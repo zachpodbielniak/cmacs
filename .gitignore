@@ -161,7 +161,8 @@ lisp/mh-e/mh-autoloads.el
 lisp/subdirs.el
 
 # Dependencies.
-deps/
+# deps/ — CMacs uses deps/ for submodules, see below
+!deps/
 
 # Logs and temporaries.
 *.log

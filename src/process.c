@@ -135,6 +135,10 @@ static struct rlimit nofile_limit;
 #endif
 #endif
 
+#ifdef HAVE_CMACS_GLIB
+#include "../cmacs/glib/cmacs-glib-loop.h"
+#endif
+
 #if defined HAVE_GETADDRINFO_A || defined HAVE_GNUTLS
 /* This is 0.1s in nanoseconds. */
 #define ASYNC_RETRY_NSEC 100000000
@@ -5778,6 +5782,10 @@ wait_reading_process_output (intmax_t time_limit, int nsecs, int read_kbd,
 	    timeout = short_timeout;
 #endif
 
+#ifdef HAVE_CMACS_GLIB
+	  cmacs_glib_prepare (&Available, &Writeok, &timeout);
+#endif
+
 	  /* Android requires using a replacement for pselect in
 	     android.c to poll for events.  */
 #if defined HAVE_ANDROID && !defined ANDROID_STUBIFY
@@ -5811,6 +5819,10 @@ wait_reading_process_output (intmax_t time_limit, int nsecs, int read_kbd,
 				NULL, &timeout, NULL);
 #endif	/* !HAVE_GLIB */
 #endif /* HAVE_ANDROID && !ANDROID_STUBIFY */
+
+#ifdef HAVE_CMACS_GLIB
+	  cmacs_glib_dispatch (&Available);
+#endif
 
 #ifdef HAVE_GNUTLS
 	  /* Merge tls_available into Available. */

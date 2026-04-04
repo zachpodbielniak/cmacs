@@ -1,0 +1,21 @@
+/* cmacs-gowl.h — Gowl Wayland compositor integration
+ *
+ * Copyright (C) 2026 Zach Podbielniak
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ *
+ * Embeds gowl (GObject Wayland compositor) into CMacs so that Emacs
+ * itself becomes the Wayland window manager.
+ */
+
+#ifndef CMACS_GOWL_H
+#define CMACS_GOWL_H
+
+#include <config.h>
+
+#ifdef HAVE_CMACS_GOWL
+
+/* Register DEFUN primitives. */
+extern void syms_of_cmacs_gowl (void);
+
+#endif /* HAVE_CMACS_GOWL */
+#endif /* CMACS_GOWL_H */

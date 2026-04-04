@@ -48,6 +48,15 @@ vpath %.c := $(srcdir)
 vpath %.h := $(srcdir)
 endif
 
+vpath %.c $(srcdir)/../cmacs/glib $(srcdir)/../cmacs/gobject \
+          $(srcdir)/../cmacs/gi $(srcdir)/../cmacs/crispy \
+          $(srcdir)/../cmacs/bacon $(srcdir)/../cmacs/gowl \
+          $(srcdir)/../cmacs/compat
+vpath %.h $(srcdir)/../cmacs/glib $(srcdir)/../cmacs/gobject \
+          $(srcdir)/../cmacs/gi $(srcdir)/../cmacs/crispy \
+          $(srcdir)/../cmacs/bacon $(srcdir)/../cmacs/gowl \
+          $(srcdir)/../cmacs/compat
+
 # abs_top_builddir is the name of the toplevel build directory under
 # cross-compiled builds.
 abs_top_builddir = @abs_top_builddir@
@@ -325,6 +334,26 @@ W32_LIBS=@W32_LIBS@
 PGTK_OBJ=@PGTK_OBJ@
 PGTK_LIBS=@PGTK_LIBS@
 
+# CMACS
+CMACS_GLIB_OBJ = @CMACS_GLIB_OBJ@
+CMACS_GLIB_CFLAGS = @CMACS_GLIB_CFLAGS@
+CMACS_GLIB_LIBS = @CMACS_GLIB_LIBS@
+CMACS_GI_OBJ = @CMACS_GI_OBJ@
+CMACS_GI_CFLAGS = @CMACS_GI_CFLAGS@
+CMACS_GI_LIBS = @CMACS_GI_LIBS@
+CMACS_CRISPY_OBJ = @CMACS_CRISPY_OBJ@
+CMACS_CRISPY_CFLAGS = @CMACS_CRISPY_CFLAGS@
+CMACS_CRISPY_LIBS = @CMACS_CRISPY_LIBS@
+CMACS_BACON_OBJ = @CMACS_BACON_OBJ@
+CMACS_BACON_CFLAGS = @CMACS_BACON_CFLAGS@
+CMACS_BACON_LIBS = @CMACS_BACON_LIBS@
+CMACS_GOWL_OBJ = @CMACS_GOWL_OBJ@
+CMACS_GOWL_CFLAGS = @CMACS_GOWL_CFLAGS@
+CMACS_GOWL_LIBS = @CMACS_GOWL_LIBS@
+CMACS_CFLAGS = $(CMACS_GLIB_CFLAGS) $(CMACS_GI_CFLAGS) \
+               $(CMACS_CRISPY_CFLAGS) $(CMACS_BACON_CFLAGS) \
+               $(CMACS_GOWL_CFLAGS)
+
 ## emacs.res if HAVE_W32
 EMACSRES = @EMACSRES@
 ## If HAVE_W32, compiler arguments for including
@@ -431,7 +460,7 @@ EMACS_CFLAGS=-Demacs $(MYCPPFLAGS) -I. -I$(srcdir) \
   $(LIBGNUTLS_CFLAGS) $(NOTIFY_CFLAGS) $(CAIRO_CFLAGS) \
   $(WERROR_CFLAGS) $(HAIKU_CFLAGS) $(XCOMPOSITE_CFLAGS) $(XSHAPE_CFLAGS) \
   $(ANDROID_BUILD_CFLAGS) $(GIF_CFLAGS) $(JPEG_CFLAGS) $(SQLITE3_CFLAGS) \
-  $(LIBGMP_CFLAGS) $(TIFF_CFLAGS) $(LIBSELINUX_CFLAGS)
+  $(LIBGMP_CFLAGS) $(TIFF_CFLAGS) $(LIBSELINUX_CFLAGS) $(CMACS_CFLAGS)
 ALL_CFLAGS = $(EMACS_CFLAGS) $(WARN_CFLAGS) $(CFLAGS)
 ALL_OBJC_CFLAGS = $(EMACS_CFLAGS) \
   $(filter-out $(NON_OBJC_CFLAGS),$(WARN_CFLAGS)) $(CFLAGS) \
@@ -466,7 +495,8 @@ base_obj = dispnew.o frame.o scroll.o xdisp.o menu.o $(XMENU_OBJ) window.o     \
 	itree.o json.o 							       \
 	$(MSDOS_OBJ) $(MSDOS_X_OBJ) $(NS_OBJ) $(CYGWIN_OBJ) $(FONT_OBJ)        \
 	$(W32_OBJ) $(WINDOW_SYSTEM_OBJ) $(XGSELOBJ)			       \
-	$(HAIKU_OBJ) $(PGTK_OBJ) $(ANDROID_OBJ)
+	$(HAIKU_OBJ) $(PGTK_OBJ) $(ANDROID_OBJ) \
+	$(CMACS_GLIB_OBJ) $(CMACS_GI_OBJ) $(CMACS_CRISPY_OBJ) $(CMACS_BACON_OBJ) $(CMACS_GOWL_OBJ)
 doc_obj = $(base_obj) $(NS_OBJC_OBJ)
 obj = $(doc_obj) $(HAIKU_CXX_OBJ)
 
@@ -584,7 +614,9 @@ LIBES = $(LIBS) $(W32_LIBS) $(LIBS_GNUSTEP) $(PGTK_LIBS) $(LIBX_BASE) $(LIBIMAGE
    $(NOTIFY_LIBS) $(LIB_MATH) $(LIBZ) $(LIBMODULES) $(LIBSYSTEMD_LIBS) \
    $(LIBGMP) $(LIBGCCJIT_LIBS) $(XINPUT_LIBS) $(HAIKU_LIBS) \
    $(TREE_SITTER_LIBS) $(SQLITE3_LIBS) $(XCOMPOSITE_LIBS) $(XSHAPE_LIBS) \
-   $(ANDROID_LIBS)
+   $(ANDROID_LIBS) \
+   $(CMACS_GLIB_LIBS) $(CMACS_GI_LIBS) $(CMACS_CRISPY_LIBS) \
+   $(CMACS_BACON_LIBS) $(CMACS_GOWL_LIBS)
 
 ## FORCE it so that admin/unidata can decide whether this file is
 ## up-to-date.  Although since charprop depends on bootstrap-emacs,

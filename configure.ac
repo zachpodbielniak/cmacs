@@ -651,6 +651,55 @@ OPTION_DEFAULT_OFF([be-app],
 OPTION_DEFAULT_OFF([be-cairo],
   [enable use of cairo under Haiku's Application Kit])
 
+# CMACS: GLib integration (optional, default off)
+OPTION_DEFAULT_OFF([cmacs-glib], [CMacs GLib/GObject integration])
+OPTION_DEFAULT_OFF([cmacs-gi],   [CMacs GObject Introspection bridge])
+OPTION_DEFAULT_OFF([cmacs-crispy], [CMacs crispy C scripting])
+OPTION_DEFAULT_OFF([cmacs-bacon],  [CMacs bacon shell])
+OPTION_DEFAULT_OFF([cmacs-gowl],  [CMacs Gowl Wayland compositor])
+
+# CMACS: pkg-config checks when enabled
+if test "$with_cmacs_glib" != "no"; then
+  PKG_CHECK_MODULES([CMACS_GLIB], [glib-2.0 gobject-2.0 gio-2.0 gmodule-2.0])
+  AC_DEFINE([HAVE_CMACS_GLIB], 1, [CMacs GLib integration])
+  CMACS_GLIB_OBJ="cmacs-glib-loop.o cmacs-gobject.o cmacs-gclosure.o"
+fi
+if test "$with_cmacs_gi" != "no"; then
+  PKG_CHECK_MODULES([CMACS_GI], [gobject-introspection-1.0])
+  AC_DEFINE([HAVE_CMACS_GI], 1, [CMacs GI bridge])
+  CMACS_GI_OBJ="cmacs-gi.o"
+fi
+if test "$with_cmacs_crispy" != "no"; then
+  PKG_CHECK_MODULES([CMACS_CRISPY], [crispy])
+  AC_DEFINE([HAVE_CMACS_CRISPY], 1, [CMacs crispy integration])
+  CMACS_CRISPY_OBJ="cmacs-crispy.o"
+fi
+if test "$with_cmacs_bacon" != "no"; then
+  PKG_CHECK_MODULES([CMACS_BACON], [bacon-1.0])
+  AC_DEFINE([HAVE_CMACS_BACON], 1, [CMacs bacon integration])
+  CMACS_BACON_OBJ="cmacs-bacon.o"
+fi
+if test "$with_cmacs_gowl" != "no"; then
+  PKG_CHECK_MODULES([CMACS_GOWL], [libgowl wlroots-0.19 wayland-server])
+  AC_DEFINE([HAVE_CMACS_GOWL], 1, [CMacs Gowl compositor])
+  CMACS_GOWL_OBJ="cmacs-gowl.o"
+fi
+AC_SUBST(CMACS_GLIB_OBJ)
+AC_SUBST(CMACS_GI_OBJ)
+AC_SUBST(CMACS_CRISPY_OBJ)
+AC_SUBST(CMACS_BACON_OBJ)
+AC_SUBST(CMACS_GOWL_OBJ)
+AC_SUBST(CMACS_GLIB_CFLAGS)
+AC_SUBST(CMACS_GLIB_LIBS)
+AC_SUBST(CMACS_GI_CFLAGS)
+AC_SUBST(CMACS_GI_LIBS)
+AC_SUBST(CMACS_CRISPY_CFLAGS)
+AC_SUBST(CMACS_CRISPY_LIBS)
+AC_SUBST(CMACS_BACON_CFLAGS)
+AC_SUBST(CMACS_BACON_LIBS)
+AC_SUBST(CMACS_GOWL_CFLAGS)
+AC_SUBST(CMACS_GOWL_LIBS)
+
 ## Makefile.in needs the cache file name.
 AC_SUBST([cache_file])
 

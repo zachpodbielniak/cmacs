@@ -5484,6 +5484,25 @@ extern void resume_text_conversion (void);
 extern void syms_of_textconv (void);
 #endif
 
+/* CMACS */
+#ifdef HAVE_CMACS_GLIB
+extern void syms_of_cmacs_glib (void);
+extern void syms_of_cmacs_gobject (void);
+extern void init_cmacs_glib (void);
+#endif
+#ifdef HAVE_CMACS_GI
+extern void syms_of_cmacs_gi (void);
+#endif
+#ifdef HAVE_CMACS_CRISPY
+extern void syms_of_cmacs_crispy (void);
+#endif
+#ifdef HAVE_CMACS_BACON
+extern void syms_of_cmacs_bacon (void);
+#endif
+#ifdef HAVE_CMACS_GOWL
+extern void syms_of_cmacs_gowl (void);
+#endif
+
 #ifdef HAVE_NATIVE_COMP
 INLINE bool
 NATIVE_COMP_FUNCTIONP (Lisp_Object a)

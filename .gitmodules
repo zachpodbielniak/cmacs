@@ -1,0 +1,9 @@
+[submodule "deps/crispy"]
+	path = deps/crispy
+	url = git@git-ssh.podbielniak.com:zachpodbielniak/crispy.git
+[submodule "deps/bacon"]
+	path = deps/bacon
+	url = git@git-ssh.podbielniak.com:zachpodbielniak/bacon.git
+[submodule "deps/gowl"]
+	path = deps/gowl
+	url = git@git-ssh.podbielniak.com:zachpodbielniak/gowl.git

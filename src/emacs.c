@@ -2489,6 +2489,24 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
       syms_of_pdumper ();
       syms_of_json ();
 
+  /* CMACS */
+#ifdef HAVE_CMACS_GLIB
+      syms_of_cmacs_glib ();
+      syms_of_cmacs_gobject ();
+#endif
+#ifdef HAVE_CMACS_GI
+      syms_of_cmacs_gi ();
+#endif
+#ifdef HAVE_CMACS_CRISPY
+      syms_of_cmacs_crispy ();
+#endif
+#ifdef HAVE_CMACS_BACON
+      syms_of_cmacs_bacon ();
+#endif
+#ifdef HAVE_CMACS_GOWL
+      syms_of_cmacs_gowl ();
+#endif
+
       keys_of_keyboard ();
 
 #ifdef HAVE_NATIVE_COMP
@@ -2562,6 +2580,11 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
   init_androidselect ();
   init_sfntfont ();
   init_sfntfont_android ();
+#endif
+
+  /* CMACS: late init (after terminal setup) */
+#ifdef HAVE_CMACS_GLIB
+  init_cmacs_glib ();
 #endif
 
   if (!initialized)
