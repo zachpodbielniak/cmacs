@@ -18,12 +18,6 @@
 #include <glib.h>
 #include <sys/select.h>
 
-/* Called during Emacs startup to create the GMainContext. */
-extern void init_cmacs_glib (void);
-
-/* Register DEFUN primitives. */
-extern void syms_of_cmacs_glib (void);
-
 /* Call before pselect(): query GMainContext for fds and adjust timeout.
  * Adds GLib's file descriptors to READABLE and WRITEABLE, and reduces
  * *TIMEOUT if GLib needs an earlier wake-up.

@@ -18,9 +18,6 @@
 #include <glib-object.h>
 #include "lisp.h"
 
-/* Register DEFUN primitives. */
-extern void syms_of_cmacs_gobject (void);
-
 /* Wrap a GObject as an elisp user-ptr.
  * Takes a reference (calls g_object_ref). */
 extern Lisp_Object cmacs_gobject_wrap (GObject *obj);
@@ -31,9 +28,6 @@ extern GObject *cmacs_gobject_unwrap (Lisp_Object obj);
 
 /* Check if an elisp value is a wrapped GObject. */
 extern bool cmacs_gobject_p (Lisp_Object obj);
-
-/* Type tag for GObject user-ptrs (for type checking). */
-extern Lisp_Object Qcmacs_gobject;
 
 #endif /* HAVE_CMACS_GLIB */
 #endif /* CMACS_GOBJECT_H */

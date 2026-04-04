@@ -350,7 +350,11 @@ CMACS_BACON_LIBS = @CMACS_BACON_LIBS@
 CMACS_GOWL_OBJ = @CMACS_GOWL_OBJ@
 CMACS_GOWL_CFLAGS = @CMACS_GOWL_CFLAGS@
 CMACS_GOWL_LIBS = @CMACS_GOWL_LIBS@
-CMACS_CFLAGS = $(CMACS_GLIB_CFLAGS) $(CMACS_GI_CFLAGS) \
+CMACS_INTERNAL_CFLAGS = -I$(srcdir)/../cmacs/glib -I$(srcdir)/../cmacs/gobject \
+                        -I$(srcdir)/../cmacs/gi -I$(srcdir)/../cmacs/crispy \
+                        -I$(srcdir)/../cmacs/bacon -I$(srcdir)/../cmacs/gowl
+CMACS_CFLAGS = $(CMACS_INTERNAL_CFLAGS) \
+               $(CMACS_GLIB_CFLAGS) $(CMACS_GI_CFLAGS) \
                $(CMACS_CRISPY_CFLAGS) $(CMACS_BACON_CFLAGS) \
                $(CMACS_GOWL_CFLAGS)
 
@@ -711,7 +715,22 @@ buildobj.h: Makefile
 
 GLOBAL_SOURCES = $(base_obj:.o=.c) $(NS_OBJC_OBJ:.o=.m)
 
-gl-stamp: $(libsrc)/make-docfile$(EXEEXT) $(GLOBAL_SOURCES)
+## CMACS: make-docfile needs .c files visible from srcdir.
+## Create symlinks so scanning finds the DEFUN docstrings.
+CMACS_ALL_OBJ = $(CMACS_GLIB_OBJ) $(CMACS_GI_OBJ) \
+                $(CMACS_CRISPY_OBJ) $(CMACS_BACON_OBJ) $(CMACS_GOWL_OBJ)
+CMACS_DIRS = glib gobject gi crispy bacon gowl
+cmacs-symlinks:
+	$(AM_V_at)for f in $(CMACS_ALL_OBJ:.o=.c); do \
+	  test -e "$(srcdir)/$$f" && continue; \
+	  for d in $(CMACS_DIRS); do \
+	    src="$(srcdir)/../cmacs/$$d/$$f"; \
+	    if test -f "$$src"; then ln -sf "$$src" "$(srcdir)/$$f"; break; fi; \
+	  done; \
+	done
+.PHONY: cmacs-symlinks
+
+gl-stamp: $(libsrc)/make-docfile$(EXEEXT) $(GLOBAL_SOURCES) cmacs-symlinks
 	$(AM_V_GLOBALS)$(libsrc)/make-docfile -d $(srcdir) -g $(doc_obj) > globals.tmp
 	$(AM_V_at)$(top_srcdir)/build-aux/move-if-change globals.tmp globals.h
 	$(AM_V_at)echo timestamp > $@

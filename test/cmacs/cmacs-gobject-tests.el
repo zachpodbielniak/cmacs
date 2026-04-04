@@ -164,5 +164,58 @@
   (should-error (gobject-disconnect nil 1)
                 :type 'error))
 
+;; Edge cases: boundary values and error recovery
+(ert-deftest cmacs-gobject-p-various-types ()
+  "gobject-p should reject all non-GObject types gracefully."
+  (skip-unless (fboundp 'gobject-p))
+  (should-not (gobject-p 0))
+  (should-not (gobject-p -1))
+  (should-not (gobject-p 1.5))
+  (should-not (gobject-p ""))
+  (should-not (gobject-p 'symbol))
+  (should-not (gobject-p [vector]))
+  (should-not (gobject-p (make-hash-table))))
+
+(ert-deftest cmacs-gobject-new-empty-string ()
+  "Creating a GObject with empty type string should error."
+  (skip-unless (fboundp 'gobject-new))
+  (should-error (gobject-new "")))
+
+(ert-deftest cmacs-gobject-wrap-unwrap-identity ()
+  "Wrapping and immediately using a GObject should preserve type."
+  (skip-unless (and (fboundp 'gobject-new) (fboundp 'gobject-type-name)))
+  (let ((obj (gobject-new "GObject")))
+    (should (gobject-p obj))
+    (should (equal (gobject-type-name obj) "GObject"))))
+
+(ert-deftest cmacs-gobject-connect-invalid-signal ()
+  "Connecting to a nonexistent signal returns 0 (no valid handler)."
+  (skip-unless (and (fboundp 'gobject-new) (fboundp 'gobject-connect)))
+  ;; g_signal_connect_closure returns 0 for invalid signals rather
+  ;; than raising an error — it emits a GLib warning instead.
+  (let* ((obj (gobject-new "GObject"))
+         (handler-id (gobject-connect obj "nonexistent-signal-xyz" #'ignore)))
+    (should (integerp handler-id))
+    (should (= handler-id 0))))
+
+(ert-deftest cmacs-gobject-disconnect-invalid-id ()
+  "Disconnecting an invalid handler ID should not crash."
+  (skip-unless (and (fboundp 'gobject-new) (fboundp 'gobject-disconnect)))
+  (let ((obj (gobject-new "GObject")))
+    ;; Should not signal an error — just a no-op
+    (gobject-disconnect obj 999999)))
+
+(ert-deftest cmacs-gobject-set-invalid-property-name ()
+  "Setting a nonexistent property should error, not crash."
+  (skip-unless (and (fboundp 'gobject-new) (fboundp 'gobject-set)))
+  (let ((obj (gobject-new "GObject")))
+    (should-error (gobject-set obj "totally-fake-property" 42))))
+
+(ert-deftest cmacs-gobject-get-invalid-property-name ()
+  "Getting a nonexistent property should error, not crash."
+  (skip-unless (and (fboundp 'gobject-new) (fboundp 'gobject-get)))
+  (let ((obj (gobject-new "GObject")))
+    (should-error (gobject-get obj "totally-fake-property"))))
+
 (provide 'cmacs-gobject-tests)
 ;;; cmacs-gobject-tests.el ends here

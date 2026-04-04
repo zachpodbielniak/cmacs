@@ -18,12 +18,10 @@
 #ifdef HAVE_CMACS_GI
 
 #include "lisp.h"
-#include "../gobject/cmacs-gobject.h"
+#include "cmacs-gobject.h"
 
 #include <girepository.h>
 #include <string.h>
-
-static Lisp_Object Qgi_error;
 
 /* In-memory cache: namespace → loaded flag.
  * Typelib reflection is expensive; cache the results. */
@@ -90,7 +88,7 @@ cmacs_gi_lisp_to_arg (Lisp_Object obj, GITypeInfo *type_info,
         arg->v_float = (gfloat)XFIXNUM (obj);
       else
         {
-          CHECK_FLOAT (obj);
+          CHECK_NUMBER (obj);
           arg->v_float = (gfloat)XFLOAT_DATA (obj);
         }
       return TRUE;
@@ -100,7 +98,7 @@ cmacs_gi_lisp_to_arg (Lisp_Object obj, GITypeInfo *type_info,
         arg->v_double = (gdouble)XFIXNUM (obj);
       else
         {
-          CHECK_FLOAT (obj);
+          CHECK_NUMBER (obj);
           arg->v_double = XFLOAT_DATA (obj);
         }
       return TRUE;
@@ -411,7 +409,7 @@ usage: (gi-method OBJECT METHOD &rest ARGS) */)
   {
     GIBaseInfo *base = NULL;
     GList *namespaces = NULL;
-    const gchar * const *loaded;
+    gchar **loaded;
     gint i;
 
     loaded = g_irepository_get_loaded_namespaces (repo);
@@ -683,9 +681,9 @@ syms_of_cmacs_gi (void)
   DEFSYM (Qgi_error, "gi-error");
 
   Fput (Qgi_error, Qerror_conditions,
-        pure_list (Qgi_error, Qerror));
+        Fcons (Qgi_error, Fcons (Qerror, Qnil)));
   Fput (Qgi_error, Qerror_message,
-        build_pure_c_string ("GObject Introspection error"));
+        build_string ("GObject Introspection error"));
 
   defsubr (&Sgi_require);
   defsubr (&Sgi_call);

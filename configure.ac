@@ -680,7 +680,7 @@ if test "$with_cmacs_bacon" != "no"; then
   CMACS_BACON_OBJ="cmacs-bacon.o"
 fi
 if test "$with_cmacs_gowl" != "no"; then
-  PKG_CHECK_MODULES([CMACS_GOWL], [libgowl wlroots-0.19 wayland-server])
+  PKG_CHECK_MODULES([CMACS_GOWL], [gowl wlroots-0.19 wayland-server])
   AC_DEFINE([HAVE_CMACS_GOWL], 1, [CMacs Gowl compositor])
   CMACS_GOWL_OBJ="cmacs-gowl.o"
 fi

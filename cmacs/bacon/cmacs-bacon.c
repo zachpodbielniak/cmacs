@@ -14,8 +14,6 @@
 #include "lisp.h"
 #include <bacon.h>
 
-static Lisp_Object Qbacon_error;
-
 /* Persistent shell instance. */
 static BaconShell *cmacs_bacon_shell = NULL;
 
@@ -206,9 +204,9 @@ syms_of_cmacs_bacon (void)
   DEFSYM (Qbacon_error, "bacon-error");
 
   Fput (Qbacon_error, Qerror_conditions,
-        pure_list (Qbacon_error, Qerror));
+        Fcons (Qbacon_error, Fcons (Qerror, Qnil)));
   Fput (Qbacon_error, Qerror_message,
-        build_pure_c_string ("Bacon shell error"));
+        build_string ("Bacon shell error"));
 
   defsubr (&Sbacon_start);
   defsubr (&Sbacon_stop);

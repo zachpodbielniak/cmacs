@@ -160,5 +160,55 @@ FEATURE is a symbol: glib, gobject, gi, crispy, bacon, gowl."
         (should (cmacs-glib-pending-p))
       (cmacs-glib-source-remove id))))
 
+;; Edge cases: boundary values
+(ert-deftest cmacs-glib-timeout-zero-interval ()
+  "Zero interval timeout should still create a valid source."
+  (skip-unless (fboundp 'cmacs-glib-timeout-add))
+  (let ((id (cmacs-glib-timeout-add 0 (lambda () nil))))
+    (should (integerp id))
+    (should (> id 0))
+    (cmacs-glib-source-remove id)))
+
+(ert-deftest cmacs-glib-timeout-large-interval ()
+  "Large interval should not error."
+  (skip-unless (fboundp 'cmacs-glib-timeout-add))
+  (let ((id (cmacs-glib-timeout-add 999999 (lambda () nil))))
+    (should (integerp id))
+    (cmacs-glib-source-remove id)))
+
+(ert-deftest cmacs-glib-remove-already-removed ()
+  "Removing an already-removed source should not error."
+  (skip-unless (fboundp 'cmacs-glib-source-remove))
+  (let ((id (cmacs-glib-timeout-add 1000 (lambda () nil))))
+    (cmacs-glib-source-remove id)
+    ;; Second remove should be a no-op, not an error
+    (should-not (cmacs-glib-source-remove id))))
+
+(ert-deftest cmacs-glib-multiple-sources ()
+  "Creating multiple sources should return distinct IDs."
+  (skip-unless (fboundp 'cmacs-glib-timeout-add))
+  (let ((id1 (cmacs-glib-timeout-add 1000 (lambda () nil)))
+        (id2 (cmacs-glib-timeout-add 2000 (lambda () nil)))
+        (id3 (cmacs-glib-idle-add (lambda () nil))))
+    (should-not (= id1 id2))
+    (should-not (= id2 id3))
+    (should-not (= id1 id3))
+    (cmacs-glib-source-remove id1)
+    (cmacs-glib-source-remove id2)
+    (cmacs-glib-source-remove id3)))
+
+(ert-deftest cmacs-glib-iteration-multiple ()
+  "Multiple non-blocking iterations should not error."
+  (skip-unless (fboundp 'cmacs-glib-iteration))
+  (dotimes (_ 10)
+    (cmacs-glib-iteration nil)))
+
+(ert-deftest cmacs-glib-context-stable ()
+  "Context predicate should return consistent results."
+  (skip-unless (fboundp 'cmacs-glib-context-p))
+  (let ((r1 (cmacs-glib-context-p))
+        (r2 (cmacs-glib-context-p)))
+    (should (eq r1 r2))))
+
 (provide 'cmacs-glib-tests)
 ;;; cmacs-glib-tests.el ends here

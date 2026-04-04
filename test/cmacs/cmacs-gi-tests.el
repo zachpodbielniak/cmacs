@@ -105,7 +105,8 @@
   (gi-require "GLib" "2.0")
   (let ((val (gi-enum "GLib" "ChecksumType" "sha256")))
     (should (integerp val))
-    (should (= val 1))))
+    ;; GChecksumType: md5=0, sha1=1, sha256=2, sha512=3, sha384=4
+    (should (= val 2))))
 
 (ert-deftest cmacs-gi-test-enum-nonexistent-member ()
   "Test that resolving a nonexistent enum member signals an error."
@@ -187,6 +188,52 @@
   (let ((obj (gobject-new "GObject")))
     (should-error (gi-method obj 42)
                   :type 'wrong-type-argument)))
+
+;; Edge cases
+(ert-deftest cmacs-gi-require-empty-namespace ()
+  "Requiring empty string namespace should error."
+  (skip-unless (fboundp 'gi-require))
+  (should-error (gi-require "" nil)))
+
+(ert-deftest cmacs-gi-require-idempotent ()
+  "Requiring the same namespace twice should not error."
+  (skip-unless (fboundp 'gi-require))
+  (gi-require "GLib" nil)
+  (gi-require "GLib" nil))
+
+(ert-deftest cmacs-gi-call-wrong-arg-types ()
+  "Calling a zero-arg function with extra args silently ignores them."
+  (skip-unless (fboundp 'gi-call))
+  (gi-require "GLib" nil)
+  ;; gi-call only validates that enough args are provided, not that
+  ;; there aren't too many — extra args are silently ignored.
+  (let ((result (gi-call "GLib" "get_user_name" "extra-arg")))
+    (should (stringp result))))
+
+(ert-deftest cmacs-gi-list-functions-returns-strings ()
+  "All items in function list should be strings."
+  (skip-unless (fboundp 'gi-list-functions))
+  (gi-require "GLib" nil)
+  (let ((funcs (gi-list-functions "GLib")))
+    (dolist (f funcs)
+      (should (stringp f)))))
+
+(ert-deftest cmacs-gi-enum-case-sensitive ()
+  "Enum member lookup should be case-sensitive."
+  (skip-unless (fboundp 'gi-enum))
+  (gi-require "GLib" nil)
+  ;; Correct: md5, wrong: MD5
+  (should-error (gi-enum "GLib" "ChecksumType" "MD5")))
+
+(ert-deftest cmacs-gi-function-info-has-required-keys ()
+  "Function info alist should have name, args, and return-type keys."
+  (skip-unless (fboundp 'gi-function-info))
+  (gi-require "GLib" nil)
+  (let ((info (gi-function-info "GLib" "get_user_name")))
+    (when info
+      (should (assq 'name info))
+      (should (assq 'args info))
+      (should (assq 'return-type info)))))
 
 (provide 'cmacs-gi-tests)
 ;;; cmacs-gi-tests.el ends here

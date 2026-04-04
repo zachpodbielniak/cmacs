@@ -86,5 +86,8 @@ Possible values: `linux', `macos', `freebsd', or `unknown'."
 (autoload 'cmacs-gowl-mode "cmacs-gowl"
   "Toggle Gowl compositor control minor mode." t)
 
+(autoload 'cmacs-config-load-all "cmacs-config"
+  "Load bacon and C config files after elisp init.")
+
 (provide 'cmacs)
 ;;; cmacs.el ends here

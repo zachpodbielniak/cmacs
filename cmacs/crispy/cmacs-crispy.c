@@ -15,8 +15,6 @@
 #include "lisp.h"
 #include <crispy.h>
 
-static Lisp_Object Qcrispy_error;
-
 /* Persistent objects — created once, reused across calls. */
 static CrispyGccCompiler *cmacs_crispy_compiler = NULL;
 static CrispyFileCache *cmacs_crispy_cache = NULL;
@@ -320,9 +318,9 @@ syms_of_cmacs_crispy (void)
   DEFSYM (Qcrispy_error, "crispy-error");
 
   Fput (Qcrispy_error, Qerror_conditions,
-        pure_list (Qcrispy_error, Qerror));
+        Fcons (Qcrispy_error, Fcons (Qerror, Qnil)));
   Fput (Qcrispy_error, Qerror_message,
-        build_pure_c_string ("Crispy error"));
+        build_string ("Crispy error"));
 
   defsubr (&Scrispy_eval);
   defsubr (&Scrispy_eval_string);

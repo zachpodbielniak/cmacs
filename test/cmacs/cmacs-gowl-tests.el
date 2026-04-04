@@ -256,5 +256,49 @@
   (should-error (gowl-spawn "echo hello")
                 :type 'error))
 
+;; Edge cases
+(ert-deftest cmacs-gowl-start-stop-cycle ()
+  "Start/stop cycle should leave clean state."
+  (skip-unless (fboundp 'gowl-start))
+  (skip-unless (not (gowl-running-p)))
+  ;; Gowl may not start without a display, so just test stop is safe
+  (gowl-stop)
+  (should-not (gowl-running-p)))
+
+(ert-deftest cmacs-gowl-spawn-empty-string ()
+  "Spawning empty command should error or handle gracefully."
+  (skip-unless (fboundp 'gowl-spawn))
+  (skip-unless (gowl-running-p))
+  (should-error (gowl-spawn "")))
+
+(ert-deftest cmacs-gowl-view-tags-zero ()
+  "Tag mask of zero should be valid (show no tags)."
+  (skip-unless (fboundp 'gowl-view-tags))
+  (skip-unless (gowl-running-p))
+  (gowl-view-tags 0))
+
+(ert-deftest cmacs-gowl-move-client-negative-coords ()
+  "Moving to negative coordinates should not crash."
+  (skip-unless (fboundp 'gowl-move-client))
+  ;; Without a real client, this should error on the type check
+  (should-error (gowl-move-client nil -100 -200)))
+
+(ert-deftest cmacs-gowl-resize-client-zero ()
+  "Resizing to zero dimensions should not crash."
+  (skip-unless (fboundp 'gowl-resize-client))
+  (should-error (gowl-resize-client nil 0 0)))
+
+(ert-deftest cmacs-gowl-set-layout-invalid ()
+  "Setting an invalid layout string should not crash."
+  (skip-unless (fboundp 'gowl-set-layout))
+  (skip-unless (gowl-running-p))
+  ;; Even an invalid name should not crash -- the function may just ignore it
+  (gowl-set-layout "nonexistent_layout"))
+
+(ert-deftest cmacs-gowl-client-info-nil ()
+  "Getting info for nil should error."
+  (skip-unless (fboundp 'gowl-client-info))
+  (should-error (gowl-client-info nil)))
+
 (provide 'cmacs-gowl-tests)
 ;;; cmacs-gowl-tests.el ends here

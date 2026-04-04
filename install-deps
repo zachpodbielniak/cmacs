@@ -1,0 +1,184 @@
+#!/usr/bin/env bash
+# install-deps — Install all CMacs build dependencies on Fedora
+#
+# Copyright (C) 2026 Zach Podbielniak
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Usage:
+#   ./install-deps              # install everything (system + from-source)
+#   ./install-deps --system     # system packages only (dnf)
+#   ./install-deps --from-source # build crispy, bacon, gowl from deps/
+#   ./install-deps --ldconfig   # just configure /usr/local/lib64
+#
+# On Fedora Silverblue / immutable systems, run with:
+#   sudo bootc override -- ./install-deps --system
+# or install inside a dev distrobox.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PREFIX="${PREFIX:-/usr/local}"
+
+# ── Emacs core build dependencies ────────────────────────────────────
+# These are needed to build upstream GNU Emacs with pgtk, native-comp,
+# JSON, and tree-sitter support.
+EMACS_BUILD_DEPS=(
+	# Build tools
+	autoconf
+	automake
+	gcc
+	make
+	pkg-config
+	texinfo
+
+	# Core libraries
+	gnutls-devel
+	ncurses-devel
+	zlib-devel
+
+	# GUI (pgtk)
+	gtk3-devel
+
+	# Native compilation
+	libgccjit-devel
+
+	# Image support
+	libXpm-devel
+	libjpeg-turbo-devel
+	giflib-devel
+	libtiff-devel
+	librsvg2-devel
+	libwebp-devel
+	ImageMagick-devel
+
+	# Text rendering
+	libotf-devel
+	m17n-lib-devel
+
+	# JSON (--with-json)
+	jansson-devel
+
+	# Tree-sitter (--with-tree-sitter)
+	libtree-sitter-devel
+)
+
+# ── CMacs GLib/GObject/GI dependencies ──────────────────────────────
+# Required for --with-cmacs-glib and --with-cmacs-gi.
+# pkg-config names: glib-2.0 gobject-2.0 gio-2.0 gmodule-2.0
+#                   gobject-introspection-1.0
+CMACS_GLIB_DEPS=(
+	glib2-devel
+	gobject-introspection-devel
+)
+
+# ── CMacs Gowl (Wayland compositor) dependencies ────────────────────
+# Required for --with-cmacs-gowl.
+# pkg-config names: gowl wlroots-0.19 wayland-server
+CMACS_GOWL_DEPS=(
+	wlroots-devel
+	wayland-devel
+	wayland-protocols-devel
+	libinput-devel
+	libxkbcommon-devel
+	pango-devel
+	cairo-devel
+)
+
+# ── All system packages ─────────────────────────────────────────────
+ALL_SYSTEM_DEPS=(
+	"${EMACS_BUILD_DEPS[@]}"
+	"${CMACS_GLIB_DEPS[@]}"
+	"${CMACS_GOWL_DEPS[@]}"
+)
+
+install_system_deps () {
+	echo "==> Installing system packages via dnf..."
+	sudo dnf install -y "${ALL_SYSTEM_DEPS[@]}"
+}
+
+# ── From-source CMacs dependencies ──────────────────────────────────
+# crispy, bacon, and gowl are built from deps/ and installed to PREFIX.
+# pkg-config names: crispy, bacon-1.0, gowl
+build_from_source () {
+	echo "==> Building from-source dependencies (PREFIX=${PREFIX})..."
+
+	for dep in crispy bacon gowl; do
+		dep_dir="${SCRIPT_DIR}/deps/${dep}"
+		if [[ ! -d "${dep_dir}" ]]; then
+			echo "    SKIP ${dep} (${dep_dir} not found)"
+			continue
+		fi
+		echo "    Building ${dep}..."
+		make -C "${dep_dir}" clean all
+		sudo make -C "${dep_dir}" install PREFIX="${PREFIX}"
+	done
+
+	configure_ldconfig
+}
+
+# ── ldconfig for /usr/local/lib64 ────────────────────────────────────
+# Libraries installed to /usr/local/lib64 need ldconfig to be visible
+# at runtime.  Without this, cmacs will fail to start with
+# "libcrispy.so.0: cannot open shared object file".
+configure_ldconfig () {
+	local conf="/etc/ld.so.conf.d/local.conf"
+	local lib_dir="${PREFIX}/lib64"
+
+	if [[ ! -d "${lib_dir}" ]]; then
+		lib_dir="${PREFIX}/lib"
+	fi
+
+	echo "==> Configuring ldconfig for ${lib_dir}..."
+	if ! grep -qxF "${lib_dir}" "${conf}" 2>/dev/null; then
+		echo "${lib_dir}" | sudo tee -a "${conf}" > /dev/null
+	fi
+	sudo ldconfig
+}
+
+# ── Main ─────────────────────────────────────────────────────────────
+usage () {
+	echo "Usage: $0 [--system|--from-source|--ldconfig]"
+	echo ""
+	echo "  (no args)      Install everything"
+	echo "  --system       System packages only (dnf)"
+	echo "  --from-source  Build crispy, bacon, gowl from deps/"
+	echo "  --ldconfig     Configure /usr/local/lib64 in ldconfig"
+	echo ""
+	echo "Configure CMacs with:"
+	echo "  ./configure --with-pgtk --with-native-compilation \\"
+	echo "    --with-json --with-tree-sitter \\"
+	echo "    --with-cmacs-glib --with-cmacs-gi \\"
+	echo "    --with-cmacs-crispy --with-cmacs-bacon --with-cmacs-gowl"
+}
+
+main () {
+	local mode="${1:-all}"
+
+	case "${mode}" in
+		--system)
+			install_system_deps
+			;;
+		--from-source)
+			build_from_source
+			;;
+		--ldconfig)
+			configure_ldconfig
+			;;
+		--help|-h)
+			usage
+			;;
+		all)
+			install_system_deps
+			build_from_source
+			;;
+		*)
+			echo "Unknown option: ${mode}" >&2
+			usage
+			exit 1
+			;;
+	esac
+
+	echo "==> Done."
+}
+
+main "$@"

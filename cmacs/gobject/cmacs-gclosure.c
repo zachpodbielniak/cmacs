@@ -15,7 +15,7 @@
 #include "lisp.h"
 #include "cmacs-gclosure.h"
 #include "cmacs-gobject.h"
-#include "../glib/cmacs-glib-loop.h"
+#include "cmacs-glib-loop.h"
 
 #include <glib-object.h>
 
@@ -42,9 +42,12 @@ cmacs_gclosure_marshal (GClosure     *closure,
                         gpointer      marshal_data)
 {
   CmacsElispClosure *eclosure = (CmacsElispClosure *)closure;
-  Lisp_Object args[n_param_values + 1];
+  Lisp_Object *args;
   Lisp_Object result;
   guint i;
+
+  /* Allocate args on the stack.  GLib signals rarely exceed 8 params. */
+  args = (Lisp_Object *)alloca ((n_param_values + 1) * sizeof (Lisp_Object));
 
   (void)invocation_hint;
   (void)marshal_data;
@@ -85,7 +88,7 @@ cmacs_gclosure_marshal (GClosure     *closure,
     }
 
   /* Call the elisp function. */
-  result = safe_calln (n_param_values, args);
+  result = safe_funcall ((ptrdiff_t)n_param_values, args);
 
   /* If the signal expects a return value, marshal it back. */
   if (return_value != NULL && G_VALUE_TYPE (return_value) != G_TYPE_NONE)

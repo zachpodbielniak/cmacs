@@ -20,6 +20,7 @@
 #ifdef HAVE_CMACS_GLIB
 
 #include "lisp.h"
+#include "timespec.h"
 #include "cmacs-glib-loop.h"
 
 #include <glib.h>
@@ -187,7 +188,7 @@ cmacs_glib_timer_cb (gpointer user_data)
   Lisp_Object result;
 
   /* Call the elisp function.  If it returns nil, remove the source. */
-  result = safe_call (1, data->callback);
+  result = safe_calln (data->callback);
   return !NILP (result);
 }
 

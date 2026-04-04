@@ -16,10 +16,8 @@
 #ifdef HAVE_CMACS_GOWL
 
 #include "lisp.h"
-#include "../gobject/cmacs-gobject.h"
+#include "cmacs-gobject.h"
 #include <gowl.h>
-
-static Lisp_Object Qgowl_error;
 
 /* Persistent compositor instance. */
 static GowlCompositor *cmacs_gowl_compositor = NULL;
@@ -355,9 +353,9 @@ syms_of_cmacs_gowl (void)
   DEFSYM (Qgowl_error, "gowl-error");
 
   Fput (Qgowl_error, Qerror_conditions,
-        pure_list (Qgowl_error, Qerror));
+        Fcons (Qgowl_error, Fcons (Qerror, Qnil)));
   Fput (Qgowl_error, Qerror_message,
-        build_pure_c_string ("Gowl compositor error"));
+        build_string ("Gowl compositor error"));
 
   defsubr (&Sgowl_start);
   defsubr (&Sgowl_stop);

@@ -1665,6 +1665,12 @@ please check its value")
     (when (featurep 'native-compile)
       (startup--update-eln-cache))
 
+    ;; CMacs: load bacon/C config files after elisp init.
+    (when (and init-file-user (not noninteractive))
+      (require 'cmacs-config nil t)
+      (when (fboundp 'cmacs-config-load-all)
+        (cmacs-config-load-all)))
+
     (when (and deactivate-mark transient-mark-mode)
       (with-current-buffer (window-buffer)
         (deactivate-mark)))

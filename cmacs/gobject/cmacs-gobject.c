@@ -24,12 +24,10 @@
 
 #include "lisp.h"
 #include "cmacs-gobject.h"
+#include "cmacs-gclosure.h"
 
 #include <glib-object.h>
 #include <string.h>
-
-Lisp_Object Qcmacs_gobject;
-static Lisp_Object Qgobject_error;
 
 /* ──────────────────────────────────────────────────────────────────── */
 /* GObject ↔ user-ptr                                                  */
@@ -181,7 +179,7 @@ cmacs_lisp_to_gvalue (Lisp_Object obj, GValue *val)
 
   if (type == G_TYPE_FLOAT)
     {
-      CHECK_FLOAT (obj);
+      CHECK_NUMBER (obj);
       g_value_set_float (val, (gfloat)XFLOAT_DATA (obj));
       return TRUE;
     }
@@ -192,7 +190,7 @@ cmacs_lisp_to_gvalue (Lisp_Object obj, GValue *val)
         g_value_set_double (val, (gdouble)XFIXNUM (obj));
       else
         {
-          CHECK_FLOAT (obj);
+          CHECK_NUMBER (obj);
           g_value_set_double (val, XFLOAT_DATA (obj));
         }
       return TRUE;
@@ -318,10 +316,6 @@ CALLBACK is an elisp function called when the signal is emitted.
 Returns a handler ID (integer) for disconnecting. */)
   (Lisp_Object object, Lisp_Object signal, Lisp_Object callback)
 {
-  /* Forward-declared — implemented in cmacs-gclosure.c */
-  extern gulong cmacs_gclosure_connect (GObject *, const gchar *,
-                                        Lisp_Object);
-
   GObject *obj;
   gulong handler_id;
 
@@ -475,9 +469,9 @@ syms_of_cmacs_gobject (void)
   DEFSYM (Qgobject_error, "gobject-error");
 
   Fput (Qgobject_error, Qerror_conditions,
-        pure_list (Qgobject_error, Qerror));
+        Fcons (Qgobject_error, Fcons (Qerror, Qnil)));
   Fput (Qgobject_error, Qerror_message,
-        build_pure_c_string ("GObject error"));
+        build_string ("GObject error"));
 
   defsubr (&Sgobject_p);
   defsubr (&Sgobject_type_name);

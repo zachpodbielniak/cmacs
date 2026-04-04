@@ -219,5 +219,49 @@
                       :type 'bacon-error))
     (bacon-stop)))
 
+;; Edge cases
+(ert-deftest cmacs-bacon-eval-empty-string ()
+  "Evaluating empty string should return 0."
+  (skip-unless (fboundp 'bacon-eval))
+  (should (= 0 (bacon-eval ""))))
+
+(ert-deftest cmacs-bacon-eval-pipe ()
+  "Pipe commands should execute."
+  (skip-unless (fboundp 'bacon-eval))
+  (should (integerp (bacon-eval "echo hello | cat"))))
+
+(ert-deftest cmacs-bacon-eval-semicolons ()
+  "Multiple commands separated by semicolons should work."
+  (skip-unless (fboundp 'bacon-eval))
+  (should (integerp (bacon-eval "true; true; true"))))
+
+(ert-deftest cmacs-bacon-alias-overwrite ()
+  "Setting an alias twice should overwrite the first."
+  (skip-unless (fboundp 'bacon-alias))
+  (bacon-start)
+  (bacon-alias "test_alias_ow" "echo first")
+  (bacon-alias "test_alias_ow" "echo second")
+  (should (equal (bacon-alias "test_alias_ow") "echo second")))
+
+(ert-deftest cmacs-bacon-source-nonexistent ()
+  "Sourcing a nonexistent file should error."
+  (skip-unless (fboundp 'bacon-source))
+  (should-error (bacon-source "/nonexistent/file.bacon")))
+
+(ert-deftest cmacs-bacon-start-stop-cycle ()
+  "Starting and stopping multiple times should not leak."
+  (skip-unless (and (fboundp 'bacon-start) (fboundp 'bacon-stop)))
+  (dotimes (_ 3)
+    (bacon-start)
+    (should (bacon-running-p))
+    (bacon-stop)
+    (should-not (bacon-running-p))))
+
+(ert-deftest cmacs-bacon-eval-c-type-check ()
+  "bacon-eval-c requires a string."
+  (skip-unless (fboundp 'bacon-eval-c))
+  (should-error (bacon-eval-c 42))
+  (should-error (bacon-eval-c nil)))
+
 (provide 'cmacs-bacon-tests)
 ;;; cmacs-bacon-tests.el ends here
