@@ -1,16 +1,23 @@
 #!/usr/bin/env bash
-# install-deps — Install all CMacs build dependencies on Fedora
+# install-deps — Install all CMacs build dependencies
 #
 # Copyright (C) 2026 Zach Podbielniak
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
+# Supported platforms:
+#   Fedora / RHEL / CentOS Stream (dnf)
+#   Ubuntu / Debian (apt)
+#   Arch Linux (pacman)
+#   macOS (Homebrew)
+#   FreeBSD (pkg)
+#
 # Usage:
 #   ./install-deps              # install everything (system + from-source)
-#   ./install-deps --system     # system packages only (dnf)
+#   ./install-deps --system     # system packages only
 #   ./install-deps --from-source # build crispy, bacon, gowl from deps/
-#   ./install-deps --ldconfig   # just configure /usr/local/lib64
+#   ./install-deps --ldconfig   # configure /usr/local/lib64 (Linux only)
 #
-# On Fedora Silverblue / immutable systems, run with:
+# On Fedora Silverblue / immutable systems:
 #   sudo bootc override -- ./install-deps --system
 # or install inside a dev distrobox.
 
@@ -19,87 +26,203 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PREFIX="${PREFIX:-/usr/local}"
 
-# ── Emacs core build dependencies ────────────────────────────────────
-# These are needed to build upstream GNU Emacs with pgtk, native-comp,
-# JSON, and tree-sitter support.
-EMACS_BUILD_DEPS=(
-	# Build tools
-	autoconf
-	automake
-	gcc
-	make
-	pkg-config
-	texinfo
+# ── Platform detection ───────────────────────────────────────────────
 
-	# Core libraries
-	gnutls-devel
-	ncurses-devel
-	zlib-devel
+detect_platform () {
+	if [[ "$(uname)" == "Darwin" ]]; then
+		echo "macos"
+		return
+	fi
+	if [[ "$(uname)" == "FreeBSD" ]]; then
+		echo "freebsd"
+		return
+	fi
+	if [[ -f /etc/os-release ]]; then
+		# shellcheck source=/dev/null
+		. /etc/os-release
+		case "${ID}" in
+			fedora|rhel|centos|rocky|alma)
+				echo "fedora"
+				;;
+			ubuntu|debian|linuxmint|pop)
+				echo "debian"
+				;;
+			arch|manjaro|endeavouros)
+				echo "arch"
+				;;
+			*)
+				echo "unknown"
+				;;
+		esac
+		return
+	fi
+	echo "unknown"
+}
 
-	# GUI (pgtk)
-	gtk3-devel
+# ── Package lists per platform ───────────────────────────────────────
+#
+# Grouped by function:
+#   PKGS_BUILD    — compilers, autotools, pkg-config, texinfo
+#   PKGS_CORE     — gnutls, ncurses, zlib
+#   PKGS_GUI      — gtk3 (pgtk backend)
+#   PKGS_NCOMP    — libgccjit (native compilation)
+#   PKGS_IMAGE    — xpm, jpeg, gif, tiff, rsvg, webp, imagemagick
+#   PKGS_TEXT     — libotf, m17n-lib
+#   PKGS_JSON     — jansson
+#   PKGS_TS       — tree-sitter
+#   PKGS_GLIB     — glib, gobject-introspection
+#   PKGS_GOWL     — wlroots, wayland, libinput, xkbcommon, pango, cairo
 
-	# Native compilation
-	libgccjit-devel
+set_packages_fedora () {
+	PKGS_BUILD=(autoconf automake gcc make pkgconf-pkg-config texinfo)
+	PKGS_CORE=(gnutls-devel ncurses-devel zlib-devel)
+	PKGS_GUI=(gtk3-devel)
+	PKGS_NCOMP=(libgccjit-devel)
+	PKGS_IMAGE=(libXpm-devel libjpeg-turbo-devel giflib-devel libtiff-devel
+	            librsvg2-devel libwebp-devel ImageMagick-devel)
+	PKGS_TEXT=(libotf-devel m17n-lib-devel)
+	PKGS_JSON=(jansson-devel)
+	PKGS_TS=(libtree-sitter-devel)
+	PKGS_GLIB=(glib2-devel gobject-introspection-devel)
+	PKGS_GOWL=(wlroots-devel wayland-devel wayland-protocols-devel
+	           libinput-devel libxkbcommon-devel pango-devel cairo-devel)
+	PKG_CMD="sudo dnf install -y"
+}
 
-	# Image support
-	libXpm-devel
-	libjpeg-turbo-devel
-	giflib-devel
-	libtiff-devel
-	librsvg2-devel
-	libwebp-devel
-	ImageMagick-devel
+set_packages_debian () {
+	PKGS_BUILD=(autoconf automake gcc make pkg-config texinfo)
+	PKGS_CORE=(libgnutls28-dev libncurses-dev zlib1g-dev)
+	PKGS_GUI=(libgtk-3-dev)
+	PKGS_NCOMP=(libgccjit-13-dev)
+	PKGS_IMAGE=(libxpm-dev libjpeg-dev libgif-dev libtiff-dev
+	            librsvg2-dev libwebp-dev libmagickwand-dev)
+	PKGS_TEXT=(libotf-dev libm17n-dev)
+	PKGS_JSON=(libjansson-dev)
+	PKGS_TS=(libtree-sitter-dev)
+	PKGS_GLIB=(libglib2.0-dev libgirepository1.0-dev)
+	PKGS_GOWL=(libwlroots-dev libwayland-dev wayland-protocols
+	           libinput-dev libxkbcommon-dev libpango1.0-dev libcairo2-dev)
+	PKG_CMD="sudo apt-get install -y"
+}
 
-	# Text rendering
-	libotf-devel
-	m17n-lib-devel
+set_packages_arch () {
+	PKGS_BUILD=(autoconf automake gcc make pkgconf texinfo)
+	PKGS_CORE=(gnutls ncurses zlib)
+	PKGS_GUI=(gtk3)
+	PKGS_NCOMP=(libgccjit)
+	PKGS_IMAGE=(libxpm libjpeg-turbo giflib libtiff librsvg libwebp imagemagick)
+	PKGS_TEXT=(libotf m17n-lib)
+	PKGS_JSON=(jansson)
+	PKGS_TS=(tree-sitter)
+	PKGS_GLIB=(glib2 gobject-introspection)
+	PKGS_GOWL=(wlroots wayland wayland-protocols libinput libxkbcommon pango cairo)
+	PKG_CMD="sudo pacman -S --needed --noconfirm"
+}
 
-	# JSON (--with-json)
-	jansson-devel
+set_packages_macos () {
+	PKGS_BUILD=(autoconf automake gcc make pkg-config texinfo)
+	PKGS_CORE=(gnutls)
+	PKGS_GUI=(gtk+3)
+	PKGS_NCOMP=(libgccjit)
+	PKGS_IMAGE=(libxpm jpeg-turbo giflib libtiff librsvg webp imagemagick)
+	PKGS_TEXT=(libotf m17n-lib)
+	PKGS_JSON=(jansson)
+	PKGS_TS=(tree-sitter)
+	PKGS_GLIB=(glib gobject-introspection)
+	PKGS_GOWL=()  # Wayland not available on macOS
+	PKG_CMD="brew install"
+}
 
-	# Tree-sitter (--with-tree-sitter)
-	libtree-sitter-devel
-)
+set_packages_freebsd () {
+	PKGS_BUILD=(autoconf automake gcc gmake pkgconf texinfo)
+	PKGS_CORE=(gnutls ncurses)
+	PKGS_GUI=(gtk3)
+	PKGS_NCOMP=()  # libgccjit not readily available; native-comp optional
+	PKGS_IMAGE=(libXpm jpeg-turbo giflib tiff librsvg2 webp ImageMagick7-nox11)
+	PKGS_TEXT=(libotf m17n-lib)
+	PKGS_JSON=(jansson)
+	PKGS_TS=(tree-sitter)
+	PKGS_GLIB=(glib gobject-introspection)
+	PKGS_GOWL=()  # Wayland compositor support limited on FreeBSD
+	PKG_CMD="sudo pkg install -y"
+}
 
-# ── CMacs GLib/GObject/GI dependencies ──────────────────────────────
-# Required for --with-cmacs-glib and --with-cmacs-gi.
-# pkg-config names: glib-2.0 gobject-2.0 gio-2.0 gmodule-2.0
-#                   gobject-introspection-1.0
-CMACS_GLIB_DEPS=(
-	glib2-devel
-	gobject-introspection-devel
-)
+# ── Collect all packages ─────────────────────────────────────────────
 
-# ── CMacs Gowl (Wayland compositor) dependencies ────────────────────
-# Required for --with-cmacs-gowl.
-# pkg-config names: gowl wlroots-0.19 wayland-server
-CMACS_GOWL_DEPS=(
-	wlroots-devel
-	wayland-devel
-	wayland-protocols-devel
-	libinput-devel
-	libxkbcommon-devel
-	pango-devel
-	cairo-devel
-)
+all_packages () {
+	echo "${PKGS_BUILD[@]}" \
+	     "${PKGS_CORE[@]}" \
+	     "${PKGS_GUI[@]}" \
+	     "${PKGS_NCOMP[@]}" \
+	     "${PKGS_IMAGE[@]}" \
+	     "${PKGS_TEXT[@]}" \
+	     "${PKGS_JSON[@]}" \
+	     "${PKGS_TS[@]}" \
+	     "${PKGS_GLIB[@]}" \
+	     "${PKGS_GOWL[@]}"
+}
 
-# ── All system packages ─────────────────────────────────────────────
-ALL_SYSTEM_DEPS=(
-	"${EMACS_BUILD_DEPS[@]}"
-	"${CMACS_GLIB_DEPS[@]}"
-	"${CMACS_GOWL_DEPS[@]}"
-)
+# ── Install system packages ──────────────────────────────────────────
 
 install_system_deps () {
-	echo "==> Installing system packages via dnf..."
-	sudo dnf install -y "${ALL_SYSTEM_DEPS[@]}"
+	local platform
+	platform="$(detect_platform)"
+
+	case "${platform}" in
+		fedora)  set_packages_fedora ;;
+		debian)  set_packages_debian ;;
+		arch)    set_packages_arch ;;
+		macos)   set_packages_macos ;;
+		freebsd) set_packages_freebsd ;;
+		*)
+			echo "ERROR: Unsupported platform." >&2
+			echo "Supported: Fedora/RHEL, Ubuntu/Debian, Arch, macOS, FreeBSD" >&2
+			exit 1
+			;;
+	esac
+
+	local pkgs
+	pkgs="$(all_packages)"
+
+	echo "==> Platform: ${platform}"
+	echo "==> Installing system packages..."
+
+	if [[ "${platform}" == "macos" ]]; then
+		if ! command -v brew &>/dev/null; then
+			echo "ERROR: Homebrew not found. Install from https://brew.sh" >&2
+			exit 1
+		fi
+	fi
+
+	# shellcheck disable=SC2086
+	${PKG_CMD} ${pkgs}
+
+	if [[ ${#PKGS_GOWL[@]} -eq 0 ]]; then
+		echo ""
+		echo "NOTE: Gowl (Wayland compositor) deps skipped — not available on ${platform}."
+		echo "      Configure with --without-cmacs-gowl on this platform."
+	fi
+
+	if [[ ${#PKGS_NCOMP[@]} -eq 0 ]]; then
+		echo ""
+		echo "NOTE: libgccjit not available on ${platform}."
+		echo "      Configure without --with-native-compilation on this platform."
+	fi
 }
 
 # ── From-source CMacs dependencies ──────────────────────────────────
 # crispy, bacon, and gowl are built from deps/ and installed to PREFIX.
 # pkg-config names: crispy, bacon-1.0, gowl
+
 build_from_source () {
+	local platform
+	platform="$(detect_platform)"
+	local make_cmd="make"
+
+	if [[ "${platform}" == "freebsd" ]]; then
+		make_cmd="gmake"
+	fi
+
 	echo "==> Building from-source dependencies (PREFIX=${PREFIX})..."
 
 	for dep in crispy bacon gowl; do
@@ -108,19 +231,47 @@ build_from_source () {
 			echo "    SKIP ${dep} (${dep_dir} not found)"
 			continue
 		fi
+		if [[ "${dep}" == "gowl" && "${platform}" == "macos" ]]; then
+			echo "    SKIP gowl (Wayland not available on macOS)"
+			continue
+		fi
+		if [[ "${dep}" == "gowl" && "${platform}" == "freebsd" ]]; then
+			echo "    SKIP gowl (Wayland compositor limited on FreeBSD)"
+			continue
+		fi
 		echo "    Building ${dep}..."
-		make -C "${dep_dir}" clean all
-		sudo make -C "${dep_dir}" install PREFIX="${PREFIX}"
+		${make_cmd} -C "${dep_dir}" clean all
+		sudo ${make_cmd} -C "${dep_dir}" install PREFIX="${PREFIX}"
 	done
 
 	configure_ldconfig
 }
 
-# ── ldconfig for /usr/local/lib64 ────────────────────────────────────
-# Libraries installed to /usr/local/lib64 need ldconfig to be visible
-# at runtime.  Without this, cmacs will fail to start with
-# "libcrispy.so.0: cannot open shared object file".
+# ── ldconfig / library path ──────────────────────────────────────────
+# Libraries installed to PREFIX need to be discoverable at runtime.
+# Linux: ldconfig    macOS: handled by brew/install_name    FreeBSD: ldconfig
+
 configure_ldconfig () {
+	local platform
+	platform="$(detect_platform)"
+
+	case "${platform}" in
+		macos)
+			echo "==> macOS: no ldconfig needed (dyld handles ${PREFIX}/lib)"
+			return
+			;;
+		freebsd)
+			local lib_dir="${PREFIX}/lib"
+			echo "==> Configuring ldconfig for ${lib_dir}..."
+			if ! ldconfig -r 2>/dev/null | grep -q "${lib_dir}"; then
+				sudo sh -c "echo '${lib_dir}' >> /etc/ld-elf.conf"
+			fi
+			sudo ldconfig
+			return
+			;;
+	esac
+
+	# Linux
 	local conf="/etc/ld.so.conf.d/local.conf"
 	local lib_dir="${PREFIX}/lib64"
 
@@ -136,19 +287,61 @@ configure_ldconfig () {
 }
 
 # ── Main ─────────────────────────────────────────────────────────────
+
 usage () {
-	echo "Usage: $0 [--system|--from-source|--ldconfig]"
+	echo "Usage: $0 [--system|--from-source|--ldconfig|--list]"
 	echo ""
-	echo "  (no args)      Install everything"
-	echo "  --system       System packages only (dnf)"
+	echo "  (no args)      Install everything (system + from-source)"
+	echo "  --system       System packages only"
 	echo "  --from-source  Build crispy, bacon, gowl from deps/"
-	echo "  --ldconfig     Configure /usr/local/lib64 in ldconfig"
+	echo "  --ldconfig     Configure library path (Linux/FreeBSD)"
+	echo "  --list         Print package list for detected platform (dry run)"
+	echo ""
+	echo "Supported platforms:"
+	echo "  Fedora / RHEL / CentOS Stream    (dnf)"
+	echo "  Ubuntu / Debian / Mint / Pop!_OS (apt)"
+	echo "  Arch / Manjaro / EndeavourOS     (pacman)"
+	echo "  macOS                            (Homebrew)"
+	echo "  FreeBSD                          (pkg)"
 	echo ""
 	echo "Configure CMacs with:"
 	echo "  ./configure --with-pgtk --with-native-compilation \\"
 	echo "    --with-json --with-tree-sitter \\"
 	echo "    --with-cmacs-glib --with-cmacs-gi \\"
 	echo "    --with-cmacs-crispy --with-cmacs-bacon --with-cmacs-gowl"
+}
+
+list_packages () {
+	local platform
+	platform="$(detect_platform)"
+
+	case "${platform}" in
+		fedora)  set_packages_fedora ;;
+		debian)  set_packages_debian ;;
+		arch)    set_packages_arch ;;
+		macos)   set_packages_macos ;;
+		freebsd) set_packages_freebsd ;;
+		*)
+			echo "ERROR: Unsupported platform." >&2
+			exit 1
+			;;
+	esac
+
+	echo "Platform: ${platform}"
+	echo "Install command: ${PKG_CMD}"
+	echo ""
+	echo "Build tools:     ${PKGS_BUILD[*]}"
+	echo "Core libs:       ${PKGS_CORE[*]}"
+	echo "GUI (pgtk):      ${PKGS_GUI[*]}"
+	echo "Native comp:     ${PKGS_NCOMP[*]:-N/A}"
+	echo "Image libs:      ${PKGS_IMAGE[*]}"
+	echo "Text rendering:  ${PKGS_TEXT[*]}"
+	echo "JSON:            ${PKGS_JSON[*]}"
+	echo "Tree-sitter:     ${PKGS_TS[*]}"
+	echo "GLib/GI:         ${PKGS_GLIB[*]}"
+	echo "Gowl (Wayland):  ${PKGS_GOWL[*]:-N/A}"
+	echo ""
+	echo "From source (deps/): crispy, bacon, gowl"
 }
 
 main () {
@@ -163,6 +356,9 @@ main () {
 			;;
 		--ldconfig)
 			configure_ldconfig
+			;;
+		--list)
+			list_packages
 			;;
 		--help|-h)
 			usage
