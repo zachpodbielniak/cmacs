@@ -1,0 +1,69 @@
+#+TITLE: D-Bus Service
+#+STARTUP: showall
+#+OPTIONS: toc:2 num:t
+
+* Bus Name
+
+CMacs registers on the session bus as:
+
+#+begin_example
+org.cmacs.Editor.Pid<PID>
+#+end_example
+
+For example, if Emacs has PID 12345: =org.cmacs.Editor.Pid12345=.
+
+The bus name is stored in the environment variable =$CMACS_DBUS_NAME=
+so child processes (bacon, external scripts) can discover it.
+
+* Interface: org.cmacs.Editor1
+
+Object path: =/org/cmacs/Editor=
+
+| Method              | Parameters                       | Returns        | Description                    |
+|---------------------+----------------------------------+----------------+--------------------------------|
+| =Eval=              | =(s)= expression                 | =(s)= result   | Evaluate elisp, return result  |
+| =FindFile=          | =(s)= path                       | (none)         | Open a file in the editor      |
+| =Message=           | =(s)= text                       | (none)         | Display message in echo area   |
+| =GiRequire=         | =(ss)= namespace, version        | =(b)= success  | Load a GI namespace            |
+| =GiCall=            | =(ssas)= ns, func, args          | =(s)= result   | Call a GI function             |
+| =GiListFunctions=   | =(s)= namespace                  | =(as)= names   | List functions in namespace    |
+
+* Elisp Primitives
+
+| Function                                | Description                          |
+|-----------------------------------------+--------------------------------------|
+| =(cmacs-dbus-register)=                 | Register the D-Bus service           |
+| =(cmacs-dbus-unregister)=               | Unregister the D-Bus service         |
+| =(cmacs-dbus-registered-p)=             | Return =t= if registered             |
+| =(cmacs-dbus-bus-name)=                 | Return the current bus name string   |
+
+* Testing with gdbus
+
+#+begin_src shell
+# Introspect the service
+gdbus introspect --session \
+  --dest org.cmacs.Editor.Pid$(pgrep -f 'src/emacs') \
+  --object-path /org/cmacs/Editor
+
+# Evaluate elisp
+gdbus call --session \
+  --dest org.cmacs.Editor.Pid$(pgrep -f 'src/emacs') \
+  --object-path /org/cmacs/Editor \
+  --method org.cmacs.Editor1.Eval \
+  '(+ 40 2)'
+# => ('42',)
+
+# Open a file
+gdbus call --session \
+  --dest org.cmacs.Editor.Pid$(pgrep -f 'src/emacs') \
+  --object-path /org/cmacs/Editor \
+  --method org.cmacs.Editor1.FindFile \
+  '/tmp/test.txt'
+#+end_src
+
+* Files
+
+| File                          | Purpose                             |
+|-------------------------------+-------------------------------------|
+| =cmacs/glib/cmacs-dbus.c=    | D-Bus service registration + methods |
+| =lisp/cmacs/cmacs-dbus.el=   | Elisp layer                          |

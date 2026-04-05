@@ -1,0 +1,81 @@
+#+TITLE: GObject Bridge
+#+STARTUP: showall
+#+OPTIONS: toc:2 num:t
+
+* Overview
+
+The GObject bridge wraps GObject instances as Emacs =user-ptr= values
+with automatic reference counting.  When the Emacs garbage collector
+finalizes a user-ptr, =g_object_unref()= is called automatically.
+
+* Elisp Primitives
+
+| Function                                              | Description                                    |
+|-------------------------------------------------------+------------------------------------------------|
+| =(gobject-new TYPE &rest PROPERTIES)=                 | Create a new GObject of TYPE with properties   |
+| =(gobject-p OBJECT)=                                  | Return =t= if OBJECT is a wrapped GObject      |
+| =(gobject-type-name OBJECT)=                          | Return the GType name string                   |
+| =(gobject-get OBJECT PROPERTY)=                       | Get a GObject property value                   |
+| =(gobject-set OBJECT PROPERTY VALUE)=                 | Set a GObject property                         |
+| =(gobject-connect OBJECT SIGNAL CALLBACK)=            | Connect a Lisp function to a GObject signal    |
+| =(gobject-disconnect OBJECT HANDLER-ID)=              | Disconnect a signal handler                    |
+| =(gobject-list-properties OBJECT-OR-TYPE)=            | List all property names                        |
+| =(gobject-list-signals OBJECT-OR-TYPE)=               | List all signal names                          |
+
+** Examples
+
+#+begin_src emacs-lisp
+;; Create a GObject and inspect it
+(let ((obj (gobject-new "GtkButton"
+             "label" "Click me")))
+  (message "Type: %s" (gobject-type-name obj))
+  (message "Label: %s" (gobject-get obj "label"))
+  (gobject-set obj "label" "New label"))
+
+;; Connect a signal
+(let* ((obj (gobject-new "GtkButton"))
+       (id (gobject-connect obj "clicked"
+             (lambda (o) (message "Button clicked!")))))
+  ;; Later: disconnect
+  (gobject-disconnect obj id))
+
+;; Introspect properties
+(gobject-list-properties "GtkWindow")
+;; => ("title" "resizable" "default-width" ...)
+#+end_src
+
+* GValue Marshalling
+
+Conversion between Emacs Lisp types and GValue types:
+
+| GType           | Lisp type        | Notes                              |
+|-----------------+------------------+------------------------------------|
+| =G_TYPE_BOOLEAN= | =t= / =nil=     |                                    |
+| =G_TYPE_INT=    | integer          |                                    |
+| =G_TYPE_UINT=   | integer          | Negative values signal error       |
+| =G_TYPE_INT64=  | integer          |                                    |
+| =G_TYPE_UINT64= | integer          |                                    |
+| =G_TYPE_FLOAT=  | float            |                                    |
+| =G_TYPE_DOUBLE= | float            |                                    |
+| =G_TYPE_STRING= | string           |                                    |
+| =G_TYPE_ENUM=   | integer or symbol |                                   |
+| =G_TYPE_OBJECT= | user-ptr         | Ref'd on wrap, unref'd on finalize |
+
+* GClosure Integration
+
+When you connect a Lisp function as a signal handler via
+=gobject-connect=, CMacs wraps it in a =GClosure=.  The closure:
+
+- Holds a GC-protected reference to the Lisp function
+- Marshals GValue arguments to Lisp values on invocation
+- Marshals the Lisp return value back to a GValue
+- Is invalidated (Lisp ref released) on =gobject-disconnect=
+
+* Files
+
+| File                                  | Purpose                       |
+|---------------------------------------+-------------------------------|
+| =cmacs/gobject/cmacs-gobject.c=      | GObject wrapping, properties  |
+| =cmacs/gobject/cmacs-gobject-signal.c= | Signal connection, GClosure |
+| =cmacs/gobject/cmacs-gvalue.c=       | GValue <-> Lisp marshalling    |
+| =lisp/cmacs/cmacs-gobject.el=        | Elisp layer                   |

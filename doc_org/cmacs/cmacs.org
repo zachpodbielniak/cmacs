@@ -1,0 +1,51 @@
+#+TITLE: CMacs Manual
+#+AUTHOR: Zach Podbielniak
+#+STARTUP: showall
+#+OPTIONS: toc:3 num:t
+
+CMacs is GNU Emacs extended with GLib, GObject, Wayland, and embedded
+scripting.  This manual covers every CMacs-specific subsystem.
+
+* Opening This Manual
+
+From inside CMacs:
+
+- =M-x cmacs-manual= --- open this index
+- =M-x cmacs-manual-topic= --- jump directly to a topic (with completion)
+
+From any Org file, follow links with =C-c C-o= or =M-x org-open-at-point=.
+
+* Documentation Index
+
+| Chapter                          | File                | Description                                    |
+|----------------------------------+---------------------+------------------------------------------------|
+| [[file:overview.org][Overview]]                         | =overview.org=      | Architecture, source layout, quick start       |
+| [[file:glib.org][GLib Event Loop]]                  | =glib.org=          | GMainContext integration with Emacs pselect()   |
+| [[file:gobject.org][GObject Bridge]]                   | =gobject.org=       | GObject <-> Lisp bridge, GClosure, GValue       |
+| [[file:gi.org][GObject Introspection]]            | =gi.org=            | Call any GI-registered library from Elisp       |
+| [[file:dbus.org][D-Bus Service]]                    | =dbus.org=          | org.cmacs.Editor1 interface                     |
+| [[file:bacon.org][Bacon Shell]]                      | =bacon.org=         | Embedded shell, IPC, =cmacs --bacon=           |
+| [[file:cmacsgi.org][cmacsgi Command Reference]]        | =cmacsgi.org=       | All 50+ shell commands for controlling Emacs   |
+| [[file:api.org][CMacs API (C Library)]]            | =api.org=           | libcmacs-api.so --- transports, helpers, API   |
+| [[file:crispy.org][Crispy C Scripting]]               | =crispy.org=        | Write config and scripts in C                   |
+| [[file:build.org][Build Configuration]]              | =build.org=         | Configure flags, dependencies, Makefiles        |
+
+* Quick Start
+
+#+begin_example
+./install-deps            # system dependencies
+./autogen.sh              # first time only
+./configure               # auto-detects bundled deps
+make -j$(nproc)           # builds everything
+src/emacs                 # run it
+#+end_example
+
+Place config files in =~/.config/cmacs/=:
+
+| File          | Language | Loaded by              |
+|---------------+----------+------------------------|
+| =init.el=     | Elisp    | Emacs (standard)       |
+| =init.bacon=  | Shell    | =bacon-source=         |
+| =init.c=      | C        | =crispy-run=           |
+
+All three are loaded at startup in that order.

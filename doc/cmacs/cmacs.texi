@@ -1078,43 +1078,41 @@ Directory containing @command{cmacsgi} module files.  Set by
 @section Module Files
 
 @table @file
-@item cmacs/bacon/modules/cmacs-gi-transport.c
-Transport abstraction: auto-selects fd (socketpair) or D-Bus backend.
 @item cmacs/bacon/modules/cmacs-gi-command.c
-Core dispatch table, shared utilities, original subcommands.
+BaconCommand subclass, top-level dispatch table, original subcommands
+(eval, find-file, message, require, call, list).
 @item cmacs/bacon/modules/cmacs-gi-cmd-internal.h
-Shared types, handler typedefs, utility declarations.
-@item cmacs/bacon/modules/cmacs-gi-cmd-buf.c
-Buffer subcommands (buf list, show, create, kill, ...).
-@item cmacs/bacon/modules/cmacs-gi-cmd-file.c
-File subcommands (open, save, close, recent).
-@item cmacs/bacon/modules/cmacs-gi-cmd-text.c
-Text editing subcommands (insert, delete, line, append).
-@item cmacs/bacon/modules/cmacs-gi-cmd-nav.c
-Navigation subcommands (point, goto).
-@item cmacs/bacon/modules/cmacs-gi-cmd-search.c
-Search subcommands (search, replace, occur).
-@item cmacs/bacon/modules/cmacs-gi-cmd-win.c
-Window subcommands (win list, split, close, ...).
-@item cmacs/bacon/modules/cmacs-gi-cmd-config.c
-Configuration subcommands (set, get, theme, font, mode).
-@item cmacs/bacon/modules/cmacs-gi-cmd-project.c
-Project/build subcommands (grep, find, compile, diag, ...).
-@item cmacs/bacon/modules/cmacs-gi-cmd-mark.c
-Bookmark subcommands (mark set, list, jump, del).
-@item cmacs/bacon/modules/cmacs-gi-cmd-clip.c
-Clipboard subcommands (copy, cut, paste, clip list).
-@item cmacs/bacon/modules/cmacs-gi-cmd-vc.c
-Version control subcommands (vc status, diff, log, blame).
-@item cmacs/bacon/modules/cmacs-gi-cmd-pkg.c
-Package subcommands (pkg install, remove, list, refresh).
+Compat shim: typedefs/macros mapping old names to @code{cmacs_api_*}.
 @item cmacs/bacon/modules/cmacs-gi-command.h
 GObject type declaration.
 @item cmacs/bacon/modules/cmacs-gi-module.c
 BaconModule wrapper (registers the builtin on startup).
 @item cmacs/bacon/modules/Makefile
-Builds @file{cmacs_gi.so} for standalone module use.  Requires
-@code{gio-2.0} and @code{json-glib-1.0}.
+Builds @file{cmacs_gi.so}, links against @file{libcmacs-api.so}.
+@item cmacs/api/cmacs-api-cmd-buf.c
+Buffer subcommands (buf list, show, create, kill, ...).
+@item cmacs/api/cmacs-api-cmd-file.c
+File subcommands (open, save, close, recent).
+@item cmacs/api/cmacs-api-cmd-text.c
+Text editing subcommands (insert, delete, line, append).
+@item cmacs/api/cmacs-api-cmd-nav.c
+Navigation subcommands (point, goto).
+@item cmacs/api/cmacs-api-cmd-search.c
+Search subcommands (search, replace, occur).
+@item cmacs/api/cmacs-api-cmd-win.c
+Window subcommands (win list, split, close, ...).
+@item cmacs/api/cmacs-api-cmd-config.c
+Configuration subcommands (set, get, theme, font, mode).
+@item cmacs/api/cmacs-api-cmd-project.c
+Project/build subcommands (grep, find, compile, diag, ...).
+@item cmacs/api/cmacs-api-cmd-mark.c
+Bookmark subcommands (mark set, list, jump, del).
+@item cmacs/api/cmacs-api-cmd-clip.c
+Clipboard subcommands (copy, cut, paste, clip list).
+@item cmacs/api/cmacs-api-cmd-vc.c
+Version control subcommands (vc status, diff, log, blame).
+@item cmacs/api/cmacs-api-cmd-pkg.c
+Package subcommands (pkg install, remove, list, refresh).
 @end table
 
 @c ===================================================================
@@ -1140,74 +1138,228 @@ In-process function calls via a registered dispatch table.  Used by
 Crispy scripts, which are compiled to @file{.so} files and loaded into
 the Emacs process via @code{g_module_open()}.  Zero IPC overhead.
 
+The dispatch table is a struct of function pointers registered by
+@code{cmacs-crispy.c} before executing scripts:
+
+@example
+typedef struct @{
+    gchar    *(*eval)(const gchar *expression, GError **error);
+    void      (*find_file)(const gchar *path);
+    void      (*message)(const gchar *text);
+    gboolean  (*gi_require)(const gchar *ns, const gchar *ver,
+                            GError **error);
+    gchar    *(*gi_call)(const gchar *ns, const gchar *func,
+                         const gchar *const *args, gint n_args,
+                         GError **error);
+    gchar   **(*gi_list_functions)(const gchar *ns);
+@} CmacsApiDirectDispatch;
+@end example
+
 @item FD
 Length-prefixed JSON over a Unix socketpair (@env{CMACS_IPC_FD}).
 Used by the Bacon child process.
 
+Messages are framed as: @code{[4 bytes: uint32 BE length][N bytes: JSON]}.
+Maximum message size is 16@tie{}MiB.  Timeout is 30 seconds.
+
+Request format:
+
+@example
+@{"id": 1, "method": "Eval", "params": @{"expression": "(+ 40 2)"@}@}
+@end example
+
+@noindent
+Method parameter mappings:
+
+@multitable @columnfractions .25 .75
+@headitem Method @tab JSON params
+@item @code{Eval} @tab @code{@{"expression": "..."@}}
+@item @code{FindFile} @tab @code{@{"path": "..."@}}
+@item @code{Message} @tab @code{@{"text": "..."@}}
+@item @code{GiRequire} @tab @code{@{"namespace": "...", "version": "..."@}}
+@item @code{GiCall}
+@tab @code{@{"namespace": "...", "function": "...", "args": [...]@}}
+@item @code{GiListFunctions} @tab @code{@{"namespace": "..."@}}
+@end multitable
+
+@noindent
+Response: @code{@{"result": "42"@}} on success,
+@code{@{"error": "message"@}} on error.
+
 @item D-Bus
 GDBusProxy to @code{org.cmacs.Editor1} (@env{CMACS_DBUS_NAME}).
-Used by external tools.
+Used by external tools.  Connects on the session bus with object
+path @code{/org/cmacs/Editor}.  GVariant params pass through
+directly (no JSON translation).
 @end table
 
 @section High-Level C API
 
 Include @code{<cmacs-api.h>} and link with @code{-lcmacs-api}.
+All functions return 0 on success unless noted otherwise.
 
 @table @code
 @item CmacsApi *cmacs_api_new (GError **error)
-Create a handle (auto-detects transport).
+Create a handle (auto-detects transport).  Returns @code{NULL} on
+failure.
 
-@item cmacs_set (api, var, value)
-Set an Emacs variable.  Numbers and @code{t}/@code{nil} pass through;
-other values become strings.
+@item void cmacs_api_free (CmacsApi *api)
+Free the handle and all associated resources.
 
-@item cmacs_get (api, var, &out)
-Get an Emacs variable value.
+@item gint cmacs_set (CmacsApi *api, const gchar *var, const gchar *value)
+Set an Emacs variable.  Numbers and @code{t}/@code{nil} pass through
+as Lisp values; everything else becomes a quoted string.
+Generates: @code{(setq VAR VALUE)}.
 
-@item cmacs_theme (api, name)
-Load a color theme.
+@item gint cmacs_get (CmacsApi *api, const gchar *var, gchar **out)
+Get an Emacs variable value.  On success, stores the printed Lisp
+representation in @code{*out} (caller must @code{g_free}).
 
-@item cmacs_font (api, family, size)
-Set the default font and size.
+@item gint cmacs_theme (CmacsApi *api, const gchar *name)
+Load a color theme.  Generates: @code{(load-theme 'NAME t)}.
 
-@item cmacs_mode (api, name)
-Enable a mode (appends @code{-mode} if needed).
+@item gint cmacs_font (CmacsApi *api, const gchar *family, gint size)
+Set the default font and size.  Pass @code{size <= 0} to leave size
+unchanged.  Point sizes less than 100 are converted to 1/10 point
+units (14 becomes 140).  Generates:
+@code{(set-face-attribute 'default nil :family "FAMILY" :height SIZE)}.
 
-@item cmacs_eval (api, elisp)
+@item gint cmacs_mode (CmacsApi *api, const gchar *name)
+Enable a mode.  Appends @code{-mode} if not already present.
+Generates: @code{(NAME-mode 1)}.
+
+@item gint cmacs_eval (CmacsApi *api, const gchar *elisp)
 Evaluate arbitrary elisp.
 
-@item cmacs_open (api, path)
-Open a file.
+@item gint cmacs_open (CmacsApi *api, const gchar *path)
+Open a file via the @code{FindFile} transport method.
 
-@item cmacs_message (api, text)
+@item gint cmacs_message (CmacsApi *api, const gchar *text)
 Display a message in the echo area.
 
-@item cmacs_pkg_install (api, name)
-Install a package via @code{package.el}.
+@item gint cmacs_pkg_install (CmacsApi *api, const gchar *name)
+Install a package via @code{package.el}.  Automatically refreshes
+package contents if the package is not already installed.
 
-@item cmacs_pkg_remove (api, name)
+@item gint cmacs_pkg_remove (CmacsApi *api, const gchar *name)
 Remove a package.
+@end table
 
-@item cmacs_api_free (api)
-Free the handle.
+@section Low-Level Transport API
+
+@table @code
+@item CmacsApiTransport *cmacs_api_transport_new (GError **error)
+Auto-detect and create a transport.  Returns @code{NULL} on failure.
+
+@item void cmacs_api_transport_free (CmacsApiTransport *t)
+Free the transport.  Does not close the fd (caller owns it).
+
+@item GVariant *cmacs_api_transport_call (CmacsApiTransport *t, const gchar *method, GVariant *params, GError **error)
+Call a method with GVariant parameters.  Returns the result GVariant
+(caller must @code{g_variant_unref}), or @code{NULL} on error.
+@end table
+
+@noindent
+Supported method signatures:
+
+@multitable @columnfractions .25 .25 .25 .25
+@headitem Method @tab Params @tab Returns @tab Description
+@item @code{Eval} @tab @code{(s)} @tab @code{(s)} @tab Evaluate elisp
+@item @code{FindFile} @tab @code{(s)} @tab (none)
+@tab Open file
+@item @code{Message} @tab @code{(s)} @tab (none)
+@tab Echo area msg
+@item @code{GiRequire} @tab @code{(ss)} @tab @code{(b)}
+@tab Load GI namespace
+@item @code{GiCall} @tab @code{(ssas)} @tab @code{(s)}
+@tab Call GI function
+@item @code{GiListFunctions} @tab @code{(s)} @tab @code{(as)}
+@tab List GI functions
+@end multitable
+
+@section Eval Helpers
+
+@table @code
+@item gint cmacs_api_eval_print (CmacsApiTransport *t, const gchar *elisp)
+Evaluate elisp via transport, print result to stdout.
+
+@item gint cmacs_api_eval_quiet (CmacsApiTransport *t, const gchar *elisp)
+Evaluate elisp, suppress output.
+
+@item gchar *cmacs_api_eval_get_string (CmacsApiTransport *t, const gchar *elisp)
+Evaluate elisp, return result as string (caller must @code{g_free}).
+@end table
+
+@section String Utilities
+
+@table @code
+@item gchar *cmacs_api_lisp_escape (const gchar *s)
+Escape a C string for embedding in a Lisp string literal.  Escapes
+@code{\} and @code{"}.  Does not add outer quotes.  Caller must
+@code{g_free}.
+
+@item gchar *cmacs_api_lisp_quote (const gchar *s)
+Quote a value for the Lisp reader: numbers, @code{t}/@code{nil},
+quoted strings, and s-expressions pass through; bare words become
+quoted string literals.  Caller must @code{g_free}.
+@end table
+
+@section Dispatch Table Types
+
+Used by @command{cmacsgi} command implementations to organize
+subcommands into groups.
+
+@table @code
+@item CmacsApiHandler
+@code{typedef gint (*CmacsApiHandler)(CmacsApiTransport *transport, gint argc, gchar **argv);}
+
+@item CmacsApiSubcmd
+Struct: @code{@{ const gchar *name; CmacsApiHandler handler; const gchar *usage; const gchar *help; @}}.
+
+@item gint cmacs_api_dispatch_group (group_name, table, transport, argc, argv, depth)
+Dispatch @code{argv[depth]} against a NULL-terminated subcommand table.
+Handles @code{--help}/@code{-h}.
+
+@item void cmacs_api_print_group_help (group_name, table)
+Print formatted help listing for a subcommand group.
 @end table
 
 @section Example: init.c
 
 @example
+/* ~/.config/cmacs/init.c */
 #include <cmacs-api.h>
 
 int main(int argc, char **argv)
 @{
     CmacsApi *api = cmacs_api_new(NULL);
+    if (!api) return 1;
 
+    /* Appearance */
     cmacs_theme(api, "modus-vivendi");
     cmacs_font(api, "Iosevka", 14);
-    cmacs_set(api, "inhibit-startup-screen", "t");
-    cmacs_mode(api, "electric-pair");
-    cmacs_pkg_install(api, "magit");
-    cmacs_eval(api, "(global-display-line-numbers-mode 1)");
 
+    /* Settings */
+    cmacs_set(api, "inhibit-startup-screen", "t");
+    cmacs_set(api, "ring-bell-function", "ignore");
+    cmacs_set(api, "scroll-conservatively", "101");
+
+    /* Modes */
+    cmacs_mode(api, "electric-pair");
+    cmacs_mode(api, "global-display-line-numbers");
+    cmacs_mode(api, "column-number");
+
+    /* Packages */
+    cmacs_pkg_install(api, "magit");
+    cmacs_pkg_install(api, "which-key");
+
+    /* Keybindings */
+    cmacs_eval(api, "(global-set-key (kbd \"C-x g\") 'magit-status)");
+
+    /* Open a file */
+    cmacs_open(api, "~/Documents/notes/todo.org");
+
+    cmacs_message(api, "C config loaded!");
     cmacs_api_free(api);
     return 0;
 @}

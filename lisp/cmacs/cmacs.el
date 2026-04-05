@@ -66,6 +66,36 @@ Possible values: `linux', `macos', `freebsd', or `unknown'."
        'bsd))
     (_ 'unknown)))
 
+;;; Documentation
+
+(defvar cmacs-doc-org-directory
+  (expand-file-name "doc_org/cmacs/" source-directory)
+  "Directory containing CMacs Org documentation files.")
+
+;;;###autoload
+(defun cmacs-manual ()
+  "Open the CMacs Org manual index."
+  (interactive)
+  (let ((index (expand-file-name "cmacs.org" cmacs-doc-org-directory)))
+    (if (file-exists-p index)
+        (find-file index)
+      (info "(cmacs)"))))
+
+;;;###autoload
+(defun cmacs-manual-topic (topic)
+  "Open a specific CMacs Org manual TOPIC.
+TOPIC is a filename without extension (e.g., \"cmacsgi\", \"api\")."
+  (interactive
+   (list (completing-read "CMacs topic: "
+                          '("overview" "glib" "gobject" "gi" "dbus"
+                            "bacon" "cmacsgi" "api" "crispy" "build")
+                          nil t)))
+  (let ((file (expand-file-name (concat topic ".org")
+                                cmacs-doc-org-directory)))
+    (if (file-exists-p file)
+        (find-file file)
+      (user-error "Doc file not found: %s" file))))
+
 ;;; Autoloads
 
 (autoload 'cmacs-gi-require "cmacs-gi"

@@ -1,0 +1,87 @@
+#+TITLE: CMacs Overview
+#+STARTUP: showall
+#+OPTIONS: toc:2 num:t
+
+* What Is CMacs
+
+CMacs is GNU Emacs with deep GLib/GObject/Wayland integration.  It adds
+seven subsystems as C primitives (DEFUNs), all built into the editor:
+
+| Subsystem  | Directory        | Purpose                                              |
+|------------+------------------+------------------------------------------------------|
+| *glib*     | =cmacs/glib/=    | GMainContext event loop integration, D-Bus, dispatch |
+| *gobject*  | =cmacs/gobject/= | GObject <-> Lisp bridge, GClosure wrappers            |
+| *gi*       | =cmacs/gi/=      | GObject Introspection --- call any GI library         |
+| *api*      | =cmacs/api/=     | Shared C library (libcmacs-api.so) for editor control |
+| *crispy*   | =cmacs/crispy/=  | C scripting --- compile and run C at runtime          |
+| *bacon*    | =cmacs/bacon/=   | Embedded shell (fork-of-self, socketpair IPC)         |
+| *gowl*     | =cmacs/gowl/=    | Wayland compositor (wlroots) --- 47 DEFUNs            |
+
+* Source Layout
+
+#+begin_example
+cmacs/                C source for all subsystems
+  glib/               GLib loop, D-Bus, eval dispatch
+  gobject/            GObject bridge, GClosure
+  gi/                 GObject Introspection bridge
+  api/                Shared C library (libcmacs-api.so)
+  crispy/             Crispy language integration
+  bacon/              Bacon shell integration + IPC
+    modules/          Bacon native modules (starship, fzf, etc.)
+  gowl/               Wayland compositor
+  compat/             Compatibility shims
+  cmacs.h             Master header
+deps/                 Git submodules (crispy, bacon, gowl)
+lisp/cmacs/           Elisp layer for each subsystem
+test/cmacs/           ERT tests for each subsystem
+doc/cmacs/            Texinfo manual
+doc_org/cmacs/        Org manual (this documentation)
+#+end_example
+
+* How The Pieces Fit Together
+
+#+begin_example
+┌─────────────────────────────────────────────────────────┐
+│                    Emacs (temacs)                        │
+│                                                         │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐              │
+│  │ GLib loop │  │ GObject  │  │    GI    │              │
+│  │ + D-Bus   │  │  bridge  │  │  bridge  │              │
+│  └────┬─────┘  └──────────┘  └──────────┘              │
+│       │                                                 │
+│  ┌────┴──────────────────────────────┐                  │
+│  │         eval dispatch             │                  │
+│  │  (cmacs-eval-dispatch.c)          │                  │
+│  └────┬──────────────┬───────────────┘                  │
+│       │              │                                  │
+│  ┌────┴─────┐   ┌────┴──────┐   ┌──────────┐           │
+│  │  Bacon   │   │  Crispy   │   │   Gowl   │           │
+│  │  shell   │   │ C scripts │   │ Wayland  │           │
+│  └────┬─────┘   └────┬──────┘   └──────────┘           │
+│       │              │                                  │
+│       │         ┌────┴──────┐                           │
+│       │         │ DIRECT    │                           │
+│       │         │ dispatch  │                           │
+│       │         └────┬──────┘                           │
+│       │              │                                  │
+│  ┌────┴──────────────┴───────────────┐                  │
+│  │      libcmacs-api.so              │                  │
+│  │  transport / helpers / commands   │                  │
+│  └───────────────────────────────────┘                  │
+└─────────────────────────────────────────────────────────┘
+#+end_example
+
+- *Bacon* communicates via socketpair (FD transport) --- it forks from Emacs
+- *Crispy* scripts run in-process via =g_module_open= (DIRECT transport) --- zero IPC
+- *External tools* use D-Bus transport (=org.cmacs.Editor1=)
+- All three share =libcmacs-api.so= for the same command set
+
+* Config File Search Order
+
+CMacs checks for config files in this priority:
+
+1. =$XDG_CONFIG_HOME/cmacs/= (default: =~/.config/cmacs/=)
+2. =user-emacs-directory= (=~/.emacs.d/=)
+
+This keeps CMacs-specific config (=init.bacon=, =init.c=) separate from
+vanilla Emacs.  Elisp =init.el= is always loaded from =user-emacs-directory=.

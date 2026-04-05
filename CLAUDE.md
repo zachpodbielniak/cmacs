@@ -63,7 +63,18 @@ cmacs/              C source for all cmacs subsystems
 deps/               Git submodules (crispy, bacon, gowl)
 lisp/cmacs/         Elisp layer for each subsystem
 test/cmacs/         ERT tests for each subsystem
+doc/cmacs/          Texinfo manual (built into Emacs Info)
+doc_org/cmacs/      Org manual (interactive, browsable in Emacs)
 ```
+
+## Documentation
+
+CMacs documentation is maintained in **two formats** that must be kept in sync:
+
+- `doc/cmacs/cmacs.texi` — Texinfo manual, built into Emacs's Info system
+- `doc_org/cmacs/*.org` — Org files, browsable interactively in Emacs
+
+When adding or updating documentation, **update both**. The Org docs are the primary interactive reference; the Texinfo docs are the formal manual built into the editor.
 
 ## Code Style
 

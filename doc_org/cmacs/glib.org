@@ -1,0 +1,60 @@
+#+TITLE: GLib Event Loop Integration
+#+STARTUP: showall
+#+OPTIONS: toc:2 num:t
+
+* How It Works
+
+CMacs does *not* replace the Emacs event loop.  Instead,
+=cmacs-glib-loop.c= hooks into Emacs's =pselect()= call in =process.c=:
+
+1. *cmacs_glib_prepare()* --- before pselect: queries =GMainContext= for
+   file descriptors and timeouts, merges them into Emacs's =fd_sets=
+2. *cmacs_glib_dispatch()* --- after pselect: maps results back to
+   =GPollFD=, calls =g_main_context_dispatch()=
+
+#+begin_quote
+*Critical invariant*: GLib callbacks (IPC, D-Bus, timers) may evaluate
+Lisp.  Emacs's =signal_or_quit= unconditionally aborts if
+=waiting_for_input= is true during a Lisp error.
+=cmacs_glib_dispatch= must clear =waiting_for_input= before dispatch
+and restore it after.  Failing to do this causes non-deterministic
+=Fatal error 6: Aborted= crashes.
+#+end_quote
+
+* Elisp Primitives
+
+| Function                                    | Description                                         |
+|---------------------------------------------+-----------------------------------------------------|
+| =(cmacs-glib-context-p)=                    | Return =t= if the GLib context is active            |
+| =(cmacs-glib-iteration &optional MAY-BLOCK)= | Run one GMainContext iteration                       |
+| =(cmacs-glib-pending-p)=                    | Return =t= if pending GLib events exist             |
+| =(cmacs-glib-timeout-add MS CALLBACK)=      | Schedule CALLBACK after MS milliseconds; return id  |
+| =(cmacs-glib-idle-add CALLBACK)=            | Schedule CALLBACK as a GLib idle handler; return id |
+| =(cmacs-glib-source-remove ID)=             | Remove a timeout or idle source by ID               |
+
+** Examples
+
+#+begin_src emacs-lisp
+;; Flash a message after 2 seconds
+(cmacs-glib-timeout-add 2000
+  (lambda () (message "2 seconds elapsed!") nil))
+
+;; Run something when idle
+(cmacs-glib-idle-add
+  (lambda () (message "GLib idle callback fired") nil))
+
+;; Check if context is active
+(when (cmacs-glib-context-p)
+  (message "GLib integration is running"))
+#+end_src
+
+* Files
+
+| File                            | Purpose                                     |
+|---------------------------------+---------------------------------------------|
+| =cmacs/glib/cmacs-glib-loop.c= | pselect() hook, prepare/dispatch             |
+| =cmacs/glib/cmacs-glib-core.c= | Timeout, idle, iteration primitives          |
+| =cmacs/glib/cmacs-eval-dispatch.c= | Safe Lisp evaluation from GLib callbacks |
+| =cmacs/glib/cmacs-eval-dispatch.h= | Dispatch function signatures             |
+| =cmacs/glib/cmacs-dbus.c=      | D-Bus service (org.cmacs.Editor1)            |
+| =lisp/cmacs/cmacs-glib.el=     | Elisp layer                                  |

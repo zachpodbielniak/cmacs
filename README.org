@@ -19,6 +19,27 @@ CMacs embeds three companion projects as git submodules under =deps/=:
 Each module is optional and detected at configure time via
 =--with-cmacs-*= flags.
 
+* Documentation
+
+CMacs ships with interactive Org documentation built into the editor.
+
+- =M-x cmacs-manual= --- open the manual index
+- =M-x cmacs-manual-topic= --- jump to a topic (with completion):
+  =overview=, =glib=, =gobject=, =gi=, =dbus=, =bacon=, =cmacsgi=, =api=, =crispy=, =build=
+
+The Org docs live in =doc_org/cmacs/= and can also be browsed directly
+on disk.  A Texinfo version is built into Emacs Info (=C-h i=, look for
+CMacs).
+
+| Topic                | =M-x cmacs-manual-topic= | Description                              |
+|----------------------+--------------------------+------------------------------------------|
+| cmacsgi reference    | =cmacsgi=                | All 50+ shell commands for editor control |
+| CMacs C API          | =api=                    | libcmacs-api.so --- write config in C     |
+| Crispy scripting     | =crispy=                 | Compile and run C at runtime              |
+| Bacon shell          | =bacon=                  | Embedded shell, IPC, init.bacon           |
+| GObject Introspection | =gi=                    | Call any GI library from Elisp            |
+| Build configuration  | =build=                  | Configure flags, deps, Makefiles          |
+
 * Modules
 
 ** GLib Core (=--with-cmacs-glib=)

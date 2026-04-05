@@ -1,0 +1,63 @@
+#+TITLE: GObject Introspection
+#+STARTUP: showall
+#+OPTIONS: toc:2 num:t
+
+* Overview
+
+The GI bridge lets you call any GObject Introspection-registered library
+directly from Elisp.  Load a typelib with =gi-require=, then call
+functions with =gi-call=.
+
+* Elisp Primitives
+
+| Function                                         | Description                                         |
+|--------------------------------------------------+-----------------------------------------------------|
+| =(gi-require NAMESPACE &optional VERSION)=       | Load a GI namespace (e.g., "Gtk" "4.0")            |
+| =(gi-call NAMESPACE FUNCTION &rest ARGS)=        | Call a GI function, return result as string         |
+| =(gi-enum NAMESPACE ENUM-TYPE MEMBER)=           | Look up an enum value by name                       |
+| =(gi-flags NAMESPACE FLAGS-TYPE &rest MEMBERS)=  | Combine flag values by name                         |
+| =(gi-list-functions NAMESPACE)=                  | List all functions in a loaded namespace             |
+| =(gi-function-info NAMESPACE FUNCTION)=          | Return parameter/return type info for a function    |
+
+** Examples
+
+#+begin_src emacs-lisp
+;; Get the current user name via GLib
+(gi-require "GLib")
+(gi-call "GLib" "get_user_name")
+;; => "zach"
+
+;; Look up an enum value
+(gi-enum "GLib" "ChecksumType" "sha256")
+;; => 2
+
+;; List available functions
+(gi-list-functions "GLib")
+;; => ("get_user_name" "get_host_name" "get_home_dir" ...)
+
+;; Use Gtk
+(gi-require "Gtk" "4.0")
+(gi-call "Gtk" "init")
+#+end_src
+
+* High-Level Elisp Interface
+
+The =cmacs-gi-require= function provides auto-generation of Elisp
+wrapper functions.  After calling =(cmacs-gi-require "Gio")=, you can
+call GI functions as =(gio-get-default)= etc.
+
+#+begin_src emacs-lisp
+;; Auto-generate wrappers for Gio
+(cmacs-gi-require "Gio")
+
+;; Now call Gio functions directly
+(gio-app-info-get-all)
+#+end_src
+
+* Files
+
+| File                        | Purpose                               |
+|-----------------------------+---------------------------------------|
+| =cmacs/gi/cmacs-gi.c=      | Core GI bridge (require, call, enum)  |
+| =cmacs/gi/cmacs-gi-info.c= | Function info introspection           |
+| =lisp/cmacs/cmacs-gi.el=   | High-level wrappers, auto-generation  |

@@ -1,0 +1,550 @@
+#+TITLE: CMacs API (C Library Reference)
+#+STARTUP: showall
+#+OPTIONS: toc:3 num:t
+
+* Overview
+
+The CMacs API is a shared C library (=libcmacs-api.so=) that provides a
+unified interface for interacting with the CMacs editor from C code.
+It is used by:
+
+- *Crispy scripts* --- =init.c= and runtime C code (DIRECT transport)
+- *Bacon cmacsgi* --- shell builtin (FD transport)
+- *External tools* --- any program on the system (D-Bus transport)
+
+Include =<cmacs-api.h>= and link with =-lcmacs-api=.
+
+* Transport Backends
+
+The API auto-detects the best available transport in this order:
+
+1. *DIRECT* --- in-process function calls (zero overhead)
+2. *FD* --- length-prefixed JSON over socketpair
+3. *D-Bus* --- GDBusProxy to =org.cmacs.Editor1=
+
+** DIRECT Transport
+
+Used by crispy scripts compiled to =.so= and loaded into the Emacs
+process via =g_module_open()=.  The CMacs crispy integration registers
+a dispatch table of function pointers before executing any script:
+
+#+begin_src c
+typedef struct {
+    gchar    *(*eval)(const gchar *expression, GError **error);
+    void      (*find_file)(const gchar *path);
+    void      (*message)(const gchar *text);
+    gboolean  (*gi_require)(const gchar *ns, const gchar *ver, GError **error);
+    gchar    *(*gi_call)(const gchar *ns, const gchar *func,
+                         const gchar *const *args, gint n_args, GError **error);
+    gchar   **(*gi_list_functions)(const gchar *ns);
+} CmacsApiDirectDispatch;
+#+end_src
+
+These point directly to =cmacs_dispatch_eval()=, =cmacs_dispatch_find_file()=,
+etc. in =cmacs-eval-dispatch.c=.  Calls execute synchronously on the Emacs
+main thread.
+
+** FD Transport (Wire Protocol)
+
+Used by the bacon child process communicating over a socketpair.
+
+*** Message Format
+
+Messages are length-prefixed JSON:
+
+#+begin_example
+┌──────────────┬──────────────────────────┐
+│ 4 bytes      │ N bytes                  │
+│ uint32 BE    │ JSON payload (UTF-8)     │
+│ (length = N) │                          │
+└──────────────┴──────────────���───────────┘
+#+end_example
+
+- Length is a 4-byte unsigned integer in big-endian (network) byte order
+- Maximum message size: 16 MiB
+- Timeout: 30 seconds (via =poll()=)
+
+*** Request Format
+
+#+begin_src json
+{
+    "id": 1,
+    "method": "Eval",
+    "params": {
+        "expression": "(+ 40 2)"
+    }
+}
+#+end_src
+
+*** Method Parameters
+
+| Method            | JSON params                                              |
+|-------------------+----------------------------------------------------------|
+| =Eval=            | ={"expression": "..."}=                                 |
+| =FindFile=        | ={"path": "..."}=                                       |
+| =Message=         | ={"text": "..."}=                                       |
+| =GiRequire=       | ={"namespace": "...", "version": "..."}=                 |
+| =GiCall=          | ={"namespace": "...", "function": "...", "args": [...]}= |
+| =GiListFunctions= | ={"namespace": "..."}=                                  |
+
+*** Response Format
+
+Success:
+#+begin_src json
+{"result": "42"}
+#+end_src
+
+Error:
+#+begin_src json
+{"error": "Symbol's value as variable is void: foo"}
+#+end_src
+
+** D-Bus Transport
+
+Used by external tools.  Connects to the session bus.
+
+| Property         | Value                                      |
+|------------------+--------------------------------------------|
+| Bus name         | Value of =$CMACS_DBUS_NAME=                |
+| Object path      | =/org/cmacs/Editor=                        |
+| Interface        | =org.cmacs.Editor1=                        |
+| Call mechanism    | =g_dbus_proxy_call_sync()=                 |
+| Timeout          | Infinite (=-1=)                            |
+
+GVariant parameter types match the D-Bus interface directly --- no JSON
+translation.
+
+* High-Level C API
+
+These are the convenience functions for common editor operations.  All
+take a =CmacsApi= handle and return 0 on success.
+
+** cmacs_api_new
+
+#+begin_src c
+CmacsApi *cmacs_api_new (GError **error);
+#+end_src
+
+Create a new API handle.  Auto-detects the best transport backend.
+Returns =NULL= on failure (sets =*error=).
+
+** cmacs_api_free
+
+#+begin_src c
+void cmacs_api_free (CmacsApi *api);
+#+end_src
+
+Free the API handle and all associated resources.
+
+** cmacs_set
+
+#+begin_src c
+gint cmacs_set (CmacsApi *api, const gchar *var, const gchar *value);
+#+end_src
+
+Set an Emacs variable.  Values are auto-quoted:
+- Numbers (=42=, =3.14=) pass through as Lisp numbers
+- =t= and =nil= pass through as Lisp symbols
+- Everything else becomes a quoted string
+
+Generates: =(setq VAR VALUE)=
+
+#+begin_src c
+cmacs_set(api, "inhibit-startup-screen", "t");
+cmacs_set(api, "fill-column", "80");
+cmacs_set(api, "frame-title-format", "CMacs: %b");
+#+end_src
+
+** cmacs_get
+
+#+begin_src c
+gint cmacs_get (CmacsApi *api, const gchar *var, gchar **out);
+#+end_src
+
+Get an Emacs variable's value.  On success, stores the printed Lisp
+representation in =*out= (caller must =g_free=).  Returns 0 on success.
+
+#+begin_src c
+gchar *value = NULL;
+cmacs_get(api, "fill-column", &value);
+printf("fill-column = %s\n", value);  /* "80" */
+g_free(value);
+#+end_src
+
+** cmacs_theme
+
+#+begin_src c
+gint cmacs_theme (CmacsApi *api, const gchar *name);
+#+end_src
+
+Load a color theme by name.
+
+Generates: =(load-theme 'NAME t)=
+
+#+begin_src c
+cmacs_theme(api, "modus-vivendi");
+cmacs_theme(api, "catppuccin");
+#+end_src
+
+** cmacs_font
+
+#+begin_src c
+gint cmacs_font (CmacsApi *api, const gchar *family, gint size);
+#+end_src
+
+Set the default font.  Pass =size <= 0= to leave size unchanged.
+Point sizes less than 100 are automatically converted to 1/10 point
+units (e.g., 14 becomes 140).
+
+Generates: =(set-face-attribute 'default nil :family "FAMILY" :height SIZE)=
+
+#+begin_src c
+cmacs_font(api, "Iosevka", 14);
+cmacs_font(api, "JetBrains Mono", 12);
+cmacs_font(api, "Fira Code", -1);  /* change family only */
+#+end_src
+
+** cmacs_mode
+
+#+begin_src c
+gint cmacs_mode (CmacsApi *api, const gchar *name);
+#+end_src
+
+Enable a global minor mode or set a major mode.  Appends =-mode= if
+not already present.
+
+Generates: =(NAME-mode 1)=
+
+#+begin_src c
+cmacs_mode(api, "electric-pair");      /* -> (electric-pair-mode 1) */
+cmacs_mode(api, "global-display-line-numbers");
+cmacs_mode(api, "org-mode");           /* already has -mode suffix */
+#+end_src
+
+** cmacs_eval
+
+#+begin_src c
+gint cmacs_eval (CmacsApi *api, const gchar *elisp);
+#+end_src
+
+Evaluate arbitrary elisp.  Returns 0 on success.
+
+#+begin_src c
+cmacs_eval(api, "(global-display-line-numbers-mode 1)");
+cmacs_eval(api, "(setq custom-file (concat user-emacs-directory \"custom.el\"))");
+#+end_src
+
+** cmacs_open
+
+#+begin_src c
+gint cmacs_open (CmacsApi *api, const gchar *path);
+#+end_src
+
+Open a file in the editor.  Uses the =FindFile= transport method.
+
+#+begin_src c
+cmacs_open(api, "~/Documents/notes.org");
+cmacs_open(api, "/tmp/test.txt");
+#+end_src
+
+** cmacs_message
+
+#+begin_src c
+gint cmacs_message (CmacsApi *api, const gchar *text);
+#+end_src
+
+Display a message in the Emacs echo area (minibuffer).
+
+#+begin_src c
+cmacs_message(api, "Hello from C!");
+cmacs_message(api, "Build complete.");
+#+end_src
+
+** cmacs_pkg_install
+
+#+begin_src c
+gint cmacs_pkg_install (CmacsApi *api, const gchar *name);
+#+end_src
+
+Install an Emacs package via =package.el=.  Automatically refreshes
+package contents if the package is not already installed.
+
+Generates:
+#+begin_example
+(progn (require 'package)
+       (unless (package-installed-p 'NAME)
+         (package-refresh-contents)
+         (package-install 'NAME)))
+#+end_example
+
+#+begin_src c
+cmacs_pkg_install(api, "magit");
+cmacs_pkg_install(api, "which-key");
+#+end_src
+
+** cmacs_pkg_remove
+
+#+begin_src c
+gint cmacs_pkg_remove (CmacsApi *api, const gchar *name);
+#+end_src
+
+Remove an installed Emacs package.
+
+#+begin_src c
+cmacs_pkg_remove(api, "some-unused-package");
+#+end_src
+
+* Low-Level Transport API
+
+For advanced use cases (building custom commands, implementing new
+transport consumers).  Most users should use the high-level API above.
+
+** cmacs_api_transport_new
+
+#+begin_src c
+CmacsApiTransport *cmacs_api_transport_new (GError **error);
+#+end_src
+
+Auto-detect and create a transport.  Returns =NULL= on failure.
+Detection order: DIRECT > FD (=$CMACS_IPC_FD=) > D-Bus (=$CMACS_DBUS_NAME=).
+
+** cmacs_api_transport_free
+
+#+begin_src c
+void cmacs_api_transport_free (CmacsApiTransport *t);
+#+end_src
+
+Free the transport.  Does *not* close the FD (caller owns it).
+
+** cmacs_api_transport_call
+
+#+begin_src c
+GVariant *cmacs_api_transport_call (CmacsApiTransport *t,
+                                    const gchar       *method,
+                                    GVariant          *params,
+                                    GError           **error);
+#+end_src
+
+Call a method with GVariant parameters.  Returns the result GVariant
+(caller must =g_variant_unref=), or =NULL= on error.
+
+Supported methods and their GVariant parameter types:
+
+| Method            | Params type          | Return type    |
+|-------------------+----------------------+----------------|
+| =Eval=            | =(s)= expression     | =(s)= result   |
+| =FindFile=        | =(s)= path           | (none)         |
+| =Message=         | =(s)= text           | (none)         |
+| =GiRequire=       | =(ss)= ns, version   | =(b)= success  |
+| =GiCall=          | =(ssas)= ns, fn, args | =(s)= result  |
+| =GiListFunctions= | =(s)= namespace      | =(as)= names   |
+
+#+begin_src c
+CmacsApiTransport *t = cmacs_api_transport_new(NULL);
+GVariant *result;
+GError *err = NULL;
+
+/* Evaluate elisp */
+result = cmacs_api_transport_call(t, "Eval",
+    g_variant_new("(s)", "(+ 40 2)"), &err);
+if (result) {
+    const gchar *str;
+    g_variant_get(result, "(s)", &str);
+    printf("Result: %s\n", str);  /* "42" */
+    g_variant_unref(result);
+}
+
+cmacs_api_transport_free(t);
+#+end_src
+
+** cmacs_api_set_direct_dispatch
+
+#+begin_src c
+void cmacs_api_set_direct_dispatch (const CmacsApiDirectDispatch *dispatch);
+#+end_src
+
+Register the direct dispatch table for the DIRECT transport backend.
+Must be called before any =CmacsApi= handle uses DIRECT transport.
+The pointer must remain valid for the lifetime of the process.
+
+This is called internally by =cmacs-crispy.c= --- users do not need
+to call it directly.
+
+* Eval Helpers
+
+Convenience wrappers around =cmacs_api_transport_call= for elisp evaluation.
+
+** cmacs_api_eval_print
+
+#+begin_src c
+gint cmacs_api_eval_print (CmacsApiTransport *t, const gchar *elisp);
+#+end_src
+
+Evaluate elisp and print the result to stdout.  Returns 0 on success.
+
+** cmacs_api_eval_quiet
+
+#+begin_src c
+gint cmacs_api_eval_quiet (CmacsApiTransport *t, const gchar *elisp);
+#+end_src
+
+Evaluate elisp and suppress output.  Returns 0 on success.
+
+** cmacs_api_eval_get_string
+
+#+begin_src c
+gchar *cmacs_api_eval_get_string (CmacsApiTransport *t, const gchar *elisp);
+#+end_src
+
+Evaluate elisp and return the result as a string.  Caller must =g_free=.
+Returns =NULL= on error.
+
+#+begin_src c
+gchar *mode = cmacs_api_eval_get_string(t, "(symbol-name major-mode)");
+printf("Current mode: %s\n", mode);
+g_free(mode);
+#+end_src
+
+* String Utilities
+
+** cmacs_api_lisp_escape
+
+#+begin_src c
+gchar *cmacs_api_lisp_escape (const gchar *s);
+#+end_src
+
+Escape a C string for embedding in a Lisp string literal.  Escapes =\=
+and ="= characters.  Does *not* add outer quotes.  Caller must =g_free=.
+
+#+begin_src c
+gchar *escaped = cmacs_api_lisp_escape("say \"hello\"");
+/* escaped = "say \\\"hello\\\"" */
+g_free(escaped);
+#+end_src
+
+** cmacs_api_lisp_quote
+
+#+begin_src c
+gchar *cmacs_api_lisp_quote (const gchar *s);
+#+end_src
+
+Quote a value for the Lisp reader:
+- Numbers (=42=, =3.14=) pass through
+- =t= and =nil= pass through
+- Strings already quoted (="..."=) pass through
+- S-expressions (=(...)=) pass through
+- Everything else becomes a quoted string literal (="value"=)
+
+Caller must =g_free=.
+
+#+begin_src c
+cmacs_api_lisp_quote("42");       /* -> "42" */
+cmacs_api_lisp_quote("t");        /* -> "t" */
+cmacs_api_lisp_quote("hello");    /* -> "\"hello\"" */
+cmacs_api_lisp_quote("(+ 1 2)"); /* -> "(+ 1 2)" */
+#+end_src
+
+* Dispatch Table Types
+
+These types are used by the [[file:cmacsgi.org][cmacsgi]] command implementation to organize
+subcommands into groups.
+
+** CmacsApiHandler
+
+#+begin_src c
+typedef gint (*CmacsApiHandler)(CmacsApiTransport *transport,
+                                gint argc, gchar **argv);
+#+end_src
+
+Function pointer type for command handlers.
+
+** CmacsApiSubcmd
+
+#+begin_src c
+typedef struct {
+    const gchar     *name;
+    CmacsApiHandler  handler;
+    const gchar     *usage;
+    const gchar     *help;
+} CmacsApiSubcmd;
+#+end_src
+
+Describes a single subcommand with its name, handler, usage string,
+and help text.
+
+** cmacs_api_dispatch_group
+
+#+begin_src c
+gint cmacs_api_dispatch_group (const gchar          *group_name,
+                               const CmacsApiSubcmd *table,
+                               CmacsApiTransport    *transport,
+                               gint                  argc,
+                               gchar               **argv,
+                               gint                  depth);
+#+end_src
+
+Dispatch =argv[depth]= against a NULL-terminated subcommand table.
+Handles =--help= / =-h= automatically.  Prints error on unknown subcommand.
+
+** cmacs_api_print_group_help
+
+#+begin_src c
+void cmacs_api_print_group_help (const gchar          *group_name,
+                                 const CmacsApiSubcmd *table);
+#+end_src
+
+Print a formatted help listing for a subcommand group.
+
+* Complete Example: init.c
+
+#+begin_src c
+/* ~/.config/cmacs/init.c */
+#include <cmacs-api.h>
+
+int main(int argc, char **argv)
+{
+    CmacsApi *api = cmacs_api_new(NULL);
+    if (!api) return 1;
+
+    /* Appearance */
+    cmacs_theme(api, "modus-vivendi");
+    cmacs_font(api, "Iosevka", 14);
+
+    /* Settings */
+    cmacs_set(api, "inhibit-startup-screen", "t");
+    cmacs_set(api, "ring-bell-function", "ignore");
+    cmacs_set(api, "scroll-conservatively", "101");
+
+    /* Modes */
+    cmacs_mode(api, "electric-pair");
+    cmacs_mode(api, "global-display-line-numbers");
+    cmacs_mode(api, "column-number");
+
+    /* Packages */
+    cmacs_pkg_install(api, "magit");
+    cmacs_pkg_install(api, "which-key");
+
+    /* Arbitrary elisp */
+    cmacs_eval(api, "(setq custom-file "
+                    "(concat user-emacs-directory \"custom.el\"))");
+    cmacs_eval(api, "(global-set-key (kbd \"C-x g\") 'magit-status)");
+
+    /* Open a file */
+    cmacs_open(api, "~/Documents/notes/todo.org");
+
+    cmacs_message(api, "C config loaded!");
+    cmacs_api_free(api);
+    return 0;
+}
+#+end_src
+
+* Files
+
+| File                                 | Purpose                            |
+|--------------------------------------+------------------------------------|
+| =cmacs/api/cmacs-api.h=             | Public header (include this)       |
+| =cmacs/api/cmacs-api-transport.c=   | Transport layer (3 backends)       |
+| =cmacs/api/cmacs-api-helpers.c=     | Eval wrappers, string utilities    |
+| =cmacs/api/cmacs-api-high-level.c=  | High-level convenience functions   |
+| =cmacs/api/cmacs-api-cmd-*.c=       | Command group implementations (12) |
+| =cmacs/api/Makefile=                | Builds =libcmacs-api.so=          |

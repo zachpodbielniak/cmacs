@@ -1,0 +1,979 @@
+#+TITLE: cmacsgi Command Reference
+#+STARTUP: showall
+#+OPTIONS: toc:3 num:t
+
+* Overview
+
+=cmacsgi= is a bacon shell builtin that provides 50+ commands for
+controlling CMacs from the shell.  It works through the shared
+[[file:api.org][CMacs API]] library with three transport backends:
+
+- *FD* (socketpair) --- used by the bacon child process
+- *D-Bus* --- used by external tools
+- *DIRECT* (in-process) --- used by crispy scripts
+
+Every command documented here is available from the bacon shell prompt:
+
+#+begin_example
+bacon> cmacsgi <command> [args...]
+bacon> cmacsgi help
+bacon> cmacsgi help <command>
+#+end_example
+
+* Buffer Commands
+
+Group: =buf=
+
+Manage open buffers --- list, create, kill, save, switch, inspect.
+
+** buf list
+
+List open buffers.
+
+#+begin_example
+cmacsgi buf list [-l]
+#+end_example
+
+| Flag | Description                                                   |
+|------+---------------------------------------------------------------|
+| =-l= | Long format: tab-separated name, file, modified, size, mode  |
+
+#+begin_example
+bacon> cmacsgi buf list
+*scratch*
+*Messages*
+init.el
+
+bacon> cmacsgi buf list -l
+*scratch*	(none)	no	42	lisp-interaction-mode
+*Messages*	(none)	no	1024	messages-buffer-mode
+init.el	~/.emacs.d/init.el	no	2048	emacs-lisp-mode
+#+end_example
+
+** buf show
+
+Print buffer content to stdout.
+
+#+begin_example
+cmacsgi buf show [NAME]
+#+end_example
+
+If NAME is omitted, shows the current buffer.
+
+** buf create
+
+Create an empty buffer.
+
+#+begin_example
+cmacsgi buf create NAME
+#+end_example
+
+** buf kill
+
+Kill (close) a buffer.
+
+#+begin_example
+cmacsgi buf kill NAME
+#+end_example
+
+** buf save
+
+Save a buffer to its associated file.
+
+#+begin_example
+cmacsgi buf save [NAME]
+#+end_example
+
+If NAME is omitted, saves the current buffer.
+
+** buf save-as
+
+Save a buffer to a new file path.
+
+#+begin_example
+cmacsgi buf save-as NAME PATH
+#+end_example
+
+** buf current
+
+Print the current buffer name.
+
+#+begin_example
+bacon> cmacsgi buf current
+*scratch*
+#+end_example
+
+** buf switch
+
+Switch the editor to display a buffer.
+
+#+begin_example
+cmacsgi buf switch NAME
+#+end_example
+
+** buf info
+
+Print buffer metadata as =key=value= pairs.
+
+#+begin_example
+cmacsgi buf info [NAME]
+#+end_example
+
+#+begin_example
+bacon> cmacsgi buf info init.el
+name=init.el
+file=/home/zach/.emacs.d/init.el
+modified=no
+size=2048
+mode=emacs-lisp-mode
+point=1
+line=1
+col=0
+#+end_example
+
+** buf rename
+
+Rename a buffer.
+
+#+begin_example
+cmacsgi buf rename OLD NEW
+#+end_example
+
+* File Commands
+
+Top-level commands for file operations.
+
+** open
+
+Open a file in the editor (equivalent to =find-file=).
+
+#+begin_example
+cmacsgi open PATH
+#+end_example
+
+#+begin_example
+bacon> cmacsgi open ~/Documents/notes.org
+#+end_example
+
+** save
+
+Save the current buffer, optionally to a new path.
+
+#+begin_example
+cmacsgi save [PATH]
+#+end_example
+
+If PATH is given, saves to that path (like =write-file=).
+
+** close
+
+Close a buffer.
+
+#+begin_example
+cmacsgi close [NAME]
+#+end_example
+
+If NAME is omitted, closes the current buffer.
+
+** recent
+
+List recently opened files.
+
+#+begin_example
+cmacsgi recent [-n N]
+#+end_example
+
+| Flag    | Description                  | Default |
+|---------+------------------------------+---------|
+| =-n N=  | Number of recent files shown | 20      |
+
+#+begin_example
+bacon> cmacsgi recent -n 5
+/home/zach/.emacs.d/init.el
+/home/zach/src/main.c
+/home/zach/notes.org
+/home/zach/.bashrc
+/home/zach/README.md
+#+end_example
+
+* Text Commands
+
+Edit buffer text.  All accept =-b BUF= to target a specific buffer
+(defaults to current buffer).
+
+** insert
+
+Insert text at point or at a specific position.
+
+#+begin_example
+cmacsgi insert [-b BUF] [-p POS] TEXT...
+#+end_example
+
+| Flag     | Description                              |
+|----------+------------------------------------------|
+| =-b BUF= | Target buffer (default: current)         |
+| =-p POS= | Character position to insert at          |
+
+Remaining arguments are joined with spaces as the text to insert.
+
+#+begin_example
+bacon> cmacsgi insert "Hello, world!"
+bacon> cmacsgi insert -p 1 "Header: "
+bacon> cmacsgi insert -b notes.org "New entry"
+#+end_example
+
+** delete
+
+Delete a region and print the deleted text.
+
+#+begin_example
+cmacsgi delete [-b BUF] START END
+#+end_example
+
+START and END are character positions (1-indexed).
+
+#+begin_example
+bacon> cmacsgi delete 1 10
+Hello, wo
+#+end_example
+
+** line
+
+Print a specific line (or the current line).
+
+#+begin_example
+cmacsgi line [-b BUF] [N]
+#+end_example
+
+#+begin_example
+bacon> cmacsgi line 42
+(defun my-function ()
+#+end_example
+
+** append
+
+Append text to the end of a buffer.
+
+#+begin_example
+cmacsgi append [-b BUF] TEXT...
+#+end_example
+
+* Navigation Commands
+
+Move the cursor and report position.
+
+** point
+
+Print cursor position as =LINE:COL=.
+
+#+begin_example
+cmacsgi point [-b BUF]
+#+end_example
+
+#+begin_example
+bacon> cmacsgi point
+42:12
+#+end_example
+
+** goto
+
+Move cursor to a line and optional column.
+
+#+begin_example
+cmacsgi goto [-b BUF] LINE[:COL]
+#+end_example
+
+#+begin_example
+bacon> cmacsgi goto 100
+bacon> cmacsgi goto 100:20
+bacon> cmacsgi goto -b init.el 1:0
+#+end_example
+
+* Search Commands
+
+Search, replace, and filter buffer content.
+
+** search
+
+Search for a pattern in a buffer.
+
+#+begin_example
+cmacsgi search [-b BUF] [-r] [-c] [--] PATTERN
+#+end_example
+
+| Flag   | Description                            |
+|--------+----------------------------------------|
+| =-r=   | Use regexp (default: literal string)   |
+| =-c=   | Count matches only (print number)      |
+| =--=   | End of flags (pattern follows)         |
+
+#+begin_example
+bacon> cmacsgi search "defun"
+42:  (defun my-function ()
+87:  (defun another-function ()
+
+bacon> cmacsgi search -r "def\(un\|var\|macro\)"
+42:  (defun my-function ()
+55:  (defvar my-var nil)
+
+bacon> cmacsgi search -c "TODO"
+7
+#+end_example
+
+** replace
+
+Replace all occurrences of a pattern.  Prints the replacement count.
+
+#+begin_example
+cmacsgi replace [-b BUF] [-r] [--] PATTERN REPLACEMENT
+#+end_example
+
+| Flag | Description                  |
+|------+------------------------------|
+| =-r= | Use regexp                   |
+| =--= | End of flags                 |
+
+#+begin_example
+bacon> cmacsgi replace "foo" "bar"
+12
+
+bacon> cmacsgi replace -r "v[0-9]+" "latest"
+3
+#+end_example
+
+** occur
+
+List all matching lines in grep format (=LINE_NUMBER:LINE_TEXT=).
+
+#+begin_example
+cmacsgi occur [-b BUF] PATTERN
+#+end_example
+
+#+begin_example
+bacon> cmacsgi occur "TODO"
+15:;; TODO: fix this hack
+42:;; TODO: add error handling
+99:;; TODO: write tests
+#+end_example
+
+* Window Commands
+
+Group: =win=
+
+Manage Emacs windows (splits/panes within a frame).
+
+** win list
+
+List windows with their buffer, width, and height (tab-separated).
+
+#+begin_example
+bacon> cmacsgi win list
+*scratch*	80	40
+*Messages*	80	20
+#+end_example
+
+** win split
+
+Split the current window.
+
+#+begin_example
+cmacsgi win split [-v]
+#+end_example
+
+| Flag | Description                                  |
+|------+----------------------------------------------|
+| =-v= | Split vertically (side by side); default is horizontal (stacked) |
+
+** win close
+
+Close the current window.
+
+#+begin_example
+cmacsgi win close
+#+end_example
+
+** win only
+
+Close all windows except the current one.
+
+#+begin_example
+cmacsgi win only
+#+end_example
+
+** win next
+
+Cycle to the next window.
+
+#+begin_example
+cmacsgi win next
+#+end_example
+
+** win balance
+
+Balance all window sizes equally.
+
+#+begin_example
+cmacsgi win balance
+#+end_example
+
+* Configuration Commands
+
+Top-level commands for setting editor options.
+
+** set
+
+Set an Emacs variable.  Values are auto-quoted: numbers and =t=/=nil=
+pass through as Lisp values; everything else becomes a quoted string.
+
+#+begin_example
+cmacsgi set VAR VALUE
+#+end_example
+
+#+begin_example
+bacon> cmacsgi set fill-column 80
+bacon> cmacsgi set inhibit-startup-screen t
+bacon> cmacsgi set frame-title-format "CMacs: %b"
+#+end_example
+
+** get
+
+Print an Emacs variable's current value.
+
+#+begin_example
+cmacsgi get VAR
+#+end_example
+
+#+begin_example
+bacon> cmacsgi get major-mode
+emacs-lisp-mode
+
+bacon> cmacsgi get fill-column
+80
+#+end_example
+
+** theme
+
+Load a color theme.
+
+#+begin_example
+cmacsgi theme NAME
+#+end_example
+
+#+begin_example
+bacon> cmacsgi theme modus-vivendi
+bacon> cmacsgi theme catppuccin
+#+end_example
+
+** font
+
+Set the default font face and optional size.
+
+#+begin_example
+cmacsgi font FAMILY [SIZE]
+#+end_example
+
+Point sizes less than 100 are automatically converted to 1/10 point
+units (e.g., 14 becomes 140).
+
+#+begin_example
+bacon> cmacsgi font "JetBrains Mono" 14
+bacon> cmacsgi font Iosevka
+#+end_example
+
+** mode
+
+Set the major mode of the current buffer.  Appends =-mode= if not
+already present.
+
+#+begin_example
+cmacsgi mode NAME
+#+end_example
+
+#+begin_example
+bacon> cmacsgi mode python
+bacon> cmacsgi mode org-mode
+#+end_example
+
+* Project and Build Commands
+
+Top-level commands for project navigation and compilation.
+
+** grep
+
+Recursive grep, results appear in an Emacs compilation buffer.
+
+#+begin_example
+cmacsgi grep PATTERN [DIR]
+#+end_example
+
+#+begin_example
+bacon> cmacsgi grep "TODO" src/
+#+end_example
+
+** find
+
+Find a file by name within a directory tree.
+
+#+begin_example
+cmacsgi find FILENAME [DIR]
+#+end_example
+
+#+begin_example
+bacon> cmacsgi find "main.c" ~/src/
+#+end_example
+
+** project-root
+
+Print the project root directory (as detected by Emacs's =project.el=).
+
+#+begin_example
+bacon> cmacsgi project-root
+/home/zach/source/projects/cmacs
+#+end_example
+
+** compile
+
+Run a compilation command.  All remaining arguments are joined.
+
+#+begin_example
+cmacsgi compile CMD...
+#+end_example
+
+#+begin_example
+bacon> cmacsgi compile make -j8
+bacon> cmacsgi compile cargo build --release
+#+end_example
+
+** next-error
+
+Jump to the next compilation error.
+
+#+begin_example
+cmacsgi next-error
+#+end_example
+
+** prev-error
+
+Jump to the previous compilation error.
+
+#+begin_example
+cmacsgi prev-error
+#+end_example
+
+** diag
+
+List Flymake diagnostics for a buffer.
+
+#+begin_example
+cmacsgi diag [-b BUF]
+#+end_example
+
+#+begin_example
+bacon> cmacsgi diag
+main.c:42:10: error: undeclared identifier 'foo'
+main.c:87:5: warning: unused variable 'x'
+#+end_example
+
+* Bookmark Commands
+
+Group: =mark=
+
+Manage Emacs bookmarks.
+
+** mark set
+
+Set a bookmark at the current point.
+
+#+begin_example
+cmacsgi mark set NAME
+#+end_example
+
+** mark list
+
+List all bookmarks (tab-separated: name, file, position).
+
+#+begin_example
+bacon> cmacsgi mark list
+todo	~/notes/todo.org	1
+config	~/.emacs.d/init.el	42
+#+end_example
+
+** mark jump
+
+Jump to a bookmark.
+
+#+begin_example
+cmacsgi mark jump NAME
+#+end_example
+
+** mark del
+
+Delete a bookmark.
+
+#+begin_example
+cmacsgi mark del NAME
+#+end_example
+
+* Clipboard Commands
+
+Top-level commands for the kill ring.
+
+** copy
+
+Copy a region to the kill ring.
+
+#+begin_example
+cmacsgi copy [-b BUF] START END
+#+end_example
+
+** cut
+
+Cut a region (delete and copy to kill ring).
+
+#+begin_example
+cmacsgi cut [-b BUF] START END
+#+end_example
+
+** paste
+
+Paste from the kill ring at point.
+
+#+begin_example
+cmacsgi paste [-b BUF]
+#+end_example
+
+** clip list
+
+List kill ring entries.
+
+Group: =clip=
+
+#+begin_example
+cmacsgi clip list [-n N]
+#+end_example
+
+| Flag   | Description               | Default |
+|--------+---------------------------+---------|
+| =-n N= | Number of entries to show | 10      |
+
+* Version Control Commands
+
+Group: =vc=
+
+Git integration via Emacs's VC layer.
+
+** vc status
+
+Show git status in porcelain format.
+
+#+begin_example
+bacon> cmacsgi vc status
+ M src/main.c
+?? new-file.txt
+A  staged-file.c
+#+end_example
+
+** vc diff
+
+Show diff for a file or the whole project.
+
+#+begin_example
+cmacsgi vc diff [FILE]
+#+end_example
+
+** vc log
+
+Show git log in oneline format.
+
+#+begin_example
+cmacsgi vc log [-n N] [FILE]
+#+end_example
+
+| Flag   | Description                 | Default |
+|--------+-----------------------------+---------|
+| =-n N= | Number of log entries shown | 20      |
+
+#+begin_example
+bacon> cmacsgi vc log -n 3
+abc1234 feat: add new feature
+def5678 fix: resolve crash
+ghi9012 docs: update README
+#+end_example
+
+** vc blame
+
+Show git blame annotations.
+
+#+begin_example
+cmacsgi vc blame [FILE]
+#+end_example
+
+* Package Commands
+
+Group: =pkg=
+
+Manage Emacs packages via =package.el=.
+
+** pkg install
+
+Install a package.
+
+#+begin_example
+cmacsgi pkg install NAME
+#+end_example
+
+#+begin_example
+bacon> cmacsgi pkg install magit
+#+end_example
+
+** pkg remove
+
+Remove a package.
+
+#+begin_example
+cmacsgi pkg remove NAME
+#+end_example
+
+** pkg list
+
+List installed packages, or all available with =-a=.
+
+#+begin_example
+cmacsgi pkg list [-a]
+#+end_example
+
+| Flag | Description              |
+|------+--------------------------|
+| =-a= | Show all available pkgs  |
+
+** pkg refresh
+
+Refresh package archive contents.
+
+#+begin_example
+cmacsgi pkg refresh
+#+end_example
+
+* GObject Introspection Commands
+
+Call GI functions directly from the shell.
+
+** require
+
+Load a GI namespace.
+
+#+begin_example
+cmacsgi require NS [VERSION]
+#+end_example
+
+#+begin_example
+bacon> cmacsgi require GLib
+bacon> cmacsgi require Gtk 4.0
+#+end_example
+
+** call
+
+Call a GI function.
+
+#+begin_example
+cmacsgi call NS FUNC [ARGS...]
+#+end_example
+
+#+begin_example
+bacon> cmacsgi call GLib get_user_name
+zach
+
+bacon> cmacsgi call GLib get_home_dir
+/home/zach
+
+bacon> cmacsgi call GLib hostname_is_ascii_encoded example.com
+true
+#+end_example
+
+** list
+
+List all functions in a loaded GI namespace.
+
+#+begin_example
+cmacsgi list NS
+#+end_example
+
+#+begin_example
+bacon> cmacsgi list GLib | head -5
+access
+ascii_digit_value
+ascii_dtostr
+ascii_formatd
+ascii_strcasecmp
+#+end_example
+
+* Eval Command
+
+Evaluate arbitrary elisp from the shell.
+
+#+begin_example
+cmacsgi eval EXPR...
+#+end_example
+
+All arguments are joined with spaces into a single expression.
+
+#+begin_example
+bacon> cmacsgi eval '(+ 40 2)'
+42
+
+bacon> cmacsgi eval '(format-time-string "%Y-%m-%d")'
+"2026-04-05"
+
+bacon> cmacsgi eval '(buffer-name)'
+"*scratch*"
+
+bacon> cmacsgi eval '(message "hello from bacon")'
+"hello from bacon"
+#+end_example
+
+* Other Commands
+
+** find-file
+
+Alias for =open=.  Opens a file in the editor.
+
+#+begin_example
+cmacsgi find-file PATH
+#+end_example
+
+** message
+
+Display a message in the Emacs echo area (minibuffer).
+
+#+begin_example
+cmacsgi message TEXT...
+#+end_example
+
+#+begin_example
+bacon> cmacsgi message "Build complete!"
+#+end_example
+
+* Environment Variables
+
+| Variable          | Description                                           |
+|-------------------+-------------------------------------------------------|
+| =$CMACS_IPC_FD=   | File descriptor for socketpair IPC (bacon -> Emacs)   |
+| =$CMACS_DBUS_NAME= | D-Bus bus name (e.g., =org.cmacs.Editor.Pid12345=) |
+
+These are set automatically by CMacs.  You do not need to configure them.
+
+* Architecture
+
+#+begin_example
+┌──────────────────────────────────────────┐
+│           bacon shell (child)            │
+│                                          │
+│  cmacsgi set theme modus-vivendi         │
+│     │                                    │
+│     ▼                                    │
+│  CmacsApiTransport (FD backend)          │
+│     │                                    │
+│     │  length-prefixed JSON              │
+│     │  over socketpair                   │
+└─────┼────────────────────────────────────┘
+      │
+      ▼
+┌─────────────────────────────────────────┐
+│           Emacs (parent)                │
+│                                         │
+│  GLib idle callback                     │
+│     │                                   │
+│     ▼                                   │
+│  cmacs_dispatch_eval()                  │
+│     │                                   │
+│     ▼                                   │
+│  (load-theme 'modus-vivendi t)          │
+└─────────────────────────────────────────┘
+#+end_example
+
+* Module Files
+
+| File                                          | Purpose                               |
+|-----------------------------------------------+---------------------------------------|
+| =cmacs/bacon/modules/cmacs-gi-command.c=      | BaconCommand subclass, dispatch table |
+| =cmacs/bacon/modules/cmacs-gi-module.c=       | Module entry point                    |
+| =cmacs/api/cmacs-api-cmd-buf.c=               | Buffer commands                       |
+| =cmacs/api/cmacs-api-cmd-file.c=              | File commands                         |
+| =cmacs/api/cmacs-api-cmd-text.c=              | Text editing commands                 |
+| =cmacs/api/cmacs-api-cmd-nav.c=               | Navigation commands                   |
+| =cmacs/api/cmacs-api-cmd-search.c=            | Search/replace commands               |
+| =cmacs/api/cmacs-api-cmd-win.c=               | Window commands                       |
+| =cmacs/api/cmacs-api-cmd-config.c=            | Configuration commands                |
+| =cmacs/api/cmacs-api-cmd-project.c=           | Project/build commands                |
+| =cmacs/api/cmacs-api-cmd-mark.c=              | Bookmark commands                     |
+| =cmacs/api/cmacs-api-cmd-clip.c=              | Clipboard commands                    |
+| =cmacs/api/cmacs-api-cmd-vc.c=                | Version control commands              |
+| =cmacs/api/cmacs-api-cmd-pkg.c=               | Package management commands           |
+
+* Command Summary
+
+| Command         | Usage                                  | Description                     |
+|-----------------+----------------------------------------+---------------------------------|
+| =buf list=      | =buf list [-l]=                        | List open buffers               |
+| =buf show=      | =buf show [NAME]=                      | Print buffer content            |
+| =buf create=    | =buf create NAME=                      | Create empty buffer             |
+| =buf kill=      | =buf kill NAME=                        | Kill buffer                     |
+| =buf save=      | =buf save [NAME]=                      | Save buffer                     |
+| =buf save-as=   | =buf save-as NAME PATH=               | Save to new path                |
+| =buf current=   | =buf current=                          | Print current buffer name       |
+| =buf switch=    | =buf switch NAME=                      | Switch to buffer                |
+| =buf info=      | =buf info [NAME]=                      | Show buffer metadata            |
+| =buf rename=    | =buf rename OLD NEW=                   | Rename buffer                   |
+| =open=          | =open PATH=                            | Open a file                     |
+| =save=          | =save [PATH]=                          | Save current buffer             |
+| =close=         | =close [NAME]=                         | Close buffer                    |
+| =recent=        | =recent [-n N]=                        | List recent files               |
+| =insert=        | =insert [-b BUF] [-p POS] TEXT=        | Insert text                     |
+| =delete=        | =delete [-b BUF] START END=            | Delete region                   |
+| =line=          | =line [-b BUF] [N]=                    | Print line                      |
+| =append=        | =append [-b BUF] TEXT=                 | Append to buffer                |
+| =point=         | =point [-b BUF]=                       | Print cursor position           |
+| =goto=          | =goto [-b BUF] LINE[:COL]=            | Move cursor                     |
+| =search=        | =search [-b BUF] [-r] [-c] PATTERN=   | Search buffer                   |
+| =replace=       | =replace [-b BUF] [-r] PAT REPL=      | Replace all                     |
+| =occur=         | =occur [-b BUF] PATTERN=              | List matching lines             |
+| =win list=      | =win list=                             | List windows                    |
+| =win split=     | =win split [-v]=                       | Split window                    |
+| =win close=     | =win close=                            | Close window                    |
+| =win only=      | =win only=                             | Close other windows             |
+| =win next=      | =win next=                             | Cycle to next window            |
+| =win balance=   | =win balance=                          | Balance window sizes            |
+| =set=           | =set VAR VALUE=                        | Set Emacs variable              |
+| =get=           | =get VAR=                              | Get Emacs variable              |
+| =theme=         | =theme NAME=                           | Load color theme                |
+| =font=          | =font FAMILY [SIZE]=                   | Set default font                |
+| =mode=          | =mode NAME=                            | Set major mode                  |
+| =grep=          | =grep PATTERN [DIR]=                   | Recursive grep                  |
+| =find=          | =find FILENAME [DIR]=                  | Find file by name               |
+| =project-root=  | =project-root=                         | Print project root              |
+| =compile=       | =compile CMD=                          | Run compilation                 |
+| =next-error=    | =next-error=                           | Next compilation error          |
+| =prev-error=    | =prev-error=                           | Previous compilation error      |
+| =diag=          | =diag [-b BUF]=                        | List diagnostics                |
+| =mark set=      | =mark set NAME=                        | Set bookmark                    |
+| =mark list=     | =mark list=                            | List bookmarks                  |
+| =mark jump=     | =mark jump NAME=                       | Jump to bookmark                |
+| =mark del=      | =mark del NAME=                        | Delete bookmark                 |
+| =copy=          | =copy [-b BUF] START END=             | Copy region                     |
+| =cut=           | =cut [-b BUF] START END=              | Cut region                      |
+| =paste=         | =paste [-b BUF]=                       | Paste from kill ring            |
+| =clip list=     | =clip list [-n N]=                     | List kill ring                  |
+| =vc status=     | =vc status=                            | Git status                      |
+| =vc diff=       | =vc diff [FILE]=                       | Git diff                        |
+| =vc log=        | =vc log [-n N] [FILE]=                 | Git log                         |
+| =vc blame=      | =vc blame [FILE]=                      | Git blame                       |
+| =pkg install=   | =pkg install NAME=                     | Install package                 |
+| =pkg remove=    | =pkg remove NAME=                      | Remove package                  |
+| =pkg list=      | =pkg list [-a]=                        | List packages                   |
+| =pkg refresh=   | =pkg refresh=                          | Refresh archives                |
+| =require=       | =require NS [VERSION]=                 | Load GI namespace               |
+| =call=          | =call NS FUNC [ARGS...]=              | Call GI function                |
+| =list=          | =list NS=                              | List GI functions               |
+| =eval=          | =eval EXPR=                            | Evaluate elisp                  |
+| =find-file=     | =find-file PATH=                       | Open file (alias)               |
+| =message=       | =message TEXT=                         | Display echo area message       |

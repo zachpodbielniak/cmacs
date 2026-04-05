@@ -1,0 +1,152 @@
+#+TITLE: Bacon Shell
+#+STARTUP: showall
+#+OPTIONS: toc:2 num:t
+
+* Overview
+
+Bacon is a shell embedded in CMacs.  It runs as a forked child process
+communicating with the parent Emacs over a socketpair using
+length-prefixed JSON IPC.  The shell is rendered via vterm inside Emacs.
+
+* Interactive Use: M-x bacon
+
+Launch an interactive bacon shell inside Emacs:
+
+#+begin_example
+M-x bacon
+#+end_example
+
+This starts a vterm buffer running the bacon shell.  You get a full
+shell with:
+
+- Command history and completion
+- =cmacsgi= builtin for controlling the editor ([[file:cmacsgi.org][full reference]])
+- Native modules (starship prompt, fzf integration, etc.)
+- Access to all standard Unix commands
+
+* Programmatic C Primitives
+
+| Function                                       | Description                                    |
+|------------------------------------------------+------------------------------------------------|
+| =(bacon-start)=                                | Start the bacon shell process                  |
+| =(bacon-stop)=                                 | Stop the bacon shell process                   |
+| =(bacon-eval STRING)=                          | Evaluate a shell expression, return output     |
+| =(bacon-eval-c STRING)=                        | Evaluate and capture output as string           |
+| =(bacon-complete PREFIX)=                      | Get completions for PREFIX                     |
+| =(bacon-environment)=                          | Return shell environment as alist              |
+| =(bacon-source FILE)=                          | Source a shell script file                     |
+| =(bacon-alias NAME EXPANSION)=                 | Define a shell alias                           |
+| =(bacon-running-p)=                            | Return =t= if shell is running                |
+| =(bacon-get-prompt)=                           | Return the current prompt string               |
+
+** Examples
+
+#+begin_src emacs-lisp
+;; Start the shell and evaluate commands
+(bacon-start)
+(bacon-eval "echo hello")
+
+;; Capture output as a string
+(let ((files (bacon-eval-c "ls -1 ~/Documents")))
+  (message "Files: %s" files))
+
+;; Source a config file
+(bacon-source "~/.config/cmacs/init.bacon")
+
+;; Define aliases
+(bacon-alias "ll" "ls -la")
+(bacon-alias "gs" "git status")
+
+;; Check status
+(when (bacon-running-p)
+  (message "Shell prompt: %s" (bacon-get-prompt)))
+#+end_src
+
+* cmacs --bacon
+
+Run bacon as a standalone shell (outside Emacs):
+
+#+begin_example
+src/emacs --bacon
+#+end_example
+
+This mode forks the Emacs process into a pure shell --- no GUI, no
+frame.  Useful for:
+
+- Testing cmacsgi commands
+- Scripting with =init.bacon=
+- Using bacon as a login shell
+
+#+begin_example
+$ src/emacs --bacon
+bacon> echo "Hello from bacon"
+Hello from bacon
+bacon> cmacsgi eval '(+ 40 2)'
+42
+bacon> exit
+#+end_example
+
+* Customization
+
+| Variable                                | Description                               | Default |
+|-----------------------------------------+-------------------------------------------+---------|
+| =cmacs-bacon-shell-program=             | Path to the bacon binary                  | (auto)  |
+| =cmacs-bacon-init-file=                 | Path to init.bacon                        | (auto)  |
+| =cmacs-config-load-bacon=               | Whether to load init.bacon at startup     | =t=     |
+
+* init.bacon
+
+Place =init.bacon= in =~/.config/cmacs/= (or =~/.emacs.d/=):
+
+#+begin_src shell
+# ~/.config/cmacs/init.bacon
+
+# Theme and font
+cmacsgi theme modus-vivendi
+cmacsgi font "Iosevka" 14
+
+# Settings
+cmacsgi set inhibit-startup-screen t
+cmacsgi set ring-bell-function ignore
+
+# Aliases for cmacsgi
+alias e="cmacsgi open"
+alias theme="cmacsgi theme"
+
+# Environment
+export EDITOR="emacsclient"
+export PAGER="less"
+#+end_src
+
+* IPC Architecture
+
+#+begin_example
+┌──────────────────────┐     socketpair      ┌──────────────────────┐
+│     Emacs (parent)   │ ◄──────────────────► │   Bacon (child)      │
+│                      │   length-prefixed    │                      │
+│  GLib idle callback  │   JSON messages      │  cmacsgi commands    │
+│  dispatches eval     │                      │  write to $CMACS_IPC_FD │
+│                      │                      │                      │
+│  cmacs-bacon-ipc.c   │                      │  cmacs-gi-command.c  │
+└──────────────────────┘                      └──────────────────────┘
+#+end_example
+
+* Elisp IPC Primitives
+
+Low-level IPC functions (normally you don't call these directly):
+
+| Function                                         | Description                          |
+|--------------------------------------------------+--------------------------------------|
+| =(cmacs-bacon-ipc-send METHOD PARAMS)=           | Send an IPC request to bacon         |
+| =(cmacs-bacon-ipc-connected-p)=                  | Return =t= if IPC is active         |
+
+* Files
+
+| File                                          | Purpose                              |
+|-----------------------------------------------+--------------------------------------|
+| =cmacs/bacon/cmacs-bacon.c=                  | Bacon process management (start/stop) |
+| =cmacs/bacon/cmacs-bacon-ipc.c=              | Socketpair IPC, idle dispatch        |
+| =cmacs/bacon/modules/cmacs-gi-command.c=     | cmacsgi BaconCommand (thin wrapper)  |
+| =cmacs/bacon/modules/cmacs-gi-module.c=      | Module entry point                   |
+| =lisp/cmacs/cmacs-bacon.el=                  | Elisp layer, vterm integration       |
+| =lisp/cmacs/cmacs-config.el=                 | Config file loading                  |

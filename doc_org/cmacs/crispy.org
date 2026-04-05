@@ -1,0 +1,246 @@
+#+TITLE: Crispy C Scripting
+#+STARTUP: showall
+#+OPTIONS: toc:2 num:t
+
+* Overview
+
+CMacs integrates the Crispy library for evaluating C code at runtime.
+Scripts are compiled to shared objects (=.so=), cached by content hash
+(SHA256), and loaded into the Emacs process via =g_module_open()=.
+
+Because scripts run *in-process*, they can call back into Emacs through
+the [[file:api.org][CMacs API]] using the DIRECT transport --- zero IPC overhead.
+
+* Writing Config in C
+
+Place an =init.c= in =~/.config/cmacs/= (preferred) or =~/.emacs.d/=.
+CMacs checks =$XDG_CONFIG_HOME/cmacs/= first, then =user-emacs-directory=.
+
+The file is loaded after =init.el= via =crispy-run=.  The CMacs API
+headers and library are automatically available --- no manual
+=CRISPY_PARAMS= needed.
+
+** Minimal Example
+
+#+begin_src c
+/* ~/.config/cmacs/init.c */
+#include <cmacs-api.h>
+
+int main(int argc, char **argv)
+{
+    CmacsApi *api = cmacs_api_new(NULL);
+    if (!api) return 1;
+
+    cmacs_message(api, "Hello from init.c!");
+    cmacs_api_free(api);
+    return 0;
+}
+#+end_src
+
+** Full Configuration Example
+
+#+begin_src c
+/* ~/.config/cmacs/init.c */
+#include <cmacs-api.h>
+
+int main(int argc, char **argv)
+{
+    CmacsApi *api = cmacs_api_new(NULL);
+    if (!api) return 1;
+
+    /* Appearance */
+    cmacs_theme(api, "modus-vivendi");
+    cmacs_font(api, "Iosevka", 14);
+
+    /* Settings */
+    cmacs_set(api, "inhibit-startup-screen", "t");
+    cmacs_set(api, "ring-bell-function", "ignore");
+    cmacs_set(api, "scroll-conservatively", "101");
+    cmacs_set(api, "use-short-answers", "t");
+
+    /* Modes */
+    cmacs_mode(api, "electric-pair");
+    cmacs_mode(api, "global-display-line-numbers");
+    cmacs_mode(api, "column-number");
+    cmacs_mode(api, "show-paren");
+
+    /* Packages */
+    cmacs_pkg_install(api, "magit");
+    cmacs_pkg_install(api, "which-key");
+    cmacs_pkg_install(api, "vertico");
+
+    /* Keybindings and custom elisp */
+    cmacs_eval(api, "(global-set-key (kbd \"C-x g\") 'magit-status)");
+    cmacs_eval(api, "(setq custom-file "
+                    "(concat user-emacs-directory \"custom.el\"))");
+
+    /* Open a file on startup */
+    cmacs_open(api, "~/Documents/notes/todo.org");
+
+    cmacs_message(api, "C config loaded!");
+    cmacs_api_free(api);
+    return 0;
+}
+#+end_src
+
+** How It Works
+
+1. =cmacs-config-load-crispy-init= finds =init.c=
+2. Calls =(crispy-run "~/.config/cmacs/init.c")=
+3. Crispy compiles the file with GCC, injecting =-I= / =-L= / =-rpath=
+   flags for =cmacs-api.h= and =libcmacs-api.so=
+4. The compiled =.so= is cached by SHA256 hash
+5. =g_module_open= loads it into the Emacs process
+6. =main()= is called as a function pointer on the Emacs main thread
+7. The CMacs API uses the DIRECT transport --- function calls, no IPC
+
+** Using GObject Introspection from C
+
+Since crispy scripts are compiled with GLib flags, you can use GI:
+
+#+begin_src c
+#include <cmacs-api.h>
+
+int main(int argc, char **argv)
+{
+    CmacsApi *api = cmacs_api_new(NULL);
+
+    /* Use GLib functions directly */
+    const gchar *user = g_get_user_name();
+    gchar *greeting = g_strdup_printf("Hello, %s!", user);
+    cmacs_message(api, greeting);
+    g_free(greeting);
+
+    cmacs_api_free(api);
+    return 0;
+}
+#+end_src
+
+* Elisp Primitives
+
+** crispy-eval
+
+#+begin_example
+(crispy-eval CODE)
+#+end_example
+
+Compile and execute inline C code string.  Returns the exit code as
+an integer.
+
+#+begin_src emacs-lisp
+(crispy-eval "int main() { return 42; }")
+;; => 42
+#+end_src
+
+** crispy-eval-string
+
+#+begin_example
+(crispy-eval-string CODE)
+#+end_example
+
+Compile and execute C code, capturing stdout as a string.
+
+#+begin_src emacs-lisp
+(crispy-eval-string "#include <stdio.h>\nint main() { printf(\"hello\"); return 0; }")
+;; => "hello"
+#+end_src
+
+#+begin_src emacs-lisp
+;; With CMacs API
+(crispy-eval-string "
+#include <cmacs-api.h>
+#include <stdio.h>
+int main() {
+    CmacsApi *api = cmacs_api_new(NULL);
+    gchar *val = NULL;
+    cmacs_get(api, \"major-mode\", &val);
+    printf(\"%s\", val);
+    g_free(val);
+    cmacs_api_free(api);
+    return 0;
+}")
+;; => "emacs-lisp-mode"
+#+end_src
+
+** crispy-run
+
+#+begin_example
+(crispy-run FILE &rest ARGS)
+#+end_example
+
+Compile and execute a =.c= script file with optional arguments.
+Returns the exit code.
+
+#+begin_src emacs-lisp
+(crispy-run "~/.config/cmacs/init.c")
+;; => 0
+
+;; With arguments
+(crispy-run "/tmp/script.c" "arg1" "arg2")
+#+end_src
+
+** crispy-compile
+
+#+begin_example
+(crispy-compile FILE)
+#+end_example
+
+Compile a =.c= file and return the cached binary path (without
+executing it).
+
+#+begin_src emacs-lisp
+(crispy-compile "/tmp/test.c")
+;; => "/home/zach/.cache/crispy/abc123.so"
+#+end_src
+
+** crispy-repl-eval
+
+#+begin_example
+(crispy-repl-eval CODE)
+#+end_example
+
+Evaluate code in the persistent REPL.  The REPL maintains state across
+calls --- variables and functions defined in previous calls are available.
+
+#+begin_src emacs-lisp
+(crispy-repl-eval "int x = 42;")
+(crispy-repl-eval "printf(\"%d\\n\", x);")  ;; prints 42
+#+end_src
+
+** crispy-repl-reset
+
+#+begin_example
+(crispy-repl-reset)
+#+end_example
+
+Reset the persistent REPL state.  All previously defined variables and
+functions are cleared.
+
+** crispy-cache-status
+
+#+begin_example
+(crispy-cache-status)
+#+end_example
+
+Return the crispy cache directory path.
+
+#+begin_src emacs-lisp
+(crispy-cache-status)
+;; => "/home/zach/.cache/crispy"
+#+end_src
+
+* Customization
+
+| Variable                    | Description                            | Default |
+|-----------------------------+----------------------------------------+---------|
+| =cmacs-config-load-crispy=  | Whether to load init.c at startup      | =t=     |
+| =cmacs-config-directory=    | Where to look for init.c first         | =~/.config/cmacs= |
+
+* Files
+
+| File                               | Purpose                                       |
+|------------------------------------+-----------------------------------------------|
+| =cmacs/crispy/cmacs-crispy.c=      | C primitives, DIRECT dispatch registration    |
+| =lisp/cmacs/cmacs-crispy.el=       | Elisp layer: REPL, minor mode, evaluation     |
+| =lisp/cmacs/cmacs-config.el=       | Config file loading (init.c discovery)        |
+| =deps/crispy/=                     | Crispy library (git submodule)                |
