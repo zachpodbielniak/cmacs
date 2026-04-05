@@ -483,6 +483,9 @@ cmacs_bacon_main (int argc, char **argv, int bacon_idx)
       exit (1);
     }
 
+  /* Register all standard builtins (cd, echo, exit, etc.). */
+  bacon_shell_register_default_builtins (shell);
+
   /* Load cmacsgi module if a module directory is set.
      The parent sets CMACS_MODULE_DIR before launching us. */
   mm = bacon_shell_get_module_manager (shell);
@@ -492,6 +495,11 @@ cmacs_bacon_main (int argc, char **argv, int bacon_idx)
       bacon_module_manager_load_from_directory (mm, module_dir);
       bacon_module_manager_activate_all (mm);
     }
+
+  /* Dispatch module startup hooks so module-provided builtins
+     (like cmacsgi) are available before RC files run. */
+  if (mm != NULL)
+    bacon_module_manager_dispatch_startup (mm, shell);
 
   /* Source RC files. */
   {
