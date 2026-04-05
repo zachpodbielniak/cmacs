@@ -1,0 +1,361 @@
+#+TITLE: CMacs — GNU Emacs with GLib/GObject Integration
+#+AUTHOR: Zach Podbielniak
+#+LICENSE: AGPL-3.0-or-later (CMacs additions), GPL-3.0-or-later (GNU Emacs)
+
+* Overview
+
+CMacs is a fork of GNU Emacs 31.x that deeply integrates the
+GLib/GObject ecosystem.  The goal: make Emacs a first-class GLib
+application where everything — window management, shell, scripting,
+introspection — is controllable from C via GObject Introspection,
+without requiring elisp.
+
+CMacs embeds three companion projects as git submodules under =deps/=:
+
+- [[https://gitlab.com/zachpodbielniak/crispy][Crispy]] — C scripting engine (compile-and-run C with GLib/GObject)
+- [[https://gitlab.com/zachpodbielniak/bacon][Bacon]] — GLib-native shell (pipelines, modules, job control)
+- [[https://gitlab.com/zachpodbielniak/gowl][Gowl]] — Wayland compositor (tiling WM built on wlroots + GLib)
+
+Each module is optional and detected at configure time via
+=--with-cmacs-*= flags.
+
+* Modules
+
+** GLib Core (=--with-cmacs-glib=)
+
+GLib event loop integration with the Emacs main loop.
+
+- =cmacs-glib-iteration= / =cmacs-glib-pending-p= — pump the GMainContext
+- =cmacs-glib-timeout-add= / =cmacs-glib-idle-add= / =cmacs-glib-source-remove= — schedule callbacks
+- =cmacs-gobject-wrap= / =cmacs-gobject-unwrap= — bridge GObjects to elisp
+
+** GObject Introspection (=--with-cmacs-gi=)
+
+Call any GI-annotated library from elisp or cmacsgi:
+
+- =gi-require= — load a typelib (e.g. =Gtk=, =Gio=, =Gowl=)
+- =gi-call= / =gi-method= — invoke functions and methods by name
+- =gi-enum= — resolve enum values
+- =gi-list-functions= / =gi-function-info= — introspect namespaces
+
+** Crispy (=--with-cmacs-crispy=)
+
+Embed the Crispy C scripting engine:
+
+- =crispy-eval= / =crispy-eval-string= — evaluate C expressions
+- =crispy-compile= / =crispy-run= — compile and execute C source files
+- =crispy-repl-eval= / =crispy-repl-reset= — interactive C REPL
+- =crispy-cache-status= — check the build cache
+
+** Bacon Shell (=--with-cmacs-bacon=)
+
+Embed the Bacon shell as a GLib-native terminal:
+
+- =bacon-start= / =bacon-stop= / =bacon-running-p= — lifecycle
+- =bacon-eval= — execute shell commands
+- =bacon-eval-c= — compile and run C code via crispy (from shell)
+- =bacon-source= / =bacon-alias= / =bacon-environment= / =bacon-complete= — shell internals
+- =bacon-ipc-start= / =bacon-ipc-stop= — socketpair IPC for cmacsgi builtin
+
+The bacon shell's =cmacsgi= builtin can call back into CMacs (eval elisp,
+open files, invoke GI functions, control gowl) over the IPC channel.
+
+** Gowl Wayland Compositor (=--with-cmacs-gowl=)
+
+Embed a full tiling Wayland compositor inside CMacs.  49 elisp commands
+and 15 JSON dispatch methods expose complete window manager control:
+
+*** Lifecycle
+- =gowl-start= / =gowl-stop= / =gowl-running-p=
+
+*** GObject Accessors (for GI runtime control)
+- =gowl-compositor= — the live =GowlCompositor= GObject
+- =gowl-config-object= — the live =GowlConfig= GObject
+- =gowl-module-manager= — the =GowlModuleManager= GObject
+
+*** Client Management
+- =gowl-list-clients= / =gowl-client-count= / =gowl-focused-client=
+- =gowl-focus-client= / =gowl-close-client= / =gowl-find-client=
+- =gowl-client-info= / =gowl-client-pid=
+- =gowl-move-client= / =gowl-resize-client= / =gowl-move-client-to-monitor=
+- =gowl-toggle-client-floating= / =gowl-toggle-client-fullscreen=
+- =gowl-set-client-urgent=
+
+*** Monitor & Tags
+- =gowl-list-monitors= / =gowl-monitor-count= / =gowl-focused-monitor=
+- =gowl-monitor-info=
+- =gowl-view-tags= / =gowl-set-tags= / =gowl-toggle-tag-view=
+- =gowl-toggle-client-tag= / =gowl-tag-info=
+
+*** Layout
+- =gowl-get-layout= / =gowl-set-layout=
+- =gowl-get-mfact= / =gowl-set-mfact=
+- =gowl-get-nmaster= / =gowl-set-nmaster=
+
+*** Keybinds & Rules
+- =gowl-add-keybind= / =gowl-list-keybinds=
+- =gowl-add-rule= / =gowl-list-rules=
+
+*** Session & Config
+- =gowl-lock= / =gowl-unlock= / =gowl-locked-p=
+- =gowl-reload-config= / =gowl-config-get= / =gowl-config-generate-yaml=
+
+*** Modules
+- =gowl-load-module= / =gowl-list-modules= / =gowl-load-modules-from-dir=
+
+*** cmacsgi / D-Bus Access
+
+All gowl features are also exposed over the bacon IPC channel and
+D-Bus (=org.cmacs.Editor1=), so external processes and bacon scripts
+can control the compositor without elisp:
+
+#+begin_example
+cmacsgi GowlListClients '{}'
+cmacsgi GowlSpawn '{"command": "foot"}'
+cmacsgi GowlAddKeybind '{"key": "Mod4+Return", "action": 1, "arg": "foot"}'
+cmacsgi GowlSetMfact '{"mfact": 0.55}'
+cmacsgi GowlViewTags '{"tagmask": 3}'
+#+end_example
+
+Or via D-Bus:
+
+#+begin_example
+gdbus call --session --dest org.cmacs.Editor.Pid$(pidof emacs) \
+  --object-path /org/cmacs/Editor \
+  --method org.cmacs.Editor1.GowlListClients
+#+end_example
+
+* Building
+
+** Quick Start (Fedora)
+
+#+begin_src bash
+git clone --recursive git@git-ssh.podbielniak.com:zachpodbielniak/cmacs.git
+cd cmacs
+./install-deps           # installs system packages + builds crispy/bacon/gowl
+./autogen.sh
+./configure \
+  --with-cmacs-glib \
+  --with-cmacs-gi \
+  --with-cmacs-crispy \
+  --with-cmacs-bacon \
+  --with-cmacs-gowl \
+  --with-pgtk
+make -j$(nproc)
+sudo make install
+#+end_src
+
+** Step by Step
+
+*** 1. Clone with Submodules
+
+#+begin_src bash
+git clone --recursive git@git-ssh.podbielniak.com:zachpodbielniak/cmacs.git
+cd cmacs
+#+end_src
+
+If you already cloned without =--recursive=:
+
+#+begin_src bash
+git submodule update --init --recursive
+#+end_src
+
+*** 2. Install Dependencies
+
+The =install-deps= script auto-detects your platform and handles
+everything:
+
+#+begin_src bash
+# Install all dependencies (system packages + build deps from source)
+./install-deps
+
+# System packages only
+./install-deps --system
+
+# Build crispy/bacon/gowl from deps/ only
+./install-deps --from-source
+
+# List what would be installed (dry run)
+./install-deps --list
+
+# Set up /usr/local/lib64 in ldconfig (Linux, needed after from-source)
+sudo ./install-deps --ldconfig
+#+end_src
+
+Supported platforms: Fedora/RHEL, Ubuntu/Debian, Arch Linux, macOS
+(Homebrew), FreeBSD.
+
+On Fedora Silverblue or other immutable systems, install inside a
+distrobox:
+
+#+begin_src bash
+distrobox enter dev
+./install-deps
+#+end_src
+
+*** 3. Generate Configure Script
+
+#+begin_src bash
+./autogen.sh
+#+end_src
+
+Requires =autoconf= (>= 2.65) and =automake=.
+
+*** 4. Configure
+
+#+begin_src bash
+./configure \
+  --with-cmacs-glib \
+  --with-cmacs-gi \
+  --with-cmacs-crispy \
+  --with-cmacs-bacon \
+  --with-cmacs-gowl \
+  --with-pgtk
+#+end_src
+
+Module flags:
+
+- =--with-cmacs-glib= — GLib event loop + GObject bridge (required by all other cmacs modules)
+- =--with-cmacs-gi= — GObject Introspection bridge
+- =--with-cmacs-crispy= — Crispy C scripting
+- =--with-cmacs-bacon= — Bacon shell
+- =--with-cmacs-gowl= — Gowl Wayland compositor
+
+Each module auto-detects bundled (=deps/=) or system libraries.  To
+force system-installed versions:
+
+#+begin_src bash
+--with-cmacs-crispy=system
+--with-cmacs-bacon=system
+--with-cmacs-gowl=system
+#+end_src
+
+If optional image/TLS libraries are missing, use =ifavailable=:
+
+#+begin_src bash
+--with-xpm=ifavailable --with-jpeg=ifavailable \
+--with-gif=ifavailable --with-tiff=ifavailable \
+--with-gnutls=ifavailable
+#+end_src
+
+*** 5. Build
+
+#+begin_src bash
+make -j$(nproc)
+#+end_src
+
+*** 6. Install
+
+#+begin_src bash
+sudo make install
+#+end_src
+
+Default prefix is =/usr/local=.  Override with =--prefix= at configure time.
+
+** Building the Dependencies Separately
+
+If you prefer to build and install crispy, bacon, or gowl system-wide
+before configuring CMacs:
+
+#+begin_src bash
+# Crispy
+cd deps/crispy && make lib && sudo make install && cd ../..
+
+# Bacon
+cd deps/bacon && make lib-static && sudo make install && cd ../..
+
+# Gowl
+cd deps/gowl && make deps lib && sudo make install && cd ../..
+
+sudo ldconfig   # refresh linker cache
+#+end_src
+
+Then configure with =--with-cmacs-crispy=system= etc.
+
+* Testing
+
+#+begin_src bash
+# Run the full Emacs test suite
+make check
+
+# Run just the CMacs-related tests
+cd test && make SELECTOR='cmacs' check
+#+end_src
+
+* Architecture
+
+#+begin_example
+┌─────────────────────────────────────────────────────────┐
+│                    CMacs (Emacs 31.x)                   │
+│                                                         │
+│  ┌─────────────┐  ┌──────────┐  ┌───────────────────┐  │
+│  │ GLib Core   │  │ GI Bridge│  │ Eval Dispatch     │  │
+│  │ (event loop │  │ (call any│  │ (transport-agnostic│  │
+│  │  GObject    │  │  GI lib) │  │  JSON methods)    │  │
+│  │  bridge)    │  │          │  │                   │  │
+│  └──────┬──────┘  └────┬─────┘  └────────┬──────────┘  │
+│         │              │                  │             │
+│  ┌──────┴──────┐  ┌────┴────┐  ┌─────────┴──────────┐  │
+│  │   Crispy    │  │  Bacon  │  │      Gowl          │  │
+│  │ (C scripts) │  │ (shell) │  │ (Wayland compositor│  │
+│  │             │  │         │  │  49 DEFUNs)        │  │
+│  └─────────────┘  └────┬────┘  └────────────────────┘  │
+│                         │                               │
+│              ┌──────────┴──────────┐                    │
+│              │  cmacsgi builtin    │                    │
+│              │  (bacon IPC + D-Bus)│                    │
+│              └─────────────────────┘                    │
+└─────────────────────────────────────────────────────────┘
+#+end_example
+
+** IPC Design
+
+The bacon shell's =cmacsgi= builtin communicates with CMacs over a
+socketpair using length-prefixed JSON messages:
+
+1. Child (bacon) sends: =4-byte big-endian length + JSON payload=
+2. Parent (CMacs) reads non-blocking into a =GByteArray= accumulator
+3. Complete messages are parsed and queued in a =GQueue=
+4. Dispatch happens via GLib idle callbacks (one request per iteration)
+5. Response is written back as length-prefixed JSON
+
+This design prevents IPC deadlocks — the parent never blocks on reads,
+and dispatch interleaves with the GLib event loop.
+
+The same methods are also available over D-Bus (=org.cmacs.Editor1=)
+for external process access.
+
+** Static Linking
+
+When building with bundled dependencies (the default), crispy, bacon,
+and gowl are statically linked into the emacs binary using
+=--whole-archive=.  This avoids runtime library path issues and makes
+the binary self-contained.
+
+* Key Differences from GNU Emacs
+
+- GLib =GMainContext= integrated into the Emacs event loop
+- GObject ↔ elisp bridge (wrap/unwrap arbitrary GObjects)
+- GObject Introspection: call any GI library from elisp or C
+- Embedded C scripting via Crispy
+- Embedded GLib-native shell via Bacon
+- Embedded Wayland compositor via Gowl
+- D-Bus service (=org.cmacs.Editor1=) for external control
+- All features accessible from C/GI without elisp knowledge
+
+* Source Layout
+
+- =cmacs/glib/= — GLib core, GObject bridge, GClosure, D-Bus service, eval dispatch
+- =cmacs/gi/= — GObject Introspection bridge
+- =cmacs/crispy/= — Crispy integration
+- =cmacs/bacon/= — Bacon shell, IPC, bacon modules (GI transport, etc.)
+- =cmacs/gowl/= — Gowl compositor integration
+- =deps/crispy/= — Crispy submodule
+- =deps/bacon/= — Bacon submodule
+- =deps/gowl/= — Gowl submodule
+- =install-deps= — multi-platform dependency installer
+
+* License
+
+CMacs additions: AGPL-3.0-or-later
+GNU Emacs base: GPL-3.0-or-later
