@@ -21,6 +21,7 @@
 
 #include "lisp.h"
 #include "timespec.h"
+#include "keyboard.h"
 #include "cmacs-glib-loop.h"
 
 #include <glib.h>
@@ -136,10 +137,25 @@ cmacs_glib_dispatch (fd_set *readable, int nfds)
         poll_fds[i].revents |= (poll_fds[i].events & (G_IO_IN | G_IO_HUP));
     }
 
-  /* Let GLib check and dispatch ready sources. */
+  /* Let GLib check and dispatch ready sources.
+   *
+   * GLib callbacks (IPC, D-Bus, idle handlers) may evaluate Lisp code.
+   * We are called from wait_reading_process_output, where
+   * `waiting_for_input' may be true (e.g. during read_char → sit_for).
+   * Emacs aborts unconditionally if any Lisp error is signaled while
+   * `waiting_for_input' is set, because signal_or_quit treats it as an
+   * "impossible" situation.  Temporarily clear the flag so that Lisp
+   * errors in GLib callbacks are handled normally, then restore it. */
   g_main_context_check (cmacs_context, poll_max_priority,
                         poll_fds, poll_fds_count);
-  g_main_context_dispatch (cmacs_context);
+  {
+    bool was_waiting = waiting_for_input;
+    if (was_waiting)
+      clear_waiting_for_input ();
+    g_main_context_dispatch (cmacs_context);
+    if (was_waiting)
+      set_waiting_for_input (input_available_clear_time);
+  }
   g_main_context_release (cmacs_context);
 }
 

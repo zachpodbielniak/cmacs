@@ -748,16 +748,10 @@ AC_SUBST(CMACS_GOWL_CFLAGS)
 AC_SUBST(CMACS_GOWL_LIBS)
 AC_SUBST(CMACS_GOWL_BUNDLED)
 
-# When bundling multiple static libs that share vendored deps
-# (crispy, yaml-glib), allow duplicate symbol definitions.
-# All duplicates are identical code from identical sources.
-cmacs_bundled_count=0
-test "$CMACS_CRISPY_BUNDLED" = "yes" && cmacs_bundled_count=$((cmacs_bundled_count + 1))
-test "$CMACS_BACON_BUNDLED" = "yes" && cmacs_bundled_count=$((cmacs_bundled_count + 1))
-test "$CMACS_GOWL_BUNDLED" = "yes" && cmacs_bundled_count=$((cmacs_bundled_count + 1))
-if test "$cmacs_bundled_count" -ge 2; then
-  CMACS_GOWL_LIBS="$CMACS_GOWL_LIBS -Wl,-z,muldefs"
-fi
+# NOTE: shared vendored deps (crispy, yaml-glib) across bundled static libs
+# are de-duplicated at build time in src/Makefile.in rather than using
+# -Wl,-z,muldefs, which caused non-deterministic crashes when the vendored
+# copies were at different commits and produced incompatible objects.
 
 ## Makefile.in needs the cache file name.
 AC_SUBST([cache_file])

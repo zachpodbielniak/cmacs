@@ -344,6 +344,7 @@ CMACS_GI_LIBS = @CMACS_GI_LIBS@
 CMACS_CRISPY_OBJ = @CMACS_CRISPY_OBJ@
 CMACS_CRISPY_CFLAGS = @CMACS_CRISPY_CFLAGS@
 CMACS_CRISPY_LIBS = @CMACS_CRISPY_LIBS@
+CMACS_CRISPY_BUNDLED = @CMACS_CRISPY_BUNDLED@
 CMACS_BACON_OBJ = @CMACS_BACON_OBJ@
 CMACS_BACON_CFLAGS = @CMACS_BACON_CFLAGS@
 CMACS_BACON_LIBS = @CMACS_BACON_LIBS@
@@ -351,6 +352,7 @@ CMACS_BACON_BUNDLED = @CMACS_BACON_BUNDLED@
 CMACS_GOWL_OBJ = @CMACS_GOWL_OBJ@
 CMACS_GOWL_CFLAGS = @CMACS_GOWL_CFLAGS@
 CMACS_GOWL_LIBS = @CMACS_GOWL_LIBS@
+CMACS_GOWL_BUNDLED = @CMACS_GOWL_BUNDLED@
 CMACS_INTERNAL_CFLAGS = -I$(srcdir)/../cmacs/glib -I$(srcdir)/../cmacs/gobject \
                         -I$(srcdir)/../cmacs/gi -I$(srcdir)/../cmacs/crispy \
                         -I$(srcdir)/../cmacs/bacon -I$(srcdir)/../cmacs/gowl
@@ -761,14 +763,75 @@ endif
 ifeq ($(CMACS_CRISPY_BUNDLED),yes)
 CMACS_CRISPY_STATIC_LIB = $(srcdir)/../deps/crispy/build/release/libcrispy.a
 $(CMACS_CRISPY_STATIC_LIB):
-	$(MAKE) -C $(srcdir)/../deps/crispy lib-static
+	$(MAKE) -C $(srcdir)/../deps/crispy lib
 endif
 
 ifeq ($(CMACS_GOWL_BUNDLED),yes)
 CMACS_GOWL_STATIC_LIB = $(srcdir)/../deps/gowl/build/release/libgowl.a
 $(CMACS_GOWL_STATIC_LIB):
-	$(MAKE) -C $(srcdir)/../deps/gowl lib-static
+	$(MAKE) -C $(srcdir)/../deps/gowl lib
+
+## Objects that include gowl.h (directly or via cmacs-eval-dispatch.h)
+## need gowl-version.h, which is generated during the gowl lib build.
+$(CMACS_GOWL_OBJ) $(CMACS_GLIB_OBJ) $(CMACS_BACON_OBJ): $(CMACS_GOWL_STATIC_LIB)
 endif
+
+## -------------------------------------------------------------------
+## De-duplicate shared objects between bundled static libraries.
+##
+## crispy, bacon, and gowl each vendor copies of crispy and/or yaml-glib
+## as git submodules at different commits, producing differently-compiled
+## objects.  Linking all with --whole-archive and -Wl,-z,muldefs caused
+## the linker to arbitrarily pick between incompatible implementations,
+## leading to non-deterministic memory corruption and crashes.
+##
+## Fix: strip shared-dep objects from downstream archives before linking
+## so each symbol has exactly one definition.
+##   crispy objects -> canonical: libcrispy.a (standalone, most complete)
+##   yaml-glib objects -> canonical: libbacon-1.0.a
+## -------------------------------------------------------------------
+
+_dup_crispy = crispy-cache-provider.o crispy-compiler.o \
+  crispy-config-context.o crispy-config-loader.o crispy-file-cache.o \
+  crispy-gcc-compiler.o crispy-plugin-engine.o crispy-script.o \
+  crispy-source-utils-private.o
+_dup_yaml = yaml-builder.o yaml-document.o yaml-generator.o \
+  yaml-gobject.o yaml-mapping.o yaml-node.o yaml-parser.o yaml-schema.o \
+  yaml-sequence.o yaml-serializable.o
+
+_bacon_strip =
+_gowl_strip =
+
+ifeq ($(CMACS_BACON_BUNDLED),yes)
+ifeq ($(CMACS_CRISPY_BUNDLED),yes)
+_bacon_strip += $(_dup_crispy)
+endif
+endif
+
+ifeq ($(CMACS_GOWL_BUNDLED),yes)
+ifneq ($(CMACS_CRISPY_BUNDLED)$(CMACS_BACON_BUNDLED),)
+_gowl_strip += $(_dup_crispy)
+endif
+ifeq ($(CMACS_BACON_BUNDLED),yes)
+_gowl_strip += $(_dup_yaml)
+endif
+endif
+
+ifneq ($(_bacon_strip),)
+CMACS_BACON_DEDUP_LIB = libbacon-dedup.a
+$(CMACS_BACON_DEDUP_LIB): $(CMACS_BACON_STATIC_LIB)
+	$(AM_V_GEN)cp $< $@ && ar d $@ $(_bacon_strip)
+CMACS_BACON_LIBS := $(subst $(CMACS_BACON_STATIC_LIB),$(CMACS_BACON_DEDUP_LIB),$(CMACS_BACON_LIBS))
+endif
+
+comma := ,
+ifneq ($(_gowl_strip),)
+CMACS_GOWL_DEDUP_LIB = libgowl-dedup.a
+$(CMACS_GOWL_DEDUP_LIB): $(CMACS_GOWL_STATIC_LIB)
+	$(AM_V_GEN)cp $< $@ && ar d $@ $(_gowl_strip)
+CMACS_GOWL_LIBS := $(subst $(CMACS_GOWL_STATIC_LIB),$(CMACS_GOWL_DEDUP_LIB),$(CMACS_GOWL_LIBS))
+endif
+CMACS_GOWL_LIBS := $(subst -Wl$(comma)-z$(comma)muldefs,,$(CMACS_GOWL_LIBS))
 
 ## We have to create $(etc) here because init_cmdargs tests its
 ## existence when setting Vinstallation_directory (FIXME?).
@@ -776,7 +839,8 @@ endif
 ## to start if Vinstallation_directory has the wrong value.
 temacs$(EXEEXT): $(LIBXMENU) $(ALLOBJS) $(LIBEGNU_ARCHIVE) $(EMACSRES) \
   $(charsets) $(charscript) ${emoji-zwj} $(MAKE_PDUMPER_FINGERPRINT) \
-  $(CMACS_BACON_STATIC_LIB) $(CMACS_CRISPY_STATIC_LIB) $(CMACS_GOWL_STATIC_LIB)
+  $(CMACS_BACON_STATIC_LIB) $(CMACS_CRISPY_STATIC_LIB) $(CMACS_GOWL_STATIC_LIB) \
+  $(CMACS_BACON_DEDUP_LIB) $(CMACS_GOWL_DEDUP_LIB)
 ifeq ($(HAVE_BE_APP),yes)
 	$(AM_V_CXXLD)$(CXX) -o $@.tmp \
 	  $(ALL_CFLAGS) $(TEMACS_LDFLAGS) $(LDFLAGS) \
