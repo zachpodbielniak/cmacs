@@ -751,11 +751,23 @@ else
 MAKE_PDUMPER_FINGERPRINT =
 endif
 
-## Build bundled libbacon static library if needed
+## Build bundled static libraries if needed
 ifeq ($(CMACS_BACON_BUNDLED),yes)
 CMACS_BACON_STATIC_LIB = $(srcdir)/../deps/bacon/build/release/libbacon-1.0.a
 $(CMACS_BACON_STATIC_LIB):
 	$(MAKE) -C $(srcdir)/../deps/bacon lib-static
+endif
+
+ifeq ($(CMACS_CRISPY_BUNDLED),yes)
+CMACS_CRISPY_STATIC_LIB = $(srcdir)/../deps/crispy/build/release/libcrispy.a
+$(CMACS_CRISPY_STATIC_LIB):
+	$(MAKE) -C $(srcdir)/../deps/crispy lib-static
+endif
+
+ifeq ($(CMACS_GOWL_BUNDLED),yes)
+CMACS_GOWL_STATIC_LIB = $(srcdir)/../deps/gowl/build/release/libgowl.a
+$(CMACS_GOWL_STATIC_LIB):
+	$(MAKE) -C $(srcdir)/../deps/gowl lib-static
 endif
 
 ## We have to create $(etc) here because init_cmdargs tests its
@@ -764,7 +776,7 @@ endif
 ## to start if Vinstallation_directory has the wrong value.
 temacs$(EXEEXT): $(LIBXMENU) $(ALLOBJS) $(LIBEGNU_ARCHIVE) $(EMACSRES) \
   $(charsets) $(charscript) ${emoji-zwj} $(MAKE_PDUMPER_FINGERPRINT) \
-  $(CMACS_BACON_STATIC_LIB)
+  $(CMACS_BACON_STATIC_LIB) $(CMACS_CRISPY_STATIC_LIB) $(CMACS_GOWL_STATIC_LIB)
 ifeq ($(HAVE_BE_APP),yes)
 	$(AM_V_CXXLD)$(CXX) -o $@.tmp \
 	  $(ALL_CFLAGS) $(TEMACS_LDFLAGS) $(LDFLAGS) \

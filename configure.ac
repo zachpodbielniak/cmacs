@@ -670,7 +670,19 @@ if test "$with_cmacs_gi" != "no"; then
   CMACS_GI_OBJ="cmacs-gi.o"
 fi
 if test "$with_cmacs_crispy" != "no"; then
-  PKG_CHECK_MODULES([CMACS_CRISPY], [crispy])
+  if test "$with_cmacs_crispy" = "system"; then
+    # Use system-installed crispy (for distro packaging)
+    PKG_CHECK_MODULES([CMACS_CRISPY], [crispy])
+  else
+    # Build libcrispy from deps/crispy/ (default)
+    PKG_CHECK_MODULES([CMACS_CRISPY_DEPS],
+      [glib-2.0 gobject-2.0 gio-2.0])
+    CMACS_CRISPY_CFLAGS="-I\$(srcdir)/../deps/crispy/src \
+      $CMACS_CRISPY_DEPS_CFLAGS"
+    CMACS_CRISPY_LIBS="-Wl,--whole-archive \$(srcdir)/../deps/crispy/build/release/libcrispy.a \
+      -Wl,--no-whole-archive $CMACS_CRISPY_DEPS_LIBS"
+    CMACS_CRISPY_BUNDLED=yes
+  fi
   AC_DEFINE([HAVE_CMACS_CRISPY], 1, [CMacs crispy integration])
   CMACS_CRISPY_OBJ="cmacs-crispy.o"
 fi
@@ -697,7 +709,23 @@ if test "$with_cmacs_bacon" != "no"; then
   CMACS_BACON_OBJ="cmacs-bacon.o cmacs-bacon-ipc.o"
 fi
 if test "$with_cmacs_gowl" != "no"; then
-  PKG_CHECK_MODULES([CMACS_GOWL], [gowl wlroots-0.19 wayland-server])
+  if test "$with_cmacs_gowl" = "system"; then
+    # Use system-installed gowl (for distro packaging)
+    PKG_CHECK_MODULES([CMACS_GOWL], [gowl wlroots-0.19 wayland-server])
+  else
+    # Build libgowl from deps/gowl/ (default)
+    PKG_CHECK_MODULES([CMACS_GOWL_DEPS],
+      [wlroots-0.19 wayland-server wayland-protocols pixman-1 xkbcommon \
+       glib-2.0 gobject-2.0 gio-2.0 pango pangocairo])
+    CMACS_GOWL_CFLAGS="-I\$(srcdir)/../deps/gowl/src \
+      -I\$(srcdir)/../deps/gowl/src/core \
+      -I\$(srcdir)/../deps/gowl/src/config \
+      -I\$(srcdir)/../deps/gowl/src/module \
+      $CMACS_GOWL_DEPS_CFLAGS"
+    CMACS_GOWL_LIBS="-Wl,--whole-archive \$(srcdir)/../deps/gowl/build/release/libgowl.a \
+      -Wl,--no-whole-archive $CMACS_GOWL_DEPS_LIBS"
+    CMACS_GOWL_BUNDLED=yes
+  fi
   AC_DEFINE([HAVE_CMACS_GOWL], 1, [CMacs Gowl compositor])
   CMACS_GOWL_OBJ="cmacs-gowl.o"
 fi
@@ -715,8 +743,21 @@ AC_SUBST(CMACS_CRISPY_LIBS)
 AC_SUBST(CMACS_BACON_CFLAGS)
 AC_SUBST(CMACS_BACON_LIBS)
 AC_SUBST(CMACS_BACON_BUNDLED)
+AC_SUBST(CMACS_CRISPY_BUNDLED)
 AC_SUBST(CMACS_GOWL_CFLAGS)
 AC_SUBST(CMACS_GOWL_LIBS)
+AC_SUBST(CMACS_GOWL_BUNDLED)
+
+# When bundling multiple static libs that share vendored deps
+# (crispy, yaml-glib), allow duplicate symbol definitions.
+# All duplicates are identical code from identical sources.
+cmacs_bundled_count=0
+test "$CMACS_CRISPY_BUNDLED" = "yes" && cmacs_bundled_count=$((cmacs_bundled_count + 1))
+test "$CMACS_BACON_BUNDLED" = "yes" && cmacs_bundled_count=$((cmacs_bundled_count + 1))
+test "$CMACS_GOWL_BUNDLED" = "yes" && cmacs_bundled_count=$((cmacs_bundled_count + 1))
+if test "$cmacs_bundled_count" -ge 2; then
+  CMACS_GOWL_LIBS="$CMACS_GOWL_LIBS -Wl,-z,muldefs"
+fi
 
 ## Makefile.in needs the cache file name.
 AC_SUBST([cache_file])

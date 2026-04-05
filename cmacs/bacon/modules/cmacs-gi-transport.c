@@ -21,6 +21,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <string.h>
+#include <poll.h>
 
 typedef enum {
     TRANSPORT_FD,
@@ -137,6 +138,26 @@ fd_recv_json (int fd)
     return root;
 }
 
+/* Read a length-prefixed JSON message with a timeout (milliseconds).
+   Returns a JsonNode (caller unrefs), or NULL on error/timeout. */
+static JsonNode *
+fd_recv_json_timeout (int fd, int timeout_ms)
+{
+    struct pollfd pfd;
+    int ret;
+
+    pfd.fd = fd;
+    pfd.events = POLLIN;
+
+    ret = poll (&pfd, 1, timeout_ms);
+    if (ret <= 0)
+        return NULL;  /* timeout or error */
+    if (!(pfd.revents & POLLIN))
+        return NULL;  /* hangup or error condition */
+
+    return fd_recv_json (fd);
+}
+
 /* ── FD transport call implementation ──────────────────────────────── */
 
 /* Build a JSON request for the given D-Bus-style method + GVariant params.
@@ -232,8 +253,8 @@ fd_transport_call (CmacsGiTransport *t, const gchar *method,
     json_node_unref (req_root);
     json_object_unref (req_obj);
 
-    /* Read response. */
-    resp_root = fd_recv_json (t->u.fd);
+    /* Read response (30s timeout to avoid deadlock). */
+    resp_root = fd_recv_json_timeout (t->u.fd, 30000);
     if (resp_root == NULL)
     {
         g_set_error (error, CMACS_TRANSPORT_ERROR, 1,

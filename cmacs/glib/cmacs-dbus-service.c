@@ -55,6 +55,68 @@ static const gchar introspection_xml[] =
   "      <arg type='s' name='namespace_' direction='in'/>"
   "      <arg type='as' name='functions' direction='out'/>"
   "    </method>"
+#ifdef HAVE_CMACS_GOWL
+  "    <method name='GowlListClients'>"
+  "      <arg type='s' name='result' direction='out'/>"
+  "    </method>"
+  "    <method name='GowlFocusedClient'>"
+  "      <arg type='s' name='result' direction='out'/>"
+  "    </method>"
+  "    <method name='GowlSpawn'>"
+  "      <arg type='s' name='command' direction='in'/>"
+  "      <arg type='s' name='result' direction='out'/>"
+  "    </method>"
+  "    <method name='GowlListMonitors'>"
+  "      <arg type='s' name='result' direction='out'/>"
+  "    </method>"
+  "    <method name='GowlAddKeybind'>"
+  "      <arg type='s' name='key' direction='in'/>"
+  "      <arg type='i' name='action' direction='in'/>"
+  "      <arg type='s' name='arg' direction='in'/>"
+  "      <arg type='s' name='result' direction='out'/>"
+  "    </method>"
+  "    <method name='GowlListKeybinds'>"
+  "      <arg type='s' name='result' direction='out'/>"
+  "    </method>"
+  "    <method name='GowlAddRule'>"
+  "      <arg type='s' name='app_id' direction='in'/>"
+  "      <arg type='s' name='title' direction='in'/>"
+  "      <arg type='u' name='tags' direction='in'/>"
+  "      <arg type='b' name='floating' direction='in'/>"
+  "      <arg type='i' name='monitor' direction='in'/>"
+  "      <arg type='s' name='result' direction='out'/>"
+  "    </method>"
+  "    <method name='GowlSetMfact'>"
+  "      <arg type='d' name='mfact' direction='in'/>"
+  "      <arg type='s' name='result' direction='out'/>"
+  "    </method>"
+  "    <method name='GowlSetNmaster'>"
+  "      <arg type='i' name='n' direction='in'/>"
+  "      <arg type='s' name='result' direction='out'/>"
+  "    </method>"
+  "    <method name='GowlViewTags'>"
+  "      <arg type='u' name='tagmask' direction='in'/>"
+  "      <arg type='s' name='result' direction='out'/>"
+  "    </method>"
+  "    <method name='GowlLock'>"
+  "      <arg type='s' name='result' direction='out'/>"
+  "    </method>"
+  "    <method name='GowlUnlock'>"
+  "      <arg type='s' name='result' direction='out'/>"
+  "    </method>"
+  "    <method name='GowlReloadConfig'>"
+  "      <arg type='s' name='result' direction='out'/>"
+  "    </method>"
+  "    <method name='GowlConfigGet'>"
+  "      <arg type='s' name='property' direction='in'/>"
+  "      <arg type='s' name='result' direction='out'/>"
+  "    </method>"
+  "    <method name='GowlFindClient'>"
+  "      <arg type='s' name='pattern' direction='in'/>"
+  "      <arg type='s' name='by' direction='in'/>"
+  "      <arg type='s' name='result' direction='out'/>"
+  "    </method>"
+#endif /* HAVE_CMACS_GOWL */
   "  </interface>"
   "</node>";
 
@@ -183,6 +245,246 @@ handle_method_call (GDBusConnection       *connection,
       g_dbus_method_invocation_return_value (
         invocation, g_variant_new ("(as)", &builder));
     }
+
+#ifdef HAVE_CMACS_GOWL
+
+  /* ── Gowl compositor methods (bypass elisp for performance) ──────── */
+
+  else if (g_strcmp0 (method_name, "GowlListClients") == 0)
+    {
+      GError *err = NULL;
+      gchar *result = cmacs_dispatch_gowl_list_clients (&err);
+      if (result != NULL)
+        {
+          g_dbus_method_invocation_return_value (
+            invocation, g_variant_new ("(s)", result));
+          g_free (result);
+        }
+      else
+        dbus_return_gerror (invocation, err);
+    }
+  else if (g_strcmp0 (method_name, "GowlFocusedClient") == 0)
+    {
+      GError *err = NULL;
+      gchar *result = cmacs_dispatch_gowl_focused_client (&err);
+      if (result != NULL)
+        {
+          g_dbus_method_invocation_return_value (
+            invocation, g_variant_new ("(s)", result));
+          g_free (result);
+        }
+      else
+        dbus_return_gerror (invocation, err);
+    }
+  else if (g_strcmp0 (method_name, "GowlSpawn") == 0)
+    {
+      const gchar *command;
+      GError *err = NULL;
+      gchar *result;
+
+      g_variant_get (parameters, "(&s)", &command);
+      result = cmacs_dispatch_gowl_spawn (command, &err);
+      if (result != NULL)
+        {
+          g_dbus_method_invocation_return_value (
+            invocation, g_variant_new ("(s)", result));
+          g_free (result);
+        }
+      else
+        dbus_return_gerror (invocation, err);
+    }
+  else if (g_strcmp0 (method_name, "GowlListMonitors") == 0)
+    {
+      GError *err = NULL;
+      gchar *result = cmacs_dispatch_gowl_list_monitors (&err);
+      if (result != NULL)
+        {
+          g_dbus_method_invocation_return_value (
+            invocation, g_variant_new ("(s)", result));
+          g_free (result);
+        }
+      else
+        dbus_return_gerror (invocation, err);
+    }
+  else if (g_strcmp0 (method_name, "GowlAddKeybind") == 0)
+    {
+      const gchar *key, *arg;
+      gint action;
+      GError *err = NULL;
+      gchar *result;
+
+      g_variant_get (parameters, "(&si&s)", &key, &action, &arg);
+      result = cmacs_dispatch_gowl_add_keybind (key, action, arg, &err);
+      if (result != NULL)
+        {
+          g_dbus_method_invocation_return_value (
+            invocation, g_variant_new ("(s)", result));
+          g_free (result);
+        }
+      else
+        dbus_return_gerror (invocation, err);
+    }
+  else if (g_strcmp0 (method_name, "GowlListKeybinds") == 0)
+    {
+      GError *err = NULL;
+      gchar *result = cmacs_dispatch_gowl_list_keybinds (&err);
+      if (result != NULL)
+        {
+          g_dbus_method_invocation_return_value (
+            invocation, g_variant_new ("(s)", result));
+          g_free (result);
+        }
+      else
+        dbus_return_gerror (invocation, err);
+    }
+  else if (g_strcmp0 (method_name, "GowlAddRule") == 0)
+    {
+      const gchar *app_id, *title;
+      guint32 tags;
+      gboolean floating;
+      gint monitor;
+      GError *err = NULL;
+      gchar *result;
+
+      g_variant_get (parameters, "(&s&subi)", &app_id, &title, &tags,
+                     &floating, &monitor);
+      result = cmacs_dispatch_gowl_add_rule (app_id, title, tags, floating,
+                                              monitor, &err);
+      if (result != NULL)
+        {
+          g_dbus_method_invocation_return_value (
+            invocation, g_variant_new ("(s)", result));
+          g_free (result);
+        }
+      else
+        dbus_return_gerror (invocation, err);
+    }
+  else if (g_strcmp0 (method_name, "GowlSetMfact") == 0)
+    {
+      gdouble mfact;
+      GError *err = NULL;
+      gchar *result;
+
+      g_variant_get (parameters, "(d)", &mfact);
+      result = cmacs_dispatch_gowl_set_mfact (mfact, &err);
+      if (result != NULL)
+        {
+          g_dbus_method_invocation_return_value (
+            invocation, g_variant_new ("(s)", result));
+          g_free (result);
+        }
+      else
+        dbus_return_gerror (invocation, err);
+    }
+  else if (g_strcmp0 (method_name, "GowlSetNmaster") == 0)
+    {
+      gint n;
+      GError *err = NULL;
+      gchar *result;
+
+      g_variant_get (parameters, "(i)", &n);
+      result = cmacs_dispatch_gowl_set_nmaster (n, &err);
+      if (result != NULL)
+        {
+          g_dbus_method_invocation_return_value (
+            invocation, g_variant_new ("(s)", result));
+          g_free (result);
+        }
+      else
+        dbus_return_gerror (invocation, err);
+    }
+  else if (g_strcmp0 (method_name, "GowlViewTags") == 0)
+    {
+      guint32 tagmask;
+      GError *err = NULL;
+      gchar *result;
+
+      g_variant_get (parameters, "(u)", &tagmask);
+      result = cmacs_dispatch_gowl_view_tags (tagmask, &err);
+      if (result != NULL)
+        {
+          g_dbus_method_invocation_return_value (
+            invocation, g_variant_new ("(s)", result));
+          g_free (result);
+        }
+      else
+        dbus_return_gerror (invocation, err);
+    }
+  else if (g_strcmp0 (method_name, "GowlLock") == 0)
+    {
+      GError *err = NULL;
+      gchar *result = cmacs_dispatch_gowl_lock (&err);
+      if (result != NULL)
+        {
+          g_dbus_method_invocation_return_value (
+            invocation, g_variant_new ("(s)", result));
+          g_free (result);
+        }
+      else
+        dbus_return_gerror (invocation, err);
+    }
+  else if (g_strcmp0 (method_name, "GowlUnlock") == 0)
+    {
+      GError *err = NULL;
+      gchar *result = cmacs_dispatch_gowl_unlock (&err);
+      if (result != NULL)
+        {
+          g_dbus_method_invocation_return_value (
+            invocation, g_variant_new ("(s)", result));
+          g_free (result);
+        }
+      else
+        dbus_return_gerror (invocation, err);
+    }
+  else if (g_strcmp0 (method_name, "GowlReloadConfig") == 0)
+    {
+      GError *err = NULL;
+      gchar *result = cmacs_dispatch_gowl_reload_config (&err);
+      if (result != NULL)
+        {
+          g_dbus_method_invocation_return_value (
+            invocation, g_variant_new ("(s)", result));
+          g_free (result);
+        }
+      else
+        dbus_return_gerror (invocation, err);
+    }
+  else if (g_strcmp0 (method_name, "GowlConfigGet") == 0)
+    {
+      const gchar *property;
+      GError *err = NULL;
+      gchar *result;
+
+      g_variant_get (parameters, "(&s)", &property);
+      result = cmacs_dispatch_gowl_config_get (property, &err);
+      if (result != NULL)
+        {
+          g_dbus_method_invocation_return_value (
+            invocation, g_variant_new ("(s)", result));
+          g_free (result);
+        }
+      else
+        dbus_return_gerror (invocation, err);
+    }
+  else if (g_strcmp0 (method_name, "GowlFindClient") == 0)
+    {
+      const gchar *pattern, *by;
+      GError *err = NULL;
+      gchar *result;
+
+      g_variant_get (parameters, "(&s&s)", &pattern, &by);
+      result = cmacs_dispatch_gowl_find_client (pattern, by, &err);
+      if (result != NULL)
+        {
+          g_dbus_method_invocation_return_value (
+            invocation, g_variant_new ("(s)", result));
+          g_free (result);
+        }
+      else
+        dbus_return_gerror (invocation, err);
+    }
+
+#endif /* HAVE_CMACS_GOWL */
 }
 
 static const GDBusInterfaceVTable vtable = {

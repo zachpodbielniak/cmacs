@@ -42,5 +42,59 @@ gchar *cmacs_dispatch_gi_call (const gchar *ns, const gchar *func,
    Returns NULL-terminated string array (caller must g_strfreev). */
 gchar **cmacs_dispatch_gi_list_functions (const gchar *ns);
 
+/* ── Gowl compositor dispatch (bypasses elisp for performance) ───── */
+
+#ifdef HAVE_CMACS_GOWL
+
+#include <gowl.h>
+
+/* Global compositor instance, defined in cmacs-gowl.c. */
+extern GowlCompositor *cmacs_gowl_compositor;
+
+/* List clients as JSON array string. */
+gchar *cmacs_dispatch_gowl_list_clients (GError **error);
+
+/* Get focused client info as JSON string. */
+gchar *cmacs_dispatch_gowl_focused_client (GError **error);
+
+/* Spawn a command. */
+gchar *cmacs_dispatch_gowl_spawn (const gchar *command, GError **error);
+
+/* List monitors as JSON array string. */
+gchar *cmacs_dispatch_gowl_list_monitors (GError **error);
+
+/* Add a keybind.  Returns "t" on success. */
+gchar *cmacs_dispatch_gowl_add_keybind (const gchar *key, gint action,
+                                         const gchar *arg, GError **error);
+
+/* List keybinds as JSON array string. */
+gchar *cmacs_dispatch_gowl_list_keybinds (GError **error);
+
+/* Add a window rule. */
+gchar *cmacs_dispatch_gowl_add_rule (const gchar *app_id,
+                                      const gchar *title,
+                                      guint32 tags, gboolean floating,
+                                      gint monitor, GError **error);
+
+/* Set layout, mfact, nmaster, view tags. */
+gchar *cmacs_dispatch_gowl_set_mfact (gdouble mfact, GError **error);
+gchar *cmacs_dispatch_gowl_set_nmaster (gint n, GError **error);
+gchar *cmacs_dispatch_gowl_view_tags (guint32 tagmask, GError **error);
+
+/* Session control. */
+gchar *cmacs_dispatch_gowl_lock (GError **error);
+gchar *cmacs_dispatch_gowl_unlock (GError **error);
+gchar *cmacs_dispatch_gowl_reload_config (GError **error);
+
+/* Get config property by name. */
+gchar *cmacs_dispatch_gowl_config_get (const gchar *property,
+                                        GError **error);
+
+/* Find client by app-id or title pattern. */
+gchar *cmacs_dispatch_gowl_find_client (const gchar *pattern,
+                                         const gchar *by, GError **error);
+
+#endif /* HAVE_CMACS_GOWL */
+
 #endif /* HAVE_CMACS_GLIB */
 #endif /* CMACS_EVAL_DISPATCH_H */
