@@ -42,20 +42,21 @@ static gint     poll_max_priority = 0;
 /* Event loop hooks                                                    */
 /* ──────────────────────────────────────────────────────────────────── */
 
-void
+int
 cmacs_glib_prepare (fd_set *readable, fd_set *writeable,
                     struct timespec *timeout)
 {
   gint glib_timeout_ms;
   gint n_fds;
   gint i;
+  int max_glib_fd = -1;
 
   if (cmacs_context == NULL)
-    return;
+    return -1;
 
   /* Acquire and prepare — tells GLib sources to report readiness. */
   if (!g_main_context_acquire (cmacs_context))
-    return;
+    return -1;
 
   g_main_context_prepare (cmacs_context, &poll_max_priority);
 
@@ -87,6 +88,9 @@ cmacs_glib_prepare (fd_set *readable, fd_set *writeable,
 
       if (poll_fds[i].events & G_IO_OUT)
         FD_SET (fd, writeable);
+
+      if (fd > max_glib_fd)
+        max_glib_fd = fd;
     }
 
   /* If GLib needs a shorter timeout, reduce ours.
@@ -100,15 +104,24 @@ cmacs_glib_prepare (fd_set *readable, fd_set *writeable,
       if (timespec_cmp (glib_ts, *timeout) < 0)
         *timeout = glib_ts;
     }
+
+  return max_glib_fd;
 }
 
 void
-cmacs_glib_dispatch (fd_set *readable)
+cmacs_glib_dispatch (fd_set *readable, int nfds)
 {
   gint i;
 
   if (cmacs_context == NULL)
     return;
+
+  /* If pselect failed, just release the context — fd_sets are undefined. */
+  if (nfds < 0)
+    {
+      g_main_context_release (cmacs_context);
+      return;
+    }
 
   /* Map pselect() results back to GPollFD revents. */
   for (i = 0; i < poll_fds_count; i++)

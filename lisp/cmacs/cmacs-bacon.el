@@ -8,25 +8,35 @@
 ;; Elisp interface for the Bacon shell, a Unix shell with integrated
 ;; C scripting via Crispy.
 ;;
-;; C primitives available:
+;; C primitives available (for programmatic use from elisp):
 ;;   `bacon-start'       -- create and start a BaconShell
 ;;   `bacon-stop'        -- destroy the BaconShell
-;;   `bacon-eval'        -- execute a command string
-;;   `bacon-eval-c'      -- execute a C code block
+;;   `bacon-eval'        -- execute a command string, returns (RC . OUTPUT)
+;;   `bacon-eval-c'      -- execute a C code block, returns (RC . OUTPUT)
 ;;   `bacon-complete'    -- get completion candidates
 ;;   `bacon-environment' -- get shell environment as alist
 ;;   `bacon-source'      -- source a file
 ;;   `bacon-alias'       -- get or set an alias
 ;;   `bacon-running-p'   -- check if shell is running
+;;   `bacon-get-prompt'  -- get configured prompt string
 ;;
-;; This file provides:
-;;   - `bacon-shell-mode' -- major mode derived from comint-mode
-;;   - `M-x bacon'        -- open a Bacon shell buffer
-;;   - Tab completion via `bacon-complete'
+;; Interactive use:
+;;   `M-x bacon'         -- open a Bacon shell in vterm
+;;
+;; From the bacon shell, use the `cmacsgi` builtin (GI over D-Bus):
+;;   cmacsgi eval "(+ 1 2)"
+;;   cmacsgi find-file /tmp/foo.txt
+;;   cmacsgi message "hello from bacon"
+;;   cmacsgi require GLib 2.0
+;;   cmacsgi call GLib get_user_name
+;;   cmacsgi list GLib
 
 ;;; Code:
 
-(require 'comint)
+;; Declare vterm variables as special so `let' bindings work
+;; correctly under lexical-binding even before vterm is loaded.
+(defvar vterm-shell)
+(defvar vterm-buffer-name)
 
 (defgroup bacon nil
   "Bacon shell integration."
@@ -38,155 +48,53 @@
   :type 'string
   :group 'bacon)
 
-(defcustom bacon-prompt "bacon$ "
-  "Prompt string for the Bacon shell."
+(defcustom bacon-shell-program (or (executable-find "bacon") "bacon")
+  "Path to the bacon shell binary."
   :type 'string
   :group 'bacon)
 
-(defcustom bacon-startup-file nil
-  "File to source when starting the Bacon shell, or nil for none."
-  :type '(choice (const nil) file)
-  :group 'bacon)
+(defvar bacon--module-dir
+  (expand-file-name "../../cmacs/bacon/modules/"
+                    (file-name-directory
+                     (or load-file-name
+                         (locate-library "cmacs-bacon")
+                         default-directory)))
+  "Directory containing CMacs bacon modules.")
 
-(defvar bacon-shell-mode-map
-  (let ((map (make-sparse-keymap)))
-    (set-keymap-parent map comint-mode-map)
-    (define-key map (kbd "TAB") #'bacon-complete-at-point)
-    (define-key map (kbd "C-c C-c") #'bacon-interrupt)
-    (define-key map (kbd "C-c C-d") #'bacon-send-eof)
-    (define-key map (kbd "C-c C-z") #'bury-buffer)
-    map)
-  "Keymap for `bacon-shell-mode'.")
-
-(defvar bacon-shell--process nil
-  "The internal process object for the Bacon shell buffer.")
-
-;;; Shell mode
-
-(define-derived-mode bacon-shell-mode comint-mode "Bacon"
-  "Major mode for the Bacon shell.
-
-Bacon is a Unix shell with integrated C scripting support.  This
-mode provides an interactive shell environment inside CMacs with
-tab completion and command history.
-
-\\{bacon-shell-mode-map}"
-  :group 'bacon
-  (setq-local comint-prompt-regexp (regexp-quote bacon-prompt))
-  (setq-local comint-prompt-read-only t)
-  (setq-local comint-input-sender #'bacon-shell--input-sender)
-  (setq-local comint-process-echoes nil)
-  (add-hook 'completion-at-point-functions
-            #'bacon-completion-at-point nil t))
-
-(defun bacon-shell--input-sender (_proc input)
-  "Send INPUT to the Bacon shell for evaluation.
-_PROC is ignored; we call the C primitives directly."
-  (let* ((trimmed (string-trim input))
-         (output (condition-case err
-                     (progn
-                       (bacon-eval trimmed)
-                       ;; bacon-eval returns exit code; get environment
-                       ;; for the last exit status.
-                       nil)
-                   (bacon-error
-                    (format "Error: %s" (cadr err))))))
-    (bacon-shell--insert-output (or output ""))))
-
-(defun bacon-shell--insert-output (output)
-  "Insert OUTPUT into the Bacon shell buffer, followed by a new prompt."
-  (let ((buf (get-buffer bacon-buffer-name)))
-    (when buf
-      (with-current-buffer buf
-        (let ((inhibit-read-only t))
-          (goto-char (point-max))
-          (unless (string-empty-p output)
-            (insert output)
-            (unless (string-suffix-p "\n" output)
-              (insert "\n")))
-          (insert bacon-prompt)
-          (set-marker (process-mark
-                       (get-buffer-process (current-buffer)))
-                      (point)))))))
-
-;;; Completion
-
-(defun bacon-completion-at-point ()
-  "Completion-at-point function for Bacon shell mode."
-  (let* ((end (point))
-         (start (save-excursion
-                  (skip-chars-backward "^ \t\n")
-                  (point)))
-         (prefix (buffer-substring-no-properties start end)))
-    (when (> (length prefix) 0)
-      (let ((candidates (bacon-complete prefix)))
-        (when candidates
-          (list start end candidates
-                :exclusive 'no))))))
-
-(defun bacon-complete-at-point ()
-  "Perform completion at point in the Bacon shell."
-  (interactive)
-  (completion-at-point))
-
-;;; Interactive commands
+;;; Interactive shell via vterm
 
 ;;;###autoload
 (defun bacon ()
-  "Open (or switch to) the Bacon shell buffer."
+  "Open (or switch to) the Bacon shell in a vterm buffer.
+Starts the CMacs D-Bus service and loads the cmacsgi bacon module
+so that `cmacsgi' commands in the shell can call back into CMacs
+via GObject Introspection."
   (interactive)
-  (let ((buf (get-buffer-create bacon-buffer-name)))
-    (unless (comint-check-proc buf)
-      (with-current-buffer buf
-        ;; Start a dummy process for comint.
-        ;; Actual evaluation goes through bacon-eval.
-        (let ((proc (start-process "bacon-shell" buf "cat")))
-          (set-process-query-on-exit-flag proc nil)
-          (setq bacon-shell--process proc)
-          (bacon-shell-mode)
-          ;; Ensure the C-level shell is started.
-          (bacon-start)
-          ;; Source startup file if configured.
-          (when bacon-startup-file
-            (condition-case err
-                (bacon-source (expand-file-name bacon-startup-file))
-              (bacon-error
-               (message "Bacon: failed to source %s: %s"
-                        bacon-startup-file (cadr err)))))
-          (let ((inhibit-read-only t))
-            (insert "Bacon Shell\n")
-            (insert "Type shell commands at the prompt.\n\n")
-            (insert bacon-prompt)
-            (set-marker (process-mark proc) (point))))))
-    (pop-to-buffer buf)))
+  (require 'vterm)
+  ;; Start the D-Bus service so cmacsgi can reach us.
+  (let ((dbus-name (cmacs-dbus-start)))
+    (setenv "CMACS_DBUS_NAME" dbus-name))
+  ;; Set BACON_ARGS so bacon loads the cmacsgi module.
+  (let ((module-so (expand-file-name "cmacs_gi.so" bacon--module-dir)))
+    (when (file-exists-p module-so)
+      (setenv "BACON_ARGS"
+              (format "-M %s" (shell-quote-argument
+                               (file-name-directory module-so))))))
+  (let ((buf (get-buffer bacon-buffer-name)))
+    (if (and buf (buffer-live-p buf)
+             (get-buffer-process buf))
+        (pop-to-buffer buf)
+      (when (and buf (buffer-live-p buf))
+        (kill-buffer buf))
+      (let ((vterm-buffer-name bacon-buffer-name)
+            (vterm-shell bacon-shell-program))
+        (vterm)))))
 
-(defun bacon-interrupt ()
-  "Interrupt the current Bacon command."
-  (interactive)
-  (message "bacon: interrupted"))
-
-(defun bacon-send-eof ()
-  "Send EOF to the Bacon shell, stopping it."
-  (interactive)
-  (bacon-stop)
-  (message "Bacon shell stopped"))
-
-;;; Evil integration awareness
-
-(defun bacon--setup-evil ()
-  "Set up evil-mode bindings for Bacon shell buffers if evil is loaded."
-  (when (featurep 'evil)
-    (eval-after-load 'evil
-      '(progn
-         (evil-set-initial-state 'bacon-shell-mode 'insert)))))
-
-(add-hook 'bacon-shell-mode-hook #'bacon--setup-evil)
-
-;;; Utility functions
+;;; Programmatic interface
 
 (defun bacon-shell-send (command)
   "Send COMMAND to the Bacon shell from elisp.
-Does not require the Bacon buffer to be open."
+Returns (EXIT-CODE . OUTPUT)."
   (bacon-eval command))
 
 (defun bacon-shell-running-p ()

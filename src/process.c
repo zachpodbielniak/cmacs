@@ -5783,7 +5783,13 @@ wait_reading_process_output (intmax_t time_limit, int nsecs, int read_kbd,
 #endif
 
 #ifdef HAVE_CMACS_GLIB
-	  cmacs_glib_prepare (&Available, &Writeok, &timeout);
+	  int saved_max_desc = max_desc;
+	  {
+	    int glib_max_fd = cmacs_glib_prepare (&Available, &Writeok,
+						  &timeout);
+	    if (glib_max_fd > max_desc)
+	      max_desc = glib_max_fd;
+	  }
 #endif
 
 	  /* Android requires using a replacement for pselect in
@@ -5821,7 +5827,8 @@ wait_reading_process_output (intmax_t time_limit, int nsecs, int read_kbd,
 #endif /* HAVE_ANDROID && !ANDROID_STUBIFY */
 
 #ifdef HAVE_CMACS_GLIB
-	  cmacs_glib_dispatch (&Available);
+	  cmacs_glib_dispatch (&Available, nfds);
+	  max_desc = saved_max_desc;
 #endif
 
 #ifdef HAVE_GNUTLS

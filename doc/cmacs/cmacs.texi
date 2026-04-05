@@ -1,0 +1,669 @@
+\input texinfo   @c -*- texinfo -*-
+@c %**start of header
+@setfilename cmacs.info
+@settitle CMacs Manual
+@documentencoding UTF-8
+@c %**end of header
+
+@copying
+Copyright @copyright{} 2026 Zach Podbielniak
+
+@quotation
+This document is part of CMacs, licensed under AGPL-3.0-or-later.
+@end quotation
+@end copying
+
+@titlepage
+@title CMacs
+@subtitle GLib/GObject/GI Integration for Emacs
+@author Zach Podbielniak
+@insertcopying
+@end titlepage
+
+@contents
+
+@ifnottex
+@node Top
+@top CMacs
+
+CMacs extends Emacs with a deep GLib/GObject integration layer,
+bringing GObject Introspection, a GLib-aware event loop, the Bacon
+shell, Crispy C scripting, and a D-Bus service for cross-process
+interaction.
+@end ifnottex
+
+@menu
+* Overview::                    What CMacs adds to Emacs.
+* GLib Event Loop::             How GMainContext integrates with pselect().
+* GObject Bridge::              Wrapping GObjects in elisp.
+* GObject Introspection::       Calling any GI-annotated library from elisp.
+* D-Bus Service::               The org.cmacs.Editor1 interface.
+* Bacon Shell::                 Interactive shell via vterm.
+* cmacsgi Builtin::             Calling CMacs from the Bacon shell.
+* Crispy C Scripting::          Inline C evaluation.
+* Build Configuration::         Configure flags and dependencies.
+@end menu
+
+@c ===================================================================
+@node Overview
+@chapter Overview
+
+CMacs is a customized build of Emacs that adds first-class GLib and
+GObject support.  It is built from the Emacs source tree with
+additional C modules under @file{cmacs/} and elisp under
+@file{lisp/cmacs/}.
+
+Key components:
+
+@table @strong
+@item GLib Event Loop
+Integrates a GMainContext into Emacs's @code{pselect()}-based event
+loop so that GLib sources (timers, D-Bus, sockets) fire naturally
+within the Emacs event cycle---no threads, no races.
+
+@item GObject Bridge
+Wraps GObjects as elisp user-pointers with automatic reference
+counting, property access, signal connection, and GClosure marshalling.
+
+@item GObject Introspection
+Loads typelibs at runtime and calls any GI-annotated function or method
+from elisp, with full bidirectional type marshalling.
+
+@item D-Bus Service
+Exposes an @code{org.cmacs.Editor1} D-Bus interface so external
+processes can call into CMacs for elisp evaluation, GI calls, and file
+operations.
+
+@item Bacon Shell
+Runs the Bacon shell inside Emacs via vterm, with the @command{cmacsgi}
+builtin for interacting with CMacs over D-Bus.
+
+@item Crispy C Scripting
+Evaluates C code strings at runtime via the Crispy library, capturing
+stdout/stderr output.
+@end table
+
+@noindent
+Source layout:
+
+@example
+cmacs/
+  glib/           GLib event loop, GObject bridge, GClosure, D-Bus service
+  gobject/        (symlinked into glib/)
+  gi/             GObject Introspection bridge
+  crispy/         Crispy C scripting
+  bacon/          Bacon shell C primitives
+    modules/      Bacon module: cmacsgi builtin (.so)
+lisp/cmacs/       Elisp integration layers
+src/              Symlinks to cmacs/ files (for the Emacs build system)
+@end example
+
+@c ===================================================================
+@node GLib Event Loop
+@chapter GLib Event Loop Integration
+
+@cindex GMainContext
+@cindex event loop, GLib
+
+CMacs creates a private @code{GMainContext} (separate from the GLib
+default context that PGTK/GTK may own) and integrates it into Emacs's
+@code{pselect()}-based event loop in @file{src/process.c}.
+
+@section How It Works
+
+@enumerate
+@item
+Before each @code{pselect()} call, @code{cmacs_glib_prepare()} queries
+the GMainContext for its file descriptors and timeouts via
+@code{g_main_context_query()}.  These fds are merged into Emacs's
+@code{fd_set}s, and the timeout is reduced if GLib needs an earlier
+wake-up.  Returns the highest GLib fd (for @code{nfds}).
+
+@item
+After @code{pselect()} returns, @code{cmacs_glib_dispatch()} maps the
+results back to GLib's @code{GPollFD} structures, then calls
+@code{g_main_context_check()} and @code{g_main_context_dispatch()} to
+fire any ready GLib sources.
+
+@item
+If @code{pselect()} fails (@code{nfds < 0}), the context is released
+without dispatching.
+@end enumerate
+
+@noindent
+All GLib callbacks fire on the Emacs main thread.  No additional
+threads are created.
+
+@section Elisp Primitives
+
+@table @code
+@item cmacs-glib-context-p
+Return non-nil if the GMainContext exists.
+
+@item cmacs-glib-iteration &optional BLOCK
+Run one iteration of the GLib main loop.
+
+@item cmacs-glib-pending-p
+Return non-nil if any GLib sources are pending.
+
+@item cmacs-glib-timeout-add MS CALLBACK
+Add a timeout source.  @var{CALLBACK} is called every @var{MS}
+milliseconds.  If it returns nil, the timer is removed.  Returns a
+source ID.
+
+@item cmacs-glib-idle-add CALLBACK
+Add an idle source.  Returns a source ID.
+
+@item cmacs-glib-source-remove ID
+Remove a GLib source by its ID.
+@end table
+
+@section Files
+
+@table @file
+@item cmacs/glib/cmacs-glib-loop.c
+C implementation (hooks into @file{src/process.c}).
+@item cmacs/glib/cmacs-glib-loop.h
+Header with @code{cmacs_glib_prepare()} and @code{cmacs_glib_dispatch()}.
+@end table
+
+@c ===================================================================
+@node GObject Bridge
+@chapter GObject Bridge
+
+@cindex GObject, elisp bridge
+@cindex properties, GObject
+@cindex signals, GObject
+
+CMacs wraps GObjects as Emacs @code{user-ptr} values with automatic
+reference counting.  When a wrapped GObject is garbage-collected,
+@code{g_object_unref()} is called.
+
+@section Elisp Primitives
+
+@table @code
+@item gobject-new TYPE &rest PROPERTIES
+Construct a new GObject.  @var{TYPE} is the GType name string.
+Properties are passed as alternating key-value pairs.
+
+@item gobject-p OBJECT
+Return non-nil if @var{OBJECT} is a wrapped GObject.
+
+@item gobject-type-name OBJECT
+Return the GType name of @var{OBJECT} as a string.
+
+@item gobject-get OBJECT PROPERTY
+Get a property value.  Marshals GValues to elisp automatically.
+
+@item gobject-set OBJECT PROPERTY VALUE
+Set a property value.  Marshals elisp to GValues automatically.
+
+@item gobject-connect OBJECT SIGNAL CALLBACK
+Connect @var{CALLBACK} (an elisp function) to @var{SIGNAL}.  Returns a
+handler ID.  The callback receives signal arguments marshalled to elisp.
+
+@item gobject-disconnect OBJECT HANDLER-ID
+Disconnect a signal handler.
+
+@item gobject-list-properties OBJECT
+Return a list of property names.
+
+@item gobject-list-signals OBJECT
+Return a list of signal names.
+@end table
+
+@section GValue Marshalling
+
+The bridge automatically converts between GValues and elisp:
+
+@multitable @columnfractions .3 .3 .4
+@headitem GType @tab Elisp Type @tab Notes
+@item @code{G_TYPE_BOOLEAN} @tab @code{t}/@code{nil} @tab
+@item @code{G_TYPE_INT} etc. @tab fixnum @tab All integer types
+@item @code{G_TYPE_FLOAT/DOUBLE} @tab float @tab
+@item @code{G_TYPE_STRING} @tab string @tab
+@item @code{G_TYPE_ENUM/FLAGS} @tab fixnum @tab
+@item @code{G_TYPE_OBJECT} @tab user-ptr @tab Wrapped GObject
+@end multitable
+
+@section GClosure Integration
+
+Elisp functions can be used anywhere GLib expects a @code{GClosure}.
+The @code{gobject-connect} primitive creates a closure that marshals
+signal parameters to elisp, calls the function, and marshals any
+return value back.
+
+@section Files
+
+@table @file
+@item cmacs/gobject/cmacs-gobject.c
+GObject wrapping, property access, signal connection.
+@item cmacs/gobject/cmacs-gclosure.c
+GClosure marshalling bridge.
+@end table
+
+@c ===================================================================
+@node GObject Introspection
+@chapter GObject Introspection
+
+@cindex GI, GObject Introspection
+@cindex typelib
+
+CMacs can load GI typelibs at runtime and call any function or method
+from any GI-annotated library (GLib, GTK, GStreamer, etc.) directly
+from elisp.
+
+@section Elisp Primitives
+
+@table @code
+@item gi-require NAMESPACE &optional VERSION
+Load a typelib.  Example: @code{(gi-require "GLib" "2.0")}.
+
+@item gi-call NAMESPACE FUNCTION &rest ARGS
+Call a GI function.  Arguments are marshalled based on GI type info.
+@example
+(gi-require "GLib" "2.0")
+(gi-call "GLib" "get_user_name")  @result{} "zach"
+@end example
+
+@item gi-method OBJECT METHOD &rest ARGS
+Call a method on a GObject instance.
+
+@item gi-enum NAMESPACE ENUM MEMBER
+Resolve an enum value.
+@example
+(gi-enum "GLib" "ChecksumType" "sha256")  @result{} 2
+@end example
+
+@item gi-list-functions NAMESPACE
+Return a list of all function names in @var{NAMESPACE}.
+
+@item gi-function-info NAMESPACE FUNCTION
+Return an alist describing the function signature: @code{name},
+@code{args} (list of @code{(name . type)}), and @code{return-type}.
+@end table
+
+@section High-Level Elisp Interface
+
+The @file{lisp/cmacs/cmacs-gi.el} layer provides convenience wrappers:
+
+@table @code
+@item cmacs-gi-require NAMESPACE &optional VERSION
+Load a namespace and auto-generate elisp wrapper functions.  After
+@code{(cmacs-gi-require "Gtk" "4.0")}, you can call
+@code{(gtk-application-new "com.example" 0)}.
+
+@item cmacs-gi-describe-function NAMESPACE FUNCTION
+Interactive: display the function signature in a help buffer.
+@end table
+
+@section Files
+
+@table @file
+@item cmacs/gi/cmacs-gi.c
+C bridge: typelib loading, argument marshalling, function invocation.
+@item lisp/cmacs/cmacs-gi.el
+Elisp convenience layer with namespace auto-generation.
+@end table
+
+@c ===================================================================
+@node D-Bus Service
+@chapter D-Bus Service
+
+@cindex D-Bus
+@cindex org.cmacs.Editor1
+
+CMacs exposes a D-Bus service so that external processes (such as the
+Bacon shell) can call into CMacs.  The service uses GDBus and runs on
+the CMacs GMainContext, so method handlers fire on the Emacs main
+thread.
+
+@section Bus Name
+
+Each CMacs instance owns a unique bus name:
+@code{org.cmacs.Editor.Pid@var{PID}}, where @var{PID} is the Emacs
+process ID.
+
+@section Interface: org.cmacs.Editor1
+
+Object path: @code{/org/cmacs/Editor}
+
+@table @code
+@item Eval (expression: s) @result{} (result: s)
+Evaluate an elisp expression.  Returns the printed representation of
+the result.  Errors are returned as D-Bus errors.
+
+@item FindFile (path: s)
+Open a file in CMacs.
+
+@item Message (text: s)
+Display a message in the CMacs minibuffer.
+
+@item GiRequire (namespace: s, version: s) @result{} (success: b)
+Load a GI namespace.
+
+@item GiCall (namespace: s, function: s, args: as) @result{} (result: s)
+Call a GI function.  Each argument string is read as a Lisp expression
+(numbers pass through, bare words are auto-quoted as strings).
+
+@item GiListFunctions (namespace: s) @result{} (functions: as)
+List all functions in a loaded GI namespace.
+@end table
+
+@section Elisp Primitives
+
+@table @code
+@item cmacs-dbus-start
+Start the D-Bus service.  Returns the bus name string.  Idempotent:
+calling again returns the existing name.
+
+@item cmacs-dbus-stop
+Stop the D-Bus service and release the bus name.
+
+@item cmacs-dbus-name
+Return the current bus name, or nil if not running.
+@end table
+
+@section Testing with gdbus
+
+@example
+$ gdbus introspect --session \
+    --dest org.cmacs.Editor.Pid12345 \
+    --object-path /org/cmacs/Editor
+
+$ gdbus call --session \
+    --dest org.cmacs.Editor.Pid12345 \
+    --object-path /org/cmacs/Editor \
+    --method org.cmacs.Editor1.Eval "(+ 1 2)"
+('3',)
+@end example
+
+@section Files
+
+@table @file
+@item cmacs/glib/cmacs-dbus-service.c
+GDBus service implementation.
+@item cmacs/glib/cmacs-dbus-service.h
+Header.
+@end table
+
+@c ===================================================================
+@node Bacon Shell
+@chapter Bacon Shell
+
+@cindex Bacon shell
+@cindex vterm
+
+Bacon is a Unix shell with integrated C scripting via Crispy.  CMacs
+provides both a programmatic API (C primitives callable from elisp) and
+an interactive shell via vterm.
+
+@section Interactive Use: M-x bacon
+
+The @code{bacon} command opens (or switches to) a Bacon shell in a
+vterm buffer.  On launch it:
+
+@enumerate
+@item
+Starts the CMacs D-Bus service (@pxref{D-Bus Service}).
+@item
+Sets @env{CMACS_DBUS_NAME} so the @command{cmacsgi} builtin can reach
+CMacs.
+@item
+Sets @env{BACON_ARGS} with @option{-M} pointing to the CMacs bacon
+module directory, so Bacon loads the @command{cmacsgi} module.
+@item
+Creates a vterm buffer running @command{bacon}.
+@end enumerate
+
+@section Programmatic C Primitives
+
+These are available from elisp for scripted use (without vterm):
+
+@table @code
+@item bacon-start
+Create and start a BaconShell instance.  Sources RC files and imports
+bashrc aliases per the Bacon config.
+
+@item bacon-stop
+Destroy the BaconShell.
+
+@item bacon-eval COMMAND
+Execute a shell command string.  Returns @code{(EXIT-CODE . OUTPUT)}.
+Uses tmpfile-based stdout/stderr capture to avoid deadlocks.  Redirects
+stdin to @file{/dev/null} to prevent @code{tcsetpgrp} job control from
+stealing the terminal foreground.
+
+@item bacon-eval-c CODE
+Execute a C code block via Crispy.  Returns @code{(EXIT-CODE . OUTPUT)}.
+
+@item bacon-complete PREFIX
+Get tab-completion candidates for @var{PREFIX}.
+
+@item bacon-environment
+Return the shell environment as an alist.
+
+@item bacon-source FILE
+Source a file in the shell.
+
+@item bacon-alias &optional NAME VALUE
+Get or set a shell alias.
+
+@item bacon-running-p
+Return non-nil if the shell backend is active.
+
+@item bacon-get-prompt
+Return the configured prompt format string.
+@end table
+
+@section Customization
+
+@table @code
+@item bacon-buffer-name
+Name of the Bacon shell buffer (default @code{"*bacon*"}).
+@item bacon-shell-program
+Path to the @command{bacon} binary.
+@end table
+
+@section Files
+
+@table @file
+@item cmacs/bacon/cmacs-bacon.c
+C primitives (bacon-start, bacon-eval, etc.).
+@item lisp/cmacs/cmacs-bacon.el
+Elisp layer: vterm integration, D-Bus startup.
+@end table
+
+@c ===================================================================
+@node cmacsgi Builtin
+@chapter cmacsgi: Calling CMacs from Bacon
+
+@cindex cmacsgi
+
+The @command{cmacsgi} command is a Bacon shell builtin provided by a
+dynamically loaded module.  It uses GDBus to call the
+@code{org.cmacs.Editor1} D-Bus interface, giving you full access to
+CMacs's elisp evaluator and GObject Introspection from the shell.
+
+@section Usage
+
+@example
+cmacsgi eval EXPR              evaluate elisp in CMacs
+cmacsgi find-file PATH         open a file in CMacs
+cmacsgi message TEXT           display a message in CMacs
+cmacsgi require NS [VERSION]   load a GI namespace
+cmacsgi call NS FUNC [ARGS]    call a GI function
+cmacsgi list NS                list functions in a namespace
+cmacsgi --help                 show help
+@end example
+
+@section Examples
+
+@example
+bacon$ cmacsgi eval "(+ 40 2)"
+42
+
+bacon$ cmacsgi find-file /tmp/notes.txt
+@c (opens the file in CMacs)
+
+bacon$ cmacsgi message "build complete"
+@c (displays in CMacs minibuffer)
+
+bacon$ cmacsgi require GLib 2.0
+bacon$ cmacsgi call GLib get_user_name
+"zach"
+
+bacon$ cmacsgi list GLib | head -5
+access
+aligned_alloc
+aligned_alloc0
+aligned_free
+aligned_free_sized
+
+bacon$ cmacsgi call GLib compute_checksum_for_string 2 hello -1
+"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c..."
+@end example
+
+@section Argument Quoting
+
+For @code{cmacsgi call}, arguments are marshalled to the Lisp reader:
+
+@itemize @bullet
+@item
+Numbers are passed through: @code{42} @result{} integer 42.
+@item
+Quoted strings pass through: @code{"hello"} @result{} string.
+@item
+Bare words are auto-quoted as strings: @code{hello} @result{}
+@code{"hello"}.
+@item
+Lisp expressions pass through: @code{(+ 1 2)}, @code{'symbol}.
+@end itemize
+
+@section Architecture
+
+@example
+  Bacon shell (separate process, in vterm)
+       |
+  cmacsgi builtin (cmacs_gi.so, loaded via BACON_ARGS -M)
+       |
+  GDBus proxy  --->  D-Bus session bus
+       |                     |
+       |              org.cmacs.Editor1
+       |                     |
+  CMacs (Emacs process)
+       |
+  elisp eval / GI primitives / file ops
+@end example
+
+@section Environment Variables
+
+@table @env
+@item CMACS_DBUS_NAME
+The D-Bus bus name of the running CMacs instance.  Set automatically
+by @code{M-x bacon}.  Example: @code{org.cmacs.Editor.Pid12345}.
+
+@item BACON_ARGS
+Passed to Bacon at startup.  CMacs sets this to
+@code{-M /path/to/cmacs/bacon/modules/} so Bacon loads the
+@command{cmacsgi} module.
+@end table
+
+@section Module Files
+
+@table @file
+@item cmacs/bacon/modules/cmacs-gi-command.c
+The @command{cmacsgi} BaconCommand implementation (GDBus proxy calls).
+@item cmacs/bacon/modules/cmacs-gi-command.h
+Header.
+@item cmacs/bacon/modules/cmacs-gi-module.c
+BaconModule wrapper (registers the builtin on startup).
+@item cmacs/bacon/modules/cmacs-gi-module.h
+Header.
+@item cmacs/bacon/modules/Makefile
+Builds @file{cmacs_gi.so}.  Requires @code{gio-2.0}.
+@end table
+
+@c ===================================================================
+@node Crispy C Scripting
+@chapter Crispy C Scripting
+
+@cindex Crispy
+@cindex C scripting
+
+CMacs integrates the Crispy library for evaluating C code at runtime.
+
+@section Elisp Primitives
+
+@table @code
+@item crispy-eval-string CODE
+Evaluate @var{CODE} as C.  Returns @code{(EXIT-CODE . OUTPUT)}.
+Uses tmpfile-based capture for both stdout and stderr to avoid pipe
+deadlocks on large output.
+@end table
+
+@section Files
+
+@table @file
+@item cmacs/crispy/cmacs-crispy.c
+C primitive implementation.
+@end table
+
+@c ===================================================================
+@node Build Configuration
+@chapter Build Configuration
+
+@section Configure Flags
+
+CMacs features are off by default.  Enable them with:
+
+@example
+./configure \
+  --with-cmacs-glib    \  # GLib event loop + GObject bridge + D-Bus
+  --with-cmacs-gi      \  # GObject Introspection
+  --with-cmacs-crispy  \  # Crispy C scripting
+  --with-cmacs-bacon   \  # Bacon shell primitives
+  --with-cmacs-gowl    \  # Gowl Wayland compositor (optional)
+  --with-pgtk          \
+  --with-native-compilation=aot
+@end example
+
+@section Dependencies
+
+@multitable @columnfractions .25 .35 .4
+@headitem Feature @tab pkg-config Module @tab Provides
+@item cmacs-glib @tab glib-2.0 gobject-2.0 gio-2.0 gmodule-2.0
+  @tab Event loop, GObject, D-Bus, GClosure
+@item cmacs-gi @tab gobject-introspection-1.0 @tab GI bridge
+@item cmacs-crispy @tab crispy @tab C scripting
+@item cmacs-bacon @tab bacon-1.0 @tab Shell primitives
+@end multitable
+
+@section Building the Bacon Module
+
+The @command{cmacsgi} module is built separately:
+
+@example
+cd cmacs/bacon/modules/
+make
+@end example
+
+This produces @file{cmacs_gi.so}.  The elisp @code{bacon} command
+locates it automatically relative to the source tree.
+
+@section Compile Flags
+
+The Emacs build system picks up CMacs objects via @code{configure.ac}:
+
+@example
+CMACS_GLIB_OBJ="cmacs-glib-loop.o cmacs-gobject.o
+                 cmacs-gclosure.o cmacs-dbus-service.o"
+CMACS_GI_OBJ="cmacs-gi.o"
+CMACS_CRISPY_OBJ="cmacs-crispy.o"
+CMACS_BACON_OBJ="cmacs-bacon.o"
+@end example
+
+C source files live under @file{cmacs/} and are symlinked into
+@file{src/} for the build system.
+
+@bye

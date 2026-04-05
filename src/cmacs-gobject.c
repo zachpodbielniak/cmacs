@@ -1,0 +1,1 @@
+./../cmacs/gobject/cmacs-gobject.c

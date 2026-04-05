@@ -14,6 +14,8 @@
 
 #include "lisp.h"
 #include <crispy.h>
+#include <unistd.h>
+#include <stdio.h>
 
 /* Persistent objects — created once, reused across calls. */
 static CrispyGccCompiler *cmacs_crispy_compiler = NULL;
@@ -95,23 +97,24 @@ Returns stdout output. */)
   CrispyScript *script;
   GError *err = NULL;
   gint rc;
-  gint stdout_pipe[2];
-  gchar buf[4096];
-  GString *output;
+  FILE *tmp;
+  int tmpfd, saved_out, saved_err;
+  off_t size;
+  char *buf;
   Lisp_Object result;
-  gssize n;
-  gint old_stdout;
 
   CHECK_STRING (code);
   cmacs_crispy_ensure_init ();
 
-  /* Redirect stdout to capture output. */
-  if (pipe (stdout_pipe) != 0)
-    error ("crispy-eval-string: pipe() failed");
+  tmp = tmpfile ();
+  if (tmp == NULL)
+    error ("crispy-eval-string: tmpfile() failed");
 
-  old_stdout = dup (STDOUT_FILENO);
-  dup2 (stdout_pipe[1], STDOUT_FILENO);
-  close (stdout_pipe[1]);
+  tmpfd = fileno (tmp);
+  saved_out = dup (STDOUT_FILENO);
+  saved_err = dup (STDERR_FILENO);
+  dup2 (tmpfd, STDOUT_FILENO);
+  dup2 (tmpfd, STDERR_FILENO);
 
   script = crispy_script_new_from_inline (
     SSDATA (code), NULL,
@@ -121,10 +124,11 @@ Returns stdout output. */)
 
   if (script == NULL)
     {
-      /* Restore stdout before signaling. */
-      dup2 (old_stdout, STDOUT_FILENO);
-      close (old_stdout);
-      close (stdout_pipe[0]);
+      dup2 (saved_out, STDOUT_FILENO);
+      dup2 (saved_err, STDERR_FILENO);
+      close (saved_out);
+      close (saved_err);
+      fclose (tmp);
 
       Lisp_Object msg = build_string (err->message);
       g_error_free (err);
@@ -134,30 +138,35 @@ Returns stdout output. */)
   rc = crispy_script_execute (script, 0, NULL, &err);
   g_object_unref (script);
 
-  /* Restore stdout. */
   fflush (stdout);
-  dup2 (old_stdout, STDOUT_FILENO);
-  close (old_stdout);
+  fflush (stderr);
+  dup2 (saved_out, STDOUT_FILENO);
+  dup2 (saved_err, STDERR_FILENO);
+  close (saved_out);
+  close (saved_err);
 
   /* Read captured output. */
-  output = g_string_new (NULL);
-  while ((n = read (stdout_pipe[0], buf, sizeof (buf) - 1)) > 0)
+  size = lseek (tmpfd, 0, SEEK_END);
+  if (size > 0)
     {
-      buf[n] = '\0';
-      g_string_append (output, buf);
+      lseek (tmpfd, 0, SEEK_SET);
+      buf = xmalloc (size + 1);
+      read (tmpfd, buf, size);
+      buf[size] = '\0';
+      result = make_string (buf, size);
+      xfree (buf);
     }
-  close (stdout_pipe[0]);
+  else
+    result = empty_unibyte_string;
+
+  fclose (tmp);
 
   if (err != NULL)
     {
-      g_string_free (output, TRUE);
       Lisp_Object msg = build_string (err->message);
       g_error_free (err);
       xsignal1 (Qcrispy_error, msg);
     }
-
-  result = build_string (output->str);
-  g_string_free (output, TRUE);
 
   (void)rc;
   return result;

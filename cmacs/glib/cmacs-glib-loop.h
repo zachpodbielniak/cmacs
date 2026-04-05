@@ -21,12 +21,15 @@
 /* Call before pselect(): query GMainContext for fds and adjust timeout.
  * Adds GLib's file descriptors to READABLE and WRITEABLE, and reduces
  * *TIMEOUT if GLib needs an earlier wake-up.
+ * Returns the highest fd added by GLib, or -1 if none were added.
  */
-extern void cmacs_glib_prepare (fd_set *readable, fd_set *writeable,
-                                struct timespec *timeout);
+extern int cmacs_glib_prepare (fd_set *readable, fd_set *writeable,
+                               struct timespec *timeout);
 
-/* Call after pselect(): dispatch any ready GLib sources. */
-extern void cmacs_glib_dispatch (fd_set *readable);
+/* Call after pselect(): dispatch any ready GLib sources.
+ * NFDS is the return value from pselect; if < 0, releases the context
+ * without dispatching. */
+extern void cmacs_glib_dispatch (fd_set *readable, int nfds);
 
 /* Return the CMacs-owned GMainContext. */
 extern GMainContext *cmacs_glib_get_context (void);
