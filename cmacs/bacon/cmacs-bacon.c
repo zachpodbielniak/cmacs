@@ -19,6 +19,7 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <sys/socket.h>
 
 /* Persistent shell instance. */
@@ -486,20 +487,41 @@ cmacs_bacon_main (int argc, char **argv, int bacon_idx)
   /* Register all standard builtins (cd, echo, exit, etc.). */
   bacon_shell_register_default_builtins (shell);
 
-  /* Load cmacsgi module if a module directory is set.
-     The parent sets CMACS_MODULE_DIR before launching us. */
+  /* Load modules from standard bacon directories (starship, fzf, git,
+     etc.) and from the CMacs-specific cmacsgi module directory. */
   mm = bacon_shell_get_module_manager (shell);
+#ifdef BACON_DEV_MODULE_DIR
+  if (g_file_test (BACON_DEV_MODULE_DIR, G_FILE_TEST_IS_DIR))
+    bacon_module_manager_load_from_directory (mm, BACON_DEV_MODULE_DIR);
+#endif
+#ifdef BACON_MODULEDIR
+  if (g_file_test (BACON_MODULEDIR, G_FILE_TEST_IS_DIR))
+    bacon_module_manager_load_from_directory (mm, BACON_MODULEDIR);
+#endif
   module_dir = g_getenv ("CMACS_MODULE_DIR");
   if (module_dir != NULL && g_file_test (module_dir, G_FILE_TEST_IS_DIR))
-    {
-      bacon_module_manager_load_from_directory (mm, module_dir);
-      bacon_module_manager_activate_all (mm);
-    }
+    bacon_module_manager_load_from_directory (mm, module_dir);
+  bacon_module_manager_activate_all (mm);
 
   /* Dispatch module startup hooks so module-provided builtins
      (like cmacsgi) are available before RC files run. */
   if (mm != NULL)
     bacon_module_manager_dispatch_startup (mm, shell);
+
+  /* Set up signals for interactive mode.  SIGTTIN/SIGTTOU must be
+     ignored or the shell is stopped by SIGTTOU when it calls
+     tcsetpgrp() to reclaim the terminal after a foreground child. */
+  {
+    struct sigaction sa;
+    memset (&sa, 0, sizeof (sa));
+    sigemptyset (&sa.sa_mask);
+    sa.sa_handler = SIG_IGN;
+    sa.sa_flags = 0;
+    sigaction (SIGTTIN, &sa, NULL);
+    sigaction (SIGTTOU, &sa, NULL);
+    sigaction (SIGTSTP, &sa, NULL);
+    sigaction (SIGQUIT, &sa, NULL);
+  }
 
   /* Source RC files. */
   {
