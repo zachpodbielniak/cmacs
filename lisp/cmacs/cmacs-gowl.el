@@ -200,6 +200,7 @@ When disabled, stops the compositor."
     (when client
       (gowl-close-client client))))
 
+;;;###autoload
 (defun cmacs-gowl-spawn-command (command)
   "Launch COMMAND as a Wayland client in the Gowl compositor."
   (interactive "sSpawn command: ")

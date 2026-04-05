@@ -683,24 +683,39 @@ DEFUN ("gowl-spawn", Fgowl_spawn, Sgowl_spawn, 1, 1, 0,
 {
   GError *err = NULL;
   const gchar *socket;
-  gchar *env_cmd;
+  gchar **argv;
+  gchar **envp;
 
   CHECK_STRING (command);
   GOWL_CHECK_RUNNING ();
 
-  socket = gowl_compositor_get_socket_name (cmacs_gowl_compositor);
-  env_cmd = g_strdup_printf ("WAYLAND_DISPLAY=%s %s",
-                             socket ? socket : "", SSDATA (command));
-
-  if (!g_spawn_command_line_async (env_cmd, &err))
+  if (!g_shell_parse_argv (SSDATA (command), NULL, &argv, &err))
     {
-      g_free (env_cmd);
       Lisp_Object msg = build_string (err->message);
       g_error_free (err);
       xsignal1 (Qgowl_error, msg);
     }
 
-  g_free (env_cmd);
+  /* Build environment: inherit current env, override WAYLAND_DISPLAY. */
+  socket = gowl_compositor_get_socket_name (cmacs_gowl_compositor);
+  {
+    gchar **parent_env = g_get_environ ();
+    envp = g_environ_setenv (parent_env, "WAYLAND_DISPLAY",
+                             socket ? socket : "", TRUE);
+  }
+
+  if (!g_spawn_async (NULL, argv, envp,
+                      G_SPAWN_SEARCH_PATH, NULL, NULL, NULL, &err))
+    {
+      g_strfreev (argv);
+      g_strfreev (envp);
+      Lisp_Object msg = build_string (err->message);
+      g_error_free (err);
+      xsignal1 (Qgowl_error, msg);
+    }
+
+  g_strfreev (argv);
+  g_strfreev (envp);
   return Qt;
 }
 

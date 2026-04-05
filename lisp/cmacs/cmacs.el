@@ -116,6 +116,9 @@ TOPIC is a filename without extension (e.g., \"cmacsgi\", \"api\")."
 (autoload 'cmacs-gowl-mode "cmacs-gowl"
   "Toggle Gowl compositor control minor mode." t)
 
+(autoload 'cmacs-gowl-spawn-command "cmacs-gowl"
+  "Launch a Wayland client in the Gowl compositor." t)
+
 (autoload 'cmacs-config-load-all "cmacs-config"
   "Load bacon and C config files after elisp init.")
 
