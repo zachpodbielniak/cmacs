@@ -1,0 +1,1456 @@
+<<Top>>
+
+Next: [[#Overview][Overview]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+* EasyPG Assistant User's Manual [[#EasyPG-Assistant-User_0027s-Manual][¶]]
+:PROPERTIES:
+:CUSTOM_ID: EasyPG-Assistant-User_0027s-Manual
+:CLASS: top
+:END:
+EasyPG Assistant is an Emacs user interface to GNU Privacy Guard (GnuPG,
+see
+[[https://www.gnupg.org/documentation/manuals/gnupg/index.html#Top][Top]]
+in Using the GNU Privacy Guard).
+
+EasyPG Assistant is a part of the package called EasyPG, an all-in-one
+GnuPG interface for Emacs. EasyPG also contains the library interface
+called EasyPG Library.
+
+This file describes EasyPG Assistant 1.0.0.
+
+Copyright © 2007--2026 Free Software Foundation, Inc.
+
+#+begin_quote
+Permission is granted to copy, distribute and/or modify this document
+under the terms of the GNU Free Documentation License, Version 1.3 or
+any later version published by the Free Software Foundation; with no
+Invariant Sections, with the Front-Cover Texts being “A GNU Manual,” and
+with the Back-Cover Texts as in (a) below. A copy of the license is
+included in the section entitled “GNU Free Documentation License”.
+
+(a) The FSF's Back-Cover Text is: “You have the freedom to copy and
+modify this GNU manual.”
+#+end_quote
+
+<<SEC_Contents>>
+** Table of Contents
+:PROPERTIES:
+:CUSTOM_ID: table-of-contents
+:CLASS: contents-heading
+:END:
+
+- [[#Overview][1 Overview]]
+- [[#Quick-start][2 Quick Start]]
+- [[#Commands][3 Commands]]
+  - [[#Key-management][3.1 Key Management]]
+  - [[#Cryptographic-operations-on-regions][3.2 Cryptographic Operations on Regions]]
+  - [[#Cryptographic-operations-on-files][3.3 Cryptographic Operations on Files]]
+  - [[#Dired-integration][3.4 Dired Integration]]
+  - [[#Mail_002dmode-integration][3.5 Mail-Mode Integration]]
+  - [[#Encrypting_002fdecrypting-gpg-files][3.6 Encrypting and Decrypting gpg Files]]
+  - [[#Querying-a-key-server][3.7 Querying a Key Server]]
+- [[#GnuPG-version-compatibility][4 GnuPG Version Compatibility]]
+- [[#GnuPG-Pinentry][5 GnuPG Pinentry]]
+- [[#Caching-Passphrases][6 Caching Passphrases]]
+- [[#Bug-Reports][7 Bug Reports]]
+- [[#GNU-Free-Documentation-License][Appendix A GNU Free Documentation License]]
+- [[#Concept-Index][Concept Index]]
+- [[#Key-Index][Key Index]]
+- [[#Function-Index][Function Index]]
+- [[#Variable-Index][Variable Index]]
+
+--------------
+
+<<Overview>>
+
+Next: [[#Quick-start][Quick Start]], Previous:
+[[#Top][EasyPG Assistant User's Manual]], Up:
+[[#Top][EasyPG Assistant User's Manual]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+** 1 Overview [[#Overview-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Overview-1
+:CLASS: chapter
+:END:
+EasyPG Assistant is an Emacs frontend application to GnuPG (GNU Privacy
+Guard) that provides the following features:
+
+- Key management.
+- Cryptographic operations on regions.
+- Cryptographic operations on files.
+- Dired integration.
+- Mail-mode integration.
+- Automatic encryption/decryption of *.gpg files.
+
+--------------
+
+<<Quick-start>>
+
+Next: [[#Commands][Commands]], Previous: [[#Overview][Overview]], Up:
+[[#Top][EasyPG Assistant User's Manual]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+** 2 Quick Start [[#Quick-Start][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Quick-Start
+:CLASS: chapter
+:END:
+You can use EasyPG Assistant without any Emacs or GnuPG configuration
+whatsoever, for example to encrypt and decrypt files automatically with
+symmetric encryption, see
+[[#Encrypting_002fdecrypting-gpg-files][Encrypting and Decrypting gpg Files]].
+However, to use the full set of EasyPG Assistant's functions you should
+have at least some minimum GnuPG configuration in place.
+
+John Michael Ashley's GNU Privacy Handbook, available online as part of
+[[https://gnupg.org/documentation/guides.html][the GnuPG user guides]],
+provides an introduction to GnuPG use and configuration. In contrast to
+that, the GnuPG manual (see
+[[https://www.gnupg.org/documentation/manuals/gnupg/index.html#Top][Top]]
+in Using the GNU Privacy Guard) is more of a reference manual.
+
+EasyPG Assistant commands are prefixed by ‘=epa-='. For example,
+
+- To browse your keyring, type M-x epa-list-keys
+- To create a cleartext signature of the region, type M-x
+  epa-sign-region
+- To encrypt a file, type M-x epa-encrypt-file
+- To query a key server for keys, type M-x epa-search-keys
+
+EasyPG Assistant provides several cryptographic features which can be
+integrated into other Emacs functionalities. For example, automatic
+encryption/decryption of =*.gpg= files.
+
+--------------
+
+<<Commands>>
+
+Next: [[#GnuPG-version-compatibility][GnuPG Version Compatibility]],
+Previous: [[#Quick-start][Quick Start]], Up:
+[[#Top][EasyPG Assistant User's Manual]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+** 3 Commands [[#Commands-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Commands-1
+:CLASS: chapter
+:END:
+This chapter introduces various commands for typical use cases.
+
+- [[#Key-management][Key Management]]
+- [[#Cryptographic-operations-on-regions][Cryptographic Operations on Regions]]
+- [[#Cryptographic-operations-on-files][Cryptographic Operations on Files]]
+- [[#Dired-integration][Dired Integration]]
+- [[#Mail_002dmode-integration][Mail-Mode Integration]]
+- [[#Encrypting_002fdecrypting-gpg-files][Encrypting and Decrypting gpg Files]]
+- [[#Querying-a-key-server][Querying a Key Server]]
+
+--------------
+
+<<Key-management>>
+
+Next:
+[[#Cryptographic-operations-on-regions][Cryptographic Operations on Regions]],
+Up: [[#Commands][Commands]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+*** 3.1 Key Management [[#Key-Management][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Key-Management
+:CLASS: section
+:END:
+Probably the first step of using EasyPG Assistant is to browse your
+keyring. M-x epa-list-keys is corresponding to ‘=gpg --list-keys=' from
+the command line.
+
+- Command: *epa-list-keys* =name mode=
+  [[#index-epa_002dlist_002dkeys][¶]] :: Show all keys matched with
+  =name= from the public keyring.
+
+The output looks as follows.
+
+#+begin_src example-preformatted
+  u A5B6B2D4B15813FE Daiki Ueno <ueno@unixuser.org>
+#+end_src
+
+A character on the leftmost column indicates the trust level of the key.
+If it is ‘=u=', the key is marked as ultimately trusted. The second
+column is the key ID, and the rest is the user ID.
+
+You can move over entries by TAB. If you type RET or click button1 on an
+entry, you will see more detailed information about the key you
+selected.
+
+#+begin_src example-preformatted
+ u Daiki Ueno <ueno@unixuser.org>
+ u A5B6B2D4B15813FE 1024bits DSA
+        Created: 2001-10-09
+        Expires: 2007-09-04
+        Capabilities: sign certify
+        Fingerprint: 8003 7CD0 0F1A 9400 03CA  50AA A5B6 B2D4 B158 13FE
+ u 4447461B2A9BEA2D 2048bits ELGAMAL_E
+        Created: 2001-10-09
+        Expires: 2007-09-04
+        Capabilities: encrypt
+        Fingerprint: 9003 D76B 73B7 4A8A E588  10AF 4447 461B 2A9B EA2D
+#+end_src
+
+To browse your private keyring, use M-x epa-list-secret-keys.
+
+- Command: *epa-list-secret-keys* =name=
+  [[#index-epa_002dlist_002dsecret_002dkeys][¶]] :: Show all keys
+  matched with =name= from the private keyring.
+
+In =*Keys*= buffer, several commands are available. The common use case
+is to export some keys to a file. To do that, type m to select keys,
+type o, and then supply the filename.
+
+Below are other commands related to key management. Some of them take a
+file as input/output, and others take the current region.
+
+- Command: *epa-insert-keys* =keys=
+  [[#index-epa_002dinsert_002dkeys][¶]] :: Insert selected =keys= after
+  the point. It will let you select keys before insertion. By default,
+  it will encode keys in the OpenPGP armor format.
+
+- Command: *epa-import-keys* =file=
+  [[#index-epa_002dimport_002dkeys][¶]] :: Import keys from =file= to
+  your keyring.
+
+- Command: *epa-import-keys-region* =start end=
+  [[#index-epa_002dimport_002dkeys_002dregion][¶]] :: Import keys from
+  the current region between =start= and =end= to your keyring.
+
+- Command: *epa-import-armor-in-region* =start end=
+  [[#index-epa_002dimport_002darmor_002din_002dregion][¶]] :: Import
+  keys in the OpenPGP armor format in the current region between =start=
+  and =end=. The difference from =epa-import-keys-region= is that
+  =epa-import-armor-in-region= searches armors in the region and applies
+  =epa-import-keys-region= to each of them.
+
+- Command: *epa-delete-keys* =allow-secret=
+  [[#index-epa_002ddelete_002dkeys][¶]] :: Delete selected keys. If
+  =allow-secret= is non-=nil=, it also delete the secret keys.
+
+--------------
+
+<<Cryptographic-operations-on-regions>>
+
+Next:
+[[#Cryptographic-operations-on-files][Cryptographic Operations on Files]],
+Previous: [[#Key-management][Key Management]], Up:
+[[#Commands][Commands]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+*** 3.2 Cryptographic Operations on Regions [[#Cryptographic-Operations-on-Regions][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Cryptographic-Operations-on-Regions
+:CLASS: section
+:END:
+- Command: *epa-decrypt-region* =start end=
+  [[#index-epa_002ddecrypt_002dregion][¶]] :: Decrypt the current region
+  between =start= and =end=. It replaces the region with the decrypted
+  text.
+
+- Command: *epa-decrypt-armor-in-region* =start end=
+  [[#index-epa_002ddecrypt_002darmor_002din_002dregion][¶]] :: Decrypt
+  OpenPGP armors in the current region between =start= and =end=. The
+  difference from =epa-decrypt-region= is that
+  =epa-decrypt-armor-in-region= searches armors in the region and
+  applies =epa-decrypt-region= to each of them. That is, this command
+  does not alter the original text around armors.
+
+- Command: *epa-verify-region* =start end=
+  [[#index-epa_002dverify_002dregion][¶]] :: Verify the current region
+  between =start= and =end=. It sends the verification result to the
+  minibuffer or a popup window. It replaces the region with the signed
+  text.
+
+- Command: *epa-verify-cleartext-in-region*
+  [[#index-epa_002dverify_002dcleartext_002din_002dregion][¶]] :: Verify
+  OpenPGP cleartext blocks in the current region between =start= and
+  =end=. The difference from =epa-verify-region= is that
+  =epa-verify-cleartext-in-region= searches OpenPGP cleartext blocks in
+  the region and applies =epa-verify-region= to each of them. That is,
+  this command does not alter the original text around OpenPGP cleartext
+  blocks.
+
+- Command: *epa-sign-region* =start end signers type=
+  [[#index-epa_002dsign_002dregion][¶]] :: Sign the current region
+  between =start= and =end=. By default, it creates a cleartext
+  signature. If a prefix argument is given, it will let you select
+  signing keys, and then a signature type.
+
+- Command: *epa-encrypt-region* =start end recipients sign signers=
+  [[#index-epa_002dencrypt_002dregion][¶]] :: Encrypt the current region
+  between =start= and =end=. It will let you select recipients. If a
+  prefix argument is given, it will also ask you whether or not to sign
+  the text before encryption and if you answered yes, it will let you
+  select the signing keys.
+
+- Variable: *epa-keys-select-method*
+  [[#index-epa_002dkeys_002dselect_002dmethod][¶]] :: This variable
+  controls the method used for key selection in =epa-select-keys=. The
+  default value =buffer= pops up a special buffer where you can select
+  the keys. If the value is =minibuffer=, =epa-select-keys= will instead
+  prompt for the keys in the minibuffer, where you should type the keys
+  separated by commas.
+
+--------------
+
+<<Cryptographic-operations-on-files>>
+
+Next: [[#Dired-integration][Dired Integration]], Previous:
+[[#Cryptographic-operations-on-regions][Cryptographic Operations on Regions]],
+Up: [[#Commands][Commands]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+*** 3.3 Cryptographic Operations on Files [[#Cryptographic-Operations-on-Files][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Cryptographic-Operations-on-Files
+:CLASS: section
+:END:
+- Command: *epa-decrypt-file* =file &optional output=
+  [[#index-epa_002ddecrypt_002dfile][¶]] :: Decrypt =file=. If you do
+  not specify the name =output= to use for the decrypted file, this
+  function prompts for the value to use.
+
+- Command: *epa-verify-file* =file=
+  [[#index-epa_002dverify_002dfile][¶]] :: Verify =file=.
+
+- Command: *epa-sign-file* =file signers type=
+  [[#index-epa_002dsign_002dfile][¶]] :: Sign =file=. If a prefix
+  argument is given, it will let you select signing keys, and then a
+  signature type.
+
+- Command: *epa-encrypt-file* =file recipients=
+  [[#index-epa_002dencrypt_002dfile][¶]] :: Encrypt =file=. It will let
+  you select recipients.
+
+--------------
+
+<<Dired-integration>>
+
+Next: [[#Mail_002dmode-integration][Mail-Mode Integration]], Previous:
+[[#Cryptographic-operations-on-files][Cryptographic Operations on Files]],
+Up: [[#Commands][Commands]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+*** 3.4 Dired Integration [[#Dired-Integration][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Dired-Integration
+:CLASS: section
+:END:
+EasyPG Assistant extends Dired Mode for GNU Emacs to allow users to
+easily do cryptographic operations on files. For example,
+
+#+begin_src example-preformatted
+M-x dired
+(mark some files)
+: e (or M-x epa-dired-do-encrypt)
+(select recipients by 'm' and click [OK])
+#+end_src
+
+The following keys are assigned.
+
+-  <<index-_003a-d>>: d [[#index-_003a-d][¶]] :: Decrypt marked files.
+
+-  <<index-_003a-v>>: v [[#index-_003a-v][¶]] :: Verify marked files.
+
+-  <<index-_003a-s>>: s [[#index-_003a-s][¶]] :: Sign marked files.
+
+-  <<index-_003a-e>>: e [[#index-_003a-e][¶]] :: Encrypt marked files.
+
+--------------
+
+<<Mail_002dmode-integration>>
+
+Next:
+[[#Encrypting_002fdecrypting-gpg-files][Encrypting and Decrypting gpg Files]],
+Previous: [[#Dired-integration][Dired Integration]], Up:
+[[#Commands][Commands]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+*** 3.5 Mail-Mode Integration [[#Mail_002dMode-Integration][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Mail_002dMode-Integration
+:CLASS: section
+:END:
+EasyPG Assistant provides a minor mode =epa-mail-mode= to help user
+compose inline OpenPGP messages. Inline OpenPGP is a traditional style
+of sending signed/encrypted emails by embedding raw OpenPGP blobs inside
+a message body, not using modern MIME format.
+
+NOTE: Inline OpenPGP is not recommended and you should consider to use
+PGP/MIME. See
+[[https://josefsson.org/inline-openpgp-considered-harmful.html][Inline OpenPGP in E-mail is bad, Mm'kay?]].
+
+Once =epa-mail-mode= is enabled, the following keys are assigned. You
+can do it by C-u 1 M-x epa-mail-mode or through the Customize interface.
+Try M-x customize-variable epa-global-mail-mode.
+
+-  <<index-C_002dc-C_002de-C_002dd>>C-c C-e C-d and C-c C-e d
+  [[#index-C_002dc-C_002de-C_002dd][¶]] :: Decrypt OpenPGP armors in the
+  current buffer.
+
+-  <<index-C_002dc-C_002de-C_002dv>>C-c C-e C-v and C-c C-e v
+  [[#index-C_002dc-C_002de-C_002dv][¶]] :: Verify OpenPGP cleartext
+  signed messages in the current buffer. If verification fails for some
+  reason, this command signals an error.
+
+-  <<index-C_002dc-C_002de-C_002ds>>C-c C-e C-s and C-c C-e s
+  [[#index-C_002dc-C_002de-C_002ds][¶]] :: Compose a signed message from
+  the current buffer, using your default key. With a prefix argument,
+  select the key to use interactively.
+
+-  <<index-C_002dc-C_002de-C_002de>>C-c C-e C-e and C-c C-e e
+  [[#index-C_002dc-C_002de-C_002de][¶]] :: Compose an encrypted message
+  from the current buffer. By default it tries to build the recipient
+  list from ‘=to=', ‘=cc=', and ‘=bcc=' fields of the mail header. To
+  include your key in the recipient list, use ‘=encrypt-to=' option in
+  =~/.gnupg/gpg.conf=. This function translates recipient addresses
+  using the =epa-mail-aliases= list. You can also use that option to
+  ignore specific recipients for encryption purposes.
+
+  With prefix argument, asks you to select the recipients interactively,
+  whether to sign, and which key(s) to sign with.
+
+--------------
+
+<<Encrypting_002fdecrypting-gpg-files>>
+
+Next: [[#Querying-a-key-server][Querying a Key Server]], Previous:
+[[#Mail_002dmode-integration][Mail-Mode Integration]], Up:
+[[#Commands][Commands]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+*** 3.6 Encrypting and Decrypting gpg Files [[#Encrypting-and-Decrypting-gpg-Files][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Encrypting-and-Decrypting-gpg-Files
+:CLASS: section
+:END:
+By default, every file whose name ends with =.gpg= will be treated as
+encrypted. That is, when you open such a file, the decrypted text is
+inserted in the buffer rather than encrypted one. Similarly, when you
+save the buffer to a =foo.gpg= file, encrypted data is written.
+
+When you save a buffer to an encrypted file for the first time, EasyPG
+Assistant presents you a list of keys in a buffer =*Keys*= where you can
+select recipients for encryption. See
+[[#Key-management][Key Management]], for a description of the format of
+that buffer. You can streamline this recipient selection step by
+customizing variables =epa-file-encrypt-to= and =epa-file-select-keys=
+described further below in this section.
+
+If you do not select any recipient during this step, EasyPG Assistant
+uses symmetric encryption. As a consequence, you have to enter the
+passphrase twice for every buffer save and every so often for file
+reads, since the GnuPG Agent caches your passphrase for file reads at
+least for some time, but not for buffer saves. See
+[[#Caching-Passphrases][Caching Passphrases]], for more information.
+
+If you have created your own keypair[[#FOOT1][^{1}]], you can select
+that as recipient, and EasyPG Assistant will use public key encryption
+for that file. Since GnuPG performs encryption with your public key, it
+does not prompt for a passphrase for the buffer save, but it will prompt
+for your passphrase for file reads every now and then, depending on the
+GnuPG Agent cache configuration.
+
+To encrypt and decrypt files as described above EasyPG Assistant under
+certain circumstances uses intermediate temporary files that contain the
+plain-text contents of the files it processes. EasyPG Assistant creates
+them below the directory returned by function =temporary-file-directory=
+(see
+[[https://www.gnu.org/software/emacs/manual/html_mono/elisp.html#Unique-File-Names][Generating Unique File Names]]
+in GNU Emacs Lisp Reference Manual). If you want to be sure not to leave
+any plain-text traces, use an encrypted file systems at least for that
+directory.
+
+The file name pattern for encrypted files can be controlled by
+=epa-file-name-regexp=.
+
+- Variable: *epa-file-name-regexp*
+  [[#index-epa_002dfile_002dname_002dregexp][¶]] :: Regexp which matches
+  filenames treated as encrypted.
+
+You can disable this behavior with M-x epa-file-disable, and then get it
+back with M-x epa-file-enable.
+
+- Command: *epa-file-disable*
+  [[#index-epa_002dfile_002ddisable][¶]] :: Disable automatic
+  encryption/decryption of *.gpg files.
+
+- Command: *epa-file-enable*
+  [[#index-epa_002dfile_002denable][¶]] :: Enable automatic
+  encryption/decryption of *.gpg files.
+
+By default, =epa-file= will try to use symmetric encryption, aka
+password-based encryption. If you want to use public key encryption
+instead, do M-x epa-file-select-keys, which pops up the key selection
+dialog.
+
+- Command: *epa-file-select-keys*
+  [[#index-epa_002dfile_002dselect_002dkeys][¶]] :: Select recipient
+  keys to encrypt the currently visiting file with public key
+  encryption.
+
+You can also change the default behavior with the variable
+=epa-file-select-keys=.
+
+- Variable: *epa-file-select-keys*
+  [[#index-epa_002dfile_002dselect_002dkeys-1][¶]] :: Control whether or
+  not to pop up the key selection dialog.
+
+For frequently visited files, it might be a good idea to tell Emacs
+which encryption method should be used through file variables (see
+[[https://www.gnu.org/software/emacs/manual/html_mono/emacs.html#File-Variables][Local Variables in Files]]
+in The Emacs Editor). Use the =epa-file-encrypt-to= local variable for
+this.
+
+For example, if you want an Elisp file to be encrypted with a public key
+associated with an email address ‘=ueno@unixuser.org=', add the
+following line to the beginning of the file.
+
+| #+begin_src lisp-preformatted                         |
+| ;; -*- epa-file-encrypt-to: ("ueno@unixuser.org") -*- |
+| #+end_src                                             |
+
+Instead, if you want the file always (regardless of the value of the
+=epa-file-select-keys= variable) encrypted with symmetric encryption,
+change the line as follows.
+
+| #+begin_src lisp-preformatted       |
+| ;; -*- epa-file-encrypt-to: nil -*- |
+| #+end_src                           |
+
+Other variables which control the automatic encryption/decryption
+behavior are below.
+
+- Variable: *epa-file-cache-passphrase-for-symmetric-encryption*
+  [[#index-epa_002dfile_002dcache_002dpassphrase_002dfor_002dsymmetric_002dencryption][¶]] :: If
+  non-=nil=, cache passphrase for symmetric encryption. The default
+  value is =nil=.
+
+  For security reasons, this option is turned off by default and not
+  recommended to be used. Instead, consider using the GnuPG Agent, which
+  in many cases can do the same job, and does it in a safer way. See
+  [[#Caching-Passphrases][Caching Passphrases]], for more information.
+
+- Variable: *epa-file-inhibit-auto-save*
+  [[#index-epa_002dfile_002dinhibit_002dauto_002dsave][¶]] :: If
+  non-=nil=, disable auto-saving when opening an encrypted file. The
+  default value is =t=.
+
+--------------
+
+<<Querying-a-key-server>>
+
+Previous:
+[[#Encrypting_002fdecrypting-gpg-files][Encrypting and Decrypting gpg Files]],
+Up: [[#Commands][Commands]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+*** 3.7 Querying a Key Server [[#Querying-a-Key-Server][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Querying-a-Key-Server
+:CLASS: section
+:END:
+The =epa-search-keys= command can be used to query a GPG key server.
+Emacs will then pop up a buffer that lists the matches, and you can then
+fetch (and add) keys to your personal key ring.
+
+In the key search buffer, you can use the f command to mark keys for
+fetching, and then x to fetch the keys (and incorporate them into your
+key ring).
+
+The =epa-keyserver= variable says which server to query.
+
+--------------
+
+<<GnuPG-version-compatibility>>
+
+Next: [[#GnuPG-Pinentry][GnuPG Pinentry]], Previous:
+[[#Commands][Commands]], Up: [[#Top][EasyPG Assistant User's Manual]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+** 4 GnuPG Version Compatibility [[#GnuPG-Version-Compatibility][¶]]
+:PROPERTIES:
+:CUSTOM_ID: GnuPG-Version-Compatibility
+:CLASS: chapter
+:END:
+As of June 2023, there are three active branches of GnuPG: 2.4, 2.2, and
+1.4. GnuPG versions 2.4.1 and later suffer from
+[[https://dev.gnupg.org/T6481][GnuPG bug T6481]] and are hardly usable
+with Emacs. There is a patch for that bug available at least for GnuPG
+version 2.4.1, which your operating system or distribution might provide
+already. GnuPG 1.4 is considered a legacy version.
+
+Besides that, all of those branches mentioned above should work
+flawlessly with Emacs with basic use-cases. They have, however, some
+incompatible characteristics, which might be visible when used from
+Emacs.
+
+- The key store format used by GnuPG 2.1 is incompatible with 1.4. That
+  means, a key created with GnuPG 2.1 is not visible with 1.4.
+- GnuPG 2.1 uses a fixed address for the Unix domain socket used to
+  communicate with =gpg-agent=. The =GPG_AGENT_INFO= environment
+  variable, which is used by GnuPG 2.0 and 1.4, is ignored. That means,
+  if your system has both GnuPG 2.1 and 1.4, the gpg command from GnuPG
+  1.4 is not able to use =gpg-agent= provided by 2.1 (at least out of
+  box).
+- GnuPG 2.1 (2.1.5 or later) has a mechanism to direct the Pinentry
+  password prompt to the Emacs minibuffer. See
+  [[#GnuPG-Pinentry][GnuPG Pinentry]].
+
+--------------
+
+<<GnuPG-Pinentry>>
+
+Next: [[#Caching-Passphrases][Caching Passphrases]], Previous:
+[[#GnuPG-version-compatibility][GnuPG Version Compatibility]], Up:
+[[#Top][EasyPG Assistant User's Manual]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+** 5 GnuPG Pinentry [[#GnuPG-Pinentry-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: GnuPG-Pinentry-1
+:CLASS: chapter
+:END:
+An important component of the GnuPG suite is the Pinentry, which allows
+for secure entry of passphrases requested by GnuPG. GnuPG delivers
+various different programs as Pinentry, ranging from bland TTY-only
+=pinentry-tty= to fancy graphical dialogs for various desktop
+environments, like =pinentry-gnome3=. Your operating system usually
+determines which of these is used by default.
+
+Note that the selection of a concrete Pinentry program determines only
+/how/ GnuPG queries for passphrases and not /how often/. For the latter
+question see [[#Caching-Passphrases][Caching Passphrases]].
+
+With some configuration Emacs can also play the role of a Pinentry. The
+most natural choice, available with GnuPG 2.1.5 and later, is to use
+Emacs itself as Pinentry for requests that are triggered by Emacs. For
+example, if you open a file whose name ends with =.gpg= using automatic
+decryption, you most likely also want to enter the passphrase for that
+request in Emacs.
+
+This so called /loopback Pinentry/ has the added benefit that it works
+also when you use Emacs remotely or from a text-only terminal. To enable
+it:
+
+1.  Ensure that option =allow-loopback-pinentry= is configured for
+   =gpg-agent=, which should be the default. See
+   [[https://www.gnupg.org/documentation/manuals/gnupg/Agent-Options.html#Agent-Options][Option Summary]]
+   in Using the GNU Privacy Guard.
+2.  Customize variable =epg-pinentry-mode= to =loopback= in Emacs.
+
+Note that loopback Pinentry does not work with =gpgsm=, therefore EasyPG
+will ignore this setting for it.
+
+There are other options available to use Emacs as Pinentry, you might
+come across a Pinentry called =pinentry-emacs= or =gpg-agent= option
+=allow-emacs-pinentry=. However, these are considered insecure or
+semi-obsolete and might not be supported by your operating system or
+distribution. For example, Debian GNU/Linux supports only the loopback
+Pinentry described above.
+
+--------------
+
+<<Caching-Passphrases>>
+
+Next: [[#Bug-Reports][Bug Reports]], Previous:
+[[#GnuPG-Pinentry][GnuPG Pinentry]], Up:
+[[#Top][EasyPG Assistant User's Manual]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+** 6 Caching Passphrases [[#Caching-Passphrases-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Caching-Passphrases-1
+:CLASS: chapter
+:END:
+Typing passphrases is a troublesome task if you frequently open and
+close the same file. GnuPG and EasyPG Assistant provide mechanisms to
+remember your passphrases for a limited time. Using these, you only need
+to re-enter the passphrase occasionally. However, the configuration is a
+bit confusing since it depends on your GnuPG installation (see
+[[#GnuPG-version-compatibility][GnuPG Version Compatibility]]),
+encryption method (symmetric or public key), and whether or not you want
+to use GnuPG Agent. As an additional constraint, use of the GnuPG Agent
+is mandatory for GnuPG 2.0 and later. Here are some questions:
+
+1. Do you use GnuPG version 2.0 or later instead of GnuPG version 1.4?
+2. Do you use symmetric encryption rather than public key encryption?
+3. Do you want to use GnuPG Agent?
+
+Here are configurations depending on your answers:
+
+| *1* | *2* | *3*  | Configuration                   |
+| Yes | Yes | Must | Set up GnuPG Agent.             |
+| Yes | No  | Must | Set up GnuPG Agent.             |
+| No  | Yes | Yes  | Set up elisp passphrase cache.  |
+| No  | Yes | No   | Set up elisp passphrase cache.  |
+| No  | No  | Yes  | Set up GnuPG Agent.             |
+| No  | No  | No   | You can't, without GnuPG Agent. |
+
+To set up GnuPG Agent, follow the instruction in
+[[https://www.gnupg.org/documentation/manuals/gnupg/Invoking-GPG_002dAGENT.html#Invoking-GPG_002dAGENT][Invoking GPG-AGENT]]
+in Using the GNU Privacy Guard.
+
+To set up elisp passphrase cache, set
+=epa-file-cache-passphrase-for-symmetric-encryption=. See
+[[#Encrypting_002fdecrypting-gpg-files][Encrypting and Decrypting gpg Files]].
+
+--------------
+
+<<Bug-Reports>>
+
+Next:
+[[#GNU-Free-Documentation-License][GNU Free Documentation License]],
+Previous: [[#Caching-Passphrases][Caching Passphrases]], Up:
+[[#Top][EasyPG Assistant User's Manual]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+** 7 Bug Reports [[#Bug-Reports-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Bug-Reports-1
+:CLASS: chapter
+:END:
+Bugs and problems with EasyPG Assistant are actively worked on by the
+Emacs development team. Feature requests and suggestions are also more
+than welcome. Use M-x report-emacs-bug, see
+[[https://www.gnu.org/software/emacs/manual/html_mono/emacs.html#Bugs][Reporting Bugs]]
+in The Emacs Editor.
+
+When submitting a bug report, please try to describe in excruciating
+detail the steps required to reproduce the problem. Also try to collect
+necessary information to fix the bug, such as:
+
+- the GnuPG version. Send the output of ‘=gpg --version='.
+- the GnuPG configuration. Send the contents of =~/.gnupg/gpg.conf=.
+
+Before reporting the bug, you should set =epg-debug= in the =~/.emacs=
+file and repeat the bug. Then, include the contents of the
+= *epg-debug*= buffer. Note that the first letter of the buffer name is
+a whitespace.
+
+--------------
+
+<<GNU-Free-Documentation-License>>
+
+Next: [[#Concept-Index][Concept Index]], Previous:
+[[#Bug-Reports][Bug Reports]], Up:
+[[#Top][EasyPG Assistant User's Manual]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+** Appendix A GNU Free Documentation License [[#GNU-Free-Documentation-License-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: GNU-Free-Documentation-License-1
+:CLASS: appendix
+:END:
+
+#+begin_center
+Version 1.3, 3 November 2008
+#+end_center
+
+#+begin_src display-preformatted
+Copyright © 2000, 2001, 2002, 2007, 2008 Free Software Foundation, Inc.
+https://fsf.org/
+
+Everyone is permitted to copy and distribute verbatim copies
+of this license document, but changing it is not allowed.
+#+end_src
+
+0. [@0] PREAMBLE
+
+   The purpose of this License is to make a manual, textbook, or other
+   functional and useful document /free/ in the sense of freedom: to
+   assure everyone the effective freedom to copy and redistribute it,
+   with or without modifying it, either commercially or noncommercially.
+   Secondarily, this License preserves for the author and publisher a
+   way to get credit for their work, while not being considered
+   responsible for modifications made by others.
+
+   This License is a kind of “copyleft”, which means that derivative
+   works of the document must themselves be free in the same sense. It
+   complements the GNU General Public License, which is a copyleft
+   license designed for free software.
+
+   We have designed this License in order to use it for manuals for free
+   software, because free software needs free documentation: a free
+   program should come with manuals providing the same freedoms that the
+   software does. But this License is not limited to software manuals;
+   it can be used for any textual work, regardless of subject matter or
+   whether it is published as a printed book. We recommend this License
+   principally for works whose purpose is instruction or reference.
+
+1. APPLICABILITY AND DEFINITIONS
+
+   This License applies to any manual or other work, in any medium, that
+   contains a notice placed by the copyright holder saying it can be
+   distributed under the terms of this License. Such a notice grants a
+   world-wide, royalty-free license, unlimited in duration, to use that
+   work under the conditions stated herein. The “Document”, below,
+   refers to any such manual or work. Any member of the public is a
+   licensee, and is addressed as “you”. You accept the license if you
+   copy, modify or distribute the work in a way requiring permission
+   under copyright law.
+
+   A “Modified Version” of the Document means any work containing the
+   Document or a portion of it, either copied verbatim, or with
+   modifications and/or translated into another language.
+
+   A “Secondary Section” is a named appendix or a front-matter section
+   of the Document that deals exclusively with the relationship of the
+   publishers or authors of the Document to the Document's overall
+   subject (or to related matters) and contains nothing that could fall
+   directly within that overall subject. (Thus, if the Document is in
+   part a textbook of mathematics, a Secondary Section may not explain
+   any mathematics.) The relationship could be a matter of historical
+   connection with the subject or with related matters, or of legal,
+   commercial, philosophical, ethical or political position regarding
+   them.
+
+   The “Invariant Sections” are certain Secondary Sections whose titles
+   are designated, as being those of Invariant Sections, in the notice
+   that says that the Document is released under this License. If a
+   section does not fit the above definition of Secondary then it is not
+   allowed to be designated as Invariant. The Document may contain zero
+   Invariant Sections. If the Document does not identify any Invariant
+   Sections then there are none.
+
+   The “Cover Texts” are certain short passages of text that are listed,
+   as Front-Cover Texts or Back-Cover Texts, in the notice that says
+   that the Document is released under this License. A Front-Cover Text
+   may be at most 5 words, and a Back-Cover Text may be at most 25
+   words.
+
+   A “Transparent” copy of the Document means a machine-readable copy,
+   represented in a format whose specification is available to the
+   general public, that is suitable for revising the document
+   straightforwardly with generic text editors or (for images composed
+   of pixels) generic paint programs or (for drawings) some widely
+   available drawing editor, and that is suitable for input to text
+   formatters or for automatic translation to a variety of formats
+   suitable for input to text formatters. A copy made in an otherwise
+   Transparent file format whose markup, or absence of markup, has been
+   arranged to thwart or discourage subsequent modification by readers
+   is not Transparent. An image format is not Transparent if used for
+   any substantial amount of text. A copy that is not “Transparent” is
+   called “Opaque”.
+
+   Examples of suitable formats for Transparent copies include plain
+   ASCII without markup, Texinfo input format, LaTeX input format, SGML
+   or XML using a publicly available DTD, and standard-conforming simple
+   HTML, PostScript or PDF designed for human modification. Examples of
+   transparent image formats include PNG, XCF and JPG. Opaque formats
+   include proprietary formats that can be read and edited only by
+   proprietary word processors, SGML or XML for which the DTD and/or
+   processing tools are not generally available, and the
+   machine-generated HTML, PostScript or PDF produced by some word
+   processors for output purposes only.
+
+   The “Title Page” means, for a printed book, the title page itself,
+   plus such following pages as are needed to hold, legibly, the
+   material this License requires to appear in the title page. For works
+   in formats which do not have any title page as such, “Title Page”
+   means the text near the most prominent appearance of the work's
+   title, preceding the beginning of the body of the text.
+
+   The “publisher” means any person or entity that distributes copies of
+   the Document to the public.
+
+   A section “Entitled XYZ” means a named subunit of the Document whose
+   title either is precisely XYZ or contains XYZ in parentheses
+   following text that translates XYZ in another language. (Here XYZ
+   stands for a specific section name mentioned below, such as
+   “Acknowledgements”, “Dedications”, “Endorsements”, or “History”.) To
+   “Preserve the Title” of such a section when you modify the Document
+   means that it remains a section “Entitled XYZ” according to this
+   definition.
+
+   The Document may include Warranty Disclaimers next to the notice
+   which states that this License applies to the Document. These
+   Warranty Disclaimers are considered to be included by reference in
+   this License, but only as regards disclaiming warranties: any other
+   implication that these Warranty Disclaimers may have is void and has
+   no effect on the meaning of this License.
+
+2. VERBATIM COPYING
+
+   You may copy and distribute the Document in any medium, either
+   commercially or noncommercially, provided that this License, the
+   copyright notices, and the license notice saying this License applies
+   to the Document are reproduced in all copies, and that you add no
+   other conditions whatsoever to those of this License. You may not use
+   technical measures to obstruct or control the reading or further
+   copying of the copies you make or distribute. However, you may accept
+   compensation in exchange for copies. If you distribute a large enough
+   number of copies you must also follow the conditions in section 3.
+
+   You may also lend copies, under the same conditions stated above, and
+   you may publicly display copies.
+
+3. COPYING IN QUANTITY
+
+   If you publish printed copies (or copies in media that commonly have
+   printed covers) of the Document, numbering more than 100, and the
+   Document's license notice requires Cover Texts, you must enclose the
+   copies in covers that carry, clearly and legibly, all these Cover
+   Texts: Front-Cover Texts on the front cover, and Back-Cover Texts on
+   the back cover. Both covers must also clearly and legibly identify
+   you as the publisher of these copies. The front cover must present
+   the full title with all words of the title equally prominent and
+   visible. You may add other material on the covers in addition.
+   Copying with changes limited to the covers, as long as they preserve
+   the title of the Document and satisfy these conditions, can be
+   treated as verbatim copying in other respects.
+
+   If the required texts for either cover are too voluminous to fit
+   legibly, you should put the first ones listed (as many as fit
+   reasonably) on the actual cover, and continue the rest onto adjacent
+   pages.
+
+   If you publish or distribute Opaque copies of the Document numbering
+   more than 100, you must either include a machine-readable Transparent
+   copy along with each Opaque copy, or state in or with each Opaque
+   copy a computer-network location from which the general network-using
+   public has access to download using public-standard network protocols
+   a complete Transparent copy of the Document, free of added material.
+   If you use the latter option, you must take reasonably prudent steps,
+   when you begin distribution of Opaque copies in quantity, to ensure
+   that this Transparent copy will remain thus accessible at the stated
+   location until at least one year after the last time you distribute
+   an Opaque copy (directly or through your agents or retailers) of that
+   edition to the public.
+
+   It is requested, but not required, that you contact the authors of
+   the Document well before redistributing any large number of copies,
+   to give them a chance to provide you with an updated version of the
+   Document.
+
+4. MODIFICATIONS
+
+   You may copy and distribute a Modified Version of the Document under
+   the conditions of sections 2 and 3 above, provided that you release
+   the Modified Version under precisely this License, with the Modified
+   Version filling the role of the Document, thus licensing distribution
+   and modification of the Modified Version to whoever possesses a copy
+   of it. In addition, you must do these things in the Modified Version:
+
+   1. Use in the Title Page (and on the covers, if any) a title distinct
+      from that of the Document, and from those of previous versions
+      (which should, if there were any, be listed in the History section
+      of the Document). You may use the same title as a previous version
+      if the original publisher of that version gives permission.
+   2. List on the Title Page, as authors, one or more persons or
+      entities responsible for authorship of the modifications in the
+      Modified Version, together with at least five of the principal
+      authors of the Document (all of its principal authors, if it has
+      fewer than five), unless they release you from this requirement.
+   3. State on the Title page the name of the publisher of the Modified
+      Version, as the publisher.
+   4. Preserve all the copyright notices of the Document.
+   5. Add an appropriate copyright notice for your modifications
+      adjacent to the other copyright notices.
+   6. Include, immediately after the copyright notices, a license notice
+      giving the public permission to use the Modified Version under the
+      terms of this License, in the form shown in the Addendum below.
+   7. Preserve in that license notice the full lists of Invariant
+      Sections and required Cover Texts given in the Document's license
+      notice.
+   8. Include an unaltered copy of this License.
+   9. Preserve the section Entitled “History”, Preserve its Title, and
+      add to it an item stating at least the title, year, new authors,
+      and publisher of the Modified Version as given on the Title Page.
+      If there is no section Entitled “History” in the Document, create
+      one stating the title, year, authors, and publisher of the
+      Document as given on its Title Page, then add an item describing
+      the Modified Version as stated in the previous sentence.
+   10. Preserve the network location, if any, given in the Document for
+       public access to a Transparent copy of the Document, and likewise
+       the network locations given in the Document for previous versions
+       it was based on. These may be placed in the “History” section.
+       You may omit a network location for a work that was published at
+       least four years before the Document itself, or if the original
+       publisher of the version it refers to gives permission.
+   11. For any section Entitled “Acknowledgements” or “Dedications”,
+       Preserve the Title of the section, and preserve in the section
+       all the substance and tone of each of the contributor
+       acknowledgements and/or dedications given therein.
+   12. Preserve all the Invariant Sections of the Document, unaltered in
+       their text and in their titles. Section numbers or the equivalent
+       are not considered part of the section titles.
+   13. Delete any section Entitled “Endorsements”. Such a section may
+       not be included in the Modified Version.
+   14. Do not retitle any existing section to be Entitled “Endorsements”
+       or to conflict in title with any Invariant Section.
+   15. Preserve any Warranty Disclaimers.
+
+   If the Modified Version includes new front-matter sections or
+   appendices that qualify as Secondary Sections and contain no material
+   copied from the Document, you may at your option designate some or
+   all of these sections as invariant. To do this, add their titles to
+   the list of Invariant Sections in the Modified Version's license
+   notice. These titles must be distinct from any other section titles.
+
+   You may add a section Entitled “Endorsements”, provided it contains
+   nothing but endorsements of your Modified Version by various
+   parties---for example, statements of peer review or that the text has
+   been approved by an organization as the authoritative definition of a
+   standard.
+
+   You may add a passage of up to five words as a Front-Cover Text, and
+   a passage of up to 25 words as a Back-Cover Text, to the end of the
+   list of Cover Texts in the Modified Version. Only one passage of
+   Front-Cover Text and one of Back-Cover Text may be added by (or
+   through arrangements made by) any one entity. If the Document already
+   includes a cover text for the same cover, previously added by you or
+   by arrangement made by the same entity you are acting on behalf of,
+   you may not add another; but you may replace the old one, on explicit
+   permission from the previous publisher that added the old one.
+
+   The author(s) and publisher(s) of the Document do not by this License
+   give permission to use their names for publicity for or to assert or
+   imply endorsement of any Modified Version.
+
+5. COMBINING DOCUMENTS
+
+   You may combine the Document with other documents released under this
+   License, under the terms defined in section 4 above for modified
+   versions, provided that you include in the combination all of the
+   Invariant Sections of all of the original documents, unmodified, and
+   list them all as Invariant Sections of your combined work in its
+   license notice, and that you preserve all their Warranty Disclaimers.
+
+   The combined work need only contain one copy of this License, and
+   multiple identical Invariant Sections may be replaced with a single
+   copy. If there are multiple Invariant Sections with the same name but
+   different contents, make the title of each such section unique by
+   adding at the end of it, in parentheses, the name of the original
+   author or publisher of that section if known, or else a unique
+   number. Make the same adjustment to the section titles in the list of
+   Invariant Sections in the license notice of the combined work.
+
+   In the combination, you must combine any sections Entitled “History”
+   in the various original documents, forming one section Entitled
+   “History”; likewise combine any sections Entitled “Acknowledgements”,
+   and any sections Entitled “Dedications”. You must delete all sections
+   Entitled “Endorsements.”
+
+6. COLLECTIONS OF DOCUMENTS
+
+   You may make a collection consisting of the Document and other
+   documents released under this License, and replace the individual
+   copies of this License in the various documents with a single copy
+   that is included in the collection, provided that you follow the
+   rules of this License for verbatim copying of each of the documents
+   in all other respects.
+
+   You may extract a single document from such a collection, and
+   distribute it individually under this License, provided you insert a
+   copy of this License into the extracted document, and follow this
+   License in all other respects regarding verbatim copying of that
+   document.
+
+7. AGGREGATION WITH INDEPENDENT WORKS
+
+   A compilation of the Document or its derivatives with other separate
+   and independent documents or works, in or on a volume of a storage or
+   distribution medium, is called an “aggregate” if the copyright
+   resulting from the compilation is not used to limit the legal rights
+   of the compilation's users beyond what the individual works permit.
+   When the Document is included in an aggregate, this License does not
+   apply to the other works in the aggregate which are not themselves
+   derivative works of the Document.
+
+   If the Cover Text requirement of section 3 is applicable to these
+   copies of the Document, then if the Document is less than one half of
+   the entire aggregate, the Document's Cover Texts may be placed on
+   covers that bracket the Document within the aggregate, or the
+   electronic equivalent of covers if the Document is in electronic
+   form. Otherwise they must appear on printed covers that bracket the
+   whole aggregate.
+
+8. TRANSLATION
+
+   Translation is considered a kind of modification, so you may
+   distribute translations of the Document under the terms of section 4.
+   Replacing Invariant Sections with translations requires special
+   permission from their copyright holders, but you may include
+   translations of some or all Invariant Sections in addition to the
+   original versions of these Invariant Sections. You may include a
+   translation of this License, and all the license notices in the
+   Document, and any Warranty Disclaimers, provided that you also
+   include the original English version of this License and the original
+   versions of those notices and disclaimers. In case of a disagreement
+   between the translation and the original version of this License or a
+   notice or disclaimer, the original version will prevail.
+
+   If a section in the Document is Entitled “Acknowledgements”,
+   “Dedications”, or “History”, the requirement (section 4) to Preserve
+   its Title (section 1) will typically require changing the actual
+   title.
+
+9. TERMINATION
+
+   You may not copy, modify, sublicense, or distribute the Document
+   except as expressly provided under this License. Any attempt
+   otherwise to copy, modify, sublicense, or distribute it is void, and
+   will automatically terminate your rights under this License.
+
+   However, if you cease all violation of this License, then your
+   license from a particular copyright holder is reinstated (a)
+   provisionally, unless and until the copyright holder explicitly and
+   finally terminates your license, and (b) permanently, if the
+   copyright holder fails to notify you of the violation by some
+   reasonable means prior to 60 days after the cessation.
+
+   Moreover, your license from a particular copyright holder is
+   reinstated permanently if the copyright holder notifies you of the
+   violation by some reasonable means, this is the first time you have
+   received notice of violation of this License (for any work) from that
+   copyright holder, and you cure the violation prior to 30 days after
+   your receipt of the notice.
+
+   Termination of your rights under this section does not terminate the
+   licenses of parties who have received copies or rights from you under
+   this License. If your rights have been terminated and not permanently
+   reinstated, receipt of a copy of some or all of the same material
+   does not give you any rights to use it.
+
+10. FUTURE REVISIONS OF THIS LICENSE
+
+    The Free Software Foundation may publish new, revised versions of
+    the GNU Free Documentation License from time to time. Such new
+    versions will be similar in spirit to the present version, but may
+    differ in detail to address new problems or concerns. See
+    [[https://www.gnu.org/licenses/]].
+
+    Each version of the License is given a distinguishing version
+    number. If the Document specifies that a particular numbered version
+    of this License “or any later version” applies to it, you have the
+    option of following the terms and conditions either of that
+    specified version or of any later version that has been published
+    (not as a draft) by the Free Software Foundation. If the Document
+    does not specify a version number of this License, you may choose
+    any version ever published (not as a draft) by the Free Software
+    Foundation. If the Document specifies that a proxy can decide which
+    future versions of this License can be used, that proxy's public
+    statement of acceptance of a version permanently authorizes you to
+    choose that version for the Document.
+
+11. RELICENSING
+
+    “Massive Multiauthor Collaboration Site” (or “MMC Site”) means any
+    World Wide Web server that publishes copyrightable works and also
+    provides prominent facilities for anybody to edit those works. A
+    public wiki that anybody can edit is an example of such a server. A
+    “Massive Multiauthor Collaboration” (or “MMC”) contained in the site
+    means any set of copyrightable works thus published on the MMC site.
+
+    “CC-BY-SA” means the Creative Commons Attribution-Share Alike 3.0
+    license published by Creative Commons Corporation, a not-for-profit
+    corporation with a principal place of business in San Francisco,
+    California, as well as future copyleft versions of that license
+    published by that same organization.
+
+    “Incorporate” means to publish or republish a Document, in whole or
+    in part, as part of another Document.
+
+    An MMC is “eligible for relicensing” if it is licensed under this
+    License, and if all works that were first published under this
+    License somewhere other than this MMC, and subsequently incorporated
+    in whole or in part into the MMC, (1) had no cover texts or
+    invariant sections, and (2) were thus incorporated prior to November
+    1, 2008.
+
+    The operator of an MMC Site may republish an MMC contained in the
+    site under CC-BY-SA on the same site at any time before August 1,
+    2009, provided the MMC is eligible for relicensing.
+
+*** ADDENDUM: How to use this License for your documents [[#ADDENDUM_003a-How-to-use-this-License-for-your-documents][¶]]
+:PROPERTIES:
+:CUSTOM_ID: ADDENDUM_003a-How-to-use-this-License-for-your-documents
+:CLASS: heading
+:END:
+To use this License in a document you have written, include a copy of
+the License in the document and put the following copyright and license
+notices just after the title page:
+
+#+begin_src example-preformatted
+  Copyright (C)  year  your name.
+  Permission is granted to copy, distribute and/or modify this document
+  under the terms of the GNU Free Documentation License, Version 1.3
+  or any later version published by the Free Software Foundation;
+  with no Invariant Sections, no Front-Cover Texts, and no Back-Cover
+  Texts.  A copy of the license is included in the section entitled ``GNU
+  Free Documentation License''.
+#+end_src
+
+If you have Invariant Sections, Front-Cover Texts and Back-Cover Texts,
+replace the “with...Texts.” line with this:
+
+#+begin_src example-preformatted
+    with the Invariant Sections being list their titles, with
+    the Front-Cover Texts being list, and with the Back-Cover Texts
+    being list.
+#+end_src
+
+If you have Invariant Sections without Cover Texts, or some other
+combination of the three, merge those two alternatives to suit the
+situation.
+
+If your document contains nontrivial examples of program code, we
+recommend releasing these examples in parallel under your choice of free
+software license, such as the GNU General Public License, to permit
+their use in free software.
+
+--------------
+
+<<Concept-Index>>
+
+Next: [[#Key-Index][Key Index]], Previous:
+[[#GNU-Free-Documentation-License][GNU Free Documentation License]], Up:
+[[#Top][EasyPG Assistant User's Manual]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+** Concept Index [[#Concept-Index-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Concept-Index-1
+:CLASS: unnumbered
+:END:
+
+| Jump to:   | [[#Concept-Index_cp_letter-A][*A*]]   [[#Concept-Index_cp_letter-B][*B*]]   [[#Concept-Index_cp_letter-C][*C*]]   [[#Concept-Index_cp_letter-D][*D*]]   [[#Concept-Index_cp_letter-E][*E*]]   [[#Concept-Index_cp_letter-F][*F*]]   [[#Concept-Index_cp_letter-G][*G*]]   [[#Concept-Index_cp_letter-I][*I*]]   [[#Concept-Index_cp_letter-K][*K*]]   [[#Concept-Index_cp_letter-L][*L*]]   [[#Concept-Index_cp_letter-M][*M*]]   [[#Concept-Index_cp_letter-P][*P*]]   [[#Concept-Index_cp_letter-Q][*Q*]]   [[#Concept-Index_cp_letter-R][*R*]]   [[#Concept-Index_cp_letter-S][*S*]]   [[#Concept-Index_cp_letter-T][*T*]]   [[#Concept-Index_cp_letter-V][*V*]]   |
+
+|                | Index Entry                                                                                             | Section                                                                       |
+| -------------- |                                                                                                         |                                                                               |
+| A              |                                                                                                         |                                                                               |
+|                | [[#index-automatic-file-encryption-and-decryption][automatic file encryption and decryption]]           | [[#Encrypting_002fdecrypting-gpg-files][Encrypting/decrypting gpg files]]     |
+| -------------- |                                                                                                         |                                                                               |
+| B              |                                                                                                         |                                                                               |
+|                | [[#index-browse-key-ring][browse key ring]]                                                             | [[#Key-management][Key management]]                                           |
+|                | [[#index-bug-reports][bug reports]]                                                                     | [[#Bug-Reports][Bug Reports]]                                                 |
+| -------------- |                                                                                                         |                                                                               |
+| C              |                                                                                                         |                                                                               |
+|                | [[#index-caching-passphrases][caching passphrases]]                                                     | [[#Caching-Passphrases][Caching Passphrases]]                                 |
+|                | [[#index-compatibility-with-gnupg][compatibility with gnupg]]                                           | [[#GnuPG-version-compatibility][GnuPG version compatibility]]                 |
+|                | [[#index-configuration-of-gnupg][configuration of gnupg]]                                               | [[#Quick-start][Quick start]]                                                 |
+|                | [[#index-cryptographic-operations-on-files][cryptographic operations on files]]                         | [[#Cryptographic-operations-on-files][Cryptographic operations on files]]     |
+|                | [[#index-cryptographic-operations-on-regions][cryptographic operations on regions]]                     | [[#Cryptographic-operations-on-regions][Cryptographic operations on regions]] |
+| -------------- |                                                                                                         |                                                                               |
+| D              |                                                                                                         |                                                                               |
+|                | [[#index-decrypt-file][decrypt file]]                                                                   | [[#Cryptographic-operations-on-files][Cryptographic operations on files]]     |
+|                | [[#index-decrypt-region][decrypt region]]                                                               | [[#Cryptographic-operations-on-regions][Cryptographic operations on regions]] |
+|                | [[#index-decrypting-gpg-files][decrypting gpg files]]                                                   | [[#Encrypting_002fdecrypting-gpg-files][Encrypting/decrypting gpg files]]     |
+|                | [[#index-delete-keys][delete keys]]                                                                     | [[#Key-management][Key management]]                                           |
+|                | [[#index-directory-operations][directory operations]]                                                   | [[#Dired-integration][Dired integration]]                                     |
+|                | [[#index-dired-integration][dired integration]]                                                         | [[#Dired-integration][Dired integration]]                                     |
+|                | [[#index-documentation-on-gnupg][documentation on gnupg]]                                               | [[#Quick-start][Quick start]]                                                 |
+| -------------- |                                                                                                         |                                                                               |
+| E              |                                                                                                         |                                                                               |
+|                | [[#index-easypg-assistant][easypg assistant]]                                                           | [[#Top][Top]]                                                                 |
+|                | [[#index-encrypt-file][encrypt file]]                                                                   | [[#Cryptographic-operations-on-files][Cryptographic operations on files]]     |
+|                | [[#index-encrypt-region][encrypt region]]                                                               | [[#Cryptographic-operations-on-regions][Cryptographic operations on regions]] |
+|                | [[#index-encrypting-gpg-files][encrypting gpg files]]                                                   | [[#Encrypting_002fdecrypting-gpg-files][Encrypting/decrypting gpg files]]     |
+|                | [[#index-entering-passphrases][entering passphrases]]                                                   | [[#Caching-Passphrases][Caching Passphrases]]                                 |
+| -------------- |                                                                                                         |                                                                               |
+| F              |                                                                                                         |                                                                               |
+|                | [[#index-features-of-easypg-assistant][features of easypg assistant]]                                   | [[#Overview][Overview]]                                                       |
+|                | [[#index-file-operations_002c-cryptographic][file operations, cryptographic]]                           | [[#Cryptographic-operations-on-files][Cryptographic operations on files]]     |
+| -------------- |                                                                                                         |                                                                               |
+| G              |                                                                                                         |                                                                               |
+|                | [[#index-gnu-privacy-guard][gnu privacy guard]]                                                         | [[#Top][Top]]                                                                 |
+|                | [[#index-gnupg][gnupg]]                                                                                 | [[#Top][Top]]                                                                 |
+|                | [[#index-gnupg-documentation][gnupg documentation]]                                                     | [[#Quick-start][Quick start]]                                                 |
+|                | [[#index-gnupg-pinentry][gnupg pinentry]]                                                               | [[#GnuPG-Pinentry][GnuPG Pinentry]]                                           |
+|                | [[#index-gnupg-version-compatibility][gnupg version compatibility]]                                     | [[#GnuPG-version-compatibility][GnuPG version compatibility]]                 |
+|                | [[#index-gpg-files_002c-encrypting-and-decrypting][gpg files, encrypting and decrypting]]               | [[#Encrypting_002fdecrypting-gpg-files][Encrypting/decrypting gpg files]]     |
+| -------------- |                                                                                                         |                                                                               |
+| I              |                                                                                                         |                                                                               |
+|                | [[#index-import-keys][import keys]]                                                                     | [[#Key-management][Key management]]                                           |
+|                | [[#index-insert-keys][insert keys]]                                                                     | [[#Key-management][Key management]]                                           |
+|                | [[#index-introduction-to-easypg-assistant][introduction to easypg assistant]]                           | [[#Quick-start][Quick start]]                                                 |
+|                | [[#index-introduction-to-gnupg][introduction to gnupg]]                                                 | [[#Quick-start][Quick start]]                                                 |
+| -------------- |                                                                                                         |                                                                               |
+| K              |                                                                                                         |                                                                               |
+|                | [[#index-key-management][key management]]                                                               | [[#Key-management][Key management]]                                           |
+|                | [[#index-key-ring_002c-browsing][key ring, browsing]]                                                   | [[#Key-management][Key management]]                                           |
+|                | [[#index-key-server_002c-querying][key server, querying]]                                               | [[#Querying-a-key-server][Querying a key server]]                             |
+| -------------- |                                                                                                         |                                                                               |
+| L              |                                                                                                         |                                                                               |
+|                | [[#index-loopback-pinentry][loopback pinentry]]                                                         | [[#GnuPG-Pinentry][GnuPG Pinentry]]                                           |
+| -------------- |                                                                                                         |                                                                               |
+| M              |                                                                                                         |                                                                               |
+|                | [[#index-mail_002dmode-integration][mail-mode integration]]                                             | [[#Mail_002dmode-integration][Mail-mode integration]]                         |
+|                | [[#index-multiple-file-operations][multiple file operations]]                                           | [[#Dired-integration][Dired integration]]                                     |
+| -------------- |                                                                                                         |                                                                               |
+| P              |                                                                                                         |                                                                               |
+|                | [[#index-passphrases_002c-entering-and-caching][passphrases, entering and caching]]                     | [[#Caching-Passphrases][Caching Passphrases]]                                 |
+|                | [[#index-pinentry-provided-by-gnupg][pinentry provided by gnupg]]                                       | [[#GnuPG-Pinentry][GnuPG Pinentry]]                                           |
+|                | [[#index-pinentry_002c-emacs-as][pinentry, emacs as]]                                                   | [[#GnuPG-Pinentry][GnuPG Pinentry]]                                           |
+|                | [[#index-private-key-ring_002c-browsing][private key ring, browsing]]                                   | [[#Key-management][Key management]]                                           |
+|                | [[#index-public-key-encryption_002c-passphrase-entry-for][public key encryption, passphrase entry for]] | [[#Encrypting_002fdecrypting-gpg-files][Encrypting/decrypting gpg files]]     |
+| -------------- |                                                                                                         |                                                                               |
+| Q              |                                                                                                         |                                                                               |
+|                | [[#index-query-key-server][query key server]]                                                           | [[#Querying-a-key-server][Querying a key server]]                             |
+| -------------- |                                                                                                         |                                                                               |
+| R              |                                                                                                         |                                                                               |
+|                | [[#index-region-operations_002c-cryptographic][region operations, cryptographic]]                       | [[#Cryptographic-operations-on-regions][Cryptographic operations on regions]] |
+|                | [[#index-reporting-bugs][reporting bugs]]                                                               | [[#Bug-Reports][Bug Reports]]                                                 |
+| -------------- |                                                                                                         |                                                                               |
+| S              |                                                                                                         |                                                                               |
+|                | [[#index-sending-signed_002fencrypted-mails][sending signed/encrypted mails]]                           | [[#Mail_002dmode-integration][Mail-mode integration]]                         |
+|                | [[#index-sign-file][sign file]]                                                                         | [[#Cryptographic-operations-on-files][Cryptographic operations on files]]     |
+|                | [[#index-sign-region][sign region]]                                                                     | [[#Cryptographic-operations-on-regions][Cryptographic operations on regions]] |
+|                | [[#index-symmetric-encryption_002c-passphrase-entry-for][symmetric encryption, passphrase entry for]]   | [[#Encrypting_002fdecrypting-gpg-files][Encrypting/decrypting gpg files]]     |
+| -------------- |                                                                                                         |                                                                               |
+| T              |                                                                                                         |                                                                               |
+|                | [[#index-temporary-files-created-by-easypg-assistant][temporary files created by easypg assistant]]     | [[#Encrypting_002fdecrypting-gpg-files][Encrypting/decrypting gpg files]]     |
+| -------------- |                                                                                                         |                                                                               |
+| V              |                                                                                                         |                                                                               |
+|                | [[#index-verify-file][verify file]]                                                                     | [[#Cryptographic-operations-on-files][Cryptographic operations on files]]     |
+|                | [[#index-verify-region][verify region]]                                                                 | [[#Cryptographic-operations-on-regions][Cryptographic operations on regions]] |
+|                | [[#index-version-compatibility-with-gnupg][version compatibility with gnupg]]                           | [[#GnuPG-version-compatibility][GnuPG version compatibility]]                 |
+| -------------- |                                                                                                         |                                                                               |
+
+| Jump to:   | [[#Concept-Index_cp_letter-A][*A*]]   [[#Concept-Index_cp_letter-B][*B*]]   [[#Concept-Index_cp_letter-C][*C*]]   [[#Concept-Index_cp_letter-D][*D*]]   [[#Concept-Index_cp_letter-E][*E*]]   [[#Concept-Index_cp_letter-F][*F*]]   [[#Concept-Index_cp_letter-G][*G*]]   [[#Concept-Index_cp_letter-I][*I*]]   [[#Concept-Index_cp_letter-K][*K*]]   [[#Concept-Index_cp_letter-L][*L*]]   [[#Concept-Index_cp_letter-M][*M*]]   [[#Concept-Index_cp_letter-P][*P*]]   [[#Concept-Index_cp_letter-Q][*Q*]]   [[#Concept-Index_cp_letter-R][*R*]]   [[#Concept-Index_cp_letter-S][*S*]]   [[#Concept-Index_cp_letter-T][*T*]]   [[#Concept-Index_cp_letter-V][*V*]]   |
+
+--------------
+
+<<Key-Index>>
+
+Next: [[#Function-Index][Function Index]], Previous:
+[[#Concept-Index][Concept Index]], Up:
+[[#Top][EasyPG Assistant User's Manual]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+** Key Index [[#Key-Index-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Key-Index-1
+:CLASS: unnumbered
+:END:
+
+| Jump to:   | [[#Key-Index_ky_symbol-1][*:*]]  \\ |
+|            | [[#Key-Index_ky_letter-C][*C*]]     |
+
+|                | Index Entry                                       | Section                                               |
+| -------------- |                                                   |                                                       |
+| :              |                                                   |                                                       |
+|                | [[#index-_003a-d][=: d=]]                         | [[#Dired-integration][Dired integration]]             |
+|                | [[#index-_003a-e][=: e=]]                         | [[#Dired-integration][Dired integration]]             |
+|                | [[#index-_003a-s][=: s=]]                         | [[#Dired-integration][Dired integration]]             |
+|                | [[#index-_003a-v][=: v=]]                         | [[#Dired-integration][Dired integration]]             |
+| -------------- |                                                   |                                                       |
+| C              |                                                   |                                                       |
+|                | [[#index-C_002dc-C_002de-C_002dd][=C-c C-e C-d=]] | [[#Mail_002dmode-integration][Mail-mode integration]] |
+|                | [[#index-C_002dc-C_002de-C_002de][=C-c C-e C-e=]] | [[#Mail_002dmode-integration][Mail-mode integration]] |
+|                | [[#index-C_002dc-C_002de-C_002ds][=C-c C-e C-s=]] | [[#Mail_002dmode-integration][Mail-mode integration]] |
+|                | [[#index-C_002dc-C_002de-C_002dv][=C-c C-e C-v=]] | [[#Mail_002dmode-integration][Mail-mode integration]] |
+|                | [[#index-C_002dc-C_002de-d][=C-c C-e d=]]         | [[#Mail_002dmode-integration][Mail-mode integration]] |
+|                | [[#index-C_002dc-C_002de-e][=C-c C-e e=]]         | [[#Mail_002dmode-integration][Mail-mode integration]] |
+|                | [[#index-C_002dc-C_002de-s][=C-c C-e s=]]         | [[#Mail_002dmode-integration][Mail-mode integration]] |
+|                | [[#index-C_002dc-C_002de-v][=C-c C-e v=]]         | [[#Mail_002dmode-integration][Mail-mode integration]] |
+| -------------- |                                                   |                                                       |
+
+| Jump to:   | [[#Key-Index_ky_symbol-1][*:*]]  \\ |
+|            | [[#Key-Index_ky_letter-C][*C*]]     |
+
+--------------
+
+<<Function-Index>>
+
+Next: [[#Variable-Index][Variable Index]], Previous:
+[[#Key-Index][Key Index]], Up: [[#Top][EasyPG Assistant User's Manual]]
+  [[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+** Function Index [[#Function-Index-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Function-Index-1
+:CLASS: unnumbered
+:END:
+
+|                | Index Entry                                                                                 | Section                                                                       |
+| -------------- |                                                                                             |                                                                               |
+| E              |                                                                                             |                                                                               |
+|                | [[#index-epa_002ddecrypt_002darmor_002din_002dregion][=epa-decrypt-armor-in-region=]]       | [[#Cryptographic-operations-on-regions][Cryptographic operations on regions]] |
+|                | [[#index-epa_002ddecrypt_002dfile][=epa-decrypt-file=]]                                     | [[#Cryptographic-operations-on-files][Cryptographic operations on files]]     |
+|                | [[#index-epa_002ddecrypt_002dregion][=epa-decrypt-region=]]                                 | [[#Cryptographic-operations-on-regions][Cryptographic operations on regions]] |
+|                | [[#index-epa_002ddelete_002dkeys][=epa-delete-keys=]]                                       | [[#Key-management][Key management]]                                           |
+|                | [[#index-epa_002ddired_002ddo_002ddecrypt][=epa-dired-do-decrypt=]]                         | [[#Dired-integration][Dired integration]]                                     |
+|                | [[#index-epa_002ddired_002ddo_002dencrypt][=epa-dired-do-encrypt=]]                         | [[#Dired-integration][Dired integration]]                                     |
+|                | [[#index-epa_002ddired_002ddo_002dsign][=epa-dired-do-sign=]]                               | [[#Dired-integration][Dired integration]]                                     |
+|                | [[#index-epa_002ddired_002ddo_002dverify][=epa-dired-do-verify=]]                           | [[#Dired-integration][Dired integration]]                                     |
+|                | [[#index-epa_002dencrypt_002dfile][=epa-encrypt-file=]]                                     | [[#Cryptographic-operations-on-files][Cryptographic operations on files]]     |
+|                | [[#index-epa_002dencrypt_002dregion][=epa-encrypt-region=]]                                 | [[#Cryptographic-operations-on-regions][Cryptographic operations on regions]] |
+|                | [[#index-epa_002dfile_002ddisable][=epa-file-disable=]]                                     | [[#Encrypting_002fdecrypting-gpg-files][Encrypting/decrypting gpg files]]     |
+|                | [[#index-epa_002dfile_002denable][=epa-file-enable=]]                                       | [[#Encrypting_002fdecrypting-gpg-files][Encrypting/decrypting gpg files]]     |
+|                | [[#index-epa_002dfile_002dselect_002dkeys][=epa-file-select-keys=]]                         | [[#Encrypting_002fdecrypting-gpg-files][Encrypting/decrypting gpg files]]     |
+|                | [[#index-epa_002dimport_002darmor_002din_002dregion][=epa-import-armor-in-region=]]         | [[#Key-management][Key management]]                                           |
+|                | [[#index-epa_002dimport_002dkeys][=epa-import-keys=]]                                       | [[#Key-management][Key management]]                                           |
+|                | [[#index-epa_002dimport_002dkeys_002dregion][=epa-import-keys-region=]]                     | [[#Key-management][Key management]]                                           |
+|                | [[#index-epa_002dinsert_002dkeys][=epa-insert-keys=]]                                       | [[#Key-management][Key management]]                                           |
+|                | [[#index-epa_002dlist_002dkeys][=epa-list-keys=]]                                           | [[#Key-management][Key management]]                                           |
+|                | [[#index-epa_002dlist_002dsecret_002dkeys][=epa-list-secret-keys=]]                         | [[#Key-management][Key management]]                                           |
+|                | [[#index-epa_002dmail_002ddecrypt][=epa-mail-decrypt=]]                                     | [[#Mail_002dmode-integration][Mail-mode integration]]                         |
+|                | [[#index-epa_002dmail_002dencrypt][=epa-mail-encrypt=]]                                     | [[#Mail_002dmode-integration][Mail-mode integration]]                         |
+|                | [[#index-epa_002dmail_002dsign][=epa-mail-sign=]]                                           | [[#Mail_002dmode-integration][Mail-mode integration]]                         |
+|                | [[#index-epa_002dmail_002dverify][=epa-mail-verify=]]                                       | [[#Mail_002dmode-integration][Mail-mode integration]]                         |
+|                | [[#index-epa_002dsign_002dfile][=epa-sign-file=]]                                           | [[#Cryptographic-operations-on-files][Cryptographic operations on files]]     |
+|                | [[#index-epa_002dsign_002dregion][=epa-sign-region=]]                                       | [[#Cryptographic-operations-on-regions][Cryptographic operations on regions]] |
+|                | [[#index-epa_002dverify_002dcleartext_002din_002dregion][=epa-verify-cleartext-in-region=]] | [[#Cryptographic-operations-on-regions][Cryptographic operations on regions]] |
+|                | [[#index-epa_002dverify_002dfile][=epa-verify-file=]]                                       | [[#Cryptographic-operations-on-files][Cryptographic operations on files]]     |
+|                | [[#index-epa_002dverify_002dregion][=epa-verify-region=]]                                   | [[#Cryptographic-operations-on-regions][Cryptographic operations on regions]] |
+| -------------- |                                                                                             |                                                                               |
+
+--------------
+
+<<Variable-Index>>
+
+Previous: [[#Function-Index][Function Index]], Up:
+[[#Top][EasyPG Assistant User's Manual]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+** Variable Index [[#Variable-Index-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Variable-Index-1
+:CLASS: unnumbered
+:END:
+
+| Jump to:   | [[#Variable-Index_vr_letter-A][*A*]]   [[#Variable-Index_vr_letter-E][*E*]]   |
+
+|                | Index Entry                                                                                                                                 | Section                                                                       |
+| -------------- |                                                                                                                                             |                                                                               |
+| A              |                                                                                                                                             |                                                                               |
+|                | [[#index-allow_002dloopback_002dpinentry][=allow-loopback-pinentry=]]                                                                       | [[#GnuPG-Pinentry][GnuPG Pinentry]]                                           |
+| -------------- |                                                                                                                                             |                                                                               |
+| E              |                                                                                                                                             |                                                                               |
+|                | [[#index-epa_002dfile_002dcache_002dpassphrase_002dfor_002dsymmetric_002dencryption][=epa-file-cache-passphrase-for-symmetric-encryption=]] | [[#Encrypting_002fdecrypting-gpg-files][Encrypting/decrypting gpg files]]     |
+|                | [[#index-epa_002dfile_002dencrypt_002dto][=epa-file-encrypt-to=]]                                                                           | [[#Encrypting_002fdecrypting-gpg-files][Encrypting/decrypting gpg files]]     |
+|                | [[#index-epa_002dfile_002dinhibit_002dauto_002dsave][=epa-file-inhibit-auto-save=]]                                                         | [[#Encrypting_002fdecrypting-gpg-files][Encrypting/decrypting gpg files]]     |
+|                | [[#index-epa_002dfile_002dname_002dregexp][=epa-file-name-regexp=]]                                                                         | [[#Encrypting_002fdecrypting-gpg-files][Encrypting/decrypting gpg files]]     |
+|                | [[#index-epa_002dfile_002dselect_002dkeys-1][=epa-file-select-keys=]]                                                                       | [[#Encrypting_002fdecrypting-gpg-files][Encrypting/decrypting gpg files]]     |
+|                | [[#index-epa_002dkeys_002dselect_002dmethod][=epa-keys-select-method=]]                                                                     | [[#Cryptographic-operations-on-regions][Cryptographic operations on regions]] |
+|                | [[#index-epa_002dmail_002daliases][=epa-mail-aliases=]]                                                                                     | [[#Mail_002dmode-integration][Mail-mode integration]]                         |
+|                | [[#index-epg_002dpinentry_002dmode][=epg-pinentry-mode=]]                                                                                   | [[#GnuPG-Pinentry][GnuPG Pinentry]]                                           |
+| -------------- |                                                                                                                                             |                                                                               |
+
+| Jump to:   | [[#Variable-Index_vr_letter-A][*A*]]   [[#Variable-Index_vr_letter-E][*E*]]   |
+
+--------------
+
+**** Footnotes
+:PROPERTIES:
+:CUSTOM_ID: footnotes
+:CLASS: footnotes-heading
+:END:
+***** [[#DOCF1][(1)]]
+:PROPERTIES:
+:CUSTOM_ID: section
+:CLASS: footnote-body-heading
+:END:
+For encryption and decryption of files you do not intend to share, you
+do not have to use an email address as recipient during creation of the
+keypair. You can also use some free-form string that gives information
+on the use of the keypair, like =backup= or =account database=.

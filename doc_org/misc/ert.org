@@ -1,0 +1,2377 @@
+<<Top>>
+
+Next: [[#Introduction][Introduction]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+* ERT: Emacs Lisp Regression Testing [[#ERT_003a-Emacs-Lisp-Regression-Testing][¶]]
+:PROPERTIES:
+:CUSTOM_ID: ERT_003a-Emacs-Lisp-Regression-Testing
+:CLASS: top
+:END:
+Copyright © 2008, 2010--2026 Free Software Foundation, Inc.
+
+#+begin_quote
+Permission is granted to copy, distribute and/or modify this document
+under the terms of the GNU Free Documentation License, Version 1.3 or
+any later version published by the Free Software Foundation; with no
+Invariant Sections, with the Front-Cover Texts being “A GNU Manual,” and
+with the Back-Cover Texts as in (a) below. A copy of the license is
+included in the section entitled “GNU Free Documentation License”.
+
+(a) The FSF's Back-Cover Text is: “You have the freedom to copy and
+modify this GNU manual.”
+#+end_quote
+
+ERT is a tool for automated testing in Emacs Lisp. Its main features are
+facilities for defining and running tests, reporting results, and
+debugging test failures interactively. Tests are written in Emacs Lisp,
+just like the code under test, making it easy to write expressive and
+concise test cases.
+
+ERT has unique features that take advantage of the dynamic and
+interactive nature of Emacs. It has no opinion about when or how tests
+are written: you can use it to verify newly written code, reproduce
+known bugs, prevent regressions, or explore the behavior of complex
+systems. It can be used for both unit tests and larger integration
+tests.
+
+<<SEC_Contents>>
+** Table of Contents
+:PROPERTIES:
+:CUSTOM_ID: table-of-contents
+:CLASS: contents-heading
+:END:
+
+- [[#Introduction][1 Introduction]]
+- [[#How-to-Run-Tests][2 How to Run Tests]]
+  - [[#Running-Tests-Interactively][2.1 Running Tests Interactively]]
+  - [[#Running-Tests-in-Batch-Mode][2.2 Running Tests in Batch Mode]]
+  - [[#Test-Selectors][2.3 Test Selectors]]
+- [[#How-to-Write-Tests][3 How to Write Tests]]
+  - [[#The-should-Macro][3.1 The =should= Macro]]
+  - [[#Expected-Failures][3.2 Expected Failures]]
+  - [[#Tests-and-Their-Environment][3.3 Tests and Their Environment]]
+  - [[#Useful-Techniques][3.4 Useful Techniques when Writing Tests]]
+  - [[#erts-files][3.5 erts files]]
+  - [[#Syntax-Highlighting-Tests][3.6 Syntax Highlighting Tests]]
+  - [[#Helpers-for-Buffers][3.7 Handling Buffers during tests]]
+    - [[#Creating-temporary-buffers][3.7.1 Creating temporary buffers]]
+    - [[#Protecting-buffers][3.7.2 Protecting buffers]]
+  - [[#Helper-Functions][3.8 Various Helper Functions]]
+    - [[#Test-Directories-and-Files][3.8.1 Test Directories and Files]]
+    - [[#Miscellaneous-Utilities][3.8.2 Miscellaneous Utilities]]
+- [[#How-to-Debug-Tests][4 How to Debug Tests]]
+  - [[#Understanding-Explanations][4.1 Understanding Explanations]]
+  - [[#Interactive-Debugging][4.2 Interactive Debugging]]
+- [[#Extending-ERT][5 Extending ERT]]
+  - [[#Defining-Explanation-Functions][5.1 Defining Explanation Functions]]
+  - [[#Low_002dLevel-Functions-for-Working-with-Tests][5.2 Low-Level Functions for Working with Tests]]
+- [[#Other-Testing-Concepts][6 Other Testing Concepts]]
+  - [[#Mocks-and-Stubs][6.1 Other Tools for Emacs Lisp]]
+  - [[#Fixtures-and-Test-Suites][6.2 Fixtures and Test Suites]]
+- [[#Index][Index]]
+- [[#GNU-Free-Documentation-License][Appendix A GNU Free Documentation License]]
+
+--------------
+
+<<Introduction>>
+
+Next: [[#How-to-Run-Tests][How to Run Tests]], Previous:
+[[#Top][ERT: Emacs Lisp Regression Testing]], Up:
+[[#Top][ERT: Emacs Lisp Regression Testing]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+** 1 Introduction [[#Introduction-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Introduction-1
+:CLASS: chapter
+:END:
+ERT allows you to define /tests/ in addition to functions, macros,
+variables, and the other usual Lisp constructs. Tests are simply Lisp
+code: code that invokes other code and checks whether it behaves as
+expected.
+
+ERT keeps track of the tests that are defined and provides convenient
+commands to run them to verify whether the definitions that are
+currently loaded in Emacs pass the tests.
+
+Some Lisp files have comments like the following (adapted from the
+package =pp.el=):
+
+#+begin_src lisp-preformatted
+;; (pp-to-string '(quote quote))          ; expected: "'quote"
+;; (pp-to-string '((quote a) (quote b)))  ; expected: "('a 'b)\n"
+;; (pp-to-string '('a 'b))                ; same as above
+#+end_src
+
+The Lisp forms contained in these comments can be evaluated from time to
+time, e.g. with C-x C-e, to compare the output with the expected output.
+ERT formalizes this and introduces a common convention, which simplifies
+Emacs development, since programmers no longer have to manually find and
+evaluate such comments.
+
+An ERT test definition equivalent to the above comments is this:
+
+#+begin_src lisp-preformatted
+(ert-deftest pp-test-quote ()
+  "Tests the rendering of `quote' symbols in `pp-to-string'."
+  (should (equal (pp-to-string '(quote quote)) "'quote"))
+  (should (equal (pp-to-string '((quote a) (quote b))) "('a 'b)\n"))
+  (should (equal (pp-to-string '('a 'b)) "('a 'b)\n")))
+#+end_src
+
+If you know =defun=, the syntax of =ert-deftest= should look familiar:
+This example defines a test named =pp-test-quote= that will pass if the
+three calls to =equal= all return non-=nil=.
+
+=should= is a macro with the same meaning as =cl-assert= but better
+error reporting. See [[#The-should-Macro][The =should= Macro]].
+
+Each test should have a name that describes what functionality it tests.
+Test names can be chosen arbitrarily---they are in a namespace separate
+from functions and variables---but should follow the usual Emacs Lisp
+convention of having a prefix that indicates which package they belong
+to. Test names are displayed by ERT when reporting failures and can be
+used when selecting which tests to run.
+
+The empty parentheses =()= in the first line don't currently have any
+meaning and are reserved for future extension. They also make the syntax
+of =ert-deftest= more similar to that of =defun=.
+
+The docstring describes what feature this test tests. When running tests
+interactively, the first line of the docstring is displayed for tests
+that fail, so it is good if the first line makes sense on its own.
+
+The body of a test can be arbitrary Lisp code. It should have as few
+side effects as possible; each test should be written to clean up after
+itself, leaving Emacs in the same state as it was before the test. Tests
+should clean up even if they fail. See
+[[#Tests-and-Their-Environment][Tests and Their Environment]].
+
+--------------
+
+<<How-to-Run-Tests>>
+
+Next: [[#How-to-Write-Tests][How to Write Tests]], Previous:
+[[#Introduction][Introduction]], Up:
+[[#Top][ERT: Emacs Lisp Regression Testing]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+** 2 How to Run Tests [[#How-to-Run-Tests-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: How-to-Run-Tests-1
+:CLASS: chapter
+:END:
+You can run tests either in the Emacs you are working in, or on the
+command line in a separate Emacs process in batch mode (i.e., with no
+user interface). The former mode is convenient during interactive
+development, the latter is useful to make sure that tests pass
+independently of your customizations; and it allows you to invoke tests
+from makefiles, and to write scripts that run tests in several different
+Emacs versions.
+
+- [[#Running-Tests-Interactively][Running Tests Interactively]]
+- [[#Running-Tests-in-Batch-Mode][Running Tests in Batch Mode]]
+- [[#Test-Selectors][Test Selectors]]
+
+--------------
+
+<<Running-Tests-Interactively>>
+
+Next: [[#Running-Tests-in-Batch-Mode][Running Tests in Batch Mode]], Up:
+[[#How-to-Run-Tests][How to Run Tests]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 2.1 Running Tests Interactively [[#Running-Tests-Interactively-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Running-Tests-Interactively-1
+:CLASS: section
+:END:
+You can run the tests that are currently defined in your Emacs with the
+command M-x ert RET t RET (which is an alias of
+=ert-run-tests-interactively=). The =t= argument means to run all the
+defined tests, see [[#Test-Selectors][Test Selectors]], which also
+explains how to run only some specific part of the tests. ERT will pop
+up a new buffer, the ERT results buffer, showing the results of the
+tests run. It looks like this:
+
+#+begin_src example-preformatted
+Selector: t
+Passed:  31
+Skipped: 0
+Failed:  2 (2 unexpected)
+Total:   33/33
+
+Started at:   2008-09-11 08:39:25-0700
+Finished.
+Finished at:  2008-09-11 08:39:27-0700
+
+FF...............................
+
+F addition-test
+    (ert-test-failed
+     ((should
+       (=
+        (+ 1 2)
+        4))
+      :form
+      (= 3 4)
+      :value nil))
+
+F list-test
+    (ert-test-failed
+     ((should
+       (equal
+        (list 'a 'b 'c)
+        '(a b d)))
+      :form
+      (equal
+       (a b c)
+       (a b d))
+      :value nil :explanation
+      (list-elt 2
+                (different-atoms c d))))
+#+end_src
+
+At the top, there is a summary of the results: we ran all tests defined
+in the current Emacs (=Selector: t=), 31 of them passed, and 2 failed
+unexpectedly. See [[#Expected-Failures][Expected Failures]], for an
+explanation of the term /unexpected/ in this context.
+
+The line of dots and =F=s is a progress bar where each character
+represents one test; it fills while the tests are running. A dot means
+that the test passed, an =F= means that it failed. Below the progress
+bar, ERT shows details about each test that had an unexpected result. In
+the example above, there are two failures, both due to failed =should=
+forms. See [[#Understanding-Explanations][Understanding Explanations]],
+for more details.
+
+The following key bindings are available in the ERT results buffer:
+
+- <<index-RET_002c-in-ert-results-buffer>>RET
+  [[#index-RET_002c-in-ert-results-buffer][¶]] :: Each name of a
+  function or macro in this buffer is a button; moving point to it and
+  typing RET jumps to its definition.
+
+-  <<index-TAB_002c-in-ert-results-buffer>>TAB
+  [[#index-TAB_002c-in-ert-results-buffer][¶]]\\
+  S-TAB :: Cycle between buttons forward (=forward-button=) and backward
+  (=backward-button=).
+
+-  <<index-r_002c-in-ert-results-buffer>>r
+  [[#index-r_002c-in-ert-results-buffer][¶]] :: Re-run the test near
+  point on its own (=ert-results-rerun-test-at-point=).
+
+-  <<index-d_002c-in-ert-results-buffer>>d
+  [[#index-d_002c-in-ert-results-buffer][¶]] :: Re-run the test near
+  point on its own with the debugger enabled
+  (=ert-results-rerun-test-at-point-debugging-errors=).
+
+-  <<index-R_002c-in-ert-results-buffer>>R
+  [[#index-R_002c-in-ert-results-buffer][¶]] :: Re-run all tests
+  (=ert-results-rerun-all-tests=).
+
+-  <<index-_002e_002c-in-ert-results-buffer>>.
+  [[#index-_002e_002c-in-ert-results-buffer][¶]] :: Jump to the
+  definition of the test near point
+  (=ert-results-find-test-at-point-other-window=). This has the same
+  effect as RET, but does not require point to be on the name of the
+  test.
+
+-  <<index-b_002c-in-ert-results-buffer>>b
+  [[#index-b_002c-in-ert-results-buffer][¶]] :: Show the backtrace of a
+  failed test (=ert-results-pop-to-backtrace-for-test-at-point=). See
+  [[https://www.gnu.org/software/emacs/manual/html_mono/elisp.html#Debugging][Backtraces]]
+  in GNU Emacs Lisp Reference Manual, for more information about
+  backtraces.
+
+-  <<index-l_002c-in-ert-results-buffer>>l
+  [[#index-l_002c-in-ert-results-buffer][¶]] :: Show the list of
+  =should= forms executed in the test
+  (=ert-results-pop-to-should-forms-for-test-at-point=).
+
+-  <<index-m_002c-in-ert-results-buffer>>m
+  [[#index-m_002c-in-ert-results-buffer][¶]] :: Show any messages that
+  were generated (with the Lisp function =message=) in a test or any of
+  the code that it invoked
+  (=ert-results-pop-to-messages-for-test-at-point=).
+
+-  <<index-L_002c-in-ert-results-buffer>>L
+  [[#index-L_002c-in-ert-results-buffer][¶]] :: By default, long
+  expressions in the failure details are abbreviated using
+  =print-length= and =print-level=. Increase the limits to show more of
+  the expression by moving point to a test failure with this command
+  (=ert-results-toggle-printer-limits-for-test-at-point=).
+
+-  <<index-D_002c-in-ert-results-buffer>>D
+  [[#index-D_002c-in-ert-results-buffer][¶]] :: Delete a test from the
+  running Emacs session (=ert-delete-test=).
+
+-  <<index-h_002c-in-ert-results-buffer>>h
+  [[#index-h_002c-in-ert-results-buffer][¶]] :: Show the documentation
+  of a test (=ert-describe-test=).
+
+-  <<index-T_002c-in-ert-results-buffer>>T
+  [[#index-T_002c-in-ert-results-buffer][¶]] :: Display test timings for
+  the last run (=ert-results-pop-to-timings=).
+
+-  <<index-ert_002ddelete_002dall_002dtests>>M-x ert-delete-all-tests
+  [[#index-ert_002ddelete_002dall_002dtests][¶]] :: Delete all tests
+  from the running session.
+
+- <<index-ert_002dresults_002ddescribe_002dtest_002dat_002dpoint>>M-x
+  ert-describe-test
+  [[#index-ert_002dresults_002ddescribe_002dtest_002dat_002dpoint][¶]] :: Prompt
+  for a test and then show its documentation.
+
+--------------
+
+<<Running-Tests-in-Batch-Mode>>
+
+Next: [[#Test-Selectors][Test Selectors]], Previous:
+[[#Running-Tests-Interactively][Running Tests Interactively]], Up:
+[[#How-to-Run-Tests][How to Run Tests]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 2.2 Running Tests in Batch Mode [[#Running-Tests-in-Batch-Mode-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Running-Tests-in-Batch-Mode-1
+:CLASS: section
+:END:
+ERT supports automated invocations from the command line or from scripts
+or makefiles. There are two functions for this purpose,
+=ert-run-tests-batch= and =ert-run-tests-batch-and-exit=. They can be
+used like this:
+
+#+begin_src example-preformatted
+emacs -batch -l ert -l my-tests.el -f ert-run-tests-batch-and-exit
+#+end_src
+
+This command will start up Emacs in batch mode, load ERT, load
+=my-tests.el=, and run all tests defined in it. It will exit with a zero
+exit status if all tests passed, or nonzero if any tests failed or if
+anything else went wrong. It will also print progress messages and error
+diagnostics to standard output.
+
+You can also redirect the above output to a log file, say =output.log=,
+and use the =ert-summarize-tests-batch-and-exit= function to produce a
+neat summary as shown below:
+
+#+begin_src example-preformatted
+emacs -batch -l ert -f ert-summarize-tests-batch-and-exit output.log
+#+end_src
+
+ERT attempts to limit the output size for failed tests by choosing
+conservative values for =print-level= and =print-length= when printing
+Lisp values. This can in some cases make it difficult to see which
+portions of those values are incorrect. Use =ert-batch-print-level= and
+=ert-batch-print-length= to customize that:
+
+#+begin_src example-preformatted
+emacs -batch -l ert -l my-tests.el \
+      --eval "(let ((ert-batch-print-level 10) \
+                    (ert-batch-print-length 120)) \
+                (ert-run-tests-batch-and-exit))"
+#+end_src
+
+Even modest settings for =print-level= and =print-length= can produce
+extremely long lines in backtraces, however, with attendant pauses in
+execution progress. Set =ert-batch-backtrace-line-length= to =t= to use
+the value of =backtrace-line-length=, =nil= to stop any limitations on
+backtrace line lengths (that is, to get full backtraces), or a positive
+integer to limit backtrace line length to that number.
+
+By default, ERT in batch mode is quite verbose, printing a line with
+result after each test. This gives you progress information: how many
+tests have been executed and how many there are. However, in some cases
+this much output may be undesirable. In this case, set =ert-quiet=
+variable to a non-=nil= value:
+
+#+begin_src example-preformatted
+emacs -batch -l ert -l my-tests.el \
+      --eval "(let ((ert-quiet t)) (ert-run-tests-batch-and-exit))"
+#+end_src
+
+In quiet mode ERT prints only unexpected results and summary.
+
+You can specify selectors to only run a subset of your tests (see
+[[#Test-Selectors][Test Selectors]]). For example, the following would
+run all tests where the name of the test matches the regular expression
+“to-match”.
+
+#+begin_src example-preformatted
+emacs -batch -l ert -l my-tests.el \
+      -eval '(ert-run-tests-batch-and-exit "to-match")'
+#+end_src
+
+By default, ERT test failure summaries are quite brief in batch
+mode---only the names of the failed tests are listed. If the
+=EMACS_TEST_VERBOSE= environment variable is set and is non-empty, the
+failure summaries will also include the data from the failing test.
+
+ERT can produce JUnit test reports in batch mode. If the environment
+variable =EMACS_TEST_JUNIT_REPORT= is set, ERT will produce for every
+test package =my-tests.el= a corresponding JUnit test report
+=my-tests.xml=. The function =ert-summarize-tests-batch-and-exit=
+collects all these package test reports into a new JUnit test report,
+with the respective name of that environment variable.
+
+--------------
+
+<<Test-Selectors>>
+
+Previous: [[#Running-Tests-in-Batch-Mode][Running Tests in Batch Mode]],
+Up: [[#How-to-Run-Tests][How to Run Tests]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 2.3 Test Selectors [[#Test-Selectors-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Test-Selectors-1
+:CLASS: section
+:END:
+Functions like =ert= accept a /test selector/, a Lisp expression
+specifying a set of tests. Test selector syntax is similar to Common
+Lisp's type specifier syntax:
+
+- =nil= selects no tests.
+- =t= selects all tests.
+- =:new= selects all tests that have not been run yet.
+- =:failed= and =:passed= select tests according to their most recent
+  result.
+- =:expected=, =:unexpected= select tests according to their most recent
+  result.
+- A string is a regular expression that selects all tests with matching
+  names.
+- A test (i.e., an object of =ert-test= data type, see its doc string
+  for details) selects that test.
+- A symbol selects the test that the symbol names.
+- =(member ==tests==...)= selects the elements of =tests=, a list of
+  tests or symbols naming tests.
+- =(eql ==test==)= selects =test=, a test or a symbol naming a test.
+- =(and ==selectors==…)= selects the tests that match all =selectors=.
+- =(or ==selectors==…)= selects the tests that match any of the
+  =selectors=.
+- =(not ==selector==)= selects all tests that do not match =selector=.
+- =(tag ==tag==)= selects all tests that have =tag= on their tags list.
+  (Tags are optional labels you can apply to tests when you define
+  them.)
+- =(satisfies ==predicate==)= selects all tests that satisfy
+  =predicate=, a function that takes a test as argument and returns
+  non-=nil= if it is selected.
+
+Selectors that are frequently useful when selecting tests to run include
+=t= to run all tests that are currently defined in Emacs, ="^foo-"= to
+run all tests in package =foo= (this assumes that package =foo= uses the
+prefix =foo-= for its test names), result-based selectors such as
+=(or :new :unexpected)= to run all tests that have either not run yet or
+that had an unexpected result in the last run, and tag-based selectors
+such as =(not (tag :causes-redisplay))= to run all tests that are not
+tagged =:causes-redisplay=.
+
+--------------
+
+<<How-to-Write-Tests>>
+
+Next: [[#How-to-Debug-Tests][How to Debug Tests]], Previous:
+[[#How-to-Run-Tests][How to Run Tests]], Up:
+[[#Top][ERT: Emacs Lisp Regression Testing]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+** 3 How to Write Tests [[#How-to-Write-Tests-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: How-to-Write-Tests-1
+:CLASS: chapter
+:END:
+ERT lets you define tests in the same way you define functions. You can
+type =ert-deftest= forms in a buffer and evaluate them there with
+=eval-defun= or =compile-defun=, or you can save the file and load it,
+optionally byte-compiling it first.
+
+Just like =find-function= is able to find where a function was defined
+only if the function was loaded from a file, ERT is able to find where a
+test was defined only if the test was loaded from a file.
+
+If the test definition is generated by a macro, the macro may want to
+help ERT find the defining call to the macro by putting the property
+=find-function-type-alist= on the test name. See
+[[https://www.gnu.org/software/emacs/manual/html_mono/elisp.html#Finding-Definitions][Finding Definitions]]
+in GNU Emacs Lisp Reference Manual.
+
+- [[#The-should-Macro][The =should= Macro]]
+- [[#Expected-Failures][Expected Failures]]
+- [[#Tests-and-Their-Environment][Tests and Their Environment]]
+- [[#Useful-Techniques][Useful Techniques when Writing Tests]]
+- [[#erts-files][erts files]]
+- [[#Syntax-Highlighting-Tests][Syntax Highlighting Tests]]
+- [[#Helpers-for-Buffers][Handling Buffers during tests]]
+- [[#Helper-Functions][Various Helper Functions]]
+
+--------------
+
+<<The-should-Macro>>
+
+Next: [[#Expected-Failures][Expected Failures]], Up:
+[[#How-to-Write-Tests][How to Write Tests]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 3.1 The =should= Macro [[#The-should-Macro-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: The-should-Macro-1
+:CLASS: section
+:END:
+Test bodies can include arbitrary code; but to be useful, they need to
+check whether the code being tested (or /code under test/) does what it
+is supposed to do. The macro =should= is similar to =cl-assert= from the
+cl package (see
+[[https://www.gnu.org/software/emacs/manual/html_mono/cl.html#Assertions][Assertions]]
+in Common Lisp Extensions), but analyzes its argument form and records
+information that ERT can display to help debugging.
+
+This test definition
+
+#+begin_src lisp-preformatted
+(ert-deftest addition-test ()
+  (should (= (+ 1 2) 4)))
+#+end_src
+
+will produce this output when run via M-x ert:
+
+#+begin_src example-preformatted
+F addition-test
+    (ert-test-failed
+     ((should
+       (=
+        (+ 1 2)
+        4))
+      :form
+      (= 3 4)
+      :value nil))
+#+end_src
+
+In this example, =should= recorded the fact that (= (+ 1 2) 4) reduced
+to (= 3 4) before it reduced to =nil=. When debugging why the test
+failed, it helps to know that the function =+= returned 3 here. ERT
+records the return value for any predicate called directly within
+=should=.
+
+In addition to =should=, ERT provides =should-not=, which checks that
+the predicate returns =nil=, and =should-error=, which checks that the
+form called within it signals an error. An example use of
+=should-error=:
+
+#+begin_src lisp-preformatted
+(ert-deftest test-divide-by-zero ()
+  (should-error (/ 1 0)
+                :type 'arith-error))
+#+end_src
+
+This checks that dividing one by zero signals an error of type
+=arith-error=. The =:type= argument to =should-error= is optional; if
+absent, any type of error is accepted. =should-error= returns an error
+description of the error that was signaled, to allow additional checks
+to be made. The error description has the format
+=(ERROR-SYMBOL . DATA)=.
+
+There is no =should-not-error= macro since tests that signal an error
+fail anyway, so =should-not-error= is effectively the default.
+
+See [[#Understanding-Explanations][Understanding Explanations]], for
+more details on what =should= reports.
+
+--------------
+
+<<Expected-Failures>>
+
+Next: [[#Tests-and-Their-Environment][Tests and Their Environment]],
+Previous: [[#The-should-Macro][The =should= Macro]], Up:
+[[#How-to-Write-Tests][How to Write Tests]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 3.2 Expected Failures [[#Expected-Failures-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Expected-Failures-1
+:CLASS: section
+:END:
+Some bugs are complicated to fix, or not very important, and are left as
+/known bugs/. If there is a test case that triggers the bug and fails,
+ERT will alert you of this failure every time you run all tests. For
+known bugs, this alert is a distraction. The way to suppress it is to
+add =:expected-result :failed= to the test definition:
+
+#+begin_src lisp-preformatted
+(ert-deftest future-bug ()
+  "Test `time-forward' with negative arguments.
+Since this functionality isn't implemented, the test is known to fail."
+  :expected-result :failed
+  (time-forward -1))
+#+end_src
+
+ERT will still display a small =f= in the progress bar as a reminder
+that there is a known bug, and will count the test as failed, but it
+will be quiet about it otherwise.
+
+An alternative to marking the test as a known failure this way is to
+delete the test. This is a good idea if there is no intent to fix it,
+i.e., if the behavior that was formerly considered a bug has become an
+accepted feature.
+
+In general, however, it can be useful to keep tests that are known to
+fail. If someone wants to fix the bug, they will have a very good
+starting point: an automated test case that reproduces the bug. This
+makes it much easier to fix the bug, demonstrate that it is fixed, and
+prevent future regressions.
+
+ERT displays the same kind of alerts for tests that pass unexpectedly as
+it displays for unexpected failures. This way, if you make code changes
+that happen to fix a bug that you weren't aware of, you will know to
+remove the =:expected-result= clause of that test and close the
+corresponding bug report, if any.
+
+Since =:expected-result= evaluates its argument when the test is loaded,
+tests can be marked as known failures only on certain Emacs versions,
+specific architectures, etc.:
+
+#+begin_src lisp-preformatted
+(ert-deftest foo ()
+  "A test that is expected to fail on Emacs 23 but succeed elsewhere."
+  :expected-result (if (string-match "GNU Emacs 23[.]" (emacs-version))
+                       :failed
+                     :passed)
+  ...)
+#+end_src
+
+--------------
+
+<<Tests-and-Their-Environment>>
+
+Next: [[#Useful-Techniques][Useful Techniques when Writing Tests]],
+Previous: [[#Expected-Failures][Expected Failures]], Up:
+[[#How-to-Write-Tests][How to Write Tests]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 3.3 Tests and Their Environment [[#Tests-and-Their-Environment-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Tests-and-Their-Environment-1
+:CLASS: section
+:END:
+Sometimes, it doesn't make sense to run a test due to missing
+preconditions. A required Emacs feature might not be compiled in, the
+function to be tested could call an external binary which might not be
+available on the test machine, you name it. In this case, the macros
+=skip-when= or =skip-unless= could be used to skip the
+test.[[#FOOT1][^{1}]]
+
+For example, this test is skipped on MS-Windows and macOS:
+
+#+begin_src lisp-preformatted
+(ert-deftest test-gnu-linux ()
+  "A test that is not relevant on MS-Windows and macOS."
+  (skip-when (memq system-type '(windows-nt ns))
+  ...))
+#+end_src
+
+This test is skipped if the feature ‘=dbusbind=' is not present in the
+running Emacs:
+
+#+begin_src lisp-preformatted
+(ert-deftest test-dbus ()
+  "A test that checks D-BUS functionality."
+  (skip-unless (featurep 'dbusbind))
+  ...)
+#+end_src
+
+The outcome of running a test should not depend on the current state of
+the environment, and each test should leave its environment in the same
+state it found it in. In particular, a test should not depend on any
+Emacs customization variables or hooks, and if it has to make any
+changes to Emacs's state or state external to Emacs (such as the file
+system), it should undo these changes before it returns, regardless of
+whether it passed or failed.
+
+Tests should not depend on the environment because any such dependencies
+can make the test brittle or lead to failures that occur only under
+certain circumstances and are hard to reproduce. Of course, the code
+under test may have settings that affect its behavior. In that case, it
+is best to make the test =let=-bind all such setting variables to set up
+a specific configuration for the duration of the test. The test can also
+set up a number of different configurations and run the code under test
+with each.
+
+Tests that have side effects on their environment should restore it to
+its original state because any side effects that persist after the test
+can disrupt the workflow of the programmer running the tests. If the
+code under test has side effects on Emacs's current state, such as on
+the current buffer or window configuration, the test should create a
+temporary buffer for the code to manipulate (using =with-temp-buffer=),
+or save and restore the window configuration (using
+=save-window-excursion=), respectively. For aspects of the state that
+can not be preserved with such macros, cleanup should be performed with
+=unwind-protect=, to ensure that the cleanup occurs even if the test
+fails.
+
+An exception to this are messages that the code under test prints with
+=message= and similar logging; tests should not bother restoring the
+=*Message*= buffer to its original state.
+
+The above guidelines imply that tests should avoid calling highly
+customizable commands such as =find-file=, except, of course, if such
+commands are what they want to test. The exact behavior of =find-file=
+depends on many settings such as =find-file-wildcards=,
+=enable-local-variables=, and =auto-mode-alist=. It is difficult to
+write a meaningful test if its behavior can be affected by so many
+external factors. Also, =find-file= has side effects that are hard to
+predict and thus hard to undo: It may create a new buffer or reuse an
+existing buffer if one is already visiting the requested file; and it
+runs =find-file-hook=, which can have arbitrary side effects.
+
+Instead, it is better to use lower-level mechanisms with simple and
+predictable semantics like =with-temp-buffer=, =insert= or
+=insert-file-contents-literally=, and to activate any desired mode by
+calling the corresponding function directly, after binding the hook
+variables to =nil=. This avoids the above problems.
+
+--------------
+
+<<Useful-Techniques>>
+
+Next: [[#erts-files][erts files]], Previous:
+[[#Tests-and-Their-Environment][Tests and Their Environment]], Up:
+[[#How-to-Write-Tests][How to Write Tests]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 3.4 Useful Techniques when Writing Tests [[#Useful-Techniques-when-Writing-Tests][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Useful-Techniques-when-Writing-Tests
+:CLASS: section
+:END:
+Testing simple functions that have no side effects and no dependencies
+on their environment is easy. Such tests often look like this:
+
+#+begin_src lisp-preformatted
+(ert-deftest ert-test-mismatch ()
+  (should (eql (cl-mismatch "" "") nil))
+  (should (eql (cl-mismatch "" "a") 0))
+  (should (eql (cl-mismatch "a" "a") nil))
+  (should (eql (cl-mismatch "ab" "a") 1))
+  (should (eql (cl-mismatch "Aa" "aA") 0))
+  (should (eql (cl-mismatch '(a b c) '(a b d)) 2)))
+#+end_src
+
+This test calls the function =cl-mismatch= several times with various
+combinations of arguments and compares the return value to the expected
+return value. (Some programmers prefer =(should (eql EXPECTED ACTUAL))=
+over the =(should (eql ACTUAL EXPECTED))= shown here. ERT works either
+way.)
+
+Here's a more complicated test:
+
+#+begin_src lisp-preformatted
+(ert-deftest ert-test-record-backtrace ()
+  (let ((test (make-ert-test :body (lambda () (ert-fail "foo")))))
+    (let ((result (ert-run-test test)))
+      (should (ert-test-failed-p result))
+      (with-temp-buffer
+        (ert--print-backtrace (ert-test-failed-backtrace result))
+        (goto-char (point-min))
+        (end-of-line)
+        (let ((first-line (buffer-substring-no-properties
+                           (point-min) (point))))
+          (should (equal first-line
+                         "  signal(ert-test-failed (\"foo\"))")))))))
+#+end_src
+
+This test creates a test object using =make-ert-test= whose body will
+immediately signal failure. It then runs that test and asserts that it
+fails. Then, it creates a temporary buffer and invokes
+=ert--print-backtrace= to print the backtrace of the failed test to the
+current buffer. Finally, it extracts the first line from the buffer and
+asserts that it matches what we expect. It uses
+=buffer-substring-no-properties= and =equal= to ignore text properties;
+for a test that takes properties into account, =buffer-substring= and
+=equal-including-properties= could be used instead.
+
+The reason why this test only checks the first line of the backtrace is
+that the remainder of the backtrace is dependent on ERT's internals as
+well as whether the code is running interpreted or compiled. By looking
+only at the first line, the test checks a useful property---that the
+backtrace correctly captures the call to =signal= that results from the
+call to =ert-fail=---without being brittle.
+
+This example also shows that writing tests is much easier if the code
+under test was structured with testing in mind.
+
+For example, if =ert-run-test= accepted only symbols that name tests
+rather than test objects, the test would need a name for the failing
+test, which would have to be a temporary symbol generated with
+=make-symbol=, to avoid side effects on Emacs's state. Choosing the
+right interface for =ert-run-tests= allows the test to be simpler.
+
+Similarly, if =ert--print-backtrace= printed the backtrace to a buffer
+with a fixed name rather than the current buffer, it would be much
+harder for the test to undo the side effect. Of course, some code
+somewhere needs to pick the buffer name. But that logic is independent
+of the logic that prints backtraces, and keeping them in separate
+functions allows us to test them independently.
+
+A lot of code that you will encounter in Emacs was not written with
+testing in mind. Sometimes, the easiest way to write tests for such code
+is to restructure the code slightly to provide better interfaces for
+testing. Usually, this makes the interfaces easier to use as well.
+
+--------------
+
+<<erts-files>>
+
+Next: [[#Syntax-Highlighting-Tests][Syntax Highlighting Tests]],
+Previous: [[#Useful-Techniques][Useful Techniques when Writing Tests]],
+Up: [[#How-to-Write-Tests][How to Write Tests]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 3.5 erts files [[#erts-files-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: erts-files-1
+:CLASS: section
+:END:
+Many relevant Emacs tests depend on comparing the contents of a buffer
+before and after executing a particular function. These tests can be
+written the normal way---making a temporary buffer, inserting the
+“before” text, running the function, and then comparing with the
+expected “after” text. However, this often leads to test code that's
+pretty difficult to read and write, especially when the text in question
+is multi-line.
+
+So ert provides a function called =ert-test-erts-file= that takes two
+parameters: the name of a specially-formatted /erts/ file, and
+(optionally) a function that performs the transform.
+
+These erts files can be edited with the =erts-mode= major mode.
+
+An erts file is divided into sections by the (‘==-==') separator.
+
+Here's an example file containing two tests:
+
+#+begin_src example-preformatted
+Name: flet
+
+=-=
+(cl-flet ((bla (x)
+(* x x)))
+(bla 42))
+=-=
+(cl-flet ((bla (x)
+            (* x x)))
+  (bla 42))
+=-=-=
+
+Name: defun
+
+=-=
+(defun x ()
+  (print (quote ( thingy great
+                  stuff))))
+=-=-=
+#+end_src
+
+A test starts with a line containing just ‘==-==' and ends with a line
+containing just ‘==-=-=='. The test may be preceded by freeform text
+(for instance, comments), and also name/value pairs (see below for a
+list of them).
+
+If there is a line with ‘==-==' inside the test, that designates the
+start of the “after” text. Otherwise, the “before” and “after” texts are
+assumed to be identical, which you typically see when writing
+indentation tests.
+
+=ert-test-erts-file= puts the “before” section into a temporary buffer,
+calls the transform function, and then compares with the “after”
+section.
+
+Here's an example usage:
+
+#+begin_src lisp-preformatted
+(ert-test-erts-file "elisp.erts"
+                    (lambda ()
+                      (emacs-lisp-mode)
+                      (indent-region (point-min) (point-max))))
+#+end_src
+
+A list of the name/value specifications that can appear before a test
+follows. The general syntax is ‘=Name: Value=', but continuation lines
+can be used (along the same lines as in mail---subsequent lines that
+start with a space are part of the value).
+
+#+begin_src example-preformatted
+Name: foo
+Code: (indent-region
+        (point-min) (point-max))
+#+end_src
+
+- ‘=Name=' :: All tests should have a name. This name will appear in ERT
+  output if the test fails, and helps to identify the failing test.
+
+- ‘=Code=' :: This is the code that will be run to do the transform.
+  This can also be passed in via the =ert-test-erts-file= call, but
+  ‘=Code=' overrides that. It's used not only in the following test, but
+  in all subsequent tests in the file (until overridden by another
+  ‘=Code=' specification).
+
+- ‘=No-Before-Newline='\\
+  ‘=No-After-Newline=' :: These specifications say whether the “before”
+  or “after” portions have a newline at the end. (This would otherwise
+  be impossible to specify.)
+
+- ‘=Point-Char=' :: Sometimes it's useful to be able to put point at a
+  specific place before executing the transform function.
+  ‘=Point-Char: |=' will make =ert-test-erts-file= place point where
+  ‘=|=' is in the “before” form (and remove that character), and will
+  check that it's where the ‘=|=' character is in the “after” form (and
+  issue a test failure if that isn't the case). (This is used in all
+  subsequent tests, unless overridden by a new ‘=Point-Char=' spec.)
+
+- <<index-skipping-tests_002c-in-erts-file>>‘=Skip='
+  [[#index-skipping-tests_002c-in-erts-file][¶]] :: If this is present
+  and value is a form that evaluates to a non-=nil= value, the test will
+  be skipped.
+
+If you need to use the literal line single line ‘==-==' in a test
+section, you can quote it with a ‘=\=' character.
+
+--------------
+
+<<Syntax-Highlighting-Tests>>
+
+Next: [[#Helpers-for-Buffers][Handling Buffers during tests]], Previous:
+[[#erts-files][erts files]], Up:
+[[#How-to-Write-Tests][How to Write Tests]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 3.6 Syntax Highlighting Tests [[#Syntax-Highlighting-Tests-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Syntax-Highlighting-Tests-1
+:CLASS: section
+:END:
+Syntax highlighting is normally provided by the Font Lock minor mode
+that assigns face properties to parts of the buffer. The =ert-font-lock=
+package makes it possible to introduce unit tests checking face
+assignment. Test assertions are included in code-level comments directly
+and can be read either from inline strings or files. The parser expects
+the input string to contain at least one assertion.
+
+The test assertion parser extracts tests from comment-only lines. Every
+comment assertion line starts either with a caret (‘=^=') or an arrow
+(‘=<-='). A single caret/arrow or carets should be followed immediately
+by the name of a face or a list of faces to be checked against the
+=:face= property at point.
+
+The test then checks if the first non-assertion column above the caret
+contains a face expected by the assertion:
+
+#+begin_src example-preformatted
+var variable = 11;
+//   ^ font-lock-variable-name-face
+//             ^ font-lock-literal-face
+//               ^ font-lock-punctuation-face
+// this is not an assertion, it's just a comment
+//   ^ font-lock-comment-face
+
+// multiple carets per line
+// ^^^^     ^    ^ font-lock-comment-face
+#+end_src
+
+Both symbol-only =:face= property values and assertion face values are
+normalized to single element lists so the assertions below are
+equivalent:
+
+#+begin_src example-preformatted
+// single
+// ^ font-lock-comment-face
+// single
+// ^ (font-lock-comment-face)
+#+end_src
+
+Assertions can be negated:
+
+#+begin_src example-preformatted
+var variable = 11;
+//  ^ !font-lock-comment-face
+#+end_src
+
+It is possible to specify face lists in assertions:
+
+#+begin_src example-preformatted
+// TODO
+// ^^^^ (font-lock-comment-face hl-todo)
+     var test = 1;
+// ^    ()
+// ^    nil
+//   negation works as expected
+//   ^  !nil
+#+end_src
+
+The arrow (‘=<-=') means that the first non-empty column of the
+assertion line will be used for the check:
+
+#+begin_src example-preformatted
+var variable = 1;
+// <- font-lock-keyword-face
+  11;
+   // <- font-lock-literal-face
+#+end_src
+
+The =ert-font-lock-test-string= function extracts ERT assertions from an
+inline string. The =javascript-mode= symbol below specifies the major
+mode used for comments and font locking:
+
+#+begin_src lisp-preformatted
+(ert-deftest test-font-lock-test-string--correct ()
+  (ert-font-lock-test-string
+   "
+var abc = function(d) {
+// <- font-lock-keyword-face
+//   ^ font-lock-variable-name-face
+    //        ^ font-lock-keyword-face
+    //             ^ font-lock-variable-name-face
+};
+"
+   'javascript-mode))
+#+end_src
+
+It is also possible to extract test assertions from a file:
+
+#+begin_src lisp-preformatted
+(ert-deftest test-font-lock-test-file--correct ()
+  (ert-font-lock-test-file
+   (ert-resource-file "correct.js")
+   'javascript-mode))
+#+end_src
+
+The =ert-font-lock-deftest= macro simplifies inline test definition:
+
+#+begin_src lisp-preformatted
+(ert-font-lock-deftest test-macro-test--inline
+  emacs-lisp-mode
+  "
+(defun fun ())
+;; ^ font-lock-keyword-face
+;;      ^ font-lock-function-name-face")
+#+end_src
+
+The =ert-font-lock-deftest-file= macro reads assertions from a file:
+
+#+begin_src lisp-preformatted
+(ert-font-lock-deftest-file test-macro-test--file
+  "Test reading correct assertions from a file."
+  javascript-mode
+  "correct.js")
+#+end_src
+
+The =ert-font-lock-deftest= and =ert-font-lock-deftest-file= macros
+accept the same keyword arguments as =ert-deftest=, i.e., =:tag= and
+=:expected-result=.
+
+--------------
+
+<<Helpers-for-Buffers>>
+
+Next: [[#Helper-Functions][Various Helper Functions]], Previous:
+[[#Syntax-Highlighting-Tests][Syntax Highlighting Tests]], Up:
+[[#How-to-Write-Tests][How to Write Tests]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 3.7 Handling Buffers during tests [[#Handling-Buffers-during-tests][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Handling-Buffers-during-tests
+:CLASS: section
+:END:
+ERT comes with some macros for dealing with buffers used when testing.
+
+- [[#Creating-temporary-buffers][Creating temporary buffers]]
+- [[#Protecting-buffers][Protecting buffers]]
+
+<<Creating-temporary-buffers>>
+**** 3.7.1 Creating temporary buffers [[#Creating-temporary-buffers][¶]]
+:PROPERTIES:
+:CUSTOM_ID: creating-temporary-buffers
+:CLASS: subsection
+:END:
+The =ert-with-test-buffer= macro can be used to create a temporary
+buffer during a test, which is cleaned up automatically if the test is
+successful. But if the test fails, the buffer stays around so that you
+can more easily investigate the test failure. When you are done, you can
+use the command =ert-kill-all-test-buffers= to kill all test buffers
+that have been created by this macro.
+
+- Macro: *ert-with-test-buffer*
+  =((&key ((:name name-form :selected select-form))) &body body)=
+  [[#index-ert_002dwith_002dtest_002dbuffer][¶]] :: This macro creates a
+  test buffer and runs =body= in that buffer. If =body= finishes
+  successfully, the test buffer is killed; if there is an error, the
+  test buffer is kept around for further inspection. The return value is
+  the last form in =body=.
+
+  The test buffer name is derived from the name of the ERT test and the
+  result of =NAME-FORM=. Example:
+
+  #+begin_src lisp-preformatted
+  (ert-deftest backtrace-tests--variables ()
+    (ert-with-test-buffer (:name "variables")
+      ...))
+  #+end_src
+
+  This uses the test buffer
+  =*Test buffer (backtrace-tests--variables): variables*=.
+
+  If =select-form= is non-nil, select the buffer after creating it. This
+  has the same effect as combining =ert-with-test-buffer= with
+  =ert-with-buffer-selected=. Example:
+
+  #+begin_src lisp-preformatted
+  (ert-deftest whitespace-tests--global ()
+    (ert-with-test-buffer (:name "global" :selected t)
+      ...))
+  #+end_src
+
+- Macro: *ert-with-buffer-selected* =(buffer &body body)=
+  [[#index-ert_002dwith_002dbuffer_002dselected][¶]] :: The macro
+  display a buffer in a temporary selected window and runs =body=. If
+  =buffer= is =nil=, the current buffer is used.
+
+  The buffer is made the current buffer, and the temporary window
+  becomes the =selected-window=, before =body= is evaluated. The
+  modification hooks =before-change-functions= and
+  =after-change-functions= are not inhibited during the evaluation of
+  =body=, which makes it easier to use =execute-kbd-macro= to simulate
+  user interaction. The window configuration is restored before
+  returning, even if =body= exits nonlocally. The return value is the
+  last form in =body=. Example:
+
+  #+begin_src lisp-preformatted
+  (with-temp-buffer
+    (ert-with-buffer-selected nil
+      ...))
+  #+end_src
+
+  This displays a temporary buffer like = *temp*-739785*=.
+
+<<Protecting-buffers>>
+**** 3.7.2 Protecting buffers [[#Protecting-buffers][¶]]
+:PROPERTIES:
+:CUSTOM_ID: protecting-buffers
+:CLASS: subsection
+:END:
+- Macro: *ert-with-buffer-renamed* =((buffer-name-form) &body body)=
+  [[#index-ert_002dwith_002dbuffer_002drenamed][¶]] :: This macro
+  protects the buffer =buffer-name= from side-effects and runs =body=.
+  It renames the buffer =buffer-name= to a new temporary name, creates a
+  new buffer named =buffer-name=, executes =body=, kills the new buffer,
+  and renames the original buffer back to =buffer-name=.
+
+  This is useful if =body= has undesirable side-effects on an Emacs
+  buffer with a fixed name such as =*Messages*=. Example:
+
+  #+begin_src lisp-preformatted
+  (ert-with-buffer-renamed ("*Messages*") ...)
+  #+end_src
+
+--------------
+
+<<Helper-Functions>>
+
+Previous: [[#Helpers-for-Buffers][Handling Buffers during tests]], Up:
+[[#How-to-Write-Tests][How to Write Tests]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 3.8 Various Helper Functions [[#Various-Helper-Functions][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Various-Helper-Functions
+:CLASS: section
+:END:
+The package =ert-x.el= contains some macros and functions useful for
+writing tests.
+
+- Macro: *ert-with-message-capture* =(var &rest body)=
+  [[#index-ert_002dwith_002dmessage_002dcapture][¶]] :: This macro
+  executes =body= while collecting messages in =var=. It captures
+  messages issued by Lisp code and concatenates them separated by
+  newlines into one string. This includes messages written by =message=
+  as well as objects printed by =print=, =prin1= and =princ= to the echo
+  area. Messages issued from C code using the above mentioned functions
+  will not be captured.
+
+  This is useful for separating the issuance of messages by the code
+  under test from the behavior of the =*Messages*= buffer. Example:
+
+  #+begin_src lisp-preformatted
+  (ert-with-message-capture captured-messages ...)
+  #+end_src
+
+- [[#Test-Directories-and-Files][Test Directories and Files]]
+- [[#Miscellaneous-Utilities][Miscellaneous Utilities]]
+
+<<Test-Directories-and-Files>>
+**** 3.8.1 Test Directories and Files [[#Test-Directories-and-Files][¶]]
+:PROPERTIES:
+:CUSTOM_ID: test-directories-and-files
+:CLASS: subsection
+:END:
+- Macro: *ert-resource-directory* =()=
+  [[#index-ert_002dresource_002ddirectory][¶]] :: It returns the
+  absolute file name of the resource (test data) directory. The path to
+  the resource directory is the =resources= directory in the same
+  directory as the test file this is called from.
+
+  If that directory doesn't exist, find a directory based on the test
+  file name. If the test file is named =foo-tests.el=, it returns the
+  absolute file name for =foo-resources=. Example:
+
+  #+begin_src lisp-preformatted
+  (let ((dir (ert-resource-directory)))
+    ...)
+  #+end_src
+
+  In order to use a different resource directory naming scheme, the
+  variable =ert-resource-directory-format= can be changed. Before
+  formatting, the file name will be trimmed using =string-trim= with
+  arguments =ert-resource-directory-trim-left-regexp= and
+  =ert-resource-directory-trim-right-regexp=. Example:
+
+  #+begin_src lisp-preformatted
+  (let* ((ert-resource-directory-format "test-resources-%s/")
+         (ert-resource-directory-trim-left-regexp ".*/")
+         (dir (ert-resource-directory)))
+    ...)
+  #+end_src
+
+  uses the absolute file name for =test-resources-foo=.
+
+- Macro: *ert-resource-file* =(file)=
+  [[#index-ert_002dresource_002dfile][¶]] :: It returns the absolute
+  file name of resource (test data) file named =file=, which should be a
+  relative file name. A resource file is defined as any file placed in
+  the resource directory as returned by =ert-resource-directory=.
+  Example:
+
+  #+begin_src lisp-preformatted
+  (let ((file (ert-resource-file "bar/baz")))
+    ...)
+  #+end_src
+
+  It returns the absolute file name for =foo-resources/bar/baz= when
+  called in test file =foo-tests.el=.
+
+- Macro: *ert-with-temp-file* =(name &rest body)=
+  [[#index-ert_002dwith_002dtemp_002dfile][¶]] :: This macro binds
+  =name= to the name of a new temporary file and evaluates =body=. It
+  deletes the temporary file after =body= exits normally or non-locally.
+  =name= will be bound to the file name of the temporary file.
+
+  The following keyword arguments are supported:
+
+  - <<index-ert_002dtemp_002dfile_002dprefix>>=:prefix ==string=
+    [[#index-ert_002dtemp_002dfile_002dprefix][¶]] :: If non-nil, pass
+    =string= to =make-temp-file= as the =prefix= argument. Otherwise,
+    use the value of =ert-temp-file-prefix=.
+
+  - <<index-ert_002dtemp_002dfile_002dsuffix>>=:suffix ==string=
+    [[#index-ert_002dtemp_002dfile_002dsuffix][¶]] :: If non-nil, pass
+    =string= to =make-temp-file= as the =suffix= argument. Otherwise,
+    use the value of =ert-temp-file-suffix=; if the value of that
+    variable is nil, generate a suffix based on the name of the file
+    that =ert-with-temp-file= is called from.
+
+  - =:text ==string= :: If non-nil, pass =string= to =make-temp-file= as
+    the =text= argument.
+
+  - =:buffer ==symbol= :: Open the temporary file using
+    =find-file-noselect= and bind =symbol= to the buffer. Kill the
+    buffer after =body= exits normally or non-locally.
+
+  - =:coding ==coding= :: If non-nil, bind =coding-system-for-write= to
+    =coding= when executing =body=. This is handy when =string= includes
+    non-ASCII characters or the temporary file must have a specific
+    encoding or end-of-line format.
+
+  Example:
+
+  #+begin_src lisp-preformatted
+  (ert-with-temp-file temp-file
+    :prefix "foo"
+    :suffix "bar"
+    :text "foobar3"
+    ...)
+  #+end_src
+
+- Macro: *ert-with-temp-directory* =(name &rest body)=
+  [[#index-ert_002dwith_002dtemp_002ddirectory][¶]] :: This macro binds
+  =name= to the name of a new temporary directory and evaluates =body=.
+  It deletes the temporary directory after =body= exits normally or
+  non-locally.
+
+  =name= is bound to the directory name, not the directory file name.
+  (In other words, it will end with the directory delimiter; on
+  Unix-like systems, it will end with ="/"=.)
+
+  The same keyword arguments are supported as in =ert-with-temp-file=,
+  except for =:text=. Example:
+
+  #+begin_src lisp-preformatted
+  (ert-with-temp-directory temp-dir
+    :prefix "foo"
+    :suffix "bar"
+    ...)
+  #+end_src
+
+- Variable: *ert-remote-temporary-file-directory*
+  [[#index-ert_002dremote_002dtemporary_002dfile_002ddirectory][¶]] :: This
+  variable provides the name of a temporary directory for remote file
+  tests. Per default, a mock-up connection method is used (this might
+  not be possible when running on MS Windows). The default value is
+  ="/mock::/tmp/"=.
+
+  If a real remote connection shall be used for testing, this can be
+  overwritten by the environment variable
+  =REMOTE_TEMPORARY_FILE_DIRECTORY=. Example:
+
+  #+begin_src example-preformatted
+  # env REMOTE_TEMPORARY_FILE_DIRECTORY=/ssh:host:/tmp make ...
+  #+end_src
+
+<<Miscellaneous-Utilities>>
+**** 3.8.2 Miscellaneous Utilities [[#Miscellaneous-Utilities][¶]]
+:PROPERTIES:
+:CUSTOM_ID: miscellaneous-utilities
+:CLASS: subsection
+:END:
+- Function: *ert-simulate-command* =(command)=
+  [[#index-ert_002dsimulate_002dcommand][¶]] :: Simulate calling
+  =command= the way the Emacs command loop would call it. It runs hooks
+  like =pre-command-hook= and =post-command-hook=, and sets variables
+  like =this-command= and =last-command=.
+
+  =command= should be a list where the =car= is the command symbol and
+  the rest are arguments to the command. Example:
+
+  #+begin_src lisp-preformatted
+  (ert-simulate-command '(find-file "project/foo.c"))
+  #+end_src
+
+  *Note*: Since the command is not called by =call-interactively=, a
+  test for =(called-interactively-p 'interactive)= in the command will
+  fail.
+
+- Macro: *ert-simulate-keys* =(keys &rest body)=
+  [[#index-ert_002dsimulate_002dkeys][¶]] :: This executes =body= with
+  =keys= as pseudo-interactive input. =keys= is either a string, a list
+  of characters, or a character vector. Examples:
+
+  #+begin_src lisp-preformatted
+  (ert-simulate-keys '(?n ?\C-m) ...)
+  (ert-simulate-keys "\r\r\r\ry\r" ...)
+  (ert-simulate-keys (kbd "#fake C-m C-a C-k C-m") ...)
+  (ert-simulate-keys [?b ?2 return] ...)
+  #+end_src
+
+- Function: *ert-filter-string* =(s &rest regexps)=
+  [[#index-ert_002dfilter_002dstring][¶]] :: This function returns a
+  copy of string =s= with all matches of =regexps= removed. Elements of
+  =regexps= may also be two-element lists =(==regexp== ==subexp==)=,
+  where =subexp= is the number of a subexpression in =regexp=. In that
+  case, only that subexpression will be removed rather than the entire
+  match. Example:
+
+  #+begin_src lisp-preformatted
+  (with-current-buffer ...
+   (ert-filter-string (buffer-string)
+    '("Started at:\\(.*\\)$" 1)
+    '("Finished at:\\(.*\\)$" 1))
+   ...)
+  #+end_src
+
+- Function: *ert-propertized-string* =(&rest args)=
+  [[#index-ert_002dpropertized_002dstring][¶]] :: This function returns
+  a string with properties as specified by =args=.
+
+  =args= is a list of strings and plists. The strings in =args= are
+  concatenated to produce an output string. In the output string, each
+  string from =args= will have the preceding plist as its property list,
+  or no properties if there is no plist before it. Example:
+
+  #+begin_src lisp-preformatted
+  (ert-propertized-string "foo " '(face italic) "bar" " baz" nil " quux")
+  #+end_src
+
+  This returns the string ="foo =/=bar baz=/= quux"= where the substring
+  ="=/=bar baz=/="= has a =face= property with the value =italic=.
+
+--------------
+
+<<How-to-Debug-Tests>>
+
+Next: [[#Extending-ERT][Extending ERT]], Previous:
+[[#How-to-Write-Tests][How to Write Tests]], Up:
+[[#Top][ERT: Emacs Lisp Regression Testing]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+** 4 How to Debug Tests [[#How-to-Debug-Tests-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: How-to-Debug-Tests-1
+:CLASS: chapter
+:END:
+This section describes how to use ERT's features to understand why a
+test failed.
+
+- [[#Understanding-Explanations][Understanding Explanations]]
+- [[#Interactive-Debugging][Interactive Debugging]]
+
+--------------
+
+<<Understanding-Explanations>>
+
+Next: [[#Interactive-Debugging][Interactive Debugging]], Up:
+[[#How-to-Debug-Tests][How to Debug Tests]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 4.1 Understanding Explanations [[#Understanding-Explanations-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Understanding-Explanations-1
+:CLASS: section
+:END:
+Failed =should= forms are reported like this:
+
+#+begin_src example-preformatted
+F addition-test
+    (ert-test-failed
+     ((should
+       (=
+        (+ 1 2)
+        4))
+      :form
+      (= 3 4)
+      :value nil))
+#+end_src
+
+ERT shows what the =should= expression looked like and what values its
+subexpressions had: The source code of the assertion was
+=(should (= (+ 1 2) 4))=, which applied the function === to the
+arguments =3= and =4=, resulting in the value =nil=. In this case, the
+test is wrong; it should expect 3 rather than 4.
+
+If a predicate like =equal= is used with =should=, ERT provides a
+so-called /explanation/:
+
+#+begin_src example-preformatted
+F list-test
+    (ert-test-failed
+     ((should
+       (equal
+        (list 'a 'b 'c)
+        '(a b d)))
+      :form
+      (equal
+       (a b c)
+       (a b d))
+      :value nil :explanation
+      (list-elt 2
+                (different-atoms c d))))
+#+end_src
+
+In this case, the function =equal= was applied to the arguments
+=(a b c)= and =(a b d)=. ERT's explanation shows that the item at index
+2 differs between the two lists; in one list, it is the atom c, in the
+other, it is the atom d.
+
+In simple examples like the above, the explanation is unnecessary. But
+in cases where the difference is not immediately apparent, it can save
+time:
+
+#+begin_src example-preformatted
+F test1
+    (ert-test-failed
+     ((should
+       (equal x y))
+      :form
+      (equal a a)
+      :value nil :explanation
+      (different-symbols-with-the-same-name a a)))
+#+end_src
+
+ERT only provides explanations for predicates that have an explanation
+function registered. See
+[[#Defining-Explanation-Functions][Defining Explanation Functions]].
+
+--------------
+
+<<Interactive-Debugging>>
+
+Previous: [[#Understanding-Explanations][Understanding Explanations]],
+Up: [[#How-to-Debug-Tests][How to Debug Tests]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 4.2 Interactive Debugging [[#Interactive-Debugging-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Interactive-Debugging-1
+:CLASS: section
+:END:
+Debugging failed tests essentially works the same way as debugging any
+other problems with Lisp code. Here are a few tricks specific to tests:
+
+-  Re-run the failed test a few times to see if it fails in the same way
+  each time. It's good to find out whether the behavior is deterministic
+  before spending any time looking for a cause. In the ERT results
+  buffer, r re-runs the selected test.
+-  Use . to jump to the source code of the test to find out exactly what
+  it does. Perhaps the test is broken rather than the code under test.
+- If the test contains a series of =should= forms and you can't tell
+  which one failed, use l, which shows you the list of all =should=
+  forms executed during the test before it failed.
+-  Use b to view the backtrace. You can also use d to re-run the test
+  with debugging enabled, this will enter the debugger and show the
+  backtrace as well; but the top few frames shown there will not be
+  relevant to you since they are ERT's own debugger hook. b strips them
+  out, so it is more convenient.
+- If the test or the code under testing prints messages using =message=,
+  use m to see what messages it printed before it failed. This can be
+  useful to figure out how far it got.
+-  You can instrument tests for debugging the same way you instrument
+  =defun=s for debugging: go to the source code of the test and type C-u
+  C-M-x. Then, go back to the ERT buffer and re-run the test with r or
+  d.
+-  If you have been editing and rearranging tests, it is possible that
+  ERT remembers an old test that you have since renamed or removed:
+  renamings or removals of definitions in the source code leave around a
+  stray definition under the old name in the running process (this is a
+  common problem in Lisp). In such a situation, hit D to let ERT forget
+  about the obsolete test.
+
+--------------
+
+<<Extending-ERT>>
+
+Next: [[#Other-Testing-Concepts][Other Testing Concepts]], Previous:
+[[#How-to-Debug-Tests][How to Debug Tests]], Up:
+[[#Top][ERT: Emacs Lisp Regression Testing]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+** 5 Extending ERT [[#Extending-ERT-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Extending-ERT-1
+:CLASS: chapter
+:END:
+There are several ways to add functionality to ERT.
+
+- [[#Defining-Explanation-Functions][Defining Explanation Functions]]
+- [[#Low_002dLevel-Functions-for-Working-with-Tests][Low-Level Functions for Working with Tests]]
+
+--------------
+
+<<Defining-Explanation-Functions>>
+
+Next:
+[[#Low_002dLevel-Functions-for-Working-with-Tests][Low-Level Functions for Working with Tests]],
+Up: [[#Extending-ERT][Extending ERT]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 5.1 Defining Explanation Functions [[#Defining-Explanation-Functions-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Defining-Explanation-Functions-1
+:CLASS: section
+:END:
+The explanation function for a predicate is a function that takes the
+same arguments as the predicate and returns an /explanation/. The
+explanation should explain why the predicate, when invoked with the
+arguments given to the explanation function, returns the value that it
+returns. The explanation can be any object but should have a
+comprehensible printed representation. If the return value of the
+predicate needs no explanation for a given list of arguments, the
+explanation function should return =nil=.
+
+To associate an explanation function with a predicate, add the property
+=ert-explainer= to the symbol that names the predicate. The value of the
+property should be the symbol that names the explanation function.
+
+--------------
+
+<<Low_002dLevel-Functions-for-Working-with-Tests>>
+
+Previous:
+[[#Defining-Explanation-Functions][Defining Explanation Functions]], Up:
+[[#Extending-ERT][Extending ERT]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 5.2 Low-Level Functions for Working with Tests [[#Low_002dLevel-Functions-for-Working-with-Tests-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Low_002dLevel-Functions-for-Working-with-Tests-1
+:CLASS: section
+:END:
+Both =ert-run-tests-interactively= and =ert-run-tests-batch= are
+implemented on top of the lower-level test handling code in the sections
+of =ert.el= labeled “Facilities for running a single test”, “Test
+selectors”, and “Facilities for running a whole set of tests”.
+
+If you want to write code that works with ERT tests, you should take a
+look at this lower-level code. Symbols that start with =ert--= are
+internal to ERT, whereas those that start with =ert-= are meant to be
+usable by other code. But there is no mature API yet.
+
+Contributions to ERT are welcome.
+
+--------------
+
+<<Other-Testing-Concepts>>
+
+Next: [[#Index][Index]], Previous: [[#Extending-ERT][Extending ERT]],
+Up: [[#Top][ERT: Emacs Lisp Regression Testing]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+** 6 Other Testing Concepts [[#Other-Testing-Concepts-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Other-Testing-Concepts-1
+:CLASS: chapter
+:END:
+For information on mocks, stubs, fixtures, or test suites, see below.
+
+- [[#Mocks-and-Stubs][Other Tools for Emacs Lisp]]
+- [[#Fixtures-and-Test-Suites][Fixtures and Test Suites]]
+
+--------------
+
+<<Mocks-and-Stubs>>
+
+Next: [[#Fixtures-and-Test-Suites][Fixtures and Test Suites]], Up:
+[[#Other-Testing-Concepts][Other Testing Concepts]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 6.1 Other Tools for Emacs Lisp [[#Other-Tools-for-Emacs-Lisp][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Other-Tools-for-Emacs-Lisp
+:CLASS: section
+:END:
+Stubbing out functions or using so-called /mocks/ can make it easier to
+write tests. See [[https://en.wikipedia.org/wiki/Mock_object]] for an
+explanation of the corresponding concepts in object-oriented languages.
+
+ERT does not have built-in support for mocks or stubs. The package
+=el-mock= (see [[https://www.emacswiki.org/emacs/el-mock.el]]) offers
+mocks for Emacs Lisp and can be used in conjunction with ERT.
+
+--------------
+
+<<Fixtures-and-Test-Suites>>
+
+Previous: [[#Mocks-and-Stubs][Other Tools for Emacs Lisp]], Up:
+[[#Other-Testing-Concepts][Other Testing Concepts]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 6.2 Fixtures and Test Suites [[#Fixtures-and-Test-Suites-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Fixtures-and-Test-Suites-1
+:CLASS: section
+:END:
+In many ways, ERT is similar to frameworks for other languages like
+SUnit or JUnit. However, two features commonly found in such frameworks
+are notably absent from ERT: fixtures and test suites.
+
+Fixtures are mainly used (e.g., in SUnit or JUnit) to provide an
+environment for a set of tests, and consist of set-up and tear-down
+functions.
+
+While fixtures are a useful syntactic simplification in other languages,
+this does not apply to Lisp, where higher-order functions and
+=unwind-protect= are available. One way to implement and use a fixture
+in ERT is
+
+#+begin_src lisp-preformatted
+(defun my-fixture (body)
+  (unwind-protect
+      (progn [set up]
+             (funcall body))
+    [tear down]))
+
+(ert-deftest my-test ()
+  (my-fixture
+   (lambda ()
+     [test code])))
+#+end_src
+
+(Another way would be a =with-my-fixture= macro.) This solves the set-up
+and tear-down part, and additionally allows any test to use any
+combination of fixtures, so it is more flexible than what other tools
+typically allow.
+
+If the test needs access to the environment the fixture sets up, the
+fixture can be modified to pass arguments to the body.
+
+These are well-known Lisp techniques. Special syntax for them could be
+added but would provide only a minor simplification.
+
+(If you are interested in such syntax, note that splitting set-up and
+tear-down into separate functions, like *Unit tools usually do, makes it
+impossible to establish dynamic =let= bindings as part of the fixture.
+So, blindly imitating the way fixtures are implemented in other
+languages would be counter-productive in Lisp.)
+
+The purpose of test suites is to group related tests together.
+
+The most common use of this is to run just the tests for one particular
+module. Since symbol prefixes are the usual way of separating module
+namespaces in Emacs Lisp, test selectors already solve this by allowing
+regexp matching on test names; e.g., the selector ="^ert-"= selects
+ERT's self-tests.
+
+Other uses include grouping tests by their expected execution time,
+e.g., to run quick tests during interactive development and slow tests
+less often. This can be achieved with the =:tag= argument to
+=ert-deftest= and =tag= test selectors.
+
+--------------
+
+<<Index>>
+
+Next:
+[[#GNU-Free-Documentation-License][GNU Free Documentation License]],
+Previous: [[#Other-Testing-Concepts][Other Testing Concepts]], Up:
+[[#Top][ERT: Emacs Lisp Regression Testing]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+** Index [[#Index-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Index-1
+:CLASS: unnumbered
+:END:
+
+| Jump to:   | [[#Index_cp_symbol-1][*.*]]   [[#Index_cp_symbol-2][*:*]]  \\                                                                                                                                                                                                                                                                                                                                                                                                     |
+|            | [[#Index_cp_letter-B][*B*]]   [[#Index_cp_letter-D][*D*]]   [[#Index_cp_letter-E][*E*]]   [[#Index_cp_letter-F][*F*]]   [[#Index_cp_letter-H][*H*]]   [[#Index_cp_letter-I][*I*]]   [[#Index_cp_letter-J][*J*]]   [[#Index_cp_letter-K][*K*]]   [[#Index_cp_letter-L][*L*]]   [[#Index_cp_letter-M][*M*]]   [[#Index_cp_letter-P][*P*]]   [[#Index_cp_letter-R][*R*]]   [[#Index_cp_letter-S][*S*]]   [[#Index_cp_letter-T][*T*]]   [[#Index_cp_letter-U][*U*]]   |
+
+|                | Index Entry                                                                                                                                           | Section                                                                                         |
+| -------------- |                                                                                                                                                       |                                                                                                 |
+| .              |                                                                                                                                                       |                                                                                                 |
+|                | [[#index-_002e_002c-in-ert-results-buffer][=.==, in ert results buffer=]]                                                                             | [[#Running-Tests-Interactively][Running Tests Interactively]]                                   |
+| -------------- |                                                                                                                                                       |                                                                                                 |
+| :              |                                                                                                                                                       |                                                                                                 |
+|                | [[#index-_003aexpected_002dresult][=:expected-result=]]                                                                                               | [[#Expected-Failures][Expected Failures]]                                                       |
+| -------------- |                                                                                                                                                       |                                                                                                 |
+| B              |                                                                                                                                                       |                                                                                                 |
+|                | [[#index-b_002c-in-ert-results-buffer][=b==, in ert results buffer=]]                                                                                 | [[#Running-Tests-Interactively][Running Tests Interactively]]                                   |
+|                | [[#index-backtrace-of-a-failed-test][backtrace of a failed test]]                                                                                     | [[#Running-Tests-Interactively][Running Tests Interactively]]                                   |
+|                | [[#index-batch_002dmode-testing][batch-mode testing]]                                                                                                 | [[#Running-Tests-in-Batch-Mode][Running Tests in Batch Mode]]                                   |
+| -------------- |                                                                                                                                                       |                                                                                                 |
+| D              |                                                                                                                                                       |                                                                                                 |
+|                | [[#index-d_002c-in-ert-results-buffer][=d==, in ert results buffer=]]                                                                                 | [[#Running-Tests-Interactively][Running Tests Interactively]]                                   |
+|                | [[#index-D_002c-in-ert-results-buffer][=D==, in ert results buffer=]]                                                                                 | [[#Running-Tests-Interactively][Running Tests Interactively]]                                   |
+|                | [[#index-debugging-failed-tests][debugging failed tests]]                                                                                             | [[#Interactive-Debugging][Interactive Debugging]]                                               |
+|                | [[#index-defining-explanation-functions][defining explanation functions]]                                                                             | [[#Defining-Explanation-Functions][Defining Explanation Functions]]                             |
+|                | [[#index-delete-all-tests][delete all tests]]                                                                                                         | [[#Running-Tests-Interactively][Running Tests Interactively]]                                   |
+|                | [[#index-delete-test][delete test]]                                                                                                                   | [[#Running-Tests-Interactively][Running Tests Interactively]]                                   |
+|                | [[#index-discard-obsolete-test-results][discard obsolete test results]]                                                                               | [[#Interactive-Debugging][Interactive Debugging]]                                               |
+| -------------- |                                                                                                                                                       |                                                                                                 |
+| E              |                                                                                                                                                       |                                                                                                 |
+|                | [[#index-EMACS_005fTEST_005fJUNIT_005fREPORT_002c-environment-variable][=EMACS_TEST_JUNIT_REPORT==, environment variable=]]                           | [[#Running-Tests-in-Batch-Mode][Running Tests in Batch Mode]]                                   |
+|                | [[#index-EMACS_005fTEST_005fVERBOSE_002c-environment-variable][=EMACS_TEST_VERBOSE==, environment variable=]]                                         | [[#Running-Tests-in-Batch-Mode][Running Tests in Batch Mode]]                                   |
+|                | [[#index-ert][=ert=]]                                                                                                                                 | [[#Running-Tests-Interactively][Running Tests Interactively]]                                   |
+|                | [[#index-ert_002dbatch_002dbacktrace_002dline_002dlength][=ert-batch-backtrace-line-length=]]                                                         | [[#Running-Tests-in-Batch-Mode][Running Tests in Batch Mode]]                                   |
+|                | [[#index-ert_002dbatch_002dprint_002dlength][=ert-batch-print-length=]]                                                                               | [[#Running-Tests-in-Batch-Mode][Running Tests in Batch Mode]]                                   |
+|                | [[#index-ert_002dbatch_002dprint_002dlevel][=ert-batch-print-level=]]                                                                                 | [[#Running-Tests-in-Batch-Mode][Running Tests in Batch Mode]]                                   |
+|                | [[#index-ert_002ddeftest][=ert-deftest=]]                                                                                                             | [[#How-to-Write-Tests][How to Write Tests]]                                                     |
+|                | [[#index-ert_002ddelete_002dall_002dtests][=ert-delete-all-tests=]]                                                                                   | [[#Running-Tests-Interactively][Running Tests Interactively]]                                   |
+|                | [[#index-ert_002ddelete_002dtest][=ert-delete-test=]]                                                                                                 | [[#Running-Tests-Interactively][Running Tests Interactively]]                                   |
+|                | [[#index-ert_002ddescribe_002dtest][=ert-describe-test=]]                                                                                             | [[#Running-Tests-Interactively][Running Tests Interactively]]                                   |
+|                | [[#index-ert_002dexplainer_002c-property][=ert-explainer==, property=]]                                                                               | [[#Defining-Explanation-Functions][Defining Explanation Functions]]                             |
+|                | [[#index-ert_002dfilter_002dstring][=ert-filter-string=]]                                                                                             | [[#Helper-Functions][Helper Functions]]                                                         |
+|                | [[#index-ert_002dfont_002dlock_002ddeftest][=ert-font-lock-deftest=]]                                                                                 | [[#Syntax-Highlighting-Tests][Syntax Highlighting Tests]]                                       |
+|                | [[#index-ert_002dfont_002dlock_002ddeftest_002dfile][=ert-font-lock-deftest-file=]]                                                                   | [[#Syntax-Highlighting-Tests][Syntax Highlighting Tests]]                                       |
+|                | [[#index-ert_002dfont_002dlock_002dtest_002dfile][=ert-font-lock-test-file=]]                                                                         | [[#Syntax-Highlighting-Tests][Syntax Highlighting Tests]]                                       |
+|                | [[#index-ert_002dfont_002dlock_002dtest_002dstring][=ert-font-lock-test-string=]]                                                                     | [[#Syntax-Highlighting-Tests][Syntax Highlighting Tests]]                                       |
+|                | [[#index-ert_002dkill_002dall_002dtest_002dbuffers][=ert-kill-all-test-buffers=]]                                                                     | [[#Helpers-for-Buffers][Helpers for Buffers]]                                                   |
+|                | [[#index-ert_002dpropertized_002dstring][=ert-propertized-string=]]                                                                                   | [[#Helper-Functions][Helper Functions]]                                                         |
+|                | [[#index-ert_002dquiet][=ert-quiet=]]                                                                                                                 | [[#Running-Tests-in-Batch-Mode][Running Tests in Batch Mode]]                                   |
+|                | [[#index-ert_002dremote_002dtemporary_002dfile_002ddirectory][=ert-remote-temporary-file-directory=]]                                                 | [[#Helper-Functions][Helper Functions]]                                                         |
+|                | [[#index-ert_002dresource_002ddirectory][=ert-resource-directory=]]                                                                                   | [[#Helper-Functions][Helper Functions]]                                                         |
+|                | [[#index-ert_002dresource_002ddirectory_002dformat][=ert-resource-directory-format=]]                                                                 | [[#Helper-Functions][Helper Functions]]                                                         |
+|                | [[#index-ert_002dresource_002ddirectory_002dtrim_002dleft_002dregexp][=ert-resource-directory-trim-left-regexp=]]                                     | [[#Helper-Functions][Helper Functions]]                                                         |
+|                | [[#index-ert_002dresource_002ddirectory_002dtrim_002dright_002dregexp][=ert-resource-directory-trim-right-regexp=]]                                   | [[#Helper-Functions][Helper Functions]]                                                         |
+|                | [[#index-ert_002dresource_002dfile][=ert-resource-file=]]                                                                                             | [[#Helper-Functions][Helper Functions]]                                                         |
+|                | [[#index-ert_002dresults_002ddescribe_002dtest_002dat_002dpoint][=ert-results-describe-test-at-point=]]                                               | [[#Running-Tests-Interactively][Running Tests Interactively]]                                   |
+|                | [[#index-ert_002dresults_002dfind_002dtest_002dat_002dpoint_002dother_002dwindow][=ert-results-find-test-at-point-other-window=]]                     | [[#Running-Tests-Interactively][Running Tests Interactively]]                                   |
+|                | [[#index-ert_002dresults_002dpop_002dto_002dbacktrace_002dfor_002dtest_002dat_002dpoint][=ert-results-pop-to-backtrace-for-test-at-point=]]           | [[#Running-Tests-Interactively][Running Tests Interactively]]                                   |
+|                | [[#index-ert_002dresults_002dpop_002dto_002dmessages_002dfor_002dtest_002dat_002dpoint][=ert-results-pop-to-messages-for-test-at-point=]]             | [[#Running-Tests-Interactively][Running Tests Interactively]]                                   |
+|                | [[#index-ert_002dresults_002dpop_002dto_002dshould_002dforms_002dfor_002dtest_002dat_002dpoint][=ert-results-pop-to-should-forms-for-test-at-point=]] | [[#Running-Tests-Interactively][Running Tests Interactively]]                                   |
+|                | [[#index-ert_002dresults_002dpop_002dto_002dtimings][=ert-results-pop-to-timings=]]                                                                   | [[#Running-Tests-Interactively][Running Tests Interactively]]                                   |
+|                | [[#index-ert_002dresults_002drerun_002dall_002dtests][=ert-results-rerun-all-tests=]]                                                                 | [[#Running-Tests-Interactively][Running Tests Interactively]]                                   |
+|                | [[#index-ert_002dresults_002drerun_002dtest_002dat_002dpoint][=ert-results-rerun-test-at-point=]]                                                     | [[#Running-Tests-Interactively][Running Tests Interactively]]                                   |
+|                | [[#index-ert_002dresults_002drerun_002dtest_002dat_002dpoint_002ddebugging_002derrors][=ert-results-rerun-test-at-point-debugging-errors=]]           | [[#Running-Tests-Interactively][Running Tests Interactively]]                                   |
+|                | [[#index-ert_002dresults_002dtoggle_002dprinter_002dlimits_002dfor_002dtest_002dat_002dpoint][=ert-results-toggle-printer-limits-for-test-at-point=]] | [[#Running-Tests-Interactively][Running Tests Interactively]]                                   |
+|                | [[#index-ert_002drun_002dtests_002dbatch][=ert-run-tests-batch=]]                                                                                     | [[#Running-Tests-in-Batch-Mode][Running Tests in Batch Mode]]                                   |
+|                | [[#index-ert_002drun_002dtests_002dbatch_002dand_002dexit][=ert-run-tests-batch-and-exit=]]                                                           | [[#Running-Tests-in-Batch-Mode][Running Tests in Batch Mode]]                                   |
+|                | [[#index-ert_002drun_002dtests_002dinteractively][=ert-run-tests-interactively=]]                                                                     | [[#Running-Tests-Interactively][Running Tests Interactively]]                                   |
+|                | [[#index-ert_002dsimulate_002dcommand][=ert-simulate-command=]]                                                                                       | [[#Helper-Functions][Helper Functions]]                                                         |
+|                | [[#index-ert_002dsimulate_002dkeys][=ert-simulate-keys=]]                                                                                             | [[#Helper-Functions][Helper Functions]]                                                         |
+|                | [[#index-ert_002dsummarize_002dtests_002dbatch_002dand_002dexit][=ert-summarize-tests-batch-and-exit=]]                                               | [[#Running-Tests-in-Batch-Mode][Running Tests in Batch Mode]]                                   |
+|                | [[#index-ert_002dtemp_002dfile_002dprefix][=ert-temp-file-prefix=]]                                                                                   | [[#Helper-Functions][Helper Functions]]                                                         |
+|                | [[#index-ert_002dtemp_002dfile_002dsuffix][=ert-temp-file-suffix=]]                                                                                   | [[#Helper-Functions][Helper Functions]]                                                         |
+|                | [[#index-ert_002dtest_002derts_002dfile][=ert-test-erts-file=]]                                                                                       | [[#erts-files][erts files]]                                                                     |
+|                | [[#index-ert_002dwith_002dbuffer_002drenamed][=ert-with-buffer-renamed=]]                                                                             | [[#Helpers-for-Buffers][Helpers for Buffers]]                                                   |
+|                | [[#index-ert_002dwith_002dbuffer_002dselected][=ert-with-buffer-selected=]]                                                                           | [[#Helpers-for-Buffers][Helpers for Buffers]]                                                   |
+|                | [[#index-ert_002dwith_002dmessage_002dcapture][=ert-with-message-capture=]]                                                                           | [[#Helper-Functions][Helper Functions]]                                                         |
+|                | [[#index-ert_002dwith_002dtemp_002ddirectory][=ert-with-temp-directory=]]                                                                             | [[#Helper-Functions][Helper Functions]]                                                         |
+|                | [[#index-ert_002dwith_002dtemp_002dfile][=ert-with-temp-file=]]                                                                                       | [[#Helper-Functions][Helper Functions]]                                                         |
+|                | [[#index-ert_002dwith_002dtest_002dbuffer][=ert-with-test-buffer=]]                                                                                   | [[#Helpers-for-Buffers][Helpers for Buffers]]                                                   |
+|                | [[#index-erts_002dmode][=erts-mode=]]                                                                                                                 | [[#erts-files][erts files]]                                                                     |
+|                | [[#index-expected-failures][expected failures]]                                                                                                       | [[#Expected-Failures][Expected Failures]]                                                       |
+|                | [[#index-explanations_002c-understanding][explanations, understanding]]                                                                               | [[#Understanding-Explanations][Understanding Explanations]]                                     |
+|                | [[#index-extending-ert][extending ert]]                                                                                                               | [[#Extending-ERT][Extending ERT]]                                                               |
+| -------------- |                                                                                                                                                       |                                                                                                 |
+| F              |                                                                                                                                                       |                                                                                                 |
+|                | [[#index-fixtures][fixtures]]                                                                                                                         | [[#Fixtures-and-Test-Suites][Fixtures and Test Suites]]                                         |
+| -------------- |                                                                                                                                                       |                                                                                                 |
+| H              |                                                                                                                                                       |                                                                                                 |
+|                | [[#index-h_002c-in-ert-results-buffer][=h==, in ert results buffer=]]                                                                                 | [[#Running-Tests-Interactively][Running Tests Interactively]]                                   |
+|                | [[#index-how-to-run-ert-tests][how to run ert tests]]                                                                                                 | [[#How-to-Run-Tests][How to Run Tests]]                                                         |
+|                | [[#index-how-to-write-tests][how to write tests]]                                                                                                     | [[#How-to-Write-Tests][How to Write Tests]]                                                     |
+| -------------- |                                                                                                                                                       |                                                                                                 |
+| I              |                                                                                                                                                       |                                                                                                 |
+|                | [[#index-instrumenting-test-for-Edebug][instrumenting test for Edebug]]                                                                               | [[#Interactive-Debugging][Interactive Debugging]]                                               |
+|                | [[#index-interactive-debugging][interactive debugging]]                                                                                               | [[#Interactive-Debugging][Interactive Debugging]]                                               |
+|                | [[#index-interactive-testing][interactive testing]]                                                                                                   | [[#Running-Tests-Interactively][Running Tests Interactively]]                                   |
+|                | [[#index-introduction-to-ERT][introduction to ERT]]                                                                                                   | [[#Introduction][Introduction]]                                                                 |
+| -------------- |                                                                                                                                                       |                                                                                                 |
+| J              |                                                                                                                                                       |                                                                                                 |
+|                | [[#index-jump-to-the-test-source-code][jump to the test source code]]                                                                                 | [[#Interactive-Debugging][Interactive Debugging]]                                               |
+| -------------- |                                                                                                                                                       |                                                                                                 |
+| K              |                                                                                                                                                       |                                                                                                 |
+|                | [[#index-known-bugs][known bugs]]                                                                                                                     | [[#Expected-Failures][Expected Failures]]                                                       |
+| -------------- |                                                                                                                                                       |                                                                                                 |
+| L              |                                                                                                                                                       |                                                                                                 |
+|                | [[#index-l_002c-in-ert-results-buffer][=l==, in ert results buffer=]]                                                                                 | [[#Running-Tests-Interactively][Running Tests Interactively]]                                   |
+|                | [[#index-L_002c-in-ert-results-buffer][=L==, in ert results buffer=]]                                                                                 | [[#Running-Tests-Interactively][Running Tests Interactively]]                                   |
+|                | [[#index-low_002dlevel-functions][low-level functions]]                                                                                               | [[#Low_002dLevel-Functions-for-Working-with-Tests][Low-Level Functions for Working with Tests]] |
+| -------------- |                                                                                                                                                       |                                                                                                 |
+| M              |                                                                                                                                                       |                                                                                                 |
+|                | [[#index-m_002c-in-ert-results-buffer][=m==, in ert results buffer=]]                                                                                 | [[#Running-Tests-Interactively][Running Tests Interactively]]                                   |
+|                | [[#index-make_002dert_002dtest][=make-ert-test=]]                                                                                                     | [[#Useful-Techniques][Useful Techniques]]                                                       |
+|                | [[#index-mocks-and-stubs][mocks and stubs]]                                                                                                           | [[#Mocks-and-Stubs][Mocks and Stubs]]                                                           |
+| -------------- |                                                                                                                                                       |                                                                                                 |
+| P              |                                                                                                                                                       |                                                                                                 |
+|                | [[#index-preconditions-of-a-test][preconditions of a test]]                                                                                           | [[#Tests-and-Their-Environment][Tests and Their Environment]]                                   |
+| -------------- |                                                                                                                                                       |                                                                                                 |
+| R              |                                                                                                                                                       |                                                                                                 |
+|                | [[#index-r_002c-in-ert-results-buffer][=r==, in ert results buffer=]]                                                                                 | [[#Running-Tests-Interactively][Running Tests Interactively]]                                   |
+|                | [[#index-R_002c-in-ert-results-buffer][=R==, in ert results buffer=]]                                                                                 | [[#Running-Tests-Interactively][Running Tests Interactively]]                                   |
+|                | [[#index-re_002drunning-a-failed-test][re-running a failed test]]                                                                                     | [[#Interactive-Debugging][Interactive Debugging]]                                               |
+|                | [[#index-RET_002c-in-ert-results-buffer][=RET==, in ert results buffer=]]                                                                             | [[#Running-Tests-Interactively][Running Tests Interactively]]                                   |
+|                | [[#index-running-tests-in-batch-mode][running tests in batch mode]]                                                                                   | [[#Running-Tests-in-Batch-Mode][Running Tests in Batch Mode]]                                   |
+|                | [[#index-running-tests-interactively][running tests interactively]]                                                                                   | [[#Running-Tests-Interactively][Running Tests Interactively]]                                   |
+| -------------- |                                                                                                                                                       |                                                                                                 |
+| S              |                                                                                                                                                       |                                                                                                 |
+|                | [[#index-S_002dTAB_002c-in-ert-results-buffer][=S-TAB==, in ert results buffer=]]                                                                     | [[#Running-Tests-Interactively][Running Tests Interactively]]                                   |
+|                | [[#index-selecting-tests][selecting tests]]                                                                                                           | [[#Test-Selectors][Test Selectors]]                                                             |
+|                | [[#index-should_002c-ert-macro][=should==, ert macro=]]                                                                                               | [[#The-should-Macro][The =should= Macro]]                                                       |
+|                | [[#index-should_002derror_002c-ert-macro][=should-error==, ert macro=]]                                                                               | [[#The-should-Macro][The =should= Macro]]                                                       |
+|                | [[#index-should_002dnot_002c-ert-macro][=should-not==, ert macro=]]                                                                                   | [[#The-should-Macro][The =should= Macro]]                                                       |
+|                | [[#index-show-backtrace-of-failed-test][show backtrace of failed test]]                                                                               | [[#Interactive-Debugging][Interactive Debugging]]                                               |
+|                | [[#index-skip_002dunless][=skip-unless=]]                                                                                                             | [[#Tests-and-Their-Environment][Tests and Their Environment]]                                   |
+|                | [[#index-skip_002dwhen][=skip-when=]]                                                                                                                 | [[#Tests-and-Their-Environment][Tests and Their Environment]]                                   |
+|                | [[#index-skipping-tests][skipping tests]]                                                                                                             | [[#Tests-and-Their-Environment][Tests and Their Environment]]                                   |
+|                | [[#index-skipping-tests_002c-in-erts-file][skipping tests, in erts file]]                                                                             | [[#erts-files][erts files]]                                                                     |
+| -------------- |                                                                                                                                                       |                                                                                                 |
+| T              |                                                                                                                                                       |                                                                                                 |
+|                | [[#index-T_002c-in-ert-results-buffer][=T==, in ert results buffer=]]                                                                                 | [[#Running-Tests-Interactively][Running Tests Interactively]]                                   |
+|                | [[#index-TAB_002c-in-ert-results-buffer][=TAB==, in ert results buffer=]]                                                                             | [[#Running-Tests-Interactively][Running Tests Interactively]]                                   |
+|                | [[#index-test-preconditions][test preconditions]]                                                                                                     | [[#Tests-and-Their-Environment][Tests and Their Environment]]                                   |
+|                | [[#index-test-results-buffer][test results buffer]]                                                                                                   | [[#Running-Tests-Interactively][Running Tests Interactively]]                                   |
+|                | [[#index-test-selector][test selector]]                                                                                                               | [[#Test-Selectors][Test Selectors]]                                                             |
+|                | [[#index-tests-and-their-environment][tests and their environment]]                                                                                   | [[#Tests-and-Their-Environment][Tests and Their Environment]]                                   |
+|                | [[#index-tips-and-tricks][tips and tricks]]                                                                                                           | [[#Useful-Techniques][Useful Techniques]]                                                       |
+| -------------- |                                                                                                                                                       |                                                                                                 |
+| U              |                                                                                                                                                       |                                                                                                 |
+|                | [[#index-understanding-explanations][understanding explanations]]                                                                                     | [[#Understanding-Explanations][Understanding Explanations]]                                     |
+|                | [[#index-useful-techniques][useful techniques]]                                                                                                       | [[#Useful-Techniques][Useful Techniques]]                                                       |
+| -------------- |                                                                                                                                                       |                                                                                                 |
+
+| Jump to:   | [[#Index_cp_symbol-1][*.*]]   [[#Index_cp_symbol-2][*:*]]  \\                                                                                                                                                                                                                                                                                                                                                                                                     |
+|            | [[#Index_cp_letter-B][*B*]]   [[#Index_cp_letter-D][*D*]]   [[#Index_cp_letter-E][*E*]]   [[#Index_cp_letter-F][*F*]]   [[#Index_cp_letter-H][*H*]]   [[#Index_cp_letter-I][*I*]]   [[#Index_cp_letter-J][*J*]]   [[#Index_cp_letter-K][*K*]]   [[#Index_cp_letter-L][*L*]]   [[#Index_cp_letter-M][*M*]]   [[#Index_cp_letter-P][*P*]]   [[#Index_cp_letter-R][*R*]]   [[#Index_cp_letter-S][*S*]]   [[#Index_cp_letter-T][*T*]]   [[#Index_cp_letter-U][*U*]]   |
+
+--------------
+
+<<GNU-Free-Documentation-License>>
+
+Previous: [[#Index][Index]], Up:
+[[#Top][ERT: Emacs Lisp Regression Testing]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+** Appendix A GNU Free Documentation License [[#GNU-Free-Documentation-License-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: GNU-Free-Documentation-License-1
+:CLASS: appendix
+:END:
+
+#+begin_center
+Version 1.3, 3 November 2008
+#+end_center
+
+#+begin_src display-preformatted
+Copyright © 2000, 2001, 2002, 2007, 2008 Free Software Foundation, Inc.
+https://fsf.org/
+
+Everyone is permitted to copy and distribute verbatim copies
+of this license document, but changing it is not allowed.
+#+end_src
+
+0. [@0] PREAMBLE
+
+   The purpose of this License is to make a manual, textbook, or other
+   functional and useful document /free/ in the sense of freedom: to
+   assure everyone the effective freedom to copy and redistribute it,
+   with or without modifying it, either commercially or noncommercially.
+   Secondarily, this License preserves for the author and publisher a
+   way to get credit for their work, while not being considered
+   responsible for modifications made by others.
+
+   This License is a kind of “copyleft”, which means that derivative
+   works of the document must themselves be free in the same sense. It
+   complements the GNU General Public License, which is a copyleft
+   license designed for free software.
+
+   We have designed this License in order to use it for manuals for free
+   software, because free software needs free documentation: a free
+   program should come with manuals providing the same freedoms that the
+   software does. But this License is not limited to software manuals;
+   it can be used for any textual work, regardless of subject matter or
+   whether it is published as a printed book. We recommend this License
+   principally for works whose purpose is instruction or reference.
+
+1. APPLICABILITY AND DEFINITIONS
+
+   This License applies to any manual or other work, in any medium, that
+   contains a notice placed by the copyright holder saying it can be
+   distributed under the terms of this License. Such a notice grants a
+   world-wide, royalty-free license, unlimited in duration, to use that
+   work under the conditions stated herein. The “Document”, below,
+   refers to any such manual or work. Any member of the public is a
+   licensee, and is addressed as “you”. You accept the license if you
+   copy, modify or distribute the work in a way requiring permission
+   under copyright law.
+
+   A “Modified Version” of the Document means any work containing the
+   Document or a portion of it, either copied verbatim, or with
+   modifications and/or translated into another language.
+
+   A “Secondary Section” is a named appendix or a front-matter section
+   of the Document that deals exclusively with the relationship of the
+   publishers or authors of the Document to the Document's overall
+   subject (or to related matters) and contains nothing that could fall
+   directly within that overall subject. (Thus, if the Document is in
+   part a textbook of mathematics, a Secondary Section may not explain
+   any mathematics.) The relationship could be a matter of historical
+   connection with the subject or with related matters, or of legal,
+   commercial, philosophical, ethical or political position regarding
+   them.
+
+   The “Invariant Sections” are certain Secondary Sections whose titles
+   are designated, as being those of Invariant Sections, in the notice
+   that says that the Document is released under this License. If a
+   section does not fit the above definition of Secondary then it is not
+   allowed to be designated as Invariant. The Document may contain zero
+   Invariant Sections. If the Document does not identify any Invariant
+   Sections then there are none.
+
+   The “Cover Texts” are certain short passages of text that are listed,
+   as Front-Cover Texts or Back-Cover Texts, in the notice that says
+   that the Document is released under this License. A Front-Cover Text
+   may be at most 5 words, and a Back-Cover Text may be at most 25
+   words.
+
+   A “Transparent” copy of the Document means a machine-readable copy,
+   represented in a format whose specification is available to the
+   general public, that is suitable for revising the document
+   straightforwardly with generic text editors or (for images composed
+   of pixels) generic paint programs or (for drawings) some widely
+   available drawing editor, and that is suitable for input to text
+   formatters or for automatic translation to a variety of formats
+   suitable for input to text formatters. A copy made in an otherwise
+   Transparent file format whose markup, or absence of markup, has been
+   arranged to thwart or discourage subsequent modification by readers
+   is not Transparent. An image format is not Transparent if used for
+   any substantial amount of text. A copy that is not “Transparent” is
+   called “Opaque”.
+
+   Examples of suitable formats for Transparent copies include plain
+   ASCII without markup, Texinfo input format, LaTeX input format, SGML
+   or XML using a publicly available DTD, and standard-conforming simple
+   HTML, PostScript or PDF designed for human modification. Examples of
+   transparent image formats include PNG, XCF and JPG. Opaque formats
+   include proprietary formats that can be read and edited only by
+   proprietary word processors, SGML or XML for which the DTD and/or
+   processing tools are not generally available, and the
+   machine-generated HTML, PostScript or PDF produced by some word
+   processors for output purposes only.
+
+   The “Title Page” means, for a printed book, the title page itself,
+   plus such following pages as are needed to hold, legibly, the
+   material this License requires to appear in the title page. For works
+   in formats which do not have any title page as such, “Title Page”
+   means the text near the most prominent appearance of the work's
+   title, preceding the beginning of the body of the text.
+
+   The “publisher” means any person or entity that distributes copies of
+   the Document to the public.
+
+   A section “Entitled XYZ” means a named subunit of the Document whose
+   title either is precisely XYZ or contains XYZ in parentheses
+   following text that translates XYZ in another language. (Here XYZ
+   stands for a specific section name mentioned below, such as
+   “Acknowledgements”, “Dedications”, “Endorsements”, or “History”.) To
+   “Preserve the Title” of such a section when you modify the Document
+   means that it remains a section “Entitled XYZ” according to this
+   definition.
+
+   The Document may include Warranty Disclaimers next to the notice
+   which states that this License applies to the Document. These
+   Warranty Disclaimers are considered to be included by reference in
+   this License, but only as regards disclaiming warranties: any other
+   implication that these Warranty Disclaimers may have is void and has
+   no effect on the meaning of this License.
+
+2. VERBATIM COPYING
+
+   You may copy and distribute the Document in any medium, either
+   commercially or noncommercially, provided that this License, the
+   copyright notices, and the license notice saying this License applies
+   to the Document are reproduced in all copies, and that you add no
+   other conditions whatsoever to those of this License. You may not use
+   technical measures to obstruct or control the reading or further
+   copying of the copies you make or distribute. However, you may accept
+   compensation in exchange for copies. If you distribute a large enough
+   number of copies you must also follow the conditions in section 3.
+
+   You may also lend copies, under the same conditions stated above, and
+   you may publicly display copies.
+
+3. COPYING IN QUANTITY
+
+   If you publish printed copies (or copies in media that commonly have
+   printed covers) of the Document, numbering more than 100, and the
+   Document's license notice requires Cover Texts, you must enclose the
+   copies in covers that carry, clearly and legibly, all these Cover
+   Texts: Front-Cover Texts on the front cover, and Back-Cover Texts on
+   the back cover. Both covers must also clearly and legibly identify
+   you as the publisher of these copies. The front cover must present
+   the full title with all words of the title equally prominent and
+   visible. You may add other material on the covers in addition.
+   Copying with changes limited to the covers, as long as they preserve
+   the title of the Document and satisfy these conditions, can be
+   treated as verbatim copying in other respects.
+
+   If the required texts for either cover are too voluminous to fit
+   legibly, you should put the first ones listed (as many as fit
+   reasonably) on the actual cover, and continue the rest onto adjacent
+   pages.
+
+   If you publish or distribute Opaque copies of the Document numbering
+   more than 100, you must either include a machine-readable Transparent
+   copy along with each Opaque copy, or state in or with each Opaque
+   copy a computer-network location from which the general network-using
+   public has access to download using public-standard network protocols
+   a complete Transparent copy of the Document, free of added material.
+   If you use the latter option, you must take reasonably prudent steps,
+   when you begin distribution of Opaque copies in quantity, to ensure
+   that this Transparent copy will remain thus accessible at the stated
+   location until at least one year after the last time you distribute
+   an Opaque copy (directly or through your agents or retailers) of that
+   edition to the public.
+
+   It is requested, but not required, that you contact the authors of
+   the Document well before redistributing any large number of copies,
+   to give them a chance to provide you with an updated version of the
+   Document.
+
+4. MODIFICATIONS
+
+   You may copy and distribute a Modified Version of the Document under
+   the conditions of sections 2 and 3 above, provided that you release
+   the Modified Version under precisely this License, with the Modified
+   Version filling the role of the Document, thus licensing distribution
+   and modification of the Modified Version to whoever possesses a copy
+   of it. In addition, you must do these things in the Modified Version:
+
+   1. Use in the Title Page (and on the covers, if any) a title distinct
+      from that of the Document, and from those of previous versions
+      (which should, if there were any, be listed in the History section
+      of the Document). You may use the same title as a previous version
+      if the original publisher of that version gives permission.
+   2. List on the Title Page, as authors, one or more persons or
+      entities responsible for authorship of the modifications in the
+      Modified Version, together with at least five of the principal
+      authors of the Document (all of its principal authors, if it has
+      fewer than five), unless they release you from this requirement.
+   3. State on the Title page the name of the publisher of the Modified
+      Version, as the publisher.
+   4. Preserve all the copyright notices of the Document.
+   5. Add an appropriate copyright notice for your modifications
+      adjacent to the other copyright notices.
+   6. Include, immediately after the copyright notices, a license notice
+      giving the public permission to use the Modified Version under the
+      terms of this License, in the form shown in the Addendum below.
+   7. Preserve in that license notice the full lists of Invariant
+      Sections and required Cover Texts given in the Document's license
+      notice.
+   8. Include an unaltered copy of this License.
+   9. Preserve the section Entitled “History”, Preserve its Title, and
+      add to it an item stating at least the title, year, new authors,
+      and publisher of the Modified Version as given on the Title Page.
+      If there is no section Entitled “History” in the Document, create
+      one stating the title, year, authors, and publisher of the
+      Document as given on its Title Page, then add an item describing
+      the Modified Version as stated in the previous sentence.
+   10. Preserve the network location, if any, given in the Document for
+       public access to a Transparent copy of the Document, and likewise
+       the network locations given in the Document for previous versions
+       it was based on. These may be placed in the “History” section.
+       You may omit a network location for a work that was published at
+       least four years before the Document itself, or if the original
+       publisher of the version it refers to gives permission.
+   11. For any section Entitled “Acknowledgements” or “Dedications”,
+       Preserve the Title of the section, and preserve in the section
+       all the substance and tone of each of the contributor
+       acknowledgements and/or dedications given therein.
+   12. Preserve all the Invariant Sections of the Document, unaltered in
+       their text and in their titles. Section numbers or the equivalent
+       are not considered part of the section titles.
+   13. Delete any section Entitled “Endorsements”. Such a section may
+       not be included in the Modified Version.
+   14. Do not retitle any existing section to be Entitled “Endorsements”
+       or to conflict in title with any Invariant Section.
+   15. Preserve any Warranty Disclaimers.
+
+   If the Modified Version includes new front-matter sections or
+   appendices that qualify as Secondary Sections and contain no material
+   copied from the Document, you may at your option designate some or
+   all of these sections as invariant. To do this, add their titles to
+   the list of Invariant Sections in the Modified Version's license
+   notice. These titles must be distinct from any other section titles.
+
+   You may add a section Entitled “Endorsements”, provided it contains
+   nothing but endorsements of your Modified Version by various
+   parties---for example, statements of peer review or that the text has
+   been approved by an organization as the authoritative definition of a
+   standard.
+
+   You may add a passage of up to five words as a Front-Cover Text, and
+   a passage of up to 25 words as a Back-Cover Text, to the end of the
+   list of Cover Texts in the Modified Version. Only one passage of
+   Front-Cover Text and one of Back-Cover Text may be added by (or
+   through arrangements made by) any one entity. If the Document already
+   includes a cover text for the same cover, previously added by you or
+   by arrangement made by the same entity you are acting on behalf of,
+   you may not add another; but you may replace the old one, on explicit
+   permission from the previous publisher that added the old one.
+
+   The author(s) and publisher(s) of the Document do not by this License
+   give permission to use their names for publicity for or to assert or
+   imply endorsement of any Modified Version.
+
+5. COMBINING DOCUMENTS
+
+   You may combine the Document with other documents released under this
+   License, under the terms defined in section 4 above for modified
+   versions, provided that you include in the combination all of the
+   Invariant Sections of all of the original documents, unmodified, and
+   list them all as Invariant Sections of your combined work in its
+   license notice, and that you preserve all their Warranty Disclaimers.
+
+   The combined work need only contain one copy of this License, and
+   multiple identical Invariant Sections may be replaced with a single
+   copy. If there are multiple Invariant Sections with the same name but
+   different contents, make the title of each such section unique by
+   adding at the end of it, in parentheses, the name of the original
+   author or publisher of that section if known, or else a unique
+   number. Make the same adjustment to the section titles in the list of
+   Invariant Sections in the license notice of the combined work.
+
+   In the combination, you must combine any sections Entitled “History”
+   in the various original documents, forming one section Entitled
+   “History”; likewise combine any sections Entitled “Acknowledgements”,
+   and any sections Entitled “Dedications”. You must delete all sections
+   Entitled “Endorsements.”
+
+6. COLLECTIONS OF DOCUMENTS
+
+   You may make a collection consisting of the Document and other
+   documents released under this License, and replace the individual
+   copies of this License in the various documents with a single copy
+   that is included in the collection, provided that you follow the
+   rules of this License for verbatim copying of each of the documents
+   in all other respects.
+
+   You may extract a single document from such a collection, and
+   distribute it individually under this License, provided you insert a
+   copy of this License into the extracted document, and follow this
+   License in all other respects regarding verbatim copying of that
+   document.
+
+7. AGGREGATION WITH INDEPENDENT WORKS
+
+   A compilation of the Document or its derivatives with other separate
+   and independent documents or works, in or on a volume of a storage or
+   distribution medium, is called an “aggregate” if the copyright
+   resulting from the compilation is not used to limit the legal rights
+   of the compilation's users beyond what the individual works permit.
+   When the Document is included in an aggregate, this License does not
+   apply to the other works in the aggregate which are not themselves
+   derivative works of the Document.
+
+   If the Cover Text requirement of section 3 is applicable to these
+   copies of the Document, then if the Document is less than one half of
+   the entire aggregate, the Document's Cover Texts may be placed on
+   covers that bracket the Document within the aggregate, or the
+   electronic equivalent of covers if the Document is in electronic
+   form. Otherwise they must appear on printed covers that bracket the
+   whole aggregate.
+
+8. TRANSLATION
+
+   Translation is considered a kind of modification, so you may
+   distribute translations of the Document under the terms of section 4.
+   Replacing Invariant Sections with translations requires special
+   permission from their copyright holders, but you may include
+   translations of some or all Invariant Sections in addition to the
+   original versions of these Invariant Sections. You may include a
+   translation of this License, and all the license notices in the
+   Document, and any Warranty Disclaimers, provided that you also
+   include the original English version of this License and the original
+   versions of those notices and disclaimers. In case of a disagreement
+   between the translation and the original version of this License or a
+   notice or disclaimer, the original version will prevail.
+
+   If a section in the Document is Entitled “Acknowledgements”,
+   “Dedications”, or “History”, the requirement (section 4) to Preserve
+   its Title (section 1) will typically require changing the actual
+   title.
+
+9. TERMINATION
+
+   You may not copy, modify, sublicense, or distribute the Document
+   except as expressly provided under this License. Any attempt
+   otherwise to copy, modify, sublicense, or distribute it is void, and
+   will automatically terminate your rights under this License.
+
+   However, if you cease all violation of this License, then your
+   license from a particular copyright holder is reinstated (a)
+   provisionally, unless and until the copyright holder explicitly and
+   finally terminates your license, and (b) permanently, if the
+   copyright holder fails to notify you of the violation by some
+   reasonable means prior to 60 days after the cessation.
+
+   Moreover, your license from a particular copyright holder is
+   reinstated permanently if the copyright holder notifies you of the
+   violation by some reasonable means, this is the first time you have
+   received notice of violation of this License (for any work) from that
+   copyright holder, and you cure the violation prior to 30 days after
+   your receipt of the notice.
+
+   Termination of your rights under this section does not terminate the
+   licenses of parties who have received copies or rights from you under
+   this License. If your rights have been terminated and not permanently
+   reinstated, receipt of a copy of some or all of the same material
+   does not give you any rights to use it.
+
+10. FUTURE REVISIONS OF THIS LICENSE
+
+    The Free Software Foundation may publish new, revised versions of
+    the GNU Free Documentation License from time to time. Such new
+    versions will be similar in spirit to the present version, but may
+    differ in detail to address new problems or concerns. See
+    [[https://www.gnu.org/licenses/]].
+
+    Each version of the License is given a distinguishing version
+    number. If the Document specifies that a particular numbered version
+    of this License “or any later version” applies to it, you have the
+    option of following the terms and conditions either of that
+    specified version or of any later version that has been published
+    (not as a draft) by the Free Software Foundation. If the Document
+    does not specify a version number of this License, you may choose
+    any version ever published (not as a draft) by the Free Software
+    Foundation. If the Document specifies that a proxy can decide which
+    future versions of this License can be used, that proxy's public
+    statement of acceptance of a version permanently authorizes you to
+    choose that version for the Document.
+
+11. RELICENSING
+
+    “Massive Multiauthor Collaboration Site” (or “MMC Site”) means any
+    World Wide Web server that publishes copyrightable works and also
+    provides prominent facilities for anybody to edit those works. A
+    public wiki that anybody can edit is an example of such a server. A
+    “Massive Multiauthor Collaboration” (or “MMC”) contained in the site
+    means any set of copyrightable works thus published on the MMC site.
+
+    “CC-BY-SA” means the Creative Commons Attribution-Share Alike 3.0
+    license published by Creative Commons Corporation, a not-for-profit
+    corporation with a principal place of business in San Francisco,
+    California, as well as future copyleft versions of that license
+    published by that same organization.
+
+    “Incorporate” means to publish or republish a Document, in whole or
+    in part, as part of another Document.
+
+    An MMC is “eligible for relicensing” if it is licensed under this
+    License, and if all works that were first published under this
+    License somewhere other than this MMC, and subsequently incorporated
+    in whole or in part into the MMC, (1) had no cover texts or
+    invariant sections, and (2) were thus incorporated prior to November
+    1, 2008.
+
+    The operator of an MMC Site may republish an MMC contained in the
+    site under CC-BY-SA on the same site at any time before August 1,
+    2009, provided the MMC is eligible for relicensing.
+
+*** ADDENDUM: How to use this License for your documents [[#ADDENDUM_003a-How-to-use-this-License-for-your-documents][¶]]
+:PROPERTIES:
+:CUSTOM_ID: ADDENDUM_003a-How-to-use-this-License-for-your-documents
+:CLASS: heading
+:END:
+To use this License in a document you have written, include a copy of
+the License in the document and put the following copyright and license
+notices just after the title page:
+
+#+begin_src example-preformatted
+  Copyright (C)  year  your name.
+  Permission is granted to copy, distribute and/or modify this document
+  under the terms of the GNU Free Documentation License, Version 1.3
+  or any later version published by the Free Software Foundation;
+  with no Invariant Sections, no Front-Cover Texts, and no Back-Cover
+  Texts.  A copy of the license is included in the section entitled ``GNU
+  Free Documentation License''.
+#+end_src
+
+If you have Invariant Sections, Front-Cover Texts and Back-Cover Texts,
+replace the “with...Texts.” line with this:
+
+#+begin_src example-preformatted
+    with the Invariant Sections being list their titles, with
+    the Front-Cover Texts being list, and with the Back-Cover Texts
+    being list.
+#+end_src
+
+If you have Invariant Sections without Cover Texts, or some other
+combination of the three, merge those two alternatives to suit the
+situation.
+
+If your document contains nontrivial examples of program code, we
+recommend releasing these examples in parallel under your choice of free
+software license, such as the GNU General Public License, to permit
+their use in free software.
+
+--------------
+
+**** Footnotes
+:PROPERTIES:
+:CUSTOM_ID: footnotes
+:CLASS: footnotes-heading
+:END:
+***** [[#DOCF1][(1)]]
+:PROPERTIES:
+:CUSTOM_ID: section
+:CLASS: footnote-body-heading
+:END:
+The =skip-when= macro was added in Emacs 30.1. If you need your tests to
+be compatible with older versions of Emacs, use =skip-unless= instead.

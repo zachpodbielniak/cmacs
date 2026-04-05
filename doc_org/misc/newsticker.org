@@ -1,0 +1,1169 @@
+<<Top>>
+
+Next: [[#Overview][Overview]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+* Newsticker [[#Newsticker][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Newsticker
+:CLASS: top
+:END:
+This manual documents Newsticker, a feed reader for Emacs. It
+corresponds to Emacs version 31.0.50.
+
+Copyright © 2004--2026 Free Software Foundation, Inc.
+
+#+begin_quote
+Permission is granted to copy, distribute and/or modify this document
+under the terms of the GNU Free Documentation License, Version 1.3 or
+any later version published by the Free Software Foundation; with no
+Invariant Sections, with the Front-Cover Texts being “A GNU Manual”, and
+with the Back-Cover Texts as in (a) below. A copy of the license is
+included in the section entitled “GNU Free Documentation License”.
+
+(a) The FSF's Back-Cover Text is: “You have the freedom to copy and
+modify this GNU manual.”
+#+end_quote
+
+<<SEC_Contents>>
+** Table of Contents
+:PROPERTIES:
+:CUSTOM_ID: table-of-contents
+:CLASS: contents-heading
+:END:
+
+- [[#Overview][1 Overview]]
+- [[#Installation][2 Installation]]
+- [[#Retrieving-News][3 Retrieving News]]
+- [[#Headline-Management][4 Headline Management]]
+- [[#Reading-News][5 Reading News]]
+  - [[#Frontends][5.1 Frontends]]
+  - [[#Navigation][5.2 Navigation]]
+  - [[#Marking][5.3 Marking]]
+  - [[#More-Actions][5.4 More Actions]]
+- [[#Automatic-Processing][6 Automatic Processing]]
+- [[#Configuration][7 Configuration]]
+- [[#Supported-Formats][Appendix A Supported Formats]]
+- [[#GNU-Free-Documentation-License][Appendix B GNU Free Documentation License]]
+- [[#Index][Index]]
+
+--------------
+
+<<Overview>>
+
+Next: [[#Installation][Installation]], Previous: [[#Top][Newsticker]],
+Up: [[#Top][Newsticker]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+** 1 Overview [[#Overview-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Overview-1
+:CLASS: chapter
+:END:
+Newsticker provides a *Feed Reader* for Emacs. It retrieves headlines
+from a list of news sites, processes them, and provides frontends for
+reading and managing them. (Standard headline formats are RSS and Atom
+which makes Newsticker an “RSS Reader”, “Atom Reader” or “Feed
+Aggregator”.)
+
+Headlines (or news items) consist of a title, (mostly) a description,
+and a link to the full story. The description may be a brief summary in
+plain text or a full HTML-formatted article. A headline may carry
+enclosed data such as images, audio or video files, typically in the
+case of so “podcast feeds”.
+
+Newsticker downloads headlines asynchronously at configurable times,
+processes and stores them so that you can read them later. The list of
+subscribed feeds, the headline processing, the presentation of the
+headlines and almost all other aspects of Newsticker can be customized
+to your liking.
+
+--------------
+
+<<Installation>>
+
+Next: [[#Retrieving-News][Retrieving News]], Previous:
+[[#Overview][Overview]], Up: [[#Top][Newsticker]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+** 2 Installation [[#Installation-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Installation-1
+:CLASS: chapter
+:END:
+As Newsticker is part of GNU Emacs there is no need to perform any
+installation steps in order to use it.
+
+Newsticker is highly customizable. All options have reasonable default
+values, so that (in most cases) it is not necessary to customize
+anything before you start Newsticker for the first time.
+
+--------------
+
+<<Retrieving-News>>
+
+Next: [[#Headline-Management][Headline Management]], Previous:
+[[#Installation][Installation]], Up: [[#Top][Newsticker]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+** 3 Retrieving News [[#Retrieving-News-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Retrieving-News-1
+:CLASS: chapter
+:END:
+Newsticker downloads news periodically in the background. This is
+triggered as soon as you start reading news
+([[#Reading-News][Reading News]]).
+
+Alternatively you may use the command =newsticker-start=
+(=newsticker-stop=) in order to start (stop) the periodic download of
+news without opening the reader.
+
+The following variables define which feeds are fetched and how this is
+done.
+
+- <<index-newsticker_002durl_002dlist_002ddefaults>>=newsticker-url-list-defaults=
+  [[#index-newsticker_002durl_002dlist_002ddefaults][¶]] :: You may
+  select any number of feeds from this list of (sample) news feeds.
+
+- <<index-newsticker_002durl_002dlist>>=newsticker-url-list=
+  [[#index-newsticker_002durl_002dlist][¶]] :: All your personal news
+  feeds are defined here. Each feed is identified by its name and an
+  URL. You may set the start-time and the retrieval interval for each
+  feed as well as the retrieval command arguments in case that the
+  default values do not fit a certain feed.
+
+-
+  <<index-newsticker_002dretrieval_002dmethod>>=newsticker-retrieval-method=
+  [[#index-newsticker_002dretrieval_002dmethod][¶]] :: By default
+  Newsticker uses Emacs's built-in download capabilities for fetching
+  headlines. You may change this to use an external tool like =wget=. In
+  this case you need to set =newsticker-wget-name= and possibly
+  =newsticker-wget-arguments=.
+
+- <<index-newsticker_002dretrieval_002dinterval>>=newsticker-retrieval-interval=
+  [[#index-newsticker_002dretrieval_002dinterval][¶]] :: The number of
+  seconds between headline retrievals.
+
+--------------
+
+<<Headline-Management>>
+
+Next: [[#Reading-News][Reading News]], Previous:
+[[#Retrieving-News][Retrieving News]], Up: [[#Top][Newsticker]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+** 4 Headline Management [[#Headline-Management-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Headline-Management-1
+:CLASS: chapter
+:END:
+Newsticker assigns a status (or “age”) to each headline which you can
+modify manually. This makes it easy to distinguish new headlines from
+old ones, to keep important headlines, to hide boring headlines etc. An
+item is “new” when it has just arrived and has not been read. You can
+mark it as “old” when you have read it or -- if you want to keep it --
+you can mark it as “immortal”. You can do that manually and you can
+define filters which do that automatically, see below. When a headline
+has vanished from the feed it is automatically marked as “obsolete”
+unless it has the status “immortal”. “Obsolete” headlines get removed
+automatically after a certain time.
+
+-  <<index-Filter>>=newsticker-auto-mark-filter-list=
+  [[#index-Filter][¶]] :: You may define any number of filters for
+  automatically marking newly arrived headlines as “immortal” or “old”.
+  A filter looks for a regular expression in either the title or the
+  description of a headline and then, if the expression matches, marks
+  the headline as “immortal” or as “old”. This is done only once, when a
+  headline is fetched for the very first time.
+
+-
+  <<index-newsticker_002dkeep_002dobsolete_002ditems>>=newsticker-keep-obsolete-items=
+  [[#index-newsticker_002dkeep_002dobsolete_002ditems][¶]] :: Obsolete
+  headlines are removed immediately unless
+  =newsticker-keep-obsolete-items= is non-=nil= in which case they are
+  kept until =newsticker-obsolete-item-max-age= is reached.
+
+- <<index-newsticker_002dautomatically_002dmark_002ditems_002das_002dold>>=newsticker-automatically-mark-items-as-old=
+  [[#index-newsticker_002dautomatically_002dmark_002ditems_002das_002dold][¶]] :: If
+  this is set to =t= then a “new” item becomes “old” as soon as it is
+  retrieved a second time.
+
+--------------
+
+<<Reading-News>>
+
+Next: [[#Automatic-Processing][Automatic Processing]], Previous:
+[[#Headline-Management][Headline Management]], Up: [[#Top][Newsticker]]
+  [[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+** 5 Reading News [[#Reading-News-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Reading-News-1
+:CLASS: chapter
+:END:
+Start Newsticker with the command M-x newsticker-show-news. This will
+start the asynchronous news download and displays all available
+headlines.
+
+- [[#Frontends][Frontends]]
+- [[#Navigation][Navigation]]
+- [[#Marking][Marking]]
+- [[#More-Actions][More Actions]]
+
+--------------
+
+<<Frontends>>
+
+Next: [[#Navigation][Navigation]], Up: [[#Reading-News][Reading News]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 5.1 Frontends [[#Frontends-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Frontends-1
+:CLASS: section
+:END:
+Newsticker provides two different /views/ for browsing, marking and
+reading news. The variable =newsticker-frontend= determines the actual
+headline reader.
+
+**** Treeview [[#Treeview][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Treeview
+:CLASS: subheading
+:END:
+In this view separate windows are used for displaying feeds, headlines
+and their descriptions. The feeds are shown as a tree on the left hand
+side, headlines of the currently selected feed are shown on the upper
+right side, and the full contents of the currently selected headline is
+shown on the lower right side.
+
+Feeds can be placed into groups, which themselves can be placed in
+groups and so on. This results in the tree which is displayed on the
+left. A node represents either a feed or a group of feeds holding a
+subtree. The following commands allow for managing groups.
+
+-  <<index-M_002da>>M-a [[#index-M_002da][¶]] :: Add a new feed group.
+  Name of the new group and of the parent group must be entered. If The
+  name of the parent group is the new group becomes a top-level group.
+  (=newsticker-group-add-group=)
+
+-  <<index-M_002dm>>M-m [[#index-M_002dm][¶]] :: Moves a feed into a
+  group. The name of the group must be entered.
+  (=newsticker-group-move-feed=)
+
+The position of groups and feeds within the tree can be changed with
+these commands:
+
+-  <<index-M_002dUP>>M-UP [[#index-M_002dUP][¶]]\\
+  M-DOWN :: Shift the currently selected feed up and down within its
+  group.
+
+-  <<index-M_002dS_002dUP>>M-S-UP [[#index-M_002dS_002dUP][¶]]\\
+  M-S-DOWN :: Shift the currently selected group up and down within its
+  parent group.
+
+The group settings are saved to a file either automatically when
+newsticker is being quit or manually when the following command is
+executed.
+
+-  <<index-s>>s [[#index-s][¶]] :: Save treeview group settings.
+
+The Treeview is updated automatically as soon as new headlines have
+arrived.
+
+The Treeview is used when the variable =newsticker-frontend= is set to
+the value =newsticker-treeview=. (Alternatively it can be started with
+the command =newsticker-treeview=.)
+
+**** Plainview [[#Plainview][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Plainview
+:CLASS: subheading
+:END:
+In this view all headlines of all feeds are displayed in a single buffer
+(=*newsticker*=). The modeline in the =*newsticker*= buffer informs you
+whenever new headlines have arrived.
+
+You may want to use imenu with Plainview, which allows for navigating
+with the help of a menu. In this case add the following to your Emacs
+startup file (=~/.emacs=).
+
+#+begin_src lisp-preformatted
+(add-hook 'newsticker-mode-hook 'imenu-add-menubar-index)
+#+end_src
+
+(Note that preparing the Plainview takes significantly more time than
+starting the Treeview because all headlines are displayed in a single
+buffer. When you have subscribed to a large amount of feeds you may find
+that Newsticker's efforts of minimizing rendering times, caching
+rendered items and so on you may find However, when you have subscribed
+to a large amount of feeds you may want to give the Treeview a try.)
+
+The Plainview is used when the variable =newsticker-frontend= is set to
+the value =newsticker-plainview=. (Alternatively it can be started with
+the command =newsticker-plainview=.)
+
+**** Ticker [[#Ticker][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Ticker
+:CLASS: subheading
+:END:
+Additionally, headlines can be displayed in the echo area in the style
+of a news ticker.
+
+Headlines can be displayed in the echo area, either scrolling like
+messages in a stock-quote ticker, or just changing. This can be started
+with the command =newsticker-start-ticker=. It can be stopped with
+=newsticker-stop-ticker=.
+
+The ticker by default runs continuously. To only run it once, at a
+specific time interval, set the =newsticker-ticker-period= variable.
+
+--------------
+
+<<Navigation>>
+
+Next: [[#Marking][Marking]], Previous: [[#Frontends][Frontends]], Up:
+[[#Reading-News][Reading News]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 5.2 Navigation [[#Navigation-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Navigation-1
+:CLASS: section
+:END:
+Navigating through the list of feeds and headlines is rather
+straightforward. You may do this either with the mouse or with the
+keyboard. The following key bindings are provided in both, the Treeview
+as well as the Plainview.
+
+-  <<index-newsticker_002dnext_002dfeed>>f
+  [[#index-newsticker_002dnext_002dfeed][¶]] :: Move to next feed
+  (=newsticker-next-feed=, =newsticker-treeview-next-feed=).
+
+-  <<index-newsticker_002dprevious_002dfeed>>F
+  [[#index-newsticker_002dprevious_002dfeed][¶]] :: Move to previous
+  feed (=newsticker-previous-feed=, =newsticker-treeview-prev-feed=).
+
+-  <<index-newsticker_002dnext_002ditem>>n
+  [[#index-newsticker_002dnext_002ditem][¶]] :: Move to next item
+  (=newsticker-next-item=, =newsticker-treeview-next-item=).
+
+-  <<index-newsticker_002dnext_002dnew_002ditem>>N
+  [[#index-newsticker_002dnext_002dnew_002ditem][¶]] :: Move to next new
+  item (possibly in another feed) (=newsticker-next-new-item=,
+  =newsticker-treeview-next-new-item=).
+
+-  <<index-newsticker_002dprevious_002ditem>>p
+  [[#index-newsticker_002dprevious_002ditem][¶]] :: Move to previous
+  item (=newsticker-previous-item=, =newsticker-treeview-prev-item=).
+
+-  <<index-newsticker_002dprevious_002dnew_002ditem>>P
+  [[#index-newsticker_002dprevious_002dnew_002ditem][¶]] :: Move to
+  previous new item (possibly in another feed)
+  (=newsticker-previous-new-item=, =newsticker-treeview-prev-new-item=).
+
+**** Treeview [[#Treeview-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Treeview-1
+:CLASS: subheading
+:END:
+- <<index-newsticker_002dtreeview_002djump>>j
+  [[#index-newsticker_002dtreeview_002djump][¶]] :: Enter the name of a
+  feed and jump to it (=newsticker-treeview-jump=).
+
+--------------
+
+<<Marking>>
+
+Next: [[#More-Actions][More Actions]], Previous:
+[[#Navigation][Navigation]], Up: [[#Reading-News][Reading News]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 5.3 Marking [[#Marking-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Marking-1
+:CLASS: section
+:END:
+The following key bindings are provided in both, the Treeview as well as
+the Plainview.
+
+-
+  <<index-newsticker_002dmark_002ditem_002dat_002dpoint_002das_002dread>>o
+  [[#index-newsticker_002dmark_002ditem_002dat_002dpoint_002das_002dread][¶]] :: Mark
+  current item as old. (=newsticker-mark-item-at-point-as-read=,
+  =newsticker-treeview-mark-item-old=).
+
+-
+  <<index-newsticker_002dmark_002ditem_002dat_002dpoint_002das_002dimmortal>>i
+  [[#index-newsticker_002dmark_002ditem_002dat_002dpoint_002das_002dimmortal][¶]] :: Mark
+  current item as immortal. Immortal items are kept forever.
+  (=newsticker-mark-item-at-point-as-immortal=,
+  =newsticker-treeview-mark-item-immortal=).
+
+--------------
+
+<<More-Actions>>
+
+Previous: [[#Marking][Marking]], Up: [[#Reading-News][Reading News]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 5.4 More Actions [[#More-Actions-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: More-Actions-1
+:CLASS: section
+:END:
+**** View full article [[#View-full-article][¶]]
+:PROPERTIES:
+:CUSTOM_ID: View-full-article
+:CLASS: subheading
+:END:
+-  <<index-newsticker_002dtreeview_002dbrowse_002durl>>v
+  [[#index-newsticker_002dtreeview_002dbrowse_002durl][¶]]\\
+  RET\\
+  mouse-1 :: Open the link to the full article (as contained in the
+  current headline) in your web browser
+  =newsticker-treeview-browse-url=).
+
+**** Get News [[#Get-News][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Get-News
+:CLASS: subheading
+:END:
+You can force immediate download of news with the following commands.
+
+- <<index-newsticker_002dtreeview_002dget_002dnews>>g
+  [[#index-newsticker_002dtreeview_002dget_002dnews][¶]] :: Get news for
+  currently shown feed (=newsticker-treeview-get-news=).
+
+- <<index-newsticker_002dget_002dall_002dnews>>G
+  [[#index-newsticker_002dget_002dall_002dnews][¶]] :: Get news for all
+  feeds (=newsticker-get-all-news=).
+
+**** Add More Feeds [[#Add-More-Feeds][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Add-More-Feeds
+:CLASS: subheading
+:END:
+- <<index-newsticker_002dadd_002durl>>a
+  [[#index-newsticker_002dadd_002durl][¶]] :: The command
+  =newsticker-add-url= prompts for an URL and a name of a new feed. It
+  then prepares a customization buffer where the details of the new feed
+  can be set.
+
+--------------
+
+<<Automatic-Processing>>
+
+Next: [[#Configuration][Configuration]], Previous:
+[[#Reading-News][Reading News]], Up: [[#Top][Newsticker]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+** 6 Automatic Processing [[#Automatic-Processing-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Automatic-Processing-1
+:CLASS: chapter
+:END:
+Apart from automatic marking of headlines (by means of filters)
+Newsticker provides the possibility to fully process newly arrived
+headlines. Instead of reading headlines yourself you can tell Newsticker
+to do that for you.
+
+In order to do so write a function which takes two arguments
+
+- =FEEDNAME= :: the name of the corresponding news feed,
+
+- =ITEM= :: the decoded headline.
+
+and add it to =newsticker-new-item-functions=. Each function contained
+in this list is called once for each new headline. Depending on the feed
+name and the contents of the new headline you can
+
+- automatically download images referenced in HTML-formatted
+  descriptions (for which a function already exists, see
+  =newsticker-download-images=),
+- automatically save enclosed audio and video files (for which another
+  function exists as well, see =newsticker-download-enclosures=),
+- flash the screen while playing some sound,
+- whatever you want.
+
+--------------
+
+<<Configuration>>
+
+Next: [[#Supported-Formats][Supported Formats]], Previous:
+[[#Automatic-Processing][Automatic Processing]], Up:
+[[#Top][Newsticker]]   [[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+** 7 Configuration [[#Configuration-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Configuration-1
+:CLASS: chapter
+:END:
+All Newsticker options are customizable, i.e., they can be changed with
+Emacs customization methods. Call the command =customize-group= and
+enter ‘=newsticker=' for the customization group.
+
+The following list shows the available groups of Newsticker options and
+some of the most important options.
+
+- =newsticker-retrieval= contains options that define which news feeds
+  are retrieved and how this is done.
+  -  =newsticker-url-list= defines the list of headlines that are
+    retrieved.
+  -  =newsticker-retrieval-method= defines how headlines are retrieved.
+    This is either done using Emacs's built-in download capabilities or
+    using an external tool.
+  -  =newsticker-retrieval-interval= defines how often headlines are
+    retrieved.
+- =newsticker-headline-processing= contains options that define how the
+  retrieved headlines are processed.
+  -  =newsticker-keep-obsolete-items= decides whether unread headlines
+    that have been removed from the feed are kept in the Newsticker
+    cache.
+  -  =newsticker-auto-mark-filter-list= provides the possibility to
+    automatically mark headlines as immortal or old.
+- =newsticker-hooks= contains options for hooking other Emacs commands
+  to newsticker functions.
+  -  =newsticker-new-item-functions= allows for automatic processing of
+    headlines. See =newsticker-download-images=, and
+    =newsticker-download-enclosures= for sample functions.
+  -  The subgroup =newsticker-plainview-hooks= contains hooks that apply
+    to the plainview reader only.
+- =newsticker-miscellaneous= contains other Newsticker options.
+- =newsticker-ticker= contains options that define how headlines are
+  shown in the echo area, i.e., the “ticker”.
+  -  =newsticker-ticker-interval=, =newsticker-ticker-period=, and
+    =newsticker-scroll-smoothly= define how headlines are shown in the
+    echo area.
+- =newsticker-reader= contains options for adjusting the headline
+  reader.
+  -  =newsticker-frontend= determines the actual headline reader. The
+    “plainview” reader uses a single buffer, the “treeview” uses
+    separate buffers and windows.
+
+  -  The subgroup =newsticker-plainview= contains options for the
+    plainview reader.
+  -  The subgroup =newsticker-treeview= contains options for the
+    treeview reader.
+
+For the complete list of options please have a look at the customization
+buffers.
+
+--------------
+
+<<Supported-Formats>>
+
+Next:
+[[#GNU-Free-Documentation-License][GNU Free Documentation License]],
+Previous: [[#Configuration][Configuration]], Up: [[#Top][Newsticker]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+** Appendix A Supported Formats [[#Supported-Formats-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Supported-Formats-1
+:CLASS: appendix
+:END:
+Newsticker works with the standard RSS and Atom formats listed below
+(being lenient with feeds which break the specifications).
+
+**** RSS formats [[#RSS-formats][¶]]
+:PROPERTIES:
+:CUSTOM_ID: RSS-formats
+:CLASS: subheading
+:END:
+- RSS 0.91 (see [[http://backend.userland.com/rss091]])
+- RSS 0.92 (see [[http://backend.userland.com/rss092]])
+- RSS 1.0 (see [[http://web.resource.org/rss/1.0/spec]])
+- RSS 2.0 (see [[https://cyber.harvard.edu/rss/rss.html]])
+
+**** Atom formats [[#Atom-formats][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Atom-formats
+:CLASS: subheading
+:END:
+- Atom 0.3
+- Atom 1.0 (see [[https://datatracker.ietf.org/doc/rfc4287/]])
+
+--------------
+
+<<GNU-Free-Documentation-License>>
+
+Next: [[#Index][Index]], Previous:
+[[#Supported-Formats][Supported Formats]], Up: [[#Top][Newsticker]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+** Appendix B GNU Free Documentation License [[#GNU-Free-Documentation-License-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: GNU-Free-Documentation-License-1
+:CLASS: appendix
+:END:
+
+#+begin_center
+Version 1.3, 3 November 2008
+#+end_center
+
+#+begin_src display-preformatted
+Copyright © 2000, 2001, 2002, 2007, 2008 Free Software Foundation, Inc.
+https://fsf.org/
+
+Everyone is permitted to copy and distribute verbatim copies
+of this license document, but changing it is not allowed.
+#+end_src
+
+0. [@0] PREAMBLE
+
+   The purpose of this License is to make a manual, textbook, or other
+   functional and useful document /free/ in the sense of freedom: to
+   assure everyone the effective freedom to copy and redistribute it,
+   with or without modifying it, either commercially or noncommercially.
+   Secondarily, this License preserves for the author and publisher a
+   way to get credit for their work, while not being considered
+   responsible for modifications made by others.
+
+   This License is a kind of “copyleft”, which means that derivative
+   works of the document must themselves be free in the same sense. It
+   complements the GNU General Public License, which is a copyleft
+   license designed for free software.
+
+   We have designed this License in order to use it for manuals for free
+   software, because free software needs free documentation: a free
+   program should come with manuals providing the same freedoms that the
+   software does. But this License is not limited to software manuals;
+   it can be used for any textual work, regardless of subject matter or
+   whether it is published as a printed book. We recommend this License
+   principally for works whose purpose is instruction or reference.
+
+1. APPLICABILITY AND DEFINITIONS
+
+   This License applies to any manual or other work, in any medium, that
+   contains a notice placed by the copyright holder saying it can be
+   distributed under the terms of this License. Such a notice grants a
+   world-wide, royalty-free license, unlimited in duration, to use that
+   work under the conditions stated herein. The “Document”, below,
+   refers to any such manual or work. Any member of the public is a
+   licensee, and is addressed as “you”. You accept the license if you
+   copy, modify or distribute the work in a way requiring permission
+   under copyright law.
+
+   A “Modified Version” of the Document means any work containing the
+   Document or a portion of it, either copied verbatim, or with
+   modifications and/or translated into another language.
+
+   A “Secondary Section” is a named appendix or a front-matter section
+   of the Document that deals exclusively with the relationship of the
+   publishers or authors of the Document to the Document's overall
+   subject (or to related matters) and contains nothing that could fall
+   directly within that overall subject. (Thus, if the Document is in
+   part a textbook of mathematics, a Secondary Section may not explain
+   any mathematics.) The relationship could be a matter of historical
+   connection with the subject or with related matters, or of legal,
+   commercial, philosophical, ethical or political position regarding
+   them.
+
+   The “Invariant Sections” are certain Secondary Sections whose titles
+   are designated, as being those of Invariant Sections, in the notice
+   that says that the Document is released under this License. If a
+   section does not fit the above definition of Secondary then it is not
+   allowed to be designated as Invariant. The Document may contain zero
+   Invariant Sections. If the Document does not identify any Invariant
+   Sections then there are none.
+
+   The “Cover Texts” are certain short passages of text that are listed,
+   as Front-Cover Texts or Back-Cover Texts, in the notice that says
+   that the Document is released under this License. A Front-Cover Text
+   may be at most 5 words, and a Back-Cover Text may be at most 25
+   words.
+
+   A “Transparent” copy of the Document means a machine-readable copy,
+   represented in a format whose specification is available to the
+   general public, that is suitable for revising the document
+   straightforwardly with generic text editors or (for images composed
+   of pixels) generic paint programs or (for drawings) some widely
+   available drawing editor, and that is suitable for input to text
+   formatters or for automatic translation to a variety of formats
+   suitable for input to text formatters. A copy made in an otherwise
+   Transparent file format whose markup, or absence of markup, has been
+   arranged to thwart or discourage subsequent modification by readers
+   is not Transparent. An image format is not Transparent if used for
+   any substantial amount of text. A copy that is not “Transparent” is
+   called “Opaque”.
+
+   Examples of suitable formats for Transparent copies include plain
+   ASCII without markup, Texinfo input format, LaTeX input format, SGML
+   or XML using a publicly available DTD, and standard-conforming simple
+   HTML, PostScript or PDF designed for human modification. Examples of
+   transparent image formats include PNG, XCF and JPG. Opaque formats
+   include proprietary formats that can be read and edited only by
+   proprietary word processors, SGML or XML for which the DTD and/or
+   processing tools are not generally available, and the
+   machine-generated HTML, PostScript or PDF produced by some word
+   processors for output purposes only.
+
+   The “Title Page” means, for a printed book, the title page itself,
+   plus such following pages as are needed to hold, legibly, the
+   material this License requires to appear in the title page. For works
+   in formats which do not have any title page as such, “Title Page”
+   means the text near the most prominent appearance of the work's
+   title, preceding the beginning of the body of the text.
+
+   The “publisher” means any person or entity that distributes copies of
+   the Document to the public.
+
+   A section “Entitled XYZ” means a named subunit of the Document whose
+   title either is precisely XYZ or contains XYZ in parentheses
+   following text that translates XYZ in another language. (Here XYZ
+   stands for a specific section name mentioned below, such as
+   “Acknowledgements”, “Dedications”, “Endorsements”, or “History”.) To
+   “Preserve the Title” of such a section when you modify the Document
+   means that it remains a section “Entitled XYZ” according to this
+   definition.
+
+   The Document may include Warranty Disclaimers next to the notice
+   which states that this License applies to the Document. These
+   Warranty Disclaimers are considered to be included by reference in
+   this License, but only as regards disclaiming warranties: any other
+   implication that these Warranty Disclaimers may have is void and has
+   no effect on the meaning of this License.
+
+2. VERBATIM COPYING
+
+   You may copy and distribute the Document in any medium, either
+   commercially or noncommercially, provided that this License, the
+   copyright notices, and the license notice saying this License applies
+   to the Document are reproduced in all copies, and that you add no
+   other conditions whatsoever to those of this License. You may not use
+   technical measures to obstruct or control the reading or further
+   copying of the copies you make or distribute. However, you may accept
+   compensation in exchange for copies. If you distribute a large enough
+   number of copies you must also follow the conditions in section 3.
+
+   You may also lend copies, under the same conditions stated above, and
+   you may publicly display copies.
+
+3. COPYING IN QUANTITY
+
+   If you publish printed copies (or copies in media that commonly have
+   printed covers) of the Document, numbering more than 100, and the
+   Document's license notice requires Cover Texts, you must enclose the
+   copies in covers that carry, clearly and legibly, all these Cover
+   Texts: Front-Cover Texts on the front cover, and Back-Cover Texts on
+   the back cover. Both covers must also clearly and legibly identify
+   you as the publisher of these copies. The front cover must present
+   the full title with all words of the title equally prominent and
+   visible. You may add other material on the covers in addition.
+   Copying with changes limited to the covers, as long as they preserve
+   the title of the Document and satisfy these conditions, can be
+   treated as verbatim copying in other respects.
+
+   If the required texts for either cover are too voluminous to fit
+   legibly, you should put the first ones listed (as many as fit
+   reasonably) on the actual cover, and continue the rest onto adjacent
+   pages.
+
+   If you publish or distribute Opaque copies of the Document numbering
+   more than 100, you must either include a machine-readable Transparent
+   copy along with each Opaque copy, or state in or with each Opaque
+   copy a computer-network location from which the general network-using
+   public has access to download using public-standard network protocols
+   a complete Transparent copy of the Document, free of added material.
+   If you use the latter option, you must take reasonably prudent steps,
+   when you begin distribution of Opaque copies in quantity, to ensure
+   that this Transparent copy will remain thus accessible at the stated
+   location until at least one year after the last time you distribute
+   an Opaque copy (directly or through your agents or retailers) of that
+   edition to the public.
+
+   It is requested, but not required, that you contact the authors of
+   the Document well before redistributing any large number of copies,
+   to give them a chance to provide you with an updated version of the
+   Document.
+
+4. MODIFICATIONS
+
+   You may copy and distribute a Modified Version of the Document under
+   the conditions of sections 2 and 3 above, provided that you release
+   the Modified Version under precisely this License, with the Modified
+   Version filling the role of the Document, thus licensing distribution
+   and modification of the Modified Version to whoever possesses a copy
+   of it. In addition, you must do these things in the Modified Version:
+
+   1. Use in the Title Page (and on the covers, if any) a title distinct
+      from that of the Document, and from those of previous versions
+      (which should, if there were any, be listed in the History section
+      of the Document). You may use the same title as a previous version
+      if the original publisher of that version gives permission.
+   2. List on the Title Page, as authors, one or more persons or
+      entities responsible for authorship of the modifications in the
+      Modified Version, together with at least five of the principal
+      authors of the Document (all of its principal authors, if it has
+      fewer than five), unless they release you from this requirement.
+   3. State on the Title page the name of the publisher of the Modified
+      Version, as the publisher.
+   4. Preserve all the copyright notices of the Document.
+   5. Add an appropriate copyright notice for your modifications
+      adjacent to the other copyright notices.
+   6. Include, immediately after the copyright notices, a license notice
+      giving the public permission to use the Modified Version under the
+      terms of this License, in the form shown in the Addendum below.
+   7. Preserve in that license notice the full lists of Invariant
+      Sections and required Cover Texts given in the Document's license
+      notice.
+   8. Include an unaltered copy of this License.
+   9. Preserve the section Entitled “History”, Preserve its Title, and
+      add to it an item stating at least the title, year, new authors,
+      and publisher of the Modified Version as given on the Title Page.
+      If there is no section Entitled “History” in the Document, create
+      one stating the title, year, authors, and publisher of the
+      Document as given on its Title Page, then add an item describing
+      the Modified Version as stated in the previous sentence.
+   10. Preserve the network location, if any, given in the Document for
+       public access to a Transparent copy of the Document, and likewise
+       the network locations given in the Document for previous versions
+       it was based on. These may be placed in the “History” section.
+       You may omit a network location for a work that was published at
+       least four years before the Document itself, or if the original
+       publisher of the version it refers to gives permission.
+   11. For any section Entitled “Acknowledgements” or “Dedications”,
+       Preserve the Title of the section, and preserve in the section
+       all the substance and tone of each of the contributor
+       acknowledgements and/or dedications given therein.
+   12. Preserve all the Invariant Sections of the Document, unaltered in
+       their text and in their titles. Section numbers or the equivalent
+       are not considered part of the section titles.
+   13. Delete any section Entitled “Endorsements”. Such a section may
+       not be included in the Modified Version.
+   14. Do not retitle any existing section to be Entitled “Endorsements”
+       or to conflict in title with any Invariant Section.
+   15. Preserve any Warranty Disclaimers.
+
+   If the Modified Version includes new front-matter sections or
+   appendices that qualify as Secondary Sections and contain no material
+   copied from the Document, you may at your option designate some or
+   all of these sections as invariant. To do this, add their titles to
+   the list of Invariant Sections in the Modified Version's license
+   notice. These titles must be distinct from any other section titles.
+
+   You may add a section Entitled “Endorsements”, provided it contains
+   nothing but endorsements of your Modified Version by various
+   parties---for example, statements of peer review or that the text has
+   been approved by an organization as the authoritative definition of a
+   standard.
+
+   You may add a passage of up to five words as a Front-Cover Text, and
+   a passage of up to 25 words as a Back-Cover Text, to the end of the
+   list of Cover Texts in the Modified Version. Only one passage of
+   Front-Cover Text and one of Back-Cover Text may be added by (or
+   through arrangements made by) any one entity. If the Document already
+   includes a cover text for the same cover, previously added by you or
+   by arrangement made by the same entity you are acting on behalf of,
+   you may not add another; but you may replace the old one, on explicit
+   permission from the previous publisher that added the old one.
+
+   The author(s) and publisher(s) of the Document do not by this License
+   give permission to use their names for publicity for or to assert or
+   imply endorsement of any Modified Version.
+
+5. COMBINING DOCUMENTS
+
+   You may combine the Document with other documents released under this
+   License, under the terms defined in section 4 above for modified
+   versions, provided that you include in the combination all of the
+   Invariant Sections of all of the original documents, unmodified, and
+   list them all as Invariant Sections of your combined work in its
+   license notice, and that you preserve all their Warranty Disclaimers.
+
+   The combined work need only contain one copy of this License, and
+   multiple identical Invariant Sections may be replaced with a single
+   copy. If there are multiple Invariant Sections with the same name but
+   different contents, make the title of each such section unique by
+   adding at the end of it, in parentheses, the name of the original
+   author or publisher of that section if known, or else a unique
+   number. Make the same adjustment to the section titles in the list of
+   Invariant Sections in the license notice of the combined work.
+
+   In the combination, you must combine any sections Entitled “History”
+   in the various original documents, forming one section Entitled
+   “History”; likewise combine any sections Entitled “Acknowledgements”,
+   and any sections Entitled “Dedications”. You must delete all sections
+   Entitled “Endorsements.”
+
+6. COLLECTIONS OF DOCUMENTS
+
+   You may make a collection consisting of the Document and other
+   documents released under this License, and replace the individual
+   copies of this License in the various documents with a single copy
+   that is included in the collection, provided that you follow the
+   rules of this License for verbatim copying of each of the documents
+   in all other respects.
+
+   You may extract a single document from such a collection, and
+   distribute it individually under this License, provided you insert a
+   copy of this License into the extracted document, and follow this
+   License in all other respects regarding verbatim copying of that
+   document.
+
+7. AGGREGATION WITH INDEPENDENT WORKS
+
+   A compilation of the Document or its derivatives with other separate
+   and independent documents or works, in or on a volume of a storage or
+   distribution medium, is called an “aggregate” if the copyright
+   resulting from the compilation is not used to limit the legal rights
+   of the compilation's users beyond what the individual works permit.
+   When the Document is included in an aggregate, this License does not
+   apply to the other works in the aggregate which are not themselves
+   derivative works of the Document.
+
+   If the Cover Text requirement of section 3 is applicable to these
+   copies of the Document, then if the Document is less than one half of
+   the entire aggregate, the Document's Cover Texts may be placed on
+   covers that bracket the Document within the aggregate, or the
+   electronic equivalent of covers if the Document is in electronic
+   form. Otherwise they must appear on printed covers that bracket the
+   whole aggregate.
+
+8. TRANSLATION
+
+   Translation is considered a kind of modification, so you may
+   distribute translations of the Document under the terms of section 4.
+   Replacing Invariant Sections with translations requires special
+   permission from their copyright holders, but you may include
+   translations of some or all Invariant Sections in addition to the
+   original versions of these Invariant Sections. You may include a
+   translation of this License, and all the license notices in the
+   Document, and any Warranty Disclaimers, provided that you also
+   include the original English version of this License and the original
+   versions of those notices and disclaimers. In case of a disagreement
+   between the translation and the original version of this License or a
+   notice or disclaimer, the original version will prevail.
+
+   If a section in the Document is Entitled “Acknowledgements”,
+   “Dedications”, or “History”, the requirement (section 4) to Preserve
+   its Title (section 1) will typically require changing the actual
+   title.
+
+9. TERMINATION
+
+   You may not copy, modify, sublicense, or distribute the Document
+   except as expressly provided under this License. Any attempt
+   otherwise to copy, modify, sublicense, or distribute it is void, and
+   will automatically terminate your rights under this License.
+
+   However, if you cease all violation of this License, then your
+   license from a particular copyright holder is reinstated (a)
+   provisionally, unless and until the copyright holder explicitly and
+   finally terminates your license, and (b) permanently, if the
+   copyright holder fails to notify you of the violation by some
+   reasonable means prior to 60 days after the cessation.
+
+   Moreover, your license from a particular copyright holder is
+   reinstated permanently if the copyright holder notifies you of the
+   violation by some reasonable means, this is the first time you have
+   received notice of violation of this License (for any work) from that
+   copyright holder, and you cure the violation prior to 30 days after
+   your receipt of the notice.
+
+   Termination of your rights under this section does not terminate the
+   licenses of parties who have received copies or rights from you under
+   this License. If your rights have been terminated and not permanently
+   reinstated, receipt of a copy of some or all of the same material
+   does not give you any rights to use it.
+
+10. FUTURE REVISIONS OF THIS LICENSE
+
+    The Free Software Foundation may publish new, revised versions of
+    the GNU Free Documentation License from time to time. Such new
+    versions will be similar in spirit to the present version, but may
+    differ in detail to address new problems or concerns. See
+    [[https://www.gnu.org/licenses/]].
+
+    Each version of the License is given a distinguishing version
+    number. If the Document specifies that a particular numbered version
+    of this License “or any later version” applies to it, you have the
+    option of following the terms and conditions either of that
+    specified version or of any later version that has been published
+    (not as a draft) by the Free Software Foundation. If the Document
+    does not specify a version number of this License, you may choose
+    any version ever published (not as a draft) by the Free Software
+    Foundation. If the Document specifies that a proxy can decide which
+    future versions of this License can be used, that proxy's public
+    statement of acceptance of a version permanently authorizes you to
+    choose that version for the Document.
+
+11. RELICENSING
+
+    “Massive Multiauthor Collaboration Site” (or “MMC Site”) means any
+    World Wide Web server that publishes copyrightable works and also
+    provides prominent facilities for anybody to edit those works. A
+    public wiki that anybody can edit is an example of such a server. A
+    “Massive Multiauthor Collaboration” (or “MMC”) contained in the site
+    means any set of copyrightable works thus published on the MMC site.
+
+    “CC-BY-SA” means the Creative Commons Attribution-Share Alike 3.0
+    license published by Creative Commons Corporation, a not-for-profit
+    corporation with a principal place of business in San Francisco,
+    California, as well as future copyleft versions of that license
+    published by that same organization.
+
+    “Incorporate” means to publish or republish a Document, in whole or
+    in part, as part of another Document.
+
+    An MMC is “eligible for relicensing” if it is licensed under this
+    License, and if all works that were first published under this
+    License somewhere other than this MMC, and subsequently incorporated
+    in whole or in part into the MMC, (1) had no cover texts or
+    invariant sections, and (2) were thus incorporated prior to November
+    1, 2008.
+
+    The operator of an MMC Site may republish an MMC contained in the
+    site under CC-BY-SA on the same site at any time before August 1,
+    2009, provided the MMC is eligible for relicensing.
+
+*** ADDENDUM: How to use this License for your documents [[#ADDENDUM_003a-How-to-use-this-License-for-your-documents][¶]]
+:PROPERTIES:
+:CUSTOM_ID: ADDENDUM_003a-How-to-use-this-License-for-your-documents
+:CLASS: heading
+:END:
+To use this License in a document you have written, include a copy of
+the License in the document and put the following copyright and license
+notices just after the title page:
+
+#+begin_src example-preformatted
+  Copyright (C)  year  your name.
+  Permission is granted to copy, distribute and/or modify this document
+  under the terms of the GNU Free Documentation License, Version 1.3
+  or any later version published by the Free Software Foundation;
+  with no Invariant Sections, no Front-Cover Texts, and no Back-Cover
+  Texts.  A copy of the license is included in the section entitled ``GNU
+  Free Documentation License''.
+#+end_src
+
+If you have Invariant Sections, Front-Cover Texts and Back-Cover Texts,
+replace the “with...Texts.” line with this:
+
+#+begin_src example-preformatted
+    with the Invariant Sections being list their titles, with
+    the Front-Cover Texts being list, and with the Back-Cover Texts
+    being list.
+#+end_src
+
+If you have Invariant Sections without Cover Texts, or some other
+combination of the three, merge those two alternatives to suit the
+situation.
+
+If your document contains nontrivial examples of program code, we
+recommend releasing these examples in parallel under your choice of free
+software license, such as the GNU General Public License, to permit
+their use in free software.
+
+--------------
+
+<<Index>>
+
+Previous:
+[[#GNU-Free-Documentation-License][GNU Free Documentation License]], Up:
+[[#Top][Newsticker]]   [[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+** Index [[#Index-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Index-1
+:CLASS: unnumbered
+:END:
+
+| Jump to:   | [[#Index_cp_letter-A][*A*]]   [[#Index_cp_letter-F][*F*]]   [[#Index_cp_letter-G][*G*]]   [[#Index_cp_letter-M][*M*]]   [[#Index_cp_letter-N][*N*]]   [[#Index_cp_letter-P][*P*]]   [[#Index_cp_letter-S][*S*]]   [[#Index_cp_letter-T][*T*]]   |
+
+|                | Index Entry                                                                                                               | Section                                         |
+| -------------- |                                                                                                                           |                                                 |
+| A              |                                                                                                                           |                                                 |
+|                | [[#index-Add-More-Feeds][Add More Feeds]]                                                                                 | [[#More-Actions][More Actions]]                 |
+|                | [[#index-Age][Age]]                                                                                                       | [[#Headline-Management][Headline Management]]   |
+|                | [[#index-Automatic-Processing][Automatic Processing]]                                                                     | [[#Automatic-Processing][Automatic Processing]] |
+| -------------- |                                                                                                                           |                                                 |
+| F              |                                                                                                                           |                                                 |
+|                | [[#index-Filter][Filter]]                                                                                                 | [[#Headline-Management][Headline Management]]   |
+|                | [[#index-Frontends][Frontends]]                                                                                           | [[#Frontends][Frontends]]                       |
+| -------------- |                                                                                                                           |                                                 |
+| G              |                                                                                                                           |                                                 |
+|                | [[#index-Get-News][Get News]]                                                                                             | [[#More-Actions][More Actions]]                 |
+|                | [[#index-Get-News-1][Get News]]                                                                                           | [[#More-Actions][More Actions]]                 |
+| -------------- |                                                                                                                           |                                                 |
+| M              |                                                                                                                           |                                                 |
+|                | [[#index-Marking][Marking]]                                                                                               | [[#Marking][Marking]]                           |
+|                | [[#index-More-Actions][More Actions]]                                                                                     | [[#More-Actions][More Actions]]                 |
+| -------------- |                                                                                                                           |                                                 |
+| N              |                                                                                                                           |                                                 |
+|                | [[#index-Navigation][Navigation]]                                                                                         | [[#Navigation][Navigation]]                     |
+|                | [[#index-newsticker_002dadd_002durl][=newsticker-add-url=]]                                                               | [[#More-Actions][More Actions]]                 |
+|                | [[#index-newsticker_002dauto_002dmark_002dfilter_002dlist][=newsticker-auto-mark-filter-list=]]                           | [[#Headline-Management][Headline Management]]   |
+|                | [[#index-newsticker_002dauto_002dmark_002dfilter_002dlist-1][=newsticker-auto-mark-filter-list=]]                         | [[#Configuration][Configuration]]               |
+|                | [[#index-newsticker_002dautomatically_002dmark_002ditems_002das_002dold][=newsticker-automatically-mark-items-as-old=]]   | [[#Headline-Management][Headline Management]]   |
+|                | [[#index-newsticker_002ddisplay_002dinterval][=newsticker-display-interval=]]                                             | [[#Configuration][Configuration]]               |
+|                | [[#index-newsticker_002dfrontend][=newsticker-frontend=]]                                                                 | [[#Frontends][Frontends]]                       |
+|                | [[#index-newsticker_002dfrontend-1][=newsticker-frontend=]]                                                               | [[#Configuration][Configuration]]               |
+|                | [[#index-newsticker_002dget_002dall_002dnews][=newsticker-get-all-news=]]                                                 | [[#More-Actions][More Actions]]                 |
+|                | [[#index-newsticker_002dgroup_002dadd_002dgroup][=newsticker-group-add-group=]]                                           | [[#Frontends][Frontends]]                       |
+|                | [[#index-newsticker_002dgroup_002dmove_002dfeed][=newsticker-group-move-feed=]]                                           | [[#Frontends][Frontends]]                       |
+|                | [[#index-newsticker_002dgroup_002dshift_002dfeed_002ddown][=newsticker-group-shift-feed-down=]]                           | [[#Frontends][Frontends]]                       |
+|                | [[#index-newsticker_002dgroup_002dshift_002dfeed_002dup][=newsticker-group-shift-feed-up=]]                               | [[#Frontends][Frontends]]                       |
+|                | [[#index-newsticker_002dgroup_002dshift_002dgroup_002ddown][=newsticker-group-shift-group-down=]]                         | [[#Frontends][Frontends]]                       |
+|                | [[#index-newsticker_002dgroup_002dshift_002dgroup_002dup][=newsticker-group-shift-group-up=]]                             | [[#Frontends][Frontends]]                       |
+|                | [[#index-newsticker_002dkeep_002dobsolete_002ditems][=newsticker-keep-obsolete-items=]]                                   | [[#Headline-Management][Headline Management]]   |
+|                | [[#index-newsticker_002dkeep_002dobsolete_002ditems-1][=newsticker-keep-obsolete-items=]]                                 | [[#Configuration][Configuration]]               |
+|                | [[#index-newsticker_002dmark_002ditem_002dat_002dpoint_002das_002dimmortal][=newsticker-mark-item-at-point-as-immortal=]] | [[#Marking][Marking]]                           |
+|                | [[#index-newsticker_002dmark_002ditem_002dat_002dpoint_002das_002dread][=newsticker-mark-item-at-point-as-read=]]         | [[#Marking][Marking]]                           |
+|                | [[#index-newsticker_002dnew_002ditem_002dfunctions][=newsticker-new-item-functions=]]                                     | [[#Automatic-Processing][Automatic Processing]] |
+|                | [[#index-newsticker_002dnew_002ditem_002dfunctions-1][=newsticker-new-item-functions=]]                                   | [[#Configuration][Configuration]]               |
+|                | [[#index-newsticker_002dnext_002dfeed][=newsticker-next-feed=]]                                                           | [[#Navigation][Navigation]]                     |
+|                | [[#index-newsticker_002dnext_002ditem][=newsticker-next-item=]]                                                           | [[#Navigation][Navigation]]                     |
+|                | [[#index-newsticker_002dnext_002dnew_002ditem][=newsticker-next-new-item=]]                                               | [[#Navigation][Navigation]]                     |
+|                | [[#index-newsticker_002dobsolete_002ditem_002dmax_002dage][=newsticker-obsolete-item-max-age=]]                           | [[#Headline-Management][Headline Management]]   |
+|                | [[#index-newsticker_002dplainview][=newsticker-plainview=]]                                                               | [[#Configuration][Configuration]]               |
+|                | [[#index-newsticker_002dplainview_002dhooks][=newsticker-plainview-hooks=]]                                               | [[#Configuration][Configuration]]               |
+|                | [[#index-newsticker_002dprevious_002dfeed][=newsticker-previous-feed=]]                                                   | [[#Navigation][Navigation]]                     |
+|                | [[#index-newsticker_002dprevious_002ditem][=newsticker-previous-item=]]                                                   | [[#Navigation][Navigation]]                     |
+|                | [[#index-newsticker_002dprevious_002dnew_002ditem][=newsticker-previous-new-item=]]                                       | [[#Navigation][Navigation]]                     |
+|                | [[#index-newsticker_002dretrieval_002dinterval][=newsticker-retrieval-interval=]]                                         | [[#Retrieving-News][Retrieving News]]           |
+|                | [[#index-newsticker_002dretrieval_002dinterval-1][=newsticker-retrieval-interval=]]                                       | [[#Configuration][Configuration]]               |
+|                | [[#index-newsticker_002dretrieval_002dmethod][=newsticker-retrieval-method=]]                                             | [[#Retrieving-News][Retrieving News]]           |
+|                | [[#index-newsticker_002dretrieval_002dmethod-1][=newsticker-retrieval-method=]]                                           | [[#Configuration][Configuration]]               |
+|                | [[#index-newsticker_002dscroll_002dsmoothly][=newsticker-scroll-smoothly=]]                                               | [[#Configuration][Configuration]]               |
+|                | [[#index-newsticker_002dshow_002dnews][=newsticker-show-news=]]                                                           | [[#Reading-News][Reading News]]                 |
+|                | [[#index-newsticker_002dstart][=newsticker-start=]]                                                                       | [[#Retrieving-News][Retrieving News]]           |
+|                | [[#index-newsticker_002dstart_002dticker][=newsticker-start-ticker=]]                                                     | [[#Frontends][Frontends]]                       |
+|                | [[#index-newsticker_002dstop][=newsticker-stop=]]                                                                         | [[#Retrieving-News][Retrieving News]]           |
+|                | [[#index-newsticker_002dstop_002dticker][=newsticker-stop-ticker=]]                                                       | [[#Frontends][Frontends]]                       |
+|                | [[#index-newsticker_002dticker_002dperiod][=newsticker-ticker-period=]]                                                   | [[#Frontends][Frontends]]                       |
+|                | [[#index-newsticker_002dticker_002dperiod-1][=newsticker-ticker-period=]]                                                 | [[#Configuration][Configuration]]               |
+|                | [[#index-newsticker_002dtreeview][=newsticker-treeview=]]                                                                 | [[#Configuration][Configuration]]               |
+|                | [[#index-newsticker_002dtreeview_002dbrowse_002durl][=newsticker-treeview-browse-url=]]                                   | [[#More-Actions][More Actions]]                 |
+|                | [[#index-newsticker_002dtreeview_002dget_002dnews][=newsticker-treeview-get-news=]]                                       | [[#More-Actions][More Actions]]                 |
+|                | [[#index-newsticker_002dtreeview_002djump][=newsticker-treeview-jump=]]                                                   | [[#Navigation][Navigation]]                     |
+|                | [[#index-newsticker_002dtreeview_002dmark_002ditem_002dimmortal][=newsticker-treeview-mark-item-immortal=]]               | [[#Marking][Marking]]                           |
+|                | [[#index-newsticker_002dtreeview_002dmark_002ditem_002dold][=newsticker-treeview-mark-item-old=]]                         | [[#Marking][Marking]]                           |
+|                | [[#index-newsticker_002dtreeview_002dnext_002dfeed][=newsticker-treeview-next-feed=]]                                     | [[#Navigation][Navigation]]                     |
+|                | [[#index-newsticker_002dtreeview_002dnext_002ditem][=newsticker-treeview-next-item=]]                                     | [[#Navigation][Navigation]]                     |
+|                | [[#index-newsticker_002dtreeview_002dnext_002dnew_002ditem][=newsticker-treeview-next-new-item=]]                         | [[#Navigation][Navigation]]                     |
+|                | [[#index-newsticker_002dtreeview_002dprev_002dfeed][=newsticker-treeview-prev-feed=]]                                     | [[#Navigation][Navigation]]                     |
+|                | [[#index-newsticker_002dtreeview_002dprev_002ditem][=newsticker-treeview-prev-item=]]                                     | [[#Navigation][Navigation]]                     |
+|                | [[#index-newsticker_002dtreeview_002dprev_002dnew_002ditem][=newsticker-treeview-prev-new-item=]]                         | [[#Navigation][Navigation]]                     |
+|                | [[#index-newsticker_002dtreeview_002dsave][=newsticker-treeview-save=]]                                                   | [[#Frontends][Frontends]]                       |
+|                | [[#index-newsticker_002durl_002dlist][=newsticker-url-list=]]                                                             | [[#Retrieving-News][Retrieving News]]           |
+|                | [[#index-newsticker_002durl_002dlist-1][=newsticker-url-list=]]                                                           | [[#Configuration][Configuration]]               |
+|                | [[#index-newsticker_002durl_002dlist_002ddefaults][=newsticker-url-list-defaults=]]                                       | [[#Retrieving-News][Retrieving News]]           |
+|                | [[#index-newsticker_002dwget_002darguments][=newsticker-wget-arguments=]]                                                 | [[#Retrieving-News][Retrieving News]]           |
+|                | [[#index-newsticker_002dwget_002dname][=newsticker-wget-name=]]                                                           | [[#Retrieving-News][Retrieving News]]           |
+| -------------- |                                                                                                                           |                                                 |
+| P              |                                                                                                                           |                                                 |
+|                | [[#index-Plainview][Plainview]]                                                                                           | [[#Frontends][Frontends]]                       |
+| -------------- |                                                                                                                           |                                                 |
+| S              |                                                                                                                           |                                                 |
+|                | [[#index-Status][Status]]                                                                                                 | [[#Headline-Management][Headline Management]]   |
+|                | [[#index-Supported-Formats][Supported Formats]]                                                                           | [[#Supported-Formats][Supported Formats]]       |
+| -------------- |                                                                                                                           |                                                 |
+| T              |                                                                                                                           |                                                 |
+|                | [[#index-Ticker][Ticker]]                                                                                                 | [[#Frontends][Frontends]]                       |
+|                | [[#index-Treeview][Treeview]]                                                                                             | [[#Frontends][Frontends]]                       |
+| -------------- |                                                                                                                           |                                                 |
+
+| Jump to:   | [[#Index_cp_letter-A][*A*]]   [[#Index_cp_letter-F][*F*]]   [[#Index_cp_letter-G][*G*]]   [[#Index_cp_letter-M][*M*]]   [[#Index_cp_letter-N][*N*]]   [[#Index_cp_letter-P][*P*]]   [[#Index_cp_letter-S][*S*]]   [[#Index_cp_letter-T][*T*]]   |

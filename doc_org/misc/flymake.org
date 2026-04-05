@@ -1,0 +1,2144 @@
+<<Top>>
+
+Next: [[#Using-Flymake][Using Flymake]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+* GNU Flymake [[#GNU-Flymake][¶]]
+:PROPERTIES:
+:CUSTOM_ID: GNU-Flymake
+:CLASS: top
+:END:
+Flymake is a universal on-the-fly syntax checker for Emacs. When
+enabled, Flymake contacts one or more source /backends/ to collect
+information about problems in the buffer, called /diagnostics/, and
+visually annotates them with a special face. The mode line displays
+overall status including totals for different types of diagnostics.
+
+To learn about using Flymake, see [[#Using-Flymake][Using Flymake]].
+
+When the Emacs LSP support mode Eglot is enabled, Flymake will use that
+as an additional back-end. See
+[[https://www.gnu.org/software/emacs/manual/html_mono/eglot.html#Eglot-Features][Eglot Features]]
+in Eglot: The Emacs LSP Client. Flymake is also designed to be easily
+extended to support new backends via an Elisp interface. See
+[[#Flymake-API][Flymake API]].
+
+This manual is for GNU Flymake (version 1.3.4, April 2023).
+
+Copyright © 2004--2026 Free Software Foundation, Inc.
+
+#+begin_quote
+Permission is granted to copy, distribute and/or modify this document
+under the terms of the GNU Free Documentation License, Version 1.3 or
+any later version published by the Free Software Foundation; with no
+Invariant Sections, with the Front-Cover Texts being “A GNU Manual,” and
+with the Back-Cover Texts as in (a) below. A copy of the license is
+included in the section entitled “GNU Free Documentation License”.
+
+(a) The FSF's Back-Cover Text is: “You have the freedom to copy and
+modify this GNU manual.”
+#+end_quote
+
+<<SEC_Contents>>
+** Table of Contents
+:PROPERTIES:
+:CUSTOM_ID: table-of-contents
+:CLASS: contents-heading
+:END:
+
+- [[#Using-Flymake][1 Using Flymake]]
+  - [[#Starting-Flymake][1.1 Starting Flymake]]
+  - [[#Finding-diagnostics][1.2 Finding diagnostics]]
+  - [[#Mode-line-status][1.3 Mode line status]]
+  - [[#Troubleshooting][1.4 Troubleshooting]]
+  - [[#Customizable-variables][1.5 Customizable variables]]
+- [[#Flymake-API][2 Flymake API]]
+  - [[#Flymake-error-types][2.1 Customizing Flymake error types]]
+  - [[#Backend-functions][2.2 Backend functions]]
+    - [[#Flymake-utility-functions][2.2.1 Flymake utility functions]]
+    - [[#Foreign-and-list_002donly-diagnostics][2.2.2 Foreign and list-only diagnostics]]
+    - [[#An-annotated-example-backend][2.2.3 An annotated example backend]]
+  - [[#Inspecting-diagnostics][2.3 Inspecting diagnostics]]
+- [[#The-legacy-Proc-backend][3 The legacy “Proc” backend]]
+  - [[#Proc-customization-variables][3.1 Customization variables for the Proc backend]]
+  - [[#Adding-support-for-a-new-syntax-check-tool][3.2 Adding support for a new syntax check tool]]
+    - [[#Example_002d_002d_002dConfiguring-a-tool-called-directly][3.2.1 Example---Configuring a tool called directly]]
+    - [[#Example_002d_002d_002dConfiguring-a-tool-called-via-make][3.2.2 Example---Configuring a tool called via make]]
+  - [[#Implementation-overview][3.3 Implementation overview]]
+  - [[#Making-a-temporary-copy][3.4 Making a temporary copy]]
+  - [[#Locating-a-master-file][3.5 Locating a master file]]
+  - [[#Getting-the-include-directories][3.6 Getting the include directories]]
+  - [[#Locating-the-buildfile][3.7 Locating the buildfile]]
+  - [[#Starting-the-syntax-check-process][3.8 Starting the syntax check process]]
+  - [[#Parsing-the-output][3.9 Parsing the output]]
+  - [[#Interaction-with-other-modes][3.10 Interaction with other modes]]
+- [[#GNU-Free-Documentation-License][Appendix A GNU Free Documentation License]]
+- [[#Index][Index]]
+
+--------------
+
+<<Using-Flymake>>
+
+Next: [[#Flymake-API][Flymake API]], Previous: [[#Top][GNU Flymake]],
+Up: [[#Top][GNU Flymake]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+** 1 Using Flymake [[#Using-Flymake-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Using-Flymake-1
+:CLASS: chapter
+:END:
+Flymake is only useful if at least one /backend/ is configured to
+provide the buffer-checking service. This is done via the hook
+=flymake-diagnostic-functions=. See
+[[https://www.gnu.org/software/emacs/manual/html_mono/emacs.html#Hooks][Hooks]]
+in The Emacs Editor.
+
+It's possible that some major modes or a third-party package has already
+setup this hook for you, by adding /backend functions/ to
+=flymake-diagnostic-functions=. If you know Elisp you may also write
+your own Flymake backend functions. See
+[[#Backend-functions][Backend functions]].
+
+When the Emacs LSP support mode Eglot is enabled, Flymake will use that
+as an additional back-end automatically. See
+[[https://www.gnu.org/software/emacs/manual/html_mono/eglot.html#Eglot-Features][Eglot Features]]
+in Eglot: The Emacs LSP Client.
+
+- [[#Starting-Flymake][Starting Flymake]]
+- [[#Finding-diagnostics][Finding diagnostics]]
+- [[#Mode-line-status][Mode line status]]
+- [[#Troubleshooting][Troubleshooting]]
+- [[#Customizable-variables][Customizable variables]]
+
+--------------
+
+<<Starting-Flymake>>
+
+Next: [[#Finding-diagnostics][Finding diagnostics]], Up:
+[[#Using-Flymake][Using Flymake]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 1.1 Starting Flymake [[#Starting-Flymake-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Starting-Flymake-1
+:CLASS: section
+:END:
+To use Flymake, activate the minor-mode =flymake-mode=. Use the command
+flymake-mode to toggle it on and off. The mode line should indicate its
+presence via an indicator (see [[#Mode-line-status][Mode line status]]).
+
+Syntax checks happen “on-the-fly”. Each check is started whenever:
+
+- =flymake-mode= is started, unless =flymake-start-on-flymake-mode= is
+  =nil=;
+- the buffer is saved, unless =flymake-start-on-save-buffer= is =nil=;
+- some changes were made to the buffer more than =0.5= seconds ago (the
+  delay is configurable in =flymake-no-changes-timeout=).
+- When the user invokes the command =flymake-start=.
+
+If the check detected errors or warnings, the respective buffer regions
+are highlighted. See [[#Finding-diagnostics][Finding diagnostics]], for
+how to learn what the problems are.
+
+--------------
+
+<<Finding-diagnostics>>
+
+Next: [[#Mode-line-status][Mode line status]], Previous:
+[[#Starting-Flymake][Starting Flymake]], Up:
+[[#Using-Flymake][Using Flymake]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 1.2 Finding diagnostics [[#Finding-diagnostics-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Finding-diagnostics-1
+:CLASS: section
+:END:
+If Flymake has highlighted the buffer, you may hover the mouse on the
+highlighted regions to learn what the specific problem is.
+Alternatively, place point on the highlighted regions and use the
+commands =eldoc= or =display-local-help=.
+
+Another easy way to get instant access to the diagnostic text is to set
+=flymake-show-diagnostics-at-end-of-line= to a non-=nil= value. This
+makes the diagnostic messages appear at the end of the line where the
+regular annotation is located (see
+[[#Customizable-variables][Customizable variables]])
+
+If the diagnostics are outside the visible region of the buffer,
+=flymake-goto-next-error= and =flymake-goto-prev-error= let you navigate
+to the next/previous erroneous regions, respectively. It might be a good
+idea to map them to M-n and M-p in =flymake-mode=, by adding to your
+init file:
+
+#+begin_src lisp-preformatted
+(define-key flymake-mode-map (kbd "M-n") 'flymake-goto-next-error)
+(define-key flymake-mode-map (kbd "M-p") 'flymake-goto-prev-error)
+#+end_src
+
+Sometimes it is useful to have a detailed overview of the diagnostics in
+your files without having to jump to each one. The commands
+=flymake-show-buffer-diagnostics= and =flymake-show-project-diagnostics=
+are designed to handle this situation. When invoked, they bring up a
+separate buffer containing a detailed structured listing of multiple
+diagnostics in the current buffer or for the current project,
+respectively (see
+[[https://www.gnu.org/software/emacs/manual/html_mono/emacs.html#Projects][Projects]]
+in The Emacs Editor).
+
+The listings is continuously updated as you edit source code, adding or
+removing lines as you make or correct mistakes. Each line of this
+listing includes the type of the diagnostic, its line and column in the
+file, as well as the diagnostic message. You may sort the listing by
+each of these columns.
+
+When invoked on a diagnostic (either via the keyboard or a mouse click)
+the command =flymake-show-buffer-diagnostics= attempts to reveal said
+diagnostic in the listing.
+
+--------------
+
+<<Mode-line-status>>
+
+Next: [[#Troubleshooting][Troubleshooting]], Previous:
+[[#Finding-diagnostics][Finding diagnostics]], Up:
+[[#Using-Flymake][Using Flymake]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 1.3 Mode line status [[#Mode-line-status-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Mode-line-status-1
+:CLASS: section
+:END:
+When enabled, Flymake displays its status in the mode line, which
+provides a visual summary of diagnostic collection. It may also hint at
+certain exceptional situations encountered when communicating with
+backends.
+
+The following statuses are defined:
+
+| [=nerrors= =nwarnings= ...] | Normal operation. =nerrors= and =nwarnings= are, respectively, the total number of errors and warnings found during the last buffer check, for all backends. They may be followed by other totals for other types of diagnostics (see [[#Flymake-error-types][Customizing Flymake error types]]). |
+| =Wait=                      | Some Flymake backends haven't reported since the last time they where questioned. It is reasonable to assume that this is a temporary delay and Flymake will resume normal operation soon.                                                                                                        |
+| =!=                         | All the configured Flymake backends have disabled themselves: Flymake cannot annotate the buffer and action from the user is needed to investigate and remedy the situation (see [[#Troubleshooting][Troubleshooting]]).                                                                          |
+| =?=                         | There are no applicable Flymake backends for this buffer, thus Flymake cannot annotate it. To fix this, a user may look to extending Flymake and add a new backend (see [[#Flymake-API][Flymake API]]).                                                                                           |
+
+If you would like to customize the appearance of the mode-line, you can
+use the variables =flymake-mode-line-format= and
+=flymake-mode-line-counter-format= for that purpose. See
+[[#Customizable-variables][Customizable variables]].
+
+--------------
+
+<<Troubleshooting>>
+
+Next: [[#Customizable-variables][Customizable variables]], Previous:
+[[#Mode-line-status][Mode line status]], Up:
+[[#Using-Flymake][Using Flymake]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 1.4 Troubleshooting [[#Troubleshooting-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Troubleshooting-1
+:CLASS: section
+:END:
+As Flymake supports multiple simultaneously active external backends, it
+becomes useful to monitor their status. For example, some backends may
+take longer than others to respond or complete, and some may decide to
+/disable/ themselves if they are not suitable for the current buffer or
+encounter some unavoidable problem. A disabled backend is not tried
+again for future checks of the current buffer.
+
+The commands =flymake-reporting-backends=, =flymake-running-backends=
+and =flymake-disabled-backends= show the backends currently used and
+those which are disabled.
+
+Sometimes, re-starting a backend that disabled itself is useful after
+some external roadblock has been removed (for example after the user
+installed a needed syntax-check program). Invoking =flymake-start= with
+a prefix argument is a way to reset the disabled backend list, so that
+they will be tried again in the next check. Manually toggling
+=flymake-mode= off and on again also works.
+
+Flymake uses a simple logging facility for indicating important points
+in the control flow. The logging facility sends logging messages to the
+=*Flymake log*= buffer. The logged information can be used for resolving
+various problems related to Flymake. For convenience, a shortcut to this
+buffer can be found in Flymake's menu, accessible from the top menu bar
+or just left of the status indicator. The command
+=flymake-switch-to-log-buffer= is another alternative.
+
+Logging output is controlled by the Emacs =warning-minimum-log-level=
+and =warning-minimum-level= variables.
+
+--------------
+
+<<Customizable-variables>>
+
+Previous: [[#Troubleshooting][Troubleshooting]], Up:
+[[#Using-Flymake][Using Flymake]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 1.5 Customizable variables [[#Customizable-variables-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Customizable-variables-1
+:CLASS: section
+:END:
+This section summarizes customization variables used for the
+configuration of the Flymake user interface.
+
+- <<index-flymake_002dmode_002dline_002dlighter>>=flymake-mode-line-lighter=
+  [[#index-flymake_002dmode_002dline_002dlighter][¶]] :: The name of the
+  mode. Defaults to ‘=Flymake='.
+
+- <<index-flymake_002dmode_002dline_002dformat>>=flymake-mode-line-format=
+  [[#index-flymake_002dmode_002dline_002dformat][¶]] :: Format to use
+  for the Flymake mode line indicator.
+
+- <<index-flymake_002dmode_002dline_002dcounter_002dformat>>=flymake-mode-line-counter-format=
+  [[#index-flymake_002dmode_002dline_002dcounter_002dformat][¶]] :: mode
+  line construct for formatting Flymake diagnostic counters inside the
+  Flymake mode line indicator.
+
+- <<index-flymake_002dno_002dchanges_002dtimeout>>=flymake-no-changes-timeout=
+  [[#index-flymake_002dno_002dchanges_002dtimeout][¶]] :: If any changes
+  are made to the buffer, syntax check is automatically started after
+  this many seconds, unless the user makes another change, which resets
+  the timer.
+
+- <<index-flymake_002dstart_002don_002dflymake_002dmode>>=flymake-start-on-flymake-mode=
+  [[#index-flymake_002dstart_002don_002dflymake_002dmode][¶]] :: A
+  boolean flag indicating whether to start syntax check immediately
+  after enabling =flymake-mode=.
+
+- <<index-flymake_002dstart_002don_002dsave_002dbuffer>>=flymake-start-on-save-buffer=
+  [[#index-flymake_002dstart_002don_002dsave_002dbuffer][¶]] :: A
+  boolean flag indicating whether to start syntax check after saving the
+  buffer.
+
+- <<index-flymake_002derror>>=flymake-error=
+  [[#index-flymake_002derror][¶]] :: A custom face for highlighting
+  regions for which an error has been reported.
+
+- <<index-flymake_002dwarning>>=flymake-warning=
+  [[#index-flymake_002dwarning][¶]] :: A custom face for highlighting
+  regions for which a warning has been reported.
+
+- <<index-flymake_002dnote>>=flymake-note=
+  [[#index-flymake_002dnote][¶]] :: A custom face for highlighting
+  regions for which a note has been reported.
+
+- <<index-flymake_002dindicator_002dtype>>=flymake-indicator-type=
+  [[#index-flymake_002dindicator_002dtype][¶]] :: The indicator type
+  which Flymake should use to indicate lines with errors or warnings.
+  Depending on your preference, this can either use =fringes= or
+  =margins= for indicating errors. On text terminals, only =margins= is
+  available.
+
+- <<index-flymake_002derror_002dbitmap>>=flymake-error-bitmap=
+  [[#index-flymake_002derror_002dbitmap][¶]] :: A bitmap used in the
+  fringe to mark lines for which an error has been reported.
+
+- <<index-flymake_002dwarning_002dbitmap>>=flymake-warning-bitmap=
+  [[#index-flymake_002dwarning_002dbitmap][¶]] :: A bitmap used in the
+  fringe to mark lines for which a warning has been reported.
+
+- <<index-flymake_002dfringe_002dindicator_002dposition>>=flymake-fringe-indicator-position=
+  [[#index-flymake_002dfringe_002dindicator_002dposition][¶]] :: Which
+  fringe (if any) should show the warning/error bitmaps.
+
+- <<index-flymake_002dmargin_002dindicators_002dstring>>=flymake-margin-indicators-string=
+  [[#index-flymake_002dmargin_002dindicators_002dstring][¶]] :: Specifies
+  the string and face to use for the margin indicators, for each error
+  type.
+
+- <<index-flymake_002dmargin_002dindicator_002dposition>>=flymake-margin-indicator-position=
+  [[#index-flymake_002dmargin_002dindicator_002dposition][¶]] :: Which
+  margin (if any) should show the warning/error strings.
+
+- <<index-flymake_002dautoresize_002dmargins>>=flymake-autoresize-margins=
+  [[#index-flymake_002dautoresize_002dmargins][¶]] :: If non-=nil=,
+  Flymake will resize the margins when =flymake-mode= is turned on or
+  off. Only relevant if =flymake-indicator-type= is set to =margins=.
+
+- <<index-flymake_002dwrap_002daround>>=flymake-wrap-around=
+  [[#index-flymake_002dwrap_002daround][¶]] :: If non-=nil=, moving to
+  errors with =flymake-goto-next-error= and =flymake-goto-prev-error=
+  wraps around buffer boundaries.
+
+- <<index-flymake_002dshow_002ddiagnostics_002dat_002dend_002dof_002dline>>=flymake-show-diagnostics-at-end-of-line=
+  [[#index-flymake_002dshow_002ddiagnostics_002dat_002dend_002dof_002dline][¶]] :: If
+  non-=nil=, show summarized descriptions of diagnostics at the end of
+  the line. Depending on your preference, this can either be distracting
+  and easily confused with actual code, or a significant early aid that
+  relieves you from moving around or reaching for the mouse to consult
+  an error message. This value may also be set to =fancy=, which will
+  attempt to layout diagnostics below the affected line using unicode
+  graphics to point to diagnostic locus.
+
+- <<index-flymake_002ddiagnostic_002dformat_002dalist>>=flymake-diagnostic-format-alist=
+  [[#index-flymake_002ddiagnostic_002dformat_002dalist][¶]] :: Control
+  which parts of a diagnostic to show in various situations.
+
+- <<index-flymake_002derror_002deol>>=flymake-error-eol=
+  [[#index-flymake_002derror_002deol][¶]] :: A custom face for
+  summarizing diagnostic error messages.
+
+- <<index-flymake_002dwarning_002deol>>=flymake-warning-eol=
+  [[#index-flymake_002dwarning_002deol][¶]] :: A custom face for
+  summarizing diagnostic warning messages.
+
+- <<index-flymake_002dnote_002deol>>=flymake-note-eol=
+  [[#index-flymake_002dnote_002deol][¶]] :: A custom face for
+  summarizing diagnostic notes.
+
+--------------
+
+<<Flymake-API>>
+
+Next: [[#The-legacy-Proc-backend][The legacy “Proc” backend]], Previous:
+[[#Using-Flymake][Using Flymake]], Up: [[#Top][GNU Flymake]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+** 2 Flymake API [[#Flymake-API-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Flymake-API-1
+:CLASS: chapter
+:END:
+Flymake's API supports the following use cases:
+
+1. Changing the look and feel of the annotations produced by the
+   different backends. See
+   [[#Flymake-error-types][Customizing Flymake error types]].
+2. Adding a new buffer-checking backend. See
+   [[#Backend-functions][Backend functions]].
+3. Writing extension to and process Flymake's output. See
+   [[#Inspecting-diagnostics][Inspecting diagnostics]].
+
+The following sections discuss each approach in detail.
+
+- [[#Flymake-error-types][Customizing Flymake error types]]
+- [[#Backend-functions][Backend functions]]
+- [[#Inspecting-diagnostics][Inspecting diagnostics]]
+
+--------------
+
+<<Flymake-error-types>>
+
+Next: [[#Backend-functions][Backend functions]], Up:
+[[#Flymake-API][Flymake API]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 2.1 Customizing Flymake error types [[#Customizing-Flymake-error-types][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Customizing-Flymake-error-types
+:CLASS: section
+:END:
+To customize the appearance of error types, the user must set properties
+on the symbols associated with each diagnostic type.
+
+The three standard diagnostic keyword symbols -- =:error=, =:warning=
+and =:note= -- have pre-configured appearances. However a backend may
+define more (see [[#Backend-functions][Backend functions]]).
+
+The following properties can be set:
+
+-  =flymake-bitmap=, an image displayed in the fringe according to
+  =flymake-fringe-indicator-position=. The value actually follows the
+  syntax of =flymake-error-bitmap= (see
+  [[#Customizable-variables][Customizable variables]]). It is overridden
+  by any =before-string= overlay property.
+
+-  =flymake-margin-string=, a string displayed in the margin according
+  to =flymake-margin-indicator-position=. The value actually follows the
+  syntax of =flymake-margin-indicators-string= (see
+  [[#Customizable-variables][Customizable variables]]). It is overridden
+  by any =before-string= overlay property.
+
+- =flymake-overlay-control=, an alist ((=OVPROP= . =VALUE=) =...=) of
+  further properties used to affect the appearance of Flymake
+  annotations. With the exception of =category= and =evaporate=, these
+  properties are applied directly to the created overlay (see
+  [[https://www.gnu.org/software/emacs/manual/html_mono/elisp.html#Overlay-Properties][Overlay Properties]]
+  in The Emacs Lisp Reference Manual).
+
+  As an example, here's how to make diagnostics of the type =:note=
+  stand out more prominently:
+
+  #+begin_src example-preformatted
+  (push '(face . highlight) (get :note 'flymake-overlay-control))
+  #+end_src
+
+  If you push another alist entry in front, it overrides the previous
+  one. So this effectively removes the face from =:note= diagnostics:
+
+  #+begin_src example-preformatted
+  (push '(face . nil) (get :note 'flymake-overlay-control))
+  #+end_src
+
+  To restore the original look for =:note= types, empty or remove its
+  =flymake-overlay-control= property:
+
+  #+begin_src example-preformatted
+  (put :note 'flymake-overlay-control '())
+  #+end_src
+
+-  =severity= is a non-negative integer specifying the diagnostic's
+  severity. The higher the value, the more serious is the error. If the
+  overlay property =priority= is not specified in
+  =flymake-overlay-control=, =flymake-severity= is used to set it and
+  help sort overlapping overlays.
+
+-  =flymake-type-name= is a string used to succinctly name the error
+  type, in case the name of the symbol associated with it is very long.
+
+-  =flymake-category= is a symbol whose property list is considered the
+  default for missing values of any other properties.
+
+-  =mode-line-face= is a face specifier controlling the appearance of
+  the indicator of this type of diagnostic in the mode line.
+
+-  =echo-face= is a face specifier controlling the appearance of the
+  summarized description of this diagnostic when reading diagnostic
+  messages (see [[#Finding-diagnostics][Finding diagnostics]]).
+
+Three default diagnostic types are predefined: =:error=, =:warning=, and
+=:note=. By default, each one of them has a =flymake-category= property
+whose value is, respectively, the category symbol =flymake-error=,
+=flymake-warning= and =flymake-note=.
+
+These category symbols' plist is where the values of customizable
+variables and faces (such as =flymake-error-bitmap=) are found. Thus, if
+you change their plists, Flymake may stop honoring these user
+customizations.
+
+The =flymake-category= special property is especially useful for
+backends which create diagnostics objects with non-default types that
+differ from an existing type by only a few properties (see
+[[#Flymake-utility-functions][Flymake utility functions]]).
+
+As an example, consider configuring a new diagnostic type
+=:low-priority-note= that behaves much like =:note=, but without an
+overlay face.
+
+#+begin_src example-preformatted
+(put :low-priority-note 'flymake-overlay-control '((face . nil)))
+(put :low-priority-note 'flymake-category 'flymake-note)
+#+end_src
+
+As you might have guessed, Flymake's annotations are implemented as
+overlays (see
+[[https://www.gnu.org/software/emacs/manual/html_mono/elisp.html#Overlays][Overlays]]
+in The Emacs Lisp Reference Manual). Along with the properties that you
+specify for the specific type of diagnostic, Flymake adds the property
+=flymake-diagnostic= to these overlays, and sets it to the object that
+the backend created with =flymake-make-diagnostic=.
+
+Since overlays also support arbitrary keymaps, you can use this along
+with the functions =flymake-diagnostics= and =flymake-diagnostic-text=
+(see [[#Flymake-utility-functions][Flymake utility functions]]) to
+create interactive annotations, such as in the following example of
+binding a =mouse-3= event (middle mouse button click) to an Internet
+search for the text of a =:warning= or =:error=.
+
+#+begin_src example-preformatted
+(defun my-search-for-message (event)
+  (interactive "e")
+  (let* ((diags (flymake-diagnostics (posn-point (event-start event))))
+         (topmost-diag (car diags)))
+    (eww-browse-url
+       (concat
+        "https://duckduckgo.com/?q="
+        (replace-regexp-in-string
+          " " "+" (flymake-diagnostic-text topmost-diag)))
+       t)))
+
+(dolist (type '(:warning :error))
+  (push '(mouse-face . highlight) (get type 'flymake-overlay-control))
+  (push `(keymap . ,(let ((map (make-sparse-keymap)))
+                      (define-key map [mouse-2]
+                        'my-search-for-message)
+                      map))
+        (get type 'flymake-overlay-control)))
+#+end_src
+
+--------------
+
+<<Backend-functions>>
+
+Next: [[#Inspecting-diagnostics][Inspecting diagnostics]], Previous:
+[[#Flymake-error-types][Customizing Flymake error types]], Up:
+[[#Flymake-API][Flymake API]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 2.2 Backend functions [[#Backend-functions-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Backend-functions-1
+:CLASS: section
+:END:
+Flymake backends are Lisp functions placed in the special hook
+=flymake-diagnostic-functions=.
+
+A backend's responsibility is to diagnose the contents of a buffer for
+problems, registering the problem's positions, type, and summary
+description. This information is collected in the form of diagnostic
+objects created by the function =flymake-make-diagnostic= (see
+[[#Flymake-utility-functions][Flymake utility functions]]), and then
+handed over to Flymake, which proceeds to annotate the buffer.
+
+A request for a buffer check, and the subsequent delivery of
+diagnostics, are two key events of the interaction between Flymake and
+backend. Each such event corresponds to a well-defined function calling
+convention: one for calls made by Flymake into the backend via the
+backend function, the other in the reverse direction via a callback. To
+be usable, backends must adhere to both.
+
+The first argument passed to a backend function is always =report-fn=, a
+callback function detailed below. Beyond it, functions must be prepared
+to accept (and possibly ignore) an arbitrary number of keyword-value
+pairs of the form =(==:key== ==value== ==:key2== ==value2==...)=.
+
+Currently, Flymake may pass the following keywords and values to the
+backend function:
+
+- =:recent-changes= The value is a list recent changes since the last
+  time the backend function was called for the buffer. If the list is
+  empty, this indicates that no changes have been recorded. If it is the
+  first time that this backend function is called for this activation of
+  =flymake-mode=, then this argument isn't provided at all (in other
+  words, it's not merely nil).
+
+  Each element is in the form (=beg= =end= =text=) where =beg= and =end=
+  are buffer positions, and =text= is a string containing the text
+  contained between those positions (if any), after the change was
+  performed.
+
+- =:changes-start= and =:changes-end= The value is, respectively, the
+  minimum and maximum buffer positions touched by the recent changes.
+  These are provided for convenience and only if =:recent-changes= is
+  also provided.
+
+Whenever Flymake or the user decide to re-check the buffer, backend
+functions are called as detailed above, and are expected to initiate
+this check, but aren't in any way required to complete it before
+exiting: if the computation involved is expensive, as is often the case
+with large buffers, that slower task should be scheduled for the future
+using asynchronous sub-processes (see
+[[https://www.gnu.org/software/emacs/manual/html_mono/elisp.html#Asynchronous-Processes][Asynchronous Processes]]
+in The Emacs Lisp reference manual) or other asynchronous mechanisms.
+
+In any case, backend functions are expected to return quickly or signal
+an error, in which case the backend is disabled (see
+[[#Troubleshooting][Troubleshooting]]).
+
+If the function returns, Flymake considers the backend to be /running/.
+If it has not done so already, the backend is expected to call the
+function =report-fn= passed to it, at which point Flymake considers the
+backend to be /reporting/. Backends call =report-fn= by passing it a
+single argument =report-action= followed by an optional list of
+keyword-value pairs of the form
+=(==:report-key== ==value== ==:report-key2== ==value2==...)=.
+
+Currently accepted values for =report-action= are:
+
+- A (possibly empty) list of diagnostic objects created by
+  =flymake-make-diagnostic=, causing Flymake to annotate the buffer with
+  this information.
+
+  A backend may call =report-fn= repeatedly in this manner, but only
+  until Flymake considers that the most recently requested buffer check
+  is now obsolete, because, say, buffer contents have changed in the
+  meantime. The backend is only given notice of this via a renewed call
+  to the backend function. Thus, to prevent making obsolete reports and
+  wasting resources, backend functions should first cancel any ongoing
+  processing from previous calls.
+
+- The symbol =:panic=, signaling that the backend has encountered an
+  exceptional situation and should be disabled.
+
+Currently accepted =report-key= arguments are:
+
+- =:explanation=, whose value should give user-readable details of the
+  situation encountered, if any.
+- =:force=, whose value should be a boolean suggesting that Flymake
+  consider the report even if it was somehow unexpected.
+- =:region=, a cons (=beg= . =end=) of buffer positions indicating that
+  the report applies to that region and that previous reports targeting
+  other parts of the buffer remain valid.
+
+- [[#Flymake-utility-functions][Flymake utility functions]]
+- [[#Foreign-and-list_002donly-diagnostics][Foreign and list-only diagnostics]]
+- [[#An-annotated-example-backend][An annotated example backend]]
+
+--------------
+
+<<Flymake-utility-functions>>
+
+Next:
+[[#Foreign-and-list_002donly-diagnostics][Foreign and list-only diagnostics]],
+Up: [[#Backend-functions][Backend functions]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+**** 2.2.1 Flymake utility functions [[#Flymake-utility-functions-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Flymake-utility-functions-1
+:CLASS: subsection
+:END:
+Before delivering them to Flymake, backends create diagnostic objects by
+calling the function =flymake-make-diagnostic=.
+
+- Function: *flymake-make-diagnostic*
+  =locus beg end type info &optional data=
+  [[#index-flymake_002dmake_002ddiagnostic][¶]] :: Make a Flymake
+  diagnostic for the region of text in =locus='s delimited by =beg= and
+  =end=. =type= is a diagnostic symbol (see
+  [[#Flymake-error-types][Customizing Flymake error types]]). =text= can
+  be a string or a list (=origin= =code= =message=) appropriately
+  categorizing and describing the diagnostic. Most commonly, =locus= is
+  the buffer object designating for the current buffer being
+  syntax-checked. However, it may be a string naming a file relative to
+  the current working directory. See
+  [[#Foreign-and-list_002donly-diagnostics][Foreign and list-only diagnostics]],
+  for when this may be useful. Depending on the type of =locus=, =beg=
+  and =end= are both either buffer positions or conses (=line= . =col=)
+  which specify the line and column of the diagnostic's start and end
+  positions, respectively.
+
+It is often the case with external syntax tools that a diagnostic's
+position is reported in terms of a line number, and sometimes a column
+number. To convert this information into a buffer position, backends can
+use the following function:
+
+- Function: *flymake-diag-region* =buffer line &optional col=
+  [[#index-flymake_002ddiag_002dregion][¶]] :: Compute =buffer='s region
+  (=beg= . =end=) corresponding to =line= and =col=. If =col= is =nil=,
+  return a region just for =line=. Return =nil= if the region is
+  invalid. This function saves match data (see
+  [[https://www.gnu.org/software/emacs/manual/html_mono/elisp.html#Saving-Match-Data][Saving Match Data]]
+  in The Emacs Lisp Reference Manual).
+
+For troubleshooting purposes, backends may record arbitrary exceptional
+or erroneous situations into the Flymake log buffer (see
+[[#Troubleshooting][Troubleshooting]]):
+
+- Macro: *flymake-log* =level msg &optional args=
+  [[#index-flymake_002dlog][¶]] :: Log, at level =level=, the message
+  =msg= formatted with =args=. =level= is passed to =display-warning=
+  (see
+  [[https://www.gnu.org/software/emacs/manual/html_mono/elisp.html#Warning-Basics][Warning Basics]]
+  in The Emacs Lisp reference Manual), which is used to display the
+  warning in Flymake's log buffer.
+
+--------------
+
+<<Foreign-and-list_002donly-diagnostics>>
+
+Next: [[#An-annotated-example-backend][An annotated example backend]],
+Previous: [[#Flymake-utility-functions][Flymake utility functions]], Up:
+[[#Backend-functions][Backend functions]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+**** 2.2.2 Foreign and list-only diagnostics [[#Foreign-and-list_002donly-diagnostics-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Foreign-and-list_002donly-diagnostics-1
+:CLASS: subsection
+:END:
+It is possible for a given backend's implementation to use
+=flymake-make-diagnostic= to create diagnostics for buffers or files
+other than the “source” buffer where Flymake was enabled. For instance,
+this is useful when a given backend has access to information about the
+health of neighboring files that are not yet visited or whose
+diagnostics depend on the current buffer's state. There are two
+alternative ways to go about doing this:
+
+1.  If the information about neighboring diagnostics is obtained
+   regularly, like when each syntax-checking iteration of a =.c= file
+   also reports a number of associated problems in an neighboring =.h=
+   file, it is better to create so-called “foreign” diagnostics.
+
+   This is done by passing a file name to =flymake-make-diagnostic= (see
+   [[#Flymake-utility-functions][Flymake utility functions]]). Then, the
+   resulting object is simply reported along with the other “domestic”
+   diagnostics for the source buffer (see
+   [[#Backend-functions][Backend functions]]). When the neighboring file
+   is visited as a buffer and Flymake is active there, a number of
+   supplemental annotations will appear and automatically update
+   whenever as the “source” buffer is syntax-checked.
+
+2.  If information about neighboring diagnostics is obtained
+   infrequently, like when running a time-consuming and sporadic check
+   of a large project, it is easier for the backend to modify the global
+   variable =flymake-list-only-diagnostics=.
+
+   Flymake will look up this variable when asked to compile project-wide
+   lists of diagnostics. The backend should add one or more alist
+   entries that look like (=file-name= . =diags=). =file-name= is the
+   absolute name of the neighboring file presumed not to be visited in
+   Emacs already, as that would mean that that buffer contains more
+   up-to-date information on its diagnostics. =diags= is a list of
+   diagnostic objects. When the neighboring file =file-name= is visited
+   as a buffer and Flymake is activated there, the “list-only”
+   diagnostics will /not/ produce annotations for =diags=, as Flymake
+   assumes that the Flymake activation in the new buffer will take care
+   of that.
+
+--------------
+
+<<An-annotated-example-backend>>
+
+Previous:
+[[#Foreign-and-list_002donly-diagnostics][Foreign and list-only diagnostics]],
+Up: [[#Backend-functions][Backend functions]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+**** 2.2.3 An annotated example backend [[#An-annotated-example-backend-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: An-annotated-example-backend-1
+:CLASS: subsection
+:END:
+This section presents an annotated example of a complete working Flymake
+backend. The example illustrates the process of writing a backend as
+outlined above.
+
+The backend in question is used for checking Ruby source files. It uses
+asynchronous sub-processes (see
+[[https://www.gnu.org/software/emacs/manual/html_mono/elisp.html#Asynchronous-Processes][Asynchronous Processes]]
+in The Emacs Lisp Reference Manual), a common technique for performing
+parallel processing in Emacs.
+
+The following code needs lexical binding (see
+[[https://www.gnu.org/software/emacs/manual/html_mono/elisp.html#Using-Lexical-Binding][Using Lexical Binding]]
+in The Emacs Lisp Reference Manual) to be active.
+
+#+begin_src example-preformatted
+;;; ruby-flymake.el --- A ruby Flymake backend  -*- lexical-binding: t; -*-
+(require 'cl-lib)
+(defvar-local ruby--flymake-proc nil)
+#+end_src
+
+#+begin_src example-preformatted
+
+#+end_src
+
+#+begin_src example-preformatted
+(defun ruby-flymake (report-fn &rest _args)
+  ;; Not having a ruby interpreter is a serious problem which should cause
+  ;; the backend to disable itself, so an error is signaled.
+  ;;
+  (unless (executable-find
+           "ruby") (error "Cannot find a suitable ruby"))
+  ;; If a live process launched in an earlier check was found, that
+  ;; process is killed.  When that process's sentinel eventually runs,
+  ;; it will notice its obsoletion, since it have since reset
+  ;; `ruby-flymake-proc' to a different value
+  ;;
+  (when (process-live-p ruby--flymake-proc)
+    (kill-process ruby--flymake-proc))
+#+end_src
+
+#+begin_src example-preformatted
+
+#+end_src
+
+#+begin_src example-preformatted
+  ;; Save the current buffer, the narrowing restriction, remove any
+  ;; narrowing restriction.
+  ;;
+  (let ((source (current-buffer)))
+    (save-restriction
+      (widen)
+      ;; Reset the `ruby--flymake-proc' process to a new process
+      ;; calling the ruby tool.
+      ;;
+      (setq
+       ruby--flymake-proc
+       (make-process
+        :name "ruby-flymake" :noquery t :connection-type 'pipe
+        ;; Make output go to a temporary buffer.
+        ;;
+        :buffer (generate-new-buffer " *ruby-flymake*")
+        :command '("ruby" "-w" "-c")
+        :sentinel
+        (lambda (proc _event)
+          ;; Check that the process has indeed exited, as it might
+          ;; be simply suspended.
+          ;;
+          (when (memq (process-status proc) '(exit signal))
+            (unwind-protect
+                ;; Only proceed if `proc' is the same as
+                ;; `ruby--flymake-proc', which indicates that
+                ;; `proc' is not an obsolete process.
+                ;;
+                (if (with-current-buffer source (eq proc ruby--flymake-proc))
+                    (with-current-buffer (process-buffer proc)
+                      (goto-char (point-min))
+                      ;; Parse the output buffer for diagnostic's
+                      ;; messages and locations, collect them in a list
+                      ;; of objects, and call `report-fn'.
+                      ;;
+                      (cl-loop
+                       while (search-forward-regexp
+                              "^\\(?:.*\\.rb\\|-\\):\\([0-9]+\\): \\(.*\\)$"
+                              nil t)
+                       for msg = (match-string 2)
+                       for (beg . end) = (flymake-diag-region
+                                          source
+                                          (string-to-number (match-string 1)))
+                       for type = (if (string-match "^warning" msg)
+                                      :warning
+                                    :error)
+                       when (and beg end)
+                       collect (flymake-make-diagnostic source
+                                                        beg
+                                                        end
+                                                        type
+                                                        msg)
+                       into diags
+                       finally (funcall report-fn diags)))
+                  (flymake-log :warning "Canceling obsolete check %s"
+                               proc))
+              ;; Cleanup the temporary buffer used to hold the
+              ;; check's output.
+              ;;
+              (kill-buffer (process-buffer proc)))))))
+      ;; Send the buffer contents to the process's stdin, followed by
+      ;; an EOF.
+      ;;
+      (process-send-region ruby--flymake-proc (point-min) (point-max))
+      (process-send-eof ruby--flymake-proc))))
+#+end_src
+
+#+begin_src example-preformatted
+
+#+end_src
+
+#+begin_src example-preformatted
+(defun ruby-setup-flymake-backend ()
+  (add-hook 'flymake-diagnostic-functions 'ruby-flymake nil t))
+
+(add-hook 'ruby-mode-hook 'ruby-setup-flymake-backend)
+#+end_src
+
+--------------
+
+<<Inspecting-diagnostics>>
+
+Previous: [[#Backend-functions][Backend functions]], Up:
+[[#Flymake-API][Flymake API]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 2.3 Inspecting diagnostics [[#Inspecting-diagnostics-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Inspecting-diagnostics-1
+:CLASS: section
+:END:
+When Flymake has called on the backend and collected its diagnostics, it
+will annotate the buffer with it. After this happens, Elisp programs may
+call =flymake-diagnostics= to collect such objects in a specified
+region.
+
+- Function: *flymake-diagnostics* =beg end=
+  [[#index-flymake_002ddiagnostics][¶]] :: Get a list of Flymake
+  diagnostics in the region determined by =beg= and =end=. If neither
+  =beg= or =end= is supplied, use the whole buffer, otherwise if =beg=
+  is non-=nil= and =end= is =nil=, consider only diagnostics at =beg=.
+
+A diagnostic object's properties can be accessed with the functions
+=flymake-diagnostic-backend=, =flymake-diagnostic-buffer=,
+=flymake-diagnostic-origin=, =flymake-diagnostic-code=
+=flymake-diagnostic-message=, =flymake-diagnostic-beg=,
+=flymake-diagnostic-end=, =flymake-diagnostic-type= and
+=flymake-diagnostic-data=. =flymake-diagnostic-text= will compose the
+diagnostic's origin, code and message in a single string.
+
+--------------
+
+<<The-legacy-Proc-backend>>
+
+Next:
+[[#GNU-Free-Documentation-License][GNU Free Documentation License]],
+Previous: [[#Flymake-API][Flymake API]], Up: [[#Top][GNU Flymake]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+** 3 The legacy “Proc” backend [[#The-legacy-_0060_0060Proc_0027_0027-backend][¶]]
+:PROPERTIES:
+:CUSTOM_ID: The-legacy-_0060_0060Proc_0027_0027-backend
+:CLASS: chapter
+:END:
+The backend =flymake-proc-legacy-flymake= was originally designed to be
+extended for supporting new syntax check tools and error message
+patterns. It is also controlled by its own set of customization
+variables.
+
+- [[#Proc-customization-variables][Customization variables for the Proc backend]]
+- [[#Adding-support-for-a-new-syntax-check-tool][Adding support for a new syntax check tool]]
+- [[#Implementation-overview][Implementation overview]]
+- [[#Making-a-temporary-copy][Making a temporary copy]]
+- [[#Locating-a-master-file][Locating a master file]]
+- [[#Getting-the-include-directories][Getting the include directories]]
+- [[#Locating-the-buildfile][Locating the buildfile]]
+- [[#Starting-the-syntax-check-process][Starting the syntax check process]]
+- [[#Parsing-the-output][Parsing the output]]
+- [[#Interaction-with-other-modes][Interaction with other modes]]
+
+--------------
+
+<<Proc-customization-variables>>
+
+Next:
+[[#Adding-support-for-a-new-syntax-check-tool][Adding support for a new syntax check tool]],
+Up: [[#The-legacy-Proc-backend][The legacy “Proc” backend]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 3.1 Customization variables for the Proc backend [[#Customization-variables-for-the-Proc-backend][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Customization-variables-for-the-Proc-backend
+:CLASS: section
+:END:
+- <<index-flymake_002dproc_002dallowed_002dfile_002dname_002dmasks>>=flymake-proc-allowed-file-name-masks=
+  [[#index-flymake_002dproc_002dallowed_002dfile_002dname_002dmasks][¶]] :: A
+  list of
+  =(filename-regexp, init-function, cleanup-function getfname-function)=
+  for configuring syntax check tools. See
+  [[#Adding-support-for-a-new-syntax-check-tool][Adding support for a new syntax check tool]].
+
+- <<index-flymake_002dproc_002dmaster_002dfile_002ddirs>>=flymake-proc-master-file-dirs=
+  [[#index-flymake_002dproc_002dmaster_002dfile_002ddirs][¶]] :: A list
+  of directories for searching a master file. See
+  [[#Locating-a-master-file][Locating a master file]].
+
+- <<index-flymake_002dproc_002dget_002dproject_002dinclude_002ddirs_002dfunction>>=flymake-proc-get-project-include-dirs-function=
+  [[#index-flymake_002dproc_002dget_002dproject_002dinclude_002ddirs_002dfunction][¶]] :: A
+  function used for obtaining a list of project include dirs (C/C++
+  specific). See
+  [[#Getting-the-include-directories][Getting the include directories]].
+
+- <<index-flymake_002dproc_002dmaster_002dfile_002dcount_002dlimit>>=flymake-proc-master-file-count-limit=
+  [[#index-flymake_002dproc_002dmaster_002dfile_002dcount_002dlimit][¶]]\\
+  <<index-flymake_002dproc_002dcheck_002dfile_002dlimit>>=flymake-proc-check-file-limit=
+  [[#index-flymake_002dproc_002dcheck_002dfile_002dlimit][¶]] :: Used
+  when looking for a master file. See
+  [[#Locating-a-master-file][Locating a master file]].
+
+- <<index-flymake_002dproc_002derr_002dline_002dpatterns>>=flymake-proc-err-line-patterns=
+  [[#index-flymake_002dproc_002derr_002dline_002dpatterns][¶]] :: Patterns
+  for error/warning messages in the form
+  =(regexp file-idx line-idx col-idx err-text-idx)=. See
+  [[#Parsing-the-output][Parsing the output]].
+
+- <<index-flymake_002dproc_002ddiagnostic_002dtype_002dpred>>=flymake-proc-diagnostic-type-pred=
+  [[#index-flymake_002dproc_002ddiagnostic_002dtype_002dpred][¶]] :: A
+  function to classify a diagnostic text as a particular type of error.
+  The value of this variable should be a function taking an error text
+  and returning a diagnostic symbol (see
+  [[#Flymake-error-types][Customizing Flymake error types]]). If it
+  returns a non-=nil= value but there is no such symbol in that table,
+  the text is interpreted as a warning. If the function returns =nil=,
+  the text is assumed to be an error.
+
+  The value of this variable can alternatively be a regular expression
+  that should match only warnings.
+
+  This variable replaces the old =flymake-warning-re= and
+  =flymake-warning-predicate=.
+
+- <<index-flymake_002dproc_002dcompilation_002dprevents_002dsyntax_002dcheck>>=flymake-proc-compilation-prevents-syntax-check=
+  [[#index-flymake_002dproc_002dcompilation_002dprevents_002dsyntax_002dcheck][¶]] :: A
+  flag indicating whether compilation and syntax check of the same file
+  cannot be run simultaneously. See
+  [[#Interaction-with-other-modes][Interaction with other modes]].
+
+--------------
+
+<<Adding-support-for-a-new-syntax-check-tool>>
+
+Next: [[#Implementation-overview][Implementation overview]], Previous:
+[[#Proc-customization-variables][Customization variables for the Proc backend]],
+Up: [[#The-legacy-Proc-backend][The legacy “Proc” backend]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 3.2 Adding support for a new syntax check tool [[#Adding-support-for-a-new-syntax-check-tool-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Adding-support-for-a-new-syntax-check-tool-1
+:CLASS: section
+:END:
+Syntax check tools are configured using the
+=flymake-proc-allowed-file-name-masks= list. Each item of this list has
+the following format:
+
+#+begin_src lisp-preformatted
+(filename-regexp, init-function, cleanup-function, getfname-function)
+#+end_src
+
+- =filename-regexp= :: This field is used as a key for locating
+  init/cleanup/getfname functions for the buffer. Items in
+  =flymake-proc-allowed-file-name-masks= are searched sequentially. The
+  first item with =filename-regexp= matching buffer filename is
+  selected. If no match is found, =flymake-mode= is switched off.
+
+- =init-function= :: =init-function= is required to initialize the
+  syntax check, usually by creating a temporary copy of the buffer
+  contents. The function must return =(list cmd-name arg-list)=. If
+  =init-function= returns null, syntax check is aborted, but
+  =flymake-mode= is not switched off.
+
+- =cleanup-function= :: =cleanup-function= is called after the syntax
+  check process is complete and should take care of proper
+  deinitialization, which is usually deleting a temporary copy created
+  by the =init-function=.
+
+- =getfname-function= :: This function is used for translating filenames
+  reported by the syntax check tool into “real” filenames. Filenames
+  reported by the tool will be different from the real ones, as actually
+  the tool works with the temporary copy. In most cases, the default
+  implementation provided by Flymake, =flymake-proc-get-real-file-name=,
+  can be used as =getfname-function=.
+
+To add support for a new syntax check tool, write the corresponding
+=init-function= and, optionally, =cleanup-function= and
+=getfname-function=. If the format of error messages reported by the new
+tool is not yet supported by Flymake, add a new entry to the
+=flymake-proc-err-line-patterns= list.
+
+The following sections contain some examples of configuring Flymake
+support for various syntax check tools.
+
+- [[#Example_002d_002d_002dConfiguring-a-tool-called-directly][Example---Configuring a tool called directly]]
+- [[#Example_002d_002d_002dConfiguring-a-tool-called-via-make][Example---Configuring a tool called via make]]
+
+--------------
+
+<<Example_002d_002d_002dConfiguring-a-tool-called-directly>>
+
+Next:
+[[#Example_002d_002d_002dConfiguring-a-tool-called-via-make][Example---Configuring a tool called via make]],
+Up:
+[[#Adding-support-for-a-new-syntax-check-tool][Adding support for a new syntax check tool]]
+  [[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+**** 3.2.1 Example---Configuring a tool called directly [[#Example_002d_002d_002dConfiguring-a-tool-called-directly-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Example_002d_002d_002dConfiguring-a-tool-called-directly-1
+:CLASS: subsection
+:END:
+In this example, we will add support for =perl= as a syntax check tool.
+=perl= supports the =-c= option which does syntax checking.
+
+First, we write the =init-function=:
+
+#+begin_src lisp-preformatted
+(defun flymake-proc-perl-init ()
+  (let* ((temp-file (flymake-proc-init-create-temp-buffer-copy
+                     'flymake-proc-create-temp-inplace))
+         (local-file (file-relative-name
+                      temp-file
+                      (file-name-directory buffer-file-name))))
+    (list "perl" (list "-wc " local-file))))
+#+end_src
+
+=flymake-proc-perl-init= creates a temporary copy of the buffer contents
+with the help of =flymake-proc-init-create-temp-buffer-copy=, and builds
+an appropriate command line.
+
+Next, we add a new entry to the =flymake-proc-allowed-file-name-masks=:
+
+#+begin_src lisp-preformatted
+(setq flymake-proc-allowed-file-name-masks
+      (cons '(".+\\.pl$"
+              flymake-proc-perl-init
+              flymake-proc-simple-cleanup
+              flymake-proc-get-real-file-name)
+            flymake-proc-allowed-file-name-masks))
+#+end_src
+
+Note that we use standard =cleanup-function= and =getfname-function=.
+
+Finally, we add an entry to =flymake-proc-err-line-patterns=:
+
+#+begin_src lisp-preformatted
+(setq flymake-proc-err-line-patterns
+      (cons '("\\(.*\\) at \\([^ \n]+\\) line \\([0-9]+\\)[,.\n]"
+              2 3 nil 1)
+            flymake-proc-err-line-patterns))
+#+end_src
+
+--------------
+
+<<Example_002d_002d_002dConfiguring-a-tool-called-via-make>>
+
+Previous:
+[[#Example_002d_002d_002dConfiguring-a-tool-called-directly][Example---Configuring a tool called directly]],
+Up:
+[[#Adding-support-for-a-new-syntax-check-tool][Adding support for a new syntax check tool]]
+  [[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+**** 3.2.2 Example---Configuring a tool called via make [[#Example_002d_002d_002dConfiguring-a-tool-called-via-make-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Example_002d_002d_002dConfiguring-a-tool-called-via-make-1
+:CLASS: subsection
+:END:
+In this example we will add support for C files syntax checked by =gcc=
+called via =make=.
+
+We're not required to write any new functions, as Flymake already has
+functions for =make=. We just add a new entry to the
+=flymake-proc-allowed-file-name-masks=:
+
+#+begin_src lisp-preformatted
+(setq flymake-proc-allowed-file-name-masks
+      (cons '(".+\\.c$"
+              flymake-proc-simple-make-init
+              flymake-proc-simple-cleanup
+              flymake-proc-get-real-file-name)
+            flymake-proc-allowed-file-name-masks))
+#+end_src
+
+=flymake-proc-simple-make-init= builds the following =make= command
+line:
+
+#+begin_src lisp-preformatted
+(list "make"
+      (list "-s" "-C"
+            base-dir
+            (concat "CHK_SOURCES=" source)
+            "SYNTAX_CHECK_MODE=1"
+            "check-syntax"))
+#+end_src
+
+=base-dir= is a directory containing the =Makefile=, see
+[[#Locating-the-buildfile][Locating the buildfile]].
+
+Thus, =Makefile= must contain the =check-syntax= target. In our case
+this target might look like this:
+
+#+begin_src verbatim
+check-syntax:
+    gcc -o /dev/null -S ${CHK_SOURCES} || true
+#+end_src
+
+The format of error messages reported by =gcc= is already supported by
+Flymake, so we don't have to add a new entry to
+=flymake-err-line-patterns=. Note that if you are using Automake, you
+may want to replace =gcc= with the standard Automake variable =COMPILE=:
+
+#+begin_src verbatim
+check-syntax:
+    $(COMPILE) -o /dev/null -S ${CHK_SOURCES} || true
+#+end_src
+
+--------------
+
+<<Implementation-overview>>
+
+Next: [[#Making-a-temporary-copy][Making a temporary copy]], Previous:
+[[#Adding-support-for-a-new-syntax-check-tool][Adding support for a new syntax check tool]],
+Up: [[#The-legacy-Proc-backend][The legacy “Proc” backend]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 3.3 Implementation overview [[#Implementation-overview-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Implementation-overview-1
+:CLASS: section
+:END:
+=flymake-proc-legacy-flymake= saves a copy of the buffer in a temporary
+file in the buffer's directory (or in the system temporary directory,
+for Java files), creates a syntax check command and launches a process
+with this command. The output is parsed using a list of error message
+patterns, and error information (file name, line number, type and text)
+is saved. After the process has finished, Flymake highlights erroneous
+lines in the buffer using the accumulated error information.
+
+Syntax check is considered possible if there's an entry in
+=flymake-proc-allowed-file-name-masks= matching buffer's filename and
+its =init-function= returns non-=nil= value.
+
+Two syntax check modes are distinguished:
+
+1. Buffer can be syntax checked in a standalone fashion, that is, the
+   file (its temporary copy, in fact) can be passed over to the compiler
+   to do the syntax check. Examples are C/C=++= sources (=.c=, =.cpp=)
+   and Java (=.java=).
+2. Buffer can be syntax checked, but additional file, called master
+   file, is required to perform this operation. A master file is a file
+   that includes the current file, so that running a syntax check tool
+   on it will also check syntax in the current file. Examples are
+   C/C=++= headers (=.h=, =.hpp=).
+
+These modes are handled inside init/cleanup/getfname functions, see
+[[#Adding-support-for-a-new-syntax-check-tool][Adding support for a new syntax check tool]].
+
+The Proc backend contains implementations of all functionality required
+to support different syntax check modes described above (making
+temporary copies, finding master files, etc.), as well as some
+tool-specific (routines for Make, Ant, etc.) code.
+
+--------------
+
+<<Making-a-temporary-copy>>
+
+Next: [[#Locating-a-master-file][Locating a master file]], Previous:
+[[#Implementation-overview][Implementation overview]], Up:
+[[#The-legacy-Proc-backend][The legacy “Proc” backend]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 3.4 Making a temporary copy [[#Making-a-temporary-copy-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Making-a-temporary-copy-1
+:CLASS: section
+:END:
+After the possibility of the syntax check has been determined, a
+temporary copy of the current buffer is made so that the most recent
+unsaved changes could be seen by the syntax check tool. Making a copy is
+quite straightforward in a standalone case (mode =1=), as it's just
+saving buffer contents to a temporary file.
+
+Things get trickier, however, when master file is involved, as it
+requires to
+
+- locate a master file
+- patch it to include the current file using its new (temporary) name.
+
+Locating a master file is discussed in the following section.
+
+Patching just changes all appropriate lines of the master file so that
+they use the new (temporary) name of the current file. For example,
+suppose current file name is =file.h=, the master file is =file.cpp=,
+and it includes current file via =#include "file.h"=. Current file's
+copy is saved to file =file_flymake.h=, so the include line must be
+changed to =#include "file_flymake.h"=. Finally, patched master file is
+saved to =file_flymake_master.cpp=, and the last one is passed to the
+syntax check tool.
+
+--------------
+
+<<Locating-a-master-file>>
+
+Next:
+[[#Getting-the-include-directories][Getting the include directories]],
+Previous: [[#Making-a-temporary-copy][Making a temporary copy]], Up:
+[[#The-legacy-Proc-backend][The legacy “Proc” backend]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 3.5 Locating a master file [[#Locating-a-master-file-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Locating-a-master-file-1
+:CLASS: section
+:END:
+Master file is located in two steps.
+
+First, a list of possible master files is built. A simple name matching
+is used to find the files. For a C++ header =file.h=, the Proc backend
+searches for all =.cpp= files in the directories whose relative paths
+are stored in a customizable variable =flymake-proc-master-file-dirs=,
+which usually contains something like =("." "./src")=. No more than
+=flymake-proc-master-file-count-limit= entries is added to the master
+file list. The list is then sorted to move files with names =file.cpp=
+to the top.
+
+Next, each master file in a list is checked to contain the appropriate
+include directives. No more than =flymake-proc-check-file-limit= of each
+file are parsed.
+
+For =file.h=, the include directives to look for are
+=#include "file.h"=, =#include "../file.h"=, etc. Each include is
+checked against a list of include directories (see
+[[#Getting-the-include-directories][Getting the include directories]])
+to be sure it points to the correct =file.h=.
+
+First matching master file found stops the search. The master file is
+then patched and saved to disk. In case no master file is found, syntax
+check is aborted, and corresponding status (‘=!=') is reported in the
+mode line. See [[#Mode-line-status][Mode line status]].
+
+--------------
+
+<<Getting-the-include-directories>>
+
+Next: [[#Locating-the-buildfile][Locating the buildfile]], Previous:
+[[#Locating-a-master-file][Locating a master file]], Up:
+[[#The-legacy-Proc-backend][The legacy “Proc” backend]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 3.6 Getting the include directories [[#Getting-the-include-directories-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Getting-the-include-directories-1
+:CLASS: section
+:END:
+Two sets of include directories are distinguished: system include
+directories and project include directories. The former is just the
+contents of the =INCLUDE= environment variable. The latter is not so
+easy to obtain, and the way it can be obtained can vary greatly for
+different projects. Therefore, a customizable variable
+=flymake-proc-get-project-include-dirs-function= is used to provide the
+way to implement the desired behavior.
+
+The default implementation, =flymake-proc-get-project-include-dirs-imp=,
+uses a =make= call. This requires a correct base directory, that is, a
+directory containing a correct =Makefile=, to be determined.
+
+As obtaining the project include directories might be a costly
+operation, its return value is cached in the hash table. The cache is
+cleared in the beginning of every syntax check attempt.
+
+--------------
+
+<<Locating-the-buildfile>>
+
+Next:
+[[#Starting-the-syntax-check-process][Starting the syntax check process]],
+Previous:
+[[#Getting-the-include-directories][Getting the include directories]],
+Up: [[#The-legacy-Proc-backend][The legacy “Proc” backend]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 3.7 Locating the buildfile [[#Locating-the-buildfile-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Locating-the-buildfile-1
+:CLASS: section
+:END:
+The Proc backend can be configured to use different tools for performing
+syntax checks. For example, it can use direct compiler call to syntax
+check a perl script or a call to =make= for a more complicated case of a
+C/C=++= source. The general idea is that simple files, like Perl scripts
+and HTML pages, can be checked by directly invoking a corresponding
+tool. Files that are usually more complex and generally used as part of
+larger projects, might require non-trivial options to be passed to the
+syntax check tool, like include directories for C=++=. The latter files
+are syntax checked using some build tool, like Make or Ant.
+
+All Make configuration data is usually stored in a file called
+=Makefile=. To allow for future extensions, Flymake uses a notion of
+buildfile to reference the /project configuration/ file.
+
+Special function, =flymake-proc-find-buildfile= is provided for locating
+buildfiles. Searching for a buildfile is done in a manner similar to
+that of searching for possible master files. In case there's no build
+file, the syntax check is aborted.
+
+Buildfile values are also cached.
+
+--------------
+
+<<Starting-the-syntax-check-process>>
+
+Next: [[#Parsing-the-output][Parsing the output]], Previous:
+[[#Locating-the-buildfile][Locating the buildfile]], Up:
+[[#The-legacy-Proc-backend][The legacy “Proc” backend]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 3.8 Starting the syntax check process [[#Starting-the-syntax-check-process-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Starting-the-syntax-check-process-1
+:CLASS: section
+:END:
+The command line (command name and the list of arguments) for launching
+a process is returned by the initialization function. The Proc backend
+then just starts an asynchronous process and configures a process filter
+and sentinel, which are used for processing the output of the syntax
+check tool. When exiting Emacs, running processes will be killed without
+prompting the user.
+
+--------------
+
+<<Parsing-the-output>>
+
+Next: [[#Interaction-with-other-modes][Interaction with other modes]],
+Previous:
+[[#Starting-the-syntax-check-process][Starting the syntax check process]],
+Up: [[#The-legacy-Proc-backend][The legacy “Proc” backend]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 3.9 Parsing the output [[#Parsing-the-output-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Parsing-the-output-1
+:CLASS: section
+:END:
+The output generated by the syntax check tool is parsed in the process
+filter/sentinel using the error message patterns stored in the
+=flymake-proc-err-line-patterns= variable. This variable contains a list
+of items of the form =(regexp file-idx line-idx err-text-idx)=, used to
+determine whether a particular line is an error message and extract file
+name, line number and error text, respectively. Error type
+(error/warning) is also guessed by matching error text with the
+‘=^[wW]arning=' pattern. Anything that was not classified as a warning
+is considered an error. Type is then used to sort error menu items,
+which shows error messages first.
+
+The Proc backend is also able to interpret error message patterns
+missing err-text-idx information. This is done by merely taking the rest
+of the matched line (=(substring line (match-end 0))=) as error text.
+This trick allows making use of a huge collection of error message line
+patterns from =compile.el=. All these error patterns are appended to the
+end of =flymake-proc-err-line-patterns=.
+
+The error information obtained is saved in a buffer local variable. The
+buffer for which the process output belongs is determined from the
+process-id->buffer mapping updated after every process launch/exit.
+
+--------------
+
+<<Interaction-with-other-modes>>
+
+Previous: [[#Parsing-the-output][Parsing the output]], Up:
+[[#The-legacy-Proc-backend][The legacy “Proc” backend]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 3.10 Interaction with other modes [[#Interaction-with-other-modes-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Interaction-with-other-modes-1
+:CLASS: section
+:END:
+The only mode the Proc backend currently knows about is =compile=.
+
+The Proc backend can be configured to not start syntax check if it
+thinks the compilation is in progress, by testing the
+=compilation-in-progress= variable. The reason why this might be useful
+is saving CPU time in case both syntax check and compilation are very
+CPU intensive. The original reason for adding this feature, though, was
+working around a locking problem with MS Visual C++ compiler. The
+variable in question is
+=flymake-proc-compilation-prevents-syntax-check=.
+
+The Proc backend also provides an alternative command for starting
+compilation, =flymake-proc-compile=. It just kills all the active syntax
+check processes before calling =compile=.
+
+--------------
+
+<<GNU-Free-Documentation-License>>
+
+Next: [[#Index][Index]], Previous:
+[[#The-legacy-Proc-backend][The legacy “Proc” backend]], Up:
+[[#Top][GNU Flymake]]   [[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+** Appendix A GNU Free Documentation License [[#GNU-Free-Documentation-License-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: GNU-Free-Documentation-License-1
+:CLASS: appendix
+:END:
+
+#+begin_center
+Version 1.3, 3 November 2008
+#+end_center
+
+#+begin_src display-preformatted
+Copyright © 2000, 2001, 2002, 2007, 2008 Free Software Foundation, Inc.
+https://fsf.org/
+
+Everyone is permitted to copy and distribute verbatim copies
+of this license document, but changing it is not allowed.
+#+end_src
+
+0. [@0] PREAMBLE
+
+   The purpose of this License is to make a manual, textbook, or other
+   functional and useful document /free/ in the sense of freedom: to
+   assure everyone the effective freedom to copy and redistribute it,
+   with or without modifying it, either commercially or noncommercially.
+   Secondarily, this License preserves for the author and publisher a
+   way to get credit for their work, while not being considered
+   responsible for modifications made by others.
+
+   This License is a kind of “copyleft”, which means that derivative
+   works of the document must themselves be free in the same sense. It
+   complements the GNU General Public License, which is a copyleft
+   license designed for free software.
+
+   We have designed this License in order to use it for manuals for free
+   software, because free software needs free documentation: a free
+   program should come with manuals providing the same freedoms that the
+   software does. But this License is not limited to software manuals;
+   it can be used for any textual work, regardless of subject matter or
+   whether it is published as a printed book. We recommend this License
+   principally for works whose purpose is instruction or reference.
+
+1. APPLICABILITY AND DEFINITIONS
+
+   This License applies to any manual or other work, in any medium, that
+   contains a notice placed by the copyright holder saying it can be
+   distributed under the terms of this License. Such a notice grants a
+   world-wide, royalty-free license, unlimited in duration, to use that
+   work under the conditions stated herein. The “Document”, below,
+   refers to any such manual or work. Any member of the public is a
+   licensee, and is addressed as “you”. You accept the license if you
+   copy, modify or distribute the work in a way requiring permission
+   under copyright law.
+
+   A “Modified Version” of the Document means any work containing the
+   Document or a portion of it, either copied verbatim, or with
+   modifications and/or translated into another language.
+
+   A “Secondary Section” is a named appendix or a front-matter section
+   of the Document that deals exclusively with the relationship of the
+   publishers or authors of the Document to the Document's overall
+   subject (or to related matters) and contains nothing that could fall
+   directly within that overall subject. (Thus, if the Document is in
+   part a textbook of mathematics, a Secondary Section may not explain
+   any mathematics.) The relationship could be a matter of historical
+   connection with the subject or with related matters, or of legal,
+   commercial, philosophical, ethical or political position regarding
+   them.
+
+   The “Invariant Sections” are certain Secondary Sections whose titles
+   are designated, as being those of Invariant Sections, in the notice
+   that says that the Document is released under this License. If a
+   section does not fit the above definition of Secondary then it is not
+   allowed to be designated as Invariant. The Document may contain zero
+   Invariant Sections. If the Document does not identify any Invariant
+   Sections then there are none.
+
+   The “Cover Texts” are certain short passages of text that are listed,
+   as Front-Cover Texts or Back-Cover Texts, in the notice that says
+   that the Document is released under this License. A Front-Cover Text
+   may be at most 5 words, and a Back-Cover Text may be at most 25
+   words.
+
+   A “Transparent” copy of the Document means a machine-readable copy,
+   represented in a format whose specification is available to the
+   general public, that is suitable for revising the document
+   straightforwardly with generic text editors or (for images composed
+   of pixels) generic paint programs or (for drawings) some widely
+   available drawing editor, and that is suitable for input to text
+   formatters or for automatic translation to a variety of formats
+   suitable for input to text formatters. A copy made in an otherwise
+   Transparent file format whose markup, or absence of markup, has been
+   arranged to thwart or discourage subsequent modification by readers
+   is not Transparent. An image format is not Transparent if used for
+   any substantial amount of text. A copy that is not “Transparent” is
+   called “Opaque”.
+
+   Examples of suitable formats for Transparent copies include plain
+   ASCII without markup, Texinfo input format, LaTeX input format, SGML
+   or XML using a publicly available DTD, and standard-conforming simple
+   HTML, PostScript or PDF designed for human modification. Examples of
+   transparent image formats include PNG, XCF and JPG. Opaque formats
+   include proprietary formats that can be read and edited only by
+   proprietary word processors, SGML or XML for which the DTD and/or
+   processing tools are not generally available, and the
+   machine-generated HTML, PostScript or PDF produced by some word
+   processors for output purposes only.
+
+   The “Title Page” means, for a printed book, the title page itself,
+   plus such following pages as are needed to hold, legibly, the
+   material this License requires to appear in the title page. For works
+   in formats which do not have any title page as such, “Title Page”
+   means the text near the most prominent appearance of the work's
+   title, preceding the beginning of the body of the text.
+
+   The “publisher” means any person or entity that distributes copies of
+   the Document to the public.
+
+   A section “Entitled XYZ” means a named subunit of the Document whose
+   title either is precisely XYZ or contains XYZ in parentheses
+   following text that translates XYZ in another language. (Here XYZ
+   stands for a specific section name mentioned below, such as
+   “Acknowledgements”, “Dedications”, “Endorsements”, or “History”.) To
+   “Preserve the Title” of such a section when you modify the Document
+   means that it remains a section “Entitled XYZ” according to this
+   definition.
+
+   The Document may include Warranty Disclaimers next to the notice
+   which states that this License applies to the Document. These
+   Warranty Disclaimers are considered to be included by reference in
+   this License, but only as regards disclaiming warranties: any other
+   implication that these Warranty Disclaimers may have is void and has
+   no effect on the meaning of this License.
+
+2. VERBATIM COPYING
+
+   You may copy and distribute the Document in any medium, either
+   commercially or noncommercially, provided that this License, the
+   copyright notices, and the license notice saying this License applies
+   to the Document are reproduced in all copies, and that you add no
+   other conditions whatsoever to those of this License. You may not use
+   technical measures to obstruct or control the reading or further
+   copying of the copies you make or distribute. However, you may accept
+   compensation in exchange for copies. If you distribute a large enough
+   number of copies you must also follow the conditions in section 3.
+
+   You may also lend copies, under the same conditions stated above, and
+   you may publicly display copies.
+
+3. COPYING IN QUANTITY
+
+   If you publish printed copies (or copies in media that commonly have
+   printed covers) of the Document, numbering more than 100, and the
+   Document's license notice requires Cover Texts, you must enclose the
+   copies in covers that carry, clearly and legibly, all these Cover
+   Texts: Front-Cover Texts on the front cover, and Back-Cover Texts on
+   the back cover. Both covers must also clearly and legibly identify
+   you as the publisher of these copies. The front cover must present
+   the full title with all words of the title equally prominent and
+   visible. You may add other material on the covers in addition.
+   Copying with changes limited to the covers, as long as they preserve
+   the title of the Document and satisfy these conditions, can be
+   treated as verbatim copying in other respects.
+
+   If the required texts for either cover are too voluminous to fit
+   legibly, you should put the first ones listed (as many as fit
+   reasonably) on the actual cover, and continue the rest onto adjacent
+   pages.
+
+   If you publish or distribute Opaque copies of the Document numbering
+   more than 100, you must either include a machine-readable Transparent
+   copy along with each Opaque copy, or state in or with each Opaque
+   copy a computer-network location from which the general network-using
+   public has access to download using public-standard network protocols
+   a complete Transparent copy of the Document, free of added material.
+   If you use the latter option, you must take reasonably prudent steps,
+   when you begin distribution of Opaque copies in quantity, to ensure
+   that this Transparent copy will remain thus accessible at the stated
+   location until at least one year after the last time you distribute
+   an Opaque copy (directly or through your agents or retailers) of that
+   edition to the public.
+
+   It is requested, but not required, that you contact the authors of
+   the Document well before redistributing any large number of copies,
+   to give them a chance to provide you with an updated version of the
+   Document.
+
+4. MODIFICATIONS
+
+   You may copy and distribute a Modified Version of the Document under
+   the conditions of sections 2 and 3 above, provided that you release
+   the Modified Version under precisely this License, with the Modified
+   Version filling the role of the Document, thus licensing distribution
+   and modification of the Modified Version to whoever possesses a copy
+   of it. In addition, you must do these things in the Modified Version:
+
+   1. Use in the Title Page (and on the covers, if any) a title distinct
+      from that of the Document, and from those of previous versions
+      (which should, if there were any, be listed in the History section
+      of the Document). You may use the same title as a previous version
+      if the original publisher of that version gives permission.
+   2. List on the Title Page, as authors, one or more persons or
+      entities responsible for authorship of the modifications in the
+      Modified Version, together with at least five of the principal
+      authors of the Document (all of its principal authors, if it has
+      fewer than five), unless they release you from this requirement.
+   3. State on the Title page the name of the publisher of the Modified
+      Version, as the publisher.
+   4. Preserve all the copyright notices of the Document.
+   5. Add an appropriate copyright notice for your modifications
+      adjacent to the other copyright notices.
+   6. Include, immediately after the copyright notices, a license notice
+      giving the public permission to use the Modified Version under the
+      terms of this License, in the form shown in the Addendum below.
+   7. Preserve in that license notice the full lists of Invariant
+      Sections and required Cover Texts given in the Document's license
+      notice.
+   8. Include an unaltered copy of this License.
+   9. Preserve the section Entitled “History”, Preserve its Title, and
+      add to it an item stating at least the title, year, new authors,
+      and publisher of the Modified Version as given on the Title Page.
+      If there is no section Entitled “History” in the Document, create
+      one stating the title, year, authors, and publisher of the
+      Document as given on its Title Page, then add an item describing
+      the Modified Version as stated in the previous sentence.
+   10. Preserve the network location, if any, given in the Document for
+       public access to a Transparent copy of the Document, and likewise
+       the network locations given in the Document for previous versions
+       it was based on. These may be placed in the “History” section.
+       You may omit a network location for a work that was published at
+       least four years before the Document itself, or if the original
+       publisher of the version it refers to gives permission.
+   11. For any section Entitled “Acknowledgements” or “Dedications”,
+       Preserve the Title of the section, and preserve in the section
+       all the substance and tone of each of the contributor
+       acknowledgements and/or dedications given therein.
+   12. Preserve all the Invariant Sections of the Document, unaltered in
+       their text and in their titles. Section numbers or the equivalent
+       are not considered part of the section titles.
+   13. Delete any section Entitled “Endorsements”. Such a section may
+       not be included in the Modified Version.
+   14. Do not retitle any existing section to be Entitled “Endorsements”
+       or to conflict in title with any Invariant Section.
+   15. Preserve any Warranty Disclaimers.
+
+   If the Modified Version includes new front-matter sections or
+   appendices that qualify as Secondary Sections and contain no material
+   copied from the Document, you may at your option designate some or
+   all of these sections as invariant. To do this, add their titles to
+   the list of Invariant Sections in the Modified Version's license
+   notice. These titles must be distinct from any other section titles.
+
+   You may add a section Entitled “Endorsements”, provided it contains
+   nothing but endorsements of your Modified Version by various
+   parties---for example, statements of peer review or that the text has
+   been approved by an organization as the authoritative definition of a
+   standard.
+
+   You may add a passage of up to five words as a Front-Cover Text, and
+   a passage of up to 25 words as a Back-Cover Text, to the end of the
+   list of Cover Texts in the Modified Version. Only one passage of
+   Front-Cover Text and one of Back-Cover Text may be added by (or
+   through arrangements made by) any one entity. If the Document already
+   includes a cover text for the same cover, previously added by you or
+   by arrangement made by the same entity you are acting on behalf of,
+   you may not add another; but you may replace the old one, on explicit
+   permission from the previous publisher that added the old one.
+
+   The author(s) and publisher(s) of the Document do not by this License
+   give permission to use their names for publicity for or to assert or
+   imply endorsement of any Modified Version.
+
+5. COMBINING DOCUMENTS
+
+   You may combine the Document with other documents released under this
+   License, under the terms defined in section 4 above for modified
+   versions, provided that you include in the combination all of the
+   Invariant Sections of all of the original documents, unmodified, and
+   list them all as Invariant Sections of your combined work in its
+   license notice, and that you preserve all their Warranty Disclaimers.
+
+   The combined work need only contain one copy of this License, and
+   multiple identical Invariant Sections may be replaced with a single
+   copy. If there are multiple Invariant Sections with the same name but
+   different contents, make the title of each such section unique by
+   adding at the end of it, in parentheses, the name of the original
+   author or publisher of that section if known, or else a unique
+   number. Make the same adjustment to the section titles in the list of
+   Invariant Sections in the license notice of the combined work.
+
+   In the combination, you must combine any sections Entitled “History”
+   in the various original documents, forming one section Entitled
+   “History”; likewise combine any sections Entitled “Acknowledgements”,
+   and any sections Entitled “Dedications”. You must delete all sections
+   Entitled “Endorsements.”
+
+6. COLLECTIONS OF DOCUMENTS
+
+   You may make a collection consisting of the Document and other
+   documents released under this License, and replace the individual
+   copies of this License in the various documents with a single copy
+   that is included in the collection, provided that you follow the
+   rules of this License for verbatim copying of each of the documents
+   in all other respects.
+
+   You may extract a single document from such a collection, and
+   distribute it individually under this License, provided you insert a
+   copy of this License into the extracted document, and follow this
+   License in all other respects regarding verbatim copying of that
+   document.
+
+7. AGGREGATION WITH INDEPENDENT WORKS
+
+   A compilation of the Document or its derivatives with other separate
+   and independent documents or works, in or on a volume of a storage or
+   distribution medium, is called an “aggregate” if the copyright
+   resulting from the compilation is not used to limit the legal rights
+   of the compilation's users beyond what the individual works permit.
+   When the Document is included in an aggregate, this License does not
+   apply to the other works in the aggregate which are not themselves
+   derivative works of the Document.
+
+   If the Cover Text requirement of section 3 is applicable to these
+   copies of the Document, then if the Document is less than one half of
+   the entire aggregate, the Document's Cover Texts may be placed on
+   covers that bracket the Document within the aggregate, or the
+   electronic equivalent of covers if the Document is in electronic
+   form. Otherwise they must appear on printed covers that bracket the
+   whole aggregate.
+
+8. TRANSLATION
+
+   Translation is considered a kind of modification, so you may
+   distribute translations of the Document under the terms of section 4.
+   Replacing Invariant Sections with translations requires special
+   permission from their copyright holders, but you may include
+   translations of some or all Invariant Sections in addition to the
+   original versions of these Invariant Sections. You may include a
+   translation of this License, and all the license notices in the
+   Document, and any Warranty Disclaimers, provided that you also
+   include the original English version of this License and the original
+   versions of those notices and disclaimers. In case of a disagreement
+   between the translation and the original version of this License or a
+   notice or disclaimer, the original version will prevail.
+
+   If a section in the Document is Entitled “Acknowledgements”,
+   “Dedications”, or “History”, the requirement (section 4) to Preserve
+   its Title (section 1) will typically require changing the actual
+   title.
+
+9. TERMINATION
+
+   You may not copy, modify, sublicense, or distribute the Document
+   except as expressly provided under this License. Any attempt
+   otherwise to copy, modify, sublicense, or distribute it is void, and
+   will automatically terminate your rights under this License.
+
+   However, if you cease all violation of this License, then your
+   license from a particular copyright holder is reinstated (a)
+   provisionally, unless and until the copyright holder explicitly and
+   finally terminates your license, and (b) permanently, if the
+   copyright holder fails to notify you of the violation by some
+   reasonable means prior to 60 days after the cessation.
+
+   Moreover, your license from a particular copyright holder is
+   reinstated permanently if the copyright holder notifies you of the
+   violation by some reasonable means, this is the first time you have
+   received notice of violation of this License (for any work) from that
+   copyright holder, and you cure the violation prior to 30 days after
+   your receipt of the notice.
+
+   Termination of your rights under this section does not terminate the
+   licenses of parties who have received copies or rights from you under
+   this License. If your rights have been terminated and not permanently
+   reinstated, receipt of a copy of some or all of the same material
+   does not give you any rights to use it.
+
+10. FUTURE REVISIONS OF THIS LICENSE
+
+    The Free Software Foundation may publish new, revised versions of
+    the GNU Free Documentation License from time to time. Such new
+    versions will be similar in spirit to the present version, but may
+    differ in detail to address new problems or concerns. See
+    [[https://www.gnu.org/licenses/]].
+
+    Each version of the License is given a distinguishing version
+    number. If the Document specifies that a particular numbered version
+    of this License “or any later version” applies to it, you have the
+    option of following the terms and conditions either of that
+    specified version or of any later version that has been published
+    (not as a draft) by the Free Software Foundation. If the Document
+    does not specify a version number of this License, you may choose
+    any version ever published (not as a draft) by the Free Software
+    Foundation. If the Document specifies that a proxy can decide which
+    future versions of this License can be used, that proxy's public
+    statement of acceptance of a version permanently authorizes you to
+    choose that version for the Document.
+
+11. RELICENSING
+
+    “Massive Multiauthor Collaboration Site” (or “MMC Site”) means any
+    World Wide Web server that publishes copyrightable works and also
+    provides prominent facilities for anybody to edit those works. A
+    public wiki that anybody can edit is an example of such a server. A
+    “Massive Multiauthor Collaboration” (or “MMC”) contained in the site
+    means any set of copyrightable works thus published on the MMC site.
+
+    “CC-BY-SA” means the Creative Commons Attribution-Share Alike 3.0
+    license published by Creative Commons Corporation, a not-for-profit
+    corporation with a principal place of business in San Francisco,
+    California, as well as future copyleft versions of that license
+    published by that same organization.
+
+    “Incorporate” means to publish or republish a Document, in whole or
+    in part, as part of another Document.
+
+    An MMC is “eligible for relicensing” if it is licensed under this
+    License, and if all works that were first published under this
+    License somewhere other than this MMC, and subsequently incorporated
+    in whole or in part into the MMC, (1) had no cover texts or
+    invariant sections, and (2) were thus incorporated prior to November
+    1, 2008.
+
+    The operator of an MMC Site may republish an MMC contained in the
+    site under CC-BY-SA on the same site at any time before August 1,
+    2009, provided the MMC is eligible for relicensing.
+
+*** ADDENDUM: How to use this License for your documents [[#ADDENDUM_003a-How-to-use-this-License-for-your-documents][¶]]
+:PROPERTIES:
+:CUSTOM_ID: ADDENDUM_003a-How-to-use-this-License-for-your-documents
+:CLASS: heading
+:END:
+To use this License in a document you have written, include a copy of
+the License in the document and put the following copyright and license
+notices just after the title page:
+
+#+begin_src example-preformatted
+  Copyright (C)  year  your name.
+  Permission is granted to copy, distribute and/or modify this document
+  under the terms of the GNU Free Documentation License, Version 1.3
+  or any later version published by the Free Software Foundation;
+  with no Invariant Sections, no Front-Cover Texts, and no Back-Cover
+  Texts.  A copy of the license is included in the section entitled ``GNU
+  Free Documentation License''.
+#+end_src
+
+If you have Invariant Sections, Front-Cover Texts and Back-Cover Texts,
+replace the “with...Texts.” line with this:
+
+#+begin_src example-preformatted
+    with the Invariant Sections being list their titles, with
+    the Front-Cover Texts being list, and with the Back-Cover Texts
+    being list.
+#+end_src
+
+If you have Invariant Sections without Cover Texts, or some other
+combination of the three, merge those two alternatives to suit the
+situation.
+
+If your document contains nontrivial examples of program code, we
+recommend releasing these examples in parallel under your choice of free
+software license, such as the GNU General Public License, to permit
+their use in free software.
+
+--------------
+
+<<Index>>
+
+Previous:
+[[#GNU-Free-Documentation-License][GNU Free Documentation License]], Up:
+[[#Top][GNU Flymake]]   [[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+** Index [[#Index-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Index-1
+:CLASS: unnumbered
+:END:
+
+| Jump to:   | [[#Index_cp_letter-A][*A*]]   [[#Index_cp_letter-B][*B*]]   [[#Index_cp_letter-C][*C*]]   [[#Index_cp_letter-D][*D*]]   [[#Index_cp_letter-E][*E*]]   [[#Index_cp_letter-F][*F*]]   [[#Index_cp_letter-I][*I*]]   [[#Index_cp_letter-L][*L*]]   [[#Index_cp_letter-M][*M*]]   [[#Index_cp_letter-N][*N*]]   [[#Index_cp_letter-O][*O*]]   [[#Index_cp_letter-P][*P*]]   [[#Index_cp_letter-R][*R*]]   [[#Index_cp_letter-S][*S*]]   [[#Index_cp_letter-T][*T*]]   [[#Index_cp_letter-U][*U*]]   [[#Index_cp_letter-V][*V*]]   [[#Index_cp_letter-W][*W*]]   |
+
+|                | Index Entry                                                                                                                         | Section                                                                                                     |
+| -------------- |                                                                                                                                     |                                                                                                             |
+| A              |                                                                                                                                     |                                                                                                             |
+|                | [[#index-access-diagnostic-object][access diagnostic object]]                                                                       | [[#Inspecting-diagnostics][Inspecting diagnostics]]                                                         |
+|                | [[#index-add-a-log-message][add a log message]]                                                                                     | [[#Flymake-utility-functions][Flymake utility functions]]                                                   |
+|                | [[#index-adding-support-for-a-new-syntax-check-tool][adding support for a new syntax check tool]]                                   | [[#Adding-support-for-a-new-syntax-check-tool][Adding support for a new syntax check tool]]                 |
+|                | [[#index-adding-support-for-C-_0028gcc_002bmake_0029][adding support for C (gcc+make)]]                                             | [[#Example_002d_002d_002dConfiguring-a-tool-called-via-make][Example---Configuring a tool called via make]] |
+|                | [[#index-adding-support-for-perl][adding support for perl]]                                                                         | [[#Example_002d_002d_002dConfiguring-a-tool-called-directly][Example---Configuring a tool called directly]] |
+| -------------- |                                                                                                                                     |                                                                                                             |
+| B              |                                                                                                                                     |                                                                                                             |
+|                | [[#index-backend-exceptions][backend exceptions]]                                                                                   | [[#Troubleshooting][Troubleshooting]]                                                                       |
+|                | [[#index-backend-functions][backend functions]]                                                                                     | [[#Backend-functions][Backend functions]]                                                                   |
+|                | [[#index-backend_002c-annotated-example][backend, annotated example]]                                                               | [[#An-annotated-example-backend][An annotated example backend]]                                             |
+|                | [[#index-backends_002c-disabled][backends, disabled]]                                                                               | [[#Troubleshooting][Troubleshooting]]                                                                       |
+|                | [[#index-bitmap-of-diagnostic][bitmap of diagnostic]]                                                                               | [[#Flymake-error-types][Flymake error types]]                                                               |
+|                | [[#index-buffer-position-from-line-and-column-number][buffer position from line and column number]]                                 | [[#Flymake-utility-functions][Flymake utility functions]]                                                   |
+|                | [[#index-buildfile_002c-locating][buildfile, locating]]                                                                             | [[#Locating-the-buildfile][Locating the buildfile]]                                                         |
+| -------------- |                                                                                                                                     |                                                                                                             |
+| C              |                                                                                                                                     |                                                                                                             |
+|                | [[#index-collect-diagnostic-objects][collect diagnostic objects]]                                                                   | [[#Inspecting-diagnostics][Inspecting diagnostics]]                                                         |
+|                | [[#index-create-diagnostic-object][create diagnostic object]]                                                                       | [[#Flymake-utility-functions][Flymake utility functions]]                                                   |
+|                | [[#index-create-diagnostic-object-for-other-buffer][create diagnostic object for other buffer]]                                     | [[#Foreign-and-list_002donly-diagnostics][Foreign and list-only diagnostics]]                               |
+|                | [[#index-customizable-variables][customizable variables]]                                                                           | [[#Customizable-variables][Customizable variables]]                                                         |
+|                | [[#index-customizing-error-types][customizing error types]]                                                                         | [[#Flymake-error-types][Flymake error types]]                                                               |
+| -------------- |                                                                                                                                     |                                                                                                             |
+| D              |                                                                                                                                     |                                                                                                             |
+|                | [[#index-disabled-backends][disabled backends]]                                                                                     | [[#Troubleshooting][Troubleshooting]]                                                                       |
+|                | [[#index-domestic-diagnostics][domestic diagnostics]]                                                                               | [[#Foreign-and-list_002donly-diagnostics][Foreign and list-only diagnostics]]                               |
+| -------------- |                                                                                                                                     |                                                                                                             |
+| E              |                                                                                                                                     |                                                                                                             |
+|                | [[#index-error-types_002c-customization][error types, customization]]                                                               | [[#Flymake-error-types][Flymake error types]]                                                               |
+|                | [[#index-example-of-backend][example of backend]]                                                                                   | [[#An-annotated-example-backend][An annotated example backend]]                                             |
+|                | [[#index-extending-flymake][extending flymake]]                                                                                     | [[#Flymake-API][Flymake API]]                                                                               |
+| -------------- |                                                                                                                                     |                                                                                                             |
+| F              |                                                                                                                                     |                                                                                                             |
+|                | [[#index-flymake-logging][flymake logging]]                                                                                         | [[#Troubleshooting][Troubleshooting]]                                                                       |
+|                | [[#index-flymake-mode-line][flymake mode line]]                                                                                     | [[#Mode-line-status][Mode line status]]                                                                     |
+|                | [[#index-flymake_002dautoresize_002dmargins][=flymake-autoresize-margins=]]                                                         | [[#Customizable-variables][Customizable variables]]                                                         |
+|                | [[#index-flymake_002dcategory][=flymake-category=]]                                                                                 | [[#Flymake-error-types][Flymake error types]]                                                               |
+|                | [[#index-flymake_002ddiag_002dregion][=flymake-diag-region=]]                                                                       | [[#Flymake-utility-functions][Flymake utility functions]]                                                   |
+|                | [[#index-flymake_002ddiagnostic_002dbackend][=flymake-diagnostic-backend=]]                                                         | [[#Flymake-error-types][Flymake error types]]                                                               |
+|                | [[#index-flymake_002ddiagnostic_002dbeg][=flymake-diagnostic-beg=]]                                                                 | [[#Flymake-error-types][Flymake error types]]                                                               |
+|                | [[#index-flymake_002ddiagnostic_002dbuffer][=flymake-diagnostic-buffer=]]                                                           | [[#Flymake-error-types][Flymake error types]]                                                               |
+|                | [[#index-flymake_002ddiagnostic_002dend][=flymake-diagnostic-end=]]                                                                 | [[#Flymake-error-types][Flymake error types]]                                                               |
+|                | [[#index-flymake_002ddiagnostic_002dformat_002dalist][=flymake-diagnostic-format-alist=]]                                           | [[#Customizable-variables][Customizable variables]]                                                         |
+|                | [[#index-flymake_002ddiagnostic_002dfunctions][=flymake-diagnostic-functions=]]                                                     | [[#Backend-functions][Backend functions]]                                                                   |
+|                | [[#index-flymake_002ddiagnostic_002dtext][=flymake-diagnostic-text=]]                                                               | [[#Flymake-error-types][Flymake error types]]                                                               |
+|                | [[#index-flymake_002ddiagnostics][=flymake-diagnostics=]]                                                                           | [[#Inspecting-diagnostics][Inspecting diagnostics]]                                                         |
+|                | [[#index-flymake_002ddiagnostics-1][=flymake-diagnostics=]]                                                                         | [[#Flymake-error-types][Flymake error types]]                                                               |
+|                | [[#index-flymake_002ddisabled_002dbackends][=flymake-disabled-backends=]]                                                           | [[#Troubleshooting][Troubleshooting]]                                                                       |
+|                | [[#index-flymake_002derror][=flymake-error=]]                                                                                       | [[#Customizable-variables][Customizable variables]]                                                         |
+|                | [[#index-flymake_002derror-1][=flymake-error=]]                                                                                     | [[#Flymake-error-types][Flymake error types]]                                                               |
+|                | [[#index-flymake_002derror_002dbitmap][=flymake-error-bitmap=]]                                                                     | [[#Customizable-variables][Customizable variables]]                                                         |
+|                | [[#index-flymake_002derror_002deol][=flymake-error-eol=]]                                                                           | [[#Customizable-variables][Customizable variables]]                                                         |
+|                | [[#index-flymake_002dfringe_002dindicator_002dposition][=flymake-fringe-indicator-position=]]                                       | [[#Customizable-variables][Customizable variables]]                                                         |
+|                | [[#index-flymake_002dindicator_002dtype][=flymake-indicator-type=]]                                                                 | [[#Customizable-variables][Customizable variables]]                                                         |
+|                | [[#index-flymake_002dlist_002donly_002ddiagnostics][=flymake-list-only-diagnostics=]]                                               | [[#Foreign-and-list_002donly-diagnostics][Foreign and list-only diagnostics]]                               |
+|                | [[#index-flymake_002dlog][=flymake-log=]]                                                                                           | [[#Flymake-utility-functions][Flymake utility functions]]                                                   |
+|                | [[#index-flymake_002dmake_002ddiagnostic][=flymake-make-diagnostic=]]                                                               | [[#Flymake-utility-functions][Flymake utility functions]]                                                   |
+|                | [[#index-flymake_002dmargin_002dindicator_002dposition][=flymake-margin-indicator-position=]]                                       | [[#Customizable-variables][Customizable variables]]                                                         |
+|                | [[#index-flymake_002dmargin_002dindicators_002dstring][=flymake-margin-indicators-string=]]                                         | [[#Customizable-variables][Customizable variables]]                                                         |
+|                | [[#index-flymake_002dmode_002dline_002dcounter_002dformat][=flymake-mode-line-counter-format=]]                                     | [[#Customizable-variables][Customizable variables]]                                                         |
+|                | [[#index-flymake_002dmode_002dline_002dformat][=flymake-mode-line-format=]]                                                         | [[#Customizable-variables][Customizable variables]]                                                         |
+|                | [[#index-flymake_002dmode_002dline_002dlighter][=flymake-mode-line-lighter=]]                                                       | [[#Customizable-variables][Customizable variables]]                                                         |
+|                | [[#index-flymake_002dno_002dchanges_002dtimeout][=flymake-no-changes-timeout=]]                                                     | [[#Customizable-variables][Customizable variables]]                                                         |
+|                | [[#index-flymake_002dnote][=flymake-note=]]                                                                                         | [[#Customizable-variables][Customizable variables]]                                                         |
+|                | [[#index-flymake_002dnote-1][=flymake-note=]]                                                                                       | [[#Flymake-error-types][Flymake error types]]                                                               |
+|                | [[#index-flymake_002dnote_002deol][=flymake-note-eol=]]                                                                             | [[#Customizable-variables][Customizable variables]]                                                         |
+|                | [[#index-flymake_002dproc_002dallowed_002dfile_002dname_002dmasks][=flymake-proc-allowed-file-name-masks=]]                         | [[#Proc-customization-variables][Proc customization variables]]                                             |
+|                | [[#index-flymake_002dproc_002dcheck_002dfile_002dlimit][=flymake-proc-check-file-limit=]]                                           | [[#Proc-customization-variables][Proc customization variables]]                                             |
+|                | [[#index-flymake_002dproc_002dcompilation_002dprevents_002dsyntax_002dcheck][=flymake-proc-compilation-prevents-syntax-check=]]     | [[#Proc-customization-variables][Proc customization variables]]                                             |
+|                | [[#index-flymake_002dproc_002dcompile][=flymake-proc-compile=]]                                                                     | [[#Interaction-with-other-modes][Interaction with other modes]]                                             |
+|                | [[#index-flymake_002dproc_002ddiagnostic_002dtype_002dpred][=flymake-proc-diagnostic-type-pred=]]                                   | [[#Proc-customization-variables][Proc customization variables]]                                             |
+|                | [[#index-flymake_002dproc_002derr_002dline_002dpatterns][=flymake-proc-err-line-patterns=]]                                         | [[#Proc-customization-variables][Proc customization variables]]                                             |
+|                | [[#index-flymake_002dproc_002dfind_002dbuildfile][=flymake-proc-find-buildfile=]]                                                   | [[#Locating-the-buildfile][Locating the buildfile]]                                                         |
+|                | [[#index-flymake_002dproc_002dget_002dproject_002dinclude_002ddirs_002dfunction][=flymake-proc-get-project-include-dirs-function=]] | [[#Proc-customization-variables][Proc customization variables]]                                             |
+|                | [[#index-flymake_002dproc_002dlegacy_002dflymake][=flymake-proc-legacy-flymake=]]                                                   | [[#The-legacy-Proc-backend][The legacy Proc backend]]                                                       |
+|                | [[#index-flymake_002dproc_002dmaster_002dfile_002dcount_002dlimit][=flymake-proc-master-file-count-limit=]]                         | [[#Proc-customization-variables][Proc customization variables]]                                             |
+|                | [[#index-flymake_002dproc_002dmaster_002dfile_002ddirs][=flymake-proc-master-file-dirs=]]                                           | [[#Proc-customization-variables][Proc customization variables]]                                             |
+|                | [[#index-flymake_002dreporting_002dbackends][=flymake-reporting-backends=]]                                                         | [[#Troubleshooting][Troubleshooting]]                                                                       |
+|                | [[#index-flymake_002drunning_002dbackends][=flymake-running-backends=]]                                                             | [[#Troubleshooting][Troubleshooting]]                                                                       |
+|                | [[#index-flymake_002dshow_002ddiagnostics_002dat_002dend_002dof_002dline][=flymake-show-diagnostics-at-end-of-line=]]               | [[#Customizable-variables][Customizable variables]]                                                         |
+|                | [[#index-flymake_002dstart_002don_002dflymake_002dmode][=flymake-start-on-flymake-mode=]]                                           | [[#Customizable-variables][Customizable variables]]                                                         |
+|                | [[#index-flymake_002dstart_002don_002dsave_002dbuffer][=flymake-start-on-save-buffer=]]                                             | [[#Customizable-variables][Customizable variables]]                                                         |
+|                | [[#index-flymake_002dtype_002dname][=flymake-type-name=]]                                                                           | [[#Flymake-error-types][Flymake error types]]                                                               |
+|                | [[#index-flymake_002dwarning][=flymake-warning=]]                                                                                   | [[#Customizable-variables][Customizable variables]]                                                         |
+|                | [[#index-flymake_002dwarning-1][=flymake-warning=]]                                                                                 | [[#Flymake-error-types][Flymake error types]]                                                               |
+|                | [[#index-flymake_002dwarning_002dbitmap][=flymake-warning-bitmap=]]                                                                 | [[#Customizable-variables][Customizable variables]]                                                         |
+|                | [[#index-flymake_002dwarning_002deol][=flymake-warning-eol=]]                                                                       | [[#Customizable-variables][Customizable variables]]                                                         |
+|                | [[#index-flymake_002dwrap_002daround][=flymake-wrap-around=]]                                                                       | [[#Customizable-variables][Customizable variables]]                                                         |
+|                | [[#index-foreign-diagnostics][foreign diagnostics]]                                                                                 | [[#Foreign-and-list_002donly-diagnostics][Foreign and list-only diagnostics]]                               |
+| -------------- |                                                                                                                                     |                                                                                                             |
+| I              |                                                                                                                                     |                                                                                                             |
+|                | [[#index-include-directories-_0028C_002fC_002b_002b-specific_0029][include directories (C/C++ specific)]]                           | [[#Getting-the-include-directories][Getting the include directories]]                                       |
+|                | [[#index-interaction-with-compile-mode_002c-legacy-proc-backend][interaction with compile mode, legacy proc backend]]               | [[#Interaction-with-other-modes][Interaction with other modes]]                                             |
+|                | [[#index-interaction-with-other-modes_002c-legacy-proc-backend][interaction with other modes, legacy proc backend]]                 | [[#Interaction-with-other-modes][Interaction with other modes]]                                             |
+| -------------- |                                                                                                                                     |                                                                                                             |
+| L              |                                                                                                                                     |                                                                                                             |
+|                | [[#index-legacy-proc-backend][legacy proc backend]]                                                                                 | [[#The-legacy-Proc-backend][The legacy Proc backend]]                                                       |
+|                | [[#index-list_002donly-diagnostics][list-only diagnostics]]                                                                         | [[#Foreign-and-list_002donly-diagnostics][Foreign and list-only diagnostics]]                               |
+|                | [[#index-listing-diagnostics][listing diagnostics]]                                                                                 | [[#Finding-diagnostics][Finding diagnostics]]                                                               |
+|                | [[#index-locating-a-master-file][locating a master file]]                                                                           | [[#Locating-a-master-file][Locating a master file]]                                                         |
+|                | [[#index-locating-the-buildfile][locating the buildfile]]                                                                           | [[#Locating-the-buildfile][Locating the buildfile]]                                                         |
+|                | [[#index-logging][logging]]                                                                                                         | [[#Troubleshooting][Troubleshooting]]                                                                       |
+| -------------- |                                                                                                                                     |                                                                                                             |
+| M              |                                                                                                                                     |                                                                                                             |
+|                | [[#index-makefile_002c-locating][makefile, locating]]                                                                               | [[#Locating-the-buildfile][Locating the buildfile]]                                                         |
+|                | [[#index-margin-of-diagnostic][margin of diagnostic]]                                                                               | [[#Flymake-error-types][Flymake error types]]                                                               |
+|                | [[#index-master-file][master file]]                                                                                                 | [[#Implementation-overview][Implementation overview]]                                                       |
+|                | [[#index-master-file_002c-locating][master file, locating]]                                                                         | [[#Locating-a-master-file][Locating a master file]]                                                         |
+|                | [[#index-mode_002dline-appearance-of-a-diagnostic][mode-line appearance of a diagnostic]]                                           | [[#Flymake-error-types][Flymake error types]]                                                               |
+| -------------- |                                                                                                                                     |                                                                                                             |
+| N              |                                                                                                                                     |                                                                                                             |
+|                | [[#index-next-and-previous-diagnostic][next and previous diagnostic]]                                                               | [[#Finding-diagnostics][Finding diagnostics]]                                                               |
+| -------------- |                                                                                                                                     |                                                                                                             |
+| O              |                                                                                                                                     |                                                                                                             |
+|                | [[#index-overview-of-flymake][overview of flymake]]                                                                                 | [[#Using-Flymake][Using Flymake]]                                                                           |
+| -------------- |                                                                                                                                     |                                                                                                             |
+| P              |                                                                                                                                     |                                                                                                             |
+|                | [[#index-parsing-the-output_002c-legacy-proc-backend][parsing the output, legacy proc backend]]                                     | [[#Parsing-the-output][Parsing the output]]                                                                 |
+|                | [[#index-predefined-diagnostic-types][predefined diagnostic types]]                                                                 | [[#Flymake-error-types][Flymake error types]]                                                               |
+|                | [[#index-proc-backend-customization-variables][proc backend customization variables]]                                               | [[#Proc-customization-variables][Proc customization variables]]                                             |
+| -------------- |                                                                                                                                     |                                                                                                             |
+| R              |                                                                                                                                     |                                                                                                             |
+|                | [[#index-read-diagnostic-message][read diagnostic message]]                                                                         | [[#Finding-diagnostics][Finding diagnostics]]                                                               |
+|                | [[#index-reset-disabled-backends][reset disabled backends]]                                                                         | [[#Troubleshooting][Troubleshooting]]                                                                       |
+| -------------- |                                                                                                                                     |                                                                                                             |
+| S              |                                                                                                                                     |                                                                                                             |
+|                | [[#index-severity-of-diagnostic][severity of diagnostic]]                                                                           | [[#Flymake-error-types][Flymake error types]]                                                               |
+|                | [[#index-starting-Flymake][starting Flymake]]                                                                                       | [[#Starting-Flymake][Starting Flymake]]                                                                     |
+|                | [[#index-summarized-appearance-of-a-diagnostic][summarized appearance of a diagnostic]]                                             | [[#Flymake-error-types][Flymake error types]]                                                               |
+|                | [[#index-syntax-check-models][syntax check models]]                                                                                 | [[#Implementation-overview][Implementation overview]]                                                       |
+|                | [[#index-syntax-check-process_002c-legacy-proc-backend][syntax check process, legacy proc backend]]                                 | [[#Starting-the-syntax-check-process][Starting the syntax check process]]                                   |
+|                | [[#index-syntax-check-status][syntax check status]]                                                                                 | [[#Mode-line-status][Mode line status]]                                                                     |
+| -------------- |                                                                                                                                     |                                                                                                             |
+| T              |                                                                                                                                     |                                                                                                             |
+|                | [[#index-temporary-copy-of-the-buffer][temporary copy of the buffer]]                                                               | [[#Making-a-temporary-copy][Making a temporary copy]]                                                       |
+|                | [[#index-troubleshooting][troubleshooting]]                                                                                         | [[#Troubleshooting][Troubleshooting]]                                                                       |
+| -------------- |                                                                                                                                     |                                                                                                             |
+| U              |                                                                                                                                     |                                                                                                             |
+|                | [[#index-using-flymake][using flymake]]                                                                                             | [[#Using-Flymake][Using Flymake]]                                                                           |
+|                | [[#index-utility-functions][utility functions]]                                                                                     | [[#Flymake-utility-functions][Flymake utility functions]]                                                   |
+| -------------- |                                                                                                                                     |                                                                                                             |
+| V              |                                                                                                                                     |                                                                                                             |
+|                | [[#index-variables-for-customizing-flymake][variables for customizing flymake]]                                                     | [[#Customizable-variables][Customizable variables]]                                                         |
+| -------------- |                                                                                                                                     |                                                                                                             |
+| W              |                                                                                                                                     |                                                                                                             |
+|                | [[#index-warning_002dminimum_002dlevel][=warning-minimum-level=]]                                                                   | [[#Troubleshooting][Troubleshooting]]                                                                       |
+|                | [[#index-warning_002dminimum_002dlog_002dlevel][=warning-minimum-log-level=]]                                                       | [[#Troubleshooting][Troubleshooting]]                                                                       |
+| -------------- |                                                                                                                                     |                                                                                                             |
+
+| Jump to:   | [[#Index_cp_letter-A][*A*]]   [[#Index_cp_letter-B][*B*]]   [[#Index_cp_letter-C][*C*]]   [[#Index_cp_letter-D][*D*]]   [[#Index_cp_letter-E][*E*]]   [[#Index_cp_letter-F][*F*]]   [[#Index_cp_letter-I][*I*]]   [[#Index_cp_letter-L][*L*]]   [[#Index_cp_letter-M][*M*]]   [[#Index_cp_letter-N][*N*]]   [[#Index_cp_letter-O][*O*]]   [[#Index_cp_letter-P][*P*]]   [[#Index_cp_letter-R][*R*]]   [[#Index_cp_letter-S][*S*]]   [[#Index_cp_letter-T][*T*]]   [[#Index_cp_letter-U][*U*]]   [[#Index_cp_letter-V][*V*]]   [[#Index_cp_letter-W][*W*]]   |

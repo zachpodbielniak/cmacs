@@ -1,0 +1,1513 @@
+<<Top>>
+
+Next: [[#Introduction][Introduction]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+* Dired Extra [[#Dired-Extra][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Dired-Extra
+:CLASS: top
+:END:
+This documents the “extra” features for GNU Emacs's Dired Mode that are
+provided by the file =dired-x.el=.
+
+- Based on =dired.texi= by Sebastian Kremer <sk@thp.uni-koeln.de>
+- For =dired-x.el= as distributed with GNU Emacs 31.0.50.
+
+Copyright © 1994--1995, 1999, 2001--2026 Free Software Foundation, Inc.
+
+#+begin_quote
+Permission is granted to copy, distribute and/or modify this document
+under the terms of the GNU Free Documentation License, Version 1.3 or
+any later version published by the Free Software Foundation; with no
+Invariant Sections, with the Front-Cover Texts being “A GNU Manual”, and
+with the Back-Cover Texts as in (a) below. A copy of the license is
+included in the section entitled “GNU Free Documentation License”.
+
+(a) The FSF's Back-Cover Text is: “You have the freedom to copy and
+modify this GNU manual.”
+#+end_quote
+
+<<SEC_Contents>>
+** Table of Contents
+:PROPERTIES:
+:CUSTOM_ID: table-of-contents
+:CLASS: contents-heading
+:END:
+
+- [[#Introduction][1 Introduction]]
+  - [[#Features][1.1 Features]]
+  - [[#Technical-Details][1.2 Technical Details]]
+- [[#Installation][2 Installation]]
+  - [[#Optional-Installation-File-At-Point][2.1 Optional Installation File At Point]]
+- [[#Omitting-Files-in-Dired][3 Omitting Files in Dired]]
+  - [[#Omitting-Variables][3.1 Omitting Variables]]
+  - [[#Omitting-Examples][3.2 Examples of Omitting Various File Types]]
+  - [[#Omitting-Technical][3.3 Some Technical Details of Omitting]]
+- [[#Virtual-Dired][4 Virtual Dired]]
+- [[#Advanced-Mark-Commands][5 Advanced Mark Commands]]
+  - [[#Advanced-Cleaning-Functions][5.1 Advanced Cleaning Functions]]
+  - [[#Advanced-Cleaning-Variables][5.2 Advanced Cleaning Variables]]
+  - [[#Special-Marking-Function][5.3 Special Marking Function]]
+- [[#Multiple-Dired-Directories][6 Multiple Dired Directories and Non-Dired Commands]]
+- [[#Find-File-At-Point][7 Find File At Point]]
+- [[#Miscellaneous-Commands][8 Miscellaneous Commands]]
+- [[#Bugs][9 Bugs]]
+- [[#GNU-Free-Documentation-License][Appendix A GNU Free Documentation License]]
+- [[#Concept-Index][Concept Index]]
+- [[#Command-Index][Function Index]]
+- [[#Key-Index][Key Index]]
+- [[#Variable-Index][Variable Index]]
+
+--------------
+
+<<Introduction>>
+
+Next: [[#Installation][Installation]], Previous: [[#Top][Dired Extra]],
+Up: [[#Top][Dired Extra]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+** 1 Introduction [[#Introduction-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Introduction-1
+:CLASS: chapter
+:END:
+This documents some /extra/ features for GNU Emacs's Dired Mode that are
+provided by =dired-x.el= (derived from Sebastian Kremer's original
+=dired-x.el=).
+
+- [[#Features][Features]]
+- [[#Technical-Details][Technical Details]]
+
+--------------
+
+<<Features>>
+
+Next: [[#Technical-Details][Technical Details]], Up:
+[[#Introduction][Introduction]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+*** 1.1 Features [[#Features-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Features-1
+:CLASS: section
+:END:
+Some features provided by Dired Extra:
+
+1. Omitting uninteresting files from Dired listing (see
+   [[#Omitting-Files-in-Dired][Omitting Files in Dired]]).
+2. Running Dired command in non-Dired buffers (see
+   [[#Virtual-Dired][Virtual Dired]]).
+3. Finding a file mentioned in a buffer (see
+   [[#Find-File-At-Point][Find File At Point]]).
+4. Commands using file marking (see
+   [[#Advanced-Mark-Commands][Advanced Mark Commands]]).
+
+=dired-x.el= binds some functions to keys in Dired Mode (see
+[[#Key-Index][Key Index]]). Optionally, it also binds C-x C-f and C-x 4
+C-f to =dired-x-find-file= and =dired-x-find-file-other-window=,
+respectively (see [[#Find-File-At-Point][Find File At Point]]).
+
+--------------
+
+<<Technical-Details>>
+
+Previous: [[#Features][Features]], Up: [[#Introduction][Introduction]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+*** 1.2 Technical Details [[#Technical-Details-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Technical-Details-1
+:CLASS: section
+:END:
+When =dired-x.el= is loaded, some standard Dired functions from
+=dired.el= and =dired-aux.el= offer additional features.
+=dired-add-entry= obeys Dired Omit mode (see
+[[#Omitting-Files-in-Dired][Omitting Files in Dired]]), if it is active.
+=dired-find-buffer-nocreate= and =dired-initial-position= respect the
+value of =dired-find-subdir= (see
+[[#Miscellaneous-Commands][Miscellaneous Commands]]).
+
+--------------
+
+<<Installation>>
+
+Next: [[#Omitting-Files-in-Dired][Omitting Files in Dired]], Previous:
+[[#Introduction][Introduction]], Up: [[#Top][Dired Extra]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+** 2 Installation [[#Installation-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Installation-1
+:CLASS: chapter
+:END:
+This manual describes the Dired features provided by the file
+=dired-x.el=. To take advantage of these features, you must load the
+file and (optionally) set some variables.
+
+In your =~/.emacs= file, or in the system-wide initialization file
+=default.el= in the =site-lisp= directory, put
+
+#+begin_src example-preformatted
+(with-eval-after-load 'dired
+  (require 'dired-x)
+  ;; Set dired-x global variables here.  For example:
+  ;; (setq dired-x-hands-off-my-keys nil)
+  )
+(add-hook 'dired-mode-hook
+          (lambda ()
+            ;; Set dired-x buffer-local variables here.  For example:
+            ;; (dired-omit-mode 1)
+            ))
+#+end_src
+
+This will load =dired-x.el= when Dired is first invoked (for example,
+when you first type C-x d).
+
+- [[#Optional-Installation-File-At-Point][Optional Installation File At Point]]
+
+--------------
+
+<<Optional-Installation-File-At-Point>>
+
+Up: [[#Installation][Installation]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+*** 2.1 Optional Installation File At Point [[#Optional-Installation-File-At-Point-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Optional-Installation-File-At-Point-1
+:CLASS: section
+:END:
+If you choose to have =dired-x.el= bind =dired-x-find-file= over
+=find-file= (see [[#Find-File-At-Point][Find File At Point]]), then you
+will need to set =dired-x-hands-off-my-keys=. To do this, either set it
+/before/ =dired-x.el= is loaded, or use M-x customize-variable, or call
+=dired-x-bind-find-file= after changing the value.
+
+#+begin_src example-preformatted
+(with-eval-after-load 'dired
+  ;; Bind dired-x-find-file.
+  (setq dired-x-hands-off-my-keys nil)
+  (require 'dired-x))
+#+end_src
+
+--------------
+
+<<Omitting-Files-in-Dired>>
+
+Next: [[#Virtual-Dired][Virtual Dired]], Previous:
+[[#Installation][Installation]], Up: [[#Top][Dired Extra]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+** 3 Omitting Files in Dired [[#Omitting-Files-in-Dired-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Omitting-Files-in-Dired-1
+:CLASS: chapter
+:END:
+/Omitting/ a file means removing it from the directory listing. Omitting
+is useful for keeping Dired buffers free of “uninteresting” files (for
+instance, auto-save, auxiliary, backup, and revision control files) so
+that the user can concentrate on the interesting files. Like hidden
+files, omitted files are never seen by Dired. Omitting differs from
+hiding in several respects:
+
+- Omitting works on individual files, not on directories; an entire
+  directory cannot be omitted (though each of its files could be).
+- Omitting is wholesale; if omitting is turned on for a Dired buffer,
+  then all uninteresting files listed in that buffer are omitted. The
+  user does not omit (or unomit) files one at a time.
+- Omitting can be automatic; uninteresting file lines in the buffer can
+  be removed before the user ever sees them.
+- Marked files are never omitted.
+
+-  <<index-C_002dx-M_002do>>C-x M-o
+  [[#index-C_002dx-M_002do][¶]] :: (=dired-omit-mode=) Toggle between
+  displaying and omitting “uninteresting” files.
+
+-  <<index-_002a-O>>* O [[#index-_002a-O][¶]] :: (=dired-mark-omitted=)
+  Mark “uninteresting” files.
+
+In order to make Dired Omit work you need to load =dired-x= after
+loading =dired= (see [[#Installation][Installation]]) and then evaluate
+=(dired-omit-mode 1)= in some way (see
+[[#Omitting-Variables][Omitting Variables]]).
+
+- [[#Omitting-Variables][Omitting Variables]]
+- [[#Omitting-Examples][Examples of Omitting Various File Types]]
+- [[#Omitting-Technical][Some Technical Details of Omitting]]
+
+--------------
+
+<<Omitting-Variables>>
+
+Next: [[#Omitting-Examples][Examples of Omitting Various File Types]],
+Up: [[#Omitting-Files-in-Dired][Omitting Files in Dired]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+*** 3.1 Omitting Variables [[#Omitting-Variables-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Omitting-Variables-1
+:CLASS: section
+:END:
+The following variables can be used to customize omitting.
+
+- Variable: *dired-omit-mode*
+  [[#index-dired_002domit_002dmode-1][¶]] :: If non-=nil=,
+  “uninteresting” files are not listed. The default is =nil=.
+  Uninteresting files are files whose names match regexp
+  =dired-omit-files=, plus files whose names end with extension in
+  =dired-omit-extensions=. C-x M-o (=dired-omit-mode=) toggles its
+  value, which is buffer-local. Put
+
+  #+begin_src example-preformatted
+  (dired-omit-mode 1)
+  #+end_src
+
+  inside your =dired-mode-hook= to have omitting initially turned on in
+  /every/ Dired buffer (see [[#Installation][Installation]]). You can
+  then use C-x M-o to unomit in that buffer.
+
+  To enable omitting automatically only in certain directories you can
+  add a directory local setting (see
+  [[https://www.gnu.org/software/emacs/manual/html_mono/emacs.html#Directory-Variables][Directory Variables]]
+  in The GNU Emacs manual) for Dired mode
+
+  #+begin_src example-preformatted
+  ((dired-mode . ((dired-omit-mode . t))))
+  #+end_src
+
+  to a =.dir-locals.el= file in that directory. You can use the command
+  =add-dir-local-variable= to do this.
+
+- Variable: *dired-omit-files*
+  [[#index-dired_002domit_002dfiles][¶]] :: This buffer-local variable's
+  value is a regexp, a string. Files whose names match this regexp will
+  not be displayed. This only has effect when =dired-omit-mode='s value
+  is =t=.
+
+  The default value omits the special directories =.= and =..= and
+  autosave files (plus other files ending in =.=) (see
+  [[#Omitting-Examples][Examples of Omitting Various File Types]]).
+
+- Variable: *dired-omit-extensions*
+  [[#index-dired_002domit_002dextensions][¶]] :: If non-=nil=, this
+  variable's value is a list of extensions (strings) to omit from Dired
+  listings. Its format is the same as that of
+  =completion-ignored-extensions=. The default value is the elements of
+  =completion-ignored-extensions=, =dired-latex-unclean-extensions=,
+  =dired-bibtex-unclean-extensions= and
+  =dired-texinfo-unclean-extensions=.
+
+- Variable: *dired-omit-case-fold*
+  [[#index-dired_002domit_002dcase_002dfold][¶]] :: Default:
+  =filesystem= This variable controls whether file-name matching is
+  case-insensitive. By default, when =dired-omit-case-fold= is set to
+  =filesystem=, =dired-omit-mode= will match filenames and extensions
+  case-sensitively on Dired buffers visiting case-sensitive filesystems,
+  and case-insensitively on case-insensitive filesystems. Set it to
+  =nil= to be always case-sensitive, and to =t= to be always
+  case-insensitive.
+
+- Variable: *dired-omit-localp*
+  [[#index-dired_002domit_002dlocalp][¶]] :: This variable determines
+  the =localp= argument =dired-omit-expunge= passes to
+  =dired-get-filename=. If it is =no-dir=, the default, omitting is much
+  faster, but you can only match against the non-directory part of the
+  file name. Set it to =nil= if you need to match the whole file name or
+  =t= to match the file name relative to the buffer's top-level
+  directory.
+
+- Variable: *dired-omit-size-limit*
+  [[#index-dired_002domit_002dsize_002dlimit][¶]] :: If non-=nil=,
+  =dired-omit-mode= will be effectively disabled in directories whose
+  listing has size (in bytes) larger than the value of this option.
+  Since omitting can be slow for very large directories, this avoids
+  having to wait before seeing the directory. This variable is ignored
+  when =dired-omit-mode= is called interactively, such as by C-x M-o, so
+  you can still enable omitting in the directory after the initial
+  display.
+
+- Variable: *dired-omit-marker-char*
+  [[#index-dired_002domit_002dmarker_002dchar][¶]] :: Temporary marker
+  used by Dired to implement omitting. Should never be used as marker by
+  the user or other packages. There is one exception to this rule: by
+  adding
+
+  #+begin_src example-preformatted
+  (setq dired-mark-keys "\C-o")
+  ;; i.e., the value of dired-omit-marker-char
+  ;; (which is not defined yet)
+  #+end_src
+
+  to your =~/.emacs=, you can bind the C-o key to insert a C-o marker,
+  thus causing these files to be omitted in addition to the usually
+  omitted files. Unfortunately the files you omitted manually this way
+  will show up again after reverting the buffer, unlike the others. The
+  default value is C-o.
+
+--------------
+
+<<Omitting-Examples>>
+
+Next: [[#Omitting-Technical][Some Technical Details of Omitting]],
+Previous: [[#Omitting-Variables][Omitting Variables]], Up:
+[[#Omitting-Files-in-Dired][Omitting Files in Dired]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+*** 3.2 Examples of Omitting Various File Types [[#Examples-of-Omitting-Various-File-Types][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Examples-of-Omitting-Various-File-Types
+:CLASS: section
+:END:
+-  If you wish to avoid seeing RCS files and the =RCS= directory, then
+  use
+
+  #+begin_src example-preformatted
+  (setq dired-omit-files
+        (concat dired-omit-files "\\|^RCS$\\|,v$"))
+  #+end_src
+
+  after loading =dired-x= (see [[#Installation][Installation]]). This
+  assumes =dired-omit-localp= has its default value of =no-dir= to make
+  the =^=-anchored matches work. As a slower alternative, with
+  =dired-omit-localp= set to =nil=, you can use =/= instead of =^= in
+  the regexp.
+
+-  If you use =tib=, the bibliography program for use with TeX and
+  LaTeX, and you want to omit the =INDEX= and the =*-t.tex= files, then
+  use
+
+  #+begin_src example-preformatted
+  (setq dired-omit-files
+        (concat dired-omit-files "\\|^INDEX$\\|-t\\.tex$"))
+  #+end_src
+
+  after loading =dired-x= (see [[#Installation][Installation]]).
+
+-  If you do not wish to see ‘=dot=' files (files starting with a =.=),
+  then use
+
+  #+begin_src example-preformatted
+  (setq dired-omit-files
+        (concat dired-omit-files "\\|^\\..+$"))
+  #+end_src
+
+  after loading =dired-x= (see [[#Installation][Installation]]). (Of
+  course, a better way to achieve this particular goal is simply to omit
+  ‘=-a=' from =dired-listing-switches=.)
+
+--------------
+
+<<Omitting-Technical>>
+
+Previous:
+[[#Omitting-Examples][Examples of Omitting Various File Types]], Up:
+[[#Omitting-Files-in-Dired][Omitting Files in Dired]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+*** 3.3 Some Technical Details of Omitting [[#Some-Technical-Details-of-Omitting][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Some-Technical-Details-of-Omitting
+:CLASS: section
+:END:
+Loading =dired-x.el= will install Dired Omit by putting
+=dired-omit-expunge= on your =dired-after-readin-hook=, and will call
+=dired-extra-startup=, which in turn calls =dired-omit-startup= in your
+=dired-mode-hook=.
+
+--------------
+
+<<Virtual-Dired>>
+
+Next: [[#Advanced-Mark-Commands][Advanced Mark Commands]], Previous:
+[[#Omitting-Files-in-Dired][Omitting Files in Dired]], Up:
+[[#Top][Dired Extra]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+** 4 Virtual Dired [[#Virtual-Dired-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Virtual-Dired-1
+:CLASS: chapter
+:END:
+Using /Virtual Dired/ means putting a buffer with Dired-like contents in
+Dired mode. The files described by the buffer contents need not actually
+exist. This is useful if you want to peruse an ‘=ls -lR=' output file,
+for example one you got from an FTP server. You can use all motion
+commands usually available in Dired. You can also use it to save a Dired
+buffer in a file and resume it in a later session.
+
+Type M-x dired-virtual to put the current buffer into virtual Dired
+mode. You will be prompted for the top level directory of this buffer,
+with a default value guessed from the buffer contents. To convert the
+virtual to a real Dired buffer again, type g (which calls
+=dired-virtual-revert=) in the virtual Dired buffer and answer ‘=y='.
+You don't have to do this, though: you can relist single subdirectories
+using l (=dired-do-redisplay=) on the subdirectory headerline, leaving
+the buffer in virtual Dired mode all the time.
+
+The function ‘=dired-virtual-mode=' is specially designed to turn on
+virtual Dired mode from the =auto-mode-alist=. To edit all =*.dired=
+files automatically in virtual Dired mode, put this into your
+=~/.emacs=:
+
+#+begin_src example-preformatted
+(setq auto-mode-alist (cons '("[^/]\\.dired$" . dired-virtual-mode)
+                              auto-mode-alist))
+#+end_src
+
+The regexp is a bit more complicated than usual to exclude =.dired=
+local-variable files.
+
+--------------
+
+<<Advanced-Mark-Commands>>
+
+Next:
+[[#Multiple-Dired-Directories][Multiple Dired Directories and Non-Dired Commands]],
+Previous: [[#Virtual-Dired][Virtual Dired]], Up: [[#Top][Dired Extra]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+** 5 Advanced Mark Commands [[#Advanced-Mark-Commands-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Advanced-Mark-Commands-1
+:CLASS: chapter
+:END:
+-  <<index-F>>F [[#index-F][¶]] :: (=dired-do-find-marked-files=) Find
+  all marked files at once displaying them simultaneously. If optional
+  =noselect= is non-=nil= then just find the files but do not select. If
+  you want to keep the Dired buffer displayed, type C-x 2 first. If you
+  want just the marked files displayed and nothing else, type C-x 1
+  first.
+
+  The current window is split across all files marked, as evenly as
+  possible. Remaining lines go to the bottom-most window. The number of
+  files that can be displayed this way is restricted by the height of
+  the current window and the variable =window-min-height=.
+
+- <<index-dired_002dmark_002dextension>>=dired-mark-extension=
+  [[#index-dired_002dmark_002dextension][¶]] :: Mark all files with a
+  certain extension for use in later commands. A ‘=.=' is automatically
+  prepended to the string entered when not present. If invoked with
+  prefix argument C-u, this command unmarks files instead. If called
+  with the C-u C-u prefix, asks for a character to use as the marker,
+  and marks files with it.
+
+  When called from Lisp, =extension= may also be a list of extensions
+  and an optional argument =marker-char= specifies the marker used.
+
+- <<index-dired_002dmark_002dsuffix>>=dired-mark-suffix=
+  [[#index-dired_002dmark_002dsuffix][¶]] :: Mark all files with a
+  certain suffix for use in later commands. A ‘=.=' is not automatically
+  prepended to the string entered, you must type it explicitly. This is
+  different from =dired-mark-extension= which prepends a ‘=.=' if not
+  present. If invoked with prefix argument C-u, this command unmarks
+  files instead. If called with the C-u C-u prefix, asks for a character
+  to use as the marker, and marks files with it.
+
+  When called from Lisp, =suffix= may also be a list of suffixes and an
+  optional argument =marker-char= specifies the marker used.
+
+- <<index-dired_002dflag_002dextension>>=dired-flag-extension=
+  [[#index-dired_002dflag_002dextension][¶]] :: Flag all files with a
+  certain extension for deletion. A ‘=.=' is /not/ automatically
+  prepended to the string entered.
+
+- [[#Advanced-Cleaning-Functions][Advanced Cleaning Functions]]
+- [[#Advanced-Cleaning-Variables][Advanced Cleaning Variables]]
+- [[#Special-Marking-Function][Special Marking Function]]
+
+--------------
+
+<<Advanced-Cleaning-Functions>>
+
+Next: [[#Advanced-Cleaning-Variables][Advanced Cleaning Variables]], Up:
+[[#Advanced-Mark-Commands][Advanced Mark Commands]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+*** 5.1 Advanced Cleaning Functions [[#Advanced-Cleaning-Functions-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Advanced-Cleaning-Functions-1
+:CLASS: section
+:END:
+- <<index-dired_002dclean_002dpatch>>=dired-clean-patch=
+  [[#index-dired_002dclean_002dpatch][¶]] :: Flag dispensable files
+  created by the ‘=patch=' program for deletion. See variable
+  =dired-patch-unclean-extensions=.
+
+- <<index-dired_002dclean_002dtex>>=dired-clean-tex=
+  [[#index-dired_002dclean_002dtex][¶]] :: Flag dispensable files
+  created by TeX, LaTeX, and ‘=texinfo=' for deletion. See the following
+  variables (see
+  [[#Advanced-Cleaning-Variables][Advanced Cleaning Variables]]):
+
+  - =dired-tex-unclean-extensions=
+  - =dired-texinfo-unclean-extensions=
+  - =dired-latex-unclean-extensions=
+  - =dired-bibtex-unclean-extensions=
+
+- <<index-dired_002dvery_002dclean_002dtex>>=dired-very-clean-tex=
+  [[#index-dired_002dvery_002dclean_002dtex][¶]] :: Flag dispensable
+  files created by TeX, LaTeX, ‘=texinfo=', and =*.dvi= files for
+  deletion.
+
+--------------
+
+<<Advanced-Cleaning-Variables>>
+
+Next: [[#Special-Marking-Function][Special Marking Function]], Previous:
+[[#Advanced-Cleaning-Functions][Advanced Cleaning Functions]], Up:
+[[#Advanced-Mark-Commands][Advanced Mark Commands]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+*** 5.2 Advanced Cleaning Variables [[#Advanced-Cleaning-Variables-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Advanced-Cleaning-Variables-1
+:CLASS: section
+:END:
+Variables used by the above cleaning commands (and in the default value
+for variable =dired-omit-extensions=, see
+[[#Omitting-Variables][Omitting Variables]]):
+
+- Variable: *dired-patch-unclean-extensions*
+  [[#index-dired_002dpatch_002dunclean_002dextensions][¶]] :: This
+  variable specifies the list of extensions of dispensable files created
+  by the ‘=patch=' program. The default is =(".rej" ".orig")=.
+
+- Variable: *dired-tex-unclean-extensions*
+  [[#index-dired_002dtex_002dunclean_002dextensions][¶]] :: This
+  variable specifies the list of extensions of dispensable files created
+  by TeX. The default is =(".toc" ".log" ".aux")=.
+
+- Variable: *dired-texinfo-unclean-extensions*
+  [[#index-dired_002dtexinfo_002dunclean_002dextensions][¶]] :: This
+  variable holds the list of extensions of dispensable files created by
+  ‘=texinfo='. The default is
+  =(".cp" ".cps" ".fn" ".fns" ".ky" ".kys"= =".pg" ".pgs" ".tp" ".tps" ".vr" ".vrs")=
+
+- Variable: *dired-latex-unclean-extensions*
+  [[#index-dired_002dlatex_002dunclean_002dextensions][¶]] :: This
+  variable specifies the list of extensions of dispensable files created
+  by LaTeX. The default is =(".idx" ".lof" ".lot" ".glo")=.
+
+- Variable: *dired-bibtex-unclean-extensions*
+  [[#index-dired_002dbibtex_002dunclean_002dextensions][¶]] :: This
+  variable specifies the list of extensions of dispensable files created
+  by BibTeX. The default is =(".blg" ".bbl")=.
+
+--------------
+
+<<Special-Marking-Function>>
+
+Previous: [[#Advanced-Cleaning-Variables][Advanced Cleaning Variables]],
+Up: [[#Advanced-Mark-Commands][Advanced Mark Commands]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+*** 5.3 Special Marking Function [[#Special-Marking-Function-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Special-Marking-Function-1
+:CLASS: section
+:END:
+-  <<index-M_002d_0028>>M-( [[#index-M_002d_0028][¶]] :: Mark files for
+  which =predicate= returns non-=nil= (=dired-mark-sexp=). With a prefix
+  argument, unflag those files instead.
+
+  The =predicate= is a Lisp expression that can refer to the following
+  symbols:
+
+  - =inode= :: [/integer/] the inode of the file (only for ‘=ls -i='
+    output)
+
+  - =s= :: [/integer/] the size of the file for ‘=ls -s=' output
+    (usually in blocks or, with ‘=-k=', in KBytes)
+
+  - =mode= :: [/string/] file permission bits, e.g., ‘=-rw-r--r--='
+
+  - =nlink= :: [/integer/] number of links to file
+
+  - =uid= :: [/string/] owner
+
+  - =gid= :: [/string/] group (If the gid is not displayed by ‘=ls=',
+    this will still be set (to the same as uid))
+
+  - =size= :: [/integer/] file size in bytes
+
+  - =time= :: [/string/] the time that ‘=ls=' displays, e.g.,
+    ‘=Feb 12 14:17='
+
+  - =name= :: [/string/] the name of the file
+
+  - =sym= :: [/string/] if file is a symbolic link, the linked-to name,
+    else =""=
+
+  For example, use
+
+  #+begin_src example-preformatted
+  (equal 0 size)
+  #+end_src
+
+  to mark all zero length files.
+
+  To find out all not yet compiled Emacs Lisp files in a directory,
+  Dired all =.el= files in the lisp directory using the wildcard
+  ‘=*.el='. Then use M-( with
+
+  #+begin_src example-preformatted
+  (not (file-exists-p (concat name "c")))
+  #+end_src
+
+  to mark all =.el= files without a corresponding =.elc= file.
+
+--------------
+
+<<Multiple-Dired-Directories>>
+
+Next: [[#Find-File-At-Point][Find File At Point]], Previous:
+[[#Advanced-Mark-Commands][Advanced Mark Commands]], Up:
+[[#Top][Dired Extra]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+** 6 Multiple Dired Directories and Non-Dired Commands [[#Multiple-Dired-Directories-and-Non_002dDired-Commands][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Multiple-Dired-Directories-and-Non_002dDired-Commands
+:CLASS: chapter
+:END:
+An Emacs buffer can have but one working directory, stored in the
+buffer-local variable =default-directory=. A Dired buffer may have
+several subdirectories inserted, but it still has only one working
+directory: that of the top-level Dired directory in that buffer. For
+some commands it is appropriate that they use the current Dired
+directory instead of =default-directory=, e.g., =find-file= and
+=compile=.
+
+The command =dired-smart-shell-command=, bound to M-! in Dired buffers,
+is like =shell-command=, but it runs with =default-directory= bound to
+the current Dired directory.
+
+--------------
+
+<<Find-File-At-Point>>
+
+Next: [[#Miscellaneous-Commands][Miscellaneous Commands]], Previous:
+[[#Multiple-Dired-Directories][Multiple Dired Directories and Non-Dired Commands]],
+Up: [[#Top][Dired Extra]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+** 7 Find File At Point [[#Find-File-At-Point-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Find-File-At-Point-1
+:CLASS: chapter
+:END:
+=dired-x= provides a method of visiting or editing a file mentioned in
+the buffer you are viewing (e.g., a mail buffer, a news article, a
+=README= file, etc.) or to test if that file exists. You can then modify
+this in the minibuffer after snatching the file name.
+
+When installed =dired-x= will substitute =dired-x-find-file= for
+=find-file= (normally bound to C-x C-f) and
+=dired-x-find-file-other-window= for =find-file-other-window= (normally
+bound to C-x 4 C-f).
+
+In order to use this feature, you will need to set
+=dired-x-hands-off-my-keys= to =nil= before loading =dired-x= (see
+[[#Optional-Installation-File-At-Point][Optional Installation File At Point]]).
+
+-  <<index-dired_002dx_002dfind_002dfile>>=dired-x-find-file=
+  [[#index-dired_002dx_002dfind_002dfile][¶]] :: =dired-x-find-file=
+  behaves exactly like =find-file= (normally bound to C-x C-f) unless a
+  prefix argument is passed to the function in which case it will use
+  the file name at point as a guess for the file to visit.
+
+  For example, if the buffer you were reading contained the words
+
+  #+begin_src example-preformatted
+  Available via anonymous ftp in
+
+     /roebling.poly.edu:/pub/lisp/crypt++.el.gz
+  #+end_src
+
+  then you could move your cursor to the line containing the ftp address
+  and type C-u C-x C-f (the C-u is a universal argument). The minibuffer
+  would read
+
+  #+begin_src example-preformatted
+  Find file: /roebling.poly.edu:/pub/lisp/crypt++.el.gz
+  #+end_src
+
+  with the point after the last =/=. If you hit RET, emacs will visit
+  the file at that address. This also works with files on your own
+  computer.
+
+-
+  <<index-dired_002dx_002dfind_002dfile_002dother_002dwindow>>=dired-x-find-file-other-window=
+  [[#index-dired_002dx_002dfind_002dfile_002dother_002dwindow][¶]] :: =dired-x-find-file-other-window=
+  behaves exactly like =find-file-other-window= (normally bound to C-x 4
+  C-f) unless a prefix argument is used. See =dired-x-find-file= for
+  more information.
+
+- <<index-dired_002dx_002dhands_002doff_002dmy_002dkeys>>=dired-x-hands-off-my-keys=
+  [[#index-dired_002dx_002dhands_002doff_002dmy_002dkeys][¶]] :: If set
+  to =t=, then it means that =dired-x= should /not/ bind
+  =dired-x-find-file= over =find-file= on keyboard. Similarly, it should
+  not bind =dired-x-find-file-other-window= over
+  =find-file-other-window=. If you change this variable after
+  =dired-x.el= is loaded then do M-x dired-x-bind-find-file. The default
+  value of this variable is =t=; by default, the binding is not done.
+  See
+  [[#Optional-Installation-File-At-Point][Optional Installation File At Point]].
+
+- <<index-dired_002dx_002dbind_002dfind_002dfile>>=dired-x-bind-find-file=
+  [[#index-dired_002dx_002dbind_002dfind_002dfile][¶]] :: A function,
+  which can be called interactively or in your =~/.emacs= file, that
+  uses the value of =dired-x-hands-off-my-keys= to determine if
+  =dired-x-find-file= should be bound over =find-file= and
+  =dired-x-find-file-other-window= bound over =find-file-other-window=.
+  See
+  [[#Optional-Installation-File-At-Point][Optional Installation File At Point]].
+
+--------------
+
+<<Miscellaneous-Commands>>
+
+Next: [[#Bugs][Bugs]], Previous:
+[[#Find-File-At-Point][Find File At Point]], Up: [[#Top][Dired Extra]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+** 8 Miscellaneous Commands [[#Miscellaneous-Commands-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Miscellaneous-Commands-1
+:CLASS: chapter
+:END:
+Miscellaneous features not fitting anywhere else:
+
+- <<index-dired_002dfind_002dsubdir>>=dired-find-subdir=
+  [[#index-dired_002dfind_002dsubdir][¶]] :: Default: =nil=
+
+  If non-=nil=, Dired does not make a new buffer for a directory if it
+  can be found (perhaps as subdirectory) in some existing Dired buffer.
+
+  If there are several Dired buffers for a directory, the most recently
+  used is chosen.
+
+  Dired avoids switching to the current buffer, so that if you have a
+  normal and a wildcard buffer for the same directory, C-x d RET will
+  toggle between those two.
+
+-  <<index-reading-mail_002e>>=dired-vm=
+  [[#index-reading-mail_002e][¶]] :: Bound to V if =dired-bind-vm= is
+  =t=. Run VM on this file (assumed to be a UNIX mail folder).
+
+  If you give this command a prefix argument, it will visit the folder
+  read-only.
+
+  If the variable =dired-vm-read-only-folders= is =t=, =dired-vm= will
+  visit all folders read-only. If it is neither =nil= nor =t=, e.g., the
+  symbol =if-file-read-only=, only files not writable by you are visited
+  read-only.
+
+  If the variable =dired-bind-vm= is =t=, =dired-vm= will be bound to V.
+  Otherwise, =dired-bind-rmail= will be bound.
+
+-  <<index-reading-mail_002e-1>>=dired-rmail=
+  [[#index-reading-mail_002e-1][¶]] :: Bound to V if =dired-bind-vm= is
+  =nil=. Run Rmail on this file (assumed to be mail folder in Rmail
+  format).
+
+--------------
+
+<<Bugs>>
+
+Next:
+[[#GNU-Free-Documentation-License][GNU Free Documentation License]],
+Previous: [[#Miscellaneous-Commands][Miscellaneous Commands]], Up:
+[[#Top][Dired Extra]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+** 9 Bugs [[#Bugs-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Bugs-1
+:CLASS: chapter
+:END:
+If you encounter a bug in this package, or wish to suggest an
+enhancement, then please use M-x report-emacs-bug to report it.
+
+--------------
+
+<<GNU-Free-Documentation-License>>
+
+Next: [[#Concept-Index][Concept Index]], Previous: [[#Bugs][Bugs]], Up:
+[[#Top][Dired Extra]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+** Appendix A GNU Free Documentation License [[#GNU-Free-Documentation-License-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: GNU-Free-Documentation-License-1
+:CLASS: appendix
+:END:
+
+#+begin_center
+Version 1.3, 3 November 2008
+#+end_center
+
+#+begin_src display-preformatted
+Copyright © 2000, 2001, 2002, 2007, 2008 Free Software Foundation, Inc.
+https://fsf.org/
+
+Everyone is permitted to copy and distribute verbatim copies
+of this license document, but changing it is not allowed.
+#+end_src
+
+0. [@0] PREAMBLE
+
+   The purpose of this License is to make a manual, textbook, or other
+   functional and useful document /free/ in the sense of freedom: to
+   assure everyone the effective freedom to copy and redistribute it,
+   with or without modifying it, either commercially or noncommercially.
+   Secondarily, this License preserves for the author and publisher a
+   way to get credit for their work, while not being considered
+   responsible for modifications made by others.
+
+   This License is a kind of “copyleft”, which means that derivative
+   works of the document must themselves be free in the same sense. It
+   complements the GNU General Public License, which is a copyleft
+   license designed for free software.
+
+   We have designed this License in order to use it for manuals for free
+   software, because free software needs free documentation: a free
+   program should come with manuals providing the same freedoms that the
+   software does. But this License is not limited to software manuals;
+   it can be used for any textual work, regardless of subject matter or
+   whether it is published as a printed book. We recommend this License
+   principally for works whose purpose is instruction or reference.
+
+1. APPLICABILITY AND DEFINITIONS
+
+   This License applies to any manual or other work, in any medium, that
+   contains a notice placed by the copyright holder saying it can be
+   distributed under the terms of this License. Such a notice grants a
+   world-wide, royalty-free license, unlimited in duration, to use that
+   work under the conditions stated herein. The “Document”, below,
+   refers to any such manual or work. Any member of the public is a
+   licensee, and is addressed as “you”. You accept the license if you
+   copy, modify or distribute the work in a way requiring permission
+   under copyright law.
+
+   A “Modified Version” of the Document means any work containing the
+   Document or a portion of it, either copied verbatim, or with
+   modifications and/or translated into another language.
+
+   A “Secondary Section” is a named appendix or a front-matter section
+   of the Document that deals exclusively with the relationship of the
+   publishers or authors of the Document to the Document's overall
+   subject (or to related matters) and contains nothing that could fall
+   directly within that overall subject. (Thus, if the Document is in
+   part a textbook of mathematics, a Secondary Section may not explain
+   any mathematics.) The relationship could be a matter of historical
+   connection with the subject or with related matters, or of legal,
+   commercial, philosophical, ethical or political position regarding
+   them.
+
+   The “Invariant Sections” are certain Secondary Sections whose titles
+   are designated, as being those of Invariant Sections, in the notice
+   that says that the Document is released under this License. If a
+   section does not fit the above definition of Secondary then it is not
+   allowed to be designated as Invariant. The Document may contain zero
+   Invariant Sections. If the Document does not identify any Invariant
+   Sections then there are none.
+
+   The “Cover Texts” are certain short passages of text that are listed,
+   as Front-Cover Texts or Back-Cover Texts, in the notice that says
+   that the Document is released under this License. A Front-Cover Text
+   may be at most 5 words, and a Back-Cover Text may be at most 25
+   words.
+
+   A “Transparent” copy of the Document means a machine-readable copy,
+   represented in a format whose specification is available to the
+   general public, that is suitable for revising the document
+   straightforwardly with generic text editors or (for images composed
+   of pixels) generic paint programs or (for drawings) some widely
+   available drawing editor, and that is suitable for input to text
+   formatters or for automatic translation to a variety of formats
+   suitable for input to text formatters. A copy made in an otherwise
+   Transparent file format whose markup, or absence of markup, has been
+   arranged to thwart or discourage subsequent modification by readers
+   is not Transparent. An image format is not Transparent if used for
+   any substantial amount of text. A copy that is not “Transparent” is
+   called “Opaque”.
+
+   Examples of suitable formats for Transparent copies include plain
+   ASCII without markup, Texinfo input format, LaTeX input format, SGML
+   or XML using a publicly available DTD, and standard-conforming simple
+   HTML, PostScript or PDF designed for human modification. Examples of
+   transparent image formats include PNG, XCF and JPG. Opaque formats
+   include proprietary formats that can be read and edited only by
+   proprietary word processors, SGML or XML for which the DTD and/or
+   processing tools are not generally available, and the
+   machine-generated HTML, PostScript or PDF produced by some word
+   processors for output purposes only.
+
+   The “Title Page” means, for a printed book, the title page itself,
+   plus such following pages as are needed to hold, legibly, the
+   material this License requires to appear in the title page. For works
+   in formats which do not have any title page as such, “Title Page”
+   means the text near the most prominent appearance of the work's
+   title, preceding the beginning of the body of the text.
+
+   The “publisher” means any person or entity that distributes copies of
+   the Document to the public.
+
+   A section “Entitled XYZ” means a named subunit of the Document whose
+   title either is precisely XYZ or contains XYZ in parentheses
+   following text that translates XYZ in another language. (Here XYZ
+   stands for a specific section name mentioned below, such as
+   “Acknowledgements”, “Dedications”, “Endorsements”, or “History”.) To
+   “Preserve the Title” of such a section when you modify the Document
+   means that it remains a section “Entitled XYZ” according to this
+   definition.
+
+   The Document may include Warranty Disclaimers next to the notice
+   which states that this License applies to the Document. These
+   Warranty Disclaimers are considered to be included by reference in
+   this License, but only as regards disclaiming warranties: any other
+   implication that these Warranty Disclaimers may have is void and has
+   no effect on the meaning of this License.
+
+2. VERBATIM COPYING
+
+   You may copy and distribute the Document in any medium, either
+   commercially or noncommercially, provided that this License, the
+   copyright notices, and the license notice saying this License applies
+   to the Document are reproduced in all copies, and that you add no
+   other conditions whatsoever to those of this License. You may not use
+   technical measures to obstruct or control the reading or further
+   copying of the copies you make or distribute. However, you may accept
+   compensation in exchange for copies. If you distribute a large enough
+   number of copies you must also follow the conditions in section 3.
+
+   You may also lend copies, under the same conditions stated above, and
+   you may publicly display copies.
+
+3. COPYING IN QUANTITY
+
+   If you publish printed copies (or copies in media that commonly have
+   printed covers) of the Document, numbering more than 100, and the
+   Document's license notice requires Cover Texts, you must enclose the
+   copies in covers that carry, clearly and legibly, all these Cover
+   Texts: Front-Cover Texts on the front cover, and Back-Cover Texts on
+   the back cover. Both covers must also clearly and legibly identify
+   you as the publisher of these copies. The front cover must present
+   the full title with all words of the title equally prominent and
+   visible. You may add other material on the covers in addition.
+   Copying with changes limited to the covers, as long as they preserve
+   the title of the Document and satisfy these conditions, can be
+   treated as verbatim copying in other respects.
+
+   If the required texts for either cover are too voluminous to fit
+   legibly, you should put the first ones listed (as many as fit
+   reasonably) on the actual cover, and continue the rest onto adjacent
+   pages.
+
+   If you publish or distribute Opaque copies of the Document numbering
+   more than 100, you must either include a machine-readable Transparent
+   copy along with each Opaque copy, or state in or with each Opaque
+   copy a computer-network location from which the general network-using
+   public has access to download using public-standard network protocols
+   a complete Transparent copy of the Document, free of added material.
+   If you use the latter option, you must take reasonably prudent steps,
+   when you begin distribution of Opaque copies in quantity, to ensure
+   that this Transparent copy will remain thus accessible at the stated
+   location until at least one year after the last time you distribute
+   an Opaque copy (directly or through your agents or retailers) of that
+   edition to the public.
+
+   It is requested, but not required, that you contact the authors of
+   the Document well before redistributing any large number of copies,
+   to give them a chance to provide you with an updated version of the
+   Document.
+
+4. MODIFICATIONS
+
+   You may copy and distribute a Modified Version of the Document under
+   the conditions of sections 2 and 3 above, provided that you release
+   the Modified Version under precisely this License, with the Modified
+   Version filling the role of the Document, thus licensing distribution
+   and modification of the Modified Version to whoever possesses a copy
+   of it. In addition, you must do these things in the Modified Version:
+
+   1. Use in the Title Page (and on the covers, if any) a title distinct
+      from that of the Document, and from those of previous versions
+      (which should, if there were any, be listed in the History section
+      of the Document). You may use the same title as a previous version
+      if the original publisher of that version gives permission.
+   2. List on the Title Page, as authors, one or more persons or
+      entities responsible for authorship of the modifications in the
+      Modified Version, together with at least five of the principal
+      authors of the Document (all of its principal authors, if it has
+      fewer than five), unless they release you from this requirement.
+   3. State on the Title page the name of the publisher of the Modified
+      Version, as the publisher.
+   4. Preserve all the copyright notices of the Document.
+   5. Add an appropriate copyright notice for your modifications
+      adjacent to the other copyright notices.
+   6. Include, immediately after the copyright notices, a license notice
+      giving the public permission to use the Modified Version under the
+      terms of this License, in the form shown in the Addendum below.
+   7. Preserve in that license notice the full lists of Invariant
+      Sections and required Cover Texts given in the Document's license
+      notice.
+   8. Include an unaltered copy of this License.
+   9. Preserve the section Entitled “History”, Preserve its Title, and
+      add to it an item stating at least the title, year, new authors,
+      and publisher of the Modified Version as given on the Title Page.
+      If there is no section Entitled “History” in the Document, create
+      one stating the title, year, authors, and publisher of the
+      Document as given on its Title Page, then add an item describing
+      the Modified Version as stated in the previous sentence.
+   10. Preserve the network location, if any, given in the Document for
+       public access to a Transparent copy of the Document, and likewise
+       the network locations given in the Document for previous versions
+       it was based on. These may be placed in the “History” section.
+       You may omit a network location for a work that was published at
+       least four years before the Document itself, or if the original
+       publisher of the version it refers to gives permission.
+   11. For any section Entitled “Acknowledgements” or “Dedications”,
+       Preserve the Title of the section, and preserve in the section
+       all the substance and tone of each of the contributor
+       acknowledgements and/or dedications given therein.
+   12. Preserve all the Invariant Sections of the Document, unaltered in
+       their text and in their titles. Section numbers or the equivalent
+       are not considered part of the section titles.
+   13. Delete any section Entitled “Endorsements”. Such a section may
+       not be included in the Modified Version.
+   14. Do not retitle any existing section to be Entitled “Endorsements”
+       or to conflict in title with any Invariant Section.
+   15. Preserve any Warranty Disclaimers.
+
+   If the Modified Version includes new front-matter sections or
+   appendices that qualify as Secondary Sections and contain no material
+   copied from the Document, you may at your option designate some or
+   all of these sections as invariant. To do this, add their titles to
+   the list of Invariant Sections in the Modified Version's license
+   notice. These titles must be distinct from any other section titles.
+
+   You may add a section Entitled “Endorsements”, provided it contains
+   nothing but endorsements of your Modified Version by various
+   parties---for example, statements of peer review or that the text has
+   been approved by an organization as the authoritative definition of a
+   standard.
+
+   You may add a passage of up to five words as a Front-Cover Text, and
+   a passage of up to 25 words as a Back-Cover Text, to the end of the
+   list of Cover Texts in the Modified Version. Only one passage of
+   Front-Cover Text and one of Back-Cover Text may be added by (or
+   through arrangements made by) any one entity. If the Document already
+   includes a cover text for the same cover, previously added by you or
+   by arrangement made by the same entity you are acting on behalf of,
+   you may not add another; but you may replace the old one, on explicit
+   permission from the previous publisher that added the old one.
+
+   The author(s) and publisher(s) of the Document do not by this License
+   give permission to use their names for publicity for or to assert or
+   imply endorsement of any Modified Version.
+
+5. COMBINING DOCUMENTS
+
+   You may combine the Document with other documents released under this
+   License, under the terms defined in section 4 above for modified
+   versions, provided that you include in the combination all of the
+   Invariant Sections of all of the original documents, unmodified, and
+   list them all as Invariant Sections of your combined work in its
+   license notice, and that you preserve all their Warranty Disclaimers.
+
+   The combined work need only contain one copy of this License, and
+   multiple identical Invariant Sections may be replaced with a single
+   copy. If there are multiple Invariant Sections with the same name but
+   different contents, make the title of each such section unique by
+   adding at the end of it, in parentheses, the name of the original
+   author or publisher of that section if known, or else a unique
+   number. Make the same adjustment to the section titles in the list of
+   Invariant Sections in the license notice of the combined work.
+
+   In the combination, you must combine any sections Entitled “History”
+   in the various original documents, forming one section Entitled
+   “History”; likewise combine any sections Entitled “Acknowledgements”,
+   and any sections Entitled “Dedications”. You must delete all sections
+   Entitled “Endorsements.”
+
+6. COLLECTIONS OF DOCUMENTS
+
+   You may make a collection consisting of the Document and other
+   documents released under this License, and replace the individual
+   copies of this License in the various documents with a single copy
+   that is included in the collection, provided that you follow the
+   rules of this License for verbatim copying of each of the documents
+   in all other respects.
+
+   You may extract a single document from such a collection, and
+   distribute it individually under this License, provided you insert a
+   copy of this License into the extracted document, and follow this
+   License in all other respects regarding verbatim copying of that
+   document.
+
+7. AGGREGATION WITH INDEPENDENT WORKS
+
+   A compilation of the Document or its derivatives with other separate
+   and independent documents or works, in or on a volume of a storage or
+   distribution medium, is called an “aggregate” if the copyright
+   resulting from the compilation is not used to limit the legal rights
+   of the compilation's users beyond what the individual works permit.
+   When the Document is included in an aggregate, this License does not
+   apply to the other works in the aggregate which are not themselves
+   derivative works of the Document.
+
+   If the Cover Text requirement of section 3 is applicable to these
+   copies of the Document, then if the Document is less than one half of
+   the entire aggregate, the Document's Cover Texts may be placed on
+   covers that bracket the Document within the aggregate, or the
+   electronic equivalent of covers if the Document is in electronic
+   form. Otherwise they must appear on printed covers that bracket the
+   whole aggregate.
+
+8. TRANSLATION
+
+   Translation is considered a kind of modification, so you may
+   distribute translations of the Document under the terms of section 4.
+   Replacing Invariant Sections with translations requires special
+   permission from their copyright holders, but you may include
+   translations of some or all Invariant Sections in addition to the
+   original versions of these Invariant Sections. You may include a
+   translation of this License, and all the license notices in the
+   Document, and any Warranty Disclaimers, provided that you also
+   include the original English version of this License and the original
+   versions of those notices and disclaimers. In case of a disagreement
+   between the translation and the original version of this License or a
+   notice or disclaimer, the original version will prevail.
+
+   If a section in the Document is Entitled “Acknowledgements”,
+   “Dedications”, or “History”, the requirement (section 4) to Preserve
+   its Title (section 1) will typically require changing the actual
+   title.
+
+9. TERMINATION
+
+   You may not copy, modify, sublicense, or distribute the Document
+   except as expressly provided under this License. Any attempt
+   otherwise to copy, modify, sublicense, or distribute it is void, and
+   will automatically terminate your rights under this License.
+
+   However, if you cease all violation of this License, then your
+   license from a particular copyright holder is reinstated (a)
+   provisionally, unless and until the copyright holder explicitly and
+   finally terminates your license, and (b) permanently, if the
+   copyright holder fails to notify you of the violation by some
+   reasonable means prior to 60 days after the cessation.
+
+   Moreover, your license from a particular copyright holder is
+   reinstated permanently if the copyright holder notifies you of the
+   violation by some reasonable means, this is the first time you have
+   received notice of violation of this License (for any work) from that
+   copyright holder, and you cure the violation prior to 30 days after
+   your receipt of the notice.
+
+   Termination of your rights under this section does not terminate the
+   licenses of parties who have received copies or rights from you under
+   this License. If your rights have been terminated and not permanently
+   reinstated, receipt of a copy of some or all of the same material
+   does not give you any rights to use it.
+
+10. FUTURE REVISIONS OF THIS LICENSE
+
+    The Free Software Foundation may publish new, revised versions of
+    the GNU Free Documentation License from time to time. Such new
+    versions will be similar in spirit to the present version, but may
+    differ in detail to address new problems or concerns. See
+    [[https://www.gnu.org/licenses/]].
+
+    Each version of the License is given a distinguishing version
+    number. If the Document specifies that a particular numbered version
+    of this License “or any later version” applies to it, you have the
+    option of following the terms and conditions either of that
+    specified version or of any later version that has been published
+    (not as a draft) by the Free Software Foundation. If the Document
+    does not specify a version number of this License, you may choose
+    any version ever published (not as a draft) by the Free Software
+    Foundation. If the Document specifies that a proxy can decide which
+    future versions of this License can be used, that proxy's public
+    statement of acceptance of a version permanently authorizes you to
+    choose that version for the Document.
+
+11. RELICENSING
+
+    “Massive Multiauthor Collaboration Site” (or “MMC Site”) means any
+    World Wide Web server that publishes copyrightable works and also
+    provides prominent facilities for anybody to edit those works. A
+    public wiki that anybody can edit is an example of such a server. A
+    “Massive Multiauthor Collaboration” (or “MMC”) contained in the site
+    means any set of copyrightable works thus published on the MMC site.
+
+    “CC-BY-SA” means the Creative Commons Attribution-Share Alike 3.0
+    license published by Creative Commons Corporation, a not-for-profit
+    corporation with a principal place of business in San Francisco,
+    California, as well as future copyleft versions of that license
+    published by that same organization.
+
+    “Incorporate” means to publish or republish a Document, in whole or
+    in part, as part of another Document.
+
+    An MMC is “eligible for relicensing” if it is licensed under this
+    License, and if all works that were first published under this
+    License somewhere other than this MMC, and subsequently incorporated
+    in whole or in part into the MMC, (1) had no cover texts or
+    invariant sections, and (2) were thus incorporated prior to November
+    1, 2008.
+
+    The operator of an MMC Site may republish an MMC contained in the
+    site under CC-BY-SA on the same site at any time before August 1,
+    2009, provided the MMC is eligible for relicensing.
+
+*** ADDENDUM: How to use this License for your documents [[#ADDENDUM_003a-How-to-use-this-License-for-your-documents][¶]]
+:PROPERTIES:
+:CUSTOM_ID: ADDENDUM_003a-How-to-use-this-License-for-your-documents
+:CLASS: heading
+:END:
+To use this License in a document you have written, include a copy of
+the License in the document and put the following copyright and license
+notices just after the title page:
+
+#+begin_src example-preformatted
+  Copyright (C)  year  your name.
+  Permission is granted to copy, distribute and/or modify this document
+  under the terms of the GNU Free Documentation License, Version 1.3
+  or any later version published by the Free Software Foundation;
+  with no Invariant Sections, no Front-Cover Texts, and no Back-Cover
+  Texts.  A copy of the license is included in the section entitled ``GNU
+  Free Documentation License''.
+#+end_src
+
+If you have Invariant Sections, Front-Cover Texts and Back-Cover Texts,
+replace the “with...Texts.” line with this:
+
+#+begin_src example-preformatted
+    with the Invariant Sections being list their titles, with
+    the Front-Cover Texts being list, and with the Back-Cover Texts
+    being list.
+#+end_src
+
+If you have Invariant Sections without Cover Texts, or some other
+combination of the three, merge those two alternatives to suit the
+situation.
+
+If your document contains nontrivial examples of program code, we
+recommend releasing these examples in parallel under your choice of free
+software license, such as the GNU General Public License, to permit
+their use in free software.
+
+--------------
+
+<<Concept-Index>>
+
+Next: [[#Command-Index][Function Index]], Previous:
+[[#GNU-Free-Documentation-License][GNU Free Documentation License]], Up:
+[[#Top][Dired Extra]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+** Concept Index [[#Concept-Index-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Concept-Index-1
+:CLASS: unnumbered
+:END:
+
+| Jump to:   | [[#Concept-Index_cp_letter-B][*B*]]   [[#Concept-Index_cp_letter-C][*C*]]   [[#Concept-Index_cp_letter-D][*D*]]   [[#Concept-Index_cp_letter-F][*F*]]   [[#Concept-Index_cp_letter-H][*H*]]   [[#Concept-Index_cp_letter-L][*L*]]   [[#Concept-Index_cp_letter-M][*M*]]   [[#Concept-Index_cp_letter-O][*O*]]   [[#Concept-Index_cp_letter-P][*P*]]   [[#Concept-Index_cp_letter-R][*R*]]   [[#Concept-Index_cp_letter-S][*S*]]   [[#Concept-Index_cp_letter-T][*T*]]   [[#Concept-Index_cp_letter-U][*U*]]   [[#Concept-Index_cp_letter-V][*V*]]   [[#Concept-Index_cp_letter-W][*W*]]   |
+
+|                | Index Entry                                                                                               | Section                                                                       |
+| -------------- |                                                                                                           |                                                                               |
+| B              |                                                                                                           |                                                                               |
+|                | [[#index-binding-dired_002dx_002dfind_002dfile][binding =dired-x-find-file=]]                             | [[#Optional-Installation-File-At-Point][Optional Installation File At Point]] |
+|                | [[#index-bugs][bugs]]                                                                                     | [[#Bugs][Bugs]]                                                               |
+| -------------- |                                                                                                           |                                                                               |
+| C              |                                                                                                           |                                                                               |
+|                | [[#index-customizing-file-omitting][customizing file omitting]]                                           | [[#Omitting-Variables][Omitting Variables]]                                   |
+| -------------- |                                                                                                           |                                                                               |
+| D              |                                                                                                           |                                                                               |
+|                | [[#index-dired_002daux_002eel][=dired-aux.el=]]                                                           | [[#Technical-Details][Technical Details]]                                     |
+|                | [[#index-Dired_002dx-features][Dired-x features]]                                                         | [[#Features][Features]]                                                       |
+|                | [[#index-dot-files_002c-how-to-omit-them-in-Dired][dot files, how to omit them in Dired]]                 | [[#Omitting-Examples][Omitting Examples]]                                     |
+| -------------- |                                                                                                           |                                                                               |
+| F              |                                                                                                           |                                                                               |
+|                | [[#index-finding-a-file-at-point][finding a file at point]]                                               | [[#Find-File-At-Point][Find File At Point]]                                   |
+| -------------- |                                                                                                           |                                                                               |
+| H              |                                                                                                           |                                                                               |
+|                | [[#index-how-to-make-omitting-the-default-in-Dired][how to make omitting the default in Dired]]           | [[#Omitting-Variables][Omitting Variables]]                                   |
+| -------------- |                                                                                                           |                                                                               |
+| L              |                                                                                                           |                                                                               |
+|                | [[#index-lisp-expression_002c-marking-files-with-in-Dired][lisp expression, marking files with in Dired]] | [[#Special-Marking-Function][Special Marking Function]]                       |
+|                | [[#index-ls-listings_002c-how-to-peruse-them-in-Dired][=ls= listings, how to peruse them in Dired]]       | [[#Virtual-Dired][Virtual Dired]]                                             |
+| -------------- |                                                                                                           |                                                                               |
+| M              |                                                                                                           |                                                                               |
+|                | [[#index-mark-file-by-Lisp-expression][mark file by Lisp expression]]                                     | [[#Special-Marking-Function][Special Marking Function]]                       |
+|                | [[#index-modified-functions][modified functions]]                                                         | [[#Technical-Details][Technical Details]]                                     |
+|                | [[#index-multiple-Dired-directories][multiple Dired directories]]                                         | [[#Multiple-Dired-Directories][Multiple Dired Directories]]                   |
+| -------------- |                                                                                                           |                                                                               |
+| O              |                                                                                                           |                                                                               |
+|                | [[#index-omitting-additional-files][omitting additional files]]                                           | [[#Omitting-Variables][Omitting Variables]]                                   |
+|                | [[#index-omitting-dot-files-in-Dired][omitting dot files in Dired]]                                       | [[#Omitting-Examples][Omitting Examples]]                                     |
+|                | [[#index-omitting-Files-in-Dired][omitting Files in Dired]]                                               | [[#Omitting-Files-in-Dired][Omitting Files in Dired]]                         |
+|                | [[#index-omitting-RCS-files-in-Dired][omitting RCS files in Dired]]                                       | [[#Omitting-Examples][Omitting Examples]]                                     |
+|                | [[#index-omitting-tib-files-in-Dired][omitting tib files in Dired]]                                       | [[#Omitting-Examples][Omitting Examples]]                                     |
+| -------------- |                                                                                                           |                                                                               |
+| P              |                                                                                                           |                                                                               |
+|                | [[#index-perusing-ls-listings][perusing =ls= listings]]                                                   | [[#Virtual-Dired][Virtual Dired]]                                             |
+| -------------- |                                                                                                           |                                                                               |
+| R              |                                                                                                           |                                                                               |
+|                | [[#index-RCS-files_002c-how-to-omit-them-in-Dired][RCS files, how to omit them in Dired]]                 | [[#Omitting-Examples][Omitting Examples]]                                     |
+|                | [[#index-reading-mail_002e][reading mail.]]                                                               | [[#Miscellaneous-Commands][Miscellaneous Commands]]                           |
+|                | [[#index-reading-mail_002e-1][reading mail.]]                                                             | [[#Miscellaneous-Commands][Miscellaneous Commands]]                           |
+| -------------- |                                                                                                           |                                                                               |
+| S              |                                                                                                           |                                                                               |
+|                | [[#index-simultaneous-visiting-of-several-files][simultaneous visiting of several files]]                 | [[#Advanced-Mark-Commands][Advanced Mark Commands]]                           |
+| -------------- |                                                                                                           |                                                                               |
+| T              |                                                                                                           |                                                                               |
+|                | [[#index-tib-files_002c-how-to-omit-them-in-Dired][tib files, how to omit them in Dired]]                 | [[#Omitting-Examples][Omitting Examples]]                                     |
+| -------------- |                                                                                                           |                                                                               |
+| U              |                                                                                                           |                                                                               |
+|                | [[#index-uninteresting-files][uninteresting files]]                                                       | [[#Omitting-Files-in-Dired][Omitting Files in Dired]]                         |
+| -------------- |                                                                                                           |                                                                               |
+| V              |                                                                                                           |                                                                               |
+|                | [[#index-virtual-Dired][virtual Dired]]                                                                   | [[#Virtual-Dired][Virtual Dired]]                                             |
+|                | [[#index-visiting-a-file-mentioned-in-a-buffer][visiting a file mentioned in a buffer]]                   | [[#Find-File-At-Point][Find File At Point]]                                   |
+|                | [[#index-visiting-several-files-at-once][visiting several files at once]]                                 | [[#Advanced-Mark-Commands][Advanced Mark Commands]]                           |
+| -------------- |                                                                                                           |                                                                               |
+| W              |                                                                                                           |                                                                               |
+|                | [[#index-working-directory][working directory]]                                                           | [[#Multiple-Dired-Directories][Multiple Dired Directories]]                   |
+| -------------- |                                                                                                           |                                                                               |
+
+| Jump to:   | [[#Concept-Index_cp_letter-B][*B*]]   [[#Concept-Index_cp_letter-C][*C*]]   [[#Concept-Index_cp_letter-D][*D*]]   [[#Concept-Index_cp_letter-F][*F*]]   [[#Concept-Index_cp_letter-H][*H*]]   [[#Concept-Index_cp_letter-L][*L*]]   [[#Concept-Index_cp_letter-M][*M*]]   [[#Concept-Index_cp_letter-O][*O*]]   [[#Concept-Index_cp_letter-P][*P*]]   [[#Concept-Index_cp_letter-R][*R*]]   [[#Concept-Index_cp_letter-S][*S*]]   [[#Concept-Index_cp_letter-T][*T*]]   [[#Concept-Index_cp_letter-U][*U*]]   [[#Concept-Index_cp_letter-V][*V*]]   [[#Concept-Index_cp_letter-W][*W*]]   |
+
+--------------
+
+<<Command-Index>>
+
+Next: [[#Key-Index][Key Index]], Previous:
+[[#Concept-Index][Concept Index]], Up: [[#Top][Dired Extra]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+** Function Index [[#Function-Index][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Function-Index
+:CLASS: unnumbered
+:END:
+
+| Jump to:   | [[#Command-Index_fn_letter-D][*D*]]   [[#Command-Index_fn_letter-S][*S*]]   |
+
+|                | Index Entry                                                                                     | Section                                                       |
+| -------------- |                                                                                                 |                                                               |
+| D              |                                                                                                 |                                                               |
+|                | [[#index-dired_002dclean_002dpatch][=dired-clean-patch=]]                                       | [[#Advanced-Cleaning-Functions][Advanced Cleaning Functions]] |
+|                | [[#index-dired_002dclean_002dtex][=dired-clean-tex=]]                                           | [[#Advanced-Cleaning-Functions][Advanced Cleaning Functions]] |
+|                | [[#index-dired_002ddo_002dfind_002dmarked_002dfiles][=dired-do-find-marked-files=]]             | [[#Advanced-Mark-Commands][Advanced Mark Commands]]           |
+|                | [[#index-dired_002dflag_002dextension][=dired-flag-extension=]]                                 | [[#Advanced-Mark-Commands][Advanced Mark Commands]]           |
+|                | [[#index-dired_002dmark_002dextension][=dired-mark-extension=]]                                 | [[#Advanced-Mark-Commands][Advanced Mark Commands]]           |
+|                | [[#index-dired_002dmark_002domitted][=dired-mark-omitted=]]                                     | [[#Omitting-Files-in-Dired][Omitting Files in Dired]]         |
+|                | [[#index-dired_002dmark_002dsexp][=dired-mark-sexp=]]                                           | [[#Special-Marking-Function][Special Marking Function]]       |
+|                | [[#index-dired_002dmark_002dsuffix][=dired-mark-suffix=]]                                       | [[#Advanced-Mark-Commands][Advanced Mark Commands]]           |
+|                | [[#index-dired_002domit_002dmode][=dired-omit-mode=]]                                           | [[#Omitting-Files-in-Dired][Omitting Files in Dired]]         |
+|                | [[#index-dired_002drmail][=dired-rmail=]]                                                       | [[#Miscellaneous-Commands][Miscellaneous Commands]]           |
+|                | [[#index-dired_002dsmart_002dshell_002dcommand][=dired-smart-shell-command=]]                   | [[#Multiple-Dired-Directories][Multiple Dired Directories]]   |
+|                | [[#index-dired_002dvery_002dclean_002dtex][=dired-very-clean-tex=]]                             | [[#Advanced-Cleaning-Functions][Advanced Cleaning Functions]] |
+|                | [[#index-dired_002dvirtual][=dired-virtual=]]                                                   | [[#Virtual-Dired][Virtual Dired]]                             |
+|                | [[#index-dired_002dvirtual_002dmode][=dired-virtual-mode=]]                                     | [[#Virtual-Dired][Virtual Dired]]                             |
+|                | [[#index-dired_002dvirtual_002drevert][=dired-virtual-revert=]]                                 | [[#Virtual-Dired][Virtual Dired]]                             |
+|                | [[#index-dired_002dvm][=dired-vm=]]                                                             | [[#Miscellaneous-Commands][Miscellaneous Commands]]           |
+|                | [[#index-dired_002dx_002dbind_002dfind_002dfile][=dired-x-bind-find-file=]]                     | [[#Find-File-At-Point][Find File At Point]]                   |
+|                | [[#index-dired_002dx_002dfind_002dfile][=dired-x-find-file=]]                                   | [[#Find-File-At-Point][Find File At Point]]                   |
+|                | [[#index-dired_002dx_002dfind_002dfile_002dother_002dwindow][=dired-x-find-file-other-window=]] | [[#Find-File-At-Point][Find File At Point]]                   |
+| -------------- |                                                                                                 |                                                               |
+| S              |                                                                                                 |                                                               |
+|                | [[#index-shell_002dcommand][=shell-command=]]                                                   | [[#Multiple-Dired-Directories][Multiple Dired Directories]]   |
+| -------------- |                                                                                                 |                                                               |
+
+| Jump to:   | [[#Command-Index_fn_letter-D][*D*]]   [[#Command-Index_fn_letter-S][*S*]]   |
+
+--------------
+
+<<Key-Index>>
+
+Next: [[#Variable-Index][Variable Index]], Previous:
+[[#Command-Index][Function Index]], Up: [[#Top][Dired Extra]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+** Key Index [[#Key-Index-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Key-Index-1
+:CLASS: unnumbered
+:END:
+
+| Jump to:   | [[#Key-Index_ky_symbol-1][***]]  \\                                                                                                                                       |
+|            | [[#Key-Index_ky_letter-C][*C*]]   [[#Key-Index_ky_letter-F][*F*]]   [[#Key-Index_ky_letter-G][*G*]]   [[#Key-Index_ky_letter-M][*M*]]   [[#Key-Index_ky_letter-V][*V*]]   |
+
+|                | Index Entry                               | Section                                                     |
+| -------------- |                                           |                                                             |
+| ​*              |                                           |                                                             |
+|                | [[#index-_002a-O][=* O=]]                 | [[#Omitting-Files-in-Dired][Omitting Files in Dired]]       |
+| -------------- |                                           |                                                             |
+| C              |                                           |                                                             |
+|                | [[#index-C_002dx-4-C_002df][=C-x 4 C-f=]] | [[#Find-File-At-Point][Find File At Point]]                 |
+|                | [[#index-C_002dx-C_002df][=C-x C-f=]]     | [[#Find-File-At-Point][Find File At Point]]                 |
+|                | [[#index-C_002dx-M_002do][=C-x M-o=]]     | [[#Omitting-Files-in-Dired][Omitting Files in Dired]]       |
+| -------------- |                                           |                                                             |
+| F              |                                           |                                                             |
+|                | [[#index-F][=F=]]                         | [[#Advanced-Mark-Commands][Advanced Mark Commands]]         |
+| -------------- |                                           |                                                             |
+| G              |                                           |                                                             |
+|                | [[#index-g][=g=]]                         | [[#Virtual-Dired][Virtual Dired]]                           |
+| -------------- |                                           |                                                             |
+| M              |                                           |                                                             |
+|                | [[#index-M_002d_0021][=M-!=]]             | [[#Multiple-Dired-Directories][Multiple Dired Directories]] |
+|                | [[#index-M_002d_0028][=M-(=]]             | [[#Special-Marking-Function][Special Marking Function]]     |
+| -------------- |                                           |                                                             |
+| V              |                                           |                                                             |
+|                | [[#index-V][=V=]]                         | [[#Miscellaneous-Commands][Miscellaneous Commands]]         |
+| -------------- |                                           |                                                             |
+
+| Jump to:   | [[#Key-Index_ky_symbol-1][***]]  \\                                                                                                                                       |
+|            | [[#Key-Index_ky_letter-C][*C*]]   [[#Key-Index_ky_letter-F][*F*]]   [[#Key-Index_ky_letter-G][*G*]]   [[#Key-Index_ky_letter-M][*M*]]   [[#Key-Index_ky_letter-V][*V*]]   |
+
+--------------
+
+<<Variable-Index>>
+
+Previous: [[#Key-Index][Key Index]], Up: [[#Top][Dired Extra]]  
+[[[#SEC_Contents][Contents]]][[[#Concept-Index][Index]]]
+
+** Variable Index [[#Variable-Index-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Variable-Index-1
+:CLASS: unnumbered
+:END:
+
+| Jump to:   | [[#Variable-Index_vr_letter-A][*A*]]   [[#Variable-Index_vr_letter-D][*D*]]   |
+
+|                | Index Entry                                                                                 | Section                                                       |
+| -------------- |                                                                                             |                                                               |
+| A              |                                                                                             |                                                               |
+|                | [[#index-auto_002dmode_002dalist][=auto-mode-alist=]]                                       | [[#Virtual-Dired][Virtual Dired]]                             |
+| -------------- |                                                                                             |                                                               |
+| D              |                                                                                             |                                                               |
+|                | [[#index-dired_002dbibtex_002dunclean_002dextensions][=dired-bibtex-unclean-extensions=]]   | [[#Advanced-Cleaning-Variables][Advanced Cleaning Variables]] |
+|                | [[#index-dired_002dbind_002dvm][=dired-bind-vm=]]                                           | [[#Miscellaneous-Commands][Miscellaneous Commands]]           |
+|                | [[#index-dired_002dfind_002dsubdir][=dired-find-subdir=]]                                   | [[#Miscellaneous-Commands][Miscellaneous Commands]]           |
+|                | [[#index-dired_002dlatex_002dunclean_002dextensions][=dired-latex-unclean-extensions=]]     | [[#Advanced-Cleaning-Variables][Advanced Cleaning Variables]] |
+|                | [[#index-dired_002domit_002dcase_002dfold][=dired-omit-case-fold=]]                         | [[#Omitting-Variables][Omitting Variables]]                   |
+|                | [[#index-dired_002domit_002dextensions][=dired-omit-extensions=]]                           | [[#Omitting-Variables][Omitting Variables]]                   |
+|                | [[#index-dired_002domit_002dfiles][=dired-omit-files=]]                                     | [[#Omitting-Variables][Omitting Variables]]                   |
+|                | [[#index-dired_002domit_002dlocalp][=dired-omit-localp=]]                                   | [[#Omitting-Variables][Omitting Variables]]                   |
+|                | [[#index-dired_002domit_002dmarker_002dchar][=dired-omit-marker-char=]]                     | [[#Omitting-Variables][Omitting Variables]]                   |
+|                | [[#index-dired_002domit_002dmode-1][=dired-omit-mode=]]                                     | [[#Omitting-Variables][Omitting Variables]]                   |
+|                | [[#index-dired_002domit_002dsize_002dlimit][=dired-omit-size-limit=]]                       | [[#Omitting-Variables][Omitting Variables]]                   |
+|                | [[#index-dired_002dpatch_002dunclean_002dextensions][=dired-patch-unclean-extensions=]]     | [[#Advanced-Cleaning-Variables][Advanced Cleaning Variables]] |
+|                | [[#index-dired_002dtex_002dunclean_002dextensions][=dired-tex-unclean-extensions=]]         | [[#Advanced-Cleaning-Variables][Advanced Cleaning Variables]] |
+|                | [[#index-dired_002dtexinfo_002dunclean_002dextensions][=dired-texinfo-unclean-extensions=]] | [[#Advanced-Cleaning-Variables][Advanced Cleaning Variables]] |
+|                | [[#index-dired_002dvm_002dread_002donly_002dfolders][=dired-vm-read-only-folders=]]         | [[#Miscellaneous-Commands][Miscellaneous Commands]]           |
+|                | [[#index-dired_002dx_002dhands_002doff_002dmy_002dkeys][=dired-x-hands-off-my-keys=]]       | [[#Find-File-At-Point][Find File At Point]]                   |
+| -------------- |                                                                                             |                                                               |
+
+| Jump to:   | [[#Variable-Index_vr_letter-A][*A*]]   [[#Variable-Index_vr_letter-D][*D*]]   |

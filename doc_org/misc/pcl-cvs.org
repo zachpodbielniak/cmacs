@@ -1,0 +1,2053 @@
+<<Top>>
+
+Next: [[#About-PCL_002dCVS][About PCL-CVS]]  
+[[[#SEC_Contents][Contents]]][[[#Function-and-Variable-Index][Index]]]
+
+* PCL-CVS [[#PCL_002dCVS][¶]]
+:PROPERTIES:
+:CUSTOM_ID: PCL_002dCVS
+:CLASS: top
+:END:
+This manual describes PCL-CVS, the GNU Emacs front-end to CVS. It is
+nowhere near complete, so you are advised to use M-x customize-group RET
+pcl-cvs RET and to look at the documentation strings of the various
+commands and major modes for further information.
+
+Copyright © 1991--2026 Free Software Foundation, Inc.
+
+#+begin_quote
+Permission is granted to copy, distribute and/or modify this document
+under the terms of the GNU Free Documentation License, Version 1.3 or
+any later version published by the Free Software Foundation; with no
+Invariant Sections, with the Front-Cover Texts being “A GNU Manual”, and
+with the Back-Cover Texts as in (a) below. A copy of the license is
+included in the section entitled “GNU Free Documentation License”.
+
+(a) The FSF's Back-Cover Text is: “You have the freedom to copy and
+modify this GNU manual.”
+#+end_quote
+
+<<SEC_Contents>>
+** Table of Contents
+:PROPERTIES:
+:CUSTOM_ID: table-of-contents
+:CLASS: contents-heading
+:END:
+
+- [[#About-PCL_002dCVS][1 About PCL-CVS]]
+  - [[#Contributors][1.1 Contributors to PCL-CVS]]
+- [[#Getting-started][2 Getting started]]
+- [[#Buffer-contents][3 Buffer contents]]
+- [[#Selected-files][4 Selected files]]
+- [[#Commands][5 Commands]]
+  - [[#Entering-PCL_002dCVS][5.1 Entering PCL-CVS]]
+  - [[#Setting-flags][5.2 Setting flags for CVS commands]]
+  - [[#Updating-the-buffer][5.3 Updating the =*cvs*= buffer]]
+  - [[#Movement-commands][5.4 Movement Commands]]
+  - [[#Marking-files][5.5 Marking files]]
+  - [[#Committing-changes][5.6 Committing changes]]
+  - [[#Editing-files][5.7 Editing files]]
+  - [[#Getting-info-about-files][5.8 Getting info about files]]
+  - [[#Adding-and-removing-files][5.9 Adding and removing files]]
+  - [[#Undoing-changes][5.10 Undoing changes]]
+  - [[#Removing-handled-entries][5.11 Removing handled entries]]
+  - [[#Ignoring-files][5.12 Ignoring files]]
+  - [[#Viewing-differences][5.13 Viewing differences]]
+  - [[#Invoking-Ediff][5.14 Running ediff]]
+  - [[#Updating-files][5.15 Updating files]]
+  - [[#Tagging-files][5.16 Tagging files]]
+  - [[#Miscellaneous-commands][5.17 Miscellaneous commands]]
+- [[#Log-Edit-Mode][6 Editing a Log Message]]
+- [[#Log-View-Mode][7 Browsing a Log of Changes]]
+- [[#Customization][8 Customization]]
+  - [[#Customizing-Faces][8.1 Customizing Faces]]
+- [[#Bugs][9 Bugs (known and unknown)]]
+- [[#GNU-Free-Documentation-License][Appendix A GNU Free Documentation License]]
+- [[#Function-and-Variable-Index][Function and Variable Index]]
+- [[#Concept-Index][Concept Index]]
+- [[#Key-Index][Key Index]]
+
+--------------
+
+<<About-PCL_002dCVS>>
+
+Next: [[#Getting-started][Getting started]], Previous:
+[[#Top][PCL-CVS]], Up: [[#Top][PCL-CVS]]  
+[[[#SEC_Contents][Contents]]][[[#Function-and-Variable-Index][Index]]]
+
+** 1 About PCL-CVS [[#About-PCL_002dCVS-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: About-PCL_002dCVS-1
+:CLASS: chapter
+:END:
+PCL-CVS is a front-end to CVS versions 1.9 and later. It concisely shows
+the present status of a checked out module in an Emacs buffer and
+provides single-key access to the most frequently used CVS commands.
+Note that the =vc-dir= command (see
+[[https://www.gnu.org/software/emacs/manual/html_mono/emacs.html#VC-Directory-Mode][VC Directory Mode]]
+in The GNU Emacs Manual) provides similar functionality, but for several
+version control systems, including CVS.
+
+PCL-CVS was originally written many years ago by Per Cederqvist who
+proudly maintained it until January 1996, at which point he released the
+beta version 2.0b2 and passed on the maintainership to Greg A Woods.
+Development stayed mostly dormant for a few years during which version
+2.0 never seemed to be able to leave the “beta” stage while a separate
+XEmacs version was slowly splitting away. In late 1998, Stefan Monnier
+picked up development again, adding some major new functionality and
+taking over the maintenance.
+
+- [[#Contributors][Contributors to PCL-CVS]]
+
+--------------
+
+<<Contributors>>
+
+Up: [[#About-PCL_002dCVS][About PCL-CVS]]  
+[[[#SEC_Contents][Contents]]][[[#Function-and-Variable-Index][Index]]]
+
+*** 1.1 Contributors to PCL-CVS [[#Contributors-to-PCL_002dCVS][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Contributors-to-PCL_002dCVS
+:CLASS: section
+:END:
+Contributions to the package are welcome. I have limited time to work on
+this project, but I will gladly add any code that you contribute to me
+to this package (see [[#Bugs][Bugs (known and unknown)]]).
+
+The following persons have made contributions to PCL-CVS.
+
+- Brian Berliner wrote CVS, together with some other contributors.
+  Without his work on CVS this package would be useless...
+- Per Cederqvist wrote most of the otherwise unattributed functions in
+  PCL-CVS as well as all the documentation.
+- Inge Wallin wrote the skeleton of =pcl-cvs.texi=, and gave useful
+  comments on it. He also wrote the files =elib-node.el= and
+  =compile-all.el=. The file =cookie.el= was inspired by Inge.
+- Linus Tolke contributed useful comments on both the functionality and
+  the documentation.
+- Jamie Zawinski contributed =pcl-cvs-lucid.el=, which was later renamed
+  to =pcl-cvs-xemacs.el=.
+- Leif Lonnblad contributed RCVS support (since superseded by the new
+  remote CVS support).
+- Jim Blandy contributed hooks to automatically guess CVS log entries
+  from =ChangeLog= contents, and initial support of the new Cygnus /
+  Cyclic remote CVS, as well as various sundry bug fixes and cleanups.
+- Jim Kingdon contributed lots of fixes to the build and installation
+  procedure.
+- Greg A. Woods contributed code to implement the use of per-file diff
+  buffers, and vendor join diffs with emerge and ediff, as well as
+  various and sundry bug fixes and cleanups.
+- Greg Klanderman implemented toggling of marked files, setting of CVS
+  command flags via prefix arguments, updated the XEmacs support,
+  updated the manual, and fixed numerous bugs.
+- Stefan Monnier added a slew of other features and introduced even more
+  new bugs. If there's any bug left, you can be sure it's his.
+- Masatake YAMATO made a gracious contribution of his cvstree code to
+  display a tree of tags which was later superseded by the new
+  =cvs-status-mode=.
+
+Apart from these, a lot of people have sent us suggestions, ideas,
+requests, bug reports and encouragement. Thanks a lot! Without you there
+would be no new releases of PCL-CVS.
+
+--------------
+
+<<Getting-started>>
+
+Next: [[#Buffer-contents][Buffer contents]], Previous:
+[[#About-PCL_002dCVS][About PCL-CVS]], Up: [[#Top][PCL-CVS]]  
+[[[#SEC_Contents][Contents]]][[[#Function-and-Variable-Index][Index]]]
+
+** 2 Getting started [[#Getting-started-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Getting-started-1
+:CLASS: chapter
+:END:
+This document assumes that you know what CVS is, and that you at least
+know the fundamental concepts of CVS. If that is not the case, you
+should read the CVS documentation. Type info -f cvs or man cvs.
+
+PCL-CVS is only useful once you have checked out a module. So before you
+invoke it, you must have a copy of a module somewhere in the file
+system.
+
+You can invoke PCL-CVS by typing M-x cvs-examine RET. You can also
+invoke it via the menu bar, under ‘=Tools='. Or, if you prefer, you can
+also invoke PCL-CVS by simply visiting the CVS administrative
+subdirectory of your module, with a prefix argument. For example, to
+invoke PCL-CVS in a separate frame, type C-u C-x 5 f ~/my/project/CVS
+RET.
+
+The function =cvs-examine= will ask for a directory. The command
+‘=cvs -n update=' will be run in that directory. (It should contain
+files that have been checked out from a CVS archive.) The output from
+=cvs= will be parsed and presented in a table in a buffer called
+=*cvs*=. It might look something like this:
+
+#+begin_src example-preformatted
+Repository : /usr/CVSroot
+Module     : test
+Working dir: /users/ceder/FOO/test
+
+
+In directory .:
+           Need-Update            bar
+           Need-Update            file.txt
+           Modified               namechange
+           Need-Update            newer
+In directory sub:
+           Modified               ChangeLog
+
+--------------------- End ---------------------
+-- last cmd: cvs -f -z6 -n update -d -P --
+#+end_src
+
+In this example, your repository is in =/usr/CVSroot= and CVS has been
+run in the directory =/users/ceder/FOO/test=. The three files (=bar=,
+=file.txt= and =newer=) that are marked with ‘=Need-Update=' have been
+changed by someone else in the CVS repository. Two files (=namechange=
+and =sub/ChangeLog=) have been modified locally, and need to be checked
+in.
+
+You can move the cursor up and down in the buffer with C-n and C-p or n
+and p. If you press c on one of the ‘=Modified=' files, that file will
+be checked in to the CVS repository. See
+[[#Committing-changes][Committing changes]]. You can also press O to
+update any of the files that are marked ‘=Need-Update='. You can also
+run M-x cvs-update RET (bound to M-u in the =*cvs*= buffer) to update
+all the files.
+
+You can then press = to easily get a ‘=diff=' between your modified file
+and the base version that you started from, or you can press l to get
+the output from ‘=cvs log='. Many more such commands are available
+simply by pressing a key (see
+[[#Getting-info-about-files][Getting info about files]]).
+
+--------------
+
+<<Buffer-contents>>
+
+Next: [[#Selected-files][Selected files]], Previous:
+[[#Getting-started][Getting started]], Up: [[#Top][PCL-CVS]]  
+[[[#SEC_Contents][Contents]]][[[#Function-and-Variable-Index][Index]]]
+
+** 3 Buffer contents [[#Buffer-contents-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Buffer-contents-1
+:CLASS: chapter
+:END:
+The display contains several columns, some of which are optional. These
+columns are, from left to right:
+
+- Optionally, the head revision of the file. This is the latest version
+  found in the repository. It might also contain (instead of the head
+  revision) a sub status which typically gives further information about
+  how we got to the current state, for example ‘=patched=', ‘=merged=',
+  ...
+- An asterisk when the file is /marked/ (see
+  [[#Selected-files][Selected files]]).
+- The actual status of the file wrt the repository. See below.
+- Optionally, the base revision of the file. This is the version which
+  the copy in your working directory is based upon.
+- The file name.
+
+The ‘=file status=' field can have the following values:
+
+- ‘=Modified=' :: The file is modified in your working directory, and
+  there was no modification to the same file in the repository. This
+  status can have the following substatus:
+
+  - ‘=merged=' :: The file was modified in your working directory, and
+    there were modifications in the repository as well, but they were
+    merged successfully, without conflict, in your working directory.
+
+- ‘=Conflict=' :: A conflict was detected while trying to merge your
+  changes to =file= with changes from the repository. =file= (the copy
+  in your working directory) is now the output of the =rcsmerge= command
+  on the two versions; an unmodified copy of your file is also in your
+  working directory, with the name =.#==file==.==version=, where
+  =version= is the RCS revision that your modified file started from.
+  See [[#Viewing-differences][Viewing differences]], for more details.
+
+  A conflict can also come from a disagreement on the existence of the
+  file rather than on its content. This case is indicated by the
+  following possible substatus:
+
+  - ‘=removed=' :: The file is locally removed but a new revision has
+    been committed to the repository by someone else.
+
+  - ‘=added=' :: The file is locally added and has also been added to
+    the repository by someone else.
+
+  - ‘=modified=' :: The file is locally modified but someone else has
+    removed it from the repository.
+
+- ‘=Added=' :: The file has been added by you, but it still needs to be
+  checked in to the repository.
+
+- ‘=Removed=' :: The file has been removed by you, but it still needs to
+  be checked in to the repository. You can resurrect it by typing a (see
+  [[#Adding-and-removing-files][Adding and removing files]]).
+
+- ‘=Unknown=' :: A file that was detected in your directory, but that
+  neither appears in the repository, nor is present on the list of files
+  that CVS should ignore.
+
+- ‘=Up-to-date=' :: The file is up to date with respect to the version
+  in the repository. This status can have a substatus of:
+
+  - ‘=added=' :: You have just added the file to the repository.
+
+  - ‘=updated=' :: The file was brought up to date with respect to the
+    repository. This is done for any file that exists in the repository
+    but not in your source, and for files that you haven't changed but
+    are not the most recent versions available in the repository.
+
+  - ‘=patched=' :: The file was brought up to date with respect to the
+    remote repository by way of fetching and applying a patch to the
+    file in your source. This is equivalent to ‘=updated=' except that
+    CVS decided to use a hopefully more efficient method.
+
+  - ‘=committed=' :: You just committed the file.
+
+- ‘=Need-Update=' :: Either a newer version than the one in your source
+  is available in the repository and you have not modified your checked
+  out version, or the file exists in the repository but not in your
+  source. Use ‘=cvs-mode-update=' bound to O to update the file.
+
+- ‘=Need-Merge=' :: You have modified the checked out version of the
+  file, and a newer version is available in the repository. A merge will
+  take place when you run a ‘=cvs-update='.
+
+- ‘=Missing=' :: The file has been unexpectedly removed from your
+  working directory although it has not been ‘=cvs remove='d.
+
+--------------
+
+<<Selected-files>>
+
+Next: [[#Commands][Commands]], Previous:
+[[#Buffer-contents][Buffer contents]], Up: [[#Top][PCL-CVS]]  
+[[[#SEC_Contents][Contents]]][[[#Function-and-Variable-Index][Index]]]
+
+** 4 Selected files [[#Selected-files-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Selected-files-1
+:CLASS: chapter
+:END:
+Many of the commands work on the current set of /selected/ files which
+can be either the set of marked files (if any file is marked and marks
+are not ignored) or whichever file or directory the cursor is on.
+
+If a directory is selected but the command cannot be applied to a
+directory, then it will be applied to the set of files under this
+directory which are in the =*cvs*= buffer.
+
+Furthermore, each command only operates on a subset of the selected
+files, depending on whether or not the command is /applicable/ to each
+file (based on the file's status). For example, =cvs-mode-commit= is not
+applicable to a file whose status is ‘=Need-Update='. If it should
+happen that PCL-CVS guesses the applicability wrong, you can override it
+with the special prefix =cvs-mode-force-command= normally bound to M-f
+(and file a bug report). The applicability rule can be slightly changed
+with =cvs-allow-dir-commit= and =cvs-force-dir-tag=.
+
+By default, marks are always in effect (you may change this, however, by
+setting the variable =cvs-default-ignore-marks=) except for the commands
+that ‘=tag=' or ‘=diff=' a file (which can be changed with the variable
+=cvs-invert-ignore-marks=).
+
+In addition, you may use the special prefix =cvs-mode-toggle-marks=
+normally bound to T to toggle the use of marks for the following
+command.
+
+This scheme might seem a little complicated, but once one gets used to
+it, it is quite powerful.
+
+For commands to mark and unmark files, see
+[[#Marking-files][Marking files]].
+
+--------------
+
+<<Commands>>
+
+Next: [[#Log-Edit-Mode][Editing a Log Message]], Previous:
+[[#Selected-files][Selected files]], Up: [[#Top][PCL-CVS]]  
+[[[#SEC_Contents][Contents]]][[[#Function-and-Variable-Index][Index]]]
+
+** 5 Commands [[#Commands-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Commands-1
+:CLASS: chapter
+:END:
+The nodes in this menu contains explanations about all the commands that
+you can use in PCL-CVS. They are grouped together by type.
+
+- [[#Entering-PCL_002dCVS][Entering PCL-CVS]]
+- [[#Setting-flags][Setting flags for CVS commands]]
+- [[#Updating-the-buffer][Updating the =*cvs*= buffer]]
+- [[#Movement-commands][Movement Commands]]
+- [[#Marking-files][Marking files]]
+- [[#Committing-changes][Committing changes]]
+- [[#Editing-files][Editing files]]
+- [[#Getting-info-about-files][Getting info about files]]
+- [[#Adding-and-removing-files][Adding and removing files]]
+- [[#Undoing-changes][Undoing changes]]
+- [[#Removing-handled-entries][Removing handled entries]]
+- [[#Ignoring-files][Ignoring files]]
+- [[#Viewing-differences][Viewing differences]]
+- [[#Invoking-Ediff][Running ediff]]
+- [[#Updating-files][Updating files]]
+- [[#Tagging-files][Tagging files]]
+- [[#Miscellaneous-commands][Miscellaneous commands]]
+
+--------------
+
+<<Entering-PCL_002dCVS>>
+
+Next: [[#Setting-flags][Setting flags for CVS commands]], Up:
+[[#Commands][Commands]]  
+[[[#SEC_Contents][Contents]]][[[#Function-and-Variable-Index][Index]]]
+
+*** 5.1 Entering PCL-CVS [[#Entering-PCL_002dCVS-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Entering-PCL_002dCVS-1
+:CLASS: section
+:END:
+Most commands in PCL-CVS require that you have a =*cvs*= buffer. The
+commands that you use to get one are listed below. For each, a ‘=cvs='
+process will be run, the output will be parsed by PCL-CVS, and the
+result will be printed in the =*cvs*= buffer (see
+[[#Buffer-contents][Buffer contents]], for a description of the buffer's
+contents).
+
+- M-x cvs-update :: Run a ‘=cvs update=' command. You will be asked for
+  the directory in which the ‘=cvs update=' will be run.
+
+- M-x cvs-examine :: Run a ‘=cvs -n update=' command. This is identical
+  to the previous command, except that it will only check what needs to
+  be done but will not change anything. You will be asked for the
+  directory in which the ‘=cvs -n update=' will be run.
+
+- M-x cvs-status :: Run a ‘=cvs status=' command. You will be asked for
+  the directory in which the ‘=cvs status=' will be run.
+
+- M-x cvs-checkout :: Run a ‘=cvs checkout=' command. You will be asked
+  for the directory in which the ‘=cvs update=' will be run and the
+  module to be checked out.
+
+- M-x cvs-quickdir :: Populate the =*cvs*= buffer by just looking at the
+  =CVS/Entries= files. This is very much like =cvs-examine= except that
+  it does not access the CVS repository, which is a major advantage when
+  the repository is far away. But of course, it will not be able to
+  detect when a file needs to be updated or merged.
+
+The first four of those commands are also reachable from the menu bar
+under ‘=Tools->PCL-CVS='. Finally, an alternative way is to visit the
+CVS administrative subdirectory in your work area with a simple prefix
+argument. For example C-u C-x C-f ~/my/work/CVS RET. This by default
+runs =cvs-quickdir= but the specific behavior can be changed with
+=cvs-dired-action= and =cvs-dired-use-hook=.
+
+By default, the commands above will descend recursively into
+subdirectories. You can avoid that behavior by including ‘=-l=' in the
+flags for the command. These flags can be set by giving a prefix
+argument to the command (e.g., by typing C-u M-x cvs-update RET -l RET).
+
+--------------
+
+<<Setting-flags>>
+
+Next: [[#Updating-the-buffer][Updating the =*cvs*= buffer]], Previous:
+[[#Entering-PCL_002dCVS][Entering PCL-CVS]], Up: [[#Commands][Commands]]
+  [[[#SEC_Contents][Contents]]][[[#Function-and-Variable-Index][Index]]]
+
+*** 5.2 Setting flags for CVS commands [[#Setting-flags-for-CVS-commands][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Setting-flags-for-CVS-commands
+:CLASS: section
+:END:
+This section describes the convention used by nearly all PCL-CVS
+commands for setting optional flags sent to CVS. A single C-u prefix
+argument is used to cause the command to prompt for flags to be used for
+the current invocation of the command only. Two C-u prefix arguments are
+used to prompt for flags which will be set permanently, for the current
+invocation and all that follow, until the flags are changed, or unless
+temporary flags are set which override them.
+
+Perhaps an example or two is in order. Say you are about to add a binary
+file to the repository, and want to specify the flags ‘=-kb=' to
+‘=cvs add='. You can type C-u a -kb RET, and the file will be added.
+Subsequent ‘=cvs add=' commands will use the previously prevailing
+flags.
+
+As a second example, say you are about to perform a diff and want to see
+the result in unified diff format, i.e., you'd like to pass the flag
+‘=-u=' to both ‘=cvs diff=' and ‘=diff='. You'd also like all subsequent
+diffs to use this flag. You can type C-u C-u = -u RET and the diff will
+be performed, and the default flags will be set to =("-u")=. You can of
+course override this flag for a single diff by using a single C-u prefix
+argument.
+
+In addition to this, some commands can take /special prefix/ arguments.
+These work as follows: When called with a C-u prefix, the user is
+prompted for a new value of the special prefix and the special prefix is
+activated for the next command. When called without the C-u prefix, the
+special prefix is re-activated (with the same value as last time) for
+the next command. Calling the prefix command again when it's already
+activated deactivates it. Calling it with the C-u C-u prefix activates
+it for all subsequent commands until you deactivate it explicitly. The
+special prefixes are:
+
+- T :: Toggles whether or not marks will be active in the next command.
+
+- b :: Provide the next command with a branch (can be any version
+  specifier) to work on.
+
+- B :: Secondary branch argument. Only meaningful if b is also used. It
+  can be used to provide a second branch argument to =cvs-mode-diff= or
+  to =cvs-mode-update=.
+
+- M-f :: Forces the next command to apply to every selected file rather
+  than only to the ones PCL-CVS thinks are relevant.
+
+--------------
+
+<<Updating-the-buffer>>
+
+Next: [[#Movement-commands][Movement Commands]], Previous:
+[[#Setting-flags][Setting flags for CVS commands]], Up:
+[[#Commands][Commands]]  
+[[[#SEC_Contents][Contents]]][[[#Function-and-Variable-Index][Index]]]
+
+*** 5.3 Updating the =*cvs*= buffer [[#Updating-the-_002acvs_002a-buffer][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Updating-the-_002acvs_002a-buffer
+:CLASS: section
+:END:
+The following commands can be used from within the =*cvs*= buffer to
+update the display:
+
+- M-u :: Runs the command ‘=cvs-update='.
+
+- M-e :: Runs the command ‘=cvs-examine='.
+
+- M-s :: Runs the command ‘=cvs-status='.
+
+In addition to the above commands which operate on the whole module, you
+can run the equivalent CVS command on just a subset of the
+files/directories with these keys:
+
+- O :: Runs =cvs-mode-update= on the selected files. When run on the
+  top-level directory, this is equivalent to M-u.
+
+- e :: Runs =cvs-mode-examine= on the selected files. When run on the
+  top-level directory, this is equivalent to M-e.
+
+- <<index-cvs_002dstatus_002dmode>>s
+  [[#index-cvs_002dstatus_002dmode][¶]] :: Runs =cvs-mode-status= on the
+  selected files. When run on the top-level directory, this is
+  equivalent to M-s, except that CVS output will be shown in a
+  =*cvs-info*= buffer that will be put in ‘=cvs-status-mode='.
+
+--------------
+
+<<Movement-commands>>
+
+Next: [[#Marking-files][Marking files]], Previous:
+[[#Updating-the-buffer][Updating the =*cvs*= buffer]], Up:
+[[#Commands][Commands]]  
+[[[#SEC_Contents][Contents]]][[[#Function-and-Variable-Index][Index]]]
+
+*** 5.4 Movement Commands [[#Movement-Commands][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Movement-Commands
+:CLASS: section
+:END:
+You can use most normal Emacs commands to move forward and backward in
+the buffer. Some keys are rebound to functions that take advantage of
+the fact that the buffer is a PCL-CVS buffer:
+
+- SPC\\
+  n :: These keys move the cursor one file forward, towards the end of
+  the buffer (=cvs-mode-next-line=).
+
+- p :: This key moves one file backward, towards the beginning of the
+  buffer (=cvs-mode-previous-line=).
+
+--------------
+
+<<Marking-files>>
+
+Next: [[#Committing-changes][Committing changes]], Previous:
+[[#Movement-commands][Movement Commands]], Up: [[#Commands][Commands]]  
+[[[#SEC_Contents][Contents]]][[[#Function-and-Variable-Index][Index]]]
+
+*** 5.5 Marking files [[#Marking-files-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Marking-files-1
+:CLASS: section
+:END:
+PCL-CVS works on a set of /selected files/ (see
+[[#Selected-files][Selected files]]). You can mark and unmark files with
+these commands:
+
+- m :: This marks the file that the cursor is positioned on. If the
+  cursor is positioned on a directory all files in that directory are
+  marked (=cvs-mode-mark=).
+
+- u :: Unmark the file that the cursor is positioned on. If the cursor
+  is on a directory, all files in that directory are unmarked
+  (=cvs-mode-unmark=).
+
+- M :: Mark /all/ files in the buffer (=cvs-mode-mark-all-files=).
+
+- M-DEL :: Unmark /all/ files (=cvs-mode-unmark-all-files=).
+
+- DEL :: Unmark the file on the previous line, and move point to that
+  line (=cvs-mode-unmark-up=).
+
+- % :: Mark all files matching a regular expression
+  (=cvs-mode-mark-matching-files=).
+
+- S :: Mark all files in a particular state, such as “Modified” or
+  “Removed” (=cvs-mode-mark-on-state=).
+
+- T :: Toggle use of marks for the next command
+  (=cvs-mode-toggle-marks=).
+
+--------------
+
+<<Committing-changes>>
+
+Next: [[#Editing-files][Editing files]], Previous:
+[[#Marking-files][Marking files]], Up: [[#Commands][Commands]]  
+[[[#SEC_Contents][Contents]]][[[#Function-and-Variable-Index][Index]]]
+
+*** 5.6 Committing changes [[#Committing-changes-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Committing-changes-1
+:CLASS: section
+:END:
+Committing changes basically works as follows:
+
+1. After having selected the files you want to commit, you type either c
+   or C which brings up a special buffer =*cvs-commit*=.
+2. You type in the log message describing the changes you're about to
+   commit (see [[#Log-Edit-Mode][Editing a Log Message]]).
+3. When you're happy with it, you type C-c C-c to do the actual commit.
+
+There's no hidden state, so you can abort the process or pick it up
+again at any time.
+
+The set of files actually committed is really decided only during the
+very last step, which is a mixed blessing. It allows you to go back and
+change your mind about which files to commit, but it also means that you
+might inadvertently change the set of selected files. To reduce the risk
+of error, C-c C-c will ask for confirmation if the set of selected files
+has changed between the first step and the last. You can change this
+last detail with =log-edit-confirm=.
+
+As for the difference between c (i.e., =cvs-mode-commit=) and C (i.e.,
+=cvs-mode-commit-setup=) is that the first gets you straight to
+=*cvs-commit*= without erasing it or changing anything to its content,
+while the second first erases =*cvs-commit*= and tries to initialize it
+with a sane default (it does that by either using a template provided by
+the CVS administrator or by extracting a relevant log message from a
+=ChangeLog= file).
+
+If you are editing the files in your Emacs, an automatic
+‘=revert-buffer=' will be performed. (If the file contains ‘=$Id$='
+keywords, ‘=cvs commit=' will write a new file with the new values
+substituted. The auto-revert makes sure that you get them into your
+buffer.) The revert will not occur if you have modified your buffer, or
+if ‘=cvs-auto-revert=' is set to ‘=nil='.
+
+--------------
+
+<<Editing-files>>
+
+Next: [[#Getting-info-about-files][Getting info about files]], Previous:
+[[#Committing-changes][Committing changes]], Up: [[#Commands][Commands]]
+  [[[#SEC_Contents][Contents]]][[[#Function-and-Variable-Index][Index]]]
+
+*** 5.7 Editing files [[#Editing-files-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Editing-files-1
+:CLASS: section
+:END:
+There are currently three commands that can be used to find a file (that
+is, load it into a buffer and start editing it there). These commands
+work on the line that the cursor is situated at. They always ignore any
+marked files.
+
+- f :: Find the file that the cursor points to (=cvs-mode-find-file=).
+  If the cursor points to a directory, run =dired= on that directory;
+  see
+  [[https://www.gnu.org/software/emacs/manual/html_mono/emacs.html#Dired][Emacs Manual]].
+
+- o :: Like f, but use another window
+  (=cvs-mode-find-file-other-window=).
+
+- A :: Invoke ‘=add-change-log-entry-other-window=' to edit a
+  =ChangeLog= file. The =ChangeLog= file will be found in the directory
+  of the file the cursor points to, or in a parent of that directory
+  (=cvs-mode-add-change-log-entry-other-window=).
+
+--------------
+
+<<Getting-info-about-files>>
+
+Next: [[#Adding-and-removing-files][Adding and removing files]],
+Previous: [[#Editing-files][Editing files]], Up: [[#Commands][Commands]]
+  [[[#SEC_Contents][Contents]]][[[#Function-and-Variable-Index][Index]]]
+
+*** 5.8 Getting info about files [[#Getting-info-about-files-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Getting-info-about-files-1
+:CLASS: section
+:END:
+- l :: Call the command =cvs-mode-log= which runs ‘=cvs log=' on all
+  selected files, and show the result in a temporary buffer =*cvs-info*=
+  (see [[#Log-View-Mode][Browsing a Log of Changes]]).
+
+- s :: Call the command =cvs-mode-status= which runs ‘=cvs status=' on
+  all selected files, and show the result in a temporary buffer
+  =*cvs-info*=.
+
+--------------
+
+<<Adding-and-removing-files>>
+
+Next: [[#Undoing-changes][Undoing changes]], Previous:
+[[#Getting-info-about-files][Getting info about files]], Up:
+[[#Commands][Commands]]  
+[[[#SEC_Contents][Contents]]][[[#Function-and-Variable-Index][Index]]]
+
+*** 5.9 Adding and removing files [[#Adding-and-removing-files-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Adding-and-removing-files-1
+:CLASS: section
+:END:
+The following commands are available to make it easy to add files to and
+remove them from the CVS repository.
+
+- a :: Add all selected files. This command can be used on ‘=Unknown='
+  files (see [[#Buffer-contents][Buffer contents]]). The status of the
+  file will change to ‘=Added=', and you will have to use c
+  (‘=cvs-mode-commit=' see [[#Committing-changes][Committing changes]]),
+  to really add the file to the repository.
+
+  This command can also be used on ‘=Removed=' files (before you commit
+  them) to resurrect them.
+
+  The command that is run is =cvs-mode-add=.
+
+- r :: This command removes the selected files (after prompting for
+  confirmation). The files are deleted from your directory and (unless
+  the status was ‘=Unknown='; see [[#Buffer-contents][Buffer contents]])
+  they will also be ‘=cvs remove='d. If the files' status was
+  ‘=Unknown=' they will disappear from the buffer. Otherwise their
+  status will change to ‘=Removed=', and you must use c
+  (‘=cvs-mode-commit=', see [[#Committing-changes][Committing changes]])
+  to commit the removal.
+
+  The command that is run is =cvs-mode-remove-file=.
+
+--------------
+
+<<Undoing-changes>>
+
+Next: [[#Removing-handled-entries][Removing handled entries]], Previous:
+[[#Adding-and-removing-files][Adding and removing files]], Up:
+[[#Commands][Commands]]  
+[[[#SEC_Contents][Contents]]][[[#Function-and-Variable-Index][Index]]]
+
+*** 5.10 Undoing changes [[#Undoing-changes-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Undoing-changes-1
+:CLASS: section
+:END:
+- U :: If you have modified a file, and for some reason decide that you
+  don't want to keep the changes, you can undo them with this command.
+  It works by removing your working copy of the file and then getting
+  the latest version from the repository
+  (=cvs-mode-undo-local-changes=).
+
+--------------
+
+<<Removing-handled-entries>>
+
+Next: [[#Ignoring-files][Ignoring files]], Previous:
+[[#Undoing-changes][Undoing changes]], Up: [[#Commands][Commands]]  
+[[[#SEC_Contents][Contents]]][[[#Function-and-Variable-Index][Index]]]
+
+*** 5.11 Removing handled entries [[#Removing-handled-entries-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Removing-handled-entries-1
+:CLASS: section
+:END:
+- x :: This command allows you to remove all entries that you have
+  processed. More specifically, the lines for ‘=Up-to-date=' files (see
+  [[#Buffer-contents][Buffer contents]]) are removed from the buffer. If
+  a directory becomes empty the heading for that directory is also
+  removed. This makes it easier to get an overview of what needs to be
+  done.
+
+  x invokes =cvs-mode-remove-handled=. If ‘=cvs-auto-remove-handled=' is
+  set to non-=nil=, this will automatically be performed after every
+  commit.
+
+- C-k :: This command can be used for lines that
+  ‘=cvs-mode-remove-handled=' would not delete, but that you want to
+  delete (=cvs-mode-acknowledge=).
+
+--------------
+
+<<Ignoring-files>>
+
+Next: [[#Viewing-differences][Viewing differences]], Previous:
+[[#Removing-handled-entries][Removing handled entries]], Up:
+[[#Commands][Commands]]  
+[[[#SEC_Contents][Contents]]][[[#Function-and-Variable-Index][Index]]]
+
+*** 5.12 Ignoring files [[#Ignoring-files-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Ignoring-files-1
+:CLASS: section
+:END:
+- i :: Arrange so that CVS will ignore the selected files. The file
+  names are added to the =.cvsignore= file in the corresponding
+  directory. If the =.cvsignore= file doesn't exist, it will be created.
+
+  The =.cvsignore= file should normally be added to the repository, but
+  you could ignore it as well, if you like it better that way.
+
+  This runs =cvs-mode-ignore=.
+
+--------------
+
+<<Viewing-differences>>
+
+Next: [[#Invoking-Ediff][Running ediff]], Previous:
+[[#Ignoring-files][Ignoring files]], Up: [[#Commands][Commands]]  
+[[[#SEC_Contents][Contents]]][[[#Function-and-Variable-Index][Index]]]
+
+*** 5.13 Viewing differences [[#Viewing-differences-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Viewing-differences-1
+:CLASS: section
+:END:
+- =\\
+  d = :: Display a ‘=cvs diff=' between the selected files and the
+  version that they are based on (=cvs-mode-diff=).
+
+- d b :: If CVS finds a conflict while merging two versions of a file
+  (during a ‘=cvs update=', see
+  [[#Updating-the-buffer][Updating the =*cvs*= buffer]]) it will save
+  the original file in a file called =.#==file==.==version= where =file=
+  is the name of the file, and =version= is the revision number that
+  =file= was based on.
+
+  With the d b command you can run a ‘=diff=' on the files
+  =.#==file==.==version= and =file=.
+
+- d h :: Display a ‘=cvs diff=' between the selected files and the head
+  revision (the most recent version on the current branch) in the
+  repository (=cvs-mode-diff-head=).
+
+- d r :: Display a ‘=cvs diff=' between the base revision of the
+  selected files and the head revision in the repository. This displays
+  the changes anyone has committed to the repository since you last
+  executed a checkout, update or commit operation
+  (=cvs-mode-diff-repository=).
+
+- d v :: Display a ‘=cvs diff=' between the selected files and the head
+  revision of the vendor branch in the repository
+  (=cvs-mode-diff-vendor=).
+
+- d y :: Display a ‘=cvs diff=' between the selected files and
+  yesterday's head revision in the repository
+  (=cvs-mode-diff-yesterday=).
+
+By default, ‘=diff=' commands ignore the marks. This can be changed with
+=cvs-invert-ignore-marks=.
+
+--------------
+
+<<Invoking-Ediff>>
+
+Next: [[#Updating-files][Updating files]], Previous:
+[[#Viewing-differences][Viewing differences]], Up:
+[[#Commands][Commands]]  
+[[[#SEC_Contents][Contents]]][[[#Function-and-Variable-Index][Index]]]
+
+*** 5.14 Running ediff [[#Running-ediff][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Running-ediff
+:CLASS: section
+:END:
+- <<index-cvs_002didiff_002dimerge_002dhandlers-_0028variable_0029>>d e
+  [[#index-cvs_002didiff_002dimerge_002dhandlers-_0028variable_0029][¶]] :: This
+  uses =ediff= (or =emerge=, depending on ‘=cvs-idiff-imerge-handlers=')
+  to allow you to view diffs. If a prefix argument is given, PCL-CVS
+  will prompt for a revision against which the diff should be made, else
+  the default will be to use the BASE revision.
+
+- <<index-Merging-with-ediff-and-emerge>>d E
+  [[#index-Merging-with-ediff-and-emerge][¶]] :: This command use
+  =ediff= (or =emerge=, see above) to allow you to do an interactive
+  3-way merge.
+
+  *Please note:* when the file status is ‘=Conflict=', CVS has already
+  performed a merge. The resulting file is not used in any way if you
+  use this command. If you use the q command inside ‘=ediff=' (to
+  successfully terminate a merge) the file that CVS created will be
+  overwritten.
+
+--------------
+
+<<Updating-files>>
+
+Next: [[#Tagging-files][Tagging files]], Previous:
+[[#Invoking-Ediff][Running ediff]], Up: [[#Commands][Commands]]  
+[[[#SEC_Contents][Contents]]][[[#Function-and-Variable-Index][Index]]]
+
+*** 5.15 Updating files [[#Updating-files-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Updating-files-1
+:CLASS: section
+:END:
+- O :: Update all selected files with status ‘=Need-update=' by running
+  ‘=cvs update=' on them (=cvs-mode-update=).
+
+--------------
+
+<<Tagging-files>>
+
+Next: [[#Miscellaneous-commands][Miscellaneous commands]], Previous:
+[[#Updating-files][Updating files]], Up: [[#Commands][Commands]]  
+[[[#SEC_Contents][Contents]]][[[#Function-and-Variable-Index][Index]]]
+
+*** 5.16 Tagging files [[#Tagging-files-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Tagging-files-1
+:CLASS: section
+:END:
+- t :: Tag all selected files by running ‘=cvs tag=' on them
+  (=cvs-mode-tag=). It's usually preferable to tag a directory at a
+  time. Rather than selecting all files (which too often doesn't select
+  all files but only the few that are displayed), clear the selection
+  with M-DEL (=cvs-mode-unmark-all-files=), position the cursor on the
+  directory you want to tag and hit t.
+
+By default, ‘=tag=' commands ignore the marks. This can be changed with
+=cvs-invert-ignore-marks=. Also, by default ‘=tag=' can only be applied
+to directories, see =cvs-force-dir-tag= if you want to change this
+behavior.
+
+--------------
+
+<<Miscellaneous-commands>>
+
+Previous: [[#Tagging-files][Tagging files]], Up: [[#Commands][Commands]]
+  [[[#SEC_Contents][Contents]]][[[#Function-and-Variable-Index][Index]]]
+
+*** 5.17 Miscellaneous commands [[#Miscellaneous-commands-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Miscellaneous-commands-1
+:CLASS: section
+:END:
+- M-x cvs-mode-byte-compile-files :: Byte compile all selected files
+  that end in =.el=.
+
+- M-x cvs-mode-delete-lock :: This command deletes the lock files that
+  the =*cvs*= buffer informs you about. You should normally never have
+  to use this command, since CVS tries very carefully to always remove
+  the lock files itself.
+
+  You can only use this command when a message in the =*cvs*= buffer
+  tells you so. You should wait a while before using this command in
+  case someone else is running a =cvs= command.
+
+  Also note that this only works if the repository is local.
+
+- ?\\
+  h :: Show a summary of common command key bindings in the echo area
+  (=cvs-help=).
+
+- q :: Bury the PCL-CVS buffer (=cvs-bury-buffer=).
+
+- M-x cvs-mode-quit :: Quit PCL-CVS, killing the =*cvs*= buffer.
+
+--------------
+
+<<Log-Edit-Mode>>
+
+Next: [[#Log-View-Mode][Browsing a Log of Changes]], Previous:
+[[#Commands][Commands]], Up: [[#Top][PCL-CVS]]  
+[[[#SEC_Contents][Contents]]][[[#Function-and-Variable-Index][Index]]]
+
+** 6 Editing a Log Message [[#Editing-a-Log-Message][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Editing-a-Log-Message
+:CLASS: chapter
+:END:
+Buffers for entering/editing log messages for changes which are about to
+be committed are put into Log Edit mode.
+
+Sometimes the log buffer contains default text when you enter it,
+typically the last log message entered. If it does, mark and point are
+set around the entire contents of the buffer so that it is easy to kill
+the contents of the buffer with C-w.
+
+If you work by writing entries in the =ChangeLog= (see
+[[https://www.gnu.org/software/emacs/manual/html_mono/emacs.html#Change-Log][Change Log]]
+in The GNU Emacs Manual) and then commit the change under revision
+control, you can generate the Log Edit text from the ChangeLog using C-c
+C-a (log-edit-insert-changelog). This looks for entries for the file(s)
+concerned in the top entry in the ChangeLog and uses those paragraphs as
+the log text. This text is only inserted if the top entry was made under
+your user name on the current date. See
+[[https://www.gnu.org/software/emacs/manual/html_mono/emacs.html#Change-Logs-and-VC][Change Logs and VC]]
+in The GNU Emacs Manual, for the opposite way of working---generating
+ChangeLog entries from the revision control log.
+
+In the Log Edit buffer, C-c C-f (M-x log-edit-show-files) shows the list
+of files to be committed in case you need to check that.
+
+When you have finished editing the log message, type C-c C-c to exit the
+buffer and commit the change.
+
+--------------
+
+<<Log-View-Mode>>
+
+Next: [[#Customization][Customization]], Previous:
+[[#Log-Edit-Mode][Editing a Log Message]], Up: [[#Top][PCL-CVS]]  
+[[[#SEC_Contents][Contents]]][[[#Function-and-Variable-Index][Index]]]
+
+** 7 Browsing a Log of Changes [[#Browsing-a-Log-of-Changes][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Browsing-a-Log-of-Changes
+:CLASS: chapter
+:END:
+Log View mode provides a few useful commands for navigating revision
+control log output. It is used for the output buffers of both
+=cvs-mode-log= and =vc-print-log=.
+
+In this mode, n goes to the next message and p goes to the previous
+message and N and P go to the next and previous files, respectively, in
+multi-file output. With a numeric prefix argument, these commands move
+that many messages of files.
+
+--------------
+
+<<Customization>>
+
+Next: [[#Bugs][Bugs (known and unknown)]], Previous:
+[[#Log-View-Mode][Browsing a Log of Changes]], Up: [[#Top][PCL-CVS]]  
+[[[#SEC_Contents][Contents]]][[[#Function-and-Variable-Index][Index]]]
+
+** 8 Customization [[#Customization-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Customization-1
+:CLASS: chapter
+:END:
+If you have an idea about any customization that would be handy but
+isn't present in this list, please tell us! For info on how to reach us,
+see [[#Bugs][Bugs (known and unknown)]].
+
+- ‘=cvs-auto-remove-handled=' :: If this variable is set to any
+  non-=nil= value, ‘=cvs-mode-remove-handled=' will be called every time
+  you check in files, after the check-in is ready. See
+  [[#Removing-handled-entries][Removing handled entries]].
+
+- ‘=cvs-auto-remove-directories=' :: If this variable is set to any
+  non-=nil= value, directories that do not contain any files to be
+  checked in will not be listed in the =*cvs*= buffer.
+
+- ‘=cvs-auto-revert=' :: If this variable is set to any non-‘=nil='
+  value any buffers you have that visit a file that is committed will be
+  automatically reverted. This variable defaults to ‘=t='. See
+  [[#Committing-changes][Committing changes]].
+
+- ‘=cvs-update-prog-output-skip-regexp=' :: The ‘=-u=' flag in the
+  =modules= file can be used to run a command whenever a ‘=cvs update='
+  is performed (see =cvs(5)=). This regexp is used to search for the
+  last line in that output. It is normally set to ‘=$='. That setting is
+  only correct if the command outputs nothing. Note that PCL-CVS will
+  get very confused if the command outputs /anything/ to =stderr=.
+
+- ‘=cvs-cvsroot=' :: This variable can be set to override ‘=CVSROOT='.
+  It should be a string. If it is set, then every time a =cvs= command
+  is run, it will be called as ‘=cvs -d ==cvs-cvsroot==…='. This can be
+  useful if your site has several repositories.
+
+- ‘=log-edit-require-final-newline=' :: When you enter a log message by
+  typing into the =*cvs-commit-message*= buffer, PCL-CVS normally
+  automatically inserts a trailing newline, unless there already is one.
+  This behavior can be controlled via
+  ‘=cvs-commit-buffer-require-final-newline='. If it is ‘=t=' (the
+  default behavior), a newline will always be appended. If it is
+  ‘=nil=', newlines will never be appended. Any other value causes
+  PCL-CVS to ask the user whenever there is no trailing newline in the
+  commit message buffer.
+
+- <<index-cvs_002dmode_002dchangelog_002dcommit>>‘=log-edit-changelog-full-paragraphs='
+  [[#index-cvs_002dmode_002dchangelog_002dcommit][¶]] :: If this
+  variable is non-=nil=, include full =ChangeLog= paragraphs in the CVS
+  log created by ‘=cvs-mode-changelog-commit='. This may be set in the
+  local variables section of a =ChangeLog= file, to indicate the policy
+  for that =ChangeLog=.
+
+  A /=ChangeLog= paragraph/ is a bunch of log text containing no blank
+  lines; a paragraph usually describes a set of changes with a single
+  purpose, but perhaps spanning several functions in several files.
+  Changes in different paragraphs are unrelated.
+
+  You could argue that the CVS log entry for a file should contain the
+  full =ChangeLog= paragraph mentioning the change to the file, even
+  though it may mention other files, because that gives you the full
+  context you need to understand the change. This is the behavior you
+  get when this variable is set to =t=, the default.
+
+  On the other hand, you could argue that the CVS log entry for a change
+  should contain only the text for the changes which occurred in that
+  file, because the CVS log is per-file. This is the behavior you get
+  when this variable is set to =nil=.
+
+- <<index-cvs_002dmode_002dignore_002c-and-_002ecvsignore-sorting>>‘=cvs-sort-ignore-file='
+  [[#index-cvs_002dmode_002dignore_002c-and-_002ecvsignore-sorting][¶]] :: If
+  this variable is set to any non-‘=nil=' value, the =.cvsignore= file
+  will always be sorted whenever you use ‘=cvs-mode-ignore=' to add a
+  file to it. This option is on by default.
+
+- [[#Customizing-Faces][Customizing Faces]]
+
+--------------
+
+<<Customizing-Faces>>
+
+Up: [[#Customization][Customization]]  
+[[[#SEC_Contents][Contents]]][[[#Function-and-Variable-Index][Index]]]
+
+*** 8.1 Customizing Faces [[#Customizing-Faces-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Customizing-Faces-1
+:CLASS: section
+:END:
+PCL-CVS adds a few extra features, including menus, mouse bindings, and
+fontification of the =*cvs*= buffer. The faces defined for fontification
+are listed below:
+
+- ‘=cvs-header=' :: used to highlight directory changes.
+
+- ‘=cvs-filename=' :: Used to highlight file names.
+
+- ‘=cvs-unknown=' :: Used to highlight the status of files which are
+  ‘=Unknown='.
+
+- ‘=cvs-handled=' :: Used to highlight the status of files which are
+  handled and need no further action.
+
+- ‘=cvs-need-action=' :: Used to highlight the status of files which
+  still need action.
+
+- ‘=cvs-marked=' :: Used to highlight the marked file indicator (‘=*=').
+
+- ‘=cvs-msg=' :: Used to highlight CVS messages.
+
+--------------
+
+<<Bugs>>
+
+Next:
+[[#GNU-Free-Documentation-License][GNU Free Documentation License]],
+Previous: [[#Customization][Customization]], Up: [[#Top][PCL-CVS]]  
+[[[#SEC_Contents][Contents]]][[[#Function-and-Variable-Index][Index]]]
+
+** 9 Bugs (known and unknown) [[#Bugs-_0028known-and-unknown_0029][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Bugs-_0028known-and-unknown_0029
+:CLASS: chapter
+:END:
+If you find a bug or misfeature, don't hesitate to tell us! Use M-x
+report-emacs-bug to send us a report. You can follow the same process
+for feature requests. We prefer discussing one thing at a time. If you
+find several unrelated bugs, please report them separately.
+
+If you have problems using PCL-CVS or other questions, send them to the
+[[https://lists.gnu.org/mailman/listinfo/help-gnu-emacs][help-gnu-emacs mailing list]].
+This is a good place to get help, as is the
+[[https://lists.nongnu.org/mailman/listinfo/info-cvs][info-cvs list]].
+
+If you have ideas for improvements, or if you have written some
+extensions to this package, we would like to hear from you. We hope that
+you find this package useful!
+
+Below is a partial list of currently known problems with PCL-CVS.
+
+- Unexpected output from CVS :: Unexpected output from CVS may confuse
+  PCL-CVS. It will create warning messages in the =*cvs*= buffer
+  alerting you to any parse errors. If you get these messages, please
+  send a bug report to the email addresses listed above. Include the
+  contents of the =*cvs*= buffer, the output of the CVS process (which
+  should be found in the = *cvs-tmp*= buffer), and the versions of
+  Emacs, PCL-CVS and CVS you are using.
+
+--------------
+
+<<GNU-Free-Documentation-License>>
+
+Next: [[#Function-and-Variable-Index][Function and Variable Index]],
+Previous: [[#Bugs][Bugs (known and unknown)]], Up: [[#Top][PCL-CVS]]  
+[[[#SEC_Contents][Contents]]][[[#Function-and-Variable-Index][Index]]]
+
+** Appendix A GNU Free Documentation License [[#GNU-Free-Documentation-License-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: GNU-Free-Documentation-License-1
+:CLASS: appendix
+:END:
+
+#+begin_center
+Version 1.3, 3 November 2008
+#+end_center
+
+#+begin_src display-preformatted
+Copyright © 2000, 2001, 2002, 2007, 2008 Free Software Foundation, Inc.
+https://fsf.org/
+
+Everyone is permitted to copy and distribute verbatim copies
+of this license document, but changing it is not allowed.
+#+end_src
+
+0. [@0] PREAMBLE
+
+   The purpose of this License is to make a manual, textbook, or other
+   functional and useful document /free/ in the sense of freedom: to
+   assure everyone the effective freedom to copy and redistribute it,
+   with or without modifying it, either commercially or noncommercially.
+   Secondarily, this License preserves for the author and publisher a
+   way to get credit for their work, while not being considered
+   responsible for modifications made by others.
+
+   This License is a kind of “copyleft”, which means that derivative
+   works of the document must themselves be free in the same sense. It
+   complements the GNU General Public License, which is a copyleft
+   license designed for free software.
+
+   We have designed this License in order to use it for manuals for free
+   software, because free software needs free documentation: a free
+   program should come with manuals providing the same freedoms that the
+   software does. But this License is not limited to software manuals;
+   it can be used for any textual work, regardless of subject matter or
+   whether it is published as a printed book. We recommend this License
+   principally for works whose purpose is instruction or reference.
+
+1. APPLICABILITY AND DEFINITIONS
+
+   This License applies to any manual or other work, in any medium, that
+   contains a notice placed by the copyright holder saying it can be
+   distributed under the terms of this License. Such a notice grants a
+   world-wide, royalty-free license, unlimited in duration, to use that
+   work under the conditions stated herein. The “Document”, below,
+   refers to any such manual or work. Any member of the public is a
+   licensee, and is addressed as “you”. You accept the license if you
+   copy, modify or distribute the work in a way requiring permission
+   under copyright law.
+
+   A “Modified Version” of the Document means any work containing the
+   Document or a portion of it, either copied verbatim, or with
+   modifications and/or translated into another language.
+
+   A “Secondary Section” is a named appendix or a front-matter section
+   of the Document that deals exclusively with the relationship of the
+   publishers or authors of the Document to the Document's overall
+   subject (or to related matters) and contains nothing that could fall
+   directly within that overall subject. (Thus, if the Document is in
+   part a textbook of mathematics, a Secondary Section may not explain
+   any mathematics.) The relationship could be a matter of historical
+   connection with the subject or with related matters, or of legal,
+   commercial, philosophical, ethical or political position regarding
+   them.
+
+   The “Invariant Sections” are certain Secondary Sections whose titles
+   are designated, as being those of Invariant Sections, in the notice
+   that says that the Document is released under this License. If a
+   section does not fit the above definition of Secondary then it is not
+   allowed to be designated as Invariant. The Document may contain zero
+   Invariant Sections. If the Document does not identify any Invariant
+   Sections then there are none.
+
+   The “Cover Texts” are certain short passages of text that are listed,
+   as Front-Cover Texts or Back-Cover Texts, in the notice that says
+   that the Document is released under this License. A Front-Cover Text
+   may be at most 5 words, and a Back-Cover Text may be at most 25
+   words.
+
+   A “Transparent” copy of the Document means a machine-readable copy,
+   represented in a format whose specification is available to the
+   general public, that is suitable for revising the document
+   straightforwardly with generic text editors or (for images composed
+   of pixels) generic paint programs or (for drawings) some widely
+   available drawing editor, and that is suitable for input to text
+   formatters or for automatic translation to a variety of formats
+   suitable for input to text formatters. A copy made in an otherwise
+   Transparent file format whose markup, or absence of markup, has been
+   arranged to thwart or discourage subsequent modification by readers
+   is not Transparent. An image format is not Transparent if used for
+   any substantial amount of text. A copy that is not “Transparent” is
+   called “Opaque”.
+
+   Examples of suitable formats for Transparent copies include plain
+   ASCII without markup, Texinfo input format, LaTeX input format, SGML
+   or XML using a publicly available DTD, and standard-conforming simple
+   HTML, PostScript or PDF designed for human modification. Examples of
+   transparent image formats include PNG, XCF and JPG. Opaque formats
+   include proprietary formats that can be read and edited only by
+   proprietary word processors, SGML or XML for which the DTD and/or
+   processing tools are not generally available, and the
+   machine-generated HTML, PostScript or PDF produced by some word
+   processors for output purposes only.
+
+   The “Title Page” means, for a printed book, the title page itself,
+   plus such following pages as are needed to hold, legibly, the
+   material this License requires to appear in the title page. For works
+   in formats which do not have any title page as such, “Title Page”
+   means the text near the most prominent appearance of the work's
+   title, preceding the beginning of the body of the text.
+
+   The “publisher” means any person or entity that distributes copies of
+   the Document to the public.
+
+   A section “Entitled XYZ” means a named subunit of the Document whose
+   title either is precisely XYZ or contains XYZ in parentheses
+   following text that translates XYZ in another language. (Here XYZ
+   stands for a specific section name mentioned below, such as
+   “Acknowledgements”, “Dedications”, “Endorsements”, or “History”.) To
+   “Preserve the Title” of such a section when you modify the Document
+   means that it remains a section “Entitled XYZ” according to this
+   definition.
+
+   The Document may include Warranty Disclaimers next to the notice
+   which states that this License applies to the Document. These
+   Warranty Disclaimers are considered to be included by reference in
+   this License, but only as regards disclaiming warranties: any other
+   implication that these Warranty Disclaimers may have is void and has
+   no effect on the meaning of this License.
+
+2. VERBATIM COPYING
+
+   You may copy and distribute the Document in any medium, either
+   commercially or noncommercially, provided that this License, the
+   copyright notices, and the license notice saying this License applies
+   to the Document are reproduced in all copies, and that you add no
+   other conditions whatsoever to those of this License. You may not use
+   technical measures to obstruct or control the reading or further
+   copying of the copies you make or distribute. However, you may accept
+   compensation in exchange for copies. If you distribute a large enough
+   number of copies you must also follow the conditions in section 3.
+
+   You may also lend copies, under the same conditions stated above, and
+   you may publicly display copies.
+
+3. COPYING IN QUANTITY
+
+   If you publish printed copies (or copies in media that commonly have
+   printed covers) of the Document, numbering more than 100, and the
+   Document's license notice requires Cover Texts, you must enclose the
+   copies in covers that carry, clearly and legibly, all these Cover
+   Texts: Front-Cover Texts on the front cover, and Back-Cover Texts on
+   the back cover. Both covers must also clearly and legibly identify
+   you as the publisher of these copies. The front cover must present
+   the full title with all words of the title equally prominent and
+   visible. You may add other material on the covers in addition.
+   Copying with changes limited to the covers, as long as they preserve
+   the title of the Document and satisfy these conditions, can be
+   treated as verbatim copying in other respects.
+
+   If the required texts for either cover are too voluminous to fit
+   legibly, you should put the first ones listed (as many as fit
+   reasonably) on the actual cover, and continue the rest onto adjacent
+   pages.
+
+   If you publish or distribute Opaque copies of the Document numbering
+   more than 100, you must either include a machine-readable Transparent
+   copy along with each Opaque copy, or state in or with each Opaque
+   copy a computer-network location from which the general network-using
+   public has access to download using public-standard network protocols
+   a complete Transparent copy of the Document, free of added material.
+   If you use the latter option, you must take reasonably prudent steps,
+   when you begin distribution of Opaque copies in quantity, to ensure
+   that this Transparent copy will remain thus accessible at the stated
+   location until at least one year after the last time you distribute
+   an Opaque copy (directly or through your agents or retailers) of that
+   edition to the public.
+
+   It is requested, but not required, that you contact the authors of
+   the Document well before redistributing any large number of copies,
+   to give them a chance to provide you with an updated version of the
+   Document.
+
+4. MODIFICATIONS
+
+   You may copy and distribute a Modified Version of the Document under
+   the conditions of sections 2 and 3 above, provided that you release
+   the Modified Version under precisely this License, with the Modified
+   Version filling the role of the Document, thus licensing distribution
+   and modification of the Modified Version to whoever possesses a copy
+   of it. In addition, you must do these things in the Modified Version:
+
+   1. Use in the Title Page (and on the covers, if any) a title distinct
+      from that of the Document, and from those of previous versions
+      (which should, if there were any, be listed in the History section
+      of the Document). You may use the same title as a previous version
+      if the original publisher of that version gives permission.
+   2. List on the Title Page, as authors, one or more persons or
+      entities responsible for authorship of the modifications in the
+      Modified Version, together with at least five of the principal
+      authors of the Document (all of its principal authors, if it has
+      fewer than five), unless they release you from this requirement.
+   3. State on the Title page the name of the publisher of the Modified
+      Version, as the publisher.
+   4. Preserve all the copyright notices of the Document.
+   5. Add an appropriate copyright notice for your modifications
+      adjacent to the other copyright notices.
+   6. Include, immediately after the copyright notices, a license notice
+      giving the public permission to use the Modified Version under the
+      terms of this License, in the form shown in the Addendum below.
+   7. Preserve in that license notice the full lists of Invariant
+      Sections and required Cover Texts given in the Document's license
+      notice.
+   8. Include an unaltered copy of this License.
+   9. Preserve the section Entitled “History”, Preserve its Title, and
+      add to it an item stating at least the title, year, new authors,
+      and publisher of the Modified Version as given on the Title Page.
+      If there is no section Entitled “History” in the Document, create
+      one stating the title, year, authors, and publisher of the
+      Document as given on its Title Page, then add an item describing
+      the Modified Version as stated in the previous sentence.
+   10. Preserve the network location, if any, given in the Document for
+       public access to a Transparent copy of the Document, and likewise
+       the network locations given in the Document for previous versions
+       it was based on. These may be placed in the “History” section.
+       You may omit a network location for a work that was published at
+       least four years before the Document itself, or if the original
+       publisher of the version it refers to gives permission.
+   11. For any section Entitled “Acknowledgements” or “Dedications”,
+       Preserve the Title of the section, and preserve in the section
+       all the substance and tone of each of the contributor
+       acknowledgements and/or dedications given therein.
+   12. Preserve all the Invariant Sections of the Document, unaltered in
+       their text and in their titles. Section numbers or the equivalent
+       are not considered part of the section titles.
+   13. Delete any section Entitled “Endorsements”. Such a section may
+       not be included in the Modified Version.
+   14. Do not retitle any existing section to be Entitled “Endorsements”
+       or to conflict in title with any Invariant Section.
+   15. Preserve any Warranty Disclaimers.
+
+   If the Modified Version includes new front-matter sections or
+   appendices that qualify as Secondary Sections and contain no material
+   copied from the Document, you may at your option designate some or
+   all of these sections as invariant. To do this, add their titles to
+   the list of Invariant Sections in the Modified Version's license
+   notice. These titles must be distinct from any other section titles.
+
+   You may add a section Entitled “Endorsements”, provided it contains
+   nothing but endorsements of your Modified Version by various
+   parties---for example, statements of peer review or that the text has
+   been approved by an organization as the authoritative definition of a
+   standard.
+
+   You may add a passage of up to five words as a Front-Cover Text, and
+   a passage of up to 25 words as a Back-Cover Text, to the end of the
+   list of Cover Texts in the Modified Version. Only one passage of
+   Front-Cover Text and one of Back-Cover Text may be added by (or
+   through arrangements made by) any one entity. If the Document already
+   includes a cover text for the same cover, previously added by you or
+   by arrangement made by the same entity you are acting on behalf of,
+   you may not add another; but you may replace the old one, on explicit
+   permission from the previous publisher that added the old one.
+
+   The author(s) and publisher(s) of the Document do not by this License
+   give permission to use their names for publicity for or to assert or
+   imply endorsement of any Modified Version.
+
+5. COMBINING DOCUMENTS
+
+   You may combine the Document with other documents released under this
+   License, under the terms defined in section 4 above for modified
+   versions, provided that you include in the combination all of the
+   Invariant Sections of all of the original documents, unmodified, and
+   list them all as Invariant Sections of your combined work in its
+   license notice, and that you preserve all their Warranty Disclaimers.
+
+   The combined work need only contain one copy of this License, and
+   multiple identical Invariant Sections may be replaced with a single
+   copy. If there are multiple Invariant Sections with the same name but
+   different contents, make the title of each such section unique by
+   adding at the end of it, in parentheses, the name of the original
+   author or publisher of that section if known, or else a unique
+   number. Make the same adjustment to the section titles in the list of
+   Invariant Sections in the license notice of the combined work.
+
+   In the combination, you must combine any sections Entitled “History”
+   in the various original documents, forming one section Entitled
+   “History”; likewise combine any sections Entitled “Acknowledgements”,
+   and any sections Entitled “Dedications”. You must delete all sections
+   Entitled “Endorsements.”
+
+6. COLLECTIONS OF DOCUMENTS
+
+   You may make a collection consisting of the Document and other
+   documents released under this License, and replace the individual
+   copies of this License in the various documents with a single copy
+   that is included in the collection, provided that you follow the
+   rules of this License for verbatim copying of each of the documents
+   in all other respects.
+
+   You may extract a single document from such a collection, and
+   distribute it individually under this License, provided you insert a
+   copy of this License into the extracted document, and follow this
+   License in all other respects regarding verbatim copying of that
+   document.
+
+7. AGGREGATION WITH INDEPENDENT WORKS
+
+   A compilation of the Document or its derivatives with other separate
+   and independent documents or works, in or on a volume of a storage or
+   distribution medium, is called an “aggregate” if the copyright
+   resulting from the compilation is not used to limit the legal rights
+   of the compilation's users beyond what the individual works permit.
+   When the Document is included in an aggregate, this License does not
+   apply to the other works in the aggregate which are not themselves
+   derivative works of the Document.
+
+   If the Cover Text requirement of section 3 is applicable to these
+   copies of the Document, then if the Document is less than one half of
+   the entire aggregate, the Document's Cover Texts may be placed on
+   covers that bracket the Document within the aggregate, or the
+   electronic equivalent of covers if the Document is in electronic
+   form. Otherwise they must appear on printed covers that bracket the
+   whole aggregate.
+
+8. TRANSLATION
+
+   Translation is considered a kind of modification, so you may
+   distribute translations of the Document under the terms of section 4.
+   Replacing Invariant Sections with translations requires special
+   permission from their copyright holders, but you may include
+   translations of some or all Invariant Sections in addition to the
+   original versions of these Invariant Sections. You may include a
+   translation of this License, and all the license notices in the
+   Document, and any Warranty Disclaimers, provided that you also
+   include the original English version of this License and the original
+   versions of those notices and disclaimers. In case of a disagreement
+   between the translation and the original version of this License or a
+   notice or disclaimer, the original version will prevail.
+
+   If a section in the Document is Entitled “Acknowledgements”,
+   “Dedications”, or “History”, the requirement (section 4) to Preserve
+   its Title (section 1) will typically require changing the actual
+   title.
+
+9. TERMINATION
+
+   You may not copy, modify, sublicense, or distribute the Document
+   except as expressly provided under this License. Any attempt
+   otherwise to copy, modify, sublicense, or distribute it is void, and
+   will automatically terminate your rights under this License.
+
+   However, if you cease all violation of this License, then your
+   license from a particular copyright holder is reinstated (a)
+   provisionally, unless and until the copyright holder explicitly and
+   finally terminates your license, and (b) permanently, if the
+   copyright holder fails to notify you of the violation by some
+   reasonable means prior to 60 days after the cessation.
+
+   Moreover, your license from a particular copyright holder is
+   reinstated permanently if the copyright holder notifies you of the
+   violation by some reasonable means, this is the first time you have
+   received notice of violation of this License (for any work) from that
+   copyright holder, and you cure the violation prior to 30 days after
+   your receipt of the notice.
+
+   Termination of your rights under this section does not terminate the
+   licenses of parties who have received copies or rights from you under
+   this License. If your rights have been terminated and not permanently
+   reinstated, receipt of a copy of some or all of the same material
+   does not give you any rights to use it.
+
+10. FUTURE REVISIONS OF THIS LICENSE
+
+    The Free Software Foundation may publish new, revised versions of
+    the GNU Free Documentation License from time to time. Such new
+    versions will be similar in spirit to the present version, but may
+    differ in detail to address new problems or concerns. See
+    [[https://www.gnu.org/licenses/]].
+
+    Each version of the License is given a distinguishing version
+    number. If the Document specifies that a particular numbered version
+    of this License “or any later version” applies to it, you have the
+    option of following the terms and conditions either of that
+    specified version or of any later version that has been published
+    (not as a draft) by the Free Software Foundation. If the Document
+    does not specify a version number of this License, you may choose
+    any version ever published (not as a draft) by the Free Software
+    Foundation. If the Document specifies that a proxy can decide which
+    future versions of this License can be used, that proxy's public
+    statement of acceptance of a version permanently authorizes you to
+    choose that version for the Document.
+
+11. RELICENSING
+
+    “Massive Multiauthor Collaboration Site” (or “MMC Site”) means any
+    World Wide Web server that publishes copyrightable works and also
+    provides prominent facilities for anybody to edit those works. A
+    public wiki that anybody can edit is an example of such a server. A
+    “Massive Multiauthor Collaboration” (or “MMC”) contained in the site
+    means any set of copyrightable works thus published on the MMC site.
+
+    “CC-BY-SA” means the Creative Commons Attribution-Share Alike 3.0
+    license published by Creative Commons Corporation, a not-for-profit
+    corporation with a principal place of business in San Francisco,
+    California, as well as future copyleft versions of that license
+    published by that same organization.
+
+    “Incorporate” means to publish or republish a Document, in whole or
+    in part, as part of another Document.
+
+    An MMC is “eligible for relicensing” if it is licensed under this
+    License, and if all works that were first published under this
+    License somewhere other than this MMC, and subsequently incorporated
+    in whole or in part into the MMC, (1) had no cover texts or
+    invariant sections, and (2) were thus incorporated prior to November
+    1, 2008.
+
+    The operator of an MMC Site may republish an MMC contained in the
+    site under CC-BY-SA on the same site at any time before August 1,
+    2009, provided the MMC is eligible for relicensing.
+
+*** ADDENDUM: How to use this License for your documents [[#ADDENDUM_003a-How-to-use-this-License-for-your-documents][¶]]
+:PROPERTIES:
+:CUSTOM_ID: ADDENDUM_003a-How-to-use-this-License-for-your-documents
+:CLASS: heading
+:END:
+To use this License in a document you have written, include a copy of
+the License in the document and put the following copyright and license
+notices just after the title page:
+
+#+begin_src example-preformatted
+  Copyright (C)  year  your name.
+  Permission is granted to copy, distribute and/or modify this document
+  under the terms of the GNU Free Documentation License, Version 1.3
+  or any later version published by the Free Software Foundation;
+  with no Invariant Sections, no Front-Cover Texts, and no Back-Cover
+  Texts.  A copy of the license is included in the section entitled ``GNU
+  Free Documentation License''.
+#+end_src
+
+If you have Invariant Sections, Front-Cover Texts and Back-Cover Texts,
+replace the “with...Texts.” line with this:
+
+#+begin_src example-preformatted
+    with the Invariant Sections being list their titles, with
+    the Front-Cover Texts being list, and with the Back-Cover Texts
+    being list.
+#+end_src
+
+If you have Invariant Sections without Cover Texts, or some other
+combination of the three, merge those two alternatives to suit the
+situation.
+
+If your document contains nontrivial examples of program code, we
+recommend releasing these examples in parallel under your choice of free
+software license, such as the GNU General Public License, to permit
+their use in free software.
+
+--------------
+
+<<Function-and-Variable-Index>>
+
+Next: [[#Concept-Index][Concept Index]], Previous:
+[[#GNU-Free-Documentation-License][GNU Free Documentation License]], Up:
+[[#Top][PCL-CVS]]  
+[[[#SEC_Contents][Contents]]][[[#Function-and-Variable-Index][Index]]]
+
+** Function and Variable Index [[#Function-and-Variable-Index-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Function-and-Variable-Index-1
+:CLASS: unnumbered
+:END:
+This is an index of all the functions and variables documented in this
+manual.
+
+| Jump to:   | [[#Function-and-Variable-Index_fn_letter-C][*C*]]   [[#Function-and-Variable-Index_fn_letter-L][*L*]]   [[#Function-and-Variable-Index_fn_letter-V][*V*]]   |
+
+|                | Index Entry                                                                                                                             | Section                                                   |
+| -------------- |                                                                                                                                         |                                                           |
+| C              |                                                                                                                                         |                                                           |
+|                | [[#index-cvs_002dallow_002ddir_002dcommit][=cvs-allow-dir-commit=]]                                                                     | [[#Selected-files][Selected files]]                       |
+|                | [[#index-cvs_002dauto_002dremove_002ddirectories-_0028variable_0029][=cvs-auto-remove-directories== (variable)=]]                       | [[#Customization][Customization]]                         |
+|                | [[#index-cvs_002dauto_002dremove_002dhandled-_0028variable_0029][=cvs-auto-remove-handled== (variable)=]]                               | [[#Customization][Customization]]                         |
+|                | [[#index-cvs_002dauto_002drevert-_0028variable_0029][=cvs-auto-revert== (variable)=]]                                                   | [[#Committing-changes][Committing changes]]               |
+|                | [[#index-cvs_002dauto_002drevert-_0028variable_0029-1][=cvs-auto-revert== (variable)=]]                                                 | [[#Customization][Customization]]                         |
+|                | [[#index-cvs_002dbury_002dbuffer][=cvs-bury-buffer=]]                                                                                   | [[#Miscellaneous-commands][Miscellaneous commands]]       |
+|                | [[#index-cvs_002dcheckout][=cvs-checkout=]]                                                                                             | [[#Entering-PCL_002dCVS][Entering PCL-CVS]]               |
+|                | [[#index-cvs_002dcvsroot-_0028variable_0029][=cvs-cvsroot== (variable)=]]                                                               | [[#Customization][Customization]]                         |
+|                | [[#index-cvs_002ddired_002daction][=cvs-dired-action=]]                                                                                 | [[#Entering-PCL_002dCVS][Entering PCL-CVS]]               |
+|                | [[#index-cvs_002ddired_002duse_002dhook][=cvs-dired-use-hook=]]                                                                         | [[#Entering-PCL_002dCVS][Entering PCL-CVS]]               |
+|                | [[#index-cvs_002dexamine][=cvs-examine=]]                                                                                               | [[#Entering-PCL_002dCVS][Entering PCL-CVS]]               |
+|                | [[#index-cvs_002dexamine-1][=cvs-examine=]]                                                                                             | [[#Updating-the-buffer][Updating the buffer]]             |
+|                | [[#index-cvs_002dfilename-_0028face_0029][=cvs-filename ==(face)=]]                                                                     | [[#Customizing-Faces][Customizing Faces]]                 |
+|                | [[#index-cvs_002dforce_002ddir_002dtag-_0028variable_0029][=cvs-force-dir-tag== (variable)=]]                                           | [[#Tagging-files][Tagging files]]                         |
+|                | [[#index-cvs_002dhandled-_0028face_0029][=cvs-handled ==(face)=]]                                                                       | [[#Customizing-Faces][Customizing Faces]]                 |
+|                | [[#index-cvs_002dheader-_0028face_0029][=cvs-header ==(face)=]]                                                                         | [[#Customizing-Faces][Customizing Faces]]                 |
+|                | [[#index-cvs_002dhelp][=cvs-help=]]                                                                                                     | [[#Miscellaneous-commands][Miscellaneous commands]]       |
+|                | [[#index-cvs_002didiff_002dimerge_002dhandlers-_0028variable_0029][=cvs-idiff-imerge-handlers== (variable)=]]                           | [[#Invoking-Ediff][Invoking Ediff]]                       |
+|                | [[#index-cvs_002dinvert_002dignore_002dmarks-_0028variable_0029][=cvs-invert-ignore-marks== (variable)=]]                               | [[#Viewing-differences][Viewing differences]]             |
+|                | [[#index-cvs_002dinvert_002dignore_002dmarks-_0028variable_0029-1][=cvs-invert-ignore-marks== (variable)=]]                             | [[#Tagging-files][Tagging files]]                         |
+|                | [[#index-cvs_002dmarked-_0028face_0029][=cvs-marked ==(face)=]]                                                                         | [[#Customizing-Faces][Customizing Faces]]                 |
+|                | [[#index-cvs_002dmode_002dacknowledge][=cvs-mode-acknowledge=]]                                                                         | [[#Removing-handled-entries][Removing handled entries]]   |
+|                | [[#index-cvs_002dmode_002dadd][=cvs-mode-add=]]                                                                                         | [[#Adding-and-removing-files][Adding and removing files]] |
+|                | [[#index-cvs_002dmode_002dadd_002dchange_002dlog_002dentry_002dother_002dwindow][=cvs-mode-add-change-log-entry-other-window=]]         | [[#Editing-files][Editing files]]                         |
+|                | [[#index-cvs_002dmode_002dbyte_002dcompile_002dfiles][=cvs-mode-byte-compile-files=]]                                                   | [[#Miscellaneous-commands][Miscellaneous commands]]       |
+|                | [[#index-cvs_002dmode_002dchangelog_002dcommit][=cvs-mode-changelog-commit=]]                                                           | [[#Customization][Customization]]                         |
+|                | [[#index-cvs_002dmode_002dcommit][=cvs-mode-commit=]]                                                                                   | [[#Committing-changes][Committing changes]]               |
+|                | [[#index-cvs_002dmode_002dcommit_002dsetup][=cvs-mode-commit-setup=]]                                                                   | [[#Committing-changes][Committing changes]]               |
+|                | [[#index-cvs_002dmode_002ddelete_002dlock][=cvs-mode-delete-lock=]]                                                                     | [[#Miscellaneous-commands][Miscellaneous commands]]       |
+|                | [[#index-cvs_002dmode_002ddiff][=cvs-mode-diff=]]                                                                                       | [[#Viewing-differences][Viewing differences]]             |
+|                | [[#index-cvs_002dmode_002ddiff_002dbackup][=cvs-mode-diff-backup=]]                                                                     | [[#Viewing-differences][Viewing differences]]             |
+|                | [[#index-cvs_002dmode_002ddiff_002dhead][=cvs-mode-diff-head=]]                                                                         | [[#Viewing-differences][Viewing differences]]             |
+|                | [[#index-cvs_002dmode_002ddiff_002drepository][=cvs-mode-diff-repository=]]                                                             | [[#Viewing-differences][Viewing differences]]             |
+|                | [[#index-cvs_002dmode_002ddiff_002dvendor][=cvs-mode-diff-vendor=]]                                                                     | [[#Viewing-differences][Viewing differences]]             |
+|                | [[#index-cvs_002dmode_002ddiff_002dyesterday][=cvs-mode-diff-yesterday=]]                                                               | [[#Viewing-differences][Viewing differences]]             |
+|                | [[#index-cvs_002dmode_002dexamine][=cvs-mode-examine=]]                                                                                 | [[#Updating-the-buffer][Updating the buffer]]             |
+|                | [[#index-cvs_002dmode_002dfind_002dfile][=cvs-mode-find-file=]]                                                                         | [[#Editing-files][Editing files]]                         |
+|                | [[#index-cvs_002dmode_002dfind_002dfile_002dother_002dwindow][=cvs-mode-find-file-other-window=]]                                       | [[#Editing-files][Editing files]]                         |
+|                | [[#index-cvs_002dmode_002dforce_002dcommand][=cvs-mode-force-command=]]                                                                 | [[#Selected-files][Selected files]]                       |
+|                | [[#index-cvs_002dmode_002didiff][=cvs-mode-idiff=]]                                                                                     | [[#Invoking-Ediff][Invoking Ediff]]                       |
+|                | [[#index-cvs_002dmode_002dignore][=cvs-mode-ignore=]]                                                                                   | [[#Removing-handled-entries][Removing handled entries]]   |
+|                | [[#index-cvs_002dmode_002dignore-1][=cvs-mode-ignore=]]                                                                                 | [[#Ignoring-files][Ignoring files]]                       |
+|                | [[#index-cvs_002dmode_002dignore_002c-and-_002ecvsignore-sorting][=cvs-mode-ignore==, and ==.cvsignore== sorting=]]                     | [[#Customization][Customization]]                         |
+|                | [[#index-cvs_002dmode_002dimerge][=cvs-mode-imerge=]]                                                                                   | [[#Invoking-Ediff][Invoking Ediff]]                       |
+|                | [[#index-cvs_002dmode_002dlog][=cvs-mode-log=]]                                                                                         | [[#Getting-info-about-files][Getting info about files]]   |
+|                | [[#index-cvs_002dmode_002dlog-1][=cvs-mode-log=]]                                                                                       | [[#Log-View-Mode][Log View Mode]]                         |
+|                | [[#index-cvs_002dmode_002dmark][=cvs-mode-mark=]]                                                                                       | [[#Marking-files][Marking files]]                         |
+|                | [[#index-cvs_002dmode_002dmark_002dall_002dfiles][=cvs-mode-mark-all-files=]]                                                           | [[#Marking-files][Marking files]]                         |
+|                | [[#index-cvs_002dmode_002dmark_002dmatching_002dfiles][=cvs-mode-mark-matching-files=]]                                                 | [[#Marking-files][Marking files]]                         |
+|                | [[#index-cvs_002dmode_002dmark_002don_002dstate][=cvs-mode-mark-on-state=]]                                                             | [[#Marking-files][Marking files]]                         |
+|                | [[#index-cvs_002dmode_002dnext_002dline][=cvs-mode-next-line=]]                                                                         | [[#Movement-commands][Movement commands]]                 |
+|                | [[#index-cvs_002dmode_002dprevious_002dline][=cvs-mode-previous-line=]]                                                                 | [[#Movement-commands][Movement commands]]                 |
+|                | [[#index-cvs_002dmode_002dquit][=cvs-mode-quit=]]                                                                                       | [[#Miscellaneous-commands][Miscellaneous commands]]       |
+|                | [[#index-cvs_002dmode_002dremove_002dfile][=cvs-mode-remove-file=]]                                                                     | [[#Adding-and-removing-files][Adding and removing files]] |
+|                | [[#index-cvs_002dmode_002dremove_002dhandled][=cvs-mode-remove-handled=]]                                                               | [[#Removing-handled-entries][Removing handled entries]]   |
+|                | [[#index-cvs_002dmode_002dremove_002dhandled-_0028variable_0029][=cvs-mode-remove-handled== (variable)=]]                               | [[#Removing-handled-entries][Removing handled entries]]   |
+|                | [[#index-cvs_002dmode_002dstatus][=cvs-mode-status=]]                                                                                   | [[#Updating-the-buffer][Updating the buffer]]             |
+|                | [[#index-cvs_002dmode_002dstatus-1][=cvs-mode-status=]]                                                                                 | [[#Getting-info-about-files][Getting info about files]]   |
+|                | [[#index-cvs_002dmode_002dtag][=cvs-mode-tag=]]                                                                                         | [[#Tagging-files][Tagging files]]                         |
+|                | [[#index-cvs_002dmode_002dtoggle_002dmarks][=cvs-mode-toggle-marks=]]                                                                   | [[#Marking-files][Marking files]]                         |
+|                | [[#index-cvs_002dmode_002dundo_002dlocal_002dchanges][=cvs-mode-undo-local-changes=]]                                                   | [[#Undoing-changes][Undoing changes]]                     |
+|                | [[#index-cvs_002dmode_002dunmark][=cvs-mode-unmark=]]                                                                                   | [[#Marking-files][Marking files]]                         |
+|                | [[#index-cvs_002dmode_002dunmark_002dall_002dfiles][=cvs-mode-unmark-all-files=]]                                                       | [[#Marking-files][Marking files]]                         |
+|                | [[#index-cvs_002dmode_002dunmark_002dup][=cvs-mode-unmark-up=]]                                                                         | [[#Marking-files][Marking files]]                         |
+|                | [[#index-cvs_002dmode_002duntag][=cvs-mode-untag=]]                                                                                     | [[#Tagging-files][Tagging files]]                         |
+|                | [[#index-cvs_002dmode_002dupdate][=cvs-mode-update=]]                                                                                   | [[#Updating-the-buffer][Updating the buffer]]             |
+|                | [[#index-cvs_002dmode_002dupdate-1][=cvs-mode-update=]]                                                                                 | [[#Updating-files][Updating files]]                       |
+|                | [[#index-cvs_002dmsg-_0028face_0029][=cvs-msg ==(face)=]]                                                                               | [[#Customizing-Faces][Customizing Faces]]                 |
+|                | [[#index-cvs_002dneed_002daction-_0028face_0029][=cvs-need-action ==(face)=]]                                                           | [[#Customizing-Faces][Customizing Faces]]                 |
+|                | [[#index-cvs_002dquickdir][=cvs-quickdir=]]                                                                                             | [[#Entering-PCL_002dCVS][Entering PCL-CVS]]               |
+|                | [[#index-cvs_002drtag][=cvs-rtag=]]                                                                                                     | [[#Tagging-files][Tagging files]]                         |
+|                | [[#index-cvs_002dsort_002dignore_002dfile-_0028variable_0029][=cvs-sort-ignore-file== (variable)=]]                                     | [[#Customization][Customization]]                         |
+|                | [[#index-cvs_002dstatus][=cvs-status=]]                                                                                                 | [[#Entering-PCL_002dCVS][Entering PCL-CVS]]               |
+|                | [[#index-cvs_002dstatus-1][=cvs-status=]]                                                                                               | [[#Updating-the-buffer][Updating the buffer]]             |
+|                | [[#index-cvs_002dstatus_002dmode][=cvs-status-mode=]]                                                                                   | [[#Updating-the-buffer][Updating the buffer]]             |
+|                | [[#index-cvs_002dunknown-_0028face_0029][=cvs-unknown ==(face)=]]                                                                       | [[#Customizing-Faces][Customizing Faces]]                 |
+|                | [[#index-cvs_002dupdate][=cvs-update=]]                                                                                                 | [[#Entering-PCL_002dCVS][Entering PCL-CVS]]               |
+|                | [[#index-cvs_002dupdate-1][=cvs-update=]]                                                                                               | [[#Updating-the-buffer][Updating the buffer]]             |
+|                | [[#index-cvs_002dupdate_002dprog_002doutput_002dskip_002dregexp-_0028variable_0029][=cvs-update-prog-output-skip-regexp== (variable)=]] | [[#Customization][Customization]]                         |
+| -------------- |                                                                                                                                         |                                                           |
+| L              |                                                                                                                                         |                                                           |
+|                | [[#index-log_002dedit_002dchangelog_002dfull_002dparagraphs-_0028variable_0029][=log-edit-changelog-full-paragraphs== (variable)=]]     | [[#Customization][Customization]]                         |
+|                | [[#index-log_002dedit_002dconfirm-_0028variable_0029][=log-edit-confirm== (variable)=]]                                                 | [[#Committing-changes][Committing changes]]               |
+|                | [[#index-log_002dedit_002dinsert_002dchangelog][=log-edit-insert-changelog=]]                                                           | [[#Log-Edit-Mode][Log Edit Mode]]                         |
+|                | [[#index-log_002dedit_002drequire_002dfinal_002dnewline-_0028variable_0029][=log-edit-require-final-newline== (variable)=]]             | [[#Customization][Customization]]                         |
+| -------------- |                                                                                                                                         |                                                           |
+| V              |                                                                                                                                         |                                                           |
+|                | [[#index-vc_002dprint_002dlog][=vc-print-log=]]                                                                                         | [[#Log-View-Mode][Log View Mode]]                         |
+| -------------- |                                                                                                                                         |                                                           |
+
+| Jump to:   | [[#Function-and-Variable-Index_fn_letter-C][*C*]]   [[#Function-and-Variable-Index_fn_letter-L][*L*]]   [[#Function-and-Variable-Index_fn_letter-V][*V*]]   |
+
+--------------
+
+<<Concept-Index>>
+
+Next: [[#Key-Index][Key Index]], Previous:
+[[#Function-and-Variable-Index][Function and Variable Index]], Up:
+[[#Top][PCL-CVS]]  
+[[[#SEC_Contents][Contents]]][[[#Function-and-Variable-Index][Index]]]
+
+** Concept Index [[#Concept-Index-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Concept-Index-1
+:CLASS: unnumbered
+:END:
+This is an index of concepts discussed in this manual.
+
+| Jump to:   | [[#Concept-Index_cp_symbol-1][***]]   [[#Concept-Index_cp_symbol-2][*-*]]   [[#Concept-Index_cp_symbol-3][*.*]]  \\                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+|            | [[#Concept-Index_cp_letter-A][*A*]]   [[#Concept-Index_cp_letter-B][*B*]]   [[#Concept-Index_cp_letter-C][*C*]]   [[#Concept-Index_cp_letter-D][*D*]]   [[#Concept-Index_cp_letter-E][*E*]]   [[#Concept-Index_cp_letter-F][*F*]]   [[#Concept-Index_cp_letter-G][*G*]]   [[#Concept-Index_cp_letter-H][*H*]]   [[#Concept-Index_cp_letter-I][*I*]]   [[#Concept-Index_cp_letter-K][*K*]]   [[#Concept-Index_cp_letter-L][*L*]]   [[#Concept-Index_cp_letter-M][*M*]]   [[#Concept-Index_cp_letter-O][*O*]]   [[#Concept-Index_cp_letter-P][*P*]]   [[#Concept-Index_cp_letter-Q][*Q*]]   [[#Concept-Index_cp_letter-R][*R*]]   [[#Concept-Index_cp_letter-S][*S*]]   [[#Concept-Index_cp_letter-T][*T*]]   [[#Concept-Index_cp_letter-U][*U*]]   [[#Concept-Index_cp_letter-V][*V*]]   |
+
+|                | Index Entry                                                                                                       | Section                                                   |
+| -------------- |                                                                                                                   |                                                           |
+| ​*              |                                                                                                                   |                                                           |
+|                | [[#index-_002acvs_002a-buffer-contents][=*cvs*= buffer contents]]                                                 | [[#Buffer-contents][Buffer contents]]                     |
+| -------------- |                                                                                                                   |                                                           |
+| -              |                                                                                                                   |                                                           |
+|                | [[#index-_002du-option-in-modules-file][‘=-u=' option in modules file]]                                           | [[#Customization][Customization]]                         |
+| -------------- |                                                                                                                   |                                                           |
+| .              |                                                                                                                   |                                                           |
+|                | [[#index-_002ecvsignore-file_002c-sorting][=.cvsignore= file, sorting]]                                           | [[#Customization][Customization]]                         |
+| -------------- |                                                                                                                   |                                                           |
+| A              |                                                                                                                   |                                                           |
+|                | [[#index-About-PCL_002dCVS][About PCL-CVS]]                                                                       | [[#About-PCL_002dCVS][About PCL-CVS]]                     |
+|                | [[#index-Active-files][Active files]]                                                                             | [[#Selected-files][Selected files]]                       |
+|                | [[#index-Adding-files][Adding files]]                                                                             | [[#Adding-and-removing-files][Adding and removing files]] |
+|                | [[#index-Applicable][Applicable]]                                                                                 | [[#Selected-files][Selected files]]                       |
+|                | [[#index-Author_002c-how-to-reach][Author, how to reach]]                                                         | [[#Bugs][Bugs]]                                           |
+|                | [[#index-Authors][Authors]]                                                                                       | [[#Contributors][Contributors]]                           |
+|                | [[#index-Automatically-inserting-newline][Automatically inserting newline]]                                       | [[#Customization][Customization]]                         |
+|                | [[#index-Automatically-remove-handled-files][Automatically remove handled files]]                                 | [[#Customization][Customization]]                         |
+|                | [[#index-Automatically-sorting-_002ecvsignore][Automatically sorting =.cvsignore=]]                               | [[#Customization][Customization]]                         |
+| -------------- |                                                                                                                   |                                                           |
+| B              |                                                                                                                   |                                                           |
+|                | [[#index-Buffer-contents][Buffer contents]]                                                                       | [[#Buffer-contents][Buffer contents]]                     |
+|                | [[#index-Bugs_002c-how-to-report-them][Bugs, how to report them]]                                                 | [[#Bugs][Bugs]]                                           |
+|                | [[#index-Bugs_002c-known][Bugs, known]]                                                                           | [[#Bugs][Bugs]]                                           |
+|                | [[#index-Byte-compilation][Byte compilation]]                                                                     | [[#Miscellaneous-commands][Miscellaneous commands]]       |
+| -------------- |                                                                                                                   |                                                           |
+| C              |                                                                                                                   |                                                           |
+|                | [[#index-ChangeLog-paragraphs][=ChangeLog= paragraphs]]                                                           | [[#Customization][Customization]]                         |
+|                | [[#index-Command_002dline-options-to-CVS][Command-line options to CVS]]                                           | [[#Setting-flags][Setting flags]]                         |
+|                | [[#index-Commit-buffer][Commit buffer]]                                                                           | [[#Committing-changes][Committing changes]]               |
+|                | [[#index-Commit-message_002c-inserting-newline][Commit message, inserting newline]]                               | [[#Customization][Customization]]                         |
+|                | [[#index-Committing-changes][Committing changes]]                                                                 | [[#Committing-changes][Committing changes]]               |
+|                | [[#index-Conflicts_002c-how-to-resolve-them][Conflicts, how to resolve them]]                                     | [[#Viewing-differences][Viewing differences]]             |
+|                | [[#index-Conflicts_002c-how-to-resolve-them-1][Conflicts, how to resolve them]]                                   | [[#Invoking-Ediff][Invoking Ediff]]                       |
+|                | [[#index-Context-diff_002c-how-to-get][Context diff, how to get]]                                                 | [[#Customization][Customization]]                         |
+|                | [[#index-Contributors][Contributors]]                                                                             | [[#Contributors][Contributors]]                           |
+|                | [[#index-Creating-the-_002acvs_002a-buffer][Creating the *cvs* buffer]]                                           | [[#Entering-PCL_002dCVS][Entering PCL-CVS]]               |
+|                | [[#index-Customization][Customization]]                                                                           | [[#Customization][Customization]]                         |
+|                | [[#index-CVSROOT_002c-overriding][‘=CVSROOT=', overriding]]                                                       | [[#Customization][Customization]]                         |
+| -------------- |                                                                                                                   |                                                           |
+| D              |                                                                                                                   |                                                           |
+|                | [[#index-Deleting-files][Deleting files]]                                                                         | [[#Adding-and-removing-files][Adding and removing files]] |
+|                | [[#index-Diff][Diff]]                                                                                             | [[#Viewing-differences][Viewing differences]]             |
+|                | [[#index-Dired][Dired]]                                                                                           | [[#Editing-files][Editing files]]                         |
+| -------------- |                                                                                                                   |                                                           |
+| E              |                                                                                                                   |                                                           |
+|                | [[#index-Ediff][Ediff]]                                                                                           | [[#Invoking-Ediff][Invoking Ediff]]                       |
+|                | [[#index-Edit-buffer][Edit buffer]]                                                                               | [[#Committing-changes][Committing changes]]               |
+|                | [[#index-Editing-files][Editing files]]                                                                           | [[#Editing-files][Editing files]]                         |
+|                | [[#index-Email-to-the-author][Email to the author]]                                                               | [[#Bugs][Bugs]]                                           |
+|                | [[#index-Erasing-commit-message][Erasing commit message]]                                                         | [[#Committing-changes][Committing changes]]               |
+|                | [[#index-Erasing-input-buffer][Erasing input buffer]]                                                             | [[#Customization][Customization]]                         |
+|                | [[#index-Example-run][Example run]]                                                                               | [[#Getting-started][Getting started]]                     |
+|                | [[#index-Expunging-uninteresting-entries][Expunging uninteresting entries]]                                       | [[#Removing-handled-entries][Removing handled entries]]   |
+| -------------- |                                                                                                                   |                                                           |
+| F              |                                                                                                                   |                                                           |
+|                | [[#index-FAQ][FAQ]]                                                                                               | [[#Bugs][Bugs]]                                           |
+|                | [[#index-File-selection][File selection]]                                                                         | [[#Selected-files][Selected files]]                       |
+|                | [[#index-Finding-files][Finding files]]                                                                           | [[#Editing-files][Editing files]]                         |
+|                | [[#index-Flush-changes][Flush changes]]                                                                           | [[#Undoing-changes][Undoing changes]]                     |
+| -------------- |                                                                                                                   |                                                           |
+| G              |                                                                                                                   |                                                           |
+|                | [[#index-Getting-rid-of-lock-files][Getting rid of lock files]]                                                   | [[#Miscellaneous-commands][Miscellaneous commands]]       |
+|                | [[#index-Getting-rid-of-uninteresting-lines][Getting rid of uninteresting lines]]                                 | [[#Removing-handled-entries][Removing handled entries]]   |
+|                | [[#index-Getting-status][Getting status]]                                                                         | [[#Getting-info-about-files][Getting info about files]]   |
+| -------------- |                                                                                                                   |                                                           |
+| H              |                                                                                                                   |                                                           |
+|                | [[#index-Handled-lines_002c-removing-them][Handled lines, removing them]]                                         | [[#Removing-handled-entries][Removing handled entries]]   |
+|                | [[#index-Help][Help]]                                                                                             | [[#Miscellaneous-commands][Miscellaneous commands]]       |
+| -------------- |                                                                                                                   |                                                           |
+| I              |                                                                                                                   |                                                           |
+|                | [[#index-Ignoring-files][Ignoring files]]                                                                         | [[#Ignoring-files][Ignoring files]]                       |
+|                | [[#index-Introduction][Introduction]]                                                                             | [[#Getting-started][Getting started]]                     |
+|                | [[#index-Invoking-diff][Invoking =diff=]]                                                                         | [[#Viewing-differences][Viewing differences]]             |
+|                | [[#index-Invoking-dired][Invoking dired]]                                                                         | [[#Editing-files][Editing files]]                         |
+|                | [[#index-Invoking-ediff][Invoking ediff]]                                                                         | [[#Invoking-Ediff][Invoking Ediff]]                       |
+| -------------- |                                                                                                                   |                                                           |
+| K              |                                                                                                                   |                                                           |
+|                | [[#index-Known-bugs][Known bugs]]                                                                                 | [[#Bugs][Bugs]]                                           |
+| -------------- |                                                                                                                   |                                                           |
+| L              |                                                                                                                   |                                                           |
+|                | [[#index-Loading-files][Loading files]]                                                                           | [[#Editing-files][Editing files]]                         |
+|                | [[#index-Lock-files][Lock files]]                                                                                 | [[#Miscellaneous-commands][Miscellaneous commands]]       |
+|                | [[#index-Log-_0028RCS_002fcvs-command_0029][Log (RCS/cvs command)]]                                               | [[#Getting-info-about-files][Getting info about files]]   |
+|                | [[#index-Log-Edit-mode][Log Edit mode]]                                                                           | [[#Log-Edit-Mode][Log Edit Mode]]                         |
+|                | [[#index-Log-View-mode][Log View mode]]                                                                           | [[#Log-View-Mode][Log View Mode]]                         |
+| -------------- |                                                                                                                   |                                                           |
+| M              |                                                                                                                   |                                                           |
+|                | [[#index-Marked-files][Marked files]]                                                                             | [[#Selected-files][Selected files]]                       |
+|                | [[#index-Marking-files][Marking files]]                                                                           | [[#Marking-files][Marking files]]                         |
+|                | [[#index-Merging-with-ediff-and-emerge][Merging with =ediff= and =emerge=]]                                       | [[#Invoking-Ediff][Invoking Ediff]]                       |
+|                | [[#index-mode_002c-Log-Edit][mode, Log Edit]]                                                                     | [[#Log-Edit-Mode][Log Edit Mode]]                         |
+|                | [[#index-mode_002c-Log-View][mode, Log View]]                                                                     | [[#Log-View-Mode][Log View Mode]]                         |
+|                | [[#index-Modules-file-_0028_002du-option_0029][Modules file (‘=-u=' option)]]                                     | [[#Customization][Customization]]                         |
+|                | [[#index-Movement-Commands][Movement Commands]]                                                                   | [[#Movement-commands][Movement commands]]                 |
+| -------------- |                                                                                                                   |                                                           |
+| O              |                                                                                                                   |                                                           |
+|                | [[#index-Optional-switches-to-CVS][Optional switches to CVS]]                                                     | [[#Setting-flags][Setting flags]]                         |
+|                | [[#index-output_002c-logs][output, logs]]                                                                         | [[#Log-View-Mode][Log View Mode]]                         |
+| -------------- |                                                                                                                   |                                                           |
+| P              |                                                                                                                   |                                                           |
+|                | [[#index-Problems_002c-list-of-common][Problems, list of common]]                                                 | [[#Bugs][Bugs]]                                           |
+|                | [[#index-Putting-files-under-CVS-control][Putting files under CVS control]]                                       | [[#Adding-and-removing-files][Adding and removing files]] |
+| -------------- |                                                                                                                   |                                                           |
+| Q              |                                                                                                                   |                                                           |
+|                | [[#index-Quitting][Quitting]]                                                                                     | [[#Miscellaneous-commands][Miscellaneous commands]]       |
+| -------------- |                                                                                                                   |                                                           |
+| R              |                                                                                                                   |                                                           |
+|                | [[#index-Recompiling-elisp-files][Recompiling elisp files]]                                                       | [[#Miscellaneous-commands][Miscellaneous commands]]       |
+|                | [[#index-Removing-files][Removing files]]                                                                         | [[#Adding-and-removing-files][Adding and removing files]] |
+|                | [[#index-Removing-uninteresting-_0028processed_0029-lines][Removing uninteresting (processed) lines]]             | [[#Removing-handled-entries][Removing handled entries]]   |
+|                | [[#index-Reporting-bugs-and-ideas][Reporting bugs and ideas]]                                                     | [[#Bugs][Bugs]]                                           |
+|                | [[#index-Require-final-newline][Require final newline]]                                                           | [[#Customization][Customization]]                         |
+|                | [[#index-Resolving-conflicts][Resolving conflicts]]                                                               | [[#Invoking-Ediff][Invoking Ediff]]                       |
+|                | [[#index-Resurrecting-files][Resurrecting files]]                                                                 | [[#Adding-and-removing-files][Adding and removing files]] |
+|                | [[#index-Reverting-buffers-after-commit][Reverting buffers after commit]]                                         | [[#Committing-changes][Committing changes]]               |
+|                | [[#index-Reverting-buffers-after-commit-1][Reverting buffers after commit]]                                       | [[#Customization][Customization]]                         |
+| -------------- |                                                                                                                   |                                                           |
+| S              |                                                                                                                   |                                                           |
+|                | [[#index-Sample-session][Sample session]]                                                                         | [[#Getting-started][Getting started]]                     |
+|                | [[#index-Selected-files][Selected files]]                                                                         | [[#Selected-files][Selected files]]                       |
+|                | [[#index-Selecting-files-_0028commands-to-mark-files_0029][Selecting files (commands to mark files)]]             | [[#Marking-files][Marking files]]                         |
+|                | [[#index-Sorting-_002ecvsignore-file][Sorting =.cvsignore= file]]                                                 | [[#Customization][Customization]]                         |
+|                | [[#index-Special-prefix][Special prefix]]                                                                         | [[#Setting-flags][Setting flags]]                         |
+|                | [[#index-Status-_0028cvs-command_0029][Status (cvs command)]]                                                     | [[#Getting-info-about-files][Getting info about files]]   |
+| -------------- |                                                                                                                   |                                                           |
+| T              |                                                                                                                   |                                                           |
+|                | [[#index-Tagging-files][Tagging files]]                                                                           | [[#Tagging-files][Tagging files]]                         |
+| -------------- |                                                                                                                   |                                                           |
+| U              |                                                                                                                   |                                                           |
+|                | [[#index-Undo-changes][Undo changes]]                                                                             | [[#Undoing-changes][Undoing changes]]                     |
+|                | [[#index-Unidiff_002c-how-to-get][Unidiff, how to get]]                                                           | [[#Customization][Customization]]                         |
+|                | [[#index-Uninteresting-entries_002c-getting-rid-of-them][Uninteresting entries, getting rid of them]]             | [[#Removing-handled-entries][Removing handled entries]]   |
+|                | [[#index-Update-program-_0028_002du-option-in-modules-file_0029][Update program (‘=-u=' option in modules file)]] | [[#Customization][Customization]]                         |
+|                | [[#index-Updating-files][Updating files]]                                                                         | [[#Updating-files][Updating files]]                       |
+| -------------- |                                                                                                                   |                                                           |
+| V              |                                                                                                                   |                                                           |
+|                | [[#index-Variables_002c-list-of-all][Variables, list of all]]                                                     | [[#Customization][Customization]]                         |
+|                | [[#index-Viewing-differences][Viewing differences]]                                                               | [[#Viewing-differences][Viewing differences]]             |
+|                | [[#index-Viewing-differences-1][Viewing differences]]                                                             | [[#Invoking-Ediff][Invoking Ediff]]                       |
+| -------------- |                                                                                                                   |                                                           |
+
+| Jump to:   | [[#Concept-Index_cp_symbol-1][***]]   [[#Concept-Index_cp_symbol-2][*-*]]   [[#Concept-Index_cp_symbol-3][*.*]]  \\                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+|            | [[#Concept-Index_cp_letter-A][*A*]]   [[#Concept-Index_cp_letter-B][*B*]]   [[#Concept-Index_cp_letter-C][*C*]]   [[#Concept-Index_cp_letter-D][*D*]]   [[#Concept-Index_cp_letter-E][*E*]]   [[#Concept-Index_cp_letter-F][*F*]]   [[#Concept-Index_cp_letter-G][*G*]]   [[#Concept-Index_cp_letter-H][*H*]]   [[#Concept-Index_cp_letter-I][*I*]]   [[#Concept-Index_cp_letter-K][*K*]]   [[#Concept-Index_cp_letter-L][*L*]]   [[#Concept-Index_cp_letter-M][*M*]]   [[#Concept-Index_cp_letter-O][*O*]]   [[#Concept-Index_cp_letter-P][*P*]]   [[#Concept-Index_cp_letter-Q][*Q*]]   [[#Concept-Index_cp_letter-R][*R*]]   [[#Concept-Index_cp_letter-S][*S*]]   [[#Concept-Index_cp_letter-T][*T*]]   [[#Concept-Index_cp_letter-U][*U*]]   [[#Concept-Index_cp_letter-V][*V*]]   |
+
+--------------
+
+<<Key-Index>>
+
+Previous: [[#Concept-Index][Concept Index]], Up: [[#Top][PCL-CVS]]  
+[[[#SEC_Contents][Contents]]][[[#Function-and-Variable-Index][Index]]]
+
+** Key Index [[#Key-Index-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Key-Index-1
+:CLASS: unnumbered
+:END:
+This index includes an entry for each PCL-CVS key sequence documented in
+this manual.
+
+| Jump to:   | [[#Key-Index_ky_symbol-1][*%*]]   [[#Key-Index_ky_symbol-2][*=*]]   [[#Key-Index_ky_symbol-3][*?*]]  \\                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+|            | [[#Key-Index_ky_letter-A][*A*]]   [[#Key-Index_ky_letter-C][*C*]]   [[#Key-Index_ky_letter-D][*D*]]   [[#Key-Index_ky_letter-E][*E*]]   [[#Key-Index_ky_letter-F][*F*]]   [[#Key-Index_ky_letter-H][*H*]]   [[#Key-Index_ky_letter-I][*I*]]   [[#Key-Index_ky_letter-L][*L*]]   [[#Key-Index_ky_letter-M][*M*]]   [[#Key-Index_ky_letter-N][*N*]]   [[#Key-Index_ky_letter-O][*O*]]   [[#Key-Index_ky_letter-P][*P*]]   [[#Key-Index_ky_letter-Q][*Q*]]   [[#Key-Index_ky_letter-R][*R*]]   [[#Key-Index_ky_letter-S][*S*]]   [[#Key-Index_ky_letter-T][*T*]]   [[#Key-Index_ky_letter-U][*U*]]   [[#Key-Index_ky_letter-X][*X*]]   |
+
+|                | Index Entry                                                                                                      | Section                                                   |
+| -------------- |                                                                                                                  |                                                           |
+| %              |                                                                                                                  |                                                           |
+|                | [[#index-_0025_002d_002dmark-files-matching-regexp][=%==–mark files matching regexp=]]                           | [[#Marking-files][Marking files]]                         |
+| -------------- |                                                                                                                  |                                                           |
+| =              |                                                                                                                  |                                                           |
+|                | [[#index-_003d_002d_002drun-cvs-diff][====–run ‘==cvs diff==’=]]                                                 | [[#Viewing-differences][Viewing differences]]             |
+| -------------- |                                                                                                                  |                                                           |
+| ?              |                                                                                                                  |                                                           |
+|                | [[#index-_003f_002d_002dhelp][=?==–help=]]                                                                       | [[#Miscellaneous-commands][Miscellaneous commands]]       |
+| -------------- |                                                                                                                  |                                                           |
+| A              |                                                                                                                  |                                                           |
+|                | [[#index-a_002d_002dadd-a-file][=a==–add a file=]]                                                               | [[#Adding-and-removing-files][Adding and removing files]] |
+|                | [[#index-A_002d_002dadd-ChangeLog-entry][=A==–add ==ChangeLog== entry=]]                                         | [[#Editing-files][Editing files]]                         |
+| -------------- |                                                                                                                  |                                                           |
+| C              |                                                                                                                  |                                                           |
+|                | [[#index-c_002d_002dcommit-files][=c==–commit files=]]                                                           | [[#Committing-changes][Committing changes]]               |
+|                | [[#index-C_002d_002dcommit-files-with-ChangeLog-message][=C==–commit files with ==ChangeLog== message=]]         | [[#Committing-changes][Committing changes]]               |
+|                | [[#index-C_002dk_002d_002dremove-selected-entries][=C-k==–remove selected entries=]]                             | [[#Removing-handled-entries][Removing handled entries]]   |
+| -------------- |                                                                                                                  |                                                           |
+| D              |                                                                                                                  |                                                           |
+|                | [[#index-d_003d_002d_002drun-cvs-diff][=d===–run ‘==cvs diff==’=]]                                               | [[#Viewing-differences][Viewing differences]]             |
+|                | [[#index-db_002d_002ddiff-against-base-version][=db==–diff against base version=]]                               | [[#Viewing-differences][Viewing differences]]             |
+|                | [[#index-DEL_002d_002dunmark-previous-file][=DEL==–unmark previous file=]]                                       | [[#Marking-files][Marking files]]                         |
+|                | [[#index-dh_002d_002ddiff-against-head-of-repository][=dh==–diff against head of repository=]]                   | [[#Viewing-differences][Viewing differences]]             |
+|                | [[#index-dr_002d_002ddiff-between-base-and-head-of-repository][=dr==–diff between base and head of repository=]] | [[#Viewing-differences][Viewing differences]]             |
+|                | [[#index-dv_002d_002ddiff-against-vendor-branch][=dv==–diff against vendor branch=]]                             | [[#Viewing-differences][Viewing differences]]             |
+|                | [[#index-dy_002d_002ddiff-against-yesterday_0027s-head][=dy==–diff against yesterday’s head=]]                   | [[#Viewing-differences][Viewing differences]]             |
+| -------------- |                                                                                                                  |                                                           |
+| E              |                                                                                                                  |                                                           |
+|                | [[#index-e_002d_002dinvoke-ediff][=e==–invoke ‘==ediff==’=]]                                                     | [[#Invoking-Ediff][Invoking Ediff]]                       |
+|                | [[#index-ESC-DEL_002d_002dunmark-all-files][=ESC DEL==–unmark all files=]]                                       | [[#Marking-files][Marking files]]                         |
+| -------------- |                                                                                                                  |                                                           |
+| F              |                                                                                                                  |                                                           |
+|                | [[#index-f_002d_002dfind-file-or-directory][=f==–find file or directory=]]                                       | [[#Editing-files][Editing files]]                         |
+| -------------- |                                                                                                                  |                                                           |
+| H              |                                                                                                                  |                                                           |
+|                | [[#index-h_002d_002dhelp][=h==–help=]]                                                                           | [[#Miscellaneous-commands][Miscellaneous commands]]       |
+| -------------- |                                                                                                                  |                                                           |
+| I              |                                                                                                                  |                                                           |
+|                | [[#index-i_002d_002dignoring-files][=i==–ignoring files=]]                                                       | [[#Ignoring-files][Ignoring files]]                       |
+| -------------- |                                                                                                                  |                                                           |
+| L              |                                                                                                                  |                                                           |
+|                | [[#index-l_002d_002drun-cvs-log][=l==–run ‘==cvs log==’=]]                                                       | [[#Getting-info-about-files][Getting info about files]]   |
+| -------------- |                                                                                                                  |                                                           |
+| M              |                                                                                                                  |                                                           |
+|                | [[#index-m_002d_002dmarking-a-file][=m==–marking a file=]]                                                       | [[#Marking-files][Marking files]]                         |
+|                | [[#index-M_002d_002dmarking-all-files][=M==–marking all files=]]                                                 | [[#Marking-files][Marking files]]                         |
+|                | [[#index-M_002dt_002d_002drepository-tag-files][=M-t==–repository tag files=]]                                   | [[#Tagging-files][Tagging files]]                         |
+| -------------- |                                                                                                                  |                                                           |
+| N              |                                                                                                                  |                                                           |
+|                | [[#index-n_002d_002dMove-down-one-file][=n==–Move down one file=]]                                               | [[#Movement-commands][Movement commands]]                 |
+| -------------- |                                                                                                                  |                                                           |
+| O              |                                                                                                                  |                                                           |
+|                | [[#index-o_002d_002dfind-file-in-other-window][=o==–find file in other window=]]                                 | [[#Editing-files][Editing files]]                         |
+|                | [[#index-O_002d_002dupdate-files][=O==–update files=]]                                                           | [[#Updating-files][Updating files]]                       |
+| -------------- |                                                                                                                  |                                                           |
+| P              |                                                                                                                  |                                                           |
+|                | [[#index-p_002d_002dMove-up-one-file][=p==–Move up one file=]]                                                   | [[#Movement-commands][Movement commands]]                 |
+| -------------- |                                                                                                                  |                                                           |
+| Q              |                                                                                                                  |                                                           |
+|                | [[#index-q_002d_002dbury-the-PCL_002dCVS-buffer][=q==–bury the PCL-CVS buffer=]]                                 | [[#Miscellaneous-commands][Miscellaneous commands]]       |
+| -------------- |                                                                                                                  |                                                           |
+| R              |                                                                                                                  |                                                           |
+|                | [[#index-r_002d_002dremove-a-file][=r==–remove a file=]]                                                         | [[#Adding-and-removing-files][Adding and removing files]] |
+| -------------- |                                                                                                                  |                                                           |
+| S              |                                                                                                                  |                                                           |
+|                | [[#index-S_002d_002dmark-files-in-a-particular-state][=S==–mark files in a particular state=]]                   | [[#Marking-files][Marking files]]                         |
+|                | [[#index-s_002d_002drun-cvs-status][=s==–run ‘==cvs status==’=]]                                                 | [[#Getting-info-about-files][Getting info about files]]   |
+|                | [[#index-SPC_002d_002dMove-down-one-file][=SPC==–Move down one file=]]                                           | [[#Movement-commands][Movement commands]]                 |
+| -------------- |                                                                                                                  |                                                           |
+| T              |                                                                                                                  |                                                           |
+|                | [[#index-t_002d_002dtag-files][=t==–tag files=]]                                                                 | [[#Tagging-files][Tagging files]]                         |
+|                | [[#index-T_002d_002dtoggle-marks][=T==–toggle marks=]]                                                           | [[#Marking-files][Marking files]]                         |
+| -------------- |                                                                                                                  |                                                           |
+| U              |                                                                                                                  |                                                           |
+|                | [[#index-U_002d_002dundo-changes][=U==–undo changes=]]                                                           | [[#Undoing-changes][Undoing changes]]                     |
+|                | [[#index-u_002d_002dunmark-a-file][=u==–unmark a file=]]                                                         | [[#Marking-files][Marking files]]                         |
+| -------------- |                                                                                                                  |                                                           |
+| X              |                                                                                                                  |                                                           |
+|                | [[#index-x_002d_002dremove-processed-entries][=x==–remove processed entries=]]                                   | [[#Removing-handled-entries][Removing handled entries]]   |
+| -------------- |                                                                                                                  |                                                           |
+
+| Jump to:   | [[#Key-Index_ky_symbol-1][*%*]]   [[#Key-Index_ky_symbol-2][*=*]]   [[#Key-Index_ky_symbol-3][*?*]]  \\                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+|            | [[#Key-Index_ky_letter-A][*A*]]   [[#Key-Index_ky_letter-C][*C*]]   [[#Key-Index_ky_letter-D][*D*]]   [[#Key-Index_ky_letter-E][*E*]]   [[#Key-Index_ky_letter-F][*F*]]   [[#Key-Index_ky_letter-H][*H*]]   [[#Key-Index_ky_letter-I][*I*]]   [[#Key-Index_ky_letter-L][*L*]]   [[#Key-Index_ky_letter-M][*M*]]   [[#Key-Index_ky_letter-N][*N*]]   [[#Key-Index_ky_letter-O][*O*]]   [[#Key-Index_ky_letter-P][*P*]]   [[#Key-Index_ky_letter-Q][*Q*]]   [[#Key-Index_ky_letter-R][*R*]]   [[#Key-Index_ky_letter-S][*S*]]   [[#Key-Index_ky_letter-T][*T*]]   [[#Key-Index_ky_letter-U][*U*]]   [[#Key-Index_ky_letter-X][*X*]]   |

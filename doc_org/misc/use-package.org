@@ -1,0 +1,3200 @@
+<<Top>>
+
+Next: [[#Basic-Concepts][Basic Concepts]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+* use-package User Manual [[#use_002dpackage-User-Manual][¶]]
+:PROPERTIES:
+:CUSTOM_ID: use_002dpackage-User-Manual
+:CLASS: top
+:END:
+The =use-package= macro allows you to set up package customization in
+your init file in a declarative way. It reduces the need for repetitive
+boilerplate code by handling many common customization tasks for you.
+These include binding keys, setting hooks, customizing user options and
+faces, setting up autoloading, and more. It also helps you keep Emacs
+startup fast, even when you use many (even hundreds) of packages.
+
+Note that use-package is not a package manager. While it provides
+convenient integration with Emacs's built-in package manager, its
+primary purpose is to help with configuring and loading packages, not
+with downloading, upgrading, or installing them.
+
+This manual is for use-package 2.4.5 as distributed with Emacs 31.0.50.
+
+Copyright © 2022--2026 Free Software Foundation, Inc.
+
+#+begin_quote
+Permission is granted to copy, distribute and/or modify this document
+under the terms of the GNU Free Documentation License, Version 1.3 or
+any later version published by the Free Software Foundation; with no
+Invariant Sections, with the Front-Cover Texts being “A GNU Manual”, and
+with the Back-Cover Texts as in (a) below. A copy of the license is
+included in the section entitled “GNU Free Documentation License”.
+
+(a) The FSF's Back-Cover Text is: “You have the freedom to copy and
+modify this GNU manual.”
+#+end_quote
+
+<<SEC_Contents>>
+** Table of Contents
+:PROPERTIES:
+:CUSTOM_ID: table-of-contents
+:CLASS: contents-heading
+:END:
+
+- [[#Basic-Concepts][1 Basic Concepts]]
+- [[#Getting-Started][2 Getting Started]]
+- [[#Loading-Packages][3 Loading Packages]]
+  - [[#Loading-basics][3.1 How and when use-package loads packages]]
+  - [[#Deferring-loading][3.2 Deferring package loading]]
+  - [[#Forcing-loading][3.3 Forcing package to load immediately]]
+  - [[#Conditional-loading][3.4 Loading packages conditionally]]
+  - [[#Loading-sequentially][3.5 Loading packages in sequence]]
+  - [[#The-emacs-package][3.6 Customizing built-in variables]]
+  - [[#Load-dependencies][3.7 Prevent loading if dependencies are missing]]
+  - [[#Manual-installation][3.8 Manually installed package]]
+    - [[#Load-path][3.8.1 Setting a custom =load-path=]]
+    - [[#Manual-autoloads][3.8.2 Setting up autoloads manually]]
+- [[#Configuring-Packages][4 Configuring Packages]]
+  - [[#Lisp-Configuration][4.1 Using Lisp code for configuring packages]]
+    - [[#Preface-keyword][4.1.1 =:preface= is evaluated first]]
+    - [[#Init-keyword][4.1.2 =:init= is evaluated before loading package]]
+    - [[#Config-keyword][4.1.3 =:config= is evaluated after loading package]]
+    - [[#Best-practices][4.1.4 When to use =:preface=, =:config= and =:init=?]]
+  - [[#Key-bindings][4.2 Key bindings]]
+    - [[#Global-keybindings][4.2.1 Global keybindings]]
+    - [[#Binding-in-keymaps][4.2.2 Key bindings in local keymaps]]
+    - [[#Binding-to-a-keymap][4.2.3 Binding to keymaps]]
+    - [[#Binding-to-repeat_002dmaps][4.2.4 Binding to repeat-maps]]
+    - [[#Displaying-keybindings][4.2.5 Displaying personal keybindings]]
+  - [[#Hooks][4.3 Hooks]]
+  - [[#Modes-and-interpreters][4.4 Modes and interpreters]]
+  - [[#Magic-handlers][4.5 Magic handlers]]
+  - [[#User-options][4.6 User options]]
+  - [[#Faces][4.7 Faces]]
+  - [[#Hiding-minor-modes][4.8 Hiding minor modes with diminish and delight]]
+    - [[#Diminish][4.8.1 Diminish]]
+    - [[#Delight][4.8.2 Delight]]
+- [[#Installing-packages][5 Installing packages automatically]]
+  - [[#Install-package][5.1 Installing package]]
+  - [[#Pinning-packages][5.2 Pinning packages using =:pin=]]
+  - [[#Other-package-managers][5.3 Non-standard package managers]]
+- [[#Byte_002dcompiling][6 Byte-compiling your init file]]
+- [[#Troubleshooting][7 Troubleshooting]]
+  - [[#Troubleshooting-Options][7.1 Options that help when troubleshooting]]
+  - [[#Gathering-Statistics][7.2 Gathering Statistics]]
+  - [[#Disabling-a-package][7.3 Disabling a package]]
+- [[#Keyword-extensions][Appendix A Keyword extensions]]
+  - [[#use_002dpackage_002densure_002dsystem_002dpackage][A.1 :use-package-ensure-system-package]]
+  - [[#Creating-an-extension][A.2 How to create an extension keyword]]
+- [[#History][Appendix B History and acknowledgments]]
+- [[#GNU-Free-Documentation-License][Appendix C GNU Free Documentation License]]
+- [[#Index][Index]]
+
+--------------
+
+<<Basic-Concepts>>
+
+Next: [[#Getting-Started][Getting Started]], Previous:
+[[#Top][use-package User Manual]], Up: [[#Top][use-package User Manual]]
+  [[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+** 1 Basic Concepts [[#Basic-Concepts-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Basic-Concepts-1
+:CLASS: chapter
+:END:
+use-package provides the =use-package= macro, that simplifies the
+customization and use of packages in Emacs. It was created for a few
+basic reasons, each of which drove the design. Understanding these
+reasons may help make some of those decisions clearer:
+
+1. Allow gathering all the configuration details of a package into one
+   place, making it easier to copy, disable, or move it elsewhere in the
+   init file.
+2. Reduce duplication and repetitive boilerplate, capturing several
+   common practices as mere keywords both easy and intuitive to use.
+3. Make startup time of Emacs as short as possible, without sacrificing
+   the quantity of add-on packages used.
+4. Ensure that errors encountered during startup disable only the
+   package(s) raising the error(s), and as little else as possible,
+   leaving Emacs as close to fully functional as possible.
+5. Allow byte-compiling your init file, so that any warnings or errors
+   you see at startup are meaningful. In this way, even if
+   byte-compilation is not used for speed (see item 3 above), it can
+   still be used as a sanity check.
+
+It is worth noting that use-package is not intended to replace the
+standard customization command M-x customize (see
+[[https://www.gnu.org/software/emacs/manual/html_mono/emacs.html#Easy-Customization][Easy Customization]]
+in GNU Emacs Manual). On the contrary, it is designed to work together
+with it, for things that Customize cannot do.
+
+--------------
+
+<<Getting-Started>>
+
+Next: [[#Loading-Packages][Loading Packages]], Previous:
+[[#Basic-Concepts][Basic Concepts]], Up:
+[[#Top][use-package User Manual]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+** 2 Getting Started [[#Getting-Started-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Getting-Started-1
+:CLASS: chapter
+:END:
+This chapter provides instructions and examples for quickly getting
+started with use-package. In this manual, we say that each call to the
+=use-package= macro in your init file is a /declaration/, to highlight
+the declarative nature of its syntax.
+
+To unconditionally load a package named ‘=foo=', add the following
+declaration to your init file:
+
+#+begin_src lisp-preformatted
+(use-package foo)
+#+end_src
+
+This declaration is equivalent to using =require= (see
+[[https://www.gnu.org/software/emacs/manual/html_mono/elisp.html#Named-Features][Named Features]]
+in GNU Emacs Lisp Reference Manual), with some use-package specific
+error handling added in. Just like =require=, it needs the package
+‘=foo=' to be installed and available via your =load-path= (see
+[[#Installing-packages][Installing packages automatically]]).
+
+To evaluate some Lisp /before/ the ‘=foo=' package is loaded, use the
+=:init= keyword:
+
+#+begin_src lisp-preformatted
+(use-package foo
+  :init
+  (setq foo-variable t))
+#+end_src
+
+Similarly, =:config= can be used to execute code /after/ a package is
+loaded. In cases where loading is done lazily (see
+[[#Loading-Packages][Loading Packages]]), this execution is deferred
+until after the loading actually occurs. As you might expect, you can
+use =:init= and =:config= together:
+
+#+begin_src lisp-preformatted
+(use-package foo
+  :init
+  (setq foo-variable t)
+  :config
+  (foo-mode 1))
+#+end_src
+
+The above declarations will load the ‘=foo=' package immediately. In
+most cases, this is not necessary or desirable, as that will slow down
+Emacs startup. Instead, you should try to set things up so that packages
+are only loaded when they are actually needed (this is known as
+“autoloading”). If you have installed a package from GNU ELPA that
+provides its own autoloads, it is often enough to say:
+
+#+begin_src lisp-preformatted
+(use-package foo
+  :defer t)
+#+end_src
+
+This will avoid loading the package. Now, when you run any autoloaded
+command, the package ‘=foo=' is loaded automatically. (Which commands
+from a package are marked to auto-load by default is the decision of the
+package authors.)
+
+In some cases, you might need or want to provide your own autoloads. The
+more complex example below autoloads the commands =isearch-moccur= and
+=isearch-all= from the package =color-moccur.el=, and binds keys both
+globally and in =isearch-mode-map=. When one of these two commands are
+used, the package will be loaded. At that point, =moccur-edit= is also
+loaded, to allow editing of the =moccur= buffer.
+
+#+begin_src lisp-preformatted
+(use-package color-moccur
+  :commands (isearch-moccur isearch-all)
+  :bind (("M-s O" . moccur)
+         :map isearch-mode-map
+         ("M-o" . isearch-moccur)
+         ("M-O" . isearch-moccur-all))
+  :init
+  (setq isearch-lazy-highlight t)
+  :config
+  (use-package moccur-edit))
+#+end_src
+
+Some packages will suggest ready-made =use-package= declarations that
+you can use. Where possible, it is a good idea to copy them, and use
+that as a starting point.
+
+That should be enough to get you started!
+
+--------------
+
+<<Loading-Packages>>
+
+Next: [[#Configuring-Packages][Configuring Packages]], Previous:
+[[#Getting-Started][Getting Started]], Up:
+[[#Top][use-package User Manual]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+** 3 Loading Packages [[#Loading-Packages-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Loading-Packages-1
+:CLASS: chapter
+:END:
+Before use-package can load an Emacs Lisp package, it must be available
+in a directory on your =load-path=. When you install packages using the
+built-in =install-package= command, it will do this automatically for
+you. Packages shipped with Emacs (built-in packages) are always
+available.
+
+Some packages have more than one library. In those cases, you might need
+more than one =use-package= declaration to make sure the package is
+properly loaded. For complex configurations, you might also need more
+than one declaration for a package with the same name.
+
+use-package can interface with ‘=package.el=' to install packages on
+Emacs start. See
+[[#Installing-packages][Installing packages automatically]], for
+details.
+
+- [[#Loading-basics][How and when use-package loads packages]]
+- [[#Deferring-loading][Deferring package loading]]
+- [[#Forcing-loading][Forcing package to load immediately]]
+- [[#Conditional-loading][Loading packages conditionally]]
+- [[#Loading-sequentially][Loading packages in sequence]]
+- [[#The-emacs-package][Customizing built-in variables]]
+- [[#Load-dependencies][Prevent loading if dependencies are missing]]
+- [[#Manual-installation][Manually installed package]]
+
+--------------
+
+<<Loading-basics>>
+
+Next: [[#Deferring-loading][Deferring package loading]], Up:
+[[#Loading-Packages][Loading Packages]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 3.1 How and when use-package loads packages [[#How-and-when-use_002dpackage-loads-packages][¶]]
+:PROPERTIES:
+:CUSTOM_ID: How-and-when-use_002dpackage-loads-packages
+:CLASS: section
+:END:
+The call to the =use-package= macro will load a package either
+immediately, or when the package is first used (via autoloading). In the
+simplest case, a =use-package= declaration loads a package when it is
+evaluated.[[#FOOT1][^{1}]] If the declaration is in your init file, this
+happens automatically each time Emacs is started.
+
+For example, the declaration below immediately loads the library =foo=,
+just like =require= would:
+
+#+begin_src lisp-preformatted
+(use-package foo)
+#+end_src
+
+If the library ‘=foo=' is not available in your =load-path=, the
+declaration logs a warning to the ‘=*Messages*=' buffer.
+
+Note that a “package” is different from an Emacs Lisp “library”. The
+above declaration tells use-package to load the /library/ =foo.el=,
+which in the overwhelming majority of cases also resides in a /package/
+named =foo=. But the package =foo= might also contain a library named
+=foo-extra.el=. If that library is not loaded automatically, you will
+need a separate =use-package= declaration to make sure that it is loaded
+when needed. This manual will often use the terms “package” and
+“library” interchangeably, as this distinction does not usually matter,
+but you should keep it in mind for the cases when it does.
+
+The details of how and when you should load a package might differ from
+one package to another. When in doubt, refer to the package
+documentation for details.
+
+--------------
+
+<<Deferring-loading>>
+
+Next: [[#Forcing-loading][Forcing package to load immediately]],
+Previous: [[#Loading-basics][How and when use-package loads packages]],
+Up: [[#Loading-Packages][Loading Packages]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 3.2 Deferring package loading [[#Deferring-package-loading][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Deferring-package-loading
+:CLASS: section
+:END:
+In the examples we have seen so far, use-package loads packages every
+time you start Emacs, even if that package is never used. That will make
+starting Emacs slower. use-package therefore allows setting things up in
+such a way that packages are only loaded when some of the package's
+commands is first used (either with M-x or via some key binding). This
+is based on autoloading, a full description of which is outside the
+scope of this manual. See
+[[https://www.gnu.org/software/emacs/manual/html_mono/elisp.html#Autoload][Autoload]]
+in GNU Emacs Lisp Reference Manual, for the full story.
+
+Some =use-package= keywords provide autoload /triggers/ that cause a
+package to be loaded when certain events occur. For example, the =:hook=
+keyword sets up a trigger that fires when the specified hook is run, and
+then loads the package automatically. The other trigger keywords, all of
+which are described later in this manual, are =:commands=, =:bind=,
+=:bind*=, =:bind-keymap=, =:bind-keymap*=, =:mode=, and =:interpreter=.
+
+**** The =:defer= keyword [[#The-_003adefer-keyword][¶]]
+:PROPERTIES:
+:CUSTOM_ID: The-_003adefer-keyword
+:CLASS: subheading
+:END:
+If you did not specify any autoloading keyword, use-package will fall
+back to loading the package immediately (typically when Emacs is
+starting up). This can be overridden using the =:defer= keyword. It
+takes one boolean argument: a non-=nil= value means to stop this package
+from being immediately loaded. Here is an example of using =:defer= to
+postpone loading the package ‘=foo=':
+
+#+begin_src lisp-preformatted
+(use-package foo
+  :defer t)
+#+end_src
+
+Using =:defer t= by itself like this is rarely useful. Typically, you
+would only use it together with a keyword like =:config= (see
+[[#Lisp-Configuration][Using Lisp code for configuring packages]]), or
+=:ensure= (see
+[[#Installing-packages][Installing packages automatically]]).
+
+**** Defer loading until idle for N seconds [[#Defer-loading-until-idle-for-N-seconds][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Defer-loading-until-idle-for-N-seconds
+:CLASS: subheading
+:END:
+You can also give a numeric argument =n= to =:defer= to specify that a
+package should be loaded (if it hasn't already) after Emacs has been
+idle for =n= seconds. For example, use the following to make use-package
+load ‘=foo=' after 30 seconds of idle time:
+
+#+begin_src lisp-preformatted
+(use-package foo
+  :defer 30)
+#+end_src
+
+**** When to use =:defer= [[#When-to-use-_003adefer][¶]]
+:PROPERTIES:
+:CUSTOM_ID: When-to-use-_003adefer
+:CLASS: subheading
+:END:
+When using autoloading keywords, there is no need to also use =:defer=.
+It doesn't hurt to add it in this case, perhaps for extra clarity, but
+it is redundant.
+
+You should use =:defer= to force deferred loading, in cases when
+use-package isn't creating any autoloads for you. For example, you might
+know that some other package will already do something to cause your
+package to load at the appropriate time. This is usually the case when
+you install a package using =package-install=, as packages installed in
+this way normally always have their own autoloads already set up.
+
+**** Making =:defer t= the default [[#Making-_003adefer-t-the-default][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Making-_003adefer-t-the-default
+:CLASS: subheading
+:END:
+If you customize the user option =use-package-always-defer= to
+non-=nil=, the =use-package= macro will behave as if =:defer t= is
+always specified. This can be overridden for individual declarations
+using either =:defer nil= or =:demand t= (see
+[[#Forcing-loading][Forcing package to load immediately]]).
+
+--------------
+
+<<Forcing-loading>>
+
+Next: [[#Conditional-loading][Loading packages conditionally]],
+Previous: [[#Deferring-loading][Deferring package loading]], Up:
+[[#Loading-Packages][Loading Packages]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 3.3 Forcing package to load immediately [[#Forcing-package-to-load-immediately][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Forcing-package-to-load-immediately
+:CLASS: section
+:END:
+The presence of autoloading trigger keywords can be overridden using
+=:demand t=, which forces the package to load immediately. Thus, even if
+you use an autoloading keyword such as =:bind= (see
+[[#Key-bindings][Key bindings]]), adding =:demand= will force loading to
+occur immediately. It will also avoid creating an autoload for the bound
+key, as it would be redundant.
+
+If you specify both =:demand t= and =:defer t=, the =:defer= keyword
+will take precedence.
+
+--------------
+
+<<Conditional-loading>>
+
+Next: [[#Loading-sequentially][Loading packages in sequence]], Previous:
+[[#Forcing-loading][Forcing package to load immediately]], Up:
+[[#Loading-Packages][Loading Packages]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 3.4 Loading packages conditionally [[#Loading-packages-conditionally][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Loading-packages-conditionally
+:CLASS: section
+:END:
+The =:if=, =:when=, and =:unless= keywords predicates the loading and
+initialization of packages. They all accept one argument, an Emacs Lisp
+form that is evaluated at run-time.
+
+If the argument of the =:if= keyword evaluates to non-=nil=, the package
+will be loaded and initialized. The =:when= keyword is provided as an
+alias for =:if=. Finally, the =:unless= keyword is the inverse of =:if=,
+such that =:unless foo= means the same thing as =:if (not foo)=.
+
+For example, if you only want to load ‘=foo=' in graphical Emacs
+sessions, you could use the following:
+
+#+begin_src lisp-preformatted
+(use-package foo
+  :if (display-graphic-p))
+#+end_src
+
+**** Some common use cases [[#Some-common-use-cases][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Some-common-use-cases
+:CLASS: subheading
+:END:
+Here are some common cases for conditional loading, and how to achieve
+them.
+
+- Operating system
+
+  The following example loads a package only on GNU/Linux. See the
+  docstring of =system-type= for other valid values.
+
+  #+begin_src lisp-preformatted
+  :if (eq system-type 'gnu/linux)
+  #+end_src
+
+- Window system
+
+  The example below loads a package only on macOS and X. See the
+  docstring of =window-system= for valid values.
+
+  #+begin_src lisp-preformatted
+  :if (memq window-system '(ns x))
+  #+end_src
+
+- Installed package
+
+  The following example loads a package only when the ‘=foo=' package is
+  installed.
+
+  #+begin_src lisp-preformatted
+  :if (package-installed-p 'foo)
+  #+end_src
+
+- Libraries in =load-path=
+
+  The example below loads a package only when =foo.el= is available in
+  your =load-path= (for example, if you installed that file manually):
+
+  #+begin_src lisp-preformatted
+  :if (locate-library "foo.el")
+  #+end_src
+
+**** Making conditional loading affect =:preface= and =:ensure= [[#Making-conditional-loading-affect-_003apreface-and-_003aensure][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Making-conditional-loading-affect-_003apreface-and-_003aensure
+:CLASS: subheading
+:END:
+If you need to make a use-package form conditional so that the condition
+occurs before even =:ensure= (see
+[[#Install-package][Installing package]]) or =:preface= (see
+[[#Preface-keyword][=:preface= is evaluated first]]), use =when= around
+the =use-package= form itself. For example:
+
+#+begin_src lisp-preformatted
+(when (memq window-system '(mac ns))
+  (use-package foo
+    :ensure t))
+#+end_src
+
+--------------
+
+<<Loading-sequentially>>
+
+Next: [[#The-emacs-package][Customizing built-in variables]], Previous:
+[[#Conditional-loading][Loading packages conditionally]], Up:
+[[#Loading-Packages][Loading Packages]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 3.5 Loading packages in sequence [[#Loading-packages-in-sequence][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Loading-packages-in-sequence
+:CLASS: section
+:END:
+Sometimes it only makes sense to configure a package after another one
+has been loaded, because certain variables or functions are not in scope
+until that time. This can be achieved with the =:after= keyword, which
+allows a fairly rich description of the exact conditions when loading
+should occur. The =:after= keyword takes as argument either a symbol
+indicating the package name, a list of such symbols, or a list of
+selectors (see below).
+
+Here is an example of using the GNU ELPA packages =hydra=, =ivy=, and
+=ivy-hydra=. Note that =ivy-hydra= will always be loaded last:
+
+#+begin_src lisp-preformatted
+(use-package hydra)
+
+(use-package ivy)
+#+end_src
+
+#+begin_src lisp-preformatted
+(use-package ivy-hydra
+  :after (ivy hydra))
+#+end_src
+
+In this case, because the declarations are evaluated in the order they
+occur, the use of =:after= is not strictly necessary. However, if
+‘=hydra=' and ‘=ivy=' were to be autoloaded, using =:after= guarantees
+that ‘=ivy-hydra=' is not loaded until it is actually needed. By using
+=:after=, the above code will also work even if the order of the
+declaration changes. This means that moving things around in your init
+file is less likely to break things.
+
+**** Using =:after= selectors [[#Using-_003aafter-selectors][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Using-_003aafter-selectors
+:CLASS: subheading
+:END:
+The =:after= keyword also accepts a list of selectors. By default,
+=:after (foo bar)= is the same as =:after (:all foo bar)=, meaning that
+loading of the given package will not happen until both =foo= and =bar=
+have been loaded. Here are some of the other possibilities:
+
+#+begin_src verbatim
+:after (foo bar)
+:after (:all foo bar)
+:after (:any foo bar)
+:after (:all (:any foo bar) (:any baz quux))
+:after (:any (:all foo bar) (:all baz quux))
+#+end_src
+
+When you nest selectors, such as in
+=(:any (:all foo bar) (:all baz quux))=, it means that the package will
+be loaded when either both =foo= and =bar= have been loaded, or when
+both =baz= and =quux= have been loaded.
+
+Pay attention when setting =use-package-always-defer= to a non-=nil=
+value, and also using the =:after= keyword. In that case, you will need
+to specify how the declared package is to be loaded: for example, by
+some =:bind= (see [[#Global-keybindings][Global keybindings]]). If you
+are not using one of the keywords that registers autoloads, such as
+=:bind= or =:hook= (see [[#Hooks][Hooks]]), and your package manager
+does not provide autoloads, it is possible that your package will never
+be loaded if you do not add =:demand t= to those declarations.
+
+--------------
+
+<<The-emacs-package>>
+
+Next:
+[[#Load-dependencies][Prevent loading if dependencies are missing]],
+Previous: [[#Loading-sequentially][Loading packages in sequence]], Up:
+[[#Loading-Packages][Loading Packages]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 3.6 Customizing built-in variables [[#Customizing-built_002din-variables][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Customizing-built_002din-variables
+:CLASS: section
+:END:
+Some users want to put all their customizations in use-package
+declarations, even for variables, hooks, and options that are always
+available, without loading any package.[[#FOOT2][^{2}]]
+
+For that purpose, you can use the no-op ‘=emacs=' package:
+
+#+begin_src lisp-preformatted
+(use-package emacs
+  :init
+  (setq custom-file "~/.emacs.d/emacs-custom.el")
+  (load custom-file)
+  (setq frame-title-format "%b")
+  :custom
+  (use-short-answers t))
+#+end_src
+
+This declaration takes advantage of the fact that =(featurep 'emacs)=
+always returns true, and has no special meaning beyond that. It simply
+provides a way to organize your customizations, without loading
+anything.
+
+--------------
+
+<<Load-dependencies>>
+
+Next: [[#Manual-installation][Manually installed package]], Previous:
+[[#The-emacs-package][Customizing built-in variables]], Up:
+[[#Loading-Packages][Loading Packages]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 3.7 Prevent loading if dependencies are missing [[#Prevent-loading-if-dependencies-are-missing][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Prevent-loading-if-dependencies-are-missing
+:CLASS: section
+:END:
+While the =:after= keyword delays loading until the dependencies are
+loaded, the somewhat simpler =:requires= keyword /never/ loads the
+package if the dependencies are not available when the =use-package=
+declaration is evaluated. In this context, “available” means that =foo=
+is available if =(featurep 'foo)= evaluates to a non-=nil= value. For
+example:
+
+#+begin_src lisp-preformatted
+(use-package abbrev
+  :requires foo)
+#+end_src
+
+This is the same as:
+
+#+begin_src lisp-preformatted
+(use-package abbrev
+  :if (featurep 'foo))
+#+end_src
+
+As a convenience, a list of such packages may be specified:
+
+#+begin_src lisp-preformatted
+(use-package abbrev
+  :requires (foo bar baz))
+#+end_src
+
+For more complex logic, such as that supported by =:after=, simply use
+=:if= and the appropriate Lisp expression.
+
+--------------
+
+<<Manual-installation>>
+
+Previous:
+[[#Load-dependencies][Prevent loading if dependencies are missing]], Up:
+[[#Loading-Packages][Loading Packages]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 3.8 Manually installed package [[#Manually-installed-package][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Manually-installed-package
+:CLASS: section
+:END:
+When installing packages manually, without Emacs's built-in package
+manager (=package.el=), it will obviously not help you set up autoloads
+or add it to your =load-path=. You must do it yourself. However,
+use-package makes this more convenient.
+
+- [[#Load-path][Setting a custom =load-path=]]
+- [[#Manual-autoloads][Setting up autoloads manually]]
+
+--------------
+
+<<Load-path>>
+
+Next: [[#Manual-autoloads][Setting up autoloads manually]], Up:
+[[#Manual-installation][Manually installed package]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+**** 3.8.1 Setting a custom =load-path= [[#Setting-a-custom-load_002dpath][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Setting-a-custom-load_002dpath
+:CLASS: subsection
+:END:
+When installing packages manually, you must make sure its libraries are
+available on your =load-path=. See
+[[https://www.gnu.org/software/emacs/manual/html_mono/emacs.html#Lisp-Libraries][Lisp Libraries]]
+in GNU Emacs Manual, for more details about package loading.
+
+The =:load-path= keyword provides a convenient way to add directories to
+your load path. It takes as argument a symbol, a function, a string or a
+list of strings. If a directory is specified as a relative file name, it
+is expanded relative to =user-emacs-directory=.
+
+For example:
+
+#+begin_src lisp-preformatted
+(use-package org
+  :load-path "site-lisp/org/lisp/"
+  :commands org-mode)
+#+end_src
+
+When using a symbol or a function to provide a dynamically generated
+list of directories, you must inform the byte-compiler of this
+definition, so that the value is available at byte-compilation time.
+This is done by using the special form =eval-and-compile= (as opposed to
+=eval-when-compile=, see
+[[https://www.gnu.org/software/emacs/manual/html_mono/elisp.html#Eval-During-Compile][Eval During Compile]]
+in GNU Emacs Lisp Reference Manual). Furthermore, this value is fixed to
+the value it had during compilation. If the operation is costly, you do
+not have to repeat it again on each startup. For example:
+
+#+begin_src lisp-preformatted
+(eval-and-compile
+  (defun ess-site-load-path ()
+    (shell-command-to-string "find ~ -path ess/lisp")))
+#+end_src
+
+#+begin_src lisp-preformatted
+
+#+end_src
+
+#+begin_src lisp-preformatted
+(use-package ess-site
+  :load-path (lambda () (list (ess-site-load-path)))
+  :commands R)
+#+end_src
+
+--------------
+
+<<Manual-autoloads>>
+
+Previous: [[#Load-path][Setting a custom =load-path=]], Up:
+[[#Manual-installation][Manually installed package]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+**** 3.8.2 Setting up autoloads manually [[#Setting-up-autoloads-manually][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Setting-up-autoloads-manually
+:CLASS: subsection
+:END:
+Packages often document how to set up its autoloads when it is being
+manually installed. If it does, follow those instructions. Otherwise,
+you might want to set them up manually.
+
+To autoload an interactive command, use the =:commands= keyword, which
+takes either a symbol or a list of symbols as its argument. It creates
+autoloads for those commands (which defers loading of the module until
+those commands are used).
+
+The =:autoload= keyword takes the same arguments as =:commands=, but is
+used to autoload non-interactive functions. Here is an example:
+
+#+begin_src lisp-preformatted
+(use-package org-crypt
+  :autoload org-crypt-use-before-save-magic)
+#+end_src
+
+--------------
+
+<<Configuring-Packages>>
+
+Next: [[#Installing-packages][Installing packages automatically]],
+Previous: [[#Loading-Packages][Loading Packages]], Up:
+[[#Top][use-package User Manual]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+** 4 Configuring Packages [[#Configuring-Packages-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Configuring-Packages-1
+:CLASS: chapter
+:END:
+This chapter describes the various keywords provided by =use-package=
+that help you configure packages.
+
+- [[#Lisp-Configuration][Using Lisp code for configuring packages]]
+- [[#Key-bindings][Key bindings]]
+- [[#Hooks][Hooks]]
+- [[#Modes-and-interpreters][Modes and interpreters]]
+- [[#Magic-handlers][Magic handlers]]
+- [[#User-options][User options]]
+- [[#Faces][Faces]]
+- [[#Hiding-minor-modes][Hiding minor modes with diminish and delight]]
+
+--------------
+
+<<Lisp-Configuration>>
+
+Next: [[#Key-bindings][Key bindings]], Up:
+[[#Configuring-Packages][Configuring Packages]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 4.1 Using Lisp code for configuring packages [[#Using-Lisp-code-for-configuring-packages][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Using-Lisp-code-for-configuring-packages
+:CLASS: section
+:END:
+The most general way to add customizations are the =:preface=, =:init=,
+and =:config= keywords. They all accept one or more Emacs Lisp forms, up
+to the next keyword, that are evaluated in order. This lets you add
+arbitrary Lisp code to your =use-package= declarations.
+
+The only difference between these keywords is when they are evaluated.
+
+- [[#Preface-keyword][=:preface= is evaluated first]]
+- [[#Init-keyword][=:init= is evaluated before loading package]]
+- [[#Config-keyword][=:config= is evaluated after loading package]]
+- [[#Best-practices][When to use =:preface=, =:config= and =:init=?]]
+
+--------------
+
+<<Preface-keyword>>
+
+Next: [[#Init-keyword][=:init= is evaluated before loading package]],
+Up: [[#Lisp-Configuration][Using Lisp code for configuring packages]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+**** 4.1.1 =:preface= is evaluated first [[#g_t_003apreface-is-evaluated-first][¶]]
+:PROPERTIES:
+:CUSTOM_ID: g_t_003apreface-is-evaluated-first
+:CLASS: subsection
+:END:
+The =:preface= section is evaluated before anything else, except
+=:disabled= and =:ensure=. It can be used to establish function and
+variable definitions that will:
+
+1. Make the byte-compiler happy: it will not complain about functions
+   whose definitions are unknown.
+2. Define functions and variables that will be used in an =:if= test.
+
+Note that whatever is specified within =:preface= is evaluated both at
+load time and at byte-compilation time, in order to ensure that
+definitions are seen by both the Lisp evaluator and the byte-compiler.
+Therefore, you should avoid having any side-effects in your =:preface=
+forms, and restrict them to symbol declarations and definitions.
+
+--------------
+
+<<Init-keyword>>
+
+Next: [[#Config-keyword][=:config= is evaluated after loading package]],
+Previous: [[#Preface-keyword][=:preface= is evaluated first]], Up:
+[[#Lisp-Configuration][Using Lisp code for configuring packages]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+**** 4.1.2 =:init= is evaluated before loading package [[#g_t_003ainit-is-evaluated-before-loading-package][¶]]
+:PROPERTIES:
+:CUSTOM_ID: g_t_003ainit-is-evaluated-before-loading-package
+:CLASS: subsection
+:END:
+The =:init= section is evaluated just before the package is loaded. Note
+that the =:init= form is run unconditionally -- even if the package
+happens to not exist on your system. You must therefore remember to
+restrict =:init= code to what would succeed either way; put the rest in
+the =:config= section. =:init= also always happens before package load,
+whether =:config= has been deferred or not.
+
+--------------
+
+<<Config-keyword>>
+
+Next:
+[[#Best-practices][When to use =:preface=, =:config= and =:init=?]],
+Previous:
+[[#Init-keyword][=:init= is evaluated before loading package]], Up:
+[[#Lisp-Configuration][Using Lisp code for configuring packages]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+**** 4.1.3 =:config= is evaluated after loading package [[#g_t_003aconfig-is-evaluated-after-loading-package][¶]]
+:PROPERTIES:
+:CUSTOM_ID: g_t_003aconfig-is-evaluated-after-loading-package
+:CLASS: subsection
+:END:
+The =:config= section is evaluated after the package has been loaded. If
+the package is loaded immediately, this happens immediately after that,
+but if loading is done lazily (see
+[[#Loading-Packages][Loading Packages]]), this is deferred until after
+the package has been loaded.
+
+In general, you should keep =:init= forms as simple and quick as
+possible, and put as much as you can get away with into the =:config=
+section. That way, deferred loading can help your Emacs start as quickly
+as possible.
+
+--------------
+
+<<Best-practices>>
+
+Previous:
+[[#Config-keyword][=:config= is evaluated after loading package]], Up:
+[[#Lisp-Configuration][Using Lisp code for configuring packages]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+**** 4.1.4 When to use =:preface=, =:config= and =:init=? [[#When-to-use-_003apreface_002c-_003aconfig-and-_003ainit_003f][¶]]
+:PROPERTIES:
+:CUSTOM_ID: When-to-use-_003apreface_002c-_003aconfig-and-_003ainit_003f
+:CLASS: subsection
+:END:
+Where possible, it is better to avoid =:preface=, =:config= and =:init=.
+Instead, prefer autoloading keywords such as =:bind= (see
+[[#Key-bindings][Key bindings]]), =:hook= (see [[#Hooks][Hooks]]), and
+=:mode= (see [[#Modes-and-interpreters][Modes and interpreters]]), as
+they will take care of setting up autoloads for you without any need for
+boilerplate code. For example, consider the following declaration:
+
+#+begin_src lisp-preformatted
+(use-package foo
+  :init
+  (add-hook 'some-hook 'foo-mode))
+#+end_src
+
+This has two problems. First, it will unconditionally load the package
+‘=foo=' on startup, which will make things slower. You can fix this by
+adding =:defer t=:
+
+#+begin_src lisp-preformatted
+(use-package foo
+  :defer t
+  :init
+  (add-hook 'some-hook 'foo-mode))
+#+end_src
+
+This is better, as ‘=foo=' is now only loaded when it is actually needed
+(that is, when the hook ‘=some-hook=' is run).
+
+The second problem is that there is a lot of boilerplate that you have
+to write. In this case, it might not be so bad, but avoiding that was
+what use-package was made to allow. The better option in this case is
+therefore to use =:hook= (see [[#Hooks][Hooks]]), which also implies
+=:defer t=. The above is thereby reduced down to:
+
+#+begin_src lisp-preformatted
+(use-package foo
+  :hook some-hook)
+#+end_src
+
+Now use-package will set up autoloading for you, and your Emacs startup
+time will not suffer one bit.
+
+--------------
+
+<<Key-bindings>>
+
+Next: [[#Hooks][Hooks]], Previous:
+[[#Lisp-Configuration][Using Lisp code for configuring packages]], Up:
+[[#Configuring-Packages][Configuring Packages]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 4.2 Key bindings [[#Key-bindings-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Key-bindings-1
+:CLASS: section
+:END:
+One common thing to do when loading a package is to bind keys to
+commands within that module. Without use-package, this would be done
+using a combination of =keymap-local-set=, =keymap-global-set= and
+various autoloads. With use-package, you can simplify this using the
+=:bind= keyword, as described in this section.
+
+- [[#Global-keybindings][Global keybindings]]
+- [[#Binding-in-keymaps][Key bindings in local keymaps]]
+- [[#Binding-to-a-keymap][Binding to keymaps]]
+- [[#Binding-to-repeat_002dmaps][Binding to repeat-maps]]
+- [[#Displaying-keybindings][Displaying personal keybindings]]
+
+--------------
+
+<<Global-keybindings>>
+
+Next: [[#Binding-in-keymaps][Key bindings in local keymaps]], Up:
+[[#Key-bindings][Key bindings]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+**** 4.2.1 Global keybindings [[#Global-keybindings-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Global-keybindings-1
+:CLASS: subsection
+:END:
+To bind keys globally, the =:bind= keyword takes as its argument either
+a single cons or a list of conses. Each cons has the form
+=(==key== . ==command==)=, where =key= is a string indicating the key to
+bind, and =command= is the name of a command (a symbol). The syntax for
+the keys is similar to the syntax used by the =kbd= function (see
+[[https://www.gnu.org/software/emacs/manual/html_mono/emacs.html#Init-Rebinding][Init Rebinding]]
+in GNU Emacs Manual, for more information).
+
+**** Using =:bind= with a single cons [[#Using-_003abind-with-a-single-cons][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Using-_003abind-with-a-single-cons
+:CLASS: subheading
+:END:
+Here is an example of using a single cons:
+
+#+begin_src lisp-preformatted
+(use-package ace-jump-mode
+  :bind ("C-." . ace-jump-mode))
+#+end_src
+
+This does two things: first, it creates an autoload for the
+=ace-jump-mode= command and defers loading of the =ace-jump-mode=
+package until you actually use it. Second, it binds the key =C-.= to
+that command globally.
+
+**** Using =:bind= with a list of conses [[#Using-_003abind-with-a-list-of-conses][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Using-_003abind-with-a-list-of-conses
+:CLASS: subheading
+:END:
+Here is an example of using =:bind= with a list of conses:
+
+#+begin_src lisp-preformatted
+(use-package hi-lock
+  :bind (("M-o l" . highlight-lines-matching-regexp)
+         ("M-o r" . highlight-regexp)
+         ("M-o w" . highlight-phrase)))
+#+end_src
+
+This binds the three key sequences to the corresponding commands.
+
+**** Using special keys [[#Using-special-keys][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Using-special-keys
+:CLASS: subheading
+:END:
+Inside key strings, special keys like TAB or F1--F12 have to be written
+inside angle brackets, e.g., ="C-<up>"=. Standalone special keys (and
+some combinations) can be written in square brackets, e.g. =[tab]=
+instead of ="<tab>"=.
+
+Examples:
+
+#+begin_src lisp-preformatted
+(use-package helm
+  :bind (("M-x" . helm-M-x)
+         ("M-<f5>" . helm-find-files)
+         ([f10] . helm-buffers-list)
+         ([S-f10] . helm-recentf)))
+#+end_src
+
+**** Remapping commands [[#Remapping-commands][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Remapping-commands
+:CLASS: subheading
+:END:
+Remapping of commands with =:bind= and =bind-key= works as expected,
+because when the binding is a vector, it is passed straight to
+=define-key=. See
+[[https://www.gnu.org/software/emacs/manual/html_mono/elisp.html#Remapping-Commands][Remapping Commands]]
+in GNU Emacs Lisp Reference Manual, for more information about command
+remapping. For example, the following declaration will rebind
+=fill-paragraph= (bound to M-q by default) to =unfill-toggle=:
+
+#+begin_src lisp-preformatted
+(use-package unfill
+  :bind ([remap fill-paragraph] . unfill-toggle))
+#+end_src
+
+**** What =:bind= does behind the scenes [[#What-_003abind-does-behind-the-scenes][¶]]
+:PROPERTIES:
+:CUSTOM_ID: What-_003abind-does-behind-the-scenes
+:CLASS: subheading
+:END:
+To understand what =:bind= does behind the scenes, it might be useful to
+consider an example:
+
+#+begin_src lisp-preformatted
+(use-package ace-jump-mode
+  :bind ("C-." . ace-jump-mode))
+#+end_src
+
+This could be expressed in a much more verbose way with the =:commands=
+and =:init= keywords:
+
+#+begin_src lisp-preformatted
+(use-package ace-jump-mode
+  :commands ace-jump-mode
+  :init
+  (bind-key "C-." 'ace-jump-mode))
+#+end_src
+
+Without using even the =:commands= keyword, we could also write the
+above like so:
+
+#+begin_src lisp-preformatted
+(use-package ace-jump-mode
+  :defer t
+  :init
+  (autoload 'ace-jump-mode "ace-jump-mode" nil t)
+  (bind-key "C-." 'ace-jump-mode))
+#+end_src
+
+Although these three forms are all equivalent, the first form is usually
+the best, as it will save some typing.
+
+--------------
+
+<<Binding-in-keymaps>>
+
+Next: [[#Binding-to-a-keymap][Binding to keymaps]], Previous:
+[[#Global-keybindings][Global keybindings]], Up:
+[[#Key-bindings][Key bindings]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+**** 4.2.2 Key bindings in local keymaps [[#Key-bindings-in-local-keymaps][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Key-bindings-in-local-keymaps
+:CLASS: subsection
+:END:
+Slightly different from binding a key to a keymap, is binding a key
+/within/ a local keymap that only exists after the package is loaded.
+=use-package= supports this with a =:map= modifier, taking the local
+keymap to bind to:
+
+#+begin_src lisp-preformatted
+(use-package helm
+  :bind (:map helm-command-map
+         ("C-c h" . helm-execute-persistent-action)))
+#+end_src
+
+The effect of this is to wait until =helm= has loaded, and then to bind
+the key sequence C-c h to =helm-execute-persistent-action= within Helm's
+local keymap, =helm-command-map=.
+
+Multiple uses of =:map= may be specified. Any binding occurring before
+the first use of =:map= are applied to the global keymap:
+
+#+begin_src lisp-preformatted
+(use-package term
+  :bind (("C-c t" . term)
+         :map term-mode-map
+         ("M-p" . term-send-up)
+         ("M-n" . term-send-down)
+         :map term-raw-map
+         ("M-o" . other-window)
+         ("M-p" . term-send-up)
+         ("M-n" . term-send-down)))
+#+end_src
+
+--------------
+
+<<Binding-to-a-keymap>>
+
+Next: [[#Binding-to-repeat_002dmaps][Binding to repeat-maps]], Previous:
+[[#Binding-in-keymaps][Key bindings in local keymaps]], Up:
+[[#Key-bindings][Key bindings]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+**** 4.2.3 Binding to keymaps [[#Binding-to-keymaps][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Binding-to-keymaps
+:CLASS: subsection
+:END:
+Normally =:bind= expects that commands are functions that will be
+autoloaded from the given package. However, this does not work if one of
+those commands is actually a keymap, since keymaps are not functions,
+and cannot be autoloaded using the built-in =autoload= function.
+
+When you define a keymap using =defvar-keymap= you can add the required
+function definition by including =:prefix t= in the keymap definition
+(see
+[[https://www.gnu.org/software/emacs/manual/html_mono/elisp.html#Creating-Keymaps][Creating Keymaps]]
+in GNU Emacs Lisp Reference Manual).
+
+For example:
+
+#+begin_src lisp-preformatted
+(defvar-keymap foo-command-map
+ :doc "A keymap that returns a function"
+ :prefix t
+ "A" #'foo-command-a
+ "B" #'foo-command-b)
+
+(use-package foo
+  :bind (("C-c p" . foo-command-map)))
+#+end_src
+
+would create the bindings for the key sequences ="C-c p A"=, and
+="C-c p B"= for package =foo=.
+
+Alternatively, to handle this case, =use-package= offers a special,
+limited variant of =:bind= called =:bind-keymap=. The only difference is
+that the “commands” bound to by =:bind-keymap= must be keymaps defined
+in the package, rather than interactive functions. This is handled
+behind the scenes by generating custom code that loads the package
+containing the keymap, and then re-executes your keypress after the
+first load, to reinterpret that keypress as a prefix key.
+
+For example:
+
+#+begin_src lisp-preformatted
+(use-package foo
+  :bind-keymap ("C-c p" . foo-command-map))
+#+end_src
+
+--------------
+
+<<Binding-to-repeat_002dmaps>>
+
+Next: [[#Displaying-keybindings][Displaying personal keybindings]],
+Previous: [[#Binding-to-a-keymap][Binding to keymaps]], Up:
+[[#Key-bindings][Key bindings]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+**** 4.2.4 Binding to repeat-maps [[#Binding-to-repeat_002dmaps-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Binding-to-repeat_002dmaps-1
+:CLASS: subsection
+:END:
+A special case of binding within a local keymap is when that keymap is
+used by =repeat-mode= (see
+[[https://www.gnu.org/software/emacs/manual/html_mono/emacs.html#Repeating][Repeating]]
+in GNU Emacs Manual). These keymaps are usually defined specifically for
+this. Using the =:repeat-map= keyword, and passing it a name for the map
+it defines, will bind all the following keys inside that map, and (by
+default) set the =repeat-map= property of each bound command to that
+map.
+
+The following example creates a keymap called =git-gutter+-repeat-map=,
+makes four bindings in it, then sets the =repeat-map= property of each
+bound command (=git-gutter+-next-hunk=, =git-gutter+-previous-hunk=,
+=git-gutter+-stage-hunks=, and =git-gutter+-revert-hunk=) to that
+keymap.
+
+#+begin_src lisp-preformatted
+(use-package git-gutter+
+  :bind
+  (:repeat-map git-gutter+-repeat-map
+   ("n" . git-gutter+-next-hunk)
+   ("p" . git-gutter+-previous-hunk)
+   ("s" . git-gutter+-stage-hunks)
+   ("r" . git-gutter+-revert-hunk)))
+#+end_src
+
+Specifying =:exit= inside the scope of =:repeat-map= will prevent the
+=repeat-map= property from being set, so that the command can be used
+from within the repeat map, but after using it the repeat map will no
+longer be available. This is useful for commands often used at the end
+of a series of repeated commands. Example:
+
+#+begin_src lisp-preformatted
+(use-package git-gutter+
+  :bind
+  (:repeat-map my/git-gutter+-repeat-map
+   ("n" . git-gutter+-next-hunk)
+   ("p" . git-gutter+-previous-hunk)
+   ("s" . git-gutter+-stage-hunks)
+   ("r" . git-gutter+-revert-hunk)
+   :exit
+   ("c" . magit-commit-create)
+   ("C" . magit-commit)
+   ("b" . magit-blame)))
+#+end_src
+
+Specifying =:continue= /forces/ setting the =repeat-map= property (just
+like /not/ specifying =:exit=), so the above snippet is equivalent to:
+
+#+begin_src lisp-preformatted
+(use-package git-gutter+
+  :bind
+  (:repeat-map my/git-gutter+-repeat-map
+   :exit
+   ("c" . magit-commit-create)
+   ("C" . magit-commit)
+   ("b" . magit-blame)
+   :continue
+   ("n" . git-gutter+-next-hunk)
+   ("p" . git-gutter+-previous-hunk)
+   ("s" . git-gutter+-stage-hunks)
+   ("r" . git-gutter+-revert-hunk)))
+#+end_src
+
+Specifying =:continue-only= inside the scope of =:repeat-map= will make
+commands continue an active repeating sequence, but never initiate it.
+This is done by setting the =repeat-continue= property of each command
+with the keymap, but not the =repeat-map= property. This is useful for
+commands that should be available while repeating a sequence, but not
+initiate the repeat map themselves. Example:
+
+#+begin_src lisp-preformatted
+(use-package emacs
+  :bind
+  (:repeat-map
+   paragraph-repeat-map
+   ("}" . forward-paragraph)
+   ("{" . backward-paragraph)
+   ("]" . forward-paragraph)
+   ("[" . backward-paragraph)
+   :continue-only
+   ("h" . mark-paragraph)
+   ("w" . kill-region)
+   ("M-w" . kill-ring-save)
+   ("k" . kill-paragraph)
+   ("y" . yank)))
+#+end_src
+
+--------------
+
+<<Displaying-keybindings>>
+
+Previous: [[#Binding-to-repeat_002dmaps][Binding to repeat-maps]], Up:
+[[#Key-bindings][Key bindings]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+**** 4.2.5 Displaying personal keybindings [[#Displaying-personal-keybindings][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Displaying-personal-keybindings
+:CLASS: subsection
+:END:
+The =:bind= keyword uses the =bind-keys= macro from the ‘=bind-key.el='
+library to set up keybindings. It keeps track of all keybindings you
+make, so that you can display them separately from the default
+keybindings.
+
+Use M-x describe-personal-keybindings to see all keybindings you've set
+using either the =:bind= keyword or the =bind-keys= macro.
+
+--------------
+
+<<Hooks>>
+
+Next: [[#Modes-and-interpreters][Modes and interpreters]], Previous:
+[[#Key-bindings][Key bindings]], Up:
+[[#Configuring-Packages][Configuring Packages]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 4.3 Hooks [[#Hooks-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Hooks-1
+:CLASS: section
+:END:
+The =:hook= keyword allows adding functions to hooks. It takes one
+argument of the form =hooks=, specifying one or more functions to add to
+one or more hooks. For the purposes of =:hook=, the name of hook
+variables should always exclude the ‘=-hook=' suffix. It is appended
+automatically for you, to save some typing.
+
+For example, consider the following =use-package= declaration that sets
+up autoloads for =company-mode= from the ‘=company=' package, and adds
+‘=company-mode=' to =prog-mode-hook=:
+
+#+begin_src lisp-preformatted
+(use-package company
+  :commands company-mode
+  :init
+  (add-hook 'prog-mode-hook #'company-mode))
+#+end_src
+
+Using =:hook=, this can be simplified to:
+
+#+begin_src lisp-preformatted
+(use-package company
+  :hook (prog-mode . company-mode))
+#+end_src
+
+Here, =:hook= will automatically set up autoloads for the =company-mode=
+command, so there is no need to use =:commands=.
+
+The =:hook= keyword will also assume that the name of the function you
+want to add is the same as the package name with ‘=-mode=' appended to
+it. Taking this into account, you can simplify the above to the
+equivalent:
+
+#+begin_src lisp-preformatted
+(use-package company
+  :hook prog-mode)
+#+end_src
+
+You can also provide a list of hooks. When multiple hooks should be
+applied, the following examples are all equivalent:
+
+#+begin_src lisp-preformatted
+(use-package company
+  :hook (prog-mode text-mode))
+#+end_src
+
+#+begin_src lisp-preformatted
+
+#+end_src
+
+#+begin_src lisp-preformatted
+(use-package company
+  :hook ((prog-mode text-mode) . company-mode))
+#+end_src
+
+#+begin_src lisp-preformatted
+
+#+end_src
+
+#+begin_src lisp-preformatted
+(use-package company
+  :hook ((prog-mode . company-mode)
+         (text-mode . company-mode)))
+#+end_src
+
+#+begin_src lisp-preformatted
+
+#+end_src
+
+#+begin_src lisp-preformatted
+(use-package company
+  :commands company-mode
+  :init
+  (add-hook 'prog-mode-hook #'company-mode)
+  (add-hook 'text-mode-hook #'company-mode))
+#+end_src
+
+To add more than one function to the same hook, add them separately,
+like this:
+
+#+begin_src lisp-preformatted
+(use-package company
+  :hook ((prog-mode . company-mode)
+         (prog-mode . some-other-function)))
+#+end_src
+
+One common mistake when using =:hook= is to forget to omit the ‘=-hook='
+suffix, which, as already explained, is appended automatically.
+Therefore, the following will not work, as it attempts to add a function
+to non-existent =prog-mode-hook-hook=:
+
+#+begin_src lisp-preformatted
+;; DOES NOT WORK
+(use-package ace-jump-mode
+  :hook (prog-mode-hook . ace-jump-mode))
+#+end_src
+
+If you do not like this behavior, you can customize the user option
+=use-package-hook-name-suffix= to =nil=. The value of this variable is
+‘="-hook"=' by default.
+
+The use of =:hook=, as with =:bind=, =:mode=, =:interpreter=, etc.,
+causes the functions being hooked to implicitly be read as =:commands=.
+This means that they will establish interactive =autoload= definitions
+for that module, if not already defined as functions), and so =:defer t=
+is also implied by =:hook=.
+
+--------------
+
+<<Modes-and-interpreters>>
+
+Next: [[#Magic-handlers][Magic handlers]], Previous: [[#Hooks][Hooks]],
+Up: [[#Configuring-Packages][Configuring Packages]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 4.4 Modes and interpreters [[#Modes-and-interpreters-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Modes-and-interpreters-1
+:CLASS: section
+:END:
+Similar to =:bind=, you can use =:mode= and =:interpreter= to establish
+a deferred binding within the =auto-mode-alist= and
+=interpreter-mode-alist= variables (see
+[[https://www.gnu.org/software/emacs/manual/html_mono/elisp.html#Auto-Major-Mode][Auto Major Mode]]
+in GNU Emacs Lisp Reference Manual). The specifier to either keyword can
+be a cons cell, a list of cons cells, or a string or regexp.
+
+The following example reproduces the default =ruby-mode= configuration,
+exactly as it is in Emacs out-of-the-box. That mode is enabled
+automatically when a file whose name matches the regexp ="\\.rb\\'"= (a
+file with the =.rb= extension), or when the first line of the file
+(known as the “shebang”) matches the string ="ruby"=:
+
+#+begin_src lisp-preformatted
+(use-package ruby-mode
+  :mode "\\.rb\\'"
+  :interpreter "ruby")
+#+end_src
+
+The default =python-mode= configuration can be reproduced using the
+declaration below. Note that the package that should be loaded differs
+from the mode name in this case, so we must use a cons:
+
+#+begin_src lisp-preformatted
+;; The package is "python" but the mode is "python-mode":
+(use-package python
+  :mode ("\\.py\\'" . python-mode)
+  :interpreter ("python" . python-mode))
+#+end_src
+
+Both the =:mode= and =:interpreter= keywords also accept a list of
+regexps:
+
+#+begin_src lisp-preformatted
+(use-package foo
+  ;; Equivalent to "\\(ba[rz]\\)\\'":
+  :mode ("\\.bar\\'" "\\.baz\\'")
+  ;; Equivalent to "\\(foo[ab]\\)":
+  :interpreter ("fooa" "foob"))
+#+end_src
+
+--------------
+
+<<Magic-handlers>>
+
+Next: [[#User-options][User options]], Previous:
+[[#Modes-and-interpreters][Modes and interpreters]], Up:
+[[#Configuring-Packages][Configuring Packages]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 4.5 Magic handlers [[#Magic-handlers-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Magic-handlers-1
+:CLASS: section
+:END:
+Similar to =:mode= and =:interpreter=, you can also use =:magic= and
+=:magic-fallback= to cause certain function to be run if the beginning
+of a file matches a given regular expression, as if these regular
+expressions were added to =magic-mode-alist= and
+=magic-fallback-mode-alist= (see
+[[https://www.gnu.org/software/emacs/manual/html_mono/elisp.html#Auto-Major-Mode][Auto Major Mode]]
+in GNU Emacs Lisp Reference Manual). The difference between =:magic= and
+=:magic-fallback=, is that the latter has a lower priority than =:mode=.
+
+Here is an example:
+
+#+begin_src lisp-preformatted
+(use-package pdf-tools
+  :magic ("%PDF" . pdf-view-mode)
+  :config
+  (pdf-tools-install :no-query))
+#+end_src
+
+This registers an autoloaded command for =pdf-view-mode=, defers loading
+of =pdf-tools=, and runs =pdf-view-mode= if the beginning of a buffer
+matches the string ="%PDF"=.
+
+--------------
+
+<<User-options>>
+
+Next: [[#Faces][Faces]], Previous: [[#Magic-handlers][Magic handlers]],
+Up: [[#Configuring-Packages][Configuring Packages]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 4.6 User options [[#User-options-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: User-options-1
+:CLASS: section
+:END:
+In Emacs, you normally set customizable variables (user options) using
+the =M-x customize= interface (see
+[[https://www.gnu.org/software/emacs/manual/html_mono/emacs.html#Easy-Customization][Easy Customization]]
+in GNU Emacs Manual). We recommend this method for most users. However,
+it is also possible to set them in your =use-package= declarations by
+using the =:custom= keyword.
+
+#+begin_src lisp-preformatted
+(use-package comint
+  :defer t
+  :custom
+  (comint-buffer-maximum-size 20000 "Increase comint buffer size.")
+  (comint-prompt-read-only t "Make the prompt read only."))
+#+end_src
+
+This is better than using =setq= in a =:config= block, as customizable
+variables might have some code associated with it that Emacs will
+execute when you assign values to them. (In Emacs 29 and later, there is
+also the new =setopt= macro that does this for you.)
+
+Note that the values customized using =:custom= are /not/ saved in the
+standard Emacs =custom-file= (see
+[[https://www.gnu.org/software/emacs/manual/html_mono/emacs.html#Saving-Customizations][Saving Customizations]]
+in GNU Emacs Manual). You should therefore set each user option using
+either the =:custom= keyword /or/ M-x customize-option command; the
+latter will save customized values in the Emacs =custom-file=. Do not
+use both for the same variable, as this risks having conflicting values
+in your use-package declaration and your =custom-file=, which can lead
+to problems that are both tricky and tedious to debug.
+
+Also note that if you use =:custom= in a file that you byte-compile, you
+could have some unexpected results if you later load or =require=
+=use-package= (e.g., due to lazy loading): the value of the
+corresponding user options could be reset back to their initial values.
+We therefore recommend against byte-compiling files that use
+=use-package= with =:custom= settings.
+
+--------------
+
+<<Faces>>
+
+Next:
+[[#Hiding-minor-modes][Hiding minor modes with diminish and delight]],
+Previous: [[#User-options][User options]], Up:
+[[#Configuring-Packages][Configuring Packages]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 4.7 Faces [[#Faces-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Faces-1
+:CLASS: section
+:END:
+The =:custom-face= keyword allows customization of package's faces.
+Example:
+
+#+begin_src lisp-preformatted
+(use-package eruby-mode
+  :custom-face
+  (eruby-standard-face ((t (:slant italic)))))
+#+end_src
+
+#+begin_src lisp-preformatted
+
+#+end_src
+
+#+begin_src lisp-preformatted
+(use-package example
+  :custom-face
+  (example-1-face ((t (:foreground "LightPink"))))
+  (example-2-face ((t (:foreground "LightGreen")))))
+#+end_src
+
+#+begin_src lisp-preformatted
+
+#+end_src
+
+#+begin_src lisp-preformatted
+(use-package zenburn-theme
+  :preface
+  (setq my/zenburn-colors-alist
+        '((fg . "#DCDCCC") (bg . "#1C1C1C") (cyan . "#93E0E3")))
+  :custom-face
+  (region ((t (:background ,(alist-get my/zenburn-colors-alist 'cyan)))))
+  :config
+  (load-theme 'zenburn t))
+#+end_src
+
+Similarly to =:custom= (see [[#User-options][User options]]), this
+allows configuring customizable faces outside of Customize (see
+[[https://www.gnu.org/software/emacs/manual/html_mono/emacs.html#Saving-Customizations][Saving Customizations]]
+in GNU Emacs Manual). Using both systems to configure the same face can
+lead to confusing results.
+
+--------------
+
+<<Hiding-minor-modes>>
+
+Previous: [[#Faces][Faces]], Up:
+[[#Configuring-Packages][Configuring Packages]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 4.8 Hiding minor modes with diminish and delight [[#Hiding-minor-modes-with-diminish-and-delight][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Hiding-minor-modes-with-diminish-and-delight
+:CLASS: section
+:END:
+=use-package= supports the =diminish= and =delight= packages, both of
+which make it possible to remove or change minor mode strings in your
+mode-line. Which one to use is up to you, but you should normally only
+use one or the other -- never both.[[#FOOT3][^{3}]] To use either of
+them, you must first install the corresponding package from GNU ELPA.
+
+- [[#Diminish][Diminish]]
+- [[#Delight][Delight]]
+
+--------------
+
+<<Diminish>>
+
+Next: [[#Delight][Delight]], Up:
+[[#Hiding-minor-modes][Hiding minor modes with diminish and delight]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+**** 4.8.1 Diminish [[#Diminish-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Diminish-1
+:CLASS: subsection
+:END:
+When diminish[[#FOOT4][^{4}]] is installed, you can use the =:diminish=
+keyword. If =diminish= is not installed, the =:diminish= keyword does
+nothing.
+
+First, add the following declaration to the beginning of your init file.
+
+#+begin_src lisp-preformatted
+(use-package diminish :ensure t)
+#+end_src
+
+The optional =:ensure t= makes sure the package is installed if it isn't
+already (see
+[[#Installing-packages][Installing packages automatically]]).
+
+The =:diminish= keyword takes as its argument either a minor mode
+symbol, a cons of the symbol and its replacement string, or just a
+replacement string, in which case the minor mode symbol is guessed to be
+the package name with ‘=-mode=' appended at the end:
+
+#+begin_src lisp-preformatted
+(use-package abbrev
+  :diminish abbrev-mode
+  :config
+  (if (file-exists-p abbrev-file-name)
+      (quietly-read-abbrev-file)))
+#+end_src
+
+--------------
+
+<<Delight>>
+
+Previous: [[#Diminish][Diminish]], Up:
+[[#Hiding-minor-modes][Hiding minor modes with diminish and delight]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+**** 4.8.2 Delight [[#Delight-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Delight-1
+:CLASS: subsection
+:END:
+When =delight=[[#FOOT5][^{5}]] is installed, you can use the =:delight=
+keyword. If =delight= is not installed, the =:delight= keyword does
+nothing.
+
+First, add the following declaration to the beginning of your init file.
+
+#+begin_src lisp-preformatted
+(use-package delight :ensure t)
+#+end_src
+
+The optional =:ensure t= makes sure the package is installed if it isn't
+already (see
+[[#Installing-packages][Installing packages automatically]]).
+
+The =:delight= keyword takes as its argument a minor mode symbol, a
+replacement string, or quoted mode line data (in which case the minor
+mode symbol is assumed to be the package name with ‘=-mode=' appended at
+the end), both of these, or several lists of both. See
+[[https://www.gnu.org/software/emacs/manual/html_mono/elisp.html#Mode-Line-Data][Mode Line Data]]
+in GNU Emacs Lisp Reference Manual. If no arguments are provided, the
+default mode name is hidden completely.
+
+For example, the following hides everything for the ‘=foo-mode=' minor
+mode in the ‘=foo=' package:
+
+#+begin_src lisp-preformatted
+(use-package foo
+  :delight)
+#+end_src
+
+If the mode name doesn't match the package name with ‘=-mode=' appended,
+provide a symbol instead. For example, the following hides
+=auto-revert-mode= from the mode line:
+
+#+begin_src lisp-preformatted
+;; Don't show anything for auto-revert-mode, which doesn't match
+;; its package name.
+(use-package autorevert
+  :delight auto-revert-mode)
+#+end_src
+
+You can also use arbitrary Lisp code as argument of =:delight=. For
+example, to replace ‘=foo-mode=' with the value of the current buffer:
+
+#+begin_src lisp-preformatted
+(use-package foo
+  :delight '(:eval buffer-file-name))
+#+end_src
+
+Here is an example of hiding several built-in minor modes:
+
+#+begin_src lisp-preformatted
+;; Completely hide visual-line-mode and change auto-fill-mode to " AF".
+(use-package emacs
+  :delight
+  (auto-fill-function " AF")
+  (visual-line-mode))
+#+end_src
+
+--------------
+
+<<Installing-packages>>
+
+Next: [[#Byte_002dcompiling][Byte-compiling your init file]], Previous:
+[[#Configuring-Packages][Configuring Packages]], Up:
+[[#Top][use-package User Manual]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+** 5 Installing packages automatically [[#Installing-packages-automatically][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Installing-packages-automatically
+:CLASS: chapter
+:END:
+The standard Emacs package manager is documented in the Emacs manual
+(see
+[[https://www.gnu.org/software/emacs/manual/html_mono/emacs.html#Package-Installation][Package Installation]]
+in GNU Emacs Manual). The =use-package= macro provides the =:ensure= and
+=:pin= keywords that interface with that package manager to
+automatically install packages. The =:vc= keyword may be used to control
+how package sources are downloaded; e.g., from remote hosts (see
+[[https://www.gnu.org/software/emacs/manual/html_mono/emacs.html#Fetching-Package-Sources][Fetching Package Sources]]
+in GNU Emacs Manual). This is particularly useful if you use your init
+file on more than one system.
+
+- [[#Install-package][Installing package]]
+- [[#Pinning-packages][Pinning packages using =:pin=]]
+- [[#Other-package-managers][Non-standard package managers]]
+
+--------------
+
+<<Install-package>>
+
+Next: [[#Pinning-packages][Pinning packages using =:pin=]], Up:
+[[#Installing-packages][Installing packages automatically]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 5.1 Installing package [[#Installing-package][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Installing-package
+:CLASS: section
+:END:
+The =:ensure= keyword makes use-package ask the Emacs package manager to
+install a package if it is not already present on your system.
+
+For example:
+
+#+begin_src lisp-preformatted
+(use-package magit
+  :ensure t)
+#+end_src
+
+If you need to install a different package from the one named by
+=use-package=, you can use a symbol:
+
+#+begin_src lisp-preformatted
+(use-package tex
+  :ensure auctex)
+#+end_src
+
+You can customize the user option =use-package-always-ensure= to a
+non-=nil= value if you want this behavior to be global for all packages:
+
+#+begin_src lisp-preformatted
+(require 'use-package-ensure)
+(setq use-package-always-ensure t)
+#+end_src
+
+You can override the above setting for a single package by adding
+=:ensure nil= to its declaration.
+
+The =:vc= keyword can be used to control how packages are downloaded
+and/or installed. More specifically, it allows one to fetch and update
+packages directly from a version control system. This is especially
+convenient when wanting to install a package that is not on any package
+archive.
+
+The keyword accepts the same arguments as specified in see
+[[https://www.gnu.org/software/emacs/manual/html_mono/emacs.html#Fetching-Package-Sources][Fetching Package Sources]]
+in GNU Emacs Manual, except that a name need not explicitly be given: it
+is inferred from the declaration. The accepted property list is
+augmented by a =:rev= keyword, which has the same shape as the =REV=
+argument to =package-vc-install=. Notably -- even when not specified --
+=:rev= defaults to checking out the last release of the package. You can
+use =:rev :newest= to check out the latest commit. Note that currently,
+you cannot upgrade built-in packages using =:vc=.
+
+For example,
+
+#+begin_src example-preformatted
+(use-package bbdb
+  :vc "https://git.savannah.nongnu.org/git/bbdb.git")
+#+end_src
+
+will check out the latest release commit using =package-vc-install=,
+while
+
+#+begin_src example-preformatted
+(use-package bbdb
+  :vc (:url "https://git.savannah.nongnu.org/git/bbdb.git"
+       :rev :newest))
+#+end_src
+
+would try to install the latest commit of the package =foo= from the
+specified remote.
+
+Alternatively, the =use-package-vc-prefer-newest= user option exists to
+always prefer the latest commit.
+
+--------------
+
+<<Pinning-packages>>
+
+Next: [[#Other-package-managers][Non-standard package managers]],
+Previous: [[#Install-package][Installing package]], Up:
+[[#Installing-packages][Installing packages automatically]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 5.2 Pinning packages using =:pin= [[#Pinning-packages-using-_003apin][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Pinning-packages-using-_003apin
+:CLASS: section
+:END:
+use-package can /pin/ a package to a specific archive using the =:pin=
+keyword.[[#FOOT6][^{6}]] This allows you to mix and match packages from
+different archives. The primary use-case for this is preferring to
+install packages from GNU ELPA or NonGNU ELPA (indicated by =gnu= and
+=nongnu=, respectively), while installing specific packages from
+third-party archives.
+
+For example:
+
+#+begin_src lisp-preformatted
+(use-package company
+  :ensure t
+  :pin gnu)   ; GNU ELPA
+#+end_src
+
+Unfortunately, the third-party archive MELPA uses a versioning scheme
+based on dates, which means that packages from that archive are always
+preferred. If you are using that archive, we strongly encourage you to
+customize =use-package-always-pin= to =nongnu=. This guarantees that you
+are using a version of that package that has been specifically marked
+for release by its developer, and not a development snapshot.
+
+If you want to manually keep a package updated and ignore upstream
+updates, you can pin it to ‘=manual='. This will work as long as you
+have not customized a repository to use that name in the
+=package-archives= variable.
+
+Example:
+
+#+begin_src lisp-preformatted
+(use-package org
+  :ensure t
+  ;; ignore org-mode from upstream and use a manually installed version
+  :pin manual)
+#+end_src
+
+=use-package= signals an error if you try to pin a package to an archive
+that is not configured using =package-archives= (except from the special
+‘=manual=' archive).
+
+--------------
+
+<<Other-package-managers>>
+
+Previous: [[#Pinning-packages][Pinning packages using =:pin=]], Up:
+[[#Installing-packages][Installing packages automatically]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 5.3 Non-standard package managers [[#Non_002dstandard-package-managers][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Non_002dstandard-package-managers
+:CLASS: section
+:END:
+By default, use-package assumes that you are using the Emacs built-in
+=package.el= package manager. We expect that most users will find that
+it is capable enough, even for advanced use cases.
+
+However, some users might prefer to use a third-party package manager
+for a specific circumstance or use case. By setting the user option
+=use-package-ensure-function= to the name of a function, you can direct
+=:ensure= to use a different package manager for installing packages.
+
+For more details, please see the documentation of the package manager
+you are using. If you run into any bugs, it is often best to report them
+directly to the developers of that package manager.
+
+--------------
+
+<<Byte_002dcompiling>>
+
+Next: [[#Troubleshooting][Troubleshooting]], Previous:
+[[#Installing-packages][Installing packages automatically]], Up:
+[[#Top][use-package User Manual]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+** 6 Byte-compiling your init file [[#Byte_002dcompiling-your-init-file][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Byte_002dcompiling-your-init-file
+:CLASS: chapter
+:END:
+Some users might want to byte-compile their init file to make Emacs
+startup faster. This is not recommended in most cases, as the speed-up
+is usually too small to be worth it, and it can lead to confusion if the
+byte-compiled files are out-of-date. If you still want to do it, this
+chapter explains how to do that.
+
+=use-package= always loads every library that it can while a file is
+being byte-compiled. This helps silence spurious warnings about unknown
+variables and functions.
+
+However, there are times when this is just not enough. For those times,
+use the =:defines= and =:functions= keywords to introduce dummy variable
+and function declarations solely for the sake of silencing byte-compiler
+warnings. For example:
+
+#+begin_src lisp-preformatted
+(use-package texinfo
+  :defines texinfo-section-list
+  :commands texinfo-mode
+  :init
+  (add-to-list 'auto-mode-alist '("\\.texi$" . texinfo-mode)))
+#+end_src
+
+If you need to silence a missing function warning, you can use
+=:functions=:
+
+#+begin_src lisp-preformatted
+(use-package ruby-mode
+  :mode "\\.rb\\'"
+  :interpreter "ruby"
+  :functions inf-ruby-keys
+  :config
+  (defun my-ruby-mode-hook ()
+    (require 'inf-ruby)
+    (inf-ruby-keys))
+  (add-hook 'ruby-mode-hook 'my-ruby-mode-hook))
+#+end_src
+
+Normally, =use-package= will load each package at compile time before
+compiling the configuration, to ensure that any necessary symbols are in
+scope to satisfy the byte-compiler. At times this can cause problems,
+since a package may have special loading requirements, and all that you
+want to use =use-package= for is to add a configuration to the
+=eval-after-load= hook. In such cases, use the =:no-require= keyword:
+
+#+begin_src lisp-preformatted
+(use-package foo
+  :no-require t
+  :config
+  (message "Evaluate this immediately after loading `foo'"))
+#+end_src
+
+--------------
+
+<<Troubleshooting>>
+
+Next: [[#Keyword-extensions][Keyword extensions]], Previous:
+[[#Byte_002dcompiling][Byte-compiling your init file]], Up:
+[[#Top][use-package User Manual]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+** 7 Troubleshooting [[#Troubleshooting-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Troubleshooting-1
+:CLASS: chapter
+:END:
+If an error occurs while initializing or configuring a package, this
+will not stop your Emacs from loading. Instead, =use-package= captures
+the error and reports it in a special =*Warnings*= popup buffer, so that
+you can debug the situation in an otherwise functional Emacs.
+
+If you are having trouble when starting Emacs, you can pass Emacs the
+‘=--debug-init=' command line flag. See
+[[https://www.gnu.org/software/emacs/manual/html_mono/emacs.html#Initial-Options][Initial Options]]
+in GNU Emacs Manual. To get even more information when using that flag,
+add the following to your init file (these options are documented
+below):
+
+#+begin_src lisp-preformatted
+(when init-file-debug
+  (setq use-package-verbose t
+        use-package-expand-minimally nil
+        use-package-compute-statistics t
+        debug-on-error t))
+#+end_src
+
+Since =use-package= is a macro, the first step when you need to dig
+deeper is usually to see what Emacs Lisp code your declaration expands
+to. You can either use the command M-x pp-macroexpand-last-sexp, or wrap
+the use-package declaration in =macroexpand= and evaluate it. It is a
+good idea to include their output in any bugs you file for use-package.
+
+- [[#Troubleshooting-Options][Options that help when troubleshooting]]
+- [[#Gathering-Statistics][Gathering Statistics]]
+- [[#Disabling-a-package][Disabling a package]]
+
+--------------
+
+<<Troubleshooting-Options>>
+
+Next: [[#Gathering-Statistics][Gathering Statistics]], Up:
+[[#Troubleshooting][Troubleshooting]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 7.1 Options that help when troubleshooting [[#Options-that-help-when-troubleshooting][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Options-that-help-when-troubleshooting
+:CLASS: section
+:END:
+By default, use-package will attempts to catch and report errors that
+occur during expansion of use-package declarations in your init file.
+Customize the user option =use-package-expand-minimally= to a non-=nil=
+value to disable this checking.
+
+This behavior may be overridden locally using the =:catch= keyword. If
+=t= or =nil=, it enables or disables catching errors at load time. It
+can also be a function taking two arguments: the keyword being processed
+at the time the error was encountered, and the error object (as
+generated by =condition-case=). For example:
+
+#+begin_src lisp-preformatted
+(use-package example
+  ;; Note that errors are never trapped in the preface, since
+  ;; doing so would hide definitions from the byte-compiler.
+  :preface (message "I'm here at byte-compile and load time")
+  :init (message "I'm always here at startup")
+  :config
+  (message "I'm always here after the package is loaded")
+  (error "oops")
+  ;; Don't try to (require 'example), this is just an example!
+  :no-require t
+  :catch (lambda (keyword err)
+           (message (error-message-string err))))
+#+end_src
+
+Evaluating the above form will print these messages:
+
+#+begin_src verbatim
+I'm here at byte-compile and load time
+I'm always here at startup
+Configuring package example...
+I'm always here after the package is loaded
+oops
+#+end_src
+
+--------------
+
+<<Gathering-Statistics>>
+
+Next: [[#Disabling-a-package][Disabling a package]], Previous:
+[[#Troubleshooting-Options][Options that help when troubleshooting]],
+Up: [[#Troubleshooting][Troubleshooting]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 7.2 Gathering Statistics [[#Gathering-Statistics-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Gathering-Statistics-1
+:CLASS: section
+:END:
+When a package is loaded, and if you have =use-package-verbose= set to
+=t=, or if the package takes longer than 0.1 seconds to load, you will
+see a message to indicate this loading activity in the =*Messages*=
+buffer. The same will happen for configuration, or =:config= blocks,
+that take longer than 0.1 seconds to execute.
+
+If you'd like to see a summary how many packages you've loaded, what
+stage of initialization they've reached, and how much aggregate time
+they've spent (roughly), you can customize the user option
+=use-package-compute-statistics= to a non-=nil= value. Then reload your
+packages, normally by restarting Emacs, to make sure that use-package
+can gather statistics for all your packages.
+
+Run the command M-x use-package-report to see the results. The buffer
+displayed is a tabulated list. To sort rows based on a particular
+column, move point to it and type S, or click the column name at the top
+of the buffer on graphical displays.
+
+To reset all statistics that use-package has gathered for the current
+Emacs invocation, run the command M-x use-package-reset-statistics.
+
+Note that if you are setting =use-package-compute-statistics= directly
+in your init file, and not with =customize=, you must do this after
+loading =use-package=, but before any =use-package= forms.
+
+--------------
+
+<<Disabling-a-package>>
+
+Previous: [[#Gathering-Statistics][Gathering Statistics]], Up:
+[[#Troubleshooting][Troubleshooting]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** 7.3 Disabling a package [[#Disabling-a-package-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Disabling-a-package-1
+:CLASS: section
+:END:
+The =:disabled= keyword inhibits loading a package, and all its
+customizations. It is equivalent to commenting out or deleting the
+definition.
+
+You could use this, for example, to temporarily disable a package that
+you're having difficulties with, or to avoid loading a package that
+you're not currently using.
+
+This example disables the ‘=foo=' package:
+
+#+begin_src lisp-preformatted
+(use-package foo
+  :disabled)
+#+end_src
+
+When byte-compiling your init file, use-package omits disabled
+declarations from the output entirely, in order to make Emacs startup
+faster.
+
+--------------
+
+<<Keyword-extensions>>
+
+Next: [[#History][History and acknowledgments]], Previous:
+[[#Troubleshooting][Troubleshooting]], Up:
+[[#Top][use-package User Manual]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+** Appendix A Keyword extensions [[#Keyword-extensions-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Keyword-extensions-1
+:CLASS: appendix
+:END:
+use-package is based on an extensible framework that makes it easy for
+package authors to add new keywords, or modify the behavior of existing
+keywords.
+
+Some keyword extensions are included with =use-package=, and can be
+optionally enabled.
+
+- [[#use_002dpackage_002densure_002dsystem_002dpackage][:use-package-ensure-system-package]]
+- [[#Creating-an-extension][How to create an extension keyword]]
+
+--------------
+
+<<use_002dpackage_002densure_002dsystem_002dpackage>>
+
+Next: [[#Creating-an-extension][How to create an extension keyword]],
+Up: [[#Keyword-extensions][Keyword extensions]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** A.1 :use-package-ensure-system-package [[#g_t_003ause_002dpackage_002densure_002dsystem_002dpackage][¶]]
+:PROPERTIES:
+:CUSTOM_ID: g_t_003ause_002dpackage_002densure_002dsystem_002dpackage
+:CLASS: appendixsec
+:END:
+The =:ensure-system-package= keyword allows you to ensure certain
+executables are available on your system alongside your package
+declarations.[[#FOOT7][^{7}]]
+
+To use this extension, add this immediately after loading =use-package=:
+
+#+begin_src lisp-preformatted
+(use-package use-package-ensure-system-package)
+#+end_src
+
+Now you can use the =:ensure-system-package= keyword. Here's an example
+usage:
+
+#+begin_src lisp-preformatted
+(use-package foo
+  :ensure-system-package foo)
+#+end_src
+
+This will expect a global binary package to exist called =foo=. If it
+does not, it will use your system package manager to attempt an install
+of a binary by the same name asynchronously. This requires the GNU ELPA
+package
+[[https://gitlab.com/jabranham/system-packages][‘=system-packages=']],
+so for this to work you must install that first.
+
+One way of making sure it is installed is with =use-package= together
+with =:ensure=.
+
+#+begin_src lisp-preformatted
+(use-package system-packages
+  :ensure t)
+#+end_src
+
+For example, on a Debian GNU/Linux system, this would call
+‘=apt-get install foo='.
+
+If the package is named differently than the binary, you can use a cons
+in the form of =(binary . package-name)=. For example:
+
+#+begin_src lisp-preformatted
+(use-package foo
+  :ensure-system-package
+  (foocmd . foo))
+#+end_src
+
+On a Debian GNU/Linux system, this would call =apt install foo= if Emacs
+could not locate the executable =foocmd=.[[#FOOT8][^{8}]]
+
+=:ensure-system-package= can also take a cons where the =cdr= is a
+string that will get called by =(async-shell-command)= to install if it
+isn't found. This does not depend on any external package.
+
+#+begin_src lisp-preformatted
+(use-package tern
+  :ensure-system-package (tern . "npm i -g tern"))
+#+end_src
+
+To install several packages, you can pass in a list of conses:
+
+#+begin_src lisp-preformatted
+(use-package ruby-mode
+  :ensure-system-package
+  ((rubocop     . "gem install rubocop")
+   (ruby-lint   . "gem install ruby-lint")
+   (ripper-tags . "gem install ripper-tags")
+   (pry         . "gem install pry")))
+#+end_src
+
+Finally, in case the package dependency does not provide a global
+executable, you can ensure that packages exist by checking the presence
+of a file by providing a string like so:
+
+#+begin_src lisp-preformatted
+(use-package dash-at-point
+  :if (eq system-type 'darwin)
+  :ensure-system-package
+  ("/Applications/Dash.app" . "brew cask install dash"))
+#+end_src
+
+=:ensure-system-package= will use =system-packages-install= to install
+system packages, except where a custom command has been specified, in
+which case it will be executed verbatim by =async-shell-command=.
+
+The user options =system-packages-package-manager= and
+=system-packages-use-sudo= are honored, but not for custom commands.
+Custom commands should include the call to sudo in the command if
+needed.
+
+--------------
+
+<<Creating-an-extension>>
+
+Previous:
+[[#use_002dpackage_002densure_002dsystem_002dpackage][:use-package-ensure-system-package]],
+Up: [[#Keyword-extensions][Keyword extensions]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+*** A.2 How to create an extension keyword [[#How-to-create-an-extension-keyword][¶]]
+:PROPERTIES:
+:CUSTOM_ID: How-to-create-an-extension-keyword
+:CLASS: appendixsec
+:END:
+This section describes how to create a new keyword.
+
+1. Add the keyword.
+
+   The first step is to add your keyword at the right place in
+   =use-package-keywords=. This list determines the order in which
+   things will happen in the expanded code. You should never change this
+   order, but it gives you a framework within which to decide when your
+   keyword should fire.
+
+2. Create a normalizer.
+
+   The job of the normalizer is take a list of arguments (possibly
+   =nil=), and turn it into the single argument (which could still be a
+   list) that should appear in the final property list used by
+   =use-package=.
+
+   Define a normalizer for your keyword by defining a function named
+   after the keyword, for example:
+
+   #+begin_src lisp-preformatted
+   (defun use-package-normalize/:pin (name-symbol keyword args)
+     (use-package-only-one (symbol-name keyword) args
+       (lambda (label arg)
+         (cond
+          ((stringp arg) arg)
+          ((symbolp arg) (symbol-name arg))
+          (t
+           (use-package-error
+            ":pin wants an archive name (a string)"))))))
+   #+end_src
+
+3. Create a handler.
+
+   Once you have a normalizer, you must create a handler for the
+   keyword.
+
+   Handlers can affect the handling of keywords in two ways. First, they
+   can modify the =state= plist before recursively processing the
+   remaining keywords, to influence keywords that pay attention to the
+   state (one example is the state keyword =:deferred=, not to be
+   confused with the =use-package= keyword =:defer=). Then, once the
+   remaining keywords have been handled and their resulting forms
+   returned, the handlers may manipulate, extend, or just ignore those
+   forms.
+
+   The task of each handler is to return a /list of forms/ representing
+   code to be inserted. It does not need to be a =progn= list, as this
+   is handled automatically in other places. Thus it is common to see
+   the idiom of using =use-package-concat= to add new functionality
+   before or after a code body, so that only the minimum code necessary
+   is emitted as the result of a =use-package= expansion.
+
+   This is an example handler:
+
+   #+begin_src lisp-preformatted
+   (defun use-package-handler/:pin (name-symbol keyword archive-name rest state)
+     (let ((body (use-package-process-keywords name-symbol rest state)))
+       ;; This happens at macro expansion time, not when the expanded code is
+       ;; compiled or evaluated.
+       (if (null archive-name)
+           body
+         (use-package-pin-package name-symbol archive-name)
+         (use-package-concat
+          body
+          `((push '(,name-symbol . ,archive-name)
+                  package-pinned-packages))))))
+   #+end_src
+
+4. Test it.
+
+   After the keyword has been inserted into =use-package-keywords=, and
+   a normalizer and a handler has been defined, you can now test the
+   keyword by seeing how usages of the keyword will expand. For this,
+   use M-x pp-macroexpand-last-sexp with the cursor set immediately
+   after the =(use-package …)= expression.
+
+--------------
+
+<<History>>
+
+Next:
+[[#GNU-Free-Documentation-License][GNU Free Documentation License]],
+Previous: [[#Keyword-extensions][Keyword extensions]], Up:
+[[#Top][use-package User Manual]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+** Appendix B History and acknowledgments [[#History-and-acknowledgments][¶]]
+:PROPERTIES:
+:CUSTOM_ID: History-and-acknowledgments
+:CLASS: appendix
+:END:
+use-package was written by John Wiegley. Its development started in
+2012, and it got merged into Emacs in 2022, in preparation of the
+release of Emacs 29.1.
+
+Dozens of people have contributed to use-package over the years with bug
+reports, documentation and code. They are too many to list here, but we
+thank them all for their contributions.
+
+This Texinfo manual was written by Stefan Kangas, as a significant
+rewrite of the old use-package manual and =README=.
+
+--------------
+
+<<GNU-Free-Documentation-License>>
+
+Next: [[#Index][Index]], Previous:
+[[#History][History and acknowledgments]], Up:
+[[#Top][use-package User Manual]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+** Appendix C GNU Free Documentation License [[#GNU-Free-Documentation-License-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: GNU-Free-Documentation-License-1
+:CLASS: appendix
+:END:
+
+#+begin_center
+Version 1.3, 3 November 2008
+#+end_center
+
+#+begin_src display-preformatted
+Copyright © 2000, 2001, 2002, 2007, 2008 Free Software Foundation, Inc.
+https://fsf.org/
+
+Everyone is permitted to copy and distribute verbatim copies
+of this license document, but changing it is not allowed.
+#+end_src
+
+0. [@0] PREAMBLE
+
+   The purpose of this License is to make a manual, textbook, or other
+   functional and useful document /free/ in the sense of freedom: to
+   assure everyone the effective freedom to copy and redistribute it,
+   with or without modifying it, either commercially or noncommercially.
+   Secondarily, this License preserves for the author and publisher a
+   way to get credit for their work, while not being considered
+   responsible for modifications made by others.
+
+   This License is a kind of “copyleft”, which means that derivative
+   works of the document must themselves be free in the same sense. It
+   complements the GNU General Public License, which is a copyleft
+   license designed for free software.
+
+   We have designed this License in order to use it for manuals for free
+   software, because free software needs free documentation: a free
+   program should come with manuals providing the same freedoms that the
+   software does. But this License is not limited to software manuals;
+   it can be used for any textual work, regardless of subject matter or
+   whether it is published as a printed book. We recommend this License
+   principally for works whose purpose is instruction or reference.
+
+1. APPLICABILITY AND DEFINITIONS
+
+   This License applies to any manual or other work, in any medium, that
+   contains a notice placed by the copyright holder saying it can be
+   distributed under the terms of this License. Such a notice grants a
+   world-wide, royalty-free license, unlimited in duration, to use that
+   work under the conditions stated herein. The “Document”, below,
+   refers to any such manual or work. Any member of the public is a
+   licensee, and is addressed as “you”. You accept the license if you
+   copy, modify or distribute the work in a way requiring permission
+   under copyright law.
+
+   A “Modified Version” of the Document means any work containing the
+   Document or a portion of it, either copied verbatim, or with
+   modifications and/or translated into another language.
+
+   A “Secondary Section” is a named appendix or a front-matter section
+   of the Document that deals exclusively with the relationship of the
+   publishers or authors of the Document to the Document's overall
+   subject (or to related matters) and contains nothing that could fall
+   directly within that overall subject. (Thus, if the Document is in
+   part a textbook of mathematics, a Secondary Section may not explain
+   any mathematics.) The relationship could be a matter of historical
+   connection with the subject or with related matters, or of legal,
+   commercial, philosophical, ethical or political position regarding
+   them.
+
+   The “Invariant Sections” are certain Secondary Sections whose titles
+   are designated, as being those of Invariant Sections, in the notice
+   that says that the Document is released under this License. If a
+   section does not fit the above definition of Secondary then it is not
+   allowed to be designated as Invariant. The Document may contain zero
+   Invariant Sections. If the Document does not identify any Invariant
+   Sections then there are none.
+
+   The “Cover Texts” are certain short passages of text that are listed,
+   as Front-Cover Texts or Back-Cover Texts, in the notice that says
+   that the Document is released under this License. A Front-Cover Text
+   may be at most 5 words, and a Back-Cover Text may be at most 25
+   words.
+
+   A “Transparent” copy of the Document means a machine-readable copy,
+   represented in a format whose specification is available to the
+   general public, that is suitable for revising the document
+   straightforwardly with generic text editors or (for images composed
+   of pixels) generic paint programs or (for drawings) some widely
+   available drawing editor, and that is suitable for input to text
+   formatters or for automatic translation to a variety of formats
+   suitable for input to text formatters. A copy made in an otherwise
+   Transparent file format whose markup, or absence of markup, has been
+   arranged to thwart or discourage subsequent modification by readers
+   is not Transparent. An image format is not Transparent if used for
+   any substantial amount of text. A copy that is not “Transparent” is
+   called “Opaque”.
+
+   Examples of suitable formats for Transparent copies include plain
+   ASCII without markup, Texinfo input format, LaTeX input format, SGML
+   or XML using a publicly available DTD, and standard-conforming simple
+   HTML, PostScript or PDF designed for human modification. Examples of
+   transparent image formats include PNG, XCF and JPG. Opaque formats
+   include proprietary formats that can be read and edited only by
+   proprietary word processors, SGML or XML for which the DTD and/or
+   processing tools are not generally available, and the
+   machine-generated HTML, PostScript or PDF produced by some word
+   processors for output purposes only.
+
+   The “Title Page” means, for a printed book, the title page itself,
+   plus such following pages as are needed to hold, legibly, the
+   material this License requires to appear in the title page. For works
+   in formats which do not have any title page as such, “Title Page”
+   means the text near the most prominent appearance of the work's
+   title, preceding the beginning of the body of the text.
+
+   The “publisher” means any person or entity that distributes copies of
+   the Document to the public.
+
+   A section “Entitled XYZ” means a named subunit of the Document whose
+   title either is precisely XYZ or contains XYZ in parentheses
+   following text that translates XYZ in another language. (Here XYZ
+   stands for a specific section name mentioned below, such as
+   “Acknowledgements”, “Dedications”, “Endorsements”, or “History”.) To
+   “Preserve the Title” of such a section when you modify the Document
+   means that it remains a section “Entitled XYZ” according to this
+   definition.
+
+   The Document may include Warranty Disclaimers next to the notice
+   which states that this License applies to the Document. These
+   Warranty Disclaimers are considered to be included by reference in
+   this License, but only as regards disclaiming warranties: any other
+   implication that these Warranty Disclaimers may have is void and has
+   no effect on the meaning of this License.
+
+2. VERBATIM COPYING
+
+   You may copy and distribute the Document in any medium, either
+   commercially or noncommercially, provided that this License, the
+   copyright notices, and the license notice saying this License applies
+   to the Document are reproduced in all copies, and that you add no
+   other conditions whatsoever to those of this License. You may not use
+   technical measures to obstruct or control the reading or further
+   copying of the copies you make or distribute. However, you may accept
+   compensation in exchange for copies. If you distribute a large enough
+   number of copies you must also follow the conditions in section 3.
+
+   You may also lend copies, under the same conditions stated above, and
+   you may publicly display copies.
+
+3. COPYING IN QUANTITY
+
+   If you publish printed copies (or copies in media that commonly have
+   printed covers) of the Document, numbering more than 100, and the
+   Document's license notice requires Cover Texts, you must enclose the
+   copies in covers that carry, clearly and legibly, all these Cover
+   Texts: Front-Cover Texts on the front cover, and Back-Cover Texts on
+   the back cover. Both covers must also clearly and legibly identify
+   you as the publisher of these copies. The front cover must present
+   the full title with all words of the title equally prominent and
+   visible. You may add other material on the covers in addition.
+   Copying with changes limited to the covers, as long as they preserve
+   the title of the Document and satisfy these conditions, can be
+   treated as verbatim copying in other respects.
+
+   If the required texts for either cover are too voluminous to fit
+   legibly, you should put the first ones listed (as many as fit
+   reasonably) on the actual cover, and continue the rest onto adjacent
+   pages.
+
+   If you publish or distribute Opaque copies of the Document numbering
+   more than 100, you must either include a machine-readable Transparent
+   copy along with each Opaque copy, or state in or with each Opaque
+   copy a computer-network location from which the general network-using
+   public has access to download using public-standard network protocols
+   a complete Transparent copy of the Document, free of added material.
+   If you use the latter option, you must take reasonably prudent steps,
+   when you begin distribution of Opaque copies in quantity, to ensure
+   that this Transparent copy will remain thus accessible at the stated
+   location until at least one year after the last time you distribute
+   an Opaque copy (directly or through your agents or retailers) of that
+   edition to the public.
+
+   It is requested, but not required, that you contact the authors of
+   the Document well before redistributing any large number of copies,
+   to give them a chance to provide you with an updated version of the
+   Document.
+
+4. MODIFICATIONS
+
+   You may copy and distribute a Modified Version of the Document under
+   the conditions of sections 2 and 3 above, provided that you release
+   the Modified Version under precisely this License, with the Modified
+   Version filling the role of the Document, thus licensing distribution
+   and modification of the Modified Version to whoever possesses a copy
+   of it. In addition, you must do these things in the Modified Version:
+
+   1. Use in the Title Page (and on the covers, if any) a title distinct
+      from that of the Document, and from those of previous versions
+      (which should, if there were any, be listed in the History section
+      of the Document). You may use the same title as a previous version
+      if the original publisher of that version gives permission.
+   2. List on the Title Page, as authors, one or more persons or
+      entities responsible for authorship of the modifications in the
+      Modified Version, together with at least five of the principal
+      authors of the Document (all of its principal authors, if it has
+      fewer than five), unless they release you from this requirement.
+   3. State on the Title page the name of the publisher of the Modified
+      Version, as the publisher.
+   4. Preserve all the copyright notices of the Document.
+   5. Add an appropriate copyright notice for your modifications
+      adjacent to the other copyright notices.
+   6. Include, immediately after the copyright notices, a license notice
+      giving the public permission to use the Modified Version under the
+      terms of this License, in the form shown in the Addendum below.
+   7. Preserve in that license notice the full lists of Invariant
+      Sections and required Cover Texts given in the Document's license
+      notice.
+   8. Include an unaltered copy of this License.
+   9. Preserve the section Entitled “History”, Preserve its Title, and
+      add to it an item stating at least the title, year, new authors,
+      and publisher of the Modified Version as given on the Title Page.
+      If there is no section Entitled “History” in the Document, create
+      one stating the title, year, authors, and publisher of the
+      Document as given on its Title Page, then add an item describing
+      the Modified Version as stated in the previous sentence.
+   10. Preserve the network location, if any, given in the Document for
+       public access to a Transparent copy of the Document, and likewise
+       the network locations given in the Document for previous versions
+       it was based on. These may be placed in the “History” section.
+       You may omit a network location for a work that was published at
+       least four years before the Document itself, or if the original
+       publisher of the version it refers to gives permission.
+   11. For any section Entitled “Acknowledgements” or “Dedications”,
+       Preserve the Title of the section, and preserve in the section
+       all the substance and tone of each of the contributor
+       acknowledgements and/or dedications given therein.
+   12. Preserve all the Invariant Sections of the Document, unaltered in
+       their text and in their titles. Section numbers or the equivalent
+       are not considered part of the section titles.
+   13. Delete any section Entitled “Endorsements”. Such a section may
+       not be included in the Modified Version.
+   14. Do not retitle any existing section to be Entitled “Endorsements”
+       or to conflict in title with any Invariant Section.
+   15. Preserve any Warranty Disclaimers.
+
+   If the Modified Version includes new front-matter sections or
+   appendices that qualify as Secondary Sections and contain no material
+   copied from the Document, you may at your option designate some or
+   all of these sections as invariant. To do this, add their titles to
+   the list of Invariant Sections in the Modified Version's license
+   notice. These titles must be distinct from any other section titles.
+
+   You may add a section Entitled “Endorsements”, provided it contains
+   nothing but endorsements of your Modified Version by various
+   parties---for example, statements of peer review or that the text has
+   been approved by an organization as the authoritative definition of a
+   standard.
+
+   You may add a passage of up to five words as a Front-Cover Text, and
+   a passage of up to 25 words as a Back-Cover Text, to the end of the
+   list of Cover Texts in the Modified Version. Only one passage of
+   Front-Cover Text and one of Back-Cover Text may be added by (or
+   through arrangements made by) any one entity. If the Document already
+   includes a cover text for the same cover, previously added by you or
+   by arrangement made by the same entity you are acting on behalf of,
+   you may not add another; but you may replace the old one, on explicit
+   permission from the previous publisher that added the old one.
+
+   The author(s) and publisher(s) of the Document do not by this License
+   give permission to use their names for publicity for or to assert or
+   imply endorsement of any Modified Version.
+
+5. COMBINING DOCUMENTS
+
+   You may combine the Document with other documents released under this
+   License, under the terms defined in section 4 above for modified
+   versions, provided that you include in the combination all of the
+   Invariant Sections of all of the original documents, unmodified, and
+   list them all as Invariant Sections of your combined work in its
+   license notice, and that you preserve all their Warranty Disclaimers.
+
+   The combined work need only contain one copy of this License, and
+   multiple identical Invariant Sections may be replaced with a single
+   copy. If there are multiple Invariant Sections with the same name but
+   different contents, make the title of each such section unique by
+   adding at the end of it, in parentheses, the name of the original
+   author or publisher of that section if known, or else a unique
+   number. Make the same adjustment to the section titles in the list of
+   Invariant Sections in the license notice of the combined work.
+
+   In the combination, you must combine any sections Entitled “History”
+   in the various original documents, forming one section Entitled
+   “History”; likewise combine any sections Entitled “Acknowledgements”,
+   and any sections Entitled “Dedications”. You must delete all sections
+   Entitled “Endorsements.”
+
+6. COLLECTIONS OF DOCUMENTS
+
+   You may make a collection consisting of the Document and other
+   documents released under this License, and replace the individual
+   copies of this License in the various documents with a single copy
+   that is included in the collection, provided that you follow the
+   rules of this License for verbatim copying of each of the documents
+   in all other respects.
+
+   You may extract a single document from such a collection, and
+   distribute it individually under this License, provided you insert a
+   copy of this License into the extracted document, and follow this
+   License in all other respects regarding verbatim copying of that
+   document.
+
+7. AGGREGATION WITH INDEPENDENT WORKS
+
+   A compilation of the Document or its derivatives with other separate
+   and independent documents or works, in or on a volume of a storage or
+   distribution medium, is called an “aggregate” if the copyright
+   resulting from the compilation is not used to limit the legal rights
+   of the compilation's users beyond what the individual works permit.
+   When the Document is included in an aggregate, this License does not
+   apply to the other works in the aggregate which are not themselves
+   derivative works of the Document.
+
+   If the Cover Text requirement of section 3 is applicable to these
+   copies of the Document, then if the Document is less than one half of
+   the entire aggregate, the Document's Cover Texts may be placed on
+   covers that bracket the Document within the aggregate, or the
+   electronic equivalent of covers if the Document is in electronic
+   form. Otherwise they must appear on printed covers that bracket the
+   whole aggregate.
+
+8. TRANSLATION
+
+   Translation is considered a kind of modification, so you may
+   distribute translations of the Document under the terms of section 4.
+   Replacing Invariant Sections with translations requires special
+   permission from their copyright holders, but you may include
+   translations of some or all Invariant Sections in addition to the
+   original versions of these Invariant Sections. You may include a
+   translation of this License, and all the license notices in the
+   Document, and any Warranty Disclaimers, provided that you also
+   include the original English version of this License and the original
+   versions of those notices and disclaimers. In case of a disagreement
+   between the translation and the original version of this License or a
+   notice or disclaimer, the original version will prevail.
+
+   If a section in the Document is Entitled “Acknowledgements”,
+   “Dedications”, or “History”, the requirement (section 4) to Preserve
+   its Title (section 1) will typically require changing the actual
+   title.
+
+9. TERMINATION
+
+   You may not copy, modify, sublicense, or distribute the Document
+   except as expressly provided under this License. Any attempt
+   otherwise to copy, modify, sublicense, or distribute it is void, and
+   will automatically terminate your rights under this License.
+
+   However, if you cease all violation of this License, then your
+   license from a particular copyright holder is reinstated (a)
+   provisionally, unless and until the copyright holder explicitly and
+   finally terminates your license, and (b) permanently, if the
+   copyright holder fails to notify you of the violation by some
+   reasonable means prior to 60 days after the cessation.
+
+   Moreover, your license from a particular copyright holder is
+   reinstated permanently if the copyright holder notifies you of the
+   violation by some reasonable means, this is the first time you have
+   received notice of violation of this License (for any work) from that
+   copyright holder, and you cure the violation prior to 30 days after
+   your receipt of the notice.
+
+   Termination of your rights under this section does not terminate the
+   licenses of parties who have received copies or rights from you under
+   this License. If your rights have been terminated and not permanently
+   reinstated, receipt of a copy of some or all of the same material
+   does not give you any rights to use it.
+
+10. FUTURE REVISIONS OF THIS LICENSE
+
+    The Free Software Foundation may publish new, revised versions of
+    the GNU Free Documentation License from time to time. Such new
+    versions will be similar in spirit to the present version, but may
+    differ in detail to address new problems or concerns. See
+    [[https://www.gnu.org/licenses/]].
+
+    Each version of the License is given a distinguishing version
+    number. If the Document specifies that a particular numbered version
+    of this License “or any later version” applies to it, you have the
+    option of following the terms and conditions either of that
+    specified version or of any later version that has been published
+    (not as a draft) by the Free Software Foundation. If the Document
+    does not specify a version number of this License, you may choose
+    any version ever published (not as a draft) by the Free Software
+    Foundation. If the Document specifies that a proxy can decide which
+    future versions of this License can be used, that proxy's public
+    statement of acceptance of a version permanently authorizes you to
+    choose that version for the Document.
+
+11. RELICENSING
+
+    “Massive Multiauthor Collaboration Site” (or “MMC Site”) means any
+    World Wide Web server that publishes copyrightable works and also
+    provides prominent facilities for anybody to edit those works. A
+    public wiki that anybody can edit is an example of such a server. A
+    “Massive Multiauthor Collaboration” (or “MMC”) contained in the site
+    means any set of copyrightable works thus published on the MMC site.
+
+    “CC-BY-SA” means the Creative Commons Attribution-Share Alike 3.0
+    license published by Creative Commons Corporation, a not-for-profit
+    corporation with a principal place of business in San Francisco,
+    California, as well as future copyleft versions of that license
+    published by that same organization.
+
+    “Incorporate” means to publish or republish a Document, in whole or
+    in part, as part of another Document.
+
+    An MMC is “eligible for relicensing” if it is licensed under this
+    License, and if all works that were first published under this
+    License somewhere other than this MMC, and subsequently incorporated
+    in whole or in part into the MMC, (1) had no cover texts or
+    invariant sections, and (2) were thus incorporated prior to November
+    1, 2008.
+
+    The operator of an MMC Site may republish an MMC contained in the
+    site under CC-BY-SA on the same site at any time before August 1,
+    2009, provided the MMC is eligible for relicensing.
+
+*** ADDENDUM: How to use this License for your documents [[#ADDENDUM_003a-How-to-use-this-License-for-your-documents][¶]]
+:PROPERTIES:
+:CUSTOM_ID: ADDENDUM_003a-How-to-use-this-License-for-your-documents
+:CLASS: heading
+:END:
+To use this License in a document you have written, include a copy of
+the License in the document and put the following copyright and license
+notices just after the title page:
+
+#+begin_src example-preformatted
+  Copyright (C)  year  your name.
+  Permission is granted to copy, distribute and/or modify this document
+  under the terms of the GNU Free Documentation License, Version 1.3
+  or any later version published by the Free Software Foundation;
+  with no Invariant Sections, no Front-Cover Texts, and no Back-Cover
+  Texts.  A copy of the license is included in the section entitled ``GNU
+  Free Documentation License''.
+#+end_src
+
+If you have Invariant Sections, Front-Cover Texts and Back-Cover Texts,
+replace the “with...Texts.” line with this:
+
+#+begin_src example-preformatted
+    with the Invariant Sections being list their titles, with
+    the Front-Cover Texts being list, and with the Back-Cover Texts
+    being list.
+#+end_src
+
+If you have Invariant Sections without Cover Texts, or some other
+combination of the three, merge those two alternatives to suit the
+situation.
+
+If your document contains nontrivial examples of program code, we
+recommend releasing these examples in parallel under your choice of free
+software license, such as the GNU General Public License, to permit
+their use in free software.
+
+--------------
+
+<<Index>>
+
+Previous:
+[[#GNU-Free-Documentation-License][GNU Free Documentation License]], Up:
+[[#Top][use-package User Manual]]  
+[[[#SEC_Contents][Contents]]][[[#Index][Index]]]
+
+** Index [[#Index-1][¶]]
+:PROPERTIES:
+:CUSTOM_ID: Index-1
+:CLASS: unnumbered
+:END:
+
+| Jump to:   | [[#Index_cp_symbol-1][*:*]]  \\                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+|            | [[#Index_cp_letter-A][*A*]]   [[#Index_cp_letter-B][*B*]]   [[#Index_cp_letter-C][*C*]]   [[#Index_cp_letter-D][*D*]]   [[#Index_cp_letter-E][*E*]]   [[#Index_cp_letter-F][*F*]]   [[#Index_cp_letter-G][*G*]]   [[#Index_cp_letter-H][*H*]]   [[#Index_cp_letter-I][*I*]]   [[#Index_cp_letter-K][*K*]]   [[#Index_cp_letter-L][*L*]]   [[#Index_cp_letter-M][*M*]]   [[#Index_cp_letter-N][*N*]]   [[#Index_cp_letter-O][*O*]]   [[#Index_cp_letter-P][*P*]]   [[#Index_cp_letter-Q][*Q*]]   [[#Index_cp_letter-R][*R*]]   [[#Index_cp_letter-S][*S*]]   [[#Index_cp_letter-T][*T*]]   [[#Index_cp_letter-U][*U*]]   [[#Index_cp_letter-V][*V*]]   |
+
+|                | Index Entry                                                                                                                             | Section                                                                                   |
+| -------------- |                                                                                                                                         |                                                                                           |
+| :              |                                                                                                                                         |                                                                                           |
+|                | [[#index-_003aafter][=:after=]]                                                                                                         | [[#Loading-sequentially][Loading sequentially]]                                           |
+|                | [[#index-_003aall_002c-_0028with-_003aafter_0029][=:all==, (with ==:after==)=]]                                                         | [[#Loading-sequentially][Loading sequentially]]                                           |
+|                | [[#index-_003aany_002c-_0028with-_003aafter_0029][=:any==, (with ==:after==)=]]                                                         | [[#Loading-sequentially][Loading sequentially]]                                           |
+|                | [[#index-_003aautoload][=:autoload=]]                                                                                                   | [[#Manual-autoloads][Manual autoloads]]                                                   |
+|                | [[#index-_003abind][=:bind=]]                                                                                                           | [[#Global-keybindings][Global keybindings]]                                               |
+|                | [[#index-_003abind_002c-and-function-keys][=:bind=, and function keys]]                                                                 | [[#Global-keybindings][Global keybindings]]                                               |
+|                | [[#index-_003abind_002c-and-remapping-of-commands][=:bind=, and remapping of commands]]                                                 | [[#Global-keybindings][Global keybindings]]                                               |
+|                | [[#index-_003abind_002c-internals][=:bind=, internals]]                                                                                 | [[#Global-keybindings][Global keybindings]]                                               |
+|                | [[#index-_003abind_002dkeymap][=:bind-keymap=]]                                                                                         | [[#Binding-to-a-keymap][Binding to a keymap]]                                             |
+|                | [[#index-_003acatch][=:catch=]]                                                                                                         | [[#Troubleshooting-Options][Troubleshooting Options]]                                     |
+|                | [[#index-_003acommands][=:commands=]]                                                                                                   | [[#Manual-autoloads][Manual autoloads]]                                                   |
+|                | [[#index-_003aconfig][=:config=]]                                                                                                       | [[#Config-keyword][Config keyword]]                                                       |
+|                | [[#index-_003acontinue_002c-inside-_003arepeat_002dmap-and-_003abind][=:continue==, inside== :repeat-map== and== :bind=]]               | [[#Binding-to-repeat_002dmaps][Binding to repeat-maps]]                                   |
+|                | [[#index-_003acontinue_002donly_002c-inside-_003arepeat_002dmap-and-_003abind][=:continue-only==, inside== :repeat-map== and== :bind=]] | [[#Binding-to-repeat_002dmaps][Binding to repeat-maps]]                                   |
+|                | [[#index-_003acustom][=:custom=]]                                                                                                       | [[#User-options][User options]]                                                           |
+|                | [[#index-_003acustom_002dface][=:custom-face=]]                                                                                         | [[#Faces][Faces]]                                                                         |
+|                | [[#index-_003adefer][=:defer=]]                                                                                                         | [[#Deferring-loading][Deferring loading]]                                                 |
+|                | [[#index-_003adefer_002c-with-a-numeric-argument][=:defer==, with a numeric argument=]]                                                 | [[#Deferring-loading][Deferring loading]]                                                 |
+|                | [[#index-_003adefines][=:defines=]]                                                                                                     | [[#Byte_002dcompiling][Byte-compiling]]                                                   |
+|                | [[#index-_003adelight][=:delight=]]                                                                                                     | [[#Delight][Delight]]                                                                     |
+|                | [[#index-_003ademand][=:demand=]]                                                                                                       | [[#Forcing-loading][Forcing loading]]                                                     |
+|                | [[#index-_003adiminish][=:diminish=]]                                                                                                   | [[#Diminish][Diminish]]                                                                   |
+|                | [[#index-_003adisabled][=:disabled=]]                                                                                                   | [[#Disabling-a-package][Disabling a package]]                                             |
+|                | [[#index-_003aensure][=:ensure=]]                                                                                                       | [[#Install-package][Install package]]                                                     |
+|                | [[#index-_003aensure_002dsystem_002dpackage][=:ensure-system-package=]]                                                                 | [[#use_002dpackage_002densure_002dsystem_002dpackage][use-package-ensure-system-package]] |
+|                | [[#index-_003aexit_002c-inside-_003arepeat_002dmap-and-_003abind][=:exit==, inside== :repeat-map== and== :bind=]]                       | [[#Binding-to-repeat_002dmaps][Binding to repeat-maps]]                                   |
+|                | [[#index-_003afunctions][=:functions=]]                                                                                                 | [[#Byte_002dcompiling][Byte-compiling]]                                                   |
+|                | [[#index-_003ahook][=:hook=]]                                                                                                           | [[#Hooks][Hooks]]                                                                         |
+|                | [[#index-_003aif][=:if=]]                                                                                                               | [[#Conditional-loading][Conditional loading]]                                             |
+|                | [[#index-_003ainit][=:init=]]                                                                                                           | [[#Init-keyword][Init keyword]]                                                           |
+|                | [[#index-_003ainterpreter][=:interpreter=]]                                                                                             | [[#Modes-and-interpreters][Modes and interpreters]]                                       |
+|                | [[#index-_003aload_002dpath][=:load-path=]]                                                                                             | [[#Load-path][Load path]]                                                                 |
+|                | [[#index-_003amagic][=:magic=]]                                                                                                         | [[#Magic-handlers][Magic handlers]]                                                       |
+|                | [[#index-_003amagic_002dfallback][=:magic-fallback=]]                                                                                   | [[#Magic-handlers][Magic handlers]]                                                       |
+|                | [[#index-_003amap_002c-inside-_003abind][=:map==, inside== :bind=]]                                                                     | [[#Binding-in-keymaps][Binding in keymaps]]                                               |
+|                | [[#index-_003amode][=:mode=]]                                                                                                           | [[#Modes-and-interpreters][Modes and interpreters]]                                       |
+|                | [[#index-_003ano_002drequire][=:no-require=]]                                                                                           | [[#Byte_002dcompiling][Byte-compiling]]                                                   |
+|                | [[#index-_003apin][=:pin=]]                                                                                                             | [[#Pinning-packages][Pinning packages]]                                                   |
+|                | [[#index-_003apreface][=:preface=]]                                                                                                     | [[#Preface-keyword][Preface keyword]]                                                     |
+|                | [[#index-_003arepeat_002dmap_002c-inside-_003abind][=:repeat-map==, inside== :bind=]]                                                   | [[#Binding-to-repeat_002dmaps][Binding to repeat-maps]]                                   |
+|                | [[#index-_003arequires][=:requires=]]                                                                                                   | [[#Load-dependencies][Load dependencies]]                                                 |
+|                | [[#index-_003aunless][=:unless=]]                                                                                                       | [[#Conditional-loading][Conditional loading]]                                             |
+|                | [[#index-_003avc][=:vc=]]                                                                                                               | [[#Install-package][Install package]]                                                     |
+|                | [[#index-_003awhen][=:when=]]                                                                                                           | [[#Conditional-loading][Conditional loading]]                                             |
+| -------------- |                                                                                                                                         |                                                                                           |
+| A              |                                                                                                                                         |                                                                                           |
+|                | [[#index-auto_002dmode_002dalist-customization][=auto-mode-alist= customization]]                                                       | [[#Modes-and-interpreters][Modes and interpreters]]                                       |
+|                | [[#index-autoloading-packages][autoloading packages]]                                                                                   | [[#Deferring-loading][Deferring loading]]                                                 |
+|                | [[#index-autoloads-for-packages_002c-setting-up-manually][autoloads for packages, setting up manually]]                                 | [[#Manual-autoloads][Manual autoloads]]                                                   |
+| -------------- |                                                                                                                                         |                                                                                           |
+| B              |                                                                                                                                         |                                                                                           |
+|                | [[#index-binding-commands-that-only-continue-repeat-series][binding commands that only continue repeat series]]                         | [[#Binding-to-repeat_002dmaps][Binding to repeat-maps]]                                   |
+|                | [[#index-binding-commands-used-at-end-of-repeat-series][binding commands used at end of repeat series]]                                 | [[#Binding-to-repeat_002dmaps][Binding to repeat-maps]]                                   |
+|                | [[#index-binding-function-keys-with-_003abind][binding function keys with =:bind=]]                                                     | [[#Global-keybindings][Global keybindings]]                                               |
+|                | [[#index-binding-keys-for-package-commands][binding keys for package commands]]                                                         | [[#Key-bindings][Key bindings]]                                                           |
+|                | [[#index-binding-keys-to-keymaps][binding keys to keymaps]]                                                                             | [[#Binding-to-a-keymap][Binding to a keymap]]                                             |
+|                | [[#index-byte_002dcompiling-your-init-file][byte-compiling your init file]]                                                             | [[#Byte_002dcompiling][Byte-compiling]]                                                   |
+| -------------- |                                                                                                                                         |                                                                                           |
+| C              |                                                                                                                                         |                                                                                           |
+|                | [[#index-conditional-loading][conditional loading]]                                                                                     | [[#Conditional-loading][Conditional loading]]                                             |
+|                | [[#index-conditional-loading-before-_003apreface-or-_003aensure][conditional loading before =:preface= or =:ensure=]]                   | [[#Conditional-loading][Conditional loading]]                                             |
+|                | [[#index-configure-package-using-Lisp-forms][configure package using Lisp forms]]                                                       | [[#Lisp-Configuration][Lisp Configuration]]                                               |
+|                | [[#index-configure-packages-using-use_002dpackage][configure packages using =use-package=]]                                             | [[#Configuring-Packages][Configuring Packages]]                                           |
+|                | [[#index-custom-load_002dpath-for-loading-a-package][custom =load-path= for loading a package]]                                         | [[#Load-path][Load path]]                                                                 |
+|                | [[#index-customization-of-faces][customization of faces]]                                                                               | [[#Faces][Faces]]                                                                         |
+|                | [[#index-customization-of-variables][customization of variables]]                                                                       | [[#User-options][User options]]                                                           |
+|                | [[#index-customize-package-configuration][customize package configuration]]                                                             | [[#Configuring-Packages][Configuring Packages]]                                           |
+|                | [[#index-customizing-built_002din-variables][customizing built-in variables]]                                                           | [[#The-emacs-package][The =emacs= package]]                                               |
+| -------------- |                                                                                                                                         |                                                                                           |
+| D              |                                                                                                                                         |                                                                                           |
+|                | [[#index-debugging-use_002dpackage][debugging use-package]]                                                                             | [[#Troubleshooting][Troubleshooting]]                                                     |
+|                | [[#index-defer-loading-by-default][defer loading by default]]                                                                           | [[#Deferring-loading][Deferring loading]]                                                 |
+|                | [[#index-deferring-loading-of-package][deferring loading of package]]                                                                   | [[#Deferring-loading][Deferring loading]]                                                 |
+|                | [[#index-describe_002dpersonal_002dkeybindings][=describe-personal-keybindings=]]                                                       | [[#Displaying-keybindings][Displaying keybindings]]                                       |
+|                | [[#index-disable-package][disable package]]                                                                                             | [[#Disabling-a-package][Disabling a package]]                                             |
+|                | [[#index-display-your-keybindings][display your keybindings]]                                                                           | [[#Displaying-keybindings][Displaying keybindings]]                                       |
+| -------------- |                                                                                                                                         |                                                                                           |
+| E              |                                                                                                                                         |                                                                                           |
+|                | [[#index-expanding-macro_002c-for-troubleshooting][expanding macro, for troubleshooting]]                                               | [[#Troubleshooting][Troubleshooting]]                                                     |
+|                | [[#index-extending-use_002dpackage-keywords][extending use-package keywords]]                                                           | [[#Keyword-extensions][Keyword extensions]]                                               |
+|                | [[#index-extension-keywords][extension keywords]]                                                                                       | [[#Creating-an-extension][Creating an extension]]                                         |
+| -------------- |                                                                                                                                         |                                                                                           |
+| F              |                                                                                                                                         |                                                                                           |
+|                | [[#index-faces_002c-setting][faces, setting]]                                                                                           | [[#Faces][Faces]]                                                                         |
+|                | [[#index-forcing-immediate-loading][forcing immediate loading]]                                                                         | [[#Forcing-loading][Forcing loading]]                                                     |
+| -------------- |                                                                                                                                         |                                                                                           |
+| G              |                                                                                                                                         |                                                                                           |
+|                | [[#index-gathering-use_002dpackage-statistics][gathering use-package statistics]]                                                       | [[#Gathering-Statistics][Gathering Statistics]]                                           |
+|                | [[#index-global-keybindings][global keybindings]]                                                                                       | [[#Global-keybindings][Global keybindings]]                                               |
+| -------------- |                                                                                                                                         |                                                                                           |
+| H              |                                                                                                                                         |                                                                                           |
+|                | [[#index-hiding-minor-modes][hiding minor modes]]                                                                                       | [[#Hiding-minor-modes][Hiding minor modes]]                                               |
+|                | [[#index-hooks][hooks]]                                                                                                                 | [[#Hooks][Hooks]]                                                                         |
+| -------------- |                                                                                                                                         |                                                                                           |
+| I              |                                                                                                                                         |                                                                                           |
+|                | [[#index-installing-package-from-specific-archive][installing package from specific archive]]                                           | [[#Pinning-packages][Pinning packages]]                                                   |
+|                | [[#index-installing-packages-from-archives][installing packages from archives]]                                                         | [[#Install-package][Install package]]                                                     |
+|                | [[#index-installing-using-non_002dstandard-package-managers][installing using non-standard package managers]]                           | [[#Other-package-managers][Other package managers]]                                       |
+|                | [[#index-interpreter_002dmode_002dalist-customization][=interpreter-mode-alist= customization]]                                         | [[#Modes-and-interpreters][Modes and interpreters]]                                       |
+| -------------- |                                                                                                                                         |                                                                                           |
+| K              |                                                                                                                                         |                                                                                           |
+|                | [[#index-key-bindings-for-package-commands][key bindings for package commands]]                                                         | [[#Key-bindings][Key bindings]]                                                           |
+|                | [[#index-keybinding-for-repeat_002dmode-keymaps][keybinding for =repeat-mode= keymaps]]                                                 | [[#Binding-to-repeat_002dmaps][Binding to repeat-maps]]                                   |
+|                | [[#index-keyword-extension][keyword extension]]                                                                                         | [[#Keyword-extensions][Keyword extensions]]                                               |
+| -------------- |                                                                                                                                         |                                                                                           |
+| L              |                                                                                                                                         |                                                                                           |
+|                | [[#index-lazy-loading-by-default][lazy loading by default]]                                                                             | [[#Deferring-loading][Deferring loading]]                                                 |
+|                | [[#index-lazy-loading-of-packages][lazy loading of packages]]                                                                           | [[#Deferring-loading][Deferring loading]]                                                 |
+|                | [[#index-list-of-selectors_002c-for-_003aafter][list of selectors, for =:after=]]                                                       | [[#Loading-sequentially][Loading sequentially]]                                           |
+|                | [[#index-load_002dpath_002c-add-directories-for-loading-a-package][=load-path=, add directories for loading a package]]                 | [[#Load-path][Load path]]                                                                 |
+|                | [[#index-loading-a-package-after-other-packages][loading a package after other packages]]                                               | [[#Loading-sequentially][Loading sequentially]]                                           |
+|                | [[#index-loading-conditions][loading conditions]]                                                                                       | [[#Conditional-loading][Conditional loading]]                                             |
+|                | [[#index-loading-lazily][loading lazily]]                                                                                               | [[#Deferring-loading][Deferring loading]]                                                 |
+|                | [[#index-loading-packages-with-use_002dpackage][loading packages with use-package]]                                                     | [[#Loading-Packages][Loading Packages]]                                                   |
+|                | [[#index-local-keybindings][local keybindings]]                                                                                         | [[#Binding-in-keymaps][Binding in keymaps]]                                               |
+| -------------- |                                                                                                                                         |                                                                                           |
+| M              |                                                                                                                                         |                                                                                           |
+|                | [[#index-magic_002dmode_002dalist-customization][=magic-mode-alist= customization]]                                                     | [[#Magic-handlers][Magic handlers]]                                                       |
+|                | [[#index-manual-update-of-packages][manual update of packages]]                                                                         | [[#Pinning-packages][Pinning packages]]                                                   |
+|                | [[#index-multiple-hooks][multiple hooks]]                                                                                               | [[#Hooks][Hooks]]                                                                         |
+| -------------- |                                                                                                                                         |                                                                                           |
+| N              |                                                                                                                                         |                                                                                           |
+|                | [[#index-non_002dstandard-package-managers][non-standard package managers]]                                                             | [[#Other-package-managers][Other package managers]]                                       |
+| -------------- |                                                                                                                                         |                                                                                           |
+| O              |                                                                                                                                         |                                                                                           |
+|                | [[#index-options-for-troubleshooting][options for troubleshooting]]                                                                     | [[#Troubleshooting-Options][Troubleshooting Options]]                                     |
+| -------------- |                                                                                                                                         |                                                                                           |
+| P              |                                                                                                                                         |                                                                                           |
+|                | [[#index-package-autoloads_002c-setting-up-manually][package autoloads, setting up manually]]                                           | [[#Manual-autoloads][Manual autoloads]]                                                   |
+|                | [[#index-package-loading-at-byte_002dcompilation-time_002c-prevent][package loading at byte-compilation time, prevent]]                 | [[#Byte_002dcompiling][Byte-compiling]]                                                   |
+|                | [[#index-package-managers_002c-other-than-package_002eel][package managers, other than =package.el=]]                                   | [[#Other-package-managers][Other package managers]]                                       |
+|                | [[#index-package-vs-library][package vs library]]                                                                                       | [[#Loading-basics][Loading basics]]                                                       |
+|                | [[#index-pinning-a-package-to-archive][pinning a package to archive]]                                                                   | [[#Pinning-packages][Pinning packages]]                                                   |
+|                | [[#index-prevent-a-package-from-loading-at-compile_002dtime][prevent a package from loading at compile-time]]                           | [[#Byte_002dcompiling][Byte-compiling]]                                                   |
+|                | [[#index-prevent-loading-package-if-dependencies-are-missing][prevent loading package if dependencies are missing]]                     | [[#Load-dependencies][Load dependencies]]                                                 |
+| -------------- |                                                                                                                                         |                                                                                           |
+| Q              |                                                                                                                                         |                                                                                           |
+|                | [[#index-quick_002dstart-instructions][quick-start instructions]]                                                                       | [[#Getting-Started][Getting Started]]                                                     |
+| -------------- |                                                                                                                                         |                                                                                           |
+| R              |                                                                                                                                         |                                                                                           |
+|                | [[#index-reasons-for-developing-use_002dpackage][reasons for developing use-package]]                                                   | [[#Basic-Concepts][Basic Concepts]]                                                       |
+|                | [[#index-remapping-commands-with-_003abind][remapping commands with =:bind=]]                                                           | [[#Global-keybindings][Global keybindings]]                                               |
+|                | [[#index-repeat_002dmode-and-use_002dpackage_002c-using][=repeat-mode= and use-package, using]]                                         | [[#Binding-to-repeat_002dmaps][Binding to repeat-maps]]                                   |
+|                | [[#index-reporting-bugs][reporting bugs]]                                                                                               | [[#Troubleshooting][Troubleshooting]]                                                     |
+| -------------- |                                                                                                                                         |                                                                                           |
+| S              |                                                                                                                                         |                                                                                           |
+|                | [[#index-setting-up-major-modes][setting up major modes]]                                                                               | [[#Modes-and-interpreters][Modes and interpreters]]                                       |
+|                | [[#index-silence-byte_002dcompilation-warnings][silence byte-compilation warnings]]                                                     | [[#Byte_002dcompiling][Byte-compiling]]                                                   |
+| -------------- |                                                                                                                                         |                                                                                           |
+| T              |                                                                                                                                         |                                                                                           |
+|                | [[#index-tips-for-using-_003apreface_002c-_003aconfig_002c-_003ainit][tips for using =:preface=, =:config=, =:init=]]                   | [[#Best-practices][Best practices]]                                                       |
+|                | [[#index-triggers_002c-for-loading-packages][triggers, for loading packages]]                                                           | [[#Deferring-loading][Deferring loading]]                                                 |
+|                | [[#index-troubleshooting-use_002dpackage][troubleshooting use-package]]                                                                 | [[#Troubleshooting][Troubleshooting]]                                                     |
+|                | [[#index-troubleshooting_002c-options-that-help][troubleshooting, options that help]]                                                   | [[#Troubleshooting-Options][Troubleshooting Options]]                                     |
+| -------------- |                                                                                                                                         |                                                                                           |
+| U              |                                                                                                                                         |                                                                                           |
+|                | [[#index-usage-statistics-for-use_002dpackage][usage statistics for use-package]]                                                       | [[#Gathering-Statistics][Gathering Statistics]]                                           |
+|                | [[#index-use_002dpackage_002dalways_002ddefer][=use-package-always-defer=]]                                                             | [[#Deferring-loading][Deferring loading]]                                                 |
+|                | [[#index-use_002dpackage_002dalways_002ddefer_002c-with-_003aafter][=use-package-always-defer=, with =:after=]]                         | [[#Loading-sequentially][Loading sequentially]]                                           |
+|                | [[#index-use_002dpackage_002dalways_002densure][=use-package-always-ensure=]]                                                           | [[#Install-package][Install package]]                                                     |
+|                | [[#index-use_002dpackage_002dalways_002dpin][=use-package-always-pin=]]                                                                 | [[#Pinning-packages][Pinning packages]]                                                   |
+|                | [[#index-use_002dpackage_002dcompute_002dstatistics][=use-package-compute-statistics=]]                                                 | [[#Gathering-Statistics][Gathering Statistics]]                                           |
+|                | [[#index-use_002dpackage_002densure_002dfunction][=use-package-ensure-function=]]                                                       | [[#Other-package-managers][Other package managers]]                                       |
+|                | [[#index-use_002dpackage_002dexpand_002dminimally][=use-package-expand-minimally=]]                                                     | [[#Troubleshooting-Options][Troubleshooting Options]]                                     |
+|                | [[#index-use_002dpackage_002dhook_002dname_002dsuffix][=use-package-hook-name-suffix=]]                                                 | [[#Hooks][Hooks]]                                                                         |
+|                | [[#index-use_002dpackage_002dreport][use-package-report]]                                                                               | [[#Gathering-Statistics][Gathering Statistics]]                                           |
+|                | [[#index-use_002dpackage_002dreset_002dstatistics][=use-package-reset-statistics=]]                                                     | [[#Gathering-Statistics][Gathering Statistics]]                                           |
+|                | [[#index-use_002dpackage_002dvc_002dprefer_002dnewest][=use-package-vc-prefer-newest=]]                                                 | [[#Install-package][Install package]]                                                     |
+|                | [[#index-use_002dpackage_002dverbose][=use-package-verbose=]]                                                                           | [[#Gathering-Statistics][Gathering Statistics]]                                           |
+|                | [[#index-user-options_002c-setting][user options, setting]]                                                                             | [[#User-options][User options]]                                                           |
+| -------------- |                                                                                                                                         |                                                                                           |
+| V              |                                                                                                                                         |                                                                                           |
+|                | [[#index-variable-customizations][variable customizations]]                                                                             | [[#User-options][User options]]                                                           |
+| -------------- |                                                                                                                                         |                                                                                           |
+
+| Jump to:   | [[#Index_cp_symbol-1][*:*]]  \\                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+|            | [[#Index_cp_letter-A][*A*]]   [[#Index_cp_letter-B][*B*]]   [[#Index_cp_letter-C][*C*]]   [[#Index_cp_letter-D][*D*]]   [[#Index_cp_letter-E][*E*]]   [[#Index_cp_letter-F][*F*]]   [[#Index_cp_letter-G][*G*]]   [[#Index_cp_letter-H][*H*]]   [[#Index_cp_letter-I][*I*]]   [[#Index_cp_letter-K][*K*]]   [[#Index_cp_letter-L][*L*]]   [[#Index_cp_letter-M][*M*]]   [[#Index_cp_letter-N][*N*]]   [[#Index_cp_letter-O][*O*]]   [[#Index_cp_letter-P][*P*]]   [[#Index_cp_letter-Q][*Q*]]   [[#Index_cp_letter-R][*R*]]   [[#Index_cp_letter-S][*S*]]   [[#Index_cp_letter-T][*T*]]   [[#Index_cp_letter-U][*U*]]   [[#Index_cp_letter-V][*V*]]   |
+
+--------------
+
+**** Footnotes
+:PROPERTIES:
+:CUSTOM_ID: footnotes
+:CLASS: footnotes-heading
+:END:
+***** [[#DOCF1][(1)]]
+:PROPERTIES:
+:CUSTOM_ID: section
+:CLASS: footnote-body-heading
+:END:
+This happens both at run-time and at compile-time. See
+[[#Byte_002dcompiling][Byte-compiling your init file]].
+
+***** [[#DOCF2][(2)]]
+:PROPERTIES:
+:CUSTOM_ID: section-1
+:CLASS: footnote-body-heading
+:END:
+In other words, they are either preloaded in Emacs or defined in Emacs's
+C sources.
+
+***** [[#DOCF3][(3)]]
+:PROPERTIES:
+:CUSTOM_ID: section-2
+:CLASS: footnote-body-heading
+:END:
+When in doubt, you might as well use =diminish=.
+
+***** [[#DOCF4][(4)]]
+:PROPERTIES:
+:CUSTOM_ID: section-3
+:CLASS: footnote-body-heading
+:END:
+The =diminish= package is installable from GNU ELPA.
+
+***** [[#DOCF5][(5)]]
+:PROPERTIES:
+:CUSTOM_ID: section-4
+:CLASS: footnote-body-heading
+:END:
+The =delight= package is installable from GNU ELPA.
+
+***** [[#DOCF6][(6)]]
+:PROPERTIES:
+:CUSTOM_ID: section-5
+:CLASS: footnote-body-heading
+:END:
+The =:pin= keyword has no effect on Emacs versions older than 24.4.
+
+***** [[#DOCF7][(7)]]
+:PROPERTIES:
+:CUSTOM_ID: section-6
+:CLASS: footnote-body-heading
+:END:
+On macOS, your =exec-path= might be different if you are starting Emacs
+as a GUI app instead of from a shell. If you find that Emacs on macOS
+cannot find some executables that you know are already installed, you
+could try the
+[[https://github.com/purcell/exec-path-from-shell][‘=exec-path-from-shell=']]
+package.
+
+***** [[#DOCF8][(8)]]
+:PROPERTIES:
+:CUSTOM_ID: section-7
+:CLASS: footnote-body-heading
+:END:
+For manual testing, you could use the =executable-find= function, which
+is what ‘=system-packages=' uses internally.
