@@ -20,6 +20,7 @@
 
 #include "lisp.h"
 #include "cmacs-glib-loop.h"
+#include "cmacs-eval-dispatch.h"
 
 #include <gio/gio.h>
 #include <unistd.h>
@@ -65,56 +66,14 @@ static guint            dbus_owner_id = 0;
 static guint            dbus_reg_id = 0;
 static gchar           *dbus_bus_name = NULL;
 
-/* ── Safe evaluation helpers ───────────────────────────────────────── */
+/* ── D-Bus error helper ────────────────────────────────────────────── */
 
-/* Body function for internal_condition_case_1: eval a form. */
-static Lisp_Object
-dbus_eval_body (Lisp_Object form)
-{
-  return Feval (form, Qnil);
-}
-
-/* Error handler: return (error . "message"). */
-static Lisp_Object
-dbus_eval_error (Lisp_Object err)
-{
-  return Fcons (Qerror, Ferror_message_string (err));
-}
-
-/* Evaluate FORM safely.  On success, return the result.
-   On error, return (error . "message"). */
-static Lisp_Object
-dbus_safe_eval (Lisp_Object form)
-{
-  return internal_condition_case_1 (dbus_eval_body, form,
-                                    Qt, dbus_eval_error);
-}
-
-/* Check if RESULT is an error cons from dbus_safe_eval. */
-static bool
-dbus_result_is_error (Lisp_Object result)
-{
-  return CONSP (result) && EQ (XCAR (result), Qerror);
-}
-
-/* Return a D-Bus error for a failed eval, or the printed result. */
 static void
-dbus_return_eval_result (GDBusMethodInvocation *invocation,
-                         Lisp_Object result)
+dbus_return_gerror (GDBusMethodInvocation *invocation, GError *err)
 {
-  if (dbus_result_is_error (result))
-    {
-      Lisp_Object msg = XCDR (result);
-      g_dbus_method_invocation_return_dbus_error (
-        invocation, "org.cmacs.Editor1.Error",
-        STRINGP (msg) ? SSDATA (msg) : "unknown error");
-    }
-  else
-    {
-      Lisp_Object printed = Fprin1_to_string (result, Qnil, Qnil);
-      g_dbus_method_invocation_return_value (
-        invocation, g_variant_new ("(s)", SSDATA (printed)));
-    }
+  g_dbus_method_invocation_return_dbus_error (
+    invocation, "org.cmacs.Editor1.Error", err->message);
+  g_error_free (err);
 }
 
 /* ── Method handler ────────────────────────────────────────────────── */
@@ -135,98 +94,92 @@ handle_method_call (GDBusConnection       *connection,
   if (g_strcmp0 (method_name, "Eval") == 0)
     {
       const gchar *expr;
-      Lisp_Object form, result;
+      GError *err = NULL;
+      gchar *result;
 
       g_variant_get (parameters, "(&s)", &expr);
-
-      /* Build: (progn <user-expr>) via read. */
-      form = Fcar (Fread_from_string (build_string (expr), Qnil, Qnil));
-      result = dbus_safe_eval (form);
-      dbus_return_eval_result (invocation, result);
+      result = cmacs_dispatch_eval (expr, &err);
+      if (result != NULL)
+        {
+          g_dbus_method_invocation_return_value (
+            invocation, g_variant_new ("(s)", result));
+          g_free (result);
+        }
+      else
+        dbus_return_gerror (invocation, err);
     }
   else if (g_strcmp0 (method_name, "FindFile") == 0)
     {
       const gchar *path;
       g_variant_get (parameters, "(&s)", &path);
-      safe_calln (intern ("find-file"), build_string (path));
+      cmacs_dispatch_find_file (path);
       g_dbus_method_invocation_return_value (invocation, NULL);
     }
   else if (g_strcmp0 (method_name, "Message") == 0)
     {
       const gchar *text;
       g_variant_get (parameters, "(&s)", &text);
-      safe_calln (intern ("message"), build_string (text));
+      cmacs_dispatch_message (text);
       g_dbus_method_invocation_return_value (invocation, NULL);
     }
   else if (g_strcmp0 (method_name, "GiRequire") == 0)
     {
       const gchar *ns, *ver;
-      Lisp_Object form, result;
+      GError *err = NULL;
+      gboolean ok;
 
       g_variant_get (parameters, "(&s&s)", &ns, &ver);
-
-      /* Build: (gi-require "NS" "VER") */
-      form = list3 (intern ("gi-require"),
-                     build_string (ns), build_string (ver));
-      result = dbus_safe_eval (form);
-
-      if (dbus_result_is_error (result))
-        g_dbus_method_invocation_return_dbus_error (
-          invocation, "org.cmacs.Editor1.Error",
-          SSDATA (XCDR (result)));
+      ok = cmacs_dispatch_gi_require (ns, ver, &err);
+      if (err != NULL)
+        dbus_return_gerror (invocation, err);
       else
         g_dbus_method_invocation_return_value (
-          invocation, g_variant_new ("(b)", !NILP (result)));
+          invocation, g_variant_new ("(b)", ok));
     }
   else if (g_strcmp0 (method_name, "GiCall") == 0)
     {
       const gchar *ns, *func, *arg;
       GVariantIter *iter;
-      Lisp_Object args_list, form, result;
+      GPtrArray *args_arr;
+      GError *err = NULL;
+      gchar *result;
 
       g_variant_get (parameters, "(&s&sas)", &ns, &func, &iter);
 
-      /* Collect args: read each string as a Lisp expression. */
-      args_list = Qnil;
+      args_arr = g_ptr_array_new ();
       while (g_variant_iter_next (iter, "&s", &arg))
-        {
-          Lisp_Object parsed =
-            Fcar (Fread_from_string (build_string (arg), Qnil, Qnil));
-          args_list = Fcons (parsed, args_list);
-        }
+        g_ptr_array_add (args_arr, (gpointer)arg);
       g_variant_iter_free (iter);
-      args_list = Fnreverse (args_list);
 
-      /* Build: (gi-call "NS" "func" arg1 arg2 ...) */
-      form = Fcons (intern ("gi-call"),
-                    Fcons (build_string (ns),
-                           Fcons (build_string (func), args_list)));
-      result = dbus_safe_eval (form);
-      dbus_return_eval_result (invocation, result);
+      result = cmacs_dispatch_gi_call (
+        ns, func, (const gchar *const *)args_arr->pdata,
+        (gint)args_arr->len, &err);
+      g_ptr_array_free (args_arr, TRUE);
+
+      if (result != NULL)
+        {
+          g_dbus_method_invocation_return_value (
+            invocation, g_variant_new ("(s)", result));
+          g_free (result);
+        }
+      else
+        dbus_return_gerror (invocation, err);
     }
   else if (g_strcmp0 (method_name, "GiListFunctions") == 0)
     {
       const gchar *ns;
-      Lisp_Object form, result;
+      gchar **funcs;
       GVariantBuilder builder;
+      gint i;
 
       g_variant_get (parameters, "(&s)", &ns);
-
-      form = list2 (intern ("gi-list-functions"), build_string (ns));
-      result = dbus_safe_eval (form);
+      funcs = cmacs_dispatch_gi_list_functions (ns);
 
       g_variant_builder_init (&builder, G_VARIANT_TYPE ("as"));
-      if (!dbus_result_is_error (result))
-        {
-          Lisp_Object tail = result;
-          while (CONSP (tail))
-            {
-              Lisp_Object s = XCAR (tail);
-              if (STRINGP (s))
-                g_variant_builder_add (&builder, "s", SSDATA (s));
-              tail = XCDR (tail);
-            }
-        }
+      for (i = 0; funcs[i] != NULL; i++)
+        g_variant_builder_add (&builder, "s", funcs[i]);
+      g_strfreev (funcs);
+
       g_dbus_method_invocation_return_value (
         invocation, g_variant_new ("(as)", &builder));
     }

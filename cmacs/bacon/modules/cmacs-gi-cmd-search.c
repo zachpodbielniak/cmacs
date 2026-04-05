@@ -36,7 +36,7 @@ wrap_with_buffer(const gchar *buf, const gchar *body)
 /* ── Subcommand handlers ──────────────────────────────────────────── */
 
 gint
-cmd_search(GDBusProxy *proxy, gint argc, gchar **argv)
+cmd_search(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     const gchar *buf;
     gboolean use_regex, count_only;
@@ -117,13 +117,13 @@ cmd_search(GDBusProxy *proxy, gint argc, gchar **argv)
     elisp = wrap_with_buffer(buf, body);
     g_free(body);
 
-    rc = cmacs_gi_eval_print(proxy, elisp);
+    rc = cmacs_gi_eval_print(transport, elisp);
     g_free(elisp);
     return rc;
 }
 
 gint
-cmd_replace(GDBusProxy *proxy, gint argc, gchar **argv)
+cmd_replace(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     const gchar *buf;
     gboolean use_regex;
@@ -187,13 +187,13 @@ cmd_replace(GDBusProxy *proxy, gint argc, gchar **argv)
     elisp = wrap_with_buffer(buf, body);
     g_free(body);
 
-    rc = cmacs_gi_eval_print(proxy, elisp);
+    rc = cmacs_gi_eval_print(transport, elisp);
     g_free(elisp);
     return rc;
 }
 
 gint
-cmd_occur(GDBusProxy *proxy, gint argc, gchar **argv)
+cmd_occur(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     const gchar *buf;
     gint i;
@@ -248,7 +248,7 @@ cmd_occur(GDBusProxy *proxy, gint argc, gchar **argv)
     elisp = wrap_with_buffer(buf, body);
     g_free(body);
 
-    rc = cmacs_gi_eval_print(proxy, elisp);
+    rc = cmacs_gi_eval_print(transport, elisp);
     g_free(elisp);
     return rc;
 }

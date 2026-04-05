@@ -48,8 +48,10 @@
   :type 'string
   :group 'bacon)
 
-(defcustom bacon-shell-program (or (executable-find "bacon") "bacon")
-  "Path to the bacon shell binary."
+(defcustom bacon-shell-program
+  (expand-file-name invocation-name invocation-directory)
+  "Path to the bacon shell binary.
+By default, this is the CMacs binary itself (invoked with --bacon)."
   :type 'string
   :group 'bacon)
 
@@ -66,20 +68,24 @@
 ;;;###autoload
 (defun bacon ()
   "Open (or switch to) the Bacon shell in a vterm buffer.
-Starts the CMacs D-Bus service and loads the cmacsgi bacon module
-so that `cmacsgi' commands in the shell can call back into CMacs
-via GObject Introspection."
+Sets up a socketpair for IPC between CMacs and the bacon child,
+then launches `cmacs --bacon' in vterm.  The cmacsgi builtin in
+the child uses this socketpair to call back into CMacs."
   (interactive)
   (require 'vterm)
-  ;; Start the D-Bus service so cmacsgi can reach us.
+  ;; Create socketpair for IPC.  bacon-ipc-start returns the
+  ;; child-side fd number; the parent side is already watching
+  ;; it on the CMacs GMainContext.
+  (let ((child-fd (bacon-ipc-start)))
+    (setenv "CMACS_IPC_FD" (number-to-string child-fd)))
+  ;; Also start D-Bus for external tools that want to reach us.
   (let ((dbus-name (cmacs-dbus-start)))
     (setenv "CMACS_DBUS_NAME" dbus-name))
-  ;; Set BACON_ARGS so bacon loads the cmacsgi module.
-  (let ((module-so (expand-file-name "cmacs_gi.so" bacon--module-dir)))
-    (when (file-exists-p module-so)
-      (setenv "BACON_ARGS"
-              (format "-M %s" (shell-quote-argument
-                               (file-name-directory module-so))))))
+  ;; Point cmacsgi module dir for the child shell to load.
+  (let ((module-dir (file-name-directory
+                     (expand-file-name "cmacs_gi.so" bacon--module-dir))))
+    (when (file-directory-p module-dir)
+      (setenv "CMACS_MODULE_DIR" module-dir)))
   (let ((buf (get-buffer bacon-buffer-name)))
     (if (and buf (buffer-live-p buf)
              (get-buffer-process buf))
@@ -87,7 +93,7 @@ via GObject Introspection."
       (when (and buf (buffer-live-p buf))
         (kill-buffer buf))
       (let ((vterm-buffer-name bacon-buffer-name)
-            (vterm-shell bacon-shell-program))
+            (vterm-shell (format "%s --bacon" bacon-shell-program)))
         (vterm)))))
 
 ;;; Programmatic interface

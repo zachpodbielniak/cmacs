@@ -20,7 +20,7 @@
 /* ── Handlers ─────────────────────────────────────────────────────── */
 
 static gint
-pkg_install(GDBusProxy *proxy, gint argc, gchar **argv)
+pkg_install(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     gchar *elisp;
     gint rc;
@@ -35,13 +35,13 @@ pkg_install(GDBusProxy *proxy, gint argc, gchar **argv)
         "(progn (require 'package)"
         " (unless package-archive-contents (package-refresh-contents))"
         " (package-install '%s))", argv[3]);
-    rc = cmacs_gi_eval_quiet(proxy, elisp);
+    rc = cmacs_gi_eval_quiet(transport, elisp);
     g_free(elisp);
     return rc;
 }
 
 static gint
-pkg_remove(GDBusProxy *proxy, gint argc, gchar **argv)
+pkg_remove(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     gchar *elisp;
     gint rc;
@@ -57,13 +57,13 @@ pkg_remove(GDBusProxy *proxy, gint argc, gchar **argv)
         " (let ((desc (cadr (assq '%s package-alist))))"
         "  (if desc (package-delete desc) (error \"package not found\"))))",
         argv[3]);
-    rc = cmacs_gi_eval_quiet(proxy, elisp);
+    rc = cmacs_gi_eval_quiet(transport, elisp);
     g_free(elisp);
     return rc;
 }
 
 static gint
-pkg_list(GDBusProxy *proxy, gint argc, gchar **argv)
+pkg_list(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     gboolean available;
     gint i;
@@ -101,17 +101,17 @@ pkg_list(GDBusProxy *proxy, gint argc, gchar **argv)
             "        (or (package-desc-summary desc) \"\"))))"
             "  package-alist \"\\n\"))");
 
-    rc = cmacs_gi_eval_print(proxy, elisp);
+    rc = cmacs_gi_eval_print(transport, elisp);
     g_free(elisp);
     return rc;
 }
 
 static gint
-pkg_refresh(GDBusProxy *proxy, gint argc, gchar **argv)
+pkg_refresh(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     (void)argc;
     (void)argv;
-    return cmacs_gi_eval_quiet(proxy,
+    return cmacs_gi_eval_quiet(transport,
         "(progn (require 'package) (package-refresh-contents))");
 }
 
@@ -126,8 +126,8 @@ static const CmacsGiSubcmd pkg_subcmds[] = {
 };
 
 gint
-cmd_pkg(GDBusProxy *proxy, gint argc, gchar **argv)
+cmd_pkg(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     return cmacs_gi_dispatch_group("pkg", pkg_subcmds,
-                                   proxy, argc, argv, 2);
+                                   transport, argc, argv, 2);
 }

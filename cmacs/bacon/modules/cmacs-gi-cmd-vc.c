@@ -20,12 +20,12 @@
 /* ── Handlers ─────────────────────────────────────────────────────── */
 
 static gint
-vc_status(GDBusProxy *proxy, gint argc, gchar **argv)
+vc_status(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     (void)argc;
     (void)argv;
 
-    return cmacs_gi_eval_print(proxy,
+    return cmacs_gi_eval_print(transport,
         "(let ((root (vc-root-dir)))"
         " (if root"
         "   (with-temp-buffer"
@@ -37,7 +37,7 @@ vc_status(GDBusProxy *proxy, gint argc, gchar **argv)
 }
 
 static gint
-vc_diff(GDBusProxy *proxy, gint argc, gchar **argv)
+vc_diff(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     gchar *escaped, *elisp;
     gint rc;
@@ -64,13 +64,13 @@ vc_diff(GDBusProxy *proxy, gint argc, gchar **argv)
             " (buffer-string))");
     }
 
-    rc = cmacs_gi_eval_print(proxy, elisp);
+    rc = cmacs_gi_eval_print(transport, elisp);
     g_free(elisp);
     return rc;
 }
 
 static gint
-vc_log(GDBusProxy *proxy, gint argc, gchar **argv)
+vc_log(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     gint n, i;
     const gchar *file;
@@ -114,13 +114,13 @@ vc_log(GDBusProxy *proxy, gint argc, gchar **argv)
             n);
     }
 
-    rc = cmacs_gi_eval_print(proxy, elisp);
+    rc = cmacs_gi_eval_print(transport, elisp);
     g_free(elisp);
     return rc;
 }
 
 static gint
-vc_blame(GDBusProxy *proxy, gint argc, gchar **argv)
+vc_blame(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     gchar *escaped, *elisp;
     gint rc;
@@ -157,7 +157,7 @@ vc_blame(GDBusProxy *proxy, gint argc, gchar **argv)
             "   \"no file associated with current buffer\"))");
     }
 
-    rc = cmacs_gi_eval_print(proxy, elisp);
+    rc = cmacs_gi_eval_print(transport, elisp);
     g_free(elisp);
     return rc;
 }
@@ -173,8 +173,8 @@ static const CmacsGiSubcmd vc_subcmds[] = {
 };
 
 gint
-cmd_vc(GDBusProxy *proxy, gint argc, gchar **argv)
+cmd_vc(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     return cmacs_gi_dispatch_group("vc", vc_subcmds,
-                                   proxy, argc, argv, 2);
+                                   transport, argc, argv, 2);
 }

@@ -22,12 +22,12 @@
 /* ── Handlers ─────────────────────────────────────────────────────── */
 
 static gint
-win_list(GDBusProxy *proxy, gint argc, gchar **argv)
+win_list(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     (void)argc;
     (void)argv;
 
-    return cmacs_gi_eval_print(proxy,
+    return cmacs_gi_eval_print(transport,
         "(mapconcat"
         " (lambda (w)"
         "   (format \"%s\\t%d\\t%d\""
@@ -38,7 +38,7 @@ win_list(GDBusProxy *proxy, gint argc, gchar **argv)
 }
 
 static gint
-win_split(GDBusProxy *proxy, gint argc, gchar **argv)
+win_split(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     gboolean vertical;
     gint i;
@@ -53,43 +53,43 @@ win_split(GDBusProxy *proxy, gint argc, gchar **argv)
     }
 
     if (vertical)
-        return cmacs_gi_eval_quiet(proxy,
+        return cmacs_gi_eval_quiet(transport,
             "(split-window nil nil 'right)");
     else
-        return cmacs_gi_eval_quiet(proxy,
+        return cmacs_gi_eval_quiet(transport,
             "(split-window nil nil 'below)");
 }
 
 static gint
-win_close(GDBusProxy *proxy, gint argc, gchar **argv)
+win_close(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     (void)argc;
     (void)argv;
-    return cmacs_gi_eval_quiet(proxy, "(delete-window)");
+    return cmacs_gi_eval_quiet(transport, "(delete-window)");
 }
 
 static gint
-win_only(GDBusProxy *proxy, gint argc, gchar **argv)
+win_only(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     (void)argc;
     (void)argv;
-    return cmacs_gi_eval_quiet(proxy, "(delete-other-windows)");
+    return cmacs_gi_eval_quiet(transport, "(delete-other-windows)");
 }
 
 static gint
-win_next(GDBusProxy *proxy, gint argc, gchar **argv)
+win_next(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     (void)argc;
     (void)argv;
-    return cmacs_gi_eval_quiet(proxy, "(other-window 1)");
+    return cmacs_gi_eval_quiet(transport, "(other-window 1)");
 }
 
 static gint
-win_balance(GDBusProxy *proxy, gint argc, gchar **argv)
+win_balance(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     (void)argc;
     (void)argv;
-    return cmacs_gi_eval_quiet(proxy, "(balance-windows)");
+    return cmacs_gi_eval_quiet(transport, "(balance-windows)");
 }
 
 /* ── Dispatch table ───────────────────────────────────────────────── */
@@ -105,8 +105,8 @@ static const CmacsGiSubcmd win_subcmds[] = {
 };
 
 gint
-cmd_win(GDBusProxy *proxy, gint argc, gchar **argv)
+cmd_win(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     return cmacs_gi_dispatch_group("win", win_subcmds,
-                                   proxy, argc, argv, 2);
+                                   transport, argc, argv, 2);
 }

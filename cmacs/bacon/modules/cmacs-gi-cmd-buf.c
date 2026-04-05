@@ -26,7 +26,7 @@
 /* ── Handlers ───���────────────────────────────���────────────────────── */
 
 static gint
-buf_list(GDBusProxy *proxy, gint argc, gchar **argv)
+buf_list(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     gboolean long_fmt;
     gint i;
@@ -56,30 +56,30 @@ buf_list(GDBusProxy *proxy, gint argc, gchar **argv)
     else
         elisp = "(mapconcat #'buffer-name (buffer-list) \"\\n\")";
 
-    return cmacs_gi_eval_print(proxy, elisp);
+    return cmacs_gi_eval_print(transport, elisp);
 }
 
 static gint
-buf_show(GDBusProxy *proxy, gint argc, gchar **argv)
+buf_show(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     gchar *escaped, *elisp;
     gint rc;
 
     /* buf show [NAME] — if no NAME, use current buffer */
     if (argc < 4 || strcmp(argv[3], "") == 0)
-        return cmacs_gi_eval_print(proxy, "(buffer-string)");
+        return cmacs_gi_eval_print(transport, "(buffer-string)");
 
     escaped = cmacs_gi_lisp_escape(argv[3]);
     elisp = g_strdup_printf(
         "(with-current-buffer \"%s\" (buffer-string))", escaped);
-    rc = cmacs_gi_eval_print(proxy, elisp);
+    rc = cmacs_gi_eval_print(transport, elisp);
     g_free(elisp);
     g_free(escaped);
     return rc;
 }
 
 static gint
-buf_create(GDBusProxy *proxy, gint argc, gchar **argv)
+buf_create(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     gchar *escaped, *elisp;
     gint rc;
@@ -93,14 +93,14 @@ buf_create(GDBusProxy *proxy, gint argc, gchar **argv)
     escaped = cmacs_gi_lisp_escape(argv[3]);
     elisp = g_strdup_printf(
         "(buffer-name (get-buffer-create \"%s\"))", escaped);
-    rc = cmacs_gi_eval_print(proxy, elisp);
+    rc = cmacs_gi_eval_print(transport, elisp);
     g_free(elisp);
     g_free(escaped);
     return rc;
 }
 
 static gint
-buf_kill(GDBusProxy *proxy, gint argc, gchar **argv)
+buf_kill(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     gchar *escaped, *elisp;
     gint rc;
@@ -113,32 +113,32 @@ buf_kill(GDBusProxy *proxy, gint argc, gchar **argv)
 
     escaped = cmacs_gi_lisp_escape(argv[3]);
     elisp = g_strdup_printf("(kill-buffer \"%s\")", escaped);
-    rc = cmacs_gi_eval_quiet(proxy, elisp);
+    rc = cmacs_gi_eval_quiet(transport, elisp);
     g_free(elisp);
     g_free(escaped);
     return rc;
 }
 
 static gint
-buf_save(GDBusProxy *proxy, gint argc, gchar **argv)
+buf_save(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     gchar *escaped, *elisp;
     gint rc;
 
     if (argc < 4)
-        return cmacs_gi_eval_quiet(proxy, "(save-buffer)");
+        return cmacs_gi_eval_quiet(transport, "(save-buffer)");
 
     escaped = cmacs_gi_lisp_escape(argv[3]);
     elisp = g_strdup_printf(
         "(with-current-buffer \"%s\" (save-buffer))", escaped);
-    rc = cmacs_gi_eval_quiet(proxy, elisp);
+    rc = cmacs_gi_eval_quiet(transport, elisp);
     g_free(elisp);
     g_free(escaped);
     return rc;
 }
 
 static gint
-buf_save_as(GDBusProxy *proxy, gint argc, gchar **argv)
+buf_save_as(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     gchar *esc_buf, *esc_path, *elisp;
     gint rc;
@@ -155,7 +155,7 @@ buf_save_as(GDBusProxy *proxy, gint argc, gchar **argv)
     elisp = g_strdup_printf(
         "(with-current-buffer \"%s\" (write-file \"%s\"))",
         esc_buf, esc_path);
-    rc = cmacs_gi_eval_quiet(proxy, elisp);
+    rc = cmacs_gi_eval_quiet(transport, elisp);
     g_free(elisp);
     g_free(esc_path);
     g_free(esc_buf);
@@ -163,15 +163,15 @@ buf_save_as(GDBusProxy *proxy, gint argc, gchar **argv)
 }
 
 static gint
-buf_current(GDBusProxy *proxy, gint argc, gchar **argv)
+buf_current(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     (void)argc;
     (void)argv;
-    return cmacs_gi_eval_print(proxy, "(buffer-name)");
+    return cmacs_gi_eval_print(transport, "(buffer-name)");
 }
 
 static gint
-buf_switch(GDBusProxy *proxy, gint argc, gchar **argv)
+buf_switch(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     gchar *escaped, *elisp;
     gint rc;
@@ -184,14 +184,14 @@ buf_switch(GDBusProxy *proxy, gint argc, gchar **argv)
 
     escaped = cmacs_gi_lisp_escape(argv[3]);
     elisp = g_strdup_printf("(switch-to-buffer \"%s\")", escaped);
-    rc = cmacs_gi_eval_quiet(proxy, elisp);
+    rc = cmacs_gi_eval_quiet(transport, elisp);
     g_free(elisp);
     g_free(escaped);
     return rc;
 }
 
 static gint
-buf_info(GDBusProxy *proxy, gint argc, gchar **argv)
+buf_info(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     gchar *escaped, *elisp;
     gint rc;
@@ -226,13 +226,13 @@ buf_info(GDBusProxy *proxy, gint argc, gchar **argv)
         g_free(escaped);
     }
 
-    rc = cmacs_gi_eval_print(proxy, elisp);
+    rc = cmacs_gi_eval_print(transport, elisp);
     g_free(elisp);
     return rc;
 }
 
 static gint
-buf_rename(GDBusProxy *proxy, gint argc, gchar **argv)
+buf_rename(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     gchar *esc_old, *esc_new, *elisp;
     gint rc;
@@ -249,7 +249,7 @@ buf_rename(GDBusProxy *proxy, gint argc, gchar **argv)
     elisp = g_strdup_printf(
         "(with-current-buffer \"%s\" (rename-buffer \"%s\"))",
         esc_old, esc_new);
-    rc = cmacs_gi_eval_quiet(proxy, elisp);
+    rc = cmacs_gi_eval_quiet(transport, elisp);
     g_free(elisp);
     g_free(esc_new);
     g_free(esc_old);
@@ -273,8 +273,8 @@ static const CmacsGiSubcmd buf_subcmds[] = {
 };
 
 gint
-cmd_buf(GDBusProxy *proxy, gint argc, gchar **argv)
+cmd_buf(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     return cmacs_gi_dispatch_group("buf", buf_subcmds,
-                                   proxy, argc, argv, 2);
+                                   transport, argc, argv, 2);
 }

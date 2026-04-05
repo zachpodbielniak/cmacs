@@ -21,7 +21,7 @@
 #include "cmacs-gi-cmd-internal.h"
 
 gint
-cmd_grep(GDBusProxy *proxy, gint argc, gchar **argv)
+cmd_grep(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     gchar *esc_pat, *esc_dir, *elisp;
     gint rc;
@@ -53,13 +53,13 @@ cmd_grep(GDBusProxy *proxy, gint argc, gchar **argv)
     }
 
     g_free(esc_pat);
-    rc = cmacs_gi_eval_quiet(proxy, elisp);
+    rc = cmacs_gi_eval_quiet(transport, elisp);
     g_free(elisp);
     return rc;
 }
 
 gint
-cmd_find(GDBusProxy *proxy, gint argc, gchar **argv)
+cmd_find(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     gchar *esc_name, *esc_dir, *elisp;
     gint rc;
@@ -94,23 +94,23 @@ cmd_find(GDBusProxy *proxy, gint argc, gchar **argv)
     }
 
     g_free(esc_name);
-    rc = cmacs_gi_eval_print(proxy, elisp);
+    rc = cmacs_gi_eval_print(transport, elisp);
     g_free(elisp);
     return rc;
 }
 
 gint
-cmd_project_root(GDBusProxy *proxy, gint argc, gchar **argv)
+cmd_project_root(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     (void)argc;
     (void)argv;
-    return cmacs_gi_eval_print(proxy,
+    return cmacs_gi_eval_print(transport,
         "(let ((pr (project-current)))"
         " (if pr (project-root pr) \"\"))");
 }
 
 gint
-cmd_compile(GDBusProxy *proxy, gint argc, gchar **argv)
+cmd_compile(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     GString *cmd;
     gchar *escaped, *elisp;
@@ -135,29 +135,29 @@ cmd_compile(GDBusProxy *proxy, gint argc, gchar **argv)
     elisp = g_strdup_printf("(compile \"%s\")", escaped);
     g_free(escaped);
 
-    rc = cmacs_gi_eval_quiet(proxy, elisp);
+    rc = cmacs_gi_eval_quiet(transport, elisp);
     g_free(elisp);
     return rc;
 }
 
 gint
-cmd_next_error(GDBusProxy *proxy, gint argc, gchar **argv)
+cmd_next_error(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     (void)argc;
     (void)argv;
-    return cmacs_gi_eval_quiet(proxy, "(next-error)");
+    return cmacs_gi_eval_quiet(transport, "(next-error)");
 }
 
 gint
-cmd_prev_error(GDBusProxy *proxy, gint argc, gchar **argv)
+cmd_prev_error(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     (void)argc;
     (void)argv;
-    return cmacs_gi_eval_quiet(proxy, "(previous-error)");
+    return cmacs_gi_eval_quiet(transport, "(previous-error)");
 }
 
 gint
-cmd_diag(GDBusProxy *proxy, gint argc, gchar **argv)
+cmd_diag(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     const gchar *buf;
     gint i;
@@ -212,7 +212,7 @@ cmd_diag(GDBusProxy *proxy, gint argc, gchar **argv)
             " \"no diagnostics backend active\")");
     }
 
-    rc = cmacs_gi_eval_print(proxy, elisp);
+    rc = cmacs_gi_eval_print(transport, elisp);
     g_free(elisp);
     return rc;
 }

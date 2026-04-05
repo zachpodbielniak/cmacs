@@ -662,7 +662,7 @@ OPTION_DEFAULT_OFF([cmacs-gowl],  [CMacs Gowl Wayland compositor])
 if test "$with_cmacs_glib" != "no"; then
   PKG_CHECK_MODULES([CMACS_GLIB], [glib-2.0 gobject-2.0 gio-2.0 gmodule-2.0])
   AC_DEFINE([HAVE_CMACS_GLIB], 1, [CMacs GLib integration])
-  CMACS_GLIB_OBJ="cmacs-glib-loop.o cmacs-gobject.o cmacs-gclosure.o cmacs-dbus-service.o"
+  CMACS_GLIB_OBJ="cmacs-glib-loop.o cmacs-gobject.o cmacs-gclosure.o cmacs-dbus-service.o cmacs-eval-dispatch.o"
 fi
 if test "$with_cmacs_gi" != "no"; then
   PKG_CHECK_MODULES([CMACS_GI], [gobject-introspection-1.0])
@@ -675,9 +675,23 @@ if test "$with_cmacs_crispy" != "no"; then
   CMACS_CRISPY_OBJ="cmacs-crispy.o"
 fi
 if test "$with_cmacs_bacon" != "no"; then
-  PKG_CHECK_MODULES([CMACS_BACON], [bacon-1.0])
+  if test "$with_cmacs_bacon" = "system"; then
+    # Use system-installed bacon (for distro packaging)
+    PKG_CHECK_MODULES([CMACS_BACON], [bacon-1.0])
+  else
+    # Build libbacon from deps/bacon/ (default)
+    PKG_CHECK_MODULES([CMACS_BACON_DEPS],
+      [glib-2.0 gobject-2.0 gio-2.0 gio-unix-2.0 gmodule-2.0 json-glib-1.0 yaml-0.1 readline])
+    CMACS_BACON_CFLAGS="-I\$(srcdir)/../deps/bacon -I\$(srcdir)/../deps/bacon/src \
+      -I\$(srcdir)/../deps/bacon/deps/crispy/src \
+      -I\$(srcdir)/../deps/bacon/deps/yaml-glib/src \
+      -DBACON_COMPILATION $CMACS_BACON_DEPS_CFLAGS"
+    CMACS_BACON_LIBS="\$(srcdir)/../deps/bacon/build/release/libbacon-1.0.a \
+      $CMACS_BACON_DEPS_LIBS"
+    CMACS_BACON_BUNDLED=yes
+  fi
   AC_DEFINE([HAVE_CMACS_BACON], 1, [CMacs bacon integration])
-  CMACS_BACON_OBJ="cmacs-bacon.o"
+  CMACS_BACON_OBJ="cmacs-bacon.o cmacs-bacon-ipc.o"
 fi
 if test "$with_cmacs_gowl" != "no"; then
   PKG_CHECK_MODULES([CMACS_GOWL], [gowl wlroots-0.19 wayland-server])
@@ -697,6 +711,7 @@ AC_SUBST(CMACS_CRISPY_CFLAGS)
 AC_SUBST(CMACS_CRISPY_LIBS)
 AC_SUBST(CMACS_BACON_CFLAGS)
 AC_SUBST(CMACS_BACON_LIBS)
+AC_SUBST(CMACS_BACON_BUNDLED)
 AC_SUBST(CMACS_GOWL_CFLAGS)
 AC_SUBST(CMACS_GOWL_LIBS)
 

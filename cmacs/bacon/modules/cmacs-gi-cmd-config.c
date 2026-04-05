@@ -45,7 +45,7 @@ looks_like_number_or_keyword(const gchar *s)
 /* ── Subcommand handlers ──────────────────────────────────────────── */
 
 gint
-cmd_set(GDBusProxy *proxy, gint argc, gchar **argv)
+cmd_set(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     gchar *esc_val, *elisp;
     gint rc;
@@ -71,13 +71,13 @@ cmd_set(GDBusProxy *proxy, gint argc, gchar **argv)
         g_free(esc_val);
     }
 
-    rc = cmacs_gi_eval_quiet(proxy, elisp);
+    rc = cmacs_gi_eval_quiet(transport, elisp);
     g_free(elisp);
     return rc;
 }
 
 gint
-cmd_get_var(GDBusProxy *proxy, gint argc, gchar **argv)
+cmd_get_var(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     gchar *elisp;
     gint rc;
@@ -89,13 +89,13 @@ cmd_get_var(GDBusProxy *proxy, gint argc, gchar **argv)
     }
 
     elisp = g_strdup_printf("(symbol-value '%s)", argv[2]);
-    rc = cmacs_gi_eval_print(proxy, elisp);
+    rc = cmacs_gi_eval_print(transport, elisp);
     g_free(elisp);
     return rc;
 }
 
 gint
-cmd_theme(GDBusProxy *proxy, gint argc, gchar **argv)
+cmd_theme(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     gchar *elisp;
     gint rc;
@@ -107,13 +107,13 @@ cmd_theme(GDBusProxy *proxy, gint argc, gchar **argv)
     }
 
     elisp = g_strdup_printf("(load-theme '%s t)", argv[2]);
-    rc = cmacs_gi_eval_quiet(proxy, elisp);
+    rc = cmacs_gi_eval_quiet(transport, elisp);
     g_free(elisp);
     return rc;
 }
 
 gint
-cmd_font(GDBusProxy *proxy, gint argc, gchar **argv)
+cmd_font(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     gchar *esc_fam, *elisp;
     gint rc;
@@ -143,13 +143,13 @@ cmd_font(GDBusProxy *proxy, gint argc, gchar **argv)
     }
 
     g_free(esc_fam);
-    rc = cmacs_gi_eval_quiet(proxy, elisp);
+    rc = cmacs_gi_eval_quiet(transport, elisp);
     g_free(elisp);
     return rc;
 }
 
 gint
-cmd_mode(GDBusProxy *proxy, gint argc, gchar **argv)
+cmd_mode(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     gchar *elisp;
     gint rc;
@@ -166,7 +166,7 @@ cmd_mode(GDBusProxy *proxy, gint argc, gchar **argv)
     else
         elisp = g_strdup_printf("(funcall (intern \"%s-mode\"))", argv[2]);
 
-    rc = cmacs_gi_eval_quiet(proxy, elisp);
+    rc = cmacs_gi_eval_quiet(transport, elisp);
     g_free(elisp);
     return rc;
 }

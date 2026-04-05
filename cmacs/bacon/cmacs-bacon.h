@@ -13,8 +13,9 @@
 
 #ifdef HAVE_CMACS_BACON
 
-/* Register DEFUN primitives. */
-extern void syms_of_cmacs_bacon (void);
+/* Enter bacon shell mode.  Called from main() when --bacon is detected.
+   Strips argv[bacon_idx], runs the shell REPL, and never returns. */
+extern _Noreturn void cmacs_bacon_main (int argc, char **argv, int bacon_idx);
 
 #endif /* HAVE_CMACS_BACON */
 #endif /* CMACS_BACON_H */

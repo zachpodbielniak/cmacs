@@ -156,6 +156,10 @@ extern char etext;
 #include "comp.h"
 #include "thread.h"
 
+#ifdef HAVE_CMACS_BACON
+#include "cmacs-bacon.h"
+#endif
+
 static const char emacs_version[] = PACKAGE_VERSION;
 static const char emacs_copyright[] = COPYRIGHT;
 static const char emacs_bugreport[] = PACKAGE_BUGREPORT;
@@ -1340,6 +1344,21 @@ android_emacs_init (int argc, char **argv, char *dump_file)
      the initialization phase.  */
 #if SECCOMP_USABLE
   maybe_load_seccomp (argc, argv);
+#endif
+
+  /* Check for --bacon before ANY Emacs initialization.
+     If present, enter bacon shell mode and never return. */
+#ifdef HAVE_CMACS_BACON
+  {
+    int i;
+    for (i = 1; i < argc; i++)
+      {
+        if (strcmp (argv[i], "--bacon") == 0)
+          cmacs_bacon_main (argc, argv, i);
+        if (strcmp (argv[i], "--") == 0)
+          break;
+      }
+  }
 #endif
 
   bool no_loadup = false;

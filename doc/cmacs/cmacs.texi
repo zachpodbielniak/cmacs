@@ -90,12 +90,14 @@ Source layout:
 
 @example
 cmacs/
-  glib/           GLib event loop, GObject bridge, GClosure, D-Bus service
+  glib/           GLib event loop, GObject bridge, GClosure, D-Bus,
+                  eval dispatch
   gobject/        (symlinked into glib/)
   gi/             GObject Introspection bridge
   crispy/         Crispy C scripting
-  bacon/          Bacon shell C primitives
-    modules/      Bacon module: cmacsgi builtin (.so)
+  bacon/          Bacon shell: C primitives, IPC, cmacs_bacon_main()
+    modules/      cmacsgi builtin (transport abstraction + 60+ commands)
+deps/bacon/       Bundled bacon source (built as libbacon-1.0.a)
 lisp/cmacs/       Elisp integration layers
 src/              Symlinks to cmacs/ files (for the Emacs build system)
 @end example
@@ -315,10 +317,17 @@ Elisp convenience layer with namespace auto-generation.
 @cindex D-Bus
 @cindex org.cmacs.Editor1
 
-CMacs exposes a D-Bus service so that external processes (such as the
-Bacon shell) can call into CMacs.  The service uses GDBus and runs on
-the CMacs GMainContext, so method handlers fire on the Emacs main
-thread.
+CMacs exposes a D-Bus service so that external processes can call into
+CMacs.  The service uses GDBus and runs on the CMacs GMainContext, so
+method handlers fire on the Emacs main thread.
+
+@quotation Note
+The embedded Bacon shell (@pxref{Bacon Shell}) uses a faster Unix
+socketpair for IPC instead of D-Bus.  The D-Bus service remains
+available for @emph{external} tools---scripts, other editors, desktop
+automation---that want to communicate with CMacs from outside the
+process.
+@end quotation
 
 @section Bus Name
 
@@ -407,16 +416,25 @@ vterm buffer.  On launch it:
 
 @enumerate
 @item
-Starts the CMacs D-Bus service (@pxref{D-Bus Service}).
+Creates a Unix socketpair for IPC between the parent (Emacs) and child
+(bacon shell).  The parent-side fd is watched on the CMacs GMainContext;
+the child-side fd is passed via @env{CMACS_IPC_FD}.
 @item
-Sets @env{CMACS_DBUS_NAME} so the @command{cmacsgi} builtin can reach
-CMacs.
+Starts the CMacs D-Bus service (@pxref{D-Bus Service}) and exports the
+bus name via @env{CMACS_DBUS_NAME}, as a fallback for external tools.
 @item
-Sets @env{BACON_ARGS} with @option{-M} pointing to the CMacs bacon
-module directory, so Bacon loads the @command{cmacsgi} module.
+Sets @env{CMACS_MODULE_DIR} so the child can locate the @command{cmacsgi}
+module directory.
 @item
-Creates a vterm buffer running @command{bacon}.
+Creates a vterm buffer running @command{cmacs --bacon} (the same CMacs
+binary, which enters shell mode when invoked with @option{--bacon}).
 @end enumerate
+
+@noindent
+Because bacon is statically linked into CMacs, no external
+@command{bacon} binary is required.  The @option{--bacon} flag causes
+CMacs to skip all editor initialization and enter the Bacon shell REPL
+directly.  @xref{cmacs --bacon}.
 
 @section Programmatic C Primitives
 
@@ -458,22 +476,74 @@ Return non-nil if the shell backend is active.
 Return the configured prompt format string.
 @end table
 
+@anchor{cmacs --bacon}
+@section cmacs --bacon
+
+When invoked as @command{cmacs --bacon}, CMacs enters shell mode:
+
+@enumerate
+@item
+The @option{--bacon} flag is detected very early in @code{main()},
+before any Emacs initialization.
+@item
+@code{cmacs_bacon_main()} strips the flag from argv, creates a
+@code{BaconShell}, registers the @command{cmacsgi} builtin (using the
+fd transport from @env{CMACS_IPC_FD}), sources @file{~/.baconrc}, and
+enters the shell REPL.
+@item
+The function never returns---it calls @code{exit()} when the shell
+terminates.
+@end enumerate
+
+@noindent
+This mode is primarily used by @code{M-x bacon} (which launches
+@command{cmacs --bacon} in vterm), but it can also be used standalone:
+
+@example
+$ cmacs --bacon
+bacon$ echo "hello from bacon"
+hello from bacon
+bacon$ cmacsgi eval "(+ 1 2)"    # only works with IPC fd
+@end example
+
+@noindent
+When run standalone (outside of @code{M-x bacon}), the @command{cmacsgi}
+builtin falls back to D-Bus if @env{CMACS_IPC_FD} is not set.
+
 @section Customization
 
 @table @code
 @item bacon-buffer-name
 Name of the Bacon shell buffer (default @code{"*bacon*"}).
 @item bacon-shell-program
-Path to the @command{bacon} binary.
+Path to the bacon shell binary.  Defaults to the CMacs binary itself
+(i.e.@: @code{invocation-name} in @code{invocation-directory}), which
+is invoked with @option{--bacon}.
+@end table
+
+@section Elisp IPC Primitives
+
+@table @code
+@item bacon-ipc-start
+Create a Unix socketpair for parent--child IPC.  Attaches the parent-side
+fd to the CMacs GMainContext and returns the child-side fd number.
+@item bacon-ipc-stop
+Destroy the IPC handler and close the parent-side fd.
 @end table
 
 @section Files
 
 @table @file
 @item cmacs/bacon/cmacs-bacon.c
-C primitives (bacon-start, bacon-eval, etc.).
+C primitives (bacon-start, bacon-eval, etc.) and @code{cmacs_bacon_main()}.
+@item cmacs/bacon/cmacs-bacon-ipc.c
+Parent-side socketpair IPC handler: reads requests from the child,
+dispatches to the shared eval layer, writes responses.
+@item cmacs/glib/cmacs-eval-dispatch.c
+Transport-agnostic eval dispatch used by both the D-Bus service and
+the socketpair IPC handler.
 @item lisp/cmacs/cmacs-bacon.el
-Elisp layer: vterm integration, D-Bus startup.
+Elisp layer: socketpair setup, vterm integration.
 @end table
 
 @c ===================================================================
@@ -483,11 +553,12 @@ Elisp layer: vterm integration, D-Bus startup.
 @cindex cmacsgi
 
 The @command{cmacsgi} command is a Bacon shell builtin that lets you
-control CMacs from the command line.  It communicates over D-Bus via
-the @code{org.cmacs.Editor1} interface, providing 60+ subcommands
-covering buffer management, text editing, search/replace, window
-layout, project navigation, version control, and more---all without
-writing a single line of elisp.
+control CMacs from the command line.  It communicates via a Unix
+socketpair (when launched from @code{M-x bacon}) or falls back to
+D-Bus (for standalone use), providing 60+ subcommands covering buffer
+management, text editing, search/replace, window layout, project
+navigation, version control, and more---all without writing a single
+line of elisp.
 
 @section Overview
 
@@ -937,42 +1008,71 @@ Display a message in the CMacs minibuffer.
 @c ----- Architecture --------------------------------------------------
 @section Architecture
 
+The primary IPC path (used by @code{M-x bacon}) is a Unix socketpair
+with length-prefixed JSON messages:
+
 @example
-  Bacon shell (separate process, in vterm)
+  CMacs (Emacs process)
        |
-  cmacsgi builtin (cmacs_gi.so, loaded via BACON_ARGS -M)
+  cmacs-bacon-ipc  <--- socketpair fd ---> cmacs --bacon (child)
+       |                                        |
+  cmacs-eval-dispatch                     cmacsgi builtin
+       |                                        |
+  elisp eval / GI / file ops            CmacsGiTransport (fd backend)
+@end example
+
+@noindent
+Wire protocol: @code{[4 bytes: uint32 BE length][length bytes: JSON]}.
+Requests and responses are JSON objects with @code{id}, @code{method},
+@code{params}/@code{result}/@code{error} fields.
+
+The D-Bus fallback path (for external tools or standalone bacon) goes
+through the session bus:
+
+@example
+  External tool / standalone bacon
        |
   GDBus proxy  --->  D-Bus session bus
        |                     |
        |              org.cmacs.Editor1
        |                     |
-  CMacs (Emacs process)
-       |
-  elisp eval / GI primitives / file ops
+  CMacs (cmacs-eval-dispatch)
 @end example
 
 @noindent
+Both paths share the same dispatch layer (@file{cmacs-eval-dispatch.c}),
+so all methods behave identically regardless of transport.
+
 Most subcommands build an elisp form on the client side and call the
-D-Bus @code{Eval} method.  The user never sees or writes elisp---the
+@code{Eval} method.  The user never sees or writes elisp---the
 @command{cmacsgi} command translates shell arguments into the
 appropriate Lisp forms.
 
 @section Environment Variables
 
 @table @env
+@item CMACS_IPC_FD
+File descriptor number for the child side of the socketpair.  Set
+automatically by @code{M-x bacon} before launching @command{cmacs
+--bacon}.  When set, @command{cmacsgi} uses the fd transport (faster,
+no bus daemon involved).
+
 @item CMACS_DBUS_NAME
 The D-Bus bus name of the running CMacs instance.  Set automatically
-by @code{M-x bacon}.  Example: @code{org.cmacs.Editor.Pid12345}.
+by @code{M-x bacon} as a fallback.  Example:
+@code{org.cmacs.Editor.Pid12345}.  Used when @env{CMACS_IPC_FD} is
+not available.
 
-@item BACON_ARGS
-Passed to Bacon at startup.  CMacs sets this to
-@code{-M /path/to/cmacs/bacon/modules/} so Bacon loads the
-@command{cmacsgi} module.
+@item CMACS_MODULE_DIR
+Directory containing @command{cmacsgi} module files.  Set by
+@code{M-x bacon} so the child shell can locate loadable modules.
 @end table
 
 @section Module Files
 
 @table @file
+@item cmacs/bacon/modules/cmacs-gi-transport.c
+Transport abstraction: auto-selects fd (socketpair) or D-Bus backend.
 @item cmacs/bacon/modules/cmacs-gi-command.c
 Core dispatch table, shared utilities, original subcommands.
 @item cmacs/bacon/modules/cmacs-gi-cmd-internal.h
@@ -1006,7 +1106,8 @@ GObject type declaration.
 @item cmacs/bacon/modules/cmacs-gi-module.c
 BaconModule wrapper (registers the builtin on startup).
 @item cmacs/bacon/modules/Makefile
-Builds @file{cmacs_gi.so}.  Requires @code{gio-2.0}.
+Builds @file{cmacs_gi.so} for standalone module use.  Requires
+@code{gio-2.0} and @code{json-glib-1.0}.
 @end table
 
 @c ===================================================================
@@ -1047,11 +1148,17 @@ CMacs features are off by default.  Enable them with:
   --with-cmacs-glib    \  # GLib event loop + GObject bridge + D-Bus
   --with-cmacs-gi      \  # GObject Introspection
   --with-cmacs-crispy  \  # Crispy C scripting
-  --with-cmacs-bacon   \  # Bacon shell primitives
+  --with-cmacs-bacon   \  # Bacon shell (bundled from deps/bacon/)
   --with-cmacs-gowl    \  # Gowl Wayland compositor (optional)
   --with-pgtk          \
   --with-native-compilation=aot
 @end example
+
+@noindent
+@code{--with-cmacs-bacon} builds libbacon statically from
+@file{deps/bacon/} and links it into the CMacs binary.  For distro
+packaging, use @code{--with-cmacs-bacon=system} to link against a
+system-installed @code{bacon-1.0} via pkg-config instead.
 
 @section Dependencies
 
@@ -1061,20 +1168,24 @@ CMacs features are off by default.  Enable them with:
   @tab Event loop, GObject, D-Bus, GClosure
 @item cmacs-gi @tab gobject-introspection-1.0 @tab GI bridge
 @item cmacs-crispy @tab crispy @tab C scripting
-@item cmacs-bacon @tab bacon-1.0 @tab Shell primitives
+@item cmacs-bacon (bundled) @tab glib-2.0 gio-2.0 gio-unix-2.0
+  json-glib-1.0 yaml-0.1 readline @tab Shell (built from deps/bacon/)
+@item cmacs-bacon (system) @tab bacon-1.0 @tab Shell (system package)
 @end multitable
 
 @section Building the Bacon Module
 
-The @command{cmacsgi} module is built separately:
+The @command{cmacsgi} module is compiled into the CMacs binary by
+default (via the bundled libbacon static link).  For standalone or
+development use, it can also be built as a loadable @file{.so}:
 
 @example
 cd cmacs/bacon/modules/
 make
 @end example
 
-This produces @file{cmacs_gi.so}.  The elisp @code{bacon} command
-locates it automatically relative to the source tree.
+This produces @file{cmacs_gi.so} for use with an external
+@command{bacon} binary.
 
 @section Compile Flags
 
@@ -1082,10 +1193,11 @@ The Emacs build system picks up CMacs objects via @code{configure.ac}:
 
 @example
 CMACS_GLIB_OBJ="cmacs-glib-loop.o cmacs-gobject.o
-                 cmacs-gclosure.o cmacs-dbus-service.o"
+                 cmacs-gclosure.o cmacs-dbus-service.o
+                 cmacs-eval-dispatch.o"
 CMACS_GI_OBJ="cmacs-gi.o"
 CMACS_CRISPY_OBJ="cmacs-crispy.o"
-CMACS_BACON_OBJ="cmacs-bacon.o"
+CMACS_BACON_OBJ="cmacs-bacon.o cmacs-bacon-ipc.o"
 @end example
 
 C source files live under @file{cmacs/} and are symlinked into

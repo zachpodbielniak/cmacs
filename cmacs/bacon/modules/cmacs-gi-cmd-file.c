@@ -18,7 +18,7 @@
 #include "cmacs-gi-cmd-internal.h"
 
 gint
-cmd_file_open(GDBusProxy *proxy, gint argc, gchar **argv)
+cmd_file_open(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     gchar *escaped, *elisp;
     gint rc;
@@ -31,48 +31,48 @@ cmd_file_open(GDBusProxy *proxy, gint argc, gchar **argv)
 
     escaped = cmacs_gi_lisp_escape(argv[2]);
     elisp = g_strdup_printf("(find-file \"%s\")", escaped);
-    rc = cmacs_gi_eval_quiet(proxy, elisp);
+    rc = cmacs_gi_eval_quiet(transport, elisp);
     g_free(elisp);
     g_free(escaped);
     return rc;
 }
 
 gint
-cmd_file_save(GDBusProxy *proxy, gint argc, gchar **argv)
+cmd_file_save(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     gchar *escaped, *elisp;
     gint rc;
 
     if (argc < 3)
-        return cmacs_gi_eval_quiet(proxy, "(save-buffer)");
+        return cmacs_gi_eval_quiet(transport, "(save-buffer)");
 
     escaped = cmacs_gi_lisp_escape(argv[2]);
     elisp = g_strdup_printf("(write-file \"%s\")", escaped);
-    rc = cmacs_gi_eval_quiet(proxy, elisp);
+    rc = cmacs_gi_eval_quiet(transport, elisp);
     g_free(elisp);
     g_free(escaped);
     return rc;
 }
 
 gint
-cmd_file_close(GDBusProxy *proxy, gint argc, gchar **argv)
+cmd_file_close(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     gchar *escaped, *elisp;
     gint rc;
 
     if (argc < 3)
-        return cmacs_gi_eval_quiet(proxy, "(kill-buffer (current-buffer))");
+        return cmacs_gi_eval_quiet(transport, "(kill-buffer (current-buffer))");
 
     escaped = cmacs_gi_lisp_escape(argv[2]);
     elisp = g_strdup_printf("(kill-buffer \"%s\")", escaped);
-    rc = cmacs_gi_eval_quiet(proxy, elisp);
+    rc = cmacs_gi_eval_quiet(transport, elisp);
     g_free(elisp);
     g_free(escaped);
     return rc;
 }
 
 gint
-cmd_file_recent(GDBusProxy *proxy, gint argc, gchar **argv)
+cmd_file_recent(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     gint n, i;
     gchar *elisp;
@@ -94,7 +94,7 @@ cmd_file_recent(GDBusProxy *proxy, gint argc, gchar **argv)
         " (mapconcat #'identity"
         "   (seq-take recentf-list %d) \"\\n\"))",
         n);
-    rc = cmacs_gi_eval_print(proxy, elisp);
+    rc = cmacs_gi_eval_print(transport, elisp);
     g_free(elisp);
     return rc;
 }

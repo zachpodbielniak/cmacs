@@ -12,13 +12,20 @@
 #ifdef HAVE_CMACS_BACON
 
 #include "lisp.h"
+#include "cmacs-bacon.h"
+#include "cmacs-glib-loop.h"
+#include "cmacs-bacon-ipc.h"
 #include <bacon.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <fcntl.h>
+#include <sys/socket.h>
 
 /* Persistent shell instance. */
 static BaconShell *cmacs_bacon_shell = NULL;
+
+/* Active IPC handler for the bacon child socketpair. */
+static CmacsBaconIpc *cmacs_bacon_ipc = NULL;
 
 /* ──────────────────────────────────────────────────────────────────── */
 /* Startup helpers (replicate main.c's post-construction init)         */
@@ -379,6 +386,130 @@ DEFUN ("bacon-running-p", Fbacon_running_p, Sbacon_running_p, 0, 0, 0,
 }
 
 /* ──────────────────────────────────────────────────────────────────── */
+/* Socketpair IPC for forked bacon child                               */
+/* ──────────────────────────────────────────────────────────────────── */
+
+DEFUN ("bacon-ipc-start", Fbacon_ipc_start, Sbacon_ipc_start, 0, 0, 0,
+       doc: /* Create a socketpair for CMacs ↔ bacon IPC.
+Sets up the parent-side IPC handler on the CMacs GMainContext.
+Returns the child-side fd number (an integer) which should be passed
+to the bacon child process via the CMACS_IPC_FD environment variable.
+The child fd has FD_CLOEXEC cleared so it survives exec.  */)
+  (void)
+{
+  int fds[2];
+  int flags;
+  GMainContext *ctx;
+
+  /* Destroy any previous IPC session. */
+  if (cmacs_bacon_ipc != NULL)
+    {
+      cmacs_bacon_ipc_destroy (cmacs_bacon_ipc);
+      cmacs_bacon_ipc = NULL;
+    }
+
+  if (socketpair (AF_UNIX, SOCK_STREAM, 0, fds) < 0)
+    xsignal1 (Qbacon_error,
+              build_string ("Failed to create socketpair for bacon IPC"));
+
+  /* Set FD_CLOEXEC on parent fd (fds[0]) so it stays private. */
+  flags = fcntl (fds[0], F_GETFD);
+  if (flags >= 0)
+    fcntl (fds[0], F_SETFD, flags | FD_CLOEXEC);
+
+  /* Clear FD_CLOEXEC on child fd (fds[1]) so it survives vterm's exec. */
+  flags = fcntl (fds[1], F_GETFD);
+  if (flags >= 0)
+    fcntl (fds[1], F_SETFD, flags & ~FD_CLOEXEC);
+
+  ctx = cmacs_glib_get_context ();
+  if (ctx == NULL)
+    {
+      close (fds[0]);
+      close (fds[1]);
+      xsignal1 (Qbacon_error,
+                build_string ("CMacs GLib context not initialized"));
+    }
+
+  cmacs_bacon_ipc = cmacs_bacon_ipc_new (fds[0], ctx);
+
+  return make_fixnum (fds[1]);
+}
+
+DEFUN ("bacon-ipc-stop", Fbacon_ipc_stop, Sbacon_ipc_stop, 0, 0, 0,
+       doc: /* Shut down the bacon IPC handler. */)
+  (void)
+{
+  if (cmacs_bacon_ipc != NULL)
+    {
+      cmacs_bacon_ipc_destroy (cmacs_bacon_ipc);
+      cmacs_bacon_ipc = NULL;
+    }
+  return Qnil;
+}
+
+/* ──────────────────────────────────────────────────────────────────── */
+/* cmacs --bacon: standalone shell mode (child side of fork)           */
+/* ──────────────────────────────────────────────────────────────────── */
+
+/* Called from main() in emacs.c when --bacon is detected.
+   This replaces deps/bacon/src/main.c for the embedded case.
+   Never returns. */
+_Noreturn void
+cmacs_bacon_main (int argc, char **argv, int bacon_idx)
+{
+  BaconShell *shell;
+  BaconModuleManager *mm;
+  const gchar *module_dir;
+  gint i, j;
+  int new_argc;
+  char **new_argv;
+
+  /* Strip --bacon from argv. */
+  new_argc = argc - 1;
+  new_argv = g_new (char *, new_argc + 1);
+  for (i = 0, j = 0; i < argc; i++)
+    {
+      if (i != bacon_idx)
+        new_argv[j++] = argv[i];
+    }
+  new_argv[j] = NULL;
+
+  /* Create the shell with interactive flag. */
+  shell = bacon_shell_new (BACON_FLAG_INTERACTIVE);
+  if (shell == NULL)
+    {
+      fprintf (stderr, "cmacs --bacon: failed to create shell\n");
+      exit (1);
+    }
+
+  /* Load cmacsgi module if a module directory is set.
+     The parent sets CMACS_MODULE_DIR before launching us. */
+  mm = bacon_shell_get_module_manager (shell);
+  module_dir = g_getenv ("CMACS_MODULE_DIR");
+  if (module_dir != NULL && g_file_test (module_dir, G_FILE_TEST_IS_DIR))
+    {
+      bacon_module_manager_load_from_directory (mm, module_dir);
+      bacon_module_manager_activate_all (mm);
+    }
+
+  /* Source RC files. */
+  {
+    gchar *rc_path = g_build_filename (g_get_home_dir (), ".baconrc", NULL);
+    if (g_file_test (rc_path, G_FILE_TEST_IS_REGULAR))
+      bacon_shell_source_file (shell, rc_path, NULL);
+    g_free (rc_path);
+  }
+
+  /* Run the shell REPL — this blocks until exit. */
+  bacon_shell_run (shell);
+
+  g_object_unref (shell);
+  g_free (new_argv);
+  exit (0);
+}
+
+/* ──────────────────────────────────────────────────────────────────── */
 /* Init                                                                */
 /* ──────────────────────────────────────────────────────────────────── */
 
@@ -402,6 +533,8 @@ syms_of_cmacs_bacon (void)
   defsubr (&Sbacon_alias);
   defsubr (&Sbacon_running_p);
   defsubr (&Sbacon_get_prompt);
+  defsubr (&Sbacon_ipc_start);
+  defsubr (&Sbacon_ipc_stop);
 }
 
 #endif /* HAVE_CMACS_BACON */

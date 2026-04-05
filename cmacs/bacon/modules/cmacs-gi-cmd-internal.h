@@ -19,13 +19,16 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include "cmacs-gi-transport.h"
+
 /* ── Dispatch table types ─────────────────────────────────────────── */
 
-/* Handler signature: receives the D-Bus proxy and the FULL argc/argv
+/* Handler signature: receives the transport and the FULL argc/argv
    from the top-level cmacsgi invocation.  argv[0] is "cmacsgi",
    argv[1] is the subcommand name.  For group commands (e.g. "buf list")
    the group handler receives the same argv — it dispatches on argv[2]. */
-typedef gint (*CmacsGiHandler)(GDBusProxy *proxy, gint argc, gchar **argv);
+typedef gint (*CmacsGiHandler)(CmacsGiTransport *transport,
+                               gint argc, gchar **argv);
 
 typedef struct {
     const gchar     *name;      /* subcommand name */
@@ -34,23 +37,24 @@ typedef struct {
     const gchar     *help;      /* short description (one sentence) */
 } CmacsGiSubcmd;
 
-/* ── D-Bus proxy ──────────────────────────────────────────────────── */
+/* ── Transport ────────────────────────────────────────────────────── */
 
-/* Get a GDBus proxy to the CMacs Editor1 interface.
-   Reads $CMACS_DBUS_NAME.  Caller must g_object_unref(). */
-GDBusProxy *cmacs_gi_get_proxy (GError **error);
+/* Get a transport to CMacs.  Auto-detects $CMACS_IPC_FD or $CMACS_DBUS_NAME.
+   Caller must cmacs_gi_transport_free(). */
+CmacsGiTransport *cmacs_gi_get_transport (GError **error);
 
 /* ── Eval helpers ─────────────────────────────────────────────────── */
 
-/* Call Eval over D-Bus, print result to stdout, return exit code. */
-gint cmacs_gi_eval_print (GDBusProxy *proxy, const gchar *elisp);
+/* Call Eval via transport, print result to stdout, return exit code. */
+gint cmacs_gi_eval_print (CmacsGiTransport *transport, const gchar *elisp);
 
-/* Call Eval over D-Bus, suppress stdout, return exit code. */
-gint cmacs_gi_eval_quiet (GDBusProxy *proxy, const gchar *elisp);
+/* Call Eval via transport, suppress stdout, return exit code. */
+gint cmacs_gi_eval_quiet (CmacsGiTransport *transport, const gchar *elisp);
 
-/* Call Eval over D-Bus, return result as an allocated string.
+/* Call Eval via transport, return result as an allocated string.
    Returns NULL on error (prints to stderr).  Caller must g_free(). */
-gchar *cmacs_gi_eval_get_string (GDBusProxy *proxy, const gchar *elisp);
+gchar *cmacs_gi_eval_get_string (CmacsGiTransport *transport,
+                                 const gchar *elisp);
 
 /* ── String utilities ─────────────────────────────────────────────── */
 
@@ -68,12 +72,12 @@ gchar *cmacs_gi_lisp_quote (const gchar *s);
 
 /* Look up argv[depth] in TABLE (NULL-terminated) and call its handler.
    On unknown subcommand, prints error + available subcommands. */
-gint cmacs_gi_dispatch_group (const gchar        *group_name,
-                              const CmacsGiSubcmd *table,
-                              GDBusProxy          *proxy,
-                              gint                 argc,
-                              gchar              **argv,
-                              gint                 depth);
+gint cmacs_gi_dispatch_group (const gchar          *group_name,
+                              const CmacsGiSubcmd  *table,
+                              CmacsGiTransport     *transport,
+                              gint                  argc,
+                              gchar               **argv,
+                              gint                  depth);
 
 /* Print a subcommand table as help text (name + help columns). */
 void cmacs_gi_print_group_help (const gchar        *group_name,

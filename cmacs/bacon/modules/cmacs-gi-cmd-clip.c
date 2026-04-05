@@ -57,7 +57,7 @@ parse_buf_flag(gint argc, gchar **argv, gint *idx, const gchar **buf)
 /* ── Subcommand handlers ──────────────────────────────────────────── */
 
 gint
-cmd_copy(GDBusProxy *proxy, gint argc, gchar **argv)
+cmd_copy(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     const gchar *buf;
     gint i, start, end;
@@ -80,13 +80,13 @@ cmd_copy(GDBusProxy *proxy, gint argc, gchar **argv)
     elisp = wrap_with_buffer(buf, body);
     g_free(body);
 
-    rc = cmacs_gi_eval_quiet(proxy, elisp);
+    rc = cmacs_gi_eval_quiet(transport, elisp);
     g_free(elisp);
     return rc;
 }
 
 gint
-cmd_cut(GDBusProxy *proxy, gint argc, gchar **argv)
+cmd_cut(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     const gchar *buf;
     gint i, start, end;
@@ -109,13 +109,13 @@ cmd_cut(GDBusProxy *proxy, gint argc, gchar **argv)
     elisp = wrap_with_buffer(buf, body);
     g_free(body);
 
-    rc = cmacs_gi_eval_quiet(proxy, elisp);
+    rc = cmacs_gi_eval_quiet(transport, elisp);
     g_free(elisp);
     return rc;
 }
 
 gint
-cmd_paste(GDBusProxy *proxy, gint argc, gchar **argv)
+cmd_paste(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     const gchar *buf;
     gint i;
@@ -126,7 +126,7 @@ cmd_paste(GDBusProxy *proxy, gint argc, gchar **argv)
     parse_buf_flag(argc, argv, &i, &buf);
 
     elisp = wrap_with_buffer(buf, "(yank)");
-    rc = cmacs_gi_eval_quiet(proxy, elisp);
+    rc = cmacs_gi_eval_quiet(transport, elisp);
     g_free(elisp);
     return rc;
 }
@@ -134,7 +134,7 @@ cmd_paste(GDBusProxy *proxy, gint argc, gchar **argv)
 /* ── clip subgroup ────────────────────────────────────────────────── */
 
 static gint
-clip_list(GDBusProxy *proxy, gint argc, gchar **argv)
+clip_list(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     gint n, i;
     gchar *elisp;
@@ -154,7 +154,7 @@ clip_list(GDBusProxy *proxy, gint argc, gchar **argv)
 
     elisp = g_strdup_printf(
         "(mapconcat #'identity (seq-take kill-ring %d) \"\\n\")", n);
-    rc = cmacs_gi_eval_print(proxy, elisp);
+    rc = cmacs_gi_eval_print(transport, elisp);
     g_free(elisp);
     return rc;
 }
@@ -165,8 +165,8 @@ static const CmacsGiSubcmd clip_subcmds[] = {
 };
 
 gint
-cmd_clip(GDBusProxy *proxy, gint argc, gchar **argv)
+cmd_clip(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     return cmacs_gi_dispatch_group("clip", clip_subcmds,
-                                   proxy, argc, argv, 2);
+                                   transport, argc, argv, 2);
 }

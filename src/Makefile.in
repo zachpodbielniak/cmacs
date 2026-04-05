@@ -347,6 +347,7 @@ CMACS_CRISPY_LIBS = @CMACS_CRISPY_LIBS@
 CMACS_BACON_OBJ = @CMACS_BACON_OBJ@
 CMACS_BACON_CFLAGS = @CMACS_BACON_CFLAGS@
 CMACS_BACON_LIBS = @CMACS_BACON_LIBS@
+CMACS_BACON_BUNDLED = @CMACS_BACON_BUNDLED@
 CMACS_GOWL_OBJ = @CMACS_GOWL_OBJ@
 CMACS_GOWL_CFLAGS = @CMACS_GOWL_CFLAGS@
 CMACS_GOWL_LIBS = @CMACS_GOWL_LIBS@
@@ -750,12 +751,20 @@ else
 MAKE_PDUMPER_FINGERPRINT =
 endif
 
+## Build bundled libbacon static library if needed
+ifeq ($(CMACS_BACON_BUNDLED),yes)
+CMACS_BACON_STATIC_LIB = $(srcdir)/../deps/bacon/build/release/libbacon-1.0.a
+$(CMACS_BACON_STATIC_LIB):
+	$(MAKE) -C $(srcdir)/../deps/bacon lib-static
+endif
+
 ## We have to create $(etc) here because init_cmdargs tests its
 ## existence when setting Vinstallation_directory (FIXME?).
 ## This goes on to affect various things, and the emacs binary fails
 ## to start if Vinstallation_directory has the wrong value.
 temacs$(EXEEXT): $(LIBXMENU) $(ALLOBJS) $(LIBEGNU_ARCHIVE) $(EMACSRES) \
-  $(charsets) $(charscript) ${emoji-zwj} $(MAKE_PDUMPER_FINGERPRINT)
+  $(charsets) $(charscript) ${emoji-zwj} $(MAKE_PDUMPER_FINGERPRINT) \
+  $(CMACS_BACON_STATIC_LIB)
 ifeq ($(HAVE_BE_APP),yes)
 	$(AM_V_CXXLD)$(CXX) -o $@.tmp \
 	  $(ALL_CFLAGS) $(TEMACS_LDFLAGS) $(LDFLAGS) \

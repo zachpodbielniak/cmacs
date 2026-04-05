@@ -8,7 +8,7 @@
  * Core dispatch, shared utilities, and GObject boilerplate for the
  * cmacsgi bacon builtin.  Individual command groups live in separate
  * cmacs-gi-cmd-*.c files; this file owns the top-level dispatch table,
- * the D-Bus proxy helper, eval wrappers, and the original subcommands
+ * the D-Bus transport helper, eval wrappers, and the original subcommands
  * (eval, find-file, message, require, call, list).
  */
 
@@ -26,31 +26,12 @@ struct _CmacsGiCommand
 
 G_DEFINE_FINAL_TYPE(CmacsGiCommand, cmacs_gi_command, BACON_TYPE_COMMAND)
 
-/* ── D-Bus proxy management ──────────────────────────────────────── */
+/* ── Transport management ─────────────────────────────────────────── */
 
-GDBusProxy *
-cmacs_gi_get_proxy(GError **error)
+CmacsGiTransport *
+cmacs_gi_get_transport(GError **error)
 {
-    const gchar *bus_name;
-    GDBusProxy  *proxy;
-
-    bus_name = g_getenv("CMACS_DBUS_NAME");
-    if (bus_name == NULL || *bus_name == '\0')
-    {
-        g_set_error(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
-                    "CMACS_DBUS_NAME not set — not running inside CMacs?");
-        return NULL;
-    }
-
-    proxy = g_dbus_proxy_new_for_bus_sync(
-        G_BUS_TYPE_SESSION,
-        G_DBUS_PROXY_FLAGS_NONE,
-        NULL,
-        bus_name,
-        "/org/cmacs/Editor",
-        "org.cmacs.Editor1",
-        NULL, error);
-    return proxy;
+    return cmacs_gi_transport_new(error);
 }
 
 /* ── String utilities ─────────────────────────────────────────────── */
@@ -116,16 +97,15 @@ cmacs_gi_lisp_quote(const gchar *s)
 /* ── Eval helpers ─────────────────────────────────────────────────── */
 
 gint
-cmacs_gi_eval_print(GDBusProxy *proxy, const gchar *elisp)
+cmacs_gi_eval_print(CmacsGiTransport *transport, const gchar *elisp)
 {
     GError   *err = NULL;
     GVariant *result;
     const gchar *val;
 
-    result = g_dbus_proxy_call_sync(
-        proxy, "Eval",
-        g_variant_new("(s)", elisp),
-        G_DBUS_CALL_FLAGS_NONE, -1, NULL, &err);
+    result = cmacs_gi_transport_call(
+        transport, "Eval",
+        g_variant_new("(s)", elisp), &err);
 
     if (result == NULL)
     {
@@ -141,15 +121,14 @@ cmacs_gi_eval_print(GDBusProxy *proxy, const gchar *elisp)
 }
 
 gint
-cmacs_gi_eval_quiet(GDBusProxy *proxy, const gchar *elisp)
+cmacs_gi_eval_quiet(CmacsGiTransport *transport, const gchar *elisp)
 {
     GError   *err = NULL;
     GVariant *result;
 
-    result = g_dbus_proxy_call_sync(
-        proxy, "Eval",
-        g_variant_new("(s)", elisp),
-        G_DBUS_CALL_FLAGS_NONE, -1, NULL, &err);
+    result = cmacs_gi_transport_call(
+        transport, "Eval",
+        g_variant_new("(s)", elisp), &err);
 
     if (result == NULL)
     {
@@ -163,17 +142,16 @@ cmacs_gi_eval_quiet(GDBusProxy *proxy, const gchar *elisp)
 }
 
 gchar *
-cmacs_gi_eval_get_string(GDBusProxy *proxy, const gchar *elisp)
+cmacs_gi_eval_get_string(CmacsGiTransport *transport, const gchar *elisp)
 {
     GError   *err = NULL;
     GVariant *result;
     const gchar *val;
     gchar *ret;
 
-    result = g_dbus_proxy_call_sync(
-        proxy, "Eval",
-        g_variant_new("(s)", elisp),
-        G_DBUS_CALL_FLAGS_NONE, -1, NULL, &err);
+    result = cmacs_gi_transport_call(
+        transport, "Eval",
+        g_variant_new("(s)", elisp), &err);
 
     if (result == NULL)
     {
@@ -205,7 +183,7 @@ cmacs_gi_print_group_help(const gchar        *group_name,
 gint
 cmacs_gi_dispatch_group(const gchar        *group_name,
                         const CmacsGiSubcmd *table,
-                        GDBusProxy          *proxy,
+                        CmacsGiTransport    *transport,
                         gint                 argc,
                         gchar              **argv,
                         gint                 depth)
@@ -231,7 +209,7 @@ cmacs_gi_dispatch_group(const gchar        *group_name,
     for (p = table; p->name != NULL; p++)
     {
         if (strcmp(sub, p->name) == 0)
-            return p->handler(proxy, argc, argv);
+            return p->handler(transport, argc, argv);
     }
 
     fprintf(stderr, "cmacsgi %s: unknown subcommand '%s'\n", group_name, sub);
@@ -242,7 +220,7 @@ cmacs_gi_dispatch_group(const gchar        *group_name,
 /* ── Original subcommand handlers ─────────────────────────────────── */
 
 static gint
-cmd_eval(GDBusProxy *proxy, gint argc, gchar **argv)
+cmd_eval(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     GString  *expr;
     gint      i;
@@ -262,13 +240,13 @@ cmd_eval(GDBusProxy *proxy, gint argc, gchar **argv)
         g_string_append(expr, argv[i]);
     }
 
-    rc = cmacs_gi_eval_print(proxy, expr->str);
+    rc = cmacs_gi_eval_print(transport, expr->str);
     g_string_free(expr, TRUE);
     return rc;
 }
 
 static gint
-cmd_find_file(GDBusProxy *proxy, gint argc, gchar **argv)
+cmd_find_file(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     GError   *err = NULL;
     GVariant *result;
@@ -279,10 +257,9 @@ cmd_find_file(GDBusProxy *proxy, gint argc, gchar **argv)
         return 1;
     }
 
-    result = g_dbus_proxy_call_sync(
-        proxy, "FindFile",
-        g_variant_new("(s)", argv[2]),
-        G_DBUS_CALL_FLAGS_NONE, -1, NULL, &err);
+    result = cmacs_gi_transport_call(
+        transport, "FindFile",
+        g_variant_new("(s)", argv[2]), &err);
 
     if (result == NULL)
     {
@@ -290,12 +267,13 @@ cmd_find_file(GDBusProxy *proxy, gint argc, gchar **argv)
         g_error_free(err);
         return 1;
     }
-    g_variant_unref(result);
+    if (result != NULL)
+        g_variant_unref(result);
     return 0;
 }
 
 static gint
-cmd_message(GDBusProxy *proxy, gint argc, gchar **argv)
+cmd_message(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     GString  *text;
     gint      i;
@@ -318,7 +296,7 @@ cmd_message(GDBusProxy *proxy, gint argc, gchar **argv)
 
     escaped = cmacs_gi_lisp_escape(text->str);
     elisp = g_strdup_printf("(message \"%%s\" \"%s\")", escaped);
-    rc = cmacs_gi_eval_quiet(proxy, elisp);
+    rc = cmacs_gi_eval_quiet(transport, elisp);
     g_free(elisp);
     g_free(escaped);
     g_string_free(text, TRUE);
@@ -326,7 +304,7 @@ cmd_message(GDBusProxy *proxy, gint argc, gchar **argv)
 }
 
 static gint
-cmd_require(GDBusProxy *proxy, gint argc, gchar **argv)
+cmd_require(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     GError     *err = NULL;
     GVariant   *result;
@@ -342,10 +320,9 @@ cmd_require(GDBusProxy *proxy, gint argc, gchar **argv)
     ns  = argv[2];
     ver = (argc >= 4) ? argv[3] : "";
 
-    result = g_dbus_proxy_call_sync(
-        proxy, "GiRequire",
-        g_variant_new("(ss)", ns, ver),
-        G_DBUS_CALL_FLAGS_NONE, -1, NULL, &err);
+    result = cmacs_gi_transport_call(
+        transport, "GiRequire",
+        g_variant_new("(ss)", ns, ver), &err);
 
     if (result == NULL)
     {
@@ -366,7 +343,7 @@ cmd_require(GDBusProxy *proxy, gint argc, gchar **argv)
 }
 
 static gint
-cmd_call(GDBusProxy *proxy, gint argc, gchar **argv)
+cmd_call(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     GError         *err = NULL;
     GVariant       *result;
@@ -389,10 +366,9 @@ cmd_call(GDBusProxy *proxy, gint argc, gchar **argv)
         g_free(quoted);
     }
 
-    result = g_dbus_proxy_call_sync(
-        proxy, "GiCall",
-        g_variant_new("(ssas)", argv[2], argv[3], &builder),
-        G_DBUS_CALL_FLAGS_NONE, -1, NULL, &err);
+    result = cmacs_gi_transport_call(
+        transport, "GiCall",
+        g_variant_new("(ssas)", argv[2], argv[3], &builder), &err);
 
     if (result == NULL)
     {
@@ -411,7 +387,7 @@ cmd_call(GDBusProxy *proxy, gint argc, gchar **argv)
 }
 
 static gint
-cmd_list(GDBusProxy *proxy, gint argc, gchar **argv)
+cmd_list(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     GError       *err = NULL;
     GVariant     *result;
@@ -424,10 +400,9 @@ cmd_list(GDBusProxy *proxy, gint argc, gchar **argv)
         return 1;
     }
 
-    result = g_dbus_proxy_call_sync(
-        proxy, "GiListFunctions",
-        g_variant_new("(s)", argv[2]),
-        G_DBUS_CALL_FLAGS_NONE, -1, NULL, &err);
+    result = cmacs_gi_transport_call(
+        transport, "GiListFunctions",
+        g_variant_new("(s)", argv[2]), &err);
 
     if (result == NULL)
     {
@@ -447,40 +422,40 @@ cmd_list(GDBusProxy *proxy, gint argc, gchar **argv)
 /* ── Forward declarations for group handlers ──────────────────────── */
 
 /* Each cmacs-gi-cmd-*.c defines a cmd_GROUP function. */
-extern gint cmd_buf     (GDBusProxy *proxy, gint argc, gchar **argv);
-extern gint cmd_file_open   (GDBusProxy *proxy, gint argc, gchar **argv);
-extern gint cmd_file_save   (GDBusProxy *proxy, gint argc, gchar **argv);
-extern gint cmd_file_close  (GDBusProxy *proxy, gint argc, gchar **argv);
-extern gint cmd_file_recent (GDBusProxy *proxy, gint argc, gchar **argv);
-extern gint cmd_insert  (GDBusProxy *proxy, gint argc, gchar **argv);
-extern gint cmd_delete  (GDBusProxy *proxy, gint argc, gchar **argv);
-extern gint cmd_line    (GDBusProxy *proxy, gint argc, gchar **argv);
-extern gint cmd_append  (GDBusProxy *proxy, gint argc, gchar **argv);
-extern gint cmd_point   (GDBusProxy *proxy, gint argc, gchar **argv);
-extern gint cmd_goto    (GDBusProxy *proxy, gint argc, gchar **argv);
-extern gint cmd_search  (GDBusProxy *proxy, gint argc, gchar **argv);
-extern gint cmd_replace (GDBusProxy *proxy, gint argc, gchar **argv);
-extern gint cmd_occur   (GDBusProxy *proxy, gint argc, gchar **argv);
-extern gint cmd_win     (GDBusProxy *proxy, gint argc, gchar **argv);
-extern gint cmd_set     (GDBusProxy *proxy, gint argc, gchar **argv);
-extern gint cmd_get_var (GDBusProxy *proxy, gint argc, gchar **argv);
-extern gint cmd_theme   (GDBusProxy *proxy, gint argc, gchar **argv);
-extern gint cmd_font    (GDBusProxy *proxy, gint argc, gchar **argv);
-extern gint cmd_mode    (GDBusProxy *proxy, gint argc, gchar **argv);
-extern gint cmd_grep    (GDBusProxy *proxy, gint argc, gchar **argv);
-extern gint cmd_find    (GDBusProxy *proxy, gint argc, gchar **argv);
-extern gint cmd_project_root (GDBusProxy *proxy, gint argc, gchar **argv);
-extern gint cmd_compile (GDBusProxy *proxy, gint argc, gchar **argv);
-extern gint cmd_next_error (GDBusProxy *proxy, gint argc, gchar **argv);
-extern gint cmd_prev_error (GDBusProxy *proxy, gint argc, gchar **argv);
-extern gint cmd_diag    (GDBusProxy *proxy, gint argc, gchar **argv);
-extern gint cmd_mark    (GDBusProxy *proxy, gint argc, gchar **argv);
-extern gint cmd_copy    (GDBusProxy *proxy, gint argc, gchar **argv);
-extern gint cmd_cut     (GDBusProxy *proxy, gint argc, gchar **argv);
-extern gint cmd_paste   (GDBusProxy *proxy, gint argc, gchar **argv);
-extern gint cmd_clip    (GDBusProxy *proxy, gint argc, gchar **argv);
-extern gint cmd_vc      (GDBusProxy *proxy, gint argc, gchar **argv);
-extern gint cmd_pkg     (GDBusProxy *proxy, gint argc, gchar **argv);
+extern gint cmd_buf     (CmacsGiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_file_open   (CmacsGiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_file_save   (CmacsGiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_file_close  (CmacsGiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_file_recent (CmacsGiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_insert  (CmacsGiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_delete  (CmacsGiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_line    (CmacsGiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_append  (CmacsGiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_point   (CmacsGiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_goto    (CmacsGiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_search  (CmacsGiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_replace (CmacsGiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_occur   (CmacsGiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_win     (CmacsGiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_set     (CmacsGiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_get_var (CmacsGiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_theme   (CmacsGiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_font    (CmacsGiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_mode    (CmacsGiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_grep    (CmacsGiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_find    (CmacsGiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_project_root (CmacsGiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_compile (CmacsGiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_next_error (CmacsGiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_prev_error (CmacsGiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_diag    (CmacsGiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_mark    (CmacsGiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_copy    (CmacsGiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_cut     (CmacsGiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_paste   (CmacsGiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_clip    (CmacsGiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_vc      (CmacsGiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_pkg     (CmacsGiTransport *transport, gint argc, gchar **argv);
 
 /* ── Top-level dispatch table ─────────────────────────────────────── */
 
@@ -612,7 +587,7 @@ static const gchar *
 cmacs_gi_command_get_help(BaconCommand *cmd)
 {
     (void)cmd;
-    return "Interact with CMacs via GObject Introspection over D-Bus.\n"
+    return "Interact with CMacs via GObject Introspection.\n"
            "Use 'cmacsgi --help' for a full list of commands.";
 }
 
@@ -636,7 +611,7 @@ cmacs_gi_command_run(BaconCommand  *cmd,
                      gpointer      shell,
                      GError      **error)
 {
-    GDBusProxy  *proxy;
+    CmacsGiTransport  *transport;
     const gchar *subcmd;
     const CmacsGiSubcmd *p;
     gint         rc;
@@ -678,8 +653,8 @@ cmacs_gi_command_run(BaconCommand  *cmd,
         return 1;
     }
 
-    proxy = cmacs_gi_get_proxy(error);
-    if (proxy == NULL)
+    transport = cmacs_gi_get_transport(error);
+    if (transport == NULL)
     {
         fprintf(stderr, "cmacsgi: %s\n",
                 (error && *error) ? (*error)->message
@@ -693,15 +668,15 @@ cmacs_gi_command_run(BaconCommand  *cmd,
     {
         if (strcmp(subcmd, p->name) == 0)
         {
-            rc = p->handler(proxy, argc, argv);
-            g_object_unref(proxy);
+            rc = p->handler(transport, argc, argv);
+            cmacs_gi_transport_free(transport);
             return rc;
         }
     }
 
     fprintf(stderr, "cmacsgi: unknown command '%s'\n", subcmd);
     fprintf(stderr, "Try 'cmacsgi --help' for usage.\n");
-    g_object_unref(proxy);
+    cmacs_gi_transport_free(transport);
     return 1;
 }
 

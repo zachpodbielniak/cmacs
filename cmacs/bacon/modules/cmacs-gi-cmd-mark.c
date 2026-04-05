@@ -20,7 +20,7 @@
 /* ── Handlers ─────────────────────────────────────────────────────── */
 
 static gint
-mark_set(GDBusProxy *proxy, gint argc, gchar **argv)
+mark_set(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     gchar *escaped, *elisp;
     gint rc;
@@ -33,19 +33,19 @@ mark_set(GDBusProxy *proxy, gint argc, gchar **argv)
 
     escaped = cmacs_gi_lisp_escape(argv[3]);
     elisp = g_strdup_printf("(bookmark-set \"%s\")", escaped);
-    rc = cmacs_gi_eval_quiet(proxy, elisp);
+    rc = cmacs_gi_eval_quiet(transport, elisp);
     g_free(elisp);
     g_free(escaped);
     return rc;
 }
 
 static gint
-mark_list(GDBusProxy *proxy, gint argc, gchar **argv)
+mark_list(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     (void)argc;
     (void)argv;
 
-    return cmacs_gi_eval_print(proxy,
+    return cmacs_gi_eval_print(transport,
         "(progn"
         " (require 'bookmark)"
         " (mapconcat"
@@ -59,7 +59,7 @@ mark_list(GDBusProxy *proxy, gint argc, gchar **argv)
 }
 
 static gint
-mark_jump(GDBusProxy *proxy, gint argc, gchar **argv)
+mark_jump(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     gchar *escaped, *elisp;
     gint rc;
@@ -72,14 +72,14 @@ mark_jump(GDBusProxy *proxy, gint argc, gchar **argv)
 
     escaped = cmacs_gi_lisp_escape(argv[3]);
     elisp = g_strdup_printf("(bookmark-jump \"%s\")", escaped);
-    rc = cmacs_gi_eval_quiet(proxy, elisp);
+    rc = cmacs_gi_eval_quiet(transport, elisp);
     g_free(elisp);
     g_free(escaped);
     return rc;
 }
 
 static gint
-mark_del(GDBusProxy *proxy, gint argc, gchar **argv)
+mark_del(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     gchar *escaped, *elisp;
     gint rc;
@@ -92,7 +92,7 @@ mark_del(GDBusProxy *proxy, gint argc, gchar **argv)
 
     escaped = cmacs_gi_lisp_escape(argv[3]);
     elisp = g_strdup_printf("(bookmark-delete \"%s\")", escaped);
-    rc = cmacs_gi_eval_quiet(proxy, elisp);
+    rc = cmacs_gi_eval_quiet(transport, elisp);
     g_free(elisp);
     g_free(escaped);
     return rc;
@@ -109,8 +109,8 @@ static const CmacsGiSubcmd mark_subcmds[] = {
 };
 
 gint
-cmd_mark(GDBusProxy *proxy, gint argc, gchar **argv)
+cmd_mark(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     return cmacs_gi_dispatch_group("mark", mark_subcmds,
-                                   proxy, argc, argv, 2);
+                                   transport, argc, argv, 2);
 }

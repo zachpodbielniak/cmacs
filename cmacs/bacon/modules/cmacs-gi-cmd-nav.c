@@ -55,7 +55,7 @@ parse_buf_flag(gint argc, gchar **argv, gint *idx, const gchar **buf)
 /* ── Subcommand handlers ────────────────────────────────────���─────── */
 
 gint
-cmd_point(GDBusProxy *proxy, gint argc, gchar **argv)
+cmd_point(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     const gchar *buf;
     gint i;
@@ -70,13 +70,13 @@ cmd_point(GDBusProxy *proxy, gint argc, gchar **argv)
         " (line-number-at-pos)"
         " (current-column))");
 
-    rc = cmacs_gi_eval_print(proxy, elisp);
+    rc = cmacs_gi_eval_print(transport, elisp);
     g_free(elisp);
     return rc;
 }
 
 gint
-cmd_goto(GDBusProxy *proxy, gint argc, gchar **argv)
+cmd_goto(CmacsGiTransport *transport, gint argc, gchar **argv)
 {
     const gchar *buf;
     gint i;
@@ -129,7 +129,7 @@ cmd_goto(GDBusProxy *proxy, gint argc, gchar **argv)
     elisp = wrap_with_buffer(buf, body);
     g_free(body);
 
-    rc = cmacs_gi_eval_print(proxy, elisp);
+    rc = cmacs_gi_eval_print(transport, elisp);
     g_free(elisp);
     return rc;
 }
