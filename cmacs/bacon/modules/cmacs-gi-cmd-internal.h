@@ -3,84 +3,36 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-/* cmacs-gi-cmd-internal.h — shared types and utilities for cmacsgi subcommands
+/* cmacs-gi-cmd-internal.h --- compatibility shim
  *
- * Every cmacs-gi-cmd-*.c file includes this header.  It provides the
- * dispatch-table types, shared D-Bus/eval helpers, and string utilities
- * so that individual command groups are self-contained.
+ * The cmacsgi command implementations have been extracted into the
+ * shared cmacs-api library (cmacs/api/).  This header provides
+ * backward-compatible typedefs and macros so that the remaining
+ * bacon-specific code (cmacs-gi-command.c) continues to compile
+ * against the new API without changes.
  */
 
 #ifndef CMACS_GI_CMD_INTERNAL_H
 #define CMACS_GI_CMD_INTERNAL_H
 
-#include <gio/gio.h>
-#include <glib.h>
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
+#include "../../api/cmacs-api.h"
 
-#include "cmacs-gi-transport.h"
+/* Type aliases: old bacon-specific names → new shared names. */
+typedef CmacsApiTransport  CmacsGiTransport;
+typedef CmacsApiHandler    CmacsGiHandler;
+typedef CmacsApiSubcmd     CmacsGiSubcmd;
 
-/* ── Dispatch table types ─────────────────────────────────────────── */
-
-/* Handler signature: receives the transport and the FULL argc/argv
-   from the top-level cmacsgi invocation.  argv[0] is "cmacsgi",
-   argv[1] is the subcommand name.  For group commands (e.g. "buf list")
-   the group handler receives the same argv — it dispatches on argv[2]. */
-typedef gint (*CmacsGiHandler)(CmacsGiTransport *transport,
-                               gint argc, gchar **argv);
-
-typedef struct {
-    const gchar     *name;      /* subcommand name */
-    CmacsGiHandler   handler;   /* function pointer */
-    const gchar     *usage;     /* one-line usage string */
-    const gchar     *help;      /* short description (one sentence) */
-} CmacsGiSubcmd;
-
-/* ── Transport ────────────────────────────────────────────────────── */
-
-/* Get a transport to CMacs.  Auto-detects $CMACS_IPC_FD or $CMACS_DBUS_NAME.
-   Caller must cmacs_gi_transport_free(). */
-CmacsGiTransport *cmacs_gi_get_transport (GError **error);
-
-/* ── Eval helpers ─────────────────────────────────────────────────── */
-
-/* Call Eval via transport, print result to stdout, return exit code. */
-gint cmacs_gi_eval_print (CmacsGiTransport *transport, const gchar *elisp);
-
-/* Call Eval via transport, suppress stdout, return exit code. */
-gint cmacs_gi_eval_quiet (CmacsGiTransport *transport, const gchar *elisp);
-
-/* Call Eval via transport, return result as an allocated string.
-   Returns NULL on error (prints to stderr).  Caller must g_free(). */
-gchar *cmacs_gi_eval_get_string (CmacsGiTransport *transport,
-                                 const gchar *elisp);
-
-/* ── String utilities ─────────────────────────────────────────────── */
-
-/* Escape a C string for embedding in an elisp string literal.
-   Handles backslash and double-quote.  Does NOT add outer quotes.
-   Caller must g_free(). */
-gchar *cmacs_gi_lisp_escape (const gchar *s);
-
-/* Quote a value for the Lisp reader: numbers, quoted strings, and
-   s-expressions pass through; bare words become Lisp string literals.
-   Caller must g_free(). */
-gchar *cmacs_gi_lisp_quote (const gchar *s);
-
-/* ── Group dispatch helper ────────────────────────────────────────── */
-
-/* Look up argv[depth] in TABLE (NULL-terminated) and call its handler.
-   On unknown subcommand, prints error + available subcommands. */
-gint cmacs_gi_dispatch_group (const gchar          *group_name,
-                              const CmacsGiSubcmd  *table,
-                              CmacsGiTransport     *transport,
-                              gint                  argc,
-                              gchar               **argv,
-                              gint                  depth);
-
-/* Print a subcommand table as help text (name + help columns). */
-void cmacs_gi_print_group_help (const gchar        *group_name,
-                                const CmacsGiSubcmd *table);
+/* Function aliases. */
+#define cmacs_gi_transport_new    cmacs_api_transport_new
+#define cmacs_gi_transport_free   cmacs_api_transport_free
+#define cmacs_gi_transport_call   cmacs_api_transport_call
+#define cmacs_gi_eval_print       cmacs_api_eval_print
+#define cmacs_gi_eval_quiet       cmacs_api_eval_quiet
+#define cmacs_gi_eval_get_string  cmacs_api_eval_get_string
+#define cmacs_gi_lisp_escape      cmacs_api_lisp_escape
+#define cmacs_gi_lisp_quote       cmacs_api_lisp_quote
+#define cmacs_gi_dispatch_group   cmacs_api_dispatch_group
+#define cmacs_gi_print_group_help cmacs_api_print_group_help
+#define cmacs_gi_get_transport    cmacs_api_transport_new
 
 #endif /* CMACS_GI_CMD_INTERNAL_H */

@@ -748,6 +748,11 @@ AC_SUBST(CMACS_GOWL_CFLAGS)
 AC_SUBST(CMACS_GOWL_LIBS)
 AC_SUBST(CMACS_GOWL_BUNDLED)
 
+# CMacs API library: built as a shared library in cmacs/api/ and used
+# by both the bacon cmacsgi module and crispy scripts (in-process).
+CMACS_API_DIR="\$(srcdir)/../cmacs/api"
+AC_SUBST(CMACS_API_DIR)
+
 # NOTE: shared vendored deps (crispy, yaml-glib) across bundled static libs
 # are de-duplicated at build time in src/Makefile.in rather than using
 # -Wl,-z,muldefs, which caused non-deterministic crashes when the vendored

@@ -353,9 +353,12 @@ CMACS_GOWL_OBJ = @CMACS_GOWL_OBJ@
 CMACS_GOWL_CFLAGS = @CMACS_GOWL_CFLAGS@
 CMACS_GOWL_LIBS = @CMACS_GOWL_LIBS@
 CMACS_GOWL_BUNDLED = @CMACS_GOWL_BUNDLED@
+CMACS_API_DIR = @CMACS_API_DIR@
 CMACS_INTERNAL_CFLAGS = -I$(srcdir)/../cmacs/glib -I$(srcdir)/../cmacs/gobject \
                         -I$(srcdir)/../cmacs/gi -I$(srcdir)/../cmacs/crispy \
-                        -I$(srcdir)/../cmacs/bacon -I$(srcdir)/../cmacs/gowl
+                        -I$(srcdir)/../cmacs/bacon -I$(srcdir)/../cmacs/gowl \
+                        -I$(srcdir)/../cmacs/api \
+                        -DCMACS_SRCDIR=\"$(abspath $(srcdir))\"
 CMACS_CFLAGS = $(CMACS_INTERNAL_CFLAGS) \
                $(CMACS_GLIB_CFLAGS) $(CMACS_GI_CFLAGS) \
                $(CMACS_CRISPY_CFLAGS) $(CMACS_BACON_CFLAGS) \

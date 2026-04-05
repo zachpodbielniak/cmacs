@@ -13,7 +13,9 @@
 #ifdef HAVE_CMACS_CRISPY
 
 #include "lisp.h"
+#include "cmacs-eval-dispatch.h"
 #include <crispy.h>
+#include <gmodule.h>
 #include <unistd.h>
 #include <stdio.h>
 
@@ -47,6 +49,93 @@ cmacs_crispy_ensure_init (void)
 }
 
 /* ──────────────────────────────────────────────────────────────────── */
+/* CMacs API direct dispatch                                           */
+/* ──────────────────────────────────────────────────────────────────── */
+
+/* Register the cmacs-api direct dispatch table so that crispy scripts
+ * loaded in-process (via g_module_open) can call back into Emacs
+ * without IPC.  The dispatch functions are defined in
+ * cmacs-eval-dispatch.c and run on the Emacs main thread.
+ *
+ * This is safe because crispy_script_execute() calls the script's
+ * main() synchronously on the same thread.
+ *
+ * We load libcmacs-api.so dynamically rather than linking it into
+ * temacs, because the library is a runtime component used by crispy
+ * scripts.  Pre-loading it here ensures the dispatch table is set
+ * before any script executes, and the dynamic linker reuses the
+ * same instance when the script's .so resolves its dependency. */
+
+/* Mirror the CmacsApiDirectDispatch layout from cmacs-api.h so we
+   can populate it without a build-time dependency on the API lib. */
+typedef struct
+{
+  gchar    *(*eval)       (const gchar *expression, GError **error);
+  void      (*find_file)  (const gchar *path);
+  void      (*message)    (const gchar *text);
+  gboolean  (*gi_require) (const gchar *ns, const gchar *ver,
+                           GError **error);
+  gchar    *(*gi_call)    (const gchar *ns, const gchar *func,
+                           const gchar *const *args, gint n_args,
+                           GError **error);
+  gchar   **(*gi_list_functions) (const gchar *ns);
+} CmacsCrispyDispatch;
+
+static const CmacsCrispyDispatch cmacs_crispy_dispatch = {
+  cmacs_dispatch_eval,
+  cmacs_dispatch_find_file,
+  cmacs_dispatch_message,
+  cmacs_dispatch_gi_require,
+  cmacs_dispatch_gi_call,
+  cmacs_dispatch_gi_list_functions
+};
+
+static gboolean cmacs_crispy_dispatch_registered = FALSE;
+static GModule *cmacs_crispy_api_module = NULL;
+
+static void
+cmacs_crispy_register_dispatch (void)
+{
+  if (!cmacs_crispy_dispatch_registered)
+    {
+      gchar *path = g_strconcat (CMACS_SRCDIR, "/../cmacs/api/libcmacs-api.so", NULL);
+      cmacs_crispy_api_module = g_module_open (path, G_MODULE_BIND_LAZY);
+      g_free (path);
+
+      if (cmacs_crispy_api_module != NULL)
+        {
+          typedef void (*SetDispatchFunc) (const void *);
+          SetDispatchFunc setter = NULL;
+
+          if (g_module_symbol (cmacs_crispy_api_module,
+                               "cmacs_api_set_direct_dispatch",
+                               (gpointer *) &setter))
+            setter (&cmacs_crispy_dispatch);
+        }
+
+      cmacs_crispy_dispatch_registered = TRUE;
+    }
+}
+
+/* Extra compiler flags injected into every crispy script so that
+ * `#include <cmacs-api.h>` resolves and `-lcmacs-api` links.
+ * Built from the source tree paths at compile time. */
+#ifndef CMACS_API_EXTRA_FLAGS
+#define CMACS_API_EXTRA_FLAGS \
+  "-I" CMACS_SRCDIR "/../cmacs/api " \
+  "-L" CMACS_SRCDIR "/../cmacs/api " \
+  "-Wl,-rpath," CMACS_SRCDIR "/../cmacs/api " \
+  "-lcmacs-api"
+#endif
+
+/* Inject the cmacs-api flags into a CrispyScript before execution. */
+static void
+cmacs_crispy_inject_api_flags (CrispyScript *script)
+{
+  crispy_script_set_extra_flags (script, CMACS_API_EXTRA_FLAGS);
+}
+
+/* ──────────────────────────────────────────────────────────────────── */
 /* DEFUN primitives                                                    */
 /* ──────────────────────────────────────────────────────────────────── */
 
@@ -61,6 +150,7 @@ Returns the exit code as an integer. */)
 
   CHECK_STRING (code);
   cmacs_crispy_ensure_init ();
+  cmacs_crispy_register_dispatch ();
 
   script = crispy_script_new_from_inline (
     SSDATA (code), NULL,
@@ -75,6 +165,7 @@ Returns the exit code as an integer. */)
       xsignal1 (Qcrispy_error, msg);
     }
 
+  cmacs_crispy_inject_api_flags (script);
   rc = crispy_script_execute (script, 0, NULL, &err);
   g_object_unref (script);
 
@@ -105,6 +196,7 @@ Returns stdout output. */)
 
   CHECK_STRING (code);
   cmacs_crispy_ensure_init ();
+  cmacs_crispy_register_dispatch ();
 
   tmp = tmpfile ();
   if (tmp == NULL)
@@ -135,6 +227,7 @@ Returns stdout output. */)
       xsignal1 (Qcrispy_error, msg);
     }
 
+  cmacs_crispy_inject_api_flags (script);
   rc = crispy_script_execute (script, 0, NULL, &err);
   g_object_unref (script);
 
@@ -219,6 +312,7 @@ usage: (crispy-run FILE &rest ARGS) */)
 
   CHECK_STRING (args[0]);
   cmacs_crispy_ensure_init ();
+  cmacs_crispy_register_dispatch ();
 
   /* Build argv from elisp args. */
   argc = (gint)(nargs - 1);
@@ -243,6 +337,7 @@ usage: (crispy-run FILE &rest ARGS) */)
       xsignal1 (Qcrispy_error, msg);
     }
 
+  cmacs_crispy_inject_api_flags (script);
   rc = crispy_script_execute (script, argc, argv, &err);
   g_object_unref (script);
   g_free (argv);
@@ -267,6 +362,7 @@ Returns the exit code. */)
 
   CHECK_STRING (code);
   cmacs_crispy_ensure_init ();
+  cmacs_crispy_register_dispatch ();
 
   if (cmacs_crispy_repl == NULL)
     {

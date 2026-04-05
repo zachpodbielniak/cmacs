@@ -40,7 +40,8 @@ interaction.
 * D-Bus Service::               The org.cmacs.Editor1 interface.
 * Bacon Shell::                 Interactive shell via vterm.
 * cmacsgi Builtin::             Calling CMacs from the Bacon shell.
-* Crispy C Scripting::          Inline C evaluation.
+* CMacs API::                   Shared C library for scripting integration.
+* Crispy C Scripting::          Inline C evaluation and config.
 * Build Configuration::         Configure flags and dependencies.
 @end menu
 
@@ -1008,6 +1009,12 @@ Display a message in the CMacs minibuffer.
 @c ----- Architecture --------------------------------------------------
 @section Architecture
 
+The @command{cmacsgi} builtin is a thin wrapper around the shared
+@code{libcmacs-api} library (@pxref{CMacs API}).  The command
+implementations, transport layer, and eval helpers all live in
+@file{cmacs/api/}; the bacon module only contains the BaconCommand
+GObject boilerplate and the dispatch table.
+
 The primary IPC path (used by @code{M-x bacon}) is a Unix socketpair
 with length-prefixed JSON messages:
 
@@ -1018,7 +1025,7 @@ with length-prefixed JSON messages:
        |                                        |
   cmacs-eval-dispatch                     cmacsgi builtin
        |                                        |
-  elisp eval / GI / file ops            CmacsGiTransport (fd backend)
+  elisp eval / GI / file ops     libcmacs-api (FD transport backend)
 @end example
 
 @noindent
@@ -1111,6 +1118,119 @@ Builds @file{cmacs_gi.so} for standalone module use.  Requires
 @end table
 
 @c ===================================================================
+@node CMacs API
+@chapter CMacs API
+
+@cindex CMacs API
+@cindex libcmacs-api
+@cindex init.c
+
+The CMacs API is a shared C library (@file{libcmacs-api.so}) that
+provides a high-level interface for interacting with the CMacs editor
+from C code.  It is used by both the @command{cmacsgi} bacon builtin
+and by Crispy C scripts (including @file{init.c}).
+
+@section Transport Backends
+
+The API supports three transport backends, auto-detected in order:
+
+@table @strong
+@item DIRECT
+In-process function calls via a registered dispatch table.  Used by
+Crispy scripts, which are compiled to @file{.so} files and loaded into
+the Emacs process via @code{g_module_open()}.  Zero IPC overhead.
+
+@item FD
+Length-prefixed JSON over a Unix socketpair (@env{CMACS_IPC_FD}).
+Used by the Bacon child process.
+
+@item D-Bus
+GDBusProxy to @code{org.cmacs.Editor1} (@env{CMACS_DBUS_NAME}).
+Used by external tools.
+@end table
+
+@section High-Level C API
+
+Include @code{<cmacs-api.h>} and link with @code{-lcmacs-api}.
+
+@table @code
+@item CmacsApi *cmacs_api_new (GError **error)
+Create a handle (auto-detects transport).
+
+@item cmacs_set (api, var, value)
+Set an Emacs variable.  Numbers and @code{t}/@code{nil} pass through;
+other values become strings.
+
+@item cmacs_get (api, var, &out)
+Get an Emacs variable value.
+
+@item cmacs_theme (api, name)
+Load a color theme.
+
+@item cmacs_font (api, family, size)
+Set the default font and size.
+
+@item cmacs_mode (api, name)
+Enable a mode (appends @code{-mode} if needed).
+
+@item cmacs_eval (api, elisp)
+Evaluate arbitrary elisp.
+
+@item cmacs_open (api, path)
+Open a file.
+
+@item cmacs_message (api, text)
+Display a message in the echo area.
+
+@item cmacs_pkg_install (api, name)
+Install a package via @code{package.el}.
+
+@item cmacs_pkg_remove (api, name)
+Remove a package.
+
+@item cmacs_api_free (api)
+Free the handle.
+@end table
+
+@section Example: init.c
+
+@example
+#include <cmacs-api.h>
+
+int main(int argc, char **argv)
+@{
+    CmacsApi *api = cmacs_api_new(NULL);
+
+    cmacs_theme(api, "modus-vivendi");
+    cmacs_font(api, "Iosevka", 14);
+    cmacs_set(api, "inhibit-startup-screen", "t");
+    cmacs_mode(api, "electric-pair");
+    cmacs_pkg_install(api, "magit");
+    cmacs_eval(api, "(global-display-line-numbers-mode 1)");
+
+    cmacs_api_free(api);
+    return 0;
+@}
+@end example
+
+@section Files
+
+@table @file
+@item cmacs/api/cmacs-api.h
+Public header (include this).
+@item cmacs/api/cmacs-api-transport.c
+Transport layer (DIRECT, FD, D-Bus backends).
+@item cmacs/api/cmacs-api-helpers.c
+Eval wrappers, string utilities, dispatch helpers.
+@item cmacs/api/cmacs-api-high-level.c
+High-level convenience functions.
+@item cmacs/api/cmacs-api-cmd-*.c
+Command group implementations (12 files).
+@item cmacs/api/Makefile
+Builds @file{libcmacs-api.so}.
+@end table
+
+@c ===================================================================
 @node Crispy C Scripting
 @chapter Crispy C Scripting
 
@@ -1118,21 +1238,50 @@ Builds @file{cmacs_gi.so} for standalone module use.  Requires
 @cindex C scripting
 
 CMacs integrates the Crispy library for evaluating C code at runtime.
+Scripts are compiled to shared objects, cached by content hash (SHA256),
+and loaded into the Emacs process via @code{g_module_open()}.  Because
+scripts run in-process, they can call back into Emacs through the
+CMacs API (@pxref{CMacs API}).
+
+@section Writing Config in C
+
+Place an @file{init.c} in @file{~/.config/cmacs/} (or
+@code{user-emacs-directory} as a fallback).  CMacs checks
+@code{$XDG_CONFIG_HOME/cmacs/} first, then @file{~/.emacs.d/}, so
+you can keep CMacs config separate from vanilla Emacs.  The file is
+loaded after @file{init.el} via @code{crispy-run}.  The CMacs API
+headers and library are automatically available---no manual
+@code{CRISPY_PARAMS} needed.
+
+@xref{CMacs API, , Example: init.c}, for a complete example.
 
 @section Elisp Primitives
 
 @table @code
+@item crispy-eval CODE
+Compile and execute inline C @var{CODE}.  Returns the exit code.
 @item crispy-eval-string CODE
-Evaluate @var{CODE} as C.  Returns @code{(EXIT-CODE . OUTPUT)}.
-Uses tmpfile-based capture for both stdout and stderr to avoid pipe
-deadlocks on large output.
+Execute C @var{CODE}, capturing stdout as a string.
+@item crispy-run FILE &rest ARGS
+Compile and execute a @file{.c} file with arguments.
+@item crispy-compile FILE
+Compile @var{FILE}, return the cached binary path.
+@item crispy-repl-eval CODE
+Evaluate in the persistent REPL.
+@item crispy-repl-reset
+Reset persistent REPL state.
+@item crispy-cache-status
+Return the crispy cache directory path.
 @end table
 
 @section Files
 
 @table @file
 @item cmacs/crispy/cmacs-crispy.c
-C primitive implementation.
+C primitive implementation.  Registers the CMacs API direct dispatch
+table so crispy scripts can call back into Emacs without IPC.
+@item lisp/cmacs/cmacs-crispy.el
+Elisp layer: REPL, minor mode, region/buffer evaluation.
 @end table
 
 @c ===================================================================

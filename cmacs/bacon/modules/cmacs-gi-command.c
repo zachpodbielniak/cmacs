@@ -3,13 +3,13 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-/* cmacs-gi-command.c — `cmacsgi` builtin: interact with CMacs via D-Bus
+/* cmacs-gi-command.c --- cmacsgi bacon builtin (thin wrapper)
  *
- * Core dispatch, shared utilities, and GObject boilerplate for the
- * cmacsgi bacon builtin.  Individual command groups live in separate
- * cmacs-gi-cmd-*.c files; this file owns the top-level dispatch table,
- * the D-Bus transport helper, eval wrappers, and the original subcommands
- * (eval, find-file, message, require, call, list).
+ * BaconCommand GObject subclass that provides the `cmacsgi` shell
+ * builtin.  The actual command implementations, transport layer,
+ * and helper functions now live in the shared cmacs-api library
+ * (cmacs/api/).  This file only contains the BaconCommand dispatch
+ * and GObject boilerplate.
  */
 
 #ifndef BACON_COMPILATION
@@ -26,201 +26,14 @@ struct _CmacsGiCommand
 
 G_DEFINE_FINAL_TYPE(CmacsGiCommand, cmacs_gi_command, BACON_TYPE_COMMAND)
 
-/* ── Transport management ─────────────────────────────────────────── */
-
-CmacsGiTransport *
-cmacs_gi_get_transport(GError **error)
-{
-    return cmacs_gi_transport_new(error);
-}
-
-/* ── String utilities ─────────────────────────────────────────────── */
-
-gchar *
-cmacs_gi_lisp_escape(const gchar *s)
-{
-    GString *q;
-
-    q = g_string_new(NULL);
-    while (*s != '\0')
-    {
-        if (*s == '\\' || *s == '"')
-            g_string_append_c(q, '\\');
-        g_string_append_c(q, *s);
-        s++;
-    }
-    return g_string_free(q, FALSE);
-}
-
-static gboolean
-looks_like_number(const gchar *s)
-{
-    if (*s == '-' || *s == '+')
-        s++;
-    if (*s == '\0')
-        return FALSE;
-    while (*s != '\0')
-    {
-        if (!g_ascii_isdigit(*s) && *s != '.' && *s != 'e' && *s != 'E')
-            return FALSE;
-        s++;
-    }
-    return TRUE;
-}
-
-gchar *
-cmacs_gi_lisp_quote(const gchar *s)
-{
-    GString *q;
-
-    /* Already a number, quoted string, or s-expression — pass through. */
-    if (looks_like_number(s) || *s == '"' || *s == '(' || *s == '\'')
-        return g_strdup(s);
-
-    /* Lisp keywords: t, nil */
-    if (strcmp(s, "t") == 0 || strcmp(s, "nil") == 0)
-        return g_strdup(s);
-
-    /* Otherwise wrap as a Lisp string literal. */
-    q = g_string_new("\"");
-    while (*s != '\0')
-    {
-        if (*s == '\\' || *s == '"')
-            g_string_append_c(q, '\\');
-        g_string_append_c(q, *s);
-        s++;
-    }
-    g_string_append_c(q, '"');
-    return g_string_free(q, FALSE);
-}
-
-/* ── Eval helpers ─────────────────────────────────────────────────── */
-
-gint
-cmacs_gi_eval_print(CmacsGiTransport *transport, const gchar *elisp)
-{
-    GError   *err = NULL;
-    GVariant *result;
-    const gchar *val;
-
-    result = cmacs_gi_transport_call(
-        transport, "Eval",
-        g_variant_new("(s)", elisp), &err);
-
-    if (result == NULL)
-    {
-        fprintf(stderr, "cmacsgi: %s\n", err->message);
-        g_error_free(err);
-        return 1;
-    }
-
-    g_variant_get(result, "(&s)", &val);
-    printf("%s\n", val);
-    g_variant_unref(result);
-    return 0;
-}
-
-gint
-cmacs_gi_eval_quiet(CmacsGiTransport *transport, const gchar *elisp)
-{
-    GError   *err = NULL;
-    GVariant *result;
-
-    result = cmacs_gi_transport_call(
-        transport, "Eval",
-        g_variant_new("(s)", elisp), &err);
-
-    if (result == NULL)
-    {
-        fprintf(stderr, "cmacsgi: %s\n", err->message);
-        g_error_free(err);
-        return 1;
-    }
-
-    g_variant_unref(result);
-    return 0;
-}
-
-gchar *
-cmacs_gi_eval_get_string(CmacsGiTransport *transport, const gchar *elisp)
-{
-    GError   *err = NULL;
-    GVariant *result;
-    const gchar *val;
-    gchar *ret;
-
-    result = cmacs_gi_transport_call(
-        transport, "Eval",
-        g_variant_new("(s)", elisp), &err);
-
-    if (result == NULL)
-    {
-        fprintf(stderr, "cmacsgi: %s\n", err->message);
-        g_error_free(err);
-        return NULL;
-    }
-
-    g_variant_get(result, "(&s)", &val);
-    ret = g_strdup(val);
-    g_variant_unref(result);
-    return ret;
-}
-
-/* ── Group dispatch helper ────────────────────────────────────────── */
-
-void
-cmacs_gi_print_group_help(const gchar        *group_name,
-                          const CmacsGiSubcmd *table)
-{
-    const CmacsGiSubcmd *p;
-
-    printf("cmacsgi %s subcommands:\n\n", group_name);
-    for (p = table; p->name != NULL; p++)
-        printf("  %-24s %s\n", p->usage, p->help);
-    printf("\n");
-}
-
-gint
-cmacs_gi_dispatch_group(const gchar        *group_name,
-                        const CmacsGiSubcmd *table,
-                        CmacsGiTransport    *transport,
-                        gint                 argc,
-                        gchar              **argv,
-                        gint                 depth)
-{
-    const CmacsGiSubcmd *p;
-    const gchar *sub;
-
-    if (depth >= argc)
-    {
-        fprintf(stderr, "cmacsgi %s: missing subcommand\n", group_name);
-        cmacs_gi_print_group_help(group_name, table);
-        return 1;
-    }
-
-    sub = argv[depth];
-
-    if (strcmp(sub, "--help") == 0 || strcmp(sub, "-h") == 0)
-    {
-        cmacs_gi_print_group_help(group_name, table);
-        return 0;
-    }
-
-    for (p = table; p->name != NULL; p++)
-    {
-        if (strcmp(sub, p->name) == 0)
-            return p->handler(transport, argc, argv);
-    }
-
-    fprintf(stderr, "cmacsgi %s: unknown subcommand '%s'\n", group_name, sub);
-    fprintf(stderr, "Try 'cmacsgi %s --help' for usage.\n", group_name);
-    return 1;
-}
-
 /* ── Original subcommand handlers ─────────────────────────────────── */
 
+/* These six handlers were defined here before the extraction and use
+   the transport layer + eval helpers from the API library via the
+   compat macros in cmacs-gi-cmd-internal.h. */
+
 static gint
-cmd_eval(CmacsGiTransport *transport, gint argc, gchar **argv)
+cmd_eval(CmacsApiTransport *transport, gint argc, gchar **argv)
 {
     GString  *expr;
     gint      i;
@@ -232,7 +45,6 @@ cmd_eval(CmacsGiTransport *transport, gint argc, gchar **argv)
         return 1;
     }
 
-    /* Join all remaining args as the expression. */
     expr = g_string_new(argv[2]);
     for (i = 3; i < argc; i++)
     {
@@ -240,13 +52,13 @@ cmd_eval(CmacsGiTransport *transport, gint argc, gchar **argv)
         g_string_append(expr, argv[i]);
     }
 
-    rc = cmacs_gi_eval_print(transport, expr->str);
+    rc = cmacs_api_eval_print(transport, expr->str);
     g_string_free(expr, TRUE);
     return rc;
 }
 
 static gint
-cmd_find_file(CmacsGiTransport *transport, gint argc, gchar **argv)
+cmd_find_file(CmacsApiTransport *transport, gint argc, gchar **argv)
 {
     GError   *err = NULL;
     GVariant *result;
@@ -257,7 +69,7 @@ cmd_find_file(CmacsGiTransport *transport, gint argc, gchar **argv)
         return 1;
     }
 
-    result = cmacs_gi_transport_call(
+    result = cmacs_api_transport_call(
         transport, "FindFile",
         g_variant_new("(s)", argv[2]), &err);
 
@@ -273,7 +85,7 @@ cmd_find_file(CmacsGiTransport *transport, gint argc, gchar **argv)
 }
 
 static gint
-cmd_message(CmacsGiTransport *transport, gint argc, gchar **argv)
+cmd_message(CmacsApiTransport *transport, gint argc, gchar **argv)
 {
     GString  *text;
     gint      i;
@@ -294,9 +106,9 @@ cmd_message(CmacsGiTransport *transport, gint argc, gchar **argv)
         g_string_append(text, argv[i]);
     }
 
-    escaped = cmacs_gi_lisp_escape(text->str);
+    escaped = cmacs_api_lisp_escape(text->str);
     elisp = g_strdup_printf("(message \"%%s\" \"%s\")", escaped);
-    rc = cmacs_gi_eval_quiet(transport, elisp);
+    rc = cmacs_api_eval_quiet(transport, elisp);
     g_free(elisp);
     g_free(escaped);
     g_string_free(text, TRUE);
@@ -304,7 +116,7 @@ cmd_message(CmacsGiTransport *transport, gint argc, gchar **argv)
 }
 
 static gint
-cmd_require(CmacsGiTransport *transport, gint argc, gchar **argv)
+cmd_require(CmacsApiTransport *transport, gint argc, gchar **argv)
 {
     GError     *err = NULL;
     GVariant   *result;
@@ -320,7 +132,7 @@ cmd_require(CmacsGiTransport *transport, gint argc, gchar **argv)
     ns  = argv[2];
     ver = (argc >= 4) ? argv[3] : "";
 
-    result = cmacs_gi_transport_call(
+    result = cmacs_api_transport_call(
         transport, "GiRequire",
         g_variant_new("(ss)", ns, ver), &err);
 
@@ -343,7 +155,7 @@ cmd_require(CmacsGiTransport *transport, gint argc, gchar **argv)
 }
 
 static gint
-cmd_call(CmacsGiTransport *transport, gint argc, gchar **argv)
+cmd_call(CmacsApiTransport *transport, gint argc, gchar **argv)
 {
     GError         *err = NULL;
     GVariant       *result;
@@ -357,16 +169,15 @@ cmd_call(CmacsGiTransport *transport, gint argc, gchar **argv)
         return 1;
     }
 
-    /* Build the args array, quoting strings for the Lisp reader. */
     g_variant_builder_init(&builder, G_VARIANT_TYPE("as"));
     for (i = 4; i < argc; i++)
     {
-        gchar *quoted = cmacs_gi_lisp_quote(argv[i]);
+        gchar *quoted = cmacs_api_lisp_quote(argv[i]);
         g_variant_builder_add(&builder, "s", quoted);
         g_free(quoted);
     }
 
-    result = cmacs_gi_transport_call(
+    result = cmacs_api_transport_call(
         transport, "GiCall",
         g_variant_new("(ssas)", argv[2], argv[3], &builder), &err);
 
@@ -387,7 +198,7 @@ cmd_call(CmacsGiTransport *transport, gint argc, gchar **argv)
 }
 
 static gint
-cmd_list(CmacsGiTransport *transport, gint argc, gchar **argv)
+cmd_list(CmacsApiTransport *transport, gint argc, gchar **argv)
 {
     GError       *err = NULL;
     GVariant     *result;
@@ -400,7 +211,7 @@ cmd_list(CmacsGiTransport *transport, gint argc, gchar **argv)
         return 1;
     }
 
-    result = cmacs_gi_transport_call(
+    result = cmacs_api_transport_call(
         transport, "GiListFunctions",
         g_variant_new("(s)", argv[2]), &err);
 
@@ -419,47 +230,46 @@ cmd_list(CmacsGiTransport *transport, gint argc, gchar **argv)
     return 0;
 }
 
-/* ── Forward declarations for group handlers ──────────────────────── */
+/* ── Forward declarations for group handlers (in libcmacs-api) ────── */
 
-/* Each cmacs-gi-cmd-*.c defines a cmd_GROUP function. */
-extern gint cmd_buf     (CmacsGiTransport *transport, gint argc, gchar **argv);
-extern gint cmd_file_open   (CmacsGiTransport *transport, gint argc, gchar **argv);
-extern gint cmd_file_save   (CmacsGiTransport *transport, gint argc, gchar **argv);
-extern gint cmd_file_close  (CmacsGiTransport *transport, gint argc, gchar **argv);
-extern gint cmd_file_recent (CmacsGiTransport *transport, gint argc, gchar **argv);
-extern gint cmd_insert  (CmacsGiTransport *transport, gint argc, gchar **argv);
-extern gint cmd_delete  (CmacsGiTransport *transport, gint argc, gchar **argv);
-extern gint cmd_line    (CmacsGiTransport *transport, gint argc, gchar **argv);
-extern gint cmd_append  (CmacsGiTransport *transport, gint argc, gchar **argv);
-extern gint cmd_point   (CmacsGiTransport *transport, gint argc, gchar **argv);
-extern gint cmd_goto    (CmacsGiTransport *transport, gint argc, gchar **argv);
-extern gint cmd_search  (CmacsGiTransport *transport, gint argc, gchar **argv);
-extern gint cmd_replace (CmacsGiTransport *transport, gint argc, gchar **argv);
-extern gint cmd_occur   (CmacsGiTransport *transport, gint argc, gchar **argv);
-extern gint cmd_win     (CmacsGiTransport *transport, gint argc, gchar **argv);
-extern gint cmd_set     (CmacsGiTransport *transport, gint argc, gchar **argv);
-extern gint cmd_get_var (CmacsGiTransport *transport, gint argc, gchar **argv);
-extern gint cmd_theme   (CmacsGiTransport *transport, gint argc, gchar **argv);
-extern gint cmd_font    (CmacsGiTransport *transport, gint argc, gchar **argv);
-extern gint cmd_mode    (CmacsGiTransport *transport, gint argc, gchar **argv);
-extern gint cmd_grep    (CmacsGiTransport *transport, gint argc, gchar **argv);
-extern gint cmd_find    (CmacsGiTransport *transport, gint argc, gchar **argv);
-extern gint cmd_project_root (CmacsGiTransport *transport, gint argc, gchar **argv);
-extern gint cmd_compile (CmacsGiTransport *transport, gint argc, gchar **argv);
-extern gint cmd_next_error (CmacsGiTransport *transport, gint argc, gchar **argv);
-extern gint cmd_prev_error (CmacsGiTransport *transport, gint argc, gchar **argv);
-extern gint cmd_diag    (CmacsGiTransport *transport, gint argc, gchar **argv);
-extern gint cmd_mark    (CmacsGiTransport *transport, gint argc, gchar **argv);
-extern gint cmd_copy    (CmacsGiTransport *transport, gint argc, gchar **argv);
-extern gint cmd_cut     (CmacsGiTransport *transport, gint argc, gchar **argv);
-extern gint cmd_paste   (CmacsGiTransport *transport, gint argc, gchar **argv);
-extern gint cmd_clip    (CmacsGiTransport *transport, gint argc, gchar **argv);
-extern gint cmd_vc      (CmacsGiTransport *transport, gint argc, gchar **argv);
-extern gint cmd_pkg     (CmacsGiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_buf     (CmacsApiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_file_open   (CmacsApiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_file_save   (CmacsApiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_file_close  (CmacsApiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_file_recent (CmacsApiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_insert  (CmacsApiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_delete  (CmacsApiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_line    (CmacsApiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_append  (CmacsApiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_point   (CmacsApiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_goto    (CmacsApiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_search  (CmacsApiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_replace (CmacsApiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_occur   (CmacsApiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_win     (CmacsApiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_set     (CmacsApiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_get_var (CmacsApiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_theme   (CmacsApiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_font    (CmacsApiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_mode    (CmacsApiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_grep    (CmacsApiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_find    (CmacsApiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_project_root (CmacsApiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_compile (CmacsApiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_next_error (CmacsApiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_prev_error (CmacsApiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_diag    (CmacsApiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_mark    (CmacsApiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_copy    (CmacsApiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_cut     (CmacsApiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_paste   (CmacsApiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_clip    (CmacsApiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_vc      (CmacsApiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_pkg     (CmacsApiTransport *transport, gint argc, gchar **argv);
 
 /* ── Top-level dispatch table ─────────────────────────────────────── */
 
-static const CmacsGiSubcmd subcmds[] = {
+static const CmacsApiSubcmd subcmds[] = {
     /* ── buffer / file ─────────────────────────────────────────────── */
     { "buf",          cmd_buf,
       "buf SUBCMD [ARGS...]",       "buffer operations (list, show, create, kill, ...)" },
@@ -594,7 +404,7 @@ cmacs_gi_command_get_help(BaconCommand *cmd)
 static void
 print_top_help(void)
 {
-    const CmacsGiSubcmd *p;
+    const CmacsApiSubcmd *p;
 
     printf("cmacsgi — interact with CMacs from the Bacon shell\n\n");
     printf("Usage: cmacsgi COMMAND [ARGS...]\n\n");
@@ -611,9 +421,9 @@ cmacs_gi_command_run(BaconCommand  *cmd,
                      gpointer      shell,
                      GError      **error)
 {
-    CmacsGiTransport  *transport;
+    CmacsApiTransport  *transport;
     const gchar *subcmd;
-    const CmacsGiSubcmd *p;
+    const CmacsApiSubcmd *p;
     gint         rc;
 
     (void)cmd;
@@ -633,7 +443,6 @@ cmacs_gi_command_run(BaconCommand  *cmd,
         return 0;
     }
 
-    /* "help COMMAND" — look up and print that command's help. */
     if (strcmp(subcmd, "help") == 0)
     {
         if (argc < 3)
@@ -653,7 +462,7 @@ cmacs_gi_command_run(BaconCommand  *cmd,
         return 1;
     }
 
-    transport = cmacs_gi_get_transport(error);
+    transport = cmacs_api_transport_new(error);
     if (transport == NULL)
     {
         fprintf(stderr, "cmacsgi: %s\n",
@@ -662,21 +471,20 @@ cmacs_gi_command_run(BaconCommand  *cmd,
         return 1;
     }
 
-    /* Table lookup. */
     rc = 1;
     for (p = subcmds; p->name != NULL; p++)
     {
         if (strcmp(subcmd, p->name) == 0)
         {
             rc = p->handler(transport, argc, argv);
-            cmacs_gi_transport_free(transport);
+            cmacs_api_transport_free(transport);
             return rc;
         }
     }
 
     fprintf(stderr, "cmacsgi: unknown command '%s'\n", subcmd);
     fprintf(stderr, "Try 'cmacsgi --help' for usage.\n");
-    cmacs_gi_transport_free(transport);
+    cmacs_api_transport_free(transport);
     return 1;
 }
 

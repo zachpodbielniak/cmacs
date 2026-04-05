@@ -25,6 +25,7 @@ cmacs integrates five subsystems into Emacs as C primitives (DEFUNs):
 | **glib** | `cmacs/glib/` | GMainContext event loop integration, D-Bus service, safe Lisp eval dispatch |
 | **gobject** | `cmacs/gobject/` | GObject ↔ Lisp bridge, GClosure wrappers |
 | **gi** | `cmacs/gi/` | GObject Introspection — call any GI-registered library from Elisp |
+| **api** | `cmacs/api/` | Shared C library: transport, eval helpers, high-level config API (libcmacs-api.so) |
 | **crispy** | `cmacs/crispy/` | Embedded scripting language (C-like, GObject-based) |
 | **bacon** | `cmacs/bacon/` | Embedded shell (fork-of-self `--bacon` mode, socketpair IPC) |
 | **gowl** | `cmacs/gowl/` | Wayland compositor (wlroots-based) — 47 DEFUNs for full WM control |
