@@ -175,6 +175,7 @@ src/gl-stamp
 
 # Object files and debugging.
 *.a
+*.d
 *.dSYM/
 *.dll
 *.core
