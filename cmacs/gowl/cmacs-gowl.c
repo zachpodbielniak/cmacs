@@ -16,13 +16,207 @@
 #ifdef HAVE_CMACS_GOWL
 
 #include "lisp.h"
+#include "cmacs-gowl.h"
 #include "cmacs-gobject.h"
 #include "cmacs-eval-dispatch.h"
 #include <gowl.h>
+#include <wayland-server-core.h>
+#include <wayland-client-core.h>
+#include <wlr/backend.h>
+#include <wlr/backend/wayland.h>
+#include "keyboard-shortcuts-inhibit-v1-client.h"
+
+#ifdef HAVE_PGTK
+#include <gdk/gdk.h>
+#ifdef GDK_WINDOWING_WAYLAND
+#include <gdk/gdkwayland.h>
+#endif
+#endif
 
 /* Persistent compositor instance.
    NOT static — cmacs-eval-dispatch.c accesses this for gowl dispatch. */
 GowlCompositor *cmacs_gowl_compositor = NULL;
+
+/* ── Keyboard shortcut inhibition for nested mode ────────────────────
+ *
+ * When gowl runs nested inside another Wayland compositor (e.g. GNOME),
+ * the parent compositor intercepts keyboard shortcuts (Super, Alt+Tab,
+ * etc.) before they reach gowl.  We use the zwp_keyboard_shortcuts_
+ * inhibit_manager_v1 protocol to tell the parent compositor to pass
+ * ALL key events through to gowl's output surface.
+ */
+
+static struct zwp_keyboard_shortcuts_inhibit_manager_v1 *shortcuts_mgr = NULL;
+static struct zwp_keyboard_shortcuts_inhibitor_v1 *shortcuts_inhibitor = NULL;
+static struct wl_seat *parent_seat = NULL;
+
+static void
+registry_handle_global (void *data, struct wl_registry *registry,
+                        uint32_t name, const char *interface,
+                        uint32_t version)
+{
+  if (strcmp (interface,
+             zwp_keyboard_shortcuts_inhibit_manager_v1_interface.name) == 0)
+    shortcuts_mgr = wl_registry_bind (
+      registry, name,
+      &zwp_keyboard_shortcuts_inhibit_manager_v1_interface, 1);
+  else if (strcmp (interface, "wl_seat") == 0 && parent_seat == NULL)
+    parent_seat = wl_registry_bind (registry, name,
+                                    &wl_seat_interface, 1);
+}
+
+static void
+registry_handle_global_remove (void *data, struct wl_registry *registry,
+                               uint32_t name)
+{
+  /* nothing */
+}
+
+static const struct wl_registry_listener registry_listener = {
+  registry_handle_global,
+  registry_handle_global_remove,
+};
+
+/* Request shortcut inhibition from the parent compositor.
+   Must be called after gowl_compositor_start() in nested mode,
+   BEFORE the dispatch thread starts (roundtrips the parent display
+   which is safe since the parent compositor is a separate process).
+   Uses wlroots backend accessors to get the parent display and
+   the output surface, then binds the shortcut inhibitor protocol.
+
+   NOT static — called from emacs.c --gowl handler. */
+void
+cmacs_gowl_inhibit_parent_shortcuts (GowlCompositor *comp)
+{
+  struct wlr_backend *backend;
+  struct wl_display *parent_dpy;
+  struct wl_registry *registry;
+  GList *monitors;
+  struct wlr_output *output;
+  struct wl_surface *surface;
+
+  backend = gowl_compositor_get_wlr_backend (comp);
+  if (backend == NULL || !wlr_backend_is_wl (backend))
+    return;  /* not nested */
+
+  parent_dpy = wlr_wl_backend_get_remote_display (backend);
+  if (parent_dpy == NULL)
+    return;
+
+  /* Bind the shortcut inhibitor manager and a wl_seat from
+     the parent compositor via its registry. */
+  registry = wl_display_get_registry (parent_dpy);
+  wl_registry_add_listener (registry, &registry_listener, NULL);
+  wl_display_roundtrip (parent_dpy);
+  wl_registry_destroy (registry);
+
+  if (shortcuts_mgr == NULL || parent_seat == NULL)
+    return;  /* parent doesn't support shortcut inhibition */
+
+  /* Inhibit shortcuts on the primary output surface. */
+  monitors = gowl_compositor_get_monitors (comp);
+  if (monitors == NULL)
+    return;
+
+  output = gowl_monitor_get_wlr_output (GOWL_MONITOR (monitors->data));
+  if (output == NULL)
+    return;
+
+  surface = wlr_wl_output_get_surface (output);
+  if (surface == NULL)
+    return;
+
+  shortcuts_inhibitor =
+    zwp_keyboard_shortcuts_inhibit_manager_v1_inhibit_shortcuts (
+      shortcuts_mgr, surface, parent_seat);
+  wl_display_roundtrip (parent_dpy);
+}
+
+/* ── Compositor dispatch thread ───────────────────────────────────────
+ *
+ * The gowl compositor and Emacs's GDK Wayland client share the same
+ * process.  GDK does blocking wl_display_roundtrip_queue() calls that
+ * wait for the compositor to respond — but the compositor can only
+ * respond when wl_event_loop_dispatch() runs.  If both are on the same
+ * thread, this is a deadlock.
+ *
+ * Solution: run the compositor event loop in a dedicated pthread.
+ * The thread dispatches wl_event_loop with poll(), so it responds to
+ * GDK's roundtrips without blocking the main thread (and vice versa).
+ *
+ * Thread safety: Emacs DEFUNs that access compositor state acquire
+ * cmacs_gowl_mutex before reading/writing.  The dispatch thread holds
+ * the mutex during wl_event_loop_dispatch() (which fires wlroots
+ * callbacks that mutate compositor state).  Between dispatches the
+ * mutex is released so DEFUNs can proceed without delay.
+ */
+
+#include <pthread.h>
+#include <poll.h>
+
+static pthread_t cmacs_gowl_thread;
+static volatile int cmacs_gowl_thread_running = 0;
+static pthread_mutex_t cmacs_gowl_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static void *
+cmacs_gowl_dispatch_thread (void *data)
+{
+  GowlCompositor *comp = (GowlCompositor *) data;
+  struct wl_display *wl_dpy = gowl_compositor_get_wl_display (comp);
+  struct wl_event_loop *loop = gowl_compositor_get_event_loop (comp);
+  int fd = wl_event_loop_get_fd (loop);
+  struct pollfd pfd;
+
+  pfd.fd = fd;
+  pfd.events = POLLIN;
+
+  while (cmacs_gowl_thread_running)
+    {
+      /* Wait for activity on the event loop fd (16ms timeout for
+         wl_event_loop internal timers to fire regularly). */
+      pfd.revents = 0;
+      if (poll (&pfd, 1, 16) < 0)
+        {
+          if (errno == EINTR)
+            continue;
+          break;
+        }
+
+      pthread_mutex_lock (&cmacs_gowl_mutex);
+      wl_display_flush_clients (wl_dpy);
+      wl_event_loop_dispatch (loop, 0);
+      wl_display_flush_clients (wl_dpy);
+      pthread_mutex_unlock (&cmacs_gowl_mutex);
+    }
+
+  return NULL;
+}
+
+void
+cmacs_gowl_start_thread (void)
+{
+  if (cmacs_gowl_thread_running || cmacs_gowl_compositor == NULL)
+    return;
+
+  cmacs_gowl_thread_running = 1;
+  if (pthread_create (&cmacs_gowl_thread, NULL,
+                      cmacs_gowl_dispatch_thread,
+                      cmacs_gowl_compositor) != 0)
+    {
+      cmacs_gowl_thread_running = 0;
+      fprintf (stderr, "cmacs: failed to create gowl dispatch thread\n");
+    }
+}
+
+static void
+cmacs_gowl_stop_thread (void)
+{
+  if (!cmacs_gowl_thread_running)
+    return;
+
+  cmacs_gowl_thread_running = 0;
+  pthread_join (cmacs_gowl_thread, NULL);
+}
 
 /* ── Helper: get focused monitor ──────────────────────────────────── */
 
@@ -89,32 +283,73 @@ gowl_resolve_client (Lisp_Object client)
 
 DEFUN ("gowl-start", Fgowl_start, Sgowl_start, 0, 0, 0,
        doc: /* Create and start the gowl Wayland compositor.
-Returns non-nil on success.  Signals an error if already running. */)
+Returns non-nil on success.  Signals an error if already running.
+If the compositor was pre-started via --gowl, this just attaches
+the event loop source and returns. */)
   (void)
 {
   GError *err = NULL;
 
+  /* If already started (e.g. via --gowl early init), just make
+     sure the dispatch thread is running. */
   if (cmacs_gowl_compositor != NULL)
-    error ("Gowl compositor is already running");
+    {
+      if (!cmacs_gowl_thread_running)
+        cmacs_gowl_start_thread ();
+      return Qt;
+    }
+
+  /* If running inside an existing Wayland session, tell wlroots to
+     use the nested Wayland backend rather than trying DRM/libseat.
+     Use GDK to detect this reliably — env vars like WAYLAND_DISPLAY
+     may not be propagated to the process by all terminal emulators. */
+  {
+    gboolean nested = FALSE;
+    const char *wl_display = getenv ("WAYLAND_DISPLAY");
+
+    if (wl_display != NULL && wl_display[0] != '\0')
+      nested = TRUE;
+
+#if defined (HAVE_PGTK) && defined (GDK_WINDOWING_WAYLAND)
+    if (!nested)
+      {
+        GdkDisplay *gdk_dpy = gdk_display_get_default ();
+        if (gdk_dpy != NULL && GDK_IS_WAYLAND_DISPLAY (gdk_dpy))
+          {
+            nested = TRUE;
+            /* wlroots needs WAYLAND_DISPLAY to connect.  GDK is
+               already connected to Wayland but the env var may not
+               be set (e.g. terminal didn't propagate it).  Recover
+               the socket name from GDK so wlroots can find it. */
+            const gchar *name = gdk_display_get_name (gdk_dpy);
+            if (name != NULL)
+              setenv ("WAYLAND_DISPLAY", name, 0);
+          }
+      }
+#endif
+
+    if (nested)
+      setenv ("WLR_BACKENDS", "wayland", 0);
+  }
 
   cmacs_gowl_compositor = gowl_compositor_new ();
   if (cmacs_gowl_compositor == NULL)
     xsignal1 (Qgowl_error,
               build_string ("Failed to create GowlCompositor"));
 
-  /* Load default config. */
+  /* Load default config.  Do NOT unref — the compositor stores a
+     borrowed reference, so cmacs owns the lifetime.  The objects
+     are released in gowl-stop via g_clear_object on the compositor. */
   {
     GowlConfig *config = gowl_config_new ();
     gowl_config_load_yaml_from_search_path (config, NULL);
     gowl_compositor_set_config (cmacs_gowl_compositor, config);
-    g_object_unref (config);
   }
 
-  /* Load modules. */
+  /* Load modules.  Same ownership rule as config above. */
   {
     GowlModuleManager *mgr = gowl_module_manager_new ();
     gowl_compositor_set_module_manager (cmacs_gowl_compositor, mgr);
-    g_object_unref (mgr);
   }
 
   if (!gowl_compositor_start (cmacs_gowl_compositor, &err))
@@ -125,6 +360,8 @@ Returns non-nil on success.  Signals an error if already running. */)
       xsignal1 (Qgowl_error, msg);
     }
 
+  cmacs_gowl_start_thread ();
+
   return Qt;
 }
 
@@ -134,6 +371,7 @@ DEFUN ("gowl-stop", Fgowl_stop, Sgowl_stop, 0, 0, 0,
 {
   if (cmacs_gowl_compositor != NULL)
     {
+      cmacs_gowl_stop_thread ();
       gowl_compositor_quit (cmacs_gowl_compositor);
       g_clear_object (&cmacs_gowl_compositor);
     }
@@ -145,6 +383,25 @@ DEFUN ("gowl-running-p", Fgowl_running_p, Sgowl_running_p, 0, 0, 0,
   (void)
 {
   return cmacs_gowl_compositor != NULL ? Qt : Qnil;
+}
+
+DEFUN ("gowl-socket-name", Fgowl_socket_name, Sgowl_socket_name, 0, 0, 0,
+       doc: /* Return the Wayland socket name of the gowl compositor.
+This is the value of WAYLAND_DISPLAY that clients should use to
+connect (e.g. "wayland-1").  Returns nil if the compositor is not
+running or the socket name is unavailable. */)
+  (void)
+{
+  const gchar *name;
+
+  if (cmacs_gowl_compositor == NULL)
+    return Qnil;
+
+  name = gowl_compositor_get_socket_name (cmacs_gowl_compositor);
+  if (name == NULL)
+    return Qnil;
+
+  return build_string (name);
 }
 
 
@@ -1145,10 +1402,16 @@ syms_of_cmacs_gowl (void)
   Fput (Qgowl_error, Qerror_message,
         build_string ("Gowl compositor error"));
 
+  DEFVAR_BOOL ("gowl-early-started", gowl_early_started,
+               doc: /* Non-nil if the gowl compositor was started via --gowl.
+The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
+  gowl_early_started = cmacs_gowl_compositor != NULL;
+
   /* Lifecycle */
   defsubr (&Sgowl_start);
   defsubr (&Sgowl_stop);
   defsubr (&Sgowl_running_p);
+  defsubr (&Sgowl_socket_name);
 
   /* GObject accessors for full GI runtime control */
   defsubr (&Sgowl_compositor);
@@ -1215,6 +1478,13 @@ syms_of_cmacs_gowl (void)
   defsubr (&Sgowl_load_module);
   defsubr (&Sgowl_list_modules);
   defsubr (&Sgowl_load_modules_from_dir);
+}
+
+void
+init_cmacs_gowl (void)
+{
+  /* Nothing to do here — the dispatch thread is started from
+     --gowl in emacs.c or from gowl-start. */
 }
 
 #endif /* HAVE_CMACS_GOWL */

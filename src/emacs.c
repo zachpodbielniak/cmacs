@@ -160,6 +160,11 @@ extern char etext;
 #include "cmacs-bacon.h"
 #endif
 
+#ifdef HAVE_CMACS_GOWL
+#include <gowl.h>
+#include <wayland-server-core.h>
+#endif
+
 static const char emacs_version[] = PACKAGE_VERSION;
 static const char emacs_copyright[] = COPYRIGHT;
 static const char emacs_bugreport[] = PACKAGE_BUGREPORT;
@@ -1361,6 +1366,105 @@ android_emacs_init (int argc, char **argv, char *dump_file)
   }
 #endif
 
+  /* Check for --gowl before display initialization.
+     Start the Wayland compositor early so that PGTK/GDK connects
+     to gowl's display instead of any existing compositor.  This
+     makes Emacs render inside its own window manager. */
+#ifdef HAVE_CMACS_GOWL
+  {
+    int i;
+    for (i = 1; i < argc; i++)
+      {
+        if (strcmp (argv[i], "--gowl") == 0)
+          {
+            GowlCompositor *comp;
+            GowlConfig *config;
+            GowlModuleManager *mgr;
+            GError *err = NULL;
+            const gchar *socket;
+
+            /* Detect nested Wayland before GDK is available.
+               WAYLAND_DISPLAY may not be set (some terminals
+               don't propagate it), so also probe for the default
+               socket file in XDG_RUNTIME_DIR. */
+            {
+              const char *wl_display = getenv ("WAYLAND_DISPLAY");
+              int nested = (wl_display != NULL && wl_display[0] != '\0');
+
+              if (!nested)
+                {
+                  const char *xdg = getenv ("XDG_RUNTIME_DIR");
+                  if (xdg != NULL)
+                    {
+                      /* Try wayland-0 through wayland-3. */
+                      int n;
+                      for (n = 0; n <= 3 && !nested; n++)
+                        {
+                          char path[4096];
+                          snprintf (path, sizeof path,
+                                    "%s/wayland-%d", xdg, n);
+                          if (access (path, F_OK) == 0)
+                            {
+                              char name[32];
+                              snprintf (name, sizeof name,
+                                        "wayland-%d", n);
+                              setenv ("WAYLAND_DISPLAY", name, 0);
+                              nested = 1;
+                            }
+                        }
+                    }
+                }
+
+              if (nested)
+                setenv ("WLR_BACKENDS", "wayland", 0);
+            }
+
+            comp = gowl_compositor_new ();
+            if (comp == NULL)
+              {
+                fprintf (stderr, "cmacs: failed to create GowlCompositor\n");
+                exit (1);
+              }
+
+            config = gowl_config_new ();
+            gowl_config_load_yaml_from_search_path (config, NULL);
+            gowl_compositor_set_config (comp, config);
+
+            mgr = gowl_module_manager_new ();
+            gowl_compositor_set_module_manager (comp, mgr);
+
+            if (!gowl_compositor_start (comp, &err))
+              {
+                fprintf (stderr, "cmacs: gowl start failed: %s\n",
+                         err->message);
+                g_error_free (err);
+                exit (1);
+              }
+
+            socket = gowl_compositor_get_socket_name (comp);
+            if (socket != NULL)
+              setenv ("WAYLAND_DISPLAY", socket, 1);
+
+            /* Store the compositor globally.  Inhibit parent compositor
+               keyboard shortcuts (e.g. GNOME Super/Alt+Tab) BEFORE
+               starting the dispatch thread — the roundtrip talks to
+               the parent compositor process, not to gowl. */
+            {
+              extern GowlCompositor *cmacs_gowl_compositor;
+              extern void cmacs_gowl_start_thread (void);
+              extern void cmacs_gowl_inhibit_parent_shortcuts (GowlCompositor *);
+              cmacs_gowl_compositor = comp;
+              cmacs_gowl_inhibit_parent_shortcuts (comp);
+              cmacs_gowl_start_thread ();
+            }
+            break;
+          }
+        if (strcmp (argv[i], "--") == 0)
+          break;
+      }
+  }
+#endif
+
   bool no_loadup = false;
   char *junk = 0;
   char *dname_arg = 0;
@@ -1734,6 +1838,13 @@ android_emacs_init (int argc, char **argv, char *dump_file)
       skip_args -= 2;
       sort_args (argc, argv);
     }
+
+#ifdef HAVE_CMACS_GOWL
+  /* Consume --gowl so startup.el does not error on an unknown option.
+     The actual compositor startup was done earlier (before sort_args)
+     because it must precede display initialization.  */
+  argmatch (argv, argc, "-gowl", "--gowl", 5, NULL, &skip_args);
+#endif
 
   /* Handle the --help option, which gives a usage message.  */
   if (argmatch (argv, argc, "-help", "--help", 3, NULL, &skip_args)
@@ -2606,6 +2717,9 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #ifdef HAVE_CMACS_GLIB
   init_cmacs_glib ();
 #endif
+#ifdef HAVE_CMACS_GOWL
+  init_cmacs_gowl ();
+#endif
 
   if (!initialized)
     {
@@ -2705,6 +2819,9 @@ static const struct standard_args standard_args[] =
   { "-daemon", "--daemon", 99, 0 },
   { "-bg-daemon", "--bg-daemon", 99, 0 },
   { "-fg-daemon", "--fg-daemon", 99, 0 },
+#ifdef HAVE_CMACS_GOWL
+  { "-gowl", "--gowl", 98, 0 },
+#endif
   { "-help", "--help", 90, 0 },
   { "-nl", "--no-loadup", 70, 0 },
   { "-nsl", "--no-site-lisp", 65, 0 },

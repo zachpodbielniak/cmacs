@@ -119,5 +119,10 @@ TOPIC is a filename without extension (e.g., \"cmacsgi\", \"api\")."
 (autoload 'cmacs-config-load-all "cmacs-config"
   "Load bacon and C config files after elisp init.")
 
+;;; Auto-enable gowl mode when started with --gowl
+(when (bound-and-true-p gowl-early-started)
+  (add-hook 'after-init-hook
+            (lambda () (cmacs-gowl-mode 1))))
+
 (provide 'cmacs)
 ;;; cmacs.el ends here

@@ -1,0 +1,89 @@
+#!/bin/bash
+# install-wm — Install CMacs as a Wayland session for GDM/SDDM/greetd
+#
+# Usage:
+#   sudo ./install-wm              # auto-detect binary path
+#   sudo ./install-wm PREFIX=/usr/local  # use installed binary
+#   ./install-wm --dry-run         # show what would be written
+#
+# Copyright (C) 2026 Zach Podbielniak
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+set -euo pipefail
+
+SESSION_DIR="/usr/share/wayland-sessions"
+SESSION_FILE="${SESSION_DIR}/cmacs.desktop"
+DRY_RUN=0
+PREFIX=""
+EMACS_BIN=""
+
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run)  DRY_RUN=1 ;;
+        --remove)
+            if [ -f "$SESSION_FILE" ]; then
+                rm -v "$SESSION_FILE"
+                echo "CMacs session removed."
+            else
+                echo "No CMacs session file found."
+            fi
+            exit 0
+            ;;
+        PREFIX=*)   PREFIX="${arg#PREFIX=}" ;;
+        --help|-h)
+            echo "Usage: sudo $0 [PREFIX=/usr/local] [--dry-run] [--remove]"
+            exit 0
+            ;;
+        *)
+            echo "Unknown argument: $arg" >&2
+            exit 1
+            ;;
+    esac
+done
+
+# Detect emacs binary path
+if [ -n "$PREFIX" ]; then
+    # Installed mode: use PREFIX/bin/emacs
+    EMACS_BIN="${PREFIX}/bin/emacs"
+elif [ -x "$(dirname "$0")/src/emacs" ]; then
+    # Repo mode: use absolute path to src/emacs
+    EMACS_BIN="$(cd "$(dirname "$0")" && pwd)/src/emacs"
+else
+    echo "Error: Cannot find emacs binary." >&2
+    echo "Run from the repo root or pass PREFIX=/usr/local" >&2
+    exit 1
+fi
+
+if [ "$DRY_RUN" -eq 0 ] && [ ! -x "$EMACS_BIN" ]; then
+    echo "Warning: $EMACS_BIN does not exist yet (build with 'make' first)." >&2
+fi
+
+DESKTOP_ENTRY="[Desktop Entry]
+Name=CMacs
+Comment=CMacs — Emacs as a Wayland Compositor
+Exec=${EMACS_BIN} --gowl
+Type=Application
+DesktopNames=CMacs"
+
+if [ "$DRY_RUN" -eq 1 ]; then
+    echo "Would write to: $SESSION_FILE"
+    echo "---"
+    echo "$DESKTOP_ENTRY"
+    echo "---"
+    echo "Binary: $EMACS_BIN"
+    exit 0
+fi
+
+# Must be root to write to /usr/share
+if [ "$(id -u)" -ne 0 ]; then
+    echo "Error: Must run as root (use sudo)." >&2
+    exit 1
+fi
+
+mkdir -p "$SESSION_DIR"
+echo "$DESKTOP_ENTRY" > "$SESSION_FILE"
+echo "Installed CMacs Wayland session:"
+echo "  Session file: $SESSION_FILE"
+echo "  Binary: $EMACS_BIN"
+echo ""
+echo "Log out and select 'CMacs' from your display manager."

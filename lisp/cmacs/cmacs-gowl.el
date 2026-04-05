@@ -85,22 +85,32 @@ Example:
 ;;; Internal functions
 
 (defun cmacs-gowl--start ()
-  "Start the Gowl compositor and apply configuration."
-  (unless (gowl-running-p)
-    (gowl-start)
-    ;; Apply default layout.
-    (when cmacs-gowl-default-layout
-      (gowl-set-layout cmacs-gowl-default-layout))
-    ;; Launch autostart programs (only once per session).
-    (unless cmacs-gowl--autostart-launched
-      (dolist (cmd cmacs-gowl-autostart)
-        (condition-case err
-            (gowl-spawn cmd)
-          (gowl-error
-           (message "Gowl autostart failed for %S: %s"
-                    cmd (cadr err)))))
-      (setq cmacs-gowl--autostart-launched t))
-    (setq cmacs-gowl--active t)))
+  "Start the Gowl compositor and apply configuration.
+When launched with --gowl, the compositor is already running and
+Emacs is rendering inside it.  This function ensures the dispatch
+thread is running and applies configuration."
+  (gowl-start)  ;; no-op if already running via --gowl
+  ;; Apply default layout.
+  (when cmacs-gowl-default-layout
+    (gowl-set-layout cmacs-gowl-default-layout))
+  ;; Ensure Emacs has keyboard focus.  The client may have mapped
+  ;; before focus was properly assigned, so explicitly focus it.
+  (run-with-timer 0.5 nil
+    (lambda ()
+      (when (gowl-running-p)
+        (let ((clients (gowl-list-clients)))
+          (when clients
+            (gowl-focus-client (car clients)))))))
+  ;; Launch autostart programs (only once per session).
+  (unless cmacs-gowl--autostart-launched
+    (dolist (cmd cmacs-gowl-autostart)
+      (condition-case err
+          (gowl-spawn cmd)
+        (gowl-error
+         (message "Gowl autostart failed for %S: %s"
+                  cmd (cadr err)))))
+    (setq cmacs-gowl--autostart-launched t))
+  (setq cmacs-gowl--active t))
 
 (defun cmacs-gowl--stop ()
   "Stop the Gowl compositor."

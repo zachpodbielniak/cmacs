@@ -5502,6 +5502,7 @@ extern void syms_of_cmacs_bacon (void);
 #endif
 #ifdef HAVE_CMACS_GOWL
 extern void syms_of_cmacs_gowl (void);
+extern void init_cmacs_gowl (void);
 #endif
 
 #ifdef HAVE_NATIVE_COMP

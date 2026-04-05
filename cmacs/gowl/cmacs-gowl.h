@@ -14,8 +14,13 @@
 
 #ifdef HAVE_CMACS_GOWL
 
-/* Register DEFUN primitives. */
-extern void syms_of_cmacs_gowl (void);
+#include <gowl.h>
+
+/* Start the compositor dispatch thread. */
+extern void cmacs_gowl_start_thread (void);
+
+/* Inhibit parent compositor keyboard shortcuts (nested mode). */
+extern void cmacs_gowl_inhibit_parent_shortcuts (GowlCompositor *comp);
 
 #endif /* HAVE_CMACS_GOWL */
 #endif /* CMACS_GOWL_H */

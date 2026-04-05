@@ -711,23 +711,24 @@ fi
 if test "$with_cmacs_gowl" != "no"; then
   if test "$with_cmacs_gowl" = "system"; then
     # Use system-installed gowl (for distro packaging)
-    PKG_CHECK_MODULES([CMACS_GOWL], [gowl wlroots-0.19 wayland-server])
+    PKG_CHECK_MODULES([CMACS_GOWL], [gowl wlroots-0.19 wayland-server wayland-client])
   else
     # Build libgowl from deps/gowl/ (default)
     PKG_CHECK_MODULES([CMACS_GOWL_DEPS],
-      [wlroots-0.19 wayland-server wayland-protocols pixman-1 xkbcommon \
+      [wlroots-0.19 wayland-server wayland-client wayland-protocols pixman-1 xkbcommon \
        glib-2.0 gobject-2.0 gio-2.0 pango pangocairo])
     CMACS_GOWL_CFLAGS="-I\$(srcdir)/../deps/gowl/src \
       -I\$(srcdir)/../deps/gowl/src/core \
       -I\$(srcdir)/../deps/gowl/src/config \
       -I\$(srcdir)/../deps/gowl/src/module \
+      -DWLR_USE_UNSTABLE \
       $CMACS_GOWL_DEPS_CFLAGS"
     CMACS_GOWL_LIBS="-Wl,--whole-archive \$(srcdir)/../deps/gowl/build/release/libgowl.a \
       -Wl,--no-whole-archive $CMACS_GOWL_DEPS_LIBS"
     CMACS_GOWL_BUNDLED=yes
   fi
   AC_DEFINE([HAVE_CMACS_GOWL], 1, [CMacs Gowl compositor])
-  CMACS_GOWL_OBJ="cmacs-gowl.o"
+  CMACS_GOWL_OBJ="cmacs-gowl.o keyboard-shortcuts-inhibit-v1-protocol.o"
 fi
 AC_SUBST(CMACS_GLIB_OBJ)
 AC_SUBST(CMACS_GI_OBJ)
