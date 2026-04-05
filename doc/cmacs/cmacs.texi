@@ -76,7 +76,9 @@ operations.
 
 @item Bacon Shell
 Runs the Bacon shell inside Emacs via vterm, with the @command{cmacsgi}
-builtin for interacting with CMacs over D-Bus.
+builtin providing 60+ subcommands for buffer management, text editing,
+search/replace, window layout, project navigation, version control,
+and package management---all without writing elisp.
 
 @item Crispy C Scripting
 Evaluates C code strings at runtime via the Crispy library, capturing
@@ -480,66 +482,459 @@ Elisp layer: vterm integration, D-Bus startup.
 
 @cindex cmacsgi
 
-The @command{cmacsgi} command is a Bacon shell builtin provided by a
-dynamically loaded module.  It uses GDBus to call the
-@code{org.cmacs.Editor1} D-Bus interface, giving you full access to
-CMacs's elisp evaluator and GObject Introspection from the shell.
+The @command{cmacsgi} command is a Bacon shell builtin that lets you
+control CMacs from the command line.  It communicates over D-Bus via
+the @code{org.cmacs.Editor1} interface, providing 60+ subcommands
+covering buffer management, text editing, search/replace, window
+layout, project navigation, version control, and more---all without
+writing a single line of elisp.
 
-@section Usage
-
-@example
-cmacsgi eval EXPR              evaluate elisp in CMacs
-cmacsgi find-file PATH         open a file in CMacs
-cmacsgi message TEXT           display a message in CMacs
-cmacsgi require NS [VERSION]   load a GI namespace
-cmacsgi call NS FUNC [ARGS]    call a GI function
-cmacsgi list NS                list functions in a namespace
-cmacsgi --help                 show help
-@end example
-
-@section Examples
+@section Overview
 
 @example
-bacon$ cmacsgi eval "(+ 40 2)"
-42
-
-bacon$ cmacsgi find-file /tmp/notes.txt
-@c (opens the file in CMacs)
-
-bacon$ cmacsgi message "build complete"
-@c (displays in CMacs minibuffer)
-
-bacon$ cmacsgi require GLib 2.0
-bacon$ cmacsgi call GLib get_user_name
-"zach"
-
-bacon$ cmacsgi list GLib | head -5
-access
-aligned_alloc
-aligned_alloc0
-aligned_free
-aligned_free_sized
-
-bacon$ cmacsgi call GLib compute_checksum_for_string 2 hello -1
-"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c..."
+cmacsgi COMMAND [ARGS...]
+cmacsgi --help                 list all commands
+cmacsgi help COMMAND           help for a specific command
 @end example
 
-@section Argument Quoting
-
-For @code{cmacsgi call}, arguments are marshalled to the Lisp reader:
+@noindent
+Output conventions:
 
 @itemize @bullet
 @item
-Numbers are passed through: @code{42} @result{} integer 42.
+Tabular data: tab-separated, one record per line, no headers.
+Pipe to @command{cut}, @command{awk}, @command{grep}.
 @item
-Quoted strings pass through: @code{"hello"} @result{} string.
+Single values: plain text with trailing newline.
 @item
-Bare words are auto-quoted as strings: @code{hello} @result{}
-@code{"hello"}.
+Raw content: buffer text, diffs---no wrapping.
 @item
-Lisp expressions pass through: @code{(+ 1 2)}, @code{'symbol}.
+Errors: @code{cmacsgi SUBCMD: message} to stderr, exit code 1.
+@item
+Side-effect operations (open, save, etc.): silent on success, exit 0.
 @end itemize
 
+@c ----- Buffer Commands -----------------------------------------------
+@section Buffer Commands
+
+@table @code
+@item buf list [-l]
+List open buffers.  Short format prints one buffer name per line.
+With @option{-l}, prints tab-separated: name, file, modified flag,
+size, major mode.
+@example
+bacon$ cmacsgi buf list
+*scratch*
+*Messages*
+main.c
+
+bacon$ cmacsgi buf list -l
+*scratch*	            *	0	lisp-interaction-mode
+main.c	/home/zach/main.c		4096	c-mode
+@end example
+
+@item buf show [NAME]
+Print buffer content to stdout.  If @var{NAME} is omitted, prints the
+current buffer.
+
+@item buf create NAME
+Create an empty buffer.  Prints the buffer name.
+
+@item buf kill NAME
+Kill (close) a buffer.
+
+@item buf save [NAME]
+Save a buffer to its associated file.
+
+@item buf save-as NAME PATH
+Save a buffer to a new file path.
+
+@item buf current
+Print the name of the current buffer.
+
+@item buf switch NAME
+Switch the editor to display @var{NAME}.
+
+@item buf info [NAME]
+Print buffer metadata as key=value pairs:
+@example
+bacon$ cmacsgi buf info main.c
+name=main.c
+file=/home/zach/main.c
+modified=no
+size=4096
+mode=c-mode
+readonly=no
+lines=128
+@end example
+
+@item buf rename OLD NEW
+Rename a buffer.
+@end table
+
+@c ----- File Commands -------------------------------------------------
+@section File Commands
+
+@table @code
+@item open PATH
+Open a file in the editor.  Equivalent to @code{find-file}.
+
+@item save [PATH]
+Save the current buffer.  If @var{PATH} is given, save to that path
+(like ``Save As'').
+
+@item close [NAME]
+Close a buffer.  If @var{NAME} is omitted, closes the current buffer.
+
+@item recent [-n N]
+List recently opened files, one per line.  Defaults to 20.
+@example
+bacon$ cmacsgi recent -n 5
+/home/zach/main.c
+/home/zach/Makefile
+/home/zach/README.md
+/tmp/notes.txt
+/etc/hosts
+@end example
+@end table
+
+@c ----- Text Commands -------------------------------------------------
+@section Text Commands
+
+All text commands accept @option{-b BUF} to target a specific buffer
+(defaults to current buffer).
+
+@table @code
+@item insert [-b BUF] [-p POS] TEXT
+Insert @var{TEXT} at point, or at position @var{POS} if given.
+@example
+bacon$ cmacsgi insert "hello world"
+bacon$ cmacsgi insert -b scratch -p 1 "header text"
+@end example
+
+@item delete [-b BUF] START END
+Delete the region between @var{START} and @var{END}.  Prints the
+deleted text to stdout.
+
+@item line [-b BUF] [N]
+Print the Nth line of the buffer.  If @var{N} is omitted, prints the
+current line.
+@example
+bacon$ cmacsgi line 42
+@end example
+
+@item append [-b BUF] TEXT
+Append @var{TEXT} to the end of the buffer.
+@end table
+
+@c ----- Navigation Commands -------------------------------------------
+@section Navigation Commands
+
+@table @code
+@item point [-b BUF]
+Print the cursor position as @code{LINE:COL}.
+@example
+bacon$ cmacsgi point
+42:12
+@end example
+
+@item goto [-b BUF] LINE[:COL]
+Move the cursor to @var{LINE} and optionally @var{COL}.  Prints the
+resulting position.
+@example
+bacon$ cmacsgi goto 100
+100:0
+bacon$ cmacsgi goto 50:20
+50:20
+@end example
+@end table
+
+@c ----- Search Commands -----------------------------------------------
+@section Search Commands
+
+@table @code
+@item search [-b BUF] [-r] [-c] PATTERN
+Search for @var{PATTERN} in the buffer.  With @option{-r}, use regex.
+With @option{-c}, print the match count instead of the first match.
+Prints @code{LINE:COL:MATCH} for the first match.
+@example
+bacon$ cmacsgi search -r "TODO.*fix"
+12:4:TODO: fix this later
+
+bacon$ cmacsgi search -c "printf"
+7
+@end example
+
+@item replace [-b BUF] [-r] PATTERN REPLACEMENT
+Replace all occurrences of @var{PATTERN} with @var{REPLACEMENT}.
+With @option{-r}, treat @var{PATTERN} as a regex.  Prints the number
+of replacements.
+@example
+bacon$ cmacsgi replace "foo" "bar"
+12
+
+bacon$ cmacsgi replace -r "TODO\|FIXME" "DONE"
+3
+@end example
+
+@item occur [-b BUF] PATTERN
+List all lines matching @var{PATTERN} in grep-style format:
+@code{LINENUM:LINE}.
+@example
+bacon$ cmacsgi occur "#include"
+1:#include <stdio.h>
+2:#include <stdlib.h>
+15:#include "myheader.h"
+@end example
+@end table
+
+@c ----- Window Commands -----------------------------------------------
+@section Window Commands
+
+@table @code
+@item win list
+List windows.  Tab-separated: buffer name, width, height.
+@example
+bacon$ cmacsgi win list
+main.c	80	40
+*compilation*	80	20
+@end example
+
+@item win split [-v]
+Split the current window.  Default is horizontal (above/below).
+@option{-v} splits vertically (side by side).
+
+@item win close
+Close the current window.
+
+@item win only
+Close all windows except the current one.
+
+@item win next
+Cycle to the next window.
+
+@item win balance
+Balance all window sizes equally.
+@end table
+
+@c ----- Configuration Commands ----------------------------------------
+@section Configuration Commands
+
+@table @code
+@item set VAR VALUE
+Set an Emacs variable.  Numbers and @code{t}/@code{nil} are passed
+as-is; other values become strings.
+@example
+bacon$ cmacsgi set fill-column 80
+bacon$ cmacsgi set indent-tabs-mode nil
+@end example
+
+@item get VAR
+Print the value of an Emacs variable.
+@example
+bacon$ cmacsgi get fill-column
+80
+bacon$ cmacsgi get major-mode
+c-mode
+@end example
+
+@item theme NAME
+Load a color theme.
+@example
+bacon$ cmacsgi theme modus-vivendi
+@end example
+
+@item font FAMILY [SIZE]
+Set the default font.  @var{SIZE} is in points (converted to 1/10pt
+internally).
+@example
+bacon$ cmacsgi font "JetBrains Mono" 14
+@end example
+
+@item mode NAME
+Set the major mode.  Appends @code{-mode} automatically if needed.
+@example
+bacon$ cmacsgi mode python
+bacon$ cmacsgi mode org-mode
+@end example
+@end table
+
+@c ----- Project Commands ----------------------------------------------
+@section Project and Build Commands
+
+@table @code
+@item grep PATTERN [DIR]
+Run a recursive grep.  Results appear in a CMacs compilation buffer.
+@example
+bacon$ cmacsgi grep "TODO" src/
+@end example
+
+@item find FILENAME [DIR]
+Find a file by name, searching from @var{DIR} or the current
+directory.  Prints the path.
+
+@item project-root
+Print the project root directory (as determined by Emacs project.el).
+
+@item compile CMD
+Run a compilation command in CMacs.
+@example
+bacon$ cmacsgi compile "make -j8"
+@end example
+
+@item next-error
+Jump to the next compilation error.
+
+@item prev-error
+Jump to the previous compilation error.
+
+@item diag [-b BUF]
+List Flymake diagnostics in @code{FILE:LINE: SEVERITY: MESSAGE}
+format.
+@example
+bacon$ cmacsgi diag
+main.c:42: warning: unused variable
+main.c:87: error: expected semicolon
+@end example
+@end table
+
+@c ----- Bookmark Commands ---------------------------------------------
+@section Bookmark Commands
+
+@table @code
+@item mark set NAME
+Set a bookmark at the current point.
+
+@item mark list
+List all bookmarks.  Tab-separated: name, file, position.
+@example
+bacon$ cmacsgi mark list
+debug-spot	/home/zach/main.c	1234
+review-here	/home/zach/lib.c	567
+@end example
+
+@item mark jump NAME
+Jump to a bookmark.
+
+@item mark del NAME
+Delete a bookmark.
+@end table
+
+@c ----- Clipboard Commands --------------------------------------------
+@section Clipboard Commands
+
+@table @code
+@item copy [-b BUF] START END
+Copy the region between @var{START} and @var{END} to the kill ring.
+
+@item cut [-b BUF] START END
+Cut the region (delete and copy to kill ring).
+
+@item paste [-b BUF]
+Paste from the kill ring at point.
+
+@item clip list [-n N]
+List the last @var{N} kill ring entries (default 10), one per line.
+@end table
+
+@c ----- Version Control Commands --------------------------------------
+@section Version Control Commands
+
+@table @code
+@item vc status
+Show git status (porcelain format).
+@example
+bacon$ cmacsgi vc status
+## master...origin/master
+ M src/main.c
+?? newfile.txt
+@end example
+
+@item vc diff [FILE]
+Show the diff for @var{FILE} or the entire working tree.
+
+@item vc log [-n N] [FILE]
+Show the git log (oneline format).  Defaults to 20 entries.
+@example
+bacon$ cmacsgi vc log -n 5
+abc1234 feat: add cmacsgi expansion
+def5678 fix: buffer list formatting
+@end example
+
+@item vc blame [FILE]
+Show git blame for @var{FILE} or the current buffer's file.
+@end table
+
+@c ----- Package Commands ----------------------------------------------
+@section Package Commands
+
+@table @code
+@item pkg install NAME
+Install an Emacs package.  Refreshes archives if needed.
+
+@item pkg remove NAME
+Remove an installed package.
+
+@item pkg list [-a]
+List installed packages.  With @option{-a}, list all available
+packages.  Tab-separated: name, version, description.
+
+@item pkg refresh
+Refresh package archive contents.
+@end table
+
+@c ----- GI Commands ---------------------------------------------------
+@section GObject Introspection Commands
+
+@table @code
+@item require NS [VERSION]
+Load a GI namespace (typelib).
+@example
+bacon$ cmacsgi require GLib 2.0
+@end example
+
+@item call NS FUNC [ARGS...]
+Call a GI function.  Arguments are auto-quoted for the Lisp reader:
+numbers pass through, bare words become strings, quoted strings and
+s-expressions pass through.
+@example
+bacon$ cmacsgi call GLib get_user_name
+"zach"
+bacon$ cmacsgi call GLib compute_checksum_for_string 2 hello -1
+"2cf24dba..."
+@end example
+
+@item list NS
+List all functions in a namespace, one per line.
+@end table
+
+@c ----- Eval Command --------------------------------------------------
+@section Eval Command
+
+@table @code
+@item eval EXPR
+Evaluate an arbitrary elisp expression and print the result.  This is
+the escape hatch for anything not covered by the other commands.
+@example
+bacon$ cmacsgi eval "(+ 40 2)"
+42
+bacon$ cmacsgi eval "(format-time-string \"%Y-%m-%d\")"
+"2026-04-04"
+@end example
+@end table
+
+@c ----- Other Original Commands ---------------------------------------
+@section Other Commands
+
+@table @code
+@item find-file PATH
+Open a file (alias for @code{open}).
+
+@item message TEXT
+Display a message in the CMacs minibuffer.
+@end table
+
+@c ----- Architecture --------------------------------------------------
 @section Architecture
 
 @example
@@ -555,6 +950,12 @@ Lisp expressions pass through: @code{(+ 1 2)}, @code{'symbol}.
        |
   elisp eval / GI primitives / file ops
 @end example
+
+@noindent
+Most subcommands build an elisp form on the client side and call the
+D-Bus @code{Eval} method.  The user never sees or writes elisp---the
+@command{cmacsgi} command translates shell arguments into the
+appropriate Lisp forms.
 
 @section Environment Variables
 
@@ -573,13 +974,37 @@ Passed to Bacon at startup.  CMacs sets this to
 
 @table @file
 @item cmacs/bacon/modules/cmacs-gi-command.c
-The @command{cmacsgi} BaconCommand implementation (GDBus proxy calls).
+Core dispatch table, shared utilities, original subcommands.
+@item cmacs/bacon/modules/cmacs-gi-cmd-internal.h
+Shared types, handler typedefs, utility declarations.
+@item cmacs/bacon/modules/cmacs-gi-cmd-buf.c
+Buffer subcommands (buf list, show, create, kill, ...).
+@item cmacs/bacon/modules/cmacs-gi-cmd-file.c
+File subcommands (open, save, close, recent).
+@item cmacs/bacon/modules/cmacs-gi-cmd-text.c
+Text editing subcommands (insert, delete, line, append).
+@item cmacs/bacon/modules/cmacs-gi-cmd-nav.c
+Navigation subcommands (point, goto).
+@item cmacs/bacon/modules/cmacs-gi-cmd-search.c
+Search subcommands (search, replace, occur).
+@item cmacs/bacon/modules/cmacs-gi-cmd-win.c
+Window subcommands (win list, split, close, ...).
+@item cmacs/bacon/modules/cmacs-gi-cmd-config.c
+Configuration subcommands (set, get, theme, font, mode).
+@item cmacs/bacon/modules/cmacs-gi-cmd-project.c
+Project/build subcommands (grep, find, compile, diag, ...).
+@item cmacs/bacon/modules/cmacs-gi-cmd-mark.c
+Bookmark subcommands (mark set, list, jump, del).
+@item cmacs/bacon/modules/cmacs-gi-cmd-clip.c
+Clipboard subcommands (copy, cut, paste, clip list).
+@item cmacs/bacon/modules/cmacs-gi-cmd-vc.c
+Version control subcommands (vc status, diff, log, blame).
+@item cmacs/bacon/modules/cmacs-gi-cmd-pkg.c
+Package subcommands (pkg install, remove, list, refresh).
 @item cmacs/bacon/modules/cmacs-gi-command.h
-Header.
+GObject type declaration.
 @item cmacs/bacon/modules/cmacs-gi-module.c
 BaconModule wrapper (registers the builtin on startup).
-@item cmacs/bacon/modules/cmacs-gi-module.h
-Header.
 @item cmacs/bacon/modules/Makefile
 Builds @file{cmacs_gi.so}.  Requires @code{gio-2.0}.
 @end table

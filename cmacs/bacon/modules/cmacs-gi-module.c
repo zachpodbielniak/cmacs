@@ -10,7 +10,9 @@
  * elisp evaluation, and file operations.
  */
 
+#ifndef BACON_COMPILATION
 #define BACON_COMPILATION
+#endif
 #include "cmacs-gi-module.h"
 #include "cmacs-gi-command.h"
 #include <interfaces/bacon-startup-shutdown.h>

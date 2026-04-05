@@ -8,7 +8,9 @@
 #ifndef CMACS_GI_MODULE_H
 #define CMACS_GI_MODULE_H
 
+#ifndef BACON_COMPILATION
 #define BACON_COMPILATION
+#endif
 #include <glib-object.h>
 #include <module/bacon-module.h>
 

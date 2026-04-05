@@ -10,7 +10,9 @@
 #ifndef CMACS_GI_COMMAND_H
 #define CMACS_GI_COMMAND_H
 
+#ifndef BACON_COMPILATION
 #define BACON_COMPILATION
+#endif
 #include <glib-object.h>
 #include <commands/bacon-command.h>
 
