@@ -89,6 +89,28 @@ compositor's focus-follows-mouse.
 - *Window hidden*: overlay is hidden via =gowl-set-client-visible=.
   Switching back to the buffer re-shows it.
 
+** Keyboard Focus (ESC Escape-Hatch)
+
+Embedded clients receive keyboard input directly from the compositor.
+An ESC-based escape hatch lets you switch between the embedded client
+and Emacs:
+
+- *ESC* (single press): returns keyboard focus to Emacs.  Subsequent
+  keys are processed by Emacs (e.g. Evil normal-mode commands).
+- *ESC ESC* (double press): sends a single ESC to the embedded client
+  (useful for apps that use ESC, like vim or bash with =set -o vi=).
+- *i / a* (in Evil normal state): gives keyboard focus back to the
+  embedded client.  Also works with =I=, =A=, =o=, =O=, and =RET=.
+- *Click* on the embedded area: also returns keyboard focus to the
+  embedded client.
+
+The escape hatch uses a 200ms timer to distinguish single from double
+ESC.  Pressing ESC followed by another key within the timeout sends
+the second key to Emacs.
+
+The underlying primitive =gowl-embed-focus= can be called from Elisp
+to programmatically give keyboard focus to any embedded client.
+
 * C Primitives
 
 Core compositor control:
@@ -124,6 +146,7 @@ Embedding primitives:
 | =gowl-set-client-border-width= | Set client border width (0 to hide borders)   |
 | =gowl-reparent-client=        | Reparent client to a scene layer               |
 | =gowl-prefloat-pid=           | Pre-register PID for float-on-map              |
+| =gowl-embed-focus=            | Give keyboard focus to an embedded client      |
 
 * Customization
 

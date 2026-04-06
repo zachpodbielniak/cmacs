@@ -1552,6 +1552,34 @@ by PID), kills the placeholder buffer.
 Overlay is hidden.  Switching back to the buffer re-shows it.
 @end table
 
+@subsection Keyboard Focus (ESC Escape-Hatch)
+
+Embedded clients receive keyboard input directly from the compositor.
+An ESC-based escape hatch lets you switch between the embedded client
+and Emacs:
+
+@table @strong
+@item ESC (single press)
+Returns keyboard focus to Emacs.  Subsequent keys are processed by
+Emacs (e.g.@: Evil normal-mode commands).
+@item ESC ESC (double press)
+Sends a single ESC to the embedded client (useful for apps that use
+ESC, like vim or bash with @code{set -o vi}).
+@item i / a (Evil normal state)
+Gives keyboard focus back to the embedded client.  Also works with
+@kbd{I}, @kbd{A}, @kbd{o}, @kbd{O}, and @kbd{RET}.
+@item Click
+Clicking on the embedded area also returns keyboard focus to the
+embedded client.
+@end table
+
+The escape hatch uses a 200@dmn{ms} timer to distinguish single from
+double ESC@.  Pressing ESC followed by another key within the timeout
+sends the second key to Emacs.
+
+The underlying primitive @code{gowl-embed-focus} can be called from
+Elisp to programmatically give keyboard focus to any embedded client.
+
 @section C Primitives
 
 Core compositor control:
@@ -1611,6 +1639,8 @@ Set client border width (0 to hide borders).
 Reparent client to a scene layer.
 @item gowl-prefloat-pid PID
 Pre-register PID for float-on-map.
+@item gowl-embed-focus CLIENT
+Give keyboard focus to an embedded client.
 @end table
 
 @section Customization

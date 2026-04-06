@@ -38,14 +38,22 @@
 #endif
 
 #include <wlr/types/wlr_compositor.h>
+#include <wlr/types/wlr_keyboard.h>
 #include <wlr/types/wlr_seat.h>
+#include <xkbcommon/xkbcommon-keysyms.h>
 #include <wlr/render/wlr_texture.h>
 #include <drm_fourcc.h>
 #include <cairo.h>
+#include <pthread.h>
 
 /* Persistent compositor instance.
    NOT static — cmacs-eval-dispatch.c accesses this for gowl dispatch. */
 GowlCompositor *cmacs_gowl_compositor = NULL;
+
+/* Mutex guarding wlroots seat state.  The dispatch thread holds it
+   during wl_event_loop_dispatch(); GDK event handlers and DEFUNs
+   acquire it before calling wlroots seat functions. */
+static pthread_mutex_t cmacs_gowl_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* ── Embed view (GTK widget inside Emacs frame) ────────────────────────
  *
@@ -75,6 +83,12 @@ struct gowl_embed_view
 };
 
 static GHashTable *embed_views = NULL; /* GowlClient* -> gowl_embed_view* */
+
+/* ── ESC escape-hatch state (used by compositor intercept) ──────────── */
+enum { EMBED_KB_NORMAL, EMBED_KB_ESC_PENDING };
+static int cmacs_embed_key_state = EMBED_KB_NORMAL;
+static gboolean cmacs_embed_esc_release_pending = FALSE;
+static struct wl_event_source *cmacs_embed_wl_esc_timer = NULL;
 
 static void
 gowl_embed_view_capture (struct gowl_embed_view *view)
@@ -212,19 +226,26 @@ gowl_embed_view_event (GtkWidget *widget, GdkEvent *event, gpointer data)
   switch (event->type)
     {
     case GDK_ENTER_NOTIFY:
+      /* Pointer focus only — keyboard focus is given on click so that
+         ESC can reliably return control to Emacs without hover
+         immediately re-focusing the embedded client. */
+      pthread_mutex_lock (&cmacs_gowl_mutex);
       wlr_seat_pointer_notify_enter (seat, surface,
                                      event->crossing.x, event->crossing.y);
-      wlr_seat_keyboard_notify_enter (seat, surface,
-                                      NULL, 0, NULL);
+      pthread_mutex_unlock (&cmacs_gowl_mutex);
       return TRUE;
 
     case GDK_LEAVE_NOTIFY:
+      pthread_mutex_lock (&cmacs_gowl_mutex);
       wlr_seat_pointer_notify_clear_focus (seat);
+      pthread_mutex_unlock (&cmacs_gowl_mutex);
       return TRUE;
 
     case GDK_MOTION_NOTIFY:
+      pthread_mutex_lock (&cmacs_gowl_mutex);
       wlr_seat_pointer_notify_motion (seat, time_ms,
                                       event->motion.x, event->motion.y);
+      pthread_mutex_unlock (&cmacs_gowl_mutex);
       return TRUE;
 
     case GDK_BUTTON_PRESS:
@@ -238,7 +259,17 @@ gowl_embed_view_event (GtkWidget *widget, GdkEvent *event, gpointer data)
         state = (event->type == GDK_BUTTON_PRESS)
           ? WL_POINTER_BUTTON_STATE_PRESSED
           : WL_POINTER_BUTTON_STATE_RELEASED;
+
+        pthread_mutex_lock (&cmacs_gowl_mutex);
         wlr_seat_pointer_notify_button (seat, time_ms, btn, state);
+        /* Click gives keyboard focus to the embedded client and
+           GTK focus to the drawing area (re-enters the embed). */
+        if (event->type == GDK_BUTTON_PRESS)
+          {
+            wlr_seat_keyboard_notify_enter (seat, surface, NULL, 0, NULL);
+            gtk_widget_grab_focus (view->widget);
+          }
+        pthread_mutex_unlock (&cmacs_gowl_mutex);
         return TRUE;
       }
 
@@ -259,6 +290,7 @@ gowl_embed_view_event (GtkWidget *widget, GdkEvent *event, gpointer data)
         else if (event->scroll.direction == GDK_SCROLL_RIGHT)
           dx = 15.0;
 
+        pthread_mutex_lock (&cmacs_gowl_mutex);
         wlr_seat_pointer_notify_axis (seat, time_ms,
                                       WL_POINTER_AXIS_VERTICAL_SCROLL,
                                       dy,
@@ -272,20 +304,24 @@ gowl_embed_view_event (GtkWidget *widget, GdkEvent *event, gpointer data)
                                         (int32_t) dx,
                                         WL_POINTER_AXIS_SOURCE_WHEEL,
                                         WL_POINTER_AXIS_RELATIVE_DIRECTION_IDENTICAL);
+        pthread_mutex_unlock (&cmacs_gowl_mutex);
         return TRUE;
       }
 
     case GDK_KEY_PRESS:
     case GDK_KEY_RELEASE:
       {
-        /* hardware_keycode is the Linux evdev scancode + 8.
-           Wayland keycodes are evdev scancodes. */
+        /* Keyboard events normally arrive via wlroots on_kb_key, not
+           GDK.  This handler only fires if the drawing area somehow
+           gets GTK keyboard focus.  Forward to the embedded client. */
         uint32_t keycode = event->key.hardware_keycode - 8;
-        enum wl_keyboard_key_state state =
+        enum wl_keyboard_key_state wl_state =
           (event->type == GDK_KEY_PRESS)
           ? WL_KEYBOARD_KEY_STATE_PRESSED
           : WL_KEYBOARD_KEY_STATE_RELEASED;
-        wlr_seat_keyboard_notify_key (seat, time_ms, keycode, state);
+        pthread_mutex_lock (&cmacs_gowl_mutex);
+        wlr_seat_keyboard_notify_key (seat, time_ms, keycode, wl_state);
+        pthread_mutex_unlock (&cmacs_gowl_mutex);
         return TRUE;
       }
 
@@ -442,12 +478,12 @@ cmacs_gowl_inhibit_parent_shortcuts (GowlCompositor *comp)
  * mutex is released so DEFUNs can proceed without delay.
  */
 
-#include <pthread.h>
 #include <poll.h>
 
 static pthread_t cmacs_gowl_thread;
 static volatile int cmacs_gowl_thread_running = 0;
-static pthread_mutex_t cmacs_gowl_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+/* cmacs_gowl_mutex is defined near the top of this file. */
 
 static void *
 cmacs_gowl_dispatch_thread (void *data)
@@ -483,11 +519,33 @@ cmacs_gowl_dispatch_thread (void *data)
   return NULL;
 }
 
+/* Forward declarations for ESC intercept (defined after embed helpers). */
+static int cmacs_embed_wl_esc_timeout (void *data);
+static gboolean cmacs_gowl_key_intercept (GowlCompositor *comp,
+                                           guint modifiers, guint keysym,
+                                           guint keycode, gboolean pressed,
+                                           gpointer data);
+
 void
 cmacs_gowl_start_thread (void)
 {
   if (cmacs_gowl_thread_running || cmacs_gowl_compositor == NULL)
     return;
+
+  /* Register ESC intercept and timer before the dispatch thread
+     starts processing keyboard events.  This runs from emacs.c
+     --gowl handler, before Elisp initializes. */
+  if (cmacs_embed_wl_esc_timer == NULL)
+    {
+      struct wl_event_loop *loop =
+        gowl_compositor_get_event_loop (cmacs_gowl_compositor);
+      gowl_compositor_set_key_intercept (cmacs_gowl_compositor,
+                                         cmacs_gowl_key_intercept,
+                                         NULL);
+      cmacs_embed_wl_esc_timer =
+        wl_event_loop_add_timer (loop, cmacs_embed_wl_esc_timeout,
+                                 cmacs_gowl_compositor);
+    }
 
   cmacs_gowl_thread_running = 1;
   if (pthread_create (&cmacs_gowl_thread, NULL,
@@ -568,6 +626,145 @@ gowl_resolve_client (Lisp_Object client)
   while (0)
 
 
+/* ── Compositor-level ESC escape-hatch ───��────────────────────────────
+ *
+ * Keyboard events for embedded clients travel through wlroots
+ * on_kb_key, NOT through GDK.  The intercept callback fires in
+ * the compositor dispatch thread before keys are forwarded to the
+ * focused Wayland client.
+ */
+
+/* Check whether the seat keyboard focus is on an embedded client. */
+static gboolean
+embedded_client_has_kb_focus (GowlCompositor *comp)
+{
+  struct wlr_seat *seat = gowl_compositor_get_wlr_seat (comp);
+  struct wlr_surface *focused;
+  GList *clients, *l;
+
+  if (seat == NULL)
+    return FALSE;
+  focused = seat->keyboard_state.focused_surface;
+  if (focused == NULL)
+    return FALSE;
+
+  clients = gowl_compositor_get_clients (comp);
+  for (l = clients; l != NULL; l = l->next)
+    {
+      GowlClient *c = (GowlClient *) l->data;
+      if (gowl_client_get_wlr_surface (c) == focused
+          && gowl_client_get_embedded (c))
+        return TRUE;
+    }
+  return FALSE;
+}
+
+/* Redirect seat keyboard focus to the first non-embedded client (Emacs). */
+static void
+redirect_kb_to_emacs (GowlCompositor *comp)
+{
+  struct wlr_seat *seat = gowl_compositor_get_wlr_seat (comp);
+  struct wlr_keyboard *kb;
+  GList *clients, *l;
+
+  if (seat == NULL)
+    return;
+
+  clients = gowl_compositor_get_clients (comp);
+  for (l = clients; l != NULL; l = l->next)
+    {
+      GowlClient *c = (GowlClient *) l->data;
+      struct wlr_surface *surf;
+      if (gowl_client_get_embedded (c))
+        continue;
+      surf = gowl_client_get_wlr_surface (c);
+      if (surf == NULL)
+        continue;
+      kb = wlr_seat_get_keyboard (seat);
+      if (kb != NULL)
+        wlr_seat_keyboard_notify_enter (seat, surf,
+                                        kb->keycodes, kb->num_keycodes,
+                                        &kb->modifiers);
+      else
+        wlr_seat_keyboard_notify_enter (seat, surf, NULL, 0, NULL);
+      return;
+    }
+}
+
+/* Timer callback (wl_event_loop): ESC pressed and user waited. */
+static int
+cmacs_embed_wl_esc_timeout (void *data)
+{
+  GowlCompositor *comp = (GowlCompositor *) data;
+  cmacs_embed_key_state = EMBED_KB_NORMAL;
+  redirect_kb_to_emacs (comp);
+  return 0;
+}
+
+/* Key intercept: called from on_kb_key() in the compositor dispatch
+   thread before unhandled keys are forwarded to the focused client. */
+static gboolean
+cmacs_gowl_key_intercept (GowlCompositor *comp,
+                           guint           modifiers,
+                           guint           keysym,
+                           guint           keycode,
+                           gboolean        pressed,
+                           gpointer        data)
+{
+  (void) modifiers; (void) keycode; (void) data;
+
+  /* Only act when an embedded client has keyboard focus. */
+  if (!embedded_client_has_kb_focus (comp))
+    {
+      cmacs_embed_key_state = EMBED_KB_NORMAL;
+      cmacs_embed_esc_release_pending = FALSE;
+      return FALSE;
+    }
+
+  /* Consume the ESC release matching a consumed ESC press. */
+  if (!pressed && keysym == XKB_KEY_Escape && cmacs_embed_esc_release_pending)
+    {
+      cmacs_embed_esc_release_pending = FALSE;
+      return TRUE;
+    }
+
+  /* Only act on key presses. */
+  if (!pressed)
+    return FALSE;
+
+  switch (cmacs_embed_key_state)
+    {
+    case EMBED_KB_NORMAL:
+      if (keysym == XKB_KEY_Escape)
+        {
+          cmacs_embed_key_state = EMBED_KB_ESC_PENDING;
+          cmacs_embed_esc_release_pending = TRUE;
+          if (cmacs_embed_wl_esc_timer != NULL)
+            wl_event_source_timer_update (cmacs_embed_wl_esc_timer, 200);
+          return TRUE; /* consume ESC */
+        }
+      return FALSE; /* other keys pass to embedded client */
+
+    case EMBED_KB_ESC_PENDING:
+      if (cmacs_embed_wl_esc_timer != NULL)
+        wl_event_source_timer_update (cmacs_embed_wl_esc_timer, 0);
+      cmacs_embed_key_state = EMBED_KB_NORMAL;
+
+      if (keysym == XKB_KEY_Escape)
+        return FALSE; /* double-ESC: let ESC through to embedded client */
+
+      /* ESC + other key: redirect focus to Emacs, let key through.
+         on_kb_key will forward it to the now-focused Emacs client. */
+      redirect_kb_to_emacs (comp);
+      return FALSE;
+
+    default:
+      break;
+    }
+
+  return FALSE;
+}
+
 /* ══════════════════════════════════════════════════════════════════════
  * COMPOSITOR LIFECYCLE
  * ══════════════════════════════════════════════════════════════════════ */
@@ -581,10 +778,23 @@ the event loop source and returns. */)
 {
   GError *err = NULL;
 
-  /* If already started (e.g. via --gowl early init), just make
-     sure the dispatch thread is running. */
+  /* If already started (e.g. via --gowl early init), just make sure
+     the dispatch thread is running.  The intercept and timer are
+     registered in cmacs_gowl_start_thread. */
   if (cmacs_gowl_compositor != NULL)
     {
+      if (cmacs_embed_wl_esc_timer == NULL)
+        {
+          struct wl_event_loop *loop =
+            gowl_compositor_get_event_loop (cmacs_gowl_compositor);
+          gowl_compositor_set_key_intercept (cmacs_gowl_compositor,
+                                             cmacs_gowl_key_intercept,
+                                             NULL);
+          cmacs_embed_wl_esc_timer =
+            wl_event_loop_add_timer (loop,
+                                     cmacs_embed_wl_esc_timeout,
+                                     cmacs_gowl_compositor);
+        }
       if (!cmacs_gowl_thread_running)
         cmacs_gowl_start_thread ();
       return Qt;
@@ -650,6 +860,18 @@ the event loop source and returns. */)
       g_clear_object (&cmacs_gowl_compositor);
       xsignal1 (Qgowl_error, msg);
     }
+
+  /* ESC escape-hatch: intercept ESC in the compositor dispatch thread
+     to redirect keyboard focus from embedded clients back to Emacs. */
+  gowl_compositor_set_key_intercept (cmacs_gowl_compositor,
+                                     cmacs_gowl_key_intercept, NULL);
+  {
+    struct wl_event_loop *loop =
+      gowl_compositor_get_event_loop (cmacs_gowl_compositor);
+    cmacs_embed_wl_esc_timer =
+      wl_event_loop_add_timer (loop, cmacs_embed_wl_esc_timeout,
+                               cmacs_gowl_compositor);
+  }
 
   cmacs_gowl_start_thread ();
 
@@ -1369,6 +1591,51 @@ DEFUN ("gowl-embed-view-p", Fgowl_embed_view_p,
     return Qnil;
 
   return g_hash_table_lookup (embed_views, c) != NULL ? Qt : Qnil;
+}
+
+DEFUN ("gowl-embed-focus", Fgowl_embed_focus,
+       Sgowl_embed_focus, 1, 1, 0,
+       doc: /* Give keyboard focus to embedded CLIENT.
+This allows keyboard input to reach the embedded Wayland client.
+Use this to re-enter an embedded client after ESC returned
+control to Emacs.  CLIENT is a gowl client object. */)
+  (Lisp_Object client)
+{
+  GowlClient *c = gowl_resolve_client (client);
+  struct wlr_seat *seat;
+  struct wlr_surface *surf;
+  struct wlr_keyboard *kb;
+  struct gowl_embed_view *view;
+
+  if (cmacs_gowl_compositor == NULL)
+    error ("gowl compositor not running");
+  if (c == NULL)
+    error ("Invalid client");
+
+  seat = gowl_compositor_get_wlr_seat (cmacs_gowl_compositor);
+  surf = gowl_client_get_wlr_surface (c);
+  if (seat == NULL || surf == NULL)
+    return Qnil;
+
+  /* Also grab GTK focus for the drawing area if it exists. */
+  if (embed_views != NULL)
+    {
+      view = g_hash_table_lookup (embed_views, c);
+      if (view != NULL && view->widget != NULL)
+        gtk_widget_grab_focus (view->widget);
+    }
+
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  kb = wlr_seat_get_keyboard (seat);
+  if (kb != NULL)
+    wlr_seat_keyboard_notify_enter (seat, surf,
+                                    kb->keycodes, kb->num_keycodes,
+                                    &kb->modifiers);
+  else
+    wlr_seat_keyboard_notify_enter (seat, surf, NULL, 0, NULL);
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+
+  return Qt;
 }
 
 
@@ -2118,6 +2385,7 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_embed_move_view);
   defsubr (&Sgowl_embed_destroy_view);
   defsubr (&Sgowl_embed_view_p);
+  defsubr (&Sgowl_embed_focus);
 
   /* Process control */
   defsubr (&Sgowl_spawn);

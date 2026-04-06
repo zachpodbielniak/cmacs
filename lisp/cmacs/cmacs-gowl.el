@@ -264,13 +264,33 @@ When disabled, stops the compositor."
 (define-derived-mode gowl-embed-mode special-mode "GowlEmbed"
   "Major mode for buffers displaying an embedded Wayland client.
 The buffer is a placeholder; the actual client renders as a
-compositor overlay positioned over this window's body area."
+compositor overlay positioned over this window's body area.
+
+In Evil, pressing \\`i' or \\`a' gives keyboard focus to the
+embedded client.  Pressing ESC in the embedded client returns
+control to Emacs."
   :group 'cmacs-gowl
   (setq-local cursor-type nil)
   (setq-local mode-line-buffer-identification
               (propertize "%b" 'face 'mode-line-buffer-id))
   (when (boundp 'doom-real-buffer-p)
     (setq-local doom-real-buffer-p t)))
+
+(with-eval-after-load 'evil
+  (eval '(evil-define-key 'normal gowl-embed-mode-map
+           "i" #'gowl-embed--enter-client
+           "a" #'gowl-embed--enter-client
+           "A" #'gowl-embed--enter-client
+           "I" #'gowl-embed--enter-client
+           "o" #'gowl-embed--enter-client
+           "O" #'gowl-embed--enter-client
+           (kbd "RET") #'gowl-embed--enter-client)))
+
+(defun gowl-embed--enter-client ()
+  "Give keyboard focus to the embedded client in the current buffer."
+  (interactive)
+  (when gowl-embedded-client
+    (gowl-embed-focus gowl-embedded-client)))
 
 (defvar-local gowl-embedded-client nil
   "The gowl client embedded in this buffer, or nil.")
