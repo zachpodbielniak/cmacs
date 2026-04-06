@@ -244,5 +244,245 @@ When disabled, stops the compositor."
         (message "No monitors detected")
       (message "Gowl: %d monitor(s) connected" (length monitors)))))
 
+
+;;; ── Client embedding ──────────────────────────────────────────────
+;;
+;; Embeds Wayland clients into Emacs buffer windows.  A GtkDrawingArea
+;; is added to the Emacs frame's GTK container and positioned over the
+;; buffer window's body area.  The C layer reads pixels from the
+;; client's wlr_texture on each surface commit and paints them into
+;; the GtkDrawingArea via Cairo.  Mouse and keyboard events on the
+;; widget are forwarded to the Wayland client through the compositor's
+;; wlr_seat.
+;;
+;; Compositor overlay: the embedded client's scene node is reparented
+;; into Emacs's scene tree and positioned over the window body area.
+;; The compositor renders it directly — no pixel copying, no EGL
+;; conflicts, no swapchain issues.  Input is routed by the
+;; compositor's focus-follows-mouse.
+
+(define-derived-mode gowl-embed-mode special-mode "GowlEmbed"
+  "Major mode for buffers displaying an embedded Wayland client.
+The buffer is a placeholder; the actual client renders as a
+compositor overlay positioned over this window's body area."
+  :group 'cmacs-gowl
+  (setq-local cursor-type nil)
+  (setq-local mode-line-buffer-identification
+              (propertize "%b" 'face 'mode-line-buffer-id))
+  (when (boundp 'doom-real-buffer-p)
+    (setq-local doom-real-buffer-p t)))
+
+(defvar-local gowl-embedded-client nil
+  "The gowl client embedded in this buffer, or nil.")
+
+(defvar gowl-embed--pending nil
+  "Alist of (PID . WINDOW) for spawned clients awaiting map.")
+
+(defvar gowl-embed--pending-timer nil
+  "Timer polling for pending embeds.")
+
+(defvar gowl-embed--health-timer nil
+  "Timer checking if embedded clients are still alive.")
+
+(defvar gowl-embed--syncing nil
+  "Non-nil while `gowl-embed--sync-all' is running (recursion guard).")
+
+(defun gowl-embed--body-geometry (window)
+  "Return (X Y W H) of WINDOW's body area in frame-relative pixels."
+  (let ((edges (window-body-pixel-edges window)))
+    (list (nth 0 edges)
+          (nth 1 edges)
+          (- (nth 2 edges) (nth 0 edges))
+          (- (nth 3 edges) (nth 1 edges)))))
+
+(defun gowl-embed--sync-position (window)
+  "Reposition the embedded client overlay for WINDOW."
+  (when-let* ((buf (window-buffer window))
+              (client (buffer-local-value 'gowl-embedded-client buf)))
+    (let ((geom (gowl-embed--body-geometry window)))
+      (when (and (> (nth 2 geom) 0) (> (nth 3 geom) 0))
+        (gowl-position-embedded client
+                                (nth 0 geom) (nth 1 geom)
+                                (nth 2 geom) (nth 3 geom))
+        (gowl-set-client-visible client t)))))
+
+(defun gowl-embed--sync-all ()
+  "Sync position and visibility for all embedded clients."
+  (when (and (gowl-running-p) (not gowl-embed--syncing))
+    (let ((gowl-embed--syncing t))
+      (dolist (buf (buffer-list))
+        (when-let ((client (buffer-local-value 'gowl-embedded-client buf)))
+          (let ((win (get-buffer-window buf t)))
+            (if win
+                (gowl-embed--sync-position win)
+              ;; Buffer not displayed — hide the overlay.
+              (condition-case nil
+                  (gowl-set-client-visible client nil)
+                (error nil)))))))))
+
+(defun gowl-embed--do-embed (client window)
+  "Embed CLIENT into WINDOW via compositor scene graph.
+Reparents CLIENT into Emacs's scene tree so its position is
+frame-relative, then positions it over the window body area."
+  (with-selected-window window
+    (setq-local gowl-embedded-client client)
+    ;; Mark as embedded so arrange() skips it.
+    (gowl-set-client-embedded client t)
+    (gowl-set-client-border-width client 0)
+    ;; Reparent into Emacs's scene tree — positions become frame-relative.
+    (when-let ((emacs-client (gowl-emacs-client)))
+      (gowl-embed-into client emacs-client))
+    ;; Position over the window body and show.
+    (let ((geom (gowl-embed--body-geometry window)))
+      (when (and (> (nth 2 geom) 0) (> (nth 3 geom) 0))
+        (gowl-position-embedded client
+                                (nth 0 geom) (nth 1 geom)
+                                (nth 2 geom) (nth 3 geom))
+        (gowl-set-client-visible client t)))
+    (gowl-embed--ensure-health-timer)))
+
+(defun gowl-embed--setup-buffer (buf command)
+  "Initialize BUF as an embed buffer for COMMAND."
+  (with-current-buffer buf
+    (gowl-embed-mode)
+    (let ((inhibit-read-only t))
+      (insert (propertize (format " Embedding %s…" command)
+                          'face 'shadow)))))
+
+(defun gowl-embed--display-buffer (buf window)
+  "Display BUF in WINDOW and mark it dedicated."
+  (set-window-buffer window buf)
+  (set-window-dedicated-p window t)
+  (when (bound-and-true-p persp-mode)
+    (persp-add-buffer buf)))
+
+(defun gowl-embed--check-pending ()
+  "Match pending PIDs to newly mapped gowl clients."
+  (if (null gowl-embed--pending)
+      (progn
+        (when gowl-embed--pending-timer
+          (cancel-timer gowl-embed--pending-timer)
+          (setq gowl-embed--pending-timer nil)))
+    (let ((clients (gowl-list-clients)))
+      (dolist (entry (copy-sequence gowl-embed--pending))
+        (let* ((pid (car entry))
+               (window (cdr entry))
+               (client (seq-find
+                        (lambda (c) (= (gowl-client-pid c) pid))
+                        clients)))
+          (when client
+            (setq gowl-embed--pending (delq entry gowl-embed--pending))
+            (when (window-live-p window)
+              (gowl-embed--do-embed client window))))))))
+
+(defun gowl-embed--start-pending-timer ()
+  "Start the timer that checks for pending embeds."
+  (unless gowl-embed--pending-timer
+    (setq gowl-embed--pending-timer
+          (run-with-timer 0.1 0.1 #'gowl-embed--check-pending))))
+
+(defun gowl-embed--check-health ()
+  "Kill embed buffers whose clients have exited.
+Compares by PID rather than object identity because
+`gowl-list-clients' allocates fresh wrappers each call."
+  (let ((client-pids (when (gowl-running-p)
+                       (mapcar #'gowl-client-pid (gowl-list-clients))))
+        (has-embeds nil))
+    (dolist (buf (buffer-list))
+      (when-let ((client (buffer-local-value 'gowl-embedded-client buf)))
+        (if (memq (gowl-client-pid client) client-pids)
+            (setq has-embeds t)
+          (with-current-buffer buf
+            (condition-case nil
+                (gowl-set-client-visible client nil)
+              (error nil))
+            (setq gowl-embedded-client nil)
+            (let ((win (get-buffer-window buf t)))
+              (when win (set-window-dedicated-p win nil)))
+            (kill-buffer buf)))))
+    (unless has-embeds
+      (when gowl-embed--health-timer
+        (cancel-timer gowl-embed--health-timer)
+        (setq gowl-embed--health-timer nil)))))
+
+(defun gowl-embed--ensure-health-timer ()
+  "Start the health-check timer if not running."
+  (unless gowl-embed--health-timer
+    (setq gowl-embed--health-timer
+          (run-with-timer 1 1 #'gowl-embed--check-health))))
+
+(defun gowl-embed--on-kill-buffer ()
+  "Close the embedded client when its buffer is killed."
+  (when gowl-embedded-client
+    (let ((win (get-buffer-window (current-buffer) t)))
+      (when win (set-window-dedicated-p win nil)))
+    (condition-case nil
+        (progn
+          (gowl-set-client-visible gowl-embedded-client nil)
+          (gowl-set-client-embedded gowl-embedded-client nil)
+          (gowl-close-client gowl-embedded-client))
+      (error nil))
+    (setq gowl-embedded-client nil)))
+
+(add-hook 'kill-buffer-hook #'gowl-embed--on-kill-buffer)
+(add-hook 'window-configuration-change-hook #'gowl-embed--sync-all)
+
+;;;###autoload
+(defun gowl-embed (command)
+  "Spawn COMMAND and embed it in the current Emacs window.
+The Wayland client is reparented into Emacs's compositor scene
+tree and positioned over the window body area.  Modeline, fringes,
+and header line remain visible.  The compositor's focus-follows-mouse
+routes input to the client when the pointer is over it."
+  (interactive "sEmbed: ")
+  (unless (gowl-running-p)
+    (user-error "Gowl compositor is not running"))
+  (let* ((pid (gowl-spawn command))
+         (buf (generate-new-buffer (format "*gowl: %s*" command)))
+         (win (selected-window)))
+    (gowl-prefloat-pid pid)
+    (gowl-embed--setup-buffer buf command)
+    (gowl-embed--display-buffer buf win)
+    (push (cons pid win) gowl-embed--pending)
+    (gowl-embed--start-pending-timer)))
+
+;;;###autoload
+(defun gowl-embed-client (client)
+  "Embed an existing gowl CLIENT in the current Emacs window."
+  (interactive
+   (list (let* ((clients (gowl-list-clients))
+                (candidates
+                 (mapcar (lambda (c)
+                           (let ((info (gowl-client-info c)))
+                             (cons (format "%s — %s"
+                                           (cdr (assq 'title info))
+                                           (cdr (assq 'app-id info)))
+                                   c)))
+                         clients))
+                (choice (completing-read "Embed client: " candidates nil t)))
+           (cdr (assoc choice candidates)))))
+  (unless (gowl-running-p)
+    (user-error "Gowl compositor is not running"))
+  (let* ((info (gowl-client-info client))
+         (title (or (cdr (assq 'title info)) "client"))
+         (buf (generate-new-buffer (format "*gowl: %s*" title)))
+         (win (selected-window)))
+    (gowl-embed--setup-buffer buf title)
+    (gowl-embed--display-buffer buf win)
+    (gowl-embed--do-embed client win)))
+
+(defun gowl-unembed ()
+  "Release the embedded client from the current buffer."
+  (interactive)
+  (when-let ((client gowl-embedded-client))
+    (setq gowl-embedded-client nil)
+    (set-window-dedicated-p (selected-window) nil)
+    (gowl-set-client-visible client nil)
+    (gowl-set-client-embedded client nil)
+    (gowl-set-client-border-width client 1)
+    (gowl-reparent-client client 2)
+    (gowl-arrange)
+    (kill-buffer (current-buffer))))
+
 (provide 'cmacs-gowl)
 ;;; cmacs-gowl.el ends here

@@ -1,0 +1,147 @@
+#+TITLE: Gowl Wayland Compositor
+#+STARTUP: showall
+#+OPTIONS: toc:2 num:t
+
+* Overview
+
+Gowl is a wlroots-based Wayland compositor embedded in CMacs.  When
+launched with =--gowl=, Emacs becomes a tiling window manager: the
+editor renders as a Wayland client inside its own compositor, and other
+Wayland apps (terminals, browsers, viewers) tile alongside or embed
+directly inside Emacs windows.
+
+The integration provides 47+ C primitives (DEFUNs) for full compositor
+control from Elisp: spawning clients, managing tags, switching layouts,
+querying monitors, and embedding client windows inside Emacs buffers.
+
+* Starting the Compositor
+
+#+begin_example
+src/emacs --gowl              # launch Emacs as a Wayland WM
+#+end_example
+
+Inside Emacs, the compositor is controlled via =cmacs-gowl-mode=:
+
+#+begin_example
+M-x cmacs-gowl-mode           ;; toggle (usually auto-enabled by --gowl)
+#+end_example
+
+* Window Management Commands
+
+| Command                        | Description                              |
+|--------------------------------+------------------------------------------|
+| =cmacs-gowl-spawn-command=    | Launch a Wayland client (=M-x= or Elisp) |
+| =cmacs-gowl-focus-window=     | Select and focus a client window          |
+| =cmacs-gowl-close-window=     | Select and close a client window          |
+| =cmacs-gowl-list-windows=     | Show all managed windows in a buffer      |
+| =cmacs-gowl-view-tag=         | Switch to a tag (workspace) 1--9          |
+| =cmacs-gowl-send-to-tag=      | Move focused client to a tag 1--9         |
+| =cmacs-gowl-set-layout=       | Set layout (tile, monocle, float)         |
+| =cmacs-gowl-list-monitors=    | Show connected monitor count              |
+
+* Client Embedding
+
+Wayland clients can render /inside/ Emacs buffer windows.  The client's
+scene node is reparented into Emacs's compositor scene tree and
+positioned over the window body area.  The compositor renders the client
+directly---no pixel copying, no GPU readback.  Input is routed by the
+compositor's focus-follows-mouse.
+
+#+begin_example
+┌─ Emacs frame (tiled, layer 2) ─────────────────────┐
+│ ┌─ window: code.el ────┐┌─ window: *gowl: foot* ──┐│
+│ │ (defun hello ()      ││┌─────────────────────────┐││
+│ │   (message "hi"))    │││  foot terminal          │││
+│ │                      │││  (embedded client)      │││
+│ │                      ││└─────────────────────────┘││
+│ │-:-- code.el     L3  ││-:-- *gowl: foot*    L1  ││
+│ └──────────────────────┘└──────────────────────────┘│
+│ M-x                                                 │
+└─────────────────────────────────────────────────────┘
+#+end_example
+
+** Embedding Commands
+
+| Command             | Description                                        |
+|---------------------+----------------------------------------------------|
+| =gowl-embed=       | Spawn a command and embed it in the current window |
+| =gowl-embed-client= | Embed an existing gowl client in current window   |
+| =gowl-unembed=     | Release an embedded client back to normal tiling   |
+
+** How It Works
+
+1. =gowl-embed= spawns a Wayland client and pre-registers its PID so
+   the compositor floats and hides it on map.
+2. A 100ms timer polls =gowl-list-clients= to match the PID.
+3. Once matched, the client is reparented into Emacs's scene tree
+   (=gowl-embed-into=) and positioned over the window body
+   (=gowl-position-embedded=).
+4. =window-configuration-change-hook= keeps the overlay in sync when
+   windows resize, split, or switch buffers.
+5. A 1-second health timer detects client exit and cleans up the buffer.
+
+** Lifecycle
+
+- *Client exits*: health timer detects it gone from =gowl-list-clients=
+  (compared by PID), kills the placeholder buffer.
+- *Buffer killed*: =kill-buffer-hook= closes the Wayland client via
+  =gowl-close-client=.
+- *Window hidden*: overlay is hidden via =gowl-set-client-visible=.
+  Switching back to the buffer re-shows it.
+
+* C Primitives
+
+Core compositor control:
+
+| Primitive                   | Description                                     |
+|-----------------------------+-------------------------------------------------|
+| =gowl-start=               | Start the compositor                            |
+| =gowl-stop=                | Stop the compositor                             |
+| =gowl-running-p=           | Check if compositor is running                  |
+| =gowl-spawn=               | Launch a Wayland client, return PID             |
+| =gowl-list-clients=        | List managed client objects                     |
+| =gowl-client-info=         | Get client info alist (title, app-id, geometry) |
+| =gowl-client-pid=          | Get client PID                                  |
+| =gowl-focus-client=        | Focus a client window                           |
+| =gowl-close-client=        | Close a client window                           |
+| =gowl-move-client=         | Move client to x,y                              |
+| =gowl-resize-client=       | Resize client to w,h                            |
+| =gowl-set-tags=            | Set tag bitmask on client                       |
+| =gowl-view-tags=           | Switch tag view                                 |
+| =gowl-set-layout=          | Set layout on current monitor                   |
+| =gowl-list-monitors=       | List connected monitors                         |
+| =gowl-arrange=             | Recalculate tiling layout                       |
+
+Embedding primitives:
+
+| Primitive                      | Description                                    |
+|--------------------------------+------------------------------------------------|
+| =gowl-emacs-client=           | Find the Emacs client by PID                   |
+| =gowl-embed-into=             | Reparent client into another client's scene    |
+| =gowl-position-embedded=      | Position an embedded client (x, y, w, h)       |
+| =gowl-set-client-visible=     | Show or hide a client's scene node             |
+| =gowl-set-client-embedded=    | Mark client as embedded (arrange() skips it)   |
+| =gowl-set-client-border-width= | Set client border width (0 to hide borders)   |
+| =gowl-reparent-client=        | Reparent client to a scene layer               |
+| =gowl-prefloat-pid=           | Pre-register PID for float-on-map              |
+
+* Customization
+
+#+begin_src emacs-lisp
+(setq cmacs-gowl-border-width 2)
+(setq cmacs-gowl-border-color-focus "#5e81ac")
+(setq cmacs-gowl-border-color-unfocus "#4c566a")
+(setq cmacs-gowl-layouts '("tile" "monocle" "float"))
+(setq cmacs-gowl-default-layout "tile")
+(setq cmacs-gowl-autostart '("waybar"))
+#+end_src
+
+* Files
+
+| File                              | Description                              |
+|-----------------------------------+------------------------------------------|
+| =cmacs/gowl/cmacs-gowl.c=       | C primitives (47+ DEFUNs)               |
+| =cmacs/gowl/cmacs-gowl.h=       | C header                                |
+| =lisp/cmacs/cmacs-gowl.el=       | Elisp layer: mode, commands, embedding  |
+| =test/cmacs/cmacs-gowl-tests.el= | ERT tests                               |
+| =deps/gowl/=                     | Bundled gowl library (git submodule)    |

@@ -20,6 +20,7 @@
 #include "cmacs-gobject.h"
 #include "cmacs-eval-dispatch.h"
 #include <gowl.h>
+#include <unistd.h>
 #include <wayland-server-core.h>
 #include <wayland-client-core.h>
 #include <wlr/backend.h>
@@ -31,11 +32,301 @@
 #ifdef GDK_WINDOWING_WAYLAND
 #include <gdk/gdkwayland.h>
 #endif
+#include "pgtkterm.h"
+#include "frame.h"
+#include "window.h"
 #endif
+
+#include <wlr/types/wlr_compositor.h>
+#include <wlr/types/wlr_seat.h>
+#include <wlr/render/wlr_texture.h>
+#include <drm_fourcc.h>
+#include <cairo.h>
 
 /* Persistent compositor instance.
    NOT static — cmacs-eval-dispatch.c accesses this for gowl dispatch. */
 GowlCompositor *cmacs_gowl_compositor = NULL;
+
+/* ── Embed view (GTK widget inside Emacs frame) ────────────────────────
+ *
+ * Each embedded client gets a GtkDrawingArea added to the Emacs frame's
+ * GtkFixed container.  The draw callback reads pixels from the client's
+ * wlr_texture via wlr_texture_read_pixels() and paints them with Cairo.
+ * A wl_listener on surface->events.commit queues a redraw when the
+ * client renders a new frame.
+ *
+ * Input: mouse/keyboard events on the GtkDrawingArea are forwarded to
+ * the Wayland client via the compositor's wlr_seat.
+ */
+
+struct gowl_embed_view
+{
+  GtkWidget *widget;            /* GtkDrawingArea in the Emacs frame */
+  GowlClient *client;          /* The embedded Wayland client */
+  struct frame *emacs_frame;   /* Emacs frame containing the widget */
+  struct wl_listener commit;   /* wlr_surface commit listener */
+  unsigned char *pixel_buf;    /* Pixel readback buffer */
+  size_t pixel_buf_size;       /* Allocated size of pixel_buf */
+  cairo_surface_t *cr_surface; /* Cairo surface wrapping pixel_buf */
+  int tex_w, tex_h;            /* Last captured texture dimensions */
+  int view_w, view_h;          /* Widget display size */
+  gboolean dirty;              /* New frame available */
+  guint idle_id;               /* Pending idle capture source, or 0 */
+};
+
+static GHashTable *embed_views = NULL; /* GowlClient* -> gowl_embed_view* */
+
+static void
+gowl_embed_view_capture (struct gowl_embed_view *view)
+{
+  struct wlr_surface *surface;
+  struct wlr_texture *texture;
+  int tw, th;
+  size_t stride, needed;
+  struct wlr_texture_read_pixels_options opts;
+
+  surface = gowl_client_get_wlr_surface (view->client);
+  if (surface == NULL || surface->buffer == NULL)
+    return;
+
+  texture = surface->buffer->texture;
+  if (texture == NULL)
+    return;
+
+  tw = texture->width;
+  th = texture->height;
+  stride = (size_t) tw * 4;
+  needed = stride * (size_t) th;
+
+  if (needed > view->pixel_buf_size)
+    {
+      g_free (view->pixel_buf);
+      view->pixel_buf = g_malloc (needed);
+      view->pixel_buf_size = needed;
+    }
+
+  memset (&opts, 0, sizeof (opts));
+  opts.data = view->pixel_buf;
+  opts.format = DRM_FORMAT_ARGB8888;
+  opts.stride = (uint32_t) stride;
+
+  if (!wlr_texture_read_pixels (texture, &opts))
+    return;
+
+  /* Recreate Cairo surface if dimensions changed. */
+  if (view->cr_surface != NULL
+      && (view->tex_w != tw || view->tex_h != th))
+    {
+      cairo_surface_destroy (view->cr_surface);
+      view->cr_surface = NULL;
+    }
+
+  if (view->cr_surface == NULL)
+    view->cr_surface = cairo_image_surface_create_for_data (
+      view->pixel_buf, CAIRO_FORMAT_ARGB32, tw, th, (int) stride);
+  else
+    cairo_surface_mark_dirty (view->cr_surface);
+
+  view->tex_w = tw;
+  view->tex_h = th;
+}
+
+static gboolean
+gowl_embed_view_draw (GtkWidget *widget, cairo_t *cr, gpointer data)
+{
+  struct gowl_embed_view *view = data;
+  (void) widget;
+
+  /* Pixels were already captured in the commit callback (which runs
+     during Wayland event processing, when the compositor's EGL context
+     is idle).  We just paint the stored surface here. */
+  if (view->cr_surface == NULL)
+    return FALSE;
+
+  /* Scale texture to fill the widget area. */
+  if (view->tex_w > 0 && view->tex_h > 0
+      && view->view_w > 0 && view->view_h > 0)
+    {
+      double sx = (double) view->view_w / (double) view->tex_w;
+      double sy = (double) view->view_h / (double) view->tex_h;
+      cairo_scale (cr, sx, sy);
+    }
+
+  cairo_set_source_surface (cr, view->cr_surface, 0, 0);
+  cairo_set_operator (cr, CAIRO_OPERATOR_SOURCE);
+  cairo_paint (cr);
+
+  return TRUE;
+}
+
+static gboolean
+gowl_embed_view_idle_capture (gpointer data)
+{
+  struct gowl_embed_view *view = data;
+
+  view->idle_id = 0;
+  if (!view->dirty || view->widget == NULL)
+    return G_SOURCE_REMOVE;
+
+  /* The idle callback runs AFTER all higher-priority sources (Wayland
+     events at G_PRIORITY_DEFAULT and output frame handling) have been
+     dispatched.  The compositor's renderer has finished presenting,
+     so eglMakeCurrent in wlr_texture_read_pixels won't conflict. */
+  gowl_embed_view_capture (view);
+  view->dirty = FALSE;
+  gtk_widget_queue_draw (view->widget);
+  return G_SOURCE_REMOVE;
+}
+
+static void
+gowl_embed_view_on_commit (struct wl_listener *listener, void *data)
+{
+  struct gowl_embed_view *view =
+    wl_container_of (listener, view, commit);
+  (void) data;
+
+  view->dirty = TRUE;
+  /* Schedule ONE capture per idle cycle.  Multiple client commits
+     are batched — only the latest frame is captured.  Idle priority
+     ensures the compositor finishes its output render first. */
+  if (view->idle_id == 0)
+    view->idle_id = g_idle_add (gowl_embed_view_idle_capture, view);
+}
+
+static gboolean
+gowl_embed_view_event (GtkWidget *widget, GdkEvent *event, gpointer data)
+{
+  struct gowl_embed_view *view = data;
+  struct wlr_seat *seat;
+  struct wlr_surface *surface;
+  uint32_t time_ms;
+  (void) widget;
+
+  seat = gowl_compositor_get_wlr_seat (cmacs_gowl_compositor);
+  surface = gowl_client_get_wlr_surface (view->client);
+  if (seat == NULL || surface == NULL)
+    return FALSE;
+
+  time_ms = (uint32_t) (gdk_event_get_time (event) & 0xFFFFFFFF);
+
+  switch (event->type)
+    {
+    case GDK_ENTER_NOTIFY:
+      wlr_seat_pointer_notify_enter (seat, surface,
+                                     event->crossing.x, event->crossing.y);
+      wlr_seat_keyboard_notify_enter (seat, surface,
+                                      NULL, 0, NULL);
+      return TRUE;
+
+    case GDK_LEAVE_NOTIFY:
+      wlr_seat_pointer_notify_clear_focus (seat);
+      return TRUE;
+
+    case GDK_MOTION_NOTIFY:
+      wlr_seat_pointer_notify_motion (seat, time_ms,
+                                      event->motion.x, event->motion.y);
+      return TRUE;
+
+    case GDK_BUTTON_PRESS:
+    case GDK_BUTTON_RELEASE:
+      {
+        uint32_t btn;
+        enum wl_pointer_button_state state;
+
+        /* GDK button 1..5 → Linux BTN_LEFT..BTN_EXTRA */
+        btn = event->button.button - 1 + 0x110; /* BTN_LEFT = 0x110 */
+        state = (event->type == GDK_BUTTON_PRESS)
+          ? WL_POINTER_BUTTON_STATE_PRESSED
+          : WL_POINTER_BUTTON_STATE_RELEASED;
+        wlr_seat_pointer_notify_button (seat, time_ms, btn, state);
+        return TRUE;
+      }
+
+    case GDK_SCROLL:
+      {
+        double dx = 0, dy = 0;
+        if (event->scroll.direction == GDK_SCROLL_SMOOTH)
+          {
+            dx = event->scroll.delta_x * 15.0;
+            dy = event->scroll.delta_y * 15.0;
+          }
+        else if (event->scroll.direction == GDK_SCROLL_UP)
+          dy = -15.0;
+        else if (event->scroll.direction == GDK_SCROLL_DOWN)
+          dy = 15.0;
+        else if (event->scroll.direction == GDK_SCROLL_LEFT)
+          dx = -15.0;
+        else if (event->scroll.direction == GDK_SCROLL_RIGHT)
+          dx = 15.0;
+
+        wlr_seat_pointer_notify_axis (seat, time_ms,
+                                      WL_POINTER_AXIS_VERTICAL_SCROLL,
+                                      dy,
+                                      (int32_t) dy,
+                                      WL_POINTER_AXIS_SOURCE_WHEEL,
+                                      WL_POINTER_AXIS_RELATIVE_DIRECTION_IDENTICAL);
+        if (dx != 0.0)
+          wlr_seat_pointer_notify_axis (seat, time_ms,
+                                        WL_POINTER_AXIS_HORIZONTAL_SCROLL,
+                                        dx,
+                                        (int32_t) dx,
+                                        WL_POINTER_AXIS_SOURCE_WHEEL,
+                                        WL_POINTER_AXIS_RELATIVE_DIRECTION_IDENTICAL);
+        return TRUE;
+      }
+
+    case GDK_KEY_PRESS:
+    case GDK_KEY_RELEASE:
+      {
+        /* hardware_keycode is the Linux evdev scancode + 8.
+           Wayland keycodes are evdev scancodes. */
+        uint32_t keycode = event->key.hardware_keycode - 8;
+        enum wl_keyboard_key_state state =
+          (event->type == GDK_KEY_PRESS)
+          ? WL_KEYBOARD_KEY_STATE_PRESSED
+          : WL_KEYBOARD_KEY_STATE_RELEASED;
+        wlr_seat_keyboard_notify_key (seat, time_ms, keycode, state);
+        return TRUE;
+      }
+
+    default:
+      break;
+    }
+
+  return FALSE;
+}
+
+static void
+gowl_embed_view_free (struct gowl_embed_view *view)
+{
+  if (view == NULL)
+    return;
+
+  wl_list_remove (&view->commit.link);
+
+  if (view->idle_id != 0)
+    {
+      g_source_remove (view->idle_id);
+      view->idle_id = 0;
+    }
+
+  if (view->widget != NULL)
+    {
+      gtk_widget_destroy (view->widget);
+      view->widget = NULL;
+    }
+
+  if (view->cr_surface != NULL)
+    {
+      cairo_surface_destroy (view->cr_surface);
+      view->cr_surface = NULL;
+    }
+
+  g_free (view->pixel_buf);
+  view->pixel_buf = NULL;
+
+  g_free (view);
+}
 
 /* ── Keyboard shortcut inhibition for nested mode ────────────────────
  *
@@ -556,37 +847,43 @@ Keys: title, app-id, tags, floating, fullscreen, urgent, pid, id, geometry. */)
 
 DEFUN ("gowl-move-client", Fgowl_move_client, Sgowl_move_client,
        3, 3, 0,
-       doc: /* Move CLIENT to position X, Y. */)
+       doc: /* Move CLIENT to position X, Y in compositor coordinates.
+Updates the scene graph and sends a configure to the client. */)
   (Lisp_Object client, Lisp_Object x, Lisp_Object y)
 {
   GowlClient *c;
   gint cx, cy, cw, ch;
 
+  GOWL_CHECK_RUNNING ();
   CHECK_FIXNUM (x);
   CHECK_FIXNUM (y);
 
   c = gowl_resolve_client (client);
   gowl_client_get_geometry (c, &cx, &cy, &cw, &ch);
-  gowl_client_set_geometry (c, (gint)XFIXNUM (x), (gint)XFIXNUM (y),
-                            cw, ch);
+  gowl_compositor_resize_client (cmacs_gowl_compositor, c,
+                                 (gint) XFIXNUM (x), (gint) XFIXNUM (y),
+                                 cw, ch);
   return Qnil;
 }
 
 DEFUN ("gowl-resize-client", Fgowl_resize_client, Sgowl_resize_client,
        3, 3, 0,
-       doc: /* Resize CLIENT to W x H pixels. */)
+       doc: /* Resize CLIENT to W x H pixels.
+Updates the scene graph and sends a configure to the client. */)
   (Lisp_Object client, Lisp_Object w, Lisp_Object h)
 {
   GowlClient *c;
   gint cx, cy, cw, ch;
 
+  GOWL_CHECK_RUNNING ();
   CHECK_FIXNUM (w);
   CHECK_FIXNUM (h);
 
   c = gowl_resolve_client (client);
   gowl_client_get_geometry (c, &cx, &cy, &cw, &ch);
-  gowl_client_set_geometry (c, cx, cy, (gint)XFIXNUM (w),
-                            (gint)XFIXNUM (h));
+  gowl_compositor_resize_client (cmacs_gowl_compositor, c,
+                                 cx, cy,
+                                 (gint) XFIXNUM (w), (gint) XFIXNUM (h));
   return Qnil;
 }
 
@@ -678,13 +975,15 @@ Optional second arg BY is a symbol: `app-id' (default) or `title'. */)
  * ══════════════════════════════════════════════════════════════════════ */
 
 DEFUN ("gowl-spawn", Fgowl_spawn, Sgowl_spawn, 1, 1, 0,
-       doc: /* Launch COMMAND as a Wayland client. */)
+       doc: /* Launch COMMAND as a Wayland client.
+Returns the child process PID as an integer. */)
   (Lisp_Object command)
 {
   GError *err = NULL;
   const gchar *socket;
   gchar **argv;
   gchar **envp;
+  GPid child_pid = 0;
 
   CHECK_STRING (command);
   GOWL_CHECK_RUNNING ();
@@ -705,7 +1004,8 @@ DEFUN ("gowl-spawn", Fgowl_spawn, Sgowl_spawn, 1, 1, 0,
   }
 
   if (!g_spawn_async (NULL, argv, envp,
-                      G_SPAWN_SEARCH_PATH, NULL, NULL, NULL, &err))
+                      G_SPAWN_SEARCH_PATH, NULL, NULL,
+                      &child_pid, &err))
     {
       g_strfreev (argv);
       g_strfreev (envp);
@@ -716,7 +1016,359 @@ DEFUN ("gowl-spawn", Fgowl_spawn, Sgowl_spawn, 1, 1, 0,
 
   g_strfreev (argv);
   g_strfreev (envp);
+  return make_fixnum ((EMACS_INT) child_pid);
+}
+
+DEFUN ("gowl-client-border-width",
+       Fgowl_client_border_width, Sgowl_client_border_width,
+       1, 1, 0,
+       doc: /* Return CLIENT border width in pixels. */)
+  (Lisp_Object client)
+{
+  return make_fixnum (
+    (EMACS_INT) gowl_client_get_border_width (gowl_resolve_client (client)));
+}
+
+DEFUN ("gowl-set-client-border-width",
+       Fgowl_set_client_border_width, Sgowl_set_client_border_width,
+       2, 2, 0,
+       doc: /* Set CLIENT border width to WIDTH pixels. */)
+  (Lisp_Object client, Lisp_Object width)
+{
+  CHECK_FIXNAT (width);
+  gowl_client_set_border_width (gowl_resolve_client (client),
+                                (guint) XFIXNAT (width));
+  return Qnil;
+}
+
+DEFUN ("gowl-set-client-visible",
+       Fgowl_set_client_visible, Sgowl_set_client_visible,
+       2, 2, 0,
+       doc: /* Set CLIENT visibility.
+Non-nil VISIBLE shows the client, nil hides it. */)
+  (Lisp_Object client, Lisp_Object visible)
+{
+  gowl_client_set_visible (gowl_resolve_client (client),
+                           !NILP (visible));
+  return Qnil;
+}
+
+DEFUN ("gowl-arrange", Fgowl_arrange, Sgowl_arrange, 0, 0, 0,
+       doc: /* Recalculate the tiling layout on the selected monitor.
+Reparents floating clients to the float layer and retiles
+non-floating clients.  Call this after programmatically changing
+a client's floating state. */)
+  (void)
+{
+  GowlMonitor *mon;
+
+  GOWL_CHECK_RUNNING ();
+  mon = gowl_get_focused_monitor ();
+  if (mon != NULL)
+    gowl_compositor_arrange (cmacs_gowl_compositor, mon);
+  return Qnil;
+}
+
+DEFUN ("gowl-prefloat-pid", Fgowl_prefloat_pid, Sgowl_prefloat_pid,
+       1, 1, 0,
+       doc: /* Register PID so its client is floated and hidden on map.
+The compositor will make the client floating and invisible when it
+first appears, instead of tiling it.  The registration is consumed
+on first match.  Used by `gowl-embed' to prevent a visual flash. */)
+  (Lisp_Object pid)
+{
+  GOWL_CHECK_RUNNING ();
+  CHECK_FIXNUM (pid);
+  gowl_compositor_prefloat_pid (cmacs_gowl_compositor,
+                                (pid_t) XFIXNUM (pid));
+  return Qnil;
+}
+
+DEFUN ("gowl-reparent-client", Fgowl_reparent_client, Sgowl_reparent_client,
+       2, 2, 0,
+       doc: /* Move CLIENT scene node to LAYER.
+LAYER is an integer index: 0=bg, 1=bottom, 2=tile, 3=float,
+4=top, 5=fs, 6=overlay, 7=block. */)
+  (Lisp_Object client, Lisp_Object layer)
+{
+  GOWL_CHECK_RUNNING ();
+  CHECK_FIXNAT (layer);
+  gowl_compositor_reparent_client (cmacs_gowl_compositor,
+                                   gowl_resolve_client (client),
+                                   (gint) XFIXNAT (layer));
+  return Qnil;
+}
+
+DEFUN ("gowl-set-client-embedded", Fgowl_set_client_embedded,
+       Sgowl_set_client_embedded, 2, 2, 0,
+       doc: /* Mark CLIENT as embedded (non-nil) or unembedded (nil).
+Embedded clients are excluded from the tiling arrange pass.
+The embedder controls their position, visibility, and scene layer. */)
+  (Lisp_Object client, Lisp_Object embedded)
+{
+  gowl_client_set_embedded (gowl_resolve_client (client),
+                            !NILP (embedded));
+  return Qnil;
+}
+
+DEFUN ("gowl-emacs-client", Fgowl_emacs_client, Sgowl_emacs_client,
+       0, 0, 0,
+       doc: /* Return the GowlClient for Emacs's own frame.
+Matches by PID against the compositor's client list. */)
+  (void)
+{
+  GList *clients;
+  GList *l;
+  pid_t self_pid;
+
+  GOWL_CHECK_RUNNING ();
+  self_pid = getpid ();
+  clients = gowl_compositor_get_clients (cmacs_gowl_compositor);
+  for (l = clients; l != NULL; l = l->next)
+    {
+      GowlClient *c = (GowlClient *) l->data;
+      if (gowl_client_get_pid (c) == self_pid)
+        return cmacs_gobject_wrap (G_OBJECT (c));
+    }
+  return Qnil;
+}
+
+DEFUN ("gowl-embed-into", Fgowl_embed_into, Sgowl_embed_into,
+       2, 2, 0,
+       doc: /* Embed CHILD client into PARENT client's scene tree.
+CHILD's scene node becomes a child of PARENT's, so it renders
+as part of PARENT.  Positions are then parent-relative. */)
+  (Lisp_Object child, Lisp_Object parent)
+{
+  GOWL_CHECK_RUNNING ();
+  gowl_compositor_reparent_client_to_client (
+    cmacs_gowl_compositor,
+    gowl_resolve_client (child),
+    gowl_resolve_client (parent));
+  return Qnil;
+}
+
+DEFUN ("gowl-position-embedded", Fgowl_position_embedded,
+       Sgowl_position_embedded, 5, 5, 0,
+       doc: /* Position embedded CLIENT at X, Y with size W x H.
+Coordinates are relative to the parent scene tree.
+Directly sets the scene node position and sends an XDG configure. */)
+  (Lisp_Object client, Lisp_Object x, Lisp_Object y,
+   Lisp_Object w, Lisp_Object h)
+{
+  GOWL_CHECK_RUNNING ();
+  CHECK_FIXNUM (x);
+  CHECK_FIXNUM (y);
+  CHECK_FIXNUM (w);
+  CHECK_FIXNUM (h);
+  gowl_compositor_position_embedded (
+    cmacs_gowl_compositor,
+    gowl_resolve_client (client),
+    (gint) XFIXNUM (x), (gint) XFIXNUM (y),
+    (gint) XFIXNUM (w), (gint) XFIXNUM (h));
+  return Qnil;
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════
+ * EMBED VIEW — GTK WIDGET INSIDE EMACS FRAME
+ * ══════════════════════════════════════════════════════════════════════ */
+
+DEFUN ("gowl-embed-create-view", Fgowl_embed_create_view,
+       Sgowl_embed_create_view, 5, 5, 0,
+       doc: /* Create an embed view for CLIENT at X, Y with size W x H.
+Adds a GtkDrawingArea to the selected frame and renders the Wayland
+client's surface into it.  Coordinates are frame-relative pixels.
+The client's compositor scene node is disabled — all rendering goes
+through the GTK widget.  Returns t on success. */)
+  (Lisp_Object client, Lisp_Object x, Lisp_Object y,
+   Lisp_Object w, Lisp_Object h)
+{
+#ifdef HAVE_PGTK
+  GowlClient *c;
+  struct gowl_embed_view *view;
+  struct wlr_surface *surface;
+  struct frame *f;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_FIXNUM (x);
+  CHECK_FIXNUM (y);
+  CHECK_FIXNUM (w);
+  CHECK_FIXNUM (h);
+
+  c = gowl_resolve_client (client);
+  f = SELECTED_FRAME ();
+
+  if (embed_views == NULL)
+    embed_views = g_hash_table_new (g_direct_hash, g_direct_equal);
+
+  /* Remove existing view for this client, if any. */
+  {
+    struct gowl_embed_view *old = g_hash_table_lookup (embed_views, c);
+    if (old != NULL)
+      {
+        g_hash_table_remove (embed_views, c);
+        gowl_embed_view_free (old);
+      }
+  }
+
+  view = g_new0 (struct gowl_embed_view, 1);
+  view->client = c;
+  view->emacs_frame = f;
+  view->view_w = (int) XFIXNUM (w);
+  view->view_h = (int) XFIXNUM (h);
+
+  /* Disable the compositor scene node — rendering is via GTK. */
+  gowl_client_set_visible (c, FALSE);
+  gowl_client_set_embedded (c, TRUE);
+  gowl_client_set_border_width (c, 0);
+
+  /* Request the client to render at the widget size by sending a
+     configure via gowl_compositor_position_embedded. */
+  gowl_compositor_position_embedded (cmacs_gowl_compositor, c,
+                                     0, 0, view->view_w, view->view_h);
+
+  /* Create the GtkDrawingArea. */
+  view->widget = gtk_drawing_area_new ();
+  gtk_widget_set_app_paintable (view->widget, TRUE);
+  gtk_widget_add_events (view->widget,
+                         GDK_POINTER_MOTION_MASK
+                         | GDK_BUTTON_PRESS_MASK
+                         | GDK_BUTTON_RELEASE_MASK
+                         | GDK_ENTER_NOTIFY_MASK
+                         | GDK_LEAVE_NOTIFY_MASK
+                         | GDK_SCROLL_MASK
+                         | GDK_SMOOTH_SCROLL_MASK
+                         | GDK_KEY_PRESS_MASK
+                         | GDK_KEY_RELEASE_MASK);
+  gtk_widget_set_can_focus (view->widget, TRUE);
+  gtk_widget_set_size_request (view->widget, view->view_w, view->view_h);
+
+  g_signal_connect (view->widget, "draw",
+                    G_CALLBACK (gowl_embed_view_draw), view);
+  g_signal_connect (view->widget, "event",
+                    G_CALLBACK (gowl_embed_view_event), view);
+
+  /* Add to Emacs frame's GtkFixed container. */
+  gtk_fixed_put (GTK_FIXED (FRAME_GTK_WIDGET (f)),
+                 view->widget,
+                 (gint) XFIXNUM (x), (gint) XFIXNUM (y));
+  gtk_widget_show (view->widget);
+
+  /* Listen for surface commits to capture new frames. */
+  surface = gowl_client_get_wlr_surface (c);
+  if (surface != NULL)
+    {
+      view->commit.notify = gowl_embed_view_on_commit;
+      wl_signal_add (&surface->events.commit, &view->commit);
+    }
+  else
+    wl_list_init (&view->commit.link);
+
+  g_hash_table_insert (embed_views, c, view);
   return Qt;
+#else
+  error ("gowl-embed-create-view requires PGTK build");
+  return Qnil;
+#endif
+}
+
+DEFUN ("gowl-embed-move-view", Fgowl_embed_move_view,
+       Sgowl_embed_move_view, 5, 5, 0,
+       doc: /* Reposition embed view for CLIENT to X, Y with size W x H.
+Coordinates are frame-relative pixels. */)
+  (Lisp_Object client, Lisp_Object x, Lisp_Object y,
+   Lisp_Object w, Lisp_Object h)
+{
+#ifdef HAVE_PGTK
+  GowlClient *c;
+  struct gowl_embed_view *view;
+  int nw, nh;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_FIXNUM (x);
+  CHECK_FIXNUM (y);
+  CHECK_FIXNUM (w);
+  CHECK_FIXNUM (h);
+
+  c = gowl_resolve_client (client);
+
+  if (embed_views == NULL)
+    return Qnil;
+
+  view = g_hash_table_lookup (embed_views, c);
+  if (view == NULL || view->widget == NULL)
+    return Qnil;
+
+  nw = (int) XFIXNUM (w);
+  nh = (int) XFIXNUM (h);
+
+  if (nw <= 0 || nh <= 0)
+    {
+      /* Hide the widget — do NOT send a 0×0 configure to the client.
+         A zero-size XDG configure breaks client rendering permanently.
+         The client keeps rendering at its last valid size; the commit
+         listener keeps capturing frames so content is ready when we
+         show the widget again. */
+      gtk_widget_hide (view->widget);
+      return Qt;
+    }
+
+  view->view_w = nw;
+  view->view_h = nh;
+
+  gtk_widget_set_size_request (view->widget, nw, nh);
+  gtk_fixed_move (GTK_FIXED (FRAME_GTK_WIDGET (view->emacs_frame)),
+                  view->widget,
+                  (gint) XFIXNUM (x), (gint) XFIXNUM (y));
+  gtk_widget_show (view->widget);
+  gtk_widget_queue_allocate (view->widget);
+
+  /* Ask the client to render at the new size. */
+  gowl_compositor_position_embedded (cmacs_gowl_compositor, c,
+                                     0, 0, nw, nh);
+
+  return Qt;
+#else
+  return Qnil;
+#endif
+}
+
+DEFUN ("gowl-embed-destroy-view", Fgowl_embed_destroy_view,
+       Sgowl_embed_destroy_view, 1, 1, 0,
+       doc: /* Destroy the embed view for CLIENT.
+Removes the GtkDrawingArea and frees resources.
+The client's compositor scene node remains disabled. */)
+  (Lisp_Object client)
+{
+  GowlClient *c;
+  struct gowl_embed_view *view;
+
+  c = gowl_resolve_client (client);
+
+  if (embed_views == NULL)
+    return Qnil;
+
+  view = g_hash_table_lookup (embed_views, c);
+  if (view != NULL)
+    {
+      g_hash_table_remove (embed_views, c);
+      gowl_embed_view_free (view);
+    }
+  return Qnil;
+}
+
+DEFUN ("gowl-embed-view-p", Fgowl_embed_view_p,
+       Sgowl_embed_view_p, 1, 1, 0,
+       doc: /* Return t if CLIENT has an active embed view. */)
+  (Lisp_Object client)
+{
+  GowlClient *c = gowl_resolve_client (client);
+
+  if (embed_views == NULL)
+    return Qnil;
+
+  return g_hash_table_lookup (embed_views, c) != NULL ? Qt : Qnil;
 }
 
 
@@ -1449,6 +2101,23 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_move_client_to_monitor);
   defsubr (&Sgowl_client_pid);
   defsubr (&Sgowl_find_client);
+
+  defsubr (&Sgowl_set_client_border_width);
+  defsubr (&Sgowl_set_client_visible);
+  defsubr (&Sgowl_arrange);
+  defsubr (&Sgowl_prefloat_pid);
+  defsubr (&Sgowl_reparent_client);
+  defsubr (&Sgowl_set_client_embedded);
+  defsubr (&Sgowl_client_border_width);
+  defsubr (&Sgowl_emacs_client);
+  defsubr (&Sgowl_embed_into);
+  defsubr (&Sgowl_position_embedded);
+
+  /* Embed view (GTK widget) */
+  defsubr (&Sgowl_embed_create_view);
+  defsubr (&Sgowl_embed_move_view);
+  defsubr (&Sgowl_embed_destroy_view);
+  defsubr (&Sgowl_embed_view_p);
 
   /* Process control */
   defsubr (&Sgowl_spawn);
