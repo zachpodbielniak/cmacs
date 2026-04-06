@@ -182,6 +182,16 @@ make -j$(nproc)
 sudo make install
 #+end_src
 
+To install somewhere other than =/usr/local= (e.g. your home directory),
+pass =--prefix= at configure time:
+
+#+begin_src bash
+./configure --prefix=$HOME/.local \
+  ...                              # same flags as above
+make -j$(nproc)
+make install                       # no sudo needed for ~/.local
+#+end_src
+
 ** Step by Step
 
 *** 1. Clone with Submodules

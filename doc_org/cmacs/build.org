@@ -52,6 +52,16 @@ Example with explicit flags:
   --with-cmacs-gowl
 #+end_example
 
+To install somewhere other than =/usr/local=, pass =--prefix= at
+configure time.  For example, to install under =~/.local=:
+
+#+begin_example
+./configure --prefix=$HOME/.local \
+  ...                              # same flags as above
+make -j$(nproc)
+make install                       # no sudo needed for ~/.local
+#+end_example
+
 * Dependencies
 
 ** Always Required

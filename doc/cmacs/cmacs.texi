@@ -1713,6 +1713,18 @@ fully-featured build matching Fedora defaults, use:
 @end example
 
 @noindent
+To install somewhere other than @file{/usr/local}, pass
+@option{--prefix} at configure time.  For example, to install under
+@file{~/.local}:
+
+@example
+./configure --prefix=$HOME/.local \
+  ...                              # same flags as above
+make -j$(nproc)
+make install                       # no sudo needed for ~/.local
+@end example
+
+@noindent
 @code{--with-cmacs-bacon} builds libbacon statically from
 @file{deps/bacon/} and links it into the CMacs binary.  For distro
 packaging, use @code{--with-cmacs-bacon=system} to link against a
