@@ -267,6 +267,7 @@ extern gint cmd_clip    (CmacsApiTransport *transport, gint argc, gchar **argv);
 extern gint cmd_vc      (CmacsApiTransport *transport, gint argc, gchar **argv);
 extern gint cmd_pkg     (CmacsApiTransport *transport, gint argc, gchar **argv);
 extern gint cmd_monitor (CmacsApiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_rg      (CmacsApiTransport *transport, gint argc, gchar **argv);
 
 /* ── Top-level dispatch table ─────────────────────────────────────── */
 
@@ -364,6 +365,11 @@ static const CmacsApiSubcmd subcmds[] = {
     /* ── monitor management ────────────────────────────────────────── */
     { "monitor",      cmd_monitor,
       "monitor SUBCMD [ARGS...]",       "monitor management (list, modes, scale, ...)" },
+
+    /* ── ripgrep ────────────────────────────────────────────────────── */
+    { "rg",           cmd_rg,
+      "rg [search|files|type] [-i] [-w] PATTERN [DIR]",
+      "ripgrep search, results in clickable *rg* buffer" },
 
     /* ── original commands ─────────────────────────────────────────── */
     { "eval",         cmd_eval,
