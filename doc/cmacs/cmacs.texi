@@ -1492,6 +1492,158 @@ Move focused client to a tag 1--9.
 Set the tiling layout (tile, monocle, float).
 @end table
 
+@section Monitor Management
+
+@cindex monitor
+@cindex output
+@cindex resolution
+@cindex scale
+@cindex transform
+@cindex HiDPI
+
+Gowl provides full control over connected monitors (outputs): listing,
+mode changes, scale adjustments, transforms, and enable/disable.  All
+operations work on both physical monitors (DRM backend) and nested
+Wayland outputs.
+
+@subsection Listing Monitors
+
+@code{cmacs-gowl-list-monitors} displays a table of all outputs:
+
+@example
+Name    Mode          Position  Scale  Status   Transform
+WL-1    1280x720@@60   0,0      1.0    enabled  normal
+DP-1    2560x1440@@144  1280,0  1.0    enabled  normal
+@end example
+
+@noindent
+From the shell:
+
+@example
+bacon> cmacsgi monitor list
+WL-1
+DP-1
+
+bacon> cmacsgi monitor info WL-1
+name=WL-1
+mode=1280x720@@60
+position=0,0
+scale=1.000000
+enabled=t
+transform=0
+@end example
+
+@subsection Changing Resolution
+
+@code{cmacs-gowl-set-resolution} prompts with the monitor's advertised
+modes.  For outputs with no advertised modes (common for nested Wayland
+sessions), specify a custom mode directly.
+
+@example
+;; From Elisp:
+(gowl-set-monitor-mode 1920 1080 0 (gowl-find-monitor "WL-1"))
+
+;; From the shell:
+bacon> cmacsgi monitor set-mode WL-1 1920x1080
+bacon> cmacsgi monitor set-mode DP-1 2560x1440@@144000
+@end example
+
+@noindent
+The refresh rate is in millihertz (60000 = 60@dmn{Hz}).  Use 0 to match
+any refresh rate, or omit the @code{@@RATE} suffix.
+
+@subsection Scaling
+
+Scale controls the output DPI@.  A scale of 2.0 doubles the pixel
+density, halving the logical resolution.
+
+@example
+;; HiDPI (2x):
+(gowl-set-monitor-scale 2.0 (gowl-find-monitor "WL-1"))
+
+;; Lower density for more screen real-estate:
+(gowl-set-monitor-scale 0.8 (gowl-find-monitor "WL-1"))
+@end example
+
+@example
+bacon> cmacsgi monitor scale WL-1 2.0
+bacon> cmacsgi monitor scale WL-1 0.8
+bacon> cmacsgi monitor scale WL-1 1.0
+@end example
+
+@noindent
+At scale 0.8 on a 1280x720 output the logical area grows to 1600x900;
+at scale 2.0 it shrinks to 640x360.  Clients automatically resize to
+fill the new logical area.
+
+@subsection Transform (Rotation/Flip)
+
+Transform values follow the Wayland @code{wl_output_transform} enum:
+
+@multitable @columnfractions .15 .25 .6
+@headitem Value @tab Name @tab Effect
+@item 0 @tab normal @tab No rotation
+@item 1 @tab 90 @tab Rotate 90@textdegree{} clockwise
+@item 2 @tab 180 @tab Rotate 180@textdegree{}
+@item 3 @tab 270 @tab Rotate 270@textdegree{} clockwise
+@item 4 @tab flipped @tab Horizontal flip
+@item 5 @tab flipped-90 @tab Flip + rotate 90@textdegree{}
+@item 6 @tab flipped-180 @tab Flip + rotate 180@textdegree{}
+@item 7 @tab flipped-270 @tab Flip + rotate 270@textdegree{}
+@end multitable
+
+@example
+bacon> cmacsgi monitor transform WL-1 1   @r{;; rotate 90@textdegree{}}
+bacon> cmacsgi monitor transform WL-1 0   @r{;; back to normal}
+@end example
+
+@subsection Enable / Disable
+
+@example
+bacon> cmacsgi monitor disable DP-2
+bacon> cmacsgi monitor enable DP-2
+@end example
+
+@noindent
+Or interactively: @kbd{M-x cmacs-gowl-toggle-monitor}.
+
+@subsection Interactive Commands
+
+@table @code
+@item cmacs-gowl-list-monitors
+Show a table of all outputs with mode, position, scale, and status.
+@item cmacs-gowl-monitor-info
+Show detailed info for a selected monitor.
+@item cmacs-gowl-set-resolution
+Interactively choose a monitor and set its resolution.
+@item cmacs-gowl-set-scale SCALE
+Set the scale factor on a selected monitor.
+@item cmacs-gowl-set-transform
+Interactively choose a transform for a selected monitor.
+@item cmacs-gowl-toggle-monitor
+Enable or disable a selected monitor.
+@end table
+
+@subsection How It Works
+
+When a mode, scale, or transform change is committed via
+@code{wlr_output_commit_state()}, gowl updates the monitor geometry by
+querying @code{wlr_output_layout_get_box()}, which returns the correct
+logical dimensions accounting for scale and transform.  This matches the
+approach used by dwl.
+
+The compositor then calls @code{gowl_compositor_arrange()}, which
+re-tiles all clients on the affected monitor.  Fullscreen clients
+(including the Emacs frame in standalone @option{--gowl} mode) are
+resized to fill the full monitor area.  Normal tiling clients are
+re-laid-out by the active layout function (tile, monocle, etc.).
+
+On the Wayland backend (nested compositors),
+@code{on_layout_change()} typically fires synchronously during the
+output commit.  As a safety net, each setter also queries the layout
+box and calls @code{arrange()} directly, ensuring correct behavior
+even if the asynchronous path is delayed.
+
 @section Client Embedding
 
 Wayland clients can render @emph{inside} Emacs buffer windows.  The
@@ -1615,6 +1767,26 @@ Switch tag view.
 Set layout on current monitor.
 @item gowl-list-monitors
 List connected monitors.
+@item gowl-find-monitor NAME
+Find monitor by name, return object or nil.
+@item gowl-monitor-modes MONITOR
+List advertised modes for a monitor.
+@item gowl-set-monitor-mode WIDTH HEIGHT REFRESH &optional MONITOR
+Set monitor output mode.
+@item gowl-set-monitor-position X Y &optional MONITOR
+Set monitor position in layout.
+@item gowl-monitor-enabled-p &optional MONITOR
+Check if monitor is enabled.
+@item gowl-set-monitor-enabled ENABLED &optional MONITOR
+Enable or disable a monitor.
+@item gowl-monitor-scale &optional MONITOR
+Get current scale factor.
+@item gowl-set-monitor-scale SCALE &optional MONITOR
+Set scale factor.
+@item gowl-monitor-transform &optional MONITOR
+Get current transform value (0--7).
+@item gowl-set-monitor-transform TRANSFORM &optional MONITOR
+Set transform (rotation/flip, 0--7).
 @item gowl-arrange
 Recalculate tiling layout.
 @end table

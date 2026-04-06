@@ -266,6 +266,7 @@ extern gint cmd_paste   (CmacsApiTransport *transport, gint argc, gchar **argv);
 extern gint cmd_clip    (CmacsApiTransport *transport, gint argc, gchar **argv);
 extern gint cmd_vc      (CmacsApiTransport *transport, gint argc, gchar **argv);
 extern gint cmd_pkg     (CmacsApiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_monitor (CmacsApiTransport *transport, gint argc, gchar **argv);
 
 /* ── Top-level dispatch table ─────────────────────────────────────── */
 
@@ -359,6 +360,10 @@ static const CmacsApiSubcmd subcmds[] = {
     /* ── packages ──────────────────────────────────────────────────── */
     { "pkg",          cmd_pkg,
       "pkg SUBCMD [ARGS...]",       "package management (install, remove, list)" },
+
+    /* ── monitor management ────────────────────────────────────────── */
+    { "monitor",      cmd_monitor,
+      "monitor SUBCMD [ARGS...]",       "monitor management (list, modes, scale, ...)" },
 
     /* ── original commands ─────────────────────────────────────────── */
     { "eval",         cmd_eval,

@@ -485,6 +485,147 @@ ipc_handle_request (CmacsBaconIpc *ipc, IpcRequest *req)
           g_error_free (err);
         }
     }
+  else if (g_strcmp0 (method, "GowlMonitorInfo") == 0)
+    {
+      const gchar *name = json_object_get_string_member (params, "name");
+      GError *err = NULL;
+      gchar *result = cmacs_dispatch_gowl_monitor_info (name, &err);
+      if (result != NULL)
+        {
+          ipc_send_result (ipc->fd, id, result);
+          g_free (result);
+        }
+      else
+        {
+          ipc_send_error (ipc->fd, id, err->message);
+          g_error_free (err);
+        }
+    }
+  else if (g_strcmp0 (method, "GowlMonitorModes") == 0)
+    {
+      const gchar *name = json_object_get_string_member (params, "name");
+      GError *err = NULL;
+      gchar *result = cmacs_dispatch_gowl_monitor_modes (name, &err);
+      if (result != NULL)
+        {
+          ipc_send_result (ipc->fd, id, result);
+          g_free (result);
+        }
+      else
+        {
+          ipc_send_error (ipc->fd, id, err->message);
+          g_error_free (err);
+        }
+    }
+  else if (g_strcmp0 (method, "GowlSetMonitorMode") == 0)
+    {
+      const gchar *name = json_object_get_string_member (params, "name");
+      gint w = (gint)json_object_get_int_member (params, "width");
+      gint h = (gint)json_object_get_int_member (params, "height");
+      gint refresh = (gint)json_object_get_int_member (params, "refresh_mhz");
+      GError *err = NULL;
+      gchar *result = cmacs_dispatch_gowl_set_monitor_mode (name, w, h,
+                                                              refresh, &err);
+      if (result != NULL)
+        {
+          ipc_send_result (ipc->fd, id, result);
+          g_free (result);
+        }
+      else
+        {
+          ipc_send_error (ipc->fd, id, err->message);
+          g_error_free (err);
+        }
+    }
+  else if (g_strcmp0 (method, "GowlMonitorPosition") == 0)
+    {
+      const gchar *name = json_object_get_string_member (params, "name");
+      GError *err = NULL;
+      gchar *result = cmacs_dispatch_gowl_monitor_position (name, &err);
+      if (result != NULL)
+        {
+          ipc_send_result (ipc->fd, id, result);
+          g_free (result);
+        }
+      else
+        {
+          ipc_send_error (ipc->fd, id, err->message);
+          g_error_free (err);
+        }
+    }
+  else if (g_strcmp0 (method, "GowlSetMonitorPosition") == 0)
+    {
+      const gchar *name = json_object_get_string_member (params, "name");
+      gint x = (gint)json_object_get_int_member (params, "x");
+      gint y = (gint)json_object_get_int_member (params, "y");
+      GError *err = NULL;
+      gchar *result = cmacs_dispatch_gowl_set_monitor_pos (name, x, y, &err);
+      if (result != NULL)
+        {
+          ipc_send_result (ipc->fd, id, result);
+          g_free (result);
+        }
+      else
+        {
+          ipc_send_error (ipc->fd, id, err->message);
+          g_error_free (err);
+        }
+    }
+  else if (g_strcmp0 (method, "GowlSetMonitorEnabled") == 0)
+    {
+      const gchar *name = json_object_get_string_member (params, "name");
+      gboolean en = json_object_get_boolean_member (params, "enabled");
+      GError *err = NULL;
+      gchar *result = cmacs_dispatch_gowl_set_monitor_enabled (name, en,
+                                                                 &err);
+      if (result != NULL)
+        {
+          ipc_send_result (ipc->fd, id, result);
+          g_free (result);
+        }
+      else
+        {
+          ipc_send_error (ipc->fd, id, err->message);
+          g_error_free (err);
+        }
+    }
+  else if (g_strcmp0 (method, "GowlSetMonitorScale") == 0)
+    {
+      const gchar *name = json_object_get_string_member (params, "name");
+      gdouble scale = json_object_get_double_member (params, "scale");
+      GError *err = NULL;
+      gchar *result = cmacs_dispatch_gowl_set_monitor_scale (name, scale,
+                                                               &err);
+      if (result != NULL)
+        {
+          ipc_send_result (ipc->fd, id, result);
+          g_free (result);
+        }
+      else
+        {
+          ipc_send_error (ipc->fd, id, err->message);
+          g_error_free (err);
+        }
+    }
+  else if (g_strcmp0 (method, "GowlSetMonitorTransform") == 0)
+    {
+      const gchar *name = json_object_get_string_member (params, "name");
+      gint xform = (gint)json_object_get_int_member (params, "transform");
+      GError *err = NULL;
+      gchar *result = cmacs_dispatch_gowl_set_monitor_transform (name,
+                                                                    xform,
+                                                                    &err);
+      if (result != NULL)
+        {
+          ipc_send_result (ipc->fd, id, result);
+          g_free (result);
+        }
+      else
+        {
+          ipc_send_error (ipc->fd, id, err->message);
+          g_error_free (err);
+        }
+    }
 
 #endif /* HAVE_CMACS_GOWL */
 

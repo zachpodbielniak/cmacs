@@ -94,6 +94,44 @@ gchar *cmacs_dispatch_gowl_config_get (const gchar *property,
 gchar *cmacs_dispatch_gowl_find_client (const gchar *pattern,
                                          const gchar *by, GError **error);
 
+/* Monitor info by name (JSON string). */
+gchar *cmacs_dispatch_gowl_monitor_info (const gchar *name,
+                                          GError **error);
+
+/* Monitor modes by name (JSON array string). */
+gchar *cmacs_dispatch_gowl_monitor_modes (const gchar *name,
+                                           GError **error);
+
+/* Set monitor mode. */
+gchar *cmacs_dispatch_gowl_set_monitor_mode (const gchar *name,
+                                              gint w, gint h,
+                                              gint refresh_mhz,
+                                              GError **error);
+
+/* Monitor position by name (JSON string). */
+gchar *cmacs_dispatch_gowl_monitor_position (const gchar *name,
+                                              GError **error);
+
+/* Set monitor position. */
+gchar *cmacs_dispatch_gowl_set_monitor_pos (const gchar *name,
+                                             gint x, gint y,
+                                             GError **error);
+
+/* Enable/disable monitor. */
+gchar *cmacs_dispatch_gowl_set_monitor_enabled (const gchar *name,
+                                                 gboolean en,
+                                                 GError **error);
+
+/* Set monitor scale. */
+gchar *cmacs_dispatch_gowl_set_monitor_scale (const gchar *name,
+                                               gdouble scale,
+                                               GError **error);
+
+/* Set monitor transform. */
+gchar *cmacs_dispatch_gowl_set_monitor_transform (const gchar *name,
+                                                    gint xform,
+                                                    GError **error);
+
 #endif /* HAVE_CMACS_GOWL */
 
 #endif /* HAVE_CMACS_GLIB */

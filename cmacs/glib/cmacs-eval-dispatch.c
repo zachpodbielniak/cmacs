@@ -176,6 +176,23 @@ cmacs_dispatch_gi_list_functions (const gchar *ns)
     return NULL;                                                    \
   }} while (0)
 
+/* Resolve a monitor by output name. */
+static GowlMonitor *
+dispatch_resolve_monitor (const gchar *name, GError **error)
+{
+  GList *monitors, *l;
+  monitors = gowl_compositor_get_monitors (cmacs_gowl_compositor);
+  for (l = monitors; l != NULL; l = l->next)
+    {
+      GowlMonitor *m = GOWL_MONITOR (l->data);
+      if (g_strcmp0 (gowl_monitor_get_name (m), name) == 0)
+        return m;
+    }
+  g_set_error (error, CMACS_DISPATCH_ERROR_DOMAIN, 1,
+               "No monitor named \"%s\"", name);
+  return NULL;
+}
+
 gchar *
 cmacs_dispatch_gowl_list_clients (GError **error)
 {
@@ -273,6 +290,7 @@ cmacs_dispatch_gowl_list_monitors (GError **error)
   for (l = monitors; l != NULL; l = l->next)
     {
       GowlMonitor *m = GOWL_MONITOR (l->data);
+      GowlOutputMode *cur;
       gint x, y, w, h;
       gowl_monitor_get_geometry (m, &x, &y, &w, &h);
 
@@ -280,12 +298,30 @@ cmacs_dispatch_gowl_list_monitors (GError **error)
       g_string_append_printf (buf,
         "{\"name\":\"%s\",\"mfact\":%.2f,\"nmaster\":%d,"
         "\"tags\":%u,\"layout\":\"%s\","
-        "\"geometry\":[%d,%d,%d,%d]}",
+        "\"enabled\":%s,\"scale\":%.2f,\"transform\":%d,",
         gowl_monitor_get_name (m) ? : "",
         gowl_monitor_get_mfact (m),
         gowl_monitor_get_nmaster (m),
         (guint)gowl_monitor_get_tags (m),
         gowl_monitor_get_layout_symbol (m) ? : "",
+        gowl_monitor_get_enabled (m) ? "true" : "false",
+        gowl_monitor_get_scale (m),
+        gowl_monitor_get_transform (m));
+
+      cur = gowl_monitor_get_current_mode (m);
+      if (cur != NULL)
+        {
+          g_string_append_printf (buf,
+            "\"current_mode\":{\"width\":%d,\"height\":%d,"
+            "\"refresh_mhz\":%d},",
+            cur->width, cur->height, cur->refresh_mhz);
+          gowl_output_mode_free (cur);
+        }
+      else
+        g_string_append (buf, "\"current_mode\":null,");
+
+      g_string_append_printf (buf,
+        "\"geometry\":[%d,%d,%d,%d]}",
         x, y, w, h);
     }
   g_string_append_c (buf, ']');
@@ -511,6 +547,244 @@ cmacs_dispatch_gowl_find_client (const gchar *pattern, const gchar *by,
     gowl_client_get_app_id (c) ? : "",
     (guint)gowl_client_get_tags (c),
     x, y, w, h);
+}
+
+/* ── Monitor management dispatch ─────────────────────────────────── */
+
+static const char *transform_names[] = {
+  "normal", "90", "180", "270",
+  "flipped", "flipped-90", "flipped-180", "flipped-270"
+};
+
+gchar *
+cmacs_dispatch_gowl_monitor_info (const gchar *name, GError **error)
+{
+  GowlMonitor *m;
+  GowlOutputMode *cur;
+  GList *modes, *ml;
+  GString *buf;
+  gint x, y, w, h;
+
+  GOWL_DISPATCH_CHECK ();
+
+  m = dispatch_resolve_monitor (name, error);
+  if (m == NULL)
+    return NULL;
+
+  gowl_monitor_get_geometry (m, &x, &y, &w, &h);
+
+  buf = g_string_new ("{");
+  g_string_append_printf (buf,
+    "\"name\":\"%s\",\"mfact\":%.2f,\"nmaster\":%d,"
+    "\"tags\":%u,\"layout\":\"%s\","
+    "\"enabled\":%s,\"scale\":%.2f,\"transform\":\"%s\","
+    "\"geometry\":[%d,%d,%d,%d],",
+    gowl_monitor_get_name (m) ? : "",
+    gowl_monitor_get_mfact (m),
+    gowl_monitor_get_nmaster (m),
+    (guint)gowl_monitor_get_tags (m),
+    gowl_monitor_get_layout_symbol (m) ? : "",
+    gowl_monitor_get_enabled (m) ? "true" : "false",
+    gowl_monitor_get_scale (m),
+    transform_names[gowl_monitor_get_transform (m) & 7],
+    x, y, w, h);
+
+  /* current_mode */
+  cur = gowl_monitor_get_current_mode (m);
+  if (cur != NULL)
+    {
+      g_string_append_printf (buf,
+        "\"current_mode\":{\"width\":%d,\"height\":%d,"
+        "\"refresh_mhz\":%d},",
+        cur->width, cur->height, cur->refresh_mhz);
+      gowl_output_mode_free (cur);
+    }
+  else
+    g_string_append (buf, "\"current_mode\":null,");
+
+  /* modes array */
+  g_string_append (buf, "\"modes\":[");
+  modes = gowl_monitor_get_modes (m);
+  for (ml = modes; ml != NULL; ml = ml->next)
+    {
+      GowlOutputMode *om = (GowlOutputMode *)ml->data;
+      if (ml != modes) g_string_append_c (buf, ',');
+      g_string_append_printf (buf,
+        "{\"width\":%d,\"height\":%d,\"refresh_mhz\":%d}",
+        om->width, om->height, om->refresh_mhz);
+      gowl_output_mode_free (om);
+    }
+  g_list_free (modes);
+  g_string_append (buf, "]}");
+
+  return g_string_free (buf, FALSE);
+}
+
+gchar *
+cmacs_dispatch_gowl_monitor_modes (const gchar *name, GError **error)
+{
+  GowlMonitor *m;
+  GList *modes, *l;
+  GString *buf;
+
+  GOWL_DISPATCH_CHECK ();
+
+  m = dispatch_resolve_monitor (name, error);
+  if (m == NULL)
+    return NULL;
+
+  buf = g_string_new ("[");
+  modes = gowl_monitor_get_modes (m);
+  for (l = modes; l != NULL; l = l->next)
+    {
+      GowlOutputMode *om = (GowlOutputMode *)l->data;
+      if (l != modes) g_string_append_c (buf, ',');
+      g_string_append_printf (buf,
+        "{\"width\":%d,\"height\":%d,\"refresh_mhz\":%d}",
+        om->width, om->height, om->refresh_mhz);
+      gowl_output_mode_free (om);
+    }
+  g_list_free (modes);
+  g_string_append_c (buf, ']');
+  return g_string_free (buf, FALSE);
+}
+
+gchar *
+cmacs_dispatch_gowl_set_monitor_mode (const gchar *name, gint w, gint h,
+                                       gint refresh_mhz, GError **error)
+{
+  GowlMonitor *m;
+
+  GOWL_DISPATCH_CHECK ();
+
+  m = dispatch_resolve_monitor (name, error);
+  if (m == NULL)
+    return NULL;
+
+  if (!gowl_monitor_set_mode (m, w, h, refresh_mhz))
+    {
+      g_set_error (error, CMACS_DISPATCH_ERROR_DOMAIN, 1,
+                   "Failed to set mode %dx%d@%d on \"%s\"",
+                   w, h, refresh_mhz, name);
+      return NULL;
+    }
+
+  return g_strdup ("t");
+}
+
+gchar *
+cmacs_dispatch_gowl_monitor_position (const gchar *name, GError **error)
+{
+  GowlMonitor *m;
+  gint x, y;
+
+  GOWL_DISPATCH_CHECK ();
+
+  m = dispatch_resolve_monitor (name, error);
+  if (m == NULL)
+    return NULL;
+
+  gowl_monitor_get_position (m, &x, &y);
+  return g_strdup_printf ("{\"x\":%d,\"y\":%d}", x, y);
+}
+
+gchar *
+cmacs_dispatch_gowl_set_monitor_pos (const gchar *name, gint x, gint y,
+                                      GError **error)
+{
+  GowlMonitor *m;
+
+  GOWL_DISPATCH_CHECK ();
+
+  m = dispatch_resolve_monitor (name, error);
+  if (m == NULL)
+    return NULL;
+
+  if (!gowl_monitor_set_position (m, x, y))
+    {
+      g_set_error (error, CMACS_DISPATCH_ERROR_DOMAIN, 1,
+                   "Failed to set position (%d,%d) on \"%s\"",
+                   x, y, name);
+      return NULL;
+    }
+
+  return g_strdup ("t");
+}
+
+gchar *
+cmacs_dispatch_gowl_set_monitor_enabled (const gchar *name, gboolean en,
+                                          GError **error)
+{
+  GowlMonitor *m;
+
+  GOWL_DISPATCH_CHECK ();
+
+  m = dispatch_resolve_monitor (name, error);
+  if (m == NULL)
+    return NULL;
+
+  if (!gowl_monitor_set_enabled (m, en))
+    {
+      g_set_error (error, CMACS_DISPATCH_ERROR_DOMAIN, 1,
+                   "Failed to %s monitor \"%s\"",
+                   en ? "enable" : "disable", name);
+      return NULL;
+    }
+
+  return g_strdup ("t");
+}
+
+gchar *
+cmacs_dispatch_gowl_set_monitor_scale (const gchar *name, gdouble scale,
+                                        GError **error)
+{
+  GowlMonitor *m;
+
+  GOWL_DISPATCH_CHECK ();
+
+  m = dispatch_resolve_monitor (name, error);
+  if (m == NULL)
+    return NULL;
+
+  if (!gowl_monitor_set_scale (m, scale))
+    {
+      g_set_error (error, CMACS_DISPATCH_ERROR_DOMAIN, 1,
+                   "Failed to set scale %.2f on \"%s\"",
+                   scale, name);
+      return NULL;
+    }
+
+  return g_strdup ("t");
+}
+
+gchar *
+cmacs_dispatch_gowl_set_monitor_transform (const gchar *name, gint xform,
+                                            GError **error)
+{
+  GowlMonitor *m;
+
+  GOWL_DISPATCH_CHECK ();
+
+  m = dispatch_resolve_monitor (name, error);
+  if (m == NULL)
+    return NULL;
+
+  if (xform < 0 || xform > 7)
+    {
+      g_set_error (error, CMACS_DISPATCH_ERROR_DOMAIN, 1,
+                   "Invalid transform %d (must be 0-7)", xform);
+      return NULL;
+    }
+
+  if (!gowl_monitor_set_transform (m, xform))
+    {
+      g_set_error (error, CMACS_DISPATCH_ERROR_DOMAIN, 1,
+                   "Failed to set transform %d on \"%s\"",
+                   xform, name);
+      return NULL;
+    }
+
+  return g_strdup ("t");
 }
 
 #endif /* HAVE_CMACS_GOWL */

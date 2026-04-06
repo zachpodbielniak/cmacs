@@ -754,6 +754,164 @@ Refresh package archive contents.
 cmacsgi pkg refresh
 #+end_example
 
+* Monitor Commands
+
+Group: =monitor=
+
+Manage compositor outputs (monitors) when running in =--gowl= mode.
+
+** monitor list
+
+List connected monitor names, one per line.
+
+#+begin_example
+bacon> cmacsgi monitor list
+WL-1
+DP-1
+#+end_example
+
+** monitor info
+
+Show monitor metadata as =key=value= pairs.
+
+#+begin_example
+cmacsgi monitor info NAME
+#+end_example
+
+#+begin_example
+bacon> cmacsgi monitor info WL-1
+name=WL-1
+mode=1280x720@60
+position=0,0
+scale=1.000000
+enabled=t
+transform=0
+#+end_example
+
+** monitor modes
+
+List advertised modes for a monitor.  Nested Wayland outputs
+typically have no advertised modes (custom modes are used instead).
+
+#+begin_example
+cmacsgi monitor modes NAME
+#+end_example
+
+#+begin_example
+bacon> cmacsgi monitor modes DP-1
+2560x1440@144000
+1920x1080@60000
+1280x720@60000
+#+end_example
+
+** monitor set-mode
+
+Set the output resolution.  Format is =WxH= or =WxH@RATE= where
+RATE is in millihertz (60000 = 60 Hz).  Omit =@RATE= to match any
+refresh rate.
+
+#+begin_example
+cmacsgi monitor set-mode NAME WxH[@RATE]
+#+end_example
+
+#+begin_example
+bacon> cmacsgi monitor set-mode WL-1 1920x1080
+bacon> cmacsgi monitor set-mode DP-1 2560x1440@144000
+#+end_example
+
+If the requested mode matches an advertised mode, it is used directly.
+Otherwise a custom mode is created (common for nested Wayland
+sessions where the parent compositor controls the actual window size).
+
+** monitor position
+
+Get the monitor's position in the output layout.
+
+#+begin_example
+cmacsgi monitor position NAME
+#+end_example
+
+#+begin_example
+bacon> cmacsgi monitor position DP-1
+1280,0
+#+end_example
+
+** monitor set-position
+
+Set the monitor's position in the output layout.
+
+#+begin_example
+cmacsgi monitor set-position NAME X Y
+#+end_example
+
+#+begin_example
+bacon> cmacsgi monitor set-position DP-1 1920 0
+#+end_example
+
+** monitor scale
+
+Get or set the output scale factor.  Without FACTOR, prints the
+current scale.  With FACTOR, sets it.
+
+#+begin_example
+cmacsgi monitor scale NAME [FACTOR]
+#+end_example
+
+#+begin_example
+bacon> cmacsgi monitor scale WL-1
+1.000000
+
+bacon> cmacsgi monitor scale WL-1 2.0
+bacon> cmacsgi monitor scale WL-1 0.8
+bacon> cmacsgi monitor scale WL-1 1.0
+#+end_example
+
+Scale affects the logical resolution: at scale 2.0 on a 1280x720
+output, the logical area shrinks to 640x360 (HiDPI).  At scale 0.8
+it grows to 1600x900.  Clients automatically resize to fill the new
+logical area.
+
+** monitor transform
+
+Get or set the output transform (rotation/flip).  Without VALUE,
+prints the current transform.  With VALUE (0--7), sets it.
+
+#+begin_example
+cmacsgi monitor transform NAME [VALUE]
+#+end_example
+
+| Value | Meaning      |
+|-------+--------------|
+|     0 | normal       |
+|     1 | 90°          |
+|     2 | 180°         |
+|     3 | 270°         |
+|     4 | flipped      |
+|     5 | flipped-90°  |
+|     6 | flipped-180° |
+|     7 | flipped-270° |
+
+#+begin_example
+bacon> cmacsgi monitor transform WL-1 1    ;; rotate 90°
+bacon> cmacsgi monitor transform WL-1 0    ;; back to normal
+#+end_example
+
+** monitor enable
+
+Enable a disabled monitor.
+
+#+begin_example
+cmacsgi monitor enable NAME
+#+end_example
+
+** monitor disable
+
+Disable a monitor.
+
+#+begin_example
+cmacsgi monitor disable NAME
+#+end_example
+
 * GObject Introspection Commands
 
 Call GI functions directly from the shell.
@@ -909,6 +1067,7 @@ These are set automatically by CMacs.  You do not need to configure them.
 | =cmacs/api/cmacs-api-cmd-clip.c=              | Clipboard commands                    |
 | =cmacs/api/cmacs-api-cmd-vc.c=                | Version control commands              |
 | =cmacs/api/cmacs-api-cmd-pkg.c=               | Package management commands           |
+| =cmacs/api/cmacs-api-cmd-monitor.c=           | Monitor management commands           |
 
 * Command Summary
 
@@ -974,6 +1133,16 @@ These are set automatically by CMacs.  You do not need to configure them.
 | =require=       | =require NS [VERSION]=                 | Load GI namespace               |
 | =call=          | =call NS FUNC [ARGS...]=              | Call GI function                |
 | =list=          | =list NS=                              | List GI functions               |
-| =eval=          | =eval EXPR=                            | Evaluate elisp                  |
-| =find-file=     | =find-file PATH=                       | Open file (alias)               |
-| =message=       | =message TEXT=                         | Display echo area message       |
+| =eval=            | =eval EXPR=                              | Evaluate elisp                  |
+| =find-file=       | =find-file PATH=                         | Open file (alias)               |
+| =message=         | =message TEXT=                           | Display echo area message       |
+| =monitor list=    | =monitor list=                           | List monitors                   |
+| =monitor info=    | =monitor info NAME=                      | Show monitor metadata           |
+| =monitor modes=   | =monitor modes NAME=                     | List advertised modes           |
+| =monitor set-mode= | =monitor set-mode NAME WxH[@RATE]=     | Set resolution                  |
+| =monitor position= | =monitor position NAME=                | Get position                    |
+| =monitor set-position= | =monitor set-position NAME X Y=    | Set position                    |
+| =monitor scale=   | =monitor scale NAME [FACTOR]=            | Get/set scale factor            |
+| =monitor transform= | =monitor transform NAME [VALUE]=      | Get/set transform               |
+| =monitor enable=  | =monitor enable NAME=                    | Enable monitor                  |
+| =monitor disable= | =monitor disable NAME=                   | Disable monitor                 |

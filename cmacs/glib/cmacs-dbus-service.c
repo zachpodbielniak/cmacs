@@ -116,6 +116,46 @@ static const gchar introspection_xml[] =
   "      <arg type='s' name='by' direction='in'/>"
   "      <arg type='s' name='result' direction='out'/>"
   "    </method>"
+  "    <method name='GowlMonitorInfo'>"
+  "      <arg type='s' name='name' direction='in'/>"
+  "      <arg type='s' name='result' direction='out'/>"
+  "    </method>"
+  "    <method name='GowlMonitorModes'>"
+  "      <arg type='s' name='name' direction='in'/>"
+  "      <arg type='s' name='result' direction='out'/>"
+  "    </method>"
+  "    <method name='GowlSetMonitorMode'>"
+  "      <arg type='s' name='name' direction='in'/>"
+  "      <arg type='i' name='width' direction='in'/>"
+  "      <arg type='i' name='height' direction='in'/>"
+  "      <arg type='i' name='refresh_mhz' direction='in'/>"
+  "      <arg type='s' name='result' direction='out'/>"
+  "    </method>"
+  "    <method name='GowlMonitorPosition'>"
+  "      <arg type='s' name='name' direction='in'/>"
+  "      <arg type='s' name='result' direction='out'/>"
+  "    </method>"
+  "    <method name='GowlSetMonitorPosition'>"
+  "      <arg type='s' name='name' direction='in'/>"
+  "      <arg type='i' name='x' direction='in'/>"
+  "      <arg type='i' name='y' direction='in'/>"
+  "      <arg type='s' name='result' direction='out'/>"
+  "    </method>"
+  "    <method name='GowlSetMonitorEnabled'>"
+  "      <arg type='s' name='name' direction='in'/>"
+  "      <arg type='b' name='enabled' direction='in'/>"
+  "      <arg type='s' name='result' direction='out'/>"
+  "    </method>"
+  "    <method name='GowlSetMonitorScale'>"
+  "      <arg type='s' name='name' direction='in'/>"
+  "      <arg type='d' name='scale' direction='in'/>"
+  "      <arg type='s' name='result' direction='out'/>"
+  "    </method>"
+  "    <method name='GowlSetMonitorTransform'>"
+  "      <arg type='s' name='name' direction='in'/>"
+  "      <arg type='i' name='transform' direction='in'/>"
+  "      <arg type='s' name='result' direction='out'/>"
+  "    </method>"
 #endif /* HAVE_CMACS_GOWL */
   "  </interface>"
   "</node>";
@@ -474,6 +514,149 @@ handle_method_call (GDBusConnection       *connection,
 
       g_variant_get (parameters, "(&s&s)", &pattern, &by);
       result = cmacs_dispatch_gowl_find_client (pattern, by, &err);
+      if (result != NULL)
+        {
+          g_dbus_method_invocation_return_value (
+            invocation, g_variant_new ("(s)", result));
+          g_free (result);
+        }
+      else
+        dbus_return_gerror (invocation, err);
+    }
+  else if (g_strcmp0 (method_name, "GowlMonitorInfo") == 0)
+    {
+      const gchar *name;
+      GError *err = NULL;
+      gchar *result;
+
+      g_variant_get (parameters, "(&s)", &name);
+      result = cmacs_dispatch_gowl_monitor_info (name, &err);
+      if (result != NULL)
+        {
+          g_dbus_method_invocation_return_value (
+            invocation, g_variant_new ("(s)", result));
+          g_free (result);
+        }
+      else
+        dbus_return_gerror (invocation, err);
+    }
+  else if (g_strcmp0 (method_name, "GowlMonitorModes") == 0)
+    {
+      const gchar *name;
+      GError *err = NULL;
+      gchar *result;
+
+      g_variant_get (parameters, "(&s)", &name);
+      result = cmacs_dispatch_gowl_monitor_modes (name, &err);
+      if (result != NULL)
+        {
+          g_dbus_method_invocation_return_value (
+            invocation, g_variant_new ("(s)", result));
+          g_free (result);
+        }
+      else
+        dbus_return_gerror (invocation, err);
+    }
+  else if (g_strcmp0 (method_name, "GowlSetMonitorMode") == 0)
+    {
+      const gchar *name;
+      gint w, h, refresh;
+      GError *err = NULL;
+      gchar *result;
+
+      g_variant_get (parameters, "(&siii)", &name, &w, &h, &refresh);
+      result = cmacs_dispatch_gowl_set_monitor_mode (name, w, h, refresh,
+                                                       &err);
+      if (result != NULL)
+        {
+          g_dbus_method_invocation_return_value (
+            invocation, g_variant_new ("(s)", result));
+          g_free (result);
+        }
+      else
+        dbus_return_gerror (invocation, err);
+    }
+  else if (g_strcmp0 (method_name, "GowlMonitorPosition") == 0)
+    {
+      const gchar *name;
+      GError *err = NULL;
+      gchar *result;
+
+      g_variant_get (parameters, "(&s)", &name);
+      result = cmacs_dispatch_gowl_monitor_position (name, &err);
+      if (result != NULL)
+        {
+          g_dbus_method_invocation_return_value (
+            invocation, g_variant_new ("(s)", result));
+          g_free (result);
+        }
+      else
+        dbus_return_gerror (invocation, err);
+    }
+  else if (g_strcmp0 (method_name, "GowlSetMonitorPosition") == 0)
+    {
+      const gchar *name;
+      gint x, y;
+      GError *err = NULL;
+      gchar *result;
+
+      g_variant_get (parameters, "(&sii)", &name, &x, &y);
+      result = cmacs_dispatch_gowl_set_monitor_pos (name, x, y, &err);
+      if (result != NULL)
+        {
+          g_dbus_method_invocation_return_value (
+            invocation, g_variant_new ("(s)", result));
+          g_free (result);
+        }
+      else
+        dbus_return_gerror (invocation, err);
+    }
+  else if (g_strcmp0 (method_name, "GowlSetMonitorEnabled") == 0)
+    {
+      const gchar *name;
+      gboolean en;
+      GError *err = NULL;
+      gchar *result;
+
+      g_variant_get (parameters, "(&sb)", &name, &en);
+      result = cmacs_dispatch_gowl_set_monitor_enabled (name, en, &err);
+      if (result != NULL)
+        {
+          g_dbus_method_invocation_return_value (
+            invocation, g_variant_new ("(s)", result));
+          g_free (result);
+        }
+      else
+        dbus_return_gerror (invocation, err);
+    }
+  else if (g_strcmp0 (method_name, "GowlSetMonitorScale") == 0)
+    {
+      const gchar *name;
+      gdouble scale;
+      GError *err = NULL;
+      gchar *result;
+
+      g_variant_get (parameters, "(&sd)", &name, &scale);
+      result = cmacs_dispatch_gowl_set_monitor_scale (name, scale, &err);
+      if (result != NULL)
+        {
+          g_dbus_method_invocation_return_value (
+            invocation, g_variant_new ("(s)", result));
+          g_free (result);
+        }
+      else
+        dbus_return_gerror (invocation, err);
+    }
+  else if (g_strcmp0 (method_name, "GowlSetMonitorTransform") == 0)
+    {
+      const gchar *name;
+      gint xform;
+      GError *err = NULL;
+      gchar *result;
+
+      g_variant_get (parameters, "(&si)", &name, &xform);
+      result = cmacs_dispatch_gowl_set_monitor_transform (name, xform,
+                                                            &err);
       if (result != NULL)
         {
           g_dbus_method_invocation_return_value (

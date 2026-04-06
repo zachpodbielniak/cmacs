@@ -1733,15 +1733,41 @@ DEFUN ("gowl-focused-monitor", Fgowl_focused_monitor,
   return cmacs_gobject_wrap (G_OBJECT (mon));
 }
 
+DEFUN ("gowl-find-monitor", Fgowl_find_monitor, Sgowl_find_monitor,
+       1, 1, 0,
+       doc: /* Return the monitor named NAME, or nil if not found.
+NAME is a string such as "eDP-1" or "HDMI-A-1". */)
+  (Lisp_Object name)
+{
+  GList *monitors, *l;
+  const gchar *target;
+
+  CHECK_STRING (name);
+  GOWL_CHECK_RUNNING ();
+
+  target = SSDATA (name);
+  monitors = gowl_compositor_get_monitors (cmacs_gowl_compositor);
+  for (l = monitors; l != NULL; l = l->next)
+    {
+      GowlMonitor *mon = GOWL_MONITOR (l->data);
+      const gchar *n = gowl_monitor_get_name (mon);
+      if (n != NULL && strcmp (n, target) == 0)
+        return cmacs_gobject_wrap (G_OBJECT (mon));
+    }
+  return Qnil;
+}
+
 DEFUN ("gowl-monitor-info", Fgowl_monitor_info, Sgowl_monitor_info,
        0, 1, 0,
        doc: /* Return an alist of MONITOR properties.
-Keys: name, geometry, mfact, nmaster, tags, layout-symbol.
+Keys: name, geometry, mfact, nmaster, tags, layout-symbol,
+enabled, scale, transform, current-mode, modes.
 MONITOR defaults to the focused monitor. */)
   (Lisp_Object monitor)
 {
   GowlMonitor *mon;
   gint x, y, w, h;
+  Lisp_Object result, modes_list, cur_mode_val;
 
   GOWL_CHECK_RUNNING ();
   mon = gowl_resolve_monitor (monitor);
@@ -1750,18 +1776,373 @@ MONITOR defaults to the focused monitor. */)
 
   gowl_monitor_get_geometry (mon, &x, &y, &w, &h);
 
-  return list5 (
-    Fcons (intern_c_string ("name"),
-           build_string (gowl_monitor_get_name (mon) ? : "")),
-    Fcons (intern_c_string ("geometry"),
-           list4 (make_fixnum (x), make_fixnum (y),
-                  make_fixnum (w), make_fixnum (h))),
-    Fcons (intern_c_string ("mfact"),
-           make_float (gowl_monitor_get_mfact (mon))),
-    Fcons (intern_c_string ("nmaster"),
-           make_fixnum (gowl_monitor_get_nmaster (mon))),
-    Fcons (intern_c_string ("tags"),
-           make_fixnum ((EMACS_INT)gowl_monitor_get_tags (mon))));
+  /* Build modes list and current-mode under mutex (reads wlr_output). */
+  modes_list = Qnil;
+  cur_mode_val = Qnil;
+
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  {
+    GList *modes, *ml;
+    GowlOutputMode *cur;
+    gboolean enabled;
+    gdouble scale;
+    gint transform;
+
+    modes = gowl_monitor_get_modes (mon);
+    for (ml = modes; ml != NULL; ml = ml->next)
+      {
+        GowlOutputMode *m = (GowlOutputMode *)ml->data;
+        modes_list = Fcons (list3 (make_fixnum (m->width),
+                                   make_fixnum (m->height),
+                                   make_fixnum (m->refresh_mhz)),
+                            modes_list);
+        gowl_output_mode_free (m);
+      }
+    g_list_free (modes);
+    modes_list = Fnreverse (modes_list);
+
+    cur = gowl_monitor_get_current_mode (mon);
+    if (cur != NULL)
+      {
+        cur_mode_val = list3 (make_fixnum (cur->width),
+                              make_fixnum (cur->height),
+                              make_fixnum (cur->refresh_mhz));
+        gowl_output_mode_free (cur);
+      }
+
+    enabled = gowl_monitor_get_enabled (mon);
+    scale = gowl_monitor_get_scale (mon);
+    transform = gowl_monitor_get_transform (mon);
+
+    result = list (
+      Fcons (intern_c_string ("name"),
+             build_string (gowl_monitor_get_name (mon) ? : "")),
+      Fcons (intern_c_string ("geometry"),
+             list4 (make_fixnum (x), make_fixnum (y),
+                    make_fixnum (w), make_fixnum (h))),
+      Fcons (intern_c_string ("mfact"),
+             make_float (gowl_monitor_get_mfact (mon))),
+      Fcons (intern_c_string ("nmaster"),
+             make_fixnum (gowl_monitor_get_nmaster (mon))),
+      Fcons (intern_c_string ("tags"),
+             make_fixnum ((EMACS_INT)gowl_monitor_get_tags (mon))),
+      Fcons (intern_c_string ("layout-symbol"),
+             gowl_monitor_get_layout_symbol (mon)
+               ? build_string (gowl_monitor_get_layout_symbol (mon))
+               : Qnil),
+      Fcons (intern_c_string ("enabled"), enabled ? Qt : Qnil),
+      Fcons (intern_c_string ("scale"), make_float (scale)),
+      Fcons (intern_c_string ("transform"), make_fixnum (transform)),
+      Fcons (intern_c_string ("current-mode"), cur_mode_val),
+      Fcons (intern_c_string ("modes"), modes_list));
+  }
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+
+  return result;
+}
+
+DEFUN ("gowl-monitor-modes", Fgowl_monitor_modes,
+       Sgowl_monitor_modes, 0, 1, 0,
+       doc: /* Return available modes for MONITOR as a list of triples.
+Each element is (WIDTH HEIGHT REFRESH-MHZ).
+MONITOR defaults to the focused monitor. */)
+  (Lisp_Object monitor)
+{
+  GowlMonitor *mon;
+  GList *modes, *l;
+  Lisp_Object result = Qnil;
+
+  GOWL_CHECK_RUNNING ();
+  mon = gowl_resolve_monitor (monitor);
+  if (mon == NULL)
+    return Qnil;
+
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  modes = gowl_monitor_get_modes (mon);
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+
+  for (l = modes; l != NULL; l = l->next)
+    {
+      GowlOutputMode *m = (GowlOutputMode *)l->data;
+      result = Fcons (list3 (make_fixnum (m->width),
+                             make_fixnum (m->height),
+                             make_fixnum (m->refresh_mhz)),
+                      result);
+      gowl_output_mode_free (m);
+    }
+  g_list_free (modes);
+
+  return Fnreverse (result);
+}
+
+DEFUN ("gowl-monitor-current-mode", Fgowl_monitor_current_mode,
+       Sgowl_monitor_current_mode, 0, 1, 0,
+       doc: /* Return current mode for MONITOR as (WIDTH HEIGHT REFRESH-MHZ).
+Returns nil if no mode is set.  MONITOR defaults to focused. */)
+  (Lisp_Object monitor)
+{
+  GowlMonitor *mon;
+  GowlOutputMode *cur;
+  Lisp_Object result;
+
+  GOWL_CHECK_RUNNING ();
+  mon = gowl_resolve_monitor (monitor);
+  if (mon == NULL)
+    return Qnil;
+
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  cur = gowl_monitor_get_current_mode (mon);
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+
+  if (cur == NULL)
+    return Qnil;
+
+  result = list3 (make_fixnum (cur->width),
+                  make_fixnum (cur->height),
+                  make_fixnum (cur->refresh_mhz));
+  gowl_output_mode_free (cur);
+  return result;
+}
+
+DEFUN ("gowl-set-monitor-mode", Fgowl_set_monitor_mode,
+       Sgowl_set_monitor_mode, 3, 4, 0,
+       doc: /* Set MONITOR output mode to WIDTH x HEIGHT at REFRESH mHz.
+Returns t on success, nil on failure.  MONITOR defaults to focused. */)
+  (Lisp_Object width, Lisp_Object height, Lisp_Object refresh,
+   Lisp_Object monitor)
+{
+  GowlMonitor *mon;
+  gboolean ok;
+
+  CHECK_FIXNUM (width);
+  CHECK_FIXNUM (height);
+  CHECK_FIXNUM (refresh);
+  GOWL_CHECK_RUNNING ();
+
+  mon = gowl_resolve_monitor (monitor);
+  if (mon == NULL)
+    return Qnil;
+
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  ok = gowl_monitor_set_mode (mon, (gint)XFIXNUM (width),
+                               (gint)XFIXNUM (height),
+                               (gint)XFIXNUM (refresh));
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+
+  return ok ? Qt : Qnil;
+}
+
+DEFUN ("gowl-monitor-position", Fgowl_monitor_position,
+       Sgowl_monitor_position, 0, 1, 0,
+       doc: /* Return MONITOR position as (X . Y) cons cell.
+MONITOR defaults to focused. */)
+  (Lisp_Object monitor)
+{
+  GowlMonitor *mon;
+  gint x, y;
+
+  GOWL_CHECK_RUNNING ();
+  mon = gowl_resolve_monitor (monitor);
+  if (mon == NULL)
+    return Qnil;
+
+  gowl_monitor_get_position (mon, &x, &y);
+  return Fcons (make_fixnum (x), make_fixnum (y));
+}
+
+DEFUN ("gowl-set-monitor-position", Fgowl_set_monitor_position,
+       Sgowl_set_monitor_position, 2, 3, 0,
+       doc: /* Set MONITOR position to X, Y in layout space.
+Returns t on success, nil on failure.  MONITOR defaults to focused. */)
+  (Lisp_Object x, Lisp_Object y, Lisp_Object monitor)
+{
+  GowlMonitor *mon;
+  gboolean ok;
+
+  CHECK_FIXNUM (x);
+  CHECK_FIXNUM (y);
+  GOWL_CHECK_RUNNING ();
+
+  mon = gowl_resolve_monitor (monitor);
+  if (mon == NULL)
+    return Qnil;
+
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  ok = gowl_monitor_set_position (mon, (gint)XFIXNUM (x),
+                                   (gint)XFIXNUM (y));
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+
+  return ok ? Qt : Qnil;
+}
+
+DEFUN ("gowl-monitor-enabled-p", Fgowl_monitor_enabled_p,
+       Sgowl_monitor_enabled_p, 0, 1, 0,
+       doc: /* Return t if MONITOR is enabled, nil otherwise.
+MONITOR defaults to focused. */)
+  (Lisp_Object monitor)
+{
+  GowlMonitor *mon;
+  gboolean enabled;
+
+  GOWL_CHECK_RUNNING ();
+  mon = gowl_resolve_monitor (monitor);
+  if (mon == NULL)
+    return Qnil;
+
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  enabled = gowl_monitor_get_enabled (mon);
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+
+  return enabled ? Qt : Qnil;
+}
+
+DEFUN ("gowl-set-monitor-enabled", Fgowl_set_monitor_enabled,
+       Sgowl_set_monitor_enabled, 1, 2, 0,
+       doc: /* Enable or disable MONITOR according to ENABLED.
+Returns t on success, nil on failure.  MONITOR defaults to focused. */)
+  (Lisp_Object enabled, Lisp_Object monitor)
+{
+  GowlMonitor *mon;
+  gboolean ok;
+
+  GOWL_CHECK_RUNNING ();
+  mon = gowl_resolve_monitor (monitor);
+  if (mon == NULL)
+    return Qnil;
+
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  ok = gowl_monitor_set_enabled (mon, !NILP (enabled));
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+
+  return ok ? Qt : Qnil;
+}
+
+DEFUN ("gowl-monitor-scale", Fgowl_monitor_scale,
+       Sgowl_monitor_scale, 0, 1, 0,
+       doc: /* Return the scale factor for MONITOR as a float.
+MONITOR defaults to focused. */)
+  (Lisp_Object monitor)
+{
+  GowlMonitor *mon;
+  gdouble scale;
+
+  GOWL_CHECK_RUNNING ();
+  mon = gowl_resolve_monitor (monitor);
+  if (mon == NULL)
+    return Qnil;
+
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  scale = gowl_monitor_get_scale (mon);
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+
+  return make_float (scale);
+}
+
+DEFUN ("gowl-set-monitor-scale", Fgowl_set_monitor_scale,
+       Sgowl_set_monitor_scale, 1, 2, 0,
+       doc: /* Set MONITOR scale factor to SCALE.
+SCALE is a number (e.g. 1.0, 1.5, 2.0).
+Returns t on success, nil on failure.  MONITOR defaults to focused. */)
+  (Lisp_Object scale, Lisp_Object monitor)
+{
+  GowlMonitor *mon;
+  gboolean ok;
+
+  CHECK_NUMBER (scale);
+  GOWL_CHECK_RUNNING ();
+
+  mon = gowl_resolve_monitor (monitor);
+  if (mon == NULL)
+    return Qnil;
+
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  ok = gowl_monitor_set_scale (mon, XFLOATINT (scale));
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+
+  return ok ? Qt : Qnil;
+}
+
+DEFUN ("gowl-monitor-transform", Fgowl_monitor_transform,
+       Sgowl_monitor_transform, 0, 1, 0,
+       doc: /* Return the transform for MONITOR as a symbol.
+Possible values: normal, 90, 180, 270, flipped,
+flipped-90, flipped-180, flipped-270.
+MONITOR defaults to focused. */)
+  (Lisp_Object monitor)
+{
+  GowlMonitor *mon;
+  gint xform;
+
+  GOWL_CHECK_RUNNING ();
+  mon = gowl_resolve_monitor (monitor);
+  if (mon == NULL)
+    return Qnil;
+
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  xform = gowl_monitor_get_transform (mon);
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+
+  switch (xform)
+    {
+    case 0: return Qnormal;
+    case 1: return Q90;
+    case 2: return Q180;
+    case 3: return Q270;
+    case 4: return Qflipped;
+    case 5: return Qflipped_90;
+    case 6: return Qflipped_180;
+    case 7: return Qflipped_270;
+    default: return make_fixnum (xform);
+    }
+}
+
+DEFUN ("gowl-set-monitor-transform", Fgowl_set_monitor_transform,
+       Sgowl_set_monitor_transform, 1, 2, 0,
+       doc: /* Set MONITOR transform to TRANSFORM.
+TRANSFORM is an integer 0-7 or a symbol: normal, 90, 180, 270,
+flipped, flipped-90, flipped-180, flipped-270.
+Returns t on success, nil on failure.  MONITOR defaults to focused. */)
+  (Lisp_Object transform, Lisp_Object monitor)
+{
+  GowlMonitor *mon;
+  gint xform;
+  gboolean ok;
+
+  GOWL_CHECK_RUNNING ();
+
+  if (FIXNUMP (transform))
+    xform = (gint)XFIXNUM (transform);
+  else if (EQ (transform, Qnormal))
+    xform = 0;
+  else if (EQ (transform, Q90))
+    xform = 1;
+  else if (EQ (transform, Q180))
+    xform = 2;
+  else if (EQ (transform, Q270))
+    xform = 3;
+  else if (EQ (transform, Qflipped))
+    xform = 4;
+  else if (EQ (transform, Qflipped_90))
+    xform = 5;
+  else if (EQ (transform, Qflipped_180))
+    xform = 6;
+  else if (EQ (transform, Qflipped_270))
+    xform = 7;
+  else
+    error ("Invalid transform: must be integer 0-7 or symbol");
+
+  if (xform < 0 || xform > 7)
+    error ("Transform must be between 0 and 7");
+
+  mon = gowl_resolve_monitor (monitor);
+  if (mon == NULL)
+    return Qnil;
+
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  ok = gowl_monitor_set_transform (mon, xform);
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+
+  return ok ? Qt : Qnil;
 }
 
 
@@ -2514,6 +2895,14 @@ void
 syms_of_cmacs_gowl (void)
 {
   DEFSYM (Qgowl_error, "gowl-error");
+  DEFSYM (Qnormal, "normal");
+  DEFSYM (Q90, "90");
+  DEFSYM (Q180, "180");
+  DEFSYM (Q270, "270");
+  DEFSYM (Qflipped, "flipped");
+  DEFSYM (Qflipped_90, "flipped-90");
+  DEFSYM (Qflipped_180, "flipped-180");
+  DEFSYM (Qflipped_270, "flipped-270");
 
   Fput (Qgowl_error, Qerror_conditions,
         Fcons (Qgowl_error, Fcons (Qerror, Qnil)));
@@ -2584,7 +2973,19 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_list_monitors);
   defsubr (&Sgowl_monitor_count);
   defsubr (&Sgowl_focused_monitor);
+  defsubr (&Sgowl_find_monitor);
   defsubr (&Sgowl_monitor_info);
+  defsubr (&Sgowl_monitor_modes);
+  defsubr (&Sgowl_monitor_current_mode);
+  defsubr (&Sgowl_set_monitor_mode);
+  defsubr (&Sgowl_monitor_position);
+  defsubr (&Sgowl_set_monitor_position);
+  defsubr (&Sgowl_monitor_enabled_p);
+  defsubr (&Sgowl_set_monitor_enabled);
+  defsubr (&Sgowl_monitor_scale);
+  defsubr (&Sgowl_set_monitor_scale);
+  defsubr (&Sgowl_monitor_transform);
+  defsubr (&Sgowl_set_monitor_transform);
 
   /* Tags */
   defsubr (&Sgowl_view_tags);

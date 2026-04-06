@@ -242,7 +242,106 @@ When disabled, stops the compositor."
   (let ((monitors (gowl-list-monitors)))
     (if (null monitors)
         (message "No monitors detected")
-      (message "Gowl: %d monitor(s) connected" (length monitors)))))
+      (with-help-window "*Gowl Monitors*"
+        (princ (format "Gowl Monitors (%d):\n\n" (length monitors)))
+        (princ (format "%-14s %-18s %-10s %-6s %-8s %s\n"
+                       "Name" "Mode" "Position" "Scale" "Status" "Transform"))
+        (princ (make-string 78 ?-))
+        (princ "\n")
+        (dolist (m monitors)
+          (let* ((info (gowl-monitor-info m))
+                 (name (cdr (assq 'name info)))
+                 (geo (cdr (assq 'geometry info)))
+                 (mode (gowl-monitor-current-mode m))
+                 (scale (gowl-monitor-scale m))
+                 (enabled (gowl-monitor-enabled-p m))
+                 (xform (gowl-monitor-transform m)))
+            (princ (format "%-14s %-18s %-10s %-6.1f %-8s %s\n"
+                           name
+                           (if mode
+                               (format "%dx%d@%dHz"
+                                       (nth 0 mode) (nth 1 mode)
+                                       (/ (nth 2 mode) 1000))
+                             "unknown")
+                           (format "%d,%d" (nth 0 geo) (nth 1 geo))
+                           scale
+                           (if enabled "on" "off")
+                           xform))))))))
+
+(defun cmacs-gowl--read-monitor (prompt)
+  "Read a monitor name with completion using PROMPT."
+  (let* ((monitors (gowl-list-monitors))
+         (names (mapcar (lambda (m)
+                          (cdr (assq 'name (gowl-monitor-info m))))
+                        monitors))
+         (name (completing-read prompt names nil t)))
+    (gowl-find-monitor name)))
+
+(defun cmacs-gowl-monitor-info ()
+  "Display detailed info for a selected monitor."
+  (interactive)
+  (unless (gowl-running-p)
+    (user-error "Gowl compositor is not running"))
+  (let* ((mon (cmacs-gowl--read-monitor "Monitor: "))
+         (info (gowl-monitor-info mon)))
+    (with-help-window "*Gowl Monitor Info*"
+      (dolist (kv info)
+        (princ (format "%-15s %S\n" (car kv) (cdr kv)))))))
+
+(defun cmacs-gowl-set-resolution ()
+  "Set resolution for a selected monitor from available modes."
+  (interactive)
+  (unless (gowl-running-p)
+    (user-error "Gowl compositor is not running"))
+  (let* ((mon (cmacs-gowl--read-monitor "Monitor: "))
+         (modes (gowl-monitor-modes mon))
+         (choices (mapcar (lambda (m)
+                            (format "%dx%d@%dHz"
+                                    (nth 0 m) (nth 1 m)
+                                    (/ (nth 2 m) 1000)))
+                          modes))
+         (choice (completing-read "Mode: " choices nil t))
+         (idx (cl-position choice choices :test #'string=))
+         (mode (nth idx modes)))
+    (if (gowl-set-monitor-mode (nth 0 mode) (nth 1 mode) (nth 2 mode) mon)
+        (message "Mode set to %s" choice)
+      (message "Failed to set mode"))))
+
+(defun cmacs-gowl-set-scale (scale)
+  "Set SCALE factor for a selected monitor."
+  (interactive "nScale factor: ")
+  (unless (gowl-running-p)
+    (user-error "Gowl compositor is not running"))
+  (let ((mon (cmacs-gowl--read-monitor "Monitor: ")))
+    (if (gowl-set-monitor-scale scale mon)
+        (message "Scale set to %.1f" scale)
+      (message "Failed to set scale"))))
+
+(defun cmacs-gowl-set-transform ()
+  "Set transform for a selected monitor."
+  (interactive)
+  (unless (gowl-running-p)
+    (user-error "Gowl compositor is not running"))
+  (let* ((mon (cmacs-gowl--read-monitor "Monitor: "))
+         (transforms '("normal" "90" "180" "270"
+                        "flipped" "flipped-90" "flipped-180" "flipped-270"))
+         (choice (completing-read "Transform: " transforms nil t))
+         (sym (intern choice)))
+    (if (gowl-set-monitor-transform sym mon)
+        (message "Transform set to %s" choice)
+      (message "Failed to set transform"))))
+
+(defun cmacs-gowl-toggle-monitor ()
+  "Toggle enable/disable for a selected monitor."
+  (interactive)
+  (unless (gowl-running-p)
+    (user-error "Gowl compositor is not running"))
+  (let* ((mon (cmacs-gowl--read-monitor "Monitor: "))
+         (enabled (gowl-monitor-enabled-p mon)))
+    (if (gowl-set-monitor-enabled (not enabled) mon)
+        (message "Monitor %s"
+                 (if enabled "disabled" "enabled"))
+      (message "Failed to toggle monitor"))))
 
 
 ;;; ── Client embedding ──────────────────────────────────────────────
