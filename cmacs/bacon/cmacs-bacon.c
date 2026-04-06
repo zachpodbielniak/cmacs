@@ -16,17 +16,72 @@
 #include "cmacs-glib-loop.h"
 #include "cmacs-bacon-ipc.h"
 #include <bacon.h>
+#include <gmodule.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <sys/socket.h>
+#include "cmacs-eval-dispatch.h"
 
 /* Persistent shell instance. */
 static BaconShell *cmacs_bacon_shell = NULL;
 
 /* Active IPC handler for the bacon child socketpair. */
 static CmacsBaconIpc *cmacs_bacon_ipc = NULL;
+
+/* ── Direct dispatch for in-process cmacsgi ─────────────────────────── */
+
+/* Mirror the CmacsApiDirectDispatch layout from cmacs-api.h so we
+   can populate it without a build-time dependency on the API lib. */
+typedef struct
+{
+  gchar    *(*eval)       (const gchar *expression, GError **error);
+  void      (*find_file)  (const gchar *path);
+  void      (*message)    (const gchar *text);
+  gboolean  (*gi_require) (const gchar *ns, const gchar *ver,
+                           GError **error);
+  gchar    *(*gi_call)    (const gchar *ns, const gchar *func,
+                           const gchar *const *args, gint n_args,
+                           GError **error);
+  gchar   **(*gi_list_functions) (const gchar *ns);
+} CmacsBaconDispatch;
+
+static const CmacsBaconDispatch cmacs_bacon_dispatch = {
+  cmacs_dispatch_eval,
+  cmacs_dispatch_find_file,
+  cmacs_dispatch_message,
+  cmacs_dispatch_gi_require,
+  cmacs_dispatch_gi_call,
+  cmacs_dispatch_gi_list_functions
+};
+
+static gboolean cmacs_bacon_dispatch_registered = FALSE;
+static GModule *cmacs_bacon_api_module = NULL;
+
+static void
+cmacs_bacon_register_dispatch (void)
+{
+  if (!cmacs_bacon_dispatch_registered)
+    {
+      gchar *path = g_strconcat (CMACS_SRCDIR, "/../cmacs/api/libcmacs-api.so", NULL);
+      cmacs_bacon_api_module = g_module_open (path, G_MODULE_BIND_LAZY);
+      g_free (path);
+
+      if (cmacs_bacon_api_module != NULL)
+        {
+          typedef void (*SetDispatchFunc) (const void *);
+          SetDispatchFunc setter = NULL;
+
+          if (g_module_symbol (cmacs_bacon_api_module,
+                               "cmacs_api_set_direct_dispatch",
+                               (gpointer *) &setter))
+            setter (&cmacs_bacon_dispatch);
+        }
+
+      cmacs_bacon_dispatch_registered = TRUE;
+    }
+}
 
 /* ──────────────────────────────────────────────────────────────────── */
 /* Startup helpers (replicate main.c's post-construction init)         */
@@ -132,8 +187,41 @@ Returns non-nil on success. */)
   if (cmacs_bacon_shell == NULL)
     xsignal1 (Qbacon_error, build_string ("Failed to create BaconShell"));
 
-  /* Replicate main.c's post-construction startup:
-     source RC files and import bash aliases. */
+  /* Register direct dispatch so in-process cmacsgi commands use
+     DIRECT transport (zero IPC overhead, same address space). */
+  cmacs_bacon_register_dispatch ();
+
+  /* Register default builtins (cd, echo, exit, etc.). */
+  bacon_shell_register_default_builtins (cmacs_bacon_shell);
+
+  /* Load modules (including cmacsgi) from standard directories,
+     mirroring cmacs_bacon_main() for the standalone --bacon case. */
+  {
+    BaconModuleManager *mm
+      = bacon_shell_get_module_manager (cmacs_bacon_shell);
+#ifdef BACON_DEV_MODULE_DIR
+    if (g_file_test (BACON_DEV_MODULE_DIR, G_FILE_TEST_IS_DIR))
+      bacon_module_manager_load_from_directory (mm, BACON_DEV_MODULE_DIR);
+#endif
+#ifdef BACON_MODULEDIR
+    if (g_file_test (BACON_MODULEDIR, G_FILE_TEST_IS_DIR))
+      bacon_module_manager_load_from_directory (mm, BACON_MODULEDIR);
+#endif
+#ifdef CMACS_BACON_MODULE_DIR
+    if (g_file_test (CMACS_BACON_MODULE_DIR, G_FILE_TEST_IS_DIR))
+      bacon_module_manager_load_from_directory (mm, CMACS_BACON_MODULE_DIR);
+#endif
+    {
+      const gchar *module_dir = g_getenv ("CMACS_MODULE_DIR");
+      if (module_dir != NULL
+          && g_file_test (module_dir, G_FILE_TEST_IS_DIR))
+        bacon_module_manager_load_from_directory (mm, module_dir);
+    }
+    bacon_module_manager_activate_all (mm);
+    bacon_module_manager_dispatch_startup (mm, cmacs_bacon_shell);
+  }
+
+  /* Source RC files and import bash aliases. */
   cmacs_bacon_source_interactive_rc (cmacs_bacon_shell);
   cmacs_bacon_import_bashrc_aliases (cmacs_bacon_shell);
 

@@ -700,6 +700,7 @@ if test "$with_cmacs_bacon" != "no"; then
       -DBACON_COMPILATION \
       -DBACON_DEV_MODULE_DIR=\\\"\$(abs_top_srcdir)/deps/bacon/build/release/modules\\\" \
       -DBACON_MODULEDIR=\\\"$libdir/bacon/modules\\\" \
+      -DCMACS_BACON_MODULE_DIR=\\\"\$(abs_top_srcdir)/cmacs/bacon/modules\\\" \
       $CMACS_BACON_DEPS_CFLAGS"
     CMACS_BACON_LIBS="-Wl,--whole-archive \$(srcdir)/../deps/bacon/build/release/libbacon-1.0.a \
       -Wl,--no-whole-archive $CMACS_BACON_DEPS_LIBS"
