@@ -727,6 +727,11 @@ if test "$with_cmacs_gowl" != "no"; then
     CMACS_GOWL_LIBS="-Wl,--whole-archive \$(srcdir)/../deps/gowl/build/release/libgowl.a \
       -Wl,--no-whole-archive $CMACS_GOWL_DEPS_LIBS"
     CMACS_GOWL_BUNDLED=yes
+    # Check for libdecor (optional, for nested Wayland window decorations)
+    PKG_CHECK_MODULES([LIBDECOR], [libdecor-0],
+      [CMACS_GOWL_CFLAGS="$CMACS_GOWL_CFLAGS $LIBDECOR_CFLAGS"
+       CMACS_GOWL_LIBS="$CMACS_GOWL_LIBS $LIBDECOR_LIBS"],
+      [AC_MSG_WARN([libdecor not found - nested window decorations disabled])])
   fi
   AC_DEFINE([HAVE_CMACS_GOWL], 1, [CMacs Gowl compositor])
   CMACS_GOWL_OBJ="cmacs-gowl.o keyboard-shortcuts-inhibit-v1-protocol.o"
