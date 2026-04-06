@@ -275,6 +275,9 @@ compositor overlay positioned over this window's body area."
 (defvar-local gowl-embedded-client nil
   "The gowl client embedded in this buffer, or nil.")
 
+(defvar-local gowl-embedded-client-pid nil
+  "PID of the embedded client, cached to avoid dereferencing dead objects.")
+
 (defvar gowl-embed--pending nil
   "Alist of (PID . WINDOW) for spawned clients awaiting map.")
 
@@ -326,6 +329,7 @@ Reparents CLIENT into Emacs's scene tree so its position is
 frame-relative, then positions it over the window body area."
   (with-selected-window window
     (setq-local gowl-embedded-client client)
+    (setq-local gowl-embedded-client-pid (gowl-client-pid client))
     ;; Mark as embedded so arrange() skips it.
     (gowl-set-client-embedded client t)
     (gowl-set-client-border-width client 0)
@@ -383,20 +387,19 @@ frame-relative, then positions it over the window body area."
 
 (defun gowl-embed--check-health ()
   "Kill embed buffers whose clients have exited.
-Compares by PID rather than object identity because
-`gowl-list-clients' allocates fresh wrappers each call."
+Uses the cached PID to avoid dereferencing dead client objects
+whose underlying wlr resources may already be freed."
   (let ((client-pids (when (gowl-running-p)
                        (mapcar #'gowl-client-pid (gowl-list-clients))))
         (has-embeds nil))
     (dolist (buf (buffer-list))
-      (when-let ((client (buffer-local-value 'gowl-embedded-client buf)))
-        (if (memq (gowl-client-pid client) client-pids)
+      (when-let ((pid (buffer-local-value 'gowl-embedded-client-pid buf)))
+        (if (memq pid client-pids)
             (setq has-embeds t)
+          ;; Client is gone — clean up without touching the dead object.
           (with-current-buffer buf
-            (condition-case nil
-                (gowl-set-client-visible client nil)
-              (error nil))
             (setq gowl-embedded-client nil)
+            (setq gowl-embedded-client-pid nil)
             (let ((win (get-buffer-window buf t)))
               (when win (set-window-dedicated-p win nil)))
             (kill-buffer buf)))))
@@ -414,15 +417,22 @@ Compares by PID rather than object identity because
 (defun gowl-embed--on-kill-buffer ()
   "Close the embedded client when its buffer is killed."
   (when gowl-embedded-client
-    (let ((win (get-buffer-window (current-buffer) t)))
-      (when win (set-window-dedicated-p win nil)))
-    (condition-case nil
-        (progn
-          (gowl-set-client-visible gowl-embedded-client nil)
-          (gowl-set-client-embedded gowl-embedded-client nil)
-          (gowl-close-client gowl-embedded-client))
-      (error nil))
-    (setq gowl-embedded-client nil)))
+    (let ((win (get-buffer-window (current-buffer) t))
+          (client gowl-embedded-client)
+          (pid gowl-embedded-client-pid)
+          (live-pids (when (gowl-running-p)
+                       (mapcar #'gowl-client-pid (gowl-list-clients)))))
+      (when win (set-window-dedicated-p win nil))
+      ;; Only call gowl functions if the client is still alive.
+      (when (and pid (memq pid live-pids))
+        (condition-case nil
+            (progn
+              (gowl-set-client-visible client nil)
+              (gowl-set-client-embedded client nil)
+              (gowl-close-client client))
+          (error nil)))
+      (setq gowl-embedded-client nil)
+      (setq gowl-embedded-client-pid nil))))
 
 (add-hook 'kill-buffer-hook #'gowl-embed--on-kill-buffer)
 (add-hook 'window-configuration-change-hook #'gowl-embed--sync-all)
