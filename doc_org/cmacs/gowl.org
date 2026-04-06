@@ -147,6 +147,7 @@ Embedding primitives:
 | =gowl-reparent-client=        | Reparent client to a scene layer               |
 | =gowl-prefloat-pid=           | Pre-register PID for float-on-map              |
 | =gowl-embed-focus=            | Give keyboard focus to an embedded client      |
+| =gowl-embed-expect-client=    | Mark next mapped client for embedding           |
 
 * Customization
 

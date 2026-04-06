@@ -381,7 +381,10 @@ frame-relative, then positions it over the window body area."
     (persp-add-buffer buf)))
 
 (defun gowl-embed--check-pending ()
-  "Match pending PIDs to newly mapped gowl clients."
+  "Match pending embeds to newly mapped gowl clients.
+First tries PID matching (works for direct processes).  If that
+fails, falls back to matching any embedded client that doesn't
+have an embed view yet (catches flatpak/sandbox launchers)."
   (if (null gowl-embed--pending)
       (progn
         (when gowl-embed--pending-timer
@@ -391,9 +394,19 @@ frame-relative, then positions it over the window body area."
       (dolist (entry (copy-sequence gowl-embed--pending))
         (let* ((pid (car entry))
                (window (cdr entry))
+               ;; Try PID match first.
                (client (seq-find
                         (lambda (c) (= (gowl-client-pid c) pid))
-                        clients)))
+                        clients))
+               ;; Fallback: any embedded client without a view yet.
+               ;; The client-map callback marks it embedded; this
+               ;; catches flatpak/sandbox where spawn PID != client PID.
+               (client (or client
+                          (seq-find
+                           (lambda (c)
+                             (and (alist-get 'embedded (gowl-client-info c))
+                                  (not (gowl-embed-view-p c))))
+                           clients))))
           (when client
             (setq gowl-embed--pending (delq entry gowl-embed--pending))
             (when (window-live-p window)
@@ -471,6 +484,7 @@ routes input to the client when the pointer is over it."
          (buf (generate-new-buffer (format "*gowl: %s*" command)))
          (win (selected-window)))
     (gowl-prefloat-pid pid)
+    (gowl-embed-expect-client)
     (gowl-embed--setup-buffer buf command)
     (gowl-embed--display-buffer buf win)
     (push (cons pid win) gowl-embed--pending)

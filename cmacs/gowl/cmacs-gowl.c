@@ -90,6 +90,12 @@ static int cmacs_embed_key_state = EMBED_KB_NORMAL;
 static gboolean cmacs_embed_esc_release_pending = FALSE;
 static struct wl_event_source *cmacs_embed_wl_esc_timer = NULL;
 
+/* ── Pending embed counter (for client-map callback) ─────────────────
+ * Incremented by gowl-embed-expect-client, decremented by the
+ * client-map callback.  When > 0, newly mapped clients that weren't
+ * caught by prefloat PID matching are force-embedded. */
+static int cmacs_embed_pending_count = 0;
+
 static void
 gowl_embed_view_capture (struct gowl_embed_view *view)
 {
@@ -526,15 +532,39 @@ static gboolean cmacs_gowl_key_intercept (GowlCompositor *comp,
                                            guint keycode, gboolean pressed,
                                            gpointer data);
 
+/* Client-map callback: force-embed clients when embeds are pending.
+   Runs on the dispatch thread (mutex held). */
+static void
+cmacs_gowl_client_map (GowlCompositor *comp, GowlClient *client,
+                        gpointer data)
+{
+  (void) data;
+
+  /* If this client was already caught by prefloat PID matching,
+     it's already embedded — nothing to do. */
+  if (gowl_client_get_embedded (client))
+    return;
+
+  /* If we're expecting an embed (flatpak, etc.), claim this client. */
+  if (cmacs_embed_pending_count > 0)
+    {
+      cmacs_embed_pending_count--;
+      gowl_client_set_embedded (client, TRUE);
+      gowl_client_set_floating (client, TRUE);
+      gowl_client_set_visible (client, FALSE);
+      gowl_compositor_reparent_client (comp, client,
+                                       GOWL_SCENE_LAYER_OVERLAY);
+      gowl_compositor_arrange (comp, gowl_client_get_monitor (client));
+    }
+}
+
 void
 cmacs_gowl_start_thread (void)
 {
   if (cmacs_gowl_thread_running || cmacs_gowl_compositor == NULL)
     return;
 
-  /* Register ESC intercept and timer before the dispatch thread
-     starts processing keyboard events.  This runs from emacs.c
-     --gowl handler, before Elisp initializes. */
+  /* Register callbacks before the dispatch thread starts. */
   if (cmacs_embed_wl_esc_timer == NULL)
     {
       struct wl_event_loop *loop =
@@ -542,6 +572,9 @@ cmacs_gowl_start_thread (void)
       gowl_compositor_set_key_intercept (cmacs_gowl_compositor,
                                          cmacs_gowl_key_intercept,
                                          NULL);
+      gowl_compositor_set_client_map_callback (cmacs_gowl_compositor,
+                                               cmacs_gowl_client_map,
+                                               NULL);
       cmacs_embed_wl_esc_timer =
         wl_event_loop_add_timer (loop, cmacs_embed_wl_esc_timeout,
                                  cmacs_gowl_compositor);
@@ -1044,7 +1077,7 @@ DEFUN ("gowl-close-client", Fgowl_close_client, Sgowl_close_client,
 DEFUN ("gowl-client-info", Fgowl_client_info, Sgowl_client_info,
        1, 1, 0,
        doc: /* Return an alist of info about CLIENT.
-Keys: title, app-id, tags, floating, fullscreen, urgent, pid, id, geometry. */)
+Keys: title, app-id, tags, floating, embedded, geometry. */)
   (Lisp_Object client)
 {
   GowlClient *c;
@@ -1062,9 +1095,8 @@ Keys: title, app-id, tags, floating, fullscreen, urgent, pid, id, geometry. */)
            make_fixnum ((EMACS_INT)gowl_client_get_tags (c))),
     Fcons (intern_c_string ("floating"),
            gowl_client_get_floating (c) ? Qt : Qnil),
-    Fcons (intern_c_string ("geometry"),
-           list4 (make_fixnum (x), make_fixnum (y),
-                  make_fixnum (w), make_fixnum (h))));
+    Fcons (intern_c_string ("embedded"),
+           gowl_client_get_embedded (c) ? Qt : Qnil));
 }
 
 DEFUN ("gowl-move-client", Fgowl_move_client, Sgowl_move_client,
@@ -1635,6 +1667,19 @@ control to Emacs.  CLIENT is a gowl client object. */)
     wlr_seat_keyboard_notify_enter (seat, surf, NULL, 0, NULL);
   pthread_mutex_unlock (&cmacs_gowl_mutex);
 
+  return Qt;
+}
+
+DEFUN ("gowl-embed-expect-client", Fgowl_embed_expect_client,
+       Sgowl_embed_expect_client, 0, 0, 0,
+       doc: /* Tell the compositor to embed the next unmapped client.
+When a new Wayland client maps and was not caught by the PID-based
+prefloat mechanism (e.g. flatpak, sandbox launchers), the compositor
+will force-embed it instead of tiling it normally.  The counter is
+decremented on each match, so call once per expected embed. */)
+  (void)
+{
+  cmacs_embed_pending_count++;
   return Qt;
 }
 
@@ -2386,6 +2431,7 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_embed_destroy_view);
   defsubr (&Sgowl_embed_view_p);
   defsubr (&Sgowl_embed_focus);
+  defsubr (&Sgowl_embed_expect_client);
 
   /* Process control */
   defsubr (&Sgowl_spawn);

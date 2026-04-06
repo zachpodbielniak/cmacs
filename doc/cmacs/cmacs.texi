@@ -1641,6 +1641,8 @@ Reparent client to a scene layer.
 Pre-register PID for float-on-map.
 @item gowl-embed-focus CLIENT
 Give keyboard focus to an embedded client.
+@item gowl-embed-expect-client
+Mark the next mapped client for embedding.
 @end table
 
 @section Customization
