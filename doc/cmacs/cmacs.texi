@@ -1683,17 +1683,33 @@ Bundled gowl library (git submodule).
 
 @section Configure Flags
 
-CMacs features are off by default.  Enable them with:
+CMacs features are auto-detected at configure time.  For a
+fully-featured build matching Fedora defaults, use:
 
 @example
 ./configure \
-  --with-cmacs-glib    \  # GLib event loop + GObject bridge + D-Bus
-  --with-cmacs-gi      \  # GObject Introspection
-  --with-cmacs-crispy  \  # Crispy C scripting
-  --with-cmacs-bacon   \  # Bacon shell (bundled from deps/bacon/)
-  --with-cmacs-gowl    \  # Gowl Wayland compositor (optional)
-  --with-pgtk          \
-  --with-native-compilation=aot
+  --with-pgtk \
+  --with-cairo \
+  --with-dbus \
+  --with-harfbuzz \
+  --with-modules \
+  --with-native-compilation=aot \
+  --with-tree-sitter \
+  --with-sqlite3 \
+  --with-json \
+  --with-rsvg \
+  --with-jpeg \
+  --with-png \
+  --with-gif \
+  --with-tiff \
+  --with-webp \
+  --with-xpm \
+  --with-gpm=no \
+  --with-cmacs-glib \
+  --with-cmacs-gi \
+  --with-cmacs-crispy \
+  --with-cmacs-bacon \
+  --with-cmacs-gowl
 @end example
 
 @noindent

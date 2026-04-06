@@ -156,12 +156,28 @@ cd cmacs
 ./install-deps           # installs system packages + builds crispy/bacon/gowl
 ./autogen.sh
 ./configure \
+  --with-pgtk \
+  --with-cairo \
+  --with-dbus \
+  --with-harfbuzz \
+  --with-modules \
+  --with-native-compilation=aot \
+  --with-tree-sitter \
+  --with-sqlite3 \
+  --with-json \
+  --with-rsvg \
+  --with-jpeg \
+  --with-png \
+  --with-gif \
+  --with-tiff \
+  --with-webp \
+  --with-xpm \
+  --with-gpm=no \
   --with-cmacs-glib \
   --with-cmacs-gi \
   --with-cmacs-crispy \
   --with-cmacs-bacon \
-  --with-cmacs-gowl \
-  --with-pgtk
+  --with-cmacs-gowl
 make -j$(nproc)
 sudo make install
 #+end_src
@@ -226,13 +242,44 @@ Requires =autoconf= (>= 2.65) and =automake=.
 
 #+begin_src bash
 ./configure \
+  --with-pgtk \
+  --with-cairo \
+  --with-dbus \
+  --with-harfbuzz \
+  --with-modules \
+  --with-native-compilation=aot \
+  --with-tree-sitter \
+  --with-sqlite3 \
+  --with-json \
+  --with-rsvg \
+  --with-jpeg \
+  --with-png \
+  --with-gif \
+  --with-tiff \
+  --with-webp \
+  --with-xpm \
+  --with-gpm=no \
   --with-cmacs-glib \
   --with-cmacs-gi \
   --with-cmacs-crispy \
   --with-cmacs-bacon \
-  --with-cmacs-gowl \
-  --with-pgtk
+  --with-cmacs-gowl
 #+end_src
+
+Emacs flags:
+
+- =--with-pgtk= --- pure GTK (native Wayland support, required for gowl)
+- =--with-cairo= --- Cairo rendering backend
+- =--with-dbus= --- D-Bus support (used by cmacs D-Bus service)
+- =--with-harfbuzz= --- HarfBuzz text shaping
+- =--with-modules= --- dynamic module loading
+- =--with-native-compilation=aot= --- ahead-of-time native compilation of all Elisp
+- =--with-tree-sitter= --- tree-sitter syntax parsing
+- =--with-sqlite3= --- SQLite3 support
+- =--with-json= --- native JSON parsing
+- =--with-rsvg= --- SVG image rendering
+- =--with-jpeg/png/gif/tiff/webp/xpm= --- image format support
+- =--with-gpm=no= --- disable GPM console mouse (not needed on desktop)
 
 Module flags:
 
@@ -249,14 +296,6 @@ force system-installed versions:
 --with-cmacs-crispy=system
 --with-cmacs-bacon=system
 --with-cmacs-gowl=system
-#+end_src
-
-If optional image/TLS libraries are missing, use =ifavailable=:
-
-#+begin_src bash
---with-xpm=ifavailable --with-jpeg=ifavailable \
---with-gif=ifavailable --with-tiff=ifavailable \
---with-gnutls=ifavailable
 #+end_src
 
 *** 5. Build

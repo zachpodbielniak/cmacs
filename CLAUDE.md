@@ -5,7 +5,14 @@
 ```bash
 ./install-deps            # system dependencies (Fedora, Ubuntu, Arch, macOS, FreeBSD)
 ./autogen.sh              # first time only
-./configure               # auto-detects bundled deps in deps/
+./configure \             # see README.org for full recommended flags
+  --with-pgtk --with-cairo --with-dbus --with-harfbuzz \
+  --with-modules --with-native-compilation=aot \
+  --with-tree-sitter --with-sqlite3 --with-json \
+  --with-rsvg --with-jpeg --with-png --with-gif \
+  --with-tiff --with-webp --with-xpm --with-gpm=no \
+  --with-cmacs-glib --with-cmacs-gi --with-cmacs-crispy \
+  --with-cmacs-bacon --with-cmacs-gowl
 make -j$(nproc)           # builds deps + emacs
 src/emacs                 # run it
 ```
