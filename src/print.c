@@ -1842,14 +1842,17 @@ print_vectorlike_unreadable (Lisp_Object obj, Lisp_Object printcharfun,
 	  print_c_string ("#<killed xwidget>", printcharfun);
 	else
 	  {
-#ifdef USE_GTK
+#ifdef HAVE_WEBKIT
 	    int len = sprintf (buf, "#<xwidget %u %p>",
 			       XXWIDGET (obj)->xwidget_id,
 			       XXWIDGET (obj)->widget_osr);
-#else
+#elif defined NS_IMPL_COCOA
 	    int len = sprintf (buf, "#<xwidget %u %p>",
 			       XXWIDGET (obj)->xwidget_id,
 			       XXWIDGET (obj)->xwWidget);
+#else
+	    int len = sprintf (buf, "#<xwidget %u>",
+			       XXWIDGET (obj)->xwidget_id);
 #endif
 	    strout (buf, len, len, printcharfun);
 	  }

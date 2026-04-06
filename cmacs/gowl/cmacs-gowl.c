@@ -41,7 +41,7 @@
 #include <wlr/types/wlr_keyboard.h>
 #include <wlr/types/wlr_seat.h>
 #include <xkbcommon/xkbcommon-keysyms.h>
-#include <wlr/render/wlr_texture.h>
+#include <wlr/types/wlr_buffer.h>
 #include <drm_fourcc.h>
 #include <cairo.h>
 #include <pthread.h>
@@ -59,9 +59,9 @@ static pthread_mutex_t cmacs_gowl_mutex = PTHREAD_MUTEX_INITIALIZER;
  *
  * Each embedded client gets a GtkDrawingArea added to the Emacs frame's
  * GtkFixed container.  The draw callback reads pixels from the client's
- * wlr_texture via wlr_texture_read_pixels() and paints them with Cairo.
- * A wl_listener on surface->events.commit queues a redraw when the
- * client renders a new frame.
+ * wlr_buffer via wlr_buffer_begin_data_ptr_access() (CPU-side, no EGL)
+ * and paints them with Cairo.  A wl_listener on surface->events.commit
+ * queues a redraw when the client renders a new frame.
  *
  * Input: mouse/keyboard events on the GtkDrawingArea are forwarded to
  * the Wayland client via the compositor's wlr_seat.
@@ -100,23 +100,30 @@ static void
 gowl_embed_view_capture (struct gowl_embed_view *view)
 {
   struct wlr_surface *surface;
-  struct wlr_texture *texture;
+  struct wlr_buffer *buffer;
+  void *data;
+  uint32_t fmt;
+  size_t src_stride, needed;
   int tw, th;
-  size_t stride, needed;
-  struct wlr_texture_read_pixels_options opts;
 
   surface = gowl_client_get_wlr_surface (view->client);
   if (surface == NULL || surface->buffer == NULL)
     return;
 
-  texture = surface->buffer->texture;
-  if (texture == NULL)
+  buffer = &surface->buffer->base;
+  tw = buffer->width;
+  th = buffer->height;
+
+  /* Access pixel data directly from the buffer — no EGL needed.
+     This is safe to call from the GTK main thread because it uses
+     CPU-side access (SHM direct pointer or DMA-BUF CPU map),
+     avoiding the EGL context which belongs to the compositor thread. */
+  if (!wlr_buffer_begin_data_ptr_access (buffer,
+                                         WLR_BUFFER_DATA_PTR_ACCESS_READ,
+                                         &data, &fmt, &src_stride))
     return;
 
-  tw = texture->width;
-  th = texture->height;
-  stride = (size_t) tw * 4;
-  needed = stride * (size_t) th;
+  needed = src_stride * (size_t) th;
 
   if (needed > view->pixel_buf_size)
     {
@@ -125,13 +132,8 @@ gowl_embed_view_capture (struct gowl_embed_view *view)
       view->pixel_buf_size = needed;
     }
 
-  memset (&opts, 0, sizeof (opts));
-  opts.data = view->pixel_buf;
-  opts.format = DRM_FORMAT_ARGB8888;
-  opts.stride = (uint32_t) stride;
-
-  if (!wlr_texture_read_pixels (texture, &opts))
-    return;
+  memcpy (view->pixel_buf, data, needed);
+  wlr_buffer_end_data_ptr_access (buffer);
 
   /* Recreate Cairo surface if dimensions changed. */
   if (view->cr_surface != NULL
@@ -143,7 +145,7 @@ gowl_embed_view_capture (struct gowl_embed_view *view)
 
   if (view->cr_surface == NULL)
     view->cr_surface = cairo_image_surface_create_for_data (
-      view->pixel_buf, CAIRO_FORMAT_ARGB32, tw, th, (int) stride);
+      view->pixel_buf, CAIRO_FORMAT_ARGB32, tw, th, (int) src_stride);
   else
     cairo_surface_mark_dirty (view->cr_surface);
 
@@ -188,10 +190,8 @@ gowl_embed_view_idle_capture (gpointer data)
   if (!view->dirty || view->widget == NULL)
     return G_SOURCE_REMOVE;
 
-  /* The idle callback runs AFTER all higher-priority sources (Wayland
-     events at G_PRIORITY_DEFAULT and output frame handling) have been
-     dispatched.  The compositor's renderer has finished presenting,
-     so eglMakeCurrent in wlr_texture_read_pixels won't conflict. */
+  /* Read pixels via wlr_buffer CPU access (no EGL needed).
+     Safe on the GTK main thread — avoids the compositor's EGL context. */
   gowl_embed_view_capture (view);
   view->dirty = FALSE;
   gtk_widget_queue_draw (view->widget);
@@ -2367,6 +2367,145 @@ DEFUN ("gowl-load-modules-from-dir", Fgowl_load_modules_from_dir,
 }
 
 
+/* ── Xwidget integration ─────────────────────────────────────────────
+ *
+ * When HAVE_XWIDGETS is enabled alongside HAVE_CMACS_GOWL, embedded
+ * Wayland clients render as xwidget buffer content instead of floating
+ * overlays.  The xwidget display engine (XWIDGET_GLYPH) handles
+ * positioning and clipping automatically; we just provide the draw
+ * and event callbacks.
+ */
+
+#ifdef HAVE_XWIDGETS
+#include "xwidget.h"
+
+void
+cmacs_gowl_xwidget_setup (struct xwidget *xw, GtkWidget *view_widget)
+{
+  struct gowl_embed_view *view;
+  struct wlr_surface *surface;
+  GowlClient *c = (GowlClient *) xw->gowl_client;
+
+  if (c == NULL)
+    return;
+
+  view = g_new0 (struct gowl_embed_view, 1);
+  view->client = c;
+  view->widget = view_widget;
+  view->view_w = xw->width;
+  view->view_h = xw->height;
+
+  /* Configure the client to render at widget size. */
+  gowl_client_set_visible (c, FALSE);
+  gowl_client_set_embedded (c, TRUE);
+  gowl_client_set_border_width (c, 0);
+  gowl_compositor_position_embedded (cmacs_gowl_compositor, c,
+                                     0, 0, view->view_w, view->view_h);
+
+  /* Listen for surface commits to capture new frames. */
+  surface = gowl_client_get_wlr_surface (c);
+  if (surface != NULL)
+    {
+      view->commit.notify = gowl_embed_view_on_commit;
+      wl_signal_add (&surface->events.commit, &view->commit);
+    }
+  else
+    wl_list_init (&view->commit.link);
+
+  xw->gowl_view = view;
+
+  if (embed_views == NULL)
+    embed_views = g_hash_table_new (g_direct_hash, g_direct_equal);
+  g_hash_table_insert (embed_views, c, view);
+}
+
+void
+cmacs_gowl_xwidget_teardown (struct xwidget *xw)
+{
+  struct gowl_embed_view *view = (struct gowl_embed_view *) xw->gowl_view;
+  GowlClient *c = (GowlClient *) xw->gowl_client;
+
+  if (view == NULL)
+    return;
+
+  /* The xwidget system destroys the GtkWidget — don't double-free. */
+  view->widget = NULL;
+
+  if (embed_views != NULL && c != NULL)
+    g_hash_table_remove (embed_views, c);
+
+  gowl_embed_view_free (view);
+  xw->gowl_view = NULL;
+
+  /* Close the Wayland client. */
+  if (c != NULL && cmacs_gowl_compositor != NULL)
+    {
+      pthread_mutex_lock (&cmacs_gowl_mutex);
+      gowl_client_close (c);
+      pthread_mutex_unlock (&cmacs_gowl_mutex);
+    }
+}
+
+gboolean
+cmacs_gowl_xwidget_draw_cb (GtkWidget *widget, cairo_t *cr, gpointer data)
+{
+  struct xwidget_view *xv = data;
+  struct xwidget *xw = XXWIDGET (xv->model);
+  struct gowl_embed_view *view = (struct gowl_embed_view *) xw->gowl_view;
+
+  if (view == NULL)
+    return FALSE;
+
+  /* Update view dimensions from xwidget (may have been resized). */
+  view->view_w = xw->width;
+  view->view_h = xw->height;
+
+  return gowl_embed_view_draw (widget, cr, view);
+}
+
+gboolean
+cmacs_gowl_xwidget_event_cb (GtkWidget *widget, GdkEvent *event,
+                              gpointer data)
+{
+  struct xwidget_view *xv = data;
+  struct xwidget *xw = XXWIDGET (xv->model);
+  struct gowl_embed_view *view = (struct gowl_embed_view *) xw->gowl_view;
+
+  if (view == NULL)
+    return FALSE;
+
+  return gowl_embed_view_event (widget, event, view);
+}
+
+DEFUN ("gowl-make-xwidget", Fgowl_make_xwidget, Sgowl_make_xwidget,
+       3, 4, 0,
+       doc: /* Create a gowl xwidget for CLIENT with size WIDTH x HEIGHT.
+CLIENT is a gowl client object.  Optional BUFFER defaults to current buffer.
+Returns an xwidget object suitable for use in display properties. */)
+  (Lisp_Object client, Lisp_Object width, Lisp_Object height,
+   Lisp_Object buffer)
+{
+  GowlClient *c;
+  struct xwidget *xw;
+  Lisp_Object val;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_FIXNAT (width);
+  CHECK_FIXNAT (height);
+
+  c = gowl_resolve_client (client);
+
+  val = cmacs_xwidget_allocate_gowl (buffer, XFIXNAT (width),
+                                      XFIXNAT (height));
+  xw = XXWIDGET (val);
+  xw->gowl_client = c;
+
+  return val;
+}
+
+#endif /* HAVE_XWIDGETS */
+
+
 /* ══════════════════════════════════════════════════════════════════════
  * Init
  * ══════════════════════════════════════════════════════════════════════ */
@@ -2432,6 +2571,11 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_embed_view_p);
   defsubr (&Sgowl_embed_focus);
   defsubr (&Sgowl_embed_expect_client);
+
+#ifdef HAVE_XWIDGETS
+  /* Xwidget-based embedding */
+  defsubr (&Sgowl_make_xwidget);
+#endif
 
   /* Process control */
   defsubr (&Sgowl_spawn);

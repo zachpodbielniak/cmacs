@@ -22,5 +22,18 @@ extern void cmacs_gowl_start_thread (void);
 /* Inhibit parent compositor keyboard shortcuts (nested mode). */
 extern void cmacs_gowl_inhibit_parent_shortcuts (GowlCompositor *comp);
 
+/* Xwidget integration callbacks — called from xwidget.c for gowl type. */
+struct xwidget;
+#include <gtk/gtk.h>
+extern void cmacs_gowl_xwidget_setup (struct xwidget *xw,
+                                       GtkWidget *view_widget);
+extern void cmacs_gowl_xwidget_teardown (struct xwidget *xw);
+extern gboolean cmacs_gowl_xwidget_draw_cb (GtkWidget *widget,
+                                             cairo_t *cr,
+                                             gpointer data);
+extern gboolean cmacs_gowl_xwidget_event_cb (GtkWidget *widget,
+                                              GdkEvent *event,
+                                              gpointer data);
+
 #endif /* HAVE_CMACS_GOWL */
 #endif /* CMACS_GOWL_H */

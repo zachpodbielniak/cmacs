@@ -73,12 +73,19 @@ struct xwidget
   char *find_text;
 
 #if defined (USE_GTK)
+#ifdef HAVE_WEBKIT
   /* For offscreen widgets, unused if not osr.  */
   GtkWidget *widget_osr;
   GtkWidget *widgetwindow_osr;
   struct frame *embedder;
   struct xwidget_view *embedder_view;
   guint hit_result;
+#endif
+#ifdef HAVE_CMACS_GOWL
+  /* Gowl embedded Wayland client state. */
+  void *gowl_client;              /* GowlClient* */
+  void *gowl_view;                /* struct gowl_embed_view* */
+#endif
 #elif defined (NS_IMPL_COCOA)
 # ifdef __OBJC__
   /* For offscreen widgets, unused if not osr.  */
@@ -204,6 +211,11 @@ void store_xwidget_js_callback_event (struct xwidget *xw,
                                       Lisp_Object argument);
 
 extern struct xwidget *xwidget_from_id (uint32_t id);
+
+#ifdef HAVE_CMACS_GOWL
+extern Lisp_Object cmacs_xwidget_allocate_gowl (Lisp_Object buffer,
+                                                  int width, int height);
+#endif
 
 #ifdef HAVE_X_WINDOWS
 struct xwidget_view *xwidget_view_from_window (Window wdesc);

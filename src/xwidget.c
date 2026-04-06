@@ -35,8 +35,10 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 
 /* Include xwidget bottom end headers.  */
 #ifdef USE_GTK
+#ifdef HAVE_WEBKIT
 #include <webkit2/webkit2.h>
 #include <JavaScriptCore/JavaScript.h>
+#endif
 #include <cairo.h>
 #ifndef HAVE_PGTK
 #include <cairo-xlib.h>
@@ -51,6 +53,10 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 #include "nsxwidget.h"
 #endif
 
+#ifdef HAVE_CMACS_GOWL
+#include "cmacs-gowl.h"
+#endif
+
 #include <math.h>
 
 static Lisp_Object id_to_xwidget_map;
@@ -61,10 +67,13 @@ static uint32_t xwidget_counter = 0;
 #ifdef USE_GTK
 #ifdef HAVE_X_WINDOWS
 static Lisp_Object x_window_to_xwv_map;
+#ifdef HAVE_WEBKIT
 #if WEBKIT_CHECK_VERSION (2, 34, 0)
 static Lisp_Object dummy_tooltip_string;
 #endif
 #endif
+#endif
+#ifdef HAVE_WEBKIT
 static gboolean offscreen_damage_event (GtkWidget *, GdkEvent *, gpointer);
 static void synthesize_focus_in_event (GtkWidget *);
 static GdkDevice *find_suitable_keyboard (struct frame *);
@@ -74,6 +83,7 @@ static void record_osr_embedder (struct xwidget_view *);
 static void from_embedder (GdkWindow *, double, double, gpointer, gpointer, gpointer);
 static void to_embedder (GdkWindow *, double, double, gpointer, gpointer, gpointer);
 static GdkWindow *pick_embedded_child (GdkWindow *, double, double, gpointer);
+#endif /* HAVE_WEBKIT */
 #endif
 
 static struct xwidget *
@@ -95,7 +105,7 @@ static struct xwidget_view *xwidget_view_lookup (struct xwidget *,
 						 struct window *);
 static void kill_xwidget (struct xwidget *);
 
-#ifdef USE_GTK
+#ifdef HAVE_WEBKIT
 static void webkit_view_load_changed_cb (WebKitWebView *,
                                          WebKitLoadEvent,
                                          gpointer);
@@ -125,9 +135,9 @@ struct widget_search_data
 };
 
 static void find_widget (GtkWidget *t, struct widget_search_data *);
-#endif
+#endif /* HAVE_WEBKIT */
 
-#ifdef HAVE_PGTK
+#if defined HAVE_PGTK && defined HAVE_WEBKIT
 static void mouse_target_changed (WebKitWebView *, WebKitHitTestResult *, guint,
 				  gpointer);
 
@@ -303,7 +313,14 @@ fails.  */)
   CHECK_FIXNAT (width);
   CHECK_FIXNAT (height);
 
-  if (!EQ (type, Qwebkit))
+  if (1
+#ifdef HAVE_WEBKIT
+      && !EQ (type, Qwebkit)
+#endif
+#ifdef HAVE_CMACS_GOWL
+      && !EQ (type, Qgowl)
+#endif
+      )
     error ("Bad xwidget type");
 
   Frequire (Qxwidget, Qnil, Qnil);
@@ -327,9 +344,16 @@ fails.  */)
   Fputhash (make_fixnum (xw->xwidget_id), val, id_to_xwidget_map);
 
 #ifdef USE_GTK
+#ifdef HAVE_WEBKIT
   xw->widgetwindow_osr = NULL;
   xw->widget_osr = NULL;
   xw->hit_result = 0;
+#endif
+#ifdef HAVE_CMACS_GOWL
+  xw->gowl_client = NULL;
+  xw->gowl_view = NULL;
+#endif
+#ifdef HAVE_WEBKIT
   if (EQ (xw->type, Qwebkit))
     {
       block_input ();
@@ -452,12 +476,44 @@ fails.  */)
 
       unblock_input ();
     }
+#endif /* HAVE_WEBKIT */
 #elif defined NS_IMPL_COCOA
   nsxwidget_init (xw);
 #endif
 
   return val;
 }
+
+#ifdef HAVE_CMACS_GOWL
+/* Allocate and register an xwidget for use by gowl embedding.
+   Called from cmacs-gowl.c.  The caller fills in gowl-specific fields. */
+Lisp_Object
+cmacs_xwidget_allocate_gowl (Lisp_Object buffer, int width, int height)
+{
+  struct xwidget *xw = allocate_xwidget ();
+  Lisp_Object val;
+
+  xw->type = Qgowl;
+  xw->title = build_string ("gowl");
+  xw->buffer = NILP (buffer) ? Fcurrent_buffer ()
+    : Fget_buffer_create (buffer, Qnil);
+  xw->width = width;
+  xw->height = height;
+  xw->kill_without_query = true;
+  xw->plist = Qnil;
+  xw->xwidget_id = ++xwidget_counter;
+  xw->find_text = NULL;
+  xw->gowl_client = NULL;
+  xw->gowl_view = NULL;
+
+  XSETXWIDGET (val, xw);
+  internal_xwidget_list = Fcons (val, internal_xwidget_list);
+  Vxwidget_list = Fcopy_sequence (internal_xwidget_list);
+  Fputhash (make_fixnum (xw->xwidget_id), val, id_to_xwidget_map);
+
+  return val;
+}
+#endif /* HAVE_CMACS_GOWL */
 
 DEFUN ("xwidget-live-p", Fxwidget_live_p, Sxwidget_live_p,
        1, 1, 0, doc: /* Return t if OBJECT is an xwidget that has not been killed.
@@ -469,7 +525,7 @@ Value is nil if OBJECT is not an xwidget or if it has been killed.  */)
 	  ? Qt : Qnil);
 }
 
-#ifdef USE_GTK
+#ifdef HAVE_WEBKIT
 static void
 set_widget_if_text_view (GtkWidget *widget, void *data)
 {
@@ -480,6 +536,7 @@ set_widget_if_text_view (GtkWidget *widget, void *data)
 }
 #endif
 
+#ifdef HAVE_WEBKIT
 DEFUN ("xwidget-perform-lispy-event",
        Fxwidget_perform_lispy_event, Sxwidget_perform_lispy_event,
        2, 3, 0, doc: /* Send a lispy event to XWIDGET.
@@ -489,7 +546,7 @@ On X11, modifier keys will not be processed if FRAME is nil and the
 selected frame is not an X-Windows frame.  */)
   (Lisp_Object xwidget, Lisp_Object event, Lisp_Object frame)
 {
-#ifdef USE_GTK
+#ifdef HAVE_WEBKIT
   struct frame *f = NULL;
   GdkEvent *xg_event;
   GtkContainerClass *klass;
@@ -503,7 +560,7 @@ selected frame is not an X-Windows frame.  */)
 
   CHECK_LIVE_XWIDGET (xwidget);
 
-#ifdef USE_GTK
+#ifdef HAVE_WEBKIT
   if (!NILP (frame))
     f = decode_window_system_frame (frame);
   else if (FRAME_WINDOW_P (SELECTED_FRAME ()))
@@ -667,10 +724,11 @@ selected frame is not an X-Windows frame.  */)
     gdk_offscreen_window_set_embedder (osw, NULL);
 #endif	/* HAVE_XINPUT2 */
   unblock_input ();
-#endif	/* USE_GTK */
+#endif	/* HAVE_WEBKIT */
 
   return Qnil;
 }
+#endif /* HAVE_WEBKIT */
 
 DEFUN ("get-buffer-xwidgets", Fget_buffer_xwidgets, Sget_buffer_xwidgets,
        1, 1, 0,
@@ -716,6 +774,7 @@ xwidget_from_id (uint32_t id)
 }
 
 #ifdef USE_GTK
+#ifdef HAVE_WEBKIT
 static GdkWindow *
 pick_embedded_child (GdkWindow *window, double x, double y,
 		     gpointer user_data)
@@ -2110,6 +2169,7 @@ synthesize_focus_in_event (GtkWidget *offscreen_window)
   gtk_main_do_event (focus_event);
   gdk_event_free (focus_event);
 }
+#endif /* HAVE_WEBKIT */
 
 #ifdef HAVE_X_WINDOWS
 struct xwidget_view *
@@ -2156,6 +2216,7 @@ xwidget_hide_view (struct xwidget_view *xv)
 #endif
 }
 
+#ifdef HAVE_WEBKIT
 #ifndef HAVE_PGTK
 static void
 xv_do_draw (struct xwidget_view *xw, struct xwidget *w)
@@ -2257,6 +2318,51 @@ xwidget_expose (struct xwidget_view *xv)
   xv_do_draw (xv, xw);
 }
 #endif
+#endif /* HAVE_WEBKIT */
+
+#if !defined HAVE_WEBKIT && defined HAVE_X_WINDOWS
+/* Stubs for X11 xwidget functions that only apply to WebKit offscreen
+   rendering.  xterm.c calls these under HAVE_XWIDGETS, so they must
+   exist at link time even when WebKit is absent.  */
+
+void
+xwidget_expose (struct xwidget_view *xv)
+{
+}
+
+void
+xwidget_button (struct xwidget_view *xv, bool down,
+		int x, int y, int button, int modifier, Time time)
+{
+}
+
+void
+xwidget_motion_or_crossing (struct xwidget_view *xv, const XEvent *event)
+{
+}
+
+#ifdef HAVE_XINPUT2
+void
+xwidget_motion_notify (struct xwidget_view *xv, double x, double y,
+		       double root_x, double root_y, uint state, Time time)
+{
+}
+
+void
+xwidget_scroll (struct xwidget_view *xv, double x, double y,
+		double dx, double dy, uint state, Time time, bool stop_p)
+{
+}
+
+#ifdef HAVE_XINPUT2_4
+void
+xwidget_pinch (struct xwidget_view *xv, XIGesturePinchEvent *event)
+{
+}
+#endif /* HAVE_XINPUT2_4 */
+#endif /* HAVE_XINPUT2 */
+#endif /* !HAVE_WEBKIT && HAVE_X_WINDOWS */
+
 #endif /* USE_GTK */
 
 void
@@ -2309,7 +2415,7 @@ store_xwidget_js_callback_event (struct xwidget *xw,
 }
 
 
-#ifdef USE_GTK
+#ifdef HAVE_WEBKIT
 static void
 store_xwidget_display_event (struct xwidget *xw,
 			     struct xwidget *src)
@@ -2692,7 +2798,7 @@ webkit_script_dialog_cb (WebKitWebView *webview,
 
   return TRUE;
 }
-#endif /* USE_GTK */
+#endif /* HAVE_WEBKIT */
 
 
 /* Initializes and does initial placement of an xwidget view on screen.  */
@@ -2742,10 +2848,25 @@ xwidget_init_view (struct xwidget *xww,
   gtk_container_add (GTK_CONTAINER (FRAME_GTK_WIDGET (s->f)),
 		     xv->widget);
 
-  g_signal_connect (xv->widget, "draw",
-		    G_CALLBACK (xwidget_view_draw_cb), xv);
-  g_signal_connect (xv->widget, "event",
-		    G_CALLBACK (xw_forward_event_from_view), xv);
+#ifdef HAVE_CMACS_GOWL
+  if (EQ (xww->type, Qgowl))
+    {
+      cmacs_gowl_xwidget_setup (xww, xv->widget);
+      g_signal_connect (xv->widget, "draw",
+			G_CALLBACK (cmacs_gowl_xwidget_draw_cb), xv);
+      g_signal_connect (xv->widget, "event",
+			G_CALLBACK (cmacs_gowl_xwidget_event_cb), xv);
+    }
+  else
+#endif
+    {
+#ifdef HAVE_WEBKIT
+      g_signal_connect (xv->widget, "draw",
+			G_CALLBACK (xwidget_view_draw_cb), xv);
+      g_signal_connect (xv->widget, "event",
+			G_CALLBACK (xw_forward_event_from_view), xv);
+#endif
+    }
 
   g_object_set_data (G_OBJECT (xv->widget), XG_XWIDGET_VIEW, xv);
 
@@ -2758,7 +2879,7 @@ xwidget_init_view (struct xwidget *xww,
   xv->clip_bottom = xww->height;
 
   xv->frame = s->f;
-  xv->cursor = cursor_for_hit (xww->hit_result, s->f);
+  xv->cursor = FRAME_OUTPUT_DATA (s->f)->nontext_cursor;
   xv->just_resized = false;
 #elif defined NS_IMPL_COCOA
   nsxwidget_init_view (xv, xww, s, x, y);
@@ -2990,11 +3111,14 @@ x_draw_xwidget_glyph_string (struct glyph_string *s)
     {
       if (!xwidget_hidden (xv))
 	{
+#ifdef HAVE_WEBKIT
 #ifdef USE_GTK
-	  gtk_widget_queue_draw (xww->widget_osr);
+	  if (EQ (xww->type, Qwebkit))
+	    gtk_widget_queue_draw (xww->widget_osr);
 #elif defined NS_IMPL_COCOA
 	  nsxwidget_set_needsdisplay (xv);
 #endif
+#endif /* HAVE_WEBKIT */
 	}
     }
 #ifdef HAVE_X_WINDOWS
@@ -3005,19 +3129,22 @@ x_draw_xwidget_glyph_string (struct glyph_string *s)
     }
 #endif
 
+#ifdef HAVE_WEBKIT
 #if defined HAVE_XINPUT2 || defined HAVE_PGTK
-  if (!NILP (xww->buffer))
+  if (!NILP (xww->buffer) && EQ (xww->type, Qwebkit))
     {
       record_osr_embedder (xv);
       synthesize_focus_in_event (xww->widget_osr);
     }
 #endif
+#endif /* HAVE_WEBKIT */
 
 #ifdef USE_GTK
   unblock_input ();
 #endif
 }
 
+#ifdef HAVE_WEBKIT
 #define CHECK_WEBKIT_WIDGET(xw)				\
   if (NILP (xw->buffer) || !EQ (xw->type, Qwebkit))	\
     error ("Not a WebKit widget")
@@ -3227,6 +3354,7 @@ argument procedure FUN.*/)
 #endif
   return Qnil;
 }
+#endif /* HAVE_WEBKIT */
 
 DEFUN ("xwidget-resize", Fxwidget_resize, Sxwidget_resize, 3, 3, 0,
        doc: /* Resize XWIDGET to NEW_WIDTH, NEW_HEIGHT.  */ )
@@ -3263,7 +3391,7 @@ DEFUN ("xwidget-resize", Fxwidget_resize, Sxwidget_resize, 3, 3, 0,
   redisplay ();
 
   /* If there is an offscreen widget resize it first.  */
-#ifdef USE_GTK
+#ifdef HAVE_WEBKIT
   if (xw->widget_osr)
     {
       gtk_window_resize (GTK_WINDOW (xw->widgetwindow_osr), xw->width,
@@ -3293,13 +3421,18 @@ Emacs allocated area accordingly.  */)
   (Lisp_Object xwidget)
 {
   CHECK_LIVE_XWIDGET (xwidget);
-#ifdef USE_GTK
-  GtkRequisition requisition;
-  gtk_widget_size_request (XXWIDGET (xwidget)->widget_osr, &requisition);
-  return list2i (requisition.width, requisition.height);
-#elif defined NS_IMPL_COCOA
+#ifdef HAVE_WEBKIT
+  if (EQ (XXWIDGET (xwidget)->type, Qwebkit))
+    {
+      GtkRequisition requisition;
+      gtk_widget_size_request (XXWIDGET (xwidget)->widget_osr, &requisition);
+      return list2i (requisition.width, requisition.height);
+    }
+#endif
+#ifdef NS_IMPL_COCOA
   return nsxwidget_get_size (XXWIDGET (xwidget));
 #endif
+  return list2i (XXWIDGET (xwidget)->width, XXWIDGET (xwidget)->height);
 }
 
 DEFUN ("xwidgetp",
@@ -3379,45 +3512,48 @@ DEFUN ("delete-xwidget-view",
 
   block_input ();
 #ifdef USE_GTK
-  struct xwidget *xw = XXWIDGET (xv->model);
-  GdkWindow *w;
 #ifdef HAVE_X_WINDOWS
-  if (xv->wdesc != None)
-    {
-      cairo_destroy (xv->cr_context);
-      cairo_surface_destroy (xv->cr_surface);
-      XDestroyWindow (xv->dpy, xv->wdesc);
-      Fremhash (make_fixnum (xv->wdesc), x_window_to_xwv_map);
-    }
+  {
+    struct xwidget *xw = XXWIDGET (xv->model);
+    GdkWindow *w;
+    if (xv->wdesc != None)
+      {
+	cairo_destroy (xv->cr_context);
+	cairo_surface_destroy (xv->cr_surface);
+	XDestroyWindow (xv->dpy, xv->wdesc);
+	Fremhash (make_fixnum (xv->wdesc), x_window_to_xwv_map);
+      }
 
-  if (xv->last_crossing_window)
-    g_signal_handler_disconnect (xv->last_crossing_window,
-				 xv->last_crossing_cursor_signal);
-  g_clear_pointer (&xv->last_crossing_window,
-		   g_object_unref);
+    if (xv->last_crossing_window)
+      g_signal_handler_disconnect (xv->last_crossing_window,
+				   xv->last_crossing_cursor_signal);
+    g_clear_pointer (&xv->last_crossing_window,
+		     g_object_unref);
 
-  if (xv->passive_grab)
-    {
-      g_signal_handler_disconnect (xv->passive_grab,
-				   xv->passive_grab_destruction_signal);
-      g_signal_handler_disconnect (xv->passive_grab,
-				   xv->passive_grab_drag_signal);
-      xv->passive_grab = NULL;
-    }
+    if (xv->passive_grab)
+      {
+	g_signal_handler_disconnect (xv->passive_grab,
+				     xv->passive_grab_destruction_signal);
+	g_signal_handler_disconnect (xv->passive_grab,
+				     xv->passive_grab_drag_signal);
+	xv->passive_grab = NULL;
+      }
 
+#ifdef HAVE_WEBKIT
+    if (xw->embedder_view == xv && !NILP (xw->buffer))
+      {
+	w = gtk_widget_get_window (xw->widgetwindow_osr);
+
+	XXWIDGET (xv->model)->embedder_view = NULL;
+	XXWIDGET (xv->model)->embedder = NULL;
+
+	gdk_offscreen_window_set_embedder (w, NULL);
+      }
+#endif /* HAVE_WEBKIT */
+  }
 #else
   gtk_widget_destroy (xv->widget);
 #endif
-
-  if (xw->embedder_view == xv && !NILP (xw->buffer))
-    {
-      w = gtk_widget_get_window (xw->widgetwindow_osr);
-
-      XXWIDGET (xv->model)->embedder_view = NULL;
-      XXWIDGET (xv->model)->embedder = NULL;
-
-      gdk_offscreen_window_set_embedder (w, NULL);
-    }
 #elif defined NS_IMPL_COCOA
   nsxwidget_delete_view (xv);
 #endif
@@ -3525,6 +3661,7 @@ DEFUN ("xwidget-query-on-exit-flag",
   return (XXWIDGET (xwidget)->kill_without_query ? Qnil : Qt);
 }
 
+#ifdef HAVE_WEBKIT
 DEFUN ("xwidget-webkit-search", Fxwidget_webkit_search, Sxwidget_webkit_search,
        2, 5, 0,
        doc: /* Begin an incremental search operation in an xwidget.
@@ -3689,6 +3826,7 @@ using `xwidget-webkit-search'.  */)
 
   return Qnil;
 }
+#endif /* HAVE_WEBKIT */
 
 DEFUN ("kill-xwidget", Fkill_xwidget, Skill_xwidget,
        1, 1, 0,
@@ -3709,7 +3847,7 @@ removes it from `xwidget-list', and detaches it from its buffer.  */)
   return Qnil;
 }
 
-#ifdef USE_GTK
+#ifdef HAVE_WEBKIT
 DEFUN ("xwidget-webkit-load-html", Fxwidget_webkit_load_html,
        Sxwidget_webkit_load_html, 2, 3, 0,
        doc: /* Make XWIDGET's WebKit widget render TEXT.
@@ -3840,8 +3978,9 @@ LIMIT is not specified or nil, it is treated as `50'.  */)
   return list3 (back, here, forward);
 }
 
-#endif
+#endif /* HAVE_WEBKIT load-html + back-forward-list */
 
+#ifdef HAVE_WEBKIT
 DEFUN ("xwidget-webkit-set-cookie-storage-file",
        Fxwidget_webkit_set_cookie_storage_file, Sxwidget_webkit_set_cookie_storage_file,
        2, 2, 0, doc: /* Make the WebKit widget XWIDGET load and store cookies in FILE.
@@ -3902,6 +4041,7 @@ XWIDGET as part of loading a page.  */)
 
   return Qnil;
 }
+#endif /* HAVE_WEBKIT */
 
 void
 syms_of_xwidget (void)
@@ -3923,6 +4063,7 @@ syms_of_xwidget (void)
   defsubr (&Sxwidget_query_on_exit_flag);
   defsubr (&Sset_xwidget_query_on_exit_flag);
 
+#ifdef HAVE_WEBKIT
   defsubr (&Sxwidget_webkit_uri);
   defsubr (&Sxwidget_webkit_title);
   defsubr (&Sxwidget_webkit_goto_uri);
@@ -3931,26 +4072,29 @@ syms_of_xwidget (void)
   defsubr (&Sxwidget_webkit_execute_script);
   DEFSYM (Qwebkit, "webkit");
 
+  defsubr (&Sxwidget_perform_lispy_event);
+  defsubr (&Sxwidget_webkit_search);
+  defsubr (&Sxwidget_webkit_finish_search);
+  defsubr (&Sxwidget_webkit_next_result);
+  defsubr (&Sxwidget_webkit_previous_result);
+  defsubr (&Sxwidget_webkit_set_cookie_storage_file);
+  defsubr (&Sxwidget_webkit_stop_loading);
+  defsubr (&Sxwidget_webkit_load_html);
+  defsubr (&Sxwidget_webkit_back_forward_list);
+  defsubr (&Sxwidget_webkit_estimated_load_progress);
+#endif /* HAVE_WEBKIT */
+
+#ifdef HAVE_CMACS_GOWL
+  DEFSYM (Qgowl, "gowl");
+#endif
+
   defsubr (&Sxwidget_size_request);
   defsubr (&Sdelete_xwidget_view);
 
   defsubr (&Sxwidget_plist);
   defsubr (&Sxwidget_buffer);
   defsubr (&Sset_xwidget_plist);
-  defsubr (&Sxwidget_perform_lispy_event);
-  defsubr (&Sxwidget_webkit_search);
-  defsubr (&Sxwidget_webkit_finish_search);
-  defsubr (&Sxwidget_webkit_next_result);
-  defsubr (&Sxwidget_webkit_previous_result);
   defsubr (&Sset_xwidget_buffer);
-  defsubr (&Sxwidget_webkit_set_cookie_storage_file);
-  defsubr (&Sxwidget_webkit_stop_loading);
-#ifdef USE_GTK
-  defsubr (&Sxwidget_webkit_load_html);
-  defsubr (&Sxwidget_webkit_back_forward_list);
-#endif
-
-  defsubr (&Sxwidget_webkit_estimated_load_progress);
   defsubr (&Skill_xwidget);
 
   DEFSYM (QCxwidget, ":xwidget");
@@ -3972,12 +4116,14 @@ syms_of_xwidget (void)
 	       doc: /* List of all xwidget views.  */);
   Vxwidget_view_list = Qnil;
 
+#ifdef HAVE_WEBKIT
   DEFVAR_BOOL ("xwidget-webkit-disable-javascript", xwidget_webkit_disable_javascript,
     doc: /* If non-nil, disable execution of JavaScript in xwidget WebKit widgets.
 Modifications to this setting do not take effect in existing WebKit
 widgets; kill all xwidget-webkit buffers for changes in this setting
 to take effect.  */);
   xwidget_webkit_disable_javascript = false;
+#endif
 
   Fprovide (intern ("xwidget-internal"), Qnil);
 
@@ -3995,13 +4141,17 @@ to take effect.  */);
 
   staticpro (&x_window_to_xwv_map);
 
+#ifdef HAVE_WEBKIT
 #if WEBKIT_CHECK_VERSION (2, 34, 0)
   dummy_tooltip_string = build_string ("");
   staticpro (&dummy_tooltip_string);
 #endif
-#endif
+#endif /* HAVE_WEBKIT */
+#endif /* HAVE_X_WINDOWS */
+#ifdef HAVE_WEBKIT
   DEFSYM (Qdownload_callback, "download-callback");
   DEFSYM (Qjavascript_callback, "javascript-callback");
+#endif
 }
 
 
@@ -4233,31 +4383,44 @@ kill_xwidget (struct xwidget *xw)
 #ifdef USE_GTK
   xw->buffer = Qnil;
 
-  if (xw->widget_osr && xw->widgetwindow_osr)
+#ifdef HAVE_CMACS_GOWL
+  if (EQ (xw->type, Qgowl))
     {
-      gtk_widget_destroy (xw->widget_osr);
-      gtk_widget_destroy (xw->widgetwindow_osr);
+      cmacs_gowl_xwidget_teardown (xw);
+      xw->gowl_client = NULL;
+      xw->gowl_view = NULL;
     }
-
-  if (xw->find_text)
-    xfree (xw->find_text);
-
-  if (!NILP (xw->script_callbacks))
+#endif
+#ifdef HAVE_WEBKIT
+  if (EQ (xw->type, Qwebkit))
     {
-      for (ptrdiff_t idx = 0; idx < ASIZE (xw->script_callbacks); idx++)
+      if (xw->widget_osr && xw->widgetwindow_osr)
 	{
-	  Lisp_Object cb = AREF (xw->script_callbacks, idx);
-	  if (!NILP (cb))
-	    xfree (xmint_pointer (XCAR (cb)));
-	  ASET (xw->script_callbacks, idx, Qnil);
+	  gtk_widget_destroy (xw->widget_osr);
+	  gtk_widget_destroy (xw->widgetwindow_osr);
 	}
+
+      if (xw->find_text)
+	xfree (xw->find_text);
+
+      if (!NILP (xw->script_callbacks))
+	{
+	  for (ptrdiff_t idx = 0; idx < ASIZE (xw->script_callbacks); idx++)
+	    {
+	      Lisp_Object cb = AREF (xw->script_callbacks, idx);
+	      if (!NILP (cb))
+		xfree (xmint_pointer (XCAR (cb)));
+	      ASET (xw->script_callbacks, idx, Qnil);
+	    }
+	}
+
+      xw->widget_osr = NULL;
+      xw->widgetwindow_osr = NULL;
+      xw->find_text = NULL;
+
+      catch_child_signal ();
     }
-
-  xw->widget_osr = NULL;
-  xw->widgetwindow_osr = NULL;
-  xw->find_text = NULL;
-
-  catch_child_signal ();
+#endif
 #elif defined NS_IMPL_COCOA
   nsxwidget_kill (xw);
 #endif
@@ -4279,5 +4442,7 @@ kill_buffer_xwidgets (Lisp_Object buffer)
       }
     }
 
+#ifdef HAVE_WEBKIT
   catch_child_signal ();
+#endif
 }

@@ -716,7 +716,7 @@ if test "$with_cmacs_gowl" != "no"; then
     # Build libgowl from deps/gowl/ (default)
     PKG_CHECK_MODULES([CMACS_GOWL_DEPS],
       [wlroots-0.19 wayland-server wayland-client wayland-protocols pixman-1 xkbcommon \
-       glib-2.0 gobject-2.0 gio-2.0 pango pangocairo])
+       glib-2.0 gobject-2.0 gio-2.0 pango pangocairo json-glib-1.0 yaml-0.1])
     CMACS_GOWL_CFLAGS="-I\$(srcdir)/../deps/gowl/src \
       -I\$(srcdir)/../deps/gowl/src/core \
       -I\$(srcdir)/../deps/gowl/src/config \
@@ -4612,6 +4612,16 @@ if test "$with_xwidgets" != "no"; then
   test $HAVE_XWIDGETS = yes ||
     AC_MSG_ERROR([xwidgets requested but WebKitGTK+ or WebKit framework not found.])
 
+  AC_DEFINE([HAVE_XWIDGETS], [1], [Define to 1 if you have xwidgets support.])
+  AC_DEFINE([HAVE_WEBKIT], [1], [Define to 1 if WebKit is available.])
+fi
+
+dnl Enable xwidget infrastructure for gowl even without WebKit.
+dnl The xwidget display engine (XWIDGET_GLYPH) is widget-type-agnostic;
+dnl gowl uses it to embed Wayland surfaces as buffer content.
+if test "$HAVE_XWIDGETS" = "no" && test -n "$CMACS_GOWL_OBJ"; then
+  HAVE_XWIDGETS=yes
+  XWIDGETS_OBJ="xwidget.o"
   AC_DEFINE([HAVE_XWIDGETS], [1], [Define to 1 if you have xwidgets support.])
 fi
 AC_SUBST([XWIDGETS_OBJ])
