@@ -413,12 +413,31 @@ usage: (gi-method OBJECT METHOD &rest ARGS) */)
     gint i;
 
     loaded = g_irepository_get_loaded_namespaces (repo);
-    for (i = 0; loaded[i] != NULL; i++)
+    for (i = 0; loaded[i] != NULL && base == NULL; i++)
       {
-        base = g_irepository_find_by_name (repo, loaded[i], type_name);
-        if (base != NULL)
-          break;
+        const char *ns = loaded[i];
+        size_t ns_len = strlen (ns);
+        const char *short_name = type_name;
+
+        /* Strip namespace prefix: "GtkButton" → "Button".
+           Also handle version digits: "WebKit2" → "WebKit". */
+        if (strncmp (type_name, ns, ns_len) == 0)
+          short_name = type_name + ns_len;
+        else
+          {
+            size_t base_len = ns_len;
+            while (base_len > 0
+                   && ns[base_len - 1] >= '0'
+                   && ns[base_len - 1] <= '9')
+              base_len--;
+            if (base_len > 0 && base_len < ns_len
+                && strncmp (type_name, ns, base_len) == 0)
+              short_name = type_name + base_len;
+          }
+
+        base = g_irepository_find_by_name (repo, ns, short_name);
       }
+    g_strfreev (loaded);
 
     if (base == NULL)
       error ("GI type info not found for '%s'", type_name);

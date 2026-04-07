@@ -29,5 +29,8 @@ extern GClosure *cmacs_gclosure_new (Lisp_Object func);
 extern gulong cmacs_gclosure_connect (GObject *obj, const gchar *signal,
                                       Lisp_Object func);
 
+/* Initialize GC protection for closures.  Call from syms_of_*. */
+extern void cmacs_gclosure_init (void);
+
 #endif /* HAVE_CMACS_GLIB */
 #endif /* CMACS_GCLOSURE_H */

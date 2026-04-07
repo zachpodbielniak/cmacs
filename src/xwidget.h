@@ -86,6 +86,10 @@ struct xwidget
   void *gowl_client;              /* GowlClient* */
   void *gowl_view;                /* struct gowl_embed_view* */
 #endif
+#ifdef HAVE_PGTK
+  /* Directly embedded GTK widget for gtk-embed xwidget type. */
+  GtkWidget *gtk_embed_widget;
+#endif
 #elif defined (NS_IMPL_COCOA)
 # ifdef __OBJC__
   /* For offscreen widgets, unused if not osr.  */

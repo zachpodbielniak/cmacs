@@ -1,0 +1,86 @@
+#+TITLE: Org-Ex GTK Control Examples
+#+ORGEX: t
+#+STARTUP: showall
+
+* GTK Control Examples
+
+The =elisp= widget type evaluates Elisp code that returns a GTK
+widget via GObject Introspection.  This gives access to the full
+GTK 4 widget toolkit from inside an Org document.
+
+** Button with Click Handler
+
+A simple GTK button.  Clicking it prints a message in the echo area:
+
+#+BEGIN_WIDGET elisp
+:code (progn (gi-require "Gtk" "3.0") (let ((btn (gobject-new "GtkButton"))) (gobject-set btn "label" "Click Me") (gobject-connect btn "clicked" (lambda (&rest _) (message "Button clicked at %s" (current-time-string)))) btn))
+:width 200
+:height 50
+#+END_WIDGET
+
+** Scale / Slider
+
+A GTK scale widget with custom range and step.  This is the same
+underlying widget that the =slider= built-in type uses, but created
+manually for full control:
+
+#+BEGIN_WIDGET elisp
+:code (progn (gi-require "Gtk" "3.0") (let* ((adj (gobject-new "GtkAdjustment")) (scale (gobject-new "GtkScale"))) (gobject-set adj "lower" 0.0) (gobject-set adj "upper" 100.0) (gobject-set adj "value" 25.0) (gobject-set adj "step-increment" 0.5) (gobject-set adj "page-increment" 5.0) (gobject-set scale "adjustment" adj) (gobject-set scale "draw-value" t) (gobject-connect adj "value-changed" (lambda (&rest _) (message "Scale value: %.1f" (gobject-get adj "value")))) scale))
+:width 400
+:height 60
+#+END_WIDGET
+
+** Entry Field
+
+A GTK text entry field.  The entered text is printed in the echo
+area when the user presses Enter:
+
+#+BEGIN_WIDGET elisp
+:code (progn (gi-require "Gtk" "3.0") (let ((entry (gobject-new "GtkEntry"))) (gobject-set entry "placeholder-text" "Type here and press Enter...") (gobject-connect entry "activate" (lambda (&rest _) (message "Entry text: %s" (gobject-get entry "text")))) entry))
+:width 300
+:height 40
+#+END_WIDGET
+
+** Check Button (Toggle)
+
+A GTK check button for boolean on/off values:
+
+#+BEGIN_WIDGET elisp
+:code (progn (gi-require "Gtk" "3.0") (let ((cb (gobject-new "GtkCheckButton"))) (gobject-set cb "label" "Enable feature") (gobject-set cb "active" t) (gobject-connect cb "notify::active" (lambda (&rest _) (message "Check button is %s" (if (gobject-get cb "active") "ON" "OFF")))) cb))
+:width 200
+:height 40
+#+END_WIDGET
+
+** Progress Bar
+
+A GTK progress bar showing a fixed value:
+
+#+BEGIN_WIDGET elisp
+:code (progn (gi-require "Gtk" "3.0") (let ((pb (gobject-new "GtkProgressBar"))) (gobject-set pb "fraction" 0.65) (gobject-set pb "show-text" t) (gobject-set pb "text" "65% complete") pb))
+:width 300
+:height 40
+#+END_WIDGET
+
+** Label with Markup
+
+A GTK label displaying Pango markup:
+
+#+BEGIN_WIDGET elisp
+:code (progn (gi-require "Gtk" "3.0") (let ((label (gobject-new "GtkLabel"))) (gobject-set label "use-markup" t) (gobject-set label "label" "<span size='large' weight='bold' color='#2196f3'>Styled Label</span>\n<span size='small' color='#666'>with Pango markup</span>") label))
+:width 250
+:height 60
+#+END_WIDGET
+
+* Notes
+
+- GTK widgets are created via =gobject-new= and configured with
+  =gobject-set=.  Call =(gi-require "Gtk" "3.0")= before using GTK
+  types to register them with GObject Introspection.
+- The =:code= property contains a single Elisp expression.  Use
+  =progn= to group multiple forms.
+- The expression must return a =GtkWidget= GObject.  Org-Ex wraps it
+  automatically with =org-ex-widget-gtk-new=.
+- Signal handlers (=gobject-connect=) receive GObject signal arguments
+  marshalled to Elisp.
+- For simpler slider use cases, prefer the built-in =slider= widget
+  type over manual GTK construction.

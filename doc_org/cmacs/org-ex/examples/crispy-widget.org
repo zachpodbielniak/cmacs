@@ -1,0 +1,83 @@
+#+TITLE: Org-Ex Crispy Widget Example
+#+ORGEX: t
+#+STARTUP: showall
+
+* Crispy C Widget
+
+The =crispy= widget type evaluates C code at runtime via the Crispy
+subsystem.  The code runs inline, and both the source and its stdout
+output are displayed as a code widget.
+
+** Hello World
+
+A minimal example printing a greeting:
+
+#+BEGIN_WIDGET crispy
+:code g_print("Hello from Crispy!\n");
+:width 500
+:height 100
+#+END_WIDGET
+
+** Arithmetic
+
+Compute a value and display the result:
+
+#+BEGIN_WIDGET crispy
+:code int x = 6, y = 7; g_print("The answer is: %d\n", x * y);
+:width 500
+:height 100
+#+END_WIDGET
+
+** Fibonacci Sequence
+
+Generate the first 10 Fibonacci numbers:
+
+#+BEGIN_WIDGET crispy
+:code int a = 0, b = 1, i, t; g_print("Fibonacci: "); for (i = 0; i < 10; i++) { g_print("%d ", a); t = a + b; a = b; b = t; } g_print("\n");
+:width 500
+:height 100
+#+END_WIDGET
+
+** String Processing
+
+C-level string manipulation rendered inline:
+
+#+BEGIN_WIDGET crispy
+:code const char *msg = "HELLO WORLD"; int i; char c; g_print("Original: %s\n", msg); g_print("Lower:    "); for (i = 0; msg[i]; i++) { c = msg[i]; if (c >= 'A' && c <= 'Z') c += 32; g_print("%c", c); } g_print("\nLength:   %d\n", (int)strlen(msg));
+:width 500
+:height 120
+#+END_WIDGET
+
+** GObject Usage
+
+Crispy code can use GLib/GObject functions since the runtime links
+against libglib:
+
+#+BEGIN_WIDGET crispy
+:code GDateTime *now = g_date_time_new_now_local(); gchar *s = g_date_time_format(now, "%Y-%m-%d %H:%M:%S"); g_print("Current time: %s\n", s); g_free(s); g_date_time_unref(now);
+:width 500
+:height 100
+#+END_WIDGET
+
+** System Information
+
+Crispy code can query system information via GLib:
+
+#+BEGIN_WIDGET crispy
+:code g_print("GLib version: %d.%d.%d\n", glib_major_version, glib_minor_version, glib_micro_version); g_print("Host: %s\n", g_get_host_name()); g_print("User: %s\n", g_get_user_name());
+:width 300
+:height 100
+#+END_WIDGET
+
+* Notes
+
+- The Crispy subsystem must be compiled in (=--with-cmacs-crispy=).
+  Check with =(cmacs-feature-p 'crispy)=.
+- Code runs in a sandboxed Crispy context with access to GLib and
+  standard C library functions.
+- The =:code= property is a single line of C code.  Use semicolons to
+  separate statements.
+- Output captured from =stdout= (=printf=, =puts=) is displayed
+  below the source code in the widget.
+- Crispy widgets export as =<pre>= blocks in HTML and as plain text
+  code listings in text export.

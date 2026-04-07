@@ -29,6 +29,7 @@ From any Org file, follow links with =C-c C-o= or =M-x org-open-at-point=.
 | [[file:api.org][CMacs API (C Library)]]            | =api.org=           | libcmacs-api.so --- transports, helpers, API   |
 | [[file:crispy.org][Crispy C Scripting]]               | =crispy.org=        | Write config and scripts in C                   |
 | [[file:gowl.org][Gowl Wayland Compositor]]          | =gowl.org=          | Tiling WM, client embedding, 47+ DEFUNs        |
+| [[file:org-ex/org-ex.org][Org-Ex Interactive Widgets]]       | =org-ex/org-ex.org= | Widget embedding in Org buffers                 |
 | [[file:build.org][Build Configuration]]              | =build.org=         | Configure flags, dependencies, Makefiles        |
 
 * Quick Start

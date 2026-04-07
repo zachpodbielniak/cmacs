@@ -1,0 +1,63 @@
+#+TITLE: Org-Ex Dashboard Example
+#+ORGEX: t
+#+STARTUP: showall
+
+* Dashboard
+
+This example demonstrates a multi-widget dashboard with reactive
+binding.  The slider controls a temperature value that is reflected
+both in the document property and in a web chart widget.
+
+** Properties
+
+The =temperature= property is the shared data source.  Edit the value
+below manually, or drag the slider --- both directions are reactive.
+
+#+PROPERTY: temperature 50
+
+** Temperature Slider
+
+A GTK slider bound to the =temperature= property.  Dragging the
+slider updates the property line above, and the chart below.
+
+#+BEGIN_WIDGET slider
+:min 0
+:max 100
+:value 50
+:step 1
+:width 500
+:height 60
+:bind temperature
+:publish temp-updates
+#+END_WIDGET
+
+** Temperature Chart
+
+A web chart that subscribes to the =temp-updates= channel.  When the
+slider changes, the chart receives the new value and updates the
+bar width.
+
+#+BEGIN_WIDGET web
+:html <div style="font-family: sans-serif; padding: 16px;"><h3>Temperature</h3><div style="background: #e0e0e0; border-radius: 4px; height: 32px; width: 100%;"><div id="bar" style="background: linear-gradient(90deg, #2196f3, #f44336); height: 100%; border-radius: 4px; width: 50%; transition: width 0.3s;"></div></div><p id="label">50 C</p></div>
+:subscribe temp-updates
+:width 500
+:height 150
+#+END_WIDGET
+
+** System Status (Bacon)
+
+Show current system information using a bacon widget:
+
+#+BEGIN_WIDGET bacon
+:code uname -srm && echo "Uptime:" && uptime -p
+:width 500
+:height 100
+#+END_WIDGET
+
+* Notes
+
+- The slider and chart communicate through the =temp-updates= channel.
+- The slider is also bound to the =temperature= property via =:bind=.
+- Edit =#+PROPERTY: temperature= manually to see the slider update.
+- Widget state (slider position) is persisted in the =.org-ex-state=
+  sidecar file.

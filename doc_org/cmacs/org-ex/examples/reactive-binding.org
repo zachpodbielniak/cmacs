@@ -1,0 +1,171 @@
+#+TITLE: Org-Ex Reactive Binding and Channels
+#+ORGEX: t
+#+STARTUP: showall
+
+* Reactive Binding Demo
+
+This file demonstrates Org-Ex's reactive data binding system.
+Widgets can share state through two mechanisms: property binding
+(=:bind=) and channel-based pub/sub (=:publish= / =:subscribe=).
+
+* Property Binding
+
+** Shared Property
+
+Two widgets bound to the same property stay synchronized.  Changing
+one updates the other.
+
+#+PROPERTY: volume 50
+
+*** Volume Slider
+
+#+BEGIN_WIDGET slider
+:min 0
+:max 100
+:value 50
+:step 1
+:width 400
+:height 60
+:bind volume
+#+END_WIDGET
+
+*** Volume Display
+
+A web widget also bound to =volume=.  When the slider moves, this
+display updates:
+
+#+BEGIN_WIDGET web
+:html <div style="font-family: monospace; padding: 16px; background: #1e1e2e; color: #cdd6f4; border-radius: 8px; text-align: center;"><span style="font-size: 48px; font-weight: bold;" id="vol">50</span><br><span style="color: #a6adc8;">volume</span></div>
+:bind volume
+:width 200
+:height 120
+#+END_WIDGET
+
+** Direction Control
+
+Use =:direction= to create one-way bindings:
+
+#+PROPERTY: brightness 75
+
+*** Source Slider (from-widget)
+
+This slider pushes its value to the property, but does not react
+to external property changes:
+
+#+BEGIN_WIDGET slider
+:min 0
+:max 100
+:value 75
+:bind brightness
+:direction from-widget
+:width 400
+:height 60
+#+END_WIDGET
+
+*** Display (to-widget)
+
+This widget reads from the property but never writes back:
+
+#+BEGIN_WIDGET web
+:html <div style="font-family: sans-serif; padding: 16px;"><div style="width: 100px; height: 100px; border-radius: 50%; background: rgba(255, 220, 0, 0.75); box-shadow: 0 0 20px rgba(255, 220, 0, 0.5);"></div><p>Brightness indicator</p></div>
+:bind brightness
+:direction to-widget
+:width 200
+:height 180
+#+END_WIDGET
+
+* Channel-Based Communication
+
+Channels decouple widgets that need to communicate without sharing a
+document property.
+
+** Temperature Sensor Network
+
+A slider simulates a temperature sensor.  It publishes readings to
+the =sensor-data= channel.  Two independent displays subscribe.
+
+*** Sensor (Publisher)
+
+#+BEGIN_WIDGET slider
+:min -20
+:max 120
+:value 22
+:step 1
+:width 400
+:height 60
+:publish sensor-data
+#+END_WIDGET
+
+*** Display A (Subscriber)
+
+A numeric display subscribing to =sensor-data=:
+
+#+BEGIN_WIDGET web
+:html <div style="font-family: monospace; padding: 12px; background: #000; color: #0f0; border-radius: 4px; text-align: center;"><span style="font-size: 36px;" id="temp">22</span><span style="font-size: 18px;"> C</span><br><span style="font-size: 12px; color: #0a0;">SENSOR A</span></div>
+:subscribe sensor-data
+:width 180
+:height 100
+#+END_WIDGET
+
+*** Display B (Subscriber)
+
+A bar chart display subscribing to the same channel:
+
+#+BEGIN_WIDGET web
+:html <div style="font-family: sans-serif; padding: 12px; background: #f5f5f5; border-radius: 4px;"><p style="margin: 0 0 8px; font-weight: bold;">Sensor B</p><div style="background: #ddd; height: 24px; border-radius: 4px;"><div id="bar" style="background: linear-gradient(90deg, #42a5f5, #ef5350); height: 100%; border-radius: 4px; width: 30%; transition: width 0.3s;"></div></div></div>
+:subscribe sensor-data
+:width 300
+:height 80
+#+END_WIDGET
+
+** Bidirectional Channel
+
+A widget can both publish and subscribe to different channels,
+creating a processing pipeline:
+
+*** Input
+
+#+BEGIN_WIDGET slider
+:min 0
+:max 100
+:value 50
+:publish raw-input
+:width 400
+:height 60
+#+END_WIDGET
+
+*** Processor
+
+This web widget subscribes to =raw-input=, processes the value
+(doubles it), and publishes to =processed-output=:
+
+#+BEGIN_WIDGET web
+:html <div style="font-family: monospace; padding: 12px; background: #263238; color: #80cbc4; border-radius: 4px; text-align: center;">Processing...<br><span id="status">input: 50 -> output: 100</span></div>
+:subscribe raw-input
+:publish processed-output
+:width 300
+:height 80
+#+END_WIDGET
+
+*** Output
+
+#+BEGIN_WIDGET web
+:html <div style="font-family: sans-serif; padding: 16px; background: #e8f5e9; border-radius: 8px; text-align: center;"><p style="margin: 0; font-size: 14px; color: #666;">Processed Value</p><p style="margin: 8px 0 0; font-size: 32px; font-weight: bold; color: #2e7d32;" id="result">100</p></div>
+:subscribe processed-output
+:width 200
+:height 100
+#+END_WIDGET
+
+* Notes
+
+- Property bindings (=:bind=) synchronize widgets with =#+PROPERTY:=
+  lines in the document.  This state is visible and editable.
+- Channel bindings (=:publish= / =:subscribe=) are decoupled --- no
+  document property is involved.
+- A widget can use both =:bind= and =:publish= simultaneously, as
+  shown in the dashboard example.
+- =:direction= only applies to property bindings (=:bind=), not to
+  channel communication.
+- All binding state is ephemeral per session.  Channels are recreated
+  on mode activation.  Property values are persisted via the sidecar
+  state file.

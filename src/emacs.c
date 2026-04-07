@@ -2637,6 +2637,9 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #ifdef HAVE_CMACS_GOWL
       syms_of_cmacs_gowl ();
 #endif
+#ifdef HAVE_CMACS_ORG_EX
+      syms_of_cmacs_org_ex ();
+#endif
 
       keys_of_keyboard ();
 

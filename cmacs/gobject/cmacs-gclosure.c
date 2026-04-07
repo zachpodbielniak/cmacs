@@ -20,6 +20,16 @@
 #include <glib-object.h>
 
 /* ──────────────────────────────────────────────────────────────────── */
+/* GC protection for closure functions                                 */
+/* ──────────────────────────────────────────────────────────────────── */
+
+/* All live Elisp closures are held on this list so the Emacs GC does
+   not collect the lambda while GLib still references it.  Entries are
+   added in cmacs_gclosure_new and removed in the invalidate
+   notifier when the GClosure is freed.  */
+static Lisp_Object cmacs_gclosure_prevent_gc_list;
+
+/* ──────────────────────────────────────────────────────────────────── */
 /* Elisp GClosure type                                                 */
 /* ──────────────────────────────────────────────────────────────────── */
 
@@ -107,11 +117,12 @@ cmacs_gclosure_marshal (GClosure     *closure,
 static void
 cmacs_gclosure_invalidate (gpointer data, GClosure *closure)
 {
+  CmacsElispClosure *eclosure = (CmacsElispClosure *)closure;
   (void)data;
-  (void)closure;
-  /* Nothing to do — the elisp function is GC-protected by the
-   * staticpro or by being referenced in a live closure.
-   * When the GClosure is freed, GLib handles cleanup. */
+
+  /* Remove the function from the GC protection list. */
+  cmacs_gclosure_prevent_gc_list =
+    Fdelq (eclosure->func, cmacs_gclosure_prevent_gc_list);
 }
 
 GClosure *
@@ -123,6 +134,10 @@ cmacs_gclosure_new (Lisp_Object func)
   closure = g_closure_new_simple (sizeof (CmacsElispClosure), NULL);
   eclosure = (CmacsElispClosure *)closure;
   eclosure->func = func;
+
+  /* Protect the function from GC while the closure is alive. */
+  cmacs_gclosure_prevent_gc_list =
+    Fcons (func, cmacs_gclosure_prevent_gc_list);
 
   g_closure_set_marshal (closure, cmacs_gclosure_marshal);
   g_closure_add_invalidate_notifier (closure, NULL,
@@ -142,6 +157,13 @@ cmacs_gclosure_connect (GObject *obj, const gchar *signal,
   handler_id = g_signal_connect_closure (obj, signal, closure, FALSE);
 
   return handler_id;
+}
+
+void
+cmacs_gclosure_init (void)
+{
+  cmacs_gclosure_prevent_gc_list = Qnil;
+  staticpro (&cmacs_gclosure_prevent_gc_list);
 }
 
 #endif /* HAVE_CMACS_GLIB */

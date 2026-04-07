@@ -29,6 +29,11 @@
 #include <glib-object.h>
 #include <string.h>
 
+#ifdef HAVE_CMACS_GI
+#include <girepository.h>
+#include <gmodule.h>
+#endif
+
 /* ──────────────────────────────────────────────────────────────────── */
 /* GObject ↔ user-ptr                                                  */
 /* ──────────────────────────────────────────────────────────────────── */
@@ -208,10 +213,17 @@ cmacs_lisp_to_gvalue (Lisp_Object obj, GValue *val)
       return TRUE;
     }
 
-  if (type == G_TYPE_ENUM)
+  if (G_TYPE_IS_ENUM (type))
     {
       CHECK_FIXNUM (obj);
       g_value_set_enum (val, (gint)XFIXNUM (obj));
+      return TRUE;
+    }
+
+  if (G_TYPE_IS_FLAGS (type))
+    {
+      CHECK_FIXNUM (obj);
+      g_value_set_flags (val, (guint)XFIXNUM (obj));
       return TRUE;
     }
 
@@ -362,6 +374,120 @@ usage: (gobject-new TYPE &rest PROPERTIES) */)
   CHECK_STRING (args[0]);
 
   type = g_type_from_name (SSDATA (args[0]));
+
+#ifdef HAVE_CMACS_GI
+  /* If the type isn't registered yet, try GI to find the _get_type()
+     function and call it directly via dlsym.
+
+     We must NOT use g_registered_type_info_get_g_type() because it
+     can conflict with already-initialized GTK types (e.g. pgtk has
+     registered GtkWidget but not GtkCheckButton — GI tries to
+     re-register parent types and corrupts the g_once state, causing
+     a deadlock).
+
+     Instead: get the type_init function name from GI metadata
+     (e.g. "gtk_check_button_get_type"), resolve it from the already-
+     loaded library via g_module_symbol, and call it. */
+  if (type == G_TYPE_INVALID)
+    {
+      GIRepository *repo = g_irepository_get_default ();
+      gchar **loaded = g_irepository_get_loaded_namespaces (repo);
+      if (loaded != NULL)
+        {
+          const char *ctype = SSDATA (args[0]);
+          for (gint i = 0; loaded[i] != NULL && type == G_TYPE_INVALID; i++)
+            {
+              const char *ns = loaded[i];
+              size_t ns_len = strlen (ns);
+              const char *short_name = ctype;
+
+              /* Strip namespace prefix: "GtkButton" → "Button".
+                 Also handle namespaces with trailing version digits
+                 that don't appear in C type names, e.g.
+                 namespace "WebKit2" → C prefix "WebKit". */
+              if (strncmp (ctype, ns, ns_len) == 0)
+                short_name = ctype + ns_len;
+              else
+                {
+                  size_t base_len = ns_len;
+                  while (base_len > 0
+                         && ns[base_len - 1] >= '0'
+                         && ns[base_len - 1] <= '9')
+                    base_len--;
+                  if (base_len > 0 && base_len < ns_len
+                      && strncmp (ctype, ns, base_len) == 0)
+                    short_name = ctype + base_len;
+                }
+
+              GIBaseInfo *info =
+                g_irepository_find_by_name (repo, ns, short_name);
+              if (info != NULL)
+                {
+                  GIInfoType itype = g_base_info_get_type (info);
+                  if (itype == GI_INFO_TYPE_OBJECT
+                      || itype == GI_INFO_TYPE_INTERFACE)
+                    {
+                      const gchar *type_init =
+                        g_registered_type_info_get_type_init (
+                          (GIRegisteredTypeInfo *) info);
+                      if (type_init != NULL)
+                        {
+                          typedef GType (*GetTypeFunc) (void);
+                          GetTypeFunc get_type_fn = NULL;
+
+                          /* First try the current process (works for
+                             libraries already linked, e.g. GTK via pgtk). */
+                          GModule *self_mod =
+                            g_module_open (NULL, G_MODULE_BIND_LAZY);
+                          if (self_mod != NULL)
+                            {
+                              g_module_symbol (self_mod, type_init,
+                                               (gpointer *) &get_type_fn);
+                              g_module_close (self_mod);
+                            }
+
+                          /* If not found, load the namespace's shared
+                             library (e.g. libwebkit2gtk-4.1.so). */
+                          if (get_type_fn == NULL)
+                            {
+                              const gchar *shlibs =
+                                g_irepository_get_shared_library (repo, ns);
+                              if (shlibs != NULL)
+                                {
+                                  gchar **libs = g_strsplit (shlibs, ",", -1);
+                                  for (gint li = 0;
+                                       libs[li] != NULL && get_type_fn == NULL;
+                                       li++)
+                                    {
+                                      GModule *mod =
+                                        g_module_open (libs[li],
+                                                       G_MODULE_BIND_LAZY);
+                                      if (mod != NULL)
+                                        {
+                                          g_module_symbol (
+                                            mod, type_init,
+                                            (gpointer *) &get_type_fn);
+                                          /* Keep the module open — closing
+                                             it would unload the library and
+                                             invalidate the GType. */
+                                        }
+                                    }
+                                  g_strfreev (libs);
+                                }
+                            }
+
+                          if (get_type_fn != NULL)
+                            type = get_type_fn ();
+                        }
+                    }
+                  g_base_info_unref (info);
+                }
+            }
+          g_strfreev (loaded);
+        }
+    }
+#endif
+
   if (type == G_TYPE_INVALID)
     error ("Unknown GType: %s", SSDATA (args[0]));
 
@@ -401,7 +527,13 @@ usage: (gobject-new TYPE &rest PROPERTIES) */)
       g_value_unset (&val);
     }
 
-  /* Wrap without taking an extra ref — we already own it. */
+  /* Sink floating ref if this is a GInitiallyUnowned (e.g. GtkWidget).
+     g_object_new returns a floating ref for these types — we must sink
+     it to take proper ownership, otherwise g_object_unref in the
+     finalizer triggers "floating object was finalized" warnings. */
+  if (g_object_is_floating (obj))
+    g_object_ref_sink (obj);
+
   Lisp_Object result = make_user_ptr (cmacs_gobject_finalizer, obj);
   return result;
 }
@@ -482,6 +614,8 @@ syms_of_cmacs_gobject (void)
   defsubr (&Sgobject_new);
   defsubr (&Sgobject_list_properties);
   defsubr (&Sgobject_list_signals);
+
+  cmacs_gclosure_init ();
 }
 
 #endif /* HAVE_CMACS_GLIB */

@@ -1,0 +1,919 @@
+\input texinfo   @c -*- texinfo -*-
+@c %**start of header
+@setfilename org-ex.info
+@settitle Org-Ex Manual
+@documentencoding UTF-8
+@c %**end of header
+
+@copying
+Copyright @copyright{} 2026 Zach Podbielniak
+
+@quotation
+This document is part of CMacs, licensed under AGPL-3.0-or-later.
+@end quotation
+@end copying
+
+@titlepage
+@title Org-Ex
+@subtitle Interactive Widget Embedding for Org Buffers
+@author Zach Podbielniak
+@insertcopying
+@end titlepage
+
+@contents
+
+@ifnottex
+@node Top
+@top Org-Ex
+
+Org-Ex embeds interactive widgets---GTK controls, web views, buffer
+windows, and code evaluation results---directly inside Org mode buffers.
+Widgets are declared with special blocks, bound reactively to document
+properties, and exported cleanly to HTML, PDF, and plain text.
+@end ifnottex
+
+@menu
+* Overview::                    What Org-Ex adds to Org mode.
+* Widget Block Syntax::         Declaring widgets in Org buffers.
+* Built-in Widget Types::       slider, web, buffer, elisp, crispy, bacon.
+* Reactive Binding::            Property bindings and pub/sub channels.
+* Channels::                    Named publish/subscribe messaging.
+* Inline Widgets::              Widget links inside paragraph text.
+* State Persistence::           Saving widget state across sessions.
+* Export Behavior::             HTML, PDF, and text export.
+* Custom Widget Types::         Creating new widget types.
+* API Reference::               Elisp and C primitives.
+* Files::                       Source layout.
+@end menu
+
+@c ===================================================================
+@node Overview
+@chapter Overview
+
+@cindex Org-Ex
+@cindex widget, embedding
+
+Org-Ex is a CMacs subsystem that extends Org mode with live, interactive
+widgets.  Instead of static images or plain text, an Org buffer can
+contain GTK controls (sliders, buttons, entry fields), WebKit web views,
+embedded file buffers, and code blocks whose output renders inline.
+
+The subsystem has three layers:
+
+@table @strong
+@item liborgex (C / GObject)
+A shared library (@file{liborgex-1.0.so}) providing the core GObject
+types: @code{OrgExWidget} (abstract base), @code{OrgExDocument}
+(per-buffer manager), @code{OrgExBinding} (reactive property link),
+and @code{OrgExChannel} (pub/sub messaging).  Widget subtypes include
+@code{OrgExWidgetGtk}, @code{OrgExWidgetWeb}, @code{OrgExWidgetBuffer},
+and @code{OrgExWidgetCode}.
+
+@item C DEFUN bridge
+@file{cmacs/org-ex/cmacs-org-ex.c} wraps every liborgex constructor and
+method as an Emacs DEFUN so that all operations are callable from Elisp.
+GObject return values are wrapped via @code{cmacs_gobject_wrap()}.
+
+@item Elisp layer
+Five files under @file{lisp/cmacs/} provide the minor mode, widget
+type dispatch, reactive binding setup, export backends, and state
+persistence.
+@end table
+
+@section Rendering Architecture
+
+@cindex gtk-embed
+@cindex rendering, GTK
+
+Under pgtk, Org-Ex embeds native GTK3 widgets directly in the Emacs
+frame using the @code{gtk-embed} xwidget type.  This is a CMacs
+extension to the Emacs xwidget system (@file{src/xwidget.c}) that adds
+the actual @code{GtkWidget} to the frame's @code{GtkFixed}
+container---no offscreen rendering or draw callbacks needed, the widget
+draws itself natively.
+
+The rendering path for GTK widget types (@code{slider}, @code{web},
+@code{elisp}):
+
+@enumerate
+@item
+The widget creation function produces a @code{GtkWidget} via GObject
+Introspection (e.g.@: @code{gobject-new "GtkScale"} or
+@code{gobject-new "WebKitWebView"}).
+
+@item
+The widget is wrapped as an @code{OrgExWidgetGtk} via
+@code{org-ex-widget-gtk-new}.
+
+@item
+A @code{gtk-embed} xwidget is created and the underlying
+@code{GtkWidget} is extracted via @code{org-ex-widget-gtk-get-widget}
+and set with @code{xwidget-gtk-embed-set-widget}.
+
+@item
+The xwidget is displayed via an Org buffer overlay.
+
+@item
+On redisplay, Emacs adds the widget to the frame and positions it with
+@code{gtk_fixed_move}.
+@end enumerate
+
+@noindent
+@strong{Note:} pgtk uses GTK3 (@code{libgtk-3}), not GTK4.  All GI
+widget creation uses @code{gi-require "Gtk" "3.0"}.
+
+@noindent
+Activating Org-Ex in a buffer:
+
+@example
+;; Automatic: place this keyword in the Org file header:
+#+ORGEX: t
+
+;; Manual:
+M-x cmacs-org-ex-mode
+@end example
+
+@noindent
+When the mode activates it creates an @code{OrgExDocument}, scans the
+buffer for @code{#+BEGIN_WIDGET} blocks, instantiates each widget, and
+displays them as overlays.
+
+@c ===================================================================
+@node Widget Block Syntax
+@chapter Widget Block Syntax
+
+@cindex widget block
+@cindex BEGIN_WIDGET
+
+Widgets are declared using Org special blocks with the type
+@code{WIDGET}.  The word after @code{WIDGET} on the @code{#+BEGIN_WIDGET}
+line specifies the widget subtype.
+
+@section Basic Structure
+
+@example
+#+BEGIN_WIDGET slider
+:min 0
+:max 100
+:value 50
+:step 1
+:width 400
+:height 60
+#+END_WIDGET
+@end example
+
+@noindent
+The general form is:
+
+@example
+#+BEGIN_WIDGET @var{subtype}
+:@var{key1} @var{value1}
+:@var{key2} @var{value2}
+@dots{}
+#+END_WIDGET
+@end example
+
+@noindent
+@var{subtype} is a registered widget type name string (e.g.@:
+@code{slider}, @code{web}, @code{buffer}).  Properties are lines
+beginning with @code{:key} followed by whitespace and a value.
+
+@section Common Properties
+
+All widget types accept these properties:
+
+@table @code
+@item :width
+Width in pixels (default @code{cmacs-org-ex-default-width}, 400).
+
+@item :height
+Height in pixels (default @code{cmacs-org-ex-default-height}, 200).
+
+@item :bind
+Bind the widget to a document @code{#+PROPERTY:} line
+(@pxref{Reactive Binding}).
+
+@item :publish
+Publish widget value changes to a named channel
+(@pxref{Channels}).
+
+@item :subscribe
+Subscribe the widget to a named channel.
+
+@item :direction
+Binding direction: @code{both} (default), @code{to-widget}, or
+@code{from-widget}.
+@end table
+
+@section Widget IDs
+
+Each widget is assigned a unique ID of the form
+@code{@var{subtype}-@var{position}} where @var{position} is the buffer
+byte offset of the @code{#+BEGIN_WIDGET} line.  This ID is used for
+document registration, state persistence, and export.
+
+@c ===================================================================
+@node Built-in Widget Types
+@chapter Built-in Widget Types
+
+@cindex widget types, built-in
+
+Org-Ex ships with six built-in widget types, registered at load time
+by @file{cmacs-org-ex-widgets.el}.
+
+@section slider
+
+@cindex slider widget
+
+A GTK3 @code{GtkScale} control created via GObject Introspection
+(@code{gi-require "Gtk" "3.0"}).  The slider is embedded natively in
+the Emacs frame using the @code{gtk-embed} xwidget type.
+
+@table @code
+@item :min
+Minimum value (default 0).
+@item :max
+Maximum value (default 100).
+@item :value
+Initial value (default 50).
+@item :step
+Step increment (default 1).
+@end table
+
+@example
+#+BEGIN_WIDGET slider
+:min 0
+:max 255
+:value 128
+:step 1
+:width 400
+:height 60
+:bind brightness
+#+END_WIDGET
+@end example
+
+@noindent
+The slider emits a @code{value-changed} GObject signal when the user
+drags it.  When bound to a property, the corresponding @code{#+PROPERTY:}
+line updates automatically.
+
+@section web
+
+@cindex web widget
+@cindex WebKit
+
+A WebKit2GTK web view created via GObject Introspection
+(@code{gi-require "WebKit2" "4.1"}).  The @code{WebKitWebView} is a
+GTK3 widget, so it embeds natively through the @code{gtk-embed} path
+just like slider and elisp widgets.  Specify either a URL or inline
+HTML.
+
+@table @code
+@item :url
+URL to load.
+@item :html
+Inline HTML content (used when @code{:url} is absent).
+@end table
+
+@example
+#+BEGIN_WIDGET web
+:url https://example.com
+:width 600
+:height 400
+#+END_WIDGET
+
+#+BEGIN_WIDGET web
+:html <h1>Hello, Org-Ex!</h1><p>Inline HTML content.</p>
+:width 400
+:height 200
+#+END_WIDGET
+@end example
+
+@section buffer
+
+@cindex buffer widget
+
+Embeds another file as an Emacs buffer view inside the Org document.
+
+@table @code
+@item :file
+Path to the file to embed (required).
+@item :editable
+If @code{t}, the embedded buffer is editable.  Default is view-only.
+@end table
+
+@example
+#+BEGIN_WIDGET buffer
+:file ~/code/hello.py
+:editable t
+:width 500
+:height 300
+#+END_WIDGET
+@end example
+
+@section elisp
+
+@cindex elisp widget
+
+Evaluates Elisp code.  The result must be a @code{GtkWidget} (wrapped
+via @code{org-ex-widget-gtk-new}) or a value coerced to an HTML string
+and displayed in a web view.
+
+@table @code
+@item :code
+Elisp expression to evaluate (required).
+@end table
+
+@example
+#+BEGIN_WIDGET elisp
+:code (let ((btn (gi-call "Gtk" "button_new_with_label" "Click"))) btn)
+:width 200
+:height 50
+#+END_WIDGET
+@end example
+
+@section crispy
+
+@cindex crispy widget
+
+Evaluates a C code string via the Crispy subsystem.  The code and its
+stdout output are displayed as a code widget.
+
+@table @code
+@item :code
+C code to evaluate (required).
+@end table
+
+@example
+#+BEGIN_WIDGET crispy
+:code printf("result: %d\n", 6 * 7);
+:width 400
+:height 150
+#+END_WIDGET
+@end example
+
+@section bacon
+
+@cindex bacon widget
+
+Evaluates a shell command via the Bacon subsystem.  The command and its
+output are displayed as a code widget.
+
+@table @code
+@item :code
+Shell command to evaluate (required).
+@end table
+
+@example
+#+BEGIN_WIDGET bacon
+:code echo "Files:" && ls -1 ~/Documents | head -5
+:width 400
+:height 150
+#+END_WIDGET
+@end example
+
+@c ===================================================================
+@node Reactive Binding
+@chapter Reactive Binding
+
+@cindex binding, reactive
+@cindex property binding
+
+Org-Ex provides reactive data binding between widgets and Org document
+properties.  When a widget value changes, the corresponding
+@code{#+PROPERTY:} line updates; when a @code{#+PROPERTY:} line is
+edited, the bound widget updates.
+
+@section The :bind Directive
+
+Add @code{:bind @var{property-name}} to a widget block to bind it to
+a document property:
+
+@example
+#+PROPERTY: temperature 50
+
+#+BEGIN_WIDGET slider
+:min 0
+:max 100
+:value 50
+:bind temperature
+#+END_WIDGET
+@end example
+
+@noindent
+When the user drags the slider, the @code{#+PROPERTY: temperature}
+line is updated.  When the property line is edited manually, the
+slider position updates.
+
+@section Binding Direction
+
+The @code{:direction} property controls the binding direction:
+
+@table @code
+@item both
+Bidirectional (default).  Widget and property update each other.
+
+@item to-widget
+Property changes update the widget, but widget changes do not
+propagate back.
+
+@item from-widget
+Widget changes update the property, but property edits do not
+propagate to the widget.
+@end table
+
+@example
+#+BEGIN_WIDGET slider
+:min 0
+:max 100
+:bind temperature
+:direction from-widget
+#+END_WIDGET
+@end example
+
+@section How It Works
+
+Under the hood, @code{cmacs-org-ex-setup-bindings} calls
+@code{org-ex-binding-create} to create an @code{OrgExBinding} GObject
+that connects the widget to the document.  The document monitors
+@code{#+PROPERTY:} changes via @code{after-change-functions} and calls
+@code{org-ex-document-notify-property-changed} to propagate.  A
+re-entrancy guard (@code{cmacs-org-ex--inhibit-notify}) prevents
+infinite update loops.
+
+@c ===================================================================
+@node Channels
+@chapter Channels
+
+@cindex channel, pub/sub
+@cindex publish
+@cindex subscribe
+
+Channels provide decoupled communication between widgets that are not
+bound to the same property.  A channel is a named message bus:
+publishers emit values, subscribers receive them.
+
+@section Declaring Channels
+
+Use @code{:publish} and @code{:subscribe} in widget blocks:
+
+@example
+#+BEGIN_WIDGET slider
+:min 0
+:max 100
+:value 50
+:publish data-feed
+#+END_WIDGET
+
+#+BEGIN_WIDGET web
+:html <div id="display">Waiting...</div>
+:subscribe data-feed
+:width 400
+:height 100
+#+END_WIDGET
+@end example
+
+@noindent
+When the slider value changes, it publishes the new value to the
+@code{data-feed} channel.  The web widget subscribes and receives the
+value via the channel's @code{::message} GObject signal.
+
+@section Programmatic Use
+
+@example
+(let ((channel (org-ex-channel-create "my-channel")))
+  ;; Subscribe:
+  (gobject-connect channel "message"
+    (lambda (value)
+      (message "Received: %s" value)))
+  ;; Publish:
+  (org-ex-channel-publish channel "hello"))
+@end example
+
+@section Channel Lifecycle
+
+Channels are created lazily on first reference (either @code{:publish}
+or @code{:subscribe}).  They are stored in a buffer-local alist
+(@code{cmacs-org-ex--channels}) and cleaned up when the mode is
+disabled.  Channel names recorded in state files serve as markers so
+that channel-based topologies are recreated on restore.
+
+@c ===================================================================
+@node Inline Widgets
+@chapter Inline Widgets
+
+@cindex inline widget
+@cindex widget link
+
+For small widgets that belong inside paragraph text, Org-Ex provides
+a custom Org link type:
+
+@example
+See the current value: [[widget:slider:min=0,max=100,value=50]]
+@end example
+
+@noindent
+The link format is:
+
+@example
+[[widget:@var{type}:@var{params}]]
+[[widget:@var{type}:@var{params}][@var{description}]]
+@end example
+
+@noindent
+@var{params} is a comma-separated list of @code{key=value} pairs.
+
+When followed, the link creates the widget in a popup or inline
+overlay.  On export, the link produces:
+
+@table @code
+@item HTML
+@code{<span class="org-ex-widget" data-type="...">...</span>}
+@item LaTeX
+@code{\texttt@{...@}}
+@item Text
+The description or path string.
+@end table
+
+@c ===================================================================
+@node State Persistence
+@chapter State Persistence
+
+@cindex state persistence
+@cindex .org-ex-state
+
+Widget state (slider positions, text entry values, toggle states) is
+ephemeral---it lives only in GObject properties.  To survive buffer
+kills and Emacs restarts, Org-Ex persists state to a sidecar file.
+
+@section Sidecar File
+
+For a file @file{notes.org}, the state file is
+@file{notes.org.org-ex-state}.  The format is a Lisp alist written
+with @code{prin1}:
+
+@example
+;; org-ex state file --- auto-generated
+;; Do not edit manually.
+
+(("slider-42" ("value" . "73") ("active" . "t"))
+ ("web-200" ("text" . "hello"))
+ (channel "data-feed"))
+@end example
+
+@section Save and Restore
+
+State is saved automatically when:
+@itemize
+@item
+The buffer is killed (@code{kill-buffer-hook}).
+@item
+@code{cmacs-org-ex-mode} is disabled.
+@end itemize
+
+@noindent
+State is restored when @code{cmacs-org-ex-mode} enables: the sidecar
+is read and values are applied to widgets via @code{gobject-set} after
+a short timer delay (100ms) to ensure widgets have finished
+initialization.
+
+@section Configuration
+
+@table @code
+@item cmacs-org-ex-state-enabled
+When non-nil (the default), enable state persistence.
+
+@item cmacs-org-ex-state-suffix
+The suffix appended to form the state file path.  Default:
+@code{.org-ex-state}.
+@end table
+
+@section Cleanup
+
+@code{M-x cmacs-org-ex-state-delete} removes the sidecar state file
+for the current buffer.
+
+@c ===================================================================
+@node Export Behavior
+@chapter Export Behavior
+
+@cindex export, widgets
+@cindex HTML export
+@cindex text export
+
+Org-Ex defines derived export backends so that widget blocks produce
+meaningful output instead of being silently dropped.
+
+@section HTML Export
+
+@code{C-c C-e w h} exports the buffer using the @code{org-ex-html}
+backend.  For each @code{#+BEGIN_WIDGET} block:
+
+@enumerate
+@item
+If the widget is live, @code{org-ex-widget-export-html} is called,
+which dispatches to the widget type's @code{OrgExExportable}
+implementation.  Web widgets export their HTML directly; GTK widgets
+produce a screenshot; code widgets export a @code{<pre>} block with
+output.
+
+@item
+If the widget is not live (cold export without @code{cmacs-org-ex-mode}),
+a placeholder @code{<div>} with the widget type and properties is
+emitted.
+@end enumerate
+
+@section Text Export
+
+@code{C-c C-e w t} exports using the @code{org-ex-text} backend.
+Widgets produce a plain text description via
+@code{org-ex-widget-export-text}, e.g.@: @code{[slider widget: min=0,
+max=100, value=73]}.
+
+@section PDF Export
+
+PDF export (via LaTeX) does not have a dedicated backend.  Widgets are
+exported as their text fallback descriptions.  For richer PDF output,
+export to HTML first, then print to PDF.
+
+@section Export Commands
+
+@table @code
+@item cmacs-org-ex-export-to-html
+Export to an HTML file with widget support.
+
+@item cmacs-org-ex-export-as-html
+Export to an HTML buffer.
+
+@item cmacs-org-ex-export-to-text
+Export to a text file with widget fallbacks.
+
+@item cmacs-org-ex-export-as-text
+Export to a text buffer.
+@end table
+
+@c ===================================================================
+@node Custom Widget Types
+@chapter Custom Widget Types
+
+@cindex custom widget type
+@cindex widget registration
+
+Org-Ex is extensible: you can define new widget types that integrate
+with the block syntax, binding system, and export pipeline.
+
+@section Registering a Type in Elisp
+
+The simplest approach is to register a creation function:
+
+@example
+(cmacs-org-ex-register-widget-type "my-gauge"
+  (lambda (props width height)
+    ;; PROPS is an alist of ("key" . "value") strings.
+    ;; Must return an OrgExWidget GObject.
+    (let* ((label (or (cdr (assoc "label" props)) "Gauge"))
+           (gtk-widget (gi-call "Gtk" "label_new" label))
+           (widget (org-ex-widget-gtk-new gtk-widget)))
+      (org-ex-widget-set-size widget width height)
+      widget)))
+@end example
+
+@noindent
+After registration:
+
+@example
+#+BEGIN_WIDGET my-gauge
+:label CPU Temperature
+:width 200
+:height 50
+#+END_WIDGET
+@end example
+
+@section GObject Subclassing (C)
+
+For full control, subclass @code{OrgExWidget} in C:
+
+@enumerate
+@item
+Use @code{G_DECLARE_FINAL_TYPE} to declare your widget type.
+
+@item
+Override the virtual methods in @code{OrgExWidgetClass}:
+
+@table @code
+@item render
+Render the widget to a display target.  Returns a display handle.
+@item update
+Update widget state from properties.
+@item teardown
+Release display resources.
+@item save_state
+Serialize ephemeral state for persistence.  Returns an
+@code{OrgExWidgetState}.
+@item restore_state
+Restore state from a saved @code{OrgExWidgetState}.
+@end table
+
+@item
+Implement @code{OrgExExportable} for export support:
+
+@table @code
+@item export_html
+Return an HTML fragment string.
+@item export_text
+Return a plain text description.
+@end table
+
+@item
+Register the type from Elisp using
+@code{cmacs-org-ex-register-widget-type}.
+@end enumerate
+
+@section GObject Interfaces
+
+Org-Ex defines two GObject interfaces that widget types may implement:
+
+@table @code
+@item OrgExRenderable
+For widgets that can render to a display context.
+
+@item OrgExExportable
+For widgets that can produce HTML and text export output.
+@end table
+
+@c ===================================================================
+@node API Reference
+@chapter API Reference
+
+@section Document Management
+
+@table @code
+@item org-ex-document-create &optional FILE-PATH
+Create an @code{OrgExDocument} for the given file.  Returns a GObject.
+
+@item org-ex-document-register-widget DOCUMENT ID WIDGET
+Register @var{WIDGET} under @var{ID} in @var{DOCUMENT}.
+
+@item org-ex-document-get-widget DOCUMENT ID
+Retrieve a widget by @var{ID}.  Returns the widget or nil.
+
+@item org-ex-document-remove-widget DOCUMENT ID
+Remove and teardown a widget.
+
+@item org-ex-document-teardown-all DOCUMENT
+Teardown and remove all widgets.
+
+@item org-ex-document-notify-property-changed DOCUMENT NAME VALUE
+Notify bound widgets that property @var{NAME} changed to @var{VALUE}.
+@end table
+
+@section Widget Creation
+
+@table @code
+@item org-ex-widget-gtk-new GTK-WIDGET
+Wrap a GtkWidget GObject as an @code{OrgExWidgetGtk}.
+
+@item org-ex-widget-web-new URL WIDTH HEIGHT
+Create a web view widget for @var{URL}.
+
+@item org-ex-widget-web-new-from-html HTML WIDTH HEIGHT
+Create a web view widget from inline @var{HTML}.
+
+@item org-ex-widget-buffer-new FILE &optional EDITABLE
+Create a buffer widget for @var{FILE}.
+
+@item org-ex-widget-code-new LANGUAGE CODE
+Create a code widget for @var{LANGUAGE} (@code{"elisp"}, @code{"crispy"},
+@code{"bacon"}) with @var{CODE}.
+
+@item org-ex-widget-gtk-get-widget WIDGET
+Extract the underlying @code{GtkWidget} GObject from an
+@code{OrgExWidgetGtk}.  Returns the GtkWidget or nil.
+@end table
+
+@section Widget Operations
+
+@table @code
+@item org-ex-widget-set-size WIDGET WIDTH HEIGHT
+Set widget dimensions.
+
+@item org-ex-widget-teardown WIDGET
+Teardown a widget, releasing display resources.
+
+@item org-ex-widget-code-set-result CODE-WIDGET RESULT
+Set the result widget on a code widget after evaluation.
+
+@item xwidget-gtk-embed-set-widget XWIDGET GOBJECT
+Set the @code{GtkWidget} on a @code{gtk-embed} xwidget.
+@var{GOBJECT} must be a GObject wrapping a @code{GtkWidget}.  This
+connects the native widget to the xwidget for display in the frame.
+@end table
+
+@section Binding and Channels
+
+@table @code
+@item org-ex-binding-create DOCUMENT PROPERTY WIDGET &optional DIRECTION
+Create a reactive binding.  @var{DIRECTION} is a symbol:
+@code{bidirectional} (default), @code{to-widget}, or @code{from-widget}.
+
+@item org-ex-channel-create NAME
+Create a named pub/sub channel.
+
+@item org-ex-channel-publish CHANNEL VALUE
+Publish @var{VALUE} on @var{CHANNEL}.  All subscribers'
+@code{::message} signal handlers fire.
+@end table
+
+@section Export
+
+@table @code
+@item org-ex-widget-export-html WIDGET
+Export @var{WIDGET} as an HTML string.  Returns nil if the widget does
+not implement @code{OrgExExportable}.
+
+@item org-ex-widget-export-text WIDGET
+Export @var{WIDGET} as a plain text description.
+@end table
+
+@section Elisp Functions
+
+@table @code
+@item cmacs-org-ex-mode
+Buffer-local minor mode.  Activates widget scanning and overlay display.
+
+@item cmacs-org-ex-register-widget-type SUBTYPE CREATE-FN
+Register a widget type.  @var{CREATE-FN} takes @code{(PROPS WIDTH HEIGHT)}.
+
+@item cmacs-org-ex-widget-types
+Return a list of registered widget type name strings.
+
+@item cmacs-org-ex-state-save
+Save widget state to the sidecar file.
+
+@item cmacs-org-ex-state-restore
+Restore widget state from the sidecar file.
+
+@item cmacs-org-ex-state-delete
+Delete the sidecar state file.
+
+@item cmacs-org-ex-export-to-html
+Export to HTML file with widget support.
+
+@item cmacs-org-ex-export-as-html
+Export to HTML buffer with widget support.
+
+@item cmacs-org-ex-export-to-text
+Export to text file with widget fallbacks.
+
+@item cmacs-org-ex-export-as-text
+Export to text buffer with widget fallbacks.
+@end table
+
+@c ===================================================================
+@node Files
+@chapter Files
+
+@table @file
+@item cmacs/org-ex/lib/
+liborgex shared library (GObject types).
+@item cmacs/org-ex/lib/org-ex.h
+Umbrella header.
+@item cmacs/org-ex/lib/org-ex-types.h
+Forward declarations, enums, error domain.
+@item cmacs/org-ex/lib/core/org-ex-widget.h
+Abstract widget base class.
+@item cmacs/org-ex/lib/core/org-ex-widget-gtk.h
+GTK widget wrapper.
+@item cmacs/org-ex/lib/core/org-ex-widget-web.h
+WebKit web view widget.
+@item cmacs/org-ex/lib/core/org-ex-widget-buffer.h
+Buffer embed widget.
+@item cmacs/org-ex/lib/core/org-ex-widget-code.h
+Code evaluation widget.
+@item cmacs/org-ex/lib/core/org-ex-document.h
+Document manager.
+@item cmacs/org-ex/lib/core/org-ex-binding.h
+Reactive property binding.
+@item cmacs/org-ex/lib/core/org-ex-channel.h
+Pub/sub channel.
+@item cmacs/org-ex/lib/interfaces/org-ex-renderable.h
+Renderable interface.
+@item cmacs/org-ex/lib/interfaces/org-ex-exportable.h
+Exportable interface.
+@item cmacs/org-ex/cmacs-org-ex.c
+C DEFUN bridge (Emacs primitives).
+@item cmacs/org-ex/cmacs-org-ex.h
+C DEFUN bridge header.
+@item lisp/cmacs/cmacs-org-ex.el
+Minor mode, block scanning, overlays.
+@item lisp/cmacs/cmacs-org-ex-widgets.el
+Widget type registry and built-in types.
+@item lisp/cmacs/cmacs-org-ex-binding.el
+Reactive binding setup.
+@item lisp/cmacs/cmacs-org-ex-export.el
+Export backends (HTML, text).
+@item lisp/cmacs/cmacs-org-ex-state.el
+Sidecar state persistence.
+@end table
+
+@bye

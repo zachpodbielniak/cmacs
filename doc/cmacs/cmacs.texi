@@ -43,6 +43,7 @@ interaction.
 * CMacs API::                   Shared C library for scripting integration.
 * Crispy C Scripting::          Inline C evaluation and config.
 * Gowl Wayland Compositor::    Tiling WM and client embedding.
+* Org-Ex Interactive Widgets::  Widget embedding in Org buffers.
 * Build Configuration::         Configure flags and dependencies.
 @end menu
 
@@ -91,6 +92,12 @@ Embeds a wlroots-based Wayland compositor into Emacs.  With
 @option{--gowl}, Emacs becomes a tiling window manager with 47+ DEFUNs
 for spawning clients, managing tags, switching layouts, and embedding
 Wayland clients directly inside Emacs buffer windows.
+
+@item Org-Ex Interactive Widgets
+Embeds interactive widgets---GTK controls, web views, buffer windows,
+and code evaluation results---directly inside Org mode buffers.
+Widgets are declared with @code{#+BEGIN_WIDGET} blocks, bound
+reactively to document properties, and exported to HTML and text.
 @end table
 
 @noindent
@@ -106,6 +113,7 @@ cmacs/
   bacon/          Bacon shell: C primitives, IPC, cmacs_bacon_main()
     modules/      cmacsgi builtin (transport abstraction + 60+ commands)
   gowl/           Wayland compositor (wlroots, 47+ DEFUNs, embedding)
+  org-ex/         Org-Ex interactive widgets (liborgex-1.0.so + DEFUN bridge)
 deps/bacon/       Bundled bacon source (built as libbacon-1.0.a)
 deps/gowl/        Bundled gowl library (wlroots-based compositor)
 lisp/cmacs/       Elisp integration layers
@@ -1848,6 +1856,58 @@ ERT tests.
 @item deps/gowl/
 Bundled gowl library (git submodule).
 @end table
+
+@c ===================================================================
+@node Org-Ex Interactive Widgets
+@chapter Org-Ex Interactive Widgets
+
+@cindex Org-Ex
+@cindex widget, embedding
+
+Org-Ex embeds interactive widgets inside Org mode buffers.  It is built
+as a GObject-native shared library (@file{liborgex-1.0.so}) with a thin
+DEFUN bridge and an Elisp layer.
+
+Activate with @code{#+ORGEX: t} in the file header or
+@code{M-x cmacs-org-ex-mode}.
+
+Widget types: @code{slider} (GTK), @code{web} (WebKit), @code{buffer}
+(file embed), @code{elisp} / @code{crispy} / @code{bacon} (code
+evaluation).
+
+@example
+#+BEGIN_WIDGET slider
+:min 0
+:max 100
+:value 50
+:bind temperature
+#+END_WIDGET
+@end example
+
+@noindent
+Features:
+
+@itemize
+@item
+Reactive binding: @code{:bind} links widgets to @code{#+PROPERTY:} lines.
+@item
+Pub/sub channels: @code{:publish} / @code{:subscribe} for
+widget-to-widget messaging.
+@item
+Export: HTML (live widgets), text (fallback descriptions).
+@item
+State persistence: ephemeral widget state saved to @file{.org-ex-state}
+sidecar files.
+@item
+Extensible: register new widget types via
+@code{cmacs-org-ex-register-widget-type} or by subclassing
+@code{OrgExWidget} in C.
+@end itemize
+
+@noindent
+See @file{doc/cmacs/org-ex/org-ex.texi} for the full Org-Ex manual
+with API reference, custom widget creation guide, and export details.
+See @file{doc_org/cmacs/org-ex/examples/} for working examples.
 
 @c ===================================================================
 @node Build Configuration

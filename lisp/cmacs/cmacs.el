@@ -33,19 +33,20 @@
 
 (defun cmacs-feature-p (feature)
   "Return non-nil if CMacs was built with FEATURE support.
-FEATURE is a symbol: `glib', `gi', `crispy', `bacon', or `gowl'."
+FEATURE is a symbol: `glib', `gi', `crispy', `bacon', `gowl', or `org-ex'."
   (pcase feature
     ('glib   (fboundp 'gobject-p))
     ('gi     (fboundp 'gi-require))
     ('crispy (fboundp 'crispy-eval))
     ('bacon  (fboundp 'bacon-start))
     ('gowl   (fboundp 'gowl-start))
+    ('org-ex (fboundp 'org-ex-document-create))
     (_ (error "Unknown CMacs feature: %S" feature))))
 
 (defun cmacs-features ()
   "Return a list of available CMacs features."
   (let (features)
-    (dolist (feat '(glib gi crispy bacon gowl))
+    (dolist (feat '(glib gi crispy bacon gowl org-ex))
       (when (cmacs-feature-p feat)
         (push feat features)))
     (nreverse features)))
@@ -88,7 +89,8 @@ TOPIC is a filename without extension (e.g., \"cmacsgi\", \"api\")."
   (interactive
    (list (completing-read "CMacs topic: "
                           '("overview" "glib" "gobject" "gi" "dbus"
-                            "bacon" "cmacsgi" "api" "crispy" "build")
+                            "bacon" "cmacsgi" "api" "crispy" "build"
+                            "org-ex")
                           nil t)))
   (let ((file (expand-file-name (concat topic ".org")
                                 cmacs-doc-org-directory)))
@@ -119,6 +121,9 @@ TOPIC is a filename without extension (e.g., \"cmacsgi\", \"api\")."
 (autoload 'cmacs-gowl-spawn-command "cmacs-gowl"
   "Launch a Wayland client in the Gowl compositor." t)
 
+(autoload 'cmacs-org-ex-mode "cmacs-org-ex"
+  "Toggle org-ex interactive widget mode." t)
+
 (autoload 'cmacs-config-load-all "cmacs-config"
   "Load bacon and C config files after elisp init.")
 
@@ -126,6 +131,8 @@ TOPIC is a filename without extension (e.g., \"cmacsgi\", \"api\")."
 (when (bound-and-true-p gowl-early-started)
   (add-hook 'after-init-hook
             (lambda () (cmacs-gowl-mode 1))))
+
+;;; Auto-enable org-ex mode — hook setup is in cmacs-org-ex.el via autoload.
 
 (provide 'cmacs)
 ;;; cmacs.el ends here

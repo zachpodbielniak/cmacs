@@ -56,6 +56,9 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 #ifdef HAVE_CMACS_GOWL
 #include "cmacs-gowl.h"
 #endif
+#ifdef HAVE_CMACS_GLIB
+#include "cmacs-gobject.h"
+#endif
 
 #include <math.h>
 
@@ -296,6 +299,7 @@ If BUFFER is a string and no such buffer exists, create it.
 TYPE is a symbol which can take one of the following values:
 
 - webkit
+- gtk-embed (pgtk only -- embed a native GTK widget)
 
 RELATED is nil, or an xwidget.  When constructing a WebKit widget, it
 will share the same settings and internal subprocess as RELATED.
@@ -319,6 +323,9 @@ fails.  */)
 #endif
 #ifdef HAVE_CMACS_GOWL
       && !EQ (type, Qgowl)
+#endif
+#ifdef HAVE_PGTK
+      && !EQ (type, Qgtk_embed)
 #endif
       )
     error ("Bad xwidget type");
@@ -352,6 +359,9 @@ fails.  */)
 #ifdef HAVE_CMACS_GOWL
   xw->gowl_client = NULL;
   xw->gowl_view = NULL;
+#endif
+#ifdef HAVE_PGTK
+  xw->gtk_embed_widget = NULL;
 #endif
 #ifdef HAVE_WEBKIT
   if (EQ (xw->type, Qwebkit))
@@ -2842,30 +2852,43 @@ xwidget_init_view (struct xwidget *xww,
   xv->passive_grab = NULL;
 #elif defined HAVE_PGTK
   xv->dpyinfo = FRAME_DISPLAY_INFO (s->f);
-  xv->widget = gtk_drawing_area_new ();
-  gtk_widget_set_app_paintable (xv->widget, TRUE);
-  gtk_widget_add_events (xv->widget, GDK_ALL_EVENTS_MASK);
-  gtk_container_add (GTK_CONTAINER (FRAME_GTK_WIDGET (s->f)),
-		     xv->widget);
 
-#ifdef HAVE_CMACS_GOWL
-  if (EQ (xww->type, Qgowl))
+  if (EQ (xww->type, Qgtk_embed) && xww->gtk_embed_widget != NULL)
     {
-      cmacs_gowl_xwidget_setup (xww, xv->widget);
-      g_signal_connect (xv->widget, "draw",
-			G_CALLBACK (cmacs_gowl_xwidget_draw_cb), xv);
-      g_signal_connect (xv->widget, "event",
-			G_CALLBACK (cmacs_gowl_xwidget_event_cb), xv);
+      /* For gtk-embed, use the actual GtkWidget directly — it renders
+         itself natively without offscreen drawing.  */
+      xv->widget = xww->gtk_embed_widget;
+      gtk_container_add (GTK_CONTAINER (FRAME_GTK_WIDGET (s->f)),
+                         xv->widget);
+      gtk_widget_show_all (xv->widget);
     }
   else
-#endif
     {
-#ifdef HAVE_WEBKIT
-      g_signal_connect (xv->widget, "draw",
-			G_CALLBACK (xwidget_view_draw_cb), xv);
-      g_signal_connect (xv->widget, "event",
-			G_CALLBACK (xw_forward_event_from_view), xv);
+      xv->widget = gtk_drawing_area_new ();
+      gtk_widget_set_app_paintable (xv->widget, TRUE);
+      gtk_widget_add_events (xv->widget, GDK_ALL_EVENTS_MASK);
+      gtk_container_add (GTK_CONTAINER (FRAME_GTK_WIDGET (s->f)),
+                         xv->widget);
+
+#ifdef HAVE_CMACS_GOWL
+      if (EQ (xww->type, Qgowl))
+        {
+          cmacs_gowl_xwidget_setup (xww, xv->widget);
+          g_signal_connect (xv->widget, "draw",
+                            G_CALLBACK (cmacs_gowl_xwidget_draw_cb), xv);
+          g_signal_connect (xv->widget, "event",
+                            G_CALLBACK (cmacs_gowl_xwidget_event_cb), xv);
+        }
+      else
 #endif
+        {
+#ifdef HAVE_WEBKIT
+          g_signal_connect (xv->widget, "draw",
+                            G_CALLBACK (xwidget_view_draw_cb), xv);
+          g_signal_connect (xv->widget, "event",
+                            G_CALLBACK (xw_forward_event_from_view), xv);
+#endif
+        }
     }
 
   g_object_set_data (G_OBJECT (xv->widget), XG_XWIDGET_VIEW, xv);
@@ -3552,7 +3575,19 @@ DEFUN ("delete-xwidget-view",
 #endif /* HAVE_WEBKIT */
   }
 #else
-  gtk_widget_destroy (xv->widget);
+  {
+    struct xwidget *xw = XXWIDGET (xv->model);
+    if (EQ (xw->type, Qgtk_embed))
+      {
+        /* For gtk-embed, just remove from the container — the widget
+           is owned by the GObject bridge, not by us.  */
+        GtkWidget *parent = gtk_widget_get_parent (xv->widget);
+        if (parent != NULL)
+          gtk_container_remove (GTK_CONTAINER (parent), xv->widget);
+      }
+    else
+      gtk_widget_destroy (xv->widget);
+  }
 #endif
 #elif defined NS_IMPL_COCOA
   nsxwidget_delete_view (xv);
@@ -4043,6 +4078,39 @@ XWIDGET as part of loading a page.  */)
 }
 #endif /* HAVE_WEBKIT */
 
+#ifdef HAVE_PGTK
+DEFUN ("xwidget-gtk-embed-set-widget",
+       Fxwidget_gtk_embed_set_widget, Sxwidget_gtk_embed_set_widget,
+       2, 2, 0,
+       doc: /* Set the GTK widget for a gtk-embed XWIDGET.
+GOBJECT must be a GObject wrapping a GtkWidget created via `gobject-new'.
+The widget will be embedded directly in the Emacs frame when displayed.  */)
+  (Lisp_Object xwidget, Lisp_Object gobject)
+{
+  CHECK_LIVE_XWIDGET (xwidget);
+  struct xwidget *xw = XXWIDGET (xwidget);
+
+  if (!EQ (xw->type, Qgtk_embed))
+    error ("Not a gtk-embed xwidget");
+
+#ifdef HAVE_CMACS_GLIB
+  GObject *obj = cmacs_gobject_unwrap (gobject);
+  if (obj == NULL)
+    error ("Expected a GObject");
+
+  if (!GTK_IS_WIDGET (obj))
+    error ("GObject is not a GtkWidget");
+
+  /* Take a reference so the widget stays alive.  */
+  xw->gtk_embed_widget = GTK_WIDGET (g_object_ref (obj));
+#else
+  error ("GObject bridge not available");
+#endif
+
+  return Qnil;
+}
+#endif /* HAVE_PGTK */
+
 void
 syms_of_xwidget (void)
 {
@@ -4086,6 +4154,11 @@ syms_of_xwidget (void)
 
 #ifdef HAVE_CMACS_GOWL
   DEFSYM (Qgowl, "gowl");
+#endif
+
+#ifdef HAVE_PGTK
+  DEFSYM (Qgtk_embed, "gtk-embed");
+  defsubr (&Sxwidget_gtk_embed_set_widget);
 #endif
 
   defsubr (&Sxwidget_size_request);
@@ -4389,6 +4462,16 @@ kill_xwidget (struct xwidget *xw)
       cmacs_gowl_xwidget_teardown (xw);
       xw->gowl_client = NULL;
       xw->gowl_view = NULL;
+    }
+#endif
+#ifdef HAVE_PGTK
+  if (EQ (xw->type, Qgtk_embed))
+    {
+      if (xw->gtk_embed_widget != NULL)
+        {
+          g_object_unref (xw->gtk_embed_widget);
+          xw->gtk_embed_widget = NULL;
+        }
     }
 #endif
 #ifdef HAVE_WEBKIT

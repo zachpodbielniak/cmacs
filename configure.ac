@@ -657,6 +657,7 @@ OPTION_DEFAULT_OFF([cmacs-gi],   [CMacs GObject Introspection bridge])
 OPTION_DEFAULT_OFF([cmacs-crispy], [CMacs crispy C scripting])
 OPTION_DEFAULT_OFF([cmacs-bacon],  [CMacs bacon shell])
 OPTION_DEFAULT_OFF([cmacs-gowl],  [CMacs Gowl Wayland compositor])
+OPTION_DEFAULT_OFF([cmacs-org-ex], [CMacs org-ex interactive widgets])
 
 # CMACS: pkg-config checks when enabled
 if test "$with_cmacs_glib" != "no"; then
@@ -736,6 +737,16 @@ if test "$with_cmacs_gowl" != "no"; then
   AC_DEFINE([HAVE_CMACS_GOWL], 1, [CMacs Gowl compositor])
   CMACS_GOWL_OBJ="cmacs-gowl.o keyboard-shortcuts-inhibit-v1-protocol.o"
 fi
+if test "$with_cmacs_org_ex" != "no"; then
+  AC_DEFINE([HAVE_CMACS_ORG_EX], 1, [CMacs org-ex interactive widgets])
+  CMACS_ORG_EX_OBJ="cmacs-org-ex.o"
+  CMACS_ORG_EX_CFLAGS="-I\$(srcdir)/../cmacs/org-ex/lib $CMACS_GLIB_CFLAGS"
+  cmacs_org_ex_libdir=`cd "$srcdir/cmacs/org-ex/lib" 2>/dev/null && pwd`
+  CMACS_ORG_EX_LIBS="-L${cmacs_org_ex_libdir} -lorgex-1.0 -Wl,-rpath,${cmacs_org_ex_libdir}"
+fi
+AC_SUBST(CMACS_ORG_EX_OBJ)
+AC_SUBST(CMACS_ORG_EX_CFLAGS)
+AC_SUBST(CMACS_ORG_EX_LIBS)
 AC_SUBST(CMACS_GLIB_OBJ)
 AC_SUBST(CMACS_GI_OBJ)
 AC_SUBST(CMACS_CRISPY_OBJ)

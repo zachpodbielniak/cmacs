@@ -1,0 +1,67 @@
+#+TITLE: Org-Ex Web Widget Examples
+#+ORGEX: t
+#+STARTUP: showall
+
+* Web Widget Examples
+
+Org-Ex embeds WebKit web views directly in Org buffers.  Two modes
+are supported: loading a URL, and rendering inline HTML.
+
+** Basic URL Embed
+
+Load an external web page inside the document:
+
+#+BEGIN_WIDGET web
+:url https://example.com
+:width 600
+:height 400
+#+END_WIDGET
+
+** Inline HTML Embed
+
+Render arbitrary HTML directly without fetching a URL:
+
+#+BEGIN_WIDGET web
+:html <div style="font-family: sans-serif; padding: 20px; background: #f5f5f5; border-radius: 8px;"><h2 style="color: #333;">Inline HTML Widget</h2><p>This content is rendered from an HTML string passed directly to the WebKit view.</p><ul><li>No network request needed</li><li>Full CSS and JavaScript support</li><li>Ideal for generated content</li></ul></div>
+:width 500
+:height 250
+#+END_WIDGET
+
+** Small Inline Status
+
+A compact web widget suitable for inline status display:
+
+#+BEGIN_WIDGET web
+:html <div style="display: inline-flex; align-items: center; gap: 8px; font-family: monospace; padding: 8px 16px; background: #1a1a2e; color: #0f0; border-radius: 4px;"><span style="width: 8px; height: 8px; border-radius: 50%; background: #0f0; display: inline-block;"></span> System OK</div>
+:width 200
+:height 40
+#+END_WIDGET
+
+** Large Documentation View
+
+A full-width web embed for reading documentation:
+
+#+BEGIN_WIDGET web
+:url https://www.gnu.org/software/emacs/manual/html_node/emacs/index.html
+:width 800
+:height 600
+#+END_WIDGET
+
+** Interactive HTML with JavaScript
+
+Inline HTML can include JavaScript for interactive content:
+
+#+BEGIN_WIDGET web
+:html <div style="font-family: sans-serif; padding: 20px;"><h3>Click Counter</h3><p>Count: <span id="count">0</span></p><button onclick="document.getElementById('count').textContent = parseInt(document.getElementById('count').textContent) + 1" style="padding: 8px 16px; cursor: pointer;">Increment</button></div>
+:width 300
+:height 150
+#+END_WIDGET
+
+* Notes
+
+- Web widgets use WebKit2GTK under the hood.
+- The =:url= and =:html= properties are mutually exclusive; if both
+  are provided, =:url= takes precedence.
+- All standard web features (CSS, JavaScript, images) are available.
+- On export, web widgets emit their HTML content directly into the
+  exported document.

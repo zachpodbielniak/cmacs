@@ -17,7 +17,7 @@
 
 (defun cmacs-feature-p (feature)
   "Return non-nil if CMacs FEATURE is available.
-FEATURE is a symbol: glib, gobject, gi, crispy, bacon, gowl."
+FEATURE is a symbol: glib, gobject, gi, crispy, bacon, gowl, org-ex."
   (pcase feature
     ('glib (fboundp 'cmacs-glib-context-p))
     ('gobject (fboundp 'gobject-p))
@@ -25,6 +25,7 @@ FEATURE is a symbol: glib, gobject, gi, crispy, bacon, gowl."
     ('crispy (fboundp 'crispy-eval))
     ('bacon (fboundp 'bacon-start))
     ('gowl (fboundp 'gowl-start))
+    ('org-ex (fboundp 'org-ex-document-create))
     (_ nil)))
 
 ;;; Context tests

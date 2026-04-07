@@ -146,6 +146,30 @@ gdbus call --session --dest org.cmacs.Editor.Pid$(pidof emacs) \
   --method org.cmacs.Editor1.GowlListClients
 #+end_example
 
+** Org-Ex Interactive Widgets (=--with-cmacs-org-ex=)
+
+Embed interactive widgets---GTK controls, web views, buffer windows,
+and code evaluation results---directly inside Org mode buffers.
+
+- Activate with =#+ORGEX: t= file keyword or =M-x cmacs-org-ex-mode=
+- Widget types: =slider= (GTK), =web= (WebKit), =buffer= (file embed), =elisp= / =crispy= / =bacon= (code evaluation)
+- Reactive binding: =:bind= links widgets to =#+PROPERTY:= lines
+- Pub/sub channels: =:publish= / =:subscribe= for widget-to-widget messaging
+- Export: HTML (live widgets), text (fallback descriptions)
+- State persistence: ephemeral widget state saved to =.org-ex-state= sidecar
+
+Architecture: =liborgex-1.0.so= shared library (GObject-native, GI-introspectable)
+with a thin DEFUN bridge (20 primitives) and Elisp layer.
+
+#+begin_example
+#+BEGIN_WIDGET slider
+:min 0
+:max 100
+:value 50
+:bind temperature
+#+END_WIDGET
+#+end_example
+
 * Building
 
 ** Quick Start (Fedora)
@@ -177,7 +201,8 @@ cd cmacs
   --with-cmacs-gi \
   --with-cmacs-crispy \
   --with-cmacs-bacon \
-  --with-cmacs-gowl
+  --with-cmacs-gowl \
+  --with-cmacs-org-ex
 make -j$(nproc)
 sudo make install
 #+end_src
@@ -273,7 +298,8 @@ Requires =autoconf= (>= 2.65) and =automake=.
   --with-cmacs-gi \
   --with-cmacs-crispy \
   --with-cmacs-bacon \
-  --with-cmacs-gowl
+  --with-cmacs-gowl \
+  --with-cmacs-org-ex
 #+end_src
 
 Emacs flags:
@@ -298,6 +324,7 @@ Module flags:
 - =--with-cmacs-crispy= — Crispy C scripting
 - =--with-cmacs-bacon= — Bacon shell
 - =--with-cmacs-gowl= — Gowl Wayland compositor
+- =--with-cmacs-org-ex= — Org-Ex interactive widget embedding
 
 Each module auto-detects bundled (=deps/=) or system libraries.  To
 force system-installed versions:

@@ -1,0 +1,88 @@
+#+TITLE: Org-Ex Buffer Embed Examples
+#+ORGEX: t
+#+STARTUP: showall
+
+* Buffer Embed Examples
+
+The =buffer= widget type embeds another file as an Emacs buffer
+view inside the Org document.  This is useful for showing source
+code, configuration files, or log output alongside narrative text.
+
+** View-Only Embedded File
+
+Embed a file in read-only mode.  The user can scroll and read the
+content but cannot modify it:
+
+#+BEGIN_WIDGET buffer
+:file ~/.bashrc
+:width 600
+:height 300
+#+END_WIDGET
+
+** Editable Embedded File
+
+Set =:editable t= to allow in-place editing of the embedded file.
+Changes are written back to the original file on save:
+
+#+BEGIN_WIDGET buffer
+:file ~/scratch/notes.txt
+:editable t
+:width 600
+:height 250
+#+END_WIDGET
+
+** Embedded with Forced Mode
+
+When a file is embedded, it opens in its default major mode.  The
+buffer widget respects Emacs's =auto-mode-alist=, so a =.py= file
+gets =python-mode= syntax highlighting, a =.c= file gets =c-mode=,
+and so on:
+
+#+BEGIN_WIDGET buffer
+:file ~/code/example.py
+:width 600
+:height 300
+#+END_WIDGET
+
+** Embedding a Log File
+
+Useful for dashboards that monitor log output:
+
+#+BEGIN_WIDGET buffer
+:file /var/log/syslog
+:width 700
+:height 200
+#+END_WIDGET
+
+** Side-by-Side Comparison
+
+Use two buffer widgets to show related files next to each other.
+Each widget operates independently with its own scroll position:
+
+*** Header File
+
+#+BEGIN_WIDGET buffer
+:file ~/code/widget.h
+:width 500
+:height 250
+#+END_WIDGET
+
+*** Implementation
+
+#+BEGIN_WIDGET buffer
+:file ~/code/widget.c
+:width 500
+:height 250
+#+END_WIDGET
+
+* Notes
+
+- The =:file= property is required.  Relative paths are resolved
+  from the Org file's directory.
+- The =:editable= property defaults to =nil= (view-only).
+- The embedded buffer inherits the appropriate major mode via
+  =auto-mode-alist=.
+- On export, buffer widgets produce their file contents as a
+  formatted code block (HTML) or plain text.
+- Buffer widget state (scroll position) is not currently persisted
+  in the sidecar file.
