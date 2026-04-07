@@ -25,7 +25,7 @@ Set =:editable t= to allow in-place editing of the embedded file.
 Changes are written back to the original file on save:
 
 #+BEGIN_WIDGET buffer
-:file ~/scratch/notes.txt
+:file README.org
 :editable t
 :width 600
 :height 250
@@ -34,22 +34,22 @@ Changes are written back to the original file on save:
 ** Embedded with Forced Mode
 
 When a file is embedded, it opens in its default major mode.  The
-buffer widget respects Emacs's =auto-mode-alist=, so a =.py= file
-gets =python-mode= syntax highlighting, a =.c= file gets =c-mode=,
-and so on:
+buffer widget respects Emacs's =auto-mode-alist=, so a =.el= file
+gets =emacs-lisp-mode= syntax highlighting, a =.c= file gets
+=c-mode=, and so on:
 
 #+BEGIN_WIDGET buffer
-:file ~/code/example.py
+:file lisp/cmacs/cmacs-org-ex-widgets.el
 :width 600
 :height 300
 #+END_WIDGET
 
-** Embedding a Log File
+** Embedding Project Documentation
 
-Useful for dashboards that monitor log output:
+Embed project documentation for quick reference:
 
 #+BEGIN_WIDGET buffer
-:file /var/log/syslog
+:file CLAUDE.md
 :width 700
 :height 200
 #+END_WIDGET
@@ -62,7 +62,7 @@ Each widget operates independently with its own scroll position:
 *** Header File
 
 #+BEGIN_WIDGET buffer
-:file ~/code/widget.h
+:file cmacs/org-ex/cmacs-org-ex.h
 :width 500
 :height 250
 #+END_WIDGET
@@ -70,7 +70,7 @@ Each widget operates independently with its own scroll position:
 *** Implementation
 
 #+BEGIN_WIDGET buffer
-:file ~/code/widget.c
+:file cmacs/org-ex/cmacs-org-ex.c
 :width 500
 :height 250
 #+END_WIDGET
