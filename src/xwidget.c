@@ -2811,6 +2811,23 @@ webkit_script_dialog_cb (WebKitWebView *webview,
 #endif /* HAVE_WEBKIT */
 
 
+#ifdef HAVE_PGTK
+/* Callback for "focus-in-event" on gtk-embed widgets.  When an embedded
+   GTK widget (e.g. WebKitWebView) receives focus — typically when the
+   frame regains focus after being idle — redirect focus back to the
+   Emacs edit widget so keyboard input continues to work.  */
+static gboolean
+xwidget_gtk_embed_focus_in_cb (GtkWidget *widget,
+                               GdkEventFocus *event,
+                               gpointer user_data)
+{
+  struct frame *f = user_data;
+  if (f != NULL && FRAME_GTK_WIDGET (f) != NULL)
+    gtk_widget_grab_focus (FRAME_GTK_WIDGET (f));
+  return TRUE;  /* Stop propagation — we handled the focus event.  */
+}
+#endif /* HAVE_PGTK */
+
 /* Initializes and does initial placement of an xwidget view on screen.  */
 static struct xwidget_view *
 xwidget_init_view (struct xwidget *xww,
@@ -2858,6 +2875,17 @@ xwidget_init_view (struct xwidget *xww,
       /* For gtk-embed, use the actual GtkWidget directly — it renders
          itself natively without offscreen drawing.  */
       xv->widget = xww->gtk_embed_widget;
+
+      /* Prevent the embedded widget from taking keyboard focus.  */
+      gtk_widget_set_can_focus (xv->widget, FALSE);
+
+      /* If the widget is a container (e.g. WebKitWebView), child
+         widgets may still grab focus.  Connect a focus-in-event
+         handler that redirects focus back to the Emacs edit widget.  */
+      g_signal_connect (G_OBJECT (xv->widget), "focus-in-event",
+                        G_CALLBACK (xwidget_gtk_embed_focus_in_cb),
+                        s->f);
+
       gtk_container_add (GTK_CONTAINER (FRAME_GTK_WIDGET (s->f)),
                          xv->widget);
       gtk_widget_show_all (xv->widget);
@@ -4103,6 +4131,12 @@ The widget will be embedded directly in the Emacs frame when displayed.  */)
 
   /* Take a reference so the widget stays alive.  */
   xw->gtk_embed_widget = GTK_WIDGET (g_object_ref (obj));
+
+  /* Prevent the embedded widget from stealing keyboard focus from
+     Emacs.  Without this, GTK may route key events to the embedded
+     widget (e.g. WebKitWebView) instead of Emacs, causing keyboard
+     input to stop working after the frame loses and regains focus.  */
+  gtk_widget_set_can_focus (xw->gtk_embed_widget, FALSE);
 #else
   error ("GObject bridge not available");
 #endif

@@ -43,8 +43,8 @@ A full-width web embed for reading documentation:
 
 #+BEGIN_WIDGET web
 :url https://www.gnu.org/software/emacs/manual/html_node/emacs/index.html
-:width 800
-:height 600
+:width 1280
+:height 720
 #+END_WIDGET
 
 ** Interactive HTML with JavaScript
