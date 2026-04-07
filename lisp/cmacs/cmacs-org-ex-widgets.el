@@ -123,7 +123,12 @@ Properties:
                    "t")))
     (unless file
       (error "Buffer widget requires :file property"))
-    (let ((widget (org-ex-widget-buffer-new file editable)))
+    ;; Resolve relative paths against the Org file's directory, not CWD.
+    (let* ((file (expand-file-name file
+                                   (if buffer-file-name
+                                       (file-name-directory buffer-file-name)
+                                     default-directory)))
+           (widget (org-ex-widget-buffer-new file editable)))
       (org-ex-widget-set-size widget width height)
       widget)))
 

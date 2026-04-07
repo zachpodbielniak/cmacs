@@ -25,7 +25,7 @@ Set =:editable t= to allow in-place editing of the embedded file.
 Changes are written back to the original file on save:
 
 #+BEGIN_WIDGET buffer
-:file README.org
+:file ../../../../README.org
 :editable t
 :width 600
 :height 250
@@ -39,7 +39,7 @@ gets =emacs-lisp-mode= syntax highlighting, a =.c= file gets
 =c-mode=, and so on:
 
 #+BEGIN_WIDGET buffer
-:file lisp/cmacs/cmacs-org-ex-widgets.el
+:file ../../../../lisp/cmacs/cmacs-org-ex-widgets.el
 :width 600
 :height 300
 #+END_WIDGET
@@ -49,7 +49,7 @@ gets =emacs-lisp-mode= syntax highlighting, a =.c= file gets
 Embed project documentation for quick reference:
 
 #+BEGIN_WIDGET buffer
-:file CLAUDE.md
+:file ../../../../CLAUDE.md
 :width 700
 :height 200
 #+END_WIDGET
@@ -62,7 +62,7 @@ Each widget operates independently with its own scroll position:
 *** Header File
 
 #+BEGIN_WIDGET buffer
-:file cmacs/org-ex/cmacs-org-ex.h
+:file ../../../../cmacs/org-ex/cmacs-org-ex.h
 :width 500
 :height 250
 #+END_WIDGET
@@ -70,7 +70,7 @@ Each widget operates independently with its own scroll position:
 *** Implementation
 
 #+BEGIN_WIDGET buffer
-:file cmacs/org-ex/cmacs-org-ex.c
+:file ../../../../cmacs/org-ex/cmacs-org-ex.c
 :width 500
 :height 250
 #+END_WIDGET
