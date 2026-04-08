@@ -5504,6 +5504,10 @@ extern void syms_of_cmacs_bacon (void);
 extern void syms_of_cmacs_gowl (void);
 extern void init_cmacs_gowl (void);
 #endif
+#ifdef HAVE_CMACS_PODOMATION
+extern void syms_of_cmacs_podomation (void);
+extern void init_cmacs_podomation (void);
+#endif
 #ifdef HAVE_CMACS_ORG_EX
 extern void syms_of_cmacs_org_ex (void);
 #endif

@@ -657,6 +657,7 @@ OPTION_DEFAULT_OFF([cmacs-gi],   [CMacs GObject Introspection bridge])
 OPTION_DEFAULT_OFF([cmacs-crispy], [CMacs crispy C scripting])
 OPTION_DEFAULT_OFF([cmacs-bacon],  [CMacs bacon shell])
 OPTION_DEFAULT_OFF([cmacs-gowl],  [CMacs Gowl Wayland compositor])
+OPTION_DEFAULT_OFF([cmacs-podomation], [CMacs podomation automation engine])
 OPTION_DEFAULT_OFF([cmacs-org-ex], [CMacs org-ex interactive widgets])
 
 # CMACS: pkg-config checks when enabled
@@ -737,6 +738,29 @@ if test "$with_cmacs_gowl" != "no"; then
   AC_DEFINE([HAVE_CMACS_GOWL], 1, [CMacs Gowl compositor])
   CMACS_GOWL_OBJ="cmacs-gowl.o keyboard-shortcuts-inhibit-v1-protocol.o"
 fi
+if test "$with_cmacs_podomation" != "no"; then
+  if test "$with_cmacs_podomation" = "system"; then
+    # Use system-installed podomation (for distro packaging)
+    PKG_CHECK_MODULES([CMACS_PODOMATION], [podomation-1.0])
+  else
+    # Build libpodomation from deps/podomation/ (default)
+    PKG_CHECK_MODULES([CMACS_PODOMATION_DEPS],
+      [glib-2.0 gobject-2.0 gio-2.0 gio-unix-2.0 gmodule-2.0
+       libsoup-3.0 json-glib-1.0 libetpan yaml-0.1])
+    CMACS_PODOMATION_CFLAGS="-I\$(srcdir)/../deps/podomation/src \
+      -I\$(srcdir)/../deps/podomation/build/release \
+      -I\$(srcdir)/../deps/podomation/deps/crispy/src \
+      -I\$(srcdir)/../deps/podomation/deps/yaml-glib/src \
+      -DPOD_COMPILATION \
+      -DCMACS_PODOMATION_MODULE_DIR=\\\"\$(abs_top_srcdir)/deps/podomation/build/release/modules\\\" \
+      $CMACS_PODOMATION_DEPS_CFLAGS"
+    CMACS_PODOMATION_LIBS="-Wl,--whole-archive \$(srcdir)/../deps/podomation/build/release/libpodomation-1.0.a \
+      -Wl,--no-whole-archive $CMACS_PODOMATION_DEPS_LIBS"
+    CMACS_PODOMATION_BUNDLED=yes
+  fi
+  AC_DEFINE([HAVE_CMACS_PODOMATION], 1, [CMacs podomation automation engine])
+  CMACS_PODOMATION_OBJ="cmacs-podomation.o pod-cmacs-module.o pod-gowl-module.o"
+fi
 if test "$with_cmacs_org_ex" != "no"; then
   AC_DEFINE([HAVE_CMACS_ORG_EX], 1, [CMacs org-ex interactive widgets])
   CMACS_ORG_EX_OBJ="cmacs-org-ex.o"
@@ -765,6 +789,10 @@ AC_SUBST(CMACS_CRISPY_BUNDLED)
 AC_SUBST(CMACS_GOWL_CFLAGS)
 AC_SUBST(CMACS_GOWL_LIBS)
 AC_SUBST(CMACS_GOWL_BUNDLED)
+AC_SUBST(CMACS_PODOMATION_OBJ)
+AC_SUBST(CMACS_PODOMATION_CFLAGS)
+AC_SUBST(CMACS_PODOMATION_LIBS)
+AC_SUBST(CMACS_PODOMATION_BUNDLED)
 
 # CMacs API library: built as a shared library in cmacs/api/ and used
 # by both the bacon cmacsgi module and crispy scripts (in-process).

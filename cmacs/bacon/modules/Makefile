@@ -1,9 +1,3 @@
-MODULE_NAME := cmacs_gi
-
-# Only the bacon-specific files remain here; the command implementations
-# and transport layer now live in cmacs/api/ as libcmacs-api.so.
-SRCS        := cmacs-gi-module.c cmacs-gi-command.c
-
 BACON_DIR   ?= ../../../deps/bacon
 API_DIR     ?= ../../api
 CC          ?= gcc
@@ -21,17 +15,30 @@ LDFLAGS     += -L$(API_DIR) -lcmacs-api -Wl,-rpath,'$$ORIGIN/../../api' \
 
 OUTDIR      ?= .
 
+# ── cmacs_gi module ──────────────────────────────────────────────────
+
+GI_SRCS := cmacs-gi-module.c cmacs-gi-command.c
+
+$(OUTDIR)/cmacs_gi.so: $(GI_SRCS) $(API_DIR)/libcmacs-api.so
+	$(CC) $(CFLAGS) -o $@ $(GI_SRCS) $(LDFLAGS)
+
+# ── cmacs_pod module ─────────────────────────────────────────────────
+
+POD_SRCS := cmacs-pod-module.c cmacs-pod-command.c
+
+$(OUTDIR)/cmacs_pod.so: $(POD_SRCS) $(API_DIR)/libcmacs-api.so
+	$(CC) $(CFLAGS) -o $@ $(POD_SRCS) $(LDFLAGS) -lreadline
+
+# ── Targets ──────────────────────────────────────────────────────────
+
 .PHONY: all clean api
 
-all: api $(OUTDIR)/$(MODULE_NAME).so
+all: api $(OUTDIR)/cmacs_gi.so $(OUTDIR)/cmacs_pod.so
 
 # Build the shared API library first.
 api:
 	$(MAKE) -C $(API_DIR)
 
-$(OUTDIR)/$(MODULE_NAME).so: $(SRCS) $(API_DIR)/libcmacs-api.so
-	$(CC) $(CFLAGS) -o $@ $(SRCS) $(LDFLAGS)
-
 clean:
-	rm -f $(OUTDIR)/$(MODULE_NAME).so
+	rm -f $(OUTDIR)/cmacs_gi.so $(OUTDIR)/cmacs_pod.so
 	$(MAKE) -C $(API_DIR) clean

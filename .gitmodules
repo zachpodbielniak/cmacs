@@ -7,3 +7,6 @@
 [submodule "deps/gowl"]
 	path = deps/gowl
 	url = git@git-ssh.podbielniak.com:zachpodbielniak/gowl.git
+[submodule "deps/podomation"]
+	path = deps/podomation
+	url = git@git-ssh.podbielniak.com:zachpodbielniak/podomation.git

@@ -43,6 +43,7 @@ interaction.
 * CMacs API::                   Shared C library for scripting integration.
 * Crispy C Scripting::          Inline C evaluation and config.
 * Gowl Wayland Compositor::    Tiling WM and client embedding.
+* Podomation Automation::      Event-driven automation engine.
 * Org-Ex Interactive Widgets::  Widget embedding in Org buffers.
 * Build Configuration::         Configure flags and dependencies.
 @end menu
@@ -92,6 +93,13 @@ Embeds a wlroots-based Wayland compositor into Emacs.  With
 @option{--gowl}, Emacs becomes a tiling window manager with 47+ DEFUNs
 for spawning clients, managing tags, switching layouts, and embedding
 Wayland clients directly inside Emacs buffer windows.
+
+@item Podomation Automation
+Embeds the Podomation event-driven automation engine.  Provides 17
+DEFUNs for engine lifecycle, DSL evaluation, REPL, and event emission.
+Includes built-in @code{cmacs} and @code{gowl} PodModules that bridge
+Emacs events and compositor commands into the DSL, plus 80+ loadable
+plugin modules.
 
 @item Org-Ex Interactive Widgets
 Embeds interactive widgets---GTK controls, web views, buffer windows,
@@ -2039,6 +2047,996 @@ ERT tests.
 @item deps/gowl/
 Bundled gowl library (git submodule).
 @end table
+
+@c ===================================================================
+@node Podomation Automation
+@chapter Podomation Automation
+
+@cindex podomation
+@cindex automation engine
+
+Podomation is a GObject-native, event-driven automation engine with 80+
+modules, a custom DSL, REPL, admin API, and state persistence.  CMacs
+embeds it via @code{pod_engine_start_embedded()}, running on the existing
+GMainContext without a separate event loop.
+
+Enable with @option{--with-cmacs-podomation} at configure time.
+
+@menu
+* Podomation Architecture::     Embedding model and design.
+* Podomation Configuration::    Customize variables and .pod files.
+* Podomation DSL::              The event-binding language.
+* Podomation REPL::             Interactive evaluation.
+* Podomation Hook Bridge::      Emacs hooks as podomation events.
+* Podomation Modules::          Built-in cmacs and gowl modules.
+* Podomation Plugin Modules::   80+ loadable .so plugins.
+* Podomation DEFUNs::           Elisp primitives.
+* Podomation Elisp Layer::      Convenience commands and functions.
+* Podomation Bacon Builtin::    The pod shell command.
+* Podomation GI Access::        GObject Introspection.
+* Podomation Examples::         DSL recipes.
+* Podomation File Reference::   Source file listing.
+@end menu
+
+@node Podomation Architecture
+@section Architecture
+
+@subsection Embedding Model
+
+CMacs uses @code{PodRepl} to create the engine internally.  The REPL's
+engine (obtained via @code{pod_repl_get_engine()}) is the engine ---
+REPL and DEFUNs share the same module manager and pod namespace.
+
+The engine runs on the default @code{GMainContext} integrated into
+Emacs's @code{pselect()} loop via @file{cmacs-glib-loop.c}.  No
+separate thread or event loop is needed.
+
+@subsection Built-in Modules
+
+Two @code{PodModule} subclasses are compiled into @command{temacs}
+(not loaded as @file{.so} plugins).  They are registered with
+@code{pod_module_manager_register()} during
+@code{cmacs-podomation-start}, after the plugin @file{.so} files load:
+
+@table @code
+@item cmacs
+Bridges Emacs events and eval into the DSL.
+@item gowl
+Bridges compositor events and commands (requires
+@option{--with-cmacs-gowl}).
+@end table
+
+Both are DUAL modules implementing @code{PodEventSource} and
+@code{PodEventHandler} interfaces via
+@code{G_DEFINE_FINAL_TYPE_WITH_CODE} with
+@code{G_IMPLEMENT_INTERFACE}.
+
+@subsection Lisp Eval Safety
+
+The cmacs module's @code{eval} and @code{eval_async} handlers use
+@code{g_idle_add()} to post work to the GMainContext.  This avoids the
+@code{waiting_for_input} SIGABRT crash that would occur if Lisp were
+evaluated synchronously from a GLib dispatch callback.
+
+The gowl module's handlers call @code{cmacs_dispatch_gowl_*()} functions
+directly --- no idle dispatch needed since they don't evaluate Lisp.
+
+@subsection pdumper Safety
+
+The @code{PodEngine} is never created during C init.
+@code{init_cmacs_podomation()} is intentionally empty.  The engine is
+created from Elisp only, making it pdumper-safe.
+
+@node Podomation Configuration
+@section Configuration
+
+@defvar cmacs-podomation-auto-start
+When non-nil, start the engine automatically during init.
+Default: @code{nil}.
+@end defvar
+
+@defvar cmacs-podomation-pod-files
+List of @file{.pod} files to load when the engine starts.
+@end defvar
+
+@defvar cmacs-podomation-module-dirs
+Additional directories to scan for podomation module @file{.so} files.
+@end defvar
+
+Start the engine manually:
+
+@lisp
+(cmacs-podomation-start)
+@end lisp
+
+Or with full config (starts engine, installs hook bridge, loads pod
+files):
+
+@lisp
+(cmacs-podomation-start-with-config)
+@end lisp
+
+@node Podomation DSL
+@section DSL Reference
+
+The podomation DSL connects event sources to handlers.
+
+@subsection Pod Declaration
+
+@example
+pod name = module_name->new(arg1, arg2);
+@end example
+
+@subsection Event Binding
+
+@example
+name->event_name => handler->function(args);
+@end example
+
+@subsection Result Capture
+
+@example
+res result := name->event => handler->function(args);
+res persist result := name->event => handler->function(args);
+@end example
+
+@code{persist} results survive across event dispatches.
+
+@subsection Pipe Chain
+
+@example
+name->event => handler1->func(args) | handler2->func("@{pipe->field@}");
+@end example
+
+Each handler's output becomes the next handler's @code{pipe} scope.
+
+@subsection Where Guard
+
+@example
+name->event where result->field == "value" => handler->func(args);
+@end example
+
+Comparison operators: @code{==}, @code{!=}, @code{<}, @code{>},
+@code{<=}, @code{>=}, @code{=~} (regex), @code{!~} (negated regex).
+
+@subsection Conditional
+
+@example
+if result->field == "value" @{
+    name->event => handler->func(args);
+@} else @{
+    name->event => handler->other(args);
+@}
+@end example
+
+@subsection Retry with Circuit Breaker
+
+@example
+name->event => retry(3, backoff: "exponential") @{
+    res r := handler->func(args)
+        circuit_breaker(threshold: 5, reset: "1m");
+@} on_failure => log->write_error("failed: @{error@}");
+@end example
+
+@subsection Parallel Block
+
+@example
+name->event => parallel @{
+    res a := handler1->func(args);
+    res b := handler2->func(args);
+@};
+@end example
+
+@subsection Interpolation
+
+@multitable @columnfractions .45 .55
+@headitem Syntax @tab Meaning
+@item @code{@{result->field@}} @tab Property access on a result
+@item @code{@{result->field[key]@}} @tab Nested dict key lookup
+@item @code{@{pipe->field@}} @tab Current pipe stage value
+@item @code{@{pipe[N]->field@}} @tab Nth pipe stage (0-based)
+@item @code{$@{ENV_VAR@}} @tab Environment variable
+@item @code{$(command)} @tab Shell substitution (stdout)
+@item @code{@{field|regex("pat","rep")@}} @tab Inline regex substitution
+@end multitable
+
+@subsection Regex Operators
+
+@code{=~} matches against PCRE patterns.  After a match, capture groups
+populate @code{rematch->} scope:
+
+@example
+source->on_event
+    where event->message =~ "(?P<action>Accepted|Failed) .* for (?P<user>\\w+)"
+    => log->write_info("@{rematch->action@} for @{rematch->user@}");
+@end example
+
+@multitable @columnfractions .35 .65
+@headitem Scope @tab Meaning
+@item @code{rematch->0} @tab Full match
+@item @code{rematch->1} @tab First capture group
+@item @code{rematch->name} @tab Named group
+@item @code{rematch->count} @tab Number of groups
+@item @code{rematch->matched} @tab @code{"true"} or @code{"false"}
+@end multitable
+
+@subsection Event Name Patterns
+
+@example
+name->on_*               glob: matches on_tick, on_message, ...
+name->on_t?ck            glob: single wildcard char
+name->/on_(get|post)/    regex: enclosed in /.../ delimiters
+@end example
+
+@subsection Operators Summary
+
+@multitable @columnfractions .1 .35 .55
+@headitem Op @tab Use @tab Example
+@item @code{->} @tab Member access / call
+  @tab @code{timer->new(1000)}
+@item @code{=>} @tab Event binding
+  @tab @code{t->on_tick => log->write(...)}
+@item @code{=} @tab Pod declaration only
+  @tab @code{pod t = timer->new(...)}
+@item @code{:=} @tab Result capture
+  @tab @code{res r := source->event => ...}
+@item @code{|} @tab Pipe to next handler
+  @tab @code{h1->f() | h2->g(...)}
+@item @code{==} @tab String equality guard
+  @tab @code{where r->status == "200"}
+@item @code{!=} @tab Inequality
+  @tab @code{where r->code != "0"}
+@item @code{=~} @tab Regex match (PCRE)
+  @tab @code{where e->path =~ "^/api"}
+@item @code{!~} @tab Negated regex match
+  @tab @code{where e->ua !~ "bot"}
+@end multitable
+
+Evaluate DSL text from Elisp:
+
+@lisp
+(cmacs-podomation-eval-dsl
+ "pod t = timer->new(5000); t->on_tick => print->string(\"tick\");")
+@end lisp
+
+Load a @file{.pod} file:
+
+@lisp
+(cmacs-podomation-load "~/.config/cmacs/auto.pod")
+@end lisp
+
+@node Podomation REPL
+@section REPL
+
+Open an interactive REPL buffer with @code{M-x podomation-repl}.
+The REPL uses @code{comint-mode} with tab completion.
+
+From the bacon shell, use @code{pod repl} to enter an interactive
+session.
+
+Built-in REPL commands start with @code{:}:
+
+@table @code
+@item :modules
+List loaded modules.
+@item :pods
+List active pods.
+@item :vars
+List result variables.
+@item :undef <name>
+Remove a pod (stops it) or variable.
+@item :load <file>
+Load and execute a @file{.pod} file.
+@item :reset
+Reset engine state.
+@item :describe <module>
+Full module help text.
+@item :help
+Show help.
+@item :quit
+Exit the REPL.
+@end table
+
+DSL text entered at the prompt is parsed and executed immediately.
+Multi-line input is supported (the prompt changes to @code{...>}).
+Tab completion works for module names, event names, handler names,
+and REPL commands.
+
+@node Podomation Hook Bridge
+@section Hook Bridge
+
+The Elisp layer bridges Emacs hooks to podomation events in
+@code{snake_case}.  Hooks are installed by
+@code{cmacs-podomation--install-hooks} (called automatically by
+@code{cmacs-podomation-start-with-config}).
+
+@subsection Default Hook Mappings
+
+@multitable @columnfractions .35 .3 .35
+@headitem Emacs Hook @tab Podomation Event @tab Event Data
+@item @code{after-save-hook}
+  @tab @code{on_buffer_save}
+  @tab @code{buffer_name}, @code{file_name}, @code{major_mode}
+@item @code{kill-buffer-hook}
+  @tab @code{on_buffer_kill}
+  @tab @code{buffer_name}
+@item @code{after-init-hook}
+  @tab @code{on_after_init}
+  @tab (none)
+@item @code{post-command-hook}
+  @tab @code{on_post_command}
+  @tab @code{command_name}
+@end multitable
+
+@subsection Dynamic Hook Registration
+
+Register any Emacs hook as a podomation event source:
+
+@lisp
+(cmacs-podomation-hook "compilation-finish-functions")
+@end lisp
+
+This fires an @code{on_hook} event with @code{hook_name} data
+whenever the named hook runs.  Use from DSL with a @code{where}
+guard:
+
+@example
+pod c = cmacs->new();
+c->on_hook
+    where event->hook_name == "compilation-finish-functions"
+    => gotify->send("Compilation finished");
+@end example
+
+@node Podomation Modules
+@section Built-in Modules
+
+Two PodModules are compiled into the editor (not loaded as @file{.so}
+plugins).
+
+@subsection cmacs Module
+
+Module name: @code{"cmacs"}.  DUAL module (source + handler).
+
+@subsubsection Source Events
+
+@multitable @columnfractions .25 .4 .35
+@headitem Event @tab Data Fields @tab Triggered By
+@item @code{on_buffer_save}
+  @tab @code{buffer_name}, @code{file_name}, @code{major_mode}
+  @tab @code{after-save-hook}
+@item @code{on_buffer_kill}
+  @tab @code{buffer_name}
+  @tab @code{kill-buffer-hook}
+@item @code{on_idle}
+  @tab @code{idle_seconds}
+  @tab Idle timer
+@item @code{on_command}
+  @tab @code{command_name}, @code{prefix_arg}
+  @tab Command execution
+@item @code{on_after_init}
+  @tab (none)
+  @tab @code{after-init-hook}
+@item @code{on_after_load}
+  @tab @code{file_name}, @code{feature}
+  @tab Feature loaded
+@item @code{on_post_command}
+  @tab @code{command_name}
+  @tab @code{post-command-hook}
+@item @code{on_process_exit}
+  @tab @code{process_name}, @code{exit_code}
+  @tab Subprocess exit
+@item @code{on_buffer_create}
+  @tab @code{buffer_name}
+  @tab Buffer creation
+@item @code{on_window_focus}
+  @tab @code{focused} (@code{"true"}/@code{"false"})
+  @tab Window focus change
+@item @code{on_region_change}
+  @tab @code{buffer_name}, @code{begin}, @code{end}
+  @tab Region change
+@item @code{on_compile_finish}
+  @tab @code{buffer_name}, @code{exit_code}
+  @tab Compilation finished
+@item @code{on_hook}
+  @tab @code{hook_name} + hook-specific fields
+  @tab Dynamic hook wrapper
+@end multitable
+
+All event data is passed as @code{a@{sv@}} GVariant dictionaries with
+string values.
+
+@subsubsection Handler Functions
+
+@b{Lisp Eval}
+
+@multitable @columnfractions .2 .3 .5
+@headitem Handler @tab Params @tab Description
+@item @code{eval}
+  @tab @code{("(elisp)")}
+  @tab Evaluate Elisp, return result in @code{value}
+@item @code{eval_async}
+  @tab @code{("(elisp)")}
+  @tab Evaluate Elisp, fire-and-forget
+@end multitable
+
+@b{Buffer Actions}
+
+@multitable @columnfractions .25 .3 .45
+@headitem Handler @tab Params @tab Description
+@item @code{save_buffer}
+  @tab (none) @tab Save current buffer
+@item @code{save_all}
+  @tab (none) @tab Save all modified buffers
+@item @code{kill_buffer}
+  @tab @code{("name")} or none @tab Kill named or current buffer
+@item @code{switch_buffer}
+  @tab @code{("name")} @tab Switch to named buffer
+@item @code{revert_buffer}
+  @tab (none) @tab Revert buffer from disk
+@end multitable
+
+@b{Buffer Queries} (return data in @code{value} for pipes)
+
+@multitable @columnfractions .25 .75
+@headitem Handler @tab Description
+@item @code{buffer_name} @tab Current buffer name
+@item @code{buffer_file} @tab Current buffer's file path
+@item @code{buffer_list} @tab All buffer names (newline-separated)
+@item @code{major_mode} @tab Current major mode name
+@item @code{region_text} @tab Selected text (empty if no region)
+@item @code{project_root} @tab Project root directory
+@end multitable
+
+@b{Navigation and Editing}
+
+@multitable @columnfractions .2 .3 .5
+@headitem Handler @tab Params @tab Description
+@item @code{message}
+  @tab @code{("text")} @tab Display in minibuffer
+@item @code{find_file}
+  @tab @code{("/path")} @tab Open a file
+@item @code{set_variable}
+  @tab @code{("var", "value")} @tab Set an Elisp variable
+@item @code{run_command}
+  @tab @code{("cmd", "arg1")} @tab Execute interactive command
+@item @code{insert}
+  @tab @code{("text")} @tab Insert text at point
+@item @code{goto_line}
+  @tab @code{("N")} @tab Go to line number
+@item @code{compile}
+  @tab @code{("command")} @tab Start compilation
+@item @code{dired}
+  @tab @code{("/path")} @tab Open directory in dired
+@end multitable
+
+@b{Clipboard}
+
+@multitable @columnfractions .2 .3 .5
+@headitem Handler @tab Params @tab Description
+@item @code{kill_new}
+  @tab @code{("text")} @tab Copy text to kill ring
+@item @code{current_kill}
+  @tab (none) @tab Get top of kill ring (@code{value})
+@end multitable
+
+@b{File Operations} (pure C, no Lisp needed)
+
+@multitable @columnfractions .2 .35 .45
+@headitem Handler @tab Params @tab Description
+@item @code{shell_command}
+  @tab @code{("cmd")}
+  @tab Run command; result has @code{stdout}, @code{stderr},
+@code{exit_code}, @code{value}
+@item @code{write_file}
+  @tab @code{("/path", "content")} @tab Write string to file
+@item @code{append_file}
+  @tab @code{("/path", "content")} @tab Append string to file
+@item @code{read_file}
+  @tab @code{("/path")} @tab Read file contents (@code{value})
+@item @code{delete_file}
+  @tab @code{("/path")} @tab Delete a file
+@item @code{rename_file}
+  @tab @code{("/old", "/new")} @tab Rename/move a file
+@item @code{copy_file}
+  @tab @code{("/src", "/dst")} @tab Copy a file
+@item @code{file_exists}
+  @tab @code{("/path")}
+  @tab Check existence (@code{value}: @code{"true"}/@code{"false"})
+@item @code{mkdir}
+  @tab @code{("/path")} @tab Create directory (with parents)
+@end multitable
+
+@b{Notification}
+
+@multitable @columnfractions .2 .35 .45
+@headitem Handler @tab Params @tab Description
+@item @code{notify}
+  @tab @code{("title", "body")}
+  @tab Desktop notification via @command{notify-send}
+@end multitable
+
+@subsubsection cmacs DSL Examples
+
+@example
+pod c = cmacs->new();
+
+/* Log every buffer save */
+c->on_buffer_save => log->write_info("saved: @{event->file_name@}");
+
+/* Desktop notification on build failure */
+c->on_compile_finish
+    where event->exit_code != "0"
+    => cmacs->notify("Build Failed", "@{event->buffer_name@}");
+
+/* Shell command piped to log */
+pod t = timer->new(60000);
+t->on_tick => cmacs->shell_command("uptime")
+           | log->write_info("uptime: @{pipe->stdout@}");
+
+/* Save all buffers on idle */
+c->on_idle => cmacs->save_all();
+
+/* Compile on save for Rust files */
+c->on_buffer_save
+    where event->major_mode == "rust-mode"
+    => cmacs->compile("cargo check");
+
+/* Write to a log file */
+c->on_buffer_save
+    => cmacs->shell_command("date +%H:%M")
+     | cmacs->append_file("/tmp/save-log.txt",
+         "@{pipe->value@} @{event->file_name@}\n");
+@end example
+
+@subsection gowl Module
+
+Module name: @code{"gowl"}.  DUAL module (source + handler).  Only
+available when built with @option{--with-cmacs-gowl}.
+
+@subsubsection Source Events
+
+@multitable @columnfractions .25 .4 .35
+@headitem Event @tab Data Fields @tab GowlCompositor Signal
+@item @code{on_client_map}
+  @tab @code{app_id}, @code{title}, @code{client_id}
+  @tab @code{client-added}
+@item @code{on_client_unmap}
+  @tab @code{app_id}, @code{title}, @code{client_id}
+  @tab @code{client-removed}
+@item @code{on_focus_change}
+  @tab @code{app_id}, @code{title}, @code{client_id} (or empty)
+  @tab @code{focus-changed}
+@item @code{on_tag_change}
+  @tab (reserved, not yet wired)
+  @tab ---
+@end multitable
+
+@subsubsection Handler Functions
+
+@multitable @columnfractions .3 .3 .4
+@headitem Handler @tab Params @tab Description
+@item @code{list_clients}
+  @tab (none) @tab List all clients as JSON
+@item @code{focused_client}
+  @tab (none) @tab Focused client info
+@item @code{find_client}
+  @tab @code{(pattern [, by])} @tab Find client by app-id/title
+@item @code{spawn}
+  @tab @code{(command)} @tab Launch a program
+@item @code{list_monitors}
+  @tab (none) @tab List all monitors
+@item @code{monitor_info}
+  @tab @code{(name)} @tab Info for named monitor
+@item @code{monitor_modes}
+  @tab @code{(name)} @tab Available modes for monitor
+@item @code{set_monitor_mode}
+  @tab @code{(name, mode)} @tab Set monitor resolution
+@item @code{set_monitor_position}
+  @tab @code{(name, x, y)} @tab Set monitor position
+@item @code{set_monitor_enabled}
+  @tab @code{(name, bool)} @tab Enable/disable monitor
+@item @code{set_monitor_scale}
+  @tab @code{(name, scale)} @tab Set monitor scale factor
+@item @code{set_monitor_transform}
+  @tab @code{(name, transform)} @tab Set monitor transform
+@item @code{view_tags}
+  @tab @code{(tagmask)} @tab View tags by bitmask
+@item @code{set_mfact}
+  @tab @code{(factor)} @tab Set master area factor
+@item @code{set_nmaster}
+  @tab @code{(n)} @tab Set master window count
+@item @code{set_layout}
+  @tab @code{(name)} @tab Set tiling layout
+@item @code{add_keybind}
+  @tab @code{(key, action [, arg])} @tab Add a keybinding
+@item @code{list_keybinds}
+  @tab (none) @tab List all keybindings
+@item @code{add_rule}
+  @tab @code{(rule_spec)} @tab Add a client rule
+@item @code{list_rules}
+  @tab (none) @tab List all client rules
+@item @code{lock}
+  @tab (none) @tab Lock the session
+@item @code{unlock}
+  @tab (none) @tab Unlock the session
+@item @code{reload_config}
+  @tab (none) @tab Reload compositor config
+@item @code{config_get}
+  @tab @code{(property)} @tab Get a config property
+@end multitable
+
+@subsubsection gowl DSL Examples
+
+@example
+pod g = gowl->new();
+
+/* Log focus changes */
+g->on_focus_change
+    => log->write_info("Focus: @{event->app_id@} - @{event->title@}");
+
+/* Notify on client map */
+g->on_client_map
+    => print->string("Opened: @{event->app_id@}");
+
+/* Spawn a program from a timer */
+pod t = timer->new(0);
+t->on_tick => gowl->spawn("foot");
+
+/* List clients from DSL */
+res clients := gowl->list_clients();
+@end example
+
+@node Podomation Plugin Modules
+@section Plugin Modules
+
+82 plugin modules are loaded from @file{.so} files at engine start.
+
+@subsection Sources (event-only)
+
+@code{timer}, @code{cron}, @code{inotify}, @code{dbus},
+@code{journal}, @code{public_ip}, @code{exec_pipe},
+@code{cert_monitor}, @code{dns_monitor}, @code{healthcheck},
+@code{engine}, @code{astronomical}, @code{rss}.
+
+@subsection Handlers (action-only)
+
+@code{log}, @code{print}, @code{network}, @code{webhook},
+@code{metrics}, @code{state_store}, @code{rate_limiter},
+@code{system}, @code{transform}, @code{regex}, @code{shell}.
+
+@subsection Combined (source + handler)
+
+@code{http}, @code{chat}, @code{socket}, @code{container},
+@code{process}, @code{aggregate}, @code{dlq}, @code{event_store},
+@code{gotify}, @code{homeassistant}, @code{gpio}, @code{db_postgres},
+@code{db_sqlite}, @code{mq_fifo}, @code{mq_mqtt}, @code{mq_mqueue},
+@code{ai_chat}, @code{ai_claude_code}, @code{ai_opencode},
+@code{email}, @code{slack}, @code{discord}, @code{github},
+@code{gitlab}, @code{gitea}, @code{alertmanager}, @code{caldav},
+@code{kubernetes}, @code{mastodon}, @code{ntfy}, @code{redis},
+@code{sentry}, @code{serial}, @code{ssh}, @code{vault}, @code{git},
+@code{nats}, @code{fileio}, @code{udev}, @code{text}, @code{unifi},
+@code{fs_btrfs}, @code{fs_zfs}, @code{vm_virtmanager},
+@code{forgejo}, @code{forgejo_poll}, @code{gitlab_poll},
+@code{bacon}.
+
+@node Podomation DEFUNs
+@section DEFUNs
+
+@subsection Engine Lifecycle
+
+@deffn Command cmacs-podomation-start
+Start the embedded engine.  Signals @code{cmacs-podomation-error}
+if already running.
+@end deffn
+
+@deffn Command cmacs-podomation-stop
+Stop the engine and release resources.
+@end deffn
+
+@defun cmacs-podomation-running-p
+Return @code{t} if the engine is running.
+@end defun
+
+@defun cmacs-podomation-reload
+Hot-reload engine configuration.
+@end defun
+
+@subsection DSL and Pod Management
+
+@defun cmacs-podomation-eval-dsl string
+Parse and execute DSL text.
+@end defun
+
+@defun cmacs-podomation-load-file file
+Load and parse a @file{.pod} file.
+@end defun
+
+@defun cmacs-podomation-list-pods
+Return an alist of @code{(NAME . STATUS)} pairs.
+@end defun
+
+@defun cmacs-podomation-list-modules
+Return a list of module name strings.
+@end defun
+
+@subsection REPL
+
+@defun cmacs-podomation-repl-eval input
+Evaluate @var{input} in the REPL.  Returns @code{(KIND . TEXT)}.
+@end defun
+
+@defun cmacs-podomation-repl-complete prefix
+Return a list of completion strings for @var{prefix}.
+@end defun
+
+@defun cmacs-podomation-repl-prompt
+Return the current prompt string.
+@end defun
+
+@defun cmacs-podomation-repl-reset
+Reset REPL state.
+@end defun
+
+@subsection Engine Context and Stats
+
+@defun cmacs-podomation-set-context alist
+Set engine context from @var{alist} to @code{a@{sv@}} GVariant.
+@end defun
+
+@defun cmacs-podomation-stats
+Return engine statistics as a plist with keys
+@code{:events-dispatched}, @code{:handlers-called},
+@code{:handlers-failed}, @code{:pipe-chains-executed},
+@code{:start-time-us}.
+@end defun
+
+@subsection Event Emission
+
+@defun cmacs-podomation-emit-event event-name data
+Emit an event through the cmacs module.  @var{event-name} is a string
+(e.g.@: @code{"on_buffer_save"}).  @var{data} is an alist of
+@code{(KEY . VALUE)} string pairs.
+@end defun
+
+@node Podomation Elisp Layer
+@section Elisp Convenience Layer
+
+File: @file{lisp/cmacs/cmacs-podomation.el}.
+
+@subsection Interactive Commands
+
+@deffn Command podomation-repl
+Open a comint REPL buffer (@code{*podomation*}).
+@end deffn
+
+@deffn Command cmacs-podomation-load
+Interactively load a @file{.pod} file.
+@end deffn
+
+@deffn Command cmacs-podomation-start-with-config
+Start engine, install hook bridge, and load configured pod files.
+@end deffn
+
+@subsection Functions
+
+@defun cmacs-podomation-hook hook-name
+Register any Emacs hook as a podomation event source.
+@end defun
+
+@defun cmacs-podomation--install-hooks
+Wire default hook-alist to podomation events.
+@end defun
+
+@defun cmacs-podomation--remove-hooks
+Remove podomation hook functions.
+@end defun
+
+@defun cmacs-podomation--gi-available-p
+Check if the Podomation-1.0 typelib is available.
+@end defun
+
+@node Podomation Bacon Builtin
+@section Bacon Builtin
+
+The @code{pod} builtin is available in the bacon shell.  It connects
+to CMacs via the API transport layer (FD/D-Bus/direct).
+
+@multitable @columnfractions .35 .65
+@headitem Command @tab Description
+@item @code{pod start} @tab Start the engine
+@item @code{pod stop} @tab Stop the engine
+@item @code{pod status} @tab Show running state
+@item @code{pod modules} @tab List loaded modules
+@item @code{pod pods} @tab List active pods
+@item @code{pod stats} @tab Show engine statistics
+@item @code{pod eval DSL_TEXT} @tab Evaluate DSL text
+@item @code{pod load FILE} @tab Load a @file{.pod} file
+@item @code{pod repl} @tab Enter interactive REPL
+@item @code{pod --help} @tab Show all commands
+@item @code{pod help COMMAND} @tab Help for a command
+@end multitable
+
+@subsection Example Session
+
+@example
+$ pod start
+t
+$ pod modules
+timer
+cron
+http
+...
+cmacs
+gowl
+$ pod eval "pod t = timer->new(5000); \
+    t->on_tick => print->string(\"tick\");"
+t
+$ pod pods
+t	healthy
+$ pod stats
+events-dispatched: 3
+handlers-called: 3
+handlers-failed: 0
+pipe-chains-executed: 3
+$ pod repl
+Podomation REPL (type :quit to exit)
+podomation> :modules
+LOADED MODULES:
+  cmacs   [source+handler]  CMacs Emacs integration
+  ...
+podomation> pod x = timer->new(1000); \
+    x->on_tick => print->string("hello");
+podomation> :pods
+ACTIVE PODS:
+  t        healthy
+  x        healthy
+podomation> :quit
+$ pod stop
+t
+@end example
+
+@node Podomation GI Access
+@section GObject Introspection Access
+
+If the Podomation-1.0 typelib is built:
+
+@example
+make -C deps/podomation typelib
+@end example
+
+Then the full podomation API is accessible from Elisp via GI:
+
+@lisp
+(gi-require "Podomation" "1.0")
+
+;; Access engine stats directly
+(gi-call "Podomation" "engine_stats_new")
+
+;; Access module manager
+(let ((engine (cmacs-podomation-get-engine)))
+  (gi-call "Podomation" "engine_get_module_manager" engine))
+@end lisp
+
+This provides access to the full GObject API beyond what the DEFUNs
+expose.
+
+@node Podomation Examples
+@section Examples
+
+@subsection Auto-start with Pod Files
+
+@lisp
+;; In init.el
+(setq cmacs-podomation-auto-start t)
+(setq cmacs-podomation-pod-files
+      '("~/.config/cmacs/hooks.pod"
+        "~/.config/cmacs/timers.pod"))
+@end lisp
+
+@subsection Notify on Build Failure
+
+@example
+pod c = cmacs->new();
+c->on_compile_finish
+    where event->exit_code != "0"
+    => gotify->send("Build failed in @{event->buffer_name@}");
+@end example
+
+@subsection Focus Tracking with Logging
+
+@example
+pod g = gowl->new();
+g->on_focus_change
+    => log->write_info("Focus: @{event->app_id@} - @{event->title@}");
+@end example
+
+@subsection Auto-save Reminder via Timer
+
+@example
+pod t = timer->new(300000);
+t->on_tick => cmacs->eval("(message \"Consider saving your work\")");
+@end example
+
+@subsection HTTP Health Monitor
+
+@example
+pod h = http->new();
+pod t = timer->new(60000);
+t->on_tick => h->get("https://api.example.com/health");
+h->on_response
+    where event->status_code != "200"
+    => slack->send("#alerts", "API unhealthy: @{event->status_code@}");
+@end example
+
+@subsection Pipe Chain: Transform and Log
+
+@example
+pod c = cmacs->new();
+c->on_buffer_save
+    => transform->uppercase("@{event->file_name@}")
+     | log->write_info("SAVED: @{pipe->value@}");
+@end example
+
+@subsection Conditional: Different Actions by Mode
+
+@example
+pod c = cmacs->new();
+if c->on_buffer_save where event->major_mode == "python-mode" @{
+    c->on_buffer_save
+        => shell->exec("ruff check @{event->file_name@}");
+@} else @{
+    c->on_buffer_save
+        => print->string("saved @{event->file_name@}");
+@}
+@end example
+
+@subsection Regex: Parse Log Lines
+
+@example
+pod j = journal->new();
+j->on_entry
+    where event->message =~
+        "(?P<level>ERROR|WARN) (?P<service>\\w+): (?P<msg>.*)"
+    => gotify->send(
+        "@{rematch->level@} in @{rematch->service@}: @{rematch->msg@}");
+@end example
+
+@subsection Client Auto-tiling Rule
+
+@example
+pod g = gowl->new();
+g->on_client_map
+    where event->app_id == "firefox"
+    => gowl->view_tags("2");
+@end example
+
+@node Podomation File Reference
+@section File Reference
+
+@multitable @columnfractions .5 .5
+@headitem File @tab Description
+@item @file{cmacs/podomation/cmacs-podomation.h}
+  @tab Header: syms_of, init, getter functions
+@item @file{cmacs/podomation/cmacs-podomation.c}
+  @tab 17 DEFUNs: lifecycle, DSL, REPL, events
+@item @file{cmacs/podomation/pod-cmacs-module.h}
+  @tab CMacs PodModule type declaration
+@item @file{cmacs/podomation/pod-cmacs-module.c}
+  @tab DUAL module: 13 events + 32 handlers
+@item @file{cmacs/podomation/pod-gowl-module.h}
+  @tab Gowl PodModule type declaration
+@item @file{cmacs/podomation/pod-gowl-module.c}
+  @tab DUAL module: 4 events + 24 handlers
+@item @file{lisp/cmacs/cmacs-podomation.el}
+  @tab Elisp: config, hooks, comint REPL
+@item @file{test/cmacs/cmacs-podomation-tests.el}
+  @tab 8 ERT tests
+@item @file{cmacs/bacon/modules/cmacs-pod-module.c}
+  @tab Bacon module: registers @code{pod} builtin
+@item @file{cmacs/bacon/modules/cmacs-pod-command.c}
+  @tab @code{pod} command: 9 subcommands
+@end multitable
 
 @c ===================================================================
 @node Org-Ex Interactive Widgets

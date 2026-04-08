@@ -1,0 +1,741 @@
+#+TITLE: Podomation Automation Engine
+#+AUTHOR: Zach Podbielniak
+#+STARTUP: showall
+
+* Overview
+
+Podomation is a GObject-native, event-driven automation engine with 80+
+modules, a custom DSL, REPL, admin API, and state persistence.  CMacs
+embeds it via =pod_engine_start_embedded()=, running on the existing
+GMainContext without a separate event loop.
+
+Enable with =--with-cmacs-podomation= at configure time.
+
+* Architecture
+
+** Embedding Model
+
+CMacs uses =PodRepl= to create the engine internally.  The REPL's
+engine (obtained via =pod_repl_get_engine()=) is THE engine --- REPL and
+DEFUNs share the same module manager and pod namespace.
+
+The engine runs on the default =GMainContext= integrated into Emacs's
+=pselect()= loop via =cmacs-glib-loop.c=.  No separate thread or event
+loop is needed.
+
+** Built-in Modules
+
+Two =PodModule= subclasses are compiled into =temacs= (not loaded as
+=.so= plugins).  They are registered with =pod_module_manager_register()=
+during =cmacs-podomation-start=, after the plugin =.so= files load:
+
+- =cmacs= -- bridges Emacs events and eval into the DSL
+- =gowl= -- bridges compositor events and commands (requires =--with-cmacs-gowl=)
+
+Both are DUAL modules implementing =PodEventSource= and
+=PodEventHandler= interfaces via =G_DEFINE_FINAL_TYPE_WITH_CODE= with
+=G_IMPLEMENT_INTERFACE=.
+
+** Lisp Eval Safety
+
+The cmacs module's =eval= and =eval_async= handlers use =g_idle_add()=
+to post work to the GMainContext.  This avoids the =waiting_for_input=
+SIGABRT crash that would occur if Lisp were evaluated synchronously from
+a GLib dispatch callback.
+
+The gowl module's handlers call =cmacs_dispatch_gowl_*()= functions
+directly --- no idle dispatch needed since they don't evaluate Lisp.
+
+** pdumper Safety
+
+The =PodEngine= is never created during C init.  =init_cmacs_podomation()=
+is intentionally empty.  The engine is created from Elisp only, making
+it pdumper-safe.
+
+* Configuration
+
+#+begin_src emacs-lisp
+(setq cmacs-podomation-auto-start t)           ; start during init
+(setq cmacs-podomation-pod-files
+      '("~/.config/cmacs/auto.pod"))            ; .pod files to load
+(setq cmacs-podomation-module-dirs
+      '("/opt/podomation/modules"))             ; extra module dirs
+#+end_src
+
+| Variable                            | Type           | Default | Description                             |
+|-------------------------------------+----------------+---------+-----------------------------------------|
+| =cmacs-podomation-auto-start=       | boolean        | =nil=   | Start engine during init                |
+| =cmacs-podomation-pod-files=        | list of files  | =nil=   | =.pod= files to load on start          |
+| =cmacs-podomation-module-dirs=      | list of dirs   | =nil=   | Extra directories for module =.so= files |
+
+Start manually:
+
+#+begin_src emacs-lisp
+(cmacs-podomation-start)
+#+end_src
+
+Or with full config (starts engine, installs hook bridge, loads pod files):
+
+#+begin_src emacs-lisp
+(cmacs-podomation-start-with-config)
+#+end_src
+
+* DSL Reference
+
+** Pod Declaration
+
+#+begin_example
+pod name = module_name->new(arg1, arg2);
+#+end_example
+
+** Event Binding
+
+#+begin_example
+name->event_name => handler->function(args);
+#+end_example
+
+** Result Capture
+
+#+begin_example
+res result := name->event => handler->function(args);
+res persist result := name->event => handler->function(args);
+#+end_example
+
+=persist= results survive across event dispatches.
+
+** Pipe Chain
+
+#+begin_example
+name->event => handler1->func(args) | handler2->func("{pipe->field}");
+#+end_example
+
+Each handler's output becomes the next handler's =pipe= scope.
+
+** Where Guard
+
+#+begin_example
+name->event where result->field == "value" => handler->func(args);
+#+end_example
+
+Comparison operators: ~==~, ~!=~, ~<~, ~>~, ~<=~, ~>=~, ~=~~
+(regex), ~!~~ (negated regex).
+
+** Conditional
+
+#+begin_example
+if result->field == "value" {
+    name->event => handler->func(args);
+} else {
+    name->event => handler->other(args);
+}
+#+end_example
+
+** Retry with Circuit Breaker
+
+#+begin_example
+name->event => retry(3, backoff: "exponential") {
+    res r := handler->func(args) circuit_breaker(threshold: 5, reset: "1m");
+} on_failure => log->write_error("failed: {error}");
+#+end_example
+
+** Parallel Block
+
+#+begin_example
+name->event => parallel {
+    res a := handler1->func(args);
+    res b := handler2->func(args);
+};
+#+end_example
+
+** Interpolation
+
+#+begin_example
+"{result->field}"              property access on a result
+"{result->field[key]}"         nested dict key lookup
+"{pipe->field}"                current pipe stage value
+"{pipe[N]->field}"             Nth pipe stage (0-based)
+"${ENV_VAR}"                   environment variable
+"$(command)"                   shell substitution (stdout)
+"{field|regex(\"pat\",\"rep\")}" inline regex substitution
+#+end_example
+
+** Regex Operators
+
+~=~~ matches against PCRE patterns.  After a match, capture groups
+populate =rematch->= scope:
+
+#+begin_example
+source->on_event
+    where event->message =~ "(?P<action>Accepted|Failed) .* for (?P<user>\\w+)"
+    => log->write_info("{rematch->action} for {rematch->user}");
+#+end_example
+
+| Scope              | Meaning              |
+|--------------------+----------------------|
+| =rematch->0=       | Full match           |
+| =rematch->1=       | First capture group  |
+| =rematch->name=    | Named group          |
+| =rematch->count=   | Number of groups     |
+| =rematch->matched= | ="true"= or ="false"= |
+
+** Event Name Patterns
+
+#+begin_example
+name->on_*               glob: matches on_tick, on_message, ...
+name->on_t?ck            glob: single wildcard char
+name->/on_(get|post)/    regex: enclosed in /.../ delimiters
+#+end_example
+
+** Operators Summary
+
+| Operator | Use                      | Example                        |
+|----------+--------------------------+--------------------------------|
+| ~->~     | Member access / call     | =timer->new(1000)=             |
+| ~=>~     | Event binding            | =t->on_tick => log->write(...)= |
+| ~=~      | Pod declaration only     | =pod t = timer->new(...)=       |
+| ~:=~     | Result capture           | =res r := source->event => ...= |
+| ~\vert~  | Pipe to next handler     | =h1->f() \vert h2->g(...)=       |
+| ~==~     | String equality guard    | =where r->status == "200"=      |
+| ~!=~     | Inequality               | =where r->code != "0"=          |
+| ~=~~     | Regex match (PCRE)       | =where e->path =~ "^/api"=      |
+| ~!~~     | Negated regex match      | =where e->ua !~ "bot"=          |
+
+* REPL
+
+Open an interactive REPL buffer:
+
+: M-x podomation-repl
+
+The REPL uses =comint-mode= with tab completion.
+
+From the bacon shell:
+
+: pod repl
+
+Built-in REPL commands start with ~:~:
+
+| Command         | Description                        |
+|-----------------+------------------------------------|
+| =:modules=      | List loaded modules                |
+| =:pods=         | List active pods                   |
+| =:vars=         | List result variables              |
+| =:undef <name>= | Remove a pod (stops it) or variable |
+| =:load <file>=  | Load and execute a =.pod= file     |
+| =:reset=        | Reset engine state                 |
+| =:describe <m>= | Full module help text              |
+| =:help=         | Show help                          |
+| =:quit=         | Exit the REPL                      |
+
+DSL text entered at the prompt is parsed and executed immediately.
+Multi-line input is supported (the prompt changes to =...>=).
+
+Tab completion works for module names, event names, handler names,
+and REPL commands.
+
+* Hook Bridge
+
+The Elisp layer bridges Emacs hooks to podomation events in =snake_case=.
+Hooks are installed by =cmacs-podomation--install-hooks= (called
+automatically by =cmacs-podomation-start-with-config=).
+
+** Default Hook Mappings
+
+| Emacs Hook          | Podomation Event   | Event Data                          |
+|---------------------+--------------------+-------------------------------------|
+| =after-save-hook=   | =on_buffer_save=   | =buffer_name=, =file_name=, =major_mode= |
+| =kill-buffer-hook=  | =on_buffer_kill=   | =buffer_name=                        |
+| =after-init-hook=   | =on_after_init=    | (none)                              |
+| =post-command-hook= | =on_post_command=  | =command_name=                       |
+
+** Dynamic Hook Registration
+
+Register any Emacs hook as a podomation event source:
+
+#+begin_src emacs-lisp
+(cmacs-podomation-hook "compilation-finish-functions")
+#+end_src
+
+This fires an =on_hook= event with =hook_name= data whenever the named
+hook runs.  Use from DSL with a =where= guard:
+
+#+begin_example
+pod c = cmacs->new();
+c->on_hook
+    where event->hook_name == "compilation-finish-functions"
+    => gotify->send("Compilation finished");
+#+end_example
+
+* Built-in Modules
+
+** cmacs Module
+
+Module name: ="cmacs"=.  DUAL module (source + handler).
+
+*** Source Events
+
+| Event              | Data Fields                                   | Triggered By              |
+|--------------------+-----------------------------------------------+---------------------------|
+| =on_buffer_save=   | =buffer_name=, =file_name=, =major_mode=       | =after-save-hook=         |
+| =on_buffer_kill=   | =buffer_name=                                   | =kill-buffer-hook=        |
+| =on_idle=          | =idle_seconds=                                  | Idle timer                |
+| =on_command=       | =command_name=, =prefix_arg=                    | Command execution         |
+| =on_after_init=    | (none)                                          | =after-init-hook=         |
+| =on_after_load=    | =file_name=, =feature=                          | Feature loaded            |
+| =on_post_command=  | =command_name=                                  | =post-command-hook=       |
+| =on_process_exit=  | =process_name=, =exit_code=                     | Subprocess exit           |
+| =on_buffer_create= | =buffer_name=                                   | Buffer creation           |
+| =on_window_focus=  | =focused= (="true"= / ="false"=)                | Window focus change       |
+| =on_region_change= | =buffer_name=, =begin=, =end=                   | Region change             |
+| =on_compile_finish= | =buffer_name=, =exit_code=                     | Compilation finished      |
+| =on_hook=          | =hook_name= + hook-specific fields               | Dynamic hook wrapper      |
+
+All event data is passed as =a{sv}= GVariant dictionaries with string
+values.
+
+*** Handler Functions
+
+**** Lisp Eval
+
+| Handler        | Params              | Result             | Description                     |
+|----------------+---------------------+--------------------+---------------------------------|
+| =eval=         | =("(elisp)")=       | =value=            | Evaluate Elisp, return result   |
+| =eval_async=   | =("(elisp)")=       | (none)             | Evaluate Elisp, fire-and-forget |
+
+**** Buffer Actions
+
+| Handler          | Params              | Description                     |
+|------------------+---------------------+---------------------------------|
+| =save_buffer=    | (none)              | Save current buffer             |
+| =save_all=       | (none)              | Save all modified buffers       |
+| =kill_buffer=    | =("name")= or none  | Kill named or current buffer    |
+| =switch_buffer=  | =("name")=          | Switch to named buffer          |
+| =revert_buffer=  | (none)              | Revert buffer from disk         |
+
+**** Buffer Queries
+
+| Handler          | Result       | Description                     |
+|------------------+--------------+---------------------------------|
+| =buffer_name=    | =value=      | Current buffer name             |
+| =buffer_file=    | =value=      | Current buffer's file path      |
+| =buffer_list=    | =value=      | All buffer names (newline-sep)  |
+| =major_mode=     | =value=      | Current major mode name         |
+| =region_text=    | =value=      | Selected text (empty if none)   |
+| =project_root=   | =value=      | Project root directory          |
+
+**** Navigation and Editing
+
+| Handler        | Params              | Description                     |
+|----------------+---------------------+---------------------------------|
+| =message=      | =("text")=          | Display in minibuffer           |
+| =find_file=    | =("/path")=         | Open a file                     |
+| =set_variable= | =("var", "value")=  | Set an Elisp variable           |
+| =run_command=  | =("cmd", "arg1")=   | Execute interactive command     |
+| =insert=       | =("text")=          | Insert text at point            |
+| =goto_line=    | =("N")=             | Go to line number               |
+| =compile=      | =("command")=       | Start compilation               |
+| =dired=        | =("/path")=         | Open directory in dired         |
+
+**** Clipboard
+
+| Handler        | Params          | Result       | Description              |
+|----------------+-----------------+--------------+--------------------------|
+| =kill_new=     | =("text")=      | (none)       | Copy text to kill ring   |
+| =current_kill= | (none)          | =value=      | Get top of kill ring     |
+
+**** File Operations (pure C, no Lisp)
+
+| Handler        | Params                  | Result                              | Description            |
+|----------------+-------------------------+-------------------------------------+------------------------|
+| =shell_command= | =("cmd")=              | =stdout=, =stderr=, =exit_code=, =value= | Run shell command |
+| =write_file=   | =("/path", "content")=  | (none)                              | Write string to file   |
+| =append_file=  | =("/path", "content")=  | (none)                              | Append string to file  |
+| =read_file=    | =("/path")=             | =value=                             | Read file contents     |
+| =delete_file=  | =("/path")=             | (none)                              | Delete a file          |
+| =rename_file=  | =("/old", "/new")=      | (none)                              | Rename/move a file     |
+| =copy_file=    | =("/src", "/dst")=      | (none)                              | Copy a file            |
+| =file_exists=  | =("/path")=             | =value= (="true"=/="false"=)        | Check file existence   |
+| =mkdir=        | =("/path")=             | (none)                              | Create directory       |
+
+**** Notification
+
+| Handler   | Params                  | Description                   |
+|-----------+-------------------------+-------------------------------|
+| =notify=  | =("title", "body")=     | Desktop notification via notify-send |
+
+*** DSL Examples
+
+#+begin_example
+pod c = cmacs->new();
+
+/* Log every buffer save */
+c->on_buffer_save => log->write_info("saved: {event->file_name}");
+
+/* Notify on compilation failure */
+c->on_compile_finish
+    where event->exit_code != "0"
+    => cmacs->notify("Build Failed", "{event->buffer_name}");
+
+/* Shell command with pipe to capture output */
+pod t = timer->new(60000);
+t->on_tick => cmacs->shell_command("uptime")
+           | log->write_info("uptime: {pipe->stdout}");
+
+/* Save all buffers on idle */
+pod idle = cmacs->new();
+idle->on_idle => cmacs->save_all();
+
+/* Write results to a file */
+c->on_buffer_save
+    => cmacs->shell_command("date +%H:%M")
+     | cmacs->append_file("/tmp/save-log.txt",
+         "{pipe->value} saved {event->file_name}\n");
+
+/* Query buffer state in a pipe */
+t->on_tick => cmacs->buffer_name()
+           | cmacs->shell_command("echo editing: {pipe->value}");
+
+/* Compile on save for specific modes */
+c->on_buffer_save
+    where event->major_mode == "rust-mode"
+    => cmacs->compile("cargo check");
+
+/* Open a file from DSL */
+cmacs->find_file("/tmp/notes.org");
+#+end_example
+
+** gowl Module
+
+Module name: ="gowl"=.  DUAL module (source + handler).  Only available
+when built with =--with-cmacs-gowl=.
+
+*** Source Events
+
+| Event              | Data Fields                          | GowlCompositor Signal |
+|--------------------+--------------------------------------+-----------------------|
+| =on_client_map=    | =app_id=, =title=, =client_id=        | =client-added=        |
+| =on_client_unmap=  | =app_id=, =title=, =client_id=        | =client-removed=      |
+| =on_focus_change=  | =app_id=, =title=, =client_id= (or empty) | =focus-changed=  |
+| =on_tag_change=    | (reserved, not yet wired)              | --                    |
+
+*** Handler Functions
+
+| Handler                | Params                         | Description                    |
+|------------------------+--------------------------------+--------------------------------|
+| =list_clients=         | (none)                         | List all clients as JSON       |
+| =focused_client=       | (none)                         | Focused client info            |
+| =find_client=          | =(pattern [, by])=             | Find client by app-id/title    |
+| =spawn=                | =(command)=                    | Launch a program               |
+| =list_monitors=        | (none)                         | List all monitors              |
+| =monitor_info=         | =(name)=                       | Info for named monitor         |
+| =monitor_modes=        | =(name)=                       | Available modes for monitor    |
+| =set_monitor_mode=     | =(name, mode)=                 | Set monitor resolution         |
+| =set_monitor_position= | =(name, x, y)=                 | Set monitor position           |
+| =set_monitor_enabled=  | =(name, bool)=                 | Enable/disable monitor         |
+| =set_monitor_scale=    | =(name, scale)=                | Set monitor scale factor       |
+| =set_monitor_transform= | =(name, transform)=           | Set monitor transform          |
+| =view_tags=            | =(tagmask)=                    | View tags by bitmask           |
+| =set_mfact=            | =(factor)=                     | Set master area factor         |
+| =set_nmaster=          | =(n)=                          | Set master window count        |
+| =set_layout=           | =(name)=                       | Set tiling layout              |
+| =add_keybind=          | =(key, action [, arg])=        | Add a keybinding               |
+| =list_keybinds=        | (none)                         | List all keybindings           |
+| =add_rule=             | =(rule_spec)=                  | Add a client rule              |
+| =list_rules=           | (none)                         | List all client rules          |
+| =lock=                 | (none)                         | Lock the session               |
+| =unlock=               | (none)                         | Unlock the session             |
+| =reload_config=        | (none)                         | Reload compositor config       |
+| =config_get=           | =(property)=                   | Get a config property          |
+
+*** DSL Examples
+
+#+begin_example
+pod g = gowl->new();
+
+/* Log focus changes */
+g->on_focus_change
+    => log->write_info("Focus: {event->app_id} - {event->title}");
+
+/* Notify on client map */
+g->on_client_map
+    => print->string("Opened: {event->app_id}");
+
+/* Spawn a program from a timer */
+pod t = timer->new(0);
+t->on_tick => gowl->spawn("foot");
+
+/* List clients from DSL */
+res clients := gowl->list_clients();
+#+end_example
+
+** Plugin Modules (82 .so files)
+
+*** Sources (event-only)
+
+=timer=, =cron=, =inotify=, =dbus=, =journal=, =public_ip=,
+=exec_pipe=, =cert_monitor=, =dns_monitor=, =healthcheck=, =engine=,
+=astronomical=, =rss=
+
+*** Handlers (action-only)
+
+=log=, =print=, =network=, =webhook=, =metrics=, =state_store=,
+=rate_limiter=, =system=, =transform=, =regex=, =shell=
+
+*** Combined (source + handler)
+
+=http=, =chat=, =socket=, =container=, =process=, =aggregate=, =dlq=,
+=event_store=, =gotify=, =homeassistant=, =gpio=, =db_postgres=,
+=db_sqlite=, =mq_fifo=, =mq_mqtt=, =mq_mqueue=, =ai_chat=,
+=ai_claude_code=, =ai_opencode=, =email=, =slack=, =discord=, =github=,
+=gitlab=, =gitea=, =alertmanager=, =caldav=, =kubernetes=, =mastodon=,
+=ntfy=, =redis=, =sentry=, =serial=, =ssh=, =vault=, =git=, =nats=,
+=fileio=, =udev=, =text=, =unifi=, =fs_btrfs=, =fs_zfs=,
+=vm_virtmanager=, =forgejo=, =forgejo_poll=, =gitlab_poll=, =bacon=
+
+* DEFUNs
+
+** Engine Lifecycle
+
+| Function                       | Args | Description                                          |
+|--------------------------------+------+------------------------------------------------------|
+| =cmacs-podomation-start=       | 0    | Start the embedded engine. Error if already running. |
+| =cmacs-podomation-stop=        | 0    | Stop the engine and release resources.               |
+| =cmacs-podomation-running-p=   | 0    | Return =t= if engine is running.                     |
+| =cmacs-podomation-reload=      | 0    | Hot-reload engine configuration.                     |
+
+** DSL and Pod Management
+
+| Function                       | Args        | Description                                  |
+|--------------------------------+-------------+----------------------------------------------|
+| =cmacs-podomation-eval-dsl=    | =STRING=    | Parse and execute DSL text.                  |
+| =cmacs-podomation-load-file=   | =FILE=      | Load and parse a =.pod= file.               |
+| =cmacs-podomation-list-pods=   | 0           | Return alist of =(NAME . STATUS)= pairs.     |
+| =cmacs-podomation-list-modules= | 0          | Return list of module name strings.          |
+
+** REPL
+
+| Function                        | Args      | Description                                       |
+|---------------------------------+-----------+---------------------------------------------------|
+| =cmacs-podomation-repl-eval=    | =INPUT=   | Evaluate in REPL. Returns =(KIND . TEXT)= cons.   |
+| =cmacs-podomation-repl-complete= | =PREFIX= | Return list of completion strings for PREFIX.      |
+| =cmacs-podomation-repl-prompt=  | 0         | Return current prompt string.                     |
+| =cmacs-podomation-repl-reset=   | 0         | Reset REPL state.                                 |
+
+** Engine Context and Stats
+
+| Function                        | Args    | Description                                    |
+|---------------------------------+---------+------------------------------------------------|
+| =cmacs-podomation-set-context=  | =ALIST= | Set engine context from alist to =a{sv}= GVariant. |
+| =cmacs-podomation-stats=        | 0       | Return plist of engine stats.                  |
+
+Stats plist keys: =:events-dispatched=, =:handlers-called=,
+=:handlers-failed=, =:pipe-chains-executed=, =:start-time-us=.
+
+** Event Emission
+
+| Function                        | Args                  | Description                      |
+|---------------------------------+-----------------------+----------------------------------|
+| =cmacs-podomation-emit-event=   | =EVENT-NAME DATA=     | Emit event through cmacs module. |
+
+=EVENT-NAME= is a string (e.g. ="on_buffer_save"=).  =DATA= is an
+alist of =(KEY . VALUE)= string pairs.
+
+* Elisp Convenience Layer
+
+File: =lisp/cmacs/cmacs-podomation.el=
+
+** Interactive Commands
+
+| Command                             | Description                                |
+|-------------------------------------+--------------------------------------------|
+| =podomation-repl=                   | Open comint REPL buffer (=*podomation*=)   |
+| =cmacs-podomation-load=             | Interactively load a =.pod= file           |
+| =cmacs-podomation-start-with-config= | Start engine + install hooks + load files |
+
+** Functions
+
+| Function                            | Description                                       |
+|-------------------------------------+---------------------------------------------------|
+| =cmacs-podomation-hook=             | Register any Emacs hook as podomation event source |
+| =cmacs-podomation--install-hooks=   | Wire default hook-alist to podomation events       |
+| =cmacs-podomation--remove-hooks=    | Remove podomation hook functions                   |
+| =cmacs-podomation--gi-available-p=  | Check if Podomation-1.0 typelib is available       |
+
+* Bacon Builtin
+
+The =pod= builtin is available in the bacon shell.  It connects to
+CMacs via the API transport layer (FD/D-Bus/direct).
+
+| Command                | Description              |
+|------------------------+--------------------------|
+| =pod start=            | Start the engine         |
+| =pod stop=             | Stop the engine          |
+| =pod status=           | Show running state       |
+| =pod modules=          | List loaded modules      |
+| =pod pods=             | List active pods         |
+| =pod stats=            | Show engine statistics   |
+| =pod eval DSL_TEXT=    | Evaluate DSL text        |
+| =pod load FILE=        | Load a =.pod= file      |
+| =pod repl=             | Enter interactive REPL   |
+| =pod --help=           | Show all commands        |
+| =pod help COMMAND=     | Help for a command       |
+
+** Example Session
+
+#+begin_example
+$ pod start
+t
+$ pod modules
+timer
+cron
+http
+...
+cmacs
+gowl
+$ pod eval "pod t = timer->new(5000); t->on_tick => print->string(\"tick\");"
+t
+$ pod pods
+t	healthy
+$ pod stats
+events-dispatched: 3
+handlers-called: 3
+handlers-failed: 0
+pipe-chains-executed: 3
+$ pod repl
+Podomation REPL (type :quit to exit)
+podomation> :modules
+LOADED MODULES:
+  cmacs   [source+handler]  CMacs Emacs integration
+  ...
+podomation> pod x = timer->new(1000); x->on_tick => print->string("hello");
+podomation> :pods
+ACTIVE PODS:
+  t        healthy
+  x        healthy
+podomation> :quit
+$ pod stop
+t
+#+end_example
+
+* GObject Introspection Access
+
+If the Podomation-1.0 typelib is built:
+
+#+begin_src shell
+make -C deps/podomation typelib
+#+end_src
+
+Then the full podomation API is accessible from Elisp via GI:
+
+#+begin_src emacs-lisp
+(gi-require "Podomation" "1.0")
+
+;; Access engine stats directly
+(gi-call "Podomation" "engine_stats_new")
+
+;; Access module manager
+(let ((engine (cmacs-podomation-get-engine)))
+  (gi-call "Podomation" "engine_get_module_manager" engine))
+#+end_src
+
+This provides access to the full GObject API beyond what the DEFUNs
+expose.
+
+* Examples
+
+** Auto-start with Pod Files
+
+#+begin_src emacs-lisp
+;; In init.el
+(setq cmacs-podomation-auto-start t)
+(setq cmacs-podomation-pod-files
+      '("~/.config/cmacs/hooks.pod"
+        "~/.config/cmacs/timers.pod"))
+#+end_src
+
+** Notify on Build Failure
+
+#+begin_example
+pod c = cmacs->new();
+c->on_compile_finish
+    where event->exit_code != "0"
+    => gotify->send("Build failed in {event->buffer_name}");
+#+end_example
+
+** Focus Tracking with Logging
+
+#+begin_example
+pod g = gowl->new();
+g->on_focus_change
+    => log->write_info("Focus: {event->app_id} - {event->title}");
+#+end_example
+
+** Auto-save Reminder via Timer
+
+#+begin_example
+pod t = timer->new(300000);
+t->on_tick => cmacs->eval("(message \"Consider saving your work\")");
+#+end_example
+
+** HTTP Health Monitor
+
+#+begin_example
+pod h = http->new();
+pod t = timer->new(60000);
+t->on_tick => h->get("https://api.example.com/health");
+h->on_response
+    where event->status_code != "200"
+    => slack->send("#alerts", "API unhealthy: {event->status_code}");
+#+end_example
+
+** Pipe Chain: Transform and Log
+
+#+begin_example
+pod c = cmacs->new();
+c->on_buffer_save
+    => transform->uppercase("{event->file_name}")
+     | log->write_info("SAVED: {pipe->value}");
+#+end_example
+
+** Conditional: Different Actions by Mode
+
+#+begin_example
+pod c = cmacs->new();
+if c->on_buffer_save where event->major_mode == "python-mode" {
+    c->on_buffer_save => shell->exec("ruff check {event->file_name}");
+} else {
+    c->on_buffer_save => print->string("saved {event->file_name}");
+}
+#+end_example
+
+** Regex: Parse Log Lines
+
+#+begin_example
+pod j = journal->new();
+j->on_entry
+    where event->message =~ "(?P<level>ERROR|WARN) (?P<service>\\w+): (?P<msg>.*)"
+    => gotify->send("{rematch->level} in {rematch->service}: {rematch->msg}");
+#+end_example
+
+** Client Auto-tiling Rule
+
+#+begin_example
+pod g = gowl->new();
+g->on_client_map
+    where event->app_id == "firefox"
+    => gowl->view_tags("2");
+#+end_example
+
+* File Reference
+
+| File                                       | Description                              |
+|--------------------------------------------+------------------------------------------|
+| =cmacs/podomation/cmacs-podomation.h=       | Header: syms_of, init, getter functions  |
+| =cmacs/podomation/cmacs-podomation.c=       | 17 DEFUNs: lifecycle, DSL, REPL, events  |
+| =cmacs/podomation/pod-cmacs-module.h=       | CMacs PodModule type declaration         |
+| =cmacs/podomation/pod-cmacs-module.c=       | DUAL module: 13 events + 32 handlers     |
+| =cmacs/podomation/pod-gowl-module.h=        | Gowl PodModule type declaration          |
+| =cmacs/podomation/pod-gowl-module.c=        | DUAL module: 4 events + 24 handlers      |
+| =lisp/cmacs/cmacs-podomation.el=            | Elisp: config, hooks, comint REPL        |
+| =test/cmacs/cmacs-podomation-tests.el=      | 8 ERT tests                              |
+| =cmacs/bacon/modules/cmacs-pod-module.c=    | Bacon module: registers =pod= builtin    |
+| =cmacs/bacon/modules/cmacs-pod-command.c=   | =pod= command: 9 subcommands             |
