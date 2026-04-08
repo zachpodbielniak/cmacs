@@ -3122,7 +3122,9 @@ fully-featured build matching Fedora defaults, use:
   --with-cmacs-gi \
   --with-cmacs-crispy \
   --with-cmacs-bacon \
-  --with-cmacs-gowl
+  --with-cmacs-gowl \
+  --with-cmacs-podomation \
+  --with-cmacs-org-ex
 @end example
 
 @noindent
@@ -3154,6 +3156,12 @@ system-installed @code{bacon-1.0} via pkg-config instead.
 @item cmacs-bacon (bundled) @tab glib-2.0 gio-2.0 gio-unix-2.0
   json-glib-1.0 yaml-0.1 readline @tab Shell (built from deps/bacon/)
 @item cmacs-bacon (system) @tab bacon-1.0 @tab Shell (system package)
+@item cmacs-podomation (bundled) @tab glib-2.0 gio-2.0 json-glib-1.0
+  libsoup-3.0 @tab Automation engine (built from deps/podomation/)
+@item cmacs-podomation (system) @tab podomation-1.0
+  @tab Automation engine (system package)
+@item cmacs-org-ex @tab glib-2.0 gobject-2.0 gio-2.0
+  @tab Org-Ex widgets (built from cmacs/org-ex/lib/)
 @end multitable
 
 @section Building the Bacon Module

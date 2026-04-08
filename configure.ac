@@ -765,8 +765,7 @@ if test "$with_cmacs_org_ex" != "no"; then
   AC_DEFINE([HAVE_CMACS_ORG_EX], 1, [CMacs org-ex interactive widgets])
   CMACS_ORG_EX_OBJ="cmacs-org-ex.o"
   CMACS_ORG_EX_CFLAGS="-I\$(srcdir)/../cmacs/org-ex/lib $CMACS_GLIB_CFLAGS"
-  cmacs_org_ex_libdir=`cd "$srcdir/cmacs/org-ex/lib" 2>/dev/null && pwd`
-  CMACS_ORG_EX_LIBS="-L${cmacs_org_ex_libdir} -lorgex-1.0 -Wl,-rpath,${cmacs_org_ex_libdir}"
+  CMACS_ORG_EX_LIBS="\$(srcdir)/../cmacs/org-ex/lib/liborgex-1.0.a"
 fi
 AC_SUBST(CMACS_ORG_EX_OBJ)
 AC_SUBST(CMACS_ORG_EX_CFLAGS)

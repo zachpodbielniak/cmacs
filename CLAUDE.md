@@ -13,12 +13,12 @@
   --with-tiff --with-webp --with-xpm --with-gpm=no \
   --with-cmacs-glib --with-cmacs-gi --with-cmacs-crispy \
   --with-cmacs-bacon --with-cmacs-gowl \
-  --with-cmacs-org-ex
+  --with-cmacs-podomation --with-cmacs-org-ex
 make -j$(nproc)           # builds deps + emacs
 src/emacs                 # run it
 ```
 
-- Dependencies under `deps/` (crispy, bacon, gowl) are git submodules — `configure` falls back to bundled builds when system packages aren't found
+- Dependencies under `deps/` (crispy, bacon, gowl, podomation) are git submodules — `configure` falls back to bundled builds when system packages aren't found
 - After modifying C source in `cmacs/`, just `make -j$(nproc)` from the top level
 - After modifying `configure.ac`, run `autoconf` then `./configure` again
 - After touching temacs-linked objects, the pdumper image is regenerated automatically
@@ -26,7 +26,7 @@ src/emacs                 # run it
 
 ## Architecture
 
-cmacs integrates six subsystems into Emacs as C primitives (DEFUNs):
+cmacs integrates seven subsystems into Emacs as C primitives (DEFUNs):
 
 | Subsystem | Directory | What it does |
 |-----------|-----------|--------------|
@@ -37,7 +37,8 @@ cmacs integrates six subsystems into Emacs as C primitives (DEFUNs):
 | **crispy** | `cmacs/crispy/` | Embedded scripting language (C-like, GObject-based) |
 | **bacon** | `cmacs/bacon/` | Embedded shell (fork-of-self `--bacon` mode, socketpair IPC) |
 | **gowl** | `cmacs/gowl/` | Wayland compositor (wlroots-based) — 47 DEFUNs for full WM control |
-| **org-ex** | `cmacs/org-ex/` | Interactive widget embedding for Org mode (liborgex-1.0.so) |
+| **podomation** | `cmacs/podomation/` | Event-driven automation engine — 17 DEFUNs, DSL, REPL |
+| **org-ex** | `cmacs/org-ex/` | Interactive widget embedding for Org mode (liborgex-1.0.a, statically linked) |
 
 ### GLib event loop integration (critical)
 
@@ -67,10 +68,11 @@ cmacs/              C source for all cmacs subsystems
   bacon/            bacon shell integration + IPC
     modules/        bacon native modules (starship, fzf, etc.)
   gowl/             Wayland compositor
-  org-ex/           Org-Ex interactive widgets (liborgex-1.0.so + DEFUN bridge)
+  podomation/       Automation engine (DEFUN bridge + cmacs/gowl modules)
+  org-ex/           Org-Ex interactive widgets (liborgex-1.0.a + DEFUN bridge)
   compat/           Compatibility shims
   cmacs.h           Master header
-deps/               Git submodules (crispy, bacon, gowl)
+deps/               Git submodules (crispy, bacon, gowl, podomation)
 lisp/cmacs/         Elisp layer for each subsystem
 test/cmacs/         ERT tests for each subsystem
 doc/cmacs/          Texinfo manual (built into Emacs Info)
@@ -105,7 +107,8 @@ All cmacs features are auto-detected. The configure script checks for system pac
 - **crispy**: system `crispy` package or bundled `deps/crispy`
 - **bacon**: system `bacon-1.0` package or bundled `deps/bacon`
 - **gowl**: system `gowl` package or bundled `deps/gowl` + wlroots-0.19 + wayland-server
-- **org-ex**: builds `liborgex-1.0.so` from `cmacs/org-ex/lib/` (requires glib)
+- **podomation**: system `podomation-1.0` package or bundled `deps/podomation`
+- **org-ex**: builds `liborgex-1.0.a` statically from `cmacs/org-ex/lib/` (requires glib)
 
 ## Testing
 

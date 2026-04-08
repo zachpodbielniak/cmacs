@@ -808,6 +808,15 @@ cmacs-podomation-modules: $(CMACS_PODOMATION_STATIC_LIB)
 	$(MAKE) -C $(srcdir)/../deps/podomation modules
 endif
 
+## Build liborgex-1.0.a (statically linked into emacs)
+ifneq ($(CMACS_ORG_EX_OBJ),)
+CMACS_ORG_EX_STATIC_LIB = $(srcdir)/../cmacs/org-ex/lib/liborgex-1.0.a
+$(CMACS_ORG_EX_STATIC_LIB):
+	$(MAKE) -C $(srcdir)/../cmacs/org-ex/lib static
+
+$(CMACS_ORG_EX_OBJ): $(CMACS_ORG_EX_STATIC_LIB)
+endif
+
 ## -------------------------------------------------------------------
 ## De-duplicate shared objects between bundled static libraries.
 ##

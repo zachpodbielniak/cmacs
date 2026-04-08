@@ -202,6 +202,7 @@ cd cmacs
   --with-cmacs-crispy \
   --with-cmacs-bacon \
   --with-cmacs-gowl \
+  --with-cmacs-podomation \
   --with-cmacs-org-ex
 make -j$(nproc)
 sudo make install
@@ -299,6 +300,7 @@ Requires =autoconf= (>= 2.65) and =automake=.
   --with-cmacs-crispy \
   --with-cmacs-bacon \
   --with-cmacs-gowl \
+  --with-cmacs-podomation \
   --with-cmacs-org-ex
 #+end_src
 
@@ -324,6 +326,7 @@ Module flags:
 - =--with-cmacs-crispy= — Crispy C scripting
 - =--with-cmacs-bacon= — Bacon shell
 - =--with-cmacs-gowl= — Gowl Wayland compositor
+- =--with-cmacs-podomation= — Podomation automation engine
 - =--with-cmacs-org-ex= — Org-Ex interactive widget embedding
 
 Each module auto-detects bundled (=deps/=) or system libraries.  To
