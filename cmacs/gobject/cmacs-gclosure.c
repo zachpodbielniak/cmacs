@@ -93,12 +93,30 @@ cmacs_gclosure_marshal (GClosure     *closure,
         args[i] = make_fixnum (g_value_get_enum (&param_values[i]));
       else if (g_type_is_a (type, G_TYPE_OBJECT))
         args[i] = cmacs_gobject_wrap (g_value_get_object (&param_values[i]));
+      else if (g_type_is_a (type, G_TYPE_BOXED))
+        {
+          gpointer boxed = g_value_get_boxed (&param_values[i]);
+          args[i] = boxed ? cmacs_boxed_wrap (type, boxed) : Qnil;
+        }
       else
         args[i] = Qnil;
     }
 
-  /* Call the elisp function. */
-  result = safe_funcall ((ptrdiff_t)n_param_values, args);
+  /* Call the elisp function.
+   *
+   * GLib may dispatch this closure while Emacs is in input-wait
+   * (e.g. xg_select → g_main_context_dispatch).  If waiting_for_input
+   * is set and the Elisp code signals an error, signal_or_quit aborts
+   * unconditionally.  Temporarily clear the flag so errors are handled
+   * normally by safe_funcall's condition-case wrapper.  */
+  {
+    bool was_waiting = waiting_for_input;
+    if (was_waiting)
+      waiting_for_input = false;
+    result = safe_funcall ((ptrdiff_t)n_param_values, args);
+    if (was_waiting)
+      waiting_for_input = true;
+  }
 
   /* If the signal expects a return value, marshal it back. */
   if (return_value != NULL && G_VALUE_TYPE (return_value) != G_TYPE_NONE)

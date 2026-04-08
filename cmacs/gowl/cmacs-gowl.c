@@ -16,6 +16,7 @@
 #ifdef HAVE_CMACS_GOWL
 
 #include "lisp.h"
+#include "xwidget.h"
 #include "cmacs-gowl.h"
 #include "cmacs-gobject.h"
 #include "cmacs-eval-dispatch.h"
@@ -249,6 +250,10 @@ gowl_embed_view_event (GtkWidget *widget, GdkEvent *event, gpointer data)
 
     case GDK_MOTION_NOTIFY:
       pthread_mutex_lock (&cmacs_gowl_mutex);
+      /* Ensure pointer focus — GDK_ENTER_NOTIFY may not have fired
+         if the widget appeared under an already-stationary pointer. */
+      wlr_seat_pointer_notify_enter (seat, surface,
+                                     event->motion.x, event->motion.y);
       wlr_seat_pointer_notify_motion (seat, time_ms,
                                       event->motion.x, event->motion.y);
       pthread_mutex_unlock (&cmacs_gowl_mutex);
@@ -267,14 +272,29 @@ gowl_embed_view_event (GtkWidget *widget, GdkEvent *event, gpointer data)
           : WL_POINTER_BUTTON_STATE_RELEASED;
 
         pthread_mutex_lock (&cmacs_gowl_mutex);
+        /* Ensure pointer focus — see GDK_MOTION_NOTIFY comment. */
+        wlr_seat_pointer_notify_enter (seat, surface,
+                                       event->button.x, event->button.y);
         wlr_seat_pointer_notify_button (seat, time_ms, btn, state);
-        /* Click gives keyboard focus to the embedded client and
-           GTK focus to the drawing area (re-enters the embed). */
+        /* Click gives keyboard focus to the embedded client.
+           Pass the actual keyboard state so the client doesn't
+           get desynced after repeated focus cycles. */
         if (event->type == GDK_BUTTON_PRESS)
           {
-            wlr_seat_keyboard_notify_enter (seat, surface, NULL, 0, NULL);
-            gtk_widget_grab_focus (view->widget);
+            struct wlr_keyboard *kb = wlr_seat_get_keyboard (seat);
+            if (kb)
+              wlr_seat_keyboard_notify_enter (seat, surface,
+                                              kb->keycodes,
+                                              kb->num_keycodes,
+                                              &kb->modifiers);
+            else
+              wlr_seat_keyboard_notify_enter (seat, surface,
+                                              NULL, 0, NULL);
           }
+        /* Flush immediately so the client sees the events without
+           waiting for the dispatch thread's next 16ms cycle. */
+        wl_display_flush_clients (
+          gowl_compositor_get_wl_display (cmacs_gowl_compositor));
         pthread_mutex_unlock (&cmacs_gowl_mutex);
         return TRUE;
       }
@@ -297,6 +317,9 @@ gowl_embed_view_event (GtkWidget *widget, GdkEvent *event, gpointer data)
           dx = 15.0;
 
         pthread_mutex_lock (&cmacs_gowl_mutex);
+        /* Ensure pointer focus — see GDK_MOTION_NOTIFY comment. */
+        wlr_seat_pointer_notify_enter (seat, surface,
+                                       event->scroll.x, event->scroll.y);
         wlr_seat_pointer_notify_axis (seat, time_ms,
                                       WL_POINTER_AXIS_VERTICAL_SCROLL,
                                       dy,
@@ -317,9 +340,24 @@ gowl_embed_view_event (GtkWidget *widget, GdkEvent *event, gpointer data)
     case GDK_KEY_PRESS:
     case GDK_KEY_RELEASE:
       {
-        /* Keyboard events normally arrive via wlroots on_kb_key, not
-           GDK.  This handler only fires if the drawing area somehow
-           gets GTK keyboard focus.  Forward to the embedded client. */
+        /* Escape returns keyboard focus to Emacs. */
+        if (event->type == GDK_KEY_PRESS
+            && event->key.keyval == GDK_KEY_Escape
+            && view->emacs_frame != NULL)
+          {
+            /* Tell the Wayland client it lost keyboard focus.
+               The forwarder in xwidget.c manages the focus state —
+               do NOT call gtk_widget_grab_focus here, as that
+               triggers spurious frame focus-out events. */
+            pthread_mutex_lock (&cmacs_gowl_mutex);
+            wlr_seat_keyboard_notify_clear_focus (seat);
+            wl_display_flush_clients (
+              gowl_compositor_get_wl_display (cmacs_gowl_compositor));
+            pthread_mutex_unlock (&cmacs_gowl_mutex);
+            return TRUE;
+          }
+
+        /* Forward other keys to the embedded Wayland client. */
         uint32_t keycode = event->key.hardware_keycode - 8;
         enum wl_keyboard_key_state wl_state =
           (event->type == GDK_KEY_PRESS)
@@ -327,6 +365,8 @@ gowl_embed_view_event (GtkWidget *widget, GdkEvent *event, gpointer data)
           : WL_KEYBOARD_KEY_STATE_RELEASED;
         pthread_mutex_lock (&cmacs_gowl_mutex);
         wlr_seat_keyboard_notify_key (seat, time_ms, keycode, wl_state);
+        wl_display_flush_clients (
+          gowl_compositor_get_wl_display (cmacs_gowl_compositor));
         pthread_mutex_unlock (&cmacs_gowl_mutex);
         return TRUE;
       }
@@ -368,6 +408,54 @@ gowl_embed_view_free (struct gowl_embed_view *view)
   view->pixel_buf = NULL;
 
   g_free (view);
+}
+
+/* Give keyboard focus to the Wayland client embedded in XW.
+   Called from the event forwarder in xwidget.c when the pointer enters
+   a gowl xwidget area (focus-follows-mouse).  */
+void
+cmacs_gowl_xwidget_keyboard_enter (struct xwidget *xw)
+{
+  struct gowl_embed_view *gview = xw->gowl_view;
+  if (gview == NULL)
+    return;
+
+  struct wlr_seat *seat
+    = gowl_compositor_get_wlr_seat (cmacs_gowl_compositor);
+  struct wlr_surface *surface
+    = gowl_client_get_wlr_surface (gview->client);
+  if (seat == NULL || surface == NULL)
+    return;
+
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  struct wlr_keyboard *kb = wlr_seat_get_keyboard (seat);
+  if (kb)
+    wlr_seat_keyboard_notify_enter (seat, surface,
+                                    kb->keycodes, kb->num_keycodes,
+                                    &kb->modifiers);
+  else
+    wlr_seat_keyboard_notify_enter (seat, surface, NULL, 0, NULL);
+  wl_display_flush_clients (
+    gowl_compositor_get_wl_display (cmacs_gowl_compositor));
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+}
+
+/* Clear keyboard focus from any embedded Wayland client.
+   Called from the event forwarder in xwidget.c when the pointer
+   leaves a gowl xwidget area or on Escape.  */
+void
+cmacs_gowl_xwidget_keyboard_leave (void)
+{
+  struct wlr_seat *seat
+    = gowl_compositor_get_wlr_seat (cmacs_gowl_compositor);
+  if (seat == NULL)
+    return;
+
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  wlr_seat_keyboard_notify_clear_focus (seat);
+  wl_display_flush_clients (
+    gowl_compositor_get_wl_display (cmacs_gowl_compositor));
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
 }
 
 /* ── Keyboard shortcut inhibition for nested mode ────────────────────
@@ -1203,20 +1291,43 @@ DEFUN ("gowl-client-pid", Fgowl_client_pid, Sgowl_client_pid, 1, 1, 0,
 DEFUN ("gowl-find-client", Fgowl_find_client, Sgowl_find_client,
        1, 2, 0,
        doc: /* Find a client matching PATTERN.
-Optional second arg BY is a symbol: `app-id' (default) or `title'. */)
+Optional second arg BY is a symbol: `app-id' (default), `title',
+or `pid' (PATTERN is a PID integer). */)
   (Lisp_Object pattern, Lisp_Object by)
 {
-  GowlClient *c;
+  GowlClient *c = NULL;
 
   GOWL_CHECK_RUNNING ();
-  CHECK_STRING (pattern);
 
-  if (!NILP (by) && EQ (by, intern_c_string ("title")))
-    c = gowl_compositor_find_client_by_title (cmacs_gowl_compositor,
-                                               SSDATA (pattern));
+  if (!NILP (by) && EQ (by, intern_c_string ("pid")))
+    {
+      /* Search by PID: iterate all clients. */
+      pid_t target;
+      GList *clients, *l;
+
+      CHECK_FIXNUM (pattern);
+      target = (pid_t) XFIXNUM (pattern);
+      clients = gowl_compositor_get_clients (cmacs_gowl_compositor);
+      for (l = clients; l != NULL; l = l->next)
+        {
+          GowlClient *candidate = GOWL_CLIENT (l->data);
+          if (gowl_client_get_pid (candidate) == target)
+            {
+              c = candidate;
+              break;
+            }
+        }
+    }
   else
-    c = gowl_compositor_find_client_by_app_id (cmacs_gowl_compositor,
-                                                SSDATA (pattern));
+    {
+      CHECK_STRING (pattern);
+      if (!NILP (by) && EQ (by, intern_c_string ("title")))
+        c = gowl_compositor_find_client_by_title (cmacs_gowl_compositor,
+                                                   SSDATA (pattern));
+      else
+        c = gowl_compositor_find_client_by_app_id (cmacs_gowl_compositor,
+                                                    SSDATA (pattern));
+    }
 
   if (c == NULL)
     return Qnil;
@@ -2758,10 +2869,10 @@ DEFUN ("gowl-load-modules-from-dir", Fgowl_load_modules_from_dir,
  */
 
 #ifdef HAVE_XWIDGETS
-#include "xwidget.h"
 
 void
-cmacs_gowl_xwidget_setup (struct xwidget *xw, GtkWidget *view_widget)
+cmacs_gowl_xwidget_setup (struct xwidget *xw, GtkWidget *view_widget,
+                          struct frame *frame)
 {
   struct gowl_embed_view *view;
   struct wlr_surface *surface;
@@ -2773,6 +2884,7 @@ cmacs_gowl_xwidget_setup (struct xwidget *xw, GtkWidget *view_widget)
   view = g_new0 (struct gowl_embed_view, 1);
   view->client = c;
   view->widget = view_widget;
+  view->emacs_frame = frame;
   view->view_w = xw->width;
   view->view_h = xw->height;
 
@@ -2855,6 +2967,29 @@ cmacs_gowl_xwidget_event_cb (GtkWidget *widget, GdkEvent *event,
   if (view == NULL)
     return FALSE;
 
+  /* Update focus state for keyboard routing by the edit_widget
+     forwarder.  GDK routes pointer events to the DrawingArea
+     directly — they never reach the edit_widget — so the DrawingArea
+     must manage the focus state here.  */
+  switch (event->type)
+    {
+    case GDK_ENTER_NOTIFY:
+      xwidget_gowl_set_focused_view (xv);
+      cmacs_gowl_xwidget_keyboard_enter (xw);
+      break;
+    case GDK_LEAVE_NOTIFY:
+      xwidget_gowl_clear_focused_view ();
+      cmacs_gowl_xwidget_keyboard_leave ();
+      break;
+    case GDK_BUTTON_PRESS:
+      /* Reinforce on click — enter may have been missed if the widget
+         appeared under an already-stationary pointer. */
+      xwidget_gowl_set_focused_view (xv);
+      break;
+    default:
+      break;
+    }
+
   return gowl_embed_view_event (widget, event, view);
 }
 
@@ -2885,6 +3020,732 @@ Returns an xwidget object suitable for use in display properties. */)
 }
 
 #endif /* HAVE_XWIDGETS */
+
+
+/* ══════════════════════════════════════════════════════════════════════
+ * GObject sub-object accessors
+ * ══════════════════════════════════════════════════════════════════════ */
+
+DEFUN ("gowl-seat", Fgowl_seat, Sgowl_seat, 0, 0, 0,
+       doc: /* Return the GowlSeat GObject wrapping the Wayland seat.
+Signals: "focus-changed".
+Use gobject-connect to listen for focus changes. */)
+  (void)
+{
+  GowlSeat *seat;
+
+  GOWL_CHECK_RUNNING ();
+  seat = gowl_compositor_get_seat (cmacs_gowl_compositor);
+  if (seat == NULL)
+    return Qnil;
+  return cmacs_gobject_wrap (G_OBJECT (seat));
+}
+
+DEFUN ("gowl-cursor", Fgowl_cursor, Sgowl_cursor, 0, 0, 0,
+       doc: /* Return the GowlCursor GObject.
+Signals: "motion", "button", "axis".
+Properties accessible via gobject-get: "mode". */)
+  (void)
+{
+  GowlCursor *cursor;
+
+  GOWL_CHECK_RUNNING ();
+  cursor = gowl_compositor_get_cursor (cmacs_gowl_compositor);
+  if (cursor == NULL)
+    return Qnil;
+  return cmacs_gobject_wrap (G_OBJECT (cursor));
+}
+
+DEFUN ("gowl-keyboard-group", Fgowl_keyboard_group,
+       Sgowl_keyboard_group, 0, 0, 0,
+       doc: /* Return the GowlKeyboardGroup GObject.
+Signals: "key", "modifiers".
+Properties: repeat-rate, repeat-delay. */)
+  (void)
+{
+  GowlKeyboardGroup *kb;
+
+  GOWL_CHECK_RUNNING ();
+  kb = gowl_compositor_get_keyboard_group (cmacs_gowl_compositor);
+  if (kb == NULL)
+    return Qnil;
+  return cmacs_gobject_wrap (G_OBJECT (kb));
+}
+
+DEFUN ("gowl-idle-manager", Fgowl_idle_manager,
+       Sgowl_idle_manager, 0, 0, 0,
+       doc: /* Return the GowlIdleManager GObject.
+Signals: "idle", "resume".
+Properties: timeout, state. */)
+  (void)
+{
+  GowlIdleManager *mgr;
+
+  GOWL_CHECK_RUNNING ();
+  mgr = gowl_compositor_get_idle_manager (cmacs_gowl_compositor);
+  if (mgr == NULL)
+    return Qnil;
+  return cmacs_gobject_wrap (G_OBJECT (mgr));
+}
+
+DEFUN ("gowl-bar", Fgowl_bar, Sgowl_bar, 0, 0, 0,
+       doc: /* Return the GowlBar GObject, or nil if no bar is active.
+Signals: "render", "click".
+Properties: height, visible. */)
+  (void)
+{
+  GowlBar *bar;
+
+  GOWL_CHECK_RUNNING ();
+  bar = gowl_compositor_get_bar (cmacs_gowl_compositor);
+  if (bar == NULL)
+    return Qnil;
+  return cmacs_gobject_wrap (G_OBJECT (bar));
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════
+ * Swap / Zoom
+ * ══════════════════════════════════════════════════════════════════════ */
+
+DEFUN ("gowl-swap-clients", Fgowl_swap_clients,
+       Sgowl_swap_clients, 2, 2, 0,
+       doc: /* Swap CLIENT1 and CLIENT2 positions in the tiling list.
+Both arguments must be GowlClient GObjects.  The layout is
+re-arranged on affected monitors after the swap. */)
+  (Lisp_Object client1, Lisp_Object client2)
+{
+  GOWL_CHECK_RUNNING ();
+  gowl_compositor_swap_clients (cmacs_gowl_compositor,
+                                gowl_resolve_client (client1),
+                                gowl_resolve_client (client2));
+  return Qnil;
+}
+
+DEFUN ("gowl-zoom-client", Fgowl_zoom_client,
+       Sgowl_zoom_client, 0, 1, 0,
+       doc: /* Promote CLIENT to master (head of tiling list).
+If CLIENT is already master, promote the next visible tiled client.
+If CLIENT is nil, operate on the focused client.
+Floating clients are ignored. */)
+  (Lisp_Object client)
+{
+  GowlClient *c = NULL;
+
+  GOWL_CHECK_RUNNING ();
+  if (!NILP (client))
+    c = gowl_resolve_client (client);
+  gowl_compositor_zoom_client (cmacs_gowl_compositor, c);
+  return Qnil;
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════
+ * Cursor / Keyboard accessors
+ * ══════════════════════════════════════════════════════════════════════ */
+
+DEFUN ("gowl-cursor-mode", Fgowl_cursor_mode,
+       Sgowl_cursor_mode, 0, 0, 0,
+       doc: /* Return the current cursor mode as an integer.
+0 = normal, 1 = move, 2 = resize. */)
+  (void)
+{
+  GowlCursor *cursor;
+
+  GOWL_CHECK_RUNNING ();
+  cursor = gowl_compositor_get_cursor (cmacs_gowl_compositor);
+  if (cursor == NULL)
+    return Qnil;
+  return make_fixnum (gowl_cursor_get_mode (cursor));
+}
+
+DEFUN ("gowl-set-cursor-mode", Fgowl_set_cursor_mode,
+       Sgowl_set_cursor_mode, 1, 1, 0,
+       doc: /* Set the cursor mode to MODE (integer).
+0 = normal, 1 = move, 2 = resize. */)
+  (Lisp_Object mode)
+{
+  GowlCursor *cursor;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_FIXNUM (mode);
+  cursor = gowl_compositor_get_cursor (cmacs_gowl_compositor);
+  if (cursor != NULL)
+    gowl_cursor_set_mode (cursor, (gint) XFIXNUM (mode));
+  return Qnil;
+}
+
+DEFUN ("gowl-keyboard-repeat-rate", Fgowl_keyboard_repeat_rate,
+       Sgowl_keyboard_repeat_rate, 0, 0, 0,
+       doc: /* Return the keyboard repeat rate (keys per second). */)
+  (void)
+{
+  GowlKeyboardGroup *kb;
+
+  GOWL_CHECK_RUNNING ();
+  kb = gowl_compositor_get_keyboard_group (cmacs_gowl_compositor);
+  if (kb == NULL)
+    return Qnil;
+  return make_fixnum (gowl_keyboard_group_get_repeat_rate (kb));
+}
+
+DEFUN ("gowl-set-keyboard-repeat-rate", Fgowl_set_keyboard_repeat_rate,
+       Sgowl_set_keyboard_repeat_rate, 1, 1, 0,
+       doc: /* Set the keyboard repeat rate to RATE (keys per second). */)
+  (Lisp_Object rate)
+{
+  GowlKeyboardGroup *kb;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_FIXNAT (rate);
+  kb = gowl_compositor_get_keyboard_group (cmacs_gowl_compositor);
+  if (kb != NULL)
+    gowl_keyboard_group_set_repeat_rate (kb, (gint) XFIXNAT (rate));
+  return Qnil;
+}
+
+DEFUN ("gowl-keyboard-repeat-delay", Fgowl_keyboard_repeat_delay,
+       Sgowl_keyboard_repeat_delay, 0, 0, 0,
+       doc: /* Return the keyboard repeat delay in milliseconds. */)
+  (void)
+{
+  GowlKeyboardGroup *kb;
+
+  GOWL_CHECK_RUNNING ();
+  kb = gowl_compositor_get_keyboard_group (cmacs_gowl_compositor);
+  if (kb == NULL)
+    return Qnil;
+  return make_fixnum (gowl_keyboard_group_get_repeat_delay (kb));
+}
+
+DEFUN ("gowl-set-keyboard-repeat-delay", Fgowl_set_keyboard_repeat_delay,
+       Sgowl_set_keyboard_repeat_delay, 1, 1, 0,
+       doc: /* Set the keyboard repeat delay to DELAY milliseconds. */)
+  (Lisp_Object delay)
+{
+  GowlKeyboardGroup *kb;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_FIXNAT (delay);
+  kb = gowl_compositor_get_keyboard_group (cmacs_gowl_compositor);
+  if (kb != NULL)
+    gowl_keyboard_group_set_repeat_delay (kb, (gint) XFIXNAT (delay));
+  return Qnil;
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════
+ * IPC
+ * ══════════════════════════════════════════════════════════════════════ */
+
+DEFUN ("gowl-ipc-push-event", Fgowl_ipc_push_event,
+       Sgowl_ipc_push_event, 1, 1, 0,
+       doc: /* Push EVENT-STRING to all connected IPC subscribers.
+The string is sent as-is on the IPC event channel. */)
+  (Lisp_Object event_string)
+{
+  GowlIpc *ipc;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_STRING (event_string);
+  ipc = gowl_compositor_get_ipc (cmacs_gowl_compositor);
+  if (ipc != NULL)
+    gowl_ipc_push_event (ipc, "%s", SSDATA (event_string));
+  return Qnil;
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════
+ * Input injection
+ * ══════════════════════════════════════════════════════════════════════ */
+
+DEFUN ("gowl-send-key", Fgowl_send_key, Sgowl_send_key, 2, 2, 0,
+       doc: /* Send a synthetic key event.
+KEYCODE is the XKB keycode.  PRESSED is non-nil for press, nil for release. */)
+  (Lisp_Object keycode, Lisp_Object pressed)
+{
+  GowlSeat *seat;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_FIXNAT (keycode);
+  seat = gowl_compositor_get_seat (cmacs_gowl_compositor);
+  if (seat != NULL)
+    gowl_seat_send_key (seat, (guint32) XFIXNAT (keycode), !NILP (pressed));
+  return Qnil;
+}
+
+DEFUN ("gowl-send-mouse-move", Fgowl_send_mouse_move,
+       Sgowl_send_mouse_move, 2, 2, 0,
+       doc: /* Move the cursor to absolute coordinates X, Y. */)
+  (Lisp_Object x, Lisp_Object y)
+{
+  GowlSeat *seat;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_NUMBER (x);
+  CHECK_NUMBER (y);
+  seat = gowl_compositor_get_seat (cmacs_gowl_compositor);
+  if (seat != NULL)
+    gowl_seat_send_mouse_move (seat, XFLOATINT (x), XFLOATINT (y));
+  return Qnil;
+}
+
+DEFUN ("gowl-send-mouse-button", Fgowl_send_mouse_button,
+       Sgowl_send_mouse_button, 2, 2, 0,
+       doc: /* Send a synthetic mouse button event.
+BUTTON is the button code.  PRESSED is non-nil for press, nil for release. */)
+  (Lisp_Object button, Lisp_Object pressed)
+{
+  GowlSeat *seat;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_FIXNAT (button);
+  seat = gowl_compositor_get_seat (cmacs_gowl_compositor);
+  if (seat != NULL)
+    gowl_seat_send_mouse_button (seat, (guint32) XFIXNAT (button),
+                                  !NILP (pressed));
+  return Qnil;
+}
+
+DEFUN ("gowl-send-scroll", Fgowl_send_scroll,
+       Sgowl_send_scroll, 2, 2, 0,
+       doc: /* Send a synthetic scroll event with deltas DX, DY. */)
+  (Lisp_Object dx, Lisp_Object dy)
+{
+  GowlSeat *seat;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_NUMBER (dx);
+  CHECK_NUMBER (dy);
+  seat = gowl_compositor_get_seat (cmacs_gowl_compositor);
+  if (seat != NULL)
+    gowl_seat_send_scroll (seat, XFLOATINT (dx), XFLOATINT (dy));
+  return Qnil;
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════
+ * Screenshots
+ * ══════════════════════════════════════════════════════════════════════ */
+
+DEFUN ("gowl-screenshot-monitor", Fgowl_screenshot_monitor,
+       Sgowl_screenshot_monitor, 0, 1, 0,
+       doc: /* Capture a screenshot of MONITOR (or focused monitor).
+MONITOR is a GowlMonitor object or nil for the focused monitor.
+Returns a list (WIDTH HEIGHT DATA) where DATA is a unibyte string
+of RGBA pixel data, or nil on failure. */)
+  (Lisp_Object monitor)
+{
+  GError *err = NULL;
+  GBytes *bytes;
+  gint w, h;
+  const gchar *name = NULL;
+
+  GOWL_CHECK_RUNNING ();
+
+  if (!NILP (monitor))
+    {
+      GowlMonitor *mon = gowl_resolve_monitor (monitor);
+      struct wlr_output *output = gowl_monitor_get_wlr_output (mon);
+      if (output != NULL)
+        name = output->name;
+    }
+
+  bytes = gowl_compositor_screenshot_output (cmacs_gowl_compositor,
+                                              name, &w, &h, &err);
+  if (bytes == NULL)
+    {
+      if (err != NULL)
+        {
+          Lisp_Object msg = build_string (err->message);
+          g_error_free (err);
+          xsignal1 (Qgowl_error, msg);
+        }
+      return Qnil;
+    }
+
+  {
+    gsize size;
+    const guint8 *data = g_bytes_get_data (bytes, &size);
+    Lisp_Object str = make_unibyte_string ((const char *) data, size);
+    g_bytes_unref (bytes);
+    return list3 (make_fixnum (w), make_fixnum (h), str);
+  }
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════
+ * Clipboard
+ * ══════════════════════════════════════════════════════════════════════ */
+
+DEFUN ("gowl-clipboard-get", Fgowl_clipboard_get,
+       Sgowl_clipboard_get, 0, 0, 0,
+       doc: /* Get the current Wayland clipboard text, or nil. */)
+  (void)
+{
+  GowlSeat *seat;
+  gchar *text;
+
+  GOWL_CHECK_RUNNING ();
+  seat = gowl_compositor_get_seat (cmacs_gowl_compositor);
+  if (seat == NULL)
+    return Qnil;
+  text = gowl_seat_get_clipboard (seat);
+  if (text == NULL)
+    return Qnil;
+  {
+    Lisp_Object result = build_string (text);
+    g_free (text);
+    return result;
+  }
+}
+
+DEFUN ("gowl-clipboard-set", Fgowl_clipboard_set,
+       Sgowl_clipboard_set, 1, 1, 0,
+       doc: /* Set the Wayland clipboard to TEXT. */)
+  (Lisp_Object text)
+{
+  GowlSeat *seat;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_STRING (text);
+  seat = gowl_compositor_get_seat (cmacs_gowl_compositor);
+  if (seat != NULL)
+    gowl_seat_set_clipboard (seat, SSDATA (text));
+  return Qnil;
+}
+
+DEFUN ("gowl-primary-selection-get", Fgowl_primary_selection_get,
+       Sgowl_primary_selection_get, 0, 0, 0,
+       doc: /* Get the current Wayland primary selection text, or nil. */)
+  (void)
+{
+  GowlSeat *seat;
+  gchar *text;
+
+  GOWL_CHECK_RUNNING ();
+  seat = gowl_compositor_get_seat (cmacs_gowl_compositor);
+  if (seat == NULL)
+    return Qnil;
+  text = gowl_seat_get_primary_selection (seat);
+  if (text == NULL)
+    return Qnil;
+  {
+    Lisp_Object result = build_string (text);
+    g_free (text);
+    return result;
+  }
+}
+
+DEFUN ("gowl-primary-selection-set", Fgowl_primary_selection_set,
+       Sgowl_primary_selection_set, 1, 1, 0,
+       doc: /* Set the Wayland primary selection to TEXT. */)
+  (Lisp_Object text)
+{
+  GowlSeat *seat;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_STRING (text);
+  seat = gowl_compositor_get_seat (cmacs_gowl_compositor);
+  if (seat != NULL)
+    gowl_seat_set_primary_selection (seat, SSDATA (text));
+  return Qnil;
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════
+ * Bar / Layer surface
+ * ══════════════════════════════════════════════════════════════════════ */
+
+DEFUN ("gowl-bar-height", Fgowl_bar_height,
+       Sgowl_bar_height, 0, 0, 0,
+       doc: /* Return the bar height in pixels, or nil if no bar. */)
+  (void)
+{
+  GowlBar *bar;
+
+  GOWL_CHECK_RUNNING ();
+  bar = gowl_compositor_get_bar (cmacs_gowl_compositor);
+  if (bar == NULL)
+    return Qnil;
+  return make_fixnum (gowl_bar_get_height (bar));
+}
+
+DEFUN ("gowl-set-bar-height", Fgowl_set_bar_height,
+       Sgowl_set_bar_height, 1, 1, 0,
+       doc: /* Set the bar height to HEIGHT pixels. */)
+  (Lisp_Object height)
+{
+  GowlBar *bar;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_FIXNAT (height);
+  bar = gowl_compositor_get_bar (cmacs_gowl_compositor);
+  if (bar != NULL)
+    gowl_bar_set_height (bar, (gint) XFIXNAT (height));
+  return Qnil;
+}
+
+DEFUN ("gowl-bar-visible-p", Fgowl_bar_visible_p,
+       Sgowl_bar_visible_p, 0, 0, 0,
+       doc: /* Return non-nil if the bar is visible. */)
+  (void)
+{
+  GowlBar *bar;
+
+  GOWL_CHECK_RUNNING ();
+  bar = gowl_compositor_get_bar (cmacs_gowl_compositor);
+  if (bar == NULL)
+    return Qnil;
+  return gowl_bar_is_visible (bar) ? Qt : Qnil;
+}
+
+DEFUN ("gowl-set-bar-visible", Fgowl_set_bar_visible,
+       Sgowl_set_bar_visible, 1, 1, 0,
+       doc: /* Set bar visibility.  Non-nil VISIBLE shows the bar. */)
+  (Lisp_Object visible)
+{
+  GowlBar *bar;
+
+  GOWL_CHECK_RUNNING ();
+  bar = gowl_compositor_get_bar (cmacs_gowl_compositor);
+  if (bar != NULL)
+    gowl_bar_set_visible (bar, !NILP (visible));
+  return Qnil;
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════
+ * Input injection (text)
+ * ══════════════════════════════════════════════════════════════════════ */
+
+DEFUN ("gowl-send-text", Fgowl_send_text, Sgowl_send_text, 1, 1, 0,
+       doc: /* Send synthetic key events to type TEXT on the focused surface.
+TEXT is a UTF-8 string.  Each character is mapped to an XKB keycode
+and injected as a press/release pair.
+Note: currently a stub that logs a warning; requires XKB keycode lookup. */)
+  (Lisp_Object text)
+{
+  GowlSeat *seat;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_STRING (text);
+  seat = gowl_compositor_get_seat (cmacs_gowl_compositor);
+  if (seat != NULL)
+    gowl_seat_send_text (seat, SSDATA (text));
+  return Qnil;
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════
+ * Screenshots (client + region)
+ * ══════════════════════════════════════════════════════════════════════ */
+
+DEFUN ("gowl-screenshot-client", Fgowl_screenshot_client,
+       Sgowl_screenshot_client, 1, 1, 0,
+       doc: /* Capture a screenshot of CLIENT.
+Returns a list (WIDTH HEIGHT DATA) where DATA is a unibyte string
+of RGBA pixel data, or nil on failure. */)
+  (Lisp_Object client)
+{
+  GowlClient *c;
+  GError *err = NULL;
+  GBytes *bytes;
+  gint w, h;
+
+  GOWL_CHECK_RUNNING ();
+  c = gowl_resolve_client (client);
+
+  bytes = gowl_compositor_screenshot_client (cmacs_gowl_compositor,
+                                              c, &w, &h, &err);
+  if (bytes == NULL)
+    {
+      if (err != NULL)
+        {
+          Lisp_Object msg = build_string (err->message);
+          g_error_free (err);
+          xsignal1 (Qgowl_error, msg);
+        }
+      return Qnil;
+    }
+
+  {
+    gsize size;
+    const guint8 *data = g_bytes_get_data (bytes, &size);
+    Lisp_Object str = make_unibyte_string ((const char *) data, size);
+    g_bytes_unref (bytes);
+    return list3 (make_fixnum (w), make_fixnum (h), str);
+  }
+}
+
+DEFUN ("gowl-screenshot-region", Fgowl_screenshot_region,
+       Sgowl_screenshot_region, 4, 5, 0,
+       doc: /* Capture a region from a monitor screenshot.
+X, Y, W, H define the crop rectangle.  MONITOR is a GowlMonitor
+object or nil for the focused monitor.
+Returns a list (WIDTH HEIGHT DATA) with the cropped RGBA pixel data. */)
+  (Lisp_Object x, Lisp_Object y, Lisp_Object w, Lisp_Object h,
+   Lisp_Object monitor)
+{
+  GError *err = NULL;
+  GBytes *bytes;
+  gint sw, sh;
+  const gchar *name = NULL;
+  EMACS_INT rx, ry, rw, rh;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_FIXNUM (x);
+  CHECK_FIXNUM (y);
+  CHECK_FIXNUM (w);
+  CHECK_FIXNUM (h);
+
+  rx = XFIXNUM (x);
+  ry = XFIXNUM (y);
+  rw = XFIXNUM (w);
+  rh = XFIXNUM (h);
+
+  if (!NILP (monitor))
+    {
+      GowlMonitor *mon = gowl_resolve_monitor (monitor);
+      struct wlr_output *output = gowl_monitor_get_wlr_output (mon);
+      if (output != NULL)
+        name = output->name;
+    }
+
+  bytes = gowl_compositor_screenshot_output (cmacs_gowl_compositor,
+                                              name, &sw, &sh, &err);
+  if (bytes == NULL)
+    {
+      if (err != NULL)
+        {
+          Lisp_Object msg = build_string (err->message);
+          g_error_free (err);
+          xsignal1 (Qgowl_error, msg);
+        }
+      return Qnil;
+    }
+
+  /* Crop the region */
+  {
+    gsize size;
+    const guint8 *src = g_bytes_get_data (bytes, &size);
+    EMACS_INT row, src_stride, dst_stride;
+    Lisp_Object str;
+    unsigned char *dst;
+
+    /* Clamp to screenshot bounds */
+    if (rx < 0) rx = 0;
+    if (ry < 0) ry = 0;
+    if (rx + rw > sw) rw = sw - rx;
+    if (ry + rh > sh) rh = ry - ry;
+    if (rw <= 0 || rh <= 0)
+      {
+        g_bytes_unref (bytes);
+        return Qnil;
+      }
+
+    src_stride = sw * 4;
+    dst_stride = rw * 4;
+    str = make_uninit_string (rh * dst_stride);
+    dst = (unsigned char *) SDATA (str);
+    STRING_SET_UNIBYTE (str);
+
+    for (row = 0; row < rh; row++)
+      memcpy (dst + row * dst_stride,
+              src + (ry + row) * src_stride + rx * 4,
+              dst_stride);
+
+    g_bytes_unref (bytes);
+    return list3 (make_fixnum (rw), make_fixnum (rh), str);
+  }
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════
+ * Layer surfaces
+ * ══════════════════════════════════════════════════════════════════════ */
+
+DEFUN ("gowl-list-layer-surfaces", Fgowl_list_layer_surfaces,
+       Sgowl_list_layer_surfaces, 0, 1, 0,
+       doc: /* Return a list of GowlLayerSurface GObjects on MONITOR.
+MONITOR is a GowlMonitor object or nil for the focused monitor. */)
+  (Lisp_Object monitor)
+{
+  GowlMonitor *mon;
+  GList *surfaces, *l;
+  Lisp_Object result;
+
+  GOWL_CHECK_RUNNING ();
+  mon = gowl_resolve_monitor (monitor);
+  if (mon == NULL)
+    return Qnil;
+
+  surfaces = gowl_monitor_get_layer_surfaces (mon);
+  result = Qnil;
+  for (l = surfaces; l != NULL; l = l->next)
+    {
+      GowlLayerSurface *ls = GOWL_LAYER_SURFACE (l->data);
+      result = Fcons (cmacs_gobject_wrap (G_OBJECT (ls)), result);
+    }
+  return Fnreverse (result);
+}
+
+DEFUN ("gowl-layer-surface-info", Fgowl_layer_surface_info,
+       Sgowl_layer_surface_info, 1, 1, 0,
+       doc: /* Return an alist of info about LAYER-SURFACE.
+Keys: layer, mapped. */)
+  (Lisp_Object layer_surface)
+{
+  GObject *obj;
+  GowlLayerSurface *ls;
+
+  obj = cmacs_gobject_unwrap (layer_surface);
+  if (obj == NULL || !GOWL_IS_LAYER_SURFACE (obj))
+    error ("Not a GowlLayerSurface");
+  ls = GOWL_LAYER_SURFACE (obj);
+
+  return list2 (
+    Fcons (intern_c_string ("layer"),
+           make_fixnum (gowl_layer_surface_get_layer (ls))),
+    Fcons (intern_c_string ("mapped"),
+           gowl_layer_surface_is_mapped (ls) ? Qt : Qnil));
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════
+ * Process info
+ * ══════════════════════════════════════════════════════════════════════ */
+
+DEFUN ("gowl-client-process-info", Fgowl_client_process_info,
+       Sgowl_client_process_info, 1, 1, 0,
+       doc: /* Return process info for CLIENT as an alist.
+Keys: pid, comm, cmdline, cwd.  Values are strings or integers.
+Returns nil if the PID is unavailable. */)
+  (Lisp_Object client)
+{
+  GowlClient *c;
+  GowlProcessInfo *info;
+  Lisp_Object result;
+
+  GOWL_CHECK_RUNNING ();
+  c = gowl_resolve_client (client);
+  info = gowl_client_get_process_info (c);
+  if (info == NULL)
+    return Qnil;
+
+  result = list4 (
+    Fcons (intern_c_string ("pid"),
+           make_fixnum ((EMACS_INT) info->pid)),
+    Fcons (intern_c_string ("comm"),
+           info->comm ? build_string (info->comm) : Qnil),
+    Fcons (intern_c_string ("cmdline"),
+           info->cmdline ? build_string (info->cmdline) : Qnil),
+    Fcons (intern_c_string ("cwd"),
+           info->cwd ? build_string (info->cwd) : Qnil));
+
+  gowl_process_info_free (info);
+  return result;
+}
 
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -2924,6 +3785,11 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_compositor);
   defsubr (&Sgowl_config_object);
   defsubr (&Sgowl_module_manager);
+  defsubr (&Sgowl_seat);
+  defsubr (&Sgowl_cursor);
+  defsubr (&Sgowl_keyboard_group);
+  defsubr (&Sgowl_idle_manager);
+  defsubr (&Sgowl_bar);
 
   /* Client management */
   defsubr (&Sgowl_list_clients);
@@ -3021,6 +3887,50 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_load_module);
   defsubr (&Sgowl_list_modules);
   defsubr (&Sgowl_load_modules_from_dir);
+
+  /* Swap / Zoom */
+  defsubr (&Sgowl_swap_clients);
+  defsubr (&Sgowl_zoom_client);
+
+  /* Cursor / Keyboard */
+  defsubr (&Sgowl_cursor_mode);
+  defsubr (&Sgowl_set_cursor_mode);
+  defsubr (&Sgowl_keyboard_repeat_rate);
+  defsubr (&Sgowl_set_keyboard_repeat_rate);
+  defsubr (&Sgowl_keyboard_repeat_delay);
+  defsubr (&Sgowl_set_keyboard_repeat_delay);
+
+  /* IPC */
+  defsubr (&Sgowl_ipc_push_event);
+
+  /* Input injection */
+  defsubr (&Sgowl_send_key);
+  defsubr (&Sgowl_send_text);
+  defsubr (&Sgowl_send_mouse_move);
+  defsubr (&Sgowl_send_mouse_button);
+  defsubr (&Sgowl_send_scroll);
+
+  /* Screenshots */
+  defsubr (&Sgowl_screenshot_monitor);
+  defsubr (&Sgowl_screenshot_client);
+  defsubr (&Sgowl_screenshot_region);
+
+  /* Clipboard */
+  defsubr (&Sgowl_clipboard_get);
+  defsubr (&Sgowl_clipboard_set);
+  defsubr (&Sgowl_primary_selection_get);
+  defsubr (&Sgowl_primary_selection_set);
+
+  /* Bar / Layer surface */
+  defsubr (&Sgowl_bar_height);
+  defsubr (&Sgowl_set_bar_height);
+  defsubr (&Sgowl_bar_visible_p);
+  defsubr (&Sgowl_set_bar_visible);
+  defsubr (&Sgowl_list_layer_surfaces);
+  defsubr (&Sgowl_layer_surface_info);
+
+  /* Process info */
+  defsubr (&Sgowl_client_process_info);
 }
 
 void

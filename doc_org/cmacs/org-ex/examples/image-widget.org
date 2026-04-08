@@ -1,0 +1,55 @@
+#+TITLE: Org-Ex Image Widget Examples
+#+ORGEX: t
+#+STARTUP: showall
+
+* Image Widget
+
+The =image= widget type displays an image file inside the Org
+document.  It supports common formats (PNG, JPEG, GIF, SVG, WebP)
+via Emacs's built-in image support, with a GtkImage fallback on
+the gtk-embed path.
+
+** Basic Image Display
+
+Display an image at a fixed size.  The =:file= property points to
+the image file, which can be a relative or absolute path:
+
+#+BEGIN_WIDGET image
+:file ./screenshot.png
+:width 600
+:height 400
+#+END_WIDGET
+
+** Scaled Image
+
+Use the =:scale= property to adjust the image scale factor.
+Values greater than 1.0 enlarge; values less than 1.0 shrink:
+
+#+BEGIN_WIDGET image
+:file ./diagram.png
+:width 400
+:height 300
+:scale 0.5
+#+END_WIDGET
+
+** Project Logo
+
+Display a project asset.  Relative paths are resolved against
+the Org file's directory:
+
+#+BEGIN_WIDGET image
+:file ../../../../etc/images/icons/hicolor/scalable/apps/emacs.svg
+:width 128
+:height 128
+#+END_WIDGET
+
+* Notes
+
+- The =:file= property is required.  The file must exist at
+  render time or an error is signaled.
+- Relative paths resolve from the Org file's directory, not the
+  current working directory.
+- The =:scale= property defaults to =1.0=.
+- On displays that support images (=display-images-p= is non-nil),
+  the image is rendered as an HTML img tag in a web widget.
+  Otherwise, a GtkImage via GI is used as a fallback.

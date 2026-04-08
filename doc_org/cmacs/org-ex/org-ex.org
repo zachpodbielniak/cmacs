@@ -95,12 +95,38 @@ All widget types accept these properties:
 
 | Property     | Description                                      | Default |
 |--------------+--------------------------------------------------+---------|
-| =:width=     | Width in pixels                                  |     400 |
-| =:height=    | Height in pixels                                 |     200 |
+| =:width=     | Width in pixels or percentage (e.g. =50%=)       |     400 |
+| =:height=    | Height in pixels or =auto=                       |     200 |
 | =:bind=      | Bind to a document =#+PROPERTY:= line            |         |
 | =:publish=   | Publish value changes to a named channel         |         |
 | =:subscribe= | Subscribe to a named channel                     |         |
 | =:direction= | Binding direction: =both=, =to-widget=, =from-widget= | =both= |
+| =:reactive=  | If =t=, re-evaluate the widget when bindings change |     =nil= |
+| =:interval=  | Re-evaluate every N seconds (polling mode)       |         |
+| =:bridge=    | If =t=, enable JS bridge for =web= widgets       |     =nil= |
+
+** Responsive Sizing
+
+Widget dimensions support responsive values in addition to fixed
+pixel sizes:
+
+| Value      | Behavior                                               |
+|------------+--------------------------------------------------------|
+| =400=      | Fixed size: 400 pixels                                 |
+| =50%=      | Percentage of the Emacs window body width              |
+| =auto=     | Compute from content (images: intrinsic size; web: fit) |
+
+#+begin_example
+#+BEGIN_WIDGET web
+:url https://example.com
+:width 80%
+:height auto
+#+END_WIDGET
+#+end_example
+
+Percentage widths are recalculated when the Emacs window is resized
+via =window-configuration-change-hook=.  The =auto= height is
+currently supported by =image= and =web= widget types.
 
 ** Widget IDs
 
@@ -240,6 +266,61 @@ are displayed as a code widget.
 :height 150
 #+END_WIDGET
 #+end_example
+
+** wayland
+
+Embeds a live Wayland client window inside the Org document.  The
+client's surface is composited directly into the widget area via the
+Gowl compositor --- no pixel copying or offscreen rendering.
+
+| Property    | Description                                    | Default |
+|-------------+------------------------------------------------+---------|
+| =:command=  | Command to launch the Wayland client (required) |         |
+| =:app-id=   | Match an existing client by app-id instead      |         |
+
+#+begin_example
+#+BEGIN_WIDGET wayland
+:command foot
+:width 600
+:height 400
+#+END_WIDGET
+#+end_example
+
+#+begin_example
+#+BEGIN_WIDGET wayland
+:app-id org.gnome.Calculator
+:width 300
+:height 400
+#+END_WIDGET
+#+end_example
+
+The widget spawns the command (or finds an existing client by
+=app-id=), then embeds it using the same scene-reparenting mechanism
+as =gowl-embed-into=.  Keyboard focus follows the same ESC
+escape-hatch described in the Gowl manual.
+
+** image
+
+Displays an image file inline in the Org document.  The image is
+rendered natively via GdkPixbuf and displayed as a GTK =GtkImage=
+widget.
+
+| Property   | Description                                    | Default |
+|------------+------------------------------------------------+---------|
+| =:file=    | Path to the image file (required)              |         |
+| =:scale=   | Scale factor for the image                     |     1.0 |
+
+#+begin_example
+#+BEGIN_WIDGET image
+:file ~/photos/diagram.png
+:width 500
+:height auto
+#+END_WIDGET
+#+end_example
+
+Supported formats: PNG, JPEG, GIF, SVG, WebP, TIFF (anything
+supported by GdkPixbuf).  Paths are resolved relative to the Org
+file's directory, just like =buffer= widgets.
 
 * Reactive Binding
 
@@ -495,6 +576,55 @@ For full control, subclass =OrgExWidget= in C:
 | =OrgExRenderable=  | For widgets that render to a display context |
 | =OrgExExportable=  | For widgets that produce export output       |
 
+* JS Bridge
+
+Web widgets with =:bridge t= gain a bidirectional JavaScript bridge
+that allows JavaScript code in the WebKit view to call Elisp functions
+and vice versa.  The bridge is implemented via WebKit user content
+manager messages.
+
+** Enabling the Bridge
+
+#+begin_example
+#+BEGIN_WIDGET web
+:html <button onclick="cmacs.call('greet', 'world')">Say Hello</button>
+:bridge t
+:width 400
+:height 100
+#+END_WIDGET
+#+end_example
+
+** Registering Bridge Functions
+
+Use =cmacs-org-ex-bridge-register= to expose Elisp functions to
+JavaScript:
+
+#+begin_src emacs-lisp
+(cmacs-org-ex-bridge-register "greet"
+  (lambda (name)
+    (message "Hello, %s!" name)))
+#+end_src
+
+From JavaScript, call registered functions via the =cmacs= object:
+
+#+begin_src javascript
+// Call Elisp from JS:
+cmacs.call("greet", "world");
+
+// Call with callback:
+cmacs.call("get-value", "key", function(result) {
+  document.getElementById("output").textContent = result;
+});
+#+end_src
+
+** Bridge API
+
+| Function                                       | Description                          |
+|------------------------------------------------+--------------------------------------|
+| =(cmacs-org-ex-bridge-register NAME FN)=       | Register FN as callable from JS      |
+| =cmacs.call(name, ...args)=                    | (JS) Call a registered Elisp function |
+| =cmacs.call(name, ...args, callback)=          | (JS) Call with result callback       |
+
 * API Reference
 
 ** Document Management
@@ -517,6 +647,8 @@ For full control, subclass =OrgExWidget= in C:
 | =(org-ex-widget-web-new-from-html HTML W H)= | Web view from inline HTML      |
 | =(org-ex-widget-buffer-new FILE &opt EDIT)=  | Buffer embed                   |
 | =(org-ex-widget-code-new LANG CODE)=         | Code widget                    |
+| =(org-ex-widget-wayland-new CMD W H)=        | Wayland client embed           |
+| =(org-ex-widget-image-new FILE W H)=         | Image widget from file         |
 | =(org-ex-widget-gtk-get-widget W)=           | Extract underlying GtkWidget   |
 
 ** Widget Operations
@@ -535,6 +667,7 @@ For full control, subclass =OrgExWidget= in C:
 | =(org-ex-binding-create DOC PROP W &opt DIR)=   | Create reactive binding      |
 | =(org-ex-channel-create NAME)=                   | Create pub/sub channel       |
 | =(org-ex-channel-publish CHAN VALUE)=             | Publish to channel           |
+| =(cmacs-org-ex-bridge-register NAME FN)=         | Register Elisp fn for JS bridge |
 
 ** Export
 

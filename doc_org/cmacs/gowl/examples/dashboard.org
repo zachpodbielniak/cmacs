@@ -1,0 +1,101 @@
+#+TITLE: Gowl Compositor Dashboard
+#+ORGEX: t
+#+STARTUP: showall
+
+* Compositor Dashboard
+
+This Org document serves as a live configuration dashboard for
+the gowl Wayland compositor.  Each slider widget is bound to a
+compositor property --- dragging it changes the setting in real
+time.
+
+Requires =cmacs-gowl-dashboard-mode= to be active for the
+=:gowl-property= bindings to take effect.
+
+** Layout Controls
+
+*** Master Factor
+
+Controls what fraction of the screen the master area occupies
+in tiled layouts:
+
+#+BEGIN_WIDGET slider
+:min 0.1
+:max 0.9
+:value 0.55
+:step 0.05
+:publish mfact
+#+END_WIDGET
+
+*** Number of Masters
+
+How many clients appear in the master area:
+
+#+BEGIN_WIDGET slider
+:min 1
+:max 5
+:value 1
+:step 1
+:publish nmaster
+#+END_WIDGET
+
+** Appearance
+
+*** Border Width
+
+Pixel width of client window borders:
+
+#+BEGIN_WIDGET slider
+:min 0
+:max 10
+:value 2
+:step 1
+:publish borderpx
+#+END_WIDGET
+
+*** Gap Size
+
+Pixel gap between tiled windows:
+
+#+BEGIN_WIDGET slider
+:min 0
+:max 20
+:value 4
+:step 2
+:publish gappx
+#+END_WIDGET
+
+** Input Settings
+
+*** Keyboard Repeat Rate
+
+Characters per second when a key is held:
+
+#+BEGIN_WIDGET slider
+:min 10
+:max 100
+:value 50
+:step 5
+:publish repeat-rate
+#+END_WIDGET
+
+*** Keyboard Repeat Delay
+
+Milliseconds before repeat starts:
+
+#+BEGIN_WIDGET slider
+:min 100
+:max 1000
+:value 300
+:step 50
+:publish repeat-delay
+#+END_WIDGET
+
+* Notes
+
+- Activate the dashboard with =M-x cmacs-gowl-dashboard-mode=.
+- Slider values are applied immediately when dragged.
+- The =:publish= property names the channel; the dashboard mode
+  maps channel names to gowl setter functions.
+- Changes made here are ephemeral --- they do not persist across
+  compositor restarts unless saved to the gowl config file.

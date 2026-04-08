@@ -93,8 +93,9 @@ Properties:
 (defun cmacs-org-ex--create-web (props width height)
   "Create a web view widget from PROPS with WIDTH and HEIGHT.
 Properties:
-  :url   -- URL to load
-  :html  -- inline HTML (used if :url is absent)
+  :url     -- URL to load
+  :html    -- inline HTML (used if :url is absent)
+  :bridge  -- when \"t\", enable JS-to-Emacs message bridge
 Creates a WebKitWebView via GObject Introspection and wraps it
 as an OrgExWidgetGtk for embedding via gtk-embed."
   (let ((url (cdr (assoc "url" props)))
@@ -104,6 +105,13 @@ as an OrgExWidgetGtk for embedding via gtk-embed."
     (gi-require "WebKit2" "4.1")
     (let* ((webview (gobject-new "WebKitWebView"))
            (widget (org-ex-widget-gtk-new webview)))
+      ;; Set up JS bridge BEFORE loading content — the handler must
+      ;; be registered before the page context is created, otherwise
+      ;; window.webkit.messageHandlers.cmacs won't exist in JS.
+      (when (string-equal-ignore-case
+             (or (cdr (assoc "bridge" props)) "") "t")
+        (require 'cmacs-org-ex-bridge)
+        (cmacs-org-ex-bridge-setup webview))
       (cond
        (url  (gi-method webview "load_uri" url))
        (html (gi-method webview "load_html" html "")))
@@ -207,6 +215,125 @@ The output is rendered as a code widget."
       (org-ex-widget-set-size widget width height)
       widget)))
 
+;;; Built-in type: wayland
+
+(defvar cmacs-org-ex--wayland-pending nil
+  "Alist of (PID . (widget overlay buffer)) for pending Wayland embeds.")
+
+(defvar cmacs-org-ex--wayland-timer nil
+  "Timer checking for mapped Wayland clients.")
+
+(defun cmacs-org-ex--create-wayland (props width height)
+  "Create a Wayland client embed widget from PROPS with WIDTH and HEIGHT.
+Properties:
+  :command  -- command to spawn (required)
+  :args     -- additional arguments (space-separated string)
+
+Spawns the command, registers for embed, and creates a gowl xwidget
+once the client maps."
+  (let ((command (cdr (assoc "command" props)))
+        (args (cdr (assoc "args" props))))
+    (unless command
+      (error "Wayland widget requires :command property"))
+    (unless (and (fboundp 'gowl-running-p) (gowl-running-p))
+      (error "Gowl compositor not running"))
+    (let* ((full-cmd (if args
+                        (concat command " " args)
+                      command))
+           (pid (gowl-spawn full-cmd)))
+      ;; Register PID for embedding
+      (gowl-prefloat-pid pid)
+      ;; Store PID in props so instantiate-block can map PID→overlay.
+      (nconc props (list (cons "_wayland_pid" (number-to-string pid))))
+      ;; Create placeholder widget, will be replaced when client maps
+      (let ((widget (org-ex-widget-code-new "sh" full-cmd)))
+        (org-ex-widget-set-size widget width height)
+        ;; Store pending info for async completion
+        (push (list pid widget width height (current-buffer))
+              cmacs-org-ex--wayland-pending)
+        ;; Start polling timer if not already running
+        (unless cmacs-org-ex--wayland-timer
+          (setq cmacs-org-ex--wayland-timer
+                (run-with-timer 0.2 0.2
+                                #'cmacs-org-ex--wayland-check-pending)))
+        widget))))
+
+(defun cmacs-org-ex--wayland-check-pending ()
+  "Check if any pending Wayland clients have mapped."
+  (let (remaining)
+    (dolist (entry cmacs-org-ex--wayland-pending)
+      (let* ((pid (nth 0 entry))
+             (client (gowl-find-client pid 'pid)))
+        (if client
+            ;; Client mapped — create xwidget and replace placeholder
+            (let ((width (nth 2 entry))
+                  (height (nth 3 entry))
+                  (buf (nth 4 entry)))
+              (when (buffer-live-p buf)
+                (with-current-buffer buf
+                  (condition-case nil
+                      (let* ((xw (gowl-make-xwidget client width height buf))
+                             (ov (cdr (assq pid
+                                            cmacs-org-ex--wayland-overlay-map))))
+                        (when (and xw ov (overlay-buffer ov))
+                          (let ((str (concat
+                                      "\n"
+                                      (propertize
+                                       " "
+                                       'display (list 'xwidget :xwidget xw))
+                                      "\n")))
+                            (overlay-put ov 'before-string str))))
+                    (error nil)))))
+          ;; Not yet mapped — keep waiting
+          (push entry remaining))))
+    (setq cmacs-org-ex--wayland-pending (nreverse remaining))
+    ;; Stop timer when no more pending
+    (when (null cmacs-org-ex--wayland-pending)
+      (when cmacs-org-ex--wayland-timer
+        (cancel-timer cmacs-org-ex--wayland-timer)
+        (setq cmacs-org-ex--wayland-timer nil)))))
+
+;;; Built-in type: image
+
+(defun cmacs-org-ex--create-image (props width height)
+  "Create an image widget from PROPS with WIDTH and HEIGHT.
+Properties:
+  :file   -- path to image file (required)
+  :scale  -- scale factor (default 1.0)
+
+Displays the image using Emacs built-in image support.  Falls back
+to a GtkImage via GI on the gtk-embed path."
+  (let ((file (cdr (assoc "file" props)))
+        (scale (if-let ((v (cdr (assoc "scale" props))))
+                   (string-to-number v) 1.0)))
+    (unless file
+      (error "Image widget requires :file property"))
+    ;; Resolve relative paths against the Org file's directory.
+    (setq file (expand-file-name file
+                                 (if buffer-file-name
+                                     (file-name-directory buffer-file-name)
+                                   default-directory)))
+    (unless (file-exists-p file)
+      (error "Image file not found: %s" file))
+    ;; Try native image display first
+    (if (display-images-p)
+        (let* ((img (create-image file nil nil
+                                  :width width :height height
+                                  :scale scale))
+               ;; Wrap in a web widget with img tag as fallback
+               (html (format "<img src=\"file://%s\" width=\"%d\" height=\"%d\">"
+                             (expand-file-name file) width height))
+               (widget (org-ex-widget-web-new-from-html html width height)))
+          widget)
+      ;; Fallback: GtkImage via GI
+      (gi-require "Gtk" "3.0")
+      (let* ((gtk-img (gobject-new "GtkImage"))
+             (widget (org-ex-widget-gtk-new gtk-img)))
+        (gi-method gtk-img "set_from_file" file)
+        (org-ex-widget-set-size widget width height)
+        widget))))
+
+
 ;;; Register built-in types
 
 (cmacs-org-ex-register-widget-type "slider"  #'cmacs-org-ex--create-slider)
@@ -215,6 +342,8 @@ The output is rendered as a code widget."
 (cmacs-org-ex-register-widget-type "elisp"   #'cmacs-org-ex--create-elisp)
 (cmacs-org-ex-register-widget-type "crispy"  #'cmacs-org-ex--create-crispy)
 (cmacs-org-ex-register-widget-type "bacon"   #'cmacs-org-ex--create-bacon)
+(cmacs-org-ex-register-widget-type "wayland" #'cmacs-org-ex--create-wayland)
+(cmacs-org-ex-register-widget-type "image"   #'cmacs-org-ex--create-image)
 
 (provide 'cmacs-org-ex-widgets)
 ;;; cmacs-org-ex-widgets.el ends here

@@ -29,5 +29,25 @@ extern GObject *cmacs_gobject_unwrap (Lisp_Object obj);
 /* Check if an elisp value is a wrapped GObject. */
 extern bool cmacs_gobject_p (Lisp_Object obj);
 
+/* ── Boxed type wrapper ─────────────────────────────────────────────── */
+
+/* A boxed value carries its GType so GI can look up methods. */
+typedef struct
+{
+  GType type;
+  gpointer data;
+} CmacsBoxedValue;
+
+/* Wrap a boxed value as an elisp user-ptr.
+ * Copies via g_boxed_copy(); finalizer calls g_boxed_free(). */
+extern Lisp_Object cmacs_boxed_wrap (GType type, gpointer boxed);
+
+/* Extract the CmacsBoxedValue from an elisp user-ptr.
+ * Returns NULL if not a wrapped boxed value. */
+extern CmacsBoxedValue *cmacs_boxed_unwrap (Lisp_Object obj);
+
+/* Check if an elisp value is a wrapped boxed value. */
+extern bool cmacs_boxed_p (Lisp_Object obj);
+
 #endif /* HAVE_CMACS_GLIB */
 #endif /* CMACS_GOBJECT_H */

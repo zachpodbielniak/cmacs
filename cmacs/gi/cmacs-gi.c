@@ -370,16 +370,17 @@ usage: (gi-call NAMESPACE FUNCTION &rest ARGS) */)
 }
 
 DEFUN ("gi-method", Fgi_method, Sgi_method, 2, MANY, 0,
-       doc: /* Call METHOD on a GObject OBJECT via GI.
-OBJECT is a wrapped GObject.
+       doc: /* Call METHOD on a GObject or boxed type OBJECT via GI.
+OBJECT is a wrapped GObject or boxed value.
 METHOD is a string (method name).
 Remaining arguments are passed to the method.
 usage: (gi-method OBJECT METHOD &rest ARGS) */)
   (ptrdiff_t nargs, Lisp_Object *args)
 {
   GObject *obj;
+  CmacsBoxedValue *bv;
   GIRepository *repo;
-  GIObjectInfo *obj_info;
+  GIBaseInfo *owner_info = NULL;  /* GIObjectInfo or GIStructInfo */
   GIFunctionInfo *method_info = NULL;
   GICallableInfo *callable;
   gint n_gi_args;
@@ -391,72 +392,109 @@ usage: (gi-method OBJECT METHOD &rest ARGS) */)
   gint in_count;
   gint arg_idx;
   const gchar *type_name;
+  gpointer instance;  /* GObject* or boxed pointer */
 
   if (nargs < 2)
     error ("gi-method requires at least OBJECT and METHOD");
 
-  obj = cmacs_gobject_unwrap (args[0]);
-  if (obj == NULL)
-    error ("Not a GObject");
-
   CHECK_STRING (args[1]);
 
-  /* Look up the object type in the GI repository. */
-  type_name = G_OBJECT_TYPE_NAME (obj);
+  obj = cmacs_gobject_unwrap (args[0]);
+  bv = (obj == NULL) ? cmacs_boxed_unwrap (args[0]) : NULL;
+
+  if (obj == NULL && bv == NULL)
+    error ("Not a GObject or boxed type");
+
   repo = g_irepository_get_default ();
 
-  /* Search loaded namespaces for this type. */
-  {
-    GIBaseInfo *base = NULL;
-    GList *namespaces = NULL;
-    gchar **loaded;
-    gint i;
+  if (obj != NULL)
+    {
+      /* ── GObject path ─────────────────────────────────────────── */
+      instance = obj;
+      type_name = G_OBJECT_TYPE_NAME (obj);
 
-    loaded = g_irepository_get_loaded_namespaces (repo);
-    for (i = 0; loaded[i] != NULL && base == NULL; i++)
+      /* Search loaded namespaces for this type. */
       {
-        const char *ns = loaded[i];
-        size_t ns_len = strlen (ns);
-        const char *short_name = type_name;
+        GIBaseInfo *base = NULL;
+        gchar **loaded;
+        gint i;
 
-        /* Strip namespace prefix: "GtkButton" → "Button".
-           Also handle version digits: "WebKit2" → "WebKit". */
-        if (strncmp (type_name, ns, ns_len) == 0)
-          short_name = type_name + ns_len;
-        else
+        loaded = g_irepository_get_loaded_namespaces (repo);
+        for (i = 0; loaded[i] != NULL && base == NULL; i++)
           {
-            size_t base_len = ns_len;
-            while (base_len > 0
-                   && ns[base_len - 1] >= '0'
-                   && ns[base_len - 1] <= '9')
-              base_len--;
-            if (base_len > 0 && base_len < ns_len
-                && strncmp (type_name, ns, base_len) == 0)
-              short_name = type_name + base_len;
+            const char *ns = loaded[i];
+            size_t ns_len = strlen (ns);
+            const char *short_name = type_name;
+
+            /* Strip namespace prefix: "GtkButton" → "Button".
+               Also handle version digits: "WebKit2" → "WebKit". */
+            if (strncmp (type_name, ns, ns_len) == 0)
+              short_name = type_name + ns_len;
+            else
+              {
+                size_t base_len = ns_len;
+                while (base_len > 0
+                       && ns[base_len - 1] >= '0'
+                       && ns[base_len - 1] <= '9')
+                  base_len--;
+                if (base_len > 0 && base_len < ns_len
+                    && strncmp (type_name, ns, base_len) == 0)
+                  short_name = type_name + base_len;
+              }
+
+            base = g_irepository_find_by_name (repo, ns, short_name);
+          }
+        g_strfreev (loaded);
+
+        /* Fallback: resolve via GType when the C type prefix differs
+           from the GI namespace name (e.g. JSCValue →
+           JavaScriptCore.Value). */
+        if (base == NULL)
+          {
+            GType gtype = G_OBJECT_TYPE (obj);
+            base = g_irepository_find_by_gtype (repo, gtype);
           }
 
-        base = g_irepository_find_by_name (repo, ns, short_name);
+        if (base == NULL)
+          error ("GI type info not found for '%s'", type_name);
+
+        if (g_base_info_get_type (base) != GI_INFO_TYPE_OBJECT)
+          {
+            g_base_info_unref (base);
+            error ("'%s' is not a GObject type in GI", type_name);
+          }
+
+        owner_info = base;
       }
-    g_strfreev (loaded);
 
-    if (base == NULL)
-      error ("GI type info not found for '%s'", type_name);
+      method_info = g_object_info_find_method ((GIObjectInfo *)owner_info,
+                                               SSDATA (args[1]));
+    }
+  else
+    {
+      /* ── Boxed type path ──────────────────────────────────────── */
+      instance = bv->data;
+      type_name = g_type_name (bv->type);
 
-    if (g_base_info_get_type (base) != GI_INFO_TYPE_OBJECT)
-      {
-        g_base_info_unref (base);
-        error ("'%s' is not a GObject type in GI", type_name);
-      }
+      owner_info = g_irepository_find_by_gtype (repo, bv->type);
+      if (owner_info == NULL)
+        error ("GI type info not found for boxed type '%s'", type_name);
 
-    obj_info = (GIObjectInfo *)base;
-    (void)namespaces;
-  }
+      GIInfoType info_type = g_base_info_get_type (owner_info);
+      if (info_type != GI_INFO_TYPE_STRUCT
+          && info_type != GI_INFO_TYPE_BOXED)
+        {
+          g_base_info_unref (owner_info);
+          error ("'%s' is not a struct/boxed type in GI", type_name);
+        }
 
-  /* Find the method. */
-  method_info = g_object_info_find_method (obj_info, SSDATA (args[1]));
+      method_info = g_struct_info_find_method ((GIStructInfo *)owner_info,
+                                               SSDATA (args[1]));
+    }
+
   if (method_info == NULL)
     {
-      g_base_info_unref ((GIBaseInfo *)obj_info);
+      g_base_info_unref (owner_info);
       error ("GI method '%s' not found on type '%s'",
              SSDATA (args[1]), type_name);
     }
@@ -477,7 +515,7 @@ usage: (gi-method OBJECT METHOD &rest ARGS) */)
 
   /* Marshal args. */
   in_args = g_new0 (GIArgument, in_count);
-  in_args[0].v_pointer = obj; /* instance */
+  in_args[0].v_pointer = instance;
   arg_idx = 1;
 
   for (gint i = 0; i < n_gi_args && arg_idx < in_count; i++)
@@ -490,10 +528,22 @@ usage: (gi-method OBJECT METHOD &rest ARGS) */)
           gint lisp_idx = 2 + (arg_idx - 1);
           if (lisp_idx >= nargs)
             {
+              /* If the parameter is nullable or optional, default to
+                 NULL rather than erroring.  This handles API additions
+                 like WebKit2 4.1's world_name on
+                 register_script_message_handler. */
+              if (g_arg_info_may_be_null (ai)
+                  || g_arg_info_is_optional (ai))
+                {
+                  in_args[arg_idx].v_pointer = NULL;
+                  arg_idx++;
+                  g_base_info_unref ((GIBaseInfo *)ai);
+                  continue;
+                }
               g_base_info_unref ((GIBaseInfo *)ai);
               g_free (in_args);
               g_base_info_unref ((GIBaseInfo *)method_info);
-              g_base_info_unref ((GIBaseInfo *)obj_info);
+              g_base_info_unref (owner_info);
               error ("gi-method: not enough args for '%s'",
                      SSDATA (args[1]));
             }
@@ -506,7 +556,7 @@ usage: (gi-method OBJECT METHOD &rest ARGS) */)
               g_base_info_unref ((GIBaseInfo *)ai);
               g_free (in_args);
               g_base_info_unref ((GIBaseInfo *)method_info);
-              g_base_info_unref ((GIBaseInfo *)obj_info);
+              g_base_info_unref (owner_info);
               error ("gi-method: cannot marshal arg %d", arg_idx - 1);
             }
           g_base_info_unref ((GIBaseInfo *)ti);
@@ -528,7 +578,7 @@ usage: (gi-method OBJECT METHOD &rest ARGS) */)
       Lisp_Object msg = build_string (err->message);
       g_error_free (err);
       g_base_info_unref ((GIBaseInfo *)method_info);
-      g_base_info_unref ((GIBaseInfo *)obj_info);
+      g_base_info_unref (owner_info);
       xsignal1 (Qgi_error, msg);
     }
 
@@ -540,7 +590,7 @@ usage: (gi-method OBJECT METHOD &rest ARGS) */)
   }
 
   g_base_info_unref ((GIBaseInfo *)method_info);
-  g_base_info_unref ((GIBaseInfo *)obj_info);
+  g_base_info_unref (owner_info);
   return result;
 }
 

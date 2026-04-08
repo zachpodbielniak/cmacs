@@ -1,0 +1,52 @@
+#+TITLE: Gowl Spatial Org
+#+ORGEX: t
+#+STARTUP: showall
+
+* Spatial Org Workspaces
+
+Spatial Org maps gowl compositor tags (workspaces) to Org files.
+Switching tags automatically opens the associated Org document,
+creating a spatial relationship between your workspace layout and
+your documentation.
+
+** Setup
+
+Enable spatial mode and configure the tag-to-file mapping:
+
+#+BEGIN_SRC emacs-lisp
+(require 'cmacs-gowl-spatial)
+
+(setq cmacs-gowl-spatial-map
+      '((1 . "~/org/inbox.org")
+        (2 . "~/org/work.org")
+        (3 . "~/org/projects.org")
+        (4 . "~/org/references.org")
+        (5 . "~/org/journal.org")))
+
+(cmacs-gowl-spatial-mode 1)
+#+END_SRC
+
+** How It Works
+
+1. When you switch to tag 2, Emacs opens =~/org/work.org=.
+2. Your window configuration (splits, scroll positions) for
+   each tag is saved and restored automatically.
+3. Switching back to tag 1 restores the exact window layout
+   you had there.
+
+** Example Workflow
+
+- *Tag 1 (Inbox)*: Capture notes, triage tasks
+- *Tag 2 (Work)*: Current sprint tasks with embedded widgets
+- *Tag 3 (Projects)*: Long-term project tracking
+- *Tag 4 (References)*: Documentation with embedded code
+- *Tag 5 (Journal)*: Daily notes
+
+* Notes
+
+- Spatial mode connects to the gowl compositor's =tag-changed=
+  signal on each monitor via =gobject-connect=.
+- Window configurations are stored per-tag in a buffer-local
+  alist --- no files are written.
+- Tags not in the map are ignored (normal tag switching occurs).
+- Disable with =M-x cmacs-gowl-spatial-mode= (toggle off).

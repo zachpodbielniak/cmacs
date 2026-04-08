@@ -79,6 +79,60 @@ cmacs_gobject_p (Lisp_Object obj)
 }
 
 /* ──────────────────────────────────────────────────────────────────── */
+/* Boxed type ↔ user-ptr                                               */
+/* ──────────────────────────────────────────────────────────────────── */
+
+static void
+cmacs_boxed_finalizer (void *ptr)
+{
+  CmacsBoxedValue *bv = (CmacsBoxedValue *)ptr;
+  if (bv != NULL)
+    {
+      if (bv->data != NULL)
+        g_boxed_free (bv->type, bv->data);
+      free (bv);
+    }
+}
+
+Lisp_Object
+cmacs_boxed_wrap (GType type, gpointer boxed)
+{
+  CmacsBoxedValue *bv;
+
+  if (boxed == NULL)
+    return Qnil;
+
+  bv = (CmacsBoxedValue *)malloc (sizeof (CmacsBoxedValue));
+  bv->type = type;
+  bv->data = g_boxed_copy (type, boxed);
+
+  return make_user_ptr (cmacs_boxed_finalizer, bv);
+}
+
+CmacsBoxedValue *
+cmacs_boxed_unwrap (Lisp_Object obj)
+{
+  if (NILP (obj))
+    return NULL;
+  if (!USER_PTRP (obj))
+    return NULL;
+
+  struct Lisp_User_Ptr *uptr = XUSER_PTR (obj);
+  if (uptr->finalizer != cmacs_boxed_finalizer)
+    return NULL;
+  return (CmacsBoxedValue *)uptr->p;
+}
+
+bool
+cmacs_boxed_p (Lisp_Object obj)
+{
+  if (!USER_PTRP (obj))
+    return false;
+  struct Lisp_User_Ptr *uptr = XUSER_PTR (obj);
+  return uptr->finalizer == cmacs_boxed_finalizer;
+}
+
+/* ──────────────────────────────────────────────────────────────────── */
 /* GValue ↔ elisp marshaling                                           */
 /* ──────────────────────────────────────────────────────────────────── */
 

@@ -289,6 +289,139 @@ Embedding primitives:
 | =gowl-embed-focus=            | Give keyboard focus to an embedded client      |
 | =gowl-embed-expect-client=    | Mark next mapped client for embedding           |
 
+Sub-object accessors:
+
+| Primitive                      | Description                                    |
+|--------------------------------+------------------------------------------------|
+| =gowl-seat=                   | Return the compositor's =wlr_seat= object      |
+| =gowl-cursor=                 | Return the compositor's =wlr_cursor= object    |
+| =gowl-keyboard-group=         | Return the compositor's keyboard group         |
+| =gowl-idle-manager=           | Return the idle inhibit manager                |
+| =gowl-bar=                    | Return the embedded bar object (or nil)        |
+
+Swap and zoom:
+
+| Primitive                      | Description                                    |
+|--------------------------------+------------------------------------------------|
+| =gowl-swap-clients=           | Swap two clients' positions in the tiling order |
+| =gowl-zoom-client=            | Promote client to master (or swap with master) |
+
+Cursor and keyboard configuration:
+
+| Primitive                      | Description                                    |
+|--------------------------------+------------------------------------------------|
+| =gowl-cursor-mode=            | Return current cursor mode (string)            |
+| =gowl-set-cursor-mode=        | Set cursor mode (=move=, =resize=, =normal=)  |
+| =gowl-keyboard-repeat-rate=   | Return keyboard repeat rate (keys/sec)         |
+| =gowl-set-keyboard-repeat-rate= | Set keyboard repeat rate                     |
+| =gowl-keyboard-repeat-delay=  | Return keyboard repeat delay (ms)              |
+| =gowl-set-keyboard-repeat-delay= | Set keyboard repeat delay                   |
+
+IPC:
+
+| Primitive                      | Description                                    |
+|--------------------------------+------------------------------------------------|
+| =gowl-ipc-push-event=         | Push a compositor event to all IPC listeners   |
+
+Input injection:
+
+| Primitive                      | Description                                    |
+|--------------------------------+------------------------------------------------|
+| =gowl-send-key=               | Inject a key press/release event               |
+| =gowl-send-mouse-move=        | Inject a pointer motion event (x, y)           |
+| =gowl-send-mouse-button=      | Inject a mouse button press/release            |
+| =gowl-send-scroll=            | Inject a scroll event (dx, dy)                 |
+
+Screenshot:
+
+| Primitive                      | Description                                    |
+|--------------------------------+------------------------------------------------|
+| =gowl-screenshot-monitor=     | Capture a monitor to a PNG file, return path   |
+
+Clipboard:
+
+| Primitive                      | Description                                    |
+|--------------------------------+------------------------------------------------|
+| =gowl-clipboard-get=          | Return the clipboard contents (string)         |
+| =gowl-clipboard-set=          | Set the clipboard contents                     |
+| =gowl-primary-selection-get=  | Return the primary selection contents          |
+| =gowl-primary-selection-set=  | Set the primary selection contents             |
+
+Bar:
+
+| Primitive                      | Description                                    |
+|--------------------------------+------------------------------------------------|
+| =gowl-bar-height=             | Return bar height in pixels                    |
+| =gowl-set-bar-height=         | Set bar height in pixels                       |
+| =gowl-bar-visible-p=          | Return =t= if the bar is visible               |
+| =gowl-set-bar-visible=        | Show or hide the bar                           |
+
+* Compositor Signals
+
+Gowl emits GObject signals when compositor state changes.  These
+signals are exposed to Elisp via =gobject-connect= on the compositor
+object returned by =gowl-compositor=.
+
+| Signal            | Arguments                     | Description                          |
+|-------------------+-------------------------------+--------------------------------------|
+| =client-added=   | =client=                      | A new client has been mapped         |
+| =client-removed= | =client=                      | A client has been unmapped/destroyed |
+| =focus-changed=  | =client= (or =nil=)          | Keyboard focus has moved             |
+
+#+begin_src emacs-lisp
+;; Low-level signal connection:
+(gobject-connect (gowl-compositor) "focus-changed"
+  (lambda (client)
+    (message "Focus: %s" (gowl-client-info client))))
+#+end_src
+
+* Elisp Convenience Functions
+
+The Elisp layer provides convenience wrappers around compositor
+signals, making it easy to react to common events without manually
+calling =gobject-connect=.
+
+| Function                         | Description                                 |
+|----------------------------------+---------------------------------------------|
+| =cmacs-gowl-on-focus-changed=   | Register a callback for focus changes       |
+| =cmacs-gowl-on-client-added=    | Register a callback for new clients         |
+| =cmacs-gowl-on-client-removed=  | Register a callback for client removal      |
+
+#+begin_src emacs-lisp
+(cmacs-gowl-on-focus-changed
+  (lambda (client)
+    (when client
+      (message "Focused: %s" (alist-get 'title (gowl-client-info client))))))
+
+(cmacs-gowl-on-client-added
+  (lambda (client)
+    (message "New client: %s" (alist-get 'app-id (gowl-client-info client)))))
+#+end_src
+
+* Modes
+
+** cmacs-gowl-spatial-mode
+
+A minor mode that replaces the default tag-based workspace switching
+with spatial directional navigation.  Move focus between clients
+using directional keys (left, right, up, down) instead of tag
+numbers.  Useful for multi-monitor setups where spatial reasoning is
+more natural than numbered workspaces.
+
+#+begin_example
+M-x cmacs-gowl-spatial-mode
+#+end_example
+
+** cmacs-gowl-dashboard
+
+A dashboard buffer that displays a live overview of the compositor:
+connected monitors, active clients, tags, layout, and resource usage.
+Updates in real time via compositor signals.
+
+#+begin_example
+M-x cmacs-gowl-dashboard
+#+end_example
+
 * Customization
 
 #+begin_src emacs-lisp

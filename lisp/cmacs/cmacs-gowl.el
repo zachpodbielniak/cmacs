@@ -598,5 +598,118 @@ with the window and hides/shows with buffer switching."
     (gowl-arrange)
     (kill-buffer (current-buffer))))
 
+;;; Signal convenience wrappers
+
+(defvar cmacs-gowl--signal-handles nil
+  "Alist of (HANDLE . DESCRIPTION) for active signal connections.")
+
+(defun cmacs-gowl-on-focus-changed (callback)
+  "Connect CALLBACK to the compositor's \"focus-changed\" signal.
+CALLBACK is called with one argument, the newly focused client
+GObject (or nil when focus is cleared).
+Returns a handle for `cmacs-gowl-signal-disconnect'."
+  (let ((handle (gobject-connect (gowl-compositor)
+                                 "focus-changed" callback)))
+    (push (cons handle "focus-changed") cmacs-gowl--signal-handles)
+    handle))
+
+(defun cmacs-gowl-on-client-added (callback)
+  "Connect CALLBACK to the compositor's \"client-added\" signal.
+CALLBACK is called with one argument, the new client GObject.
+Returns a handle for `cmacs-gowl-signal-disconnect'."
+  (let ((handle (gobject-connect (gowl-compositor)
+                                 "client-added" callback)))
+    (push (cons handle "client-added") cmacs-gowl--signal-handles)
+    handle))
+
+(defun cmacs-gowl-on-client-removed (callback)
+  "Connect CALLBACK to the compositor's \"client-removed\" signal.
+CALLBACK is called with one argument, the departing client GObject.
+Returns a handle for `cmacs-gowl-signal-disconnect'."
+  (let ((handle (gobject-connect (gowl-compositor)
+                                 "client-removed" callback)))
+    (push (cons handle "client-removed") cmacs-gowl--signal-handles)
+    handle))
+
+(defun cmacs-gowl-on-tag-changed (callback &optional monitor)
+  "Connect CALLBACK to a monitor's \"tag-changed\" signal.
+CALLBACK is called with no arguments when the viewed tags change.
+MONITOR is a GowlMonitor object or nil for the focused monitor.
+Returns a handle for `cmacs-gowl-signal-disconnect'."
+  (let* ((mon (or monitor (gowl-focused-monitor)))
+         (handle (gobject-connect mon "tag-changed" callback)))
+    (push (cons handle "tag-changed") cmacs-gowl--signal-handles)
+    handle))
+
+(defun cmacs-gowl-on-layout-changed (callback &optional monitor)
+  "Connect CALLBACK to a monitor's \"layout-changed\" signal.
+CALLBACK is called with no arguments when the layout changes.
+MONITOR is a GowlMonitor object or nil for the focused monitor.
+Returns a handle for `cmacs-gowl-signal-disconnect'."
+  (let* ((mon (or monitor (gowl-focused-monitor)))
+         (handle (gobject-connect mon "layout-changed" callback)))
+    (push (cons handle "layout-changed") cmacs-gowl--signal-handles)
+    handle))
+
+(defun cmacs-gowl-on-idle (callback)
+  "Connect CALLBACK to the idle manager's \"idle\" signal.
+CALLBACK is called with no arguments when the idle timeout elapses.
+Returns a handle for `cmacs-gowl-signal-disconnect'."
+  (let ((mgr (gowl-idle-manager)))
+    (when mgr
+      (let ((handle (gobject-connect mgr "idle" callback)))
+        (push (cons handle "idle") cmacs-gowl--signal-handles)
+        handle))))
+
+(defun cmacs-gowl-on-resume (callback)
+  "Connect CALLBACK to the idle manager's \"resume\" signal.
+CALLBACK is called with no arguments when input resumes after idle.
+Returns a handle for `cmacs-gowl-signal-disconnect'."
+  (let ((mgr (gowl-idle-manager)))
+    (when mgr
+      (let ((handle (gobject-connect mgr "resume" callback)))
+        (push (cons handle "resume") cmacs-gowl--signal-handles)
+        handle))))
+
+(defun cmacs-gowl-signal-disconnect (handle)
+  "Disconnect a signal connection identified by HANDLE.
+HANDLE is a value previously returned by one of the
+`cmacs-gowl-on-*' functions."
+  (when handle
+    (gobject-disconnect handle)
+    (setq cmacs-gowl--signal-handles
+          (assq-delete-all handle cmacs-gowl--signal-handles))))
+
+
+;;; Interactive commands
+
+(defun cmacs-gowl-zoom ()
+  "Promote the focused client to master position."
+  (interactive)
+  (gowl-zoom-client nil))
+
+(defun cmacs-gowl-swap-master ()
+  "Swap the focused client with the master client."
+  (interactive)
+  (let* ((focused (gowl-focused-client))
+         (clients (gowl-list-clients))
+         (master (car clients)))
+    (when (and focused master (not (eq focused master)))
+      (gowl-swap-clients focused master))))
+
+(defun cmacs-gowl-set-repeat (rate delay)
+  "Set keyboard repeat RATE (keys/sec) and DELAY (ms)."
+  (interactive "nRepeat rate (keys/sec): \nnRepeat delay (ms): ")
+  (gowl-set-keyboard-repeat-rate rate)
+  (gowl-set-keyboard-repeat-delay delay))
+
+(defun cmacs-gowl-kill-ring-sync ()
+  "Push the top of the Emacs kill ring to the Wayland clipboard.
+This uses the IPC event channel to notify external clipboard tools."
+  (interactive)
+  (when (car kill-ring)
+    (gowl-ipc-push-event
+     (format "EVENT clipboard %s" (car kill-ring)))))
+
 (provide 'cmacs-gowl)
 ;;; cmacs-gowl.el ends here

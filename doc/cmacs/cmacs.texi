@@ -1825,6 +1825,189 @@ Give keyboard focus to an embedded client.
 Mark the next mapped client for embedding.
 @end table
 
+@noindent
+GObject sub-object accessors:
+
+@table @code
+@item gowl-seat
+Return the @code{GowlSeat} GObject for the compositor's seat.
+Signals: @code{focus-changed}.
+@item gowl-cursor
+Return the @code{GowlCursor} GObject.
+Signals: @code{motion}, @code{button}, @code{axis}.
+@item gowl-keyboard-group
+Return the @code{GowlKeyboardGroup} GObject.
+Signals: @code{key}, @code{modifiers}.
+Properties: @code{repeat-rate}, @code{repeat-delay}.
+@item gowl-idle-manager
+Return the @code{GowlIdleManager} GObject.
+Signals: @code{idle}, @code{resume}.
+Properties: @code{timeout}, @code{state}.
+@item gowl-bar
+Return the @code{GowlBar} GObject, or @code{nil} if no bar is active.
+Signals: @code{render}, @code{click}.
+Properties: @code{height}, @code{visible}.
+@end table
+
+@noindent
+Swap and zoom:
+
+@table @code
+@item gowl-swap-clients CLIENT1 CLIENT2
+Swap the tiling positions of @var{CLIENT1} and @var{CLIENT2}.
+@item gowl-zoom-client &optional CLIENT
+Promote @var{CLIENT} (or the focused client) to the master position.
+@end table
+
+@noindent
+Cursor and keyboard:
+
+@table @code
+@item gowl-cursor-mode
+Return the current cursor mode: 0 = normal, 1 = move, 2 = resize.
+@item gowl-set-cursor-mode MODE
+Set cursor mode to @var{MODE} (0, 1, or 2).
+@item gowl-keyboard-repeat-rate
+Return the keyboard repeat rate in keys per second.
+@item gowl-set-keyboard-repeat-rate RATE
+Set the keyboard repeat rate to @var{RATE} keys per second.
+@item gowl-keyboard-repeat-delay
+Return the keyboard repeat delay in milliseconds.
+@item gowl-set-keyboard-repeat-delay DELAY
+Set the keyboard repeat delay to @var{DELAY} milliseconds.
+@end table
+
+@noindent
+IPC:
+
+@table @code
+@item gowl-ipc-push-event STRING
+Push @var{STRING} as an event to all connected IPC subscribers.
+@end table
+
+@noindent
+Input injection:
+
+@table @code
+@item gowl-send-key KEYCODE PRESSED
+Inject a synthetic key event.  @var{PRESSED} is non-nil for key-down,
+nil for key-up.
+@item gowl-send-mouse-move X Y
+Move the cursor to absolute position (@var{X}, @var{Y}).
+@item gowl-send-mouse-button BUTTON PRESSED
+Inject a synthetic mouse button event.  @var{PRESSED} is non-nil for
+press, nil for release.
+@item gowl-send-scroll DX DY
+Inject a synthetic scroll event with deltas @var{DX} and @var{DY}.
+@end table
+
+@noindent
+Screenshots:
+
+@table @code
+@item gowl-screenshot-monitor &optional MONITOR
+Capture a screenshot of @var{MONITOR} (or the focused monitor).
+Returns a list @code{(@var{WIDTH} @var{HEIGHT} @var{DATA})} where
+@var{DATA} is a unibyte string of raw pixel data, or @code{nil} on
+failure.
+@end table
+
+@noindent
+Clipboard and primary selection:
+
+@table @code
+@item gowl-clipboard-get
+Return the current clipboard text as a string, or @code{nil}.
+@item gowl-clipboard-set TEXT
+Set the clipboard contents to @var{TEXT}.
+@item gowl-primary-selection-get
+Return the current primary selection text, or @code{nil}.
+@item gowl-primary-selection-set TEXT
+Set the primary selection to @var{TEXT}.
+@end table
+
+@noindent
+Bar control:
+
+@table @code
+@item gowl-bar-height
+Return the current bar height in pixels.
+@item gowl-set-bar-height HEIGHT
+Set the bar height to @var{HEIGHT} pixels.
+@item gowl-bar-visible-p
+Return non-nil if the bar is currently visible.
+@item gowl-set-bar-visible VISIBLE
+Show the bar if @var{VISIBLE} is non-nil, hide it otherwise.
+@end table
+
+@section Compositor Signals
+
+@cindex signals, compositor
+@cindex focus-changed signal
+@cindex client-added signal
+@cindex client-removed signal
+
+The @code{GowlCompositor} GObject emits the following signals.
+Connect to them using @code{cmacs-gi-signal-connect} or the
+convenience wrappers in @file{cmacs-gowl.el}.
+
+@table @code
+@item client-added
+Emitted when a new client maps.  The callback receives one argument:
+the @code{GowlClient} GObject.
+@item client-removed
+Emitted when a client unmaps.  The callback receives one argument:
+the @code{GowlClient} GObject.
+@item focus-changed
+Emitted when keyboard focus changes.  The callback receives one
+argument: the newly focused @code{GowlClient}, or @code{nil} if no
+client is focused.
+@end table
+
+@section Elisp Convenience Layer
+
+@cindex cmacs-gowl.el helpers
+
+The Elisp layer in @file{lisp/cmacs/cmacs-gowl.el} provides
+higher-level wrappers around the C primitives.
+
+@noindent
+Signal connection helpers:
+
+@table @code
+@item cmacs-gowl-on-focus-changed CALLBACK
+Connect @var{CALLBACK} to the @code{focus-changed} signal.
+Returns a handle for later disconnection.
+@item cmacs-gowl-on-client-added CALLBACK
+Connect @var{CALLBACK} to the @code{client-added} signal.
+@item cmacs-gowl-on-client-removed CALLBACK
+Connect @var{CALLBACK} to the @code{client-removed} signal.
+@item cmacs-gowl-on-idle CALLBACK
+Connect @var{CALLBACK} to the idle manager's @code{idle} signal.
+@item cmacs-gowl-on-resume CALLBACK
+Connect @var{CALLBACK} to the idle manager's @code{resume} signal.
+@item cmacs-gowl-signal-disconnect HANDLE
+Disconnect the signal previously connected via @var{HANDLE}.
+@end table
+
+@noindent
+Interactive commands:
+
+@table @code
+@item cmacs-gowl-zoom
+Promote the focused client to the master position.
+@item cmacs-gowl-swap-master
+Swap the focused client with the master client.
+@item cmacs-gowl-set-repeat RATE DELAY
+Interactively set the keyboard repeat rate and delay.
+@item cmacs-gowl-spatial-mode
+Minor mode that maps tags to Org files, providing a spatial workspace
+workflow.
+@item cmacs-gowl-dashboard
+Open a WM configuration dashboard buffer for inspecting and adjusting
+compositor settings.
+@end table
+
 @section Customization
 
 @table @code

@@ -112,12 +112,88 @@ Notifies the document of property changes so bindings update."
              cmacs-org-ex--document name value)))
         (forward-line 1)))))
 
+;;; Reactive re-evaluation
+
+(defvar-local cmacs-org-ex--reactive-widgets nil
+  "Alist of (ID . CONTEXT) for widgets with `:reactive t'.
+CONTEXT is a plist (:create-fn FN :props ALIST :width W :height H
+:subtype STR :marker M :widget W).")
+
+(defvar-local cmacs-org-ex--timers nil
+  "Alist of (ID . TIMER) for widgets with `:interval N'.")
+
+(defun cmacs-org-ex--reactive-register (id create-fn props width height
+                                           subtype marker widget)
+  "Register widget ID for reactive re-creation.
+CREATE-FN, PROPS, WIDTH, HEIGHT, SUBTYPE are the original creation
+parameters.  MARKER points to the widget's position in the buffer.
+WIDGET is the current live widget."
+  (let ((ctx (list :create-fn create-fn :props props
+                   :width width :height height
+                   :subtype subtype :marker marker
+                   :widget widget)))
+    (setf (alist-get id cmacs-org-ex--reactive-widgets) ctx)))
+
+(defun cmacs-org-ex--reactive-recreate (id)
+  "Tear down and re-create the widget identified by ID."
+  (when-let ((ctx (alist-get id cmacs-org-ex--reactive-widgets)))
+    (let ((create-fn (plist-get ctx :create-fn))
+          (props     (plist-get ctx :props))
+          (width     (plist-get ctx :width))
+          (height    (plist-get ctx :height))
+          (old       (plist-get ctx :widget)))
+      ;; Teardown old widget if it has a destroy method
+      (when (and old (fboundp 'org-ex-widget-destroy))
+        (ignore-errors (org-ex-widget-destroy old)))
+      ;; Re-create
+      (let ((new-widget (funcall create-fn props width height)))
+        (plist-put ctx :widget new-widget)
+        new-widget))))
+
+(defun cmacs-org-ex-setup-reactive (id widget props create-fn
+                                       width height subtype)
+  "Set up reactive re-evaluation for widget ID if `:reactive t'.
+Also sets up `:interval N' timer polling.
+Returns non-nil if reactive was configured."
+  (let ((reactive (string-equal-ignore-case
+                   (or (cdr (assoc "reactive" props)) "") "t"))
+        (interval (when-let ((v (cdr (assoc "interval" props))))
+                    (string-to-number v))))
+    (when (or reactive interval)
+      (let ((marker (copy-marker (point))))
+        (cmacs-org-ex--reactive-register
+         id create-fn props width height subtype marker widget)
+        ;; Subscribe to channel for reactive updates
+        (when reactive
+          (when-let ((sub-name (cdr (assoc "subscribe" props))))
+            (let ((channel (cmacs-org-ex--get-or-create-channel
+                            sub-name)))
+              (gobject-connect channel "message"
+                               (lambda (_value)
+                                 (cmacs-org-ex--reactive-recreate id))))))
+        ;; Set up interval timer
+        (when (and interval (> interval 0))
+          (let ((timer (run-with-timer
+                        interval interval
+                        (lambda ()
+                          (when (buffer-live-p (marker-buffer marker))
+                            (with-current-buffer (marker-buffer marker)
+                              (cmacs-org-ex--reactive-recreate id)))))))
+            (setf (alist-get id cmacs-org-ex--timers) timer)))
+        t))))
+
 ;;; Teardown
 
 (defun cmacs-org-ex-binding-teardown ()
-  "Clean up all bindings and channels in the current buffer."
+  "Clean up all bindings, channels, reactive widgets, and timers."
   (setq cmacs-org-ex--bindings nil)
-  (setq cmacs-org-ex--channels nil))
+  (setq cmacs-org-ex--channels nil)
+  ;; Cancel all timers
+  (dolist (entry cmacs-org-ex--timers)
+    (when (timerp (cdr entry))
+      (cancel-timer (cdr entry))))
+  (setq cmacs-org-ex--timers nil)
+  (setq cmacs-org-ex--reactive-widgets nil))
 
 ;;; Integration with cmacs-org-ex-mode
 

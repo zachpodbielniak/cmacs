@@ -219,6 +219,8 @@ extern struct xwidget *xwidget_from_id (uint32_t id);
 #ifdef HAVE_CMACS_GOWL
 extern Lisp_Object cmacs_xwidget_allocate_gowl (Lisp_Object buffer,
                                                   int width, int height);
+extern void xwidget_gowl_set_focused_view (struct xwidget_view *xv);
+extern void xwidget_gowl_clear_focused_view (void);
 #endif
 
 #ifdef HAVE_X_WINDOWS

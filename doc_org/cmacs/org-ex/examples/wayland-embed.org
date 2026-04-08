@@ -1,0 +1,86 @@
+#+TITLE: Org-Ex Wayland Client Embed Examples
+#+ORGEX: t
+#+STARTUP: showall
+
+* Wayland Client Embedding
+
+The =wayland= widget type spawns a Wayland client and embeds it
+directly into the Org document as a live, interactive surface.
+Input (keyboard, mouse) is forwarded to the embedded client via
+the gowl compositor's xwidget infrastructure.
+
+This requires the gowl compositor to be running (=gowl-running-p=
+returns non-nil).
+
+** Embedded Terminal
+
+Spawn a =gst= terminal emulator embedded in the document.  The
+terminal is fully interactive --- you can type commands, run
+programs, and see output:
+
+#+BEGIN_WIDGET wayland
+:command gst
+:width 800
+:height 400
+#+END_WIDGET
+
+** Embedded with Arguments
+
+Pass arguments to the spawned command.  Here we launch =gst=
+running =htop= for a live system monitor view:
+
+#+BEGIN_WIDGET wayland
+:command gst
+:args -e htop
+:width 800
+:height 300
+#+END_WIDGET
+
+** Small Utility Window
+
+Embed a calculator or other small utility.  The widget size
+constrains the client surface:
+
+#+BEGIN_WIDGET wayland
+:command gst
+:args -e bc -l
+:width 400
+:height 200
+#+END_WIDGET
+
+** Side-by-Side Terminals
+
+Use two wayland widgets to show related tasks next to each other.
+Each terminal operates independently:
+
+*** Build Output
+
+#+BEGIN_WIDGET wayland
+:command gst
+:args -e make -C /var/home/zach/source/projects/cmacs
+:width 500
+:height 300
+#+END_WIDGET
+
+*** Test Output
+
+#+BEGIN_WIDGET wayland
+:command gst
+:args -e make -C /var/home/zach/source/projects/cmacs check-cmacs
+:width 500
+:height 300
+#+END_WIDGET
+
+* Notes
+
+- The =:command= property is required.  It must be a program
+  available in =$PATH=.
+- The =:args -e= property is optional and provides additional
+  command-line arguments.
+- The widget initially shows a placeholder (the command text)
+  until the client maps its Wayland surface, at which point the
+  live surface replaces it.
+- Closing the Org buffer or removing the widget tears down the
+  embedded client.
+- This widget type only works when the gowl compositor is
+  running.  Outside of gowl, it signals an error.

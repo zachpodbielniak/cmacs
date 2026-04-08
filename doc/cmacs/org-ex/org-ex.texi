@@ -35,13 +35,14 @@ properties, and exported cleanly to HTML, PDF, and plain text.
 @menu
 * Overview::                    What Org-Ex adds to Org mode.
 * Widget Block Syntax::         Declaring widgets in Org buffers.
-* Built-in Widget Types::       slider, web, buffer, elisp, crispy, bacon.
+* Built-in Widget Types::       slider, web, buffer, elisp, crispy, bacon, wayland, image.
 * Reactive Binding::            Property bindings and pub/sub channels.
 * Channels::                    Named publish/subscribe messaging.
 * Inline Widgets::              Widget links inside paragraph text.
 * State Persistence::           Saving widget state across sessions.
 * Export Behavior::             HTML, PDF, and text export.
 * Custom Widget Types::         Creating new widget types.
+* JS Bridge::                   JavaScript to Elisp messaging for web widgets.
 * API Reference::               Elisp and C primitives.
 * Files::                       Source layout.
 @end menu
@@ -185,9 +186,16 @@ All widget types accept these properties:
 @table @code
 @item :width
 Width in pixels (default @code{cmacs-org-ex-default-width}, 400).
+May also be a percentage of the window pixel width (e.g.@: @code{50%})
+or the string @code{auto} to use the widget type's default.
+Percentage and auto values are resolved at display time.
+@xref{Responsive Sizing}.
 
 @item :height
 Height in pixels (default @code{cmacs-org-ex-default-height}, 200).
+May also be a percentage of the window pixel height (e.g.@: @code{50%})
+or the string @code{auto} to use the widget type's default.
+@xref{Responsive Sizing}.
 
 @item :bind
 Bind the widget to a document @code{#+PROPERTY:} line
@@ -203,6 +211,20 @@ Subscribe the widget to a named channel.
 @item :direction
 Binding direction: @code{both} (default), @code{to-widget}, or
 @code{from-widget}.
+
+@item :reactive
+When set to @code{t}, the widget is torn down and re-created whenever
+a value arrives on the channel specified by @code{:subscribe}.
+Works with any widget type.  @xref{Reactive Re-evaluation}.
+
+@item :interval
+Polling interval in seconds.  The widget is periodically torn down
+and re-created at this interval.  Useful for dashboard widgets that
+display live data.  @xref{Timer Polling}.
+
+@item :bridge
+When set to @code{t} on a @code{web} widget, enables the JavaScript
+to Elisp messaging bridge.  @xref{JS Bridge}.
 @end table
 
 @section Widget IDs
@@ -218,7 +240,7 @@ document registration, state persistence, and export.
 
 @cindex widget types, built-in
 
-Org-Ex ships with six built-in widget types, registered at load time
+Org-Ex ships with eight built-in widget types, registered at load time
 by @file{cmacs-org-ex-widgets.el}.
 
 @section slider
@@ -372,6 +394,68 @@ Shell command to evaluate (required).
 #+END_WIDGET
 @end example
 
+@section wayland
+
+@cindex wayland widget
+@cindex Wayland client embedding
+
+Embeds a live Wayland client inside the Org document.  The specified
+command is spawned as a subprocess, registered for embedding via the
+gowl compositor, and displayed as a gowl xwidget.
+
+@table @code
+@item :command
+The Wayland client executable to spawn (required).
+@item :args
+Additional command-line arguments passed to the client (optional).
+@end table
+
+@example
+#+BEGIN_WIDGET wayland
+:command foot
+:args --title embedded
+:width 800
+:height 400
+#+END_WIDGET
+@end example
+
+@noindent
+This widget type requires the gowl Wayland compositor to be running.
+The creation path is: spawn the command, register the client surface
+for embedding with gowl, then create a gowl xwidget to display the
+surface inline in the Org buffer.  If the gowl compositor is not
+active, widget creation fails with an error.
+
+@section image
+
+@cindex image widget
+
+Displays an image file inside the Org document.
+
+@table @code
+@item :file
+Path to the image file (required).  Relative paths are resolved
+relative to the Org file's directory.
+@item :scale
+Scale factor for the image (optional, default 1.0).
+@end table
+
+@example
+#+BEGIN_WIDGET image
+:file ./diagram.png
+:width 400
+:height 300
+:scale 1.0
+#+END_WIDGET
+@end example
+
+@noindent
+When Emacs native image support is available (built with image
+libraries), the image is displayed using the native image rendering
+path.  Otherwise, Org-Ex falls back to creating a @code{GtkImage}
+widget via GObject Introspection and embedding it through the
+@code{gtk-embed} xwidget path.
+
 @c ===================================================================
 @node Reactive Binding
 @chapter Reactive Binding
@@ -440,6 +524,105 @@ that connects the widget to the document.  The document monitors
 @code{org-ex-document-notify-property-changed} to propagate.  A
 re-entrancy guard (@code{cmacs-org-ex--inhibit-notify}) prevents
 infinite update loops.
+
+@anchor{Reactive Re-evaluation}
+@section Reactive Re-evaluation
+
+@cindex reactive re-evaluation
+@cindex widget, reactive
+
+When a widget specifies @code{:reactive t} together with
+@code{:subscribe @var{channel}}, it subscribes to reactive
+re-evaluation.  Each time a value is published on the subscribed
+channel, the widget is fully torn down and re-created from its block
+definition.  This is useful for widgets whose output depends on
+external state communicated via channels.
+
+@example
+#+BEGIN_WIDGET web
+:html <p>Updated at: <span id="ts"></span></p>
+:width 400
+:height 100
+:subscribe refresh
+:reactive t
+#+END_WIDGET
+@end example
+
+@noindent
+Any widget type supports @code{:reactive t}.  The re-creation uses the
+same property values from the block; to change properties dynamically,
+combine reactive re-evaluation with property bindings or compute new
+values in the widget's creation function.
+
+@anchor{Timer Polling}
+@section Timer Polling
+
+@cindex timer polling
+@cindex interval, widget
+@cindex dashboard widget
+
+The @code{:interval} property causes a widget to be periodically torn
+down and re-created at a fixed interval (in seconds).  This is useful
+for dashboard-style widgets that should refresh on a schedule without
+requiring an external event source.
+
+@example
+#+BEGIN_WIDGET bacon
+:code date +"%Y-%m-%d %H:%M:%S"
+:width 300
+:height 60
+:interval 5
+#+END_WIDGET
+@end example
+
+@noindent
+In this example, the bacon widget re-evaluates every 5 seconds,
+displaying the current date and time.  The timer is started when the
+widget is first created and stopped when the widget is torn down or the
+mode is disabled.
+
+@noindent
+@code{:interval} and @code{:reactive t} can be combined: the widget
+refreshes on both the timer schedule and channel messages.
+
+@anchor{Responsive Sizing}
+@section Responsive Sizing
+
+@cindex responsive sizing
+@cindex percentage width
+@cindex auto sizing
+
+In addition to absolute pixel values, the @code{:width} and
+@code{:height} properties accept percentage and auto values:
+
+@table @code
+@item @var{N}%
+A percentage of the Emacs window's pixel dimensions.  For example,
+@code{:width 50%} makes the widget half the window width.  The value
+is recalculated on window resize.
+
+@item auto
+Uses the widget type's default size or, for widgets with intrinsic
+sizing (e.g.@: images), the natural content size.
+@end table
+
+@example
+#+BEGIN_WIDGET web
+:url https://example.com
+:width 80%
+:height auto
+#+END_WIDGET
+
+#+BEGIN_WIDGET image
+:file ./photo.jpg
+:width 50%
+:height auto
+#+END_WIDGET
+@end example
+
+@noindent
+Responsive values are resolved at display time and updated when the
+window is resized via @code{window-size-change-functions}.
 
 @c ===================================================================
 @node Channels
@@ -742,6 +925,93 @@ For widgets that can produce HTML and text export output.
 @end table
 
 @c ===================================================================
+@node JS Bridge
+@chapter JS Bridge
+
+@cindex JS bridge
+@cindex JavaScript bridge
+@cindex WebKit message handler
+
+For @code{web} widgets created with @code{:bridge t}, Org-Ex provides a
+JavaScript to Elisp messaging bridge.  This allows JavaScript code
+running inside a WebKit web view to invoke Elisp handlers registered on
+the Emacs side.
+
+@section Enabling the Bridge
+
+Add @code{:bridge t} to a web widget block:
+
+@example
+#+BEGIN_WIDGET web
+:html <button onclick="sendMessage()">Click me</button><script>
+function sendMessage() @{
+  window.webkit.messageHandlers.cmacs.postMessage(
+    JSON.stringify(@{action: "clicked", data: "hello"@}));
+@}
+</script>
+:width 400
+:height 200
+:bridge t
+#+END_WIDGET
+@end example
+
+@noindent
+The bridge is only available for web widgets created through the GI
+path (@code{WebKitWebView} via GObject Introspection), which is the
+@code{gtk-embed} rendering path.
+
+@section JavaScript Side
+
+From JavaScript, send messages to Emacs using the WebKit message
+handler API:
+
+@example
+window.webkit.messageHandlers.cmacs.postMessage(
+  JSON.stringify(@{
+    action: "@var{handler-name}",
+    data: @var{payload}
+  @}));
+@end example
+
+@noindent
+The message must be a JSON string with at least an @code{action} field.
+The @code{data} field is optional and can be any JSON-serializable
+value.
+
+@section Elisp Side
+
+Register handlers using @code{cmacs-org-ex-bridge-register}:
+
+@example
+(cmacs-org-ex-bridge-register "clicked"
+  (lambda (data)
+    (message "Button clicked with data: %s" data)))
+@end example
+
+@noindent
+When the JavaScript side posts a message with @code{action} set to
+@code{"clicked"}, the registered Elisp function is called with the
+@code{data} value as its argument.
+
+@section Bridge API
+
+@table @code
+@item cmacs-org-ex-bridge-register ACTION HANDLER
+Register @var{HANDLER} (a function of one argument) to be called when a
+web widget sends a message with the given @var{ACTION} string.
+
+@item cmacs-org-ex-bridge-unregister ACTION
+Remove the handler for @var{ACTION}.
+
+@item cmacs-org-ex-bridge-handlers
+Return an alist of currently registered @code{(ACTION . HANDLER)}
+pairs.
+@end table
+
+@noindent
+The bridge file is @file{lisp/cmacs/cmacs-org-ex-bridge.el}.
+
+@c ===================================================================
 @node API Reference
 @chapter API Reference
 
@@ -867,6 +1137,15 @@ Export to text file with widget fallbacks.
 
 @item cmacs-org-ex-export-as-text
 Export to text buffer with widget fallbacks.
+
+@item cmacs-org-ex-bridge-register ACTION HANDLER
+Register a JavaScript bridge handler for @var{ACTION}.
+
+@item cmacs-org-ex-bridge-unregister ACTION
+Remove the bridge handler for @var{ACTION}.
+
+@item cmacs-org-ex-bridge-handlers
+Return an alist of registered bridge handlers.
 @end table
 
 @c ===================================================================
@@ -914,6 +1193,8 @@ Reactive binding setup.
 Export backends (HTML, text).
 @item lisp/cmacs/cmacs-org-ex-state.el
 Sidecar state persistence.
+@item lisp/cmacs/cmacs-org-ex-bridge.el
+JavaScript to Elisp messaging bridge for web widgets.
 @end table
 
 @bye

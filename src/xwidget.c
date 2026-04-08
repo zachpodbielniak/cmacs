@@ -2812,21 +2812,125 @@ webkit_script_dialog_cb (WebKitWebView *webview,
 
 
 #ifdef HAVE_PGTK
-/* Callback for "focus-in-event" on gtk-embed widgets.  When an embedded
-   GTK widget (e.g. WebKitWebView) receives focus — typically when the
-   frame regains focus after being idle — redirect focus back to the
-   Emacs edit widget so keyboard input continues to work.  */
+/* Callback for "focus-in-event" on gtk-embed widgets.  Distinguishes
+   between focus gained from user interaction (allow — needed for HTML
+   form inputs in WebKitWebView) and focus gained from frame
+   activation by the window manager (redirect to Emacs).  */
 static gboolean
 xwidget_gtk_embed_focus_in_cb (GtkWidget *widget,
                                GdkEventFocus *event,
                                gpointer user_data)
 {
+  /* When the user clicks on the widget (e.g. an HTML text input),
+     the current GTK event is a button press — let the widget keep
+     focus so keyboard input reaches WebKit for text editing.  When
+     the frame regains focus from the WM, the current event is a
+     focus-change or window-state event, or NULL.  */
+  GdkEvent *current = gtk_get_current_event ();
+  if (current != NULL)
+    {
+      GdkEventType type = current->type;
+      gdk_event_free (current);
+      if (type == GDK_BUTTON_PRESS || type == GDK_BUTTON_RELEASE)
+        return FALSE;  /* User click — allow focus.  */
+    }
+
+  /* Frame activation or programmatic focus — redirect to Emacs.  */
   struct frame *f = user_data;
   if (f != NULL && FRAME_GTK_WIDGET (f) != NULL)
     gtk_widget_grab_focus (FRAME_GTK_WIDGET (f));
-  return TRUE;  /* Stop propagation — we handled the focus event.  */
+  return TRUE;
+}
+
+/* Callback for "key-press-event" on gtk-embed widgets.
+   Escape returns keyboard focus to Emacs so the user can resume
+   normal editing after interacting with an embedded widget.  */
+static gboolean
+xwidget_gtk_embed_key_press_cb (GtkWidget *widget,
+                                GdkEventKey *event,
+                                gpointer user_data)
+{
+  if (event->keyval == GDK_KEY_Escape)
+    {
+      struct frame *f = user_data;
+      if (f != NULL && FRAME_GTK_WIDGET (f) != NULL)
+        gtk_widget_grab_focus (FRAME_GTK_WIDGET (f));
+      return TRUE;  /* Consume the Escape key.  */
+    }
+  return FALSE;  /* All other keys pass through to the widget.  */
 }
 #endif /* HAVE_PGTK */
+
+#if defined HAVE_CMACS_GOWL && defined HAVE_PGTK
+/* Gowl xwidget focus state.  Managed entirely by the event forwarder
+   below — we do NOT use gtk_widget_grab_focus because that triggers
+   spurious frame focus-out events via pgtk_focus_changed.
+
+   gowl_hovered_view: the view currently under the pointer (pointer focus).
+   gowl_focused_view: the view with keyboard focus (set on pointer enter,
+                       cleared on pointer leave or Escape).  */
+static struct xwidget_view *gowl_hovered_view;
+static struct xwidget_view *gowl_focused_view;
+
+/* Called from cmacs_gowl_xwidget_event_cb when the DrawingArea
+   receives GDK_ENTER_NOTIFY or GDK_BUTTON_PRESS.  The DrawingArea
+   gets pointer events directly from GDK (they don't reach the
+   edit_widget), so it must set the focus state here.  The edit_widget
+   forwarder below then uses this state for keyboard routing.  */
+void
+xwidget_gowl_set_focused_view (struct xwidget_view *xv)
+{
+  gowl_focused_view = xv;
+  gowl_hovered_view = xv;
+}
+
+/* Called from cmacs_gowl_xwidget_event_cb on GDK_LEAVE_NOTIFY.  */
+void
+xwidget_gowl_clear_focused_view (void)
+{
+  gowl_focused_view = NULL;
+  gowl_hovered_view = NULL;
+}
+
+/* Keyboard-only event forwarder on the edit_widget's "event" signal.
+   Pointer events go directly to the DrawingArea (GDK routes them
+   there), so this handler only intercepts keyboard events and
+   forwards them to the focused gowl view's Wayland client.
+
+   Returns TRUE to consume the key (preventing Emacs from processing
+   it), or FALSE to let Emacs handle the key normally.  */
+static gboolean
+xwidget_gowl_forward_event (GtkWidget *widget, GdkEvent *event,
+                            gpointer data)
+{
+  (void) widget;
+  (void) data;
+
+  /* Only intercept keyboard events. */
+  if (event->type != GDK_KEY_PRESS && event->type != GDK_KEY_RELEASE)
+    return FALSE;
+
+  if (gowl_focused_view == NULL)
+    return FALSE;  /* No gowl view focused — let Emacs handle. */
+
+  /* Escape: clear focus and return to Emacs. */
+  if (event->type == GDK_KEY_PRESS
+      && event->key.keyval == GDK_KEY_Escape)
+    {
+      /* The gowl handler clears wlr_seat keyboard focus. */
+      cmacs_gowl_xwidget_event_cb (gowl_focused_view->widget,
+                                   event, gowl_focused_view);
+      gowl_focused_view = NULL;
+      gowl_hovered_view = NULL;
+      return TRUE;
+    }
+
+  /* Forward other keys to the focused Wayland client. */
+  cmacs_gowl_xwidget_event_cb (gowl_focused_view->widget,
+                               event, gowl_focused_view);
+  return TRUE;
+}
+#endif /* HAVE_CMACS_GOWL && HAVE_PGTK */
 
 /* Initializes and does initial placement of an xwidget view on screen.  */
 static struct xwidget_view *
@@ -2876,14 +2980,20 @@ xwidget_init_view (struct xwidget *xww,
          itself natively without offscreen drawing.  */
       xv->widget = xww->gtk_embed_widget;
 
-      /* Prevent the embedded widget from taking keyboard focus.  */
-      gtk_widget_set_can_focus (xv->widget, FALSE);
+      /* Allow focus on user click (needed for HTML form inputs) but
+         the focus-in-event handler redirects focus back to Emacs
+         when the frame is activated by the window manager.  */
+      gtk_widget_set_can_focus (xv->widget, TRUE);
 
-      /* If the widget is a container (e.g. WebKitWebView), child
-         widgets may still grab focus.  Connect a focus-in-event
-         handler that redirects focus back to the Emacs edit widget.  */
+      /* Redirect focus back to Emacs on WM frame activation.  */
       g_signal_connect (G_OBJECT (xv->widget), "focus-in-event",
                         G_CALLBACK (xwidget_gtk_embed_focus_in_cb),
+                        s->f);
+
+      /* Escape key returns focus to Emacs after interacting with
+         the embedded widget (e.g. typing in an HTML form input).  */
+      g_signal_connect (G_OBJECT (xv->widget), "key-press-event",
+                        G_CALLBACK (xwidget_gtk_embed_key_press_cb),
                         s->f);
 
       gtk_container_add (GTK_CONTAINER (FRAME_GTK_WIDGET (s->f)),
@@ -2901,11 +3011,27 @@ xwidget_init_view (struct xwidget *xww,
 #ifdef HAVE_CMACS_GOWL
       if (EQ (xww->type, Qgowl))
         {
-          cmacs_gowl_xwidget_setup (xww, xv->widget);
+          cmacs_gowl_xwidget_setup (xww, xv->widget, s->f);
+          gtk_widget_set_can_focus (xv->widget, TRUE);
           g_signal_connect (xv->widget, "draw",
                             G_CALLBACK (cmacs_gowl_xwidget_draw_cb), xv);
           g_signal_connect (xv->widget, "event",
                             G_CALLBACK (cmacs_gowl_xwidget_event_cb), xv);
+
+          /* Connect a fallback event forwarder on the edit_widget.
+             If GDK's client-side window routing doesn't deliver
+             pointer events to the DrawingArea (e.g. stale GdkWindow
+             geometry after allocation lag), this handler intercepts
+             them at the GtkFixed level and forwards directly.  */
+          GtkWidget *fw = FRAME_GTK_WIDGET (s->f);
+          if (!g_object_get_data (G_OBJECT (fw), "gowl-event-fwd"))
+            {
+              g_signal_connect (G_OBJECT (fw), "event",
+                                G_CALLBACK (xwidget_gowl_forward_event),
+                                s->f);
+              g_object_set_data (G_OBJECT (fw), "gowl-event-fwd",
+                                 GINT_TO_POINTER (1));
+            }
         }
       else
 #endif
@@ -3605,6 +3731,13 @@ DEFUN ("delete-xwidget-view",
 #else
   {
     struct xwidget *xw = XXWIDGET (xv->model);
+#ifdef HAVE_CMACS_GOWL
+    /* Clear dangling focus pointers before destroying the view. */
+    if (gowl_hovered_view == xv)
+      gowl_hovered_view = NULL;
+    if (gowl_focused_view == xv)
+      gowl_focused_view = NULL;
+#endif
     if (EQ (xw->type, Qgtk_embed))
       {
         /* For gtk-embed, just remove from the container — the widget
@@ -4132,11 +4265,10 @@ The widget will be embedded directly in the Emacs frame when displayed.  */)
   /* Take a reference so the widget stays alive.  */
   xw->gtk_embed_widget = GTK_WIDGET (g_object_ref (obj));
 
-  /* Prevent the embedded widget from stealing keyboard focus from
-     Emacs.  Without this, GTK may route key events to the embedded
-     widget (e.g. WebKitWebView) instead of Emacs, causing keyboard
-     input to stop working after the frame loses and regains focus.  */
-  gtk_widget_set_can_focus (xw->gtk_embed_widget, FALSE);
+  /* Allow focus on user click (for HTML form inputs) — the
+     focus-in-event handler in xwidget_init_view redirects focus back
+     to Emacs on frame activation by the window manager.  */
+  gtk_widget_set_can_focus (xw->gtk_embed_widget, TRUE);
 #else
   error ("GObject bridge not available");
 #endif
@@ -4372,7 +4504,6 @@ xwidget_end_redisplay (struct window *w, struct glyph_matrix *matrix)
 {
   int i;
   int area;
-
   xwidget_start_redisplay ();
   /* Iterate desired glyph matrix of window here, hide gtk widgets
      not in the desired matrix.
@@ -4433,6 +4564,49 @@ xwidget_end_redisplay (struct window *w, struct glyph_matrix *matrix)
                 }
               else
                 {
+#ifdef HAVE_CMACS_GOWL
+		  /* Gowl xwidgets manage their own visibility
+		     through the compositor — the DrawingArea must
+		     stay visible for user interaction.  The
+		     redisplay glyph-matrix scan may not find the
+		     xwidget glyph (e.g. during incremental
+		     updates), but hiding the widget would make it
+		     permanently unclickable.  */
+		  if (EQ (XXWIDGET (xv->model)->type, Qgowl))
+		    {
+		      /* Only do GTK operations when the widget is
+			 actually hidden.  Calling gtk_fixed_move /
+			 gtk_widget_show_all / gdk_window_raise on
+			 every redisplay cycle causes GTK churn that
+			 disrupts keyboard focus on the DrawingArea. */
+		      if (xv->hidden)
+			{
+			  struct xwidget *xw = XXWIDGET (xv->model);
+			  int cw = xv->clip_right - xv->clip_left;
+			  int ch = xv->clip_bottom - xv->clip_top;
+			  if (cw <= 0) cw = xw->width;
+			  if (ch <= 0) ch = xw->height;
+
+			  gtk_widget_set_size_request (xv->widget, cw, ch);
+			  xwidget_show_view (xv);
+			  gtk_widget_queue_allocate (xv->widget);
+
+			  /* Force GdkWindow geometry immediately so
+			     GDK can route events to it.  */
+			  GdkWindow *gwin
+			    = gtk_widget_get_window (xv->widget);
+			  if (gwin)
+			    {
+			      gdk_window_move_resize (gwin,
+						      xv->x + xv->clip_left,
+						      xv->y + xv->clip_top,
+						      cw, ch);
+			      gdk_window_raise (gwin);
+			    }
+			}
+		      continue;
+		    }
+#endif
 #ifdef USE_GTK
                   xwidget_hide_view (xv);
 #elif defined NS_IMPL_COCOA

@@ -26,7 +26,8 @@ extern void cmacs_gowl_inhibit_parent_shortcuts (GowlCompositor *comp);
 struct xwidget;
 #include <gtk/gtk.h>
 extern void cmacs_gowl_xwidget_setup (struct xwidget *xw,
-                                       GtkWidget *view_widget);
+                                       GtkWidget *view_widget,
+                                       struct frame *frame);
 extern void cmacs_gowl_xwidget_teardown (struct xwidget *xw);
 extern gboolean cmacs_gowl_xwidget_draw_cb (GtkWidget *widget,
                                              cairo_t *cr,
@@ -34,6 +35,10 @@ extern gboolean cmacs_gowl_xwidget_draw_cb (GtkWidget *widget,
 extern gboolean cmacs_gowl_xwidget_event_cb (GtkWidget *widget,
                                               GdkEvent *event,
                                               gpointer data);
+
+/* Focus helpers — called from the event forwarder in xwidget.c. */
+extern void cmacs_gowl_xwidget_keyboard_enter (struct xwidget *xw);
+extern void cmacs_gowl_xwidget_keyboard_leave (void);
 
 #endif /* HAVE_CMACS_GOWL */
 #endif /* CMACS_GOWL_H */

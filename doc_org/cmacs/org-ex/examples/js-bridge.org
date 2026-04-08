@@ -1,0 +1,94 @@
+#+TITLE: Org-Ex JavaScript Bridge Examples
+#+ORGEX: t
+#+STARTUP: showall
+
+* JavaScript-to-Emacs Bridge
+
+The =:bridge t= property on a =web= widget enables bidirectional
+communication between JavaScript in the web page and Elisp.
+JavaScript calls:
+
+#+BEGIN_SRC javascript
+window.webkit.messageHandlers.cmacs.postMessage(
+  JSON.stringify({action: "my-action", data: "payload"}))
+#+END_SRC
+
+The message is received via WebKit's =WebKitUserContentManager=
+signal and dispatched to registered Elisp handlers.
+
+** Interactive Counter
+
+This example shows a web page with a button.  Each click sends a
+message to Emacs, which updates a buffer-local counter:
+
+#+BEGIN_WIDGET web
+:html <html><body style="font-family:sans-serif;padding:20px"><h2 id="count">Clicks: 0</h2><button onclick="send()" style="font-size:18px;padding:10px 20px">Click Me</button><script>var n=0;function send(){n++;document.getElementById('count').textContent='Clicks: '+n;window.webkit.messageHandlers.cmacs.postMessage(JSON.stringify({action:'click',data:''+n}));}</script></body></html>
+:bridge t
+:width 400
+:height 200
+#+END_WIDGET
+
+Register a handler in Emacs to react to clicks:
+
+#+ATTR_ORGEX: :eval t
+#+BEGIN_SRC emacs-lisp
+(require 'cmacs-org-ex-bridge)
+(cmacs-org-ex-bridge-register "click"
+  (lambda (data)
+    (message "Button clicked %s times" data)))
+#+END_SRC
+
+** Form Submission
+
+A web form that sends its data to Emacs for processing:
+
+#+BEGIN_WIDGET web
+:html <html><body style="font-family:sans-serif;padding:20px"><form onsubmit="send();return false"><input id="name" placeholder="Your name" style="font-size:16px;padding:5px"><button type="submit" style="font-size:16px;padding:5px 15px;margin-left:10px">Send</button></form><script>function send(){var v=document.getElementById('name').value;window.webkit.messageHandlers.cmacs.postMessage(JSON.stringify({action:'greet',data:v}));}</script></body></html>
+:bridge t
+:width 500
+:height 150
+#+END_WIDGET
+
+#+ATTR_ORGEX: :eval t
+#+BEGIN_SRC emacs-lisp
+(cmacs-org-ex-bridge-register "greet"
+  (lambda (data)
+    (message "Hello, %s!" data)))
+#+END_SRC
+
+** Status Dashboard
+
+A page that receives live status updates from Emacs.  The bridge
+is one-way (JS to Emacs) by default, but you can inject
+JavaScript back into the page using =gi-method= on the webview:
+
+#+BEGIN_WIDGET web
+:html <html><body style="font-family:sans-serif;padding:20px"><h2>System Status</h2><div id="status" style="font-size:14px;color:#666">Waiting for data...</div><button onclick="window.webkit.messageHandlers.cmacs.postMessage(JSON.stringify({action:'request-status',data:''}))" style="font-size:14px;padding:8px 16px">Refresh</button></body></html>
+:bridge t
+:width 500
+:height 200
+#+END_WIDGET
+
+#+ATTR_ORGEX: :eval t
+#+BEGIN_SRC emacs-lisp
+(cmacs-org-ex-bridge-register "request-status"
+  (lambda (_data)
+    (message "Status requested from web widget")))
+#+END_SRC
+
+* Notes
+
+- The =:bridge t= property must be set on the =web= widget for
+  the bridge to be active.
+- Messages must be JSON strings with =action= and =data= fields.
+- Register handlers with =cmacs-org-ex-bridge-register= before
+  the widget sends messages.
+- Add =#+ATTR_ORGEX: :eval t= above a =#+BEGIN_SRC emacs-lisp=
+  block to auto-evaluate it when org-ex scans the buffer.
+- The bridge uses WebKit's =WebKitUserContentManager= script
+  message handler mechanism.
+- Multiple web widgets can share the same bridge handlers --- the
+  =action= string determines dispatch.
+- Call =cmacs-org-ex-bridge-unregister= to remove a handler.
+- Call =cmacs-org-ex-bridge-teardown= to disconnect all bridge
+  signal connections.

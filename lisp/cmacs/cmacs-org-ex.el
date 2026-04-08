@@ -73,8 +73,54 @@
 (defvar-local cmacs-org-ex--widget-ids nil
   "Alist mapping widget ID strings to overlay objects.")
 
+(defvar-local cmacs-org-ex--wayland-overlay-map nil
+  "Alist mapping Wayland client PID (integer) to overlay.")
+
 (defvar-local cmacs-org-ex--inhibit-change nil
   "When non-nil, suppress `after-change-functions' processing.")
+
+(defvar-local cmacs-org-ex--size-specs nil
+  "Alist of (ID . (WIDTH-SPEC . HEIGHT-SPEC)) for responsive widgets.
+Specs can be pixel integers, percentage strings like \"50%\",
+or the string \"auto\".")
+
+;;; Responsive sizing
+
+(defun cmacs-org-ex--resolve-size-spec (spec default window-pixels)
+  "Resolve a size SPEC to pixels.
+SPEC can be an integer (pixels), a string like \"50%\" (percentage
+of WINDOW-PIXELS), \"auto\" (use DEFAULT), or a numeric string.
+Returns an integer pixel value."
+  (cond
+   ((integerp spec) spec)
+   ((null spec) default)
+   ((and (stringp spec) (string-suffix-p "%" spec))
+    (let ((pct (string-to-number (substring spec 0 -1))))
+      (max 1 (round (* (/ pct 100.0) window-pixels)))))
+   ((and (stringp spec) (string-equal-ignore-case spec "auto"))
+    default)
+   ((stringp spec)
+    (let ((n (string-to-number spec)))
+      (if (> n 0) n default)))
+   (t default)))
+
+(defun cmacs-org-ex--parse-size-spec (props)
+  "Parse width/height from PROPS, returning (WIDTH-SPEC . HEIGHT-SPEC).
+Preserves percentage strings and \"auto\" for responsive resolution."
+  (let ((w (cdr (assoc "width" props)))
+        (h (cdr (assoc "height" props))))
+    (cons (or w cmacs-org-ex-default-width)
+          (or h cmacs-org-ex-default-height))))
+
+(defun cmacs-org-ex--resolve-dimensions (width-spec height-spec)
+  "Resolve WIDTH-SPEC and HEIGHT-SPEC to pixel values.
+Uses the current window's pixel dimensions for percentage calculations."
+  (let ((win-w (window-body-width nil t))
+        (win-h (window-body-height nil t)))
+    (cons (cmacs-org-ex--resolve-size-spec
+           width-spec cmacs-org-ex-default-width win-w)
+          (cmacs-org-ex--resolve-size-spec
+           height-spec cmacs-org-ex-default-height win-h))))
 
 ;;; Block parsing
 
@@ -326,12 +372,11 @@ Returns the overlay, or nil on failure."
   (let* ((subtype (cmacs-org-ex--parse-block-subtype element))
          (props (cmacs-org-ex--parse-block-properties element))
          (id (cmacs-org-ex--generate-id subtype element))
-         (width (if-let ((w (cdr (assoc "width" props))))
-                    (string-to-number w)
-                  cmacs-org-ex-default-width))
-         (height (if-let ((h (cdr (assoc "height" props))))
-                     (string-to-number h)
-                   cmacs-org-ex-default-height)))
+         (size-spec (cmacs-org-ex--parse-size-spec props))
+         (dims (cmacs-org-ex--resolve-dimensions
+                (car size-spec) (cdr size-spec)))
+         (width (car dims))
+         (height (cdr dims)))
     (when subtype
       (condition-case err
           (let ((widget (cmacs-org-ex-create-widget
@@ -343,6 +388,18 @@ Returns the overlay, or nil on failure."
               (when (fboundp 'cmacs-org-ex-setup-bindings)
                 (cmacs-org-ex-setup-bindings
                  cmacs-org-ex--document widget props))
+              ;; Set up reactive re-evaluation / timers.
+              (when (fboundp 'cmacs-org-ex-setup-reactive)
+                (let ((create-fn (gethash subtype
+                                          cmacs-org-ex--widget-types)))
+                  (cmacs-org-ex-setup-reactive
+                   id widget props create-fn width height subtype)))
+              ;; Store size spec for responsive resize.
+              (when (or (stringp (car size-spec))
+                        (stringp (cdr size-spec)))
+                (setf (alist-get id cmacs-org-ex--size-specs
+                                 nil nil #'equal)
+                      size-spec))
               (let ((ov (cond
                          ;; GTK widget types: embed natively via gtk-embed.
                          ((and (cmacs-org-ex--gtk-embed-available-p)
@@ -370,6 +427,11 @@ Returns the overlay, or nil on failure."
                            element subtype props)))))
                 (push ov cmacs-org-ex--overlays)
                 (push (cons id ov) cmacs-org-ex--widget-ids)
+                ;; Track wayland widget overlays by PID for async
+                ;; replacement when the client maps.
+                (when-let ((pid-str (cdr (assoc "_wayland_pid" props))))
+                  (push (cons (string-to-number pid-str) ov)
+                        cmacs-org-ex--wayland-overlay-map))
                 ov)))
         (error
          (message "org-ex: failed to create %s widget: %s"
@@ -380,10 +442,38 @@ Returns the overlay, or nil on failure."
 
 ;;; Buffer scanning
 
+(defun cmacs-org-ex--eval-src-block-p (element)
+  "Return non-nil if src block ELEMENT should be auto-evaluated.
+A src block is auto-evaluated when it has the attribute
+  #+ATTR_ORGEX: :eval t
+and its language is emacs-lisp."
+  (and (string-equal-ignore-case
+        (or (org-element-property :language element) "") "emacs-lisp")
+       (let ((attrs (org-element-property :attr_orgex element)))
+         (cl-some (lambda (attr)
+                    (string-match-p ":eval\\b" attr))
+                  attrs))))
+
+(defun cmacs-org-ex--eval-src-block (element)
+  "Evaluate an emacs-lisp src block ELEMENT if marked for auto-eval."
+  (when (cmacs-org-ex--eval-src-block-p element)
+    (let ((code (org-element-property :value element)))
+      (when code
+        (condition-case err
+            (eval (car (read-from-string (concat "(progn " code ")"))) t)
+          (error
+           (message "org-ex: error evaluating src block: %s"
+                    (error-message-string err))))))))
+
 (defun cmacs-org-ex--scan-buffer ()
-  "Scan the current buffer for widget blocks and instantiate them."
+  "Scan the current buffer for widget blocks and instantiate them.
+Src blocks marked with #+ATTR_ORGEX: :eval t are evaluated first
+so that bridge handlers and other setup code are registered before
+widgets that depend on them are created."
   (cmacs-org-ex--remove-overlays)
   (let ((tree (org-element-parse-buffer)))
+    (org-element-map tree 'src-block
+      #'cmacs-org-ex--eval-src-block)
     (org-element-map tree 'special-block
       (lambda (element)
         (when (string-equal-ignore-case
