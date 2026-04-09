@@ -185,7 +185,7 @@ src/gl-stamp
 *.res
 *.so
 *.dylib
-core
+/core
 core.*[0-9]
 gmon.out
 native-lisp/
