@@ -403,25 +403,33 @@ control to Emacs."
   "Timer checking if embedded clients are still alive.")
 
 (defun gowl-embed--do-embed (client window buf)
-  "Embed CLIENT as xwidget content in BUF, displayed in WINDOW."
-  ;; Ensure the window shows the embed buffer — it may have been
-  ;; replaced by display-buffer or workspace management since spawn.
+  "Embed CLIENT into the compositor scene tree, displayed in WINDOW's area.
+The client's scene node is reparented into Emacs's scene tree and
+positioned at WINDOW's pixel coordinates.  The compositor renders it
+directly — no xwidget or GTK widget involved."
   (set-window-buffer window buf)
   (with-selected-window window
-    (let* ((w (window-body-width window t))
-           (h (window-body-height window t))
-           (xw (gowl-make-xwidget client w h buf)))
+    (let* ((edges (window-inside-absolute-pixel-edges window))
+           (x (nth 0 edges))
+           (y (nth 1 edges))
+           (w (- (nth 2 edges) x))
+           (h (- (nth 3 edges) y))
+           (emacs-client (gowl-emacs-client)))
       (setq-local gowl-embedded-client client)
       (setq-local gowl-embedded-client-pid (gowl-client-pid client))
-      (setq-local gowl-embed--xwidget xw)
       ;; Mark as embedded so arrange() skips it.
       (gowl-set-client-embedded client t)
       (gowl-set-client-border-width client 0)
-      (gowl-set-client-visible client nil)
-      ;; Insert xwidget as buffer content.
+      ;; Reparent into Emacs's scene tree — coordinates become frame-relative.
+      (when emacs-client
+        (gowl-embed-into client emacs-client))
+      ;; ENABLE the scene node — compositor renders it directly.
+      (gowl-set-client-visible client t)
+      ;; Position and clip at window coordinates.
+      (gowl-position-embedded client x y w h)
+      ;; Plain text placeholder — the compositor renders the surface on top.
       (let ((inhibit-read-only t))
-        (erase-buffer)
-        (insert (propertize " " 'display (list 'xwidget :xwidget xw))))
+        (erase-buffer))
       (gowl-embed--ensure-health-timer))))
 
 (defun gowl-embed--setup-buffer (buf command)
@@ -457,7 +465,7 @@ have an embed view yet (catches flatpak/sandbox launchers)."
       (dolist (entry (copy-sequence gowl-embed--pending))
         (let* ((pid (nth 0 entry))
                (window (nth 1 entry))
-               (buf (nth 2 entry))
+               (command (nth 2 entry))
                ;; Try PID match first.
                (client (seq-find
                         (lambda (c) (= (gowl-client-pid c) pid))
@@ -473,8 +481,12 @@ have an embed view yet (catches flatpak/sandbox launchers)."
                            clients))))
           (when client
             (setq gowl-embed--pending (delq entry gowl-embed--pending))
-            (when (and (window-live-p window) (buffer-live-p buf))
-              (gowl-embed--do-embed client window buf))))))))
+            (when (window-live-p window)
+              (let ((buf (generate-new-buffer
+                          (format "*gowl: %s*" command))))
+                (gowl-embed--setup-buffer buf command)
+                (gowl-embed--display-buffer buf window)
+                (gowl-embed--do-embed client window buf)))))))))
 
 (defun gowl-embed--start-pending-timer ()
   "Start the timer that checks for pending embeds."
@@ -523,25 +535,32 @@ whose underlying wlr resources may already be freed."
       ;; Only call gowl functions if the client is still alive.
       (when (and pid (memq pid live-pids))
         (condition-case nil
-            (gowl-close-client client)
+            (progn
+              (gowl-set-client-visible client nil)
+              (gowl-close-client client))
           (error nil)))
       (setq gowl-embedded-client nil)
-      (setq gowl-embedded-client-pid nil)
-      (setq gowl-embed--xwidget nil))))
+      (setq gowl-embedded-client-pid nil))))
 
 (defun gowl-embed--adjust-size (frame)
-  "Resize gowl xwidgets to match their window dimensions in FRAME."
+  "Reposition embedded clients to match their window dimensions in FRAME.
+Enforces single-window display first, then positions each embedded
+client's scene node at the window's pixel coordinates."
+  (gowl-embed--enforce-single-window)
   (walk-windows
    (lambda (win)
-     (when-let* ((xw (buffer-local-value 'gowl-embed--xwidget
-                                          (window-buffer win))))
-       (let ((w (window-body-width win t))
-             (h (window-body-height win t)))
-         (when (and (> w 0) (> h 0))
-           (xwidget-resize xw w h)
-           (when-let* ((client (buffer-local-value 'gowl-embedded-client
-                                                    (window-buffer win))))
-             (gowl-resize-client client w h))))))
+     (when-let* ((client (buffer-local-value 'gowl-embedded-client
+                                              (window-buffer win))))
+       (let* ((edges (window-inside-absolute-pixel-edges win))
+              (x (nth 0 edges))
+              (y (nth 1 edges))
+              (w (- (nth 2 edges) x))
+              (h (- (nth 3 edges) y)))
+         (if (and (> w 0) (> h 0))
+             (progn
+               (gowl-set-client-visible client t)
+               (gowl-position-embedded client x y w h))
+           (gowl-set-client-visible client nil)))))
    'no-minibuf frame))
 
 (defun gowl-embed--manage-dedication (&rest _)
@@ -555,28 +574,63 @@ This runs on `window-configuration-change-hook'."
         (when (and win (not (window-dedicated-p win)))
           (set-window-dedicated-p win 'gowl-embed))))))
 
+(defun gowl-embed--enforce-single-window (&rest _)
+  "Ensure each gowl-embed buffer is displayed in at most one window.
+When a split duplicates a gowl-embed buffer, switch the extra
+window to the previous buffer."
+  (let ((seen (make-hash-table :test #'eq)))
+    (walk-windows
+     (lambda (win)
+       (let ((buf (window-buffer win)))
+         (when (buffer-local-value 'gowl-embedded-client buf)
+           (if (gethash buf seen)
+               ;; Duplicate — switch this window away.
+               (switch-to-prev-buffer win)
+             (puthash buf t seen)))))
+     'no-minibuf)))
+
+(defun gowl-embed--on-buffer-change (&rest _)
+  "Show/hide embedded clients based on buffer visibility.
+When a buffer with an embedded client is displayed in a window,
+position the client at that window's coordinates.  When the buffer
+is no longer visible, hide the client's scene node."
+  (dolist (buf (buffer-list))
+    (when-let* ((client (buffer-local-value 'gowl-embedded-client buf)))
+      (let ((win (get-buffer-window buf t)))
+        (if win
+            (let* ((edges (window-inside-absolute-pixel-edges win))
+                   (x (nth 0 edges))
+                   (y (nth 1 edges))
+                   (w (- (nth 2 edges) x))
+                   (h (- (nth 3 edges) y)))
+              (when (and (> w 0) (> h 0))
+                (gowl-set-client-visible client t)
+                (gowl-position-embedded client x y w h)))
+          (gowl-set-client-visible client nil))))))
+
 (add-hook 'kill-buffer-hook #'gowl-embed--on-kill-buffer)
 (add-hook 'window-size-change-functions #'gowl-embed--adjust-size)
 (add-hook 'window-configuration-change-hook #'gowl-embed--manage-dedication)
+(add-hook 'window-configuration-change-hook #'gowl-embed--enforce-single-window)
+(add-hook 'window-buffer-change-functions #'gowl-embed--on-buffer-change)
+(add-hook 'window-selection-change-functions #'gowl-embed--on-buffer-change)
 
 ;;;###autoload
 (defun gowl-embed (command)
-  "Spawn COMMAND and embed it as xwidget content in the current window.
-The Wayland client renders as a gowl xwidget glyph — real buffer
-content managed by the Emacs display engine.  The surface resizes
+  "Spawn COMMAND and embed it in the current window via the compositor.
+The client's scene node is reparented into Emacs's scene tree and
+positioned at the window's pixel coordinates.  The surface resizes
 with the window and hides/shows with buffer switching."
   (interactive "sEmbed: ")
   (unless (gowl-running-p)
     (user-error "Gowl compositor is not running"))
   (let* ((pid (gowl-spawn command))
-         (buf (generate-new-buffer (format "*gowl: %s*" command)))
          (win (selected-window)))
     (gowl-prefloat-pid pid)
     (gowl-embed-expect-client)
-    (gowl-embed--setup-buffer buf command)
-    (gowl-embed--display-buffer buf win)
-    (push (list pid win buf) gowl-embed--pending)
-    (gowl-embed--start-pending-timer)))
+    (push (list pid win command) gowl-embed--pending)
+    (gowl-embed--start-pending-timer)
+    (message "Spawning %s…" command)))
 
 ;;;###autoload
 (defun gowl-embed-client (client)
@@ -608,11 +662,13 @@ with the window and hides/shows with buffer switching."
   (interactive)
   (when-let ((client gowl-embedded-client))
     (setq gowl-embedded-client nil)
-    (setq gowl-embed--xwidget nil)
+    (setq gowl-embedded-client-pid nil)
     (set-window-dedicated-p (selected-window) nil)
     (gowl-set-client-embedded client nil)
     (gowl-set-client-border-width client 1)
+    ;; Move back to TILE layer (index 2) for normal tiling.
     (gowl-reparent-client client 2)
+    (gowl-set-client-visible client t)
     (gowl-arrange)
     (kill-buffer (current-buffer))))
 

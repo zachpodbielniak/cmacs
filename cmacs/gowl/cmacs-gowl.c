@@ -1857,7 +1857,6 @@ control to Emacs.  CLIENT is a gowl client object. */)
   struct wlr_seat *seat;
   struct wlr_surface *surf;
   struct wlr_keyboard *kb;
-  struct gowl_embed_view *view;
 
   if (cmacs_gowl_compositor == NULL)
     error ("gowl compositor not running");
@@ -1868,14 +1867,6 @@ control to Emacs.  CLIENT is a gowl client object. */)
   surf = gowl_client_get_wlr_surface (c);
   if (seat == NULL || surf == NULL)
     return Qnil;
-
-  /* Also grab GTK focus for the drawing area if it exists. */
-  if (embed_views != NULL)
-    {
-      view = g_hash_table_lookup (embed_views, c);
-      if (view != NULL && view->widget != NULL)
-        gtk_widget_grab_focus (view->widget);
-    }
 
   pthread_mutex_lock (&cmacs_gowl_mutex);
   kb = wlr_seat_get_keyboard (seat);

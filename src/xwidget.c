@@ -3303,6 +3303,27 @@ x_draw_xwidget_glyph_string (struct glyph_string *s)
       xv->clip_left = clip_left;
     }
 
+#if defined HAVE_PGTK && defined HAVE_CMACS_GOWL
+  /* Force an immediate GDK window resize for gowl xwidgets.
+     The GTK allocation cycle is deferred, so the old-size GDK window
+     can paint beyond the new clip bounds.  Synchronous move_resize
+     avoids the visual overflow (EWM uses the same pixel-precise
+     positioning approach via compositor layout entries).  */
+  if (EQ (xww->type, Qgowl) && xv->widget != NULL)
+    {
+      GdkWindow *gwin = gtk_widget_get_window (xv->widget);
+      if (gwin)
+	{
+	  int cw = clip_right - clip_left;
+	  int ch = clip_bottom - clip_top;
+	  if (cw > 0 && ch > 0)
+	    gdk_window_move_resize (gwin,
+				    x + clip_left, y + clip_top,
+				    cw, ch);
+	}
+    }
+#endif
+
   /* If emacs wants to repaint the area where the widget lives, queue
      a redraw.  It seems its possible to get out of sync with emacs
      redraws so emacs background sometimes shows up instead of the
