@@ -85,6 +85,11 @@ struct gowl_embed_view
 
 static GHashTable *embed_views = NULL; /* GowlClient* -> gowl_embed_view* */
 
+/* The direct gowl-embed view that currently owns keyboard focus
+   (click-to-focus model), or NULL.  Prevents xwidget focus-follows-mouse
+   leave events from clearing compositor keyboard focus.  */
+static struct gowl_embed_view *direct_embed_kb_owner;
+
 /* ── ESC escape-hatch state (used by compositor intercept) ──────────── */
 enum { EMBED_KB_NORMAL, EMBED_KB_ESC_PENDING };
 static int cmacs_embed_key_state = EMBED_KB_NORMAL;
@@ -296,6 +301,7 @@ gowl_embed_view_event (GtkWidget *widget, GdkEvent *event, gpointer data)
         wl_display_flush_clients (
           gowl_compositor_get_wl_display (cmacs_gowl_compositor));
         pthread_mutex_unlock (&cmacs_gowl_mutex);
+        direct_embed_kb_owner = view;
         return TRUE;
       }
 
@@ -354,6 +360,7 @@ gowl_embed_view_event (GtkWidget *widget, GdkEvent *event, gpointer data)
             wl_display_flush_clients (
               gowl_compositor_get_wl_display (cmacs_gowl_compositor));
             pthread_mutex_unlock (&cmacs_gowl_mutex);
+            direct_embed_kb_owner = NULL;
             return TRUE;
           }
 
@@ -383,6 +390,9 @@ gowl_embed_view_free (struct gowl_embed_view *view)
 {
   if (view == NULL)
     return;
+
+  if (view == direct_embed_kb_owner)
+    direct_embed_kb_owner = NULL;
 
   wl_list_remove (&view->commit.link);
 
@@ -416,6 +426,9 @@ gowl_embed_view_free (struct gowl_embed_view *view)
 void
 cmacs_gowl_xwidget_keyboard_enter (struct xwidget *xw)
 {
+  /* Xwidget focus-follows-mouse overrides direct-embed click-to-focus. */
+  direct_embed_kb_owner = NULL;
+
   struct gowl_embed_view *gview = xw->gowl_view;
   if (gview == NULL)
     return;
@@ -446,6 +459,12 @@ cmacs_gowl_xwidget_keyboard_enter (struct xwidget *xw)
 void
 cmacs_gowl_xwidget_keyboard_leave (void)
 {
+  /* Don't clear compositor keyboard focus if a direct gowl-embed view
+     owns it (click-to-focus model).  The xwidget's focus-follows-mouse
+     leave should not interfere with a persistent click-based focus.  */
+  if (direct_embed_kb_owner != NULL)
+    return;
+
   struct wlr_seat *seat
     = gowl_compositor_get_wlr_seat (cmacs_gowl_compositor);
   if (seat == NULL)
