@@ -28,7 +28,7 @@ WORKDIR /build/cmacs
 
 # Remove .git pointer (submodule COPY artifact) and build bundled deps
 RUN rm -f .git \
-    && for dep in crispy bacon gowl; do \
+    && for dep in crispy bacon gowl podomation; do \
            if [ -d "deps/${dep}" ]; then \
                make -C "deps/${dep}" clean all PREFIX=/usr; \
                make -C "deps/${dep}" install PREFIX=/usr; \
