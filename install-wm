@@ -61,7 +61,7 @@ fi
 DESKTOP_ENTRY="[Desktop Entry]
 Name=CMacs
 Comment=CMacs — Emacs as a Wayland Compositor
-Exec=${EMACS_BIN} --gowl
+Exec=/bin/bash -lc 'exec ${EMACS_BIN} --gowl'
 Type=Application
 DesktopNames=CMacs"
 

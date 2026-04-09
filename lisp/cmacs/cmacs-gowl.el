@@ -620,6 +620,21 @@ is no longer visible, hide the client's scene node."
 (add-hook 'window-buffer-change-functions #'gowl-embed--on-buffer-change)
 (add-hook 'window-selection-change-functions #'gowl-embed--on-buffer-change)
 
+(defun gowl-embed--prepare-command (command)
+  "Prepare COMMAND for Wayland embedding.
+Injects --socket=wayland and toolkit env vars into flatpak run
+commands so the sandboxed app can connect to gowl's Wayland socket."
+  (if (string-match "\\bflatpak run\\b" command)
+      (replace-regexp-in-string
+       "\\(flatpak run\\)"
+       (concat "\\1 --socket=wayland"
+               " --env=ELECTRON_OZONE_PLATFORM_HINT=auto"
+               " --env=GDK_BACKEND=wayland"
+               " --env=QT_QPA_PLATFORM=wayland"
+               " --env=MOZ_ENABLE_WAYLAND=1")
+       command nil nil)
+    command))
+
 ;;;###autoload
 (defun gowl-embed (command)
   "Spawn COMMAND and embed it in the current window via the compositor.
@@ -629,7 +644,8 @@ with the window and hides/shows with buffer switching."
   (interactive "sEmbed: ")
   (unless (gowl-running-p)
     (user-error "Gowl compositor is not running"))
-  (let* ((pid (gowl-spawn command))
+  (let* ((command (gowl-embed--prepare-command command))
+         (pid (gowl-spawn command))
          (win (selected-window)))
     (gowl-prefloat-pid pid)
     (gowl-embed-expect-client)

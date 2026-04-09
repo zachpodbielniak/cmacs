@@ -1306,9 +1306,11 @@ Updates the scene graph and sends a configure to the client. */)
 
   c = gowl_resolve_client (client);
   gowl_client_get_geometry (c, &cx, &cy, &cw, &ch);
+  pthread_mutex_lock (&cmacs_gowl_mutex);
   gowl_compositor_resize_client (cmacs_gowl_compositor, c,
                                  (gint) XFIXNUM (x), (gint) XFIXNUM (y),
                                  cw, ch);
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
   return Qnil;
 }
 
@@ -1327,9 +1329,11 @@ Updates the scene graph and sends a configure to the client. */)
 
   c = gowl_resolve_client (client);
   gowl_client_get_geometry (c, &cx, &cy, &cw, &ch);
+  pthread_mutex_lock (&cmacs_gowl_mutex);
   gowl_compositor_resize_client (cmacs_gowl_compositor, c,
                                  cx, cy,
                                  (gint) XFIXNUM (w), (gint) XFIXNUM (h));
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
   return Qnil;
 }
 
@@ -1464,12 +1468,21 @@ Returns the child process PID as an integer. */)
       xsignal1 (Qgowl_error, msg);
     }
 
-  /* Build environment: inherit current env, override WAYLAND_DISPLAY. */
+  /* Build environment: inherit current env, set Wayland hints. */
   socket = gowl_compositor_get_socket_name (cmacs_gowl_compositor);
   {
     gchar **parent_env = g_get_environ ();
     envp = g_environ_setenv (parent_env, "WAYLAND_DISPLAY",
                              socket ? socket : "", TRUE);
+    /* Toolkit-specific Wayland hints — ensures Electron, GTK, Qt,
+       and SDL apps connect to this compositor's Wayland socket. */
+    envp = g_environ_setenv (envp, "ELECTRON_OZONE_PLATFORM_HINT",
+                             "wayland", TRUE);
+    envp = g_environ_setenv (envp, "MOZ_ENABLE_WAYLAND", "1", TRUE);
+    envp = g_environ_setenv (envp, "QT_QPA_PLATFORM", "wayland", TRUE);
+    envp = g_environ_setenv (envp, "SDL_VIDEODRIVER", "wayland", TRUE);
+    envp = g_environ_setenv (envp, "GDK_BACKEND", "wayland", TRUE);
+    envp = g_environ_unsetenv (envp, "DISPLAY");
   }
 
   if (!g_spawn_async (NULL, argv, envp,
@@ -1504,9 +1517,13 @@ DEFUN ("gowl-set-client-border-width",
        doc: /* Set CLIENT border width to WIDTH pixels. */)
   (Lisp_Object client, Lisp_Object width)
 {
+  GowlClient *c;
+
   CHECK_FIXNAT (width);
-  gowl_client_set_border_width (gowl_resolve_client (client),
-                                (guint) XFIXNAT (width));
+  c = gowl_resolve_client (client);
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  gowl_client_set_border_width (c, (guint) XFIXNAT (width));
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
   return Qnil;
 }
 
@@ -1517,8 +1534,10 @@ DEFUN ("gowl-set-client-visible",
 Non-nil VISIBLE shows the client, nil hides it. */)
   (Lisp_Object client, Lisp_Object visible)
 {
-  gowl_client_set_visible (gowl_resolve_client (client),
-                           !NILP (visible));
+  GowlClient *c = gowl_resolve_client (client);
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  gowl_client_set_visible (c, !NILP (visible));
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
   return Qnil;
 }
 
@@ -1534,7 +1553,11 @@ a client's floating state. */)
   GOWL_CHECK_RUNNING ();
   mon = gowl_get_focused_monitor ();
   if (mon != NULL)
-    gowl_compositor_arrange (cmacs_gowl_compositor, mon);
+    {
+      pthread_mutex_lock (&cmacs_gowl_mutex);
+      gowl_compositor_arrange (cmacs_gowl_compositor, mon);
+      pthread_mutex_unlock (&cmacs_gowl_mutex);
+    }
   return Qnil;
 }
 
@@ -1560,11 +1583,15 @@ LAYER is an integer index: 0=bg, 1=bottom, 2=tile, 3=float,
 4=top, 5=fs, 6=overlay, 7=block. */)
   (Lisp_Object client, Lisp_Object layer)
 {
+  GowlClient *c;
+
   GOWL_CHECK_RUNNING ();
   CHECK_FIXNAT (layer);
-  gowl_compositor_reparent_client (cmacs_gowl_compositor,
-                                   gowl_resolve_client (client),
+  c = gowl_resolve_client (client);
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  gowl_compositor_reparent_client (cmacs_gowl_compositor, c,
                                    (gint) XFIXNAT (layer));
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
   return Qnil;
 }
 
@@ -1627,16 +1654,20 @@ Directly sets the scene node position and sends an XDG configure. */)
   (Lisp_Object client, Lisp_Object x, Lisp_Object y,
    Lisp_Object w, Lisp_Object h)
 {
+  GowlClient *c;
+
   GOWL_CHECK_RUNNING ();
   CHECK_FIXNUM (x);
   CHECK_FIXNUM (y);
   CHECK_FIXNUM (w);
   CHECK_FIXNUM (h);
+  c = gowl_resolve_client (client);
+  pthread_mutex_lock (&cmacs_gowl_mutex);
   gowl_compositor_position_embedded (
-    cmacs_gowl_compositor,
-    gowl_resolve_client (client),
+    cmacs_gowl_compositor, c,
     (gint) XFIXNUM (x), (gint) XFIXNUM (y),
     (gint) XFIXNUM (w), (gint) XFIXNUM (h));
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
   return Qnil;
 }
 
