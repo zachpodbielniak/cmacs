@@ -394,7 +394,7 @@ control to Emacs."
   "The xwidget displaying the embedded client, or nil.")
 
 (defvar gowl-embed--pending nil
-  "Alist of (PID . WINDOW) for spawned clients awaiting map.")
+  "List of (PID WINDOW BUFFER) for spawned clients awaiting map.")
 
 (defvar gowl-embed--pending-timer nil
   "Timer polling for pending embeds.")
@@ -402,11 +402,13 @@ control to Emacs."
 (defvar gowl-embed--health-timer nil
   "Timer checking if embedded clients are still alive.")
 
-(defun gowl-embed--do-embed (client window)
-  "Embed CLIENT as xwidget content in WINDOW's buffer."
+(defun gowl-embed--do-embed (client window buf)
+  "Embed CLIENT as xwidget content in BUF, displayed in WINDOW."
+  ;; Ensure the window shows the embed buffer — it may have been
+  ;; replaced by display-buffer or workspace management since spawn.
+  (set-window-buffer window buf)
   (with-selected-window window
-    (let* ((buf (window-buffer window))
-           (w (window-body-width window t))
+    (let* ((w (window-body-width window t))
            (h (window-body-height window t))
            (xw (gowl-make-xwidget client w h buf)))
       (setq-local gowl-embedded-client client)
@@ -432,10 +434,12 @@ control to Emacs."
                           'face 'shadow)))))
 
 (defun gowl-embed--display-buffer (buf window)
-  "Display BUF in WINDOW.
-The gowl xwidget manages its own visibility through
-`xwidget_end_redisplay' — no window dedication is needed."
+  "Display BUF in WINDOW with soft dedication.
+Soft dedication (non-t) protects the window from `display-buffer'
+hijacking but allows `set-window-buffer' and workspace management
+to replace the buffer (clearing the dedication)."
   (set-window-buffer window buf)
+  (set-window-dedicated-p window 'gowl-embed)
   (when (bound-and-true-p persp-mode)
     (persp-add-buffer buf)))
 
@@ -451,8 +455,9 @@ have an embed view yet (catches flatpak/sandbox launchers)."
           (setq gowl-embed--pending-timer nil)))
     (let ((clients (gowl-list-clients)))
       (dolist (entry (copy-sequence gowl-embed--pending))
-        (let* ((pid (car entry))
-               (window (cdr entry))
+        (let* ((pid (nth 0 entry))
+               (window (nth 1 entry))
+               (buf (nth 2 entry))
                ;; Try PID match first.
                (client (seq-find
                         (lambda (c) (= (gowl-client-pid c) pid))
@@ -468,8 +473,8 @@ have an embed view yet (catches flatpak/sandbox launchers)."
                            clients))))
           (when client
             (setq gowl-embed--pending (delq entry gowl-embed--pending))
-            (when (window-live-p window)
-              (gowl-embed--do-embed client window))))))))
+            (when (and (window-live-p window) (buffer-live-p buf))
+              (gowl-embed--do-embed client window buf))))))))
 
 (defun gowl-embed--start-pending-timer ()
   "Start the timer that checks for pending embeds."
@@ -509,10 +514,12 @@ whose underlying wlr resources may already be freed."
 (defun gowl-embed--on-kill-buffer ()
   "Close the embedded client when its buffer is killed."
   (when gowl-embedded-client
-    (let ((client gowl-embedded-client)
+    (let ((win (get-buffer-window (current-buffer) t))
+          (client gowl-embedded-client)
           (pid gowl-embedded-client-pid)
           (live-pids (when (gowl-running-p)
                        (mapcar #'gowl-client-pid (gowl-list-clients)))))
+      (when win (set-window-dedicated-p win nil))
       ;; Only call gowl functions if the client is still alive.
       (when (and pid (memq pid live-pids))
         (condition-case nil
@@ -537,8 +544,20 @@ whose underlying wlr resources may already be freed."
              (gowl-resize-client client w h))))))
    'no-minibuf frame))
 
+(defun gowl-embed--manage-dedication (&rest _)
+  "Manage soft dedication for gowl-embed windows.
+Re-establish soft dedication when a gowl-embed buffer is displayed
+in a window without it (e.g. after workspace restore clears it).
+This runs on `window-configuration-change-hook'."
+  (dolist (buf (buffer-list))
+    (when (buffer-local-value 'gowl-embedded-client buf)
+      (let ((win (get-buffer-window buf t)))
+        (when (and win (not (window-dedicated-p win)))
+          (set-window-dedicated-p win 'gowl-embed))))))
+
 (add-hook 'kill-buffer-hook #'gowl-embed--on-kill-buffer)
 (add-hook 'window-size-change-functions #'gowl-embed--adjust-size)
+(add-hook 'window-configuration-change-hook #'gowl-embed--manage-dedication)
 
 ;;;###autoload
 (defun gowl-embed (command)
@@ -556,7 +575,7 @@ with the window and hides/shows with buffer switching."
     (gowl-embed-expect-client)
     (gowl-embed--setup-buffer buf command)
     (gowl-embed--display-buffer buf win)
-    (push (cons pid win) gowl-embed--pending)
+    (push (list pid win buf) gowl-embed--pending)
     (gowl-embed--start-pending-timer)))
 
 ;;;###autoload
@@ -582,7 +601,7 @@ with the window and hides/shows with buffer switching."
          (win (selected-window)))
     (gowl-embed--setup-buffer buf title)
     (gowl-embed--display-buffer buf win)
-    (gowl-embed--do-embed client win)))
+    (gowl-embed--do-embed client win buf)))
 
 (defun gowl-unembed ()
   "Release the embedded client from the current buffer."
@@ -590,6 +609,7 @@ with the window and hides/shows with buffer switching."
   (when-let ((client gowl-embedded-client))
     (setq gowl-embedded-client nil)
     (setq gowl-embed--xwidget nil)
+    (set-window-dedicated-p (selected-window) nil)
     (gowl-set-client-embedded client nil)
     (gowl-set-client-border-width client 1)
     (gowl-reparent-client client 2)
