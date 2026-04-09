@@ -40,5 +40,8 @@ extern gboolean cmacs_gowl_xwidget_event_cb (GtkWidget *widget,
 extern void cmacs_gowl_xwidget_keyboard_enter (struct xwidget *xw);
 extern void cmacs_gowl_xwidget_keyboard_leave (void);
 
+/* Return the GtkWidget from an xwidget's gowl embed view, or NULL. */
+extern GtkWidget *cmacs_gowl_xwidget_get_widget (struct xwidget *xw);
+
 #endif /* HAVE_CMACS_GOWL */
 #endif /* CMACS_GOWL_H */

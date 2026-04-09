@@ -432,9 +432,10 @@ control to Emacs."
                           'face 'shadow)))))
 
 (defun gowl-embed--display-buffer (buf window)
-  "Display BUF in WINDOW and mark it dedicated."
+  "Display BUF in WINDOW.
+The gowl xwidget manages its own visibility through
+`xwidget_end_redisplay' — no window dedication is needed."
   (set-window-buffer window buf)
-  (set-window-dedicated-p window t)
   (when (bound-and-true-p persp-mode)
     (persp-add-buffer buf)))
 
@@ -508,12 +509,10 @@ whose underlying wlr resources may already be freed."
 (defun gowl-embed--on-kill-buffer ()
   "Close the embedded client when its buffer is killed."
   (when gowl-embedded-client
-    (let ((win (get-buffer-window (current-buffer) t))
-          (client gowl-embedded-client)
+    (let ((client gowl-embedded-client)
           (pid gowl-embedded-client-pid)
           (live-pids (when (gowl-running-p)
                        (mapcar #'gowl-client-pid (gowl-list-clients)))))
-      (when win (set-window-dedicated-p win nil))
       ;; Only call gowl functions if the client is still alive.
       (when (and pid (memq pid live-pids))
         (condition-case nil
@@ -591,7 +590,6 @@ with the window and hides/shows with buffer switching."
   (when-let ((client gowl-embedded-client))
     (setq gowl-embedded-client nil)
     (setq gowl-embed--xwidget nil)
-    (set-window-dedicated-p (selected-window) nil)
     (gowl-set-client-embedded client nil)
     (gowl-set-client-border-width client 1)
     (gowl-reparent-client client 2)

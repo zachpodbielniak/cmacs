@@ -3005,6 +3005,22 @@ xwidget_init_view (struct xwidget *xww,
     }
   else
     {
+#ifdef HAVE_CMACS_GOWL
+      /* For gowl xwidgets, reuse the existing widget from the gowl
+	 embed view if one exists (e.g. after tab/workspace switch
+	 deleted the old xwidget view but kept the widget alive).  */
+      if (EQ (xww->type, Qgowl))
+	{
+	  GtkWidget *existing = cmacs_gowl_xwidget_get_widget (xww);
+	  if (existing != NULL)
+	    {
+	      xv->widget = existing;
+	      gtk_widget_show_all (xv->widget);
+	      goto gowl_skip_widget_create;
+	    }
+	}
+#endif
+
       xv->widget = gtk_drawing_area_new ();
       gtk_widget_set_app_paintable (xv->widget, TRUE);
       gtk_widget_add_events (xv->widget, GDK_ALL_EVENTS_MASK);
@@ -3046,6 +3062,11 @@ xwidget_init_view (struct xwidget *xww,
                             G_CALLBACK (xw_forward_event_from_view), xv);
 #endif
         }
+
+#ifdef HAVE_CMACS_GOWL
+    gowl_skip_widget_create:
+#endif
+      ;
     }
 
   g_object_set_data (G_OBJECT (xv->widget), XG_XWIDGET_VIEW, xv);
@@ -3740,6 +3761,22 @@ DEFUN ("delete-xwidget-view",
       gowl_hovered_view = NULL;
     if (gowl_focused_view == xv)
       gowl_focused_view = NULL;
+    if (EQ (xw->type, Qgowl))
+      {
+	/* Gowl xwidgets: hide the widget but don't destroy it.  The
+	   gowl embed view shares this widget and survives view deletion.
+	   The widget will be reused when a new xwidget view is created
+	   for the same xwidget (e.g. after tab/workspace switch).  Clear
+	   the stored view pointer so callbacks see NULL until the new
+	   view is created.  */
+	if (xv->widget != NULL)
+	  {
+	    g_object_set_data (G_OBJECT (xv->widget),
+			       XG_XWIDGET_VIEW, NULL);
+	    gtk_widget_hide (xv->widget);
+	  }
+      }
+    else
 #endif
     if (EQ (xw->type, Qgtk_embed))
       {

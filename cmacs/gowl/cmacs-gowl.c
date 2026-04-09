@@ -3054,6 +3054,15 @@ cmacs_gowl_xwidget_setup (struct xwidget *xw, GtkWidget *view_widget,
   g_hash_table_insert (embed_views, c, view);
 }
 
+GtkWidget *
+cmacs_gowl_xwidget_get_widget (struct xwidget *xw)
+{
+  struct gowl_embed_view *view = (struct gowl_embed_view *) xw->gowl_view;
+  if (view == NULL)
+    return NULL;
+  return view->widget;
+}
+
 void
 cmacs_gowl_xwidget_teardown (struct xwidget *xw)
 {
@@ -3084,9 +3093,21 @@ cmacs_gowl_xwidget_teardown (struct xwidget *xw)
 gboolean
 cmacs_gowl_xwidget_draw_cb (GtkWidget *widget, cairo_t *cr, gpointer data)
 {
-  struct xwidget_view *xv = data;
-  struct xwidget *xw = XXWIDGET (xv->model);
-  struct gowl_embed_view *view = (struct gowl_embed_view *) xw->gowl_view;
+  /* Look up the current xwidget view from the widget, not from the
+     signal user data.  The view may have been recreated after a
+     tab/workspace switch while the widget (and its signal handlers)
+     survived.  */
+  struct xwidget_view *xv
+    = g_object_get_data (G_OBJECT (widget), XG_XWIDGET_VIEW);
+  struct xwidget *xw;
+  struct gowl_embed_view *view;
+  (void) data;
+
+  if (xv == NULL)
+    return FALSE;
+
+  xw = XXWIDGET (xv->model);
+  view = (struct gowl_embed_view *) xw->gowl_view;
 
   if (view == NULL)
     return FALSE;
@@ -3102,9 +3123,17 @@ gboolean
 cmacs_gowl_xwidget_event_cb (GtkWidget *widget, GdkEvent *event,
                               gpointer data)
 {
-  struct xwidget_view *xv = data;
-  struct xwidget *xw = XXWIDGET (xv->model);
-  struct gowl_embed_view *view = (struct gowl_embed_view *) xw->gowl_view;
+  struct xwidget_view *xv
+    = g_object_get_data (G_OBJECT (widget), XG_XWIDGET_VIEW);
+  struct xwidget *xw;
+  struct gowl_embed_view *view;
+  (void) data;
+
+  if (xv == NULL)
+    return FALSE;
+
+  xw = XXWIDGET (xv->model);
+  view = (struct gowl_embed_view *) xw->gowl_view;
 
   if (view == NULL)
     return FALSE;
