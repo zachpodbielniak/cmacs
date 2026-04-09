@@ -70,7 +70,7 @@ Possible values: `linux', `macos', `freebsd', or `unknown'."
 ;;; Documentation
 
 (defvar cmacs-doc-org-directory
-  (expand-file-name "doc_org/cmacs/" source-directory)
+  (expand-file-name "../doc_org/cmacs/" data-directory)
   "Directory containing CMacs Org documentation files.")
 
 ;;;###autoload
