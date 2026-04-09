@@ -29,6 +29,7 @@ jobs:
       - name: Fetch submodules over HTTPS
         run: |
           git config --global url."https://git.podbielniak.com/".insteadOf "git@git-ssh.podbielniak.com:"
+          git config --global url."https://gitlab.com/".insteadOf "git@gitlab.com:"
           git submodule update --init --recursive
 
       - name: Login to quay.io
