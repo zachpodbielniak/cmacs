@@ -1428,6 +1428,17 @@ android_emacs_init (int argc, char **argv, char *dump_file)
 
             config = gowl_config_new ();
             gowl_config_load_yaml_from_search_path (config, NULL);
+
+            /* Clear all compositor keybinds — Emacs handles all
+               keyboard input in --gowl mode.  Gowl's default binds
+               (Super+h/l/j/k etc.) would otherwise be consumed by
+               the compositor before reaching Emacs. */
+            {
+              GArray *kb = gowl_config_get_keybinds (config);
+              if (kb != NULL)
+                g_array_set_size (kb, 0);
+            }
+
             gowl_compositor_set_config (comp, config);
 
             mgr = gowl_module_manager_new ();
