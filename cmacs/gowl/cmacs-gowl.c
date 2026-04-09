@@ -74,6 +74,7 @@ struct gowl_embed_view
   GowlClient *client;          /* The embedded Wayland client */
   struct frame *emacs_frame;   /* Emacs frame containing the widget */
   struct wl_listener commit;   /* wlr_surface commit listener */
+  struct wl_listener destroy;  /* wlr_surface destroy listener */
   unsigned char *pixel_buf;    /* Pixel readback buffer */
   size_t pixel_buf_size;       /* Allocated size of pixel_buf */
   cairo_surface_t *cr_surface; /* Cairo surface wrapping pixel_buf */
@@ -111,6 +112,9 @@ gowl_embed_view_capture (struct gowl_embed_view *view)
   uint32_t fmt;
   size_t src_stride, needed;
   int tw, th;
+
+  if (view->client == NULL)
+    return;
 
   surface = gowl_client_get_wlr_surface (view->client);
   if (surface == NULL || surface->buffer == NULL)
@@ -219,6 +223,62 @@ gowl_embed_view_on_commit (struct wl_listener *listener, void *data)
     view->idle_id = g_idle_add (gowl_embed_view_idle_capture, view);
 }
 
+static void gowl_embed_view_free (struct gowl_embed_view *view);
+
+/* Main-thread cleanup after the Wayland surface is destroyed.
+   The dispatch-thread handler (on_surface_destroy) already removed
+   the wl_listeners; this finishes tearing down the GTK side.  */
+static gboolean
+gowl_embed_view_destroy_idle (gpointer data)
+{
+  struct gowl_embed_view *view = data;
+
+  /* Remove from the embed_views hash table. The client pointer was
+     saved in the hash key — iterate to find our entry.  */
+  if (embed_views != NULL)
+    {
+      GHashTableIter iter;
+      gpointer key, value;
+
+      g_hash_table_iter_init (&iter, embed_views);
+      while (g_hash_table_iter_next (&iter, &key, &value))
+        {
+          if (value == view)
+            {
+              g_hash_table_iter_remove (&iter);
+              break;
+            }
+        }
+    }
+
+  gowl_embed_view_free (view);
+  return G_SOURCE_REMOVE;
+}
+
+/* Called on the dispatch thread when the wlr_surface is destroyed
+   (client disconnected).  Must remove wl_listeners synchronously
+   before wlroots frees the signal lists.  GTK cleanup is deferred
+   to the main thread via idle callback.  */
+static void
+gowl_embed_view_on_surface_destroy (struct wl_listener *listener, void *data)
+{
+  struct gowl_embed_view *view =
+    wl_container_of (listener, view, destroy);
+  (void) data;
+
+  /* Detach from the surface before wlroots frees it.  */
+  wl_list_remove (&view->commit.link);
+  wl_list_init (&view->commit.link);
+  wl_list_remove (&view->destroy.link);
+  wl_list_init (&view->destroy.link);
+
+  /* Mark client gone so event/draw handlers don't dereference it.  */
+  view->client = NULL;
+
+  /* Schedule GTK teardown on the main thread.  */
+  g_idle_add (gowl_embed_view_destroy_idle, view);
+}
+
 static gboolean
 gowl_embed_view_event (GtkWidget *widget, GdkEvent *event, gpointer data)
 {
@@ -227,6 +287,9 @@ gowl_embed_view_event (GtkWidget *widget, GdkEvent *event, gpointer data)
   struct wlr_surface *surface;
   uint32_t time_ms;
   (void) widget;
+
+  if (view->client == NULL)
+    return FALSE;
 
   seat = gowl_compositor_get_wlr_seat (cmacs_gowl_compositor);
   surface = gowl_client_get_wlr_surface (view->client);
@@ -395,6 +458,7 @@ gowl_embed_view_free (struct gowl_embed_view *view)
     direct_embed_kb_owner = NULL;
 
   wl_list_remove (&view->commit.link);
+  wl_list_remove (&view->destroy.link);
 
   if (view->idle_id != 0)
     {
@@ -1645,9 +1709,14 @@ through the GTK widget.  Returns t on success. */)
     {
       view->commit.notify = gowl_embed_view_on_commit;
       wl_signal_add (&surface->events.commit, &view->commit);
+      view->destroy.notify = gowl_embed_view_on_surface_destroy;
+      wl_signal_add (&surface->events.destroy, &view->destroy);
     }
   else
-    wl_list_init (&view->commit.link);
+    {
+      wl_list_init (&view->commit.link);
+      wl_list_init (&view->destroy.link);
+    }
 
   g_hash_table_insert (embed_views, c, view);
   return Qt;
@@ -2920,9 +2989,14 @@ cmacs_gowl_xwidget_setup (struct xwidget *xw, GtkWidget *view_widget,
     {
       view->commit.notify = gowl_embed_view_on_commit;
       wl_signal_add (&surface->events.commit, &view->commit);
+      view->destroy.notify = gowl_embed_view_on_surface_destroy;
+      wl_signal_add (&surface->events.destroy, &view->destroy);
     }
   else
-    wl_list_init (&view->commit.link);
+    {
+      wl_list_init (&view->commit.link);
+      wl_list_init (&view->destroy.link);
+    }
 
   xw->gowl_view = view;
 
