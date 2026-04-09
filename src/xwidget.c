@@ -2206,6 +2206,8 @@ xwidget_show_view (struct xwidget_view *xv)
   XMapWindow (xv->dpy, xv->wdesc);
   XFlush (xv->dpy);
 #else
+  if (xv->widget == NULL)
+    return;
   gtk_fixed_move (GTK_FIXED (FRAME_GTK_WIDGET (xv->frame)),
 		  xv->widget, xv->x + xv->clip_left,
 		  xv->y + xv->clip_top);
@@ -2222,7 +2224,8 @@ xwidget_hide_view (struct xwidget_view *xv)
   XUnmapWindow (xv->dpy, xv->wdesc);
   XFlush (xv->dpy);
 #else
-  gtk_widget_hide (xv->widget);
+  if (xv->widget != NULL)
+    gtk_widget_hide (xv->widget);
 #endif
 }
 
@@ -4556,6 +4559,42 @@ xwidget_end_redisplay (struct window *w, struct glyph_matrix *matrix)
             {
               if (xwidget_touched (xv))
                 {
+#ifdef HAVE_CMACS_GOWL
+		  if (EQ (XXWIDGET (xv->model)->type, Qgowl)
+		      && xv->widget != NULL)
+		    {
+		      /* Only do GTK operations when the widget was
+			 hidden.  Calling gtk_fixed_move / show_all /
+			 gdk_window_raise every cycle disrupts keyboard
+			 focus on the DrawingArea.  */
+		      if (xv->hidden)
+			{
+			  struct xwidget *xw = XXWIDGET (xv->model);
+			  int cw = xv->clip_right - xv->clip_left;
+			  int ch = xv->clip_bottom - xv->clip_top;
+			  if (cw <= 0) cw = xw->width;
+			  if (ch <= 0) ch = xw->height;
+
+			  gtk_widget_set_size_request (xv->widget,
+						      cw, ch);
+			  xwidget_show_view (xv);
+			  gtk_widget_queue_allocate (xv->widget);
+
+			  GdkWindow *gwin
+			    = gtk_widget_get_window (xv->widget);
+			  if (gwin)
+			    {
+			      gdk_window_move_resize (
+				gwin,
+				xv->x + xv->clip_left,
+				xv->y + xv->clip_top,
+				cw, ch);
+			      gdk_window_raise (gwin);
+			    }
+			}
+		      continue;
+		    }
+#endif
 #ifdef USE_GTK
                   xwidget_show_view (xv);
 #elif defined NS_IMPL_COCOA
@@ -4565,45 +4604,16 @@ xwidget_end_redisplay (struct window *w, struct glyph_matrix *matrix)
               else
                 {
 #ifdef HAVE_CMACS_GOWL
-		  /* Gowl xwidgets manage their own visibility
-		     through the compositor — the DrawingArea must
-		     stay visible for user interaction.  The
-		     redisplay glyph-matrix scan may not find the
-		     xwidget glyph (e.g. during incremental
-		     updates), but hiding the widget would make it
-		     permanently unclickable.  */
 		  if (EQ (XXWIDGET (xv->model)->type, Qgowl))
 		    {
-		      /* Only do GTK operations when the widget is
-			 actually hidden.  Calling gtk_fixed_move /
-			 gtk_widget_show_all / gdk_window_raise on
-			 every redisplay cycle causes GTK churn that
-			 disrupts keyboard focus on the DrawingArea. */
-		      if (xv->hidden)
+		      if (xv->widget == NULL)
 			{
-			  struct xwidget *xw = XXWIDGET (xv->model);
-			  int cw = xv->clip_right - xv->clip_left;
-			  int ch = xv->clip_bottom - xv->clip_top;
-			  if (cw <= 0) cw = xw->width;
-			  if (ch <= 0) ch = xw->height;
-
-			  gtk_widget_set_size_request (xv->widget, cw, ch);
-			  xwidget_show_view (xv);
-			  gtk_widget_queue_allocate (xv->widget);
-
-			  /* Force GdkWindow geometry immediately so
-			     GDK can route events to it.  */
-			  GdkWindow *gwin
-			    = gtk_widget_get_window (xv->widget);
-			  if (gwin)
-			    {
-			      gdk_window_move_resize (gwin,
-						      xv->x + xv->clip_left,
-						      xv->y + xv->clip_top,
-						      cw, ch);
-			      gdk_window_raise (gwin);
-			    }
+			  continue;
 			}
+		      /* Hide gowl xwidgets that are no longer
+			 in the display (e.g. after tab switch).  */
+		      if (!xv->hidden)
+			xwidget_hide_view (xv);
 		      continue;
 		    }
 #endif

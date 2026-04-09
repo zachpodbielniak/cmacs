@@ -75,6 +75,7 @@ struct gowl_embed_view
   struct frame *emacs_frame;   /* Emacs frame containing the widget */
   struct wl_listener commit;   /* wlr_surface commit listener */
   struct wl_listener destroy;  /* wlr_surface destroy listener */
+  gboolean xwidget_managed;   /* TRUE if widget is owned by xwidget system */
   unsigned char *pixel_buf;    /* Pixel readback buffer */
   size_t pixel_buf_size;       /* Allocated size of pixel_buf */
   cairo_surface_t *cr_surface; /* Cairo surface wrapping pixel_buf */
@@ -249,6 +250,17 @@ gowl_embed_view_destroy_idle (gpointer data)
               break;
             }
         }
+    }
+
+  if (view->xwidget_managed)
+    {
+      /* The widget is owned by the xwidget display system — don't
+         destroy it here.  Just hide it and null our reference so
+         gowl_embed_view_free won't double-free.  The xwidget system
+         will destroy the widget when the xwidget itself is killed.  */
+      if (view->widget != NULL)
+        gtk_widget_hide (view->widget);
+      view->widget = NULL;
     }
 
   gowl_embed_view_free (view);
@@ -1878,6 +1890,33 @@ control to Emacs.  CLIENT is a gowl client object. */)
   return Qt;
 }
 
+DEFUN ("gowl-embed-set-visible", Fgowl_embed_set_visible,
+       Sgowl_embed_set_visible, 2, 2, 0,
+       doc: /* Set the visibility of the embed view for CLIENT.
+VISIBLE non-nil shows the widget, nil hides it.
+Use this to hide embeds during workspace/tab switches. */)
+  (Lisp_Object client, Lisp_Object visible)
+{
+  GowlClient *c;
+  struct gowl_embed_view *view;
+
+  c = gowl_resolve_client (client);
+
+  if (embed_views == NULL)
+    return Qnil;
+
+  view = g_hash_table_lookup (embed_views, c);
+  if (view == NULL || view->widget == NULL)
+    return Qnil;
+
+  if (NILP (visible))
+    gtk_widget_hide (view->widget);
+  else
+    gtk_widget_show (view->widget);
+
+  return visible;
+}
+
 DEFUN ("gowl-embed-expect-client", Fgowl_embed_expect_client,
        Sgowl_embed_expect_client, 0, 0, 0,
        doc: /* Tell the compositor to embed the next unmapped client.
@@ -2984,6 +3023,7 @@ cmacs_gowl_xwidget_setup (struct xwidget *xw, GtkWidget *view_widget,
   view->emacs_frame = frame;
   view->view_w = xw->width;
   view->view_h = xw->height;
+  view->xwidget_managed = TRUE;
 
   /* Configure the client to render at widget size. */
   gowl_client_set_visible (c, FALSE);
@@ -3927,6 +3967,7 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_embed_destroy_view);
   defsubr (&Sgowl_embed_view_p);
   defsubr (&Sgowl_embed_focus);
+  defsubr (&Sgowl_embed_set_visible);
   defsubr (&Sgowl_embed_expect_client);
 
 #ifdef HAVE_XWIDGETS
