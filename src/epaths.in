@@ -81,6 +81,11 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 /* Where Emacs should look for the application default file. */
 #define PATH_X_DEFAULTS "/usr/lib/X11/%L/%T/%N%C%S:/usr/lib/X11/%l/%T/%N%C%S:/usr/lib/X11/%T/%N%C%S:/usr/lib/X11/%L/%T/%N%S:/usr/lib/X11/%l/%T/%N%S:/usr/lib/X11/%T/%N%S"
 
+/* Where cmacs should find the API library and headers at runtime.
+   Used by crispy and bacon to locate libcmacs-api.so and cmacs-api.h
+   on an installed system.  */
+#define PATH_CMACS_API "/usr/local/lib/cmacs"
+
 #else
 
 /* Replace the defines above with links to files in the assets

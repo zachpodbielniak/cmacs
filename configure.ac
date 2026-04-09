@@ -797,6 +797,8 @@ AC_SUBST(CMACS_PODOMATION_BUNDLED)
 # by both the bacon cmacsgi module and crispy scripts (in-process).
 CMACS_API_DIR="\$(srcdir)/../cmacs/api"
 AC_SUBST(CMACS_API_DIR)
+cmacsapidir='${libdir}/cmacs'
+AC_SUBST([cmacsapidir])
 
 # NOTE: shared vendored deps (crispy, yaml-glib) across bundled static libs
 # are de-duplicated at build time in src/Makefile.in rather than using

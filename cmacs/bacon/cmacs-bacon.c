@@ -12,6 +12,7 @@
 #ifdef HAVE_CMACS_BACON
 
 #include "lisp.h"
+#include "epaths.h"
 #include "cmacs-bacon.h"
 #include "cmacs-glib-loop.h"
 #include "cmacs-bacon-ipc.h"
@@ -59,12 +60,27 @@ static const CmacsBaconDispatch cmacs_bacon_dispatch = {
 static gboolean cmacs_bacon_dispatch_registered = FALSE;
 static GModule *cmacs_bacon_api_module = NULL;
 
+/* Locate libcmacs-api.so at runtime.  Try the installed path first
+ * (from epaths.h), then fall back to the source tree for development. */
+static gchar *
+cmacs_bacon_api_find_so (void)
+{
+  gchar *installed = g_build_filename (PATH_CMACS_API,
+                                       "libcmacs-api.so", NULL);
+  if (g_file_test (installed, G_FILE_TEST_EXISTS))
+    return installed;
+  g_free (installed);
+
+  return g_strconcat (CMACS_SRCDIR, "/../cmacs/api/libcmacs-api.so",
+                      NULL);
+}
+
 static void
 cmacs_bacon_register_dispatch (void)
 {
   if (!cmacs_bacon_dispatch_registered)
     {
-      gchar *path = g_strconcat (CMACS_SRCDIR, "/../cmacs/api/libcmacs-api.so", NULL);
+      gchar *path = cmacs_bacon_api_find_so ();
       cmacs_bacon_api_module = g_module_open (path, G_MODULE_BIND_LAZY);
       g_free (path);
 

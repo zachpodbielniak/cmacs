@@ -808,6 +808,11 @@ cmacs-podomation-modules: $(CMACS_PODOMATION_STATIC_LIB)
 	$(MAKE) -C $(srcdir)/../deps/podomation modules
 endif
 
+## Build libcmacs-api.so (used at runtime by crispy and bacon)
+CMACS_API_SO = $(srcdir)/../cmacs/api/libcmacs-api.so
+$(CMACS_API_SO):
+	$(MAKE) -C $(srcdir)/../cmacs/api all
+
 ## Build liborgex-1.0.a (statically linked into emacs)
 ifneq ($(CMACS_ORG_EX_OBJ),)
 CMACS_ORG_EX_STATIC_LIB = $(srcdir)/../cmacs/org-ex/lib/liborgex-1.0.a

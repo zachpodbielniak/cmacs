@@ -13,6 +13,7 @@
 #ifdef HAVE_CMACS_CRISPY
 
 #include "lisp.h"
+#include "epaths.h"
 #include "cmacs-eval-dispatch.h"
 #include <crispy.h>
 #include <gmodule.h>
@@ -93,12 +94,27 @@ static const CmacsCrispyDispatch cmacs_crispy_dispatch = {
 static gboolean cmacs_crispy_dispatch_registered = FALSE;
 static GModule *cmacs_crispy_api_module = NULL;
 
+/* Locate libcmacs-api.so at runtime.  Try the installed path first
+ * (from epaths.h), then fall back to the source tree for development. */
+static gchar *
+cmacs_api_find_so (void)
+{
+  gchar *installed = g_build_filename (PATH_CMACS_API,
+                                       "libcmacs-api.so", NULL);
+  if (g_file_test (installed, G_FILE_TEST_EXISTS))
+    return installed;
+  g_free (installed);
+
+  return g_strconcat (CMACS_SRCDIR, "/../cmacs/api/libcmacs-api.so",
+                      NULL);
+}
+
 static void
 cmacs_crispy_register_dispatch (void)
 {
   if (!cmacs_crispy_dispatch_registered)
     {
-      gchar *path = g_strconcat (CMACS_SRCDIR, "/../cmacs/api/libcmacs-api.so", NULL);
+      gchar *path = cmacs_api_find_so ();
       cmacs_crispy_api_module = g_module_open (path, G_MODULE_BIND_LAZY);
       g_free (path);
 
@@ -117,22 +133,32 @@ cmacs_crispy_register_dispatch (void)
     }
 }
 
-/* Extra compiler flags injected into every crispy script so that
- * `#include <cmacs-api.h>` resolves and `-lcmacs-api` links.
- * Built from the source tree paths at compile time. */
-#ifndef CMACS_API_EXTRA_FLAGS
-#define CMACS_API_EXTRA_FLAGS \
-  "-I" CMACS_SRCDIR "/../cmacs/api " \
-  "-L" CMACS_SRCDIR "/../cmacs/api " \
-  "-Wl,-rpath," CMACS_SRCDIR "/../cmacs/api " \
-  "-lcmacs-api"
-#endif
+/* Build the extra compiler flags for crispy scripts at runtime.
+ * Checks the installed path first, falls back to source tree. */
+static gchar *
+cmacs_api_extra_flags (void)
+{
+  const gchar *dir;
+  gchar *header = g_build_filename (PATH_CMACS_API,
+                                    "cmacs-api.h", NULL);
+  gboolean installed = g_file_test (header, G_FILE_TEST_EXISTS);
+  g_free (header);
+
+  dir = installed
+    ? PATH_CMACS_API
+    : CMACS_SRCDIR "/../cmacs/api";
+
+  return g_strdup_printf (
+    "-I%s -L%s -Wl,-rpath,%s -lcmacs-api", dir, dir, dir);
+}
 
 /* Inject the cmacs-api flags into a CrispyScript before execution. */
 static void
 cmacs_crispy_inject_api_flags (CrispyScript *script)
 {
-  crispy_script_set_extra_flags (script, CMACS_API_EXTRA_FLAGS);
+  gchar *flags = cmacs_api_extra_flags ();
+  crispy_script_set_extra_flags (script, flags);
+  g_free (flags);
 }
 
 /* ──────────────────────────────────────────────────────────────────── */

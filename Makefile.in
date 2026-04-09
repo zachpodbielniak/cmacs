@@ -272,6 +272,10 @@ etcdir=@etcdir@
 # once.
 archlibdir=@archlibdir@
 
+# Where to install the cmacs API library and headers so that
+# crispy scripts and bacon can find them at runtime.
+cmacsapidir=@cmacsapidir@
+
 # Where to put the etc/DOC file.
 etcdocdir=@etcdocdir@
 
@@ -476,7 +480,8 @@ epaths-force:
 	  -e 's;\(#define.*PATH_BITMAPS\).*$$;\1 "${bitmapdir}";'			\
 	  -e 's;\(#define.*PATH_X_DEFAULTS\).*$$;\1 "${x_default_search_path}";'	\
 	  -e 's;\(#define.*PATH_GAME\).*$$;\1 $(PATH_GAME);'				\
-	  -e 's;\(#define.*PATH_DOC\).*$$;\1 "${etcdocdir}";') &&			\
+	  -e 's;\(#define.*PATH_DOC\).*$$;\1 "${etcdocdir}";'				\
+	  -e 's;\(#define.*PATH_CMACS_API\).*$$;\1 "${cmacsapidir}";') &&		\
 	${srcdir}/build-aux/move-if-change epaths.h.$$$$ src/epaths.h
 
 # The w32 build needs a slightly different editing, and it uses
@@ -640,6 +645,13 @@ ifeq (${DUMPING},pdumper)
 endif
 	subdir=${ns_appresdir}/site-lisp && ${write_subdir}
 	rm -rf ${ns_appresdir}/share
+endif
+ifeq (${ns_self_contained},no)
+	umask 022; ${MKDIR_P} "$(DESTDIR)${cmacsapidir}"
+	if test -f $(srcdir)/cmacs/api/libcmacs-api.so; then \
+	  ${INSTALL_PROGRAM} $(srcdir)/cmacs/api/libcmacs-api.so "$(DESTDIR)${cmacsapidir}/libcmacs-api.so"; \
+	fi
+	${INSTALL_DATA} $(srcdir)/cmacs/api/cmacs-api.h "$(DESTDIR)${cmacsapidir}/cmacs-api.h"
 endif
 
 ### Windows-specific install target for installing programs produced
