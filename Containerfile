@@ -17,7 +17,8 @@ RUN dnf install -y \
         libinput-devel libxkbcommon-devel pango-devel cairo-devel \
         libdecor-devel libdrm-devel pixman-devel \
         libxcb-devel xcb-util-wm-devel \
-        libyaml-devel json-glib-devel \
+        libyaml-devel json-glib-devel libdex-devel \
+        gdk-pixbuf2-devel \
         libsoup3-devel readline-devel \
         libetpan-devel sqlite-devel libpq-devel \
         libssh2-devel libvirt-devel pam-devel \
