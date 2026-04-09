@@ -1583,7 +1583,8 @@ The embedder controls their position, visibility, and scene layer. */)
 DEFUN ("gowl-emacs-client", Fgowl_emacs_client, Sgowl_emacs_client,
        0, 0, 0,
        doc: /* Return the GowlClient for Emacs's own frame.
-Matches by PID against the compositor's client list. */)
+Matches by PID against the compositor's client list.
+Skips embedded clients to avoid returning a hijacked surface. */)
   (void)
 {
   GList *clients;
@@ -1596,7 +1597,8 @@ Matches by PID against the compositor's client list. */)
   for (l = clients; l != NULL; l = l->next)
     {
       GowlClient *c = (GowlClient *) l->data;
-      if (gowl_client_get_pid (c) == self_pid)
+      if (gowl_client_get_pid (c) == self_pid
+          && !gowl_client_get_embedded (c))
         return cmacs_gobject_wrap (G_OBJECT (c));
     }
   return Qnil;

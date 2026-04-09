@@ -404,30 +404,27 @@ control to Emacs."
 
 (defun gowl-embed--do-embed (client window buf)
   "Embed CLIENT into the compositor scene tree, displayed in WINDOW's area.
-The client's scene node is reparented into Emacs's scene tree and
-positioned at WINDOW's pixel coordinates.  The compositor renders it
-directly — no xwidget or GTK widget involved."
+The client stays in its current scene layer (OVERLAY, set by the map
+callback) and is positioned at WINDOW's pixel coordinates.  The
+compositor renders it directly — no xwidget or GTK widget involved."
   (set-window-buffer window buf)
   (with-selected-window window
     (let* ((edges (window-inside-absolute-pixel-edges window))
            (x (nth 0 edges))
            (y (nth 1 edges))
            (w (- (nth 2 edges) x))
-           (h (- (nth 3 edges) y))
-           (emacs-client (gowl-emacs-client)))
+           (h (- (nth 3 edges) y)))
       (setq-local gowl-embedded-client client)
       (setq-local gowl-embedded-client-pid (gowl-client-pid client))
       ;; Mark as embedded so arrange() skips it.
       (gowl-set-client-embedded client t)
       (gowl-set-client-border-width client 0)
-      ;; Reparent into Emacs's scene tree — coordinates become frame-relative.
-      (when emacs-client
-        (gowl-embed-into client emacs-client))
-      ;; ENABLE the scene node — compositor renders it directly.
+      ;; Enable scene node — compositor renders it directly.
+      ;; The map callback already placed it in OVERLAY layer.
       (gowl-set-client-visible client t)
-      ;; Position and clip at window coordinates.
+      ;; Position + clip at window coordinates (output-relative since
+      ;; Emacs is fullscreen at 0,0 in --gowl mode).
       (gowl-position-embedded client x y w h)
-      ;; Plain text placeholder — the compositor renders the surface on top.
       (let ((inhibit-read-only t))
         (erase-buffer))
       (gowl-embed--ensure-health-timer))))
@@ -451,6 +448,14 @@ to replace the buffer (clearing the dedication)."
   (when (bound-and-true-p persp-mode)
     (persp-add-buffer buf)))
 
+(defun gowl-embed--client-has-buffer-p (client)
+  "Return non-nil if CLIENT is already owned by an embed buffer."
+  (let ((pid (gowl-client-pid client)))
+    (cl-some (lambda (buf)
+               (let ((buf-pid (buffer-local-value 'gowl-embedded-client-pid buf)))
+                 (and buf-pid (= buf-pid pid))))
+             (buffer-list))))
+
 (defun gowl-embed--check-pending ()
   "Match pending embeds to newly mapped gowl clients.
 First tries PID matching (works for direct processes).  If that
@@ -470,14 +475,14 @@ have an embed view yet (catches flatpak/sandbox launchers)."
                (client (seq-find
                         (lambda (c) (= (gowl-client-pid c) pid))
                         clients))
-               ;; Fallback: any embedded client without a view yet.
+               ;; Fallback: any embedded client not yet owned by a buffer.
                ;; The client-map callback marks it embedded; this
                ;; catches flatpak/sandbox where spawn PID != client PID.
                (client (or client
                           (seq-find
                            (lambda (c)
                              (and (alist-get 'embedded (gowl-client-info c))
-                                  (not (gowl-embed-view-p c))))
+                                  (not (gowl-embed--client-has-buffer-p c))))
                            clients))))
           (when client
             (setq gowl-embed--pending (delq entry gowl-embed--pending))
