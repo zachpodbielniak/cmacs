@@ -808,10 +808,19 @@ cmacs-podomation-modules: $(CMACS_PODOMATION_STATIC_LIB)
 	$(MAKE) -C $(srcdir)/../deps/podomation modules
 endif
 
-## Build libcmacs-api.so (used at runtime by crispy and bacon)
+## Build libcmacs-api.so (used at runtime by crispy and bacon).
+## Must be built before temacs so it's available for make install.
 CMACS_API_SO = $(srcdir)/../cmacs/api/libcmacs-api.so
 $(CMACS_API_SO):
 	$(MAKE) -C $(srcdir)/../cmacs/api all
+
+## Ensure the API .so is built when crispy or bacon objects are compiled.
+ifneq ($(CMACS_CRISPY_OBJ),)
+$(CMACS_CRISPY_OBJ): $(CMACS_API_SO)
+endif
+ifneq ($(CMACS_BACON_OBJ),)
+$(CMACS_BACON_OBJ): $(CMACS_API_SO)
+endif
 
 ## Build liborgex-1.0.a (statically linked into emacs)
 ifneq ($(CMACS_ORG_EX_OBJ),)

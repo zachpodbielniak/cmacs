@@ -648,9 +648,7 @@ endif
 endif
 ifeq (${ns_self_contained},no)
 	umask 022; ${MKDIR_P} "$(DESTDIR)${cmacsapidir}"
-	if test -f $(srcdir)/cmacs/api/libcmacs-api.so; then \
-	  ${INSTALL_PROGRAM} $(srcdir)/cmacs/api/libcmacs-api.so "$(DESTDIR)${cmacsapidir}/libcmacs-api.so"; \
-	fi
+	${INSTALL_PROGRAM} $(srcdir)/cmacs/api/libcmacs-api.so "$(DESTDIR)${cmacsapidir}/libcmacs-api.so"
 	${INSTALL_DATA} $(srcdir)/cmacs/api/cmacs-api.h "$(DESTDIR)${cmacsapidir}/cmacs-api.h"
 endif
 
