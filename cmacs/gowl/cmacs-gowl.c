@@ -197,7 +197,7 @@ gowl_embed_view_idle_capture (gpointer data)
   struct gowl_embed_view *view = data;
 
   view->idle_id = 0;
-  if (!view->dirty || view->widget == NULL)
+  if (view->client == NULL || !view->dirty || view->widget == NULL)
     return G_SOURCE_REMOVE;
 
   /* Read pixels via wlr_buffer CPU access (no EGL needed).
@@ -271,6 +271,15 @@ gowl_embed_view_on_surface_destroy (struct wl_listener *listener, void *data)
   wl_list_init (&view->commit.link);
   wl_list_remove (&view->destroy.link);
   wl_list_init (&view->destroy.link);
+
+  /* Cancel any pending idle capture — the surface is gone and the
+     view will be freed shortly.  g_source_remove is thread-safe for
+     sources on the default main context.  */
+  if (view->idle_id != 0)
+    {
+      g_source_remove (view->idle_id);
+      view->idle_id = 0;
+    }
 
   /* Mark client gone so event/draw handlers don't dereference it.  */
   view->client = NULL;
