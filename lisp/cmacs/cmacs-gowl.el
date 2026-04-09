@@ -637,6 +637,53 @@ with the window and hides/shows with buffer switching."
     (gowl-embed--start-pending-timer)
     (message "Spawning %s…" command)))
 
+(defun gowl-embed--read-desktop-file (file)
+  "Parse FILE and return (NAME . EXEC) or nil if not a GUI app."
+  (with-temp-buffer
+    (insert-file-contents file)
+    (let ((name nil) (exec nil) (type nil) (terminal nil) (nodisplay nil))
+      (goto-char (point-min))
+      (when (re-search-forward "^\\[Desktop Entry\\]" nil t)
+        (forward-line)
+        (while (and (not (eobp))
+                    (not (looking-at "^\\[")))
+          (cond
+           ((looking-at "^Name=\\(.+\\)") (setq name (match-string 1)))
+           ((looking-at "^Exec=\\(.+\\)") (setq exec (match-string 1)))
+           ((looking-at "^Type=\\(.+\\)") (setq type (match-string 1)))
+           ((looking-at "^Terminal=true") (setq terminal t))
+           ((looking-at "^NoDisplay=true") (setq nodisplay t)))
+          (forward-line)))
+      (when (and name exec
+                 (equal type "Application")
+                 (not terminal) (not nodisplay))
+        (cons name (replace-regexp-in-string " *%[fFuUdDnNickvm]" "" exec))))))
+
+(defun gowl-embed--list-apps ()
+  "Return alist of (NAME . EXEC) from XDG .desktop files."
+  (let ((dirs (mapcar (lambda (d) (expand-file-name "applications" d))
+                      (cons (xdg-data-home) (xdg-data-dirs))))
+        (seen (make-hash-table :test #'equal))
+        apps)
+    (dolist (dir dirs)
+      (when (file-directory-p dir)
+        (dolist (file (directory-files dir t "\\.desktop\\'"))
+          (unless (gethash (file-name-nondirectory file) seen)
+            (puthash (file-name-nondirectory file) t seen)
+            (when-let ((app (gowl-embed--read-desktop-file file)))
+              (push app apps))))))
+    (sort apps (lambda (a b) (string< (car a) (car b))))))
+
+;;;###autoload
+(defun gowl-embed-app ()
+  "Select a GUI application from installed .desktop files and embed it."
+  (interactive)
+  (let* ((apps (gowl-embed--list-apps))
+         (name (completing-read "Embed app: " (mapcar #'car apps) nil t))
+         (exec (cdr (assoc name apps))))
+    (unless exec (user-error "App not found: %s" name))
+    (gowl-embed exec)))
+
 ;;;###autoload
 (defun gowl-embed-client (client)
   "Embed an existing gowl CLIENT in the current Emacs window."
