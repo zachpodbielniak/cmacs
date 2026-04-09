@@ -1,0 +1,50 @@
+#!/bin/bash
+# Build the cmacs container image locally.
+#
+# Usage:
+#   ./build-container                # build only
+#   ./build-container --push         # build then push
+#   ./build-container --only-push    # push without building
+#   ./build-container 44             # use Fedora 44
+#   ./build-container 44 --push      # build Fedora 44 and push
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+set -euo pipefail
+
+DO_BUILD=1
+DO_PUSH=0
+VERSION="43"
+
+usage() {
+    echo "Usage: ./build-container [VERSION] [--push] [--only-push]"
+    echo
+    echo "  VERSION      Fedora version (default: 43)"
+    echo "  --push       Build then push to quay.io"
+    echo "  --only-push  Push without building"
+    echo "  -h, --help   Show this help"
+}
+
+for arg in "$@"; do
+    case "$arg" in
+        -h|--help)   usage; exit 0 ;;
+        --push)      DO_PUSH=1 ;;
+        --only-push) DO_PUSH=1; DO_BUILD=0 ;;
+        *)           VERSION="$arg" ;;
+    esac
+done
+
+IMAGE="quay.io/zachpodbielniak/cmacs:${VERSION}"
+
+if [[ "$DO_BUILD" -eq 1 ]]; then
+    buildah build \
+        --build-arg=FEDORA_VERSION="${VERSION}" \
+        -t "${IMAGE}" \
+        -f ./Containerfile .
+    echo "Built ${IMAGE}"
+fi
+
+if [[ "$DO_PUSH" -eq 1 ]]; then
+    buildah push "${IMAGE}"
+    echo "Pushed ${IMAGE}"
+fi

@@ -1,0 +1,65 @@
+# build.yaml - Forgejo CI workflow
+#
+# Builds the cmacs container and pushes to quay.io on every push to master.
+#
+# Required secrets:
+#   QUAY_USER  - quay.io username
+#   QUAY_TOKEN - quay.io password/token
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: Build CMacs
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  build:
+    runs-on: linux-amd64
+    container:
+      image: git.podbielniak.com/zachpodbielniak/build-container:43
+      options: --privileged
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fetch submodules over HTTPS
+        run: |
+          git config --global url."https://git.podbielniak.com/".insteadOf "git@git-ssh.podbielniak.com:"
+          git submodule update --init --recursive
+
+      - name: Login to quay.io
+        env:
+          QUAY_USER: ${{ secrets.QUAY_USER }}
+          QUAY_TOKEN: ${{ secrets.QUAY_TOKEN }}
+        run: |
+          backoff=30
+          for attempt in 1 2 3; do
+              if buildah login -u "${QUAY_USER}" -p "${QUAY_TOKEN}" quay.io; then
+                  exit 0
+              fi
+              echo "Login attempt $attempt failed, retrying in ${backoff}s..."
+              sleep "$backoff"
+              backoff=$((backoff * 2))
+          done
+          echo "All login attempts failed"
+          exit 1
+
+      - name: Build container
+        env:
+          VERSION: ${{ vars.VERSION || '43' }}
+        run: |
+          buildah build \
+              --no-cache \
+              -t quay.io/zachpodbielniak/cmacs:${VERSION} \
+              -f ./Containerfile \
+              --build-arg=FEDORA_VERSION=${VERSION}
+
+      - name: Push container
+        env:
+          VERSION: ${{ vars.VERSION || '43' }}
+        run: |
+          buildah push quay.io/zachpodbielniak/cmacs:${VERSION}

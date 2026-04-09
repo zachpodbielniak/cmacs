@@ -26,6 +26,8 @@
 !.gitattributes
 !.gitignore
 !.gitlab-ci.yml
+!.containerignore
+!.forgejo
 !.mailmap
 
 # Built by 'autogen.sh'.
