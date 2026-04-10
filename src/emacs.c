@@ -2745,7 +2745,8 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
   init_cmacs_podomation ();
 #endif
 #ifdef HAVE_CMACS_MCP
-  init_cmacs_mcp ();
+  if (!noninteractive)
+    init_cmacs_mcp ();
 #endif
 
   if (!initialized)
