@@ -659,30 +659,32 @@ ifeq (${ns_self_contained},no)
 			fi; \
 		done; \
 	fi
-	@if test -d $(srcdir)/deps/bacon/build/release/modules; then \
-		umask 022; ${MKDIR_P} "$(DESTDIR)${libdir}/bacon/modules"; \
+	@baconmoddir="${exec_prefix}/$$(if [ -d /usr/lib64 ]; then echo lib64; else echo lib; fi)/bacon/modules"; \
+	if test -d $(srcdir)/deps/bacon/build/release/modules; then \
+		umask 022; ${MKDIR_P} "$(DESTDIR)$$baconmoddir"; \
 		for f in $(srcdir)/deps/bacon/build/release/modules/*.so; do \
 			if test -f "$$f"; then \
 				${INSTALL_PROGRAM} "$$f" \
-					"$(DESTDIR)${libdir}/bacon/modules/$$(basename $$f)"; \
+					"$(DESTDIR)$$baconmoddir/$$(basename $$f)"; \
 			fi; \
 		done; \
-	fi
-	@if test -d $(srcdir)/cmacs/bacon/modules; then \
-		umask 022; ${MKDIR_P} "$(DESTDIR)${libdir}/bacon/modules"; \
+	fi; \
+	if test -d $(srcdir)/cmacs/bacon/modules; then \
+		umask 022; ${MKDIR_P} "$(DESTDIR)$$baconmoddir"; \
 		for f in $(srcdir)/cmacs/bacon/modules/*.so; do \
 			if test -f "$$f"; then \
 				${INSTALL_PROGRAM} "$$f" \
-					"$(DESTDIR)${libdir}/bacon/modules/$$(basename $$f)"; \
+					"$(DESTDIR)$$baconmoddir/$$(basename $$f)"; \
 			fi; \
 		done; \
 	fi
-	@if test -d $(srcdir)/deps/podomation/build/release/modules; then \
-		umask 022; ${MKDIR_P} "$(DESTDIR)${libdir}/podomation/modules"; \
+	@podmoddir="${exec_prefix}/$$(if [ -d /usr/lib64 ]; then echo lib64; else echo lib; fi)/podomation/modules"; \
+	if test -d $(srcdir)/deps/podomation/build/release/modules; then \
+		umask 022; ${MKDIR_P} "$(DESTDIR)$$podmoddir"; \
 		for f in $(srcdir)/deps/podomation/build/release/modules/*.so; do \
 			if test -f "$$f"; then \
 				${INSTALL_PROGRAM} "$$f" \
-					"$(DESTDIR)${libdir}/podomation/modules/$$(basename $$f)"; \
+					"$(DESTDIR)$$podmoddir/$$(basename $$f)"; \
 			fi; \
 		done; \
 	fi
