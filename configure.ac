@@ -754,6 +754,7 @@ if test "$with_cmacs_podomation" != "no"; then
       -I\$(srcdir)/../deps/podomation/deps/yaml-glib/src \
       -DPOD_COMPILATION \
       -DCMACS_PODOMATION_MODULE_DIR=\\\"\$(abs_top_srcdir)/deps/podomation/build/release/modules\\\" \
+      -DPODOMATION_MODULEDIR=\\\"$libdir/podomation/modules\\\" \
       $CMACS_PODOMATION_DEPS_CFLAGS"
     CMACS_PODOMATION_LIBS="-Wl,--whole-archive \$(srcdir)/../deps/podomation/build/release/libpodomation-1.0.a \
       -Wl,--no-whole-archive $CMACS_PODOMATION_DEPS_LIBS"

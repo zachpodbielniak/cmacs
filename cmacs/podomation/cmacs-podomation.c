@@ -129,11 +129,18 @@ GMainContext.  */)
   cmacs_pod_repl = pod_repl_new ();
   cmacs_pod_engine = pod_repl_get_engine (cmacs_pod_repl);
 
-  /* Load .so modules. */
-#ifdef CMACS_PODOMATION_MODULE_DIR
-  module_dir = CMACS_PODOMATION_MODULE_DIR;
-#else
+  /* Load .so modules.  Try the in-tree dev path first, then the
+     installed system path.  When embedded, the dev path is the build
+     tree; the installed path is $libdir/podomation/modules/. */
   module_dir = NULL;
+#ifdef CMACS_PODOMATION_MODULE_DIR
+  if (g_file_test (CMACS_PODOMATION_MODULE_DIR, G_FILE_TEST_IS_DIR))
+    module_dir = CMACS_PODOMATION_MODULE_DIR;
+#endif
+#ifdef PODOMATION_MODULEDIR
+  if (module_dir == NULL
+      && g_file_test (PODOMATION_MODULEDIR, G_FILE_TEST_IS_DIR))
+    module_dir = PODOMATION_MODULEDIR;
 #endif
   if (!pod_repl_load_modules (cmacs_pod_repl, module_dir, &error))
     {
