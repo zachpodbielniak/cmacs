@@ -69,6 +69,10 @@ RUN ./autogen.sh \
     && make -j"$(nproc)" \
     && make install DESTDIR=/build/stage
 
+# Build and install cmacs-mcp stdio relay (MCP client support)
+RUN make -C tools/cmacs-mcp clean all PREFIX=/usr \
+    && make -C tools/cmacs-mcp install PREFIX=/usr DESTDIR=/build/stage
+
 # Install Wayland session file
 RUN ./install-wm PREFIX=/usr \
     && mkdir -p /build/stage/usr/share/wayland-sessions \
