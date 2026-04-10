@@ -47,4 +47,8 @@
 # include "org-ex/cmacs-org-ex.h"
 #endif
 
+#ifdef HAVE_CMACS_MCP
+# include "mcp/cmacs-mcp.h"
+#endif
+
 #endif /* CMACS_H */

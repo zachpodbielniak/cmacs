@@ -170,6 +170,18 @@ with a thin DEFUN bridge (20 primitives) and Elisp layer.
 #+END_WIDGET
 #+end_example
 
+** MCP Server (=--with-cmacs-mcp=)
+
+Embed an MCP (Model Context Protocol) server in Emacs for AI-native
+runtime control.  Uses =mcp-glib= (bundled from =deps/mcp-glib=) to
+expose Emacs internals as MCP tools, resources, and prompts.
+
+- Tools: =eval=, =buffers=, =windows=, =input=, =processes=, =debugging=, =GI=, =gowl=
+- Resources: =buffer://=, =file://=, =variable://= URIs for live Emacs state
+- Prompts: prebuilt prompt templates for common editor interactions
+- Transport: =cmacs-mcp= shim binary connects via Unix socket for stdio transport
+- Dependencies: =json-glib-1.0=, =libsoup-3.0=, =libdex-1=
+
 * Building
 
 ** Quick Start (Fedora)
@@ -203,7 +215,8 @@ cd cmacs
   --with-cmacs-bacon \
   --with-cmacs-gowl \
   --with-cmacs-podomation \
-  --with-cmacs-org-ex
+  --with-cmacs-org-ex \
+  --with-cmacs-mcp
 make -j$(nproc)
 sudo make install
 #+end_src
@@ -301,7 +314,8 @@ Requires =autoconf= (>= 2.65) and =automake=.
   --with-cmacs-bacon \
   --with-cmacs-gowl \
   --with-cmacs-podomation \
-  --with-cmacs-org-ex
+  --with-cmacs-org-ex \
+  --with-cmacs-mcp
 #+end_src
 
 Emacs flags:
@@ -328,6 +342,7 @@ Module flags:
 - =--with-cmacs-gowl= — Gowl Wayland compositor
 - =--with-cmacs-podomation= — Podomation automation engine
 - =--with-cmacs-org-ex= — Org-Ex interactive widget embedding
+- =--with-cmacs-mcp= — MCP server for AI-native runtime control
 
 Each module auto-detects bundled (=deps/=) or system libraries.  To
 force system-installed versions:

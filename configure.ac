@@ -659,6 +659,7 @@ OPTION_DEFAULT_OFF([cmacs-bacon],  [CMacs bacon shell])
 OPTION_DEFAULT_OFF([cmacs-gowl],  [CMacs Gowl Wayland compositor])
 OPTION_DEFAULT_OFF([cmacs-podomation], [CMacs podomation automation engine])
 OPTION_DEFAULT_OFF([cmacs-org-ex], [CMacs org-ex interactive widgets])
+OPTION_DEFAULT_OFF([cmacs-mcp], [CMacs MCP server])
 
 # CMACS: pkg-config checks when enabled
 if test "$with_cmacs_glib" != "no"; then
@@ -767,6 +768,30 @@ if test "$with_cmacs_org_ex" != "no"; then
   CMACS_ORG_EX_CFLAGS="-I\$(srcdir)/../cmacs/org-ex/lib $CMACS_GLIB_CFLAGS"
   CMACS_ORG_EX_LIBS="\$(srcdir)/../cmacs/org-ex/lib/liborgex-1.0.a"
 fi
+if test "$with_cmacs_mcp" != "no"; then
+  if test "$with_cmacs_mcp" = "system"; then
+    # Use system-installed mcp-glib (for distro packaging)
+    PKG_CHECK_MODULES([CMACS_MCP], [mcp-glib-1.0])
+  else
+    # Build libmcp-glib from deps/mcp-glib/ (default)
+    PKG_CHECK_MODULES([CMACS_MCP_DEPS],
+      [glib-2.0 gobject-2.0 gio-2.0 gio-unix-2.0 json-glib-1.0 libsoup-3.0 libdex-1])
+    CMACS_MCP_CFLAGS="-I\$(srcdir)/../deps/mcp-glib/src \
+      $CMACS_MCP_DEPS_CFLAGS"
+    CMACS_MCP_LIBS="\$(srcdir)/../deps/mcp-glib/build/libmcp-glib-1.0.a \
+      $CMACS_MCP_DEPS_LIBS"
+    CMACS_MCP_BUNDLED=yes
+  fi
+  AC_DEFINE([HAVE_CMACS_MCP], 1, [CMacs MCP server])
+  CMACS_MCP_OBJ="cmacs-mcp.o cmacs-mcp-tools.o cmacs-mcp-tools-eval.o \
+    cmacs-mcp-tools-buffer.o cmacs-mcp-tools-window.o cmacs-mcp-tools-input.o \
+    cmacs-mcp-tools-process.o cmacs-mcp-tools-debug.o cmacs-mcp-tools-gi.o \
+    cmacs-mcp-tools-gowl.o cmacs-mcp-resources.o cmacs-mcp-prompts.o"
+fi
+AC_SUBST(CMACS_MCP_OBJ)
+AC_SUBST(CMACS_MCP_CFLAGS)
+AC_SUBST(CMACS_MCP_LIBS)
+AC_SUBST(CMACS_MCP_BUNDLED)
 AC_SUBST(CMACS_ORG_EX_OBJ)
 AC_SUBST(CMACS_ORG_EX_CFLAGS)
 AC_SUBST(CMACS_ORG_EX_LIBS)

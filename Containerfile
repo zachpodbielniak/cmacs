@@ -29,7 +29,7 @@ WORKDIR /build/cmacs
 
 # Remove .git pointer (submodule COPY artifact) and build bundled deps
 RUN rm -f .git \
-    && for dep in crispy bacon gowl podomation; do \
+    && for dep in mcp-glib crispy bacon gowl podomation; do \
            if [ -d "deps/${dep}" ]; then \
                make -C "deps/${dep}" clean all PREFIX=/usr; \
                make -C "deps/${dep}" install PREFIX=/usr; \
@@ -65,6 +65,7 @@ RUN ./autogen.sh \
         --with-cmacs-gowl \
         --with-cmacs-podomation \
         --with-cmacs-org-ex \
+        --with-cmacs-mcp \
     && make -j"$(nproc)" \
     && make install DESTDIR=/build/stage
 

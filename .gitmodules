@@ -10,3 +10,6 @@
 [submodule "deps/podomation"]
 	path = deps/podomation
 	url = git@git-ssh.podbielniak.com:zachpodbielniak/podomation.git
+[submodule "deps/mcp-glib"]
+	path = deps/mcp-glib
+	url = git@gitlab.com:copyleft-games/mcp-glib.git

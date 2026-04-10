@@ -5511,6 +5511,10 @@ extern void init_cmacs_podomation (void);
 #ifdef HAVE_CMACS_ORG_EX
 extern void syms_of_cmacs_org_ex (void);
 #endif
+#ifdef HAVE_CMACS_MCP
+extern void syms_of_cmacs_mcp (void);
+extern void init_cmacs_mcp (void);
+#endif
 
 #ifdef HAVE_NATIVE_COMP
 INLINE bool

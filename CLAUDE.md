@@ -13,7 +13,8 @@
   --with-tiff --with-webp --with-xpm --with-gpm=no \
   --with-cmacs-glib --with-cmacs-gi --with-cmacs-crispy \
   --with-cmacs-bacon --with-cmacs-gowl \
-  --with-cmacs-podomation --with-cmacs-org-ex
+  --with-cmacs-podomation --with-cmacs-org-ex \
+  --with-cmacs-mcp
 make -j$(nproc)           # builds deps + emacs
 src/emacs                 # run it
 ```
@@ -26,7 +27,7 @@ src/emacs                 # run it
 
 ## Architecture
 
-cmacs integrates seven subsystems into Emacs as C primitives (DEFUNs):
+cmacs integrates eight subsystems into Emacs as C primitives (DEFUNs):
 
 | Subsystem | Directory | What it does |
 |-----------|-----------|--------------|
@@ -39,6 +40,7 @@ cmacs integrates seven subsystems into Emacs as C primitives (DEFUNs):
 | **gowl** | `cmacs/gowl/` | Wayland compositor (wlroots-based) — 47 DEFUNs for full WM control |
 | **podomation** | `cmacs/podomation/` | Event-driven automation engine — 17 DEFUNs, DSL, REPL |
 | **org-ex** | `cmacs/org-ex/` | Interactive widget embedding for Org mode (liborgex-1.0.a, statically linked) |
+| **mcp** | `cmacs/mcp/` | MCP server — full AI-native runtime introspection and control via Unix socket |
 
 ### GLib event loop integration (critical)
 
@@ -70,9 +72,11 @@ cmacs/              C source for all cmacs subsystems
   gowl/             Wayland compositor
   podomation/       Automation engine (DEFUN bridge + cmacs/gowl modules)
   org-ex/           Org-Ex interactive widgets (liborgex-1.0.a + DEFUN bridge)
+  mcp/              MCP server (Unix socket, tools, resources, prompts)
   compat/           Compatibility shims
   cmacs.h           Master header
-deps/               Git submodules (crispy, bacon, gowl, podomation)
+deps/               Git submodules (crispy, bacon, gowl, podomation, mcp-glib)
+tools/cmacs-mcp/    MCP stdio-to-socket shim binary
 lisp/cmacs/         Elisp layer for each subsystem
 test/cmacs/         ERT tests for each subsystem
 doc/cmacs/          Texinfo manual (built into Emacs Info)
@@ -109,6 +113,7 @@ All cmacs features are auto-detected. The configure script checks for system pac
 - **gowl**: system `gowl` package or bundled `deps/gowl` + wlroots-0.19 + wayland-server
 - **podomation**: system `podomation-1.0` package or bundled `deps/podomation`
 - **org-ex**: builds `liborgex-1.0.a` statically from `cmacs/org-ex/lib/` (requires glib)
+- **mcp**: system `mcp-glib-1.0` package or bundled `deps/mcp-glib` + json-glib-1.0, libsoup-3.0, libdex-1
 
 ## Testing
 

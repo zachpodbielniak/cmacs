@@ -53,12 +53,14 @@ vpath %.c $(srcdir)/../cmacs/glib $(srcdir)/../cmacs/gobject \
           $(srcdir)/../cmacs/bacon $(srcdir)/../cmacs/gowl \
           $(srcdir)/../cmacs/podomation \
           $(srcdir)/../cmacs/org-ex \
+          $(srcdir)/../cmacs/mcp \
           $(srcdir)/../cmacs/compat
 vpath %.h $(srcdir)/../cmacs/glib $(srcdir)/../cmacs/gobject \
           $(srcdir)/../cmacs/gi $(srcdir)/../cmacs/crispy \
           $(srcdir)/../cmacs/bacon $(srcdir)/../cmacs/gowl \
           $(srcdir)/../cmacs/podomation \
           $(srcdir)/../cmacs/org-ex \
+          $(srcdir)/../cmacs/mcp \
           $(srcdir)/../cmacs/compat
 
 # abs_top_builddir is the name of the toplevel build directory under
@@ -364,19 +366,25 @@ CMACS_PODOMATION_BUNDLED = @CMACS_PODOMATION_BUNDLED@
 CMACS_ORG_EX_OBJ = @CMACS_ORG_EX_OBJ@
 CMACS_ORG_EX_CFLAGS = @CMACS_ORG_EX_CFLAGS@
 CMACS_ORG_EX_LIBS = @CMACS_ORG_EX_LIBS@
+CMACS_MCP_OBJ = @CMACS_MCP_OBJ@
+CMACS_MCP_CFLAGS = @CMACS_MCP_CFLAGS@
+CMACS_MCP_LIBS = @CMACS_MCP_LIBS@
+CMACS_MCP_BUNDLED = @CMACS_MCP_BUNDLED@
 CMACS_API_DIR = @CMACS_API_DIR@
 CMACS_INTERNAL_CFLAGS = -I$(srcdir)/../cmacs/glib -I$(srcdir)/../cmacs/gobject \
                         -I$(srcdir)/../cmacs/gi -I$(srcdir)/../cmacs/crispy \
                         -I$(srcdir)/../cmacs/bacon -I$(srcdir)/../cmacs/gowl \
                         -I$(srcdir)/../cmacs/podomation \
                         -I$(srcdir)/../cmacs/org-ex \
+                        -I$(srcdir)/../cmacs/mcp \
                         -I$(srcdir)/../cmacs/api \
                         -DCMACS_SRCDIR=\"$(abspath $(srcdir))\"
 CMACS_CFLAGS = $(CMACS_INTERNAL_CFLAGS) \
                $(CMACS_GLIB_CFLAGS) $(CMACS_GI_CFLAGS) \
                $(CMACS_CRISPY_CFLAGS) $(CMACS_BACON_CFLAGS) \
                $(CMACS_GOWL_CFLAGS) $(CMACS_PODOMATION_CFLAGS) \
-               $(CMACS_ORG_EX_CFLAGS)
+               $(CMACS_ORG_EX_CFLAGS) \
+               $(CMACS_MCP_CFLAGS)
 
 ## emacs.res if HAVE_W32
 EMACSRES = @EMACSRES@
@@ -520,7 +528,7 @@ base_obj = dispnew.o frame.o scroll.o xdisp.o menu.o $(XMENU_OBJ) window.o     \
 	$(MSDOS_OBJ) $(MSDOS_X_OBJ) $(NS_OBJ) $(CYGWIN_OBJ) $(FONT_OBJ)        \
 	$(W32_OBJ) $(WINDOW_SYSTEM_OBJ) $(XGSELOBJ)			       \
 	$(HAIKU_OBJ) $(PGTK_OBJ) $(ANDROID_OBJ) \
-	$(CMACS_GLIB_OBJ) $(CMACS_GI_OBJ) $(CMACS_CRISPY_OBJ) $(CMACS_BACON_OBJ) $(CMACS_GOWL_OBJ) $(CMACS_PODOMATION_OBJ) $(CMACS_ORG_EX_OBJ)
+	$(CMACS_GLIB_OBJ) $(CMACS_GI_OBJ) $(CMACS_CRISPY_OBJ) $(CMACS_BACON_OBJ) $(CMACS_GOWL_OBJ) $(CMACS_PODOMATION_OBJ) $(CMACS_ORG_EX_OBJ) $(CMACS_MCP_OBJ)
 doc_obj = $(base_obj) $(NS_OBJC_OBJ)
 obj = $(doc_obj) $(HAIKU_CXX_OBJ)
 
@@ -640,7 +648,7 @@ LIBES = $(LIBS) $(W32_LIBS) $(LIBS_GNUSTEP) $(PGTK_LIBS) $(LIBX_BASE) $(LIBIMAGE
    $(TREE_SITTER_LIBS) $(SQLITE3_LIBS) $(XCOMPOSITE_LIBS) $(XSHAPE_LIBS) \
    $(ANDROID_LIBS) \
    $(CMACS_GLIB_LIBS) $(CMACS_GI_LIBS) $(CMACS_CRISPY_LIBS) \
-   $(CMACS_BACON_LIBS) $(CMACS_GOWL_LIBS) $(CMACS_PODOMATION_LIBS) $(CMACS_ORG_EX_LIBS)
+   $(CMACS_BACON_LIBS) $(CMACS_GOWL_LIBS) $(CMACS_PODOMATION_LIBS) $(CMACS_ORG_EX_LIBS) $(CMACS_MCP_LIBS)
 
 ## FORCE it so that admin/unidata can decide whether this file is
 ## up-to-date.  Although since charprop depends on bootstrap-emacs,
@@ -739,8 +747,8 @@ GLOBAL_SOURCES = $(base_obj:.o=.c) $(NS_OBJC_OBJ:.o=.m)
 ## Create symlinks so scanning finds the DEFUN docstrings.
 CMACS_ALL_OBJ = $(CMACS_GLIB_OBJ) $(CMACS_GI_OBJ) \
                 $(CMACS_CRISPY_OBJ) $(CMACS_BACON_OBJ) $(CMACS_GOWL_OBJ) \
-                $(CMACS_PODOMATION_OBJ) $(CMACS_ORG_EX_OBJ)
-CMACS_DIRS = glib gobject gi crispy bacon gowl podomation org-ex
+                $(CMACS_PODOMATION_OBJ) $(CMACS_ORG_EX_OBJ) $(CMACS_MCP_OBJ)
+CMACS_DIRS = glib gobject gi crispy bacon gowl podomation org-ex mcp
 cmacs-symlinks:
 	$(AM_V_at)for f in $(CMACS_ALL_OBJ:.o=.c); do \
 	  test -e "$(srcdir)/$$f" && continue; \
@@ -829,6 +837,17 @@ $(CMACS_ORG_EX_STATIC_LIB):
 	$(MAKE) -C $(srcdir)/../cmacs/org-ex/lib static
 
 $(CMACS_ORG_EX_OBJ): $(CMACS_ORG_EX_STATIC_LIB)
+endif
+
+## Build libmcp-glib-1.0.a (MCP server library)
+ifneq ($(CMACS_MCP_OBJ),)
+ifeq ($(CMACS_MCP_BUNDLED),yes)
+CMACS_MCP_STATIC_LIB = $(srcdir)/../deps/mcp-glib/build/libmcp-glib-1.0.a
+$(CMACS_MCP_STATIC_LIB):
+	$(MAKE) -C $(srcdir)/../deps/mcp-glib
+
+$(CMACS_MCP_OBJ): $(CMACS_MCP_STATIC_LIB)
+endif
 endif
 
 ## -------------------------------------------------------------------

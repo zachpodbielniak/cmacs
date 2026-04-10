@@ -45,6 +45,7 @@ interaction.
 * Gowl Wayland Compositor::    Tiling WM and client embedding.
 * Podomation Automation::      Event-driven automation engine.
 * Org-Ex Interactive Widgets::  Widget embedding in Org buffers.
+* MCP Server::                  MCP server for AI-native control.
 * Build Configuration::         Configure flags and dependencies.
 @end menu
 
@@ -3089,6 +3090,255 @@ Extensible: register new widget types via
 See @file{doc/cmacs/org-ex/org-ex.texi} for the full Org-Ex manual
 with API reference, custom widget creation guide, and export details.
 See @file{doc_org/cmacs/org-ex/examples/} for working examples.
+
+@c ===================================================================
+@node MCP Server
+@chapter MCP Server
+
+@cindex MCP
+@cindex Model Context Protocol
+@cindex AI, agent control
+
+CMacs embeds a Model Context Protocol (MCP) server directly inside the
+Emacs process.  The server runs on the GLib event loop via
+@code{McpUnixSocketServer} (from @code{mcp-glib}), exposing Emacs
+buffers, windows, evaluation, and subsystem access to any MCP-capable AI
+agent.
+
+@section Architecture
+
+An AI agent never connects to Emacs directly.  Instead, the
+@command{cmacs-mcp} shim binary bridges @code{stdio} transport
+(expected by MCP clients) to the Unix domain socket inside Emacs:
+
+@example
+MCP Client (AI agent)
+    |  stdio (JSON-RPC)
+    v
+cmacs-mcp  (shim binary)
+    |  Unix domain socket
+    v
+Emacs (McpUnixSocketServer on GLib main loop)
+@end example
+
+@noindent
+The server is started automatically by @code{cmacs-mcp-mode} or
+manually via @code{cmacs-mcp-start}.  The socket path defaults to
+@file{$XDG_RUNTIME_DIR/cmacs-mcp/@var{PID}.sock}.
+
+@section Tools
+
+MCP tools are grouped by category.  Each tool name is prefixed with its
+category (e.g., @code{eval}, @code{buffer_list_buffers}).
+
+@subsection eval
+
+@table @code
+@item eval
+Evaluate an Elisp expression and return the result.
+@item describe_function
+Return the docstring and arglist of a function.
+@item describe_variable
+Return the docstring and value of a variable.
+@item apropos
+Search for symbols matching a pattern.
+@item completions
+Return completion candidates for a prefix.
+@end table
+
+@subsection buffer
+
+@table @code
+@item buffer_list_buffers
+List all buffers with metadata (size, mode, file, modified).
+@item buffer_get_buffer_content
+Return buffer text, optionally by line range.
+@item buffer_set_buffer_content
+Replace buffer content or a region.
+@item buffer_create_buffer
+Create a new empty buffer.
+@item buffer_kill_buffer
+Kill a buffer by name.
+@item buffer_switch_to_buffer
+Switch the current window to a buffer.
+@item buffer_save_buffer
+Save a buffer to its visited file.
+@item buffer_find_file
+Open a file and return its buffer name.
+@end table
+
+@subsection window
+
+@table @code
+@item window_list_windows
+List all windows across all frames.
+@item window_list_frames
+List all frames with geometry and display info.
+@item window_split_window
+Split a window horizontally or vertically.
+@item window_delete_window
+Delete a window.
+@item window_select_window
+Select a window by ID.
+@end table
+
+@subsection input
+
+@table @code
+@item input_send_keys
+Inject a key sequence as if typed by the user.
+@item input_execute_command
+Execute an interactive command by name.
+@end table
+
+@subsection process
+
+@table @code
+@item process_list_processes
+List all subprocesses with status and command.
+@item process_send_to_process
+Send a string to a running process.
+@end table
+
+@subsection debug
+
+@table @code
+@item debug_backtrace
+Return the current Lisp backtrace.
+@item debug_memory_info
+Return GC and memory statistics.
+@item debug_process_status
+Return Emacs process resource usage.
+@item debug_recent_messages
+Return the last N lines from @code{*Messages*}.
+@item debug_describe_mode
+Describe active major and minor modes.
+@item debug_list_hooks
+List hooks and their attached functions.
+@item debug_profiler_start
+Start the Emacs profiler (CPU, memory, or both).
+@item debug_profiler_stop
+Stop the profiler.
+@item debug_profiler_report
+Return the profiler report as text.
+@end table
+
+@subsection gi (conditional)
+
+These tools are registered only when CMacs is built with
+@option{--with-cmacs-gi}.
+
+@table @code
+@item gi_gi_call
+Call a GObject Introspection function by namespace, name, and args.
+@item gi_gi_list_namespaces
+List all available GI namespaces.
+@item gi_gi_describe
+Describe a GI type, function, or signal.
+@item gi_gi_list_functions
+List functions in a GI namespace.
+@end table
+
+@subsection gowl (conditional)
+
+These tools are registered only when CMacs is built with
+@option{--with-cmacs-gowl}.
+
+@table @code
+@item gowl_gowl_list_clients
+List Wayland clients managed by Gowl.
+@item gowl_gowl_focused_client
+Return the currently focused client.
+@item gowl_gowl_spawn
+Spawn a Wayland client process.
+@item gowl_gowl_list_monitors
+List connected monitors and their geometry.
+@end table
+
+@section Resources
+
+MCP resources expose Emacs state as URI-addressable objects that
+clients can read or subscribe to:
+
+@table @code
+@item buffer://@var{name}
+Contents of the named buffer.
+@item file://@var{path}
+Contents of a file on disk.
+@item messages://
+The @code{*Messages*} buffer (subscribable for live updates).
+@item variable://@var{name}
+The value of an Elisp variable.
+@end table
+
+@section Prompts
+
+The server registers reusable prompt templates:
+
+@table @code
+@item debug_session
+A structured prompt for debugging a problem in the current buffer,
+gathering backtrace, mode info, and recent messages automatically.
+@item code_review
+A prompt for reviewing code in a buffer, collecting content and
+mode context for the AI agent.
+@end table
+
+@section The cmacs-mcp Shim Binary
+
+The @command{cmacs-mcp} binary (@file{tools/cmacs-mcp/}) bridges MCP
+@code{stdio} transport to the Emacs Unix socket.  Socket discovery
+follows this order:
+
+@enumerate
+@item
+@option{--socket @var{PATH}} command-line argument.
+@item
+@option{--name @var{NAME}} looks up
+@file{$XDG_RUNTIME_DIR/cmacs-mcp/@var{NAME}.sock}.
+@item
+@env{CMACS_MCP_SOCKET} environment variable.
+@item
+Auto-discover: scan @file{$XDG_RUNTIME_DIR/cmacs-mcp/} for a
+single @file{.sock} file.
+@end enumerate
+
+@section Elisp Primitives
+
+@table @code
+@item cmacs-mcp-server-p
+Return @code{t} if the MCP server is currently running.
+@item cmacs-mcp-socket-path
+Return the active socket path, or @code{nil}.
+@item cmacs-mcp-session-count
+Return the number of connected MCP sessions.
+@item cmacs-mcp-start
+Start the MCP server (creates socket, begins accepting connections).
+@item cmacs-mcp-stop
+Stop the MCP server (closes all sessions, removes socket).
+@end table
+
+@section Configure
+
+Enable with @option{--with-cmacs-mcp} (auto-detected when
+@code{mcp-glib-1.0} is available via @code{pkg-config}).
+
+@section File Reference
+
+@table @file
+@item cmacs/mcp/cmacs-mcp.c
+Server lifecycle, socket management, session handling.
+@item cmacs/mcp/cmacs-mcp.h
+Public header for the MCP subsystem.
+@item cmacs/mcp/cmacs-mcp-tools.c
+Tool registration and dispatch (all categories).
+@item cmacs/mcp/cmacs-mcp-resources.c
+Resource and prompt registration.
+@item tools/cmacs-mcp/
+Source for the @command{cmacs-mcp} shim binary.
+@item lisp/cmacs/cmacs-mcp.el
+Elisp layer: @code{cmacs-mcp-mode}, configuration, hooks.
+@end table
 
 @c ===================================================================
 @node Build Configuration

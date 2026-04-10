@@ -1,0 +1,281 @@
+#+TITLE: CMacs MCP Server
+#+STARTUP: showall
+#+OPTIONS: toc:2 num:t
+
+* Overview
+
+CMacs embeds an MCP (Model Context Protocol) server directly in Emacs,
+giving AI agents full access to the editor runtime over a Unix domain
+socket.  The server starts automatically at init and listens on
+=$XDG_RUNTIME_DIR/cmacs-mcp-PID.sock=.
+
+MCP clients (Claude Code, other AI tools) connect through the
+=cmacs-mcp= shim binary, which relays stdio to the socket.  Once
+connected, an agent can evaluate Elisp, read and write buffers,
+control windows, send keystrokes, manage processes, run GObject
+Introspection calls, and operate the Gowl Wayland compositor --- all
+through structured MCP tool calls.
+
+* Architecture
+
+#+begin_example
+MCP Client (e.g. Claude Code)
+  |
+  |  stdin/stdout (NDJSON)
+  v
+cmacs-mcp  (shim binary)
+  |
+  |  Unix domain socket (NDJSON)
+  v
+McpUnixSocketServer  (inside Emacs)
+  |
+  |  GLib main context dispatch
+  v
+Emacs runtime  (eval, buffers, windows, ...)
+#+end_example
+
+The =cmacs-mcp= shim is a small GIO-based relay that reads NDJSON
+lines from stdin and forwards them to the socket, and vice versa.
+This lets any MCP client that speaks stdio connect without knowing
+about Unix sockets.
+
+Inside Emacs, the =McpUnixSocketServer= is attached to the CMacs
+=GMainContext= (see [[file:glib.org][GLib Event Loop]]).  Tool callbacks run through the
+=cmacs_dispatch_eval= mechanism to safely evaluate Lisp, respecting
+the =waiting_for_input= guard.
+
+Multiple concurrent client sessions are supported.
+
+* Tools
+
+The server exposes tools in eight categories.
+
+** eval --- Elisp Evaluation
+
+| Tool                  | Description                                        |
+|-----------------------+----------------------------------------------------|
+| =eval=                | Evaluate an Elisp expression, return result        |
+| =describe_function=   | Describe an Elisp function (docstring, arglist)    |
+| =describe_variable=   | Describe an Elisp variable (docstring, value)      |
+| =apropos=             | Search for symbols matching a pattern              |
+| =completions=         | Get completion candidates for a prefix             |
+
+The =eval= tool is the universal gateway --- any Emacs functionality
+is reachable through it.
+
+** buffer --- Buffer Management
+
+| Tool                  | Description                                        |
+|-----------------------+----------------------------------------------------|
+| =list_buffers=        | List all buffers with metadata                     |
+| =get_buffer_content=  | Read text content of a buffer (with optional range) |
+| =set_buffer_content=  | Replace buffer content or insert at point          |
+| =create_buffer=       | Create a new buffer with optional content          |
+| =kill_buffer=         | Kill a buffer by name                              |
+| =switch_to_buffer=    | Switch to a buffer                                 |
+| =save_buffer=         | Save a buffer to its file                          |
+| =find_file=           | Open a file in a buffer                            |
+
+** window --- Window and Frame Control
+
+| Tool                  | Description                                        |
+|-----------------------+----------------------------------------------------|
+| =list_windows=        | List all windows with buffer and geometry info     |
+| =list_frames=         | List all frames                                    |
+| =split_window=        | Split a window horizontally or vertically          |
+| =delete_window=       | Delete a window                                    |
+| =select_window=       | Select (focus) a window                            |
+
+** input --- Keyboard and Commands
+
+| Tool                  | Description                                        |
+|-----------------------+----------------------------------------------------|
+| =send_keys=           | Send a key sequence to Emacs (e.g. =C-x C-s=)     |
+| =execute_command=     | Execute an interactive command by name             |
+
+** process --- Subprocess Management
+
+| Tool                  | Description                                        |
+|-----------------------+----------------------------------------------------|
+| =list_processes=      | List running subprocesses                          |
+| =send_to_process=     | Send input to a process buffer                     |
+
+** debug --- Debugging and Introspection
+
+| Tool                  | Description                                        |
+|-----------------------+----------------------------------------------------|
+| =backtrace=           | Get the current Elisp backtrace                    |
+| =memory_info=         | Report memory usage (cons cells, strings, etc.)    |
+| =process_status=      | PID, uptime, version                               |
+| =recent_messages=     | Last N lines from =*Messages*=                     |
+| =describe_mode=       | Describe major and minor modes of a buffer         |
+| =list_hooks=          | List hooks and their functions                     |
+| =profiler_start=      | Start the Emacs profiler                           |
+| =profiler_stop=       | Stop the profiler                                  |
+| =profiler_report=     | Get the profiler report                            |
+
+** gi --- GObject Introspection (optional)
+
+Available when CMacs is built with =--with-cmacs-gi=.
+
+| Tool                  | Description                                        |
+|-----------------------+----------------------------------------------------|
+| =gi_call=             | Call a GI function (namespace, function, args)     |
+| =gi_list_namespaces=  | List loaded GI namespaces                          |
+| =gi_describe=         | Describe a GI type or function                     |
+| =gi_list_functions=   | List functions in a GI namespace                   |
+
+** gowl --- Wayland Compositor (optional)
+
+Available when CMacs is built with =--with-cmacs-gowl=.
+
+| Tool                  | Description                                        |
+|-----------------------+----------------------------------------------------|
+| =gowl_list_clients=   | List Wayland clients                               |
+| =gowl_focused_client= | Get the focused client                             |
+| =gowl_spawn=          | Spawn a program on the compositor                  |
+| =gowl_list_monitors=  | List connected monitors                            |
+| =gowl_list_keybinds=  | List compositor keybindings                        |
+| =gowl_find_client=    | Find a client by title or app-id                   |
+| =gowl_reload_config=  | Reload the compositor configuration                |
+| =gowl_lock=           | Lock the session                                   |
+| =gowl_unlock=         | Unlock the session                                 |
+
+* Resources
+
+MCP resources expose Emacs state as readable URIs.
+
+| URI Pattern             | Description                                      |
+|-------------------------+--------------------------------------------------|
+| =buffer://{name}=       | Text content of an Emacs buffer by name          |
+| =file://{path}=         | Read a file from the filesystem                  |
+| =messages://=           | Contents of the =*Messages*= buffer              |
+| =variable://{name}=     | Current value of an Elisp variable               |
+
+* Prompts
+
+Prompt templates provide structured context for AI interactions.
+
+** debug_session
+
+Start a debug session with full Emacs context: backtrace, recent
+messages, optional buffer content, and process info.
+
+| Argument         | Required | Description                               |
+|------------------+----------+-------------------------------------------|
+| =error_message=  | no       | Error message or symptom to investigate   |
+| =buffer=         | no       | Buffer name to include in context         |
+
+** code_review
+
+Review code in an Emacs buffer with file info and content.
+
+| Argument         | Required | Description                               |
+|------------------+----------+-------------------------------------------|
+| =buffer=         | no       | Buffer to review (defaults to current)    |
+
+* cmacs-mcp Shim Binary
+
+The =cmacs-mcp= binary is a stdio-to-socket relay that lets MCP
+clients connect to the embedded server.
+
+** Socket Discovery Order
+
+1. =--socket PATH= flag (explicit full path)
+2. =--name NAME= flag (expands to =$XDG_RUNTIME_DIR/cmacs-mcp-NAME.sock=)
+3. =$CMACS_MCP_SOCKET= environment variable
+4. Auto-discover: scan =$XDG_RUNTIME_DIR/cmacs-mcp-*.sock=, pick newest
+
+** Usage Examples
+
+#+begin_src shell
+# Auto-discover (picks the most recently created socket)
+cmacs-mcp
+
+# Connect to a specific socket
+cmacs-mcp --socket /run/user/1000/cmacs-mcp-12345.sock
+
+# Connect by name
+cmacs-mcp --name myproject
+
+# Override via environment
+CMACS_MCP_SOCKET=/tmp/test.sock cmacs-mcp
+#+end_src
+
+** Claude Code Configuration
+
+Add to your MCP client config (e.g. =.claude/settings.json=):
+
+#+begin_src json
+{
+  "mcpServers": {
+    "cmacs": {
+      "command": "cmacs-mcp"
+    }
+  }
+}
+#+end_src
+
+* Elisp Primitives
+
+| Function                              | Description                                    |
+|---------------------------------------+------------------------------------------------|
+| =(cmacs-mcp-server-p)=               | Return non-nil if the MCP server is running    |
+| =(cmacs-mcp-socket-path)=            | Return the Unix socket path, or nil            |
+| =(cmacs-mcp-session-count)=          | Return the number of active client sessions    |
+| =(cmacs-mcp-start)=                  | Start the MCP server                           |
+| =(cmacs-mcp-stop)=                   | Stop the MCP server and disconnect all clients |
+
+** Minor Mode
+
+=cmacs-mcp-mode= is a global minor mode that tracks buffer
+modifications so MCP resource subscriptions (e.g. =buffer://=)
+receive update notifications.
+
+#+begin_src emacs-lisp
+;; Enable buffer change notifications for MCP clients
+(cmacs-mcp-mode 1)
+
+;; Check server status
+(cmacs-mcp-status)
+#+end_src
+
+* Configuration
+
+** Configure Flag
+
+#+begin_example
+./configure --with-cmacs-mcp
+#+end_example
+
+MCP support is auto-detected when the =mcp-glib= library is available.
+
+** Dependencies
+
+| Package       | Purpose                               |
+|---------------+---------------------------------------|
+| =mcp-glib=    | MCP server library (GObject-based)    |
+| =json-glib=   | JSON parsing for tool schemas         |
+| =gio-2.0=     | Unix socket and async I/O             |
+
+* Files
+
+| File                                    | Purpose                                |
+|-----------------------------------------+----------------------------------------|
+| =cmacs/mcp/cmacs-mcp.c=                | Server lifecycle, DEFUNs               |
+| =cmacs/mcp/cmacs-mcp.h=                | Public API header                      |
+| =cmacs/mcp/cmacs-mcp-tools.c=          | Master tool registration, schema helper |
+| =cmacs/mcp/cmacs-mcp-tools.h=          | Tool registration declarations         |
+| =cmacs/mcp/cmacs-mcp-tools-eval.c=     | eval, describe, apropos, completions   |
+| =cmacs/mcp/cmacs-mcp-tools-buffer.c=   | Buffer management tools                |
+| =cmacs/mcp/cmacs-mcp-tools-window.c=   | Window and frame tools                 |
+| =cmacs/mcp/cmacs-mcp-tools-input.c=    | Key sequence and command tools         |
+| =cmacs/mcp/cmacs-mcp-tools-process.c=  | Subprocess tools                       |
+| =cmacs/mcp/cmacs-mcp-tools-debug.c=    | Debugging and profiler tools           |
+| =cmacs/mcp/cmacs-mcp-tools-gi.c=       | GObject Introspection tools            |
+| =cmacs/mcp/cmacs-mcp-tools-gowl.c=     | Wayland compositor tools               |
+| =cmacs/mcp/cmacs-mcp-resources.c=      | Resource handlers                      |
+| =cmacs/mcp/cmacs-mcp-prompts.c=        | Prompt templates                       |
+| =tools/cmacs-mcp/cmacs-mcp.c=          | Shim binary (stdio-to-socket relay)    |
+| =tools/cmacs-mcp/Makefile=             | Shim build                             |
+| =lisp/cmacs/cmacs-mcp.el=              | Elisp layer, cmacs-mcp-mode           |
