@@ -653,29 +653,37 @@ ifeq (${ns_self_contained},no)
 	@if test -d $(srcdir)/deps/gowl/build/release/modules; then \
 		umask 022; ${MKDIR_P} "$(DESTDIR)${archlibdir}/gowl-modules"; \
 		for f in $(srcdir)/deps/gowl/build/release/modules/*.so; do \
-			test -f "$$f" && ${INSTALL_PROGRAM} "$$f" \
-				"$(DESTDIR)${archlibdir}/gowl-modules/$$(basename $$f)"; \
+			if test -f "$$f"; then \
+				${INSTALL_PROGRAM} "$$f" \
+					"$(DESTDIR)${archlibdir}/gowl-modules/$$(basename $$f)"; \
+			fi; \
 		done; \
 	fi
 	@if test -d $(srcdir)/deps/bacon/build/release/modules; then \
 		umask 022; ${MKDIR_P} "$(DESTDIR)${libdir}/bacon/modules"; \
 		for f in $(srcdir)/deps/bacon/build/release/modules/*.so; do \
-			test -f "$$f" && ${INSTALL_PROGRAM} "$$f" \
-				"$(DESTDIR)${libdir}/bacon/modules/$$(basename $$f)"; \
+			if test -f "$$f"; then \
+				${INSTALL_PROGRAM} "$$f" \
+					"$(DESTDIR)${libdir}/bacon/modules/$$(basename $$f)"; \
+			fi; \
 		done; \
 	fi
 	@if test -d $(srcdir)/cmacs/bacon/modules; then \
 		umask 022; ${MKDIR_P} "$(DESTDIR)${libdir}/bacon/modules"; \
 		for f in $(srcdir)/cmacs/bacon/modules/*.so; do \
-			test -f "$$f" && ${INSTALL_PROGRAM} "$$f" \
-				"$(DESTDIR)${libdir}/bacon/modules/$$(basename $$f)"; \
+			if test -f "$$f"; then \
+				${INSTALL_PROGRAM} "$$f" \
+					"$(DESTDIR)${libdir}/bacon/modules/$$(basename $$f)"; \
+			fi; \
 		done; \
 	fi
 	@if test -d $(srcdir)/deps/podomation/build/release/modules; then \
 		umask 022; ${MKDIR_P} "$(DESTDIR)${libdir}/podomation/modules"; \
 		for f in $(srcdir)/deps/podomation/build/release/modules/*.so; do \
-			test -f "$$f" && ${INSTALL_PROGRAM} "$$f" \
-				"$(DESTDIR)${libdir}/podomation/modules/$$(basename $$f)"; \
+			if test -f "$$f"; then \
+				${INSTALL_PROGRAM} "$$f" \
+					"$(DESTDIR)${libdir}/podomation/modules/$$(basename $$f)"; \
+			fi; \
 		done; \
 	fi
 endif
