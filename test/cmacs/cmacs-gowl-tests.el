@@ -300,5 +300,96 @@
   (skip-unless (fboundp 'gowl-client-info))
   (should-error (gowl-client-info nil)))
 
+;;; Module management tests
+
+(ert-deftest cmacs-gowl-test-enable-module-not-running ()
+  "Enabling a module without a running compositor should error."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (skip-unless (not (gowl-running-p)))
+  (should-error (gowl-enable-module "alpha") :type 'error))
+
+(ert-deftest cmacs-gowl-test-enable-module-bad-name ()
+  "Enabling a nonexistent module should signal gowl-error."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (skip-unless (gowl-running-p))
+  (should-error (gowl-enable-module "nonexistent-module-xyz")
+                :type 'gowl-error))
+
+(ert-deftest cmacs-gowl-test-enable-module-type-check ()
+  "gowl-enable-module should reject non-string arguments."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (should-error (gowl-enable-module 42) :type 'wrong-type-argument))
+
+(ert-deftest cmacs-gowl-test-disable-module-not-loaded ()
+  "Disabling a module that isn't loaded should return nil."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (skip-unless (gowl-running-p))
+  (should-not (gowl-disable-module "nonexistent-module-xyz")))
+
+(ert-deftest cmacs-gowl-test-disable-module-type-check ()
+  "gowl-disable-module should reject non-string arguments."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (should-error (gowl-disable-module 42) :type 'wrong-type-argument))
+
+(ert-deftest cmacs-gowl-test-configure-module-type-check ()
+  "gowl-configure-module should reject non-string name."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (should-error (gowl-configure-module 42 '()) :type 'wrong-type-argument))
+
+(ert-deftest cmacs-gowl-test-configure-module-alist-check ()
+  "gowl-configure-module should reject non-list alist."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (should-error (gowl-configure-module "test" 42) :type 'wrong-type-argument))
+
+;;; Alpha convenience DEFUN tests
+
+(ert-deftest cmacs-gowl-test-set-client-alpha-type-check ()
+  "gowl-set-client-alpha should reject nil client."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (should-error (gowl-set-client-alpha nil 0.5) :type 'error))
+
+(ert-deftest cmacs-gowl-test-alpha-info-no-module ()
+  "gowl-alpha-info returns nil when alpha module is not loaded."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (skip-unless (gowl-running-p))
+  (should (null (gowl-alpha-info))))
+
+(ert-deftest cmacs-gowl-test-set-focused-alpha-type-check ()
+  "gowl-set-focused-alpha should reject non-number."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (should-error (gowl-set-focused-alpha "bad") :type 'wrong-type-argument))
+
+(ert-deftest cmacs-gowl-test-set-unfocused-alpha-type-check ()
+  "gowl-set-unfocused-alpha should reject non-number."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (should-error (gowl-set-unfocused-alpha "bad") :type 'wrong-type-argument))
+
+;;; Gaps convenience DEFUN tests
+
+(ert-deftest cmacs-gowl-test-gaps-info-no-module ()
+  "gowl-gaps-info returns nil when vanitygaps module is not loaded."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (skip-unless (gowl-running-p))
+  (should (null (gowl-gaps-info))))
+
+(ert-deftest cmacs-gowl-test-set-gaps-type-check ()
+  "gowl-set-gaps should reject non-list argument."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (should-error (gowl-set-gaps 42) :type 'wrong-type-argument))
+
+;;; Screenlock convenience DEFUN tests
+
+(ert-deftest cmacs-gowl-test-configure-screenlock-type-check ()
+  "gowl-configure-screenlock should reject non-list argument."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (should-error (gowl-configure-screenlock 42) :type 'wrong-type-argument))
+
+;;; Scratchpad convenience DEFUN tests
+
+(ert-deftest cmacs-gowl-test-scratchpad-toggle-type-check ()
+  "gowl-scratchpad-toggle should reject non-string argument."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (should-error (gowl-scratchpad-toggle 42) :type 'wrong-type-argument))
+
 (provide 'cmacs-gowl-tests)
 ;;; cmacs-gowl-tests.el ends here

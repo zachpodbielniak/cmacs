@@ -1973,6 +1973,155 @@ argument: the newly focused @code{GowlClient}, or @code{nil} if no
 client is focused.
 @end table
 
+@section Modules
+
+@cindex gowl modules
+@cindex modules, gowl
+
+Gowl provides a module system for extending the compositor.  Modules
+are shared-object plugins that implement compositor interfaces
+(layout providers, gap providers, keybind handlers, etc.).
+
+When running with @option{--gowl}, call @code{gowl-start} before
+using any module functions.  The @option{--gowl} command-line flag
+pre-starts the compositor early (before Elisp loads), but
+@code{gowl-start} is still needed to load bundled modules and
+initialize the Elisp integration layer.
+
+@example
+(when (and (fboundp 'gowl-running-p) (gowl-running-p))
+  (gowl-start)
+  (gowl-enable-module "alpha")
+  (gowl-set-wallpaper "~/Pictures/wallpaper.png"))
+@end example
+
+@table @code
+@item gowl-start
+Initialize module loading and Elisp integration.  Safe to call
+when the compositor is already running (idempotent).
+@item gowl-enable-module @var{name}
+Find and load a module by name, activate it, and dispatch startup.
+@item gowl-disable-module @var{name}
+Deactivate a loaded module.
+@item gowl-configure-module @var{name} @var{alist}
+Configure a module with an alist of string key-value pairs.
+@item gowl-list-modules
+Return a list of loaded module info alists.
+@end table
+
+@subsection Alpha (Window Opacity)
+@cindex alpha, window opacity
+@cindex transparency, windows
+
+The alpha module controls per-client window opacity with automatic
+focus dimming.  Unfocused windows fade to a configurable opacity.
+
+@example
+(gowl-enable-module "alpha")
+(gowl-set-focused-alpha 0.9)
+(gowl-set-unfocused-alpha 0.9)
+;; Per-client override:
+(gowl-set-client-alpha client 0.5)
+;; Set all clients at once:
+(gowl-set-all-alpha 0.8)
+;; Query current config:
+(gowl-alpha-info)
+  @result{} ((focused-alpha . 0.9) (unfocused-alpha . 0.9))
+@end example
+
+@subsubheading Seeing the Wallpaper Through Emacs
+
+To make the Emacs frame transparent so the gowl wallpaper is visible
+behind it, two things are needed:
+
+@enumerate
+@item
+@strong{PGTK @code{alpha-background}}: Makes Emacs render its
+background with transparent pixels.  Text and UI stay fully opaque.
+@item
+@strong{Compositor-level alpha}: Any client opacity less than 1.0
+forces wlroots to skip the opaque-region optimization and composite
+the wallpaper behind the frame.
+@end enumerate
+
+wlroots resets scene buffer opacity to 1.0 on every surface commit.
+Gowl re-applies the stored alpha after each commit so the
+transparency persists across frames.
+
+@example
+;; In your Emacs config (e.g. Doom config.el):
+(when (and (fboundp 'gowl-running-p) (gowl-running-p))
+  (gowl-start)
+  (gowl-enable-module "alpha")
+  (gowl-set-focused-alpha 0.9)
+  (gowl-set-unfocused-alpha 0.9)
+  (gowl-set-wallpaper "~/Pictures/wallpaper.png")
+  (set-frame-parameter nil 'alpha-background 85)
+  (add-to-list 'default-frame-alist '(alpha-background . 85))
+  (gowl-set-all-alpha 0.99))
+@end example
+
+@table @code
+@item gowl-set-client-alpha @var{client} @var{alpha}
+Set opacity of a specific client (0.0--1.0).
+@item gowl-set-all-alpha @var{alpha}
+Set opacity of all clients.  Returns the number affected.
+@item gowl-set-focused-alpha @var{alpha}
+Set opacity for the focused window.
+@item gowl-set-unfocused-alpha @var{alpha}
+Set opacity for unfocused windows.
+@item gowl-alpha-info
+Return the current alpha configuration as an alist.
+@end table
+
+@subsection Vanitygaps
+@cindex gaps, window
+
+The vanitygaps module adds configurable inner and outer gaps between
+tiled windows.
+
+@example
+(gowl-enable-module "vanitygaps")
+(gowl-set-gaps '(("inner-gap" . "16") ("outer-gap" . "8")))
+(gowl-gaps-info)
+  @result{} ((inner-h . 16) (inner-v . 16) (outer-h . 8) (outer-v . 8))
+@end example
+
+@table @code
+@item gowl-set-gaps @var{alist}
+Configure gap sizes.  Keys: @code{inner-gap}, @code{outer-gap},
+@code{inner-h}, @code{inner-v}, @code{outer-h}, @code{outer-v}.
+@item gowl-gaps-info
+Return the current gap values as an alist.
+@end table
+
+@subsection Screenlock
+@cindex screenlock
+@cindex screen lock
+
+The screenlock module provides full-screen session locking with PAM
+authentication.  @code{gowl-lock} and @code{gowl-locked-p} are
+available as C primitives; use @code{gowl-configure-screenlock} to
+set colors, font, PAM service, and auto-lock timeout.
+
+@example
+(gowl-enable-module "screenlock")
+(gowl-configure-screenlock
+  '(("pam-service" . "gowl")
+    ("auto-lock-timeout" . "300")
+    ("bg-color" . "#1e1e2e")))
+@end example
+
+@subsection Scratchpad
+@cindex scratchpad
+
+Named scratchpad windows that can be toggled on and off.
+
+@example
+(gowl-enable-module "scratchpad")
+(gowl-scratchpad-toggle "terminal")
+@end example
+
 @section Elisp Convenience Layer
 
 @cindex cmacs-gowl.el helpers

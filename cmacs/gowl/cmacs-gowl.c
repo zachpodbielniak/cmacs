@@ -1042,11 +1042,34 @@ the event loop source and returns. */)
 {
   GError *err = NULL;
 
-  /* If already started (e.g. via --gowl early init), just make sure
-     the dispatch thread is running.  The intercept and timer are
-     registered in cmacs_gowl_start_thread. */
+  /* If already started (e.g. via --gowl early init), load modules
+     (the early path creates an empty module manager), set up the
+     intercept/timer, and ensure the dispatch thread is running. */
   if (cmacs_gowl_compositor != NULL)
     {
+      /* Load bundled modules if the manager is still empty
+         (--gowl early path doesn't load any). */
+      {
+        GowlModuleManager *mgr =
+          gowl_compositor_get_module_manager (cmacs_gowl_compositor);
+        if (mgr != NULL)
+          {
+            g_autofree gchar *wallpaper_so =
+              cmacs_gowl_find_module ("wallpaper");
+            if (wallpaper_so != NULL)
+              {
+                g_autoptr (GError) mod_err = NULL;
+                if (!gowl_module_manager_load_module (mgr, wallpaper_so,
+                                                      &mod_err))
+                  g_warning ("gowl: failed to load wallpaper module: %s",
+                             mod_err->message);
+              }
+            gowl_module_manager_activate_all (mgr);
+            gowl_module_manager_dispatch_startup (mgr,
+                                                  cmacs_gowl_compositor);
+          }
+      }
+
       if (cmacs_embed_wl_esc_timer == NULL)
         {
           struct wl_event_loop *loop =
@@ -3064,7 +3087,8 @@ DEFUN ("gowl-load-module", Fgowl_load_module, Sgowl_load_module,
 
 DEFUN ("gowl-list-modules", Fgowl_list_modules, Sgowl_list_modules,
        0, 0, 0,
-       doc: /* Return a list of loaded module GObjects. */)
+       doc: /* Return a list of module info alists.
+Each element is ((name . NAME) (description . DESC) (version . VER)). */)
   (void)
 {
   GowlModuleManager *mgr;
@@ -3078,7 +3102,18 @@ DEFUN ("gowl-list-modules", Fgowl_list_modules, Sgowl_list_modules,
 
   modules = gowl_module_manager_get_modules (mgr);
   for (l = modules; l != NULL; l = l->next)
-    result = Fcons (cmacs_gobject_wrap (G_OBJECT (l->data)), result);
+    {
+      GowlModuleInfo *info = (GowlModuleInfo *) l->data;
+      const gchar *n = gowl_module_info_get_name (info);
+      const gchar *d = gowl_module_info_get_description (info);
+      const gchar *v = gowl_module_info_get_version (info);
+      Lisp_Object entry = list3 (
+        Fcons (intern ("name"), build_string (n ? n : "")),
+        Fcons (intern ("description"), build_string (d ? d : "")),
+        Fcons (intern ("version"), build_string (v ? v : "")));
+      result = Fcons (entry, result);
+    }
+  g_list_free_full (modules, (GDestroyNotify) gowl_module_info_free);
 
   return Fnreverse (result);
 }
@@ -3098,6 +3133,139 @@ DEFUN ("gowl-load-modules-from-dir", Fgowl_load_modules_from_dir,
     error ("No module manager");
 
   gowl_module_manager_load_from_directory (mgr, SSDATA (dir));
+  return Qt;
+}
+
+/* Helper: find a loaded module by name. */
+static GowlModule *
+cmacs_gowl_find_loaded_module (const gchar *name)
+{
+  GowlModuleManager *mgr;
+
+  mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
+  if (mgr == NULL)
+    return NULL;
+
+  return gowl_module_manager_find_module (mgr, name);
+}
+
+DEFUN ("gowl-enable-module", Fgowl_enable_module, Sgowl_enable_module,
+       1, 1, 0,
+       doc: /* Enable a gowl module by NAME (a string).
+Finds the module .so, loads it, activates it, and dispatches startup.
+Returns t on success.  Signals `gowl-error' if the module cannot be
+found or fails to load. */)
+  (Lisp_Object name)
+{
+  GowlModuleManager *mgr;
+  GowlModule *mod;
+  g_autofree gchar *so_path = NULL;
+  g_autoptr (GError) err = NULL;
+
+  CHECK_STRING (name);
+  GOWL_CHECK_RUNNING ();
+
+  mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
+  if (mgr == NULL)
+    error ("No module manager");
+
+  /* Already loaded? */
+  mod = cmacs_gowl_find_loaded_module (SSDATA (name));
+  if (mod != NULL)
+    {
+      if (!gowl_module_get_is_active (mod))
+        gowl_module_activate (mod);
+      return Qt;
+    }
+
+  /* Find the .so */
+  so_path = cmacs_gowl_find_module (SSDATA (name));
+  if (so_path == NULL)
+    xsignal1 (Qgowl_error,
+              concat3 (build_string ("Module not found: "),
+                       name, empty_unibyte_string));
+
+  if (!gowl_module_manager_load_module (mgr, so_path, &err))
+    xsignal1 (Qgowl_error, build_string (err->message));
+
+  /* Look up the module by name — safer than assuming list position. */
+  mod = cmacs_gowl_find_loaded_module (SSDATA (name));
+  if (mod == NULL)
+    xsignal1 (Qgowl_error,
+              concat3 (build_string ("Module loaded but not found: "),
+                       name, empty_unibyte_string));
+
+  gowl_module_activate (mod);
+
+  /* Dispatch startup if the module implements the interface. */
+  if (GOWL_IS_STARTUP_HANDLER (mod))
+    gowl_startup_handler_on_startup (GOWL_STARTUP_HANDLER (mod),
+                                     cmacs_gowl_compositor);
+
+  return Qt;
+}
+
+DEFUN ("gowl-disable-module", Fgowl_disable_module, Sgowl_disable_module,
+       1, 1, 0,
+       doc: /* Disable a loaded gowl module by NAME.
+Deactivates the module.  Returns t if found, nil otherwise. */)
+  (Lisp_Object name)
+{
+  GowlModule *mod;
+
+  CHECK_STRING (name);
+  GOWL_CHECK_RUNNING ();
+
+  mod = cmacs_gowl_find_loaded_module (SSDATA (name));
+  if (mod == NULL)
+    return Qnil;
+
+  if (gowl_module_get_is_active (mod))
+    gowl_module_deactivate (mod);
+  return Qt;
+}
+
+DEFUN ("gowl-configure-module", Fgowl_configure_module,
+       Sgowl_configure_module, 2, 2, 0,
+       doc: /* Configure module NAME with ALIST.
+ALIST is an association list of (KEY . VALUE) pairs where both KEY
+and VALUE are strings.  Builds the module config hash and calls
+gowl_module_manager_configure_all. */)
+  (Lisp_Object name, Lisp_Object alist)
+{
+  GowlModuleManager *mgr;
+  GHashTable *inner, *outer;
+  Lisp_Object tail, pair;
+
+  CHECK_STRING (name);
+  CHECK_LIST (alist);
+  GOWL_CHECK_RUNNING ();
+
+  mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
+  if (mgr == NULL)
+    error ("No module manager");
+
+  /* Convert alist to GHashTable<str,str>. */
+  inner = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_free);
+  for (tail = alist; CONSP (tail); tail = XCDR (tail))
+    {
+      pair = XCAR (tail);
+      if (!CONSP (pair))
+        continue;
+      CHECK_STRING (XCAR (pair));
+      CHECK_STRING (XCDR (pair));
+      g_hash_table_insert (inner,
+                           g_strdup (SSDATA (XCAR (pair))),
+                           g_strdup (SSDATA (XCDR (pair))));
+    }
+
+  outer = g_hash_table_new (g_str_hash, g_str_equal);
+  g_hash_table_insert (outer, SSDATA (name), inner);
+
+  gowl_module_manager_configure_all (mgr, outer);
+
+  g_hash_table_unref (outer);
+  g_hash_table_unref (inner);
   return Qt;
 }
 
@@ -3180,6 +3348,298 @@ Returns nil if no wallpaper has been set. */)
                 Fcons (intern ("mode"),
                        build_string (cmacs_wallpaper_mode
                                      ? cmacs_wallpaper_mode : "fill")));
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════
+ * ALPHA / OPACITY
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static gfloat cmacs_alpha_focused = 1.0f;
+static gfloat cmacs_alpha_unfocused = 0.8f;
+
+DEFUN ("gowl-set-client-alpha", Fgowl_set_client_alpha,
+       Sgowl_set_client_alpha, 2, 2, 0,
+       doc: /* Set the opacity of CLIENT to ALPHA (a float 0.0 to 1.0).
+Immediately walks the client's scene tree and applies the opacity. */)
+  (Lisp_Object client, Lisp_Object alpha)
+{
+  GowlClient *c;
+  double val;
+
+  GOWL_CHECK_RUNNING ();
+  c = gowl_resolve_client (client);
+  CHECK_NUMBER (alpha);
+  val = XFLOATINT (alpha);
+  gowl_client_set_alpha (c, (gfloat) val);
+  return Qt;
+}
+
+DEFUN ("gowl-set-all-alpha", Fgowl_set_all_alpha,
+       Sgowl_set_all_alpha, 1, 1, 0,
+       doc: /* Set opacity of ALL clients to ALPHA (a float 0.0 to 1.0).
+Returns the number of clients affected. */)
+  (Lisp_Object alpha)
+{
+  GList *clients, *l;
+  double val;
+  int count = 0;
+
+  CHECK_NUMBER (alpha);
+  GOWL_CHECK_RUNNING ();
+  val = XFLOATINT (alpha);
+
+  clients = gowl_compositor_get_clients (cmacs_gowl_compositor);
+  for (l = clients; l != NULL; l = l->next)
+    {
+      GowlClient *c = GOWL_CLIENT (l->data);
+      gowl_client_set_alpha (c, (gfloat) val);
+      count++;
+    }
+
+  message1 (SSDATA (CALLN (Fformat,
+    build_string ("gowl: set alpha %.2f on %d clients"),
+    alpha, make_fixnum (count))));
+
+  return make_fixnum (count);
+}
+
+DEFUN ("gowl-set-focused-alpha", Fgowl_set_focused_alpha,
+       Sgowl_set_focused_alpha, 1, 1, 0,
+       doc: /* Set the alpha module's focused window opacity to ALPHA.
+Configures the alpha module and re-applies immediately. */)
+  (Lisp_Object alpha)
+{
+  GowlModuleManager *mgr;
+  GHashTable *inner, *outer;
+  char buf[64];
+
+  CHECK_NUMBER (alpha);
+  GOWL_CHECK_RUNNING ();
+
+  mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
+  if (mgr == NULL)
+    error ("No module manager");
+
+  cmacs_alpha_focused = (gfloat) XFLOATINT (alpha);
+  snprintf (buf, sizeof buf, "%.4f", cmacs_alpha_focused);
+
+  inner = g_hash_table_new (g_str_hash, g_str_equal);
+  g_hash_table_insert (inner, (gpointer) "focused-alpha", buf);
+  outer = g_hash_table_new (g_str_hash, g_str_equal);
+  g_hash_table_insert (outer, (gpointer) "alpha", inner);
+  gowl_module_manager_configure_all (mgr, outer);
+  g_hash_table_unref (outer);
+  g_hash_table_unref (inner);
+  return Qt;
+}
+
+DEFUN ("gowl-set-unfocused-alpha", Fgowl_set_unfocused_alpha,
+       Sgowl_set_unfocused_alpha, 1, 1, 0,
+       doc: /* Set the alpha module's unfocused window opacity to ALPHA.
+Configures the alpha module and re-applies immediately. */)
+  (Lisp_Object alpha)
+{
+  GowlModuleManager *mgr;
+  GHashTable *inner, *outer;
+  char buf[64];
+
+  CHECK_NUMBER (alpha);
+  GOWL_CHECK_RUNNING ();
+
+  mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
+  if (mgr == NULL)
+    error ("No module manager");
+
+  cmacs_alpha_unfocused = (gfloat) XFLOATINT (alpha);
+  snprintf (buf, sizeof buf, "%.4f", cmacs_alpha_unfocused);
+
+  inner = g_hash_table_new (g_str_hash, g_str_equal);
+  g_hash_table_insert (inner, (gpointer) "unfocused-alpha", buf);
+  outer = g_hash_table_new (g_str_hash, g_str_equal);
+  g_hash_table_insert (outer, (gpointer) "alpha", inner);
+  gowl_module_manager_configure_all (mgr, outer);
+  g_hash_table_unref (outer);
+  g_hash_table_unref (inner);
+  return Qt;
+}
+
+DEFUN ("gowl-alpha-info", Fgowl_alpha_info, Sgowl_alpha_info,
+       0, 0, 0,
+       doc: /* Return the current alpha module configuration as an alist.
+Returns ((focused-alpha . F) (unfocused-alpha . F)) or nil if
+the alpha module has never been configured. */)
+  (void)
+{
+  GowlModule *mod;
+
+  GOWL_CHECK_RUNNING ();
+
+  mod = cmacs_gowl_find_loaded_module ("alpha");
+  if (mod == NULL)
+    return Qnil;
+
+  return list2 (Fcons (intern ("focused-alpha"),
+                       make_float (cmacs_alpha_focused)),
+                Fcons (intern ("unfocused-alpha"),
+                       make_float (cmacs_alpha_unfocused)));
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ * GAPS (vanitygaps)
+ * ══════════════════════════════════════════════════════════════════════ */
+
+DEFUN ("gowl-set-gaps", Fgowl_set_gaps, Sgowl_set_gaps, 1, 1, 0,
+       doc: /* Configure the vanitygaps module with ALIST.
+ALIST is an alist of string key-value pairs.  Supported keys:
+"inner-gap", "outer-gap", "inner-h", "inner-v", "outer-h", "outer-v".
+Re-arranges all monitors immediately. */)
+  (Lisp_Object alist)
+{
+  GowlModuleManager *mgr;
+  GHashTable *inner, *outer;
+  GList *monitors, *l;
+  Lisp_Object tail, pair;
+
+  CHECK_LIST (alist);
+  GOWL_CHECK_RUNNING ();
+
+  mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
+  if (mgr == NULL)
+    error ("No module manager");
+
+  inner = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_free);
+  for (tail = alist; CONSP (tail); tail = XCDR (tail))
+    {
+      pair = XCAR (tail);
+      if (!CONSP (pair))
+        continue;
+      CHECK_STRING (XCAR (pair));
+      CHECK_STRING (XCDR (pair));
+      g_hash_table_insert (inner,
+                           g_strdup (SSDATA (XCAR (pair))),
+                           g_strdup (SSDATA (XCDR (pair))));
+    }
+
+  outer = g_hash_table_new (g_str_hash, g_str_equal);
+  g_hash_table_insert (outer, (gpointer) "vanitygaps", inner);
+  gowl_module_manager_configure_all (mgr, outer);
+  g_hash_table_unref (outer);
+  g_hash_table_unref (inner);
+
+  /* Re-arrange all monitors so gaps take effect immediately. */
+  monitors = gowl_compositor_get_monitors (cmacs_gowl_compositor);
+  for (l = monitors; l != NULL; l = l->next)
+    gowl_compositor_arrange (cmacs_gowl_compositor, l->data);
+
+  return Qt;
+}
+
+DEFUN ("gowl-gaps-info", Fgowl_gaps_info, Sgowl_gaps_info, 0, 0, 0,
+       doc: /* Return the current gap configuration as an alist.
+Returns ((inner-h . N) (inner-v . N) (outer-h . N) (outer-v . N))
+or nil if no gap provider is active. */)
+  (void)
+{
+  GowlModuleManager *mgr;
+  GowlMonitor *mon;
+  gint ih = 0, iv = 0, oh = 0, ov = 0;
+
+  GOWL_CHECK_RUNNING ();
+  mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
+  if (mgr == NULL)
+    return Qnil;
+
+  mon = gowl_get_focused_monitor ();
+  if (!gowl_module_manager_get_gaps (mgr, mon, &ih, &iv, &oh, &ov))
+    return Qnil;
+
+  return list4 (Fcons (intern ("inner-h"), make_fixnum (ih)),
+                Fcons (intern ("inner-v"), make_fixnum (iv)),
+                Fcons (intern ("outer-h"), make_fixnum (oh)),
+                Fcons (intern ("outer-v"), make_fixnum (ov)));
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ * SCREENLOCK
+ * ══════════════════════════════════════════════════════════════════════ */
+
+DEFUN ("gowl-configure-screenlock", Fgowl_configure_screenlock,
+       Sgowl_configure_screenlock, 1, 1, 0,
+       doc: /* Configure the screenlock module with ALIST.
+ALIST is an alist of string key-value pairs.  Supported keys:
+"pam-service", "auto-lock-timeout", "bg-color", "text-color",
+"indicator-color", "error-color", "font", "font-size". */)
+  (Lisp_Object alist)
+{
+  GowlModuleManager *mgr;
+  GHashTable *inner, *outer;
+  Lisp_Object tail, pair;
+
+  CHECK_LIST (alist);
+  GOWL_CHECK_RUNNING ();
+
+  mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
+  if (mgr == NULL)
+    error ("No module manager");
+
+  inner = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_free);
+  for (tail = alist; CONSP (tail); tail = XCDR (tail))
+    {
+      pair = XCAR (tail);
+      if (!CONSP (pair))
+        continue;
+      CHECK_STRING (XCAR (pair));
+      CHECK_STRING (XCDR (pair));
+      g_hash_table_insert (inner,
+                           g_strdup (SSDATA (XCAR (pair))),
+                           g_strdup (SSDATA (XCDR (pair))));
+    }
+
+  outer = g_hash_table_new (g_str_hash, g_str_equal);
+  g_hash_table_insert (outer, (gpointer) "screenlock", inner);
+  gowl_module_manager_configure_all (mgr, outer);
+  g_hash_table_unref (outer);
+  g_hash_table_unref (inner);
+  return Qt;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ * SCRATCHPAD
+ * ══════════════════════════════════════════════════════════════════════ */
+
+DEFUN ("gowl-scratchpad-toggle", Fgowl_scratchpad_toggle,
+       Sgowl_scratchpad_toggle, 1, 1, 0,
+       doc: /* Toggle a named scratchpad window.
+NAME is a string identifying the scratchpad.
+Returns t if the scratchpad module handled the request. */)
+  (Lisp_Object name)
+{
+  GowlModuleManager *mgr;
+  GList *modules, *l;
+
+  CHECK_STRING (name);
+  GOWL_CHECK_RUNNING ();
+
+  mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
+  if (mgr == NULL)
+    error ("No module manager");
+
+  /* Find the first module implementing GowlScratchpadHandler. */
+  modules = gowl_module_manager_get_modules (mgr);
+  for (l = modules; l != NULL; l = l->next)
+    {
+      GowlModule *mod = GOWL_MODULE (l->data);
+      if (GOWL_IS_SCRATCHPAD_HANDLER (mod)
+          && gowl_module_get_is_active (mod))
+        {
+          gowl_scratchpad_handler_toggle_scratchpad (
+            GOWL_SCRATCHPAD_HANDLER (mod), SSDATA (name));
+          return Qt;
+        }
+    }
+
+  return Qnil;
 }
 
 
@@ -4247,10 +4707,22 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_load_module);
   defsubr (&Sgowl_list_modules);
   defsubr (&Sgowl_load_modules_from_dir);
+  defsubr (&Sgowl_enable_module);
+  defsubr (&Sgowl_disable_module);
+  defsubr (&Sgowl_configure_module);
 
   /* Wallpaper */
   defsubr (&Sgowl_set_wallpaper);
   defsubr (&Sgowl_wallpaper_info);
+  defsubr (&Sgowl_set_client_alpha);
+  defsubr (&Sgowl_set_all_alpha);
+  defsubr (&Sgowl_set_focused_alpha);
+  defsubr (&Sgowl_set_unfocused_alpha);
+  defsubr (&Sgowl_alpha_info);
+  defsubr (&Sgowl_set_gaps);
+  defsubr (&Sgowl_gaps_info);
+  defsubr (&Sgowl_configure_screenlock);
+  defsubr (&Sgowl_scratchpad_toggle);
 
   /* Swap / Zoom */
   defsubr (&Sgowl_swap_clients);

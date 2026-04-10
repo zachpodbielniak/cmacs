@@ -375,6 +375,140 @@ object returned by =gowl-compositor=.
     (message "Focus: %s" (gowl-client-info client))))
 #+end_src
 
+* Modules
+
+Gowl provides a module system for extending the compositor with
+shared-object plugins.  When running with =--gowl=, call
+=gowl-start= before using any module functions.  The =--gowl= flag
+pre-starts the compositor early, but =gowl-start= is still needed to
+load bundled modules and initialize the Elisp integration.
+
+#+begin_src emacs-lisp
+(when (and (fboundp 'gowl-running-p) (gowl-running-p))
+  (gowl-start)
+  (gowl-enable-module "vanitygaps")
+  (gowl-configure-module "vanitygaps"
+    '(("inner-gap" . "16") ("outer-gap" . "8"))))
+#+end_src
+
+| Function                          | Description                              |
+|-----------------------------------+------------------------------------------|
+| =gowl-start=                     | Initialize modules and Elisp integration |
+| =gowl-enable-module=             | Find, load, activate a module by name    |
+| =gowl-disable-module=            | Deactivate a loaded module               |
+| =gowl-configure-module=          | Configure a module with an alist         |
+| =gowl-list-modules=              | List loaded module info alists           |
+
+** Alpha (Window Opacity)
+
+Per-client window opacity with automatic focus dimming.
+
+#+begin_src emacs-lisp
+(gowl-enable-module "alpha")
+(gowl-set-focused-alpha 0.9)
+(gowl-set-unfocused-alpha 0.9)
+;; Per-client override:
+(gowl-set-client-alpha client 0.5)
+;; Set all clients at once:
+(gowl-set-all-alpha 0.8)
+;; Query:
+(gowl-alpha-info)
+  ;; => ((focused-alpha . 0.9) (unfocused-alpha . 0.9))
+#+end_src
+
+| Function                          | Description                              |
+|-----------------------------------+------------------------------------------|
+| =gowl-set-client-alpha=          | Set opacity of a specific client         |
+| =gowl-set-all-alpha=             | Set opacity of all clients at once       |
+| =gowl-set-focused-alpha=         | Set focused window opacity               |
+| =gowl-set-unfocused-alpha=       | Set unfocused window opacity             |
+| =gowl-alpha-info=                | Query current alpha config               |
+
+*** Seeing the Wallpaper Through Emacs
+
+To make the Emacs frame transparent so the gowl wallpaper is visible
+behind it, two things are needed:
+
+1. *PGTK =alpha-background=*: Makes Emacs render its background with
+   transparent pixels.  Text and UI elements stay fully opaque.
+2. *Compositor-level alpha*: Any client opacity less than 1.0 forces
+   wlroots to skip the opaque-region optimization and composite the
+   wallpaper behind the frame.
+
+wlroots resets scene buffer opacity to 1.0 on every surface commit.
+Gowl re-applies the stored alpha after each commit so the
+transparency persists across frames.
+
+#+begin_src emacs-lisp
+;; Complete setup (e.g. in Doom config.el):
+(when (and (fboundp 'gowl-running-p) (gowl-running-p))
+  (gowl-start)
+  (gowl-enable-module "alpha")
+  (gowl-set-focused-alpha 0.9)
+  (gowl-set-unfocused-alpha 0.9)
+  (gowl-set-wallpaper "~/Pictures/wallpaper.png")
+  ;; PGTK: transparent background, solid text
+  (set-frame-parameter nil 'alpha-background 85)
+  (add-to-list 'default-frame-alist '(alpha-background . 85))
+  ;; Force compositor to blend behind the Emacs frame
+  (gowl-set-all-alpha 0.99))
+#+end_src
+
+** Vanitygaps
+
+Configurable inner and outer gaps between tiled windows.
+
+#+begin_src emacs-lisp
+(gowl-enable-module "vanitygaps")
+(gowl-set-gaps '(("inner-gap" . "16") ("outer-gap" . "8")))
+(gowl-gaps-info)
+  ;; => ((inner-h . 16) (inner-v . 16) (outer-h . 8) (outer-v . 8))
+#+end_src
+
+| Function                          | Description                              |
+|-----------------------------------+------------------------------------------|
+| =gowl-set-gaps=                  | Configure gap sizes                      |
+| =gowl-gaps-info=                 | Query current gap values                 |
+
+** Screenlock
+
+Full-screen session locking with PAM authentication.
+
+#+begin_src emacs-lisp
+(gowl-enable-module "screenlock")
+(gowl-configure-screenlock
+  '(("pam-service" . "gowl")
+    ("auto-lock-timeout" . "300")
+    ("bg-color" . "#1e1e2e")))
+(gowl-lock)
+#+end_src
+
+** Scratchpad
+
+Named scratchpad windows that toggle visibility.
+
+#+begin_src emacs-lisp
+(gowl-enable-module "scratchpad")
+(gowl-scratchpad-toggle "terminal")
+#+end_src
+
+** Available Modules
+
+| Module          | Description                                    | Default |
+|-----------------+------------------------------------------------+---------|
+| wallpaper       | Per-monitor desktop wallpaper                  | on      |
+| alpha           | Per-client window opacity with focus dimming   | off     |
+| vanitygaps      | Configurable tiling gaps                       | off     |
+| pertag          | Per-tag layout/mfact/nmaster                   | off     |
+| copyhighlight   | Sync primary selection to clipboard            | off     |
+| scratchpad      | Named scratchpad windows                       | off     |
+| screenlock      | PAM-based screen locking                       | off     |
+| swallow         | Terminal window swallowing                     | off     |
+| autostart       | Run commands on startup                        | off     |
+| centeredmaster  | Centered master layout                         | off     |
+| fibonacci       | Fibonacci spiral layout                        | off     |
+| movestack       | Reorder clients in tiling stack                | off     |
+
 * Elisp Convenience Functions
 
 The Elisp layer provides convenience wrappers around compositor
