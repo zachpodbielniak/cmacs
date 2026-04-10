@@ -575,6 +575,15 @@ endif
 ifeq ($(CMACS_GOWL_BUNDLED),yes)
 all: $(GOWL_WALLPAPER_SO)
 endif
+ifeq ($(CMACS_BACON_BUNDLED),yes)
+all: cmacs-bacon-dep-modules
+endif
+ifneq ($(CMACS_BACON_OBJ),)
+all: $(CMACS_BACON_MODULES)
+endif
+ifeq ($(CMACS_PODOMATION_BUNDLED),yes)
+all: cmacs-podomation-modules
+endif
 .PHONY: all
 
 dmpstruct_headers=$(srcdir)/lisp.h $(srcdir)/buffer.h $(srcdir)/itree.h \
@@ -787,6 +796,11 @@ ifeq ($(CMACS_BACON_BUNDLED),yes)
 CMACS_BACON_STATIC_LIB = $(srcdir)/../deps/bacon/build/release/libbacon-1.0.a
 $(CMACS_BACON_STATIC_LIB):
 	$(MAKE) -C $(srcdir)/../deps/bacon lib-static
+
+## Build bacon module .so files (loaded at runtime, not linked into temacs).
+.PHONY: cmacs-bacon-dep-modules
+cmacs-bacon-dep-modules: $(CMACS_BACON_STATIC_LIB)
+	$(MAKE) -C $(srcdir)/../deps/bacon modules
 endif
 
 ifeq ($(CMACS_CRISPY_BUNDLED),yes)
@@ -837,6 +851,15 @@ $(CMACS_CRISPY_OBJ): $(CMACS_API_SO)
 endif
 ifneq ($(CMACS_BACON_OBJ),)
 $(CMACS_BACON_OBJ): $(CMACS_API_SO)
+
+## Build cmacs bacon modules (cmacs_gi.so, cmacs_pod.so).
+## These are runtime .so files loaded by bacon, not linked into temacs.
+CMACS_BACON_MODULES = $(srcdir)/../cmacs/bacon/modules/cmacs_gi.so \
+	$(srcdir)/../cmacs/bacon/modules/cmacs_pod.so
+$(CMACS_BACON_MODULES): $(CMACS_API_SO)
+	$(MAKE) -C $(srcdir)/../cmacs/bacon/modules \
+		BACON_DIR=$(abspath $(srcdir)/../deps/bacon) \
+		API_DIR=$(abspath $(srcdir)/../cmacs/api)
 endif
 
 ## Build liborgex-1.0.a (statically linked into emacs)

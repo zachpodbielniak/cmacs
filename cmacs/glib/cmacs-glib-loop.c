@@ -39,6 +39,11 @@ static gint     poll_fds_alloc = 0;
 static gint     poll_fds_count = 0;
 static gint     poll_max_priority = 0;
 
+/* TRUE when cmacs_glib_prepare successfully acquired the context.
+ * Guards cmacs_glib_dispatch against re-entrant calls (a GLib
+ * callback may eval Lisp that re-enters wait_reading_process_output). */
+static bool cmacs_context_acquired = false;
+
 /* ──────────────────────────────────────────────────────────────────── */
 /* Event loop hooks                                                    */
 /* ──────────────────────────────────────────────────────────────────── */
@@ -55,9 +60,18 @@ cmacs_glib_prepare (fd_set *readable, fd_set *writeable,
   if (cmacs_context == NULL)
     return -1;
 
-  /* Acquire and prepare — tells GLib sources to report readiness. */
+  /* Acquire and prepare — tells GLib sources to report readiness.
+   * If we already hold the context (re-entrant call from a GLib
+   * callback → Lisp → wait_reading_process_output), skip GLib
+   * integration for this iteration to avoid corrupting the shared
+   * poll_fds array and double-dispatching sources. */
+  if (cmacs_context_acquired)
+    return -1;
+
   if (!g_main_context_acquire (cmacs_context))
     return -1;
+
+  cmacs_context_acquired = true;
 
   g_main_context_prepare (cmacs_context, &poll_max_priority);
 
@@ -114,23 +128,30 @@ cmacs_glib_dispatch (fd_set *readable, int nfds)
 {
   gint i;
 
-  if (cmacs_context == NULL)
+  if (cmacs_context == NULL || !cmacs_context_acquired)
     return;
 
   /* If pselect failed, just release the context — fd_sets are undefined. */
   if (nfds < 0)
     {
       g_main_context_release (cmacs_context);
+      cmacs_context_acquired = false;
       return;
     }
 
-  /* Map pselect() results back to GPollFD revents. */
+  /* Map pselect() results back to GPollFD revents.
+   *
+   * IMPORTANT: when nfds == 0 (pselect returned due to timeout), the
+   * fd_sets may contain stale bits from before the call — Linux does
+   * not zero them on timeout.  Only consult FD_ISSET when nfds > 0
+   * (i.e. at least one fd was actually ready).  Timeout and idle
+   * GLib sources still fire correctly via their ready_time. */
   for (i = 0; i < poll_fds_count; i++)
     {
       gint fd = poll_fds[i].fd;
       poll_fds[i].revents = 0;
 
-      if (fd < 0 || fd >= FD_SETSIZE)
+      if (nfds == 0 || fd < 0 || fd >= FD_SETSIZE)
         continue;
 
       if (FD_ISSET (fd, readable))
@@ -157,6 +178,7 @@ cmacs_glib_dispatch (fd_set *readable, int nfds)
       set_waiting_for_input (input_available_clear_time);
   }
   g_main_context_release (cmacs_context);
+  cmacs_context_acquired = false;
 }
 
 GMainContext *

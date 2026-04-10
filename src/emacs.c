@@ -1427,7 +1427,8 @@ android_emacs_init (int argc, char **argv, char *dump_file)
               }
 
             config = gowl_config_new ();
-            gowl_config_load_yaml_from_search_path (config, NULL);
+            /* Do NOT load user config from search path.  When
+               embedded, cmacs owns all configuration via Elisp. */
 
             /* Clear all compositor keybinds — Emacs handles all
                keyboard input in --gowl mode.  Gowl's default binds
