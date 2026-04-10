@@ -650,6 +650,11 @@ ifeq (${ns_self_contained},no)
 	umask 022; ${MKDIR_P} "$(DESTDIR)${cmacsapidir}"
 	${INSTALL_PROGRAM} $(srcdir)/cmacs/api/libcmacs-api.so "$(DESTDIR)${cmacsapidir}/libcmacs-api.so"
 	${INSTALL_DATA} $(srcdir)/cmacs/api/cmacs-api.h "$(DESTDIR)${cmacsapidir}/cmacs-api.h"
+	@if test -f $(srcdir)/deps/gowl/build/release/modules/wallpaper.so; then \
+		umask 022; ${MKDIR_P} "$(DESTDIR)${archlibdir}/gowl-modules"; \
+		${INSTALL_PROGRAM} $(srcdir)/deps/gowl/build/release/modules/wallpaper.so \
+			"$(DESTDIR)${archlibdir}/gowl-modules/wallpaper.so"; \
+	fi
 endif
 
 ### Windows-specific install target for installing programs produced

@@ -17,6 +17,7 @@
 
 #include "lisp.h"
 #include "xwidget.h"
+#include <epaths.h>
 #include "cmacs-gowl.h"
 #include "cmacs-gobject.h"
 #include "cmacs-eval-dispatch.h"
@@ -990,6 +991,44 @@ cmacs_gowl_key_intercept (GowlCompositor *comp,
   return FALSE;
 }
 
+/* ── Module discovery ──────────────────────────────────────────────── */
+
+/* Search for a gowl module .so by name.  Tries the in-tree dev build
+   path first, then the installed libexec location (PATH_EXEC from
+   epaths.h, i.e. archlibdir).  Returns a newly allocated path or NULL
+   if not found. */
+static gchar *
+cmacs_gowl_find_module (const gchar *name)
+{
+  g_autofree gchar *so_name = g_strdup_printf ("%s.so", name);
+  g_autofree gchar *exe_path = NULL;
+  g_autofree gchar *dev_path = NULL;
+
+  /* 1. In-tree: <exe-dir>/../deps/gowl/build/release/modules/<name>.so */
+  exe_path = g_file_read_link ("/proc/self/exe", NULL);
+  if (exe_path != NULL)
+    {
+      g_autofree gchar *bin_dir = g_path_get_dirname (exe_path);
+      dev_path = g_build_filename (bin_dir, "..", "deps", "gowl",
+                                   "build", "release", "modules",
+                                   so_name, NULL);
+      if (g_file_test (dev_path, G_FILE_TEST_EXISTS))
+        return g_steal_pointer (&dev_path);
+    }
+
+  /* 2. Installed: PATH_EXEC/gowl-modules/<name>.so
+     PATH_EXEC is archlibdir (e.g. /usr/libexec/emacs/31.0.50/x86_64-...) */
+  {
+    g_autofree gchar *inst_path =
+      g_build_filename (PATH_EXEC, "gowl-modules", so_name, NULL);
+    if (g_file_test (inst_path, G_FILE_TEST_EXISTS))
+      return g_steal_pointer (&inst_path);
+  }
+
+  g_debug ("gowl: module '%s' not found", name);
+  return NULL;
+}
+
 /* ══════════════════════════════════════════════════════════════════════
  * COMPOSITOR LIFECYCLE
  * ══════════════════════════════════════════════════════════════════════ */
@@ -1063,18 +1102,36 @@ the event loop source and returns. */)
     xsignal1 (Qgowl_error,
               build_string ("Failed to create GowlCompositor"));
 
-  /* Load default config.  Do NOT unref — the compositor stores a
-     borrowed reference, so cmacs owns the lifetime.  The objects
-     are released in gowl-stop via g_clear_object on the compositor. */
+  /* Create a default config.  Do NOT load ~/.config/gowl/config.yaml
+     or any search-path config — when embedded, the application (cmacs)
+     owns all configuration via Elisp / GI.  gowl_config_new() provides
+     sane defaults; adjust at runtime with (gobject-set (gowl-config-object) ...)
+     or (gowl-reload-config "/path/to/config.yaml").
+
+     Do NOT unref — the compositor stores a borrowed reference, so
+     cmacs owns the lifetime.  Released in gowl-stop via g_clear_object. */
   {
     GowlConfig *config = gowl_config_new ();
-    gowl_config_load_yaml_from_search_path (config, NULL);
     gowl_compositor_set_config (cmacs_gowl_compositor, config);
   }
 
   /* Load modules.  Same ownership rule as config above. */
   {
     GowlModuleManager *mgr = gowl_module_manager_new ();
+
+    /* Load the bundled wallpaper module. */
+    {
+      g_autofree gchar *wallpaper_so = cmacs_gowl_find_module ("wallpaper");
+      if (wallpaper_so != NULL)
+        {
+          g_autoptr (GError) mod_err = NULL;
+          if (!gowl_module_manager_load_module (mgr, wallpaper_so, &mod_err))
+            g_warning ("gowl: failed to load wallpaper module: %s",
+                       mod_err->message);
+        }
+    }
+
+    gowl_module_manager_activate_all (mgr);
     gowl_compositor_set_module_manager (cmacs_gowl_compositor, mgr);
   }
 
@@ -1085,6 +1142,15 @@ the event loop source and returns. */)
       g_clear_object (&cmacs_gowl_compositor);
       xsignal1 (Qgowl_error, msg);
     }
+
+  /* Dispatch startup hooks so modules (e.g. wallpaper) can cache the
+     compositor reference.  Must happen after gowl_compositor_start(). */
+  {
+    GowlModuleManager *mgr =
+      gowl_compositor_get_module_manager (cmacs_gowl_compositor);
+    if (mgr != NULL)
+      gowl_module_manager_dispatch_startup (mgr, cmacs_gowl_compositor);
+  }
 
   /* ESC escape-hatch: intercept ESC in the compositor dispatch thread
      to redirect keyboard focus from embedded clients back to Emacs. */
@@ -2863,16 +2929,33 @@ DEFUN ("gowl-locked-p", Fgowl_locked_p, Sgowl_locked_p, 0, 0, 0,
 }
 
 DEFUN ("gowl-reload-config", Fgowl_reload_config, Sgowl_reload_config,
-       0, 0, 0,
-       doc: /* Reload the gowl config from the YAML search path. */)
-  (void)
+       0, 1, 0,
+       doc: /* Reload gowl config from PATH, a YAML file.
+If PATH is nil, reset the config to built-in defaults without
+loading any file.  This never searches the user's config directory;
+all configuration when embedded is explicit. */)
+  (Lisp_Object path)
 {
   GowlConfig *config;
 
   GOWL_CHECK_RUNNING ();
-  config = gowl_compositor_get_config (cmacs_gowl_compositor);
-  if (config != NULL)
-    gowl_config_load_yaml_from_search_path (config, NULL);
+
+  if (NILP (path))
+    {
+      /* Reset to fresh defaults. */
+      config = gowl_config_new ();
+      gowl_compositor_set_config (cmacs_gowl_compositor, config);
+    }
+  else
+    {
+      g_autoptr (GError) err = NULL;
+      CHECK_STRING (path);
+      config = gowl_compositor_get_config (cmacs_gowl_compositor);
+      if (config == NULL)
+        error ("No gowl config");
+      if (!gowl_config_load_yaml (config, SSDATA (path), &err))
+        xsignal1 (Qgowl_error, build_string (err->message));
+    }
 
   return Qt;
 }
@@ -3016,6 +3099,87 @@ DEFUN ("gowl-load-modules-from-dir", Fgowl_load_modules_from_dir,
 
   gowl_module_manager_load_from_directory (mgr, SSDATA (dir));
   return Qt;
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════
+ * WALLPAPER
+ * ══════════════════════════════════════════════════════════════════════ */
+
+/* Track the last-set wallpaper path and mode so gowl-wallpaper-info can
+   return them without poking into the module's private struct. */
+static gchar *cmacs_wallpaper_path;
+static gchar *cmacs_wallpaper_mode;
+
+DEFUN ("gowl-set-wallpaper", Fgowl_set_wallpaper, Sgowl_set_wallpaper,
+       1, 2, 0,
+       doc: /* Set the desktop wallpaper to IMAGE-PATH.
+Optional MODE is a scaling mode string: "fill" (default), "fit",
+"center", "stretch", or "tile".
+Configures the wallpaper module and applies to all current monitors. */)
+  (Lisp_Object image_path, Lisp_Object mode)
+{
+  GowlModuleManager *mgr;
+  GHashTable *outer, *inner;
+  GList *monitors, *l;
+  const gchar *mode_str;
+
+  CHECK_STRING (image_path);
+  if (!NILP (mode))
+    CHECK_STRING (mode);
+  GOWL_CHECK_RUNNING ();
+
+  mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
+  if (mgr == NULL)
+    error ("No module manager");
+
+  mode_str = NILP (mode) ? "fill" : SSDATA (mode);
+
+  /* Build the module_configs hash:
+     { "wallpaper" => { "path" => PATH, "mode" => MODE } } */
+  inner = g_hash_table_new (g_str_hash, g_str_equal);
+  g_hash_table_insert (inner, (gpointer) "path", SSDATA (image_path));
+  g_hash_table_insert (inner, (gpointer) "mode", (gpointer) mode_str);
+
+  outer = g_hash_table_new (g_str_hash, g_str_equal);
+  g_hash_table_insert (outer, (gpointer) "wallpaper", inner);
+
+  gowl_module_manager_configure_all (mgr, outer);
+
+  g_hash_table_unref (outer);
+  g_hash_table_unref (inner);
+
+  /* Re-dispatch wallpaper on every monitor to apply immediately. */
+  monitors = gowl_compositor_get_monitors (cmacs_gowl_compositor);
+  for (l = monitors; l != NULL; l = l->next)
+    gowl_module_manager_dispatch_wallpaper_output (mgr,
+                                                   cmacs_gowl_compositor,
+                                                   l->data);
+
+  /* Track for gowl-wallpaper-info. */
+  g_free (cmacs_wallpaper_path);
+  cmacs_wallpaper_path = g_strdup (SSDATA (image_path));
+  g_free (cmacs_wallpaper_mode);
+  cmacs_wallpaper_mode = g_strdup (mode_str);
+
+  return Qt;
+}
+
+DEFUN ("gowl-wallpaper-info", Fgowl_wallpaper_info, Sgowl_wallpaper_info,
+       0, 0, 0,
+       doc: /* Return the current wallpaper configuration as an alist.
+Keys: path (image file), mode (scaling mode).
+Returns nil if no wallpaper has been set. */)
+  (void)
+{
+  if (cmacs_wallpaper_path == NULL)
+    return Qnil;
+
+  return list2 (Fcons (intern ("path"),
+                       build_string (cmacs_wallpaper_path)),
+                Fcons (intern ("mode"),
+                       build_string (cmacs_wallpaper_mode
+                                     ? cmacs_wallpaper_mode : "fill")));
 }
 
 
@@ -4083,6 +4247,10 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_load_module);
   defsubr (&Sgowl_list_modules);
   defsubr (&Sgowl_load_modules_from_dir);
+
+  /* Wallpaper */
+  defsubr (&Sgowl_set_wallpaper);
+  defsubr (&Sgowl_wallpaper_info);
 
   /* Swap / Zoom */
   defsubr (&Sgowl_swap_clients);

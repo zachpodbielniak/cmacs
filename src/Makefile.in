@@ -572,6 +572,9 @@ endif
 ifeq ($(HAVE_NATIVE_COMP):$(NATIVE_DISABLED),yes:)
 all: ../native-lisp
 endif
+ifeq ($(CMACS_GOWL_BUNDLED),yes)
+all: $(GOWL_WALLPAPER_SO)
+endif
 .PHONY: all
 
 dmpstruct_headers=$(srcdir)/lisp.h $(srcdir)/buffer.h $(srcdir)/itree.h \
@@ -800,6 +803,12 @@ $(CMACS_GOWL_STATIC_LIB):
 ## Objects that include gowl.h (directly or via cmacs-eval-dispatch.h)
 ## need gowl-version.h, which is generated during the gowl lib build.
 $(CMACS_GOWL_OBJ) $(CMACS_GLIB_OBJ) $(CMACS_BACON_OBJ): $(CMACS_GOWL_STATIC_LIB)
+
+## Build gowl wallpaper module .so (loaded at runtime, not linked into temacs).
+## gowl's own `make` builds this as part of its modules target.
+GOWL_WALLPAPER_SO = $(srcdir)/../deps/gowl/build/release/modules/wallpaper.so
+$(GOWL_WALLPAPER_SO): $(CMACS_GOWL_STATIC_LIB)
+	$(MAKE) -C $(srcdir)/../deps/gowl modules
 endif
 
 ifeq ($(CMACS_PODOMATION_BUNDLED),yes)
