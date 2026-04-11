@@ -1,0 +1,156 @@
+#+TITLE: Bar Widgets Reference
+#+STARTUP: showall
+#+OPTIONS: toc:2 num:t
+
+* Overview
+
+The gowl bar module provides 25 configurable widgets for system
+monitoring, media, network, development, and custom command output.
+
+Widgets are specified as a space-separated string in the bar
+configuration:
+
+#+begin_src emacs-lisp
+(gowl-bar-configure
+  '(("widgets" . "cpu load memory swap temp gpu disk:/ io net volume media wifi ip vpn git todo podman uptime host user keymap weather clock")))
+#+end_src
+
+Each widget supports a per-type color via =TYPE-color= config keys.
+Some widgets accept parameters via colon syntax: =disk:/home=,
+=net:wlp2s0=, =cmd:~/script.sh=, =weather:London=.
+
+* Widget Reference
+
+| Widget    | Syntax               | Display                  | Source              | Cache  |
+|-----------+----------------------+--------------------------+---------------------+--------|
+| =cpu=     | =cpu=                | =CPU 42%=                | /proc/stat delta    | 2s     |
+| =load=    | =load=               | =LOAD 1.23=              | /proc/loadavg       | 5s     |
+| =memory=  | =memory= or =mem=    | =MEM 4.2G= or =MEM 512M= | /proc/meminfo      | 5s     |
+| =swap=    | =swap=               | =SWAP 1.2G/8G=           | /proc/meminfo       | 5s     |
+| =temp=    | =temp=               | =72°C=                   | /sys/class/hwmon/   | 10s    |
+| =gpu=     | =gpu=                | =GPU 45%=                | sysfs (AMD amdgpu)  | 5s     |
+| =disk=    | =disk= or =disk:/path= | =/ 42G= or =/home 180G= | statvfs             | 30s    |
+| =io=      | =io= or =io:nvme0n1= | =R:12.3M W:3.4M=        | /proc/diskstats     | 2s     |
+| =battery= | =battery= or =bat=  | =BAT 85%=                | /sys/class/power_supply | 60s |
+| =net=     | =net= or =net:eth0=  | =↓1.2M ↑340K=           | /proc/net/dev delta | 2s     |
+| =volume=  | =volume= or =vol=    | =VOL 75%= or =VOL MUTE= | wpctl (PipeWire)    | 2s     |
+| =media=   | =media=              | =♫ Artist - Song=        | playerctl (MPRIS)   | 2s     |
+| =wifi=    | =wifi=               | =WiFi -45dBm=            | /proc/net/wireless  | 10s    |
+| =ip=      | =ip= or =ip:eth0=    | =192.168.1.42=           | getifaddrs()        | 30s    |
+| =vpn=     | =vpn=                | =VPN ✓= or =VPN ✗=      | /sys/class/net/     | 10s    |
+| =git=     | =git=                | =main*3= or =dev=        | .git/HEAD + status  | 5s     |
+| =todo=    | =todo=               | =TODO 5=                 | Elisp push          | --     |
+| =podman=  | =podman= or =pod=    | =POD 3=                  | podman ps           | 30s    |
+| =cmd=     | =cmd:COMMAND=        | first line of stdout      | subprocess          | 10s    |
+| =weather= | =weather= or =weather:LOC= | =☀ +72°F=          | wttr.in             | 15min  |
+| =uptime=  | =uptime=             | =UP 3d 14h=              | /proc/uptime        | 60s    |
+| =host=    | =host= or =hostname= | =myhost=                 | g_get_host_name()   | once   |
+| =user=    | =user=               | =zach=                   | g_get_user_name()   | once   |
+| =keymap=  | =keymap=             | =EN= or =RU=             | xkb_state           | 2s     |
+| =clock=   | =clock= or =time=    | =Fri Apr 11  14:30=      | localtime()         | 2s     |
+
+* CMD Widget: Custom Command Output
+
+The =cmd= widget runs an arbitrary shell command and displays its
+first line of output.
+
+#+begin_src emacs-lisp
+(gowl-bar-configure
+  '(("widgets" . "cmd:~/bar/weather.sh cmd:~/bar/vpn-status.sh clock")
+    ("cmd-interval" . "15")))  ;; refresh every 15 seconds
+#+end_src
+
+** ANSI Color Support
+
+The =cmd= widget supports ANSI escape sequences for colored output.
+Colors are applied *only to ASCII printable characters* (0x20-0x7E).
+Unicode characters (emojis, CJK, etc.) render in the widget's base
+color, ensuring consistent display.
+
+Supported ANSI sequences:
+- =\033[0m= -- reset to default
+- =\033[30m= - =\033[37m= -- standard 8 colors
+- =\033[90m= - =\033[97m= -- bright 8 colors
+- =\033[38;5;Nm= -- 256-color palette
+- =\033[38;2;R;G;Bm= -- 24-bit truecolor
+
+** Example: Colored status script
+
+#+begin_src bash
+#!/bin/bash
+# ~/bar/status.sh
+if systemctl is-active --quiet my-service; then
+    echo -e "\033[32mSVC OK\033[0m 🟢"
+else
+    echo -e "\033[31mSVC DOWN\033[0m 🔴"
+fi
+#+end_src
+
+The =SVC OK= / =SVC DOWN= text renders in green/red.
+The emoji renders in the default foreground color.
+
+* Git Widget
+
+The =git= widget determines the current working directory from the
+focused Wayland client's process (via =/proc/PID/cwd=), walks up
+to find a =.git/= directory, reads the branch from =.git/HEAD=,
+and counts dirty files via =git status --porcelain=.
+
+Display format: =BRANCH= (clean) or =BRANCH*N= (N dirty files).
+
+Works automatically when any terminal or editor is focused in a
+git repository.
+
+* Todo Widget (Elisp-driven)
+
+The =todo= widget displays text pushed from Elisp via the
+=widget-data-todo= config key:
+
+#+begin_src emacs-lisp
+;; Push todo count every 30 seconds
+(run-with-timer 5 30
+  (lambda ()
+    (when (gowl-running-p)
+      (gowl-bar-configure
+        '(("widget-data-todo" .
+           ,(format "TODO %d"
+              (length (org-map-entries nil "/TODO" 'agenda)))))))))
+#+end_src
+
+* Network Widgets
+
+** =net= -- Throughput
+
+Delta-based byte rate calculation from =/proc/net/dev=.
+Auto-detects the first non-lo interface, or specify: =net:wlp2s0=.
+
+** =wifi= -- Signal Strength
+
+Reads signal level in dBm from =/proc/net/wireless=.
+
+** =ip= -- Local IP
+
+Uses =getifaddrs()= for the first non-lo IPv4 address.
+Specify interface: =ip:eth0=.
+
+** =vpn= -- Status
+
+Checks if =tun0= or =wg0= network interface exists in
+=/sys/class/net/=.
+
+* Configuration Reference
+
+All keys are passed via =gowl-bar-configure=:
+
+| Key                | Default         | Description                         |
+|--------------------+-----------------+-------------------------------------|
+| =widgets=          | cpu mem disk bat clock | Space-separated widget list   |
+| =height=           | 28              | Bar height in pixels                |
+| =bg-color=         | =#1e1e2e= (80%) | Background color (hex + alpha)      |
+| =fg-color=         | =#cdd6f4=       | Default text color                  |
+| =font=             | =monospace 13=  | Pango font description              |
+| =TYPE-color=       | (use fg-color)  | Per-widget color (e.g. =cpu-color=) |
+| =cmd-interval=     | 10              | Seconds between cmd re-runs         |
+| =widget-data-KEY=  | --              | Push data for Elisp-driven widgets  |
+| =title-delimiters= | --              | Chars that split title segments     |
+| =title-palette=    | --              | Space-separated hex colors          |

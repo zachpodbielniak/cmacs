@@ -2279,6 +2279,45 @@ own color:
     ("clock-color" . "#cdd6f4")))
 @end example
 
+@noindent
+The bar supports 25 widget types:
+
+@table @code
+@item cpu, load, memory, swap, temp, gpu
+System monitoring: CPU %, load average, RAM, swap, temperature, GPU %.
+@item disk, io
+Storage: free space (with mount path), read/write throughput.
+@item battery, uptime
+Power and session: battery %, system uptime.
+@item net, wifi, ip, vpn
+Network: throughput (↓/↑), WiFi signal, local IP, VPN status.
+@item volume, media
+Audio: PipeWire volume (via @command{wpctl}), MPRIS now-playing
+(via @command{playerctl}).
+@item git, todo, podman
+Development: branch + dirty count (from focused client's CWD),
+Elisp-pushed TODO count, running Podman container count.
+@item cmd:@var{COMMAND}
+Custom command output with ANSI color support.  Colors apply
+only to ASCII printable characters; Unicode (emoji) uses the
+base widget color.
+@item weather
+Weather from @url{https://wttr.in} (15-minute cache).  Specify
+location: @code{weather:London}.
+@item host, user, keymap, clock
+Session info: hostname, username, keyboard layout, date/time.
+@end table
+
+@noindent
+Additional config keys:
+
+@table @code
+@item cmd-interval
+Seconds between @code{cmd} widget re-runs (default 10).
+@item widget-data-@var{KEY}
+Push data for Elisp-driven widgets (e.g.@: @code{widget-data-todo}).
+@end table
+
 @subsection Vanitygaps
 @cindex gaps, window
 

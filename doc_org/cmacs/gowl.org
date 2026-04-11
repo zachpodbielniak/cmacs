@@ -581,6 +581,10 @@ See [[file:gowl/clipboard-sync.org][Clipboard Sync]] for bidirectional
 clipboard synchronization between Wayland clients and the Emacs
 kill-ring via =cmacs-gowl-clipboard-sync-mode=.
 
+See [[file:gowl/bar-widgets.org][Bar Widgets Reference]] for the
+complete list of 25 bar widgets including system monitoring, network,
+media, git, custom commands with ANSI color, and configuration.
+
 * Elisp Convenience Functions
 
 The Elisp layer provides convenience wrappers around compositor
