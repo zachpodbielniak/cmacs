@@ -39,6 +39,7 @@ IMAGE="quay.io/zachpodbielniak/cmacs:${VERSION}"
 if [[ "$DO_BUILD" -eq 1 ]]; then
     buildah build \
         --no-cache \
+        --ignorefile .containerignore \
         --build-arg=FEDORA_VERSION="${VERSION}" \
         -t "${IMAGE}" \
         -f ./Containerfile .
