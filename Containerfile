@@ -69,6 +69,10 @@ RUN ./autogen.sh \
     && make -j"$(nproc)" \
     && make install DESTDIR=/build/stage
 
+# Register cmacs API library path so bacon modules can find libcmacs-api.so
+RUN mkdir -p /build/stage/etc/ld.so.conf.d \
+    && echo "/usr/lib64/cmacs" > /build/stage/etc/ld.so.conf.d/cmacs.conf
+
 # Build and install cmacs-mcp stdio relay (MCP client support)
 RUN make -C tools/cmacs-mcp clean all PREFIX=/usr \
     && make -C tools/cmacs-mcp install PREFIX=/usr DESTDIR=/build/stage
