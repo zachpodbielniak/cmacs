@@ -24,6 +24,7 @@ src/emacs                 # run it
 - After modifying `configure.ac`, run `autoconf` then `./configure` again
 - After touching temacs-linked objects, the pdumper image is regenerated automatically
 - Native-compiled .eln files cache by ABI hash — if you see stale-code behavior, `rm -rf native-lisp/`
+- **After modifying Elisp in `lisp/cmacs/`**, you MUST clean all compiled caches (see below)
 
 ## Architecture
 
@@ -136,9 +137,39 @@ cmacs has a GDB debugging agent (`.claude/agents/gdb-debugger.md`) that uses the
 - **Non-deterministic crashes with varying backtraces**: Duplicate symbols from vendored static libraries. Check the dedup logic in `src/Makefile.in`.
 - **GC crashes**: A `Lisp_Object` stored in GLib-allocated memory without GC protection (`staticpro` or specpdl).
 
+## Modifying Elisp in `lisp/cmacs/` — Stale Cache Pitfall
+
+Emacs has **three layers of compiled Elisp** that silently override `.el` source files. After modifying any `.el` file in `lisp/cmacs/`, you MUST clean ALL of them or your changes will not take effect:
+
+```bash
+# 1. Delete byte-compiled .elc (Emacs prefers .elc over .el)
+rm -f lisp/cmacs/CHANGED-FILE.elc
+
+# 2. Delete native-compiled .eln from ALL ABI hash directories
+#    Each rebuild generates a new ABI hash; old .eln files accumulate
+rm -f native-lisp/*/CHANGED-FILE-*.eln
+
+# 3. Delete user-level eln cache (Doom Emacs, etc.)
+rm -f ~/.config/emacs/.local/cache/eln/*/CHANGED-FILE-*.eln
+rm -f ~/.config/emacs/eln-cache/*/CHANGED-FILE-*.eln
+
+# 4. If you also changed C DEFUNs used by the .el file, force relink:
+rm -f src/temacs src/emacs && make -j$(nproc)
+```
+
+**Why this matters:** Emacs's async native compiler runs in the background during normal use. It can compile a `.el` file WHILE you're editing it, producing an `.eln` from an intermediate version. On the next function call or restart, Emacs loads the stale `.eln` instead of the updated `.el`. This causes changes to silently "stop working" mid-session with no error.
+
+**Best practice for Elisp changes:**
+- Always delete the corresponding `.elc` after editing
+- Run `rm -f native-lisp/*/FILENAME-*.eln` after editing
+- If behavior is wrong despite correct source, check `(locate-library "LIBRARY-NAME")` to see what file Emacs is actually loading
+- When in doubt: `rm -rf native-lisp/ lisp/cmacs/*.elc`
+
 ## Known Issues / Gotchas
 
 - The pdumper image must be regenerated after changes to temacs-linked code — `make` handles this, but stale dumps cause confusing runtime errors
 - Native compilation .eln cache is keyed by ABI hash — version mismatches cause silent fallback to byte-compiled code
+- **Stale `.elc`/`.eln` files** are the #1 cause of "my Elisp change isn't working" — see section above
 - `g_main_context_iteration` in `cmacs-glib-iteration` does NOT go through the `waiting_for_input` guard — only use it from Lisp code that knows Emacs is not in input-wait state
 - bacon `--bacon` mode forks the emacs process itself — `fork()` safety constraints apply (no threads before fork)
+- **`make` may not relink** after C source changes — if `src/Makefile.in` dependencies are incomplete, the `.o` recompiles but `temacs` is not re-linked. Force with `rm -f src/temacs && make -j$(nproc)`
