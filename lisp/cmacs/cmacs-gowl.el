@@ -917,6 +917,61 @@ current buffer name."
   (cmacs-gowl-bar--update-title))
 
 
+;;; ─── Clipboard Sync (Wayland ↔ kill-ring) ──────────────────────────
+
+(defvar cmacs-gowl--clipboard-last nil
+  "Last clipboard text pushed from Wayland, for deduplication.")
+
+(defun cmacs-gowl--on-clipboard-changed (text)
+  "Called from C when a Wayland client changes the clipboard.
+Pushes TEXT to the kill-ring if it differs from the last known value."
+  (when (and text (not (string-empty-p text))
+              (not (equal text cmacs-gowl--clipboard-last))
+              (not (equal text (car kill-ring))))
+    (setq cmacs-gowl--clipboard-last text)
+    (kill-new text)))
+
+(defun cmacs-gowl--interprogram-cut (text)
+  "Cut function for `interprogram-cut-function'.
+Sends TEXT to the Wayland clipboard."
+  (when (and (fboundp 'gowl-clipboard-set) (gowl-running-p))
+    (setq cmacs-gowl--clipboard-last text)
+    (gowl-clipboard-set text)))
+
+(defun cmacs-gowl--interprogram-paste ()
+  "Paste function for `interprogram-paste-function'.
+Returns the Wayland clipboard text if it differs from the kill-ring top."
+  (when (and (fboundp 'gowl-clipboard-get) (gowl-running-p))
+    (let ((text (gowl-clipboard-get)))
+      (when (and text (not (string-empty-p text))
+                 (not (equal text (car kill-ring))))
+        (setq cmacs-gowl--clipboard-last text)
+        text))))
+
+;;;###autoload
+(define-minor-mode cmacs-gowl-clipboard-sync-mode
+  "Bidirectional clipboard sync between Wayland and Emacs kill-ring.
+
+When enabled:
+- Text copied by Wayland clients is pushed to the kill-ring.
+- Text killed in Emacs is placed on the Wayland clipboard.
+- `interprogram-cut-function' and `interprogram-paste-function'
+  are set to route through the gowl compositor."
+  :global t
+  :lighter " GowlClip"
+  :group 'cmacs-gowl
+  (if cmacs-gowl-clipboard-sync-mode
+      (progn
+        (when (and (fboundp 'gowl-clipboard-watch) (gowl-running-p))
+          (gowl-clipboard-watch))
+        (setq interprogram-cut-function   #'cmacs-gowl--interprogram-cut
+              interprogram-paste-function  #'cmacs-gowl--interprogram-paste))
+    (when (fboundp 'gowl-clipboard-unwatch)
+      (gowl-clipboard-unwatch))
+    (setq interprogram-cut-function   nil
+          interprogram-paste-function nil)))
+
+
 ;;; ─── Screenshot & Recording ────────────────────────────────────────
 
 (defcustom cmacs-gowl-screenshot-directory

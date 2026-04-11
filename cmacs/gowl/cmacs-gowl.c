@@ -57,6 +57,10 @@ GowlCompositor *cmacs_gowl_compositor = NULL;
    acquire it before calling wlroots seat functions. */
 static pthread_mutex_t cmacs_gowl_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+/* Clipboard sync: signal handler ID (0 = not watching) */
+static gulong cmacs_clipboard_handler_id = 0;
+static gulong cmacs_psel_handler_id = 0;
+
 /* ── Embed view (GTK widget inside Emacs frame) ────────────────────────
  *
  * Each embedded client gets a GtkDrawingArea added to the Emacs frame's
@@ -4464,6 +4468,129 @@ DEFUN ("gowl-primary-selection-set", Fgowl_primary_selection_set,
 
 
 /* ══════════════════════════════════════════════════════════════════════
+ * Clipboard sync (Wayland ↔ Emacs kill-ring)
+ * ══════════════════════════════════════════════════════════════════════ */
+
+/* Idle callback — runs on Emacs main thread via GMainContext. */
+static gboolean
+clipboard_push_idle (gpointer user_data)
+{
+  gchar *text = (gchar *)user_data;
+  gchar *escaped;
+  gchar *elisp;
+
+  if (text == NULL || text[0] == '\0')
+    {
+      g_free (text);
+      return G_SOURCE_REMOVE;
+    }
+
+  /* Escape text for embedding in a Lisp string literal:
+     backslash and double-quote need escaping. */
+  {
+    GString *esc = g_string_sized_new (strlen (text) + 16);
+    const gchar *p;
+
+    for (p = text; *p != '\0'; p++)
+      {
+        if (*p == '\\' || *p == '"')
+          g_string_append_c (esc, '\\');
+        g_string_append_c (esc, *p);
+      }
+
+    elisp = g_strdup_printf (
+        "(cmacs-gowl--on-clipboard-changed \"%s\")", esc->str);
+    g_string_free (esc, TRUE);
+  }
+  cmacs_dispatch_eval (elisp, NULL);
+  g_free (elisp);
+  g_free (text);
+
+  return G_SOURCE_REMOVE;
+}
+
+/* Signal handler — runs on compositor dispatch thread. */
+static void
+on_clipboard_changed (GowlSeat *seat, gpointer user_data)
+{
+  gchar *text;
+
+  (void)user_data;
+
+  text = gowl_seat_get_clipboard (seat);
+  if (text != NULL)
+    g_idle_add (clipboard_push_idle, text);
+}
+
+static void
+on_primary_selection_changed (GowlSeat *seat, gpointer user_data)
+{
+  gchar *text;
+
+  (void)user_data;
+
+  text = gowl_seat_get_primary_selection (seat);
+  if (text != NULL)
+    g_idle_add (clipboard_push_idle, text);
+}
+
+DEFUN ("gowl-clipboard-watch", Fgowl_clipboard_watch,
+       Sgowl_clipboard_watch, 0, 0, 0,
+       doc: /* Start watching Wayland clipboard changes.
+When a Wayland client copies text, it is pushed to the Emacs
+kill-ring via `cmacs-gowl--on-clipboard-changed'.
+Returns t if watching started, nil if already watching. */)
+  (void)
+{
+  GowlSeat *seat;
+
+  GOWL_CHECK_RUNNING ();
+
+  if (cmacs_clipboard_handler_id != 0)
+    return Qnil;
+
+  seat = gowl_compositor_get_seat (cmacs_gowl_compositor);
+  if (seat == NULL)
+    return Qnil;
+
+  cmacs_clipboard_handler_id =
+    g_signal_connect (seat, "clipboard-changed",
+                      G_CALLBACK (on_clipboard_changed), NULL);
+  cmacs_psel_handler_id =
+    g_signal_connect (seat, "primary-selection-changed",
+                      G_CALLBACK (on_primary_selection_changed), NULL);
+
+  return Qt;
+}
+
+DEFUN ("gowl-clipboard-unwatch", Fgowl_clipboard_unwatch,
+       Sgowl_clipboard_unwatch, 0, 0, 0,
+       doc: /* Stop watching Wayland clipboard changes.
+Returns t if watching was stopped, nil if not watching. */)
+  (void)
+{
+  GowlSeat *seat;
+
+  GOWL_CHECK_RUNNING ();
+
+  if (cmacs_clipboard_handler_id == 0)
+    return Qnil;
+
+  seat = gowl_compositor_get_seat (cmacs_gowl_compositor);
+  if (seat != NULL)
+    {
+      g_signal_handler_disconnect (seat, cmacs_clipboard_handler_id);
+      g_signal_handler_disconnect (seat, cmacs_psel_handler_id);
+    }
+
+  cmacs_clipboard_handler_id = 0;
+  cmacs_psel_handler_id = 0;
+
+  return Qt;
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════
  * Bar / Layer surface
  * ══════════════════════════════════════════════════════════════════════ */
 
@@ -5286,6 +5413,10 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
 
   /* Process info */
   defsubr (&Sgowl_client_process_info);
+
+  /* Clipboard sync */
+  defsubr (&Sgowl_clipboard_watch);
+  defsubr (&Sgowl_clipboard_unwatch);
 
   /* Screenshot & Recording (high-level) */
   defsubr (&Sgowl_screenshot);
