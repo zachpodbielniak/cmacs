@@ -2,6 +2,9 @@
   "mcpServers": {
     "gdb": {
       "command": "gdb-mcp-server"
+    },
+    "cmacs": {
+      "command": "cmacs-mcp"
     }
   }
 }
