@@ -2339,19 +2339,99 @@ Default layout applied at startup.
 List of commands to spawn when the mode is enabled.
 @end table
 
+@section Screenshot and Recording
+
+@cindex screenshot
+@cindex screen recording
+@cindex screen capture
+
+The @code{screenshot} and @code{recording} gowl modules provide
+screen capture with four selection modes: @code{desktop} (current
+monitor), @code{window} (focused client), @code{area} (interactive
+rubber-band selection), and @code{all} (all monitors stitched).
+
+@subsection Screenshot
+
+@defun gowl-screenshot mode &optional path no-clipboard
+Take a screenshot in @var{mode} (@code{desktop}, @code{window}, or
+@code{all}).  @var{path} defaults to @file{~/Pictures/Screenshots/}.
+Unless @var{no-clipboard} is non-nil, the PNG is copied to the
+Wayland clipboard.  Returns the saved file path.
+@end defun
+
+@defun gowl-screenshot-save-png width height data path
+Save raw RGBA pixel @var{data} (a unibyte string) as a PNG file at
+@var{path}.  Returns @code{t} on success.
+@end defun
+
+@defun gowl-screenshot-all
+Capture all monitors stitched together.  Returns @code{(WIDTH HEIGHT
+DATA)} where @var{DATA} is a unibyte string of RGBA pixel data.
+@end defun
+
+@subsection Recording
+
+Requires @command{ffmpeg} installed on the system.
+
+@defun gowl-record-start mode &optional path
+Start continuous screen recording in @var{mode}.  The recording is
+encoded by an @command{ffmpeg} subprocess.  @var{path} defaults to
+@file{~/Videos/Recordings/}.  Returns the output file path.
+@end defun
+
+@defun gowl-record-stop
+Stop the current recording.  Returns the output file path.
+@end defun
+
+@defun gowl-recording-p
+Return non-nil if a recording is in progress.
+@end defun
+
+@subsection Interactive Commands
+
+@table @code
+@item M-x cmacs-gowl-screenshot-desktop
+Screenshot the current monitor.
+@item M-x cmacs-gowl-screenshot-window
+Screenshot the focused window.
+@item M-x cmacs-gowl-screenshot-all
+Screenshot all monitors stitched.
+@item M-x cmacs-gowl-record-toggle
+Start or stop recording.
+@end table
+
+@subsection GObject Types
+
+@table @code
+@item GowlCaptureMode
+Registered GEnum: @code{desktop}, @code{window}, @code{area},
+@code{all}.
+@item GowlCaptureResult
+Boxed type carrying pixel data, dimensions, file path, and
+cancellation status.
+@item GowlScreenshotProvider
+GInterface for screenshot modules.
+@item GowlRecordingProvider
+GInterface for recording modules.
+@end table
+
 @section Files
 
 @table @file
 @item cmacs/gowl/cmacs-gowl.c
-C primitives (47+ DEFUNs).
+C primitives (50+ DEFUNs).
 @item cmacs/gowl/cmacs-gowl.h
 C header.
 @item lisp/cmacs/cmacs-gowl.el
-Elisp layer: minor mode, commands, embedding subsystem.
+Elisp layer: minor mode, commands, embedding, screenshot, recording.
 @item test/cmacs/cmacs-gowl-tests.el
 ERT tests.
 @item deps/gowl/
 Bundled gowl library (git submodule).
+@item deps/gowl/modules/screenshot/
+Screenshot module source.
+@item deps/gowl/modules/recording/
+Recording module source.
 @end table
 
 @c ===================================================================

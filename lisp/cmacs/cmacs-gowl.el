@@ -916,5 +916,74 @@ current buffer name."
   ;; Initial update
   (cmacs-gowl-bar--update-title))
 
+
+;;; ─── Screenshot & Recording ────────────────────────────────────────
+
+(defcustom cmacs-gowl-screenshot-directory
+  (expand-file-name "Screenshots"
+                    (or (getenv "XDG_PICTURES_DIR")
+                        (expand-file-name "Pictures" "~")))
+  "Default directory for screenshots."
+  :type 'directory :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-recording-directory
+  (expand-file-name "Recordings"
+                    (or (getenv "XDG_VIDEOS_DIR")
+                        (expand-file-name "Videos" "~")))
+  "Default directory for screen recordings."
+  :type 'directory :group 'cmacs-gowl)
+
+(defvar gowl-screenshot-done-hook nil
+  "Hook run after an async screenshot completes.
+Each function receives the saved file path as its argument.")
+
+(defun cmacs-gowl-screenshot-desktop ()
+  "Screenshot the current monitor."
+  (interactive)
+  (let ((path (gowl-screenshot 'desktop)))
+    (when path (message "Screenshot saved: %s" path))
+    path))
+
+(defun cmacs-gowl-screenshot-window ()
+  "Screenshot the focused window."
+  (interactive)
+  (let ((path (gowl-screenshot 'window)))
+    (when path (message "Screenshot saved: %s" path))
+    path))
+
+(defun cmacs-gowl-screenshot-all ()
+  "Screenshot all monitors stitched together."
+  (interactive)
+  (let ((path (gowl-screenshot 'all)))
+    (when path (message "Screenshot saved: %s" path))
+    path))
+
+(defun cmacs-gowl-record-toggle ()
+  "Start or stop screen recording."
+  (interactive)
+  (if (and (fboundp 'gowl-recording-p) (gowl-recording-p))
+      (let ((path (gowl-record-stop)))
+        (message "Recording saved: %s" path))
+    (let ((path (gowl-record-start 'desktop)))
+      (message "Recording started: %s" path))))
+
+(defun cmacs-gowl-record-start (&optional mode path)
+  "Start recording.  MODE defaults to `desktop'."
+  (interactive (list (intern (completing-read "Mode: "
+                               '("desktop" "window" "all")
+                               nil t nil nil "desktop"))))
+  (let ((result (gowl-record-start (or mode 'desktop) path)))
+    (when result (message "Recording started: %s" result))
+    result))
+
+(defun cmacs-gowl-record-stop ()
+  "Stop the current recording."
+  (interactive)
+  (let ((path (gowl-record-stop)))
+    (if path
+        (message "Recording saved: %s" path)
+      (message "No recording in progress"))
+    path))
+
 (provide 'cmacs-gowl)
 ;;; cmacs-gowl.el ends here

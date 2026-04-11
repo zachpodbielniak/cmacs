@@ -1,0 +1,242 @@
+#+TITLE: Screenshot & Recording
+#+STARTUP: showall
+#+OPTIONS: toc:2 num:t
+
+* Overview
+
+Gowl provides two compositor modules for screen capture: =screenshot=
+for single-frame captures and =recording= for continuous video.
+
+Both support four selection modes:
+
+| Mode      | Description                           |
+|-----------+---------------------------------------|
+| desktop   | Capture the current monitor           |
+| window    | Capture the focused client window     |
+| area      | Interactive rubber-band region select |
+| all       | All monitors stitched together        |
+
+The =screenshot= module saves PNG files and can copy to the Wayland
+clipboard.  The =recording= module pipes raw frames to an =ffmpeg=
+subprocess, producing MP4 (or any ffmpeg-supported format).
+
+Both modules are implemented as GObject-based gowl plugins with
+registered GTypes, signals, and GObject Introspection support.
+
+* Screenshot
+
+** Enabling
+
+#+begin_src emacs-lisp
+(gowl-enable-module "screenshot")
+#+end_src
+
+** Elisp Commands
+
+#+begin_src emacs-lisp
+;; Take a desktop screenshot (saves to ~/Pictures/Screenshots/)
+(gowl-screenshot 'desktop)
+
+;; Save to a specific path
+(gowl-screenshot 'desktop "/tmp/shot.png")
+
+;; Skip clipboard copy
+(gowl-screenshot 'desktop nil t)
+
+;; Screenshot the focused window
+(gowl-screenshot 'window)
+
+;; Screenshot all monitors stitched
+(gowl-screenshot 'all)
+
+;; Get raw pixel data (for programmatic use)
+(gowl-screenshot-monitor)         ;; => (WIDTH HEIGHT DATA)
+(gowl-screenshot-client CLIENT)   ;; => (WIDTH HEIGHT DATA)
+(gowl-screenshot-all)             ;; => (WIDTH HEIGHT DATA)
+
+;; Save raw pixel data as PNG
+(gowl-screenshot-save-png WIDTH HEIGHT DATA "/tmp/out.png")
+#+end_src
+
+** Interactive Commands
+
+| Command                          | Description                  |
+|----------------------------------+------------------------------|
+| =M-x cmacs-gowl-screenshot-desktop= | Screenshot current monitor |
+| =M-x cmacs-gowl-screenshot-window=  | Screenshot focused window  |
+| =M-x cmacs-gowl-screenshot-all=     | Screenshot all monitors    |
+
+** Shell (bacon)
+
+#+begin_example
+bacon> cmacsgi screenshot desktop
+/home/user/Pictures/Screenshots/screenshot_20260411_143022.png
+
+bacon> cmacsgi screenshot window /tmp/window.png
+/tmp/window.png
+
+bacon> cmacsgi screenshot all
+/home/user/Pictures/Screenshots/screenshot_20260411_143025.png
+#+end_example
+
+** Configuration (YAML)
+
+#+begin_src yaml
+modules:
+  screenshot:
+    enabled: true
+    save-directory: ~/Pictures/Screenshots
+    filename-format: screenshot_%Y%m%d_%H%M%S
+    copy-to-clipboard: true
+#+end_src
+
+* Recording
+
+** Enabling
+
+#+begin_src emacs-lisp
+(gowl-enable-module "recording")
+#+end_src
+
+Requires =ffmpeg= to be installed on the system.
+
+** Elisp Commands
+
+#+begin_src emacs-lisp
+;; Start recording the desktop
+(gowl-record-start 'desktop)
+
+;; Start with specific output path
+(gowl-record-start 'desktop "/tmp/demo.mp4")
+
+;; Stop and get the file path
+(gowl-record-stop)  ;; => "/home/.../recording_20260411_143100.mp4"
+
+;; Check status
+(gowl-recording-p)  ;; => t or nil
+
+;; Toggle (convenient for keybinding)
+(cmacs-gowl-record-toggle)
+#+end_src
+
+** Interactive Commands
+
+| Command                       | Description                    |
+|-------------------------------+--------------------------------|
+| =M-x cmacs-gowl-record-toggle=  | Start/stop recording toggle |
+| =M-x cmacs-gowl-record-start=   | Start recording (prompts)   |
+| =M-x cmacs-gowl-record-stop=    | Stop current recording      |
+
+** Shell (bacon)
+
+#+begin_example
+bacon> cmacsgi record start desktop
+Recording started: .../recording_20260411_143100.mp4
+
+bacon> cmacsgi record stop
+Recording saved: .../recording_20260411_143100.mp4
+#+end_example
+
+** Configuration (YAML)
+
+#+begin_src yaml
+modules:
+  recording:
+    enabled: false
+    save-directory: ~/Videos/Recordings
+    filename-format: recording_%Y%m%d_%H%M%S
+    framerate: 30
+    codec: libx264
+    crf: 23
+    container: mp4
+    ffmpeg-path: ffmpeg
+    pixel-format: yuv420p
+#+end_src
+
+* GObject API
+
+Both modules are full GObject types with registered signals, making
+them accessible from any GObject Introspection consumer.
+
+** New Types
+
+| Type                     | Kind      | Description                       |
+|--------------------------+-----------+-----------------------------------|
+| =GowlCaptureMode=       | GEnum     | desktop, window, area, all        |
+| =GowlCaptureResult=     | Boxed     | Capture data + metadata           |
+| =GowlScreenshotProvider= | Interface | Screenshot module interface       |
+| =GowlRecordingProvider= | Interface | Recording module interface         |
+
+** Screenshot Signals
+
+| Signal              | Parameters               | Description              |
+|---------------------+--------------------------+--------------------------|
+| =capture-started=   | =GowlCaptureMode=       | Capture begins           |
+| =capture-complete=  | =GowlCaptureResult *=   | Capture finishes         |
+| =selection-active=  | =gboolean=               | Area selection state     |
+
+** Recording Signals
+
+| Signal               | Parameters  | Description                  |
+|----------------------+-------------+------------------------------|
+| =recording-started=  | =gchar *=  | Recording begins (path)      |
+| =recording-stopped=  | =gchar *=  | Recording ends (path)        |
+| =recording-error=    | =gchar *=  | Error occurred (message)     |
+| =frame-dropped=      | (none)      | Frame skipped (pipe full)    |
+
+** GI Usage from Elisp
+
+#+begin_src emacs-lisp
+;; Types are auto-available through GI
+(gi-require "Gowl" "1.0")
+(gi-call "Gowl" "capture_mode_get_type")
+#+end_src
+
+** Crispy Script Usage
+
+#+begin_src c
+/* In a crispy init.c script */
+CmacsApi *api = cmacs_api_new(NULL);
+cmacs_eval(api, "(gowl-screenshot 'desktop)");
+cmacs_eval(api, "(gowl-record-start 'desktop)");
+/* ... some time later ... */
+cmacs_eval(api, "(gowl-record-stop)");
+cmacs_api_free(api);
+#+end_src
+
+* Architecture
+
+** Screenshot Module
+
+The screenshot module (=gowl-module-screenshot.c=) implements five
+GObject interfaces:
+
+1. =GowlScreenshotProvider= -- capture API
+2. =GowlStartupHandler= -- receives compositor reference
+3. =GowlShutdownHandler= -- cleanup
+4. =GowlMouseHandler= -- rubber-band selection
+5. =GowlKeybindHandler= -- Escape cancels selection
+
+For interactive area selection, the module renders a semi-transparent
+overlay rectangle on the =OVERLAY= scene layer using =wlr_scene_rect=.
+Mouse button and motion events are consumed during selection mode.
+
+** Recording Module
+
+The recording module (=gowl-module-recording.c=) implements three
+GObject interfaces:
+
+1. =GowlRecordingProvider= -- start/stop/status API
+2. =GowlStartupHandler= -- receives compositor reference
+3. =GowlShutdownHandler= -- stops recording on compositor exit
+
+The recording pipeline:
+1. Probe frame dimensions from the compositor
+2. Spawn =ffmpeg= via =g_spawn_async_with_pipes()=
+3. Create a timer on the Wayland event loop at =1000/fps= ms
+4. Each timer tick: capture frame, write raw BGRA to ffmpeg stdin
+5. On stop: close pipe (ffmpeg finalizes file), reap child process
+
+Non-blocking writes with =O_NONBLOCK= prevent the compositor from
+stalling if ffmpeg falls behind.  Dropped frames emit the
+=frame-dropped= signal.

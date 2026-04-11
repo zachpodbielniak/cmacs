@@ -4672,6 +4672,327 @@ Returns a list (WIDTH HEIGHT DATA) with the cropped RGBA pixel data. */)
 
 
 /* ══════════════════════════════════════════════════════════════════════
+ * Screenshot & Recording (high-level)
+ * ══════════════════════════════════════════════════════════════════════ */
+
+DEFUN ("gowl-screenshot", Fgowl_screenshot, Sgowl_screenshot, 1, 3, 0,
+       doc: /* Take a screenshot and save as PNG.
+MODE is a symbol: `desktop', `window', or `all'.
+Optional PATH is the output file; nil uses ~/Pictures/Screenshots/.
+Optional NO-CLIPBOARD non-nil skips clipboard copy.
+Returns the saved file path as a string. */)
+  (Lisp_Object mode, Lisp_Object path, Lisp_Object no_clipboard)
+{
+  GBytes *data = NULL;
+  gint w = 0, h = 0;
+  GError *err = NULL;
+  g_autofree gchar *save_path = NULL;
+  g_autofree gchar *dir = NULL;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_SYMBOL (mode);
+
+  /* Capture based on mode */
+  if (EQ (mode, intern_c_string ("desktop")))
+    {
+      pthread_mutex_lock (&cmacs_gowl_mutex);
+      data = gowl_compositor_screenshot_output (cmacs_gowl_compositor,
+                                                 NULL, &w, &h, &err);
+      pthread_mutex_unlock (&cmacs_gowl_mutex);
+    }
+  else if (EQ (mode, intern_c_string ("window")))
+    {
+      GowlClient *focused;
+
+      pthread_mutex_lock (&cmacs_gowl_mutex);
+      focused = gowl_compositor_get_focused_client (cmacs_gowl_compositor);
+      if (focused != NULL)
+        data = gowl_compositor_screenshot_client (cmacs_gowl_compositor,
+                                                   focused, &w, &h, &err);
+      pthread_mutex_unlock (&cmacs_gowl_mutex);
+    }
+  else if (EQ (mode, intern_c_string ("all")))
+    {
+      pthread_mutex_lock (&cmacs_gowl_mutex);
+      data = gowl_compositor_screenshot_all (cmacs_gowl_compositor,
+                                              &w, &h, &err);
+      pthread_mutex_unlock (&cmacs_gowl_mutex);
+    }
+  else
+    {
+      xsignal1 (Qgowl_error,
+                 build_string ("Unknown mode: use desktop, window, or all"));
+    }
+
+  if (data == NULL)
+    {
+      if (err != NULL)
+        {
+          Lisp_Object msg = build_string (err->message);
+          g_error_free (err);
+          xsignal1 (Qgowl_error, msg);
+        }
+      return Qnil;
+    }
+
+  /* Determine save path */
+  if (STRINGP (path))
+    {
+      save_path = g_strdup (SSDATA (path));
+      dir = g_path_get_dirname (save_path);
+      g_mkdir_with_parents (dir, 0755);
+    }
+  else
+    {
+      char timebuf[64];
+      time_t t = time (NULL);
+      struct tm tm;
+      const char *home = getenv ("HOME");
+
+      localtime_r (&t, &tm);
+      strftime (timebuf, sizeof (timebuf),
+                "screenshot_%Y%m%d_%H%M%S", &tm);
+
+      dir = g_strdup_printf ("%s/Pictures/Screenshots",
+                             home ? home : "/tmp");
+      g_mkdir_with_parents (dir, 0755);
+      save_path = g_strdup_printf ("%s/%s.png", dir, timebuf);
+    }
+
+  /* Save PNG */
+  if (!gowl_compositor_save_png (data, w, h, save_path, &err))
+    {
+      g_bytes_unref (data);
+      if (err != NULL)
+        {
+          Lisp_Object msg = build_string (err->message);
+          g_error_free (err);
+          xsignal1 (Qgowl_error, msg);
+        }
+      return Qnil;
+    }
+
+  g_bytes_unref (data);
+  return build_string (save_path);
+}
+
+DEFUN ("gowl-screenshot-save-png", Fgowl_screenshot_save_png,
+       Sgowl_screenshot_save_png, 4, 4, 0,
+       doc: /* Save RGBA pixel DATA as a PNG file.
+WIDTH and HEIGHT are dimensions.  DATA is a unibyte string of RGBA
+pixel data.  PATH is the output file path.
+Returns t on success. */)
+  (Lisp_Object width, Lisp_Object height, Lisp_Object data,
+   Lisp_Object path)
+{
+  GBytes *bytes;
+  GError *err = NULL;
+  g_autofree gchar *dir = NULL;
+
+  CHECK_FIXNAT (width);
+  CHECK_FIXNAT (height);
+  CHECK_STRING (data);
+  CHECK_STRING (path);
+
+  bytes = g_bytes_new_static (SDATA (data), SBYTES (data));
+
+  dir = g_path_get_dirname (SSDATA (path));
+  g_mkdir_with_parents (dir, 0755);
+
+  if (!gowl_compositor_save_png (bytes,
+                                  (gint) XFIXNAT (width),
+                                  (gint) XFIXNAT (height),
+                                  SSDATA (path), &err))
+    {
+      g_bytes_unref (bytes);
+      if (err != NULL)
+        {
+          Lisp_Object msg = build_string (err->message);
+          g_error_free (err);
+          xsignal1 (Qgowl_error, msg);
+        }
+      return Qnil;
+    }
+
+  g_bytes_unref (bytes);
+  return Qt;
+}
+
+DEFUN ("gowl-screenshot-all", Fgowl_screenshot_all,
+       Sgowl_screenshot_all, 0, 0, 0,
+       doc: /* Capture all monitors stitched together.
+Returns a list (WIDTH HEIGHT DATA) where DATA is a unibyte string
+of RGBA pixel data, or nil on failure. */)
+  (void)
+{
+  GError *err = NULL;
+  GBytes *bytes;
+  gint w, h;
+
+  GOWL_CHECK_RUNNING ();
+
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  bytes = gowl_compositor_screenshot_all (cmacs_gowl_compositor,
+                                           &w, &h, &err);
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+
+  if (bytes == NULL)
+    {
+      if (err != NULL)
+        {
+          Lisp_Object msg = build_string (err->message);
+          g_error_free (err);
+          xsignal1 (Qgowl_error, msg);
+        }
+      return Qnil;
+    }
+
+  {
+    gsize size;
+    const guint8 *data = g_bytes_get_data (bytes, &size);
+    Lisp_Object str = make_unibyte_string ((const char *) data, size);
+    g_bytes_unref (bytes);
+    return list3 (make_fixnum (w), make_fixnum (h), str);
+  }
+}
+
+DEFUN ("gowl-record-start", Fgowl_record_start, Sgowl_record_start,
+       1, 2, 0,
+       doc: /* Start screen recording.
+MODE is a symbol: `desktop', `window', or `all'.
+Optional PATH is the output file; nil uses ~/Videos/Recordings/.
+Returns the output file path.
+Signals `gowl-error' if ffmpeg is not found or a recording is active. */)
+  (Lisp_Object mode, Lisp_Object path)
+{
+  GowlModuleManager *mgr;
+  GowlModule *mod;
+  GError *err = NULL;
+  GowlCaptureMode capture_mode;
+  g_autofree gchar *save_path = NULL;
+  gboolean ok;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_SYMBOL (mode);
+
+  mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
+  mod = gowl_module_manager_find_module (mgr, "recording");
+  if (mod == NULL || !GOWL_IS_RECORDING_PROVIDER (mod))
+    xsignal1 (Qgowl_error,
+              build_string ("Recording module not loaded"));
+
+  /* Map mode symbol to enum */
+  if (EQ (mode, intern_c_string ("desktop")))
+    capture_mode = GOWL_CAPTURE_MODE_DESKTOP;
+  else if (EQ (mode, intern_c_string ("window")))
+    capture_mode = GOWL_CAPTURE_MODE_WINDOW;
+  else if (EQ (mode, intern_c_string ("all")))
+    capture_mode = GOWL_CAPTURE_MODE_ALL;
+  else
+    xsignal1 (Qgowl_error,
+              build_string ("Unknown mode: use desktop, window, or all"));
+
+  /* Determine save path */
+  if (STRINGP (path))
+    {
+      save_path = g_strdup (SSDATA (path));
+    }
+  else
+    {
+      char timebuf[64];
+      time_t t = time (NULL);
+      struct tm tm;
+      const char *home = getenv ("HOME");
+      g_autofree gchar *dir = NULL;
+
+      localtime_r (&t, &tm);
+      strftime (timebuf, sizeof (timebuf),
+                "recording_%Y%m%d_%H%M%S", &tm);
+
+      dir = g_strdup_printf ("%s/Videos/Recordings",
+                             home ? home : "/tmp");
+      g_mkdir_with_parents (dir, 0755);
+      save_path = g_strdup_printf ("%s/%s.mp4", dir, timebuf);
+    }
+
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  ok = gowl_recording_provider_start (
+           GOWL_RECORDING_PROVIDER (mod),
+           capture_mode, NULL, NULL,
+           0, 0, 0, 0,
+           save_path, &err);
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+
+  if (!ok)
+    {
+      if (err != NULL)
+        {
+          Lisp_Object msg = build_string (err->message);
+          g_error_free (err);
+          xsignal1 (Qgowl_error, msg);
+        }
+      return Qnil;
+    }
+
+  return build_string (save_path);
+}
+
+DEFUN ("gowl-record-stop", Fgowl_record_stop, Sgowl_record_stop,
+       0, 0, 0,
+       doc: /* Stop the current screen recording.
+Returns the output file path, or nil if not recording. */)
+  (void)
+{
+  GowlModuleManager *mgr;
+  GowlModule *mod;
+  GError *err = NULL;
+  g_autofree gchar *out_path = NULL;
+
+  GOWL_CHECK_RUNNING ();
+
+  mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
+  mod = gowl_module_manager_find_module (mgr, "recording");
+  if (mod == NULL || !GOWL_IS_RECORDING_PROVIDER (mod))
+    return Qnil;
+
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  gowl_recording_provider_stop (GOWL_RECORDING_PROVIDER (mod),
+                                 &out_path, &err);
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+
+  if (err != NULL)
+    {
+      Lisp_Object msg = build_string (err->message);
+      g_error_free (err);
+      xsignal1 (Qgowl_error, msg);
+    }
+
+  if (out_path != NULL)
+    return build_string (out_path);
+  return Qnil;
+}
+
+DEFUN ("gowl-recording-p", Fgowl_recording_p, Sgowl_recording_p,
+       0, 0, 0,
+       doc: /* Return non-nil if a screen recording is in progress. */)
+  (void)
+{
+  GowlModuleManager *mgr;
+  GowlModule *mod;
+
+  GOWL_CHECK_RUNNING ();
+
+  mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
+  mod = gowl_module_manager_find_module (mgr, "recording");
+  if (mod == NULL || !GOWL_IS_RECORDING_PROVIDER (mod))
+    return Qnil;
+
+  return gowl_recording_provider_is_recording (
+             GOWL_RECORDING_PROVIDER (mod)) ? Qt : Qnil;
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════
  * Layer surfaces
  * ══════════════════════════════════════════════════════════════════════ */
 
@@ -4965,6 +5286,14 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
 
   /* Process info */
   defsubr (&Sgowl_client_process_info);
+
+  /* Screenshot & Recording (high-level) */
+  defsubr (&Sgowl_screenshot);
+  defsubr (&Sgowl_screenshot_save_png);
+  defsubr (&Sgowl_screenshot_all);
+  defsubr (&Sgowl_record_start);
+  defsubr (&Sgowl_record_stop);
+  defsubr (&Sgowl_recording_p);
 }
 
 void

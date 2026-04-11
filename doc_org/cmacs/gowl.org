@@ -569,6 +569,13 @@ Named scratchpad windows that toggle visibility.
 | centeredmaster  | Centered master layout                         | off     |
 | fibonacci       | Fibonacci spiral layout                        | off     |
 | movestack       | Reorder clients in tiling stack                | off     |
+| screenshot      | Screen capture with area selection              | off     |
+| recording       | Screen recording via ffmpeg                    | off     |
+
+See [[file:gowl/screenshot-recording.org][Screenshot & Recording]] for
+full documentation on the screenshot and recording modules, including
+interactive area selection, clipboard integration, configuration, and
+GObject API.
 
 * Elisp Convenience Functions
 
