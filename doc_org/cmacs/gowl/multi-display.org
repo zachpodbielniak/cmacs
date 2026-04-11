@@ -1,0 +1,118 @@
+#+TITLE: Multi-Display Setup in cmacs --gowl
+#+STARTUP: showall
+#+OPTIONS: toc:2 num:t
+
+* Overview
+
+When running =emacs --gowl=, the gowl compositor manages all
+connected displays.  You can query, reposition, and configure
+monitors from Elisp to match your physical layout.
+
+* Listing Monitors
+
+#+begin_src emacs-lisp
+;; List all monitors with their names
+(mapcar (lambda (m)
+          (cdr (assq 'name (gowl-monitor-info m))))
+        (gowl-list-monitors))
+;; => ("eDP-1" "DP-11" "DP-12")
+
+;; Full info for a monitor
+(gowl-monitor-info (car (gowl-list-monitors)))
+;; => ((name . "eDP-1") (current-mode (2256 1504 59999)) ...)
+
+;; Current positions
+(mapcar (lambda (m)
+          (cons (cdr (assq 'name (gowl-monitor-info m)))
+                (gowl-monitor-position m)))
+        (gowl-list-monitors))
+;; => (("eDP-1" . (0 . 0)) ("DP-11" . (2256 . 0)) ...)
+#+end_src
+
+* Positioning Monitors
+
+Use =gowl-set-monitor-position= to arrange monitors.  Coordinates
+are in layout space (pixels).
+
+#+begin_src emacs-lisp
+(gowl-set-monitor-position X Y MONITOR)
+#+end_src
+
+** Example: Two External Monitors + Laptop Below
+
+Two 2560x2880 monitors side-by-side at the top, laptop centered
+below (mirroring a typical GNOME layout):
+
+#+begin_src emacs-lisp
+(let ((monitors (gowl-list-monitors)))
+  ;; Find monitors by name
+  (let ((laptop (cl-find-if
+                  (lambda (m)
+                    (string= "eDP-1"
+                      (cdr (assq 'name (gowl-monitor-info m)))))
+                  monitors))
+        (ext1 (cl-find-if
+                (lambda (m)
+                  (string= "DP-11"
+                    (cdr (assq 'name (gowl-monitor-info m)))))
+                monitors))
+        (ext2 (cl-find-if
+                (lambda (m)
+                  (string= "DP-12"
+                    (cdr (assq 'name (gowl-monitor-info m)))))
+                monitors)))
+    ;; External monitors side-by-side at top
+    (gowl-set-monitor-position 0 0 ext1)
+    (gowl-set-monitor-position 2560 0 ext2)
+    ;; Laptop centered below
+    (gowl-set-monitor-position 1501 2880 laptop)))
+#+end_src
+
+** Example: Simple Side-by-Side
+
+#+begin_src emacs-lisp
+(let ((monitors (gowl-list-monitors)))
+  (gowl-set-monitor-position 0 0 (nth 0 monitors))
+  (gowl-set-monitor-position 1920 0 (nth 1 monitors)))
+#+end_src
+
+* Mirroring GNOME Layout
+
+GNOME stores monitor layout in =~/.config/monitors.xml=.  To
+mirror it in gowl, read the =<logicalmonitor>= entries and match
+connectors (note: connector names may differ between GNOME and
+gowl — =DP-9= in GNOME might be =DP-11= in gowl since the
+Wayland backend creates new connector IDs).
+
+Check both layouts:
+
+#+begin_src shell
+# GNOME layout
+grep -E "<x>|<y>|<connector>" ~/.config/monitors.xml
+
+# Gowl monitor names
+emacs --batch --eval '(message "%S" (mapcar ...))'
+#+end_src
+
+* Monitor Properties
+
+| Function                     | Description                        |
+|------------------------------+------------------------------------|
+| =gowl-list-monitors=        | List all monitor GObjects          |
+| =gowl-monitor-info=         | Get full info alist for a monitor  |
+| =gowl-monitor-position=     | Get current (x . y) position       |
+| =gowl-set-monitor-position= | Set position in layout space       |
+| =gowl-monitor-scale=        | Get current scale factor           |
+| =gowl-set-monitor-scale=    | Set scale factor                   |
+| =gowl-monitor-modes=        | List available modes               |
+| =gowl-monitor-current-mode= | Get current mode (w h refresh)     |
+| =gowl-usable-area=          | Get usable area after bar/gaps     |
+
+* Tips
+
+- After repositioning monitors, the bar and wallpaper automatically
+  update via the =on_layout_change= callback.
+- Each monitor gets its own independent tiling layout, wallpaper,
+  and bar surface.
+- The =gowl-bar-restart= function recreates bar surfaces if they
+  appear at the wrong size after a layout change.

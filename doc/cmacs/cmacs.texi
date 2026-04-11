@@ -1978,6 +1978,46 @@ argument: the newly focused @code{GowlClient}, or @code{nil} if no
 client is focused.
 @end table
 
+@section Multi-Display Setup
+
+@cindex multi-monitor
+@cindex multi-display
+@cindex monitor positioning
+
+When running with @option{--gowl}, the compositor manages all
+connected displays.  Use @code{gowl-set-monitor-position} to arrange
+them to match your physical layout.
+
+@table @code
+@item gowl-list-monitors
+List all monitor GObjects.
+@item gowl-monitor-info @var{monitor}
+Get full info alist (name, current-mode, scale, etc.).
+@item gowl-monitor-position @var{monitor}
+Get current position as @code{(x . y)}.
+@item gowl-set-monitor-position @var{x} @var{y} @var{monitor}
+Set monitor position in layout space.
+@end table
+
+@subsection Example: Dual External + Laptop
+
+Two 2560x2880 monitors side-by-side at top, laptop centered below:
+
+@example
+(let ((monitors (gowl-list-monitors)))
+  ;; External monitors side-by-side
+  (gowl-set-monitor-position 0 0 (nth 1 monitors))
+  (gowl-set-monitor-position 2560 0 (nth 2 monitors))
+  ;; Laptop centered below
+  (gowl-set-monitor-position 1501 2880 (nth 0 monitors)))
+@end example
+
+@noindent
+Monitor connector names (e.g.@: @code{DP-11}) may differ from GNOME's
+names (@code{DP-9}) since the Wayland backend creates new IDs.
+Check @file{~/.config/monitors.xml} for GNOME's layout and match
+by vendor/product.
+
 @section Modules
 
 @cindex gowl modules
