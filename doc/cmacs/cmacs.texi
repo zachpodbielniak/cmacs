@@ -1938,7 +1938,56 @@ Set the clipboard contents to @var{TEXT}.
 Return the current primary selection text, or @code{nil}.
 @item gowl-primary-selection-set TEXT
 Set the primary selection to @var{TEXT}.
+@item gowl-clipboard-watch
+Start monitoring Wayland clipboard changes.  When a client copies
+text, it is pushed to the Emacs kill-ring.
+@item gowl-clipboard-unwatch
+Stop monitoring Wayland clipboard changes.
 @end table
+
+@subsection Clipboard Sync
+
+@cindex clipboard sync
+@cindex kill-ring, Wayland sync
+
+@code{cmacs-gowl-clipboard-sync-mode} provides bidirectional
+clipboard synchronization between the Wayland compositor and the
+Emacs kill-ring.
+
+@defun cmacs-gowl-clipboard-sync-mode &optional arg
+Global minor mode.  When enabled:
+@itemize @bullet
+@item
+Text copied by Wayland clients is pushed to the kill-ring.
+@item
+Text killed in Emacs is placed on the Wayland clipboard.
+@item
+@kbd{C-y} checks the Wayland clipboard before the kill-ring.
+@end itemize
+@end defun
+
+@noindent
+Enable in your config:
+
+@example
+(cmacs-gowl-clipboard-sync-mode 1)
+@end example
+
+@noindent
+The @code{GowlSeat} object emits two signals for clipboard
+monitoring:
+
+@table @code
+@item clipboard-changed
+Fired when a Wayland client sets the clipboard.
+@item primary-selection-changed
+Fired when a Wayland client sets the primary selection.
+@end table
+
+@noindent
+These signals only fire for client-initiated changes, not when
+Emacs sets the clipboard via @code{gowl-clipboard-set}, so no
+infinite loop occurs.
 
 @noindent
 Bar control:

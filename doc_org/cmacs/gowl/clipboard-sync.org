@@ -1,0 +1,136 @@
+#+TITLE: Clipboard Sync
+#+STARTUP: showall
+#+OPTIONS: toc:2 num:t
+
+* Overview
+
+=cmacs-gowl-clipboard-sync-mode= provides bidirectional clipboard
+synchronization between the gowl Wayland compositor and Emacs's
+kill-ring.  When enabled:
+
+- Text copied by Wayland clients (Firefox, terminals, etc.) is
+  automatically pushed to the Emacs kill-ring.
+- Text killed or copied in Emacs (=C-w=, =M-w=) is placed on the
+  Wayland clipboard, available to all Wayland clients.
+- =C-y= (yank) checks the Wayland clipboard first, so pasting from
+  external apps works seamlessly.
+
+* Enabling
+
+#+begin_src emacs-lisp
+;; Enable bidirectional clipboard sync
+(cmacs-gowl-clipboard-sync-mode 1)
+#+end_src
+
+Or add to your =--gowl= startup config:
+
+#+begin_src emacs-lisp
+(when IS-GOWL
+  (gowl-start)
+  (cmacs-gowl-clipboard-sync-mode 1)
+  ;; ... other gowl configuration
+  )
+#+end_src
+
+The mode lighter is =GowlClip= in the mode line.
+
+* How It Works
+
+** Wayland to Emacs (client copy -> kill-ring)
+
+1. A Wayland client copies text (e.g., Ctrl+C in Firefox)
+2. The client sends =wl_data_device.set_selection= to the compositor
+3. =GowlSeat= emits the =clipboard-changed= GObject signal
+4. The cmacs signal handler reads the clipboard text and schedules
+   an idle callback on the GLib main context
+5. The idle callback (on the Emacs main thread) evaluates
+   =(kill-new TEXT)= to push the text onto the kill-ring
+
+Primary selection (mouse highlight) works the same way via the
+=primary-selection-changed= signal.
+
+** Emacs to Wayland (kill -> clipboard)
+
+1. User kills text in Emacs (=C-w=, =M-w=, etc.)
+2. =interprogram-cut-function= fires, calling =gowl-clipboard-set=
+3. The compositor creates a =wl_data_source= with the text
+4. All Wayland clients can now paste the text
+
+** Yank Integration
+
+1. User presses =C-y= in Emacs
+2. =interprogram-paste-function= calls =gowl-clipboard-get=
+3. If the Wayland clipboard differs from the kill-ring top, the
+   new text is returned and inserted
+4. Otherwise, normal kill-ring yank proceeds
+
+** Deduplication
+
+The sync tracks the last known clipboard value to prevent loops:
+- When Emacs sets the clipboard, the value is cached
+- When a Wayland client sets the clipboard, the idle callback
+  skips =(kill-new)= if the text matches the cache or the
+  current kill-ring top
+
+* Low-Level Primitives
+
+These DEFUNs are available independently of the sync mode:
+
+| Function                       | Description                        |
+|--------------------------------+------------------------------------|
+| =gowl-clipboard-get=          | Read Wayland clipboard text        |
+| =gowl-clipboard-set TEXT=     | Set Wayland clipboard to TEXT      |
+| =gowl-primary-selection-get=  | Read Wayland primary selection     |
+| =gowl-primary-selection-set TEXT= | Set primary selection to TEXT |
+| =gowl-clipboard-watch=        | Start monitoring clipboard changes |
+| =gowl-clipboard-unwatch=      | Stop monitoring clipboard changes  |
+
+* Shell Access (bacon)
+
+From the bacon shell, clipboard operations use the existing
+=cmacsgi= subcommands:
+
+#+begin_example
+bacon> cmacsgi eval "(gowl-clipboard-get)"
+"text from clipboard"
+
+bacon> cmacsgi eval "(gowl-clipboard-set \"hello from bacon\")"
+nil
+#+end_example
+
+* GObject Signals
+
+The =GowlSeat= object emits these signals for clipboard monitoring:
+
+| Signal                          | Description                      |
+|---------------------------------+----------------------------------|
+| =clipboard-changed=            | Fired when a client sets the clipboard |
+| =primary-selection-changed=    | Fired when a client sets the primary selection |
+
+These signals fire on the compositor dispatch thread.  The cmacs
+integration uses =g_idle_add()= to safely dispatch to the Emacs
+main thread.
+
+** Connecting from GI
+
+#+begin_src emacs-lisp
+;; Manual signal connection (the mode does this automatically)
+(let ((seat (gowl-seat)))
+  (gi-method seat "connect" "clipboard-changed"
+    (lambda ()
+      (message "Clipboard changed: %s" (gowl-clipboard-get)))))
+#+end_src
+
+* Architecture Notes
+
+- The =clipboard-changed= signal only fires for *client-initiated*
+  clipboard changes.  When Emacs sets the clipboard via
+  =gowl-clipboard-set=, it calls =wlr_seat_set_selection()=
+  directly, bypassing =request_set_selection= --- so no infinite
+  loop occurs.
+- Clipboard reads (=gowl_seat_get_clipboard=) are synchronous pipe
+  operations that negotiate MIME types: =text/plain;charset=utf-8=,
+  =text/plain=, or =UTF8_STRING=.
+- The mode uses Emacs's standard =interprogram-cut-function= and
+  =interprogram-paste-function= hooks, which are the official
+  integration points for external clipboard systems.

@@ -577,6 +577,10 @@ full documentation on the screenshot and recording modules, including
 interactive area selection, clipboard integration, configuration, and
 GObject API.
 
+See [[file:gowl/clipboard-sync.org][Clipboard Sync]] for bidirectional
+clipboard synchronization between Wayland clients and the Emacs
+kill-ring via =cmacs-gowl-clipboard-sync-mode=.
+
 * Elisp Convenience Functions
 
 The Elisp layer provides convenience wrappers around compositor
