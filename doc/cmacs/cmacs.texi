@@ -2044,6 +2044,34 @@ same Emacs state.  This avoids the complexity of
 @option{--gowl} mode because the compositor thread must survive
 the daemon fork.
 
+@subsection Testing Multi-Monitor in a Nested Session
+
+When developing inside GNOME, simulate multiple monitors with:
+
+@example
+LIBDECOR_PLUGIN_DIR=/nonexistent WLR_WL_OUTPUTS=3 ./src/emacs --gowl
+@end example
+
+@noindent
+This creates 3 undecorated gowl windows on GNOME, each acting as
+a monitor.  @code{LIBDECOR_PLUGIN_DIR=/nonexistent} is required
+because libdecor intercepts the first wlr_output and creates a
+decorated window at 0x0 dimensions, which prevents the Emacs frame
+from appearing.  Disabling libdecor plugins gives all outputs plain
+undecorated windows that initialize correctly.
+
+@subsubheading Known Limitations
+@itemize
+@item
+Nested multi-output windows have no title bar or close button.
+@item
+The @samp{No free output buffer slot} warning from wlroots is
+harmless and occurs during initial output setup.
+@item
+For production multi-monitor, launch from a TTY/login session
+where gowl controls real DRM outputs directly.
+@end itemize
+
 @section Modules
 
 @cindex gowl modules

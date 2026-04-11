@@ -142,6 +142,44 @@ trickier with =--gowl= because the compositor thread must survive
 the daemon fork.  =make-frame= from within the running session
 avoids this entirely.
 
+* Testing Multi-Monitor in a Nested Session
+
+When developing inside GNOME (or another Wayland compositor), you
+can simulate multiple monitors using wlroots' =WLR_WL_OUTPUTS=
+environment variable:
+
+#+begin_src shell
+LIBDECOR_PLUGIN_DIR=/nonexistent WLR_WL_OUTPUTS=3 ./src/emacs --gowl
+#+end_src
+
+This creates 3 separate undecorated windows on your GNOME desktop,
+each acting as a gowl output/monitor.
+
+** Why LIBDECOR_PLUGIN_DIR=/nonexistent?
+
+Gowl uses libdecor for window decorations in nested Wayland sessions.
+Libdecor intercepts the first wlr_output and replaces it with a
+decorated window.  With =WLR_WL_OUTPUTS > 1=, this conflicts:
+
+- The decorated output starts at 0x0 dimensions (waiting for a
+  configure from the parent compositor)
+- The Emacs PGTK frame may map on the 0x0 output and never appear
+- The swapchain reports "No free output buffer slot" errors
+
+Setting =LIBDECOR_PLUGIN_DIR= to a nonexistent path disables
+libdecor plugins, so all outputs are plain undecorated windows.
+You lose the window title bar and close button, but all outputs
+initialize correctly.
+
+** Known Limitations
+
+- The nested multi-output simulation creates undecorated windows
+  without title bars (no resize handles, close buttons)
+- For production multi-monitor use, launch from a TTY/login session
+  where gowl controls real DRM outputs directly
+- The =No free output buffer slot= warning from wlroots is harmless
+  and occurs during initial output setup
+
 * Tips
 
 - After repositioning monitors, the bar and wallpaper automatically
