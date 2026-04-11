@@ -4,3 +4,6 @@ issue.png
 native-lisp
 *.elc
 *.so
+*.a
+src/emacs
+tools/cmacs-mcp/cmacs-mcp
