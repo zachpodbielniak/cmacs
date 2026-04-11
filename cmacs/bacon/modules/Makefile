@@ -10,7 +10,10 @@ CFLAGS      += -std=gnu89 -Wall -Wextra -Wno-unused-parameter \
                -I$(BACON_DIR) -I$(BACON_DIR)/src \
                -I$(API_DIR) \
                $(PKG_CFLAGS)
-LDFLAGS     += -L$(API_DIR) -lcmacs-api -Wl,-rpath,'$$ORIGIN/../../api' \
+CMACS_API_LIBDIR ?= /usr/lib64/cmacs
+LDFLAGS     += -L$(API_DIR) -lcmacs-api \
+               -Wl,-rpath,'$$ORIGIN/../../api' \
+               -Wl,-rpath,$(CMACS_API_LIBDIR) \
                $(PKG_LIBS)
 
 OUTDIR      ?= .
