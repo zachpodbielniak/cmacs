@@ -2018,6 +2018,32 @@ names (@code{DP-9}) since the Wayland backend creates new IDs.
 Check @file{~/.config/monitors.xml} for GNOME's layout and match
 by vendor/product.
 
+@subsection Multiple Frames (One Per Monitor)
+
+Emacs supports multiple frames sharing the same session.  In
+@option{--gowl} mode, each frame is a separate Wayland client
+that gowl tiles on its own monitor:
+
+@example
+(make-frame)   ;; creates a new frame on the next monitor
+@end example
+
+@noindent
+Auto-create one frame per monitor:
+
+@example
+(when (> (gowl-monitor-count) 1)
+  (dotimes (_ (1- (gowl-monitor-count)))
+    (make-frame)))
+@end example
+
+@noindent
+Each frame has its own buffers and window splits but shares the
+same Emacs state.  This avoids the complexity of
+@command{emacsclient} with @option{--daemon}, which is tricky in
+@option{--gowl} mode because the compositor thread must survive
+the daemon fork.
+
 @section Modules
 
 @cindex gowl modules

@@ -108,6 +108,40 @@ emacs --batch --eval '(message "%S" (mapcar ...))'
 | =gowl-monitor-current-mode= | Get current mode (w h refresh)     |
 | =gowl-usable-area=          | Get usable area after bar/gaps     |
 
+* Multiple Frames (One Per Monitor)
+
+Emacs supports multiple frames sharing the same session.  In
+=--gowl= mode, each frame is a separate Wayland client that gowl
+tiles on its own monitor.  No =emacsclient= needed — create frames
+from within the running session:
+
+#+begin_src emacs-lisp
+;; Create a new frame (tiled on next available monitor)
+(make-frame)
+#+end_src
+
+Each frame has its own buffer, window splits, and modeline, but
+shares the same Emacs state (buffers, kill ring, variables).
+
+** Auto-create frames for all monitors
+
+#+begin_src emacs-lisp
+;; In your IS-GOWL config, after positioning monitors:
+(when (> (gowl-monitor-count) 1)
+  (dotimes (_ (1- (gowl-monitor-count)))
+    (make-frame)))
+#+end_src
+
+This creates one frame per monitor.  With 3 monitors you get 3
+independent Emacs frames, each tiled on its own display.
+
+** Why not emacsclient?
+
+The =--daemon= + =emacsclient -c= approach also works but is
+trickier with =--gowl= because the compositor thread must survive
+the daemon fork.  =make-frame= from within the running session
+avoids this entirely.
+
 * Tips
 
 - After repositioning monitors, the bar and wallpaper automatically
