@@ -3265,7 +3265,11 @@ gowl_module_manager_configure_all. */)
   outer = g_hash_table_new (g_str_hash, g_str_equal);
   g_hash_table_insert (outer, SSDATA (name), inner);
 
+  /* Lock the compositor mutex — configure may trigger scene graph
+     modifications (e.g. bar_redraw_all calls wlr_scene_buffer_set_buffer). */
+  pthread_mutex_lock (&cmacs_gowl_mutex);
   gowl_module_manager_configure_all (mgr, outer);
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
 
   g_hash_table_unref (outer);
   g_hash_table_unref (inner);
@@ -3315,17 +3319,18 @@ Configures the wallpaper module and applies to all current monitors. */)
   outer = g_hash_table_new (g_str_hash, g_str_equal);
   g_hash_table_insert (outer, (gpointer) "wallpaper", inner);
 
+  pthread_mutex_lock (&cmacs_gowl_mutex);
   gowl_module_manager_configure_all (mgr, outer);
-
-  g_hash_table_unref (outer);
-  g_hash_table_unref (inner);
-
   /* Re-dispatch wallpaper on every monitor to apply immediately. */
   monitors = gowl_compositor_get_monitors (cmacs_gowl_compositor);
   for (l = monitors; l != NULL; l = l->next)
     gowl_module_manager_dispatch_wallpaper_output (mgr,
                                                    cmacs_gowl_compositor,
                                                    l->data);
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+
+  g_hash_table_unref (outer);
+  g_hash_table_unref (inner);
 
   /* Track for gowl-wallpaper-info. */
   g_free (cmacs_wallpaper_path);
@@ -3431,7 +3436,9 @@ Configures the alpha module and re-applies immediately. */)
   g_hash_table_insert (inner, (gpointer) "focused-alpha", buf);
   outer = g_hash_table_new (g_str_hash, g_str_equal);
   g_hash_table_insert (outer, (gpointer) "alpha", inner);
+  pthread_mutex_lock (&cmacs_gowl_mutex);
   gowl_module_manager_configure_all (mgr, outer);
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
   g_hash_table_unref (outer);
   g_hash_table_unref (inner);
   return Qt;
@@ -3461,7 +3468,9 @@ Configures the alpha module and re-applies immediately. */)
   g_hash_table_insert (inner, (gpointer) "unfocused-alpha", buf);
   outer = g_hash_table_new (g_str_hash, g_str_equal);
   g_hash_table_insert (outer, (gpointer) "alpha", inner);
+  pthread_mutex_lock (&cmacs_gowl_mutex);
   gowl_module_manager_configure_all (mgr, outer);
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
   g_hash_table_unref (outer);
   g_hash_table_unref (inner);
   return Qt;
@@ -3526,14 +3535,15 @@ Re-arranges all monitors immediately. */)
 
   outer = g_hash_table_new (g_str_hash, g_str_equal);
   g_hash_table_insert (outer, (gpointer) "vanitygaps", inner);
+  pthread_mutex_lock (&cmacs_gowl_mutex);
   gowl_module_manager_configure_all (mgr, outer);
-  g_hash_table_unref (outer);
-  g_hash_table_unref (inner);
-
   /* Re-arrange all monitors so gaps take effect immediately. */
   monitors = gowl_compositor_get_monitors (cmacs_gowl_compositor);
   for (l = monitors; l != NULL; l = l->next)
     gowl_compositor_arrange (cmacs_gowl_compositor, l->data);
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+  g_hash_table_unref (outer);
+  g_hash_table_unref (inner);
 
   return Qt;
 }
@@ -3601,7 +3611,9 @@ ALIST is an alist of string key-value pairs.  Supported keys:
 
   outer = g_hash_table_new (g_str_hash, g_str_equal);
   g_hash_table_insert (outer, (gpointer) "screenlock", inner);
+  pthread_mutex_lock (&cmacs_gowl_mutex);
   gowl_module_manager_configure_all (mgr, outer);
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
   g_hash_table_unref (outer);
   g_hash_table_unref (inner);
   return Qt;
@@ -3708,10 +3720,13 @@ area on all monitors so tiling accounts for the bar height. */)
   GOWL_CHECK_RUNNING ();
   Fgowl_enable_module (build_string ("bar"));
 
-  /* Recalculate usable area (subtracts bar height) and re-tile. */
+  /* Recalculate usable area (subtracts bar height) and re-tile.
+     Must hold mutex — arrangelayers modifies the scene graph. */
+  pthread_mutex_lock (&cmacs_gowl_mutex);
   monitors = gowl_compositor_get_monitors (cmacs_gowl_compositor);
   for (l = monitors; l != NULL; l = l->next)
     gowl_compositor_arrangelayers (cmacs_gowl_compositor, l->data);
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
 
   return Qt;
 }
@@ -3727,10 +3742,13 @@ Deactivates the bar module and reclaims the tiling space. */)
   GOWL_CHECK_RUNNING ();
   Fgowl_disable_module (build_string ("bar"));
 
-  /* Recalculate usable area (bar height now 0) and re-tile. */
+  /* Recalculate usable area (bar height now 0) and re-tile.
+     Must hold mutex — arrangelayers modifies the scene graph. */
+  pthread_mutex_lock (&cmacs_gowl_mutex);
   monitors = gowl_compositor_get_monitors (cmacs_gowl_compositor);
   for (l = monitors; l != NULL; l = l->next)
     gowl_compositor_arrangelayers (cmacs_gowl_compositor, l->data);
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
 
   return Qt;
 }
@@ -3749,10 +3767,13 @@ Re-arranges monitors if height changed. */)
 
   Fgowl_configure_module (build_string ("bar"), alist);
 
-  /* Recalculate usable area in case height changed. */
+  /* Recalculate usable area in case height changed.
+     Must hold mutex — arrangelayers modifies the scene graph. */
+  pthread_mutex_lock (&cmacs_gowl_mutex);
   monitors = gowl_compositor_get_monitors (cmacs_gowl_compositor);
   for (l = monitors; l != NULL; l = l->next)
     gowl_compositor_arrangelayers (cmacs_gowl_compositor, l->data);
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
 
   return Qt;
 }
@@ -3770,10 +3791,12 @@ DEFUN ("gowl-bar-redraw", Fgowl_bar_redraw, Sgowl_bar_redraw,
   if (mgr == NULL)
     return Qnil;
 
+  pthread_mutex_lock (&cmacs_gowl_mutex);
   monitors = gowl_compositor_get_monitors (cmacs_gowl_compositor);
   for (l = monitors; l != NULL; l = l->next)
     gowl_module_manager_dispatch_bar_render (mgr, cmacs_gowl_compositor,
                                              l->data);
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
   return Qt;
 }
 
