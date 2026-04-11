@@ -203,9 +203,11 @@ compositor's focus-follows-mouse.
 1. =gowl-embed= spawns a Wayland client and pre-registers its PID so
    the compositor floats and hides it on map.
 2. A 100ms timer polls =gowl-list-clients= to match the PID.
-3. Once matched, the client is reparented into Emacs's scene tree
-   (=gowl-embed-into=) and positioned over the window body
-   (=gowl-position-embedded=).
+3. Once matched, the client is positioned on the OVERLAY layer at
+   the Emacs window's monitor-absolute coordinates.  The frame's
+   compositor geometry (from =gowl-client-info=) is added to the
+   frame-relative window coordinates to account for bar height and
+   vanitygaps.
 4. =window-configuration-change-hook= keeps the overlay in sync when
    windows resize, split, or switch buffers.
 5. A 1-second health timer detects client exit and cleans up the buffer.
@@ -252,8 +254,9 @@ Core compositor control:
 | =gowl-running-p=           | Check if compositor is running                  |
 | =gowl-spawn=               | Launch a Wayland client, return PID             |
 | =gowl-list-clients=        | List managed client objects                     |
-| =gowl-client-info=         | Get client info alist (title, app-id, geometry) |
+| =gowl-client-info=         | Get client info (title, app-id, geometry, etc.) |
 | =gowl-client-pid=          | Get client PID                                  |
+| =gowl-usable-area=         | Get focused monitor's usable area (x y w h)     |
 | =gowl-focus-client=        | Focus a client window                           |
 | =gowl-close-client=        | Close a client window                           |
 | =gowl-move-client=         | Move client to x,y                              |
@@ -453,6 +456,29 @@ transparency persists across frames.
   ;; Force compositor to blend behind the Emacs frame
   (gowl-set-all-alpha 0.99))
 #+end_src
+
+** Status Bar
+
+Compositor-level status bar showing focused window title and system
+info (battery, clock).  Semi-transparent background so the wallpaper
+shows through.  Tiling layout automatically accounts for bar height.
+
+#+begin_src emacs-lisp
+(gowl-bar-enable)
+(gowl-bar-configure
+  '(("height" . "28")
+    ("bg-color" . "#1e1e2ecc")
+    ("fg-color" . "#cdd6f4")
+    ("font" . "Hack Nerd Font Mono")
+    ("font-size" . "13")))
+#+end_src
+
+| Function                          | Description                              |
+|-----------------------------------+------------------------------------------|
+| =gowl-bar-enable=                | Load and activate the bar module         |
+| =gowl-bar-disable=               | Deactivate and reclaim tiling space      |
+| =gowl-bar-configure=             | Configure bar appearance                 |
+| =gowl-bar-redraw=                | Force full redraw                        |
 
 ** Vanitygaps
 

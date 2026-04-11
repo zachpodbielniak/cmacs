@@ -1698,9 +1698,12 @@ so the compositor floats and hides it on map.
 @item
 A 100ms timer polls @code{gowl-list-clients} to match the PID.
 @item
-Once matched, the client is reparented into Emacs's scene tree
-(@code{gowl-embed-into}) and positioned over the window body
-(@code{gowl-position-embedded}).
+Once matched, the client is positioned on the compositor's OVERLAY
+layer at the Emacs window's monitor-absolute coordinates
+(@code{gowl-position-embedded}).  The frame's compositor position
+(from @code{gowl-client-info} geometry) is added to the
+frame-relative window coordinates to account for the bar height
+and vanitygaps.
 @item
 @code{window-configuration-change-hook} keeps the overlay in sync
 when windows resize, split, or switch buffers.
@@ -1765,7 +1768,9 @@ Launch a Wayland client, return PID.
 @item gowl-list-clients
 List managed client objects.
 @item gowl-client-info CLIENT
-Get client info alist (title, app-id, geometry).
+Get client info alist (title, app-id, tags, floating, embedded, geometry).
+@item gowl-usable-area
+Get the focused monitor's usable window area (x y width height).
 @item gowl-client-pid CLIENT
 Get client PID.
 @item gowl-focus-client CLIENT
@@ -2072,6 +2077,36 @@ Set opacity for the focused window.
 Set opacity for unfocused windows.
 @item gowl-alpha-info
 Return the current alpha configuration as an alist.
+@end table
+
+@subsection Status Bar
+@cindex bar, status
+@cindex status bar
+
+The bar module renders a compositor-level status bar at the top of the
+screen.  It shows the focused window title and system info (battery,
+clock).  The background is semi-transparent so the wallpaper shows
+through.  The tiling layout automatically accounts for the bar height.
+
+@example
+(gowl-bar-enable)
+(gowl-bar-configure
+  '(("height" . "28")
+    ("bg-color" . "#1e1e2ecc")
+    ("fg-color" . "#cdd6f4")
+    ("font" . "Hack Nerd Font Mono")
+    ("font-size" . "13")))
+@end example
+
+@table @code
+@item gowl-bar-enable
+Load and activate the bar module.
+@item gowl-bar-disable
+Deactivate the bar and reclaim tiling space.
+@item gowl-bar-configure @var{alist}
+Configure bar appearance (height, colors, font).
+@item gowl-bar-redraw
+Force a full redraw of all bar surfaces.
 @end table
 
 @subsection Vanitygaps

@@ -1367,7 +1367,7 @@ Keys: title, app-id, tags, floating, embedded, geometry. */)
   c = gowl_resolve_client (client);
   gowl_client_get_geometry (c, &x, &y, &w, &h);
 
-  return list5 (
+  return CALLN (Flist,
     Fcons (intern_c_string ("title"),
            build_string (gowl_client_get_title (c) ? : "")),
     Fcons (intern_c_string ("app-id"),
@@ -1377,7 +1377,10 @@ Keys: title, app-id, tags, floating, embedded, geometry. */)
     Fcons (intern_c_string ("floating"),
            gowl_client_get_floating (c) ? Qt : Qnil),
     Fcons (intern_c_string ("embedded"),
-           gowl_client_get_embedded (c) ? Qt : Qnil));
+           gowl_client_get_embedded (c) ? Qt : Qnil),
+    Fcons (intern_c_string ("geometry"),
+           list4 (make_fixnum (x), make_fixnum (y),
+                  make_fixnum (w), make_fixnum (h))));
 }
 
 DEFUN ("gowl-move-client", Fgowl_move_client, Sgowl_move_client,
@@ -3643,6 +3646,111 @@ Returns t if the scratchpad module handled the request. */)
 }
 
 
+/* ══════════════════════════════════════════════════════════════════════
+ * BAR
+ * ══════════════════════════════════════════════════════════════════════ */
+
+DEFUN ("gowl-usable-area", Fgowl_usable_area, Sgowl_usable_area,
+       0, 0, 0,
+       doc: /* Return the focused monitor's usable window area.
+Shows (x y width height) after bar and layer-shell subtraction. */)
+  (void)
+{
+  GowlMonitor *mon;
+  gint x, y, w, h;
+
+  GOWL_CHECK_RUNNING ();
+  mon = gowl_get_focused_monitor ();
+  if (mon == NULL)
+    return Qnil;
+
+  gowl_monitor_get_window_area (mon, &x, &y, &w, &h);
+  return list4 (make_fixnum (x), make_fixnum (y),
+                make_fixnum (w), make_fixnum (h));
+}
+
+DEFUN ("gowl-bar-enable", Fgowl_bar_enable, Sgowl_bar_enable,
+       0, 0, 0,
+       doc: /* Enable the compositor status bar.
+Loads the bar module, activates it, and recalculates the usable
+area on all monitors so tiling accounts for the bar height. */)
+  (void)
+{
+  GList *monitors, *l;
+
+  GOWL_CHECK_RUNNING ();
+  Fgowl_enable_module (build_string ("bar"));
+
+  /* Recalculate usable area (subtracts bar height) and re-tile. */
+  monitors = gowl_compositor_get_monitors (cmacs_gowl_compositor);
+  for (l = monitors; l != NULL; l = l->next)
+    gowl_compositor_arrangelayers (cmacs_gowl_compositor, l->data);
+
+  return Qt;
+}
+
+DEFUN ("gowl-bar-disable", Fgowl_bar_disable, Sgowl_bar_disable,
+       0, 0, 0,
+       doc: /* Disable the compositor status bar.
+Deactivates the bar module and reclaims the tiling space. */)
+  (void)
+{
+  GList *monitors, *l;
+
+  GOWL_CHECK_RUNNING ();
+  Fgowl_disable_module (build_string ("bar"));
+
+  /* Recalculate usable area (bar height now 0) and re-tile. */
+  monitors = gowl_compositor_get_monitors (cmacs_gowl_compositor);
+  for (l = monitors; l != NULL; l = l->next)
+    gowl_compositor_arrangelayers (cmacs_gowl_compositor, l->data);
+
+  return Qt;
+}
+
+DEFUN ("gowl-bar-configure", Fgowl_bar_configure,
+       Sgowl_bar_configure, 1, 1, 0,
+       doc: /* Configure the status bar with ALIST.
+Keys: "height", "bg-color", "fg-color", "font", "font-size".
+Re-arranges monitors if height changed. */)
+  (Lisp_Object alist)
+{
+  GList *monitors, *l;
+
+  CHECK_LIST (alist);
+  GOWL_CHECK_RUNNING ();
+
+  Fgowl_configure_module (build_string ("bar"), alist);
+
+  /* Recalculate usable area in case height changed. */
+  monitors = gowl_compositor_get_monitors (cmacs_gowl_compositor);
+  for (l = monitors; l != NULL; l = l->next)
+    gowl_compositor_arrangelayers (cmacs_gowl_compositor, l->data);
+
+  return Qt;
+}
+
+DEFUN ("gowl-bar-redraw", Fgowl_bar_redraw, Sgowl_bar_redraw,
+       0, 0, 0,
+       doc: /* Force a full redraw of all bar surfaces. */)
+  (void)
+{
+  GowlModuleManager *mgr;
+  GList *monitors, *l;
+
+  GOWL_CHECK_RUNNING ();
+  mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
+  if (mgr == NULL)
+    return Qnil;
+
+  monitors = gowl_compositor_get_monitors (cmacs_gowl_compositor);
+  for (l = monitors; l != NULL; l = l->next)
+    gowl_module_manager_dispatch_bar_render (mgr, cmacs_gowl_compositor,
+                                             l->data);
+  return Qt;
+}
+
+
 /* ── Xwidget integration ─────────────────────────────────────────────
  *
  * When HAVE_XWIDGETS is enabled alongside HAVE_CMACS_GOWL, embedded
@@ -4723,6 +4831,11 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_gaps_info);
   defsubr (&Sgowl_configure_screenlock);
   defsubr (&Sgowl_scratchpad_toggle);
+  defsubr (&Sgowl_usable_area);
+  defsubr (&Sgowl_bar_enable);
+  defsubr (&Sgowl_bar_disable);
+  defsubr (&Sgowl_bar_configure);
+  defsubr (&Sgowl_bar_redraw);
 
   /* Swap / Zoom */
   defsubr (&Sgowl_swap_clients);

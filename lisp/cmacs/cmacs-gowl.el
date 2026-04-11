@@ -402,29 +402,52 @@ control to Emacs."
 (defvar gowl-embed--health-timer nil
   "Timer checking if embedded clients are still alive.")
 
+(defun gowl-embed--find-emacs-client (exclude)
+  "Find the Emacs frame's gowl client (the non-embedded tiled client).
+EXCLUDE is the client being embedded — skip it."
+  (cl-find-if
+   (lambda (c)
+     (and (not (eq c exclude))
+          (let ((info (gowl-client-info c)))
+            (not (cdr (assq 'embedded info))))))
+   (gowl-list-clients)))
+
+(defun gowl-embed--frame-offset ()
+  "Return the Emacs frame's content origin as (X . Y).
+The gowl client geometry includes the border, so add the border
+width to get the surface content origin."
+  (let ((emacs-client (gowl-embed--find-emacs-client nil)))
+    (if emacs-client
+        (let* ((info (gowl-client-info emacs-client))
+               (geom (cdr (assq 'geometry info)))
+               (bw (gowl-client-border-width emacs-client)))
+          (if geom
+              (cons (+ (nth 0 geom) bw) (+ (nth 1 geom) bw))
+            '(0 . 0)))
+      '(0 . 0))))
+
 (defun gowl-embed--do-embed (client window buf)
   "Embed CLIENT into the compositor scene tree, displayed in WINDOW's area.
-The client stays in its current scene layer (OVERLAY, set by the map
-callback) and is positioned at WINDOW's pixel coordinates.  The
-compositor renders it directly — no xwidget or GTK widget involved."
+The client stays on the OVERLAY layer and is positioned at
+monitor-absolute coordinates (frame position + window position).
+The compositor renders it directly — no xwidget or GTK widget involved."
   (set-window-buffer window buf)
   (with-selected-window window
     (let* ((edges (window-inside-absolute-pixel-edges window))
-           (x (nth 0 edges))
-           (y (nth 1 edges))
-           (w (- (nth 2 edges) x))
-           (h (- (nth 3 edges) y)))
+           (offset (gowl-embed--frame-offset))
+           (x (+ (car offset) (nth 0 edges)))
+           (y (+ (cdr offset) (nth 1 edges)))
+           (w (- (nth 2 edges) (nth 0 edges)))
+           (h (- (nth 3 edges) (nth 1 edges))))
       (setq-local gowl-embedded-client client)
       (setq-local gowl-embedded-client-pid (gowl-client-pid client))
       ;; Mark as embedded so arrange() skips it.
       (gowl-set-client-embedded client t)
       (gowl-set-client-border-width client 0)
-      ;; Enable scene node — compositor renders it directly.
-      ;; The map callback already placed it in OVERLAY layer.
-      (gowl-set-client-visible client t)
-      ;; Position + clip at window coordinates (output-relative since
-      ;; Emacs is fullscreen at 0,0 in --gowl mode).
+      ;; Position first, THEN show — avoids a flash at (0,0).
+      ;; Client stays on OVERLAY layer (set by map callback).
       (gowl-position-embedded client x y w h)
+      (gowl-set-client-visible client t)
       (let ((inhibit-read-only t))
         (erase-buffer))
       (gowl-embed--ensure-health-timer))))
@@ -550,23 +573,25 @@ whose underlying wlr resources may already be freed."
 (defun gowl-embed--adjust-size (frame)
   "Reposition embedded clients to match their window dimensions in FRAME.
 Enforces single-window display first, then positions each embedded
-client's scene node at the window's pixel coordinates."
+client's scene node at monitor-absolute coordinates (frame offset +
+window position)."
   (gowl-embed--enforce-single-window)
-  (walk-windows
-   (lambda (win)
-     (when-let* ((client (buffer-local-value 'gowl-embedded-client
-                                              (window-buffer win))))
-       (let* ((edges (window-inside-absolute-pixel-edges win))
-              (x (nth 0 edges))
-              (y (nth 1 edges))
-              (w (- (nth 2 edges) x))
-              (h (- (nth 3 edges) y)))
-         (if (and (> w 0) (> h 0))
-             (progn
-               (gowl-set-client-visible client t)
-               (gowl-position-embedded client x y w h))
-           (gowl-set-client-visible client nil)))))
-   'no-minibuf frame))
+  (let ((offset (gowl-embed--frame-offset)))
+    (walk-windows
+     (lambda (win)
+       (when-let* ((client (buffer-local-value 'gowl-embedded-client
+                                                (window-buffer win))))
+         (let* ((edges (window-inside-absolute-pixel-edges win))
+                (x (+ (car offset) (nth 0 edges)))
+                (y (+ (cdr offset) (nth 1 edges)))
+                (w (- (nth 2 edges) (nth 0 edges)))
+                (h (- (nth 3 edges) (nth 1 edges))))
+           (if (and (> w 0) (> h 0))
+               (progn
+                 (gowl-set-client-visible client t)
+                 (gowl-position-embedded client x y w h))
+             (gowl-set-client-visible client nil)))))
+     'no-minibuf frame)))
 
 (defun gowl-embed--manage-dedication (&rest _)
   "Manage soft dedication for gowl-embed windows.
