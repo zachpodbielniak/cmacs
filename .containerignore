@@ -3,3 +3,4 @@ TEST.org
 issue.png
 native-lisp
 *.elc
+*.so
