@@ -3750,6 +3750,39 @@ DEFUN ("gowl-bar-redraw", Fgowl_bar_redraw, Sgowl_bar_redraw,
   return Qt;
 }
 
+DEFUN ("gowl-bar-set-title", Fgowl_bar_set_title,
+       Sgowl_bar_set_title, 1, 1, 0,
+       doc: /* Set the bar's displayed title to TITLE (a string).
+Overrides the default focused-client title.  Pass nil to clear
+the override and revert to the focused client title.
+Triggers an immediate redraw. */)
+  (Lisp_Object title)
+{
+  GHashTable *inner, *outer;
+  GowlModuleManager *mgr;
+
+  GOWL_CHECK_RUNNING ();
+  mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
+  if (mgr == NULL)
+    return Qnil;
+
+  inner = g_hash_table_new (g_str_hash, g_str_equal);
+  g_hash_table_insert (inner, (gpointer) "title",
+                       NILP (title) ? (gpointer) "" : SSDATA (title));
+  outer = g_hash_table_new (g_str_hash, g_str_equal);
+  g_hash_table_insert (outer, (gpointer) "bar", inner);
+
+  /* Lock the compositor mutex — configure triggers bar_redraw_all
+     which modifies the scene graph (wlr_scene_buffer_set_buffer). */
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  gowl_module_manager_configure_all (mgr, outer);
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+
+  g_hash_table_unref (outer);
+  g_hash_table_unref (inner);
+  return Qt;
+}
+
 
 /* ── Xwidget integration ─────────────────────────────────────────────
  *
@@ -4836,6 +4869,7 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_bar_disable);
   defsubr (&Sgowl_bar_configure);
   defsubr (&Sgowl_bar_redraw);
+  defsubr (&Sgowl_bar_set_title);
 
   /* Swap / Zoom */
   defsubr (&Sgowl_swap_clients);

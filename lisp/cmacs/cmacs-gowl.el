@@ -878,5 +878,41 @@ This uses the IPC event channel to notify external clipboard tools."
     (gowl-ipc-push-event
      (format "EVENT clipboard %s" (car kill-ring)))))
 
+;;; Bar title sync — keeps the compositor bar in sync with the
+;;; active Emacs buffer or embedded client.
+
+(defvar cmacs-gowl-bar--last-title nil
+  "Last title sent to the bar, to avoid redundant updates.")
+
+(defun cmacs-gowl-bar--update-title ()
+  "Update the compositor bar title to reflect the current context.
+Shows the embedded client title if one is active, otherwise the
+current buffer name."
+  (when (and (bound-and-true-p IS-GOWL)
+             (fboundp 'gowl-bar-set-title))
+    (let ((title (if (and (boundp 'gowl-embedded-client)
+                          (buffer-local-value 'gowl-embedded-client
+                                              (current-buffer)))
+                     ;; Embedded client — show its title
+                     (let ((info (gowl-client-info
+                                  (buffer-local-value
+                                   'gowl-embedded-client
+                                   (current-buffer)))))
+                       (or (cdr (assq 'title info)) (buffer-name)))
+                   ;; Normal buffer
+                   (buffer-name))))
+      (unless (equal title cmacs-gowl-bar--last-title)
+        (setq cmacs-gowl-bar--last-title title)
+        (gowl-bar-set-title title)))))
+
+(defun cmacs-gowl-bar-sync-enable ()
+  "Enable automatic bar title sync with Emacs buffer changes."
+  (add-hook 'window-buffer-change-functions
+            (lambda (_frame) (cmacs-gowl-bar--update-title)))
+  (add-hook 'window-selection-change-functions
+            (lambda (_frame) (cmacs-gowl-bar--update-title)))
+  ;; Initial update
+  (cmacs-gowl-bar--update-title))
+
 (provide 'cmacs-gowl)
 ;;; cmacs-gowl.el ends here

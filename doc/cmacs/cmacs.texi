@@ -2107,7 +2107,19 @@ Deactivate the bar and reclaim tiling space.
 Configure bar appearance (height, colors, font).
 @item gowl-bar-redraw
 Force a full redraw of all bar surfaces.
+@item gowl-bar-set-title @var{title}
+Set the bar's displayed title.  Pass @code{nil} to revert to the
+default (focused client title).  Use a polling timer to keep it
+in sync with the active Emacs buffer:
 @end table
+
+@example
+(run-with-timer 0.2 0.2
+  (lambda ()
+    (ignore-errors
+      (gowl-bar-set-title
+        (buffer-name (window-buffer (selected-window)))))))
+@end example
 
 @subsection Vanitygaps
 @cindex gaps, window

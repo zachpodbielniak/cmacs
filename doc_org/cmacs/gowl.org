@@ -479,6 +479,18 @@ shows through.  Tiling layout automatically accounts for bar height.
 | =gowl-bar-disable=               | Deactivate and reclaim tiling space      |
 | =gowl-bar-configure=             | Configure bar appearance                 |
 | =gowl-bar-redraw=                | Force full redraw                        |
+| =gowl-bar-set-title=            | Set bar title (nil to revert to default) |
+
+To keep the bar title in sync with the active Emacs buffer, use a
+polling timer (hooks fire before window state is finalized):
+
+#+begin_src emacs-lisp
+(run-with-timer 0.2 0.2
+  (lambda ()
+    (ignore-errors
+      (gowl-bar-set-title
+        (buffer-name (window-buffer (selected-window)))))))
+#+end_src
 
 ** Vanitygaps
 
