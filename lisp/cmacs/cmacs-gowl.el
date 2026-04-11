@@ -917,6 +917,15 @@ current buffer name."
   (cmacs-gowl-bar--update-title))
 
 
+;;; ─── Rounded Corners ───────────────────────────────────────────────
+
+(defun cmacs-gowl-set-corner-radius (radius)
+  "Set the corner radius for rounded window borders.
+Requires the roundcorners module to be enabled."
+  (interactive "nCorner radius (pixels): ")
+  (gowl-set-corner-radius radius))
+
+
 ;;; ─── Clipboard Sync (Wayland ↔ kill-ring) ──────────────────────────
 
 (defvar cmacs-gowl--clipboard-last nil

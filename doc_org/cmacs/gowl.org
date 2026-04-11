@@ -571,6 +571,7 @@ Named scratchpad windows that toggle visibility.
 | movestack       | Reorder clients in tiling stack                | off     |
 | screenshot      | Screen capture with area selection              | off     |
 | recording       | Screen recording via ffmpeg                    | off     |
+| roundcorners    | Rounded corner window borders via cairo         | off     |
 
 See [[file:gowl/screenshot-recording.org][Screenshot & Recording]] for
 full documentation on the screenshot and recording modules, including

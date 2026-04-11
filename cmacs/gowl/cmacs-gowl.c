@@ -4468,6 +4468,73 @@ DEFUN ("gowl-primary-selection-set", Fgowl_primary_selection_set,
 
 
 /* ══════════════════════════════════════════════════════════════════════
+ * Rounded corners
+ * ══════════════════════════════════════════════════════════════════════ */
+
+DEFUN ("gowl-set-corner-radius", Fgowl_set_corner_radius,
+       Sgowl_set_corner_radius, 1, 1, 0,
+       doc: /* Set the corner radius for rounded window borders.
+RADIUS is a non-negative integer (pixels).  Requires the
+roundcorners module to be enabled.
+Returns t on success, signals `gowl-error' if the module is not loaded. */)
+  (Lisp_Object radius)
+{
+  GHashTable *inner, *outer;
+  GowlModuleManager *mgr;
+  gchar radstr[16];
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_FIXNAT (radius);
+
+  mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
+
+  g_snprintf (radstr, sizeof (radstr), "%ld", (long) XFIXNAT (radius));
+
+  inner = g_hash_table_new (g_str_hash, g_str_equal);
+  g_hash_table_insert (inner, (gpointer) "radius", (gpointer) radstr);
+
+  outer = g_hash_table_new (g_str_hash, g_str_equal);
+  g_hash_table_insert (outer, (gpointer) "roundcorners", inner);
+
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  gowl_module_manager_configure_all (mgr, outer);
+  /* Force re-render all clients */
+  gowl_compositor_arrange (cmacs_gowl_compositor,
+      gowl_compositor_get_monitors (cmacs_gowl_compositor)
+          ? GOWL_MONITOR (gowl_compositor_get_monitors (
+                cmacs_gowl_compositor)->data)
+          : NULL);
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+
+  g_hash_table_unref (outer);
+  g_hash_table_unref (inner);
+
+  return Qt;
+}
+
+DEFUN ("gowl-corner-radius", Fgowl_corner_radius,
+       Sgowl_corner_radius, 0, 0, 0,
+       doc: /* Return the current corner radius, or nil if roundcorners
+module is not active. */)
+  (void)
+{
+  GowlModuleManager *mgr;
+  GowlModule *mod;
+
+  GOWL_CHECK_RUNNING ();
+
+  mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
+  mod = gowl_module_manager_find_module (mgr, "roundcorners");
+  if (mod == NULL || !GOWL_IS_CLIENT_DECORATOR (mod))
+    return Qnil;
+
+  return make_fixnum (
+      gowl_client_decorator_get_corner_radius (
+          GOWL_CLIENT_DECORATOR (mod)));
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════
  * Clipboard sync (Wayland ↔ Emacs kill-ring)
  * ══════════════════════════════════════════════════════════════════════ */
 
@@ -5413,6 +5480,10 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
 
   /* Process info */
   defsubr (&Sgowl_client_process_info);
+
+  /* Rounded corners */
+  defsubr (&Sgowl_set_corner_radius);
+  defsubr (&Sgowl_corner_radius);
 
   /* Clipboard sync */
   defsubr (&Sgowl_clipboard_watch);

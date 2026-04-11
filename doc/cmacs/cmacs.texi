@@ -2318,6 +2318,43 @@ Seconds between @code{cmd} widget re-runs (default 10).
 Push data for Elisp-driven widgets (e.g.@: @code{widget-data-todo}).
 @end table
 
+@subsection Rounded Corners
+@cindex rounded corners
+@cindex border radius
+
+The roundcorners module replaces flat rectangular window borders
+with cairo-rendered rounded rectangle frames.
+
+@example
+(gowl-enable-module "roundcorners")
+(gowl-set-corner-radius 12)
+(gowl-corner-radius)  @result{} 12
+@end example
+
+@defun gowl-set-corner-radius radius
+Set the corner radius in pixels.  Requires the roundcorners module.
+@end defun
+
+@defun gowl-corner-radius
+Return the current corner radius, or @code{nil} if the module is
+not active.
+@end defun
+
+@noindent
+YAML configuration:
+@example
+modules:
+  roundcorners:
+    enabled: true
+    radius: 12
+@end example
+
+@noindent
+The module implements @code{GowlClientDecorator}, replacing the
+compositor's default 4-rect borders with a single
+@code{wlr_scene_buffer} rendered by cairo.  Cached per client —
+re-rendered only on resize or color change.
+
 @subsection Vanitygaps
 @cindex gaps, window
 
