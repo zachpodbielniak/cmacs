@@ -622,21 +622,23 @@ window to the previous buffer."
 (defun gowl-embed--on-buffer-change (&rest _)
   "Show/hide embedded clients based on buffer visibility.
 When a buffer with an embedded client is displayed in a window,
-position the client at that window's coordinates.  When the buffer
-is no longer visible, hide the client's scene node."
-  (dolist (buf (buffer-list))
-    (when-let* ((client (buffer-local-value 'gowl-embedded-client buf)))
-      (let ((win (get-buffer-window buf t)))
-        (if win
-            (let* ((edges (window-inside-absolute-pixel-edges win))
-                   (x (nth 0 edges))
-                   (y (nth 1 edges))
-                   (w (- (nth 2 edges) x))
-                   (h (- (nth 3 edges) y)))
-              (when (and (> w 0) (> h 0))
-                (gowl-set-client-visible client t)
-                (gowl-position-embedded client x y w h)))
-          (gowl-set-client-visible client nil))))))
+position the client at that window's monitor-absolute coordinates
+(frame offset + window position).  When the buffer is no longer
+visible, hide the client's scene node."
+  (let ((offset (gowl-embed--frame-offset)))
+    (dolist (buf (buffer-list))
+      (when-let* ((client (buffer-local-value 'gowl-embedded-client buf)))
+        (let ((win (get-buffer-window buf t)))
+          (if win
+              (let* ((edges (window-inside-absolute-pixel-edges win))
+                     (x (+ (car offset) (nth 0 edges)))
+                     (y (+ (cdr offset) (nth 1 edges)))
+                     (w (- (nth 2 edges) (nth 0 edges)))
+                     (h (- (nth 3 edges) (nth 1 edges))))
+                (when (and (> w 0) (> h 0))
+                  (gowl-set-client-visible client t)
+                  (gowl-position-embedded client x y w h)))
+            (gowl-set-client-visible client nil)))))))
 
 (add-hook 'kill-buffer-hook #'gowl-embed--on-kill-buffer)
 (add-hook 'window-size-change-functions #'gowl-embed--adjust-size)
