@@ -414,17 +414,17 @@ EXCLUDE is the client being embedded — skip it."
 
 (defun gowl-embed--frame-offset ()
   "Return the Emacs frame's content origin as (X . Y).
-The gowl client geometry includes the border, so add the border
-width to get the surface content origin."
-  (let ((emacs-client (gowl-embed--find-emacs-client nil)))
-    (if emacs-client
-        (let* ((info (gowl-client-info emacs-client))
-               (geom (cdr (assq 'geometry info)))
-               (bw (gowl-client-border-width emacs-client)))
-          (if geom
-              (cons (+ (nth 0 geom) bw) (+ (nth 1 geom) bw))
-            '(0 . 0)))
-      '(0 . 0))))
+Computes from usable area + gap offset + border width.  This
+avoids client geometry lookup which can be unreliable."
+  (let* ((area (and (fboundp 'gowl-usable-area) (gowl-usable-area)))
+         (gaps (and (fboundp 'gowl-gaps-info) (gowl-gaps-info)))
+         (ax (or (nth 0 area) 0))
+         (ay (or (nth 1 area) 0))
+         (oh (or (cdr (assq 'outer-h gaps)) 0))
+         (ov (or (cdr (assq 'outer-v gaps)) 0))
+         ;; Border width defaults to 1 for tiled clients
+         (bw 1))
+    (cons (+ ax oh bw) (+ ay ov bw))))
 
 (defun gowl-embed--do-embed (client window buf)
   "Embed CLIENT into the compositor scene tree, displayed in WINDOW's area.

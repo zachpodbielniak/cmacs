@@ -3646,6 +3646,33 @@ Returns t if the scratchpad module handled the request. */)
 }
 
 
+DEFUN ("gowl-frame-origin", Fgowl_frame_origin, Sgowl_frame_origin,
+       0, 0, 0,
+       doc: /* Return the Emacs frame's content origin on the monitor as (X . Y).
+Finds the non-embedded tiled client (the Emacs frame) and returns
+its geometry position plus border width.  Accounts for bar height
+and vanitygaps. */)
+  (void)
+{
+  GList *clients, *l;
+  gint x, y, bw;
+
+  GOWL_CHECK_RUNNING ();
+
+  clients = gowl_compositor_get_clients (cmacs_gowl_compositor);
+  for (l = clients; l != NULL; l = l->next)
+    {
+      GowlClient *c = GOWL_CLIENT (l->data);
+      if (!gowl_client_get_embedded (c))
+        {
+          gowl_client_get_geometry (c, &x, &y, NULL, NULL);
+          bw = (gint) gowl_client_get_border_width (c);
+          return Fcons (make_fixnum (x + bw), make_fixnum (y + bw));
+        }
+    }
+  return Fcons (make_fixnum (0), make_fixnum (0));
+}
+
 /* ══════════════════════════════════════════════════════════════════════
  * BAR
  * ══════════════════════════════════════════════════════════════════════ */
@@ -4865,6 +4892,7 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_configure_screenlock);
   defsubr (&Sgowl_scratchpad_toggle);
   defsubr (&Sgowl_usable_area);
+  defsubr (&Sgowl_frame_origin);
   defsubr (&Sgowl_bar_enable);
   defsubr (&Sgowl_bar_disable);
   defsubr (&Sgowl_bar_configure);
