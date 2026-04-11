@@ -492,6 +492,29 @@ polling timer (hooks fire before window state is finalized):
         (buffer-name (window-buffer (selected-window)))))))
 #+end_src
 
+*** Configurable Widgets
+
+The right side shows system widgets.  Default: =cpu memory disk
+battery clock=.  Configure which widgets appear and their colors:
+
+#+begin_src emacs-lisp
+(gowl-bar-configure
+  '(("widgets" . "cpu memory disk battery clock")
+    ("cpu-color" . "#a6e3a1")
+    ("memory-color" . "#89b4fa")
+    ("disk-color" . "#f9e2af")
+    ("battery-color" . "#94e2d5")
+    ("clock-color" . "#cdd6f4")))
+#+end_src
+
+| Widget    | Data Source              | Update   |
+|-----------+--------------------------+----------|
+| =cpu=     | =/proc/stat= (delta)     | 2s       |
+| =memory=  | =/proc/meminfo=          | 5s       |
+| =disk=    | =statvfs("/")=           | 30s      |
+| =battery= | =/sys/class/power_supply= | 60s      |
+| =clock=   | =time()=                 | 2s       |
+
 ** Vanitygaps
 
 Configurable inner and outer gaps between tiled windows.

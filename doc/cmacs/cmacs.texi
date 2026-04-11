@@ -2121,6 +2121,21 @@ in sync with the active Emacs buffer:
         (buffer-name (window-buffer (selected-window)))))))
 @end example
 
+@noindent
+The right side shows configurable system widgets.  Default:
+@code{cpu memory disk battery clock}.  Each widget can have its
+own color:
+
+@example
+(gowl-bar-configure
+  '(("widgets" . "cpu memory disk battery clock")
+    ("cpu-color" . "#a6e3a1")
+    ("memory-color" . "#89b4fa")
+    ("disk-color" . "#f9e2af")
+    ("battery-color" . "#94e2d5")
+    ("clock-color" . "#cdd6f4")))
+@end example
+
 @subsection Vanitygaps
 @cindex gaps, window
 
