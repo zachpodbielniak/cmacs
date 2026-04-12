@@ -2300,7 +2300,8 @@ Elisp-pushed TODO count, running Podman container count.
 @item cmd:@var{COMMAND}
 Custom command output with ANSI color support.  Colors apply
 only to ASCII printable characters; Unicode (emoji) uses the
-base widget color.
+base widget color.  Leading @code{~/} in the command path is
+expanded to @env{$HOME} at spawn time.
 @item weather
 Weather from @url{https://wttr.in} (15-minute cache).  Specify
 location: @code{weather:London}.
@@ -2308,12 +2309,36 @@ location: @code{weather:London}.
 Session info: hostname, username, keyboard layout, date/time.
 @end table
 
+@subsubsection Per-widget refresh interval
+
+Any widget can take a trailing @code{@@N} suffix to override its
+refresh interval in seconds.  This works for every widget type, not
+just @code{cmd}, and wins over the global @code{cmd-interval} config
+key.
+
+@example
+(gowl-bar-configure
+  '(("widgets" . "cpu@@1 memory disk:/@@60 cmd:~/bin/pomo@@1 weather:London@@900 clock")))
+@end example
+
+Setting a fast interval on one widget also speeds up the bar tick so
+it can reach that rate (bar ticks at @code{min(2s, fastest @@N)},
+floor 1s).  Slow intervals don't slow the tick down -- those widgets
+simply use their cached output across redraws.
+
+The last @code{@@} is the delimiter, so commands that legitimately
+contain @code{@@} still parse: @code{cmd:ssh user@@host@@5} becomes
+(@code{ssh user@@host}, interval 5).  If the text after the final
+@code{@@} is not a positive integer, the whole token is treated as
+the widget spec.
+
 @noindent
 Additional config keys:
 
 @table @code
 @item cmd-interval
-Seconds between @code{cmd} widget re-runs (default 10).
+Seconds between @code{cmd} widget re-runs (default 10).  This is
+a global default; per-widget @code{@@N} overrides win.
 @item widget-data-@var{KEY}
 Push data for Elisp-driven widgets (e.g.@: @code{widget-data-todo}).
 @end table

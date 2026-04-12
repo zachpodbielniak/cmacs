@@ -49,15 +49,39 @@ Some widgets accept parameters via colon syntax: =disk:/home=,
 | =keymap=  | =keymap=             | =EN= or =RU=             | xkb_state           | 2s     |
 | =clock=   | =clock= or =time=    | =Fri Apr 11  14:30=      | localtime()         | 2s     |
 
+** Per-widget refresh interval =@N=
+
+Any widget can take a trailing =@N= suffix to override its refresh
+interval in seconds.  This works for every widget type, not just
+=cmd=, and wins over the global =cmd-interval= config key.
+
+#+begin_src emacs-lisp
+(gowl-bar-configure
+  '(("widgets" . "cpu@1 memory disk:/@60 cmd:~/bin/pomo@1 weather:London@900 clock")))
+#+end_src
+
+Setting a fast interval on one widget also speeds up the bar tick so
+it can reach that rate (bar ticks at =min(2s, fastest @N)=, floor 1s).
+Slow intervals don't slow the tick down -- those widgets simply use
+their cached output across redraws.
+
+The last =@= is the delimiter, so commands that legitimately contain
+=@= still parse: =cmd:ssh user@host@5= becomes (=ssh user@host=,
+interval 5).  If the text after the final =@= is not a positive
+integer, the whole token is treated as the widget spec.
+
 * CMD Widget: Custom Command Output
 
 The =cmd= widget runs an arbitrary shell command and displays its
 first line of output.
 
+Tilde paths (=~/bar/script.sh=) are expanded to =$HOME= at spawn time
+because =g_spawn= bypasses the shell.
+
 #+begin_src emacs-lisp
 (gowl-bar-configure
   '(("widgets" . "cmd:~/bar/weather.sh cmd:~/bar/vpn-status.sh clock")
-    ("cmd-interval" . "15")))  ;; refresh every 15 seconds
+    ("cmd-interval" . "15")))  ;; global default for cmd widgets
 #+end_src
 
 ** ANSI Color Support
@@ -150,7 +174,7 @@ All keys are passed via =gowl-bar-configure=:
 | =fg-color=         | =#cdd6f4=       | Default text color                  |
 | =font=             | =monospace 13=  | Pango font description              |
 | =TYPE-color=       | (use fg-color)  | Per-widget color (e.g. =cpu-color=) |
-| =cmd-interval=     | 10              | Seconds between cmd re-runs         |
+| =cmd-interval=     | 10              | Global default for cmd re-runs (per-widget =@N= wins) |
 | =widget-data-KEY=  | --              | Push data for Elisp-driven widgets  |
 | =title-delimiters= | --              | Chars that split title segments     |
 | =title-palette=    | --              | Space-separated hex colors          |
