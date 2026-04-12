@@ -162,12 +162,100 @@ Specify interface: =ip:eth0=.
 Checks if =tun0= or =wg0= network interface exists in
 =/sys/class/net/=.
 
+* Multiple Bars (top + bottom)
+
+The bar module supports two independent slots per compositor: one at
+the top edge of the monitor, one at the bottom.  Each slot keeps its
+own widgets, height, colors, font, title, and visibility flag.  The
+compositor subtracts BOTH bar heights from the usable window area, so
+tiling, vanitygaps, roundcorners, and =gowl-embed-app= automatically
+respect both edges with no extra configuration.
+
+The top slot is enabled by default (with the standard cpu/memory/
+disk/battery/clock widgets).  The bottom slot stays dormant until you
+configure it with a =("position" . "bottom")= entry.
+
+** From Elisp
+
+#+begin_src emacs-lisp
+;; Top bar (same as before — this is the default slot)
+(gowl-bar-configure
+  '(("widgets" . "cpu memory disk battery clock")
+    ("height"  . "28")))
+
+;; Bottom bar — explicit position key activates the second slot
+(gowl-bar-configure
+  '(("position" . "bottom")
+    ("widgets"  . "cmd:~/bin/scripts/tasks@5 clock")
+    ("height"   . "24")
+    ("bg-color" . "#181825")))
+#+end_src
+
+Convenience wrappers prepend the position key for you:
+
+#+begin_src emacs-lisp
+(cmacs-gowl-bar-configure-top
+  '(("widgets" . "cpu memory disk battery clock")))
+
+(cmacs-gowl-bar-configure-bottom
+  '(("widgets" . "cmd:~/bin/scripts/tasks clock")
+    ("height"  . "24")))
+#+end_src
+
+** Hiding / showing / resizing a slot
+
+All per-slot DEFUNs take an optional POSITION symbol (=top= or
+=bottom=, default =top=):
+
+#+begin_src emacs-lisp
+(gowl-set-bar-visible nil 'bottom)   ;; hide the bottom bar
+(gowl-set-bar-visible t   'bottom)   ;; show it again
+(gowl-set-bar-height 32 'top)        ;; taller top bar
+(gowl-bar-height 'bottom)            ;; => 24
+(gowl-bar-set-title "build: ok" 'bottom) ;; per-slot title
+#+end_src
+
+Hiding a slot clears its surfaces and re-runs =arrangelayers=, so the
+tiling area grows back immediately.  The slot's configuration is
+preserved across hide/show cycles.
+
+** From cmacsgi (bacon shell)
+
+#+begin_example
+bacon> cmacsgi bar configure bottom widgets="clock" height=24
+bacon> cmacsgi bar configure top widgets="cpu memory disk battery clock"
+bacon> cmacsgi bar height bottom
+24
+bacon> cmacsgi bar hide bottom
+bacon> cmacsgi bar show bottom
+bacon> cmacsgi bar title "hello" top
+#+end_example
+
+The =cmacsgi bar= subcommand takes an optional position token right
+after the action.  =bar configure= expects =KEY=VALUE= arguments; all
+other keys follow the same syntax as =gowl-bar-configure=.
+
+** From crispy / C
+
+No crispy-specific binding is needed — call through =cmacs_eval()=:
+
+#+begin_src c
+cmacs_eval(api,
+  "(gowl-bar-configure "
+  "'((\"position\" . \"bottom\") "
+  "  (\"widgets\"  . \"clock\") "
+  "  (\"height\"   . \"24\")))");
+#+end_src
+
 * Configuration Reference
 
-All keys are passed via =gowl-bar-configure=:
+All keys are passed via =gowl-bar-configure=.  The (optional)
+=position= key selects which bar slot the settings apply to; all
+other keys act per-slot.
 
 | Key                | Default         | Description                         |
 |--------------------+-----------------+-------------------------------------|
+| =position=         | =top=           | Target slot: =top= or =bottom=      |
 | =widgets=          | cpu mem disk bat clock | Space-separated widget list   |
 | =height=           | 28              | Bar height in pixels                |
 | =bg-color=         | =#1e1e2e= (80%) | Background color (hex + alpha)      |

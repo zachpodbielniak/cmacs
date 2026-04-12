@@ -15,7 +15,7 @@ SRCS := cmacs-api-transport.c cmacs-api-helpers.c \
         cmacs-api-cmd-mark.c cmacs-api-cmd-clip.c \
         cmacs-api-cmd-vc.c cmacs-api-cmd-pkg.c \
         cmacs-api-cmd-monitor.c \
-        cmacs-api-cmd-rg.c
+        cmacs-api-cmd-rg.c cmacs-api-cmd-bar.c
 
 CC       ?= gcc
 PKG_CFLAGS := $(shell pkg-config --cflags glib-2.0 gobject-2.0 \

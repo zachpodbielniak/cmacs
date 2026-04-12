@@ -916,6 +916,24 @@ current buffer name."
   ;; Initial update
   (cmacs-gowl-bar--update-title))
 
+;;; Multi-bar helpers — route a config alist to a specific slot.
+;;; Both wrappers prepend a ("position" . "top"|"bottom") entry to
+;;; ALIST and hand it to `gowl-bar-configure', which dispatches on
+;;; the position key inside the bar module.
+
+(defun cmacs-gowl-bar-configure-top (alist)
+  "Configure the top gowl bar with ALIST (an alist of string pairs).
+Equivalent to `gowl-bar-configure' with `(\"position\" . \"top\")'
+prepended; useful as a symmetric counterpart to
+`cmacs-gowl-bar-configure-bottom'."
+  (gowl-bar-configure (cons '("position" . "top") alist)))
+
+(defun cmacs-gowl-bar-configure-bottom (alist)
+  "Configure the bottom gowl bar with ALIST (an alist of string pairs).
+The bottom slot stays dormant until it has been configured at
+least once, so this is how you make a second bar appear."
+  (gowl-bar-configure (cons '("position" . "bottom") alist)))
+
 
 ;;; ─── Rounded Corners ───────────────────────────────────────────────
 

@@ -3828,24 +3828,37 @@ DEFUN ("gowl-bar-redraw", Fgowl_bar_redraw, Sgowl_bar_redraw,
 }
 
 DEFUN ("gowl-bar-set-title", Fgowl_bar_set_title,
-       Sgowl_bar_set_title, 1, 1, 0,
+       Sgowl_bar_set_title, 1, 2, 0,
        doc: /* Set the bar's displayed title to TITLE (a string).
 Overrides the default focused-client title.  Pass nil to clear
 the override and revert to the focused client title.
+
+Optional POSITION selects which bar slot receives the title:
+  `top' (default) or `bottom'.
+
 Triggers an immediate redraw. */)
-  (Lisp_Object title)
+  (Lisp_Object title, Lisp_Object position)
 {
   GHashTable *inner, *outer;
   GowlModuleManager *mgr;
+  const char *pos_str;
 
   GOWL_CHECK_RUNNING ();
   mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
   if (mgr == NULL)
     return Qnil;
 
+  /* Resolve POSITION.  Symbols `top and `bottom are accepted;
+     anything else (including nil) defaults to `top. */
+  pos_str = "top";
+  if (EQ (position, intern ("bottom")))
+    pos_str = "bottom";
+
   inner = g_hash_table_new (g_str_hash, g_str_equal);
   g_hash_table_insert (inner, (gpointer) "title",
                        NILP (title) ? (gpointer) "" : SSDATA (title));
+  g_hash_table_insert (inner, (gpointer) "position",
+                       (gpointer) pos_str);
   outer = g_hash_table_new (g_str_hash, g_str_equal);
   g_hash_table_insert (outer, (gpointer) "bar", inner);
 
@@ -4722,60 +4735,133 @@ Returns t if watching was stopped, nil if not watching. */)
  * Bar / Layer surface
  * ══════════════════════════════════════════════════════════════════════ */
 
-DEFUN ("gowl-bar-height", Fgowl_bar_height,
-       Sgowl_bar_height, 0, 0, 0,
-       doc: /* Return the bar height in pixels, or nil if no bar. */)
-  (void)
+/* ── Multi-bar helpers ─────────────────────────────────────────────
+ *
+ * The four DEFUNs below let Elisp inspect or change individual bar
+ * slots (top / bottom).  POSITION is an optional symbol -- `top
+ * (default), `bottom, or nil.
+ *
+ * Reads go through the bar provider's get_bar_insets vfunc, so
+ * they always reflect the current state of the bar module.  Writes
+ * go through gowl_module_manager_configure_all with a small
+ * settings hash naming the slot via the "position" key, mirroring
+ * what `(gowl-bar-configure '(("position" . "top") ...))' would do
+ * from elisp -- this keeps a single source of truth for slot
+ * dispatch in bar_configure().
+ */
+
+/* Translate an optional Lisp POSITION symbol to a "top"/"bottom"
+   string.  Defaults to "top" if @position is nil or unrecognised. */
+static const char *
+bar_position_str (Lisp_Object position)
 {
-  GowlBar *bar;
+  if (EQ (position, intern ("bottom")))
+    return "bottom";
+  return "top";
+}
+
+/* Configure a single bar slot via the module manager.  Builds a
+   one-shot settings hash with "position" + the named KEY = VALUE,
+   then dispatches.  KEY/VALUE may be NULL to apply position alone
+   (used by visibility wrappers that build the hash themselves). */
+static void
+bar_configure_slot (const char *position, const char *key, const char *value)
+{
+  GHashTable *inner, *outer;
+  GowlModuleManager *mgr;
+
+  mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
+  if (mgr == NULL)
+    return;
+
+  inner = g_hash_table_new (g_str_hash, g_str_equal);
+  g_hash_table_insert (inner, (gpointer) "position", (gpointer) position);
+  if (key != NULL && value != NULL)
+    g_hash_table_insert (inner, (gpointer) key, (gpointer) value);
+  outer = g_hash_table_new (g_str_hash, g_str_equal);
+  g_hash_table_insert (outer, (gpointer) "bar", inner);
+
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  gowl_module_manager_configure_all (mgr, outer);
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+
+  g_hash_table_unref (outer);
+  g_hash_table_unref (inner);
+}
+
+DEFUN ("gowl-bar-height", Fgowl_bar_height,
+       Sgowl_bar_height, 0, 1, 0,
+       doc: /* Return the height in pixels of the bar at POSITION.
+POSITION is `top' (default) or `bottom'.  Returns 0 if that slot
+is not configured or has been hidden, or nil if the bar module
+has no active provider. */)
+  (Lisp_Object position)
+{
+  GowlModuleManager *mgr;
+  gint top = 0, bottom = 0;
 
   GOWL_CHECK_RUNNING ();
-  bar = gowl_compositor_get_bar (cmacs_gowl_compositor);
-  if (bar == NULL)
+  mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
+  if (mgr == NULL)
     return Qnil;
-  return make_fixnum (gowl_bar_get_height (bar));
+
+  gowl_module_manager_get_bar_insets (mgr, NULL, &top, &bottom);
+  if (EQ (position, intern ("bottom")))
+    return make_fixnum (bottom);
+  return make_fixnum (top);
 }
 
 DEFUN ("gowl-set-bar-height", Fgowl_set_bar_height,
-       Sgowl_set_bar_height, 1, 1, 0,
-       doc: /* Set the bar height to HEIGHT pixels. */)
-  (Lisp_Object height)
+       Sgowl_set_bar_height, 1, 2, 0,
+       doc: /* Set the bar height to HEIGHT pixels.
+Optional POSITION selects which slot (`top' default or `bottom'). */)
+  (Lisp_Object height, Lisp_Object position)
 {
-  GowlBar *bar;
+  char buf[32];
+  const char *pos;
 
   GOWL_CHECK_RUNNING ();
   CHECK_FIXNAT (height);
-  bar = gowl_compositor_get_bar (cmacs_gowl_compositor);
-  if (bar != NULL)
-    gowl_bar_set_height (bar, (gint) XFIXNAT (height));
+  pos = bar_position_str (position);
+  snprintf (buf, sizeof (buf), "%ld", (long) XFIXNAT (height));
+  bar_configure_slot (pos, "height", buf);
   return Qnil;
 }
 
 DEFUN ("gowl-bar-visible-p", Fgowl_bar_visible_p,
-       Sgowl_bar_visible_p, 0, 0, 0,
-       doc: /* Return non-nil if the bar is visible. */)
-  (void)
+       Sgowl_bar_visible_p, 0, 1, 0,
+       doc: /* Return non-nil if the bar at POSITION is visible.
+POSITION is `top' (default) or `bottom'.  A slot is visible iff
+its inset is greater than zero. */)
+  (Lisp_Object position)
 {
-  GowlBar *bar;
+  GowlModuleManager *mgr;
+  gint top = 0, bottom = 0;
+  gint v;
 
   GOWL_CHECK_RUNNING ();
-  bar = gowl_compositor_get_bar (cmacs_gowl_compositor);
-  if (bar == NULL)
+  mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
+  if (mgr == NULL)
     return Qnil;
-  return gowl_bar_is_visible (bar) ? Qt : Qnil;
+
+  gowl_module_manager_get_bar_insets (mgr, NULL, &top, &bottom);
+  v = EQ (position, intern ("bottom")) ? bottom : top;
+  return v > 0 ? Qt : Qnil;
 }
 
 DEFUN ("gowl-set-bar-visible", Fgowl_set_bar_visible,
-       Sgowl_set_bar_visible, 1, 1, 0,
-       doc: /* Set bar visibility.  Non-nil VISIBLE shows the bar. */)
-  (Lisp_Object visible)
+       Sgowl_set_bar_visible, 1, 2, 0,
+       doc: /* Set bar visibility.  Non-nil VISIBLE shows the bar.
+Optional POSITION selects which slot (`top' default or `bottom').
+Hiding releases the slot's surfaces but preserves its
+configuration so a later show restores it. */)
+  (Lisp_Object visible, Lisp_Object position)
 {
-  GowlBar *bar;
+  const char *pos;
 
   GOWL_CHECK_RUNNING ();
-  bar = gowl_compositor_get_bar (cmacs_gowl_compositor);
-  if (bar != NULL)
-    gowl_bar_set_visible (bar, !NILP (visible));
+  pos = bar_position_str (position);
+  bar_configure_slot (pos, "visible", NILP (visible) ? "false" : "true");
   return Qnil;
 }
 

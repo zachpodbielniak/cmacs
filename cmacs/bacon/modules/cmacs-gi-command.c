@@ -268,6 +268,7 @@ extern gint cmd_vc      (CmacsApiTransport *transport, gint argc, gchar **argv);
 extern gint cmd_pkg     (CmacsApiTransport *transport, gint argc, gchar **argv);
 extern gint cmd_monitor (CmacsApiTransport *transport, gint argc, gchar **argv);
 extern gint cmd_rg      (CmacsApiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_bar     (CmacsApiTransport *transport, gint argc, gchar **argv);
 
 /* ── Top-level dispatch table ─────────────────────────────────────── */
 
@@ -370,6 +371,11 @@ static const CmacsApiSubcmd subcmds[] = {
     { "rg",           cmd_rg,
       "rg [search|files|type] [-i] [-w] PATTERN [DIR]",
       "ripgrep search, results in clickable *rg* buffer" },
+
+    /* ── gowl bar ──────────────────────────────────────────────────── */
+    { "bar",          cmd_bar,
+      "bar SUBCMD [ARGS...]",
+      "gowl bar operations (configure, height, show, hide, redraw, title)" },
 
     /* ── original commands ─────────────────────────────────────────── */
     { "eval",         cmd_eval,

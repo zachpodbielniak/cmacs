@@ -2265,13 +2265,17 @@ Load and activate the bar module.
 @item gowl-bar-disable
 Deactivate the bar and reclaim tiling space.
 @item gowl-bar-configure @var{alist}
-Configure bar appearance (height, colors, font).
+Configure bar appearance (height, colors, font).  An optional
+@code{("position" . "top"|"bottom")} entry in @var{alist} selects
+which bar slot the remaining settings apply to; if absent, the
+top slot is targeted.  See @ref{Multiple Bars}.
 @item gowl-bar-redraw
-Force a full redraw of all bar surfaces.
-@item gowl-bar-set-title @var{title}
+Force a full redraw of all bar surfaces (both slots).
+@item gowl-bar-set-title @var{title} &optional @var{position}
 Set the bar's displayed title.  Pass @code{nil} to revert to the
-default (focused client title).  Use a polling timer to keep it
-in sync with the active Emacs buffer:
+default (focused client title).  @var{position} is @code{'top} or
+@code{'bottom} (default @code{'top}).  Use a polling timer to keep
+it in sync with the active Emacs buffer:
 @end table
 
 @example
@@ -2354,12 +2358,90 @@ the widget spec.
 Additional config keys:
 
 @table @code
+@item position
+Which bar slot (@code{"top"} or @code{"bottom"}) the surrounding
+settings apply to.  Defaults to @code{"top"} if absent --
+existing single-bar configs keep working unchanged.  See
+@ref{Multiple Bars}.
 @item cmd-interval
 Seconds between @code{cmd} widget re-runs (default 10).  This is
 a global default; per-widget @code{@@N} overrides win.
 @item widget-data-@var{KEY}
 Push data for Elisp-driven widgets (e.g.@: @code{widget-data-todo}).
 @end table
+
+@subsubsection Multiple Bars
+@anchor{Multiple Bars}
+@cindex multiple bars
+@cindex bottom bar
+
+The bar module supports two independent slots per compositor: a
+top bar and a bottom bar.  Each slot keeps its own widgets,
+height, colors, font, title, and visibility.  The compositor
+subtracts both bar heights from the monitor's usable area, so
+tiling, vanitygaps, roundcorners, and @code{gowl-embed-app} all
+respect both edges with no extra configuration.
+
+The top slot is enabled by default with the standard widgets.
+The bottom slot stays dormant until you configure it at least
+once with a @code{"position"} key of @code{"bottom"}.
+
+@example
+;; Top bar (default slot)
+(gowl-bar-configure
+  '(("widgets" . "cpu memory disk battery clock")
+    ("height"  . "28")))
+
+;; Bottom bar
+(gowl-bar-configure
+  '(("position" . "bottom")
+    ("widgets"  . "cmd:~/bin/scripts/tasks@@5 clock")
+    ("height"   . "24")))
+@end example
+
+Convenience Elisp wrappers prepend the position key for you:
+
+@example
+(cmacs-gowl-bar-configure-top    '(("widgets" . "cpu clock")))
+(cmacs-gowl-bar-configure-bottom '(("widgets" . "clock")))
+@end example
+
+Per-slot DEFUNs take an optional @var{position} symbol
+(@code{'top} or @code{'bottom}, default @code{'top}):
+
+@example
+(gowl-set-bar-visible nil 'bottom)   ;; hide bottom bar
+(gowl-set-bar-visible t   'bottom)   ;; show it again
+(gowl-set-bar-height 32 'top)
+(gowl-bar-height 'bottom)            @result{} 24
+(gowl-bar-set-title "build: ok" 'bottom)
+@end example
+
+Hiding a slot releases its surfaces and reruns
+@code{arrangelayers} so the tiling area grows immediately; the
+slot's configuration is preserved across hide/show cycles.
+
+@noindent
+From the @command{cmacsgi} shell:
+
+@example
+cmacsgi bar configure bottom widgets="clock" height=24
+cmacsgi bar configure top widgets="cpu memory disk battery clock"
+cmacsgi bar height bottom
+cmacsgi bar hide bottom
+cmacsgi bar show bottom
+cmacsgi bar title "hello" top
+@end example
+
+@noindent
+From crispy or any embedded C scripting, call through
+@code{cmacs_eval()}:
+
+@example
+cmacs_eval(api,
+  "(gowl-bar-configure '((\"position\" . \"bottom\") "
+  "                      (\"widgets\"  . \"clock\")))");
+@end example
 
 @subsection Rounded Corners
 @cindex rounded corners
