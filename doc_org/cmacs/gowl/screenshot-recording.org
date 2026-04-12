@@ -226,17 +226,168 @@ Mouse button and motion events are consumed during selection mode.
 The recording module (=gowl-module-recording.c=) implements three
 GObject interfaces:
 
-1. =GowlRecordingProvider= -- start/stop/status API
+1. =GowlRecordingProvider= -- start/stop/status/finalize API
 2. =GowlStartupHandler= -- receives compositor reference
 3. =GowlShutdownHandler= -- stops recording on compositor exit
 
-The recording pipeline:
-1. Probe frame dimensions from the compositor
-2. Spawn =ffmpeg= via =g_spawn_async_with_pipes()=
-3. Create a timer on the Wayland event loop at =1000/fps= ms
-4. Each timer tick: capture frame, write raw BGRA to ffmpeg stdin
-5. On stop: close pipe (ffmpeg finalizes file), reap child process
+*** Recording Pipeline
 
-Non-blocking writes with =O_NONBLOCK= prevent the compositor from
-stalling if ffmpeg falls behind.  Dropped frames emit the
-=frame-dropped= signal.
+1. Probe frame dimensions from the compositor (desktop / window /
+   region / all-monitors)
+2. Spawn =ffmpeg= via =g_spawn_async_with_pipes()= with a child
+   setup callback that restores default signal dispositions
+3. Connect to the compositor's =frame-rendered= signal, which fires
+   on the compositor dispatch thread after each =wlr_scene_output_commit=
+4. Each signal dispatch: call =gowl_compositor_screenshot_output()=,
+   write raw BGRA frame to ffmpeg stdin (blocking write)
+5. On stop: fast cleanup under the compositor mutex (disconnect
+   signal, close pipe, send SIGINT), release mutex, then wait for
+   ffmpeg to exit with escalating signals (SIGINT -> SIGTERM ->
+   SIGKILL) outside the mutex
+
+*** ffmpeg Invocation
+
+#+begin_example
+ffmpeg -y -f rawvideo -pixel_format bgra -video_size WxH
+       -framerate 30 -i pipe:0
+       -c:v libx264 -preset ultrafast -tune zerolatency -g 30
+       -crf 23 -pix_fmt yuv420p
+       -movflags +frag_keyframe+empty_moov+default_base_moof
+       output.mp4
+#+end_example
+
+Key flags:
+
+- =-preset ultrafast -tune zerolatency=: disables libx264 lookahead
+  and B-frames so frames are encoded immediately with no internal
+  buffering. Without this, libx264 buffers 40+ frames before
+  outputting anything, and short recordings produce empty files.
+- =-g 30=: forces a keyframe every 1 second (at 30fps), which
+  flushes a new MP4 fragment every second.
+- =-movflags +frag_keyframe+empty_moov+default_base_moof=:
+  fragmented MP4 -- writes an empty moov atom at the start of the
+  file and each keyframe starts a new fragment (moof/mdat pair).
+  The file is playable even if ffmpeg is killed abruptly.
+
+* Lessons Learned / Debugging Journey
+
+The recording module went through several iterations before reaching
+the current working design.  These notes capture the issues we hit
+so future modifications avoid the same pitfalls.
+
+** Issue 1: EGL context thread affinity
+
+*Symptom*: recordings produced empty files.  =eglMakeCurrent failed:
+EGL_BAD_ACCESS= in logs.
+
+*Cause*: the first implementation used =g_timeout_add= to schedule
+frame captures at 30fps on Emacs's GLib main context.  Those
+callbacks fire on the *Emacs main thread*.  But the wlroots EGL
+context is bound to the *compositor dispatch thread* that runs
+=wl_event_loop_dispatch=.  Calling =wlr_scene_output_build_state=
+from the wrong thread returns =EGL_BAD_ACCESS= silently, producing
+no buffer, so =screenshot_output= returned =NULL= on every call.
+
+*Fix*: added a new =frame-rendered= signal on =GowlCompositor=,
+emitted from =on_monitor_frame= in the compositor core after
+=wlr_scene_output_commit= completes.  The recording module connects
+to this signal, which runs on the compositor dispatch thread where
+EGL is valid.  FPS throttling is done inline in the handler by
+comparing =g_get_monotonic_time()= to the configured interval.
+
+** Issue 2: Short writes corrupting the rawvideo stream
+
+*Symptom*: ffmpeg logged =Invalid buffer size, packet size N <
+expected frame_size M= for every frame.  Output file was 262 bytes.
+
+*Cause*: the initial implementation used =O_NONBLOCK= on the ffmpeg
+stdin pipe.  When the 1280x696x4 (3.5 MB) frame write hit the 64 KB
+default pipe buffer, =write()= returned after only a few KB.  The
+module assumed the write succeeded and moved on.  ffmpeg's rawvideo
+demuxer then saw a mid-frame boundary and discarded every packet.
+
+*Fix*: switched to *blocking writes*.  A single =write()= on a
+blocking fd either writes the full buffer or fails atomically.
+The compositor dispatch thread briefly blocks while ffmpeg drains,
+but libx264 at ultrafast preset is faster than realtime so the
+stall is sub-millisecond.  Also grew the pipe buffer via
+=fcntl(F_SETPIPE_SZ, ...)= to hold at least one full frame.
+
+** Issue 3: Mutex deadlock in do_stop
+
+*Symptom*: =(gowl-record-stop)= hung indefinitely.  Thread dump
+showed the main thread in =waitpid= inside =do_stop=, and the
+compositor dispatch thread blocked on =pthread_mutex_lock=.
+
+*Cause*: =Fgowl_record_stop= acquired =cmacs_gowl_mutex= before
+calling =do_stop=, which called =waitpid(ffmpeg)=.  Meanwhile the
+compositor dispatch thread needed the mutex to run its event loop
+iteration.  ffmpeg couldn't drain because nothing was writing to
+its pipe; the pipe was still open via inherited fds; =waitpid=
+blocked forever; the mutex was held forever.
+
+*Fix*: split =do_stop= into two phases.  The *fast* phase (disconnect
+signal, close pipe, transfer pid to =ffmpeg_pid_to_reap=) runs under
+the mutex.  The caller releases the mutex, then calls a new
+=finalize()= interface method which does the =waitpid= outside
+the mutex.  Added =gowl_recording_provider_finalize()= to the
+=GowlRecordingProvider= interface vtable.
+
+** Issue 4: ffmpeg won't exit on SIGINT
+
+*Symptom*: even outside the mutex, =waitpid= blocked indefinitely.
+ffmpeg was stuck and didn't respond to SIGINT or SIGTERM.
+
+*Cause*: other Emacs subprocesses (vterm's =/bin/bash=, for example)
+inherited the pipe's write end via fork before =O_CLOEXEC= could
+close it.  Even after the module closed its own write end, ffmpeg
+saw the pipe as "still has writers" because those inherited fds
+kept it alive.  ffmpeg's main loop was blocked in =read()= on
+stdin, and signal flags weren't being checked because =read()=
+never returned.  At the same time, libx264 buffered frames
+internally (lookahead + B-frames) and never flushed anything, so
+even the first 12 seconds of capture produced a 28-byte file (just
+the =ftyp= atom).
+
+*Fix*: two complementary changes.
+
+1. *Fragmented MP4*: added
+   =-movflags +frag_keyframe+empty_moov+default_base_moof= plus
+   =-preset ultrafast -tune zerolatency -g 30=.  The empty moov
+   atom is written at the start of the file, and each keyframe
+   (every 1 second) flushes a complete =moof/mdat= fragment.  The
+   resulting file is playable *even if ffmpeg is killed abruptly*.
+
+2. *Escalating signals in finalize()*: send SIGINT, wait 500ms;
+   if still alive, SIGTERM, wait 500ms; if still alive, SIGKILL.
+   The recording stops in at most 1 second regardless of whether
+   ffmpeg is stuck.  The fragmented MP4 output ensures SIGKILL
+   doesn't corrupt the file.
+
+** Issue 5: Nested Wayland and GPU-only screenshot buffers
+
+*Symptom*: =gowl-screenshot 'desktop= returned =Cannot access
+output buffer data=.
+
+*Cause*: in nested Wayland mode the renderer's swapchain allocates
+GPU-only buffers (DMA-BUF) that don't support
+=wlr_buffer_begin_data_ptr_access()= for direct CPU readback.
+
+*Fix*: added a fallback path in =gowl_compositor_screenshot_output=
+that creates a =wlr_texture= from the buffer and uses
+=wlr_texture_read_pixels()= for GPU-side readback into a
+caller-owned ARGB8888 buffer.
+
+** Issue 6: Stale damage preventing repeated captures
+
+*Symptom*: the first =screenshot_output= worked but subsequent
+ones returned no buffer.
+
+*Cause*: =wlr_scene_output_build_state= skips rendering entirely
+when there's no damage since the last frame.  For continuous
+captures (recording), this meant only the very first frame
+produced output.
+
+*Fix*: call =wlr_damage_ring_add_whole(&scene_output->damage_ring)=
+before =build_state= in =screenshot_output=.  This forces a full
+re-render on every capture.

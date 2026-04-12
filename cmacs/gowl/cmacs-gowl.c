@@ -3069,11 +3069,16 @@ Returns the YAML as a string.  Useful for saving config changes. */)
 
 DEFUN ("gowl-load-module", Fgowl_load_module, Sgowl_load_module,
        1, 1, 0,
-       doc: /* Load a gowl module from PATH (a .so file). */)
+       doc: /* Load a gowl module.
+PATH is either an absolute path to a .so file, or a bare module
+name (e.g. "recording") — in which case the standard search paths
+are used to locate the .so, same as `gowl-enable-module'. */)
   (Lisp_Object path)
 {
   GowlModuleManager *mgr;
   GError *err = NULL;
+  g_autofree gchar *resolved = NULL;
+  const gchar *input;
 
   CHECK_STRING (path);
   GOWL_CHECK_RUNNING ();
@@ -3082,7 +3087,21 @@ DEFUN ("gowl-load-module", Fgowl_load_module, Sgowl_load_module,
   if (mgr == NULL)
     error ("No module manager");
 
-  if (!gowl_module_manager_load_module (mgr, SSDATA (path), &err))
+  input = SSDATA (path);
+
+  /* If the argument is a bare name (no slash and no .so suffix),
+     resolve via the standard search paths. */
+  if (strchr (input, '/') == NULL && !g_str_has_suffix (input, ".so"))
+    {
+      resolved = cmacs_gowl_find_module (input);
+      if (resolved == NULL)
+        xsignal1 (Qgowl_error,
+                  concat3 (build_string ("Module not found: "),
+                           path, empty_unibyte_string));
+      input = resolved;
+    }
+
+  if (!gowl_module_manager_load_module (mgr, input, &err))
     {
       Lisp_Object msg = build_string (err->message);
       g_error_free (err);
@@ -4869,9 +4888,9 @@ Returns a list (WIDTH HEIGHT DATA) with the cropped RGBA pixel data. */)
  * Screenshot & Recording (high-level)
  * ══════════════════════════════════════════════════════════════════════ */
 
-DEFUN ("gowl-screenshot", Fgowl_screenshot, Sgowl_screenshot, 1, 3, 0,
+DEFUN ("gowl-screenshot", Fgowl_screenshot, Sgowl_screenshot, 0, 3, 0,
        doc: /* Take a screenshot and save as PNG.
-MODE is a symbol: `desktop', `window', or `all'.
+Optional MODE is a symbol: `desktop' (default), `window', or `all'.
 Optional PATH is the output file; nil uses ~/Pictures/Screenshots/.
 Optional NO-CLIPBOARD non-nil skips clipboard copy.
 Returns the saved file path as a string. */)
@@ -4884,7 +4903,12 @@ Returns the saved file path as a string. */)
   g_autofree gchar *dir = NULL;
 
   GOWL_CHECK_RUNNING ();
-  CHECK_SYMBOL (mode);
+
+  /* MODE defaults to 'desktop when nil */
+  if (NILP (mode))
+    mode = intern_c_string ("desktop");
+  else
+    CHECK_SYMBOL (mode);
 
   /* Capture based on mode */
   if (EQ (mode, intern_c_string ("desktop")))
@@ -5051,9 +5075,9 @@ of RGBA pixel data, or nil on failure. */)
 }
 
 DEFUN ("gowl-record-start", Fgowl_record_start, Sgowl_record_start,
-       1, 2, 0,
+       0, 2, 0,
        doc: /* Start screen recording.
-MODE is a symbol: `desktop', `window', or `all'.
+Optional MODE is a symbol: `desktop' (default), `window', or `all'.
 Optional PATH is the output file; nil uses ~/Videos/Recordings/.
 Returns the output file path.
 Signals `gowl-error' if ffmpeg is not found or a recording is active. */)
@@ -5067,7 +5091,12 @@ Signals `gowl-error' if ffmpeg is not found or a recording is active. */)
   gboolean ok;
 
   GOWL_CHECK_RUNNING ();
-  CHECK_SYMBOL (mode);
+
+  /* MODE defaults to 'desktop when nil */
+  if (NILP (mode))
+    mode = intern_c_string ("desktop");
+  else
+    CHECK_SYMBOL (mode);
 
   mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
   mod = gowl_module_manager_find_module (mgr, "recording");
@@ -5149,10 +5178,17 @@ Returns the output file path, or nil if not recording. */)
   if (mod == NULL || !GOWL_IS_RECORDING_PROVIDER (mod))
     return Qnil;
 
+  /* Fast cleanup (disconnect signal, close pipe) under the mutex. */
   pthread_mutex_lock (&cmacs_gowl_mutex);
   gowl_recording_provider_stop (GOWL_RECORDING_PROVIDER (mod),
                                  &out_path, &err);
   pthread_mutex_unlock (&cmacs_gowl_mutex);
+
+  /* Wait for ffmpeg to finalize the file OUTSIDE the mutex.
+   * waitpid can block for hundreds of milliseconds; holding the
+   * compositor mutex during that time deadlocks the dispatch
+   * thread which needs the mutex to run the Wayland event loop. */
+  gowl_recording_provider_finalize (GOWL_RECORDING_PROVIDER (mod));
 
   if (err != NULL)
     {

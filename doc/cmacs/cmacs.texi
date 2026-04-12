@@ -2477,11 +2477,12 @@ rubber-band selection), and @code{all} (all monitors stitched).
 
 @subsection Screenshot
 
-@defun gowl-screenshot mode &optional path no-clipboard
-Take a screenshot in @var{mode} (@code{desktop}, @code{window}, or
-@code{all}).  @var{path} defaults to @file{~/Pictures/Screenshots/}.
-Unless @var{no-clipboard} is non-nil, the PNG is copied to the
-Wayland clipboard.  Returns the saved file path.
+@defun gowl-screenshot &optional mode path no-clipboard
+Take a screenshot in @var{mode} (@code{desktop} (default),
+@code{window}, or @code{all}).  @var{path} defaults to
+@file{~/Pictures/Screenshots/}.  Unless @var{no-clipboard} is
+non-nil, the PNG is copied to the Wayland clipboard.  Returns the
+saved file path.
 @end defun
 
 @defun gowl-screenshot-save-png width height data path
@@ -2498,19 +2499,45 @@ DATA)} where @var{DATA} is a unibyte string of RGBA pixel data.
 
 Requires @command{ffmpeg} installed on the system.
 
-@defun gowl-record-start mode &optional path
-Start continuous screen recording in @var{mode}.  The recording is
-encoded by an @command{ffmpeg} subprocess.  @var{path} defaults to
+@defun gowl-record-start &optional mode path
+Start continuous screen recording in @var{mode} (@code{desktop}
+(default), @code{window}, or @code{all}).  The recording is encoded
+by an @command{ffmpeg} subprocess.  @var{path} defaults to
 @file{~/Videos/Recordings/}.  Returns the output file path.
 @end defun
 
 @defun gowl-record-stop
 Stop the current recording.  Returns the output file path.
+Blocks briefly (up to ~1 second) waiting for @command{ffmpeg} to
+finalize the output file.
 @end defun
 
 @defun gowl-recording-p
 Return non-nil if a recording is in progress.
 @end defun
+
+@noindent
+The recording uses fragmented MP4 with @code{libx264 -preset
+ultrafast -tune zerolatency -g 30}.  This produces output files
+that are playable even if @command{ffmpeg} is terminated abruptly:
+an empty moov atom is written at the start, and each keyframe
+(every 1 second) flushes a complete moof/mdat fragment.
+
+@noindent
+Frame capture is driven by the compositor's @code{frame-rendered}
+signal, which fires on the compositor dispatch thread after each
+monitor frame render.  This guarantees that
+@code{wlr_scene_output_build_state} runs on the thread that owns
+the EGL context, avoiding @code{EGL_BAD_ACCESS} from cross-thread
+renderer calls.
+
+@noindent
+Stopping a recording does a fast cleanup under the compositor
+mutex (disconnect signal, close stdin pipe, send SIGINT), releases
+the mutex, then waits for @command{ffmpeg} to exit outside the
+mutex with escalating signals (SIGINT @tie{}→@tie{} SIGTERM
+@tie{}→@tie{} SIGKILL).  The compositor dispatch thread is never
+blocked for more than the fast cleanup.
 
 @subsection Interactive Commands
 
@@ -2537,7 +2564,75 @@ cancellation status.
 @item GowlScreenshotProvider
 GInterface for screenshot modules.
 @item GowlRecordingProvider
-GInterface for recording modules.
+GInterface for recording modules.  Provides @code{start},
+@code{stop}, @code{is_recording}, and @code{finalize} methods.
+The split between @code{stop} (fast, under compositor mutex) and
+@code{finalize} (slow, outside mutex) avoids blocking the
+compositor dispatch thread during child reaping.
+@end table
+
+@subsection Implementation Notes
+
+The recording module went through several design iterations before
+reaching the current working approach.  A few of the key issues
+and their resolutions are captured here as guidance for future
+modifications.
+
+@table @emph
+@item EGL context thread affinity
+Frame capture must run on the compositor dispatch thread.  The
+wlroots renderer's EGL context is bound to that thread, and any
+call to @code{wlr_scene_output_build_state} from another thread
+silently fails with @code{EGL_BAD_ACCESS}.  The recording module
+connects to a @code{frame-rendered} signal on @code{GowlCompositor}
+emitted from @code{on_monitor_frame}, ensuring captures happen on
+the right thread.
+
+@item Blocking vs.@: non-blocking pipe writes
+Non-blocking writes of multi-megabyte frames produce short writes
+that corrupt the rawvideo stream (ffmpeg reports
+@code{Invalid buffer size}).  The module uses blocking writes so
+each frame is either fully delivered or fails atomically.
+
+@item Mutex deadlock on stop
+Waiting for @command{ffmpeg} to exit while holding the compositor
+mutex deadlocks the dispatch thread.  Stop is split into a fast
+phase (disconnect signal, close pipe) under the mutex and a slow
+phase (waitpid with escalating signals) outside it, via the
+@code{GowlRecordingProvider.finalize} interface method.
+
+@item Abrupt termination of @command{ffmpeg}
+Other Emacs subprocesses (vterm @command{bash}, etc.) inherit
+the ffmpeg stdin pipe's write end via fork, so closing the
+module's copy does not cause EOF.  @command{ffmpeg} stays blocked
+in @code{read()} and does not act on SIGINT until the syscall
+returns.  The module's escalating-signal strategy (SIGINT
+@tie{}→@tie{} SIGTERM @tie{}→@tie{} SIGKILL) combined with
+fragmented MP4 output (@code{+frag_keyframe+empty_moov}) ensures
+stop always returns within a second and the output file is
+always playable.
+
+@item libx264 lookahead buffer
+libx264 buffers dozens of frames internally by default (lookahead
++ B-frames) and may not output any data for a short recording.
+Using @code{-preset ultrafast -tune zerolatency} disables
+lookahead and B-frames, so frames are emitted immediately and
+the output file grows as soon as encoding starts.
+
+@item Nested Wayland screenshot buffers
+In nested Wayland mode the compositor's renderer allocates
+GPU-only buffers that can't be read with
+@code{wlr_buffer_begin_data_ptr_access}.  The
+@code{gowl_compositor_screenshot_output} implementation falls
+back to @code{wlr_texture_from_buffer} +
+@code{wlr_texture_read_pixels} for GPU-side readback.
+
+@item Repeated captures and damage tracking
+@code{wlr_scene_output_build_state} skips rendering when there is
+no damage since the last frame, which causes repeated screenshots
+(including those used by recording) to return no buffer.  The
+screenshot path calls @code{wlr_damage_ring_add_whole} before
+each @code{build_state} to force a full re-render.
 @end table
 
 @section Files
