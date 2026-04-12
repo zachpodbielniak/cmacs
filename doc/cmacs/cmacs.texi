@@ -1989,6 +1989,24 @@ These signals only fire for client-initiated changes, not when
 Emacs sets the clipboard via @code{gowl-clipboard-set}, so no
 infinite loop occurs.
 
+@subsubsection Implementation notes
+
+Clipboard reads from client-owned sources (including clients
+embedded via @code{gowl-embed-app}) are asynchronous.  The signal
+handler schedules an fd watch via
+@code{gowl_seat_read_clipboard_async} and returns immediately; the
+wl dispatch loop then flushes the @code{wl_data_source.send} event
+to the owning client, the client writes to a pipe, and a
+@code{WL_EVENT_READABLE} callback drains the data and hands it to
+the Emacs main thread via @code{g_idle_add}.  A synchronous read
+inside the signal handler would see EOF immediately because the
+event hasn't been flushed to the client yet.
+
+The sync @code{gowl-clipboard-get} DEFUN still exists for
+peeking at the current clipboard state; it works reliably for
+compositor-owned sources (text set via @code{gowl-clipboard-set})
+and is used by @code{interprogram-paste-function}.
+
 @noindent
 Bar control:
 
@@ -2379,6 +2397,20 @@ The module implements @code{GowlClientDecorator}, replacing the
 compositor's default 4-rect borders with a single
 @code{wlr_scene_buffer} rendered by cairo.  Cached per client —
 re-rendered only on resize or color change.
+
+The decoration buffer installs a @code{point_accepts_input}
+callback that always returns false, so pointer hit-testing skips
+it entirely.  Clicks on the cairo stroke pass through to the
+client surface underneath — no dead zones along the border ring.
+
+Clients embedded via @code{gowl-embed-app} get special handling:
+@code{gowl_compositor_position_embedded} calls
+@code{gowl_compositor_refresh_client_decoration} after updating
+the embed geometry, and the @code{gowl-set-client-border-width}
+DEFUN does the same after changing @code{bw}.  When @code{bw}
+transitions to 0 (as in the embed path), the decoration is
+destroyed rather than left at stale dimensions.  This keeps the
+rounded frame in sync with the embedded client's actual size.
 
 @subsection Vanitygaps
 @cindex gaps, window

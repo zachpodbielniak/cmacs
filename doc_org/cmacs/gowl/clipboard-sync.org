@@ -41,13 +41,27 @@ The mode lighter is =GowlClip= in the mode line.
 1. A Wayland client copies text (e.g., Ctrl+C in Firefox)
 2. The client sends =wl_data_device.set_selection= to the compositor
 3. =GowlSeat= emits the =clipboard-changed= GObject signal
-4. The cmacs signal handler reads the clipboard text and schedules
-   an idle callback on the GLib main context
-5. The idle callback (on the Emacs main thread) evaluates
+4. The cmacs signal handler calls =gowl_seat_read_clipboard_async=
+   which registers a non-blocking fd watch on the read end of a
+   pipe and returns immediately — it does *not* block the dispatch
+   loop
+5. The dispatch loop returns, =wl_display_flush_clients= runs, and
+   the client receives its =wl_data_source.send= event
+6. The client writes the text to the pipe and closes its fd
+7. The fd watch fires on =WL_EVENT_READABLE=, drains the pipe, and
+   on EOF schedules =clipboard_push_idle= on the GLib main context
+8. The idle callback (on the Emacs main thread) evaluates
    =(kill-new TEXT)= to push the text onto the kill-ring
 
 Primary selection (mouse highlight) works the same way via the
 =primary-selection-changed= signal.
+
+This async path is required for *client-owned* sources.  A
+synchronous pipe read inside the signal handler would deadlock
+(or, if the write end has already been closed by wlroots, return
+EOF with no data) because the dispatch loop hasn't flushed the
+=wl_data_source.send= event to the client yet.  See "Architecture
+Notes" below for the background.
 
 ** Emacs to Wayland (kill -> clipboard)
 
@@ -128,9 +142,29 @@ main thread.
   =gowl-clipboard-set=, it calls =wlr_seat_set_selection()=
   directly, bypassing =request_set_selection= --- so no infinite
   loop occurs.
-- Clipboard reads (=gowl_seat_get_clipboard=) are synchronous pipe
-  operations that negotiate MIME types: =text/plain;charset=utf-8=,
+- Two read paths exist:
+  - =gowl_seat_get_clipboard= (sync): works for compositor-owned
+    sources (text set via =gowl_seat_set_clipboard=).  Used by the
+    =gowl-clipboard-get= DEFUN which just wants to peek at the
+    current state.
+  - =gowl_seat_read_clipboard_async= (fd-watch): required for
+    client-owned sources, including embedded clients from
+    =gowl-embed-app=.  Used by the signal handler in
+    =cmacs-gowl-clipboard-sync-mode=.
+  Both negotiate MIME types: =text/plain;charset=utf-8=,
   =text/plain=, or =UTF8_STRING=.
+- Why async for client sources: =wlr_data_source_send()= queues a
+  =wl_data_source.send= event in the client's output buffer; the
+  event isn't delivered until the dispatch cycle flushes.  A
+  synchronous =read()= inside the signal handler runs before that
+  flush, so the read sees EOF with no data (wlroots has already
+  closed its own write end in the client source's =.send=
+  callback).  The fd-watch approach waits for the flush to happen
+  naturally between dispatch cycles.
 - The mode uses Emacs's standard =interprogram-cut-function= and
   =interprogram-paste-function= hooks, which are the official
   integration points for external clipboard systems.
+- Works for clients embedded via =M-x gowl-embed-app= — the embed
+  path does not change how clients participate in the Wayland
+  seat/data-device protocols, so clipboard sync is transparent
+  to the embedding.

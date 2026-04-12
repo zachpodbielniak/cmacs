@@ -1619,6 +1619,10 @@ DEFUN ("gowl-set-client-border-width",
   c = gowl_resolve_client (client);
   pthread_mutex_lock (&cmacs_gowl_mutex);
   gowl_client_set_border_width (c, (guint) XFIXNAT (width));
+  /* Keep the active decorator (e.g. roundcorners) in sync with the
+     new border width -- gowl_client_set_border_width only touches
+     the legacy wlr_scene_rect borders. */
+  gowl_compositor_refresh_client_decoration (cmacs_gowl_compositor, c);
   pthread_mutex_unlock (&cmacs_gowl_mutex);
   return Qnil;
 }
@@ -4595,29 +4599,67 @@ clipboard_push_idle (gpointer user_data)
   return G_SOURCE_REMOVE;
 }
 
-/* Signal handler — runs on compositor dispatch thread. */
+/* Async read completion — runs on compositor dispatch thread,
+   called from the fd-watch callback inside gowl-seat.c.  @text is
+   allocated by the async helper and transferred to us; hand it off
+   to the Emacs idle callback which will g_free it. */
+static void
+on_clipboard_read_done (gchar *text, gpointer user_data)
+{
+  (void)user_data;
+  if (text != NULL)
+    g_idle_add (clipboard_push_idle, text);
+}
+
+/* Signal handler — runs on compositor dispatch thread.
+   We MUST NOT read the clipboard synchronously here: the signal
+   fires from inside on_request_set_sel before the wl dispatch cycle
+   has flushed the wl_data_source.send event to the owning client,
+   so a blocking read would deadlock (or, with the write end already
+   closed by wlr, return EOF with no data).  Instead, schedule an
+   async read via an fd watch — the fd-watch fires later in the same
+   dispatch loop, after the client has been given a chance to write. */
 static void
 on_clipboard_changed (GowlSeat *seat, gpointer user_data)
 {
-  gchar *text;
+  struct wl_event_loop *loop;
+  struct wl_display *wl_dpy;
 
   (void)user_data;
 
-  text = gowl_seat_get_clipboard (seat);
-  if (text != NULL)
-    g_idle_add (clipboard_push_idle, text);
+  if (cmacs_gowl_compositor == NULL)
+    return;
+  wl_dpy = gowl_compositor_get_wl_display (cmacs_gowl_compositor);
+  if (wl_dpy == NULL)
+    return;
+  loop = wl_display_get_event_loop (wl_dpy);
+  if (loop == NULL)
+    return;
+
+  (void) gowl_seat_read_clipboard_async (seat, loop,
+                                          on_clipboard_read_done, NULL);
 }
 
 static void
 on_primary_selection_changed (GowlSeat *seat, gpointer user_data)
 {
-  gchar *text;
+  struct wl_event_loop *loop;
+  struct wl_display *wl_dpy;
 
   (void)user_data;
 
-  text = gowl_seat_get_primary_selection (seat);
-  if (text != NULL)
-    g_idle_add (clipboard_push_idle, text);
+  if (cmacs_gowl_compositor == NULL)
+    return;
+  wl_dpy = gowl_compositor_get_wl_display (cmacs_gowl_compositor);
+  if (wl_dpy == NULL)
+    return;
+  loop = wl_display_get_event_loop (wl_dpy);
+  if (loop == NULL)
+    return;
+
+  (void) gowl_seat_read_primary_selection_async (seat, loop,
+                                                  on_clipboard_read_done,
+                                                  NULL);
 }
 
 DEFUN ("gowl-clipboard-watch", Fgowl_clipboard_watch,
