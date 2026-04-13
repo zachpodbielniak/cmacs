@@ -40,9 +40,27 @@ static gint     poll_fds_count = 0;
 static gint     poll_max_priority = 0;
 
 /* TRUE when cmacs_glib_prepare successfully acquired the context.
- * Guards cmacs_glib_dispatch against re-entrant calls (a GLib
- * callback may eval Lisp that re-enters wait_reading_process_output). */
+ * Guards cmacs_glib_prepare against re-entrant calls (a GLib
+ * callback may eval Lisp that re-enters wait_reading_process_output
+ * → cmacs_glib_prepare → would try to acquire an already-held
+ * context, corrupting the poll_fds scratch array). */
 static bool cmacs_context_acquired = false;
+
+/* TRUE while cmacs_glib_dispatch is actively running its
+ * check/dispatch loop on cmacs_context.  Guards against re-entrant
+ * calls from GLib callbacks that evaluate Lisp → sleep-for /
+ * accept-process-output → wait_reading_process_output →
+ * cmacs_glib_dispatch.  Without this flag the inner invocation
+ * would call g_main_context_check and g_main_context_dispatch on a
+ * context that the outer invocation is still iterating, mutating
+ * the pending-dispatches list mid-iteration and tripping g_main's
+ * `source->context == context` assertion (gmain.c g_main_dispatch).
+ * Note: cmacs_context_acquired is *not* a suitable reentry guard
+ * here because the outer dispatch leaves it set for the full
+ * duration of its check/dispatch/release cycle -- by design, since
+ * inner cmacs_glib_prepare needs it true to know it shouldn't
+ * acquire again.  We need a second, orthogonal flag. */
+static bool cmacs_context_dispatching = false;
 
 /* ──────────────────────────────────────────────────────────────────── */
 /* Event loop hooks                                                    */
@@ -131,11 +149,31 @@ cmacs_glib_dispatch (fd_set *readable, int nfds)
   if (cmacs_context == NULL || !cmacs_context_acquired)
     return;
 
+  /* Reentry guard.  cmacs_glib_prepare already blocks the inner
+   * wait_reading_process_output from contributing fds to the
+   * pselect (see cmacs_context_acquired check at the top of
+   * cmacs_glib_prepare), but wait_reading_process_output still
+   * unconditionally calls cmacs_glib_dispatch after pselect.  We
+   * must no-op here when we're already inside an outer dispatch,
+   * otherwise the inner call runs g_main_context_check +
+   * g_main_context_dispatch + g_main_context_release on a context
+   * the outer g_main_context_dispatch is still iterating, which
+   * mutates `context->pending_dispatches' mid-walk and trips an
+   * assertion in g_main_dispatch (`source->context == context').
+   *
+   * The outer dispatch still owns the acquire and will perform the
+   * check/dispatch/release sequence when it unwinds.  The inner
+   * call must be a pure no-op -- no check, no dispatch, no release. */
+  if (cmacs_context_dispatching)
+    return;
+  cmacs_context_dispatching = true;
+
   /* If pselect failed, just release the context — fd_sets are undefined. */
   if (nfds < 0)
     {
       g_main_context_release (cmacs_context);
       cmacs_context_acquired = false;
+      cmacs_context_dispatching = false;
       return;
     }
 
@@ -166,7 +204,23 @@ cmacs_glib_dispatch (fd_set *readable, int nfds)
    * Emacs aborts unconditionally if any Lisp error is signaled while
    * `waiting_for_input' is set, because signal_or_quit treats it as an
    * "impossible" situation.  Temporarily clear the flag so that Lisp
-   * errors in GLib callbacks are handled normally, then restore it. */
+   * errors in GLib callbacks are handled normally, then restore it.
+   *
+   * Note: we do *not* push cmacs_context as thread-default across
+   * this dispatch.  An earlier revision tried that, intending to
+   * make async GIO calls from cmacs_context callbacks attach their
+   * new sources to cmacs_context.  It caused a latent reentrancy
+   * bug to surface as a hard crash: holding cmacs_context as
+   * thread-default across a long Lisp call made GTK/GDK's async
+   * callbacks (frame clock, iconify paths, etc.) also attach to
+   * cmacs_context, fattening its pending-dispatches list; when Lisp
+   * then re-entered wait_reading_process_output via sleep-for, the
+   * inner dispatch walked the same mutated list and tripped
+   * g_main_dispatch's `source->context == context' assertion.  The
+   * MCP-on-wrong-context problem the push was solving is handled
+   * from the Lisp-error side by dispatch_safe_eval's own
+   * waiting_for_input clear/restore guard in
+   * cmacs/glib/cmacs-eval-dispatch.c. */
   g_main_context_check (cmacs_context, poll_max_priority,
                         poll_fds, poll_fds_count);
   {
@@ -179,6 +233,7 @@ cmacs_glib_dispatch (fd_set *readable, int nfds)
   }
   g_main_context_release (cmacs_context);
   cmacs_context_acquired = false;
+  cmacs_context_dispatching = false;
 }
 
 GMainContext *

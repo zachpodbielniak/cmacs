@@ -15,6 +15,7 @@
 #ifdef HAVE_CMACS_GLIB
 
 #include "lisp.h"
+#include "keyboard.h"
 #include "cmacs-eval-dispatch.h"
 
 #include <glib.h>
@@ -33,11 +34,33 @@ dispatch_eval_error (Lisp_Object err)
   return Fcons (Qerror, Ferror_message_string (err));
 }
 
+/* Guarded wrapper around internal_condition_case_1.
+ *
+ * GLib callbacks that come through cmacs_dispatch_* may run while the
+ * main thread is inside read_char / sit_for with `waiting_for_input'
+ * set to true (e.g. the MCP server's GIO sources are attached to the
+ * default GMainContext dispatched from `xg_select`, which does *not*
+ * go through `cmacs_glib_dispatch` and therefore does not clear the
+ * flag).  If a Lisp error is signaled from that state, signal_or_quit
+ * hits its "impossible" branch and calls emacs_abort before
+ * internal_condition_case_1 ever sees the signal -- aborting the
+ * whole emacs process on what should be a recoverable error.
+ *
+ * Temporarily clearing waiting_for_input mirrors the guard in
+ * cmacs_glib_dispatch (cmacs-glib-loop.c) and keeps signals inside
+ * the condition-case where they belong. */
 static Lisp_Object
 dispatch_safe_eval (Lisp_Object form)
 {
-  return internal_condition_case_1 (dispatch_eval_body, form,
-                                    Qt, dispatch_eval_error);
+  Lisp_Object result;
+  bool was_waiting = waiting_for_input;
+  if (was_waiting)
+    clear_waiting_for_input ();
+  result = internal_condition_case_1 (dispatch_eval_body, form,
+                                      Qt, dispatch_eval_error);
+  if (was_waiting)
+    set_waiting_for_input (input_available_clear_time);
+  return result;
 }
 
 static gboolean
@@ -70,16 +93,32 @@ cmacs_dispatch_eval (const gchar *expression, GError **error)
   return g_strdup (SSDATA (printed));
 }
 
+/* Same waiting_for_input guard as dispatch_safe_eval -- see the
+   comment there.  safe_calln's internal condition-case is still
+   entered too late to catch an error signaled while
+   waiting_for_input is set. */
+#define DISPATCH_WITH_INPUT_GUARD(body)                         \
+  do {                                                          \
+    bool _was_waiting = waiting_for_input;                      \
+    if (_was_waiting)                                           \
+      clear_waiting_for_input ();                               \
+    body;                                                       \
+    if (_was_waiting)                                           \
+      set_waiting_for_input (input_available_clear_time);       \
+  } while (0)
+
 void
 cmacs_dispatch_find_file (const gchar *path)
 {
-  safe_calln (intern ("find-file"), build_string (path));
+  DISPATCH_WITH_INPUT_GUARD (
+    safe_calln (intern ("find-file"), build_string (path)));
 }
 
 void
 cmacs_dispatch_message (const gchar *text)
 {
-  safe_calln (intern ("message"), build_string (text));
+  DISPATCH_WITH_INPUT_GUARD (
+    safe_calln (intern ("message"), build_string (text)));
 }
 
 gboolean
