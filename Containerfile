@@ -1,8 +1,16 @@
 ARG FEDORA_VERSION=43
 FROM registry.fedoraproject.org/fedora:${FEDORA_VERSION} AS builder
+ARG FEDORA_VERSION
 
 # System build dependencies
-RUN dnf install -y \
+# Fedora 44+ ships wlroots-0.20 as wlroots-devel; gowl needs
+# wlroots-0.19, available as the wlroots0.19-devel compat package.
+RUN if [ "${FEDORA_VERSION}" -ge 44 ] 2>/dev/null; then \
+        WLROOTS_PKG=wlroots0.19-devel; \
+    else \
+        WLROOTS_PKG=wlroots-devel; \
+    fi \
+    && dnf install -y \
         autoconf automake gcc make pkgconf-pkg-config texinfo \
         gnutls-devel ncurses-devel zlib-devel \
         gtk3-devel \
@@ -13,7 +21,7 @@ RUN dnf install -y \
         jansson-devel \
         libtree-sitter-devel \
         glib2-devel gobject-introspection-devel \
-        wlroots-devel wayland-devel wayland-protocols-devel \
+        "${WLROOTS_PKG}" wayland-devel wayland-protocols-devel \
         libinput-devel libxkbcommon-devel pango-devel cairo-devel \
         libdecor-devel libdrm-devel pixman-devel \
         libxcb-devel xcb-util-wm-devel \

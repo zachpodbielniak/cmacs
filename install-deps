@@ -86,7 +86,19 @@ set_packages_fedora () {
 	PKGS_GLIB=(glib2-devel gobject-introspection-devel json-glib-devel
 	           libsoup3-devel libdex-devel libetpan-devel libpq-devel
 	           libssh2-devel libvirt-devel)
-	PKGS_GOWL=(wlroots-devel wayland-devel wayland-protocols-devel
+	# Fedora 44+ ships wlroots-0.20 as wlroots-devel; gowl needs
+	# wlroots-0.19, available as the wlroots0.19-devel compat package.
+	local wlroots_pkg="wlroots-devel"
+	if [[ -f /etc/os-release ]]; then
+		# shellcheck source=/dev/null
+		. /etc/os-release
+		if [[ "${ID}" == "fedora" ]] \
+		   && [[ "${VERSION_ID}" =~ ^[0-9]+$ ]] \
+		   && (( VERSION_ID >= 44 )); then
+			wlroots_pkg="wlroots0.19-devel"
+		fi
+	fi
+	PKGS_GOWL=("${wlroots_pkg}" wayland-devel wayland-protocols-devel
 	           libinput-devel libxkbcommon-devel pango-devel cairo-devel)
 	PKG_CMD="sudo dnf install -y"
 }
