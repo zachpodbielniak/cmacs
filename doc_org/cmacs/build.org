@@ -74,6 +74,15 @@ make install                       # no sudo needed for ~/.local
 - =gobject-2.0=
 - =gio-2.0=
 - =gmodule-2.0=
+- =json-glib-1.0=
+- =libsoup-3.0= (podomation HTTP backend)
+- =libdex-1= (mcp-glib async futures)
+- =libetpan= (podomation mail backend)
+
+On Debian/Ubuntu these map to =libglib2.0-dev=, =libjson-glib-dev=,
+=libsoup-3.0-dev=, =libdex-dev=, and =libetpan-dev=.  =libdex-dev=
+is not available before Ubuntu 24.10 --- see the Ubuntu 24.04
+section below.
 
 ** Per Feature
 
@@ -107,13 +116,35 @@ It does *not* depend on Emacs internals, bacon, or crispy.
 make -C cmacs/api
 #+end_example
 
-** Bacon cmacsgi module
+** Bacon modules (cmacs_gi, cmacs_pod)
+
+Built automatically by the top-level =make= when both
+=--with-cmacs-bacon= and =--with-cmacs-gi= are enabled
+(=src/Makefile.in= adds =$(CMACS_BACON_MODULES)= to the =all=
+target).  =make install= installs both =.so= files to
+=$prefix/lib64/bacon/modules/= (or =lib/bacon/modules/= on
+systems without =/usr/lib64=) --- no separate step required.
+
+To rebuild them in isolation during development:
 
 #+begin_example
 make -C cmacs/bacon/modules
 #+end_example
 
-This automatically builds =libcmacs-api.so= first.
+This automatically builds =libcmacs-api.so= first.  To install
+after a dev rebuild without re-running a full =make install=:
+
+#+begin_example
+sudo install -d /usr/local/lib64/bacon/modules
+sudo install -m 644 cmacs/bacon/modules/cmacs_gi.so \
+                    cmacs/bacon/modules/cmacs_pod.so \
+                    /usr/local/lib64/bacon/modules/
+#+end_example
+
+If the modules are missing after =sudo make install=, check that
+=./configure= actually enabled both features --- grep
+=config.status= for =CMACS_BACON_OBJ= and =CMACS_GI_OBJ=; both
+must be non-empty.
 
 ** After modifying source
 
@@ -154,6 +185,120 @@ duplicate objects from downstream archives before linking.
 implementation of duplicated symbols, causing ABI mismatches and
 non-deterministic crashes.
 #+end_quote
+
+* Building on Ubuntu 24.04 / older hosts
+
+Ubuntu 24.04 LTS (noble) --- and other distributions that have not
+yet caught up with the wlroots 0.19 release cadence --- ship
+versions of several gowl dependencies that are too old to satisfy
+=pkg-config --exists wlroots-0.19=.  Noble specifically ships:
+
+| Package            | Noble version | Gowl requires |
+|--------------------+---------------+---------------|
+| =wlroots=          | 0.17          | >= 0.19       |
+| =wayland=          | 1.22          | >= 1.23.1     |
+| =wayland-protocols= | 1.34         | >= 1.38       |
+| =pixman=           | 0.42          | >= 0.43       |
+| =libdex=           | (absent)      | any           |
+
+Because gowl's =config.mk= queries all required pkg-config modules
+in a single invocation, a single missing package causes
+=pkg-config --cflags= to return an empty string, which then cascades
+into a =fatal error: glib.h: No such file or directory= when the
+vendored =yaml-glib= sources are compiled.  The real fix is to
+satisfy the version gates, not to patch the include paths.
+
+** Recipe
+
+First install everything that apt *can* provide, including the mcp
+and podomation runtime deps that are sometimes overlooked:
+
+#+begin_example
+sudo apt install \
+  meson ninja-build pkg-config \
+  libglib2.0-dev libjson-glib-dev libsoup-3.0-dev libetpan-dev \
+  libdrm-dev libxkbcommon-dev libudev-dev libinput-dev \
+  libseat-dev libdisplay-info-dev libliftoff-dev hwdata \
+  libgbm-dev libvulkan-dev glslang-tools \
+  libxcb1-dev libxcb-composite0-dev libxcb-ewmh-dev \
+  libxcb-icccm4-dev libxcb-render-util0-dev libxcb-res0-dev \
+  libxcb-xinput-dev
+#+end_example
+
+Then build the out-of-date components into =/usr/local=, in
+dependency order.  Each step uses the same pattern:
+
+#+begin_example
+# 1. wayland >= 1.23.1
+git clone https://gitlab.freedesktop.org/wayland/wayland.git
+cd wayland && git checkout 1.23.1
+meson setup build --prefix=/usr/local -Ddocumentation=false -Dtests=false
+ninja -C build && sudo ninja -C build install
+
+# 2. wayland-protocols >= 1.38
+git clone https://gitlab.freedesktop.org/wayland/wayland-protocols.git
+cd wayland-protocols && git checkout 1.38
+meson setup build --prefix=/usr/local -Dtests=false
+ninja -C build && sudo ninja -C build install
+
+# 3. pixman >= 0.43
+git clone https://gitlab.freedesktop.org/pixman/pixman.git
+cd pixman && git checkout pixman-0.44.0
+meson setup build --prefix=/usr/local -Dtests=disabled
+ninja -C build && sudo ninja -C build install
+
+# 4. libdex (not packaged on noble)
+git clone https://gitlab.gnome.org/GNOME/libdex.git
+cd libdex && git checkout 0.9.1
+meson setup build --prefix=/usr/local \
+  -Dsysprof=false -Ddocs=disabled -Dexamples=false -Dtests=false
+ninja -C build && sudo ninja -C build install
+
+# 5. wlroots 0.19
+git clone -b 0.19 https://gitlab.freedesktop.org/wlroots/wlroots.git
+cd wlroots
+meson setup build --prefix=/usr/local
+ninja -C build && sudo ninja -C build install
+
+sudo ldconfig
+#+end_example
+
+** PKG_CONFIG_PATH
+
+Everything above installs under =/usr/local=, which is *not* on
+Ubuntu's default pkg-config search path.  Export this in every
+shell where you run =./configure= or =make= for cmacs, and in any
+child build that re-invokes pkg-config (the cmacs top-level make
+does not propagate it down to =deps/gowl= or =deps/podomation=
+automatically):
+
+#+begin_example
+export PKG_CONFIG_PATH=/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig
+#+end_example
+
+Verify before rebuilding:
+
+#+begin_example
+pkg-config --modversion wlroots-0.19   # => 0.19.x
+pkg-config --modversion libdex-1       # => 0.9.x
+#+end_example
+
+** Why gowl fails silently without this
+
+=deps/gowl/config.mk= computes =CFLAGS_DEPS= with:
+
+#+begin_example
+CFLAGS_DEPS := $(shell $(PKG_CONFIG) --cflags $(DEPS_REQUIRED) 2>/dev/null)
+#+end_example
+
+=pkg-config --cflags= is all-or-nothing: if *any* module in the
+list is missing, the command exits non-zero and (with =2>/dev/null=)
+produces an empty string.  All the glib/gio/wayland include paths
+then vanish from =CFLAGS=, and the first vendored =yaml-glib=
+compile unit fails with a missing =glib.h=.  If you see that error,
+run =pkg-config --print-errors --exists= on the full
+=DEPS_REQUIRED= list to identify the missing module --- do not try
+to patch the include paths directly.
 
 * Known Issues
 
