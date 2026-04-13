@@ -682,9 +682,16 @@ cmacs_gowl_inhibit_parent_shortcuts (GowlCompositor *comp)
  */
 
 #include <poll.h>
+#include <sys/eventfd.h>
+#include <stdint.h>
 
 static pthread_t cmacs_gowl_thread;
 static volatile int cmacs_gowl_thread_running = 0;
+
+/* eventfd used to wake the dispatch thread out of poll() on shutdown.
+   Without it, a blocking poll() would never notice the running flag
+   going to 0 and pthread_join() would hang. */
+static int cmacs_gowl_wake_fd = -1;
 
 /* cmacs_gowl_mutex is defined near the top of this file. */
 
@@ -695,22 +702,39 @@ cmacs_gowl_dispatch_thread (void *data)
   struct wl_display *wl_dpy = gowl_compositor_get_wl_display (comp);
   struct wl_event_loop *loop = gowl_compositor_get_event_loop (comp);
   int fd = wl_event_loop_get_fd (loop);
-  struct pollfd pfd;
+  struct pollfd pfds[2];
 
-  pfd.fd = fd;
-  pfd.events = POLLIN;
+  pfds[0].fd = fd;
+  pfds[0].events = POLLIN;
+  pfds[1].fd = cmacs_gowl_wake_fd;
+  pfds[1].events = POLLIN;
 
   while (cmacs_gowl_thread_running)
     {
-      /* Wait for activity on the event loop fd (16ms timeout for
-         wl_event_loop internal timers to fire regularly). */
-      pfd.revents = 0;
-      if (poll (&pfd, 1, 16) < 0)
+      /* Block indefinitely until either the wl_event_loop fd (wayland
+         clients, DRM vblank, internal timers such as the bar tick) or
+         the wake eventfd (shutdown signal) becomes readable.  No fixed
+         timeout — polling at 60 Hz at idle was pinning the CPU and
+         blocking deeper C-states on battery. */
+      pfds[0].revents = 0;
+      pfds[1].revents = 0;
+      if (poll (pfds, 2, -1) < 0)
         {
           if (errno == EINTR)
             continue;
           break;
         }
+
+      /* Drain the wake fd so the next poll() blocks again. */
+      if (pfds[1].revents & POLLIN)
+        {
+          uint64_t val;
+          ssize_t r = read (cmacs_gowl_wake_fd, &val, sizeof val);
+          (void) r;
+        }
+
+      if (!cmacs_gowl_thread_running)
+        break;
 
       pthread_mutex_lock (&cmacs_gowl_mutex);
       wl_display_flush_clients (wl_dpy);
@@ -777,12 +801,26 @@ cmacs_gowl_start_thread (void)
                                  cmacs_gowl_compositor);
     }
 
+  if (cmacs_gowl_wake_fd < 0)
+    {
+      cmacs_gowl_wake_fd = eventfd (0, EFD_CLOEXEC | EFD_NONBLOCK);
+      if (cmacs_gowl_wake_fd < 0)
+        {
+          fprintf (stderr,
+                   "cmacs: eventfd() failed for gowl wake-up: %s\n",
+                   strerror (errno));
+          return;
+        }
+    }
+
   cmacs_gowl_thread_running = 1;
   if (pthread_create (&cmacs_gowl_thread, NULL,
                       cmacs_gowl_dispatch_thread,
                       cmacs_gowl_compositor) != 0)
     {
       cmacs_gowl_thread_running = 0;
+      close (cmacs_gowl_wake_fd);
+      cmacs_gowl_wake_fd = -1;
       fprintf (stderr, "cmacs: failed to create gowl dispatch thread\n");
     }
 }
@@ -794,7 +832,22 @@ cmacs_gowl_stop_thread (void)
     return;
 
   cmacs_gowl_thread_running = 0;
+
+  /* Wake the dispatch thread out of poll() so it observes the flag. */
+  if (cmacs_gowl_wake_fd >= 0)
+    {
+      uint64_t val = 1;
+      ssize_t r = write (cmacs_gowl_wake_fd, &val, sizeof val);
+      (void) r;
+    }
+
   pthread_join (cmacs_gowl_thread, NULL);
+
+  if (cmacs_gowl_wake_fd >= 0)
+    {
+      close (cmacs_gowl_wake_fd);
+      cmacs_gowl_wake_fd = -1;
+    }
 }
 
 /* ── Helper: get focused monitor ──────────────────────────────────── */
