@@ -2542,6 +2542,113 @@ Named scratchpad windows that can be toggled on and off.
 (gowl-scratchpad-toggle "terminal")
 @end example
 
+@subsection Windowrules
+@cindex windowrules
+@cindex floating popups
+@cindex modal dialogs
+
+Applies @code{rules:} entries from the gowl config to every
+newly mapped client.  Rules fire before the client is assigned
+a monitor, so a matched rule can force floating, override tags
+or monitor, and set an explicit geometry without the visible
+tile@to{}float flicker caused by a post-placement transition.
+
+Each rule supports glob or PCRE-regex matching on
+@code{app-id} and @code{title}.  Regex mode catches apps that
+update their title @emph{after} the initial @code{xdg_surface}
+configure --- Zoom's "Join Meeting" window is the canonical
+case and is covered by a default rule.
+
+YAML schema:
+
+@example
+rules:
+  - app-id: "pavucontrol"
+    floating: true
+  - title: "^Zoom Meeting$"
+    floating: true
+    regex: true
+  - app-id: "org.keepassxc.KeePassXC"
+    title: "Unlock"
+    floating: true
+    width: 500
+    height: 200
+    center: true
+@end example
+
+Float-management keybinds provided by the module (all
+configurable under the @code{windowrules:} module config):
+
+@multitable @columnfractions .35 .65
+@headitem Key @tab Action
+@item @code{Super+Space} @tab Toggle floating on focused client
+@item @code{Super+c} @tab Center focused floater on output
+@item @code{Super+Shift+Arrow} @tab Move focused floater
+@item @code{Super+Ctrl+Arrow} @tab Resize focused floater
+@end multitable
+
+CMacs ships an opinionated default rule list covering Zoom,
+Proton Mail Bridge, KeePassXC, pinentry, pavucontrol, GTK/KDE
+file choosers and "Preferences" dialogs, and common image
+viewers.  Override via the @code{cmacs-gowl-float-rules}
+defcustom or the @code{rules:} YAML section; both surfaces are
+additive.
+
+@subsection Dropdown
+@cindex dropdown
+@cindex guake terminal
+@cindex escape hatch
+
+Guake-style toggleable windows.  Each dropdown entry has a
+name, a @code{spawn-cmd}, a keybind, and a geometry spec
+(anchor edge plus fractional or absolute dimensions).  On the
+first keybind press the command is spawned and its first
+Wayland toplevel is captured via a compositor prefloat hint.
+Subsequent presses toggle visibility without destroying the
+window, and re-compute the target geometry for the currently
+focused output so the dropdown follows the user's focus across
+monitors.
+
+YAML schema:
+
+@example
+dropdowns:
+  - name: term
+    spawn-cmd: "foot"
+    keybind: "Super+grave"
+    width-pct: 1.0
+    height-pct: 0.4
+    anchor: top
+  - name: btop
+    spawn-cmd: "foot -e btop"
+    keybind: "Super+F10"
+    width-pct: 0.8
+    height-pct: 0.6
+    anchor: top
+@end example
+
+Because the module runs inside the gowl compositor rather than
+inside Emacs, the dropdown keybind still fires even when Emacs
+is frozen (native compilation stall, infinite Lisp loop, modal
+prompt deadlock).  This is the primary motivation for the
+feature: an always-available shell from which to @code{gdb}
+the stuck editor.
+
+From Elisp, the entries are configured via
+@code{cmacs-gowl-dropdowns}.  Interactive commands:
+
+@table @code
+@item cmacs-gowl-dropdown-toggle NAME
+Prompt for a dropdown name and toggle it.
+@item cmacs-gowl-toggle-float
+Toggle floating on the currently focused client.
+@item cmacs-gowl-reapply-float-rules
+Push @code{cmacs-gowl-float-rules} into the running config.
+@item cmacs-gowl-reapply-dropdowns
+Push @code{cmacs-gowl-dropdowns} into the running config and
+refresh the dropdown module.
+@end table
+
 @section Elisp Convenience Layer
 
 @cindex cmacs-gowl.el helpers

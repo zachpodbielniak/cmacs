@@ -633,6 +633,163 @@ Updates in real time via compositor signals.
 M-x cmacs-gowl-dashboard
 #+end_example
 
+* Window Rules and Floating Popups
+
+CMacs ships with two gowl modules that work together to keep
+modal/popup windows out of the tiled layout:
+
+- =windowrules= --- applies rules from the gowl config's =rules:=
+  section to every new client at map time.  The rules are
+  evaluated *before* the client is assigned a monitor, so a
+  matched rule can force floating, override tags, pin a monitor,
+  or set an explicit geometry without causing a visible
+  tile→float flicker.  The module also re-evaluates rules when
+  a client's title changes, which is the only way to catch apps
+  like Zoom that rename their toplevel after map (the "Join
+  Meeting" window is a classic case).
+- =dropdown= --- manages Guake-style toggleable windows.  Each
+  dropdown entry has a =spawn-cmd=, =keybind=, and =geometry=
+  spec.  On first keypress the command is spawned and its first
+  Wayland toplevel captured via a compositor prefloat hint; on
+  subsequent presses the window is hidden/shown without being
+  destroyed, and re-positioned on the currently focused output.
+
+** YAML config
+
+#+begin_example
+rules:
+  # Match by glob (default).  Float the pavucontrol popup.
+  - app-id: "pavucontrol"
+    floating: true
+
+  # Match by regex.  Zoom sets its title to "Zoom Meeting" after
+  # the initial xdg configure, so a post-map rule is needed.
+  - title: "^Zoom Meeting$"
+    floating: true
+    regex: true
+
+  # Explicit size + center on target monitor.
+  - app-id: "org.keepassxc.KeePassXC"
+    title: "Unlock"
+    floating: true
+    width: 500
+    height: 200
+    center: true
+
+dropdowns:
+  - name: term
+    spawn-cmd: "foot"
+    keybind: "Super+grave"
+    width-pct: 1.0
+    height-pct: 0.4
+    anchor: top
+
+  - name: btop
+    spawn-cmd: "foot -e btop"
+    keybind: "Super+F10"
+    width-pct: 0.8
+    height-pct: 0.6
+    anchor: top
+#+end_example
+
+Rule fields:
+
+| Key       | Type    | Description                                     |
+|-----------+---------+-------------------------------------------------|
+| =app-id=  | string  | Pattern matched against Wayland app_id         |
+| =title=   | string  | Pattern matched against window title           |
+| =regex=   | bool    | =true= for PCRE regex, otherwise shell glob    |
+| =floating= | bool    | Force floating state                            |
+| =tags=    | int     | Tag bitmask to assign                           |
+| =monitor= | int     | Monitor index (-1 = any)                        |
+| =width=   | int     | Explicit pixel width, 0 = keep natural          |
+| =height=  | int     | Explicit pixel height, 0 = keep natural         |
+| =center=  | bool    | Center floated match on monitor (default true) |
+
+Dropdown fields:
+
+| Key          | Type          | Description                             |
+|--------------+---------------+-----------------------------------------|
+| =name=       | string        | Unique identifier                        |
+| =spawn-cmd=  | string        | Shell command spawned on first toggle    |
+| =keybind=    | string        | Keybind (e.g. "Super+grave")             |
+| =width-pct=  | float         | Fractional width (0.0–1.0)               |
+| =height-pct= | float         | Fractional height (0.0–1.0)              |
+| =width=      | int           | Absolute width in pixels (overrides pct) |
+| =height=     | int           | Absolute height in pixels                |
+| =anchor=     | top/bottom/left/right | Edge to attach to                |
+
+** Elisp API
+
+The rule and dropdown lists can also be defined from =init.el=
+via defcustoms.  =cmacs-gowl-mode= pushes them into the running
+gowl config at mode-enable time.
+
+#+begin_src emacs-lisp
+(setq cmacs-gowl-float-rules
+      '((:app-id "pavucontrol"     :floating t)
+        (:title  "^Zoom Meeting$"  :floating t :regex t)
+        (:app-id "ch.protonmail.protonmail-bridge" :floating t)
+        (:title  "Join Meeting"    :floating t)))
+
+(setq cmacs-gowl-dropdowns
+      '((:name "term"
+         :spawn-cmd "foot"
+         :keybind "Super+grave"
+         :width-pct 1.0
+         :height-pct 0.4
+         :anchor top)
+        (:name "btop"
+         :spawn-cmd "foot -e btop"
+         :keybind "Super+F10"
+         :width-pct 0.8
+         :height-pct 0.6
+         :anchor top)))
+
+(cmacs-gowl-mode 1)
+#+end_src
+
+Shipped defaults under =cmacs-gowl-float-rules= cover common
+modal/popup windows: Zoom "Join Meeting", Proton Mail Bridge,
+KeePassXC unlock, pavucontrol, pinentry, GTK/KDE "Open File" /
+"Save As" / "Print" dialogs, and similar one-shot UI windows.
+=cmacs-gowl-default-dropdown-terminal= lets you override the
+default terminal used when a dropdown entry's =:spawn-cmd= is
+nil.
+
+Interactive commands:
+
+| Command                         | Description                                 |
+|---------------------------------+---------------------------------------------|
+| =M-x cmacs-gowl-toggle-float=   | Toggle floating on the focused client       |
+| =M-x cmacs-gowl-dropdown-toggle= | Prompt and toggle a dropdown by name        |
+| =M-x cmacs-gowl-reapply-float-rules= | Re-sync rules from defcustom           |
+| =M-x cmacs-gowl-reapply-dropdowns= | Re-sync dropdowns from defcustom          |
+
+Float keybinds (served by the =windowrules= module):
+
+| Key                   | Action                                    |
+|-----------------------+-------------------------------------------|
+| =Super+Space=         | Toggle floating on focused client         |
+| =Super+c=             | Center focused floater on output          |
+| =Super+Shift+Arrow=   | Move focused floater                      |
+| =Super+Ctrl+Arrow=    | Resize focused floater                    |
+
+These are configurable via the =windowrules= module's YAML
+section (keys =toggle-float=, =center-float=, =move-float-*=,
+=grow-float-*=, =shrink-float-*=).
+
+** Why this matters (debugging escape hatch)
+
+The =dropdown= module runs entirely inside the gowl compositor,
+not in Emacs's event loop.  If Emacs freezes --- native
+compilation stall, infinite Lisp loop, deadlock in a modal
+prompt --- the =Super+grave= keybind still fires, the terminal
+still appears, and you retain a shell from which to =gdb
+--pid=$(pidof emacs)=, send signals, or inspect state.  This is
+the primary motivation for the feature: an always-available
+escape hatch that survives Emacs pathologies.
+
 * Customization
 
 #+begin_src emacs-lisp

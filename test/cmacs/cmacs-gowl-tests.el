@@ -391,5 +391,121 @@
   (skip-unless (cmacs-feature-p 'gowl))
   (should-error (gowl-scratchpad-toggle 42) :type 'wrong-type-argument))
 
+;;; Window rule DEFUN tests
+
+(ert-deftest cmacs-gowl-test-add-rule-full-round-trip ()
+  "`gowl-add-rule-full' then `gowl-list-rules' returns the rule."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (skip-unless (gowl-running-p))
+  (let ((marker (format "test-rule-%d" (random 100000))))
+    (unwind-protect
+        (progn
+          (gowl-add-rule-full marker nil 0 t -1 0 0 nil)
+          (let* ((rules (gowl-list-rules))
+                 (found (seq-find
+                          (lambda (r)
+                            (equal (cdr (assq 'app-id r)) marker))
+                          rules)))
+            (should found)
+            (should (equal (cdr (assq 'floating found)) t))
+            (should (equal (cdr (assq 'regex found)) nil))))
+      (gowl-remove-rule marker nil))))
+
+(ert-deftest cmacs-gowl-test-add-rule-regex-flag ()
+  "Regex rules round-trip with the :regex field set."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (skip-unless (gowl-running-p))
+  (unwind-protect
+      (progn
+        (gowl-add-rule-full nil "^Zoom.*" 0 t -1 0 0 t)
+        (let* ((rules (gowl-list-rules))
+               (found (seq-find
+                        (lambda (r)
+                          (equal (cdr (assq 'title r)) "^Zoom.*"))
+                        rules)))
+          (should found)
+          (should (equal (cdr (assq 'regex found)) t))))
+    (gowl-remove-rule nil "^Zoom.*")))
+
+(ert-deftest cmacs-gowl-test-remove-rule-returns-nil-for-missing ()
+  "Removing a non-existent rule returns nil."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (skip-unless (gowl-running-p))
+  (should-not (gowl-remove-rule "nonexistent-app-id-xyz-123" nil)))
+
+(ert-deftest cmacs-gowl-test-clear-rules-empties-list ()
+  "`gowl-clear-rules' removes every rule."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (skip-unless (gowl-running-p))
+  ;; Snapshot for restoration.
+  (let ((snapshot (gowl-list-rules)))
+    (unwind-protect
+        (progn
+          (gowl-clear-rules)
+          (should (null (gowl-list-rules))))
+      ;; Restore.
+      (dolist (r snapshot)
+        (gowl-add-rule-full
+          (cdr (assq 'app-id r))
+          (cdr (assq 'title r))
+          (cdr (assq 'tags r))
+          (cdr (assq 'floating r))
+          (cdr (assq 'monitor r))
+          (cdr (assq 'width r))
+          (cdr (assq 'height r))
+          (cdr (assq 'regex r)))))))
+
+;;; Dropdown DEFUN tests
+
+(ert-deftest cmacs-gowl-test-add-dropdown-round-trip ()
+  "`gowl-add-dropdown' then `gowl-list-dropdowns' returns the entry."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (skip-unless (gowl-running-p))
+  (let ((marker (format "test-dd-%d" (random 100000))))
+    (unwind-protect
+        (progn
+          (gowl-add-dropdown marker "true" nil 1.0 0.4 0 0 'top)
+          (let* ((dds (gowl-list-dropdowns))
+                 (found (seq-find
+                          (lambda (d)
+                            (equal (cdr (assq 'name d)) marker))
+                          dds)))
+            (should found)
+            (should (equal (cdr (assq 'spawn-cmd found)) "true"))
+            (should (equal (cdr (assq 'anchor found)) 'top))))
+      (gowl-remove-dropdown marker))))
+
+(ert-deftest cmacs-gowl-test-add-dropdown-type-check ()
+  "`gowl-add-dropdown' requires NAME and SPAWN-CMD strings."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (should-error (gowl-add-dropdown 42 "foo" nil 1.0 0.4 0 0 'top)
+                :type 'wrong-type-argument))
+
+(ert-deftest cmacs-gowl-test-remove-dropdown-returns-nil-for-missing ()
+  "Removing a non-existent dropdown returns nil."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (skip-unless (gowl-running-p))
+  (should-not (gowl-remove-dropdown "nonexistent-dropdown-xyz-123")))
+
+(ert-deftest cmacs-gowl-test-dropdown-toggle-type-check ()
+  "`gowl-dropdown-toggle' requires a string argument."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (should-error (gowl-dropdown-toggle 42) :type 'wrong-type-argument))
+
+;;; Customization integration tests
+
+(ert-deftest cmacs-gowl-test-float-rules-defaults-valid ()
+  "Every shipped default float rule has a non-nil pattern."
+  (require 'cmacs-gowl)
+  (dolist (r cmacs-gowl-float-rules)
+    (should (or (plist-get r :app-id) (plist-get r :title)))))
+
+(ert-deftest cmacs-gowl-test-dropdowns-defaults-valid ()
+  "Every shipped default dropdown has a :name and either a spawn-cmd
+or nil (which falls back to `cmacs-gowl-default-dropdown-terminal')."
+  (require 'cmacs-gowl)
+  (dolist (d cmacs-gowl-dropdowns)
+    (should (plist-get d :name))))
+
 (provide 'cmacs-gowl-tests)
 ;;; cmacs-gowl-tests.el ends here

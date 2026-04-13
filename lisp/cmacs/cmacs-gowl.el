@@ -69,6 +69,106 @@ Example:
   :type '(repeat string)
   :group 'cmacs-gowl)
 
+(defcustom cmacs-gowl-float-rules
+  '(;; Video conferencing
+    (:app-id "zoom"                  :floating t)
+    (:app-id "Zoom"                  :floating t)
+    (:title  "^Zoom Meeting$"        :floating t :regex t)
+    (:title  "Join Meeting"          :floating t)
+    (:title  "^Zoom - .*"            :floating t :regex t)
+    (:app-id "teams-for-linux"       :floating t)
+    (:app-id "discord" :title "^Discord Updater$" :floating t)
+    ;; Email / productivity popups
+    (:app-id "ch.protonmail.protonmail-bridge" :floating t)
+    (:app-id "protonmail-bridge"     :floating t)
+    (:app-id "thunderbird" :title "^Write: .*" :floating t :regex t)
+    (:title  "^Compose: .*"          :floating t :regex t)
+    ;; Password / secret prompts
+    (:app-id "org.keepassxc.KeePassXC" :title "Unlock" :floating t)
+    (:app-id "pinentry"              :floating t)
+    (:app-id "pinentry-gtk-2"        :floating t)
+    (:app-id "pinentry-qt"           :floating t)
+    (:app-id "1password"             :floating t)
+    (:app-id "bitwarden"             :floating t)
+    ;; System / media control popups
+    (:app-id "pavucontrol"           :floating t)
+    (:app-id "org.pulseaudio.pavucontrol" :floating t)
+    (:app-id "blueman-manager"       :floating t)
+    (:app-id "nm-connection-editor"  :floating t)
+    (:app-id "org.gnome.FileRoller"  :floating t)
+    ;; File choosers / dialog titles
+    (:title  "^Open File$"           :floating t)
+    (:title  "^Open Files$"          :floating t)
+    (:title  "^Save As$"             :floating t)
+    (:title  "^Save File$"           :floating t)
+    (:title  "^Print$"               :floating t)
+    (:title  "^Print Preview$"       :floating t)
+    (:title  "^Preferences$"         :floating t)
+    (:title  "^Settings$"            :floating t)
+    (:title  "^About .*"             :floating t :regex t)
+    (:title  "^File Properties$"     :floating t)
+    ;; Image viewers (typically float in a tiling WM)
+    (:app-id "imv"                   :floating t)
+    (:app-id "feh"                   :floating t)
+    (:app-id "org.gnome.Loupe"       :floating t))
+  "Window rules applied by `cmacs-gowl-mode' on enable.
+Each element is a plist with the following keys:
+
+  :app-id    Pattern matched against the Wayland app_id.
+  :title     Pattern matched against the window title.
+  :floating  Non-nil to force the client floating.
+  :regex     Non-nil to interpret :app-id and :title as PCRE
+             regexes instead of shell globs.
+  :tags      Optional integer tag bitmask.
+  :monitor   Optional integer monitor index (-1 for any).
+  :width     Optional explicit width in pixels.
+  :height    Optional explicit height in pixels.
+  :center    t (default) to center floated matches on the
+             target monitor, nil to keep the client's position.
+
+The shipped defaults cover common modal/popup windows that
+should float above the tiled Emacs frame: Zoom \"Join Meeting\",
+Proton Mail Bridge, KeePassXC unlock, pinentry, pavucontrol,
+file chooser dialogs, and similar one-shot UI windows."
+  :type '(repeat plist)
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-default-dropdown-terminal "gst"
+  "Default terminal command used by `cmacs-gowl-dropdowns' entries
+whose :spawn-cmd is nil.  Defaults to gst (gtk-shell-toolkit
+terminal) since that's what the gowl config ships with; set to
+foot, alacritty, wezterm, kitty, etc. if you prefer one of those."
+  :type 'string
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-dropdowns
+  '((:name "term"
+     :spawn-cmd nil
+     :keybind "Super+grave"
+     :width-pct 1.0
+     :height-pct 0.4
+     :anchor top))
+  "Guake-style dropdown entries managed by `cmacs-gowl-mode'.
+Each element is a plist:
+
+  :name        Unique string identifier.
+  :spawn-cmd   Shell command to spawn on first toggle, or nil
+               to fall back to `cmacs-gowl-default-dropdown-terminal'.
+  :keybind     Keybind string (e.g. \"Super+grave\"), or nil.
+  :width-pct   Fractional width (0.0–1.0) of target output.
+  :height-pct  Fractional height (0.0–1.0) of target output.
+  :width       Optional absolute width in pixels.
+  :height      Optional absolute height in pixels.
+  :anchor      Symbol `top', `bottom', `left', or `right'.
+
+The first press of the keybind spawns the command and captures
+its first Wayland toplevel.  Subsequent presses toggle the
+window's visibility without destroying it, and re-compute its
+position for the currently focused output so the dropdown
+always appears on the user's active monitor."
+  :type '(repeat plist)
+  :group 'cmacs-gowl)
+
 (defcustom cmacs-gowl-default-layout "tile"
   "Default layout to apply when the compositor starts."
   :type 'string
@@ -84,6 +184,53 @@ Example:
 
 ;;; Internal functions
 
+(defun cmacs-gowl--apply-float-rules ()
+  "Push `cmacs-gowl-float-rules' into the running gowl config.
+Clears any existing rules first so this function is idempotent
+across mode re-enables.  Skips the push entirely if the rules
+list is empty or gowl is not running."
+  (when (and (gowl-running-p) cmacs-gowl-float-rules)
+    (gowl-clear-rules)
+    (dolist (rule cmacs-gowl-float-rules)
+      (let ((app-id   (plist-get rule :app-id))
+            (title    (plist-get rule :title))
+            (tags     (or (plist-get rule :tags) 0))
+            (floating (plist-get rule :floating))
+            (monitor  (or (plist-get rule :monitor) -1))
+            (width    (or (plist-get rule :width) 0))
+            (height   (or (plist-get rule :height) 0))
+            (regex    (plist-get rule :regex)))
+        ;; The :center key is honored by YAML but always true via
+        ;; this DEFUN entry point (Emacs DEFUN max is 8 args).
+        (condition-case err
+            (gowl-add-rule-full app-id title tags floating
+                                 monitor width height regex)
+          (error
+           (message "cmacs-gowl: rule %S failed: %s" rule err)))))))
+
+(defun cmacs-gowl--apply-dropdowns ()
+  "Push `cmacs-gowl-dropdowns' into the running gowl config.
+Each entry whose :spawn-cmd is nil is replaced with
+`cmacs-gowl-default-dropdown-terminal' so users can override the
+terminal choice with a single setting."
+  (when (and (gowl-running-p) cmacs-gowl-dropdowns)
+    (dolist (dd cmacs-gowl-dropdowns)
+      (let ((name        (plist-get dd :name))
+            (spawn-cmd   (or (plist-get dd :spawn-cmd)
+                             cmacs-gowl-default-dropdown-terminal))
+            (keybind     (plist-get dd :keybind))
+            (width-pct   (or (plist-get dd :width-pct) 1.0))
+            (height-pct  (or (plist-get dd :height-pct) 0.4))
+            (width       (or (plist-get dd :width) 0))
+            (height      (or (plist-get dd :height) 0))
+            (anchor      (or (plist-get dd :anchor) 'top)))
+        (condition-case err
+            (gowl-add-dropdown name spawn-cmd keybind
+                                width-pct height-pct
+                                width height anchor)
+          (error
+           (message "cmacs-gowl: dropdown %S failed: %s" dd err)))))))
+
 (defun cmacs-gowl--start ()
   "Start the Gowl compositor and apply configuration.
 When launched with --gowl, the compositor is already running and
@@ -93,6 +240,20 @@ thread is running and applies configuration."
   ;; Apply default layout.
   (when cmacs-gowl-default-layout
     (gowl-set-layout cmacs-gowl-default-layout))
+  ;; Push float rules and dropdowns from defcustoms into the
+  ;; running gowl config.  Dropdowns must be pushed before the
+  ;; dropdown module reads them at its own startup; in the
+  ;; --gowl launch path the module has already initialised, so
+  ;; runtime additions work via the config-scan fallback in
+  ;; modules/dropdown/dd_adopt_config_entry().
+  (cmacs-gowl--apply-float-rules)
+  (cmacs-gowl--apply-dropdowns)
+  ;; Tell the dropdown module to adopt any newly-added config
+  ;; entries so per-entry keybinds work for defcustom-driven
+  ;; dropdowns after module startup.  The DEFUN is a no-op if
+  ;; the dropdown module isn't loaded.
+  (when (fboundp 'gowl-dropdown-refresh)
+    (ignore-errors (gowl-dropdown-refresh)))
   ;; Ensure Emacs has keyboard focus.  The client may have mapped
   ;; before focus was properly assigned, so explicitly focus it.
   (run-with-timer 0.5 nil
@@ -569,6 +730,60 @@ whose underlying wlr resources may already be freed."
           (error nil)))
       (setq gowl-embedded-client nil)
       (setq gowl-embedded-client-pid nil))))
+
+;;;###autoload
+(defun cmacs-gowl-embed-release (&optional client)
+  "Release CLIENT from its embedded buffer and float it freely.
+Clears the compositor's `embedded' flag, reparents the scene
+node to the FLOAT layer, re-arranges the layout so neighbouring
+tiled clients reclaim space, and centers the released client on
+its current monitor at half its monitor's size.
+
+Also detaches the embed bookkeeping on the elisp side: clears
+the owning buffer's `gowl-embedded-client' / `-pid' buffer-locals
+and removes window dedication so `gowl-embed--adjust-size' stops
+tracking it.
+
+CLIENT defaults to the buffer-local `gowl-embedded-client' in the
+current buffer, or the focused gowl client if there is none."
+  (interactive)
+  (unless (gowl-running-p)
+    (user-error "Gowl compositor is not running"))
+  (let ((c (or client
+               gowl-embedded-client
+               (gowl-focused-client))))
+    (unless c
+      (user-error "No client to release"))
+    ;; Detach elisp-side embed state: walk every buffer that
+    ;; references this client and clear its bookkeeping.
+    (let ((target-pid (gowl-client-pid c)))
+      (dolist (buf (buffer-list))
+        (when (and (buffer-local-value 'gowl-embedded-client-pid buf)
+                   (equal (buffer-local-value 'gowl-embedded-client-pid buf)
+                          target-pid))
+          (with-current-buffer buf
+            (setq gowl-embedded-client nil)
+            (setq gowl-embedded-client-pid nil))
+          (dolist (win (get-buffer-window-list buf nil t))
+            (set-window-dedicated-p win nil)))))
+    ;; Compositor-side release: clear isembedded, then set
+    ;; floating which reparents to FLOAT and re-arranges.
+    (gowl-set-client-embedded c nil)
+    (gowl-set-client-floating c t)
+    ;; Center the released client on its monitor at half size.
+    (let* ((mon-info (gowl-monitor-info))
+           (geom (cdr (assq 'geometry mon-info)))
+           (mx (nth 0 geom))
+           (my (nth 1 geom))
+           (mw (nth 2 geom))
+           (mh (nth 3 geom))
+           (cw (/ mw 2))
+           (ch (/ mh 2)))
+      (gowl-move-client c
+                        (+ mx (/ (- mw cw) 2))
+                        (+ my (/ (- mh ch) 2)))
+      (gowl-resize-client c cw ch))
+    (message "Released embedded client; floating on monitor center")))
 
 (defun gowl-embed--adjust-size (frame)
   "Reposition embedded clients to match their window dimensions in FRAME.
@@ -1066,6 +1281,135 @@ Each function receives the saved file path as its argument.")
         (message "Recording saved: %s" path)
       (message "No recording in progress"))
     path))
+
+;;; Interactive commands for window rules and dropdowns
+
+(defun cmacs-gowl-toggle-float ()
+  "Toggle the floating state of the currently focused client."
+  (interactive)
+  (unless (gowl-running-p)
+    (user-error "Gowl compositor is not running"))
+  (unless (gowl-float-toggle)
+    (message "No focused client")))
+
+;;; Module keybind testing — synthesize key events from elisp
+
+;; These constants mirror the GOWL_KEY_MOD_* bits in gowl-enums.h,
+;; which are the same bits wlroots reports for keyboard modifier
+;; state.  Combine with logior.
+(defconst cmacs-gowl-mod-shift 1)
+(defconst cmacs-gowl-mod-caps  2)
+(defconst cmacs-gowl-mod-ctrl  4)
+(defconst cmacs-gowl-mod-alt   8)
+(defconst cmacs-gowl-mod-mod2  16)
+(defconst cmacs-gowl-mod-mod3  32)
+(defconst cmacs-gowl-mod-super 64)
+(defconst cmacs-gowl-mod-mod5  128)
+
+;; A handful of XKB keysym constants that are awkward to spell as
+;; raw hex.  Full list lives in /usr/include/xkbcommon/xkbcommon-keysyms.h.
+(defconst cmacs-gowl-key-grave #x0060)   ; `
+(defconst cmacs-gowl-key-space #x0020)   ; space
+(defconst cmacs-gowl-key-left  #xFF51)
+(defconst cmacs-gowl-key-right #xFF53)
+(defconst cmacs-gowl-key-up    #xFF52)
+(defconst cmacs-gowl-key-down  #xFF54)
+(defconst cmacs-gowl-key-F10   #xFFC7)
+(defconst cmacs-gowl-key-F11   #xFFC8)
+(defconst cmacs-gowl-key-F12   #xFFC9)
+
+;;;###autoload
+(defun cmacs-gowl-test-dropdown (&optional name)
+  "Test-trigger a dropdown by NAME without using a real keybind.
+If NAME is nil, toggles the first entry in `cmacs-gowl-dropdowns'
+(usually \"term\").  Dispatches through the same code path as a
+real key event — goes through the dropdown module's
+toggle_by_name implementation, which spawns the command on first
+call and toggles visibility on subsequent calls."
+  (interactive "sDropdown name (empty = first): ")
+  (unless (gowl-running-p)
+    (user-error "Gowl compositor is not running"))
+  (let ((target (or name
+                    (plist-get (car cmacs-gowl-dropdowns) :name)
+                    "term")))
+    (if (gowl-dropdown-toggle target)
+        (message "Dropdown %s toggled" target)
+      (message "Dropdown %s not found" target))))
+
+;;;###autoload
+(defun cmacs-gowl-test-float-toggle ()
+  "Test-trigger the windowrules float-toggle action on the focused
+client.  Goes through `gowl-float-toggle' directly (bypassing the
+keybind layer) so the test works even if no modifier keybind is
+registered."
+  (interactive)
+  (unless (gowl-running-p)
+    (user-error "Gowl compositor is not running"))
+  (if (gowl-float-toggle)
+      (message "Floating toggled on focused client")
+    (message "No focused client")))
+
+;;;###autoload
+(defun cmacs-gowl-test-synth-key (modifiers keysym)
+  "Synthesise a module keybind dispatch for MODIFIERS and KEYSYM.
+MODIFIERS is an integer bitmask built from
+`cmacs-gowl-mod-super', `cmacs-gowl-mod-shift', etc.
+KEYSYM is an XKB keysym integer.  Returns t if any module
+consumed the event.
+
+Example — simulate pressing Super+grave (the default dropdown
+keybind) without touching the keyboard:
+
+  (cmacs-gowl-test-synth-key cmacs-gowl-mod-super cmacs-gowl-key-grave)"
+  (interactive "nModifiers (integer bitmask): \nnKeysym (integer): ")
+  (unless (gowl-running-p)
+    (user-error "Gowl compositor is not running"))
+  (let ((consumed (gowl-module-dispatch-key modifiers keysym)))
+    (message "synth dispatch mods=%d key=0x%X consumed=%s"
+             modifiers keysym consumed)
+    consumed))
+
+(defun cmacs-gowl-dropdown-toggle (name)
+  "Toggle the dropdown named NAME.
+Interactively prompts using the names from `cmacs-gowl-dropdowns'
+and any entries currently registered in the running gowl config."
+  (interactive
+   (let ((names (delete-dups
+                  (append
+                    (mapcar (lambda (dd) (plist-get dd :name))
+                            cmacs-gowl-dropdowns)
+                    (and (gowl-running-p)
+                         (mapcar (lambda (e)
+                                   (cdr (assq 'name e)))
+                                 (gowl-list-dropdowns)))))))
+     (list (completing-read "Dropdown: " (delq nil names) nil t))))
+  (unless (gowl-running-p)
+    (user-error "Gowl compositor is not running"))
+  (unless (gowl-dropdown-toggle name)
+    (message "Dropdown %s not found" name)))
+
+(defun cmacs-gowl-reapply-float-rules ()
+  "Push `cmacs-gowl-float-rules' into the running gowl config.
+Use after editing the defcustom at runtime to re-sync the rule
+set without restarting `cmacs-gowl-mode'."
+  (interactive)
+  (unless (gowl-running-p)
+    (user-error "Gowl compositor is not running"))
+  (cmacs-gowl--apply-float-rules)
+  (message "Applied %d float rules" (length cmacs-gowl-float-rules)))
+
+(defun cmacs-gowl-reapply-dropdowns ()
+  "Push `cmacs-gowl-dropdowns' into the running gowl config.
+Use after editing the defcustom at runtime.  Calls
+`gowl-dropdown-refresh' so the dropdown module picks up new
+entries without a mode cycle."
+  (interactive)
+  (unless (gowl-running-p)
+    (user-error "Gowl compositor is not running"))
+  (cmacs-gowl--apply-dropdowns)
+  (when (fboundp 'gowl-dropdown-refresh)
+    (ignore-errors (gowl-dropdown-refresh)))
+  (message "Applied %d dropdowns" (length cmacs-gowl-dropdowns)))
 
 (provide 'cmacs-gowl)
 ;;; cmacs-gowl.el ends here

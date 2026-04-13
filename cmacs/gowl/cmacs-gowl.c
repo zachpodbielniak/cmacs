@@ -1498,12 +1498,38 @@ DEFUN ("gowl-set-tags", Fgowl_set_tags, Sgowl_set_tags, 2, 2, 0,
 
 DEFUN ("gowl-toggle-client-floating", Fgowl_toggle_client_floating,
        Sgowl_toggle_client_floating, 1, 1, 0,
-       doc: /* Toggle floating state of CLIENT. */)
+       doc: /* Toggle floating state of CLIENT.
+Reparents CLIENT's scene node to the FLOAT or TILE layer and
+re-arranges the layout so neighbouring tiled clients reclaim
+or yield space.  Signals an error if CLIENT is embedded — use
+`cmacs-gowl-embed-release' to free an embedded client first. */)
   (Lisp_Object client)
 {
   GowlClient *c = gowl_resolve_client (client);
-  gowl_client_set_floating (c, !gowl_client_get_floating (c));
+  if (gowl_client_get_embedded (c))
+    error ("gowl: client is embedded; release it first");
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  gowl_compositor_set_floating (cmacs_gowl_compositor, c,
+                                 !gowl_client_get_floating (c));
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
   return gowl_client_get_floating (c) ? Qt : Qnil;
+}
+
+DEFUN ("gowl-set-client-floating", Fgowl_set_client_floating,
+       Sgowl_set_client_floating, 2, 2, 0,
+       doc: /* Set floating state of CLIENT to FLOATING.
+Reparents the scene node to the FLOAT or TILE layer and
+re-arranges the layout.  Unlike `gowl-toggle-client-floating'
+this accepts embedded clients — callers releasing a previously
+embedded client should clear `gowl-set-client-embedded' first
+and then use this to move the client into the float layer. */)
+  (Lisp_Object client, Lisp_Object floating)
+{
+  GowlClient *c = gowl_resolve_client (client);
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  gowl_compositor_set_floating (cmacs_gowl_compositor, c, !NILP (floating));
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+  return NILP (floating) ? Qnil : Qt;
 }
 
 DEFUN ("gowl-toggle-client-fullscreen", Fgowl_toggle_client_fullscreen,
@@ -2945,8 +2971,94 @@ TAGS is a bitmask, FLOATING is a boolean, MONITOR is an integer (-1 for any). */
   return Qt;
 }
 
+DEFUN ("gowl-add-rule-full", Fgowl_add_rule_full, Sgowl_add_rule_full,
+       0, 8, 0,
+       doc: /* Add a window placement rule with every tunable field.
+APP-ID and TITLE are pattern strings (or nil).  TAGS is a bitmask.
+FLOATING and REGEX are booleans.  MONITOR, WIDTH, HEIGHT are integers
+(MONITOR -1 for any; WIDTH/HEIGHT 0 to keep natural size).  When
+REGEX is non-nil, APP-ID and TITLE are compiled as PCRE regexes
+(GRegex) instead of being matched as shell globs.
+
+The rule's `center' flag (center floated match on target monitor)
+is always true from this entry point.  Use a YAML `rules:' section
+with `center: false' to opt out, or call `gowl-add-rule' for the
+minimal legacy form.  */)
+  (Lisp_Object app_id, Lisp_Object title, Lisp_Object tags,
+   Lisp_Object floating, Lisp_Object monitor_idx, Lisp_Object width,
+   Lisp_Object height, Lisp_Object regex)
+{
+  GowlConfig *config;
+  const gchar *app_str = NULL;
+  const gchar *title_str = NULL;
+  guint32 tags_val = 0;
+  gboolean float_val = FALSE;
+  gint mon_val = -1;
+  gint width_val = 0;
+  gint height_val = 0;
+  gboolean regex_val = FALSE;
+
+  GOWL_CHECK_RUNNING ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    error ("No gowl config loaded");
+
+  if (STRINGP (app_id))       app_str = SSDATA (app_id);
+  if (STRINGP (title))        title_str = SSDATA (title);
+  if (FIXNATP (tags))         tags_val = (guint32)XFIXNAT (tags);
+  if (!NILP (floating))       float_val = TRUE;
+  if (FIXNUMP (monitor_idx))  mon_val = (gint)XFIXNUM (monitor_idx);
+  if (FIXNATP (width))        width_val = (gint)XFIXNAT (width);
+  if (FIXNATP (height))       height_val = (gint)XFIXNAT (height);
+  if (!NILP (regex))          regex_val = TRUE;
+
+  gowl_config_add_rule_full (config, app_str, title_str, tags_val,
+                              float_val, mon_val, width_val,
+                              height_val, TRUE, regex_val);
+  return Qt;
+}
+
+DEFUN ("gowl-remove-rule", Fgowl_remove_rule, Sgowl_remove_rule, 0, 2, 0,
+       doc: /* Remove the first window rule matching APP-ID and TITLE literally.
+Both arguments are strings or nil; nil matches a rule's nil field.
+Returns t if a rule was removed, nil otherwise. */)
+  (Lisp_Object app_id, Lisp_Object title)
+{
+  GowlConfig *config;
+  const gchar *app_str = NULL;
+  const gchar *title_str = NULL;
+  guint removed;
+
+  GOWL_CHECK_RUNNING ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    return Qnil;
+
+  if (STRINGP (app_id))  app_str = SSDATA (app_id);
+  if (STRINGP (title))   title_str = SSDATA (title);
+
+  removed = gowl_config_remove_rule (config, app_str, title_str);
+  return removed > 0 ? Qt : Qnil;
+}
+
+DEFUN ("gowl-clear-rules", Fgowl_clear_rules, Sgowl_clear_rules, 0, 0, 0,
+       doc: /* Remove every window rule from the gowl config. */)
+  (void)
+{
+  GowlConfig *config;
+
+  GOWL_CHECK_RUNNING ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    return Qnil;
+  gowl_config_clear_rules (config);
+  return Qt;
+}
+
 DEFUN ("gowl-list-rules", Fgowl_list_rules, Sgowl_list_rules, 0, 0, 0,
-       doc: /* Return a list of window rule alists. */)
+       doc: /* Return a list of window rule alists.
+Each alist contains: app-id, title, tags, floating, monitor, width,
+height, center, regex. */)
   (void)
 {
   GowlConfig *config;
@@ -2965,21 +3077,269 @@ DEFUN ("gowl-list-rules", Fgowl_list_rules, Sgowl_list_rules, 0, 0, 0,
       GowlRuleEntry *r = g_ptr_array_index (rules, i);
       Lisp_Object entry;
 
-      entry = list5 (
-        Fcons (intern_c_string ("app-id"),
-               r->app_id ? build_string (r->app_id) : Qnil),
-        Fcons (intern_c_string ("title"),
-               r->title ? build_string (r->title) : Qnil),
-        Fcons (intern_c_string ("tags"),
-               make_fixnum ((EMACS_INT)r->tags)),
-        Fcons (intern_c_string ("floating"),
-               r->floating ? Qt : Qnil),
-        Fcons (intern_c_string ("monitor"),
-               make_fixnum (r->monitor)));
+      entry = Fcons (Fcons (intern_c_string ("app-id"),
+                             r->app_id ? build_string (r->app_id) : Qnil),
+                     Fcons (Fcons (intern_c_string ("title"),
+                             r->title ? build_string (r->title) : Qnil),
+                     Fcons (Fcons (intern_c_string ("tags"),
+                             make_fixnum ((EMACS_INT)r->tags)),
+                     Fcons (Fcons (intern_c_string ("floating"),
+                             r->floating ? Qt : Qnil),
+                     Fcons (Fcons (intern_c_string ("monitor"),
+                             make_fixnum (r->monitor)),
+                     Fcons (Fcons (intern_c_string ("width"),
+                             make_fixnum (r->width)),
+                     Fcons (Fcons (intern_c_string ("height"),
+                             make_fixnum (r->height)),
+                     Fcons (Fcons (intern_c_string ("center"),
+                             r->center ? Qt : Qnil),
+                     Fcons (Fcons (intern_c_string ("regex"),
+                             r->regex_mode ? Qt : Qnil),
+                            Qnil)))))))));
 
       result = Fcons (entry, result);
     }
 
+  return Fnreverse (result);
+}
+
+DEFUN ("gowl-float-toggle", Fgowl_float_toggle, Sgowl_float_toggle,
+       0, 0, 0,
+       doc: /* Toggle the floating state of the currently focused client.
+Reparents the scene node to the FLOAT or TILE layer and re-runs
+the layout so neighbouring tiled clients reclaim or yield space.
+
+Returns t if the client was toggled, nil if no client is
+focused, and signals an error if the focused client is embedded
+(use `cmacs-gowl-embed-release' to free an embedded client). */)
+  (void)
+{
+  GowlClient *c;
+
+  GOWL_CHECK_RUNNING ();
+  c = gowl_compositor_get_focused_client (cmacs_gowl_compositor);
+  if (c == NULL)
+    return Qnil;
+  if (gowl_client_get_embedded (c))
+    error ("gowl: focused client is embedded; release it first");
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  gowl_compositor_set_floating (cmacs_gowl_compositor, c,
+                                 !gowl_client_get_floating (c));
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+  return Qt;
+}
+
+DEFUN ("gowl-module-dispatch-key", Fgowl_module_dispatch_key,
+       Sgowl_module_dispatch_key, 2, 2, 0,
+       doc: /* Synthetically dispatch a key event to all keybind-handler modules.
+MODIFIERS is an integer bitmask (Shift=1, Ctrl=4, Alt=8, Super=64).
+KEYSYM is the XKB keysym as an integer.  Returns t if any module
+consumed the event, nil otherwise.  Useful for testing the
+`windowrules' and `dropdown' module keybinds from elisp without
+having to press the real key combination.
+
+Example — toggle the first dropdown bound to Super+grave (keysym
+0xFE50 on many layouts; use `xev' to find the right one for yours):
+
+    (gowl-module-dispatch-key 64 #x0060)  ; Super + ` (grave) */)
+  (Lisp_Object modifiers, Lisp_Object keysym)
+{
+  GowlModuleManager *mgr;
+  guint mods;
+  guint sym;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_FIXNAT (modifiers);
+  CHECK_FIXNAT (keysym);
+  mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
+  if (mgr == NULL)
+    return Qnil;
+  mods = (guint)XFIXNAT (modifiers);
+  sym  = (guint)XFIXNAT (keysym);
+  return gowl_module_manager_dispatch_key (mgr, mods, sym, TRUE)
+           ? Qt : Qnil;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ * DROPDOWNS (Guake-style toggleable windows)
+ * ══════════════════════════════════════════════════════════════════════ */
+
+DEFUN ("gowl-add-dropdown", Fgowl_add_dropdown, Sgowl_add_dropdown,
+       3, 8, 0,
+       doc: /* Add a dropdown entry to the gowl config.
+NAME is a unique string identifier.  SPAWN-CMD is the shell command
+spawned on first toggle.  KEYBIND is a keybind string parsed via
+`gowl-keybind-parse' (e.g. \"Super+grave\"), or nil for elisp-only
+toggling.  WIDTH-PCT and HEIGHT-PCT are fractions (0.0–1.0) of the
+target monitor; WIDTH and HEIGHT are absolute pixel sizes and take
+precedence when non-zero.  ANCHOR is a symbol: `top', `bottom',
+`left', or `right'.  */)
+  (Lisp_Object name, Lisp_Object spawn_cmd, Lisp_Object keybind,
+   Lisp_Object width_pct, Lisp_Object height_pct,
+   Lisp_Object width, Lisp_Object height, Lisp_Object anchor)
+{
+  GowlConfig *config;
+  const gchar *keybind_str = NULL;
+  gdouble wp = 1.0;
+  gdouble hp = 0.4;
+  gint    wa = 0;
+  gint    ha = 0;
+  gint    anc = 0;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_STRING (name);
+  CHECK_STRING (spawn_cmd);
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    error ("No gowl config loaded");
+
+  if (STRINGP (keybind))  keybind_str = SSDATA (keybind);
+  if (FLOATP (width_pct)) wp = XFLOAT_DATA (width_pct);
+  else if (FIXNUMP (width_pct)) wp = (gdouble)XFIXNUM (width_pct);
+  if (FLOATP (height_pct)) hp = XFLOAT_DATA (height_pct);
+  else if (FIXNUMP (height_pct)) hp = (gdouble)XFIXNUM (height_pct);
+  if (FIXNATP (width))    wa = (gint)XFIXNAT (width);
+  if (FIXNATP (height))   ha = (gint)XFIXNAT (height);
+
+  if (EQ (anchor, intern_c_string ("bottom")))     anc = 1;
+  else if (EQ (anchor, intern_c_string ("left")))  anc = 2;
+  else if (EQ (anchor, intern_c_string ("right"))) anc = 3;
+  else                                              anc = 0;
+
+  gowl_config_add_dropdown (config, SSDATA (name), SSDATA (spawn_cmd),
+                             keybind_str, wp, hp, wa, ha, anc);
+  return Qt;
+}
+
+DEFUN ("gowl-remove-dropdown", Fgowl_remove_dropdown,
+       Sgowl_remove_dropdown, 1, 1, 0,
+       doc: /* Remove the dropdown entry named NAME. */)
+  (Lisp_Object name)
+{
+  GowlConfig *config;
+  guint removed;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_STRING (name);
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    return Qnil;
+  removed = gowl_config_remove_dropdown (config, SSDATA (name));
+  return removed > 0 ? Qt : Qnil;
+}
+
+/* Look up the active dropdown module and return it as the
+   #GowlDropdownProvider interface.  Returns NULL if the module
+   is not loaded, not active, or does not implement the
+   interface. */
+static GowlDropdownProvider *
+cmacs_gowl_find_dropdown_provider (void)
+{
+  GowlModuleManager *mgr;
+  GowlModule        *mod;
+
+  mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
+  if (mgr == NULL)
+    return NULL;
+  mod = gowl_module_manager_find_module (mgr, "dropdown");
+  if (mod == NULL
+      || !GOWL_IS_DROPDOWN_PROVIDER (mod)
+      || !gowl_module_get_is_active (mod))
+    return NULL;
+  return GOWL_DROPDOWN_PROVIDER (mod);
+}
+
+DEFUN ("gowl-dropdown-refresh", Fgowl_dropdown_refresh,
+       Sgowl_dropdown_refresh, 0, 0, 0,
+       doc: /* Refresh the dropdown module from the current gowl config.
+Scans the config's dropdown list for any entries not already
+registered in the dropdown module and adopts them.  Returns the
+number of newly adopted entries, or nil if no dropdown provider
+module is loaded. */)
+  (void)
+{
+  GowlDropdownProvider *prov;
+  guint                 adopted;
+
+  GOWL_CHECK_RUNNING ();
+  prov = cmacs_gowl_find_dropdown_provider ();
+  if (prov == NULL)
+    return Qnil;
+  adopted = gowl_dropdown_provider_refresh (prov);
+  return make_fixnum ((EMACS_INT)adopted);
+}
+
+DEFUN ("gowl-dropdown-toggle", Fgowl_dropdown_toggle,
+       Sgowl_dropdown_toggle, 1, 1, 0,
+       doc: /* Toggle the dropdown named NAME.
+Finds the first active module implementing `GowlDropdownProvider'
+and dispatches the toggle through its interface vfunc.  Returns t
+if a matching entry was toggled, nil if the provider or entry is
+missing.  Entries added via `gowl-add-dropdown' after module
+startup are picked up via the module's config-scan fallback
+inside its toggle_by_name implementation.  */)
+  (Lisp_Object name)
+{
+  GowlDropdownProvider *prov;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_STRING (name);
+  prov = cmacs_gowl_find_dropdown_provider ();
+  if (prov == NULL)
+    {
+      message ("dropdown module not loaded");
+      return Qnil;
+    }
+  return gowl_dropdown_provider_toggle_by_name (prov, SSDATA (name))
+           ? Qt : Qnil;
+}
+
+DEFUN ("gowl-list-dropdowns", Fgowl_list_dropdowns, Sgowl_list_dropdowns,
+       0, 0, 0,
+       doc: /* Return a list of dropdown alists. */)
+  (void)
+{
+  GowlConfig *config;
+  GPtrArray *arr;
+  Lisp_Object result = Qnil;
+  guint i;
+
+  GOWL_CHECK_RUNNING ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    return Qnil;
+  arr = gowl_config_get_dropdowns (config);
+  for (i = 0; i < arr->len; i++)
+    {
+      GowlDropdownEntry *e = g_ptr_array_index (arr, i);
+      Lisp_Object entry;
+      Lisp_Object anchor_sym;
+
+      switch (e->anchor) {
+      case 1: anchor_sym = intern_c_string ("bottom"); break;
+      case 2: anchor_sym = intern_c_string ("left"); break;
+      case 3: anchor_sym = intern_c_string ("right"); break;
+      default: anchor_sym = intern_c_string ("top"); break;
+      }
+
+      entry = Fcons (Fcons (intern_c_string ("name"),
+                             build_string (e->name)),
+               Fcons (Fcons (intern_c_string ("spawn-cmd"),
+                             build_string (e->spawn_cmd)),
+               Fcons (Fcons (intern_c_string ("keybind"),
+                             e->keybind ? build_string (e->keybind) : Qnil),
+               Fcons (Fcons (intern_c_string ("width-pct"),
+                             make_float (e->width_pct)),
+               Fcons (Fcons (intern_c_string ("height-pct"),
+                             make_float (e->height_pct)),
+               Fcons (Fcons (intern_c_string ("width"),
+                             make_fixnum (e->width_abs)),
+               Fcons (Fcons (intern_c_string ("height"),
+                             make_fixnum (e->height_abs)),
+               Fcons (Fcons (intern_c_string ("anchor"), anchor_sym),
+                             Qnil))))))));
+      result = Fcons (entry, result);
+    }
   return Fnreverse (result);
 }
 
@@ -3711,7 +4071,7 @@ Returns t if the scratchpad module handled the request. */)
   (Lisp_Object name)
 {
   GowlModuleManager *mgr;
-  GList *modules, *l;
+  GowlModule        *mod;
 
   CHECK_STRING (name);
   GOWL_CHECK_RUNNING ();
@@ -3720,21 +4080,15 @@ Returns t if the scratchpad module handled the request. */)
   if (mgr == NULL)
     error ("No module manager");
 
-  /* Find the first module implementing GowlScratchpadHandler. */
-  modules = gowl_module_manager_get_modules (mgr);
-  for (l = modules; l != NULL; l = l->next)
-    {
-      GowlModule *mod = GOWL_MODULE (l->data);
-      if (GOWL_IS_SCRATCHPAD_HANDLER (mod)
-          && gowl_module_get_is_active (mod))
-        {
-          gowl_scratchpad_handler_toggle_scratchpad (
-            GOWL_SCRATCHPAD_HANDLER (mod), SSDATA (name));
-          return Qt;
-        }
-    }
+  mod = gowl_module_manager_find_module (mgr, "scratchpad");
+  if (mod == NULL
+      || !GOWL_IS_SCRATCHPAD_HANDLER (mod)
+      || !gowl_module_get_is_active (mod))
+    return Qnil;
 
-  return Qnil;
+  gowl_scratchpad_handler_toggle_scratchpad (
+    GOWL_SCRATCHPAD_HANDLER (mod), SSDATA (name));
+  return Qt;
 }
 
 
@@ -5544,6 +5898,7 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_resize_client);
   defsubr (&Sgowl_set_tags);
   defsubr (&Sgowl_toggle_client_floating);
+  defsubr (&Sgowl_set_client_floating);
   defsubr (&Sgowl_toggle_client_fullscreen);
   defsubr (&Sgowl_set_client_urgent);
   defsubr (&Sgowl_move_client_to_monitor);
@@ -5616,7 +5971,19 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
 
   /* Window rules */
   defsubr (&Sgowl_add_rule);
+  defsubr (&Sgowl_add_rule_full);
+  defsubr (&Sgowl_remove_rule);
+  defsubr (&Sgowl_clear_rules);
   defsubr (&Sgowl_list_rules);
+  defsubr (&Sgowl_float_toggle);
+  defsubr (&Sgowl_module_dispatch_key);
+
+  /* Dropdowns */
+  defsubr (&Sgowl_add_dropdown);
+  defsubr (&Sgowl_remove_dropdown);
+  defsubr (&Sgowl_list_dropdowns);
+  defsubr (&Sgowl_dropdown_toggle);
+  defsubr (&Sgowl_dropdown_refresh);
 
   /* Session */
   defsubr (&Sgowl_lock);
