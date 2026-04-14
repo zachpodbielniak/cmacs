@@ -3270,28 +3270,61 @@ module is loaded. */)
 }
 
 DEFUN ("gowl-dropdown-toggle", Fgowl_dropdown_toggle,
-       Sgowl_dropdown_toggle, 1, 1, 0,
+       Sgowl_dropdown_toggle, 0, 1, 0,
        doc: /* Toggle the dropdown named NAME.
 Finds the first active module implementing `GowlDropdownProvider'
 and dispatches the toggle through its interface vfunc.  Returns t
 if a matching entry was toggled, nil if the provider or entry is
 missing.  Entries added via `gowl-add-dropdown' after module
 startup are picked up via the module's config-scan fallback
-inside its toggle_by_name implementation.  */)
+inside its toggle_by_name implementation.
+
+When NAME is nil or omitted, toggles the first dropdown entry in
+the running gowl config — matches `cmacs-gowl-test-dropdown' and
+lets callers type `(gowl-dropdown-toggle)' for the common case. */)
   (Lisp_Object name)
 {
   GowlDropdownProvider *prov;
+  GowlConfig           *config;
+  const gchar          *target = NULL;
+  gchar                *first_name = NULL;
 
   GOWL_CHECK_RUNNING ();
-  CHECK_STRING (name);
   prov = cmacs_gowl_find_dropdown_provider ();
   if (prov == NULL)
     {
       message ("dropdown module not loaded");
       return Qnil;
     }
-  return gowl_dropdown_provider_toggle_by_name (prov, SSDATA (name))
-           ? Qt : Qnil;
+  if (STRINGP (name))
+    {
+      target = SSDATA (name);
+    }
+  else
+    {
+      GPtrArray *arr;
+      config = gowl_compositor_get_config (cmacs_gowl_compositor);
+      if (config == NULL)
+        return Qnil;
+      arr = gowl_config_get_dropdowns (config);
+      if (arr == NULL || arr->len == 0)
+        {
+          message ("no dropdowns registered in gowl config");
+          return Qnil;
+        }
+      {
+        GowlDropdownEntry *e = g_ptr_array_index (arr, 0);
+        if (e == NULL || e->name == NULL)
+          return Qnil;
+        first_name = g_strdup (e->name);
+        target = first_name;
+      }
+    }
+  {
+    gboolean toggled = gowl_dropdown_provider_toggle_by_name (prov, target);
+    g_free (first_name);
+    return toggled ? Qt : Qnil;
+  }
 }
 
 DEFUN ("gowl-list-dropdowns", Fgowl_list_dropdowns, Sgowl_list_dropdowns,
