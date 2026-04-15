@@ -29,6 +29,7 @@ RUN if [ "${FEDORA_VERSION}" -ge 44 ] 2>/dev/null; then \
         gdk-pixbuf2-devel \
         libsoup3-devel readline-devel \
         libetpan-devel sqlite-devel libpq-devel \
+        cmark-devel \
         libssh2-devel libvirt-devel pam-devel \
     && dnf clean all
 
@@ -37,7 +38,7 @@ WORKDIR /build/cmacs
 
 # Remove .git pointer (submodule COPY artifact) and build bundled deps
 RUN rm -f .git \
-    && for dep in mcp-glib crispy bacon gowl podomation; do \
+    && for dep in mcp-glib crispy bacon gowl podomation libreclaw; do \
            if [ -d "deps/${dep}" ]; then \
                make -C "deps/${dep}" clean all PREFIX=/usr; \
                make -C "deps/${dep}" install PREFIX=/usr; \
@@ -72,6 +73,7 @@ RUN ./autogen.sh \
         --with-cmacs-bacon \
         --with-cmacs-gowl \
         --with-cmacs-podomation \
+        --with-cmacs-libreclaw \
         --with-cmacs-org-ex \
         --with-cmacs-mcp \
     && make -j"$(nproc)" \

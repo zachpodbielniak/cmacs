@@ -241,8 +241,10 @@ install_system_deps () {
 }
 
 # ── From-source CMacs dependencies ──────────────────────────────────
-# crispy, bacon, and gowl are built from deps/ and installed to PREFIX.
-# pkg-config names: crispy, bacon-1.0, gowl
+# Built from deps/ and installed to PREFIX so their .so, headers,
+# pkg-config files, and GI typelibs are discoverable at runtime.
+# pkg-config names: mcp-glib-1.0, crispy, bacon-1.0, gowl,
+#                   podomation-1.0, libreclaw
 
 build_from_source () {
 	local platform
@@ -255,7 +257,7 @@ build_from_source () {
 
 	echo "==> Building from-source dependencies (PREFIX=${PREFIX})..."
 
-	for dep in crispy bacon gowl; do
+	for dep in mcp-glib crispy bacon gowl podomation libreclaw; do
 		dep_dir="${SCRIPT_DIR}/deps/${dep}"
 		if [[ ! -d "${dep_dir}" ]]; then
 			echo "    SKIP ${dep} (${dep_dir} not found)"
@@ -270,7 +272,7 @@ build_from_source () {
 			continue
 		fi
 		echo "    Building ${dep}..."
-		${make_cmd} -C "${dep_dir}" clean all
+		${make_cmd} -C "${dep_dir}" clean all PREFIX="${PREFIX}"
 		sudo ${make_cmd} -C "${dep_dir}" install PREFIX="${PREFIX}"
 	done
 
@@ -323,7 +325,8 @@ usage () {
 	echo ""
 	echo "  (no args)      Install everything (system + from-source)"
 	echo "  --system       System packages only"
-	echo "  --from-source  Build crispy, bacon, gowl from deps/"
+	echo "  --from-source  Build mcp-glib, crispy, bacon, gowl,"
+	echo "                 podomation, libreclaw from deps/"
 	echo "  --ldconfig     Configure library path (Linux/FreeBSD)"
 	echo "  --list         Print package list for detected platform (dry run)"
 	echo ""
@@ -338,7 +341,9 @@ usage () {
 	echo "  ./configure --with-pgtk --with-native-compilation \\"
 	echo "    --with-json --with-tree-sitter \\"
 	echo "    --with-cmacs-glib --with-cmacs-gi \\"
-	echo "    --with-cmacs-crispy --with-cmacs-bacon --with-cmacs-gowl"
+	echo "    --with-cmacs-crispy --with-cmacs-bacon --with-cmacs-gowl \\"
+	echo "    --with-cmacs-podomation --with-cmacs-libreclaw \\"
+	echo "    --with-cmacs-org-ex --with-cmacs-mcp"
 }
 
 list_packages () {
@@ -371,7 +376,7 @@ list_packages () {
 	echo "GLib/GI:         ${PKGS_GLIB[*]}"
 	echo "Gowl (Wayland):  ${PKGS_GOWL[*]:-N/A}"
 	echo ""
-	echo "From source (deps/): crispy, bacon, gowl"
+	echo "From source (deps/): mcp-glib, crispy, bacon, gowl, podomation, libreclaw"
 }
 
 main () {
