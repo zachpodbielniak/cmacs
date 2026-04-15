@@ -1,0 +1,70 @@
+@node LibreClaw DSL
+@section Podomation DSL
+
+The @code{pod-cmacs-libreclaw-module} (built into temacs and
+registered on cmacs's shared PodEngine at
+@code{cmacs-libreclaw-start} time) exposes libreclaw events and
+actions to podomation DSL rules.
+
+@subsection Events emitted
+
+All events use the @code{on_cm_lc_} prefix so they don't collide
+with @code{pod-cmacs-module} or @code{pod-gowl-module}.
+
+@multitable @columnfractions .4 .55
+@headitem Event @tab Fires on
+@item @code{on_cm_lc_message}
+@tab inbound message received
+@item @code{on_cm_lc_response}
+@tab outbound message sent
+@item @code{on_cm_lc_room_joined}
+@tab channel joined a room
+@item @code{on_cm_lc_room_removed}
+@tab channel left a room
+@item @code{on_cm_lc_channel_connected}
+@tab channel connection opened
+@item @code{on_cm_lc_channel_disconnected}
+@tab channel connection closed
+@item @code{on_cm_lc_channel_error}
+@tab channel error reported
+@item @code{on_cm_lc_session_created}
+@tab AI session spawned
+@item @code{on_cm_lc_session_destroyed}
+@tab AI session reaped
+@end multitable
+
+Event payloads are @code{GVariant a@{sv@}} dicts with string-valued
+keys matching libreclaw's signal argument names.
+
+@subsection Actions supported
+
+@multitable @columnfractions .2 .35 .4
+@headitem Action @tab Arguments @tab Effect
+@item @code{send_message}
+@tab @code{channel}, @code{room}, @code{body}
+@tab async send
+@item @code{join_room}
+@tab @code{channel}, @code{room}
+@tab placeholder — 0.18.0
+@item @code{leave_room}
+@tab @code{channel}, @code{room}
+@tab placeholder — 0.18.0
+@end multitable
+
+@subsection Example DSL
+
+@example
+pod lc = cmacs_libreclaw->new();
+
+lc->on_cm_lc_message where event->body contains "@@bot"
+    => cmacs_libreclaw->send_message(
+         channel = event->channel_id,
+         room    = event->room_id,
+         body    = "You rang?");
+
+lc->on_cm_lc_channel_error
+    => cmacs->log("channel @{event->channel_id@} error: @{event->error@}");
+@end example
+
+The @code{cmacs_libreclaw} pod and the @code{cmacs} pod run on the
+same engine, so pods in either can cross-reference each other.

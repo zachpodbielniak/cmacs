@@ -1,0 +1,108 @@
+#+TITLE: LibreClaw Troubleshooting
+#+AUTHOR: Zach Podbielniak
+
+* =cmacs-libreclaw-start= signals "cmacs-podomation must be started first"
+
+Libreclaw shares cmacs's PodEngine, so podomation must already be
+running.  Either:
+
+#+begin_src elisp
+(cmacs-podomation-start)
+(cmacs-libreclaw-start)
+#+end_src
+
+or let =cmacs-libreclaw-start= auto-start podomation for you —
+which it does since 0.18.0 via the Elisp wrapper.  If that's
+failing, check =(cmacs-podomation-running-p)= and look at the
+=*Messages*= buffer for any podomation error.
+
+* "libreclaw 0.18.0 does not expose a public join-room API"
+
+=cmacs-libreclaw-join-room= and =cmacs-libreclaw-leave-room= are
+placeholders in the initial integration.  Add rooms to
+=auto_join= in your YAML config instead:
+
+#+begin_src yaml
+channels:
+  - id: matrix
+    kind: matrix
+    homeserver: "..."
+    user_id:    "..."
+    access_token: "..."
+    auto_join:
+      - "!roomid1:server"
+      - "!roomid2:server"
+#+end_src
+
+and call =M-x cmacs-libreclaw-reload-config=.
+
+* "text-read-only: LibreClaw history is read-only"
+
+You tried to edit above the =* Compose= sentinel heading.  Only
+the region below =* Compose= is writable; that's the compose area
+where you draft outgoing messages.  Move below the sentinel
+headline and try again.
+
+* Room buffer doesn't get updated
+
+Check:
+
+1. =(cmacs-libreclaw-running-p)= returns =t=
+2. =(cmacs-libreclaw-list-channels)= contains the expected channel
+3. =(cmacs-libreclaw-channel-connected-p "CHANNEL-ID")= is =t=
+4. Looking for the expected Lisp symbol in =*Messages*= — any
+   dispatch error will log via =g_warning= and show up there.
+
+* =(gi-require "Lc" "1.0")= fails
+
+Two likely causes:
+
+1. =cmacs-gi= isn't built — check =(fboundp 'gi-require)=.
+2. The typelib isn't on =GI_TYPELIB_PATH=.  For in-tree builds,
+   set it explicitly:
+
+   #+begin_src bash
+   export GI_TYPELIB_PATH=$(pwd)/deps/libreclaw/build/release:$GI_TYPELIB_PATH
+   #+end_src
+
+   For system installs, libreclaw 0.18.0's =make install-gir=
+   drops the typelib into =$(libdir)/girepository-1.0/=, which
+   is on the default path.
+
+* Stale =.elc= / =.eln= after editing cmacs-libreclaw.el
+
+Documented in the top-level =CLAUDE.md= as the #1 cause of "my
+Elisp change isn't working".  After editing:
+
+#+begin_src bash
+rm -f lisp/cmacs/cmacs-libreclaw.elc \
+      lisp/cmacs/cmacs-libreclaw-hatch.elc
+rm -f native-lisp/*/cmacs-libreclaw-*.eln
+rm -f native-lisp/*/cmacs-libreclaw-hatch-*.eln
+#+end_src
+
+and restart Emacs.
+
+* Duplicate-symbol link errors after adding a channel type
+
+libreclaw vendors yaml-glib and podomation inside =liblc-1.0.a=.
+cmacs's =src/Makefile.in= has dedup logic (=_libreclaw_strip=)
+that strips the duplicates before linking.  If you see new
+=multiple definition of 'yaml_*'= or =multiple definition of 'pod_*'=
+errors after updating libreclaw, check whether libreclaw's
+vendored copy introduced a new object; extend =_dup_yaml= /
+=_dup_podomation_objs= in =src/Makefile.in= accordingly.
+
+Do NOT add =-Wl,-z,muldefs= to work around the problem — that
+leads to non-deterministic ABI mismatches.  See the cmacs
+=CLAUDE.md= for the full explanation.
+
+* Crash with "Fatal error 6: Aborted" in =signal_or_quit=
+
+Classic =waiting_for_input= invariant violation.  All C→Lisp
+dispatches from libreclaw signal handlers should go through
+=cmacs_libreclaw_dispatch_expr= (which calls =cmacs_dispatch_eval=
+internally — the same guard =pod-cmacs-module.c= relies on).  If
+you added a new signal handler that calls =Feval=, =call3=, or
+similar directly, route it through =cmacs_libreclaw_dispatch_expr=
+instead.

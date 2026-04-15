@@ -1,0 +1,79 @@
+@node LibreClaw Installation
+@section Installation
+
+@subsection Prerequisites
+
+On Fedora:
+
+@example
+sudo dnf install \
+    glib2-devel gobject-introspection-devel \
+    libsoup3-devel json-glib-devel libyaml-devel \
+    cmark-devel sqlite-devel libetpan-devel libpq-devel
+@end example
+
+On Debian/Ubuntu:
+
+@example
+sudo apt install \
+    libglib2.0-dev libgirepository1.0-dev \
+    libsoup-3.0-dev libjson-glib-dev libyaml-dev \
+    libcmark-dev libsqlite3-dev libetpan-dev libpq-dev
+@end example
+
+@subsection Submodule
+
+LibreClaw lives under @file{deps/libreclaw} as a git submodule.
+
+@example
+git submodule update --init --recursive deps/libreclaw
+@end example
+
+Nested submodules (@file{deps/ai-glib}, @file{deps/yaml-glib},
+@file{deps/podomation} inside libreclaw) come along for the ride.
+
+@subsection Configure flag
+
+@example
+./configure \
+    --with-cmacs-glib --with-cmacs-gi \
+    --with-cmacs-podomation \
+    --with-cmacs-libreclaw \
+    @dots{} other flags @dots{}
+make -j$(nproc)
+@end example
+
+@code{--with-cmacs-libreclaw} implies @code{--with-cmacs-podomation}
+at runtime — libreclaw shares its PodEngine.
+
+@subsection System vs bundled
+
+Like other subsystems:
+
+@itemize
+@item
+@code{--with-cmacs-libreclaw} — build from @file{deps/libreclaw}
+@item
+@code{--with-cmacs-libreclaw=system} — link against
+@code{libreclaw >= 0.18.0} via pkg-config
+@end itemize
+
+The bundled path pulls in libreclaw's vendored ai-glib, yaml-glib,
+and podomation submodules.  The dedup logic in
+@file{src/Makefile.in} (@code{_libreclaw_strip}) strips yaml-glib
+and podomation duplicates from libreclaw's archive before linking.
+
+@subsection GIR / typelib
+
+Starting with libreclaw 0.18.0, the build always produces
+@file{Lc-1.0.gir} and @file{Lc-1.0.typelib} (unless @code{GIR=0}).
+@code{make install} drops them into
+@file{$(libdir)/girepository-1.0} and @file{$(datadir)/gir-1.0}.
+
+For in-tree builds, set @env{GI_TYPELIB_PATH} to
+@file{deps/libreclaw/build/release} so cmacs-gi finds the typelib:
+
+@example
+export GI_TYPELIB_PATH=$PWD/deps/libreclaw/build/release:$GI_TYPELIB_PATH
+src/emacs
+@end example

@@ -1,0 +1,184 @@
+@node LibreClaw API Reference
+@section DEFUN Reference
+
+All DEFUNs listed here are Emacs C primitives and are only available
+when cmacs is built with @code{--with-cmacs-libreclaw}.
+
+@subsection Lifecycle
+
+@table @code
+@item cmacs-libreclaw-start
+Elisp wrapper.  Ensures @code{cmacs-libreclaw-config-file} is set,
+starts cmacs-podomation if needed, calls
+@code{cmacs-libreclaw--start-internal}, and loads the GI typelib.
+
+@item cmacs-libreclaw--start-internal
+C DEFUN.  Create the @code{LcApp} and register the podomation bridge
+module on the shared engine.  Signals @code{cmacs-libreclaw-error}
+if the config file is unset, podomation is not running, or
+libreclaw fails to start.
+
+@item cmacs-libreclaw-stop
+Disconnect signal handlers, stop the embedded LcApp, deactivate
+the bridge module.
+
+@item cmacs-libreclaw-running-p
+Return @code{t} if the LcApp is live.
+
+@item cmacs-libreclaw-set-config-file FILE
+Store @var{FILE} as the YAML path for the next start.
+
+@item cmacs-libreclaw-get-config-file
+Return the currently configured YAML path, or @code{nil}.
+
+@item cmacs-libreclaw-reload-config
+Re-read the YAML file and re-emit libreclaw's @code{config-reloaded}
+signal.  Use this for live edits to the @emph{same} file; for
+switching to a @emph{different} file, use
+@code{cmacs-libreclaw-load-config} below.
+
+@item cmacs-libreclaw-load-config FILE &optional RESTART
+Elisp autoload.  One-command config switcher.  Expands
+@var{FILE}, asserts it's readable, sets
+@code{cmacs-libreclaw-config-file}, and --- if libreclaw is
+already running --- cleanly stops and restarts the subsystem
+against the new path when @var{RESTART} is non-nil.  When
+libreclaw is not running, stages the path for the next
+@code{cmacs-libreclaw-start} call.  Interactive:
+@kbd{M-x cmacs-libreclaw-load-config} prompts for the YAML path
+with completion.
+
+@item cmacs-libreclaw-version
+Return libreclaw's version as a @samp{N.N.N} string.
+
+@item cmacs-libreclaw-podomation-shared-p
+Return @code{t} if the bridge module is registered on cmacs's
+shared PodEngine.
+@end table
+
+@subsection Config
+
+@table @code
+@item cmacs-libreclaw-config-validate FILE
+Parse @var{FILE} without starting an LcApp.  Signals
+@code{cmacs-libreclaw-error} on parse failure.
+
+@item cmacs-libreclaw-config-preview FILE
+Return a plist summarising @var{FILE}'s contents.
+
+@item cmacs-libreclaw-generate-default-config &optional WS AI OVERWRITE
+Elisp.  Write a minimal default YAML to
+@file{WS/config.yaml} (defaulting to
+@code{cmacs-libreclaw-default-workspace}).  Uses libreclaw's
+@code{lc_hatch_*} API, so the schema tracks whatever libreclaw
+version is linked.  Sets @code{cmacs-libreclaw-config-file} to
+the written path and returns it.
+
+@item cmacs-libreclaw-ensure-config
+Elisp.  Called by @code{cmacs-libreclaw-start}.  Adopts any
+existing default config or (with user consent) auto-generates
+one via @code{cmacs-libreclaw-generate-default-config}.
+@end table
+
+@subsection Cmacs channel
+
+@table @code
+@item cmacs-libreclaw-open &optional DIRECTORY
+Elisp (autoload).  Primary user entry point.  Creates or
+switches to a libreclaw chat buffer for the project containing
+@var{DIRECTORY} (defaults to the current @code{default-directory}).
+Starts libreclaw and generates a default config if needed.  Each
+project gets its own buffer with its own persistent AI session.
+
+@item cmacs-libreclaw-cmacs-channel-available-p
+C DEFUN.  Returns @code{t} if the in-process LcCmacsChannel is
+bound.  Requires both @code{(cmacs-libreclaw-running-p)} and
+@code{channels: cmacs: enabled: true} in the loaded YAML.
+
+@item cmacs-libreclaw-cmacs-channel-inject ROOM-ID SENDER-ID BODY &optional SENDER-NAME
+C DEFUN.  Pushes @var{BODY} as an inbound message on
+@var{ROOM-ID} into libreclaw's pipeline.  Routes through
+@code{LcChannelManager}, @code{LcRouter}, and
+@code{LcSessionManager}, so the AI provider generates a response
+that eventually arrives through
+@code{cmacs-libreclaw--on-cmacs-response}.
+
+@item cmacs-libreclaw-cmacs-channel-register-room ROOM-ID
+C DEFUN.  Marks @var{ROOM-ID} as a known room.  Idempotent.
+
+@item cmacs-libreclaw-cmacs-channel-unregister-room ROOM-ID
+C DEFUN.  Drops @var{ROOM-ID} from the known-rooms set.
+
+@item cmacs-libreclaw-cmacs-channel-list-rooms
+C DEFUN.  Returns the list of known room identifiers.
+
+@item cmacs-libreclaw-cmacs-channel-has-room-p ROOM-ID
+C DEFUN.  Returns non-nil if @var{ROOM-ID} is registered.
+
+@item cmacs-libreclaw-cmacs-channel-save-history
+Elisp.  Persists the current buffer's history region to
+@file{<history-dir>/<sha>.org}.  Called automatically on
+@code{after-save-hook} and @code{kill-buffer-hook}; bound to
+@kbd{C-c C-s} interactively.
+
+@item cmacs-libreclaw-hatch-add-cmacs HANDLE
+C DEFUN.  Appends a cmacs (in-process) channel to the hatch
+context.  No parameters.
+@end table
+
+@subsection Channels
+
+@table @code
+@item cmacs-libreclaw-list-channels
+@code{((id . kind) @dots{})} of active channels.
+
+@item cmacs-libreclaw-channel-kind ID
+Kind symbol for @var{ID}.
+
+@item cmacs-libreclaw-channel-connected-p ID
+@code{t} if connected.
+
+@item cmacs-libreclaw-channel-connect ID
+Async connect.
+
+@item cmacs-libreclaw-channel-disconnect ID
+Async disconnect.
+@end table
+
+@subsection Messaging
+
+@table @code
+@item cmacs-libreclaw-send-message CHANNEL-ID ROOM-ID BODY &optional HTML-BODY THREAD-ID
+Queue an outbound message.  Returns @code{t} immediately; delivery
+is async.
+
+@item cmacs-libreclaw-join-room CHANNEL-ID ROOM-ID
+Signals @code{cmacs-libreclaw-error} — libreclaw 0.18.0 does not
+expose a public join-room API.  Use @code{auto_join} in config.yaml.
+
+@item cmacs-libreclaw-leave-room CHANNEL-ID ROOM-ID
+Same — not supported in 0.18.0.
+@end table
+
+@subsection Hatch
+
+@table @code
+@item cmacs-libreclaw-hatch-new WORKSPACE-DIR
+Create a new hatch context.  Returns an integer handle.
+
+@item cmacs-libreclaw-hatch-free HANDLE
+Release the hatch context.
+
+@item cmacs-libreclaw-hatch-set-name HANDLE NAME
+@item cmacs-libreclaw-hatch-set-identity HANDLE PATH
+@item cmacs-libreclaw-hatch-set-ai HANDLE KIND
+@item cmacs-libreclaw-hatch-add-matrix HANDLE HS USER-ID TOKEN
+@item cmacs-libreclaw-hatch-add-local HANDLE &optional PROMPT
+@item cmacs-libreclaw-hatch-add-email HANDLE IMAP SMTP USER PASS
+@item cmacs-libreclaw-hatch-add-webhook HANDLE PORT PATH-PREFIX
+@item cmacs-libreclaw-hatch-enable-podomation HANDLE &optional DSL
+@item cmacs-libreclaw-hatch-enable-audit HANDLE &optional DB-PATH
+@item cmacs-libreclaw-hatch-preview HANDLE
+@item cmacs-libreclaw-hatch-finalize HANDLE &optional OVERWRITE
+See the Hatch Wizard chapter for the full wizard flow.
+@end table

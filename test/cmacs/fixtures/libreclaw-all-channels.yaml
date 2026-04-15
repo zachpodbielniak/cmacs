@@ -1,0 +1,45 @@
+# libreclaw test fixture — all channel types enabled
+#
+# Exercises the channel-agnostic code paths in cmacs-libreclaw.c.
+# All network-bearing channels use invalid endpoints so they cannot
+# connect; tests that need a working channel should use the local
+# variant in libreclaw-local-only.yaml.
+
+agent:
+  name: "cmacs-libreclaw-all-test"
+  workspace: "/tmp/cmacs-libreclaw-all-test-ws"
+
+providers:
+  - name: claude
+    kind: claude-code
+    command: "echo test"
+    model: test
+
+channels:
+  - id: matrix
+    kind: matrix
+    homeserver: "https://invalid.example.test"
+    user_id: "@test:invalid.example.test"
+    access_token: "dummy"
+
+  - id: local
+    kind: local
+    prompt: "test> "
+
+  - id: email
+    kind: email
+    imap_host: "invalid.example.test"
+    smtp_host: "invalid.example.test"
+    username: "test"
+    password: "dummy"
+
+  - id: webhook
+    kind: webhook
+    port: 0
+    path_prefix: "/test/webhooks"
+
+podomation:
+  enabled: false
+
+audit_log:
+  enabled: false

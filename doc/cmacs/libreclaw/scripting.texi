@@ -1,0 +1,51 @@
+@node LibreClaw Scripting
+@section Scripting via cmacs-gi
+
+Libreclaw 0.18.0 ships @file{Lc-1.0.gir}/@file{.typelib} as part of
+the default build, so cmacs-gi's auto-wiring can reach every
+libreclaw public API from Elisp without handwritten wrappers.
+
+@subsection Loading the typelib
+
+@example
+(gi-require "Lc" "1.0")
+@end example
+
+@code{cmacs-libreclaw-start} does this automatically when cmacs-gi
+is loaded.
+
+@subsection Getting the app handle
+
+@example
+(let ((app (cmacs-libreclaw-get-app)))
+  (gi-method app "get_channel_manager"))
+@end example
+
+@subsection Connecting to signals
+
+@example
+(let* ((app (cmacs-libreclaw-get-app))
+       (mgr (gi-method app "get_channel_manager")))
+  (gobject-connect mgr "message-received"
+    (lambda (ch msg)
+      (message "Got %s from %s"
+               (gi-method msg "get_body")
+               (gi-method msg "get_sender_name")))))
+@end example
+
+The signal callback runs on the Emacs main thread via cmacs's
+dispatch guard — no threading concerns.
+
+@subsection Scripting the hatch API
+
+@example
+(let ((ctx (gi-call "Lc" "HatchContext_new" "/tmp/scripted-ws")))
+  (gi-method ctx "set_workspace_name" "scripted")
+  (gi-method ctx "set_ai_provider" 'claude)
+  (gi-method ctx "add_local_channel" "scripted> ")
+  (gi-method ctx "finalize" nil))
+@end example
+
+The DEFUN wrappers @code{cmacs-libreclaw-hatch-*} are usually
+preferable because they do argument validation and error
+translation, but the direct GI path is available.

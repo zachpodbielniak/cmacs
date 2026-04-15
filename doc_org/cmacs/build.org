@@ -24,7 +24,9 @@ All CMacs features are auto-detected.  You can force them on or off:
 | =--with-cmacs-bacon=          | Bacon shell                             |
 | =--with-cmacs-gowl=           | Wayland compositor (needs wlroots)      |
 | =--with-cmacs-podomation=     | Podomation automation engine            |
+| =--with-cmacs-libreclaw=      | LibreClaw chat / Matrix integration     |
 | =--with-cmacs-org-ex=         | Org-Ex interactive widget embedding     |
+| =--with-cmacs-mcp=            | MCP server for AI-native control        |
 
 Example with explicit flags:
 
@@ -53,7 +55,9 @@ Example with explicit flags:
   --with-cmacs-bacon \
   --with-cmacs-gowl \
   --with-cmacs-podomation \
-  --with-cmacs-org-ex
+  --with-cmacs-libreclaw \
+  --with-cmacs-org-ex \
+  --with-cmacs-mcp
 #+end_example
 
 To install somewhere other than =/usr/local=, pass =--prefix= at
@@ -86,15 +90,37 @@ section below.
 
 ** Per Feature
 
-| Feature | System package            | Fallback (bundled)       |
-|---------+---------------------------+--------------------------|
-| GI      | =gobject-introspection-1.0= | (none, system only)    |
-| Crispy  | =crispy= pkg-config      | =deps/crispy/=           |
-| Bacon   | =bacon-1.0= pkg-config   | =deps/bacon/=            |
-| Gowl    | =gowl= pkg-config        | =deps/gowl/= + wlroots  |
-| Podomation | =podomation-1.0= pkg-config | =deps/podomation/=  |
-| Org-Ex  | (built from =cmacs/org-ex/lib/=) | (always bundled)  |
-| API     | (built from =cmacs/api/=) | (always bundled)        |
+| Feature  | System package                 | Fallback (bundled)         |
+|----------+--------------------------------+----------------------------|
+| GI       | =gobject-introspection-1.0=    | (none, system only)        |
+| Crispy   | =crispy= pkg-config            | =deps/crispy/=             |
+| Bacon    | =bacon-1.0= pkg-config         | =deps/bacon/=              |
+| Gowl     | =gowl= pkg-config              | =deps/gowl/= + wlroots     |
+| Podomation | =podomation-1.0= pkg-config  | =deps/podomation/=         |
+| LibreClaw | =libreclaw >= 0.18.0= pkg-config | =deps/libreclaw/=        |
+| Org-Ex   | (built from =cmacs/org-ex/lib/=) | (always bundled)         |
+| MCP      | =mcp-glib-1.0= pkg-config      | =deps/mcp-glib/=           |
+| API      | (built from =cmacs/api/=)      | (always bundled)           |
+
+** LibreClaw dependencies
+
+LibreClaw drags in a larger dependency graph than the other cmacs
+subsystems because it speaks multiple messaging protocols:
+
+- =libsoup-3.0= — Matrix Client-Server API via HTTP long-poll
+- =json-glib-1.0= — Matrix JSON payloads
+- =libcmark= — Markdown → HTML for rich message bodies
+- =sqlite3= — audit log backend
+- =libetpan= — IMAP / SMTP for the email channel
+- =libpq= — optional PostgreSQL audit backend
+- =yaml-0.1= — YAML configuration (via libreclaw's bundled
+  yaml-glib; cmacs dedups this at link time via the
+  =_libreclaw_strip= logic in =src/Makefile.in=)
+
+On Fedora: =libsoup3-devel json-glib-devel libcmark-devel
+sqlite-devel libetpan-devel libpq-devel libyaml-devel=.
+On Debian/Ubuntu: =libsoup-3.0-dev libjson-glib-dev libcmark-dev
+libsqlite3-dev libetpan-dev libpq-dev libyaml-dev=.
 
 ** libcmacs-api.so
 

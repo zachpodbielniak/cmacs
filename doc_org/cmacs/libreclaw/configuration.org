@@ -1,0 +1,223 @@
+#+TITLE: LibreClaw Configuration
+#+AUTHOR: Zach Podbielniak
+
+* Where configuration lives
+
+LibreClaw reads a single YAML file at startup.  There are three
+ways to tell cmacs-libreclaw which file to use:
+
+** Option A — declarative, in your init file
+
+#+begin_src elisp
+(setq cmacs-libreclaw-config-file "~/.libreclaw/work.yaml")
+#+end_src
+
+Clean and idiomatic.  The path is expanded and checked the
+first time =cmacs-libreclaw-start= (or =cmacs-libreclaw-open=)
+runs — if the file is missing or unreadable the start errors
+out with a pointer at the exact path.
+
+** Option B — imperative, one-shot
+
+#+begin_src elisp
+(cmacs-libreclaw-load-config "~/.libreclaw/work.yaml")
+#+end_src
+
+Does the same thing, but also handles the "libreclaw is already
+running" case: pass a non-nil second argument or answer the
+=y-or-n-p= prompt and it cleanly stops the subsystem and
+restarts it against the new config.  Useful when you need to
+switch configs mid-session (e.g. jumping between a work bot and
+a personal one).
+
+Interactive: =M-x cmacs-libreclaw-load-config= prompts with
+completion for the YAML path.
+
+** Option C — let the default-config generator take over
+
+If you never set =cmacs-libreclaw-config-file= at all,
+=cmacs-libreclaw-start= calls =cmacs-libreclaw-ensure-config=,
+which prompts to auto-generate a minimal default at
+=cmacs-libreclaw-default-workspace= (=~/.libreclaw=) on first
+run.  See [[#first-run-auto-generated-config][First-run
+auto-generated config]] below.
+
+** Switching vs. reloading
+
+- =cmacs-libreclaw-load-config= switches to a *different* file
+  and restarts the subsystem (if requested).  Session state in
+  the old config is flushed.
+- =cmacs-libreclaw-reload-config= re-reads the *same* file and
+  fires libreclaw's =config-reloaded= signal, so live edits to
+  your YAML take effect without a full restart.  Use this for
+  tweaking things like the AI model, podomation DSL, or
+  =identity_files= list while the subsystem is running.
+
+The YAML schema is owned by libreclaw (not cmacs) so that upgrading
+libreclaw automatically expands the set of supported keys.  See the
+libreclaw documentation at =deps/libreclaw/docs/configuration.md=
+for the canonical reference.
+
+* First-run auto-generated config
+
+You don't have to hand-author a YAML to get started.  On first use
+=cmacs-libreclaw-start= calls =cmacs-libreclaw-ensure-config=, which:
+
+1. adopts an existing =config.yaml= at
+   =cmacs-libreclaw-default-workspace= if one is already there, or
+2. prompts you (=yes-or-no=) to auto-generate a minimal default at
+   that path — a single Local stdin/stdout channel, your choice of
+   AI provider, no podomation, no audit log.  The raw
+   =cmacs-libreclaw-generate-default-config= DEFUN does the work
+   through libreclaw's =lc_hatch_*= library API, so the schema is
+   always in sync with the libreclaw version you linked against.
+
+To trigger it manually (without starting libreclaw):
+
+#+begin_src elisp
+M-x cmacs-libreclaw-generate-default-config
+#+end_src
+
+Customization knobs:
+
+- =cmacs-libreclaw-default-workspace= — target directory (default
+  =~/.libreclaw=)
+- =cmacs-libreclaw-default-ai-provider= — symbol: =claude=,
+  =openai=, or =both=
+- =cmacs-libreclaw-default-prompt= — prompt for the generated
+  Local channel
+- =cmacs-libreclaw-auto-generate-config= — set to =nil= to disable
+  the auto-prompt and force users to run the generator explicitly
+
+For a richer wizard (Matrix credentials, email channels, podomation
+DSL, audit log) use =M-x cmacs-libreclaw-hatch= instead —
+[[file:hatch.org][hatch.org]] walks through it.
+
+* Minimal example
+
+#+begin_src yaml
+agent:
+  name: "my-bot"
+  workspace: "/home/me/.libreclaw"
+
+providers:
+  - name: claude
+    kind: claude-code
+    command: "claude -p"
+    model: claude-opus-4-5
+
+channels:
+  - id: local
+    kind: local
+    prompt: "libreclaw> "
+
+podomation:
+  enabled: true
+#+end_src
+
+* auth-source for secrets
+
+LibreClaw's YAML supports =${auth-source:host:user}= indirection in
+any string field.  At load time it calls out to Emacs's
+=auth-source= to fetch the actual value.  The recommended pattern:
+
+1. Store your Matrix token, email password, or API key via
+   =auth-source-secrets-create= (or =authinfo.gpg=).
+2. Reference it in YAML by host and user.
+3. The raw secret never touches the YAML file or the hatch buffer.
+
+#+begin_src yaml
+channels:
+  - id: matrix
+    kind: matrix
+    homeserver: "https://matrix.example.com"
+    user_id: "@bot:example.com"
+    access_token: "${auth-source:matrix:@bot:example.com}"
+#+end_src
+
+The hatch wizard (=M-x cmacs-libreclaw-hatch=) automatically writes
+YAML with this pattern when you enter secrets at the =read-passwd=
+prompt — the raw value is stored via auth-source and the YAML keeps
+only the indirection.
+
+* Hot reload
+
+Once started, you can re-read the config file without restarting:
+
+#+begin_src elisp
+M-x cmacs-libreclaw-reload-config
+#+end_src
+
+This re-parses the file and fires libreclaw's =config-reloaded=
+signal, which the podomation bridge translates into
+=on_cm_lc_config_reloaded= for DSL rules.  Channel creation /
+destruction on reload is subject to libreclaw's own rules — see its
+docs for which fields can change at runtime.
+
+* Customization (core)
+
+- =cmacs-libreclaw-config-file= — the YAML path
+- =cmacs-libreclaw-auto-start= — if non-nil, start on after-init-hook
+- =cmacs-libreclaw-buffer-name-format= — printf format for generic
+  room buffer names; defaults to =*libreclaw:%s:%s*= (channel /
+  room-id).  Not used by the cmacs channel, which has its own
+  formatter.
+- =cmacs-libreclaw-my-name= — the label used for locally-echoed
+  outbound messages (defaults to ="you"=)
+- =cmacs-libreclaw-timestamp-format= — strftime format for message
+  heading timestamps
+- =cmacs-libreclaw-message-hook= — run on every inbound message
+- =cmacs-libreclaw-room-added-hook= — run when a new room buffer is
+  created
+
+* Customization (cmacs channel)
+
+- =cmacs-libreclaw-default-workspace= — where the first-run default
+  config lives (default =~/.libreclaw=)
+- =cmacs-libreclaw-default-ai-provider= — symbol =claude=, =openai=,
+  or =both=; baked into the generated YAML as =ai.model=
+- =cmacs-libreclaw-auto-generate-config= — prompt to create a
+  default on first run (default =t=)
+- =cmacs-libreclaw-cmacs-channel-history-dir= — where per-project
+  buffer history is persisted; default
+  =~/.libreclaw/cmacs-sessions=
+- =cmacs-libreclaw-cmacs-channel-sender= — identifier used as the
+  sender component in the session key
+  =cmacs:<project-root>:<sender>=; defaults to =$USER=
+- =cmacs-libreclaw-cmacs-channel-buffer-name-format= — printf
+  format for chat buffer names; =%s= is the project basename
+- =cmacs-libreclaw-cmacs-channel-autosave-history= — if non-nil,
+  persist on kill/save (default =t=)
+
+Set these via =M-x customize-group cmacs-libreclaw RET= /
+=cmacs-libreclaw-cmacs-channel RET= or with =setq= in your init
+file.
+
+* Per-project session persistence
+
+The cmacs channel writes two kinds of state to disk, keyed off
+the absolute path of each project root:
+
+1. *Buffer history* — the visible conversation (all the
+   =** timestamp sender= org headings above =* Compose=) is
+   written to
+   =~/.libreclaw/cmacs-sessions/<sha>.org=
+   where =<sha>= is =secure-hash 'sha1 <project-root>=.  Written
+   on buffer kill and after manual =C-c C-s=
+   (=cmacs-libreclaw-cmacs-channel-save-history=), restored on
+   next =cmacs-libreclaw-open= for the same project.
+2. *AI session context* — libreclaw's own session manager
+   persists the model's rolling context under the session key
+   =cmacs:<project-root>:<user>=, in
+   =~/.libreclaw/sessions/=.  This is independent of the buffer
+   history and is managed entirely by libreclaw.
+
+Because both stores key off the absolute project path, opening
+the same project twice (even across Emacs restarts) picks up
+where you left off, and opening a different project gives you
+a clean slate with its own separate memory.
+
+To reset one project without affecting others, delete the
+matching =<sha>.org= file and the corresponding entry under
+=~/.libreclaw/sessions/=.  To reset everything, wipe the two
+directories entirely.

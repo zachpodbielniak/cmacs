@@ -1,0 +1,57 @@
+#+TITLE: LibreClaw Podomation DSL
+#+AUTHOR: Zach Podbielniak
+
+The =pod-cmacs-libreclaw-module= (built into temacs and registered
+on cmacs's shared PodEngine at =cmacs-libreclaw-start= time) exposes
+libreclaw events and actions to podomation DSL rules.
+
+* Events emitted
+
+All events use the =on_cm_lc_= prefix so they don't collide with
+=pod-cmacs-module= (=on_buffer_save=, etc.) or =pod-gowl-module=
+(=on_cm_gowl_*=).
+
+| Event                         | Fires on                                |
+|-------------------------------|-----------------------------------------|
+| =on_cm_lc_message=             | inbound message received                |
+| =on_cm_lc_response=            | outbound message sent                   |
+| =on_cm_lc_room_joined=         | channel joined a room                   |
+| =on_cm_lc_room_removed=        | channel left a room                     |
+| =on_cm_lc_channel_connected=   | channel connection opened               |
+| =on_cm_lc_channel_disconnected= | channel connection closed              |
+| =on_cm_lc_channel_error=       | channel error reported                  |
+| =on_cm_lc_session_created=     | AI session spawned                       |
+| =on_cm_lc_session_destroyed=   | AI session reaped                        |
+
+Event payloads are =GVariant a{sv}= dicts with string-valued keys
+matching libreclaw's native signal argument names (e.g.
+=channel_id=, =sender_id=, =body=, =room_id=).
+
+* Actions supported
+
+| Action         | Arguments                        | Effect                          |
+|----------------|----------------------------------|---------------------------------|
+| =send_message= | =channel=, =room=, =body=           | async send                       |
+| =join_room=    | =channel=, =room=                  | (placeholder — 0.18.0)           |
+| =leave_room=   | =channel=, =room=                  | (placeholder — 0.18.0)           |
+
+* Example DSL
+
+#+begin_src
+pod lc = cmacs_libreclaw->new();
+
+;; Auto-reply to bot mentions on matrix.
+lc->on_cm_lc_message where event->body contains "@bot"
+    => cmacs_libreclaw->send_message(
+         channel = event->channel_id,
+         room    = event->room_id,
+         body    = "You rang?");
+
+;; Log channel errors into the Emacs *Messages* buffer via the
+;; cmacs bridge module.
+lc->on_cm_lc_channel_error
+    => cmacs->log("channel {event->channel_id} error: {event->error}");
+#+end_src
+
+The =cmacs_libreclaw= pod and the =cmacs= pod run on the same
+engine, so pods in either can cross-reference each other.

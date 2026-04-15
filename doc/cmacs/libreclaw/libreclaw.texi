@@ -1,0 +1,39 @@
+@c libreclaw.texi — master file for cmacs-libreclaw docs
+@c Copyright (C) 2026 Zach Podbielniak
+@c SPDX-License-Identifier: AGPL-3.0-or-later
+
+@node LibreClaw
+@chapter LibreClaw Chat/Matrix Integration
+
+LibreClaw is an AI-agent gateway (Matrix, email, webhook, local CLI)
+embedded inside cmacs as the @code{cmacs-libreclaw} subsystem.  It runs
+inside Emacs on cmacs's GMainContext, shares cmacs's podomation engine,
+and surfaces each room as an org-mode buffer in the style of ellama.
+
+This chapter is mirrored in @file{doc_org/cmacs/libreclaw/} — the Org
+files are the primary interactive reference and the two directories
+must stay in sync.  Run @file{tools/sync-docs.sh} to verify.
+
+@menu
+* LibreClaw Overview::
+* LibreClaw Installation::
+* LibreClaw Configuration::
+* LibreClaw Usage::
+* LibreClaw Hatch Wizard::
+* LibreClaw Channels::
+* LibreClaw Scripting::
+* LibreClaw DSL::
+* LibreClaw API Reference::
+* LibreClaw Troubleshooting::
+@end menu
+
+@include libreclaw/overview.texi
+@include libreclaw/installation.texi
+@include libreclaw/configuration.texi
+@include libreclaw/usage.texi
+@include libreclaw/hatch.texi
+@include libreclaw/channels.texi
+@include libreclaw/scripting.texi
+@include libreclaw/dsl.texi
+@include libreclaw/api.texi
+@include libreclaw/troubleshooting.texi

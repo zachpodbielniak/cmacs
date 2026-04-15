@@ -13,3 +13,6 @@
 [submodule "deps/mcp-glib"]
 	path = deps/mcp-glib
 	url = git@gitlab.com:copyleft-games/mcp-glib.git
+[submodule "deps/libreclaw"]
+	path = deps/libreclaw
+	url = git@gitlab.com:zachpodbielniak/libreclaw.git

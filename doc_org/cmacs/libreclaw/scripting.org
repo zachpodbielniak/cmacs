@@ -1,0 +1,78 @@
+#+TITLE: LibreClaw Scripting via cmacs-gi
+#+AUTHOR: Zach Podbielniak
+
+Libreclaw 0.18.0 ships =Lc-1.0.gir= / =Lc-1.0.typelib= as part of the
+default build, which means cmacs-gi's auto-wiring can reach every
+libreclaw public API from Elisp without handwritten wrappers.
+
+* Loading the typelib
+
+#+begin_src elisp
+(gi-require "Lc" "1.0")
+#+end_src
+
+=cmacs-libreclaw-start= does this automatically as long as
+=cmacs-gi= is loaded.  You can also call it directly when writing
+scripts that don't go through the normal start path.
+
+* Getting the app handle
+
+#+begin_src elisp
+(let ((app (cmacs-libreclaw-get-app)))
+  ;; Now you can call LcApp methods directly via gi-method.
+  (gi-method app "get_channel_manager"))
+#+end_src
+
+=cmacs-libreclaw-get-app= returns a GObject handle wrapped by
+cmacs-gobject; cmacs-gi treats it as a real object.
+
+* Connecting to signals
+
+Use =gobject-connect= from cmacs-gobject:
+
+#+begin_src elisp
+(let* ((app (cmacs-libreclaw-get-app))
+       (mgr (gi-method app "get_channel_manager")))
+  (gobject-connect mgr "message-received"
+    (lambda (ch msg)
+      (message "Got %s from %s"
+               (gi-method msg "get_body")
+               (gi-method msg "get_sender_name")))))
+#+end_src
+
+The signal callback runs on the Emacs main thread via cmacs's
+dispatch guard — no threading concerns.
+
+* Calling libreclaw functions directly
+
+Any public =lc_*= function in libreclaw's headers is callable via
+=gi-call= or =gi-method=.  Examples:
+
+#+begin_src elisp
+;; List channels via the GObject Introspection path.
+(let* ((app (cmacs-libreclaw-get-app))
+       (mgr (gi-method app "get_channel_manager"))
+       (chs (gi-method mgr "list_channels")))
+  (dolist (ch chs)
+    (message "channel: %s (%s)"
+             (gi-method ch "get_id")
+             (G-OBJECT-TYPE-NAME ch))))
+#+end_src
+
+* Writing hatch scripts
+
+The hatch library API is also GI-exposed, so you can scaffold a
+workspace entirely from Elisp without going through the interactive
+wizard:
+
+#+begin_src elisp
+(let ((ctx (gi-call "Lc" "HatchContext_new" "/tmp/scripted-ws")))
+  (gi-method ctx "set_workspace_name" "scripted")
+  (gi-method ctx "set_ai_provider" 'claude)
+  (gi-method ctx "add_local_channel" "scripted> ")
+  (gi-method ctx "finalize" nil))
+#+end_src
+
+In practice you'll usually want the DEFUN wrappers in
+=cmacs-libreclaw-hatch-*= because they do argument validation and
+error translation, but the GI path is there if you need it.

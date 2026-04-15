@@ -182,6 +182,61 @@ expose Emacs internals as MCP tools, resources, and prompts.
 - Transport: =cmacs-mcp= shim binary connects via Unix socket for stdio transport
 - Dependencies: =json-glib-1.0=, =libsoup-3.0=, =libdex-1=
 
+** LibreClaw Chat/Matrix Integration (=--with-cmacs-libreclaw=)
+
+Embed [[https://gitlab.com/zachpodbielniak/libreclaw][libreclaw]]
+(=liblc-1.0=) — a GObject-native AI agent gateway — as a cmacs
+subsystem.  Each "room" surfaces as an org-mode buffer,
+ellama-style: a single read-only history section followed by an
+editable =* Compose= region where =C-c C-c= sends and =RET= stays
+free for multi-line drafting (source blocks, tables, links,
+attachments).
+
+*One-command entry point:*
+
+#+begin_example
+M-x cmacs-libreclaw-open
+#+end_example
+
+=cmacs-libreclaw-open= detects your current project (via
+=project-current= / =vc-root-dir= / =.git=), opens a dedicated
+chat buffer for that project root, auto-starts libreclaw, and
+auto-generates a default config on first run.  *Each project gets
+its own persistent buffer* with its own AI session — open one in
+=~/Documents/notes=, a separate one in
+=~/source/projects/cmacs=, and libreclaw keeps the two
+conversations fully separated across Emacs restarts.
+
+- *Cmacs channel* (recommended default): native in-process
+  =LcCmacsChannel= that lets the Emacs host drive multi-room chat
+  with no credentials, no sockets, and no sub-processes.  Per-project
+  buffer history is persisted at
+  =~/.libreclaw/cmacs-sessions/<sha>.org= and the libreclaw session
+  manager keeps the AI's rolling context under the key
+  =cmacs:<project-root>:<user>=.
+- Other channels: Matrix (libsoup3), Email (libetpan IMAP/SMTP),
+  Webhook (HTTP receiver).  Local stdin/stdout channel is also
+  available but is only useful for the standalone =libreclaw= CLI.
+- Shared podomation: libreclaw's =LcPodomation= attaches to cmacs's
+  existing =PodEngine= via =lc_podomation_new_with_engine()= (new in
+  libreclaw 0.18.0) so there's one engine for the whole process
+- Embed mode: =lc_app_new_embedded= attaches all event sources to
+  cmacs's GMainContext without owning a GMainLoop, so Emacs's
+  pselect-based loop drives everything
+- YAML config: specify via =cmacs-libreclaw-config-file=; secrets
+  (Matrix tokens, email passwords) flow through =auth-source=
+- Hatch wizard: =M-x cmacs-libreclaw-hatch= scaffolds a new
+  workspace from inside an org buffer in REPL-style (type answer,
+  press =C-c C-c=, next question appears), driving libreclaw's
+  =lc_hatch_*= library API step-by-step
+- GI: libreclaw ships =Lc-1.0.gir= / =typelib= by default as of 0.18.0,
+  so =(gi-require "Lc" "1.0")= works for scripting access
+- Podomation bridge module (=cmacs_libreclaw=) emits =on_cm_lc_*=
+  events and supports a =send_message= handler action, so DSL rules
+  can react to chat traffic alongside normal Emacs events
+- Dependencies: =libsoup-3.0=, =json-glib-1.0=, =libcmark=, =sqlite3=,
+  =libetpan=, =libpq=, =yaml-0.1=
+
 * Building
 
 ** Quick Start (Fedora)
@@ -215,6 +270,7 @@ cd cmacs
   --with-cmacs-bacon \
   --with-cmacs-gowl \
   --with-cmacs-podomation \
+  --with-cmacs-libreclaw \
   --with-cmacs-org-ex \
   --with-cmacs-mcp
 make -j$(nproc)
@@ -314,6 +370,7 @@ Requires =autoconf= (>= 2.65) and =automake=.
   --with-cmacs-bacon \
   --with-cmacs-gowl \
   --with-cmacs-podomation \
+  --with-cmacs-libreclaw \
   --with-cmacs-org-ex \
   --with-cmacs-mcp
 #+end_src
@@ -341,6 +398,7 @@ Module flags:
 - =--with-cmacs-bacon= — Bacon shell
 - =--with-cmacs-gowl= — Gowl Wayland compositor
 - =--with-cmacs-podomation= — Podomation automation engine
+- =--with-cmacs-libreclaw= — LibreClaw chat/Matrix client integration
 - =--with-cmacs-org-ex= — Org-Ex interactive widget embedding
 - =--with-cmacs-mcp= — MCP server for AI-native runtime control
 
@@ -351,6 +409,7 @@ force system-installed versions:
 --with-cmacs-crispy=system
 --with-cmacs-bacon=system
 --with-cmacs-gowl=system
+--with-cmacs-libreclaw=system
 #+end_src
 
 *** 5. Build

@@ -13,8 +13,8 @@
   --with-tiff --with-webp --with-xpm --with-gpm=no \
   --with-cmacs-glib --with-cmacs-gi --with-cmacs-crispy \
   --with-cmacs-bacon --with-cmacs-gowl \
-  --with-cmacs-podomation --with-cmacs-org-ex \
-  --with-cmacs-mcp
+  --with-cmacs-podomation --with-cmacs-libreclaw \
+  --with-cmacs-org-ex --with-cmacs-mcp
 make -j$(nproc)           # builds deps + emacs
 src/emacs                 # run it
 ```
@@ -28,7 +28,7 @@ src/emacs                 # run it
 
 ## Architecture
 
-cmacs integrates eight subsystems into Emacs as C primitives (DEFUNs):
+cmacs integrates nine subsystems into Emacs as C primitives (DEFUNs):
 
 | Subsystem | Directory | What it does |
 |-----------|-----------|--------------|
@@ -40,6 +40,7 @@ cmacs integrates eight subsystems into Emacs as C primitives (DEFUNs):
 | **bacon** | `cmacs/bacon/` | Embedded shell (fork-of-self `--bacon` mode, socketpair IPC) |
 | **gowl** | `cmacs/gowl/` | Wayland compositor (wlroots-based) — 47 DEFUNs for full WM control |
 | **podomation** | `cmacs/podomation/` | Event-driven automation engine — 17 DEFUNs, DSL, REPL |
+| **libreclaw** | `cmacs/libreclaw/` | LibreClaw chat gateway — Matrix/Local/Email/Webhook rooms as org-mode buffers, shared PodEngine, hatch wizard |
 | **org-ex** | `cmacs/org-ex/` | Interactive widget embedding for Org mode (liborgex-1.0.a, statically linked) |
 | **mcp** | `cmacs/mcp/` | MCP server — full AI-native runtime introspection and control via Unix socket |
 
@@ -72,11 +73,12 @@ cmacs/              C source for all cmacs subsystems
     modules/        bacon native modules (starship, fzf, etc.)
   gowl/             Wayland compositor
   podomation/       Automation engine (DEFUN bridge + cmacs/gowl modules)
+  libreclaw/        LibreClaw chat/Matrix integration (rooms as org buffers)
   org-ex/           Org-Ex interactive widgets (liborgex-1.0.a + DEFUN bridge)
   mcp/              MCP server (Unix socket, tools, resources, prompts)
   compat/           Compatibility shims
   cmacs.h           Master header
-deps/               Git submodules (crispy, bacon, gowl, podomation, mcp-glib)
+deps/               Git submodules (crispy, bacon, gowl, podomation, libreclaw, mcp-glib)
 tools/cmacs-mcp/    MCP stdio-to-socket shim binary
 lisp/cmacs/         Elisp layer for each subsystem
 test/cmacs/         ERT tests for each subsystem
@@ -113,6 +115,7 @@ All cmacs features are auto-detected. The configure script checks for system pac
 - **bacon**: system `bacon-1.0` package or bundled `deps/bacon`
 - **gowl**: system `gowl` package or bundled `deps/gowl` + wlroots-0.19 + wayland-server
 - **podomation**: system `podomation-1.0` package or bundled `deps/podomation`
+- **libreclaw**: system `libreclaw >= 0.18.0` package or bundled `deps/libreclaw` + libsoup-3.0, json-glib-1.0, libcmark, sqlite3, libetpan, libpq, yaml-0.1. Shares cmacs's PodEngine via `lc_podomation_new_with_engine()`; `init_cmacs_libreclaw()` is intentionally empty — `(cmacs-libreclaw-start)` from Elisp creates the LcApp at runtime.
 - **org-ex**: builds `liborgex-1.0.a` statically from `cmacs/org-ex/lib/` (requires glib)
 - **mcp**: system `mcp-glib-1.0` package or bundled `deps/mcp-glib` + json-glib-1.0, libsoup-3.0, libdex-1
 
@@ -122,7 +125,7 @@ All cmacs features are auto-detected. The configure script checks for system pac
 make -C test check-cmacs    # run all cmacs ERT tests
 ```
 
-Test files in `test/cmacs/`: one per subsystem (`cmacs-glib-tests.el`, `cmacs-bacon-tests.el`, `cmacs-gi-tests.el`, `cmacs-gobject-tests.el`, `cmacs-gowl-tests.el`, `cmacs-crispy-tests.el`, `cmacs-config-tests.el`, `cmacs-org-ex-tests.el`).
+Test files in `test/cmacs/`: one per subsystem (`cmacs-glib-tests.el`, `cmacs-bacon-tests.el`, `cmacs-gi-tests.el`, `cmacs-gobject-tests.el`, `cmacs-gowl-tests.el`, `cmacs-crispy-tests.el`, `cmacs-config-tests.el`, `cmacs-org-ex-tests.el`, `cmacs-libreclaw-tests.el`).
 
 ## Debugging Crashes
 

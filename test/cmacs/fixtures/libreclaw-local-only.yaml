@@ -1,0 +1,26 @@
+# libreclaw test fixture — local channel only, no network
+#
+# Used by cmacs-libreclaw-tests.el to verify lifecycle DEFUNs without
+# needing a running Matrix homeserver or mail server.  Suitable for
+# CI environments that can't reach external services.
+
+agent:
+  name: "cmacs-libreclaw-test"
+  workspace: "/tmp/cmacs-libreclaw-test-ws"
+
+providers:
+  - name: claude
+    kind: claude-code
+    command: "echo test"   # dummy; never actually invoked
+    model: test
+
+channels:
+  - id: local
+    kind: local
+    prompt: "test> "
+
+podomation:
+  enabled: false
+
+audit_log:
+  enabled: false

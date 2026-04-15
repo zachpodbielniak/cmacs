@@ -363,6 +363,10 @@ CMACS_PODOMATION_OBJ = @CMACS_PODOMATION_OBJ@
 CMACS_PODOMATION_CFLAGS = @CMACS_PODOMATION_CFLAGS@
 CMACS_PODOMATION_LIBS = @CMACS_PODOMATION_LIBS@
 CMACS_PODOMATION_BUNDLED = @CMACS_PODOMATION_BUNDLED@
+CMACS_LIBRECLAW_OBJ = @CMACS_LIBRECLAW_OBJ@
+CMACS_LIBRECLAW_CFLAGS = @CMACS_LIBRECLAW_CFLAGS@
+CMACS_LIBRECLAW_LIBS = @CMACS_LIBRECLAW_LIBS@
+CMACS_LIBRECLAW_BUNDLED = @CMACS_LIBRECLAW_BUNDLED@
 CMACS_ORG_EX_OBJ = @CMACS_ORG_EX_OBJ@
 CMACS_ORG_EX_CFLAGS = @CMACS_ORG_EX_CFLAGS@
 CMACS_ORG_EX_LIBS = @CMACS_ORG_EX_LIBS@
@@ -375,6 +379,7 @@ CMACS_INTERNAL_CFLAGS = -I$(srcdir)/../cmacs/glib -I$(srcdir)/../cmacs/gobject \
                         -I$(srcdir)/../cmacs/gi -I$(srcdir)/../cmacs/crispy \
                         -I$(srcdir)/../cmacs/bacon -I$(srcdir)/../cmacs/gowl \
                         -I$(srcdir)/../cmacs/podomation \
+                        -I$(srcdir)/../cmacs/libreclaw \
                         -I$(srcdir)/../cmacs/org-ex \
                         -I$(srcdir)/../cmacs/mcp \
                         -I$(srcdir)/../cmacs/api \
@@ -383,6 +388,7 @@ CMACS_CFLAGS = $(CMACS_INTERNAL_CFLAGS) \
                $(CMACS_GLIB_CFLAGS) $(CMACS_GI_CFLAGS) \
                $(CMACS_CRISPY_CFLAGS) $(CMACS_BACON_CFLAGS) \
                $(CMACS_GOWL_CFLAGS) $(CMACS_PODOMATION_CFLAGS) \
+               $(CMACS_LIBRECLAW_CFLAGS) \
                $(CMACS_ORG_EX_CFLAGS) \
                $(CMACS_MCP_CFLAGS)
 
@@ -528,7 +534,7 @@ base_obj = dispnew.o frame.o scroll.o xdisp.o menu.o $(XMENU_OBJ) window.o     \
 	$(MSDOS_OBJ) $(MSDOS_X_OBJ) $(NS_OBJ) $(CYGWIN_OBJ) $(FONT_OBJ)        \
 	$(W32_OBJ) $(WINDOW_SYSTEM_OBJ) $(XGSELOBJ)			       \
 	$(HAIKU_OBJ) $(PGTK_OBJ) $(ANDROID_OBJ) \
-	$(CMACS_GLIB_OBJ) $(CMACS_GI_OBJ) $(CMACS_CRISPY_OBJ) $(CMACS_BACON_OBJ) $(CMACS_GOWL_OBJ) $(CMACS_PODOMATION_OBJ) $(CMACS_ORG_EX_OBJ) $(CMACS_MCP_OBJ)
+	$(CMACS_GLIB_OBJ) $(CMACS_GI_OBJ) $(CMACS_CRISPY_OBJ) $(CMACS_BACON_OBJ) $(CMACS_GOWL_OBJ) $(CMACS_PODOMATION_OBJ) $(CMACS_LIBRECLAW_OBJ) $(CMACS_ORG_EX_OBJ) $(CMACS_MCP_OBJ)
 doc_obj = $(base_obj) $(NS_OBJC_OBJ)
 obj = $(doc_obj) $(HAIKU_CXX_OBJ)
 
@@ -660,7 +666,8 @@ LIBES = $(LIBS) $(W32_LIBS) $(LIBS_GNUSTEP) $(PGTK_LIBS) $(LIBX_BASE) $(LIBIMAGE
    $(TREE_SITTER_LIBS) $(SQLITE3_LIBS) $(XCOMPOSITE_LIBS) $(XSHAPE_LIBS) \
    $(ANDROID_LIBS) \
    $(CMACS_GLIB_LIBS) $(CMACS_GI_LIBS) $(CMACS_CRISPY_LIBS) \
-   $(CMACS_BACON_LIBS) $(CMACS_GOWL_LIBS) $(CMACS_PODOMATION_LIBS) $(CMACS_ORG_EX_LIBS) $(CMACS_MCP_LIBS)
+   $(CMACS_BACON_LIBS) $(CMACS_GOWL_LIBS) $(CMACS_PODOMATION_LIBS) \
+   $(CMACS_LIBRECLAW_LIBS) $(CMACS_ORG_EX_LIBS) $(CMACS_MCP_LIBS)
 
 ## FORCE it so that admin/unidata can decide whether this file is
 ## up-to-date.  Although since charprop depends on bootstrap-emacs,
@@ -759,8 +766,9 @@ GLOBAL_SOURCES = $(base_obj:.o=.c) $(NS_OBJC_OBJ:.o=.m)
 ## Create symlinks so scanning finds the DEFUN docstrings.
 CMACS_ALL_OBJ = $(CMACS_GLIB_OBJ) $(CMACS_GI_OBJ) \
                 $(CMACS_CRISPY_OBJ) $(CMACS_BACON_OBJ) $(CMACS_GOWL_OBJ) \
-                $(CMACS_PODOMATION_OBJ) $(CMACS_ORG_EX_OBJ) $(CMACS_MCP_OBJ)
-CMACS_DIRS = glib gobject gi crispy bacon gowl podomation org-ex mcp
+                $(CMACS_PODOMATION_OBJ) $(CMACS_LIBRECLAW_OBJ) \
+                $(CMACS_ORG_EX_OBJ) $(CMACS_MCP_OBJ)
+CMACS_DIRS = glib gobject gi crispy bacon gowl podomation libreclaw org-ex mcp
 cmacs-symlinks:
 	$(AM_V_at)for f in $(CMACS_ALL_OBJ:.o=.c); do \
 	  test -e "$(srcdir)/$$f" && continue; \
@@ -839,6 +847,20 @@ cmacs-podomation-modules: $(CMACS_PODOMATION_STATIC_LIB)
 	$(MAKE) -C $(srcdir)/../deps/podomation modules
 endif
 
+ifeq ($(CMACS_LIBRECLAW_BUNDLED),yes)
+## Build liblc-1.0.a (+ GIR/typelib) from deps/libreclaw/ as a static
+## library.  The full libreclaw target produces shared, static, the
+## CLI binary, and (since 0.18.0) Lc-1.0.gir/typelib by default.
+## We depend on the static lib but invoke the `all` target so the
+## GIR files also get produced and can be referenced by cmacs-gi at
+## runtime via GI_TYPELIB_PATH.
+CMACS_LIBRECLAW_STATIC_LIB = $(srcdir)/../deps/libreclaw/build/release/liblc-1.0.a
+$(CMACS_LIBRECLAW_STATIC_LIB):
+	$(MAKE) -C $(srcdir)/../deps/libreclaw static gir
+
+$(CMACS_LIBRECLAW_OBJ): $(CMACS_LIBRECLAW_STATIC_LIB)
+endif
+
 ## Build libcmacs-api.so (used at runtime by crispy and bacon).
 ## Must be built before temacs so it's available for make install.
 CMACS_API_SO = $(srcdir)/../cmacs/api/libcmacs-api.so
@@ -905,8 +927,29 @@ _dup_yaml = yaml-builder.o yaml-document.o yaml-generator.o \
   yaml-gobject.o yaml-mapping.o yaml-node.o yaml-parser.o yaml-schema.o \
   yaml-sequence.o yaml-serializable.o
 
+## libreclaw vendors both yaml-glib AND podomation inside liblc-1.0.a.
+## When cmacs is already pulling podomation as a bundled dep, those
+## objects appear twice at link time.  Strip them from libreclaw's
+## archive and rely on the canonical podomation (for pod_*) and
+## bacon/gowl-provided (for yaml_*) copies.  libreclaw's own
+## lc-podomation.o / lc-hatch.o / lc-app.o survive because they are
+## prefixed with lc_ not pod_ / yaml_.
+_dup_podomation_objs =
+
+ifeq ($(CMACS_LIBRECLAW_BUNDLED),yes)
+ifeq ($(CMACS_PODOMATION_BUNDLED),yes)
+## Fetch the canonical podomation object list from its archive.  This
+## runs at parse time, so libpodomation-1.0.a must already exist — it
+## is built as a temacs dependency before this expansion is used
+## thanks to the dedup-lib rule's prerequisite ordering below.
+_dup_podomation_objs := $(shell ar t \
+  $(srcdir)/../deps/podomation/build/release/libpodomation-1.0.a 2>/dev/null)
+endif
+endif
+
 _bacon_strip =
 _gowl_strip =
+_libreclaw_strip =
 
 ifeq ($(CMACS_BACON_BUNDLED),yes)
 ifeq ($(CMACS_CRISPY_BUNDLED),yes)
@@ -920,6 +963,15 @@ _gowl_strip += $(_dup_crispy)
 endif
 ifeq ($(CMACS_BACON_BUNDLED),yes)
 _gowl_strip += $(_dup_yaml)
+endif
+endif
+
+ifeq ($(CMACS_LIBRECLAW_BUNDLED),yes)
+ifneq ($(CMACS_BACON_BUNDLED)$(CMACS_GOWL_BUNDLED),)
+_libreclaw_strip += $(_dup_yaml)
+endif
+ifeq ($(CMACS_PODOMATION_BUNDLED),yes)
+_libreclaw_strip += $(_dup_podomation_objs)
 endif
 endif
 
@@ -939,6 +991,13 @@ CMACS_GOWL_LIBS := $(subst $(CMACS_GOWL_STATIC_LIB),$(CMACS_GOWL_DEDUP_LIB),$(CM
 endif
 CMACS_GOWL_LIBS := $(subst -Wl$(comma)-z$(comma)muldefs,,$(CMACS_GOWL_LIBS))
 
+ifneq ($(_libreclaw_strip),)
+CMACS_LIBRECLAW_DEDUP_LIB = liblibreclaw-dedup.a
+$(CMACS_LIBRECLAW_DEDUP_LIB): $(CMACS_LIBRECLAW_STATIC_LIB) $(CMACS_PODOMATION_STATIC_LIB)
+	$(AM_V_GEN)cp $< $@ && ar d $@ $(_libreclaw_strip) 2>/dev/null || true
+CMACS_LIBRECLAW_LIBS := $(subst $(CMACS_LIBRECLAW_STATIC_LIB),$(CMACS_LIBRECLAW_DEDUP_LIB),$(CMACS_LIBRECLAW_LIBS))
+endif
+
 ## We have to create $(etc) here because init_cmdargs tests its
 ## existence when setting Vinstallation_directory (FIXME?).
 ## This goes on to affect various things, and the emacs binary fails
@@ -946,8 +1005,8 @@ CMACS_GOWL_LIBS := $(subst -Wl$(comma)-z$(comma)muldefs,,$(CMACS_GOWL_LIBS))
 temacs$(EXEEXT): $(LIBXMENU) $(ALLOBJS) $(LIBEGNU_ARCHIVE) $(EMACSRES) \
   $(charsets) $(charscript) ${emoji-zwj} $(MAKE_PDUMPER_FINGERPRINT) \
   $(CMACS_BACON_STATIC_LIB) $(CMACS_CRISPY_STATIC_LIB) $(CMACS_GOWL_STATIC_LIB) \
-  $(CMACS_PODOMATION_STATIC_LIB) \
-  $(CMACS_BACON_DEDUP_LIB) $(CMACS_GOWL_DEDUP_LIB)
+  $(CMACS_PODOMATION_STATIC_LIB) $(CMACS_LIBRECLAW_STATIC_LIB) \
+  $(CMACS_BACON_DEDUP_LIB) $(CMACS_GOWL_DEDUP_LIB) $(CMACS_LIBRECLAW_DEDUP_LIB)
 ifeq ($(HAVE_BE_APP),yes)
 	$(AM_V_CXXLD)$(CXX) -o $@.tmp \
 	  $(ALL_CFLAGS) $(TEMACS_LDFLAGS) $(LDFLAGS) \

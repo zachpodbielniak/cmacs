@@ -1,0 +1,153 @@
+#+TITLE: LibreClaw Hatch Wizard
+#+AUTHOR: Zach Podbielniak
+
+* Overview
+
+The hatch wizard scaffolds a new libreclaw workspace inside a
+REPL-style org buffer.  It drives libreclaw 0.18.0's =lc_hatch_*=
+library API (in =deps/libreclaw/src/hatch/=) through a back-and-
+forth conversation with the user — the wizard asks a question,
+you type your answer below the =** you= heading, press =C-c C-c=,
+and the next question appears underneath.
+
+Start it with:
+
+#+begin_src elisp
+M-x cmacs-libreclaw-hatch
+#+end_src
+
+and enter a directory path (defaults to
+=cmacs-libreclaw-default-workspace=, i.e. =~/.libreclaw/=).  A
+buffer named =*libreclaw-hatch: <dir>*= opens in
+=cmacs-libreclaw-hatch-mode=, an =org-mode= derivative.
+
+* Interaction model
+
+The buffer works exactly like a libreclaw room buffer:
+
+- History (everything above the most recent =** you= heading) is
+  read-only — the wizard rejects edits there with =text-read-only=.
+- The region below the current =** you= heading is an editable
+  compose area.  =RET= is ordinary org-mode, so you can write
+  multi-line answers, paste source blocks, etc.
+- =C-c C-c= submits the compose region.  The wizard validates the
+  answer, calls the relevant =lc_hatch_*= DEFUN, and inserts the
+  next =** wizard:= prompt + a fresh =** you= compose region below.
+- =C-c C-k= aborts the session at any time.  Killing the buffer
+  directly is also safe — a =kill-buffer-hook= releases the
+  underlying =LcHatchContext= via =cmacs-libreclaw-hatch-free=.
+
+* Buffer layout (mid-session)
+
+#+begin_example
+,#+TITLE: LibreClaw Workspace Hatching
+,#+STARTUP: showall indent
+,#+OPTIONS: toc:nil num:nil
+
+,* Welcome
+I'll help you scaffold a new libreclaw workspace at
+=/home/me/.libreclaw/my-bot=.
+
+Answer each question below the =** you= heading and press
+=C-c C-c= to submit...
+
+,* Wizard                                              :wizard:
+
+,** wizard: What should this workspace be called?
+Short identifier matching "^[a-zA-Z][a-zA-Z0-9_-]*$".
+Example: my-bot
+
+,** you
+my-bot
+
+,** wizard: Attach an identity file (SOUL.md)?
+Type a path to a SOUL.md file, or "skip" to continue without one.
+
+,** you
+skip
+
+,** wizard: Which AI provider should this workspace use?
+Type one of: claude, openai, both
+
+,** you
+<cursor parks here; user types the answer>
+#+end_example
+
+* Conversation flow
+
+The wizard walks through these questions in order.  Channels can
+be added in a loop — after each one it asks whether to add
+another or type =done= to continue.
+
+1. *Workspace name* — validated against
+   =^[a-zA-Z][a-zA-Z0-9_-]*$=.  Retries on invalid input.
+2. *Identity (SOUL.md)* — path or =skip=.
+3. *AI provider* — =claude=, =openai=, or =both=.
+4. *Channels* — loops until you type =done= (and at least one
+   channel has been added):
+   - =cmacs= — the native in-process Emacs channel.  No
+     parameters.  Recommended for in-Emacs chat workflows; the
+     generated YAML is simply =channels: cmacs: enabled: true=
+     and the Emacs host handles rooms, persistence, and buffer
+     rendering entirely at runtime.
+   - =matrix= — asks for homeserver, then user ID.  Token is
+     prompted via =read-passwd= in the *minibuffer*, not in the
+     buffer, and stored via =auth-source=.  The generated YAML
+     only references =${auth-source:matrix:@user:host}=, never
+     the raw token.
+   - =local= — asks for the prompt string.  CLI-only: uses fd 0/1,
+     so it's not useful inside Emacs.  Use =cmacs= instead.
+   - =email= — asks for IMAP host, SMTP host, username.  Password
+     via =read-passwd= + =auth-source=.
+   - =webhook= — asks for port and path prefix.
+5. *Podomation* — yes/no; on =yes=, asks for an inline DSL block
+   (or =none= to enable with no pre-declared pods).
+6. *Audit log* — yes/no; on =yes=, asks for the SQLite path (or
+   =default=).
+7. *Review & Write* — the wizard inserts the proposed YAML inline
+   as a =#+begin_src yaml ... #+end_src= block and asks =yes / no=
+   to finalize.  On =yes=, =lc_hatch_finalize= writes the workspace
+   and the wizard offers to =cmacs-libreclaw-start= against the new
+   config.
+
+Any step that rejects the answer (invalid regex, unknown channel
+kind, port out of range, etc.) re-asks the same question inline
+with the error message.  No lost context, no modal dialogs.
+
+* Keybindings
+
+| Binding   | Command                       |
+|-----------|-------------------------------|
+| =C-c C-c= | =cmacs-libreclaw-hatch-submit= |
+| =C-c C-k= | =cmacs-libreclaw-hatch-cancel= |
+| =RET=     | (org-mode default — newline)   |
+| =TAB=     | (org-mode default — cycle)     |
+
+There are *no* step-navigation bindings because the wizard is a
+linear conversational flow.  Past answers live in the read-only
+history section; to change an earlier answer, cancel with
+=C-c C-k= and restart.
+
+* Secrets handling
+
+- Matrix access tokens and email passwords are read via
+  =read-passwd= (no echo) in the minibuffer, never the org
+  buffer.
+- The hatch mode disables =auto-save-mode= and
+  =make-backup-files= locally, so even transient buffer state
+  doesn't hit disk.
+- After reading, the wizard tries
+  =auth-source-secrets-create=/=save-function= to store the
+  value in your configured backend (GNOME Keyring, KWallet,
+  encrypted authinfo, etc.).
+- The YAML written to disk contains only the indirection
+  =${auth-source:matrix:@user:host}= — libreclaw fetches the
+  real value at load time.
+
+* Not-wizard path
+
+If you just want a minimal working YAML with a Local channel and
+no credentials, call =M-x cmacs-libreclaw-generate-default-config=
+instead — see [[file:configuration.org][configuration.org]].  The
+wizard is for the richer case where you're configuring Matrix
+tokens, email credentials, podomation rules, and so on.

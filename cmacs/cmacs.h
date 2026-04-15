@@ -43,6 +43,10 @@
 # include "gowl/cmacs-gowl.h"
 #endif
 
+#ifdef HAVE_CMACS_LIBRECLAW
+# include "libreclaw/cmacs-libreclaw.h"
+#endif
+
 #ifdef HAVE_CMACS_ORG_EX
 # include "org-ex/cmacs-org-ex.h"
 #endif

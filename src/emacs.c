@@ -2652,6 +2652,9 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #ifdef HAVE_CMACS_PODOMATION
       syms_of_cmacs_podomation ();
 #endif
+#ifdef HAVE_CMACS_LIBRECLAW
+      syms_of_cmacs_libreclaw ();
+#endif
 #ifdef HAVE_CMACS_ORG_EX
       syms_of_cmacs_org_ex ();
 #endif
@@ -2743,6 +2746,9 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #endif
 #ifdef HAVE_CMACS_PODOMATION
   init_cmacs_podomation ();
+#endif
+#ifdef HAVE_CMACS_LIBRECLAW
+  init_cmacs_libreclaw ();
 #endif
 #ifdef HAVE_CMACS_MCP
   if (!noninteractive)

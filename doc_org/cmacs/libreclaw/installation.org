@@ -1,0 +1,81 @@
+#+TITLE: LibreClaw Installation
+#+AUTHOR: Zach Podbielniak
+
+* Prerequisites
+
+LibreClaw pulls in a fairly large dependency graph.  On Fedora:
+
+#+begin_src bash
+sudo dnf install \
+    glib2-devel gobject-introspection-devel \
+    libsoup3-devel json-glib-devel libyaml-devel \
+    cmark-devel sqlite-devel libetpan-devel \
+    libpq-devel
+#+end_src
+
+On Debian/Ubuntu:
+
+#+begin_src bash
+sudo apt install \
+    libglib2.0-dev libgirepository1.0-dev \
+    libsoup-3.0-dev libjson-glib-dev libyaml-dev \
+    libcmark-dev libsqlite3-dev libetpan-dev \
+    libpq-dev
+#+end_src
+
+* Submodule
+
+LibreClaw lives under =deps/libreclaw= as a git submodule.  After
+cloning cmacs, run:
+
+#+begin_src bash
+git submodule update --init --recursive deps/libreclaw
+#+end_src
+
+The nested submodules =deps/ai-glib=, =deps/yaml-glib=, and
+=deps/podomation= inside libreclaw are pulled in at the same time.
+
+* Configure flag
+
+Build cmacs with:
+
+#+begin_src bash
+./configure \
+    --with-cmacs-glib --with-cmacs-gi \
+    --with-cmacs-podomation \
+    --with-cmacs-libreclaw \
+    ... other flags ...
+make -j$(nproc)
+#+end_src
+
+=--with-cmacs-libreclaw= implies =--with-cmacs-podomation= at runtime
+(libreclaw shares its PodEngine), so make sure both are on.
+
+* System vs bundled
+
+Like the other cmacs subsystems, libreclaw supports:
+
+- =--with-cmacs-libreclaw= — build from =deps/libreclaw= (default)
+- =--with-cmacs-libreclaw=system= — link against a system-installed
+  =libreclaw >= 0.18.0= via =pkg-config=
+
+The bundled path pulls in libreclaw's vendored ai-glib, yaml-glib,
+and podomation submodules.  The dedup logic in =src/Makefile.in=
+strips yaml-glib and podomation duplicates from libreclaw's archive
+at link time so the canonical cmacs versions win.
+
+* GIR / typelib
+
+Starting with libreclaw 0.18.0, the build always produces
+=Lc-1.0.gir= and =Lc-1.0.typelib= (unless you pass =GIR=0=).  When
+installed via =make install=, these land in
+=$(libdir)/girepository-1.0= and =$(datadir)/gir-1.0= respectively.
+
+For in-tree builds, point =GI_TYPELIB_PATH= at
+=deps/libreclaw/build/release= so =cmacs-gi=' =(gi-require "Lc" "1.0")=
+finds the typelib:
+
+#+begin_src bash
+export GI_TYPELIB_PATH=$(pwd)/deps/libreclaw/build/release:$GI_TYPELIB_PATH
+src/emacs
+#+end_src

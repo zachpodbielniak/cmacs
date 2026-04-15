@@ -1,0 +1,73 @@
+#+TITLE: LibreClaw Overview
+#+AUTHOR: Zach Podbielniak
+
+* What LibreClaw is
+
+LibreClaw is a GObject-native AI agent gateway, written in C with
+GLib/GObject, that routes messages between AI sessions and messaging
+channels.  It talks Matrix via libsoup3, accepts stdin/stdout for
+local CLI, speaks IMAP/SMTP through libetpan for email, hosts HTTP
+webhook receivers, and dispatches to Claude or OpenAI via ai-glib.
+
+* Why embed it in cmacs
+
+1. *Native GObject* — fits cmacs's GLib-based architecture cleanly.
+2. *Shared main loop* — libreclaw 0.18.0 added embed mode
+   (=lc_app_new_embedded=) that attaches sources to any GMainContext
+   without owning a GMainLoop, so Emacs's pselect-based loop drives
+   everything.
+3. *Shared podomation* — 0.18.0 also added =lc_podomation_new_with_engine=
+   so libreclaw can reuse cmacs's PodEngine instead of running a
+   second one.  DSL rules defined in either place see each other.
+4. *Org-mode buffers* — treating each room as an org document means
+   users get multi-line editing, source blocks, tables, links, and
+   attachments for free.
+
+* Architecture
+
+#+begin_src
+               ┌───────────────────────────────────────────┐
+               │                   Emacs                   │
+               │                                           │
+  Matrix ─┐    │  ┌─ cmacs-libreclaw.el (org-mode room UI) │
+  Email ──┼──▶ │──┤                                         │
+  Webhook ┤    │  │                    DEFUNs (C layer)     │
+  Local ──┘    │  └── cmacs/libreclaw/cmacs-libreclaw.c ──┐ │
+               │                                          ▼ │
+               │   ┌────────────────────────────────────────┐
+               │   │ libreclaw 0.18.0 (deps/libreclaw)      │
+               │   │   LcApp ─ LcChannelManager ─ LcChannels│
+               │   │          ─ LcSessionManager             │
+               │   │          ─ LcPodomation ──┐             │
+               │   │                            ▼             │
+               │   │                 shared PodEngine         │
+               │   │                            ▲             │
+               │   │   pod-cmacs-libreclaw-module.o (bridge)  │
+               │   │                            │             │
+               │   │   cmacs-podomation ────────┘             │
+               │   └────────────────────────────────────────┘
+               └───────────────────────────────────────────┘
+#+end_src
+
+* Lifecycle
+
+1. User sets =cmacs-libreclaw-config-file= to a YAML path.
+2. User runs =M-x cmacs-libreclaw-start=.
+3. =cmacs-libreclaw.el= ensures =cmacs-podomation= is running, then
+   calls =cmacs-libreclaw--start-internal= (C DEFUN).
+4. C layer:
+   a. Registers =pod-cmacs-libreclaw-module= on the shared engine.
+   b. Calls =lc_app_new_embedded(config_path, NULL, shared_engine)=.
+   c. Calls =lc_app_start_embedded=, which brings up channels,
+      sessions, cron, providers, and wires libreclaw's own signals.
+   d. Wires =cmacs-libreclaw-room.c= signal handlers into
+      =LcChannelManager::message-received= and related events.
+5. Incoming messages fire C callbacks, which format a Lisp
+   expression and hand it to =cmacs_dispatch_eval= — the same
+   mechanism =pod-cmacs-module.c= uses to stay safe across the
+   =waiting_for_input= invariant.
+6. Elisp inserts the message into the appropriate room buffer as
+   a new level-2 org heading above the =* Compose= sentinel.
+7. User types a response below =* Compose= and presses =C-c C-c=.
+   =cmacs-libreclaw-send-compose= grabs the region and calls
+   =cmacs-libreclaw-send-message=, which async-queues the send.

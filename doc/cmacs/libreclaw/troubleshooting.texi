@@ -1,0 +1,89 @@
+@node LibreClaw Troubleshooting
+@section Troubleshooting
+
+@subsection ``cmacs-podomation must be started first''
+
+Libreclaw shares cmacs's PodEngine, so podomation must already be
+running.  Either:
+
+@example
+(cmacs-podomation-start)
+(cmacs-libreclaw-start)
+@end example
+
+or let @code{cmacs-libreclaw-start} auto-start podomation for you.
+
+@subsection ``libreclaw 0.18.0 does not expose a public join-room API''
+
+@code{cmacs-libreclaw-join-room} and @code{-leave-room} are
+placeholders in the initial integration.  Add rooms to
+@code{auto_join} in your YAML config and call
+@code{cmacs-libreclaw-reload-config}.
+
+@subsection ``text-read-only: LibreClaw history is read-only''
+
+You tried to edit above the @samp{* Compose} sentinel heading.
+Only the region below is writable.
+
+@subsection Room buffer doesn't get updated
+
+Check:
+
+@enumerate
+@item
+@code{(cmacs-libreclaw-running-p)} returns @code{t}
+@item
+@code{(cmacs-libreclaw-list-channels)} contains the expected channel
+@item
+@code{(cmacs-libreclaw-channel-connected-p "CHANNEL-ID")} is @code{t}
+@item
+Look in @samp{*Messages*} — dispatch errors log via @code{g_warning}.
+@end enumerate
+
+@subsection @code{(gi-require "Lc" "1.0")} fails
+
+Likely causes:
+
+@enumerate
+@item
+cmacs-gi isn't built — check @code{(fboundp 'gi-require)}.
+@item
+The typelib isn't on @env{GI_TYPELIB_PATH}.  For in-tree builds:
+
+@example
+export GI_TYPELIB_PATH=$PWD/deps/libreclaw/build/release:$GI_TYPELIB_PATH
+@end example
+@end enumerate
+
+@subsection Stale @file{.elc}/@file{.eln} after editing cmacs-libreclaw.el
+
+The #1 cause of ``my Elisp change isn't working''.  After editing:
+
+@example
+rm -f lisp/cmacs/cmacs-libreclaw.elc \
+      lisp/cmacs/cmacs-libreclaw-hatch.elc
+rm -f native-lisp/*/cmacs-libreclaw-*.eln
+rm -f native-lisp/*/cmacs-libreclaw-hatch-*.eln
+@end example
+
+Then restart Emacs.
+
+@subsection Duplicate-symbol link errors after updating libreclaw
+
+Libreclaw vendors yaml-glib and podomation inside
+@file{liblc-1.0.a}.  The dedup logic in @file{src/Makefile.in}
+(@code{_libreclaw_strip}) strips duplicates before linking.  If a
+new libreclaw release vendors additional objects, extend
+@code{_dup_yaml} / @code{_dup_podomation_objs}.
+
+Do NOT add @code{-Wl,-z,muldefs} — that leads to non-deterministic
+ABI mismatches.
+
+@subsection Crash with ``Fatal error 6: Aborted'' in @code{signal_or_quit}
+
+Classic @code{waiting_for_input} invariant violation.  All
+C→Lisp dispatches should go through
+@code{cmacs_libreclaw_dispatch_expr} (which calls
+@code{cmacs_dispatch_eval} internally).  If you added a signal
+handler that calls @code{Feval} or @code{call3} directly, route it
+through @code{cmacs_libreclaw_dispatch_expr} instead.

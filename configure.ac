@@ -658,6 +658,7 @@ OPTION_DEFAULT_OFF([cmacs-crispy], [CMacs crispy C scripting])
 OPTION_DEFAULT_OFF([cmacs-bacon],  [CMacs bacon shell])
 OPTION_DEFAULT_OFF([cmacs-gowl],  [CMacs Gowl Wayland compositor])
 OPTION_DEFAULT_OFF([cmacs-podomation], [CMacs podomation automation engine])
+OPTION_DEFAULT_OFF([cmacs-libreclaw], [CMacs libreclaw chat/Matrix client integration])
 OPTION_DEFAULT_OFF([cmacs-org-ex], [CMacs org-ex interactive widgets])
 OPTION_DEFAULT_OFF([cmacs-mcp], [CMacs MCP server])
 
@@ -763,6 +764,44 @@ if test "$with_cmacs_podomation" != "no"; then
   AC_DEFINE([HAVE_CMACS_PODOMATION], 1, [CMacs podomation automation engine])
   CMACS_PODOMATION_OBJ="cmacs-podomation.o pod-cmacs-module.o pod-gowl-module.o"
 fi
+if test "$with_cmacs_libreclaw" != "no"; then
+  if test "$with_cmacs_libreclaw" = "system"; then
+    # Use system-installed libreclaw (for distro packaging)
+    PKG_CHECK_MODULES([CMACS_LIBRECLAW], [libreclaw >= 0.18.0])
+  else
+    # Build liblc-1.0 from deps/libreclaw/ (default).  Pull in the
+    # full dep set libreclaw needs: libsoup-3.0 for Matrix, libetpan
+    # for IMAP/SMTP, libpq for postgres audit, libcmark for markdown
+    # rendering, sqlite3 for audit log, plus json-glib and yaml.
+    PKG_CHECK_MODULES([CMACS_LIBRECLAW_DEPS],
+      [glib-2.0 gobject-2.0 gio-2.0 gio-unix-2.0 gmodule-2.0
+       libsoup-3.0 json-glib-1.0 libcmark sqlite3 libetpan libpq
+       yaml-0.1])
+    CMACS_LIBRECLAW_CFLAGS="-I\$(srcdir)/../deps/libreclaw/src \
+      -I\$(srcdir)/../deps/libreclaw/build/release \
+      -I\$(srcdir)/../deps/libreclaw/deps/ai-glib/src \
+      -I\$(srcdir)/../deps/libreclaw/deps/ai-glib/build \
+      -I\$(srcdir)/../deps/libreclaw/deps/yaml-glib/src \
+      -I\$(srcdir)/../deps/libreclaw/deps/podomation/src \
+      -I\$(srcdir)/../deps/libreclaw/deps/podomation/src/module \
+      -I\$(srcdir)/../deps/libreclaw/deps/podomation/src/interfaces \
+      -I\$(srcdir)/../deps/libreclaw/deps/podomation/src/core \
+      -I\$(srcdir)/../deps/libreclaw/deps/podomation/build/release \
+      -DLC_COMPILATION \
+      -DCMACS_LIBRECLAW_GIR_DIR=\\\"\$(abs_top_srcdir)/deps/libreclaw/build/release\\\" \
+      $CMACS_LIBRECLAW_DEPS_CFLAGS"
+    CMACS_LIBRECLAW_LIBS="-Wl,--whole-archive \$(srcdir)/../deps/libreclaw/build/release/liblc-1.0.a \
+      -Wl,--no-whole-archive \
+      \$(srcdir)/../deps/libreclaw/deps/ai-glib/build/libai-glib-1.0.a \
+      $CMACS_LIBRECLAW_DEPS_LIBS"
+    CMACS_LIBRECLAW_BUNDLED=yes
+  fi
+  AC_DEFINE([HAVE_CMACS_LIBRECLAW], 1, [CMacs libreclaw chat integration])
+  CMACS_LIBRECLAW_OBJ="cmacs-libreclaw.o cmacs-libreclaw-config.o \
+    cmacs-libreclaw-room.o cmacs-libreclaw-marshal.o \
+    cmacs-libreclaw-hatch.o cmacs-libreclaw-cmacs-channel.o \
+    pod-cmacs-libreclaw-module.o"
+fi
 if test "$with_cmacs_org_ex" != "no"; then
   AC_DEFINE([HAVE_CMACS_ORG_EX], 1, [CMacs org-ex interactive widgets])
   CMACS_ORG_EX_OBJ="cmacs-org-ex.o"
@@ -818,6 +857,10 @@ AC_SUBST(CMACS_PODOMATION_OBJ)
 AC_SUBST(CMACS_PODOMATION_CFLAGS)
 AC_SUBST(CMACS_PODOMATION_LIBS)
 AC_SUBST(CMACS_PODOMATION_BUNDLED)
+AC_SUBST(CMACS_LIBRECLAW_OBJ)
+AC_SUBST(CMACS_LIBRECLAW_CFLAGS)
+AC_SUBST(CMACS_LIBRECLAW_LIBS)
+AC_SUBST(CMACS_LIBRECLAW_BUNDLED)
 
 # CMacs API library: built as a shared library in cmacs/api/ and used
 # by both the bacon cmacsgi module and crispy scripts (in-process).

@@ -1,0 +1,231 @@
+@node LibreClaw Configuration
+@section Configuration
+
+@subsection Where configuration lives
+
+LibreClaw reads a single YAML file at startup.  There are three
+ways to tell cmacs-libreclaw which file to use.
+
+@subsubsection Option A --- declarative, in your init file
+
+@example
+(setq cmacs-libreclaw-config-file "~/.libreclaw/work.yaml")
+@end example
+
+The path is expanded and checked the first time
+@code{cmacs-libreclaw-start} or @code{cmacs-libreclaw-open}
+runs.
+
+@subsubsection Option B --- imperative, one-shot
+
+@example
+(cmacs-libreclaw-load-config "~/.libreclaw/work.yaml")
+@end example
+
+Same result, but also handles the ``libreclaw is already
+running'' case: pass a non-nil second argument (or answer the
+@code{y-or-n-p} prompt) and the subsystem is cleanly stopped
+and restarted against the new config.
+
+Interactively: @kbd{M-x cmacs-libreclaw-load-config} prompts
+for the YAML path with completion.
+
+@subsubsection Option C --- let the default-config generator take over
+
+If @code{cmacs-libreclaw-config-file} is never set,
+@code{cmacs-libreclaw-start} calls
+@code{cmacs-libreclaw-ensure-config}, which prompts to
+auto-generate a minimal default at
+@code{cmacs-libreclaw-default-workspace} on first run.
+
+@subsubsection Switching vs. reloading
+
+@itemize
+@item
+@code{cmacs-libreclaw-load-config} switches to a @emph{different}
+file and restarts the subsystem (if requested).  In-memory
+session state in the old config is flushed.
+@item
+@code{cmacs-libreclaw-reload-config} re-reads the @emph{same}
+file and fires libreclaw's @code{config-reloaded} signal, so
+live edits to the YAML take effect without a full restart.
+@end itemize
+
+The YAML schema is owned by libreclaw, not cmacs.  See
+@file{deps/libreclaw/docs/configuration.md} for the canonical
+reference.
+
+@subsection First-run auto-generated config
+
+You don't have to hand-author a YAML to get started.  On first use
+@code{cmacs-libreclaw-start} calls
+@code{cmacs-libreclaw-ensure-config}, which:
+
+@enumerate
+@item
+adopts an existing @file{config.yaml} at
+@code{cmacs-libreclaw-default-workspace} if one is already there,
+or
+@item
+prompts you (yes-or-no) to auto-generate a minimal default at that
+path --- a single Local stdin/stdout channel, your choice of AI
+provider, no podomation, no audit log.
+@end enumerate
+
+The generator calls @code{cmacs-libreclaw-generate-default-config},
+which uses libreclaw's @code{lc_hatch_*} library API under the
+hood, so the schema is always in sync with whatever libreclaw
+version you linked against.
+
+To trigger it manually without starting libreclaw:
+
+@example
+M-x cmacs-libreclaw-generate-default-config
+@end example
+
+Customization knobs:
+
+@table @code
+@item cmacs-libreclaw-default-workspace
+Target directory (default @file{~/.libreclaw}).
+@item cmacs-libreclaw-default-ai-provider
+Symbol @samp{claude}, @samp{openai}, or @samp{both}.
+@item cmacs-libreclaw-default-prompt
+Prompt string baked into the Local channel.
+@item cmacs-libreclaw-auto-generate-config
+Set to @code{nil} to disable the auto-prompt and force the user to
+run the generator explicitly.
+@end table
+
+For a richer wizard (Matrix credentials, email channels,
+podomation DSL, audit log) use @kbd{M-x cmacs-libreclaw-hatch}
+instead.
+
+@subsection Minimal example
+
+@example
+agent:
+  name: "my-bot"
+  workspace: "/home/me/.libreclaw"
+
+providers:
+  - name: claude
+    kind: claude-code
+    command: "claude -p"
+    model: claude-opus-4-5
+
+channels:
+  - id: local
+    kind: local
+    prompt: "libreclaw> "
+
+podomation:
+  enabled: true
+@end example
+
+@subsection auth-source for secrets
+
+LibreClaw's YAML supports @code{$@{auth-source:host:user@}}
+indirection in any string field.  At load time it calls out to
+Emacs's @code{auth-source} to fetch the actual value.
+
+@enumerate
+@item
+Store your Matrix token, email password, or API key via
+@code{auth-source-secrets-create} (or @file{authinfo.gpg}).
+@item
+Reference it in YAML by host and user.
+@item
+The raw secret never touches the YAML file or the hatch buffer.
+@end enumerate
+
+@example
+channels:
+  - id: matrix
+    kind: matrix
+    homeserver:   "https://matrix.example.com"
+    user_id:      "@@bot:example.com"
+    access_token: "$@{auth-source:matrix:@@bot:example.com@}"
+@end example
+
+@subsection Hot reload
+
+@example
+M-x cmacs-libreclaw-reload-config
+@end example
+
+Re-parses the file and fires libreclaw's @code{config-reloaded}
+signal, which the podomation bridge translates into
+@code{on_cm_lc_config_reloaded} for DSL rules.
+
+@subsection Customization (core)
+
+@table @code
+@item cmacs-libreclaw-config-file
+YAML path.
+@item cmacs-libreclaw-auto-start
+If non-nil, start on @code{after-init-hook}.
+@item cmacs-libreclaw-buffer-name-format
+Printf format for generic room buffer names (not used by the
+cmacs channel, which has its own formatter).
+@item cmacs-libreclaw-my-name
+Label for locally-echoed outbound messages (default @samp{you}).
+@item cmacs-libreclaw-timestamp-format
+Strftime format for message heading timestamps.
+@item cmacs-libreclaw-message-hook
+Hook run on every inbound message.
+@item cmacs-libreclaw-room-added-hook
+Hook run when a new room buffer is created.
+@end table
+
+@subsection Customization (cmacs channel)
+
+@table @code
+@item cmacs-libreclaw-default-workspace
+Where the first-run default config lives (default
+@file{~/.libreclaw}).
+@item cmacs-libreclaw-default-ai-provider
+Symbol @samp{claude}, @samp{openai}, or @samp{both}; baked into
+the generated YAML as @code{ai.model}.
+@item cmacs-libreclaw-auto-generate-config
+Prompt to create a default on first run (default @code{t}).
+@item cmacs-libreclaw-cmacs-channel-history-dir
+Per-project buffer history directory (default
+@file{~/.libreclaw/cmacs-sessions}).
+@item cmacs-libreclaw-cmacs-channel-sender
+Sender component in the session key
+@code{cmacs:<project-root>:<sender>} (default @code{$USER}).
+@item cmacs-libreclaw-cmacs-channel-buffer-name-format
+Printf format for chat buffer names; @code{%s} is the project
+basename.
+@item cmacs-libreclaw-cmacs-channel-autosave-history
+If non-nil, persist on kill/save (default @code{t}).
+@end table
+
+@subsection Per-project session persistence
+
+The cmacs channel writes two kinds of state to disk, keyed off
+the absolute path of each project root:
+
+@enumerate
+@item
+@strong{Buffer history} --- the visible conversation (all the
+@samp{** timestamp sender} org headings above @samp{* Compose})
+is written to
+@file{~/.libreclaw/cmacs-sessions/<sha>.org}, where @samp{<sha>}
+is @code{secure-hash 'sha1 <project-root>}.  Written on buffer
+kill and after manual @kbd{C-c C-s}, restored on the next
+@code{cmacs-libreclaw-open} for the same project.
+@item
+@strong{AI session context} --- libreclaw's session manager
+persists the model's rolling context under the session key
+@code{cmacs:<project-root>:<user>}, in
+@file{~/.libreclaw/sessions/}.  This is independent of the
+buffer history and is managed entirely by libreclaw.
+@end enumerate
+
+Opening the same project twice (even across Emacs restarts)
+picks up where you left off; opening a different project gives
+you a clean slate with its own separate memory.  To reset one
+project, delete the matching @file{<sha>.org} file plus the
+corresponding entry under @file{~/.libreclaw/sessions/}.

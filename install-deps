@@ -85,7 +85,8 @@ set_packages_fedora () {
 	PKGS_TS=(libtree-sitter-devel)
 	PKGS_GLIB=(glib2-devel gobject-introspection-devel json-glib-devel
 	           libsoup3-devel libdex-devel libetpan-devel libpq-devel
-	           libssh2-devel libvirt-devel)
+	           libssh2-devel libvirt-devel libyaml-devel
+	           sqlite-devel cmark-devel)
 	# Fedora 44+ ships wlroots-0.20 as wlroots-devel; gowl needs
 	# wlroots-0.19, available as the wlroots0.19-devel compat package.
 	local wlroots_pkg="wlroots-devel"
@@ -115,7 +116,8 @@ set_packages_debian () {
 	PKGS_TS=(libtree-sitter-dev)
 	PKGS_GLIB=(libglib2.0-dev libgirepository1.0-dev libjson-glib-dev
 	           libsoup-3.0-dev libdex-dev libetpan-dev libpq-dev
-	           libssh2-1-dev libvirt-dev)
+	           libssh2-1-dev libvirt-dev libyaml-dev
+	           libsqlite3-dev libcmark-dev)
 	PKGS_GOWL=(libwlroots-dev libwayland-dev wayland-protocols
 	           libinput-dev libxkbcommon-dev libpango1.0-dev libcairo2-dev)
 	PKG_CMD="sudo apt-get install -y"
@@ -137,7 +139,8 @@ set_packages_arch () {
 	PKGS_JSON=(jansson)
 	PKGS_TS=(tree-sitter)
 	PKGS_GLIB=(glib2 gobject-introspection json-glib libsoup3 libdex
-	           libetpan postgresql-libs libssh2 libvirt)
+	           libetpan postgresql-libs libssh2 libvirt libyaml
+	           sqlite cmark)
 	PKGS_GOWL=(wlroots wayland wayland-protocols libinput libxkbcommon pango cairo)
 	PKG_CMD="sudo pacman -S --needed --noconfirm"
 }
@@ -152,7 +155,8 @@ set_packages_macos () {
 	PKGS_JSON=(jansson)
 	PKGS_TS=(tree-sitter)
 	PKGS_GLIB=(glib gobject-introspection json-glib libsoup libdex
-	           libetpan libpq libssh2 libvirt)
+	           libetpan libpq libssh2 libvirt libyaml
+	           sqlite cmark)
 	PKGS_GOWL=()  # Wayland not available on macOS
 	PKG_CMD="brew install"
 }
@@ -167,7 +171,8 @@ set_packages_freebsd () {
 	PKGS_JSON=(jansson)
 	PKGS_TS=(tree-sitter)
 	PKGS_GLIB=(glib gobject-introspection json-glib libsoup3 libdex
-	           libetpan postgresql16-client libssh2 libvirt)
+	           libetpan postgresql16-client libssh2 libvirt libyaml
+	           sqlite3 cmark)
 	PKGS_GOWL=()  # Wayland compositor support limited on FreeBSD
 	PKG_CMD="sudo pkg install -y"
 }

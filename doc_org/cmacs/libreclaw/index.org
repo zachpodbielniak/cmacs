@@ -1,0 +1,41 @@
+#+TITLE: CMacs LibreClaw Integration
+#+AUTHOR: Zach Podbielniak
+#+STARTUP: showall
+
+LibreClaw is an AI-agent gateway (Matrix, email, webhook, local CLI)
+embedded inside cmacs as the =cmacs-libreclaw= subsystem.  It runs
+inside Emacs on cmacs's GMainContext, shares cmacs's podomation
+engine, and surfaces each room as an org-mode buffer in the style of
+[[https://github.com/s-kostyaev/ellama][ellama]].
+
+* Table of contents
+
+- [[file:overview.org][Overview]] — what libreclaw is, why it's embedded, architecture
+- [[file:installation.org][Installation]] — deps, configure flag, submodule init
+- [[file:configuration.org][Configuration]] — YAML schema, auth-source, hot reload
+- [[file:usage.org][Usage]] — start/stop, room buffers, sending messages
+- [[file:hatch.org][Hatching]] — running the org-buffer workspace wizard
+- [[file:channels.org][Channels]] — per-channel setup (Matrix, Local, Email, Webhook)
+- [[file:scripting.org][Scripting]] — cmacs-gi and signal connection from Elisp
+- [[file:dsl.org][Podomation DSL]] — bridge events and handler actions
+- [[file:api.org][API Reference]] — every DEFUN with signature and examples
+- [[file:troubleshooting.org][Troubleshooting]] — common issues and diagnostic flows
+
+* At a glance
+
+- *Submodule*: =deps/libreclaw= — pinned to libreclaw =v0.18.0+=
+- *Configure flag*: =--with-cmacs-libreclaw=
+- *Dependencies*: glib, gobject, gio, libsoup-3.0, json-glib, libcmark,
+  sqlite3, libetpan, libpq, yaml-0.1
+- *Shared PodEngine*: libreclaw's LcPodomation attaches to cmacs's
+  engine via =lc_podomation_new_with_engine=, so there is one engine
+  for the whole process
+- *Room buffers*: =cmacs-libreclaw-room-mode= (derived from =org-mode=)
+  with a read-only history section and an editable =* Compose= sentinel
+- *Compose UX*: =C-c C-c= sends, =RET= stays native org for multi-line
+  edits (source blocks, tables, links)
+- *Hatch wizard*: =M-x cmacs-libreclaw-hatch= opens an org-buffer
+  wizard that drives libreclaw's =lc_hatch_*= API to scaffold a new
+  workspace end-to-end
+- *GI*: libreclaw ships =Lc-1.0.gir=/=.typelib= by default as of
+  0.18.0, so =(gi-require "Lc" "1.0")= works for scripting access

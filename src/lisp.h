@@ -5508,6 +5508,10 @@ extern void init_cmacs_gowl (void);
 extern void syms_of_cmacs_podomation (void);
 extern void init_cmacs_podomation (void);
 #endif
+#ifdef HAVE_CMACS_LIBRECLAW
+extern void syms_of_cmacs_libreclaw (void);
+extern void init_cmacs_libreclaw (void);
+#endif
 #ifdef HAVE_CMACS_ORG_EX
 extern void syms_of_cmacs_org_ex (void);
 #endif

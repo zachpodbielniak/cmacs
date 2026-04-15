@@ -1,0 +1,134 @@
+@node LibreClaw Usage
+@section Usage
+
+@subsection One-command entry point
+
+If you just want to start chatting:
+
+@example
+M-x cmacs-libreclaw-open
+@end example
+
+On first run this will:
+
+@enumerate
+@item
+Ensure libreclaw is running --- auto-generating a default config
+at @code{cmacs-libreclaw-default-workspace} if one is not already
+configured.
+@item
+Detect the current project directory via @code{project-current},
+@code{vc-root-dir}, or @code{locate-dominating-file} for common
+markers (@file{.git}, @file{Cargo.toml}, @file{pyproject.toml},
+etc.).  Falls back to the current @code{default-directory} when
+no project is detected.
+@item
+Open a dedicated org-mode buffer named
+@samp{*libreclaw: <project>*} bound to that project root.  The
+first time you open a project, libreclaw starts a fresh AI
+session for it.  Subsequent opens restore the conversation from
+disk (@file{~/.libreclaw/cmacs-sessions/<sha>.org}) and continue
+the same session.
+@end enumerate
+
+Two different projects, two different buffers, two independent
+conversations.  The cmacs channel gives each project root its
+own room key, so libreclaw's session manager keeps their memory
+separated automatically:
+
+@example
+M-x find-file ~/Documents/notes
+M-x cmacs-libreclaw-open
+  -> *libreclaw: notes*     (fresh session for the notes project)
+
+M-x find-file ~/source/projects/cmacs
+M-x cmacs-libreclaw-open
+  -> *libreclaw: cmacs*     (completely separate session)
+@end example
+
+Both buffers persist across Emacs restarts.
+
+@subsection Starting and stopping manually
+
+@code{cmacs-libreclaw-open} handles the lifecycle for you, but
+you can drive it directly:
+
+@example
+(setq cmacs-libreclaw-config-file "~/.libreclaw/config.yaml")
+M-x cmacs-libreclaw-start
+@end example
+
+Calling @code{cmacs-libreclaw-start} when it is already running
+signals @code{cmacs-libreclaw-error}.  Use
+@code{cmacs-libreclaw-running-p} to check first.
+
+Stop with @kbd{M-x cmacs-libreclaw-stop}.  Room buffers are left in
+place with their history preserved; killing them removes them from
+@code{cmacs-libreclaw-rooms-alist}.
+
+@subsection Room buffers
+
+Each room surfaces as a buffer named
+@samp{*libreclaw:CHANNEL-ID:ROOM-ID*}.  The mode is
+@code{cmacs-libreclaw-room-mode}, derived from @code{org-mode}, with
+a fixed structure:
+
+@example
+#+TITLE: LibreClaw — <room-name>
+#+STARTUP: showall indent
+#+OPTIONS: toc:nil num:nil
+#+PROPERTY: channel <channel-id>
+#+PROPERTY: room-id <room-id>
+
+* Messages
+
+** 2026-04-15 14:30:12  bob
+Hey, just checking in.
+
+** 2026-04-15 14:31:05  you
+All good — working on the libreclaw integration.
+
+* Compose                                             :compose:
+<cursor parks here; type, then C-c C-c sends>
+@end example
+
+Everything above the @samp{* Compose} sentinel is read-only.  The
+region below is a normal org buffer — source blocks, tables, links,
+lists, footnotes all work as usual.
+
+@subsection Sending a message
+
+Type below @samp{* Compose} and press @kbd{C-c C-c}.  The compose
+region is read, cleared, sent async through the libreclaw channel,
+and inserted as a new @samp{** TIMESTAMP you} heading above the
+sentinel as a local echo.
+
+Buffer-local bindings:
+
+@table @kbd
+@item C-c C-c
+@code{cmacs-libreclaw-send-compose}
+@item C-c C-k
+@code{cmacs-libreclaw-clear-compose}
+@item C-c C-x C-f
+@code{cmacs-libreclaw-attach-file}
+@end table
+
+@kbd{RET}, @kbd{TAB}, @kbd{C-c C-l} are standard org-mode keys and
+work as usual for multi-line editing.
+
+@subsection Switching between rooms
+
+@kbd{M-x cmacs-libreclaw-show-room} prompts with a completion list
+of @samp{CHANNEL/ROOM-ID} strings.
+
+@subsection Sending programmatically
+
+@example
+(cmacs-libreclaw-send-message
+ "matrix" "!roomid:example.com"
+ "Hello from Elisp!")
+@end example
+
+Optional @var{HTML-BODY} and @var{THREAD-ID} arguments cover Matrix
+reply threads.

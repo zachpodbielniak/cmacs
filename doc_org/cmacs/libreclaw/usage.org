@@ -1,0 +1,133 @@
+#+TITLE: LibreClaw Usage
+#+AUTHOR: Zach Podbielniak
+
+* One-command entry point
+
+If you just want to start chatting, this is it:
+
+#+begin_src elisp
+M-x cmacs-libreclaw-open
+#+end_src
+
+On first run this will:
+
+1. Ensure libreclaw is running — auto-generating a default config
+   at =cmacs-libreclaw-default-workspace= if one is not already
+   configured (see [[file:configuration.org][configuration.org]]).
+2. Detect the current *project directory* via =project-current=,
+   =vc-root-dir=, or =locate-dominating-file= for common markers
+   (=.git=, =Cargo.toml=, =pyproject.toml=, etc.).  Falls back to
+   the current =default-directory= when no project is detected.
+3. Open a dedicated org-mode buffer named =*libreclaw: <project>*=
+   bound to that project root.  The first time you open a
+   project, libreclaw starts a fresh AI session for it.  Subsequent
+   opens restore the conversation from disk
+   (=~/.libreclaw/cmacs-sessions/<sha>.org=) and continue the same
+   session.
+
+Two different projects, two different buffers, two independent
+conversations — the cmacs channel gives each project root its
+own room key, so libreclaw's session manager keeps their memory
+separated automatically:
+
+#+begin_example
+M-x find-file ~/Documents/notes
+M-x cmacs-libreclaw-open
+  → *libreclaw: notes*     (fresh session for the notes project)
+
+M-x find-file ~/source/projects/cmacs
+M-x cmacs-libreclaw-open
+  → *libreclaw: cmacs*     (completely separate session)
+#+end_example
+
+Both buffers persist across Emacs restarts.
+
+* Starting and stopping manually
+
+=cmacs-libreclaw-open= handles the lifecycle for you, but you can
+drive it directly:
+
+#+begin_src elisp
+(setq cmacs-libreclaw-config-file "~/.libreclaw/config.yaml")
+M-x cmacs-libreclaw-start
+#+end_src
+
+Calling =cmacs-libreclaw-start= when it is already running signals
+=cmacs-libreclaw-error=.  Use =cmacs-libreclaw-running-p= to check
+first.
+
+Stop with =M-x cmacs-libreclaw-stop=.  Room buffers are left in
+place with their history preserved; killing them removes them from
+=cmacs-libreclaw-rooms-alist= and persists their history to disk.
+
+* Room buffers
+
+Each room surfaces as its own buffer named
+=*libreclaw:CHANNEL-ID:ROOM-ID*=.  The buffer uses
+=cmacs-libreclaw-room-mode=, derived from =org-mode=, with a fixed
+structure:
+
+#+begin_src
+#+TITLE: LibreClaw — <room-name>
+#+STARTUP: showall indent
+#+OPTIONS: toc:nil num:nil
+#+PROPERTY: channel <channel-id>
+#+PROPERTY: room-id <room-id>
+
+* Messages
+
+** 2026-04-15 14:30:12  bob
+Hey, just checking in.
+
+** 2026-04-15 14:31:05  you
+All good — working on the libreclaw integration.
+#+begin_src c
+void hello(void) { puts("world"); }
+#+end_src
+
+* Compose                                             :compose:
+<cursor parks here; type, then C-c C-c sends>
+#+end_src
+
+Everything above the =* Compose= sentinel is read-only — attempting
+to edit it signals =text-read-only=.  The region below is a normal
+org buffer, so all your usual org muscle memory works: source
+blocks, tables, links, lists, footnotes, =M-RET= to insert a new
+list item, =TAB= to cycle visibility, etc.
+
+* Sending a message
+
+Type below the =* Compose= heading and press =C-c C-c=.  The compose
+region is read, cleared, sent async through the libreclaw channel,
+and inserted as a new =** TIMESTAMP you= heading above the sentinel
+as a local echo.
+
+Useful bindings (all buffer-local to =cmacs-libreclaw-room-mode=):
+
+| Binding       | Command                          | Purpose                          |
+|---------------|----------------------------------|----------------------------------|
+| =C-c C-c=     | =cmacs-libreclaw-send-compose=    | send & clear                     |
+| =C-c C-k=     | =cmacs-libreclaw-clear-compose=   | drop the draft                   |
+| =C-c C-x C-f= | =cmacs-libreclaw-attach-file=     | insert an org file: link         |
+
+=RET=, =TAB=, =C-c C-l=, etc. are the standard org-mode keys and
+behave as usual for multi-line editing.
+
+* Switching between rooms
+
+=M-x cmacs-libreclaw-show-room= prompts with a completion list of
+=CHANNEL/ROOM-ID= strings and pops the selected buffer to the
+current window.
+
+* Sending programmatically
+
+The send path is available as a DEFUN:
+
+#+begin_src elisp
+(cmacs-libreclaw-send-message
+ "matrix" "!roomid:example.com"
+ "Hello from Elisp!")
+#+end_src
+
+Optional =HTML-BODY= and =THREAD-ID= arguments cover Matrix reply
+threads.

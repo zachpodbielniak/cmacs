@@ -1,0 +1,143 @@
+@node LibreClaw Channels
+@section Channels
+
+LibreClaw exposes five channel kinds, all implemented as GObjects
+behind the @code{LcChannel} interface.  cmacs-libreclaw treats them
+uniformly — @code{cmacs-libreclaw-send-message} works against any of
+them.
+
+@subsection Cmacs (LcCmacsChannel) — the recommended default
+
+The native in-process channel for embedded use inside Emacs.  The
+Emacs host pushes inbound messages via
+@code{cmacs-libreclaw-cmacs-channel-inject} and receives AI
+responses through a registered callback that dispatches into the
+right org-mode buffer.
+
+Key properties:
+
+@itemize
+@item
+Multi-room: a single channel instance tracks many rooms.  Each
+Emacs project directory becomes its own room with its own AI
+session context.
+@item
+Persistent: buffer history is saved per project under
+@file{~/.libreclaw/cmacs-sessions/<sha>.org}, and libreclaw's own
+session manager persists the AI context under the key
+@code{cmacs:<project-root>:<user>}.  Both survive Emacs restarts.
+@item
+No credentials, no ports, no hostnames.  Just
+@code{channels: cmacs: enabled: true} and it works.
+@end itemize
+
+@example
+channels:
+  cmacs:
+    enabled: true
+@end example
+
+Usage from Emacs:
+
+@example
+M-x cmacs-libreclaw-open              ; opens the chat buffer for
+                                      ; the current project root
+@end example
+
+@subsection Matrix (LcMatrixChannel)
+
+Talks Matrix Client-Server API via libsoup3.  Supports long-poll
+@code{/sync}, reply threading, room membership events.
+
+@example
+channels:
+  - id: matrix
+    kind: matrix
+    homeserver:   "https://matrix.example.com"
+    user_id:      "@@bot:example.com"
+    access_token: "$@{auth-source:matrix:@@bot:example.com@}"
+    auto_join:
+      - "!general:example.com"
+      - "!ops:example.com"
+@end example
+
+Runtime room-joining is not currently supported through cmacs — use
+@code{auto_join} and reload.
+
+@subsection Local (LcLocalChannel)
+
+stdin/stdout channel — reads from fd 0, writes to fd 1.  Useful
+for the standalone @command{libreclaw} CLI but @emph{not} for
+embedded use inside Emacs (Emacs's stdin/stdout is not a chat
+transport).  Use the Cmacs channel above instead.
+
+@example
+channels:
+  local:
+    enabled: true
+    prompt: "libreclaw> "
+@end example
+
+@subsection Email (LcEmailChannel)
+
+IMAP/SMTP via libetpan.
+
+@example
+channels:
+  - id: email
+    kind: email
+    imap_host: "imap.example.com"
+    smtp_host: "smtp.example.com"
+    username:  "bot@@example.com"
+    password:  "$@{auth-source:email:bot@@example.com@}"
+@end example
+
+@subsection Webhook (LcWebhookChannel)
+
+HTTP webhook receiver.
+
+@example
+channels:
+  - id: webhook
+    kind: webhook
+    port: 8080
+    path_prefix: "/libreclaw/webhooks"
+@end example
+
+@subsection Channel DEFUNs (cross-channel)
+
+@table @code
+@item cmacs-libreclaw-list-channels
+Return @code{((id . kind) @dots{})} of active channels.
+@item cmacs-libreclaw-channel-kind
+Kind symbol for a given channel id (@samp{matrix}, @samp{local},
+@samp{cmacs}, @samp{email}, @samp{webhook}).
+@item cmacs-libreclaw-channel-connected-p
+Connection state.
+@item cmacs-libreclaw-channel-connect
+Async connect.
+@item cmacs-libreclaw-channel-disconnect
+Async disconnect.
+@item cmacs-libreclaw-send-message
+Send a message on any channel kind.
+@end table
+
+@subsection Cmacs channel DEFUNs (native-only)
+
+@table @code
+@item cmacs-libreclaw-cmacs-channel-available-p
+@code{t} if the channel is bound.
+@item cmacs-libreclaw-cmacs-channel-inject
+Inject an inbound message (room, sender, body).
+@item cmacs-libreclaw-cmacs-channel-register-room
+Add a room to the known-rooms set.
+@item cmacs-libreclaw-cmacs-channel-unregister-room
+Drop a room from the known-rooms set.
+@item cmacs-libreclaw-cmacs-channel-list-rooms
+List known rooms.
+@item cmacs-libreclaw-cmacs-channel-has-room-p
+Check room membership.
+@item cmacs-libreclaw-open
+Elisp entry point --- open the chat buffer for the current
+project root.
+@end table
