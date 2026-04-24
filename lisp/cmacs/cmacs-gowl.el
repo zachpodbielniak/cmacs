@@ -31,6 +31,8 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'cmacs-gowl-focus)
+(require 'cmacs-gowl-app)
 
 (defgroup cmacs-gowl nil
   "Gowl Wayland compositor integration."
@@ -174,6 +176,62 @@ always appears on the user's active monitor."
   :type 'string
   :group 'cmacs-gowl)
 
+(defcustom cmacs-gowl-session-file nil
+  "File path for automatic session save/restore, or nil to disable.
+When non-nil, `cmacs-gowl-mode' enable calls `gowl-session-restore'
+with this path (if the file exists), and `kill-emacs-hook' calls
+`gowl-session-save' to refresh it.  Set to a file like
+\"~/.config/gowl/session.yaml\" to opt in."
+  :type '(choice (const :tag "Disabled" nil)
+                 (file :tag "Session file"))
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-config-evaluation '(yaml c)
+  "Which portions of ~/.config/gowl/ to apply under --gowl.
+A list of symbols from the set `yaml' and `c'.  Presence of the
+symbol enables evaluation of that config source; absence disables
+it.  The two gates are independent: YAML is loaded first, then
+C config.
+
+This defcustom mirrors the two root-level GowlConfig properties
+`evaluate-gowl-config-with-cmacs' (YAML gate) and
+`evaluate-c-config-with-cmacs' (C-config gate).  It exists so
+users can write:
+
+  (setq cmacs-gowl-config-evaluation \\='(yaml))      ; YAML only
+  (setq cmacs-gowl-config-evaluation \\='(c))         ; C only
+  (setq cmacs-gowl-config-evaluation nil)             ; neither
+
+…without touching a YAML file.  The initial load at --gowl
+startup respects the YAML's root-level declarations first; this
+defcustom only takes effect when applied at runtime (post-start)
+via `cmacs-gowl-apply-config-evaluation' — at that point the
+compositor is already up, so the gates are informational until
+the next `gowl-reload-config'.
+
+Standalone gowl and nested-gowl ignore the two gates entirely;
+they are purely a cmacs `--gowl' concern."
+  :type '(set (const :tag "YAML config" yaml)
+              (const :tag "C config"    c))
+  :group 'cmacs-gowl)
+
+(defun cmacs-gowl-apply-config-evaluation ()
+  "Push `cmacs-gowl-config-evaluation' onto the live GowlConfig.
+Sets the two root-level properties so any subsequent
+`gowl-reload-config' respects them.  No-op if gowl isn't running."
+  (interactive)
+  (when (gowl-running-p)
+    (let* ((cfg (gowl-config-object))
+           (yaml-on (memq 'yaml cmacs-gowl-config-evaluation))
+           (c-on    (memq 'c    cmacs-gowl-config-evaluation)))
+      (when cfg
+        ;; Uses the generic GObject set DEFUN from cmacs-gobject;
+        ;; emits notify:: on change.
+        (gobject-set cfg "evaluate-gowl-config-with-cmacs"
+                     (if yaml-on t nil))
+        (gobject-set cfg "evaluate-c-config-with-cmacs"
+                     (if c-on t nil))))))
+
 ;;; Internal state
 
 (defvar cmacs-gowl--active nil
@@ -237,6 +295,9 @@ When launched with --gowl, the compositor is already running and
 Emacs is rendering inside it.  This function ensures the dispatch
 thread is running and applies configuration."
   (gowl-start)  ;; no-op if already running via --gowl
+  ;; Reflect the Elisp defcustom onto the live GowlConfig so any
+  ;; later `gowl-reload-config' honours it.
+  (cmacs-gowl-apply-config-evaluation)
   ;; Apply default layout.
   (when cmacs-gowl-default-layout
     (gowl-set-layout cmacs-gowl-default-layout))
@@ -254,6 +315,24 @@ thread is running and applies configuration."
   ;; the dropdown module isn't loaded.
   (when (fboundp 'gowl-dropdown-refresh)
     (ignore-errors (gowl-dropdown-refresh)))
+  ;; Install the prefix-key policy + post-command hook.  Keeps
+  ;; C-x/C-c/M-x/C-g/C-h reaching Emacs even when an embed has
+  ;; focus.  Replaces the old ESC-timer escape hatch.
+  (cmacs-gowl-focus-setup)
+  ;; Install the default workspace provider.  Enables the
+  ;; `workspace-*` signals on the compositor.  Standalone users
+  ;; never hit this — it's cmacs-gowl-mode exclusive.
+  (when (fboundp 'gowl-install-frame-workspace-manager)
+    (gowl-install-frame-workspace-manager))
+  ;; Auto-restore session if configured.
+  (when (and cmacs-gowl-session-file
+             (file-exists-p (expand-file-name cmacs-gowl-session-file)))
+    (condition-case err
+        (gowl-session-restore (expand-file-name cmacs-gowl-session-file))
+      (error
+       (message "cmacs-gowl: session restore failed: %s" err))))
+  ;; Install the save-on-exit hook idempotently.
+  (add-hook 'kill-emacs-hook #'cmacs-gowl--save-session-if-configured)
   ;; Ensure Emacs has keyboard focus.  The client may have mapped
   ;; before focus was properly assigned, so explicitly focus it.
   (run-with-timer 0.5 nil
@@ -273,8 +352,22 @@ thread is running and applies configuration."
     (setq cmacs-gowl--autostart-launched t))
   (setq cmacs-gowl--active t))
 
+(defun cmacs-gowl--save-session-if-configured ()
+  "Run `gowl-session-save' against `cmacs-gowl-session-file' when set."
+  (when (and cmacs-gowl-session-file
+             (fboundp 'gowl-session-save)
+             (gowl-running-p))
+    (ignore-errors
+      (gowl-session-save (expand-file-name cmacs-gowl-session-file)))))
+
 (defun cmacs-gowl--stop ()
   "Stop the Gowl compositor."
+  (cmacs-gowl--save-session-if-configured)
+  (remove-hook 'kill-emacs-hook #'cmacs-gowl--save-session-if-configured)
+  (cmacs-gowl-focus-teardown)
+  (when (and (gowl-running-p)
+             (fboundp 'gowl-uninstall-workspace-provider))
+    (gowl-uninstall-workspace-provider))
   (when (gowl-running-p)
     (gowl-stop))
   (setq cmacs-gowl--active nil))

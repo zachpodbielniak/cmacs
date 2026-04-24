@@ -1427,18 +1427,85 @@ android_emacs_init (int argc, char **argv, char *dump_file)
               }
 
             config = gowl_config_new ();
-            /* Do NOT load user config from search path.  When
-               embedded, cmacs owns all configuration via Elisp. */
 
-            /* Clear all compositor keybinds — Emacs handles all
-               keyboard input in --gowl mode.  Gowl's default binds
-               (Super+h/l/j/k etc.) would otherwise be consumed by
-               the compositor before reaching Emacs. */
+            /* Load user YAML config from the search path.  The two
+               root-level cmacs gates (evaluate-gowl-config-with-cmacs
+               and evaluate-c-config-with-cmacs) are parsed as regular
+               properties; we then act on them.  YAML always parses
+               fully so `notify::` fires with the user's intent. */
             {
-              GArray *kb = gowl_config_get_keybinds (config);
-              if (kb != NULL)
-                g_array_set_size (kb, 0);
+              GError *yaml_err = NULL;
+              if (!gowl_config_load_yaml_from_search_path (config,
+                                                          &yaml_err))
+                {
+                  fprintf (stderr, "cmacs: gowl YAML load failed: %s\n",
+                           yaml_err != NULL
+                           ? yaml_err->message : "(unknown error)");
+                  g_clear_error (&yaml_err);
+                  /* Proceed with whatever values made it into the
+                     config before the parse error; the user can
+                     still restore sanity from Elisp. */
+                }
             }
+
+            /* Gate #1: if evaluate-gowl-config-with-cmacs is FALSE,
+               discard every user-loaded value (YAML and any that
+               would come from C config) while keeping the gates
+               themselves observable.  Keybinds, rules, dropdowns
+               and module configs are cleared too. */
+            if (!gowl_config_get_evaluate_gowl_config_with_cmacs (config))
+              gowl_config_reset_values_to_defaults (config);
+
+            /* Gate #2: if evaluate-c-config-with-cmacs is TRUE, try
+               to compile and apply the user's C config.  The C
+               config itself may set a root-level
+               evaluate_gowl_config_with_cmacs symbol to opt out
+               without disturbing the YAML gate. */
+            if (gowl_config_get_evaluate_c_config_with_cmacs (config))
+              {
+                GError *c_err = NULL;
+                GowlConfigCompiler *compiler
+                  = gowl_config_compiler_new (&c_err);
+                if (compiler == NULL)
+                  {
+                    g_clear_error (&c_err);
+                  }
+                else
+                  {
+                    gchar *c_source
+                      = gowl_config_compiler_find_config (compiler);
+                    if (c_source != NULL)
+                      {
+                        gchar *so_path
+                          = gowl_config_compiler_compile (compiler,
+                                                          c_source,
+                                                          FALSE,
+                                                          &c_err);
+                        if (so_path == NULL)
+                          {
+                            g_clear_error (&c_err);
+                          }
+                        else if (gowl_config_compiler_probe_cmacs_gate (
+                                     so_path))
+                          {
+                            /* Make the C config's externs resolve:
+                               gowl_config / gowl_compositor globals
+                               are expected to be defined by the
+                               embedding process (cmacs-gowl.c). */
+                            extern GowlConfig *gowl_config;
+                            gowl_config = config;
+                            if (!gowl_config_compiler_load_and_apply (
+                                    compiler, so_path, &c_err))
+                              {
+                                g_clear_error (&c_err);
+                              }
+                          }
+                        g_free (so_path);
+                        g_free (c_source);
+                      }
+                    g_object_unref (compiler);
+                  }
+              }
 
             gowl_compositor_set_config (comp, config);
 
@@ -1463,9 +1530,14 @@ android_emacs_init (int argc, char **argv, char *dump_file)
                the parent compositor process, not to gowl. */
             {
               extern GowlCompositor *cmacs_gowl_compositor;
+              extern GowlCompositor *gowl_compositor;
               extern void cmacs_gowl_start_thread (void);
               extern void cmacs_gowl_inhibit_parent_shortcuts (GowlCompositor *);
               cmacs_gowl_compositor = comp;
+              /* Mirror into the shared-object global so any C config
+                 that already ran saw the config, and so future
+                 runtime module loads can see the compositor. */
+              gowl_compositor = comp;
               cmacs_gowl_inhibit_parent_shortcuts (comp);
               cmacs_gowl_start_thread ();
             }

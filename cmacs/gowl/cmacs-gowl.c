@@ -52,10 +52,61 @@
    NOT static — cmacs-eval-dispatch.c accesses this for gowl dispatch. */
 GowlCompositor *cmacs_gowl_compositor = NULL;
 
-/* Mutex guarding wlroots seat state.  The dispatch thread holds it
-   during wl_event_loop_dispatch(); GDK event handlers and DEFUNs
-   acquire it before calling wlroots seat functions. */
-static pthread_mutex_t cmacs_gowl_mutex = PTHREAD_MUTEX_INITIALIZER;
+/* Shared-object globals that user-written C configs declare as
+   `extern GowlCompositor *gowl_compositor;` / `extern GowlConfig
+   *gowl_config;`.  Standalone gowl defines them in its main.c; when
+   embedded in cmacs we must provide matching symbols so the
+   `g_module_open()` of a compiled C config can resolve them against
+   the running process.  Values are populated at `--gowl` init time
+   in src/emacs.c right before the C config is loaded (if any). */
+GowlCompositor *gowl_compositor = NULL;
+GowlConfig     *gowl_config     = NULL;
+
+/* Mutex guarding wlroots seat, scene graph, and wl_display client-
+   queue state.  The dispatch thread holds it during
+   wl_event_loop_dispatch(); GDK event handlers and DEFUNs acquire
+   it before calling wlroots functions.
+
+   Recursive so a DEFUN that mutates compositor state under the
+   mutex can safely emit a GObject signal whose handlers in turn
+   call back through another DEFUN (e.g. a workspace-switch DEFUN
+   emits `workspace-switched', which fires the ext-workspace-v1
+   bridge which also wants the mutex).  wlroots itself uses no
+   locking, but wayland-server's per-resource post_event path
+   assumes single-threaded access; a recursive mutex gives the
+   same guarantee without requiring every signal handler to know
+   whether it was invoked from the dispatch tick or a main-thread
+   DEFUN.
+
+   Wave 2 (GSource-on-cmacs_context) deleted this and lost gtk_init:
+   GDK calls wl_display_roundtrip_queue() long before Emacs reaches
+   wait_reading_process_output, so the GSource never fires and the
+   roundtrip blocks forever.  The dispatch thread is load-bearing
+   during compositor bootstrap even if the GLib-loop integration
+   otherwise duplicates its job; keep it. */
+static pthread_mutex_t cmacs_gowl_mutex;
+
+static pthread_once_t cmacs_gowl_mutex_once = PTHREAD_ONCE_INIT;
+
+static void
+cmacs_gowl_mutex_init (void)
+{
+  pthread_mutexattr_t attr;
+
+  pthread_mutexattr_init (&attr);
+  pthread_mutexattr_settype (&attr, PTHREAD_MUTEX_RECURSIVE);
+  pthread_mutex_init (&cmacs_gowl_mutex, &attr);
+  pthread_mutexattr_destroy (&attr);
+}
+
+/* Idempotent accessor; callers use pthread_mutex_lock/unlock on
+   &cmacs_gowl_mutex directly afterwards.  Called from
+   cmacs_gowl_start_thread and from every DEFUN that locks. */
+static inline void
+cmacs_gowl_ensure_mutex (void)
+{
+  pthread_once (&cmacs_gowl_mutex_once, cmacs_gowl_mutex_init);
+}
 
 /* Clipboard sync: signal handler ID (0 = not watching) */
 static gulong cmacs_clipboard_handler_id = 0;
@@ -97,11 +148,27 @@ static GHashTable *embed_views = NULL; /* GowlClient* -> gowl_embed_view* */
    leave events from clearing compositor keyboard focus.  */
 static struct gowl_embed_view *direct_embed_kb_owner;
 
-/* ── ESC escape-hatch state (used by compositor intercept) ──────────── */
-enum { EMBED_KB_NORMAL, EMBED_KB_ESC_PENDING };
-static int cmacs_embed_key_state = EMBED_KB_NORMAL;
-static gboolean cmacs_embed_esc_release_pending = FALSE;
-static struct wl_event_source *cmacs_embed_wl_esc_timer = NULL;
+/* ── Prefix-key focus redirect state ──────────────────────────────────
+ *
+ * Set by cmacs_gowl_key_intercept() when a prefix key is detected and
+ * we push a focus redirect on the seat.  Cleared by the matching
+ * `gowl-return-focus-to-embed` DEFUN (called from Elisp
+ * post-command-hook).  Lives at file scope because push/pop happen
+ * from different call sites: push is in the compositor dispatch
+ * callback, pop comes from Elisp after the command chain completes.
+ *
+ * At most one redirect is active at a time — nested prefix sequences
+ * short-circuit because we only push when the embed is focused, and
+ * after a successful push Emacs holds focus.
+ *
+ * cmacs_gowl_redirect_is_sticky distinguishes two redirect modes:
+ *   - prefix-key (C-x etc): Emacs's post-command-hook pops after the
+ *     command completes.  Auto-pop.
+ *   - sticky (plain ESC, hardcoded): Emacs keeps focus until the
+ *     user explicitly returns (click on embed, or calls
+ *     `gowl-return-focus-to-embed').  No auto-pop. */
+static GowlFocusToken *cmacs_gowl_active_focus_token = NULL;
+static gboolean        cmacs_gowl_redirect_is_sticky  = FALSE;
 
 /* ── Pending embed counter (for client-map callback) ─────────────────
  * Incremented by gowl-embed-expect-client, decremented by the
@@ -679,6 +746,16 @@ cmacs_gowl_inhibit_parent_shortcuts (GowlCompositor *comp)
  * the mutex during wl_event_loop_dispatch() (which fires wlroots
  * callbacks that mutate compositor state).  Between dispatches the
  * mutex is released so DEFUNs can proceed without delay.
+ *
+ * Note: Wave 2 attempted to replace this with a GSource attached to
+ * cmacs_glib_get_context(), relying on Emacs's main loop to pump
+ * it.  That works once the main loop is running but fatally deadlocks
+ * during pgtk_term_init → gtk_init → wl_display_roundtrip_queue,
+ * which runs before the Emacs event loop is entered.  The pthread
+ * is load-bearing during compositor bootstrap; see CmacsGowlLoopSource
+ * in cmacs-gowl-loop.c for the (now unused) GSource implementation,
+ * kept around because it may still be useful for a future hybrid
+ * strategy.
  */
 
 #include <poll.h>
@@ -746,8 +823,8 @@ cmacs_gowl_dispatch_thread (void *data)
   return NULL;
 }
 
-/* Forward declarations for ESC intercept (defined after embed helpers). */
-static int cmacs_embed_wl_esc_timeout (void *data);
+/* Forward declaration for the prefix-key intercept (defined after
+   the embed helpers). */
 static gboolean cmacs_gowl_key_intercept (GowlCompositor *comp,
                                            guint modifiers, guint keysym,
                                            guint keycode, gboolean pressed,
@@ -782,24 +859,21 @@ cmacs_gowl_client_map (GowlCompositor *comp, GowlClient *client,
 void
 cmacs_gowl_start_thread (void)
 {
+  cmacs_gowl_ensure_mutex ();
+
   if (cmacs_gowl_thread_running || cmacs_gowl_compositor == NULL)
     return;
 
-  /* Register callbacks before the dispatch thread starts. */
-  if (cmacs_embed_wl_esc_timer == NULL)
-    {
-      struct wl_event_loop *loop =
-        gowl_compositor_get_event_loop (cmacs_gowl_compositor);
-      gowl_compositor_set_key_intercept (cmacs_gowl_compositor,
-                                         cmacs_gowl_key_intercept,
-                                         NULL);
-      gowl_compositor_set_client_map_callback (cmacs_gowl_compositor,
-                                               cmacs_gowl_client_map,
-                                               NULL);
-      cmacs_embed_wl_esc_timer =
-        wl_event_loop_add_timer (loop, cmacs_embed_wl_esc_timeout,
-                                 cmacs_gowl_compositor);
-    }
+  /* Register callbacks before the dispatch thread starts.  The
+     prefix-key intercept is always installed; whether it does
+     anything is gated on the compositor's `prefix-key-policy'
+     property (NULL = standalone behaviour, policy = redirect). */
+  gowl_compositor_set_key_intercept (cmacs_gowl_compositor,
+                                     cmacs_gowl_key_intercept,
+                                     NULL);
+  gowl_compositor_set_client_map_callback (cmacs_gowl_compositor,
+                                           cmacs_gowl_client_map,
+                                           NULL);
 
   if (cmacs_gowl_wake_fd < 0)
     {
@@ -917,14 +991,17 @@ gowl_resolve_client (Lisp_Object client)
  * focused Wayland client.
  */
 
-/* Check whether the seat keyboard focus is on an embedded client. */
+/* Return TRUE when keyboard focus currently sits on an embedded
+   client — i.e. a press here would otherwise go to an embedded app.
+   Identified by `gowl_client_get_embedded() == TRUE'. */
 static gboolean
-embedded_client_has_kb_focus (GowlCompositor *comp)
+cmacs_gowl_focus_on_embed (GowlCompositor *comp)
 {
-  struct wlr_seat *seat = gowl_compositor_get_wlr_seat (comp);
+  struct wlr_seat    *seat;
   struct wlr_surface *focused;
-  GList *clients, *l;
+  GList              *clients, *l;
 
+  seat = gowl_compositor_get_wlr_seat (comp);
   if (seat == NULL)
     return FALSE;
   focused = seat->keyboard_state.focused_surface;
@@ -942,50 +1019,58 @@ embedded_client_has_kb_focus (GowlCompositor *comp)
   return FALSE;
 }
 
-/* Redirect seat keyboard focus to the first non-embedded client (Emacs). */
-static void
-redirect_kb_to_emacs (GowlCompositor *comp)
+/* Locate the first non-embedded client (the Emacs surface).  Used as
+   the push target for a focus redirect. */
+static GowlClient *
+cmacs_gowl_find_emacs_client (GowlCompositor *comp)
 {
-  struct wlr_seat *seat = gowl_compositor_get_wlr_seat (comp);
-  struct wlr_keyboard *kb;
   GList *clients, *l;
-
-  if (seat == NULL)
-    return;
 
   clients = gowl_compositor_get_clients (comp);
   for (l = clients; l != NULL; l = l->next)
     {
       GowlClient *c = (GowlClient *) l->data;
-      struct wlr_surface *surf;
-      if (gowl_client_get_embedded (c))
-        continue;
-      surf = gowl_client_get_wlr_surface (c);
-      if (surf == NULL)
-        continue;
-      kb = wlr_seat_get_keyboard (seat);
-      if (kb != NULL)
-        wlr_seat_keyboard_notify_enter (seat, surf,
-                                        kb->keycodes, kb->num_keycodes,
-                                        &kb->modifiers);
-      else
-        wlr_seat_keyboard_notify_enter (seat, surf, NULL, 0, NULL);
-      return;
+      if (!gowl_client_get_embedded (c))
+        return c;
     }
+  return NULL;
 }
 
-/* Timer callback (wl_event_loop): ESC pressed and user waited. */
-static int
-cmacs_embed_wl_esc_timeout (void *data)
+/* Send wlr_seat_keyboard_notify_enter for the given GowlClient using
+   the current keyboard modifier state. */
+static void
+cmacs_gowl_wlr_focus_client (GowlCompositor *comp, GowlClient *target)
 {
-  GowlCompositor *comp = (GowlCompositor *) data;
-  cmacs_embed_key_state = EMBED_KB_NORMAL;
-  redirect_kb_to_emacs (comp);
-  return 0;
+  struct wlr_seat     *seat;
+  struct wlr_surface  *surf;
+  struct wlr_keyboard *kb;
+
+  seat = gowl_compositor_get_wlr_seat (comp);
+  if (seat == NULL || target == NULL)
+    return;
+  surf = gowl_client_get_wlr_surface (target);
+  if (surf == NULL)
+    return;
+
+  kb = wlr_seat_get_keyboard (seat);
+  if (kb != NULL)
+    wlr_seat_keyboard_notify_enter (seat, surf,
+                                    kb->keycodes, kb->num_keycodes,
+                                    &kb->modifiers);
+  else
+    wlr_seat_keyboard_notify_enter (seat, surf, NULL, 0, NULL);
 }
 
 /* Key intercept: called from on_kb_key() in the compositor dispatch
-   thread before unhandled keys are forwarded to the focused client. */
+   thread before unhandled keys are forwarded to the focused client.
+   Returns TRUE to consume, FALSE to let the key propagate.
+
+   Strategy: if the installed GowlPrefixKeyPolicy matches the press,
+   push a focus redirect on the seat (flipping focus to the Emacs
+   client) and return FALSE so the key falls through to Emacs.  The
+   matching pop happens via `gowl-return-focus-to-embed' called from
+   Elisp's post-command-hook after the full prefix sequence is
+   handled. */
 static gboolean
 cmacs_gowl_key_intercept (GowlCompositor *comp,
                            guint           modifiers,
@@ -994,58 +1079,66 @@ cmacs_gowl_key_intercept (GowlCompositor *comp,
                            gboolean        pressed,
                            gpointer        data)
 {
-  (void) modifiers; (void) keycode; (void) data;
+  GowlPrefixKeyPolicy *policy;
+  GowlClient          *emacs_target;
+  GowlSeat            *seat_obj;
+  gboolean             matched_prefix;
+  gboolean             matched_sticky_esc;
 
-  /* Only act when an embedded client has keyboard focus. */
-  if (!embedded_client_has_kb_focus (comp))
-    {
-      cmacs_embed_key_state = EMBED_KB_NORMAL;
-      cmacs_embed_esc_release_pending = FALSE;
-      return FALSE;
-    }
+  (void) data;
 
-  /* Consume the ESC release matching a consumed ESC press. */
-  if (!pressed && keysym == XKB_KEY_Escape && cmacs_embed_esc_release_pending)
-    {
-      cmacs_embed_esc_release_pending = FALSE;
-      return TRUE;
-    }
-
-  /* Only act on key presses. */
   if (!pressed)
     return FALSE;
 
-  switch (cmacs_embed_key_state)
+  /* Already redirected — let keys flow to Emacs until pop. */
+  if (cmacs_gowl_active_focus_token != NULL)
+    return FALSE;
+
+  /* Only act when keyboard focus is on an embedded client; otherwise
+     the press already reaches Emacs naturally. */
+  if (!cmacs_gowl_focus_on_embed (comp))
+    return FALSE;
+
+  /* Hardcoded sticky escape: plain ESC (no modifiers) always
+     redirects focus to Emacs.  Mirrors the pre-Wave-1b ESC
+     escape-hatch, minus the 200 ms timer.  C-ESC is handled as a
+     regular prefix key so Emacs can bind it to a "send literal
+     ESC to the embed" command. */
+  matched_sticky_esc = (modifiers == 0 && keysym == XKB_KEY_Escape);
+
+  matched_prefix = FALSE;
+  if (!matched_sticky_esc)
     {
-    case EMBED_KB_NORMAL:
-      if (keysym == XKB_KEY_Escape)
-        {
-          cmacs_embed_key_state = EMBED_KB_ESC_PENDING;
-          cmacs_embed_esc_release_pending = TRUE;
-          if (cmacs_embed_wl_esc_timer != NULL)
-            wl_event_source_timer_update (cmacs_embed_wl_esc_timer, 200);
-          return TRUE; /* consume ESC */
-        }
-      return FALSE; /* other keys pass to embedded client */
-
-    case EMBED_KB_ESC_PENDING:
-      if (cmacs_embed_wl_esc_timer != NULL)
-        wl_event_source_timer_update (cmacs_embed_wl_esc_timer, 0);
-      cmacs_embed_key_state = EMBED_KB_NORMAL;
-
-      if (keysym == XKB_KEY_Escape)
-        return FALSE; /* double-ESC: let ESC through to embedded client */
-
-      /* ESC + other key: redirect focus to Emacs, let key through.
-         on_kb_key will forward it to the now-focused Emacs client. */
-      redirect_kb_to_emacs (comp);
-      return FALSE;
-
-    default:
-      break;
+      policy = gowl_compositor_get_prefix_key_policy (comp);
+      if (policy == NULL)
+        return FALSE;  /* no policy installed -> standalone */
+      matched_prefix = gowl_prefix_key_policy_is_prefix (
+          policy, modifiers, keysym, keycode);
+      if (!matched_prefix)
+        return FALSE;
     }
 
-  return FALSE;
+  emacs_target = cmacs_gowl_find_emacs_client (comp);
+  if (emacs_target == NULL)
+    return FALSE;
+
+  seat_obj = gowl_compositor_get_seat (comp);
+  if (seat_obj == NULL)
+    return FALSE;
+
+  cmacs_gowl_active_focus_token = gowl_seat_push_focus_redirect (
+      seat_obj, emacs_target,
+      matched_sticky_esc
+      ? GOWL_FOCUS_REASON_EXPLICIT
+      : GOWL_FOCUS_REASON_PREFIX_KEY);
+  cmacs_gowl_redirect_is_sticky = matched_sticky_esc;
+
+  cmacs_gowl_wlr_focus_client (comp, emacs_target);
+
+  /* Sticky ESC consumes the key — the user wanted to "escape"
+     out of the embed, not trigger Emacs's keyboard-quit.  Prefix
+     keys pass through so Emacs runs the matching command. */
+  return matched_sticky_esc;
 }
 
 /* ── Module discovery ──────────────────────────────────────────────── */
@@ -1127,20 +1220,10 @@ the event loop source and returns. */)
           }
       }
 
-      if (cmacs_embed_wl_esc_timer == NULL)
-        {
-          struct wl_event_loop *loop =
-            gowl_compositor_get_event_loop (cmacs_gowl_compositor);
-          gowl_compositor_set_key_intercept (cmacs_gowl_compositor,
-                                             cmacs_gowl_key_intercept,
-                                             NULL);
-          cmacs_embed_wl_esc_timer =
-            wl_event_loop_add_timer (loop,
-                                     cmacs_embed_wl_esc_timeout,
-                                     cmacs_gowl_compositor);
-        }
-      if (!cmacs_gowl_thread_running)
-        cmacs_gowl_start_thread ();
+      gowl_compositor_set_key_intercept (cmacs_gowl_compositor,
+                                         cmacs_gowl_key_intercept,
+                                         NULL);
+      cmacs_gowl_start_thread ();
       return Qt;
     }
 
@@ -1232,17 +1315,13 @@ the event loop source and returns. */)
       gowl_module_manager_dispatch_startup (mgr, cmacs_gowl_compositor);
   }
 
-  /* ESC escape-hatch: intercept ESC in the compositor dispatch thread
-     to redirect keyboard focus from embedded clients back to Emacs. */
+  /* Prefix-key interception: dispatch thread consults the compositor's
+     prefix-key-policy (set from Elisp via `cmacs-gowl-focus.el') to
+     decide when to redirect keyboard focus to Emacs.  Install the
+     intercept unconditionally; it short-circuits when the policy is
+     unset (standalone / nested). */
   gowl_compositor_set_key_intercept (cmacs_gowl_compositor,
                                      cmacs_gowl_key_intercept, NULL);
-  {
-    struct wl_event_loop *loop =
-      gowl_compositor_get_event_loop (cmacs_gowl_compositor);
-    cmacs_embed_wl_esc_timer =
-      wl_event_loop_add_timer (loop, cmacs_embed_wl_esc_timeout,
-                               cmacs_gowl_compositor);
-  }
 
   cmacs_gowl_start_thread ();
 
@@ -1267,6 +1346,494 @@ DEFUN ("gowl-running-p", Fgowl_running_p, Sgowl_running_p, 0, 0, 0,
   (void)
 {
   return cmacs_gowl_compositor != NULL ? Qt : Qnil;
+}
+
+DEFUN ("gowl-grant-focus-to-emacs", Fgowl_grant_focus_to_emacs,
+       Sgowl_grant_focus_to_emacs, 0, 0, 0,
+       doc: /* Force keyboard focus to the Emacs client right now.
+Saves the currently focused gowl client on the seat focus-redirect
+stack and moves focus to the first non-embedded client.  Pair with
+`gowl-return-focus-to-embed' to restore the saved focus.
+
+This is the explicit entry point the prefix-key machinery uses under
+the hood; you can also call it from Elisp directly to claim keyboard
+focus unconditionally (e.g. from a minibuffer prompt in a program
+that the embed has been stealing keys from).
+
+Returns t on success, nil if gowl is not running or there is no
+non-embedded client to focus.  */)
+  (void)
+{
+  GowlClient *emacs_target;
+  GowlSeat   *seat_obj;
+
+  GOWL_CHECK_RUNNING ();
+
+  if (cmacs_gowl_active_focus_token != NULL)
+    /* Already redirected — keep the existing token, just idempotent. */
+    return Qt;
+
+  emacs_target = cmacs_gowl_find_emacs_client (cmacs_gowl_compositor);
+  if (emacs_target == NULL)
+    return Qnil;
+
+  seat_obj = gowl_compositor_get_seat (cmacs_gowl_compositor);
+  if (seat_obj == NULL)
+    return Qnil;
+
+  cmacs_gowl_active_focus_token = gowl_seat_push_focus_redirect (
+      seat_obj, emacs_target, GOWL_FOCUS_REASON_EXPLICIT);
+  /* Explicit Elisp grants are sticky: the caller wanted to stay
+     in Emacs, not run one command and snap back.  Use
+     `gowl-return-focus-to-embed' to undo. */
+  cmacs_gowl_redirect_is_sticky = TRUE;
+  cmacs_gowl_wlr_focus_client (cmacs_gowl_compositor, emacs_target);
+  wl_display_flush_clients (
+    gowl_compositor_get_wl_display (cmacs_gowl_compositor));
+
+  return Qt;
+}
+
+DEFUN ("gowl-return-focus-to-embed", Fgowl_return_focus_to_embed,
+       Sgowl_return_focus_to_embed, 0, 0, 0,
+       doc: /* Restore the embed focus saved by `gowl-grant-focus-to-emacs'.
+Pops the active #GowlFocusToken and re-sends a wlr_seat keyboard
+enter for the recorded client.  No-op if no redirect is active.
+Returns t if a token was popped, nil otherwise.  */)
+  (void)
+{
+  GowlSeat   *seat_obj;
+  gpointer    saved;
+  GowlClient *target;
+
+  if (cmacs_gowl_compositor == NULL
+      || cmacs_gowl_active_focus_token == NULL)
+    return Qnil;
+
+  seat_obj = gowl_compositor_get_seat (cmacs_gowl_compositor);
+  saved = gowl_focus_token_get_saved_client (
+      cmacs_gowl_active_focus_token);
+  target = (GowlClient *) saved;
+
+  /* Pop first so the GowlSeat tracker is consistent even if the
+     downstream wlr focus move below fails. */
+  gowl_seat_pop_focus_redirect (seat_obj, cmacs_gowl_active_focus_token);
+  cmacs_gowl_active_focus_token = NULL;
+  cmacs_gowl_redirect_is_sticky = FALSE;
+
+  if (target != NULL)
+    cmacs_gowl_wlr_focus_client (cmacs_gowl_compositor, target);
+  wl_display_flush_clients (
+    gowl_compositor_get_wl_display (cmacs_gowl_compositor));
+
+  return Qt;
+}
+
+DEFUN ("gowl-focus-redirect-active-p", Fgowl_focus_redirect_active_p,
+       Sgowl_focus_redirect_active_p, 0, 0, 0,
+       doc: /* Return non-nil if a prefix-key focus redirect is active.
+Useful for post-command-hook gating — Elisp only has to call
+`gowl-return-focus-to-embed' when this returns t.  */)
+  (void)
+{
+  return cmacs_gowl_active_focus_token != NULL ? Qt : Qnil;
+}
+
+DEFUN ("gowl-focus-redirect-sticky-p", Fgowl_focus_redirect_sticky_p,
+       Sgowl_focus_redirect_sticky_p, 0, 0, 0,
+       doc: /* Return non-nil if the active focus redirect is "sticky".
+Sticky redirects (plain ESC) stay put until the user explicitly
+returns focus to the embed — they do NOT auto-pop after the next
+command.  Regular prefix-key redirects (C-x etc) do auto-pop and
+return nil here.  Returns nil when no redirect is active.  */)
+  (void)
+{
+  return (cmacs_gowl_active_focus_token != NULL
+          && cmacs_gowl_redirect_is_sticky) ? Qt : Qnil;
+}
+
+/* -----------------------------------------------------------------
+ * Workspace DEFUNs.  Delegate to the compositor's installed
+ * GowlWorkspaceProvider.  When no provider is installed every
+ * function returns nil / 0 — standalone gowl + nested behaviour.
+ * ----------------------------------------------------------------- */
+
+static GowlWorkspaceProvider *
+cmacs_gowl_provider_or_null (void)
+{
+  if (cmacs_gowl_compositor == NULL)
+    return NULL;
+  return gowl_compositor_get_workspace_provider (cmacs_gowl_compositor);
+}
+
+DEFUN ("gowl-workspace-provider-installed-p",
+       Fgowl_workspace_provider_installed_p,
+       Sgowl_workspace_provider_installed_p, 0, 0, 0,
+       doc: /* Return non-nil if a workspace provider is attached.
+cmacs `--gowl' installs a `GowlFrameWorkspaceManager' at mode
+enable; standalone gowl leaves the compositor without a provider.  */)
+  (void)
+{
+  return cmacs_gowl_provider_or_null () != NULL ? Qt : Qnil;
+}
+
+DEFUN ("gowl-install-frame-workspace-manager",
+       Fgowl_install_frame_workspace_manager,
+       Sgowl_install_frame_workspace_manager, 0, 0, 0,
+       doc: /* Install the default GowlFrameWorkspaceManager.
+A one-workspace-per-frame provider is attached to the compositor,
+which takes over emitting the `workspace-*` signals.  Call once at
+mode enable; subsequent calls are no-ops (the existing provider is
+retained).
+
+Returns t on success, nil if gowl is not running.  */)
+  (void)
+{
+  GowlWorkspaceProvider *existing;
+  GowlFrameWorkspaceManager *mgr;
+
+  GOWL_CHECK_RUNNING ();
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  existing = gowl_compositor_get_workspace_provider (cmacs_gowl_compositor);
+  if (existing != NULL)
+    {
+      pthread_mutex_unlock (&cmacs_gowl_mutex);
+      return Qt;
+    }
+
+  mgr = gowl_frame_workspace_manager_new ();
+  gowl_compositor_set_workspace_provider (
+      cmacs_gowl_compositor,
+      GOWL_WORKSPACE_PROVIDER (mgr));
+  g_object_unref (mgr);  /* compositor holds its own ref */
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+
+  return Qt;
+}
+
+DEFUN ("gowl-uninstall-workspace-provider",
+       Fgowl_uninstall_workspace_provider,
+       Sgowl_uninstall_workspace_provider, 0, 0, 0,
+       doc: /* Detach any installed workspace provider.
+Subsequent workspace DEFUNs will return nil.  Useful when
+disabling cmacs-gowl-mode while keeping gowl running.
+
+Returns t on success.  */)
+  (void)
+{
+  GOWL_CHECK_RUNNING ();
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  gowl_compositor_set_workspace_provider (cmacs_gowl_compositor, NULL);
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+  return Qt;
+}
+
+DEFUN ("gowl-workspace-create", Fgowl_workspace_create,
+       Sgowl_workspace_create, 0, 2, 0,
+       doc: /* Allocate a new workspace and return its numeric id.
+Optional NAME is a display string (nil for none).  Optional TAG-MASK
+is an integer tag bitmask (default 1, meaning "tag 1 visible").
+Emits the compositor's `workspace-created' signal on success.
+
+Returns the new workspace id (integer), or nil when no workspace
+provider is installed.  */)
+  (Lisp_Object name, Lisp_Object tag_mask)
+{
+  GowlWorkspaceProvider *provider;
+  GowlWorkspace         *ws;
+  const gchar           *name_c = NULL;
+  guint32                mask   = 1;
+  guint64                id_val;
+
+  GOWL_CHECK_RUNNING ();
+  provider = cmacs_gowl_provider_or_null ();
+  if (provider == NULL)
+    return Qnil;
+
+  if (STRINGP (name))
+    name_c = SSDATA (name);
+  if (FIXNUMP (tag_mask))
+    mask = (guint32) XFIXNUM (tag_mask);
+
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  ws = gowl_workspace_provider_create (provider, name_c, mask);
+  if (ws == NULL)
+    {
+      pthread_mutex_unlock (&cmacs_gowl_mutex);
+      return Qnil;
+    }
+  gowl_compositor_emit_workspace_created (cmacs_gowl_compositor, ws);
+  id_val = gowl_workspace_get_id (ws);
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+
+  return make_uint (id_val);
+}
+
+DEFUN ("gowl-workspace-switch", Fgowl_workspace_switch,
+       Sgowl_workspace_switch, 1, 1, 0,
+       doc: /* Make workspace ID the active workspace.
+Emits `workspace-switched' with the previous and new workspace.
+Returns t on success, nil if no provider is installed, the id is
+unknown, or the workspace was already active.  */)
+  (Lisp_Object id)
+{
+  GowlWorkspaceProvider *provider;
+  GowlWorkspace         *from;
+  GowlWorkspace         *to;
+
+  CHECK_FIXNUM (id);
+  GOWL_CHECK_RUNNING ();
+  provider = cmacs_gowl_provider_or_null ();
+  if (provider == NULL)
+    return Qnil;
+
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  to = gowl_workspace_provider_lookup (provider, XFIXNUM (id));
+  if (to == NULL)
+    {
+      pthread_mutex_unlock (&cmacs_gowl_mutex);
+      return Qnil;
+    }
+
+  from = gowl_workspace_provider_get_current (provider);
+  if (!gowl_workspace_provider_switch_to (provider, to))
+    {
+      pthread_mutex_unlock (&cmacs_gowl_mutex);
+      return Qnil;
+    }
+
+  gowl_compositor_emit_workspace_switched (cmacs_gowl_compositor,
+                                            from, to);
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+  return Qt;
+}
+
+DEFUN ("gowl-workspace-destroy", Fgowl_workspace_destroy,
+       Sgowl_workspace_destroy, 1, 1, 0,
+       doc: /* Remove workspace ID.
+Emits `workspace-destroyed'.  Returns t on success, nil on
+unknown id or when no provider is installed.  */)
+  (Lisp_Object id)
+{
+  GowlWorkspaceProvider *provider;
+  GowlWorkspace         *ws;
+
+  CHECK_FIXNUM (id);
+  GOWL_CHECK_RUNNING ();
+  provider = cmacs_gowl_provider_or_null ();
+  if (provider == NULL)
+    return Qnil;
+
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  ws = gowl_workspace_provider_lookup (provider, XFIXNUM (id));
+  if (ws == NULL)
+    {
+      pthread_mutex_unlock (&cmacs_gowl_mutex);
+      return Qnil;
+    }
+
+  /* Hold a reference across the emit — the provider is about to
+     drop its last ref when destroy() returns, and we want
+     listeners to see a valid GObject during dispatch. */
+  g_object_ref (ws);
+  gowl_compositor_emit_workspace_destroyed (cmacs_gowl_compositor, ws);
+  gowl_workspace_provider_destroy (provider, ws);
+  g_object_unref (ws);
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+
+  return Qt;
+}
+
+DEFUN ("gowl-workspace-current", Fgowl_workspace_current,
+       Sgowl_workspace_current, 0, 0, 0,
+       doc: /* Return the active workspace id, or nil if none.  */)
+  (void)
+{
+  GowlWorkspaceProvider *provider;
+  GowlWorkspace         *ws;
+
+  if (cmacs_gowl_compositor == NULL)
+    return Qnil;
+
+  provider = cmacs_gowl_provider_or_null ();
+  if (provider == NULL)
+    return Qnil;
+
+  ws = gowl_workspace_provider_get_current (provider);
+  if (ws == NULL)
+    return Qnil;
+
+  return make_uint (gowl_workspace_get_id (ws));
+}
+
+DEFUN ("gowl-workspace-list", Fgowl_workspace_list,
+       Sgowl_workspace_list, 0, 0, 0,
+       doc: /* Return a list of workspace plists.
+Each entry is (:id ID :name NAME :tag-mask MASK).  Empty when no
+provider is installed.  */)
+  (void)
+{
+  GowlWorkspaceProvider *provider;
+  GList                 *all, *it;
+  Lisp_Object            result = Qnil;
+
+  if (cmacs_gowl_compositor == NULL)
+    return Qnil;
+
+  provider = cmacs_gowl_provider_or_null ();
+  if (provider == NULL)
+    return Qnil;
+
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  all = gowl_workspace_provider_list (provider);
+  for (it = all; it != NULL; it = it->next)
+    {
+      GowlWorkspace *ws   = (GowlWorkspace *) it->data;
+      const gchar   *name = gowl_workspace_get_name (ws);
+
+      /* Build (:id ID :name NAME :tag-mask MASK) as a plist.
+         Plain string keys so we don't depend on any specific
+         QC-symbol already existing in this translation unit. */
+      Lisp_Object plist = Qnil;
+      plist = Fcons (make_uint (gowl_workspace_get_tag_mask (ws)), plist);
+      plist = Fcons (intern_c_string (":tag-mask"), plist);
+      plist = Fcons (name != NULL ? build_string (name) : Qnil, plist);
+      plist = Fcons (intern_c_string (":name"), plist);
+      plist = Fcons (make_uint (gowl_workspace_get_id (ws)), plist);
+      plist = Fcons (intern_c_string (":id"), plist);
+
+      result = Fcons (plist, result);
+    }
+  g_list_free (all);
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+
+  return Fnreverse (result);
+}
+
+/* Singleton default session provider, lazily created on first use. */
+static GowlSessionProvider *cmacs_gowl_session_provider = NULL;
+
+static GowlSessionProvider *
+cmacs_gowl_get_session_provider (void)
+{
+  if (cmacs_gowl_session_provider == NULL)
+    cmacs_gowl_session_provider =
+      GOWL_SESSION_PROVIDER (gowl_session_default_new ());
+  return cmacs_gowl_session_provider;
+}
+
+DEFUN ("gowl-session-save", Fgowl_session_save, Sgowl_session_save,
+       1, 1, 0,
+       doc: /* Write the compositor session state to PATH as YAML.
+PATH is a filesystem path; it is overwritten if it exists.  The
+snapshot includes per-monitor mfact/nmaster and a per-client
+summary (app-id, title, tags, floating, geometry).  Signals nil on
+error (with message) or the path on success.  */)
+  (Lisp_Object path)
+{
+  g_autoptr (GFile) file = NULL;
+  g_autoptr (GError) err = NULL;
+
+  CHECK_STRING (path);
+  GOWL_CHECK_RUNNING ();
+
+  file = g_file_new_for_path (SSDATA (path));
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  if (!gowl_session_provider_save (cmacs_gowl_get_session_provider (),
+                                   cmacs_gowl_compositor, file, &err))
+    {
+      pthread_mutex_unlock (&cmacs_gowl_mutex);
+      message ("gowl-session-save failed: %s",
+               err != NULL ? err->message : "(unknown)");
+      return Qnil;
+    }
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+  return path;
+}
+
+DEFUN ("gowl-session-restore", Fgowl_session_restore, Sgowl_session_restore,
+       1, 1, 0,
+       doc: /* Load session state from PATH and apply it.
+Per-monitor layout parameters are applied immediately; per-client
+entries are queued as rules against the running GowlConfig so that
+subsequently-mapped clients matching by app-id inherit the saved
+tags/floating/geometry.
+
+Returns t on success, nil on error.  */)
+  (Lisp_Object path)
+{
+  g_autoptr (GFile) file = NULL;
+  g_autoptr (GError) err = NULL;
+
+  CHECK_STRING (path);
+  GOWL_CHECK_RUNNING ();
+
+  file = g_file_new_for_path (SSDATA (path));
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  if (!gowl_session_provider_load (cmacs_gowl_get_session_provider (),
+                                   cmacs_gowl_compositor, file, &err))
+    {
+      pthread_mutex_unlock (&cmacs_gowl_mutex);
+      message ("gowl-session-restore failed: %s",
+               err != NULL ? err->message : "(unknown)");
+      return Qnil;
+    }
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+  return Qt;
+}
+
+DEFUN ("gowl-set-prefix-key-policy",
+       Fgowl_set_prefix_key_policy, Sgowl_set_prefix_key_policy,
+       1, 1, 0,
+       doc: /* Install a list of keybind STRINGS as the prefix-key policy.
+Each element is a keybind string parseable by `gowl-keybind-parse'
+(e.g. "Control+x", "Control+c", "Meta+x", "Control+g").  When a
+press matches one of these WHILE an embedded client has keyboard
+focus, the compositor redirects focus to Emacs so the key chain
+reaches the minibuffer/keymap as expected.
+
+Passing nil clears any installed policy and restores standalone
+compositor behaviour (embeds own keyboard focus uninterrupted).
+
+Returns t on success.  */)
+  (Lisp_Object keys)
+{
+  GowlStaticPrefixKeyPolicy *policy;
+
+  GOWL_CHECK_RUNNING ();
+
+  if (NILP (keys))
+    {
+      pthread_mutex_lock (&cmacs_gowl_mutex);
+      gowl_compositor_set_prefix_key_policy (cmacs_gowl_compositor, NULL);
+      pthread_mutex_unlock (&cmacs_gowl_mutex);
+      return Qt;
+    }
+
+  CHECK_LIST (keys);
+
+  policy = gowl_static_prefix_key_policy_new ();
+  {
+    Lisp_Object tail = keys;
+    while (CONSP (tail))
+      {
+        Lisp_Object entry = XCAR (tail);
+        if (STRINGP (entry))
+          gowl_static_prefix_key_policy_add_from_string (
+              policy, SSDATA (entry));
+        tail = XCDR (tail);
+      }
+  }
+
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  gowl_compositor_set_prefix_key_policy (
+      cmacs_gowl_compositor,
+      GOWL_PREFIX_KEY_POLICY (policy));
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+  /* set_prefix_key_policy takes its own ref; drop ours. */
+  g_object_unref (policy);
+
+  return Qt;
 }
 
 DEFUN ("gowl-socket-name", Fgowl_socket_name, Sgowl_socket_name, 0, 0, 0,
@@ -1484,6 +2051,205 @@ Updates the scene graph and sends a configure to the client. */)
                                  (gint) XFIXNUM (w), (gint) XFIXNUM (h));
   pthread_mutex_unlock (&cmacs_gowl_mutex);
   return Qnil;
+}
+
+DEFUN ("gowl-client-set-geometry", Fgowl_client_set_geometry,
+       Sgowl_client_set_geometry, 5, 5, 0,
+       doc: /* Set CLIENT's geometry to X Y W H in one call.
+Wraps `gowl-move-client' + `gowl-resize-client' into a single
+compositor `resize-client' call so the scene graph and the client's
+xdg-configure see a consistent rectangle on the same tick.  Used
+by the buffer-mode reconciler to push `window-body-pixel-edges'
+to the compositor on every Emacs window change.  */)
+  (Lisp_Object client, Lisp_Object x, Lisp_Object y,
+   Lisp_Object w, Lisp_Object h)
+{
+  GowlClient *c;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_FIXNUM (x);
+  CHECK_FIXNUM (y);
+  CHECK_FIXNUM (w);
+  CHECK_FIXNUM (h);
+
+  c = gowl_resolve_client (client);
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  gowl_compositor_resize_client (cmacs_gowl_compositor, c,
+                                 (gint) XFIXNUM (x), (gint) XFIXNUM (y),
+                                 (gint) XFIXNUM (w), (gint) XFIXNUM (h));
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+  return Qt;
+}
+
+DEFUN ("gowl-client-add-mirror", Fgowl_client_add_mirror,
+       Sgowl_client_add_mirror, 5, 5, 0,
+       doc: /* Add a mirror scene node duplicating CLIENT at X Y W H.
+The mirror displays CLIENT's root surface buffer at the given
+compositor coordinates and updates on every client commit.
+Returns the new mirror's view id (integer), which the caller uses
+for subsequent update/remove calls.
+
+Used under cmacs `--gowl` to render the same embedded client in
+multiple Emacs windows (e.g. after C-x 3 over a gowl app buffer).
+Returns nil on failure.  */)
+  (Lisp_Object client, Lisp_Object x, Lisp_Object y,
+   Lisp_Object w, Lisp_Object h)
+{
+  GowlClient *c;
+  GowlMirror *m;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_FIXNUM (x);
+  CHECK_FIXNUM (y);
+  CHECK_FIXNUM (w);
+  CHECK_FIXNUM (h);
+
+  c = gowl_resolve_client (client);
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  m = gowl_client_add_mirror (c,
+                               (gint) XFIXNUM (x), (gint) XFIXNUM (y),
+                               (gint) XFIXNUM (w), (gint) XFIXNUM (h));
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+  if (m == NULL)
+    return Qnil;
+
+  return make_uint (gowl_mirror_get_view_id (m));
+}
+
+DEFUN ("gowl-client-update-mirror", Fgowl_client_update_mirror,
+       Sgowl_client_update_mirror, 6, 6, 0,
+       doc: /* Reposition mirror VIEW-ID belonging to CLIENT.
+Moves and resizes the mirror's scene node in one call.  Returns
+t on success, nil if VIEW-ID does not match any mirror of CLIENT.  */)
+  (Lisp_Object client, Lisp_Object view_id,
+   Lisp_Object x, Lisp_Object y,
+   Lisp_Object w, Lisp_Object h)
+{
+  GowlClient *c;
+  GowlMirror *match;
+  GList      *all, *it;
+  guint64     target;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_FIXNUM (view_id);
+  CHECK_FIXNUM (x);
+  CHECK_FIXNUM (y);
+  CHECK_FIXNUM (w);
+  CHECK_FIXNUM (h);
+
+  c = gowl_resolve_client (client);
+  target = (guint64) XFIXNUM (view_id);
+
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  match = NULL;
+  all = gowl_client_list_mirrors (c);
+  for (it = all; it != NULL; it = it->next)
+    {
+      GowlMirror *m = GOWL_MIRROR (it->data);
+      if (gowl_mirror_get_view_id (m) == target)
+        {
+          match = m;
+          break;
+        }
+    }
+  g_list_free (all);
+
+  if (match == NULL)
+    {
+      pthread_mutex_unlock (&cmacs_gowl_mutex);
+      return Qnil;
+    }
+
+  gowl_client_update_mirror (c, match,
+                              (gint) XFIXNUM (x), (gint) XFIXNUM (y),
+                              (gint) XFIXNUM (w), (gint) XFIXNUM (h));
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+  return Qt;
+}
+
+DEFUN ("gowl-client-remove-mirror", Fgowl_client_remove_mirror,
+       Sgowl_client_remove_mirror, 2, 2, 0,
+       doc: /* Remove mirror VIEW-ID from CLIENT.
+Destroys the mirror's scene node and drops the commit listener.
+Returns t on success, nil if VIEW-ID does not match.  */)
+  (Lisp_Object client, Lisp_Object view_id)
+{
+  GowlClient *c;
+  GowlMirror *match;
+  GList      *all, *it;
+  guint64     target;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_FIXNUM (view_id);
+
+  c = gowl_resolve_client (client);
+  target = (guint64) XFIXNUM (view_id);
+
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  match = NULL;
+  all = gowl_client_list_mirrors (c);
+  for (it = all; it != NULL; it = it->next)
+    {
+      GowlMirror *m = GOWL_MIRROR (it->data);
+      if (gowl_mirror_get_view_id (m) == target)
+        {
+          match = m;
+          break;
+        }
+    }
+  g_list_free (all);
+
+  if (match == NULL)
+    {
+      pthread_mutex_unlock (&cmacs_gowl_mutex);
+      return Qnil;
+    }
+
+  gowl_client_remove_mirror (c, match);
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+  return Qt;
+}
+
+DEFUN ("gowl-client-list-mirrors", Fgowl_client_list_mirrors,
+       Sgowl_client_list_mirrors, 1, 1, 0,
+       doc: /* Return a list of mirror plists for CLIENT.
+Each entry is (:view-id ID :x X :y Y :w W :h H).  Empty list if
+CLIENT has no mirrors.  */)
+  (Lisp_Object client)
+{
+  GowlClient  *c;
+  GList       *all, *it;
+  Lisp_Object  result = Qnil;
+
+  GOWL_CHECK_RUNNING ();
+  c = gowl_resolve_client (client);
+
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  all = gowl_client_list_mirrors (c);
+  for (it = all; it != NULL; it = it->next)
+    {
+      GowlMirror *m = GOWL_MIRROR (it->data);
+      gint        mx, my, mw, mh;
+      Lisp_Object plist = Qnil;
+
+      gowl_mirror_get_geometry (m, &mx, &my, &mw, &mh);
+      plist = Fcons (make_fixnum (mh), plist);
+      plist = Fcons (intern_c_string (":h"), plist);
+      plist = Fcons (make_fixnum (mw), plist);
+      plist = Fcons (intern_c_string (":w"), plist);
+      plist = Fcons (make_fixnum (my), plist);
+      plist = Fcons (intern_c_string (":y"), plist);
+      plist = Fcons (make_fixnum (mx), plist);
+      plist = Fcons (intern_c_string (":x"), plist);
+      plist = Fcons (make_uint (gowl_mirror_get_view_id (m)), plist);
+      plist = Fcons (intern_c_string (":view-id"), plist);
+
+      result = Fcons (plist, result);
+    }
+  g_list_free (all);
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+
+  return Fnreverse (result);
 }
 
 DEFUN ("gowl-set-tags", Fgowl_set_tags, Sgowl_set_tags, 2, 2, 0,
@@ -3487,6 +4253,12 @@ Supported: border-width, terminal, menu, mfact, nmaster, tag-count,
   if (g_strcmp0 (prop, "border-color-urgent") == 0)
     return build_string (
       gowl_config_get_border_color_urgent (config) ? : "");
+  if (g_strcmp0 (prop, "evaluate-gowl-config-with-cmacs") == 0)
+    return gowl_config_get_evaluate_gowl_config_with_cmacs (config)
+      ? Qt : Qnil;
+  if (g_strcmp0 (prop, "evaluate-c-config-with-cmacs") == 0)
+    return gowl_config_get_evaluate_c_config_with_cmacs (config)
+      ? Qt : Qnil;
 
   error ("Unknown config property: %s", prop);
 }
@@ -5909,6 +6681,34 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_stop);
   defsubr (&Sgowl_running_p);
   defsubr (&Sgowl_socket_name);
+
+  /* Prefix-key focus redirect */
+  defsubr (&Sgowl_grant_focus_to_emacs);
+  defsubr (&Sgowl_return_focus_to_embed);
+  defsubr (&Sgowl_focus_redirect_active_p);
+  defsubr (&Sgowl_focus_redirect_sticky_p);
+  defsubr (&Sgowl_set_prefix_key_policy);
+
+  /* Session save/restore */
+  defsubr (&Sgowl_session_save);
+  defsubr (&Sgowl_session_restore);
+
+  /* App buffer support */
+  defsubr (&Sgowl_client_set_geometry);
+  defsubr (&Sgowl_client_add_mirror);
+  defsubr (&Sgowl_client_update_mirror);
+  defsubr (&Sgowl_client_remove_mirror);
+  defsubr (&Sgowl_client_list_mirrors);
+
+  /* Workspaces */
+  defsubr (&Sgowl_workspace_provider_installed_p);
+  defsubr (&Sgowl_install_frame_workspace_manager);
+  defsubr (&Sgowl_uninstall_workspace_provider);
+  defsubr (&Sgowl_workspace_create);
+  defsubr (&Sgowl_workspace_switch);
+  defsubr (&Sgowl_workspace_destroy);
+  defsubr (&Sgowl_workspace_current);
+  defsubr (&Sgowl_workspace_list);
 
   /* GObject accessors for full GI runtime control */
   defsubr (&Sgowl_compositor);

@@ -721,7 +721,8 @@ if test "$with_cmacs_gowl" != "no"; then
     # Build libgowl from deps/gowl/ (default)
     PKG_CHECK_MODULES([CMACS_GOWL_DEPS],
       [wlroots-0.19 wayland-server wayland-client wayland-protocols pixman-1 xkbcommon \
-       glib-2.0 gobject-2.0 gio-2.0 pango pangocairo json-glib-1.0 yaml-0.1])
+       glib-2.0 gobject-2.0 gio-2.0 pango pangocairo json-glib-1.0 yaml-0.1 \
+       egl gl])
     CMACS_GOWL_CFLAGS="-I\$(srcdir)/../deps/gowl/src \
       -I\$(srcdir)/../deps/gowl/src/core \
       -I\$(srcdir)/../deps/gowl/src/config \
@@ -738,7 +739,7 @@ if test "$with_cmacs_gowl" != "no"; then
       [AC_MSG_WARN([libdecor not found - nested window decorations disabled])])
   fi
   AC_DEFINE([HAVE_CMACS_GOWL], 1, [CMacs Gowl compositor])
-  CMACS_GOWL_OBJ="cmacs-gowl.o keyboard-shortcuts-inhibit-v1-protocol.o"
+  CMACS_GOWL_OBJ="cmacs-gowl.o cmacs-gowl-loop.o keyboard-shortcuts-inhibit-v1-protocol.o"
 fi
 if test "$with_cmacs_podomation" != "no"; then
   if test "$with_cmacs_podomation" = "system"; then
