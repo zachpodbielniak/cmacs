@@ -243,7 +243,7 @@ gowl-pid:
 
 # Print all threads of the running --gowl emacs.
 [group('diag')]
-thread_dump_gowl:
+thread-dump-gowl:
     #!/usr/bin/env bash
     set -euo pipefail
     pid=$(ps -eo pid,args | awk '/[e]macs --gowl/ {print $1; exit}')
@@ -255,6 +255,47 @@ thread_dump_gowl:
         thread_dump -s -p "$pid" -f -a
     else
         # Fallback: use gdb for a one-shot all-threads backtrace.
+        gdb -batch -p "$pid" \
+            -ex 'set pagination off' \
+            -ex 'thread apply all bt' 2>&1
+    fi
+
+# Pick a running emacs via fzf and dump every thread's backtrace.
+[group('diag')]
+thread-dump:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v fzf >/dev/null; then
+        echo "fzf not installed; use 'just thread-dump-gowl' or pass a PID" >&2
+        exit 1
+    fi
+    # Collect (pid, etime, command) for every emacs* process.  -f
+    # matches against the full command line so users can preview
+    # arguments (--gowl, --daemon, etc.) in fzf.
+    candidates=$(ps -eo pid=,etime=,args= \
+        | awk '$3 ~ /(^|\/)emacs($|[[:space:]])/ \
+               || $4 ~ /(^|\/)emacs($|[[:space:]])/' \
+        | sed 's/^[[:space:]]*//')
+    if [[ -z "${candidates:-}" ]]; then
+        echo "no running emacs process found" >&2
+        exit 1
+    fi
+    n=$(printf '%s\n' "$candidates" | wc -l)
+    if (( n == 1 )); then
+        choice="$candidates"
+    else
+        choice=$(printf '%s\n' "$candidates" | fzf \
+            --prompt='thread-dump emacs > ' \
+            --header='PID    ETIME    COMMAND' \
+            --layout=reverse \
+            --no-multi)
+    fi
+    [[ -n "${choice:-}" ]] || { echo "nothing selected" >&2; exit 1; }
+    pid=$(awk '{print $1}' <<<"$choice")
+    echo "==> dumping pid=$pid"
+    if command -v thread_dump >/dev/null; then
+        thread_dump -s -p "$pid" -f -a
+    else
         gdb -batch -p "$pid" \
             -ex 'set pagination off' \
             -ex 'thread apply all bt' 2>&1
