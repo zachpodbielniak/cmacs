@@ -17,6 +17,7 @@
 
 #define ORG_EX_COMPILATION
 #include "lib/org-ex.h"
+#include "cmacs-org-ex-ink-capture.h"
 
 /* ──────────────────────────────────────────────────────────────────── */
 /* Document management                                                 */
@@ -449,6 +450,170 @@ Returns the wrapped GtkWidget as a GObject, or nil.  */)
 }
 
 /* ──────────────────────────────────────────────────────────────────── */
+/* Ink: stroke parse / serialise / render                              */
+/* ──────────────────────────────────────────────────────────────────── */
+
+DEFUN ("org-ex-ink-strokes-from-string",
+       Forg_ex_ink_strokes_from_string,
+       Sorg_ex_ink_strokes_from_string, 1, 1, 0,
+       doc: /* Parse the body of a #+BEGIN_INK block.
+TEXT is the block-body string (one stroke per line, ;; comments
+allowed).  Returns an opaque GObject-wrapped GPtrArray of
+OrgExInkStroke handles, or signals an error on malformed input.  */)
+  (Lisp_Object text)
+{
+  GPtrArray *strokes;
+  GError *err = NULL;
+
+  CHECK_STRING (text);
+
+  strokes = org_ex_ink_strokes_from_string (SSDATA (text), &err);
+  if (strokes == NULL)
+    {
+      Lisp_Object msg = build_string (err && err->message
+                                      ? err->message
+                                      : "ink: parse failed");
+      if (err) g_error_free (err);
+      xsignal1 (Qerror, msg);
+    }
+
+  /* Hand the GPtrArray to Elisp as a wrapped pointer.  Use a tiny
+     boxed GObject — since GPtrArray isn't a GObject, return it via
+     a make_misc_ptr/sentinel so Elisp can pass it back.  We use
+     make_user_ptr for clean lifetime tracking. */
+  return make_user_ptr ((void (*) (void *)) g_ptr_array_unref, strokes);
+}
+
+static GPtrArray *
+ink_unwrap_strokes (Lisp_Object obj)
+{
+  if (!USER_PTRP (obj))
+    error ("Expected ink stroke set (user-ptr)");
+  return (GPtrArray *) XUSER_PTR (obj)->p;
+}
+
+DEFUN ("org-ex-ink-strokes-to-string",
+       Forg_ex_ink_strokes_to_string,
+       Sorg_ex_ink_strokes_to_string, 1, 1, 0,
+       doc: /* Serialise an ink stroke set to its block-body string form.
+STROKES is a value returned by `org-ex-ink-strokes-from-string'.  */)
+  (Lisp_Object strokes)
+{
+  GPtrArray *array = ink_unwrap_strokes (strokes);
+  gchar *text = org_ex_ink_strokes_to_string (array);
+  Lisp_Object result = build_string (text != NULL ? text : "");
+  g_free (text);
+  return result;
+}
+
+DEFUN ("org-ex-ink-strokes-to-svg",
+       Forg_ex_ink_strokes_to_svg,
+       Sorg_ex_ink_strokes_to_svg, 3, 3, 0,
+       doc: /* Render STROKES as an SVG string of WIDTH x HEIGHT.
+STROKES is a value returned by `org-ex-ink-strokes-from-string'.
+WIDTH and HEIGHT are integer pixel extents.  */)
+  (Lisp_Object strokes, Lisp_Object width, Lisp_Object height)
+{
+  GPtrArray *array = ink_unwrap_strokes (strokes);
+  gchar *svg;
+  Lisp_Object result;
+
+  CHECK_FIXNUM (width);
+  CHECK_FIXNUM (height);
+
+  svg = org_ex_ink_render_to_svg (array,
+                                  (gint) XFIXNUM (width),
+                                  (gint) XFIXNUM (height));
+  result = build_string (svg != NULL ? svg : "");
+  g_free (svg);
+  return result;
+}
+
+DEFUN ("org-ex-ink-strokes-empty",
+       Forg_ex_ink_strokes_empty,
+       Sorg_ex_ink_strokes_empty, 0, 0, 0,
+       doc: /* Return a fresh empty ink stroke set.  */)
+  (void)
+{
+  return make_user_ptr ((void (*) (void *)) g_ptr_array_unref,
+                        org_ex_ink_strokes_new ());
+}
+
+DEFUN ("org-ex-ink-strokes-count",
+       Forg_ex_ink_strokes_count,
+       Sorg_ex_ink_strokes_count, 1, 1, 0,
+       doc: /* Return the number of strokes in STROKES.  */)
+  (Lisp_Object strokes)
+{
+  GPtrArray *array = ink_unwrap_strokes (strokes);
+  return make_fixnum (array->len);
+}
+
+DEFUN ("org-ex-ink-capture", Forg_ex_ink_capture,
+       Sorg_ex_ink_capture, 0, 6, 0,
+       doc: /* Open the modal ink capture window.
+INITIAL is an existing stroke set (from
+`org-ex-ink-strokes-from-string') to seed the canvas, or nil.
+WIDTH and HEIGHT are integer pixel extents (default 800 x 400).
+COLOUR is the hex string for new strokes (default "#222").
+BASE-WIDTH is the default pen width in pixels (default 2).
+SIDE-BUTTON-ERASES, when non-nil, makes button-2 act as eraser
+for tools without an eraser end.
+
+Returns a cons (STROKES . CANCELLED) where STROKES is a fresh
+stroke-set user-ptr (nil if cancelled), and CANCELLED is t when
+the user pressed Escape or closed the window.
+
+usage: (org-ex-ink-capture &optional INITIAL WIDTH HEIGHT COLOUR BASE-WIDTH SIDE-BUTTON-ERASES)  */)
+  (Lisp_Object initial, Lisp_Object width, Lisp_Object height,
+   Lisp_Object colour, Lisp_Object base_width,
+   Lisp_Object side_button_erases)
+{
+  GPtrArray *seed = NULL;
+  gint w = 800, h = 400;
+  const char *col = "#222";
+  gfloat bw = 2.0f;
+  gboolean sb = TRUE;
+  gboolean cancelled = TRUE;
+  GPtrArray *result;
+
+  if (!NILP (initial))
+    seed = ink_unwrap_strokes (initial);
+
+  if (!NILP (width))
+    {
+      CHECK_FIXNUM (width);
+      w = (gint) XFIXNUM (width);
+    }
+  if (!NILP (height))
+    {
+      CHECK_FIXNUM (height);
+      h = (gint) XFIXNUM (height);
+    }
+  if (!NILP (colour))
+    {
+      CHECK_STRING (colour);
+      col = SSDATA (colour);
+    }
+  if (!NILP (base_width))
+    {
+      CHECK_NUMBER (base_width);
+      bw = (gfloat) XFLOATINT (base_width);
+    }
+  if (!NILP (side_button_erases))
+    sb = TRUE;
+
+  result = cmacs_org_ex_ink_capture (seed, w, h, col, bw, sb, &cancelled);
+
+  if (result == NULL)
+    return Fcons (Qnil, cancelled ? Qt : Qnil);
+
+  return Fcons (
+    make_user_ptr ((void (*) (void *)) g_ptr_array_unref, result),
+    cancelled ? Qt : Qnil);
+}
+
+/* ──────────────────────────────────────────────────────────────────── */
 /* Symbol registration                                                 */
 /* ──────────────────────────────────────────────────────────────────── */
 
@@ -481,6 +646,13 @@ syms_of_cmacs_org_ex (void)
   defsubr (&Sorg_ex_widget_code_set_result);
 
   defsubr (&Sorg_ex_widget_gtk_get_widget);
+
+  defsubr (&Sorg_ex_ink_strokes_from_string);
+  defsubr (&Sorg_ex_ink_strokes_to_string);
+  defsubr (&Sorg_ex_ink_strokes_to_svg);
+  defsubr (&Sorg_ex_ink_strokes_empty);
+  defsubr (&Sorg_ex_ink_strokes_count);
+  defsubr (&Sorg_ex_ink_capture);
 }
 
 #endif /* HAVE_CMACS_ORG_EX */

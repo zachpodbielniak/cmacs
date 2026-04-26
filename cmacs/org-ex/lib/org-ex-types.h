@@ -35,6 +35,7 @@ typedef struct _OrgExWidgetGtk    OrgExWidgetGtk;
 typedef struct _OrgExWidgetWeb    OrgExWidgetWeb;
 typedef struct _OrgExWidgetBuffer OrgExWidgetBuffer;
 typedef struct _OrgExWidgetCode   OrgExWidgetCode;
+typedef struct _OrgExWidgetInk    OrgExWidgetInk;
 typedef struct _OrgExDocument     OrgExDocument;
 typedef struct _OrgExBinding      OrgExBinding;
 typedef struct _OrgExChannel      OrgExChannel;
@@ -88,7 +89,8 @@ typedef enum
   ORG_EX_WIDGET_TYPE_GTK,
   ORG_EX_WIDGET_TYPE_WEB,
   ORG_EX_WIDGET_TYPE_BUFFER,
-  ORG_EX_WIDGET_TYPE_CODE
+  ORG_EX_WIDGET_TYPE_CODE,
+  ORG_EX_WIDGET_TYPE_INK
 } OrgExWidgetType;
 
 #define ORG_EX_TYPE_WIDGET_TYPE (org_ex_widget_type_get_type ())

@@ -1,0 +1,56 @@
+/* cmacs-org-ex-ink-capture.h — GTK3 modal ink capture window
+ *
+ * Copyright (C) 2026 Zach Podbielniak
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ *
+ * Live ink editor.  Opens a transient GTK3 toplevel with a Cairo
+ * drawing area; reads pen / eraser / pressure off GdkDeviceTool +
+ * GDK_AXIS_PRESSURE; runs a nested GMainLoop so the call returns
+ * synchronously to the DEFUN that invoked it.
+ *
+ * No GTK / GDK headers leak through this interface — callers stay
+ * agnostic of the toolkit.
+ */
+
+#ifndef CMACS_ORG_EX_INK_CAPTURE_H
+#define CMACS_ORG_EX_INK_CAPTURE_H
+
+#include <glib.h>
+
+G_BEGIN_DECLS
+
+/* Open the ink capture window.
+ *
+ * @initial: GPtrArray<OrgExInkStroke*> to seed the canvas (may be NULL).
+ *           Captured pen strokes will be appended/diffed against this
+ *           set; eraser strokes act as whole-stroke hit tests against
+ *           the initial set.  The returned GPtrArray is a freshly
+ *           allocated set with full-ref destroy hooked up — caller
+ *           takes ownership.  Returns NULL only when @cancelled is
+ *           set non-zero.
+ *
+ * @width, @height: canvas extent in pixels.
+ *
+ * @colour: hex colour for new pen strokes (e.g. "#222"; NULL → default).
+ *
+ * @base_width: default base width for new pen strokes (≤ 0 → default).
+ *
+ * @side_button_erases: if non-zero, holding side-button-1 turns a
+ *           pen stroke into an eraser hit-test.  Provides eraser-end
+ *           fallback for cheap pens.
+ *
+ * @cancelled: set to 1 if the user cancelled (Escape); 0 if they
+ *           committed (Enter / Control-Return / window-close-via-OK).
+ *           May be NULL if the caller doesn't care.
+ */
+GPtrArray *cmacs_org_ex_ink_capture (GPtrArray   *initial,
+                                     gint         width,
+                                     gint         height,
+                                     const gchar *colour,
+                                     gfloat       base_width,
+                                     gboolean     side_button_erases,
+                                     gboolean    *cancelled);
+
+G_END_DECLS
+
+#endif /* CMACS_ORG_EX_INK_CAPTURE_H */

@@ -23,6 +23,7 @@ org_ex_widget_type_get_type (void)
         { ORG_EX_WIDGET_TYPE_WEB, "ORG_EX_WIDGET_TYPE_WEB", "web" },
         { ORG_EX_WIDGET_TYPE_BUFFER, "ORG_EX_WIDGET_TYPE_BUFFER", "buffer" },
         { ORG_EX_WIDGET_TYPE_CODE, "ORG_EX_WIDGET_TYPE_CODE", "code" },
+        { ORG_EX_WIDGET_TYPE_INK,  "ORG_EX_WIDGET_TYPE_INK",  "ink" },
         { 0, NULL, NULL }
       };
       GType type_id = g_enum_register_static ("OrgExWidgetType", values);

@@ -18,6 +18,8 @@ SRCS := org-ex-enums.c \
         core/org-ex-widget-web.c \
         core/org-ex-widget-buffer.c \
         core/org-ex-widget-code.c \
+        core/org-ex-ink-stroke.c \
+        core/org-ex-ink-render.c \
         core/org-ex-document.c \
         core/org-ex-binding.c \
         core/org-ex-channel.c \
@@ -31,6 +33,8 @@ HDRS := org-ex.h org-ex-types.h \
         core/org-ex-widget-web.h \
         core/org-ex-widget-buffer.h \
         core/org-ex-widget-code.h \
+        core/org-ex-ink-stroke.h \
+        core/org-ex-ink-render.h \
         core/org-ex-document.h \
         core/org-ex-binding.h \
         core/org-ex-channel.h \

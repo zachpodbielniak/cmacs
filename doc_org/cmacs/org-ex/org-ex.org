@@ -625,6 +625,191 @@ cmacs.call("get-value", "key", function(result) {
 | =cmacs.call(name, ...args)=                    | (JS) Call a registered Elisp function |
 | =cmacs.call(name, ...args, callback)=          | (JS) Call with result callback       |
 
+* Ink Canvas
+
+The ink canvas is a tablet-driven drawing surface embedded inside Org
+buffers via =#+BEGIN_INK= blocks.  Strokes live inline in the block
+body as one-stroke-per-line S-expressions, so a single =.org= file is
+self-contained, hand-editable, and produces minimal git diffs as
+drawings evolve.
+
+A modal capture window --- pure GTK3 with Cairo rendering --- reads
+pen, eraser, and pressure straight from =GdkDeviceTool= and the
+=GDK_AXIS_PRESSURE= axis.  Under standalone pgtk Emacs on Wayland, the
+host compositor's =wp_tablet_v2= events flow through GDK unchanged,
+so a Wacom tablet works without any extra configuration.
+
+** Requirements
+
+- *SVG image support is mandatory.*  The rendered canvas is an inline
+  =(image :type svg)= overlay.  Configure with =--with-rsvg=.  Install
+  =librsvg2-devel= (Fedora / RHEL), =librsvg2-dev= (Debian / Ubuntu),
+  or the equivalent =librsvg= package on Arch / macOS / FreeBSD.  The
+  =install-deps= helper at the repo root handles every supported OS.
+- GTK3 (already required by pgtk Emacs).
+- Cairo (already required by pgtk Emacs).
+
+** Block Syntax
+
+Ink blocks are a parallel block kind to =#+BEGIN_WIDGET= --- they have
+their own header keyword vocabulary and their body is parsed by a
+hand-rolled S-expression reader.
+
+#+begin_example
+#+BEGIN_INK :id 7e3a-9b21 :w 800 :h 400 :v 1
+;; cmacs-ink v1; one stroke per line for git-friendly diffs
+(s :t pen :c "#222" :w 2 :p ((123 245 850) (130 250 860) (138 255 870)))
+(s :t pen :c "#cc2a2a" :w 2.5 :p ((220 100 700) (228 115 750)))
+#+END_INK
+#+end_example
+
+| Header keyword | Description                                                            | Default |
+|----------------+------------------------------------------------------------------------+---------|
+| =:id=          | Unique block id; used by the write path to re-resolve at commit time.  |         |
+| =:w=           | Canvas width in pixels.                                                |     800 |
+| =:h=           | Canvas height in pixels.                                               |     400 |
+| =:v=           | Body-format version.                                                   |       1 |
+
+Each stroke line:
+
+#+begin_example
+(s :t TOOL :c "#hex" :w WIDTH :p ((X Y P) (X Y P) ...))
+#+end_example
+
+| Stroke key | Description                                                                                  |
+|------------+----------------------------------------------------------------------------------------------|
+| =:t=       | Tool symbol: =pen=, =eraser= (transient -- never persisted), =highlighter= (reserved v2).    |
+| =:c=       | Hex colour string for the stroke.                                                            |
+| =:w=       | Base width in pixels; pressure scales it per-segment.                                        |
+| =:p=       | Points list.  Each point =(X Y P)= with X,Y integer pixels and P pressure scaled to 0..1000. |
+
+=;;= comment lines inside the body are ignored on parse and preserved
+on round-trip --- this is how the canonical version marker line lives
+at the top of every block.
+
+** Rendering
+
+When =cmacs-org-ex-ink-auto-render= is non-nil (default), every block
+body is replaced visually with an SVG image overlay.  The renderer
+(=org_ex_ink_render_to_svg= in
+=cmacs/org-ex/lib/core/org-ex-ink-render.c=) emits:
+
+- A white background rect, so strokes are visible against any theme.
+- A 1px =#cccccc= border so the canvas extent is visible.
+- One =<path>= per stroke segment, split at pressure-change boundaries
+  (=Δwidth > 0.3px=).  Single-pressure strokes collapse to a single
+  path.
+- Single-point strokes as =<circle>= so taps remain visible.
+- Eraser strokes are skipped --- they are hit-test trails, never
+  persisted into the rendered SVG.
+
+The underlying buffer text is unchanged.  =save-buffer= writes the
+canonical S-expression form to disk; the SVG is purely a display
+overlay.
+
+** Capture Window
+
+The capture window is a transient GTK3 toplevel
+(=cmacs/org-ex/cmacs-org-ex-ink-capture.c=).  It runs a nested
+=GMainLoop= so the call returns synchronously to Elisp.
+
+| Key       | Action                                  |
+|-----------+-----------------------------------------|
+| =C-RET=   | Commit and return strokes.              |
+| =Esc=     | Cancel and discard.                     |
+| =C-z=     | Undo last committed stroke.             |
+
+Tablet input model:
+
+1. *Pen tip* (=GDK_DEVICE_TOOL_TYPE_PEN=) -- =:t pen= strokes.
+2. *Eraser end* (=GDK_DEVICE_TOOL_TYPE_ERASER=) -- each stroke is a
+   hit-test path; on release every existing pen stroke whose points
+   lie within =max(stroke_width, 6)= pixels is removed wholesale.
+   Whole strokes only --- never partial pixels.
+3. *Side-button-as-eraser fallback* -- when
+   =cmacs-org-ex-ink-side-button-erases= is non-nil (default), holding
+   button 2 mid-stroke routes through the same erase path.
+
+While the modal is up Emacs's =SIGALRM=-driven atimer chain is blocked
+via =pthread_sigmask=.  Without that guard the hourglass timer firing
+during a Wacom =tablet-tool-added/done= dispatch can re-enter GTK
+widget realisation in an inconsistent device state and trigger a GDK
+assertion.
+
+** Marginalia
+
+Outside =.org= files, ink lives as *marginalia* --- annotations
+anchored to source code or prose lines.  Storage is a sidecar file
+=<source>.cmacs-ink= alongside the source.
+
+#+begin_example
+;; cmacs-ink/marginalia v1 - generated; safe to hand-edit.
+((:format "cmacs-ink/marginalia/1"
+  :file "src/foo.c"
+  :anchors
+  ((:id "ann-7f3a"
+    :line 412
+    :line-hash "9af2c0..."   ; SHA1 of line + 2 lines of context
+    :width 320
+    :height 120
+    :created 1745600000
+    :strokes ((s :t pen :c "#cc2a2a" :w 2 :p ((50 30 850) ...)))))))
+#+end_example
+
+Anchors carry both a line number and a SHA1 of the line plus two
+neighbours.  On load, anchors are reconciled:
+
+1. Match by =:line=; if =:line-hash= matches the current line's hash,
+   bind to that marker.
+2. Otherwise search =cmacs-ink-marginalia-search-radius= (10) lines
+   around for a hash match and relocate.
+3. Otherwise mark the anchor as orphan and float it to the top of the
+   buffer with an =[orphan annotation]= badge.
+
+The sidecar is read on =find-file= and written on =after-save=.  =git
+status= shows source and sidecar together --- annotation changes ride
+alongside source changes through the normal review flow.
+
+** Top-Level Mode
+
+=cmacs-ink-mode= wires up hooks and the keymap.
+
+| Key       | Command                                   | Description                            |
+|-----------+-------------------------------------------+----------------------------------------|
+| =C-c i c= | =cmacs-org-ex-ink-insert=                 | Insert a fresh =#+BEGIN_INK= block.    |
+| =C-c i e= | =cmacs-org-ex-ink-edit=                   | Edit the block at point.               |
+| =C-c i t= | =cmacs-org-ex-ink-toggle-render=          | Flip raw S-expr <-> SVG view.          |
+| =C-c i a= | =cmacs-ink-marginalia-add=                | Annotate the current line.             |
+| =C-c i E= | =cmacs-ink-marginalia-edit-at-point=      | Edit the annotation on this line.      |
+| =C-c i d= | =cmacs-ink-marginalia-delete-at-point=    | Delete the annotation on this line.    |
+| =C-c i l= | =cmacs-ink-marginalia-list=               | Buffer listing all annotations.        |
+
+=global-cmacs-ink-mode= enables the mode in any file-visiting buffer.
+
+** Customisation
+
+| Variable                                 | Default     | Purpose                                            |
+|------------------------------------------+-------------+----------------------------------------------------|
+| =cmacs-org-ex-ink-default-width=         |         800 | Canvas width for new blocks.                       |
+| =cmacs-org-ex-ink-default-height=        |         400 | Canvas height for new blocks.                      |
+| =cmacs-org-ex-ink-default-colour=        | ="#222"=    | Default pen colour.                                |
+| =cmacs-org-ex-ink-default-base-width=    |         2.0 | Default pen base width.                            |
+| =cmacs-org-ex-ink-side-button-erases=    | =t=         | Mouse button 2 acts as eraser fallback.            |
+| =cmacs-org-ex-ink-auto-render=           | =t=         | Overlay SVG rendering on find-file and saves.      |
+| =cmacs-ink-marginalia-default-width=     |         320 | Sidecar canvas width.                              |
+| =cmacs-ink-marginalia-default-height=    |         120 | Sidecar canvas height.                             |
+| =cmacs-ink-marginalia-default-colour=    | ="#cc2a2a"= | Default ink colour for marginalia.                 |
+| =cmacs-ink-marginalia-search-radius=     |          10 | Lines to scan for hash reconciliation.             |
+
+** Limitations and Roadmap
+
+- Under =cmacs --gowl=, pressure is fixed at =1.0= (gowl does not yet
+  advertise =wp_tablet_v2=; v2 lifts this).
+- =highlighter=, replay scrubber, gestures (scribble-out, lasso), and
+  OCR enrichment are reserved for v2.
+- Voice-coupled ink --- time-linking strokes to libreclaw audio --- is
+  a v3 target.
+
 * API Reference
 
 ** Document Management
@@ -676,6 +861,33 @@ cmacs.call("get-value", "key", function(result) {
 | =(org-ex-widget-export-html W)=       | Export widget as HTML string        |
 | =(org-ex-widget-export-text W)=       | Export widget as text description   |
 
+** Ink Primitives
+
+| Function                                                              | Description                                |
+|-----------------------------------------------------------------------+--------------------------------------------|
+| =(org-ex-ink-strokes-from-string TEXT)=                               | Parse #+BEGIN_INK body into a stroke set.  |
+| =(org-ex-ink-strokes-to-string STROKES)=                              | Serialise back to block-body string form.  |
+| =(org-ex-ink-strokes-to-svg STROKES W H)=                             | Render to SVG string.                      |
+| =(org-ex-ink-strokes-empty)=                                          | Fresh empty stroke set.                    |
+| =(org-ex-ink-strokes-count STROKES)=                                  | Number of strokes in a set.                |
+| =(org-ex-ink-capture &opt INITIAL W H COLOUR BASE-WIDTH SIDE-BTN)=    | Modal capture; (STROKES . CANCELLED).      |
+
+** Ink Mode + Helpers
+
+| Function                                       | Description                                     |
+|------------------------------------------------+-------------------------------------------------|
+| =(cmacs-ink-mode &optional ARG)=               | Buffer-local minor mode.                        |
+| =(global-cmacs-ink-mode &optional ARG)=        | Globalised counterpart.                         |
+| =(cmacs-org-ex-ink-insert &opt NO-EDIT W H)=   | Insert and (auto-)edit a #+BEGIN_INK block.     |
+| =(cmacs-org-ex-ink-edit)=                      | Edit the block at point.                        |
+| =(cmacs-org-ex-ink-toggle-render)=             | Flip raw <-> SVG overlay.                       |
+| =(cmacs-org-ex-ink-render-buffer)=             | Refresh image overlays for every block.         |
+| =(cmacs-org-ex-ink-unrender-buffer)=           | Remove image overlays.                          |
+| =(cmacs-ink-marginalia-add)=                   | Annotate the current line.                      |
+| =(cmacs-ink-marginalia-edit-at-point)=         | Edit the annotation on this line.               |
+| =(cmacs-ink-marginalia-delete-at-point)=       | Delete the annotation on this line.             |
+| =(cmacs-ink-marginalia-list)=                  | Buffer listing all annotations.                 |
+
 * Files
 
 | File                                    | Description                              |
@@ -694,3 +906,9 @@ cmacs.call("get-value", "key", function(result) {
 | =lisp/cmacs/cmacs-org-ex-binding.el=    | Reactive binding setup                   |
 | =lisp/cmacs/cmacs-org-ex-export.el=     | Export backends (HTML, text)             |
 | =lisp/cmacs/cmacs-org-ex-state.el=      | Sidecar state persistence                |
+| =cmacs/org-ex/lib/core/org-ex-ink-stroke.h= | Ink stroke boxed type + sexpr I/O    |
+| =cmacs/org-ex/lib/core/org-ex-ink-render.h= | Variable-width SVG renderer          |
+| =cmacs/org-ex/cmacs-org-ex-ink-capture.h=   | Modal GTK3 ink capture window        |
+| =lisp/cmacs/cmacs-org-ex-ink.el=        | #+BEGIN_INK insert / edit / render       |
+| =lisp/cmacs/cmacs-ink-marginalia.el=    | Marginalia sidecar + hash anchoring      |
+| =lisp/cmacs/cmacs-ink.el=               | Top-level cmacs-ink-mode + keymap        |

@@ -23,6 +23,8 @@
 #include "core/org-ex-widget-web.h"
 #include "core/org-ex-widget-buffer.h"
 #include "core/org-ex-widget-code.h"
+#include "core/org-ex-ink-stroke.h"
+#include "core/org-ex-ink-render.h"
 #include "core/org-ex-document.h"
 #include "core/org-ex-binding.h"
 #include "core/org-ex-channel.h"

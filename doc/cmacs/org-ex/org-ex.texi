@@ -43,6 +43,7 @@ properties, and exported cleanly to HTML, PDF, and plain text.
 * Export Behavior::             HTML, PDF, and text export.
 * Custom Widget Types::         Creating new widget types.
 * JS Bridge::                   JavaScript to Elisp messaging for web widgets.
+* Ink Canvas::                  Tablet-driven hand-drawn ink blocks.
 * API Reference::               Elisp and C primitives.
 * Files::                       Source layout.
 @end menu
@@ -1012,6 +1013,276 @@ pairs.
 The bridge file is @file{lisp/cmacs/cmacs-org-ex-bridge.el}.
 
 @c ===================================================================
+@node Ink Canvas
+@chapter Ink Canvas
+
+@cindex ink
+@cindex Wacom
+@cindex tablet
+@cindex hand-drawn
+
+The ink canvas is a tablet-driven drawing surface embedded inside Org
+buffers via @code{#+BEGIN_INK} blocks.  Strokes are stored inline in
+the block body as one-stroke-per-line S-expressions, so a single
+@file{.org} file is self-contained, hand-editable, and produces minimal
+git diffs as drawings evolve.
+
+A modal capture window---pure GTK3 with Cairo rendering---reads pen,
+eraser, and pressure straight from @code{GdkDeviceTool} and the
+@code{GDK_AXIS_PRESSURE} axis.  Under standalone pgtk Emacs on Wayland,
+the host compositor's @code{wp_tablet_v2} events flow through GDK
+unchanged, so a Wacom tablet works without any extra configuration.
+
+@section Requirements
+
+@itemize @bullet
+@item
+SVG image support is mandatory: the rendered surface is an inline
+@code{(image :type svg)} overlay.  Configure with
+@code{--with-rsvg}; the build needs @code{librsvg2-devel} (Fedora /
+RHEL), @code{librsvg2-dev} (Debian / Ubuntu), or the equivalent
+@code{librsvg} package on Arch / macOS / FreeBSD.
+@item
+GTK3 (already required by pgtk Emacs).
+@item
+Cairo (already required by pgtk Emacs).
+@end itemize
+
+The @command{install-deps} helper at the repo root installs the right
+package on every supported distribution.
+
+@section Block Syntax
+
+An ink block has its own header keyword vocabulary; it does @emph{not}
+go through the @code{#+BEGIN_WIDGET} dispatcher.
+
+@example
+#+BEGIN_INK :id 7e3a-9b21 :w 800 :h 400 :v 1
+;; cmacs-ink v1; one stroke per line for git-friendly diffs
+(s :t pen :c "#222" :w 2 :p ((123 245 850) (130 250 860) (138 255 870)))
+(s :t pen :c "#cc2a2a" :w 2.5 :p ((220 100 700) (228 115 750)))
+#+END_INK
+@end example
+
+@table @code
+@item :id
+Unique block identifier.  Generated automatically on insert; used by
+the write path to re-resolve the target block at commit time so a
+position drift cannot cause the wrong region to be rewritten.
+@item :w
+Canvas width in pixels (default 800).
+@item :h
+Canvas height in pixels (default 400).
+@item :v
+Body-format version (currently @code{1}).
+@end table
+
+Each stroke line in the body has the form:
+
+@example
+(s :t TOOL :c "#hex" :w WIDTH :p ((X Y P) (X Y P) ...))
+@end example
+
+@table @code
+@item :t
+Tool symbol: @code{pen}, @code{eraser} (transient---never persisted),
+or @code{highlighter} (reserved for v2).
+@item :c
+Hex colour string for the stroke.
+@item :w
+Base width in pixels; pressure scales it per-segment.
+@item :p
+List of points.  Each point is @code{(X Y P)} with @code{X} and
+@code{Y} integer pixel coordinates within the canvas, and @code{P}
+pressure scaled to the integer range @code{0..1000} (1000 = unknown
+or no tablet---renders at full width).
+@end table
+
+Comment lines beginning with @code{;;} inside the body are ignored by
+the parser and preserved on round-trip.  This is how the canonical
+@samp{cmacs-ink v1} marker line lives at the top of every block body
+without confusing the reader.
+
+@section Rendering
+
+@cindex SVG, ink rendering
+@cindex variable-width strokes
+
+When @code{cmacs-org-ex-ink-auto-render} is non-nil (default), every
+block body is replaced visually with an SVG image overlay sized to
+the block's @code{:w x :h}.  The renderer
+(@code{org_ex_ink_render_to_svg} in
+@file{cmacs/org-ex/lib/core/org-ex-ink-render.c}) emits:
+
+@itemize @bullet
+@item A white background rect so strokes stay visible against any
+buffer theme.
+@item A 1px @code{#cccccc} border so the canvas extent is visible.
+@item One @code{<path>} fragment per stroke segment, split at
+pressure-change boundaries (@code{Δwidth > 0.3px}) so single-pressure
+strokes collapse to a single path.
+@item Single-point strokes as @code{<circle>} so taps remain visible.
+@item Eraser strokes are skipped---they are hit-test trails, never
+persisted into the rendered SVG.
+@end itemize
+
+Underlying buffer text is unchanged.  @code{save-buffer} writes the
+canonical S-expression form to disk; the SVG is purely a display
+overlay.
+
+@section Capture Window
+
+@cindex capture, ink
+
+The capture window opens as a transient GTK3 toplevel
+(@file{cmacs/org-ex/cmacs-org-ex-ink-capture.c}).  It runs a nested
+@code{GMainLoop} so the call returns synchronously to Elisp---the
+same pattern used by the @code{xg_select} integration in cmacs-glib.
+
+@table @kbd
+@item C-RET
+Commit and return strokes to the caller.
+@item Esc
+Cancel and discard.
+@item C-z
+Undo last committed stroke.
+@end table
+
+Tablet input model:
+
+@enumerate
+@item @strong{Pen tip}
+@code{GDK_DEVICE_TOOL_TYPE_PEN}: appended as
+@code{:t pen} in current colour and base width.
+@item @strong{Eraser end}
+@code{GDK_DEVICE_TOOL_TYPE_ERASER}: each stroke is a hit-test path; on
+release every existing pen stroke whose points lie within
+@code{max(stroke_width, 6)} pixels is removed wholesale.  Whole strokes
+only---never partial pixels.
+@item @strong{Side-button-as-eraser fallback}
+When @code{cmacs-org-ex-ink-side-button-erases} is non-nil (default),
+holding mouse button 2 mid-stroke routes through the same erase path
+as @item 2.  Provides eraser support for pens that lack a dedicated
+eraser end.
+@end enumerate
+
+While the modal is up, Emacs's @code{SIGALRM}-driven atimer chain is
+blocked via @code{pthread_sigmask}.  Without this guard, the hourglass
+timer firing during a Wacom @code{tablet-tool-added/done} dispatch can
+re-enter GTK widget realisation in an inconsistent device state and
+trigger a GDK assertion.
+
+@section Marginalia
+
+@cindex marginalia
+@cindex annotation
+
+Outside of @code{.org} files, ink lives as @emph{marginalia}---ink
+notes anchored to source code or prose lines.  Storage is a sidecar
+file @code{<source>.cmacs-ink} alongside the source.
+
+@example
+;; cmacs-ink/marginalia v1 - generated; safe to hand-edit.
+((:format "cmacs-ink/marginalia/1"
+  :file "src/foo.c"
+  :anchors
+  ((:id "ann-7f3a"
+    :line 412
+    :line-hash "9af2c0..."   ; SHA1 of line + 2 lines of context
+    :width 320
+    :height 120
+    :created 1745600000
+    :strokes ((s :t pen :c "#cc2a2a" :w 2 :p ((50 30 850) ...)))))))
+@end example
+
+@cindex line-hash
+Anchors carry both a line number and a SHA1 of the line plus two
+neighbours.  On load, the buffer-local list is reconciled:
+
+@enumerate
+@item Match by @code{:line}; if @code{:line-hash} matches the current
+line's hash, bind to that marker.
+@item Otherwise search @code{cmacs-ink-marginalia-search-radius} (10)
+lines around for a hash match and relocate.
+@item Otherwise mark the anchor as orphan and float it to the top of
+the buffer with an @code{[orphan annotation]} badge.
+@end enumerate
+
+The sidecar is read by @code{cmacs-ink-marginalia--maybe-load} on
+@code{find-file} and written by @code{cmacs-ink-marginalia--maybe-save}
+on @code{after-save}.  @code{git status} sees both source and sidecar
+together---annotation changes ride alongside source changes through
+the normal review flow.
+
+@section Top-Level Mode
+
+@code{cmacs-ink-mode} is a buffer-local minor mode that wires up the
+hooks and the keymap.
+
+@table @kbd
+@item C-c i c
+@code{cmacs-org-ex-ink-insert} - insert a new @code{#+BEGIN_INK} block
+on the line below point and open the capture window.  If point is
+already inside a block, escapes to the line after that block's
+@code{#+END_INK} first, so the new block is never nested.
+@item C-c i e
+@code{cmacs-org-ex-ink-edit} - edit the block at point.
+@item C-c i t
+@code{cmacs-org-ex-ink-toggle-render} - flip between raw S-expr view
+and the rendered SVG overlay.
+@item C-c i a
+@code{cmacs-ink-marginalia-add} - annotate the current line.
+@item C-c i E
+@code{cmacs-ink-marginalia-edit-at-point}
+@item C-c i d
+@code{cmacs-ink-marginalia-delete-at-point}
+@item C-c i l
+@code{cmacs-ink-marginalia-list} - show all annotations in the buffer.
+@end table
+
+@code{global-cmacs-ink-mode} enables the mode in any buffer that
+visits a file (and any @code{prog-mode}, @code{text-mode}, or
+@code{org-mode} derivative).
+
+@section Customisation
+
+@vtable @code
+@item cmacs-org-ex-ink-default-width
+@itemx cmacs-org-ex-ink-default-height
+Default canvas dimensions for new blocks (800 / 400).
+@item cmacs-org-ex-ink-default-colour
+Default pen colour for new strokes (@code{"#222"}).
+@item cmacs-org-ex-ink-default-base-width
+Default pen base width in pixels (@code{2.0}).
+@item cmacs-org-ex-ink-side-button-erases
+Whether mouse button 2 acts as an eraser when no eraser-end tool is
+detected (@code{t}).
+@item cmacs-org-ex-ink-auto-render
+Whether to overlay SVG rendering automatically on @code{find-file}
+and after edits.  Set to @code{nil} to keep blocks visible as raw
+stroke S-exprs.
+@item cmacs-ink-marginalia-default-width
+@itemx cmacs-ink-marginalia-default-height
+Default sidecar canvas dimensions (320 / 120).
+@item cmacs-ink-marginalia-default-colour
+Default ink colour for marginalia (@code{"#cc2a2a"}).
+@item cmacs-ink-marginalia-search-radius
+Lines to scan around the recorded line for a hash match during
+reconciliation (10).
+@end vtable
+
+@section Limitations and Roadmap
+
+@itemize @bullet
+@item Under @code{cmacs --gowl}, pressure is fixed at @code{1.0}
+(gowl does not yet advertise @code{wp_tablet_v2}; v2 lifts this).
+@item @code{highlighter}, replay scrubber, gestures (scribble-out,
+lasso), and OCR enrichment are reserved for v2.
+@item Voice-coupled ink---time-linking strokes to libreclaw audio---is
+a v3 target.
+@end itemize
+
+@c ===================================================================
 @node API Reference
 @chapter API Reference
 
@@ -1146,6 +1417,66 @@ Remove the bridge handler for @var{ACTION}.
 
 @item cmacs-org-ex-bridge-handlers
 Return an alist of registered bridge handlers.
+
+@item cmacs-ink-mode
+Buffer-local minor mode wiring keybindings, auto-render, and
+marginalia sidecar I/O.
+
+@item global-cmacs-ink-mode
+Globalised counterpart that enables @code{cmacs-ink-mode} in any
+file-visiting buffer.
+
+@item cmacs-org-ex-ink-insert &optional NO-EDIT WIDTH HEIGHT
+Insert a fresh @code{#+BEGIN_INK} block on the line below point and
+(unless NO-EDIT) open the capture window.  Refuses to nest a block
+inside another and always parks point on the line after
+@code{#+END_INK} on exit.
+
+@item cmacs-org-ex-ink-edit
+Edit the block at point in the capture window.  On commit, the body
+is rewritten in-place via the @code{:id}-based re-resolve path.
+
+@item cmacs-org-ex-ink-toggle-render
+Flip between raw stroke S-expr view and the rendered SVG overlay.
+
+@item cmacs-org-ex-ink-render-buffer
+Refresh image overlays for every block in the buffer.
+
+@item cmacs-org-ex-ink-unrender-buffer
+Remove image overlays so raw S-exprs are visible.
+
+@item cmacs-ink-marginalia-add
+Annotate the current line with an ink note (sidecar-stored).
+
+@item cmacs-ink-marginalia-edit-at-point
+Edit the annotation overlapping point.
+
+@item cmacs-ink-marginalia-delete-at-point
+Delete the annotation on the current line.
+
+@item cmacs-ink-marginalia-list
+Show a buffer listing all annotations in the current source.
+
+@item org-ex-ink-strokes-from-string TEXT
+Parse a @code{#+BEGIN_INK} block-body string into an opaque stroke
+set (a @code{user-ptr} wrapping a @code{GPtrArray}).
+
+@item org-ex-ink-strokes-to-string STROKES
+Serialise a stroke set to its block-body string form.
+
+@item org-ex-ink-strokes-to-svg STROKES WIDTH HEIGHT
+Render a stroke set to an SVG string.
+
+@item org-ex-ink-strokes-empty
+Return a fresh empty stroke set.
+
+@item org-ex-ink-strokes-count STROKES
+Return the number of strokes in a stroke set.
+
+@item org-ex-ink-capture &optional INITIAL WIDTH HEIGHT COLOUR BASE-WIDTH SIDE-BUTTON-ERASES
+Open the modal ink capture window.  Returns @code{(STROKES . CANCELLED)}
+where STROKES is a fresh user-ptr (nil when cancelled) and CANCELLED
+is t on Esc / window close.
 @end table
 
 @c ===================================================================
@@ -1169,6 +1500,12 @@ WebKit web view widget.
 Buffer embed widget.
 @item cmacs/org-ex/lib/core/org-ex-widget-code.h
 Code evaluation widget.
+@item cmacs/org-ex/lib/core/org-ex-ink-stroke.h
+Ink stroke boxed type and S-expression I/O.
+@item cmacs/org-ex/lib/core/org-ex-ink-render.h
+Stroke set to variable-width SVG renderer.
+@item cmacs/org-ex/cmacs-org-ex-ink-capture.h
+Modal GTK3 ink capture window with tablet event handlers.
 @item cmacs/org-ex/lib/core/org-ex-document.h
 Document manager.
 @item cmacs/org-ex/lib/core/org-ex-binding.h
@@ -1195,6 +1532,12 @@ Export backends (HTML, text).
 Sidecar state persistence.
 @item lisp/cmacs/cmacs-org-ex-bridge.el
 JavaScript to Elisp messaging bridge for web widgets.
+@item lisp/cmacs/cmacs-org-ex-ink.el
+@code{#+BEGIN_INK} canvas blocks: insert, edit, render, parse.
+@item lisp/cmacs/cmacs-ink-marginalia.el
+Marginalia sidecar: anchors, hash reconciliation, fringe overlays.
+@item lisp/cmacs/cmacs-ink.el
+Top-level @code{cmacs-ink-mode} minor mode + keymap.
 @end table
 
 @bye

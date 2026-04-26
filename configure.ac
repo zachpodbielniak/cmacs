@@ -805,7 +805,7 @@ if test "$with_cmacs_libreclaw" != "no"; then
 fi
 if test "$with_cmacs_org_ex" != "no"; then
   AC_DEFINE([HAVE_CMACS_ORG_EX], 1, [CMacs org-ex interactive widgets])
-  CMACS_ORG_EX_OBJ="cmacs-org-ex.o"
+  CMACS_ORG_EX_OBJ="cmacs-org-ex.o cmacs-org-ex-ink-capture.o"
   CMACS_ORG_EX_CFLAGS="-I\$(srcdir)/../cmacs/org-ex/lib $CMACS_GLIB_CFLAGS"
   CMACS_ORG_EX_LIBS="\$(srcdir)/../cmacs/org-ex/lib/liborgex-1.0.a"
 fi

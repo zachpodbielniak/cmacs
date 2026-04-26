@@ -157,6 +157,12 @@ and code evaluation results---directly inside Org mode buffers.
 - Pub/sub channels: =:publish= / =:subscribe= for widget-to-widget messaging
 - Export: HTML (live widgets), text (fallback descriptions)
 - State persistence: ephemeral widget state saved to =.org-ex-state= sidecar
+- Tablet ink: =#+BEGIN_INK= canvas blocks + per-line marginalia
+  (=cmacs-ink-mode=, =C-c i c= / =C-c i a=).  Pen, eraser, and
+  pressure read directly from =GdkDeviceTool= /
+  =GDK_AXIS_PRESSURE= -- works out of the box with Wacom under
+  Wayland.  *Requires =--with-rsvg=* (librsvg2): the rendered
+  canvas is an inline =(image :type svg)= overlay.
 
 Architecture: =liborgex-1.0.so= shared library (GObject-native, GI-introspectable)
 with a thin DEFUN bridge (20 primitives) and Elisp layer.

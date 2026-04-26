@@ -116,7 +116,7 @@ All cmacs features are auto-detected. The configure script checks for system pac
 - **gowl**: system `gowl` package or bundled `deps/gowl` + wlroots-0.19 + wayland-server
 - **podomation**: system `podomation-1.0` package or bundled `deps/podomation`
 - **libreclaw**: system `libreclaw >= 0.18.0` package or bundled `deps/libreclaw` + libsoup-3.0, json-glib-1.0, libcmark, sqlite3, libetpan, libpq, yaml-0.1. Shares cmacs's PodEngine via `lc_podomation_new_with_engine()`; `init_cmacs_libreclaw()` is intentionally empty — `(cmacs-libreclaw-start)` from Elisp creates the LcApp at runtime.
-- **org-ex**: builds `liborgex-1.0.a` statically from `cmacs/org-ex/lib/` (requires glib)
+- **org-ex**: builds `liborgex-1.0.a` statically from `cmacs/org-ex/lib/` (requires glib). The cmacs-ink sub-feature (`#+BEGIN_INK` canvas + marginalia) **requires `--with-rsvg`**: rendered canvases are inline `(image :type svg)` overlays. Install `librsvg2-devel` (Fedora/RHEL), `librsvg2-dev` (Debian/Ubuntu), `librsvg` (Arch/macOS), or `librsvg2` (FreeBSD) — `install-deps` handles all of them. Without rsvg the data path still works (parse/serialise/edit) but the SVG overlay falls back to Emacs's broken-image placeholder.
 - **mcp**: system `mcp-glib-1.0` package or bundled `deps/mcp-glib` + json-glib-1.0, libsoup-3.0, libdex-1
 
 ## Testing

@@ -124,6 +124,17 @@ TOPIC is a filename without extension (e.g., \"cmacsgi\", \"api\")."
 (autoload 'cmacs-org-ex-mode "cmacs-org-ex"
   "Toggle org-ex interactive widget mode." t)
 
+(autoload 'cmacs-ink-mode "cmacs-ink"
+  "Toggle Wacom tablet ink minor mode." t)
+(autoload 'global-cmacs-ink-mode "cmacs-ink"
+  "Toggle global Wacom tablet ink mode." t)
+(autoload 'cmacs-org-ex-ink-insert "cmacs-org-ex-ink"
+  "Insert a #+BEGIN_INK canvas block at point." t)
+(autoload 'cmacs-org-ex-ink-edit "cmacs-org-ex-ink"
+  "Edit the #+BEGIN_INK block at point in the capture window." t)
+(autoload 'cmacs-ink-marginalia-add "cmacs-ink-marginalia"
+  "Annotate the current line with an ink note." t)
+
 (autoload 'cmacs-config-load-all "cmacs-config"
   "Load bacon and C config files after elisp init.")
 

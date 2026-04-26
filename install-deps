@@ -67,6 +67,7 @@ detect_platform () {
 #   PKGS_GUI      — gtk3 (pgtk backend)
 #   PKGS_NCOMP    — libgccjit (native compilation)
 #   PKGS_IMAGE    — xpm, jpeg, gif, tiff, rsvg, webp, imagemagick
+#                   (rsvg is REQUIRED for the cmacs-ink canvas overlay)
 #   PKGS_TEXT     — libotf, m17n-lib
 #   PKGS_JSON     — jansson
 #   PKGS_TS       — tree-sitter
