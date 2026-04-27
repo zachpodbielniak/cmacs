@@ -194,3 +194,133 @@ org_ex_ink_render_to_svg (GPtrArray *strokes,
   g_string_append (out, "</svg>\n");
   return g_string_free (out, FALSE);
 }
+
+/* ---- Direct Cairo painting --------------------------------------- */
+
+static gint
+ink_hex_nibble (gchar c)
+{
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return 10 + c - 'a';
+  if (c >= 'A' && c <= 'F') return 10 + c - 'A';
+  return -1;
+}
+
+static void
+ink_parse_hex_colour (const gchar *hex, gdouble *r, gdouble *g, gdouble *b)
+{
+  /* Minimal hex-colour parser supporting #RGB and #RRGGBB.  Avoids
+     a GdkRGBA dependency so this helper stays toolkit-agnostic and
+     can run in any Cairo context (including the redisplay-finish
+     hook in pgtkterm where pulling in GdkRGBA would be awkward). */
+  size_t len;
+  *r = 0.13; *g = 0.13; *b = 0.13;
+  if (hex == NULL || *hex != '#')
+    return;
+  hex++;
+  len = strlen (hex);
+  if (len >= 6)
+    {
+      gint r0 = ink_hex_nibble (hex[0]), r1 = ink_hex_nibble (hex[1]);
+      gint g0 = ink_hex_nibble (hex[2]), g1 = ink_hex_nibble (hex[3]);
+      gint b0 = ink_hex_nibble (hex[4]), b1 = ink_hex_nibble (hex[5]);
+      if (r0 >= 0 && r1 >= 0 && g0 >= 0 && g1 >= 0
+          && b0 >= 0 && b1 >= 0)
+        {
+          *r = (r0 * 16 + r1) / 255.0;
+          *g = (g0 * 16 + g1) / 255.0;
+          *b = (b0 * 16 + b1) / 255.0;
+        }
+    }
+  else if (len >= 3)
+    {
+      gint r0 = ink_hex_nibble (hex[0]);
+      gint g0 = ink_hex_nibble (hex[1]);
+      gint b0 = ink_hex_nibble (hex[2]);
+      if (r0 >= 0 && g0 >= 0 && b0 >= 0)
+        {
+          *r = r0 / 15.0;
+          *g = g0 / 15.0;
+          *b = b0 / 15.0;
+        }
+    }
+}
+
+static gdouble
+ink_cairo_segment_width (gfloat base, gfloat pressure)
+{
+  gdouble scale = 0.3 + (0.7 * pressure);
+  gdouble w = base * scale;
+  if (w < INK_MIN_BASE_WIDTH) w = INK_MIN_BASE_WIDTH;
+  return w;
+}
+
+static void
+ink_paint_one_stroke (cairo_t *cr, OrgExInkStroke *stroke,
+                      gdouble alpha)
+{
+  guint n = 0, i;
+  const OrgExInkPoint *pts;
+  const gchar *colour;
+  gfloat base;
+  gdouble r, g, b;
+
+  if (org_ex_ink_stroke_get_tool (stroke) == ORG_EX_INK_TOOL_ERASER)
+    return;
+
+  pts = org_ex_ink_stroke_get_points (stroke, &n);
+  if (n == 0)
+    return;
+
+  colour = org_ex_ink_stroke_get_colour (stroke);
+  base = org_ex_ink_stroke_get_base_width (stroke);
+  if (base < INK_MIN_BASE_WIDTH)
+    base = INK_MIN_BASE_WIDTH;
+
+  ink_parse_hex_colour (colour, &r, &g, &b);
+  cairo_set_source_rgba (cr, r, g, b, alpha);
+  cairo_set_line_cap (cr, CAIRO_LINE_CAP_ROUND);
+  cairo_set_line_join (cr, CAIRO_LINE_JOIN_ROUND);
+
+  if (n == 1)
+    {
+      gdouble w = ink_cairo_segment_width (base, pts[0].pressure);
+      cairo_arc (cr, pts[0].x, pts[0].y, w * 0.5, 0, 2 * G_PI);
+      cairo_fill (cr);
+      return;
+    }
+
+  /* Variable-width: one cairo_stroke per segment between samples. */
+  for (i = 1; i < n; i++)
+    {
+      cairo_set_line_width (
+        cr, ink_cairo_segment_width (base, pts[i].pressure));
+      cairo_move_to (cr, pts[i - 1].x, pts[i - 1].y);
+      cairo_line_to (cr, pts[i].x,     pts[i].y);
+      cairo_stroke (cr);
+    }
+}
+
+void
+org_ex_ink_paint_strokes_cairo (cairo_t   *cr,
+                                GPtrArray *strokes,
+                                gdouble    tx,
+                                gdouble    ty,
+                                gdouble    alpha)
+{
+  guint i;
+  if (cr == NULL || strokes == NULL)
+    return;
+  if (alpha < 0.0) alpha = 0.0;
+  if (alpha > 1.0) alpha = 1.0;
+
+  cairo_save (cr);
+  cairo_translate (cr, tx, ty);
+  for (i = 0; i < strokes->len; i++)
+    {
+      OrgExInkStroke *s = g_ptr_array_index (strokes, i);
+      if (s != NULL)
+        ink_paint_one_stroke (cr, s, alpha);
+    }
+  cairo_restore (cr);
+}

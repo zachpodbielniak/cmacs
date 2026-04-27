@@ -41,6 +41,8 @@
 
 (require 'cmacs-org-ex-ink)
 (require 'cmacs-ink-marginalia)
+(require 'cmacs-ink-region)
+(require 'cmacs-ink-storage)
 
 (defgroup cmacs-ink nil
   "Wacom tablet integration for cmacs."
@@ -60,6 +62,14 @@
     (define-key m (kbd "C-c i E") #'cmacs-ink-marginalia-edit-at-point)
     (define-key m (kbd "C-c i d") #'cmacs-ink-marginalia-delete-at-point)
     (define-key m (kbd "C-c i l") #'cmacs-ink-marginalia-list)
+    ;; Region-bound transparent ink overlays (drawing-tab-support).
+    (define-key m (kbd "C-c i r") #'cmacs-ink-region-annotate)
+    (define-key m (kbd "C-c i R") #'cmacs-ink-region-edit-at-point)
+    (define-key m (kbd "C-c i D") #'cmacs-ink-region-delete-at-point)
+    (define-key m (kbd "C-c i L") #'cmacs-ink-region-list)
+    (define-key m (kbd "C-c i o") #'cmacs-ink-overlay-mode)
+    (define-key m (kbd "C-c i x") #'cmacs-ink-region-reload)
+    (define-key m (kbd "C-c i g") #'cmacs-ink-redraw)
     m)
   "Keymap for `cmacs-ink-mode'.")
 
@@ -75,22 +85,25 @@ that auto-render canvases and load/save the marginalia sidecar."
    (cmacs-ink-mode
     (add-hook 'find-file-hook
               #'cmacs-org-ex-ink--maybe-render nil t)
-    (add-hook 'find-file-hook
-              #'cmacs-ink-marginalia--maybe-load nil t)
-    (add-hook 'after-save-hook
-              #'cmacs-ink-marginalia--maybe-save nil t)
+    ;; Single load + save hook for both annotation flavours, owned
+    ;; by `cmacs-ink-storage.el'.  Replaces four per-module hooks.
+    (add-hook 'find-file-hook   #'cmacs-ink--load nil t)
+    ;; `revert-buffer' replaces buffer text but does NOT re-run
+    ;; `find-file-hook'; without this, in-memory annotations stay
+    ;; pinned to the old text positions after a revert.
+    (add-hook 'after-revert-hook #'cmacs-ink--load nil t)
+    (add-hook 'after-save-hook  #'cmacs-ink--save nil t)
     ;; If the buffer is already visiting a file, run the loaders now
     ;; so toggling the mode on works without a re-find.
     (when (buffer-file-name)
       (cmacs-org-ex-ink--maybe-render)
-      (cmacs-ink-marginalia--maybe-load)))
+      (cmacs-ink--load)))
    (t
     (remove-hook 'find-file-hook
                  #'cmacs-org-ex-ink--maybe-render t)
-    (remove-hook 'find-file-hook
-                 #'cmacs-ink-marginalia--maybe-load t)
-    (remove-hook 'after-save-hook
-                 #'cmacs-ink-marginalia--maybe-save t)
+    (remove-hook 'find-file-hook   #'cmacs-ink--load t)
+    (remove-hook 'after-revert-hook #'cmacs-ink--load t)
+    (remove-hook 'after-save-hook  #'cmacs-ink--save t)
     (cmacs-org-ex-ink-unrender-buffer)
     (mapc (lambda (a)
             (when (cmacs-ink-marginalia-anchor-overlay a)

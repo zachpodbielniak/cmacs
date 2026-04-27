@@ -37,6 +37,12 @@
 (require 'cl-lib)
 (require 'subr-x)
 
+;; Implemented in `cmacs-ink-storage.el', loaded by `cmacs-ink.el'.
+;; Annotate / edit / delete commands call it to persist the change
+;; (inline section for org buffers, sidecar otherwise) without
+;; waiting for `after-save-hook'.
+(declare-function cmacs-ink--save "cmacs-ink-storage" ())
+
 (defgroup cmacs-ink-marginalia nil
   "Ink annotation overlays on arbitrary buffers."
   :group 'cmacs-ink
@@ -44,23 +50,28 @@
 
 (defcustom cmacs-ink-marginalia-default-width 320
   "Default annotation canvas width in pixels."
-  :type 'integer)
+  :type 'integer
+  :safe #'integerp)
 
 (defcustom cmacs-ink-marginalia-default-height 120
   "Default annotation canvas height in pixels."
-  :type 'integer)
+  :type 'integer
+  :safe #'integerp)
 
 (defcustom cmacs-ink-marginalia-default-colour "#cc2a2a"
   "Default ink colour for annotations."
-  :type 'string)
+  :type 'string
+  :safe #'stringp)
 
 (defcustom cmacs-ink-marginalia-default-base-width 2.0
   "Default ink base width in pixels."
-  :type 'number)
+  :type 'number
+  :safe #'numberp)
 
 (defcustom cmacs-ink-marginalia-search-radius 10
   "Lines to search around recorded :line for :line-hash matches."
-  :type 'integer)
+  :type 'integer
+  :safe #'integerp)
 
 ;; ---------------------------------------------------------------------
 ;; Per-buffer state
@@ -74,36 +85,9 @@
   "List of `cmacs-ink-marginalia-anchor' records for this buffer.")
 
 (defvar-local cmacs-ink-marginalia--dirty nil
-  "Non-nil when the in-memory anchor set diverges from the sidecar.")
-
-;; ---------------------------------------------------------------------
-;; Sidecar I/O
-;; ---------------------------------------------------------------------
-
-(defun cmacs-ink-marginalia--sidecar-path (&optional file)
-  "Return the sidecar filename for FILE (default = current buffer)."
-  (let ((src (or file (buffer-file-name))))
-    (when src (concat src ".cmacs-ink"))))
-
-(defun cmacs-ink-marginalia--read-sidecar (path)
-  "Read sidecar at PATH; return parsed plist or nil."
-  (when (and path (file-readable-p path))
-    (with-temp-buffer
-      (insert-file-contents path)
-      (condition-case _err
-          (read (current-buffer))
-        (error nil)))))
-
-(defun cmacs-ink-marginalia--write-sidecar (path data)
-  "Atomically write DATA (Elisp tree) to sidecar PATH."
-  (let ((print-level nil)
-        (print-length nil)
-        (print-circle nil)
-        (print-escape-control-characters t))
-    (with-temp-file path
-      (insert ";; cmacs-ink/marginalia v1 — generated; safe to hand-edit.\n")
-      (prin1 data (current-buffer))
-      (insert "\n"))))
+  "Non-nil when the in-memory anchor set diverges from disk.
+Persistence lives in `cmacs-ink-storage.el'; this flag tells it
+when there's something to write.")
 
 ;; ---------------------------------------------------------------------
 ;; Line hashing for resilient anchoring
@@ -261,42 +245,10 @@
           :created   (cmacs-ink-marginalia-anchor-created anchor)
           :strokes   (nreverse forms))))
 
-(defun cmacs-ink-marginalia--load-from-sidecar ()
-  "Read sidecar (if any) and populate buffer-local anchor list."
-  (mapc (lambda (a)
-          (when (cmacs-ink-marginalia-anchor-overlay a)
-            (delete-overlay (cmacs-ink-marginalia-anchor-overlay a))))
-        cmacs-ink-marginalia--anchors)
-  (setq cmacs-ink-marginalia--anchors nil)
-  (let* ((path (cmacs-ink-marginalia--sidecar-path))
-         (data (and path (cmacs-ink-marginalia--read-sidecar path))))
-    (when (and data (consp data))
-      (let ((plist (car data)))
-        (dolist (anchor-plist (plist-get plist :anchors))
-          (let ((anchor (cmacs-ink-marginalia--anchor-from-plist
-                         anchor-plist)))
-            (cmacs-ink-marginalia--bind-anchor anchor)
-            (cmacs-ink-marginalia--make-overlay anchor)
-            (push anchor cmacs-ink-marginalia--anchors)))))
-    (setq cmacs-ink-marginalia--dirty nil)))
-
-(defun cmacs-ink-marginalia--save-sidecar ()
-  "Write current anchor set to the sidecar file."
-  (when-let* ((path (cmacs-ink-marginalia--sidecar-path)))
-    (let* ((anchor-plists
-            (mapcar #'cmacs-ink-marginalia--anchor-to-plist
-                    cmacs-ink-marginalia--anchors))
-           (data
-            (list (list :format "cmacs-ink/marginalia/1"
-                        :file   (file-name-nondirectory
-                                 (buffer-file-name))
-                        :anchors anchor-plists))))
-      (cond
-       ((and (null anchor-plists) (file-exists-p path))
-        (delete-file path))
-       (anchor-plists
-        (cmacs-ink-marginalia--write-sidecar path data)))
-      (setq cmacs-ink-marginalia--dirty nil))))
+;; Sidecar I/O is owned by `cmacs-ink-storage.el'.  This module
+;; only owns the in-memory shape (the cl-defstruct) and the
+;; reconciliation logic above.  Save/load happen through the
+;; unified hooks installed by `cmacs-ink-mode'.
 
 ;; ---------------------------------------------------------------------
 ;; User entry points
@@ -339,7 +291,7 @@ file alongside the source on save."
         (cmacs-ink-marginalia--bind-anchor anchor)
         (cmacs-ink-marginalia--make-overlay anchor)
         (push anchor cmacs-ink-marginalia--anchors)
-        (setq cmacs-ink-marginalia--dirty t)
+        (setq cmacs-ink-marginalia--dirty t) (cmacs-ink--save)
         (message "cmacs-ink: annotation %s on line %d (%d strokes)"
                  (cmacs-ink-marginalia-anchor-id anchor)
                  line
@@ -375,7 +327,7 @@ file alongside the source on save."
           (setf (cmacs-ink-marginalia-anchor-strokes-string anchor)
                 new-text)
           (cmacs-ink-marginalia--make-overlay anchor)
-          (setq cmacs-ink-marginalia--dirty t)
+          (setq cmacs-ink-marginalia--dirty t) (cmacs-ink--save)
           (message "cmacs-ink: %d stroke(s)"
                    (org-ex-ink-strokes-count (car capture))))))))
 
@@ -398,7 +350,7 @@ file alongside the source on save."
       (delete-overlay (cmacs-ink-marginalia-anchor-overlay anchor)))
     (setq cmacs-ink-marginalia--anchors
           (delq anchor cmacs-ink-marginalia--anchors))
-    (setq cmacs-ink-marginalia--dirty t)
+    (setq cmacs-ink-marginalia--dirty t) (cmacs-ink--save)
     (message "cmacs-ink: annotation deleted")))
 
 ;;;###autoload
@@ -426,24 +378,9 @@ file alongside the source on save."
           (special-mode)))
       (display-buffer buf))))
 
-;; ---------------------------------------------------------------------
-;; Hooks: load on find-file, save on after-save
-;; ---------------------------------------------------------------------
-
-(defun cmacs-ink-marginalia--maybe-load ()
-  (when (and (buffer-file-name)
-             (file-exists-p (cmacs-ink-marginalia--sidecar-path)))
-    (cmacs-ink-marginalia--load-from-sidecar)))
-
-(defun cmacs-ink-marginalia--maybe-save ()
-  (when (and cmacs-ink-marginalia--dirty
-             (buffer-file-name)
-             cmacs-ink-marginalia--anchors)
-    (cmacs-ink-marginalia--save-sidecar))
-  (when (and cmacs-ink-marginalia--dirty
-             (buffer-file-name)
-             (null cmacs-ink-marginalia--anchors))
-    (cmacs-ink-marginalia--save-sidecar)))
+;; Persistence hooks live in `cmacs-ink-storage.el', which sets
+;; `find-file-hook' / `after-save-hook' once for all annotation
+;; flavours.
 
 (provide 'cmacs-ink-marginalia)
 ;;; cmacs-ink-marginalia.el ends here

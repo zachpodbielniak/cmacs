@@ -44,8 +44,8 @@ OBJS := $(SRCS:.c=.o)
 
 CC       ?= gcc
 AR       ?= ar
-PKG_CFLAGS := $(shell pkg-config --cflags glib-2.0 gobject-2.0 gio-2.0)
-PKG_LIBS   := $(shell pkg-config --libs glib-2.0 gobject-2.0 gio-2.0)
+PKG_CFLAGS := $(shell pkg-config --cflags glib-2.0 gobject-2.0 gio-2.0 cairo)
+PKG_LIBS   := $(shell pkg-config --libs glib-2.0 gobject-2.0 gio-2.0 cairo)
 
 CFLAGS   += -std=gnu89 -Wall -Wextra -Wno-unused-parameter \
             -fPIC \

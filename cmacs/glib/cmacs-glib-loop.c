@@ -23,6 +23,8 @@
 #include "timespec.h"
 #include "keyboard.h"
 #include "cmacs-glib-loop.h"
+#include "cmacs-glib-screenshot.h"
+#include "cmacs-ink-overlay.h"
 
 #include <glib.h>
 #include <string.h>
@@ -402,6 +404,15 @@ syms_of_cmacs_glib (void)
   defsubr (&Scmacs_glib_timeout_add);
   defsubr (&Scmacs_glib_source_remove);
   defsubr (&Scmacs_glib_idle_add);
+
+  /* Frame Cairo screenshot DEFUNs (cmacs-glib-screenshot.c) live in
+     a sibling translation unit; pull their symbols into the same
+     init pass so emacs.c only has to call us once. */
+  syms_of_cmacs_glib_screenshot ();
+
+  /* Post-glyph ink overlay paint hook needs to staticpro a few
+     symbols.  Cheap to fold into the same init. */
+  syms_of_cmacs_ink_overlay ();
 }
 
 #endif /* HAVE_CMACS_GLIB */

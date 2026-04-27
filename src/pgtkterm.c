@@ -65,6 +65,10 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 #include "xsettings.h"
 #include "emacsgtkfixed.h"
 
+#ifdef HAVE_CMACS_GLIB
+#include "cmacs-ink-overlay.h"
+#endif
+
 #ifdef GDK_WINDOWING_WAYLAND
 #include <gdk/gdkwayland.h>
 #endif
@@ -3402,6 +3406,12 @@ pgtk_frame_up_to_date (struct frame *f)
   if (!buffer_flipping_blocked_p ())
     {
       flip_cr_context (f);
+#ifdef HAVE_CMACS_GLIB
+      /* cmacs-ink-overlay: paint transparent stroke layers on top
+         of the just-flipped glyph contents.  No-op when no buffer
+         visible in this frame has region annotations. */
+      cmacs_ink_overlay_paint (f);
+#endif
       gtk_widget_queue_draw (FRAME_GTK_WIDGET (f));
     }
   unblock_input ();
@@ -4804,6 +4814,17 @@ pgtk_buffer_flipping_unblocked_hook (struct frame *f)
 {
   block_input ();
   flip_cr_context (f);
+#ifdef HAVE_CMACS_GLIB
+  /* cmacs-ink-overlay: this is the canonical "redisplay just
+     finished" notification during the normal `redisplay_internal'
+     flow.  `pgtk_frame_up_to_date' is invoked too, but during
+     redisplay flips are blocked, so its `cmacs_ink_overlay_paint'
+     call is a no-op there.  Paint here so the strokes get
+     reapplied on every redisplay cycle (cursor moves, region
+     selection, scroll, edits) — without this, partial line
+     repaints clear stroke pixels and they don't come back. */
+  cmacs_ink_overlay_paint (f);
+#endif
   gtk_widget_queue_draw (FRAME_GTK_WIDGET (f));
   unblock_input ();
 }

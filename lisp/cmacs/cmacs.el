@@ -134,6 +134,18 @@ TOPIC is a filename without extension (e.g., \"cmacsgi\", \"api\")."
   "Edit the #+BEGIN_INK block at point in the capture window." t)
 (autoload 'cmacs-ink-marginalia-add "cmacs-ink-marginalia"
   "Annotate the current line with an ink note." t)
+(autoload 'cmacs-ink-region-annotate "cmacs-ink-region"
+  "Annotate the active region with a transparent ink layer." t)
+(autoload 'cmacs-ink-overlay-mode "cmacs-ink-region"
+  "Render region ink annotations on top of buffer text." t)
+(autoload 'cmacs-ink-region-reload "cmacs-ink-region"
+  "Force-reload region annotations from disk." t)
+(autoload 'cmacs-ink-region-debug "cmacs-ink-region"
+  "Print diagnostic info for region annotations." t)
+(autoload 'cmacs-ink-redraw "cmacs-ink-region"
+  "Force a full redraw of all region overlays." t)
+(autoload 'cmacs-ink-migrate-to-inline "cmacs-ink-storage"
+  "Migrate sidecar annotations into an inline org section." t)
 
 (autoload 'cmacs-config-load-all "cmacs-config"
   "Load bacon and C config files after elisp init.")

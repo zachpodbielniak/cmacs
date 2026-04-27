@@ -613,6 +613,77 @@ usage: (org-ex-ink-capture &optional INITIAL WIDTH HEIGHT COLOUR BASE-WIDTH SIDE
     cancelled ? Qt : Qnil);
 }
 
+/* Forward-declared in cmacs-glib-screenshot.c — same finalizer pointer
+   distinguishes a screenshot user-ptr from any other user-ptr. */
+extern void cmacs_screenshot_surface_finalizer_external (void *p);
+
+DEFUN ("org-ex-ink-capture-with-background",
+       Forg_ex_ink_capture_with_background,
+       Sorg_ex_ink_capture_with_background, 1, 7, 0,
+       doc: /* Like `org-ex-ink-capture' but seeds the canvas with a
+background image.  BACKGROUND is a user-ptr returned by
+`cmacs-frame-screenshot-rect'; it is composited at the canvas
+origin before strokes are drawn so the user effectively draws on
+top of it.
+
+INITIAL, WIDTH, HEIGHT, COLOUR, BASE-WIDTH, SIDE-BUTTON-ERASES
+are as in `org-ex-ink-capture'.
+
+usage: (org-ex-ink-capture-with-background BACKGROUND &optional INITIAL WIDTH HEIGHT COLOUR BASE-WIDTH SIDE-BUTTON-ERASES)  */)
+  (Lisp_Object background, Lisp_Object initial, Lisp_Object width,
+   Lisp_Object height, Lisp_Object colour, Lisp_Object base_width,
+   Lisp_Object side_button_erases)
+{
+  cairo_surface_t *bg;
+  GPtrArray *seed = NULL;
+  gint w = 800, h = 400;
+  const char *col = "#222";
+  gfloat bw = 2.0f;
+  gboolean sb = TRUE;
+  gboolean cancelled = TRUE;
+  GPtrArray *result;
+
+  if (!USER_PTRP (background))
+    error ("Expected a Cairo screenshot surface (user-ptr) for BACKGROUND");
+  bg = (cairo_surface_t *) XUSER_PTR (background)->p;
+
+  if (!NILP (initial))
+    seed = ink_unwrap_strokes (initial);
+
+  if (!NILP (width))
+    {
+      CHECK_FIXNUM (width);
+      w = (gint) XFIXNUM (width);
+    }
+  if (!NILP (height))
+    {
+      CHECK_FIXNUM (height);
+      h = (gint) XFIXNUM (height);
+    }
+  if (!NILP (colour))
+    {
+      CHECK_STRING (colour);
+      col = SSDATA (colour);
+    }
+  if (!NILP (base_width))
+    {
+      CHECK_NUMBER (base_width);
+      bw = (gfloat) XFLOATINT (base_width);
+    }
+  if (!NILP (side_button_erases))
+    sb = TRUE;
+
+  result = cmacs_org_ex_ink_capture_with_background (
+    bg, seed, w, h, col, bw, sb, &cancelled);
+
+  if (result == NULL)
+    return Fcons (Qnil, cancelled ? Qt : Qnil);
+
+  return Fcons (
+    make_user_ptr ((void (*) (void *)) g_ptr_array_unref, result),
+    cancelled ? Qt : Qnil);
+}
+
 /* ──────────────────────────────────────────────────────────────────── */
 /* Symbol registration                                                 */
 /* ──────────────────────────────────────────────────────────────────── */
@@ -653,6 +724,7 @@ syms_of_cmacs_org_ex (void)
   defsubr (&Sorg_ex_ink_strokes_empty);
   defsubr (&Sorg_ex_ink_strokes_count);
   defsubr (&Sorg_ex_ink_capture);
+  defsubr (&Sorg_ex_ink_capture_with_background);
 }
 
 #endif /* HAVE_CMACS_ORG_EX */

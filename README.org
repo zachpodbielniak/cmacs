@@ -158,11 +158,20 @@ and code evaluation results---directly inside Org mode buffers.
 - Export: HTML (live widgets), text (fallback descriptions)
 - State persistence: ephemeral widget state saved to =.org-ex-state= sidecar
 - Tablet ink: =#+BEGIN_INK= canvas blocks + per-line marginalia
-  (=cmacs-ink-mode=, =C-c i c= / =C-c i a=).  Pen, eraser, and
-  pressure read directly from =GdkDeviceTool= /
-  =GDK_AXIS_PRESSURE= -- works out of the box with Wacom under
-  Wayland.  *Requires =--with-rsvg=* (librsvg2): the rendered
-  canvas is an inline =(image :type svg)= overlay.
+  + region overlay ink (=cmacs-ink-mode=,
+  =C-c i c= / =C-c i a= / =C-c i r=).  Pen, eraser, and pressure
+  read directly from =GdkDeviceTool= / =GDK_AXIS_PRESSURE= --
+  works out of the box with Wacom under Wayland.  *Requires
+  =--with-rsvg=* (librsvg2): rendered canvases are inline
+  =(image :type svg)= overlays.  Region overlay ink (=C-c i r=)
+  goes a step further: it paints transparent stroke layers /on
+  top of live buffer text/ via a post-glyph Cairo hook into
+  pgtk's redisplay-finish path -- underlying text remains live
+  and editable, strokes scroll with it.  Annotations persist
+  inline in the file for org buffers (folded =* cmacs-ink
+  :noexport:= section) and as a pretty-printed
+  =<source>.cmacs-ink= sidecar for everything else --- both
+  formats are git-diff-friendly (one stroke per line).
 
 Architecture: =liborgex-1.0.so= shared library (GObject-native, GI-introspectable)
 with a thin DEFUN bridge (20 primitives) and Elisp layer.

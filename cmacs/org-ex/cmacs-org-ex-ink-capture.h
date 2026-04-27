@@ -16,6 +16,7 @@
 #define CMACS_ORG_EX_INK_CAPTURE_H
 
 #include <glib.h>
+#include <cairo.h>
 
 G_BEGIN_DECLS
 
@@ -50,6 +51,23 @@ GPtrArray *cmacs_org_ex_ink_capture (GPtrArray   *initial,
                                      gfloat       base_width,
                                      gboolean     side_button_erases,
                                      gboolean    *cancelled);
+
+/* Same as cmacs_org_ex_ink_capture, but seeds the canvas with
+ * BACKGROUND_SURFACE (typically a screenshot of an Emacs region from
+ * cmacs-frame-screenshot-rect).  The surface is composited at the
+ * canvas origin BEFORE strokes are drawn — the user effectively
+ * draws on top of a still image of the source text.  Pass NULL to
+ * fall back to the white-page default.
+ */
+GPtrArray *cmacs_org_ex_ink_capture_with_background (
+                                     cairo_surface_t *background_surface,
+                                     GPtrArray       *initial,
+                                     gint             width,
+                                     gint             height,
+                                     const gchar     *colour,
+                                     gfloat           base_width,
+                                     gboolean         side_button_erases,
+                                     gboolean        *cancelled);
 
 G_END_DECLS
 

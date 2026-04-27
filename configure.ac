@@ -666,7 +666,7 @@ OPTION_DEFAULT_OFF([cmacs-mcp], [CMacs MCP server])
 if test "$with_cmacs_glib" != "no"; then
   PKG_CHECK_MODULES([CMACS_GLIB], [glib-2.0 gobject-2.0 gio-2.0 gmodule-2.0])
   AC_DEFINE([HAVE_CMACS_GLIB], 1, [CMacs GLib integration])
-  CMACS_GLIB_OBJ="cmacs-glib-loop.o cmacs-gobject.o cmacs-gclosure.o cmacs-dbus-service.o cmacs-eval-dispatch.o"
+  CMACS_GLIB_OBJ="cmacs-glib-loop.o cmacs-gobject.o cmacs-gclosure.o cmacs-dbus-service.o cmacs-eval-dispatch.o cmacs-glib-screenshot.o cmacs-ink-overlay.o"
 fi
 if test "$with_cmacs_gi" != "no"; then
   PKG_CHECK_MODULES([CMACS_GI], [gobject-introspection-1.0])

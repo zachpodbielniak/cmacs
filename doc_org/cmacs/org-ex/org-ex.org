@@ -738,23 +738,10 @@ assertion.
 
 ** Marginalia
 
-Outside =.org= files, ink lives as *marginalia* --- annotations
-anchored to source code or prose lines.  Storage is a sidecar file
-=<source>.cmacs-ink= alongside the source.
-
-#+begin_example
-;; cmacs-ink/marginalia v1 - generated; safe to hand-edit.
-((:format "cmacs-ink/marginalia/1"
-  :file "src/foo.c"
-  :anchors
-  ((:id "ann-7f3a"
-    :line 412
-    :line-hash "9af2c0..."   ; SHA1 of line + 2 lines of context
-    :width 320
-    :height 120
-    :created 1745600000
-    :strokes ((s :t pen :c "#cc2a2a" :w 2 :p ((50 30 850) ...)))))))
-#+end_example
+Marginalia are per-line ink notes anchored to source code or
+prose lines.  See *Storage* below for where annotations are
+persisted (org files use an inline section by default; everything
+else uses a sidecar).
 
 Anchors carry both a line number and a SHA1 of the line plus two
 neighbours.  On load, anchors are reconciled:
@@ -766,9 +753,70 @@ neighbours.  On load, anchors are reconciled:
 3. Otherwise mark the anchor as orphan and float it to the top of the
    buffer with an =[orphan annotation]= badge.
 
-The sidecar is read on =find-file= and written on =after-save=.  =git
-status= shows source and sidecar together --- annotation changes ride
-alongside source changes through the normal review flow.
+** Storage
+
+cmacs-ink persists per-line marginalia and region overlay
+annotations in one of two places, chosen automatically per
+buffer:
+
+- *Inline section* (default for org buffers).  A folded =* cmacs-ink :noexport:= heading is appended to the org file with one block per anchor.  Annotations travel with the file on copy/move; =git status= captures source + annotation in a single commit; the section is excluded from HTML/PDF exports.
+- *Sidecar file* (default for non-org buffers).  A =<source>.cmacs-ink= file next to the source.  Source formats like C / Python / Markdown can't host arbitrary blocks without breaking the parser, so the sidecar is the only option.  The sidecar is /pretty-printed/ now (one anchor per indented form, one stroke per line) so it produces minimal =git diff= output as strokes change.
+
+The choice is governed by =cmacs-ink-storage=:
+
+| Value     | Behaviour                                                                  |
+|-----------+----------------------------------------------------------------------------|
+| ='auto=   | (default) org-mode → inline; everything else → sidecar.                    |
+| ='inline= | force inline (errors when not org-mode).                                   |
+| ='sidecar=| force sidecar regardless of mode.                                          |
+
+May be set buffer-locally or via =.dir-locals.el=.
+
+*** Inline Section Format
+
+#+begin_example
+* cmacs-ink                                                          :noexport:
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+#+BEGIN_INK_MARGINALIA :id "ann-..." :line 412 :hash "9af2c0..." :w 320 :h 120 :created 1745600000
+;; cmacs-ink marginalia v1; one stroke per line for git-friendly diffs
+(s :t pen :c "#cc2a2a" :w 2 :p ((50 30 850) (60 35 870)))
+#+END_INK_MARGINALIA
+
+#+BEGIN_INK_REGION :id "rgn-..." :start-line 412 :start-col 4 :end-line 415 :end-col 12 :hash "9af2c0..." :w 480 :h 60 :created 1745600000
+;; cmacs-ink region v1; one stroke per line for git-friendly diffs
+(s :t pen :c "#cc2a2a" :w 2 :p ((10 5 850) (24 12 875)))
+#+END_INK_REGION
+#+end_example
+
+Block headers use the same flat =:key value= parser as
+=#+BEGIN_INK= canvas blocks; bodies use the canonical stroke
+S-expr grammar produced by =org_ex_ink_strokes_to_string=.
+Adding a stroke is literally one new line in the diff.
+
+*Warning:* the inline section is rewritten as a unit on every
+save.  Any text you put inside =* cmacs-ink= that is /not/
+inside a =#+BEGIN_INK_*=..=#+END_INK_*= block is deleted on the
+next save.  Keep your own notes in a sibling heading.
+
+*** Backward Compatibility
+
+The loader tries the inline section first; if absent, falls
+back to reading =<file>.cmacs-ink=.  Existing v1 single-line
+sidecars (one giant =prin1=) load cleanly --- no flag day --- and
+are upgraded to the pretty-printed form (or to inline when the
+buffer is org-mode) on the next save.
+
+*** Migration
+
+=M-x cmacs-ink-migrate-to-inline=, run in an org buffer, reads
+any existing sidecar and writes the equivalent inline section,
+then prompts to delete the sidecar.  No reverse command: to
+switch a buffer back to sidecar, set =(setq-local
+cmacs-ink-storage 'sidecar)= and save --- the inline section is
+removed and the sidecar regenerated.
 
 ** Top-Level Mode
 
@@ -800,6 +848,101 @@ alongside source changes through the normal review flow.
 | =cmacs-ink-marginalia-default-height=    |         120 | Sidecar canvas height.                             |
 | =cmacs-ink-marginalia-default-colour=    | ="#cc2a2a"= | Default ink colour for marginalia.                 |
 | =cmacs-ink-marginalia-search-radius=     |          10 | Lines to scan for hash reconciliation.             |
+
+** Region Overlay Ink
+
+Marginalia attaches a single-line note as an SVG /image/ overlay
+below the line.  *Region overlay ink* is a complementary mode:
+select a multi-line range, draw on a screenshot of that text, and
+the strokes are painted as a *transparent Cairo layer on top of
+the live buffer text*.  The underlying glyphs remain editable;
+strokes scroll with the text and re-anchor on each redisplay.
+
+This is a cmacs-only feature: it depends on a small extension to
+=src/pgtkterm.c=.  *Two* paint-commit sites are intercepted; the
+hook needs to fire at /both/ for strokes to remain stable across
+cursor moves and partial redisplays:
+
+1. =pgtk_frame_up_to_date(f)= --- catches out-of-redisplay flushes
+   (echo-area updates, cursor-blink via =gui_update_cursor=,
+   post-=force-window-update= notifications).  The body is gated on
+   =!buffer_flipping_blocked_p()=, so it is a no-op during
+   =redisplay_internal=.
+2. =pgtk_buffer_flipping_unblocked_hook(f)= --- the canonical
+   "redisplay just finished" callback during the normal flow.
+   =redisplay_internal= wraps its work in
+   =block_buffer_flips=/=unblock_buffer_flips=; the /unblocked/
+   hook is what actually performs the =flip_cr_context= during a
+   normal cursor move or scroll.  Without painting here,
+   partial-row repaints clear stroke pixels and the strokes never
+   come back until something forces a full-frame update.
+
+In both sites the hook calls =cmacs_ink_overlay_paint(f)=, which
+walks every leaf window of the frame, reads the buffer-local
+=cmacs-ink-region--annotations= list via =buffer_local_value=, and
+paints stored strokes on the active Cairo context using
+=org_ex_ink_paint_strokes_cairo=.  Strokes are positioned via
+=pos_visible_p= so the overlay tracks scroll, edits, and resize.
+
+The capture window is extended to accept a Cairo background
+surface.  =cmacs-ink-region-annotate= takes a screenshot of the
+selected region via the new =cmacs-frame-screenshot-rect= DEFUN
+(which copies from the frame's back-buffer with
+=cairo_set_source_surface= + =cairo_paint=) and threads it into the
+capture as the canvas background --- the user is literally drawing
+on top of the same pixels they will later see overlaid on the
+buffer.
+
+*** Workflow
+
+1. =M-x cmacs-ink-overlay-mode= in the buffer.
+2. Select a multi-line region.
+3. =C-c i r= (=cmacs-ink-region-annotate=) opens the capture window
+   with a screenshot of the selected text as background.
+4. Draw across the text with pen / mouse.
+5. =C-Return= commits.  Strokes paint on top of the real buffer
+   text.
+
+| Key       | Command                                    | Purpose                              |
+|-----------+--------------------------------------------+--------------------------------------|
+| =C-c i r= | =cmacs-ink-region-annotate=                | Annotate the active region.          |
+| =C-c i R= | =cmacs-ink-region-edit-at-point=           | Re-edit annotation covering point.   |
+| =C-c i D= | =cmacs-ink-region-delete-at-point=         | Remove the annotation.               |
+| =C-c i L= | =cmacs-ink-region-list=                    | List all region annotations.         |
+| =C-c i o= | =cmacs-ink-overlay-mode=                   | Toggle paint pass on/off.            |
+
+*** Storage
+
+Region annotations are persisted alongside per-line marginalia
+through the same dispatcher --- inline =#+BEGIN_INK_REGION=
+blocks in the =* cmacs-ink :noexport:= section for org buffers,
+or under =:region-anchors= in the pretty-printed sidecar for
+non-org buffers.  See the *Storage* section under *Marginalia*
+above for the policy, format, and migration command.
+
+Reconciliation on load tries the saved (=:start-line= ,
+=:start-col= ); falls back to a hash search of
+=cmacs-ink-region-search-radius= lines around it; orphans if no
+match.
+
+*** Customisation
+
+| Variable                                | Default     | Purpose                                    |
+|-----------------------------------------+-------------+--------------------------------------------|
+| =cmacs-ink-region-default-colour=       | ="#cc2a2a"= | Default ink colour.                        |
+| =cmacs-ink-region-default-base-width=   |         2.0 | Default base pen width.                    |
+| =cmacs-ink-region-default-alpha=        |        0.85 | Stroke layer opacity (read every redisplay). |
+| =cmacs-ink-region-search-radius=        |          10 | Lines scanned for hash relocate.           |
+
+*** Limitations
+
+- pgtk only.  X11/Lucid and tty frames don't have the post-glyph
+  Cairo hook; the feature errors gracefully on non-pgtk frames.
+- Heavy edits inside the annotated region don't reflow strokes;
+  they stay anchored to the start-marker.  Use re-edit
+  (=C-c i R= ) to redraw on top of the new layout.
+- Pressure under =cmacs --gowl= is fixed at =1.0= until gowl
+  advertises =wp_tablet_v2= (v2).
 
 ** Limitations and Roadmap
 

@@ -1177,9 +1177,10 @@ trigger a GDK assertion.
 @cindex marginalia
 @cindex annotation
 
-Outside of @code{.org} files, ink lives as @emph{marginalia}---ink
-notes anchored to source code or prose lines.  Storage is a sidecar
-file @code{<source>.cmacs-ink} alongside the source.
+Marginalia are per-line ink notes anchored to source code or prose
+lines.  See @ref{Storage} for where annotations are persisted (org
+files use an inline section by default; everything else uses a
+sidecar).
 
 @example
 ;; cmacs-ink/marginalia v1 - generated; safe to hand-edit.
@@ -1208,11 +1209,107 @@ lines around for a hash match and relocate.
 the buffer with an @code{[orphan annotation]} badge.
 @end enumerate
 
-The sidecar is read by @code{cmacs-ink-marginalia--maybe-load} on
-@code{find-file} and written by @code{cmacs-ink-marginalia--maybe-save}
-on @code{after-save}.  @code{git status} sees both source and sidecar
-together---annotation changes ride alongside source changes through
-the normal review flow.
+The sidecar is read on @code{find-file} and written on
+@code{after-save} via the unified `cmacs-ink--load' /
+`cmacs-ink--save' hooks installed by `cmacs-ink-mode' (storage
+logic in @file{lisp/cmacs/cmacs-ink-storage.el}).  @code{git
+status} sees source + sidecar together when annotations change.
+
+@c ===================================================================
+@node Storage
+@section Storage
+
+@cindex storage policy
+@cindex inline section
+@cindex sidecar
+
+cmacs-ink persists per-line marginalia and region overlay
+annotations in one of two places, chosen automatically per
+buffer:
+
+@table @strong
+@item Inline section (default for org buffers)
+A folded @code{* cmacs-ink :noexport:} heading is appended to
+the org file with one block per anchor.  The annotation travels
+with the file on copy/move; @code{git status} captures source
+and annotations in a single commit; the section is excluded from
+HTML/PDF exports.
+@item Sidecar file (default for non-org buffers)
+A `<source>.cmacs-ink' file next to the source.  Source
+formats like C / Python / Markdown can't host arbitrary blocks
+without breaking the parser, so the sidecar is the only option.
+The sidecar is now @emph{pretty-printed} (one anchor per
+indented form, one stroke per line) so it produces minimal
+@code{git diff} output as strokes change.
+@end table
+
+The choice is governed by @code{cmacs-ink-storage}:
+
+@vtable @code
+@item cmacs-ink-storage
+@samp{auto} (default), @samp{inline}, or @samp{sidecar}.
+
+In @samp{auto}, org-mode buffers use the inline section and
+everything else uses a sidecar.  Override per-buffer or via
+@code{.dir-locals.el}.  @samp{inline} forces inline (errors when
+not org-mode); @samp{sidecar} forces a sidecar regardless of
+mode.
+@item cmacs-ink-storage-section-name
+Heading text for the inline section (default
+@samp{cmacs-ink}).  Override only if it collides with an
+existing heading you have.
+@end vtable
+
+@subsection Inline Section Format
+
+@example
+* cmacs-ink                                                          :noexport:
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+#+BEGIN_INK_MARGINALIA :id "ann-..." :line 412 :hash "9af2c0..." :w 320 :h 120 :created 1745600000
+;; cmacs-ink marginalia v1; one stroke per line for git-friendly diffs
+(s :t pen :c "#cc2a2a" :w 2 :p ((50 30 850) (60 35 870)))
+#+END_INK_MARGINALIA
+
+#+BEGIN_INK_REGION :id "rgn-..." :start-line 412 :start-col 4 :end-line 415 :end-col 12 :hash "9af2c0..." :w 480 :h 60 :created 1745600000
+;; cmacs-ink region v1; one stroke per line for git-friendly diffs
+(s :t pen :c "#cc2a2a" :w 2 :p ((10 5 850) (24 12 875)))
+#+END_INK_REGION
+@end example
+
+Block headers use the same flat @code{:key value} parser as
+@code{#+BEGIN_INK} canvas blocks; bodies use the canonical
+stroke S-expr grammar produced by
+@code{org_ex_ink_strokes_to_string}.  Adding a stroke is
+literally one new line in the diff.
+
+@quotation Warning
+The inline section is rewritten as a unit on every save.  Any
+text you put inside @code{* cmacs-ink} that is @emph{not} inside
+a @code{#+BEGIN_INK_*}..@code{#+END_INK_*} block is deleted on
+the next save.  Keep your own notes in a sibling heading.
+@end quotation
+
+@subsection Backward Compatibility
+
+The loader tries the inline section first; if absent, falls
+back to reading @code{<file>.cmacs-ink}.  Existing v1
+single-line sidecars (one giant @code{prin1}) load cleanly --- no
+flag day --- and are upgraded to the pretty-printed form (or to
+inline when the buffer is org-mode) on the next save.
+
+@subsection Migration
+
+@cindex cmacs-ink-migrate-to-inline
+
+@code{M-x cmacs-ink-migrate-to-inline}, run in an org buffer,
+reads any existing sidecar and writes the equivalent inline
+section, then prompts to delete the sidecar.  No reverse
+command: to switch a buffer back to sidecar, set
+@code{(setq-local cmacs-ink-storage 'sidecar)} and save --- the
+inline section is removed and the sidecar regenerated.
 
 @section Top-Level Mode
 
@@ -1270,6 +1367,134 @@ Default ink colour for marginalia (@code{"#cc2a2a"}).
 Lines to scan around the recorded line for a hash match during
 reconciliation (10).
 @end vtable
+
+@section Region Overlay Ink
+
+@cindex region annotation
+@cindex transparent overlay
+@cindex post-glyph paint
+
+Marginalia (@pxref{Marginalia}) attaches a single-line note as an
+SVG @emph{image} overlay below the line.  Region overlay ink is a
+complementary mode: select a multi-line range, draw on a screenshot
+of that text, and the strokes are painted as a @strong{transparent
+Cairo layer on top of the live buffer text}.  The underlying glyphs
+remain editable; strokes scroll with the text and re-anchor on each
+redisplay.
+
+@subsection How It Works
+
+This is a cmacs-only feature: it depends on a small extension to
+@file{src/pgtkterm.c}.  Two paint-commit sites are intercepted; the
+hook needs to fire at @emph{both} for strokes to remain stable
+across cursor moves and partial redisplays:
+
+@enumerate
+@item @code{pgtk_frame_up_to_date(f)} --- catches out-of-redisplay
+flushes (echo-area updates, cursor-blink via
+@code{gui_update_cursor}, post-@code{force-window-update}
+notifications).  The body is gated on
+@code{!buffer_flipping_blocked_p()}, so it is a no-op during
+@code{redisplay_internal}.
+@item @code{pgtk_buffer_flipping_unblocked_hook(f)} --- the
+canonical "redisplay just finished" callback during the normal
+flow.  @code{redisplay_internal} wraps its work in
+@code{block_buffer_flips/unblock_buffer_flips}; the
+@emph{unblocked} hook is what actually performs the
+@code{flip_cr_context} during a normal cursor move or scroll.
+Without painting here, partial-row repaints clear stroke pixels
+and the strokes never come back until something forces a
+full-frame update.
+@end enumerate
+
+In both sites the hook calls @code{cmacs_ink_overlay_paint(f)},
+which walks every leaf window of the frame, reads the
+buffer-local @code{cmacs-ink-region--annotations} list via
+@code{buffer_local_value}, and paints stored strokes on the active
+Cairo context using @code{org_ex_ink_paint_strokes_cairo}.
+Strokes are positioned via
+@code{pos_visible_p (window, start_charpos, …)} so the overlay
+tracks scroll, edits, and resize.
+
+The capture window itself (@pxref{Capture Window}) is extended to
+accept a Cairo background surface.  @code{cmacs-ink-region-annotate}
+takes a screenshot of the selected region via
+@code{cmacs-frame-screenshot-rect} (a new DEFUN that copies from the
+frame's back-buffer with @code{cairo_set_source_surface} +
+@code{cairo_paint}) and threads it into the capture as the canvas
+background --- so the user is literally drawing on top of the same
+pixels they will later see overlaid on the buffer.
+
+@subsection Workflow
+
+@enumerate
+@item Activate the mode in the buffer:
+@example
+M-x cmacs-ink-overlay-mode
+@end example
+@item Select a multi-line region.
+@item @kbd{C-c i r} (@code{cmacs-ink-region-annotate}).  The capture
+window opens with a screenshot of the selected text as the canvas
+background.
+@item Draw across the text with pen / mouse.
+@item @kbd{C-Return} commits.  The strokes paint on top of the
+real buffer text in Emacs.
+@end enumerate
+
+@table @kbd
+@item C-c i r
+@code{cmacs-ink-region-annotate} - annotate the active region.
+@item C-c i R
+@code{cmacs-ink-region-edit-at-point} - re-edit the annotation
+covering point.
+@item C-c i D
+@code{cmacs-ink-region-delete-at-point} - remove the annotation.
+@item C-c i L
+@code{cmacs-ink-region-list} - list all region annotations.
+@item C-c i o
+@code{cmacs-ink-overlay-mode} - toggle paint pass on/off.
+@end table
+
+@subsection Storage
+
+Region annotations are persisted alongside per-line marginalia
+through the same dispatcher --- inline @code{#+BEGIN_INK_REGION}
+blocks in the @code{* cmacs-ink :noexport:} section for org
+buffers, or under @code{:region-anchors} in the
+pretty-printed sidecar for non-org buffers.  See @ref{Storage}
+for the policy, format, and migration command.
+
+Reconciliation on load mirrors the marginalia line-hash flow but
+operates on a region: try the saved (start-line, start-col); fall
+back to a hash search of @code{cmacs-ink-region-search-radius}
+lines around it; orphan if no match.
+
+@subsection Customisation
+
+@vtable @code
+@item cmacs-ink-region-default-colour
+Default ink colour (@code{"#cc2a2a"}).
+@item cmacs-ink-region-default-base-width
+Default base pen width in pixels (@code{2.0}).
+@item cmacs-ink-region-default-alpha
+Stroke layer opacity in 0..1 (@code{0.85}).  The C hook reads this
+on every redisplay so changes take immediate effect.
+@item cmacs-ink-region-search-radius
+Lines scanned for hash-based reconciliation (@code{10}).
+@end vtable
+
+@subsection Limitations
+
+@itemize @bullet
+@item pgtk only.  X11/Lucid and tty frames don't have the
+post-glyph Cairo hook; the feature errors gracefully on non-pgtk
+frames.
+@item Heavy edits inside the annotated region don't reflow strokes;
+they stay anchored to the start-marker.  Use re-edit
+(@kbd{C-c i R}) to redraw on top of the new layout.
+@item Pressure under @code{cmacs --gowl} is fixed at @code{1.0}
+until gowl advertises @code{wp_tablet_v2} (v2 of cmacs-ink).
+@end itemize
 
 @section Limitations and Roadmap
 

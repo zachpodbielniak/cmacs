@@ -60,6 +60,11 @@ typedef struct
   /* Eraser fallback policy */
   gboolean     side_button_erases;
 
+  /* Optional background surface (e.g. a screenshot of an Emacs region
+     to be annotated).  When non-NULL, painted at canvas origin
+     before the white "page" fill is skipped. */
+  cairo_surface_t *background_surface;
+
   /* Stroke state.
      `committed_strokes` is the stable set rendered behind the cursor
      (initial input + finalised pen strokes).  `live_stroke` is the
@@ -314,9 +319,20 @@ on_draw (GtkWidget *widget, cairo_t *cr, gpointer user_data)
 
   (void) widget;
 
-  /* White background — easy on the eyes, prints cleanly. */
-  cairo_set_source_rgb (cr, 1.0, 1.0, 1.0);
-  cairo_paint (cr);
+  if (state->background_surface != NULL)
+    {
+      /* Annotation surface — paint the supplied screenshot at origin.
+         No white fill behind it: we want the strokes to land directly
+         on top of the source pixels for "drawing on the page" feel. */
+      cairo_set_source_surface (cr, state->background_surface, 0, 0);
+      cairo_paint (cr);
+    }
+  else
+    {
+      /* White "page" background — easy on the eyes, prints cleanly. */
+      cairo_set_source_rgb (cr, 1.0, 1.0, 1.0);
+      cairo_paint (cr);
+    }
 
   /* Subtle border so the canvas extent is visible. */
   cairo_set_source_rgba (cr, 0.0, 0.0, 0.0, 0.15);
@@ -540,6 +556,22 @@ cmacs_org_ex_ink_capture (GPtrArray   *initial,
                           gboolean     side_button_erases,
                           gboolean    *cancelled)
 {
+  return cmacs_org_ex_ink_capture_with_background (
+    NULL, initial, width, height, colour, base_width,
+    side_button_erases, cancelled);
+}
+
+GPtrArray *
+cmacs_org_ex_ink_capture_with_background (
+                          cairo_surface_t *background_surface,
+                          GPtrArray       *initial,
+                          gint             width,
+                          gint             height,
+                          const gchar     *colour,
+                          gfloat           base_width,
+                          gboolean         side_button_erases,
+                          gboolean        *cancelled)
+{
   CaptureState state = { 0 };
   GtkWidget *vbox, *toolbar, *btn_done, *btn_cancel, *btn_clear, *btn_undo;
   GPtrArray *result;
@@ -552,6 +584,7 @@ cmacs_org_ex_ink_capture (GPtrArray   *initial,
   state.pen_colour     = g_strdup (colour && *colour ? colour : "#222");
   state.pen_base_width = base_width > 0.0f ? base_width : 2.0f;
   state.side_button_erases = side_button_erases;
+  state.background_surface = background_surface;  /* borrowed; not owned */
   state.cancelled = TRUE; /* default to cancelled until commit */
 
   state.committed_strokes = org_ex_ink_strokes_new ();
