@@ -508,22 +508,34 @@ STROKES is a value returned by `org-ex-ink-strokes-from-string'.  */)
 
 DEFUN ("org-ex-ink-strokes-to-svg",
        Forg_ex_ink_strokes_to_svg,
-       Sorg_ex_ink_strokes_to_svg, 3, 3, 0,
+       Sorg_ex_ink_strokes_to_svg, 3, 4, 0,
        doc: /* Render STROKES as an SVG string of WIDTH x HEIGHT.
 STROKES is a value returned by `org-ex-ink-strokes-from-string'.
-WIDTH and HEIGHT are integer pixel extents.  */)
-  (Lisp_Object strokes, Lisp_Object width, Lisp_Object height)
+WIDTH and HEIGHT are integer pixel extents.  BG-COLOUR is the
+canvas background fill (any CSS-style colour string — hex,
+named, etc.); when nil the renderer defaults to "#ffffff".
+
+usage: (org-ex-ink-strokes-to-svg STROKES WIDTH HEIGHT &optional BG-COLOUR)  */)
+  (Lisp_Object strokes, Lisp_Object width, Lisp_Object height,
+   Lisp_Object bg_colour)
 {
   GPtrArray *array = ink_unwrap_strokes (strokes);
   gchar *svg;
   Lisp_Object result;
+  const char *bg = NULL;
 
   CHECK_FIXNUM (width);
   CHECK_FIXNUM (height);
+  if (!NILP (bg_colour))
+    {
+      CHECK_STRING (bg_colour);
+      bg = SSDATA (bg_colour);
+    }
 
   svg = org_ex_ink_render_to_svg (array,
                                   (gint) XFIXNUM (width),
-                                  (gint) XFIXNUM (height));
+                                  (gint) XFIXNUM (height),
+                                  bg);
   result = build_string (svg != NULL ? svg : "");
   g_free (svg);
   return result;
@@ -549,8 +561,24 @@ DEFUN ("org-ex-ink-strokes-count",
   return make_fixnum (array->len);
 }
 
+/* Map a `pen' / `highlighter' / `eraser' Lisp symbol to the
+   integer DEFAULT-TOOL expected by `cmacs_org_ex_ink_capture_full'.
+   Defaults to 0 (pen) for nil or any unrecognised symbol. */
+static int
+ink_default_tool_from_symbol (Lisp_Object sym)
+{
+  if (NILP (sym)) return 0;
+  if (SYMBOLP (sym))
+    {
+      const char *s = SSDATA (Fsymbol_name (sym));
+      if (g_strcmp0 (s, "highlighter") == 0) return 1;
+      if (g_strcmp0 (s, "eraser") == 0)      return 2;
+    }
+  return 0;
+}
+
 DEFUN ("org-ex-ink-capture", Forg_ex_ink_capture,
-       Sorg_ex_ink_capture, 0, 6, 0,
+       Sorg_ex_ink_capture, 0, 8, 0,
        doc: /* Open the modal ink capture window.
 INITIAL is an existing stroke set (from
 `org-ex-ink-strokes-from-string') to seed the canvas, or nil.
@@ -559,51 +587,49 @@ COLOUR is the hex string for new strokes (default "#222").
 BASE-WIDTH is the default pen width in pixels (default 2).
 SIDE-BUTTON-ERASES, when non-nil, makes button-2 act as eraser
 for tools without an eraser end.
+BG-COLOUR (string) sets the canvas page-fill colour — used by
+`#+BEGIN_INK' canvas mode to theme-match the buffer.  Nil → white.
+DEFAULT-TOOL (symbol `pen' / `highlighter' / `eraser') seeds
+the toolbar's initial selection.  Highlighter colour and width
+default to "#ffd700" / 12px and are user-tunable in the
+toolbar.
 
 Returns a cons (STROKES . CANCELLED) where STROKES is a fresh
 stroke-set user-ptr (nil if cancelled), and CANCELLED is t when
 the user pressed Escape or closed the window.
 
-usage: (org-ex-ink-capture &optional INITIAL WIDTH HEIGHT COLOUR BASE-WIDTH SIDE-BUTTON-ERASES)  */)
+usage: (org-ex-ink-capture &optional INITIAL WIDTH HEIGHT COLOUR BASE-WIDTH SIDE-BUTTON-ERASES BG-COLOUR DEFAULT-TOOL)  */)
   (Lisp_Object initial, Lisp_Object width, Lisp_Object height,
    Lisp_Object colour, Lisp_Object base_width,
-   Lisp_Object side_button_erases)
+   Lisp_Object side_button_erases, Lisp_Object bg_colour,
+   Lisp_Object default_tool)
 {
   GPtrArray *seed = NULL;
   gint w = 800, h = 400;
   const char *col = "#222";
+  const char *bg  = NULL;
   gfloat bw = 2.0f;
   gboolean sb = TRUE;
   gboolean cancelled = TRUE;
+  int dt = 0;
   GPtrArray *result;
 
-  if (!NILP (initial))
-    seed = ink_unwrap_strokes (initial);
-
+  if (!NILP (initial)) seed = ink_unwrap_strokes (initial);
   if (!NILP (width))
-    {
-      CHECK_FIXNUM (width);
-      w = (gint) XFIXNUM (width);
-    }
+    { CHECK_FIXNUM (width);  w = (gint) XFIXNUM (width); }
   if (!NILP (height))
-    {
-      CHECK_FIXNUM (height);
-      h = (gint) XFIXNUM (height);
-    }
+    { CHECK_FIXNUM (height); h = (gint) XFIXNUM (height); }
   if (!NILP (colour))
-    {
-      CHECK_STRING (colour);
-      col = SSDATA (colour);
-    }
+    { CHECK_STRING (colour); col = SSDATA (colour); }
   if (!NILP (base_width))
-    {
-      CHECK_NUMBER (base_width);
-      bw = (gfloat) XFLOATINT (base_width);
-    }
-  if (!NILP (side_button_erases))
-    sb = TRUE;
+    { CHECK_NUMBER (base_width); bw = (gfloat) XFLOATINT (base_width); }
+  if (!NILP (side_button_erases)) sb = TRUE;
+  if (!NILP (bg_colour))
+    { CHECK_STRING (bg_colour); bg = SSDATA (bg_colour); }
+  dt = ink_default_tool_from_symbol (default_tool);
 
-  result = cmacs_org_ex_ink_capture (seed, w, h, col, bw, sb, &cancelled);
+  result = cmacs_org_ex_ink_capture_full (
+    NULL, bg, seed, w, h, col, bw, NULL, 0.0f, dt, sb, &cancelled);
 
   if (result == NULL)
     return Fcons (Qnil, cancelled ? Qt : Qnil);
@@ -619,20 +645,21 @@ extern void cmacs_screenshot_surface_finalizer_external (void *p);
 
 DEFUN ("org-ex-ink-capture-with-background",
        Forg_ex_ink_capture_with_background,
-       Sorg_ex_ink_capture_with_background, 1, 7, 0,
+       Sorg_ex_ink_capture_with_background, 1, 8, 0,
        doc: /* Like `org-ex-ink-capture' but seeds the canvas with a
 background image.  BACKGROUND is a user-ptr returned by
 `cmacs-frame-screenshot-rect'; it is composited at the canvas
 origin before strokes are drawn so the user effectively draws on
 top of it.
 
-INITIAL, WIDTH, HEIGHT, COLOUR, BASE-WIDTH, SIDE-BUTTON-ERASES
-are as in `org-ex-ink-capture'.
+INITIAL, WIDTH, HEIGHT, COLOUR, BASE-WIDTH, SIDE-BUTTON-ERASES,
+DEFAULT-TOOL are as in `org-ex-ink-capture'.  (No BG-COLOUR —
+the screenshot IS the background.)
 
-usage: (org-ex-ink-capture-with-background BACKGROUND &optional INITIAL WIDTH HEIGHT COLOUR BASE-WIDTH SIDE-BUTTON-ERASES)  */)
+usage: (org-ex-ink-capture-with-background BACKGROUND &optional INITIAL WIDTH HEIGHT COLOUR BASE-WIDTH SIDE-BUTTON-ERASES DEFAULT-TOOL)  */)
   (Lisp_Object background, Lisp_Object initial, Lisp_Object width,
    Lisp_Object height, Lisp_Object colour, Lisp_Object base_width,
-   Lisp_Object side_button_erases)
+   Lisp_Object side_button_erases, Lisp_Object default_tool)
 {
   cairo_surface_t *bg;
   GPtrArray *seed = NULL;
@@ -641,40 +668,27 @@ usage: (org-ex-ink-capture-with-background BACKGROUND &optional INITIAL WIDTH HE
   gfloat bw = 2.0f;
   gboolean sb = TRUE;
   gboolean cancelled = TRUE;
+  int dt = 0;
   GPtrArray *result;
 
   if (!USER_PTRP (background))
     error ("Expected a Cairo screenshot surface (user-ptr) for BACKGROUND");
   bg = (cairo_surface_t *) XUSER_PTR (background)->p;
 
-  if (!NILP (initial))
-    seed = ink_unwrap_strokes (initial);
-
+  if (!NILP (initial)) seed = ink_unwrap_strokes (initial);
   if (!NILP (width))
-    {
-      CHECK_FIXNUM (width);
-      w = (gint) XFIXNUM (width);
-    }
+    { CHECK_FIXNUM (width);  w = (gint) XFIXNUM (width); }
   if (!NILP (height))
-    {
-      CHECK_FIXNUM (height);
-      h = (gint) XFIXNUM (height);
-    }
+    { CHECK_FIXNUM (height); h = (gint) XFIXNUM (height); }
   if (!NILP (colour))
-    {
-      CHECK_STRING (colour);
-      col = SSDATA (colour);
-    }
+    { CHECK_STRING (colour); col = SSDATA (colour); }
   if (!NILP (base_width))
-    {
-      CHECK_NUMBER (base_width);
-      bw = (gfloat) XFLOATINT (base_width);
-    }
-  if (!NILP (side_button_erases))
-    sb = TRUE;
+    { CHECK_NUMBER (base_width); bw = (gfloat) XFLOATINT (base_width); }
+  if (!NILP (side_button_erases)) sb = TRUE;
+  dt = ink_default_tool_from_symbol (default_tool);
 
-  result = cmacs_org_ex_ink_capture_with_background (
-    bg, seed, w, h, col, bw, sb, &cancelled);
+  result = cmacs_org_ex_ink_capture_full (
+    bg, NULL, seed, w, h, col, bw, NULL, 0.0f, dt, sb, &cancelled);
 
   if (result == NULL)
     return Fcons (Qnil, cancelled ? Qt : Qnil);

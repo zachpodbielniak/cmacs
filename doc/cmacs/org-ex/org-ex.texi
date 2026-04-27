@@ -1172,6 +1172,53 @@ timer firing during a Wacom @code{tablet-tool-added/done} dispatch can
 re-enter GTK widget realisation in an inconsistent device state and
 trigger a GDK assertion.
 
+@subsection Palette
+
+@cindex palette
+@cindex highlighter
+@cindex colour picker
+
+The toolbar's second row holds the palette controls.  All of them
+affect the @emph{next} stroke; previously-committed strokes keep
+the colour, width, and tool that were active when they were drawn.
+
+@table @asis
+@item Tool selector (Pen / Hilite / Eraser)
+Three radio-style toggle buttons.  The tablet eraser-end always
+forces eraser regardless of the toolbar (real eraser end wins),
+so flipping a Wacom pen still erases even when the toolbar shows
+``Pen''.
+
+@item Colour picker
+@code{GtkColorButton}; opens the standard GTK colour chooser.
+The picker is per-tool: when you switch to Hilite, the button
+remembers the highlighter colour; switching back to Pen restores
+the pen colour.  Eraser ignores colour.
+
+@item Width spin button
+0.5--20.0 px in 0.5 increments.  Per-tool: Pen and Highlighter
+remember their own widths.  Pen width modulates with pressure
+(0.3 + 0.7 * pressure scale); highlighter is always uniform.
+
+@item Background colour
+Only shown in canvas (@code{#+BEGIN_INK}) mode --- region overlay
+ink uses a screenshot of the buffer text and so already inherits
+the underlying theme.  Changing the bg in the capture window
+recolours the canvas page; the picked colour is also written
+into the block header as @code{:bg "#hex"} so it persists.
+@end table
+
+The highlighter is a uniform-width semi-transparent stroke
+(alpha 0.5).  It serialises as a normal stroke S-expression with
+@code{:t highlighter}; the renderer (both the SVG overlay and
+the live Cairo paint) checks the tool type and applies the
+fixed alpha + skips pressure-driven width modulation.
+
+Palette state persists in buffer-local defvars within the same
+Emacs session, so re-opening the capture starts from your last
+choice.  Restart resets to the @code{cmacs-org-ex-ink-default-*}
+defcustoms.
+
 @section Marginalia
 
 @cindex marginalia

@@ -18,14 +18,18 @@
 G_BEGIN_DECLS
 
 /* Render a stroke set to a self-contained SVG string.
-   `width` and `height` are the canvas extent in pixels.  Pen strokes
-   are emitted as variable-width <path> fragments split at pressure-
-   change boundaries (Δwidth > 0.3 px); single-pressure strokes emit
-   one <path>.  Eraser strokes are skipped — finalised SVG should
+   `width` and `height` are the canvas extent in pixels.
+   `bg_colour` is the page background fill (NULL → "#ffffff").
+   Pen strokes are emitted as variable-width <path> fragments split
+   at pressure-change boundaries (Δwidth > 0.3 px); single-pressure
+   strokes emit one <path>.  Highlighter strokes emit one <path> per
+   stroke with `stroke-opacity="0.5"` and uniform width (no pressure
+   modulation).  Eraser strokes are skipped — finalised SVG should
    never contain hit-test trails. */
-gchar *org_ex_ink_render_to_svg (GPtrArray *strokes,
-                                 gint       width,
-                                 gint       height);
+gchar *org_ex_ink_render_to_svg (GPtrArray   *strokes,
+                                 gint         width,
+                                 gint         height,
+                                 const gchar *bg_colour);
 
 /* Paint STROKES directly onto an existing Cairo context.  Used both
    by the modal capture window (alpha = 1.0) and by the post-glyph

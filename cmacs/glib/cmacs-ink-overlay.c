@@ -50,6 +50,8 @@ static Lisp_Object QCstart_marker;
 static Lisp_Object QCstrokes_string;
 static Lisp_Object QCstrokes_ptr;
 static Lisp_Object QCorphan;
+static Lisp_Object QCcapture_dx;
+static Lisp_Object QCcapture_dy;
 
 /* Wrapper that returns Qunbound for variables that haven't been
    defined yet — the post-glyph paint hook runs on every redisplay
@@ -110,13 +112,17 @@ cmacs_ink_overlay_parse_strokes (Lisp_Object strokes_string)
   return strokes;
 }
 
-/* Paint annotations for one leaf window. */
+/* Paint annotations for one leaf window.  CR is the per-draw GTK
+   context (NOT the persistent back-surface context); each draw
+   signal supplies a fresh cr targeting the GdkWindow, which is why
+   alpha-blended strokes don't accumulate across redisplays now. */
 static void
 cmacs_ink_overlay_paint_window (struct frame *f, struct window *w,
                                 cairo_t *cr)
 {
   Lisp_Object buffer, annotations, tail;
   int win_x, win_y, win_w, win_h;
+  int text_area_left, text_area_top;
   double alpha;
 
   if (!WINDOW_LEAF_P (w))
@@ -143,8 +149,27 @@ cmacs_ink_overlay_paint_window (struct frame *f, struct window *w,
   /* Per-buffer alpha — see `cmacs_ink_overlay_alpha_for_buffer'. */
   alpha = cmacs_ink_overlay_alpha_for_buffer (buffer);
 
-  /* Window-text-area pixel rectangle, in frame-absolute coords.
-     Used for both translation and clipping. */
+  /* Frame-absolute origin of the *text area* (NOT the outer
+     window).  Strokes were captured against a screenshot whose
+     top-left = frame-absolute glyph origin = (window_box_left
+     (TEXT_AREA), WINDOW_TOP_EDGE_Y + tab + header).  Adding
+     pos_visible_p's (text-area-relative x, window-box-relative y)
+     to this origin lands strokes back at the glyph they were drawn
+     over.  Using WINDOW_BOX_LEFT_PIXEL_EDGE / WINDOW_TOP_PIXEL_EDGE
+     here would re-introduce the (tab+header) y-offset bug —
+     pos_visible_p's y already includes header+tab, so we must NOT
+     add them again via WINDOW_TOP_PIXEL_EDGE.  See
+     `cmacs-ink-region--region-pixel-rect' in the elisp side, which
+     mirrors this via `window-body-pixel-edges'. */
+  text_area_left = window_box_left (w, TEXT_AREA);
+  text_area_top  = WINDOW_TOP_EDGE_Y (w);
+
+  /* Generous clip rectangle: the whole window box.  Keeps strokes
+     from bleeding into adjacent windows / mode-line area in split
+     layouts.  We don't clip tighter to the text area because
+     pos_visible_p's window-box-relative y is already inside the
+     text area for visible glyphs, and a slightly permissive clip
+     leaves room for stroke widths near the boundaries. */
   win_x = WINDOW_BOX_LEFT_PIXEL_EDGE (w);
   win_y = WINDOW_TOP_PIXEL_EDGE (w);
   win_w = WINDOW_PIXEL_WIDTH (w);
@@ -158,8 +183,10 @@ cmacs_ink_overlay_paint_window (struct frame *f, struct window *w,
     {
       Lisp_Object plist = XCAR (tail);
       Lisp_Object start_marker, strokes_ptr, strokes_string, orphan;
+      Lisp_Object capture_dx, capture_dy;
       ptrdiff_t start_pos;
       int x, y, rtop = 0, rbot = 0, rowh = 0, vpos = 0;
+      int dx = 0, dy = 0;
       bool visible;
       GPtrArray *strokes = NULL;
       bool owned = false;
@@ -171,6 +198,10 @@ cmacs_ink_overlay_paint_window (struct frame *f, struct window *w,
       strokes_ptr    = Fplist_get (plist, QCstrokes_ptr, Qnil);
       strokes_string = Fplist_get (plist, QCstrokes_string, Qnil);
       orphan         = Fplist_get (plist, QCorphan, Qnil);
+      capture_dx     = Fplist_get (plist, QCcapture_dx, Qnil);
+      capture_dy     = Fplist_get (plist, QCcapture_dy, Qnil);
+      if (FIXNUMP (capture_dx)) dx = (int) XFIXNUM (capture_dx);
+      if (FIXNUMP (capture_dy)) dy = (int) XFIXNUM (capture_dy);
       (void) orphan;  /* tracked in the plist for `cmacs-ink-region-list',
                          but not a paint-skip — see comment below. */
 
@@ -213,13 +244,23 @@ cmacs_ink_overlay_paint_window (struct frame *f, struct window *w,
       if (strokes == NULL)
         continue;
 
-      /* `pos_visible_p' returns x, y in window text-area coords
-         (relative to WINDOW_BOX_LEFT_PIXEL_EDGE / WINDOW_TOP_PIXEL_EDGE).
-         Add those to get frame-absolute coords for cairo_translate. */
+      /* pos_visible_p returns x in text-area-relative coords and y
+         in window-box-relative coords (its iterator's current_y is
+         seeded with tab-line + header-line height, so y already
+         includes those).  Add to the frame-absolute text-area
+         origin to get the frame-absolute glyph position — which is
+         exactly where the screenshot top-left was captured by the
+         elisp side, so strokes recorded against the screenshot's
+         (0, 0) land back on the same glyph. */
+      /* Subtract (dx, dy) so paint origin = rect-top-left at capture
+         time, regardless of where in the rect the start-marker
+         sits.  For multi-line regions whose end column is leftward
+         of start, dx > 0 and the rect extends left of start; paint
+         must compensate or strokes drift right by dx px. */
       org_ex_ink_paint_strokes_cairo (
         cr, strokes,
-        (double) (win_x + x),
-        (double) (win_y + y),
+        (double) (text_area_left + x - dx),
+        (double) (text_area_top  + y - dy),
         alpha);
 
       if (owned)
@@ -251,18 +292,13 @@ cmacs_ink_overlay_walk (struct frame *f, struct window *w, cairo_t *cr)
 }
 
 void
-cmacs_ink_overlay_paint (struct frame *f)
+cmacs_ink_overlay_paint (struct frame *f, cairo_t *cr)
 {
-  cairo_t *cr;
   Lisp_Object root;
 
-  if (f == NULL)
+  if (f == NULL || cr == NULL)
     return;
   if (!FRAME_PGTK_P (f))
-    return;
-
-  cr = CMACS_FRAME_CR_CONTEXT (f);
-  if (cr == NULL)
     return;
 
   root = FRAME_ROOT_WINDOW (f);
@@ -270,7 +306,10 @@ cmacs_ink_overlay_paint (struct frame *f)
     return;
 
   /* Alpha is now resolved per-window-buffer inside the walk so each
-     buffer's local override is honoured. */
+     buffer's local override is honoured.  CR is the GTK draw-signal
+     context — paint goes onto the screen-bound surface, not the
+     persistent back buffer, so strokes are recomposed fresh on
+     every draw event. */
   cmacs_ink_overlay_walk (f, XWINDOW (root), cr);
 }
 
@@ -296,10 +335,14 @@ syms_of_cmacs_ink_overlay (void)
   QCstrokes_string = intern_c_string (":strokes-string");
   QCstrokes_ptr    = intern_c_string (":strokes-ptr");
   QCorphan         = intern_c_string (":orphan");
+  QCcapture_dx     = intern_c_string (":capture-dx");
+  QCcapture_dy     = intern_c_string (":capture-dy");
   staticpro (&QCstart_marker);
   staticpro (&QCstrokes_string);
   staticpro (&QCstrokes_ptr);
   staticpro (&QCorphan);
+  staticpro (&QCcapture_dx);
+  staticpro (&QCcapture_dy);
 #endif
 }
 

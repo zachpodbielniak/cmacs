@@ -198,8 +198,13 @@ Skips keys whose value is nil."
   "Header key order for #+BEGIN_INK_MARGINALIA.")
 
 (defconst cmacs-ink-storage--rgn-keys
-  '(:id :start-line :start-col :end-line :end-col :hash :w :h :created)
-  "Header key order for #+BEGIN_INK_REGION.")
+  '(:id :start-line :start-col :end-line :end-col :hash :w :h :dx :dy :created)
+  "Header key order for #+BEGIN_INK_REGION.
+
+`:dx', `:dy' are the text-area-relative offsets from the start
+glyph to the screenshot rect's top-left at capture time.  Older
+blocks omit them; loaders default to 0 (correct for single-line
+or top-left-anchored regions where start IS the rect's top-left).")
 
 (defun cmacs-ink-storage--marginalia-anchor-to-block (anchor)
   "Format a marginalia ANCHOR plist (sidecar form) as an org block string."
@@ -232,6 +237,8 @@ Skips keys whose value is nil."
                 :hash       (plist-get anchor :region-hash)
                 :w          (plist-get anchor :width)
                 :h          (plist-get anchor :height)
+                :dx         (plist-get anchor :capture-dx)
+                :dy         (plist-get anchor :capture-dy)
                 :created    (plist-get anchor :created))
           cmacs-ink-storage--rgn-keys))
         (strokes (plist-get anchor :strokes)))
@@ -343,10 +350,12 @@ Returns nil if no section is present.  Both lists may be empty."
             cmacs-ink-storage--rgn-begin-rx
             cmacs-ink-storage--rgn-end-rx
             '(:id :start-line :start-col :end-line :end-col
-                  :hash :w :h :created)
+                  :hash :w :h :dx :dy :created)
             '((:hash . :region-hash)
               (:w    . :width)
-              (:h    . :height)))))
+              (:h    . :height)
+              (:dx   . :capture-dx)
+              (:dy   . :capture-dy)))))
       (cons line-anchors region-anchors))))
 
 (defun cmacs-ink-storage--save-inline (line-plists region-plists)

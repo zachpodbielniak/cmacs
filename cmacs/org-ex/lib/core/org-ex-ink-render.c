@@ -90,6 +90,60 @@ ink_append_segment_path (GString             *out,
                         " fill=\"none\"/>\n");
 }
 
+/* Emit one <path> covering the whole stroke as-is — used for
+   highlighter (no pressure modulation, uniform width, semi-
+   transparent).  The stroke-opacity attribute lives on the path
+   itself rather than the global SVG so individual highlighter
+   strokes can co-exist with opaque pen strokes. */
+static void
+ink_append_uniform_path (GString *out,
+                         const gchar *colour,
+                         gfloat width,
+                         gdouble opacity,
+                         const OrgExInkPoint *pts,
+                         guint n_points)
+{
+  guint k;
+  if (n_points == 0) return;
+
+  g_string_append (out, "<path d=\"M ");
+  g_string_append_printf (out, "%d %d",
+                          (gint) pts[0].x, (gint) pts[0].y);
+  for (k = 1; k < n_points; k++)
+    g_string_append_printf (out, " L %d %d",
+                            (gint) pts[k].x, (gint) pts[k].y);
+  g_string_append (out, "\" stroke=\"");
+  {
+    const gchar *p;
+    for (p = colour; p != NULL && *p; p++)
+      {
+        switch (*p)
+          {
+          case '<': g_string_append (out, "&lt;");   break;
+          case '>': g_string_append (out, "&gt;");   break;
+          case '&': g_string_append (out, "&amp;");  break;
+          case '"': g_string_append (out, "&quot;"); break;
+          default:  g_string_append_c (out, *p);     break;
+          }
+      }
+  }
+  g_string_append (out, "\" stroke-width=\"");
+  ink_append_width (out, width);
+  g_string_append (out, "\" stroke-linecap=\"round\""
+                        " stroke-linejoin=\"round\""
+                        " fill=\"none\"");
+  if (opacity < 1.0)
+    {
+      gchar buf[16];
+      gint q = (gint) ((opacity * 100.0) + 0.5);
+      if (q < 0) q = 0;
+      if (q > 100) q = 100;
+      g_snprintf (buf, sizeof buf, "%.2f", q / 100.0);
+      g_string_append_printf (out, " stroke-opacity=\"%s\"", buf);
+    }
+  g_string_append (out, "/>\n");
+}
+
 static void
 ink_render_stroke (GString *out, OrgExInkStroke *stroke)
 {
@@ -100,8 +154,10 @@ ink_render_stroke (GString *out, OrgExInkStroke *stroke)
   guint seg_start;
   gfloat seg_width;
   guint i;
+  OrgExInkTool tool;
 
-  if (org_ex_ink_stroke_get_tool (stroke) == ORG_EX_INK_TOOL_ERASER)
+  tool = org_ex_ink_stroke_get_tool (stroke);
+  if (tool == ORG_EX_INK_TOOL_ERASER)
     return; /* hit-test trail; never persisted into the rendered SVG */
 
   pts = org_ex_ink_stroke_get_points (stroke, &n_points);
@@ -112,6 +168,27 @@ ink_render_stroke (GString *out, OrgExInkStroke *stroke)
   base   = org_ex_ink_stroke_get_base_width (stroke);
   if (base < INK_MIN_BASE_WIDTH)
     base = INK_MIN_BASE_WIDTH;
+
+  /* Highlighter: uniform width, alpha 0.5, no pressure splitting.
+     Even single-point taps render as a small flat circle. */
+  if (tool == ORG_EX_INK_TOOL_HIGHLIGHTER)
+    {
+      if (n_points == 1)
+        {
+          g_string_append (out, "<circle cx=\"");
+          g_string_append_printf (out, "%d", (gint) pts[0].x);
+          g_string_append (out, "\" cy=\"");
+          g_string_append_printf (out, "%d", (gint) pts[0].y);
+          g_string_append (out, "\" r=\"");
+          ink_append_width (out, base * 0.5f);
+          g_string_append (out, "\" fill=\"");
+          g_string_append (out, colour);
+          g_string_append (out, "\" fill-opacity=\"0.5\"/>\n");
+          return;
+        }
+      ink_append_uniform_path (out, colour, base, 0.5, pts, n_points);
+      return;
+    }
 
   if (n_points == 1)
     {
@@ -148,10 +225,31 @@ ink_render_stroke (GString *out, OrgExInkStroke *stroke)
                            pts, seg_start, n_points - 1);
 }
 
+/* Emit BG_COLOUR as an XML-attribute value, escaping `"` and
+   the obvious XML-breakers so users can pass arbitrary CSS-style
+   colour strings (named, hex, rgb()...).  NULL → "#ffffff". */
+static void
+ink_append_bg_colour (GString *out, const gchar *bg_colour)
+{
+  const gchar *p = bg_colour && *bg_colour ? bg_colour : "#ffffff";
+  for (; *p; p++)
+    {
+      switch (*p)
+        {
+        case '<': g_string_append (out, "&lt;");   break;
+        case '>': g_string_append (out, "&gt;");   break;
+        case '&': g_string_append (out, "&amp;");  break;
+        case '"': g_string_append (out, "&quot;"); break;
+        default:  g_string_append_c (out, *p);     break;
+        }
+    }
+}
+
 gchar *
-org_ex_ink_render_to_svg (GPtrArray *strokes,
-                          gint       width,
-                          gint       height)
+org_ex_ink_render_to_svg (GPtrArray   *strokes,
+                          gint         width,
+                          gint         height,
+                          const gchar *bg_colour)
 {
   GString *out;
   guint i;
@@ -165,14 +263,18 @@ org_ex_ink_render_to_svg (GPtrArray *strokes,
     "viewBox=\"0 0 %d %d\" width=\"%d\" height=\"%d\">\n",
     width, height, width, height);
 
-  /* Explicit white "page" background.  Without it, librsvg renders
-     a transparent surface and the buffer's frame background shows
-     through — on dark themes the dark default ink colour ("#222")
-     becomes invisible against the bg.  This matches the white
-     Cairo background painted by the capture window. */
-  g_string_append_printf (out,
-    "<rect x=\"0\" y=\"0\" width=\"%d\" height=\"%d\" fill=\"#ffffff\"/>\n",
-    width, height);
+  /* "Page" background.  Defaults to white when bg_colour is NULL —
+     without an explicit fill, librsvg renders a transparent
+     surface and the buffer's frame background shows through, which
+     makes dark ink invisible on dark themes.  Pass a theme-matched
+     colour from Elisp via `cmacs-org-ex-ink--effective-bg' so the
+     canvas blends into the surrounding buffer. */
+  g_string_append (out,
+    "<rect x=\"0\" y=\"0\" width=\"");
+  g_string_append_printf (out, "%d\" height=\"%d", width, height);
+  g_string_append (out, "\" fill=\"");
+  ink_append_bg_colour (out, bg_colour);
+  g_string_append (out, "\"/>\n");
 
   /* Subtle 1px border so the canvas extent is visible against the
      surrounding buffer text. */
@@ -264,8 +366,11 @@ ink_paint_one_stroke (cairo_t *cr, OrgExInkStroke *stroke,
   const gchar *colour;
   gfloat base;
   gdouble r, g, b;
+  OrgExInkTool tool;
+  gdouble effective_alpha;
 
-  if (org_ex_ink_stroke_get_tool (stroke) == ORG_EX_INK_TOOL_ERASER)
+  tool = org_ex_ink_stroke_get_tool (stroke);
+  if (tool == ORG_EX_INK_TOOL_ERASER)
     return;
 
   pts = org_ex_ink_stroke_get_points (stroke, &n);
@@ -278,10 +383,41 @@ ink_paint_one_stroke (cairo_t *cr, OrgExInkStroke *stroke,
     base = INK_MIN_BASE_WIDTH;
 
   ink_parse_hex_colour (colour, &r, &g, &b);
-  cairo_set_source_rgba (cr, r, g, b, alpha);
+
+  /* Highlighter forces alpha 0.5 regardless of caller — the
+     tool's defining property is "see-through".  Mirrors the SVG
+     path's fixed `stroke-opacity="0.5"' so the live capture, the
+     in-buffer overlay paint, and the rendered SVG all blend
+     identically.  The caller's alpha applies to pen and any future
+     opaque tools (region overlay default 0.85, capture window
+     default 1.0). */
+  if (tool == ORG_EX_INK_TOOL_HIGHLIGHTER)
+    effective_alpha = 0.5;
+  else
+    effective_alpha = alpha;
+
+  cairo_set_source_rgba (cr, r, g, b, effective_alpha);
   cairo_set_line_cap (cr, CAIRO_LINE_CAP_ROUND);
   cairo_set_line_join (cr, CAIRO_LINE_JOIN_ROUND);
 
+  /* Highlighter: uniform width, no pressure modulation. */
+  if (tool == ORG_EX_INK_TOOL_HIGHLIGHTER)
+    {
+      cairo_set_line_width (cr, base);
+      if (n == 1)
+        {
+          cairo_arc (cr, pts[0].x, pts[0].y, base * 0.5, 0, 2 * G_PI);
+          cairo_fill (cr);
+          return;
+        }
+      cairo_move_to (cr, pts[0].x, pts[0].y);
+      for (i = 1; i < n; i++)
+        cairo_line_to (cr, pts[i].x, pts[i].y);
+      cairo_stroke (cr);
+      return;
+    }
+
+  /* Pen: variable-width, pressure-driven. */
   if (n == 1)
     {
       gdouble w = ink_cairo_segment_width (base, pts[0].pressure);
@@ -290,7 +426,6 @@ ink_paint_one_stroke (cairo_t *cr, OrgExInkStroke *stroke,
       return;
     }
 
-  /* Variable-width: one cairo_stroke per segment between samples. */
   for (i = 1; i < n; i++)
     {
       cairo_set_line_width (
@@ -315,6 +450,16 @@ org_ex_ink_paint_strokes_cairo (cairo_t   *cr,
   if (alpha > 1.0) alpha = 1.0;
 
   cairo_save (cr);
+  /* Force OPERATOR_OVER so alpha actually alpha-blends against the
+     destination.  pgtk's redisplay flip uses OPERATOR_SOURCE to
+     copy the back surface, and Emacs may leave the cr_context in
+     that state when our post-glyph hook fires — under SOURCE, an
+     alpha-0.5 source is *copied* into the dest (overwriting buffer
+     pixels with a half-transparent yellow), making the highlighter
+     look fully opaque against the surface beneath cr_context.  OVER
+     is the standard Porter-Duff blend that gives the
+     "see-through" highlighter effect we want. */
+  cairo_set_operator (cr, CAIRO_OPERATOR_OVER);
   cairo_translate (cr, tx, ty);
   for (i = 0; i < strokes->len; i++)
     {

@@ -53,17 +53,47 @@ typedef struct
   gint         width;
   gint         height;
 
-  /* Pen defaults */
+  /* Pen defaults — toolbar updates these in place; new strokes
+     pick up the current values.  Previously-drawn strokes keep
+     the values that were active at their creation. */
   gchar       *pen_colour;
   gfloat       pen_base_width;
+
+  /* Currently-selected tool.  Toolbar Pen / Hilite / Eraser
+     toggles set this; the tablet eraser-end overrides regardless
+     (real eraser always erases, see `classify_event'). */
+  OrgExInkTool current_tool;
+
+  /* Per-tool last-used widths so toggling between Pen and
+     Highlighter doesn't lose the previous value the user set on
+     the spin button.  Indexed by `OrgExInkTool'. */
+  gfloat       pen_width_remembered;
+  gfloat       hilite_width_remembered;
+  gchar       *hilite_colour;            /* default "#ffd700" */
 
   /* Eraser fallback policy */
   gboolean     side_button_erases;
 
   /* Optional background surface (e.g. a screenshot of an Emacs region
      to be annotated).  When non-NULL, painted at canvas origin
-     before the white "page" fill is skipped. */
+     before the colour bg / white "page" fill is skipped. */
   cairo_surface_t *background_surface;
+
+  /* Optional solid-colour background.  Used when there's no
+     screenshot — `#+BEGIN_INK' canvas mode passes a theme-matched
+     hex colour here so the canvas blends with the buffer.  NULL
+     falls back to white. */
+  gchar       *background_colour;
+
+  /* Toolbar widgets — saved so callbacks can interact with them
+     (e.g. tool toggle updates the spin button to that tool's
+     last-used width). */
+  GtkWidget   *btn_pen;
+  GtkWidget   *btn_hilite;
+  GtkWidget   *btn_eraser;
+  GtkWidget   *btn_colour;
+  GtkWidget   *spin_width;
+  GtkWidget   *btn_bg;       /* may be NULL when not canvas mode */
 
   /* Stroke state.
      `committed_strokes` is the stable set rendered behind the cursor
@@ -190,31 +220,44 @@ read_pressure (GdkEvent *event)
   return 1.0f;
 }
 
-/* Decide which input role this event belongs to.
-   Returns 1 = pen draw, 2 = eraser, 0 = ignore (e.g. raw mouse after
-   we've already seen a pen tool, to avoid palm-touch noise). */
-static gint
-classify_event (CaptureState *state, GdkEvent *event)
+/* Decide which tool this event represents.  Output is the
+   `OrgExInkTool' to apply to the new stroke; `*ignored' is set
+   non-zero when the event should be dropped (e.g. raw mouse
+   after we've already seen a tablet pen — avoids palm touch).
+
+   Precedence (highest first):
+     1. Tablet eraser-end       → ERASER
+     2. Toolbar selection       → PEN / HIGHLIGHTER / ERASER
+     3. Side-button-as-eraser   → ERASER (mouse fallback)
+     4. Default                 → toolbar selection (or PEN). */
+static OrgExInkTool
+classify_event (CaptureState *state, GdkEvent *event, gboolean *ignored)
 {
   GdkDevice *device = gdk_event_get_source_device (event);
   GdkInputSource source = device != NULL
     ? gdk_device_get_source (device) : GDK_SOURCE_MOUSE;
   GdkDeviceTool *tool = gdk_event_get_device_tool (event);
 
+  *ignored = FALSE;
+
   if (tool != NULL)
     {
       GdkDeviceToolType t = gdk_device_tool_get_tool_type (tool);
       state->saw_pen_tool = TRUE;
+      /* Real eraser end always erases regardless of toolbar. */
       if (t == GDK_DEVICE_TOOL_TYPE_ERASER)
-        return 2;
-      /* Treat unknown / pen / pencil / brush / airbrush all as pen. */
-      return 1;
+        return ORG_EX_INK_TOOL_ERASER;
+      /* Pen / pencil / brush / airbrush — honour the toolbar. */
+      return state->current_tool;
     }
 
   /* Non-tool event.  If we've seen a pen this session, the pointer
      is probably a palm — ignore. */
   if (state->saw_pen_tool)
-    return 0;
+    {
+      *ignored = TRUE;
+      return ORG_EX_INK_TOOL_PEN;
+    }
 
   /* Pure mouse path: check the side-button-as-eraser fallback. */
   if (source == GDK_SOURCE_MOUSE
@@ -226,11 +269,11 @@ classify_event (CaptureState *state, GdkEvent *event)
           GdkModifierType mods = 0;
           gdk_event_get_state (event, &mods);
           if (mods & GDK_BUTTON2_MASK)
-            return 2;
+            return ORG_EX_INK_TOOL_ERASER;
         }
-      return 1;
+      return state->current_tool;
     }
-  return 1;
+  return state->current_tool;
 }
 
 /* ------------------------------------------------------------------ */
@@ -265,12 +308,43 @@ draw_pen_stroke (cairo_t *cr, OrgExInkStroke *s, gboolean ghost)
   const OrgExInkPoint *pts = org_ex_ink_stroke_get_points (s, &n);
   gdouble r, g, b;
   gfloat base = org_ex_ink_stroke_get_base_width (s);
+  OrgExInkTool tool = org_ex_ink_stroke_get_tool (s);
+  gdouble alpha;
 
   if (n == 0) return;
   parse_hex_colour (org_ex_ink_stroke_get_colour (s), &r, &g, &b);
-  cairo_set_source_rgba (cr, r, g, b, ghost ? 0.45 : 1.0);
+
+  /* Highlighter is always semi-transparent (matches the persisted
+     SVG render's `stroke-opacity="0.5"' so the live capture and the
+     post-commit Emacs overlay render look identical).  Ghost
+     (in-progress) strokes are slightly faded (0.45) for both pen
+     and highlighter so the user sees their drawing-in-progress
+     before commit. */
+  if (tool == ORG_EX_INK_TOOL_HIGHLIGHTER)
+    alpha = ghost ? 0.30 : 0.5;
+  else
+    alpha = ghost ? 0.45 : 1.0;
+
+  cairo_set_source_rgba (cr, r, g, b, alpha);
   cairo_set_line_cap (cr, CAIRO_LINE_CAP_ROUND);
   cairo_set_line_join (cr, CAIRO_LINE_JOIN_ROUND);
+
+  if (tool == ORG_EX_INK_TOOL_HIGHLIGHTER)
+    {
+      /* Uniform width, no pressure modulation. */
+      cairo_set_line_width (cr, base);
+      if (n == 1)
+        {
+          cairo_arc (cr, pts[0].x, pts[0].y, base * 0.5, 0, 2 * G_PI);
+          cairo_fill (cr);
+          return;
+        }
+      cairo_move_to (cr, pts[0].x, pts[0].y);
+      for (i = 1; i < n; i++)
+        cairo_line_to (cr, pts[i].x, pts[i].y);
+      cairo_stroke (cr);
+      return;
+    }
 
   if (n == 1)
     {
@@ -322,14 +396,25 @@ on_draw (GtkWidget *widget, cairo_t *cr, gpointer user_data)
   if (state->background_surface != NULL)
     {
       /* Annotation surface — paint the supplied screenshot at origin.
-         No white fill behind it: we want the strokes to land directly
-         on top of the source pixels for "drawing on the page" feel. */
+         No fill behind it: we want strokes to land directly on top
+         of the source pixels for "drawing on the page" feel. */
       cairo_set_source_surface (cr, state->background_surface, 0, 0);
+      cairo_paint (cr);
+    }
+  else if (state->background_colour != NULL && *state->background_colour)
+    {
+      /* Solid-colour canvas (e.g. theme-matched bg for #+BEGIN_INK).
+         Use parse_hex_colour which already handles #RGB / #RRGGBB
+         and named colours (via GdkRGBA). */
+      gdouble r, g, b;
+      parse_hex_colour (state->background_colour, &r, &g, &b);
+      cairo_set_source_rgb (cr, r, g, b);
       cairo_paint (cr);
     }
   else
     {
-      /* White "page" background — easy on the eyes, prints cleanly. */
+      /* White "page" background — fallback for callers that don't
+         pass either a surface or a colour. */
       cairo_set_source_rgb (cr, 1.0, 1.0, 1.0);
       cairo_paint (cr);
     }
@@ -379,26 +464,49 @@ on_button_press (GtkWidget *w, GdkEventButton *evt, gpointer user_data)
 {
   CaptureState *state = user_data;
   GdkEvent *event = (GdkEvent *) evt;
-  gint kind;
+  OrgExInkTool tool;
+  gboolean ignored = FALSE;
   gfloat pressure;
+  const gchar *colour;
+  gfloat base_width;
 
   (void) w;
 
   if (evt->button != 1)
     return FALSE;
 
-  kind = classify_event (state, event);
-  if (kind == 0)
+  tool = classify_event (state, event, &ignored);
+  if (ignored)
     return FALSE;
 
   state_clear_live (state);
 
+  /* Pick colour + width based on the resolved tool: highlighter
+     uses its own (default gold/12); pen uses the pen settings;
+     eraser is colourless (the colour is only relevant to pen
+     strokes anyway). */
+  switch (tool)
+    {
+    case ORG_EX_INK_TOOL_HIGHLIGHTER:
+      colour = state->hilite_colour ? state->hilite_colour : "#ffd700";
+      base_width = state->hilite_width_remembered;
+      break;
+    case ORG_EX_INK_TOOL_ERASER:
+      colour = state->pen_colour;
+      base_width = state->pen_base_width;
+      break;
+    case ORG_EX_INK_TOOL_PEN:
+    default:
+      colour = state->pen_colour;
+      base_width = state->pen_base_width;
+      break;
+    }
+
   pressure = read_pressure (event);
-  state->live_is_eraser = (kind == 2);
-  state->live_kind = kind;
-  state->live_stroke = org_ex_ink_stroke_new (
-    state->live_is_eraser ? ORG_EX_INK_TOOL_ERASER : ORG_EX_INK_TOOL_PEN,
-    state->pen_colour, state->pen_base_width);
+  state->live_is_eraser = (tool == ORG_EX_INK_TOOL_ERASER);
+  state->live_kind = (tool == ORG_EX_INK_TOOL_ERASER ? 2 : 1);
+  state->live_stroke =
+    org_ex_ink_stroke_new (tool, colour, base_width);
   org_ex_ink_stroke_append_point (state->live_stroke,
                                   (gint16) evt->x, (gint16) evt->y,
                                   pressure);
@@ -544,6 +652,180 @@ on_window_delete (GtkWidget *w, GdkEvent *evt, gpointer user_data)
 }
 
 /* ------------------------------------------------------------------ */
+/* Palette callbacks                                                   */
+/* ------------------------------------------------------------------ */
+
+/* When the user toggles a tool button, update state.current_tool
+   AND swap the spin button + colour button to that tool's
+   remembered settings.  Setting the widget values fires their
+   "value-changed"/"color-set" signals which we ignore via a
+   recursion guard (a sub-zero spin value), but a simpler approach
+   is to block the relevant signal handlers for the duration of
+   the swap.  GTK provides g_signal_handlers_block_by_func for
+   this — we use it on_colour_set / on_width_changed callbacks. */
+
+static void on_colour_set   (GtkColorButton *btn, gpointer ud);
+static void on_width_changed (GtkSpinButton  *btn, gpointer ud);
+static void on_bg_set       (GtkColorButton *btn, gpointer ud);
+
+static void
+sync_palette_widgets_to_tool (CaptureState *state)
+{
+  /* Block the 'changed' signals so the in-place updates of the
+     spin button + colour button don't fire their callbacks (which
+     would update state and cause feedback loops). */
+  g_signal_handlers_block_by_func (state->btn_colour,
+                                   (gpointer) on_colour_set, state);
+  g_signal_handlers_block_by_func (state->spin_width,
+                                   (gpointer) on_width_changed, state);
+
+  switch (state->current_tool)
+    {
+    case ORG_EX_INK_TOOL_HIGHLIGHTER:
+      {
+        GdkRGBA c;
+        if (gdk_rgba_parse (
+              &c, state->hilite_colour ? state->hilite_colour : "#ffd700"))
+          gtk_color_chooser_set_rgba (
+            GTK_COLOR_CHOOSER (state->btn_colour), &c);
+        gtk_spin_button_set_value (
+          GTK_SPIN_BUTTON (state->spin_width),
+          state->hilite_width_remembered);
+        break;
+      }
+    case ORG_EX_INK_TOOL_ERASER:
+    case ORG_EX_INK_TOOL_PEN:
+    default:
+      {
+        GdkRGBA c;
+        if (gdk_rgba_parse (
+              &c, state->pen_colour ? state->pen_colour : "#222222"))
+          gtk_color_chooser_set_rgba (
+            GTK_COLOR_CHOOSER (state->btn_colour), &c);
+        gtk_spin_button_set_value (
+          GTK_SPIN_BUTTON (state->spin_width),
+          state->pen_base_width);
+        break;
+      }
+    }
+
+  g_signal_handlers_unblock_by_func (state->btn_colour,
+                                     (gpointer) on_colour_set, state);
+  g_signal_handlers_unblock_by_func (state->spin_width,
+                                     (gpointer) on_width_changed, state);
+}
+
+static void
+on_tool_toggled (GtkToggleButton *btn, gpointer user_data)
+{
+  CaptureState *state = user_data;
+  if (!gtk_toggle_button_get_active (btn))
+    return;  /* radio behaviour: only act on the new selection */
+
+  /* Block our own callback while we deactivate the other two
+     toggles — otherwise their state-change fires us recursively. */
+  g_signal_handlers_block_by_func (state->btn_pen,
+                                   (gpointer) on_tool_toggled, state);
+  g_signal_handlers_block_by_func (state->btn_hilite,
+                                   (gpointer) on_tool_toggled, state);
+  g_signal_handlers_block_by_func (state->btn_eraser,
+                                   (gpointer) on_tool_toggled, state);
+
+  if      ((GtkWidget *) btn == state->btn_pen)
+    {
+      state->current_tool = ORG_EX_INK_TOOL_PEN;
+      gtk_toggle_button_set_active (
+        GTK_TOGGLE_BUTTON (state->btn_hilite), FALSE);
+      gtk_toggle_button_set_active (
+        GTK_TOGGLE_BUTTON (state->btn_eraser), FALSE);
+    }
+  else if ((GtkWidget *) btn == state->btn_hilite)
+    {
+      state->current_tool = ORG_EX_INK_TOOL_HIGHLIGHTER;
+      gtk_toggle_button_set_active (
+        GTK_TOGGLE_BUTTON (state->btn_pen),    FALSE);
+      gtk_toggle_button_set_active (
+        GTK_TOGGLE_BUTTON (state->btn_eraser), FALSE);
+    }
+  else if ((GtkWidget *) btn == state->btn_eraser)
+    {
+      state->current_tool = ORG_EX_INK_TOOL_ERASER;
+      gtk_toggle_button_set_active (
+        GTK_TOGGLE_BUTTON (state->btn_pen),    FALSE);
+      gtk_toggle_button_set_active (
+        GTK_TOGGLE_BUTTON (state->btn_hilite), FALSE);
+    }
+
+  g_signal_handlers_unblock_by_func (state->btn_pen,
+                                     (gpointer) on_tool_toggled, state);
+  g_signal_handlers_unblock_by_func (state->btn_hilite,
+                                     (gpointer) on_tool_toggled, state);
+  g_signal_handlers_unblock_by_func (state->btn_eraser,
+                                     (gpointer) on_tool_toggled, state);
+
+  sync_palette_widgets_to_tool (state);
+}
+
+static void
+on_colour_set (GtkColorButton *btn, gpointer user_data)
+{
+  CaptureState *state = user_data;
+  GdkRGBA c;
+  gchar *hex;
+  gtk_color_chooser_get_rgba (GTK_COLOR_CHOOSER (btn), &c);
+  hex = g_strdup_printf ("#%02x%02x%02x",
+                        (int) (c.red   * 255 + 0.5),
+                        (int) (c.green * 255 + 0.5),
+                        (int) (c.blue  * 255 + 0.5));
+  /* Update whichever tool's colour slot is current.  Eraser
+     doesn't have a colour; we still record into pen_colour so
+     the user's choice persists when they switch back to pen. */
+  switch (state->current_tool)
+    {
+    case ORG_EX_INK_TOOL_HIGHLIGHTER:
+      g_free (state->hilite_colour);
+      state->hilite_colour = hex;
+      break;
+    default:
+      g_free (state->pen_colour);
+      state->pen_colour = hex;
+      break;
+    }
+}
+
+static void
+on_width_changed (GtkSpinButton *btn, gpointer user_data)
+{
+  CaptureState *state = user_data;
+  gdouble v = gtk_spin_button_get_value (btn);
+  switch (state->current_tool)
+    {
+    case ORG_EX_INK_TOOL_HIGHLIGHTER:
+      state->hilite_width_remembered = (gfloat) v;
+      break;
+    default:
+      state->pen_base_width = (gfloat) v;
+      state->pen_width_remembered = (gfloat) v;
+      break;
+    }
+}
+
+static void
+on_bg_set (GtkColorButton *btn, gpointer user_data)
+{
+  CaptureState *state = user_data;
+  GdkRGBA c;
+  gtk_color_chooser_get_rgba (GTK_COLOR_CHOOSER (btn), &c);
+  g_free (state->background_colour);
+  state->background_colour =
+    g_strdup_printf ("#%02x%02x%02x",
+                     (int) (c.red   * 255 + 0.5),
+                     (int) (c.green * 255 + 0.5),
+                     (int) (c.blue  * 255 + 0.5));
+  gtk_widget_queue_draw (state->canvas);
+}
+
+/* ------------------------------------------------------------------ */
 /* Public entry                                                       */
 /* ------------------------------------------------------------------ */
 
@@ -556,9 +838,9 @@ cmacs_org_ex_ink_capture (GPtrArray   *initial,
                           gboolean     side_button_erases,
                           gboolean    *cancelled)
 {
-  return cmacs_org_ex_ink_capture_with_background (
-    NULL, initial, width, height, colour, base_width,
-    side_button_erases, cancelled);
+  return cmacs_org_ex_ink_capture_full (
+    NULL, NULL, initial, width, height, colour, base_width,
+    NULL, 0.0f, 0 /* pen */, side_button_erases, cancelled);
 }
 
 GPtrArray *
@@ -572,8 +854,30 @@ cmacs_org_ex_ink_capture_with_background (
                           gboolean         side_button_erases,
                           gboolean        *cancelled)
 {
+  return cmacs_org_ex_ink_capture_full (
+    background_surface, NULL, initial, width, height,
+    colour, base_width,
+    NULL, 0.0f, 0 /* pen */, side_button_erases, cancelled);
+}
+
+GPtrArray *
+cmacs_org_ex_ink_capture_full (
+                          cairo_surface_t *background_surface,
+                          const gchar     *background_colour,
+                          GPtrArray       *initial,
+                          gint             width,
+                          gint             height,
+                          const gchar     *colour,
+                          gfloat           base_width,
+                          const gchar     *hilite_colour,
+                          gfloat           hilite_base_width,
+                          gint             default_tool,
+                          gboolean         side_button_erases,
+                          gboolean        *cancelled)
+{
   CaptureState state = { 0 };
   GtkWidget *vbox, *toolbar, *btn_done, *btn_cancel, *btn_clear, *btn_undo;
+  GtkWidget *lbl_colour, *lbl_width, *lbl_bg;
   GPtrArray *result;
 
   if (width  <= 0) width  = 800;
@@ -583,8 +887,22 @@ cmacs_org_ex_ink_capture_with_background (
   state.height = height;
   state.pen_colour     = g_strdup (colour && *colour ? colour : "#222");
   state.pen_base_width = base_width > 0.0f ? base_width : 2.0f;
+  state.pen_width_remembered = state.pen_base_width;
+  state.hilite_colour = g_strdup (
+    hilite_colour && *hilite_colour ? hilite_colour : "#ffd700");
+  state.hilite_width_remembered =
+    hilite_base_width > 0.0f ? hilite_base_width : 12.0f;
   state.side_button_erases = side_button_erases;
   state.background_surface = background_surface;  /* borrowed; not owned */
+  state.background_colour =
+    (background_colour && *background_colour && background_surface == NULL)
+    ? g_strdup (background_colour) : NULL;
+  switch (default_tool)
+    {
+    case 1: state.current_tool = ORG_EX_INK_TOOL_HIGHLIGHTER; break;
+    case 2: state.current_tool = ORG_EX_INK_TOOL_ERASER; break;
+    default: state.current_tool = ORG_EX_INK_TOOL_PEN; break;
+    }
   state.cancelled = TRUE; /* default to cancelled until commit */
 
   state.committed_strokes = org_ex_ink_strokes_new ();
@@ -671,6 +989,105 @@ cmacs_org_ex_ink_capture_with_background (
                     G_CALLBACK (on_clear_clicked),  &state);
   g_signal_connect (btn_undo,   "clicked",
                     G_CALLBACK (on_undo_clicked),   &state);
+
+  /* --- Palette: tool selector + colour + width + (optional) bg ---
+     These live in a SECOND row of the toolbar to keep the commit
+     buttons visually distinct from the per-stroke controls. */
+  {
+    GtkWidget *palette = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_box_pack_start (GTK_BOX (vbox), palette, FALSE, FALSE, 4);
+
+    /* Three radio-style toggles: only one is "active" at a time.
+       GtkRadioButton would behave the same but draws as actual
+       radio buttons; for a toolbar we want toggle-button styling
+       with a manual radio implementation in `on_tool_toggled'. */
+    state.btn_pen    = gtk_toggle_button_new_with_label ("Pen");
+    state.btn_hilite = gtk_toggle_button_new_with_label ("Hilite");
+    state.btn_eraser = gtk_toggle_button_new_with_label ("Eraser");
+    gtk_box_pack_start (GTK_BOX (palette), state.btn_pen,    FALSE, FALSE, 0);
+    gtk_box_pack_start (GTK_BOX (palette), state.btn_hilite, FALSE, FALSE, 0);
+    gtk_box_pack_start (GTK_BOX (palette), state.btn_eraser, FALSE, FALSE, 0);
+    /* Initialise the active toggle from the seeded current_tool. */
+    gtk_toggle_button_set_active (
+      GTK_TOGGLE_BUTTON (state.btn_pen),
+      state.current_tool == ORG_EX_INK_TOOL_PEN);
+    gtk_toggle_button_set_active (
+      GTK_TOGGLE_BUTTON (state.btn_hilite),
+      state.current_tool == ORG_EX_INK_TOOL_HIGHLIGHTER);
+    gtk_toggle_button_set_active (
+      GTK_TOGGLE_BUTTON (state.btn_eraser),
+      state.current_tool == ORG_EX_INK_TOOL_ERASER);
+
+    /* Manual radio: when one toggle is turned on, deactivate the
+       other two.  GtkToggleButton's "toggled" signal fires for
+       both turn-on and turn-off; on_tool_toggled returns early
+       when the button is now inactive. */
+    g_signal_connect (state.btn_pen,    "toggled",
+                      G_CALLBACK (on_tool_toggled), &state);
+    g_signal_connect (state.btn_hilite, "toggled",
+                      G_CALLBACK (on_tool_toggled), &state);
+    g_signal_connect (state.btn_eraser, "toggled",
+                      G_CALLBACK (on_tool_toggled), &state);
+
+    /* Colour picker — affects the next stroke (per-tool colour
+       slot; see on_colour_set). */
+    lbl_colour = gtk_label_new ("Colour:");
+    gtk_box_pack_start (GTK_BOX (palette), lbl_colour, FALSE, FALSE, 8);
+    state.btn_colour = gtk_color_button_new ();
+    gtk_color_button_set_use_alpha (
+      GTK_COLOR_BUTTON (state.btn_colour), FALSE);
+    {
+      GdkRGBA c;
+      if (gdk_rgba_parse (
+            &c, state.current_tool == ORG_EX_INK_TOOL_HIGHLIGHTER
+                ? state.hilite_colour : state.pen_colour))
+        gtk_color_chooser_set_rgba (
+          GTK_COLOR_CHOOSER (state.btn_colour), &c);
+    }
+    gtk_box_pack_start (GTK_BOX (palette), state.btn_colour,
+                        FALSE, FALSE, 0);
+    g_signal_connect (state.btn_colour, "color-set",
+                      G_CALLBACK (on_colour_set), &state);
+
+    /* Width spin button — 0.5..20 in 0.5 increments.  Like
+       colour, this is per-tool and reflects the current tool
+       when the user toggles. */
+    lbl_width = gtk_label_new ("Width:");
+    gtk_box_pack_start (GTK_BOX (palette), lbl_width, FALSE, FALSE, 8);
+    state.spin_width = gtk_spin_button_new_with_range (0.5, 20.0, 0.5);
+    gtk_spin_button_set_digits (GTK_SPIN_BUTTON (state.spin_width), 1);
+    gtk_spin_button_set_value (
+      GTK_SPIN_BUTTON (state.spin_width),
+      state.current_tool == ORG_EX_INK_TOOL_HIGHLIGHTER
+        ? state.hilite_width_remembered : state.pen_base_width);
+    gtk_box_pack_start (GTK_BOX (palette), state.spin_width,
+                        FALSE, FALSE, 0);
+    g_signal_connect (state.spin_width, "value-changed",
+                      G_CALLBACK (on_width_changed), &state);
+
+    /* Background colour — only meaningful in canvas mode (no
+       screenshot).  In region-overlay mode the screenshot IS the
+       bg; users editing one shouldn't see this knob. */
+    if (state.background_surface == NULL)
+      {
+        lbl_bg = gtk_label_new ("Bg:");
+        gtk_box_pack_start (GTK_BOX (palette), lbl_bg, FALSE, FALSE, 8);
+        state.btn_bg = gtk_color_button_new ();
+        gtk_color_button_set_use_alpha (
+          GTK_COLOR_BUTTON (state.btn_bg), FALSE);
+        if (state.background_colour != NULL)
+          {
+            GdkRGBA c;
+            if (gdk_rgba_parse (&c, state.background_colour))
+              gtk_color_chooser_set_rgba (
+                GTK_COLOR_CHOOSER (state.btn_bg), &c);
+          }
+        gtk_box_pack_start (GTK_BOX (palette), state.btn_bg,
+                            FALSE, FALSE, 0);
+        g_signal_connect (state.btn_bg, "color-set",
+                          G_CALLBACK (on_bg_set), &state);
+      }
+  }
 
   /* Canvas */
   state.canvas = gtk_drawing_area_new ();
@@ -759,6 +1176,8 @@ cmacs_org_ex_ink_capture_with_background (
     }
 
   g_free (state.pen_colour);
+  g_free (state.hilite_colour);
+  g_free (state.background_colour);
   return result;
 }
 

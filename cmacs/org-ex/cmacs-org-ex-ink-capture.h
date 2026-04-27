@@ -69,6 +69,35 @@ GPtrArray *cmacs_org_ex_ink_capture_with_background (
                                      gboolean         side_button_erases,
                                      gboolean        *cancelled);
 
+/* Full-feature entry: all of the above plus
+ *
+ * @background_colour: a hex/named colour for the canvas page when
+ *           BACKGROUND_SURFACE is NULL.  Used by `#+BEGIN_INK'
+ *           canvas mode to theme-match the buffer's `default'
+ *           face.  NULL → white.  IGNORED when BACKGROUND_SURFACE
+ *           is non-NULL (screenshot wins).
+ *
+ * @default_tool: 0 = pen (default), 1 = highlighter, 2 = eraser.
+ *           Seeds the toolbar's current selection.  User may
+ *           override via the toolbar mid-session.
+ *
+ * @hilite_colour, @hilite_base_width: highlighter defaults.  NULL
+ *           and ≤ 0 fall back to "#ffd700" / 12.0.
+ */
+GPtrArray *cmacs_org_ex_ink_capture_full (
+                                     cairo_surface_t *background_surface,
+                                     const gchar     *background_colour,
+                                     GPtrArray       *initial,
+                                     gint             width,
+                                     gint             height,
+                                     const gchar     *colour,
+                                     gfloat           base_width,
+                                     const gchar     *hilite_colour,
+                                     gfloat           hilite_base_width,
+                                     gint             default_tool,
+                                     gboolean         side_button_erases,
+                                     gboolean        *cancelled);
+
 G_END_DECLS
 
 #endif /* CMACS_ORG_EX_INK_CAPTURE_H */

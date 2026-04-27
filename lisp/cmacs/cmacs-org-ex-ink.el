@@ -47,10 +47,58 @@
   :type 'string
   :group 'cmacs-org-ex-ink)
 
+(defcustom cmacs-org-ex-ink-highlighter-default-colour "#ffd700"
+  "Default highlighter colour in the capture window's palette.
+The user can change it per-stroke via the colour picker; this
+just seeds the toolbar when the highlighter tool is selected."
+  :type 'string
+  :safe #'stringp)
+
+(defcustom cmacs-org-ex-ink-highlighter-default-width 12.0
+  "Default highlighter width in pixels.
+Highlighters render with uniform width (no pressure modulation)
+and 0.5 alpha — see `org_ex_ink_paint_strokes_cairo' /
+`org-ex-ink-strokes-to-svg' for the renderer."
+  :type 'number
+  :safe #'numberp)
+
 (defcustom cmacs-org-ex-ink-default-base-width 2.0
   "Default pen base width in pixels."
   :type 'number
   :group 'cmacs-org-ex-ink)
+
+;; ---------------------------------------------------------------------
+;; Palette persistence (within the Emacs session, reset on restart)
+;; ---------------------------------------------------------------------
+
+(defvar-local cmacs-org-ex-ink--last-tool nil
+  "Last tool the user picked in the capture window (`pen' /
+`highlighter' / `eraser').  Carried across captures in the
+same buffer; nil means use the defcustom default.")
+
+(defvar-local cmacs-org-ex-ink--last-pen-colour nil)
+(defvar-local cmacs-org-ex-ink--last-pen-width nil)
+(defvar-local cmacs-org-ex-ink--last-hilite-colour nil)
+(defvar-local cmacs-org-ex-ink--last-hilite-width nil)
+
+(defun cmacs-org-ex-ink--theme-bg ()
+  "Return the current frame's `default' face background as a
+hex/named colour string.  Falls back to white when the lookup
+returns the symbol `unspecified' (terminal frames or themes
+that haven't set the attribute)."
+  (let ((bg (face-attribute 'default :background nil t)))
+    (if (and (stringp bg)
+             (not (string= bg "unspecified-bg")))
+        bg
+      "#ffffff")))
+
+(defun cmacs-org-ex-ink--effective-bg (block)
+  "Resolve BLOCK's effective background colour to a string.
+nil `:bg' (the default) means \"track the current theme\" and
+returns whatever `cmacs-org-ex-ink--theme-bg' produces right now;
+explicit `:bg \"#hex\"' or `:bg \"name\"' returns it literally."
+  (or (and block (cmacs-org-ex-ink-block-bg block))
+      (cmacs-org-ex-ink--theme-bg)))
 
 (defcustom cmacs-org-ex-ink-side-button-erases t
   "If non-nil, button-2 in the capture window acts as eraser.
@@ -107,7 +155,9 @@ KEY is a keyword symbol like :id, value is a string."
   args                ;; alist of header keyword args
   width
   height
-  id)
+  id
+  bg)                 ;; nil = track current theme bg at render time;
+                      ;; "#hex" / named colour = use literally.
 
 (defun cmacs-org-ex-ink--block-at-point ()
   "Return the `cmacs-org-ex-ink-block' surrounding point, or nil."
@@ -142,7 +192,8 @@ KEY is a keyword symbol like :id, value is a string."
              :width  (cmacs-org-ex-ink--header-int
                       args :w cmacs-org-ex-ink-default-width)
              :height (cmacs-org-ex-ink--header-int
-                      args :h cmacs-org-ex-ink-default-height))))))))
+                      args :h cmacs-org-ex-ink-default-height)
+             :bg     (cdr (assq :bg args)))))))))
 
 (defun cmacs-org-ex-ink--find-block-by-id (id)
   "Find the #+BEGIN_INK block whose `:id' equals ID and return it.
@@ -187,7 +238,8 @@ edits, the user accidentally launching another capture, etc.)."
                                       cmacs-org-ex-ink-default-width)
                              :height (cmacs-org-ex-ink--header-int
                                       args :h
-                                      cmacs-org-ex-ink-default-height)))))))))
+                                      cmacs-org-ex-ink-default-height)
+                             :bg     (cdr (assq :bg args))))))))))
           found)))))
 
 (defun cmacs-org-ex-ink--map-blocks (fn)
@@ -219,7 +271,8 @@ edits, the user accidentally launching another capture, etc.)."
                     :width  (cmacs-org-ex-ink--header-int
                              args :w cmacs-org-ex-ink-default-width)
                     :height (cmacs-org-ex-ink--header-int
-                             args :h cmacs-org-ex-ink-default-height))))))))
+                             args :h cmacs-org-ex-ink-default-height)
+                    :bg     (cdr (assq :bg args)))))))))
 
 ;; ---------------------------------------------------------------------
 ;; Block body <-> stroke set
@@ -293,11 +346,17 @@ refusing to write" begin))
   (setq cmacs-org-ex-ink--overlays nil))
 
 (defun cmacs-org-ex-ink--make-overlay (block strokes)
-  "Install an image overlay covering BLOCK's body region."
+  "Install an image overlay covering BLOCK's body region.
+The canvas page background is resolved per-render via
+`cmacs-org-ex-ink--effective-bg' — when BLOCK's `:bg' is nil
+this picks up the current theme's `default' face background, so
+canvases stay visually consistent with their buffer across
+theme switches without touching the file."
   (let* ((svg (org-ex-ink-strokes-to-svg
                strokes
                (cmacs-org-ex-ink-block-width block)
-               (cmacs-org-ex-ink-block-height block)))
+               (cmacs-org-ex-ink-block-height block)
+               (cmacs-org-ex-ink--effective-bg block)))
          (img (create-image svg 'svg t
                             :scale 1.0
                             :ascent 'center))
@@ -426,20 +485,34 @@ so subsequent typing can never accidentally leak into the body."
 (defun cmacs-org-ex-ink-edit ()
   "Edit the ink block at point in the modal capture window.
 On commit, point is left on the line AFTER #+END_INK so that
-subsequent typing cannot leak into the block body."
+subsequent typing cannot leak into the block body.
+
+The capture is seeded with:
+  - the block's effective background colour (theme-tracked when
+    no `:bg' is set in the header);
+  - the last-used pen colour / width / tool from this buffer's
+    persistence vars (or the defcustom defaults if none yet)."
   (interactive)
   (let ((block (cmacs-org-ex-ink--block-at-point)))
     (unless block
       (user-error "Point is not inside a #+BEGIN_INK block"))
     (let* ((id (cmacs-org-ex-ink-block-id block))
            (initial (cmacs-org-ex-ink--block-strokes block))
+           (bg     (cmacs-org-ex-ink--effective-bg block))
+           (colour (or cmacs-org-ex-ink--last-pen-colour
+                       cmacs-org-ex-ink-default-colour))
+           (width  (or cmacs-org-ex-ink--last-pen-width
+                       cmacs-org-ex-ink-default-base-width))
+           (tool   (or cmacs-org-ex-ink--last-tool 'pen))
            (result  (org-ex-ink-capture
                      initial
                      (cmacs-org-ex-ink-block-width block)
                      (cmacs-org-ex-ink-block-height block)
-                     cmacs-org-ex-ink-default-colour
-                     cmacs-org-ex-ink-default-base-width
-                     cmacs-org-ex-ink-side-button-erases))
+                     colour
+                     width
+                     cmacs-org-ex-ink-side-button-erases
+                     bg
+                     tool))
            (new-strokes (car result))
            (cancelled   (cdr result)))
       (cond

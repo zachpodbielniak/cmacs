@@ -736,6 +736,45 @@ during a Wacom =tablet-tool-added/done= dispatch can re-enter GTK
 widget realisation in an inconsistent device state and trigger a GDK
 assertion.
 
+** Palette
+
+The toolbar's second row holds the palette controls.  All of them
+affect the /next/ stroke; previously-committed strokes keep the
+colour, width, and tool that were active when they were drawn.
+
+- *Tool selector (Pen / Hilite / Eraser)* -- three radio-style
+  toggle buttons.  The tablet eraser-end always forces eraser
+  regardless of the toolbar (real eraser end wins), so flipping a
+  Wacom pen still erases even when the toolbar shows "Pen".
+- *Colour picker* (=GtkColorButton=) -- opens the standard GTK
+  colour chooser.  The picker is per-tool: switching to Hilite
+  remembers the highlighter colour; switching back to Pen restores
+  the pen colour.  Eraser ignores colour.
+- *Width spin button* -- 0.5--20.0 px in 0.5 increments.  Per-tool:
+  Pen and Highlighter remember their own widths.  Pen width
+  modulates with pressure (=0.3 + 0.7 * pressure=); highlighter is
+  always uniform.
+- *Background colour* -- only shown in canvas (=#+BEGIN_INK=) mode.
+  Region overlay ink uses a screenshot of the buffer text so it
+  already inherits the theme.  Changing bg in the capture window
+  recolours the canvas page and writes =:bg "#hex"= into the block
+  header so it persists.
+
+The highlighter is a uniform-width semi-transparent stroke (alpha
+0.5).  It serialises as a normal stroke S-expression with
+=:t highlighter=; the renderer (both SVG overlay and live Cairo
+paint) checks the tool type and applies the fixed alpha + skips
+pressure-driven width modulation.
+
+Palette state persists in buffer-local defvars within the Emacs
+session, so re-opening the capture starts from your last choice.
+Restart resets to the =cmacs-org-ex-ink-default-*= defcustoms.
+
+When a =#+BEGIN_INK= block omits =:bg=, the renderer looks up the
+current theme's =default= face background at render time so the
+canvas blends into the buffer regardless of theme.  Adding =:bg
+"#hex"= to the header pins the canvas to that literal colour.
+
 ** Marginalia
 
 Marginalia are per-line ink notes anchored to source code or

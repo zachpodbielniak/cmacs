@@ -237,6 +237,8 @@ can skip re-parsing on every redisplay."
           :end-marker   end-marker
           :width  (or (plist-get plist :width)  400)
           :height (or (plist-get plist :height) 60)
+          :capture-dx (or (plist-get plist :capture-dx) 0)
+          :capture-dy (or (plist-get plist :capture-dy) 0)
           :strokes-string strokes-string
           :strokes-ptr    strokes-ptr
           :region-hash hash
@@ -274,6 +276,8 @@ can skip re-parsing on every redisplay."
           :region-hash (plist-get anchor :region-hash)
           :width  (plist-get anchor :width)
           :height (plist-get anchor :height)
+          :capture-dx (or (plist-get anchor :capture-dx) 0)
+          :capture-dy (or (plist-get anchor :capture-dy) 0)
           :created (plist-get anchor :created)
           :strokes (nreverse forms))))
 
@@ -290,31 +294,56 @@ can skip re-parsing on every redisplay."
   (format "rgn-%04x" (random #x10000)))
 
 (defun cmacs-ink-region--region-pixel-rect (start end)
-  "Return (X Y W H) frame-pixel rectangle covering the [START..END] region.
+  "Return (X Y W H DX DY) for the [START..END] region.
+X Y W H is the frame-pixel screenshot rectangle.  DX, DY are the
+text-area-relative offsets from the START glyph to the rect's
+top-left.  When START is to the right of (or below) END (e.g.
+multi-line region whose END sits at column 0 of a continuation
+line), the rect extends LEFT (or UP) of START, and DX/DY are the
+positive offsets needed at paint time to recover the rect's
+top-left from the start-marker's current glyph position.
+
 Falls back to the current line geometry if either endpoint is
 not currently visible — keeps the screenshot path robust against
 horizontal scrolling and folded regions."
   (let ((s-pos (posn-at-point start))
         (e-pos (posn-at-point end))
-        (window-edges (window-pixel-edges (selected-window))))
+        ;; Use *body* pixel edges (text area in frame coords) so that
+        ;; (body-left + posn-x, body-top + posn-y) = frame-absolute
+        ;; glyph origin.  `window-pixel-edges' is the window's OUTER
+        ;; top-left and excludes the tab-line + header-line height,
+        ;; while `posn-x-y' returns text-area-relative coords — the
+        ;; mismatch made the screenshot top-left land
+        ;; (tab+header) pixels above the actual glyph, and the C
+        ;; overlay (which uses pos_visible_p's window-box-relative
+        ;; y) painted strokes ~1.5 lines below where the user drew.
+        (body-edges (window-body-pixel-edges (selected-window))))
     (unless (and s-pos e-pos)
       (user-error "cmacs-ink-region: selected region not currently visible"))
     (let* ((s-xy (posn-x-y s-pos))
            (e-xy (posn-x-y e-pos))
-           (sx (+ (car window-edges) (car s-xy)))
-           (sy (+ (cadr window-edges) (cdr s-xy)))
-           (ex (+ (car window-edges) (car e-xy)))
-           (ey (+ (cadr window-edges) (cdr e-xy)))
+           (sx (+ (car body-edges) (car s-xy)))
+           (sy (+ (cadr body-edges) (cdr s-xy)))
+           (ex (+ (car body-edges) (car e-xy)))
+           (ey (+ (cadr body-edges) (cdr e-xy)))
            (line-h (line-pixel-height))
            ;; Bounding box: leftmost X of either endpoint,
            ;; topmost Y, extending to the right window edge and
            ;; one line below the bottom endpoint.
-           (right-edge (nth 2 window-edges))
+           (right-edge (nth 2 body-edges))
            (x (min sx ex))
            (y (min sy ey))
            (w (- right-edge x))
-           (h (- (+ (max sy ey) line-h) y)))
-      (list x y (max 50 w) (max line-h h)))))
+           (h (- (+ (max sy ey) line-h) y))
+           ;; dx/dy: how far (right, down) the start-marker glyph
+           ;; sits from the rect's top-left.  When start is the
+           ;; leftmost/topmost endpoint these are 0; for multi-line
+           ;; regions where end falls at column 0 of a later line,
+           ;; the rect extends left and `dx' captures the gap so
+           ;; paint can re-derive rect top-left from the marker.
+           (dx (- sx x))
+           (dy (- sy y)))
+      (list x y (max 50 w) (max line-h h) dx dy))))
 
 ;;;###autoload
 (defun cmacs-ink-region-annotate (start end)
@@ -341,6 +370,8 @@ overlay) on the same buffer / sidecar."
   (let* ((rect (cmacs-ink-region--region-pixel-rect start end))
          (x (nth 0 rect)) (y (nth 1 rect))
          (w (nth 2 rect)) (h (nth 3 rect))
+         (dx (or (nth 4 rect) 0))
+         (dy (or (nth 5 rect) 0))
          (bg (cmacs-frame-screenshot-rect x y w h))
          (capture (org-ex-ink-capture-with-background
                    bg nil w h
@@ -362,6 +393,10 @@ overlay) on the same buffer / sidecar."
                            :end-marker em
                            :width  w
                            :height h
+                           ;; Stroke (0,0) on canvas = rect top-left.
+                           ;; Paint origin = (start-marker glyph) - (dx, dy).
+                           :capture-dx dx
+                           :capture-dy dy
                            :strokes-string text
                            ;; Reuse the GPtrArray we already have
                            ;; from capture — avoids one parse cycle
@@ -407,6 +442,8 @@ overlay) on the same buffer / sidecar."
                (plist-get target :end-marker)))
            (rect (cmacs-ink-region--region-pixel-rect s e))
            (w (nth 2 rect)) (h (nth 3 rect))
+           (dx (or (nth 4 rect) 0))
+           (dy (or (nth 5 rect) 0))
            (bg (cmacs-frame-screenshot-rect
                 (nth 0 rect) (nth 1 rect) w h))
            (initial (org-ex-ink-strokes-from-string
@@ -423,6 +460,8 @@ overlay) on the same buffer / sidecar."
         ;; Refresh the cached parsed-strokes user-ptr so the next
         ;; redisplay picks up the new strokes without re-parsing.
         (plist-put target :strokes-ptr (car capture))
+        (plist-put target :capture-dx dx)
+        (plist-put target :capture-dy dy)
         (plist-put target :region-hash
                    (cmacs-ink-region--region-hash s e))
         (setq cmacs-ink-region--dirty t) (cmacs-ink--save)

@@ -3406,12 +3406,10 @@ pgtk_frame_up_to_date (struct frame *f)
   if (!buffer_flipping_blocked_p ())
     {
       flip_cr_context (f);
-#ifdef HAVE_CMACS_GLIB
-      /* cmacs-ink-overlay: paint transparent stroke layers on top
-         of the just-flipped glyph contents.  No-op when no buffer
-         visible in this frame has region annotations. */
-      cmacs_ink_overlay_paint (f);
-#endif
+      /* cmacs-ink-overlay paint moved to pgtk_handle_draw — see
+         comment above pgtk_buffer_flipping_unblocked_hook for why
+         painting onto the persistent back-surface accumulated alpha
+         across redisplays. */
       gtk_widget_queue_draw (FRAME_GTK_WIDGET (f));
     }
   unblock_input ();
@@ -4814,17 +4812,18 @@ pgtk_buffer_flipping_unblocked_hook (struct frame *f)
 {
   block_input ();
   flip_cr_context (f);
-#ifdef HAVE_CMACS_GLIB
-  /* cmacs-ink-overlay: this is the canonical "redisplay just
-     finished" notification during the normal `redisplay_internal'
-     flow.  `pgtk_frame_up_to_date' is invoked too, but during
-     redisplay flips are blocked, so its `cmacs_ink_overlay_paint'
-     call is a no-op there.  Paint here so the strokes get
-     reapplied on every redisplay cycle (cursor moves, region
-     selection, scroll, edits) — without this, partial line
-     repaints clear stroke pixels and they don't come back. */
-  cmacs_ink_overlay_paint (f);
-#endif
+  /* cmacs-ink-overlay paint MOVED to `pgtk_handle_draw'.  Earlier
+     this site painted strokes onto the back-surface cr_context, but
+     the back surface persists across redisplays — partial repaints
+     (cursor blinks, point moves, scrolling) leave stroke pixels in
+     unchanged rows untouched, and the next redisplay's overlay
+     paint adds *another* alpha-0.5 layer on top, accumulating
+     toward full opacity within a few cycles (highlighter looked
+     solid yellow within a couple of cursor blinks).  Painting in
+     `pgtk_handle_draw' instead targets the GTK widget's per-event
+     cr (a fresh context per draw signal that copies cr_surface and
+     then runs our paint), so each composite is independent and
+     0.5α stays 0.5α. */
   gtk_widget_queue_draw (FRAME_GTK_WIDGET (f));
   unblock_input ();
 }
@@ -5077,6 +5076,17 @@ pgtk_handle_draw (GtkWidget *widget, cairo_t *cr, gpointer *data)
 	  cairo_set_source_surface (cr, src, 0, 0);
 	  cairo_paint (cr);
 	}
+#ifdef HAVE_CMACS_GLIB
+      /* cmacs-ink-overlay: paint stroke layers AFTER the back-
+         surface copy so they land on top of the buffer text.  This
+         site replaces the old back-surface paint in
+         `pgtk_buffer_flipping_unblocked_hook' / `pgtk_frame_up_to_date'
+         — painting here is idempotent because `cr' is a fresh
+         per-draw GTK context, so 0.5α highlighters stay 0.5α
+         instead of accumulating to opacity. */
+      if (f != NULL)
+        cmacs_ink_overlay_paint (f, cr);
+#endif
     }
   return FALSE;
 }
