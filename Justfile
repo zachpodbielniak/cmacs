@@ -16,6 +16,16 @@ emacs_args  := ""
 jobs        := `nproc`
 gowl_dir    := "deps/gowl"
 
+# Android build settings.  Override per-invocation:
+#   just android_image_tag=foo:dev android-build
+android_image_tag  := "cmacs-android:latest"
+android_doom_core  := env_var_or_default('CMACS_DOOM_CORE',    env_var('HOME') + "/.config/emacs")
+android_doom_priv  := env_var_or_default('CMACS_DOOM_PRIVATE', env_var('HOME') + "/.config/doom")
+android_out_dir    := justfile_directory() + "/build/android-out"
+android_abi        := env_var_or_default('CMACS_ANDROID_ABI', "aarch64")
+# `podman` by default; set to `docker` if you don't have podman.
+container_runtime  := env_var_or_default('CMACS_CONTAINER_RUNTIME', "podman")
+
 # Full configure-flag set lifted from CLAUDE.md so we never forget one.
 # Mirrors the recommended dev build: pgtk + native comp + every cmacs
 # subsystem.  Override an individual flag by editing here, or pass
@@ -426,3 +436,289 @@ gowl-pointer:
     @git ls-tree HEAD {{ gowl_dir }} | awk '{print $3}'
     @echo -n "submodule HEAD:    "
     @cd {{ gowl_dir }} && git rev-parse HEAD
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Android APK build (containerized — no host JDK / SDK / NDK needed)
+# ──────────────────────────────────────────────────────────────────────
+#
+# Pipeline: `just android-image` once, then `just android-build` whenever
+# you want a fresh APK.  See plan in
+# .claude/plans/i-want-you-to-shimmying-finch.md for the full design.
+#
+# Doom is bundled from $CMACS_DOOM_CORE (default ~/.config/emacs) and
+# $CMACS_DOOM_PRIVATE (default ~/.config/doom) at build time.  On
+# first launch on the phone, lisp/site-start.el seeds them into the
+# app's HOME so the user lands in their Doom config.
+
+# Build the Fedora+JDK21+SDK36+NDK image (~3-4 GB; ~10 min first run).
+[group('android')]
+android-image:
+    {{ container_runtime }} build \
+        -f Containerfile.android \
+        -t {{ android_image_tag }} .
+
+# Repack upstream's prebuilt APK with our Doom bundle injected (recommended path).
+[group('android')]
+android-repack:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ ! -d "{{ android_doom_core }}" ]; then
+        echo "Doom core not found at {{ android_doom_core }}" >&2
+        exit 2
+    fi
+    if [ ! -d "{{ android_doom_priv }}" ]; then
+        echo "Doom private not found at {{ android_doom_priv }}" >&2
+        exit 2
+    fi
+    doom_core_real=$(realpath -e "{{ android_doom_core }}")
+    doom_priv_real=$(realpath -e "{{ android_doom_priv }}")
+    cache_dir="{{ justfile_directory() }}/build/upstream-apk-cache"
+    mkdir -p "{{ android_out_dir }}" "$cache_dir"
+    echo "==> Repacking upstream APK in {{ container_runtime }}: {{ android_image_tag }}"
+    echo "    doom core:     $doom_core_real"
+    echo "    doom private:  $doom_priv_real"
+    echo "    cache:         $cache_dir"
+    echo "    output:        {{ android_out_dir }}"
+    {{ container_runtime }} run --rm -t \
+        -v "{{ justfile_directory() }}:/work/cmacs:Z" \
+        -v "$doom_core_real:/work/doom-core:ro,Z" \
+        -v "$doom_priv_real:/work/doom-private:ro,Z" \
+        -v "{{ android_out_dir }}:/work/out:Z" \
+        -v "$cache_dir:/work/upstream-cache:Z" \
+        {{ android_image_tag }} \
+        bash /work/cmacs/build-aux/android-repack.sh
+
+# Build a Doom-bundled APK in the container; output: build/android-out/.
+[group('android')]
+android-build:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ ! -d "{{ android_doom_core }}" ]; then
+        echo "Doom core not found at {{ android_doom_core }}" >&2
+        echo "  set CMACS_DOOM_CORE=/path/to/.config/emacs to override" >&2
+        exit 2
+    fi
+    if [ ! -d "{{ android_doom_priv }}" ]; then
+        echo "Doom private not found at {{ android_doom_priv }}" >&2
+        echo "  set CMACS_DOOM_PRIVATE=/path/to/.config/doom to override" >&2
+        exit 2
+    fi
+    # Canonicalise via `realpath` — `~/.config/{emacs,doom}` are
+    # commonly symlinks into a dotfiles checkout (e.g.
+    # ~/.dotfiles/.config/...), and podman's :Z relabel does not
+    # traverse symlinks.  Without canonicalisation the SELinux
+    # context on the symlink target stays as `config_home_t' and
+    # the container hits `Permission denied' on read.
+    doom_core_real=$(realpath -e "{{ android_doom_core }}")
+    doom_priv_real=$(realpath -e "{{ android_doom_priv }}")
+    mkdir -p "{{ android_out_dir }}"
+    echo "==> Building APK in {{ container_runtime }}: {{ android_image_tag }}"
+    echo "    abi:          {{ android_abi }}"
+    echo "    doom core:    $doom_core_real"
+    echo "    doom private: $doom_priv_real"
+    echo "    output:       {{ android_out_dir }}"
+    {{ container_runtime }} run --rm -t \
+        -e ANDROID_ABI={{ android_abi }} \
+        -e CMACS_ANDROID_VANILLA="${CMACS_ANDROID_VANILLA:-0}" \
+        -v "{{ justfile_directory() }}:/work/cmacs:Z" \
+        -v "$doom_core_real:/work/doom-core:ro,Z" \
+        -v "$doom_priv_real:/work/doom-private:ro,Z" \
+        -v "{{ android_out_dir }}:/work/out:Z" \
+        {{ android_image_tag }} \
+        bash /work/cmacs/build-aux/android-build.sh
+
+# Drop into bash inside the Android build container (same mounts as android-build).
+[group('android')]
+android-shell:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    doom_core_real=$(realpath -e "{{ android_doom_core }}")
+    doom_priv_real=$(realpath -e "{{ android_doom_priv }}")
+    {{ container_runtime }} run --rm -it \
+        -e ANDROID_ABI={{ android_abi }} \
+        -v "{{ justfile_directory() }}:/work/cmacs:Z" \
+        -v "$doom_core_real:/work/doom-core:ro,Z" \
+        -v "$doom_priv_real:/work/doom-private:ro,Z" \
+        -v "{{ android_out_dir }}:/work/out:Z" \
+        --workdir /work/cmacs \
+        {{ android_image_tag }} \
+        bash
+
+# Clean Android build artifacts (APKs, staged Doom bundle, java/ + cross/ state).
+[group('android')]
+android-clean:
+    -rm -rf "{{ android_out_dir }}"
+    -rm -rf build-aux/android-doom-bundle
+    -rm -rf java/install_temp java/classes
+    -find java -maxdepth 1 -name 'emacs-*.apk' -delete
+    -[ -d cross ] && make -C cross distclean 2>/dev/null || true
+
+# adb install the latest APK (host adb if installed, else container w/ USB passthrough).
+[group('android')]
+android-deviceinstall:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    apk=$(ls -t "{{ android_out_dir }}"/*.apk 2>/dev/null | head -1)
+    if [ -z "$apk" ]; then
+        echo "No APK in {{ android_out_dir }} — run \`just android-build\` first." >&2
+        exit 2
+    fi
+    if command -v adb >/dev/null; then
+        echo "==> [host adb] install -r $apk"
+        adb install -r "$apk"
+    else
+        echo "==> [container adb] install -r $(basename "$apk")"
+        {{ container_runtime }} run --rm -t \
+            --device /dev/bus/usb \
+            -v "{{ android_out_dir }}:/work/out:Z" \
+            {{ android_image_tag }} \
+            adb install -r "/work/out/$(basename "$apk")"
+    fi
+
+# Live-tail device logcat filtered to Emacs tags + Java/native crashes (Ctrl-C to stop).
+[group('android')]
+android-logcat:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Tag filter: app-side (EmacsActivity, EmacsService, EmacsThread,
+    # libemacs from ndk-stack), Java runtime exceptions
+    # (AndroidRuntime), native crash tombstones (DEBUG / libc), then
+    # silence everything else with `*:S'.
+    filter='EmacsActivity:V EmacsService:V EmacsThread:V Emacs:V AndroidRuntime:E DEBUG:V libc:E zygote:E *:S'
+    echo "==> clearing logcat buffer; relaunch the app on your device now."
+    if command -v adb >/dev/null; then
+        adb logcat -c
+        adb logcat $filter
+    else
+        {{ container_runtime }} run --rm -it \
+            --device /dev/bus/usb \
+            {{ android_image_tag }} \
+            sh -c "adb logcat -c && adb logcat $filter"
+    fi
+
+# Force-stop, relaunch, then dump tagged logcat — one-shot crash capture.
+[group('android')]
+android-logcat-snapshot:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Filter widened: capture libc abort trails (libc:F), the
+    # tombstone backtrace (DEBUG / crash_dump64 are the bionic
+    # crash-handler tags), Java runtime exceptions, and the Emacs
+    # tags.  *:S silences the rest.
+    filter='EmacsActivity:V EmacsService:V EmacsThread:V Emacs:V AndroidRuntime:E DEBUG:V libc:V crash_dump64:V crash_dump32:V tombstoned:V *:S'
+    pkg=org.gnu.emacs
+    # 8s wait — the DEBUG tombstone is written ~1-3s AFTER the
+    # SIGABRT in libc, and crash_dump64 takes another second to
+    # flush.  4s sometimes misses it.
+    cmd="adb logcat -c \
+      && adb shell am force-stop $pkg \
+      && adb shell monkey -p $pkg -c android.intent.category.LAUNCHER 1 >/dev/null \
+      && sleep 8 \
+      && adb logcat -d $filter | tail -400"
+    if command -v adb >/dev/null; then
+        bash -c "$cmd"
+    else
+        {{ container_runtime }} run --rm -t \
+            --device /dev/bus/usb \
+            {{ android_image_tag }} \
+            sh -c "$cmd"
+    fi
+
+# Identify which library a given hex address falls in by snapshotting /proc/PID/maps.
+# Usage: just android-addr2lib 0x749f003718
+#
+# Uses `am set-debug-app -w' so the app waits for a debugger attach
+# before crossing into native code — gives us unlimited time to read
+# the live process's memory map.  The wait is cleared at end-of-run.
+[group('android')]
+android-addr2lib ADDR:
+    #!/usr/bin/env bash
+    # Deliberately NOT using `set -e' or `pipefail' — pidof exits 1
+    # when the app process hasn't appeared yet, and we WANT to keep
+    # polling.
+    set -u
+    pkg=org.gnu.emacs
+    addr={{ ADDR }}
+    cleanup() { adb shell am clear-debug-app >/dev/null 2>&1 || true ; }
+    trap cleanup EXIT
+    echo "==> arming debug-wait on $pkg"
+    adb shell am force-stop "$pkg" >/dev/null 2>&1 || true
+    adb shell am set-debug-app -w "$pkg" >/dev/null 2>&1 || \
+        echo "  (set-debug-app may have failed; continuing — may still catch pid quickly)" >&2
+    adb shell monkey -p "$pkg" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 || true
+    echo "==> waiting for app to land in pre-debug pause"
+    pid=
+    for i in $(seq 1 80); do
+        pid=$(adb shell pidof "$pkg" 2>/dev/null | tr -d '\r' | awk '{print $1}' || true)
+        [ -n "$pid" ] && break
+        sleep 0.1
+    done
+    if [ -z "$pid" ]; then
+        echo "couldn't catch the app pid even with debug-wait armed" >&2
+        exit 2
+    fi
+    echo "pid: $pid"
+    tmp=$(mktemp)
+    adb shell "cat /proc/$pid/maps 2>/dev/null" > "$tmp"
+    if [ ! -s "$tmp" ]; then
+        echo "/proc/$pid/maps was empty — possibly need run-as $pkg" >&2
+        # Try via run-as (works on debuggable APKs)
+        adb shell "run-as $pkg cat /proc/$pid/maps 2>/dev/null" > "$tmp" || true
+    fi
+    if [ ! -s "$tmp" ]; then
+        echo "still empty; aborting" >&2
+        rm -f "$tmp"
+        exit 2
+    fi
+    awk -v t=$(printf '%d' "$addr") '
+        /^[0-9a-f]+-[0-9a-f]+/ {
+            line[NR] = $0
+            split($1, r, "-")
+            lo = strtonum("0x" r[1])
+            hi = strtonum("0x" r[2])
+            if (t >= lo && t < hi) hit = NR
+        }
+        END {
+            if (!hit) { printf "addr 0x%x not found\n", t; exit }
+            printf "addr 0x%x falls in:\n\n", t
+            for (n = hit-5; n <= hit+5; n++) {
+                if (line[n]) {
+                    marker = (n == hit) ? "==> " : "    "
+                    printf "%s%s\n", marker, line[n]
+                }
+            }
+        }
+    ' "$tmp"
+    rm -f "$tmp"
+    # Hand control back: also let the app proceed (so the pre-debug
+    # hold doesn't strand the process forever).
+    adb shell am clear-debug-app >/dev/null 2>&1 || true
+    adb shell run-as "$pkg" kill -CONT "$pid" >/dev/null 2>&1 || true
+
+# Pull the latest /data/tombstones/* off the device (needs root).
+[group('android')]
+android-tombstones:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out="{{ android_out_dir }}/tombstones"
+    mkdir -p "$out"
+    cmd="adb shell 'su -c \"ls -t /data/tombstones/ 2>/dev/null\" || ls -t /data/tombstones/ 2>/dev/null' \
+      | head -1 \
+      | xargs -I{} sh -c 'adb shell \"su -c cat /data/tombstones/{}\" 2>/dev/null \
+                          || adb pull /data/tombstones/{} -' > '$out/latest.txt'"
+    if command -v adb >/dev/null; then
+        bash -c "$cmd"
+    else
+        echo "Tombstone pull requires host adb (and likely root on the device)." >&2
+        echo "Most non-rooted phones won't allow /data/tombstones/ access." >&2
+        echo "Use \`just android-logcat-snapshot\` instead." >&2
+        exit 2
+    fi
+    if [ -s "$out/latest.txt" ]; then
+        echo "==> wrote $out/latest.txt"
+        head -40 "$out/latest.txt"
+    else
+        echo "Tombstone empty / not readable (device probably not rooted)." >&2
+        exit 2
+    fi

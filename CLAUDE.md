@@ -126,6 +126,41 @@ All cmacs features are auto-detected. The configure script checks for system pac
   - **Storage policy** (`lisp/cmacs/cmacs-ink-storage.el`): annotations (per-line marginalia + region overlays) are persisted via a single dispatcher governed by `cmacs-ink-storage` (`'auto` / `'inline` / `'sidecar`; default `'auto`). Org buffers store inline as a folded `* cmacs-ink :noexport:` heading containing `#+BEGIN_INK_MARGINALIA` and `#+BEGIN_INK_REGION` blocks (one stroke per line — git-diff-friendly and self-contained with the file). Non-org buffers store in `<source>.cmacs-ink` sidecars (now also pretty-printed: one anchor per indented form, one stroke per line). Loader tries inline first, falls back to sidecar — old single-line sidecars (`cmacs-ink/marginalia/1` and `/2`) load cleanly; the next save upgrades to pretty-printed (or to inline). Migration command: `M-x cmacs-ink-migrate-to-inline` (org buffers only).
 - **mcp**: system `mcp-glib-1.0` package or bundled `deps/mcp-glib` + json-glib-1.0, libsoup-3.0, libdex-1
 
+## Android APK build
+
+Containerized — host needs only `podman` (or `docker`).  Two paths:
+
+### Path 1 (recommended): `just android-repack`
+
+Repackages upstream Po Lu's prebuilt APK from SourceForge with our Doom bundle injected.  Works around a libhwui-mutex bug we couldn't isolate against upstream's binary on at least **Samsung Fold 5 / Android 16** — the from-source path crashes there with `FORTIFY: pthread_mutex_lock called on a destroyed mutex (0x749f003718)`, the destroyed-looking mutex turning out to be inside `/system/lib64/libhwui.so`'s BSS, presumably mis-initialized when the framework's `vendor.display.enable_optimal_refresh_rate` property reads come back access-denied.
+
+Flow (see `build-aux/android-repack.sh`):
+1. Downloads `emacs-31.0.50-35-arm64-v8a.apk` from `https://sourceforge.net/projects/android-ports-for-gnu-emacs/files/` (cached under `build/upstream-apk-cache/`).
+2. Unzips, drops `assets/doom-bundle/{emacs,doom}` (from `$HOME/.config/{emacs,doom}`) and `assets/lisp/site-start.el` into the tree.
+3. Strips `META-INF/`, re-zips with `resources.arsc` and `lib/**/*.so` STORED uncompressed (Android 30+ requirement), zipaligns, resigns with `java/emacs.keystore` (`emacs1` storepass — same key upstream uses, so installs over an existing upstream install).
+
+We ship Po Lu's exact `libemacs.so` — no source-level customisation possible — but the Doom asset bundle still rides along and the on-device shim still seeds HOME on first launch.
+
+### Path 2: `just android-build`
+
+Cross-compiles from source.  Currently produces an APK that crashes on Samsung Fold 5 (see Path 1 caveat); kept for environments where the libhwui interaction is benign and for hacking on Emacs C internals.
+
+- `Containerfile.android` — Fedora 43 + JDK 21 (Temurin) + Android SDK 36 + NDK r28.2 (pinned).  Includes `libselinux-devel` on the host for the outer configure's selinux check (otherwise `with_selinux=no` propagates and `libselinux_emacs.so` is dropped).
+- `/opt/ndk-ports/` is staged with the full upstream-matching SourceForge port set: gnutls + deps, libxml2, harfbuzz, tree-sitter, libffi, libiconv, image libs (jpeg/png/gif/tiff), pixman + cairo + glib + pango + gdk-pixbuf + libcroco + rsvg + libselinux.  Plus AOSP `pcre` (cloned at `android-7.1.2_r1` for its Android.mk).  Tiff's `libtiff/Android.mk` + `Makefile.{am,in}` are sed-patched at image-build time to drop webp imports (no webp port available on SourceForge).
+- `build-aux/android-build.sh` runs the cross-build inside the container; `--with-ndk-path` points at all of `/opt/ndk-ports/*/`, `--with-selinux=yes` is passed explicitly (defaults to "maybe" which skips the cross-build's ndk_SEARCH_MODULE selinux branch).  `selinux/selinux.h` is staged into the NDK sysroot at image build (the gnulib `AC_CHECK_HEADER` for `<selinux/selinux.h>` doesn't pick up `--with-ndk-path`'s include flags otherwise).
+- `--without-android-debug` matches upstream's release-mode signing (`debuggable=false`); debug-mode triggers extra HyperOS/OneUI checks that are part of the libhwui crash chain.
+- `CMACS_ANDROID_VANILLA=1` env var skips the Doom bundle injection — useful for diagnostic builds that should match upstream byte-for-byte.
+
+### Shared concerns
+
+- `just android-image` — build/refresh the container image (~4 GB, ~10 min first run, cached afterward).
+- `just android-deviceinstall` — `adb install` the most recent APK in `build/android-out/`.  Falls back to container `adb` with `/dev/bus/usb` passthrough if host `adb` isn't installed.
+- `just android-logcat-snapshot` — force-stop, relaunch, and dump 400 lines of logcat filtered to Emacs + bionic crash tags.  Use to capture startup crashes.
+- `just android-addr2lib ADDR` — race-launch via `am set-debug-app -w`, dump `/proc/<pid>/maps`, identify which library covers a given hex address.  Indispensable for FORTIFY tracebacks.
+- `lisp/site-start.el` — first-launch shim.  On Android (detected via `system-configuration` containing `"android"`) it copies `/assets/doom-bundle/{emacs,doom}` into `$HOME/.config/{emacs,doom}` if absent, then re-points `user-emacs-directory` and `startup-init-directory` so `early-init.el`/`init.el` load from Doom.  No-op on every other build.
+- `java/Makefile.in` — patched `install_temp` rule: when `build-aux/android-doom-bundle/` exists, copy it into `install_temp/assets/doom-bundle/` (only used by `android-build`; `android-repack` injects the bundle into the unzipped upstream APK directly).
+- On-device first run: launch Emacs, then `M-x doom-sync` once (network required) to install the Doom packages into the seeded `~/.config/emacs/.local/` — they don't ship in the APK.  No native compilation on Android (no `libgccjit` for NDK; configure passes `--without-native-compilation`).
+
 ## Testing
 
 ```bash

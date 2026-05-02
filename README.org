@@ -461,6 +461,67 @@ sudo ldconfig   # refresh linker cache
 
 Then configure with =--with-cmacs-crispy=system= etc.
 
+** Android APK (containerized, Doom Emacs embedded)
+
+CMacs ships a containerized Android APK build pipeline.  The host
+needs only =podman= (or =docker=); the JDK, Android SDK, NDK, and
+build-tools live inside the container image.
+
+The APK is *stock GNU Emacs* — none of the cmacs C subsystems
+(gowl, bacon, libreclaw, podomation, mcp, org-ex) cross-compile to
+the Android NDK.  What the APK *does* embed is the host user's Doom
+Emacs configuration: =~/.config/emacs= (Doom core) and
+=~/.config/doom= (private layer) are bundled as Android assets and
+seeded into the app's =$HOME= on first launch.
+
+There are two ways to build:
+
+- =just android-repack= (recommended) — downloads upstream Po Lu's
+  prebuilt APK from SourceForge, injects our Doom bundle, resigns,
+  done.  Works on devices where from-source builds crash (notably
+  Samsung Fold 5 / Android 16, which trips a libhwui mutex bug
+  we couldn't isolate).
+- =just android-build= — cross-compile Emacs from source.  Slower,
+  works on most devices, lets you hack on Emacs C internals.
+
+#+begin_src bash
+# One-time: build the Fedora + JDK 21 + Android SDK 36 + NDK r28
+# container image (~4 GB, ~10 min the first time).
+just android-image
+
+# Recommended: repack upstream's prebuilt APK with our Doom bundle.
+# ~30 s, output in build/android-out/.
+just android-repack
+
+# Alternative: build Emacs from source.
+just android-build
+
+# Install onto a connected device:
+just android-deviceinstall
+#+end_src
+
+Override the bundled config locations or target ABI via env vars:
+
+#+begin_src bash
+# Embed a different Doom checkout
+CMACS_DOOM_CORE=/path/to/.config/emacs \
+CMACS_DOOM_PRIVATE=/path/to/.config/doom \
+just android-build
+
+# 64-bit x86 emulator instead of aarch64 phone:
+CMACS_ANDROID_ABI=x86_64 just android-build
+#+end_src
+
+On-device first launch: =M-x doom-sync= once (network required) to
+install Doom's packages into the seeded =~/.config/emacs/.local/=.
+The shim at =lisp/site-start.el= handles the seeding; subsequent
+launches skip it and never overwrite on-device edits.  Native
+compilation is disabled (no =libgccjit= for the NDK), so Doom runs
+on byte-code.
+
+See =Containerfile.android=, =build-aux/android-build.sh=, and the
+=[android]= recipe group in the =Justfile= for the full pipeline.
+
 * Testing
 
 #+begin_src bash

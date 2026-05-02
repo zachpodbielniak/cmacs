@@ -1,0 +1,207 @@
+# Containerfile.android — Android APK build environment for cmacs
+#
+# Builds a stock GNU Emacs APK (no cmacs C subsystems — none of them
+# cross-compile to NDK) with the host user's Doom Emacs config bundled
+# as Android assets.  See build-aux/android-build.sh and the
+# `android-*' recipes in the top-level Justfile.
+#
+# Pinned versions for reproducibility:
+#   - Fedora 43 base
+#   - Eclipse Temurin OpenJDK 17 LTS (downloaded as a tarball — Fedora
+#     43 only packages JDK 21/25/latest, but upstream Emacs's
+#     configure.ac runs javac with -source 1.7 -target 1.7 as a hard-
+#     coded sanity check (see lines ~1182, 1205), which JDK 21+
+#     rejects with "release version 7 not supported".  JDK 17 still
+#     accepts source/target 1.7 with a warning.  Pinned digest below.)
+#   - Android SDK Platform 36   (API 36 — java/INSTALL:42)
+#   - Android Build Tools 36.0.0
+#   - Android NDK r27c (27.2.12479018) — latest LTS
+#   - cmdline-tools 13.0  (sdkmanager)
+#
+# The source tree is NOT copied in.  Run with bind mounts (see
+# `just android-build') so a single image serves every code change.
+
+ARG FEDORA_VERSION=43
+FROM registry.fedoraproject.org/fedora:${FEDORA_VERSION} AS android-builder
+ARG FEDORA_VERSION
+
+# Pinned tool versions — bump deliberately, never floating.
+ARG ANDROID_API=36
+ARG ANDROID_BUILD_TOOLS=36.0.0
+ARG ANDROID_NDK_VERSION=28.2.13676358
+ARG ANDROID_CMDLINE_TOOLS_VERSION=13.0
+ARG ANDROID_CMDLINE_TOOLS_ZIP=commandlinetools-linux-13114758_latest.zip
+# Temurin JDK 17 LTS.  Pin to a specific build so APK byte-code is
+# reproducible.  17.0.13+11 (Oct 2024) is the most recent 17-LTS at
+# pin time.  See https://adoptium.net/temurin/releases/?version=17
+ARG TEMURIN_JDK_VERSION=17.0.13_11
+ARG TEMURIN_JDK_TAG=jdk-17.0.13%2B11
+ARG TEMURIN_JDK_TARBALL=OpenJDK17U-jdk_x64_linux_hotspot_17.0.13_11.tar.gz
+
+ENV ANDROID_HOME=/opt/android-sdk \
+    ANDROID_SDK_ROOT=/opt/android-sdk \
+    JAVA_HOME=/opt/jdk-17 \
+    DEBIAN_FRONTEND=noninteractive
+
+# --- 1. Base build deps (host-side Emacs build + cross-build infra)
+RUN dnf install -y \
+        autoconf automake gcc make pkgconf-pkg-config texinfo m4 \
+        gnutls-devel ncurses-devel zlib-devel libselinux-devel \
+        rsync curl tar gzip unzip zip which findutils git \
+        glibc-langpack-en ca-certificates \
+    && dnf clean all
+
+# --- 1b. Eclipse Temurin JDK 17 (tarball install — see header)
+#
+# Two-step extract: download under /tmp, untar into /opt, rename the
+# top-level `jdk-17.0.x+y` dir to plain `jdk-17` so JAVA_HOME is
+# stable across pin bumps.  No sha256 verification because Adoptium
+# publishes signed checksum files but not pinned-by-digest binaries
+# — we trust the GitHub release pin (TEMURIN_JDK_TAG).
+RUN mkdir -p /opt \
+    && cd /tmp \
+    && for attempt in 1 2 3 4 5; do \
+         echo "==> JDK download attempt $attempt" ; \
+         if curl -fsSL --retry 5 --retry-delay 4 --retry-all-errors \
+              -o jdk.tar.gz \
+              "https://github.com/adoptium/temurin17-binaries/releases/download/${TEMURIN_JDK_TAG}/${TEMURIN_JDK_TARBALL}" ; \
+         then break ; fi ; \
+         sleep $((attempt * 5)) ; \
+       done \
+    && tar -xzf jdk.tar.gz -C /opt \
+    && mv /opt/jdk-17* /opt/jdk-17 \
+    && rm jdk.tar.gz \
+    && /opt/jdk-17/bin/java -version
+
+# --- 2. Android cmdline-tools (sdkmanager) into $ANDROID_HOME
+#
+# Layout dictated by sdkmanager: cmdline-tools must live at
+# $ANDROID_HOME/cmdline-tools/latest/ for the SDK manager to find
+# itself.  Downloads from Google's CDN (no auth needed).
+RUN mkdir -p "$ANDROID_HOME/cmdline-tools" \
+    && cd /tmp \
+    && curl -fsSL -o cmdline-tools.zip \
+        "https://dl.google.com/android/repository/${ANDROID_CMDLINE_TOOLS_ZIP}" \
+    && unzip -q cmdline-tools.zip -d "$ANDROID_HOME/cmdline-tools" \
+    && mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" \
+          "$ANDROID_HOME/cmdline-tools/latest" \
+    && rm cmdline-tools.zip
+
+ENV PATH="$JAVA_HOME/bin:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
+
+# --- 3. SDK packages: platform, build-tools, NDK
+#
+# `yes |` accepts every licence prompt; the -licenses pass before the
+# install ensures the install isn't gated on an interactive prompt.
+RUN yes | sdkmanager --licenses > /dev/null \
+    && sdkmanager --install \
+        "platforms;android-${ANDROID_API}" \
+        "build-tools;${ANDROID_BUILD_TOOLS}" \
+        "ndk;${ANDROID_NDK_VERSION}" \
+        "platform-tools" \
+    && rm -rf "$ANDROID_HOME/.android"
+
+# Surface the NDK and build-tools paths now that ANDROID_NDK_VERSION
+# is fixed; the build script references these env vars by name.
+ENV ANDROID_NDK_HOME="$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}" \
+    ANDROID_NDK_ROOT="$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}" \
+    ANDROID_BUILD_TOOLS_VERSION=${ANDROID_BUILD_TOOLS} \
+    ANDROID_API_LEVEL=${ANDROID_API} \
+    ANDROID_NDK_API_LEVEL=35 \
+    PATH="$ANDROID_HOME/build-tools/${ANDROID_BUILD_TOOLS}:$PATH"
+
+# ANDROID_API_LEVEL (36) selects the android.jar to compile against.
+# ANDROID_NDK_API_LEVEL (35) selects the NDK clang triple — NDK r27c
+# ships per-API binaries `aarch64-linux-android21-clang` ..
+# `aarch64-linux-android35-clang` only.  If you bump ANDROID_NDK_VERSION
+# to a release that ships android36 binaries, raise this value to
+# match.  The two API levels do NOT need to be equal: the APK
+# compiles against API 36 and runs on devices ≥ ANDROID_NDK_API_LEVEL.
+
+# --- 4. Sanity: print what's installed at image-build time so a
+#       broken pin fails the image build, not the APK build later.
+RUN sdkmanager --list_installed \
+    && javac --version \
+    && echo "ANDROID_HOME=$ANDROID_HOME ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
+
+# --- 5. Pre-cross-compiled NDK ports (gnutls/jpeg/png/tree-sitter/...)
+#
+# Upstream Emacs Android requires cross-compiled libraries pointed
+# at via `--with-ndk-path' (see java/INSTALL).  Po Lu (the Android
+# port maintainer) publishes pre-built tarballs at
+# https://sourceforge.net/projects/android-ports-for-gnu-emacs/.
+# Without these, configure either errors out (gnutls/jpeg/png/etc.
+# default-on) or the resulting binary takes degraded init paths
+# that have triggered libc-internal mutex races on at least HyperOS
+# Android 16 — the upstream APK works on those devices because it
+# bundles these ports.
+#
+# Versions pinned for reproducibility.  Each tarball is GPL/LGPL.
+# Total download ~80 MB; extracts to ~/work/ndk-ports/.
+ARG NDK_PORTS_DIR=/opt/ndk-ports
+ENV NDK_PORTS_DIR=${NDK_PORTS_DIR}
+
+RUN mkdir -p "${NDK_PORTS_DIR}" \
+    && cd "${NDK_PORTS_DIR}" \
+    && SF=https://sourceforge.net/projects/android-ports-for-gnu-emacs/files \
+    && for tarball in \
+         gmp-6.3.0-emacs.tar.gz             \
+         nettle-3.8-emacs.tar.gz            \
+         libtasn1-4.19.0-emacs.tar.gz       \
+         p11-kit-0.24.1-emacs.tar.gz        \
+         gnutls-3.8.5-emacs.tar.gz          \
+         libiconv-1.17-emacs.tar.gz         \
+         libxml2-2.12.4-emacs.tar.gz        \
+         libjpeg-turbo-3.0.2-emacs.tar.gz   \
+         libpng-1.6.41-emacs.tar.gz         \
+         giflib-5.2.1-emacs.tar.gz          \
+         tiff-4.5.0-emacs.tar.gz            \
+         libffi-3.4.5-emacs.tar.gz          \
+         harfbuzz-7.1.0-emacs.tar.gz        \
+         tree-sitter-0.26.3-emacs.tar.gz    \
+         pixman-0.38.4-emacs.tar.gz         \
+         cairo-1.16.0-emacs.tar.gz          \
+         glib-2.33.14-emacs.tar.gz          \
+         pango-1.38.1-emacs.tar.gz          \
+         gdk-pixbuf-2.22.1-emacs.tar.gz     \
+         libcroco-0.6.13-emacs.tar.gz       \
+         rsvg-2.40.21-emacs.tar.gz          \
+         libselinux-3.6-emacs.tar.gz        ; do \
+         echo "==> downloading $tarball" ; \
+         curl -fsSL -o "$tarball" "$SF/$tarball/download" ; \
+         tar -xzf "$tarball" ; \
+         rm -f "$tarball" ; \
+       done \
+    && echo "==> cloning AOSP pcre (Android.mk-era tag)" \
+    && git clone --depth=1 \
+         --branch android-7.1.2_r1 \
+         https://android.googlesource.com/platform/external/pcre pcre \
+    && rm -rf pcre/.git \
+    && test -f pcre/Android.mk || { echo "pcre missing Android.mk" >&2; exit 1; } \
+    && echo "==> staging libselinux headers into NDK sysroot" \
+    && cp -r "${NDK_PORTS_DIR}/libselinux-3.6/include/selinux" \
+             "${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/" \
+    && echo "==> patching tiff to drop webp (no webp port available)" \
+    && for f in "${NDK_PORTS_DIR}/tiff-4.5.0/libtiff/Android.mk" \
+                "${NDK_PORTS_DIR}/tiff-4.5.0/libtiff/Makefile.am" \
+                "${NDK_PORTS_DIR}/tiff-4.5.0/libtiff/Makefile.in" ; do \
+         sed -i \
+           -e '/LOCAL_STATIC_LIBRARIES.*webp/d' \
+           -e '/import-module.*webp/d' \
+           -e '/tif_webp\.c/d' \
+           "$f" ; \
+       done \
+    && if grep -E "webp" "${NDK_PORTS_DIR}/tiff-4.5.0/libtiff/Android.mk" >&2 ; then \
+         echo "ERROR: webp still present in tiff Android.mk" >&2 ; \
+         exit 1 ; \
+       fi \
+    && echo "    tiff Android.mk + Makefile.{am,in} webp-free" \
+    && ls -1 "${NDK_PORTS_DIR}/" | sort
+
+# --- 6. Working area for bind-mounted source.  Nothing is COPYed in;
+#       the source tree comes from `-v $PWD:/work/cmacs:Z` at runtime.
+WORKDIR /work
+RUN mkdir -p /work/cmacs /work/doom-core /work/doom-private /work/out
+
+# Default to bash so `just android-shell' lands you somewhere useful.
+CMD ["/bin/bash"]

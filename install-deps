@@ -73,6 +73,11 @@ detect_platform () {
 #   PKGS_TS       — tree-sitter
 #   PKGS_GLIB     — glib, gobject-introspection
 #   PKGS_GOWL     — wlroots, wayland, libinput, xkbcommon, pango, cairo
+#
+# Android APK builds do NOT use this script — they run inside the
+# `cmacs-android` container image (see Containerfile.android +
+# `just android-image`).  The host needs only `podman` (or
+# `docker`); JDK / Android SDK / NDK live in the image.
 
 set_packages_fedora () {
 	PKGS_BUILD=(autoconf automake gcc make pkgconf-pkg-config texinfo)
