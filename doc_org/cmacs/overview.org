@@ -5,7 +5,7 @@
 * What Is CMacs
 
 CMacs is GNU Emacs with deep GLib/GObject/Wayland integration.  It adds
-seven subsystems as C primitives (DEFUNs), all built into the editor:
+several subsystems as C primitives (DEFUNs), all built into the editor:
 
 | Subsystem  | Directory        | Purpose                                              |
 |------------+------------------+------------------------------------------------------|
@@ -16,6 +16,7 @@ seven subsystems as C primitives (DEFUNs), all built into the editor:
 | *crispy*   | =cmacs/crispy/=  | C scripting --- compile and run C at runtime          |
 | *bacon*    | =cmacs/bacon/=   | Embedded shell (fork-of-self, socketpair IPC)         |
 | *gowl*     | =cmacs/gowl/=    | Wayland compositor (wlroots) --- 47 DEFUNs            |
+| *print*    | =cmacs/print/=   | "Print to cmacs" CUPS virtual printer + PDF intake    |
 
 * Source Layout
 

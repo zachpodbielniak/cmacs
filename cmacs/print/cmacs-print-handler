@@ -1,0 +1,68 @@
+#!/bin/sh
+# cmacs-print-handler — ippeveprinter command handler.
+#
+# Copyright (C) 2026 Zach Podbielniak
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Invoked per-job by ippeveprinter when running as a per-user IPP
+# virtual printer (the immutable-system path).  Counterpart of the
+# system CUPS backend at cmacs/print/cmacs-print, but simpler — we
+# already run as the target user, so no `su`, no D-Bus address
+# reconstruction, no privilege handoff.
+#
+# Document data arrives on stdin.  Job metadata via IPP_* env vars
+# (ippeveprinter convention):
+#   IPP_JOB_ID, IPP_JOB_NAME, IPP_REQUESTING_USER_NAME,
+#   CONTENT_TYPE, OUTPUT_FORMAT, ...
+
+set -eu
+
+SPOOL="${XDG_RUNTIME_DIR:-/tmp}/cmacs-print"
+mkdir -p "$SPOOL"
+chmod 0700 "$SPOOL"
+
+JOB_ID="${IPP_JOB_ID:-0}"
+TITLE="${IPP_JOB_NAME:-untitled}"
+TS="$(date +%Y%m%d-%H%M%S)"
+
+# Match the elisp-side sanitiser (cmacs-print--sanitise-title): keep
+# [A-Za-z0-9._-], cap at 80 chars.  The result is safe to interpolate
+# both into the elisp form and the on-disk filename.
+SAFE_TITLE="$(printf '%s' "$TITLE" | tr -c '[:alnum:]._-' '_' | cut -c1-80)"
+[ -n "$SAFE_TITLE" ] || SAFE_TITLE=untitled
+
+OUT="${SPOOL}/${TS}-job${JOB_ID}-${SAFE_TITLE}.pdf"
+
+# Slurp the document.  ippeveprinter sends application/pdf on stdin
+# when the printer is configured with -f application/pdf.
+cat > "$OUT"
+chmod 0600 "$OUT"
+
+# --- Hand off to cmacs ------------------------------------------------
+
+EXPR="(cmacs-print-import-pdf \"${OUT}\" \"${SAFE_TITLE}\")"
+
+if gdbus call --session \
+     --dest=org.cmacs.Editor1 \
+     --object-path=/org/cmacs/Editor \
+     --method=org.cmacs.Editor1.Eval \
+     "${EXPR}" >/dev/null 2>&1; then
+  exit 0
+fi
+
+# --- Fallback: drop into inbox + notify -------------------------------
+
+INBOX="${HOME}/Documents/notes/03_resources/cmacs-print/inbox"
+mkdir -p "$INBOX"
+mv "$OUT" "$INBOX/" 2>/dev/null || cp "$OUT" "$INBOX/"
+
+# Best-effort desktop notification.  Ignored if no notification daemon.
+if command -v notify-send >/dev/null 2>&1; then
+  notify-send "cmacs not running" \
+    "Print job saved to ~/Documents/notes/03_resources/cmacs-print/inbox/" \
+    >/dev/null 2>&1 || true
+fi
+
+# Exit 0 so ippeveprinter records the job as completed.  Returning
+# non-zero would loop the queue.
+exit 0

@@ -47,6 +47,7 @@ interaction.
 * LibreClaw::                   Matrix/email/webhook chat integration.
 * Org-Ex Interactive Widgets::  Widget embedding in Org buffers.
 * MCP Server::                  MCP server for AI-native control.
+* Print to cmacs::              Virtual printer + PDF intake for annotation.
 * Build Configuration::         Configure flags and dependencies.
 @end menu
 
@@ -4196,6 +4197,239 @@ Elisp layer: @code{cmacs-mcp-mode}, configuration, hooks.
 @end table
 
 @c ===================================================================
+@node Print to cmacs
+@chapter Print to cmacs
+
+@cindex print to cmacs
+@cindex cups
+@cindex virtual printer
+@cindex pdf import
+
+@quotation
+This chapter mirrors @file{doc_org/cmacs/print.org}; that file is the
+primary interactive reference.
+@end quotation
+
+@section Overview
+
+``Print to cmacs'' is a CUPS virtual printer that delivers print jobs
+into a running cmacs instance as multi-page annotatable org documents.
+Modelled after Microsoft OneNote's ``Print to OneNote'' --- print from
+any application, get an annotation canvas in your editor.
+
+A small CUPS backend (@file{cmacs/print/cmacs-print}) staged at
+@file{/usr/lib/cups/backend/cmacs-print} (root:root, mode 0700, as
+CUPS requires) accepts print jobs over stdin and atomically writes
+them to @file{/tmp/cmacs-print-<uid>/<TS>-job<ID>-<title>.pdf}.
+Cmacs (when @file{cmacs-print.el} is loaded) @code{file-notify}
+-watches that directory and runs @code{cmacs-print-import-pdf} in its
+own @code{unconfined_t} security context.
+
+This pull-from-spool architecture deliberately avoids three SELinux
+dead ends in stock Fedora policy that all silently deny without an
+AVC entry (suppressed by @code{dontaudit} rules):
+
+@itemize @bullet
+@item
+@code{cupsd_t} writing to @code{user_tmp_t} (= @file{/run/user/$UID/}).
+@item
+@code{cupsd_t} writing to @code{user_home_t} (the user's home dir).
+@item
+@code{cupsd_t} running @command{su} / @command{runuser} / @command{gdbus}
+to talk to the user's session.
+@end itemize
+
+@file{/tmp/} has the @code{tmp_t} label, which @code{cupsd_t} can
+manage freely.
+
+A periodic @code{cmacs-print-poll-interval} drain (default 30 s) is the
+belt-and-suspenders fallback for daemon-without-frame setups where
+@code{file-notify} events can lag.  If cmacs is not running when a
+print arrives, the PDF sits in @file{/tmp/cmacs-print-<uid>/} until
+cmacs starts; the load-time drain picks it up then.
+
+@code{cmacs-print-import-pdf} rasterises the PDF into per-page PNGs
+(@command{pdftocairo -png -r 150}) and writes a generated
+@file{index.org} with one @samp{* Page N} heading per page, each
+followed by an inline @code{[[file:...]]} image link.
+
+Annotation rides on the existing cmacs-ink subsystem (see
+@ref{Org-Ex Interactive Widgets}) plus the user's Doom annotation
+plugins:
+
+@table @asis
+@item @code{cmacs-ink-region}
+Pixel-anchored overlay strokes that float on top of the rendered page
+image as a transparent layer.  Primary ``draw on the page'' path.
+@item @code{org-remark}
+Persistent text-anchored highlights and notes.
+@item @code{org-noter}
+Side-by-side notes paired against the original PDF.
+@item @code{pdf-tools}
+Used to view the original PDF directly.
+@item @code{org-roam}
+Links the imported doc into the user's note graph.
+@end table
+
+@section Installation
+
+There are two install modes.  Pick based on whether @file{/usr} is
+writable on your system.
+
+@subsection System mode (mutable Linux)
+
+Stages a CUPS backend at @file{/usr/lib/cups/backend/cmacs-print}
+(root:root, mode 0700, as CUPS requires) and registers a CUPS queue
+named @samp{cmacs}.
+
+@example
+make install-cmacs-printer    # prompts for sudo
+@end example
+
+On immutable / OSTree systems (Fedora Silverblue, Atomic, Bluefin,
+Bazzite, Universal Blue, NixOS), the installer detects
+@file{/run/ostree-booted} or a non-writable @file{/usr} and redirects
+you to the per-user install with a single message rather than
+failing.  Override with @code{CMACS_PRINT_FORCE_SYSTEM=1} after
+@command{sudo bootc usroverlay} or for layered RPM builds.
+
+@subsection Per-user mode (immutable systems / no-sudo)
+
+Runs @command{ippeveprinter} (ships with CUPS) as a per-user systemd
+service.  The printer advertises via mDNS; @command{cups-browsed}
+discovers it and surfaces @samp{cmacs} in every app's print dialog.
+No @file{/usr} writes, no sudo:
+
+@example
+make install-cmacs-printer-user
+@end example
+
+The installer drops:
+
+@itemize @bullet
+@item
+@file{~/.local/libexec/cmacs/cmacs-print-handler} --- per-job handler.
+@item
+@file{~/.config/systemd/user/cmacs-print.service} --- service unit
+with absolute paths substituted in.
+@end itemize
+
+Then @code{systemctl --user enable --now cmacs-print.service}.
+
+If @command{cups-browsed} is inactive on your system, the installer
+prints the one-time @code{sudo systemctl enable --now cups-browsed}
+needed to make discovered printers visible to applications.  That is
+the @emph{only} sudo step on any OSTree variant.
+
+@subsection Verify and remove
+
+@example
+lpstat -p cmacs               # should report "idle"
+make check-cmacs-printer      # reports both modes + immutability
+
+# remove:
+make uninstall-cmacs-printer        # system mode
+make uninstall-cmacs-printer-user   # per-user mode
+@end example
+
+@section Configuration
+
+All defcustoms live in @file{lisp/cmacs/cmacs-print.el}:
+
+@table @code
+@item cmacs-print-target-dir
+Output directory.  Default
+@file{~/Documents/notes/03_resources/cmacs-print}.
+@item cmacs-print-output-formats
+Which artefacts to produce per print job.  A list containing any of
+@code{org} (rasterise the PDF and generate an annotatable org doc with
+inline page images) and @code{pdf} (keep a full copy of the PDF).
+Default @code{(org pdf)}.
+@item cmacs-print-dpi
+@command{pdftocairo -r} value.  Default @code{150}.
+@item cmacs-print-max-pages
+Confirmation-prompt threshold for very large PDFs.  Default @code{200}.
+@item cmacs-print-auto-open
+If non-nil, open the imported document on success.
+@item cmacs-print-rasterizer-program
+External rasteriser.  Default @code{"pdftocairo"}.
+@item cmacs-print-pdfinfo-program
+External metadata reader.  Default @code{"pdfinfo"}.
+@item cmacs-print-debug
+Log every step to @samp{*cmacs-print-log*}.  Default @code{nil}.
+@end table
+
+Output is one self-contained directory per print job under
+@code{cmacs-print-target-dir}:
+
+@example
+20260502-142300-receipt/
+  index.org              # if 'org in formats
+  source.pdf             # if 'pdf in formats
+  page-001.png           # if 'org (one per page)
+  page-002.png
+20260502-150412-other-doc/
+  ...
+@end example
+
+The org file references its siblings by bare basename
+(@code{page-001.png}, @code{source.pdf}) so the whole directory is
+self-contained --- copy or move it anywhere and the links keep working.
+
+@section Usage
+
+Pick @samp{cmacs} as the printer in any application's print dialog,
+or invoke programmatically:
+
+@example
+M-x cmacs-print-import-pdf-interactive
+@end example
+
+@noindent
+or from the shell:
+
+@example
+gdbus call --session \
+  --dest=org.cmacs.Editor1 \
+  --object-path=/org/cmacs/Editor \
+  --method=org.cmacs.Editor1.Eval \
+  '(cmacs-print-import-pdf "/tmp/test.pdf" "test")'
+@end example
+
+@noindent
+or to drain prints that arrived while cmacs was down:
+
+@example
+M-x cmacs-print-reprocess-inbox
+@end example
+
+@section File Reference
+
+@table @file
+@item cmacs/print/cmacs-print
+System CUPS backend (POSIX shell, runs as root).
+@item cmacs/print/cmacs-print.ppd
+PPD declaring @code{application/pdf} passthrough.
+@item cmacs/print/install-cmacs-printer.sh
+System installer.  Auto-redirects to user-mode on immutable systems.
+@item cmacs/print/uninstall-cmacs-printer.sh
+System uninstaller.
+@item cmacs/print/cmacs-print-handler
+Per-user IPP handler (POSIX shell).
+@item cmacs/print/cmacs-print.service.in
+systemd user-unit template.
+@item cmacs/print/install-cmacs-printer-user.sh
+Per-user installer.  No sudo, no @file{/usr} writes.
+@item cmacs/print/uninstall-cmacs-printer-user.sh
+Per-user uninstaller.
+@item lisp/cmacs/cmacs-print.el
+Elisp module: @code{cmacs-print-import-pdf} entry point + helpers.
+@item test/cmacs/cmacs-print-tests.el
+ERT tests for sanitisation, PNG dimension parsing, org generation,
+page renaming.
+@end table
+
+@c ===================================================================
 @node Build Configuration
 @chapter Build Configuration
 
@@ -4231,7 +4465,8 @@ fully-featured build matching Fedora defaults, use:
   --with-cmacs-podomation \
   --with-cmacs-libreclaw \
   --with-cmacs-org-ex \
-  --with-cmacs-mcp
+  --with-cmacs-mcp \
+  --with-cmacs-print
 @end example
 
 @noindent
@@ -4282,6 +4517,9 @@ system-installed @code{bacon-1.0} via pkg-config instead.
   @tab MCP server (built from deps/mcp-glib/)
 @item cmacs-mcp (system) @tab mcp-glib-1.0
   @tab MCP server (system package)
+@item cmacs-print @tab pdftocairo, pdfinfo, gdbus (runtime, on PATH)
+  @tab Print to cmacs virtual printer + PDF intake
+  (poppler-utils + glib2 / libglib2.0-bin)
 @end multitable
 
 @section Building the Bacon Module

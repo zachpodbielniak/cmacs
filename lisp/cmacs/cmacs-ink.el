@@ -43,6 +43,7 @@
 (require 'cmacs-ink-marginalia)
 (require 'cmacs-ink-region)
 (require 'cmacs-ink-storage)
+(require 'cmacs-print)
 
 (defgroup cmacs-ink nil
   "Wacom tablet integration for cmacs."

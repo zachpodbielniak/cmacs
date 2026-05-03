@@ -1,0 +1,468 @@
+#+TITLE: Print to cmacs
+#+STARTUP: showall
+#+OPTIONS: toc:2 num:t
+
+* Overview
+
+"Print to cmacs" is a CUPS virtual printer that delivers print jobs
+into a running cmacs instance as multi-page annotatable org documents.
+Modelled after Microsoft OneNote's "Print to OneNote" — print from any
+application, get an annotation canvas in your editor.
+
+A small CUPS backend (=cmacs/print/cmacs-print=) staged at
+=/usr/lib/cups/backend/cmacs-print= (root:root, mode 0700, as CUPS
+requires) accepts print jobs over stdin and atomically writes them
+to =/tmp/cmacs-print-<uid>/<TS>-job<ID>-<title>.pdf=.  Cmacs (when
+=cmacs-print.el= is loaded) =file-notify=-watches that directory and
+runs =cmacs-print-import-pdf= for each new file in the user's own
+security context.
+
+This pull-from-spool architecture deliberately avoids three SELinux
+dead ends in stock Fedora policy that all silently deny without an
+AVC entry:
+
+- =cupsd_t= writing to =user_tmp_t= (= =/run/user/$UID/=)
+- =cupsd_t= writing to =user_home_t= (the user's home directory)
+- =cupsd_t= running =su= / =runuser= / =gdbus= to talk to the user
+
+=/tmp/= has the =tmp_t= label, which =cupsd_t= can manage freely,
+and the per-uid subdirectory + mode 0700 keeps prints private on
+multi-user systems.
+
+The watcher is paired with a periodic
+=cmacs-print-poll-interval= drain (default 30 s) as a redundancy
+net for daemon-without-frame setups where =file-notify= events
+can lag.  If cmacs isn't running when you print, the PDF sits in
+=/tmp/cmacs-print-<uid>/= until cmacs starts; the load-time drain
+picks it up then.
+
+=cmacs-print-import-pdf= rasterises the PDF into per-page PNGs
+(=pdftocairo -png -r 150=) and writes a generated =index.org= with
+one =* Page N= heading per page, each followed by an inline
+=[[file:...]]= image link.
+
+Annotation rides on the existing =cmacs-ink= subsystem
+(see [[file:org-ex.org][Org-Ex Interactive Widgets]]) plus the user's Doom annotation
+plugins:
+
+- =cmacs-ink-region= — pixel-anchored overlay strokes that float on
+  top of the rendered page image as a transparent layer.  This is the
+  primary "draw on the page" path.
+- =org-remark= — persistent text-anchored highlights and notes.
+- =org-noter= — side-by-side notes paired against the original PDF
+  (kept alongside the org doc when both formats are enabled).
+- =pdf-tools= — used to view the original PDF directly.
+- =org-roam= — links the imported doc into the user's note graph.
+
+* Architecture
+
+#+begin_example
++----------------------+
+| any application      |
++----------+-----------+
+           | print
+           v
++----------------------+
+| CUPS / cupsd         |
++----------+-----------+
+           | stdin (PDF)
+           v
++----------------------+
+| /usr/lib/cups/       |
+|  backend/cmacs-print |   (POSIX shell, runs as root)
++----------+-----------+
+           | atomic write
+           v
++----------------------+
+| /tmp/cmacs-print-    |
+|  <uid>/<TS>-...pdf   |   (tmp_t label; cupsd_t-writable)
++----------+-----------+
+           ^ file-notify
+           |
++----------------------+
+| cmacs                |
+| `-> cmacs-print.el   |
+|     +- watcher       |   (file-notify + 30s poll fallback)
+|     +- pdfinfo       |   (read title, page count)
+|     +- pdftocairo    |   (rasterise async)
+|     `- write index.org
++----------------------+
+#+end_example
+
+Why pull (file-notify) instead of push (D-Bus)?  Stock Fedora SELinux
+policy silently denies =cupsd_t= → user-bus delivery, =cupsd_t= → su,
+and =cupsd_t= → user_home_t writes (all by =dontaudit= rules, so the
+failures don't even show up in =ausearch=).  Pull-via-/tmp/ sidesteps
+all three because cmacs reads in its own =unconfined_t= domain.
+
+Rasterisation happens asynchronously inside cmacs via =make-process=,
+so a 50-page PDF doesn't lock the editor.  If cmacs isn't running
+when a print arrives, the PDF sits in =/tmp/cmacs-print-<uid>/= until
+cmacs starts; the load-time drain picks it up then.  =/tmp= survives
+until reboot, so anything queued before reboot is lost.
+
+* Installation
+
+There are two install modes.  Pick based on whether your =/usr= is
+writable.
+
+** System mode (mutable Linux)
+
+Two steps.  First, stage the CUPS backend (system-wide, sudo):
+
+#+begin_src bash
+make install-cmacs-printer    # prompts for sudo
+# or:
+just install-cmacs-printer
+# or:
+./cmacs/print/install-cmacs-printer.sh
+#+end_src
+
+Second, install the editor-independent drainer (per-user, no sudo):
+
+#+begin_src bash
+make install-cmacs-print-watcher
+#+end_src
+
+This sets up a =systemd --user= path+service pair:
+
+- =cmacs-print-drain.path= — kernel-inotify watcher on
+  =/tmp/cmacs-print-<uid>/=
+- =cmacs-print-drain.service= — fires on inotify; runs cmacs in batch
+  mode just long enough to call =(cmacs-print-drain-spool)=
+
+This is what makes prints land in your notes directory **without
+needing an interactive cmacs running**.  Latency from print to
+drained directory is ~1 second.  Without it, prints sit in
+=/tmp/cmacs-print-<uid>/= until you start a cmacs that has loaded
+=cmacs-print.el=.
+
+On immutable / OSTree systems (Fedora Silverblue, Atomic, Bluefin,
+Bazzite, Universal Blue, NixOS), the system installer detects
+=/run/ostree-booted= or a non-writable =/usr= and redirects you to the
+per-user install below with a single message rather than silently
+failing.  Override with =CMACS_PRINT_FORCE_SYSTEM=1= if you have
+=/usr= writable via =sudo bootc usroverlay= or a layered RPM.  The
+drainer install is the same regardless of which CUPS path you used.
+
+** Per-user mode (immutable systems / no-sudo)
+
+Runs =ippeveprinter= (ships with CUPS) as a per-user systemd service.
+The printer advertises via mDNS; =cups-browsed= (active by default on
+every Fedora desktop spin) discovers it and surfaces =cmacs= in
+every app's print dialog.  No =/usr= writes, no sudo:
+
+#+begin_src bash
+make install-cmacs-printer-user
+# or:
+just install-cmacs-printer-user
+# or:
+./cmacs/print/install-cmacs-printer-user.sh
+#+end_src
+
+The installer drops:
+
+- =~/.local/libexec/cmacs/cmacs-print-handler= --- per-job handler
+- =~/.config/systemd/user/cmacs-print.service= --- service unit
+  (absolute paths to =ippeveprinter= and the handler are substituted
+  at install time)
+
+…and runs =systemctl --user enable --now cmacs-print.service=.
+
+If =cups-browsed= is inactive on your system, the installer prints the
+one-time =sudo systemctl enable --now cups-browsed= command needed to
+make mDNS-discovered printers visible to applications.  That is the
+*only* sudo step required on any OSTree variant, and it touches
+=/etc/= only (writable on every immutable Linux).
+
+Lifecycle:
+
+#+begin_src bash
+systemctl --user status  cmacs-print.service
+systemctl --user stop    cmacs-print.service
+journalctl  --user -u    cmacs-print.service -f
+#+end_src
+
+** Verify either mode
+
+#+begin_src bash
+lpstat -p cmacs               # should report "idle"
+make check-cmacs-printer      # full diagnostic — reports both modes
+#+end_src
+
+** Remove
+
+#+begin_src bash
+make uninstall-cmacs-printer        # system mode
+make uninstall-cmacs-printer-user   # per-user mode
+#+end_src
+
+** Files in =cmacs/print/=
+
+| File                              | Purpose                                                             |
+|-----------------------------------+---------------------------------------------------------------------|
+| =cmacs-print=                     | System CUPS backend (POSIX shell, root)                             |
+| =cmacs-print.ppd=                 | PPD declaring =application/pdf= passthrough                         |
+| =install-cmacs-printer.sh=        | System installer.  Auto-redirects to user-mode on immutable systems |
+| =uninstall-cmacs-printer.sh=      | System uninstaller                                                  |
+| =cmacs-print-handler=             | Per-user IPP handler (POSIX shell)                                  |
+| =cmacs-print.service.in=          | systemd user-unit template                                          |
+| =install-cmacs-printer-user.sh=   | Per-user installer.  No sudo, no =/usr= writes                      |
+| =uninstall-cmacs-printer-user.sh= | Per-user uninstaller                                                |
+| =README.md=                       | Install / troubleshoot reference                                    |
+
+* Configuration
+
+All defcustoms live in =lisp/cmacs/cmacs-print.el=.
+
+| Option                              | Default                                              | Purpose                                  |
+|-------------------------------------+------------------------------------------------------+------------------------------------------|
+| =cmacs-print-target-dir=            | =~/Documents/notes/03_resources/cmacs-print=         | Output directory for all artefacts       |
+| =cmacs-print-output-formats=        | ='(org pdf)=                                         | Which artefacts to produce — see below   |
+| =cmacs-print-dpi=                   | =150=                                                | =pdftocairo -r= value                    |
+| =cmacs-print-max-pages=             | =200=                                                | Confirmation prompt above this           |
+| =cmacs-print-auto-open=             | =t=                                                  | Open the doc on import                   |
+| =cmacs-print-rasterizer-program=    | ="pdftocairo"=                                       | External rasteriser (path is fine)       |
+| =cmacs-print-pdfinfo-program=       | ="pdfinfo"=                                          | External metadata reader                 |
+| =cmacs-print-debug=                 | =nil=                                                | Log every step to =*cmacs-print-log*=    |
+| =cmacs-print-spool-dir=             | =/tmp/cmacs-print-<uid>=                             | Where the CUPS backend drops PDFs        |
+| =cmacs-print-watch-spool=           | =t=                                                  | Auto-start the file-notify watcher       |
+| =cmacs-print-poll-interval=         | =30=                                                 | Belt-and-suspenders periodic drain (s)   |
+
+** =cmacs-print-output-formats=
+
+The list controls which artefacts are emitted per print job:
+
+- =(org pdf)= (default): both an annotatable org doc with inline page
+  images AND a full copy of the PDF.  This is the OneNote-style
+  workflow — the org doc is your canvas, the PDF stays available
+  for =org-noter=.
+- =(org)=: rasterise to images and generate the org doc only; no
+  PDF copy.  Smallest disk footprint.
+- =(pdf)=: keep a full copy of the PDF only; no rasterisation.
+  Useful when you just want a "save as PDF" virtual printer that
+  files prints into your notes directory.
+
+If neither =org= nor =pdf= is in the list, the import is a no-op
+(the spool PDF is cleaned up and nothing else happens).
+
+** Output filenames
+
+One self-contained directory per print job under
+=cmacs-print-target-dir=:
+
+#+begin_example
+20260502-142300-receipt/
+  index.org              # if 'org in formats
+  source.pdf             # if 'pdf in formats
+  page-001.png           # if 'org (one per page)
+  page-002.png
+20260502-150412-other-doc/
+  …
+inbox/                                   # cmacs-down fallback (legacy)
+#+end_example
+
+The org file references its siblings by bare basename
+(=page-001.png=, =source.pdf=) so the whole directory is
+self-contained — copy or move it anywhere and the links keep working.
+
+Directory naming: =<YYYYMMDD-HHMMSS>-<sanitised-title>=.  The title
+comes from PDF metadata (=pdfinfo Title=) when present, falling back
+to the CUPS job title, then to the original filename.  Sanitisation
+keeps =[A-Za-z0-9._-]= and replaces everything else with =_=, capping
+at 80 characters — safe to interpolate into shell, elisp, and
+filesystem paths.
+
+* Usage
+
+** Print from any application
+
+Pick =cmacs= as the printer in any application's print dialog.  The
+job arrives in cmacs as a new org doc which (with =cmacs-print-auto-open=
+non-nil) opens automatically and brings the frame to focus.
+
+** Programmatic — interactive
+
+#+begin_src emacs-lisp
+M-x cmacs-print-import-pdf-interactive
+#+end_src
+
+Prompts for a PDF and produces the same artefacts as a real print
+job.
+
+** Programmatic — Elisp
+
+#+begin_src emacs-lisp
+(cmacs-print-import-pdf "/path/to/file.pdf"
+                        "Optional Display Title")
+#+end_src
+
+** Programmatic — D-Bus
+
+Useful for testing the full pipeline end-to-end without going through
+CUPS:
+
+#+begin_src bash
+gdbus call --session \
+  --dest=org.cmacs.Editor1 \
+  --object-path=/org/cmacs/Editor \
+  --method=org.cmacs.Editor1.Eval \
+  '(cmacs-print-import-pdf "/tmp/test.pdf" "test")'
+#+end_src
+
+** Drain the inbox
+
+If prints arrived while cmacs was down, drain the inbox:
+
+#+begin_src emacs-lisp
+M-x cmacs-print-reprocess-inbox
+#+end_src
+
+Each PDF in the inbox runs through =cmacs-print-import-pdf= using the
+current settings.
+
+* Annotation
+
+** =cmacs-ink-region= — pixel-anchored overlay strokes
+
+Enable =cmacs-ink-mode= (or =global-cmacs-ink-mode=).  In an imported
+print doc, mark a region containing one or more =* Page N= headings
+plus their inline image links (=C-SPC= then move past the image),
+then:
+
+- =C-c i r= — =cmacs-ink-region-annotate=.  Opens the modal capture
+  window with the rendered region as the canvas background.  Draw,
+  press =C-c C-c=, and the strokes render as a transparent overlay
+  on top of the rendered page image, anchored to the buffer markers
+  around the region.
+- =C-c i R= — edit existing overlay at point.
+- =C-c i D= — delete overlay at point.
+- =C-c i o= — toggle =cmacs-ink-overlay-mode= (the post-glyph paint
+  pass that actually draws the strokes during redisplay).
+
+Strokes persist inline in the same org file as a folded
+=#+BEGIN_INK_REGION= block under a =* cmacs-ink :noexport:= heading,
+via the existing =cmacs-ink-storage.el= dispatcher.  Saves are
+git-friendly (one stroke per line).
+
+** =org-remark= — text-anchored highlights and notes
+
+Works on any buffer, including imported print docs.  Highlights
+anchor to *buffer text* — that means highlighting "page 1" attaches
+to the heading text =* Page 1=, not to a region of the rendered
+image.  For pixel-anchored marks, use =cmacs-ink-region= instead.
+
+Default Doom keybinds (=SPC n r ...=): mark, line, semantic
+colours, navigate, open notes, delete.
+
+** =org-noter= — side-by-side notes
+
+When both =org= and =pdf= are in =cmacs-print-output-formats=, the
+sibling =<stem>.pdf= is exactly what =org-noter= wants for paired
+notes.  From any =* Page N= heading:
+
+#+begin_src emacs-lisp
+M-x org-noter
+#+end_src
+
+Point at the sibling =.pdf= when prompted.  Subsequent annotations
+sync between the org headings and PDF page positions.
+
+** =org-roam= — knowledge graph integration
+
+Imported docs live under
+=~/Documents/notes/03_resources/cmacs-print/=.  Add =org-roam-node=
+links from your daily / project notes pointing at specific imported
+docs to fold them into your knowledge graph.
+
+* Troubleshooting
+
+** Nothing happens when I print
+
+Run the diagnostic:
+
+#+begin_src bash
+make check-cmacs-printer
+#+end_src
+
+It checks: CUPS printer state, backend file presence, runtime tools
+on =$PATH=, and the D-Bus service introspection.  Common failures:
+
+- =pdftocairo=, =pdfinfo=, =gdbus= must all be on =$PATH=.  Install
+  =poppler-utils= (Fedora/Debian/Arch) and =glib2= /
+  =libglib2.0-bin=.
+- The =cmacs= printer must be =idle= (not paused or rejecting jobs).
+  =cupsenable cmacs && cupsaccept cmacs= as root unblocks it.
+- The D-Bus introspect must list =Eval=, =FindFile=, etc. on
+  =/org/cmacs/Editor=.  If it doesn't, cmacs isn't running with
+  =--with-cmacs-glib=.
+
+** Prints land in the inbox even though cmacs is running
+
+The CUPS backend constructs the user's session bus address as
+=unix:path=/run/user/$UID/bus=.  If your desktop is locked / detached
+and your user bus has timed out, the gdbus call fails and the backend
+falls back to the inbox.  Run:
+
+#+begin_src bash
+loginctl enable-linger $USER
+#+end_src
+
+so systemd keeps your user bus alive across logout.
+
+** SELinux denies the backend on Fedora
+
+CUPS backends run in the =cupsd_t= domain and are allowed to read /
+write =/run/user/$UID/= by default.  If a custom CUPS SELinux policy
+denies it, =journalctl -t setroubleshoot= should show the AVC.
+
+** =org-noter= can't find the PDF
+
+=cmacs-print-output-formats= must include =pdf=.  With ='(org)= the
+sibling PDF is never written.
+
+* Reference
+
+** =cmacs-print-import-pdf= entry-point contract
+
+#+begin_src emacs-lisp
+(cmacs-print-import-pdf PDF-PATH &optional TITLE)
+#+end_src
+
+- Validates =PDF-PATH= is readable.
+- Reads PDF metadata (title, page count) via =pdfinfo=.
+- Sanitises =TITLE= (or PDF metadata title, or basename) to a
+  filename-safe stem.
+- Confirms with the user if page count exceeds
+  =cmacs-print-max-pages=.
+- Dispatches per =cmacs-print-output-formats= — see Configuration.
+- Returns the org-doc path (=nil= when =org= is not in formats).
+- Asynchronous: rasterisation runs in a child process; the org doc
+  is written + opened from the sentinel.
+
+** CUPS backend protocol
+
+The backend at =/usr/lib/cups/backend/cmacs-print= follows the
+standard CUPS device backend protocol:
+
+- No args ⇒ print the device discovery line and exit:
+  =direct cmacs-print "Unknown" "cmacs Virtual Printer"=.
+- Job ⇒ argv: =job-id user title copies options [filename]=, PDF on
+  stdin (or as argv[6] when CUPS uses the =file= device).
+
+Backend always exits 0 from CUPS's perspective once the PDF has been
+delivered to either cmacs or the inbox.  Returning non-zero would
+re-queue the job indefinitely.
+
+** D-Bus method called
+
+#+begin_example
+Bus:        session
+Destination: org.cmacs.Editor1
+Object path: /org/cmacs/Editor
+Method:      org.cmacs.Editor1.Eval
+Argument:    (cmacs-print-import-pdf "<spool-path>" "<title>")
+#+end_example
+
+The =Eval= method is the same one used by =cmacsgi= and other
+external integrations — see [[file:dbus.org][D-Bus Service]].

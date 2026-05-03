@@ -252,6 +252,83 @@ conversations fully separated across Emacs restarts.
 - Dependencies: =libsoup-3.0=, =json-glib-1.0=, =libcmark=, =sqlite3=,
   =libetpan=, =libpq=, =yaml-0.1=
 
+** Print to cmacs (=--with-cmacs-print=)
+
+OneNote-style "Print to cmacs" virtual printer.  Print from any
+application (Firefox, Evince, LibreOffice, …); the job arrives in
+cmacs as an annotatable multi-page org document with each PDF page
+rendered as an inline image.  Annotation rides on the existing
+=cmacs-ink-region= overlay system and the user's Doom annotation
+plugins (=pdf-tools=, =org-noter=, =org-remark=, =org-roam=).
+
+*Two install modes (pick one), then a drainer (always):*
+
+#+begin_example
+# System mode — writes to /usr/lib/cups/backend/, prompts sudo
+make install-cmacs-printer
+
+# Per-user mode — no sudo, no /usr writes, works on immutable
+# systems (Silverblue / Atomic / NixOS / Bazzite / Bluefin / …).
+# Uses ippeveprinter + a systemd user service; cups-browsed
+# auto-creates a CUPS queue named "cmacs" via mDNS discovery.
+make install-cmacs-printer-user
+
+# Editor-independent drainer (per-user systemd path+service,
+# no sudo).  Required: this is what picks up the print job from the
+# spool dir and rasterises it, with no interactive cmacs needed.
+make install-cmacs-print-watcher
+#+end_example
+
+The system-mode installer auto-detects immutable =/usr= (via
+=/run/ostree-booted= or a non-writable =/usr=) and redirects you to
+the per-user mode with a one-line message, so running the wrong one
+does not break anything.
+
+*Usage:*
+
+- Print from any application — pick =cmacs= as the printer.
+- Or programmatically: =M-x cmacs-print-import-pdf-interactive=.
+- Or from the shell:
+  =gdbus call --session --dest=org.cmacs.Editor1
+  --object-path=/org/cmacs/Editor
+  --method=org.cmacs.Editor1.Eval
+  '(cmacs-print-import-pdf "/tmp/foo.pdf")'=
+
+*Output:* flat layout under =~/Documents/notes/03_resources/cmacs-print/=:
+
+#+begin_example
+20260502-142300-receipt/
+  index.org                      # generated org with inline page images
+  source.pdf                     # full copy of the original PDF
+  page-001.png                   # one PNG per page
+  page-002.png
+inbox/                           # legacy cmacs-down fallback
+#+end_example
+
+(One self-contained directory per print job — copy/move it anywhere
+and the org links keep working.)
+
+*Configuration* (defcustoms in =cmacs-print.el=):
+
+- =cmacs-print-output-formats= — list of =org=, =pdf=, or both
+  (default both — keeps the PDF available for =org-noter=).  Set
+  to ='(org)= for org-only, ='(pdf)= to skip rasterisation entirely.
+- =cmacs-print-target-dir= — output directory.
+- =cmacs-print-dpi= — rasterisation density (default =150=).
+- =cmacs-print-max-pages= — guard against runaway PDFs.
+- =cmacs-print-auto-open= — open the doc on import.
+
+*Annotation:* with =cmacs-ink-mode= active, mark a region around any
+=* Page N= heading and press =C-c i r= to draw transparent overlay
+strokes on top of the rendered page image (anchored to buffer
+markers, persisted inline as =#+BEGIN_INK_REGION= blocks).
+=org-remark= keeps text-anchored highlights and notes; =org-noter=
+pairs the org doc with the sibling =.pdf= for side-by-side reading.
+
+*Dependencies:* =poppler-utils= (Fedora/Debian/Arch) for =pdftocairo=
+and =pdfinfo=, =glib2= / =libglib2.0-bin= for =gdbus=, =cups= for
+the print spooler.  =install-deps= picks them up.
+
 * Building
 
 ** Quick Start (Fedora)
@@ -287,7 +364,8 @@ cd cmacs
   --with-cmacs-podomation \
   --with-cmacs-libreclaw \
   --with-cmacs-org-ex \
-  --with-cmacs-mcp
+  --with-cmacs-mcp \
+  --with-cmacs-print
 make -j$(nproc)
 sudo make install
 #+end_src
@@ -387,7 +465,8 @@ Requires =autoconf= (>= 2.65) and =automake=.
   --with-cmacs-podomation \
   --with-cmacs-libreclaw \
   --with-cmacs-org-ex \
-  --with-cmacs-mcp
+  --with-cmacs-mcp \
+  --with-cmacs-print
 #+end_src
 
 Emacs flags:
@@ -416,6 +495,7 @@ Module flags:
 - =--with-cmacs-libreclaw= — LibreClaw chat/Matrix client integration
 - =--with-cmacs-org-ex= — Org-Ex interactive widget embedding
 - =--with-cmacs-mcp= — MCP server for AI-native runtime control
+- =--with-cmacs-print= — Print to cmacs virtual printer + PDF intake
 
 Each module auto-detects bundled (=deps/=) or system libraries.  To
 force system-installed versions:

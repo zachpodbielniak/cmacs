@@ -1,0 +1,23 @@
+[Unit]
+# cmacs-print-drain.path — kernel-inotify watcher for the print spool.
+#
+# Copyright (C) 2026 Zach Podbielniak
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Fires cmacs-print-drain.service whenever the spool directory has
+# content.  systemd does the inotify; the service runs cmacs in batch
+# mode to drain everything into ~/Documents/notes/03_resources/cmacs-print/.
+#
+# Installed by cmacs/print/install-cmacs-print-watcher.sh (per-user) or
+# cmacs's Containerfile (image-baked), which substitute the spool path
+# placeholder for either /tmp/cmacs-print-<uid> (per-user installs) or
+# /tmp/cmacs-print-%U (image-baked, with systemd specifier expansion).
+Description=Watch cmacs-print spool for new PDFs
+Documentation=man:cmacs-print(7)
+
+[Path]
+DirectoryNotEmpty=@SPOOL@
+Unit=cmacs-print-drain.service
+
+[Install]
+WantedBy=default.target

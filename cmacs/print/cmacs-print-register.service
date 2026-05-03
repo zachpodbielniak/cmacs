@@ -1,0 +1,28 @@
+[Unit]
+# cmacs-print-register.service — register the "cmacs" CUPS printer.
+#
+# Copyright (C) 2026 Zach Podbielniak
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# System unit shipped in /usr/lib/systemd/system/.  Enabled by default
+# via /usr/lib/systemd/system-preset/50-cmacs-print.preset on
+# immutablue-style images, so the cmacs printer is registered at every
+# boot without manual sudo.  The helper script is idempotent — already-
+# registered printers are a no-op.
+#
+# Pairs with the system CUPS backend at /usr/lib/cups/backend/cmacs-print
+# and the user-side drainer at /usr/lib/systemd/user/cmacs-print-drain.*.
+Description=Register cmacs CUPS virtual printer
+Documentation=man:cmacs-print(7)
+ConditionPathExists=/usr/lib/cups/backend/cmacs-print
+ConditionPathExists=/usr/share/cmacs-print/cmacs-print.ppd
+Wants=cups.service
+After=cups.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+ExecStart=/usr/libexec/cmacs/cmacs-print-register
+
+[Install]
+WantedBy=multi-user.target

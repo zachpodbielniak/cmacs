@@ -1,0 +1,18 @@
+# cmacs-print systemd preset.
+#
+# Copyright (C) 2026 Zach Podbielniak
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Auto-enables both the system-side CUPS printer registration and the
+# per-user spool drainer, so an immutablue (or any preset-respecting)
+# image picks up "Print to cmacs" with zero manual configuration.
+#
+# Installed to:
+#   /usr/lib/systemd/system-preset/50-cmacs-print.preset  (system)
+#   /usr/lib/systemd/user-preset/50-cmacs-print.preset    (user)
+#
+# Both paths are read by `systemctl preset-all` (run once at first boot
+# of an OSTree commit), and the per-user file is consulted again the
+# first time each user logs in.
+enable cmacs-print-register.service
+enable cmacs-print-drain.path

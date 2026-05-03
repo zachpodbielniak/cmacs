@@ -57,6 +57,7 @@ configure_flags := """
     --with-cmacs-libreclaw
     --with-cmacs-org-ex
     --with-cmacs-mcp
+    --with-cmacs-print
 """
 
 # ──────────────────────────────────────────────────────────────────────
@@ -135,6 +136,47 @@ relink:
 [group('build')]
 config-summary:
     @grep -E "^(  with[a-z-]+|  Does Emacs use|  Does Emacs support)" config.log | head -40
+
+# Install the "cmacs" CUPS virtual printer (system-wide, prompts sudo).
+# Auto-redirects to install-cmacs-printer-user on OSTree/immutable systems.
+[group('build')]
+install-cmacs-printer:
+    @make install-cmacs-printer
+
+# Remove the "cmacs" CUPS virtual printer (system-wide, prompts sudo).
+[group('build')]
+uninstall-cmacs-printer:
+    @make uninstall-cmacs-printer
+
+# Install a per-user IPP-Everywhere "cmacs" printer.  No sudo, works on
+# Silverblue / Atomic / NixOS / any read-only-rootfs system.  Uses
+# ippeveprinter + a systemd user service; cups-browsed picks it up via mDNS.
+[group('build')]
+install-cmacs-printer-user:
+    @make install-cmacs-printer-user
+
+# Stop and remove the per-user IPP-Everywhere printer.
+[group('build')]
+uninstall-cmacs-printer-user:
+    @make uninstall-cmacs-printer-user
+
+# Install editor-independent spool drainer (systemd user path+service).
+# Companion to install-cmacs-printer — drains /tmp/cmacs-print-<uid>/
+# into ~/Documents/notes/.../cmacs-print/ via cmacs --batch on inotify.
+# No sudo.  Works whether or not interactive cmacs is running.
+[group('build')]
+install-cmacs-print-watcher:
+    @make install-cmacs-print-watcher
+
+# Stop and remove the systemd spool drainer.
+[group('build')]
+uninstall-cmacs-print-watcher:
+    @make uninstall-cmacs-print-watcher
+
+# Read-only diagnostic for the print subsystem (CUPS state + tools on PATH).
+[group('build')]
+check-cmacs-printer:
+    @make check-cmacs-printer
 
 # ──────────────────────────────────────────────────────────────────────
 # Clean

@@ -1,0 +1,46 @@
+[Unit]
+# cmacs IPP-Everywhere virtual printer (per-user)
+#
+# Copyright (C) 2026 Zach Podbielniak
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Runs ippeveprinter as a user systemd service.  cups-browsed
+# discovers the mDNS-advertised printer and creates a transient CUPS
+# queue named "cmacs", which is what the GTK / Qt print dialogs
+# enumerate.  No /usr writes — works on Silverblue / Atomic / NixOS.
+#
+# Installed by cmacs/print/install-cmacs-printer-user.sh, which
+# substitutes @IPPEVE@ and @HANDLER@ for absolute paths discovered at
+# install time (systemd user-unit PATH is minimal — must use absolute
+# paths or set Environment=PATH=...).
+Description=cmacs IPP-Everywhere virtual printer
+Documentation=man:ippeveprinter(1)
+After=default.target
+
+[Service]
+Type=simple
+# RuntimeDirectory= auto-creates %t/cmacs-print before ExecStart and
+# cleans it up on stop.  Avoids the namespace-setup-before-mkdir
+# chicken-and-egg of ProtectSystem=strict + ReadWritePaths=.
+RuntimeDirectory=cmacs-print
+RuntimeDirectoryMode=0700
+ExecStart=@IPPEVE@ \
+    -c @HANDLER@ \
+    -d %t/cmacs-print \
+    -f application/pdf \
+    -m "cmacs Virtual Printer" \
+    -l "Local" \
+    cmacs
+Restart=on-failure
+RestartSec=5
+
+# Light hardening.  Heavier sandboxing (ProtectSystem=strict,
+# ReadWritePaths=) breaks because the unit needs to write the inbox
+# fallback under $HOME, the systemd journal needs stderr, and the
+# IPP listener is already a user-context process — there's nothing
+# to escalate to.
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

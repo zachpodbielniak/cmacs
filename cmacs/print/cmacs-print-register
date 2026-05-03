@@ -1,0 +1,52 @@
+#!/bin/sh
+# cmacs-print-register — register the "cmacs" CUPS printer.
+#
+# Copyright (C) 2026 Zach Podbielniak
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Idempotent.  Safe to run on every boot.  Designed to be triggered by
+# the cmacs-print-register.service systemd unit so the printer is
+# registered automatically on immutable / OSTree systems where there's
+# no traditional install step.
+
+set -eu
+
+PRINTER_NAME="cmacs"
+PPD="/usr/share/cmacs-print/cmacs-print.ppd"
+BACKEND="/usr/lib/cups/backend/cmacs-print"
+
+# Skip silently if CUPS isn't installed (immutablue may strip it on
+# minimal builds).
+if ! command -v lpadmin >/dev/null 2>&1; then
+  echo "cmacs-print-register: lpadmin not found, skipping" >&2
+  exit 0
+fi
+
+# Skip if the backend file isn't there (defensive — should always be
+# present alongside this script in a cmacs-print-enabled image).
+if [ ! -x "$BACKEND" ]; then
+  echo "cmacs-print-register: $BACKEND missing, skipping" >&2
+  exit 0
+fi
+
+if [ ! -r "$PPD" ]; then
+  echo "cmacs-print-register: $PPD missing, skipping" >&2
+  exit 0
+fi
+
+# Already registered?  Nothing to do.
+if lpstat -p "$PRINTER_NAME" >/dev/null 2>&1; then
+  exit 0
+fi
+
+echo "cmacs-print-register: registering ${PRINTER_NAME}"
+lpadmin \
+  -p "$PRINTER_NAME" \
+  -E \
+  -v "cmacs-print:/" \
+  -P "$PPD" \
+  -D "Print to cmacs" \
+  -L "Local"
+
+cupsenable "$PRINTER_NAME" >/dev/null 2>&1 || true
+cupsaccept "$PRINTER_NAME" >/dev/null 2>&1 || true

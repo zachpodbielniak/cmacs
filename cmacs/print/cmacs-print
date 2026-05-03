@@ -1,0 +1,93 @@
+#!/bin/sh
+# cmacs-print — CUPS backend for the "cmacs" virtual printer.
+#
+# Copyright (C) 2026 Zach Podbielniak
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Installed to /usr/lib/cups/backend/cmacs-print (root:root, mode 0700)
+# by cmacs/print/install-cmacs-printer.sh.
+#
+# Architecture (intentionally minimal): the backend writes the print job
+# to /tmp/cmacs-print-<uid>/<TS>-job<ID>-<title>.pdf and exits.  Cmacs
+# itself watches that directory via file-notify (`cmacs-print-watch-spool')
+# and imports new files in the user's own security context.  This avoids:
+#
+#   * SELinux deny-without-audit on cupsd_t writing to user_tmp_t / user_home_t
+#   * cupsd_t -> su / runuser / sudo transitions (also denied)
+#   * D-Bus session-bus delivery from the cupsd_t domain (also denied)
+#
+# CUPS protocol:
+#   no args  -> print device-discovery line, exit 0
+#   6+ args  -> job-id user title copies options [filename]
+#               PDF arrives on stdin (or as $6 if 'file' device)
+
+set -eu
+
+# --- Device discovery -------------------------------------------------
+
+if [ $# -eq 0 ]; then
+  printf 'direct cmacs-print "Unknown" "cmacs Virtual Printer"\n'
+  exit 0
+fi
+
+# --- Job dispatch -----------------------------------------------------
+
+if [ $# -lt 5 ]; then
+  echo "ERROR: cmacs-print: usage: job-id user title copies options [file]" >&2
+  exit 1
+fi
+
+JOB_ID="$1"
+USER_ARG="$2"
+TITLE="${3:-untitled}"
+# $4 = copies, $5 = options, $6 (optional) = filename to read instead of stdin
+
+# Sanity-check the username — CUPS forwards whatever arrived on the
+# print job, and we're about to use it in `id` and `chown`.  Allow only
+# POSIX-portable usernames.  CWE-78 mitigation.
+case "$USER_ARG" in
+  *[!A-Za-z0-9._-]*|"")
+    echo "ERROR: cmacs-print: invalid username: $USER_ARG" >&2
+    exit 1
+    ;;
+esac
+
+TARGET_UID="$(id -u "$USER_ARG" 2>/dev/null || true)"
+if [ -z "$TARGET_UID" ]; then
+  echo "ERROR: cmacs-print: unknown user: $USER_ARG" >&2
+  exit 1
+fi
+
+# --- Spool the PDF ----------------------------------------------------
+
+# /tmp/ (tmp_t) is writable from the cupsd_t / cupsd_backend_t SELinux
+# domains; /run/user/<uid>/ (user_tmp_t) is not.  Per-uid subdirectory
+# + mode 0700 + owner=user keeps prints private from other accounts on
+# multi-user systems.
+SPOOL="/tmp/cmacs-print-${TARGET_UID}"
+install -d -m 0700 -o "$USER_ARG" -g "$USER_ARG" "$SPOOL"
+
+TS="$(date +%Y%m%d-%H%M%S)"
+SAFE_TITLE="$(printf '%s' "$TITLE" | tr -c '[:alnum:]._-' '_' | cut -c1-80)"
+[ -n "$SAFE_TITLE" ] || SAFE_TITLE=untitled
+
+# Atomic write: cat to .tmp.<TS>.pdf, then rename to <TS>.pdf.  Cmacs's
+# file-notify watcher fires on the rename and never sees a partial file.
+FINAL="${SPOOL}/${TS}-job${JOB_ID}-${SAFE_TITLE}.pdf"
+STAGE="${SPOOL}/.tmp.${TS}-job${JOB_ID}-${SAFE_TITLE}.pdf"
+
+if [ $# -ge 6 ] && [ -n "$6" ] && [ -r "$6" ]; then
+  cp -f -- "$6" "$STAGE"
+else
+  cat > "$STAGE"
+fi
+
+chown "$USER_ARG":"$USER_ARG" "$STAGE"
+chmod 0600 "$STAGE"
+mv -f -- "$STAGE" "$FINAL"
+
+# Always exit 0 from CUPS's perspective — the PDF has been delivered to
+# the spool dir.  Returning non-zero would mark the printer as stopped
+# and re-queue the job, which we don't want.  Cmacs's file-notify
+# watcher takes it from here.
+exit 0

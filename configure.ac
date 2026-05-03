@@ -661,6 +661,7 @@ OPTION_DEFAULT_OFF([cmacs-podomation], [CMacs podomation automation engine])
 OPTION_DEFAULT_OFF([cmacs-libreclaw], [CMacs libreclaw chat/Matrix client integration])
 OPTION_DEFAULT_OFF([cmacs-org-ex], [CMacs org-ex interactive widgets])
 OPTION_DEFAULT_OFF([cmacs-mcp], [CMacs MCP server])
+OPTION_DEFAULT_OFF([cmacs-print], [Print to cmacs virtual printer + PDF intake])
 
 # CMACS: pkg-config checks when enabled
 if test "$with_cmacs_glib" != "no"; then
@@ -829,6 +830,33 @@ if test "$with_cmacs_mcp" != "no"; then
     cmacs-mcp-tools-process.o cmacs-mcp-tools-debug.o cmacs-mcp-tools-gi.o \
     cmacs-mcp-tools-gowl.o cmacs-mcp-resources.o cmacs-mcp-prompts.o"
 fi
+# CMACS Print: pure-Elisp + shell-script subsystem (no C build artefacts).
+# Probe for runtime tools so install-cmacs-printer can fail loudly at
+# configure time rather than mid-print.  All three live in poppler-utils +
+# glib2 on every supported distro.
+HAVE_CMACS_PRINT=no
+CMACS_PRINT_PDFTOCAIRO=
+CMACS_PRINT_PDFINFO=
+CMACS_PRINT_GDBUS=
+if test "$with_cmacs_print" != "no"; then
+  AC_PATH_PROG([CMACS_PRINT_PDFTOCAIRO], [pdftocairo])
+  AC_PATH_PROG([CMACS_PRINT_PDFINFO],    [pdfinfo])
+  AC_PATH_PROG([CMACS_PRINT_GDBUS],      [gdbus])
+  if test -n "$CMACS_PRINT_PDFTOCAIRO" && \
+     test -n "$CMACS_PRINT_PDFINFO" && \
+     test -n "$CMACS_PRINT_GDBUS"; then
+    HAVE_CMACS_PRINT=yes
+    AC_DEFINE([HAVE_CMACS_PRINT], 1, [CMacs Print to cmacs subsystem])
+  else
+    AC_MSG_WARN([cmacs-print enabled but missing one of: pdftocairo, pdfinfo, gdbus.
+  Install poppler-utils and glib2 (Fedora/RHEL), poppler-utils and libglib2.0-bin (Debian/Ubuntu),
+  or poppler and glib2 (Arch).  cmacs-print.el will load but fall back to opening PDFs verbatim.])
+  fi
+fi
+AC_SUBST(HAVE_CMACS_PRINT)
+AC_SUBST(CMACS_PRINT_PDFTOCAIRO)
+AC_SUBST(CMACS_PRINT_PDFINFO)
+AC_SUBST(CMACS_PRINT_GDBUS)
 AC_SUBST(CMACS_MCP_OBJ)
 AC_SUBST(CMACS_MCP_CFLAGS)
 AC_SUBST(CMACS_MCP_LIBS)

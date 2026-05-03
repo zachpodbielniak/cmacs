@@ -1440,3 +1440,88 @@ ifeq ($(HAVE_PGTK)$(HAVE_GSETTINGS),yesyes)
 	$(MKDIR_P) $(@D)
 	touch $@
 endif
+
+## CMacs "Print to cmacs" virtual printer.  Pure-Elisp + shell-script
+## subsystem; the install target stages a CUPS backend into
+## /usr/lib/cups/backend/ and registers a printer named "cmacs".  Off the
+## main install path because it requires sudo and a working CUPS daemon.
+
+.PHONY: install-cmacs-printer uninstall-cmacs-printer check-cmacs-printer
+.PHONY: install-cmacs-printer-user uninstall-cmacs-printer-user
+.PHONY: install-cmacs-print-watcher uninstall-cmacs-print-watcher
+
+## System-wide install — stages a CUPS backend in /usr/lib/cups/backend/.
+## Prompts sudo internally.  On immutable systems (OSTree / Silverblue /
+## NixOS), the script detects the read-only /usr and redirects to the
+## user-mode install below.
+
+install-cmacs-printer:
+	$(srcdir)/cmacs/print/install-cmacs-printer.sh
+
+uninstall-cmacs-printer:
+	$(srcdir)/cmacs/print/uninstall-cmacs-printer.sh
+
+## Per-user install — runs ippeveprinter as a systemd user service,
+## advertises via mDNS so cups-browsed surfaces "cmacs" in app print
+## dialogs.  No sudo, no /usr writes.  Recommended on Silverblue /
+## Atomic / NixOS / any read-only-rootfs system.
+
+install-cmacs-printer-user:
+	$(srcdir)/cmacs/print/install-cmacs-printer-user.sh
+
+uninstall-cmacs-printer-user:
+	$(srcdir)/cmacs/print/uninstall-cmacs-printer-user.sh
+
+## Editor-independent spool drainer — systemd user path+service that
+## watches /tmp/cmacs-print-<uid>/ via kernel inotify and runs cmacs in
+## batch mode to drain.  Pair with the system or per-user printer install
+## so prints land in ~/Documents/notes/.../cmacs-print/ regardless of
+## whether you have an interactive cmacs running.  No sudo.
+
+install-cmacs-print-watcher:
+	$(srcdir)/cmacs/print/install-cmacs-print-watcher.sh
+
+uninstall-cmacs-print-watcher:
+	$(srcdir)/cmacs/print/uninstall-cmacs-print-watcher.sh
+
+check-cmacs-printer:
+	@echo "==> CUPS printer 'cmacs':"
+	@lpstat -p cmacs 2>&1 || true
+	@echo "==> System-mode backend file:"
+	@ls -la /usr/lib/cups/backend/cmacs-print 2>&1 || \
+	  echo "  (not installed — run 'make install-cmacs-printer')"
+	@echo "==> User-mode systemd service (per-user IPP printer):"
+	@systemctl --user is-active cmacs-print.service 2>/dev/null && \
+	  echo "  active (per-user IPP-Everywhere)" || \
+	  echo "  inactive (run 'make install-cmacs-printer-user')"
+	@echo "==> User-mode handler:"
+	@ls -la $$HOME/.local/libexec/cmacs/cmacs-print-handler 2>&1 || \
+	  echo "  (not installed)"
+	@echo "==> Spool drainer (cmacs-print-drain.path):"
+	@systemctl --user is-active cmacs-print-drain.path 2>/dev/null && \
+	  echo "  active (waiting for inotify)" || \
+	  echo "  inactive (run 'make install-cmacs-print-watcher')"
+	@echo "==> Spool dir state:"
+	@if [ -d "/tmp/cmacs-print-$$(id -u)" ]; then \
+	  c=$$(ls /tmp/cmacs-print-$$(id -u)/*.pdf 2>/dev/null | wc -l); \
+	  echo "  /tmp/cmacs-print-$$(id -u)/ has $$c queued PDF(s)"; \
+	else echo "  /tmp/cmacs-print-$$(id -u)/ does not exist (no print job has arrived yet)"; fi
+	@echo "==> cups-browsed (needed for user-mode mDNS discovery):"
+	@systemctl is-active cups-browsed 2>&1 | sed 's/^/  /'
+	@echo "==> Immutable /usr detection:"
+	@if [ -e /run/ostree-booted ]; then \
+	  echo "  ostree-booted (use 'install-cmacs-printer-user')"; \
+	elif [ ! -w /usr ]; then \
+	  echo "  /usr not writable (use 'install-cmacs-printer-user')"; \
+	else \
+	  echo "  /usr writable (system-mode install OK)"; \
+	fi
+	@echo "==> Runtime tools on PATH:"
+	@for t in pdftocairo pdfinfo gdbus ippeveprinter; do \
+	  p=`command -v $$t || echo MISSING`; \
+	  printf "  %-15s %s\n" "$$t" "$$p"; \
+	done
+	@echo "==> D-Bus service org.cmacs.Editor1:"
+	@gdbus introspect --session --dest=org.cmacs.Editor1 \
+	  --object-path=/org/cmacs/Editor 2>&1 | head -3 || \
+	  echo "  (cmacs not running)"

@@ -1,0 +1,47 @@
+[Unit]
+# cmacs-print-drain.service — drain the print spool via cmacs --batch.
+#
+# Copyright (C) 2026 Zach Podbielniak
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Triggered by cmacs-print-drain.path.  Runs cmacs in batch mode just
+# long enough to call (cmacs-print-drain-spool) — which rasterises any
+# PDFs sitting in /tmp/cmacs-print-<uid>/ and writes the output
+# directories.  No interactive emacs required.
+#
+# Why batch + per-trigger spawn (vs. a long-running emacs daemon)?
+#   - Resource: idle batch process holds nothing; daemon would.
+#   - Isolation: a crashed drain doesn't take down your editor.
+#   - No conflict: works alongside an interactive cmacs running its
+#     own in-process file-notify watcher (whichever wins the race
+#     processes the file; the loser's drain is a no-op once the
+#     original PDF is gone).
+#
+# Installed by cmacs/print/install-cmacs-print-watcher.sh (per-user) or
+# cmacs's Containerfile (image-baked), which substitute the placeholders
+# (cmacs binary path, lisp directory, spool directory) at install time.
+Description=Drain cmacs-print spool to Documents/notes/.../cmacs-print
+Documentation=man:cmacs-print(7)
+
+[Service]
+Type=oneshot
+TimeoutSec=300
+# Skip if no PDFs (path-unit can fire on metadata changes too).
+# POSIX glob — `set --` expands the pattern; first arg = literal pattern
+# when no match, in which case the -e test fails.
+ExecCondition=/bin/sh -c 'set -- "@SPOOL@"/*.pdf && [ -e "$1" ]'
+ExecStart=@CMACS@ --batch \
+    -L @LISP@/cmacs \
+    -L @LISP@ \
+    --eval "(progn \
+              (require 'cmacs-print) \
+              (setq cmacs-print-auto-open nil \
+                    cmacs-print-watch-spool nil) \
+              (cmacs-print-drain-spool) \
+              (let ((deadline (+ (float-time) 240))) \
+                (while (< (float-time) deadline) (sit-for 0.5))))"
+
+# Light hardening — the drain only needs to read /tmp/, write to
+# ~/Documents/notes/.../cmacs-print/, spawn pdftocairo + pdfinfo.
+NoNewPrivileges=true
+PrivateTmp=false

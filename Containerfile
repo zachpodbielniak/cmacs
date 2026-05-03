@@ -76,6 +76,7 @@ RUN ./autogen.sh \
         --with-cmacs-libreclaw \
         --with-cmacs-org-ex \
         --with-cmacs-mcp \
+        --with-cmacs-print \
     && make -j"$(nproc)" \
     && make install DESTDIR=/build/stage
 
@@ -91,6 +92,75 @@ RUN make -C tools/cmacs-mcp clean all PREFIX=/usr \
 RUN ./install-wm PREFIX=/usr \
     && mkdir -p /build/stage/usr/share/wayland-sessions \
     && mv /usr/share/wayland-sessions/cmacs.desktop /build/stage/usr/share/wayland-sessions/
+
+# ---------------------------------------------------------------------
+# cmacs-print — "Print to cmacs" virtual printer.  Stages everything
+# image consumers (immutablue, traditional installs) need to get the
+# printer working out of the box.  All paths align with the helper
+# scripts in cmacs/print/ so a non-container install via
+# `make install-cmacs-printer` produces the same on-disk layout.
+#
+# Files staged:
+#   /usr/lib/cups/backend/cmacs-print              — CUPS backend (0700)
+#   /usr/share/cmacs-print/cmacs-print.ppd         — PPD (passthrough)
+#   /usr/libexec/cmacs/cmacs-print-register        — first-boot helper
+#   /usr/lib/systemd/system/cmacs-print-register.service
+#   /usr/lib/systemd/user/cmacs-print-drain.path
+#   /usr/lib/systemd/user/cmacs-print-drain.service
+#   /usr/lib/systemd/system-preset/50-cmacs-print.preset
+#   /usr/lib/systemd/user-preset/50-cmacs-print.preset
+# ---------------------------------------------------------------------
+RUN set -eux \
+    # Discover the emacs version so we can hardcode the lisp dir into
+    # the systemd user units (specifier expansion in path units is
+    # limited to %U/%h/%t — there is no specifier for the emacs
+    # version).
+    && emacs_version="" \
+    && for d in /build/stage/usr/share/emacs/*/; do \
+           v="$(basename "$d")"; \
+           if [ "$v" != "site-lisp" ]; then emacs_version="$v"; break; fi; \
+       done \
+    && [ -n "$emacs_version" ] \
+    && lisp_dir="/usr/share/emacs/${emacs_version}/lisp" \
+    # CUPS backend + PPD.
+    && install -d -m 0755 /build/stage/usr/lib/cups/backend \
+    && install -m 0700 cmacs/print/cmacs-print \
+       /build/stage/usr/lib/cups/backend/cmacs-print \
+    && install -d -m 0755 /build/stage/usr/share/cmacs-print \
+    && install -m 0644 cmacs/print/cmacs-print.ppd \
+       /build/stage/usr/share/cmacs-print/cmacs-print.ppd \
+    # Registration helper.
+    && install -d -m 0755 /build/stage/usr/libexec/cmacs \
+    && install -m 0755 cmacs/print/cmacs-print-register \
+       /build/stage/usr/libexec/cmacs/cmacs-print-register \
+    # System unit: register printer at boot.
+    && install -d -m 0755 /build/stage/usr/lib/systemd/system \
+    && install -m 0644 cmacs/print/cmacs-print-register.service \
+       /build/stage/usr/lib/systemd/system/cmacs-print-register.service \
+    # User units: spool drainer.  Render the .in templates with absolute
+    # paths and the systemd %U specifier (expanded per-user at runtime).
+    && install -d -m 0755 /build/stage/usr/lib/systemd/user \
+    && sed \
+         -e 's|@SPOOL@|/tmp/cmacs-print-%U|g' \
+         cmacs/print/cmacs-print-drain.path.in \
+       > /build/stage/usr/lib/systemd/user/cmacs-print-drain.path \
+    && sed \
+         -e 's|@SPOOL@|/tmp/cmacs-print-%U|g' \
+         -e 's|@CMACS@|/usr/bin/emacs|g' \
+         -e "s|@LISP@|${lisp_dir}|g" \
+         cmacs/print/cmacs-print-drain.service.in \
+       > /build/stage/usr/lib/systemd/user/cmacs-print-drain.service \
+    && chmod 0644 \
+         /build/stage/usr/lib/systemd/user/cmacs-print-drain.path \
+         /build/stage/usr/lib/systemd/user/cmacs-print-drain.service \
+    # Presets: enable the registration service system-wide and the
+    # drainer for every user on first login.
+    && install -d -m 0755 /build/stage/usr/lib/systemd/system-preset \
+    && install -m 0644 cmacs/print/50-cmacs-print.preset \
+       /build/stage/usr/lib/systemd/system-preset/50-cmacs-print.preset \
+    && install -d -m 0755 /build/stage/usr/lib/systemd/user-preset \
+    && install -m 0644 cmacs/print/50-cmacs-print.preset \
+       /build/stage/usr/lib/systemd/user-preset/50-cmacs-print.preset
 
 # Install interactive Org manual
 RUN emacs_version="" \
