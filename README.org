@@ -365,7 +365,9 @@ cd cmacs
   --with-cmacs-libreclaw \
   --with-cmacs-org-ex \
   --with-cmacs-mcp \
-  --with-cmacs-print
+  --with-cmacs-print \
+  --with-cmacs-cintrospect \
+  --enable-cmacs-cpatch
 make -j$(nproc)
 sudo make install
 #+end_src
@@ -466,7 +468,9 @@ Requires =autoconf= (>= 2.65) and =automake=.
   --with-cmacs-libreclaw \
   --with-cmacs-org-ex \
   --with-cmacs-mcp \
-  --with-cmacs-print
+  --with-cmacs-print \
+  --with-cmacs-cintrospect \
+  --enable-cmacs-cpatch
 #+end_src
 
 Emacs flags:
@@ -496,6 +500,8 @@ Module flags:
 - =--with-cmacs-org-ex= — Org-Ex interactive widget embedding
 - =--with-cmacs-mcp= — MCP server for AI-native runtime control
 - =--with-cmacs-print= — Print to cmacs virtual printer + PDF intake
+- =--with-cmacs-cintrospect= — Runtime C self-introspection: libdw DWARF reader + libgccjit JIT.  Inspect any symbol/type/source-location at runtime, compile new C from Lisp.  Default-on; needs =elfutils-devel= (Fedora) / =libdw-dev libelf-dev= (Debian).
+- =--enable-cmacs-cpatch= — Runtime C hot-patching.  Atomic =Lisp_Subr.function= swap (Phase 1) + trampoline detours (Phase 3).  *DANGEROUS* — wrong patch silently corrupts in-process state.  Off by default; requires =--with-cmacs-cintrospect=.  See [[file:doc_org/cmacs/cintrospect.org][the cintrospect manual]] for the full safety story.
 
 Each module auto-detects bundled (=deps/=) or system libraries.  To
 force system-installed versions:

@@ -89,6 +89,12 @@ set_packages_fedora () {
 	PKGS_TEXT=(libotf-devel m17n-lib-devel)
 	PKGS_JSON=(jansson-devel)
 	PKGS_TS=(libtree-sitter-devel)
+	# Cintrospect (runtime C self-introspection): libdw + libelf
+	# parse /proc/self/exe DWARF; libdebuginfod fetches split-debug
+	# DIEs from the distro debuginfo server; binutils-devel
+	# (libopcodes) is used by cpatch for prologue probe.
+	PKGS_INTROSPECT=(elfutils-devel elfutils-debuginfod-client-devel
+	                 binutils-devel)
 	PKGS_GLIB=(glib2-devel gobject-introspection-devel json-glib-devel
 	           libsoup3-devel libdex-devel libetpan-devel libpq-devel
 	           libssh2-devel libvirt-devel libyaml-devel
@@ -120,6 +126,8 @@ set_packages_debian () {
 	PKGS_TEXT=(libotf-dev libm17n-dev)
 	PKGS_JSON=(libjansson-dev)
 	PKGS_TS=(libtree-sitter-dev)
+	PKGS_INTROSPECT=(libdw-dev libelf-dev libdebuginfod-dev
+	                 binutils-dev)
 	PKGS_GLIB=(libglib2.0-dev libgirepository1.0-dev libjson-glib-dev
 	           libsoup-3.0-dev libdex-dev libetpan-dev libpq-dev
 	           libssh2-1-dev libvirt-dev libyaml-dev
@@ -144,6 +152,7 @@ set_packages_arch () {
 	PKGS_TEXT=(libotf m17n-lib)
 	PKGS_JSON=(jansson)
 	PKGS_TS=(tree-sitter)
+	PKGS_INTROSPECT=(elfutils debuginfod)
 	PKGS_GLIB=(glib2 gobject-introspection json-glib libsoup3 libdex
 	           libetpan postgresql-libs libssh2 libvirt libyaml
 	           sqlite cmark)
@@ -160,6 +169,9 @@ set_packages_macos () {
 	PKGS_TEXT=(libotf m17n-lib)
 	PKGS_JSON=(jansson)
 	PKGS_TS=(tree-sitter)
+	# Homebrew elfutils provides libdw + libelf; libdebuginfod is
+	# absent on macOS but cintrospect degrades gracefully.
+	PKGS_INTROSPECT=(elfutils)
 	PKGS_GLIB=(glib gobject-introspection json-glib libsoup libdex
 	           libetpan libpq libssh2 libvirt libyaml
 	           sqlite cmark)
@@ -176,6 +188,7 @@ set_packages_freebsd () {
 	PKGS_TEXT=(libotf m17n-lib)
 	PKGS_JSON=(jansson)
 	PKGS_TS=(tree-sitter)
+	PKGS_INTROSPECT=(elfutils)
 	PKGS_GLIB=(glib gobject-introspection json-glib libsoup3 libdex
 	           libetpan postgresql16-client libssh2 libvirt libyaml
 	           sqlite3 cmark)
@@ -194,6 +207,7 @@ all_packages () {
 	     "${PKGS_TEXT[@]}" \
 	     "${PKGS_JSON[@]}" \
 	     "${PKGS_TS[@]}" \
+	     "${PKGS_INTROSPECT[@]}" \
 	     "${PKGS_GLIB[@]}" \
 	     "${PKGS_GOWL[@]}"
 }

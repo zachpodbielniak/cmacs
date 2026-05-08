@@ -31,7 +31,12 @@ RUN if [ "${FEDORA_VERSION}" -ge 44 ] 2>/dev/null; then \
         libetpan-devel sqlite-devel libpq-devel \
         cmark-devel \
         libssh2-devel libvirt-devel pam-devel \
+        elfutils-devel elfutils-debuginfod-client-devel binutils-devel \
     && dnf clean all
+# elfutils-devel + libdebuginfod: cintrospect's libdw DWARF reader.
+# binutils-devel: provides dis-asm.h / libopcodes for cpatch's
+# (currently optional) prologue probe.  cmacs builds without it via
+# a built-in fallback.
 
 COPY . /build/cmacs
 WORKDIR /build/cmacs
@@ -77,6 +82,8 @@ RUN ./autogen.sh \
         --with-cmacs-org-ex \
         --with-cmacs-mcp \
         --with-cmacs-print \
+        --with-cmacs-cintrospect \
+        --enable-cmacs-cpatch \
     && make -j"$(nproc)" \
     && make install DESTDIR=/build/stage
 

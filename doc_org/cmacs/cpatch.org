@@ -1,0 +1,171 @@
+#+TITLE: Runtime C Hot-Patching (cpatch)
+#+STARTUP: showall
+#+OPTIONS: toc:2 num:t
+
+* Overview
+
+=cpatch= is the kernel-grade companion to [[file:cintrospect.org][cintrospect]].  Where
+cintrospect lets you inspect the running C layer, cpatch lets you
+*replace* C functions in place at runtime --- the C-side equivalent
+of redefining a Lisp function with =defun=.
+
+This is *off by default* and lives in its own
+subsystem (=cmacs/cpatch/=) for a reason: a wrong patch silently
+corrupts in-process state, may not even SIGSEGV, and can cause
+arbitrarily-bad behaviour deep into the future of the session.  Only
+build it when you've read this whole document.
+
+#+begin_example
+./configure --with-cmacs-cintrospect --enable-cmacs-cpatch ...
+#+end_example
+
+* Two patching modes
+
+** DEFUN pointer swap (Phase 1, available now)
+
+Every Emacs primitive (DEFUN) exists at runtime as a =Lisp_Subr=
+struct (=src/lisp.h:2175-2208=) whose =function= union member is the
+C function pointer the Lisp evaluator dispatches to.  Writing a new
+pointer into that field swaps the implementation atomically:
+
+#+begin_example
+(cmacs-c-patch-defun 'current-time-string NEW-FN-ADDR)
+#+end_example
+
+Why this is safe in cmacs:
+
+- The pointer write is a single aligned store --- atomic at the
+  machine level on every supported architecture.
+- Cmacs's Lisp evaluator runs single-threaded.  No other thread can
+  be midway through executing the function body.
+- The GC scanner doesn't touch the function-pointer union, so no
+  GC race either.
+
+This covers ~90% of practical use cases (every Lisp-callable C
+primitive, of which there are ~2,400 in cmacs).
+
+** Trampoline detour (Phase 3, deferred)
+
+For arbitrary C functions that are *not* DEFUNs (so there's no
+=Lisp_Subr.function= field to swap), cpatch will install a 13-byte
+=mov rax,imm64; jmp rax= thunk on x86_64 (or 12-byte
+=adrp/add/br x16= on AArch64) at the function's prologue.  This
+involves:
+
+- =mprotect()= dance to make =.text= temporarily writable
+- =__builtin___clear_cache()= to invalidate the ICache
+- libopcodes (or built-in fallback) prologue probe to compute the
+  legal patch byte count
+- Rendezvous with =cmacs_context_acquired= /
+  =cmacs_context_dispatching= flags so we don't patch while a GLib
+  callback is running on the same address
+
+This is Phase 3.  In Phase 1, =cmacs-c-patch-function= raises
+=cmacs-cpatch-not-implemented=.
+
+* DEFUN-swap walkthrough
+
+** Setup
+
+Build with =--enable-cmacs-cpatch=.  Verify:
+
+#+begin_example
+M-: (fboundp 'cmacs-c-patch-defun)
+;; => t
+#+end_example
+
+** Apply a patch
+
+Suppose we want =current-time-string= to return =emacs-version='s
+output instead.  We need a function with the right signature
+(=Lisp_Object (Lisp_Object, Lisp_Object)= matching
+current-time-string's two-arg form).  Phase 2 will let us write the
+replacement inline via the JIT REPL; for Phase 1 we re-target an
+existing C function.
+
+#+begin_example
+;; emacs-version is a 0-arg DEFUN, not 2-arg --- this is for demo
+;; only and you'd normally use a JIT-compiled body matching the
+;; signature.  Phase 1 demo:
+(let ((addr (plist-get (cmacs-c-defun-info 'emacs-version) :fn-addr)))
+  (cmacs-c-patch-defun 'current-time-string addr))
+
+(current-time-string)
+;; => "GNU Emacs 31.0.50 ..."
+#+end_example
+
+** Inspect
+
+#+begin_example
+M-x cmacs-c-list-patches-buffer
+#+end_example
+
+Opens =*cmacs-c-patches*= --- a tabulated list of currently-applied
+patches with original/patched address columns.
+
+** Roll back
+
+#+begin_example
+(cmacs-c-unpatch-defun 'current-time-string)
+;; => t
+#+end_example
+
+Or in the patches buffer, press =u= on the row.  Or =U= for
+panic-button "unpatch everything":
+
+#+begin_example
+M-x cmacs-c-unpatch-all
+;; => 1   (count restored)
+#+end_example
+
+* MCP gating
+
+Even when cpatch is *built into* the binary, MCP-driven patching
+remains *off* until the user opts in interactively:
+
+#+begin_example
+(setq cmacs-mcp-cintrospect-enable-patching t)
+#+end_example
+
+The =M-x= user trusting their own commands is *not* the same trust
+level as a remote MCP client.  Pattern matches the existing
+=cmacs/glib/cmacs-eval-dispatch.c= gating story.
+
+* Lisp API reference
+
+| =cmacs-c-patch-defun SYM NEW-FN-ADDR= | atomic =Lisp_Subr.function= swap |
+| =cmacs-c-unpatch-defun SYM= | restore the original pointer |
+| =cmacs-c-patch-list= | list of plists for currently-applied patches |
+| =cmacs-c-unpatch-all= | integer (count of patches removed); panic button |
+| =cmacs-c-patch-function NAME ADDR= | trampoline detour --- Phase 3 stub |
+| =cmacs-c-unpatch-function NAME= | remove detour --- Phase 3 stub |
+| =cmacs-c-patch-diff SYM SOURCE= | preview disasm before applying --- Phase 3 stub |
+
+* Risks (read before patching anything important)
+
+- *Wrong arity/type:* if you swap =current-time-string='s pointer
+  to a function that expects different argument types, the next
+  call SIGSEGVs or returns garbage.  Phase 2's JIT will check the
+  expected signature; Phase 1 you have to be careful.
+- *Non-trivial state:* patching a function that participates in
+  multi-step invariants (e.g. half of a refcount pair) leaves the
+  process in a partially-broken state.
+- *No checkpointing:* there's no automatic save-and-restore of
+  unrelated state.  Run =M-x cmacs-c-unpatch-all= before any
+  =M-x save-some-buffers=.
+- *Pdumper invalidates:* never expect patches to survive a session
+  restart.  The patch registry is intentionally not staticpro'd.
+- *Native-comp interaction:* a DEFUN called from .eln-compiled Lisp
+  goes through a normal indirect call, so the swap is observed.
+  Native-compiled-Lisp callers don't bypass the registry.
+
+* Architecture pointers
+
+- =cmacs/cpatch/cmacs-cpatch.c= --- DEFUN-swap implementation, patch registry
+- =cmacs/cpatch/cmacs-cpatch-defun.c= --- (Phase 3) quiescence-checking arming layer
+- =cmacs/cpatch/cmacs-cpatch-detour.c= --- (Phase 3) trampoline implementation
+- =cmacs/cintrospect/cmacs-cintrospect-defun.c= ---
+  =cmacs_cintrospect_defun_swap_fn= primitive (the actual write helper)
+
+The full architectural plan, risk register, and phasing live in
+=/var/home/zach/.claude/plans/i-want-to-add-breezy-hamming.md=.

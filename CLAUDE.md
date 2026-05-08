@@ -15,7 +15,8 @@
   --with-cmacs-bacon --with-cmacs-gowl \
   --with-cmacs-podomation --with-cmacs-libreclaw \
   --with-cmacs-org-ex --with-cmacs-mcp \
-  --with-cmacs-print
+  --with-cmacs-print \
+  --with-cmacs-cintrospect --enable-cmacs-cpatch
 make -j$(nproc)           # builds deps + emacs
 src/emacs                 # run it
 ```
@@ -45,6 +46,8 @@ cmacs integrates nine subsystems into Emacs as C primitives (DEFUNs):
 | **org-ex** | `cmacs/org-ex/` | Interactive widget embedding for Org mode (liborgex-1.0.a, statically linked) |
 | **mcp** | `cmacs/mcp/` | MCP server — full AI-native runtime introspection and control via Unix socket |
 | **print** | `cmacs/print/` + `lisp/cmacs/cmacs-print.el` | "Print to cmacs" CUPS virtual printer — PDF intake, per-page rasterisation, annotatable org docs |
+| **cintrospect** | `cmacs/cintrospect/` | Runtime C self-introspection via libdw (DWARF) + libgccjit (Phase 2 JIT). Symbol/type/source/stack/object lookup, plus compile-and-call new C from Lisp. Default-on. |
+| **cpatch** | `cmacs/cpatch/` | Runtime C hot-patching: atomic `Lisp_Subr.function` swap (Phase 1) and trampoline detours for arbitrary C (Phase 3). Off by default — `--enable-cmacs-cpatch`. |
 
 ### GLib event loop integration (critical)
 

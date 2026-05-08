@@ -2733,6 +2733,12 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #ifdef HAVE_CMACS_MCP
       syms_of_cmacs_mcp ();
 #endif
+#ifdef HAVE_CMACS_CINTROSPECT
+      syms_of_cmacs_cintrospect ();
+#endif
+#ifdef HAVE_CMACS_CPATCH
+      syms_of_cmacs_cpatch ();
+#endif
 
       keys_of_keyboard ();
 
@@ -2825,6 +2831,12 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #ifdef HAVE_CMACS_MCP
   if (!noninteractive)
     init_cmacs_mcp ();
+#endif
+#ifdef HAVE_CMACS_CINTROSPECT
+  init_cmacs_cintrospect ();
+#endif
+#ifdef HAVE_CMACS_CPATCH
+  init_cmacs_cpatch ();
 #endif
 
   if (!initialized)

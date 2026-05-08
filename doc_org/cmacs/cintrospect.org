@@ -1,0 +1,322 @@
+#+TITLE: Runtime C Self-Introspection (cintrospect)
+#+STARTUP: showall
+#+OPTIONS: toc:2 num:t
+
+* Overview
+
+CMacs already lets you redefine Elisp at runtime --- that's what
+makes Emacs a hackable editor.  The C layer, by contrast, has been a
+black box: you can call =Fmessage= from Elisp but you can't ask
+"what file:line is this defined in?", "what's the layout of =struct
+frame=?", "what's the type signature of
+=pgtk_buffer_flipping_unblocked_hook=?", or --- the holy grail ---
+"compile this C snippet now and replace =Fcurrent_time_string= with
+it for the rest of the session."
+
+The =cintrospect= subsystem closes the read side of that gap.  It
+parses the running binary's DWARF debug info via libdw (elfutils)
+and exposes structured access from Lisp and from MCP.  Phase 2 adds
+runtime C compilation via libgccjit.  The companion =cpatch=
+subsystem (off by default, separate enable flag) closes the write
+side: atomic =Lisp_Subr.function= swap (Phase 1) plus trampoline
+detours for arbitrary C functions (Phase 3).
+
+* Quick start
+
+** Build
+
+Add =--with-cmacs-cintrospect= (default-on; explicit for clarity)
+and =--enable-cmacs-cpatch= (off by default --- this enables runtime
+C *modification*, which you should only opt into when you understand
+the consequences) to your =./configure= invocation:
+
+#+begin_src bash
+./install-deps    # adds elfutils-devel + libdebuginfod-client-devel
+./autogen.sh
+./configure                                 \
+  --with-pgtk --with-cairo                  \
+  --with-native-compilation=aot             \
+  --with-cmacs-glib --with-cmacs-mcp        \
+  --with-cmacs-cintrospect                  \
+  --enable-cmacs-cpatch                     \
+  ...                                       # other flags as in README
+make -j$(nproc)
+#+end_src
+
+** Open the dashboard
+
+#+begin_example
+M-x cmacs-c-introspect
+#+end_example
+
+A =*cmacs-c-introspect*= buffer appears with live counts: ~2,400
+DEFUNs, ~38,000 C symbols, ~150+ loaded ELF objects (libgobject,
+libglib, wlroots, libemacs, ...), 0 active patches.  Hyperlinks open
+sub-browsers.
+
+* Tutorial: Follow along
+
+Each step is independent --- you can jump to any subsection.
+
+** 1. Browse symbols
+
+#+begin_example
+M-x cmacs-c-list-symbols RET buffer-* RET
+#+end_example
+
+Opens =*cmacs-c-symbols*= (=tabulated-list-mode=) with every C symbol
+matching the glob.  Press =/= to refilter, =S= to sort by column,
+=RET= on a row to open the per-symbol detail buffer, =t= to look up
+that symbol's type.
+
+** 2. Inspect a struct layout
+
+#+begin_example
+M-x cmacs-c-show-type RET frame RET
+#+end_example
+
+Opens =*cmacs-c-type: frame*= showing every field with its byte
+offset, size, alignment, and (clickable) referenced type.
+
+** 3. Find a function's source
+
+#+begin_example
+(cmacs-c-function-source "Fbuffer_string")
+;; → ("/var/home/zach/source/projects/cmacs/src/editfns.c" . 1706)
+#+end_example
+
+Or interactively:
+
+#+begin_example
+M-x cmacs-c-show-defun RET buffer-string RET
+#+end_example
+
+** 4. Walk the C stack
+
+#+begin_example
+M-x cmacs-c-show-stack
+#+end_example
+
+Or programmatically:
+
+#+begin_example
+(cmacs-c-stack-trace 8)
+;; → ((:addr ... :function "Feval" :file ".../eval.c" :line 2543) ...)
+#+end_example
+
+Requires the build to have frame pointers / async unwind tables ---
+the cintrospect configure block adds =-fno-omit-frame-pointer
+-fasynchronous-unwind-tables= for you when you enable the subsystem.
+
+** 5. Compile + call new C from Lisp (Phase 2)
+
+In Phase 2 (JIT live):
+
+#+begin_example
+M-x cmacs-c-jit-repl RET
+
+cmacs-c> int sum (int a, int b) { return a + b; }
+=> handle <h:42 sum int(int,int)>
+
+cmacs-c> (cmacs-c-call h:42 2 3)
+=> 5
+#+end_example
+
+In Phase 1 the JIT DEFUNs raise =cmacs-cintrospect-not-implemented=.
+
+** 6. Hot-patch a DEFUN (cpatch)
+
+Requires =--enable-cmacs-cpatch=.
+
+In Phase 2+ JIT lets you write the replacement inline.  In Phase 1,
+you can still patch via any C address (e.g. another DEFUN's body):
+
+#+begin_example
+;; Suppose we want current-time-string to behave like emacs-version.
+(let* ((info (cmacs-c-defun-info 'emacs-version))
+       (addr (plist-get info :fn-addr)))
+  (cmacs-c-patch-defun 'current-time-string addr))
+
+(current-time-string)
+;; => "GNU Emacs 31.0.50 (build ...)"
+
+(cmacs-c-unpatch-defun 'current-time-string)
+(current-time-string)
+;; => "Sun Mar  5 14:32:18 2026"
+#+end_example
+
+Open the patches buffer to see what's currently active:
+
+#+begin_example
+M-x cmacs-c-list-patches-buffer
+#+end_example
+
+Press =u= to unpatch one, =U= to unpatch all (panic button).  The
+unpatch-all path is also available as
+=M-x cmacs-c-unpatch-all=.
+
+** 7. Self-introspection (the killer demo)
+
+Cintrospect can introspect itself --- this is the smoke-test that
+DWARF preservation through the bundled =.a= archives held all the
+way through the link:
+
+#+begin_example
+(cmacs-c-symbol-info "cmacs_cintrospect_dwarf_init")
+;; → (:symbol-name "cmacs_cintrospect_dwarf_init"
+;;    :kind function
+;;    :addr ... :size ...
+;;    :object "emacs"
+;;    :file ".../cmacs-cintrospect-dwarf.c" :line 60)
+#+end_example
+
+* Lisp API reference
+
+** Read-only DEFUNs (Tier 0, always available)
+
+| =cmacs-c-list KIND &optional GLOB LIMIT= | KIND ∈ ='symbol|defun|object= |
+| =cmacs-c-symbol-info NAME= | plist or nil |
+| =cmacs-c-type-info NAME= | plist with :fields |
+| =cmacs-c-function-source NAME= | =(file . line)= |
+| =cmacs-c-addr-to-source ADDR= | =(file line function)= |
+| =cmacs-c-source-to-addr FILE LINE= | integer or nil |
+| =cmacs-c-list-objects= | list of plists |
+| =cmacs-c-list-defuns &optional GLOB LIMIT= | list of plists |
+| =cmacs-c-defun-info SYM= | plist or nil |
+| =cmacs-c-stack-trace &optional DEPTH= | list of frame plists |
+
+** JIT DEFUNs (Tier 1, Phase 2)
+
+| =cmacs-c-compile SOURCE FUNC-NAME &optional EXPECTED-SIG= | handle |
+| =cmacs-c-call HANDLE &rest ARGS= | result |
+| =cmacs-c-handle-info HANDLE= | plist |
+| =cmacs-c-handle-dispose HANDLE= | t |
+
+In Phase 1 these signal =cmacs-cintrospect-not-implemented=.
+
+** cpatch DEFUNs (requires --enable-cmacs-cpatch)
+
+| =cmacs-c-patch-defun SYM NEW-FN-ADDR= | atomic pointer swap |
+| =cmacs-c-unpatch-defun SYM= | restore original |
+| =cmacs-c-patch-list= | list of plists |
+| =cmacs-c-unpatch-all= | integer count (panic button) |
+| =cmacs-c-patch-function NAME ...= | trampoline detour (Phase 3 stub) |
+| =cmacs-c-patch-diff SYM SOURCE= | preview disasm (Phase 3 stub) |
+
+** Interactive buffers
+
+| =cmacs-c-introspect= | =*cmacs-c-introspect*= dashboard |
+| =cmacs-c-list-symbols= | =*cmacs-c-symbols*= browser |
+| =cmacs-c-list-defuns-buffer= | =*cmacs-c-defuns*= browser |
+| =cmacs-c-list-objects-buffer= | =*cmacs-c-objects*= browser |
+| =cmacs-c-show-symbol NAME= | =*cmacs-c-symbol: NAME*= |
+| =cmacs-c-show-type NAME= | =*cmacs-c-type: NAME*= |
+| =cmacs-c-show-defun SYM= | =*cmacs-c-defun: SYM*= |
+| =cmacs-c-show-stack &optional DEPTH= | =*cmacs-c-stack*= |
+| =cmacs-c-list-patches-buffer= | =*cmacs-c-patches*= (cpatch only) |
+
+* MCP surface
+
+When CMacs is built with both =--with-cmacs-cintrospect= and
+=--with-cmacs-mcp=, the MCP server exposes the same surface as
+tools and resources.  See [[file:mcp.org][cmacs-mcp.org]] for the connection
+protocol; the C-introspection-specific tools are:
+
+- =cmacs.c.list= --- list symbols/defuns/objects with optional glob
+- =cmacs.c.symbol_info=, =cmacs.c.type_info=, =cmacs.c.defun_info=
+- =cmacs.c.function_source=, =cmacs.c.addr_to_source=
+- =cmacs.c.stack_trace=
+- =cmacs.c.compile_snippet= / =cmacs.c.call_handle= /
+  =cmacs.c.dispose_handle= (Phase 2)
+- =cmacs.c.patch_defun=, =cmacs.c.unpatch_defun=,
+  =cmacs.c.patch_log=, =cmacs.c.unpatch_all= (cpatch only, gated by
+  =cmacs-mcp-cintrospect-enable-patching=)
+
+Resources: =cmacs://c/symbols=, =cmacs://c/types/{name}=,
+=cmacs://c/source/{+path}=, =cmacs://c/objects=, =cmacs://c/defuns=,
+=cmacs://c/patches=.
+
+* Architecture & safety
+
+** Two-subsystem split
+
+=cintrospect= (read + JIT) is default-on and safe: it observes the
+running binary, never modifies it.  The trust profile is the same
+as =M-x eval-expression=.
+
+=cpatch= (write) is OFF by default and lives in its own directory
+=cmacs/cpatch/=.  This keeps reviewers and packagers honest --- they
+can read the build output and immediately know which mode they got.
+
+** Address model
+
+Internally we store every address as an =(object-id, file-offset)=
+tuple.  Runtime addresses are derived via =dl_iterate_phdr= load
+biases on demand.  This is robust under PIE/ASLR and across pdumper
+load.
+
+** LTO interaction
+
+CMacs enables =-flto= by default when supported (configure.ac:2218).
+LTO inlines static helpers across translation units --- DWARF will
+still describe them, but =DW_AT_low_pc= may point inside an inlined
+caller's body, leaving them un-patchable as standalone functions.
+
+Mitigations:
+
+1. The DWARF reader handles =DW_TAG_inlined_subroutine= and
+   surfaces "inlined-only, no patchable address" as a first-class
+   state.
+2. *Every DEFUN remains patchable* because the =DEFUN= macro forces
+   external linkage --- LTO can't inline =Fbuffer_string= into a
+   caller because callers go through the =Lisp_Subr= function
+   pointer.
+3. If you need comprehensive static-fn patchability, pass
+   =--disable-link-time-optimization= at configure time.
+
+** Single-threaded Lisp = safe pointer swap
+
+CMacs Emacs runs Lisp evaluation single-threaded.  When we hot-patch
+a DEFUN, we just write a new pointer into the
+=union= field of the live =Lisp_Subr=.  On every supported arch a
+pointer-aligned 64-bit write is atomic at the machine level, and no
+other thread can be midway through executing the function body
+because Lisp eval is on this thread.  The GC scanner doesn't touch
+the function-pointer union, so there's no GC race either.
+
+** Pdumper interactions
+
+Pdumper does not touch the ELF binary.  =/proc/self/exe= still has
+DWARF in dumped sessions.  Cintrospect's own runtime state (libdw
+=Dwfl= handle, patch registry) is initialised lazily after pdump
+load --- never staticpro'd into the dump.
+
+** What the build flags add
+
+When =--with-cmacs-cintrospect= is enabled, configure.ac appends:
+
+- =-fno-omit-frame-pointer= --- so libdw can walk the C stack
+  reliably for =cmacs-c-stack-trace=.
+- =-fasynchronous-unwind-tables= --- for backtrace from
+  signal handlers.
+- =-gdwarf-5= --- the richest DIE format (only added if you didn't
+  already specify a =-gdwarf-N= flag).
+
+The default =-g3= comes from the existing configure.ac block at
+lines 1882--1910 when CFLAGS is unset.
+
+* What's not yet implemented
+
+- *Tier 1 (JIT):* =cmacs-c-compile= / =cmacs-c-call= raise
+  =cmacs-cintrospect-not-implemented=.  Phase 2.
+- *Trampoline detours:* =cmacs-c-patch-function= raises
+  =cmacs-cpatch-not-implemented=.  Phase 3.
+- *Patch diff preview:* =cmacs-c-patch-diff= returns a placeholder.
+  Phase 3.
+- *Type browsing list:* =(cmacs-c-list 'type ...)= --- walking every
+  CU's type DIEs is expensive; for now use =cmacs-c-type-info= with
+  an exact name.
+- *Org-Ex C-block embed* (=#+begin_src c-introspect=) --- Phase 2.
+
+See =/var/home/zach/.claude/plans/i-want-to-add-breezy-hamming.md=
+for the full phased plan.

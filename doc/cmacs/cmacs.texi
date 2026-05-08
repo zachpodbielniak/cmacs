@@ -48,6 +48,8 @@ interaction.
 * Org-Ex Interactive Widgets::  Widget embedding in Org buffers.
 * MCP Server::                  MCP server for AI-native control.
 * Print to cmacs::              Virtual printer + PDF intake for annotation.
+* Cintrospect::                 Runtime C self-introspection (libdw + JIT).
+* Cpatch::                      Runtime C hot-patching (DEFUN swap + detours).
 * Build Configuration::         Configure flags and dependencies.
 @end menu
 
@@ -109,6 +111,15 @@ Embeds interactive widgets---GTK controls, web views, buffer windows,
 and code evaluation results---directly inside Org mode buffers.
 Widgets are declared with @code{#+BEGIN_WIDGET} blocks, bound
 reactively to document properties, and exported to HTML and text.
+
+@item Cintrospect / Cpatch
+Runtime C self-introspection (libdw DWARF reader + Phase-2
+libgccjit JIT) and runtime C hot-patching (atomic
+@code{Lisp_Subr.function} swap + Phase-3 trampoline detours).
+Together: a C layer as live and inspectable as the Lisp layer ---
+the @emph{ultimate hackable editor} story.  Cintrospect default-on;
+cpatch off by default, requires explicit
+@option{--enable-cmacs-cpatch}.
 @end table
 
 @noindent
@@ -125,6 +136,8 @@ cmacs/
     modules/      cmacsgi builtin (transport abstraction + 60+ commands)
   gowl/           Wayland compositor (wlroots, 47+ DEFUNs, embedding)
   org-ex/         Org-Ex interactive widgets (liborgex-1.0.so + DEFUN bridge)
+  cintrospect/    Runtime C self-introspection (libdw DWARF + libgccjit JIT)
+  cpatch/         Runtime C hot-patching (DEFUN pointer swap + detours)
 deps/bacon/       Bundled bacon source (built as libbacon-1.0.a)
 deps/gowl/        Bundled gowl library (wlroots-based compositor)
 lisp/cmacs/       Elisp integration layers
@@ -4430,6 +4443,197 @@ page renaming.
 @end table
 
 @c ===================================================================
+@node Cintrospect
+@chapter Cintrospect: Runtime C Self-Introspection
+
+@cindex cintrospect
+@cindex DWARF
+@cindex libdw
+@cindex runtime C introspection
+
+@quotation
+This chapter mirrors @file{doc_org/cmacs/cintrospect.org}; that file
+is the primary interactive reference and contains the full follow-along
+tutorial.  Read it for examples and architecture details; this chapter
+gives the reference summary.
+@end quotation
+
+CMacs already lets you redefine Elisp at runtime.  The @code{cintrospect}
+subsystem closes the @emph{read} half of that gap for the C layer:
+parse the running binary's DWARF debug info via libdw (elfutils) and
+expose structured access from Lisp and from MCP.  Phase 2 will add
+runtime C compilation via libgccjit.  The companion
+@code{cpatch} subsystem (next chapter) closes the @emph{write} half.
+
+Enable with @option{--with-cmacs-cintrospect} (default on).  Adds
+elfutils-devel + libdebuginfod to the build deps and appends
+@code{-fno-omit-frame-pointer -fasynchronous-unwind-tables -gdwarf-5}
+to CFLAGS so DWARF queries and stack walks work reliably.
+
+@section Lisp DEFUNs
+
+@table @code
+@item cmacs-c-list KIND &optional GLOB LIMIT
+List entities; KIND is @code{symbol}, @code{defun}, or @code{object}.
+
+@item cmacs-c-symbol-info NAME
+Return plist of @code{:symbol-name :kind :addr :size :object :file :line}.
+
+@item cmacs-c-type-info NAME
+Return plist of @code{:kind :size :align :fields}; @code{:fields} is a
+list of per-field plists with @code{:symbol-name :addr :size :type-name :bit-size}.
+
+@item cmacs-c-function-source NAME
+Return @code{(file . line)} or @code{nil}.
+
+@item cmacs-c-addr-to-source ADDR
+Return @code{(file line function)} list or @code{nil}.
+
+@item cmacs-c-source-to-addr FILE LINE
+Inverse: return integer or @code{nil}.
+
+@item cmacs-c-list-objects
+List loaded ELF objects with @code{:has-dwarf} flag.
+
+@item cmacs-c-list-defuns &optional GLOB LIMIT
+List every Lisp-callable C primitive.
+
+@item cmacs-c-defun-info SYM
+Return plist for the DEFUN named SYM (lookup via obarray).
+
+@item cmacs-c-stack-trace &optional DEPTH
+List of plists for the current C stack.
+
+@item cmacs-c-compile SOURCE FUNC-NAME &optional EXPECTED-SIG
+@itemx cmacs-c-call HANDLE &rest ARGS
+@itemx cmacs-c-handle-info HANDLE
+@itemx cmacs-c-handle-dispose HANDLE
+JIT (Phase 2) DEFUNs.  In Phase 1 these signal
+@code{cmacs-cintrospect-not-implemented}.
+@end table
+
+@section Interactive buffers
+
+@table @code
+@item M-x cmacs-c-introspect
+Top-level dashboard with live counts and links to sub-browsers.
+
+@item M-x cmacs-c-list-symbols
+@code{*cmacs-c-symbols*} tabulated-list-mode browser.
+
+@item M-x cmacs-c-show-type RET NAME RET
+@code{*cmacs-c-type: NAME*} struct/union/enum layout viewer.
+
+@item M-x cmacs-c-show-defun RET SYM RET
+@code{*cmacs-c-defun: SYM*} per-DEFUN detail.
+
+@item M-x cmacs-c-show-stack
+@code{*cmacs-c-stack*} live C stack with file:line.
+
+@item M-x cmacs-c-list-defuns-buffer
+@itemx M-x cmacs-c-list-objects-buffer
+DEFUN registry / loaded-ELF-objects browsers.
+@end table
+
+@section File reference
+
+@table @file
+@item cmacs/cintrospect/cmacs-cintrospect.c
+Top-level subsystem entry; all Lisp DEFUNs.
+
+@item cmacs/cintrospect/cmacs-cintrospect-dwarf.c
+libdw/libdwfl wrapper: symbol lookup, addr↔source, recursive type
+DIE walking.  All entry points hold a coarse mutex (libdw is not
+thread-safe).
+
+@item cmacs/cintrospect/cmacs-cintrospect-defun.c
+Walks @code{Vobarray} via @code{DOOBARRAY} for SUBRP entries; exposes
+@code{cmacs_cintrospect_defun_swap_fn} primitive used by cpatch.
+
+@item cmacs/cintrospect/cmacs-cintrospect-jit.c
+@itemx cmacs/cintrospect/cmacs-cintrospect-marshal.c
+Phase-2 stubs: persistent gcc_jit_context + DWARF-driven
+Lisp@dmn{}C blob marshaller.
+
+@item lisp/cmacs/cmacs-cintrospect.el
+High-level Lisp API + autoloads + @code{tabulated-list-mode}
+browsers + @code{with-help-window} detail buffers.
+@end table
+
+@c ===================================================================
+@node Cpatch
+@chapter Cpatch: Runtime C Hot-Patching
+
+@cindex cpatch
+@cindex hot-patch
+@cindex defun swap
+
+@quotation
+This chapter mirrors @file{doc_org/cmacs/cpatch.org}.
+@end quotation
+
+@code{cpatch} is the kernel-grade companion to cintrospect.  Where
+cintrospect lets you @emph{inspect} the running C layer, cpatch lets
+you @emph{replace} C functions in place at runtime --- the C-side
+equivalent of redefining a Lisp function with @code{defun}.
+
+This is @emph{off by default} and lives in its own subsystem
+@file{cmacs/cpatch/} for a reason: a wrong patch silently corrupts
+in-process state.  Enable with @option{--enable-cmacs-cpatch}; the
+flag requires @option{--with-cmacs-cintrospect}.
+
+@section Two patching modes
+
+@table @asis
+@item DEFUN pointer swap (Phase 1, available now)
+Atomic write to @code{Lisp_Subr.function} in
+@file{src/lisp.h:2175-2208}.  Safe because Emacs Lisp eval is
+single-threaded.  Covers all ~2,400 Lisp-callable C primitives.
+
+@item Trampoline detour (Phase 3, deferred)
+13-byte @code{mov rax,imm64; jmp rax} on x86_64 / 12-byte
+@code{adrp/add/br x16} on AArch64, with mprotect W^X dance, ICache
+flush, libopcodes prologue probe, and rendezvous with cmacs's
+quiescence flags.  In Phase 1, @code{cmacs-c-patch-function} signals
+@code{cmacs-cpatch-not-implemented}.
+@end table
+
+@section Lisp DEFUNs
+
+@table @code
+@item cmacs-c-patch-defun SYM NEW-FN-ADDR
+Atomically swap @code{Lisp_Subr.function} for the DEFUN named SYM.
+Records the original pointer for later restore.
+
+@item cmacs-c-unpatch-defun SYM
+Restore the original pointer for a single DEFUN.
+
+@item cmacs-c-patch-list
+Return list of currently-applied patches with original/patched
+addresses.
+
+@item cmacs-c-unpatch-all
+Panic button.  Restores every patched DEFUN.  Returns the count.
+
+@item cmacs-c-patch-function NAME ADDR
+@itemx cmacs-c-unpatch-function NAME
+@itemx cmacs-c-patch-diff SYM SOURCE
+Phase-3 stubs.
+@end table
+
+@section MCP gating
+
+When @option{--with-cmacs-mcp} is also enabled, MCP-driven patching
+remains @emph{off} until the user opts in:
+
+@example
+(setq cmacs-mcp-cintrospect-enable-patching t)
+@end example
+
+The @code{M-x} user trusting their own commands is @emph{not} the
+same trust level as a remote MCP client.
+
+@c ===================================================================
 @node Build Configuration
 @chapter Build Configuration
 
@@ -4466,7 +4670,9 @@ fully-featured build matching Fedora defaults, use:
   --with-cmacs-libreclaw \
   --with-cmacs-org-ex \
   --with-cmacs-mcp \
-  --with-cmacs-print
+  --with-cmacs-print \
+  --with-cmacs-cintrospect \
+  --enable-cmacs-cpatch
 @end example
 
 @noindent

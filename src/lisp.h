@@ -5521,6 +5521,14 @@ extern void syms_of_cmacs_org_ex (void);
 extern void syms_of_cmacs_mcp (void);
 extern void init_cmacs_mcp (void);
 #endif
+#ifdef HAVE_CMACS_CINTROSPECT
+extern void syms_of_cmacs_cintrospect (void);
+extern void init_cmacs_cintrospect (void);
+#endif
+#ifdef HAVE_CMACS_CPATCH
+extern void syms_of_cmacs_cpatch (void);
+extern void init_cmacs_cpatch (void);
+#endif
 
 #ifdef HAVE_NATIVE_COMP
 INLINE bool

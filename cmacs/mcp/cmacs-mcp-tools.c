@@ -49,6 +49,10 @@ cmacs_mcp_register_all_tools (McpServer *server)
 #ifdef HAVE_CMACS_GOWL
   cmacs_mcp_tools_gowl_register (server);
 #endif
+
+#ifdef HAVE_CMACS_CINTROSPECT
+  cmacs_mcp_tools_cintrospect_register (server);
+#endif
 }
 
 #endif /* HAVE_CMACS_MCP */

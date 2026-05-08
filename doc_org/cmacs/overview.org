@@ -17,6 +17,8 @@ several subsystems as C primitives (DEFUNs), all built into the editor:
 | *bacon*    | =cmacs/bacon/=   | Embedded shell (fork-of-self, socketpair IPC)         |
 | *gowl*     | =cmacs/gowl/=    | Wayland compositor (wlroots) --- 47 DEFUNs            |
 | *print*    | =cmacs/print/=   | "Print to cmacs" CUPS virtual printer + PDF intake    |
+| *cintrospect* | =cmacs/cintrospect/= | Runtime C self-introspection (libdw + JIT)      |
+| *cpatch*   | =cmacs/cpatch/=  | Runtime C hot-patching (DEFUN swap + detours)         |
 
 * Source Layout
 

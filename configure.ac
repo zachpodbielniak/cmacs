@@ -829,6 +829,9 @@ if test "$with_cmacs_mcp" != "no"; then
     cmacs-mcp-tools-buffer.o cmacs-mcp-tools-window.o cmacs-mcp-tools-input.o \
     cmacs-mcp-tools-process.o cmacs-mcp-tools-debug.o cmacs-mcp-tools-gi.o \
     cmacs-mcp-tools-gowl.o cmacs-mcp-resources.o cmacs-mcp-prompts.o"
+  if test "$with_cmacs_cintrospect" != "no"; then
+    CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-cintrospect.o"
+  fi
 fi
 # CMACS Print: pure-Elisp + shell-script subsystem (no C build artefacts).
 # Probe for runtime tools so install-cmacs-printer can fail loudly at
@@ -857,6 +860,79 @@ AC_SUBST(HAVE_CMACS_PRINT)
 AC_SUBST(CMACS_PRINT_PDFTOCAIRO)
 AC_SUBST(CMACS_PRINT_PDFINFO)
 AC_SUBST(CMACS_PRINT_GDBUS)
+
+# CMACS Cintrospect: runtime C self-introspection (DWARF reader + JIT).
+# Default-on.  Probes for libdw + libelf via pkg-config, optional
+# libdebuginfod for distro split-debug support.  When enabled, also
+# adds -fno-omit-frame-pointer + -fasynchronous-unwind-tables +
+# -gdwarf-5 to CFLAGS so unwinding and DIE quality are guaranteed.
+AC_ARG_WITH([cmacs-cintrospect],
+  [AS_HELP_STRING([--with-cmacs-cintrospect],
+     [enable runtime C self-introspection (libdw + libgccjit JIT)])],
+  [], [with_cmacs_cintrospect=yes])
+HAVE_CMACS_CINTROSPECT=no
+if test "$with_cmacs_cintrospect" != "no"; then
+  PKG_CHECK_MODULES([CMACS_CINTROSPECT_DEPS], [libdw libelf],
+    [HAVE_CMACS_CINTROSPECT=yes],
+    [AC_MSG_WARN([cmacs-cintrospect requested but libdw/libelf not found; disabling.])])
+  if test "$HAVE_CMACS_CINTROSPECT" = "yes"; then
+    PKG_CHECK_MODULES([CMACS_DEBUGINFOD], [libdebuginfod],
+      [AC_DEFINE([HAVE_CMACS_DEBUGINFOD], 1, [debuginfod for split-debug DIE lookups])
+       CMACS_CINTROSPECT_DEPS_CFLAGS="$CMACS_CINTROSPECT_DEPS_CFLAGS $CMACS_DEBUGINFOD_CFLAGS"
+       CMACS_CINTROSPECT_DEPS_LIBS="$CMACS_CINTROSPECT_DEPS_LIBS $CMACS_DEBUGINFOD_LIBS"],
+      [AC_MSG_NOTICE([libdebuginfod absent --- split-debug DIEs unavailable])])
+    AC_DEFINE([HAVE_CMACS_CINTROSPECT], 1, [CMacs runtime C self-introspection])
+    CMACS_CINTROSPECT_CFLAGS="$CMACS_CINTROSPECT_DEPS_CFLAGS"
+    CMACS_CINTROSPECT_LIBS="$CMACS_CINTROSPECT_DEPS_LIBS -ldl"
+    CMACS_CINTROSPECT_OBJ="cmacs-cintrospect.o cmacs-cintrospect-dwarf.o cmacs-cintrospect-defun.o cmacs-cintrospect-jit.o cmacs-cintrospect-marshal.o"
+    # Augment CFLAGS only when introspect enabled --- keeps default
+    # builds lean.  -g3 already comes from configure.ac:1882-1910 when
+    # CFLAGS is unset; add -gdwarf-5 explicitly to guarantee the
+    # richest DIE format.  Frame pointer + async unwind tables let
+    # libdw walk the C stack reliably.
+    CFLAGS="$CFLAGS -fno-omit-frame-pointer -fasynchronous-unwind-tables"
+    case " $CFLAGS " in
+      *' -gdwarf-'*) ;;
+      *) CFLAGS="$CFLAGS -gdwarf-5" ;;
+    esac
+  fi
+fi
+
+# CMACS Cpatch: runtime C hot-patching.  OFF BY DEFAULT --- this is
+# kernel-grade machinery, a wrong patch silently corrupts in-process
+# state.  Requires --with-cmacs-cintrospect.  Probes for libopcodes
+# only when explicitly enabled; falls back to a hand-rolled prologue
+# probe if absent.
+AC_ARG_ENABLE([cmacs-cpatch],
+  [AS_HELP_STRING([--enable-cmacs-cpatch],
+     [enable runtime C hot-patching (DEFUN pointer swap + detours) --- DANGEROUS, off by default])],
+  [], [enable_cmacs_cpatch=no])
+HAVE_CMACS_CPATCH=no
+if test "$enable_cmacs_cpatch" = "yes"; then
+  if test "$HAVE_CMACS_CINTROSPECT" != "yes"; then
+    AC_MSG_ERROR([--enable-cmacs-cpatch requires --with-cmacs-cintrospect])
+  fi
+  HAVE_CMACS_CPATCH=yes
+  AC_DEFINE([HAVE_CMACS_CPATCH], 1, [CMacs runtime C hot-patching])
+  # libopcodes (binutils) gives us a battle-tested prologue-length
+  # probe; when absent we use a small built-in for x86_64/AArch64.
+  AC_CHECK_HEADER([dis-asm.h],
+    [AC_CHECK_LIB([opcodes], [init_disassemble_info],
+      [AC_DEFINE([HAVE_LIBOPCODES], 1, [libopcodes for prologue probe])
+       CMACS_CPATCH_LIBS="-lopcodes -lbfd"],
+      [AC_MSG_NOTICE([libopcodes absent --- using built-in prologue probe])])],
+    [AC_MSG_NOTICE([dis-asm.h absent --- using built-in prologue probe])])
+  CMACS_CPATCH_OBJ="cmacs-cpatch.o cmacs-cpatch-defun.o cmacs-cpatch-detour.o"
+fi
+
+AC_SUBST(HAVE_CMACS_CINTROSPECT)
+AC_SUBST(CMACS_CINTROSPECT_CFLAGS)
+AC_SUBST(CMACS_CINTROSPECT_LIBS)
+AC_SUBST(CMACS_CINTROSPECT_OBJ)
+AC_SUBST(HAVE_CMACS_CPATCH)
+AC_SUBST(CMACS_CPATCH_LIBS)
+AC_SUBST(CMACS_CPATCH_OBJ)
+
 AC_SUBST(CMACS_MCP_OBJ)
 AC_SUBST(CMACS_MCP_CFLAGS)
 AC_SUBST(CMACS_MCP_LIBS)
