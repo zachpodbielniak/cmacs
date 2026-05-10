@@ -84,6 +84,7 @@ static guint reg_iface_config   = 0;
 static guint reg_application    = 0;
 static guint reg_actions        = 0;
 static guint reg_search_provider = 0;
+static guint reg_iface_watch    = 0;
 
 /* ── Public connection / name accessors ─────────────────────────── */
 
@@ -263,12 +264,22 @@ register_modules (GDBusConnection *conn, GError **error)
     conn, CMACS_DBUS_ROOT_PATH "/SearchProvider", error);
   if (reg_search_provider == 0) return FALSE;
 
+  /* Phase 5: creative extensions (root-level Watch iface).  MPRIS is
+     opt-in via cmacs-dbus-mpris-start so we don't auto-claim
+     org.mpris.MediaPlayer2.cmacs at startup. */
+  reg_iface_watch = cmacs_dbus_iface_watch_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_watch == 0) return FALSE;
+
   return TRUE;
 }
 
 static void
 unregister_modules (GDBusConnection *conn)
 {
+  if (reg_iface_watch)
+    { cmacs_dbus_iface_watch_unregister (conn, reg_iface_watch);
+      reg_iface_watch = 0; }
   if (reg_search_provider)
     { cmacs_dbus_search_provider_unregister (conn, reg_search_provider);
       reg_search_provider = 0; }
@@ -526,6 +537,7 @@ for this cmacs process, or nil if the service is stopped.  */)
 }
 
 extern void syms_of_cmacs_dbus_emit (void);
+extern void syms_of_cmacs_dbus_mpris (void);
 
 void
 syms_of_cmacs_dbus (void)
@@ -537,6 +549,7 @@ syms_of_cmacs_dbus (void)
   defsubr (&Scmacs_dbus_per_pid_name);
 
   syms_of_cmacs_dbus_emit ();
+  syms_of_cmacs_dbus_mpris ();
 }
 
 /* Called once at startup from src/emacs.c::main, after

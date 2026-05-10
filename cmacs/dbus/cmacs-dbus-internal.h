@@ -108,6 +108,10 @@ void  cmacs_dbus_actions_unregister     (GDBusConnection *, guint);
 guint cmacs_dbus_search_provider_register   (GDBusConnection *, const gchar *, GError **);
 void  cmacs_dbus_search_provider_unregister (GDBusConnection *, guint);
 
+/* Phase 5 creative extensions. */
+guint cmacs_dbus_iface_watch_register   (GDBusConnection *, const gchar *, GError **);
+void  cmacs_dbus_iface_watch_unregister (GDBusConnection *, guint);
+
 /* ── Generic helper: invoke elisp + return string ───────────────────
  *
  * Builds an elisp expression by substituting %s placeholders with
