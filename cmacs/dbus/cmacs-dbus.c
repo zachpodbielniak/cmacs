@@ -67,6 +67,19 @@ static guint reg_iface_bufmgr   = 0;
 static guint reg_iface_framemgr = 0;
 static guint reg_iface_winmgr   = 0;
 static guint reg_iface_procmgr  = 0;
+/* Phase 3 typed parity ifaces. */
+static guint reg_iface_search   = 0;
+static guint reg_iface_vc       = 0;
+static guint reg_iface_project  = 0;
+static guint reg_iface_cintrospect = 0;
+static guint reg_iface_cpatch   = 0;
+static guint reg_iface_bookmark = 0;
+static guint reg_iface_clipboard = 0;
+static guint reg_iface_package  = 0;
+static guint reg_iface_file     = 0;
+static guint reg_iface_text     = 0;
+static guint reg_iface_nav      = 0;
+static guint reg_iface_config   = 0;
 
 /* ── Public connection / name accessors ─────────────────────────── */
 
@@ -183,12 +196,97 @@ register_modules (GDBusConnection *conn, GError **error)
   if (reg_iface_procmgr == 0)
     return FALSE;
 
+  /* Phase 3: cmacsgi parity. */
+  reg_iface_search = cmacs_dbus_iface_search_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_search == 0) return FALSE;
+
+  reg_iface_vc = cmacs_dbus_iface_vc_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_vc == 0) return FALSE;
+
+  reg_iface_project = cmacs_dbus_iface_project_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_project == 0) return FALSE;
+
+  reg_iface_cintrospect = cmacs_dbus_iface_cintrospect_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_cintrospect == 0) return FALSE;
+
+  reg_iface_cpatch = cmacs_dbus_iface_cpatch_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_cpatch == 0) return FALSE;
+
+  reg_iface_bookmark = cmacs_dbus_iface_bookmark_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_bookmark == 0) return FALSE;
+
+  reg_iface_clipboard = cmacs_dbus_iface_clipboard_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_clipboard == 0) return FALSE;
+
+  reg_iface_package = cmacs_dbus_iface_package_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_package == 0) return FALSE;
+
+  reg_iface_file = cmacs_dbus_iface_file_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_file == 0) return FALSE;
+
+  reg_iface_text = cmacs_dbus_iface_text_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_text == 0) return FALSE;
+
+  reg_iface_nav = cmacs_dbus_iface_nav_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_nav == 0) return FALSE;
+
+  reg_iface_config = cmacs_dbus_iface_config_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_config == 0) return FALSE;
+
   return TRUE;
 }
 
 static void
 unregister_modules (GDBusConnection *conn)
 {
+  if (reg_iface_config)
+    { cmacs_dbus_iface_config_unregister (conn, reg_iface_config);
+      reg_iface_config = 0; }
+  if (reg_iface_nav)
+    { cmacs_dbus_iface_nav_unregister (conn, reg_iface_nav);
+      reg_iface_nav = 0; }
+  if (reg_iface_text)
+    { cmacs_dbus_iface_text_unregister (conn, reg_iface_text);
+      reg_iface_text = 0; }
+  if (reg_iface_file)
+    { cmacs_dbus_iface_file_unregister (conn, reg_iface_file);
+      reg_iface_file = 0; }
+  if (reg_iface_package)
+    { cmacs_dbus_iface_package_unregister (conn, reg_iface_package);
+      reg_iface_package = 0; }
+  if (reg_iface_clipboard)
+    { cmacs_dbus_iface_clipboard_unregister (conn, reg_iface_clipboard);
+      reg_iface_clipboard = 0; }
+  if (reg_iface_bookmark)
+    { cmacs_dbus_iface_bookmark_unregister (conn, reg_iface_bookmark);
+      reg_iface_bookmark = 0; }
+  if (reg_iface_cpatch)
+    { cmacs_dbus_iface_cpatch_unregister (conn, reg_iface_cpatch);
+      reg_iface_cpatch = 0; }
+  if (reg_iface_cintrospect)
+    { cmacs_dbus_iface_cintrospect_unregister (conn, reg_iface_cintrospect);
+      reg_iface_cintrospect = 0; }
+  if (reg_iface_project)
+    { cmacs_dbus_iface_project_unregister (conn, reg_iface_project);
+      reg_iface_project = 0; }
+  if (reg_iface_vc)
+    { cmacs_dbus_iface_vc_unregister (conn, reg_iface_vc);
+      reg_iface_vc = 0; }
+  if (reg_iface_search)
+    { cmacs_dbus_iface_search_unregister (conn, reg_iface_search);
+      reg_iface_search = 0; }
   if (reg_iface_procmgr)
     { cmacs_dbus_iface_procmgr_unregister (conn, reg_iface_procmgr);
       reg_iface_procmgr = 0; }

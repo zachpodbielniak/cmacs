@@ -76,6 +76,42 @@ void     cmacs_dbus_register_property     (const gchar *path,
                                             const gchar *getter_elisp,
                                             const gchar *setter_elisp);
 
+/* ── Phase 3 iface registration ─────────────────────────────────────
+ *
+ * Each typed iface module exposes a register/unregister pair.  All
+ * registered at /org/cmacs/Editor by cmacs-dbus.c. */
+
+#define CMACS_DBUS_IFACE_DECL(name)                                    \
+  guint cmacs_dbus_iface_##name##_register   (GDBusConnection *,       \
+                                               const gchar *,           \
+                                               GError **);              \
+  void  cmacs_dbus_iface_##name##_unregister (GDBusConnection *, guint);
+
+CMACS_DBUS_IFACE_DECL (search)
+CMACS_DBUS_IFACE_DECL (vc)
+CMACS_DBUS_IFACE_DECL (project)
+CMACS_DBUS_IFACE_DECL (cintrospect)
+CMACS_DBUS_IFACE_DECL (cpatch)
+CMACS_DBUS_IFACE_DECL (bookmark)
+CMACS_DBUS_IFACE_DECL (clipboard)
+CMACS_DBUS_IFACE_DECL (package)
+CMACS_DBUS_IFACE_DECL (file)
+CMACS_DBUS_IFACE_DECL (text)
+CMACS_DBUS_IFACE_DECL (nav)
+CMACS_DBUS_IFACE_DECL (config)
+
+/* ── Generic helper: invoke elisp + return string ───────────────────
+ *
+ * Builds an elisp expression by substituting %s placeholders with
+ * lisp-escape'd argv values, evaluates via cmacs_dispatch_eval, and
+ * sends the result as a (s) D-Bus reply (or D-Bus error).
+ *
+ * Designed for the "elisp emitter style" cmacsgi handlers use. */
+void cmacs_dbus_eval_to_reply (GDBusMethodInvocation *invocation,
+                               const gchar           *elisp_template,
+                               const gchar          **args,
+                               gint                   n_args);
+
 /* ── Object Manager: managed-object registry ─────────────────────────
  *
  * Modules that register dynamic objects (Phase 2: buffers, frames,

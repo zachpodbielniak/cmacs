@@ -19,8 +19,10 @@
 #ifdef HAVE_CMACS_GLIB
 
 #include "cmacs-dbus-internal.h"
+#include "cmacs-eval-dispatch.h"
 
 #include <glib.h>
+#include <gio/gio.h>
 #include <string.h>
 
 /* ── Lisp string escaping ────────────────────────────────────────── */
@@ -90,6 +92,58 @@ cmacs_dbus_return_gerror (GDBusMethodInvocation *invocation, GError *err)
     invocation, "org.cmacs.Editor1.Error",
     err->message ? err->message : "(unknown error)");
   g_error_free (err);
+}
+
+/* ── Generic elisp-to-(s)-reply helper ───────────────────────────── */
+
+void
+cmacs_dbus_eval_to_reply (GDBusMethodInvocation *invocation,
+                          const gchar           *elisp_template,
+                          const gchar          **args,
+                          gint                   n_args)
+{
+  GString *expr;
+  const gchar *p = elisp_template;
+  gint arg_index = 0;
+  gchar *result;
+  GError *err = NULL;
+
+  /* Substitute %s placeholders with lisp-escaped argv values.
+     %% emits a literal %.  Other % escapes are kept verbatim. */
+  expr = g_string_new (NULL);
+  while (*p != '\0')
+    {
+      if (p[0] == '%' && p[1] == 's' && arg_index < n_args)
+        {
+          gchar *escaped =
+            cmacs_dbus_lisp_escape (args[arg_index++] ? args[arg_index - 1] : "");
+          g_string_append (expr, escaped);
+          g_free (escaped);
+          p += 2;
+        }
+      else if (p[0] == '%' && p[1] == '%')
+        {
+          g_string_append_c (expr, '%');
+          p += 2;
+        }
+      else
+        {
+          g_string_append_c (expr, *p);
+          p++;
+        }
+    }
+
+  result = cmacs_dispatch_eval (expr->str, &err);
+  g_string_free (expr, TRUE);
+
+  if (result == NULL)
+    {
+      cmacs_dbus_return_gerror (invocation, err);
+      return;
+    }
+  g_dbus_method_invocation_return_value (
+    invocation, g_variant_new ("(s)", result));
+  g_free (result);
 }
 
 #endif /* HAVE_CMACS_GLIB */
