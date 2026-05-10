@@ -112,6 +112,15 @@ void  cmacs_dbus_search_provider_unregister (GDBusConnection *, guint);
 guint cmacs_dbus_iface_watch_register   (GDBusConnection *, const gchar *, GError **);
 void  cmacs_dbus_iface_watch_unregister (GDBusConnection *, guint);
 
+#ifdef HAVE_CMACS_GOWL
+/* Wayland compositor + display configuration ifaces (replaces the
+ * Gowl* methods that previously sat on org.cmacs.Editor1). */
+guint cmacs_dbus_iface_compositor_register   (GDBusConnection *, const gchar *, GError **);
+void  cmacs_dbus_iface_compositor_unregister (GDBusConnection *, guint);
+guint cmacs_dbus_iface_monitor_register      (GDBusConnection *, const gchar *, GError **);
+void  cmacs_dbus_iface_monitor_unregister    (GDBusConnection *, guint);
+#endif
+
 /* ── Generic helper: invoke elisp + return string ───────────────────
  *
  * Builds an elisp expression by substituting %s placeholders with

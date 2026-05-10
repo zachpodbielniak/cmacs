@@ -85,6 +85,10 @@ static guint reg_application    = 0;
 static guint reg_actions        = 0;
 static guint reg_search_provider = 0;
 static guint reg_iface_watch    = 0;
+#ifdef HAVE_CMACS_GOWL
+static guint reg_iface_compositor = 0;
+static guint reg_iface_monitor    = 0;
+#endif
 
 /* ── Public connection / name accessors ─────────────────────────── */
 
@@ -271,12 +275,30 @@ register_modules (GDBusConnection *conn, GError **error)
     conn, CMACS_DBUS_ROOT_PATH, error);
   if (reg_iface_watch == 0) return FALSE;
 
+#ifdef HAVE_CMACS_GOWL
+  reg_iface_compositor = cmacs_dbus_iface_compositor_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_compositor == 0) return FALSE;
+
+  reg_iface_monitor = cmacs_dbus_iface_monitor_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_monitor == 0) return FALSE;
+#endif
+
   return TRUE;
 }
 
 static void
 unregister_modules (GDBusConnection *conn)
 {
+#ifdef HAVE_CMACS_GOWL
+  if (reg_iface_monitor)
+    { cmacs_dbus_iface_monitor_unregister (conn, reg_iface_monitor);
+      reg_iface_monitor = 0; }
+  if (reg_iface_compositor)
+    { cmacs_dbus_iface_compositor_unregister (conn, reg_iface_compositor);
+      reg_iface_compositor = 0; }
+#endif
   if (reg_iface_watch)
     { cmacs_dbus_iface_watch_unregister (conn, reg_iface_watch);
       reg_iface_watch = 0; }
