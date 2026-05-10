@@ -100,6 +100,14 @@ CMACS_DBUS_IFACE_DECL (text)
 CMACS_DBUS_IFACE_DECL (nav)
 CMACS_DBUS_IFACE_DECL (config)
 
+/* Phase 4 desktop integration. */
+guint cmacs_dbus_application_register   (GDBusConnection *, const gchar *, GError **);
+void  cmacs_dbus_application_unregister (GDBusConnection *, guint);
+guint cmacs_dbus_actions_register       (GDBusConnection *, const gchar *, GError **);
+void  cmacs_dbus_actions_unregister     (GDBusConnection *, guint);
+guint cmacs_dbus_search_provider_register   (GDBusConnection *, const gchar *, GError **);
+void  cmacs_dbus_search_provider_unregister (GDBusConnection *, guint);
+
 /* ── Generic helper: invoke elisp + return string ───────────────────
  *
  * Builds an elisp expression by substituting %s placeholders with

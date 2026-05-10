@@ -10,3 +10,4 @@ Terminal=false
 Categories=Development;TextEditor;
 StartupNotify=true
 StartupWMClass=Emacs
+DBusActivatable=true

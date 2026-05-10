@@ -80,6 +80,10 @@ static guint reg_iface_file     = 0;
 static guint reg_iface_text     = 0;
 static guint reg_iface_nav      = 0;
 static guint reg_iface_config   = 0;
+/* Phase 4 desktop integration. */
+static guint reg_application    = 0;
+static guint reg_actions        = 0;
+static guint reg_search_provider = 0;
 
 /* ── Public connection / name accessors ─────────────────────────── */
 
@@ -245,12 +249,35 @@ register_modules (GDBusConnection *conn, GError **error)
     conn, CMACS_DBUS_ROOT_PATH, error);
   if (reg_iface_config == 0) return FALSE;
 
+  /* Phase 4: desktop integration. */
+  reg_application = cmacs_dbus_application_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_application == 0) return FALSE;
+
+  reg_actions = cmacs_dbus_actions_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_actions == 0) return FALSE;
+
+  /* SearchProvider2 lives at its own object path. */
+  reg_search_provider = cmacs_dbus_search_provider_register (
+    conn, CMACS_DBUS_ROOT_PATH "/SearchProvider", error);
+  if (reg_search_provider == 0) return FALSE;
+
   return TRUE;
 }
 
 static void
 unregister_modules (GDBusConnection *conn)
 {
+  if (reg_search_provider)
+    { cmacs_dbus_search_provider_unregister (conn, reg_search_provider);
+      reg_search_provider = 0; }
+  if (reg_actions)
+    { cmacs_dbus_actions_unregister (conn, reg_actions);
+      reg_actions = 0; }
+  if (reg_application)
+    { cmacs_dbus_application_unregister (conn, reg_application);
+      reg_application = 0; }
   if (reg_iface_config)
     { cmacs_dbus_iface_config_unregister (conn, reg_iface_config);
       reg_iface_config = 0; }
