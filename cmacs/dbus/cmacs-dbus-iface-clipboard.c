@@ -4,7 +4,10 @@
  */
 
 /* cmacs-dbus-iface-clipboard.c --- clipboard operations.
- * Mirrors cmacsgi copy/cut/paste/clip. */
+ * Mirrors cmacsgi copy/cut/paste/clip and adds direct Put/Get for
+ * external producers/consumers that don't have a buffer region to
+ * point at -- e.g. a CI pipeline pushing build output to the
+ * clipboard, or a status-bar widget sampling the current selection. */
 
 #include <config.h>
 #ifdef HAVE_CMACS_GLIB
@@ -22,6 +25,18 @@ static const gchar *iface_xml =
   "    <arg type='s' name='ack' direction='out'/></method>"
   "  <method name='Paste'><arg type='s' name='ack' direction='out'/></method>"
   "  <method name='List'><arg type='s' name='entries' direction='out'/></method>"
+  "  <method name='Put'>"
+  "    <arg type='s' name='text' direction='in'/>"
+  "    <arg type='s' name='ack' direction='out'/></method>"
+  "  <method name='PutSelection'>"
+  "    <arg type='s' name='selection' direction='in'/>"
+  "    <arg type='s' name='text' direction='in'/>"
+  "    <arg type='s' name='ack' direction='out'/></method>"
+  "  <method name='Get'>"
+  "    <arg type='s' name='text' direction='out'/></method>"
+  "  <method name='GetSelection'>"
+  "    <arg type='s' name='selection' direction='in'/>"
+  "    <arg type='s' name='text' direction='out'/></method>"
   "</interface></node>";
 
 static GDBusNodeInfo *iface_info = NULL;
@@ -56,6 +71,65 @@ on_method (GDBusConnection *c, const gchar *s, const gchar *o,
     cmacs_dbus_eval_to_reply (iv,
       "(mapconcat (lambda (s) (substring s 0 (min 80 (length s))))"
       " kill-ring \"|||\")", NULL, 0);
+  else if (g_strcmp0 (m, "Put") == 0)
+    {
+      const gchar *text;
+      const gchar *args[1];
+      g_variant_get (p, "(&s)", &text);
+      args[0] = text;
+      /* Push to kill-ring; if the user has select-enable-clipboard
+         set (the Emacs default for graphical sessions), this also
+         pushes to the system CLIPBOARD selection.  Force-set the
+         system clipboard regardless so headless / non-pgtk callers
+         still see it land. */
+      cmacs_dbus_eval_to_reply (iv,
+        "(progn (kill-new \"%s\")"
+        " (when (fboundp 'gui-set-selection)"
+        "   (condition-case nil"
+        "     (gui-set-selection 'CLIPBOARD \"%s\")"
+        "     (error nil)))"
+        " \"ok\")",
+        (const gchar *[]) { text, text }, 2);
+    }
+  else if (g_strcmp0 (m, "PutSelection") == 0)
+    {
+      const gchar *sel, *text;
+      const gchar *args[2];
+      g_variant_get (p, "(&s&s)", &sel, &text);
+      args[0] = sel; args[1] = text;
+      /* PRIMARY / SECONDARY / CLIPBOARD per X11/Wayland spec.  Lisp
+         expects an unquoted symbol, so we intern at the elisp side. */
+      cmacs_dbus_eval_to_reply (iv,
+        "(progn"
+        " (when (fboundp 'gui-set-selection)"
+        "   (gui-set-selection (intern \"%s\") \"%s\"))"
+        " \"ok\")", args, 2);
+    }
+  else if (g_strcmp0 (m, "Get") == 0)
+    /* Prefer the system CLIPBOARD over kill-ring head -- matches
+       what `yank' would actually pick up when select-enable-clipboard
+       is t.  Falls back to the kill-ring on terminals / when no
+       gui-get-selection is available. */
+    cmacs_dbus_eval_to_reply (iv,
+      "(or (and (fboundp 'gui-get-selection)"
+      "         (condition-case nil"
+      "           (gui-get-selection 'CLIPBOARD 'STRING)"
+      "           (error nil)))"
+      "    (and kill-ring (car kill-ring))"
+      "    \"\")", NULL, 0);
+  else if (g_strcmp0 (m, "GetSelection") == 0)
+    {
+      const gchar *sel;
+      const gchar *args[1];
+      g_variant_get (p, "(&s)", &sel);
+      args[0] = sel;
+      cmacs_dbus_eval_to_reply (iv,
+        "(or (and (fboundp 'gui-get-selection)"
+        "         (condition-case nil"
+        "           (gui-get-selection (intern \"%s\") 'STRING)"
+        "           (error nil)))"
+        "    \"\")", args, 1);
+    }
 }
 
 static const GDBusInterfaceVTable vtable = { on_method, NULL, NULL, { NULL } };
