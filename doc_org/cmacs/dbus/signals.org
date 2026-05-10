@@ -1,0 +1,209 @@
+#+TITLE: Signals
+#+STARTUP: showall
+#+OPTIONS: toc:2 num:t
+
+cmacs's D-Bus subsystem exposes three kinds of signals.  Phase 1 ships
+the *infrastructure* for all of them; Phase 2's per-resource modules
+start *automatically firing* property-changed and lifecycle signals.
+
+* Standard signals (always present)
+
+** PropertiesChanged
+
+Defined by =org.freedesktop.DBus.Properties=.  Fires whenever a
+property value changes on any object that has registered properties.
+
+| Field           | Value                                                      |
+|-----------------+------------------------------------------------------------|
+| Interface       | =org.freedesktop.DBus.Properties=                          |
+| Body signature  | =sa{sv}as=                                                 |
+| Body fields     | iface name, changed dict, invalidated names array          |
+
+Phase 1 doesn't yet attach Properties to any path (no module declares
+a property), so this signal isn't fired.  Phase 2 starts firing it
+from per-buffer / per-frame / per-window objects.
+
+The Lisp DEFUN =cmacs-dbus-emit-properties-changed= is available now
+so module authors can wire it up:
+
+#+begin_src emacs-lisp
+;; In a buffer-tracking hook (Phase 2 ships a generic version):
+(cmacs-dbus-emit-properties-changed
+ "/org/cmacs/Editor/Buffer/12"
+ "org.cmacs.Editor1.Buffer.Resource"
+ (list :modified t :point 1234)
+ nil)
+#+end_src
+
+** InterfacesAdded / InterfacesRemoved
+
+Defined by =org.freedesktop.DBus.ObjectManager=.  Fire when a managed
+child appears or disappears.  Phase 1 registers the iface, but the
+child registry stays empty until Phase 2.
+
+| Signal             | Body signature  | Fires when...                                    |
+|--------------------+-----------------+--------------------------------------------------|
+| =InterfacesAdded=  | =oa{sa{sv}}=    | A new (path, iface, props) tuple is registered   |
+| =InterfacesRemoved=| =oas=           | (path, iface) is removed                         |
+
+C API for module authors (called from Phase 2 modules):
+
+#+begin_src c
+cmacs_dbus_object_manager_add_iface ("/org/cmacs/Editor/Buffer/12",
+                                     "org.cmacs.Editor1.Buffer.Resource",
+                                     properties_a_sv);
+cmacs_dbus_object_manager_remove_iface ("/org/cmacs/Editor/Buffer/12",
+                                        "org.cmacs.Editor1.Buffer.Resource");
+#+end_src
+
+* Custom signals (anyone can emit)
+
+The DEFUN =cmacs-dbus-emit-signal= lets any elisp code broadcast a
+typed signal:
+
+#+begin_src emacs-lisp
+;; (cmacs-dbus-emit-signal PATH IFACE NAME &optional PARAMS)
+(cmacs-dbus-emit-signal
+ "/org/cmacs/Editor"
+ "org.cmacs.Editor1.Hooks"
+ "BufferSaved"
+ (list (or (buffer-file-name) "")
+       (buffer-name)
+       42))
+#+end_src
+
+The PARAMS list is marshalled into a tuple of best-fit GVariant
+types:
+
+| Lisp type    | GVariant type      |
+|--------------+--------------------|
+| nil          | string ""          |
+| t            | boolean            |
+| fixnum       | int64              |
+| float        | double             |
+| string       | string             |
+| symbol       | string (name)      |
+| list of strings | as              |
+| list of mixed   | av              |
+
+If you need fine-grained type control, build the params manually with
+=g_variant_new= on the C side; the elisp DEFUN auto-marshals because
+the most common case is "broadcast a list of stringy fields".
+
+* Subscribing to signals
+
+** From the shell
+
+#+begin_src shell
+gdbus monitor --session --dest org.cmacs.Editor
+#+end_src
+
+streams every message the cmacs connection sends or receives.  Filter
+with grep:
+
+#+begin_src shell
+gdbus monitor --session --dest org.cmacs.Editor \
+    | grep -E 'PropertiesChanged|InterfacesAdded|BufferSaved'
+#+end_src
+
+** From Python (dasbus)
+
+#+begin_src python
+from dasbus.connection import SessionMessageBus
+from dasbus.loop import EventLoop
+
+bus = SessionMessageBus()
+
+def on_props(iface, changed, invalidated):
+    print(f"{iface}: {dict(changed)} (invalidated: {list(invalidated)})")
+
+editor = bus.get_proxy("org.cmacs.Editor", "/org/cmacs/Editor")
+editor.PropertiesChanged.connect(on_props)
+EventLoop().run()
+#+end_src
+
+** From Python (Gio low-level)
+
+#+begin_src python
+from gi.repository import Gio, GLib
+
+def on_signal(conn, sender, path, iface, signal, params):
+    print(f"signal: {iface}.{signal} from {path}: {params.unpack()}")
+
+bus = Gio.bus_get_sync(Gio.BusType.SESSION)
+bus.signal_subscribe(
+    "org.cmacs.Editor",  # sender
+    None,                # any iface
+    None,                # any signal
+    None,                # any path
+    None, Gio.DBusSignalFlags.NONE, on_signal)
+GLib.MainLoop().run()
+#+end_src
+
+** From Rust (zbus)
+
+#+begin_src rust
+use futures_util::stream::StreamExt;
+use zbus::{Connection, MatchRule, MessageStream, MessageType};
+
+let conn = Connection::session().await?;
+let rule = MatchRule::builder()
+    .msg_type(MessageType::Signal)
+    .sender("org.cmacs.Editor")?
+    .build();
+conn.add_match_rule(rule.clone()).await?;
+
+let mut stream = MessageStream::for_match_rule(rule, &conn, None).await?;
+while let Some(msg) = stream.next().await {
+    let msg = msg?;
+    println!("signal: {:?}", msg.header().member());
+}
+#+end_src
+
+* Signal-emit lifecycle
+
+Every emit goes through =g_dbus_connection_emit_signal= on the cmacs
+GMainContext.  Things to know:
+
+- *Fire-and-forget*: D-Bus signals don't have replies.  Subscribers
+  may or may not receive; cmacs doesn't track delivery.
+- *Service must be running*: =cmacs-dbus-emit-*= returns nil silently
+  when =cmacs-dbus-start= hasn't been called.  No-ops, no errors.
+- *Marshalling errors*: an unsupported Lisp value in PARAMS becomes
+  an empty string rather than aborting the emit.  The Lisp side never
+  raises from emission; failures are logged via =g_warning= to
+  stderr/=*Messages*=.
+- *Order is not guaranteed across signals*: D-Bus delivers in
+  send-order *per connection*, but external watchers see them
+  interleaved with method calls.  Consumers should treat each signal
+  as independent.
+
+* Filtering on the consumer side
+
+Signal subscriptions can use D-Bus match rules to drop noise before
+the userspace callback fires.  Common patterns:
+
+| Pattern                               | Match rule                                                               |
+|---------------------------------------+--------------------------------------------------------------------------|
+| Only signals from cmacs               | =sender='org.cmacs.Editor'=                                              |
+| Only PropertiesChanged                | =interface='org.freedesktop.DBus.Properties',member='PropertiesChanged'= |
+| Only buffer churn (Phase 2)           | =path_namespace='/org/cmacs/Editor/Buffer'=                              |
+| Only when a specific buffer changes   | =path='/org/cmacs/Editor/Buffer/12'=                                     |
+
+Add via =busctl=, =dbus-monitor=, or programmatically through your
+language's binding.
+
+* When to use signals vs polling vs methods
+
+| Want                                                    | Use                                          |
+|---------------------------------------------------------+----------------------------------------------|
+| One-shot query of current state                         | Method call (=Eval=, etc.)                   |
+| React to state changes                                  | Subscribe to =PropertiesChanged=             |
+| Track lifecycle (entity appears / disappears)           | Subscribe to ObjectManager =Interfaces*=     |
+| Long-running operation status                           | Phase 3 =Request= handles + completion signal |
+| Free-form broadcast from elisp                          | =cmacs-dbus-emit-signal= → custom iface name |
+
+Avoid polling when a signal exists.  In Phase 2 onwards almost every
+"watch this" use case has a proper signal — polling becomes a
+correctness bug (you'll race) and a power-cost bug (continuous
+wake-ups).

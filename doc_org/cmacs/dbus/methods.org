@@ -1,0 +1,210 @@
+#+TITLE: Method Reference
+#+STARTUP: showall
+#+OPTIONS: toc:3 num:t
+
+Reference for every method on =org.cmacs.Editor1= as of Phase 1.
+Phase 3 will add typed sub-interfaces; their methods will be
+documented in their own files when they land.
+
+D-Bus type signatures: =s= string, =i= int32, =u= uint32, =x= int64,
+=t= uint64, =b= bool, =d= double, =as= array-of-string, =v= variant,
+=o= object-path, =h= file descriptor, =()= no return.
+
+* Core methods
+
+** Eval
+
+Evaluate an arbitrary elisp expression, return its =prin1= form.
+
+| Field            | Value                          |
+|------------------+--------------------------------|
+| Signature        | =Eval (s expression) -> (s)=   |
+| Errors           | =org.cmacs.Editor1.Error=      |
+| Synchronous      | yes                            |
+| Bypasses elisp?  | no — full =cmacs-dispatch-eval=|
+
+#+begin_src shell
+gdbus call --session --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor \
+    --method org.cmacs.Editor1.Eval \
+    '(format "%s on %s" (emacs-version) (system-name))'
+# => ('"GNU Emacs 31.0.50 ... on hostname"',)
+#+end_src
+
+This is the universal escape hatch.  Anything reachable from elisp is
+reachable from here.  That includes the entire cmacsgi command
+surface, since cmacsgi handlers are also elisp emitters.
+
+** FindFile
+
+Open a file or URL in the editor.  No return value.
+
+| Field            | Value                            |
+|------------------+----------------------------------|
+| Signature        | =FindFile (s path) -> ()=        |
+| Errors           | =org.cmacs.Editor1.Error=        |
+
+#+begin_src shell
+gdbus call --session --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor \
+    --method org.cmacs.Editor1.FindFile \
+    /etc/hostname
+#+end_src
+
+Equivalent to =M-x find-file=, so TRAMP paths
+(=/ssh:host:/path/to/file=) work too.
+
+** Message
+
+Display a message in the echo area.  Useful for ping-style debugging
+or remote notifications.
+
+| Field            | Value                            |
+|------------------+----------------------------------|
+| Signature        | =Message (s text) -> ()=         |
+
+#+begin_src shell
+gdbus call --session --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor \
+    --method org.cmacs.Editor1.Message \
+    "build complete in $(awk '{print $1}' /tmp/build.time)s"
+#+end_src
+
+** GiRequire
+
+Load a GObject Introspection namespace (=GLib=, =Gtk=, =Soup=, ...)
+into cmacs's GI bridge.
+
+| Field            | Value                                            |
+|------------------+--------------------------------------------------|
+| Signature        | =GiRequire (s namespace, s version) -> (b)=      |
+
+#+begin_src shell
+gdbus call --session --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor \
+    --method org.cmacs.Editor1.GiRequire \
+    GLib 2.0
+# => (true,)
+#+end_src
+
+Pass an empty version string to accept whatever's installed:
+
+#+begin_src shell
+gdbus call --session --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor \
+    --method org.cmacs.Editor1.GiRequire \
+    Gtk ""
+#+end_src
+
+** GiCall
+
+Call a function from a previously loaded GI namespace.  Each argument
+is passed as a string and read on the cmacs side as a Lisp
+expression — bare words become strings, numbers pass through,
+quoted strings stay quoted.
+
+| Field            | Value                                                  |
+|------------------+--------------------------------------------------------|
+| Signature        | =GiCall (s namespace, s function, as args) -> (s)=     |
+
+#+begin_src shell
+# (g-get-user-name) → no args
+gdbus call --session --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor \
+    --method org.cmacs.Editor1.GiCall \
+    GLib get_user_name '[]'
+
+# (g-hostname-is-ascii-encoded "example.com") → one string arg
+gdbus call --session --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor \
+    --method org.cmacs.Editor1.GiCall \
+    GLib hostname_is_ascii_encoded \
+    '["example.com"]'
+#+end_src
+
+** GiListFunctions
+
+List every function in a loaded namespace.
+
+| Field            | Value                                          |
+|------------------+------------------------------------------------|
+| Signature        | =GiListFunctions (s namespace) -> (as)=        |
+
+#+begin_src shell
+gdbus call --session --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor \
+    --method org.cmacs.Editor1.GiListFunctions \
+    GLib | head -3
+# => (['access', 'ascii_digit_value', 'ascii_dtostr', ...],)
+#+end_src
+
+* Gowl methods (when =--with-cmacs-gowl=)
+
+Bypass the elisp eval round-trip for compositor-control hot paths.
+Each one returns a JSON-encoded string for structured fields and
+=t=/=nil= strings for booleans (matching the cmacsgi convention).
+
+Phase 3 will extract these into typed
+=org.cmacs.Editor1.Monitor= / =.Bar= / =.Compositor= interfaces
+with proper a{sv} return types.  Until then, parse the JSON.
+
+| Method                       | Signature                                 | Description                                |
+|------------------------------+-------------------------------------------+--------------------------------------------|
+| =GowlListClients=            | =-> (s)= JSON                             | Every Wayland client                       |
+| =GowlFocusedClient=          | =-> (s)= JSON or "nil"                    | The focused client                         |
+| =GowlSpawn=                  | =(s) -> (s)=                              | Launch CMD with =$WAYLAND_DISPLAY=         |
+| =GowlListMonitors=           | =-> (s)= JSON                             | Attached monitors                          |
+| =GowlAddKeybind=             | =(siu) -> (s)=                            | key, action-id, arg                        |
+| =GowlListKeybinds=           | =-> (s)= JSON                             | Bound keys                                 |
+| =GowlAddRule=                | =(ssubi) -> (s)=                          | app-id, title, tags, floating, monitor     |
+| =GowlSetMfact=               | =(d) -> (s)=                              | Master-area split                          |
+| =GowlSetNmaster=             | =(i) -> (s)=                              | Master-window count                        |
+| =GowlViewTags=               | =(u) -> (s)=                              | Visible tag-mask                           |
+| =GowlLock= / =GowlUnlock=    | =-> (s)=                                  | Toggle session lock                        |
+| =GowlReloadConfig=           | =-> (s)=                                  | Reload =gowl.yaml=                         |
+| =GowlConfigGet=              | =(s) -> (s)=                              | Read a top-level config property           |
+| =GowlFindClient=             | =(ss) -> (s)=                             | pattern, by ("title"/"app-id")             |
+| =GowlMonitorInfo=            | =(s) -> (s)=                              | Full monitor info JSON                     |
+| =GowlMonitorModes=           | =(s) -> (s)=                              | Available modes JSON                       |
+| =GowlSetMonitorMode=         | =(siii) -> (s)=                           | name, w, h, refresh-mhz                    |
+| =GowlMonitorPosition=        | =(s) -> (s)=                              | name → {x, y}                              |
+| =GowlSetMonitorPosition=     | =(sii) -> (s)=                            | name, x, y                                 |
+| =GowlSetMonitorEnabled=      | =(sb) -> (s)=                             | name, bool                                 |
+| =GowlSetMonitorScale=        | =(sd) -> (s)=                             | name, double                               |
+| =GowlSetMonitorTransform=    | =(si) -> (s)=                             | name, 0..7                                 |
+
+** Examples
+
+Two practical compositor-control snippets:
+
+#+begin_src shell
+# Find a Firefox window and resize the master area to give it more room.
+gdbus call --session --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor \
+    --method org.cmacs.Editor1.GowlSetMfact 0.7
+
+# Move the external monitor to position (1920, 0) and disable the laptop's.
+gdbus call --session --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor \
+    --method org.cmacs.Editor1.GowlSetMonitorPosition \
+    HDMI-A-1 1920 0
+gdbus call --session --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor \
+    --method org.cmacs.Editor1.GowlSetMonitorEnabled \
+    eDP-1 false
+#+end_src
+
+* Error handling
+
+Every method that takes elisp returns errors as
+=org.cmacs.Editor1.Error= D-Bus errors.  In =gdbus= they print as:
+
+#+begin_example
+Error: GDBus.Error:org.cmacs.Editor1.Error: ((wrong-number-of-arguments) ...)
+#+end_example
+
+Programmatic clients should match on the error name to decide whether
+to surface to the user or retry.  Most languages' D-Bus bindings turn
+the error into a typed exception (=DBusException= in Python, =Error=
+in Rust zbus, etc.).  See [[file:cli-examples.org][cli-examples.org]]
+for examples in each language.

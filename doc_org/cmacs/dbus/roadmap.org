@@ -1,0 +1,171 @@
+#+TITLE: Roadmap
+#+STARTUP: showall
+#+OPTIONS: toc:2 num:t
+
+The cmacs D-Bus surface lands incrementally.  Phase 1 (foundations)
+shipped in commit ~ab1bf5f79d3~; the four subsequent phases follow as
+separate commits.  None of them break Phase 1 wire surface.
+
+* Phase 1 — Foundations (shipped)
+
+What landed:
+
+- Dual bus name claim (=org.cmacs.Editor= + =org.cmacs.Editor.PidN=)
+- D-Bus session-bus activation file +
+  =make install-cmacs-dbus-service=
+- =org.freedesktop.DBus.ObjectManager= registered at root
+- =org.freedesktop.DBus.Properties= helper with lazy attach
+- Signal-emit infrastructure (C + Lisp)
+- File reorg: 838-line monolith split across 8 files
+  in =cmacs/dbus/=
+- Back-compat: =org.cmacs.Editor1= (6 core + 18 gowl methods)
+  preserved bit-for-bit
+- 12 ERT tests
+
+Five new DEFUNs:
+
+| =cmacs-dbus-start=                | Start service, return dominant name        |
+| =cmacs-dbus-stop=                 | Tear down                                   |
+| =cmacs-dbus-name=                 | Dominant name or nil                        |
+| =cmacs-dbus-well-known-name=      | Well-known name if held                     |
+| =cmacs-dbus-per-pid-name=         | Per-PID name                                |
+| =cmacs-dbus-emit-signal=          | Emit arbitrary signal                       |
+| =cmacs-dbus-emit-properties-changed= | Emit standard PropertiesChanged          |
+
+* Phase 2 — Per-resource objects (planned)
+
+Goal: live entities as observable D-Bus objects.
+
+Buffers, frames, windows, and subprocesses become D-Bus objects with
+proper Properties + lifecycle signals.  After Phase 2:
+
+- =/org/cmacs/Editor/Buffer/<id>= per live buffer.  Properties:
+  =Name=, =Filename=, =Modified=, =ReadOnly=, =Size=, =LineCount=,
+  =Point=, =MarkActive=, =Region=, =MajorMode=, =MinorModes=,
+  =Encoding=, =Newline=
+- =/org/cmacs/Editor/Frame/<n>= per frame.  Properties: =Visible=,
+  =Focused=, =Width=, =Height=, =Title=, =WindowIds=, =Display=
+- =/org/cmacs/Editor/Window/<n>= per window.  Properties:
+  =BufferId=, =Start=, =End=, =FrameId=, =Live=, =Selected=
+- =/org/cmacs/Editor/Process/<id>= per subprocess.  Properties:
+  =Name=, =Pid=, =Command=, =Status=, =Buffer=, =ExitCode=
+
+ObjectManager broadcasts =InterfacesAdded= / =InterfacesRemoved=;
+=PropertiesChanged= driven by the obvious Lisp hooks
+(=after-change-functions=, =post-command-hook= throttled,
+=change-major-mode-hook=, =after-save-hook=, =delete-frame-hook=,
+=window-configuration-change-hook=).
+
+Per-buffer methods land alongside the properties:
+
+- =GetContent () -> h= (memfd file-descriptor pass)
+- =Save ()=
+- =Kill ()=
+- =Revert ()=
+
+Plus root-level =BufferManager= / =FrameManager= / =WindowManager=
+interfaces with =List=, =Find=, =Create=, =Current= entry points.
+
+* Phase 3 — cmacsgi parity (planned)
+
+Goal: every cmacsgi command reachable as a typed D-Bus method.
+
+One file per interface, mirroring =cmacs/api/cmacs-api-cmd-*.c=:
+
+| Interface                          | Wraps cmacsgi group                   |
+|------------------------------------+---------------------------------------|
+| =org.cmacs.Editor1.Buffer=         | =buf=                                 |
+| =org.cmacs.Editor1.File=           | open / save / close / recent          |
+| =org.cmacs.Editor1.Text=           | insert / delete / line / append       |
+| =org.cmacs.Editor1.Nav=            | point / goto                          |
+| =org.cmacs.Editor1.Search=         | search / replace / occur              |
+| =org.cmacs.Editor1.Window=         | win                                   |
+| =org.cmacs.Editor1.Config=         | set / get / theme / font / mode       |
+| =org.cmacs.Editor1.Project=        | grep / find / project-root / compile  |
+| =org.cmacs.Editor1.Bookmark=       | mark                                  |
+| =org.cmacs.Editor1.Clipboard=      | copy / cut / paste / clip             |
+| =org.cmacs.Editor1.VC=             | vc                                    |
+| =org.cmacs.Editor1.Package=        | pkg                                   |
+| =org.cmacs.Editor1.Monitor=        | monitor (extracts gowl)               |
+| =org.cmacs.Editor1.Bar=            | bar (extracts gowl)                   |
+| =org.cmacs.Editor1.Ripgrep=        | rg                                    |
+| =org.cmacs.Editor1.Cintrospect=    | =c list/symbol/...=                   |
+| =org.cmacs.Editor1.Cpatch=         | =c patch/patches/...=                 |
+| =org.cmacs.Editor1.Print=          | new — Print.Submit fd-pass            |
+
+Long-running operations (compile, grep, rg, package install) get
+=Request= handles modeled on
+=org.freedesktop.portal.Request= — a method returns an object path
+(=/org/cmacs/Editor/Request/<token>=) and the Request iface carries
+=Cancel ()=, a =Progress= property (with =PropertiesChanged=), and a
+single-shot =Response= signal for completion.
+
+* Phase 4 — Desktop integration (planned)
+
+Goal: cmacs is a first-class freedesktop citizen.
+
+| Interface                           | Object path                       | Adds                                        |
+|-------------------------------------+-----------------------------------+---------------------------------------------|
+| =org.freedesktop.Application=       | =/org/cmacs/Editor=               | =Activate=, =Open=, =ActivateAction=        |
+| =org.gtk.Actions=                   | =/org/cmacs/Editor=               | Every interactive defun → typed action      |
+| =org.gnome.Shell.SearchProvider2=   | =/org/cmacs/Editor/SearchProvider=| Buffers / recentf / org-roam in GNOME shell |
+| =org.freedesktop.Notifications=     | (consumer)                        | Lisp =cmacs-notify= helper, action callbacks|
+| =xdg-desktop-portal= (FileChooser,  | (consumer)                        | Native dialogs, sandbox-friendly Open       |
+|   OpenURI, Print)                   |                                   |                                             |
+
+Phase 4 also ships =etc/cmacs-search-provider.ini= for the GNOME
+search-provider registration so type-then-Enter in the shell overview
+opens cmacs at the right buffer.
+
+* Phase 5 — Creative extensions (planned)
+
+Goal: things no other editor does.
+
+- =org.freedesktop.login1.Manager.Inhibit= — block sleep when buffers
+  modified, block idle during long compiles
+- =org.freedesktop.portal.GlobalShortcuts= — desktop-wide hotkeys
+  that fire even when cmacs isn't focused
+- =org.mpris.MediaPlayer2= server — opt-in mode where mediakeys
+  navigate buffers (Next/Previous → next-buffer/previous-buffer,
+  Seek → goto-line proportional, metadata reflects current buffer)
+- =org.cmacs.Editor1.Watch= — observable variable / form watchers,
+  one Request handle per watch with =Changed= signals
+- =org.cmacs.Editor1.Podomation.Events= — every Pod event becomes
+  a D-Bus signal so podomation is observable from outside cmacs
+- =/org/cmacs/Editor/GI/<Namespace>= — exposes loaded GI namespaces
+  as typed D-Bus methods.  Lazy: a namespace appears when
+  =(gi-require "GLib")= runs.  Turns cmacs into a GI-RPC bridge
+  reachable from any language's D-Bus binding.
+
+* Out of scope
+
+These won't land in any of the five phases, even if useful:
+
+- *System-bus presence.*  Everything stays on the session bus.  Each
+  user gets their own cmacs surface; system-bus would require polkit
+  gating and a daemon model that doesn't fit cmacs's per-user nature.
+- *Cross-machine D-Bus over TCP.*  Use TRAMP / emacsclient over SSH
+  for remote-edit.  The TCP-tunnel pattern in
+  [[file:integration-recipes.org][integration-recipes.org]] is for
+  monitoring, not workflow.
+- *KDE StatusNotifierItem.*  The =org.gtk.Actions= surface from
+  Phase 4 covers the same use cases via a third-party SNI shim
+  rather than a native cmacs implementation.
+- *Replacing emacsclient.*  Both stay.
+  =org.freedesktop.Application.Open= covers the common "open this
+  file" path; =emacsclient -e EXPR= still works for evaluating
+  arbitrary elisp from a script.
+- *Migrating cmacsgi off socketpair to D-Bus.*  FD socketpair is
+  faster for the local-child case; D-Bus is the external-tools path.
+  Both stay.
+
+* Versioning and stability
+
+Phase 1 surface is *stable* — every method, signal, and property
+shipped in the foundations release will keep working in subsequent
+phases.  New interfaces are additive.  Renames or removals on existing
+ifaces would constitute a breaking change and require a major-version
+bump (=org.cmacs.Editor2=, separate object hierarchy).
+
+The introspection XML is the contract.  If =gdbus introspect= shows a
+method or signal in Phase 1, every later cmacs version will too.

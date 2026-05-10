@@ -1,0 +1,90 @@
+#+TITLE: D-Bus Overview
+#+STARTUP: showall
+#+OPTIONS: toc:2 num:t
+
+* What is the cmacs D-Bus subsystem
+
+cmacs registers as a session-bus service the moment =cmacs-dbus-start=
+runs (this is automatic when =M-x bacon= launches, and can be invoked
+explicitly from elisp).  Once running, it carries:
+
+- A typed, introspectable method surface at =/org/cmacs/Editor=
+- Standards-compliant ObjectManager and Properties interfaces (the
+  Properties iface attaches lazily as Phase 2 modules register state)
+- Signal emission so external watchers get pushed updates instead of
+  having to poll
+- D-Bus activation on demand: a fresh session can launch a cmacs
+  daemon by calling any method on =org.cmacs.Editor=
+
+* When to use D-Bus vs the alternatives
+
+cmacs offers three IPC mechanisms.  Pick by transport:
+
+| Use case                                                  | Recommended IPC      |
+|-----------------------------------------------------------+----------------------|
+| Bacon shell child of a running cmacs (vterm, =cmacs --bacon=) | =CMACS_IPC_FD= socketpair (already wired by cmacsgi) |
+| Same-machine external script that doesn't need to know which |                      |
+| cmacs is "the" daemon                                     | D-Bus + well-known name =org.cmacs.Editor= |
+| Targeting a specific cmacs process when several run in parallel | D-Bus + per-PID name =org.cmacs.Editor.PidN= |
+| Editor-aware tooling that wants typed responses, properties, signals | D-Bus |
+| Existing emacsclient-style "open this file"              | =emacsclient= still works; D-Bus =Application.Open= covers the same case once Phase 4 lands |
+| AI agent / MCP integration                                | MCP (separate channel, not D-Bus) |
+
+D-Bus is the *external* path; cmacsgi via FD is the in-process child
+path.  Both ultimately funnel through the same elisp dispatcher, so
+behaviour is consistent — the only difference is transport overhead.
+
+* Why this matters
+
+Most editors stop at "you can open a file from outside".  cmacs takes
+the opposite approach: anything that can be done interactively should
+be reachable from a D-Bus client too, with proper types and live
+event notifications.  Concretely:
+
+- Hooking cmacs into the GNOME Shell overview as a buffer-search
+  provider (Phase 4)
+- Driving a CI status board that watches =compilation-finished= via
+  signals
+- Letting an AI agent edit a buffer and observe the file save in
+  real time
+- Auto-opening a freshly-mounted disk's notes directory from a udev
+  hook
+- Mediakeys that navigate buffers (Phase 5)
+
+The wire surface stays consistent: each phase adds, never removes.
+
+* Phase 1: what's actually shipping
+
+After =cmacs-dbus-start=, you get:
+
+- Two bus names: well-known =org.cmacs.Editor= (claimed by the first
+  cmacs) and per-PID =org.cmacs.Editor.PidN= (always claimed)
+- One root object path: =/org/cmacs/Editor=
+- Interfaces on that path:
+  - =org.freedesktop.DBus.Introspectable= (auto)
+  - =org.freedesktop.DBus.Peer= (auto)
+  - =org.freedesktop.DBus.ObjectManager= (registered, empty children)
+  - =org.cmacs.Editor1= (back-compat: 6 core + 18 gowl methods)
+  - =org.freedesktop.DBus.Properties= (lazy attach for Phase 2)
+- Signal-emit C and Lisp APIs (no automatic emission yet — Phase 2
+  hooks will start firing them)
+- =.service= activation file at =/usr/share/dbus-1/services/=
+  (when =make install-cmacs-dbus-service= is run)
+
+Subsequent phases add objects, methods, properties, and integrations.
+None of them remove or rename Phase 1 surface.
+
+* Architecture in one paragraph
+
+The D-Bus subsystem lives in =cmacs/dbus/= as eight small files (one
+top-level, five infrastructure modules, two interface modules).  All
+calls run on the cmacs main thread via the GMainContext — handlers
+fire from the same dispatch loop as GLib timeouts and idle callbacks,
+so they can safely call Emacs primitives (the
+=waiting_for_input= guard from =cmacs_glib_dispatch= is honoured).
+Method bodies build elisp strings and route through the existing
+=cmacs_dispatch_eval= helper, so the typed D-Bus surface and the
+cmacsgi command surface share their semantics by construction.
+
+See [[file:architecture.org][architecture.org]] for the full
+treatment.

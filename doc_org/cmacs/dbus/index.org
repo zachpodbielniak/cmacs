@@ -1,0 +1,63 @@
+#+TITLE: cmacs D-Bus
+#+STARTUP: showall
+#+OPTIONS: toc:2 num:nil
+
+* Welcome
+
+cmacs exposes a session-bus D-Bus service so external processes — shell
+scripts, file managers, language clients, custom dashboards, other
+editors, AI agents — can talk to a running cmacs through typed methods,
+watch live state via Properties, and react to events via signals.
+
+This subdirectory contains the canonical reference for that surface.
+The texi mirror is at [[file:../../doc/cmacs/dbus/][doc/cmacs/dbus/]];
+the two must stay in sync (=tools/sync-docs.sh=).
+
+* Document index
+
+| File                                              | What it covers                                        |
+|---------------------------------------------------+-------------------------------------------------------|
+| [[file:overview.org][overview.org]]               | What cmacs's D-Bus surface is, why, when to reach for |
+|                                                   | it vs cmacsgi vs emacsclient                          |
+| [[file:bus-names.org][bus-names.org]]             | Dual bus-name claim, =$CMACS_DBUS_NAME=, .service    |
+|                                                   | activation, multi-instance targeting                  |
+| [[file:interfaces.org][interfaces.org]]           | Phase 1 surface: Editor1, ObjectManager, Properties, |
+|                                                   | Introspectable, Peer.  Object hierarchy.              |
+| [[file:methods.org][methods.org]]                 | Full reference for every method on                   |
+|                                                   | =org.cmacs.Editor1= (incl. gowl)                      |
+| [[file:signals.org][signals.org]]                 | Signal-emit infrastructure, =PropertiesChanged=,     |
+|                                                   | =InterfacesAdded= / =Removed=, custom signals        |
+| [[file:elisp-api.org][elisp-api.org]]             | Every DEFUN cmacs's D-Bus subsystem provides         |
+| [[file:cli-examples.org][cli-examples.org]]       | =gdbus=, =busctl=, =dbus-send=, =qdbus=,             |
+|                                                   | Python (dasbus, pydbus), Node (dbus-next), Rust      |
+|                                                   | (zbus), shell wrappers, recipes for common chores    |
+| [[file:integration-recipes.org][integration-recipes.org]] | End-to-end recipes: open file from a script,    |
+|                                                   | watch a buffer, drive cmacs from a Makefile, build   |
+|                                                   | a status-bar widget, broadcast events                |
+| [[file:architecture.org][architecture.org]]       | File layout, dispatch model, GMainContext            |
+|                                                   | integration, GVariant marshalling, signal pipeline   |
+| [[file:roadmap.org][roadmap.org]]                 | The 5-phase expansion plan (Phase 1 shipped)         |
+
+* Quick links
+
+- *Just want to run a command?* → [[file:cli-examples.org][cli-examples.org]]
+- *Building a long-running consumer?* → [[file:integration-recipes.org][integration-recipes.org]]
+- *Hacking on the cmacs side?* → [[file:architecture.org][architecture.org]]
+- *Wondering what's coming?* → [[file:roadmap.org][roadmap.org]]
+
+* Phase status
+
+| Phase | Scope                                                            | Status      |
+|-------+------------------------------------------------------------------+-------------|
+|     1 | Foundations: dual bus name, ObjectManager, Properties helper,    | shipped     |
+|       | signal-emit infrastructure, .service activation, back-compat     |             |
+|     2 | Per-resource objects: Buffer / Frame / Window / Process,         | planned     |
+|       | =PropertiesChanged= driven by Lisp hooks                         |             |
+|     3 | Typed parity with cmacsgi: 80+ methods across                    | planned     |
+|       | =org.cmacs.Editor1.Buffer/.Search/.VC/.Pkg/.Monitor/...=         |             |
+|     4 | Desktop integration: =org.freedesktop.Application=,              | planned     |
+|       | =org.gtk.Actions=, =SearchProvider2=, =Notifications=,           |             |
+|       | =xdg-desktop-portal= consumer                                    |             |
+|     5 | Creative extensions: =Login1.Inhibit=, MPRIS-buffer-nav,         | planned     |
+|       | GlobalShortcuts portal, BufferWatch, podomation events,          |             |
+|       | GI-as-D-Bus bridge                                               |             |

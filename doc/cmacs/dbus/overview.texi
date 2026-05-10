@@ -1,0 +1,86 @@
+@node D-Bus Overview
+@section Overview
+
+@subsection What is the cmacs D-Bus subsystem
+
+cmacs registers as a session-bus service the moment
+@code{cmacs-dbus-start} runs (this is automatic when @code{M-x bacon}
+launches, and can be invoked explicitly from elisp).  Once running,
+it carries:
+
+@itemize @bullet
+@item
+A typed, introspectable method surface at @code{/org/cmacs/Editor}
+@item
+Standards-compliant ObjectManager and Properties interfaces (the
+Properties iface attaches lazily as Phase 2 modules register state)
+@item
+Signal emission so external watchers get pushed updates instead of
+having to poll
+@item
+D-Bus activation on demand: a fresh session can launch a cmacs daemon
+by calling any method on @code{org.cmacs.Editor}
+@end itemize
+
+@subsection When to use D-Bus vs the alternatives
+
+cmacs offers three IPC mechanisms.  Pick by transport:
+
+@multitable @columnfractions .55 .45
+@headitem Use case @tab Recommended IPC
+@item Bacon shell child of a running cmacs
+@tab @env{CMACS_IPC_FD} socketpair (already wired by cmacsgi)
+@item Same-machine external script that doesn't care which cmacs
+@tab D-Bus + well-known name @code{org.cmacs.Editor}
+@item Targeting a specific cmacs process when several run in parallel
+@tab D-Bus + per-PID name @code{org.cmacs.Editor.Pid@var{N}}
+@item Editor-aware tooling that wants types, properties, signals
+@tab D-Bus
+@item Existing emacsclient-style ``open this file''
+@tab @command{emacsclient} still works; D-Bus
+@code{Application.Open} covers the same case once Phase 4 lands
+@item AI agent / MCP integration
+@tab MCP (separate channel, not D-Bus)
+@end multitable
+
+D-Bus is the @emph{external} path; cmacsgi via FD is the in-process
+child path.  Both ultimately funnel through the same elisp
+dispatcher, so behaviour is consistent.
+
+@subsection Phase 1: what's actually shipping
+
+After @code{cmacs-dbus-start}, you get:
+
+@itemize @bullet
+@item
+Two bus names: well-known @code{org.cmacs.Editor} (claimed by the
+first cmacs) and per-PID @code{org.cmacs.Editor.Pid@var{N}} (always
+claimed)
+@item
+One root object path: @code{/org/cmacs/Editor}
+@item
+Interfaces on that path:
+@code{org.freedesktop.DBus.Introspectable} (auto),
+@code{org.freedesktop.DBus.Peer} (auto),
+@code{org.freedesktop.DBus.ObjectManager} (registered, empty children),
+@code{org.cmacs.Editor1} (back-compat: 6 core + 18 gowl methods),
+@code{org.freedesktop.DBus.Properties} (lazy attach for Phase 2)
+@item
+Signal-emit C and Lisp APIs (no automatic emission yet --- Phase 2
+hooks will start firing them)
+@item
+@file{.service} activation file at @file{/usr/share/dbus-1/services/}
+(when @command{make install-cmacs-dbus-service} is run)
+@end itemize
+
+@subsection Architecture in one paragraph
+
+The D-Bus subsystem lives in @file{cmacs/dbus/} as eight small files
+(one top-level, five infrastructure modules, two interface modules).
+All calls run on the cmacs main thread via the GMainContext ---
+handlers fire from the same dispatch loop as GLib timeouts and idle
+callbacks, so they can safely call Emacs primitives.  Method bodies
+build elisp strings and route through the existing
+@code{cmacs_dispatch_eval} helper, so the typed D-Bus surface and
+the cmacsgi command surface share their semantics by construction.
+See @ref{D-Bus Architecture}.

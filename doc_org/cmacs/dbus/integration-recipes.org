@@ -1,0 +1,353 @@
+#+TITLE: Integration Recipes
+#+STARTUP: showall
+#+OPTIONS: toc:3 num:t
+
+End-to-end recipes for things you'd actually want to build on top of
+cmacs's D-Bus surface.  Each recipe is self-contained — copy, adapt,
+deploy.
+
+* Open a file from any script, anywhere
+
+#+begin_src shell
+#!/usr/bin/env bash
+# cmacs-edit FILE [LINE] — open FILE in the running cmacs daemon.
+
+set -euo pipefail
+FILE=$(readlink -f "${1:?usage: cmacs-edit FILE [LINE]}")
+LINE=${2:-}
+
+# Auto-activate cmacs if not running.
+gdbus call --session --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor \
+    --method org.cmacs.Editor1.FindFile "$FILE" >/dev/null
+
+# Optional: jump to a line.
+if [[ -n "$LINE" ]]; then
+    gdbus call --session --dest org.cmacs.Editor \
+        --object-path /org/cmacs/Editor \
+        --method org.cmacs.Editor1.Eval \
+        "(with-current-buffer (find-buffer-visiting \"$FILE\")
+           (goto-line $LINE))" >/dev/null
+fi
+#+end_src
+
+Drop in =~/.local/bin/cmacs-edit= and you have an =$EDITOR= that
+always edits in the running daemon.  Pair with
+=EDITOR='cmacs-edit'= and =git commit= takes you straight to the
+cmacs that already has your project open.
+
+* Build-finished notification
+
+A common workflow: long compile finishes, you want cmacs to flash a
+message in the echo area or pop a desktop notification.
+
+#+begin_src shell
+#!/usr/bin/env bash
+# notify-cmacs.sh COMMAND ARGS...
+
+START=$(date +%s)
+"$@"; RC=$?
+ELAPSED=$(( $(date +%s) - START ))
+
+if [[ $RC -eq 0 ]]; then
+    MSG="✓ $1 finished in ${ELAPSED}s"
+else
+    MSG="✗ $1 failed (rc=$RC) in ${ELAPSED}s"
+fi
+
+gdbus call --session --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor \
+    --method org.cmacs.Editor1.Message "$MSG" >/dev/null
+#+end_src
+
+Then =notify-cmacs.sh make -j8= and the result lands in the echo
+area without you having to switch windows.
+
+* "Reveal in cmacs" from a file manager
+
+Most file managers can be configured with a custom action.  For
+GNOME Files (Nautilus), drop this into =~/.local/share/nautilus/scripts/=:
+
+#+begin_src bash
+#!/usr/bin/env bash
+# Reveal in cmacs
+
+for path in $NAUTILUS_SCRIPT_SELECTED_FILE_PATHS; do
+    gdbus call --session --dest org.cmacs.Editor \
+        --object-path /org/cmacs/Editor \
+        --method org.cmacs.Editor1.FindFile "$path" >/dev/null
+done
+#+end_src
+
+Make it executable; right-click → Scripts → Reveal in cmacs.
+
+For Dolphin, the same idea via Service Menus
+(=~/.local/share/kio/servicemenus/=).
+
+* Headless test runner that drives a real cmacs
+
+Useful for ELisp test suites that need to exercise GUI code paths
+without actually opening a frame.  The harness:
+
+#+begin_src shell
+#!/usr/bin/env bash
+# run-tests-against-running-cmacs.sh
+
+DEST=org.cmacs.Editor
+
+result=$(gdbus call --session --dest "$DEST" \
+    --object-path /org/cmacs/Editor \
+    --method org.cmacs.Editor1.Eval \
+    "(progn
+       (load-file \"$PWD/test/foo-tests.el\")
+       (let ((stats (ert-run-tests-batch t)))
+         (format \"%d expected, %d unexpected\"
+                 (ert-stats-completed-expected stats)
+                 (ert-stats-completed-unexpected stats))))")
+
+echo "$result"
+[[ "$result" == *"0 unexpected"* ]] || exit 1
+#+end_src
+
+Pair with a CI step that ensures a cmacs daemon is running:
+
+#+begin_src shell
+# in your CI:
+emacs --fg-daemon=ci &
+DAEMON=$!
+trap "kill $DAEMON" EXIT
+sleep 2  # wait for D-Bus name acquisition
+./run-tests-against-running-cmacs.sh
+#+end_src
+
+* Watch a buffer for changes (Phase 2 will get prettier, this works today)
+
+Until per-buffer objects land in Phase 2, you can watch via signals
+emitted from elisp hooks:
+
+#+begin_src emacs-lisp
+;; In your cmacs init:
+(add-hook 'after-save-hook
+  (lambda ()
+    (cmacs-dbus-emit-signal
+     "/org/cmacs/Editor"
+     "org.cmacs.Editor1.Hooks"
+     "BufferSaved"
+     (list (or (buffer-file-name) "")
+           (buffer-name)))))
+#+end_src
+
+Then watch from any consumer:
+
+#+begin_src python
+from gi.repository import Gio, GLib
+
+def on_saved(conn, sender, path, iface, signal, params):
+    filename, bufname = params
+    print(f"saved: {bufname} ({filename})")
+
+bus = Gio.bus_get_sync(Gio.BusType.SESSION)
+bus.signal_subscribe(
+    "org.cmacs.Editor", "org.cmacs.Editor1.Hooks", "BufferSaved",
+    "/org/cmacs/Editor", None, Gio.DBusSignalFlags.NONE, on_saved)
+GLib.MainLoop().run()
+#+end_src
+
+Phase 2 replaces the manual hook + custom signal with
+=PropertiesChanged= on a per-buffer object that fires automatically.
+
+* AI agent: edit a file, wait until saved, run tests
+
+A pattern useful for autonomous code-modification agents.  The agent
+asks cmacs to edit, waits for the user (or a hook) to save, then
+runs tests against the saved version.
+
+#+begin_src python
+import asyncio, dbus_next.aio as dbus
+
+async def run():
+    bus = await dbus.MessageBus().connect()
+    obj = await bus.get_proxy_object('org.cmacs.Editor',
+                                     '/org/cmacs/Editor',
+                                     introspection=None)
+    editor = obj.get_interface('org.cmacs.Editor1')
+
+    # Stage proposed edit in a temp file that cmacs opens for review.
+    await editor.call_eval(
+      "(with-current-buffer (find-file-noselect \"/tmp/proposed.py\")"
+      "  (erase-buffer)"
+      "  (insert \"\"\"… new code …\"\"\"))")
+    await editor.call_find_file("/tmp/proposed.py")
+
+    # Wait for the user to save.  Phase 2 will use PropertiesChanged
+    # on the buffer's :modified property.  Today, hand-roll a poll:
+    while True:
+        modified = await editor.call_eval(
+          "(buffer-modified-p (find-buffer-visiting \"/tmp/proposed.py\"))")
+        if modified == "nil":
+            break
+        await asyncio.sleep(0.5)
+
+    # Run tests
+    result = await editor.call_eval(
+      "(shell-command-to-string \"pytest /tmp/proposed.py\")")
+    print(result)
+
+asyncio.run(run())
+#+end_src
+
+* Pipe shell output into a cmacs buffer in real time
+
+#+begin_src shell
+#!/usr/bin/env bash
+# pipe-to-cmacs.sh BUFFER-NAME  (reads stdin, appends each line)
+
+BUFFER=${1:?usage: pipe-to-cmacs.sh BUFFER-NAME}
+
+# Make sure the buffer exists.
+gdbus call --session --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor \
+    --method org.cmacs.Editor1.Eval \
+    "(with-current-buffer (get-buffer-create \"$BUFFER\")
+       (goto-char (point-max)))" >/dev/null
+
+while IFS= read -r line; do
+    # Escape backslashes and quotes for the elisp string.
+    esc=$(printf '%s' "$line" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    gdbus call --session --dest org.cmacs.Editor \
+        --object-path /org/cmacs/Editor \
+        --method org.cmacs.Editor1.Eval \
+        "(with-current-buffer (get-buffer \"$BUFFER\")
+           (goto-char (point-max))
+           (insert \"$esc\\n\"))" >/dev/null
+done
+#+end_src
+
+#+begin_src shell
+# Usage:
+journalctl -fu nginx | pipe-to-cmacs.sh "*nginx-log*"
+#+end_src
+
+* Status-bar widget reading cmacs state
+
+A waybar / polybar custom module that reports the current cmacs
+buffer name:
+
+#+begin_src shell
+#!/usr/bin/env bash
+# waybar-cmacs.sh — every 2s, print { "text": "<buffer>" }.
+
+while true; do
+    buf=$(gdbus call --session --dest org.cmacs.Editor \
+        --object-path /org/cmacs/Editor \
+        --method org.cmacs.Editor1.Eval \
+        '(buffer-name)' 2>/dev/null \
+        | sed -e 's/^(.//' -e 's/,)$//' -e 's/^"//' -e 's/"$//')
+    printf '{"text": "%s"}\n' "${buf:--}"
+    sleep 2
+done
+#+end_src
+
+In =waybar/config=:
+
+#+begin_src json
+"custom/cmacs": {
+    "exec": "~/.config/waybar/cmacs.sh",
+    "interval": "once",
+    "tooltip": false,
+    "return-type": "json"
+}
+#+end_src
+
+Phase 2's =PropertiesChanged= signal eliminates the polling — the
+widget can subscribe and update reactively.
+
+* Cron job that opens daily notes
+
+#+begin_src cron
+# Every weekday at 09:00, open today's daily note in cmacs.
+0 9 * * 1-5 gdbus call --session --dest org.cmacs.Editor \
+   --object-path /org/cmacs/Editor \
+   --method org.cmacs.Editor1.FindFile \
+   "$HOME/notes/daily/$(date +\%Y-\%m-\%d).org"
+#+end_src
+
+If you use systemd timers instead, the same call goes in
+=ExecStart== of a oneshot user unit.
+
+* udev hook: open dired on a freshly-mounted USB stick
+
+=/etc/udev/rules.d/99-cmacs-mount.rules=:
+
+#+begin_example
+ACTION=="add", SUBSYSTEM=="block", ENV{ID_FS_USAGE}=="filesystem", \
+    RUN+="/usr/local/bin/cmacs-on-mount %E{DEVNAME}"
+#+end_example
+
+=/usr/local/bin/cmacs-on-mount=:
+
+#+begin_src bash
+#!/usr/bin/env bash
+DEV=$1
+MOUNT=$(lsblk -no MOUNTPOINT "$DEV" | head -1)
+[[ -n "$MOUNT" ]] || exit 0
+
+# Run as the desktop user.
+sudo -u "$DESKTOP_USER" -H \
+  XDG_RUNTIME_DIR="/run/user/$(id -u $DESKTOP_USER)" \
+  DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u $DESKTOP_USER)/bus" \
+  gdbus call --session --dest org.cmacs.Editor \
+      --object-path /org/cmacs/Editor \
+      --method org.cmacs.Editor1.Eval \
+      "(dired \"$MOUNT\")"
+#+end_src
+
+* Cross-machine: drive a remote cmacs over SSH
+
+D-Bus is local by design, but you can tunnel:
+
+#+begin_src shell
+# On the remote machine, expose the session bus over a TCP socket
+# (ONLY behind a trusted SSH tunnel).
+ssh -L 1234:/run/user/1000/bus remote 'sleep infinity'
+
+# On your local machine:
+DBUS_SESSION_BUS_ADDRESS=unix:abstract=$(mktemp -u --suffix=-bus) \
+   socat ABSTRACT-LISTEN:$(echo -n $DBUS_SESSION_BUS_ADDRESS | sed 's,.*=,,')\
+         TCP:localhost:1234 &
+
+DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS gdbus call \
+    --session --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor \
+    --method org.cmacs.Editor1.Eval '(emacs-version)'
+#+end_src
+
+Tramp + emacsclient is usually a better fit for remote-edit
+workflows.  This pattern is mainly useful for monitoring a remote
+cmacs from a local dashboard.
+
+* Recipe template
+
+Use this skeleton for new recipes:
+
+#+begin_src shell
+#!/usr/bin/env bash
+# what-it-does — one-line summary.
+
+set -euo pipefail
+
+DEST=${CMACS_DBUS_DEST:-org.cmacs.Editor}
+PATH_=${CMACS_DBUS_PATH:-/org/cmacs/Editor}
+
+cmacs-call() {
+    gdbus call --session --dest "$DEST" --object-path "$PATH_" "$@"
+}
+cmacs-eval() {
+    cmacs-call --method org.cmacs.Editor1.Eval "$1"
+}
+
+# … your logic …
+#+end_src
+
+Letting =CMACS_DBUS_DEST= be overridable from the env makes it easy to
+target a per-PID instance for testing.

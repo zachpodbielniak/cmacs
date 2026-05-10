@@ -1,0 +1,443 @@
+#+TITLE: Command-Line and Language Examples
+#+STARTUP: showall
+#+OPTIONS: toc:3 num:t
+
+This page is a cookbook of practical invocations for cmacs's D-Bus
+surface.  Every language with a D-Bus binding can talk to cmacs;
+this file documents the ones developers actually reach for.
+
+Common destination details (used throughout):
+
+| Bus            | session                                  |
+| Service        | =org.cmacs.Editor= (well-known) or =org.cmacs.Editor.PidN= |
+| Object path    | =/org/cmacs/Editor=                      |
+| Primary iface  | =org.cmacs.Editor1=                      |
+
+Pass =--system= instead of =--session= to anything below at your own
+peril; cmacs only registers on the session bus.
+
+* gdbus (preferred shell tool)
+
+Ships with GLib, available everywhere cmacs builds.  Auto-completes
+on bus names and method signatures.
+
+** Introspect
+
+#+begin_src shell
+# Tree dump of every object and interface on the service.
+gdbus introspect --session \
+    --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor
+
+# XML form (for piping to tools).
+gdbus introspect --session --xml \
+    --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor
+
+# Recursive — shows every object in the tree (Phase 2+ matters here).
+gdbus introspect --session --recurse \
+    --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor
+#+end_src
+
+** Call
+
+#+begin_src shell
+# Eval an expression
+gdbus call --session \
+    --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor \
+    --method org.cmacs.Editor1.Eval \
+    '(emacs-version)'
+
+# Find-file
+gdbus call --session \
+    --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor \
+    --method org.cmacs.Editor1.FindFile \
+    "$PWD/README.md"
+
+# Show a message
+gdbus call --session \
+    --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor \
+    --method org.cmacs.Editor1.Message \
+    "deploy finished"
+
+# Call a GI function
+gdbus call --session \
+    --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor \
+    --method org.cmacs.Editor1.GiCall \
+    GLib get_user_name "[]"
+#+end_src
+
+** Monitor (watch signals)
+
+#+begin_src shell
+# Stream every D-Bus message touching the cmacs unique-name connection.
+gdbus monitor --session --dest org.cmacs.Editor
+
+# Filter to a specific signal (Phase 2+).
+gdbus monitor --session --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor \
+| grep -E 'PropertiesChanged|InterfacesAdded|InterfacesRemoved'
+#+end_src
+
+** Wait for cmacs to come up
+
+Useful for shell scripts that race auto-activation:
+
+#+begin_src shell
+until gdbus call --session --dest org.cmacs.Editor \
+        --object-path /org/cmacs/Editor \
+        --method org.freedesktop.DBus.Peer.Ping 2>/dev/null; do
+    sleep 0.2
+done
+echo "cmacs ready"
+#+end_src
+
+* busctl (systemd, low-level)
+
+Lower-level than gdbus, ships with systemd.  Useful when you want
+=tree= view of the bus or you're already in systemd-land.
+
+** Tree
+
+#+begin_src shell
+# Every object on the service.
+busctl --user tree org.cmacs.Editor
+
+# Interfaces on a specific object.
+busctl --user introspect org.cmacs.Editor /org/cmacs/Editor
+#+end_src
+
+** Call
+
+The signature has to be specified explicitly with busctl:
+
+#+begin_src shell
+# Eval — single string in, single string out.
+busctl --user call \
+    org.cmacs.Editor \
+    /org/cmacs/Editor \
+    org.cmacs.Editor1 \
+    Eval s '(format "%S" features)'
+
+# FindFile — string in, no return.
+busctl --user call \
+    org.cmacs.Editor \
+    /org/cmacs/Editor \
+    org.cmacs.Editor1 \
+    FindFile s /tmp/notes.org
+#+end_src
+
+** Monitor
+
+#+begin_src shell
+# Live trace of every message.
+busctl --user monitor org.cmacs.Editor
+#+end_src
+
+* dbus-send (legacy, ubiquitous)
+
+Older, ships everywhere, widely scripted against.  Less ergonomic
+than gdbus but remains common in compatibility shims.
+
+#+begin_src shell
+dbus-send --session --print-reply \
+    --dest=org.cmacs.Editor \
+    /org/cmacs/Editor \
+    org.cmacs.Editor1.Eval \
+    string:'(+ 40 2)'
+# method return time=1715300000.123 sender=:1.NN -> destination=:1.MM serial=42 reply_serial=2
+#    string "42"
+
+# No-reply (fire-and-forget):
+dbus-send --session --type=method_call \
+    --dest=org.cmacs.Editor \
+    /org/cmacs/Editor \
+    org.cmacs.Editor1.Message \
+    string:"async ack from cron"
+#+end_src
+
+* qdbus (Qt-only)
+
+If you're already in a Qt environment, =qdbus= is convenient because
+it auto-introspects.
+
+#+begin_src shell
+qdbus --session org.cmacs.Editor /org/cmacs/Editor \
+    org.cmacs.Editor1.Eval '(emacs-version)'
+
+# List everything callable, indented.
+qdbus --session org.cmacs.Editor /org/cmacs/Editor
+#+end_src
+
+* Python
+
+Three popular bindings.  All three handle the cmacs surface.
+
+** dasbus (recommended)
+
+#+begin_src python
+from dasbus.connection import SessionMessageBus
+
+bus = SessionMessageBus()
+editor = bus.get_proxy("org.cmacs.Editor", "/org/cmacs/Editor")
+
+# Eval
+print(editor.Eval("(emacs-version)"))
+
+# FindFile
+editor.FindFile("/tmp/notes.org")
+
+# GI bridge
+editor.GiRequire("GLib", "2.0")
+print(editor.GiCall("GLib", "get_user_name", []))
+
+# Listen for signals (Phase 2+).
+def on_props_changed(iface, changed, invalidated):
+    print(f"changed on {iface}: {dict(changed)}")
+editor.PropertiesChanged.connect(on_props_changed)
+
+from dasbus.loop import EventLoop
+EventLoop().run()
+#+end_src
+
+** pydbus
+
+#+begin_src python
+import pydbus
+
+bus = pydbus.SessionBus()
+editor = bus.get("org.cmacs.Editor", "/org/cmacs/Editor")
+
+print(editor.Eval("(* 6 7)"))
+
+# Subscribe to signals
+def on_added(*args):
+    print("InterfacesAdded:", args)
+
+bus.subscribe(
+    sender="org.cmacs.Editor",
+    iface="org.freedesktop.DBus.ObjectManager",
+    signal="InterfacesAdded",
+    object="/org/cmacs/Editor",
+    signal_fired=on_added,
+)
+from gi.repository import GLib
+GLib.MainLoop().run()
+#+end_src
+
+** dbus-python (older but everywhere)
+
+#+begin_src python
+import dbus
+
+bus = dbus.SessionBus()
+proxy = bus.get_object("org.cmacs.Editor", "/org/cmacs/Editor")
+editor = dbus.Interface(proxy, "org.cmacs.Editor1")
+
+print(editor.Eval("(buffer-name)"))
+#+end_src
+
+* Node.js (dbus-next)
+
+#+begin_src javascript
+const dbus = require('dbus-next');
+const bus = dbus.sessionBus();
+
+(async () => {
+    const obj = await bus.getProxyObject('org.cmacs.Editor',
+                                         '/org/cmacs/Editor');
+    const editor = obj.getInterface('org.cmacs.Editor1');
+
+    console.log(await editor.Eval('(emacs-version)'));
+    await editor.Message('hello from node');
+
+    // Listen on PropertiesChanged
+    const props = obj.getInterface('org.freedesktop.DBus.Properties');
+    props.on('PropertiesChanged', (iface, changed, invalidated) => {
+        console.log('props changed:', iface, changed);
+    });
+})();
+#+end_src
+
+* Rust (zbus)
+
+Async, type-safe, generated proxies via macros.
+
+#+begin_src rust
+use zbus::{Connection, dbus_proxy};
+
+#[dbus_proxy(
+    interface = "org.cmacs.Editor1",
+    default_service = "org.cmacs.Editor",
+    default_path = "/org/cmacs/Editor"
+)]
+trait Editor1 {
+    fn eval(&self, expression: &str) -> zbus::Result<String>;
+    fn find_file(&self, path: &str) -> zbus::Result<()>;
+    fn message(&self, text: &str) -> zbus::Result<()>;
+}
+
+#[tokio::main]
+async fn main() -> zbus::Result<()> {
+    let conn = Connection::session().await?;
+    let editor = Editor1Proxy::new(&conn).await?;
+    println!("{}", editor.eval("(emacs-version)").await?);
+    editor.message("hello from zbus").await?;
+    Ok(())
+}
+#+end_src
+
+* Go (godbus)
+
+#+begin_src go
+package main
+
+import (
+    "fmt"
+    "github.com/godbus/dbus/v5"
+)
+
+func main() {
+    conn, err := dbus.ConnectSessionBus()
+    if err != nil { panic(err) }
+    defer conn.Close()
+
+    obj := conn.Object("org.cmacs.Editor",
+                       dbus.ObjectPath("/org/cmacs/Editor"))
+
+    var result string
+    err = obj.Call("org.cmacs.Editor1.Eval", 0,
+                   "(emacs-version)").Store(&result)
+    if err != nil { panic(err) }
+    fmt.Println(result)
+}
+#+end_src
+
+* Bash helper functions
+
+Drop these into =~/.bashrc= for ad-hoc cmacs-poking from any shell:
+
+#+begin_src bash
+# cmeval EXPR — print the result of evaluating EXPR in the dominant cmacs.
+cmeval() {
+    gdbus call --session \
+        --dest org.cmacs.Editor \
+        --object-path /org/cmacs/Editor \
+        --method org.cmacs.Editor1.Eval "$*"
+}
+
+# cmopen FILE — open FILE in cmacs.
+cmopen() {
+    gdbus call --session \
+        --dest org.cmacs.Editor \
+        --object-path /org/cmacs/Editor \
+        --method org.cmacs.Editor1.FindFile "$1" >/dev/null
+}
+
+# cmsay TEXT — display TEXT in cmacs's echo area.
+cmsay() {
+    gdbus call --session \
+        --dest org.cmacs.Editor \
+        --object-path /org/cmacs/Editor \
+        --method org.cmacs.Editor1.Message "$*" >/dev/null
+}
+
+# Usage:
+# cmeval '(buffer-name)'
+# cmopen ~/notes/ideas.org
+# cmsay "build done in $(cat /tmp/build.time)s"
+#+end_src
+
+* Zsh + completion
+
+If you put the bash helpers above in =~/.zshrc=, you get the same
+behaviour.  For interactive completion of method names, =gdbus= ships
+with bash-completion that already covers method introspection — type
+=gdbus call --session --dest org.cmacs.Editor --object-path /org/cmacs/Editor --method <TAB>=
+and the shell suggests every available method.
+
+* From a Makefile
+
+#+begin_src makefile
+# Tell my running cmacs to compile this file in compilation-mode.
+compile-in-cmacs:
+	gdbus call --session \
+	    --dest org.cmacs.Editor \
+	    --object-path /org/cmacs/Editor \
+	    --method org.cmacs.Editor1.Eval \
+	    '(compile "make -j$(shell nproc)")'
+
+# Show a notification when the long task finishes.
+deploy:
+	./long-deploy.sh
+	gdbus call --session \
+	    --dest org.cmacs.Editor \
+	    --object-path /org/cmacs/Editor \
+	    --method org.cmacs.Editor1.Message \
+	    "deploy finished at $$(date +%H:%M:%S)"
+#+end_src
+
+* From an emacs subshell or script
+
+The same gdbus form works inside =M-! shell-command= or
+=async-shell-command=, and it's the easiest way to remote-control a
+cmacs daemon from another cmacs:
+
+#+begin_src emacs-lisp
+;; From cmacs A, drive cmacs B (specifically pid 12345).
+(call-process "gdbus" nil "*scratch*" nil
+              "call" "--session"
+              "--dest" "org.cmacs.Editor.Pid12345"
+              "--object-path" "/org/cmacs/Editor"
+              "--method" "org.cmacs.Editor1.FindFile"
+              "/etc/hosts")
+#+end_src
+
+* Common pitfalls
+
+** "Error: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown"
+
+The well-known name isn't owned and the activation file isn't
+installed.  Either start a cmacs manually
+(=cmacs --fg-daemon= or =M-x server-start=) or install the
+.service file.
+
+** "Error: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod"
+
+Either you typo'd the method name (capitalisation matters:
+=Eval=, not =eval=) or the iface isn't registered (e.g. you're on a
+cmacs without =--with-cmacs-glib=).  Verify with =gdbus introspect=.
+
+** "Error: ((wrong-number-of-arguments) ...)"
+
+The elisp expression you sent through =Eval= had bad syntax or the
+wrong arity.  cmacs returns Lisp errors as D-Bus errors verbatim.
+
+** Quoting hell with =GiCall='s =as= argument
+
+The =as= is a D-Bus array-of-string.  Different tools encode it
+differently:
+
+#+begin_src shell
+# gdbus --- bracketed list, single-quoted strings.
+gdbus call ... --method org.cmacs.Editor1.GiCall \
+    GLib hostname_is_ascii_encoded "['example.com']"
+
+# busctl --- type sig + count + each element separately.
+busctl --user call org.cmacs.Editor /org/cmacs/Editor \
+    org.cmacs.Editor1 GiCall ssas \
+    GLib hostname_is_ascii_encoded \
+    1 "example.com"
+
+# dbus-send --- explicit type prefix per element.
+dbus-send --session --print-reply \
+    --dest=org.cmacs.Editor /org/cmacs/Editor \
+    org.cmacs.Editor1.GiCall \
+    string:GLib string:hostname_is_ascii_encoded \
+    array:string:"example.com"
+#+end_src

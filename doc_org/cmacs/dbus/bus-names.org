@@ -1,0 +1,177 @@
+#+TITLE: Bus Names and Activation
+#+STARTUP: showall
+#+OPTIONS: toc:2 num:t
+
+* Dual bus name claim
+
+cmacs claims two session-bus names every time =cmacs-dbus-start= runs.
+The dual claim mirrors emacsclient's daemon-vs-instance model and
+solves two distinct discovery problems with one mechanism.
+
+** Well-known: =org.cmacs.Editor=
+
+The first cmacs in a session to start the D-Bus service wins this
+name.  Subsequent cmacs instances see it owned and run in
+per-PID-only mode.  This is the name to target when you don't care
+which cmacs you talk to — desktop integration, file managers,
+"Open With cmacs" actions, AI agents, scripts.
+
+The well-known name is also what =DBusActivatable= clients send to,
+which is what triggers session-bus auto-activation when no cmacs is
+running.
+
+** Per-PID: =org.cmacs.Editor.PidN=
+
+Every cmacs always claims this, where =N= is the process ID.  This
+gives you a stable, unambiguous handle on a specific instance, so
+=cmacsgi= or a debugging script can target one cmacs out of several
+running at once.
+
+The per-PID name is published in the env var =$CMACS_DBUS_NAME= so
+child processes started by cmacs (vterm shells, =M-x bacon=, async
+shell commands) inherit it without having to re-discover.
+
+** Querying which name(s) you have
+
+#+begin_src emacs-lisp
+(cmacs-dbus-name)             ;; => "org.cmacs.Editor" if held, else
+                              ;;    "org.cmacs.Editor.PidNNN"
+(cmacs-dbus-well-known-name)  ;; => "org.cmacs.Editor" or nil
+(cmacs-dbus-per-pid-name)     ;; => "org.cmacs.Editor.PidNNN"
+#+end_src
+
+From a shell:
+
+#+begin_src shell
+# All cmacs-related names currently on the bus:
+gdbus list --session | grep -E '^org\.cmacs\.Editor'
+# org.cmacs.Editor
+# org.cmacs.Editor.Pid12345
+# org.cmacs.Editor.Pid12876
+#+end_src
+
+* Picking which name to call
+
+A heuristic for D-Bus consumers:
+
+#+begin_src shell
+# Convenience: just use the well-known name unless it's missing.
+if gdbus list --session | grep -qx 'org.cmacs.Editor'; then
+    DEST=org.cmacs.Editor
+else
+    DEST=$(gdbus list --session | grep -m1 '^org\.cmacs\.Editor\.Pid')
+fi
+
+gdbus call --session --dest "$DEST" \
+    --object-path /org/cmacs/Editor \
+    --method org.cmacs.Editor1.Eval '(emacs-version)'
+#+end_src
+
+The well-known name is preferred for:
+
+- "open this file" / "show this URI"
+- One-shot queries where multi-instance isn't a concern
+- Desktop integration (the user's primary cmacs is the right target)
+
+The per-PID name is necessary for:
+
+- Distinguishing two cmacs that share a workspace
+- Debugging: pinning a specific process for monitoring
+- Tests: targeting the cmacs you just spawned
+- =cmacsgi= using =$CMACS_DBUS_NAME= (its env var is per-PID, so
+  cmacsgi inside a bacon shell always talks to its parent cmacs)
+
+* Service activation
+
+The =/usr/share/dbus-1/services/org.cmacs.Editor.service= file (or its
+per-user equivalent at =$XDG_DATA_HOME/dbus-1/services/=) tells
+=dbus-daemon= how to start cmacs on demand:
+
+#+begin_example
+[D-BUS Service]
+Name=org.cmacs.Editor
+Exec=/usr/bin/emacs --fg-daemon
+SystemdService=cmacs.service
+#+end_example
+
+When any client sends a method call to =org.cmacs.Editor= and no
+cmacs currently owns the name, =dbus-daemon=:
+
+1. Looks up the .service file by =Name=
+2. If =SystemdService== is present and a session systemd is
+   available, runs =systemctl --user start cmacs.service=
+3. Otherwise, exec()s the =Exec== command line directly
+4. Queues the inbound message until the name is acquired (or a
+   default 25-second timeout fires)
+
+** Installing the activation file
+
+#+begin_src shell
+# System-wide (root):
+sudo make install-cmacs-dbus-service
+
+# Per-user (no sudo needed):
+mkdir -p "$XDG_DATA_HOME/dbus-1/services"
+sed "s|@bindir@|$HOME/source/projects/cmacs/src|g" \
+    etc/dbus/org.cmacs.Editor.service.in \
+    > "$XDG_DATA_HOME/dbus-1/services/org.cmacs.Editor.service"
+#+end_src
+
+The per-user form is handy for development: it lets you point the
+activation file at your in-tree =./src/emacs= so any "Open With
+cmacs" click from a file manager runs your dev build.
+
+** Testing activation
+
+After installing, kill any running cmacs and trigger activation:
+
+#+begin_src shell
+# Make sure no cmacs is running on this session bus.
+gdbus list --session | grep org.cmacs.Editor && echo "still running"
+
+# Send a method to org.cmacs.Editor — this will auto-launch cmacs.
+gdbus call --session \
+    --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor \
+    --method org.cmacs.Editor1.Eval '(emacs-version)'
+#+end_src
+
+You should see cmacs spawn (check =ps aux | grep emacs=), the bus
+name appear, and the eval result return.
+
+** Disabling auto-activation
+
+Just remove the .service file:
+
+#+begin_src shell
+sudo make uninstall-cmacs-dbus-service
+# or for per-user:
+rm "$XDG_DATA_HOME/dbus-1/services/org.cmacs.Editor.service"
+#+end_src
+
+cmacs still works as a D-Bus service when manually started; it just
+won't auto-launch.
+
+* Multi-instance scenarios
+
+** Two cmacs, both running
+
+The first one to call =cmacs-dbus-start= wins =org.cmacs.Editor=.
+Both keep their per-PID names.  Clients targeting the well-known
+name reach the first cmacs; clients targeting the per-PID name
+reach whichever instance they specify.
+
+** First cmacs exits while second is alive
+
+The well-known name becomes free.  By default, the second cmacs does
+*not* automatically claim it (we use =DO_NOT_QUEUE= without
+=ALLOW_REPLACEMENT=).  Phase 4's daemon-promotion logic will let the
+surviving instance opt in to taking over.  For Phase 1, restarting
+=cmacs-dbus-stop= + =cmacs-dbus-start= on the survivor re-claims.
+
+** Both cmacs serve the same project root
+
+Each has its own per-PID name; consumers can pick by =cwd= or
+inspection.  Phase 2's per-buffer objects will surface =Filename=
+properties so a watcher can pick "the cmacs that has my project
+file open" without a heuristic.

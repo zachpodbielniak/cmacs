@@ -1,0 +1,153 @@
+#+TITLE: Interfaces and Object Hierarchy
+#+STARTUP: showall
+#+OPTIONS: toc:2 num:t
+
+* Object hierarchy
+
+Phase 1 ships exactly one object: =/org/cmacs/Editor=.  Everything
+else is layered on the same path as separate interfaces (per the
+freedesktop convention) so the introspection XML composes cleanly.
+Future phases add child paths.
+
+#+begin_example
+/org/cmacs/Editor                         [Phase 1 root]
+  ├─ org.freedesktop.DBus.Introspectable  (auto, GDBus)
+  ├─ org.freedesktop.DBus.Peer            (auto, bus daemon)
+  ├─ org.freedesktop.DBus.Properties      (lazy; populated by Phase 2)
+  ├─ org.freedesktop.DBus.ObjectManager   (registered, empty children)
+  └─ org.cmacs.Editor1                    (back-compat surface)
+
+[Phase 2-5 will add:]
+/org/cmacs/Editor/Buffer/<id>             per-buffer object
+/org/cmacs/Editor/Frame/<n>               per-frame object
+/org/cmacs/Editor/Window/<n>              per-window object
+/org/cmacs/Editor/Process/<id>            per-subprocess object
+/org/cmacs/Editor/SearchProvider          GNOME Shell SearchProvider2
+/org/cmacs/Editor/Watch/<token>           per-watch handle
+/org/cmacs/Editor/Request/<token>         long-running operation handle
+/org/cmacs/Editor/MediaPlayer2            MPRIS-as-buffer-nav (opt-in)
+#+end_example
+
+* org.freedesktop.DBus.Introspectable (auto)
+
+Provided by GDBus for free on every registered object.  Returns the
+introspection XML for whatever interfaces are currently registered.
+You don't implement it; it's how every D-Bus client discovers what
+methods exist.
+
+#+begin_src shell
+gdbus introspect --session \
+    --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor
+#+end_src
+
+Output covers every interface registered on the path, merged.
+
+* org.freedesktop.DBus.Peer (auto)
+
+Provided by the bus daemon for any connection.  Two trivial methods
+that any consumer can use as a liveness probe.
+
+| Method                       | Description                              |
+|------------------------------+------------------------------------------|
+| =Ping ()=                    | Reply with empty body if connection live |
+| =GetMachineId () -> s=       | Stable machine UUID per /etc/machine-id  |
+
+Useful for health checks:
+
+#+begin_src shell
+# Quick "is cmacs alive?" probe — no Lisp work, no GMainContext touch.
+if gdbus call --session --dest org.cmacs.Editor \
+       --object-path /org/cmacs/Editor \
+       --method org.freedesktop.DBus.Peer.Ping 2>/dev/null; then
+    echo "cmacs is responsive"
+fi
+#+end_src
+
+* org.freedesktop.DBus.Properties
+
+Standard freedesktop pattern: =Get(s,s) -> v=, =Set(s,s,v)=,
+=GetAll(s) -> a{sv}=, signal =PropertiesChanged(s, a{sv}, as)=.
+
+Phase 1 registers this iface lazily — it appears on a path the first
+time a module calls =cmacs_dbus_register_property= for that path.
+Phase 1 modules don't yet register any properties, so on a fresh
+service =GetAll= over =org.cmacs.Editor1= returns an empty dict.
+
+The full surface lights up in Phase 2 when per-buffer / per-frame /
+per-window objects start declaring properties (=Name=, =Filename=,
+=Modified=, =Point=, =MajorMode=, ...) and emitting
+=PropertiesChanged= from Lisp hooks.
+
+* org.freedesktop.DBus.ObjectManager
+
+Standard pattern for services with dynamic objects.  cmacs has many
+short-lived entities that come and go (buffers, frames, windows,
+subprocesses), so the obvious answer is: enumerate once, then watch
+signals.
+
+| Method                       | Returns           | Description                         |
+|------------------------------+-------------------+-------------------------------------|
+| =GetManagedObjects ()=       | =a{oa{sa{sv}}}=   | Snapshot of every (path, iface,     |
+|                              |                   | properties) tuple                   |
+
+| Signal                    | Body                       | Fires on...                |
+|---------------------------+----------------------------+----------------------------|
+| =InterfacesAdded=         | =o, a{sa{sv}}=             | new (path, iface) appears  |
+| =InterfacesRemoved=       | =o, as=                    | (path, iface) disappears   |
+
+In Phase 1 the registry is empty.  Phase 2 will populate it from the
+per-resource modules so the natural client pattern becomes:
+
+#+begin_src python
+# pseudocode — Phase 2 surface
+mgr = bus.get('.Editor', '/').GetManagedObjects()
+buffers = [path for path, ifaces in mgr.items()
+           if 'org.cmacs.Editor1.Buffer' in ifaces]
+# subscribe to signals
+bus.subscribe(signal='InterfacesAdded',  ...)
+bus.subscribe(signal='InterfacesRemoved', ...)
+#+end_src
+
+* org.cmacs.Editor1 (back-compat)
+
+This is the wire surface the cmacs D-Bus subsystem exposed before the
+Phase 1 refactor.  Everything here is preserved bit-for-bit: existing
+=cmacsgi= consumers, ad-hoc shell scripts, and any third-party tool
+that calls =org.cmacs.Editor1.Eval= and friends keeps working.
+
+| Method            | In                             | Out             | Description                      |
+|-------------------+--------------------------------+-----------------+----------------------------------|
+| =Eval=            | =s expression=                 | =s result=      | Evaluate elisp, return =prin1=   |
+| =FindFile=        | =s path=                       | -               | Open a file in the editor        |
+| =Message=         | =s text=                       | -               | Display in echo area             |
+| =GiRequire=       | =s namespace, s version=       | =b success=     | Load a GI namespace              |
+| =GiCall=          | =s namespace, s function, as args= | =s result=  | Call a GI function               |
+| =GiListFunctions= | =s namespace=                  | =as functions=  | List functions in a namespace    |
+
+Plus 23 =Gowl*= methods when =--with-cmacs-gowl= is enabled (full
+list in [[file:methods.org][methods.org]]).
+
+Phase 3 will introduce typed sub-interfaces
+(=org.cmacs.Editor1.Buffer=, =.Search=, =.VC=, =.Pkg=, =.Monitor=,
+=.Bar=, =.Cintrospect=, =.Cpatch=, ...) that mirror the cmacsgi
+group structure with proper return types.  The =Editor1= surface
+stays untouched; it just becomes the "low-level escape hatch" for
+arbitrary elisp.
+
+* Inspecting the live surface
+
+#+begin_src shell
+# What's actually exposed right now?
+gdbus introspect --session \
+    --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor \
+    --xml
+#+end_src
+
+This dumps the raw introspection XML, which is the source of truth.
+Pipe through =xmllint --format -= for readability.
+
+D-Spy (=flatpak run org.gnome.dspy=) gives you the same thing as a
+GUI tree — handy when you're poking at the surface during
+development.

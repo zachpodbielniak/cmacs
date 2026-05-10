@@ -2707,7 +2707,7 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #ifdef HAVE_CMACS_GLIB
       syms_of_cmacs_glib ();
       syms_of_cmacs_gobject ();
-      syms_of_cmacs_dbus_service ();
+      syms_of_cmacs_dbus ();
 #endif
 #ifdef HAVE_CMACS_GI
       syms_of_cmacs_gi ();

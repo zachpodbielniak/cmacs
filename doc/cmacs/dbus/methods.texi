@@ -1,0 +1,146 @@
+@node D-Bus Methods
+@section Method Reference
+
+Reference for every method on @code{org.cmacs.Editor1} as of Phase 1.
+D-Bus type signatures: @code{s} string, @code{i} int32, @code{u}
+uint32, @code{x} int64, @code{t} uint64, @code{b} bool, @code{d}
+double, @code{as} array-of-string, @code{v} variant, @code{o}
+object-path, @code{h} file descriptor.
+
+@subsection Eval
+
+Evaluate an arbitrary elisp expression, return its @code{prin1} form.
+
+@example
+Eval (s expression) -> (s)
+Errors: org.cmacs.Editor1.Error
+@end example
+
+@example
+gdbus call --session --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor \
+    --method org.cmacs.Editor1.Eval \
+    '(format "%s on %s" (emacs-version) (system-name))'
+# ('"GNU Emacs 31.0.50 ... on hostname"',)
+@end example
+
+This is the universal escape hatch.  Anything reachable from elisp
+is reachable from here.
+
+@subsection FindFile
+
+Open a file or URL in the editor.
+
+@example
+FindFile (s path) -> ()
+
+gdbus call --session --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor \
+    --method org.cmacs.Editor1.FindFile \
+    /etc/hostname
+@end example
+
+Equivalent to @code{M-x find-file}, so TRAMP paths work too.
+
+@subsection Message
+
+Display a message in the echo area.
+
+@example
+Message (s text) -> ()
+
+gdbus call --session --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor \
+    --method org.cmacs.Editor1.Message \
+    "build complete"
+@end example
+
+@subsection GiRequire
+
+Load a GObject Introspection namespace into cmacs's GI bridge.
+
+@example
+GiRequire (s namespace, s version) -> (b)
+
+gdbus call --session --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor \
+    --method org.cmacs.Editor1.GiRequire \
+    GLib 2.0
+# (true,)
+@end example
+
+@subsection GiCall
+
+Call a function from a previously loaded GI namespace.  Each argument
+is passed as a string and read on the cmacs side as a Lisp
+expression --- bare words become strings, numbers pass through,
+quoted strings stay quoted.
+
+@example
+GiCall (s namespace, s function, as args) -> (s)
+
+gdbus call --session --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor \
+    --method org.cmacs.Editor1.GiCall \
+    GLib get_user_name '[]'
+@end example
+
+@subsection GiListFunctions
+
+@example
+GiListFunctions (s namespace) -> (as)
+
+gdbus call --session --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor \
+    --method org.cmacs.Editor1.GiListFunctions \
+    GLib | head -3
+@end example
+
+@subsection Gowl methods (when --with-cmacs-gowl)
+
+Bypass the elisp eval round-trip for compositor-control hot paths.
+Each one returns a JSON-encoded string for structured fields and
+@code{t}/@code{nil} strings for booleans.  Phase 3 will extract
+these into typed @code{org.cmacs.Editor1.Monitor} / @code{.Bar} /
+@code{.Compositor} interfaces with proper return types.
+
+@multitable @columnfractions .35 .35 .30
+@headitem Method @tab Signature @tab Description
+@item GowlListClients                @tab -> (s) JSON  @tab Every Wayland client
+@item GowlFocusedClient              @tab -> (s)       @tab Focused client (or "nil")
+@item GowlSpawn                      @tab (s) -> (s)   @tab Launch CMD with WAYLAND_DISPLAY
+@item GowlListMonitors               @tab -> (s) JSON  @tab Attached monitors
+@item GowlAddKeybind                 @tab (sis) -> (s) @tab key, action-id, arg
+@item GowlListKeybinds               @tab -> (s) JSON  @tab Bound keys
+@item GowlAddRule                    @tab (ssubi) -> (s) @tab app-id, title, tags, floating, monitor
+@item GowlSetMfact                   @tab (d) -> (s)   @tab Master-area split
+@item GowlSetNmaster                 @tab (i) -> (s)   @tab Master-window count
+@item GowlViewTags                   @tab (u) -> (s)   @tab Visible tag-mask
+@item GowlLock / GowlUnlock          @tab -> (s)       @tab Toggle session lock
+@item GowlReloadConfig               @tab -> (s)       @tab Reload gowl.yaml
+@item GowlConfigGet                  @tab (s) -> (s)   @tab Read top-level config property
+@item GowlFindClient                 @tab (ss) -> (s)  @tab pattern, by ("title"/"app-id")
+@item GowlMonitorInfo                @tab (s) -> (s)   @tab Full monitor info JSON
+@item GowlMonitorModes               @tab (s) -> (s)   @tab Available modes JSON
+@item GowlSetMonitorMode             @tab (siii) -> (s) @tab name, w, h, refresh-mhz
+@item GowlMonitorPosition            @tab (s) -> (s)   @tab name -> @{x, y@}
+@item GowlSetMonitorPosition         @tab (sii) -> (s) @tab name, x, y
+@item GowlSetMonitorEnabled          @tab (sb) -> (s)  @tab name, bool
+@item GowlSetMonitorScale            @tab (sd) -> (s)  @tab name, double
+@item GowlSetMonitorTransform        @tab (si) -> (s)  @tab name, 0..7
+@end multitable
+
+@subsection Error handling
+
+Every method that takes elisp returns errors as
+@code{org.cmacs.Editor1.Error} D-Bus errors.  In @command{gdbus}
+they print as:
+
+@example
+Error: GDBus.Error:org.cmacs.Editor1.Error: ((wrong-number-of-arguments) ...)
+@end example
+
+Programmatic clients should match on the error name to decide
+whether to surface to the user or retry.  Most languages' D-Bus
+bindings turn the error into a typed exception.  See
+@ref{D-Bus CLI Examples} for examples in each language.

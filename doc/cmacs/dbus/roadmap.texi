@@ -1,0 +1,142 @@
+@node D-Bus Roadmap
+@section Roadmap
+
+The cmacs D-Bus surface lands incrementally.  Phase 1 (foundations)
+shipped in commit @code{ab1bf5f79d3}; the four subsequent phases
+follow as separate commits.  None of them break Phase 1 wire
+surface.
+
+@subsection Phase 1 --- Foundations (shipped)
+
+@itemize @bullet
+@item
+Dual bus name claim (@code{org.cmacs.Editor} +
+@code{org.cmacs.Editor.Pid@var{N}})
+@item
+D-Bus session-bus activation file +
+@command{make install-cmacs-dbus-service}
+@item
+@code{org.freedesktop.DBus.ObjectManager} registered at root
+@item
+@code{org.freedesktop.DBus.Properties} helper with lazy attach
+@item
+Signal-emit infrastructure (C + Lisp)
+@item
+File reorg: 838-line monolith split across 8 files in
+@file{cmacs/dbus/}
+@item
+Back-compat: @code{org.cmacs.Editor1} (6 core + 18 gowl methods)
+preserved bit-for-bit
+@item
+12 ERT tests
+@end itemize
+
+Five new DEFUNs: @code{cmacs-dbus-start}, @code{cmacs-dbus-stop},
+@code{cmacs-dbus-name}, @code{cmacs-dbus-well-known-name},
+@code{cmacs-dbus-per-pid-name}, @code{cmacs-dbus-emit-signal},
+@code{cmacs-dbus-emit-properties-changed}.
+
+@subsection Phase 2 --- Per-resource objects (planned)
+
+Goal: live entities as observable D-Bus objects.
+
+@itemize @bullet
+@item
+@code{/org/cmacs/Editor/Buffer/<id>} per live buffer
+@item
+@code{/org/cmacs/Editor/Frame/<n>} per frame
+@item
+@code{/org/cmacs/Editor/Window/<n>} per window
+@item
+@code{/org/cmacs/Editor/Process/<id>} per subprocess
+@end itemize
+
+ObjectManager broadcasts @code{InterfacesAdded} /
+@code{InterfacesRemoved}; @code{PropertiesChanged} driven by Lisp
+hooks.  Per-buffer methods include @code{GetContent () -> h} (memfd
+file-descriptor pass), @code{Save ()}, @code{Kill ()},
+@code{Revert ()}.
+
+@subsection Phase 3 --- cmacsgi parity (planned)
+
+Goal: every cmacsgi command reachable as a typed D-Bus method.
+
+One file per interface, mirroring @file{cmacs/api/cmacs-api-cmd-*.c}:
+@code{Buffer}, @code{File}, @code{Text}, @code{Nav}, @code{Search},
+@code{Window}, @code{Config}, @code{Project}, @code{Bookmark},
+@code{Clipboard}, @code{VC}, @code{Package}, @code{Monitor} (extracts
+gowl), @code{Bar} (extracts gowl), @code{Ripgrep},
+@code{Cintrospect}, @code{Cpatch}, @code{Print}.
+
+Long-running operations (compile, grep, rg, package install) get
+@code{Request} handles modeled on
+@code{org.freedesktop.portal.Request}.
+
+@subsection Phase 4 --- Desktop integration (planned)
+
+@itemize @bullet
+@item
+@code{org.freedesktop.Application} on root: @code{Activate},
+@code{Open}, @code{ActivateAction}
+@item
+@code{org.gtk.Actions} on root: every interactive defun → typed
+action
+@item
+@code{org.gnome.Shell.SearchProvider2}: buffers / recentf / org-roam
+in GNOME shell overview
+@item
+@code{org.freedesktop.Notifications}: bidirectional --- send via
+@code{cmacs-notify} helper, receive via subscription
+@item
+@code{xdg-desktop-portal} consumer: FileChooser / OpenURI / Print
+for sandboxed apps
+@end itemize
+
+@subsection Phase 5 --- Creative extensions (planned)
+
+@itemize @bullet
+@item
+@code{org.freedesktop.login1.Manager.Inhibit}: block sleep when
+buffers modified, block idle during long compiles
+@item
+@code{org.freedesktop.portal.GlobalShortcuts}: desktop-wide hotkeys
+that fire even when cmacs isn't focused
+@item
+@code{org.mpris.MediaPlayer2} server: opt-in mode where mediakeys
+navigate buffers
+@item
+@code{org.cmacs.Editor1.Watch}: observable variable / form watchers
+@item
+@code{org.cmacs.Editor1.Podomation.Events}: every Pod event becomes
+a D-Bus signal
+@item
+@code{/org/cmacs/Editor/GI/<Namespace>}: exposes loaded GI
+namespaces as typed D-Bus methods.  Turns cmacs into a GI-RPC
+bridge reachable from any language.
+@end itemize
+
+@subsection Out of scope
+
+@itemize @bullet
+@item
+System-bus presence (everything stays on session bus)
+@item
+Cross-machine D-Bus over TCP (use TRAMP / emacsclient over SSH)
+@item
+KDE StatusNotifierItem (third-party shim via
+@code{org.gtk.Actions})
+@item
+Replacing @command{emacsclient} (both stay)
+@item
+Migrating cmacsgi off socketpair to D-Bus (FD socketpair faster for
+local-child case)
+@end itemize
+
+@subsection Versioning and stability
+
+Phase 1 surface is @emph{stable} --- every method, signal, and
+property shipped in the foundations release will keep working in
+subsequent phases.  New interfaces are additive.  Renames or
+removals on existing ifaces would constitute a breaking change and
+require a major-version bump (@code{org.cmacs.Editor2}, separate
+object hierarchy).

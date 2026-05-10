@@ -667,7 +667,7 @@ OPTION_DEFAULT_OFF([cmacs-print], [Print to cmacs virtual printer + PDF intake])
 if test "$with_cmacs_glib" != "no"; then
   PKG_CHECK_MODULES([CMACS_GLIB], [glib-2.0 gobject-2.0 gio-2.0 gmodule-2.0])
   AC_DEFINE([HAVE_CMACS_GLIB], 1, [CMacs GLib integration])
-  CMACS_GLIB_OBJ="cmacs-glib-loop.o cmacs-gobject.o cmacs-gclosure.o cmacs-dbus-service.o cmacs-eval-dispatch.o cmacs-glib-screenshot.o cmacs-ink-overlay.o"
+  CMACS_GLIB_OBJ="cmacs-glib-loop.o cmacs-gobject.o cmacs-gclosure.o cmacs-eval-dispatch.o cmacs-glib-screenshot.o cmacs-ink-overlay.o cmacs-dbus.o cmacs-dbus-helpers.o cmacs-dbus-emit.o cmacs-dbus-properties.o cmacs-dbus-object-manager.o cmacs-dbus-iface-eval.o"
 fi
 if test "$with_cmacs_gi" != "no"; then
   PKG_CHECK_MODULES([CMACS_GI], [gobject-introspection-1.0])
@@ -8116,6 +8116,10 @@ if test "$HAVE_NS" = "yes"; then
 fi
 
 AC_CONFIG_FILES([Makefile lib/gnulib.mk])
+
+dnl D-Bus session-bus activation file (CMacs) is substituted at install
+dnl time (Makefile.in install-cmacs-dbus-service) so ${exec_prefix} /
+dnl ${bindir} expand to fully-resolved paths rather than make-time vars.
 
 dnl config.status treats $srcdir specially, so I think this is ok...
 ARCH_INDEPENDENT_CONFIG_FILES([$srcdir/doc/man/emacs.1])

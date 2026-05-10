@@ -1,0 +1,103 @@
+@node D-Bus Elisp API
+@section Elisp API
+
+Every DEFUN provided by cmacs's D-Bus subsystem.  All are autoloaded
+when @option{--with-cmacs-glib} is enabled at configure time.
+
+@subsection Lifecycle
+
+@table @code
+@item (cmacs-dbus-start)
+Connect to the session bus, register all enabled interface modules
+at @code{/org/cmacs/Editor}, claim the well-known and per-PID
+names.  Returns the dominant bus name (well-known if acquired, else
+the per-PID fallback).  Idempotent.
+
+@item (cmacs-dbus-stop)
+Tear down the registration.  Returns @code{t} if the service was
+running, @code{nil} otherwise.
+
+@item (cmacs-dbus-name)
+Dominant bus name (well-known if held, else per-PID).  @code{nil}
+when stopped.
+
+@item (cmacs-dbus-well-known-name)
+The well-known name @code{org.cmacs.Editor} if this cmacs holds it;
+@code{nil} if another cmacs already owned it when we started, or if
+we're stopped.
+
+@item (cmacs-dbus-per-pid-name)
+The per-PID name @code{org.cmacs.Editor.Pid@var{N}} (always claimed
+when running), or @code{nil} when stopped.
+@end table
+
+@subsection Signal emission
+
+@table @code
+@item (cmacs-dbus-emit-signal PATH IFACE NAME &optional PARAMS)
+Emit a D-Bus signal at @var{PATH} on @var{IFACE} named @var{NAME}.
+@var{PARAMS} is a list whose elements are auto-marshalled into a
+tuple of best-fit GVariant types.  Returns @code{t} on success,
+@code{nil} if the service is not running (no-op in that case).
+Never raises.
+
+Example:
+@example
+(cmacs-dbus-emit-signal
+ "/org/cmacs/Editor"
+ "org.example.MyApp"
+ "Heartbeat"
+ (list "alive" 42))
+@end example
+
+@item (cmacs-dbus-emit-properties-changed PATH IFACE CHANGED &optional INVALIDATED)
+Emit the standard
+@code{org.freedesktop.DBus.Properties.PropertiesChanged} signal.
+@var{CHANGED} is a plist; @var{INVALIDATED} is a list of property
+names.
+
+Example:
+@example
+(cmacs-dbus-emit-properties-changed
+ "/org/cmacs/Editor/Buffer/12"
+ "org.cmacs.Editor1.Buffer.Resource"
+ (list :modified t :point 1234) nil)
+@end example
+@end table
+
+@subsection Customization
+
+Phase 1 has no defcustoms; the surface is on / off via
+@code{cmacs-dbus-start} / @code{cmacs-dbus-stop}.  Phases 4 and 5
+will add opt-in customizations.
+
+@subsection Patterns
+
+@subsubheading Conditional emit
+
+The emit DEFUNs no-op when the service is stopped, so it's safe to
+unconditionally call them from hooks even if the user hasn't started
+the service:
+
+@example
+(cmacs-dbus-emit-signal "/org/cmacs/Editor"
+                        "org.example.App" "Tick" '("hello"))
+@end example
+
+@subsubheading Forwarding hook events as signals
+
+@example
+(dolist (hook '(after-save-hook
+                kill-buffer-hook
+                find-file-hook))
+  (add-hook hook
+    (lambda (&rest _)
+      (cmacs-dbus-emit-signal
+       "/org/cmacs/Editor"
+       "org.cmacs.Editor1.Hooks"
+       (symbol-name hook) nil))))
+@end example
+
+External tools then watch
+@command{gdbus monitor --session --dest org.cmacs.Editor} to react
+to editor activity in real time.

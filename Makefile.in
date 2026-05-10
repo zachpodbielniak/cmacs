@@ -218,6 +218,9 @@ iconsrcdir=$(srcdir)/etc/images/icons
 # Where to install the gsettings schema file.
 gsettingsschemadir = $(datadir)/glib-2.0/schemas
 
+# CMacs D-Bus session-bus activation file location.
+dbusservicedir = $(datadir)/dbus-1/services
+
 # ==================== Emacs-specific directories ====================
 
 # These variables hold the values Emacs will actually use.  They are
@@ -1449,6 +1452,24 @@ endif
 .PHONY: install-cmacs-printer uninstall-cmacs-printer check-cmacs-printer
 .PHONY: install-cmacs-printer-user uninstall-cmacs-printer-user
 .PHONY: install-cmacs-print-watcher uninstall-cmacs-print-watcher
+
+## D-Bus session-bus activation file.  Installs
+## $datadir/dbus-1/services/org.cmacs.Editor.service so that any client
+## sending a method call to org.cmacs.Editor causes dbus-daemon to
+## auto-start emacs --fg-daemon.  Pair with `--with-cmacs-glib` (the
+## D-Bus subsystem is already built when that's enabled).
+
+install-cmacs-dbus-service:
+	${MKDIR_P} "$(DESTDIR)$(dbusservicedir)"
+	tmp=etc/dbus/org.cmacs.Editor.service.tmp; rm -f $${tmp}; \
+	sed -e "s|@bindir@|${bindir}|g" \
+	  ${srcdir}/etc/dbus/org.cmacs.Editor.service.in > $${tmp}; \
+	$(INSTALL_DATA) $${tmp} \
+	  "$(DESTDIR)$(dbusservicedir)/org.cmacs.Editor.service"; \
+	rm -f $${tmp}
+
+uninstall-cmacs-dbus-service:
+	rm -f "$(DESTDIR)$(dbusservicedir)/org.cmacs.Editor.service"
 
 ## System-wide install — stages a CUPS backend in /usr/lib/cups/backend/.
 ## Prompts sudo internally.  On immutable systems (OSTree / Silverblue /

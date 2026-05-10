@@ -1,0 +1,208 @@
+@node D-Bus Integration Recipes
+@section Integration Recipes
+
+End-to-end recipes for things you'd actually want to build on top of
+cmacs's D-Bus surface.
+
+@subsection Open a file from any script, anywhere
+
+@example
+#!/usr/bin/env bash
+# cmacs-edit FILE [LINE]
+
+set -euo pipefail
+FILE=$(readlink -f "$@{1:?usage: cmacs-edit FILE [LINE]@}")
+LINE=$@{2:-@}
+
+gdbus call --session --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor \
+    --method org.cmacs.Editor1.FindFile "$FILE" >/dev/null
+
+if [[ -n "$LINE" ]]; then
+    gdbus call --session --dest org.cmacs.Editor \
+        --object-path /org/cmacs/Editor \
+        --method org.cmacs.Editor1.Eval \
+        "(with-current-buffer (find-buffer-visiting \"$FILE\")
+           (goto-line $LINE))" >/dev/null
+fi
+@end example
+
+Drop in @file{~/.local/bin/cmacs-edit}, set @env{EDITOR=cmacs-edit},
+and @command{git commit} takes you straight to the cmacs that
+already has your project open.
+
+@subsection Build-finished notification
+
+@example
+#!/usr/bin/env bash
+# notify-cmacs.sh COMMAND ARGS...
+
+START=$(date +%s)
+"$@@"; RC=$?
+ELAPSED=$(( $(date +%s) - START ))
+
+if [[ $RC -eq 0 ]]; then
+    MSG="✓ $1 finished in $@{ELAPSED@}s"
+else
+    MSG="✗ $1 failed (rc=$RC) in $@{ELAPSED@}s"
+fi
+
+gdbus call --session --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor \
+    --method org.cmacs.Editor1.Message "$MSG" >/dev/null
+@end example
+
+Then @command{notify-cmacs.sh make -j8} and the result lands in the
+echo area without you having to switch windows.
+
+@subsection "Reveal in cmacs" from a file manager
+
+For GNOME Files (Nautilus), drop into
+@file{~/.local/share/nautilus/scripts/}:
+
+@example
+#!/usr/bin/env bash
+# Reveal in cmacs
+
+for path in $NAUTILUS_SCRIPT_SELECTED_FILE_PATHS; do
+    gdbus call --session --dest org.cmacs.Editor \
+        --object-path /org/cmacs/Editor \
+        --method org.cmacs.Editor1.FindFile "$path" >/dev/null
+done
+@end example
+
+For Dolphin, the same idea via Service Menus
+(@file{~/.local/share/kio/servicemenus/}).
+
+@subsection Headless test runner that drives a real cmacs
+
+@example
+#!/usr/bin/env bash
+# run-tests-against-running-cmacs.sh
+
+DEST=org.cmacs.Editor
+
+result=$(gdbus call --session --dest "$DEST" \
+    --object-path /org/cmacs/Editor \
+    --method org.cmacs.Editor1.Eval \
+    "(progn
+       (load-file \"$PWD/test/foo-tests.el\")
+       (let ((stats (ert-run-tests-batch t)))
+         (format \"%d expected, %d unexpected\"
+                 (ert-stats-completed-expected stats)
+                 (ert-stats-completed-unexpected stats))))")
+
+echo "$result"
+[[ "$result" == *"0 unexpected"* ]] || exit 1
+@end example
+
+@subsection Watch a buffer for changes (today, with hooks)
+
+Until per-buffer objects land in Phase 2, you can watch via signals
+emitted from elisp hooks:
+
+@example
+;; In your cmacs init:
+(add-hook 'after-save-hook
+  (lambda ()
+    (cmacs-dbus-emit-signal
+     "/org/cmacs/Editor"
+     "org.cmacs.Editor1.Hooks"
+     "BufferSaved"
+     (list (or (buffer-file-name) "")
+           (buffer-name)))))
+@end example
+
+Then watch from any consumer:
+
+@example
+from gi.repository import Gio, GLib
+
+def on_saved(conn, sender, path, iface, signal, params):
+    filename, bufname = params
+    print(f"saved: @{bufname@} (@{filename@})")
+
+bus = Gio.bus_get_sync(Gio.BusType.SESSION)
+bus.signal_subscribe(
+    "org.cmacs.Editor", "org.cmacs.Editor1.Hooks", "BufferSaved",
+    "/org/cmacs/Editor", None, Gio.DBusSignalFlags.NONE, on_saved)
+GLib.MainLoop().run()
+@end example
+
+@subsection Pipe shell output into a cmacs buffer in real time
+
+@example
+#!/usr/bin/env bash
+# pipe-to-cmacs.sh BUFFER-NAME
+
+BUFFER=$@{1:?usage: pipe-to-cmacs.sh BUFFER-NAME@}
+
+gdbus call --session --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor \
+    --method org.cmacs.Editor1.Eval \
+    "(with-current-buffer (get-buffer-create \"$BUFFER\")
+       (goto-char (point-max)))" >/dev/null
+
+while IFS= read -r line; do
+    esc=$(printf '%s' "$line" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    gdbus call --session --dest org.cmacs.Editor \
+        --object-path /org/cmacs/Editor \
+        --method org.cmacs.Editor1.Eval \
+        "(with-current-buffer (get-buffer \"$BUFFER\")
+           (goto-char (point-max))
+           (insert \"$esc\\n\"))" >/dev/null
+done
+
+# Usage:
+# journalctl -fu nginx | pipe-to-cmacs.sh "*nginx-log*"
+@end example
+
+@subsection Status-bar widget reading cmacs state
+
+@example
+#!/usr/bin/env bash
+# waybar-cmacs.sh
+
+while true; do
+    buf=$(gdbus call --session --dest org.cmacs.Editor \
+        --object-path /org/cmacs/Editor \
+        --method org.cmacs.Editor1.Eval \
+        '(buffer-name)' 2>/dev/null \
+        | sed -e 's/^(.//' -e 's/,)$//' -e 's/^"//' -e 's/"$//')
+    printf '@{"text": "%s"@}\n' "$@{buf:--@}"
+    sleep 2
+done
+@end example
+
+@subsection Cron job that opens daily notes
+
+@example
+# Every weekday at 09:00, open today's daily note in cmacs.
+0 9 * * 1-5 gdbus call --session --dest org.cmacs.Editor \
+   --object-path /org/cmacs/Editor \
+   --method org.cmacs.Editor1.FindFile \
+   "$HOME/notes/daily/$(date +\%Y-\%m-\%d).org"
+@end example
+
+@subsection Recipe template
+
+@example
+#!/usr/bin/env bash
+# what-it-does --- one-line summary.
+
+set -euo pipefail
+DEST=$@{CMACS_DBUS_DEST:-org.cmacs.Editor@}
+PATH_=$@{CMACS_DBUS_PATH:-/org/cmacs/Editor@}
+
+cmacs-call() @{
+    gdbus call --session --dest "$DEST" --object-path "$PATH_" "$@@"
+@}
+cmacs-eval() @{
+    cmacs-call --method org.cmacs.Editor1.Eval "$1"
+@}
+
+# ... your logic ...
+@end example
+
+Letting @env{CMACS_DBUS_DEST} be overridable from the env makes it
+easy to target a per-PID instance for testing.

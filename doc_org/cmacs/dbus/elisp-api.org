@@ -1,0 +1,203 @@
+#+TITLE: Elisp API
+#+STARTUP: showall
+#+OPTIONS: toc:2 num:t
+
+Every DEFUN provided by cmacs's D-Bus subsystem.  All are autoloaded
+when =--with-cmacs-glib= is enabled at configure time.
+
+* Lifecycle
+
+** =(cmacs-dbus-start)= → string
+
+Connect to the session bus, register all enabled interface modules
+at =/org/cmacs/Editor=, claim the well-known and per-PID names.
+Returns the dominant bus name (well-known if acquired, else the
+per-PID fallback).
+
+#+begin_src emacs-lisp
+(cmacs-dbus-start)
+;; => "org.cmacs.Editor"
+;;    or "org.cmacs.Editor.Pid12345" if another cmacs holds the well-known name
+#+end_src
+
+Idempotent: a second call returns the same name without doing
+anything.
+
+Internally, =M-x bacon= calls this when starting the bacon vterm so
+the bacon child can reach back via D-Bus when its FD socketpair
+isn't viable.  You can also call it from =init.el= to register on
+startup.
+
+** =(cmacs-dbus-stop)= → t or nil
+
+Tear down the registration.  Returns =t= if the service was running,
+=nil= otherwise.
+
+#+begin_src emacs-lisp
+(cmacs-dbus-stop)
+#+end_src
+
+After =cmacs-dbus-stop=, =cmacs-dbus-name= and friends return =nil=
+and emit functions become no-ops.
+
+* Name queries
+
+** =(cmacs-dbus-name)= → string or nil
+
+Dominant bus name (well-known if held, else per-PID).  =nil= when the
+service is stopped.
+
+** =(cmacs-dbus-well-known-name)= → string or nil
+
+The well-known name =org.cmacs.Editor= if this cmacs holds it; =nil=
+if another cmacs already owned it when we started, or if we're
+stopped.
+
+** =(cmacs-dbus-per-pid-name)= → string or nil
+
+The per-PID name =org.cmacs.Editor.PidN= (always claimed when
+running), or =nil= when stopped.
+
+#+begin_src emacs-lisp
+;; Useful for child processes:
+(setenv "CMACS_DBUS_NAME" (or (cmacs-dbus-name) ""))
+#+end_src
+
+* Signal emission
+
+** =(cmacs-dbus-emit-signal PATH IFACE NAME &optional PARAMS)= → t or nil
+
+Emit a D-Bus signal at =PATH= on =IFACE= named =NAME=.  =PARAMS= is a
+list whose elements are auto-marshalled into a tuple of best-fit
+GVariant types (see [[file:signals.org][signals.org]]).
+
+Returns =t= on success, =nil= if the service is not running (no-op
+in that case).  Never raises.
+
+#+begin_src emacs-lisp
+;; Broadcast a custom event with a string and an integer payload.
+(cmacs-dbus-emit-signal
+ "/org/cmacs/Editor"
+ "org.example.MyApp"
+ "Heartbeat"
+ (list "alive" 42))
+#+end_src
+
+Common pattern: emit from a hook.
+
+#+begin_src emacs-lisp
+(defun my/cmacs-broadcast-save ()
+  (when (buffer-file-name)
+    (cmacs-dbus-emit-signal
+     "/org/cmacs/Editor"
+     "org.cmacs.Editor1.Hooks"
+     "FileSaved"
+     (list (buffer-file-name)
+           (buffer-name)
+           (float-time)))))
+
+(add-hook 'after-save-hook #'my/cmacs-broadcast-save)
+#+end_src
+
+** =(cmacs-dbus-emit-properties-changed PATH IFACE CHANGED &optional INVALIDATED)= → t or nil
+
+Emit the standard =org.freedesktop.DBus.Properties.PropertiesChanged=
+signal.
+
+- =PATH=: the object whose properties changed
+- =IFACE=: the interface the changed properties belong to
+- =CHANGED=: a plist =(:KEY VALUE :KEY VALUE ...)=  Marshalled into
+  =a{sv}= where each value is variant-wrapped.  Keyword keys (e.g.
+  =:modified=) have their leading =:= stripped.
+- =INVALIDATED=: optional list of property names whose values are no
+  longer valid (consumers should re-fetch).
+
+Returns =t= / =nil= as above.
+
+#+begin_src emacs-lisp
+;; Phase 2 helper sketch — Phase 1 lets you do this manually.
+(cmacs-dbus-emit-properties-changed
+ "/org/cmacs/Editor/Buffer/12"
+ "org.cmacs.Editor1.Buffer.Resource"
+ (list :modified t
+       :point 1234
+       :name (buffer-name))
+ nil)
+#+end_src
+
+If you only want to invalidate (e.g. signal "this property might have
+changed but we don't want to broadcast the value"), pass an empty
+plist for CHANGED and put the name(s) in INVALIDATED:
+
+#+begin_src emacs-lisp
+(cmacs-dbus-emit-properties-changed
+ "/org/cmacs/Editor/Buffer/12"
+ "org.cmacs.Editor1.Buffer.Resource"
+ nil  ;; or '()
+ (list "Content"))
+#+end_src
+
+* Customization variables
+
+| Variable                    | Default | Description                                          |
+|-----------------------------+---------+------------------------------------------------------|
+| (none, Phase 1)             |         | Phase 4 will add e.g. =cmacs-dbus-allow-app-actions= |
+
+Phase 1 has no defcustoms; the surface is on / off via
+=cmacs-dbus-start= / =cmacs-dbus-stop=.  Phases 4 and 5 introduce
+defcustoms for opt-in features (notifications mirroring,
+inhibit-on-modified, MPRIS mode, ...).
+
+* Patterns
+
+** Conditional emit
+
+The emit DEFUNs no-op when the service is stopped, so it's safe to
+unconditionally call them from hooks even if the user hasn't started
+the service:
+
+#+begin_src emacs-lisp
+;; Always safe — silent no-op when D-Bus is off.
+(cmacs-dbus-emit-signal "/org/cmacs/Editor"
+                        "org.example.App" "Tick" '("hello"))
+#+end_src
+
+** Defining a per-buffer property (Phase 2 helper preview)
+
+The C-side =cmacs_dbus_register_property= takes path / iface / name /
+signature / getter-elisp / setter-elisp.  Phase 2 ships an elisp
+wrapper, but the pattern is:
+
+#+begin_src emacs-lisp
+;; Pseudocode — Phase 2 will add (cmacs-dbus-register-property ...)
+(cmacs-dbus-register-property
+ "/org/cmacs/Editor/Buffer/12"
+ "org.cmacs.Editor1.Buffer.Resource"
+ "Filename" "s"
+ ;; getter
+ "(or (buffer-file-name (cmacs--buffer-by-id 12)) \"\")"
+ ;; setter — nil for read-only
+ nil)
+#+end_src
+
+** Forwarding hook events as signals
+
+Phase 1 doesn't auto-forward Emacs hooks to D-Bus, but you can wire
+this manually for any hook:
+
+#+begin_src emacs-lisp
+(dolist (hook '(after-save-hook
+                kill-buffer-hook
+                find-file-hook
+                window-configuration-change-hook))
+  (add-hook hook
+    (lambda (&rest _)
+      (cmacs-dbus-emit-signal
+       "/org/cmacs/Editor"
+       "org.cmacs.Editor1.Hooks"
+       (symbol-name hook)
+       nil))))
+#+end_src
+
+External tools then watch =gdbus monitor --session --dest org.cmacs.Editor=
+to react to editor activity in real time.

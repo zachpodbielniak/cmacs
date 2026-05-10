@@ -1,0 +1,252 @@
+#+TITLE: Architecture
+#+STARTUP: showall
+#+OPTIONS: toc:2 num:t
+
+How the cmacs D-Bus subsystem is wired internally.  Useful when
+hacking on it.
+
+* File layout
+
+#+begin_example
+cmacs/dbus/
+├── cmacs-dbus.c                 top-level lifecycle, dual bus name
+├── cmacs-dbus.h                 public API for in-tree consumers
+├── cmacs-dbus-internal.h        cross-module declarations
+├── cmacs-dbus-helpers.c         lisp-escape, lisp-quote, error helpers
+├── cmacs-dbus-emit.c            signal-emit C helpers + DEFUNs
+├── cmacs-dbus-properties.c      Properties iface + lazy property registry
+├── cmacs-dbus-object-manager.c  ObjectManager iface + child registry
+└── cmacs-dbus-iface-eval.c      back-compat org.cmacs.Editor1
+                                 (eval / find-file / message / Gi* / Gowl*)
+#+end_example
+
+Phases 2-5 add more =cmacs-dbus-iface-*.c= modules, plus per-resource
+object files (=cmacs-dbus-buffer-obj.c=, etc.) and integration files
+(=cmacs-dbus-search-provider.c=, =cmacs-dbus-mpris.c=, ...).  The
+pattern is: one file per interface or per integration target.
+
+* Module registration model
+
+Each module exposes a register/unregister pair declared in
+=cmacs-dbus-internal.h=:
+
+#+begin_src c
+guint  cmacs_dbus_iface_eval_register   (GDBusConnection *, const gchar *path,
+                                          GError **);
+void   cmacs_dbus_iface_eval_unregister (GDBusConnection *, guint id);
+#+end_src
+
+The top-level =cmacs-dbus.c::register_modules= calls each enabled
+module's =register= function in sequence after the connection is up.
+Failures abort the whole start.  =unregister_modules= tears down in
+reverse order on stop.
+
+Each module owns its own introspection XML (no monolithic blob) and
+its own =GDBusInterfaceVTable=.  They register on the same path
+(=/org/cmacs/Editor=) but with distinct iface names, which GDBus
+merges automatically for =Introspectable=.
+
+* Dispatch model
+
+** Method handlers
+
+Every method body looks roughly like:
+
+1. =g_variant_get= the input args from =parameters=
+2. Build an elisp expression as a =gchar *=
+3. Call =cmacs_dispatch_eval (expr, &err)= (or one of its specialised
+   wrappers in =cmacs/glib/cmacs-eval-dispatch.c=)
+4. Either =g_dbus_method_invocation_return_value= with the result or
+   =cmacs_dbus_return_gerror= on error
+
+The elisp emission pattern is identical to the cmacsgi handlers in
+=cmacs/api/cmacs-api-cmd-*.c= — same =cmacs_dbus_lisp_escape= /
+=cmacs_dbus_lisp_quote= helpers, same eval routing.  Two transports,
+one source of truth for the elisp.
+
+** Why eval-routing instead of direct DEFUN calls
+
+Three reasons:
+
+1. *Single source of truth.* Every cmacsgi command has an elisp
+   emitter; D-Bus reuses it verbatim.  Adding a new method = copy
+   the cmacsgi emitter, swap the output sink.
+2. *Long-tail coverage.* The =Eval= method already handles every
+   possible cmacs operation.  Typed methods are an ergonomic layer
+   on top, not a replacement.
+3. *No duplicate type marshalling.* Building elisp strings is
+   simpler than emitting Lisp_Object directly with proper GC
+   protection — and the dispatch eval already handles all the
+   thread-safety concerns.
+
+** GMainContext integration
+
+D-Bus uses GLib's main loop.  cmacs has its own GMainContext
+(=cmacs_glib_get_context=) that's attached to the Emacs =pselect()=
+loop via =cmacs-glib-loop.c=.  We push that context as
+thread-default before creating the GDBus connection so all dispatch
+runs there.
+
+This means D-Bus method handlers fire from the same place as GLib
+timeouts and idle callbacks: on the Emacs main thread, between
+input cycles, with the =waiting_for_input= guard from
+=cmacs_glib_dispatch= already in place.  That's why typed methods
+can safely call elisp without crashing on input-wait races (see the
+=signal_or_quit=-vs-=waiting_for_input= comments in CLAUDE.md and
+=cmacs-eval-dispatch.c:43-50=).
+
+* Bus name acquisition
+
+=cmacs-dbus-start= claims two names in this order:
+
+1. Connect to the session bus (synchronous — =g_dbus_connection_new_for_address_sync=).
+2. Register every enabled module's interface vtable.
+3. Claim per-PID name with =REPLACE | DO_NOT_QUEUE= (always succeeds
+   since per-PID is unique).
+4. Optimistically claim the well-known name with =DO_NOT_QUEUE=.  The
+   =on_well_known_lost= callback fires immediately if another cmacs
+   already owns it; we clear =bus_name_well= in that case so dominant-name
+   queries fall back.
+
+The well-known acquisition is intentionally lossy: another cmacs
+holding the name doesn't block startup, just turns off "primary
+daemon" mode for this instance.
+
+* Properties helper internals
+
+=cmacs-dbus-properties.c= maintains a three-level registry:
+
+#+begin_example
+prop_registry: GHashTable
+    "/org/cmacs/Editor/Buffer/12" -> GHashTable
+        "org.cmacs.Editor1.Buffer.Resource" -> GHashTable
+            "Modified" -> PropEntry { signature, getter, setter }
+            "Filename" -> PropEntry { ... }
+            ...
+#+end_example
+
+The Properties iface vtable attaches to a path the first time
+=cmacs_dbus_register_property= is called for that path.  =Get= /
+=GetAll= / =Set= dispatch through the registry, evaluating the
+stored elisp expressions through =cmacs_dispatch_eval= and
+type-marshalling the result via the small parser in
+=parse_to_variant=.
+
+Phase 1 declares no properties, so the registry is empty and the
+Properties iface never attaches to any path.  Phase 2 will populate
+from per-buffer / per-frame / per-window modules.
+
+* ObjectManager internals
+
+=cmacs-dbus-object-manager.c= maintains a two-level registry:
+
+#+begin_example
+managed_objects: GHashTable
+    "/org/cmacs/Editor/Buffer/12" -> GHashTable
+        "org.cmacs.Editor1.Buffer.Resource" -> GVariant a{sv}
+        "org.cmacs.Editor1.Buffer.Markdown" -> GVariant a{sv}
+    "/org/cmacs/Editor/Frame/0" -> GHashTable
+        "org.cmacs.Editor1.Frame.Resource" -> GVariant a{sv}
+#+end_example
+
+When =cmacs_dbus_object_manager_add_iface= is called, the entry is
+recorded and an =InterfacesAdded= signal is emitted.
+=cmacs_dbus_object_manager_remove_iface= deletes and emits
+=InterfacesRemoved=.  =GetManagedObjects= flattens the whole map
+into the standard =a{oa{sa{sv}}}= reply.
+
+Phase 1 doesn't add anything to this registry.
+
+* Signal emission pipeline
+
+#+begin_example
+(cmacs-dbus-emit-signal PATH IFACE NAME PARAMS)
+       │
+       ▼
+lisp_to_variant(PARAMS)            ← best-fit Lisp -> GVariant
+       │
+       ▼
+g_variant_new("(...)", ...)        ← wrap as a tuple
+       │
+       ▼
+cmacs_dbus_emit_signal(PATH, IFACE, NAME, params)
+       │
+       ▼
+g_dbus_connection_emit_signal(...)  ← runs on cmacs GMainContext
+       │
+       ▼
+session bus daemon
+       │
+       ▼
+all subscribers
+#+end_example
+
+Two safety properties:
+
+1. =cmacs-dbus-emit-signal= silently no-ops if the service isn't
+   running.  Hooks can call it unconditionally.
+2. Errors from =g_dbus_connection_emit_signal= are caught and logged
+   via =g_warning= rather than raised, so an emit never blows up the
+   caller's hook.
+
+* Build and link
+
+=cmacs/dbus/= sources are added to =CMACS_GLIB_OBJ= in =configure.ac=:
+
+#+begin_example
+CMACS_GLIB_OBJ="cmacs-glib-loop.o cmacs-gobject.o cmacs-gclosure.o \
+                cmacs-eval-dispatch.o cmacs-glib-screenshot.o \
+                cmacs-ink-overlay.o cmacs-dbus.o cmacs-dbus-helpers.o \
+                cmacs-dbus-emit.o cmacs-dbus-properties.o \
+                cmacs-dbus-object-manager.o cmacs-dbus-iface-eval.o"
+#+end_example
+
+The =src/Makefile.in::cmacs-symlinks= rule symlinks each .c file from
+=cmacs/dbus/= into =src/= so the standard
+=$(libsrc)/make-docfile= globals scanner finds them.  This is the
+same pattern every other =cmacs/=-subdirectory uses (=glib=, =gi=,
+=crispy=, =bacon=, =cintrospect=, =cpatch=).
+
+The =CMACS_DIRS= variable in =src/Makefile.in= drives the symlink
+search; =dbus= is in that list so symlinks are auto-created /
+auto-cleaned with the rest.
+
+* DEFUN registration
+
+=src/emacs.c::main= calls =syms_of_cmacs_dbus= inside the
+=#ifdef HAVE_CMACS_GLIB= block.  That function (in =cmacs-dbus.c=)
+registers the lifecycle DEFUNs and forwards to
+=syms_of_cmacs_dbus_emit= for the emit DEFUNs.  Property registration
+is C-side only in Phase 1; Phase 2 adds an elisp wrapper.
+
+* Why a separate cmacs/dbus/ directory
+
+The pre-Phase-1 =cmacs/glib/cmacs-dbus-service.c= was 838 lines and
+already mixed:
+
+- Connection lifecycle
+- Bus-name acquisition
+- A monolithic introspection XML
+- A 6-method core dispatch
+- An 18-method gowl dispatch (conditional)
+- Lisp DEFUNs
+
+Phases 2-5 add 30+ more files of similar complexity.  Splitting per
+concern (one file per module) keeps each unit small enough to read,
+test, and replace independently.
+
+* Adding a new interface (Phase 2+ pattern)
+
+1. Write =cmacs/dbus/cmacs-dbus-iface-foo.c= with:
+   - Static introspection XML for one =<interface>= block
+   - A method-call vtable function dispatching by =method_name=
+   - =cmacs_dbus_iface_foo_register= and =unregister=
+2. Add the prototype to =cmacs-dbus-internal.h=
+3. Wire the register / unregister calls into
+   =cmacs-dbus.c::register_modules= and =unregister_modules=
+4. Append =cmacs-dbus-iface-foo.o= to =CMACS_GLIB_OBJ= in
+   =configure.ac=, run =autoconf= + =./configure=
+5. Write tests in =test/cmacs/cmacs-dbus-iface-foo-tests.el=
+
+The cmacsgi parity in Phase 3 follows this template 17 times — once
+per interface.

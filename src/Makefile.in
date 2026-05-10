@@ -49,6 +49,7 @@ vpath %.h := $(srcdir)
 endif
 
 vpath %.c $(srcdir)/../cmacs/glib $(srcdir)/../cmacs/gobject \
+          $(srcdir)/../cmacs/dbus \
           $(srcdir)/../cmacs/gi $(srcdir)/../cmacs/crispy \
           $(srcdir)/../cmacs/bacon $(srcdir)/../cmacs/gowl \
           $(srcdir)/../cmacs/podomation \
@@ -58,6 +59,7 @@ vpath %.c $(srcdir)/../cmacs/glib $(srcdir)/../cmacs/gobject \
           $(srcdir)/../cmacs/cpatch \
           $(srcdir)/../cmacs/compat
 vpath %.h $(srcdir)/../cmacs/glib $(srcdir)/../cmacs/gobject \
+          $(srcdir)/../cmacs/dbus \
           $(srcdir)/../cmacs/gi $(srcdir)/../cmacs/crispy \
           $(srcdir)/../cmacs/bacon $(srcdir)/../cmacs/gowl \
           $(srcdir)/../cmacs/podomation \
@@ -385,6 +387,7 @@ CMACS_CPATCH_OBJ = @CMACS_CPATCH_OBJ@
 CMACS_CPATCH_LIBS = @CMACS_CPATCH_LIBS@
 CMACS_API_DIR = @CMACS_API_DIR@
 CMACS_INTERNAL_CFLAGS = -I$(srcdir)/../cmacs/glib -I$(srcdir)/../cmacs/gobject \
+                        -I$(srcdir)/../cmacs/dbus \
                         -I$(srcdir)/../cmacs/gi -I$(srcdir)/../cmacs/crispy \
                         -I$(srcdir)/../cmacs/bacon -I$(srcdir)/../cmacs/gowl \
                         -I$(srcdir)/../cmacs/podomation \
@@ -782,7 +785,7 @@ CMACS_ALL_OBJ = $(CMACS_GLIB_OBJ) $(CMACS_GI_OBJ) \
                 $(CMACS_PODOMATION_OBJ) $(CMACS_LIBRECLAW_OBJ) \
                 $(CMACS_ORG_EX_OBJ) $(CMACS_MCP_OBJ) \
                 $(CMACS_CINTROSPECT_OBJ) $(CMACS_CPATCH_OBJ)
-CMACS_DIRS = glib gobject gi crispy bacon gowl podomation libreclaw org-ex mcp cintrospect cpatch
+CMACS_DIRS = glib gobject dbus gi crispy bacon gowl podomation libreclaw org-ex mcp cintrospect cpatch
 cmacs-symlinks:
 	$(AM_V_at)for f in $(CMACS_ALL_OBJ:.o=.c); do \
 	  test -e "$(srcdir)/$$f" && continue; \

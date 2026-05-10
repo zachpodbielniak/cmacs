@@ -1,0 +1,125 @@
+@node D-Bus Interfaces
+@section Interfaces and Object Hierarchy
+
+@subsection Object hierarchy
+
+Phase 1 ships exactly one object: @code{/org/cmacs/Editor}.
+Everything else is layered on the same path as separate interfaces
+(per the freedesktop convention) so the introspection XML composes
+cleanly.
+
+@example
+/org/cmacs/Editor                         [Phase 1 root]
+  +- org.freedesktop.DBus.Introspectable  (auto, GDBus)
+  +- org.freedesktop.DBus.Peer            (auto, bus daemon)
+  +- org.freedesktop.DBus.Properties      (lazy; populated by Phase 2)
+  +- org.freedesktop.DBus.ObjectManager   (registered, empty children)
+  +- org.cmacs.Editor1                    (back-compat surface)
+
+[Phase 2-5 will add:]
+/org/cmacs/Editor/Buffer/<id>             per-buffer object
+/org/cmacs/Editor/Frame/<n>               per-frame object
+/org/cmacs/Editor/Window/<n>              per-window object
+/org/cmacs/Editor/Process/<id>            per-subprocess object
+/org/cmacs/Editor/SearchProvider          GNOME Shell SearchProvider2
+/org/cmacs/Editor/Watch/<token>           per-watch handle
+/org/cmacs/Editor/Request/<token>         long-running operation handle
+/org/cmacs/Editor/MediaPlayer2            MPRIS-as-buffer-nav (opt-in)
+@end example
+
+@subsection org.freedesktop.DBus.Introspectable (auto)
+
+Provided by GDBus for free on every registered object.  Returns the
+introspection XML for whatever interfaces are currently registered.
+
+@example
+gdbus introspect --session \
+    --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor
+@end example
+
+Output covers every interface registered on the path, merged.
+
+@subsection org.freedesktop.DBus.Peer (auto)
+
+Provided by the bus daemon for any connection.  Two trivial methods
+that any consumer can use as a liveness probe.
+
+@table @code
+@item Ping ()
+Reply with empty body if connection live
+@item GetMachineId () -> s
+Stable machine UUID per @file{/etc/machine-id}
+@end table
+
+Useful for health checks:
+
+@example
+if gdbus call --session --dest org.cmacs.Editor \
+       --object-path /org/cmacs/Editor \
+       --method org.freedesktop.DBus.Peer.Ping 2>/dev/null; then
+    echo "cmacs is responsive"
+fi
+@end example
+
+@subsection org.freedesktop.DBus.Properties
+
+Standard freedesktop pattern: @code{Get(s,s) -> v},
+@code{Set(s,s,v)}, @code{GetAll(s) -> a@{sv@}}, signal
+@code{PropertiesChanged(s, a@{sv@}, as)}.
+
+Phase 1 registers this iface lazily --- it appears on a path the
+first time a module calls @code{cmacs_dbus_register_property} for
+that path.  Phase 1 modules don't yet register any properties, so on
+a fresh service @code{GetAll} over @code{org.cmacs.Editor1} returns
+an empty dict.  The full surface lights up in Phase 2.
+
+@subsection org.freedesktop.DBus.ObjectManager
+
+Standard pattern for services with dynamic objects.
+
+@table @code
+@item GetManagedObjects () -> a@{oa@{sa@{sv@}@}@}
+Snapshot of every (path, iface, properties) tuple
+@item InterfacesAdded signal (o, a@{sa@{sv@}@})
+Fires when a new (path, iface) appears
+@item InterfacesRemoved signal (o, as)
+Fires when (path, iface) disappears
+@end table
+
+In Phase 1 the registry is empty.  Phase 2 will populate it from
+per-resource modules so the natural client pattern becomes:
+enumerate once with @code{GetManagedObjects}, then watch the signals.
+
+@subsection org.cmacs.Editor1 (back-compat)
+
+This is the wire surface the cmacs D-Bus subsystem exposed before
+the Phase 1 refactor.  Everything here is preserved bit-for-bit:
+existing @command{cmacsgi} consumers, ad-hoc shell scripts, and any
+third-party tool that calls @code{org.cmacs.Editor1.Eval} and
+friends keeps working.
+
+Six core methods plus 23 @code{Gowl*} methods (when
+@option{--with-cmacs-gowl}); see @ref{D-Bus Methods} for the full
+reference.
+
+Phase 3 will introduce typed sub-interfaces
+(@code{org.cmacs.Editor1.Buffer}, @code{.Search}, @code{.VC},
+@code{.Pkg}, @code{.Monitor}, @code{.Bar}, @code{.Cintrospect},
+@code{.Cpatch}, ...) that mirror the cmacsgi group structure with
+proper return types.  The @code{Editor1} surface stays untouched.
+
+@subsection Inspecting the live surface
+
+@example
+# What's actually exposed right now?
+gdbus introspect --session \
+    --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor \
+    --xml
+@end example
+
+This dumps the raw introspection XML, the source of truth.  Pipe
+through @command{xmllint --format -} for readability.  D-Spy
+(@command{flatpak run org.gnome.dspy}) gives you the same thing as a
+GUI tree.
