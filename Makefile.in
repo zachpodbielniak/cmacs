@@ -1462,7 +1462,7 @@ endif
 install-cmacs-dbus-service:
 	${MKDIR_P} "$(DESTDIR)$(dbusservicedir)"
 	tmp=etc/dbus/org.cmacs.Editor.service.tmp; rm -f $${tmp}; \
-	sed -e "s|@bindir@|${bindir}|g" \
+	sed -e "s|__BINDIR__|${bindir}|g" \
 	  ${srcdir}/etc/dbus/org.cmacs.Editor.service.in > $${tmp}; \
 	$(INSTALL_DATA) $${tmp} \
 	  "$(DESTDIR)$(dbusservicedir)/org.cmacs.Editor.service"; \

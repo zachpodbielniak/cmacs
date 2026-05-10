@@ -169,6 +169,26 @@ RUN set -eux \
     && install -m 0644 cmacs/print/50-cmacs-print.preset \
        /build/stage/usr/lib/systemd/user-preset/50-cmacs-print.preset
 
+# ---------------------------------------------------------------------
+# D-Bus session-bus activation file.  Stages
+# /usr/share/dbus-1/services/org.cmacs.Editor.service so any client
+# (file manager "Open With cmacs", gio open, GNOME shell search,
+# external script) targeting org.cmacs.Editor when no cmacs is running
+# causes dbus-daemon to launch `emacs --fg-daemon` (or the
+# cmacs.service systemd user unit when present).
+#
+# This is what makes the cmacs D-Bus surface "just work" on downstream
+# images that copy /build/stage/usr/. into /usr/.  Nothing else needs
+# to run at first boot — dbus-daemon picks the file up automatically
+# the next time a client sends to org.cmacs.Editor.
+# ---------------------------------------------------------------------
+RUN make install-cmacs-dbus-service \
+        DESTDIR=/build/stage \
+        prefix=/usr \
+        bindir=/usr/bin \
+        datadir=/usr/share \
+        dbusservicedir=/usr/share/dbus-1/services
+
 # Install interactive Org manual
 RUN emacs_version="" \
     && for d in /build/stage/usr/share/emacs/*/; do \

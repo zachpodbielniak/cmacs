@@ -1,4 +1,4 @@
 [D-BUS Service]
 Name=org.cmacs.Editor
-Exec=@bindir@/emacs --fg-daemon
+Exec=__BINDIR__/emacs --fg-daemon
 SystemdService=cmacs.service

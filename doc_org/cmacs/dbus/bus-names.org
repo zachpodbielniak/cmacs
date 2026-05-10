@@ -112,7 +112,7 @@ sudo make install-cmacs-dbus-service
 
 # Per-user (no sudo needed):
 mkdir -p "$XDG_DATA_HOME/dbus-1/services"
-sed "s|@bindir@|$HOME/source/projects/cmacs/src|g" \
+sed "s|__BINDIR__|$HOME/source/projects/cmacs/src|g" \
     etc/dbus/org.cmacs.Editor.service.in \
     > "$XDG_DATA_HOME/dbus-1/services/org.cmacs.Editor.service"
 #+end_src
