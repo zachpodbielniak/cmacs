@@ -320,3 +320,30 @@ lines 1882--1910 when CFLAGS is unset.
 
 See =/var/home/zach/.claude/plans/i-want-to-add-breezy-hamming.md=
 for the full phased plan.
+
+* Bacon Integration
+
+The full cintrospect surface is reachable from the bacon shell via
+the =cmacsgi c= subcommand group.  Every subcommand is a thin IPC
+wrapper around the corresponding =cmacs-c-*= DEFUN; output is
+=prin1='-format Lisp.
+
+| Bacon                       | DEFUN                       |
+|-----------------------------+-----------------------------|
+| =cmacsgi c list KIND ...=   | =cmacs-c-list=              |
+| =cmacsgi c symbol NAME=     | =cmacs-c-symbol-info=       |
+| =cmacsgi c type NAME=       | =cmacs-c-type-info=         |
+| =cmacsgi c source NAME=     | =cmacs-c-function-source=   |
+| =cmacsgi c addr 0xADDR=     | =cmacs-c-addr-to-source=    |
+| =cmacsgi c objects=         | =cmacs-c-list-objects=      |
+| =cmacsgi c defuns ...=      | =cmacs-c-list-defuns=       |
+| =cmacsgi c defun-info SYM=  | =cmacs-c-defun-info=        |
+| =cmacsgi c stack [-d N]=    | =cmacs-c-stack-trace=       |
+| =cmacsgi c get NAME [TYPE]= | =cmacs-c-symbol-value=      |
+| =cmacsgi c set NAME VAL=    | =cmacs-c-symbol-set-value=  |
+| =cmacsgi c compile ...=     | =cmacs-c-compile=           |
+| =cmacsgi c call HANDLE ...= | =cmacs-c-call=              |
+| =cmacsgi c handle HANDLE=   | =cmacs-c-handle-info=       |
+
+See [[file:cmacsgi.org::*C Runtime Introspection Commands][cmacsgi.org → C Runtime Introspection Commands]] for full
+flag documentation, examples, and the JIT compile/call walkthrough.

@@ -20,6 +20,24 @@ bacon> cmacsgi help
 bacon> cmacsgi help <command>
 #+end_example
 
+** Launching with the builtin available
+
+The =cmacsgi= command is registered by =cmacs_gi.so=, a Bacon module
+loaded from =$CMACS_MODULE_DIR=.  The simplest way to get a session
+where the env var is set correctly is the =just run= recipe:
+
+#+begin_example
+just run
+M-x bacon
+bacon> cmacsgi --help
+#+end_example
+
+=just run= exports =CMACS_MODULE_DIR=$PWD/cmacs/bacon/modules= so the
+module loads in any =cmacs --bacon= subprocess (whether via =M-x
+bacon= or run directly from the same shell).  See [[file:bacon.org::*Loading the cmacsgi builtin][bacon.org → Loading
+the cmacsgi builtin]] for the full env-var story and what to do if you
+prefer launching =cmacs= some other way.
+
 * Buffer Commands
 
 Group: =buf=
@@ -964,6 +982,181 @@ ascii_dtostr
 ascii_formatd
 ascii_strcasecmp
 #+end_example
+
+* C Runtime Introspection Commands
+
+Group: =c=
+
+The =c= group exposes the [[file:cintrospect.org][cintrospect]] (DWARF
+self-introspection + libgccjit subprocess) and [[file:cpatch.org][cpatch]]
+(runtime hot-patching) DEFUNs through the bacon shell.  Every
+subcommand is a thin IPC bridge to the matching =cmacs-c-*= primitive
+in the running editor — output is whatever =prin1= produces (plists,
+lists, strings, integers).
+
+| Subcommand                      | Underlying DEFUN              | Notes                                     |
+|---------------------------------+-------------------------------+-------------------------------------------|
+| =c list KIND [-g GLOB] [-n N]=  | =cmacs-c-list=                | KIND ∈ {symbol,defun,object}              |
+| =c symbol NAME=                 | =cmacs-c-symbol-info=         | name, kind, addr, size, file, line        |
+| =c type NAME=                   | =cmacs-c-type-info=           | struct/union/enum layout                  |
+| =c source NAME=                 | =cmacs-c-function-source=     | (file . line) for a function              |
+| =c addr 0xADDR=                 | =cmacs-c-addr-to-source=      | runtime addr → (file line fn)             |
+| =c source-to-addr FILE LINE=    | =cmacs-c-source-to-addr=      | reverse lookup, prints =0xADDR=           |
+| =c objects=                     | =cmacs-c-list-objects=        | loaded ELF objects + DWARF availability   |
+| =c defuns [-g GLOB] [-n N]=     | =cmacs-c-list-defuns=         | every Lisp_Subr DEFUN                     |
+| =c defun-info SYM=              | =cmacs-c-defun-info=          | arity + fn-addr + source                  |
+| =c stack [-d N]=                | =cmacs-c-stack-trace=         | C stack via libdw (default depth 64)      |
+| =c get NAME [TYPE]=             | =cmacs-c-symbol-value=        | TYPE ∈ {auto,int,str,lisp,hex,pointer}    |
+| =c set NAME VALUE [TYPE]=       | =cmacs-c-symbol-set-value=    | mutation; refuses .rodata writes          |
+| =c compile [-s SIG] FUNC FILE=  | =cmacs-c-compile=             | reads FILE locally, JIT via gcc           |
+| =c call HANDLE [ARG...]=        | =cmacs-c-call=                | dispatches on signature                   |
+| =c handle HANDLE=               | =cmacs-c-handle-info=         | metadata for a JIT handle                 |
+| =c handle-dispose HANDLE=       | =cmacs-c-handle-dispose=      | dlclose + remove temp files               |
+| =c patch SYM FN-NAME=           | =cmacs-c-patch-defun=         | resolves FN-NAME → addr in one eval       |
+| =c unpatch SYM=                 | =cmacs-c-unpatch-defun=       | restore original                          |
+| =c patches=                     | =cmacs-c-patch-list=          | list current patches                      |
+| =c unpatch-all=                 | =cmacs-c-unpatch-all=         | panic button                              |
+
+The four =patch*= subcommands probe =fboundp= on their target DEFUN.
+If the editor was built without =--enable-cmacs-cpatch=, they print
+=cpatch not enabled in this build (configure --enable-cmacs-cpatch)=
+and return success — the cmacsgi surface stays uniform regardless of
+build configuration.
+
+** Quick start
+
+Find every DEFUN whose name starts with =buffer-=:
+
+#+begin_example
+bacon> cmacsgi c defuns -g "buffer-*" -n 5
+((:symbol-name "buffer-base-buffer" :c-name "Fbuffer_base_buffer" ...)
+ (:symbol-name "buffer-chars-modified-tick" ...)
+ ...)
+#+end_example
+
+Inspect a single DEFUN:
+
+#+begin_example
+bacon> cmacsgi c defun-info cons
+(:symbol-name "cons" :c-name "Fcons" :min-args 2 :max-args 2
+ :fn-addr 1407374883553792 :file "alloc.c" :line 2734)
+#+end_example
+
+Locate a C function in the source tree:
+
+#+begin_example
+bacon> cmacsgi c source make_buffer
+("buffer.c" . 489)
+#+end_example
+
+Resolve a runtime address (from a backtrace, =:fn-addr=, or =/proc/PID/maps=):
+
+#+begin_example
+bacon> cmacsgi c addr 0x55bb7af23a90
+("eval.c" 2351 "Feval_sub")
+#+end_example
+
+Walk the editor's C stack — handy from inside a shell pipeline that
+just pinged the editor:
+
+#+begin_example
+bacon> cmacsgi c stack -d 8
+((:addr ... :file "process.c" :line 5212 :function "wait_reading_process_output")
+ (:addr ... :file "keyboard.c" :line 4015 :function "read_event_from_main_queue")
+ ...)
+#+end_example
+
+** Read/write C globals
+
+The cintrospect demo globals are good targets for round-trips:
+
+#+begin_example
+bacon> cmacsgi c get cmacs_cintrospection_test_int int
+42
+
+bacon> cmacsgi c set cmacs_cintrospection_test_int 100 int
+t
+
+bacon> cmacsgi c get cmacs_cintrospection_test_int int
+100
+
+bacon> cmacsgi c get cmacs_cintrospection_test_str str
+"hello from C"
+#+end_example
+
+The =auto= type heuristic picks =lisp= for =Q=- and =V=-prefixed names of
+size 8, =str= for char arrays, =int= for size-1/2/4/8 with integer-ish
+naming, and =hex= for everything else.  Pass an explicit TYPE when
+auto-detection would guess wrong.
+
+** Hot-patching workflow (cpatch)
+
+Compile a replacement, patch a DEFUN, exercise it, restore.
+
+Write =/tmp/replace-cons.c=:
+
+#+begin_src c
+#include "lisp.h"
+Lisp_Object my_cons (Lisp_Object car, Lisp_Object cdr) {
+  /* trace each call before delegating to the original */
+  fprintf (stderr, "my_cons called!\n");
+  return Fcons (car, cdr);
+}
+#+end_src
+
+Then from bacon:
+
+#+begin_example
+bacon> cmacsgi c compile -s "Lisp_Object(Lisp_Object,Lisp_Object)" \
+                        my_cons /tmp/replace-cons.c
+7
+
+bacon> cmacsgi c handle 7
+(:id 7 :fn-name "my_cons" :fn-addr 140736342847584
+ :signature "Lisp_Object(Lisp_Object,Lisp_Object)" ...)
+
+bacon> cmacsgi c patch cons my_cons
+t
+
+bacon> cmacsgi eval '(cons 1 2)'
+(1 . 2)
+# stderr (in cmacs): my_cons called!
+
+bacon> cmacsgi c patches
+((:kind defun-swap :symbol cons :original-addr ... :patched-addr ...))
+
+bacon> cmacsgi c unpatch cons
+t
+
+bacon> cmacsgi c handle-dispose 7
+t
+#+end_example
+
+If anything goes sideways:
+
+#+begin_example
+bacon> cmacsgi c unpatch-all
+3
+#+end_example
+
+** Discoverability
+
+Each subcommand-group also responds to =--help= / =-h=:
+
+#+begin_example
+bacon> cmacsgi c --help
+cmacsgi c subcommands:
+
+  c list KIND [-g GLOB] [-n N]   list C entities (KIND: symbol|defun|object)
+  c symbol NAME                  plist for a C symbol (kind, addr, size, file, line)
+  ...
+#+end_example
+
+** Cross references
+
+- [[file:cintrospect.org][cintrospect.org]] — the DWARF/JIT subsystem these subcommands wrap
+- [[file:cpatch.org][cpatch.org]] — hot-patching architecture, risk register, Phase 1/3 split
+- [[file:mcp.org][mcp.org]] — the same primitives are reachable as MCP tools (=cmacs_c_*=)
 
 * Eval Command
 

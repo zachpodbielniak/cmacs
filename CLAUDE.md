@@ -18,8 +18,14 @@
   --with-cmacs-print \
   --with-cmacs-cintrospect --enable-cmacs-cpatch
 make -j$(nproc)           # builds deps + emacs
-src/emacs                 # run it
+just run                  # run it (sets CMACS_MODULE_DIR for cmacsgi)
 ```
+
+`just run` is preferred over `src/emacs` directly: it exports
+`CMACS_MODULE_DIR=$PWD/cmacs/bacon/modules` so the `cmacsgi` bacon
+builtin loads when you do `M-x bacon`. Without that env var, the
+bacon child loads no modules and `cmacsgi` is unknown. Bare
+`src/emacs` is still fine for plain editing.
 
 - Dependencies under `deps/` (crispy, bacon, gowl, podomation) are git submodules — `configure` falls back to bundled builds when system packages aren't found
 - After modifying C source in `cmacs/`, just `make -j$(nproc)` from the top level

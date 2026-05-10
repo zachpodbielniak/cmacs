@@ -221,10 +221,12 @@ clean-all: clean clean-eln-all clean-gowl
 # Run
 # ──────────────────────────────────────────────────────────────────────
 
-# Run cmacs normally.
+# Run cmacs normally.  Exports CMACS_MODULE_DIR so the `cmacsgi`
+# bacon builtin is available when the user does `M-x bacon`.
 [group('run')]
 run *ARGS:
-    {{ emacs }} {{ ARGS }}
+    CMACS_MODULE_DIR={{ justfile_directory() }}/cmacs/bacon/modules \
+        {{ emacs }} {{ ARGS }}
 
 # Run cmacs as a Wayland compositor (`--gowl`).
 [group('run')]

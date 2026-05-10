@@ -86,6 +86,27 @@ bacon> cmacsgi eval '(+ 40 2)'
 bacon> exit
 #+end_example
 
+** Loading the cmacsgi builtin
+
+The =cmacsgi= command is registered by =cmacs_gi.so=, a Bacon module
+loaded from the directory named in =$CMACS_MODULE_DIR=.  Two ways to
+get the env var set correctly:
+
+- =just run= (then =M-x bacon=) --- the recipe in =Justfile= exports
+  =CMACS_MODULE_DIR=$PWD/cmacs/bacon/modules= before launching cmacs.
+  Recommended for development.
+- =M-x bacon= from any cmacs that loads =lisp/cmacs/cmacs-bacon.el=
+  --- the =bacon= defun sets the env var itself before spawning the
+  vterm child.
+
+If you launch =src/emacs --bacon= directly with no env var set, no
+modules load and =cmacsgi= will report "command not found".  Set it
+yourself in that case:
+
+#+begin_example
+CMACS_MODULE_DIR=$PWD/cmacs/bacon/modules src/emacs --bacon
+#+end_example
+
 * Customization
 
 | Variable                                | Description                               | Default |

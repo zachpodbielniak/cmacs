@@ -9,8 +9,13 @@
 ./autogen.sh              # first time only
 ./configure               # auto-detects bundled deps in deps/
 make -j$(nproc)           # builds deps + emacs
-src/emacs                 # run it
+just run                  # run it (sets CMACS_MODULE_DIR for cmacsgi)
 #+end_example
+
+=just run= is preferred over =src/emacs= directly: it exports
+=CMACS_MODULE_DIR= so the =cmacsgi= bacon builtin loads when you do
+=M-x bacon=.  Bare =src/emacs= still works for plain editing; it
+just won't have =cmacsgi= available in the bacon shell.
 
 * Configure Flags
 

@@ -169,3 +169,40 @@ level as a remote MCP client.  Pattern matches the existing
 
 The full architectural plan, risk register, and phasing live in
 =/var/home/zach/.claude/plans/i-want-to-add-breezy-hamming.md=.
+
+* Bacon Integration
+
+The four cpatch DEFUNs are reachable from the bacon shell as part of
+the =cmacsgi c= subcommand group:
+
+| Bacon                          | DEFUN                       |
+|--------------------------------+-----------------------------|
+| =cmacsgi c patch SYM FN-NAME=  | =cmacs-c-patch-defun=       |
+| =cmacsgi c unpatch SYM=        | =cmacs-c-unpatch-defun=     |
+| =cmacsgi c patches=            | =cmacs-c-patch-list=        |
+| =cmacsgi c unpatch-all=        | =cmacs-c-unpatch-all=       |
+
+=cmacsgi c patch SYM FN-NAME= is the high-level form: it resolves
+=FN-NAME= to a runtime address via =cmacs-c-symbol-info= and applies
+the swap in a single eval, so there's no TOCTOU between lookup and
+swap.  Pair it with =cmacsgi c compile= to turn a .c file into a
+patchable function in two commands.  See
+[[file:cmacsgi.org::*Hot-patching workflow (cpatch)][cmacsgi.org → Hot-patching workflow]] for an end-to-end
+compile→patch→unpatch walkthrough.
+
+** Build-flag fallback
+
+The bacon =c patch*= subcommands always exist on the client (they
+ship in =libcmacs-api.so=, not the conditionally-built cpatch C
+code).  Each handler probes =fboundp= on its target DEFUN; when the
+editor was built without =--enable-cmacs-cpatch= the user sees:
+
+#+begin_example
+bacon> cmacsgi c patches
+"cpatch not enabled in this build (configure --enable-cmacs-cpatch)"
+#+end_example
+
+The exit code is still =0= — these are informational fallbacks, not
+errors.  This keeps the cmacsgi command surface uniform across
+builds and makes it safe to script against without =--enable=
+detection logic in the wrapper.

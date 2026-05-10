@@ -552,6 +552,31 @@ bacon$ cmacsgi eval "(+ 1 2)"    # only works with IPC fd
 When run standalone (outside of @code{M-x bacon}), the @command{cmacsgi}
 builtin falls back to D-Bus if @env{CMACS_IPC_FD} is not set.
 
+@subsection Loading the cmacsgi builtin
+
+The @command{cmacsgi} command is registered by @file{cmacs_gi.so}, a
+Bacon module loaded from @env{CMACS_MODULE_DIR}.  Two ways to get the
+env var set correctly:
+
+@itemize @bullet
+@item
+@command{just run} (then @code{M-x bacon}) --- the recipe in
+@file{Justfile} exports @env{CMACS_MODULE_DIR=$PWD/cmacs/bacon/modules}
+before launching cmacs.  Recommended for development.
+@item
+@code{M-x bacon} from any cmacs that loads
+@file{lisp/cmacs/cmacs-bacon.el} --- the @code{bacon} defun sets the
+env var itself before spawning the vterm child.
+@end itemize
+
+If you launch @command{src/emacs --bacon} directly with no env var
+set, no modules load and @command{cmacsgi} reports ``command not
+found''.  Set it manually in that case:
+
+@example
+CMACS_MODULE_DIR=$PWD/cmacs/bacon/modules src/emacs --bacon
+@end example
+
 @section Customization
 
 @table @code
@@ -1020,6 +1045,135 @@ bacon$ cmacsgi call GLib compute_checksum_for_string 2 hello -1
 @item list NS
 List all functions in a namespace, one per line.
 @end table
+
+@c ----- C Runtime Introspection Commands ------------------------------
+@section C Runtime Introspection Commands
+
+@cindex cmacsgi c
+@cindex cintrospect, bacon access
+@cindex cpatch, bacon access
+
+The @code{c} subcommand group exposes the cintrospect (DWARF
+self-introspection + libgccjit subprocess) and cpatch (runtime
+hot-patching) DEFUNs through the bacon shell.  See @ref{Cintrospect}
+and @ref{Cpatch} for the underlying subsystems.
+
+@subsection Read-Only Introspection
+
+@table @code
+@item c list KIND [-g GLOB] [-n N]
+List C entities.  KIND is one of @code{symbol}, @code{defun},
+@code{object}.  Wraps @code{cmacs-c-list}.
+
+@item c symbol NAME
+Plist for a C symbol: kind, addr, size, file, line.  Wraps
+@code{cmacs-c-symbol-info}.
+
+@item c type NAME
+Plist for a C type --- struct, union, enum layout.  Wraps
+@code{cmacs-c-type-info}.
+
+@item c source NAME
+@code{(file . line)} for a C function.  Wraps
+@code{cmacs-c-function-source}.
+
+@item c addr 0xADDR
+Resolve a runtime address to @code{(file line function)}.  Wraps
+@code{cmacs-c-addr-to-source}.
+
+@item c source-to-addr FILE LINE
+Reverse lookup --- prints @code{0xADDR} or @code{nil}.
+
+@item c objects
+List loaded ELF objects with DWARF availability.
+
+@item c defuns [-g GLOB] [-n N]
+List every Lisp_Subr DEFUN.  Wraps @code{cmacs-c-list-defuns}.
+
+@item c defun-info SYM
+Plist for a DEFUN: arity, fn-addr, source.
+
+@item c stack [-d N]
+C stack via libdw (default depth 64).  Wraps
+@code{cmacs-c-stack-trace}.
+@end table
+
+@subsection Symbol Read/Write
+
+@table @code
+@item c get NAME [TYPE]
+Read a C global.  TYPE is one of @code{auto}, @code{int}, @code{str},
+@code{lisp}, @code{hex}, @code{pointer}.
+
+@item c set NAME VALUE [TYPE]
+Write a C global.  Refuses @code{.rodata} writes (SIGSEGV is
+intentional).
+@end table
+
+@subsection JIT (libgccjit Subprocess)
+
+@table @code
+@item c compile [-s SIG] FUNC-NAME FILE.c
+Compile @file{FILE.c} via a @command{gcc} subprocess and return a
+handle id.  The file is read on the bacon side and inlined into the
+Lisp call as a string.  Default signature is
+@code{Lisp_Object(void)}; override with @code{-s
+"Lisp_Object(Lisp_Object,Lisp_Object)"} or similar.
+
+@item c call HANDLE [ARG...]
+Invoke a JIT handle.  ARGS are auto-quoted.
+
+@item c handle HANDLE
+Plist of metadata for a handle: id, fn-name, fn-addr, signature,
+.so path, source, last diagnostics.
+
+@item c handle-dispose HANDLE
+@code{dlclose} the handle's .so and remove temp files.
+@end table
+
+@subsection Hot-Patching (cpatch)
+
+These four subcommands probe @code{fboundp} on their target DEFUN.
+If the editor was built without @option{--enable-cmacs-cpatch} they
+print @samp{cpatch not enabled in this build (configure
+--enable-cmacs-cpatch)} and exit 0 --- the cmacsgi command surface
+stays uniform across builds.
+
+@table @code
+@item c patch SYM FN-NAME
+Resolve @var{FN-NAME} to a runtime address (via
+@code{cmacs-c-symbol-info}) and atomically swap the
+@code{Lisp_Subr.function} pointer of @var{SYM} to point there.  Done
+in a single eval, so no TOCTOU between lookup and swap.
+
+@item c unpatch SYM
+Restore the original pointer for @var{SYM}.
+
+@item c patches
+List currently-applied patches as @code{(:kind :symbol
+:original-addr :patched-addr)} plists.
+
+@item c unpatch-all
+Restore every patched DEFUN.  Panic button.
+@end table
+
+@subsection Example: Compile, Patch, Inspect, Restore
+
+@example
+bacon$ cmacsgi c compile -s "Lisp_Object(Lisp_Object,Lisp_Object)" \
+                         my_cons /tmp/replace-cons.c
+7
+bacon$ cmacsgi c patch cons my_cons
+t
+bacon$ cmacsgi eval "(cons 1 2)"
+(1 . 2)
+bacon$ cmacsgi c patches
+((:kind defun-swap :symbol cons :original-addr ... :patched-addr ...))
+bacon$ cmacsgi c unpatch cons
+t
+bacon$ cmacsgi c handle-dispose 7
+t
+@end example
 
 @c ----- Eval Command --------------------------------------------------
 @section Eval Command
@@ -4560,6 +4714,21 @@ High-level Lisp API + autoloads + @code{tabulated-list-mode}
 browsers + @code{with-help-window} detail buffers.
 @end table
 
+@section Bacon Integration
+
+The full DEFUN surface --- @code{cmacs-c-list},
+@code{cmacs-c-symbol-info}, @code{cmacs-c-type-info},
+@code{cmacs-c-function-source}, @code{cmacs-c-addr-to-source},
+@code{cmacs-c-list-objects}, @code{cmacs-c-list-defuns},
+@code{cmacs-c-defun-info}, @code{cmacs-c-stack-trace},
+@code{cmacs-c-symbol-value}, @code{cmacs-c-symbol-set-value},
+@code{cmacs-c-compile}, @code{cmacs-c-call},
+@code{cmacs-c-handle-info}, @code{cmacs-c-handle-dispose} --- is
+reachable from the bacon shell via the @code{cmacsgi c} subcommand
+group.  See @ref{cmacsgi Builtin}, section @samp{C Runtime
+Introspection Commands}, for full subcommand reference, examples,
+and the JIT compile/call walkthrough.
+
 @c ===================================================================
 @node Cpatch
 @chapter Cpatch: Runtime C Hot-Patching
@@ -4632,6 +4801,32 @@ remains @emph{off} until the user opts in:
 
 The @code{M-x} user trusting their own commands is @emph{not} the
 same trust level as a remote MCP client.
+
+@section Bacon Integration
+
+The four cpatch DEFUNs are reachable from the bacon shell as part of
+the @code{cmacsgi c} subcommand group:
+@code{cmacsgi c patch SYM FN-NAME},
+@code{cmacsgi c unpatch SYM},
+@code{cmacsgi c patches},
+@code{cmacsgi c unpatch-all}.
+
+The high-level form @code{cmacsgi c patch SYM FN-NAME} resolves
+@var{FN-NAME} to a runtime address via @code{cmacs-c-symbol-info} and
+applies the swap in a single eval, avoiding any TOCTOU between lookup
+and swap.
+
+The bacon handlers always exist on the client (they ship in
+@file{libcmacs-api.so}, not the conditionally-built cpatch C code).
+Each handler probes @code{fboundp} on its target DEFUN; when the
+editor was built without @option{--enable-cmacs-cpatch} the user sees
+@samp{cpatch not enabled in this build (configure
+--enable-cmacs-cpatch)} and the command exits 0.  This keeps the
+cmacsgi command surface uniform across builds.
+
+See @ref{cmacsgi Builtin}, section @samp{C Runtime Introspection
+Commands}, for the end-to-end compile, patch, list, unpatch
+walkthrough.
 
 @c ===================================================================
 @node Build Configuration

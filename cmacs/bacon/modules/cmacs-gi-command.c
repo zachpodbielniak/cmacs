@@ -269,6 +269,7 @@ extern gint cmd_pkg     (CmacsApiTransport *transport, gint argc, gchar **argv);
 extern gint cmd_monitor (CmacsApiTransport *transport, gint argc, gchar **argv);
 extern gint cmd_rg      (CmacsApiTransport *transport, gint argc, gchar **argv);
 extern gint cmd_bar     (CmacsApiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_c       (CmacsApiTransport *transport, gint argc, gchar **argv);
 
 /* ── Top-level dispatch table ─────────────────────────────────────── */
 
@@ -376,6 +377,11 @@ static const CmacsApiSubcmd subcmds[] = {
     { "bar",          cmd_bar,
       "bar SUBCMD [ARGS...]",
       "gowl bar operations (configure, height, show, hide, redraw, title)" },
+
+    /* ── C runtime introspection / hot-patching ────────────────────── */
+    { "c",            cmd_c,
+      "c SUBCMD [ARGS...]",
+      "C runtime introspection and hot-patching (cintrospect/cpatch)" },
 
     /* ── original commands ─────────────────────────────────────────── */
     { "eval",         cmd_eval,
