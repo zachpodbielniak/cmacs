@@ -377,4 +377,42 @@ syms_of_cmacs_dbus (void)
   syms_of_cmacs_dbus_emit ();
 }
 
+/* Called once at startup from src/emacs.c::main, after
+ * init_cmacs_glib has set up the GMainContext.
+ *
+ * Auto-starts the D-Bus service in interactive mode so the editor is
+ * reachable on the session bus the moment it finishes loading.
+ *
+ * Skips:
+ *   - batch mode (--batch / --script): no GMainContext loop running
+ *   - when CMACS_DBUS_NO_AUTOSTART is set in the environment: opt-out
+ *     for tests, scripts, or users who prefer to call
+ *     cmacs-dbus-start themselves.
+ *
+ * Failures (no session bus, name claim refused, etc.) are logged as
+ * warnings but do NOT abort emacs startup --- the editor still works
+ * without the D-Bus surface, and the user can retry with M-: (cmacs-dbus-start). */
+void
+init_cmacs_dbus (void)
+{
+  GError *err = NULL;
+  gchar *name;
+
+  if (noninteractive)
+    return;
+
+  if (g_getenv ("CMACS_DBUS_NO_AUTOSTART") != NULL)
+    return;
+
+  name = cmacs_dbus_start_internal (&err);
+  if (name == NULL)
+    {
+      g_warning ("cmacs-dbus: auto-start failed: %s",
+                 err ? err->message : "unknown");
+      if (err) g_error_free (err);
+      return;
+    }
+  g_free (name);
+}
+
 #endif /* HAVE_CMACS_GLIB */

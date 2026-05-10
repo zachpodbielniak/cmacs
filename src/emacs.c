@@ -2818,6 +2818,7 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
   /* CMACS: late init (after terminal setup) */
 #ifdef HAVE_CMACS_GLIB
   init_cmacs_glib ();
+  init_cmacs_dbus ();
 #endif
 #ifdef HAVE_CMACS_GOWL
   init_cmacs_gowl ();

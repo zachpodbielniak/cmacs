@@ -4,9 +4,9 @@
 
 * What is the cmacs D-Bus subsystem
 
-cmacs registers as a session-bus service the moment =cmacs-dbus-start=
-runs (this is automatic when =M-x bacon= launches, and can be invoked
-explicitly from elisp).  Once running, it carries:
+cmacs registers as a session-bus service automatically at startup
+(in interactive mode --- batch invocations skip).  Once running, it
+carries:
 
 - A typed, introspectable method surface at =/org/cmacs/Editor=
 - Standards-compliant ObjectManager and Properties interfaces (the
@@ -55,7 +55,14 @@ The wire surface stays consistent: each phase adds, never removes.
 
 * Phase 1: what's actually shipping
 
-After =cmacs-dbus-start=, you get:
+The service starts automatically on every interactive cmacs launch.
+Skip auto-start in any of these ways:
+
+- Run with =--batch= or =--script= (batch mode never registers)
+- Set =CMACS_DBUS_NO_AUTOSTART=1= in the environment before launching
+- Skip auto-start at runtime via =(cmacs-dbus-stop)=
+
+After auto-start (or =M-: (cmacs-dbus-start)=), you get:
 
 - Two bus names: well-known =org.cmacs.Editor= (claimed by the first
   cmacs) and per-PID =org.cmacs.Editor.PidN= (always claimed)

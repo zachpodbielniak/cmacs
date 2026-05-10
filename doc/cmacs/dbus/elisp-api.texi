@@ -13,6 +13,11 @@ at @code{/org/cmacs/Editor}, claim the well-known and per-PID
 names.  Returns the dominant bus name (well-known if acquired, else
 the per-PID fallback).  Idempotent.
 
+cmacs auto-runs this at startup in interactive mode, so most users
+never call it explicitly.  Auto-start is skipped under
+@option{--batch} / @option{--script} and when the env var
+@env{CMACS_DBUS_NO_AUTOSTART} is set.
+
 @item (cmacs-dbus-stop)
 Tear down the registration.  Returns @code{t} if the service was
 running, @code{nil} otherwise.

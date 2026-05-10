@@ -23,10 +23,12 @@ per-PID fallback).
 Idempotent: a second call returns the same name without doing
 anything.
 
-Internally, =M-x bacon= calls this when starting the bacon vterm so
-the bacon child can reach back via D-Bus when its FD socketpair
-isn't viable.  You can also call it from =init.el= to register on
-startup.
+*Note*: cmacs auto-runs this at startup in interactive mode, so most
+users never call it explicitly.  Auto-start is skipped under
+=--batch= / =--script= and when the env var
+=CMACS_DBUS_NO_AUTOSTART= is set.  Internally, =M-x bacon= would
+call this anyway as part of its IPC setup; auto-start just means it
+already happened by the time bacon runs.
 
 ** =(cmacs-dbus-stop)= → t or nil
 

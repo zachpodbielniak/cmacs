@@ -5491,6 +5491,7 @@ extern void syms_of_textconv (void);
 extern void syms_of_cmacs_glib (void);
 extern void syms_of_cmacs_gobject (void);
 extern void syms_of_cmacs_dbus (void);
+extern void init_cmacs_dbus (void);
 extern void init_cmacs_glib (void);
 #endif
 #ifdef HAVE_CMACS_GI

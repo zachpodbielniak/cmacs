@@ -3,10 +3,9 @@
 
 @subsection What is the cmacs D-Bus subsystem
 
-cmacs registers as a session-bus service the moment
-@code{cmacs-dbus-start} runs (this is automatic when @code{M-x bacon}
-launches, and can be invoked explicitly from elisp).  Once running,
-it carries:
+cmacs registers as a session-bus service automatically at startup
+(in interactive mode --- batch invocations skip).  Once running, it
+carries:
 
 @itemize @bullet
 @item
@@ -49,7 +48,21 @@ dispatcher, so behaviour is consistent.
 
 @subsection Phase 1: what's actually shipping
 
-After @code{cmacs-dbus-start}, you get:
+The service starts automatically on every interactive cmacs launch.
+Skip auto-start in any of these ways:
+
+@itemize @bullet
+@item
+Run with @option{--batch} or @option{--script} (batch mode never
+registers)
+@item
+Set @env{CMACS_DBUS_NO_AUTOSTART=1} in the environment before
+launching
+@item
+Stop at runtime via @code{(cmacs-dbus-stop)}
+@end itemize
+
+After auto-start (or @code{M-: (cmacs-dbus-start)}), you get:
 
 @itemize @bullet
 @item
