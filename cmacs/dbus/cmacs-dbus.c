@@ -63,6 +63,10 @@ static guint            owner_id_per_pid = 0;
 static guint reg_iface_eval     = 0;
 static guint reg_object_manager = 0;
 static guint reg_properties     = 0;
+static guint reg_iface_bufmgr   = 0;
+static guint reg_iface_framemgr = 0;
+static guint reg_iface_winmgr   = 0;
+static guint reg_iface_procmgr  = 0;
 
 /* ── Public connection / name accessors ─────────────────────────── */
 
@@ -158,12 +162,45 @@ register_modules (GDBusConnection *conn, GError **error)
   reg_properties = cmacs_dbus_properties_register (
     conn, CMACS_DBUS_ROOT_PATH, NULL);
 
+  /* Phase 2: resource manager interfaces. */
+  reg_iface_bufmgr = cmacs_dbus_iface_bufmgr_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_bufmgr == 0)
+    return FALSE;
+
+  reg_iface_framemgr = cmacs_dbus_iface_framemgr_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_framemgr == 0)
+    return FALSE;
+
+  reg_iface_winmgr = cmacs_dbus_iface_winmgr_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_winmgr == 0)
+    return FALSE;
+
+  reg_iface_procmgr = cmacs_dbus_iface_procmgr_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_procmgr == 0)
+    return FALSE;
+
   return TRUE;
 }
 
 static void
 unregister_modules (GDBusConnection *conn)
 {
+  if (reg_iface_procmgr)
+    { cmacs_dbus_iface_procmgr_unregister (conn, reg_iface_procmgr);
+      reg_iface_procmgr = 0; }
+  if (reg_iface_winmgr)
+    { cmacs_dbus_iface_winmgr_unregister (conn, reg_iface_winmgr);
+      reg_iface_winmgr = 0; }
+  if (reg_iface_framemgr)
+    { cmacs_dbus_iface_framemgr_unregister (conn, reg_iface_framemgr);
+      reg_iface_framemgr = 0; }
+  if (reg_iface_bufmgr)
+    { cmacs_dbus_iface_bufmgr_unregister (conn, reg_iface_bufmgr);
+      reg_iface_bufmgr = 0; }
   if (reg_properties)
     {
       cmacs_dbus_properties_unregister (conn, reg_properties);

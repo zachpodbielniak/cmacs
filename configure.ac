@@ -667,7 +667,7 @@ OPTION_DEFAULT_OFF([cmacs-print], [Print to cmacs virtual printer + PDF intake])
 if test "$with_cmacs_glib" != "no"; then
   PKG_CHECK_MODULES([CMACS_GLIB], [glib-2.0 gobject-2.0 gio-2.0 gmodule-2.0])
   AC_DEFINE([HAVE_CMACS_GLIB], 1, [CMacs GLib integration])
-  CMACS_GLIB_OBJ="cmacs-glib-loop.o cmacs-gobject.o cmacs-gclosure.o cmacs-eval-dispatch.o cmacs-glib-screenshot.o cmacs-ink-overlay.o cmacs-dbus.o cmacs-dbus-helpers.o cmacs-dbus-emit.o cmacs-dbus-properties.o cmacs-dbus-object-manager.o cmacs-dbus-iface-eval.o"
+  CMACS_GLIB_OBJ="cmacs-glib-loop.o cmacs-gobject.o cmacs-gclosure.o cmacs-eval-dispatch.o cmacs-glib-screenshot.o cmacs-ink-overlay.o cmacs-dbus.o cmacs-dbus-helpers.o cmacs-dbus-emit.o cmacs-dbus-properties.o cmacs-dbus-object-manager.o cmacs-dbus-iface-eval.o cmacs-dbus-iface-bufmgr.o cmacs-dbus-iface-resmgr.o"
 fi
 if test "$with_cmacs_gi" != "no"; then
   PKG_CHECK_MODULES([CMACS_GI], [gobject-introspection-1.0])

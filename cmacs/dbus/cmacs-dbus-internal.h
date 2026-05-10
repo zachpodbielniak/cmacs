@@ -41,6 +41,24 @@ guint    cmacs_dbus_object_manager_register   (GDBusConnection *conn,
 void     cmacs_dbus_object_manager_unregister (GDBusConnection *conn,
                                                 guint id);
 
+/* Phase 2 root-level resource manager interfaces. */
+guint    cmacs_dbus_iface_bufmgr_register     (GDBusConnection *conn,
+                                                const gchar     *path,
+                                                GError         **error);
+void     cmacs_dbus_iface_bufmgr_unregister   (GDBusConnection *conn, guint id);
+guint    cmacs_dbus_iface_framemgr_register   (GDBusConnection *conn,
+                                                const gchar     *path,
+                                                GError         **error);
+void     cmacs_dbus_iface_framemgr_unregister (GDBusConnection *conn, guint id);
+guint    cmacs_dbus_iface_winmgr_register     (GDBusConnection *conn,
+                                                const gchar     *path,
+                                                GError         **error);
+void     cmacs_dbus_iface_winmgr_unregister   (GDBusConnection *conn, guint id);
+guint    cmacs_dbus_iface_procmgr_register    (GDBusConnection *conn,
+                                                const gchar     *path,
+                                                GError         **error);
+void     cmacs_dbus_iface_procmgr_unregister  (GDBusConnection *conn, guint id);
+
 guint    cmacs_dbus_properties_register   (GDBusConnection *conn,
                                             const gchar     *path,
                                             GError         **error);
