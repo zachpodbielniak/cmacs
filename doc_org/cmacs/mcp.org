@@ -129,17 +129,18 @@ Available when CMacs is built with =--with-cmacs-gi=.
 
 Available when CMacs is built with =--with-cmacs-gowl=.
 
-| Tool                  | Description                                        |
-|-----------------------+----------------------------------------------------|
-| =gowl_list_clients=   | List Wayland clients                               |
-| =gowl_focused_client= | Get the focused client                             |
-| =gowl_spawn=          | Spawn a program on the compositor                  |
-| =gowl_list_monitors=  | List connected monitors                            |
-| =gowl_list_keybinds=  | List compositor keybindings                        |
-| =gowl_find_client=    | Find a client by title or app-id                   |
-| =gowl_reload_config=  | Reload the compositor configuration                |
-| =gowl_lock=           | Lock the session                                   |
-| =gowl_unlock=         | Unlock the session                                 |
+| Tool                          | Description                                            |
+|-------------------------------+--------------------------------------------------------|
+| =gowl_list_clients=           | List Wayland clients                                   |
+| =gowl_focused_client=         | Get the focused client                                 |
+| =gowl_spawn=                  | Spawn a program on the compositor                      |
+| =gowl_list_monitors=          | List connected monitors                                |
+| =gowl_set_monitor_transform=  | Rotate / flip a monitor (transform 0–7)                |
+| =gowl_list_keybinds=          | List compositor keybindings                            |
+| =gowl_find_client=            | Find a client by title or app-id                       |
+| =gowl_reload_config=          | Reload the compositor configuration                    |
+| =gowl_lock=                   | Lock the session                                       |
+| =gowl_unlock=                 | Unlock the session                                     |
 
 * Resources
 

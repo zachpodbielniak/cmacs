@@ -140,6 +140,40 @@ bacon> cmacsgi monitor transform WL-1 1     ;; rotate 90°
 bacon> cmacsgi monitor transform WL-1 0     ;; back to normal
 #+end_example
 
+*** Persisting Transform (and Other Monitor Settings) via YAML
+
+For a machine where a display always wants the same orientation,
+scale, or position (a tablet with a portrait-default panel, a
+left-of-laptop external monitor, a HiDPI screen at non-default scale),
+put the override in =~/.config/gowl/config.yaml= under the
+=monitors:= key so it applies on every boot:
+
+#+begin_src yaml
+monitors:
+  eDP-1:                 # mobile screen: boot already-rotated
+    transform: 90
+  HDMI-A-1:              # external 1440p at 144 Hz, placed right
+    width: 2560
+    height: 1440
+    refresh: 144.0
+    x: 1920
+    y: 0
+    scale: 1.0
+    enabled: true
+#+end_src
+
+Every field is independently optional — set only what you want to
+override.  Unset fields are left at the compositor's defaults, so a
+=transform: 90= line on its own is valid.  =transform= accepts either
+the integer code (0–7) or the canonical name (=normal=, =90=, =180=,
+=270=, =flipped=, =flipped-90=, =flipped-180=, =flipped-270=).
+
+Discover output names via =M-: (cmacs-gowl-list-monitors)= or
+=cmacsgi monitor list=.
+
+Changes take effect live on =M-x cmacs-gowl-reload-config= /
+=cmacsgi compositor reload= / =Mod+R= — no compositor restart needed.
+
 ** Enable / Disable
 
 #+begin_example

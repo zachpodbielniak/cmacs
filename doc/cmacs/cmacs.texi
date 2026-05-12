@@ -1698,6 +1698,43 @@ bacon> cmacsgi monitor transform WL-1 1   @r{;; rotate 90@textdegree{}}
 bacon> cmacsgi monitor transform WL-1 0   @r{;; back to normal}
 @end example
 
+@subsubsection Persisting Transform (and Other Monitor Settings) via YAML
+
+For a machine where a display always wants the same orientation,
+scale, or position (a tablet with a portrait-default panel, an
+external monitor placed left of the laptop, a HiDPI screen at
+non-default scale), put the override in
+@file{~/.config/gowl/config.yaml} under the @code{monitors:} key so
+it applies on every boot:
+
+@example
+monitors:
+  eDP-1:                 @r{# mobile screen: boot already-rotated}
+    transform: 90
+  HDMI-A-1:              @r{# external 1440p at 144 Hz, placed right}
+    width: 2560
+    height: 1440
+    refresh: 144.0
+    x: 1920
+    y: 0
+    scale: 1.0
+    enabled: true
+@end example
+
+Every field is independently optional --- set only what you want to
+override.  Unset fields are left at the compositor's defaults, so a
+@code{transform: 90} line on its own is valid.  @code{transform}
+accepts either the integer code (0--7) or one of the canonical names
+(@code{normal}, @code{90}, @code{180}, @code{270}, @code{flipped},
+@code{flipped-90}, @code{flipped-180}, @code{flipped-270}).
+
+Discover output names via @kbd{M-x cmacs-gowl-list-monitors} or
+@code{cmacsgi monitor list}.
+
+Changes take effect live on @kbd{M-x cmacs-gowl-reload-config},
+@code{cmacsgi compositor reload}, or the @kbd{Mod+R} keybind --- no
+compositor restart needed.
+
 @subsection Enable / Disable
 
 @example
@@ -4183,14 +4220,30 @@ These tools are registered only when CMacs is built with
 @option{--with-cmacs-gowl}.
 
 @table @code
-@item gowl_gowl_list_clients
+@item gowl_list_clients
 List Wayland clients managed by Gowl.
-@item gowl_gowl_focused_client
+@item gowl_focused_client
 Return the currently focused client.
-@item gowl_gowl_spawn
+@item gowl_spawn
 Spawn a Wayland client process.
-@item gowl_gowl_list_monitors
+@item gowl_list_monitors
 List connected monitors and their geometry.
+@item gowl_set_monitor_transform
+Rotate or flip a monitor.  Takes @code{name} (the output name, e.g.
+@code{eDP-1}) and @code{transform} (an integer 0--7 matching
+@code{wl_output_transform}).  To persist across sessions, add a
+@code{transform:} entry under the matching output name in the YAML
+@code{monitors:} block instead.
+@item gowl_list_keybinds
+List compositor keybindings.
+@item gowl_find_client
+Find a client by title or app-id pattern.
+@item gowl_reload_config
+Reload the compositor configuration from YAML.
+@item gowl_lock
+Lock the session.
+@item gowl_unlock
+Unlock the session.
 @end table
 
 @section Resources

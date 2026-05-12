@@ -139,6 +139,34 @@ handle_gowl_unlock (McpServer *s, const gchar *n,
   return gowl_result (cmacs_dispatch_gowl_unlock (&error), error);
 }
 
+static McpToolResult *
+handle_gowl_set_monitor_transform (McpServer *s, const gchar *n,
+                                    JsonObject *a, gpointer u)
+{
+  g_autoptr (GError) error = NULL;
+  const gchar *name;
+  gint64 xform;
+  (void) s; (void) n; (void) u;
+
+  name = json_object_get_string_member (a, "name");
+  if (name == NULL)
+    {
+      McpToolResult *r = mcp_tool_result_new (TRUE);
+      mcp_tool_result_add_text (r, "Missing required argument: name");
+      return r;
+    }
+  if (!json_object_has_member (a, "transform"))
+    {
+      McpToolResult *r = mcp_tool_result_new (TRUE);
+      mcp_tool_result_add_text (r, "Missing required argument: transform");
+      return r;
+    }
+  xform = json_object_get_int_member (a, "transform");
+  return gowl_result (
+    cmacs_dispatch_gowl_set_monitor_transform (name, (gint)xform, &error),
+    error);
+}
+
 /* ── Registration ─────────────────────────────────────────────────── */
 
 void
@@ -207,6 +235,24 @@ cmacs_mcp_tools_gowl_register (McpServer *server)
   tool = mcp_tool_new ("gowl_unlock",
     "Unlock the compositor screen.");
   mcp_server_add_tool (server, tool, handle_gowl_unlock, NULL, NULL);
+  g_object_unref (tool);
+
+  tool = mcp_tool_new ("gowl_set_monitor_transform",
+    "Set the wl_output transform for a monitor (rotation/flip). "
+    "transform is an integer 0-7: 0=normal, 1=90, 2=180, 3=270, "
+    "4=flipped, 5=flipped-90, 6=flipped-180, 7=flipped-270. "
+    "To persist across sessions, add `transform:` under the "
+    "matching output name in the YAML `monitors:` block.");
+  schema = cmacs_mcp_schema_from_string (
+    "{\"type\":\"object\",\"properties\":{"
+    "\"name\":{\"type\":\"string\","
+              "\"description\":\"Output name (e.g. eDP-1)\"},"
+    "\"transform\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":7,"
+                   "\"description\":\"Transform code 0-7\"}"
+    "},\"required\":[\"name\",\"transform\"]}");
+  mcp_tool_set_input_schema (tool, schema);
+  mcp_server_add_tool (server, tool, handle_gowl_set_monitor_transform,
+                       NULL, NULL);
   g_object_unref (tool);
 }
 

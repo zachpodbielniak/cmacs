@@ -526,7 +526,13 @@ cmacs_dispatch_gowl_reload_config (GError **error)
 
   config = gowl_compositor_get_config (cmacs_gowl_compositor);
   if (config != NULL)
-    gowl_config_load_yaml_from_search_path (config, NULL);
+    {
+      gowl_config_load_yaml_from_search_path (config, NULL);
+      /* Apply per-output YAML overrides (transform/scale/mode/...)
+       * to live monitors so the reload's effect is visible without
+       * a compositor restart. */
+      gowl_compositor_apply_monitor_configs (cmacs_gowl_compositor);
+    }
 
   return g_strdup ("t");
 }
