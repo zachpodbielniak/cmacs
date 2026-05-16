@@ -908,14 +908,26 @@ $(CMACS_BACON_MODULES): $(CMACS_API_SO)
 		API_DIR=$(abspath $(srcdir)/../cmacs/api)
 endif
 
-## Build liborgex-1.0.a (statically linked into emacs)
+## Build liborgex-1.0.a (statically linked into emacs).
+##
+## The recipe must run every top-level make to give the inner Makefile
+## a chance to detect newer .c sources and rebuild --- the .a alone has
+## no source prerequisites here.  Without this, a stale .a from `COPY .`
+## in Containerfile (or any tree where the .a is older than the
+## sources) survives into the temacs link and produces "undefined
+## reference to org_ex_ink_*" errors at the linker.  The inner Makefile
+## does its own up-to-date check, so this is cheap on no-op runs.
 ifneq ($(CMACS_ORG_EX_OBJ),)
 CMACS_ORG_EX_STATIC_LIB = $(srcdir)/../cmacs/org-ex/lib/liborgex-1.0.a
-$(CMACS_ORG_EX_STATIC_LIB):
+$(CMACS_ORG_EX_STATIC_LIB): FORCE
 	$(MAKE) -C $(srcdir)/../cmacs/org-ex/lib static
 
 $(CMACS_ORG_EX_OBJ): $(CMACS_ORG_EX_STATIC_LIB)
 endif
+
+# Empty-recipe sentinel; lets dependent rules always re-evaluate.
+.PHONY: FORCE
+FORCE:
 
 ## Build libmcp-glib-1.0.a (MCP server library)
 ifneq ($(CMACS_MCP_OBJ),)
