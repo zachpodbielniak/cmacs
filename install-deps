@@ -113,6 +113,37 @@ set_packages_fedora () {
 	fi
 	PKGS_GOWL=("${wlroots_pkg}" wayland-devel wayland-protocols-devel
 	           libinput-devel libxkbcommon-devel pango-devel cairo-devel)
+	# cmacs-video: GStreamer + plugins-{base,good,bad,ugly} + libav.
+	# plugins-bad provides rtspsrc (RTSP + RTSPS); libav gives software
+	# H.264/H.265 fallback when hardware decode is unavailable.
+	#
+	# IMPORTANT: Fedora's gstreamer1-libav is built against the
+	# *-free ffmpeg variant (libavcodec-free etc.), which strips
+	# patent-encumbered codecs --- including H.264 Main and High
+	# profile, the encoding nearly all real-world IP cameras use.
+	# Without the swap below you'll see RTSP streams reach state
+	# `paused' but never produce frames, with the error
+	# "Missing element: H.264 (Main Profile) decoder" from
+	# decodebin.
+	#
+	# To make H.264 Main/High work you need the full ffmpeg from
+	# RPM Fusion (Fedora doesn't ship it for licensing reasons):
+	#
+	#   sudo dnf install \
+	#     https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm
+	#   sudo dnf swap ffmpeg-free ffmpeg --allowerasing
+	#   rm -rf ~/.cache/gstreamer-1.0
+	#
+	# Verify with: gst-inspect-1.0 avdec_h264   (must print Factory Details, not "No such element").
+	#
+	# This is required for security-camera use cases (Unifi, Reolink,
+	# Amcrest, Hikvision, Axis, etc.) where Main or High profile is
+	# the default.  Public test streams encoded with the Baseline
+	# profile will play without this swap.
+	PKGS_VIDEO=(gstreamer1-devel gstreamer1-plugins-base-devel
+	            gstreamer1-plugins-good gstreamer1-plugins-bad-free-devel
+	            gstreamer1-plugins-bad-free-extras gstreamer1-plugins-ugly-free
+	            gstreamer1-libav)
 	PKG_CMD="sudo dnf install -y"
 }
 
@@ -134,6 +165,9 @@ set_packages_debian () {
 	           libsqlite3-dev libcmark-dev)
 	PKGS_GOWL=(libwlroots-dev libwayland-dev wayland-protocols
 	           libinput-dev libxkbcommon-dev libpango1.0-dev libcairo2-dev)
+	PKGS_VIDEO=(libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+	            gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
+	            gstreamer1.0-plugins-ugly gstreamer1.0-libav)
 	PKG_CMD="sudo apt-get install -y"
 	# NOTE: Ubuntu 24.04 (noble) ships wlroots 0.17, wayland 1.22,
 	# wayland-protocols 1.34, and pixman 0.42 --- all too old for
@@ -157,6 +191,8 @@ set_packages_arch () {
 	           libetpan postgresql-libs libssh2 libvirt libyaml
 	           sqlite cmark)
 	PKGS_GOWL=(wlroots wayland wayland-protocols libinput libxkbcommon pango cairo)
+	PKGS_VIDEO=(gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad
+	            gst-plugins-ugly gst-libav)
 	PKG_CMD="sudo pacman -S --needed --noconfirm"
 }
 
@@ -176,6 +212,8 @@ set_packages_macos () {
 	           libetpan libpq libssh2 libvirt libyaml
 	           sqlite cmark)
 	PKGS_GOWL=()  # Wayland not available on macOS
+	PKGS_VIDEO=(gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad
+	            gst-plugins-ugly gst-libav)
 	PKG_CMD="brew install"
 }
 
@@ -193,6 +231,9 @@ set_packages_freebsd () {
 	           libetpan postgresql16-client libssh2 libvirt libyaml
 	           sqlite3 cmark)
 	PKGS_GOWL=()  # Wayland compositor support limited on FreeBSD
+	PKGS_VIDEO=(gstreamer1 gstreamer1-plugins-core gstreamer1-plugins-good
+	            gstreamer1-plugins-bad gstreamer1-plugins-ugly
+	            gstreamer1-plugins-libav)
 	PKG_CMD="sudo pkg install -y"
 }
 
@@ -209,7 +250,8 @@ all_packages () {
 	     "${PKGS_TS[@]}" \
 	     "${PKGS_INTROSPECT[@]}" \
 	     "${PKGS_GLIB[@]}" \
-	     "${PKGS_GOWL[@]}"
+	     "${PKGS_GOWL[@]}" \
+	     "${PKGS_VIDEO[@]}"
 }
 
 # ── Install system packages ──────────────────────────────────────────

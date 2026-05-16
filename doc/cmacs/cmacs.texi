@@ -48,6 +48,7 @@ interaction.
 * Org-Ex Interactive Widgets::  Widget embedding in Org buffers.
 * MCP Server::                  MCP server for AI-native control.
 * Print to cmacs::              Virtual printer + PDF intake for annotation.
+* CMacs Video::                 Inline GStreamer video overlay (file + RTSP/RTSPS).
 * Cintrospect::                 Runtime C self-introspection (libdw + JIT).
 * Cpatch::                      Runtime C hot-patching (DEFUN swap + detours).
 * Build Configuration::         Configure flags and dependencies.
@@ -4562,6 +4563,299 @@ Elisp module: @code{cmacs-print-import-pdf} entry point + helpers.
 @item test/cmacs/cmacs-print-tests.el
 ERT tests for sanitisation, PNG dimension parsing, org generation,
 page renaming.
+@end table
+
+@c ===================================================================
+@node CMacs Video
+@chapter CMacs Video: Inline GStreamer Playback
+
+@cindex video
+@cindex GStreamer
+@cindex RTSP
+@cindex RTSPS
+@cindex unifi
+@cindex security camera
+
+The @code{cmacs-video} subsystem embeds GStreamer-decoded video
+inline in Emacs buffers via a Cairo post-glyph paint hook.  It
+supports local files, HTTP(S), RTSP, and RTSPS via
+@code{playbin3}, and is the foundation for third-party packages
+such as a Unifi Protect camera viewer.
+
+@strong{Compositor independence.}  cmacs-video paints inside
+@code{pgtk_handle_draw}, which fires whenever cmacs is rendering
+through GTK --- regardless of which outer compositor hosts the
+client.  This subsystem works under mutter, kwin, sway, hyprland,
+weston, gowl, and X11+pgtk alike.  It does @strong{not} require
+@code{--with-cmacs-gowl} nor running cmacs in @code{--gowl}
+compositor mode.
+
+@section Requirements
+
+System packages:
+
+@table @asis
+@item Fedora
+@code{gstreamer1-devel gstreamer1-plugins-base-devel
+gstreamer1-plugins-good gstreamer1-plugins-bad-free
+gstreamer1-plugins-bad-free-extras gstreamer1-plugins-ugly-free
+gstreamer1-libav}
+@item Debian / Ubuntu
+@code{libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+gstreamer1.0-plugins-@{good,bad,ugly@} gstreamer1.0-libav}
+@item Arch
+@code{gstreamer gst-plugins-@{base,good,bad,ugly@} gst-libav}
+@item macOS (Homebrew) / FreeBSD
+See @code{install-deps} for the exact package names.
+@end table
+
+The @code{plugins-bad} family is non-negotiable: @code{rtspsrc}
+(RTSP and RTSPS) lives there.  @code{gst-libav} provides
+software H.264 / H.265 fallback for cameras whose codecs don't
+match a hardware decoder.
+
+@strong{Fedora caveat.}  Fedora's @code{gstreamer1-libav} is
+built against @code{ffmpeg-free}, which strips patent-encumbered
+codecs --- including H.264 Main and High profile (the encoding
+nearly all IP cameras use).  Without RPM Fusion's full
+@code{ffmpeg} swap, streams will reach @code{paused} but never
+produce frames.  See @file{doc_org/cmacs/cmacs-video.org} for
+the swap recipe and the SRTP / @code{?enableSrtp} workaround for
+Unifi Protect.
+
+Build with @code{--with-cmacs-video}.  Configure also requires
+@code{--with-cmacs-glib} (bus dispatch piggybacks on the cmacs
+GMainContext); without @code{--with-pgtk} the subsystem still
+builds but cannot display frames (decode side works for
+snapshot / transcode use cases).
+
+@section Block syntax (@code{#+BEGIN_VIDEO})
+
+@example
+#+BEGIN_VIDEO :src "rtsps://nvr.lan:7441/abc?enableSrtp" :width 640 :height 360 :insecure t :latency 200
+Front-door camera                ; body is reserved for caption / notes
+#+END_VIDEO
+@end example
+
+@table @code
+@item :src
+URI.  Required.  @code{file://}, @code{http(s)://}, @code{rtsp://},
+@code{rtsps://}, @code{srt://}, @code{udp://}, @code{rtp://}.
+@item :width @var{W}
+Display width in pixels (default @code{cmacs-video-default-width}).
+@item :height @var{H}
+Display height in pixels (default @code{cmacs-video-default-height}).
+@item :autoplay
+Default @code{t}.
+@item :loop
+Restart on EOS (file URIs only).  Default @code{nil}.
+@item :start
+Initial seek in seconds.
+@item :audio
+Default @code{nil} (muted, no audio sink).
+@item :volume
+@code{0.0..1.0}, default @code{1.0}.
+@item :insecure
+RTSPS only: skip TLS validation.  See @code{cmacs-video-rtsps-insecure-by-default}.
+@item :latency
+RTSP jitterbuffer in milliseconds.  Default
+@code{cmacs-video-default-latency-ms} (200, appropriate for LAN).
+@end table
+
+Render every block in the current buffer with
+@code{M-x cmacs-video-org-render-buffer}.  Tear down with
+@code{M-x cmacs-video-org-unrender-buffer}.
+
+@section Standalone @code{cmacs-video-mode}
+
+@itemize @bullet
+@item @code{M-x cmacs-video-open-file @key{RET} PATH @key{RET}}
+@item @code{M-x cmacs-video-open-url  @key{RET} URI  @key{RET}}
+@end itemize
+
+Both pop a new buffer in @code{cmacs-video-mode} with the video
+filling the window.  Keybindings:
+
+@table @kbd
+@item SPC
+Toggle play / pause.
+@item q
+Kill the buffer (also stops the stream).
+@item s
+Prompt for a seek position in seconds.
+@item f / b
+Step one frame forward / backward.
+@item , / .
+Seek -5 / +5 seconds.
+@item < / >
+Seek -30 / +30 seconds.
+@item 0
+Seek to start.
+@item m
+Toggle mute.
+@item + / -
+Volume up / down by 0.05.
+@item p
+Save a snapshot to a PNG file.
+@item i
+Echo state, position, frame size in the minibuffer.
+@end table
+
+@section Lisp API
+
+@deffn Function cmacs-video-supported-p
+Return non-@code{nil} if @code{cmacs-video} was built in and
+GStreamer initialised successfully.
+@end deffn
+
+@deffn Function cmacs-video-open uri @rest{} plist
+Open @var{uri} and return an opaque integer handle.  See the
+docstring of the underlying primitive @code{cmacs-video--open-1}
+for the full keyword option set.  This wrapper layers on
+@code{cmacs-video-rtsps-insecure-by-default} and
+@code{cmacs-video-default-latency-ms}.
+@end deffn
+
+@deffn Function cmacs-video-close handle
+Stop and destroy stream @var{handle}.  Blocks ~100--500 ms for
+RTSP/RTSPS streams (TEARDOWN handshake) because the pipeline's
+state transition to @code{NULL} must complete before streaming
+threads unwind.  Idempotent.
+@end deffn
+
+@deffn Function cmacs-video-play handle
+@deffnx Function cmacs-video-pause handle
+@deffnx Function cmacs-video-stop handle
+Set state to @code{PLAYING} / @code{PAUSED} / @code{READY}.
+@end deffn
+
+@deffn Function cmacs-video-seek handle position-seconds
+@deffnx Function cmacs-video-step handle n
+Seek to @var{position-seconds} or step by @var{n} frames
+(negative goes backwards via approximate keyframe seek).
+@end deffn
+
+@deffn Function cmacs-video-state handle
+Return one of: @code{initializing}, @code{buffering},
+@code{playing}, @code{paused}, @code{stalled},
+@code{reconnecting}, @code{eos}, @code{error}, @code{closed}.
+@end deffn
+
+@deffn Function cmacs-video-position handle
+Return @code{(POS-NS . DUR-NS)} or @code{nil}.  For live streams
+@code{DUR-NS} is @code{nil}.
+@end deffn
+
+@deffn Function cmacs-video-frames-decoded handle
+@deffnx Function cmacs-video-frame-size handle
+Frame counter and native @code{(W . H)} dimensions.
+@end deffn
+
+@deffn Function cmacs-video-set-volume handle volume
+@deffnx Function cmacs-video-set-mute handle mute
+Audio knobs.
+@end deffn
+
+@deffn Function cmacs-video-attach-buffer handle marker
+@deffnx Function cmacs-video-attach-frame handle frame x y w h
+@deffnx Function cmacs-video-detach handle
+Anchor stream @var{handle} either to a buffer marker (inline
+overlay) or to a frame's pixel rectangle (standalone mode).
+@end deffn
+
+@deffn Function cmacs-video-snapshot-to-file handle path
+Write the current frame to @var{path} as PNG.
+@end deffn
+
+@deffn Function cmacs-video-add-state-handler handle fn
+@deffnx Function cmacs-video-remove-state-handler handle fn
+Register an observer called as @code{(@var{fn} @var{handle}
+@var{state-sym} @var{&optional detail})} on every state change.
+Always invoked on the main Emacs thread via @code{safe-calln} ---
+errors are logged to @code{*Messages*} without unwinding the
+stream.
+@end deffn
+
+@deffn Function cmacs-video-list
+Return a list of all live stream handles.
+@end deffn
+
+@deffn Function cmacs-video-promote-hardware-decoders
+Bump priority of VAAPI / V4L2 / NVDEC H.264 + H.265 decoders so
+@code{playbin3} prefers them over @code{libav}.  Saves 8--15% CPU
+per 720p stream on capable hardware; may expose flaky vendor
+drivers (black frames).  Off by default; opt in by setting the
+defcustom of the same name.
+@end deffn
+
+@section RTSPS guide
+
+The TLS validation flags follow @code{GTlsCertificateFlags}:
+
+@table @code
+@item :insecure t
+Accept any certificate.  Sets @code{tls-validation-flags=0}.
+Use only during initial setup of self-signed NVRs; pin the cert
+afterwards.
+@item default
+Accept @code{UNKNOWN_CA}, @code{BAD_IDENTITY}, @code{INSECURE}.
+Strict on @code{EXPIRED} / @code{REVOKED}.
+@end table
+
+Unifi Protect feeds look like
+@code{rtsps://NVR-IP:7441/<random-key>?enableSrtp}.  The
+@code{enableSrtp} query parameter triggers SDP-driven SRTP key
+exchange.  Set @code{:insecure t} for first connection, then
+extract the cert with @code{openssl s_client -connect
+NVR:7441 -showcerts} and switch to a pinned cert via
+@code{tls-database}.
+
+The stall watchdog (default 5 s threshold + 3 s grace) is
+mandatory for live streams: older @code{gst-plugins-good}
+(<1.22) reports only @code{WARNING} on UDP packet loss while
+the pipeline stays in @code{PLAYING} indefinitely.  Without the
+watchdog the symptom is a frozen frame; with it, the stream
+transitions @code{stalled} → @code{reconnecting} and recovers
+via exponential backoff.
+
+@section Building a third-party viewer
+
+The Lisp API is designed for third-party packages to wrap.  A
+minimal @code{unifi-cam.el} sketch:
+
+@example
+(defun unifi/open (name uri)
+  (let ((buf (get-buffer-create (format "*cam: %s*" name))))
+    (with-current-buffer buf
+      (cmacs-video-mode)
+      (let ((h (cmacs-video-open uri :width 640 :height 360
+                                 :on-state #'unifi/state-cb)))
+        (setq cmacs-video--standalone-handle h)))
+    (display-buffer buf)))
+@end example
+
+See @file{doc_org/cmacs/cmacs-video.org} for an extended recipe
+covering certificate pinning, multi-camera grid layout, snapshot
+thumbnails, and reconnect behaviour.
+
+@section Troubleshooting
+
+@table @asis
+@item @strong{Black frame forever}
+Missing @code{plugins-bad}.  Install it; restart cmacs.
+@item @strong{``Internal data stream error''}
+Codec missing.  Install @code{libav} or the relevant decoder
+plugin and retry.
+@item @strong{TLS handshake failure}
+For self-signed NVRs, set @code{:insecure t} first.  Pin the
+certificate afterwards via @code{tls-database}.
+@item @strong{No audio with @code{:audio t}}
+@code{autoaudiosink} silently falls back to @code{fakesink} when
+no session bus is reachable.  Verify @code{XDG_RUNTIME_DIR} /
+@code{PULSE_SERVER} are set.
+@item @strong{State stuck in @code{reconnecting}}
+Network reachable but the camera or NVR is denying the session.
+Check the camera's RTSP path and credentials.
 @end table
 
 @c ===================================================================

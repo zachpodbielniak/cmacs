@@ -1,0 +1,505 @@
+#+TITLE: CMacs Video --- Inline GStreamer Playback
+#+OPTIONS: toc:3 num:t
+
+* Overview
+
+The =cmacs-video= subsystem embeds GStreamer-decoded video inline
+in Emacs buffers via a Cairo post-glyph paint hook.  It supports
+local files, HTTP(S), RTSP, and RTSPS via =playbin3=.
+
+** Compositor independence (works under any Wayland/X11 compositor)
+
+cmacs-video is a *pgtk-client* feature, not a *gowl-compositor*
+feature.  The paint hook lives inside
+=pgtk_handle_draw= (see =src/pgtkterm.c=) and runs whenever cmacs
+renders through GTK --- regardless of which outer compositor hosts
+the client.  Tested under mutter (GNOME), kwin (KDE), sway,
+hyprland, weston, gowl (cmacs's own compositor), and X11 + pgtk.
+
+The subsystem MUST NOT introduce a dependency on
+=--with-cmacs-gowl=, on =cmacs --gowl= runtime mode, or on any
+compositor-specific Wayland protocol extension.  Any gowl-native
+acceleration is a deferred opt-in elevation on top of the default
+Cairo blit path --- never the only path.
+
+** Two consumer surfaces
+
+1. =#+BEGIN_VIDEO ... #+END_VIDEO= blocks in org buffers (inline,
+   mirror of =#+BEGIN_INK=).
+2. =cmacs-video-mode= standalone buffers via
+   =M-x cmacs-video-open-file= / =M-x cmacs-video-open-url=.
+
+The Lisp API is rich enough that third-party packages can wrap it
+without C extension.  A Unifi Protect RTSPS camera viewer is the
+canonical reference use case.
+
+* Requirements
+
+** Build flags
+
+| Flag                       | Why                                                            |
+|----------------------------+----------------------------------------------------------------|
+| =--with-cmacs-video=       | Enable this subsystem.                                         |
+| =--with-cmacs-glib=        | HARD: bus dispatch piggybacks on the cmacs GMainContext.       |
+| =--with-pgtk=              | SOFT: required for display; decode side works without.         |
+| =--with-cmacs-gowl=        | NOT required.                                                  |
+
+** System packages per distro
+
+| Distro            | Packages                                                                                                                                       |
+|-------------------+------------------------------------------------------------------------------------------------------------------------------------------------|
+| Fedora            | gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-good gstreamer1-plugins-bad-free gstreamer1-plugins-bad-free-extras gstreamer1-plugins-ugly-free gstreamer1-libav |
+| Debian / Ubuntu   | libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav |
+| Arch              | gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav                                                         |
+| macOS (Homebrew)  | gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav                                                         |
+| FreeBSD           | gstreamer1 gstreamer1-plugins-core gstreamer1-plugins-good gstreamer1-plugins-bad gstreamer1-plugins-ugly gstreamer1-plugins-libav             |
+
+The =plugins-bad= family provides =rtspsrc= (RTSP + RTSPS): not
+optional.  =gst-libav= provides software H.264 / H.265 fallback
+for camera codecs that don't match a hardware decoder.
+
+*** Fedora: stripped libav (REQUIRED reading)
+
+Fedora's =gstreamer1-libav= is built against =ffmpeg-free= /
+=libavcodec-free=, which strips patent-encumbered codecs ---
+including H.264 *Main* and *High* profile.  Nearly every
+real-world IP camera (Unifi, Reolink, Amcrest, Hikvision, Axis,
+…) encodes Main or High by default.  Without the swap below,
+RTSP streams will reach state =paused= but never produce frames;
+=decodebin= will log:
+
+#+begin_example
+Missing element: H.264 (Main Profile) decoder
+#+end_example
+
+The fix is RPM Fusion's full =ffmpeg=:
+
+#+begin_src bash
+sudo dnf install \
+  https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm
+sudo dnf swap ffmpeg-free ffmpeg --allowerasing
+rm -rf ~/.cache/gstreamer-1.0
+#+end_src
+
+Verify:
+
+#+begin_src bash
+gst-inspect-1.0 avdec_h264 | head -3
+# Should print "Factory Details: ... libav H.264 ..."
+#+end_src
+
+On Silverblue / immutable Fedora, run the above inside a
+=sudo bootc usr-overlay= session (the swap lands in the writable
+overlay; reboot reverts; rebase to a custom image to persist).
+
+Public test streams encoded with the Baseline profile (e.g.
+=rtsp.stream/movie=) work without this swap; cameras typically
+do not.
+
+** Hardware-accelerated decoding
+
+Off by default to avoid surprising users with flaky vendor
+drivers.  Opt in with:
+
+#+begin_src elisp
+(setq cmacs-video-promote-hardware-decoders t)
+#+end_src
+
+This promotes =vaapih264dec=, =vaapih265dec=, =v4l2h264dec=,
+=v4l2h265dec=, =nvh264dec=, and =nvh265dec= in the GStreamer
+plugin registry so =playbin3= prefers them over =libav=.  Saves
+8--15% CPU per 720p stream on capable hardware.
+
+For finer-grained control, set =GST_PLUGIN_FEATURE_RANK=
+externally:
+
+#+begin_src bash
+GST_PLUGIN_FEATURE_RANK=vaapih264dec:512 cmacs &
+#+end_src
+
+* Block syntax (=#+BEGIN_VIDEO=)
+
+#+begin_example
+,#+BEGIN_VIDEO :src "rtsps://nvr.lan:7441/abc?enableSrtp" :width 640 :height 360 :insecure t :latency 200
+caption / notes (free text reserved for human use)
+,#+END_VIDEO
+#+end_example
+
+** Parameter reference
+
+| Key         | Type   | Default                              | Meaning                                |
+|-------------+--------+--------------------------------------+----------------------------------------|
+| =:src=      | string | (required)                           | URI                                    |
+| =:width=    | int    | =cmacs-video-default-width=          | display width (px)                     |
+| =:height=   | int    | =cmacs-video-default-height=         | display height (px)                    |
+| =:autoplay= | bool   | =t=                                  |                                        |
+| =:loop=     | bool   | =nil=                                | restart on EOS (file URIs)             |
+| =:start=    | float  | 0                                    | initial seek (seconds)                 |
+| =:audio=    | bool   | =nil=                                | unmuted audio sink                     |
+| =:volume=   | float  | 1.0                                  | 0.0..1.0                               |
+| =:insecure= | bool   | =cmacs-video-rtsps-insecure-by-default= | RTSPS only: skip TLS validation      |
+| =:latency=  | int    | =cmacs-video-default-latency-ms=     | RTSP jitterbuffer (ms)                 |
+
+** Examples
+
+Local file:
+
+#+begin_example
+,#+BEGIN_VIDEO :src "file:///home/me/clip.mp4" :width 800 :height 450
+Reference clip for review.
+,#+END_VIDEO
+#+end_example
+
+HTTPS stream:
+
+#+begin_example
+,#+BEGIN_VIDEO :src "https://example.com/sample.mp4" :width 640 :height 360
+,#+END_VIDEO
+#+end_example
+
+RTSPS with pinned cert:
+
+#+begin_example
+,#+BEGIN_VIDEO :src "rtsps://nvr.lan:7441/abc?enableSrtp" :width 640 :height 360 :latency 200
+Front door.
+,#+END_VIDEO
+#+end_example
+
+* Standalone =cmacs-video-mode=
+
+** M-x entry points
+
+| Command                       | Action                              |
+|-------------------------------+-------------------------------------|
+| =cmacs-video-open-file=       | Prompt for a local path.            |
+| =cmacs-video-open-url=        | Prompt for a URI.                   |
+
+Both pop a buffer named =*cmacs-video: <basename>*= in
+=cmacs-video-mode= with the video filling the window body.
+
+** Keybindings
+
+| Key       | Command                                  |
+|-----------+------------------------------------------|
+| =SPC=     | toggle play / pause                      |
+| =q=       | kill buffer (and stop the stream)        |
+| =s=       | prompt for seek (seconds)                |
+| =f= / =b= | step ±1 frame                            |
+| =,= / =.= | seek ±5s                                 |
+| =<= / =>= | seek ±30s                                |
+| =0=       | seek to start                            |
+| =m=       | toggle mute                              |
+| =+= / =-= | volume ±0.05                             |
+| =p=       | save snapshot to PNG                     |
+| =i=       | echo state / position / size             |
+
+** Geometry semantics
+
+The stream's pixel rectangle is registered via
+=cmacs-video-attach-frame= and recomputed on every
+=window-configuration-change-hook=.  Window resize, split, and
+frame move all flow through the same path.
+
+* Lisp API reference
+
+** =cmacs-video-open= (URI &rest PLIST)
+The user-facing entry.  Applies
+=cmacs-video-rtsps-insecure-by-default= and
+=cmacs-video-default-latency-ms= as defaults, then delegates to
+the C primitive =cmacs-video--open-1=.
+
+Keyword options match the parameter table above for
+=#+BEGIN_VIDEO= plus =:on-state FN= for a state-change callback.
+
+** State machine
+
+#+begin_example
+initializing ──► buffering ◄──► playing
+                                  │   │
+                  ┌───────────────┘   │
+                  ▼                   ▼
+              stalled ──► reconnecting ──► (back to playing)
+                                  │
+                                  ▼
+                              error
+                                  │
+                                  ▼ (close)
+                              closed (terminal)
+#+end_example
+
+State callbacks are invoked as ~(FN HANDLE STATE-SYM &optional DETAIL)~
+on the main Emacs thread, wrapped in =safe-calln=.  Errors are
+logged to =*Messages*= without unwinding the stream.
+
+** Snapshot
+
+~(cmacs-video-snapshot-to-file HANDLE PATH)~ writes the current
+front frame to a PNG.  Returns =t= on success.
+
+** Attach helpers
+
+| Function                          | Purpose                                  |
+|-----------------------------------+------------------------------------------|
+| =cmacs-video-attach-buffer=       | Inline overlay anchored to a marker.     |
+| =cmacs-video-attach-frame=        | Standalone, anchored to a frame rect.    |
+| =cmacs-video-detach=              | Clear anchor without closing.            |
+
+* RTSPS guide
+
+** TLS validation flags
+
+The =rtspsrc= element exposes =tls-validation-flags=
+(=GTlsCertificateFlags=).  Bits we toggle:
+
+| Flag                       | Meaning                                    |
+|----------------------------+--------------------------------------------|
+| =UNKNOWN_CA=               | Self-signed / untrusted issuer.            |
+| =BAD_IDENTITY=             | Hostname mismatch.                         |
+| =INSECURE=                 | Insecure algorithms / key length.          |
+| =EXPIRED=                  | Certificate has expired.                   |
+| =REVOKED=                  | Certificate revoked by issuer.             |
+
+The default for cmacs-video accepts =UNKNOWN_CA |
+BAD_IDENTITY | INSECURE= (lenient on identity, strict on expiry
+/ revocation --- the common NVR self-signed case).
+=:insecure t= disables all validation.
+
+** Certificate pinning
+
+Recommended for production:
+
+#+begin_src bash
+openssl s_client -connect NVR:7441 -showcerts </dev/null 2>/dev/null \
+  | openssl x509 -outform PEM > ~/.config/cmacs/unifi-ca.pem
+#+end_src
+
+Then pass =:tls-database= via the lower-level
+=cmacs-video--open-1= primitive (the elisp wrapper hides this
+for brevity; pin-cert plumbing is the user's responsibility).
+
+** Latency tuning
+
+| Network    | Recommended =:latency=         |
+|------------+--------------------------------|
+| LAN        | 200 (default)                  |
+| WAN        | 500 -- 1000                    |
+| Pathological | 2000 (=playbin3= default)    |
+
+Aggressive low latency may surface decoder artifacts (green tear,
+partial macroblocks) on packet loss --- acceptable for monitoring,
+not for film playback.
+
+** Unifi Protect: SRTP and ~?enableSrtp~
+
+Unifi Protect publishes RTSPS URLs in two flavors:
+
+#+begin_example
+rtsps://NVR:7441/<key>             # plain RTP inside an RTSPS control channel
+rtsps://NVR:7441/<key>?enableSrtp  # SDES-keyed SRTP for media too
+#+end_example
+
+The =?enableSrtp= variant adds an =a=crypto= attribute to the
+SDP and encrypts the RTP media stream with AES-CM-128.  In
+theory =rtspsrc= auto-wires =srtpdec= when it sees that
+attribute.  In practice, on Unifi Protect specifically, the
+auto-wiring does not always engage --- the symptom is that
+=rtph264depay= receives encrypted bytes, logs
+
+#+begin_example
+WARNING: rtph264depay: Undefined packet type
+#+end_example
+
+…repeatedly, and eventually =h264parse= crashes deref'ing a
+NULL =frame->buffer= inside =gst_base_parse_handle_buffer=
+(GStreamer bug --- it should ignore malformed input).
+
+@@texi:@strong{@@Workaround:@@texi:}@@ drop the =?enableSrtp=
+query parameter.  Unifi will fall back to plain RTP-inside-RTSPS
+--- the control channel stays TLS-encrypted (because the URL is
+still =rtsps://=), only the media transport changes.  For
+end-to-end media encryption you need full SDES SRTP working;
+file an issue if you hit the auto-wire gap on a known-good
+camera and we'll add an explicit =srtpdec= wire-in to the
+cmacs-video pipeline.
+
+** Stall watchdog
+
+For live URIs, a 1 Hz timer monitors the timestamp of the most
+recent appsink sample.  Two thresholds:
+
+| Threshold                          | Action                          |
+|------------------------------------+---------------------------------|
+| =cmacs-video-stall-threshold-ms=   | State → =stalled= (UI signal).   |
+| =cmacs-video-stall-grace-ms=       | Post a synthetic error +        |
+|                                    | exponential-backoff reconnect.  |
+
+This is mandatory: older =gst-plugins-good= (<1.22) reports only
+=WARNING= on UDP packet loss, so the pipeline silently freezes on
+=PLAYING= state.  Without the watchdog the symptom is a frozen
+frame and a happy bus.
+
+* Building a third-party viewer: =unifi-cam.el=
+
+Sketch (~40 lines):
+
+#+begin_src elisp
+(require 'cmacs-video)
+
+(defgroup unifi-cam nil "Unifi Protect viewer." :group 'tools)
+
+(defcustom unifi-cam-host "10.0.0.10" "NVR hostname or IP." :type 'string)
+(defcustom unifi-cam-port 7441          "NVR RTSPS port."   :type 'integer)
+(defcustom unifi-cam-feeds nil
+  "Alist of (NAME . RTSPS-PATH-KEY) pairs.
+Each path key is the random suffix from Unifi Protect's RTSPS URL."
+  :type '(alist :key-type string :value-type string))
+
+(defun unifi-cam--url (path)
+  (format "rtsps://%s:%d/%s?enableSrtp"
+          unifi-cam-host unifi-cam-port path))
+
+(defun unifi-cam--state-cb (handle state &optional _detail)
+  (when-let* ((buf (seq-find (lambda (b)
+                               (eq (buffer-local-value
+                                    'cmacs-video--standalone-handle b)
+                                   handle))
+                             (buffer-list))))
+    (with-current-buffer buf
+      (setq mode-name (format "Cam[%s]" state))
+      (force-mode-line-update))))
+
+;;;###autoload
+(defun unifi-cam-open (name)
+  "Open the Unifi camera named NAME."
+  (interactive (list (completing-read "Camera: " unifi-cam-feeds)))
+  (let* ((key (cdr (assoc name unifi-cam-feeds)))
+         (uri (unifi-cam--url key))
+         (buf (get-buffer-create (format "*cam: %s*" name))))
+    (with-current-buffer buf
+      (cmacs-video-mode)
+      (let ((inhibit-read-only t)) (erase-buffer) (insert "\n"))
+      (setq cmacs-video--standalone-handle
+            (cmacs-video-open uri
+                              :width 640 :height 360
+                              :insecure t   ; switch to :tls-database when pinned
+                              :on-state #'unifi-cam--state-cb)))
+    (pop-to-buffer buf)
+    (with-current-buffer buf
+      (cmacs-video--standalone-recompute-geometry))))
+
+(provide 'unifi-cam)
+#+end_src
+
+For a grid of N cameras, call =unifi-cam-open= in a loop with
+=display-buffer-in-side-window= configured via
+=display-buffer-alist=, or use =posframe= for floating tiles.
+
+* Troubleshooting
+
+** Black frame forever
+
+@@texi:@strong{@@Likely cause:@@texi:}@@ =plugins-bad= is not
+installed (=rtspsrc= missing) or the codec your stream uses has
+no decoder.
+
+#+begin_src bash
+gst-inspect-1.0 rtspsrc       # should print plugin info
+gst-inspect-1.0 avdec_h264    # H.264 software decoder
+#+end_src
+
+** "Internal data stream error"
+
+Codec negotiation failed.  Install =gst-libav= for software
+fallback or check whether the upstream camera changed its codec.
+
+** TLS handshake failure
+
+For self-signed NVRs, first try =:insecure t= to confirm
+reachability.  Then pin the cert via =:tls-database= for
+production.
+
+** No audio with =:audio t=
+
+=autoaudiosink= falls back to =fakesink= when no PulseAudio /
+PipeWire session bus is reachable.  Verify
+=XDG_RUNTIME_DIR= / =PULSE_SERVER= environment variables.
+
+** State stuck in =reconnecting=
+
+Network is reachable (the pipeline is trying) but the camera /
+NVR is rejecting the SETUP.  Common causes:
+
+- Wrong RTSP path or credentials.
+- TLS validation failure (try =:insecure t= as a diagnostic).
+- Firewall blocking UDP back-channel.  Set =:protocols tcp= via
+  =:on-state= callback after open (uncommon; the default tries
+  both).
+
+* Internals
+
+** GStreamer ↔ Emacs main thread bridge
+
+The bus watch is attached via =gst_bus_create_watch= +
+=g_source_attach (cmacs_glib_get_context ())= --- NOT
+=gst_bus_add_watch=, which attaches to the default context.
+This ensures every bus message dispatches through
+=cmacs_glib_dispatch=, where =waiting_for_input= is cleared
+around the callback (preventing the SIGABRT in =signal_or_quit=
+documented elsewhere in CLAUDE.md).
+
+The appsink "new-sample" signal fires on a GStreamer streaming
+thread.  Our callback only:
+
+1. Pulls and unrefs the =GstSample=.
+2. Locks =frame_mtx=, mem-copies BGRA bytes into =back_data=,
+   swaps =front= ↔ =back=, unlocks.
+3. Calls =g_main_context_invoke= on the cmacs context to schedule
+   a redraw on the main thread.
+
+** Double-buffered BGRA frame slot
+
+Two heap-allocated pixel planes (=front_data=, =back_data=) wrapped
+as Cairo surfaces via =cairo_image_surface_create_for_data=.  The
+streaming thread always writes =back=, then swaps; the paint hook
+always reads =front= under the same mutex.
+
+Caveat: =cairo_image_surface_create_for_data= does NOT own the
+backing storage.  Teardown order is therefore:
+
+1. =gst_element_set_state (pipeline, GST_STATE_NULL)= --- BLOCKS
+   until streaming threads unwind.
+2. =cairo_surface_destroy (front)= / =cairo_surface_destroy (back)=.
+3. =g_free (front_data)= / =g_free (back_data)=.
+
+Reversing 2 and 3 risks a heap-use-after-free.
+
+** Per-stream Lisp_Object storage
+
+State callbacks, anchor buffer, and anchor marker are
+Lisp_Objects.  They live in a single =staticpro='d hash table
+=cmacs_video__lisp_state= keyed by handle, NOT in the heap struct
+itself --- because =staticpro='ing a pointer into freed memory
+makes the GC scan junk on the next collection.
+
+** Why Cairo blit, not =gtkwaylandsink=
+
+=gtkwaylandsink= (zero-copy via =wl_subsurface=) would be faster
+but requires the outer compositor to be a working Wayland
+compositor with the relevant protocols.  The Cairo blit path
+works under any pgtk-hosted environment including X11.  A
+gowl-native =wl_subsurface= path is on the roadmap as an opt-in
+elevation behind a separate flag.
+
+* Future work (deferred from v1)
+
+- Hardware zero-copy paint via =gtkwaylandsink= /
+  =wl_subsurface= xwidget --- opt-in flag, never the default.
+- Audio sink fallback detection (warn when =autoaudiosink= →
+  =fakesink= due to no session bus).
+- Decoder availability probe at init (early warning when no
+  H.264 / H.265 decoder is reachable).
+- Async close path (~100--500 ms blocking close becomes
+  fire-and-forget for callers that can tolerate it).
+- JPEG snapshots (v1 ships PNG only).
+- Smart reconnect-vs-respawn during =revert-buffer= (v1 tears
+  down and recreates).

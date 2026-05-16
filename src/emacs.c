@@ -2739,6 +2739,9 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #ifdef HAVE_CMACS_CPATCH
       syms_of_cmacs_cpatch ();
 #endif
+#ifdef HAVE_CMACS_VIDEO
+      syms_of_cmacs_video ();
+#endif
 
       keys_of_keyboard ();
 
@@ -2838,6 +2841,9 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #endif
 #ifdef HAVE_CMACS_CPATCH
   init_cmacs_cpatch ();
+#endif
+#ifdef HAVE_CMACS_VIDEO
+  init_cmacs_video ();
 #endif
 
   if (!initialized)

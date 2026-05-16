@@ -58,6 +58,7 @@ configure_flags := """
     --with-cmacs-org-ex
     --with-cmacs-mcp
     --with-cmacs-print
+    --with-cmacs-video
     --with-cmacs-cintrospect
     --enable-cmacs-cpatch
 """

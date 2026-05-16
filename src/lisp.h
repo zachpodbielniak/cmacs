@@ -5530,6 +5530,10 @@ extern void init_cmacs_cintrospect (void);
 extern void syms_of_cmacs_cpatch (void);
 extern void init_cmacs_cpatch (void);
 #endif
+#ifdef HAVE_CMACS_VIDEO
+extern void syms_of_cmacs_video (void);
+extern void init_cmacs_video (void);
+#endif
 
 #ifdef HAVE_NATIVE_COMP
 INLINE bool

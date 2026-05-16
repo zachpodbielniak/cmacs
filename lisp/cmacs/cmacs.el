@@ -33,7 +33,8 @@
 
 (defun cmacs-feature-p (feature)
   "Return non-nil if CMacs was built with FEATURE support.
-FEATURE is a symbol: `glib', `gi', `crispy', `bacon', `gowl', or `org-ex'."
+FEATURE is a symbol: `glib', `gi', `crispy', `bacon', `gowl',
+`org-ex', or `video'."
   (pcase feature
     ('glib   (fboundp 'gobject-p))
     ('gi     (fboundp 'gi-require))
@@ -41,12 +42,14 @@ FEATURE is a symbol: `glib', `gi', `crispy', `bacon', `gowl', or `org-ex'."
     ('bacon  (fboundp 'bacon-start))
     ('gowl   (fboundp 'gowl-start))
     ('org-ex (fboundp 'org-ex-document-create))
+    ('video  (and (fboundp 'cmacs-video-supported-p)
+                  (cmacs-video-supported-p)))
     (_ (error "Unknown CMacs feature: %S" feature))))
 
 (defun cmacs-features ()
   "Return a list of available CMacs features."
   (let (features)
-    (dolist (feat '(glib gi crispy bacon gowl org-ex))
+    (dolist (feat '(glib gi crispy bacon gowl org-ex video))
       (when (cmacs-feature-p feat)
         (push feat features)))
     (nreverse features)))

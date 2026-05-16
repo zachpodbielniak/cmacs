@@ -32,6 +32,7 @@ All CMacs features are auto-detected.  You can force them on or off:
 | =--with-cmacs-libreclaw=      | LibreClaw chat / Matrix integration     |
 | =--with-cmacs-org-ex=         | Org-Ex interactive widget embedding     |
 | =--with-cmacs-mcp=            | MCP server for AI-native control        |
+| =--with-cmacs-video=          | GStreamer video overlay + =#+BEGIN_VIDEO= blocks |
 | =--with-cmacs-cintrospect=    | Runtime C self-introspection (libdw+JIT)|
 | =--enable-cmacs-cpatch=       | Runtime C hot-patching (DANGEROUS)      |
 
@@ -65,6 +66,7 @@ Example with explicit flags:
   --with-cmacs-libreclaw \
   --with-cmacs-org-ex \
   --with-cmacs-mcp \
+  --with-cmacs-video \
   --with-cmacs-cintrospect \
   --enable-cmacs-cpatch
 #+end_example

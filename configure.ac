@@ -662,6 +662,7 @@ OPTION_DEFAULT_OFF([cmacs-libreclaw], [CMacs libreclaw chat/Matrix client integr
 OPTION_DEFAULT_OFF([cmacs-org-ex], [CMacs org-ex interactive widgets])
 OPTION_DEFAULT_OFF([cmacs-mcp], [CMacs MCP server])
 OPTION_DEFAULT_OFF([cmacs-print], [Print to cmacs virtual printer + PDF intake])
+OPTION_DEFAULT_OFF([cmacs-video], [CMacs GStreamer video overlay + #+BEGIN_VIDEO blocks])
 
 # CMACS: pkg-config checks when enabled
 if test "$with_cmacs_glib" != "no"; then
@@ -860,6 +861,39 @@ AC_SUBST(HAVE_CMACS_PRINT)
 AC_SUBST(CMACS_PRINT_PDFTOCAIRO)
 AC_SUBST(CMACS_PRINT_PDFINFO)
 AC_SUBST(CMACS_PRINT_GDBUS)
+
+# CMACS Video: GStreamer-backed video overlay for inline #+BEGIN_VIDEO
+# blocks and standalone cmacs-video-mode buffers.  Compositor-agnostic:
+# the paint hook lives in src/pgtkterm.c::pgtk_handle_draw so cmacs
+# runs as a pgtk client under any Wayland/X11 compositor.  Has NO
+# dependency on --with-cmacs-gowl.
+HAVE_CMACS_VIDEO=no
+if test "$with_cmacs_video" != "no"; then
+  if test "$with_cmacs_video" = "yes"; then
+    PKG_CHECK_MODULES([CMACS_VIDEO],
+      [gstreamer-1.0 >= 1.20 gstreamer-app-1.0 gstreamer-video-1.0])
+    HAVE_CMACS_VIDEO=yes
+  else
+    PKG_CHECK_MODULES([CMACS_VIDEO],
+      [gstreamer-1.0 >= 1.20 gstreamer-app-1.0 gstreamer-video-1.0],
+      [HAVE_CMACS_VIDEO=yes],
+      [AC_MSG_WARN([cmacs-video disabled: GStreamer 1.20+ not found])])
+  fi
+  if test "$HAVE_CMACS_VIDEO" = "yes"; then
+    if test "$with_cmacs_glib" = "no"; then
+      AC_MSG_ERROR([--with-cmacs-video requires --with-cmacs-glib (GStreamer bus dispatches via the cmacs GMainContext)])
+    fi
+    if test "$window_system" != "pgtk"; then
+      AC_MSG_WARN([cmacs-video built without --with-pgtk: decode pipeline will run but no frames will be displayed (paint hook is in pgtkterm.c)])
+    fi
+    AC_DEFINE([HAVE_CMACS_VIDEO], 1, [CMacs GStreamer video subsystem])
+    CMACS_VIDEO_OBJ="cmacs-video-stream.o cmacs-video-registry.o cmacs-video-overlay.o cmacs-video-defuns.o cmacs-video-init.o"
+  fi
+fi
+AC_SUBST(HAVE_CMACS_VIDEO)
+AC_SUBST(CMACS_VIDEO_OBJ)
+AC_SUBST(CMACS_VIDEO_CFLAGS)
+AC_SUBST(CMACS_VIDEO_LIBS)
 
 # CMACS Cintrospect: runtime C self-introspection (DWARF reader + JIT).
 # Default-on.  Probes for libdw + libelf via pkg-config, optional
