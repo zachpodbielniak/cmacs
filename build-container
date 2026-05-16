@@ -14,7 +14,7 @@ set -euo pipefail
 
 DO_BUILD=1
 DO_PUSH=0
-VERSION="43"
+VERSION="44"
 
 usage() {
     echo "Usage: ./build-container [VERSION] [--push] [--only-push]"

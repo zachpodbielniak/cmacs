@@ -51,7 +51,7 @@ jobs:
 
       - name: Build container
         env:
-          VERSION: ${{ vars.VERSION || '43' }}
+          VERSION: ${{ vars.VERSION || '44' }}
         run: |
           buildah build \
               --no-cache \
@@ -61,6 +61,6 @@ jobs:
 
       - name: Push container
         env:
-          VERSION: ${{ vars.VERSION || '43' }}
+          VERSION: ${{ vars.VERSION || '44' }}
         run: |
           buildah push quay.io/zachpodbielniak/cmacs:${VERSION}
