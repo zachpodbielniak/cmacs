@@ -82,6 +82,7 @@ RUN ./autogen.sh \
         --with-cmacs-org-ex \
         --with-cmacs-mcp \
         --with-cmacs-print \
+        --with-cmacs-video \
         --with-cmacs-cintrospect \
         --enable-cmacs-cpatch \
     && make -j"$(nproc)" \
