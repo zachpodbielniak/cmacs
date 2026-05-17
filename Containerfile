@@ -32,6 +32,10 @@ RUN if [ "${FEDORA_VERSION}" -ge 44 ] 2>/dev/null; then \
         cmark-devel \
         libssh2-devel libvirt-devel pam-devel \
         elfutils-devel elfutils-debuginfod-client-devel binutils-devel \
+        gstreamer1-devel gstreamer1-plugins-base-devel \
+        gstreamer1-plugins-good gstreamer1-plugins-bad-free-devel \
+        gstreamer1-plugins-bad-free-extras gstreamer1-plugins-ugly-free \
+        gstreamer1-libav \
     && dnf clean all
 # elfutils-devel + libdebuginfod: cintrospect's libdw DWARF reader.
 # binutils-devel: provides dis-asm.h / libopcodes for cpatch's
