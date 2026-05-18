@@ -55,7 +55,9 @@ Like other subsystems:
 @code{--with-cmacs-libreclaw} — build from @file{deps/libreclaw}
 @item
 @code{--with-cmacs-libreclaw=system} — link against
-@code{libreclaw >= 0.18.0} via pkg-config
+@code{libreclaw >= 0.21.0} via pkg-config (0.21.0 added the bridge
+subsystem used by the remote mode; libdex-1 was also added to the
+system-deps set at the same time)
 @end itemize
 
 The bundled path pulls in libreclaw's vendored ai-glib, yaml-glib,

@@ -21,6 +21,7 @@ must stay in sync.  Run @file{tools/sync-docs.sh} to verify.
 * LibreClaw Usage::
 * LibreClaw Hatch Wizard::
 * LibreClaw Channels::
+* LibreClaw Remote Mode::
 * LibreClaw Scripting::
 * LibreClaw DSL::
 * LibreClaw API Reference::
@@ -33,6 +34,7 @@ must stay in sync.  Run @file{tools/sync-docs.sh} to verify.
 @include libreclaw/usage.texi
 @include libreclaw/hatch.texi
 @include libreclaw/channels.texi
+@include libreclaw/remote.texi
 @include libreclaw/scripting.texi
 @include libreclaw/dsl.texi
 @include libreclaw/api.texi

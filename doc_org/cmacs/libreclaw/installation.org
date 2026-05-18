@@ -57,7 +57,10 @@ Like the other cmacs subsystems, libreclaw supports:
 
 - =--with-cmacs-libreclaw= — build from =deps/libreclaw= (default)
 - =--with-cmacs-libreclaw=system= — link against a system-installed
-  =libreclaw >= 0.18.0= via =pkg-config=
+  =libreclaw >= 0.21.0= via =pkg-config= (0.21.0 added the bridge
+  subsystem used by the remote mode; libdex-1 was also added to the
+  system-deps set at the same time so the bundled mcp-glib can be
+  embedded into the main library)
 
 The bundled path pulls in libreclaw's vendored ai-glib, yaml-glib,
 and podomation submodules.  The dedup logic in =src/Makefile.in=

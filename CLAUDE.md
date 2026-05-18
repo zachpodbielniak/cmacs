@@ -49,7 +49,7 @@ cmacs integrates nine subsystems into Emacs as C primitives (DEFUNs):
 | **bacon** | `cmacs/bacon/` | Embedded shell (fork-of-self `--bacon` mode, socketpair IPC) |
 | **gowl** | `cmacs/gowl/` | Wayland compositor (wlroots-based) — 47 DEFUNs for full WM control |
 | **podomation** | `cmacs/podomation/` | Event-driven automation engine — 17 DEFUNs, DSL, REPL |
-| **libreclaw** | `cmacs/libreclaw/` | LibreClaw chat gateway — Matrix/Local/Email/Webhook rooms as org-mode buffers, shared PodEngine, hatch wizard |
+| **libreclaw** | `cmacs/libreclaw/` | LibreClaw chat gateway — two modes: **embedded** (in-process LcApp, shared PodEngine, hatch wizard) and **remote** (dial-out to a separate libreclaw server's `/api/v1/bridge` WebSocket, tunnels cmacs's own MCP server back so the remote agent can drive the editor). Bridge subsystem (`deps/libreclaw/src/bridge/`) provides the generic substrate — any tool host that speaks the wire protocol can connect, not just cmacs. |
 | **org-ex** | `cmacs/org-ex/` | Interactive widget embedding for Org mode (liborgex-1.0.a, statically linked) |
 | **mcp** | `cmacs/mcp/` | MCP server — full AI-native runtime introspection and control via Unix socket |
 | **print** | `cmacs/print/` + `lisp/cmacs/cmacs-print.el` | "Print to cmacs" CUPS virtual printer — PDF intake, per-page rasterisation, annotatable org docs |

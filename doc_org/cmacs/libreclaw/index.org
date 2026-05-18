@@ -16,6 +16,8 @@ engine, and surfaces each room as an org-mode buffer in the style of
 - [[file:usage.org][Usage]] — start/stop, room buffers, sending messages
 - [[file:hatch.org][Hatching]] — running the org-buffer workspace wizard
 - [[file:channels.org][Channels]] — per-channel setup (Matrix, Local, Email, Webhook)
+- [[file:remote.org][Remote Mode]] — dial-out to a remote libreclaw server's bridge
+  endpoint and tunnel cmacs's MCP tools back across (libreclaw 0.21.0+)
 - [[file:scripting.org][Scripting]] — cmacs-gi and signal connection from Elisp
 - [[file:dsl.org][Podomation DSL]] — bridge events and handler actions
 - [[file:api.org][API Reference]] — every DEFUN with signature and examples
@@ -23,7 +25,7 @@ engine, and surfaces each room as an org-mode buffer in the style of
 
 * At a glance
 
-- *Submodule*: =deps/libreclaw= — pinned to libreclaw =v0.18.0+=
+- *Submodule*: =deps/libreclaw= — pinned to libreclaw =v0.21.0+=
 - *Configure flag*: =--with-cmacs-libreclaw=
 - *Dependencies*: glib, gobject, gio, libsoup-3.0, json-glib, libcmark,
   sqlite3, libetpan, libpq, yaml-0.1

@@ -43,6 +43,7 @@ extern void syms_of_cmacs_libreclaw_room          (void);
 extern void syms_of_cmacs_libreclaw_marshal       (void);
 extern void syms_of_cmacs_libreclaw_hatch         (void);
 extern void syms_of_cmacs_libreclaw_cmacs_channel (void);
+extern void syms_of_cmacs_libreclaw_remote        (void);
 
 /* ── State ─────────────────────────────────────────────────────────── */
 
@@ -729,6 +730,7 @@ syms_of_cmacs_libreclaw (void)
   syms_of_cmacs_libreclaw_marshal       ();
   syms_of_cmacs_libreclaw_hatch         ();
   syms_of_cmacs_libreclaw_cmacs_channel ();
+  syms_of_cmacs_libreclaw_remote        ();
 }
 
 void

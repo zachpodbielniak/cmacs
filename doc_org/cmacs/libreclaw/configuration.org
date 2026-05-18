@@ -193,6 +193,30 @@ Set these via =M-x customize-group cmacs-libreclaw RET= /
 =cmacs-libreclaw-cmacs-channel RET= or with =setq= in your init
 file.
 
+* Customization (remote mode)
+
+These apply only to "remote" mode (see [[file:remote.org][LibreClaw Remote Mode]]).
+~M-x customize-group cmacs-libreclaw-remote~ for the full list; the
+load-bearing ones for chat/command behaviour are:
+
+- =cmacs-libreclaw-remote-mcp-servers= (default =(cmacs)=) — list of
+  MCP endpoint specs to expose to the remote libreclaw.
+- =cmacs-libreclaw-remote-display-name= (default ~nil~) — display
+  name advertised to the remote server.
+- =cmacs-libreclaw-remote-user-id= (default ~nil~) — stable
+  =sender_id= for outbound chat.  When nil, resolved at connect
+  time to =$USER=, then ~(user-login-name)~, then to nil (server
+  falls back to the unstable bridge id).  This is what libreclaw's
+  =session.command_allowed_users= / =messages.command_allowed_users=
+  match against to enable session/message bot commands like
+  =!close_session=, =!swap_model=, =!stop=, =!sessions=.  See
+  [[file:remote.org::*Enabling bot commands on the bridge][Enabling bot commands on the bridge]] for the
+  full recipe.
+- =cmacs-libreclaw-remote-local-room-id= (default ="local"=) — room
+  id used by =cmacs-libreclaw-remote-chat=.
+- =cmacs-libreclaw-remote-local-room-name= (default ="Bridge"=) —
+  display label for the local-style chat buffer.
+
 * Per-project session persistence
 
 The cmacs channel writes two kinds of state to disk, keyed off

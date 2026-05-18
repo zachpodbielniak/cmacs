@@ -382,7 +382,11 @@ so for now we only run the hook — dedup-by-id is future work."
 ;;;; Compose / send -------------------------------------------------
 
 (defun cmacs-libreclaw-send-compose ()
-  "Send the compose region as a message and clear it."
+  "Send the compose region as a message and clear it.
+Routes through the remote bridge when the room channel is
+\"bridge\" (so chat buffers created by `cmacs-libreclaw-remote-chat'
+and friends just work), otherwise through the embedded LcApp's
+`cmacs-libreclaw-send-message' DEFUN."
   (interactive)
   (unless (and cmacs-libreclaw-room-channel cmacs-libreclaw-room-id)
     (user-error "Not in a cmacs-libreclaw room buffer"))
@@ -392,10 +396,19 @@ so for now we only run the hook — dedup-by-id is future work."
          (end   (point-max))
          (body  (string-trim (buffer-substring-no-properties start end))))
     (when (> (length body) 0)
-      (cmacs-libreclaw-send-message
-       cmacs-libreclaw-room-channel
-       cmacs-libreclaw-room-id
-       body)
+      (cond
+       ((string= cmacs-libreclaw-room-channel "bridge")
+        (unless (and (fboundp 'cmacs-libreclaw-remote-connected-p)
+                     (cmacs-libreclaw-remote-connected-p))
+          (user-error
+           "Bridge not connected — M-x cmacs-libreclaw-remote-connect"))
+        (cmacs-libreclaw-remote-send-message
+         cmacs-libreclaw-room-id body))
+       (t
+        (cmacs-libreclaw-send-message
+         cmacs-libreclaw-room-channel
+         cmacs-libreclaw-room-id
+         body)))
       ;; Optimistic local echo.
       (let ((inhibit-read-only t))
         (delete-region start end))

@@ -182,3 +182,122 @@ Release the hatch context.
 @item cmacs-libreclaw-hatch-finalize HANDLE &optional OVERWRITE
 See the Hatch Wizard chapter for the full wizard flow.
 @end table
+
+@subsection Remote mode (libreclaw 0.21.0+)
+
+The remote-mode DEFUNs are available when both
+@code{--with-cmacs-libreclaw} and @code{--with-cmacs-mcp} are
+configured.  See @ref{LibreClaw Remote Mode} for the full narrative.
+
+@table @code
+@item cmacs-libreclaw-remote-connect URL &optional TOKEN
+Elisp autoload, interactive.  Reads URL via @code{read-string} and
+runs it through @code{cmacs-libreclaw-remote--normalize-url} so a
+bare hostname like @code{libreclaw-00} expands to
+@code{ws://libreclaw-00:7077/api/v1/bridge}.  @code{host:port},
+@code{scheme://host}, and full URLs are also accepted.  If TOKEN
+is nil it is fetched via @code{auth-source-search} keyed by the
+normalised URL's host and port (offered for creation if absent).
+Dispatches the underlying C bridge connect asynchronously.
+
+@item cmacs-libreclaw-remote--normalize-url INPUT
+Helper used by @code{cmacs-libreclaw-remote-connect}.  Expands
+shorthand:
+@itemize
+@item INPUT with no scheme gets @code{ws://} prepended.
+@item @code{ws://} URLs without an explicit port get @code{:7077}
+appended.
+@item @code{wss://} URLs without a port keep the scheme default
+(443) --- typical for TLS-terminating reverse proxies.
+@item URLs without a path or with only @code{/} get
+@code{/api/v1/bridge} appended.
+@end itemize
+
+@item cmacs-libreclaw-remote--connect-internal URL TOKEN @
+       &optional DISPLAY-NAME ENDPOINTS USER-ID
+Internal C DEFUN.  Opens the bridge to URL with bearer TOKEN.
+Optional DISPLAY-NAME identifies this client to the remote server.
+Optional ENDPOINTS is a list of endpoint specs (only the symbol
+@code{cmacs} is honoured in 0.21.0 --- wraps cmacs's own MCP tool
+surface).  Default endpoint list is @code{(cmacs)}.  Optional
+USER-ID is the @code{sender_id} stamped on every outbound
+@code{chat.message_out} frame; match against the server's
+@code{session.command_allowed_users} /
+@code{messages.command_allowed_users} to enable session/message
+bot commands.  When omitted the server falls back to the bridge id
+(unstable across reconnects).
+
+@item cmacs-libreclaw-remote-disconnect
+Disconnect the remote bridge if any.  Safe to call twice.  Returns
+@code{t} when something was disconnected, @code{nil} otherwise.
+
+@item cmacs-libreclaw-remote-connected-p
+Return non-nil if the remote bridge is connected.
+
+@item cmacs-libreclaw-remote-send-message ROOM-ID BODY @
+       &optional HTML-BODY
+Send BODY to ROOM-ID over the remote bridge.  Returns @code{t} on
+success, signals @code{cmacs-libreclaw-error} on failure.
+
+@item cmacs-libreclaw-remote-status
+Elisp interactive.  Prints a one-line status line to the
+@code{*Messages*} buffer.
+
+@item cmacs-libreclaw-remote-chat
+Elisp autoload, interactive.  Opens (or pops to) the bridge's
+local-style chat buffer @file{*libreclaw:bridge:local*}.
+Equivalent to libreclaw's built-in local CLI channel, but flowing
+over the bridge.  Idempotent --- multiple invocations reuse the
+same buffer.
+
+@item cmacs-libreclaw-remote-open-room ROOM-ID &optional ROOM-NAME
+Elisp autoload, interactive.  Open or create a bridge room buffer
+for ROOM-ID.  Useful for picking a specific room id on the remote
+server.
+@end table
+
+@subsubsection Customisation
+
+@table @code
+@item cmacs-libreclaw-remote-mcp-servers
+defcustom.  List of endpoint specs to expose to the remote libreclaw.
+Default @code{(cmacs)}.  Future spec kinds (@code{:stdio CMD},
+@code{:unix-socket PATH}, @code{:ws URL}) are reserved; unknown
+entries are silently ignored.
+
+@item cmacs-libreclaw-remote-display-name
+defcustom.  Display name advertised to the remote server.
+
+@item cmacs-libreclaw-remote-user-id
+defcustom.  Default @code{nil}.  Stable @code{sender_id} stamped on
+every outbound bridge chat frame; this is what the libreclaw
+server's @code{session.command_allowed_users} and
+@code{messages.command_allowed_users} lists match against.  When
+@code{nil}, resolved at connect time to @code{$USER}, then
+@code{(user-login-name)}, then to @code{nil} (server falls back to
+the unstable bridge id).  Set explicitly for non-shell identities
+(e.g. @code{"@@zach:matrix.example.com"}).  Reconnect for changes
+to take effect.
+
+@item cmacs-libreclaw-remote-local-room-id
+defcustom.  Room id used by @code{cmacs-libreclaw-remote-chat}.
+Default @code{"local"}.
+
+@item cmacs-libreclaw-remote-local-room-name
+defcustom.  Buffer display label for the local-style chat buffer.
+Default @code{"Bridge"}.
+@end table
+
+@subsubsection Signal hooks
+
+Called from C via the dispatch helper.  Override in user Elisp to
+customise.
+
+@table @code
+@item cmacs-libreclaw-remote--on-chat-message CHANNEL ROOM SENDER BODY
+@item cmacs-libreclaw-remote--on-room-added ROOM-ID
+@item cmacs-libreclaw-remote--on-room-removed ROOM-ID
+@item cmacs-libreclaw-remote--on-connected
+@item cmacs-libreclaw-remote--on-disconnected
+@item cmacs-libreclaw-remote--on-error MSG
+@end table

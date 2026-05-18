@@ -202,6 +202,34 @@ basename.
 If non-nil, persist on kill/save (default @code{t}).
 @end table
 
+@subsection Customization (remote mode)
+
+These apply only to ``remote'' mode (see @ref{LibreClaw Remote Mode}).
+The load-bearing ones for chat/command behaviour are:
+
+@table @code
+@item cmacs-libreclaw-remote-mcp-servers
+List of MCP endpoint specs exposed to the remote server.  Default
+@code{(cmacs)}.
+@item cmacs-libreclaw-remote-display-name
+Display name advertised to the remote server (default @code{nil}).
+@item cmacs-libreclaw-remote-user-id
+Stable @code{sender_id} stamped on every outbound bridge chat
+frame (default @code{nil}).  When nil, resolved at connect time to
+@code{$USER}, then @code{(user-login-name)}, then to @code{nil}
+(server falls back to the unstable bridge id).  This is what
+libreclaw's @code{session.command_allowed_users} /
+@code{messages.command_allowed_users} lists match against to
+enable session/message bot commands like @code{!close_session},
+@code{!swap_model}, @code{!stop}, @code{!sessions}.
+@item cmacs-libreclaw-remote-local-room-id
+Room id used by @code{cmacs-libreclaw-remote-chat} (default
+@code{"local"}).
+@item cmacs-libreclaw-remote-local-room-name
+Display label for the local-style chat buffer (default
+@code{"Bridge"}).
+@end table
+
 @subsection Per-project session persistence
 
 The cmacs channel writes two kinds of state to disk, keyed off

@@ -770,16 +770,17 @@ fi
 if test "$with_cmacs_libreclaw" != "no"; then
   if test "$with_cmacs_libreclaw" = "system"; then
     # Use system-installed libreclaw (for distro packaging)
-    PKG_CHECK_MODULES([CMACS_LIBRECLAW], [libreclaw >= 0.18.0])
+    PKG_CHECK_MODULES([CMACS_LIBRECLAW], [libreclaw >= 0.21.0])
   else
     # Build liblc-1.0 from deps/libreclaw/ (default).  Pull in the
     # full dep set libreclaw needs: libsoup-3.0 for Matrix, libetpan
     # for IMAP/SMTP, libpq for postgres audit, libcmark for markdown
-    # rendering, sqlite3 for audit log, plus json-glib and yaml.
+    # rendering, sqlite3 for audit log, plus json-glib and yaml,
+    # libdex-1 (added in 0.21.0 for embedded mcp-glib in the bridge).
     PKG_CHECK_MODULES([CMACS_LIBRECLAW_DEPS],
       [glib-2.0 gobject-2.0 gio-2.0 gio-unix-2.0 gmodule-2.0
        libsoup-3.0 json-glib-1.0 libcmark sqlite3 libetpan libpq
-       yaml-0.1])
+       yaml-0.1 libdex-1])
     CMACS_LIBRECLAW_CFLAGS="-I\$(srcdir)/../deps/libreclaw/src \
       -I\$(srcdir)/../deps/libreclaw/build/release \
       -I\$(srcdir)/../deps/libreclaw/deps/ai-glib/src \
@@ -803,6 +804,7 @@ if test "$with_cmacs_libreclaw" != "no"; then
   CMACS_LIBRECLAW_OBJ="cmacs-libreclaw.o cmacs-libreclaw-config.o \
     cmacs-libreclaw-room.o cmacs-libreclaw-marshal.o \
     cmacs-libreclaw-hatch.o cmacs-libreclaw-cmacs-channel.o \
+    cmacs-libreclaw-remote.o \
     pod-cmacs-libreclaw-module.o"
 fi
 if test "$with_cmacs_org_ex" != "no"; then

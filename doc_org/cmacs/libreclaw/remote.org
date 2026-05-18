@@ -1,0 +1,296 @@
+#+TITLE: LibreClaw Remote Mode
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: ^:nil
+
+* Overview
+
+The "remote" mode of ~cmacs-libreclaw~ dials *out* from cmacs to a
+separately-running libreclaw server at its bridge endpoint
+(=/api/v1/bridge=, WebSocket), and tunnels cmacs's own MCP tool
+surface back across the connection.  The remote server treats the
+bridge as a first-class chat channel — any room it serves can route
+messages into cmacs, and the agent running on the remote server can
+invoke cmacs's MCP tools as if cmacs were local to it.
+
+This is the counterpart to *embedded* mode (the default), in which
+cmacs starts its own ~LcApp~ in-process via
+~(cmacs-libreclaw-start)~.
+
+** Why two modes?
+
+| Mode      | Where libreclaw runs       | Use case                                |
+|-----------+----------------------------+-----------------------------------------|
+| embedded  | In the cmacs process       | Single-user desktop, lowest latency     |
+| remote    | A separate server          | Shared rooms, server-side rate limits,  |
+|           |                            | shared tool surface across many editors |
+
+* Architecture
+
+#+BEGIN_SRC text
+[ remote libreclaw server ]                  [ local cmacs ]
+
+ LcBridgeServer (libsoup3 WSS)          ⇌    LcBridgeClient
+   ↓ on accept                                  ↓ McpServer (cmacs's
+ LcBridgeChannel  (impl LcChannel +              tools/resources/
+                   LcBridge)                     prompts registered)
+   ↓                                             ↓ McpMuxTransport
+ LcChannelManager (existing)            ⇌    same wire frames over WSS
+   ↓
+ LcSession / ai-glib  ← LcBridgeToolRegistry
+                        aggregates tools from
+                        every connected bridge
+#+END_SRC
+
+The bridge is a generic substrate, not cmacs-specific.  Any tool host
+that speaks the bridge wire protocol can register as an MCP endpoint
+on the remote server — cmacs is just the first consumer.
+
+* Quick start
+
+** On the server
+
+Edit your libreclaw config:
+
+#+BEGIN_SRC yaml
+bridge:
+  enabled: true
+  bind:    0.0.0.0
+  port:    7077
+  max_connections: 8
+#+END_SRC
+
+Generate a bridge-scoped API key (any name; the key needs scope
+~bridge~):
+
+#+BEGIN_SRC yaml
+- name:       cmacs-zach
+  key:        "<long random string>"
+  scopes:     ["bridge"]
+  rate_limit: 600/min
+#+END_SRC
+
+(In libreclaw 0.21.0 the server-side bridge is built as a library
+target; full YAML auto-wiring lands in a follow-up.  Until then, a
+small embedding wrapper can use ~lc_bridge_server_new~ /
+~lc_bridge_server_start~ directly.)
+
+** On the cmacs side
+
+Set up the bearer token via ~auth-source~ once (=~/.authinfo.gpg=,
+keyed by the host of the URL):
+
+#+BEGIN_SRC text
+machine bridge.example.com port 7077 password <bridge-token>
+#+END_SRC
+
+Then:
+
+#+BEGIN_SRC emacs-lisp
+M-x cmacs-libreclaw-remote-connect RET
+  bridge.example.com RET
+  ;; token auto-fetched from auth-source
+#+END_SRC
+
+The URL prompt accepts shorthand --- a bare hostname expands to
+=ws://HOST:7077/api/v1/bridge= (the libreclaw bridge defaults).
+You can also pass =host:port=, =scheme://host=, or a full URL ---
+see =cmacs-libreclaw-remote--normalize-url= for the rules.  In
+particular, =wss://bridge.example.com= keeps the scheme-default
+port (443) for TLS-terminating reverse proxies.
+
+Check status:
+
+#+BEGIN_SRC emacs-lisp
+(cmacs-libreclaw-remote-connected-p) ; => t
+(cmacs-libreclaw-remote-status)      ; one-line *Messages*
+#+END_SRC
+
+Rooms the remote server serves appear as ~cmacs-libreclaw-room-mode~
+org buffers with channel-id ="bridge"=.  Posting in a buffer with
+the room id sends a ~chat.message_out~ frame; messages from elsewhere
+in the room arrive as ~chat.message_in~ and surface via the existing
+~cmacs-libreclaw--on-message~ handler.
+
+** Local-style chat buffer
+
+For an "always there" chat with the remote agent --- equivalent to
+libreclaw's built-in stdin/stdout local channel, but flowing over
+the bridge --- use:
+
+#+BEGIN_SRC emacs-lisp
+M-x cmacs-libreclaw-remote-chat
+#+END_SRC
+
+This opens (or pops to) a single shared room buffer named
+~*libreclaw:bridge:local*~.  Compose your message in the
+~* Compose~ section and hit ~C-c C-c~ to send.  Replies from the
+remote agent surface in the same buffer.
+
+The buffer uses room id ~"local"~ by default; override with
+~cmacs-libreclaw-remote-local-room-id~ if you want a different id,
+or set ~cmacs-libreclaw-remote-local-room-name~ to change the
+buffer's display label.
+
+For arbitrary room ids:
+
+#+BEGIN_SRC emacs-lisp
+M-x cmacs-libreclaw-remote-open-room
+  some-room-id RET
+  Optional display name RET
+#+END_SRC
+
+How it works end-to-end: cmacs ships ~chat.message_out~ with the
+chosen room id, the server's ~LcBridgeChannel~ decodes it and
+emits ~LcChannel::message-received~ as if the message came from the
+bridge channel, the router routes through a session to your AI
+provider, the response is sent back via
+~lc_channel_send_message_async~ on the bridge channel, encoded as
+~chat.message_in~, and surfaces in your buffer.
+
+* Wire protocol (v1)
+
+Every frame is one WebSocket text message containing a JSON envelope:
+
+#+BEGIN_SRC json
+{ "v": 1, "kind": "<kind>", "id": "<corr-id?>", "payload": { ... } }
+#+END_SRC
+
+Three planes:
+
+| Plane      | Kinds                                                                     |
+|------------+---------------------------------------------------------------------------|
+| ~control.~ | hello, welcome, ping, pong, bye, error                                    |
+| ~chat.~    | message_in, message_out, typing, room.add, room.remove                    |
+| ~mcp.~     | request, response, notify, endpoints_changed                              |
+
+MCP frames are addressed to a named endpoint so a single bridge
+connection can multiplex multiple MCP sub-servers:
+
+#+BEGIN_SRC json
+{ "v":1, "kind": "mcp.request",
+  "payload": { "endpoint": "cmacs",
+               "frame":    { "jsonrpc": "2.0",
+                             "id":      "42",
+                             "method":  "tools/call",
+                             "params":  { "name":"cmacs-eval",
+                                          "arguments": { "form":"(+ 1 2)" } } } } }
+#+END_SRC
+
+Authentication: bearer token on the WSS upgrade ~Authorization~
+header, validated against ~LcApiKey~ entries with scope ~bridge~.
+
+* Enabling bot commands on the bridge (=!close_session= etc.)
+
+By default =M-x cmacs-libreclaw-remote-chat= sends chat through the
+bridge with cmacs's =$USER= as the sender id (or
+~cmacs-libreclaw-remote-user-id~ if you override it).  That sender
+id is what libreclaw's permission system matches against, so to
+unlock the session/message-management bot commands
+(=!close_session=, =!swap_model=, =!stop=, =!sessions=, =!status=,
+=!stats=, =!debug=, =!upgrade=, =!restart=, =!messages=,
+=!rm_message=, …), add your user to libreclaw's allowed-users lists.
+
+On the libreclaw server, in =config.yaml=:
+
+#+BEGIN_SRC yaml
+session:
+  command_allowed_users:
+    - "zach"             # must match the sender_id cmacs sends
+
+messages:
+  command_allowed_users:
+    - "zach"
+#+END_SRC
+
+On cmacs, the simplest setup is to do nothing — the default value
+of ~cmacs-libreclaw-remote-user-id~ resolves to =$USER= (falling
+back to ~(user-login-name)~).  If your shell user name matches the
+entry in =command_allowed_users= you're done.
+
+If you want a different identity (e.g. the matrix-style fully
+qualified user id), set it explicitly:
+
+#+BEGIN_SRC emacs-lisp
+(setq cmacs-libreclaw-remote-user-id "@zach:matrix.example.com")
+#+END_SRC
+
+Reconnect for the change to take effect — sender id is stamped at
+connect time.
+
+| State                                              | sender_id sent                         |
+|----------------------------------------------------+----------------------------------------|
+| ~cmacs-libreclaw-remote-user-id~ set to a string   | that string verbatim                   |
+| left ~nil~ and =$USER= is set                      | =$USER=                                |
+| both unset                                         | ~(user-login-name)~                    |
+| even that fails                                    | server falls back to bridge id (=bridge:<key>:<seq>=) |
+
+The bridge-id fallback is awkward because the sequence number
+increments per connection — entries you put in
+~command_allowed_users~ go stale every reconnect.  Pick a stable
+identity instead.
+
+After =!help= in a bridge room, you should see the full session and
+message command blocks if your user is allowed.
+
+* Server-side knobs that affect bridge traffic
+
+These are libreclaw config options (not cmacs config); listed here
+because they're load-bearing for the remote-mode user experience.
+
+** =channels.bridge.model= --- pin a model for bridge channels
+
+Added in libreclaw 0.21.0.  When set, every bridge channel uses the
+specified model and smart routing is suppressed for those turns:
+
+#+BEGIN_SRC yaml
+channels:
+  bridge:
+    model: "opus"
+    # model: "claude-opus-tmux"   # named provider from providers: block
+#+END_SRC
+
+A per-message =$OVERRIDE(model=<x>)= directive in the body still
+wins (and likewise skips routing), so you can carve out one-off
+escalations without changing the default.
+
+Resolution order for a bridge message:
+
+1. global =ai.model= / =ai.provider=
+2. =channels.bridge.model= --- suppresses smart routing
+3. =routing.*= --- only consulted if step 2 is unset
+4. =$OVERRIDE(model=...)= in the message body --- always wins
+
+** =libreclaw-bridge-mcp= shim --- driving cmacs from a server-side claude-code
+
+The libreclaw repo ships a small stdio MCP binary
+(=libreclaw-bridge-mcp=) that lets a claude-code running on the
+libreclaw server box invoke cmacs MCP tools through the bridge,
+without needing a direct socket connection to cmacs.
+
+Flow: =claude-code (stdio) → libreclaw-bridge-mcp → /api/v1/bridge/tools/call (REST) → bridge → cmacs= (and the response retraces).
+
+Setup is documented in =deps/libreclaw/docs/bridge.md=
+("libreclaw-bridge-mcp shim").  Briefly: install the binary on the
+server, issue an API key with scopes =bridge.read= +
+=bridge.invoke=, add an entry to claude-code's =.mcp.json= that
+runs =libreclaw-bridge-mcp= with =--api-url= and =--token-env=, and
+restart claude-code.  Tools are enumerated at shim startup.
+
+* Exposing additional MCP servers
+
+The default ~cmacs-libreclaw-remote-mcp-servers~ is ~(cmacs)~ — the
+symbol ~cmacs~ wraps cmacs's own MCP tool / resource / prompt
+surface as endpoint id ="cmacs"=.  Future spec kinds
+(~:stdio CMD~, ~:unix-socket PATH~, ~:ws URL~) are reserved; unknown
+entries are silently ignored in 0.21.0.
+
+* Troubleshooting
+
+| Symptom                                         | Likely cause                                                                                              |
+|-------------------------------------------------+-----------------------------------------------------------------------------------------------------------|
+| ~cmacs-libreclaw-error: remote bridge not connected~ | Connect didn't reach the server — check URL, firewall, that the libreclaw bridge listener is up          |
+| Connect succeeds but rooms never appear         | The remote server's bridge listener accepted the connection but the agent isn't routing rooms to it yet  |
+| MCP tool calls hang on the server side          | The matching tool isn't registered on cmacs's MCP server; check ~(cmacs-mcp-server-p)~ is non-nil        |
+
+See also: =doc_org/cmacs/libreclaw/api.org= for the full DEFUN
+reference and =deps/libreclaw/src/bridge/= for the wire-level codec.

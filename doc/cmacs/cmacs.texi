@@ -5168,11 +5168,13 @@ system-installed @code{bacon-1.0} via pkg-config instead.
   @tab Automation engine (system package)
 @item cmacs-libreclaw (bundled) @tab glib-2.0 gio-2.0 gio-unix-2.0
   gmodule-2.0 libsoup-3.0 json-glib-1.0 libcmark sqlite3 libetpan
-  libpq yaml-0.1
-  @tab LibreClaw chat/Matrix (built from deps/libreclaw/, needs
-  libreclaw >= 0.18.0)
-@item cmacs-libreclaw (system) @tab libreclaw >= 0.18.0
-  @tab LibreClaw chat/Matrix (system package)
+  libpq yaml-0.1 libdex-1
+  @tab LibreClaw chat/Matrix gateway with embedded + remote
+  (bridge) modes (built from deps/libreclaw/, needs libreclaw
+  >= 0.21.0; libdex-1 is new in 0.21 for the bridge subsystem's
+  embedded mcp-glib)
+@item cmacs-libreclaw (system) @tab libreclaw >= 0.21.0
+  @tab LibreClaw chat/Matrix + remote bridge (system package)
 @item cmacs-org-ex @tab glib-2.0 gobject-2.0 gio-2.0
   @tab Org-Ex widgets (built from cmacs/org-ex/lib/)
 @item cmacs-mcp (bundled) @tab glib-2.0 gio-2.0 json-glib-1.0
