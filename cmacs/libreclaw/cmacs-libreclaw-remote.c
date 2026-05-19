@@ -215,6 +215,41 @@ build_self_mcp_server (void)
 }
 #endif
 
+/* Fully tear down the current bridge client and the self MCP server
+ * it was paired with.  Disconnecting the signal handlers BEFORE
+ * dropping our ref matters: an in-flight `lc_bridge_client_connect_async'
+ * still holds a GTask ref, so without an explicit disconnect a late
+ * "error"/"connected"/"disconnected" emission from the abandoned
+ * client would fire `forward_to_lisp_*' and pollute the next
+ * connection's Elisp event stream.  No-op when no client is set. */
+static void
+remote_teardown_client (void)
+{
+  if (cmacs_bridge_client == NULL)
+    return;
+
+  if (sig_chat_msg_id != 0)
+    g_signal_handler_disconnect (cmacs_bridge_client, sig_chat_msg_id);
+  if (sig_chat_room_add != 0)
+    g_signal_handler_disconnect (cmacs_bridge_client, sig_chat_room_add);
+  if (sig_chat_room_rm != 0)
+    g_signal_handler_disconnect (cmacs_bridge_client, sig_chat_room_rm);
+  if (sig_connected_id != 0)
+    g_signal_handler_disconnect (cmacs_bridge_client, sig_connected_id);
+  if (sig_disconnected_id != 0)
+    g_signal_handler_disconnect (cmacs_bridge_client, sig_disconnected_id);
+  if (sig_error_id != 0)
+    g_signal_handler_disconnect (cmacs_bridge_client, sig_error_id);
+  sig_chat_msg_id = sig_chat_room_add = sig_chat_room_rm = 0;
+  sig_connected_id = sig_disconnected_id = sig_error_id = 0;
+
+  /* Idempotent against a never-connected or already-disconnected
+   * client; cancels the transport when a connect is still in flight. */
+  lc_bridge_client_disconnect_async (cmacs_bridge_client, NULL, NULL, NULL);
+  g_clear_object (&cmacs_bridge_client);
+  g_clear_object (&cmacs_bridge_self_server);
+}
+
 /* ── DEFUNs ────────────────────────────────────────────────────────── */
 
 DEFUN ("cmacs-libreclaw-remote--connect-internal",
@@ -241,9 +276,18 @@ Returns t on dispatch.  */)
   CHECK_STRING (url);
   CHECK_STRING (token);
 
-  if (cmacs_bridge_client != NULL)
+  if (cmacs_bridge_client != NULL
+      && lc_bridge_client_is_connected (cmacs_bridge_client))
     xsignal1 (Qcmacs_libreclaw_error,
               build_string ("remote bridge already connected"));
+
+  /* Stale client (created but never connected, or cleanly
+   * disconnected without Fdisconnect, or the server dropped us):
+   * tear it down completely — including the self MCP server, the
+   * signal handlers, and any in-flight connect — so we start from
+   * a clean slate. */
+  if (cmacs_bridge_client != NULL)
+    remote_teardown_client ();
 
   /* The bridge dispatches inbound MCP frames onto its main context;
    * use cmacs's GLib context (the one the GLib loop hook pumps)
@@ -335,25 +379,7 @@ twice.  Returns t when something was disconnected, nil otherwise.  */)
 {
   if (cmacs_bridge_client == NULL)
     return Qnil;
-
-  if (sig_chat_msg_id != 0)
-    g_signal_handler_disconnect (cmacs_bridge_client, sig_chat_msg_id);
-  if (sig_chat_room_add != 0)
-    g_signal_handler_disconnect (cmacs_bridge_client, sig_chat_room_add);
-  if (sig_chat_room_rm != 0)
-    g_signal_handler_disconnect (cmacs_bridge_client, sig_chat_room_rm);
-  if (sig_connected_id != 0)
-    g_signal_handler_disconnect (cmacs_bridge_client, sig_connected_id);
-  if (sig_disconnected_id != 0)
-    g_signal_handler_disconnect (cmacs_bridge_client, sig_disconnected_id);
-  if (sig_error_id != 0)
-    g_signal_handler_disconnect (cmacs_bridge_client, sig_error_id);
-  sig_chat_msg_id = sig_chat_room_add = sig_chat_room_rm = 0;
-  sig_connected_id = sig_disconnected_id = sig_error_id = 0;
-
-  lc_bridge_client_disconnect_async (cmacs_bridge_client, NULL, NULL, NULL);
-  g_clear_object (&cmacs_bridge_client);
-  g_clear_object (&cmacs_bridge_self_server);
+  remote_teardown_client ();
   return Qt;
 }
 
