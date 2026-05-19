@@ -1085,6 +1085,45 @@ a project buffer, stop cleanly."
       (when (file-directory-p ws) (delete-directory ws t))
       (when (file-directory-p hist-dir) (delete-directory hist-dir t)))))
 
+(ert-deftest cmacs-libreclaw-remote-stale-client-reconnect ()
+  "Regression: calling `cmacs-libreclaw-remote--connect-internal'
+a second time must not signal \"remote bridge already connected\"
+when the first attempt never reached the CONNECTED state (e.g.
+the WebSocket handshake failed or the server was unreachable).
+
+Before the fix, `cmacs_bridge_client != NULL' was used as the
+guard, so a stale client left by a failed connect would block
+every subsequent connect attempt."
+  (skip-unless (fboundp 'cmacs-libreclaw-remote--connect-internal))
+  ;; Ensure clean state going in.
+  (when (and (fboundp 'cmacs-libreclaw-remote-connected-p)
+             (cmacs-libreclaw-remote-connected-p))
+    (cmacs-libreclaw-remote-disconnect))
+  ;; First attempt: deliberately bad URL — async connect will fail
+  ;; but the C DEFUN returns t immediately after creating the client.
+  (cmacs-libreclaw-remote--connect-internal
+   "ws://127.0.0.1:19999/api/v1/bridge"   ; nothing listening here
+   "dummy-token" nil nil nil)
+  ;; Client object is now non-NULL but not yet CONNECTED.
+  (should-not (cmacs-libreclaw-remote-connected-p))
+  ;; Second attempt must NOT signal "remote bridge already connected".
+  ;; It should either succeed (if somehow connected) or fail for a
+  ;; different reason (transport error, auth, etc.) — the critical
+  ;; invariant is that it does not signal the stale-client error.
+  (should-not
+   (condition-case err
+       (progn
+         (cmacs-libreclaw-remote--connect-internal
+          "ws://127.0.0.1:19999/api/v1/bridge"
+          "dummy-token" nil nil nil)
+         nil)
+     (cmacs-libreclaw-error
+      (string= (cadr err) "remote bridge already connected"))))
+  ;; Clean up.
+  (when (and (fboundp 'cmacs-libreclaw-remote-connected-p)
+             (cmacs-libreclaw-remote-connected-p))
+    (cmacs-libreclaw-remote-disconnect)))
+
 (provide 'cmacs-libreclaw-tests)
 
 ;;; cmacs-libreclaw-tests.el ends here

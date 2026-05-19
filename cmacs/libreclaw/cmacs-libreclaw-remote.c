@@ -241,9 +241,16 @@ Returns t on dispatch.  */)
   CHECK_STRING (url);
   CHECK_STRING (token);
 
-  if (cmacs_bridge_client != NULL)
+  if (cmacs_bridge_client != NULL
+      && lc_bridge_client_is_connected (cmacs_bridge_client))
     xsignal1 (Qcmacs_libreclaw_error,
               build_string ("remote bridge already connected"));
+
+  /* Stale client (created but never connected, or cleanly
+   * disconnected without Fdisconnect): drop it so we can
+   * create a fresh one below. */
+  if (cmacs_bridge_client != NULL)
+    g_clear_object (&cmacs_bridge_client);
 
   /* The bridge dispatches inbound MCP frames onto its main context;
    * use cmacs's GLib context (the one the GLib loop hook pumps)
