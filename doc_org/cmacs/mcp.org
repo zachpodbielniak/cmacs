@@ -48,7 +48,7 @@ Multiple concurrent client sessions are supported.
 
 * Tools
 
-The server exposes tools in eight categories.
+The server exposes tools in ten categories.
 
 ** eval --- Elisp Evaluation
 
@@ -114,6 +114,31 @@ is reachable through it.
 | =profiler_stop=       | Stop the profiler                                  |
 | =profiler_report=     | Get the profiler report                            |
 
+** edit --- Editing and Search
+
+| Tool                  | Description                                        |
+|-----------------------+----------------------------------------------------|
+| =edit_buffer=         | Replace an exact substring (unique unless replace_all) |
+| =replace_in_buffer=   | Regexp search-and-replace across a buffer          |
+| =search_buffer=       | Search a buffer for a regexp, return matching lines |
+| =goto_line=           | Move point to a 1-based line number                |
+| =project_grep=        | Recursively grep a directory tree (=.git= excluded) |
+
+** shell --- Shell, Scripting and Media (optional)
+
+Each tool is available when CMacs is built with the corresponding
+subsystem.
+
+| Tool                    | Subsystem  | Description                            |
+|-------------------------+------------+----------------------------------------|
+| =bacon_eval=            | bacon      | Run a command in the embedded shell    |
+| =crispy_eval=           | crispy     | Compile and run an inline C snippet    |
+| =podomation_emit_event= | podomation | Emit an event into the automation engine |
+| =podomation_list_pods=  | podomation | List active pods and health            |
+| =podomation_eval_dsl=   | podomation | Parse and execute a DSL source string  |
+| =video_list=            | video      | List live video stream handles         |
+| =video_snapshot=        | video      | Capture a video frame as a PNG image    |
+
 ** gi --- GObject Introspection (optional)
 
 Available when CMacs is built with =--with-cmacs-gi=.
@@ -141,6 +166,13 @@ Available when CMacs is built with =--with-cmacs-gowl=.
 | =gowl_reload_config=          | Reload the compositor configuration                    |
 | =gowl_lock=                   | Lock the session                                       |
 | =gowl_unlock=                 | Unlock the session                                     |
+| =gowl_focus_client=           | Focus the client matching a pattern                    |
+| =gowl_close_client=           | Close the client matching a pattern                    |
+| =gowl_set_client_geometry=    | Move and resize a client in one call                   |
+| =gowl_set_layout=             | Set the tiling layout (tile/monocle/float)             |
+| =gowl_workspace_list=         | List workspaces                                        |
+| =gowl_workspace_switch=       | Switch to a workspace by id                            |
+| =gowl_screenshot=             | Capture the desktop or a client as a PNG image          |
 
 * Resources
 
@@ -152,6 +184,9 @@ MCP resources expose Emacs state as readable URIs.
 | =file://{path}=         | Read a file from the filesystem                  |
 | =messages://=           | Contents of the =*Messages*= buffer              |
 | =variable://{name}=     | Current value of an Elisp variable               |
+| =process://{name}=      | Output buffer of a named subprocess              |
+| =keybinds://=           | All gowl keybindings as JSON (gowl builds)       |
+| =screenshot://frame=    | A fresh PNG screenshot of the desktop (gowl builds) |
 
 * Prompts
 
@@ -174,6 +209,16 @@ Review code in an Emacs buffer with file info and content.
 | Argument         | Required | Description                               |
 |------------------+----------+-------------------------------------------|
 | =buffer=         | no       | Buffer to review (defaults to current)    |
+
+** gowl_layout
+
+Compositor state context: current layout, clients, monitors, and
+workspaces.  Available on gowl builds; takes no arguments.
+
+** automation_author
+
+Authoring context for podomation: loaded modules, active pods, and
+engine status.  Available on podomation builds; takes no arguments.
 
 * cmacs-mcp Shim Binary
 
@@ -275,6 +320,8 @@ MCP support is auto-detected when the =mcp-glib= library is available.
 | =cmacs/mcp/cmacs-mcp-tools-debug.c=    | Debugging and profiler tools           |
 | =cmacs/mcp/cmacs-mcp-tools-gi.c=       | GObject Introspection tools            |
 | =cmacs/mcp/cmacs-mcp-tools-gowl.c=     | Wayland compositor tools               |
+| =cmacs/mcp/cmacs-mcp-tools-edit.c=     | Editing and search tools               |
+| =cmacs/mcp/cmacs-mcp-tools-shell.c=    | Shell, scripting and media tools       |
 | =cmacs/mcp/cmacs-mcp-resources.c=      | Resource handlers                      |
 | =cmacs/mcp/cmacs-mcp-prompts.c=        | Prompt templates                       |
 | =tools/cmacs-mcp/cmacs-mcp.c=          | Shim binary (stdio-to-socket relay)    |

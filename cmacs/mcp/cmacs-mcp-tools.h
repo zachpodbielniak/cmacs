@@ -25,6 +25,8 @@ void cmacs_mcp_tools_window_register  (McpServer *server);
 void cmacs_mcp_tools_input_register   (McpServer *server);
 void cmacs_mcp_tools_process_register (McpServer *server);
 void cmacs_mcp_tools_debug_register   (McpServer *server);
+void cmacs_mcp_tools_edit_register    (McpServer *server);
+void cmacs_mcp_tools_shell_register   (McpServer *server);
 
 #ifdef HAVE_CMACS_GI
 void cmacs_mcp_tools_gi_register      (McpServer *server);
@@ -44,6 +46,12 @@ void cmacs_mcp_register_prompts   (McpServer *server);
 
 /* Helper: parse a JSON schema string into a JsonNode (cached). */
 JsonNode *cmacs_mcp_schema_from_string (const gchar *json_str);
+
+/* Helper: read the PNG file at PATH, base64-encode it, attach it to
+   RESULT as image content, and unlink PATH.  Returns TRUE on success;
+   on failure RESULT is left untouched and PATH is not removed. */
+gboolean cmacs_mcp_result_add_png_file (McpToolResult *result,
+                                        const gchar   *path);
 
 #endif /* HAVE_CMACS_MCP */
 #endif /* CMACS_MCP_TOOLS_H */

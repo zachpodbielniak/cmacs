@@ -831,7 +831,8 @@ if test "$with_cmacs_mcp" != "no"; then
   CMACS_MCP_OBJ="cmacs-mcp.o cmacs-mcp-tools.o cmacs-mcp-tools-eval.o \
     cmacs-mcp-tools-buffer.o cmacs-mcp-tools-window.o cmacs-mcp-tools-input.o \
     cmacs-mcp-tools-process.o cmacs-mcp-tools-debug.o cmacs-mcp-tools-gi.o \
-    cmacs-mcp-tools-gowl.o cmacs-mcp-resources.o cmacs-mcp-prompts.o"
+    cmacs-mcp-tools-gowl.o cmacs-mcp-tools-edit.o cmacs-mcp-tools-shell.o \
+    cmacs-mcp-resources.o cmacs-mcp-prompts.o"
   if test "$with_cmacs_cintrospect" != "no"; then
     CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-cintrospect.o"
   fi

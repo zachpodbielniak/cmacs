@@ -12,6 +12,7 @@
 #include "cmacs-mcp-tools.h"
 
 #include <json-glib/json-glib.h>
+#include <glib/gstdio.h>
 
 /* ── Schema helper ────────────────────────────────────────────────── */
 
@@ -30,6 +31,26 @@ cmacs_mcp_schema_from_string (const gchar *json_str)
   return json_node_copy (json_parser_get_root (parser));
 }
 
+/* ── Image content helper ─────────────────────────────────────────── */
+
+gboolean
+cmacs_mcp_result_add_png_file (McpToolResult *result, const gchar *path)
+{
+  g_autofree gchar *data = NULL;
+  g_autofree gchar *b64 = NULL;
+  gsize len = 0;
+
+  if (path == NULL
+      || !g_file_get_contents (path, &data, &len, NULL)
+      || len == 0)
+    return FALSE;
+
+  b64 = g_base64_encode ((const guchar *) data, len);
+  mcp_tool_result_add_image (result, b64, "image/png");
+  g_unlink (path);
+  return TRUE;
+}
+
 /* ── Master registration ──────────────────────────────────────────── */
 
 void
@@ -41,6 +62,8 @@ cmacs_mcp_register_all_tools (McpServer *server)
   cmacs_mcp_tools_input_register (server);
   cmacs_mcp_tools_process_register (server);
   cmacs_mcp_tools_debug_register (server);
+  cmacs_mcp_tools_edit_register (server);
+  cmacs_mcp_tools_shell_register (server);
 
 #ifdef HAVE_CMACS_GI
   cmacs_mcp_tools_gi_register (server);

@@ -159,6 +159,125 @@ handle_code_review (McpServer  *server,
   return result;
 }
 
+#ifdef HAVE_CMACS_GOWL
+/* ── gowl_layout ──────────────────────────────────────────────────── */
+
+static McpPromptResult *
+handle_gowl_layout (McpServer  *server,
+                    const gchar *name,
+                    GHashTable  *arguments,
+                    gpointer     user_data)
+{
+  GString *text;
+  McpPromptResult *result;
+  McpPromptMessage *msg;
+  g_autoptr (GError) err = NULL;
+
+  (void) server;
+  (void) name;
+  (void) arguments;
+  (void) user_data;
+
+  text = g_string_new (
+    "Current gowl Wayland compositor state.\n\n");
+
+  {
+    g_autofree gchar *layout = cmacs_dispatch_eval (
+      "(prin1-to-string (gowl-get-layout))", &err);
+    if (layout != NULL)
+      g_string_append_printf (text, "Layout: %s\n\n", layout);
+  }
+
+  {
+    g_autofree gchar *clients = cmacs_dispatch_gowl_list_clients (&err);
+    if (clients != NULL)
+      g_string_append_printf (text, "Clients:\n%s\n\n", clients);
+  }
+
+  {
+    g_autofree gchar *monitors = cmacs_dispatch_gowl_list_monitors (&err);
+    if (monitors != NULL)
+      g_string_append_printf (text, "Monitors:\n%s\n\n", monitors);
+  }
+
+  {
+    g_autofree gchar *workspaces = cmacs_dispatch_eval (
+      "(prin1-to-string (gowl-workspace-list))", &err);
+    if (workspaces != NULL)
+      g_string_append_printf (text, "Workspaces:\n%s\n", workspaces);
+  }
+
+  result = mcp_prompt_result_new (
+    "Compositor layout context for the running gowl session");
+  msg = mcp_prompt_message_new (MCP_ROLE_USER);
+  mcp_prompt_message_add_text (msg, text->str);
+  mcp_prompt_result_add_message (result, msg);
+
+  g_string_free (text, TRUE);
+  mcp_prompt_message_unref (msg);
+
+  return result;
+}
+#endif /* HAVE_CMACS_GOWL */
+
+#ifdef HAVE_CMACS_PODOMATION
+/* ── automation_author ────────────────────────────────────────────── */
+
+static McpPromptResult *
+handle_automation_author (McpServer  *server,
+                          const gchar *name,
+                          GHashTable  *arguments,
+                          gpointer     user_data)
+{
+  GString *text;
+  McpPromptResult *result;
+  McpPromptMessage *msg;
+  g_autoptr (GError) err = NULL;
+
+  (void) server;
+  (void) name;
+  (void) arguments;
+  (void) user_data;
+
+  text = g_string_new (
+    "Author a podomation automation. The podomation engine reacts to "
+    "events with pods written in its DSL.\n\n");
+
+  {
+    g_autofree gchar *modules = cmacs_dispatch_eval (
+      "(prin1-to-string (cmacs-podomation-list-modules))", &err);
+    if (modules != NULL)
+      g_string_append_printf (text, "Loaded modules:\n%s\n\n", modules);
+  }
+
+  {
+    g_autofree gchar *pods = cmacs_dispatch_eval (
+      "(prin1-to-string (cmacs-podomation-list-pods))", &err);
+    if (pods != NULL)
+      g_string_append_printf (text, "Active pods:\n%s\n\n", pods);
+  }
+
+  {
+    g_autofree gchar *running = cmacs_dispatch_eval (
+      "(if (cmacs-podomation-running-p) \"running\" \"stopped\")",
+      &err);
+    if (running != NULL)
+      g_string_append_printf (text, "Engine: %s\n", running);
+  }
+
+  result = mcp_prompt_result_new (
+    "Authoring context for the podomation automation engine");
+  msg = mcp_prompt_message_new (MCP_ROLE_USER);
+  mcp_prompt_message_add_text (msg, text->str);
+  mcp_prompt_result_add_message (result, msg);
+
+  g_string_free (text, TRUE);
+  mcp_prompt_message_unref (msg);
+
+  return result;
+}
+#endif /* HAVE_CMACS_PODOMATION */
+
 /* ── Registration ─────────────────────────────────────────────────── */
 
 void
@@ -186,6 +305,26 @@ cmacs_mcp_register_prompts (McpServer *server)
   mcp_server_add_prompt (server, prompt,
     handle_code_review, NULL, NULL);
   g_object_unref (prompt);
+
+#ifdef HAVE_CMACS_GOWL
+  /* gowl_layout */
+  prompt = mcp_prompt_new ("gowl_layout",
+    "Compositor state context: current layout, clients, monitors, "
+    "and workspaces.");
+  mcp_server_add_prompt (server, prompt,
+    handle_gowl_layout, NULL, NULL);
+  g_object_unref (prompt);
+#endif
+
+#ifdef HAVE_CMACS_PODOMATION
+  /* automation_author */
+  prompt = mcp_prompt_new ("automation_author",
+    "Authoring context for podomation: loaded modules, active pods, "
+    "and engine status.");
+  mcp_server_add_prompt (server, prompt,
+    handle_automation_author, NULL, NULL);
+  g_object_unref (prompt);
+#endif
 }
 
 #endif /* HAVE_CMACS_MCP */

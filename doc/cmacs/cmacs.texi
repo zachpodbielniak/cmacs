@@ -4199,6 +4199,50 @@ Stop the profiler.
 Return the profiler report as text.
 @end table
 
+@subsection edit
+
+@table @code
+@item edit_buffer
+Replace an exact substring in a buffer.  The match must be unique
+unless @code{replace_all} is given.
+@item replace_in_buffer
+Regexp search-and-replace across a whole buffer.
+@item search_buffer
+Search a buffer for a regexp; return up to 200 matching lines.
+@item goto_line
+Move point to a 1-based line number, updating any window showing
+the buffer.
+@item project_grep
+Recursively grep for a pattern under a directory (defaults to the
+current @code{default-directory}; @file{.git} is excluded).
+@end table
+
+@subsection shell (conditional)
+
+Each tool is registered when CMacs is built with the corresponding
+subsystem.
+
+@table @code
+@item bacon_eval
+Run a command in the embedded bacon shell (requires
+@option{--with-cmacs-bacon}).
+@item crispy_eval
+Compile and run an inline crispy C snippet (requires
+@option{--with-cmacs-crispy}).
+@item podomation_emit_event
+Emit an event into the podomation automation engine (requires
+@option{--with-cmacs-podomation}).
+@item podomation_list_pods
+List active podomation pods and their health.
+@item podomation_eval_dsl
+Parse and execute a podomation DSL source string.
+@item video_list
+List live cmacs-video stream handles (requires
+@option{--with-cmacs-video}).
+@item video_snapshot
+Capture the current frame of a video stream as a PNG image.
+@end table
+
 @subsection gi (conditional)
 
 These tools are registered only when CMacs is built with
@@ -4245,6 +4289,21 @@ Reload the compositor configuration from YAML.
 Lock the session.
 @item gowl_unlock
 Unlock the session.
+@item gowl_focus_client
+Give keyboard focus to the client matching a pattern.
+@item gowl_close_client
+Close the client matching a pattern.
+@item gowl_set_client_geometry
+Move and resize a matching client in one call.
+@item gowl_set_layout
+Set the tiling layout: @code{tile}, @code{monocle}, or @code{float}.
+@item gowl_workspace_list
+List workspaces.
+@item gowl_workspace_switch
+Switch to a workspace by id.
+@item gowl_screenshot
+Capture the desktop (or a matching client) and return it as a PNG
+image.
 @end table
 
 @section Resources
@@ -4261,6 +4320,12 @@ Contents of a file on disk.
 The @code{*Messages*} buffer (subscribable for live updates).
 @item variable://@var{name}
 The value of an Elisp variable.
+@item process://@var{name}
+The output buffer of a named subprocess.
+@item keybinds://
+All gowl compositor keybindings as JSON (gowl builds only).
+@item screenshot://frame
+A fresh PNG screenshot of the whole desktop (gowl builds only).
 @end table
 
 @section Prompts
@@ -4274,6 +4339,12 @@ gathering backtrace, mode info, and recent messages automatically.
 @item code_review
 A prompt for reviewing code in a buffer, collecting content and
 mode context for the AI agent.
+@item gowl_layout
+Compositor state context: current layout, clients, monitors, and
+workspaces (gowl builds only).
+@item automation_author
+Authoring context for podomation: loaded modules, active pods, and
+engine status (podomation builds only).
 @end table
 
 @section The cmacs-mcp Shim Binary
