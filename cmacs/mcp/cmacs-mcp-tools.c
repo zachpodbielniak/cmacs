@@ -64,6 +64,7 @@ cmacs_mcp_register_all_tools (McpServer *server)
   cmacs_mcp_tools_debug_register (server);
   cmacs_mcp_tools_edit_register (server);
   cmacs_mcp_tools_shell_register (server);
+  cmacs_mcp_tools_project_register (server);
 
 #ifdef HAVE_CMACS_GI
   cmacs_mcp_tools_gi_register (server);

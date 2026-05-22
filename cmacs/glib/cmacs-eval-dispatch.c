@@ -93,6 +93,31 @@ cmacs_dispatch_eval (const gchar *expression, GError **error)
   return g_strdup (SSDATA (printed));
 }
 
+gchar *
+cmacs_dispatch_eval_string (const gchar *expression, GError **error)
+{
+  Lisp_Object form, result, printed;
+
+  form = Fcar (Fread_from_string (build_string (expression), Qnil, Qnil));
+  result = dispatch_safe_eval (form);
+
+  if (dispatch_result_is_error (result))
+    {
+      Lisp_Object msg = XCDR (result);
+      g_set_error (error, CMACS_DISPATCH_ERROR_DOMAIN, 1,
+                   "%s", STRINGP (msg) ? SSDATA (msg) : "unknown error");
+      return NULL;
+    }
+
+  /* Strings are returned verbatim so callers get raw text; any other
+     value type falls back to its printed representation. */
+  if (STRINGP (result))
+    return g_strdup (SSDATA (result));
+
+  printed = Fprin1_to_string (result, Qnil, Qnil);
+  return g_strdup (SSDATA (printed));
+}
+
 /* Same waiting_for_input guard as dispatch_safe_eval -- see the
    comment there.  safe_calln's internal condition-case is still
    entered too late to catch an error signaled while

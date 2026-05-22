@@ -23,6 +23,25 @@
   :group 'cmacs
   :prefix "cmacs-mcp-")
 
+(defcustom cmacs-mcp-workspace-root nil
+  "Workspace root directory for the MCP `project_*' file tools.
+
+When nil, the root is auto-detected: the project.el root of the
+current project, falling back to `default-directory'.  Set this to
+pin a remote MCP \"copilot\" agent to a specific project tree."
+  :type '(choice (const :tag "Auto-detect" nil) directory)
+  :group 'cmacs-mcp)
+
+(defcustom cmacs-mcp-workspace-confine t
+  "When non-nil, confine MCP `project_*' file tools to the workspace.
+
+Paths handed to `project_read_file', `project_write_file' and the
+other workspace tools are resolved against the workspace root and
+rejected if they escape it.  Set to nil only for a fully trusted
+local client."
+  :type 'boolean
+  :group 'cmacs-mcp)
+
 ;;;###autoload
 (define-minor-mode cmacs-mcp-mode
   "Global minor mode for CMacs MCP buffer change notifications.

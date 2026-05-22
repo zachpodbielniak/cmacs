@@ -48,7 +48,7 @@ Multiple concurrent client sessions are supported.
 
 * Tools
 
-The server exposes tools in ten categories.
+The server exposes tools in eleven categories.
 
 ** eval --- Elisp Evaluation
 
@@ -123,6 +123,23 @@ is reachable through it.
 | =search_buffer=       | Search a buffer for a regexp, return matching lines |
 | =goto_line=           | Move point to a 1-based line number                |
 | =project_grep=        | Recursively grep a directory tree (=.git= excluded) |
+
+** project --- Workspace Files
+
+Generic file tools scoped to the open project, for a remote
+"copilot" agent connected over the bridge.  Every path is resolved
+against the workspace root --- =cmacs-mcp-workspace-root= if set,
+otherwise the project.el root, otherwise =default-directory= --- and,
+unless =cmacs-mcp-workspace-confine= is nil, confined to it so a
+remote client cannot escape the project tree.
+
+| Tool                  | Description                                        |
+|-----------------------+----------------------------------------------------|
+| =project_root=        | Return the absolute workspace root path            |
+| =project_read_file=   | Read a file's raw contents (path relative to root) |
+| =project_write_file=  | Write a file, creating parent directories          |
+| =project_list_files=  | List the entries of a workspace directory          |
+| =project_find_files=  | Recursively find files by name regexp (=.git= skipped) |
 
 ** shell --- Shell, Scripting and Media (optional)
 
@@ -322,6 +339,7 @@ MCP support is auto-detected when the =mcp-glib= library is available.
 | =cmacs/mcp/cmacs-mcp-tools-gowl.c=     | Wayland compositor tools               |
 | =cmacs/mcp/cmacs-mcp-tools-edit.c=     | Editing and search tools               |
 | =cmacs/mcp/cmacs-mcp-tools-shell.c=    | Shell, scripting and media tools       |
+| =cmacs/mcp/cmacs-mcp-tools-project.c=  | Workspace file tools                   |
 | =cmacs/mcp/cmacs-mcp-resources.c=      | Resource handlers                      |
 | =cmacs/mcp/cmacs-mcp-prompts.c=        | Prompt templates                       |
 | =tools/cmacs-mcp/cmacs-mcp.c=          | Shim binary (stdio-to-socket relay)    |

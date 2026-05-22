@@ -22,6 +22,14 @@
    result (caller must g_free).  On error, set *ERROR and return NULL. */
 gchar *cmacs_dispatch_eval (const gchar *expression, GError **error);
 
+/* Evaluate EXPRESSION as elisp.  Like cmacs_dispatch_eval, but when the
+   result is a string it is returned verbatim (not prin1-quoted); other
+   value types still fall back to the printed representation.  Intended
+   for tools that surface raw text such as file contents.  Caller must
+   g_free.  On error, set *ERROR and return NULL. */
+gchar *cmacs_dispatch_eval_string (const gchar *expression,
+                                   GError **error);
+
 /* Open PATH in Emacs via find-file. */
 void cmacs_dispatch_find_file (const gchar *path);
 

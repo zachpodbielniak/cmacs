@@ -4217,6 +4217,33 @@ Recursively grep for a pattern under a directory (defaults to the
 current @code{default-directory}; @file{.git} is excluded).
 @end table
 
+@subsection project
+
+Generic file tools scoped to the open project in the workspace,
+intended for a remote ``copilot'' agent connected over the bridge.
+Paths are resolved against the workspace root --- the variable
+@code{cmacs-mcp-workspace-root} if set, otherwise the project.el root,
+otherwise @code{default-directory} --- and, unless
+@code{cmacs-mcp-workspace-confine} is nil, confined to it so a remote
+client cannot escape the project tree.
+
+@table @code
+@item project_root
+Return the absolute path of the workspace root.
+@item project_read_file
+Read a file's raw contents; the path is relative to the workspace
+root.
+@item project_write_file
+Write a file, creating parent directories as needed.  Overwrites any
+existing file.
+@item project_list_files
+List the immediate entries of a workspace directory (defaults to the
+root).
+@item project_find_files
+Recursively find files whose name matches an Emacs regexp; the
+@file{.git} directory is skipped and up to 500 paths are returned.
+@end table
+
 @subsection shell (conditional)
 
 Each tool is registered when CMacs is built with the corresponding

@@ -27,6 +27,7 @@ void cmacs_mcp_tools_process_register (McpServer *server);
 void cmacs_mcp_tools_debug_register   (McpServer *server);
 void cmacs_mcp_tools_edit_register    (McpServer *server);
 void cmacs_mcp_tools_shell_register   (McpServer *server);
+void cmacs_mcp_tools_project_register (McpServer *server);
 
 #ifdef HAVE_CMACS_GI
 void cmacs_mcp_tools_gi_register      (McpServer *server);
