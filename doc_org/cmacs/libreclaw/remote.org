@@ -147,6 +147,31 @@ provider, the response is sent back via
 ~lc_channel_send_message_async~ on the bridge channel, encoded as
 ~chat.message_in~, and surfaces in your buffer.
 
+* Customization
+
+Remote-mode settings live in the =cmacs-libreclaw-remote=
+customize group (~M-x customize-group cmacs-libreclaw-remote~);
+they are listed in full under [[file:configuration.org::*Customization (remote mode)][Customization (remote mode)]].
+
+Two of them control on-disk conversation archives, kept
+*separate* from the embedded-mode settings so the two modes can
+archive independently:
+
+- =cmacs-libreclaw-remote-save-conversations-dir= (default ~nil~)
+  — directory to mirror remote-bridge conversations into as
+  standalone =.org= files.  =nil= disables archiving.  When set,
+  each remote room buffer is rewritten to disk as messages
+  arrive and again on buffer kill.
+- =cmacs-libreclaw-remote-save-conversations-name-format=
+  (default ="%y%m%d-%H%M%S-<agent-name>.org"=) — file-name
+  format.  Passed through =format-time-string= with the
+  conversation's start time, then the literal token
+  =<agent-name>= is replaced with the remote agent's name (the
+  server's =agent.name=, queried via the new
+  =cmacs-libreclaw-remote-agent-name= primitive).
+
+See [[file:configuration.org::*Archiving conversations to disk][Archiving conversations to disk]] for the full picture.
+
 * Wire protocol (v1)
 
 Every frame is one WebSocket text message containing a JSON envelope:

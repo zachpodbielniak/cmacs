@@ -169,6 +169,12 @@ docs for which fields can change at runtime.
 - =cmacs-libreclaw-message-hook= — run on every inbound message
 - =cmacs-libreclaw-room-added-hook= — run when a new room buffer is
   created
+- =cmacs-libreclaw-save-conversations-dir= — directory to archive
+  embedded-mode conversations into; =nil= (default) disables it.
+  See [[*Archiving conversations to disk][Archiving conversations to disk]].
+- =cmacs-libreclaw-save-conversations-name-format= — file-name
+  format for those archives; default
+  ="%y%m%d-%H%M%S-<agent-name>.org"=
 
 * Customization (cmacs channel)
 
@@ -216,6 +222,60 @@ load-bearing ones for chat/command behaviour are:
   id used by =cmacs-libreclaw-remote-chat=.
 - =cmacs-libreclaw-remote-local-room-name= (default ="Bridge"=) —
   display label for the local-style chat buffer.
+- =cmacs-libreclaw-remote-save-conversations-dir= (default ~nil~) —
+  directory to archive remote-bridge conversations into.
+  Independent of the embedded-mode
+  =cmacs-libreclaw-save-conversations-dir=.  See
+  [[*Archiving conversations to disk][Archiving conversations to disk]].
+- =cmacs-libreclaw-remote-save-conversations-name-format= (default
+  ="%y%m%d-%H%M%S-<agent-name>.org"=) — file-name format for those
+  archives.
+
+* Archiving conversations to disk
+
+By default libreclaw conversations are ephemeral — they live only
+in their room buffers (the cmacs channel is the exception; see
+[[*Per-project session persistence][Per-project session persistence]]).  Setting an archive directory
+turns on a readable, opt-in on-disk archive: every conversation is
+mirrored to a standalone =.org= file that is rewritten as messages
+arrive and again when the room buffer is killed.
+
+Embedded mode and remote mode keep *separate* settings, so you can
+archive them to different directories — or only one of them:
+
+- =cmacs-libreclaw-save-conversations-dir= — archive directory for
+  embedded-mode conversations (Matrix, email, webhook, the Local
+  channel, and the native cmacs channel).
+- =cmacs-libreclaw-remote-save-conversations-dir= — archive
+  directory for remote-bridge conversations.
+
+Both default to =nil=, which disables archiving.  Enable it from
+your init file, for example:
+
+#+begin_src emacs-lisp
+(setq cmacs-libreclaw-save-conversations-dir
+      "~/Documents/notes/libreclaw")
+(setq cmacs-libreclaw-remote-save-conversations-dir
+      "~/Documents/notes/libreclaw-remote")
+#+end_src
+
+The file name comes from a customizable format —
+=cmacs-libreclaw-save-conversations-name-format= for embedded mode
+and =cmacs-libreclaw-remote-save-conversations-name-format= for
+remote mode.  Both default to ="%y%m%d-%H%M%S-<agent-name>.org"=.
+The string is first run through =format-time-string= with the
+conversation's start time (so =%y=, =%m=, =%d=, =%H=, =%M=, =%S=
+all work), then the literal token =<agent-name>= is replaced with
+the agent name.  For embedded mode that name is =agent.name= from
+the loaded =config.yaml= (via =cmacs-libreclaw-agent-name=); for
+remote mode it is the remote server's =agent.name=, queried over
+the bridge API (via =cmacs-libreclaw-remote-agent-name=).  The
+default produces names such as =260522-143015-claude.org=.
+
+The archived file excludes the editable =* Compose= region, so it
+is a self-contained org document.  Archiving is additive: the
+cmacs channel keeps its own per-project session persistence
+(below) regardless of this setting.
 
 * Per-project session persistence
 

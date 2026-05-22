@@ -47,6 +47,9 @@
 (defvar cmacs-libreclaw-remote-display-name nil)
 (defvar cmacs-libreclaw-remote-local-room-id "local")
 (defvar cmacs-libreclaw-remote-local-room-name "Bridge")
+(defvar cmacs-libreclaw-remote-save-conversations-dir nil)
+(defvar cmacs-libreclaw-remote-save-conversations-name-format
+  "%y%m%d-%H%M%S-<agent-name>.org")
 
 ;; The C primitives below are provided by cmacs/libreclaw/cmacs-libreclaw-remote.c.
 (declare-function cmacs-libreclaw-remote--connect-internal
@@ -55,6 +58,8 @@
 (declare-function cmacs-libreclaw-remote-disconnect
                   "cmacs-libreclaw-remote.c" ())
 (declare-function cmacs-libreclaw-remote-connected-p
+                  "cmacs-libreclaw-remote.c" ())
+(declare-function cmacs-libreclaw-remote-agent-name
                   "cmacs-libreclaw-remote.c" ())
 (declare-function cmacs-libreclaw-remote-send-message
                   "cmacs-libreclaw-remote.c"
@@ -135,6 +140,42 @@ get distinct sessions (their bridge ids differ)."
 
 (defcustom cmacs-libreclaw-remote-local-room-name "Bridge"
   "Display name for the `cmacs-libreclaw-remote-chat' buffer."
+  :type 'string
+  :group 'cmacs-libreclaw-remote)
+
+(defcustom cmacs-libreclaw-remote-save-conversations-dir nil
+  "Directory to which remote-bridge conversations are archived.
+
+When non-nil, every remote-mode room buffer (channel id
+\"bridge\") is mirrored to a standalone `.org' file in this
+directory.  The file is rewritten as messages arrive and again
+when the room buffer is killed, so it always reflects the full
+conversation.
+
+This setting is independent of the embedded-mode
+`cmacs-libreclaw-save-conversations-dir' — point them at the
+same directory or at different ones as you like.  Leave nil
+\(the default) to disable archiving for remote mode.
+
+The file name is built from
+`cmacs-libreclaw-remote-save-conversations-name-format'."
+  :type '(choice (const :tag "Disabled" nil) directory)
+  :group 'cmacs-libreclaw-remote)
+
+(defcustom cmacs-libreclaw-remote-save-conversations-name-format
+  "%y%m%d-%H%M%S-<agent-name>.org"
+  "File-name format for archived remote-bridge conversations.
+
+Used only when `cmacs-libreclaw-remote-save-conversations-dir' is
+set.  The string is first passed through `format-time-string'
+with the conversation's start time (so the usual `%y', `%m',
+`%d', `%H', `%M', `%S' directives all work), and then the
+literal token `<agent-name>' is replaced with the remote agent's
+name as reported by `cmacs-libreclaw-remote-agent-name' (the
+`agent.name' from the remote server's config, queried over the
+bridge API).
+
+The default yields names like `260522-143015-claude.org'."
   :type 'string
   :group 'cmacs-libreclaw-remote)
 

@@ -117,6 +117,44 @@ for confirmation before anything is written to disk."
   :type 'boolean
   :group 'cmacs-libreclaw)
 
+(defcustom cmacs-libreclaw-save-conversations-dir nil
+  "Directory to which embedded-mode conversations are archived.
+
+When non-nil, every embedded libreclaw room buffer (Matrix,
+email, webhook, the Local channel, and the native cmacs channel)
+is mirrored to a standalone `.org' file in this directory.  The
+file is rewritten as messages arrive and again when the room
+buffer is killed, so it always reflects the full conversation.
+
+This is independent of the remote-mode
+`cmacs-libreclaw-remote-save-conversations-dir' — the two modes
+keep separate settings so they can archive to different places.
+Leave nil (the default) to disable archiving for embedded mode.
+
+Note: this is additive — the native cmacs channel keeps its own
+per-project session persistence under `~/.libreclaw/' regardless.
+
+The file name is built from
+`cmacs-libreclaw-save-conversations-name-format'."
+  :type '(choice (const :tag "Disabled" nil) directory)
+  :group 'cmacs-libreclaw)
+
+(defcustom cmacs-libreclaw-save-conversations-name-format
+  "%y%m%d-%H%M%S-<agent-name>.org"
+  "File-name format for archived embedded-mode conversations.
+
+Used only when `cmacs-libreclaw-save-conversations-dir' is set.
+The string is first passed through `format-time-string' with the
+conversation's start time (so the usual `%y', `%m', `%d', `%H',
+`%M', `%S' directives all work), and then the literal token
+`<agent-name>' is replaced with the agent name returned by
+`cmacs-libreclaw-agent-name' (the `agent.name' field from the
+loaded libreclaw config.yaml).
+
+The default yields names like `260522-143015-claude.org'."
+  :type 'string
+  :group 'cmacs-libreclaw)
+
 ;;;; Hooks -----------------------------------------------------------
 
 (defvar cmacs-libreclaw-message-hook nil
@@ -154,6 +192,19 @@ everything from here to `point-max' is the editable compose area.")
 
 (defvar-local cmacs-libreclaw-room--pending nil
   "List of pending messages when the buffer is temporarily hidden.")
+
+(defvar-local cmacs-libreclaw-room--created-at nil
+  "Time the room buffer was created.
+Used as the timestamp portion of the archived-conversation file
+name (see `cmacs-libreclaw-save-conversations-dir').  Captured
+once so the file name stays stable as the file is rewritten.")
+
+(defvar-local cmacs-libreclaw-room--save-file nil
+  "Absolute path of this room's archived-conversation file.
+Resolved lazily on the first save (so the agent name is known)
+and then cached, so subsequent saves rewrite the same file.")
+
+(declare-function cmacs-libreclaw-agent-name "cmacs-libreclaw.c" ())
 
 (defvar cmacs-libreclaw--allow-history-edit nil
   "Dynamic override for `cmacs-libreclaw--protect-history'.
@@ -224,6 +275,7 @@ ROOM-NAME is a human-readable label (falls back to ROOM-ID)."
     (setq-local cmacs-libreclaw-room-channel channel)
     (setq-local cmacs-libreclaw-room-id room-id)
     (setq-local cmacs-libreclaw-room-name room-name)
+    (setq-local cmacs-libreclaw-room--created-at (current-time))
     (setq-local cmacs-libreclaw-room--compose-marker
                 (save-excursion
                   (goto-char (point-max))
@@ -290,6 +342,108 @@ through; user edits above the compose marker remain blocked."
         ;; ... plus a blank line so the next heading (or the
         ;; `* Compose' sentinel) is visually separated.
         (insert "\n")))))
+
+;;;; Conversation archiving -----------------------------------------
+
+(defun cmacs-libreclaw--sanitize-file-component (s)
+  "Return S made safe for use as a single file-name component.
+Runs of characters outside [A-Za-z0-9._-] collapse to a single
+hyphen; an empty result falls back to \"agent\"."
+  (let ((clean (replace-regexp-in-string
+                "[^A-Za-z0-9._-]+" "-" (or s ""))))
+    (setq clean (replace-regexp-in-string "\\`-+\\|-+\\'" "" clean))
+    (if (string-empty-p clean) "agent" clean)))
+
+(defun cmacs-libreclaw--conversation-agent-name (channel)
+  "Return the agent name for CHANNEL, for archive file naming.
+Embedded channels use `cmacs-libreclaw-agent-name'; the remote
+\"bridge\" channel uses `cmacs-libreclaw-remote-agent-name'.
+Falls back to the room name, then to \"agent\"."
+  (let ((name (if (equal channel "bridge")
+                  (and (fboundp 'cmacs-libreclaw-remote-agent-name)
+                       (cmacs-libreclaw-remote-agent-name))
+                (and (fboundp 'cmacs-libreclaw-agent-name)
+                     (cmacs-libreclaw-agent-name)))))
+    (or (and (stringp name) (not (string-empty-p name)) name)
+        (and (stringp cmacs-libreclaw-room-name)
+             (not (string-empty-p cmacs-libreclaw-room-name))
+             cmacs-libreclaw-room-name)
+        "agent")))
+
+(defun cmacs-libreclaw--conversation-archive-dir (channel)
+  "Return the configured archive directory for CHANNEL, or nil.
+The remote \"bridge\" channel and embedded channels have separate
+settings so they can be archived independently."
+  (if (equal channel "bridge")
+      (bound-and-true-p cmacs-libreclaw-remote-save-conversations-dir)
+    cmacs-libreclaw-save-conversations-dir))
+
+(defun cmacs-libreclaw--conversation-name-format (channel)
+  "Return the archive file-name format string for CHANNEL."
+  (if (equal channel "bridge")
+      (or (bound-and-true-p
+           cmacs-libreclaw-remote-save-conversations-name-format)
+          "%y%m%d-%H%M%S-<agent-name>.org")
+    cmacs-libreclaw-save-conversations-name-format))
+
+(defun cmacs-libreclaw--conversation-save-file ()
+  "Return (resolving and caching) the archive path for the current buffer.
+Returns nil when archiving is not configured for this buffer's
+channel.  The resolved path is cached in
+`cmacs-libreclaw-room--save-file' so later saves rewrite it."
+  (or cmacs-libreclaw-room--save-file
+      (let ((dir (cmacs-libreclaw--conversation-archive-dir
+                  cmacs-libreclaw-room-channel)))
+        (when dir
+          (let* ((fmt (cmacs-libreclaw--conversation-name-format
+                       cmacs-libreclaw-room-channel))
+                 (agent (cmacs-libreclaw--sanitize-file-component
+                         (cmacs-libreclaw--conversation-agent-name
+                          cmacs-libreclaw-room-channel)))
+                 (stamped (format-time-string
+                           fmt (or cmacs-libreclaw-room--created-at
+                                   (current-time))))
+                 ;; LITERAL replacement (the t t args) so agent
+                 ;; names containing %, \\, etc. are safe.
+                 (name (replace-regexp-in-string
+                        "<agent-name>" agent stamped t t)))
+            (setq-local cmacs-libreclaw-room--save-file
+                        (expand-file-name name dir)))))))
+
+(defun cmacs-libreclaw--save-conversation (&optional buf)
+  "Write BUF's conversation history to its archive file.
+BUF defaults to the current buffer.  A no-op unless BUF is a
+libreclaw room buffer whose channel has an archive directory
+configured.  The editable `* Compose' region is excluded, so the
+result is a self-contained, readable org file."
+  (with-current-buffer (or buf (current-buffer))
+    (when (and cmacs-libreclaw-room-channel
+               (markerp cmacs-libreclaw-room--compose-marker))
+      (let ((file (cmacs-libreclaw--conversation-save-file)))
+        (when file
+          (let ((end (save-excursion
+                       (goto-char cmacs-libreclaw-room--compose-marker)
+                       (forward-line -1)
+                       (point))))
+            (condition-case err
+                (progn
+                  (make-directory (file-name-directory file) t)
+                  (write-region (point-min) end file nil 'nomessage))
+              (error
+               (message "cmacs-libreclaw: archive write failed: %s"
+                        (error-message-string err))))))))))
+
+(defun cmacs-libreclaw--save-conversation-on-message (channel room-id &rest _)
+  "Archive the CHANNEL/ROOM-ID room buffer after a message.
+Wired into `cmacs-libreclaw-message-hook' so the archive file
+tracks the live conversation."
+  (let ((buf (cdr (assoc (cons channel room-id)
+                         cmacs-libreclaw-rooms-alist))))
+    (when (buffer-live-p buf)
+      (cmacs-libreclaw--save-conversation buf))))
+
+(add-hook 'cmacs-libreclaw-message-hook
+          #'cmacs-libreclaw--save-conversation-on-message)
 
 ;;;; Signal dispatch entry points (called from C) -------------------
 
@@ -369,7 +523,8 @@ so for now we only run the hook — dedup-by-id is future work."
   (ignore session-key))
 
 (defun cmacs-libreclaw--on-buffer-killed ()
-  "Remove this buffer from `cmacs-libreclaw-rooms-alist' on kill."
+  "Archive this buffer, then remove it from `cmacs-libreclaw-rooms-alist'."
+  (ignore-errors (cmacs-libreclaw--save-conversation))
   (when (and cmacs-libreclaw-room-channel cmacs-libreclaw-room-id)
     (setq cmacs-libreclaw-rooms-alist
           (cl-remove-if

@@ -176,6 +176,23 @@ reconnect, so set this (or @code{$USER}) explicitly if you want
 stable command-permission matching.
 
 Examples: @code{"zach"}, @code{"@@zach:matrix.example.com"}.
+
+@item cmacs-libreclaw-remote-save-conversations-dir
+Directory to which remote-bridge conversations are archived as
+standalone @file{.org} files.  Default @code{nil} (disabled).
+Independent of the embedded-mode
+@code{cmacs-libreclaw-save-conversations-dir}, so the two modes
+can archive to different places.  When set, each remote room
+buffer is mirrored to disk as messages arrive and again on
+buffer kill.
+
+@item cmacs-libreclaw-remote-save-conversations-name-format
+File-name format for archived remote conversations.  Default
+@code{"%y%m%d-%H%M%S-<agent-name>.org"}.  Passed through
+@code{format-time-string} with the conversation's start time,
+then the literal token @code{<agent-name>} is replaced with the
+remote agent's name (the server's @code{agent.name}, queried via
+@code{cmacs-libreclaw-remote-agent-name}).
 @end table
 
 @subsection Enabling bot commands on the bridge

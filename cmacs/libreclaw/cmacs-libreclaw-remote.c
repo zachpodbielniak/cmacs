@@ -394,6 +394,28 @@ DEFUN ("cmacs-libreclaw-remote-connected-p",
   return lc_bridge_client_is_connected (cmacs_bridge_client) ? Qt : Qnil;
 }
 
+DEFUN ("cmacs-libreclaw-remote-agent-name",
+       Fcmacs_libreclaw_remote_agent_name,
+       Scmacs_libreclaw_remote_agent_name, 0, 0, 0,
+       doc: /* Return the remote agent's display name, or nil.
+The name is the `agent.name' from the remote libreclaw server's
+config.yaml, advertised in the `control.welcome' handshake frame.
+Returns nil when the bridge is not connected, the handshake has
+not completed, or the server did not advertise an agent name.  */)
+  (void)
+{
+  const gchar *name;
+
+  if (cmacs_bridge_client == NULL)
+    return Qnil;
+
+  name = lc_bridge_client_get_remote_agent_name (cmacs_bridge_client);
+  if (name == NULL || name[0] == '\0')
+    return Qnil;
+
+  return build_string (name);
+}
+
 DEFUN ("cmacs-libreclaw-remote-send-message",
        Fcmacs_libreclaw_remote_send_message,
        Scmacs_libreclaw_remote_send_message, 2, 3, 0,
@@ -452,6 +474,7 @@ syms_of_cmacs_libreclaw_remote (void)
   defsubr (&Scmacs_libreclaw_remote__connect_internal);
   defsubr (&Scmacs_libreclaw_remote_disconnect);
   defsubr (&Scmacs_libreclaw_remote_connected_p);
+  defsubr (&Scmacs_libreclaw_remote_agent_name);
   defsubr (&Scmacs_libreclaw_remote_send_message);
 }
 

@@ -1129,6 +1129,79 @@ every subsequent connect attempt."
     ;; is set.
     (cmacs-libreclaw-remote-disconnect)))
 
+;;;; Conversation archiving ------------------------------------------
+
+(ert-deftest cmacs-libreclaw-archive-writes-on-message ()
+  "With a save dir set, an inbound message writes a .org archive file."
+  (skip-unless (featurep 'cmacs-libreclaw))
+  (let* ((cmacs-libreclaw-rooms-alist nil)
+         (dir (make-temp-file "cmacs-lc-archive" t)))
+    (unwind-protect
+        (let ((cmacs-libreclaw-save-conversations-dir dir))
+          (cmacs-libreclaw--on-room-added "c" "r" "Room")
+          (cmacs-libreclaw--on-message
+           "c" "r"
+           '(:channel-id "c" :sender-id "@bob:srv" :sender-name "Bob"
+             :room-id "r" :body "hello world" :timestamp 0))
+          (let ((files (directory-files dir nil "\\.org\\'")))
+            (should (= 1 (length files)))
+            ;; Default format: yymmdd-hhmmss-<agent-name>.org.  No
+            ;; running LcApp, so the agent name falls back to the
+            ;; room name "Room".
+            (should (string-match-p
+                     "\\`[0-9]\\{6\\}-[0-9]\\{6\\}-Room\\.org\\'"
+                     (car files)))
+            (with-temp-buffer
+              (insert-file-contents (expand-file-name (car files) dir))
+              (should (search-forward "hello world" nil t))
+              ;; The editable compose region is excluded.
+              (goto-char (point-min))
+              (should-not (search-forward "* Compose" nil t)))))
+      (let ((buf (cdr (assoc '("c" . "r") cmacs-libreclaw-rooms-alist))))
+        (when (buffer-live-p buf) (kill-buffer buf)))
+      (delete-directory dir t))))
+
+(ert-deftest cmacs-libreclaw-archive-disabled-by-default ()
+  "With no save dir set, no archive file is written."
+  (skip-unless (featurep 'cmacs-libreclaw))
+  (let* ((cmacs-libreclaw-rooms-alist nil)
+         (cmacs-libreclaw-save-conversations-dir nil)
+         (dir (make-temp-file "cmacs-lc-noarchive" t)))
+    (unwind-protect
+        (progn
+          (cmacs-libreclaw--on-room-added "c" "r" "Room")
+          (cmacs-libreclaw--on-message
+           "c" "r"
+           '(:channel-id "c" :sender-id "s" :body "hi" :timestamp 0))
+          (should (null (directory-files dir nil "\\.org\\'"))))
+      (let ((buf (cdr (assoc '("c" . "r") cmacs-libreclaw-rooms-alist))))
+        (when (buffer-live-p buf) (kill-buffer buf)))
+      (delete-directory dir t))))
+
+(ert-deftest cmacs-libreclaw-archive-name-format-token ()
+  "The <agent-name> token is replaced and time directives expand."
+  (skip-unless (featurep 'cmacs-libreclaw))
+  (let* ((cmacs-libreclaw-rooms-alist nil)
+         (dir (make-temp-file "cmacs-lc-archfmt" t)))
+    (unwind-protect
+        (let ((cmacs-libreclaw-save-conversations-dir dir)
+              (cmacs-libreclaw-save-conversations-name-format
+               "chat-%Y-<agent-name>.org"))
+          (cmacs-libreclaw--on-room-added "c" "r" "Desk")
+          (cmacs-libreclaw--on-message
+           "c" "r"
+           '(:channel-id "c" :sender-id "s" :body "x" :timestamp 0))
+          (let ((files (directory-files dir nil "\\.org\\'")))
+            (should (= 1 (length files)))
+            (should (string-match-p
+                     (concat "\\`chat-"
+                             (format-time-string "%Y")
+                             "-Desk\\.org\\'")
+                     (car files)))))
+      (let ((buf (cdr (assoc '("c" . "r") cmacs-libreclaw-rooms-alist))))
+        (when (buffer-live-p buf) (kill-buffer buf)))
+      (delete-directory dir t))))
+
 (provide 'cmacs-libreclaw-tests)
 
 ;;; cmacs-libreclaw-tests.el ends here
