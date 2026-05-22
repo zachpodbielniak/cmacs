@@ -4425,6 +4425,19 @@ Start the MCP server (creates socket, begins accepting connections).
 Stop the MCP server (closes all sessions, removes socket).
 @end table
 
+The @code{project_*} workspace tools are governed by two
+customizable variables:
+
+@table @code
+@item cmacs-mcp-workspace-root
+Pin the workspace root for the @code{project_*} tools.  When
+@code{nil} (the default) the root is auto-detected from the
+project.el root, else @code{default-directory}.
+@item cmacs-mcp-workspace-confine
+When non-@code{nil} (the default), confine the @code{project_*}
+tools to the workspace root, rejecting any path that escapes it.
+@end table
+
 @section Configure
 
 Enable with @option{--with-cmacs-mcp} (auto-detected when

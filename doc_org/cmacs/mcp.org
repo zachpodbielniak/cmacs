@@ -328,6 +328,17 @@ MCP support is auto-detected when the =mcp-glib= library is available.
 | =json-glib=   | JSON parsing for tool schemas         |
 | =gio-2.0=     | Unix socket and async I/O             |
 
+** Variables
+
+These customizable variables govern the =project_*= workspace file
+tools.  Set them for a remote "copilot" agent that connects over the
+bridge.
+
+| Variable                      | Default | Description                                                                 |
+|--------------------------------+---------+-----------------------------------------------------------------------------|
+| =cmacs-mcp-workspace-root=     | nil     | Workspace root for the =project_*= tools.  When nil, auto-detected from the project.el root, else =default-directory=. |
+| =cmacs-mcp-workspace-confine=  | t       | When non-nil, confine the =project_*= tools to the workspace root, rejecting any path that escapes it. |
+
 * Files
 
 | File                                    | Purpose                                |
