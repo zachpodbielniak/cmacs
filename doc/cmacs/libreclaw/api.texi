@@ -213,8 +213,7 @@ appended.
 @code{/api/v1/bridge} appended.
 @end itemize
 
-@item cmacs-libreclaw-remote--connect-internal URL TOKEN @
-       &optional DISPLAY-NAME ENDPOINTS USER-ID
+@item cmacs-libreclaw-remote--connect-internal URL TOKEN &optional DISPLAY-NAME ENDPOINTS USER-ID
 Internal C DEFUN.  Opens the bridge to URL with bearer TOKEN.
 Optional DISPLAY-NAME identifies this client to the remote server.
 Optional ENDPOINTS is a list of endpoint specs (only the symbol
@@ -234,8 +233,7 @@ Disconnect the remote bridge if any.  Safe to call twice.  Returns
 @item cmacs-libreclaw-remote-connected-p
 Return non-nil if the remote bridge is connected.
 
-@item cmacs-libreclaw-remote-send-message ROOM-ID BODY @
-       &optional HTML-BODY
+@item cmacs-libreclaw-remote-send-message ROOM-ID BODY &optional HTML-BODY
 Send BODY to ROOM-ID over the remote bridge.  Returns @code{t} on
 success, signals @code{cmacs-libreclaw-error} on failure.
 

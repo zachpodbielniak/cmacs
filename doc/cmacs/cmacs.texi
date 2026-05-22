@@ -1516,7 +1516,7 @@ loaded after @file{init.el} via @code{crispy-run}.  The CMacs API
 headers and library are automatically available---no manual
 @code{CRISPY_PARAMS} needed.
 
-@xref{CMacs API, , Example: init.c}, for a complete example.
+@xref{CMacs API, , Example init.c}, for a complete example.
 
 @section Elisp Primitives
 
@@ -2673,7 +2673,7 @@ Applies @code{rules:} entries from the gowl config to every
 newly mapped client.  Rules fire before the client is assigned
 a monitor, so a matched rule can force floating, override tags
 or monitor, and set an explicit geometry without the visible
-tile@to{}float flicker caused by a post-placement transition.
+tile→float flicker caused by a post-placement transition.
 
 Each rule supports glob or PCRE-regex matching on
 @code{app-id} and @code{title}.  Regex mode catches apps that
@@ -4836,7 +4836,7 @@ Return non-@code{nil} if @code{cmacs-video} was built in and
 GStreamer initialised successfully.
 @end deffn
 
-@deffn Function cmacs-video-open uri @rest{} plist
+@deffn Function cmacs-video-open uri &rest plist
 Open @var{uri} and return an opaque integer handle.  See the
 docstring of the underlying primitive @code{cmacs-video--open-1}
 for the full keyword option set.  This wrapper layers on
