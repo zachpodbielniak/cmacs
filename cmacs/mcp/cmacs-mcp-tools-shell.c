@@ -179,6 +179,119 @@ handle_podomation_eval_dsl (McpServer *s, const gchar *n,
     "(progn (cmacs-podomation-eval-dsl \"%s\") \"DSL evaluated\")", ed);
   return shell_dispatch (expr);
 }
+
+static McpToolResult *
+handle_podomation_stats (McpServer *s, const gchar *n,
+                         JsonObject *a, gpointer u)
+{
+  (void) s; (void) n; (void) a; (void) u;
+  return shell_dispatch ("(prin1-to-string (cmacs-podomation-stats))");
+}
+
+static McpToolResult *
+handle_podomation_list_modules (McpServer *s, const gchar *n,
+                                JsonObject *a, gpointer u)
+{
+  (void) s; (void) n; (void) a; (void) u;
+  return shell_dispatch (
+    "(prin1-to-string (cmacs-podomation-list-modules))");
+}
+
+static McpToolResult *
+handle_podomation_load_file (McpServer *s, const gchar *n,
+                             JsonObject *a, gpointer u)
+{
+  const gchar *file;
+  g_autofree gchar *ef = NULL, *expr = NULL;
+
+  (void) s; (void) n; (void) u;
+
+  file = json_object_get_string_member (a, "file");
+  if (file == NULL)
+    return shell_error ("Missing required argument: file");
+
+  ef = g_strescape (file, NULL);
+  expr = g_strdup_printf (
+    "(let ((path (expand-file-name \"%s\")))"
+    "  (cmacs-podomation-load-file path)"
+    "  (format \"loaded %%s\" path))",
+    ef);
+  return shell_dispatch (expr);
+}
+
+static McpToolResult *
+handle_podomation_set_context (McpServer *s, const gchar *n,
+                               JsonObject *a, gpointer u)
+{
+  g_autofree gchar *alist = NULL, *expr = NULL;
+
+  (void) s; (void) n; (void) u;
+
+  if (!json_object_has_member (a, "context"))
+    return shell_error ("Missing required argument: context");
+
+  alist = podomation_data_alist (
+    json_object_get_object_member (a, "context"));
+  expr = g_strdup_printf (
+    "(progn (cmacs-podomation-set-context %s) \"context set\")",
+    alist);
+  return shell_dispatch (expr);
+}
+
+static McpToolResult *
+handle_podomation_reload (McpServer *s, const gchar *n,
+                          JsonObject *a, gpointer u)
+{
+  (void) s; (void) n; (void) a; (void) u;
+  return shell_dispatch (
+    "(progn (cmacs-podomation-reload) \"engine reloaded\")");
+}
+
+static McpToolResult *
+handle_podomation_control (McpServer *s, const gchar *n,
+                           JsonObject *a, gpointer u)
+{
+  const gchar *action;
+
+  (void) s; (void) n; (void) u;
+
+  action = json_object_get_string_member (a, "action");
+  if (action == NULL)
+    return shell_error ("Missing required argument: action");
+
+  if (g_strcmp0 (action, "start") == 0)
+    return shell_dispatch (
+      "(progn (cmacs-podomation-start) \"engine started\")");
+  if (g_strcmp0 (action, "stop") == 0)
+    return shell_dispatch (
+      "(progn (cmacs-podomation-stop) \"engine stopped\")");
+  if (g_strcmp0 (action, "status") == 0)
+    return shell_dispatch (
+      "(if (cmacs-podomation-running-p) \"running\" \"stopped\")");
+
+  return shell_error ("action must be one of: start, stop, status");
+}
+
+static McpToolResult *
+handle_podomation_repl_eval (McpServer *s, const gchar *n,
+                             JsonObject *a, gpointer u)
+{
+  const gchar *line;
+  g_autofree gchar *el = NULL, *expr = NULL;
+
+  (void) s; (void) n; (void) u;
+
+  line = json_object_get_string_member (a, "line");
+  if (line == NULL)
+    return shell_error ("Missing required argument: line");
+
+  el = g_strescape (line, NULL);
+  expr = g_strdup_printf (
+    "(let ((r (cmacs-podomation-repl-eval \"%s\")))"
+    "  (format \"%%s: %%s\" (car r) (or (cdr r) \"\")))",
+    el);
+  return shell_dispatch (expr);
+}
 #endif /* HAVE_CMACS_PODOMATION */
 
 /* ── video tools ──────────────────────────────────────────────────── */
@@ -300,6 +413,81 @@ cmacs_mcp_tools_shell_register (McpServer *server)
     "},\"required\":[\"dsl\"]}");
   mcp_tool_set_input_schema (tool, schema);
   mcp_server_add_tool (server, tool, handle_podomation_eval_dsl,
+                       NULL, NULL);
+  g_object_unref (tool);
+
+  tool = mcp_tool_new ("podomation_stats",
+    "Return podomation engine statistics: events dispatched, "
+    "handlers called/failed, pipe-chains executed, and start time.");
+  mcp_tool_set_read_only_hint (tool, TRUE);
+  mcp_server_add_tool (server, tool, handle_podomation_stats,
+                       NULL, NULL);
+  g_object_unref (tool);
+
+  tool = mcp_tool_new ("podomation_list_modules",
+    "List the loaded podomation modules (available event sources "
+    "and actions).");
+  mcp_tool_set_read_only_hint (tool, TRUE);
+  mcp_server_add_tool (server, tool, handle_podomation_list_modules,
+                       NULL, NULL);
+  g_object_unref (tool);
+
+  tool = mcp_tool_new ("podomation_load_file",
+    "Load and parse a .pod DSL file into the automation engine.");
+  schema = cmacs_mcp_schema_from_string (
+    "{\"type\":\"object\",\"properties\":{"
+    "\"file\":{\"type\":\"string\","
+      "\"description\":\"Path to a .pod DSL file\"}"
+    "},\"required\":[\"file\"]}");
+  mcp_tool_set_input_schema (tool, schema);
+  mcp_server_add_tool (server, tool, handle_podomation_load_file,
+                       NULL, NULL);
+  g_object_unref (tool);
+
+  tool = mcp_tool_new ("podomation_set_context",
+    "Set the engine context variables (an object of string values) "
+    "exposed to the DSL as {context->key} bindings.");
+  schema = cmacs_mcp_schema_from_string (
+    "{\"type\":\"object\",\"properties\":{"
+    "\"context\":{\"type\":\"object\","
+      "\"description\":\"Context key/value pairs (string values)\"}"
+    "},\"required\":[\"context\"]}");
+  mcp_tool_set_input_schema (tool, schema);
+  mcp_server_add_tool (server, tool, handle_podomation_set_context,
+                       NULL, NULL);
+  g_object_unref (tool);
+
+  tool = mcp_tool_new ("podomation_reload",
+    "Hot-reload the podomation engine configuration.");
+  mcp_server_add_tool (server, tool, handle_podomation_reload,
+                       NULL, NULL);
+  g_object_unref (tool);
+
+  tool = mcp_tool_new ("podomation_control",
+    "Control the podomation engine lifecycle. action is one of "
+    "\"start\", \"stop\", or \"status\".");
+  schema = cmacs_mcp_schema_from_string (
+    "{\"type\":\"object\",\"properties\":{"
+    "\"action\":{\"type\":\"string\","
+    "\"enum\":[\"start\",\"stop\",\"status\"],"
+      "\"description\":\"Lifecycle action\"}"
+    "},\"required\":[\"action\"]}");
+  mcp_tool_set_input_schema (tool, schema);
+  mcp_server_add_tool (server, tool, handle_podomation_control,
+                       NULL, NULL);
+  g_object_unref (tool);
+
+  tool = mcp_tool_new ("podomation_repl_eval",
+    "Evaluate one line of DSL input in the persistent podomation "
+    "REPL. State (pods, variables) carries across calls, so this "
+    "supports iterative authoring.");
+  schema = cmacs_mcp_schema_from_string (
+    "{\"type\":\"object\",\"properties\":{"
+    "\"line\":{\"type\":\"string\","
+      "\"description\":\"A line of podomation DSL input\"}"
+    "},\"required\":[\"line\"]}");
+  mcp_tool_set_input_schema (tool, schema);
+  mcp_server_add_tool (server, tool, handle_podomation_repl_eval,
                        NULL, NULL);
   g_object_unref (tool);
 #endif

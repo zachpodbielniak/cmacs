@@ -4263,6 +4263,23 @@ Emit an event into the podomation automation engine (requires
 List active podomation pods and their health.
 @item podomation_eval_dsl
 Parse and execute a podomation DSL source string.
+@item podomation_stats
+Return engine statistics: events dispatched, handlers called and
+failed, pipe-chains executed, and start time.
+@item podomation_list_modules
+List the loaded podomation modules.
+@item podomation_load_file
+Load and parse a @file{.pod} DSL file into the engine.
+@item podomation_set_context
+Set the engine context variables exposed to the DSL as
+@code{@{context->key@}} bindings.
+@item podomation_reload
+Hot-reload the podomation engine configuration.
+@item podomation_control
+Start, stop, or report the status of the automation engine.
+@item podomation_repl_eval
+Evaluate one line of DSL in the persistent REPL; state carries
+across calls for iterative authoring.
 @item video_list
 List live cmacs-video stream handles (requires
 @option{--with-cmacs-video}).

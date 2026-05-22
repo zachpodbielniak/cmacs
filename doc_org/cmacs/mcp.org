@@ -150,11 +150,18 @@ subsystem.
 |-------------------------+------------+----------------------------------------|
 | =bacon_eval=            | bacon      | Run a command in the embedded shell    |
 | =crispy_eval=           | crispy     | Compile and run an inline C snippet    |
-| =podomation_emit_event= | podomation | Emit an event into the automation engine |
-| =podomation_list_pods=  | podomation | List active pods and health            |
-| =podomation_eval_dsl=   | podomation | Parse and execute a DSL source string  |
-| =video_list=            | video      | List live video stream handles         |
-| =video_snapshot=        | video      | Capture a video frame as a PNG image    |
+| =podomation_emit_event=   | podomation | Emit an event into the automation engine |
+| =podomation_list_pods=    | podomation | List active pods and health            |
+| =podomation_eval_dsl=     | podomation | Parse and execute a DSL source string  |
+| =podomation_stats=        | podomation | Engine statistics (events, handlers)   |
+| =podomation_list_modules= | podomation | List loaded modules                    |
+| =podomation_load_file=    | podomation | Load a .pod DSL file                   |
+| =podomation_set_context=  | podomation | Set DSL context variables              |
+| =podomation_reload=       | podomation | Hot-reload the engine configuration    |
+| =podomation_control=      | podomation | Start / stop / status of the engine    |
+| =podomation_repl_eval=    | podomation | Evaluate a line in the persistent REPL |
+| =video_list=              | video      | List live video stream handles         |
+| =video_snapshot=          | video      | Capture a video frame as a PNG image    |
 
 ** gi --- GObject Introspection (optional)
 
