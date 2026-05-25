@@ -351,12 +351,14 @@ build_from_source () {
 		sudo ${make_cmd} -C "${dep_dir}" install PREFIX="${PREFIX}"
 	done
 
-	# whisper.cpp: ships its own Makefile.  Build the static lib only;
-	# cmacs links it in-tree from configure.ac.  No `make install` needed.
-	if [[ -d "${SCRIPT_DIR}/deps/whisper.cpp" ]]; then
-		echo "    Building whisper.cpp (static library)..."
-		${make_cmd} -C "${SCRIPT_DIR}/deps/whisper.cpp" libwhisper.a
-	fi
+	# whisper.cpp: NOT built here.  Recent whisper.cpp is CMake-only
+	# and no longer ships a libwhisper.a Make target.  The cmacs
+	# top-level `make -j$(nproc)' triggers its CMake build
+	# automatically as a prerequisite of the whisper .o files (via
+	# the $(CMACS_WHISPER_STATIC_LIB) rule in src/Makefile.in), with
+	# the right -DCMAKE_C_STANDARD=11 etc. flags for the CMake 4.x +
+	# GCC 16 feature-detection workaround.  Letting cmacs's build
+	# drive it keeps the flags in exactly one place.
 
 	# piper: OHF-Voice piper1-GPL is a Python package; the `piper`
 	# console-script is installed by pip.  Skipped if the user already

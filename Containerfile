@@ -80,9 +80,6 @@ RUN rm -f .git \
                make -C "deps/${dep}" install PREFIX=/usr; \
            fi; \
        done \
-    && if [ -d "deps/whisper.cpp" ]; then \
-           make -C deps/whisper.cpp libwhisper.a; \
-       fi \
     && if ! command -v piper >/dev/null 2>&1; then \
            dnf install -y python3-pip espeak-ng \
               && pip install --no-cache-dir piper-tts; \
@@ -91,6 +88,15 @@ RUN rm -f .git \
 # Piper (OHF-Voice piper1-GPL fork) ships as a Python package; the
 # `piper` console-script is installed by pip.  deps/piper is kept as
 # a submodule for reference / test fixtures but is not built from source.
+#
+# deps/whisper.cpp is NOT built here: the `make -j$(nproc)' below
+# triggers its CMake build automatically as a prerequisite of the
+# whisper .o files (via the $(CMACS_WHISPER_STATIC_LIB) rule in
+# src/Makefile.in), with the right -DCMAKE_C_STANDARD=11 etc. flags
+# for the CMake 4.x + GCC 16 feature-detection workaround.  Doing it
+# manually here with `make -C deps/whisper.cpp libwhisper.a' is both
+# redundant AND broken (recent whisper.cpp is CMake-only and no
+# longer ships a libwhisper.a Make target).
 
 # Build cmacs
 RUN ./autogen.sh \
