@@ -27,6 +27,7 @@
 #include "cmacs-ink-overlay.h"
 
 #include <glib.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* The CMacs-owned GMainContext.  All GLib sources created by CMacs
@@ -395,6 +396,40 @@ init_cmacs_glib (void)
   cmacs_context = g_main_context_new ();
 }
 
+/* ──────────────────────────────────────────────────────────────────────
+ * cmacs-setenv: libc setenv(3) wrapper
+ *
+ * Emacs's built-in `setenv' only manipulates `process-environment'
+ * (the Lisp variable used to build subprocess env via make-process).
+ * It does NOT call libc setenv(3), so any C code that reads
+ * `getenv()' directly -- including glib's g_find_program_in_path()
+ * used by cmacs-piper, plus everything inside GStreamer plugins,
+ * libsoup, etc. -- sees the original libc environ unchanged.
+ *
+ * `cmacs-env.el' calls this DEFUN after updating
+ * `process-environment' to keep the two views in sync.  Without it,
+ * piper (and any other tool resolved via libc PATH lookups) stays
+ * invisible to cmacs even when `executable-find' finds it just
+ * fine. */
+
+DEFUN ("cmacs-setenv", Fcmacs_setenv, Scmacs_setenv, 2, 2, 0,
+       doc: /* Call libc setenv(3) on NAME=VALUE.  Both strings.
+This is required in addition to the Lisp `setenv', whose effect is
+confined to `process-environment' and not visible to C code that
+reads `getenv()' directly (glib, GStreamer, libsoup, etc.).
+
+Returns t on success, nil on failure.  */)
+  (Lisp_Object name, Lisp_Object value)
+{
+  CHECK_STRING (name);
+  CHECK_STRING (value);
+  /* setenv copies the strings internally, so SDATA -> char* is safe. */
+  int rc = setenv ((const char *) SDATA (name),
+                   (const char *) SDATA (value),
+                   1 /* overwrite */);
+  return rc == 0 ? Qt : Qnil;
+}
+
 void
 syms_of_cmacs_glib (void)
 {
@@ -404,6 +439,7 @@ syms_of_cmacs_glib (void)
   defsubr (&Scmacs_glib_timeout_add);
   defsubr (&Scmacs_glib_source_remove);
   defsubr (&Scmacs_glib_idle_add);
+  defsubr (&Scmacs_setenv);
 
   /* Frame Cairo screenshot DEFUNs (cmacs-glib-screenshot.c) live in
      a sibling translation unit; pull their symbols into the same
