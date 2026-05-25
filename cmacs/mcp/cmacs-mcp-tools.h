@@ -45,6 +45,10 @@ void cmacs_mcp_tools_cintrospect_register (McpServer *server);
 void cmacs_mcp_tools_audio_register (McpServer *server);
 #endif
 
+#ifdef HAVE_CMACS_AI
+void cmacs_mcp_tools_ai_register (McpServer *server);
+#endif
+
 /* Resource and prompt registration. */
 void cmacs_mcp_register_resources (McpServer *server);
 void cmacs_mcp_register_prompts   (McpServer *server);

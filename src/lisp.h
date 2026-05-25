@@ -5546,6 +5546,10 @@ extern void init_cmacs_whisper (void);
 extern void syms_of_cmacs_piper (void);
 extern void init_cmacs_piper (void);
 #endif
+#ifdef HAVE_CMACS_AI
+extern void syms_of_cmacs_ai (void);
+extern void init_cmacs_ai (void);
+#endif
 
 #ifdef HAVE_NATIVE_COMP
 INLINE bool

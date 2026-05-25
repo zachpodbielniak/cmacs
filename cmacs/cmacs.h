@@ -55,4 +55,8 @@
 # include "mcp/cmacs-mcp.h"
 #endif
 
+#ifdef HAVE_CMACS_AI
+# include "ai/cmacs-ai.h"
+#endif
+
 #endif /* CMACS_H */

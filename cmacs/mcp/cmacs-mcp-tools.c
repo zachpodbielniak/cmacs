@@ -81,6 +81,10 @@ cmacs_mcp_register_all_tools (McpServer *server)
 #ifdef HAVE_CMACS_AUDIO
   cmacs_mcp_tools_audio_register (server);
 #endif
+
+#ifdef HAVE_CMACS_AI
+  cmacs_mcp_tools_ai_register (server);
+#endif
 }
 
 #endif /* HAVE_CMACS_MCP */

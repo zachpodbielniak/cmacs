@@ -72,12 +72,25 @@ RUN if [ "${FEDORA_VERSION}" -ge 44 ] 2>/dev/null; then \
 COPY . /build/cmacs
 WORKDIR /build/cmacs
 
-# Remove .git pointer (submodule COPY artifact) and build bundled deps
+# Remove .git pointer (submodule COPY artifact) and build bundled deps.
+# Order matters: ai-glib MUST come before libreclaw because libreclaw's
+# Makefile references the new build/release layout (libreclaw's bundled
+# ai-glib copy is built separately and ignored at cmacs link time -- the
+# cmacs build redirects libreclaw's sub-make at the top-level canonical
+# artifact via AI_GLIB_DIR=).  ai-glib itself is built with GIR=1 so
+# AiGlib-1.0.typelib lands in the system GI search path for downstream
+# consumers (python-gi, gjs, the bacon `cmacsgi' builtin, etc.).
 RUN rm -f .git \
-    && for dep in mcp-glib crispy bacon gowl podomation libreclaw; do \
+    && for dep in mcp-glib crispy bacon gowl podomation ai-glib libreclaw; do \
            if [ -d "deps/${dep}" ]; then \
-               make -C "deps/${dep}" clean all PREFIX=/usr; \
-               make -C "deps/${dep}" install PREFIX=/usr; \
+               case "${dep}" in \
+                   ai-glib) make -C "deps/${dep}" clean all PREFIX=/usr GIR=1;; \
+                   *)       make -C "deps/${dep}" clean all PREFIX=/usr;; \
+               esac; \
+               case "${dep}" in \
+                   ai-glib) make -C "deps/${dep}" install PREFIX=/usr GIR=1;; \
+                   *)       make -C "deps/${dep}" install PREFIX=/usr;; \
+               esac; \
            fi; \
        done \
     && if ! command -v piper >/dev/null 2>&1; then \
@@ -126,6 +139,7 @@ RUN ./autogen.sh \
         --with-cmacs-gowl \
         --with-cmacs-podomation \
         --with-cmacs-libreclaw \
+        --with-cmacs-ai \
         --with-cmacs-org-ex \
         --with-cmacs-mcp \
         --with-cmacs-print \

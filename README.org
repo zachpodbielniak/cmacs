@@ -252,6 +252,44 @@ conversations fully separated across Emacs restarts.
 - Dependencies: =libsoup-3.0=, =json-glib-1.0=, =libcmark=, =sqlite3=,
   =libetpan=, =libpq=, =yaml-0.1=
 
+** AI Coding Agent (=--with-cmacs-ai=)
+
+Wrap [[https://gitlab.com/zachpodbielniak/ai-glib][ai-glib]] —
+the multi-provider GObject-based AI library — as a first-class
+coding-agent surface.  Independent of libreclaw: where libreclaw
+orchestrates conversations across channels, =cmacs-ai= is raw,
+low-latency, single-conversation model invocation tuned for code
+editing.
+
+- Eight providers via one DEFUN: =claude=, =openai=, =gemini=,
+  =grok=, =ollama=, =claude-code=, =opencode=, =claude-tmux=
+- Streaming chat buffers in =cmacs-ai-chat-mode= (derived from
+  org-mode) with the same read-only history + =* Compose= sentinel
+  pattern as libreclaw
+- Region commands: =cmacs-ai-rewrite-region=,
+  =cmacs-ai-explain-region=, =cmacs-ai-doc-region=,
+  =cmacs-ai-test-region=, =cmacs-ai-suggest-commit-message=
+- Inline FIM ghost-text completion (=cmacs-ai-completion-mode=,
+  CLI provider by default for cost control)
+- Voice loop: =M-x cmacs-ai-voice-chat= chains whisper-in / ai /
+  piper-out for full hold-to-talk coding
+- Project-aware agent: =M-x cmacs-ai-agent-open= auto-attaches
+  =CLAUDE.md= / =AGENTS.md= as the system prompt
+- Tool use via ai-glib's built-in =AiToolExecutor= (bash, read,
+  write, edit, glob, grep, web_fetch); custom Elisp tools via
+  =cmacs-ai-tools-register=
+- =#+BEGIN_SRC ai= org-babel backend
+- GObject Introspection: =AiGlib-1.0.typelib= auto-prepended to
+  GIRepository's search path so =(gi-require "AiGlib" "1.0")= and
+  the bacon =cmacsgi= builtin Just Work
+- MCP tools: =ai_prompt=, =ai_list_providers=, =ai_open_chat= for
+  outer agents to drive the in-editor AI
+- Canonical artifact: =libai-glib-1.0.a= is built once from
+  =deps/ai-glib= and shared with libreclaw via an =AI_GLIB_DIR=
+  override (no duplicate copy linked)
+- Dependencies: =libsoup-3.0=, =json-glib-1.0= (yaml-glib is
+  vendored inside ai-glib; not embedded in its static archive)
+
 ** Print to cmacs (=--with-cmacs-print=)
 
 OneNote-style "Print to cmacs" virtual printer.  Print from any
@@ -363,6 +401,7 @@ cd cmacs
   --with-cmacs-gowl \
   --with-cmacs-podomation \
   --with-cmacs-libreclaw \
+  --with-cmacs-ai \
   --with-cmacs-org-ex \
   --with-cmacs-mcp \
   --with-cmacs-print \
@@ -470,6 +509,7 @@ Requires =autoconf= (>= 2.65) and =automake=.
   --with-cmacs-gowl \
   --with-cmacs-podomation \
   --with-cmacs-libreclaw \
+  --with-cmacs-ai \
   --with-cmacs-org-ex \
   --with-cmacs-mcp \
   --with-cmacs-print \

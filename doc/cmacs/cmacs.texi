@@ -5730,6 +5730,9 @@ Commands}, for the end-to-end compile, patch, list, unpatch
 walkthrough.
 
 @c ===================================================================
+@include cmacs-ai.texi
+
+@c ===================================================================
 @node Build Configuration
 @chapter Build Configuration
 

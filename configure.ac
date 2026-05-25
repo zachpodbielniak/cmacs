@@ -659,6 +659,7 @@ OPTION_DEFAULT_OFF([cmacs-bacon],  [CMacs bacon shell])
 OPTION_DEFAULT_OFF([cmacs-gowl],  [CMacs Gowl Wayland compositor])
 OPTION_DEFAULT_OFF([cmacs-podomation], [CMacs podomation automation engine])
 OPTION_DEFAULT_OFF([cmacs-libreclaw], [CMacs libreclaw chat/Matrix client integration])
+OPTION_DEFAULT_OFF([cmacs-ai], [CMacs ai-glib AI subsystem (multi-provider chat, tools, voice)])
 OPTION_DEFAULT_OFF([cmacs-org-ex], [CMacs org-ex interactive widgets])
 OPTION_DEFAULT_OFF([cmacs-mcp], [CMacs MCP server])
 OPTION_DEFAULT_OFF([cmacs-print], [Print to cmacs virtual printer + PDF intake])
@@ -789,8 +790,8 @@ if test "$with_cmacs_libreclaw" != "no"; then
        yaml-0.1 libdex-1])
     CMACS_LIBRECLAW_CFLAGS="-I\$(srcdir)/../deps/libreclaw/src \
       -I\$(srcdir)/../deps/libreclaw/build/release \
-      -I\$(srcdir)/../deps/libreclaw/deps/ai-glib/src \
-      -I\$(srcdir)/../deps/libreclaw/deps/ai-glib/build \
+      -I\$(abs_top_srcdir)/deps/ai-glib/src \
+      -I\$(abs_top_srcdir)/deps/ai-glib/build/release \
       -I\$(srcdir)/../deps/libreclaw/deps/yaml-glib/src \
       -I\$(srcdir)/../deps/libreclaw/deps/podomation/src \
       -I\$(srcdir)/../deps/libreclaw/deps/podomation/src/module \
@@ -802,7 +803,7 @@ if test "$with_cmacs_libreclaw" != "no"; then
       $CMACS_LIBRECLAW_DEPS_CFLAGS"
     CMACS_LIBRECLAW_LIBS="-Wl,--whole-archive \$(srcdir)/../deps/libreclaw/build/release/liblc-1.0.a \
       -Wl,--no-whole-archive \
-      \$(srcdir)/../deps/libreclaw/deps/ai-glib/build/libai-glib-1.0.a \
+      \$(abs_top_srcdir)/deps/ai-glib/build/release/libai-glib-1.0.a \
       $CMACS_LIBRECLAW_DEPS_LIBS"
     CMACS_LIBRECLAW_BUNDLED=yes
   fi
@@ -812,6 +813,33 @@ if test "$with_cmacs_libreclaw" != "no"; then
     cmacs-libreclaw-hatch.o cmacs-libreclaw-cmacs-channel.o \
     cmacs-libreclaw-remote.o \
     pod-cmacs-libreclaw-module.o"
+fi
+if test "$with_cmacs_ai" != "no"; then
+  if test "$with_cmacs_glib" = "no"; then
+    AC_MSG_ERROR([--with-cmacs-ai requires --with-cmacs-glib])
+  fi
+  # ai-glib is always sourced from the top-level deps/ai-glib submodule
+  # (canonical artifact shared with --with-cmacs-libreclaw).  System
+  # ai-glib package mode is not supported yet — the vendored copy is
+  # built unconditionally to keep one source of truth and one .a on
+  # the link line.
+  PKG_CHECK_MODULES([CMACS_AI_DEPS],
+    [glib-2.0 gobject-2.0 gio-2.0 libsoup-3.0 json-glib-1.0 >= 1.6])
+  CMACS_AI_CFLAGS="-I\$(abs_top_srcdir)/deps/ai-glib/src \
+    -I\$(abs_top_srcdir)/deps/ai-glib/build/release \
+    -DCMACS_AI_GIR_DIR=\\\"\$(abs_top_srcdir)/deps/ai-glib/build/release\\\" \
+    $CMACS_AI_DEPS_CFLAGS"
+  # libai-glib-1.0.a contains only ai_* objects (vendored yaml-glib is
+  # linked into the .so, not embedded in the .a) so no dedup is needed.
+  # When --with-cmacs-libreclaw is also enabled, the same archive is
+  # already on CMACS_LIBRECLAW_LIBS — having it appear twice is safe
+  # because the second occurrence resolves zero new undefined symbols.
+  CMACS_AI_LIBS="\$(abs_top_srcdir)/deps/ai-glib/build/release/libai-glib-1.0.a \
+    $CMACS_AI_DEPS_LIBS"
+  AC_DEFINE([HAVE_CMACS_AI], 1, [CMacs ai-glib AI subsystem])
+  CMACS_AI_OBJ="cmacs-ai-init.o cmacs-ai-defuns.o cmacs-ai-config.o \
+    cmacs-ai-client.o cmacs-ai-session.o cmacs-ai-stream.o \
+    cmacs-ai-tools.o cmacs-ai-image.o cmacs-ai-typelib.o"
 fi
 if test "$with_cmacs_org_ex" != "no"; then
   AC_DEFINE([HAVE_CMACS_ORG_EX], 1, [CMacs org-ex interactive widgets])
@@ -844,6 +872,9 @@ if test "$with_cmacs_mcp" != "no"; then
   fi
   if test "$with_cmacs_audio" != "no"; then
     CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-audio.o"
+  fi
+  if test "$with_cmacs_ai" != "no"; then
+    CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-ai.o"
   fi
 fi
 # CMACS Print: pure-Elisp + shell-script subsystem (no C build artefacts).
@@ -1139,6 +1170,10 @@ AC_SUBST(CMACS_LIBRECLAW_OBJ)
 AC_SUBST(CMACS_LIBRECLAW_CFLAGS)
 AC_SUBST(CMACS_LIBRECLAW_LIBS)
 AC_SUBST(CMACS_LIBRECLAW_BUNDLED)
+
+AC_SUBST(CMACS_AI_OBJ)
+AC_SUBST(CMACS_AI_CFLAGS)
+AC_SUBST(CMACS_AI_LIBS)
 
 # CMacs API library: built as a shared library in cmacs/api/ and used
 # by both the bacon cmacsgi module and crispy scripts (in-process).
