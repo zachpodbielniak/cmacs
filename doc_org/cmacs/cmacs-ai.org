@@ -1,0 +1,169 @@
+#+TITLE: cmacs-ai
+#+SUBTITLE: ai-glib coding agent for cmacs
+#+OPTIONS: toc:2 num:nil
+
+* Overview
+
+The =cmacs-ai= subsystem wraps =ai-glib= (the multi-provider
+GObject-based AI library) and surfaces it as a first-class
+coding-agent surface inside cmacs.  It is independent of
+=cmacs-libreclaw=: libreclaw orchestrates conversations across
+channels (Matrix, email, the bridge); =cmacs-ai= is raw, low-
+latency, single-conversation model invocation tuned for editing.
+
+Enable with =--with-cmacs-ai= at configure time.  The canonical
+=libai-glib-1.0.a= is built once from =deps/ai-glib= and shared
+with =--with-cmacs-libreclaw= when both are enabled.
+
+* Providers
+
+| Symbol           | Wire     | Env / setup                          |
+|------------------+----------+--------------------------------------|
+| =claude=         | HTTP     | =ANTHROPIC_API_KEY= / =CLAUDE_API_KEY= |
+| =openai=         | HTTP     | =OPENAI_API_KEY=                     |
+| =gemini=         | HTTP     | =GEMINI_API_KEY=                     |
+| =grok=           | HTTP     | =XAI_API_KEY= / =GROK_API_KEY=       |
+| =ollama=         | HTTP     | =OLLAMA_HOST= (default localhost)    |
+| =claude-code=    | CLI      | =claude= on PATH                     |
+| =opencode=       | CLI      | =opencode= on PATH                   |
+| =claude-tmux=    | CLI/tmux | =claude= + tmux on PATH              |
+
+* Chat buffers
+
+=M-x cmacs-ai-chat= opens a fresh chat buffer in
+=cmacs-ai-chat-mode= (derived from =org-mode=).  History above the
+=* Compose= sentinel is read-only; =C-c C-c= sends the compose body
+and streams the response into a fresh =** assistant= heading.
+
+Keymap:
+
+| Key         | Command                       |
+|-------------+-------------------------------|
+| =C-c C-c=   | =cmacs-ai-chat-send-compose=  |
+| =C-c C-k=   | =cmacs-ai-chat-cancel-stream= |
+| =C-c C-l=   | =cmacs-ai-chat-clear-history= |
+| =C-c C-s=   | =cmacs-ai-chat-save=          |
+
+* Region commands
+
+| Command                        | What                                         |
+|--------------------------------+----------------------------------------------|
+| =cmacs-ai-rewrite-region=      | Replace region with AI rewrite (one undo step) |
+| =cmacs-ai-explain-region=      | Side-window Org explanation                  |
+| =cmacs-ai-doc-region=          | Insert idiomatic doc comment above           |
+| =cmacs-ai-test-region=         | Synthesize a unit test in a scratch buffer   |
+| =cmacs-ai-suggest-commit-message= | Draft a commit message from the staged diff |
+
+* Inline ghost-text completion
+
+=cmacs-ai-completion-mode= is a buffer-local minor mode that
+drives idle-timer FIM completion.  After
+=cmacs-ai-completion-idle-delay= seconds of no input, a request is
+fired with the buffer prefix+suffix as FIM context; the result
+renders as a =shadow=-faced overlay accepted with =TAB=.
+
+Default provider is =claude-code= to avoid per-keystroke HTTP
+costs.  Override via =cmacs-ai-completion-provider=.
+
+* Voice loop
+
+=M-x cmacs-ai-voice-chat= opens a chat buffer wired for full voice
+round-trip:
+
+1. =cmacs-whisper-dictate= transcribes recorded speech.
+2. =ai-glib= streams the reply.
+3. =cmacs-piper-speak-region= speaks each completed sentence as it
+   streams in.
+
+Requires =cmacs-whisper=, =cmacs-piper=, =cmacs-audio= all enabled.
+
+* Coding agent
+
+=M-x cmacs-ai-agent-open= opens (or resumes) the agent chat for
+the current project root.  Before the first turn it builds a
+project-aware system prompt:
+
+- The first matching file from =cmacs-ai-agent-project-files=
+  (default: =CLAUDE.md=, =AGENTS.md=, =README.org=, =README.md=) is
+  read in full and attached as the "Project agent contract".
+- The absolute project root path is included.
+
+This makes the assistant honor the project's own conventions
+without manual cut-and-paste.
+
+* Tool use
+
+=cmacs-ai-tools-new= returns an =AiToolExecutor= handle with
+ai-glib's built-ins pre-registered: =bash=, =read=, =write=,
+=edit=, =glob=, =grep=, =ls=, =web_fetch=.  Per the project default
+all tools are enabled (full trust).  Set =cmacs-ai-tool-confirm=
+to ='destructive= for a per-call prompt on bash/write/edit, or to a
+function for custom approval.
+
+Custom Elisp tools are registered via =cmacs-ai-tools-register=:
+
+#+BEGIN_SRC elisp
+(let ((exec (cmacs-ai-tools-new)))
+  (cmacs-ai-tools-register
+   exec
+   "open-file"
+   "Open FILE in cmacs."
+   (cons '(("file" "string" "Path to open" t))
+         (lambda (_name input-json _id)
+           (find-file (alist-get 'file
+                                  (json-read-from-string input-json)))
+           "opened"))))
+#+END_SRC
+
+* Image generation
+
+=cmacs-ai-image-generate-async= drives OpenAI/Gemini/Grok image-
+generator interfaces.  Returns =(:images ((:url ... :base64 ...
+:mime ... :revised ...) ...))= or =(:error MSG)=.
+
+* Org-babel integration
+
+=cmacs-ai-org-block-register= adds an =ai= language to
+=org-babel-load-languages=:
+
+#+BEGIN_EXAMPLE
+,#+BEGIN_SRC ai :provider claude :system "Be brief"
+Explain the GIL.
+,#+END_SRC
+#+END_EXAMPLE
+
+* GObject Introspection
+
+The cmacs-ai init path prepends
+=$top_srcdir/deps/ai-glib/build/release= to GIRepository's search
+path and eagerly requires =AiGlib-1.0=.  After =init_cmacs_ai=
+runs, the typelib is reachable from:
+
+- Elisp: =(gi-require "AiGlib" "1.0")= returns =t=.
+- The bacon =cmacsgi= builtin.
+- The MCP =gi_*= tools.
+
+* MCP tools
+
+Built with =--with-cmacs-mcp=, three tools are exposed:
+
+| Tool               | Args                              |
+|--------------------+-----------------------------------|
+| =ai_prompt=        | =prompt= req, =provider=, =system= |
+| =ai_list_providers= | (none)                            |
+| =ai_open_chat=     | =prompt=, =provider= (opt)        |
+
+* Configuration
+
+| Defcustom                       | Default                      |
+|---------------------------------+------------------------------|
+| =cmacs-ai-default-provider=     | ='claude=                    |
+| =cmacs-ai-default-model=        | nil (provider default)       |
+| =cmacs-ai-system-prompt=        | coding-assistant boilerplate |
+| =cmacs-ai-max-tokens=           | 4096                         |
+| =cmacs-ai-enabled-tools=        | full built-in set            |
+| =cmacs-ai-tool-confirm=         | nil                          |
+| =cmacs-ai-chat-dir=             | =$XDG_DATA_HOME/cmacs-ai/=    |
+| =cmacs-ai-config-file=          | =$XDG_CONFIG_HOME/ai-glib/config.yaml= |
+| =cmacs-ai-completion-provider=  | ='claude-code=               |
+| =cmacs-ai-completion-idle-delay= | 0.3 s                        |

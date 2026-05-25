@@ -22,3 +22,6 @@
 [submodule "deps/piper"]
 	path = deps/piper
 	url = https://github.com/OHF-Voice/piper1-GPL.git
+[submodule "deps/ai-glib"]
+	path = deps/ai-glib
+	url = git@gitlab.com:zachpodbielniak/ai-glib.git

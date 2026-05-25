@@ -1,0 +1,281 @@
+@c -*- texinfo -*-
+@c This file is part of the CMacs manual.
+@c Copyright (C) 2026 Zach Podbielniak
+@c SPDX-License-Identifier: AGPL-3.0-or-later
+
+@node CMacs AI
+@chapter CMacs AI: ai-glib Coding Agent
+
+The @code{cmacs-ai} subsystem wraps @code{ai-glib} -- the multi-
+provider GObject-based AI library -- and surfaces it as a first-
+class coding-agent surface inside cmacs.  It is independent of
+@code{cmacs-libreclaw}: libreclaw orchestrates conversations across
+channels (Matrix, email, the bridge), while @code{cmacs-ai} is raw,
+low-latency, single-conversation model invocation tuned for editing
+code.
+
+Enable with @option{--with-cmacs-ai} at configure time.  The
+canonical @code{libai-glib-1.0.a} is built once from
+@file{deps/ai-glib} and shared with @code{--with-cmacs-libreclaw}
+when both are enabled (libreclaw's sub-make is redirected via
+@code{AI_GLIB_DIR=}, so there is never a duplicate copy linked).
+
+@menu
+* CMacs AI Providers::
+* CMacs AI Chat Buffers::
+* CMacs AI Region Commands::
+* CMacs AI Inline Completion::
+* CMacs AI Voice Loop::
+* CMacs AI Coding Agent::
+* CMacs AI Tool Use::
+* CMacs AI Image Generation::
+* CMacs AI Org Blocks::
+* CMacs AI GObject Introspection::
+* CMacs AI MCP Tools::
+* CMacs AI Configuration::
+@end menu
+
+@node CMacs AI Providers
+@section Providers
+
+Eight providers are wired through the same @code{cmacs-ai-client-new}
+DEFUN:
+
+@table @code
+@item claude
+Anthropic Claude (HTTP).  Reads @env{ANTHROPIC_API_KEY} or
+@env{CLAUDE_API_KEY}.
+@item openai
+OpenAI GPT (HTTP).  Reads @env{OPENAI_API_KEY}.
+@item gemini
+Google Gemini (HTTP).  Reads @env{GEMINI_API_KEY}.
+@item grok
+xAI Grok (HTTP).  Reads @env{XAI_API_KEY} or @env{GROK_API_KEY}.
+@item ollama
+Ollama (local HTTP).  Reads @env{OLLAMA_HOST}.
+@item claude-code
+The @command{claude} CLI in @option{--print} mode.
+@item opencode
+The @command{opencode} CLI.
+@item claude-tmux
+@command{claude} driven via an ephemeral tmux session.
+@end table
+
+@node CMacs AI Chat Buffers
+@section Chat Buffers
+
+@kbd{M-x cmacs-ai-chat} opens a fresh chat buffer in
+@code{cmacs-ai-chat-mode} (derived from @code{org-mode}).  The
+buffer layout mirrors @code{cmacs-libreclaw-room-mode}:
+
+@example
+#+TITLE: cmacs-ai -- 2026-05-25 18:00:00
+#+PROPERTY: provider claude
+
+* Conversation
+** 18:00:00  user
+What is GLib?
+** 18:00:00  assistant
+GLib is a low-level C utility library...
+* Compose                                              :compose:
+@end example
+
+History above the @code{* Compose} sentinel is read-only; the
+region below is the editable prompt area.  @kbd{C-c C-c} sends the
+compose body and streams the response into a fresh @code{** assistant}
+heading via the @code{AiStreamable} signal pipeline.
+
+@table @kbd
+@item C-c C-c
+Send the compose region.
+@item C-c C-k
+Cancel an in-flight request.
+@item C-c C-l
+Clear conversation history (server-side and visible).
+@item C-c C-s
+Save the chat buffer to @code{cmacs-ai-chat-dir} (auto-saved on
+every assistant turn as well).
+@end table
+
+@node CMacs AI Region Commands
+@section Region Commands
+
+Acting on the active region without opening a chat buffer:
+
+@table @kbd
+@item M-x cmacs-ai-rewrite-region
+Prompt for an instruction; replace the region with the AI rewrite.
+The current major mode is conveyed so the output uses the right
+syntax.  Wrapped in one undo step.
+@item M-x cmacs-ai-explain-region
+Pop a side window with an Org-mode explanation of the region.
+@item M-x cmacs-ai-doc-region
+Insert an AI-written doc comment above the region (idiom matches
+the language: docstring for Python/Elisp, @code{/** */} for
+JavaDoc/Doxygen, etc.).
+@item M-x cmacs-ai-test-region
+Synthesize a unit test in a scratch buffer.
+@end table
+
+A right-click context menu entry is installed via
+@code{cmacs-ai-context-menu-install}.
+
+@node CMacs AI Inline Completion
+@section Inline Ghost-Text Completion
+
+@code{cmacs-ai-completion-mode} is a minor mode that drives idle-
+timer-based fill-in-the-middle completion.  After
+@code{cmacs-ai-completion-idle-delay} seconds of no input, a request
+is fired with the buffer prefix + suffix as FIM context; the result
+renders as a @code{shadow}-faced after-string overlay.  @kbd{TAB}
+accepts; any other key dismisses.
+
+Default provider is @code{claude-code} (CLI wrapper) so per-keystroke
+HTTP costs are avoided; override with
+@code{cmacs-ai-completion-provider}.
+
+@node CMacs AI Voice Loop
+@section Voice Loop
+
+@kbd{M-x cmacs-ai-voice-chat} opens a chat buffer wired for full
+voice round-trip: whisper transcribes a held-down recording via
+@code{cmacs-whisper-dictate}, ai-glib streams the reply, and
+@code{cmacs-piper-speak-region} speaks each completed sentence as
+it streams in.  All four subsystems (@code{cmacs-whisper},
+@code{cmacs-piper}, @code{cmacs-audio}, @code{cmacs-ai}) must be
+enabled.
+
+@table @code
+@item cmacs-ai-voice-auto-speak
+Whether replies are spoken.  Default @code{t}.
+@end table
+
+@node CMacs AI Coding Agent
+@section Coding Agent
+
+@kbd{M-x cmacs-ai-agent-open} opens (or resumes) the agent chat
+for the current project root.  Before the first turn, it builds a
+project-aware system prompt:
+
+@itemize
+@item
+The first matching file from @code{cmacs-ai-agent-project-files}
+(default: CLAUDE.md, AGENTS.md, README.org, README.md) is read in
+full and attached as ``Project agent contract''.
+@item
+The absolute project root path is included.
+@end itemize
+
+This makes the assistant honor the project's own conventions
+without manual cut-and-paste.
+
+@node CMacs AI Tool Use
+@section Tool Use
+
+@code{cmacs-ai-tools-new} returns an @code{AiToolExecutor} handle
+with all of ai-glib's built-ins pre-registered:
+
+@itemize @bullet
+@item @code{bash} -- run a shell command
+@item @code{read} / @code{write} / @code{edit} -- file I/O
+@item @code{glob} / @code{grep} / @code{ls} -- file discovery
+@item @code{web_fetch} -- fetch a URL (capped at 100 KB)
+@end itemize
+
+Per the project default, all tools are enabled (full trust).
+Set @code{cmacs-ai-tool-confirm} to @code{'destructive} for a
+prompt before bash/write/edit, or to a function for per-call
+custom approval.
+
+Custom Elisp tools are registered via
+@code{cmacs-ai-tools-register}; the callback is invoked with
+@code{(NAME INPUT-JSON ID)} on each model call.
+
+@node CMacs AI Image Generation
+@section Image Generation
+
+@code{cmacs-ai-image-generate-async} drives OpenAI / Gemini / Grok
+image-generator interfaces and fires a callback with a plist of
+@code{(:url U :base64 B :mime M :revised R)} entries.
+
+@node CMacs AI Org Blocks
+@section Org Babel Integration
+
+@code{cmacs-ai-org-block-register} adds an @code{ai} language to
+@code{org-babel-load-languages}:
+
+@example
+#+BEGIN_SRC ai :provider claude :system "Be brief"
+Explain the GIL.
+#+END_SRC
+@end example
+
+@kbd{C-c C-c} on the block sends the body and inserts the response
+in @code{#+RESULTS:}.
+
+@node CMacs AI GObject Introspection
+@section GObject Introspection
+
+The cmacs-ai init path prepends @code{$top_srcdir/deps/ai-glib/build/release}
+to GIRepository's search path and eagerly requires @code{AiGlib-1.0}.
+After @code{init_cmacs_ai} runs, the typelib is reachable from:
+
+@itemize @bullet
+@item Elisp: @code{(gi-require "AiGlib" "1.0")} returns @code{t}
+without any manual @env{GI_TYPELIB_PATH} setup.
+@item The bacon @code{cmacsgi} builtin: @code{cmacsgi eval "(gi-require
+\"AiGlib\" \"1.0\")"}.
+@item The MCP @code{gi_*} tools (@code{gi_list_namespaces},
+@code{gi_describe}, @code{gi_call}).
+@end itemize
+
+This is the same machinery used for all other GI-exposed cmacs
+libraries; no per-class binding code is needed.
+
+@node CMacs AI MCP Tools
+@section MCP Tools
+
+Built with @option{--with-cmacs-mcp}, three tools are exposed on the
+cmacs MCP socket:
+
+@table @code
+@item ai_prompt
+One-shot synchronous prompt.  Args: @code{prompt} (required),
+@code{provider}, @code{system}.
+@item ai_list_providers
+Enumerate provider symbols.
+@item ai_open_chat
+Open a chat buffer (optionally seeded with a first prompt).  Returns
+the buffer name.
+@end table
+
+External agents (e.g. an outer Claude Code instance) can drive the
+in-editor AI through these tools.
+
+@node CMacs AI Configuration
+@section Configuration
+
+@table @code
+@item cmacs-ai-default-provider
+Default provider symbol.  Default @code{claude}.
+@item cmacs-ai-default-model
+Default model string, or @code{nil} for the provider default.
+@item cmacs-ai-system-prompt
+System prompt for new chat sessions.
+@item cmacs-ai-max-tokens
+Default max output tokens.  Default @code{4096}.
+@item cmacs-ai-enabled-tools
+Built-in tools advertised to the model.
+@item cmacs-ai-tool-confirm
+@code{nil} (never prompt) / @code{'destructive} / function.
+@item cmacs-ai-chat-dir
+Where auto-saved chats land.
+@item cmacs-ai-config-file
+Path to ai-glib's optional YAML config
+(@file{~/.config/ai-glib/config.yaml} by default).  Honored by
+ai-glib's @code{AiConfig} singleton; this defcustom is
+informational only.
+@end table
+
+API keys are sourced from environment variables (see Providers
+above) or from @file{~/.config/ai-glib/config.yaml}.
