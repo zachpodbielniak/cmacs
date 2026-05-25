@@ -367,6 +367,9 @@ cd cmacs
   --with-cmacs-mcp \
   --with-cmacs-print \
   --with-cmacs-video \
+  --with-cmacs-audio \
+  --with-cmacs-whisper \
+  --with-cmacs-piper \
   --with-cmacs-cintrospect \
   --enable-cmacs-cpatch
 make -j$(nproc)
@@ -471,6 +474,9 @@ Requires =autoconf= (>= 2.65) and =automake=.
   --with-cmacs-mcp \
   --with-cmacs-print \
   --with-cmacs-video \
+  --with-cmacs-audio \
+  --with-cmacs-whisper \
+  --with-cmacs-piper \
   --with-cmacs-cintrospect \
   --enable-cmacs-cpatch
 #+end_src
@@ -503,6 +509,9 @@ Module flags:
 - =--with-cmacs-mcp= — MCP server for AI-native runtime control
 - =--with-cmacs-print= — Print to cmacs virtual printer + PDF intake
 - =--with-cmacs-video= — GStreamer video overlay: =#+BEGIN_VIDEO= blocks + =cmacs-video-mode=.  Supports file/HTTP/RTSP/RTSPS via =playbin3=.  Requires GStreamer 1.20+ + plugins-{base,good,bad,ugly} + libav and =--with-pgtk= for display (decode side works without).  Runs under any Wayland or X11 compositor; does *not* require =--with-cmacs-gowl=.
+- =--with-cmacs-audio= — GStreamer audio capture (pipewiresrc/pulsesrc → appsink) and playback (appsrc → autoaudiosink).  Inline =#+BEGIN_AUDIO= org blocks render a cairo waveform overlay.  Default capture caps are 16 kHz/mono/S16LE — whisper.cpp-ready.  Shares cmacs-video's =gst_init= when both are built.  Requires =pipewire-devel= or =pulseaudio-libs-devel= (Fedora) / =libpipewire-0.3-dev= or =libpulse-dev= (Debian).
+- =--with-cmacs-whisper= — Offline speech-to-text via vendored =deps/whisper.cpp/= (or system =whisper.pc=).  Exposes synchronous + async transcription DEFUNs, an MCP =transcribe= tool, and =M-x cmacs-whisper-dictate= for live STT into the current buffer (bound to =C-c v d=).  Requires =--with-cmacs-audio= for capture PCM input.  Models live in =~/.local/share/cmacs/whisper-models/=; download with =M-x cmacs-whisper-download-model=.
+- =--with-cmacs-piper= — Offline text-to-speech via the Piper subprocess.  =M-x cmacs-piper-speak-region= (bound to =C-c v s=) speaks the active region; =M-x cmacs-piper-stop= (=C-c v S=) interrupts.  PGTK right-click context menu shows a contextual "Speak selection" / "Stop speaking" entry (auto-enables =context-menu-mode= unless =cmacs-piper-auto-enable-context-menu= is nil).  Voices live in =~/.local/share/cmacs/piper-voices/=.  Requires =--with-cmacs-audio= for playback.
 - =--with-cmacs-cintrospect= — Runtime C self-introspection: libdw DWARF reader + libgccjit JIT.  Inspect any symbol/type/source-location at runtime, compile new C from Lisp.  Default-on; needs =elfutils-devel= (Fedora) / =libdw-dev libelf-dev= (Debian).
 - =--enable-cmacs-cpatch= — Runtime C hot-patching.  Atomic =Lisp_Subr.function= swap (Phase 1) + trampoline detours (Phase 3).  *DANGEROUS* — wrong patch silently corrupts in-process state.  Off by default; requires =--with-cmacs-cintrospect=.  See [[file:doc_org/cmacs/cintrospect.org][the cintrospect manual]] for the full safety story.
 

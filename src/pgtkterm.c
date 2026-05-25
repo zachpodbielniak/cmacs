@@ -73,6 +73,10 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 #include "cmacs-video.h"
 #endif
 
+#ifdef HAVE_CMACS_AUDIO
+#include "cmacs-audio.h"
+#endif
+
 #ifdef GDK_WINDOWING_WAYLAND
 #include <gdk/gdkwayland.h>
 #endif
@@ -5088,6 +5092,14 @@ pgtk_handle_draw (GtkWidget *widget, cairo_t *cr, gpointer *data)
          runs under any Wayland/X11 compositor that hosts pgtk. */
       if (f != NULL)
         cmacs_video_overlay_paint (f, cr);
+#endif
+#ifdef HAVE_CMACS_AUDIO
+      /* cmacs-audio-overlay: standalone waveform surfaces (cmacs-audio-mode
+         buffers).  Inline #+BEGIN_AUDIO blocks use Emacs overlay images
+         instead of this paint pass — this only paints standalone-anchored
+         streams. */
+      if (f != NULL)
+        cmacs_audio_overlay_paint (f, cr);
 #endif
 #ifdef HAVE_CMACS_GLIB
       /* cmacs-ink-overlay: paint stroke layers AFTER the back-

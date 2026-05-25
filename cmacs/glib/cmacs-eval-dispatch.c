@@ -19,6 +19,127 @@
 #include "cmacs-eval-dispatch.h"
 
 #include <glib.h>
+#include <stdatomic.h>
+#include <stdint.h>
+#include <string.h>
+
+/* ── waiting_for_input guard + safe_calln wrappers ─────────────────────
+ *
+ * See the long comment in dispatch_safe_eval below for the why.  These
+ * helpers are the public API for any GLib callback that needs to
+ * invoke Lisp.  They mirror safe_calln but clear waiting_for_input
+ * around the call so signals stay inside the condition-case. */
+
+void
+cmacs_dispatch_safe_callN (Lisp_Object fn, ptrdiff_t nargs,
+                           Lisp_Object *args)
+{
+  if (NILP (fn))
+    return;
+  /* Build a single-argument-vector layout for safe_funcall: [fn, a0, ...].
+   * Stack-allocate for the common small-N case; spill to malloc for
+   * pathologically large N.  Most call sites are <= 4 args. */
+  enum { STK_MAX = 8 };
+  Lisp_Object stkbuf[STK_MAX + 1];
+  Lisp_Object *full =
+    nargs + 1 <= STK_MAX + 1 ? stkbuf : xmalloc ((nargs + 1) * sizeof (Lisp_Object));
+  full[0] = fn;
+  if (nargs > 0)
+    memcpy (full + 1, args, nargs * sizeof (Lisp_Object));
+  bool was_waiting = waiting_for_input;
+  if (was_waiting)
+    clear_waiting_for_input ();
+  safe_funcall (nargs + 1, full);
+  if (was_waiting)
+    set_waiting_for_input (input_available_clear_time);
+  if (full != stkbuf)
+    xfree (full);
+}
+
+void
+cmacs_dispatch_safe_call1 (Lisp_Object fn, Lisp_Object a1)
+{
+  Lisp_Object args[1] = { a1 };
+  cmacs_dispatch_safe_callN (fn, 1, args);
+}
+
+void
+cmacs_dispatch_safe_call2 (Lisp_Object fn, Lisp_Object a1, Lisp_Object a2)
+{
+  Lisp_Object args[2] = { a1, a2 };
+  cmacs_dispatch_safe_callN (fn, 2, args);
+}
+
+void
+cmacs_dispatch_safe_call3 (Lisp_Object fn, Lisp_Object a1,
+                           Lisp_Object a2, Lisp_Object a3)
+{
+  Lisp_Object args[3] = { a1, a2, a3 };
+  cmacs_dispatch_safe_callN (fn, 3, args);
+}
+
+/* ── One-shot callback registry ──────────────────────────────────────── */
+
+static Lisp_Object cmacs_dispatch__cb_table;
+static gboolean    cmacs_dispatch__cb_table_init;
+static _Atomic uint64_t cmacs_dispatch__next_cookie = 1;
+
+static void
+cb_table_ensure (void)
+{
+  if (cmacs_dispatch__cb_table_init)
+    return;
+  cmacs_dispatch__cb_table_init = TRUE;
+  cmacs_dispatch__cb_table = CALLN (Fmake_hash_table, QCtest, Qeql);
+  staticpro (&cmacs_dispatch__cb_table);
+}
+
+uint64_t
+cmacs_dispatch_callback_register (Lisp_Object fn)
+{
+  if (NILP (fn))
+    return 0;
+  cb_table_ensure ();
+  uint64_t cookie = atomic_fetch_add (&cmacs_dispatch__next_cookie, 1);
+  Fputhash (make_uint (cookie), fn, cmacs_dispatch__cb_table);
+  return cookie;
+}
+
+static Lisp_Object
+cb_pop (uint64_t cookie)
+{
+  if (!cmacs_dispatch__cb_table_init || cookie == 0)
+    return Qnil;
+  Lisp_Object key = make_uint (cookie);
+  Lisp_Object fn  = Fgethash (key, cmacs_dispatch__cb_table, Qnil);
+  Fremhash (key, cmacs_dispatch__cb_table);
+  return fn;
+}
+
+void
+cmacs_dispatch_callback_invoke1 (uint64_t cookie, Lisp_Object a1)
+{
+  Lisp_Object fn = cb_pop (cookie);
+  if (NILP (fn))
+    return;
+  cmacs_dispatch_safe_call1 (fn, a1);
+}
+
+void
+cmacs_dispatch_callback_invokeN (uint64_t cookie, ptrdiff_t nargs,
+                                 Lisp_Object *args)
+{
+  Lisp_Object fn = cb_pop (cookie);
+  if (NILP (fn))
+    return;
+  cmacs_dispatch_safe_callN (fn, nargs, args);
+}
+
+void
+cmacs_dispatch_callback_drop (uint64_t cookie)
+{
+  (void) cb_pop (cookie);
+}
 
 /* ── Safe evaluation helpers ───────────────────────────────────────── */
 

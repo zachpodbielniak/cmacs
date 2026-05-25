@@ -860,6 +860,70 @@ If CHANNEL is non-nil, filter to that channel."
 ;;; because it requires this file back — the autoload path keeps
 ;;; the dependency one-directional.
 
+;;;; Voice messages -------------------------------------------------
+;;
+;; When `cmacs-audio' is built, M-x cmacs-libreclaw-send-voice-message
+;; records a short utterance, transcribes it via cmacs-whisper (when
+;; built), and sends the transcript as the message body.  Future
+;; iterations will attach the WAV itself to the bridge frame; for now
+;; the transcript-only path makes the cross-subsystem composition
+;; usable end-to-end without altering the libreclaw wire protocol.
+
+(defvar cmacs-libreclaw--pending-voice nil)
+
+(declare-function cmacs-audio--capture-open-1 "cmacs-audio" (&rest plist))
+(declare-function cmacs-audio-start "cmacs-audio" (handle))
+(declare-function cmacs-audio-close "cmacs-audio" (handle))
+(declare-function cmacs-audio-write-file "cmacs-audio" (handle path))
+(declare-function cmacs-whisper-transcribe-file "cmacs-whisper" (model path &optional lang))
+(declare-function cmacs-whisper-model-path "cmacs-whisper" (&optional name))
+(defvar cmacs-audio-output-dir)
+(defvar cmacs-whisper-language)
+
+;;;###autoload
+(defun cmacs-libreclaw-send-voice-message (channel room-id)
+  "Record a voice message and send it (transcribed) to CHANNEL ROOM-ID."
+  (interactive
+   (let* ((rooms (cmacs-libreclaw-list-rooms))
+          (choices (mapcar (lambda (r)
+                             (format "%s / %s" (nth 0 r) (or (nth 2 r) (nth 1 r))))
+                           rooms))
+          (pick (completing-read "Voice -> Room: " choices nil t))
+          (idx (cl-position pick choices :test #'equal))
+          (row (nth idx rooms)))
+     (list (nth 0 row) (nth 1 row))))
+  (unless (and (featurep 'cmacs-audio) (fboundp 'cmacs-audio--capture-open-1))
+    (user-error "cmacs-audio not built"))
+  (let* ((wav (expand-file-name
+               (format-time-string "voice-%Y%m%d-%H%M%S.wav")
+               (or (bound-and-true-p cmacs-audio-output-dir) "/tmp/")))
+         (h (cmacs-audio--capture-open-1)))
+    (cmacs-audio-start h)
+    (message "cmacs-libreclaw: recording voice message (M-x cmacs-libreclaw-finish-voice-message to stop)")
+    (setq cmacs-libreclaw--pending-voice (list h wav channel room-id))))
+
+;;;###autoload
+(defun cmacs-libreclaw-finish-voice-message ()
+  "Stop recording started by `cmacs-libreclaw-send-voice-message' and dispatch."
+  (interactive)
+  (pcase cmacs-libreclaw--pending-voice
+    (`(,h ,wav ,channel ,room-id)
+     (cmacs-audio-write-file h wav)
+     (cmacs-audio-close h)
+     (setq cmacs-libreclaw--pending-voice nil)
+     (let ((body (cond
+                  ((and (featurep 'cmacs-whisper)
+                        (fboundp 'cmacs-whisper-transcribe-file))
+                   (let* ((res (cmacs-whisper-transcribe-file
+                                (cmacs-whisper-model-path) wav
+                                (or (bound-and-true-p cmacs-whisper-language) "en")))
+                          (text (cdr (assq :text res))))
+                     (or text "(voice transcription unavailable)")))
+                  (t (format "[voice message: %s]" (file-name-nondirectory wav))))))
+       (cmacs-libreclaw-send-message channel room-id (string-trim body))
+       (message "cmacs-libreclaw: voice message sent")))
+    (_ (user-error "cmacs-libreclaw: no voice recording in progress"))))
+
 (provide 'cmacs-libreclaw)
 
 ;;; cmacs-libreclaw.el ends here

@@ -16,7 +16,52 @@
 
 #ifdef HAVE_CMACS_GLIB
 
+#include "lisp.h"
 #include <glib.h>
+#include <stdint.h>
+
+/* ── Safe Lisp callback invocation from GLib callbacks ────────────────
+ *
+ * GLib callbacks fire from `g_main_context_dispatch`, which on the pgtk
+ * build is driven by `xg_select` (xgselect.c) -- a code path that does
+ * NOT pass through `cmacs_glib_dispatch`, so `waiting_for_input` stays
+ * true.  Any Lisp signal raised inside such a callback hits
+ * `signal_or_quit`'s impossible branch and aborts the whole process
+ * before `safe_funcall`'s internal condition-case can catch it.
+ *
+ * Use these helpers for every safe_calln from a GLib callback.  They
+ * temporarily clear `waiting_for_input` around the call so signals
+ * stay inside the condition-case.  Always-noop when fn is nil.  */
+extern void cmacs_dispatch_safe_callN (Lisp_Object fn, ptrdiff_t nargs,
+                                       Lisp_Object *args);
+extern void cmacs_dispatch_safe_call1 (Lisp_Object fn, Lisp_Object a1);
+extern void cmacs_dispatch_safe_call2 (Lisp_Object fn,
+                                       Lisp_Object a1, Lisp_Object a2);
+extern void cmacs_dispatch_safe_call3 (Lisp_Object fn,
+                                       Lisp_Object a1, Lisp_Object a2,
+                                       Lisp_Object a3);
+
+/* ── One-shot callback registry (cookie-keyed, GC-rooted) ─────────────
+ *
+ * Async jobs (cmacs-piper subprocess, cmacs-whisper worker, etc.) need
+ * to stash a Lisp callback through a C heap struct for the duration of
+ * a libgio / pthread round-trip.  Holding a raw Lisp_Object in C heap
+ * is wrong: it has no GC root, and Emacs may reclaim the closure
+ * mid-job.  Instead, register the callback here -- the registry is a
+ * staticpro'd Lisp hash table, so the closure stays rooted -- and pass
+ * the integer cookie through C.  On completion, invoke1+pop in one
+ * call drops the root atomically. */
+extern uint64_t   cmacs_dispatch_callback_register (Lisp_Object fn);
+
+/* Look up + remove + invoke under the input guard.  No-ops cleanly if
+ * cookie is unknown (e.g. callback was already invoked). */
+extern void cmacs_dispatch_callback_invoke1 (uint64_t cookie, Lisp_Object a1);
+extern void cmacs_dispatch_callback_invokeN (uint64_t cookie,
+                                             ptrdiff_t nargs,
+                                             Lisp_Object *args);
+
+/* Drop without invoking (cancellation path). */
+extern void cmacs_dispatch_callback_drop    (uint64_t cookie);
 
 /* Evaluate EXPRESSION as elisp.  On success, return the printed
    result (caller must g_free).  On error, set *ERROR and return NULL. */

@@ -2,6 +2,26 @@ ARG FEDORA_VERSION=43
 FROM registry.fedoraproject.org/fedora:${FEDORA_VERSION} AS builder
 ARG FEDORA_VERSION
 
+# ---------------------------------------------------------------------
+# Default voice + STT model bundled into the image.  Override at build
+# time with --build-arg to swap languages/sizes, e.g.
+#
+#   build-container --build-arg WHISPER_MODEL_NAME=ggml-small.en.bin \
+#                   --build-arg PIPER_VOICE_NAME=en_GB-alba-medium.onnx \
+#                   --build-arg PIPER_VOICE_DIR=en/en_GB/alba/medium
+#
+# Models land in /usr/share/cmacs/{whisper-models,piper-voices}/ in
+# the staged image; cmacs-whisper.el and cmacs-piper.el's search
+# paths pick them up automatically (user dir under ~/.local/share/
+# wins if both exist).  Total cost in the image: ~210 MB for the
+# defaults below.
+# ---------------------------------------------------------------------
+ARG WHISPER_MODEL_NAME=ggml-base.en.bin
+ARG WHISPER_MODEL_URL=https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
+ARG PIPER_VOICE_NAME=en_US-amy-low.onnx
+ARG PIPER_VOICE_DIR=en/en_US/amy/low
+ARG PIPER_VOICE_BASE_URL=https://huggingface.co/rhasspy/piper-voices/resolve/main
+
 # System build dependencies
 # Fedora 44+ ships wlroots-0.20 as wlroots-devel; gowl needs
 # wlroots-0.19, available as the wlroots0.19-devel compat package.
@@ -11,7 +31,7 @@ RUN if [ "${FEDORA_VERSION}" -ge 44 ] 2>/dev/null; then \
         WLROOTS_PKG=wlroots-devel; \
     fi \
     && dnf install -y \
-        autoconf automake gcc make pkgconf-pkg-config texinfo \
+        autoconf automake gcc gcc-c++ make pkgconf-pkg-config texinfo \
         gnutls-devel ncurses-devel zlib-devel \
         gtk3-devel \
         libgccjit-devel \
@@ -36,7 +56,14 @@ RUN if [ "${FEDORA_VERSION}" -ge 44 ] 2>/dev/null; then \
         gstreamer1-plugins-good gstreamer1-plugins-bad-free-devel \
         gstreamer1-plugins-bad-free-extras gstreamer1-plugins-ugly-free \
         gstreamer1-libav \
+        pipewire-devel pipewire-libs pulseaudio-libs-devel \
+        cmake espeak-ng python3-pip \
+        curl \
     && dnf clean all
+# pipewire-devel + pulseaudio-libs-devel: cmacs-audio capture source
+# (pipewiresrc preferred, pulsesrc fallback).  cmake: bundled
+# whisper.cpp build.  espeak-ng: phonemiser used by piper-tts.
+# python3-pip: installs the piper-tts CLI in the later RUN step.
 # elfutils-devel + libdebuginfod: cintrospect's libdw DWARF reader.
 # binutils-devel: provides dis-asm.h / libopcodes for cpatch's
 # (currently optional) prologue probe.  cmacs builds without it via
@@ -53,7 +80,17 @@ RUN rm -f .git \
                make -C "deps/${dep}" install PREFIX=/usr; \
            fi; \
        done \
+    && if [ -d "deps/whisper.cpp" ]; then \
+           make -C deps/whisper.cpp libwhisper.a; \
+       fi \
+    && if ! command -v piper >/dev/null 2>&1; then \
+           dnf install -y python3-pip espeak-ng \
+              && pip install --no-cache-dir piper-tts; \
+       fi \
     && ldconfig
+# Piper (OHF-Voice piper1-GPL fork) ships as a Python package; the
+# `piper` console-script is installed by pip.  deps/piper is kept as
+# a submodule for reference / test fixtures but is not built from source.
 
 # Build cmacs
 RUN ./autogen.sh \
@@ -87,6 +124,9 @@ RUN ./autogen.sh \
         --with-cmacs-mcp \
         --with-cmacs-print \
         --with-cmacs-video \
+        --with-cmacs-audio \
+        --with-cmacs-whisper \
+        --with-cmacs-piper \
         --with-cmacs-cintrospect \
         --enable-cmacs-cpatch \
     && make -j"$(nproc)" \
@@ -173,6 +213,38 @@ RUN set -eux \
     && install -d -m 0755 /build/stage/usr/lib/systemd/user-preset \
     && install -m 0644 cmacs/print/50-cmacs-print.preset \
        /build/stage/usr/lib/systemd/user-preset/50-cmacs-print.preset
+
+# ---------------------------------------------------------------------
+# cmacs-whisper + cmacs-piper: bundle the default English STT model
+# and TTS voice into the image so the subsystems work out of the box
+# on downstream images that copy /build/stage/usr/. into /usr/.
+#
+# Staged layout (FHS-compliant; models are data, not executables):
+#   /usr/share/cmacs/whisper-models/${WHISPER_MODEL_NAME}
+#   /usr/share/cmacs/piper-voices/${PIPER_VOICE_NAME}
+#   /usr/share/cmacs/piper-voices/${PIPER_VOICE_NAME}.json
+#
+# User-installed models under ~/.local/share/cmacs/* take precedence
+# over these (cmacs-whisper-models-search-path / -voices-search-path
+# put the user dir first); these are the system-wide fallbacks.
+#
+# Override at build time with the ARGs at the top of the file.
+# ---------------------------------------------------------------------
+RUN install -d -m 0755 \
+        /build/stage/usr/share/cmacs/whisper-models \
+        /build/stage/usr/share/cmacs/piper-voices \
+ && echo "==> Downloading whisper model: ${WHISPER_MODEL_NAME}" \
+ && curl -fsSL -o "/build/stage/usr/share/cmacs/whisper-models/${WHISPER_MODEL_NAME}" \
+        "${WHISPER_MODEL_URL}" \
+ && echo "==> Downloading piper voice:   ${PIPER_VOICE_NAME}" \
+ && curl -fsSL -o "/build/stage/usr/share/cmacs/piper-voices/${PIPER_VOICE_NAME}" \
+        "${PIPER_VOICE_BASE_URL}/${PIPER_VOICE_DIR}/${PIPER_VOICE_NAME}" \
+ && curl -fsSL -o "/build/stage/usr/share/cmacs/piper-voices/${PIPER_VOICE_NAME}.json" \
+        "${PIPER_VOICE_BASE_URL}/${PIPER_VOICE_DIR}/${PIPER_VOICE_NAME}.json" \
+ && chmod 0644 \
+        "/build/stage/usr/share/cmacs/whisper-models/${WHISPER_MODEL_NAME}" \
+        "/build/stage/usr/share/cmacs/piper-voices/${PIPER_VOICE_NAME}" \
+        "/build/stage/usr/share/cmacs/piper-voices/${PIPER_VOICE_NAME}.json"
 
 # ---------------------------------------------------------------------
 # D-Bus session-bus activation file.  Stages

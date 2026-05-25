@@ -51,6 +51,11 @@ static const gchar *source_events[] = {
   "on_region_change",
   "on_compile_finish",
   "on_hook",
+  /* cmacs-audio + cmacs-whisper voice events.  Fired by the Elisp
+   * `cmacs-audio-voice-event-functions' hook in `cmacs-audio.el' when
+   * a transcript or matched keyword is available. */
+  "on_transcription_ready",
+  "on_voice_command",
   NULL
 };
 
@@ -95,6 +100,8 @@ static const gchar *handler_funcs[] = {
   "mkdir",
   /* Notification (pure GLib) */
   "notify",
+  /* cmacs-piper voice action. */
+  "speak",
   NULL
 };
 
@@ -757,6 +764,22 @@ cmacs_handle_event (PodEventHandler *handler,
 
   if (g_strcmp0 (event_name, "notify") == 0)
     return handle_notify (params);
+
+  /* ── cmacs-piper speak (routes through Elisp via eval) ─────── */
+
+  if (g_strcmp0 (event_name, "speak") == 0)
+    {
+      const gchar *text = get_param_string (params, 0);
+      if (!text) return FALSE;
+      g_autofree gchar *quoted = g_strdup_printf ("\"%s\"", text);
+      g_autofree gchar *expr =
+        g_strdup_printf ("(progn (require 'cmacs-piper) "
+                         "(cmacs-piper-speak-async %s))",
+                         quoted);
+      g_autoptr (GError) err = NULL;
+      g_autofree gchar *r = cmacs_dispatch_eval (expr, &err);
+      return r != NULL;
+    }
 
   return FALSE;
 }

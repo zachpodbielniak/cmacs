@@ -1,0 +1,241 @@
+#+TITLE: cmacs-audio — GStreamer audio capture and playback
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:t num:t
+
+* Overview
+
+cmacs-audio is the audio counterpart to [[file:cmacs-video.org][cmacs-video]].  Two
+GStreamer pipeline shapes flow through the same cmacs ~GMainContext~:
+
+- *Capture*: ~pipewiresrc~ (or ~pulsesrc~ fallback) →
+  ~audioconvert~ → ~audioresample~ →
+  ~capsfilter(audio/x-raw,format=S16LE,channels=1,rate=16000)~ →
+  ~appsink~.  The defaults are whisper-ready.
+- *Playback*: either ~playbin3 uri=URI~ (file/HTTP) or ~appsrc~
+  → ~audioconvert~ → ~audioresample~ → ~volume~ →
+  ~autoaudiosink~ (the path used by Piper TTS).
+
+Inline ~#+BEGIN_AUDIO :src "file.wav"~ org blocks render an SVG
+waveform overlay (inline image, not a per-frame cairo blit).  The
+pgtk paint hook only handles standalone-anchored streams (e.g.
+~cmacs-audio-mode~ buffers).
+
+* Requirements
+
+** Build flags
+
+#+begin_src text
+--with-cmacs-glib       # required (GMainContext + dispatch)
+--with-cmacs-audio      # this subsystem
+--with-cmacs-whisper    # optional: enables auto-transcript
+--with-cmacs-piper      # optional: enables speak handler
+#+end_src
+
+** System packages
+
+The =install-deps= script installs everything for the audio quadrant
+(audio + whisper + piper) in one go.  Manual list per distro:
+
+| Platform | Packages |
+|----------|----------|
+| Fedora   | ~pipewire-devel pipewire-libs pulseaudio-libs-devel cmake gcc-c++ pipx espeak-ng~ |
+| Debian   | ~libpipewire-0.3-dev libpulse-dev cmake g++ pipx espeak-ng~ |
+| Arch     | ~pipewire libpulse cmake python-pipx espeak-ng~ |
+| macOS    | ~pipewire cmake pipx espeak-ng~ (set ~cmacs-audio-capture-source~ to ~'coreaudio~) |
+| FreeBSD  | ~pipewire pulseaudio cmake py39-pipx espeak-ng~ |
+
+- =gcc-c++= / =g++= is required to build the vendored ~deps/whisper.cpp~
+  (whisper.cpp is C++).
+- =pipx= / =espeak-ng= are runtime deps for Piper (which is installed
+  via ~pipx install piper-tts~ in the from-source step).
+
+Followed by:
+
+#+begin_src bash
+pipx install piper-tts                                  # TTS binary
+git submodule update --init deps/whisper.cpp deps/piper # STT model + voice source trees
+./autogen.sh && just configure && make -j$(nproc)
+#+end_src
+
+* Architecture
+
+** Pipeline lifecycle
+
+1. ~cmacs-audio--capture-open-1~ (or playback variant) constructs the
+   pipeline, attaches the bus watch via ~gst_bus_create_watch~ +
+   ~g_source_attach (cmacs_glib_get_context())~ — *never*
+   ~gst_bus_add_watch~ (the latter goes to the default GMainContext).
+2. The appsink ~new-sample~ callback (streaming thread) holds
+   ~frame_mtx~ briefly, mem-copies PCM into the back buffer, swaps
+   back ↔ front, unlocks.
+3. Lisp callbacks (state, level meter) are dispatched on the main
+   thread via ~g_main_context_invoke~.
+
+** Per-stream Lisp state
+
+State callbacks, anchor markers, and level callbacks all live in a
+single staticpro'd hash ~cmacs_audio__lisp_state~ keyed by
+~uint64(handle)~.  Putting ~Lisp_Object~ fields in the stream struct
+directly would risk GC roots becoming invalid as streams are
+created/destroyed.
+
+** Teardown order
+
+Identical to cmacs-video:
+
+1. Set ~state~ to CLOSED (concurrent paint hooks skip).
+2. Destroy ~bus_watch~ GSource.
+3. ~gst_element_set_state (pipeline, GST_STATE_NULL)~ — blocks until
+   streaming threads unwind.
+4. Destroy cached cairo surface (waveform).
+5. Free PCM backing buffers.
+6. Drop GStreamer refs.
+7. Remove from Lisp state hash (LAST so any in-flight idle dispatch
+   sees valid state).
+
+* Quick Start
+
+#+begin_src elisp
+;; Record 5 seconds to a WAV
+(cmacs-audio-record-to-file "/tmp/note.wav" 5)
+
+;; Play a file
+(cmacs-audio-play-file "~/music/sample.opus")
+
+;; Drain raw capture PCM into a Lisp string
+(let ((h (cmacs-audio--capture-open-1 :rate 16000)))
+  (cmacs-audio-start h)
+  (sleep-for 1)
+  (cmacs-audio-read-pcm h 16000))
+#+end_src
+
+** Inline org block
+
+#+begin_src org
+,#+BEGIN_AUDIO :src "note.wav" :width 800 :height 100
+Voice note 2026-05-23
+,#+END_AUDIO
+#+end_src
+
+* Elisp API
+
+| DEFUN | Purpose |
+|-------+---------|
+| ~cmacs-audio-supported-p~ | t if gst_init succeeded |
+| ~cmacs-audio--capture-open-1~ | Internal capture open (keywords ~:source~, ~:rate~, ~:channels~, ~:device~, ~:level-meter~) |
+| ~cmacs-audio--playback-open-file-1~ | Open file://… for playback |
+| ~cmacs-audio--playback-open-pcm-1~ | Open empty PCM sink for ~cmacs-audio-push-pcm~ |
+| ~cmacs-audio-close~ | Destroy handle |
+| ~cmacs-audio-start~ / ~-stop~ / ~-pause~ | State control |
+| ~cmacs-audio-seek~ / ~-position~ / ~-state~ | Playback queries |
+| ~cmacs-audio-read-pcm~ | Drain capture PCM → unibyte string |
+| ~cmacs-audio-push-pcm~ | Push PCM into a playback-pcm stream |
+| ~cmacs-audio-write-file~ | Mux capture history to WAV |
+| ~cmacs-audio-level~ | (PEAK . RMS) dB |
+| ~cmacs-audio-set-volume~ / ~-set-mute~ | Playback volume |
+| ~cmacs-audio-attach-buffer~ / ~-attach-frame~ / ~-detach~ | Anchoring |
+| ~cmacs-audio-waveform-svg~ | PCM → SVG string |
+| ~cmacs-audio-add-state-handler~ / ~-remove-state-handler~ | State callbacks |
+| ~cmacs-audio-add-level-handler~ / ~-remove-level-handler~ | Level meter callbacks |
+| ~cmacs-audio-list~ | All live handles |
+
+* ~#+BEGIN_AUDIO~ block reference
+
+** Keyword arguments
+
+| Keyword | Type | Default | Meaning |
+|---------+------+---------+---------|
+| ~:src~ | string | nil | Path to a WAV file |
+| ~:record~ | bool | nil | Mark as empty placeholder for recording |
+| ~:width~ | int | 800 | SVG width |
+| ~:height~ | int | 100 | SVG height |
+| ~:colour~ / ~:color~ | string | "#3f7bd6" | Waveform stroke colour |
+
+** Recording flow
+
+1. Insert an empty block: ~#+BEGIN_AUDIO :record t \n #+END_AUDIO~.
+2. ~M-x cmacs-audio-org-record~ inside the block to start capture.
+3. ~M-x cmacs-audio-org-finish~ to stop.  The block header is
+   rewritten with ~:src "PATH"~ pointing to a sidecar WAV under
+   ~cmacs-audio-output-dir~.
+4. If ~cmacs-whisper~ is built, a folded ~#+BEGIN_AUDIO_TRANSCRIPT~
+   child block is inserted with the transcribed text.
+
+* Voice keymap
+
+A shared ~cmacs-voice-map~ is bound to ~C-c v~ and populated
+conditionally based on which subsystems are built:
+
+| Key | Command | Available when |
+|-----+---------+----------------|
+| ~C-c v r~ | ~cmacs-audio-record-to-file~ | cmacs-audio |
+| ~C-c v R~ | ~cmacs-audio-finish-recording~ | cmacs-audio |
+| ~C-c v p~ | ~cmacs-audio-play-file~ | cmacs-audio |
+| ~C-c v x~ | ~cmacs-audio-stop-all~ | cmacs-audio |
+| ~C-c v d~ | ~cmacs-whisper-dictate~ | cmacs-whisper |
+| ~C-c v s~ | ~cmacs-piper-speak-region~ | cmacs-piper |
+| ~C-c v S~ | ~cmacs-piper-stop~ | cmacs-piper |
+
+* Composition
+
+** With cmacs-whisper
+
+The 16 kHz/mono/S16LE capture caps mean drained PCM is whisper-ready
+with no resample.  See [[file:cmacs-whisper.org][cmacs-whisper.org]].
+
+** With cmacs-piper
+
+PCM emitted by Piper is fed into ~cmacs-audio--playback-open-pcm-1~.
+See [[file:cmacs-piper.org][cmacs-piper.org]].
+
+** With podomation
+
+Two new event names are registered in
+~cmacs/podomation/pod-cmacs-module.c~:
+
+- ~on_transcription_ready~: payload ~(handle transcript)~
+- ~on_voice_command~: payload ~(keyword full-transcript audio-handle)~
+
+A ~speak~ handler routes to ~cmacs-piper-speak-async~ via
+~cmacs_dispatch_eval~.
+
+DSL example:
+
+#+begin_src text
+(on on_voice_command
+  (when (equal $keyword "hey-cmacs")
+    (speak "How can I help?")))
+#+end_src
+
+** With libreclaw
+
+~M-x cmacs-libreclaw-send-voice-message~ records audio, transcribes
+via whisper (if built), and sends the transcript as the message body
+on the chosen bridge room.
+
+* Troubleshooting
+
+** No frames captured
+
+Verify GStreamer can see your source:
+
+#+begin_src bash
+gst-launch-1.0 pipewiresrc num-buffers=10 ! fakesink
+gst-launch-1.0 pulsesrc   num-buffers=10 ! fakesink
+#+end_src
+
+If pipewiresrc fails but pulsesrc succeeds, set
+~cmacs-audio-capture-source~ to ~'pulse~.
+
+** Distorted playback
+
+Confirm the appsrc caps match the PCM you're pushing.  Piper voices
+hint their native sample rate in the ~.onnx.json~ sidecar — cmacs-piper
+reads it; if you push PCM directly, set the right rate when opening
+the stream.
+
+** Permission denied
+
+PipeWire requires a session manager (pipewire-pulse / wireplumber).
+On bare PulseAudio systems, just install pulseaudio and set the
+capture source.

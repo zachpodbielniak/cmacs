@@ -59,6 +59,9 @@ configure_flags := """
     --with-cmacs-mcp
     --with-cmacs-print
     --with-cmacs-video
+    --with-cmacs-audio
+    --with-cmacs-whisper
+    --with-cmacs-piper
     --with-cmacs-cintrospect
     --enable-cmacs-cpatch
 """

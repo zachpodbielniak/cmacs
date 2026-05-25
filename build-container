@@ -8,6 +8,19 @@
 #   ./build-container 44             # use Fedora 44
 #   ./build-container 44 --push      # build Fedora 44 and push
 #
+# Override the bundled whisper STT model + piper TTS voice:
+#   WHISPER_MODEL_NAME=ggml-small.en.bin \
+#   WHISPER_MODEL_URL=https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin \
+#   PIPER_VOICE_NAME=en_GB-alba-medium.onnx \
+#   PIPER_VOICE_DIR=en/en_GB/alba/medium \
+#     ./build-container
+#
+# The defaults are an English STT (ggml-base.en, 142 MB) + an English
+# TTS voice (en_US-amy-low, 64 MB).  Models land at
+# /usr/share/cmacs/{whisper-models,piper-voices}/ in the staged image
+# and follow into the consumer image when /build/stage/usr/. is
+# copied.  cmacs's search paths pick them up automatically.
+#
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 set -euo pipefail
@@ -16,13 +29,24 @@ DO_BUILD=1
 DO_PUSH=0
 VERSION="44"
 
+# Bundled-model defaults (overridable via env or --build-arg).
+: "${WHISPER_MODEL_NAME:=ggml-base.en.bin}"
+: "${WHISPER_MODEL_URL:=https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${WHISPER_MODEL_NAME}}"
+: "${PIPER_VOICE_NAME:=en_US-amy-low.onnx}"
+: "${PIPER_VOICE_DIR:=en/en_US/amy/low}"
+: "${PIPER_VOICE_BASE_URL:=https://huggingface.co/rhasspy/piper-voices/resolve/main}"
+
 usage() {
     echo "Usage: ./build-container [VERSION] [--push] [--only-push]"
     echo
-    echo "  VERSION      Fedora version (default: 43)"
+    echo "  VERSION      Fedora version (default: 44)"
     echo "  --push       Build then push to quay.io"
     echo "  --only-push  Push without building"
     echo "  -h, --help   Show this help"
+    echo
+    echo "Override bundled models via env vars:"
+    echo "  WHISPER_MODEL_NAME, WHISPER_MODEL_URL,"
+    echo "  PIPER_VOICE_NAME, PIPER_VOICE_DIR, PIPER_VOICE_BASE_URL"
 }
 
 for arg in "$@"; do
@@ -37,10 +61,18 @@ done
 IMAGE="quay.io/zachpodbielniak/cmacs:${VERSION}"
 
 if [[ "$DO_BUILD" -eq 1 ]]; then
+    echo "==> Building ${IMAGE}"
+    echo "    Whisper model: ${WHISPER_MODEL_NAME}"
+    echo "    Piper voice:   ${PIPER_VOICE_NAME}"
     buildah build \
         --no-cache \
         --ignorefile .containerignore \
         --build-arg=FEDORA_VERSION="${VERSION}" \
+        --build-arg=WHISPER_MODEL_NAME="${WHISPER_MODEL_NAME}" \
+        --build-arg=WHISPER_MODEL_URL="${WHISPER_MODEL_URL}" \
+        --build-arg=PIPER_VOICE_NAME="${PIPER_VOICE_NAME}" \
+        --build-arg=PIPER_VOICE_DIR="${PIPER_VOICE_DIR}" \
+        --build-arg=PIPER_VOICE_BASE_URL="${PIPER_VOICE_BASE_URL}" \
         -t "${IMAGE}" \
         -f ./Containerfile .
     echo "Built ${IMAGE}"

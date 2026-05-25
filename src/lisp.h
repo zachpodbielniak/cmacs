@@ -5534,6 +5534,18 @@ extern void init_cmacs_cpatch (void);
 extern void syms_of_cmacs_video (void);
 extern void init_cmacs_video (void);
 #endif
+#ifdef HAVE_CMACS_AUDIO
+extern void syms_of_cmacs_audio (void);
+extern void init_cmacs_audio (void);
+#endif
+#ifdef HAVE_CMACS_WHISPER
+extern void syms_of_cmacs_whisper (void);
+extern void init_cmacs_whisper (void);
+#endif
+#ifdef HAVE_CMACS_PIPER
+extern void syms_of_cmacs_piper (void);
+extern void init_cmacs_piper (void);
+#endif
 
 #ifdef HAVE_NATIVE_COMP
 INLINE bool

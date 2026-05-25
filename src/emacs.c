@@ -2742,6 +2742,15 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #ifdef HAVE_CMACS_VIDEO
       syms_of_cmacs_video ();
 #endif
+#ifdef HAVE_CMACS_AUDIO
+      syms_of_cmacs_audio ();
+#endif
+#ifdef HAVE_CMACS_WHISPER
+      syms_of_cmacs_whisper ();
+#endif
+#ifdef HAVE_CMACS_PIPER
+      syms_of_cmacs_piper ();
+#endif
 
       keys_of_keyboard ();
 
@@ -2844,6 +2853,15 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #endif
 #ifdef HAVE_CMACS_VIDEO
   init_cmacs_video ();
+#endif
+#ifdef HAVE_CMACS_AUDIO
+  init_cmacs_audio ();
+#endif
+#ifdef HAVE_CMACS_WHISPER
+  init_cmacs_whisper ();
+#endif
+#ifdef HAVE_CMACS_PIPER
+  init_cmacs_piper ();
 #endif
 
   if (!initialized)

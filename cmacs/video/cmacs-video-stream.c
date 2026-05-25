@@ -30,6 +30,7 @@
 
 #include "cmacs-video-stream.h"
 #include "cmacs-glib-loop.h"
+#include "cmacs-eval-dispatch.h"
 
 #include "lisp.h"
 #include "frame.h"
@@ -743,7 +744,7 @@ cmacs_video__deliver_state_idle (gpointer ud)
     {
       Lisp_Object fn = XCAR (tail);
       if (!NILP (fn))
-        safe_calln (fn, handle, state, ev->detail);
+        cmacs_dispatch_safe_call3 (fn, handle, state, ev->detail);
     }
 out:
   if (ev)
@@ -818,13 +819,13 @@ cmacs_video__redraw_idle (gpointer ud)
     cmacs_video__lisp_get (s->handle, QCcv_anchor_buffer);
   if (BUFFERP (anchor_buf))
     {
-      safe_calln (intern ("force-window-update"), anchor_buf);
+      cmacs_dispatch_safe_call1 (intern ("force-window-update"), anchor_buf);
     }
   else if (s->standalone_frame)
     {
       Lisp_Object frame;
       XSETFRAME (frame, s->standalone_frame);
-      safe_calln (intern ("force-window-update"), frame);
+      cmacs_dispatch_safe_call1 (intern ("force-window-update"), frame);
     }
   return G_SOURCE_REMOVE;
 }

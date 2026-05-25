@@ -663,6 +663,12 @@ OPTION_DEFAULT_OFF([cmacs-org-ex], [CMacs org-ex interactive widgets])
 OPTION_DEFAULT_OFF([cmacs-mcp], [CMacs MCP server])
 OPTION_DEFAULT_OFF([cmacs-print], [Print to cmacs virtual printer + PDF intake])
 OPTION_DEFAULT_OFF([cmacs-video], [CMacs GStreamer video overlay + #+BEGIN_VIDEO blocks])
+OPTION_DEFAULT_OFF([cmacs-audio],
+  [CMacs GStreamer audio capture/playback + #+BEGIN_AUDIO blocks])
+OPTION_DEFAULT_OFF([cmacs-whisper],
+  [CMacs offline speech-to-text via vendored whisper.cpp])
+OPTION_DEFAULT_OFF([cmacs-piper],
+  [CMacs offline text-to-speech via Piper])
 
 # CMACS: pkg-config checks when enabled
 if test "$with_cmacs_glib" != "no"; then
@@ -836,6 +842,9 @@ if test "$with_cmacs_mcp" != "no"; then
   if test "$with_cmacs_cintrospect" != "no"; then
     CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-cintrospect.o"
   fi
+  if test "$with_cmacs_audio" != "no"; then
+    CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-audio.o"
+  fi
 fi
 # CMACS Print: pure-Elisp + shell-script subsystem (no C build artefacts).
 # Probe for runtime tools so install-cmacs-printer can fail loudly at
@@ -897,6 +906,133 @@ AC_SUBST(HAVE_CMACS_VIDEO)
 AC_SUBST(CMACS_VIDEO_OBJ)
 AC_SUBST(CMACS_VIDEO_CFLAGS)
 AC_SUBST(CMACS_VIDEO_LIBS)
+
+# CMACS Audio: GStreamer-backed audio capture (pipewiresrc/pulsesrc ->
+# appsink) and playback (appsrc -> autoaudiosink) wired through the
+# same cmacs GMainContext as cmacs-video.  Inline #+BEGIN_AUDIO org
+# blocks render a cairo waveform overlay.  Shares cmacs-video's
+# gst_init (init_cmacs_audio is idempotent).
+HAVE_CMACS_AUDIO=no
+if test "$with_cmacs_audio" != "no"; then
+  if test "$with_cmacs_audio" = "yes"; then
+    PKG_CHECK_MODULES([CMACS_AUDIO],
+      [gstreamer-1.0 >= 1.20 gstreamer-app-1.0 gstreamer-audio-1.0])
+    HAVE_CMACS_AUDIO=yes
+  else
+    PKG_CHECK_MODULES([CMACS_AUDIO],
+      [gstreamer-1.0 >= 1.20 gstreamer-app-1.0 gstreamer-audio-1.0],
+      [HAVE_CMACS_AUDIO=yes],
+      [AC_MSG_WARN([cmacs-audio disabled: GStreamer 1.20+ not found])])
+  fi
+  if test "$HAVE_CMACS_AUDIO" = "yes"; then
+    if test "$with_cmacs_glib" = "no"; then
+      AC_MSG_ERROR([--with-cmacs-audio requires --with-cmacs-glib (GStreamer bus dispatches via the cmacs GMainContext)])
+    fi
+    AC_DEFINE([HAVE_CMACS_AUDIO], 1, [CMacs GStreamer audio subsystem])
+    CMACS_AUDIO_OBJ="cmacs-audio-stream.o cmacs-audio-registry.o cmacs-audio-overlay.o cmacs-audio-waveform.o cmacs-audio-defuns.o cmacs-audio-init.o"
+  fi
+fi
+AC_SUBST(HAVE_CMACS_AUDIO)
+AC_SUBST(CMACS_AUDIO_OBJ)
+AC_SUBST(CMACS_AUDIO_CFLAGS)
+AC_SUBST(CMACS_AUDIO_LIBS)
+
+# CMACS Whisper: offline speech-to-text via vendored whisper.cpp.
+# Tries system pkg-config (`whisper') first, falls back to bundled
+# deps/whisper.cpp/libwhisper.a.  Requires --with-cmacs-audio for
+# capture PCM plumbing.  Async transcription routes through libdex
+# via mcp-glib's runloop integration.
+HAVE_CMACS_WHISPER=no
+CMACS_WHISPER_BUNDLED=
+if test "$with_cmacs_whisper" != "no"; then
+  if test "$with_cmacs_audio" = "no"; then
+    AC_MSG_ERROR([--with-cmacs-whisper requires --with-cmacs-audio (PCM input plumbing)])
+  fi
+  if test "$with_cmacs_whisper" = "system"; then
+    PKG_CHECK_MODULES([CMACS_WHISPER], [whisper])
+    HAVE_CMACS_WHISPER=yes
+  else
+    # Try system whisper.pc, fall back to bundled deps/whisper.cpp
+    PKG_CHECK_MODULES([CMACS_WHISPER], [whisper],
+      [HAVE_CMACS_WHISPER=yes],
+      [if test -d "$srcdir/deps/whisper.cpp"; then
+         dnl Bundled whisper.cpp is C++ and the in-tree CMake build
+         dnl needs a system C++ compiler (gcc-c++ on Fedora, g++ on
+         dnl Debian).  We don't probe here -- Emacs's own configure
+         dnl uses C, not C++, and adding a fragile CXX probe risks
+         dnl false positives on systems with a broken brew clang++.
+         dnl If your C++ toolchain is missing, the build will fail
+         dnl loudly at the whisper-cmake step; install gcc-c++ and
+         dnl re-run make.
+         PKG_CHECK_MODULES([CMACS_WHISPER_DEPS],
+           [glib-2.0 gobject-2.0 gio-2.0 libdex-1])
+         CMACS_WHISPER_CFLAGS="-I\$(srcdir)/../deps/whisper.cpp/include \
+           -I\$(srcdir)/../deps/whisper.cpp/ggml/include \
+           $CMACS_WHISPER_DEPS_CFLAGS"
+         dnl Recent whisper.cpp is CMake-only and writes into
+         dnl deps/whisper.cpp/build/{src,ggml/src}/.  We link the
+         dnl whole ggml backend set (-base, -cpu) plus the main libs.
+         CMACS_WHISPER_LIBS="\$(srcdir)/../deps/whisper.cpp/build/src/libwhisper.a \
+           \$(srcdir)/../deps/whisper.cpp/build/ggml/src/libggml.a \
+           \$(srcdir)/../deps/whisper.cpp/build/ggml/src/libggml-cpu.a \
+           \$(srcdir)/../deps/whisper.cpp/build/ggml/src/libggml-base.a \
+           -lm -lstdc++ -lpthread $CMACS_WHISPER_DEPS_LIBS"
+         CMACS_WHISPER_BUNDLED=yes
+         HAVE_CMACS_WHISPER=yes
+       else
+         AC_MSG_WARN([cmacs-whisper disabled: no system whisper.pc and deps/whisper.cpp absent (run: git submodule update --init deps/whisper.cpp)])
+       fi])
+  fi
+  if test "$HAVE_CMACS_WHISPER" = "yes"; then
+    AC_DEFINE([HAVE_CMACS_WHISPER], 1, [CMacs offline speech-to-text via whisper.cpp])
+    CMACS_WHISPER_OBJ="cmacs-whisper-context.o cmacs-whisper-job.o cmacs-whisper-defuns.o cmacs-whisper-init.o"
+  fi
+fi
+AC_SUBST(HAVE_CMACS_WHISPER)
+AC_SUBST(CMACS_WHISPER_BUNDLED)
+AC_SUBST(CMACS_WHISPER_OBJ)
+AC_SUBST(CMACS_WHISPER_CFLAGS)
+AC_SUBST(CMACS_WHISPER_LIBS)
+
+# CMACS Piper: offline text-to-speech via Piper.  Subprocess-driven
+# (piper --model M --output_raw < text > pcm), so the C side only
+# needs glib's GSubprocess.  Requires --with-cmacs-audio for playback.
+# The piper binary itself is checked for at runtime so install-after-
+# build works on systems where the user installs piper later.
+HAVE_CMACS_PIPER=no
+CMACS_PIPER_BINARY=
+if test "$with_cmacs_piper" != "no"; then
+  if test "$with_cmacs_audio" = "no"; then
+    AC_MSG_ERROR([--with-cmacs-piper requires --with-cmacs-audio (playback path)])
+  fi
+  AC_PATH_PROG([CMACS_PIPER_BINARY], [piper])
+  if test -z "$CMACS_PIPER_BINARY"; then
+    if test -d "$srcdir/deps/piper"; then
+      AC_MSG_NOTICE([cmacs-piper: piper binary not found on PATH; bundled deps/piper will be built])
+    else
+      AC_MSG_WARN([cmacs-piper: piper binary not on PATH and deps/piper absent. Subsystem will load but cmacs-piper-supported-p will return nil until piper is installed.])
+    fi
+  fi
+  PKG_CHECK_MODULES([CMACS_PIPER_DEPS],
+    [glib-2.0 gobject-2.0 gio-2.0 gio-unix-2.0])
+  CMACS_PIPER_CFLAGS="$CMACS_PIPER_DEPS_CFLAGS"
+  CMACS_PIPER_LIBS="$CMACS_PIPER_DEPS_LIBS"
+  if test -n "$CMACS_PIPER_BINARY"; then
+    AC_DEFINE_UNQUOTED([CMACS_PIPER_DEFAULT_BINARY], ["$CMACS_PIPER_BINARY"],
+      [Path to piper binary detected at configure time])
+  else
+    AC_DEFINE([CMACS_PIPER_DEFAULT_BINARY], ["piper"],
+      [Path to piper binary -- resolved via PATH at runtime])
+  fi
+  AC_DEFINE([HAVE_CMACS_PIPER], 1, [CMacs offline text-to-speech via Piper])
+  HAVE_CMACS_PIPER=yes
+  CMACS_PIPER_OBJ="cmacs-piper-job.o cmacs-piper-defuns.o cmacs-piper-init.o"
+fi
+AC_SUBST(HAVE_CMACS_PIPER)
+AC_SUBST(CMACS_PIPER_BINARY)
+AC_SUBST(CMACS_PIPER_OBJ)
+AC_SUBST(CMACS_PIPER_CFLAGS)
+AC_SUBST(CMACS_PIPER_LIBS)
 
 # CMACS Cintrospect: runtime C self-introspection (DWARF reader + JIT).
 # Default-on.  Probes for libdw + libelf via pkg-config, optional

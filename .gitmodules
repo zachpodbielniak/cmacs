@@ -16,3 +16,9 @@
 [submodule "deps/libreclaw"]
 	path = deps/libreclaw
 	url = git@gitlab.com:zachpodbielniak/libreclaw.git
+[submodule "deps/whisper.cpp"]
+	path = deps/whisper.cpp
+	url = https://github.com/ggerganov/whisper.cpp.git
+[submodule "deps/piper"]
+	path = deps/piper
+	url = https://github.com/OHF-Voice/piper1-GPL.git

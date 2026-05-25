@@ -1,0 +1,212 @@
+#+TITLE: cmacs-whisper — offline speech-to-text via whisper.cpp
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:t num:t
+
+* Overview
+
+cmacs-whisper integrates [[https://github.com/ggerganov/whisper.cpp][whisper.cpp]] for offline speech-to-text.
+Models are loaded on first reference and cached in a thread-safe
+~path → struct whisper_context*~ map; inference runs on a GThread
+worker so the Emacs main thread never blocks.  Completion is
+delivered back to the main thread via
+~g_main_context_invoke (cmacs_glib_get_context())~.
+
+* Requirements
+
+** Build flags
+
+#+begin_src text
+--with-cmacs-audio      # required (PCM input plumbing)
+--with-cmacs-whisper    # this subsystem
+#+end_src
+
+** whisper.cpp
+
+The configure script tries system ~whisper.pc~ first, then falls back
+to a bundled ~deps/whisper.cpp~ submodule.  Recent whisper.cpp is
+CMake-only — the in-tree build runs:
+
+#+begin_src bash
+git submodule update --init deps/whisper.cpp
+cd deps/whisper.cpp
+cmake -B build -DBUILD_SHARED_LIBS=OFF -DGGML_OPENMP=OFF \
+      -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=OFF \
+      -DCMAKE_C_STANDARD=11 -DCMAKE_CXX_STANDARD=17 \
+      -DCMAKE_C_STANDARD_REQUIRED=ON -DCMAKE_CXX_STANDARD_REQUIRED=ON
+cmake --build build --config Release --parallel
+#+end_src
+
+The ~src/Makefile.in~ rule fires this automatically on first
+`make`.  The ~CMAKE_C/CXX_STANDARD~ flags work around a CMake 4.x
+feature-detection table that doesn't yet know about GCC 16+
+(without them ~target_compile_features(... c_std_11 cxx_std_17)~
+errors at configure time).
+
+cmacs links the resulting static archives in this order:
+
+#+begin_src text
+deps/whisper.cpp/build/src/libwhisper.a
+deps/whisper.cpp/build/ggml/src/libggml.a
+deps/whisper.cpp/build/ggml/src/libggml-cpu.a
+deps/whisper.cpp/build/ggml/src/libggml-base.a
+-lm -lstdc++ -lpthread
+#+end_src
+
+Build host needs a C++ compiler (~gcc-c++~ on Fedora, ~g++~ on
+Debian).  ~install-deps~ pulls it in via ~PKGS_AUDIO~.
+
+** Models
+
+Models are looked up via ~cmacs-whisper-models-search-path~:
+
+1. ~~/.local/share/cmacs/whisper-models/~ — user dir, writable by
+   ~M-x cmacs-whisper-download-model~.
+2. ~/usr/share/cmacs/whisper-models/~ — system dir, populated by
+   container image builds (see ~build-container~).  The bundled
+   default English model (~ggml-base.en.bin~, 142 MB) lands here.
+
+User-installed models take precedence.  Override the bundled model
+at image-build time:
+
+#+begin_src bash
+WHISPER_MODEL_NAME=ggml-small.en.bin \
+WHISPER_MODEL_URL=https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin \
+  ./build-container
+#+end_src
+
+Manual download to the user dir:
+
+#+begin_src elisp
+M-x cmacs-whisper-download-model RET ggml-base.en.bin RET
+#+end_src
+
+Recommended starter set:
+
+| Filename | Disk | RAM | Notes |
+|----------+------+-----+-------|
+| ~ggml-tiny.en.bin~  | 75 MB | 125 MB | Real-time on CPU |
+| ~ggml-base.en.bin~  | 142 MB | 210 MB | Good default |
+| ~ggml-small.en.bin~ | 466 MB | 600 MB | Better accuracy |
+| ~ggml-medium.en.bin~ | 1.5 GB | 1.7 GB | Accurate, slow |
+
+* Architecture
+
+** Async job lifecycle
+
+1. Lisp calls ~cmacs-whisper-transcribe-async~ with model path,
+   language, WAV/PCM, and callback.
+2. C side packages a ~CmacsWhisperJob~ + spawns a ~GThread~.
+3. Worker calls ~whisper_full~ (synchronous, off the main thread).
+4. Worker calls ~g_main_context_invoke~ to hand the result back.
+5. Main-thread completion handler converts segments into a Lisp
+   alist and calls the registered callback via ~safe_calln~.
+
+** Model cache
+
+~cmacs/whisper/cmacs-whisper-context.c~ holds a single
+~GHashTable~ keyed by model path.  Lookup is single-mutex; the load
+path is only contended on the very first reference per model.  No
+eviction at v1.
+
+* Quick Start
+
+#+begin_src elisp
+;; First-time setup
+M-x cmacs-whisper-download-model RET ggml-base.en.bin RET
+
+;; Synchronous transcribe
+(cmacs-whisper-transcribe-file
+  (cmacs-whisper-model-path)
+  "/tmp/note.wav")
+;; => ((:text . "the quick brown fox...")
+;;     (:segments . (((:start . 0)   (:end . 1200) (:text . "the quick"))
+;;                   ((:start . 1200) (:end . 2400) (:text . " brown fox..."))
+;;                   ...)))
+
+;; Async with callback
+(cmacs-whisper-transcribe-async
+  (cmacs-whisper-model-path) "/tmp/note.wav"
+  (lambda (r) (message "got: %s" (cdr (assq :text r)))))
+#+end_src
+
+* Live dictation (cmacs-whisper-dictate)
+
+~M-x cmacs-whisper-dictate~ (bound to ~C-c v d~) toggles a buffer-
+local dictation mode.  Speak into the mic; whisper's own
+end-of-utterance VAD detects pauses and emits each finalised segment,
+which is inserted at point with ~undo-boundary~ between segments.
+
+** Mode-line indicator
+
+- 🎤 — recording, accumulating a window
+- 🎤… — sending a window to whisper, awaiting result
+
+** Voice commands
+
+~cmacs-whisper-dictate-command-words~ is an alist intercepted before
+text is inserted:
+
+#+begin_src elisp
+'(("new line"      . newline)
+  ("new paragraph" . (lambda () (newline) (newline)))
+  ("period"        . (lambda () (insert ?.)))
+  ("question mark" . (lambda () (insert ??)))
+  ("delete word"   . backward-kill-word)
+  ("undo"          . undo))
+#+end_src
+
+Add your own by ~customize-variable~ or via DSL.
+
+** Defcustoms (dictate)
+
+| Variable | Default | Purpose |
+|----------+---------+---------|
+| ~cmacs-whisper-dictate-window-seconds~ | 3.0 | Sliding window length |
+| ~cmacs-whisper-dictate-auto-punctuate~ | t   | Capitalise + spacing |
+| ~cmacs-whisper-dictate-command-words~ | (see above) | Voice command map |
+
+* Defcustoms (general)
+
+| Variable | Default | Purpose |
+|----------+---------+---------|
+| ~cmacs-whisper-models-directory~        | ~~/.local/share/cmacs/whisper-models/~ | User-writable model dir |
+| ~cmacs-whisper-system-models-directory~ | ~/usr/share/cmacs/whisper-models/~     | System models populated by image builds |
+| ~cmacs-whisper-models-search-path~      | (user dir, then system dir)            | Ordered lookup |
+| ~cmacs-whisper-default-model~           | ~ggml-base.en.bin~                     | Default model basename |
+| ~cmacs-whisper-language~                | ~"en"~                                 | ISO 2-letter language code |
+| ~cmacs-whisper-download-base-url~       | huggingface ggerganov mirror           | Where ~download-model~ pulls from |
+
+* MCP tool
+
+The ~transcribe~ MCP tool is registered when both ~--with-cmacs-mcp~
+and ~--with-cmacs-whisper~ are built.
+
+#+begin_src json
+{"name": "transcribe",
+ "arguments": {"audio_path": "/tmp/note.wav", "language": "en"}}
+#+end_src
+
+Returns the transcript text in the result content block.  Related
+read-only tools: ~list_whisper_models~, ~list_voices~.
+
+* Troubleshooting
+
+** Model not found
+
+~cmacs-whisper-dictate~ raises ~user-error~ if
+~(cmacs-whisper-model-path)~ doesn't exist.  Run
+~M-x cmacs-whisper-download-model~ once.
+
+** Slow inference
+
+CPU only?  Try the tiny/base model.  For a Mac with Metal:
+rebuild ~deps/whisper.cpp~ with ~WHISPER_COREML=1 make libwhisper.a~.
+For NVIDIA: ~WHISPER_CUDA=1 make~.
+
+** Empty transcription
+
+Sample rate mismatch.  Confirm capture is 16 kHz:
+
+#+begin_src elisp
+(cmacs-audio-default-rate)  ;; should be 16000
+#+end_src

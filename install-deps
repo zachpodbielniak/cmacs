@@ -144,6 +144,11 @@ set_packages_fedora () {
 	            gstreamer1-plugins-good gstreamer1-plugins-bad-free-devel
 	            gstreamer1-plugins-bad-free-extras gstreamer1-plugins-ugly-free
 	            gstreamer1-libav)
+	# cmacs-audio: pipewiresrc (preferred) + pulsesrc (fallback).
+	# cmake + gcc-c++: bundled whisper.cpp build under deps/.
+	# pipx + espeak-ng: piper-tts install + phonemization backend.
+	PKGS_AUDIO=(pipewire-devel pipewire-libs pulseaudio-libs-devel
+	            cmake gcc-c++ pipx espeak-ng)
 	PKG_CMD="sudo dnf install -y"
 }
 
@@ -168,6 +173,7 @@ set_packages_debian () {
 	PKGS_VIDEO=(libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
 	            gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
 	            gstreamer1.0-plugins-ugly gstreamer1.0-libav)
+	PKGS_AUDIO=(libpipewire-0.3-dev libpulse-dev cmake g++ pipx espeak-ng)
 	PKG_CMD="sudo apt-get install -y"
 	# NOTE: Ubuntu 24.04 (noble) ships wlroots 0.17, wayland 1.22,
 	# wayland-protocols 1.34, and pixman 0.42 --- all too old for
@@ -193,6 +199,7 @@ set_packages_arch () {
 	PKGS_GOWL=(wlroots wayland wayland-protocols libinput libxkbcommon pango cairo)
 	PKGS_VIDEO=(gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad
 	            gst-plugins-ugly gst-libav)
+	PKGS_AUDIO=(pipewire libpulse cmake python-pipx espeak-ng)
 	PKG_CMD="sudo pacman -S --needed --noconfirm"
 }
 
@@ -214,6 +221,10 @@ set_packages_macos () {
 	PKGS_GOWL=()  # Wayland not available on macOS
 	PKGS_VIDEO=(gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad
 	            gst-plugins-ugly gst-libav)
+	# pipewire is best-effort on macOS; cmacs-audio falls back to
+	# coreaudiosrc (provided by gst-plugins-good) when pipewiresrc is
+	# unavailable.  Set cmacs-audio-capture-source to 'coreaudio on macOS.
+	PKGS_AUDIO=(pipewire cmake pipx espeak-ng)
 	PKG_CMD="brew install"
 }
 
@@ -234,6 +245,7 @@ set_packages_freebsd () {
 	PKGS_VIDEO=(gstreamer1 gstreamer1-plugins-core gstreamer1-plugins-good
 	            gstreamer1-plugins-bad gstreamer1-plugins-ugly
 	            gstreamer1-plugins-libav)
+	PKGS_AUDIO=(pipewire pulseaudio cmake py39-pipx espeak-ng)
 	PKG_CMD="sudo pkg install -y"
 }
 
@@ -251,7 +263,8 @@ all_packages () {
 	     "${PKGS_INTROSPECT[@]}" \
 	     "${PKGS_GLIB[@]}" \
 	     "${PKGS_GOWL[@]}" \
-	     "${PKGS_VIDEO[@]}"
+	     "${PKGS_VIDEO[@]}" \
+	     "${PKGS_AUDIO[@]}"
 }
 
 # ── Install system packages ──────────────────────────────────────────
@@ -337,6 +350,48 @@ build_from_source () {
 		${make_cmd} -C "${dep_dir}" clean all PREFIX="${PREFIX}"
 		sudo ${make_cmd} -C "${dep_dir}" install PREFIX="${PREFIX}"
 	done
+
+	# whisper.cpp: ships its own Makefile.  Build the static lib only;
+	# cmacs links it in-tree from configure.ac.  No `make install` needed.
+	if [[ -d "${SCRIPT_DIR}/deps/whisper.cpp" ]]; then
+		echo "    Building whisper.cpp (static library)..."
+		${make_cmd} -C "${SCRIPT_DIR}/deps/whisper.cpp" libwhisper.a
+	fi
+
+	# piper: OHF-Voice piper1-GPL is a Python package; the `piper`
+	# console-script is installed by pip.  Skipped if the user already
+	# has piper.
+	#
+	# We prefer `pip install --user` over `pipx` because piper-tts's
+	# scikit-build-core wheel races pipx's metadata-readback step when
+	# pipx uses uv as its backend (auto-detected on systems where uv
+	# is on PATH).  This shows up as
+	#   "Pipx Internal Error: cannot find package 'piper-tts' metadata."
+	# even though the actual wheel install succeeded.  `pip --user`
+	# sidesteps the whole pipx/uv layer.
+	#
+	# Use /usr/bin/python3 explicitly when present so we hit the
+	# distro-managed interpreter rather than a brew/conda Python that
+	# may have been rebuilt out from under a cached venv path.
+	if ! command -v piper >/dev/null 2>&1; then
+		echo "    Installing piper-tts (Python package)..."
+		_pyexe=""
+		for cand in /usr/bin/python3 python3 python; do
+			if command -v "$cand" >/dev/null 2>&1; then
+				_pyexe="$cand"; break
+			fi
+		done
+		if [[ -n "$_pyexe" ]] && "$_pyexe" -m pip --version >/dev/null 2>&1; then
+			"$_pyexe" -m pip install --user piper-tts
+		elif command -v pipx >/dev/null 2>&1; then
+			# Last resort.  May fail on the uv-backend metadata race;
+			# see comment above.
+			pipx install --python "${_pyexe:-python3}" piper-tts
+		else
+			echo "    WARNING: no pip/pipx found; install piper-tts manually:"
+			echo "             python3 -m pip install --user piper-tts"
+		fi
+	fi
 
 	configure_ldconfig
 }

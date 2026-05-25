@@ -49,6 +49,9 @@ interaction.
 * MCP Server::                  MCP server for AI-native control.
 * Print to cmacs::              Virtual printer + PDF intake for annotation.
 * CMacs Video::                 Inline GStreamer video overlay (file + RTSP/RTSPS).
+* CMacs Audio::                 GStreamer audio capture/playback + #+BEGIN_AUDIO.
+* CMacs Whisper::               Offline speech-to-text via whisper.cpp.
+* CMacs Piper::                 Offline text-to-speech via Piper subprocess.
 * Cintrospect::                 Runtime C self-introspection (libdw + JIT).
 * Cpatch::                      Runtime C hot-patching (DEFUN swap + detours).
 * Build Configuration::         Configure flags and dependencies.
@@ -4987,6 +4990,514 @@ Check the camera's RTSP path and credentials.
 @end table
 
 @c ===================================================================
+@node CMacs Audio
+@chapter CMacs Audio: GStreamer Capture and Playback
+
+@cindex cmacs-audio
+@cindex audio
+@cindex pipewire
+@cindex pulseaudio
+
+@quotation
+This chapter mirrors @file{doc_org/cmacs/cmacs-audio.org}; that file
+is the canonical interactive reference.  Updates land in both.
+@end quotation
+
+@section Overview
+
+cmacs-audio is the audio counterpart to @code{cmacs-video}.  It wires
+two GStreamer pipeline shapes through the same cmacs @code{GMainContext}:
+
+@itemize
+@item
+@strong{Capture}: @code{pipewiresrc} (or @code{pulsesrc} fallback)
+@code{! audioconvert ! audioresample ! capsfilter(audio/x-raw,format=S16LE,channels=1,rate=16000) ! appsink}.
+The default 16 kHz/mono/S16LE caps are whisper.cpp-ready; PCM drained
+via @code{cmacs-audio-read-pcm} can be passed straight to
+@code{cmacs-whisper-transcribe-pcm} without resampling.
+@item
+@strong{Playback}: either @code{playbin3 uri=URI} (file/HTTP) or
+@code{appsrc ! audioconvert ! audioresample ! volume ! autoaudiosink}
+(for streaming PCM, the path used by Piper TTS output).
+@end itemize
+
+Inline @code{#+BEGIN_AUDIO :src "file.wav"} org blocks render a cairo
+waveform SVG overlay (see @code{cmacs-audio-waveform-svg}); the org
+overlay is an inline image rather than a per-frame cairo blit, so the
+pgtk paint hook is only used for standalone-anchored streams.
+
+@section Quick Start
+
+@example
+;; Capture 5 seconds to a WAV
+(cmacs-audio-record-to-file "/tmp/note.wav" 5)
+
+;; Play a file
+(cmacs-audio-play-file "~/music/sample.opus")
+
+;; Inline #+BEGIN_AUDIO block
+;;   #+BEGIN_AUDIO :src "note.wav" :width 800 :height 100
+;;   Voice note
+;;   #+END_AUDIO
+
+;; Bound under C-c v
+C-c v r        cmacs-audio-record-to-file
+C-c v R        cmacs-audio-finish-recording
+C-c v p        cmacs-audio-play-file
+C-c v x        cmacs-audio-stop-all
+@end example
+
+@section Defcustoms
+
+@table @code
+@item cmacs-audio-capture-source
+Default capture source: @code{auto} (pipewiresrc with pulsesrc
+fallback), @code{pipewire}, @code{pulse}, @code{coreaudio}, or
+@code{test}.
+
+@item cmacs-audio-default-rate
+Sample rate in Hz (default 16000).
+
+@item cmacs-audio-default-channels
+1 (mono) or 2 (stereo); default 1.
+
+@item cmacs-audio-default-device
+Optional PipeWire/Pulse device hint.  Nil = system default.
+
+@item cmacs-audio-output-dir
+Where recordings + sidecar WAVs land
+(default @file{~/Documents/notes/03_resources/cmacs-audio/}).
+
+@item cmacs-audio-mode-line-indicator
+Show a per-stream count in the mode-line when audio is live.
+@end table
+
+@section Build Requirements
+
+System packages (Fedora):
+
+@example
+sudo dnf install \
+  pipewire-devel pipewire-libs pulseaudio-libs-devel \
+  cmake gcc-c++ pipx espeak-ng \
+  gstreamer1-plugins-good
+@end example
+
+@code{gcc-c++} is required for vendored @code{deps/whisper.cpp}
+(C++).  @code{pipx} + @code{espeak-ng} are runtime deps for Piper.
+The @code{install-deps} script handles all of this per-distro.
+
+@section Composition
+
+@itemize
+@item @code{cmacs-whisper}: 16k mono S16LE caps mean drained PCM is
+whisper-ready.  Live dictation: @code{C-c v d} (cmacs-whisper-dictate).
+@item @code{cmacs-piper}: PCM emitted by Piper is fed into
+@code{cmacs-audio--playback-open-pcm-1} for live output.
+@item @code{podomation}: fires @code{on_transcription_ready} and
+@code{on_voice_command} events; DSL rules can respond with the
+@code{speak} handler (which calls @code{cmacs-piper-speak-async}).
+@item @code{libreclaw}: @code{M-x cmacs-libreclaw-send-voice-message}
+records, transcribes via whisper if built, and sends the transcript
+into the active bridge room.
+@end itemize
+
+@c ===================================================================
+@node CMacs Whisper
+@chapter CMacs Whisper: Offline Speech-to-Text
+
+@cindex cmacs-whisper
+@cindex whisper.cpp
+@cindex speech to text
+@cindex STT
+
+@quotation
+This chapter mirrors @file{doc_org/cmacs/cmacs-whisper.org}; that file
+is the canonical interactive reference.
+@end quotation
+
+@section Overview
+
+cmacs-whisper integrates whisper.cpp for offline speech-to-text.
+Models are loaded on first reference into a thread-safe path → context
+cache; inference runs on a GThread worker so the Emacs main thread
+never blocks.  Completion is delivered back to the main thread via
+@code{g_main_context_invoke (cmacs_glib_get_context())}, where the
+registered Lisp callback fires.
+
+@section Model Search Path
+
+Model files are resolved through @code{cmacs-whisper-models-search-path},
+which by default looks in two locations:
+
+@enumerate
+@item
+@file{~/.local/share/cmacs/whisper-models/} — user-writable dir where
+@kbd{M-x cmacs-whisper-download-model} writes new models.
+@item
+@file{/usr/share/cmacs/whisper-models/} — system dir populated by
+container image builds.  The default English model
+(@code{ggml-base.en.bin}, 142 MB) is bundled here by
+@code{./build-container}.
+@end enumerate
+
+User-installed models take precedence (search-path walks in order).
+
+@subsection Overriding the bundled model
+
+Pass build-time args to @code{./build-container} to swap the
+language/size shipped in the image:
+
+@example
+WHISPER_MODEL_NAME=ggml-small.en.bin \
+WHISPER_MODEL_URL=https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin \
+  ./build-container
+@end example
+
+The default English-base model is a good real-time choice on CPU;
+swap to @code{small} or @code{medium} for higher accuracy at the
+cost of latency and memory.
+
+@subsection Build path
+
+When neither a system @code{whisper.pc} nor an installed library is
+present, configure falls back to the vendored
+@code{deps/whisper.cpp/} submodule.  The CMake build is invoked with:
+
+@example
+cmake -B build -DBUILD_SHARED_LIBS=OFF -DGGML_OPENMP=OFF \
+      -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=OFF \
+      -DCMAKE_C_STANDARD=11 -DCMAKE_CXX_STANDARD=17 \
+      -DCMAKE_C_STANDARD_REQUIRED=ON -DCMAKE_CXX_STANDARD_REQUIRED=ON
+@end example
+
+The C/CXX standard flags are a workaround for a CMake 4.x feature-
+detection table that doesn't yet know about GCC 16+; setting the
+standards explicitly makes @code{target_compile_features} a no-op.
+
+cmacs links the resulting static libraries in this order:
+
+@example
+deps/whisper.cpp/build/src/libwhisper.a
+deps/whisper.cpp/build/ggml/src/libggml.a
+deps/whisper.cpp/build/ggml/src/libggml-cpu.a
+deps/whisper.cpp/build/ggml/src/libggml-base.a
+-lm -lstdc++ -lpthread
+@end example
+
+Requires @code{gcc-c++} (Fedora) or @code{g++} (Debian) on the build
+host — installed by @code{install-deps}.
+
+@section Quick Start
+
+@example
+M-x cmacs-whisper-download-model RET ggml-base.en.bin RET
+(cmacs-whisper-transcribe-file
+  (cmacs-whisper-model-path)
+  "/tmp/note.wav")
+;; => ((:text . "...full text...")
+;;     (:segments . (((:start . 0) (:end . 1200) (:text . "..."))
+;;                   ...)))
+@end example
+
+@section Live Dictation (cmacs-whisper-dictate)
+
+@kbd{M-x cmacs-whisper-dictate} (bound to @kbd{C-c v d}) toggles a
+buffer-local dictation mode.  Speak into the microphone; whisper's
+own end-of-utterance VAD detects pauses and emits each finalised
+segment, which is inserted at point with @code{undo-boundary} between
+segments so each utterance is one undo unit.
+
+Voice commands intercepted before insertion (configured via
+@code{cmacs-whisper-dictate-command-words}):
+
+@table @code
+@item "new line"     -> newline
+@item "new paragraph" -> two newlines
+@item "period"       -> ?.
+@item "question mark" -> ??
+@item "delete word"  -> backward-kill-word
+@item "undo"         -> undo
+@end table
+
+@section MCP Tool
+
+The @code{transcribe} MCP tool (registered when both
+@code{--with-cmacs-mcp} and @code{--with-cmacs-whisper} are built)
+accepts @code{audio_path} + optional @code{language} and returns the
+transcript text.  Companion read-only tool: @code{list_whisper_models}.
+
+@section Defcustoms
+
+@table @code
+@item cmacs-whisper-models-directory
+User-writable models dir (default
+@file{~/.local/share/cmacs/whisper-models/}).
+
+@item cmacs-whisper-system-models-directory
+System models dir populated by image builds (default
+@file{/usr/share/cmacs/whisper-models/}).
+
+@item cmacs-whisper-models-search-path
+Ordered list of dirs searched for model files; default
+@code{(cmacs-whisper-models-directory cmacs-whisper-system-models-directory)}.
+
+@item cmacs-whisper-default-model
+Default model filename (e.g. @code{ggml-base.en.bin}).
+
+@item cmacs-whisper-language
+ISO 2-letter language code (default @code{"en"}).
+
+@item cmacs-whisper-download-base-url
+Upstream model mirror; default
+@code{https://huggingface.co/ggerganov/whisper.cpp/resolve/main/}.
+
+@item cmacs-whisper-dictate-window-seconds
+Sliding window length for live dictation (default 3.0 s).
+
+@item cmacs-whisper-dictate-auto-punctuate
+Capitalise + space inserted segments (default t).
+
+@item cmacs-whisper-dictate-command-words
+Alist of @code{(PHRASE . COMMAND)} for spoken commands intercepted
+before insertion.
+@end table
+
+@c ===================================================================
+@node CMacs Piper
+@chapter CMacs Piper: Offline Text-to-Speech
+
+@cindex cmacs-piper
+@cindex piper
+@cindex text to speech
+@cindex TTS
+
+@quotation
+This chapter mirrors @file{doc_org/cmacs/cmacs-piper.org}; that file
+is the canonical interactive reference.
+@end quotation
+
+@section Overview
+
+cmacs-piper invokes Piper as a subprocess via @code{g_subprocess_new}:
+
+@example
+piper --model VOICE.onnx --output_raw < text > pcm
+@end example
+
+The S16LE PCM stream is fed back into
+@code{cmacs-audio--playback-open-pcm-1} for live playback, or written
+to a WAV via @code{with-temp-file} for archival.  Spawning uses
+@code{g_subprocess_communicate_async} so polling happens on the cmacs
+GMainContext — no extra thread.
+
+@section Installing Piper
+
+cmacs uses the @uref{https://github.com/OHF-Voice/piper1-GPL,
+OHF-Voice piper1-GPL fork} — the active community fork after the
+original @code{rhasspy/piper} went quiet.  It ships as a Python
+package on PyPI that installs a @code{piper} console-script:
+
+@example
+/usr/bin/python3 -m pip install --user piper-tts       # preferred
+# or
+pipx install --python /usr/bin/python3 piper-tts       # see below
+@end example
+
+Prefer plain @code{pip --user} over @code{pipx}: piper-tts's
+scikit-build-core wheel triggers a pipx metadata-readback bug when
+pipx uses @code{uv} as its backend, surfacing as
+@code{Pipx Internal Error: cannot find package 'piper-tts' metadata.}
+even though the wheel installed cleanly.  Plain @code{pip --user}
+sidesteps the whole pipx/uv layer.
+
+Runtime dep: @code{espeak-ng} (phonemization backend; pulled in by
+@code{install-deps}).
+
+The @code{deps/piper/} submodule is kept for reference + test
+fixtures but is NOT built from source — the CMake file in that tree
+builds a Python C extension, not the standalone @code{piper} CLI.
+
+configure probes for @code{piper} on PATH at configure time
+(@code{AC_PATH_PROG}).  If absent, configure still succeeds and the
+macro @code{CMACS_PIPER_DEFAULT_BINARY} falls back to literal
+@code{"piper"} — the binary is resolved at runtime via
+@code{g_find_program_in_path}, so installing Piper post-build works
+without reconfigure.
+
+@section Voice Search Path
+
+Voice files are resolved through @code{cmacs-piper-voices-search-path},
+which by default looks in:
+
+@enumerate
+@item
+@file{~/.local/share/cmacs/piper-voices/} — user dir.
+@item
+@file{/usr/share/cmacs/piper-voices/} — system dir populated by
+container image builds.  The default English voice
+(@code{en_US-amy-low.onnx} + @code{.json} sidecar, ~64 MB) is
+bundled here by @code{./build-container}.
+@end enumerate
+
+User-installed voices take precedence.  Each voice's
+@code{.onnx.json} sidecar carries the native sample rate;
+cmacs-piper reads it to size the playback stream.
+
+@subsection Overriding the bundled voice
+
+@example
+PIPER_VOICE_NAME=en_GB-alba-medium.onnx \
+PIPER_VOICE_DIR=en/en_GB/alba/medium \
+  ./build-container
+@end example
+
+More voices at @uref{https://huggingface.co/rhasspy/piper-voices/tree/main,
+rhasspy/piper-voices}.
+
+@section Quick Start
+
+@example
+;; Speak a literal string
+(cmacs-piper-speak "Hello, cmacs.")
+
+;; Speak the active region (or sentence-at-point dwim)
+M-x cmacs-piper-speak-region        ;; C-c v s
+M-x cmacs-piper-stop                ;; C-c v S
+@end example
+
+@section PGTK Right-Click Context Menu
+
+@code{lisp/cmacs/cmacs-piper-context-menu.el} adds an entry to
+@code{context-menu-functions} (the standard Emacs 28+ hook used by
+PGTK's @kbd{mouse-3}) that shows:
+
+@itemize
+@item @samp{Speak selection (Piper)} when a region is active
+@item @samp{Speak sentence (Piper)} when there's no region
+@item @samp{Stop speaking} while playback is live
+@end itemize
+
+Auto-enables @code{context-menu-mode} unless
+@code{cmacs-piper-auto-enable-context-menu} is set to nil.
+
+@section Defcustoms
+
+@table @code
+@item cmacs-piper-voices-directory
+User-writable voices dir (default
+@file{~/.local/share/cmacs/piper-voices/}).
+
+@item cmacs-piper-system-voices-directory
+System voices dir populated by image builds (default
+@file{/usr/share/cmacs/piper-voices/}).
+
+@item cmacs-piper-voices-search-path
+Ordered list of directories searched for voice files; default
+@code{(cmacs-piper-voices-directory cmacs-piper-system-voices-directory)}.
+
+@item cmacs-piper-default-voice
+Default voice filename (e.g. @code{en_US-amy-low.onnx}).
+
+@item cmacs-piper-default-rate
+Fallback sample rate if the voice's @code{.onnx.json} sidecar is
+absent (default 22050 Hz).
+
+@item cmacs-piper-auto-enable-context-menu
+Auto-enable @code{context-menu-mode} when cmacs-piper loads (t).
+@end table
+
+@section Troubleshooting
+
+@subsection Piper not found
+
+@code{(cmacs-piper-supported-p)} returns @code{nil}; speak commands
+raise @code{user-error}.  Install piper-tts (see @ref{CMacs Piper})
+and re-run; cmacs resolves the binary at runtime via
+@code{g_find_program_in_path}, so no rebuild is needed.
+
+@subsection @code{pipx install piper-tts} fails: "cannot find package metadata"
+
+Symptom:
+
+@example
+Pipx Internal Error: cannot find package 'piper-tts' metadata.
+@end example
+
+This appears when @code{pipx} has been built (or auto-detected) to
+use @code{uv} as its backend.  piper-tts ships a scikit-build-core
+wheel that compiles a C extension wrapping piper-phonemize; uv's
+pip-install of that wheel finishes the install but doesn't
+populate the @code{PKG-INFO} / @code{METADATA} files in the layout
+pipx scans afterwards.  pipx then deletes the venv and raises this
+error even though the wheel was fine.
+
+The smoking gun in @code{pipx --verbose} output is:
+
+@example
+Backend resolved to uv (source: auto-path)
+@end example
+
+right before @code{installing piper-tts...}.
+
+@strong{Fix:} skip pipx and use plain pip:
+
+@example
+/usr/bin/python3 -m pip install --user piper-tts
+@end example
+
+CPython's own pip runs the wheel install synchronously and
+populates metadata in the expected places.  The @code{piper}
+console-script lands at @file{~/.local/bin/piper} — make sure
+that's on @code{PATH}.
+
+@strong{Why @file{/usr/bin/python3} explicitly?}  On systems where
+Homebrew / conda / asdf has put a non-distro Python first on
+@code{PATH}, pipx may have cached a venv path that points into a
+stale brew prefix (e.g.
+@file{/home/linuxbrew/.linuxbrew/opt/python@@3.14/libexec/bin/python}).
+After a brew upgrade reshuffles that path, every subsequent
+@code{pipx install} dies with @code{No interpreter found at path}
+before even reaching the backend.  Using the system interpreter is
+more stable across brew updates.
+
+@subsection @code{No interpreter found at path}
+
+@example
+× No interpreter found at path
+│ `/home/linuxbrew/.linuxbrew/opt/python@@3.14/libexec/bin/python`
+@end example
+
+pipx remembers the Python it was first set up with, baked into its
+internal venvs metadata.  When Homebrew updates @code{python@@3.14}
+the @file{libexec/bin/python} symlink moves and every @code{pipx}
+invocation fails before doing any actual work.
+
+Fixes, in order of preference:
+
+@enumerate
+@item
+Bypass pipx entirely: @*
+@code{/usr/bin/python3 -m pip install --user piper-tts}.
+@item
+Reset pipx to the system Python: @*
+@code{PIPX_DEFAULT_PYTHON=/usr/bin/python3 pipx reinstall-all}.
+@item
+Nuke pipx state and start over: @*
+@code{rm -rf ~/.local/share/pipx ~/.local/pipx && pipx ensurepath}.
+@end enumerate
+
+@subsection Choppy or wrong-pitch playback
+
+Sample-rate mismatch.  Confirm the voice's sidecar:
+
+@example
+cat ~/.local/share/cmacs/piper-voices/en_US-amy-low.onnx.json | jq .audio.sample_rate
+@end example
+
+If absent, set @code{cmacs-piper-default-rate} to the right value.
+
+@c ===================================================================
 @node Cintrospect
 @chapter Cintrospect: Runtime C Self-Introspection
 
@@ -5256,6 +5767,10 @@ fully-featured build matching Fedora defaults, use:
   --with-cmacs-org-ex \
   --with-cmacs-mcp \
   --with-cmacs-print \
+  --with-cmacs-video \
+  --with-cmacs-audio \
+  --with-cmacs-whisper \
+  --with-cmacs-piper \
   --with-cmacs-cintrospect \
   --enable-cmacs-cpatch
 @end example
@@ -5313,7 +5828,62 @@ system-installed @code{bacon-1.0} via pkg-config instead.
 @item cmacs-print @tab pdftocairo, pdfinfo, gdbus (runtime, on PATH)
   @tab Print to cmacs virtual printer + PDF intake
   (poppler-utils + glib2 / libglib2.0-bin)
+@item cmacs-video @tab gstreamer-1.0 >= 1.20 gstreamer-app-1.0
+  gstreamer-video-1.0
+  @tab GStreamer video overlay (file + RTSP/RTSPS); needs
+  plugins-@{base,good,bad,ugly@} + libav at runtime
+@item cmacs-audio @tab gstreamer-1.0 >= 1.20 gstreamer-app-1.0
+  gstreamer-audio-1.0
+  @tab GStreamer audio capture + playback; needs plugins-good
+  (@code{pipewiresrc}/@code{pulsesrc}/@code{level}) at runtime;
+  optionally @code{pipewire-devel} for PipeWire dev headers
+@item cmacs-whisper (bundled) @tab glib-2.0 gio-2.0 libdex-1
+  + @code{gcc-c++} (build) + @code{libstdc++} (runtime)
+  @tab Offline STT via vendored deps/whisper.cpp/ (CMake-built
+  libwhisper.a + libggml@{,-base,-cpu@}.a); requires
+  @option{--with-cmacs-audio}
+@item cmacs-whisper (system) @tab whisper
+  @tab Offline STT via system @code{whisper.pc}
+@item cmacs-piper @tab glib-2.0 gio-2.0 gio-unix-2.0
+  + @code{piper} on PATH (@code{pipx install piper-tts}) +
+  @code{espeak-ng} (runtime)
+  @tab Offline TTS via Piper subprocess (OHF-Voice piper1-GPL fork);
+  requires @option{--with-cmacs-audio}
 @end multitable
+
+@section Bundled Models (container builds)
+
+@code{./build-container} bundles a default English STT model and
+TTS voice into the staged image at
+@file{/usr/share/cmacs/whisper-models/} and
+@file{/usr/share/cmacs/piper-voices/}.  Downstream images that copy
+@file{/build/stage/usr/.} into @file{/usr/.} inherit them
+automatically; cmacs's @code{cmacs-whisper-models-search-path} and
+@code{cmacs-piper-voices-search-path} pick them up at runtime
+(user-installed models in @file{~/.local/share/cmacs/} take
+precedence).
+
+Defaults (~210 MB):
+
+@multitable @columnfractions .35 .65
+@headitem ARG @tab Default
+@item @code{WHISPER_MODEL_NAME} @tab @code{ggml-base.en.bin}
+@item @code{WHISPER_MODEL_URL} @tab huggingface.co/ggerganov/whisper.cpp
+@item @code{PIPER_VOICE_NAME} @tab @code{en_US-amy-low.onnx}
+@item @code{PIPER_VOICE_DIR} @tab @code{en/en_US/amy/low}
+@item @code{PIPER_VOICE_BASE_URL} @tab huggingface.co/rhasspy/piper-voices
+@end multitable
+
+Override at build time via env vars (the @code{build-container}
+wrapper forwards them as @code{--build-arg}):
+
+@example
+WHISPER_MODEL_NAME=ggml-small.en.bin \
+WHISPER_MODEL_URL=https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin \
+PIPER_VOICE_NAME=en_GB-alba-medium.onnx \
+PIPER_VOICE_DIR=en/en_GB/alba/medium \
+  ./build-container
+@end example
 
 @section Building the Bacon Module
 
