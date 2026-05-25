@@ -52,7 +52,7 @@
 
 (defun cmacs-dbus-shortcuts--on-activated (session-handle shortcut-id _ts _opts)
   "Portal Activated signal handler -- dispatch to user command."
-  (when-let ((cmd (cdr (assoc shortcut-id cmacs-dbus-shortcuts--registry))))
+  (when-let* ((cmd (cdr (assoc shortcut-id cmacs-dbus-shortcuts--registry))))
     (cond
      ((commandp cmd) (call-interactively cmd))
      ((functionp cmd) (funcall cmd))

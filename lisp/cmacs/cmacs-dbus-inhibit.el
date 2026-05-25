@@ -55,7 +55,7 @@ keyed by WHAT for later release."
 (defun cmacs-dbus-inhibit-release (what)
   "Release the inhibitor previously taken for WHAT.
 Closes the held fd; logind drops the lock."
-  (when-let ((entry (assoc what cmacs-dbus-inhibit--active-fds)))
+  (when-let* ((entry (assoc what cmacs-dbus-inhibit--active-fds)))
     (ignore-errors (delete-process (cdr entry)))
     (setq cmacs-dbus-inhibit--active-fds
           (delq entry cmacs-dbus-inhibit--active-fds))))

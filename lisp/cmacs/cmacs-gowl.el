@@ -784,7 +784,7 @@ whose underlying wlr resources may already be freed."
                        (mapcar #'gowl-client-pid (gowl-list-clients))))
         (has-embeds nil))
     (dolist (buf (buffer-list))
-      (when-let ((pid (buffer-local-value 'gowl-embedded-client-pid buf)))
+      (when-let* ((pid (buffer-local-value 'gowl-embedded-client-pid buf)))
         (if (memq pid client-pids)
             (setq has-embeds t)
           ;; Client is gone — clean up without touching the dead object.
@@ -1021,7 +1021,7 @@ with the window and hides/shows with buffer switching."
         (dolist (file (directory-files dir t "\\.desktop\\'"))
           (unless (gethash (file-name-nondirectory file) seen)
             (puthash (file-name-nondirectory file) t seen)
-            (when-let ((app (gowl-embed--read-desktop-file file)))
+            (when-let* ((app (gowl-embed--read-desktop-file file)))
               (push app apps))))))
     (sort apps (lambda (a b) (string< (car a) (car b))))))
 
@@ -1063,7 +1063,7 @@ with the window and hides/shows with buffer switching."
 (defun gowl-unembed ()
   "Release the embedded client from the current buffer."
   (interactive)
-  (when-let ((client gowl-embedded-client))
+  (when-let* ((client gowl-embedded-client))
     (setq gowl-embedded-client nil)
     (setq gowl-embedded-client-pid nil)
     (set-window-dedicated-p (selected-window) nil)

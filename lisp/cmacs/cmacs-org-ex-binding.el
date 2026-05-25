@@ -136,7 +136,7 @@ WIDGET is the current live widget."
 
 (defun cmacs-org-ex--reactive-recreate (id)
   "Tear down and re-create the widget identified by ID."
-  (when-let ((ctx (alist-get id cmacs-org-ex--reactive-widgets)))
+  (when-let* ((ctx (alist-get id cmacs-org-ex--reactive-widgets)))
     (let ((create-fn (plist-get ctx :create-fn))
           (props     (plist-get ctx :props))
           (width     (plist-get ctx :width))
@@ -157,7 +157,7 @@ Also sets up `:interval N' timer polling.
 Returns non-nil if reactive was configured."
   (let ((reactive (string-equal-ignore-case
                    (or (cdr (assoc "reactive" props)) "") "t"))
-        (interval (when-let ((v (cdr (assoc "interval" props))))
+        (interval (when-let* ((v (cdr (assoc "interval" props))))
                     (string-to-number v))))
     (when (or reactive interval)
       (let ((marker (copy-marker (point))))
@@ -165,7 +165,7 @@ Returns non-nil if reactive was configured."
          id create-fn props width height subtype marker widget)
         ;; Subscribe to channel for reactive updates
         (when reactive
-          (when-let ((sub-name (cdr (assoc "subscribe" props))))
+          (when-let* ((sub-name (cdr (assoc "subscribe" props))))
             (let ((channel (cmacs-org-ex--get-or-create-channel
                             sub-name)))
               (gobject-connect channel "message"

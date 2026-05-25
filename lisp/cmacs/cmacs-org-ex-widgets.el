@@ -66,13 +66,13 @@ Properties:
   :max    -- maximum value (default 100)
   :value  -- initial value (default 50)
   :step   -- step increment (default 1)"
-  (let ((min-val (if-let ((v (cdr (assoc "min" props))))
+  (let ((min-val (if-let* ((v (cdr (assoc "min" props))))
                      (string-to-number v) 0.0))
-        (max-val (if-let ((v (cdr (assoc "max" props))))
+        (max-val (if-let* ((v (cdr (assoc "max" props))))
                      (string-to-number v) 100.0))
-        (init-val (if-let ((v (cdr (assoc "value" props))))
+        (init-val (if-let* ((v (cdr (assoc "value" props))))
                       (string-to-number v) 50.0))
-        (step (if-let ((v (cdr (assoc "step" props))))
+        (step (if-let* ((v (cdr (assoc "step" props))))
                   (string-to-number v) 1.0)))
     (gi-require "Gtk" "3.0")
     (let* ((adjustment (gobject-new "GtkAdjustment"))
@@ -304,7 +304,7 @@ Properties:
 Displays the image using Emacs built-in image support.  Falls back
 to a GtkImage via GI on the gtk-embed path."
   (let ((file (cdr (assoc "file" props)))
-        (scale (if-let ((v (cdr (assoc "scale" props))))
+        (scale (if-let* ((v (cdr (assoc "scale" props))))
                    (string-to-number v) 1.0)))
     (unless file
       (error "Image widget requires :file property"))

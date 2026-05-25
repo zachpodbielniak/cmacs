@@ -429,7 +429,7 @@ Returns the overlay, or nil on failure."
                 (push (cons id ov) cmacs-org-ex--widget-ids)
                 ;; Track wayland widget overlays by PID for async
                 ;; replacement when the client maps.
-                (when-let ((pid-str (cdr (assoc "_wayland_pid" props))))
+                (when-let* ((pid-str (cdr (assoc "_wayland_pid" props))))
                   (push (cons (string-to-number pid-str) ov)
                         cmacs-org-ex--wayland-overlay-map))
                 ov)))
