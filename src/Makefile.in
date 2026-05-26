@@ -994,14 +994,20 @@ endif
 ##    consumes libregnum via GIRepository -- we link it as a C
 ##    library through cmacs/libregnum/*.c -- so libregnum's typelib
 ##    is unused and skipping it removes a fragile container step.
-##  - Target `lib': builds static + shared archives (the `all'
-##    target is what would also trigger gir; we don't want that).
+##  - We still invoke the default `all' target (not `lib'): `lib'
+##    only depends on `generate', skipping `deps' which is what
+##    runs graylib's sub-make.  Without `deps' running first,
+##    graylib's grl-version.h never gets generated and libregnum's
+##    own sources fail at #include "grl-version.h".  Passing
+##    BUILD_GIR=0 to the default `all' target skips just the gir
+##    sub-target while keeping the full check-deps -> platform-check
+##    -> deps -> generate -> _lib pipeline.
 CMACS_LIBREGNUM_STATIC_LIB = $(srcdir)/../deps/libregnum/build/release/lib/liblibregnum.a
 ifneq ($(CMACS_LIBREGNUM_OBJ),)
 $(CMACS_LIBREGNUM_STATIC_LIB):
 	$(MAKE) -C $(srcdir)/../deps/libregnum \
 	  WARN_CFLAGS="-Wall -Wextra -Wno-unused-but-set-variable" \
-	  BUILD_GIR=0 lib
+	  BUILD_GIR=0
 $(CMACS_LIBREGNUM_OBJ): $(CMACS_LIBREGNUM_STATIC_LIB)
 endif
 
