@@ -298,6 +298,7 @@ lisp/language/pinyin.el
 *.fn
 *.fns
 *.info
+*.info-[0-9]*
 *.ky
 *.kys
 *.op
