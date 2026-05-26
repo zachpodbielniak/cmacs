@@ -58,6 +58,8 @@ RUN if [ "${FEDORA_VERSION}" -ge 44 ] 2>/dev/null; then \
         gstreamer1-libav \
         pipewire-devel pipewire-libs pulseaudio-libs-devel \
         cmake espeak-ng python3-pip \
+        mesa-libGL-devel libX11-devel libXrandr-devel libXcursor-devel \
+        libXinerama-devel libXi-devel \
         curl \
     && dnf clean all
 # pipewire-devel + pulseaudio-libs-devel: cmacs-audio capture source
@@ -68,6 +70,10 @@ RUN if [ "${FEDORA_VERSION}" -ge 44 ] 2>/dev/null; then \
 # binutils-devel: provides dis-asm.h / libopcodes for cpatch's
 # (currently optional) prologue probe.  cmacs builds without it via
 # a built-in fallback.
+# mesa-libGL-devel + libX11-devel + the four X11 input libs:
+# raylib (via deps/libregnum/deps/graylib) needs these even when we
+# run with FLAG_WINDOW_HIDDEN because raylib's InitWindow still
+# initialises X11 to construct the offscreen GL context.
 
 COPY . /build/cmacs
 WORKDIR /build/cmacs
@@ -148,6 +154,7 @@ RUN ./autogen.sh \
         --with-cmacs-whisper \
         --with-cmacs-piper \
         --with-cmacs-cintrospect \
+        --with-cmacs-libregnum \
         --enable-cmacs-cpatch \
     && make -j"$(nproc)" \
     && make install DESTDIR=/build/stage

@@ -73,6 +73,9 @@ detect_platform () {
 #   PKGS_TS       — tree-sitter
 #   PKGS_GLIB     — glib, gobject-introspection
 #   PKGS_GOWL     — wlroots, wayland, libinput, xkbcommon, pango, cairo
+#   PKGS_LIBREGNUM — mesa GL + X11 devel libs (raylib's window/input
+#                    backend is X11 even when we use the hidden-window
+#                    + offscreen-FBO mode under Wayland).
 #
 # Android APK builds do NOT use this script — they run inside the
 # `cmacs-android` container image (see Containerfile.android +
@@ -149,6 +152,12 @@ set_packages_fedora () {
 	# pipx + espeak-ng: piper-tts install + phonemization backend.
 	PKGS_AUDIO=(pipewire-devel pipewire-libs pulseaudio-libs-devel
 	            cmake gcc-c++ pipx espeak-ng)
+	# cmacs-libregnum: raylib (via graylib/libregnum) needs GL +
+	# Xlib + the four input-related X11 libs even when we run it
+	# in FLAG_WINDOW_HIDDEN mode -- raylib's InitWindow still
+	# initialises X11 to construct the offscreen GL context.
+	PKGS_LIBREGNUM=(mesa-libGL-devel libX11-devel libXrandr-devel
+	                libXcursor-devel libXinerama-devel libXi-devel)
 	PKG_CMD="sudo dnf install -y"
 }
 
@@ -174,6 +183,8 @@ set_packages_debian () {
 	            gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
 	            gstreamer1.0-plugins-ugly gstreamer1.0-libav)
 	PKGS_AUDIO=(libpipewire-0.3-dev libpulse-dev cmake g++ pipx espeak-ng)
+	PKGS_LIBREGNUM=(libgl1-mesa-dev libx11-dev libxrandr-dev
+	                libxcursor-dev libxinerama-dev libxi-dev)
 	PKG_CMD="sudo apt-get install -y"
 	# NOTE: Ubuntu 24.04 (noble) ships wlroots 0.17, wayland 1.22,
 	# wayland-protocols 1.34, and pixman 0.42 --- all too old for
@@ -200,6 +211,7 @@ set_packages_arch () {
 	PKGS_VIDEO=(gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad
 	            gst-plugins-ugly gst-libav)
 	PKGS_AUDIO=(pipewire libpulse cmake python-pipx espeak-ng)
+	PKGS_LIBREGNUM=(mesa libx11 libxrandr libxcursor libxinerama libxi)
 	PKG_CMD="sudo pacman -S --needed --noconfirm"
 }
 
@@ -225,6 +237,9 @@ set_packages_macos () {
 	# coreaudiosrc (provided by gst-plugins-good) when pipewiresrc is
 	# unavailable.  Set cmacs-audio-capture-source to 'coreaudio on macOS.
 	PKGS_AUDIO=(pipewire cmake pipx espeak-ng)
+	# macOS: raylib uses Cocoa, not X11.  No extra system deps
+	# beyond Xcode CLT.  Leave empty so PKGS_LIBREGNUM exists.
+	PKGS_LIBREGNUM=()
 	PKG_CMD="brew install"
 }
 
@@ -246,6 +261,7 @@ set_packages_freebsd () {
 	            gstreamer1-plugins-bad gstreamer1-plugins-ugly
 	            gstreamer1-plugins-libav)
 	PKGS_AUDIO=(pipewire pulseaudio cmake py39-pipx espeak-ng)
+	PKGS_LIBREGNUM=(mesa-libs libX11 libXrandr libXcursor libXinerama libXi)
 	PKG_CMD="sudo pkg install -y"
 }
 
@@ -264,7 +280,8 @@ all_packages () {
 	     "${PKGS_GLIB[@]}" \
 	     "${PKGS_GOWL[@]}" \
 	     "${PKGS_VIDEO[@]}" \
-	     "${PKGS_AUDIO[@]}"
+	     "${PKGS_AUDIO[@]}" \
+	     "${PKGS_LIBREGNUM[@]}"
 }
 
 # ── Install system packages ──────────────────────────────────────────

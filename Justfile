@@ -64,6 +64,7 @@ configure_flags := """
     --with-cmacs-whisper
     --with-cmacs-piper
     --with-cmacs-cintrospect
+    --with-cmacs-libregnum
     --enable-cmacs-cpatch
 """
 
