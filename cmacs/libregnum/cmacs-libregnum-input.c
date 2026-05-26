@@ -32,11 +32,23 @@ static DragState drag_state = { 0 };
 static CmacsLibregnumView *
 selected_view_for_frame (struct frame *f)
 {
-  Lisp_Object frame;
-  XSETFRAME (frame, f);
-  Lisp_Object sw = Fframe_selected_window (frame);
+  /* `f' can be NULL when the GtkWidget that received the event is
+   * not a cmacs frame (tooltips, menus, popovers, the widget that
+   * passes through during a window split before the new frame is
+   * mapped).
+   *
+   * CRITICAL: this runs inside a GTK signal callback.  We MUST NOT
+   * call any Lisp `F*' helper that can xsignal -- e.g.
+   * Fframe_selected_window's CHECK_LIVE_FRAME, Fwindow_buffer's
+   * CHECK_WINDOW.  A signal here longjmps through GLib's
+   * signal_emit_unlocked_R, leaving the emission stack
+   * corrupted.  Read straight off the C structs instead. */
+  if (!f) return NULL;
+  if (cmacs_libregnum_view_registry_empty_p ()) return NULL;
+  if (!FRAME_LIVE_P (f)) return NULL;
+  Lisp_Object sw = f->selected_window;
   if (!WINDOWP (sw)) return NULL;
-  Lisp_Object buf = Fwindow_buffer (sw);
+  Lisp_Object buf = XWINDOW (sw)->contents;
   if (!BUFFERP (buf)) return NULL;
   return cmacs_libregnum_view_for_buffer (buf);
 }

@@ -69,6 +69,22 @@ Lisp_Object *cmacs_libregnum__payloads_root (void);
 Lisp_Object *cmacs_libregnum__payloads_root (void)
 { return &Vcmacs_libregnum__payloads; }
 
+/* True when no view has ever been attached (or all have been
+ * destroyed).  Used by the overlay paint and input hooks as a fast
+ * path: if no view exists, they bail before doing any work that
+ * could re-enter Lisp from a GTK signal handler.  Calling Lisp
+ * helpers (e.g. Fframe_root_window) from a GTK callback is
+ * dangerous -- a CHECK_LIVE_FRAME signal would longjmp through
+ * GLib's signal-emit machinery, bypassing emission_pop and
+ * corrupting the global emission stack. */
+gboolean cmacs_libregnum_view_registry_empty_p (void);
+gboolean
+cmacs_libregnum_view_registry_empty_p (void)
+{
+  if (!cmacs_libregnum__views) return TRUE;
+  return g_hash_table_size (cmacs_libregnum__views) == 0;
+}
+
 static void
 ensure_lisp_tables (void)
 {

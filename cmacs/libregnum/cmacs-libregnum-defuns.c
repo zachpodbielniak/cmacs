@@ -171,7 +171,7 @@ or nil if BUFFER has no attached view.  */)
 }
 
 static double
-extract_float (Lisp_Object obj)
+cmacs_libregnum__to_double (Lisp_Object obj)
 {
   if (FIXNUMP (obj))  return (double) XFIXNUM (obj);
   if (FLOATP (obj))   return XFLOAT_DATA (obj);
@@ -190,17 +190,17 @@ POSITION and TARGET are lists (X Y Z).  FOV is degrees.  */)
   CHECK_CONS (target);
   CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
   if (!v) error ("cmacs-libregnum: no view attached to buffer");
-  double px = extract_float (XCAR (position));
+  double px = cmacs_libregnum__to_double (XCAR (position));
   Lisp_Object py_c = XCDR (position);
-  double py = CONSP (py_c) ? extract_float (XCAR (py_c)) : 0.0;
+  double py = CONSP (py_c) ? cmacs_libregnum__to_double (XCAR (py_c)) : 0.0;
   Lisp_Object pz_c = CONSP (py_c) ? XCDR (py_c) : Qnil;
-  double pz = CONSP (pz_c) ? extract_float (XCAR (pz_c)) : 0.0;
-  double tx = extract_float (XCAR (target));
+  double pz = CONSP (pz_c) ? cmacs_libregnum__to_double (XCAR (pz_c)) : 0.0;
+  double tx = cmacs_libregnum__to_double (XCAR (target));
   Lisp_Object ty_c = XCDR (target);
-  double ty = CONSP (ty_c) ? extract_float (XCAR (ty_c)) : 0.0;
+  double ty = CONSP (ty_c) ? cmacs_libregnum__to_double (XCAR (ty_c)) : 0.0;
   Lisp_Object tz_c = CONSP (ty_c) ? XCDR (ty_c) : Qnil;
-  double tz = CONSP (tz_c) ? extract_float (XCAR (tz_c)) : 0.0;
-  double fov_d = extract_float (fov);
+  double tz = CONSP (tz_c) ? cmacs_libregnum__to_double (XCAR (tz_c)) : 0.0;
+  double fov_d = cmacs_libregnum__to_double (fov);
   CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
   cmacs_libregnum_render_ctx_set_camera_state (ctx,
                                                 px, py, pz,

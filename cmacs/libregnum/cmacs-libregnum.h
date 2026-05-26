@@ -84,7 +84,8 @@ extern gboolean cmacs_libregnum_handle_scroll (struct frame *f,
                                                double x, double y);
 
 /* ── Registry init (called from init_cmacs_libregnum) ───────────── */
-extern void cmacs_libregnum_view_registry_init (void);
+extern void     cmacs_libregnum_view_registry_init    (void);
+extern gboolean cmacs_libregnum_view_registry_empty_p (void);
 
 #endif /* HAVE_CMACS_LIBREGNUM */
 #endif /* CMACS_LIBREGNUM_H */
