@@ -32,6 +32,7 @@ when both are enabled (libreclaw's sub-make is redirected via
 * CMacs AI Org Blocks::
 * CMacs AI GObject Introspection::
 * CMacs AI MCP Tools::
+* CMacs AI MCP Bridge::
 * CMacs AI Configuration::
 @end menu
 
@@ -191,6 +192,10 @@ Custom Elisp tools are registered via
 @code{cmacs-ai-tools-register}; the callback is invoked with
 @code{(NAME INPUT-JSON ID)} on each model call.
 
+In addition to ai-glib's built-ins, every chat buffer is augmented
+with cmacs's own MCP tool surface (buffer / file / project / eval /
+apropos / describe by default).  See @ref{CMacs AI MCP Bridge}.
+
 @node CMacs AI Image Generation
 @section Image Generation
 
@@ -251,6 +256,96 @@ the buffer name.
 
 External agents (e.g. an outer Claude Code instance) can drive the
 in-editor AI through these tools.
+
+@node CMacs AI MCP Bridge
+@section MCP Bridge
+
+The previous section described the @emph{outbound} MCP surface ---
+@code{ai_*} tools that external agents can call into cmacs to drive
+the in-editor AI.  This section covers the @emph{inbound} mirror:
+each chat buffer's @code{AiToolExecutor} is automatically augmented
+with cmacs's own MCP tool surface, so the in-process AI gets the
+same editor-aware tools (buffer / file / project / eval / apropos /
+describe) that external Claude Code already uses to drive cmacs.
+
+Without this bridge, the model only sees ai-glib's filesystem-level
+built-ins (@code{bash}, @code{read}, @code{write}, @code{edit},
+@code{glob}, @code{grep}, @code{ls}, @code{web_fetch}).  Those work,
+but edits land on disk bypassing cmacs buffers (no undo, no
+save-hooks, races with unsaved user work), and searches don't use
+cmacs's project boundaries.  The bridge solves this by exposing
+cmacs's editor-grade tools alongside ai-glib's built-ins ---
+augmenting rather than replacing.
+
+@subsection Default allowlist
+
+The default set covers the read-only introspection tools plus the
+four safe-edit mutators that respect buffer invariants:
+
+@itemize @bullet
+@item
+@strong{Eval + introspection}: @code{eval}, @code{describe_function},
+@code{describe_variable}, @code{apropos}, @code{completions}
+@item
+@strong{Buffer surface}: @code{list_buffers}, @code{get_buffer_content},
+@code{set_buffer_content}, @code{create_buffer}, @code{edit_buffer},
+@code{replace_in_buffer}, @code{search_buffer}, @code{goto_line}
+@item
+@strong{Window introspection}: @code{list_windows}, @code{list_frames}
+@item
+@strong{Project surface} (workspace-confined): @code{project_root},
+@code{project_read_file}, @code{project_list_files},
+@code{project_find_files}, @code{project_grep}
+@item
+@strong{Process + debug read-only}: @code{list_processes},
+@code{backtrace}, @code{memory_info}, @code{process_status},
+@code{recent_messages}, @code{describe_mode}, @code{list_hooks}
+@end itemize
+
+When the model invokes one of these, the call goes through the SAME
+handler an external MCP client would hit (via the new
+@code{mcp_server_invoke_tool} entry point), then the result string is
+handed back to ai-glib as the @code{tool_result}.  The chat buffer
+renders the call and its result as @code{***} subsections under the
+@code{**} assistant turn, identical to ai-glib built-in tool calls.
+
+@subsection Opting tools in or out
+
+Allowlist patterns are PCRE regexps (the bridge runs through GLib's
+GRegex) --- @emph{not} Emacs' @code{\`X\'} syntax.  To add shell
+access plus the GObject Introspection surface, append to
+@code{cmacs-ai-mcp-bridge-allowlist}:
+
+@example
+(add-to-list 'cmacs-ai-mcp-bridge-allowlist "^bacon_eval$")
+(add-to-list 'cmacs-ai-mcp-bridge-allowlist "^crispy_eval$")
+(add-to-list 'cmacs-ai-mcp-bridge-allowlist "^gi_")
+@end example
+
+To gate a single chat buffer to read-only tools:
+
+@example
+(setq-local cmacs-ai-mcp-bridge-readonly-only t)
+@end example
+
+before opening it.
+
+@subsection Recursion guard
+
+The C layer always denies @code{^ai_} (the outbound MCP tool names),
+regardless of what you put in @code{cmacs-ai-mcp-bridge-allowlist}.
+This prevents the in-process AI from looping by invoking
+@code{ai_open_chat} or @code{ai_prompt} on itself.  This guard is
+not configurable.
+
+@subsection Trust
+
+Bridged MCP tools obey @code{cmacs-ai-tool-confirm} exactly like the
+ai-glib built-ins documented under @ref{CMacs AI Tool Use}.  One
+knob, symmetric semantics: @code{nil} for full trust (the
+project-wide default), @code{'destructive} to prompt before any tool
+that lacks the MCP read-only hint, or a function for arbitrary
+per-call gating.
 
 @node CMacs AI Configuration
 @section Configuration

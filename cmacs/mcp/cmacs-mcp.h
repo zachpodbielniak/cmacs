@@ -25,6 +25,17 @@ extern McpUnixSocketServer *cmacs_mcp_get_server (void);
 /* Get the socket path (e.g. /run/user/1000/cmacs-mcp-12345.sock). */
 extern const gchar *cmacs_mcp_get_socket_path (void);
 
+/* Get the process-lifetime "internal" McpServer.
+ *
+ * Tools / resources / prompts register here at `init_cmacs_mcp' time
+ * the same way they register per-session for external clients.  In-
+ * process consumers (the cmacs-ai MCP bridge in particular) enumerate
+ * tools off this server and invoke them via `mcp_server_invoke_tool'.
+ *
+ * Lifetime spans the cmacs process; the server has no transport bound
+ * and never participates in the JSON-RPC wire path. */
+extern McpServer *cmacs_mcp_get_internal_server (void);
+
 /* Subsystem lifecycle (called from emacs.c). */
 extern void syms_of_cmacs_mcp (void);
 extern void init_cmacs_mcp (void);

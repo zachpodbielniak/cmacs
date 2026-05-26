@@ -24,6 +24,11 @@
 #include "cmacs-glib-loop.h"
 #include "cmacs-eval-dispatch.h"
 
+#ifdef HAVE_CMACS_MCP
+#include "cmacs-mcp.h"
+#include "cmacs-ai-mcp-bridge.h"
+#endif
+
 #include <ai-glib.h>
 #include <glib.h>
 
@@ -377,6 +382,74 @@ the model to continue with the new context.  */)
   return build_string (content);
 }
 
+#ifdef HAVE_CMACS_MCP
+/* Lisp list of regexp strings -> GPtrArray<const gchar *>.
+ * The returned array does NOT own its strings; the caller must keep
+ * the Lisp list alive for the duration of the use. */
+static GPtrArray *
+cmacs_ai__lisp_regex_list (Lisp_Object lst)
+{
+  if (NILP (lst)) return NULL;
+  GPtrArray *out = g_ptr_array_new ();
+  Lisp_Object tail = lst;
+  FOR_EACH_TAIL_SAFE (tail)
+    {
+      Lisp_Object s = XCAR (tail);
+      if (STRINGP (s))
+        g_ptr_array_add (out, SSDATA (s));
+    }
+  return out;
+}
+
+DEFUN ("cmacs-ai-tools-register-mcp-bridge",
+       Fcmacs_ai_tools_register_mcp_bridge,
+       Scmacs_ai_tools_register_mcp_bridge, 1, 4, 0,
+       doc: /* Register cmacs MCP tools on EXECUTOR as ai-glib tool callbacks.
+
+Enumerates the tools registered on cmacs's process-lifetime internal
+McpServer (see `cmacs_mcp_get_internal_server') and adds each one that
+passes the filters as a custom AiToolCallback on EXECUTOR.  When the
+model invokes one of these tools, the callback routes back through
+`mcp_server_invoke_tool', running the SAME handler an external MCP
+client would hit.
+
+ALLOWLIST is a list of regexp strings; a tool is kept iff some regex
+matches its name (nil/omitted means match all).  DENYLIST is similar;
+\"\\\\`ai_\" is always implicitly added to prevent AI-driving-AI
+recursion.  READONLY-ONLY = t restricts to tools flagged with the
+MCP read-only hint.
+
+Returns the integer count of tools successfully registered.  */)
+  (Lisp_Object executor, Lisp_Object allowlist,
+   Lisp_Object denylist, Lisp_Object readonly_only)
+{
+  CHECK_FIXNAT (executor);
+  cmacs_ai__executor_registry_init ();
+  g_mutex_lock (&cmacs_ai__executor_mutex);
+  AiToolExecutor *exec =
+    g_hash_table_lookup (cmacs_ai__executors,
+                         GUINT_TO_POINTER (XFIXNUM (executor)));
+  if (exec) g_object_ref (exec);
+  g_mutex_unlock (&cmacs_ai__executor_mutex);
+  if (exec == NULL) error ("cmacs-ai: bad executor handle");
+
+  McpServer *server = cmacs_mcp_get_internal_server ();
+  if (server == NULL)
+    {
+      g_object_unref (exec);
+      error ("cmacs-ai: cmacs-mcp internal server not initialised");
+    }
+
+  g_autoptr (GPtrArray) allow = cmacs_ai__lisp_regex_list (allowlist);
+  g_autoptr (GPtrArray) deny  = cmacs_ai__lisp_regex_list (denylist);
+  guint n = cmacs_ai_mcp_bridge_register_tools (exec, server,
+                                                allow, deny,
+                                                !NILP (readonly_only));
+  g_object_unref (exec);
+  return make_fixnum (n);
+}
+#endif /* HAVE_CMACS_MCP */
+
 void syms_of_cmacs_ai_tools_defuns (void);
 void
 syms_of_cmacs_ai_tools_defuns (void)
@@ -388,6 +461,9 @@ syms_of_cmacs_ai_tools_defuns (void)
   defsubr (&Scmacs_ai_tools_register);
   defsubr (&Scmacs_ai_tools_run_async);
   defsubr (&Scmacs_ai_tools_execute_into_session);
+#ifdef HAVE_CMACS_MCP
+  defsubr (&Scmacs_ai_tools_register_mcp_bridge);
+#endif
 }
 
 #endif /* HAVE_CMACS_AI */

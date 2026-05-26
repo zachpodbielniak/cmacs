@@ -131,6 +131,70 @@ chat layer renders a `tool-loop-aborted' heading and stops."
   :type 'integer
   :group 'cmacs-ai)
 
+;;;; cmacs MCP bridge: exposes cmacs's own MCP tool surface as
+;;;; additional ai-glib tool callbacks on each chat buffer's executor.
+;;;; The bridge is the INBOUND mirror of the outbound `ai_*' MCP tools
+;;;; that let external agents drive cmacs.
+
+(defcustom cmacs-ai-mcp-bridge-enable t
+  "When non-nil, augment each new chat buffer's tool executor with
+cmacs's MCP tool surface (buffer/file/project/eval/apropos/describe
+by default; tweak via `cmacs-ai-mcp-bridge-allowlist').
+
+The bridge is silently skipped if cmacs was built --without-cmacs-mcp."
+  :type 'boolean
+  :group 'cmacs-ai)
+
+(defcustom cmacs-ai-mcp-bridge-allowlist
+  '(;; eval gateway + introspection
+    "^eval$" "^describe_function$" "^describe_variable$"
+    "^apropos$" "^completions$"
+    ;; buffer ops (read + safe edit primitives)
+    "^list_buffers$" "^get_buffer_content$"
+    "^set_buffer_content$" "^create_buffer$"
+    "^edit_buffer$" "^replace_in_buffer$"
+    "^search_buffer$" "^goto_line$"
+    ;; window read-only
+    "^list_windows$" "^list_frames$"
+    ;; project surface (workspace-confined file ops)
+    "^project_root$" "^project_read_file$"
+    "^project_list_files$" "^project_find_files$"
+    "^project_grep$"
+    ;; process + debug read-only
+    "^list_processes$" "^backtrace$" "^memory_info$"
+    "^process_status$" "^recent_messages$"
+    "^describe_mode$" "^list_hooks$")
+  "PCRE patterns that select which cmacs MCP tools the bridge exposes.
+A tool is exposed iff at least one regex matches its name AND no regex
+in `cmacs-ai-mcp-bridge-denylist' matches.  Use PCRE syntax (the
+bridge runs through GLib's GRegex) -- not Emacs's `\\\\`X\\\\\\='' form.
+
+The default set is the safe \"editor-focused\" tier: read-only
+introspection plus a few obvious safe-edit mutators (buffer/file/
+project).  Extend to add e.g. shell access (\"^bacon_eval$\") or
+GObject Introspection (\"^gi_\") -- see the cmacs-ai manual for the
+full tier table."
+  :type '(repeat string)
+  :group 'cmacs-ai)
+
+(defcustom cmacs-ai-mcp-bridge-denylist nil
+  "PCRE patterns for cmacs MCP tools to never expose via the bridge.
+`^ai_' is always implicitly added by the C layer to prevent the
+in-process AI from invoking itself recursively, so this defcustom
+only needs to grow if you have additional tools you want to suppress."
+  :type '(repeat string)
+  :group 'cmacs-ai)
+
+(defcustom cmacs-ai-mcp-bridge-readonly-only nil
+  "When non-nil, the bridge only exposes MCP tools that carry the
+`read-only' hint (`mcp_tool_set_read_only_hint').  Useful for a
+\"safe\" chat buffer that can read state but never mutate it.
+
+Per-buffer override: (setq-local cmacs-ai-mcp-bridge-readonly-only t)
+before opening the chat."
+  :type 'boolean
+  :group 'cmacs-ai)
+
 (defcustom cmacs-ai-tool-confirm nil
   "If non-nil, prompt before each tool call.
 A function is called as (FN TOOL-NAME ARGS); return nil to abort.

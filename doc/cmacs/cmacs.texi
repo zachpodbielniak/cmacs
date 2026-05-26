@@ -54,6 +54,7 @@ interaction.
 * CMacs Piper::                 Offline text-to-speech via Piper subprocess.
 * Cintrospect::                 Runtime C self-introspection (libdw + JIT).
 * Cpatch::                      Runtime C hot-patching (DEFUN swap + detours).
+* CMacs AI::                    ai-glib multi-provider coding agent.
 * Build Configuration::         Configure flags and dependencies.
 @end menu
 

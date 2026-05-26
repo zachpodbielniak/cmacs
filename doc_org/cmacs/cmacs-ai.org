@@ -100,6 +100,10 @@ all tools are enabled (full trust).  Set =cmacs-ai-tool-confirm=
 to ='destructive= for a per-call prompt on bash/write/edit, or to a
 function for custom approval.
 
+Each chat buffer is /also/ auto-augmented with cmacs's own MCP tool
+surface (buffer / file / project / eval / apropos / describe by
+default) on top of these built-ins -- see [[*MCP bridge][MCP bridge]] below.
+
 Custom Elisp tools are registered via =cmacs-ai-tools-register=:
 
 #+BEGIN_SRC elisp
@@ -152,6 +156,61 @@ Built with =--with-cmacs-mcp=, three tools are exposed:
 | =ai_prompt=        | =prompt= req, =provider=, =system= |
 | =ai_list_providers= | (none)                            |
 | =ai_open_chat=     | =prompt=, =provider= (opt)        |
+
+* MCP bridge
+
+The /outbound/ direction (above) lets external agents drive the
+in-editor AI.  The /inbound/ mirror -- this section -- lets the
+in-process AI drive cmacs's own MCP tool surface.
+
+Each chat buffer's =AiToolExecutor= is automatically augmented with
+cmacs's editor-aware tools (buffer / file / project / eval / apropos
+/ describe by default), so the model gets the same toolset external
+Claude Code already uses to drive cmacs, on top of ai-glib's
+filesystem-level built-ins.
+
+Without the bridge, AI edits land on disk bypassing cmacs buffers
+(no undo, no save-hooks); with it, edits go through =edit_buffer= /
+=replace_in_buffer= and respect editor invariants.
+
+** Default allowlist
+
+| Tool group           | Tools                                              |
+|----------------------+----------------------------------------------------|
+| eval / introspection | =eval=, =describe_function=, =describe_variable=, =apropos=, =completions= |
+| buffer               | =list_buffers=, =get_buffer_content=, =set_buffer_content=, =create_buffer=, =edit_buffer=, =replace_in_buffer=, =search_buffer=, =goto_line= |
+| window               | =list_windows=, =list_frames=                       |
+| project              | =project_root=, =project_read_file=, =project_list_files=, =project_find_files=, =project_grep= |
+| process + debug      | =list_processes=, =backtrace=, =memory_info=, =process_status=, =recent_messages=, =describe_mode=, =list_hooks= |
+
+** Extending
+
+Patterns are PCRE (the bridge uses GLib's GRegex), NOT Emacs
+=\`X\'= syntax.  To add shell access + the full GObject Introspection
+surface:
+
+#+BEGIN_SRC elisp
+(dolist (re '("^bacon_eval$" "^crispy_eval$" "^gi_"))
+  (add-to-list 'cmacs-ai-mcp-bridge-allowlist re))
+#+END_SRC
+
+To open a single read-only chat:
+
+#+BEGIN_SRC elisp
+(let ((cmacs-ai-mcp-bridge-readonly-only t))
+  (cmacs-ai-chat 'claude))
+#+END_SRC
+
+** Recursion guard
+
+The C layer always denies =^ai_= regardless of allowlist contents,
+to prevent the in-process AI from invoking =ai_open_chat= /
+=ai_prompt= on itself.  Not configurable.
+
+** Trust
+
+Bridged MCP tools obey =cmacs-ai-tool-confirm= the same way ai-glib's
+built-ins do (see /Tool use/).  Default nil = full trust.
 
 * Configuration
 

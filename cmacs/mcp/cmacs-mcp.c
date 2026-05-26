@@ -25,7 +25,8 @@
 /* ── Static state ─────────────────────────────────────────────────── */
 
 static McpUnixSocketServer *mcp_server;
-static gchar *socket_path;
+static gchar               *socket_path;
+static McpServer           *cmacs_mcp_internal_server;
 
 /* ── Session lifecycle ────────────────────────────────────────────── */
 
@@ -54,6 +55,24 @@ const gchar *
 cmacs_mcp_get_socket_path (void)
 {
   return socket_path;
+}
+
+McpServer *
+cmacs_mcp_get_internal_server (void)
+{
+  /* Lazy init: `init_cmacs_mcp' only runs in interactive mode (the
+   * Unix-socket server isn't useful in --batch), but in-process
+   * consumers like the cmacs-ai MCP bridge need the tool registry
+   * regardless.  First call here populates it. */
+  if (cmacs_mcp_internal_server == NULL)
+    {
+      cmacs_mcp_internal_server = mcp_server_new ("cmacs-mcp-internal",
+                                                  "0.1.0");
+      cmacs_mcp_register_all_tools (cmacs_mcp_internal_server);
+      cmacs_mcp_register_resources (cmacs_mcp_internal_server);
+      cmacs_mcp_register_prompts (cmacs_mcp_internal_server);
+    }
+  return cmacs_mcp_internal_server;
 }
 
 /* ── Start / stop helpers ─────────────────────────────────────────── */
@@ -203,6 +222,12 @@ void
 init_cmacs_mcp (void)
 {
   g_autoptr (GError) error = NULL;
+
+  /* Eagerly populate the in-process tool registry (see
+   * `cmacs_mcp_get_internal_server' for full notes).  This is
+   * cheap and ensures bacon `cmacsgi' + the cmacs-ai MCP bridge
+   * see a ready server immediately without an init-order race. */
+  (void) cmacs_mcp_get_internal_server ();
 
   if (!cmacs_mcp_do_start (&error))
     g_warning ("cmacs-mcp: failed to start: %s", error->message);

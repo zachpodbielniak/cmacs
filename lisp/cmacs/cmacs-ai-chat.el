@@ -33,6 +33,9 @@
                   "cmacs-ai-client.c" (handle))
 (declare-function cmacs-ai-tools-new "cmacs-ai-tools.c" ())
 (declare-function cmacs-ai-tools-free "cmacs-ai-tools.c" (handle))
+(declare-function cmacs-ai-tools-register-mcp-bridge
+                  "cmacs-ai-tools.c"
+                  (executor &optional allowlist denylist readonly-only))
 (declare-function cmacs-ai-chat-continue-stream
                   "cmacs-ai-stream.c" (session callback &optional executor))
 (declare-function cmacs-ai-tools-execute-into-session
@@ -144,6 +147,21 @@ sends the compose body and streams the response into a fresh
     (setq-local cmacs-ai-chat-tool-executor
                 (when cmacs-ai-chat-enable-tools
                   (cmacs-ai-tools-new)))
+    ;; Augment the executor with cmacs's own MCP tool surface so the
+    ;; model gets buffer / file / project / eval / apropos / describe
+    ;; on top of ai-glib's filesystem-level built-ins.  Silently
+    ;; skipped if cmacs was built --without-cmacs-mcp.
+    (when (and cmacs-ai-chat-tool-executor
+               cmacs-ai-mcp-bridge-enable
+               (fboundp 'cmacs-ai-tools-register-mcp-bridge))
+      (condition-case err
+          (cmacs-ai-tools-register-mcp-bridge
+           cmacs-ai-chat-tool-executor
+           cmacs-ai-mcp-bridge-allowlist
+           cmacs-ai-mcp-bridge-denylist
+           cmacs-ai-mcp-bridge-readonly-only)
+        (error
+         (message "cmacs-ai: MCP bridge unavailable: %S" err))))
     (setq-local cmacs-ai-chat--created-at (current-time))
     (setq-local cmacs-ai-chat--compose-marker
                 (save-excursion (goto-char (point-max)) (point-marker)))

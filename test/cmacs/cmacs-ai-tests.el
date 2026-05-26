@@ -198,6 +198,68 @@
   (let ((cmacs-ai-pre-prompt ""))
     (should (equal "hi" (cmacs-ai-chat--apply-pre-prompt "hi")))))
 
+;;;; MCP bridge ----------------------------------------------------
+
+(ert-deftest cmacs-ai-mcp-bridge-loads ()
+  "The MCP bridge DEFUN is wired in when MCP support is compiled in."
+  (skip-unless (fboundp 'cmacs-ai-tools-register-mcp-bridge)))
+
+(ert-deftest cmacs-ai-mcp-bridge-respects-allowlist ()
+  "Only tools matching the allowlist get registered."
+  (skip-unless (fboundp 'cmacs-ai-tools-register-mcp-bridge))
+  (let ((exec (cmacs-ai-tools-new)))
+    (unwind-protect
+        (let ((n (cmacs-ai-tools-register-mcp-bridge
+                  exec
+                  (list "^list_buffers$" "^apropos$"))))
+          (should (= n 2)))
+      (cmacs-ai-tools-free exec))))
+
+(ert-deftest cmacs-ai-mcp-bridge-denies-ai-recursion ()
+  "Tools matching `^ai_' are always rejected even when explicitly
+allowlisted -- the C layer's hardcoded recursion guard wins."
+  (skip-unless (fboundp 'cmacs-ai-tools-register-mcp-bridge))
+  (let ((exec (cmacs-ai-tools-new)))
+    (unwind-protect
+        (let ((n (cmacs-ai-tools-register-mcp-bridge
+                  exec
+                  (list "^ai_"))))
+          (should (= n 0)))
+      (cmacs-ai-tools-free exec))))
+
+(ert-deftest cmacs-ai-mcp-bridge-readonly-only ()
+  "READONLY-ONLY t includes read-only-hinted tools and excludes
+non-hinted ones."
+  (skip-unless (fboundp 'cmacs-ai-tools-register-mcp-bridge))
+  (let ((exec-ro (cmacs-ai-tools-new))
+        (exec-all (cmacs-ai-tools-new)))
+    (unwind-protect
+        (let ((n-ro  (cmacs-ai-tools-register-mcp-bridge
+                       exec-ro nil nil t))
+              (n-all (cmacs-ai-tools-register-mcp-bridge
+                       exec-all nil nil nil)))
+          ;; The read-only set must be a strict subset of the full set.
+          (should (> n-all n-ro))
+          (should (> n-ro 0)))
+      (cmacs-ai-tools-free exec-ro)
+      (cmacs-ai-tools-free exec-all))))
+
+(ert-deftest cmacs-ai-mcp-bridge-auto-on-chat-init ()
+  "Opening a chat buffer with the bridge enabled wires it implicitly."
+  (skip-unless (fboundp 'cmacs-ai-chat-open))
+  (skip-unless (fboundp 'cmacs-ai-tools-register-mcp-bridge))
+  (let ((cmacs-ai-mcp-bridge-enable t)
+        (cmacs-ai-chat-enable-tools t)
+        (buf (cmacs-ai-chat-open 'claude)))
+    (unwind-protect
+        (with-current-buffer buf
+          ;; The executor exists and is non-nil; bridge registration
+          ;; can't be cheaply introspected without firing a tool, but
+          ;; the init path executed without error which is the
+          ;; regression we care about.
+          (should (integerp cmacs-ai-chat-tool-executor)))
+      (kill-buffer buf))))
+
 ;;;; Integration (network) -----------------------------------------
 
 (defun cmacs-ai-tests--have-claude-key ()

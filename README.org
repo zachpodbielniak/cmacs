@@ -278,6 +278,13 @@ editing.
 - Tool use via ai-glib's built-in =AiToolExecutor= (bash, read,
   write, edit, glob, grep, web_fetch); custom Elisp tools via
   =cmacs-ai-tools-register=
+- MCP bridge: every chat buffer auto-wires cmacs's own MCP tool
+  surface (buffer / file / project / eval / apropos / describe by
+  default) as additional ai-glib tool callbacks, so the model can
+  drive cmacs natively -- edits land in buffers (undoable),
+  searches use cmacs project boundaries, introspection uses
+  Emacs's own =apropos= / =describe-function=.  Symmetric to the
+  outbound =ai_*= MCP tools that let external agents drive cmacs.
 - =#+BEGIN_SRC ai= org-babel backend
 - GObject Introspection: =AiGlib-1.0.typelib= auto-prepended to
   GIRepository's search path so =(gi-require "AiGlib" "1.0")= and
