@@ -888,8 +888,26 @@ endif
 
 ifeq ($(CMACS_PODOMATION_BUNDLED),yes)
 CMACS_PODOMATION_STATIC_LIB = $(srcdir)/../deps/podomation/build/release/libpodomation-1.0.a
+
+## Redirect podomation's ai-glib build at the canonical top-level
+## deps/ai-glib so the AI module .so files share a single ai-glib
+## copy with the rest of cmacs (same arrangement libreclaw uses).
+## podomation's module sub-make loop hardcodes `$(CURDIR)/$(AI_GLIB_DIR)/...'
+## so AI_GLIB_DIR has to be a relative path that resolves correctly
+## from podomation/.  `../ai-glib' is relative to podomation/ which
+## sits next to ai-glib/ under deps/.  Only fires when --with-cmacs-ai
+## is on; otherwise let podomation build its own copy as before.
+ifneq ($(CMACS_AI_OBJ),)
+CMACS_PODOMATION_AI_GLIB_OVERRIDES = AI_GLIB_DIR=../ai-glib
+$(CMACS_PODOMATION_STATIC_LIB): $(CMACS_AI_GLIB_STATIC_LIB)
+else
+CMACS_PODOMATION_AI_GLIB_OVERRIDES =
+endif
+
 $(CMACS_PODOMATION_STATIC_LIB):
-	$(MAKE) -C $(srcdir)/../deps/podomation lib-static
+	$(MAKE) -C $(srcdir)/../deps/podomation \
+	  $(CMACS_PODOMATION_AI_GLIB_OVERRIDES) \
+	  lib-static
 
 ## Objects that include podomation.h need pod-version.h from the lib build.
 $(CMACS_PODOMATION_OBJ): $(CMACS_PODOMATION_STATIC_LIB)
@@ -897,7 +915,9 @@ $(CMACS_PODOMATION_OBJ): $(CMACS_PODOMATION_STATIC_LIB)
 ## Build podomation module .so files (separate target, not required for temacs)
 .PHONY: cmacs-podomation-modules
 cmacs-podomation-modules: $(CMACS_PODOMATION_STATIC_LIB)
-	$(MAKE) -C $(srcdir)/../deps/podomation modules
+	$(MAKE) -C $(srcdir)/../deps/podomation \
+	  $(CMACS_PODOMATION_AI_GLIB_OVERRIDES) \
+	  modules
 endif
 
 ## Build bundled whisper.cpp static libraries when system whisper.pc is
