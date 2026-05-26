@@ -64,6 +64,16 @@ if [[ "$DO_BUILD" -eq 1 ]]; then
     echo "==> Building ${IMAGE}"
     echo "    Whisper model: ${WHISPER_MODEL_NAME}"
     echo "    Piper voice:   ${PIPER_VOICE_NAME}"
+    # .containerignore strips .git, so buildah copies only the
+    # working trees of submodules into the image -- if any nested
+    # submodule isn't checked out on the host (e.g. fresh clone
+    # without recursive init), the container build will fail with
+    # "no source files" errors deep in deps/libregnum's raylib build.
+    # Init recursively here so the buildah COPY always sees full trees.
+    if [[ -d .git ]] || [[ -f .git ]]; then
+        echo "==> Ensuring submodules are initialised (recursive)"
+        git submodule update --init --recursive
+    fi
     buildah build \
         --no-cache \
         --ignorefile .containerignore \
