@@ -660,6 +660,7 @@ OPTION_DEFAULT_OFF([cmacs-gowl],  [CMacs Gowl Wayland compositor])
 OPTION_DEFAULT_OFF([cmacs-podomation], [CMacs podomation automation engine])
 OPTION_DEFAULT_OFF([cmacs-libreclaw], [CMacs libreclaw chat/Matrix client integration])
 OPTION_DEFAULT_OFF([cmacs-ai], [CMacs ai-glib AI subsystem (multi-provider chat, tools, voice)])
+OPTION_DEFAULT_OFF([cmacs-libregnum], [CMacs libregnum 3D scene buffers (raylib + GObject scene graph)])
 OPTION_DEFAULT_OFF([cmacs-org-ex], [CMacs org-ex interactive widgets])
 OPTION_DEFAULT_OFF([cmacs-mcp], [CMacs MCP server])
 OPTION_DEFAULT_OFF([cmacs-print], [Print to cmacs virtual printer + PDF intake])
@@ -846,6 +847,43 @@ if test "$with_cmacs_ai" != "no"; then
   if test "$with_cmacs_mcp" != "no"; then
     CMACS_AI_OBJ="$CMACS_AI_OBJ cmacs-ai-mcp-bridge.o"
   fi
+fi
+if test "$with_cmacs_libregnum" != "no"; then
+  if test "$with_cmacs_glib" = "no"; then
+    AC_MSG_ERROR([--with-cmacs-libregnum requires --with-cmacs-glib])
+  fi
+  if test "$with_pgtk" = "no"; then
+    AC_MSG_ERROR([--with-cmacs-libregnum requires --with-pgtk (cairo blit path)])
+  fi
+  # libregnum is always sourced from the top-level deps/libregnum
+  # submodule.  System-package mode not supported -- libregnum
+  # vendors graylib/raylib internally, so the static archive is
+  # the simplest consumption path.
+  PKG_CHECK_MODULES([CMACS_LIBREGNUM_DEPS],
+    [glib-2.0 gobject-2.0 gio-2.0 cairo])
+  CMACS_LIBREGNUM_CFLAGS="-I\$(abs_top_srcdir)/deps/libregnum/src \
+    -I\$(abs_top_srcdir)/deps/libregnum/build/release \
+    -I\$(abs_top_srcdir)/deps/libregnum/deps/graylib/src \
+    -I\$(abs_top_srcdir)/deps/libregnum/deps/graylib/deps/raylib/src \
+    -I\$(abs_top_srcdir)/deps/libregnum/deps/yaml-glib/src \
+    -DLIBREGNUM_COMPILATION \
+    $CMACS_LIBREGNUM_DEPS_CFLAGS"
+  # libregnum's static archive carries the raymath helpers in
+  # several .o files (raylib's headers compile them inline without
+  # `static'), which produces multiple-definition errors when the
+  # archive is linked into an executable.  The .so doesn't have
+  # that problem -- the dynamic linker uses the first definition.
+  # So we link against the shared library and rely on
+  # LD_LIBRARY_PATH / RPATH at runtime.
+  CMACS_LIBREGNUM_LIBS="-L\$(abs_top_srcdir)/deps/libregnum/build/release/lib \
+    -Wl,-rpath,\$(abs_top_srcdir)/deps/libregnum/build/release/lib \
+    -llibregnum \
+    -lGL -lm -lpthread -ldl -lrt -lX11 \
+    $CMACS_LIBREGNUM_DEPS_LIBS"
+  AC_DEFINE([HAVE_CMACS_LIBREGNUM], 1, [CMacs libregnum 3D scenes])
+  CMACS_LIBREGNUM_OBJ="cmacs-libregnum-init.o cmacs-libregnum-defuns.o \
+    cmacs-libregnum-view.o cmacs-libregnum-overlay.o \
+    cmacs-libregnum-input.o cmacs-libregnum-render.o"
 fi
 if test "$with_cmacs_org_ex" != "no"; then
   AC_DEFINE([HAVE_CMACS_ORG_EX], 1, [CMacs org-ex interactive widgets])
@@ -1180,6 +1218,10 @@ AC_SUBST(CMACS_LIBRECLAW_BUNDLED)
 AC_SUBST(CMACS_AI_OBJ)
 AC_SUBST(CMACS_AI_CFLAGS)
 AC_SUBST(CMACS_AI_LIBS)
+
+AC_SUBST(CMACS_LIBREGNUM_OBJ)
+AC_SUBST(CMACS_LIBREGNUM_CFLAGS)
+AC_SUBST(CMACS_LIBREGNUM_LIBS)
 
 # CMacs API library: built as a shared library in cmacs/api/ and used
 # by both the bacon cmacsgi module and crispy scripts (in-process).

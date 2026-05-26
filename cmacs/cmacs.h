@@ -59,4 +59,8 @@
 # include "ai/cmacs-ai.h"
 #endif
 
+#ifdef HAVE_CMACS_LIBREGNUM
+# include "libregnum/cmacs-libregnum.h"
+#endif
+
 #endif /* CMACS_H */

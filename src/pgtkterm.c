@@ -77,6 +77,10 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 #include "cmacs-audio.h"
 #endif
 
+#ifdef HAVE_CMACS_LIBREGNUM
+#include "cmacs-libregnum.h"
+#endif
+
 #ifdef GDK_WINDOWING_WAYLAND
 #include <gdk/gdkwayland.h>
 #endif
@@ -5100,6 +5104,15 @@ pgtk_handle_draw (GtkWidget *widget, cairo_t *cr, gpointer *data)
          streams. */
       if (f != NULL)
         cmacs_audio_overlay_paint (f, cr);
+#endif
+#ifdef HAVE_CMACS_LIBREGNUM
+      /* cmacs-libregnum-overlay: blit the BGRA framebuffer of every
+         libregnum view whose buffer is currently shown in a window
+         of this frame.  Dedicated-major-mode model -- the GL scene
+         covers the entire text area.  Runs after audio so a 3D scene
+         can sit on top of a synthesised soundscape if both exist. */
+      if (f != NULL)
+        cmacs_libregnum_overlay_paint (f, cr);
 #endif
 #ifdef HAVE_CMACS_GLIB
       /* cmacs-ink-overlay: paint stroke layers AFTER the back-

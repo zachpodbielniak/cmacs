@@ -5550,6 +5550,10 @@ extern void init_cmacs_piper (void);
 extern void syms_of_cmacs_ai (void);
 extern void init_cmacs_ai (void);
 #endif
+#ifdef HAVE_CMACS_LIBREGNUM
+extern void syms_of_cmacs_libregnum (void);
+extern void init_cmacs_libregnum (void);
+#endif
 
 #ifdef HAVE_NATIVE_COMP
 INLINE bool

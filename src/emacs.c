@@ -2754,6 +2754,9 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #ifdef HAVE_CMACS_AI
       syms_of_cmacs_ai ();
 #endif
+#ifdef HAVE_CMACS_LIBREGNUM
+      syms_of_cmacs_libregnum ();
+#endif
 
       keys_of_keyboard ();
 
@@ -2868,6 +2871,9 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #endif
 #ifdef HAVE_CMACS_AI
   init_cmacs_ai ();
+#endif
+#ifdef HAVE_CMACS_LIBREGNUM
+  init_cmacs_libregnum ();
 #endif
 
   if (!initialized)
