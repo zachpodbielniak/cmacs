@@ -38,16 +38,147 @@ holds the active value)."
 (declare-function cmacs-libregnum-resize "cmacs-libregnum-defuns.c"
                   (buffer width height))
 (declare-function cmacs-libregnum-redraw "cmacs-libregnum-defuns.c" (buffer))
+(declare-function cmacs-libregnum-build-tree "cmacs-libregnum-defuns.c"
+                  (buffer root))
+(declare-function cmacs-libregnum-build-gobject "cmacs-libregnum-defuns.c"
+                  (buffer &optional namespace))
+(declare-function cmacs-libregnum-build-mindmap "cmacs-libregnum-defuns.c"
+                  (buffer org-file))
+(declare-function cmacs-libregnum-camera-state "cmacs-libregnum-defuns.c"
+                  (buffer))
+(declare-function cmacs-libregnum-set-camera "cmacs-libregnum-defuns.c"
+                  (buffer position target fov))
+
+;;;; Buffer text format -----------------------------------------------
+
+;; The scene file is human-editable.  Format is a tiny subset of YAML:
+;;   key: value
+;; with values being either:
+;;   - a bare string up to end of line
+;;   - "[X, Y, Z]" coordinate triples
+;;   - bare floats / ints
+;; Comments start with #.  Blank lines ignored.  This is sufficient for
+;; v1 -- if we need full YAML later, swap the parser for yaml-glib.
+
+(defun cmacs-libregnum--parse-buffer ()
+  "Parse the current buffer's scene text into an alist of (KEY . VAL)."
+  (save-excursion
+    (goto-char (point-min))
+    (let (acc)
+      (while (not (eobp))
+        (let ((line (buffer-substring-no-properties
+                     (line-beginning-position) (line-end-position))))
+          (cond
+           ((string-match "\\`[ \t]*#" line)
+            nil)
+           ((string-match "\\`[ \t]*\\'" line)
+            nil)
+           ((string-match "\\`\\([A-Za-z0-9_]+\\):[ \t]*\\(.*\\)\\'" line)
+            (let ((k (intern (match-string 1 line)))
+                  (raw (match-string 2 line)))
+              (push (cons k (cmacs-libregnum--parse-value raw)) acc)))))
+        (forward-line 1))
+      (nreverse acc))))
+
+(defun cmacs-libregnum--parse-value (raw)
+  (let ((s (string-trim raw)))
+    (cond
+     ((string-match "\\`\\[\\(.*\\)\\]\\'" s)
+      (mapcar (lambda (tok)
+                (string-to-number (string-trim tok)))
+              (split-string (match-string 1 s) ",")))
+     ((string-match "\\`-?[0-9]+\\(\\.[0-9]+\\)?\\'" s)
+      (string-to-number s))
+     (t s))))
+
+(defun cmacs-libregnum--alist-get (key alist)
+  (cdr (assq key alist)))
+
+(defun cmacs-libregnum--serialise-buffer (alist)
+  "Replace the current buffer's text with a YAML-ish dump of ALIST."
+  (let ((inhibit-read-only t))
+    (erase-buffer)
+    (insert "# -*- mode: cmacs-libregnum -*-\n")
+    (dolist (pair alist)
+      (let ((k (car pair))
+            (v (cdr pair)))
+        (cond
+         ((consp v)
+          (insert (format "%s: [%s]\n" k
+                          (mapconcat (lambda (n) (format "%.4f" n))
+                                     v ", "))))
+         ((stringp v)
+          (insert (format "%s: %s\n" k v)))
+         ((numberp v)
+          (insert (format "%s: %s\n" k v))))))))
+
+(defun cmacs-libregnum--apply-camera (buffer alist)
+  "If ALIST has :position/target/fov keys, push them into BUFFER's view."
+  (let ((pos (cmacs-libregnum--alist-get 'position alist))
+        (tgt (cmacs-libregnum--alist-get 'target alist))
+        (fov (cmacs-libregnum--alist-get 'fov alist)))
+    (when (and (listp pos) (listp tgt))
+      (cmacs-libregnum-set-camera buffer pos tgt (or fov 0.0)))))
+
+(defun cmacs-libregnum--apply-scene (buffer alist)
+  "Dispatch on `scene_type' and rebuild BUFFER's scene from ALIST."
+  (let ((type (cmacs-libregnum--alist-get 'scene_type alist)))
+    (cond
+     ((equal type "project_tree")
+      (let ((root (cmacs-libregnum--alist-get 'project_root alist)))
+        (when (and root (stringp root) (file-directory-p root))
+          (cmacs-libregnum-build-tree buffer root))))
+     ((equal type "gobject")
+      (let ((ns (cmacs-libregnum--alist-get 'namespace alist)))
+        (cmacs-libregnum-build-gobject
+         buffer (and ns (stringp ns) ns))))
+     ((equal type "mindmap")
+      (let ((org-file (cmacs-libregnum--alist-get 'org_file alist)))
+        (when (and org-file (stringp org-file) (file-exists-p org-file))
+          (cmacs-libregnum-build-mindmap buffer org-file)))))))
+
+(defun cmacs-libregnum--read-scene-from-buffer ()
+  "Rebuild this buffer's scene + restore camera from buffer text."
+  (when (cmacs-libregnum-attached-p (current-buffer))
+    (let ((alist (cmacs-libregnum--parse-buffer)))
+      (cmacs-libregnum--apply-scene (current-buffer) alist)
+      (cmacs-libregnum--apply-camera (current-buffer) alist))))
+
+(defun cmacs-libregnum--write-scene-to-buffer ()
+  "Snapshot camera + scene parameters into buffer text (called on save)."
+  (when (cmacs-libregnum-attached-p (current-buffer))
+    (let* ((existing (cmacs-libregnum--parse-buffer))
+           (state    (cmacs-libregnum-camera-state (current-buffer)))
+           (pos      (plist-get state :position))
+           (tgt      (plist-get state :target))
+           (fov      (plist-get state :fov))
+           (new (copy-alist existing)))
+      (setf (alist-get 'position new) pos)
+      (setf (alist-get 'target   new) tgt)
+      (setf (alist-get 'fov      new) fov)
+      (cmacs-libregnum--serialise-buffer new))))
 
 ;;;; Mode -------------------------------------------------------------
 
 (defvar cmacs-libregnum-mode-map
   (let ((m (make-sparse-keymap)))
     (define-key m (kbd "q")       #'kill-this-buffer)
-    (define-key m (kbd "g r")     #'cmacs-libregnum-redraw-current)
+    (define-key m (kbd "g r")     #'cmacs-libregnum-reload-from-buffer)
     (define-key m (kbd "g g")     #'cmacs-libregnum-redraw-current)
+    (define-key m (kbd "g s")     #'cmacs-libregnum-save-to-buffer)
     m)
   "Keymap for `cmacs-libregnum-mode'.")
+
+(defun cmacs-libregnum-reload-from-buffer ()
+  "Reload current scene from the buffer's YAML text."
+  (interactive)
+  (cmacs-libregnum--read-scene-from-buffer)
+  (cmacs-libregnum-redraw-current))
+
+(defun cmacs-libregnum-save-to-buffer ()
+  "Snapshot current camera state into the buffer text."
+  (interactive)
+  (cmacs-libregnum--write-scene-to-buffer))
 
 (defun cmacs-libregnum-redraw-current ()
   "Force a redraw of the current libregnum buffer's scene."
@@ -80,9 +211,19 @@ state (camera, layout options, selection).
               '("%e" mode-line-front-space mode-line-buffer-identification
                 "  cmacs-libregnum-mode"))
   (add-hook 'kill-buffer-hook #'cmacs-libregnum--on-kill nil t)
+  (add-hook 'before-save-hook
+            #'cmacs-libregnum--write-scene-to-buffer nil t)
   ;; Attach the view (idempotent).
   (let ((sz cmacs-libregnum-default-size))
-    (cmacs-libregnum-attach (current-buffer) (car sz) (cdr sz))))
+    (cmacs-libregnum-attach (current-buffer) (car sz) (cdr sz)))
+  ;; If the buffer was visiting a file with prior scene state,
+  ;; rebuild the scene + restore the camera now.  Skip when the
+  ;; buffer is a fresh interactive shell (no `scene_type:' yet).
+  (when (and buffer-file-name
+             (> (buffer-size) 0)
+             (save-excursion (goto-char (point-min))
+                             (re-search-forward "^scene_type:" nil t)))
+    (cmacs-libregnum--read-scene-from-buffer)))
 
 ;;;; Entry points ----------------------------------------------------
 
@@ -103,6 +244,101 @@ state (camera, layout options, selection).
       (cmacs-libregnum-mode))
     (switch-to-buffer buf)
     buf))
+
+;;;###autoload
+(defun cmacs-libregnum-project-tree (&optional root)
+  "Open a libregnum scene visualising the project file tree under ROOT.
+With no ROOT, uses the current project root if `project-current'
+returns one, otherwise `default-directory'.  Each regular file becomes
+a coloured cube; height encodes file size, hue encodes extension.
+Drag with the left mouse button to orbit, scroll-wheel to zoom."
+  (interactive)
+  (unless (cmacs-libregnum-supported-p)
+    (user-error "cmacs-libregnum not built; reconfigure with \
+--with-cmacs-libregnum"))
+  (let* ((dir (or root
+                  (when (fboundp 'project-current)
+                    (when-let* ((proj (project-current nil)))
+                      (if (fboundp 'project-root)
+                          (project-root proj)
+                        (car (with-no-warnings
+                               (project-roots proj))))))
+                  default-directory))
+         (abs (file-name-as-directory (expand-file-name dir)))
+         (buf (get-buffer-create
+               (format "*cmacs-libregnum tree: %s*"
+                       (file-name-nondirectory
+                        (directory-file-name abs))))))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert "# -*- mode: cmacs-libregnum -*-\n")
+        (insert "scene_type: project_tree\n")
+        (insert (format "project_root: %s\n" abs)))
+      (cmacs-libregnum-mode)
+      (setq-local cmacs-libregnum--scene-root abs)
+      (cmacs-libregnum-build-tree (current-buffer) abs))
+    (switch-to-buffer buf)
+    buf))
+
+(defvar-local cmacs-libregnum--scene-root nil
+  "Absolute path of the project root for the current tree scene, if any.")
+
+;;;###autoload
+(defun cmacs-libregnum-gobject-graph (&optional namespace)
+  "Open a libregnum scene visualising the GObject class hierarchy.
+With prefix arg or NAMESPACE non-nil, prompts for a leading type-name
+prefix (e.g. \"Gtk\", \"Lrg\") to scope the graph."
+  (interactive
+   (list (when current-prefix-arg
+           (read-string "Type-name prefix (empty = all): "))))
+  (unless (cmacs-libregnum-supported-p)
+    (user-error "cmacs-libregnum not built; reconfigure with \
+--with-cmacs-libregnum"))
+  (let* ((ns (and namespace (not (string-empty-p namespace)) namespace))
+         (buf (get-buffer-create
+               (if ns (format "*cmacs-libregnum gobject: %s*" ns)
+                 "*cmacs-libregnum gobject*"))))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert "# -*- mode: cmacs-libregnum -*-\n")
+        (insert "scene_type: gobject\n")
+        (when ns (insert (format "namespace: %s\n" ns))))
+      (cmacs-libregnum-mode)
+      (cmacs-libregnum-build-gobject (current-buffer) ns))
+    (switch-to-buffer buf)
+    buf))
+
+;;;###autoload
+(defun cmacs-libregnum-mind-map (org-file)
+  "Open a libregnum scene visualising the heading tree of ORG-FILE."
+  (interactive
+   (list (read-file-name "Org file: " nil nil t
+                         (when (and buffer-file-name
+                                    (string-match-p "\\.org\\'" buffer-file-name))
+                           (file-name-nondirectory buffer-file-name)))))
+  (unless (cmacs-libregnum-supported-p)
+    (user-error "cmacs-libregnum not built; reconfigure with \
+--with-cmacs-libregnum"))
+  (let* ((abs (expand-file-name org-file))
+         (buf (get-buffer-create
+               (format "*cmacs-libregnum mindmap: %s*"
+                       (file-name-nondirectory abs)))))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert "# -*- mode: cmacs-libregnum -*-\n")
+        (insert "scene_type: mindmap\n")
+        (insert (format "org_file: %s\n" abs)))
+      (cmacs-libregnum-mode)
+      (cmacs-libregnum-build-mindmap (current-buffer) abs))
+    (switch-to-buffer buf)
+    buf))
+
+;;;###autoload
+(add-to-list 'auto-mode-alist
+             '("\\.lrg-scene\\'" . cmacs-libregnum-mode))
 
 (provide 'cmacs-libregnum)
 ;;; cmacs-libregnum.el ends here

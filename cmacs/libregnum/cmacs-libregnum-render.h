@@ -33,13 +33,21 @@ extern void cmacs_libregnum_render_ctx_resize (CmacsLibregnumRenderCtx *r,
                                                int w, int h);
 
 /* Borrowed pointers (typed as void* so callers don't need libregnum
- * headers).  Cast to LrgRenderer/LrgSceneEntity/LrgCamera at the
- * scene-builder site (which already includes libregnum.h). */
+ * headers).  Cast to LrgRenderer/GPtrArray<LrgDrawable*>/LrgCamera
+ * at the scene-builder site (which already includes libregnum.h). */
 extern void *cmacs_libregnum_render_ctx_get_renderer (CmacsLibregnumRenderCtx *r);
 extern void *cmacs_libregnum_render_ctx_get_scene    (CmacsLibregnumRenderCtx *r);
 extern void *cmacs_libregnum_render_ctx_get_camera   (CmacsLibregnumRenderCtx *r);
 extern void  cmacs_libregnum_render_ctx_set_camera   (CmacsLibregnumRenderCtx *r,
                                                      void *cam);
+
+/* Scene-builder API: add an LrgDrawable* (e.g. LrgCube3D, LrgSphere3D,
+ * LrgText2D wrapped in 3D).  Ownership transfers to the context. */
+extern void cmacs_libregnum_render_ctx_add_drawable
+                              (CmacsLibregnumRenderCtx *r,
+                               void *drawable);
+extern void cmacs_libregnum_render_ctx_clear_drawables
+                              (CmacsLibregnumRenderCtx *r);
 
 /* Render one frame into DST (BGRA, top-down, w*h*4 bytes).
  * Returns TRUE on success. */
@@ -55,6 +63,20 @@ extern void cmacs_libregnum_render_ctx_orbit_camera
 extern void cmacs_libregnum_render_ctx_zoom_camera
                               (CmacsLibregnumRenderCtx *r,
                                double wheel_dy);
+
+/* Camera state serialisation helpers (position, target, fov).
+ * Used by the Lisp save/restore path to round-trip the view state
+ * through the buffer's YAML.  Coordinates are world-space floats. */
+extern void cmacs_libregnum_render_ctx_get_camera_state
+                              (CmacsLibregnumRenderCtx *r,
+                               double *px, double *py, double *pz,
+                               double *tx, double *ty, double *tz,
+                               double *fov);
+extern void cmacs_libregnum_render_ctx_set_camera_state
+                              (CmacsLibregnumRenderCtx *r,
+                               double px, double py, double pz,
+                               double tx, double ty, double tz,
+                               double fov);
 
 #endif /* HAVE_CMACS_LIBREGNUM */
 #endif /* CMACS_LIBREGNUM_RENDER_H */

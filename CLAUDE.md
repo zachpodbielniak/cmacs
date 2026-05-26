@@ -18,7 +18,7 @@
   --with-cmacs-org-ex --with-cmacs-mcp \
   --with-cmacs-print \
   --with-cmacs-video \
-  --with-cmacs-cintrospect --enable-cmacs-cpatch
+  --with-cmacs-cintrospect --with-cmacs-libregnum --enable-cmacs-cpatch
 make -j$(nproc)           # builds deps + emacs
 just run                  # run it (sets CMACS_MODULE_DIR for cmacsgi)
 ```
@@ -61,6 +61,7 @@ cmacs integrates nine subsystems into Emacs as C primitives (DEFUNs):
 | **piper** | `cmacs/piper/` + `lisp/cmacs/cmacs-piper*.el` | Offline TTS via Piper subprocess (`piper --model V --output_raw` reading stdin, emitting raw S16LE on stdout). PCM streamed back through `cmacs-audio--playback-open-pcm-1`. `M-x cmacs-piper-speak-region` (`C-c v s`) + `cmacs-piper-stop` (`C-c v S`); PGTK right-click context menu shows "Speak selection" / "Speak sentence" / "Stop speaking" via `context-menu-functions`. Voices in `~/.local/share/cmacs/piper-voices/`. Requires `--with-cmacs-audio`. |
 | **cintrospect** | `cmacs/cintrospect/` | Runtime C self-introspection via libdw (DWARF) + libgccjit (Phase 2 JIT). Symbol/type/source/stack/object lookup, plus compile-and-call new C from Lisp. Default-on. |
 | **cpatch** | `cmacs/cpatch/` | Runtime C hot-patching: atomic `Lisp_Subr.function` swap (Phase 1) and trampoline detours for arbitrary C (Phase 3). Off by default — `--enable-cmacs-cpatch`. |
+| **libregnum** | `cmacs/libregnum/` + `lisp/cmacs/cmacs-libregnum.el` | libregnum (GObject/raylib game engine) as embedded 3D scene buffers. Per-buffer view renders to a hidden raylib FBO (`FLAG_WINDOW_HIDDEN`), reads back BGRA, blits via `pgtk_handle_draw` (same shape as cmacs-video). **Translation-unit firewall**: only `cmacs-libregnum-render.c` includes raylib — avoids the `Color` struct vs `void*` typedef clash with `pgtkgui.h`. Three scenes: `M-x cmacs-libregnum-project-tree` (file cubes on a grid), `cmacs-libregnum-gobject-graph` (live `g_type_children` walk), `cmacs-libregnum-mind-map` (radial layout of org-heading tree). Buffer text is a YAML-ish scene description; camera state is snapshotted on save and restored on open (`before-save-hook` + mode-init scan). Off by default — `--with-cmacs-libregnum`; requires `--with-cmacs-glib` + `--with-pgtk`. **Must link against `liblibregnum.so`, NOT the static archive** — raylib's headers compile raymath inline without `static`, so `.a` has multi-defs (`QuaternionToMatrix`, `MatrixDecompose`, etc.). |
 
 ### GLib event loop integration (critical)
 

@@ -883,7 +883,9 @@ if test "$with_cmacs_libregnum" != "no"; then
   AC_DEFINE([HAVE_CMACS_LIBREGNUM], 1, [CMacs libregnum 3D scenes])
   CMACS_LIBREGNUM_OBJ="cmacs-libregnum-init.o cmacs-libregnum-defuns.o \
     cmacs-libregnum-view.o cmacs-libregnum-overlay.o \
-    cmacs-libregnum-input.o cmacs-libregnum-render.o"
+    cmacs-libregnum-input.o cmacs-libregnum-render.o \
+    cmacs-libregnum-scene-tree.o cmacs-libregnum-scene-gobject.o \
+    cmacs-libregnum-scene-mindmap.o"
 fi
 if test "$with_cmacs_org_ex" != "no"; then
   AC_DEFINE([HAVE_CMACS_ORG_EX], 1, [CMacs org-ex interactive widgets])

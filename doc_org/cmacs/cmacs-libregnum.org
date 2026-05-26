@@ -1,0 +1,159 @@
+#+TITLE: cmacs-libregnum: 3D scene buffers
+#+AUTHOR: Zach Podbielniak
+
+* Overview
+
+=cmacs-libregnum= embeds [[https://github.com/zpodbielniak/libregnum][libregnum]] — a GObject-based game engine
+wrapping raylib via graylib — as a first-class cmacs subsystem.
+Each =cmacs-libregnum-mode= buffer owns a 3D scene that is rendered
+to a BGRA framebuffer and blitted across the whole window area on
+every redisplay.
+
+The "buffer text" of a libregnum buffer is a small YAML-ish
+description of the scene (scene type, source data path, camera
+state).  Saving the buffer snapshots the current camera into the
+text; opening a saved buffer rebuilds the scene and restores the
+camera.
+
+** Architecture
+
+cmacs does *not* drive libregnum through a native =GtkGLArea= child
+widget.  raylib's =CORE.Window= globals make external GL contexts
+infeasible without multi-week upstream patches.  Instead:
+
+1. cmacs acquires a single process-shared *hidden* raylib window
+   (=FLAG_WINDOW_HIDDEN= set before =InitWindow=).
+2. Each view owns a =RenderTexture2D= (a raylib FBO) sized to its
+   target dimensions.
+3. On every redraw tick, =cmacs_libregnum_render_ctx_render_to_bgra=
+   draws the scene to the FBO, reads pixels back via
+   =LoadImageFromTexture=, converts RGBA → BGRA with a Y-flip,
+   and stages them into a Cairo image surface.
+4. =pgtk_handle_draw= calls =cmacs_libregnum_overlay_paint=, which
+   walks all live views and blits the staged surface onto the
+   current frame.
+
+This is compositor-agnostic — same hook works under Wayland (pgtk)
+and any compositor that supports pgtk.
+
+** Translation-unit firewall
+
+raylib defines =Color= as a struct; cmacs's =pgtkgui.h= defines
+=Color= as =void *= for opaque colour handles.  These conflict.
+The fix: =cmacs/libregnum/cmacs-libregnum-render.c= is the *only*
+translation unit that includes raylib headers; everything else
+(view, defuns, overlay, input) talks to it through the plain-C
+=cmacs-libregnum-render.h= API that exposes opaque pointers.
+
+* Building
+
+=--with-cmacs-libregnum= turns on the subsystem.  Configure probes
+for a system =libregnum-1.0.pc=, falling back to the bundled
+=deps/libregnum= submodule.  The block requires both
+=--with-cmacs-glib= (event loop integration) and =--with-pgtk=
+(the only compositor backend wired through =pgtk_handle_draw=).
+
+Linking goes against =liblibregnum.so= rather than the static
+archive — raylib's headers compile raymath inline without =static=,
+so the static archive carries multiply-defined =QuaternionToMatrix=,
+=MatrixDecompose=, etc.  The shared library exports them just once.
+
+* Interactive commands
+
+=M-x cmacs-libregnum-demo= opens an empty scene buffer; useful as
+a smoke test for the render pipeline.
+
+=M-x cmacs-libregnum-project-tree= builds a 3D scatter of the
+current project's regular files.  Each file is a cube on a grid;
+height encodes file size, hue encodes extension.  =.git=, =build=,
+=node_modules=, =native-lisp=, and =__pycache__= are skipped.
+The walk is depth-capped at 5 and emission-capped at 1500 cubes.
+
+=M-x cmacs-libregnum-gobject-graph= visualises the live GObject
+type tree.  With a prefix arg you can pass a leading type-name
+prefix (e.g. =Gtk=, =Lrg=, =Mcp=) to scope the graph.  Depth on
+=Y=, siblings fan out on =X=; hue derived from the first uppercase
+prefix in the type name so e.g. =Lrg= types cluster visually
+against =Gtk= types.
+
+=M-x cmacs-libregnum-mind-map= parses an org file's heading tree
+into a radial mind map.  Each heading is a node, parent/child
+relationships are =LrgLine3D= edges, and the layout is
+deterministic so reopening the same file produces the same map.
+
+* Default key bindings
+
+| Key   | Command                              |
+|-------+--------------------------------------|
+| q     | =kill-this-buffer=                   |
+| g g   | =cmacs-libregnum-redraw-current=     |
+| g r   | =cmacs-libregnum-reload-from-buffer= |
+| g s   | =cmacs-libregnum-save-to-buffer=     |
+
+Mouse:
+
+- Left-drag: orbit camera around the scene origin.
+- Right-drag: pan camera target.
+- Scroll wheel: zoom (camera moves along the line to target).
+
+* Buffer text format
+
+A minimal YAML subset.  Comments start with =#=; blank lines are
+ignored.  Recognised keys:
+
+#+begin_example
+  # -*- mode: cmacs-libregnum -*-
+  scene_type: project_tree
+  project_root: /var/home/zach/source/projects/cmacs
+  position: [10.0, 8.0, 14.0]
+  target:   [0.0, 0.0, 0.0]
+  fov:      60.0
+#+end_example
+
+=scene_type= dispatches the rebuild:
+
+| scene_type       | Required key | Notes                            |
+|------------------+--------------+----------------------------------|
+| =project_tree=   | =project_root= | absolute path of a directory   |
+| =gobject=        | =namespace=  | optional prefix; empty = all     |
+| =mindmap=        | =org_file=   | absolute path to a =.org= file   |
+
+The =position=/=target=/=fov= triple is updated on save and
+re-applied on next open via =before-save-hook= and the mode's
+initialization scan.
+
+* Files
+
+| File                                      | Purpose                              |
+|-------------------------------------------+--------------------------------------|
+| =cmacs/libregnum/cmacs-libregnum.h=       | Public umbrella header (no raylib)   |
+| =cmacs/libregnum/cmacs-libregnum-render.{c,h}= | Hidden window + FBO render          |
+| =cmacs/libregnum/cmacs-libregnum-view.c=  | Per-buffer view + redraw idle        |
+| =cmacs/libregnum/cmacs-libregnum-overlay.c= | =pgtk_handle_draw= blit hook         |
+| =cmacs/libregnum/cmacs-libregnum-input.c= | PGTK orbit/zoom routing              |
+| =cmacs/libregnum/cmacs-libregnum-defuns.c= | DEFUNs (attach, build-*, camera)    |
+| =cmacs/libregnum/cmacs-libregnum-scene-tree.c=     | Scene 1: project tree     |
+| =cmacs/libregnum/cmacs-libregnum-scene-gobject.c=  | Scene 2: GObject hierarchy |
+| =cmacs/libregnum/cmacs-libregnum-scene-mindmap.c=  | Scene 3: org mind map      |
+| =lisp/cmacs/cmacs-libregnum.el=           | Mode + interactive entry points      |
+| =test/cmacs/cmacs-libregnum-tests.el=     | ERT tests                            |
+
+* Known limitations (v1)
+
+- Multi-window: a libregnum buffer shown in two windows blits its
+  framebuffer into both, but the framebuffer is sized to a single
+  =cmacs-libregnum-default-size=.  Resizing windows independently
+  is not honoured in v1.
+- No labels on the GObject / mindmap scenes yet — class and
+  heading names live in the underlying nodes but are not blitted
+  as text-billboards.  Tracked as a follow-up.
+- Pick (click-to-jump) is not yet wired: =LrgSceneEntity= has the
+  picking primitive but the scenes use raw drawable lists, not
+  scene entities, for v1 simplicity.  Following commits will add
+  a payload map keyed by drawable identity.
+
+* See also
+
+- =doc_org/cmacs/cmacs-video.org= — the BGRA-blit pattern used by
+  this subsystem mirrors cmacs-video's GStreamer overlay pass.
+- =deps/libregnum/README.md= — upstream libregnum docs.

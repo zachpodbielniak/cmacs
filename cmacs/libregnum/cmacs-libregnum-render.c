@@ -88,8 +88,10 @@ cmacs_libregnum_render_get_shared_window (void)
 struct CmacsLibregnumRenderCtx
 {
   LrgRenderer    *renderer;
-  LrgSceneEntity *scene;
   LrgCamera      *camera;
+  /* Flat list of drawables (LrgDrawable*); each scene builder adds
+   * primitives here.  Owned ref per element. */
+  GPtrArray      *drawables;
   RenderTexture2D fbo;
   gboolean        fbo_valid;
   int             width, height;
@@ -102,8 +104,8 @@ cmacs_libregnum_render_ctx_new (int w, int h)
   CmacsLibregnumRenderCtx *r = g_new0 (CmacsLibregnumRenderCtx, 1);
   r->width  = w;
   r->height = h;
-  r->renderer = lrg_renderer_new (LRG_WINDOW (shared_window));
-  r->scene    = lrg_scene_entity_new ("cmacs-libregnum-scene");
+  r->renderer  = lrg_renderer_new (LRG_WINDOW (shared_window));
+  r->drawables = g_ptr_array_new_with_free_func (g_object_unref);
 
   LrgCamera3D *cam = lrg_camera3d_new ();
   lrg_camera3d_set_position_xyz (cam, 8.0f, 6.0f, 12.0f);
@@ -123,7 +125,7 @@ cmacs_libregnum_render_ctx_free (CmacsLibregnumRenderCtx *r)
   if (!r) return;
   if (r->fbo_valid) UnloadRenderTexture (r->fbo);
   g_clear_object (&r->camera);
-  g_clear_object (&r->scene);
+  if (r->drawables) g_ptr_array_unref (r->drawables);
   g_clear_object (&r->renderer);
   g_free (r);
 }
@@ -144,7 +146,24 @@ cmacs_libregnum_render_ctx_get_renderer (CmacsLibregnumRenderCtx *r)
 { return r ? r->renderer : NULL; }
 void *
 cmacs_libregnum_render_ctx_get_scene (CmacsLibregnumRenderCtx *r)
-{ return r ? r->scene : NULL; }
+{ return r ? (void *) r->drawables : NULL; }
+
+void
+cmacs_libregnum_render_ctx_add_drawable (CmacsLibregnumRenderCtx *r,
+                                         void *drawable)
+{
+  if (!r || !drawable) return;
+  /* Caller transfers ownership; ptr_array's free-func g_object_unref
+   * releases on removal/free. */
+  g_ptr_array_add (r->drawables, drawable);
+}
+
+void
+cmacs_libregnum_render_ctx_clear_drawables (CmacsLibregnumRenderCtx *r)
+{
+  if (!r) return;
+  g_ptr_array_set_size (r->drawables, 0);
+}
 void *
 cmacs_libregnum_render_ctx_get_camera (CmacsLibregnumRenderCtx *r)
 { return r ? r->camera : NULL; }
@@ -176,15 +195,11 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
       {
         lrg_renderer_begin_frame (r->renderer);
         lrg_renderer_begin_layer (r->renderer, LRG_RENDER_LAYER_WORLD);
-        if (r->scene)
+        for (guint i = 0; r->drawables && i < r->drawables->len; i++)
           {
-            GPtrArray *objs = lrg_scene_entity_get_objects (r->scene);
-            for (guint i = 0; objs && i < objs->len; i++)
-              {
-                gpointer obj = g_ptr_array_index (objs, i);
-                if (LRG_IS_DRAWABLE (obj))
-                  lrg_drawable_draw (LRG_DRAWABLE (obj), 0.0f);
-              }
+            gpointer d = g_ptr_array_index (r->drawables, i);
+            if (LRG_IS_DRAWABLE (d))
+              lrg_drawable_draw (LRG_DRAWABLE (d), 0.0f);
           }
         lrg_renderer_end_layer (r->renderer);
         lrg_renderer_end_frame (r->renderer);
@@ -263,6 +278,50 @@ cmacs_libregnum_render_ctx_zoom_camera (CmacsLibregnumRenderCtx *r,
                                   tgt->x + (float) ox,
                                   tgt->y + (float) oy,
                                   tgt->z + (float) oz);
+}
+
+void
+cmacs_libregnum_render_ctx_get_camera_state (CmacsLibregnumRenderCtx *r,
+                                              double *px, double *py,
+                                              double *pz,
+                                              double *tx, double *ty,
+                                              double *tz,
+                                              double *fov)
+{
+  if (px) *px = 0;
+  if (py) *py = 0;
+  if (pz) *pz = 0;
+  if (tx) *tx = 0;
+  if (ty) *ty = 0;
+  if (tz) *tz = 0;
+  if (fov) *fov = 0;
+  if (!r || !r->camera || !LRG_IS_CAMERA3D (r->camera)) return;
+  LrgCamera3D *c3 = LRG_CAMERA3D (r->camera);
+  g_autoptr (GrlVector3) pos = lrg_camera3d_get_position (c3);
+  g_autoptr (GrlVector3) tgt = lrg_camera3d_get_target   (c3);
+  if (px && pos) *px = pos->x;
+  if (py && pos) *py = pos->y;
+  if (pz && pos) *pz = pos->z;
+  if (tx && tgt) *tx = tgt->x;
+  if (ty && tgt) *ty = tgt->y;
+  if (tz && tgt) *tz = tgt->z;
+  if (fov) *fov = lrg_camera3d_get_fovy (c3);
+}
+
+void
+cmacs_libregnum_render_ctx_set_camera_state (CmacsLibregnumRenderCtx *r,
+                                              double px, double py,
+                                              double pz,
+                                              double tx, double ty,
+                                              double tz,
+                                              double fov)
+{
+  if (!r || !r->camera || !LRG_IS_CAMERA3D (r->camera)) return;
+  LrgCamera3D *c3 = LRG_CAMERA3D (r->camera);
+  lrg_camera3d_set_position_xyz (c3, (float) px, (float) py, (float) pz);
+  lrg_camera3d_set_target_xyz   (c3, (float) tx, (float) ty, (float) tz);
+  if (fov > 0.0)
+    lrg_camera3d_set_fovy (c3, (float) fov);
 }
 
 #endif /* HAVE_CMACS_LIBREGNUM */

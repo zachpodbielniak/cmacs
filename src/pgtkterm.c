@@ -5988,6 +5988,17 @@ motion_notify_event (GtkWidget *widget, GdkEvent *event,
   help_echo_string = Qnil;
 
   frame = pgtk_any_window_to_frame (gtk_widget_get_window (widget));
+#ifdef HAVE_CMACS_LIBREGNUM
+  /* If the selected window's buffer is a libregnum view, route the
+     motion to the camera controller and short-circuit -- we don't
+     want the cursor/help-echo machinery running over the 3D view. */
+  {
+    gdouble lx, ly;
+    if (gdk_event_get_coords (event, &lx, &ly)
+        && cmacs_libregnum_handle_motion (frame, lx, ly))
+      return TRUE;
+  }
+#endif
   dpyinfo = FRAME_DISPLAY_INFO (frame);
   f = (gui_mouse_grabbed (dpyinfo) ? dpyinfo->last_mouse_frame
        : pgtk_any_window_to_frame (gtk_widget_get_window (widget)));
@@ -6138,6 +6149,21 @@ button_event (GtkWidget *widget, GdkEvent *event,
     return TRUE;
 
   frame = pgtk_any_window_to_frame (gtk_widget_get_window (widget));
+#ifdef HAVE_CMACS_LIBREGNUM
+  /* Route button presses to the libregnum input controller when the
+     selected window's buffer is a libregnum view, before cmacs's
+     normal mouse-event dispatch.  We only consume the event when the
+     view's input router accepts it (left/right button on a view
+     buffer); other clicks fall through to cmacs's mouse machinery. */
+  {
+    gdouble lx, ly;
+    if (gdk_event_get_coords (event, &lx, &ly)
+        && cmacs_libregnum_handle_button (
+             frame, event->button.button,
+             event->type == GDK_BUTTON_PRESS, lx, ly))
+      return TRUE;
+  }
+#endif
   dpyinfo = FRAME_DISPLAY_INFO (frame);
 
   dpyinfo->last_mouse_glyph_frame = NULL;
@@ -6250,6 +6276,24 @@ scroll_event (GtkWidget *widget, GdkEvent *event, gpointer *user_data)
   inev.ie.arg = Qnil;
 
   frame = pgtk_any_window_to_frame (gtk_widget_get_window (widget));
+#ifdef HAVE_CMACS_LIBREGNUM
+  /* Route wheel/scroll into libregnum's camera zoom when on a
+     libregnum view buffer.  Smooth-scroll deltas come through
+     event->scroll.delta_x/delta_y; step scrolls come through
+     gdk_event_get_scroll_direction which we map below.  We only
+     handle smooth-scroll here for simplicity; step scrolls fall
+     through to cmacs's scroll machinery. */
+  {
+    gdouble sdx = 0, sdy = 0;
+    if (gdk_event_get_scroll_deltas (event, &sdx, &sdy))
+      {
+        gdouble lx, ly;
+        gdk_event_get_coords (event, &lx, &ly);
+        if (cmacs_libregnum_handle_scroll (frame, sdx, sdy, lx, ly))
+          return TRUE;
+      }
+  }
+#endif
   dpyinfo = FRAME_DISPLAY_INFO (frame);
 
   if (gui_mouse_grabbed (dpyinfo))

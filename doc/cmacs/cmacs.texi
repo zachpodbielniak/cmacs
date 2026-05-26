@@ -55,6 +55,7 @@ interaction.
 * Cintrospect::                 Runtime C self-introspection (libdw + JIT).
 * Cpatch::                      Runtime C hot-patching (DEFUN swap + detours).
 * CMacs AI::                    ai-glib multi-provider coding agent.
+* CMacs Libregnum::             Embedded libregnum 3D scene buffers.
 * Build Configuration::         Configure flags and dependencies.
 @end menu
 
@@ -5732,6 +5733,123 @@ walkthrough.
 
 @c ===================================================================
 @include cmacs-ai.texi
+
+@c ===================================================================
+@node CMacs Libregnum
+@chapter CMacs Libregnum: Embedded 3D Scene Buffers
+
+@cindex libregnum
+@cindex 3D scenes
+@cindex raylib
+
+@quotation
+This chapter mirrors @file{doc_org/cmacs/cmacs-libregnum.org}.
+@end quotation
+
+@code{cmacs-libregnum} embeds the libregnum game engine (a
+GObject wrapper over raylib via graylib) as a first-class cmacs
+subsystem.  Each @code{cmacs-libregnum-mode} buffer owns a 3D
+scene whose framebuffer is blitted across the whole window area
+on every redisplay.  The buffer's text is a YAML-ish description
+of the scene; saving the buffer snapshots the camera state into
+the text and reopening the file rebuilds the scene.
+
+@section Architecture
+
+cmacs does not drive libregnum through a native @code{GtkGLArea}
+child widget.  raylib's @code{CORE.Window} globals make external
+GL contexts infeasible.  Instead, cmacs acquires a single
+process-shared @emph{hidden} raylib window
+(@code{FLAG_WINDOW_HIDDEN} set before @code{InitWindow}); each
+view owns a @code{RenderTexture2D} (FBO); a redraw tick draws
+the scene to the FBO, reads pixels back, converts RGBA to BGRA
+with a Y-flip, and stages them into a Cairo image surface; then
+@code{pgtk_handle_draw} blits the staged surface onto the
+current frame.  The pattern matches @code{cmacs-video}'s
+GStreamer overlay path.
+
+@section Translation-unit firewall
+
+raylib declares @code{Color} as a struct; cmacs's
+@file{pgtkgui.h} declares @code{Color} as @code{void *}.  These
+conflict.  Only @file{cmacs-libregnum-render.c} pulls in raylib;
+all other translation units talk to it through the plain-C
+@file{cmacs-libregnum-render.h} API.
+
+@section Interactive commands
+
+@deffn Command cmacs-libregnum-demo
+Open an empty scene buffer.  Useful as a smoke test for the
+render pipeline.
+@end deffn
+
+@deffn Command cmacs-libregnum-project-tree &optional root
+Open a libregnum scene visualising the project file tree under
+@var{root} (defaults to @code{project-current} root, then
+@code{default-directory}).  Each regular file becomes a coloured
+cube; height encodes file size, hue encodes extension.
+Recursion depth is capped at 5, emission at 1500 cubes.
+@end deffn
+
+@deffn Command cmacs-libregnum-gobject-graph &optional namespace
+Open a libregnum scene visualising the live GObject class
+hierarchy.  With a prefix arg, prompts for a leading type-name
+prefix (e.g. @code{Gtk}, @code{Lrg}) to scope the graph.  Depth
+maps to @math{Y}, siblings fan out on @math{X}; hue derives from
+the first uppercase prefix in the type name.
+@end deffn
+
+@deffn Command cmacs-libregnum-mind-map org-file
+Parse @var{org-file}'s heading tree and render it as a 3D radial
+mind map.  Each heading is a node, parent/child relationships
+are @code{LrgLine3D} edges, layout is deterministic.
+@end deffn
+
+@section Default key bindings
+
+@table @kbd
+@item q
+@code{kill-this-buffer}
+@item g g
+@code{cmacs-libregnum-redraw-current}
+@item g r
+@code{cmacs-libregnum-reload-from-buffer}
+@item g s
+@code{cmacs-libregnum-save-to-buffer}
+@end table
+
+Mouse: left-drag orbits the camera around the scene origin;
+right-drag pans the target; scroll wheel zooms.
+
+@section Buffer text format
+
+A minimal YAML subset.  Comments start with @code{#}; blank
+lines are ignored.  Recognised keys: @code{scene_type},
+@code{project_root}, @code{namespace}, @code{org_file},
+@code{position}, @code{target}, @code{fov}.  The
+@code{position}/@code{target}/@code{fov} triple is updated on
+save via @code{before-save-hook} and re-applied on next open.
+
+@section Building
+
+Pass @option{--with-cmacs-libregnum} to @command{configure}.
+The block requires @option{--with-cmacs-glib} and
+@option{--with-pgtk}.  Configure probes for a system
+@file{libregnum-1.0.pc}; otherwise it falls back to the bundled
+@file{deps/libregnum} submodule.  Linking goes against
+@file{liblibregnum.so} rather than the static archive (raylib's
+inline raymath causes multiply-defined symbols in the static
+archive).
+
+@section Known limitations (v1)
+
+@itemize @bullet
+@item Multi-window: the framebuffer is sized to
+@code{cmacs-libregnum-default-size}; independent window resize
+isn't honoured.
+@item No text labels yet on the GObject / mindmap scenes.
+@item Click-to-jump is not yet wired; tracked as follow-up work.
+@end itemize
 
 @c ===================================================================
 @node Build Configuration
