@@ -653,24 +653,6 @@ ifeq (${ns_self_contained},no)
 	umask 022; ${MKDIR_P} "$(DESTDIR)${cmacsapidir}"
 	${INSTALL_PROGRAM} $(srcdir)/cmacs/api/libcmacs-api.so "$(DESTDIR)${cmacsapidir}/libcmacs-api.so"
 	${INSTALL_DATA} $(srcdir)/cmacs/api/cmacs-api.h "$(DESTDIR)${cmacsapidir}/cmacs-api.h"
-	@# liblibregnum.so: when --with-cmacs-libregnum was built, install
-	@# the versioned shared object + SONAME symlink into ${cmacsapidir}
-	@# (i.e. /usr/lib64/cmacs).  src/emacs has a DT_NEEDED entry of
-	@# `liblibregnum.so.0' and a DT_RUNPATH pointing at the build dir;
-	@# on installed systems the build dir doesn't exist so we rely on
-	@# /etc/ld.so.conf.d/cmacs.conf adding ${cmacsapidir} to the
-	@# dynamic linker search path.  Static linking against libregnum.a
-	@# isn't viable because raylib's headers compile raymath inline
-	@# without `static', producing multiple-definition errors across
-	@# the archive's object files.
-	@if test -f $(srcdir)/deps/libregnum/build/release/lib/liblibregnum.so.0.0.0; then \
-		${INSTALL_PROGRAM} \
-			$(srcdir)/deps/libregnum/build/release/lib/liblibregnum.so.0.0.0 \
-			"$(DESTDIR)${cmacsapidir}/liblibregnum.so.0.0.0"; \
-		(cd "$(DESTDIR)${cmacsapidir}" && \
-			ln -sf liblibregnum.so.0.0.0 liblibregnum.so.0 && \
-			ln -sf liblibregnum.so.0     liblibregnum.so); \
-	fi
 	@if test -d $(srcdir)/deps/gowl/build/release/modules; then \
 		umask 022; ${MKDIR_P} "$(DESTDIR)${archlibdir}/gowl-modules"; \
 		for f in $(srcdir)/deps/gowl/build/release/modules/*.so; do \

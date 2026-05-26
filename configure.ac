@@ -869,15 +869,34 @@ if test "$with_cmacs_libregnum" != "no"; then
     -DLIBREGNUM_COMPILATION \
     $CMACS_LIBREGNUM_DEPS_CFLAGS"
   # libregnum's static archive carries the raymath helpers in
-  # several .o files (raylib's headers compile them inline without
-  # `static'), which produces multiple-definition errors when the
-  # archive is linked into an executable.  The .so doesn't have
-  # that problem -- the dynamic linker uses the first definition.
-  # So we link against the shared library and rely on
-  # LD_LIBRARY_PATH / RPATH at runtime.
-  CMACS_LIBREGNUM_LIBS="-L\$(abs_top_srcdir)/deps/libregnum/build/release/lib \
-    -Wl,-rpath,\$(abs_top_srcdir)/deps/libregnum/build/release/lib \
-    -llibregnum \
+  # several .o files because raylib's headers compile them inline
+  # without `static', so each translation unit that includes
+  # raymath.h emits its own copy.  --allow-multiple-definition is
+  # safe here because:
+  #
+  #   1. The duplicates are confined to libregnum.a -- no other
+  #      archive in cmacs's link exposes raymath symbols, so the
+  #      flag's "silently pick first" behaviour only fires on these
+  #      byte-identical copies.  All other multi-def hazards (the
+  #      bacon/yaml-glib case CLAUDE.md warns about) are already
+  #      neutralised by the dedup machinery in src/Makefile.in.
+  #
+  #   2. Every copy of MatrixDecompose / QuaternionToMatrix /
+  #      Vector3{Length,LengthSqr,Normalize} / MatrixIdentity etc.
+  #      is built from the same source, with the same compiler and
+  #      flags, in a single archive.  Whichever copy the linker
+  #      picks is bit-for-bit equivalent to the others.
+  #
+  #   3. raymath's symbol names live in a unique namespace
+  #      (Vector*/Matrix*/Quaternion*) that doesn't collide with
+  #      anything in emacs core, glib, cmacs/, or any other dep.
+  #
+  # Linking statically means no liblibregnum.so install + ldconfig
+  # dance for downstream image consumers (immutablue et al.) -- the
+  # emacs binary is self-contained and finds its raylib at startup
+  # without consulting ld.so.cache for the cmacs lib dir.
+  CMACS_LIBREGNUM_LIBS="-Wl,--allow-multiple-definition \
+    \$(abs_top_srcdir)/deps/libregnum/build/release/lib/liblibregnum.a \
     -lGL -lm -lpthread -ldl -lrt -lX11 \
     $CMACS_LIBREGNUM_DEPS_LIBS"
   AC_DEFINE([HAVE_CMACS_LIBREGNUM], 1, [CMacs libregnum 3D scenes])
