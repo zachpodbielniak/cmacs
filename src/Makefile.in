@@ -980,15 +980,28 @@ $(CMACS_LIBRECLAW_OBJ): $(CMACS_LIBRECLAW_STATIC_LIB)
 $(CMACS_AI_OBJ): $(CMACS_AI_GLIB_STATIC_LIB)
 endif
 
-## libregnum: build deps/libregnum's static archive once.  -Werror is
-## disabled because newer GCC versions surface additional warnings
-## that libregnum upstream hasn't curated yet (we don't want a
-## downstream compiler tightening to break cmacs's build).
+## libregnum: build deps/libregnum's static + shared lib once.
+##
+##  - WARN_CFLAGS: -Werror is disabled because newer GCC versions
+##    surface additional warnings that libregnum upstream hasn't
+##    curated yet (we don't want a downstream compiler tightening
+##    to break cmacs's build).
+##  - BUILD_GIR=0: libregnum's own GIR generation runs g-ir-scanner
+##    which dlopens liblibregnum.so to introspect types.  In sandboxed
+##    builds (containers in particular) that dlopen can fail to
+##    resolve libgraylib.so.0 from libregnum's nested deps/ path,
+##    and the gir step then aborts the whole sub-make.  cmacs never
+##    consumes libregnum via GIRepository -- we link it as a C
+##    library through cmacs/libregnum/*.c -- so libregnum's typelib
+##    is unused and skipping it removes a fragile container step.
+##  - Target `lib': builds static + shared archives (the `all'
+##    target is what would also trigger gir; we don't want that).
 CMACS_LIBREGNUM_STATIC_LIB = $(srcdir)/../deps/libregnum/build/release/lib/liblibregnum.a
 ifneq ($(CMACS_LIBREGNUM_OBJ),)
 $(CMACS_LIBREGNUM_STATIC_LIB):
 	$(MAKE) -C $(srcdir)/../deps/libregnum \
-	  WARN_CFLAGS="-Wall -Wextra -Wno-unused-but-set-variable"
+	  WARN_CFLAGS="-Wall -Wextra -Wno-unused-but-set-variable" \
+	  BUILD_GIR=0 lib
 $(CMACS_LIBREGNUM_OBJ): $(CMACS_LIBREGNUM_STATIC_LIB)
 endif
 
