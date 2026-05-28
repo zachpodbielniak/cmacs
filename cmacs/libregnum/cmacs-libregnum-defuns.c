@@ -83,6 +83,39 @@ DEFUN ("cmacs-libregnum-redraw", Fcmacs_libregnum_redraw,
   return Qt;
 }
 
+DEFUN ("cmacs-libregnum-set-animated", Fcmacs_libregnum_set_animated,
+       Scmacs_libregnum_set_animated, 2, 3, 0,
+       doc: /* Enable or disable continuous animation for BUFFER's view.
+When FLAG is non-nil, a shared frame timer re-renders the view at
+TARGET-FPS (default 60) for as long as the buffer stays on-screen; the
+timer pauses automatically when the buffer is hidden and stops entirely
+when no animated view remains.  When FLAG is nil, the view reverts to
+rendering only on demand (input, camera changes, explicit redraw).  */)
+  (Lisp_Object buffer, Lisp_Object flag, Lisp_Object target_fps)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) error ("cmacs-libregnum: no view attached to buffer");
+  int fps = 0;
+  if (!NILP (target_fps))
+    {
+      CHECK_FIXNAT (target_fps);
+      fps = XFIXNUM (target_fps);
+    }
+  cmacs_libregnum_view_set_animated (v, !NILP (flag), fps);
+  return NILP (flag) ? Qnil : Qt;
+}
+
+DEFUN ("cmacs-libregnum-animated-p", Fcmacs_libregnum_animated_p,
+       Scmacs_libregnum_animated_p, 1, 1, 0,
+       doc: /* Return t if BUFFER's libregnum view is in animation mode.  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  return (v && cmacs_libregnum_view_get_animated (v)) ? Qt : Qnil;
+}
+
 DEFUN ("cmacs-libregnum-build-tree", Fcmacs_libregnum_build_tree,
        Scmacs_libregnum_build_tree, 2, 2, 0,
        doc: /* Build the project-tree scene for BUFFER under ROOT.
@@ -235,6 +268,8 @@ syms_of_cmacs_libregnum_defuns (void)
   defsubr (&Scmacs_libregnum_attached_p);
   defsubr (&Scmacs_libregnum_resize);
   defsubr (&Scmacs_libregnum_redraw);
+  defsubr (&Scmacs_libregnum_set_animated);
+  defsubr (&Scmacs_libregnum_animated_p);
   defsubr (&Scmacs_libregnum_build_tree);
   defsubr (&Scmacs_libregnum_build_gobject);
   defsubr (&Scmacs_libregnum_build_mindmap);

@@ -30,6 +30,14 @@ holds the active value)."
   :type 'color
   :group 'cmacs-libregnum)
 
+(defcustom cmacs-libregnum-target-fps 60
+  "Target frame rate for animated libregnum views.
+Only affects views switched into animation mode via
+`cmacs-libregnum-toggle-animation' (or the `cmacs-libregnum-set-animated'
+primitive).  Static scenes render on demand and ignore this value."
+  :type 'integer
+  :group 'cmacs-libregnum)
+
 (declare-function cmacs-libregnum-supported-p "cmacs-libregnum-defuns.c" ())
 (declare-function cmacs-libregnum-attach "cmacs-libregnum-defuns.c"
                   (buffer &optional width height))
@@ -48,6 +56,10 @@ holds the active value)."
                   (buffer))
 (declare-function cmacs-libregnum-set-camera "cmacs-libregnum-defuns.c"
                   (buffer position target fov))
+(declare-function cmacs-libregnum-set-animated "cmacs-libregnum-defuns.c"
+                  (buffer flag &optional target-fps))
+(declare-function cmacs-libregnum-animated-p "cmacs-libregnum-defuns.c"
+                  (buffer))
 
 ;;;; Buffer text format -----------------------------------------------
 
@@ -166,8 +178,24 @@ holds the active value)."
     (define-key m (kbd "g r")     #'cmacs-libregnum-reload-from-buffer)
     (define-key m (kbd "g g")     #'cmacs-libregnum-redraw-current)
     (define-key m (kbd "g s")     #'cmacs-libregnum-save-to-buffer)
+    (define-key m (kbd "a")       #'cmacs-libregnum-toggle-animation)
     m)
   "Keymap for `cmacs-libregnum-mode'.")
+
+(defun cmacs-libregnum-toggle-animation ()
+  "Toggle continuous animation for the current libregnum buffer.
+Animated views are re-rendered at `cmacs-libregnum-target-fps' while
+on-screen; static views render only on demand."
+  (interactive)
+  (unless (cmacs-libregnum-attached-p (current-buffer))
+    (user-error "No libregnum view attached to this buffer"))
+  (let ((on (not (cmacs-libregnum-animated-p (current-buffer)))))
+    (cmacs-libregnum-set-animated (current-buffer) on
+                                  cmacs-libregnum-target-fps)
+    (message "cmacs-libregnum animation %s%s"
+             (if on "on" "off")
+             (if on (format " (%d FPS target)" cmacs-libregnum-target-fps)
+               ""))))
 
 (defun cmacs-libregnum-reload-from-buffer ()
   "Reload current scene from the buffer's YAML text."

@@ -22,6 +22,14 @@
 #include <glib.h>
 #include <string.h>
 
+/* Desktop GL 3.3 (GLFW backend) -- we read the FBO colour attachment
+ * back with a raw glReadPixels in GL_BGRA so the driver does the
+ * RGBA->BGRA channel swap for free (no CPU convert loop).  raylib.h is
+ * only the API header here; it does not pull in the GL loader, so
+ * including the system GL header in this TU is safe and gives us the
+ * glReadPixels prototype + GL_BGRA enum. */
+#include <GL/gl.h>
+
 /* ── Process-shared hidden raylib window ────────────────────────── */
 
 static LrgGrlWindow *shared_window  = NULL;
@@ -177,7 +185,11 @@ cmacs_libregnum_render_ctx_set_camera (CmacsLibregnumRenderCtx *r, void *cam)
 }
 
 /* Render one frame into the FBO and copy the result into DST.
- * DST is BGRA (cairo ARGB32 in memory) pre-allocated to w*h*4. */
+ * DST is BGRA (cairo ARGB32 in memory) pre-allocated to w*h*4.
+ *
+ * The colour data lands in DST bottom-up (glReadPixels' origin is the
+ * lower-left corner); the overlay paint hook flips it for free with a
+ * cairo matrix, so there is no CPU row-flip or channel-swap here. */
 gboolean
 cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
                                            unsigned char *dst,
@@ -186,7 +198,18 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
   if (!r || !r->fbo_valid || !dst) return FALSE;
   if (dst_w != r->width || dst_h != r->height) return FALSE;
 
-  lrg_window_begin_frame (cmacs_libregnum_render_get_shared_window ());
+  /* NOTE: we deliberately do NOT call lrg_window_begin_frame /
+   * end_frame here.  Those wrap raylib's BeginDrawing/EndDrawing, and
+   * EndDrawing presents + paces the *hidden* offscreen window:
+   * glfwSwapBuffers (vsync-blocks), WaitTime (enforces the window's
+   * 60 FPS SetTargetFPS cap -- ~16 ms of sleep per call), and
+   * glfwPollEvents.  For an FBO-only readback path that never shows a
+   * window, all three are pure latency -- the WaitTime cap alone was
+   * throttling every scene update to <=60 FPS and adding up to a frame
+   * of sleep to each interactive redraw.  Offscreen rendering needs
+   * only BeginTextureMode/EndTextureMode + a current GL context; the
+   * default render batch is initialised by InitWindow and flushed by
+   * EndTextureMode, so no BeginDrawing is required. */
   BeginTextureMode (r->fbo);
   {
     Color bg = (Color){ 16, 16, 21, 255 };
@@ -204,34 +227,17 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
         lrg_renderer_end_layer (r->renderer);
         lrg_renderer_end_frame (r->renderer);
       }
+
+    /* Read the FBO colour attachment back while it is still bound.
+     * GL_BGRA + GL_UNSIGNED_BYTE matches cairo's ARGB32 byte order on
+     * little-endian, so the driver writes straight into DST with no
+     * channel-swap loop and no per-frame allocation.  Row stride is
+     * width*4, a multiple of the default GL_PACK_ALIGNMENT (4). */
+    glReadPixels (0, 0, r->width, r->height,
+                  GL_BGRA, GL_UNSIGNED_BYTE, dst);
   }
   EndTextureMode ();
-  lrg_window_end_frame (cmacs_libregnum_render_get_shared_window ());
 
-  Image img = LoadImageFromTexture (r->fbo.texture);
-  if (!img.data || img.width != r->width || img.height != r->height)
-    {
-      UnloadImage (img);
-      return FALSE;
-    }
-  /* raylib renders Y-up to the FBO texture; cairo wants top-down.
-   * Flip rows during the RGBA8 -> BGRA convert. */
-  const unsigned char *src = (const unsigned char *) img.data;
-  int stride = img.width * 4;
-  for (int y = 0; y < r->height; y++)
-    {
-      const unsigned char *sp = src + (r->height - 1 - y) * stride;
-      unsigned char       *dp = dst + y * (r->width * 4);
-      for (int x = 0; x < r->width; x++)
-        {
-          dp[0] = sp[2];   /* B */
-          dp[1] = sp[1];   /* G */
-          dp[2] = sp[0];   /* R */
-          dp[3] = sp[3];   /* A */
-          sp += 4; dp += 4;
-        }
-    }
-  UnloadImage (img);
   return TRUE;
 }
 

@@ -65,13 +65,25 @@ cmacs_libregnum__walk_windows (struct frame *f, cairo_t *cr, Lisp_Object w)
                     {
                       cairo_save (cr);
                       cairo_translate (cr, px, py);
-                      if (vw != pw || vh != ph)
-                        cairo_scale (cr, (double) pw / vw, (double) ph / vh);
+                      /* Fit the view's vw x vh surface into the window's
+                       * pw x ph text area. */
+                      cairo_scale (cr, (double) pw / vw, (double) ph / vh);
+                      /* The surface holds the GL framebuffer bottom-up
+                       * (glReadPixels origin is lower-left).  Flip it
+                       * here so the read path needs no CPU row-flip:
+                       * move the origin to the bottom edge, then mirror
+                       * the Y axis. */
+                      cairo_translate (cr, 0, vh);
+                      cairo_scale (cr, 1.0, -1.0);
                       cairo_set_source_surface (cr, s, 0, 0);
                       cairo_paint (cr);
                       cairo_restore (cr);
                     }
                   cmacs_libregnum_view_unlock_surface (v);
+                  /* Record that this view is on-screen this frame so
+                   * the animation clock keeps driving it (and stops
+                   * when the buffer is no longer shown). */
+                  cmacs_libregnum_view_mark_painted (v);
                 }
             }
         }

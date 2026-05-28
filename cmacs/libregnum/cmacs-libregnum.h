@@ -44,6 +44,18 @@ extern void cmacs_libregnum_view_request_redraw       (CmacsLibregnumView *v);
 extern cairo_surface_t *cmacs_libregnum_view_lock_surface   (CmacsLibregnumView *v);
 extern void             cmacs_libregnum_view_unlock_surface (CmacsLibregnumView *v);
 
+/* ── Animation clock (cmacs-libregnum-view.c) ───────────────────────
+ * When a view is `animated', a shared GMainContext timer re-renders it
+ * at `cmacs-libregnum-target-fps' for as long as it stays on-screen.
+ * Visibility is tracked without Lisp: the overlay paint hook stamps the
+ * view each time it blits, and the timer skips views that haven't been
+ * painted in the last couple of ticks (i.e. their buffer is hidden). */
+extern void cmacs_libregnum_view_set_animated (CmacsLibregnumView *v,
+                                               gboolean animated,
+                                               int target_fps);
+extern gboolean cmacs_libregnum_view_get_animated (CmacsLibregnumView *v);
+extern void cmacs_libregnum_view_mark_painted  (CmacsLibregnumView *v);
+
 /* Accessors return void* -- callers that need libregnum types
  * include libregnum.h and cast.  This keeps the header free of
  * the Color typedef conflict. */

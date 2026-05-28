@@ -19,6 +19,7 @@
 #include "cmacs-libregnum.h"
 #include "cmacs-libregnum-render.h"
 #include "cmacs-glib-loop.h"
+#include "cmacs-eval-dispatch.h"
 
 #include <cairo.h>
 #include <glib.h>
@@ -33,10 +34,19 @@ struct CmacsLibregnumView
   /* Render context owns the libregnum/raylib state. */
   CmacsLibregnumRenderCtx *render;
 
-  /* CPU-side BGRA frame protected by frame_mtx. */
+  /* CPU-side BGRA double buffer protected by frame_mtx.  The renderer
+   * fills `back', then swaps back<->front under the mutex; the paint
+   * hook reads `front'.  This keeps the mutex held only for the
+   * pointer swap, not for the whole (slow) render+readback, so a
+   * redisplay never blocks waiting for a frame to finish.  Backing
+   * pixel storage is g_malloc0'd here and wrapped by the surfaces via
+   * cairo_image_surface_create_for_data -- surfaces must be destroyed
+   * before their backing data is freed. */
   GMutex            frame_mtx;
-  cairo_surface_t  *surface;
-  guint8           *surface_data;
+  cairo_surface_t  *front;          /* read by paint hook */
+  cairo_surface_t  *back;           /* written by renderer */
+  guint8           *front_data;
+  guint8           *back_data;
 
   /* Scene-object id -> Lisp_Object payload key (the actual payload
    * lives in Vcmacs_libregnum__payloads). */
@@ -45,6 +55,14 @@ struct CmacsLibregnumView
 
   /* Coalesced redraw flag. */
   gint              redraw_pending;
+
+  /* Animation clock (see header).  `animated' opts the view into the
+   * shared frame timer; `painted_gen' is the value of the global
+   * animation generation counter at the last paint -- the timer treats
+   * the view as on-screen while painted_gen is within a tick or two of
+   * the current generation. */
+  gboolean          animated;
+  guint             painted_gen;
 };
 
 /* ── Registries ─────────────────────────────────────────────────── */
@@ -53,6 +71,11 @@ static GHashTable       *cmacs_libregnum__views     = NULL;
 static guint             cmacs_libregnum__next_id   = 1;
 static Lisp_Object       Vcmacs_libregnum__buffers;
 static Lisp_Object       Vcmacs_libregnum__payloads;
+
+/* Animation clock state (see cmacs_libregnum_view_set_animated). */
+static guint             cmacs_libregnum__anim_timer_id = 0;
+static guint             cmacs_libregnum__anim_interval_ms = 16; /* ~60 FPS */
+static guint             cmacs_libregnum__anim_gen = 0;
 
 void
 cmacs_libregnum_view_registry_init (void)
@@ -99,15 +122,34 @@ ensure_lisp_tables (void)
 static void
 alloc_surface (CmacsLibregnumView *v, int w, int h)
 {
-  if (v->surface)       cairo_surface_destroy (v->surface);
-  if (v->surface_data)  g_free (v->surface_data);
+  if (v->front)       cairo_surface_destroy (v->front);
+  if (v->back)        cairo_surface_destroy (v->back);
+  if (v->front_data)  g_free (v->front_data);
+  if (v->back_data)   g_free (v->back_data);
   gsize sz = (gsize) w * h * 4;
-  v->surface_data = g_malloc0 (sz);
-  v->surface = cairo_image_surface_create_for_data (
-    v->surface_data, CAIRO_FORMAT_ARGB32, w, h, w * 4);
+  v->front_data = g_malloc0 (sz);
+  v->back_data  = g_malloc0 (sz);
+  v->front = cairo_image_surface_create_for_data (
+    v->front_data, CAIRO_FORMAT_ARGB32, w, h, w * 4);
+  v->back = cairo_image_surface_create_for_data (
+    v->back_data, CAIRO_FORMAT_ARGB32, w, h, w * 4);
 }
 
 /* ── Redraw idle ─────────────────────────────────────────────────── */
+
+/* Push the just-rendered frame to the screen.  Marks the buffer's
+ * windows dirty via force-window-update, which provokes a redisplay
+ * and fires pgtk_handle_draw -> the libregnum overlay paint hook.
+ * Same mechanism cmacs-video uses (cmacs-video-stream.c).  Must run on
+ * the main thread (it evaluates Lisp); the GLib dispatch that runs the
+ * redraw idle has already cleared waiting_for_input, so a direct call
+ * is safe here. */
+static void
+notify_frame_ready (CmacsLibregnumView *v)
+{
+  if (NILP (v->buffer) || !BUFFERP (v->buffer)) return;
+  cmacs_dispatch_safe_call1 (intern ("force-window-update"), v->buffer);
+}
 
 static gboolean
 redraw_idle (gpointer user)
@@ -117,18 +159,22 @@ redraw_idle (gpointer user)
     return G_SOURCE_REMOVE;
   if (!v->render) return G_SOURCE_REMOVE;
 
-  g_mutex_lock (&v->frame_mtx);
-  if (v->surface_data)
+  /* Render into the back buffer WITHOUT holding frame_mtx: the paint
+   * hook only ever touches `front', so the slow render+readback runs
+   * concurrently with redisplay.  Lock only for the cheap swap. */
+  if (v->back_data
+      && cmacs_libregnum_render_ctx_render_to_bgra (
+           v->render, v->back_data, v->width, v->height))
     {
-      if (cmacs_libregnum_render_ctx_render_to_bgra (
-            v->render, v->surface_data, v->width, v->height))
-        cairo_surface_mark_dirty (v->surface);
-    }
-  g_mutex_unlock (&v->frame_mtx);
+      g_mutex_lock (&v->frame_mtx);
+      cairo_surface_mark_dirty (v->back);
+      cairo_surface_t *ts = v->front; v->front = v->back; v->back = ts;
+      guint8 *td = v->front_data; v->front_data = v->back_data;
+      v->back_data = td;
+      g_mutex_unlock (&v->frame_mtx);
 
-  /* TODO: schedule force-window-update.  In practice, cmacs's
-   * redisplay polls frequently so the new surface gets picked up
-   * at the next pgtk_handle_draw without explicit prompting. */
+      notify_frame_ready (v);
+    }
   return G_SOURCE_REMOVE;
 }
 
@@ -182,8 +228,10 @@ cmacs_libregnum_view_destroy (CmacsLibregnumView *v)
   cmacs_libregnum_render_ctx_free (v->render);
 
   g_mutex_lock (&v->frame_mtx);
-  if (v->surface) cairo_surface_destroy (v->surface);
-  g_free (v->surface_data);
+  if (v->front) cairo_surface_destroy (v->front);
+  if (v->back)  cairo_surface_destroy (v->back);
+  g_free (v->front_data);
+  g_free (v->back_data);
   g_mutex_unlock (&v->frame_mtx);
   g_mutex_clear (&v->frame_mtx);
   g_hash_table_destroy (v->payloads);
@@ -210,12 +258,99 @@ cmacs_libregnum_view_request_redraw (CmacsLibregnumView *v)
     g_main_context_invoke (cmacs_glib_get_context (), redraw_idle, v);
 }
 
+/* ── Animation clock ─────────────────────────────────────────────── */
+
+/* Shared frame timer.  Advances the generation counter, requests a
+ * redraw for every animated view that is still on-screen (painted
+ * within the last two generations), and self-terminates once no
+ * animated view remains so an idle scene costs nothing. */
+static gboolean
+anim_tick (gpointer user)
+{
+  (void) user;
+  cmacs_libregnum__anim_gen++;
+
+  guint live_animated = 0;
+  if (cmacs_libregnum__views)
+    {
+      GHashTableIter it;
+      gpointer val;
+      g_hash_table_iter_init (&it, cmacs_libregnum__views);
+      while (g_hash_table_iter_next (&it, NULL, &val))
+        {
+          CmacsLibregnumView *v = val;
+          if (!v->animated) continue;
+          live_animated++;
+          /* On-screen iff the paint hook stamped us recently.  The
+           * redraw we request now provokes a redisplay that re-stamps
+           * painted_gen, so a visible view stays "fresh"; a hidden one
+           * falls behind and is skipped. */
+          if (cmacs_libregnum__anim_gen - v->painted_gen <= 2)
+            cmacs_libregnum_view_request_redraw (v);
+        }
+    }
+
+  if (live_animated == 0)
+    {
+      cmacs_libregnum__anim_timer_id = 0;
+      return G_SOURCE_REMOVE;
+    }
+  return G_SOURCE_CONTINUE;
+}
+
+void
+cmacs_libregnum_view_set_animated (CmacsLibregnumView *v,
+                                   gboolean animated,
+                                   int target_fps)
+{
+  if (!v) return;
+  v->animated = animated;
+  if (animated)
+    {
+      if (target_fps > 0)
+        cmacs_libregnum__anim_interval_ms = MAX (1, 1000 / target_fps);
+      /* Seed visibility so the first tick renders without waiting for a
+       * paint, then kick the clock if it isn't already running. */
+      v->painted_gen = cmacs_libregnum__anim_gen;
+      cmacs_libregnum_view_request_redraw (v);
+      if (cmacs_libregnum__anim_timer_id == 0)
+        {
+          /* cmacs's GMainContext is a private context merged into
+           * Emacs's pselect (cmacs-glib-loop.c), NOT the default one,
+           * so the source must be attached to it explicitly --
+           * g_timeout_add would target the default context and never
+           * fire. */
+          GMainContext *ctx = cmacs_glib_get_context ();
+          GSource *src = g_timeout_source_new (
+                           cmacs_libregnum__anim_interval_ms);
+          g_source_set_callback (src, anim_tick, NULL, NULL);
+          cmacs_libregnum__anim_timer_id = g_source_attach (src, ctx);
+          g_source_unref (src);
+        }
+    }
+  /* When turning off, leave the timer running: anim_tick removes itself
+   * on the next tick once it sees no animated views remain. */
+}
+
+gboolean
+cmacs_libregnum_view_get_animated (CmacsLibregnumView *v)
+{
+  return v ? v->animated : FALSE;
+}
+
+void
+cmacs_libregnum_view_mark_painted (CmacsLibregnumView *v)
+{
+  if (!v) return;
+  v->painted_gen = cmacs_libregnum__anim_gen;
+}
+
 cairo_surface_t *
 cmacs_libregnum_view_lock_surface (CmacsLibregnumView *v)
 {
   if (!v) return NULL;
   g_mutex_lock (&v->frame_mtx);
-  return v->surface;
+  return v->front;
 }
 
 void
