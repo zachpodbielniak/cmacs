@@ -5761,12 +5761,66 @@ child widget.  raylib's @code{CORE.Window} globals make external
 GL contexts infeasible.  Instead, cmacs acquires a single
 process-shared @emph{hidden} raylib window
 (@code{FLAG_WINDOW_HIDDEN} set before @code{InitWindow}); each
-view owns a @code{RenderTexture2D} (FBO); a redraw tick draws
-the scene to the FBO, reads pixels back, converts RGBA to BGRA
-with a Y-flip, and stages them into a Cairo image surface; then
-@code{pgtk_handle_draw} blits the staged surface onto the
-current frame.  The pattern matches @code{cmacs-video}'s
-GStreamer overlay path.
+view owns a @code{RenderTexture2D} (FBO) plus a double-buffered
+Cairo @code{ARGB32} surface.  A redraw tick draws the scene to
+the FBO and reads it back with a single @code{glReadPixels} in
+@code{GL_BGRA} straight into the back surface (which matches
+Cairo's byte order, so there is no CPU channel-swap loop and no
+per-frame allocation; the bottom-up GL origin is flipped for free
+by the paint hook's Cairo matrix), then swaps front/back.  The
+view then invalidates the GTK widget of each frame showing the
+buffer with @code{gtk_widget_queue_draw}, which re-runs
+@code{pgtk_handle_draw} to blit the front surface.  The pattern
+matches @code{cmacs-video}'s GStreamer overlay path.
+
+@section Rendering pipeline and performance
+
+Three choices make scene interaction (orbit/zoom) real-time:
+
+@enumerate
+@item
+@emph{No hidden-window presentation.}  The render path does not
+call @code{lrg_window_begin_frame}/@code{lrg_window_end_frame}.
+Those wrap raylib's @code{BeginDrawing}/@code{EndDrawing}, and
+@code{EndDrawing} presents and @emph{paces} the hidden window:
+@code{glfwSwapBuffers} (vsync block), @code{WaitTime} (the
+@code{SetTargetFPS(60)} cap, up to ~16@dmn{ms} of sleep per
+call), and @code{glfwPollEvents}.  For an offscreen FBO that is
+pure latency.  Offscreen rendering needs only
+@code{BeginTextureMode}/@code{EndTextureMode} plus a current GL
+context.
+
+@item
+@emph{Targeted overlay refresh, not full redisplay.}
+@code{notify_frame_ready} calls @code{gtk_widget_queue_draw} on
+the frames showing the buffer rather than @code{force-window-update}.
+The latter triggers a full @code{redisplay_internal} every frame,
+profiled at ~35@dmn{ms}/frame (capping ~20 FPS even though the
+render was only ~10--15@dmn{ms}).  The targeted invalidate re-runs
+just @code{pgtk_handle_draw}, restoring 40--60 FPS.  It is correct
+because the buffer text is static and fully hidden behind the
+blit, so Emacs's backing surface is already up to date.
+
+@item
+@emph{Double buffering.}  The renderer fills the back surface and
+swaps under a mutex held only for the pointer swap, so the paint
+hook never blocks on an in-flight render.
+@end enumerate
+
+Static scenes render on demand.  For animated content, switch a
+view into animation mode with @code{cmacs-libregnum-toggle-animation}
+(or the @code{cmacs-libregnum-set-animated} primitive); a shared
+timer then re-renders at @code{cmacs-libregnum-target-fps}
+(default 60) while the buffer stays on-screen, and stops when it
+is hidden (tracked via a paint-stamp generation counter).
+
+Rendering stays on the main thread.  An off-thread GL worker
+(GLFW context handoff plus double-buffered PBO async readback) was
+implemented and reverted: the worker-to-main per-frame handoff and
+GL-driver cross-thread contention regressed frame rate, because
+after the FPS-cap removal the render was never the main-thread
+blocker.  The experiment is parked on branch
+@code{libregnum-offthread-wip}.
 
 @section Translation-unit firewall
 
@@ -5805,6 +5859,15 @@ mind map.  Each heading is a node, parent/child relationships
 are @code{LrgLine3D} edges, layout is deterministic.
 @end deffn
 
+@deffn Command cmacs-libregnum-toggle-animation
+Toggle continuous animation for the current view.  When on, a
+shared timer re-renders the view at @code{cmacs-libregnum-target-fps}
+(default 60) while its buffer is on-screen; when off, the view
+renders only on demand.  The underlying primitive is
+@code{cmacs-libregnum-set-animated} (@var{buffer} @var{flag}
+&optional @var{target-fps}).
+@end deffn
+
 @section Default key bindings
 
 @table @kbd
@@ -5816,6 +5879,8 @@ are @code{LrgLine3D} edges, layout is deterministic.
 @code{cmacs-libregnum-reload-from-buffer}
 @item g s
 @code{cmacs-libregnum-save-to-buffer}
+@item a
+@code{cmacs-libregnum-toggle-animation}
 @end table
 
 Mouse: left-drag orbits the camera around the scene origin;

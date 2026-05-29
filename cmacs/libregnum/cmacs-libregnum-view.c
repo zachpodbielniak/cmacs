@@ -16,10 +16,16 @@
 
 #include "lisp.h"
 #include "buffer.h"
+#include "frame.h"
+#include "window.h"
 #include "cmacs-libregnum.h"
 #include "cmacs-libregnum-render.h"
 #include "cmacs-glib-loop.h"
 #include "cmacs-eval-dispatch.h"
+
+#ifdef HAVE_PGTK
+#include "pgtkterm.h"   /* FRAME_GTK_WIDGET, for targeted overlay refresh */
+#endif
 
 #include <cairo.h>
 #include <glib.h>
@@ -137,18 +143,56 @@ alloc_surface (CmacsLibregnumView *v, int w, int h)
 
 /* ── Redraw idle ─────────────────────────────────────────────────── */
 
-/* Push the just-rendered frame to the screen.  Marks the buffer's
- * windows dirty via force-window-update, which provokes a redisplay
- * and fires pgtk_handle_draw -> the libregnum overlay paint hook.
- * Same mechanism cmacs-video uses (cmacs-video-stream.c).  Must run on
- * the main thread (it evaluates Lisp); the GLib dispatch that runs the
- * redraw idle has already cleared waiting_for_input, so a direct call
- * is safe here. */
+#ifdef HAVE_PGTK
+/* Does the window subtree rooted at W show BUFFER?  Plain C-struct
+ * walk (no Lisp), same shape as the overlay paint hook. */
+static bool
+frame_shows_buffer (Lisp_Object w, Lisp_Object buffer)
+{
+  while (!NILP (w) && WINDOWP (w))
+    {
+      struct window *win = XWINDOW (w);
+      Lisp_Object c = win->contents;
+      if (WINDOWP (c))
+        { if (frame_shows_buffer (c, buffer)) return true; }
+      else if (BUFFERP (c) && EQ (c, buffer))
+        return true;
+      w = win->next;
+    }
+  return false;
+}
+#endif
+
+/* Push the just-rendered frame to the screen.
+ *
+ * The libregnum buffer's text is static and entirely hidden behind the
+ * BGRA blit, so Emacs's backing surface is already correct -- we only
+ * need to re-composite the overlay.  Rather than force-window-update
+ * (which provokes a full, ~35ms redisplay_internal every frame and was
+ * the measured FPS ceiling), we invalidate just the GTK widget of each
+ * frame showing the buffer with gtk_widget_queue_draw.  That re-runs
+ * pgtk_handle_draw (-> the libregnum overlay paint hook) at the GTK
+ * frame-clock rate, skipping redisplay entirely.  Runs on the main
+ * thread from the redraw idle, so the GTK calls are safe.
+ *
+ * On non-pgtk builds (no overlay anyway) fall back to the old path. */
 static void
 notify_frame_ready (CmacsLibregnumView *v)
 {
   if (NILP (v->buffer) || !BUFFERP (v->buffer)) return;
+#ifdef HAVE_PGTK
+  Lisp_Object tail, frame;
+  FOR_EACH_FRAME (tail, frame)
+    {
+      struct frame *f = XFRAME (frame);
+      if (FRAME_LIVE_P (f) && FRAME_PGTK_P (f)
+          && FRAME_GTK_WIDGET (f)
+          && frame_shows_buffer (f->root_window, v->buffer))
+        gtk_widget_queue_draw (FRAME_GTK_WIDGET (f));
+    }
+#else
   cmacs_dispatch_safe_call1 (intern ("force-window-update"), v->buffer);
+#endif
 }
 
 static gboolean

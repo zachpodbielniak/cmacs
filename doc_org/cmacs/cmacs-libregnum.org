@@ -24,17 +24,78 @@ infeasible without multi-week upstream patches.  Instead:
 1. cmacs acquires a single process-shared *hidden* raylib window
    (=FLAG_WINDOW_HIDDEN= set before =InitWindow=).
 2. Each view owns a =RenderTexture2D= (a raylib FBO) sized to its
-   target dimensions.
+   target dimensions, plus a double-buffered Cairo =ARGB32= surface
+   (front read by the paint hook, back written by the renderer).
 3. On every redraw tick, =cmacs_libregnum_render_ctx_render_to_bgra=
-   draws the scene to the FBO, reads pixels back via
-   =LoadImageFromTexture=, converts RGBA → BGRA with a Y-flip,
-   and stages them into a Cairo image surface.
-4. =pgtk_handle_draw= calls =cmacs_libregnum_overlay_paint=, which
-   walks all live views and blits the staged surface onto the
-   current frame.
+   draws the scene to the FBO and reads it back with a single
+   =glReadPixels= in =GL_BGRA= directly into the back surface, then
+   swaps front/back.  =GL_BGRA= matches Cairo's =ARGB32= byte order
+   on little-endian, so there is no CPU channel-swap loop and no
+   per-frame allocation; the bottom-up GL origin is flipped for free
+   by the paint hook's Cairo matrix.
+4. The view asks the screen to refresh via =gtk_widget_queue_draw=
+   on the GTK widget of each frame showing the buffer.  That re-runs
+   =pgtk_handle_draw=, which calls =cmacs_libregnum_overlay_paint= to
+   blit the front surface — *without* a full Emacs redisplay.
 
 This is compositor-agnostic — same hook works under Wayland (pgtk)
 and any compositor that supports pgtk.
+
+** Rendering pipeline & performance
+
+Three design choices make scene interaction (orbit/zoom) feel
+real-time rather than a slideshow:
+
+1. *No hidden-window presentation.*  The render path does *not* call
+   =lrg_window_begin_frame= / =lrg_window_end_frame=.  Those wrap
+   raylib's =BeginDrawing= / =EndDrawing=, and =EndDrawing= presents
+   and *paces* the hidden window: =glfwSwapBuffers= (a vsync block),
+   =WaitTime= (the window's =SetTargetFPS(60)= cap — up to ~16 ms of
+   sleep per call), and =glfwPollEvents=.  For an offscreen FBO that
+   is never shown, all three are pure latency, and the =WaitTime= cap
+   alone was throttling every scene update.  Offscreen rendering needs
+   only =BeginTextureMode= / =EndTextureMode= plus a current GL
+   context — the render batch is set up by =InitWindow= and flushed by
+   =EndTextureMode=, so no =BeginDrawing= is required.
+
+2. *Targeted overlay refresh, not full redisplay.*  =notify_frame_ready=
+   (in =cmacs-libregnum-view.c=) calls =gtk_widget_queue_draw= on the
+   widgets of frames showing the buffer, NOT =force-window-update=.
+   A =force-window-update= triggers a full =redisplay_internal= every
+   frame; profiling showed that as ~35 ms/frame, capping interaction
+   at ~20 FPS even though the render itself was only ~10–15 ms.  The
+   targeted invalidate re-runs just =pgtk_handle_draw= (the blit) at
+   the GTK frame-clock rate, restoring 40–60 FPS.  This is correct
+   because the libregnum buffer's text is static and entirely hidden
+   behind the blit, so Emacs's backing surface is already up to date —
+   only the overlay needs recompositing.
+
+3. *Double buffering.*  The renderer fills the back surface and swaps
+   under a mutex held only for the pointer swap, so the paint hook
+   never blocks on an in-flight render.
+
+*Continuous animation.*  Static scenes render on demand (input,
+camera changes, explicit redraw).  For animated content, switch a
+view into animation mode — =M-x cmacs-libregnum-toggle-animation=
+(bound to =a=) or the =cmacs-libregnum-set-animated= primitive.  A
+shared GMainContext timer then re-renders the view at
+=cmacs-libregnum-target-fps= (default 60) for as long as it stays
+on-screen.  Visibility is tracked without Lisp: the paint hook stamps
+each view it blits with a generation counter, and the timer skips —
+and ultimately stops for — views whose buffer is no longer shown, so
+an idle or hidden scene costs nothing.
+
+*Why rendering is single-threaded.*  An off-thread GL worker (moving
+the raylib context to a dedicated thread via the GLFW
+make-context-current handoff, with double-buffered PBO async readback)
+was implemented and then reverted.  It *regressed* frame rate: the
+worker→main per-frame handoff plus GPU-driver contention between the
+worker's GL context and pgtk's main-thread Cairo/GL outweighed any
+benefit, because once the FPS cap was removed the render (~10–15 ms
+for ~1500 cubes) was never actually blocking the main thread.  The
+experiment is parked on the =libregnum-offthread-wip= branch; don't
+re-land it without a profile showing the render blocking the main
+thread.
 
 ** Translation-unit firewall
 
@@ -81,6 +142,13 @@ into a radial mind map.  Each heading is a node, parent/child
 relationships are =LrgLine3D= edges, and the layout is
 deterministic so reopening the same file produces the same map.
 
+=M-x cmacs-libregnum-toggle-animation= switches the current view
+between on-demand rendering and continuous animation at
+=cmacs-libregnum-target-fps= (default 60).  Use it for scenes that
+move on their own; static visualisations don't need it (they already
+redraw in real time on orbit/zoom).  The primitive is
+=cmacs-libregnum-set-animated= (=BUFFER FLAG &optional TARGET-FPS=).
+
 * Default key bindings
 
 | Key   | Command                              |
@@ -89,6 +157,7 @@ deterministic so reopening the same file produces the same map.
 | g g   | =cmacs-libregnum-redraw-current=     |
 | g r   | =cmacs-libregnum-reload-from-buffer= |
 | g s   | =cmacs-libregnum-save-to-buffer=     |
+| a     | =cmacs-libregnum-toggle-animation=   |
 
 Mouse:
 
