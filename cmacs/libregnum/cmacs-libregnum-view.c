@@ -218,6 +218,11 @@ redraw_idle (gpointer user)
       g_mutex_unlock (&v->frame_mtx);
 
       notify_frame_ready (v);
+
+      /* If a camera focus tween is in flight, keep the frames coming
+       * until it converges (render_to_bgra advances it each frame). */
+      if (cmacs_libregnum_render_ctx_focus_active (v->render))
+        cmacs_libregnum_view_request_redraw (v);
     }
   return G_SOURCE_REMOVE;
 }
@@ -292,6 +297,12 @@ cmacs_libregnum_view_for_buffer (Lisp_Object buffer)
   if (NILP (id)) return NULL;
   return g_hash_table_lookup (cmacs_libregnum__views,
                               GUINT_TO_POINTER (XFIXNUM (id)));
+}
+
+Lisp_Object
+cmacs_libregnum_view_get_buffer (CmacsLibregnumView *v)
+{
+  return v ? v->buffer : Qnil;
 }
 
 void

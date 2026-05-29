@@ -21,6 +21,7 @@
 #include <raylib.h>
 #include <glib.h>
 #include <string.h>
+#include <math.h>
 
 /* Desktop GL 3.3 (GLFW backend) -- we read the FBO colour attachment
  * back with a raw glReadPixels in GL_BGRA so the driver does the
@@ -91,6 +92,33 @@ cmacs_libregnum_render_get_shared_window (void)
   return shared_window ? LRG_WINDOW (shared_window) : NULL;
 }
 
+/* ── Scene node model ────────────────────────────────────────────
+ *
+ * A scene builder (currently the project tree) records one entry per
+ * pickable/labelable node here, in parallel with the drawables it
+ * emits.  This plain-C table is the backbone for picking (ray vs the
+ * node AABB), in-scene labels (project the node center to screen) and
+ * the Lisp-side navigation model (exposed via defuns).  Node id == the
+ * index into this array. */
+typedef struct
+{
+  gchar   *path;          /* absolute path, owned */
+  gchar   *name;          /* basename, owned */
+  gboolean is_dir;
+  int      depth;
+  int      parent;        /* node index, -1 for root */
+  float    x, y, z;       /* center */
+  float    hw, hh, hd;    /* half-extents (AABB) */
+} CmacsNode;
+
+static void
+cmacs_node_clear (gpointer p)
+{
+  CmacsNode *n = p;
+  g_clear_pointer (&n->path, g_free);
+  g_clear_pointer (&n->name, g_free);
+}
+
 /* ── Per-view render context (opaque to view.c) ────────────────── */
 
 struct CmacsLibregnumRenderCtx
@@ -103,6 +131,15 @@ struct CmacsLibregnumRenderCtx
   RenderTexture2D fbo;
   gboolean        fbo_valid;
   int             width, height;
+
+  /* Scene node model (CmacsNode), parallel to the drawables. */
+  GArray         *nodes;
+  gint            selected;       /* selected node id, -1 if none */
+
+  /* Camera focus tween (see focus_node / step_focus). */
+  gboolean        focusing;
+  float           goal_px, goal_py, goal_pz;   /* goal camera position */
+  float           goal_tx, goal_ty, goal_tz;   /* goal camera target */
 };
 
 CmacsLibregnumRenderCtx *
@@ -112,8 +149,11 @@ cmacs_libregnum_render_ctx_new (int w, int h)
   CmacsLibregnumRenderCtx *r = g_new0 (CmacsLibregnumRenderCtx, 1);
   r->width  = w;
   r->height = h;
+  r->selected = -1;
   r->renderer  = lrg_renderer_new (LRG_WINDOW (shared_window));
   r->drawables = g_ptr_array_new_with_free_func (g_object_unref);
+  r->nodes = g_array_new (FALSE, TRUE, sizeof (CmacsNode));
+  g_array_set_clear_func (r->nodes, cmacs_node_clear);
 
   LrgCamera3D *cam = lrg_camera3d_new ();
   lrg_camera3d_set_position_xyz (cam, 8.0f, 6.0f, 12.0f);
@@ -134,6 +174,7 @@ cmacs_libregnum_render_ctx_free (CmacsLibregnumRenderCtx *r)
   if (r->fbo_valid) UnloadRenderTexture (r->fbo);
   g_clear_object (&r->camera);
   if (r->drawables) g_ptr_array_unref (r->drawables);
+  if (r->nodes) g_array_free (r->nodes, TRUE);
   g_clear_object (&r->renderer);
   g_free (r);
 }
@@ -171,6 +212,223 @@ cmacs_libregnum_render_ctx_clear_drawables (CmacsLibregnumRenderCtx *r)
 {
   if (!r) return;
   g_ptr_array_set_size (r->drawables, 0);
+  /* The node model is parallel to the drawables; clear it too so a
+   * rebuild starts fresh (and drop any stale selection). */
+  if (r->nodes) g_array_set_size (r->nodes, 0);
+  r->selected = -1;
+  r->focusing = FALSE;
+}
+
+/* ── Scene node model API ──────────────────────────────────────── */
+
+guint
+cmacs_libregnum_render_ctx_add_node (CmacsLibregnumRenderCtx *r,
+                                     const char *path, const char *name,
+                                     gboolean is_dir, int depth, int parent,
+                                     float x, float y, float z,
+                                     float hw, float hh, float hd)
+{
+  CmacsNode n = { 0 };
+  n.path = g_strdup (path ? path : "");
+  n.name = g_strdup (name ? name : "");
+  n.is_dir = is_dir;
+  n.depth = depth;
+  n.parent = parent;
+  n.x = x; n.y = y; n.z = z;
+  n.hw = hw; n.hh = hh; n.hd = hd;
+  g_array_append_val (r->nodes, n);
+  return r->nodes->len - 1;
+}
+
+guint
+cmacs_libregnum_render_ctx_node_count (CmacsLibregnumRenderCtx *r)
+{
+  return (r && r->nodes) ? r->nodes->len : 0;
+}
+
+/* Borrowed pointers; valid until the next clear/rebuild. */
+gboolean
+cmacs_libregnum_render_ctx_node_info (CmacsLibregnumRenderCtx *r, guint id,
+                                      const char **path, const char **name,
+                                      gboolean *is_dir, int *depth,
+                                      int *parent)
+{
+  if (!r || !r->nodes || id >= r->nodes->len) return FALSE;
+  CmacsNode *n = &g_array_index (r->nodes, CmacsNode, id);
+  if (path)   *path   = n->path;
+  if (name)   *name   = n->name;
+  if (is_dir) *is_dir = n->is_dir;
+  if (depth)  *depth  = n->depth;
+  if (parent) *parent = n->parent;
+  return TRUE;
+}
+
+void
+cmacs_libregnum_render_ctx_set_selected (CmacsLibregnumRenderCtx *r, gint id)
+{
+  if (!r) return;
+  r->selected = (id >= 0 && r->nodes && (guint) id < r->nodes->len) ? id : -1;
+}
+
+gint
+cmacs_libregnum_render_ctx_get_selected (CmacsLibregnumRenderCtx *r)
+{
+  return r ? r->selected : -1;
+}
+
+/* Build a raylib Camera3D snapshot from the live LrgCamera3D. */
+static Camera3D
+ctx_raylib_camera (CmacsLibregnumRenderCtx *r)
+{
+  Camera3D c = { 0 };
+  c.up = (Vector3){ 0.0f, 1.0f, 0.0f };
+  c.fovy = 60.0f;
+  c.projection = CAMERA_PERSPECTIVE;
+  if (r && r->camera && LRG_IS_CAMERA3D (r->camera))
+    {
+      LrgCamera3D *c3 = LRG_CAMERA3D (r->camera);
+      g_autoptr (GrlVector3) p = lrg_camera3d_get_position (c3);
+      g_autoptr (GrlVector3) t = lrg_camera3d_get_target   (c3);
+      g_autoptr (GrlVector3) u = lrg_camera3d_get_up       (c3);
+      if (p) c.position = (Vector3){ p->x, p->y, p->z };
+      if (t) c.target   = (Vector3){ t->x, t->y, t->z };
+      if (u) c.up       = (Vector3){ u->x, u->y, u->z };
+      c.fovy = lrg_camera3d_get_fovy (c3);
+    }
+  return c;
+}
+
+/* Ray-pick the nearest node whose AABB the cursor ray crosses.
+ * VX,VY are view-local pixels (origin top-left); VW,VH the view size.
+ * Returns the node id, or -1 on a miss. */
+gint
+cmacs_libregnum_render_ctx_pick (CmacsLibregnumRenderCtx *r,
+                                 double vx, double vy, int vw, int vh)
+{
+  if (!r || !r->nodes || r->nodes->len == 0 || vw <= 0 || vh <= 0)
+    return -1;
+  Camera3D cam = ctx_raylib_camera (r);
+  Ray ray = GetScreenToWorldRayEx ((Vector2){ (float) vx, (float) vy },
+                                   cam, vw, vh);
+  gint best = -1;
+  float best_dist = 0.0f;
+  for (guint i = 0; i < r->nodes->len; i++)
+    {
+      CmacsNode *n = &g_array_index (r->nodes, CmacsNode, i);
+      BoundingBox box = {
+        (Vector3){ n->x - n->hw, n->y - n->hh, n->z - n->hd },
+        (Vector3){ n->x + n->hw, n->y + n->hh, n->z + n->hd }
+      };
+      RayCollision hit = GetRayCollisionBox (ray, box);
+      if (hit.hit && (best < 0 || hit.distance < best_dist))
+        {
+          best = (gint) i;
+          best_dist = hit.distance;
+        }
+    }
+  return best;
+}
+
+/* Project a world point to view-local pixels (origin top-left).
+ * Returns FALSE if the point is behind the camera. */
+gboolean
+cmacs_libregnum_render_ctx_project (CmacsLibregnumRenderCtx *r,
+                                    float wx, float wy, float wz,
+                                    int vw, int vh,
+                                    double *sx, double *sy)
+{
+  if (!r || vw <= 0 || vh <= 0) return FALSE;
+  Camera3D cam = ctx_raylib_camera (r);
+  /* Behind-camera test: forward . (point - position) must be positive. */
+  float fx = cam.target.x - cam.position.x;
+  float fy = cam.target.y - cam.position.y;
+  float fz = cam.target.z - cam.position.z;
+  float vx = wx - cam.position.x;
+  float vy = wy - cam.position.y;
+  float vz = wz - cam.position.z;
+  if (fx * vx + fy * vy + fz * vz <= 0.0f) return FALSE;
+  Vector2 s = GetWorldToScreenEx ((Vector3){ wx, wy, wz }, cam, vw, vh);
+  if (sx) *sx = s.x;
+  if (sy) *sy = s.y;
+  return TRUE;
+}
+
+/* Project node ID's label anchor (just above its top) to view-local
+ * pixels and report its name + type.  Returns FALSE if the node is out
+ * of range or behind the camera.  Used by the overlay to draw labels. */
+gboolean
+cmacs_libregnum_render_ctx_label_at (CmacsLibregnumRenderCtx *r, guint id,
+                                     int vw, int vh, double *sx, double *sy,
+                                     const char **name, gboolean *is_dir)
+{
+  if (!r || !r->nodes || id >= r->nodes->len) return FALSE;
+  CmacsNode *n = &g_array_index (r->nodes, CmacsNode, id);
+  if (name)   *name   = n->name;
+  if (is_dir) *is_dir = n->is_dir;
+  return cmacs_libregnum_render_ctx_project (r, n->x, n->y + n->hh + 0.25f,
+                                             n->z, vw, vh, sx, sy);
+}
+
+/* Aim the camera at node ID: target = node center, position backed off
+ * along the current view direction by a distance scaled to node size.
+ * Animated by step_focus() over subsequent frames. */
+void
+cmacs_libregnum_render_ctx_focus_node (CmacsLibregnumRenderCtx *r, gint id)
+{
+  if (!r || !r->nodes || id < 0 || (guint) id >= r->nodes->len) return;
+  CmacsNode *n = &g_array_index (r->nodes, CmacsNode, id);
+  Camera3D cam = ctx_raylib_camera (r);
+  /* Current view direction (from target back to camera), normalized. */
+  float dx = cam.position.x - cam.target.x;
+  float dy = cam.position.y - cam.target.y;
+  float dz = cam.position.z - cam.target.z;
+  float len = sqrtf (dx*dx + dy*dy + dz*dz);
+  if (len < 1e-3f) { dx = 0; dy = 0.6f; dz = 1.0f; len = sqrtf (0.36f+1.0f); }
+  dx /= len; dy /= len; dz /= len;
+  float extent = fmaxf (n->hw, fmaxf (n->hh, n->hd));
+  float dist = 6.0f + extent * 4.0f;
+  r->goal_tx = n->x; r->goal_ty = n->y; r->goal_tz = n->z;
+  r->goal_px = n->x + dx * dist;
+  r->goal_py = n->y + dy * dist;
+  r->goal_pz = n->z + dz * dist;
+  r->focusing = TRUE;
+}
+
+gboolean
+cmacs_libregnum_render_ctx_focus_active (CmacsLibregnumRenderCtx *r)
+{
+  return r && r->focusing;
+}
+
+/* Advance the focus tween one frame; clears `focusing' on arrival. */
+static void
+ctx_step_focus (CmacsLibregnumRenderCtx *r)
+{
+  if (!r || !r->focusing || !r->camera || !LRG_IS_CAMERA3D (r->camera))
+    { if (r) r->focusing = FALSE; return; }
+  LrgCamera3D *c3 = LRG_CAMERA3D (r->camera);
+  g_autoptr (GrlVector3) p = lrg_camera3d_get_position (c3);
+  g_autoptr (GrlVector3) t = lrg_camera3d_get_target   (c3);
+  float k = 0.25f;   /* lerp factor per frame */
+  float npx = p->x + (r->goal_px - p->x) * k;
+  float npy = p->y + (r->goal_py - p->y) * k;
+  float npz = p->z + (r->goal_pz - p->z) * k;
+  float ntx = t->x + (r->goal_tx - t->x) * k;
+  float nty = t->y + (r->goal_ty - t->y) * k;
+  float ntz = t->z + (r->goal_tz - t->z) * k;
+  lrg_camera3d_set_position_xyz (c3, npx, npy, npz);
+  lrg_camera3d_set_target_xyz   (c3, ntx, nty, ntz);
+  /* Converged? */
+  float dp = fabsf (r->goal_px - npx) + fabsf (r->goal_py - npy)
+           + fabsf (r->goal_pz - npz);
+  float dt = fabsf (r->goal_tx - ntx) + fabsf (r->goal_ty - nty)
+           + fabsf (r->goal_tz - ntz);
+  if (dp + dt < 0.05f)
+    {
+      lrg_camera3d_set_position_xyz (c3, r->goal_px, r->goal_py, r->goal_pz);
+      lrg_camera3d_set_target_xyz   (c3, r->goal_tx, r->goal_ty, r->goal_tz);
+      r->focusing = FALSE;
+    }
 }
 void *
 cmacs_libregnum_render_ctx_get_camera (CmacsLibregnumRenderCtx *r)
@@ -198,6 +456,10 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
   if (!r || !r->fbo_valid || !dst) return FALSE;
   if (dst_w != r->width || dst_h != r->height) return FALSE;
 
+  /* Advance the camera focus tween (if any) before drawing this
+   * frame; the view re-requests a redraw while focus_active is true. */
+  ctx_step_focus (r);
+
   /* NOTE: we deliberately do NOT call lrg_window_begin_frame /
    * end_frame here.  Those wrap raylib's BeginDrawing/EndDrawing, and
    * EndDrawing presents + paces the *hidden* offscreen window:
@@ -224,6 +486,18 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
             if (LRG_IS_DRAWABLE (d))
               lrg_drawable_draw (LRG_DRAWABLE (d), 0.0f);
           }
+        /* Selection highlight: a bright wireframe box around the
+         * selected node, drawn in the same 3D layer so it depth-sorts
+         * against the scene. */
+        if (r->selected >= 0 && r->nodes
+            && (guint) r->selected < r->nodes->len)
+          {
+            CmacsNode *n = &g_array_index (r->nodes, CmacsNode,
+                                           (guint) r->selected);
+            Vector3 c = (Vector3){ n->x, n->y, n->z };
+            DrawCubeWires (c, n->hw * 2 + 0.35f, n->hh * 2 + 0.35f,
+                           n->hd * 2 + 0.35f, (Color){ 255, 235, 120, 255 });
+          }
         lrg_renderer_end_layer (r->renderer);
         lrg_renderer_end_frame (r->renderer);
       }
@@ -248,6 +522,7 @@ cmacs_libregnum_render_ctx_orbit_camera (CmacsLibregnumRenderCtx *r,
                                          double dx_px, double dy_px)
 {
   if (!r || !r->camera || !LRG_IS_CAMERA3D (r->camera)) return;
+  r->focusing = FALSE;   /* manual control cancels an in-flight focus */
   LrgCamera3D *c3 = LRG_CAMERA3D (r->camera);
   g_autoptr (GrlVector3) pos = lrg_camera3d_get_position (c3);
   g_autoptr (GrlVector3) tgt = lrg_camera3d_get_target   (c3);
@@ -274,6 +549,7 @@ cmacs_libregnum_render_ctx_zoom_camera (CmacsLibregnumRenderCtx *r,
                                         double wheel_dy)
 {
   if (!r || !r->camera || !LRG_IS_CAMERA3D (r->camera)) return;
+  r->focusing = FALSE;
   LrgCamera3D *c3 = LRG_CAMERA3D (r->camera);
   g_autoptr (GrlVector3) pos = lrg_camera3d_get_position (c3);
   g_autoptr (GrlVector3) tgt = lrg_camera3d_get_target   (c3);
@@ -284,6 +560,46 @@ cmacs_libregnum_render_ctx_zoom_camera (CmacsLibregnumRenderCtx *r,
                                   tgt->x + (float) ox,
                                   tgt->y + (float) oy,
                                   tgt->z + (float) oz);
+}
+
+/* Pan the camera: slide both position and target across the screen
+ * plane so the scene tracks the drag (right-drag).  DX_PX/DY_PX are
+ * pointer deltas in pixels; the world distance is scaled by the
+ * camera-to-target distance so panning feels consistent at any zoom. */
+void
+cmacs_libregnum_render_ctx_pan_camera (CmacsLibregnumRenderCtx *r,
+                                       double dx_px, double dy_px)
+{
+  if (!r || !r->camera || !LRG_IS_CAMERA3D (r->camera)) return;
+  r->focusing = FALSE;
+  LrgCamera3D *c3 = LRG_CAMERA3D (r->camera);
+  g_autoptr (GrlVector3) pos = lrg_camera3d_get_position (c3);
+  g_autoptr (GrlVector3) tgt = lrg_camera3d_get_target   (c3);
+  g_autoptr (GrlVector3) up  = lrg_camera3d_get_up       (c3);
+
+  double fx = tgt->x - pos->x, fy = tgt->y - pos->y, fz = tgt->z - pos->z;
+  double dist = sqrt (fx*fx + fy*fy + fz*fz);
+  if (dist < 1e-3) dist = 1e-3;
+  fx /= dist; fy /= dist; fz /= dist;
+  double ux = up ? up->x : 0.0, uy = up ? up->y : 1.0, uz = up ? up->z : 0.0;
+  /* right = forward x up */
+  double rx = fy*uz - fz*uy, ry = fz*ux - fx*uz, rz = fx*uy - fy*ux;
+  double rl = sqrt (rx*rx + ry*ry + rz*rz);
+  if (rl < 1e-6) rl = 1e-6;
+  rx /= rl; ry /= rl; rz /= rl;
+  /* camera-up = right x forward */
+  double cux = ry*fz - rz*fy, cuy = rz*fx - rx*fz, cuz = rx*fy - ry*fx;
+
+  double s = dist * 0.0015;
+  /* Drag right -> scene moves right (camera moves -right); drag down
+   * (dy_px > 0) -> scene moves down (camera moves +up). */
+  double mx = (-dx_px) * rx * s + dy_px * cux * s;
+  double my = (-dx_px) * ry * s + dy_px * cuy * s;
+  double mz = (-dx_px) * rz * s + dy_px * cuz * s;
+  lrg_camera3d_set_position_xyz (c3, (float)(pos->x + mx),
+                                 (float)(pos->y + my), (float)(pos->z + mz));
+  lrg_camera3d_set_target_xyz   (c3, (float)(tgt->x + mx),
+                                 (float)(tgt->y + my), (float)(tgt->z + mz));
 }
 
 void

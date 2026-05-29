@@ -60,6 +60,10 @@ primitive).  Static scenes render on demand and ignore this value."
                   (buffer flag &optional target-fps))
 (declare-function cmacs-libregnum-animated-p "cmacs-libregnum-defuns.c"
                   (buffer))
+(declare-function cmacs-libregnum-tree-nodes "cmacs-libregnum-defuns.c"
+                  (buffer))
+(declare-function cmacs-libregnum-set-selection "cmacs-libregnum-defuns.c"
+                  (buffer id &optional focus))
 
 ;;;; Buffer text format -----------------------------------------------
 
@@ -139,7 +143,11 @@ primitive).  Static scenes render on demand and ignore this value."
      ((equal type "project_tree")
       (let ((root (cmacs-libregnum--alist-get 'project_root alist)))
         (when (and root (stringp root) (file-directory-p root))
-          (cmacs-libregnum-build-tree buffer root))))
+          (cmacs-libregnum-build-tree buffer root)
+          (with-current-buffer buffer
+            (setq-local cmacs-libregnum--scene-root
+                        (file-name-as-directory (expand-file-name root)))
+            (cmacs-libregnum--load-model)))))
      ((equal type "gobject")
       (let ((ns (cmacs-libregnum--alist-get 'namespace alist)))
         (cmacs-libregnum-build-gobject
@@ -179,6 +187,19 @@ primitive).  Static scenes render on demand and ignore this value."
     (define-key m (kbd "g g")     #'cmacs-libregnum-redraw-current)
     (define-key m (kbd "g s")     #'cmacs-libregnum-save-to-buffer)
     (define-key m (kbd "a")       #'cmacs-libregnum-toggle-animation)
+    ;; Tree navigation: arrows + hjkl move the selection; RET opens a
+    ;; file / enters a directory; u (or ^) goes up a directory.
+    (define-key m (kbd "<up>")    #'cmacs-libregnum-select-parent)
+    (define-key m (kbd "<down>")  #'cmacs-libregnum-select-child)
+    (define-key m (kbd "<left>")  #'cmacs-libregnum-select-prev-sibling)
+    (define-key m (kbd "<right>") #'cmacs-libregnum-select-next-sibling)
+    (define-key m (kbd "k")       #'cmacs-libregnum-select-parent)
+    (define-key m (kbd "j")       #'cmacs-libregnum-select-child)
+    (define-key m (kbd "h")       #'cmacs-libregnum-select-prev-sibling)
+    (define-key m (kbd "l")       #'cmacs-libregnum-select-next-sibling)
+    (define-key m (kbd "RET")     #'cmacs-libregnum-activate)
+    (define-key m (kbd "u")       #'cmacs-libregnum-up)
+    (define-key m (kbd "^")       #'cmacs-libregnum-up)
     m)
   "Keymap for `cmacs-libregnum-mode'.")
 
@@ -213,6 +234,121 @@ on-screen; static views render only on demand."
   (interactive)
   (when (cmacs-libregnum-attached-p (current-buffer))
     (cmacs-libregnum-redraw (current-buffer))))
+
+;;;; Tree navigation --------------------------------------------------
+
+(defvar-local cmacs-libregnum--scene-root nil
+  "Absolute path of the project root for the current tree scene, if any.")
+(defvar-local cmacs-libregnum--tree-model nil
+  "Vector of node plists for the current scene (see `cmacs-libregnum-tree-nodes').")
+(defvar-local cmacs-libregnum--children nil
+  "Hash mapping a node id to the ordered list of its child ids.")
+(defvar-local cmacs-libregnum--selected 0
+  "Currently selected node id.")
+
+(defun cmacs-libregnum--load-model ()
+  "Refresh the navigation model from the C node table and select root."
+  (setq cmacs-libregnum--tree-model
+        (cmacs-libregnum-tree-nodes (current-buffer)))
+  (setq cmacs-libregnum--children (make-hash-table :test 'eq))
+  (when (vectorp cmacs-libregnum--tree-model)
+    (dotimes (i (length cmacs-libregnum--tree-model))
+      (let ((parent (plist-get (aref cmacs-libregnum--tree-model i) :parent)))
+        (when parent
+          (push i (gethash parent cmacs-libregnum--children)))))
+    (maphash (lambda (k v)
+               (puthash k (nreverse v) cmacs-libregnum--children))
+             cmacs-libregnum--children)
+    (cmacs-libregnum--select-id 0)))
+
+(defun cmacs-libregnum--node (id)
+  "Return the plist for node ID, or nil."
+  (when (and (vectorp cmacs-libregnum--tree-model)
+             (integerp id) (>= id 0)
+             (< id (length cmacs-libregnum--tree-model)))
+    (aref cmacs-libregnum--tree-model id)))
+
+(defun cmacs-libregnum--select-id (id)
+  "Select node ID, move the camera to it, and echo its path."
+  (when-let* ((node (cmacs-libregnum--node id)))
+    (setq cmacs-libregnum--selected id)
+    (cmacs-libregnum-set-selection (current-buffer) id t)
+    (let* ((path (plist-get node :path))
+           (root cmacs-libregnum--scene-root)
+           (rel (if (and root path (string-prefix-p
+                                    (expand-file-name root) path))
+                    (file-relative-name path root)
+                  (plist-get node :name))))
+      (message "%s%s" (if (plist-get node :dir) "[dir] " "") rel))))
+
+(defun cmacs-libregnum-select-parent ()
+  "Select the parent of the current node."
+  (interactive)
+  (let ((p (plist-get (cmacs-libregnum--node cmacs-libregnum--selected) :parent)))
+    (if p (cmacs-libregnum--select-id p) (message "At root"))))
+
+(defun cmacs-libregnum-select-child ()
+  "Select the first child of the current node."
+  (interactive)
+  (let ((kids (gethash cmacs-libregnum--selected cmacs-libregnum--children)))
+    (if kids (cmacs-libregnum--select-id (car kids))
+      (message "No children"))))
+
+(defun cmacs-libregnum--sibling (delta)
+  "Select the sibling DELTA steps from the current node."
+  (let ((p (plist-get (cmacs-libregnum--node cmacs-libregnum--selected) :parent)))
+    (if (null p)
+        (message "Root has no siblings")
+      (let* ((sibs (gethash p cmacs-libregnum--children))
+             (pos  (seq-position sibs cmacs-libregnum--selected)))
+        (when pos
+          (let ((n (+ pos delta)))
+            (if (and (>= n 0) (< n (length sibs)))
+                (cmacs-libregnum--select-id (nth n sibs))
+              (message "No more siblings"))))))))
+
+(defun cmacs-libregnum-select-next-sibling ()
+  "Select the next sibling."
+  (interactive)
+  (cmacs-libregnum--sibling 1))
+
+(defun cmacs-libregnum-select-prev-sibling ()
+  "Select the previous sibling."
+  (interactive)
+  (cmacs-libregnum--sibling -1))
+
+(defun cmacs-libregnum-activate ()
+  "Open the selected file, or drill into the selected directory."
+  (interactive)
+  (when-let* ((node (cmacs-libregnum--node cmacs-libregnum--selected))
+              (path (plist-get node :path)))
+    (if (plist-get node :dir)
+        (cmacs-libregnum--drill-to (current-buffer) path)
+      (find-file path))))
+
+(defun cmacs-libregnum--drill-to (buffer path)
+  "Re-root BUFFER's tree scene at directory PATH."
+  (with-current-buffer buffer
+    (when (and (cmacs-libregnum-attached-p buffer)
+               (stringp path) (file-directory-p path))
+      (let ((abs (file-name-as-directory (expand-file-name path))))
+        (cmacs-libregnum-build-tree buffer abs)
+        (setq-local cmacs-libregnum--scene-root abs)
+        (let ((alist (cmacs-libregnum--parse-buffer)))
+          (setf (alist-get 'scene_type alist) "project_tree")
+          (setf (alist-get 'project_root alist) (directory-file-name abs))
+          (cmacs-libregnum--serialise-buffer alist))
+        (cmacs-libregnum--load-model)))))
+
+(defun cmacs-libregnum-up ()
+  "Re-root the tree at the parent of the current root directory."
+  (interactive)
+  (let* ((root (directory-file-name
+                (or cmacs-libregnum--scene-root default-directory)))
+         (parent (file-name-directory root)))
+    (if (and parent (not (equal (directory-file-name parent) root)))
+        (cmacs-libregnum--drill-to (current-buffer) parent)
+      (message "At filesystem root"))))
 
 (defun cmacs-libregnum--on-kill ()
   "Tear down the view when the buffer is killed."
@@ -252,6 +388,16 @@ state (camera, layout options, selection).
              (save-excursion (goto-char (point-min))
                              (re-search-forward "^scene_type:" nil t)))
     (cmacs-libregnum--read-scene-from-buffer)))
+
+;; Under Evil (Doom), a `special-mode' buffer sits in normal/motion
+;; state, where j/k/h/l/g/a/RET are Evil motions that shadow this mode's
+;; single-key bindings (hence "j" -> evil-next-line -> "end of buffer").
+;; These buffers are non-editable 3D viewports, so start them in Evil
+;; *emacs state* and let the major-mode keymap own every key.  No-op
+;; without Evil.
+(with-eval-after-load 'evil
+  (when (fboundp 'evil-set-initial-state)
+    (evil-set-initial-state 'cmacs-libregnum-mode 'emacs)))
 
 ;;;; Entry points ----------------------------------------------------
 
@@ -305,12 +451,10 @@ Drag with the left mouse button to orbit, scroll-wheel to zoom."
         (insert (format "project_root: %s\n" abs)))
       (cmacs-libregnum-mode)
       (setq-local cmacs-libregnum--scene-root abs)
-      (cmacs-libregnum-build-tree (current-buffer) abs))
+      (cmacs-libregnum-build-tree (current-buffer) abs)
+      (cmacs-libregnum--load-model))
     (switch-to-buffer buf)
     buf))
-
-(defvar-local cmacs-libregnum--scene-root nil
-  "Absolute path of the project root for the current tree scene, if any.")
 
 ;;;###autoload
 (defun cmacs-libregnum-gobject-graph (&optional namespace)

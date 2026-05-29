@@ -39,6 +39,7 @@ extern CmacsLibregnumView *cmacs_libregnum_view_new   (Lisp_Object buffer,
                                                        int width, int height);
 extern void cmacs_libregnum_view_destroy              (CmacsLibregnumView *v);
 extern CmacsLibregnumView *cmacs_libregnum_view_for_buffer (Lisp_Object buffer);
+extern Lisp_Object cmacs_libregnum_view_get_buffer    (CmacsLibregnumView *v);
 extern void cmacs_libregnum_view_request_redraw       (CmacsLibregnumView *v);
 
 extern cairo_surface_t *cmacs_libregnum_view_lock_surface   (CmacsLibregnumView *v);

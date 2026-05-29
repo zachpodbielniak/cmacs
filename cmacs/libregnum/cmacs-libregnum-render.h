@@ -49,6 +49,50 @@ extern void cmacs_libregnum_render_ctx_add_drawable
 extern void cmacs_libregnum_render_ctx_clear_drawables
                               (CmacsLibregnumRenderCtx *r);
 
+/* ── Scene node model ────────────────────────────────────────────
+ * A scene builder records one entry per pickable/labelable node,
+ * parallel to the drawables.  Node id == insertion index.  Cleared
+ * automatically by clear_drawables. */
+extern guint cmacs_libregnum_render_ctx_add_node
+                              (CmacsLibregnumRenderCtx *r,
+                               const char *path, const char *name,
+                               gboolean is_dir, int depth, int parent,
+                               float x, float y, float z,
+                               float hw, float hh, float hd);
+extern guint cmacs_libregnum_render_ctx_node_count
+                              (CmacsLibregnumRenderCtx *r);
+/* PATH/NAME are borrowed (valid until the next clear/rebuild). */
+extern gboolean cmacs_libregnum_render_ctx_node_info
+                              (CmacsLibregnumRenderCtx *r, guint id,
+                               const char **path, const char **name,
+                               gboolean *is_dir, int *depth, int *parent);
+
+/* Selection (highlighted node) + camera focus. */
+extern void cmacs_libregnum_render_ctx_set_selected
+                              (CmacsLibregnumRenderCtx *r, gint id);
+extern gint cmacs_libregnum_render_ctx_get_selected
+                              (CmacsLibregnumRenderCtx *r);
+extern void cmacs_libregnum_render_ctx_focus_node
+                              (CmacsLibregnumRenderCtx *r, gint id);
+extern gboolean cmacs_libregnum_render_ctx_focus_active
+                              (CmacsLibregnumRenderCtx *r);
+
+/* Ray-pick the nearest node under view-local pixel (VX,VY); -1 miss. */
+extern gint cmacs_libregnum_render_ctx_pick
+                              (CmacsLibregnumRenderCtx *r,
+                               double vx, double vy, int vw, int vh);
+/* Project a world point to view-local pixels; FALSE if behind camera. */
+extern gboolean cmacs_libregnum_render_ctx_project
+                              (CmacsLibregnumRenderCtx *r,
+                               float wx, float wy, float wz,
+                               int vw, int vh, double *sx, double *sy);
+/* Project node ID's label anchor + report NAME/IS_DIR (NAME borrowed).
+ * FALSE if out of range or behind the camera. */
+extern gboolean cmacs_libregnum_render_ctx_label_at
+                              (CmacsLibregnumRenderCtx *r, guint id,
+                               int vw, int vh, double *sx, double *sy,
+                               const char **name, gboolean *is_dir);
+
 /* Render one frame into DST (BGRA, top-down, w*h*4 bytes).
  * Returns TRUE on success. */
 extern gboolean cmacs_libregnum_render_ctx_render_to_bgra
@@ -63,6 +107,9 @@ extern void cmacs_libregnum_render_ctx_orbit_camera
 extern void cmacs_libregnum_render_ctx_zoom_camera
                               (CmacsLibregnumRenderCtx *r,
                                double wheel_dy);
+extern void cmacs_libregnum_render_ctx_pan_camera
+                              (CmacsLibregnumRenderCtx *r,
+                               double dx_px, double dy_px);
 
 /* Camera state serialisation helpers (position, target, fov).
  * Used by the Lisp save/restore path to round-trip the view state

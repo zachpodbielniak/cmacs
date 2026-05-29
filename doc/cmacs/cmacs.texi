@@ -5838,11 +5838,15 @@ render pipeline.
 @end deffn
 
 @deffn Command cmacs-libregnum-project-tree &optional root
-Open a libregnum scene visualising the project file tree under
-@var{root} (defaults to @code{project-current} root, then
-@code{default-directory}).  Each regular file becomes a coloured
-cube; height encodes file size, hue encodes extension.
-Recursion depth is capped at 5, emission at 1500 cubes.
+Open a @emph{navigable} 3D directory tree under @var{root}
+(defaults to @code{project-current} root, then
+@code{default-directory}).  Directories are spheres, files are cubes
+(height = log file size, hue = extension), laid out as a tidy
+hanging tree (depth on @math{Y}, siblings spread on @math{X} by
+subtree size) joined to their parent by edge lines.  Directory and
+selected-node names are labelled in the scene.  See the
+@emph{Navigating the project tree} section below for click and
+keyboard interaction.
 @end deffn
 
 @deffn Command cmacs-libregnum-gobject-graph &optional namespace
@@ -5868,6 +5872,41 @@ renders only on demand.  The underlying primitive is
 &optional @var{target-fps}).
 @end deffn
 
+@section Navigating the project tree
+
+The project-tree scene is interactive.  Every node is recorded in a
+node table that drives picking, in-scene labels, and a keyboard
+navigation model (exposed to Lisp via
+@code{cmacs-libregnum-tree-nodes}).
+
+Mouse: left-click a file to open it (@code{find-file}); left-click a
+directory to drill in (the scene re-roots there).  Left-drag still
+orbits, right-drag pans, scroll zooms; a click is told from a drag by
+whether the pointer moved.
+
+Keyboard (a highlighted selection cursor; the camera eases to frame
+it and its name is echoed):
+
+@table @kbd
+@item @key{up} / k
+select parent
+@item @key{down} / j
+select first child
+@item @key{left} / h
+select previous sibling
+@item @key{right} / l
+select next sibling
+@item @key{RET}
+open file / drill into directory
+@item u (or ^)
+go up one directory (re-root to parent)
+@end table
+
+Picking is a ray-cast (raylib @code{GetScreenToWorldRayEx} +
+@code{GetRayCollisionBox} against each node's AABB) on the main
+thread; the open/drill action is deferred onto the cmacs
+GMainContext so no Lisp runs inside the GTK event handler.
+
 @section Default key bindings
 
 @table @kbd
@@ -5883,8 +5922,9 @@ renders only on demand.  The underlying primitive is
 @code{cmacs-libregnum-toggle-animation}
 @end table
 
-Mouse: left-drag orbits the camera around the scene origin;
-right-drag pans the target; scroll wheel zooms.
+The project-tree navigation keys (arrows / @kbd{hjkl} / @key{RET} /
+@kbd{u}) are documented above under @emph{Navigating the project
+tree}.
 
 @section Buffer text format
 

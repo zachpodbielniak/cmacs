@@ -124,11 +124,15 @@ so the static archive carries multiply-defined =QuaternionToMatrix=,
 =M-x cmacs-libregnum-demo= opens an empty scene buffer; useful as
 a smoke test for the render pipeline.
 
-=M-x cmacs-libregnum-project-tree= builds a 3D scatter of the
-current project's regular files.  Each file is a cube on a grid;
-height encodes file size, hue encodes extension.  =.git=, =build=,
-=node_modules=, =native-lisp=, and =__pycache__= are skipped.
-The walk is depth-capped at 5 and emission-capped at 1500 cubes.
+=M-x cmacs-libregnum-project-tree= builds a *navigable* 3D
+directory tree of the current project.  Directories are spheres,
+files are cubes (height = log file size, hue = extension), laid out
+as a tidy hanging tree -- depth on =Y=, siblings spread on =X= with
+width proportional to subtree size -- and joined to their parent by
+thin edge lines.  Directory names (and the selected node's name) are
+drawn as labels in the scene.  =.git=, =build=, =node_modules=,
+=native-lisp=, and =__pycache__= are skipped; the walk is depth- and
+node-capped.  See [[*Navigating the project tree]] for interaction.
 
 =M-x cmacs-libregnum-gobject-graph= visualises the live GObject
 type tree.  With a prefix arg you can pass a leading type-name
@@ -149,6 +153,39 @@ move on their own; static visualisations don't need it (they already
 redraw in real time on orbit/zoom).  The primitive is
 =cmacs-libregnum-set-animated= (=BUFFER FLAG &optional TARGET-FPS=).
 
+* Navigating the project tree
+
+The project-tree scene is interactive.  Every node (directory or
+file) is recorded in a node table that drives picking, labels and a
+keyboard navigation model.
+
+Mouse:
+
+- *Left-click a file* -> open it in Emacs (=find-file=).
+- *Left-click a directory* -> drill in: the scene re-roots at that
+  directory so you can focus on one subtree at a time.
+- *Left-drag* still orbits, *right-drag* pans, *scroll* zooms.  A
+  click is distinguished from a drag by whether the pointer moved.
+
+Keyboard (a selection cursor highlights one node; the camera eases
+to frame it, and its name is echoed):
+
+| Key                 | Action                                  |
+|---------------------+-----------------------------------------|
+| =<up>= / =k=        | select parent                           |
+| =<down>= / =j=      | select first child                      |
+| =<left>= / =h=      | select previous sibling                 |
+| =<right>= / =l=     | select next sibling                     |
+| =RET=               | open file / drill into directory        |
+| =u= or =^=          | go up one directory (re-root to parent) |
+
+Picking is a ray-cast (raylib =GetScreenToWorldRayEx= +
+=GetRayCollisionBox= against each node's AABB) done on the main
+thread from the live camera; the file-open / drill action is
+deferred onto the cmacs GMainContext so no Lisp runs inside the GTK
+event handler.  =cmacs-libregnum-tree-nodes= exposes the model to
+Lisp (a vector of =(:id :name :path :dir :depth :parent)= plists).
+
 * Default key bindings
 
 | Key   | Command                              |
@@ -159,11 +196,9 @@ redraw in real time on orbit/zoom).  The primitive is
 | g s   | =cmacs-libregnum-save-to-buffer=     |
 | a     | =cmacs-libregnum-toggle-animation=   |
 
-Mouse:
-
-- Left-drag: orbit camera around the scene origin.
-- Right-drag: pan camera target.
-- Scroll wheel: zoom (camera moves along the line to target).
+See [[*Navigating the project tree]] for the tree-navigation keys
+(arrows / =hjkl= / =RET= / =u=), which are active in project-tree
+scenes.
 
 * Buffer text format
 

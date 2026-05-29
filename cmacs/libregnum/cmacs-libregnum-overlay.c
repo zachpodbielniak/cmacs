@@ -31,8 +31,63 @@
 #include "window.h"
 #include "buffer.h"
 #include "cmacs-libregnum.h"
+#include "cmacs-libregnum-render.h"
 
 #include <cairo.h>
+
+/* Draw directory (and selected-node) names projected onto the view's
+ * blit.  PX/PY/PW/PH are the window's frame-pixel rect, VW/VH the view
+ * render size.  Projection returns view-local pixels; we map them into
+ * the window rect (no Y flip -- the projection already matches the
+ * displayed, un-flipped orientation). */
+static void
+cmacs_libregnum__draw_labels (cairo_t *cr, CmacsLibregnumView *v,
+                              int px, int py, int pw, int ph,
+                              int vw, int vh)
+{
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  guint nc = cmacs_libregnum_render_ctx_node_count (ctx);
+  if (nc == 0) return;
+  gint sel = cmacs_libregnum_render_ctx_get_selected (ctx);
+  double sxv = (double) pw / vw;
+  double syv = (double) ph / vh;
+
+  cairo_save (cr);
+  cairo_select_font_face (cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL,
+                          CAIRO_FONT_WEIGHT_NORMAL);
+  cairo_set_font_size (cr, 12.0);
+  for (guint i = 0; i < nc; i++)
+    {
+      const char *name = NULL;
+      gboolean is_dir = FALSE;
+      double lx = 0, ly = 0;
+      if (!cmacs_libregnum_render_ctx_label_at (ctx, i, vw, vh, &lx, &ly,
+                                                &name, &is_dir))
+        continue;
+      gboolean selected = ((gint) i == sel);
+      if (!is_dir && !selected) continue;   /* dirs + selection only */
+      if (!name || !name[0]) continue;
+
+      double fx = px + lx * sxv;
+      double fy = py + ly * syv;
+      /* Centre horizontally on the node. */
+      cairo_text_extents_t ext;
+      cairo_text_extents (cr, name, &ext);
+      fx -= ext.width * 0.5;
+
+      /* Shadow for contrast, then the label. */
+      cairo_set_source_rgba (cr, 0.0, 0.0, 0.0, 0.7);
+      cairo_move_to (cr, fx + 1.0, fy + 1.0);
+      cairo_show_text (cr, name);
+      if (selected)
+        cairo_set_source_rgba (cr, 1.0, 0.92, 0.47, 1.0);
+      else
+        cairo_set_source_rgba (cr, 0.95, 0.95, 1.0, 0.95);
+      cairo_move_to (cr, fx, fy);
+      cairo_show_text (cr, name);
+    }
+  cairo_restore (cr);
+}
 
 static void
 cmacs_libregnum__walk_windows (struct frame *f, cairo_t *cr, Lisp_Object w)
@@ -84,6 +139,14 @@ cmacs_libregnum__walk_windows (struct frame *f, cairo_t *cr, Lisp_Object w)
                    * the animation clock keeps driving it (and stops
                    * when the buffer is no longer shown). */
                   cmacs_libregnum_view_mark_painted (v);
+
+                  /* In-scene labels: project each directory node (and
+                   * the selected node) to its on-screen position and
+                   * draw its name in cairo, on top of the blit.  Pure
+                   * C + cairo -- no Lisp re-entry.  Files stay unlabeled
+                   * to avoid clutter (they label when selected). */
+                  cmacs_libregnum__draw_labels (cr, v, px, py, pw, ph,
+                                                vw, vh);
                 }
             }
         }

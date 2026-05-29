@@ -180,6 +180,70 @@ deterministic radial-cone.  */)
   return Qt;
 }
 
+DEFUN ("cmacs-libregnum-tree-nodes", Fcmacs_libregnum_tree_nodes,
+       Scmacs_libregnum_tree_nodes, 1, 1, 0,
+       doc: /* Return BUFFER's scene node model as a vector.
+Element I (the node id) is a plist
+  (:id I :name NAME :path PATH :dir DIR :depth DEPTH :parent PARENT)
+where DIR is t for directories, PARENT is the parent node's id or nil
+for the root.  Returns nil if BUFFER has no attached view or no scene.
+Used by the navigation layer; rebuild the scene to refresh it.  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  guint n = cmacs_libregnum_render_ctx_node_count (ctx);
+  if (n == 0) return Qnil;
+  Lisp_Object vec = make_nil_vector (n);
+  for (guint i = 0; i < n; i++)
+    {
+      const char *path = NULL, *name = NULL;
+      gboolean is_dir = FALSE;
+      int depth = 0, parent = -1;
+      if (!cmacs_libregnum_render_ctx_node_info (ctx, i, &path, &name,
+                                                 &is_dir, &depth, &parent))
+        continue;
+      Lisp_Object lpath = DECODE_FILE (build_unibyte_string (path ? path : ""));
+      Lisp_Object lname = DECODE_FILE (build_unibyte_string (name ? name : ""));
+      Lisp_Object pl =
+        CALLN (Flist,
+               intern (":id"),     make_fixnum (i),
+               intern (":name"),   lname,
+               intern (":path"),   lpath,
+               intern (":dir"),    is_dir ? Qt : Qnil,
+               intern (":depth"),  make_fixnum (depth),
+               intern (":parent"), parent >= 0 ? make_fixnum (parent) : Qnil);
+      ASET (vec, i, pl);
+    }
+  return vec;
+}
+
+DEFUN ("cmacs-libregnum-set-selection", Fcmacs_libregnum_set_selection,
+       Scmacs_libregnum_set_selection, 2, 3, 0,
+       doc: /* Select node ID in BUFFER's scene (nil clears selection).
+The selected node gets a highlight box.  With non-nil FOCUS, the camera
+also eases to frame it.  */)
+  (Lisp_Object buffer, Lisp_Object id, Lisp_Object focus)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) error ("cmacs-libregnum: no view attached to buffer");
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  gint i = -1;
+  if (!NILP (id))
+    {
+      CHECK_FIXNAT (id);
+      i = XFIXNUM (id);
+    }
+  cmacs_libregnum_render_ctx_set_selected (ctx, i);
+  if (!NILP (focus) && i >= 0)
+    cmacs_libregnum_render_ctx_focus_node (ctx, i);
+  cmacs_libregnum_view_request_redraw (v);
+  return id;
+}
+
 DEFUN ("cmacs-libregnum-camera-state", Fcmacs_libregnum_camera_state,
        Scmacs_libregnum_camera_state, 1, 1, 0,
        doc: /* Return camera state of BUFFER's libregnum view.
@@ -270,6 +334,8 @@ syms_of_cmacs_libregnum_defuns (void)
   defsubr (&Scmacs_libregnum_redraw);
   defsubr (&Scmacs_libregnum_set_animated);
   defsubr (&Scmacs_libregnum_animated_p);
+  defsubr (&Scmacs_libregnum_tree_nodes);
+  defsubr (&Scmacs_libregnum_set_selection);
   defsubr (&Scmacs_libregnum_build_tree);
   defsubr (&Scmacs_libregnum_build_gobject);
   defsubr (&Scmacs_libregnum_build_mindmap);
