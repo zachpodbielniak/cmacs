@@ -100,6 +100,15 @@ all tools are enabled (full trust).  Set =cmacs-ai-tool-confirm=
 to ='destructive= for a per-call prompt on bash/write/edit, or to a
 function for custom approval.
 
+The =web_fetch= built-in is model-aware: HTML responses are converted
+to readable markdown-style text (scripts and styles stripped, headings
+and links preserved), =http://= URLs are upgraded to =https://=, a real
+=User-Agent= and a 30-second timeout are applied, and converted bodies
+are cached in-process for 15 minutes.  It accepts an optional =prompt=
+argument -- when the model supplies one, a sub-model reads the fetched
+page and returns only the requested information instead of the whole
+page (extraction runs through the chat's active provider).
+
 Each chat buffer is /also/ auto-augmented with cmacs's own MCP tool
 surface (buffer / file / project / eval / apropos / describe by
 default) on top of these built-ins -- see [[*MCP bridge][MCP bridge]] below.

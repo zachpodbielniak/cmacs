@@ -180,13 +180,23 @@ with all of ai-glib's built-ins pre-registered:
 @item @code{bash} -- run a shell command
 @item @code{read} / @code{write} / @code{edit} -- file I/O
 @item @code{glob} / @code{grep} / @code{ls} -- file discovery
-@item @code{web_fetch} -- fetch a URL (capped at 100 KB)
+@item @code{web_fetch} -- fetch a URL (HTML converted to text;
+optional @code{prompt} extraction)
 @end itemize
 
 Per the project default, all tools are enabled (full trust).
 Set @code{cmacs-ai-tool-confirm} to @code{'destructive} for a
 prompt before bash/write/edit, or to a function for per-call
 custom approval.
+
+@code{web_fetch} is model-aware: HTML responses are converted to
+readable markdown-style text (scripts and styles stripped, headings
+and links preserved), @code{http://} is upgraded to @code{https://},
+a @code{User-Agent} and a 30-second timeout are applied, and converted
+bodies are cached in-process for 15 minutes.  With an optional
+@code{prompt} argument, a sub-model reads the fetched page (through the
+chat's active provider) and returns only the requested information
+instead of the whole page.
 
 Custom Elisp tools are registered via
 @code{cmacs-ai-tools-register}; the callback is invoked with
