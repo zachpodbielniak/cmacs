@@ -450,6 +450,97 @@ Returns the integer count of tools successfully registered.  */)
 }
 #endif /* HAVE_CMACS_MCP */
 
+/* ── web_search provider wiring ─────────────────────────────────── */
+
+DEFUN ("cmacs-ai-tools-set-search-provider",
+       Fcmacs_ai_tools_set_search_provider,
+       Scmacs_ai_tools_set_search_provider, 2, 3, 0,
+       doc: /* Enable the web_search tool on EXECUTOR using PROVIDER.
+
+PROVIDER is one of the symbols `auto', `brave', `bing', or
+`duckduckgo'.  `auto' uses Brave or Bing when the corresponding API
+key is available and otherwise falls back to the keyless DuckDuckGo
+backend (best-effort, no SLA).  `brave' and `bing' require an API
+key: the optional API-KEY string, or else the BRAVE_API_KEY /
+BING_API_KEY environment variable.  `duckduckgo' needs no key.
+
+Registers ai-glib's web_search tool on EXECUTOR so the model can use
+it -- and, when it asks, the tool's count/freshness/safesearch/
+country/language/site/fetch_content options.  Returns t, or signals
+an error when a keyed provider has no key or PROVIDER is unknown.  */)
+  (Lisp_Object executor, Lisp_Object provider, Lisp_Object api_key)
+{
+  CHECK_FIXNAT (executor);
+  CHECK_SYMBOL (provider);
+  if (!NILP (api_key))
+    CHECK_STRING (api_key);
+
+  AiToolExecutor *exec = cmacs_ai_tools_lookup (XFIXNUM (executor));
+  if (exec == NULL) error ("cmacs-ai: bad executor handle");
+
+  AiSearchProvider *sp = NULL;
+
+  if (EQ (provider, intern ("auto")))
+    {
+      g_autoptr (GError) err = NULL;
+      sp = ai_search_provider_new_default (&err);
+      if (sp == NULL)
+        error ("cmacs-ai: search provider unavailable: %s",
+               err ? err->message : "unknown");
+    }
+  else if (EQ (provider, intern ("duckduckgo")))
+    {
+      sp = AI_SEARCH_PROVIDER (ai_duckduckgo_search_new ());
+    }
+  else if (EQ (provider, intern ("brave")) || EQ (provider, intern ("bing")))
+    {
+      gboolean     is_brave = EQ (provider, intern ("brave"));
+      const gchar *envvar   = is_brave ? "BRAVE_API_KEY" : "BING_API_KEY";
+      const gchar *key      = !NILP (api_key) ? SSDATA (api_key)
+                                              : g_getenv (envvar);
+      if (key == NULL || *key == '\0')
+        error ("cmacs-ai: %s search needs an API key (set %s)",
+               is_brave ? "Brave" : "Bing", envvar);
+      sp = is_brave
+           ? AI_SEARCH_PROVIDER (ai_brave_search_new (key))
+           : AI_SEARCH_PROVIDER (ai_bing_search_new (key));
+    }
+  else
+    error ("cmacs-ai: unknown search provider `%s'",
+           SSDATA (SYMBOL_NAME (provider)));
+
+  if (sp == NULL)
+    error ("cmacs-ai: failed to create search provider");
+
+  ai_tool_executor_set_search_provider (exec, sp);
+  g_object_unref (sp);   /* the executor took its own ref */
+  return Qt;
+}
+
+DEFUN ("cmacs-ai-tools-list", Fcmacs_ai_tools_list,
+       Scmacs_ai_tools_list, 1, 1, 0,
+       doc: /* Return the list of tool-name strings advertised by EXECUTOR.
+
+Includes ai-glib's built-ins (bash, read, write, edit, glob, grep,
+ls, web_fetch), web_search once a search provider has been set via
+`cmacs-ai-tools-set-search-provider', any custom tools registered
+with `cmacs-ai-tools-register', and bridged MCP tools.  */)
+  (Lisp_Object executor)
+{
+  CHECK_FIXNAT (executor);
+  AiToolExecutor *exec = cmacs_ai_tools_lookup (XFIXNUM (executor));
+  if (exec == NULL) error ("cmacs-ai: bad executor handle");
+
+  Lisp_Object names = Qnil;
+  for (GList *l = ai_tool_executor_get_tools (exec); l != NULL; l = l->next)
+    {
+      const gchar *n = ai_tool_get_name ((AiTool *) l->data);
+      if (n != NULL)
+        names = Fcons (build_string (n), names);
+    }
+  return Fnreverse (names);
+}
+
 void syms_of_cmacs_ai_tools_defuns (void);
 void
 syms_of_cmacs_ai_tools_defuns (void)
@@ -461,6 +552,8 @@ syms_of_cmacs_ai_tools_defuns (void)
   defsubr (&Scmacs_ai_tools_register);
   defsubr (&Scmacs_ai_tools_run_async);
   defsubr (&Scmacs_ai_tools_execute_into_session);
+  defsubr (&Scmacs_ai_tools_set_search_provider);
+  defsubr (&Scmacs_ai_tools_list);
 #ifdef HAVE_CMACS_MCP
   defsubr (&Scmacs_ai_tools_register_mcp_bridge);
 #endif

@@ -191,7 +191,9 @@ custom approval.
 
 @code{web_fetch} is model-aware: HTML responses are converted to
 readable markdown-style text (scripts and styles stripped, headings
-and links preserved), @code{http://} is upgraded to @code{https://},
+and links preserved; images surface as Markdown @code{![alt](URL)}
+with the src resolved to an absolute URL, so the model can cite or
+embed real image links), @code{http://} is upgraded to @code{https://},
 a @code{User-Agent} and a 30-second timeout are applied, and converted
 bodies are cached in-process for 15 minutes.  With an optional
 @code{prompt} argument, a sub-model reads the fetched page (through the
@@ -205,6 +207,57 @@ Custom Elisp tools are registered via
 In addition to ai-glib's built-ins, every chat buffer is augmented
 with cmacs's own MCP tool surface (buffer / file / project / eval /
 apropos / describe by default).  See @ref{CMacs AI MCP Bridge}.
+
+@subsection Web Search
+
+@code{web_search} returns ranked results (title, URL, source domain,
+snippet) and can optionally fetch the top results' pages.  Unlike
+@code{web_fetch} it is not a free built-in: it is registered on a
+chat/agent buffer's executor only when a backend is configured.
+@code{cmacs-ai-chat--init} does this automatically from
+@code{cmacs-ai-search-provider} (default @code{'auto}):
+
+@table @code
+@item auto
+Brave or Bing when its key is set, else keyless DuckDuckGo.
+@item brave
+Brave Search (needs a key).
+@item bing
+Bing Search (needs a key).
+@item duckduckgo
+Keyless DuckDuckGo (best-effort, no SLA).
+@item nil
+Disabled.
+@end table
+
+Keyed backends read @code{cmacs-ai-search-api-key}, falling back to the
+@code{BRAVE_API_KEY} / @code{BING_API_KEY} environment variable.  A keyed
+provider with no key available logs a message and leaves @code{web_search}
+off; @code{auto} always succeeds thanks to the keyless fallback.
+
+Once registered, the model may use the tool's options: @code{count},
+@code{freshness} (any/day/week/month/year), @code{safesearch}
+(off/moderate/strict), @code{country}, @code{language}, @code{site}, and
+@code{fetch_content} (fetch and attach the top results' page text via the
+@code{web_fetch} pipeline).  Results are cached in-process for five
+minutes.  Switch the backend for an open chat at runtime with
+@kbd{M-x cmacs-ai-chat-set-search-provider}; inspect the active tool set
+with @code{(cmacs-ai-tools-list @var{executor})}.
+
+@subsection Inline Images
+
+When @code{cmacs-ai-chat-inline-images} is non-nil (the default), image
+links in an assistant response render inline after each turn.  Have the
+model embed images as bare Org links, e.g.@:
+@code{[[https://host/pic.png]]} (a described link @code{[[url][text]]}
+shows the text, not the image).  Local/file images preview synchronously
+via Org; remote @code{http(s)} images are fetched @emph{asynchronously}
+and shown when they arrive, so a slow or dead URL never blocks Emacs
+(Org's own remote-image download is synchronous and would freeze the UI).
+Non-image responses, error statuses, and undecodable data are ignored
+silently.  Width is capped at @code{cmacs-ai-chat-image-max-width} (or
+~92% of the chat window); @kbd{C-c C-x C-v} (@code{org-link-preview})
+clears the previews.
 
 @node CMacs AI Image Generation
 @section Image Generation
@@ -373,6 +426,17 @@ Default max output tokens.  Default @code{4096}.
 Built-in tools advertised to the model.
 @item cmacs-ai-tool-confirm
 @code{nil} (never prompt) / @code{'destructive} / function.
+@item cmacs-ai-search-provider
+Backend for the @code{web_search} tool: @code{auto} (default),
+@code{brave}, @code{bing}, @code{duckduckgo}, or @code{nil} (disabled).
+@item cmacs-ai-search-api-key
+API key for Brave/Bing, or @code{nil} to read @code{BRAVE_API_KEY} /
+@code{BING_API_KEY} from the environment.
+@item cmacs-ai-chat-inline-images
+Render image links in assistant responses inline (default @code{t});
+remote images are fetched asynchronously.
+@item cmacs-ai-chat-image-max-width
+Max inline image width in pixels (default 800).
 @item cmacs-ai-chat-dir
 Where auto-saved chats land.
 @item cmacs-ai-config-file

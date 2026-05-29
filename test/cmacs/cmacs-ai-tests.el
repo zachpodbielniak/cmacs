@@ -260,6 +260,146 @@ non-hinted ones."
           (should (integerp cmacs-ai-chat-tool-executor)))
       (kill-buffer buf))))
 
+;;;; web_search wiring (registration only, no network) -------------
+
+(ert-deftest cmacs-ai-tools-list-has-web-fetch-not-search ()
+  "A fresh executor advertises web_fetch (a built-in) but not
+web_search (which needs a provider)."
+  (skip-unless (fboundp 'cmacs-ai-tools-list))
+  (let ((exec (cmacs-ai-tools-new)))
+    (unwind-protect
+        (let ((tools (cmacs-ai-tools-list exec)))
+          (should (member "web_fetch" tools))
+          (should (member "bash" tools))
+          (should-not (member "web_search" tools)))
+      (cmacs-ai-tools-free exec))))
+
+(ert-deftest cmacs-ai-set-search-provider-duckduckgo ()
+  "Setting the keyless DuckDuckGo provider registers web_search."
+  (skip-unless (fboundp 'cmacs-ai-tools-set-search-provider))
+  (let ((exec (cmacs-ai-tools-new)))
+    (unwind-protect
+        (progn
+          (should (eq t (cmacs-ai-tools-set-search-provider
+                         exec 'duckduckgo)))
+          (should (member "web_search" (cmacs-ai-tools-list exec))))
+      (cmacs-ai-tools-free exec))))
+
+(ert-deftest cmacs-ai-set-search-provider-auto ()
+  "The `auto' provider always registers web_search (keyless fallback)."
+  (skip-unless (fboundp 'cmacs-ai-tools-set-search-provider))
+  (let ((exec (cmacs-ai-tools-new)))
+    (unwind-protect
+        (progn
+          (should (eq t (cmacs-ai-tools-set-search-provider exec 'auto)))
+          (should (member "web_search" (cmacs-ai-tools-list exec))))
+      (cmacs-ai-tools-free exec))))
+
+(ert-deftest cmacs-ai-set-search-provider-brave-needs-key ()
+  "A keyed provider with no key available signals an error and leaves
+web_search unregistered."
+  (skip-unless (fboundp 'cmacs-ai-tools-set-search-provider))
+  ;; Only meaningful when no Brave key is present in the environment.
+  (skip-unless (not (getenv "BRAVE_API_KEY")))
+  (let ((exec (cmacs-ai-tools-new)))
+    (unwind-protect
+        (progn
+          (should-error (cmacs-ai-tools-set-search-provider exec 'brave))
+          (should-not (member "web_search" (cmacs-ai-tools-list exec)))
+          ;; An explicit key argument bypasses the env requirement.
+          (should (eq t (cmacs-ai-tools-set-search-provider
+                         exec 'brave "dummy-key")))
+          (should (member "web_search" (cmacs-ai-tools-list exec))))
+      (cmacs-ai-tools-free exec))))
+
+(ert-deftest cmacs-ai-set-search-provider-unknown-errors ()
+  "An unknown provider symbol signals an error."
+  (skip-unless (fboundp 'cmacs-ai-tools-set-search-provider))
+  (let ((exec (cmacs-ai-tools-new)))
+    (unwind-protect
+        (should-error (cmacs-ai-tools-set-search-provider exec 'nope))
+      (cmacs-ai-tools-free exec))))
+
+(ert-deftest cmacs-ai-web-search-auto-on-chat-init ()
+  "Opening a chat buffer with `cmacs-ai-search-provider' set registers
+web_search on the buffer's executor."
+  (skip-unless (fboundp 'cmacs-ai-chat-open))
+  (skip-unless (fboundp 'cmacs-ai-tools-set-search-provider))
+  (let ((cmacs-ai-chat-enable-tools t)
+        (cmacs-ai-search-provider 'duckduckgo)
+        (buf (cmacs-ai-chat-open 'claude)))
+    (unwind-protect
+        (with-current-buffer buf
+          (should (integerp cmacs-ai-chat-tool-executor))
+          (should (member "web_search"
+                          (cmacs-ai-tools-list cmacs-ai-chat-tool-executor))))
+      (kill-buffer buf))))
+
+;;;; Inline image preview (no network / no display needed) ---------
+
+(ert-deftest cmacs-ai-chat-http-image-bytes-ok ()
+  "An HTTP 2xx image response yields its body bytes."
+  (skip-unless (fboundp 'cmacs-ai-chat--http-image-bytes))
+  (with-temp-buffer
+    (insert "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\n"
+            "Content-Length: 5\r\n\r\nHELLO")
+    (should (equal (cmacs-ai-chat--http-image-bytes) "HELLO"))))
+
+(ert-deftest cmacs-ai-chat-http-image-bytes-rejects-non-image ()
+  "Non-image content types and non-2xx statuses yield nil."
+  (skip-unless (fboundp 'cmacs-ai-chat--http-image-bytes))
+  (with-temp-buffer
+    (insert "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n<html>")
+    (should (null (cmacs-ai-chat--http-image-bytes))))
+  (with-temp-buffer
+    (insert "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html\r\n\r\nnope")
+    (should (null (cmacs-ai-chat--http-image-bytes)))))
+
+(ert-deftest cmacs-ai-chat-preview-dispatches-remote-image ()
+  "A remote image link triggers an async fetch; a non-image link does not."
+  (skip-unless (fboundp 'cmacs-ai-chat--preview-images))
+  (let ((cmacs-ai-chat-inline-images t)
+        (calls nil))
+    (cl-letf (((symbol-function 'cmacs-ai-chat--fetch-image-async)
+               (lambda (url &rest _) (push url calls))))
+      (with-temp-buffer
+        (org-mode)
+        (insert "[[https://example.com/pic.png]]\n"
+                "[[https://example.com/page.html]]\n")
+        (cmacs-ai-chat--preview-images
+         (copy-marker (point-min) nil) (copy-marker (point-max) t))))
+    (should (member "https://example.com/pic.png" calls))
+    (should-not (member "https://example.com/page.html" calls))))
+
+(ert-deftest cmacs-ai-chat-preview-disabled-noop ()
+  "With `cmacs-ai-chat-inline-images' nil, nothing is dispatched."
+  (skip-unless (fboundp 'cmacs-ai-chat--preview-images))
+  (let ((cmacs-ai-chat-inline-images nil)
+        (calls nil))
+    (cl-letf (((symbol-function 'cmacs-ai-chat--fetch-image-async)
+               (lambda (url &rest _) (push url calls))))
+      (with-temp-buffer
+        (org-mode)
+        (insert "[[https://example.com/pic.png]]\n")
+        (cmacs-ai-chat--preview-images
+         (copy-marker (point-min) nil) (copy-marker (point-max) t))))
+    (should-not calls)))
+
+(ert-deftest cmacs-ai-chat-place-image-overlays ()
+  "place-image builds an image overlay (needs a display + image support)."
+  (skip-unless (fboundp 'cmacs-ai-chat--place-image))
+  (skip-unless (and (display-images-p) (image-type-available-p 'xpm)))
+  (with-temp-buffer
+    (insert "XXXX")
+    (let* ((data "/* XPM */\nstatic char *x[]={\n\"1 1 1 1\",\n\"a c #ff0000\",\n\"a\"};\n")
+           (beg (copy-marker (point-min) nil))
+           (end (copy-marker (point-max) t)))
+      (cmacs-ai-chat--place-image beg end data)
+      (let ((ov (cl-find-if (lambda (o) (overlay-get o 'cmacs-ai-image))
+                            (overlays-in (point-min) (point-max)))))
+        (should ov)
+        (should (eq (car (overlay-get ov 'display)) 'image))))))
+
 ;;;; Integration (network) -----------------------------------------
 
 (defun cmacs-ai-tests--have-claude-key ()

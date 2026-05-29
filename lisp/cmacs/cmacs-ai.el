@@ -131,6 +131,67 @@ chat layer renders a `tool-loop-aborted' heading and stops."
   :type 'integer
   :group 'cmacs-ai)
 
+(defcustom cmacs-ai-chat-inline-images t
+  "When non-nil, image links in assistant responses render inline.
+After each assistant turn the chat layer previews image links in the
+just-rendered text: local/file images via Org (synchronous), and
+remote http/https images fetched ASYNCHRONOUSLY so Emacs never blocks
+on the network.  Failures (non-image content, error status, undecodable
+data) are ignored silently.  The model is asked to embed images as
+bare Org links, e.g. =[[https://host/pic.png]]=."
+  :type 'boolean
+  :group 'cmacs-ai)
+
+(defcustom cmacs-ai-chat-image-max-width 800
+  "Maximum width in pixels for inline images in chat buffers.
+The effective cap is the smaller of this and ~92% of the chat
+window width."
+  :type 'integer
+  :group 'cmacs-ai)
+
+;;;; web_search: which backend (if any) powers ai-glib's web_search
+;;;; tool.  web_fetch is always available (an AiToolExecutor built-in);
+;;;; web_search is registered on a chat buffer's executor only when a
+;;;; provider is set -- which `cmacs-ai-chat--init' does from these
+;;;; settings.  The query options (count, freshness, safesearch,
+;;;; country, language, site, fetch_content) are then offered to the
+;;;; model automatically via the tool schema.
+
+(defcustom cmacs-ai-search-provider 'auto
+  "Backend for ai-glib's web_search tool in chat/agent buffers.
+
+One of:
+  `auto'        Use Brave or Bing when its API key is set, else fall
+                back to the keyless DuckDuckGo backend (best-effort,
+                no SLA).  This makes web_search available out of the
+                box.
+  `brave'       Brave Search -- requires `cmacs-ai-search-api-key' or
+                the BRAVE_API_KEY environment variable.
+  `bing'        Bing Search -- requires `cmacs-ai-search-api-key' or
+                the BING_API_KEY environment variable.
+  `duckduckgo'  Keyless DuckDuckGo (best-effort, no SLA).
+  nil           Disabled -- web_search is not advertised to the model.
+
+A keyed provider with no key available logs a message and simply
+leaves web_search unregistered (the rest of the tools still work).
+Per-buffer override via `(setq-local cmacs-ai-search-provider ...)'
+before the buffer's first send."
+  :type '(choice (const :tag "Auto (Brave/Bing if keyed, else DuckDuckGo)" auto)
+                 (const :tag "Brave Search" brave)
+                 (const :tag "Bing Search" bing)
+                 (const :tag "DuckDuckGo (keyless)" duckduckgo)
+                 (const :tag "Disabled" nil))
+  :group 'cmacs-ai)
+
+(defcustom cmacs-ai-search-api-key nil
+  "API key for the keyed web_search backends (Brave/Bing).
+When nil, the key is read from the BRAVE_API_KEY / BING_API_KEY
+environment variable (matching how provider API keys are sourced).
+Set a string here to override.  Ignored by the keyless DuckDuckGo
+backend."
+  :type '(choice (const :tag "Use environment variable" nil) string)
+  :group 'cmacs-ai)
+
 ;;;; cmacs MCP bridge: exposes cmacs's own MCP tool surface as
 ;;;; additional ai-glib tool callbacks on each chat buffer's executor.
 ;;;; The bridge is the INBOUND mirror of the outbound `ai_*' MCP tools

@@ -102,7 +102,9 @@ function for custom approval.
 
 The =web_fetch= built-in is model-aware: HTML responses are converted
 to readable markdown-style text (scripts and styles stripped, headings
-and links preserved), =http://= URLs are upgraded to =https://=, a real
+and links preserved; images surface as Markdown =![alt](URL)= with the
+src resolved to an absolute URL, so the model can cite or embed real
+image links), =http://= URLs are upgraded to =https://=, a real
 =User-Agent= and a 30-second timeout are applied, and converted bodies
 are cached in-process for 15 minutes.  It accepts an optional =prompt=
 argument -- when the model supplies one, a sub-model reads the fetched
@@ -127,6 +129,62 @@ Custom Elisp tools are registered via =cmacs-ai-tools-register=:
                                   (json-read-from-string input-json)))
            "opened"))))
 #+END_SRC
+
+** Web search
+
+ai-glib's =web_search= tool returns ranked results (title, URL, source
+domain, snippet) and can optionally fetch the top results' pages.
+Unlike =web_fetch= it is not a free built-in -- it is registered on a
+chat/agent buffer's executor only when a search backend is configured.
+=cmacs-ai-chat--init= does this automatically from
+=cmacs-ai-search-provider= (default ='auto=):
+
+| Provider symbol | Backend                                          |
+|-----------------+--------------------------------------------------|
+| =auto=          | Brave or Bing if its key is set, else DuckDuckGo |
+| =brave=         | Brave Search (needs a key)                       |
+| =bing=          | Bing Search (needs a key)                        |
+| =duckduckgo=    | Keyless DuckDuckGo (best-effort, no SLA)         |
+| =nil=           | Disabled                                         |
+
+Keyed backends read =cmacs-ai-search-api-key=, falling back to the
+=BRAVE_API_KEY= / =BING_API_KEY= environment variable.  A keyed
+provider with no key available logs a message and leaves =web_search=
+off; =auto= always succeeds thanks to the keyless fallback.
+
+Once registered, the model may pass the tool's options: =count=,
+=freshness= (any/day/week/month/year), =safesearch=
+(off/moderate/strict), =country=, =language=, =site=, and
+=fetch_content= (fetch and attach the top results' page text via the
+=web_fetch= pipeline).  Results are cached in-process for 5 minutes.
+
+Switch the backend for an open chat at runtime with
+=M-x cmacs-ai-chat-set-search-provider=.  Inspect the active tool set
+with =(cmacs-ai-tools-list EXECUTOR)= -- it lists the built-ins,
+=web_search= (once a provider is set), custom tools, and bridged MCP
+tools.
+
+#+BEGIN_SRC elisp
+;; Enable web_search explicitly on a standalone executor.
+(let ((exec (cmacs-ai-tools-new)))
+  (cmacs-ai-tools-set-search-provider exec 'duckduckgo)
+  (member "web_search" (cmacs-ai-tools-list exec)))   ; => t
+#+END_SRC
+
+** Inline images
+
+When =cmacs-ai-chat-inline-images= is non-nil (the default), image
+links in an assistant response render inline after each turn.  Have
+the model embed images as bare Org links, e.g.
+=[[https://host/pic.png]]= (a described link =[[url][text]]= shows the
+text, not the image).  Local/file images are previewed synchronously
+via Org; remote =http(s)= images are fetched *asynchronously* and
+shown when they arrive, so a slow or dead URL never blocks Emacs
+(Org's own remote-image download is synchronous and would freeze the
+UI).  Non-image responses, error statuses, and undecodable data are
+ignored silently.  Image width is capped at
+=cmacs-ai-chat-image-max-width= (or ~92% of the chat window).
+Toggling =org-link-preview= (=C-c C-x C-v=) clears the previews.
 
 * Image generation
 
@@ -231,6 +289,10 @@ built-ins do (see /Tool use/).  Default nil = full trust.
 | =cmacs-ai-max-tokens=           | 4096                         |
 | =cmacs-ai-enabled-tools=        | full built-in set            |
 | =cmacs-ai-tool-confirm=         | nil                          |
+| =cmacs-ai-search-provider=      | ='auto=                      |
+| =cmacs-ai-search-api-key=       | nil (use environment)        |
+| =cmacs-ai-chat-inline-images=   | t                            |
+| =cmacs-ai-chat-image-max-width= | 800 (px)                     |
 | =cmacs-ai-chat-dir=             | =$XDG_DATA_HOME/cmacs-ai/=    |
 | =cmacs-ai-config-file=          | =$XDG_CONFIG_HOME/ai-glib/config.yaml= |
 | =cmacs-ai-completion-provider=  | ='claude-code=               |

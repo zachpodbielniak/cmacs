@@ -60,6 +60,11 @@
   "Marker into the in-progress assistant heading, or nil when idle.
 Set when a stream starts; cleared on :end / :error.")
 
+(defvar-local cmacs-ai-chat--assistant-start nil
+  "Non-advancing marker at the start of the current assistant body.
+Paired with `cmacs-ai-chat--assistant-marker' (which tracks the end)
+to delimit the just-rendered region for inline image preview.")
+
 (defvar-local cmacs-ai-chat--created-at nil)
 (defvar-local cmacs-ai-chat--save-file nil)
 
@@ -162,6 +167,19 @@ sends the compose body and streams the response into a fresh
            cmacs-ai-mcp-bridge-readonly-only)
         (error
          (message "cmacs-ai: MCP bridge unavailable: %S" err))))
+    ;; Enable ai-glib's web_search tool with the configured backend.
+    ;; `auto' never fails (keyless DuckDuckGo fallback); a keyed
+    ;; provider with no key just logs and leaves web_search off.
+    (when (and cmacs-ai-chat-tool-executor
+               cmacs-ai-search-provider
+               (fboundp 'cmacs-ai-tools-set-search-provider))
+      (condition-case err
+          (cmacs-ai-tools-set-search-provider
+           cmacs-ai-chat-tool-executor
+           cmacs-ai-search-provider
+           cmacs-ai-search-api-key)
+        (error
+         (message "cmacs-ai: web_search unavailable: %S" err))))
     (setq-local cmacs-ai-chat--created-at (current-time))
     (setq-local cmacs-ai-chat--compose-marker
                 (save-excursion (goto-char (point-max)) (point-marker)))
@@ -178,6 +196,26 @@ sends the compose body and streams the response into a fresh
     (cmacs-ai-chat--init buf p)
     (switch-to-buffer buf)
     buf))
+
+(defun cmacs-ai-chat-set-search-provider (provider &optional api-key)
+  "Switch the web_search backend for the current chat buffer to PROVIDER.
+Interactively prompts for PROVIDER (auto/brave/bing/duckduckgo).
+Re-registers ai-glib's web_search tool on this buffer's executor;
+takes effect on the next send.  Optional API-KEY overrides
+`cmacs-ai-search-api-key' / the environment for keyed providers."
+  (interactive
+   (list (intern (completing-read
+                  "web_search provider: "
+                  '("auto" "brave" "bing" "duckduckgo") nil t))))
+  (unless cmacs-ai-chat-tool-executor
+    (user-error "This chat buffer has no tool executor"))
+  (unless (fboundp 'cmacs-ai-tools-set-search-provider)
+    (user-error "cmacs was built without web_search support"))
+  (cmacs-ai-tools-set-search-provider
+   cmacs-ai-chat-tool-executor provider
+   (or api-key cmacs-ai-search-api-key))
+  (setq-local cmacs-ai-search-provider provider)
+  (message "cmacs-ai: web_search now uses %s" provider))
 
 ;;;; Label resolution ------------------------------------------------
 
@@ -357,7 +395,13 @@ reason or `cmacs-ai-chat-tool-loop-max-turns' is reached."
         (:start
          (setq cmacs-ai-chat--assistant-marker
                (cmacs-ai-chat--insert-heading
-                buf (cmacs-ai-chat--assistant-label) "")))
+                buf (cmacs-ai-chat--assistant-label) ""))
+         ;; A non-advancing twin marker pins the body start, so :end can
+         ;; preview the whole just-rendered region (the advancing marker
+         ;; above tracks the end).
+         (setq cmacs-ai-chat--assistant-start
+               (and cmacs-ai-chat--assistant-marker
+                    (copy-marker cmacs-ai-chat--assistant-marker nil))))
         (:delta
          (let ((chunk (cadr payload)))
            (cmacs-ai-chat--append-at-marker
@@ -379,7 +423,12 @@ reason or `cmacs-ai-chat-tool-loop-max-turns' is reached."
               3)
              (push (list name input id) cmacs-ai-chat--pending-tool-uses))))
         (:end
+         ;; Preview image links in the region we just rendered before the
+         ;; markers are cleared.
+         (cmacs-ai-chat--preview-images cmacs-ai-chat--assistant-start
+                                        cmacs-ai-chat--assistant-marker)
          (setq cmacs-ai-chat--assistant-marker nil)
+         (setq cmacs-ai-chat--assistant-start nil)
          (cmacs-ai-chat-save-quietly)
          ;; If the model stopped to call tools and we have any pending,
          ;; drive the loop.  Otherwise the turn is done -- reset depth.
@@ -391,8 +440,108 @@ reason or `cmacs-ai-chat-tool-loop-max-turns' is reached."
          (cmacs-ai-chat--insert-heading
           buf "error" (cadr payload))
          (setq cmacs-ai-chat--assistant-marker nil)
+         (setq cmacs-ai-chat--assistant-start nil)
          (setq cmacs-ai-chat--tool-loop-depth 0)
          (setq cmacs-ai-chat--pending-tool-uses nil))))))
+
+;;;; Inline image preview ------------------------------------------
+;;
+;; Assistant responses often embed image links.  Local/file images are
+;; rendered synchronously via Org (fast); remote http(s) images are
+;; fetched ASYNCHRONOUSLY so Emacs never blocks on the network (Org's
+;; own remote-image download is synchronous and would freeze the UI).
+;; Remote images are decoded and shown as overlays registered with Org's
+;; preview machinery so `org-link-preview' toggling clears them too.
+
+(defun cmacs-ai-chat--image-max-width ()
+  "Pixel cap for inline images, sized to the chat window when possible."
+  (let ((win (get-buffer-window (current-buffer) t)))
+    (max 200 (min cmacs-ai-chat-image-max-width
+                  (if win (floor (* 0.92 (window-body-width win t)))
+                    cmacs-ai-chat-image-max-width)))))
+
+(defun cmacs-ai-chat--place-image (beg end data)
+  "Overlay an image decoded from DATA (raw bytes) on region [BEG,END).
+No-op when DATA is not a decodable image."
+  (when (and (markerp beg) (markerp end)
+             (marker-position beg) (marker-position end)
+             (display-images-p))
+    (let ((img (ignore-errors
+                 (create-image data nil t
+                               :max-width (cmacs-ai-chat--image-max-width)))))
+      (when img
+        (let ((ov (make-overlay beg end)))
+          (overlay-put ov 'display img)
+          (overlay-put ov 'cmacs-ai-image t)
+          (overlay-put ov 'keymap image-map)
+          (overlay-put ov 'evaporate t)
+          ;; Hook into Org's preview list so org-link-preview toggling
+          ;; clears our overlays alongside its own.
+          (when (boundp 'org-link-preview-overlays)
+            (push ov org-link-preview-overlays)))))))
+
+(defun cmacs-ai-chat--http-image-bytes ()
+  "In a `url-retrieve' result buffer, return image body bytes, or nil.
+Requires an HTTP 2xx status and an image (or absent) Content-Type."
+  (goto-char (point-min))
+  (when (re-search-forward "\\`HTTP/[0-9.]+ \\([0-9]+\\)" nil t)
+    (let ((code (string-to-number (match-string 1)))
+          (ct nil))
+      (save-excursion
+        (goto-char (point-min))
+        (when (re-search-forward "^[Cc]ontent-[Tt]ype:[ \t]*\\([^ \t\r\n;]+\\)"
+                                 nil t)
+          (setq ct (match-string 1))))
+      (when (and (>= code 200) (< code 300)
+                 (or (null ct) (string-prefix-p "image/" ct)))
+        (goto-char (point-min))
+        (when (re-search-forward "\r?\n\r?\n" nil t)
+          (buffer-substring-no-properties (point) (point-max)))))))
+
+(defun cmacs-ai-chat--fetch-image-async (url buf beg end)
+  "Fetch image URL asynchronously and overlay it on [BEG,END) in BUF."
+  (condition-case nil
+      (url-retrieve
+       url
+       (lambda (status)
+         (let ((rbuf (current-buffer)))
+           (unwind-protect
+               (unless (plist-get status :error)
+                 (let ((data (cmacs-ai-chat--http-image-bytes)))
+                   (when (and data (buffer-live-p buf))
+                     (with-current-buffer buf
+                       (cmacs-ai-chat--place-image beg end data)))))
+             (when (buffer-live-p rbuf) (kill-buffer rbuf)))))
+       nil t t)
+    (error nil)))
+
+(defun cmacs-ai-chat--preview-images (start endm)
+  "Preview image links between markers START and ENDM.
+Local images via Org (synchronous); remote http(s) images fetched
+async.  No-op unless `cmacs-ai-chat-inline-images' is set."
+  (when (and cmacs-ai-chat-inline-images
+             (markerp start) (markerp endm)
+             (marker-position start) (marker-position endm)
+             (< (marker-position start) (marker-position endm)))
+    (let ((b (marker-position start))
+          (e (marker-position endm))
+          (img-re (image-file-name-regexp)))
+      ;; Local/file links now -- bind remote to skip so Org never blocks.
+      (when (fboundp 'org-link-preview-region)
+        (let ((org-display-remote-inline-images 'skip))
+          (ignore-errors (org-link-preview-region nil nil b e))))
+      ;; Remote image links: dispatch async fetches.
+      (save-excursion
+        (goto-char b)
+        (while (re-search-forward org-link-bracket-re e t)
+          (let ((url  (match-string-no-properties 1))
+                (lbeg (match-beginning 0))
+                (lend (match-end 0)))
+            (when (and (string-match-p "\\`https?://" url)
+                       (string-match-p img-re url))
+              (cmacs-ai-chat--fetch-image-async
+               url (current-buffer)
+               (copy-marker lbeg) (copy-marker lend)))))))))
 
 (defun cmacs-ai-chat--apply-pre-prompt (text)
   "Return TEXT with `cmacs-ai-pre-prompt' prepended (if set).
