@@ -85,7 +85,10 @@ detect_platform () {
 set_packages_fedora () {
 	PKGS_BUILD=(autoconf automake gcc make pkgconf-pkg-config texinfo)
 	PKGS_CORE=(gnutls-devel ncurses-devel zlib-devel)
-	PKGS_GUI=(gtk3-devel)
+	# webkit2gtk4.1-devel: --with-xwidgets (xwidget-webkit browser
+	# buffers).  Must be the 4.1 (GTK3 / libsoup3) ABI -- the 6.0
+	# package is GTK4-only and unusable from Emacs pgtk (GTK3).
+	PKGS_GUI=(gtk3-devel webkit2gtk4.1-devel)
 	PKGS_NCOMP=(libgccjit-devel)
 	PKGS_IMAGE=(libXpm-devel libjpeg-turbo-devel giflib-devel libtiff-devel
 	            librsvg2-devel libwebp-devel ImageMagick-devel)
@@ -164,7 +167,7 @@ set_packages_fedora () {
 set_packages_debian () {
 	PKGS_BUILD=(autoconf automake gcc make pkg-config texinfo)
 	PKGS_CORE=(libgnutls28-dev libncurses-dev zlib1g-dev)
-	PKGS_GUI=(libgtk-3-dev)
+	PKGS_GUI=(libgtk-3-dev libwebkit2gtk-4.1-dev)
 	PKGS_NCOMP=(libgccjit-13-dev)
 	PKGS_IMAGE=(libxpm-dev libjpeg-dev libgif-dev libtiff-dev
 	            librsvg2-dev libwebp-dev libmagickwand-dev)
@@ -197,7 +200,7 @@ set_packages_debian () {
 set_packages_arch () {
 	PKGS_BUILD=(autoconf automake gcc make pkgconf texinfo)
 	PKGS_CORE=(gnutls ncurses zlib)
-	PKGS_GUI=(gtk3)
+	PKGS_GUI=(gtk3 webkit2gtk-4.1)
 	PKGS_NCOMP=(libgccjit)
 	PKGS_IMAGE=(libxpm libjpeg-turbo giflib libtiff librsvg libwebp imagemagick)
 	PKGS_TEXT=(libotf m17n-lib)

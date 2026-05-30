@@ -11,6 +11,7 @@
   --with-tree-sitter --with-sqlite3 --with-json \
   --with-rsvg --with-jpeg --with-png --with-gif \
   --with-tiff --with-webp --with-xpm --with-gpm=no \
+  --with-xwidgets \
   --with-cmacs-glib --with-cmacs-gi --with-cmacs-crispy \
   --with-cmacs-bacon --with-cmacs-gowl \
   --with-cmacs-podomation --with-cmacs-libreclaw \

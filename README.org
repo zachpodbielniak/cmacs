@@ -401,6 +401,7 @@ cd cmacs
   --with-webp \
   --with-xpm \
   --with-gpm=no \
+  --with-xwidgets \
   --with-cmacs-glib \
   --with-cmacs-gi \
   --with-cmacs-crispy \
@@ -510,6 +511,7 @@ Requires =autoconf= (>= 2.65) and =automake=.
   --with-webp \
   --with-xpm \
   --with-gpm=no \
+  --with-xwidgets \
   --with-cmacs-glib \
   --with-cmacs-gi \
   --with-cmacs-crispy \
@@ -544,6 +546,11 @@ Emacs flags:
 - =--with-rsvg= --- SVG image rendering
 - =--with-jpeg/png/gif/tiff/webp/xpm= --- image format support
 - =--with-gpm=no= --- disable GPM console mouse (not needed on desktop)
+- =--with-xwidgets= --- embedded GTK widgets in buffers, incl. the
+  =xwidget-webkit= browser (JavaScript-capable web pages as buffers).
+  Requires =webkit2gtk4.1-devel= (the GTK3 ABI; the 6.0 package is
+  GTK4-only and unusable from pgtk).  =install-deps= pulls it in.
+  Configure *errors* if the flag is given without WebKitGTK 4.1 present.
 
 Module flags:
 

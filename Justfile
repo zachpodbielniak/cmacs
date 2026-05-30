@@ -48,6 +48,7 @@ configure_flags := """
     --with-webp
     --with-xpm
     --with-gpm=no
+    --with-xwidgets
     --with-cmacs-glib
     --with-cmacs-gi
     --with-cmacs-crispy

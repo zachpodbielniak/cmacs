@@ -34,6 +34,7 @@ RUN if [ "${FEDORA_VERSION}" -ge 44 ] 2>/dev/null; then \
         autoconf automake gcc gcc-c++ make pkgconf-pkg-config texinfo \
         gnutls-devel ncurses-devel zlib-devel \
         gtk3-devel \
+        webkit2gtk4.1-devel \
         libgccjit-devel \
         libXpm-devel libjpeg-turbo-devel giflib-devel libtiff-devel \
         librsvg2-devel libwebp-devel \
@@ -138,6 +139,7 @@ RUN ./autogen.sh \
         --with-webp \
         --with-xpm \
         --with-gpm=no \
+        --with-xwidgets \
         --with-cmacs-glib \
         --with-cmacs-gi \
         --with-cmacs-crispy \
