@@ -161,17 +161,23 @@ proceed to mark and unmark other entries, without asking."
   :version "31.1")
 
 (defcustom vc-dir-auto-hide-up-to-date nil
-  "If non-nil, VC-Dir automatically hides \\+`up-to-date' and \\+`ignored' items.
+  "Whether VC-Dir auto-removes \\+`up-to-date'/\\+`ignored' files from display.
 
-If the value of this variable is the symbol `revert', \
-\\<vc-dir-mode-map>\\[revert-buffer] in VC-Dir
-buffers also does \\[vc-dir-hide-up-to-date].  \
-That is, refreshing the VC-Dir buffer also hides
-\\+`up-to-date' and \\+`ignored' items.
+If the value is nil, files shown in the VC-Dir buffer will remain on
+display if they become \\+`up-to-date' or \\+`ignored'.
+If the value is t, files are automatically removed from display when
+they become \\+`up-to-date' or \\+`ignored'.
+If the value is the symbol `revert', any displayed files that
+are \\+`up-to-date' or \\+`ignored' are removed from display
+by \\<vc-dir-mode-map>\\[revert-buffer], but they are not automatically removed
+when they become \\+`up-to-date' or \\+`ignored'.  That is,
+refreshing the VC-Dir buffer hides \\+`up-to-date' and \\+`ignored'
+files when the value is the symbol `revert'.
+Any other value is treated as t.
 
-If the value of this variable is any other non-nil value, then in
-addition, hide items whenever their state would change to
-\\+`up-to-date' or \\+`ignored'.
+VC-Dir never shows \\+`up-to-date' and \\+`ignored' files when the
+directory is first displayed.
+
 You can still use `vc-dir-show-fileentry' to manually add an entry for
 an \\+`up-to-date' or \\+`ignored' file."
   :type 'boolean
@@ -1262,6 +1268,7 @@ that file."
     (nreverse result)))
 
 (defun vc-dir-recompute-file-state (fname def-dir)
+  "Compute state of FNAME known to live inside DEF-DIR."
   (let* ((file-short (file-relative-name fname def-dir))
 	 (_remove-me-when-CVS-works
 	  (when (eq vc-dir-backend 'CVS)
@@ -1305,8 +1312,9 @@ that file."
 
 (defun vc-dir-resynch-file (&optional fname)
   "Update the entries for FNAME in any directory buffers that list it."
-  (let ((file (file-truename (or fname buffer-file-name)))
-        (drop '()))
+  (let* ((file  (or fname buffer-file-name))
+         (file-tn (file-truename file))
+         (drop '()))
     (save-current-buffer
       ;; look for a vc-dir buffer that might show this file.
       (dolist (status-buf vc-dir-buffers)
@@ -1324,13 +1332,15 @@ that file."
                          ;; `default-directory' in order to do its work,
                          ;; but that's irrelevant to us here.
                          (buffer-local-toplevel-value 'default-directory))))
-              (when (file-in-directory-p file ddir)
-                (if (file-directory-p file)
+              (when (file-in-directory-p file-tn ddir)
+                (if (file-directory-p file-tn)
 		    (progn
-		      (vc-dir-resync-directory-files file)
+		      (vc-dir-resync-directory-files file-tn)
 		      (ewoc-set-hf vc-ewoc
 				   (vc-dir-headers vc-dir-backend ddir) ""))
-                  (let* ((complete-state (vc-dir-recompute-file-state file ddir))
+                  (let* ((complete-state
+                          ;; Pass FILE not FILE-TN here.  See bug#80967.
+                          (vc-dir-recompute-file-state file ddir))
 			 (state (cadr complete-state)))
                     (vc-dir-update
                      (list complete-state)

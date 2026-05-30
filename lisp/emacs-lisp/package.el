@@ -468,7 +468,7 @@ BI-DESC should be a `package--bi-desc' object."
                        :summary (package--bi-desc-summary bi-desc)
                        :dir 'builtin))
 
-(defconst package--builtin-alist nil)
+(defvar package--builtin-alist nil)
 (defun package--builtin-alist ()
   "Return a alist of built-in packages in the form of `package-alist'.
 The alist doesn't include the pseudo-package for Emacs."
@@ -2566,7 +2566,7 @@ intended for testing Emacs and/or the packages in a clean environment."
   (interactive
    (cl-loop for p in (append
                       (cl-loop for p in (package--alist) append (cdr p))
-                      (cl-loop for p in package-archive-contents append (cdr p)))
+                      (cl-loop for p in (package--archive-contents) append (cdr p)))
 	    unless (package-built-in-p p)
 	    collect (cons (package-desc-full-name p) p) into table
 	    finally return
@@ -4814,6 +4814,10 @@ find FILE."
 ;; byte-compile-warnings: (not make-local)
 ;; End:
 "))
+    (with-demoted-errors "%S"
+      ;; The `.elc' file is now stale.  Remove it so it doesn't affect
+      ;; its own compilation or lingers in case of compilation failure.
+      (delete-file (concat package-quickstart-file "c")))
     ;; FIXME: Do it asynchronously in an Emacs subprocess, and
     ;; don't show the byte-compiler warnings.
     (byte-compile-file package-quickstart-file)))

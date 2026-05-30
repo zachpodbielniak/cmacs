@@ -23,7 +23,7 @@ dnl  along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.
 
 AC_PREREQ([2.65])
 dnl Note this is parsed by (at least) make-dist and lisp/cedet/ede/emacs.el.
-AC_INIT([GNU Emacs], [31.0.50], [bug-gnu-emacs@gnu.org], [],
+AC_INIT([GNU Emacs], [32.0.50], [bug-gnu-emacs@gnu.org], [],
   [https://www.gnu.org/software/emacs/])
 
 if test "$XCONFIGURE" = "android"; then
@@ -2220,6 +2220,10 @@ AC_DEFUN([gt_TYPE_WINT_T],
 AC_DEFUN([gl_TYPE_OFF64_T],
   [HAVE_OFF64_T=1
    AC_SUBST([HAVE_OFF64_T])])
+# Emacs does not want Gnulib's fixes for glibc bug 20381 or for
+# Unicode-compatible case matching, as that brings in too many Gnulib files.
+AC_DEFINE([_REGEX_AVOID_UCHAR_H], [1],
+  [Define to 1 so that the Gnulib regex module does not use Gnulib uchar-h.])
 
 # Initialize gnulib right after choosing the compiler.
 dnl Amongst other things, this sets AR and ARFLAGS.
@@ -2708,44 +2712,7 @@ if test $opsys = darwin; then
   AC_PATH_PROG([HAVE_MACPORTS], [port])
 fi
 
-## Require makeinfo >= 4.13 (last of the 4.x series) to build the manuals.
-: ${MAKEINFO:=makeinfo}
-case `($MAKEINFO --version) 2>/dev/null` in
-  *' (GNU texinfo) '4.1[[3-9]]* | \
-  *' (GNU texinfo) '[[5-9]]* | \
-  *' (GNU texinfo) '[[1-9][0-9]]* ) ;;
-  *) MAKEINFO=no;;
-esac
-
-## Makeinfo is unusual.  For a released Emacs, the manuals are
-## pre-built, and not deleted by the normal clean rules.  makeinfo is
-## therefore in the category of "special tools" not normally required, which
-## configure does not have to check for (eg autoconf itself).
-## In a repository checkout on the other hand, the manuals are not included.
-## So makeinfo is a requirement to build from the repository, and configure
-## should test for it as it does for any other build requirement.
-## We use the presence of $srcdir/info/emacs to distinguish a release,
-## with pre-built manuals, from a repository checkout.
-if test "$MAKEINFO" = "no"; then
-  MAKEINFO=makeinfo
-  if test ! -e "$srcdir/info/emacs" && test ! -e "$srcdir/info/emacs.info"; then
-    AC_MSG_ERROR( [You do not seem to have makeinfo >= 4.13, and your
-source tree does not seem to have pre-built manuals in the 'info' directory.
-Please install a suitable version of makeinfo.] )
-  else
-    AC_MSG_WARN( [You do not seem to have makeinfo >= 4.13.
-You will not be able to rebuild the manuals if you delete them or change
-their sources.] )
-  fi
-fi
-AC_SUBST([MAKEINFO])
-
-if test $opsys = mingw32; then
-   DOCMISC_W32=efaq-w32
-else
-   DOCMISC_W32=
-fi
-AC_SUBST([DOCMISC_W32])
+gl_TEXINFO
 
 dnl Add our options to ac_link now, after it is set up.
 
@@ -5715,6 +5682,7 @@ AC_SUBST_FILE([module_env_snippet_28])
 AC_SUBST_FILE([module_env_snippet_29])
 AC_SUBST_FILE([module_env_snippet_30])
 AC_SUBST_FILE([module_env_snippet_31])
+AC_SUBST_FILE([module_env_snippet_32])
 module_env_snippet_25="$srcdir/src/module-env-25.h"
 module_env_snippet_26="$srcdir/src/module-env-26.h"
 module_env_snippet_27="$srcdir/src/module-env-27.h"
@@ -5722,6 +5690,7 @@ module_env_snippet_28="$srcdir/src/module-env-28.h"
 module_env_snippet_29="$srcdir/src/module-env-29.h"
 module_env_snippet_30="$srcdir/src/module-env-30.h"
 module_env_snippet_31="$srcdir/src/module-env-31.h"
+module_env_snippet_32="$srcdir/src/module-env-32.h"
 emacs_major_version=`AS_ECHO([$PACKAGE_VERSION]) | sed 's/[[.]].*//'`
 AC_SUBST([emacs_major_version])
 

@@ -1719,7 +1719,7 @@ from which to check out the file(s)."
             (t
              (vc-register vc-fileset))))
      ((eq state 'missing)
-      (vc-delete-file files))
+      (vc-delete-file fileset-only-files))
      ;; Files are up-to-date, or need a merge and user specified a revision
      ((or (eq state 'up-to-date) (and verbose (eq state 'needs-update)))
       (cond
@@ -5772,7 +5772,7 @@ If ALLOW-CURRENT is non-nil, allow selecting the current working tree."
                    'require-known))
     (if (string-empty-p res) (vc-root-dir) res)))
 
-(defvar project-current-directory-override)
+(defvar project-find-matching-buffer-function)
 
 ;;;###autoload
 (defun vc-switch-working-tree (directory)
@@ -5786,8 +5786,14 @@ to the root of this working tree."
    (list
     (vc--prompt-other-working-tree (vc-responsible-backend default-directory)
                                    "Other working tree to visit")))
-  (let ((project-current-directory-override directory))
-    (project-find-matching-buffer)))
+  (let ((backend (or (vc-deduce-backend)
+                     (vc-responsible-backend default-directory)
+                     (error "No VC backend"))))
+    ;; Skip to the VC root, otherwise `project-current' could find a
+    ;; non-VC project between DEFAULT-DIRECTORY and there (bug#80939).
+    (funcall project-find-matching-buffer-function
+             (project-current nil (vc-root-dir backend))
+             (project-current nil directory))))
 
 ;;;###autoload
 (defun vc-working-tree-switch-project (dir)

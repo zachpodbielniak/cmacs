@@ -6360,13 +6360,13 @@ make_lispy_event (struct input_event *event)
     case NON_ASCII_KEYSTROKE_EVENT:
       button_down_time = 0;
 
-      for (i = 0; i < ARRAYELTS (lispy_accent_codes); i++)
+      for (i = 0; i < countof (lispy_accent_codes); i++)
 	if (event->code == lispy_accent_codes[i])
 	  return modify_event_symbol (i,
 				      event->modifiers,
 				      Qfunction_key, Qnil,
 				      lispy_accent_keys, &accent_key_syms,
-                                      ARRAYELTS (lispy_accent_keys));
+				      countof (lispy_accent_keys));
 
 #if 0
 #ifdef XK_kana_A
@@ -6375,7 +6375,7 @@ make_lispy_event (struct input_event *event)
 				    event->modifiers & ~shift_modifier,
 				    Qfunction_key, Qnil,
 				    lispy_kana_keys, &func_key_syms,
-                                    ARRAYELTS (lispy_kana_keys));
+				    countof (lispy_kana_keys));
 #endif /* XK_kana_A */
 #endif /* 0 */
 
@@ -6386,18 +6386,18 @@ make_lispy_event (struct input_event *event)
 				    event->modifiers,
 				    Qfunction_key, Qnil,
 				    iso_lispy_function_keys, &func_key_syms,
-                                    ARRAYELTS (iso_lispy_function_keys));
+				    countof (iso_lispy_function_keys));
 #endif
 
       if ((FUNCTION_KEY_OFFSET <= event->code
 	   && (event->code
-	       < FUNCTION_KEY_OFFSET + ARRAYELTS (lispy_function_keys)))
+	       < FUNCTION_KEY_OFFSET + countof (lispy_function_keys)))
 	  && lispy_function_keys[event->code - FUNCTION_KEY_OFFSET])
 	return modify_event_symbol (event->code - FUNCTION_KEY_OFFSET,
 				    event->modifiers,
 				    Qfunction_key, Qnil,
 				    lispy_function_keys, &func_key_syms,
-				    ARRAYELTS (lispy_function_keys));
+				    countof (lispy_function_keys));
 
       /* Handle system-specific or unknown keysyms.
 	 We need to use an alist rather than a vector as the cache
@@ -6424,13 +6424,13 @@ make_lispy_event (struct input_event *event)
 		    make_fixnum (event->modifiers));
 
     case MULTIMEDIA_KEY_EVENT:
-      if (event->code < ARRAYELTS (lispy_multimedia_keys)
+      if (event->code < countof (lispy_multimedia_keys)
           && event->code > 0 && lispy_multimedia_keys[event->code])
         {
           return modify_event_symbol (event->code, event->modifiers,
                                       Qfunction_key, Qnil,
                                       lispy_multimedia_keys, &func_key_syms,
-                                      ARRAYELTS (lispy_multimedia_keys));
+				      countof (lispy_multimedia_keys));
         }
       return Qnil;
 #endif
@@ -7529,7 +7529,7 @@ static const char *const modifier_names[] =
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
   0, 0, "alt", "super", "hyper", "shift", "control", "meta"
 };
-#define NUM_MOD_NAMES ARRAYELTS (modifier_names)
+#define NUM_MOD_NAMES countof (modifier_names)
 
 static Lisp_Object modifier_symbols;
 
@@ -12543,11 +12543,17 @@ handle_interrupt_signal (int sig)
   struct terminal *terminal = get_named_terminal (dev_tty);
   if (!terminal)
     {
-      /* If there are no frames there, let's pretend that we are a
-         well-behaving UN*X program and quit.  We must not call Lisp
+      /* There are no frames, so either 'quit' or exit.
+         If 'kill-emacs-on-sigint', pretend that we are a
+         well-behaving UN*X program and exit.  We must not call Lisp
          in a signal handler, so tell maybe_quit to exit when it is
          safe.  */
-      Vquit_flag = Qkill_emacs;
+      Vquit_flag = (kill_emacs_on_sigint
+		    /* Don't risk running ELisp code while shutting down
+		       and limit the effect of 'kill_emacs_on_sigint'
+		       to batch sessions.  */
+		    || NILP (Vrun_hooks) || !noninteractive
+		    ? Qkill_emacs : Qt);
     }
   else
     {
@@ -13224,17 +13230,18 @@ init_keyboard (void)
      it for the initial terminal since there is no window system there.  */
   init_kboard (current_kboard, Qnil);
 
+  /* Before multi-tty support, these handlers used to be installed
+     only if the current session was a tty session.  Now an Emacs
+     session may have multiple display types, so we always handle
+     SIGINT.  There is special code in handle_interrupt_signal to exit
+     Emacs on SIGINT when there are no termcap frames on the
+     controlling terminal.  */
+  struct sigaction action;
+  emacs_sigaction_init (&action, deliver_interrupt_signal);
+  sigaction (SIGINT, &action, 0);
+
   if (!noninteractive)
     {
-      /* Before multi-tty support, these handlers used to be installed
-         only if the current session was a tty session.  Now an Emacs
-         session may have multiple display types, so we always handle
-         SIGINT.  There is special code in handle_interrupt_signal to exit
-         Emacs on SIGINT when there are no termcap frames on the
-         controlling terminal.  */
-      struct sigaction action;
-      emacs_sigaction_init (&action, deliver_interrupt_signal);
-      sigaction (SIGINT, &action, 0);
 #ifndef DOS_NT
       /* For systems with SysV TERMIO, C-g is set up for both SIGINT and
 	 SIGQUIT and we can't tell which one it will give us.  */
@@ -13400,6 +13407,12 @@ syms_of_keyboard (void)
   DEFVAR_LISP ("internal--top-level-message", Vinternal__top_level_message,
 	       doc: /* Message displayed by `normal-top-level'.  */);
   Vinternal__top_level_message = regular_top_level_message;
+
+  DEFVAR_BOOL ("kill-emacs-on-sigint", kill_emacs_on_sigint,
+	       doc: /* If non-nil, a SIGINT event causes Emacs to exit.
+If nil, a SIGINT event causes a `quit` signal instead.
+This is effective only in `noninteractive' sessions.  */);
+  kill_emacs_on_sigint = true;
 
   /* Tool-bars.  */
   DEFSYM (QCimage, ":image");
@@ -13594,7 +13607,7 @@ syms_of_keyboard (void)
   {
     int i;
 
-    for (i = 0; i < ARRAYELTS (head_table); i++)
+    for (i = 0; i < countof (head_table); i++)
       {
 	const struct event_head *p = &head_table[i];
 	Lisp_Object var = builtin_lisp_symbol (p->var);
@@ -13613,12 +13626,12 @@ syms_of_keyboard (void)
   staticpro (&frame_relative_event_pos);
   mouse_syms = make_nil_vector (5);
   staticpro (&mouse_syms);
-  wheel_syms = make_nil_vector (ARRAYELTS (lispy_wheel_names));
+  wheel_syms = make_nil_vector (countof (lispy_wheel_names));
   staticpro (&wheel_syms);
 
   {
     int i;
-    int len = ARRAYELTS (modifier_names);
+    int len = countof (modifier_names);
 
     modifier_symbols = make_nil_vector (len);
     for (i = 0; i < len; i++)

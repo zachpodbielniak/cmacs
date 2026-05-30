@@ -2645,7 +2645,7 @@ ns_convert_key (unsigned code)
     Internal call used by NSView-keyDown.
    -------------------------------------------------------------------------- */
 {
-  const unsigned last_keysym = ARRAYELTS (convert_ns_to_X_keysym);
+  const unsigned last_keysym = countof (convert_ns_to_X_keysym);
   unsigned keysym;
   /* An array would be faster, but less easy to read.  */
   for (keysym = 0; keysym < last_keysym; keysym += 2)
@@ -8421,13 +8421,37 @@ ns_in_echo_area (void)
 }
 
 #ifdef NS_IMPL_COCOA
+static void cancel_ns_deferred_UAZoomChangeFocus_timer ()
+{
+  if (ns_deferred_UAZoomChangeFocus_timer
+      && ns_deferred_UAZoomChangeFocus_timer.valid)
+    {
+      [ns_deferred_UAZoomChangeFocus_timer invalidate];
+      [ns_deferred_UAZoomChangeFocus_timer release];
+    }
+  ns_deferred_UAZoomChangeFocus_timer = nil;
+}
+#endif
+
+- (void)windowWillClose: (NSNotification *)notification
+{
+#ifdef NS_IMPL_COCOA
+  /* Cancel the zoom focus change timer if its window is closed before
+     it runs.  */
+  cancel_ns_deferred_UAZoomChangeFocus_timer ();
+#endif
+}
+
+#ifdef NS_IMPL_COCOA
 - (void)deferred_UAZoomChangeFocus_handler: (NSTimer *)timer
 {
-  EmacsView *view = FRAME_NS_VIEW (emacsframe);
-  ns_UAZoomChangeFocus (view, true);
-  [ns_deferred_UAZoomChangeFocus_timer invalidate];
-  [ns_deferred_UAZoomChangeFocus_timer release];
-  ns_deferred_UAZoomChangeFocus_timer = nil;
+  /* The frame may be deleted before the timer fires.  */
+  if (FRAME_LIVE_P (emacsframe))
+    {
+      EmacsView *view = FRAME_NS_VIEW (emacsframe);
+      ns_UAZoomChangeFocus (view, true);
+    }
+  cancel_ns_deferred_UAZoomChangeFocus_timer ();
 }
 #endif
 

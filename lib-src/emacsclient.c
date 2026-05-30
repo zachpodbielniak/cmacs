@@ -902,7 +902,7 @@ quote_argument_len (HSOCKET s, const char *str, ptrdiff_t len)
 static void
 quote_argument (HSOCKET s, const char *str)
 {
-  return quote_argument_len (s, str, strlen (str));
+  quote_argument_len (s, str, strlen (str));
 }
 
 /* The inverse of quote_argument.  Remove quoting in string STR by
@@ -1034,10 +1034,12 @@ get_server_config (const char *config_file, struct sockaddr_in *server,
       exit (EXIT_FAILURE);
     }
 
-  memset (server, 0, sizeof *server);
-  server->sin_family = AF_INET;
-  server->sin_addr.s_addr = inet_addr (dotted);
-  server->sin_port = htons (atoi (port));
+  *server = (struct sockaddr_in)
+    {
+      .sin_family = AF_INET,
+      .sin_addr.s_addr = inet_addr (dotted),
+      .sin_port = htons (atoi (port))
+    };
   free (dotted);
 
   if (! fread (authentication, AUTH_KEY_LENGTH, 1, config))
