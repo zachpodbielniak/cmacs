@@ -87,7 +87,16 @@ WORKDIR /build/cmacs
 # artifact via AI_GLIB_DIR=).  ai-glib itself is built with GIR=1 so
 # AiGlib-1.0.typelib lands in the system GI search path for downstream
 # consumers (python-gi, gjs, the bacon `cmacsgi' builtin, etc.).
+#
+# The find/rm below is a hermetic-build safety net: even though
+# .containerignore excludes build artifacts, any *.elc/*.eln/native-lisp
+# that leaks in from the COPYed working tree would otherwise be reused by
+# the incremental `make' below (mtime trap) and shipped STALE — notably a
+# tramp-compat.elc byte-compiled under an older Emacs version.  Deleting
+# them forces a fresh compile under this image's Emacs.
 RUN rm -f .git \
+    && find . \( -name '*.elc' -o -name '*.eln' \) -delete \
+    && rm -rf native-lisp src/*.pdmp \
     && for dep in mcp-glib crispy bacon gowl podomation ai-glib libreclaw; do \
            if [ -d "deps/${dep}" ]; then \
                case "${dep}" in \
