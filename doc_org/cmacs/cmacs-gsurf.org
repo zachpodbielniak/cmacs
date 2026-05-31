@@ -1,0 +1,290 @@
+#+TITLE: cmacs-gsurf — embedded web browser
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:2 num:t
+
+* Overview
+
+cmacs-gsurf embeds [[../../deps/gsurf][gsurf]] — a GLib/GObject port of suckless =surf= — as a
+first-class cmacs subsystem.  A =cmacs-gsurf-mode= buffer owns a live
+WebKitGTK view (a =GsurfView=) that is parented into the buffer's pgtk
+frame and clipped to the window showing it (xwidget-style live embed):
+the window body *is* the browser, painted on top of the buffer text.
+
+gsurf is library-first, so cmacs links =libgsurf.a= statically into the
+editor and drives it directly.  surf's "patches" are gsurf *modules*
+(=.so= plugins) that run in-process and apply to the embedded views:
+search engines, ad-block, vim-style modal navigation + link hints,
+history, dark mode, user scripts, and ~25 more.
+
+You can drive gsurf from:
+- *Elisp* — =M-x cmacs-gsurf= and the =cmacs-gsurf-*= commands/DEFUNs.
+- *cmacsgi / GObject Introspection* — =(gi-require "Gsurf" "0.1")= then
+  call the gsurf API; also from the bacon =cmacsgi= builtin.
+- *MCP* — =gsurf_open=, =gsurf_navigate=, =gsurf_current=, … tools.
+- *cmacs-ai* — the MCP =gsurf_*= tools are in the default chat tool tier.
+
+* Requirements
+
+** Build flag
+
+: --with-cmacs-gsurf      (alias: --with-gsurf)
+
+Requires =--with-cmacs-glib= and =--with-pgtk= (the live widget embed
+parents into the pgtk frame's =GtkFixed=).  =--with-cmacs-mcp= adds the
+=gsurf_*= MCP tools; =--with-cmacs-gi= makes the bundled =Gsurf-0.1=
+typelib resolvable for cmacsgi.
+
+** System packages
+
+gsurf reuses the same WebKitGTK/GTK3 stack as =--with-xwidgets=, so no
+new packages are needed beyond a normal cmacs build:
+
+- =webkit2gtk-4.1=, =gtk+-3.0=, =javascriptcoregtk-4.1=
+- =glib-2.0 gobject-2.0 gio-2.0 gmodule-2.0=, =yaml-0.1=, =json-glib-1.0=
+
+* Architecture
+
+| Piece | File |
+|-------+------|
+| Subsystem init + GIR path | =cmacs/gsurf/cmacs-gsurf-init.c= |
+| DEFUN surface | =cmacs/gsurf/cmacs-gsurf-defuns.c= |
+| Buffer<->view registry + live embed | =cmacs/gsurf/cmacs-gsurf-view.c= |
+| Module-manager glue | =cmacs/gsurf/cmacs-gsurf-modules.c= |
+| Elisp mode + commands + MCP helpers | =lisp/cmacs/cmacs-gsurf.el= |
+| MCP tools | =cmacs/mcp/cmacs-mcp-tools-gsurf.c= |
+
+*Static link + dedup.* gsurf is built =STATIC=1 BUILD_GIR=1
+GTK_BACKEND=gtk3=; =libgsurf.a= is =--whole-archive='d into temacs.
+Because =libgsurf.a= merges crispy + yaml-glib objects, the
+=src/Makefile.in= dedup machinery strips them (=_gsurf_strip=) so the
+canonical copies win — never =-z muldefs=.  temacs is linked
+=--export-dynamic=, so the runtime-loaded gsurf module =.so= files
+resolve =gsurf_*=/=yaml_*= against the executable (one library
+instance, no duplicate GType registration).
+
+*Live embed.* =cmacs-gsurf-view.c= holds each buffer's =GsurfView=,
+gets its native =GtkWidget= (=gsurf_view_get_native_widget=), and
+=gtk_fixed_put/move='s it into =FRAME_GTK_WIDGET (f)= sized to the
+window body.  The Elisp =window-configuration-change-hook= /
+=window-size-change-functions= call =cmacs-gsurf-place= to keep the
+widget aligned, and =cmacs-gsurf-hide= for off-screen buffers.
+
+*Events.* The view's =uri-changed= / =title-changed= / =load-changed=
+GObject signals are bridged (through the cmacs safe-dispatch layer) to
+the Emacs abnormal hooks:
+- =cmacs-gsurf-uri-changed-functions=   (BUFFER URI)
+- =cmacs-gsurf-title-changed-functions= (BUFFER TITLE)
+- =cmacs-gsurf-load-changed-functions=  (BUFFER EVENT) — =started= /
+  =committed= / =finished=.
+
+* Buffer & mode
+
+=M-x cmacs-gsurf RET URL-or-search RET= opens a =*gsurf*= buffer.
+
+** Focus model (important)
+
+The window body is a *live GTK widget*.  If it held keyboard focus all
+the time, Emacs (and evil) would never see your keys --- so cmacs-gsurf
+manages focus explicitly:
+
+- A gsurf buffer *starts under Emacs/evil control*.  The page is shown
+  but does not capture keystrokes, so every normal Emacs and evil key
+  works: window management (=C-w v=, =C-w h/j/k/l=), motions, =M-x=,
+  =C-x= ..., plus the commands below.  Under evil the buffer is in
+  *normal* state.
+- *Scrolling works without focusing the page*: =h/j/k/l= (and =C-d/C-u=
+  half-page, =C-f/C-b= full-page, =gg/G= top/bottom) scroll the live page
+  while Emacs holds focus --- the buffer text is a hidden placeholder, so
+  these keys are rebound from evil motions to page scrolling.  =SPC= is
+  *not* bound, so the evil/Doom leader (=SPC b b=, etc.) works normally.
+- *Click links with =f== (vimium-style): press =f= to overlay a chord
+  label on every clickable element, then type the chord to click it
+  (Escape cancels).  This focuses the page and drives gsurf's =modal=
+  module.
+- To *type* into the page, *give it focus*: press =RET= (or =i=), =M-x
+  cmacs-gsurf-focus-page=, or just *click* it.  When focused, gsurf's
+  own =modal= module owns the keys (its own =h/j/k/l=, =f=, =i= insert,
+  …).
+- To hand control back to Emacs: press *Escape* (handled in C --- it
+  pulls focus back and drops evil to normal state; a first Escape in
+  modal insert/follow returns to normal browsing, a second returns to
+  Emacs), =C-c C-g= (=cmacs-gsurf-release-focus=), or simply *select
+  another window* (clicking another Emacs window releases page focus
+  automatically).
+
+So the fix for "the browser ate my keybindings" is: press Escape (or
+click another window) and you are back in evil-normal with =C-w= etc.
+
+** Keymap (while Emacs holds focus)
+
+| Key | Command |
+|-----+---------|
+| =h= / =j= / =k= / =l= | scroll left / down / up / right |
+| =C-d= / =C-u= | half-screen down / up |
+| =C-f= / =C-b= | full-screen down / up |
+| =gg= / =G= (=<= / =>=) | scroll to top / bottom |
+| =f= | =cmacs-gsurf-follow= (vimium link hints) |
+| =RET=, =i=, =C-c C-f= | =cmacs-gsurf-focus-page= (type in page) |
+| =C-c C-g= | =cmacs-gsurf-release-focus= (back to Emacs) |
+| =o=, =C-c C-o= | =cmacs-gsurf-open-url= |
+| =r=, =C-c C-r= | =cmacs-gsurf-reload-buffer= |
+| =R= | =cmacs-gsurf-reload-nocache= |
+| =H= / =B= | =cmacs-gsurf-back-buffer= |
+| =L= / =F= | =cmacs-gsurf-forward-buffer= |
+| =+= =-= / =-= / =0= | zoom in / out / reset |
+| =/= / =s= | =cmacs-gsurf-find-in-page= |
+| =q= | =quit-window= |
+
+(Under evil these are bound in normal+motion state so they aren't
+shadowed by evil motions; =C-w= is deliberately left to evil's window
+map.)  Once the page has focus, gsurf's own =modal= module (vim keys,
+=f= link hints, =i= insert) takes over until you press Escape.
+
+** Use as the default browser
+
+#+begin_src emacs-lisp
+(setq browse-url-browser-function #'cmacs-gsurf-browse-url)
+#+end_src
+
+* Configuration (from Emacs, by default)
+
+cmacs-gsurf does *not* read gsurf's own =~/.config/gsurf/config.yaml=
+(or =config.c=) by default --- it is configured from Emacs.  In fact it
+tells gsurf to ignore YAML entirely (=cmacs-gsurf-ignore-yaml=, default
+=t=, via gsurf's =ignore_yaml= flag).  gsurf modules are *disabled
+unless a config enables them*, so this is also how the vim =modal=
+module (=hjkl= scroll, =f= link hints) gets turned on.
+
+The primary knob is =cmacs-gsurf-modules=, an alist of
+=(MODULE-NAME . PLIST)=.  Each entry is pushed onto the gsurf config
+through gsurf's programmatic C-config setters
+(=gsurf_config_set_module_enabled= / =_set_module_option=) *before the
+modules load* --- no YAML file involved:
+
+#+begin_src emacs-lisp
+(setq cmacs-gsurf-modules
+      '(("modal"          :enabled t :scroll_step 100 :hint_chars "asdfjkl")
+        ("search_engines" :enabled t)
+        ("history"        :enabled t)
+        ("dark_mode"      :enabled t)
+        ("adblock"        :enabled t)))
+#+end_src
+
+PLIST keys: =:enabled BOOL= turns the module on/off (consulted by the
+module manager at load time, taking precedence over any YAML); any other
+=:KEY VALUE= becomes a module option (string/number/boolean, coerced to
+a string for gsurf).  The *default* value enables the windowless
+essentials: =modal=, =search_engines=, =history=.  (Modules that draw
+their own chrome windows --- =chromebar=, =tabs=, =omnibar=, =find_bar=,
+=status_bar= --- are best left disabled in the embedded browser, which
+has no gsurf window.)
+
+After editing in a running session: =M-x cmacs-gsurf-reload-config=
+(programmatic setters apply live to already-loaded modules too).
+
+** Opting in to gsurf's own config files
+
+#+begin_src emacs-lisp
+;; Also read ~/.config/gsurf/config.yaml and config.c if present:
+(setq cmacs-gsurf-load-user-config t)
+
+;; Or load a specific YAML file (overrides `cmacs-gsurf-modules'):
+(setq cmacs-gsurf-config-file "~/my-gsurf.yaml")
+
+;; Or a compiled C config (crispy) -- e.g. a cmacs init.c:
+(setq cmacs-gsurf-config-c-file "~/.config/cmacs/init.c")
+#+end_src
+
+Layering, last wins: =cmacs-gsurf-modules= → user =config.yaml= (if
+opted in) → =cmacs-gsurf-config-file= → C config.
+
+The underlying primitives (usable directly):
+
+- Programmatic setters (gsurf's C-config API, the default path):
+  =cmacs-gsurf-config-set-module-enabled=,
+  =cmacs-gsurf-config-set-module-option=,
+  =cmacs-gsurf-config-set-homepage=, =cmacs-gsurf-set-ignore-yaml=.
+- File / string loaders: =cmacs-gsurf-load-config-data= (a YAML
+  string), =cmacs-gsurf-load-config-file= (a YAML file), and
+  =cmacs-gsurf-load-config-c-file= (a crispy-compiled C config whose
+  =gsurf_config_init()= runs against the config --- it may call any of
+  the gsurf =gsurf_config_*= setters, e.g. from =~/.config/cmacs/init.c=).
+
+* Modules
+
+gsurf modules load from these directories (first match by filename
+wins, like =$PATH=):
+
+1. =$CMACS_GSURF_MODULE_DIR=  (exported by =just run= for dev testing)
+2. =$GSURF_MODULE_PATH=
+3. =cmacs/gsurf/modules/=     (cmacs custom modules, compiled-in dev path)
+4. =deps/gsurf/build/release/modules/=  (gsurf stock modules)
+5. =$libdir/cmacs/gsurf/modules/=  (installed)
+
+Which modules are *enabled* comes from the config (see above), not the
+search path.  Inspect / toggle at runtime from Elisp:
+
+#+begin_src emacs-lisp
+(cmacs-gsurf-modules-list)                    ; JSON: name/description/enabled/active
+(cmacs-gsurf-module-set-enabled "adblock" t)
+#+end_src
+
+* Elisp API
+
+#+begin_src emacs-lisp
+(cmacs-gsurf "https://gnu.org")               ; open a browser buffer
+(cmacs-gsurf-load-uri (current-buffer) "https://example.com")
+(cmacs-gsurf-back (current-buffer))
+(cmacs-gsurf-get-uri (current-buffer))        ; => current URL
+(cmacs-gsurf-get-title (current-buffer))
+(cmacs-gsurf-set-zoom (current-buffer) 1.25)
+(cmacs-gsurf-run-javascript (current-buffer) "document.body.style.filter='invert(1)'")
+(cmacs-gsurf-find (current-buffer) "needle")
+#+end_src
+
+* cmacsgi / GObject Introspection
+
+=init_cmacs_gsurf= prepends the bundled typelib dir to the GI search
+path, so no =GI_TYPELIB_PATH= setup is needed:
+
+#+begin_src emacs-lisp
+(gi-require "Gsurf" "0.1")
+#+end_src
+
+The same works from the bacon =cmacsgi= builtin (=M-x bacon=).
+
+* MCP tools
+
+With =--with-cmacs-mcp=, these tools are exposed (and reachable from
+cmacs-ai via the MCP bridge — =^gsurf_= is in the default allowlist):
+
+| Tool | Args | Notes |
+|------+------+-------|
+| =gsurf_open= | url | new buffer; returns its name |
+| =gsurf_navigate= | url, [buffer] | |
+| =gsurf_back= / =gsurf_forward= / =gsurf_reload= / =gsurf_stop= | [buffer] | |
+| =gsurf_get_uri= / =gsurf_get_title= | [buffer] | read-only |
+| =gsurf_current= | — | read-only JSON |
+| =gsurf_list= | — | read-only JSON array |
+| =gsurf_modules_list= | — | read-only |
+| =gsurf_eval_js= | script, [buffer] | fire-and-forget |
+| =gsurf_set_zoom= | level, [buffer] | |
+
+=buffer= defaults to the most-recently-opened gsurf buffer.
+
+* Troubleshooting
+
+- *=cmacs-gsurf-error: gsurf backend unavailable (no display?)=* — the
+  WebKit backend needs a display; this is expected under =--batch=.
+- *Keyboard goes to the page, not Emacs / keybindings stop working* —
+  the page has GTK focus.  Press *Escape* to return to Emacs (evil drops
+  to normal state), or *click another Emacs window* (that releases page
+  focus automatically), then =C-w=, =M-x=, motions etc. work again.  A
+  freshly-opened gsurf buffer starts under Emacs control; the page only
+  takes focus when you press =RET=/=i= or click it.  See *Focus model*
+  above.
+- *A module isn't applying* — check =(cmacs-gsurf-modules-list)=; enable
+  it with =cmacs-gsurf-module-set-enabled= or via the gsurf YAML config
+  =modules:= section (=~/.config/gsurf/config.yaml=).
+- *Stale Elisp* — after editing =lisp/cmacs/cmacs-gsurf.el=, clear the
+  =.elc=/=.eln= caches (see the top-level CLAUDE.md).

@@ -419,6 +419,7 @@ cd cmacs
   --with-cmacs-piper \
   --with-cmacs-cintrospect \
   --with-cmacs-libregnum \
+  --with-cmacs-gsurf \
   --enable-cmacs-cpatch
 make -j$(nproc)
 sudo make install
@@ -529,6 +530,7 @@ Requires =autoconf= (>= 2.65) and =automake=.
   --with-cmacs-piper \
   --with-cmacs-cintrospect \
   --with-cmacs-libregnum \
+  --with-cmacs-gsurf \
   --enable-cmacs-cpatch
 #+end_src
 
@@ -563,6 +565,7 @@ Module flags:
 - =--with-cmacs-libreclaw= — LibreClaw chat/Matrix client integration
 - =--with-cmacs-org-ex= — Org-Ex interactive widget embedding
 - =--with-cmacs-mcp= — MCP server for AI-native runtime control
+- =--with-cmacs-gsurf= — Embed gsurf (a GLib/GObject port of suckless =surf=) as live WebKitGTK browser buffers.  =M-x cmacs-gsurf= opens a =cmacs-gsurf-mode= buffer whose window body is a real web view (xwidget-style embed into the pgtk frame).  Drive it from Elisp, cmacsgi (=(gi-require "Gsurf" "0.1")=), MCP (=gsurf_*=), and cmacs-ai; gsurf modules (search engines, ad-block, vim modal navigation, …) load from a cmacs gsurf-modules dir.  Statically links =libgsurf.a=; reuses the =--with-xwidgets= WebKitGTK/GTK3 stack (no new packages).  Off by default; requires =--with-cmacs-glib= + =--with-pgtk=.  Alias: =--with-gsurf=.  See [[file:doc_org/cmacs/cmacs-gsurf.org][the manual]].
 - =--with-cmacs-print= — Print to cmacs virtual printer + PDF intake
 - =--with-cmacs-video= — GStreamer video overlay: =#+BEGIN_VIDEO= blocks + =cmacs-video-mode=.  Supports file/HTTP/RTSP/RTSPS via =playbin3=.  Requires GStreamer 1.20+ + plugins-{base,good,bad,ugly} + libav and =--with-pgtk= for display (decode side works without).  Runs under any Wayland or X11 compositor; does *not* require =--with-cmacs-gowl=.
 - =--with-cmacs-audio= — GStreamer audio capture (pipewiresrc/pulsesrc → appsink) and playback (appsrc → autoaudiosink).  Inline =#+BEGIN_AUDIO= org blocks render a cairo waveform overlay.  Default capture caps are 16 kHz/mono/S16LE — whisper.cpp-ready.  Shares cmacs-video's =gst_init= when both are built.  Requires =pipewire-devel= or =pulseaudio-libs-devel= (Fedora) / =libpipewire-0.3-dev= or =libpulse-dev= (Debian).

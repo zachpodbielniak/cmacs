@@ -5555,6 +5555,10 @@ extern void init_cmacs_ai (void);
 extern void syms_of_cmacs_libregnum (void);
 extern void init_cmacs_libregnum (void);
 #endif
+#ifdef HAVE_CMACS_GSURF
+extern void syms_of_cmacs_gsurf (void);
+extern void init_cmacs_gsurf (void);
+#endif
 
 #ifdef HAVE_NATIVE_COMP
 INLINE bool

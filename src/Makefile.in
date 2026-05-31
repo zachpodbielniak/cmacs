@@ -379,6 +379,10 @@ CMACS_AI_LIBS = @CMACS_AI_LIBS@
 CMACS_LIBREGNUM_OBJ = @CMACS_LIBREGNUM_OBJ@
 CMACS_LIBREGNUM_CFLAGS = @CMACS_LIBREGNUM_CFLAGS@
 CMACS_LIBREGNUM_LIBS = @CMACS_LIBREGNUM_LIBS@
+CMACS_GSURF_OBJ = @CMACS_GSURF_OBJ@
+CMACS_GSURF_CFLAGS = @CMACS_GSURF_CFLAGS@
+CMACS_GSURF_LIBS = @CMACS_GSURF_LIBS@
+CMACS_GSURF_BUNDLED = @CMACS_GSURF_BUNDLED@
 CMACS_ORG_EX_OBJ = @CMACS_ORG_EX_OBJ@
 CMACS_ORG_EX_CFLAGS = @CMACS_ORG_EX_CFLAGS@
 CMACS_ORG_EX_LIBS = @CMACS_ORG_EX_LIBS@
@@ -421,6 +425,7 @@ CMACS_INTERNAL_CFLAGS = -I$(srcdir)/../cmacs/glib -I$(srcdir)/../cmacs/gobject \
                         -I$(srcdir)/../cmacs/piper \
                         -I$(srcdir)/../cmacs/ai \
                         -I$(srcdir)/../cmacs/libregnum \
+                        -I$(srcdir)/../cmacs/gsurf \
                         -I$(srcdir)/../cmacs/api \
                         -DCMACS_SRCDIR=\"$(abspath $(srcdir))\"
 CMACS_CFLAGS = $(CMACS_INTERNAL_CFLAGS) \
@@ -436,7 +441,8 @@ CMACS_CFLAGS = $(CMACS_INTERNAL_CFLAGS) \
                $(CMACS_WHISPER_CFLAGS) \
                $(CMACS_PIPER_CFLAGS) \
                $(CMACS_AI_CFLAGS) \
-               $(CMACS_LIBREGNUM_CFLAGS)
+               $(CMACS_LIBREGNUM_CFLAGS) \
+               $(CMACS_GSURF_CFLAGS)
 
 ## emacs.res if HAVE_W32
 EMACSRES = @EMACSRES@
@@ -580,7 +586,7 @@ base_obj = dispnew.o frame.o scroll.o xdisp.o menu.o $(XMENU_OBJ) window.o     \
 	$(MSDOS_OBJ) $(MSDOS_X_OBJ) $(NS_OBJ) $(CYGWIN_OBJ) $(FONT_OBJ)        \
 	$(W32_OBJ) $(WINDOW_SYSTEM_OBJ) $(XGSELOBJ)			       \
 	$(HAIKU_OBJ) $(PGTK_OBJ) $(ANDROID_OBJ) \
-	$(CMACS_GLIB_OBJ) $(CMACS_GI_OBJ) $(CMACS_CRISPY_OBJ) $(CMACS_BACON_OBJ) $(CMACS_GOWL_OBJ) $(CMACS_PODOMATION_OBJ) $(CMACS_LIBRECLAW_OBJ) $(CMACS_ORG_EX_OBJ) $(CMACS_MCP_OBJ) $(CMACS_CINTROSPECT_OBJ) $(CMACS_CPATCH_OBJ) $(CMACS_VIDEO_OBJ) $(CMACS_AUDIO_OBJ) $(CMACS_WHISPER_OBJ) $(CMACS_PIPER_OBJ) $(CMACS_AI_OBJ) $(CMACS_LIBREGNUM_OBJ)
+	$(CMACS_GLIB_OBJ) $(CMACS_GI_OBJ) $(CMACS_CRISPY_OBJ) $(CMACS_BACON_OBJ) $(CMACS_GOWL_OBJ) $(CMACS_PODOMATION_OBJ) $(CMACS_LIBRECLAW_OBJ) $(CMACS_ORG_EX_OBJ) $(CMACS_MCP_OBJ) $(CMACS_CINTROSPECT_OBJ) $(CMACS_CPATCH_OBJ) $(CMACS_VIDEO_OBJ) $(CMACS_AUDIO_OBJ) $(CMACS_WHISPER_OBJ) $(CMACS_PIPER_OBJ) $(CMACS_AI_OBJ) $(CMACS_LIBREGNUM_OBJ) $(CMACS_GSURF_OBJ)
 doc_obj = $(base_obj) $(NS_OBJC_OBJ)
 obj = $(doc_obj) $(HAIKU_CXX_OBJ)
 
@@ -635,6 +641,9 @@ all: $(CMACS_BACON_MODULES)
 endif
 ifeq ($(CMACS_PODOMATION_BUNDLED),yes)
 all: cmacs-podomation-modules
+endif
+ifneq ($(CMACS_GSURF_OBJ),)
+all: cmacs-gsurf-modules
 endif
 .PHONY: all
 
@@ -716,7 +725,8 @@ LIBES = $(LIBS) $(W32_LIBS) $(LIBS_GNUSTEP) $(PGTK_LIBS) $(LIBX_BASE) $(LIBIMAGE
    $(CMACS_LIBRECLAW_LIBS) $(CMACS_ORG_EX_LIBS) $(CMACS_MCP_LIBS) \
    $(CMACS_CINTROSPECT_LIBS) $(CMACS_CPATCH_LIBS) \
    $(CMACS_VIDEO_LIBS) $(CMACS_AUDIO_LIBS) \
-   $(CMACS_WHISPER_LIBS) $(CMACS_PIPER_LIBS) $(CMACS_AI_LIBS) $(CMACS_LIBREGNUM_LIBS)
+   $(CMACS_WHISPER_LIBS) $(CMACS_PIPER_LIBS) $(CMACS_AI_LIBS) $(CMACS_LIBREGNUM_LIBS) \
+   $(CMACS_GSURF_LIBS)
 
 ## FORCE it so that admin/unidata can decide whether this file is
 ## up-to-date.  Although since charprop depends on bootstrap-emacs,
@@ -820,8 +830,9 @@ CMACS_ALL_OBJ = $(CMACS_GLIB_OBJ) $(CMACS_GI_OBJ) \
                 $(CMACS_CINTROSPECT_OBJ) $(CMACS_CPATCH_OBJ) \
                 $(CMACS_VIDEO_OBJ) $(CMACS_AUDIO_OBJ) \
                 $(CMACS_WHISPER_OBJ) $(CMACS_PIPER_OBJ) \
-                $(CMACS_AI_OBJ) $(CMACS_LIBREGNUM_OBJ)
-CMACS_DIRS = glib gobject dbus gi crispy bacon gowl podomation libreclaw org-ex mcp cintrospect cpatch video audio whisper piper ai libregnum
+                $(CMACS_AI_OBJ) $(CMACS_LIBREGNUM_OBJ) \
+                $(CMACS_GSURF_OBJ)
+CMACS_DIRS = glib gobject dbus gi crispy bacon gowl podomation libreclaw org-ex mcp cintrospect cpatch video audio whisper piper ai libregnum gsurf
 cmacs-symlinks:
 	$(AM_V_at)for f in $(CMACS_ALL_OBJ:.o=.c); do \
 	  test -e "$(srcdir)/$$f" && continue; \
@@ -1011,6 +1022,29 @@ $(CMACS_LIBREGNUM_STATIC_LIB):
 $(CMACS_LIBREGNUM_OBJ): $(CMACS_LIBREGNUM_STATIC_LIB)
 endif
 
+## gsurf: built STATIC=1 (libgsurf.a whole-archived into temacs),
+## BUILD_GIR=1 (Gsurf-0.1.typelib for cmacsgi), GTK_BACKEND=gtk3
+## (matches pgtk + xwidgets' webkit2gtk-4.1).  The default `all' target
+## also builds the stock modules into deps/gsurf/build/release/modules
+## and generates gsurf-version.h (which gsurf.h needs), so make the
+## gsurf objects depend on the archive.
+CMACS_GSURF_STATIC_LIB = $(srcdir)/../deps/gsurf/build/release/libgsurf.a
+ifneq ($(CMACS_GSURF_OBJ),)
+$(CMACS_GSURF_STATIC_LIB):
+	$(MAKE) -C $(srcdir)/../deps/gsurf STATIC=1 BUILD_GIR=1 GTK_BACKEND=gtk3
+$(CMACS_GSURF_OBJ): $(CMACS_GSURF_STATIC_LIB)
+
+## Build the cmacs-specific gsurf modules (.so loaded at runtime by the
+## embedded module manager, NOT linked into temacs).  Depends on the
+## gsurf lib build so the dev <gsurf/gsurf.h> symlink + gsurf-version.h
+## exist.  Modules resolve gsurf_*/yaml_*/cmacs_gsurf_emacs_eval_async
+## from the emacs executable (temacs --export-dynamic).
+.PHONY: cmacs-gsurf-modules
+cmacs-gsurf-modules: $(CMACS_GSURF_STATIC_LIB)
+	$(MAKE) -C $(srcdir)/../cmacs/gsurf/modules \
+	  GSURF_DIR=$(abspath $(srcdir)/../deps/gsurf)
+endif
+
 ## Build libcmacs-api.so (used at runtime by crispy and bacon).
 ## Must be built before temacs so it's available for make install.
 CMACS_API_SO = $(srcdir)/../cmacs/api/libcmacs-api.so
@@ -1137,6 +1171,19 @@ _libreclaw_strip += $(_dup_podomation_objs)
 endif
 endif
 
+## gsurf's libgsurf.a merges crispy + yaml-glib objects (ar -M), which
+## collide with cmacs's canonical copies.  Strip them so each symbol has
+## exactly one definition (same policy as gowl/libreclaw).
+_gsurf_strip =
+ifeq ($(CMACS_GSURF_BUNDLED),yes)
+ifneq ($(CMACS_CRISPY_BUNDLED)$(CMACS_BACON_BUNDLED),)
+_gsurf_strip += $(_dup_crispy)
+endif
+ifeq ($(CMACS_BACON_BUNDLED),yes)
+_gsurf_strip += $(_dup_yaml)
+endif
+endif
+
 ifneq ($(_bacon_strip),)
 CMACS_BACON_DEDUP_LIB = libbacon-dedup.a
 $(CMACS_BACON_DEDUP_LIB): $(CMACS_BACON_STATIC_LIB)
@@ -1160,6 +1207,13 @@ $(CMACS_LIBRECLAW_DEDUP_LIB): $(CMACS_LIBRECLAW_STATIC_LIB) $(CMACS_PODOMATION_S
 CMACS_LIBRECLAW_LIBS := $(subst $(CMACS_LIBRECLAW_STATIC_LIB),$(CMACS_LIBRECLAW_DEDUP_LIB),$(CMACS_LIBRECLAW_LIBS))
 endif
 
+ifneq ($(_gsurf_strip),)
+CMACS_GSURF_DEDUP_LIB = libgsurf-dedup.a
+$(CMACS_GSURF_DEDUP_LIB): $(CMACS_GSURF_STATIC_LIB)
+	$(AM_V_GEN)cp $< $@ && ar d $@ $(_gsurf_strip)
+CMACS_GSURF_LIBS := $(subst $(CMACS_GSURF_STATIC_LIB),$(CMACS_GSURF_DEDUP_LIB),$(CMACS_GSURF_LIBS))
+endif
+
 ## We have to create $(etc) here because init_cmdargs tests its
 ## existence when setting Vinstallation_directory (FIXME?).
 ## This goes on to affect various things, and the emacs binary fails
@@ -1170,7 +1224,9 @@ temacs$(EXEEXT): $(LIBXMENU) $(ALLOBJS) $(LIBEGNU_ARCHIVE) $(EMACSRES) \
   $(CMACS_PODOMATION_STATIC_LIB) $(CMACS_LIBRECLAW_STATIC_LIB) \
   $(CMACS_AI_GLIB_STATIC_LIB) \
   $(CMACS_LIBREGNUM_STATIC_LIB) \
-  $(CMACS_BACON_DEDUP_LIB) $(CMACS_GOWL_DEDUP_LIB) $(CMACS_LIBRECLAW_DEDUP_LIB)
+  $(CMACS_GSURF_STATIC_LIB) \
+  $(CMACS_BACON_DEDUP_LIB) $(CMACS_GOWL_DEDUP_LIB) $(CMACS_LIBRECLAW_DEDUP_LIB) \
+  $(CMACS_GSURF_DEDUP_LIB)
 ifeq ($(HAVE_BE_APP),yes)
 	$(AM_V_CXXLD)$(CXX) -o $@.tmp \
 	  $(ALL_CFLAGS) $(TEMACS_LDFLAGS) $(LDFLAGS) \

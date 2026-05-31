@@ -85,6 +85,10 @@ cmacs_mcp_register_all_tools (McpServer *server)
 #ifdef HAVE_CMACS_AI
   cmacs_mcp_tools_ai_register (server);
 #endif
+
+#ifdef HAVE_CMACS_GSURF
+  cmacs_mcp_tools_gsurf_register (server);
+#endif
 }
 
 #endif /* HAVE_CMACS_MCP */

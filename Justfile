@@ -66,6 +66,7 @@ configure_flags := """
     --with-cmacs-piper
     --with-cmacs-cintrospect
     --with-cmacs-libregnum
+    --with-cmacs-gsurf
     --enable-cmacs-cpatch
 """
 
@@ -233,6 +234,7 @@ clean-all: clean clean-eln-all clean-gowl
 [group('run')]
 run *ARGS:
     CMACS_MODULE_DIR={{ justfile_directory() }}/cmacs/bacon/modules \
+    CMACS_GSURF_MODULE_DIR={{ justfile_directory() }}/cmacs/gsurf/modules \
         {{ emacs }} {{ ARGS }}
 
 # Run cmacs as a Wayland compositor (`--gowl`).

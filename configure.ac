@@ -671,6 +671,13 @@ OPTION_DEFAULT_OFF([cmacs-whisper],
   [CMacs offline speech-to-text via vendored whisper.cpp])
 OPTION_DEFAULT_OFF([cmacs-piper],
   [CMacs offline text-to-speech via Piper])
+OPTION_DEFAULT_OFF([cmacs-gsurf],
+  [CMacs gsurf embedded web browser (WebKitGTK buffers, modules, MCP)])
+
+# Accept --with-gsurf as a convenience alias for --with-cmacs-gsurf.
+AC_ARG_WITH([gsurf],
+  [AS_HELP_STRING([--with-gsurf], [alias for --with-cmacs-gsurf])],
+  [with_cmacs_gsurf=$withval])
 
 # CMACS: pkg-config checks when enabled
 if test "$with_cmacs_glib" != "no"; then
@@ -906,6 +913,46 @@ if test "$with_cmacs_libregnum" != "no"; then
     cmacs-libregnum-scene-tree.o cmacs-libregnum-scene-gobject.o \
     cmacs-libregnum-scene-mindmap.o"
 fi
+if test "$with_cmacs_gsurf" != "no"; then
+  if test "$with_cmacs_glib" = "no"; then
+    AC_MSG_ERROR([--with-cmacs-gsurf requires --with-cmacs-glib])
+  fi
+  if test "$with_pgtk" = "no"; then
+    AC_MSG_ERROR([--with-cmacs-gsurf requires --with-pgtk (live widget embed)])
+  fi
+  # gsurf is sourced from the top-level deps/gsurf submodule and built
+  # STATIC=1 (libgsurf.a whole-archived into temacs), BUILD_GIR=1
+  # (Gsurf-0.1.typelib for cmacsgi/GI), GTK_BACKEND=gtk3 (matches pgtk +
+  # xwidgets' webkit2gtk-4.1 stack).  System-package mode is not
+  # supported -- one source of truth, one .a on the link line.
+  PKG_CHECK_MODULES([CMACS_GSURF_DEPS],
+    [glib-2.0 gobject-2.0 gio-2.0 gmodule-2.0 yaml-0.1 json-glib-1.0 \
+     webkit2gtk-4.1 gtk+-3.0 javascriptcoregtk-4.1])
+  CMACS_GSURF_CFLAGS="-I\$(abs_top_srcdir)/deps/gsurf/src \
+    -DCMACS_GSURF_GIR_DIR=\\\"\$(abs_top_srcdir)/deps/gsurf/build/release\\\" \
+    -DCMACS_GSURF_DEV_MODULE_DIR=\\\"\$(abs_top_srcdir)/deps/gsurf/build/release/modules\\\" \
+    -DCMACS_GSURF_MODULE_DIR=\\\"\$(abs_top_srcdir)/cmacs/gsurf/modules\\\" \
+    -DGSURF_MODULEDIR=\\\"$libdir/cmacs/gsurf/modules\\\" \
+    $CMACS_GSURF_DEPS_CFLAGS"
+  # libgsurf.a merges crispy + yaml-glib objects (ar -M in gsurf's
+  # rules.mk), which collide with cmacs's canonical copies -- the dedup
+  # machinery in src/Makefile.in strips them (see _gsurf_strip).
+  # whole-archive so every GType/boxed/enum registration the runtime
+  # modules rely on is present; temacs is linked --export-dynamic
+  # (dynamic-module support) so loaded gsurf module .so files resolve
+  # gsurf_*/yaml_* against the executable -- one library instance.
+  CMACS_GSURF_LIBS="-Wl,--whole-archive \
+    \$(abs_top_srcdir)/deps/gsurf/build/release/libgsurf.a \
+    -Wl,--no-whole-archive $CMACS_GSURF_DEPS_LIBS"
+  CMACS_GSURF_BUNDLED=yes
+  AC_DEFINE([HAVE_CMACS_GSURF], 1, [CMacs gsurf embedded web browser])
+  CMACS_GSURF_OBJ="cmacs-gsurf-init.o cmacs-gsurf-defuns.o \
+    cmacs-gsurf-view.o cmacs-gsurf-modules.o"
+fi
+AC_SUBST(CMACS_GSURF_OBJ)
+AC_SUBST(CMACS_GSURF_CFLAGS)
+AC_SUBST(CMACS_GSURF_LIBS)
+AC_SUBST(CMACS_GSURF_BUNDLED)
 if test "$with_cmacs_org_ex" != "no"; then
   AC_DEFINE([HAVE_CMACS_ORG_EX], 1, [CMacs org-ex interactive widgets])
   CMACS_ORG_EX_OBJ="cmacs-org-ex.o cmacs-org-ex-ink-capture.o"
@@ -940,6 +987,9 @@ if test "$with_cmacs_mcp" != "no"; then
   fi
   if test "$with_cmacs_ai" != "no"; then
     CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-ai.o"
+  fi
+  if test "$with_cmacs_gsurf" != "no"; then
+    CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-gsurf.o"
   fi
 fi
 # CMACS Print: pure-Elisp + shell-script subsystem (no C build artefacts).

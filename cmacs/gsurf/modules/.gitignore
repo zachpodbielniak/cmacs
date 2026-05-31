@@ -1,0 +1,4 @@
+# Build artifacts for the cmacs gsurf modules (compiled by
+# src/Makefile.in's cmacs-gsurf-modules target into this directory).
+*.so
+*.o

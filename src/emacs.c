@@ -2756,6 +2756,9 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #ifdef HAVE_CMACS_LIBREGNUM
       syms_of_cmacs_libregnum ();
 #endif
+#ifdef HAVE_CMACS_GSURF
+      syms_of_cmacs_gsurf ();
+#endif
 
       keys_of_keyboard ();
 
@@ -2873,6 +2876,9 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #endif
 #ifdef HAVE_CMACS_LIBREGNUM
   init_cmacs_libregnum ();
+#endif
+#ifdef HAVE_CMACS_GSURF
+  init_cmacs_gsurf ();
 #endif
 
   if (!initialized)

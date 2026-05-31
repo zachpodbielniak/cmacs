@@ -224,7 +224,9 @@ The bridge is silently skipped if cmacs was built --without-cmacs-mcp."
     ;; process + debug read-only
     "^list_processes$" "^backtrace$" "^memory_info$"
     "^process_status$" "^recent_messages$"
-    "^describe_mode$" "^list_hooks$")
+    "^describe_mode$" "^list_hooks$"
+    ;; gsurf embedded web browser (open/navigate/read page state)
+    "^gsurf_")
   "PCRE patterns that select which cmacs MCP tools the bridge exposes.
 A tool is exposed iff at least one regex matches its name AND no regex
 in `cmacs-ai-mcp-bridge-denylist' matches.  Use PCRE syntax (the

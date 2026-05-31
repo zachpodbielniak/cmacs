@@ -86,8 +86,11 @@ set_packages_fedora () {
 	PKGS_BUILD=(autoconf automake gcc make pkgconf-pkg-config texinfo)
 	PKGS_CORE=(gnutls-devel ncurses-devel zlib-devel)
 	# webkit2gtk4.1-devel: --with-xwidgets (xwidget-webkit browser
-	# buffers).  Must be the 4.1 (GTK3 / libsoup3) ABI -- the 6.0
-	# package is GTK4-only and unusable from Emacs pgtk (GTK3).
+	# buffers) AND --with-cmacs-gsurf (the embedded gsurf web browser,
+	# which links libgsurf.a against the same GTK3/WebKit2GTK 4.1 stack
+	# + yaml/json-glib from PKGS_GLIB).  Must be the 4.1 (GTK3 /
+	# libsoup3) ABI -- the 6.0 package is GTK4-only and unusable from
+	# Emacs pgtk (GTK3).
 	PKGS_GUI=(gtk3-devel webkit2gtk4.1-devel)
 	PKGS_NCOMP=(libgccjit-devel)
 	PKGS_IMAGE=(libXpm-devel libjpeg-turbo-devel giflib-devel libtiff-devel

@@ -56,6 +56,7 @@ interaction.
 * Cpatch::                      Runtime C hot-patching (DEFUN swap + detours).
 * CMacs AI::                    ai-glib multi-provider coding agent.
 * CMacs Libregnum::             Embedded libregnum 3D scene buffers.
+* CMacs Gsurf::                 Embedded gsurf web browser buffers.
 * Build Configuration::         Configure flags and dependencies.
 @end menu
 
@@ -5957,6 +5958,165 @@ isn't honoured.
 @end itemize
 
 @c ===================================================================
+@node CMacs Gsurf
+@chapter CMacs Gsurf
+
+This chapter mirrors @file{doc_org/cmacs/cmacs-gsurf.org}.
+
+@code{cmacs-gsurf} embeds gsurf --- a GLib/GObject port of suckless
+@command{surf} --- as a first-class subsystem.  Each
+@code{cmacs-gsurf-mode} buffer owns a live WebKitGTK view (a
+@code{GsurfView}) parented into the buffer's pgtk frame and clipped to
+the window showing it (xwidget-style live embed): the window body
+@emph{is} the browser.
+
+gsurf is library-first, so cmacs links @file{libgsurf.a} statically and
+drives it directly.  surf's ``patches'' are gsurf @dfn{modules}
+(runtime-loaded @file{.so} plugins) that apply to the embedded views:
+search engines, ad-block, vim-style modal navigation with link hints,
+history, dark mode, and more.
+
+@section Opening a browser buffer
+
+@deffn Command cmacs-gsurf &optional url
+Open a @code{cmacs-gsurf-mode} buffer at @var{url} (prompted if nil).
+Bare words become a search via @code{cmacs-gsurf-search-url}.
+@end deffn
+
+@deffn Command cmacs-gsurf-browse-url url &rest _
+Open @var{url} in a gsurf buffer.  Suitable as
+@code{browse-url-browser-function}.
+@end deffn
+
+@section Focus model
+
+The window body is a live GTK widget; if it held keyboard focus
+permanently, Emacs (and evil) would never see your keys.  So
+cmacs-gsurf manages focus explicitly.  A gsurf buffer @emph{starts under
+Emacs/evil control} (the page is shown but does not capture keys), so
+all normal Emacs and evil keys work --- window management (@kbd{C-w v}),
+motions, @kbd{M-x}, etc. --- plus the browsing commands.  To type
+into/scroll the page, give it focus with @kbd{RET}/@kbd{i},
+@code{cmacs-gsurf-focus-page} (@kbd{C-c C-f}), or a click.  To return to
+Emacs, press @kbd{Escape} (pulls focus back and drops evil to normal
+state), @code{cmacs-gsurf-release-focus} (@kbd{C-c C-g}), or select
+another window (clicking another Emacs window releases page focus
+automatically).
+
+Two things work @emph{without} focusing the page (the buffer text is a
+hidden placeholder, so these are rebound from evil motions):
+@kbd{h}/@kbd{j}/@kbd{k}/@kbd{l} (and @kbd{C-d}/@kbd{C-u} half-page,
+@kbd{C-f}/@kbd{C-b} full-page, @kbd{gg}/@kbd{G} top/bottom) scroll the
+live page, and @kbd{f} (@code{cmacs-gsurf-follow}) pops vimium-style
+link hints --- type the chord to click a link.  @kbd{SPC} is left
+unbound so the evil/Doom leader (@kbd{SPC b b}, etc.) works.
+
+The rest of the @code{cmacs-gsurf-mode} keymap: @kbd{RET}/@kbd{i} focus
+page (type), @kbd{r} reload, @kbd{R} reload-nocache, @kbd{H}/@kbd{B}
+back, @kbd{L}/@kbd{F} forward, @kbd{o}/@kbd{C-c C-o} open URL,
+@kbd{+}/@kbd{-}/@kbd{0} zoom, @kbd{/}/@kbd{s} find, @kbd{q} quit.  Under
+evil these are bound in normal+motion state (so evil motions don't
+shadow them) and @kbd{C-w} is left to evil's window map.  Once the page
+has focus, gsurf's own @code{modal} module (its own vim keys, @kbd{f}
+link hints, @kbd{i} insert) takes over until you press @kbd{Escape}.
+
+@section Elisp API
+
+Primitives operate on a browser buffer: @code{cmacs-gsurf-load-uri},
+@code{cmacs-gsurf-reload}, @code{cmacs-gsurf-stop},
+@code{cmacs-gsurf-back}, @code{cmacs-gsurf-forward},
+@code{cmacs-gsurf-get-uri}, @code{cmacs-gsurf-get-title},
+@code{cmacs-gsurf-get-progress}, @code{cmacs-gsurf-set-zoom},
+@code{cmacs-gsurf-get-zoom}, @code{cmacs-gsurf-run-javascript},
+@code{cmacs-gsurf-find}, @code{cmacs-gsurf-find-next}, and the focus
+commands @code{cmacs-gsurf-focus-page} /
+@code{cmacs-gsurf-release-focus} / @code{cmacs-gsurf-page-focused-p}.
+
+The view's URI/title/load signals run the abnormal hooks
+@code{cmacs-gsurf-uri-changed-functions} @code{(BUFFER URI)},
+@code{cmacs-gsurf-title-changed-functions} @code{(BUFFER TITLE)}, and
+@code{cmacs-gsurf-load-changed-functions} @code{(BUFFER EVENT)} where
+@var{event} is @code{started}, @code{committed} or @code{finished}.
+
+@section Configuration
+
+cmacs-gsurf does @emph{not} read gsurf's own
+@file{~/.config/gsurf/config.yaml} (or @file{config.c}) by default; it
+is configured from Emacs and tells gsurf to ignore YAML entirely
+(@code{cmacs-gsurf-ignore-yaml}, default @code{t}).  Because gsurf
+modules are disabled unless a config enables them, this is also how the
+vim @code{modal} module (@kbd{hjkl} scroll, @kbd{f} link hints) is
+turned on.
+
+The primary knob is @code{cmacs-gsurf-modules}, an alist of
+@code{(MODULE-NAME . PLIST)} pushed onto the gsurf config through its
+programmatic C-config setters (@code{gsurf_config_set_module_enabled} /
+@code{_set_module_option}) before the modules load --- no YAML file.
+@code{:enabled BOOL} toggles a module (precedence over any YAML); any
+other @code{:KEY VALUE} is a module option.  The default enables the
+windowless essentials @code{modal}, @code{search_engines},
+@code{history}:
+
+@example
+(setq cmacs-gsurf-modules
+      '(("modal"          :enabled t :scroll_step 100)
+        ("search_engines" :enabled t)
+        ("history"        :enabled t)
+        ("adblock"        :enabled t)))
+@end example
+
+To also read gsurf's own files set @code{cmacs-gsurf-load-user-config}
+to @code{t}; to load a specific file set @code{cmacs-gsurf-config-file}
+(YAML) or @code{cmacs-gsurf-config-c-file} (a crispy-compiled C config,
+e.g. @file{~/.config/cmacs/init.c}, whose @code{gsurf_config_init()} may
+call any @code{gsurf_config_*} setter).  Primitives:
+@code{cmacs-gsurf-config-set-module-enabled} / @code{-set-module-option}
+/ @code{-set-homepage} / @code{cmacs-gsurf-set-ignore-yaml}, and the
+loaders @code{cmacs-gsurf-load-config-data} / @code{-file} /
+@code{-c-file}; re-apply with @code{M-x cmacs-gsurf-reload-config}.
+
+@section Modules
+
+gsurf modules load from these directories (first match by filename
+wins, like @env{PATH}): @env{CMACS_GSURF_MODULE_DIR} (exported by
+@command{just run}), @env{GSURF_MODULE_PATH},
+@file{cmacs/gsurf/modules/} (cmacs custom modules),
+@file{deps/gsurf/build/release/modules/} (the stock modules), and the
+installed @file{$libdir/cmacs/gsurf/modules/}.  Which modules are
+@emph{enabled} comes from the config (see above), not the search path.
+Inspect and toggle at runtime with @code{cmacs-gsurf-modules-list} and
+@code{cmacs-gsurf-module-set-enabled}.
+
+@section cmacsgi / introspection
+
+@code{init_cmacs_gsurf} prepends the bundled @file{Gsurf-0.1.typelib}
+directory to the GObject-Introspection search path, so
+@code{(gi-require "Gsurf" "0.1")} and the Bacon @code{cmacsgi} builtin
+work with no @env{GI_TYPELIB_PATH} setup.
+
+@section MCP and cmacs-ai
+
+With @option{--with-cmacs-mcp}, the tools @code{gsurf_open},
+@code{gsurf_navigate}, @code{gsurf_back}, @code{gsurf_forward},
+@code{gsurf_reload}, @code{gsurf_stop}, @code{gsurf_get_uri},
+@code{gsurf_get_title}, @code{gsurf_current}, @code{gsurf_list},
+@code{gsurf_eval_js}, @code{gsurf_set_zoom} and
+@code{gsurf_modules_list} are exposed.  @code{^gsurf_} is in the default
+@code{cmacs-ai-mcp-bridge-allowlist}, so cmacs-ai chat buffers can drive
+the browser out of the box.
+
+@section Building
+
+Pass @option{--with-cmacs-gsurf} (alias @option{--with-gsurf}) to
+@command{configure}; requires @option{--with-cmacs-glib} and
+@option{--with-pgtk}.  gsurf is built @code{STATIC=1 BUILD_GIR=1
+GTK_BACKEND=gtk3} and @file{libgsurf.a} is whole-archived into temacs;
+because it merges crispy + yaml-glib objects it is run through the
+dedup machinery (@code{_gsurf_strip}), never @option{-z muldefs}.  It
+reuses the same WebKitGTK/GTK3 stack as @option{--with-xwidgets}, so no
+new system packages are needed.
+
+@c ===================================================================
 @node Build Configuration
 @chapter Build Configuration
 
@@ -6001,6 +6161,7 @@ fully-featured build matching Fedora defaults, use:
   --with-cmacs-piper \
   --with-cmacs-cintrospect \
   --with-cmacs-libregnum \
+  --with-cmacs-gsurf \
   --enable-cmacs-cpatch
 @end example
 

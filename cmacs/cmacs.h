@@ -63,4 +63,8 @@
 # include "libregnum/cmacs-libregnum.h"
 #endif
 
+#ifdef HAVE_CMACS_GSURF
+# include "gsurf/cmacs-gsurf.h"
+#endif
+
 #endif /* CMACS_H */

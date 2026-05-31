@@ -28,3 +28,6 @@
 [submodule "deps/libregnum"]
 	path = deps/libregnum
 	url = git@gitlab.com:copyleft-games/libregnum.git
+[submodule "deps/gsurf"]
+	path = deps/gsurf
+	url = git@git-ssh.podbielniak.com:zachpodbielniak/gsurf.git
