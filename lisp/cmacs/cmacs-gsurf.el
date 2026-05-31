@@ -164,6 +164,8 @@ Loaded last, so it overrides the YAML layers.  Nil means no C config."
 (declare-function cmacs-gsurf-set-zoom "cmacs-gsurf-defuns.c" (buffer level))
 (declare-function cmacs-gsurf-get-zoom "cmacs-gsurf-defuns.c" (buffer))
 (declare-function cmacs-gsurf-run-javascript "cmacs-gsurf-defuns.c" (buffer script))
+(declare-function cmacs-gsurf-run-javascript-async "cmacs-gsurf-defuns.c" (buffer script callback))
+(declare-function cmacs-gsurf-add-user-script "cmacs-gsurf-defuns.c" (buffer script &optional at-end))
 (declare-function cmacs-gsurf-find "cmacs-gsurf-defuns.c" (buffer text &optional backward))
 (declare-function cmacs-gsurf-find-next "cmacs-gsurf-defuns.c" (buffer &optional backward))
 (declare-function cmacs-gsurf-modules-list "cmacs-gsurf-defuns.c" ())
@@ -293,7 +295,10 @@ reconfigured to pick up option changes."
       (dolist (win (window-list nil 'no-minibuffer))
         (let ((buf (window-buffer win)))
           (when (and (buffer-live-p buf)
-                     (cmacs-gsurf-attached-p buf))
+                     (cmacs-gsurf-attached-p buf)
+                     ;; Offscreen (gsurf-lite) views are headless -- never
+                     ;; place their live widget over the text buffer.
+                     (not (cmacs-gsurf-offscreen-p buf)))
             (puthash buf t shown)
             (pcase-let ((`(,l ,top ,r ,bot)
                          (window-edges win t nil t)))
@@ -301,6 +306,7 @@ reconfigured to pick up option changes."
                                  (max 1 (- r l)) (max 1 (- bot top)))))))
       (dolist (buf (cmacs-gsurf--live-buffers))
         (when (and (cmacs-gsurf-attached-p buf)
+                   (not (cmacs-gsurf-offscreen-p buf))
                    (not (gethash buf shown)))
           (cmacs-gsurf-hide buf)))
       (cmacs-gsurf--update-focus))))
@@ -321,10 +327,14 @@ reconfigured to pick up option changes."
 ;; switching windows always restores normal Emacs/evil keybindings.
 
 (defun cmacs-gsurf--update-focus (&rest _)
-  "Ensure Emacs holds keyboard focus unless a gsurf page is selected."
+  "Ensure Emacs holds keyboard focus unless a gsurf page is selected.
+Offscreen (gsurf-lite) buffers never hold page focus, so they count as
+non-gsurf for this purpose."
   (when cmacs-gsurf--buffers
     (let ((buf (window-buffer (selected-window))))
-      (unless (and (buffer-live-p buf) (cmacs-gsurf-attached-p buf))
+      (unless (and (buffer-live-p buf)
+                   (cmacs-gsurf-attached-p buf)
+                   (not (cmacs-gsurf-offscreen-p buf)))
         (cmacs-gsurf-release-focus)))))
 
 (defun cmacs-gsurf--on-escape ()
@@ -429,6 +439,25 @@ Focus has already returned to Emacs; drop evil to normal state."
   (interactive)
   (cmacs-gsurf--scroll "window.scrollTo(0,document.body.scrollHeight);"))
 
+(defcustom cmacs-gsurf-scroll-line-step 40
+  "Pixels scrolled by the line-scroll keys (`C-e' / `C-y') in a gsurf buffer.
+This mirrors vim/evil `C-e'/`C-y' (scroll the view one line) -- the page
+moves a small fixed amount while Emacs keeps focus."
+  :type 'integer
+  :group 'cmacs-gsurf)
+
+(defun cmacs-gsurf-scroll-line-down ()
+  "Scroll the page down one line (vim/evil `C-e')."
+  (interactive)
+  (cmacs-gsurf--scroll
+   (format "window.scrollBy(0,%d);" cmacs-gsurf-scroll-line-step)))
+
+(defun cmacs-gsurf-scroll-line-up ()
+  "Scroll the page up one line (vim/evil `C-y')."
+  (interactive)
+  (cmacs-gsurf--scroll
+   (format "window.scrollBy(0,%d);" (- cmacs-gsurf-scroll-line-step))))
+
 (defun cmacs-gsurf-reload-nocache ()
   "Reload the current gsurf buffer, bypassing the cache."
   (interactive)
@@ -455,6 +484,9 @@ Focus has already returned to Emacs; drop evil to normal state."
     ;; SPC -- SPC is the evil/Doom leader and must pass through.
     (define-key m (kbd "C-f")     #'cmacs-gsurf-scroll-screen-down)
     (define-key m (kbd "C-b")     #'cmacs-gsurf-scroll-screen-up)
+    ;; vim/evil line scroll
+    (define-key m (kbd "C-e")     #'cmacs-gsurf-scroll-line-down)
+    (define-key m (kbd "C-y")     #'cmacs-gsurf-scroll-line-up)
     (define-key m (kbd "<")       #'cmacs-gsurf-scroll-top)
     (define-key m (kbd ">")       #'cmacs-gsurf-scroll-bottom)
     (define-key m (kbd "g g")     #'cmacs-gsurf-scroll-top)
@@ -558,6 +590,9 @@ Escape returns control to Emacs.
       ;; Full-page scroll on C-f/C-b; SPC is left to the evil/Doom leader.
       (kbd "C-f") #'cmacs-gsurf-scroll-screen-down
       (kbd "C-b") #'cmacs-gsurf-scroll-screen-up
+      ;; vim line scroll (override evil's own C-e/C-y on the placeholder)
+      (kbd "C-e") #'cmacs-gsurf-scroll-line-down
+      (kbd "C-y") #'cmacs-gsurf-scroll-line-up
       "gg" #'cmacs-gsurf-scroll-top
       "G"  #'cmacs-gsurf-scroll-bottom
       ;; history
@@ -737,6 +772,370 @@ recently opened gsurf buffer is used."
   (require 'org-capture)
   (let ((org-capture-initial text))
     (org-capture nil cmacs-gsurf-org-capture-template)))
+
+;;;; Caret mode -- in-page text cursor driven from Emacs
+;;
+;; A default-on minor mode that gives a (visible, live) gsurf buffer an
+;; in-page text caret you move with Emacs/evil motions, highlight with
+;; `v', copy with `y'/`M-w', and follow links under the caret with RET --
+;; all WITHOUT focusing the page, so the SPC leader, `C-w', and `M-x'
+;; keep working.  It is driven entirely from Emacs by injecting
+;; JavaScript (`getSelection().modify' moves the DOM selection and a
+;; fixed-position overlay draws the insertion caret); the page never
+;; receives the keystrokes.  This deliberately is NOT a gsurf
+;; `GsurfInputHandler' module -- those only fire when the page holds GTK
+;; keyboard focus, which the focus model forbids.
+
+(defcustom cmacs-gsurf-caret-mode-default t
+  "When non-nil, enable `cmacs-gsurf-caret-mode' in new gsurf buffers."
+  :type 'boolean
+  :group 'cmacs-gsurf)
+
+(defcustom cmacs-gsurf-caret-color "#ff69b4"
+  "Color of the in-page caret overlay drawn by `cmacs-gsurf-caret-mode'.
+The default is hot pink, which stands out on most pages; the caret is
+also drawn with a glow and a white halo so it is easy to spot."
+  :type 'string
+  :group 'cmacs-gsurf)
+
+(defvar cmacs-gsurf-caret-functions nil
+  "Abnormal hook run after a caret motion.
+Each function is called with (BUFFER MOTION), MOTION a symbol naming
+the motion (e.g. `left', `word-forward', `copy').")
+
+(defconst cmacs-gsurf--caret-engine-js
+  "(function(){
+  if (window.__cmacsCaret) { window.__cmacsCaret.show(); return; }
+  var C = window.__cmacsCaret = { extend:false };
+  C.caretColor = window.__cmacsCaretColor || '#ff69b4';
+  var sel = function(){ return window.getSelection(); };
+  C.firstText = function(){
+    var root = document.body || document.documentElement;
+    var w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode:function(n){
+        if(!n.nodeValue || !/\\S/.test(n.nodeValue)) return NodeFilter.FILTER_REJECT;
+        var p=n.parentElement; if(!p) return NodeFilter.FILTER_REJECT;
+        var cs=getComputedStyle(p);
+        if(cs.visibility==='hidden'||cs.display==='none') return NodeFilter.FILTER_REJECT;
+        var r=p.getBoundingClientRect(); if(r.height===0) return NodeFilter.FILTER_REJECT;
+        return NodeFilter.FILTER_ACCEPT;}});
+    return w.nextNode();
+  };
+  C.ensure = function(){
+    var s=sel();
+    if(s.rangeCount>0 && s.anchorNode) return;
+    var n=C.firstText()||document.body, r=document.createRange();
+    try{ r.setStart(n,0); r.collapse(true); }
+    catch(e){ r.selectNodeContents(document.body||document.documentElement); r.collapse(true); }
+    s.removeAllRanges(); s.addRange(r);
+  };
+  C.move = function(dir,gran){
+    C.ensure();
+    try{ sel().modify(C.extend?'extend':'move', dir, gran); }catch(e){}
+    C.follow(); C.paint();
+  };
+  C.toTop = function(){
+    C.ensure();
+    var n=C.firstText()||document.body, s=sel();
+    if(C.extend && s.rangeCount){ try{ s.extend(n,0); }catch(e){} }
+    else { var r=document.createRange(); r.setStart(n,0); r.collapse(true);
+           s.removeAllRanges(); s.addRange(r); }
+    window.scrollTo(0,0); C.paint();
+  };
+  C.toBottom = function(){
+    C.ensure();
+    try{ sel().modify(C.extend?'extend':'move','forward','documentboundary'); }catch(e){}
+    var root=document.body||document.documentElement;
+    window.scrollTo(0, root.scrollHeight); C.paint();
+  };
+  C.caretRect = function(){
+    var s=sel(); if(!s.rangeCount) return null;
+    var r=s.getRangeAt(0).cloneRange(); var rect=r.getBoundingClientRect();
+    if(!rect || (rect.width===0 && rect.height===0)){
+      var sp=document.createElement('span'); sp.textContent='\\u200b';
+      try{ r.insertNode(sp); rect=sp.getBoundingClientRect();
+           var p=sp.parentNode; if(p) p.removeChild(sp);
+           s.removeAllRanges(); s.addRange(r); }catch(e){}
+    }
+    return rect;
+  };
+  C.follow = function(){
+    var rect=C.caretRect(); if(!rect) return;
+    var vh=window.innerHeight, m=40;
+    if(rect.top<m) window.scrollBy(0, rect.top-m);
+    else if(rect.bottom>vh-m) window.scrollBy(0, rect.bottom-vh+m);
+  };
+  C.paint = function(){
+    var rect=C.caretRect();
+    var el=document.getElementById('__cmacsCaretEl');
+    if(!rect){ if(el) el.style.display='none'; return; }
+    if(!el){ el=document.createElement('div'); el.id='__cmacsCaretEl';
+      (document.body||document.documentElement).appendChild(el); }
+    /* (Re)apply the style every paint so a colour change takes effect and
+       the glow/white halo are always present -- makes the caret pop. */
+    var col=C.caretColor||window.__cmacsCaretColor||'#ff69b4';
+    el.style.cssText='position:fixed;width:3px;z-index:2147483647;'+
+      'pointer-events:none;opacity:1;border-radius:1px;background:'+col+';'+
+      'box-shadow:0 0 5px 1px '+col+',0 0 0 1px rgba(255,255,255,0.9);';
+    el.style.left=rect.left+'px'; el.style.top=rect.top+'px';
+    el.style.height=(rect.height||16)+'px'; el.style.display='block';
+  };
+  C.show = function(){ C.ensure(); C.paint(); };
+  C.hide = function(){ var el=document.getElementById('__cmacsCaretEl'); if(el) el.style.display='none'; };
+  C.startHighlight = function(){ C.ensure(); C.extend=true; };
+  C.clearHighlight = function(){
+    C.extend=false; var s=sel();
+    if(s.rangeCount){ var r=s.getRangeAt(0); r.collapse(true);
+      s.removeAllRanges(); s.addRange(r); } C.paint();
+  };
+  C.copyText = function(){ return sel().toString(); };
+  C.search = function(q, backward){
+    if(!q) return false;
+    /* window.find moves the selection to the match and scrolls it into
+       view -- works without the page holding keyboard focus. */
+    var ok=false;
+    try{ ok=window.find(q,false,!!backward,true,false,false,false); }catch(e){}
+    if(ok){ C.follow(); C.paint(); }
+    return ok;
+  };
+  C.activate = function(){
+    var s=sel(); if(!s.focusNode) return false;
+    var n=s.focusNode.nodeType===3 ? s.focusNode.parentElement : s.focusNode;
+    while(n && n!==document.body){
+      var t=n.tagName;
+      if(t==='A' && n.href){ n.click(); return true; }
+      if(t==='BUTTON' || n.getAttribute('role')==='button' ||
+         n.getAttribute('role')==='link' || n.onclick){ n.click(); return true; }
+      n=n.parentElement;
+    }
+    return false;
+  };
+  C.show();
+})();"
+  "JavaScript caret engine injected into a gsurf page by caret mode.
+Idempotent: re-running it only repaints.  Reads `window.__cmacsCaretColor'
+for the overlay color.")
+
+(defvar-local cmacs-gsurf--caret-script-added nil
+  "Non-nil once the caret engine user-script is installed for this view.")
+
+(defun cmacs-gsurf--caret-boot-js ()
+  "Return the caret engine JS prefixed with the configured color."
+  (concat "window.__cmacsCaretColor="
+          (prin1-to-string cmacs-gsurf-caret-color) ";"
+          cmacs-gsurf--caret-engine-js))
+
+(defun cmacs-gsurf--caret-install ()
+  "Ensure the caret engine is present and painting in the current page.
+Installs a persistent user-script once (so it survives navigation /
+SPA route changes), and injects into the already-loaded page now."
+  (when (cmacs-gsurf-attached-p (current-buffer))
+    (let ((boot (cmacs-gsurf--caret-boot-js)))
+      (unless cmacs-gsurf--caret-script-added
+        (setq cmacs-gsurf--caret-script-added t)
+        (cmacs-gsurf-add-user-script (current-buffer) boot nil))
+      (cmacs-gsurf-run-javascript (current-buffer) boot))))
+
+(defun cmacs-gsurf--caret-run (js &optional motion)
+  "Inject caret JS in the current gsurf buffer (no-op if not attached)."
+  (when (cmacs-gsurf-attached-p (current-buffer))
+    (cmacs-gsurf-run-javascript (current-buffer) js)
+    (when motion
+      (run-hook-with-args 'cmacs-gsurf-caret-functions
+                          (current-buffer) motion))))
+
+(defmacro cmacs-gsurf--define-caret-motion (name motion js)
+  "Define caret motion command NAME injecting JS, reporting MOTION."
+  `(defun ,name ()
+     ,(format "Move the gsurf caret (%s)." motion)
+     (interactive)
+     (cmacs-gsurf--caret-run
+      ,(concat "window.__cmacsCaret&&window.__cmacsCaret." js) ',motion)))
+
+(cmacs-gsurf--define-caret-motion cmacs-gsurf-caret-left
+  left "move('left','character')")
+(cmacs-gsurf--define-caret-motion cmacs-gsurf-caret-right
+  right "move('right','character')")
+(cmacs-gsurf--define-caret-motion cmacs-gsurf-caret-down
+  down "move('forward','line')")
+(cmacs-gsurf--define-caret-motion cmacs-gsurf-caret-up
+  up "move('backward','line')")
+(cmacs-gsurf--define-caret-motion cmacs-gsurf-caret-word-forward
+  word-forward "move('forward','word')")
+(cmacs-gsurf--define-caret-motion cmacs-gsurf-caret-word-backward
+  word-backward "move('backward','word')")
+(cmacs-gsurf--define-caret-motion cmacs-gsurf-caret-word-end
+  word-end "move('forward','word')")
+(cmacs-gsurf--define-caret-motion cmacs-gsurf-caret-line-start
+  line-start "move('left','lineboundary')")
+(cmacs-gsurf--define-caret-motion cmacs-gsurf-caret-line-end
+  line-end "move('right','lineboundary')")
+(cmacs-gsurf--define-caret-motion cmacs-gsurf-caret-top
+  top "toTop()")
+(cmacs-gsurf--define-caret-motion cmacs-gsurf-caret-bottom
+  bottom "toBottom()")
+
+(defun cmacs-gsurf-caret-start-highlight ()
+  "Begin a selection; subsequent caret motions extend the highlight."
+  (interactive)
+  (cmacs-gsurf--caret-run
+   "window.__cmacsCaret&&window.__cmacsCaret.startHighlight()" 'highlight)
+  (message "gsurf: highlighting (motions extend; y/M-w copy)"))
+
+(defun cmacs-gsurf-caret-activate ()
+  "Click the link or button under the gsurf caret."
+  (interactive)
+  (cmacs-gsurf--caret-run
+   "window.__cmacsCaret&&window.__cmacsCaret.activate()" 'activate))
+
+(defun cmacs-gsurf-caret-copy ()
+  "Copy the in-page selection to the kill-ring, then clear the highlight.
+The system clipboard follows via `select-enable-clipboard'."
+  (interactive)
+  (when (cmacs-gsurf-attached-p (current-buffer))
+    (let ((buf (current-buffer)))
+      (cmacs-gsurf-run-javascript-async
+       buf "(window.__cmacsCaret?window.__cmacsCaret.copyText():'')"
+       (lambda (text)
+         (when (and (stringp text) (> (length text) 0))
+           (kill-new text)
+           (message "gsurf: copied %d chars" (length text)))
+         (when (buffer-live-p buf)
+           (with-current-buffer buf
+             (cmacs-gsurf-run-javascript
+              buf "window.__cmacsCaret&&window.__cmacsCaret.clearHighlight()")
+             (run-hook-with-args 'cmacs-gsurf-caret-functions buf 'copy))))))))
+
+(defun cmacs-gsurf--js-string (s)
+  "Return Lisp string S as a quoted JavaScript string literal."
+  (concat "\""
+          (mapconcat
+           (lambda (c)
+             (cond ((eq c ?\\) "\\\\")
+                   ((eq c ?\") "\\\"")
+                   ((eq c ?\n) "\\n")
+                   ((eq c ?\r) "\\r")
+                   ((eq c ?\t) "\\t")
+                   ((< c 32) (format "\\u%04x" c))
+                   (t (char-to-string c))))
+           s "")
+          "\""))
+
+(defvar-local cmacs-gsurf--caret-last-search nil
+  "Last query used by `cmacs-gsurf-caret-search' in this buffer.")
+
+(defun cmacs-gsurf--caret-search-1 (query backward motion)
+  "Search the page for QUERY (BACKWARD if non-nil) and move the caret there."
+  (when (and (stringp query) (> (length query) 0))
+    (setq cmacs-gsurf--caret-last-search query)
+    (cmacs-gsurf--caret-run
+     (format "window.__cmacsCaret&&window.__cmacsCaret.search(%s,%s)"
+             (cmacs-gsurf--js-string query) (if backward "true" "false"))
+     motion)))
+
+(defun cmacs-gsurf-caret-search (query)
+  "Search the page for QUERY and jump the caret to the first match.
+Like `/' in a vim buffer.  Repeat with \\[cmacs-gsurf-caret-search-next] /\
+ \\[cmacs-gsurf-caret-search-prev]."
+  (interactive
+   (list (read-string "gsurf search: " nil nil cmacs-gsurf--caret-last-search)))
+  (cmacs-gsurf--caret-search-1 query nil 'search))
+
+(defun cmacs-gsurf-caret-search-next ()
+  "Jump the caret to the next match of the last caret search (vim `n')."
+  (interactive)
+  (if cmacs-gsurf--caret-last-search
+      (cmacs-gsurf--caret-search-1 cmacs-gsurf--caret-last-search nil 'search-next)
+    (call-interactively #'cmacs-gsurf-caret-search)))
+
+(defun cmacs-gsurf-caret-search-prev ()
+  "Jump the caret to the previous match of the last caret search (vim `N')."
+  (interactive)
+  (if cmacs-gsurf--caret-last-search
+      (cmacs-gsurf--caret-search-1 cmacs-gsurf--caret-last-search t 'search-prev)
+    (call-interactively #'cmacs-gsurf-caret-search)))
+
+(defvar cmacs-gsurf-caret-mode-map
+  (let ((m (make-sparse-keymap)))
+    (define-key m (kbd "h")   #'cmacs-gsurf-caret-left)
+    (define-key m (kbd "l")   #'cmacs-gsurf-caret-right)
+    (define-key m (kbd "j")   #'cmacs-gsurf-caret-down)
+    (define-key m (kbd "k")   #'cmacs-gsurf-caret-up)
+    (define-key m (kbd "w")   #'cmacs-gsurf-caret-word-forward)
+    (define-key m (kbd "b")   #'cmacs-gsurf-caret-word-backward)
+    (define-key m (kbd "e")   #'cmacs-gsurf-caret-word-end)
+    (define-key m (kbd "0")   #'cmacs-gsurf-caret-line-start)
+    (define-key m (kbd "$")   #'cmacs-gsurf-caret-line-end)
+    (define-key m (kbd "g g") #'cmacs-gsurf-caret-top)
+    (define-key m (kbd "G")   #'cmacs-gsurf-caret-bottom)
+    (define-key m (kbd "v")   #'cmacs-gsurf-caret-start-highlight)
+    (define-key m (kbd "y")   #'cmacs-gsurf-caret-copy)
+    (define-key m (kbd "M-w") #'cmacs-gsurf-caret-copy)
+    (define-key m (kbd "RET") #'cmacs-gsurf-caret-activate)
+    (define-key m (kbd "/")   #'cmacs-gsurf-caret-search)
+    (define-key m (kbd "n")   #'cmacs-gsurf-caret-search-next)
+    (define-key m (kbd "N")   #'cmacs-gsurf-caret-search-prev)
+    m)
+  "Keymap for `cmacs-gsurf-caret-mode' (non-evil fallback).
+Deliberately leaves C-d/C-u/C-f/C-b (scroll), f (link hints), i
+(focus page) and SPC (leader) to the major mode.")
+
+(define-minor-mode cmacs-gsurf-caret-mode
+  "In-page caret navigation for a gsurf buffer, driven by injected JS.
+With caret mode on, `h'/`j'/`k'/`l' move the caret (the page
+auto-scrolls to follow), `w'/`b'/`e' move by word, `0'/`$' to line
+ends, `gg'/`G' to the document ends.  `v' starts a highlight that
+subsequent motions extend; `y'/`M-w' copy it; RET clicks the link
+under the caret.  `C-d'/`C-u'/`C-f'/`C-b' keep scrolling and SPC stays
+free for the leader.
+
+Note: while caret mode is on, `0' and `$' move the caret (zoom reset
+remains on `=' / `+' / `-')."
+  :init-value nil
+  :lighter " Caret"
+  :keymap cmacs-gsurf-caret-mode-map
+  (when cmacs-gsurf-caret-mode
+    (cmacs-gsurf--caret-install)))
+
+(defun cmacs-gsurf--caret-on-load (buffer event)
+  "Reinstall/repaint the caret when BUFFER finishes a load (EVENT)."
+  (when (and (eq event 'finished)
+             (buffer-live-p buffer)
+             (buffer-local-value 'cmacs-gsurf-caret-mode buffer))
+    (with-current-buffer buffer
+      (cmacs-gsurf--caret-install))))
+
+(add-hook 'cmacs-gsurf-load-changed-functions #'cmacs-gsurf--caret-on-load)
+
+(defun cmacs-gsurf--maybe-enable-caret ()
+  "Enable `cmacs-gsurf-caret-mode' in a new gsurf buffer if configured."
+  (when cmacs-gsurf-caret-mode-default
+    (cmacs-gsurf-caret-mode 1)))
+
+(add-hook 'cmacs-gsurf-mode-hook #'cmacs-gsurf--maybe-enable-caret)
+
+(with-eval-after-load 'evil
+  (when (fboundp 'evil-define-minor-mode-key)
+    (dolist (state '(normal motion))
+      (evil-define-minor-mode-key state 'cmacs-gsurf-caret-mode
+        "h"  #'cmacs-gsurf-caret-left
+        "l"  #'cmacs-gsurf-caret-right
+        "j"  #'cmacs-gsurf-caret-down
+        "k"  #'cmacs-gsurf-caret-up
+        "w"  #'cmacs-gsurf-caret-word-forward
+        "b"  #'cmacs-gsurf-caret-word-backward
+        "e"  #'cmacs-gsurf-caret-word-end
+        "0"  #'cmacs-gsurf-caret-line-start
+        "$"  #'cmacs-gsurf-caret-line-end
+        "gg" #'cmacs-gsurf-caret-top
+        "G"  #'cmacs-gsurf-caret-bottom
+        "v"  #'cmacs-gsurf-caret-start-highlight
+        "y"  #'cmacs-gsurf-caret-copy
+        (kbd "M-w") #'cmacs-gsurf-caret-copy
+        (kbd "RET") #'cmacs-gsurf-caret-activate
+        "/"  #'cmacs-gsurf-caret-search
+        "n"  #'cmacs-gsurf-caret-search-next
+        "N"  #'cmacs-gsurf-caret-search-prev))))
 
 (provide 'cmacs-gsurf)
 ;;; cmacs-gsurf.el ends here

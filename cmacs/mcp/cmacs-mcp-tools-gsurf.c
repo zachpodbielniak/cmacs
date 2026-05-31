@@ -174,6 +174,36 @@ handle_gsurf_set_zoom (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
   return gsurf_eval (expr);
 }
 
+/* gsurf-lite: render a page offscreen (JS runs, logins persist) and dump
+   the post-JS DOM into a real shr-rendered Emacs text buffer.  The
+   helpers live in lisp/cmacs/cmacs-gsurf-lite.el; require it so the
+   tools work even before a lite buffer was opened interactively. */
+static McpToolResult *
+handle_gsurf_lite_open (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
+{
+  (void) s; (void) n; (void) u;
+  const gchar *url = json_object_get_string_member_with_default (a, "url", NULL);
+  if (url == NULL)
+    return missing_arg ("url");
+  g_autofree gchar *q = elisp_string (url);
+  g_autofree gchar *expr =
+    g_strdup_printf ("(progn (require 'cmacs-gsurf-lite) "
+                     "(cmacs-gsurf-lite-mcp-open %s))", q);
+  return gsurf_eval (expr);
+}
+
+static McpToolResult *
+handle_gsurf_extract_text (McpServer *s, const gchar *n, JsonObject *a,
+                           gpointer u)
+{
+  (void) s; (void) n; (void) u;
+  g_autofree gchar *buf = buffer_arg (a);
+  g_autofree gchar *expr =
+    g_strdup_printf ("(progn (require 'cmacs-gsurf-lite) "
+                     "(cmacs-gsurf-lite-mcp-extract-text %s))", buf);
+  return gsurf_eval (expr);
+}
+
 /* ── Registration ─────────────────────────────────────────────────── */
 
 static void
@@ -255,6 +285,23 @@ cmacs_mcp_tools_gsurf_register (McpServer *server)
     "\"level\":{\"type\":\"number\",\"description\":\"zoom level\"},"
     BUF_PROP "},\"required\":[\"level\"]}",
     handle_gsurf_set_zoom);
+
+  add_tool (server, "gsurf_lite_open",
+    "Open a URL as eww-style text: gsurf renders it offscreen "
+    "(JavaScript runs, logins persist) and the post-JS page is dumped to "
+    "a real Emacs text buffer.  Returns the buffer name; read it with "
+    "gsurf_extract_text once loaded.", FALSE,
+    "{\"type\":\"object\",\"properties\":{"
+    "\"url\":{\"type\":\"string\",\"description\":\"URL or search query\"}},"
+    "\"required\":[\"url\"]}",
+    handle_gsurf_lite_open);
+
+  add_tool (server, "gsurf_extract_text",
+    "Return the rendered plain text of a gsurf-lite buffer (newest, or "
+    "the named one).  Reads a JS-rendered or logged-in page as clean "
+    "text after gsurf_lite_open.", TRUE,
+    "{\"type\":\"object\",\"properties\":{" BUF_PROP "}}",
+    handle_gsurf_extract_text);
 }
 
 #endif /* HAVE_CMACS_MCP && HAVE_CMACS_GSURF */

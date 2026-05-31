@@ -146,6 +146,120 @@ map.)  Once the page has focus, gsurf's own =modal= module (vim keys,
 (setq browse-url-browser-function #'cmacs-gsurf-browse-url)
 #+end_src
 
+* Caret mode
+
+=cmacs-gsurf-caret-mode= is a minor mode (on by default — see
+=cmacs-gsurf-caret-mode-default=) that gives the live browser buffer an
+in-page *text cursor* you move with Emacs/evil motions, so a page reads
+like a normal buffer.  It is driven entirely from Emacs by injecting
+JavaScript that moves the DOM selection (=getSelection().modify=) and
+paints a fixed-position caret overlay; the page is *never focused*, so
+the =SPC= leader, =C-w=, and =M-x= keep working throughout.  (It is
+deliberately not a gsurf input-handler module — those only fire when the
+page holds GTK keyboard focus, which the focus model forbids.)
+
+| Key       | Action                                          |
+|-----------+-------------------------------------------------|
+| =h= / =l= | Move caret left / right by a character           |
+| =j= / =k= | Move caret down / up by a line                   |
+| =w= / =b= | Move caret forward / backward by a word          |
+| =e=       | Move caret to the next word                       |
+| =0= / =$= | Move caret to line start / end                   |
+| =gg= / =G= | Move caret to document top / bottom             |
+| =v=       | Start a highlight (subsequent motions extend it) |
+| =y=, =M-w= | Copy the highlight to kill-ring + clipboard     |
+| =RET=     | Activate (click) the link/button under the caret |
+| =/=       | Search the page and jump the caret to the match  |
+| =n= / =N= | Jump to the next / previous search match         |
+
+The page auto-scrolls to keep the caret in view.  =C-d=/=C-u= (half
+page), =C-f=/=C-b= (full page) and =C-e=/=C-y= (one line, like vim) all
+scroll, =f= pops link hints, and =SPC= stays free for the leader.  =/=
+runs an in-page search (via =window.find=) and moves the caret to the
+hit so you can copy or follow from there; =n=/=N= repeat it.  While caret mode is on, =0= and
+=$= move the caret; zoom-reset stays on =+= / =-= / ==.  Toggle with
+=M-x cmacs-gsurf-caret-mode= to get plain =hjkl=-scroll back.  The
+overlay colour is =cmacs-gsurf-caret-color=; the abnormal hook
+=cmacs-gsurf-caret-functions= (=(BUFFER MOTION)=) fires after each
+motion.
+
+The caret =y= readback needs the result-returning primitive
+=cmacs-gsurf-run-javascript-async= (BUFFER SCRIPT CALLBACK), which calls
+CALLBACK with the script's value (the older =cmacs-gsurf-run-javascript=
+is fire-and-forget).  The engine is installed once per page as a user
+script via =cmacs-gsurf-add-user-script=.
+
+* gsurf-lite — eww-style text buffers
+
+=gsurf-lite= renders a page with gsurf/WebKit *offscreen* (its
+JavaScript runs, and logins/sessions persist in WebKit's shared cookie
+context) and dumps the post-JS DOM into a *real Emacs text buffer*
+rendered with =shr= — like =eww=, but the HTML is WebKit's live
+=document.documentElement.outerHTML= instead of a raw =url-retrieve=
+fetch.  The result is a normal, navigable, copy/search/yank-able buffer
+that works on JavaScript-only / single-page sites and stays logged in.
+
+#+begin_src emacs-lisp
+(cmacs-gsurf-lite "https://example.com")  ; M-x cmacs-gsurf-lite
+#+end_src
+
+A hidden =GsurfView= is attached to the lite buffer headless: its
+WebKit widget is parented into the frame's =GtkFixed= at a full
+viewport size but parked far below the visible area (=y=100000=), where
+GTK clips it away.  It is realized -- so WebKit spawns its web process
+and actually runs JavaScript with a real 1280x1024 viewport -- yet
+never visible, and it is never resized to a window rectangle
+(=cmacs-gsurf-place= / =-hide= are no-ops for an offscreen view, and
+=cmacs-gsurf-offscreen-p= reports it), so the live page can never cover
+the rendered text.  (A pure =GtkOffscreenWindow= does *not* start the
+web process -- the JavaScript callback never fires -- which is why the
+parked-in-frame approach is used.)  On each load-finish the post-JS
+HTML is pulled out with =cmacs-gsurf-run-javascript-async= and rendered
+with =shr=; links navigate the *hidden* view in place (not
+=url-retrieve=), and the next load re-extracts and re-renders.
+
+| Key       | Command                            | Action               |
+|-----------+------------------------------------+----------------------|
+| =RET=     | =cmacs-gsurf-lite-follow=          | Follow link at point |
+| =g= / =r= | =cmacs-gsurf-lite-reload=          | Reload               |
+| =B= / =F= | back / forward                     | Hidden-view history  |
+| =o=       | =cmacs-gsurf-lite-open=            | Open a URL           |
+| =RET=     | =cmacs-gsurf-lite-follow=          | Activate field / link |
+| =TAB= / =S-TAB= | next / prev field or link    | Move between controls |
+| =C-c C-c= | =cmacs-gsurf-lite-submit=          | Submit the form      |
+| =&=       | =cmacs-gsurf-lite-browse-external= | Hand off to full gsurf |
+| =q=       | =quit-window=                      | Bury the buffer      |
+
+Links with no usable =href= (SPA / =onclick=) are clicked by a stable
+=data-cmlite-id= stamped during extraction, then re-extracted after
+=cmacs-gsurf-lite-extract-settle= seconds (pushState fires no load
+event).  =cmacs-gsurf-lite-shr-width= overrides the shr fill width.
+
+*Logins / forms work.*  Form controls render as editable items:
+=Username: [ ]=, =Password: [ ]=, =[ ] remember=, =[ Log In ]=.  Move
+between them with =TAB= / =S-TAB=, press =RET= on a field to fill it
+(passwords are read without echo via =read-passwd= and never written
+into the buffer or the extracted HTML -- only a filled/empty marker),
+toggle a checkbox/radio or click a button with =RET=, and submit with
+=RET= on the submit button or =C-c C-c=.  Filling pushes the value into
+the *live DOM* through the native value setter plus =input=/=change=
+events (so React/controlled inputs accept it), and submitting clicks
+the real control -- so cookies, CSRF tokens, hidden fields and the
+session all ride along exactly as a browser would send them.  A real
+login (e.g. Fidelity) therefore works from the lite buffer; the
+WebKit cookie jar is shared with full =cmacs-gsurf= buffers, so a
+session established in one is visible in the other.  Pressing =&= still
+hands the page off to a full live =cmacs-gsurf= buffer if you prefer a
+real widget.  (File-upload inputs are out of scope -- JavaScript cannot
+set =<input type=file>=.)
+
+*SPA / late-rendering pages.*  Many sign-in and React/SPA pages render
+their real content only after the load-finished event.  gsurf-lite
+re-extracts the DOM at each delay in =cmacs-gsurf-lite-resettle-times=
+(default 0.6/1.6/3.0 s) so that content appears; raise those values for
+very slow pages, or just =g= (reload) / =&= (hand off) if a page is
+still blank.
+
 * Configuration (from Emacs, by default)
 
 cmacs-gsurf does *not* read gsurf's own =~/.config/gsurf/config.yaml=
@@ -269,6 +383,8 @@ cmacs-ai via the MCP bridge — =^gsurf_= is in the default allowlist):
 | =gsurf_modules_list= | — | read-only |
 | =gsurf_eval_js= | script, [buffer] | fire-and-forget |
 | =gsurf_set_zoom= | level, [buffer] | |
+| =gsurf_lite_open= | url | offscreen render; returns buffer name |
+| =gsurf_extract_text= | [buffer] | read-only; rendered page text |
 
 =buffer= defaults to the most-recently-opened gsurf buffer.
 

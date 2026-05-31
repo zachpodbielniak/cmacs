@@ -62,12 +62,17 @@ Note that an attached browser additionally needs a windowing backend
 }
 
 DEFUN ("cmacs-gsurf-attach", Fcmacs_gsurf_attach,
-       Scmacs_gsurf_attach, 1, 1, 0,
+       Scmacs_gsurf_attach, 1, 2, 0,
        doc: /* Attach a live gsurf web view to BUFFER.
 Brings up the gsurf runtime on first use and creates a WebKitGTK view
 parented into BUFFER's frame.  Idempotent.  Signals `cmacs-gsurf-error'
-if the windowing backend is unavailable.  */)
-  (Lisp_Object buffer)
+if the windowing backend is unavailable.
+
+With optional OFFSCREEN non-nil, the view is created headless: its
+widget is hosted in a GtkOffscreenWindow (so WebKit still realizes and
+runs JavaScript) and is never shown on a frame.  This is what gsurf-lite
+uses to render a page and extract its post-JS DOM as Emacs text.  */)
+  (Lisp_Object buffer, Lisp_Object offscreen)
 {
   CHECK_BUFFER (buffer);
   if (cmacs_gsurf_view_for_buffer (buffer))
@@ -79,7 +84,21 @@ if the windowing backend is unavailable.  */)
   if (!v)
     xsignal1 (Qcmacs_gsurf_error,
               build_string ("failed to create gsurf view"));
+  if (!NILP (offscreen))
+    cmacs_gsurf_view_make_offscreen (v);
   return Qt;
+}
+
+DEFUN ("cmacs-gsurf-offscreen-p", Fcmacs_gsurf_offscreen_p,
+       Scmacs_gsurf_offscreen_p, 1, 1, 0,
+       doc: /* Return t if BUFFER's gsurf view is headless (offscreen).
+Offscreen views (gsurf-lite) are realized in a GtkOffscreenWindow and
+never placed on a frame.  Returns nil if BUFFER has no view.  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsGsurfView *v = cmacs_gsurf_view_for_buffer (buffer);
+  return (v && cmacs_gsurf_view_offscreen_p (v)) ? Qt : Qnil;
 }
 
 DEFUN ("cmacs-gsurf-detach", Fcmacs_gsurf_detach,
@@ -306,6 +325,36 @@ The result is discarded (fire-and-forget); use page side effects.  */)
   return Qt;
 }
 
+DEFUN ("cmacs-gsurf-run-javascript-async", Fcmacs_gsurf_run_javascript_async,
+       Scmacs_gsurf_run_javascript_async, 3, 3, 0,
+       doc: /* Run JavaScript SCRIPT in BUFFER's gsurf view; deliver its value.
+CALLBACK is called with one argument: the script's result as a string
+(JSON for non-string values, the empty string on error).  The call is
+asynchronous; CALLBACK runs later on the main thread.  Works while the
+page is unfocused (JS evaluation does not need GTK keyboard focus).  */)
+  (Lisp_Object buffer, Lisp_Object script, Lisp_Object callback)
+{
+  CmacsGsurfView *v = require_view (buffer);
+  CHECK_STRING (script);
+  cmacs_gsurf_view_run_js_cb (v, utf8 (script), callback);
+  return Qt;
+}
+
+DEFUN ("cmacs-gsurf-add-user-script", Fcmacs_gsurf_add_user_script,
+       Scmacs_gsurf_add_user_script, 2, 3, 0,
+       doc: /* Inject user SCRIPT into all frames of BUFFER's gsurf view.
+SCRIPT is JavaScript source, injected on every page load (it persists
+across navigation).  With optional AT-END non-nil it runs at document
+end instead of document start.  Use an idempotent guard in SCRIPT so
+re-injection on reload is harmless.  */)
+  (Lisp_Object buffer, Lisp_Object script, Lisp_Object at_end)
+{
+  CmacsGsurfView *v = require_view (buffer);
+  CHECK_STRING (script);
+  cmacs_gsurf_view_add_user_script (v, utf8 (script), !NILP (at_end));
+  return Qt;
+}
+
 DEFUN ("cmacs-gsurf-find", Fcmacs_gsurf_find,
        Scmacs_gsurf_find, 2, 3, 0,
        doc: /* Search for TEXT in BUFFER's gsurf view.
@@ -444,6 +493,7 @@ syms_of_cmacs_gsurf_defuns (void)
 
   defsubr (&Scmacs_gsurf_supported_p);
   defsubr (&Scmacs_gsurf_attach);
+  defsubr (&Scmacs_gsurf_offscreen_p);
   defsubr (&Scmacs_gsurf_detach);
   defsubr (&Scmacs_gsurf_attached_p);
   defsubr (&Scmacs_gsurf_place);
@@ -465,6 +515,8 @@ syms_of_cmacs_gsurf_defuns (void)
   defsubr (&Scmacs_gsurf_set_zoom);
   defsubr (&Scmacs_gsurf_get_zoom);
   defsubr (&Scmacs_gsurf_run_javascript);
+  defsubr (&Scmacs_gsurf_run_javascript_async);
+  defsubr (&Scmacs_gsurf_add_user_script);
   defsubr (&Scmacs_gsurf_find);
   defsubr (&Scmacs_gsurf_find_next);
   defsubr (&Scmacs_gsurf_modules_list);

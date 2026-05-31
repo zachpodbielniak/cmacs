@@ -44,6 +44,9 @@ struct CmacsGsurfView
   GsurfView   *view;         /* owned ref (gsurf_view_new) */
   GtkWidget   *widget;       /* native WebKitGTK widget (owned by view) */
   GtkWidget   *parent_fixed; /* current FRAME_GTK_WIDGET it sits in, or NULL */
+  gboolean     offscreen;    /* headless: parked far off-area in the
+                                frame's GtkFixed so WebKit runs JS but the
+                                view is never visible (gsurf-lite) */
   gboolean     shown;
   /* Our explicit focus intent.  The web widget is created NON-focusable
    * (gtk_widget_set_can_focus FALSE) so a page that autofocuses an
@@ -358,6 +361,72 @@ cmacs_gsurf_view_new (Lisp_Object buffer)
   return v;
 }
 
+/* ── Offscreen (headless) views ────────────────────────────────────── *
+ *
+ * gsurf-lite renders a page with no on-screen widget: the post-JS DOM is
+ * extracted and re-rendered as Emacs text via shr.
+ *
+ * WebKit only spawns its web process / lays out / runs JavaScript once
+ * its widget is realized inside a real on-screen GtkWindow.  A pure
+ * GtkOffscreenWindow does NOT start it (verified empirically: the
+ * run-javascript callback never fires), so instead we park the widget in
+ * the selected frame's GtkFixed at a normal viewport size but far below
+ * the visible area, where GTK clips it away.  It is realized (so it runs
+ * JS with a real 1280x1024 viewport -- important for real sites' layout)
+ * yet never visible, and it is never resized to a window rect
+ * (cmacs_gsurf_view_place / _hide are no-ops for offscreen views), so it
+ * can never cover the rendered text. */
+
+#define CMACS_GSURF_OFFSCREEN_X 0
+#define CMACS_GSURF_OFFSCREEN_Y 100000   /* below any plausible frame */
+#define CMACS_GSURF_OFFSCREEN_W 1280
+#define CMACS_GSURF_OFFSCREEN_H 1024
+
+void
+cmacs_gsurf_view_make_offscreen (CmacsGsurfView *v)
+{
+  if (v == NULL || v->widget == NULL || v->offscreen)
+    return;
+#ifdef HAVE_PGTK
+  struct frame *f = SELECTED_FRAME ();
+  if (f == NULL || !FRAME_LIVE_P (f) || !FRAME_PGTK_P (f))
+    return;
+  GtkWidget *fixed = FRAME_GTK_WIDGET (f);
+  if (fixed == NULL || !GTK_IS_FIXED (fixed))
+    return;
+  block_input ();
+  v->offscreen = TRUE;
+  GtkWidget *cur = gtk_widget_get_parent (v->widget);
+  if (cur != fixed)
+    {
+      if (cur != NULL)
+        gtk_container_remove (GTK_CONTAINER (cur), v->widget);
+      gtk_fixed_put (GTK_FIXED (fixed), v->widget,
+                     CMACS_GSURF_OFFSCREEN_X, CMACS_GSURF_OFFSCREEN_Y);
+      v->parent_fixed = fixed;
+    }
+  else
+    gtk_fixed_move (GTK_FIXED (fixed), v->widget,
+                    CMACS_GSURF_OFFSCREEN_X, CMACS_GSURF_OFFSCREEN_Y);
+  gtk_widget_set_size_request (v->widget,
+                               CMACS_GSURF_OFFSCREEN_W, CMACS_GSURF_OFFSCREEN_H);
+  /* Showing it inside the already-realized frame realizes the widget ->
+     WebKit spawns its web process and starts running JS / laying out. */
+  gtk_widget_show (v->widget);
+  v->shown = TRUE;
+  set_webview_focusable (v, FALSE);
+  unblock_input ();
+#else
+  (void) v;
+#endif
+}
+
+bool
+cmacs_gsurf_view_offscreen_p (CmacsGsurfView *v)
+{
+  return v != NULL && v->offscreen;
+}
+
 void
 cmacs_gsurf_view_destroy (CmacsGsurfView *v)
 {
@@ -411,6 +480,9 @@ cmacs_gsurf_view_place (CmacsGsurfView *v, Lisp_Object frame,
                         int x, int y, int w, int h)
 {
   if (!v || !v->widget) return;
+  /* Headless (gsurf-lite) views are never shown on a frame -- placing one
+     would yank the live page on top of the text buffer. */
+  if (v->offscreen) return;
 #ifdef HAVE_PGTK
   struct frame *f = XFRAME (frame);
   if (!FRAME_LIVE_P (f) || !FRAME_PGTK_P (f))
@@ -542,6 +614,9 @@ void
 cmacs_gsurf_view_hide (CmacsGsurfView *v)
 {
   if (!v || !v->widget) return;
+  /* Headless (gsurf-lite) views stay realized in their GtkOffscreenWindow
+     so WebKit keeps running; never hide them. */
+  if (v->offscreen) return;
   block_input ();
   gtk_widget_hide (v->widget);
   v->shown = FALSE;
@@ -612,6 +687,83 @@ cmacs_gsurf_view_get_zoom (CmacsGsurfView *v)
 void
 cmacs_gsurf_view_run_js (CmacsGsurfView *v, const char *js)
 { if (v && v->view) gsurf_view_run_javascript_async (v->view, js, NULL, NULL, NULL); }
+
+/* ---- run-javascript with a Lisp callback (result return channel) --- *
+ *
+ * The fire-and-forget path above discards the script value.  This
+ * variant delivers it back to a one-shot Lisp CALLBACK.  GC safety: the
+ * callback lives in the staticpro'd cookie registry in
+ * cmacs-eval-dispatch.c (never a raw Lisp_Object across the async gap).
+ *
+ * Threading: gsurf's run_javascript_async passes the underlying
+ * WebKitWebView (not the GsurfView) as the GAsyncResult source object,
+ * so we stash a ref to the GsurfView -- ref-held so it outlives a buffer
+ * kill mid-flight -- and hop through the cmacs GMainContext before
+ * touching Lisp (build_string + the callback must run on the main
+ * thread; webkit's callback already fires there, but the invoke keeps
+ * us robust to backend threading and matches the whisper pattern). */
+
+typedef struct
+{
+  GsurfView *view;      /* reffed; _finish needs it (source is the webview) */
+  uint64_t   cb_cookie;
+  char      *result;    /* owned; set in finish, consumed in main */
+} CmacsGsurfJsCall;
+
+static gboolean
+js_result_main (gpointer data)
+{
+  CmacsGsurfJsCall *c = data;
+  cmacs_dispatch_callback_invoke1 (c->cb_cookie,
+                                   build_string (c->result ? c->result : ""));
+  g_free (c->result);
+  g_object_unref (c->view);
+  g_free (c);
+  return G_SOURCE_REMOVE;
+}
+
+static void
+js_finish_cb (GObject *source, GAsyncResult *res, gpointer user)
+{
+  CmacsGsurfJsCall *c = user;
+  GError *err = NULL;
+  (void) source;
+  c->result = gsurf_view_run_javascript_finish (c->view, res, &err);
+  g_clear_error (&err);
+  g_main_context_invoke (cmacs_glib_get_context (), js_result_main, c);
+}
+
+void
+cmacs_gsurf_view_run_js_cb (CmacsGsurfView *v, const char *js,
+                            Lisp_Object callback)
+{
+  if (!v || !v->view)
+    return;
+  if (NILP (callback))
+    {
+      gsurf_view_run_javascript_async (v->view, js, NULL, NULL, NULL);
+      return;
+    }
+  CmacsGsurfJsCall *c = g_new0 (CmacsGsurfJsCall, 1);
+  c->view      = g_object_ref (v->view);
+  c->cb_cookie = cmacs_dispatch_callback_register (callback);
+  gsurf_view_run_javascript_async (v->view, js, NULL, js_finish_cb, c);
+}
+
+/* ---- user-script injection (idempotent per-page bootstrap) -------- *
+ *
+ * Wraps gsurf_view_add_user_script (the WebKitUserContentManager path
+ * the stock userscripts module uses).  Caret mode injects its engine
+ * once per view here so it survives navigation / SPA route changes;
+ * gsurf-lite uses it for its extraction helper. */
+
+void
+cmacs_gsurf_view_add_user_script (CmacsGsurfView *v, const char *src,
+                                  bool at_end)
+{
+  if (v && v->view && src)
+    gsurf_view_add_user_script (v->view, src, at_end);
+}
 
 void
 cmacs_gsurf_view_find (CmacsGsurfView *v, const char *text, bool forward)

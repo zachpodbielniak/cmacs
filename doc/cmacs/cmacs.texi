@@ -6020,6 +6020,117 @@ shadow them) and @kbd{C-w} is left to evil's window map.  Once the page
 has focus, gsurf's own @code{modal} module (its own vim keys, @kbd{f}
 link hints, @kbd{i} insert) takes over until you press @kbd{Escape}.
 
+@section Caret mode
+
+@cindex caret browsing
+@code{cmacs-gsurf-caret-mode} is a minor mode (on by default, see
+@code{cmacs-gsurf-caret-mode-default}) that gives the live browser
+buffer an in-page @emph{text cursor} you move with Emacs/evil motions,
+so a page reads like a normal buffer.  It is driven entirely from Emacs
+by injecting JavaScript that moves the DOM selection
+(@code{getSelection().modify}) and paints a fixed-position caret
+overlay; the page is @emph{never focused}, so the @kbd{SPC} leader,
+@kbd{C-w} and @kbd{M-x} keep working.  (It is deliberately not a gsurf
+input-handler module --- those only fire when the page holds GTK
+keyboard focus, which the focus model forbids.)
+
+@table @kbd
+@item h / l
+Move the caret left / right by a character.
+@item j / k
+Move the caret down / up by a line.
+@item w / b / e
+Move the caret by a word.
+@item 0 / $
+Move the caret to the line start / end.
+@item gg / G
+Move the caret to the document top / bottom.
+@item v
+Start a highlight (subsequent motions extend it).
+@item y, M-w
+Copy the highlight to the kill-ring and system clipboard.
+@item RET
+Activate (click) the link or button under the caret.
+@item /
+Search the page and jump the caret to the match (via
+@code{window.find}).
+@item n / N
+Jump to the next / previous search match.
+@end table
+
+The page auto-scrolls to keep the caret in view.  @kbd{C-d}/@kbd{C-u}
+(half page), @kbd{C-f}/@kbd{C-b} (full page) and @kbd{C-e}/@kbd{C-y}
+(one line, vim-style) all scroll, @kbd{f} pops link hints, and
+@kbd{SPC} stays free for the leader.  While caret mode is on, @kbd{0}
+and @kbd{$} move the caret; zoom-reset stays on @kbd{+} / @kbd{-} /
+@kbd{=}.
+
+@deffn Command cmacs-gsurf-run-javascript-async buffer script callback
+Run @var{script} in @var{buffer}'s view and call @var{callback} with
+the script's value as a string (JSON for non-strings).  Unlike
+@code{cmacs-gsurf-run-javascript} (fire-and-forget) this is the result
+return channel the caret @kbd{y} command and gsurf-lite use.
+@end deffn
+
+@deffn Command cmacs-gsurf-add-user-script buffer script &optional at-end
+Inject @var{script} into every page of @var{buffer}'s view (persists
+across navigation).  Used to install the caret engine once per view.
+@end deffn
+
+@section gsurf-lite
+
+@cindex gsurf-lite
+@cindex eww
+@code{gsurf-lite} renders a page with gsurf/WebKit @emph{offscreen}
+(its JavaScript runs, and logins/sessions persist in WebKit's shared
+cookie context) and dumps the post-JS DOM into a @emph{real Emacs text
+buffer} rendered with @code{shr} --- like @code{eww}, but the HTML is
+WebKit's live @code{document.documentElement.outerHTML} instead of a raw
+@code{url-retrieve} fetch.  The result is a normal, navigable,
+copy/search/yank-able buffer that works on JavaScript-only / single-page
+sites and stays logged in.
+
+@deffn Command cmacs-gsurf-lite &optional url
+Open @var{url} (prompted if nil) as eww-style text rendered from an
+offscreen gsurf view.  Links navigate the hidden view in place; the
+load-finish hook re-extracts and re-renders.
+@end deffn
+
+A hidden @code{GsurfView} is attached to the lite buffer headless: its
+WebKit widget is parented into the frame's @code{GtkFixed} at a full
+viewport size but parked far below the visible area (@code{y=100000}),
+where GTK clips it away.  It is realized -- so WebKit spawns its web
+process and runs JavaScript with a real viewport -- yet never visible,
+and never resized to a window rectangle (@code{cmacs-gsurf-place} /
+@code{-hide} are no-ops for it, and @code{cmacs-gsurf-offscreen-p}
+reports it), so the live page can never cover the rendered text.  (A
+pure @code{GtkOffscreenWindow} does @emph{not} start the web process --
+the JavaScript callback never fires -- which is why this parked-in-frame
+approach is used.)  @kbd{RET} follows the link at point (real links
+navigate the hidden view; SPA/@code{onclick} links are clicked by a
+@code{data-cmlite-id} stamped during extraction).  @kbd{g} reloads,
+@kbd{B}/@kbd{F} go back/forward in the hidden view's history, @kbd{o}
+opens a URL, and @kbd{&} hands the page off to a full live
+@code{cmacs-gsurf} buffer.  The MCP tools @code{gsurf_lite_open} and
+@code{gsurf_extract_text} expose this to external agents and cmacs-ai.
+
+Forms and logins work.  Form controls render as editable items
+(@code{Username: [ ]}, @code{Password: [ ]}, @code{[ ] remember},
+@code{[ Log In ]}); move between them with @kbd{TAB} / @kbd{S-TAB},
+press @kbd{RET} on a field to fill it (passwords are read without echo
+and never written into the buffer or the extracted HTML), toggle a
+checkbox or click a button with @kbd{RET}, and submit with @kbd{RET} on
+the submit button or @kbd{C-c C-c}.  Filling pushes the value into the
+live DOM via the native value setter plus @code{input}/@code{change}
+events (React-safe), and submitting clicks the real control, so
+cookies, CSRF tokens, hidden fields and the session ride along exactly
+as a browser would send them -- a real login works from the lite
+buffer.  (File-upload inputs are out of scope.)  Many sign-in / SPA
+pages render their form only after the load-finished event, so
+gsurf-lite re-extracts the DOM at each delay in
+@code{cmacs-gsurf-lite-resettle-times} (default 0.6/1.6/3.0@tie{}s);
+raise those for very slow pages.
+
 @section Elisp API
 
 Primitives operate on a browser buffer: @code{cmacs-gsurf-load-uri},
@@ -6100,8 +6211,10 @@ With @option{--with-cmacs-mcp}, the tools @code{gsurf_open},
 @code{gsurf_navigate}, @code{gsurf_back}, @code{gsurf_forward},
 @code{gsurf_reload}, @code{gsurf_stop}, @code{gsurf_get_uri},
 @code{gsurf_get_title}, @code{gsurf_current}, @code{gsurf_list},
-@code{gsurf_eval_js}, @code{gsurf_set_zoom} and
-@code{gsurf_modules_list} are exposed.  @code{^gsurf_} is in the default
+@code{gsurf_eval_js}, @code{gsurf_set_zoom},
+@code{gsurf_modules_list}, @code{gsurf_lite_open} (offscreen render to a
+text buffer) and @code{gsurf_extract_text} (read a lite buffer's text)
+are exposed.  @code{^gsurf_} is in the default
 @code{cmacs-ai-mcp-bridge-allowlist}, so cmacs-ai chat buffers can drive
 the browser out of the box.
 

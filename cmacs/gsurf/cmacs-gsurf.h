@@ -61,6 +61,13 @@ extern void cmacs_gsurf_view_place (CmacsGsurfView *v, Lisp_Object frame,
 /* Hide the live widget (buffer no longer displayed in any window). */
 extern void cmacs_gsurf_view_hide  (CmacsGsurfView *v);
 
+/* Make V a headless/offscreen view: host its widget in a
+   GtkOffscreenWindow (so WebKit realizes + runs JS) and never parent it
+   into a frame.  Used by gsurf-lite, which re-renders the page as Emacs
+   text.  cmacs_gsurf_view_place/hide become no-ops for such a view. */
+extern void cmacs_gsurf_view_make_offscreen (CmacsGsurfView *v);
+extern bool cmacs_gsurf_view_offscreen_p     (CmacsGsurfView *v);
+
 /* Focus handoff: grab GTK keyboard focus to V's web widget (so the page
    receives keys), report whether it currently has focus, or hand focus
    back to the selected frame's edit widget (so Emacs/evil regains
@@ -96,6 +103,10 @@ extern double cmacs_gsurf_view_get_progress (CmacsGsurfView *v);
 extern void   cmacs_gsurf_view_set_zoom    (CmacsGsurfView *v, double z);
 extern double cmacs_gsurf_view_get_zoom    (CmacsGsurfView *v);
 extern void   cmacs_gsurf_view_run_js      (CmacsGsurfView *v, const char *js);
+extern void   cmacs_gsurf_view_run_js_cb   (CmacsGsurfView *v, const char *js,
+                                            Lisp_Object callback);
+extern void   cmacs_gsurf_view_add_user_script (CmacsGsurfView *v,
+                                                const char *src, bool at_end);
 extern void   cmacs_gsurf_view_find        (CmacsGsurfView *v,
                                             const char *text, bool forward);
 extern void   cmacs_gsurf_view_find_next   (CmacsGsurfView *v, bool forward);
