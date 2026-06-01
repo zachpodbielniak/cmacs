@@ -407,3 +407,8 @@ exec/config.h.in
 exec/config-mips.m4
 exec/configure
 exec/*.s.s
+
+# cmacs: dependency docs mirrored from deps/*/docs by
+# tools/sync-deps-docs.sh at build time (Makefile.in: cmacs-deps-docs).
+# Generated build artifact — never committed.
+/doc_org/cmacs/deps/

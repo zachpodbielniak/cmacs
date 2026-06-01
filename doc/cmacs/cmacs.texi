@@ -6488,4 +6488,31 @@ identify the missing module.  Do not try to patch the include
 paths directly --- the empty @code{CFLAGS_DEPS} is a symptom of
 an unmet version gate somewhere in the list.
 
+@section Embedded Dependency Documentation
+
+Each vendored dependency under @file{deps/} ships its own
+@file{docs/} folder.  The @code{cmacs-deps-docs} Makefile target ---
+a prerequisite of @code{actual-all}, so it runs on every @code{make}
+--- invokes @file{tools/sync-deps-docs.sh}, which mirrors each
+@file{deps/<dep>/docs/} tree verbatim into
+@file{doc_org/cmacs/deps/<dep>/}.  That tree installs alongside the
+rest of the manual and is browsable from Emacs with
+@code{M-x cmacs-manual-topic} (the topic list is discovered
+dynamically) or via the generated
+@file{doc_org/cmacs/deps/index.org}.
+
+@itemize @bullet
+@item
+The generated @file{doc_org/cmacs/deps/} tree is a build artifact:
+it is git-ignored and refreshed from the current submodule checkouts
+on every build.  Regenerate it manually by running
+@file{tools/sync-deps-docs.sh}.
+@item
+Files are copied as-is --- both @file{.org} and @file{.md} --- so no
+Markdown conversion or extra build dependency is needed.
+@item
+The script is a clean no-op on a tree without @file{deps/}, so an
+upstream-style build is unaffected.
+@end itemize
+
 @bye

@@ -305,8 +305,15 @@ RUN make install-cmacs-dbus-service \
         datadir=/usr/share \
         dbusservicedir=/usr/share/dbus-1/services
 
-# Install interactive Org manual
-RUN emacs_version="" \
+# Install interactive Org manual (core docs + embedded dependency docs).
+# `make` already regenerates doc_org/cmacs/deps/ from each deps/<dep>/docs
+# via the cmacs-deps-docs target, but run the sync explicitly here so the
+# staged tree is guaranteed fresh regardless of make's incremental
+# decisions.  doc_org/ is then copied wholesale into the emacs data dir;
+# downstream images (immutablue) that copy /build/stage/usr/. into /usr
+# pick the whole manual — deps docs included — up automatically.
+RUN ./tools/sync-deps-docs.sh --quiet \
+    && emacs_version="" \
     && for d in /build/stage/usr/share/emacs/*/; do \
            v="$(basename "$d")"; \
            if [ "$v" != "site-lisp" ]; then emacs_version="$v"; break; fi; \

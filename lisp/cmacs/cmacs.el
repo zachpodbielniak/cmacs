@@ -90,21 +90,55 @@ Possible values: `linux', `macos', `freebsd', or `unknown'."
         (find-file index)
       (info "(cmacs)"))))
 
+(defun cmacs--manual-topics ()
+  "Return an alist of (TOPIC . FILE) for every CMacs manual doc.
+Walks `cmacs-doc-org-directory' recursively, collecting every .org
+and .md file (so embedded dependency docs under deps/<dep>/ are
+included alongside the core manual).  TOPIC is the path relative to
+the doc directory with the extension dropped; when an .org and .md
+share the same stem the extension is kept to disambiguate."
+  (let* ((dir (file-name-as-directory cmacs-doc-org-directory))
+         (files (and (file-directory-p dir)
+                     (directory-files-recursively
+                      dir "\\.\\(org\\|md\\)\\'")))
+         (stems (make-hash-table :test 'equal))
+         result)
+    ;; First pass: count how many files share each extension-less stem.
+    (dolist (file files)
+      (let ((stem (file-name-sans-extension
+                   (file-relative-name file dir))))
+        (puthash stem (1+ (gethash stem stems 0)) stems)))
+    ;; Second pass: build display keys, keeping the extension only when a
+    ;; stem is ambiguous (e.g. both foo.org and foo.md exist).
+    (dolist (file files)
+      (let* ((rel (file-relative-name file dir))
+             (stem (file-name-sans-extension rel))
+             (key (if (> (gethash stem stems 0) 1) rel stem)))
+        (push (cons key file) result)))
+    (nreverse result)))
+
 ;;;###autoload
 (defun cmacs-manual-topic (topic)
   "Open a specific CMacs Org manual TOPIC.
-TOPIC is a filename without extension (e.g., \"cmacsgi\", \"api\")."
+TOPIC is a doc path relative to `cmacs-doc-org-directory' without
+extension (e.g. \"cmacsgi\", \"api\", \"deps/ai-glib/architecture\").
+The completion list is discovered dynamically, so core docs and
+embedded dependency docs both appear."
   (interactive
-   (list (completing-read "CMacs topic: "
-                          '("overview" "glib" "gobject" "gi" "dbus"
-                            "bacon" "cmacsgi" "api" "crispy" "build"
-                            "org-ex")
-                          nil t)))
-  (let ((file (expand-file-name (concat topic ".org")
-                                cmacs-doc-org-directory)))
-    (if (file-exists-p file)
-        (find-file file)
-      (user-error "Doc file not found: %s" file))))
+   (let ((topics (cmacs--manual-topics)))
+     (unless topics
+       (user-error "No CMacs docs found in %s" cmacs-doc-org-directory))
+     (list (completing-read "CMacs topic: " topics nil t))))
+  (let* ((topics (cmacs--manual-topics))
+         (file (cdr (assoc topic topics))))
+    (cond
+     ((and file (file-exists-p file)) (find-file file))
+     ;; Fall back to a direct .org lookup for a hand-typed topic.
+     ((file-exists-p (expand-file-name (concat topic ".org")
+                                       cmacs-doc-org-directory))
+      (find-file (expand-file-name (concat topic ".org")
+                                   cmacs-doc-org-directory)))
+     (t (user-error "Doc topic not found: %s" topic)))))
 
 ;;; Autoloads
 

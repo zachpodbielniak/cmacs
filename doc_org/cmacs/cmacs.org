@@ -15,6 +15,10 @@ From inside CMacs:
 
 From any Org file, follow links with =C-c C-o= or =M-x org-open-at-point=.
 
+The topic list offered by =cmacs-manual-topic= is discovered dynamically
+from the installed doc tree, so both the core chapters below and the
+embedded dependency docs (see [[*Dependency Documentation][Dependency Documentation]]) appear automatically.
+
 * Documentation Index
 
 | Chapter                          | File                | Description                                    |
@@ -34,6 +38,21 @@ From any Org file, follow links with =C-c C-o= or =M-x org-open-at-point=.
 | [[file:cintrospect.org][Cintrospect]]                      | =cintrospect.org=   | Runtime C self-introspection (libdw + JIT)      |
 | [[file:cpatch.org][Cpatch]]                           | =cpatch.org=        | Runtime C hot-patching (DEFUN swap + detours)   |
 | [[file:build.org][Build Configuration]]              | =build.org=         | Configure flags, dependencies, Makefiles        |
+
+* Dependency Documentation
+
+Each vendored dependency under =deps/= ships its own =docs/= folder.  At
+build time =tools/sync-deps-docs.sh= (invoked by the =cmacs-deps-docs=
+Makefile target) mirrors every dependency's docs verbatim into
+=doc_org/cmacs/deps/<dep>/=, which is installed and browsable alongside
+this manual.  Files keep their original format --- =.org= open in Org
+mode, =.md= in Markdown mode.
+
+- [[file:deps/index.org][Embedded Dependency Index]] --- generated list linking into each dep
+- Or run =M-x cmacs-manual-topic= and pick a =deps/...= entry
+
+This tree is a generated build artifact (not committed); it is refreshed
+on every build from the current submodule checkouts.
 
 * Quick Start
 

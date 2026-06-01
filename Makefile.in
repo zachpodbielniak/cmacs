@@ -382,7 +382,16 @@ bootstrap-all:
 
 .PHONY: bootstrap-all actual-all advice-on-failure sanity-check
 
-actual-all: ${SUBDIR} info $(gsettings_SCHEMAS:.xml=.valid) src-depending-on-lisp blessmail
+# cmacs: mirror each deps/<dep>/docs tree into doc_org/cmacs/deps/ so the
+# dependency documentation ships with — and is browsable inside — cmacs.
+# Guarded so a stripped/upstream-style tree without the script still builds.
+.PHONY: cmacs-deps-docs
+cmacs-deps-docs:
+	@if test -x ${srcdir}/tools/sync-deps-docs.sh; then \
+	  ${srcdir}/tools/sync-deps-docs.sh --quiet || true; \
+	fi
+
+actual-all: ${SUBDIR} info $(gsettings_SCHEMAS:.xml=.valid) src-depending-on-lisp blessmail cmacs-deps-docs
 
 # ADVICE-ON-FAILURE-BEGIN:all
 # You could try to:
