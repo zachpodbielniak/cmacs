@@ -928,7 +928,14 @@ if test "$with_cmacs_gsurf" != "no"; then
   PKG_CHECK_MODULES([CMACS_GSURF_DEPS],
     [glib-2.0 gobject-2.0 gio-2.0 gmodule-2.0 yaml-0.1 json-glib-1.0 \
      webkit2gtk-4.1 gtk+-3.0 javascriptcoregtk-4.1])
-  CMACS_GSURF_CFLAGS="-I\$(abs_top_srcdir)/deps/gsurf/src \
+  # <gsurf/gsurf.h> resolves through the dev-include symlink that gsurf's
+  # own build creates at deps/gsurf/build/include/gsurf -> src
+  # (deps/gsurf/rules.mk).  It exists by compile time because the cmacs
+  # gsurf objects depend on $(CMACS_GSURF_STATIC_LIB), whose recipe runs
+  # the gsurf build.  -I.../src alone is NOT enough: the header is
+  # src/gsurf.h, but the include is angle-bracketed <gsurf/gsurf.h>.
+  CMACS_GSURF_CFLAGS="-I\$(abs_top_srcdir)/deps/gsurf/build/include \
+    -I\$(abs_top_srcdir)/deps/gsurf/src \
     -DCMACS_GSURF_GIR_DIR=\\\"\$(abs_top_srcdir)/deps/gsurf/build/release\\\" \
     -DCMACS_GSURF_DEV_MODULE_DIR=\\\"\$(abs_top_srcdir)/deps/gsurf/build/release/modules\\\" \
     -DCMACS_GSURF_MODULE_DIR=\\\"\$(abs_top_srcdir)/cmacs/gsurf/modules\\\" \
