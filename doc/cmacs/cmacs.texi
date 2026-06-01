@@ -6244,6 +6244,16 @@ dedup machinery (@code{_gsurf_strip}), never @option{-z muldefs}.  It
 reuses the same WebKitGTK/GTK3 stack as @option{--with-xwidgets}, so no
 new system packages are needed.
 
+@strong{Signal note.}  WebKit's JavaScriptCore pauses threads for GC
+using a POSIX signal that defaults to @code{SIGUSR1} (signal@tie{}10) and
+prints @samp{Overriding existing handler for signal 10} at startup.  That
+is the same signal podomation's @code{engine} source (@code{on_sigusr1}),
+libreclaw's thread-dump, and Emacs's @code{[sigusr1]} use, so JSC steals
+it.  Export @code{JSC_SIGNAL_FOR_GC=40} (a raw signal number;
+@math{40 = @code{SIGRTMIN}+5} on Linux) @emph{before} launch to move JSC
+to a free real-time signal; the @file{Justfile} @code{run}/@code{gowl}
+recipes already do this.  @code{SIGUSR2}/@code{SIGHUP} are unaffected.
+
 @c ===================================================================
 @node Build Configuration
 @chapter Build Configuration

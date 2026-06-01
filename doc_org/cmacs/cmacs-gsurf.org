@@ -419,3 +419,12 @@ cmacs-ai via the MCP bridge — =^gsurf_= is in the default allowlist):
   =modules:= section (=~/.config/gsurf/config.yaml=).
 - *Stale Elisp* — after editing =lisp/cmacs/cmacs-gsurf.el=, clear the
   =.elc=/=.eln= caches (see the top-level CLAUDE.md).
+- *=Overriding existing handler for signal 10= at startup, and podomation
+  =on_sigusr1= stops firing* — WebKit's JavaScriptCore pauses threads for
+  GC using a signal that defaults to *SIGUSR1* (signal 10), the same
+  signal podomation's =engine= source, libreclaw's thread-dump, and
+  Emacs's =[sigusr1]= use; whoever installs last wins, so JSC steals it.
+  Move JSC to a free real-time signal by exporting =JSC_SIGNAL_FOR_GC=40=
+  (raw signal number; 40 = SIGRTMIN+5 on Linux) *before* launch — the
+  =Justfile= =run= / =gowl= recipes already do this.  For a bare
+  =./src/emacs=, export it yourself.  =SIGUSR2= / =SIGHUP= are unaffected.
