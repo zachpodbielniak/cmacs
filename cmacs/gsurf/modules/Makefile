@@ -51,5 +51,9 @@ $(OUTDIR)/%.so: %.c
 	@mkdir -p $(OUTDIR)
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
+# Remove every built artifact in OUTDIR, not just the ones matching the
+# current *.c set: a renamed/removed source leaves a stale <old>.so behind,
+# and the module manager would load BOTH it and the new <new>.so, each
+# registering the same GType -> "cannot register existing type" at runtime.
 clean:
-	rm -f $(MODULES)
+	rm -f $(OUTDIR)/*.so $(OUTDIR)/*.o
