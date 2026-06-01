@@ -21,14 +21,19 @@
 ;; load-finish re-extracts and re-renders.  This is the same Emacs-side
 ;; "inject JS, read it back" model the live caret mode uses.
 ;;
-;; Forms / logins WORK: form controls render as editable items; RET on
-;; one prompts for a value (passwords without echo) and pushes it into
-;; the LIVE DOM via the native value setter + input/change events
-;; (React-safe), and RET on a submit button clicks the real control.
-;; Because the real DOM submits, cookies / CSRF tokens / hidden fields /
-;; the session all ride along -- so a real login posts exactly what a
-;; browser would.  TAB / S-TAB move between fields and links; C-c C-c
-;; submits the form.
+;; Forms / logins WORK two ways, your pick:
+;;   1. INLINE: just type into a text field (or password / textarea) like
+;;      any editable buffer -- characters self-insert in place, DEL erases,
+;;      passwords echo as bullets.  Edits are pushed to the LIVE DOM on a
+;;      short idle debounce (and immediately before any submit/click).
+;;   2. MINIBUFFER: RET on a field reads the value in the minibuffer
+;;      (passwords without echo) and pushes it -- handy on small fields.
+;; Either way the value goes into the LIVE DOM via the native value setter
+;; + input/change events (React-safe).  RET on a submit button clicks the
+;; real control.  Because the real DOM submits, cookies / CSRF tokens /
+;; hidden fields / the session all ride along -- so a real login posts
+;; exactly what a browser would.  TAB / S-TAB move between fields and
+;; links; C-c C-c submits the form.
 
 ;;; Code:
 
@@ -52,6 +57,19 @@ does not trigger a real load is followed by a timed re-extract."
 (defcustom cmacs-gsurf-lite-shr-width nil
   "Override `shr' fill width for lite buffers (nil = use the window width)."
   :type '(choice (const :tag "Window width" nil) integer)
+  :group 'cmacs-gsurf-lite)
+
+(defcustom cmacs-gsurf-lite-action-watch-times '(0.3 0.8 1.6 3.0 4.5 6.5)
+  "Delays (seconds) after a click/submit at which to re-extract the DOM.
+A login button often kicks off work that lands later than one settle:
+a `fetch'-then-update, a client-side (`pushState'/hash) route change, or
+a redirect that completes after a server round-trip.  Such navigations
+may fire no load event (so `cmacs-gsurf-lite--on-load-changed' never
+runs) or fire it later than `cmacs-gsurf-lite-extract-settle', so after a
+click we re-render at each of these delays to follow the page where it
+goes.  Re-extracts are idempotent and skipped while you are typing
+inline; raise the tail for very slow sign-in flows."
+  :type '(repeat number)
   :group 'cmacs-gsurf-lite)
 
 (defvar cmacs-gsurf-lite--buffers nil
@@ -156,13 +174,66 @@ carry the `data-cmlite-id' for SPA/onclick links."
 (defvar-local cmacs-gsurf-lite--focus-id nil
   "When set, `cmacs-gsurf-lite--render' moves point to this field id.")
 
+(defvar-local cmacs-gsurf-lite--dirty nil
+  "Hash of field id -> value typed inline but not yet flushed to the DOM.")
+
+(defvar-local cmacs-gsurf-lite--flush-timer nil
+  "Idle timer that pushes `cmacs-gsurf-lite--dirty' into the live DOM.")
+
+(defvar-local cmacs-gsurf-lite--editing nil
+  "Non-nil once the user has typed inline; suppresses SPA resettle re-renders.
+A late re-extract would erase in-progress text, so once editing starts we
+stop the timed re-renders until the next explicit navigation/reload.")
+
+(defun cmacs-gsurf-lite--reset-edit-state ()
+  "Drop any pending inline edits and re-enable resettle re-renders.
+Called whenever an explicit navigation, reload, or click is initiated."
+  (when (timerp cmacs-gsurf-lite--flush-timer)
+    (cancel-timer cmacs-gsurf-lite--flush-timer))
+  (setq cmacs-gsurf-lite--flush-timer nil
+        cmacs-gsurf-lite--editing nil)
+  (when cmacs-gsurf-lite--dirty
+    (clrhash cmacs-gsurf-lite--dirty)))
+
 (defvar cmacs-gsurf-lite-field-keymap
   (let ((m (make-sparse-keymap)))
     (define-key m (kbd "RET")   #'cmacs-gsurf-lite-follow)
     (define-key m [mouse-1]     #'cmacs-gsurf-lite-follow)
     (define-key m [mouse-2]     #'cmacs-gsurf-lite-follow)
     m)
-  "Keymap active on a gsurf-lite form field (text property keymap).")
+  "Keymap active on a non-editable gsurf-lite control (button/checkbox/select).")
+
+(defvar cmacs-gsurf-lite-text-field-keymap
+  (let ((m (make-sparse-keymap)))
+    (set-keymap-parent m text-mode-map)
+    ;; Inline editing: printable keys self-insert into the field, DEL erases.
+    (define-key m [remap self-insert-command]    #'cmacs-gsurf-lite--self-insert)
+    (define-key m [remap delete-backward-char]   #'cmacs-gsurf-lite--delete-backward)
+    (define-key m [remap backward-delete-char]   #'cmacs-gsurf-lite--delete-backward)
+    (define-key m [remap backward-delete-char-untabify]
+                #'cmacs-gsurf-lite--delete-backward)
+    (define-key m (kbd "DEL")     #'cmacs-gsurf-lite--delete-backward)
+    (define-key m [remap delete-char]            #'cmacs-gsurf-lite--delete-forward)
+    (define-key m [remap delete-forward-char]    #'cmacs-gsurf-lite--delete-forward)
+    ;; RET still opens the minibuffer prompt path (see `cmacs-gsurf-lite-follow').
+    (define-key m (kbd "RET")        #'cmacs-gsurf-lite-follow)
+    (define-key m [mouse-1]          #'cmacs-gsurf-lite--mouse-place)
+    (define-key m [mouse-2]          #'cmacs-gsurf-lite-follow)
+    (define-key m (kbd "TAB")        #'cmacs-gsurf-lite-next-field)
+    (define-key m (kbd "<backtab>")  #'cmacs-gsurf-lite-prev-field)
+    (define-key m (kbd "C-c C-c")    #'cmacs-gsurf-lite-submit)
+    m)
+  "Keymap on an inline-editable gsurf-lite text/password/textarea field.
+Printable keys edit the field in place; RET opens the minibuffer prompt.")
+
+(defconst cmacs-gsurf-lite--editable-types
+  '("text" "password" "textarea" "email" "search" "tel" "url" "number"
+    "date" "datetime-local" "month" "week" "time" "color")
+  "Input types rendered as inline-editable text fields.")
+
+(defun cmacs-gsurf-lite--editable-type-p (type)
+  "Return non-nil if TYPE is an inline-editable text field type."
+  (member type cmacs-gsurf-lite--editable-types))
 
 (defun cmacs-gsurf-lite--field-label (dom)
   "Best human label for form-control DOM (name/aria/placeholder/id/type)."
@@ -191,6 +262,187 @@ carry the `data-cmlite-id' for SPA/onclick links."
                                       "checkbox" "radio"))
                        "activate" "edit"))))))
 
+(defun cmacs-gsurf-lite--insert-text-field (label value width field type)
+  "Insert an inline-editable text field: LABEL plus an editable VALUE box.
+The editable region is WIDTH columns wide (padded with spaces), carries the
+FIELD plist, and uses `cmacs-gsurf-lite-text-field-keymap' so printable keys
+edit it in place.  For a password TYPE the characters display as bullets."
+  (let ((password (string= type "password")))
+    (insert (format "%s: " label))
+    (let ((vstart (point)))
+      (insert value)
+      (when (and password (> (length value) 0))
+        (put-text-property vstart (point) 'display
+                           (make-string (length value) ?•)))
+      (when (< (length value) width)
+        (insert (make-string (- width (length value)) ?\s)))
+      (add-text-properties
+       vstart (point)
+       (list 'cmacs-gsurf-lite-field field
+             'keymap cmacs-gsurf-lite-text-field-keymap
+             'face 'cmacs-gsurf-lite-field-face
+             'mouse-face 'highlight
+             'front-sticky t
+             'help-echo
+             (format "%s (%s) — type to edit inline, RET for minibuffer prompt"
+                     label type)))
+      ;; A plain trailing space ends the field run cleanly (boundary marker).
+      (insert " "))))
+
+;;;; Inline field editing
+;;
+;; Text/password/textarea fields are editable directly in the buffer, even
+;; though it is `special-mode' read-only: the field's keymap remaps
+;; `self-insert-command' (and the delete commands) to functions that edit
+;; only inside the field region (with `inhibit-read-only' bound), keep the
+;; box width stable by eating/adding trailing pad spaces, recompute the
+;; field value, and push it into the live DOM on a short idle debounce.
+
+(defun cmacs-gsurf-lite--field-bounds (pos)
+  "Return (BEG . END) of the editable field run covering POS, or nil.
+END is exclusive.  Handles POS sitting just past the end of a field."
+  (let* ((here (get-text-property pos 'cmacs-gsurf-lite-field))
+         (prev (and (> pos (point-min))
+                    (get-text-property (1- pos) 'cmacs-gsurf-lite-field)))
+         (at (cond (here pos)
+                   (prev (1- pos))
+                   (t nil)))
+         (field (and at (get-text-property at 'cmacs-gsurf-lite-field))))
+    (when (and field
+               (cmacs-gsurf-lite--editable-type-p (plist-get field :type)))
+      (let ((beg (if (and (> at (point-min))
+                          (eq (get-text-property (1- at) 'cmacs-gsurf-lite-field)
+                              field))
+                     (previous-single-property-change
+                      at 'cmacs-gsurf-lite-field nil (point-min))
+                   at))
+            (end (next-single-property-change
+                  at 'cmacs-gsurf-lite-field nil (point-max))))
+        (cons beg end)))))
+
+(defun cmacs-gsurf-lite--field-value (beg end type)
+  "Logical value of the editable field text in [BEG, END) of TYPE.
+Trailing pad spaces are stripped.  Passwords return the real characters
+(the bullets are only a `display' overlay, ignored by the substring)."
+  (ignore type)
+  (replace-regexp-in-string
+   " +\\'" "" (buffer-substring-no-properties beg end)))
+
+(defun cmacs-gsurf-lite--after-edit ()
+  "Record the field at point as dirty and (re)arm the debounced DOM flush."
+  (let ((bounds (cmacs-gsurf-lite--field-bounds (point))))
+    (when bounds
+      (let* ((beg (car bounds)) (end (cdr bounds))
+             (field (get-text-property beg 'cmacs-gsurf-lite-field))
+             (id (plist-get field :id))
+             (val (cmacs-gsurf-lite--field-value beg end (plist-get field :type))))
+        (setq cmacs-gsurf-lite--editing t
+              cmacs-gsurf-lite--focus-id id)
+        (when id
+          (unless cmacs-gsurf-lite--dirty
+            (setq cmacs-gsurf-lite--dirty (make-hash-table :test 'equal)))
+          (puthash id val cmacs-gsurf-lite--dirty)
+          (cmacs-gsurf-lite--schedule-flush))))))
+
+(defun cmacs-gsurf-lite--schedule-flush ()
+  "Arm an idle timer to push pending inline edits into the live DOM."
+  (when (timerp cmacs-gsurf-lite--flush-timer)
+    (cancel-timer cmacs-gsurf-lite--flush-timer))
+  (setq cmacs-gsurf-lite--flush-timer
+        (run-with-idle-timer 0.5 nil #'cmacs-gsurf-lite--flush-pending
+                             (current-buffer))))
+
+(defun cmacs-gsurf-lite--flush-pending (&optional buffer)
+  "Push every dirty inline field in BUFFER into the live DOM (no re-render)."
+  (let ((buf (or buffer (current-buffer))))
+    (when (buffer-live-p buf)
+      (with-current-buffer buf
+        (when (timerp cmacs-gsurf-lite--flush-timer)
+          (cancel-timer cmacs-gsurf-lite--flush-timer)
+          (setq cmacs-gsurf-lite--flush-timer nil))
+        (when (and cmacs-gsurf-lite--dirty
+                   (> (hash-table-count cmacs-gsurf-lite--dirty) 0))
+          (maphash (lambda (id val)
+                     (cmacs-gsurf-lite--set-field-quiet buf id val))
+                   cmacs-gsurf-lite--dirty)
+          (clrhash cmacs-gsurf-lite--dirty))))))
+
+(defun cmacs-gsurf-lite--self-insert (&optional n)
+  "Insert the typed character into the editable field at point, N times."
+  (interactive "p")
+  (let ((bounds (cmacs-gsurf-lite--field-bounds (point)))
+        (ch last-command-event))
+    (cond
+     ((not bounds) (user-error "Not in an editable field"))
+     ((not (characterp ch)) (ding))
+     (t
+      (let* ((beg (car bounds))
+             (field (get-text-property beg 'cmacs-gsurf-lite-field))
+             (password (string= (plist-get field :type) "password"))
+             (props (text-properties-at beg))
+             (inhibit-read-only t)
+             (buffer-undo-list t))
+        (dotimes (_ (max 1 (or n 1)))
+          (let ((p (point)))
+            (insert (char-to-string ch))
+            (set-text-properties p (point) props)
+            (when password
+              (put-text-property p (point) 'display "•")))
+          ;; Keep the box width stable: consume one trailing pad space.
+          (let ((end (cdr (cmacs-gsurf-lite--field-bounds (point)))))
+            (when (and end (> end (point)) (eq (char-before end) ?\s))
+              (delete-region (1- end) end))))
+        (cmacs-gsurf-lite--after-edit))))))
+
+(defun cmacs-gsurf-lite--pad-field-end (props)
+  "Append one pad space (carrying PROPS) at the end of the field at point.
+Keeps the editable box a stable width as characters are deleted."
+  (let ((bounds (cmacs-gsurf-lite--field-bounds (point))))
+    (when bounds
+      (save-excursion
+        (goto-char (cdr bounds))
+        (let ((p (point)))
+          (insert " ")
+          (set-text-properties p (point) props))))))
+
+(defun cmacs-gsurf-lite--delete-backward (&optional n)
+  "Delete N characters before point within the editable field at point."
+  (interactive "p")
+  (let ((bounds (cmacs-gsurf-lite--field-bounds (point))))
+    (if (not bounds)
+        (user-error "Not in an editable field")
+      (let* ((beg (car bounds))
+             (props (text-properties-at beg))
+             (inhibit-read-only t)
+             (buffer-undo-list t))
+        (dotimes (_ (max 1 (or n 1)))
+          (when (> (point) beg)
+            (delete-region (1- (point)) (point))
+            (cmacs-gsurf-lite--pad-field-end props)))
+        (cmacs-gsurf-lite--after-edit)))))
+
+(defun cmacs-gsurf-lite--delete-forward (&optional n)
+  "Delete N characters after point within the editable field at point."
+  (interactive "p")
+  (let ((bounds (cmacs-gsurf-lite--field-bounds (point))))
+    (if (not bounds)
+        (user-error "Not in an editable field")
+      (let* ((beg (car bounds))
+             (props (text-properties-at beg))
+             (inhibit-read-only t)
+             (buffer-undo-list t))
+        (dotimes (_ (max 1 (or n 1)))
+          (let ((end (cdr (cmacs-gsurf-lite--field-bounds (point)))))
+            (when (and end (< (point) end))
+              (delete-region (point) (1+ (point)))
+              (cmacs-gsurf-lite--pad-field-end props))))
+        (cmacs-gsurf-lite--after-edit)))))
+
+(defun cmacs-gsurf-lite--mouse-place (event)
+  "Move point to the clicked position inside an editable field."
+  (interactive "e")
+  (mouse-set-point event))
+
 (defun cmacs-gsurf-lite--tag-input (dom)
   "shr handler: render an <input> as an activatable field."
   (let* ((type (downcase (or (dom-attr dom 'type) "text")))
@@ -212,28 +464,26 @@ carry the `data-cmlite-id' for SPA/onclick links."
        (format "[%s] %s" (if (dom-attr dom 'checked) "X" " ") name)
        field 'cmacs-gsurf-lite-field-face))
      ((string= type "password")
-      (cmacs-gsurf-lite--insert-field
-       (format "%s: [%s]" name
-               (if (equal (dom-attr dom 'data-cmlite-filled) "1")
-                   "••••••" "        "))
-       field 'cmacs-gsurf-lite-field-face))
+      ;; The real value is never extracted (masked); start the box empty so
+      ;; inline typing builds the password fresh.
+      (cmacs-gsurf-lite--insert-text-field name "" 24 field type))
+     ((cmacs-gsurf-lite--editable-type-p type)
+      (cmacs-gsurf-lite--insert-text-field
+       name value
+       (max 24 (string-to-number (or (dom-attr dom 'size) "40")))
+       field type))
      (t
       (cmacs-gsurf-lite--insert-field
        (format "%s: [%s]" name (if (> (length value) 0) value "        "))
        field 'cmacs-gsurf-lite-field-face)))))
 
 (defun cmacs-gsurf-lite--tag-textarea (dom)
-  "shr handler: render a <textarea> as an activatable field."
+  "shr handler: render a <textarea> as an inline-editable field."
   (let* ((id (dom-attr dom 'data-cmlite-id))
          (name (cmacs-gsurf-lite--field-label dom))
          (value (string-trim (or (dom-texts dom) "")))
          (field (list :id id :type "textarea" :name name)))
-    (cmacs-gsurf-lite--insert-field
-     (format "%s: [%s]" name
-             (if (> (length value) 0)
-                 (truncate-string-to-width value 40 nil nil "…")
-               "        "))
-     field 'cmacs-gsurf-lite-field-face)))
+    (cmacs-gsurf-lite--insert-text-field name value 60 field "textarea")))
 
 (defun cmacs-gsurf-lite--tag-select (dom)
   "shr handler: render a <select> as an activatable field with options."
@@ -275,17 +525,33 @@ carry the `data-cmlite-id' for SPA/onclick links."
                         (point-max))))))
     found))
 
+(defun cmacs-gsurf-lite--schedule-reextracts (buffer &optional delays)
+  "Re-extract/re-render BUFFER at each delay in DELAYS (seconds).
+DELAYS defaults to `cmacs-gsurf-lite-action-watch-times'.
+This is how a JS click/submit that redirects client-side -- a `pushState'
+SPA route change, a `window.location' bounce, or a fetch-then-update --
+gets reflected even though such navigations may fire late or fire no
+load event at all (so the `load-changed' hook never runs).  In-progress
+inline editing suppresses the re-render so typed text is not clobbered."
+  (dolist (d (or delays cmacs-gsurf-lite-action-watch-times))
+    (run-at-time d nil
+                 (lambda ()
+                   (when (and (cmacs-gsurf-lite-buffer-p buffer)
+                              (not (buffer-local-value
+                                    'cmacs-gsurf-lite--editing buffer)))
+                     (cmacs-gsurf-lite--extract-and-render buffer))))))
+
 (defun cmacs-gsurf-lite--run-js-then-reextract (buffer js &optional focus-id)
-  "Run JS in BUFFER's view, then re-extract/re-render after a settle.
-If FOCUS-ID is non-nil, point is moved back to that field after render."
-  (when focus-id
-    (when (buffer-live-p buffer)
-      (with-current-buffer buffer (setq cmacs-gsurf-lite--focus-id focus-id))))
+  "Run JS in BUFFER's view, then re-extract/re-render across the resettle window.
+If FOCUS-ID is non-nil, point is moved back to that field after render.
+Several re-extracts are scheduled (not just one) so a click/submit that
+triggers a delayed or client-side (SPA) redirect still re-renders."
+  (when (and focus-id (buffer-live-p buffer))
+    (with-current-buffer buffer (setq cmacs-gsurf-lite--focus-id focus-id)))
   (cmacs-gsurf-run-javascript-async
    buffer js
    (lambda (_r)
-     (run-at-time cmacs-gsurf-lite-extract-settle nil
-                  #'cmacs-gsurf-lite--extract-and-render buffer))))
+     (cmacs-gsurf-lite--schedule-reextracts buffer))))
 
 (defun cmacs-gsurf-lite--set-field (id value)
   "Set the live DOM control ID to VALUE (React-safe), then re-extract."
@@ -306,6 +572,27 @@ return 'ok';})();"
                     (cmacs-gsurf--js-string value))))
     (cmacs-gsurf-lite--run-js-then-reextract (current-buffer) js id)))
 
+(defun cmacs-gsurf-lite--set-field-quiet (buffer id value)
+  "Push VALUE into live DOM control ID in BUFFER, with NO re-extract/render.
+Used while typing inline so the buffer text the user is editing is left
+untouched; the DOM is updated underneath (input/change, but not blur)."
+  (let ((js (format "(function(){\
+var e=document.querySelector('[data-cmlite-id=%s]');\
+if(!e)return 'nofound';\
+var pr=(e.tagName==='TEXTAREA')?window.HTMLTextAreaElement.prototype:\
+((e.tagName==='SELECT')?window.HTMLSelectElement.prototype:window.HTMLInputElement.prototype);\
+var d=Object.getOwnPropertyDescriptor(pr,'value');\
+try{ if(d&&d.set){ d.set.call(e,%s); } else { e.value=%s; } }catch(_e){ try{e.value=%s;}catch(_f){} }\
+e.dispatchEvent(new Event('input',{bubbles:true}));\
+e.dispatchEvent(new Event('change',{bubbles:true}));\
+return 'ok';})();"
+                    (cmacs-gsurf--js-string id)
+                    (cmacs-gsurf--js-string value)
+                    (cmacs-gsurf--js-string value)
+                    (cmacs-gsurf--js-string value))))
+    (when (buffer-live-p buffer)
+      (cmacs-gsurf-run-javascript-async buffer js #'ignore))))
+
 (defun cmacs-gsurf-lite--edit-select (field)
   "Prompt for one of FIELD's options and set it in the live DOM."
   (let* ((opts (plist-get field :options))
@@ -322,6 +609,8 @@ return 'ok';})();"
     (unless id (user-error "This field cannot be activated"))
     (pcase type
       ((or "submit" "button" "reset" "image" "checkbox" "radio")
+       ;; Land any inline-typed values in the DOM before the click submits.
+       (cmacs-gsurf-lite--flush-pending (current-buffer))
        (cmacs-gsurf-lite--click-id (current-buffer) id))
       ("select" (cmacs-gsurf-lite--edit-select field))
       ("password"
@@ -336,6 +625,8 @@ return 'ok';})();"
 Convenience for when the submit button is hard to land on; usually you
 just press RET on the login/submit button itself."
   (interactive)
+  ;; Push any inline-typed values first so the form posts what is on screen.
+  (cmacs-gsurf-lite--flush-pending (current-buffer))
   (cmacs-gsurf-lite--run-js-then-reextract
    (current-buffer)
    "(function(){\
@@ -452,13 +743,12 @@ up.  Each re-extract simply re-renders the buffer (idempotent)."
   "Re-render BUFFER when its hidden view finishes a load (EVENT).
 Renders immediately, then re-extracts at `cmacs-gsurf-lite-resettle-times'
 to catch SPA content that hydrates after the load-finished event."
-  (when (and (eq event 'finished) (cmacs-gsurf-lite-buffer-p buffer))
+  (when (and (eq event 'finished) (cmacs-gsurf-lite-buffer-p buffer)
+             ;; Don't clobber in-progress inline typing with a re-render.
+             (not (buffer-local-value 'cmacs-gsurf-lite--editing buffer)))
     (cmacs-gsurf-lite--extract-and-render buffer)
-    (dolist (delay cmacs-gsurf-lite-resettle-times)
-      (run-at-time delay nil
-                   (lambda ()
-                     (when (cmacs-gsurf-lite-buffer-p buffer)
-                       (cmacs-gsurf-lite--extract-and-render buffer)))))))
+    (cmacs-gsurf-lite--schedule-reextracts
+     buffer cmacs-gsurf-lite-resettle-times)))
 
 (add-hook 'cmacs-gsurf-load-changed-functions
           #'cmacs-gsurf-lite--on-load-changed)
@@ -467,8 +757,10 @@ to catch SPA content that hydrates after the load-finished event."
 
 (defun cmacs-gsurf-lite-follow ()
   "Activate the thing at point: a form field, or a link.
-Form fields prompt + push into the live DOM (passwords without echo);
-real links navigate the hidden view (the load-finish hook re-renders);
+On a text field this opens a minibuffer prompt (passwords without echo) --
+you can also just type into the field inline; either way the value is
+pushed into the live DOM.  Buttons/checkboxes/selects are clicked/toggled.
+Real links navigate the hidden view (the load-finish hook re-renders);
 JS/onclick links with a `data-cmlite-id' are clicked by selector."
   (interactive)
   (let ((field (get-text-property (point) 'cmacs-gsurf-lite-field))
@@ -477,6 +769,7 @@ JS/onclick links with a `data-cmlite-id' are clicked by selector."
     (cond
      (field (cmacs-gsurf-lite--field-activate field))
      ((and url (not (string-prefix-p "javascript:" url)))
+      (cmacs-gsurf-lite--reset-edit-state)
       (let ((abs (shr-expand-url url cmacs-gsurf-lite--base-url)))
         (setq cmacs-gsurf-lite--base-url abs)
         (message "gsurf-lite: loading %s" abs)
@@ -486,6 +779,8 @@ JS/onclick links with a `data-cmlite-id' are clicked by selector."
 
 (defun cmacs-gsurf-lite--click-id (buffer cmid)
   "Click the element tagged CMID in BUFFER's hidden view, then re-extract."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer (cmacs-gsurf-lite--reset-edit-state)))
   (cmacs-gsurf-lite--run-js-then-reextract
    buffer
    (format "(function(){var e=document.querySelector('[data-cmlite-id=%s]');\
@@ -495,21 +790,25 @@ if(!e)return 'nofound';e.click();return 'clicked';})();"
 (defun cmacs-gsurf-lite-reload ()
   "Reload the current lite page."
   (interactive)
+  (cmacs-gsurf-lite--reset-edit-state)
   (cmacs-gsurf-reload (current-buffer)))
 
 (defun cmacs-gsurf-lite-back ()
   "Go back in the hidden view's history."
   (interactive)
+  (cmacs-gsurf-lite--reset-edit-state)
   (cmacs-gsurf-back (current-buffer)))
 
 (defun cmacs-gsurf-lite-forward ()
   "Go forward in the hidden view's history."
   (interactive)
+  (cmacs-gsurf-lite--reset-edit-state)
   (cmacs-gsurf-forward (current-buffer)))
 
 (defun cmacs-gsurf-lite-open (url)
   "Load URL (or a search) in the current lite buffer."
   (interactive "sOpen URL or search: ")
+  (cmacs-gsurf-lite--reset-edit-state)
   (let ((abs (cmacs-gsurf--normalize-url url)))
     (setq cmacs-gsurf-lite--base-url abs)
     (cmacs-gsurf-load-uri (current-buffer) abs)))
@@ -544,6 +843,8 @@ if(!e)return 'nofound';e.click();return 'clicked';})();"
 
 (defun cmacs-gsurf-lite--on-kill ()
   "Detach the hidden view and unregister when a lite buffer is killed."
+  (when (timerp cmacs-gsurf-lite--flush-timer)
+    (cancel-timer cmacs-gsurf-lite--flush-timer))
   (setq cmacs-gsurf-lite--buffers
         (delq (current-buffer) cmacs-gsurf-lite--buffers))
   (when (ignore-errors (cmacs-gsurf-attached-p (current-buffer)))
@@ -553,9 +854,11 @@ if(!e)return 'nofound';e.click();return 'clicked';})();"
   "Major mode for gsurf-lite text-rendered web buffers.
 The page is rendered offscreen by gsurf/WebKit (so its JavaScript runs
 and logins persist) and dumped here as real, navigable Emacs text via
-`shr'.  Links navigate the hidden view in place; form fields are
-editable (RET to fill, passwords without echo) and submit through the
-live DOM, so real logins work.  TAB/S-TAB move between fields and links.
+`shr'.  Links navigate the hidden view in place.  Text/password/textarea
+fields are editable inline -- just type into them -- or press RET for a
+minibuffer prompt; either way the value is pushed into the live DOM, so
+real logins work.  TAB/S-TAB move between fields and links; C-c C-c
+submits.
 \\{cmacs-gsurf-lite-mode-map}"
   (unless (cmacs-gsurf-supported-p)
     (user-error "cmacs-gsurf not built; reconfigure with --with-cmacs-gsurf"))

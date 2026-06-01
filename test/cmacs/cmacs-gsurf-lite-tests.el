@@ -16,7 +16,13 @@
 
 (require 'ert)
 (require 'dom)
+(require 'cl-lib)
 (require 'cmacs-gsurf-lite)
+
+(defun cmacs-gsurf-lite-tests--first-field ()
+  "Return the position of the first gsurf-lite field in the buffer, or nil."
+  (text-property-not-all (point-min) (point-max)
+                         'cmacs-gsurf-lite-field nil))
 
 (ert-deftest cmacs-gsurf-lite-feature-loaded ()
   "The cmacs-gsurf-lite feature should be loadable."
@@ -130,20 +136,21 @@ passwords (their value is never written into the HTML)."
     (should (string-match-p "selected" js))))             ; <option> sync
 
 (ert-deftest cmacs-gsurf-lite-tag-input-renders-field ()
-  "An <input type=text data-cmlite-id> renders as an activatable field
-carrying its plist (id/type/name) and the field keymap."
+  "An <input type=text data-cmlite-id> renders as an inline-editable field
+carrying its plist (id/type/name) and the text-field keymap."
   (with-temp-buffer
     (let ((shr-width 80))
       (cmacs-gsurf-lite--tag-input
        (dom-node 'input '((type . "text") (name . "user")
                           (data-cmlite-id . "cml3")))))
-    (goto-char (point-min))
-    (let ((f (get-text-property (point) 'cmacs-gsurf-lite-field)))
-      (should f)
-      (should (equal (plist-get f :id) "cml3"))
-      (should (equal (plist-get f :type) "text"))
-      (should (equal (plist-get f :name) "user"))
-      (should (keymapp (get-text-property (point) 'keymap))))))
+    (let ((pos (cmacs-gsurf-lite-tests--first-field)))
+      (should pos)
+      (let ((f (get-text-property pos 'cmacs-gsurf-lite-field)))
+        (should (equal (plist-get f :id) "cml3"))
+        (should (equal (plist-get f :type) "text"))
+        (should (equal (plist-get f :name) "user")))
+      (should (eq (get-text-property pos 'keymap)
+                  cmacs-gsurf-lite-text-field-keymap)))))
 
 (ert-deftest cmacs-gsurf-lite-tag-input-password-masked ()
   "A password input never shows its value; it renders as a masked field."
@@ -154,8 +161,92 @@ carrying its plist (id/type/name) and the field keymap."
                           (value . "hunter2")
                           (data-cmlite-id . "cml4")))))
     (should-not (string-match-p "hunter2" (buffer-string)))
-    (let ((f (get-text-property (point-min) 'cmacs-gsurf-lite-field)))
+    (let* ((pos (cmacs-gsurf-lite-tests--first-field))
+           (f (get-text-property pos 'cmacs-gsurf-lite-field)))
       (should (equal (plist-get f :type) "password")))))
+
+;;;; Inline editing
+
+(ert-deftest cmacs-gsurf-lite-inline-helpers-defined ()
+  "The inline-editing surface should be defined."
+  (dolist (fn '(cmacs-gsurf-lite--self-insert
+                cmacs-gsurf-lite--delete-backward
+                cmacs-gsurf-lite--delete-forward
+                cmacs-gsurf-lite--field-bounds
+                cmacs-gsurf-lite--field-value
+                cmacs-gsurf-lite--set-field-quiet
+                cmacs-gsurf-lite--flush-pending
+                cmacs-gsurf-lite--reset-edit-state
+                cmacs-gsurf-lite--insert-text-field))
+    (should (fboundp fn))))
+
+(ert-deftest cmacs-gsurf-lite-text-field-keymap-edits ()
+  "The inline text-field keymap remaps self-insert/delete and keeps RET."
+  (let ((m cmacs-gsurf-lite-text-field-keymap))
+    (should (eq (lookup-key m [remap self-insert-command])
+                'cmacs-gsurf-lite--self-insert))
+    (should (eq (lookup-key m (kbd "DEL")) 'cmacs-gsurf-lite--delete-backward))
+    ;; RET still opens the minibuffer prompt path.
+    (should (eq (lookup-key m (kbd "RET")) 'cmacs-gsurf-lite-follow))
+    (should (eq (lookup-key m (kbd "TAB")) 'cmacs-gsurf-lite-next-field))))
+
+(ert-deftest cmacs-gsurf-lite-self-insert-edits-value ()
+  "Typing into a text field updates the buffer and the recomputed value,
+without point escaping the editable box."
+  (with-temp-buffer
+    (let ((shr-width 80))
+      (cmacs-gsurf-lite--tag-input
+       (dom-node 'input '((type . "text") (name . "user")
+                          (data-cmlite-id . "cml3")))))
+    (goto-char (cmacs-gsurf-lite-tests--first-field))
+    ;; No web process under ERT: skip the debounced live-DOM push.
+    (cl-letf (((symbol-function 'cmacs-gsurf-lite--schedule-flush) #'ignore))
+      (dolist (ch '(?a ?b ?c))
+        (let ((last-command-event ch))
+          (cmacs-gsurf-lite--self-insert 1))))
+    (let ((bounds (cmacs-gsurf-lite--field-bounds (point))))
+      (should bounds)
+      (should (equal (cmacs-gsurf-lite--field-value
+                      (car bounds) (cdr bounds) "text")
+                     "abc")))))
+
+(ert-deftest cmacs-gsurf-lite-password-inline-masked ()
+  "Inline-typed password chars display as bullets but the value is real."
+  (with-temp-buffer
+    (let ((shr-width 80))
+      (cmacs-gsurf-lite--tag-input
+       (dom-node 'input '((type . "password") (name . "pass")
+                          (data-cmlite-id . "cml4")))))
+    (let ((pos (cmacs-gsurf-lite-tests--first-field)))
+      (goto-char pos)
+      (cl-letf (((symbol-function 'cmacs-gsurf-lite--schedule-flush) #'ignore))
+        (dolist (ch '(?s ?e ?c))
+          (let ((last-command-event ch))
+            (cmacs-gsurf-lite--self-insert 1))))
+      ;; Visible text is masked...
+      (should (get-text-property pos 'display))
+      ;; ...but the logical value recovers the plaintext.
+      (let ((bounds (cmacs-gsurf-lite--field-bounds (point))))
+        (should (equal (cmacs-gsurf-lite--field-value
+                        (car bounds) (cdr bounds) "password")
+                       "sec"))))))
+
+(ert-deftest cmacs-gsurf-lite-delete-backward-shrinks-value ()
+  "DEL inside a field removes the preceding character from the value."
+  (with-temp-buffer
+    (let ((shr-width 80))
+      (cmacs-gsurf-lite--tag-input
+       (dom-node 'input '((type . "text") (name . "user")
+                          (data-cmlite-id . "cml3")))))
+    (goto-char (cmacs-gsurf-lite-tests--first-field))
+    (cl-letf (((symbol-function 'cmacs-gsurf-lite--schedule-flush) #'ignore))
+      (dolist (ch '(?h ?i))
+        (let ((last-command-event ch)) (cmacs-gsurf-lite--self-insert 1)))
+      (cmacs-gsurf-lite--delete-backward 1))
+    (let ((bounds (cmacs-gsurf-lite--field-bounds (point))))
+      (should (equal (cmacs-gsurf-lite--field-value
+                      (car bounds) (cdr bounds) "text")
+                     "h")))))
 
 (ert-deftest cmacs-gsurf-lite-tag-input-hidden-skipped ()
   "A hidden input renders nothing (no field, no text)."
@@ -186,6 +277,31 @@ carrying its plist (id/type/name) and the field keymap."
               'cmacs-gsurf-lite-prev-field))
   (should (eq (lookup-key cmacs-gsurf-lite-mode-map (kbd "C-c C-c"))
               'cmacs-gsurf-lite-submit)))
+
+(ert-deftest cmacs-gsurf-lite-action-watch-times-defcustom ()
+  "The post-click watch schedule is defined and spans more than one tick."
+  (should (boundp 'cmacs-gsurf-lite-action-watch-times))
+  (should (consp cmacs-gsurf-lite-action-watch-times))
+  (should (> (length cmacs-gsurf-lite-action-watch-times) 1)))
+
+(ert-deftest cmacs-gsurf-lite-click-schedules-multiple-reextracts ()
+  "A JS click/submit schedules a re-extract at every action-watch time, so a
+delayed or client-side (SPA/pushState) redirect re-renders even when the
+navigation fires no load event.  Guards the regression where a login that
+redirected behind the scenes left the lite buffer showing the old page."
+  (let ((scheduled '()))
+    (cl-letf (((symbol-function 'cmacs-gsurf-run-javascript-async)
+               (lambda (_buf _js cb) (funcall cb "ok")))
+              ((symbol-function 'run-at-time)
+               (lambda (delay _repeat _fn &rest _args)
+                 (push delay scheduled) nil)))
+      (with-temp-buffer
+        (cmacs-gsurf-lite--run-js-then-reextract (current-buffer) "x();")))
+    (setq scheduled (nreverse scheduled))
+    ;; The click schedules exactly one re-extract per action-watch time
+    ;; (ignoring any unrelated Emacs-internal timers also seen by the stub).
+    (should (equal (last scheduled (length cmacs-gsurf-lite-action-watch-times))
+                   cmacs-gsurf-lite-action-watch-times))))
 
 (provide 'cmacs-gsurf-lite-tests)
 ;;; cmacs-gsurf-lite-tests.el ends here

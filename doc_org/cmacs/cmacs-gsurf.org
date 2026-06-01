@@ -237,11 +237,16 @@ event).  =cmacs-gsurf-lite-shr-width= overrides the shr fill width.
 
 *Logins / forms work.*  Form controls render as editable items:
 =Username: [ ]=, =Password: [ ]=, =[ ] remember=, =[ Log In ]=.  Move
-between them with =TAB= / =S-TAB=, press =RET= on a field to fill it
-(passwords are read without echo via =read-passwd= and never written
-into the buffer or the extracted HTML -- only a filled/empty marker),
-toggle a checkbox/radio or click a button with =RET=, and submit with
-=RET= on the submit button or =C-c C-c=.  Filling pushes the value into
+between them with =TAB= / =S-TAB=.  Text, password and textarea fields
+are *editable inline* -- just type into the box, characters self-insert
+in place, =DEL= erases, and passwords echo as bullets; edits are pushed
+into the live DOM on a short idle debounce (and immediately before any
+submit/click).  Prefer the minibuffer?  Press =RET= on a field to read
+the value there instead (passwords without echo via =read-passwd=).
+Either way the value is masked in the extracted HTML -- passwords are
+never written into it, only a filled/empty marker.  Toggle a
+checkbox/radio or click a button with =RET=, and submit with =RET= on
+the submit button or =C-c C-c=.  Filling pushes the value into
 the *live DOM* through the native value setter plus =input=/=change=
 events (so React/controlled inputs accept it), and submitting clicks
 the real control -- so cookies, CSRF tokens, hidden fields and the
@@ -253,12 +258,22 @@ hands the page off to a full live =cmacs-gsurf= buffer if you prefer a
 real widget.  (File-upload inputs are out of scope -- JavaScript cannot
 set =<input type=file>=.)
 
-*SPA / late-rendering pages.*  Many sign-in and React/SPA pages render
-their real content only after the load-finished event.  gsurf-lite
-re-extracts the DOM at each delay in =cmacs-gsurf-lite-resettle-times=
-(default 0.6/1.6/3.0 s) so that content appears; raise those values for
-very slow pages, or just =g= (reload) / =&= (hand off) if a page is
-still blank.
+*SPA / late-rendering pages and redirects.*  Many sign-in and React/SPA
+pages render their real content only after the load-finished event.
+gsurf-lite re-extracts the DOM at each delay in
+=cmacs-gsurf-lite-resettle-times= (default 0.6/1.6/3.0 s) so that content
+appears; raise those values for very slow pages, or just =g= (reload) /
+=&= (hand off) if a page is still blank.
+
+Clicking a button or submitting -- e.g. *Log In* -- often kicks off work
+that finishes later than one settle and may navigate *client-side*
+(a =pushState= route change, a =window.location= bounce, or a
+fetch-then-update), firing the load event late or not at all.  So after
+any click/submit gsurf-lite re-extracts at each delay in
+=cmacs-gsurf-lite-action-watch-times= (default 0.3/0.8/1.6/3.0/4.5/6.5 s)
+and follows the page wherever it lands -- the buffer updates to the
+post-login page even when no load event fires.  Lengthen the tail for
+very slow sign-in flows.
 
 * Configuration (from Emacs, by default)
 
