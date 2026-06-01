@@ -6545,68 +6545,239 @@ upstream-style build is unaffected.
 @node Upstream Changes
 @chapter Upstream Changes
 
-cmacs tracks upstream GNU Emacs and merges it in every few weeks.  New
-features live in @emph{new} files under @file{cmacs/<subsystem>/} and
-@file{lisp/cmacs/}; edits to stock Emacs sources (@file{src/*.c},
-@file{lisp/*.el}, @file{src/Makefile.in}, ...) are kept as small and as
-guarded as possible.  This chapter is the authoritative catalogue of
-every such edit, so a merge conflict on one of them is easy to resolve.
-Each entry is a single, clearly-commented hunk marked with a
-@code{/* CMACS: ... */} comment in the source.  When you add or remove an
-upstream touch-point, update this chapter (and
-@file{doc_org/cmacs/cmacs-upstream-changes.org}) in the same commit.
+cmacs tracks upstream GNU Emacs and merges it in every few weeks.  To keep
+those merges painless, new features live in @emph{new} files under
+@file{cmacs/<subsystem>/} and @file{lisp/cmacs/}; edits to stock Emacs
+sources (@file{src/*.c}, @file{src/*.in}, @file{lisp/*.el},
+@file{src/Makefile.in}, @file{configure.ac}) are kept as small and as
+guarded as possible --- ideally a single @code{#ifdef HAVE_CMACS_*} block
+calling into a @code{cmacs_*} function defined in a new file.  This chapter
+is the authoritative catalogue of @emph{every} such edit, so a merge
+conflict on one is easy to resolve.  Many hunks carry a
+@code{/* CMACS ... */} comment, but not all, so use this list as the index.
+When you add or remove an upstream touch-point, update this chapter and
+@file{doc_org/cmacs/cmacs-upstream-changes.org} in the same commit.
 
-@section src/process.c --- GLib event-loop hooks
+Everything cmacs adds is gated behind a @code{HAVE_CMACS_*} macro, so with
+the cmacs flags off an upstream-style build still works and every hunk
+below compiles out.
 
-cmacs hooks Emacs's @code{pselect()} so a @code{GMainContext} is iterated
-around the same wait Emacs already performs: @code{cmacs_glib_prepare}
-before, @code{cmacs_glib_dispatch} after.  @code{cmacs_glib_dispatch}
-must clear @code{waiting_for_input} before dispatch and restore it after,
-or a Lisp error from a GLib callback aborts with @samp{Fatal error 6}.
+@menu
+* Upstream Generated Files::    Build artifacts that auto-pick-up cmacs.
+* Upstream C Sources::          emacs.c, process.c, pgtkterm.c, xwidget.c, lisp.h.
+* Upstream Build System::       configure.ac, config.in, epaths.in, Makefile.in.
+* Upstream Lisp::               lisp/startup.el.
+* Re-applying After a Merge::   How to restore the hunks.
+@end menu
 
-@section src/pgtkterm.c --- paint hooks
+@node Upstream Generated Files
+@section Generated files (not hand-edited)
 
-Paint/expose hooks call into @code{cmacs_*} functions to blit overlays
-onto the PGTK frame: GStreamer video, libregnum 3D scenes, and cmacs-ink.
+These contain @code{cmacs} strings but are build artifacts regenerated from
+the sources below --- do not edit them, and ignore them in a merge:
+@file{src/config.h} (from @file{configure.ac} + @file{src/config.in} via
+autoheader), @file{src/globals.h} (make-docfile, from the cmacs DEFUNs),
+@file{src/buildobj.h}, @file{src/epaths.h} (from @file{src/epaths.in}), and
+the generated lisp loaders @file{lisp/loaddefs.el}, @file{lisp/cus-load.el},
+@file{lisp/finder-inf.el}, @file{lisp/subdirs.el} (they discover
+@file{lisp/cmacs/} automatically).
 
-@section src/emacs.c --- early startup hooks
+@node Upstream C Sources
+@section C sources
 
-Small guarded hunks at the top of @code{main()}: @option{--bacon}
-(@code{HAVE_CMACS_BACON}) and @option{--gowl} (@code{HAVE_CMACS_GOWL})
-early entry, plus the @strong{JSC GC signal redirect}
-(@code{HAVE_CMACS_GSURF || HAVE_XWIDGETS}):
+@subsection src/emacs.c
 
+Several small hunks in @code{main()} / its init path:
+
+@itemize @bullet
+@item
+@strong{Includes} (gated): @file{cmacs-bacon.h}, @file{<gowl.h>} /
+@file{<wayland-server-core.h>}.
+@item
+@strong{@option{--bacon} entry} (@code{HAVE_CMACS_BACON}): scan @code{argv}
+and enter the embedded shell via @code{cmacs_bacon_main} before any Emacs
+init; never returns.
+@item
+@strong{@option{--gowl} early start} (@code{HAVE_CMACS_GOWL}): create and
+configure the @code{GowlCompositor} (including the
+@code{evaluate-gowl-config-with-cmacs} / @code{evaluate-c-config-with-cmacs}
+gates) and start it before display init, so PGTK/GDK connects to gowl's own
+Wayland display.
+@item
+@strong{JSC GC-signal redirect} (@code{HAVE_CMACS_GSURF || HAVE_XWIDGETS}),
+at the very top of @code{main()}:
 @example
 #if defined HAVE_CMACS_GSURF || defined HAVE_XWIDGETS
   setenv ("JSC_SIGNAL_FOR_GC", "40", 0);
 #endif
 @end example
-
 WebKit's JavaScriptCore (pulled in by gsurf and/or @option{--with-xwidgets})
 pauses threads for GC using a signal defaulting to @code{SIGUSR1}
 (signal@tie{}10) --- the same signal podomation's @code{engine} source
 (@code{on_sigusr1}), libreclaw's thread dump, and Emacs's @code{[sigusr1]}
 use, so JSC steals it.  JSC installs its handler during early GTK/library
-init, before any cmacs runtime code runs, so this top-of-@code{main()}
-hunk is the only reliable place to redirect it to a free real-time signal
-(@math{40 = @code{SIGRTMIN}+5} on Linux).  The @code{setenv} overwrite
-flag is @code{0}, so an explicit @code{JSC_SIGNAL_FOR_GC} from the launch
+init, before any cmacs runtime code runs, so this is the only reliable
+place to redirect it to a free real-time signal
+(@math{40 = @code{SIGRTMIN}+5} on Linux).  The @code{setenv} overwrite flag
+is @code{0}, so an explicit @code{JSC_SIGNAL_FOR_GC} from the launch
 environment (the @file{Justfile} @code{run}/@code{gowl} recipes export
 @code{40}) still wins.  @code{SIGUSR2}/@code{SIGHUP} are unaffected.
+@item
+@strong{@code{syms_of_cmacs_*} block}: register every subsystem's DEFUNs at
+dump time (one @code{#ifdef HAVE_CMACS_*} per subsystem: glib, gobject,
+dbus, gi, crispy, bacon, gowl, podomation, libreclaw, org-ex, mcp,
+cintrospect, cpatch, video, audio, whisper, piper, ai, libregnum, gsurf).
+@item
+@strong{@code{init_cmacs_*} late-init block} (marked
+@code{/* CMACS: late init ... */}): run each subsystem's runtime init after
+terminal setup (@code{init_cmacs_glib}, @code{init_cmacs_dbus},
+@code{init_cmacs_gowl}, @dots{}, @code{init_cmacs_gsurf}).
+@end itemize
 
-@section src/Makefile.in --- linking & static-library dedup
+@subsection src/process.c --- GLib event-loop hooks
 
-cmacs whole-archives its subsystem static libraries into temacs.  Because
-crispy and yaml-glib objects are vendored in several archives, the
-Makefile strips duplicate objects from downstream archives before
-linking.  @strong{Never} use @option{-Wl,-z,muldefs} --- it silently
-picks one implementation, giving an ABI mismatch and crashes.
+cmacs does @emph{not} replace Emacs's event loop; it hooks @code{pselect()}
+so a @code{GMainContext} is iterated around the same wait.  Include of
+@file{cmacs/glib/cmacs-glib-loop.h}, then (@code{HAVE_CMACS_GLIB})
+@code{cmacs_glib_prepare} before the wait and @code{cmacs_glib_dispatch}
+after.  @code{cmacs_glib_dispatch} must clear @code{waiting_for_input}
+before dispatch and restore it after, or a Lisp error from a GLib callback
+aborts with @samp{Fatal error 6: Aborted}.
 
+@subsection src/pgtkterm.c --- paint hooks + libregnum input
+
+@itemize @bullet
+@item
+@strong{Overlay includes} (gated): @file{cmacs-ink-overlay.h}
+(@code{HAVE_CMACS_GLIB}), @file{cmacs-video.h}, @file{cmacs-audio.h},
+@file{cmacs-libregnum.h}.
+@item
+@strong{Paint hooks} in @code{pgtk_handle_draw} (after the back-surface
+blit): @code{cmacs_video_overlay_paint} (@code{HAVE_CMACS_VIDEO}),
+@code{cmacs_audio_overlay_paint} (@code{HAVE_CMACS_AUDIO}),
+@code{cmacs_libregnum_overlay_paint} (@code{HAVE_CMACS_LIBREGNUM}), and
+@code{cmacs_ink_overlay_paint} (@code{HAVE_CMACS_GLIB}, painted last).
+@item
+@strong{libregnum pointer input} (@code{HAVE_CMACS_LIBREGNUM}): when the
+selected window shows a libregnum view, route motion / button / scroll into
+the libregnum input controller before Emacs's own mouse machinery; other
+buffers fall through unchanged.
+@end itemize
+
+@subsection src/xwidget.c / src/xwidget.h --- gowl client embedding
+
+All gated @code{HAVE_CMACS_GOWL} (and @code{HAVE_PGTK} for events).  gowl
+embeds Wayland clients as a kind of xwidget: a @code{Qgowl} xwidget type,
+two opaque fields on @code{struct xwidget} (@code{gowl_client},
+@code{gowl_view}), @code{cmacs_xwidget_allocate_gowl} (called from
+@file{cmacs-gowl.c}), and the focus / event-forwarding helpers
+(@code{xwidget_gowl_set_focused_view} / @code{_clear_focused_view},
+@code{xwidget_gowl_forward_event}) that route GTK key/pointer events to the
+focused gowl view's Wayland client.
+
+@subsection src/lisp.h --- init/syms externs
+
+A single @code{/* CMACS */} block of @code{extern void init_cmacs_*} /
+@code{syms_of_cmacs_*} declarations, one @code{#ifdef HAVE_CMACS_*} per
+subsystem, so @file{emacs.c} can call them.
+
+@node Upstream Build System
+@section Build system
+
+@subsection configure.ac + src/config.in
+
+@file{configure.ac} adds all the @option{--with-cmacs-*} /
+@option{--enable-cmacs-*} options (plus the @option{--with-gsurf} /
+@option{--with-gowl} aliases), their dependency checks (e.g.@: gsurf and
+libregnum require @option{--with-cmacs-glib} and @option{--with-pgtk}; ai
+shares libreclaw's @code{ai-glib} archive), the
+@code{AC_DEFINE([HAVE_CMACS_*])} and @code{AC_SUBST} of each subsystem's
+@code{OBJ}/@code{CFLAGS}/@code{LIBS}/@code{BUNDLED} variables.
+@file{src/config.in} carries the matching @code{#undef HAVE_CMACS_*} lines
+(autoheader-maintained) plus @code{#undef CMACS_PIPER_DEFAULT_BINARY}.
+
+@subsection src/epaths.in
+
+Adds @code{#define PATH_CMACS_API "/usr/local/lib/cmacs"} --- where crispy
+and bacon locate @file{libcmacs-api.so} / @file{cmacs-api.h} on an installed
+system.
+
+@subsection Makefile.in (top-level) --- install & docs targets
+
+The top-level build/install Makefile gains: the @code{cmacsapidir} install
+location and rules installing @file{cmacs/api/libcmacs-api.so} +
+@file{cmacs-api.h} and the bacon @file{.so} modules; a @code{sed} step
+that rewrites @code{PATH_CMACS_API} in the installed @file{epaths.h} to
+@code{cmacsapidir}; the @code{cmacs-deps-docs} target (a prerequisite of
+@code{actual-all}, so it runs on every @code{make}) that mirrors each
+@file{deps/<dep>/docs} tree into @file{doc_org/cmacs/deps/}; and the
+optional ``Print to cmacs'' printer and @code{org.cmacs.Editor} D-Bus
+service install/uninstall targets.
+
+@subsection java/Makefile.in --- Android Doom bundle
+
+When @file{build-aux/android-doom-bundle/} exists (populated by
+@file{build-aux/android-build.sh} from the host's
+@file{~/.config/@{emacs,doom@}}), copy it into
+@file{install_temp/assets/doom-bundle} so the APK ships an embedded Doom
+config.
+
+@subsection src/Makefile.in --- linking & static-library dedup
+
+@itemize @bullet
+@item
+@code{vpath %.c} / @code{vpath %.h} entries for each
+@file{cmacs/<subsystem>/} dir; the @code{CMACS_*_OBJ}/@code{_CFLAGS}/
+@code{_LIBS}/@code{_BUNDLED} variable block.
+@item
+Subsystem static libraries (e.g.@: @file{libgsurf.a},
+@file{liborgex-1.0.a}) are whole-archived into temacs.
+@item
+@strong{Static-library dedup} (critical invariant): crispy and yaml-glib
+objects are vendored in several archives, possibly from different commits.
+The @code{_bacon_strip} / @code{_gowl_strip} / @code{_libreclaw_strip} /
+@code{_gsurf_strip} machinery runs @code{ar d} to delete duplicate objects
+from the downstream archives before linking, and strips any
+@option{-Wl,-z,muldefs} from the per-lib LIBS.  @strong{Never} re-add
+@option{-Wl,-z,muldefs} --- it silently picks one implementation, giving an
+ABI mismatch and non-deterministic crashes.
+@item
+@code{make-docfile} / @code{gl-stamp} need the cmacs @file{.c} files
+visible from @code{srcdir}; a @code{cmacs-symlinks} prerequisite plus the
+@code{/* CMACS: make-docfile needs .c files visible from srcdir. */} hunk
+arrange that.
+@end itemize
+
+@node Upstream Lisp
+@section Lisp
+
+@subsection lisp/startup.el
+
+One hunk (marked @code{;; CMacs: ...}): after Elisp init, on an interactive
+session, @code{(require 'cmacs-config)} and call
+@code{cmacs-config-load-all} so the user's bacon / C config files load.
+
+@file{lisp/site-start.el} is a @emph{new} cmacs file (not an edit): it
+rides Emacs's stock @code{site-run-file} load to bootstrap the embedded
+Doom config on the first Android launch.  Everything else cmacs adds is a
+@emph{new} file under @file{lisp/cmacs/} picked up by the generated
+loaders.  @file{.gitignore} also gains entries for cmacs build artifacts.
+
+@node Re-applying After a Merge
 @section Re-applying after a merge
 
-Search the upstream files for @code{CMACS:} comments; each marks a hunk
-documented above.  If one failed to apply, re-create it from the
-description, then rebuild (force a relink if temacs-linked objects
-changed: @code{rm -f src/temacs && make -j$(nproc)}).
+@enumerate
+@item
+Search the upstream files for @code{CMACS} comments; each marks a hunk
+above.
+@item
+For hunks without a marker, use this catalogue to re-create them.
+@item
+Rebuild, forcing a relink if temacs-linked objects changed:
+@code{rm -f src/temacs && make -j$(nproc)}.
+@item
+Sanity-check the DEFUNs are present: @code{just check-defuns} (or
+@kbd{M-x} a known @code{cmacs-} command).
+@end enumerate
 
 @bye
