@@ -1347,6 +1347,21 @@ android_emacs_init (int argc, char **argv, char *dump_file)
   maybe_load_seccomp (argc, argv);
 #endif
 
+  /* CMACS: WebKit's JavaScriptCore (pulled in by gsurf and/or xwidgets)
+     pauses threads for GC using a POSIX signal that defaults to SIGUSR1
+     (signal 10) -- the same signal cmacs uses for podomation's `engine'
+     source (on_sigusr1), libreclaw's thread dump, and Emacs's own
+     [sigusr1] event.  JSC installs its handler during early GTK/library
+     init, before any cmacs runtime code runs, so the only reliable place
+     to redirect it is here, at the very top of main().  Move it to a free
+     real-time signal (40 = SIGRTMIN+5 on Linux).  The overwrite flag is 0
+     so an explicit JSC_SIGNAL_FOR_GC from the launch environment (e.g. the
+     Justfile run/gowl recipes) still takes precedence.  Only relevant when
+     WebKit is linked in.  See doc_org/cmacs/cmacs-upstream-changes.org.  */
+#if defined HAVE_CMACS_GSURF || defined HAVE_XWIDGETS
+  setenv ("JSC_SIGNAL_FOR_GC", "40", 0);
+#endif
+
   /* Check for --bacon before ANY Emacs initialization.
      If present, enter bacon shell mode and never return. */
 #ifdef HAVE_CMACS_BACON

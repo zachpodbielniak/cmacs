@@ -19,7 +19,10 @@ cmacs tracks upstream GNU Emacs and merges it in every few weeks. Keep merges pa
   self-contained, so an upstream-style build with cmacs off still works.
 
 Current upstream touch-points (keep minimal): `process.c` pselect hooks (GLib loop),
-`src/pgtkterm.c` paint hooks (video / libregnum / ink overlays), `src/Makefile.in` (linking).
+`src/pgtkterm.c` paint hooks (video / libregnum / ink overlays), `src/emacs.c` early
+`main()` hooks (`--bacon` / `--gowl` entry, JSC GC-signal redirect), `src/Makefile.in`
+(linking). Each hunk is marked `/* CMACS: ... */`; the full catalogue with rationale is
+`doc_org/cmacs/cmacs-upstream-changes.org` (and the *Upstream Changes* chapter in the manual).
 
 ## Build
 

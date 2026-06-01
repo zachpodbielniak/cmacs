@@ -38,6 +38,7 @@ embedded dependency docs (see [[*Dependency Documentation][Dependency Documentat
 | [[file:cintrospect.org][Cintrospect]]                      | =cintrospect.org=   | Runtime C self-introspection (libdw + JIT)      |
 | [[file:cpatch.org][Cpatch]]                           | =cpatch.org=        | Runtime C hot-patching (DEFUN swap + detours)   |
 | [[file:build.org][Build Configuration]]              | =build.org=         | Configure flags, dependencies, Makefiles        |
+| [[file:cmacs-upstream-changes.org][Upstream Changes]]                 | =cmacs-upstream-changes.org= | Every edit cmacs makes to stock Emacs sources |
 
 * Dependency Documentation
 

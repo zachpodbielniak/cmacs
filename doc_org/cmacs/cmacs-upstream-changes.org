@@ -1,0 +1,86 @@
+#+TITLE: CMacs Upstream Changes
+#+STARTUP: showall
+#+OPTIONS: toc:2 num:t
+
+* Why this file exists
+
+cmacs tracks upstream GNU Emacs and merges it in every few weeks.  To keep
+those merges painless, new features live in *new* files under
+=cmacs/<subsystem>/= and =lisp/cmacs/=, and edits to stock Emacs sources
+(=src/*.c=, =lisp/*.el=, =src/Makefile.in=, ...) are kept as small and as
+guarded as possible.
+
+This file is the authoritative catalogue of every edit cmacs makes to an
+upstream file, so that when a merge conflict lands on one of them you know
+exactly what the change is, why it exists, and how to re-apply it.  Each
+entry is a single, clearly-commented hunk marked with a =/* CMACS: ... */=
+comment in the source.  If you add or remove an upstream touch-point,
+update this file (and =doc/cmacs/cmacs.texi=) in the same commit.
+
+* Catalogue
+
+** src/process.c --- GLib event-loop hooks
+
+cmacs does *not* replace Emacs's event loop; it hooks Emacs's =pselect()=
+so a =GMainContext= is iterated around the same wait Emacs already does.
+=cmacs_glib_prepare= runs before the wait and =cmacs_glib_dispatch= after.
+=cmacs_glib_dispatch= must clear =waiting_for_input= before dispatch and
+restore it after, or a Lisp error raised from a GLib callback aborts with
+=Fatal error 6: Aborted=.  See the GLib chapter and the
+=cmacs-glib-loop.c= invariants.
+
+** src/pgtkterm.c --- paint hooks
+
+Paint/expose hooks call into cmacs to blit overlays onto the PGTK frame:
+video frames (GStreamer BGRA appsink), libregnum 3D scenes, and cmacs-ink
+overlays.  The hooks are thin calls into =cmacs_*= functions defined in
+the relevant subsystem files.
+
+** src/emacs.c --- early startup hooks
+
+Several small, guarded hunks at the top of =main()=:
+
+- *=--bacon=* (gated =HAVE_CMACS_BACON=): enter the embedded shell before
+  any Emacs initialisation and never return.
+- *=--gowl=* (gated =HAVE_CMACS_GOWL=): start the Wayland compositor early
+  so PGTK/GDK connects to gowl's display.
+- *JSC GC signal redirect* (gated =HAVE_CMACS_GSURF || HAVE_XWIDGETS=):
+  #+begin_src c
+  /* CMACS: ... move it to a free real-time signal ... */
+  #if defined HAVE_CMACS_GSURF || defined HAVE_XWIDGETS
+    setenv ("JSC_SIGNAL_FOR_GC", "40", 0);
+  #endif
+  #+end_src
+  WebKit's JavaScriptCore (pulled in by gsurf and/or =--with-xwidgets=)
+  pauses threads for GC using a POSIX signal that defaults to *SIGUSR1*
+  (signal 10), printing =Overriding existing handler for signal 10= at
+  startup.  That is the same signal cmacs uses for podomation's =engine=
+  source (=on_sigusr1=), libreclaw's thread dump, and Emacs's own
+  =[sigusr1]= event --- whoever installs its handler last wins, so JSC
+  silently steals it and those handlers stop firing.
+
+  JSC installs its handler during early GTK/library init, before any cmacs
+  runtime code runs, so this is the only reliable place to redirect it.
+  We move it to a free real-time signal (=40= = =SIGRTMIN+5= on Linux).
+  The =setenv= overwrite flag is =0=, so an explicit =JSC_SIGNAL_FOR_GC=
+  from the launch environment still wins --- the =Justfile= =run= /
+  =gowl= recipes export =JSC_SIGNAL_FOR_GC=40= so that =just run= behaves
+  identically whether or not this fallback is present.  =SIGUSR2= /
+  =SIGHUP= are unaffected.  See also the gsurf chapter's Troubleshooting
+  entry and the [[file:podomation.org][Podomation]] =engine= source.
+
+** src/Makefile.in --- linking & static-library dedup
+
+cmacs whole-archives its subsystem static libraries into temacs.  Because
+crispy and yaml-glib objects are vendored in several archives (possibly
+from different commits), =src/Makefile.in= strips duplicate objects from
+downstream archives before linking (the =_*_strip= machinery).  *Never*
+use =-Wl,-z,muldefs= --- it silently picks one implementation, giving an
+ABI mismatch and non-deterministic crashes.
+
+* Re-applying after a merge
+
+After a merge, search the upstream files for =CMACS:= comments; each marks
+a hunk documented above.  If a hunk failed to apply, re-create it from the
+description here.  Then rebuild (forcing a relink if temacs-linked objects
+changed: =rm -f src/temacs && make -j$(nproc)=).

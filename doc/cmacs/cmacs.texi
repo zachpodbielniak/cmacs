@@ -58,6 +58,7 @@ interaction.
 * CMacs Libregnum::             Embedded libregnum 3D scene buffers.
 * CMacs Gsurf::                 Embedded gsurf web browser buffers.
 * Build Configuration::         Configure flags and dependencies.
+* Upstream Changes::            Every edit cmacs makes to stock Emacs sources.
 @end menu
 
 @c ===================================================================
@@ -6539,5 +6540,73 @@ Markdown conversion or extra build dependency is needed.
 The script is a clean no-op on a tree without @file{deps/}, so an
 upstream-style build is unaffected.
 @end itemize
+
+@c ===================================================================
+@node Upstream Changes
+@chapter Upstream Changes
+
+cmacs tracks upstream GNU Emacs and merges it in every few weeks.  New
+features live in @emph{new} files under @file{cmacs/<subsystem>/} and
+@file{lisp/cmacs/}; edits to stock Emacs sources (@file{src/*.c},
+@file{lisp/*.el}, @file{src/Makefile.in}, ...) are kept as small and as
+guarded as possible.  This chapter is the authoritative catalogue of
+every such edit, so a merge conflict on one of them is easy to resolve.
+Each entry is a single, clearly-commented hunk marked with a
+@code{/* CMACS: ... */} comment in the source.  When you add or remove an
+upstream touch-point, update this chapter (and
+@file{doc_org/cmacs/cmacs-upstream-changes.org}) in the same commit.
+
+@section src/process.c --- GLib event-loop hooks
+
+cmacs hooks Emacs's @code{pselect()} so a @code{GMainContext} is iterated
+around the same wait Emacs already performs: @code{cmacs_glib_prepare}
+before, @code{cmacs_glib_dispatch} after.  @code{cmacs_glib_dispatch}
+must clear @code{waiting_for_input} before dispatch and restore it after,
+or a Lisp error from a GLib callback aborts with @samp{Fatal error 6}.
+
+@section src/pgtkterm.c --- paint hooks
+
+Paint/expose hooks call into @code{cmacs_*} functions to blit overlays
+onto the PGTK frame: GStreamer video, libregnum 3D scenes, and cmacs-ink.
+
+@section src/emacs.c --- early startup hooks
+
+Small guarded hunks at the top of @code{main()}: @option{--bacon}
+(@code{HAVE_CMACS_BACON}) and @option{--gowl} (@code{HAVE_CMACS_GOWL})
+early entry, plus the @strong{JSC GC signal redirect}
+(@code{HAVE_CMACS_GSURF || HAVE_XWIDGETS}):
+
+@example
+#if defined HAVE_CMACS_GSURF || defined HAVE_XWIDGETS
+  setenv ("JSC_SIGNAL_FOR_GC", "40", 0);
+#endif
+@end example
+
+WebKit's JavaScriptCore (pulled in by gsurf and/or @option{--with-xwidgets})
+pauses threads for GC using a signal defaulting to @code{SIGUSR1}
+(signal@tie{}10) --- the same signal podomation's @code{engine} source
+(@code{on_sigusr1}), libreclaw's thread dump, and Emacs's @code{[sigusr1]}
+use, so JSC steals it.  JSC installs its handler during early GTK/library
+init, before any cmacs runtime code runs, so this top-of-@code{main()}
+hunk is the only reliable place to redirect it to a free real-time signal
+(@math{40 = @code{SIGRTMIN}+5} on Linux).  The @code{setenv} overwrite
+flag is @code{0}, so an explicit @code{JSC_SIGNAL_FOR_GC} from the launch
+environment (the @file{Justfile} @code{run}/@code{gowl} recipes export
+@code{40}) still wins.  @code{SIGUSR2}/@code{SIGHUP} are unaffected.
+
+@section src/Makefile.in --- linking & static-library dedup
+
+cmacs whole-archives its subsystem static libraries into temacs.  Because
+crispy and yaml-glib objects are vendored in several archives, the
+Makefile strips duplicate objects from downstream archives before
+linking.  @strong{Never} use @option{-Wl,-z,muldefs} --- it silently
+picks one implementation, giving an ABI mismatch and crashes.
+
+@section Re-applying after a merge
+
+Search the upstream files for @code{CMACS:} comments; each marks a hunk
+documented above.  If one failed to apply, re-create it from the
+description, then rebuild (force a relink if temacs-linked objects
+changed: @code{rm -f src/temacs && make -j$(nproc)}).
 
 @bye
