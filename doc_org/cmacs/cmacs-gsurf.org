@@ -424,7 +424,15 @@ cmacs-ai via the MCP bridge — =^gsurf_= is in the default allowlist):
   GC using a signal that defaults to *SIGUSR1* (signal 10), the same
   signal podomation's =engine= source, libreclaw's thread-dump, and
   Emacs's =[sigusr1]= use; whoever installs last wins, so JSC steals it.
-  Move JSC to a free real-time signal by exporting =JSC_SIGNAL_FOR_GC=40=
-  (raw signal number; 40 = SIGRTMIN+5 on Linux) *before* launch — the
-  =Justfile= =run= / =gowl= recipes already do this.  For a bare
-  =./src/emacs=, export it yourself.  =SIGUSR2= / =SIGHUP= are unaffected.
+  cmacs moves JSC to a free real-time signal (40 = SIGRTMIN+5 on Linux) in
+  C at the top of =main()= via JSC's private =JSConfigureSignalForGC()=
+  (see =src/emacs.c=), so this is handled automatically for both
+  =./src/emacs= and =just run=.  =SIGUSR2= / =SIGHUP= are unaffected.
+  (cmacs does *not* set the =JSC_SIGNAL_FOR_GC= environment variable: it
+  works, but JSC's option parser also scans every =JSC_*= var and rejects
+  it with =ERROR: invalid option: JSC_SIGNAL_FOR_GC=40=, once per
+  JSC-initialising process — the programmatic call avoids that noise.)
+- *=ERROR: invalid option: JSC_SIGNAL_FOR_GC=...=* — you have
+  =JSC_SIGNAL_FOR_GC= set in your environment.  Unset it; cmacs configures
+  the GC signal programmatically and the env var only triggers JSC's
+  option-parser rejection.

@@ -6246,14 +6246,18 @@ reuses the same WebKitGTK/GTK3 stack as @option{--with-xwidgets}, so no
 new system packages are needed.
 
 @strong{Signal note.}  WebKit's JavaScriptCore pauses threads for GC
-using a POSIX signal that defaults to @code{SIGUSR1} (signal@tie{}10) and
-prints @samp{Overriding existing handler for signal 10} at startup.  That
-is the same signal podomation's @code{engine} source (@code{on_sigusr1}),
-libreclaw's thread-dump, and Emacs's @code{[sigusr1]} use, so JSC steals
-it.  Export @code{JSC_SIGNAL_FOR_GC=40} (a raw signal number;
-@math{40 = @code{SIGRTMIN}+5} on Linux) @emph{before} launch to move JSC
-to a free real-time signal; the @file{Justfile} @code{run}/@code{gowl}
-recipes already do this.  @code{SIGUSR2}/@code{SIGHUP} are unaffected.
+using a POSIX signal that defaults to @code{SIGUSR1} (signal@tie{}10).
+That is the same signal podomation's @code{engine} source
+(@code{on_sigusr1}), libreclaw's thread-dump, and Emacs's @code{[sigusr1]}
+use, so JSC steals it.  cmacs moves JSC to a free real-time signal
+(@math{40 = @code{SIGRTMIN}+5} on Linux) in C at the top of @code{main()}
+via JSC's private @code{JSConfigureSignalForGC()}, so both @code{./src/emacs}
+and @code{just run} are handled automatically.  @code{SIGUSR2}/@code{SIGHUP}
+are unaffected.  cmacs deliberately does @emph{not} set the
+@code{JSC_SIGNAL_FOR_GC} environment variable: it works, but JSC's option
+parser also scans every @code{JSC_*} var and rejects it with @samp{ERROR:
+invalid option: JSC_SIGNAL_FOR_GC=40}.  If you see that error, unset the
+variable in your environment.
 
 @c ===================================================================
 @node Build Configuration
@@ -6605,10 +6609,13 @@ gates) and start it before display init, so PGTK/GDK connects to gowl's own
 Wayland display.
 @item
 @strong{JSC GC-signal redirect} (@code{HAVE_CMACS_GSURF || HAVE_XWIDGETS}),
-at the very top of @code{main()}:
+plus a guarded @code{#include <dlfcn.h>}, at the very top of @code{main()}:
 @example
 #if defined HAVE_CMACS_GSURF || defined HAVE_XWIDGETS
-  setenv ("JSC_SIGNAL_FOR_GC", "40", 0);
+  int (*cmacs_jsc_configure_gc_signal) (int)
+    = (int (*) (int)) dlsym (RTLD_DEFAULT, "JSConfigureSignalForGC");
+  if (cmacs_jsc_configure_gc_signal != NULL)
+    cmacs_jsc_configure_gc_signal (40);   /* 40 = SIGRTMIN+5 on Linux */
 #endif
 @end example
 WebKit's JavaScriptCore (pulled in by gsurf and/or @option{--with-xwidgets})
@@ -6617,11 +6624,14 @@ pauses threads for GC using a signal defaulting to @code{SIGUSR1}
 (@code{on_sigusr1}), libreclaw's thread dump, and Emacs's @code{[sigusr1]}
 use, so JSC steals it.  JSC installs its handler during early GTK/library
 init, before any cmacs runtime code runs, so this is the only reliable
-place to redirect it to a free real-time signal
-(@math{40 = @code{SIGRTMIN}+5} on Linux).  The @code{setenv} overwrite flag
-is @code{0}, so an explicit @code{JSC_SIGNAL_FOR_GC} from the launch
-environment (the @file{Justfile} @code{run}/@code{gowl} recipes export
-@code{40}) still wins.  @code{SIGUSR2}/@code{SIGHUP} are unaffected.
+place to redirect it to a free real-time signal.  We call JSC's private
+@code{JSConfigureSignalForGC()} (resolved by @code{dlsym}, so it is a no-op
+if absent) rather than setting the @code{JSC_SIGNAL_FOR_GC} environment
+variable: the env var works, but JSC's option parser also scans every
+@code{JSC_*} var and rejects it with @samp{ERROR: invalid option:
+JSC_SIGNAL_FOR_GC=40} (once per JSC process).  The programmatic call sets
+the same config field with no such noise.  @code{SIGUSR2}/@code{SIGHUP}
+are unaffected.
 @item
 @strong{@code{syms_of_cmacs_*} block}: register every subsystem's DEFUNs at
 dump time (one @code{#ifdef HAVE_CMACS_*} per subsystem: glib, gobject,

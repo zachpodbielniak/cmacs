@@ -47,12 +47,14 @@ Several small hunks, all in =main()= / its init path:
   =GowlCompositor= (incl. the =evaluate-gowl-config-with-cmacs= /
   =evaluate-c-config-with-cmacs= gates) and start it before display init,
   so PGTK/GDK connects to gowl's own Wayland display.
-- *JSC GC-signal redirect* (=HAVE_CMACS_GSURF || HAVE_XWIDGETS=), at the
-  very top of =main()=:
+- *JSC GC-signal redirect* (=HAVE_CMACS_GSURF || HAVE_XWIDGETS=), plus a
+  guarded =#include <dlfcn.h>=, at the very top of =main()=:
   #+begin_src c
-  /* CMACS: ... move it to a free real-time signal ... */
   #if defined HAVE_CMACS_GSURF || defined HAVE_XWIDGETS
-    setenv ("JSC_SIGNAL_FOR_GC", "40", 0);
+    int (*cmacs_jsc_configure_gc_signal) (int)
+      = (int (*) (int)) dlsym (RTLD_DEFAULT, "JSConfigureSignalForGC");
+    if (cmacs_jsc_configure_gc_signal != NULL)
+      cmacs_jsc_configure_gc_signal (40);   /* 40 = SIGRTMIN+5 on Linux */
   #endif
   #+end_src
   WebKit's JavaScriptCore (pulled in by gsurf and/or =--with-xwidgets=)
@@ -61,10 +63,13 @@ Several small hunks, all in =main()= / its init path:
   libreclaw's thread dump, and Emacs's =[sigusr1]= use, so JSC steals it.
   JSC installs its handler during early GTK/library init, before any cmacs
   runtime code runs, so this is the only reliable place to redirect it to a
-  free real-time signal (=40= = =SIGRTMIN+5= on Linux).  The =setenv=
-  overwrite flag is =0=, so an explicit =JSC_SIGNAL_FOR_GC= from the launch
-  environment (the =Justfile= =run= / =gowl= recipes export =40=) still
-  wins.  =SIGUSR2= / =SIGHUP= are unaffected.
+  free real-time signal.  We call JSC's private =JSConfigureSignalForGC()=
+  (resolved by =dlsym=, so it is a no-op if absent) rather than setting the
+  =JSC_SIGNAL_FOR_GC= environment variable: the env var works, but JSC's
+  option parser also scans every =JSC_*= var and rejects it with =ERROR:
+  invalid option: JSC_SIGNAL_FOR_GC=40= (once per JSC process).  The
+  programmatic call sets the same config field with no such noise.
+  =SIGUSR2= / =SIGHUP= are unaffected.
 - *=syms_of_cmacs_*= block*: register every subsystem's DEFUNs at dump
   time (one =#ifdef HAVE_CMACS_*= guard per subsystem: glib, gobject,
   dbus, gi, crispy, bacon, gowl, podomation, libreclaw, org-ex, mcp,

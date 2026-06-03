@@ -15,16 +15,12 @@ emacs       := "./src/emacs"
 emacs_args  := ""
 jobs        := `nproc`
 
-# WebKit/JSC (pulled in by gsurf and --with-xwidgets) pauses its threads
-# for GC using a POSIX signal, defaulting to SIGUSR1 (signal 10).  But
-# podomation's `engine` event source registers SIGUSR1 (on_sigusr1),
-# libreclaw uses it for a thread dump, and Emacs exposes it as [sigusr1]
-# -- whoever installs last wins, so JSC silently steals it.  Move JSC to
-# a free real-time signal (SIGRTMIN+5 = 40 on Linux) so those handlers
-# keep working.  Must be in the environment before WebKit initialises, so
-# it is exported by every launch recipe below.  (For a bare `./src/emacs`,
-# export it yourself.)  See doc_org/cmacs/cmacs-gsurf.org.
-jsc_env     := "JSC_SIGNAL_FOR_GC=40"
+# Note: the WebKit/JSC GC-signal redirect off SIGUSR1 (so podomation's
+# on_sigusr1, libreclaw's thread dump and Emacs's [sigusr1] keep working)
+# is now done in C, at the top of main() via JSConfigureSignalForGC() --
+# see src/emacs.c and doc_org/cmacs/cmacs-gsurf.org.  No launch-env var is
+# needed (and the JSC_SIGNAL_FOR_GC env var is avoided on purpose: JSC's
+# option parser rejects it with "ERROR: invalid option").
 gowl_dir    := "deps/gowl"
 
 # Android build settings.  Override per-invocation:
@@ -244,7 +240,6 @@ clean-all: clean clean-eln-all clean-gowl
 # bacon builtin is available when the user does `M-x bacon`.
 [group('run')]
 run *ARGS:
-    {{ jsc_env }} \
     CMACS_MODULE_DIR={{ justfile_directory() }}/cmacs/bacon/modules \
     CMACS_GSURF_MODULE_DIR={{ justfile_directory() }}/cmacs/gsurf/modules \
         {{ emacs }} {{ ARGS }}
@@ -252,18 +247,18 @@ run *ARGS:
 # Run cmacs as a Wayland compositor (`--gowl`).
 [group('run')]
 gowl *ARGS:
-    {{ jsc_env }} {{ emacs }} --gowl {{ ARGS }}
+    {{ emacs }} --gowl {{ ARGS }}
 
 # Run cmacs --gowl under valgrind (slow, but catches use-after-free).
 [group('run')]
 gowl-valgrind *ARGS:
-    {{ jsc_env }} valgrind --suppressions=etc/emacs.supp --leak-check=no \
+    valgrind --suppressions=etc/emacs.supp --leak-check=no \
         {{ emacs }} --gowl {{ ARGS }}
 
 # Run cmacs --gowl under gdb (drops to (gdb) prompt; type `r` to start).
 [group('run')]
 gowl-gdb *ARGS:
-    {{ jsc_env }} gdb --args {{ emacs }} --gowl {{ ARGS }}
+    gdb --args {{ emacs }} --gowl {{ ARGS }}
 
 # Quick batch eval, e.g. `just batch '(princ (emacs-version))'`.
 [group('run')]

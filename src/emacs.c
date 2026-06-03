@@ -165,6 +165,10 @@ extern char etext;
 #include <wayland-server-core.h>
 #endif
 
+#if defined HAVE_CMACS_GSURF || defined HAVE_XWIDGETS
+#include <dlfcn.h>      /* dlsym for the JSC GC-signal redirect in main () */
+#endif
+
 static const char emacs_version[] = PACKAGE_VERSION;
 static const char emacs_copyright[] = COPYRIGHT;
 static const char emacs_bugreport[] = PACKAGE_BUGREPORT;
@@ -1351,15 +1355,27 @@ android_emacs_init (int argc, char **argv, char *dump_file)
      pauses threads for GC using a POSIX signal that defaults to SIGUSR1
      (signal 10) -- the same signal cmacs uses for podomation's `engine'
      source (on_sigusr1), libreclaw's thread dump, and Emacs's own
-     [sigusr1] event.  JSC installs its handler during early GTK/library
-     init, before any cmacs runtime code runs, so the only reliable place
-     to redirect it is here, at the very top of main().  Move it to a free
-     real-time signal (40 = SIGRTMIN+5 on Linux).  The overwrite flag is 0
-     so an explicit JSC_SIGNAL_FOR_GC from the launch environment (e.g. the
-     Justfile run/gowl recipes) still takes precedence.  Only relevant when
-     WebKit is linked in.  See doc_org/cmacs/cmacs-upstream-changes.org.  */
+     [sigusr1] event.  Move it to a free real-time signal (40, i.e.
+     SIGRTMIN+5 on Linux) before JSC freezes its config, which it does
+     during early GTK/library init -- so this must run at the very top of
+     main(), before any WebKit/GTK code.
+
+     We call JSC's private JSConfigureSignalForGC() via dlsym rather than
+     setting the JSC_SIGNAL_FOR_GC environment variable.  The env var does
+     move the signal, but JSC's option parser also scans every JSC_* var
+     and rejects this one as unknown, printing "ERROR: invalid option:
+     JSC_SIGNAL_FOR_GC=40" once per JSC-initialising process.  The
+     programmatic call sets the same config field with no such noise.
+     dlsym keeps the whole thing a no-op if the symbol is absent.  Only
+     relevant when WebKit is linked in.  See
+     doc_org/cmacs/cmacs-upstream-changes.org.  */
 #if defined HAVE_CMACS_GSURF || defined HAVE_XWIDGETS
-  setenv ("JSC_SIGNAL_FOR_GC", "40", 0);
+  {
+    int (*cmacs_jsc_configure_gc_signal) (int)
+      = (int (*) (int)) dlsym (RTLD_DEFAULT, "JSConfigureSignalForGC");
+    if (cmacs_jsc_configure_gc_signal != NULL)
+      cmacs_jsc_configure_gc_signal (40);
+  }
 #endif
 
   /* Check for --bacon before ANY Emacs initialization.
