@@ -96,7 +96,7 @@ WORKDIR /build/cmacs
 # them forces a fresh compile under this image's Emacs.
 RUN rm -f .git \
     && find . \( -name '*.elc' -o -name '*.eln' \) -delete \
-    && rm -rf native-lisp src/*.pdmp \
+    && rm -rf native-lisp src/*.pdmp deps/whisper.cpp/build \
     && for dep in mcp-glib crispy bacon gowl podomation ai-glib libreclaw; do \
            if [ -d "deps/${dep}" ]; then \
                case "${dep}" in \
