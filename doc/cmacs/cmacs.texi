@@ -6078,6 +6078,155 @@ Inject @var{script} into every page of @var{buffer}'s view (persists
 across navigation).  Used to install the caret engine once per view.
 @end deffn
 
+@section Page events and hooks
+
+Each live view bridges its WebKit signals to Emacs abnormal hooks.  In
+addition to the navigation hooks
+(@code{cmacs-gsurf-@{load,uri,title@}-changed-functions}), these fire:
+
+@table @code
+@item cmacs-gsurf-hovered-uri-changed-functions
+@code{(BUFFER URI)} --- the link under the pointer; shown in the echo
+area by default (@code{cmacs-gsurf-show-hovered-uri}).
+@item cmacs-gsurf-progress-changed-functions
+@code{(BUFFER FRACTION)} --- drives a @code{[NN%]} mode-line indicator.
+@item cmacs-gsurf-crashed-functions
+@code{(BUFFER)} --- the web process died; a header-line notice appears
+(reload with @kbd{r}, or set @code{cmacs-gsurf-auto-reload-on-crash}).
+@item cmacs-gsurf-favicon-changed-functions
+@code{(BUFFER)} --- refresh the header line.
+@item cmacs-gsurf-download-changed-functions
+@code{(ID URI DEST RECEIVED TOTAL STATE)} --- download lifecycle.
+@item cmacs-gsurf-permission-request-functions
+@code{(BUFFER ORIGIN TYPE)} --- a denied permission request.
+@end table
+
+The title hook renames the buffer to @samp{*gsurf: TITLE*} (unless
+@code{cmacs-gsurf-rename-buffers} is nil).  Popups (@code{target=_blank},
+@code{window.open}, middle-click) open in a new gsurf buffer displayed
+per @code{cmacs-gsurf-popup-display-function}.
+
+@section Downloads
+
+Downloads auto-save into @code{cmacs-gsurf-download-directory} (default
+@file{~/Downloads}), de-duplicating colliding names.
+
+@deffn Command cmacs-gsurf-downloads
+Open the @code{*gsurf-downloads*} manager (a @code{tabulated-list} with
+live progress): @kbd{g} refresh, @kbd{c} cancel, @kbd{RET}/@kbd{o} open
+the file, @kbd{&} open externally, @kbd{d} remove the row.
+@end deffn
+
+@deffn Command cmacs-gsurf-download-cancel id
+Cancel the in-flight download with integer @var{id}.
+@end deffn
+
+Downloads are process-wide and outlive the buffer that started them.
+
+@section Permissions
+
+Permission requests (geolocation, notifications, camera/mic, clipboard,
+@dots{}) are answered without blocking from a per-origin policy table.
+An origin with no saved policy is denied, and
+@code{cmacs-gsurf-permission-request-functions} fires.
+
+@deffn Command cmacs-gsurf-allow-origin origin type
+@deffnx Command cmacs-gsurf-deny-origin origin type
+Record a permission decision for @var{origin}
+(@samp{scheme://host:port}) and @var{type} (@samp{geolocation},
+@samp{notification}, @samp{media}, @samp{clipboard}, @samp{device-info},
+@samp{pointer-lock}).  Updates @code{cmacs-gsurf-permission-policy} for
+the session; customize that variable to persist it.
+@end deffn
+
+@section Snapshot, print and pipe
+
+@deffn Command cmacs-gsurf-snapshot buffer file &optional callback full-page
+Save a PNG snapshot of @var{buffer}'s view to @var{file} (the whole
+document when @var{full-page}, else the visible region).  Asynchronous:
+@var{callback} (or nil) receives the path on success, nil on failure.
+@end deffn
+
+@deffn Command cmacs-gsurf-print-to-pdf buffer file &optional callback
+Print @var{buffer}'s page to a PDF at @var{file} with no dialog
+(asynchronous).
+@end deffn
+
+@deffn Command cmacs-gsurf-pipe command &optional html
+Pipe the current page's text (HTML with a prefix argument) through the
+shell @var{command} into @code{*gsurf-pipe*}.  Bound to @kbd{|}.
+@end deffn
+
+@deffn Command cmacs-gsurf-play-external &optional url
+Open @var{url} (default: the current page URL) in
+@code{cmacs-gsurf-external-player} (default @command{mpv}).  Bound to
+@kbd{&}.
+@end deffn
+
+@section AI: summarize and ask
+
+With cmacs-ai configured, these read the page text (no page focus needed)
+and answer in an Org side window.
+
+@deffn Command cmacs-gsurf-summarize
+Summarize the current page (@kbd{C-c C-s}).
+@end deffn
+
+@deffn Command cmacs-gsurf-ask question
+Answer @var{question} about the current page (@kbd{C-c C-a}).
+@end deffn
+
+Page text is truncated to @code{cmacs-gsurf-ai-max-chars}.  Over MCP,
+compose @code{gsurf_extract_text} with the @code{ai_*} tools instead.
+
+The new MCP tools are @code{gsurf_download_list},
+@code{gsurf_download_cancel}, @code{gsurf_snapshot},
+@code{gsurf_print_pdf} and @code{gsurf_permission_policy}.  Browser
+activity is also emitted as podomation events (@code{on_gsurf_navigate},
+@code{on_gsurf_download}, @code{on_gsurf_permission},
+@code{on_gsurf_crash}).
+
+@section Native inspector
+
+@deffn Command cmacs-gsurf-inspect
+Open @code{*gsurf-dom*}, a navigable DOM tree of the live page
+(@kbd{C-c C-i}).  The walk stamps a @code{data-cmacs-node-id} on each
+element.  On a node: @kbd{h}/@kbd{RET} outline it in the page and scroll
+to it, @kbd{c} show its computed style in @code{*gsurf-css*}, @kbd{g}
+re-walk.  Depth is @code{cmacs-gsurf-inspector-depth}.
+@end deffn
+
+@deffn Command cmacs-gsurf-console
+Open @code{*gsurf-console*} (@kbd{C-c C-l}): streams
+@code{console.log/warn/error} from the page (through the JS bridge below)
+and evaluates a JS expression with @kbd{e}.
+@end deffn
+
+@section Bookmarks
+
+@deffn Command cmacs-gsurf-bookmark-add url title tags
+Save a tagged bookmark (@kbd{m}; defaults from the current page) to
+@code{cmacs-gsurf-bookmarks-file}.
+@end deffn
+
+@deffn Command cmacs-gsurf-bookmarks
+Open @code{*gsurf-bookmarks*} (@kbd{C-c C-b}), a @code{tabulated-list}:
+@kbd{RET}/@kbd{o} open in gsurf, @kbd{d} delete, @kbd{e} edit tags,
+@kbd{/} filter by tag, @kbd{a} add.
+@end deffn
+
+@section JS to Emacs bridge
+
+The @code{js_bridge} gsurf module (in @file{cmacs/gsurf/modules/}, so
+gsurf itself stays elisp-free) exposes a page-to-Emacs @emph{data}
+channel.  Page or user-script JS calls
+@code{window.cmacs.send("channel", @{any: "json"@})} and the C host bridge
+resolves the originating buffer and runs the abnormal hook
+@code{cmacs-gsurf-js-message-functions} with @code{(BUFFER CHANNEL
+PAYLOAD)}.  The payload is decoded JSON --- data only, never evaluated.
+The console capture rides on this channel; user scripts injected with
+@code{cmacs-gsurf-add-user-script} can define their own channels.
+
 @section gsurf-lite
 
 @cindex gsurf-lite

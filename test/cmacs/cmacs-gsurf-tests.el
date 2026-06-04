@@ -197,5 +197,177 @@ out.  The boot JS carries the configured colour."
   (should (equal (cmacs-gsurf--js-string "a\\b") "\"a\\\\b\""))
   (should (equal (cmacs-gsurf--js-string "a\nb") "\"a\\nb\"")))
 
+;;;; Phase 1: dropped view signals, downloads, permissions ------------
+
+(ert-deftest cmacs-gsurf-phase1-defuns-present ()
+  "The Phase-1 C DEFUNs are defined."
+  (skip-unless (fboundp 'cmacs-gsurf-supported-p))
+  (dolist (fn '(cmacs-gsurf-download-cancel
+                cmacs-gsurf-set-permission-policy
+                cmacs-gsurf-clear-permission-policies))
+    (should (fboundp fn))))
+
+(ert-deftest cmacs-gsurf-phase1-hooks-defined ()
+  "The previously-dropped signals are exposed as abnormal hooks."
+  (skip-unless (featurep 'cmacs-gsurf))
+  (dolist (h '(cmacs-gsurf-hovered-uri-changed-functions
+               cmacs-gsurf-progress-changed-functions
+               cmacs-gsurf-crashed-functions
+               cmacs-gsurf-favicon-changed-functions
+               cmacs-gsurf-download-changed-functions
+               cmacs-gsurf-permission-request-functions))
+    (should (boundp h))))
+
+(ert-deftest cmacs-gsurf-phase1-defcustoms ()
+  "Phase-1 defcustoms exist with sane defaults."
+  (skip-unless (featurep 'cmacs-gsurf))
+  (should (boundp 'cmacs-gsurf-show-hovered-uri))
+  (should (boundp 'cmacs-gsurf-rename-buffers))
+  (should (boundp 'cmacs-gsurf-auto-reload-on-crash))
+  (should (boundp 'cmacs-gsurf-popup-display-function))
+  (should (boundp 'cmacs-gsurf-download-directory))
+  (should (boundp 'cmacs-gsurf-permission-policy)))
+
+(ert-deftest cmacs-gsurf-uri-origin ()
+  "`cmacs-gsurf--uri-origin' extracts scheme://host[:port]."
+  (skip-unless (featurep 'cmacs-gsurf))
+  (should (equal (cmacs-gsurf--uri-origin "https://example.com/foo?x=1")
+                 "https://example.com"))
+  (should (equal (cmacs-gsurf--uri-origin "http://h:8080/a")
+                 "http://h:8080"))
+  (should (null (cmacs-gsurf--uri-origin "not a url"))))
+
+(ert-deftest cmacs-gsurf-permission-commands ()
+  "Permission policy helpers and commands are present."
+  (skip-unless (featurep 'cmacs-gsurf))
+  (should (fboundp 'cmacs-gsurf-allow-origin))
+  (should (fboundp 'cmacs-gsurf-deny-origin))
+  (should (fboundp 'cmacs-gsurf--apply-permission-policy))
+  ;; Applying an empty policy must not error even before a view exists.
+  (let ((cmacs-gsurf-permission-policy nil))
+    (should (progn (cmacs-gsurf--apply-permission-policy) t))))
+
+(ert-deftest cmacs-gsurf-downloads-loaded ()
+  "The download manager is loaded with the subsystem."
+  (skip-unless (featurep 'cmacs-gsurf))
+  (should (featurep 'cmacs-gsurf-downloads))
+  (should (fboundp 'cmacs-gsurf-downloads))
+  (should (fboundp 'cmacs-gsurf-downloads-mode)))
+
+(ert-deftest cmacs-gsurf-download-record ()
+  "`cmacs-gsurf--download-record' accumulates and updates entries."
+  (skip-unless (featurep 'cmacs-gsurf-downloads))
+  (let ((cmacs-gsurf--downloads nil))
+    (cmacs-gsurf--download-record 1 "http://x/f" "/tmp/f" 0 100 'started)
+    (cmacs-gsurf--download-record 1 "http://x/f" "/tmp/f" 50 100 'progress)
+    (should (= 1 (length cmacs-gsurf--downloads)))
+    (let ((pl (cdr (assq 1 cmacs-gsurf--downloads))))
+      (should (eq (plist-get pl :state) 'progress))
+      (should (= (plist-get pl :received) 50)))
+    (cmacs-gsurf--download-record 2 "http://x/g" "/tmp/g" 0 0 'started)
+    (should (= 2 (length cmacs-gsurf--downloads)))))
+
+(ert-deftest cmacs-gsurf-download-format-helpers ()
+  "Download size/percent formatting behaves."
+  (skip-unless (featurep 'cmacs-gsurf-downloads))
+  (should (equal (cmacs-gsurf-downloads--human-size 512) "512B"))
+  (should (equal (cmacs-gsurf-downloads--human-size 0) "—"))
+  (should (equal (cmacs-gsurf-downloads--percent '(:received 25 :total 100))
+                 "25%"))
+  (should (equal (cmacs-gsurf-downloads--percent '(:state finished)) "100%")))
+
+;;;; Phase 2: snapshot, print, pipe/play, AI, MCP --------------------
+
+(ert-deftest cmacs-gsurf-phase2-defuns-present ()
+  "Snapshot / print C DEFUNs are defined."
+  (skip-unless (fboundp 'cmacs-gsurf-supported-p))
+  (should (fboundp 'cmacs-gsurf-snapshot))
+  (should (fboundp 'cmacs-gsurf-print-to-pdf)))
+
+(ert-deftest cmacs-gsurf-phase2-pipe-play ()
+  "Page-text helpers and pipe/play commands are present."
+  (skip-unless (featurep 'cmacs-gsurf))
+  (should (fboundp 'cmacs-gsurf--page-text))
+  (should (fboundp 'cmacs-gsurf--page-html))
+  (should (fboundp 'cmacs-gsurf-pipe))
+  (should (fboundp 'cmacs-gsurf-play-external))
+  (should (boundp 'cmacs-gsurf-external-player)))
+
+(ert-deftest cmacs-gsurf-phase2-mcp-helpers ()
+  "MCP helper functions for the new tools exist."
+  (skip-unless (featurep 'cmacs-gsurf))
+  (dolist (fn '(cmacs-gsurf-mcp-snapshot
+                cmacs-gsurf-mcp-print-pdf
+                cmacs-gsurf-mcp-download-cancel
+                cmacs-gsurf-mcp-permission-policy))
+    (should (fboundp fn)))
+  (require 'cmacs-gsurf-downloads)
+  (should (fboundp 'cmacs-gsurf-mcp-download-list))
+  ;; download-list returns valid JSON for an empty set.
+  (let ((cmacs-gsurf--downloads nil))
+    (should (equal (cmacs-gsurf-mcp-download-list) "[]"))))
+
+(ert-deftest cmacs-gsurf-phase2-ai ()
+  "The AI page commands load and are present."
+  (skip-unless (featurep 'cmacs-gsurf))
+  (require 'cmacs-gsurf-ai)
+  (should (fboundp 'cmacs-gsurf-summarize))
+  (should (fboundp 'cmacs-gsurf-ask))
+  (should (boundp 'cmacs-gsurf-ai-max-chars)))
+
+;;;; Phase 3: JS bridge, inspector, bookmarks ------------------------
+
+(ert-deftest cmacs-gsurf-js-message-dispatch ()
+  "`cmacs-gsurf--js-message' parses JSON and runs the channel hook."
+  (skip-unless (featurep 'cmacs-gsurf))
+  (should (boundp 'cmacs-gsurf-js-message-functions))
+  (let* ((got nil)
+         (fn (lambda (_buf ch pl) (setq got (list ch pl)))))
+    (add-hook 'cmacs-gsurf-js-message-functions fn)
+    (unwind-protect
+        (with-temp-buffer
+          (cmacs-gsurf--js-message
+           (current-buffer)
+           "{\"channel\":\"console\",\"payload\":{\"level\":\"log\",\"text\":\"hi\"}}")
+          (should (equal (car got) "console"))
+          (should (equal (alist-get 'text (cadr got)) "hi")))
+      (remove-hook 'cmacs-gsurf-js-message-functions fn))))
+
+(ert-deftest cmacs-gsurf-js-message-bad-input ()
+  "A malformed JS message does not error out."
+  (skip-unless (featurep 'cmacs-gsurf))
+  (with-temp-buffer
+    (should (progn (cmacs-gsurf--js-message (current-buffer) "not json") t))))
+
+(ert-deftest cmacs-gsurf-inspector-loaded ()
+  "The inspector commands and DOM-walk JS are present."
+  (skip-unless (featurep 'cmacs-gsurf))
+  (require 'cmacs-gsurf-inspector)
+  (should (fboundp 'cmacs-gsurf-inspect))
+  (should (fboundp 'cmacs-gsurf-console))
+  (should (fboundp 'cmacs-gsurf-dom-mode))
+  ;; The DOM walk stamps the node-id attribute used to address nodes.
+  (let ((js (cmacs-gsurf-inspector--walk-js 4)))
+    (should (string-match-p "data-cmacs-node-id" js))
+    (should (string-match-p "JSON.stringify" js))))
+
+(ert-deftest cmacs-gsurf-bookmarks-roundtrip ()
+  "Adding a bookmark persists and reloads from disk."
+  (skip-unless (featurep 'cmacs-gsurf))
+  (require 'cmacs-gsurf-bookmarks)
+  (let* ((tmp (make-temp-file "gsurf-bm" nil ".el"))
+         (cmacs-gsurf-bookmarks-file tmp)
+         (cmacs-gsurf--bookmarks 'unset))
+    (unwind-protect
+        (progn
+          (cmacs-gsurf-bookmark-add "https://e.com" "Example" '("work"))
+          (should (assoc "https://e.com" cmacs-gsurf--bookmarks))
+          (should (member "work" (cmacs-gsurf-bookmarks--all-tags)))
+          ;; Reload from disk and confirm it persisted.
+          (setq cmacs-gsurf--bookmarks 'unset)
+          (cmacs-gsurf-bookmarks--ensure)
+          (should (assoc "https://e.com" cmacs-gsurf--bookmarks)))
+      (delete-file tmp))))
+
 (provide 'cmacs-gsurf-tests)
 ;;; cmacs-gsurf-tests.el ends here

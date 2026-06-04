@@ -56,6 +56,12 @@ static const gchar *source_events[] = {
    * a transcript or matched keyword is available. */
   "on_transcription_ready",
   "on_voice_command",
+  /* cmacs-gsurf browser events.  Fired by the Elisp page-event hook
+   * handlers in `cmacs-gsurf.el' / `cmacs-gsurf-downloads.el'. */
+  "on_gsurf_navigate",
+  "on_gsurf_download",
+  "on_gsurf_permission",
+  "on_gsurf_crash",
   NULL
 };
 

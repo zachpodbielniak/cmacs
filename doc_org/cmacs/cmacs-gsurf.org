@@ -133,6 +133,13 @@ click another window) and you are back in evil-normal with =C-w= etc.
 | =L= / =F= | =cmacs-gsurf-forward-buffer= |
 | =+= =-= / =-= / =0= | zoom in / out / reset |
 | =/= / =s= | =cmacs-gsurf-find-in-page= |
+| =m= | =cmacs-gsurf-bookmark-add= |
+| =\vert= | =cmacs-gsurf-pipe= (page text through a shell command) |
+| =&= | =cmacs-gsurf-play-external= (open URL in a player) |
+| =C-c C-s= / =C-c C-a= | AI summarize / ask |
+| =C-c C-d= | =cmacs-gsurf-downloads= |
+| =C-c C-i= / =C-c C-l= | inspector DOM tree / console |
+| =C-c C-b= | =cmacs-gsurf-bookmarks= |
 | =q= | =quit-window= |
 
 (Under evil these are bound in normal+motion state so they aren't
@@ -145,6 +152,130 @@ map.)  Once the page has focus, gsurf's own =modal= module (vim keys,
 #+begin_src emacs-lisp
 (setq browse-url-browser-function #'cmacs-gsurf-browse-url)
 #+end_src
+
+* Page events & hooks
+
+Each live view bridges its WebKit signals to Emacs *abnormal hooks*, so
+page activity can drive Lisp.  Besides the navigation hooks
+(=cmacs-gsurf-{load,uri,title}-changed-functions=), these fire:
+
+| Hook | Called with | Default behaviour |
+|------+-------------+-------------------|
+| =cmacs-gsurf-hovered-uri-changed-functions= | =(BUFFER URI)= | show the link under the pointer in the echo area (=cmacs-gsurf-show-hovered-uri=) |
+| =cmacs-gsurf-progress-changed-functions= | =(BUFFER FRACTION)= | a =[NN%]= load indicator in the mode line |
+| =cmacs-gsurf-crashed-functions= | =(BUFFER)= | header-line "web process terminated" notice; reload with =r= (or set =cmacs-gsurf-auto-reload-on-crash=) |
+| =cmacs-gsurf-favicon-changed-functions= | =(BUFFER)= | refresh the header line |
+| =cmacs-gsurf-download-changed-functions= | =(ID URI DEST RECEIVED TOTAL STATE)= | record the download (see below) |
+| =cmacs-gsurf-permission-request-functions= | =(BUFFER ORIGIN TYPE)= | notify (the request was denied — see below) |
+
+The title hook also renames the buffer to =*gsurf: TITLE*= (disable with
+=cmacs-gsurf-rename-buffers=), and the buffer carries a header line with
+the title/progress.  Popups (=target=_blank=, =window.open=,
+middle-click) open in a new gsurf buffer displayed per
+=cmacs-gsurf-popup-display-function= (default =display-buffer=; set to
+=switch-to-buffer= to focus them, or =nil= to open in the background).
+
+* Downloads
+
+Downloads auto-save (no prompt) into =cmacs-gsurf-download-directory=
+(default =~/Downloads=), de-duplicating colliding names
+(=name (1).ext=).  =M-x cmacs-gsurf-downloads= opens the
+=*gsurf-downloads*= manager, a =tabulated-list= of every download with
+live progress:
+
+| Key | Action |
+|-----+--------|
+| =g= | refresh |
+| =c= | cancel the download on this line |
+| =RET= / =o= | open the finished file in Emacs |
+| =&= | open it with the system handler |
+| =d= | remove the row (does not delete the file) |
+
+Downloads are process-wide and outlive the buffer that started them, so
+killing a gsurf buffer never aborts an in-flight download.  The lifecycle
+is also available to automation via
+=cmacs-gsurf-download-changed-functions= and the MCP tools.
+
+* Permissions
+
+When a page asks for a permission (geolocation, notifications,
+camera/mic, clipboard, …) the decision is taken *without blocking* from a
+per-origin policy table.  An origin with no saved policy is *denied* and
+=cmacs-gsurf-permission-request-functions= fires so you can react.  Save a
+decision with:
+
+#+begin_src emacs-lisp
+(cmacs-gsurf-allow-origin "https://maps.example.com" "geolocation")
+(cmacs-gsurf-deny-origin  "https://ads.example.com" "notification")
+#+end_src
+
+These update =cmacs-gsurf-permission-policy= (an alist of
+=(ORIGIN TYPE VERDICT)=) for the session; customize that variable to make
+a policy persistent across restarts.  Recognised TYPEs are
+=geolocation=, =notification=, =media=, =clipboard=, =device-info= and
+=pointer-lock=.  (Interactive per-request prompting is intentionally not
+the default, as a modal prompt inside the WebKit decision callback is
+unsafe; the policy table is the non-blocking equivalent.)
+
+* Snapshot, print & pipe
+
+| Command | What it does |
+|---------+--------------|
+| =cmacs-gsurf-snapshot= (BUFFER FILE &optional CALLBACK FULL-PAGE) | save a PNG of the view (whole document with FULL-PAGE); async — CALLBACK gets the path |
+| =cmacs-gsurf-print-to-pdf= (BUFFER FILE &optional CALLBACK) | print the page to a PDF with no dialog; async |
+| =cmacs-gsurf-pipe= (=|=) | pipe the page text (HTML with a prefix arg) through a shell command into =*gsurf-pipe*= |
+| =cmacs-gsurf-play-external= (=&=) | open the current page URL in =cmacs-gsurf-external-player= (default =mpv=) |
+
+Both snapshot and print are asynchronous (WebKit renders off the main
+loop); pass a callback to learn when the file is ready.
+
+* AI: summarize & ask
+
+With cmacs-ai configured, =cmacs-gsurf-summarize= (=C-c C-s=) extracts the
+page text and opens an Org =*gsurf-summary*= side window; =cmacs-gsurf-ask=
+(=C-c C-a=) answers a question about the page from its text.  Page text is
+read with the result-returning JS primitive (no page focus needed) and fed
+to =cmacs-ai-prompt-sync=; long pages are truncated to
+=cmacs-gsurf-ai-max-chars=.  (These live in =cmacs-gsurf-ai.el=, loaded on
+demand so the AI stack stays optional.)
+
+* Native inspector
+
+=cmacs-gsurf-inspect= (=C-c C-i=) opens =*gsurf-dom*=, a navigable DOM
+tree of the live page (the walk stamps a =data-cmacs-node-id= on each
+element so Emacs can address it).  On a node: =h=/=RET= outline it in the
+page and scroll it into view, =c= shows its computed style in =*gsurf-css*=,
+=g= re-walks.  Depth is =cmacs-gsurf-inspector-depth=.
+
+=cmacs-gsurf-console= (=C-c C-l=) opens =*gsurf-console*=: it installs a
+capture user-script that streams =console.log/info/warn/error= into the
+buffer (via the JS bridge below), and =e= evaluates a JS expression in the
+page and appends the result.  The whole inspector is injected JavaScript +
+the result channel — the page is never focused.
+
+* Bookmarks
+
+=cmacs-gsurf-bookmark-add= (=m=) saves the current page (URL, title, tags)
+to a small store (=cmacs-gsurf-bookmarks-file=).  =cmacs-gsurf-bookmarks=
+(=C-c C-b=) opens =*gsurf-bookmarks*=, a =tabulated-list=: =RET=/=o= open
+in gsurf, =d= delete, =e= edit tags, =/= filter by tag, =a= add, =g=
+refresh.
+
+* JS → Emacs bridge (window.cmacs.send)
+
+The =js_bridge= gsurf module (in =cmacs/gsurf/modules/=, so gsurf itself
+stays elisp-free) exposes a page→Emacs *data* channel.  Page or
+user-script JS calls
+
+#+begin_src js
+window.cmacs.send("my-channel", {any: "json"});
+#+end_src
+
+and the C host bridge resolves the originating buffer and runs the
+abnormal hook =cmacs-gsurf-js-message-functions= with =(BUFFER CHANNEL
+PAYLOAD)= (PAYLOAD is the decoded JSON — *data only*, never evaluated).
+This is the keystone the console capture rides on, and it is available for
+your own user scripts (injected with =cmacs-gsurf-add-user-script=).
 
 * Caret mode
 
@@ -400,8 +531,19 @@ cmacs-ai via the MCP bridge — =^gsurf_= is in the default allowlist):
 | =gsurf_set_zoom= | level, [buffer] | |
 | =gsurf_lite_open= | url | offscreen render; returns buffer name |
 | =gsurf_extract_text= | [buffer] | read-only; rendered page text |
+| =gsurf_download_list= | — | read-only JSON of downloads |
+| =gsurf_download_cancel= | id | cancel a download |
+| =gsurf_snapshot= | file, [full_page], [buffer] | save a PNG (async) |
+| =gsurf_print_pdf= | file, [buffer] | print to PDF (async) |
+| =gsurf_permission_policy= | origin, type, verdict | set a permission policy |
 
-=buffer= defaults to the most-recently-opened gsurf buffer.
+=buffer= defaults to the most-recently-opened gsurf buffer.  (To summarize
+a page over MCP, compose =gsurf_extract_text= with the =ai_*= tools; the
+interactive =cmacs-gsurf-summarize= command is the Emacs-side equivalent.)
+
+Browser activity is also emitted as *podomation events* —
+=on_gsurf_navigate=, =on_gsurf_download=, =on_gsurf_permission= and
+=on_gsurf_crash= — so pods can react to it (=when on_gsurf_download { ... }=).
 
 * Troubleshooting
 

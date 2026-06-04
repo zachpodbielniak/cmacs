@@ -77,10 +77,67 @@ fires for every gsurf view in the process (including module-initiated
 navigations), so it is the place to hook process-wide browser
 automation.")
 
+(defvar cmacs-gsurf-hovered-uri-changed-functions nil
+  "Abnormal hook run when the link under the pointer changes.
+Each function is called with (BUFFER URI); URI is the empty string when
+the pointer leaves a link.")
+
+(defvar cmacs-gsurf-progress-changed-functions nil
+  "Abnormal hook run as a gsurf view's load progresses.
+Each function is called with (BUFFER FRACTION), FRACTION a float in
+0.0-1.0.")
+
+(defvar cmacs-gsurf-crashed-functions nil
+  "Abnormal hook run when a gsurf view's web process is terminated.
+Each function is called with (BUFFER).")
+
+(defvar cmacs-gsurf-favicon-changed-functions nil
+  "Abnormal hook run when a gsurf view's favicon changes.
+Each function is called with (BUFFER).")
+
+(defvar cmacs-gsurf-download-changed-functions nil
+  "Abnormal hook run on every gsurf download lifecycle change.
+Each function is called with (ID URI DEST RECEIVED TOTAL STATE): ID is an
+integer download id, URI the source, DEST the local destination path,
+RECEIVED/TOTAL byte counts, and STATE one of the symbols `started',
+`progress', `finished', `failed' or `cancelled'.  This is process-wide
+\(not per-buffer); see `cmacs-gsurf-downloads'.")
+
 (defcustom cmacs-gsurf-org-capture-template nil
   "Org-capture template key used by the `open_in_emacs' gsurf module
 for `org-capture:' bar input.  Nil prompts for a template."
   :type '(choice (const :tag "Prompt" nil) string)
+  :group 'cmacs-gsurf)
+
+(defcustom cmacs-gsurf-show-hovered-uri t
+  "When non-nil, show the link under the pointer in the echo area.
+This mirrors `eww' / classic-browser hover behaviour and is driven by
+`cmacs-gsurf-hovered-uri-changed-functions'."
+  :type 'boolean
+  :group 'cmacs-gsurf)
+
+(defcustom cmacs-gsurf-rename-buffers t
+  "When non-nil, rename a gsurf buffer to reflect the page title.
+The buffer is renamed to \"*gsurf: TITLE*\" (uniquified) as the title
+changes, driven by `cmacs-gsurf-title-changed-functions'."
+  :type 'boolean
+  :group 'cmacs-gsurf)
+
+(defcustom cmacs-gsurf-auto-reload-on-crash nil
+  "When non-nil, automatically reload a gsurf view whose web process died.
+Otherwise the buffer shows an \"Aw, Snap\" notice and you reload with
+\\<cmacs-gsurf-mode-map>\\[cmacs-gsurf-reload-buffer]."
+  :type 'boolean
+  :group 'cmacs-gsurf)
+
+(defcustom cmacs-gsurf-popup-display-function #'display-buffer
+  "Function used to display a gsurf popup buffer (target=_blank etc.).
+Called with the new gsurf buffer.  Set to `switch-to-buffer' to focus
+popups, or nil to open them in the background without displaying."
+  :type '(choice (const :tag "Background (do not display)" nil)
+                 (function-item display-buffer)
+                 (function-item switch-to-buffer)
+                 function)
   :group 'cmacs-gsurf)
 
 ;;;; Configuration (Emacs-driven by default) --------------------------
@@ -169,6 +226,7 @@ Loaded last, so it overrides the YAML layers.  Nil means no C config."
 (declare-function cmacs-gsurf-find "cmacs-gsurf-defuns.c" (buffer text &optional backward))
 (declare-function cmacs-gsurf-find-next "cmacs-gsurf-defuns.c" (buffer &optional backward))
 (declare-function cmacs-gsurf-modules-list "cmacs-gsurf-defuns.c" ())
+(declare-function cmacs-gsurf-download-cancel "cmacs-gsurf-defuns.c" (id))
 (declare-function cmacs-gsurf-module-set-enabled "cmacs-gsurf-defuns.c" (name enabled))
 (declare-function cmacs-gsurf-focus-page "cmacs-gsurf-defuns.c" (&optional buffer))
 (declare-function cmacs-gsurf-release-focus "cmacs-gsurf-defuns.c" ())
@@ -508,6 +566,16 @@ moves a small fixed amount while Emacs keeps focus."
     (define-key m (kbd "0")       #'cmacs-gsurf-zoom-reset)
     (define-key m (kbd "/")       #'cmacs-gsurf-find-in-page)
     (define-key m (kbd "s")       #'cmacs-gsurf-find-in-page)
+    ;; AI / pipe / external player / downloads / inspector
+    (define-key m (kbd "C-c C-s") #'cmacs-gsurf-summarize)
+    (define-key m (kbd "C-c C-a") #'cmacs-gsurf-ask)
+    (define-key m (kbd "|")       #'cmacs-gsurf-pipe)
+    (define-key m (kbd "&")       #'cmacs-gsurf-play-external)
+    (define-key m (kbd "C-c C-d") #'cmacs-gsurf-downloads)
+    (define-key m (kbd "C-c C-i") #'cmacs-gsurf-inspect)
+    (define-key m (kbd "C-c C-l") #'cmacs-gsurf-console)
+    (define-key m (kbd "C-c C-b") #'cmacs-gsurf-bookmarks)
+    (define-key m (kbd "m")       #'cmacs-gsurf-bookmark-add)
     (define-key m (kbd "q")       #'quit-window)
     m)
   "Keymap for `cmacs-gsurf-mode'.
@@ -545,13 +613,18 @@ Escape returns control to Emacs.
   (setq-local mode-line-format
               '("%e" mode-line-front-space
                 mode-line-buffer-identification
-                "  " (:eval (cmacs-gsurf--mode-line-url)) "  gsurf"))
+                "  " (:eval (cmacs-gsurf--mode-line-progress))
+                (:eval (cmacs-gsurf--mode-line-url)) "  gsurf"))
+  (setq-local header-line-format
+              '((:eval (cmacs-gsurf--header-line))))
   (add-hook 'kill-buffer-hook #'cmacs-gsurf--on-kill nil t)
   ;; Apply the Emacs-side gsurf configuration (modules etc.) BEFORE the
   ;; first attach, which is what triggers module loading -- module
   ;; `enabled' flags are read from this config at load time.  Idempotent.
   (cmacs-gsurf--apply-config)
   (cmacs-gsurf-attach (current-buffer))
+  ;; Push any saved permission policy into the C table (global, idempotent).
+  (cmacs-gsurf--apply-permission-policy)
   (when (/= cmacs-gsurf-default-zoom 1.0)
     (cmacs-gsurf-set-zoom (current-buffer) cmacs-gsurf-default-zoom))
   (cmacs-gsurf--register (current-buffer))
@@ -564,6 +637,305 @@ Escape returns control to Emacs.
   (when (cmacs-gsurf-attached-p (current-buffer))
     (let ((u (ignore-errors (cmacs-gsurf-get-uri (current-buffer)))))
       (if (and u (> (length u) 60)) (concat (substring u 0 57) "...") (or u "")))))
+
+;;;; Page-event default handlers --------------------------------------
+;; Surface the previously-dropped GsurfView signals (hovered URI, load
+;; progress, web-process crash, favicon, popups) as Emacs behaviour.  The
+;; C bridge fires the abnormal hooks declared above; these are the default
+;; listeners.  Per-buffer state drives the header/mode line.
+
+(defvar-local cmacs-gsurf--load-progress nil
+  "Most recent load progress (float 0.0-1.0) for this gsurf buffer, or nil.")
+(defvar-local cmacs-gsurf--page-title nil
+  "Most recent page title for this gsurf buffer, or nil.")
+(defvar-local cmacs-gsurf--crashed nil
+  "Non-nil when this gsurf view's web process has terminated.")
+
+(defun cmacs-gsurf--mode-line-progress ()
+  "Mode-line snippet showing load progress while a page is loading."
+  (let ((p cmacs-gsurf--load-progress))
+    (if (and p (< p 1.0)) (format "[%d%%]  " (floor (* p 100))) "")))
+
+(defun cmacs-gsurf--header-line ()
+  "Header-line string: title (and a crash notice) for this gsurf buffer."
+  (cond
+   (cmacs-gsurf--crashed
+    (propertize " ⚠ web process terminated — press r to reload "
+                'face 'error))
+   (t (concat " " (or cmacs-gsurf--page-title
+                      (and (cmacs-gsurf-attached-p (current-buffer))
+                           (ignore-errors (cmacs-gsurf-get-title
+                                           (current-buffer))))
+                      "")))))
+
+(defun cmacs-gsurf--buffer-window-selected-p (buffer)
+  "Return non-nil when BUFFER is shown in the selected window."
+  (eq (window-buffer (selected-window)) buffer))
+
+(defun cmacs-gsurf--echo-hovered (buffer uri)
+  "Default handler: show the hovered URI in the echo area for BUFFER."
+  (when (and cmacs-gsurf-show-hovered-uri
+             (buffer-live-p buffer)
+             (cmacs-gsurf--buffer-window-selected-p buffer)
+             (not (minibuffer-window-active-p (selected-window))))
+    (let ((message-log-max nil))
+      (if (and uri (not (string-empty-p uri)))
+          (message "%s" uri)
+        (message nil)))))
+
+(defun cmacs-gsurf--on-progress (buffer fraction)
+  "Default handler: record load FRACTION for BUFFER and refresh its line."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (setq cmacs-gsurf--load-progress fraction)
+      (when (>= fraction 1.0)
+        ;; Clear shortly after completion so the indicator disappears.
+        (run-at-time 0.4 nil
+                     (lambda (b)
+                       (when (buffer-live-p b)
+                         (with-current-buffer b
+                           (setq cmacs-gsurf--load-progress nil)
+                           (force-mode-line-update))))
+                     buffer))
+      (force-mode-line-update))))
+
+(defun cmacs-gsurf--on-title (buffer title)
+  "Default handler: track TITLE and (optionally) rename BUFFER."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (setq cmacs-gsurf--page-title (and title (not (string-empty-p title))
+                                         title))
+      (when (and cmacs-gsurf-rename-buffers cmacs-gsurf--page-title)
+        (let ((new (generate-new-buffer-name
+                    (format "*gsurf: %s*"
+                            (truncate-string-to-width
+                             cmacs-gsurf--page-title 40 nil nil "…")))))
+          (unless (string= new (buffer-name))
+            (ignore-errors (rename-buffer new t)))))
+      (force-mode-line-update))))
+
+(declare-function cmacs-podomation-emit-event "cmacs-podomation.c"
+                  (event-name data))
+
+(defun cmacs-gsurf--emit-pod (event data)
+  "Emit a podomation EVENT with DATA (alist of string values) if available."
+  (when (fboundp 'cmacs-podomation-emit-event)
+    (ignore-errors (cmacs-podomation-emit-event event data))))
+
+(defun cmacs-gsurf--on-load (buffer event)
+  "Default handler: clear the crashed flag and emit navigation events."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when (and (memq event '(started committed)) cmacs-gsurf--crashed)
+        (setq cmacs-gsurf--crashed nil)
+        (force-mode-line-update))
+      (when (eq event 'finished)
+        (cmacs-gsurf--emit-pod
+         "on_gsurf_navigate"
+         `(("uri" . ,(or (ignore-errors (cmacs-gsurf-get-uri buffer)) ""))
+           ("title" . ,(or cmacs-gsurf--page-title ""))
+           ("buffer" . ,(buffer-name buffer))))))))
+
+(defun cmacs-gsurf--on-crash (buffer)
+  "Default handler: note BUFFER's web-process crash; reload if configured."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (setq cmacs-gsurf--crashed t)
+      (force-mode-line-update)
+      (cmacs-gsurf--emit-pod
+       "on_gsurf_crash"
+       `(("uri" . ,(or (ignore-errors (cmacs-gsurf-get-uri buffer)) ""))
+         ("buffer" . ,(buffer-name buffer))))
+      (if cmacs-gsurf-auto-reload-on-crash
+          (ignore-errors (cmacs-gsurf-reload buffer))
+        (message "gsurf: web process terminated in %s (press r to reload)"
+                 (buffer-name buffer))))))
+
+(defun cmacs-gsurf--on-favicon (buffer)
+  "Default handler: refresh BUFFER's header line on favicon change."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (force-mode-line-update))))
+
+(defun cmacs-gsurf--open-popup (url)
+  "Open URL (a popup / new-window request) in a new gsurf buffer.
+Called from the C `create-view' bridge.  Displayed per
+`cmacs-gsurf-popup-display-function'."
+  (when (and url (not (string-empty-p url)))
+    (let ((buf (save-window-excursion (cmacs-gsurf url))))
+      (when (functionp cmacs-gsurf-popup-display-function)
+        (funcall cmacs-gsurf-popup-display-function buf))
+      buf)))
+
+(add-hook 'cmacs-gsurf-hovered-uri-changed-functions #'cmacs-gsurf--echo-hovered)
+(add-hook 'cmacs-gsurf-progress-changed-functions #'cmacs-gsurf--on-progress)
+(add-hook 'cmacs-gsurf-title-changed-functions #'cmacs-gsurf--on-title)
+(add-hook 'cmacs-gsurf-load-changed-functions #'cmacs-gsurf--on-load)
+(add-hook 'cmacs-gsurf-crashed-functions #'cmacs-gsurf--on-crash)
+(add-hook 'cmacs-gsurf-favicon-changed-functions #'cmacs-gsurf--on-favicon)
+
+;;;; Permissions ------------------------------------------------------
+;; WebKit asks for geolocation / notification / camera-mic / ... decisions
+;; synchronously; the C side (cmacs-gsurf-permissions.c) answers from a
+;; per-origin policy table without blocking, denying unknown origins and
+;; firing `cmacs-gsurf-permission-request-functions' so the user can save a
+;; policy and retry.  `cmacs-gsurf-permission-policy' is the Emacs-side
+;; source of truth, pushed into the C table.
+
+(defvar cmacs-gsurf-permission-request-functions nil
+  "Abnormal hook run when a page requests a permission with no saved policy.
+Each function is called with (BUFFER ORIGIN TYPE).  The request has
+already been denied; use `cmacs-gsurf-allow-origin' to permit it next
+time.  ORIGIN is \"scheme://host:port\"; TYPE a symbol such as
+`geolocation', `notification', `media', `clipboard', `device-info' or
+`pointer-lock'.")
+
+(defconst cmacs-gsurf-permission-types
+  '("geolocation" "notification" "media" "clipboard" "device-info"
+    "pointer-lock")
+  "Known gsurf permission TYPE strings (for completion).")
+
+(declare-function cmacs-gsurf-set-permission-policy "cmacs-gsurf-defuns.c"
+                  (origin type verdict))
+(declare-function cmacs-gsurf-clear-permission-policies "cmacs-gsurf-defuns.c" ())
+
+(defun cmacs-gsurf--apply-permission-policy ()
+  "Push `cmacs-gsurf-permission-policy' into the C policy table."
+  (when (fboundp 'cmacs-gsurf-clear-permission-policies)
+    (cmacs-gsurf-clear-permission-policies)
+    (dolist (e cmacs-gsurf-permission-policy)
+      (cmacs-gsurf-set-permission-policy (nth 0 e) (nth 1 e) (nth 2 e)))))
+
+(defcustom cmacs-gsurf-permission-policy nil
+  "Saved gsurf permission decisions, pushed into the C policy table.
+Each entry is (ORIGIN TYPE VERDICT): ORIGIN \"scheme://host:port\", TYPE a
+string from `cmacs-gsurf-permission-types', and VERDICT the symbol `allow'
+or `deny'.  Applied on first use and whenever customized.  Set via
+\\[cmacs-gsurf-allow-origin] / \\[cmacs-gsurf-deny-origin] (session) or
+customize (persistent)."
+  :type '(repeat (list (string :tag "Origin")
+                       (string :tag "Type")
+                       (choice (const allow) (const deny))))
+  :set (lambda (sym val)
+         (set-default sym val)
+         (cmacs-gsurf--apply-permission-policy))
+  :group 'cmacs-gsurf)
+
+(defun cmacs-gsurf--uri-origin (uri)
+  "Return \"scheme://host[:port]\" for URI, or nil."
+  (when (and uri (string-match "\\`\\([a-z][a-z0-9+.-]*\\)://\\([^/?#]+\\)" uri))
+    (concat (match-string 1 uri) "://" (match-string 2 uri))))
+
+(defun cmacs-gsurf--current-origin ()
+  "Origin of the current gsurf buffer's page, or nil."
+  (and (cmacs-gsurf-attached-p (current-buffer))
+       (cmacs-gsurf--uri-origin
+        (ignore-errors (cmacs-gsurf-get-uri (current-buffer))))))
+
+(defun cmacs-gsurf--permission-notify (buffer origin type)
+  "Default handler: report a denied unknown-origin permission request."
+  (when (buffer-live-p buffer)
+    (cmacs-gsurf--emit-pod
+     "on_gsurf_permission"
+     `(("origin" . ,(or origin "")) ("type" . ,(format "%s" type))
+       ("buffer" . ,(buffer-name buffer))))
+    (message
+     "gsurf: denied %s from %s (M-x cmacs-gsurf-allow-origin to permit)"
+     type origin)))
+
+(add-hook 'cmacs-gsurf-permission-request-functions
+          #'cmacs-gsurf--permission-notify)
+
+(defun cmacs-gsurf--set-policy (origin type verdict)
+  "Record ORIGIN/TYPE -> VERDICT in memory and the C table."
+  (setq cmacs-gsurf-permission-policy
+        (cons (list origin type verdict)
+              (cl-remove-if (lambda (e) (and (equal (nth 0 e) origin)
+                                             (equal (nth 1 e) type)))
+                            cmacs-gsurf-permission-policy)))
+  (cmacs-gsurf-set-permission-policy origin type verdict))
+
+(defun cmacs-gsurf--read-origin-type (action)
+  "Prompt for an origin + permission type for ACTION (a string)."
+  (list (read-string (format "%s origin: " action)
+                     (cmacs-gsurf--current-origin))
+        (completing-read (format "%s type: " action)
+                         cmacs-gsurf-permission-types nil nil
+                         (car cmacs-gsurf-permission-types))))
+
+(defun cmacs-gsurf-allow-origin (origin type)
+  "Allow permission TYPE from ORIGIN for this session (and going forward).
+Customize `cmacs-gsurf-permission-policy' to persist across restarts."
+  (interactive (cmacs-gsurf--read-origin-type "Allow"))
+  (cmacs-gsurf--set-policy origin type 'allow)
+  (message "gsurf: will allow %s from %s" type origin))
+
+(defun cmacs-gsurf-deny-origin (origin type)
+  "Deny permission TYPE from ORIGIN (records an explicit deny)."
+  (interactive (cmacs-gsurf--read-origin-type "Deny"))
+  (cmacs-gsurf--set-policy origin type 'deny)
+  (message "gsurf: will deny %s from %s" type origin))
+
+;;;; Page text, external pipe / player -------------------------------
+
+(defcustom cmacs-gsurf-external-player "mpv"
+  "Program used by `cmacs-gsurf-play-external' to open a media URL."
+  :type 'string
+  :group 'cmacs-gsurf)
+
+(defun cmacs-gsurf--page-text (buffer callback)
+  "Asynchronously extract BUFFER's visible page text; call CALLBACK with it."
+  (cmacs-gsurf-run-javascript-async
+   buffer
+   "(document.body?document.body.innerText:document.documentElement.innerText)||''"
+   (lambda (txt) (funcall callback (or txt "")))))
+
+(defun cmacs-gsurf--page-html (buffer callback)
+  "Asynchronously extract BUFFER's post-JS HTML; call CALLBACK with it."
+  (cmacs-gsurf-run-javascript-async
+   buffer "document.documentElement.outerHTML||''"
+   (lambda (html) (funcall callback (or html "")))))
+
+(defun cmacs-gsurf-pipe (command &optional html)
+  "Pipe the current page's text through shell COMMAND, show output.
+With a prefix argument, pipe the page HTML instead of the rendered text."
+  (interactive (list (read-shell-command "Pipe page through: ")
+                     current-prefix-arg))
+  (let ((buf (current-buffer)))
+    (funcall (if html #'cmacs-gsurf--page-html #'cmacs-gsurf--page-text) buf
+             (lambda (text)
+               (let ((out (get-buffer-create "*gsurf-pipe*")))
+                 (with-current-buffer out
+                   (let ((inhibit-read-only t))
+                     (erase-buffer)
+                     (insert text))
+                   (shell-command-on-region (point-min) (point-max)
+                                            command (current-buffer) t))
+                 (display-buffer out))))))
+
+(defun cmacs-gsurf-play-external (&optional url)
+  "Open URL (default: the current page URL) in `cmacs-gsurf-external-player'."
+  (interactive)
+  (let ((u (or url
+               (and (cmacs-gsurf-attached-p (current-buffer))
+                    (ignore-errors (cmacs-gsurf-get-uri (current-buffer)))))))
+    (if (and u (not (string-empty-p u)))
+        (progn
+          (start-process "gsurf-play" nil cmacs-gsurf-external-player u)
+          (message "gsurf: playing %s in %s" u cmacs-gsurf-external-player))
+      (user-error "No URL to play"))))
+
+;; AI commands live in cmacs-gsurf-ai.el (loaded on demand so the AI stack
+;; is optional); the mode-map binds them via these autoloads.
+(autoload 'cmacs-gsurf-summarize "cmacs-gsurf-ai" nil t)
+(autoload 'cmacs-gsurf-ask "cmacs-gsurf-ai" nil t)
+;; Inspector (DOM tree / computed style / console) lives in
+;; cmacs-gsurf-inspector.el, loaded on demand.
+(autoload 'cmacs-gsurf-inspect "cmacs-gsurf-inspector" nil t)
+(autoload 'cmacs-gsurf-console "cmacs-gsurf-inspector" nil t)
+;; Tagged bookmarks live in cmacs-gsurf-bookmarks.el, loaded on demand.
+(autoload 'cmacs-gsurf-bookmarks "cmacs-gsurf-bookmarks" nil t)
+(autoload 'cmacs-gsurf-bookmark-add "cmacs-gsurf-bookmarks" nil t)
 
 ;; Evil (Doom) integration.  Keep gsurf buffers in *normal* state so the
 ;; user's evil keys -- window management (`C-w v', `C-w h/j/k/l'),
@@ -745,6 +1117,33 @@ recently opened gsurf buffer is used."
                     :title (or (ignore-errors (cmacs-gsurf-get-title buf)) "")))
             (cmacs-gsurf--live-buffers)))))
 
+(declare-function cmacs-gsurf-snapshot "cmacs-gsurf-defuns.c"
+                  (buffer file &optional callback full-page))
+(declare-function cmacs-gsurf-print-to-pdf "cmacs-gsurf-defuns.c"
+                  (buffer file &optional callback))
+
+(defun cmacs-gsurf-mcp-snapshot (file &optional full buffer)
+  "Snapshot the target gsurf buffer to FILE (async); return the path."
+  (let ((buf (cmacs-gsurf--mcp-target buffer))
+        (path (expand-file-name file)))
+    (cmacs-gsurf-snapshot buf path nil full)
+    path))
+
+(defun cmacs-gsurf-mcp-print-pdf (file &optional buffer)
+  "Print the target gsurf buffer to PDF at FILE (async); return the path."
+  (let ((buf (cmacs-gsurf--mcp-target buffer))
+        (path (expand-file-name file)))
+    (cmacs-gsurf-print-to-pdf buf path nil)
+    path))
+
+(defun cmacs-gsurf-mcp-download-cancel (id)
+  "Cancel download ID; return \"ok\"."
+  (cmacs-gsurf-download-cancel id) "ok")
+
+(defun cmacs-gsurf-mcp-permission-policy (origin type verdict)
+  "Set permission policy ORIGIN/TYPE -> VERDICT (\"allow\"/\"deny\"); return \"ok\"."
+  (cmacs-gsurf--set-policy origin type (intern verdict)) "ok")
+
 ;;;; Module bridge callbacks ------------------------------------------
 ;; Called from the cmacs gsurf modules (gsurf-emacs-bridge,
 ;; gsurf-open-in-emacs, gsurf-elisp) via the C host bridge
@@ -772,6 +1171,37 @@ recently opened gsurf buffer is used."
   (require 'org-capture)
   (let ((org-capture-initial text))
     (org-capture nil cmacs-gsurf-org-capture-template)))
+
+;;;; JS -> Emacs message channel -------------------------------------
+;; The `js_bridge' gsurf module (cmacs/gsurf/modules/) registers a
+;; window.cmacs.send(channel, payload) JS API and forwards each posted
+;; message to the C host bridge, which calls `cmacs-gsurf--js-message'
+;; below with the originating buffer.  The payload is DATA only -- parsed
+;; as JSON and routed by channel; it is never evaluated as code.
+
+(defvar cmacs-gsurf-js-message-functions nil
+  "Abnormal hook for `window.cmacs.send' messages from a gsurf page.
+Each function is called with (BUFFER CHANNEL PAYLOAD): CHANNEL is a string,
+PAYLOAD is the decoded JSON value (any Lisp object).  PAYLOAD is data and
+is never evaluated.  The native inspector uses this for its `console'
+channel; user scripts can define their own channels.")
+
+(defun cmacs-gsurf--js-message (buffer message)
+  "Dispatch a JS-bridge MESSAGE for BUFFER (called from the C host bridge).
+MESSAGE is the raw JSON string {\"channel\":...,\"payload\":...} posted by
+`window.cmacs.send'."
+  (when (buffer-live-p buffer)
+    (condition-case err
+        (let* ((obj (json-parse-string
+                     message :object-type 'alist :array-type 'list
+                     :null-object nil :false-object nil))
+               (channel (alist-get 'channel obj))
+               (payload (alist-get 'payload obj)))
+          (when (stringp channel)
+            (run-hook-with-args 'cmacs-gsurf-js-message-functions
+                                buffer channel payload)))
+      (error (message "cmacs-gsurf: bad JS bridge message: %s"
+                      (error-message-string err))))))
 
 ;;;; Caret mode -- in-page text cursor driven from Emacs
 ;;
@@ -1136,6 +1566,11 @@ remains on `=' / `+' / `-')."
         "/"  #'cmacs-gsurf-caret-search
         "n"  #'cmacs-gsurf-caret-search-next
         "N"  #'cmacs-gsurf-caret-search-prev))))
+
+;; Download manager: load eagerly so the C-driven
+;; `cmacs-gsurf-download-changed-functions' recorder is always active (the
+;; *gsurf-downloads* buffer can then show history opened at any time).
+(require 'cmacs-gsurf-downloads)
 
 (provide 'cmacs-gsurf)
 ;;; cmacs-gsurf.el ends here

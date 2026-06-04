@@ -124,6 +124,9 @@ cmacs_gsurf_runtime_ensure (void)
      any) is settled; module `enabled' flags are read from that config. */
   cmacs_gsurf_modules_init ();
 
+  /* Track downloads on the shared default WebKitWebContext (idempotent). */
+  cmacs_gsurf_downloads_init ();
+
   cmacs_gsurf__backend_ok = true;
   return true;
 }

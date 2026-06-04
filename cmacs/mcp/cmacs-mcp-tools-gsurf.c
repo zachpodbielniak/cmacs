@@ -204,6 +204,75 @@ handle_gsurf_extract_text (McpServer *s, const gchar *n, JsonObject *a,
   return gsurf_eval (expr);
 }
 
+static McpToolResult *
+handle_gsurf_download_list (McpServer *s, const gchar *n, JsonObject *a,
+                           gpointer u)
+{ (void) s; (void) n; (void) a; (void) u;
+  return gsurf_eval ("(progn (require 'cmacs-gsurf-downloads) "
+                     "(cmacs-gsurf-mcp-download-list))"); }
+
+static McpToolResult *
+handle_gsurf_download_cancel (McpServer *s, const gchar *n, JsonObject *a,
+                             gpointer u)
+{
+  (void) s; (void) n; (void) u;
+  if (!json_object_has_member (a, "id"))
+    return missing_arg ("id");
+  gint64 id = json_object_get_int_member_with_default (a, "id", 0);
+  g_autofree gchar *expr =
+    g_strdup_printf ("(cmacs-gsurf-mcp-download-cancel %lld)", (long long) id);
+  return gsurf_eval (expr);
+}
+
+static McpToolResult *
+handle_gsurf_snapshot (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
+{
+  (void) s; (void) n; (void) u;
+  const gchar *file = json_object_get_string_member_with_default (a, "file", NULL);
+  if (file == NULL)
+    return missing_arg ("file");
+  gboolean full = json_object_get_boolean_member_with_default (a, "full_page", FALSE);
+  g_autofree gchar *qf = elisp_string (file);
+  g_autofree gchar *buf = buffer_arg (a);
+  g_autofree gchar *expr =
+    g_strdup_printf ("(cmacs-gsurf-mcp-snapshot %s %s %s)",
+                     qf, full ? "t" : "nil", buf);
+  return gsurf_eval (expr);
+}
+
+static McpToolResult *
+handle_gsurf_print_pdf (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
+{
+  (void) s; (void) n; (void) u;
+  const gchar *file = json_object_get_string_member_with_default (a, "file", NULL);
+  if (file == NULL)
+    return missing_arg ("file");
+  g_autofree gchar *qf = elisp_string (file);
+  g_autofree gchar *buf = buffer_arg (a);
+  g_autofree gchar *expr =
+    g_strdup_printf ("(cmacs-gsurf-mcp-print-pdf %s %s)", qf, buf);
+  return gsurf_eval (expr);
+}
+
+static McpToolResult *
+handle_gsurf_permission_policy (McpServer *s, const gchar *n, JsonObject *a,
+                               gpointer u)
+{
+  (void) s; (void) n; (void) u;
+  const gchar *origin  = json_object_get_string_member_with_default (a, "origin", NULL);
+  const gchar *type    = json_object_get_string_member_with_default (a, "type", NULL);
+  const gchar *verdict = json_object_get_string_member_with_default (a, "verdict", NULL);
+  if (origin == NULL)  return missing_arg ("origin");
+  if (type == NULL)    return missing_arg ("type");
+  if (verdict == NULL) return missing_arg ("verdict");
+  g_autofree gchar *qo = elisp_string (origin);
+  g_autofree gchar *qt = elisp_string (type);
+  g_autofree gchar *qv = elisp_string (verdict);
+  g_autofree gchar *expr =
+    g_strdup_printf ("(cmacs-gsurf-mcp-permission-policy %s %s %s)", qo, qt, qv);
+  return gsurf_eval (expr);
+}
+
 /* ── Registration ─────────────────────────────────────────────────── */
 
 static void
@@ -302,6 +371,42 @@ cmacs_mcp_tools_gsurf_register (McpServer *server)
     "text after gsurf_lite_open.", TRUE,
     "{\"type\":\"object\",\"properties\":{" BUF_PROP "}}",
     handle_gsurf_extract_text);
+
+  add_tool (server, "gsurf_download_list",
+    "Return a JSON array of known gsurf downloads (id/uri/dest/received/"
+    "total/state).", TRUE,
+    "{\"type\":\"object\",\"properties\":{}}", handle_gsurf_download_list);
+
+  add_tool (server, "gsurf_download_cancel",
+    "Cancel an in-flight gsurf download by id.", FALSE,
+    "{\"type\":\"object\",\"properties\":{"
+    "\"id\":{\"type\":\"integer\",\"description\":\"download id\"}},"
+    "\"required\":[\"id\"]}", handle_gsurf_download_cancel);
+
+  add_tool (server, "gsurf_snapshot",
+    "Save a PNG snapshot of a gsurf buffer to FILE (async); returns the "
+    "path.  Set full_page for the whole document.", FALSE,
+    "{\"type\":\"object\",\"properties\":{"
+    "\"file\":{\"type\":\"string\",\"description\":\"output PNG path\"},"
+    "\"full_page\":{\"type\":\"boolean\",\"description\":\"capture full document\"},"
+    BUF_PROP "},\"required\":[\"file\"]}", handle_gsurf_snapshot);
+
+  add_tool (server, "gsurf_print_pdf",
+    "Print a gsurf buffer to a PDF at FILE (async); returns the path.",
+    FALSE,
+    "{\"type\":\"object\",\"properties\":{"
+    "\"file\":{\"type\":\"string\",\"description\":\"output PDF path\"},"
+    BUF_PROP "},\"required\":[\"file\"]}", handle_gsurf_print_pdf);
+
+  add_tool (server, "gsurf_permission_policy",
+    "Set a permission policy for an origin and type "
+    "(verdict \"allow\" or \"deny\").", FALSE,
+    "{\"type\":\"object\",\"properties\":{"
+    "\"origin\":{\"type\":\"string\",\"description\":\"scheme://host:port\"},"
+    "\"type\":{\"type\":\"string\",\"description\":\"geolocation/notification/media/...\"},"
+    "\"verdict\":{\"type\":\"string\",\"description\":\"allow or deny\"}},"
+    "\"required\":[\"origin\",\"type\",\"verdict\"]}",
+    handle_gsurf_permission_policy);
 }
 
 #endif /* HAVE_CMACS_MCP && HAVE_CMACS_GSURF */

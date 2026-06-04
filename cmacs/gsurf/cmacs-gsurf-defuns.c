@@ -377,6 +377,78 @@ With BACKWARD non-nil, move to the previous match.  */)
   return Qt;
 }
 
+DEFUN ("cmacs-gsurf-snapshot", Fcmacs_gsurf_snapshot,
+       Scmacs_gsurf_snapshot, 2, 4, 0,
+       doc: /* Save a PNG snapshot of BUFFER's gsurf view to FILE.
+With FULL-PAGE non-nil, capture the whole document; otherwise just the
+visible region.  Asynchronous: optional CALLBACK is called with FILE (the
+path) on success, or nil on failure.  */)
+  (Lisp_Object buffer, Lisp_Object file, Lisp_Object callback,
+   Lisp_Object full_page)
+{
+  CmacsGsurfView *v = require_view (buffer);
+  CHECK_STRING (file);
+  Lisp_Object enc = ENCODE_FILE (file);
+  cmacs_gsurf_snapshot (v, SSDATA (enc), callback, !NILP (full_page));
+  return Qt;
+}
+
+DEFUN ("cmacs-gsurf-print-to-pdf", Fcmacs_gsurf_print_to_pdf,
+       Scmacs_gsurf_print_to_pdf, 2, 3, 0,
+       doc: /* Print BUFFER's gsurf view to a PDF at FILE (no dialog).
+Asynchronous: optional CALLBACK is called with FILE (the path) on success,
+or nil on failure.  */)
+  (Lisp_Object buffer, Lisp_Object file, Lisp_Object callback)
+{
+  CmacsGsurfView *v = require_view (buffer);
+  CHECK_STRING (file);
+  Lisp_Object enc = ENCODE_FILE (file);
+  cmacs_gsurf_print_pdf (v, SSDATA (enc), callback);
+  return Qt;
+}
+
+DEFUN ("cmacs-gsurf-download-cancel", Fcmacs_gsurf_download_cancel,
+       Scmacs_gsurf_download_cancel, 1, 1, 0,
+       doc: /* Cancel the in-flight gsurf download with integer ID.
+ID is the identifier reported by `cmacs-gsurf-download-changed-functions'.
+Does nothing if no such download is active.  */)
+  (Lisp_Object id)
+{
+  CHECK_FIXNAT (id);
+  cmacs_gsurf_download_cancel ((unsigned int) XFIXNUM (id));
+  return Qt;
+}
+
+DEFUN ("cmacs-gsurf-set-permission-policy", Fcmacs_gsurf_set_permission_policy,
+       Scmacs_gsurf_set_permission_policy, 3, 3, 0,
+       doc: /* Set the permission policy for ORIGIN and TYPE to VERDICT.
+ORIGIN is a string like "https://example.com" (scheme://host:port), TYPE a
+string or symbol such as `geolocation', `notification', `media',
+`clipboard', `device-info' or `pointer-lock', and VERDICT either `allow'
+or `deny'.  Consulted synchronously when a page requests the permission;
+unknown origins are denied (and reported via
+`cmacs-gsurf-permission-request-functions').  */)
+  (Lisp_Object origin, Lisp_Object type, Lisp_Object verdict)
+{
+  CHECK_STRING (origin);
+  if (SYMBOLP (type)) type = SYMBOL_NAME (type);
+  CHECK_STRING (type);
+  int allow = (EQ (verdict, intern ("allow"))
+               || (STRINGP (verdict) && !strcmp (SSDATA (verdict), "allow")));
+  cmacs_gsurf_permission_set_policy (utf8 (origin), SSDATA (type), allow);
+  return Qt;
+}
+
+DEFUN ("cmacs-gsurf-clear-permission-policies",
+       Fcmacs_gsurf_clear_permission_policies,
+       Scmacs_gsurf_clear_permission_policies, 0, 0, 0,
+       doc: /* Forget all gsurf per-origin permission policies.  */)
+  (void)
+{
+  cmacs_gsurf_permission_clear_policies ();
+  return Qt;
+}
+
 DEFUN ("cmacs-gsurf-modules-list", Fcmacs_gsurf_modules_list,
        Scmacs_gsurf_modules_list, 0, 0, 0,
        doc: /* Return a JSON string describing the loaded gsurf modules.
@@ -519,6 +591,11 @@ syms_of_cmacs_gsurf_defuns (void)
   defsubr (&Scmacs_gsurf_add_user_script);
   defsubr (&Scmacs_gsurf_find);
   defsubr (&Scmacs_gsurf_find_next);
+  defsubr (&Scmacs_gsurf_snapshot);
+  defsubr (&Scmacs_gsurf_print_to_pdf);
+  defsubr (&Scmacs_gsurf_download_cancel);
+  defsubr (&Scmacs_gsurf_set_permission_policy);
+  defsubr (&Scmacs_gsurf_clear_permission_policies);
   defsubr (&Scmacs_gsurf_modules_list);
   defsubr (&Scmacs_gsurf_module_set_enabled);
   defsubr (&Scmacs_gsurf_load_config_data);

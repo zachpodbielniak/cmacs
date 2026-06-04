@@ -954,7 +954,9 @@ if test "$with_cmacs_gsurf" != "no"; then
   CMACS_GSURF_BUNDLED=yes
   AC_DEFINE([HAVE_CMACS_GSURF], 1, [CMacs gsurf embedded web browser])
   CMACS_GSURF_OBJ="cmacs-gsurf-init.o cmacs-gsurf-defuns.o \
-    cmacs-gsurf-view.o cmacs-gsurf-modules.o"
+    cmacs-gsurf-view.o cmacs-gsurf-modules.o \
+    cmacs-gsurf-downloads.o cmacs-gsurf-permissions.o \
+    cmacs-gsurf-snapshot.o cmacs-gsurf-print.o"
 fi
 AC_SUBST(CMACS_GSURF_OBJ)
 AC_SUBST(CMACS_GSURF_CFLAGS)

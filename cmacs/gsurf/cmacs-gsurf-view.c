@@ -64,6 +64,7 @@ struct CmacsGsurfView
 /* ── Registries ─────────────────────────────────────────────────────── */
 
 static GHashTable  *cmacs_gsurf__views   = NULL;  /* id -> CmacsGsurfView* */
+static GHashTable  *cmacs_gsurf__by_view = NULL;  /* GsurfView* -> CmacsGsurfView* */
 static guint        cmacs_gsurf__next_id = 1;
 static Lisp_Object  Vcmacs_gsurf__buffers;        /* buffer -> make_uint(id) */
 
@@ -79,6 +80,8 @@ registry_init (void)
 {
   if (!cmacs_gsurf__views)
     cmacs_gsurf__views = g_hash_table_new (g_direct_hash, g_direct_equal);
+  if (!cmacs_gsurf__by_view)
+    cmacs_gsurf__by_view = g_hash_table_new (g_direct_hash, g_direct_equal);
   if (NILP (Vcmacs_gsurf__buffers))
     Vcmacs_gsurf__buffers = CALLN (Fmake_hash_table, QCtest, Qeq);
 }
@@ -103,6 +106,31 @@ run_hook2 (const char *hook, Lisp_Object buffer, Lisp_Object arg)
 {
   cmacs_dispatch_safe_call3 (intern ("run-hook-with-args"),
                              intern (hook), buffer, arg);
+}
+
+/* Like run_hook2 but for a buffer-only abnormal hook (no extra arg). */
+static void
+run_hook1 (const char *hook, Lisp_Object buffer)
+{
+  cmacs_dispatch_safe_call2 (intern ("run-hook-with-args"),
+                             intern (hook), buffer);
+}
+
+/* Escape STR into a freshly g_malloc'd Elisp double-quoted string literal
+ * (backslash + double-quote escaped).  Used to embed a URI safely into a
+ * deferred Elisp form for cmacs_gsurf_emacs_eval_async.  Caller g_free's. */
+static char *
+el_string (const char *str)
+{
+  GString *s = g_string_new ("\"");
+  for (const char *p = str ? str : ""; *p; p++)
+    {
+      if (*p == '\\' || *p == '"')
+        g_string_append_c (s, '\\');
+      g_string_append_c (s, *p);
+    }
+  g_string_append_c (s, '"');
+  return g_string_free (s, FALSE);
 }
 
 static void
@@ -162,6 +190,73 @@ on_load_changed (GsurfView *view, gint event, gpointer user)
     default: sym = "changed";   break;
     }
   run_hook2 ("cmacs-gsurf-load-changed-functions", v->buffer, intern (sym));
+}
+
+/* The link URI under the pointer (or "" when the pointer leaves a link). */
+static void
+on_hovered_uri_changed (GsurfView *view, const gchar *uri, gpointer user)
+{
+  CmacsGsurfView *v = user;
+  (void) view;
+  if (!v || NILP (v->buffer) || !BUFFERP (v->buffer)) return;
+  run_hook2 ("cmacs-gsurf-hovered-uri-changed-functions", v->buffer,
+             build_string (uri ? uri : ""));
+}
+
+/* Estimated load progress, 0.0 .. 1.0. */
+static void
+on_progress_changed (GsurfView *view, gdouble progress, gpointer user)
+{
+  CmacsGsurfView *v = user;
+  (void) view;
+  if (!v || NILP (v->buffer) || !BUFFERP (v->buffer)) return;
+  run_hook2 ("cmacs-gsurf-progress-changed-functions", v->buffer,
+             make_float (progress));
+}
+
+/* The web content process crashed / was killed. */
+static void
+on_web_process_terminated (GsurfView *view, gpointer user)
+{
+  CmacsGsurfView *v = user;
+  (void) view;
+  if (!v || NILP (v->buffer) || !BUFFERP (v->buffer)) return;
+  run_hook1 ("cmacs-gsurf-crashed-functions", v->buffer);
+}
+
+/* The page favicon changed. */
+static void
+on_favicon_changed (GsurfView *view, gpointer user)
+{
+  CmacsGsurfView *v = user;
+  (void) view;
+  if (!v || NILP (v->buffer) || !BUFFERP (v->buffer)) return;
+  run_hook1 ("cmacs-gsurf-favicon-changed-functions", v->buffer);
+}
+
+/* A popup / new-window request (target=_blank, window.open, middle-click).
+ * Returning a live popup GsurfView from inside WebKit's `create' emission
+ * is unsafe: the returned view must be brand-new + unrealized for WebKit to
+ * take over, and we cannot create an Emacs buffer + view synchronously
+ * inside a GLib-dispatched signal (it would re-enter the command loop / GC
+ * during emission).  So block the WebKit-managed popup (return NULL) and
+ * async-open a normal gsurf buffer with the requested URI instead. */
+static GsurfView *
+on_create_view (GsurfView *view, const gchar *uri, gpointer user)
+{
+  CmacsGsurfView *v = user;
+  (void) view;
+  if (!v || NILP (v->buffer) || !BUFFERP (v->buffer))
+    return NULL;
+  if (uri && *uri)
+    {
+      char *lit  = el_string (uri);
+      char *form = g_strdup_printf ("(cmacs-gsurf--open-popup %s)", lit);
+      cmacs_gsurf_emacs_eval_async (form);
+      g_free (form);
+      g_free (lit);
+    }
+  return NULL;
 }
 
 /* ── Focus handoff ──────────────────────────────────────────────────────
@@ -335,6 +430,20 @@ cmacs_gsurf_view_new (Lisp_Object buffer)
   g_signal_connect (gv, "uri-changed",   G_CALLBACK (on_uri_changed),   v);
   g_signal_connect (gv, "title-changed", G_CALLBACK (on_title_changed), v);
   g_signal_connect (gv, "load-changed",  G_CALLBACK (on_load_changed),  v);
+  /* The previously-dropped signals: link hover, load progress, web-process
+   * crash, favicon, and popup/new-window requests.  All are on GV
+   * (== v->view) with data V, so g_signal_handlers_disconnect_by_data
+   * (v->view, v) in cmacs_gsurf_view_destroy tears them down. */
+  g_signal_connect (gv, "hovered-uri-changed",
+                    G_CALLBACK (on_hovered_uri_changed), v);
+  g_signal_connect (gv, "progress-changed",
+                    G_CALLBACK (on_progress_changed), v);
+  g_signal_connect (gv, "web-process-terminated",
+                    G_CALLBACK (on_web_process_terminated), v);
+  g_signal_connect (gv, "favicon-changed",
+                    G_CALLBACK (on_favicon_changed), v);
+  g_signal_connect (gv, "create-view",
+                    G_CALLBACK (on_create_view), v);
 
   /* Intercept Escape on the web widget so the user can always hand
    * control back to Emacs/evil.  Connected non-after so it runs before
@@ -342,6 +451,12 @@ cmacs_gsurf_view_new (Lisp_Object buffer)
   gtk_widget_add_events (v->widget, GDK_KEY_PRESS_MASK);
   g_signal_connect (v->widget, "key-press-event",
                     G_CALLBACK (on_view_key_press), v);
+
+  /* Permission requests (geolocation, notifications, camera/mic, ...).
+   * Connected on the native WebKitWebView (== v->widget in WK2GTK 4.1)
+   * with data V; cmacs_gsurf_view_destroy disconnects by data on v->widget
+   * before unreffing it, so no callback fires on a freed view. */
+  cmacs_gsurf_permissions_attach (v->widget, v);
 
   /* Create the web widget NON-focusable: by default keyboard focus stays
    * with the Emacs frame, so SPC (the evil/Doom leader), C-w, M-x, etc.
@@ -357,6 +472,7 @@ cmacs_gsurf_view_new (Lisp_Object buffer)
 
   g_hash_table_insert (cmacs_gsurf__views,
                        GUINT_TO_POINTER (v->view_id), v);
+  g_hash_table_insert (cmacs_gsurf__by_view, gv, v);
   Fputhash (buffer, make_uint (v->view_id), Vcmacs_gsurf__buffers);
   return v;
 }
@@ -436,6 +552,10 @@ cmacs_gsurf_view_destroy (CmacsGsurfView *v)
   if (v->widget != NULL)
     {
       g_signal_handlers_disconnect_by_data (v->view, v);
+      /* Also disconnect handlers placed on the native web widget itself
+       * (key-press, permission-request, and the Phase-3 JS message handler)
+       * before it is unreffed, so a late callback can't deref a freed V. */
+      g_signal_handlers_disconnect_by_data (v->widget, v);
       GtkWidget *parent = gtk_widget_get_parent (v->widget);
       if (parent != NULL)
         gtk_container_remove (GTK_CONTAINER (parent), v->widget);
@@ -447,6 +567,11 @@ cmacs_gsurf_view_destroy (CmacsGsurfView *v)
   if (cmacs_gsurf__views)
     g_hash_table_remove (cmacs_gsurf__views,
                          GUINT_TO_POINTER (v->view_id));
+  /* Drop the GsurfView* -> view reverse entry BEFORE freeing V so a late
+   * JS-bridge message (cmacs_gsurf_js_message) resolves to nothing and
+   * no-ops instead of dereferencing a freed view. */
+  if (cmacs_gsurf__by_view && v->view)
+    g_hash_table_remove (cmacs_gsurf__by_view, v->view);
   if (!NILP (Vcmacs_gsurf__buffers))
     Fremhash (v->buffer, Vcmacs_gsurf__buffers);
 
@@ -471,6 +596,15 @@ Lisp_Object
 cmacs_gsurf_view_buffer (CmacsGsurfView *v)
 {
   return v ? v->buffer : Qnil;
+}
+
+/* The native web widget (WebKitWebView in WK2GTK 4.1) as a void* so the
+ * webkit-only translation units (snapshot/print) can reach the WebKit API
+ * without the rest of cmacs seeing a WebKit type. */
+void *
+cmacs_gsurf_view_native_widget (CmacsGsurfView *v)
+{
+  return v ? (void *) v->widget : NULL;
 }
 
 /* ── Placement (the live embed) ─────────────────────────────────────── */
@@ -810,6 +944,31 @@ cmacs_gsurf_emacs_eval_async (const char *elisp)
   g_source_set_callback (src, eval_idle, g_strdup (elisp), NULL);
   g_source_attach (src, cmacs_glib_get_context ());
   g_source_unref (src);
+}
+
+/* ── JS -> Emacs message channel host bridge ────────────────────────── *
+ *
+ * Called from the cmacs JS-bridge gsurf module
+ * (modules/gsurf-cmacs-bridge-module.c) when a page posts via
+ * window.cmacs.send (window.webkit.messageHandlers.cmacs).  GSURF_VIEW is
+ * the GsurfView* the message came from (passed as void* to keep this
+ * header gsurf-free); MESSAGE is the raw JSON string {channel,payload}.
+ *
+ * We own the buffer<->view registry, so we resolve the originating buffer
+ * here and hand the message to the Elisp dispatcher.  The reverse map is
+ * validated (a freed/unknown view no-ops) so a late callback after a
+ * buffer kill is safe.  MESSAGE is delivered as DATA only: the dispatcher
+ * parses JSON and routes by channel -- it is never evaluated as code. */
+void
+cmacs_gsurf_js_message (void *gsurf_view, const char *message)
+{
+  if (gsurf_view == NULL || message == NULL || !cmacs_gsurf__by_view)
+    return;
+  CmacsGsurfView *v = g_hash_table_lookup (cmacs_gsurf__by_view, gsurf_view);
+  if (!v || NILP (v->buffer) || !BUFFERP (v->buffer))
+    return;
+  cmacs_dispatch_safe_call2 (intern ("cmacs-gsurf--js-message"),
+                             v->buffer, build_string (message));
 }
 
 #endif /* HAVE_CMACS_GSURF */

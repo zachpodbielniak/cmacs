@@ -51,6 +51,9 @@ extern CmacsGsurfView *cmacs_gsurf_view_new        (Lisp_Object buffer);
 extern void            cmacs_gsurf_view_destroy    (CmacsGsurfView *v);
 extern CmacsGsurfView *cmacs_gsurf_view_for_buffer (Lisp_Object buffer);
 extern Lisp_Object     cmacs_gsurf_view_buffer     (CmacsGsurfView *v);
+/* The native web widget (WebKitWebView*) as void*, for the webkit-only
+   translation units (snapshot/print).  NULL if V has no widget. */
+extern void           *cmacs_gsurf_view_native_widget (CmacsGsurfView *v);
 
 /* Position the live widget over the pixel rectangle (X, Y, W, H) of the
    buffer's window inside FRAME (a Lisp frame object), and show it.
@@ -85,6 +88,48 @@ extern bool cmacs_gsurf_registry_empty_p (void);
    modules: schedule ELISP (a source string) on the Emacs main thread.
    Defined in cmacs-gsurf-view.c. */
 extern void cmacs_gsurf_emacs_eval_async (const char *elisp);
+
+/* Host bridge for the JS->Emacs channel module: deliver a page message
+   (raw JSON {channel,payload}) from GSURF_VIEW (a GsurfView*, passed as
+   void* to keep this header gsurf-free).  Resolves the originating buffer
+   from the registry and routes to the Elisp dispatcher (data only, never
+   evaluated).  Defined in cmacs-gsurf-view.c. */
+extern void cmacs_gsurf_js_message (void *gsurf_view, const char *message);
+
+/* ── Downloads (cmacs-gsurf-downloads.c) ────────────────────────────── */
+
+/* Wire download tracking onto the process-global default WebKitWebContext
+   (idempotent).  Called once from cmacs_gsurf_runtime_ensure after the
+   backend is up.  Download lifecycle is delivered to Emacs via the
+   `cmacs-gsurf-download-changed-functions' abnormal hook. */
+extern void cmacs_gsurf_downloads_init   (void);
+/* Cancel the in-flight download with integer ID (no-op if unknown). */
+extern void cmacs_gsurf_download_cancel  (unsigned int id);
+
+/* ── Permissions (cmacs-gsurf-permissions.c) ────────────────────────── */
+
+/* Connect the per-view permission-request handler on the native web view
+   (WEBVIEW is the GsurfView's native WebKitWebView, passed as void* so this
+   header stays WebKit-free).  V is the owning view handle (opaque). */
+extern void cmacs_gsurf_permissions_attach (void *webview, CmacsGsurfView *v);
+/* Set the policy for ORIGIN ("scheme://host:port") + TYPE
+   ("geolocation"/"notification"/"media"/...): ALLOW non-zero = allow. */
+extern void cmacs_gsurf_permission_set_policy (const char *origin,
+                                               const char *type, int allow);
+/* Forget all per-origin permission policies. */
+extern void cmacs_gsurf_permission_clear_policies (void);
+
+/* ── Snapshot + print (cmacs-gsurf-snapshot.c / -print.c) ───────────── */
+
+/* Render V to a PNG at PATH (full document when FULL_PAGE, else the
+   visible region).  Async; CALLBACK (or nil) is called with the path on
+   success or nil on failure. */
+extern void cmacs_gsurf_snapshot (CmacsGsurfView *v, const char *path,
+                                  Lisp_Object callback, bool full_page);
+/* Print V to a PDF at PATH (no dialog).  Async; CALLBACK (or nil) is
+   called with the path on success or nil on failure. */
+extern void cmacs_gsurf_print_pdf (CmacsGsurfView *v, const char *path,
+                                   Lisp_Object callback);
 
 /* ── Navigation / state wrappers (cmacs-gsurf-view.c) ───────────────── */
 

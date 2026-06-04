@@ -26,7 +26,13 @@ GSURF_INC   := -I$(GSURF_DIR)/build/include \
                -I$(GSURF_DIR)/deps/crispy/src \
                -I$(GSURF_DIR)/build/release
 
-PKG_DEPS    := glib-2.0 gobject-2.0 gio-2.0 gmodule-2.0 yaml-0.1 json-glib-1.0
+# webkit2gtk-4.1 + javascriptcoregtk-4.1 are needed by
+# gsurf-cmacs-bridge-module.c (the JS->Emacs channel reaches the native
+# WebKitWebView's UserContentManager).  Unlike gsurf_*/cmacs_* symbols
+# (resolved from temacs), WebKit/JSC are ordinary shared-lib deps the .so
+# links directly.
+PKG_DEPS    := glib-2.0 gobject-2.0 gio-2.0 gmodule-2.0 yaml-0.1 json-glib-1.0 \
+               webkit2gtk-4.1 javascriptcoregtk-4.1
 PKG_CFLAGS  := $(shell pkg-config --cflags $(PKG_DEPS))
 PKG_LIBS    := $(shell pkg-config --libs $(PKG_DEPS))
 
