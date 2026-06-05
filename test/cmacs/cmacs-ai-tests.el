@@ -22,6 +22,11 @@
   (require 'cmacs-ai)
   (require 'cmacs-ai-chat))
 
+;; The transcript parser / history-end helpers are pure Elisp (no C
+;; subsystem needed), so load the chat module best-effort to let those
+;; tests run even on a build without --with-cmacs-ai.
+(require 'cmacs-ai-chat nil 'noerror)
+
 ;;;; Availability --------------------------------------------------
 
 (ert-deftest cmacs-ai-feature-available ()
@@ -399,6 +404,119 @@ web_search on the buffer's executor."
                             (overlays-in (point-min) (point-max)))))
         (should ov)
         (should (eq (car (overlay-get ov 'display)) 'image))))))
+
+;;;; Save / resume (no network) ------------------------------------
+
+(defconst cmacs-ai-tests--transcript
+  (concat
+   "#+TITLE: cmacs-ai -- 2026-06-05 14:00:00\n"
+   "#+STARTUP: showall indent\n"
+   "#+PROPERTY: provider claude\n"
+   "\n"
+   "* Conversation\n"
+   "\n"
+   "** 2026-06-05 14:00:01  zach\n"
+   "First question?\n"
+   "\n"
+   "** 2026-06-05 14:00:02  claude/claude-sonnet-4-6\n"
+   "Let me check.\n"
+   "\n"
+   "*** tool-use/bash\n"
+   ":PROPERTIES:\n:tool: bash\n:id: t1\n:END:\n"
+   "#+BEGIN_SRC json\n{\"command\":\"ls\"}\n#+END_SRC\n"
+   "\n"
+   "*** tool-result/bash\n"
+   ":PROPERTIES:\n:tool: bash\n:id: t1\n:END:\n"
+   "#+BEGIN_SRC text\nfile.txt\n#+END_SRC\n"
+   "\n"
+   "** 2026-06-05 14:00:03  claude/claude-sonnet-4-6\n"
+   "Here is the answer.\n"
+   "\n"
+   "** 2026-06-05 14:00:04  error\n"
+   "boom\n"
+   "\n")
+  "A chat archive body: a user turn, a tool-driven assistant turn split
+across two `** assistant' headings, and a stray `error' heading.")
+
+(ert-deftest cmacs-ai-chat-parse-transcript-coalesces ()
+  "Parsing strips tool/error blocks, coalesces same-role turns, alternates."
+  (skip-unless (fboundp 'cmacs-ai-chat--parse-transcript))
+  (let ((turns (with-temp-buffer
+                 (insert cmacs-ai-tests--transcript)
+                 (cmacs-ai-chat--parse-transcript))))
+    ;; Two messages: the user turn and a single coalesced assistant turn.
+    (should (= 2 (length turns)))
+    (should (equal '(user assistant) (mapcar #'car turns)))
+    (should (equal "First question?" (cdr (nth 0 turns))))
+    ;; The two assistant `**' headings (split by the tool loop) merge;
+    ;; the `*** tool-…' blocks and the `error' heading are excluded.
+    (should (equal "Let me check.\n\nHere is the answer."
+                   (cdr (nth 1 turns))))
+    (should-not (string-match-p "tool" (cdr (nth 1 turns))))
+    (should-not (string-match-p "boom" (mapconcat #'cdr turns " ")))))
+
+(ert-deftest cmacs-ai-chat-history-end-excludes-compose ()
+  "`cmacs-ai-chat--history-end' stops before the `* Compose' sentinel."
+  (skip-unless (fboundp 'cmacs-ai-chat--history-end))
+  (with-temp-buffer
+    (insert "#+TITLE: x\n\n* Conversation\n"
+            "** 2026-06-05 10:00:00  user\nhi\n\n"
+            "* Compose                                              :compose:\n")
+    (goto-char (point-max))
+    (setq-local cmacs-ai-chat--compose-marker (point-marker))
+    (let* ((end (cmacs-ai-chat--history-end))
+           (saved (buffer-substring-no-properties (point-min) end)))
+      (should (< end (point-max)))
+      (should (string-match-p "hi" saved))
+      (should-not (string-match-p "\\* Compose" saved)))))
+
+(ert-deftest cmacs-ai-chat-rebuild-session-counts ()
+  "Replaying parsed turns into a session yields one message per turn."
+  (skip-unless (fboundp 'cmacs-ai-session-new))
+  (skip-unless (fboundp 'cmacs-ai-chat--parse-transcript))
+  (let* ((c (cmacs-ai-client-new 'claude))
+         (s (cmacs-ai-session-new c)))
+    (unwind-protect
+        (let ((turns (with-temp-buffer
+                       (insert cmacs-ai-tests--transcript)
+                       (cmacs-ai-chat--parse-transcript))))
+          (should (= 2 (cmacs-ai-chat--rebuild-session s turns)))
+          (should (= 2 (cmacs-ai-session-message-count s))))
+      (cmacs-ai-session-free s)
+      (cmacs-ai-client-free c))))
+
+(ert-deftest cmacs-ai-chat-restore-from-file ()
+  "Resuming an archive reopens the transcript and rebuilds the session."
+  (skip-unless (fboundp 'cmacs-ai-chat-open))
+  (let* ((dir (make-temp-file "cmacs-ai-test" t))
+         (file (expand-file-name "260101-000000-claude.org" dir))
+         (cmacs-ai-chat-dir dir))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "#+TITLE: cmacs-ai -- 2026-01-01 00:00:00\n"
+                    "#+PROPERTY: provider claude\n\n"
+                    "* Conversation\n\n"
+                    "** 2026-01-01 00:00:01  user\nFirst question?\n\n"
+                    "** 2026-01-01 00:00:02  claude/claude-sonnet-4-6\n"
+                    "Here is the answer.\n\n"))
+          (let ((buf (cmacs-ai-chat-resume file)))
+            (unwind-protect
+                (with-current-buffer buf
+                  (should (eq major-mode 'cmacs-ai-chat-mode))
+                  (should (markerp cmacs-ai-chat--compose-marker))
+                  ;; Transcript restored; a fresh compose sentinel appended.
+                  (should (string-match-p "First question?" (buffer-string)))
+                  (should (string-match-p "Here is the answer" (buffer-string)))
+                  (should (string-match-p "^\\* Compose" (buffer-string)))
+                  ;; Session rebuilt: user + coalesced assistant = 2 messages.
+                  (should (= 2 (cmacs-ai-session-message-count
+                                (cdr cmacs-ai-chat-session-pair))))
+                  ;; Continuing appends to the SAME archive file.
+                  (should (equal (expand-file-name file)
+                                 cmacs-ai-chat--save-file)))
+              (kill-buffer buf))))
+      (delete-directory dir t))))
 
 ;;;; Integration (network) -----------------------------------------
 

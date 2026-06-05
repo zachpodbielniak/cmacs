@@ -43,6 +43,35 @@ Keymap:
 | =C-c C-k=   | =cmacs-ai-chat-cancel-stream= |
 | =C-c C-l=   | =cmacs-ai-chat-clear-history= |
 | =C-c C-s=   | =cmacs-ai-chat-save=          |
+| =C-c C-o=   | =cmacs-ai-chat-resume=        |
+
+** Saving & resuming chats
+
+Chats are archived automatically (mirroring how libreclaw persists
+its rooms).  When =cmacs-ai-chat-autosave= is non-nil (the default) a
+chat is written to =cmacs-ai-chat-dir= at three points: right after
+you send a message, after each assistant response completes, and when
+the buffer is killed — so a conversation survives a crash, a cancel,
+or an accidental close.  The archive holds the conversation history
+(the preamble and the turns above =* Compose=); the editable compose
+region is excluded.  The file name comes from
+=cmacs-ai-chat-save-name-format= (default
+=%y%m%d-%H%M%S-<provider>.org=, e.g. =260605-142345-claude.org=).
+=C-c C-s= (=cmacs-ai-chat-save=) writes the same archive on demand and
+always works, regardless of =cmacs-ai-chat-autosave=.
+
+=M-x cmacs-ai-resume-chat= (or =C-c C-o= from a chat buffer) reopens
+an archived chat: it restores the transcript *and* rebuilds the
+ai-glib session by replaying the visible turns, so the model keeps
+full prior context and further messages append to the same file.
+Picking an already-open resumed chat just switches to it.
+
+Two things are intentionally not restored: tool-call / tool-result
+blocks are replayed as plain text turns only (the rebuilt session
+carries the conversation, not the verbatim tool I/O — this avoids
+provider errors from an orphaned =tool_result=); and each chat is its
+own archive file (there is no per-project single-file model like
+libreclaw's cmacs channel).
 
 * Region commands
 
@@ -293,7 +322,9 @@ built-ins do (see /Tool use/).  Default nil = full trust.
 | =cmacs-ai-search-api-key=       | nil (use environment)        |
 | =cmacs-ai-chat-inline-images=   | t                            |
 | =cmacs-ai-chat-image-max-width= | 800 (px)                     |
-| =cmacs-ai-chat-dir=             | =$XDG_DATA_HOME/cmacs-ai/=    |
+| =cmacs-ai-chat-dir=             | =$XDG_DATA_HOME/cmacs-ai/= (archive + resume pool) |
+| =cmacs-ai-chat-autosave=        | t (save on send/response/kill) |
+| =cmacs-ai-chat-save-name-format= | =%y%m%d-%H%M%S-<provider>.org= |
 | =cmacs-ai-config-file=          | =$XDG_CONFIG_HOME/ai-glib/config.yaml= |
 | =cmacs-ai-completion-provider=  | ='claude-code=               |
 | =cmacs-ai-completion-idle-delay= | 0.3 s                        |

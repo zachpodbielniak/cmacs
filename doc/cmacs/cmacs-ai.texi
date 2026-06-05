@@ -94,9 +94,41 @@ Cancel an in-flight request.
 @item C-c C-l
 Clear conversation history (server-side and visible).
 @item C-c C-s
-Save the chat buffer to @code{cmacs-ai-chat-dir} (auto-saved on
-every assistant turn as well).
+Archive the chat history to @code{cmacs-ai-chat-dir} (the editable
+@code{* Compose} region is excluded).  Always writes, regardless of
+@code{cmacs-ai-chat-autosave}.
+@item C-c C-o
+Resume a saved chat (@code{cmacs-ai-chat-resume}): reopen its
+transcript and rebuild the ai-glib session so it continues with full
+context.
 @end table
+
+@subsection Saving and Resuming
+
+Chats are archived automatically, mirroring how libreclaw persists
+its rooms.  When @code{cmacs-ai-chat-autosave} is non-nil (the
+default), a chat is written to @code{cmacs-ai-chat-dir} at three
+points: right after you send a message, after each assistant response
+completes, and when the buffer is killed --- so a conversation
+survives a crash, a cancel, or an accidental close.  The archive
+holds the conversation history (preamble plus the turns above
+@code{* Compose}); the editable compose region is excluded.  The file
+name comes from @code{cmacs-ai-chat-save-name-format} (default
+@code{%y%m%d-%H%M%S-<provider>.org}, e.g.@:
+@file{260605-142345-claude.org}).
+
+@kbd{M-x cmacs-ai-resume-chat} (or @kbd{C-c C-o} from a chat buffer)
+reopens an archived chat: it restores the transcript @emph{and}
+rebuilds the ai-glib session by replaying the visible turns, so the
+model keeps full prior context and further messages append to the
+same file.  Reopening an already-resumed chat just switches to it.
+
+Two things are intentionally not restored: tool-call / tool-result
+blocks are replayed as plain text turns only (the rebuilt session
+carries the conversation, not the verbatim tool I/O --- this avoids
+provider errors from an orphaned @code{tool_result}); and each chat
+is its own archive file (there is no per-project single-file model
+like libreclaw's cmacs channel).
 
 @node CMacs AI Region Commands
 @section Region Commands
@@ -438,7 +470,16 @@ remote images are fetched asynchronously.
 @item cmacs-ai-chat-image-max-width
 Max inline image width in pixels (default 800).
 @item cmacs-ai-chat-dir
-Where auto-saved chats land.
+Where archived chats land; also the pool that
+@code{cmacs-ai-resume-chat} lists.
+@item cmacs-ai-chat-autosave
+Archive chats automatically on send, on each response, and on
+buffer-kill (default @code{t}).  When @code{nil}, only the manual
+@kbd{C-c C-s} save remains.
+@item cmacs-ai-chat-save-name-format
+File-name template for archives: a @code{format-time-string} pattern
+whose @code{<provider>} token is replaced with the provider name.
+Default @code{%y%m%d-%H%M%S-<provider>.org}.
 @item cmacs-ai-config-file
 Path to ai-glib's optional YAML config
 (@file{~/.config/ai-glib/config.yaml} by default).  Honored by

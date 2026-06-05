@@ -271,8 +271,34 @@ Symbols 'destructive prompts only for bash/write/edit."
   (expand-file-name "cmacs-ai/"
                     (or (getenv "XDG_DATA_HOME")
                         (expand-file-name "~/.local/share/")))
-  "Directory where chat buffers are auto-saved."
+  "Directory where chat buffers are archived.
+Each chat is saved here as an Org file (see
+`cmacs-ai-chat-save-name-format').  This is also the pool that
+`cmacs-ai-resume-chat' lists: re-opening a saved chat rebuilds its
+ai-glib session so the conversation continues with full context."
   :type 'directory
+  :group 'cmacs-ai)
+
+(defcustom cmacs-ai-chat-autosave t
+  "When non-nil, chat buffers are archived automatically.
+Saves fire right after the user sends a message, after each
+assistant response completes, and when the chat buffer is killed --
+so a conversation survives a crash, cancel, or accidental close.
+The archive excludes the editable `* Compose' region.  Disabling
+this leaves only the manual `\\<cmacs-ai-chat-mode-map>\\[cmacs-ai-chat-save]'
+command, which always writes regardless of this setting.  See
+`cmacs-ai-chat-dir' and `cmacs-ai-chat-save-name-format'."
+  :type 'boolean
+  :group 'cmacs-ai)
+
+(defcustom cmacs-ai-chat-save-name-format "%y%m%d-%H%M%S-<provider>.org"
+  "File-name template for archived chats under `cmacs-ai-chat-dir'.
+Passed through `format-time-string' (resolved against the chat's
+creation time), after which the literal token `<provider>' is
+replaced with the buffer's provider name.  The default yields e.g.
+`260605-142345-claude.org'.  Mirrors libreclaw's
+`cmacs-libreclaw-save-conversations-name-format'."
+  :type 'string
   :group 'cmacs-ai)
 
 (defcustom cmacs-ai-config-file
@@ -303,6 +329,9 @@ informational and is not auto-loaded -- ai-glib reads it directly."
 (declare-function cmacs-ai-session-clear "cmacs-ai-session.c" (handle))
 (declare-function cmacs-ai-session-append-message
                   "cmacs-ai-session.c" (handle role text))
+(declare-function cmacs-ai-session-message-count
+                  "cmacs-ai-session.c" (handle))
+(declare-function cmacs-ai-chat-resume "cmacs-ai-chat" (file))
 (declare-function cmacs-ai-chat-stream
                   "cmacs-ai-stream.c" (session prompt callback))
 (declare-function cmacs-ai-chat-cancel "cmacs-ai-stream.c" (session))
@@ -440,6 +469,17 @@ the M-x discovery surface is uniform."
   (interactive (list (cmacs-ai--read-provider "Chat with provider: ")))
   (require 'cmacs-ai-chat)
   (cmacs-ai-chat-open provider))
+
+;;;###autoload
+(defun cmacs-ai-resume-chat ()
+  "Resume an archived cmacs-ai chat from `cmacs-ai-chat-dir'.
+Prompts for one of the saved Org files (newest first), reopens its
+transcript, and rebuilds the ai-glib session so the conversation
+continues with full prior context.  Further turns append to the
+same file."
+  (interactive)
+  (require 'cmacs-ai-chat)
+  (call-interactively #'cmacs-ai-chat-resume))
 
 (provide 'cmacs-ai)
 ;;; cmacs-ai.el ends here

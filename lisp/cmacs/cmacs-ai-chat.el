@@ -94,6 +94,7 @@ Set non-nil by stream callbacks so they can insert above the marker.")
     (define-key m (kbd "C-c C-k") #'cmacs-ai-chat-cancel-stream)
     (define-key m (kbd "C-c C-l") #'cmacs-ai-chat-clear-history)
     (define-key m (kbd "C-c C-s") #'cmacs-ai-chat-save)
+    (define-key m (kbd "C-c C-o") #'cmacs-ai-chat-resume)
     m)
   "Keymap for `cmacs-ai-chat-mode'.")
 
@@ -131,6 +132,44 @@ sends the compose body and streams the response into a fresh
           (format-time-string "%H:%M:%S")
           (or provider cmacs-ai-default-provider)))
 
+(defun cmacs-ai-chat--setup-executor ()
+  "Create and configure this buffer's tool executor.
+Sets the buffer-local `cmacs-ai-chat-tool-executor' (nil when tools
+are disabled), augments it with cmacs's MCP tool surface, and wires
+ai-glib's web_search backend.  Shared by `cmacs-ai-chat--init' and
+`cmacs-ai-chat--restore'."
+  (setq-local cmacs-ai-chat-tool-executor
+              (when cmacs-ai-chat-enable-tools
+                (cmacs-ai-tools-new)))
+  ;; Augment the executor with cmacs's own MCP tool surface so the
+  ;; model gets buffer / file / project / eval / apropos / describe
+  ;; on top of ai-glib's filesystem-level built-ins.  Silently
+  ;; skipped if cmacs was built --without-cmacs-mcp.
+  (when (and cmacs-ai-chat-tool-executor
+             cmacs-ai-mcp-bridge-enable
+             (fboundp 'cmacs-ai-tools-register-mcp-bridge))
+    (condition-case err
+        (cmacs-ai-tools-register-mcp-bridge
+         cmacs-ai-chat-tool-executor
+         cmacs-ai-mcp-bridge-allowlist
+         cmacs-ai-mcp-bridge-denylist
+         cmacs-ai-mcp-bridge-readonly-only)
+      (error
+       (message "cmacs-ai: MCP bridge unavailable: %S" err))))
+  ;; Enable ai-glib's web_search tool with the configured backend.
+  ;; `auto' never fails (keyless DuckDuckGo fallback); a keyed
+  ;; provider with no key just logs and leaves web_search off.
+  (when (and cmacs-ai-chat-tool-executor
+             cmacs-ai-search-provider
+             (fboundp 'cmacs-ai-tools-set-search-provider))
+    (condition-case err
+        (cmacs-ai-tools-set-search-provider
+         cmacs-ai-chat-tool-executor
+         cmacs-ai-search-provider
+         cmacs-ai-search-api-key)
+      (error
+       (message "cmacs-ai: web_search unavailable: %S" err)))))
+
 (defun cmacs-ai-chat--init (buf provider)
   (with-current-buffer buf
     (let ((inhibit-read-only t))
@@ -149,37 +188,7 @@ sends the compose body and streams the response into a fresh
     (setq-local cmacs-ai-chat-provider provider)
     (setq-local cmacs-ai-chat-session-pair
                 (cmacs-ai-make-session provider))
-    (setq-local cmacs-ai-chat-tool-executor
-                (when cmacs-ai-chat-enable-tools
-                  (cmacs-ai-tools-new)))
-    ;; Augment the executor with cmacs's own MCP tool surface so the
-    ;; model gets buffer / file / project / eval / apropos / describe
-    ;; on top of ai-glib's filesystem-level built-ins.  Silently
-    ;; skipped if cmacs was built --without-cmacs-mcp.
-    (when (and cmacs-ai-chat-tool-executor
-               cmacs-ai-mcp-bridge-enable
-               (fboundp 'cmacs-ai-tools-register-mcp-bridge))
-      (condition-case err
-          (cmacs-ai-tools-register-mcp-bridge
-           cmacs-ai-chat-tool-executor
-           cmacs-ai-mcp-bridge-allowlist
-           cmacs-ai-mcp-bridge-denylist
-           cmacs-ai-mcp-bridge-readonly-only)
-        (error
-         (message "cmacs-ai: MCP bridge unavailable: %S" err))))
-    ;; Enable ai-glib's web_search tool with the configured backend.
-    ;; `auto' never fails (keyless DuckDuckGo fallback); a keyed
-    ;; provider with no key just logs and leaves web_search off.
-    (when (and cmacs-ai-chat-tool-executor
-               cmacs-ai-search-provider
-               (fboundp 'cmacs-ai-tools-set-search-provider))
-      (condition-case err
-          (cmacs-ai-tools-set-search-provider
-           cmacs-ai-chat-tool-executor
-           cmacs-ai-search-provider
-           cmacs-ai-search-api-key)
-        (error
-         (message "cmacs-ai: web_search unavailable: %S" err))))
+    (cmacs-ai-chat--setup-executor)
     (setq-local cmacs-ai-chat--created-at (current-time))
     (setq-local cmacs-ai-chat--compose-marker
                 (save-excursion (goto-char (point-max)) (point-marker)))
@@ -429,7 +438,7 @@ reason or `cmacs-ai-chat-tool-loop-max-turns' is reached."
                                         cmacs-ai-chat--assistant-marker)
          (setq cmacs-ai-chat--assistant-marker nil)
          (setq cmacs-ai-chat--assistant-start nil)
-         (cmacs-ai-chat-save-quietly)
+         (when cmacs-ai-chat-autosave (cmacs-ai-chat-save-quietly))
          ;; If the model stopped to call tools and we have any pending,
          ;; drive the loop.  Otherwise the turn is done -- reset depth.
          (if (and (eq (plist-get (cdr payload) :stop) 'tool-use)
@@ -572,6 +581,9 @@ result, and continue the stream until the model stops."
     (unless text (user-error "Compose is empty"))
     (cmacs-ai-chat--insert-heading
      (current-buffer) (cmacs-ai-chat--user-label) text)
+    ;; Persist the user turn before the network round-trip, so the
+    ;; message survives a crash / cancel before the model replies.
+    (when cmacs-ai-chat-autosave (cmacs-ai-chat-save-quietly))
     ;; Reset per-turn state.
     (setq cmacs-ai-chat--pending-tool-uses nil
           cmacs-ai-chat--tool-loop-depth 0)
@@ -614,35 +626,220 @@ result, and continue the stream until the model stops."
 
 ;;;; Saving ---------------------------------------------------------
 
+(defun cmacs-ai-chat--history-end ()
+  "Return the position just before the `* Compose' sentinel.
+Everything from `point-min' up to here is the conversation history
+\(preamble + turns); the editable compose region below is excluded
+from archives, mirroring
+`cmacs-libreclaw-cmacs-channel--extract-history'."
+  (if cmacs-ai-chat--compose-marker
+      (save-excursion
+        (goto-char cmacs-ai-chat--compose-marker)
+        (forward-line -1)
+        (line-beginning-position))
+    (point-max)))
+
 (defun cmacs-ai-chat--save-path ()
+  "Resolve (and cache) this buffer's archive file under `cmacs-ai-chat-dir'.
+The name comes from `cmacs-ai-chat-save-name-format': a
+`format-time-string' template (resolved against the buffer's
+creation time) whose literal `<provider>' token is replaced with
+the provider name."
   (unless (file-directory-p cmacs-ai-chat-dir)
     (make-directory cmacs-ai-chat-dir t))
   (or cmacs-ai-chat--save-file
       (setq cmacs-ai-chat--save-file
             (expand-file-name
-             (format "%s-%s.org"
-                     (format-time-string
-                      "%y%m%d-%H%M%S"
-                      cmacs-ai-chat--created-at)
-                     (or cmacs-ai-chat-provider "ai"))
+             (string-replace
+              "<provider>"
+              (format "%s" (or cmacs-ai-chat-provider "ai"))
+              (format-time-string cmacs-ai-chat-save-name-format
+                                  cmacs-ai-chat--created-at))
              cmacs-ai-chat-dir))))
 
 (defun cmacs-ai-chat-save ()
-  "Write the chat buffer to `cmacs-ai-chat-dir'.  Interactive."
+  "Archive the chat history to `cmacs-ai-chat-dir'.  Interactive.
+Writes the conversation above `* Compose' (the editable compose
+region is excluded).  Always writes, regardless of
+`cmacs-ai-chat-autosave'."
   (interactive)
   (let ((p (cmacs-ai-chat--save-path)))
-    (write-region (point-min) (point-max) p nil 'quiet)
+    (write-region (point-min) (cmacs-ai-chat--history-end) p nil 'quiet)
     (message "cmacs-ai: saved %s" p)))
 
 (defun cmacs-ai-chat-save-quietly ()
-  "Save the chat buffer without echoing the path."
+  "Archive the chat history without echoing the path.
+Like `cmacs-ai-chat-save' but silent; used by the automatic save
+triggers (which gate on `cmacs-ai-chat-autosave')."
   (let ((p (cmacs-ai-chat--save-path)))
-    (write-region (point-min) (point-max) p nil 'quiet)))
+    (write-region (point-min) (cmacs-ai-chat--history-end) p nil 'quiet)))
+
+;;;; Resuming -------------------------------------------------------
+;;
+;; A saved chat is a self-contained Org transcript (preamble +
+;; `* Conversation' turns, no `* Compose').  Resuming reopens it and
+;; rebuilds the ai-glib session by replaying the visible turns as
+;; user/assistant messages, so the next send carries full context.
+;; The C side streams the WHOLE session message list each turn
+;; (cmacs/ai/cmacs-ai-stream.c), so a replayed history is real context.
+;;
+;; Nested `*** tool-use'/`*** tool-result' blocks are NOT replayed:
+;; the rebuilt turns are text-only.  This keeps the message list clean
+;; (no orphaned tool_result without its tool_use, which providers
+;; reject) at the cost of the model not seeing prior tool I/O verbatim.
+
+(defconst cmacs-ai-chat--skip-roles '("error" "tool-loop-aborted")
+  "Level-2 heading roles ignored when rebuilding a session.")
+
+(defun cmacs-ai-chat--transcript-property (key)
+  "Return the `#+PROPERTY: KEY VALUE' value in the current buffer, or nil."
+  (save-excursion
+    (goto-char (point-min))
+    (when (re-search-forward
+           (format "^#\\+PROPERTY: %s[ \t]+\\(.+\\)$" (regexp-quote key))
+           nil t)
+      (string-trim (match-string 1)))))
+
+(defun cmacs-ai-chat--classify-role (role provider)
+  "Classify a level-2 heading ROLE string given PROVIDER (a name string).
+Returns the symbol `user' or `assistant', or nil to skip the turn.
+Assistant headings render as the downcased provider, optionally
+`provider/model' (see `cmacs-ai-chat--assistant-label'); everything
+else at level 2 is a user turn."
+  (cond
+   ((member role cmacs-ai-chat--skip-roles) nil)
+   ((string-prefix-p "tool-" role) nil)
+   ((or (string-search "/" role)
+        (and provider (string= role (downcase provider))))
+    'assistant)
+   (t 'user)))
+
+(defun cmacs-ai-chat--parse-transcript (&optional provider)
+  "Parse the current buffer's chat transcript into session messages.
+Returns an ordered list of (ROLE . BODY) cons cells where ROLE is
+`user' or `assistant'.  Empty turns are dropped and consecutive
+same-role turns are coalesced (bodies joined by a blank line) so the
+result strictly alternates -- required by providers like Claude that
+reject two same-role messages in a row (the tool loop emits several
+`** assistant' headings per user turn).  Nested `*** tool-…' blocks
+and `error' headings are skipped.  PROVIDER (a name string)
+classifies assistant headings; defaults to the buffer's
+`#+PROPERTY: provider'."
+  (let ((prov (or provider (cmacs-ai-chat--transcript-property "provider")))
+        (turns nil))
+    (save-excursion
+      (goto-char (point-min))
+      (while (re-search-forward "^\\*\\* +\\(.*\\)$" nil t)
+        (let* ((heading (match-string 1))
+               (role (if (string-match "  +\\(.*\\)\\'" heading)
+                         (string-trim (match-string 1 heading))
+                       (string-trim heading)))
+               (kind (cmacs-ai-chat--classify-role role prov))
+               (body-beg (line-beginning-position 2))
+               (body-end (save-excursion
+                           (goto-char body-beg)
+                           (if (re-search-forward "^\\*+ " nil t)
+                               (line-beginning-position)
+                             (point-max))))
+               (body (string-trim
+                      (buffer-substring-no-properties body-beg body-end))))
+          (when (and kind (not (string-empty-p body)))
+            (push (cons kind body) turns)))))
+    ;; Coalesce consecutive same-role turns so roles alternate.
+    (let ((acc nil))
+      (dolist (turn (nreverse turns))
+        (if (and acc (eq (caar acc) (car turn)))
+            (setcdr (car acc) (concat (cdar acc) "\n\n" (cdr turn)))
+          (push (cons (car turn) (cdr turn)) acc)))
+      (nreverse acc))))
+
+(defun cmacs-ai-chat--rebuild-session (session turns)
+  "Append parsed TURNS (a list of (ROLE . BODY)) to SESSION.
+ROLE is the symbol `user' or `assistant'.  Returns the count appended."
+  (let ((n 0))
+    (dolist (turn turns n)
+      (cmacs-ai-session-append-message session (car turn) (cdr turn))
+      (setq n (1+ n)))))
+
+(defun cmacs-ai-chat--restore (buf file)
+  "Populate BUF from archived chat FILE and rebuild its ai-glib session.
+Loads the saved transcript, appends a fresh `* Compose' sentinel,
+enables `cmacs-ai-chat-mode', recreates the session for the saved
+provider/model, and replays the conversation into it so the next
+turn carries full context.  Subsequent autosaves append to FILE."
+  (with-current-buffer buf
+    (let ((inhibit-read-only t)
+          (cmacs-ai-chat--allow-history-edit t))
+      (erase-buffer)
+      (insert-file-contents file)
+      (goto-char (point-max))
+      (unless (bolp) (insert "\n"))
+      ;; Ensure a blank separator precedes the compose sentinel, as in
+      ;; `cmacs-ai-chat--init'.
+      (unless (looking-back "\n\n" (max (point-min) (- (point) 2)))
+        (insert "\n"))
+      (insert "* Compose                                              :compose:\n"))
+    (let* ((provider-str (cmacs-ai-chat--transcript-property "provider"))
+           (model-str    (cmacs-ai-chat--transcript-property "model"))
+           (provider     (intern (or provider-str
+                                      (symbol-name cmacs-ai-default-provider))))
+           (turns        (cmacs-ai-chat--parse-transcript provider-str)))
+      (cmacs-ai-chat-mode)
+      (setq-local cmacs-ai-chat-provider provider)
+      (setq-local cmacs-ai-chat-session-pair
+                  (cmacs-ai-make-session provider model-str))
+      (cmacs-ai-chat--setup-executor)
+      (setq-local cmacs-ai-chat--created-at (current-time))
+      ;; Continue appending to the SAME archive file.
+      (setq-local cmacs-ai-chat--save-file file)
+      (setq-local cmacs-ai-chat--compose-marker
+                  (save-excursion (goto-char (point-max)) (point-marker)))
+      (set-marker-insertion-type cmacs-ai-chat--compose-marker nil)
+      (cmacs-ai-chat--rebuild-session (cdr cmacs-ai-chat-session-pair) turns)
+      (goto-char (point-max)))))
+
+(defun cmacs-ai-chat--saved-files ()
+  "Return archived chat files under `cmacs-ai-chat-dir', newest first."
+  (when (file-directory-p cmacs-ai-chat-dir)
+    (sort (directory-files cmacs-ai-chat-dir t "\\.org\\'") #'string>)))
+
+(defun cmacs-ai-chat-resume (file)
+  "Resume the archived chat FILE, rebuilding its ai-glib session.
+Interactively, prompts for one of the `*.org' files in
+`cmacs-ai-chat-dir' (newest first).  Reopening an already-resumed
+chat just switches to its live buffer."
+  (interactive
+   (let ((files (cmacs-ai-chat--saved-files)))
+     (unless files
+       (user-error "No archived chats in %s" cmacs-ai-chat-dir))
+     (let ((alist (mapcar (lambda (f)
+                            (cons (file-name-nondirectory f) f))
+                          files)))
+       (list (cdr (assoc (completing-read "Resume chat: "
+                                          (mapcar #'car alist) nil t)
+                         alist))))))
+  (cmacs-ai--ensure)
+  (setq file (expand-file-name file))
+  (unless (file-readable-p file)
+    (user-error "Cannot read %s" file))
+  (let* ((name (format "*cmacs-ai: %s*" (file-name-base file)))
+         (existing (get-buffer name)))
+    (if (and existing (buffer-live-p existing)
+             (buffer-local-value 'cmacs-ai-chat-session-pair existing))
+        (progn (switch-to-buffer existing) existing)
+      (let ((buf (get-buffer-create name)))
+        (cmacs-ai-chat--restore buf file)
+        (switch-to-buffer buf)
+        buf))))
 
 ;;;; Cleanup --------------------------------------------------------
 
 (defun cmacs-ai-chat--on-buffer-killed ()
-  "Free session resources when the chat buffer is killed."
+  "Free session resources when the chat buffer is killed.
+Archives the conversation first (when `cmacs-ai-chat-autosave') so a
+closed chat can be resumed with `cmacs-ai-resume-chat'."
+  (when (and cmacs-ai-chat-autosave cmacs-ai-chat--compose-marker)
+    (ignore-errors (cmacs-ai-chat-save-quietly)))
   (when cmacs-ai-chat-session-pair
     (cmacs-ai-free-session cmacs-ai-chat-session-pair)
     (setq cmacs-ai-chat-session-pair nil))
