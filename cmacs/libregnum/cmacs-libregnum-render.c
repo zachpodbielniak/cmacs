@@ -40,7 +40,14 @@ static guint         shared_refs    = 0;
 gboolean
 cmacs_libregnum_render_window_acquire (gchar **error_msg)
 {
-  if (shared_refs++ > 0) return TRUE;
+  shared_refs++;
+  /* Create the hidden window + engine exactly once and keep them resident
+   * for the process lifetime.  raylib cannot reliably re-create its GL
+   * context / FBOs after a CloseWindow + later InitWindow cycle
+   * (LoadRenderTexture then fails with "Framebuffer object can not be
+   * created"), so once the context exists we reuse it -- views come and go
+   * but the shared window does not (see ..._window_release). */
+  if (shared_window != NULL) return TRUE;
 
   SetTraceLogLevel (LOG_WARNING);
   SetConfigFlags (FLAG_WINDOW_HIDDEN);
@@ -76,14 +83,14 @@ cmacs_libregnum_render_window_acquire (gchar **error_msg)
 void
 cmacs_libregnum_render_window_release (void)
 {
-  if (shared_refs == 0) return;
-  if (--shared_refs > 0) return;
-  if (shared_engine)
-    {
-      lrg_engine_shutdown (shared_engine);
-      shared_engine = NULL;
-    }
-  g_clear_object (&shared_window);
+  /* Deliberately keep the hidden window + engine resident even after the
+   * last view is destroyed: raylib's CloseWindow followed by a later
+   * InitWindow leaves rlgl unable to create FBOs, which broke loading a
+   * second scene or game in the same session.  The hidden window is tiny
+   * and idle, so we keep it (and the shared engine) until the process
+   * exits rather than tear down a GL context we cannot cleanly rebuild. */
+  if (shared_refs > 0)
+    shared_refs--;
 }
 
 LrgWindow *

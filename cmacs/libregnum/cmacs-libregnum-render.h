@@ -17,8 +17,11 @@
 
 #include <glib.h>
 
-/* Process-shared hidden raylib window.  Refcounted -- acquire on
- * first view creation, release on last view destruction. */
+/* Process-shared hidden raylib window.  Created on first view creation
+ * and then kept resident for the process lifetime: raylib cannot
+ * reliably re-create its GL context / FBOs after CloseWindow + a later
+ * InitWindow, so release only drops the refcount and never tears the
+ * window (or shared engine) down. */
 extern gboolean cmacs_libregnum_render_window_acquire (gchar **error_msg);
 extern void     cmacs_libregnum_render_window_release (void);
 
