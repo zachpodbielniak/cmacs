@@ -902,8 +902,15 @@ if test "$with_cmacs_libregnum" != "no"; then
   # dance for downstream image consumers (immutablue et al.) -- the
   # emacs binary is self-contained and finds its raylib at startup
   # without consulting ld.so.cache for the cmacs lib dir.
+  # --whole-archive: cmacs hosts arbitrary libregnum game modules (loaded as
+  # .so via lrg_loaded_game_load), which may reference any libregnum symbol
+  # (e.g. game templates cmacs itself never calls). Pull in the entire static
+  # lib so every symbol is present and -- with --export-dynamic -- resolvable
+  # by a loaded module at runtime.
   CMACS_LIBREGNUM_LIBS="-Wl,--allow-multiple-definition \
+    -Wl,--whole-archive \
     \$(abs_top_srcdir)/deps/libregnum/build/release/lib/liblibregnum.a \
+    -Wl,--no-whole-archive \
     -lGL -lm -lpthread -ldl -lrt -lX11 \
     $CMACS_LIBREGNUM_DEPS_LIBS"
   AC_DEFINE([HAVE_CMACS_LIBREGNUM], 1, [CMacs libregnum 3D scenes])

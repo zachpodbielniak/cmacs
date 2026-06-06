@@ -5756,6 +5756,10 @@ on every redisplay.  The buffer's text is a YAML-ish description
 of the scene; saving the buffer snapshots the camera state into
 the text and reopening the file rebuilds the scene.
 
+Besides the built-in scene visualisers, a buffer can also host a
+full libregnum @emph{game} loaded as a module; see @emph{Game module
+hosting} below.
+
 @section Architecture
 
 cmacs does not drive libregnum through a native @code{GtkGLArea}
@@ -5909,6 +5913,86 @@ Picking is a ray-cast (raylib @code{GetScreenToWorldRayEx} +
 thread; the open/drill action is deferred onto the cmacs
 GMainContext so no Lisp runs inside the GTK event handler.
 
+@section Game module hosting
+
+Beyond the built-in scene visualisers, a @code{cmacs-libregnum}
+buffer can host a @emph{full libregnum game}.  A game built with the
+@code{LRG_DEFINE_GAME_MODULE} macro produces a host-agnostic shared
+module (@file{.so}); cmacs loads it, drives it each frame, and
+forwards input to it, so the game runs inside an Emacs buffer.
+
+@code{M-x cmacs-libregnum-play} prompts for a game module and opens a
+buffer that renders and plays it.
+
+@subsection How it works
+
+The game is driven through libregnum's host abstraction
+@code{LrgGameHost}.  cmacs implements @code{CmacsFboGameHost}, which
+lends the game cmacs's already-running engine and renders it into the
+view's FBO -- the same offscreen path the scene visualisers use -- so
+no extra window is created.  Each frame, @code{render_to_bgra}
+advances the game (@code{lrg_game_template_update}, with a monotonic
+delta since the FBO path never presents a backbuffer) and draws it
+(@code{lrg_game_template_render}), then reads the FBO back into the
+buffer's surface.
+
+Because the host owns no @code{LrgWindow}, an embedded game never
+grabs the real cursor (an FPS enabling mouse-look is a no-op on the
+cursor) and never starts or stops the shared engine (engine startup
+is reference-counted in libregnum, so the host and the game share
+one).
+
+@subsection Input
+
+@itemize @bullet
+@item @emph{Mouse} is routed by the C layer: in a game buffer, the
+@code{cmacs-libregnum-handle-motion}/@code{-button}/@code{-scroll}
+handlers forward the pointer and buttons to the game instead of
+orbiting the scene camera.
+@item @emph{Keyboard} is forwarded by the
+@code{cmacs-libregnum-game-mode} minor mode (enabled automatically by
+@code{cmacs-libregnum-play}).  Emacs delivers no key-@emph{release}
+events, so a held key is emulated from keyboard auto-repeat: the
+first press is sent immediately, each auto-repeat re-arms a release
+timer, and when the repeats stop the key is released.  Tune
+@code{cmacs-libregnum-game-key-release-delay} (default @code{0.4}) a
+little above your system's key-repeat delay to keep a held key from
+stuttering.
+@end itemize
+
+Letters, digits, space, the arrows, common editing/function keys and
+1:1 punctuation map to graylib @code{GrlKey} codes.  Quit with
+@kbd{C-c C-q} (@code{cmacs-libregnum-game-quit}), which releases held
+keys, unloads the game, and kills the buffer.
+
+@subsection Host-agnostic modules
+
+A game module links @emph{no} libregnum of its own: its libregnum
+symbols are resolved at load time from whichever host loads it.  The
+same @file{.so} runs unchanged under the standalone
+@command{lrg-launcher} shim (which provides libregnum via its shared
+library) and under cmacs (which static-links libregnum into Emacs with
+@option{--whole-archive --export-dynamic}; see @emph{Building}).  This
+keeps exactly one copy of the engine and the GType registry in the
+process.
+
+@subsection Game-hosting commands
+
+@table @code
+@item cmacs-libregnum-play
+open a buffer hosting a game module
+@item cmacs-libregnum-load-game
+load a module into an existing view
+@item cmacs-libregnum-unload-game
+unload the hosted game
+@item cmacs-libregnum-game-loaded-p
+@code{t} if the buffer is hosting a game
+@item cmacs-libregnum-game-mode
+minor mode: forward keyboard to the game
+@item cmacs-libregnum-game-quit
+(@kbd{C-c C-q}) unload the game and kill the buffer
+@end table
+
 @section Default key bindings
 
 @table @kbd
@@ -5943,10 +6027,15 @@ Pass @option{--with-cmacs-libregnum} to @command{configure}.
 The block requires @option{--with-cmacs-glib} and
 @option{--with-pgtk}.  Configure probes for a system
 @file{libregnum-1.0.pc}; otherwise it falls back to the bundled
-@file{deps/libregnum} submodule.  Linking goes against
-@file{liblibregnum.so} rather than the static archive (raylib's
-inline raymath causes multiply-defined symbols in the static
-archive).
+@file{deps/libregnum} submodule.  Emacs links the libregnum static
+archive with @option{-Wl,--whole-archive} and
+@option{-Wl,--allow-multiple-definition}: the whole-archive pull-in
+lets a buffer host an arbitrary game module (a host-agnostic module
+resolves its libregnum symbols from Emacs, so every symbol -- not
+just the ones cmacs itself calls -- must be present and, via
+@option{--export-dynamic}, exported), and
+@option{--allow-multiple-definition} absorbs raylib's inline raymath,
+which the headers emit without @code{static} into multiple objects.
 
 @section Known limitations (v1)
 

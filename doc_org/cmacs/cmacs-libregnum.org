@@ -15,6 +15,9 @@ state).  Saving the buffer snapshots the current camera into the
 text; opening a saved buffer rebuilds the scene and restores the
 camera.
 
+Besides the built-in scene visualisers, a buffer can also host a full
+libregnum *game* loaded as a module — see [[*Game module hosting]].
+
 ** Architecture
 
 cmacs does *not* drive libregnum through a native =GtkGLArea= child
@@ -114,10 +117,15 @@ for a system =libregnum-1.0.pc=, falling back to the bundled
 =--with-cmacs-glib= (event loop integration) and =--with-pgtk=
 (the only compositor backend wired through =pgtk_handle_draw=).
 
-Linking goes against =liblibregnum.so= rather than the static
-archive — raylib's headers compile raymath inline without =static=,
-so the static archive carries multiply-defined =QuaternionToMatrix=,
-=MatrixDecompose=, etc.  The shared library exports them just once.
+Emacs links the libregnum *static* archive with =-Wl,--whole-archive=
+and =-Wl,--allow-multiple-definition=.  The whole-archive pull-in is
+what lets a buffer host an arbitrary game module: a host-agnostic
+module (see [[*Game module hosting]]) resolves its libregnum symbols
+from Emacs, so *every* libregnum symbol — not just the ones cmacs
+itself calls (e.g. game-template types) — must be present and, via
+=--export-dynamic=, exported.  =--allow-multiple-definition= absorbs
+raylib's inline raymath (=QuaternionToMatrix=, =MatrixDecompose=, …),
+which the headers emit without =static= into multiple objects.
 
 * Interactive commands
 
@@ -186,6 +194,80 @@ deferred onto the cmacs GMainContext so no Lisp runs inside the GTK
 event handler.  =cmacs-libregnum-tree-nodes= exposes the model to
 Lisp (a vector of =(:id :name :path :dir :depth :parent)= plists).
 
+* Game module hosting
+
+Beyond the built-in scene visualisers, a =cmacs-libregnum= buffer can
+host a *full libregnum game*.  A game built with the
+=LRG_DEFINE_GAME_MODULE= macro produces a host-agnostic shared module
+(=.so=); cmacs loads it, drives it each frame, and forwards input to
+it, so the game runs *inside an Emacs buffer*.
+
+=M-x cmacs-libregnum-play= prompts for a game module and opens a buffer
+that renders and plays it:
+
+#+begin_example
+  (cmacs-libregnum-play "/path/to/libmygame.so")
+#+end_example
+
+** How it works
+
+The game is driven through libregnum's host abstraction =LrgGameHost=.
+cmacs implements =CmacsFboGameHost=, which lends the game cmacs's
+already-running engine and renders it into the view's FBO — exactly the
+offscreen path the scene visualisers use — so no extra window is
+created.  Each frame, =render_to_bgra= advances the game
+(=lrg_game_template_update=, with a monotonic delta since the FBO path
+never presents a backbuffer) and draws it (=lrg_game_template_render=),
+then reads the FBO back into the buffer's surface as usual.
+
+Because the host owns no =LrgWindow=, an embedded game never grabs the
+real cursor (an FPS enabling mouse-look is a no-op on the cursor), and
+it never starts or stops the shared engine (engine startup is
+reference-counted in libregnum, so the host and the game share one).
+
+** Input
+
+- *Mouse* is routed by the C layer: in a game buffer,
+  =cmacs-libregnum-handle-motion/button/scroll= forward the pointer and
+  buttons to the game instead of orbiting the scene camera.
+- *Keyboard* is forwarded by the =cmacs-libregnum-game-mode= minor mode
+  (enabled automatically by =cmacs-libregnum-play=).  Emacs delivers no
+  key-/release/ events, so a held key is emulated from keyboard
+  auto-repeat: the first press is sent immediately, each auto-repeat
+  re-arms a release timer, and when the repeats stop the key is
+  released.  Tune =cmacs-libregnum-game-key-release-delay= (default
+  =0.4=) a little above your system's key-repeat delay to keep a held
+  key from stuttering.
+
+Letters, digits, space, the arrows, common editing/function keys and
+1:1 punctuation are mapped to graylib =GrlKey= codes and sent on.  Quit
+with =C-c C-q= (=cmacs-libregnum-game-quit=), which releases held keys,
+unloads the game, and kills the buffer.
+
+** Host-agnostic modules
+
+A game module links *no* libregnum of its own: its libregnum symbols
+are left undefined and resolved at load time from whichever host loads
+it.  The same =.so= therefore runs unchanged under the standalone
+=lrg-launcher= shim (which provides libregnum via its shared library)
+and under cmacs (which static-links libregnum into Emacs with
+=--whole-archive --export-dynamic=; see [[*Building]]).  This keeps
+exactly one copy of the engine and the GType registry in the process.
+
+** Game-hosting commands
+
+| Command                                 | Action                                   |
+|-----------------------------------------+------------------------------------------|
+| =cmacs-libregnum-play=                  | open a buffer hosting a game module       |
+| =cmacs-libregnum-load-game=             | load a module into an existing view       |
+| =cmacs-libregnum-unload-game=           | unload the hosted game                    |
+| =cmacs-libregnum-game-loaded-p=         | =t= if the buffer is hosting a game       |
+| =cmacs-libregnum-game-mode=             | minor mode: forward keyboard to the game  |
+| =cmacs-libregnum-game-quit= (=C-c C-q=) | unload the game and kill the buffer       |
+
+See =deps/libregnum/docs= for building a game as a dual-target module
+(one source → standalone executable + loadable =.so=).
+
 * Default key bindings
 
 | Key   | Command                              |
@@ -231,15 +313,15 @@ initialization scan.
 | File                                      | Purpose                              |
 |-------------------------------------------+--------------------------------------|
 | =cmacs/libregnum/cmacs-libregnum.h=       | Public umbrella header (no raylib)   |
-| =cmacs/libregnum/cmacs-libregnum-render.{c,h}= | Hidden window + FBO render          |
+| =cmacs/libregnum/cmacs-libregnum-render.{c,h}= | Hidden window + FBO render + game host (=CmacsFboGameHost=) |
 | =cmacs/libregnum/cmacs-libregnum-view.c=  | Per-buffer view + redraw idle        |
 | =cmacs/libregnum/cmacs-libregnum-overlay.c= | =pgtk_handle_draw= blit hook         |
-| =cmacs/libregnum/cmacs-libregnum-input.c= | PGTK orbit/zoom routing              |
-| =cmacs/libregnum/cmacs-libregnum-defuns.c= | DEFUNs (attach, build-*, camera)    |
+| =cmacs/libregnum/cmacs-libregnum-input.c= | PGTK orbit/zoom + game input routing |
+| =cmacs/libregnum/cmacs-libregnum-defuns.c= | DEFUNs (attach, build-*, camera, load-game, game-key) |
 | =cmacs/libregnum/cmacs-libregnum-scene-tree.c=     | Scene 1: project tree     |
 | =cmacs/libregnum/cmacs-libregnum-scene-gobject.c=  | Scene 2: GObject hierarchy |
 | =cmacs/libregnum/cmacs-libregnum-scene-mindmap.c=  | Scene 3: org mind map      |
-| =lisp/cmacs/cmacs-libregnum.el=           | Mode + interactive entry points      |
+| =lisp/cmacs/cmacs-libregnum.el=           | Scene major mode + game input minor mode + entry points |
 | =test/cmacs/cmacs-libregnum-tests.el=     | ERT tests                            |
 
 * Known limitations (v1)

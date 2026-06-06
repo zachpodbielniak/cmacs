@@ -512,5 +512,190 @@ prefix (e.g. \"Gtk\", \"Lrg\") to scope the graph."
 (add-to-list 'auto-mode-alist
              '("\\.lrg-scene\\'" . cmacs-libregnum-mode))
 
+;;;; Game-module hosting ----------------------------------------------
+
+;; A libregnum game packaged as a loadable module (.so, built with
+;; LRG_DEFINE_GAME_MODULE) can be hosted in a buffer: the C layer drives
+;; the game each frame into the view's framebuffer and routes mouse input
+;; to it.  Keyboard input is forwarded from this minor mode, because Emacs
+;; owns the keymap (the game's hidden window never sees real key events).
+
+(declare-function cmacs-libregnum-load-game "cmacs-libregnum-defuns.c"
+                  (buffer so-path))
+(declare-function cmacs-libregnum-unload-game "cmacs-libregnum-defuns.c"
+                  (buffer))
+(declare-function cmacs-libregnum-game-loaded-p "cmacs-libregnum-defuns.c"
+                  (buffer))
+(declare-function cmacs-libregnum-game-key "cmacs-libregnum-defuns.c"
+                  (buffer grl-key press))
+
+(defcustom cmacs-libregnum-game-key-release-delay 0.4
+  "Seconds after a key's last press before it is reported released to the game.
+Emacs delivers no key-release events, so a held key is emulated from the
+keyboard's auto-repeat: each repeat re-arms this timer, and when the
+repeats stop the key is released.  Set this a little longer than your
+system's key-repeat delay to avoid a held key stuttering; lower it for a
+snappier release once you let go."
+  :type 'number
+  :group 'cmacs-libregnum)
+
+;; raylib/graylib KeyboardKey (GrlKey) codes for the non-ASCII keys.
+;; (Letters/digits/space and most punctuation already equal their raylib
+;; code, modulo lowercase->uppercase for letters; see the mapping below.)
+(defconst cmacs-libregnum-game--symbol-keys
+  '((left . 263) (right . 262) (up . 265) (down . 264)
+    (return . 257) (kp-enter . 257) (tab . 258) (backspace . 259)
+    (escape . 256) (delete . 261) (deletechar . 261) (insert . 260)
+    (home . 268) (end . 269) (prior . 266) (next . 267)
+    (f1 . 290) (f2 . 291) (f3 . 292) (f4 . 293) (f5 . 294) (f6 . 295)
+    (f7 . 296) (f8 . 297) (f9 . 298) (f10 . 299) (f11 . 300) (f12 . 301))
+  "Alist mapping Emacs key symbols to graylib GrlKey integer codes.")
+
+(defun cmacs-libregnum-game--char->grl (ch)
+  "Map a character key event CH to a GrlKey integer, or nil."
+  (cond
+   ((and (>= ch ?a) (<= ch ?z)) (- ch 32))        ; a..z -> KEY_A..KEY_Z
+   ((and (>= ch ?A) (<= ch ?Z)) ch)               ; A..Z already 65..90
+   ((and (>= ch ?0) (<= ch ?9)) ch)               ; 0..9 already 48..57
+   ;; space + punctuation whose ASCII value equals its raylib KEY_ code
+   ((memq ch '(?\s 39 44 45 46 47 59 61 91 92 93 96)) ch)
+   (t nil)))
+
+(defun cmacs-libregnum-game--event->grl (event)
+  "Map an Emacs key EVENT (character or symbol) to a GrlKey integer, or nil."
+  (cond
+   ((integerp event)
+    (cond
+     ((= event ?\r) 257)                           ; RET
+     ((= event ?\t) 258)                           ; TAB
+     ((= event 127) 259)                           ; DEL / backspace
+     ((= event ?\e) 256)                           ; ESC
+     (t (cmacs-libregnum-game--char->grl event))))
+   ((symbolp event)
+    (cdr (assq event cmacs-libregnum-game--symbol-keys)))))
+
+(defvar-local cmacs-libregnum-game--held nil
+  "Hash table mapping a currently-held GrlKey to its pending release timer.")
+
+(defun cmacs-libregnum-game--press (grl)
+  "Report GrlKey GRL as pressed to the game, auto-releasing after a delay.
+A first press is forwarded immediately; subsequent auto-repeats only
+re-arm the release timer so the key stays down while physically held."
+  (let ((buf (current-buffer)))
+    (unless (hash-table-p cmacs-libregnum-game--held)
+      (setq cmacs-libregnum-game--held (make-hash-table :test 'eq)))
+    (let ((tm (gethash grl cmacs-libregnum-game--held)))
+      (if (timerp tm)
+          (cancel-timer tm)                         ; already down: re-arm only
+        (cmacs-libregnum-game-key buf grl t))       ; first press
+      (puthash grl
+               (run-at-time
+                cmacs-libregnum-game-key-release-delay nil
+                (lambda ()
+                  (when (buffer-live-p buf)
+                    (with-current-buffer buf
+                      (when (hash-table-p cmacs-libregnum-game--held)
+                        (remhash grl cmacs-libregnum-game--held))
+                      (ignore-errors
+                        (cmacs-libregnum-game-key buf grl nil))))))
+               cmacs-libregnum-game--held))))
+
+(defun cmacs-libregnum-game--release-all ()
+  "Cancel all hold timers and release every currently-held key."
+  (when (hash-table-p cmacs-libregnum-game--held)
+    (let ((buf (current-buffer)))
+      (maphash (lambda (grl tm)
+                 (when (timerp tm) (cancel-timer tm))
+                 (ignore-errors (cmacs-libregnum-game-key buf grl nil)))
+               cmacs-libregnum-game--held)
+      (clrhash cmacs-libregnum-game--held))))
+
+(defun cmacs-libregnum-game-dispatch-key ()
+  "Forward the key that invoked this command to the hosted game.
+Bound to the game keys in `cmacs-libregnum-game-mode-map'."
+  (interactive)
+  (let ((grl (cmacs-libregnum-game--event->grl last-command-event)))
+    (when (and grl (cmacs-libregnum-game-loaded-p (current-buffer)))
+      (cmacs-libregnum-game--press grl))))
+
+(defun cmacs-libregnum-game-quit ()
+  "Release held keys, unload the game, and kill the buffer."
+  (interactive)
+  (cmacs-libregnum-game--release-all)
+  (when (and (cmacs-libregnum-attached-p (current-buffer))
+             (cmacs-libregnum-game-loaded-p (current-buffer)))
+    (cmacs-libregnum-unload-game (current-buffer)))
+  (when (bound-and-true-p cmacs-libregnum-game-mode)
+    (cmacs-libregnum-game-mode -1))
+  (kill-buffer (current-buffer)))
+
+(defvar cmacs-libregnum-game-mode-map
+  (let ((m (make-sparse-keymap)))
+    ;; Letters, digits, space -> the game.
+    (dolist (ch (number-sequence ?a ?z))
+      (define-key m (vector ch) #'cmacs-libregnum-game-dispatch-key))
+    (dolist (ch (number-sequence ?0 ?9))
+      (define-key m (vector ch) #'cmacs-libregnum-game-dispatch-key))
+    (define-key m (kbd "SPC") #'cmacs-libregnum-game-dispatch-key)
+    ;; Arrows, editing keys, function keys, and 1:1 punctuation.
+    (dolist (k '("<left>" "<right>" "<up>" "<down>"
+                 "RET" "<return>" "TAB" "<tab>" "<backspace>" "DEL"
+                 "<prior>" "<next>" "<home>" "<end>" "<insert>" "<delete>"
+                 "<f1>" "<f2>" "<f3>" "<f4>" "<f5>" "<f6>"
+                 "<f7>" "<f8>" "<f9>" "<f10>" "<f11>" "<f12>"
+                 "-" "=" "[" "]" ";" "'" "," "." "/" "`" "\\"))
+      (define-key m (kbd k) #'cmacs-libregnum-game-dispatch-key))
+    ;; Escape is left to Emacs (it is the meta prefix); quit with C-c C-q.
+    (define-key m (kbd "C-c C-q") #'cmacs-libregnum-game-quit)
+    m)
+  "Keymap for `cmacs-libregnum-game-mode'.")
+
+;;;###autoload
+(define-minor-mode cmacs-libregnum-game-mode
+  "Forward keyboard input from this buffer to a hosted libregnum game.
+
+Enable this in a buffer whose libregnum view has a game module loaded
+\(see `cmacs-libregnum-play').  Game keys (letters, digits, space, the
+arrows, and common editing/function keys) are sent to the game; mouse
+input is routed by the C layer.  Quit with \\[cmacs-libregnum-game-quit].
+
+Because Emacs has no key-release events, a held key is emulated from
+keyboard auto-repeat -- see `cmacs-libregnum-game-key-release-delay'.
+
+\\{cmacs-libregnum-game-mode-map}"
+  :lighter " LRG-Game"
+  :keymap cmacs-libregnum-game-mode-map
+  (if cmacs-libregnum-game-mode
+      (setq cmacs-libregnum-game--held (make-hash-table :test 'eq))
+    (cmacs-libregnum-game--release-all)))
+
+;;;###autoload
+(defun cmacs-libregnum-play (module)
+  "Open a buffer hosting the libregnum game MODULE (a built game `.so').
+The buffer renders the game and forwards keyboard and mouse input to it.
+MODULE is a shared object built with `LRG_DEFINE_GAME_MODULE'."
+  (interactive
+   (list (read-file-name
+          "Game module (.so): " nil nil t nil
+          (lambda (f) (or (file-directory-p f) (string-suffix-p ".so" f))))))
+  (unless (cmacs-libregnum-supported-p)
+    (user-error "cmacs-libregnum not built; reconfigure with \
+--with-cmacs-libregnum"))
+  (let* ((abs (expand-file-name module))
+         (buf (get-buffer-create
+               (format "*cmacs-libregnum game: %s*"
+                       (file-name-nondirectory abs)))))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert "# cmacs-libregnum game view\n"))
+      ;; Major mode attaches the view + sets up the per-redisplay blit.
+      (cmacs-libregnum-mode)
+      (cmacs-libregnum-load-game (current-buffer) abs)
+      ;; Minor mode (after load) forwards keyboard input to the game.
+      (cmacs-libregnum-game-mode 1))
+    (switch-to-buffer buf)
+    buf))
+
 (provide 'cmacs-libregnum)
 ;;; cmacs-libregnum.el ends here

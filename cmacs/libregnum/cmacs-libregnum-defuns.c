@@ -306,6 +306,79 @@ POSITION and TARGET are lists (X Y Z).  FOV is degrees.  */)
   return Qt;
 }
 
+DEFUN ("cmacs-libregnum-load-game", Fcmacs_libregnum_load_game,
+       Scmacs_libregnum_load_game, 2, 2, 0,
+       doc: /* Load libregnum game module SO-PATH into BUFFER's view.
+SO-PATH is the absolute path of a game `.so' built with
+LRG_DEFINE_GAME_MODULE.  The game is then driven and rendered into the
+view each frame, and the view is switched to animated mode.  Signals
+`cmacs-libregnum-error' on failure.  */)
+  (Lisp_Object buffer, Lisp_Object so_path)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_STRING (so_path);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) error ("cmacs-libregnum: no view attached to buffer");
+  Lisp_Object encoded = ENCODE_FILE (so_path);
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  char *err = NULL;
+  if (!cmacs_libregnum_render_ctx_load_game (ctx, SSDATA (encoded), &err))
+    {
+      Lisp_Object msg = build_string (err ? err : "load-game failed");
+      g_free (err);
+      xsignal1 (Qcmacs_libregnum_error, msg);
+    }
+  cmacs_libregnum_view_set_animated (v, 1, 60);
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-unload-game", Fcmacs_libregnum_unload_game,
+       Scmacs_libregnum_unload_game, 1, 1, 0,
+       doc: /* Unload the game module from BUFFER's view, if one is loaded.  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  cmacs_libregnum_render_ctx_unload_game (ctx);
+  cmacs_libregnum_view_set_animated (v, 0, 60);
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-game-loaded-p", Fcmacs_libregnum_game_loaded_p,
+       Scmacs_libregnum_game_loaded_p, 1, 1, 0,
+       doc: /* Return non-nil if BUFFER's view is hosting a game module.  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  return cmacs_libregnum_render_ctx_is_game (ctx) ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-libregnum-game-key", Fcmacs_libregnum_game_key,
+       Scmacs_libregnum_game_key, 3, 3, 0,
+       doc: /* Forward key GRL-KEY to the game hosted in BUFFER's view.
+GRL-KEY is the integer graylib key code (GrlKey).  PRESS non-nil means a
+press, nil a release.  A minor mode on the game buffer maps Emacs key
+events to these calls (Emacs owns the keymap, so keyboard input is routed
+from Elisp rather than read from the hidden window).  */)
+  (Lisp_Object buffer, Lisp_Object grl_key, Lisp_Object press)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (grl_key);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  cmacs_libregnum_render_ctx_game_key (ctx, (int) XFIXNUM (grl_key),
+                                       !NILP (press));
+  return Qt;
+}
+
 extern Lisp_Object *cmacs_libregnum__buffers_root  (void);
 extern Lisp_Object *cmacs_libregnum__payloads_root (void);
 
@@ -341,6 +414,10 @@ syms_of_cmacs_libregnum_defuns (void)
   defsubr (&Scmacs_libregnum_build_mindmap);
   defsubr (&Scmacs_libregnum_camera_state);
   defsubr (&Scmacs_libregnum_set_camera);
+  defsubr (&Scmacs_libregnum_load_game);
+  defsubr (&Scmacs_libregnum_unload_game);
+  defsubr (&Scmacs_libregnum_game_loaded_p);
+  defsubr (&Scmacs_libregnum_game_key);
 }
 
 #endif /* HAVE_CMACS_LIBREGNUM */

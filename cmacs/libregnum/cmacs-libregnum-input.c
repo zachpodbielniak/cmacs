@@ -154,6 +154,18 @@ cmacs_libregnum_handle_motion (struct frame *f, double x, double y)
   CmacsLibregnumView *v = selected_view_for_frame (f);
   if (!v) return FALSE;
 
+  {
+    /* In game mode, forward the pointer to the hosted game instead of
+     * driving the scene camera. */
+    CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+    if (cmacs_libregnum_render_ctx_is_game (ctx))
+      {
+        cmacs_libregnum_render_ctx_game_mouse_move (ctx, x, y);
+        cmacs_libregnum_view_request_redraw (v);
+        return true;
+      }
+  }
+
   if (drag_state.frame == f
       && (drag_state.dragging_left || drag_state.dragging_right))
     {
@@ -178,6 +190,20 @@ cmacs_libregnum_handle_button (struct frame *f, int button, int press,
 {
   CmacsLibregnumView *v = selected_view_for_frame (f);
   if (!v) return FALSE;
+
+  {
+    /* In game mode, forward mouse buttons to the hosted game. Map the X11
+     * button numbers (1=left, 2=middle, 3=right) to graylib's
+     * GrlMouseButton (0=left, 1=right, 2=middle). */
+    CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+    if (cmacs_libregnum_render_ctx_is_game (ctx))
+      {
+        int grl_btn = (button == 1) ? 0 : (button == 3) ? 1 : 2;
+        cmacs_libregnum_render_ctx_game_mouse_button (ctx, grl_btn, press != 0);
+        cmacs_libregnum_view_request_redraw (v);
+        return true;
+      }
+  }
 
   drag_state.frame  = f;
   drag_state.last_x = x;
@@ -219,6 +245,8 @@ cmacs_libregnum_handle_scroll (struct frame *f, double dx, double dy,
   CmacsLibregnumView *v = selected_view_for_frame (f);
   if (!v) return FALSE;
   CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  if (cmacs_libregnum_render_ctx_is_game (ctx))
+    return true;   /* a hosted game manages its own zoom; ignore scroll */
   cmacs_libregnum_render_ctx_zoom_camera (ctx, dy);
   cmacs_libregnum_view_request_redraw (v);
   return true;

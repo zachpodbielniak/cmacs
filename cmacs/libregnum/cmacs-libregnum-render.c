@@ -140,6 +140,14 @@ struct CmacsLibregnumRenderCtx
   gboolean        focusing;
   float           goal_px, goal_py, goal_pz;   /* goal camera position */
   float           goal_tx, goal_ty, goal_tz;   /* goal camera target */
+
+  /* Game-module hosting. When game_mode is TRUE, render_to_bgra drives the
+   * loaded game instead of the scene drawables. */
+  gboolean          game_mode;
+  LrgLoadedGame    *loaded_game;   /* owned */
+  LrgGameTemplate  *game;          /* borrowed from loaded_game */
+  LrgGameHost      *game_host;     /* owned (CmacsFboGameHost) */
+  LrgInputSoftware *game_input;    /* owned; registered with input manager */
 };
 
 CmacsLibregnumRenderCtx *
@@ -171,6 +179,7 @@ void
 cmacs_libregnum_render_ctx_free (CmacsLibregnumRenderCtx *r)
 {
   if (!r) return;
+  if (r->game_mode) cmacs_libregnum_render_ctx_unload_game (r);
   if (r->fbo_valid) UnloadRenderTexture (r->fbo);
   g_clear_object (&r->camera);
   if (r->drawables) g_ptr_array_unref (r->drawables);
@@ -442,6 +451,248 @@ cmacs_libregnum_render_ctx_set_camera (CmacsLibregnumRenderCtx *r, void *cam)
   lrg_renderer_set_camera (r->renderer, r->camera);
 }
 
+/* ── Embedded game host (implements LrgGameHost) ──────────────────
+ *
+ * Lets a loaded libregnum game render into this view's FBO. The game
+ * borrows cmacs's already-started engine and renders to the FBO; it has
+ * no LrgWindow of its own, so it never grabs the host's real cursor.
+ * Frame timing is a monotonic clock (raylib's frame time is invalid on
+ * the FBO path, which never presents the backbuffer). */
+
+#define CMACS_TYPE_FBO_GAME_HOST (cmacs_fbo_game_host_get_type ())
+G_DECLARE_FINAL_TYPE (CmacsFboGameHost, cmacs_fbo_game_host,
+                      CMACS, FBO_GAME_HOST, GObject)
+
+struct _CmacsFboGameHost
+{
+  GObject                  parent_instance;
+  CmacsLibregnumRenderCtx *ctx;          /* back-pointer, not owned */
+  gint64                   last_tick_us;
+};
+
+static void cmacs_fbo_game_host_iface_init (LrgGameHostInterface *iface);
+
+G_DEFINE_TYPE_WITH_CODE (CmacsFboGameHost, cmacs_fbo_game_host, G_TYPE_OBJECT,
+                         G_IMPLEMENT_INTERFACE (LRG_TYPE_GAME_HOST,
+                                                cmacs_fbo_game_host_iface_init))
+
+static void
+cmacs_fbo_game_host_class_init (CmacsFboGameHostClass *klass)
+{
+  (void) klass;
+}
+
+static void
+cmacs_fbo_game_host_init (CmacsFboGameHost *self)
+{
+  self->ctx = NULL;
+  self->last_tick_us = 0;
+}
+
+static LrgEngine *
+cfgh_get_engine (LrgGameHost *h)
+{
+  (void) h;
+  return shared_engine;
+}
+
+static LrgWindow *
+cfgh_get_window (LrgGameHost *h)
+{
+  (void) h;
+  return NULL;               /* no window: never grab the real cursor */
+}
+
+static gboolean
+cfgh_get_owns_window (LrgGameHost *h)
+{
+  (void) h;
+  return FALSE;
+}
+
+static void
+cfgh_begin_frame (LrgGameHost *h)
+{
+  CmacsFboGameHost *self = CMACS_FBO_GAME_HOST (h);
+  if (self->ctx && self->ctx->fbo_valid)
+    BeginTextureMode (self->ctx->fbo);
+}
+
+static void
+cfgh_end_frame (LrgGameHost *h)
+{
+  (void) h;
+  EndTextureMode ();
+}
+
+static void
+cfgh_get_render_size (LrgGameHost *h, gint *w, gint *height)
+{
+  CmacsFboGameHost *self = CMACS_FBO_GAME_HOST (h);
+  if (w)      *w      = self->ctx ? self->ctx->width  : 0;
+  if (height) *height = self->ctx ? self->ctx->height : 0;
+}
+
+static gdouble
+cfgh_get_frame_delta (LrgGameHost *h)
+{
+  CmacsFboGameHost *self = CMACS_FBO_GAME_HOST (h);
+  gint64  now  = g_get_monotonic_time ();
+  gint64  prev = self->last_tick_us ? self->last_tick_us : now;
+  gdouble dt   = (gdouble) (now - prev) / 1e6;
+
+  self->last_tick_us = now;
+  if (dt < 0.0)  dt = 0.0;
+  if (dt > 0.25) dt = 0.25;   /* clamp like the template's max_frame_time */
+  return dt;
+}
+
+static LrgInputSoftware *
+cfgh_get_input_source (LrgGameHost *h)
+{
+  CmacsFboGameHost *self = CMACS_FBO_GAME_HOST (h);
+  return self->ctx ? self->ctx->game_input : NULL;
+}
+
+static void
+cmacs_fbo_game_host_iface_init (LrgGameHostInterface *iface)
+{
+  iface->get_engine       = cfgh_get_engine;
+  iface->get_window       = cfgh_get_window;
+  iface->get_owns_window  = cfgh_get_owns_window;
+  iface->begin_frame      = cfgh_begin_frame;
+  iface->end_frame        = cfgh_end_frame;
+  iface->get_render_size  = cfgh_get_render_size;
+  iface->get_frame_delta  = cfgh_get_frame_delta;
+  iface->get_input_source = cfgh_get_input_source;
+  /* clear left NULL: render_to_bgra clears the FBO directly. */
+}
+
+static CmacsFboGameHost *
+cmacs_fbo_game_host_new (CmacsLibregnumRenderCtx *ctx)
+{
+  CmacsFboGameHost *h = g_object_new (CMACS_TYPE_FBO_GAME_HOST, NULL);
+  h->ctx = ctx;
+  return h;
+}
+
+/* ── Game lifecycle on the render ctx ─────────────────────────────── */
+
+gboolean
+cmacs_libregnum_render_ctx_load_game (CmacsLibregnumRenderCtx *r,
+                                      const char *so_path, char **error_msg)
+{
+  GError           *error = NULL;
+  LrgLoadedGame    *loaded;
+  LrgGameTemplate  *game;
+  CmacsFboGameHost *host;
+
+  if (!r || !so_path) return FALSE;
+  if (r->game_mode) cmacs_libregnum_render_ctx_unload_game (r);
+
+  loaded = lrg_loaded_game_load (so_path, &error);
+  if (!loaded)
+    {
+      if (error_msg)
+        *error_msg = g_strdup (error ? error->message : "load failed");
+      g_clear_error (&error);
+      return FALSE;
+    }
+
+  game = lrg_loaded_game_get_game (loaded);
+  host = cmacs_fbo_game_host_new (r);
+
+  /* Create the injected input source before startup so the host can expose
+   * it (cfgh_get_input_source reads r->game_input). */
+  r->game_input = lrg_input_software_new ();
+  lrg_input_manager_add_source (lrg_input_manager_get_default (),
+                                LRG_INPUT (r->game_input));
+
+  if (!lrg_game_template_startup (game, LRG_GAME_HOST (host), &error))
+    {
+      if (error_msg)
+        *error_msg = g_strdup (error ? error->message : "startup failed");
+      g_clear_error (&error);
+      lrg_input_manager_remove_source (lrg_input_manager_get_default (),
+                                       LRG_INPUT (r->game_input));
+      g_clear_object (&r->game_input);
+      g_object_unref (host);
+      g_object_unref (loaded);
+      return FALSE;
+    }
+
+  r->loaded_game = loaded;
+  r->game        = game;          /* borrowed from loaded_game */
+  r->game_host   = LRG_GAME_HOST (host);
+  r->game_mode   = TRUE;
+  return TRUE;
+}
+
+void
+cmacs_libregnum_render_ctx_unload_game (CmacsLibregnumRenderCtx *r)
+{
+  if (!r || !r->game_mode) return;
+
+  if (r->game)
+    lrg_game_template_shutdown_game (r->game);
+
+  if (r->game_input)
+    {
+      lrg_input_manager_remove_source (lrg_input_manager_get_default (),
+                                       LRG_INPUT (r->game_input));
+      g_clear_object (&r->game_input);
+    }
+
+  r->game = NULL;                 /* owned by loaded_game */
+  g_clear_object (&r->game_host);
+
+  if (r->loaded_game)
+    {
+      lrg_loaded_game_unload (r->loaded_game);
+      g_clear_object (&r->loaded_game);
+    }
+
+  r->game_mode = FALSE;
+}
+
+gboolean
+cmacs_libregnum_render_ctx_is_game (CmacsLibregnumRenderCtx *r)
+{
+  return r && r->game_mode;
+}
+
+void
+cmacs_libregnum_render_ctx_game_key (CmacsLibregnumRenderCtx *r,
+                                     int grl_key, int press)
+{
+  if (!r || !r->game_input) return;
+  if (press)
+    lrg_input_software_press_key (r->game_input, (GrlKey) grl_key);
+  else
+    lrg_input_software_release_key (r->game_input, (GrlKey) grl_key);
+}
+
+void
+cmacs_libregnum_render_ctx_game_mouse_move (CmacsLibregnumRenderCtx *r,
+                                            double x, double y)
+{
+  if (!r || !r->game_input) return;
+  lrg_input_software_move_mouse_to (r->game_input, (gfloat) x, (gfloat) y);
+}
+
+void
+cmacs_libregnum_render_ctx_game_mouse_button (CmacsLibregnumRenderCtx *r,
+                                              int button, int press)
+{
+  if (!r || !r->game_input) return;
+  if (press)
+    lrg_input_software_press_mouse_button (r->game_input,
+                                           (GrlMouseButton) button);
+  else
+    lrg_input_software_release_mouse_button (r->game_input,
+                                             (GrlMouseButton) button);
+}
+
 /* Render one frame into the FBO and copy the result into DST.
  * DST is BGRA (cairo ARGB32 in memory) pre-allocated to w*h*4.
  *
@@ -455,6 +706,26 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
 {
   if (!r || !r->fbo_valid || !dst) return FALSE;
   if (dst_w != r->width || dst_h != r->height) return FALSE;
+
+  /* Game-module mode: drive the loaded game's update + render into the FBO,
+   * sourcing the frame delta and the render-target bracket from the
+   * LrgGameHost. The readback stays inside BeginTextureMode/EndTextureMode. */
+  if (r->game_mode && r->game && r->game_host)
+    {
+      gdouble dt = lrg_game_host_get_frame_delta (r->game_host);
+
+      if (r->game_input)
+        lrg_input_software_update (r->game_input);
+      lrg_game_template_update (r->game, dt);
+
+      lrg_game_host_begin_frame (r->game_host);   /* BeginTextureMode(fbo) */
+      ClearBackground ((Color){ 0, 0, 0, 255 });
+      lrg_game_template_render (r->game);
+      glReadPixels (0, 0, r->width, r->height,
+                    GL_BGRA, GL_UNSIGNED_BYTE, dst);
+      lrg_game_host_end_frame (r->game_host);     /* EndTextureMode */
+      return TRUE;
+    }
 
   /* Advance the camera focus tween (if any) before drawing this
    * frame; the view re-requests a redraw while focus_active is true. */

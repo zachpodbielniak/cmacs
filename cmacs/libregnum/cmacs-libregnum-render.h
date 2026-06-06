@@ -99,6 +99,31 @@ extern gboolean cmacs_libregnum_render_ctx_render_to_bgra
                               (CmacsLibregnumRenderCtx *r,
                                unsigned char *dst, int w, int h);
 
+/* ── Game-module hosting ─────────────────────────────────────────
+ * Load a libregnum game packaged as a shared module (.so) into this
+ * view and drive it each frame (instead of a static scene). The game
+ * renders into the view's FBO via an LrgGameHost backed by this ctx;
+ * it has no window of its own and never grabs the real cursor. */
+extern gboolean cmacs_libregnum_render_ctx_load_game
+                              (CmacsLibregnumRenderCtx *r,
+                               const char *so_path, char **error_msg);
+extern void cmacs_libregnum_render_ctx_unload_game
+                              (CmacsLibregnumRenderCtx *r);
+extern gboolean cmacs_libregnum_render_ctx_is_game
+                              (CmacsLibregnumRenderCtx *r);
+
+/* Input forwarding into the hosted game (GRL_KEY / mouse-button codes are
+ * the graylib enum values; PRESS is non-zero for press, 0 for release). */
+extern void cmacs_libregnum_render_ctx_game_key
+                              (CmacsLibregnumRenderCtx *r,
+                               int grl_key, int press);
+extern void cmacs_libregnum_render_ctx_game_mouse_move
+                              (CmacsLibregnumRenderCtx *r,
+                               double x, double y);
+extern void cmacs_libregnum_render_ctx_game_mouse_button
+                              (CmacsLibregnumRenderCtx *r,
+                               int button, int press);
+
 /* Camera orbit/zoom helpers exposed to input.c so it doesn't have
  * to touch libregnum types directly. */
 extern void cmacs_libregnum_render_ctx_orbit_camera
