@@ -5965,6 +5965,10 @@ Letters, digits, space, the arrows, common editing/function keys and
 @kbd{C-c C-q} (@code{cmacs-libregnum-game-quit}), which releases held
 keys, unloads the game, and kills the buffer.
 
+Under Doom/Evil the buffer stays in Evil emacs state so these keys reach
+the game; the @kbd{C-w} window-command prefix is preserved, so window
+management (@kbd{C-w v}, @kbd{C-w s}, @dots{}) still works while playing.
+
 @subsection Host-agnostic modules
 
 A game module links @emph{no} libregnum of its own: its libregnum

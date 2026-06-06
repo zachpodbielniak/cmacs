@@ -244,6 +244,10 @@ Letters, digits, space, the arrows, common editing/function keys and
 with =C-c C-q= (=cmacs-libregnum-game-quit=), which releases held keys,
 unloads the game, and kills the buffer.
 
+Under Doom/Evil the buffer stays in Evil emacs state so these keys reach
+the game; the =C-w= window-command prefix is preserved, so window
+management (=C-w v=, =C-w s=, =C-w h/j/k/l=, …) still works while playing.
+
 ** Host-agnostic modules
 
 A game module links *no* libregnum of its own: its libregnum symbols

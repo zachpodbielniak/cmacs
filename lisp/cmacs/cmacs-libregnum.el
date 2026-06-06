@@ -397,7 +397,11 @@ state (camera, layout options, selection).
 ;; without Evil.
 (with-eval-after-load 'evil
   (when (fboundp 'evil-set-initial-state)
-    (evil-set-initial-state 'cmacs-libregnum-mode 'emacs)))
+    (evil-set-initial-state 'cmacs-libregnum-mode 'emacs))
+  ;; Keep Evil window management (C-w ...) usable even though scene buffers
+  ;; sit in emacs state for their single-key navigation.
+  (when (and (boundp 'evil-window-map) (keymapp evil-window-map))
+    (define-key cmacs-libregnum-mode-map (kbd "C-w") evil-window-map)))
 
 ;;;; Entry points ----------------------------------------------------
 
@@ -650,6 +654,15 @@ Bound to the game keys in `cmacs-libregnum-game-mode-map'."
     m)
   "Keymap for `cmacs-libregnum-game-mode'.")
 
+;; Doom/Evil: a game buffer sits in Evil emacs state so WASD and friends
+;; reach the game instead of being read as Evil motions.  In emacs state
+;; C-w is not the window prefix, so rebind it to the Evil window map here --
+;; otherwise window management (C-w v / s / h j k l / c / o ...) would be
+;; unavailable while a game is focused.  No effect without Evil.
+(with-eval-after-load 'evil
+  (when (and (boundp 'evil-window-map) (keymapp evil-window-map))
+    (define-key cmacs-libregnum-game-mode-map (kbd "C-w") evil-window-map)))
+
 ;;;###autoload
 (define-minor-mode cmacs-libregnum-game-mode
   "Forward keyboard input from this buffer to a hosted libregnum game.
@@ -661,6 +674,10 @@ input is routed by the C layer.  Quit with \\[cmacs-libregnum-game-quit].
 
 Because Emacs has no key-release events, a held key is emulated from
 keyboard auto-repeat -- see `cmacs-libregnum-game-key-release-delay'.
+
+Under Doom/Evil the buffer stays in Evil emacs state so these keys reach
+the game; the C-w window-command prefix is preserved, so window
+management (C-w v, C-w s, C-w h/j/k/l, ...) still works while playing.
 
 \\{cmacs-libregnum-game-mode-map}"
   :lighter " LRG-Game"
