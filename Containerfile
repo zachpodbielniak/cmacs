@@ -32,6 +32,7 @@ RUN if [ "${FEDORA_VERSION}" -ge 44 ] 2>/dev/null; then \
     fi \
     && dnf install -y \
         autoconf automake gcc gcc-c++ make pkgconf-pkg-config texinfo \
+        which \
         gnutls-devel ncurses-devel zlib-devel \
         gtk3-devel \
         webkit2gtk4.1-devel \
