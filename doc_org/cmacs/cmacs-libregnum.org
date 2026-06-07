@@ -713,11 +713,17 @@ rotate/scale gizmo handles and play-in-editor remain planned (see below).
   =cmacs-libregnum-editor-save-prefab= / =-instantiate-prefab=.
 - *Scene import* — =C-c i= imports a Blender-exported =.yaml= scene as the
   current level (=LrgSceneSerializerBlender= → =lrg_level_from_scene=).
-- *Multi-language scripts* — the =L= script picker now lists only the backends
-  libregnum was actually built with, queried at runtime via
+- *Multi-language scripts (Lua / Python / Gjs / crispy)* — the =L= script picker
+  lists the backends libregnum was actually built with, queried at runtime via
   =lrg_scripting_manager_get_available= (=cmacs-libregnum-scripting-languages=).
-  Crispy is built in here; Lua/Python/Gjs light up automatically once their
-  =-devel= packages are present at libregnum build time.
+  With the scripting =-devel= packages installed (=luajit-devel=,
+  =python3-devel=, =gjs-devel= --- see =install-deps=) all four are available:
+  =(("Lua" . 1) ("Python" . 2) ("JavaScript (Gjs)" . 3) ("Crispy" . 4))=.  cmacs
+  links the system =libluajit-5.1= / =libpython3.x= / =libgjs= + =libmozjs= (the
+  scripting libs are appended to =CMACS_LIBREGNUM_LIBS=, and the build passes
+  =HAS_GI=1= + =GI_RUNTIME_*= so the Gjs backend's introspection base compiles
+  under =BUILD_GIR=0=).  Each backend degrades out cleanly if its =-devel= is
+  absent (crispy, from the bundled submodule, is always present).
 - *Script hot-reload* — attaching a script through =L= opens its file with an
   =after-save-hook= that, while the level is playing, restarts play so the
   edited script recompiles + reloads.
@@ -729,21 +735,77 @@ rotate/scale gizmo handles and play-in-editor remain planned (see below).
   tileset/scene).  DEFUNs =cmacs-libregnum-project-create= /
   =cmacs-libregnum-editor-open-project= / =cmacs-libregnum-assetdb-scan=.
 
+*** Also implemented (drag-source + standalone editor)
+
+- *GTK GDK drag-source* — palette/asset rows can be dragged with a real GDK
+  drag (cross-process, and onto the viewport) via =cmacs-libregnum-dnd.c= + a
+  small guarded hook in =src/pgtkterm.c= (arm on =[down-mouse-1]= → motion
+  threshold → =gtk_drag_begin=; receiver decodes =application/x-libregnum=).
+  Complements the Emacs =drag-mouse-1= path.  See the Upstream Changes manual.
+- *Standalone engine-drawn editor* — =deps/libregnum/src/editor/ui/lrg-editor-app=
+  is now a real app (3-pane outliner | 3-D viewport | properties, orbit camera,
+  add/select/delete/undo/save) with an =examples/editor-standalone= launcher,
+  built with =make BUILD_EDITOR_UI=1=.  A second, non-cmacs frontend on the same
+  =LrgEditor= core.
+- *Lights / cameras / audio — data-accurate viz + audio playback* — the viewport
+  now renders each light's range as a wireframe sphere in its authored colour,
+  each camera as a frustum at its field of view, and each audio emitter as a
+  range sphere (read live from the node's visual params).  Author them with
+  =cmacs-libregnum-editor-set-light= (range + r/g/b),
+  =-set-camera-fov=, =-set-audio-range= (over the
+  =cmacs-libregnum-editor-set-visual-param= primitive), and *play* an emitter's
+  sound with =C-c a= (=cmacs-libregnum-editor-play-audio=, via Emacs'
+  =play-sound-file=).
+
+*** GObject Introspection (gjs + Python-GI bindings)
+
+The whole editor/authoring surface is exposed over GObject Introspection, and
+cmacs *auto-builds* the typelib so scripts can drive it:
+
+- *Auto-built typelib* — the cmacs build runs libregnum with =BUILD_GIR=1=
+  whenever =g-ir-scanner= is available, producing =Libregnum-1.typelib=
+  (=LrgLevel=, =LrgNode=, =LrgNodeVisual=, =LrgEditor=, =LrgProject=,
+  =LrgAssetDatabase=, =LrgScriptingManager=, =LrgScriptComponent=, the
+  =LrgNodeVisualKind= / =LrgScriptLanguage= / =LrgEditorTool= enums, …).  Cross/
+  sandboxed builds without the scanner fall back to =BUILD_GIR=0= and just skip
+  the typelib.
+- *gjs + Python (standalone / in-game)* — with =GI_TYPELIB_PATH= set, both fully
+  import and drive the editor types:
+  =imports.gi.versions.Libregnum='1'; const L = imports.gi.Libregnum= in gjs, and
+  =gi.require_version('Libregnum','1'); from gi.repository import Libregnum= in
+  Python (needs =python3-gobject=).  Verified end-to-end: create =Level= /
+  =Node=, =add_child=, read the enums.  This is what gives a libregnum *game's*
+  =gjs= / =python= scripting backends typed access to the engine + editor types.
+- *cmacs's own =gi= subsystem* sees it too: =(cmacs-gi-require "Libregnum")= then
+  e.g. =(cmacs-gi-enum-value "Libregnum" "NodeVisualKind" "light")= → 5.
+- *Caveat — scripts running embedded inside cmacs*: a =gjs=/=python= script
+  executed by the libregnum backends *while inside the cmacs process* currently
+  conflicts with cmacs's own =libgirepository= (=cannot register existing type
+  'GIRepository'=) because two GObject-Introspection consumers share one process.
+  The bindings + typelib are correct (proven standalone); making an embedded
+  second GI runtime coexist with cmacs's =gi= subsystem is separate, deferred
+  work (see [[file:cmacs-libregnum-design-notes.org]]).
+- *How it builds cleanly* — the graylib gir include path was corrected, and the
+  internal GI scripting *bridges* (=lrg-scripting-@{gi,pygobject,gjs@}=, which
+  pull in =girepository.h=) are excluded from the scan so the typelib does not
+  depend on a =GIRepository-2.0= namespace that gjs/PyGObject cannot resolve.
+  The bridge classes are engine-internal; script authors use the editor types +
+  the =LrgScripting= base/manager/component + the =LrgScriptLanguage= enum.
+
 *** Planned
 
-The remaining items are larger or environment-gated:
+One item remains:
 
-- *Lua / Python / Gjs availability* — wired + auto-detected + the picker filters
-  to built backends, but the interpreters are blocked until =luajit-devel= /
-  =python3-devel= / =gjs-devel= are installed at libregnum build time (this host
-  is read-only =bootc=, so only crispy is available here).
-- *Lights / cameras / audio* — store + gizmo only; no real lighting, camera
-  preview, or audio playback in the viewport (a dedicated renderer pass).
-- *Standalone engine-drawn editor* — =src/editor/ui/lrg-editor-app= (a second,
-  non-cmacs frontend behind =BUILD_EDITOR_UI=).
+- *Full scene shading* — lights/cameras/audio are visualised accurately (above)
+  but do not yet *illuminate* meshes / drive a camera-preview render / spatialise
+  audio; real-time 3-D lighting is a dedicated shader pass on the engine
+  renderer (the largest remaining item).
 
 * See also
 
+- =doc_org/cmacs/cmacs-libregnum-design-notes.org= — deliberate scope
+  boundaries + potential improvements (the "Planned" items above, with
+  rationale: scene shading, component authoring, project build/play, etc.).
 - =doc_org/cmacs/cmacs-video.org= — the BGRA-blit pattern used by
   this subsystem mirrors cmacs-video's GStreamer overlay pass.
 - =deps/libregnum/README.md= — upstream libregnum docs.

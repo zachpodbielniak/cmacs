@@ -6363,7 +6363,9 @@ round-trip to @file{.rlevel}.
 
 @itemize
 @item @strong{Real mesh + sprite rendering} --- MESH_ASSET loads + draws a
-glTF/OBJ model; SPRITE loads a texture and draws a camera-facing billboard.
+glTF/OBJ model; SPRITE draws its texture as a flat textured quad via a unit-plane
+@code{GrlModel} (the mesh/VAO path composites in the editor FBO batch, unlike
+raylib's @code{rlgl} textured immediate mode / @code{DrawBillboard}).
 @item @strong{On-screen gizmo handles} (@kbd{w}/@kbd{e}/@kbd{r}) ---
 axis-constrained translate/rotate/scale, one coalesced undo per drag.
 @item @strong{2D camera mode} (@kbd{v}) --- top-down orthographic view;
@@ -6380,7 +6382,7 @@ viewport point; the input layer ray-casts to the ground plane and drops it.
 @item @strong{Mouse drag-and-drop} --- two paths: (a) Emacs's own
 @code{drag-mouse-1} event for intra-frame drops from palette/asset rows to the
 viewport (no upstream edit); (b) a GTK-native GDK drag-source
-(@code{[down-mouse-1]} @rarr{} @code{cmacs-libregnum-dnd-arm} @rarr{}
+(@code{[down-mouse-1]} → @code{cmacs-libregnum-dnd-arm} →
 @code{gtk_drag_begin_with_coordinates}) for cross-process DnD to external GTK
 apps.  The latter requires two thin @code{pgtkterm.c} hunks described in the
 Upstream Changes chapter.
@@ -6390,23 +6392,97 @@ tileset image + tile/map dimensions; @code{cmacs-libregnum-editor-tilemap-paint}
 arms a sticky brush so each viewport click paints the cell under the cursor
 (@code{...-tilemap-set-brush}, finish with @code{...-stop-paint}).  The tile grid
 lives in the node's visual params (@code{tw}/@code{th}/@code{cols}/@code{mw}/@code{mh}/@code{tiles}
-CSV) so it round-trips in the @file{.rlevel}.  Each cell renders as a ground tile
-coloured by sampling its tile's sub-rect from the tileset (raylib's @code{rlgl}
-textured immediate mode does not composite inside the graylib FBO batch, so cells
-are colour-sampled quads, not per-texel blits --- layout, identity and
-persistence are exact).  DEFUNs: @code{...-tilemap-config}/@code{-set-tile}/@code{-info}.
+CSV) so it round-trips in the @file{.rlevel}.  Each non-empty cell renders the
+actual tileset art: the tile sub-rect is sliced
+(@code{grl_image_from_region}@tie{}+@tie{}@code{grl_texture_new_from_image}) into
+a textured unit-plane @code{GrlModel} drawn on the ground (the mesh path that
+composites in the FBO batch), cached per tile index, with a colour-sampled cell
+fallback.  DEFUNs: @code{...-tilemap-config}/@code{-set-tile}/@code{-info}.
 @item @strong{Dedicated MCP tools} --- @file{cmacs/mcp/cmacs-mcp-tools-libregnum.c}
 registers @code{lrg_editor_object_tree}/@code{_add_primitive}/@code{_add_visual}/
 @code{_move}/@code{_select}/@code{_delete}/@code{_open}/@code{_save}/@code{_play}/
 @code{_stop}.
+@item @strong{Introspection-driven inspector} --- alongside the undoable
+transform fields, the inspector enumerates the selected node's GObject
+properties (name/visible/locked/is-2d/@dots{}) through a node@tie{}GObject bridge
+(@code{cmacs-libregnum-editor-node-object}) +
+@code{gobject-list-properties}/@code{-property-info}/@code{-get}/@code{-set};
+widgets are chosen per @code{GParamSpec} type.
+@item @strong{Prefabs} --- @kbd{C-c p} saves the selected subtree to a
+@file{.rprefab}; @kbd{C-c P} instantiates one under the selection/root.
+@item @strong{Scene import} --- @kbd{C-c i} imports a Blender-exported
+@file{.yaml} scene as the current level.
+@item @strong{Multi-language scripts (Lua / Python / Gjs / crispy)} --- the
+@kbd{L} picker lists the backends libregnum was built with (runtime
+@code{lrg_scripting_manager_get_available}).  With the scripting @code{-devel}
+packages installed (@code{luajit-devel}, @code{python3-devel}, @code{gjs-devel};
+see @file{install-deps}) all four are available; cmacs links the system
+@code{libluajit}/@code{libpython}/@code{libgjs}+@code{libmozjs}.  Each degrades
+out cleanly when its @code{-devel} is absent (crispy is always present).
+@item @strong{Script hot-reload} --- attaching via @kbd{L} watches the script
+file; saving it restarts play so the script recompiles.
+@item @strong{Projects + asset database} --- @code{cmacs-libregnum-project-new}
+scaffolds a project (levels/assets/scripts + @file{project.ryaml} + a starter
+level); @code{-project-open} loads a project's default level
+(@code{LrgProject}); @code{cmacs-libregnum-assetdb-scan} classifies a directory
+via @code{LrgAssetDatabase}.
+@item @strong{Lights / cameras / audio --- viz + playback} --- the viewport
+draws each light's range as a wireframe sphere in its authored colour, each
+camera as a frustum at its FOV, and each audio emitter as a range sphere (live
+from the node's visual params).  Author with @code{cmacs-libregnum-editor-set-light}
+/ @code{-set-camera-fov} / @code{-set-audio-range}, and play an emitter's sound
+with @kbd{C-c a} (@code{play-sound-file}).
+@item @strong{GObject Introspection (gjs + Python-GI)} --- the cmacs build
+auto-builds @code{Libregnum-1.typelib} (when @code{g-ir-scanner} is present) so
+the editor/authoring types (@code{LrgLevel}, @code{LrgNode}, @code{LrgEditor},
+@code{LrgProject}, @code{LrgScriptingManager}, the enums, …) are usable over GI.
+With @code{GI_TYPELIB_PATH} set (the Justfile @code{run} recipe does so), gjs
+(@code{imports.gi.Libregnum}) and Python (@code{from gi.repository import
+Libregnum}, needs @code{python3-gobject}) fully import and drive them --- this is
+what gives a libregnum game's gjs/Python scripting backends typed engine access.
+cmacs's own @code{gi} subsystem loads it via @code{(cmacs-gi-require
+"Libregnum")}.  The internal GI scripting bridges are excluded from the scan so
+the typelib has no unresolvable @code{GIRepository-2.0} dependency.  (Caveat: a
+gjs/python script run @emph{embedded inside} cmacs still conflicts with cmacs's
+own @code{libgirepository} --- two GI runtimes in one process --- which is
+deferred; see the Design notes.)
 @end itemize
 
 @subsubsection Planned
 
-One deep extension remains: per-texel tileset blitting in the viewport
-(blocked by the @code{rlgl}/FBO-batch limitation above --- tiles render as
-colour-sampled cells today).  The GTK-native GDK drag-source is now
-implemented (see above and the Upstream Changes chapter).
+One item remains: @strong{full scene shading} --- lights/cameras/audio are
+visualised accurately but do not yet illuminate meshes, drive a camera-preview
+render, or spatialise audio; real-time 3-D lighting is a dedicated shader pass on
+the engine renderer (the largest remaining item).  (Lua/Python/Gjs scripting,
+per-texel tilemap art, the GTK GDK drag-source, and the standalone engine-drawn
+editor are all implemented --- see above and the Upstream Changes chapter.)
+
+@subsubsection Design notes & potential improvements
+
+@file{doc_org/cmacs/cmacs-libregnum-design-notes.org} catalogues the deliberate
+scope boundaries (with rationale + an improvement path each).  In brief:
+
+@itemize @bullet
+@item @strong{Full scene shading} --- the large remaining feature (above): real
+3-D lighting / camera preview / spatial audio is a renderer shader pass;
+lights/cameras/audio are accurately @emph{visualised} today.
+@item @strong{Component authoring} --- the inspector edits node GObject props +
+attaches scripts, but there is no in-editor "Add Component" + property grid for
+@code{LrgComponentDesc} (components still instantiate at play + persist).
+@item @strong{Project build-and-play} --- @code{project-new}/@code{-open} + load
+work; compiling the project's game @code{.so} from the editor (build-then-play)
+is not wired.
+@item @strong{Python / Gjs runtime} --- enabled, linked, listed; Lua is
+smoke-tested running, Python/Gjs use the same path but aren't yet run-verified.
+@item @strong{Minor / by design} --- asset browser uses a directory scan (not
+@code{LrgAssetDatabase}); the standalone editor app cycles selection + omits
+viewport rotation; prefabs are fresh copies (no override link); tilemaps persist
+inline (no standalone @code{.rtilemap}); GIR generation stays off; some new
+features lack dedicated ERT tests.
+@item @strong{Renderer constraint} --- raylib @code{rlgl} textured immediate
+mode does not composite in the editor FBO batch, so sprites/tiles use textured
+@code{GrlModel} planes (mesh/VAO path) and ranges/frustums use untextured lines.
+@end itemize
 
 @c ===================================================================
 @node CMacs Gsurf
@@ -7320,9 +7396,9 @@ Two drag paths complement each other:
 edit beyond the input-routing hook): Emacs delivers the drag to the start
 buffer's keymap with the release position; the palette/asset handler
 ray-casts the viewport drop point to the ground plane.
-@item @strong{GTK-native GDK drag-source} (@code{[down-mouse-1]} @rarr{}
-@code{cmacs-libregnum-dnd-arm} @rarr{} @code{cmacs_libregnum_dnd_check_motion}
-@rarr{} @code{gtk_drag_begin_with_coordinates}): allows dragging palette/asset
+@item @strong{GTK-native GDK drag-source} (@code{[down-mouse-1]} →
+@code{cmacs-libregnum-dnd-arm} → @code{cmacs_libregnum_dnd_check_motion}
+→ @code{gtk_drag_begin_with_coordinates}): allows dragging palette/asset
 items to external GTK apps.  The one upstream hunk is the pair in
 @code{pgtkterm.c} described above.
 @item @strong{External file drag} (e.g. a @file{.glb} from a file manager) is
@@ -7361,7 +7437,12 @@ shares libreclaw's @code{ai-glib} archive), the
 @code{AC_DEFINE([HAVE_CMACS_*])} and @code{AC_SUBST} of each subsystem's
 @code{OBJ}/@code{CFLAGS}/@code{LIBS}/@code{BUNDLED} variables.
 @file{src/config.in} carries the matching @code{#undef HAVE_CMACS_*} lines
-(autoheader-maintained) plus @code{#undef CMACS_PIPER_DEFAULT_BINARY}.
+(autoheader-maintained) plus @code{#undef CMACS_PIPER_DEFAULT_BINARY}.  Each
+@code{CMACS_*_OBJ} list grows with its subsystem --- e.g. @code{CMACS_LIBREGNUM_OBJ}
+gained @code{cmacs-libregnum-dnd.o} (editor GDK drag-source) and
+@code{CMACS_MCP_OBJ} gained @code{cmacs-mcp-tools-libregnum.o} (editor MCP tools),
+each under its existing guard.  Re-run @code{autoconf} + @code{./config.status
+--recheck} after editing (not bare @code{./configure}).
 
 @subsection src/epaths.in
 
@@ -7412,7 +7493,23 @@ ABI mismatch and non-deterministic crashes.
 @code{make-docfile} / @code{gl-stamp} need the cmacs @file{.c} files
 visible from @code{srcdir}; a @code{cmacs-symlinks} prerequisite plus the
 @code{/* CMACS: make-docfile needs .c files visible from srcdir. */} hunk
-arrange that.
+arrange that.  The @code{cmacs-symlinks} recipe walks @code{CMACS_ALL_OBJ}, so
+new subsystem objects (e.g.@: @code{cmacs-libregnum-dnd.o}) are symlinked
+automatically once added to a @code{CMACS_*_OBJ} var.
+@item
+@strong{Submodule build rules}: the @code{deps/libregnum} rule passes
+@code{CRISPY=1 HAS_GI=1} + @code{GI_RUNTIME_@{CFLAGS,LIBS@}} (crispy + the
+gjs/PyGObject scripting backends compile) and @code{BUILD_GIR=1} @emph{when
+@code{g-ir-scanner} is present} (else @code{BUILD_GIR=0}, for cross/sandboxed
+builds where the scanner's @code{dlopen} of @code{liblibregnum.so} is
+unreliable).  @code{BUILD_GIR=1} produces @code{Libregnum-1.typelib} so cmacs's
+@code{gi} subsystem and the libregnum gjs/PyGObject backends can introspect the
+editor types; the Justfile @code{run} recipe exports @code{GI_TYPELIB_PATH} to
+the libregnum + graylib gir dirs (symbols resolve from temacs's @code{-rdynamic}
+statics, so no @code{LD_LIBRARY_PATH} is added).  It deliberately does @emph{not}
+pass @code{BUILD_EDITOR_UI=1}, so the engine's standalone editor app stays out of
+temacs (a separate optional frontend).  @code{deps/gsurf} pins
+@code{STATIC=1 BUILD_GIR=1 GTK_BACKEND=gtk3}.
 @end itemize
 
 @node Upstream Lisp

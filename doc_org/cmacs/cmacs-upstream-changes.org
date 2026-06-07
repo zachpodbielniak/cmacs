@@ -187,7 +187,12 @@ shares libreclaw's =ai-glib= archive), the =AC_DEFINE([HAVE_CMACS_*])= and
 =AC_SUBST= of each subsystem's =OBJ= / =CFLAGS= / =LIBS= / =BUNDLED= vars.
 =src/config.in= carries the matching =#undef HAVE_CMACS_*= lines
 (autoheader-maintained from =configure.ac=) plus
-=#undef CMACS_PIPER_DEFAULT_BINARY=.
+=#undef CMACS_PIPER_DEFAULT_BINARY=.  Each subsystem's =CMACS_*_OBJ= list is
+appended to here as the subsystem grows --- e.g. =CMACS_LIBREGNUM_OBJ= gained
+=cmacs-libregnum-dnd.o= (editor GDK drag-source) and =CMACS_MCP_OBJ= gained
+=cmacs-mcp-tools-libregnum.o= (editor MCP tools), each under its existing
+=--with-cmacs-libregnum= / MCP guard.  (Re-run =autoconf= + =./config.status
+--recheck= after editing, not bare =./configure=.)
 
 ** src/epaths.in
 
@@ -229,7 +234,24 @@ embedded Doom config.
 - =make-docfile= / =gl-stamp= need the cmacs =.c= files visible from
   =srcdir=; a =cmacs-symlinks= prerequisite + the
   =/* CMACS: make-docfile needs .c files visible from srcdir. */= hunk
-  arrange that.
+  arrange that.  The =cmacs-symlinks= recipe walks =CMACS_ALL_OBJ= and
+  symlinks each =cmacs/<subsystem>/NAME.c= into =srcdir=; new subsystem
+  objects (e.g. the libregnum editor's =cmacs-libregnum-dnd.o=) are picked
+  up automatically once added to a =CMACS_*_OBJ= var.
+- *Submodule build rules*: recipes build the vendored deps before linking.
+  The =deps/libregnum= rule passes =CRISPY=1 HAS_GI=1= +
+  =GI_RUNTIME_{CFLAGS,LIBS}= (so crispy + the gjs/PyGObject scripting backends
+  compile), and =BUILD_GIR=1= *when =g-ir-scanner= is present* (else
+  =BUILD_GIR=0= as a fallback for cross/sandboxed builds where the scanner's
+  =dlopen= of =liblibregnum.so= is unreliable).  =BUILD_GIR=1= produces
+  =Libregnum-1.typelib= so cmacs's =gi= subsystem and the libregnum
+  gjs/PyGObject scripting backends can introspect the editor types; the
+  Justfile =run= recipe exports =GI_TYPELIB_PATH= to the libregnum + graylib
+  gir dirs (symbols resolve from temacs's own =-rdynamic= statics, so no
+  matching =LD_LIBRARY_PATH= is added).  It deliberately does *not* pass
+  =BUILD_EDITOR_UI=1=, so the engine's standalone editor app is not compiled
+  into temacs (a separate, optional frontend).  The =deps/gsurf= rule
+  similarly pins =STATIC=1 BUILD_GIR=1 GTK_BACKEND=gtk3=.
 
 * Lisp
 

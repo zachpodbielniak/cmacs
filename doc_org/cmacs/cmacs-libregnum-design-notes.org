@@ -1,0 +1,171 @@
+#+TITLE: CMacs Libregnum Editor — Design Notes & Potential Improvements
+#+STARTUP: showall
+#+OPTIONS: toc:2 num:t
+
+* Why this file exists
+
+The in-Emacs libregnum level editor (see =cmacs-libregnum.org=) is
+feature-complete for authoring.  This file catalogues the places where the
+current behaviour is a *deliberate scope boundary* rather than an oversight:
+what it does today, *why* it stops there, and the *improvement* path if it is
+ever worth pursuing.  None of these block normal use; they are the honest edges
+of the implementation.
+
+Treat each as "by design, but a candidate for a future pass."
+
+* Large feature
+
+** Full scene shading (lights / cameras / audio rendering)
+
+- *Today*: lights, cameras, and audio emitters are *visualised* accurately in
+  the viewport — a wireframe range sphere in the light's authored colour, a
+  camera frustum at its field of view, an audio range sphere — and audio
+  emitters *play* their sound (=C-c a=, via =play-sound-file=).  Authoring is
+  via =cmacs-libregnum-editor-set-light= / =-set-camera-fov= /
+  =-set-audio-range= over the =cmacs-libregnum-editor-set-visual-param=
+  primitive.
+- *Why it stops here*: actually *shading* a 3-D scene (lights illuminating
+  meshes, a picture-in-picture render from a camera's POV, spatialised audio)
+  is a dedicated renderer feature, not a wiring task.  libregnum's lighting
+  module is 2-D (=LrgLight2D=); there is no 3-D forward/deferred lighting path,
+  so it would mean authoring a GLSL lighting shader, managing per-light
+  uniforms, and applying it to every scene material through graylib's renderer
+  (which owns its own shader/batch state).  That is the single largest piece of
+  remaining work and was scoped out in favour of accurate visualisation.
+- *Improvement*: add a 3-D lighting shader pass on the engine renderer
+  (=LrgRenderer=), feed it the =LIGHT= nodes' colour/range/type, and assign it
+  to model materials in =cmacs-libregnum-render.c='s WORLD layer; a
+  camera-preview FBO blitted as an inset; route =AUDIO_EMITTER= through the
+  =cmacs/audio/= GStreamer subsystem for distance attenuation.
+
+* Partial — works, but not the full original plan
+
+** Component authoring in the inspector
+
+- *Today*: the inspector is introspection-driven over the selected node's
+  GObject properties (name / visible / locked / is-2d).  Scripts attach via
+  =L= (Lua / Python / Gjs / crispy).  Data components (=LrgComponentDesc=)
+  *instantiate* at play time and round-trip in the =.rlevel=.
+- *Why*: there is no in-editor UI to *add* a component or edit its props (the
+  plan's "Add Component" + property grid).  The introspection plumbing exists
+  for node GObjects; components are a separate descriptor type.
+- *Improvement*: an "Add Component" affordance (=completing-read= over the
+  =LrgRegistry= type names) plus a property grid driven by =LrgComponentDesc=
+  keys, writing through an undoable editor command.
+
+** Project build-and-play (game .so)
+
+- *Today*: =cmacs-libregnum-project-new= scaffolds a project + manifest +
+  starter level; =-project-open= loads the default level; the asset database
+  classifies a directory.
+- *Why*: the manifest records a =game_output= (.so) path, but the editor does
+  not yet *compile* the project's game module or do build-then-play; you build
+  the game =.so= separately and load it with the existing game-host path.
+- *Improvement*: a =-project-build= command running the project's Makefile via
+  =compile= (errors to a console panel) and a =-project-play= that builds-if-
+  stale then plays the instantiated world against the fresh =.so=.
+
+** Python / Gjs scripting — runtime not end-to-end verified
+
+- *Today*: all four backends (Lua, Python, Gjs, crispy) are compiled in,
+  linked (system =libluajit-5.1= / =libpython3.x= / =libgjs= + =libmozjs=),
+  and listed by the picker.  *Lua* is smoke-tested running (attach + play, no
+  crash).
+- *Why*: Python and Gjs are reached through the same instantiate/play path as
+  Lua, so they are expected to work, but a Python/Gjs script has not actually
+  been *executed during play* to confirm each language's hook contract.
+- *Improvement*: a small attach-+-play smoke per language (a script that writes
+  a marker from its =start=/=update= hook), as already done for crispy and Lua,
+  promoted into the ERT suite (display-guarded).
+
+* Minor / by design
+
+** Asset browser uses a directory scan, not LrgAssetDatabase
+
+The asset-browser panel lists files via an Elisp directory scan.  The engine's
+=LrgAssetDatabase= (stable guids, extension classification) is exposed as
+=cmacs-libregnum-assetdb-scan= but the browser UI does not yet consume it.
+*Improvement*: back the browser with =assetdb-scan= for typed, guid-stable
+listings.
+
+** Standalone engine-drawn editor — basic
+
+=deps/libregnum/src/editor/ui/lrg-editor-app= (built with =BUILD_EDITOR_UI=1=)
+is a real app — outliner | 3-D viewport | properties, orbit camera,
+add/select/delete/undo/save — but: selection *cycles* through nodes rather than
+ray-picking the one under the cursor, node rotation is not applied to the
+viewport cubes, and =lrg_editor_app_new= is not headless-safe (the launcher
+guards the display in =main=).  *Improvement*: ray-cast picking
+(=grl_collision_*=), =DrawModelEx= with a full transform, a guarded
+constructor.
+
+** Prefabs have no instance→source link / overrides
+
+=lrg_prefab_save= / =-instantiate= produce fresh-guid deep copies; a
+=PREFAB_INSTANCE= node does not retain a link to its source prefab or carry an
+override set (the plan's ={prefab_guid, overrides}=).  Editing a placed prefab
+edits a plain subtree.  *Improvement*: store the prefab ref on the visual asset
++ an override record, and re-sync on prefab change.
+
+** Tilemaps persist inline, not as a standalone file format
+
+Tilemap data (tileset, tile size, columns, map dims, tile CSV) lives in the
+=TILEMAP= node's visual params and round-trips in the =.rlevel=.  There is no
+standalone =.rtilemap= file over the engine's =LrgTileset= / =LrgTilemapLayer=
+runtime types.  *Improvement*: a tileset/layer serializer so tilemaps are
+reusable across levels.
+
+** GIR / typelib generation (now enabled — was a limitation)
+
+Resolved.  cmacs now builds =Libregnum-1.typelib= automatically whenever
+=g-ir-scanner= is present (falling back to =BUILD_GIR=0= only for cross/
+sandboxed builds where the scanner's =dlopen= is unreliable), and exports
+=GI_TYPELIB_PATH= from the Justfile =run= recipe.  The fix had three parts: the
+graylib gir include path was corrected (=build/release/gir= → =build/gir=); the
+internal GI scripting *bridges* (=lrg-scripting-@{gi,pygobject,gjs@}=) and the
+hardcoded =--include=GIRepository-2.0= were excluded from the scan (they made
+the typelib depend on a =GIRepository-2.0= namespace gjs/PyGObject cannot
+resolve); and =HAS_GI=1= is passed so the gjs/Python backends compile.  Result:
+=gjs= (=imports.gi.Libregnum=) and =python= (=from gi.repository import
+Libregnum=) can drive the editor types, and cmacs's own =gi= subsystem loads the
+namespace.  See [[file:cmacs-libregnum.org]] (GObject Introspection section) and
+[[file:cmacs-upstream-changes.org]] (the build rule).
+
+*Remaining limitation — embedded second GI runtime.*  The above is verified
+*standalone* (and for a libregnum game that embeds gjs/python).  A gjs/python
+script run by the libregnum scripting backends *inside the cmacs process* does
+not yet work: PyGObject/gjs initialise their own =libgirepository=, which clashes
+with the one cmacs's =gi= subsystem already loaded (=cannot register existing
+type 'GIRepository'= → hang).  Two independent GObject-Introspection runtimes in
+one process is the hard part; it is orthogonal to the bindings (which are
+correct).  *Improvement*: have the libregnum backends reuse cmacs's already-
+initialised =GIRepository= (share the singleton) instead of bootstrapping a
+second one, or run embedded scripts in a subprocess.
+
+** ERT regression coverage
+
+Some newer features (the GTK GdkDragSource, light/camera/audio visualisation,
+Python/Gjs execution) are verified by graphical harness but do not yet have
+dedicated ERT tests (the GL-dependent ones skip headless anyway).
+*Improvement*: add display-guarded ERT tests so they are exercised on a machine
+with a display.
+
+* The underlying renderer constraint (context)
+
+Several rendering choices above trace to one engine constraint worth recording:
+raylib's =rlgl= *textured immediate mode* (=rlSetTexture= + =rlBegin(RL_QUADS)=,
+flushed via =glDrawElements= against the shared batch EBO) does *not* composite
+inside the editor's offscreen FBO render pass — the quads silently drop out,
+while untextured =DrawCube=/=DrawLine3D= (=glDrawArrays=) and mesh/VAO draws
+(=grl_model_draw_ex= → =DrawMesh=) render fine.  Hence sprites and per-tile
+tilemap art are drawn as small textured =GrlModel= planes (the working mesh
+path) rather than raw textured quads, and light/audio ranges + camera frustums
+use the untextured line/wire primitives.  A future fix would be to make graylib
+expose a textured-quad helper that goes through the VAO path, or to reset to the
+default shader around immediate-mode textured draws.
+
+* See also
+
+- =cmacs-libregnum.org= — the editor's user-facing documentation + features.
+- =cmacs-upstream-changes.org= — the catalogue of mainline-Emacs edits.
+- =deps/libregnum/docs/editor/= — engine-side editor API reference.
