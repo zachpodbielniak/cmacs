@@ -238,10 +238,18 @@ clean-all: clean clean-eln-all clean-gowl
 
 # Run cmacs normally.  Exports CMACS_MODULE_DIR so the `cmacsgi`
 # bacon builtin is available when the user does `M-x bacon`.
+# GI_TYPELIB_PATH adds libregnum's + graylib's typelibs (built by the cmacs
+# build when g-ir-scanner is present) so cmacs's gi subsystem and the libregnum
+# gjs/PyGObject scripting backends can `import Libregnum` / `import Graylib`.
+# We deliberately do NOT add the matching .so dirs to LD_LIBRARY_PATH: the
+# libregnum/graylib symbols are whole-archived into temacs and exported
+# (-rdynamic), so GIRepository resolves them from the running image rather than
+# dlopening a second copy (which would re-register the GTypes and crash).
 [group('run')]
 run *ARGS:
     CMACS_MODULE_DIR={{ justfile_directory() }}/cmacs/bacon/modules \
     CMACS_GSURF_MODULE_DIR={{ justfile_directory() }}/cmacs/gsurf/modules \
+    GI_TYPELIB_PATH="{{ justfile_directory() }}/deps/libregnum/build/release/gir:{{ justfile_directory() }}/deps/libregnum/deps/graylib/build/gir${GI_TYPELIB_PATH:+:$GI_TYPELIB_PATH}" \
         {{ emacs }} {{ ARGS }}
 
 # Run cmacs as a Wayland compositor (`--gowl`).

@@ -164,6 +164,15 @@ set_packages_fedora () {
 	# initialises X11 to construct the offscreen GL context.
 	PKGS_LIBREGNUM=(mesa-libGL-devel libX11-devel libXrandr-devel
 	                libXcursor-devel libXinerama-devel libXi-devel)
+	# libregnum scripting backends for the in-Emacs level editor: luajit-devel
+	# (Lua), python3-devel (Python), gjs-devel (JavaScript; pulls mozjsNN-devel).
+	# Optional -- without them only the crispy (compile-and-run C) backend is
+	# available.  gjs additionally uses gobject-introspection-devel (in
+	# PKGS_GLIB).  crispy comes from the deps/ submodule, no system package.
+	# python3-gobject (PyGObject) is the runtime that lets Python scripts do
+	# `from gi.repository import Libregnum` against the auto-built typelib (gjs
+	# has its own GI loader built in).
+	PKGS_LIBREGNUM+=(luajit-devel python3-devel gjs-devel python3-gobject)
 	PKG_CMD="sudo dnf install -y"
 }
 

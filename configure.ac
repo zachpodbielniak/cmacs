@@ -913,6 +913,16 @@ if test "$with_cmacs_libregnum" != "no"; then
     -Wl,--no-whole-archive \
     -lGL -lm -lpthread -ldl -lrt -lX11 \
     $CMACS_LIBREGNUM_DEPS_LIBS"
+  # Scripting backends compiled into libregnum (Lua/Python/Gjs) pull in external
+  # libs (luajit, python3, gjs+mozjs, girepository).  libregnum.a is whole-
+  # archived into temacs, so those libs must be on the final link line too.
+  # Append each backend's libs when its -devel package is present; absent ones
+  # are silently skipped (so a host with only crispy still links cleanly).
+  for cmacs_lrg_sm in luajit python3-embed gjs-1.0; do
+    if $PKG_CONFIG --exists "$cmacs_lrg_sm" 2>/dev/null; then
+      CMACS_LIBREGNUM_LIBS="$CMACS_LIBREGNUM_LIBS `$PKG_CONFIG --libs $cmacs_lrg_sm`"
+    fi
+  done
   AC_DEFINE([HAVE_CMACS_LIBREGNUM], 1, [CMacs libregnum 3D scenes])
   CMACS_LIBREGNUM_OBJ="cmacs-libregnum-init.o cmacs-libregnum-defuns.o \
     cmacs-libregnum-view.o cmacs-libregnum-overlay.o \
