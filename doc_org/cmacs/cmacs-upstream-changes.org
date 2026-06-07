@@ -105,7 +105,38 @@ raised from a GLib callback aborts with =Fatal error 6: Aborted=.
   window shows a libregnum view, route motion / button / scroll into the
   libregnum input controller (=cmacs_libregnum_handle_motion= /
   =_handle_button= / =_handle_scroll=) before Emacs's own mouse machinery;
-  non-view buffers fall through unchanged.
+  non-view buffers fall through unchanged.  This is the *only* pgtk hook the
+  libregnum editor needs --- viewport orbit/pan/zoom, node picking, gizmo
+  handle drags, and object move-drags all run here (the controller is pure C
+  in =cmacs/libregnum/cmacs-libregnum-input.c=; this hunk just forwards to it).
+
+*** Editor drag-and-drop needs NO additional upstream change
+
+The libregnum editor's *asset drag-and-drop* (drag a row from the primitive
+palette / asset browser and drop it on a 3-D point in the viewport) is
+implemented entirely in Lisp + the existing C input controller, with *zero*
+new edits to =src/pgtkselect.c= or any other upstream file, deliberately, to
+keep merges clean:
+
+- *Intra-Emacs drag* uses Emacs's own =drag-mouse-1= event, bound buffer-locally
+  in =cmacs-libregnum-palette-mode-map= / =-assets-mode-map=
+  (=cmacs-libregnum-palette-drag= / =-assets-drag=).  Emacs delivers the drag to
+  the *start* buffer's keymap with the *release* position, so the panel handler
+  receives the viewport drop point and ray-casts it to the ground plane
+  (=cmacs-libregnum-editor-screen-to-ground=).  The pgtkterm pointer hook above
+  does *not* intercept this: during the drag the frame's selected window is
+  still the panel (a non-view buffer), so =selected_view_for_frame= returns NULL
+  and the release falls through to Emacs's normal =drag-mouse-1= synthesis.
+- *External file drag* (e.g. dropping a =.glb= from a file manager onto the
+  viewport) is handled by Emacs's stock =pgtk-dnd= via the buffer-local
+  =pgtk-dnd-types-alist= / drop-target variables --- again no upstream edit.
+
+A *GTK-native GDK drag-source* (a GdkDragSource with a drag icon, cross-process
+DnD) would be the one thing that required touching =src/pgtkselect.c=; it is
+*intentionally not added* because it offers no functional gain here and would be
+a new upstream merge point.  If it is ever pursued, it MUST go behind a
+=#ifdef HAVE_CMACS_LIBREGNUM= block calling a =cmacs_libregnum_*= helper in a
+new file, and be catalogued here.
 
 ** src/xwidget.c / src/xwidget.h --- gowl client embedding
 

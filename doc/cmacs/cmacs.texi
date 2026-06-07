@@ -6051,6 +6051,362 @@ isn't honoured.
 @item Click-to-jump is not yet wired; tracked as follow-up work.
 @end itemize
 
+@node Editor / Level Authoring
+@section Editor / Level Authoring
+
+@cindex level authoring
+@cindex LrgLevel
+@cindex LrgNode
+@cindex LrgEditor
+
+@subsection Overview
+
+libregnum now ships an IDE-hostable editor runtime alongside its game engine.
+The relationship mirrors Unreal Engine@tie{}@arrow{}@tie{}Unreal Editor: the
+@emph{editor runtime lives entirely inside libregnum} and is host-agnostic;
+cmacs is one frontend and a standalone engine-drawn editor is another.  For
+the full architecture and implementation sequencing, see the design plan at
+@file{~/.claude/plans/we-recently-added-support-stateless-rossum.md}.
+
+The level model (@code{LrgLevel} / @code{LrgNode}, serialized as
+@file{.rlevel} YAML files) is a new @dfn{authoring layer} sitting above the
+existing runtime layers:
+
+@table @code
+@item LrgLevel / LrgNode
+The editable document (authoring layer; @file{deps/libregnum/src/editor/}).
+@item LrgScene / LrgSceneObject
+The renderer's geometry model (existing; produced by
+@code{lrg_level_to_scene}).
+@item LrgWorld / LrgGameObject
+The ECS runtime (existing; produced by @code{lrg_level_instantiate} for
+play-in-editor).
+@end table
+
+Neither bridge mutates the source @code{LrgLevel}, so editing, baked
+previews, and play-in-editor can coexist safely.
+
+@subsection Engine-side editor types (implemented)
+
+The types in this section are part of the libregnum library and are present in
+the @code{Libregnum} GIR typelib.  Because cmacs loads the typelib via the
+@code{gi} subsystem, all of them are reachable from Elisp through
+@code{cmacs-gi-require}, @code{cmacs-gi-call}, and
+@code{cmacs-gi-method-call} today.
+
+@subsubsection LrgLevel --- the level document
+
+@code{LrgLevel} (@file{src/editor/lrg-level.h}) is a final GObject owning a
+root @code{LrgNode} whose descendants form the editable scene tree plus
+level-wide settings (name, @code{default-2d} flag).  It emits three signals so
+a host IDE can keep its panels in sync:
+
+@itemize @bullet
+@item @code{node-added} (@var{node}: @code{LrgNode *})
+@item @code{node-removed} (@var{node}: @code{LrgNode *})
+@item @code{node-changed} (@var{node}: @code{LrgNode *})
+@end itemize
+
+Key API: @code{lrg_level_new}, @code{lrg_level_get_root},
+@code{lrg_level_add_node}, @code{lrg_level_remove_node},
+@code{lrg_level_find_node}, @code{lrg_level_notify_node_changed}.
+
+@subsubsection LrgNode --- the scene-tree element
+
+@code{LrgNode} (@file{src/editor/lrg-node.h}) is a @emph{derivable} GObject
+--- the single unifier of 2D and 3D content.  Every node carries:
+
+@itemize @bullet
+@item a stable @code{guid} string (survives save/load round-trips);
+@item a local TRS transform: @code{location} / @code{rotation} (Euler radians) /
+  @code{scale} as @code{GrlVector3} values; world transform is computed lazily
+  as @math{parent * T * R * S}; 2D nodes live at @math{Z=0} with
+  @code{is-2d} set as a gizmo/camera hint;
+@item an optional @code{LrgNodeVisual} payload;
+@item ordered @code{GPtrArray}s of @code{LrgComponentDesc} and
+  @code{LrgScriptBinding} records;
+@item @code{visible} / @code{locked} flags.
+@end itemize
+
+Custom node kinds may subclass @code{LrgNode} and override the
+@code{instantiate} virtual method.
+
+@subsubsection LrgNodeVisual --- visual payload
+
+@code{LrgNodeVisual} (@file{src/editor/lrg-node-visual.h}) is a tagged record
+discriminated by @code{LrgNodeVisualKind}:
+
+@table @code
+@item LRG_NODE_VISUAL_NONE
+Empty / group node.
+@item LRG_NODE_VISUAL_PRIMITIVE
+Built-in @code{LrgPrimitiveType} + @code{LrgMaterial3D}.
+@item LRG_NODE_VISUAL_MESH_ASSET
+External mesh asset (gltf/obj/glb) by reference + material.
+@item LRG_NODE_VISUAL_SPRITE
+2D texture asset reference.
+@item LRG_NODE_VISUAL_TILEMAP
+Tileset asset reference.
+@item LRG_NODE_VISUAL_LIGHT
+Kind-specific params (intensity, colour, @dots{}).
+@item LRG_NODE_VISUAL_CAMERA
+Kind-specific params (fov, near/far, @dots{}).
+@item LRG_NODE_VISUAL_AUDIO_EMITTER
+Audio asset reference + positional params.
+@item LRG_NODE_VISUAL_PREFAB_INSTANCE
+Prefab guid + property overrides.
+@end table
+
+Kind-specific scalars live in a typed @code{GValue} parameter bag
+(@code{lrg_node_visual_set_param}, @code{get_param},
+@code{set_param_double}, @code{get_param_double}).
+
+@subsubsection LrgEditor --- the editor runtime core
+
+@code{LrgEditor} (@file{src/editor/lrg-editor.h}) is a final GObject and the
+central C API contract.  It owns the @code{LrgLevel} being edited, a selection
+model (@code{LrgEditorSelection}), and a command stack: all mutating
+operations go through reversible @code{LrgEditorCommand} objects.
+
+Mutating operations: @code{lrg_editor_add_node}, @code{delete_node},
+@code{reparent_node}, @code{set_node_transform} (full TRS in one command),
+@code{set_node_property} (any @code{GObject} property).
+
+Undo/redo: @code{lrg_editor_can_undo} / @code{can_redo} /
+@code{undo} / @code{redo}.
+
+Active tool: @code{lrg_editor_get_tool} / @code{set_tool} with
+@code{LrgEditorTool} values (@code{SELECT}, @code{TRANSLATE},
+@code{ROTATE}, @code{SCALE}).
+
+Snap: @code{lrg_editor_set_snap} / @code{get_snap} (translate / rotate /
+scale increments; 0 disables).
+
+Create with @code{lrg_editor_new ()}: the new editor immediately has an empty
+level ready to use.
+
+@subsubsection LrgEditorHost --- the embedding contract
+
+@code{LrgEditorHost} (@file{src/editor/lrg-editor-host.h}) is a GInterface
+mirroring @code{LrgGameHost}: the environment the editor borrows from its
+host.  A host IDE implements @code{get_engine},
+@code{get_render_size}, @code{begin_frame} / @code{clear} / @code{end_frame},
+@code{get_frame_delta}, @code{get_input_source},
+@code{get_viewport_camera}, @code{is_2d_mode}, and @code{request_redraw}.
+@code{LrgEditorSoftwareHost} is a simple concrete implementation that stores
+the borrowed environment; it is used by IDE-driven embedding and by tests.
+
+@subsubsection Bake and instantiate bridges
+
+@code{lrg_level_to_scene (@var{level})} bakes the renderable (primitive-visual)
+nodes of a level into a new @code{LrgScene}.
+@code{lrg_level_instantiate (@var{level}, @var{world}, @var{engine}, @var{error})}
+materializes the level into a runtime @code{LrgWorld} of
+@code{LrgGameObject} instances with their components, for play-in-editor.
+Neither bridge mutates the source @code{LrgLevel}.
+
+@code{lrg_level_from_scene} (@file{src/editor/lrg-scene-import.h}) opens
+existing Blender @file{.yaml} scene exports in the editor.
+
+@subsubsection LrgProject and LrgAssetDatabase
+
+@code{LrgProject} (@file{src/editor/lrg-project.h}) describes a game project
+on disk: a root directory plus a @file{project.ryaml} manifest.
+
+@code{LrgAssetDatabase} (@file{src/editor/lrg-asset-database.h}) scans the
+project's asset directories, classifies assets by extension, assigns stable
+guids, and exposes a queryable list suitable for an asset browser.
+
+@subsubsection Other editor types
+
+@table @code
+@item LrgComponentDesc
+Serializable component description: a registry type name plus a
+@code{GHashTable} of property values; materialized at instantiate time.
+@item LrgScriptBinding
+A @{language, script_path_or_guid, enabled@} record.  @code{language} is a
+@code{LrgScriptLanguage} enum value (@code{NONE}, @code{LUA}, @code{PYTHON},
+@code{GJS}, @code{CRISPY}).
+@item LrgPrefab
+A @file{.rprefab} file is a saved one-node subtree with an exported-property
+manifest; @code{lrg_prefab_save}, @code{load}, and @code{instantiate} manage
+the round-trip.
+@end table
+
+Full engine API reference: @file{deps/libregnum/docs/editor/}.
+
+@subsection Reaching the editor from cmacs today (via the gi subsystem)
+
+The editor types are GI-annotated and present in the @code{Libregnum} typelib.
+Using @code{cmacs-gi-require} / @code{cmacs-gi-call} /
+@code{cmacs-gi-method-call} (or MCP @code{eval}) gives full access to the
+level-authoring API from Elisp right now.
+
+The general approach for headless level authoring from Elisp:
+
+@lisp
+;; Ensure the Libregnum typelib is loaded
+(cmacs-gi-require "Libregnum")
+
+;; Create a new level and editor
+(let ((editor (cmacs-gi-call "Libregnum" "editor_new"))
+      (level  (cmacs-gi-call "Libregnum" "level_new" "My Level")))
+
+  ;; Add a node with a primitive visual
+  (let* ((node   (cmacs-gi-call "Libregnum" "node_new" "Cube"))
+         (visual (cmacs-gi-call "Libregnum" "node_visual_new"
+                                (cmacs-gi-enum-value "Libregnum"
+                                                     "NodeVisualKind"
+                                                     "PRIMITIVE"))))
+    (cmacs-gi-method-call visual "set_primitive"
+                          (cmacs-gi-enum-value "Libregnum"
+                                               "PrimitiveType" "CUBE"))
+    (cmacs-gi-method-call node "set_visual" visual)
+    (cmacs-gi-method-call editor "add_node" node nil))
+
+  ;; Save to a .rlevel file
+  (cmacs-gi-method-call editor "save_level"
+                        "/tmp/my-level.rlevel" nil))
+@end lisp
+
+The snippet above illustrates the approach.  Exact GI function names follow
+the C symbols with the @code{lrg_} prefix and class-name portion stripped per
+typelib convention.  When in doubt, use
+@code{(cmacs-gi-list-functions "Libregnum")} to enumerate what is available,
+or @code{(cmacs-gi-describe "Libregnum" "editor_new")} to inspect a specific
+function's signature.
+
+Play-in-editor is reachable from Elisp too: @code{lrg_level_instantiate}
+produces a @code{LrgWorld} and the existing game @file{.so} hosting
+(see the game-module hosting section) can run a game against that world in a buffer.
+
+@subsection Native editor frontend
+
+The core native editor is implemented: an @code{cmacs-libregnum-editor-mode}
+viewport buffer hosting an engine @code{LrgEditor}, with the level baked into
+the scene drawables so the existing FBO/Cairo blit pipeline, ray-picking and
+@code{cmacs-libregnum-tree-nodes} node model double as the editor viewport and
+outliner.  Objects move by mouse drag or keyboard nudge with optional grid
+snapping.  A property inspector, asset-browser drag-and-drop, rotate/scale
+gizmo handles and play-in-editor remain planned.
+
+@subsubsection Implemented
+
+@table @asis
+@item C layer
+An editor host path @emph{inside} @file{cmacs-libregnum-render.c} (no new
+translation unit, hence no @command{configure} change), reusing the
+scene-drawable pipeline rather than a separate gizmo renderer.  It exposes a
+plain-C opaque-pointer API (@code{cmacs_libregnum_render_ctx_editor_*}) across
+the raylib firewall, wrapped by DEFUNs in @file{cmacs-libregnum-defuns.c}:
+@code{cmacs-libregnum-editor-new}/@code{-open}/@code{-save},
+@code{-active-p}, @code{-add-primitive} (returns a node id),
+@code{-delete}/@code{-select}, @code{-set-position} (one undoable edit),
+@code{-undo}/@code{-redo}/@code{-can-undo-p}, and @code{-node-guid}; plus
+@code{-node-location} and @code{-selected-id} (the engine selection shared by
+mouse and keyboard), @code{-focus} (frame a node), @code{-set-snap} (translate
+grid), the @code{-drag-begin}/@code{-drag-update}/@code{-drag-end} mouse-move
+pipeline (view pixels → ground-plane move, one coalesced undo step per drag),
+@code{-node-rotation}/@code{-node-scale} + @code{-set-rotation}/@code{-set-scale}
+(each one undoable transform edit), @code{-reparent} (re-nest a node),
+@code{-add-visual} (mesh-asset/sprite/light/camera/audio nodes; MESH_ASSET loads
++ draws the real model), @code{-attach-script}/@code{-node-script-count},
+@code{-play}/@code{-stop}/@code{-playing-p}/@code{-play-tick} (play-in-editor),
+@code{-set-tool}/@code{-get-tool} + @code{-gizmo-begin}/@code{-gizmo-drag}/
+@code{-gizmo-end} (on-screen transform gizmo), and @code{cmacs-libregnum-project}
+(world @math{->} view pixels).  Plus @code{cmacs-libregnum-snapshot}
+(BUFFER PATH), which
+renders the view synchronously to a PNG via engine FBO read-back (works
+headless; used by the render/move ERT tests).
+
+@item Elisp layer
+In @file{lisp/cmacs/cmacs-libregnum.el}: @code{cmacs-libregnum-editor} (entry
+command; empty level, or a @file{.rlevel} with a prefix arg);
+@code{cmacs-libregnum-editor-mode} (derived from @code{cmacs-libregnum-mode})
+with keymap @kbd{c}/@kbd{b}/@kbd{y}/@kbd{n} (add cube/sphere/cylinder/plane),
+arrows or @kbd{hjkl} (nudge on the ground X/Z), @kbd{J}/@kbd{K} and PageUp/Down
+(nudge vertically Y), @kbd{[}/@kbd{]} (rotate yaw; shifted for pitch),
+@kbd{+}/@kbd{-} (scale), @kbd{s} (cycle snap grid), @kbd{f} (frame
+selection), @kbd{m} (type exact coordinates), @kbd{x}/@kbd{<delete>} (delete),
+@kbd{u}/@kbd{C-r} (undo/redo), @kbd{p} (palette), @kbd{o} (outliner), @kbd{i}
+(inspector), @kbd{C-x C-s} (save-as) --- numeric prefixes multiply the
+move/rotate/scale step; also @kbd{A} (asset browser), @kbd{L} (attach script),
+@kbd{<f5>} (play/stop).  A left-column @strong{palette}
+(@code{cmacs-libregnum-palette-mode}) in three sections --- Primitives (all
+eleven: Cube/Sphere/IcoSphere/Cylinder/Cone/Torus/Plane/Circle/Grid/Rect2D/
+Circle2D), Objects (Light/Camera/Audio), Assets (Mesh.../Sprite..., prompt for a
+file) --- over the node-tree @strong{outliner}
+(@code{cmacs-libregnum-outliner-mode}: @kbd{RET} selects, @kbd{m} marks then
+@kbd{P} reparents under point, @kbd{r} to root); a right-column @strong{inspector}
+(@code{cmacs-libregnum-inspector-mode}, key @kbd{i}): a @code{widget.el} form of
+the selection's position/rotation/scale whose @kbd{C-c C-c} (or @emph{Apply})
+routes edits through the undoable command stack; and an @strong{asset browser}
+(@code{cmacs-libregnum-assets-mode}, key @kbd{A}) that lists model/image files to
+click-place as mesh/sprite nodes.  Under Evil the palette/outliner/assets are
+read-only @code{motion}-state panels (so @kbd{hjkl} navigates); the viewport and
+inspector stay in @code{emacs} state.
+
+@strong{Transforming objects:} click a shape to select it (outliner + inspector
+follow); an @strong{on-screen gizmo} draws over it --- @kbd{w} translate (drag
+the coloured arrows), @kbd{e} rotate (drag the rings), @kbd{r} scale (drag the
+cube-tipped handles), @kbd{t} hides it.  Dragging a handle is axis-constrained;
+or @emph{drag the body} to free-move on the ground plane, or @emph{nudge} with
+arrows / @kbd{hjkl} (@kbd{[}/@kbd{]} rotate, @kbd{+}/@kbd{-} scale).  The bake
+applies each node's rotation + scale, so all transforms show live.  @kbd{s}
+cycles a snap grid honoured by drag/gizmo/nudge, @kbd{f} frames the camera.
+Dragging empty space orbits; one drag (handle or body) is a single undo step.
+Edits go through the engine's undoable @code{LrgEditorCommand} stack; levels
+round-trip to @file{.rlevel}.
+@end table
+
+@subsubsection Now also implemented
+
+@itemize
+@item @strong{Real mesh + sprite rendering} --- MESH_ASSET loads + draws a
+glTF/OBJ model; SPRITE loads a texture and draws a camera-facing billboard.
+@item @strong{On-screen gizmo handles} (@kbd{w}/@kbd{e}/@kbd{r}) ---
+axis-constrained translate/rotate/scale, one coalesced undo per drag.
+@item @strong{2D camera mode} (@kbd{v}) --- top-down orthographic view;
+picking/projection honour the projection.
+@item @strong{Running script logic} --- the crispy backend is enabled
+(@file{deps/libregnum} built @code{CRISPY=1}; cmacs already links
+@code{libcrispy}), so a crispy script attached to a node compiles + runs when
+the level plays.  @code{lrg_level_instantiate} materialises each node's
+@code{LrgScriptBinding} as an @code{LrgScriptComponent}.
+@item @strong{Play rendering} --- @code{play-tick} reflects the running world's
+object positions back onto the baked scene, so script motion shows live.
+@item @strong{Drop-at-point} --- arm a palette/asset item (@kbd{D}) then click a
+viewport point; the input layer ray-casts to the ground plane and drops it.
+@item @strong{Mouse drag-and-drop} --- press a palette/asset row and release over
+the viewport to drop the item at that 3-D point.  Uses Emacs's own
+@code{drag-mouse-1} event (and stock @code{pgtk-dnd} for external file drops), so
+it needs @emph{no} upstream pgtk change (see the Upstream Changes chapter).
+@item @strong{Tilemaps --- paint, render, persist} --- @kbd{T}
+(@code{cmacs-libregnum-editor-tilemap-create}) makes a TILEMAP node from a
+tileset image + tile/map dimensions; @code{cmacs-libregnum-editor-tilemap-paint}
+arms a sticky brush so each viewport click paints the cell under the cursor
+(@code{...-tilemap-set-brush}, finish with @code{...-stop-paint}).  The tile grid
+lives in the node's visual params (@code{tw}/@code{th}/@code{cols}/@code{mw}/@code{mh}/@code{tiles}
+CSV) so it round-trips in the @file{.rlevel}.  Each cell renders as a ground tile
+coloured by sampling its tile's sub-rect from the tileset (raylib's @code{rlgl}
+textured immediate mode does not composite inside the graylib FBO batch, so cells
+are colour-sampled quads, not per-texel blits --- layout, identity and
+persistence are exact).  DEFUNs: @code{...-tilemap-config}/@code{-set-tile}/@code{-info}.
+@item @strong{Dedicated MCP tools} --- @file{cmacs/mcp/cmacs-mcp-tools-libregnum.c}
+registers @code{lrg_editor_object_tree}/@code{_add_primitive}/@code{_add_visual}/
+@code{_move}/@code{_select}/@code{_delete}/@code{_open}/@code{_save}/@code{_play}/
+@code{_stop}.
+@end itemize
+
+@subsubsection Planned
+
+Two deep, optional extensions remain: a GTK-native GDK drag-source (the
+@code{drag-mouse-1} path already does panel → viewport drag; a GdkDragSource
+would add cross-process DnD and is the one thing that would touch
+@file{pgtkselect.c}); and per-texel tileset blitting in the viewport (blocked by
+the @code{rlgl}/FBO-batch limitation above --- tiles render as colour-sampled
+cells today).
+
 @c ===================================================================
 @node CMacs Gsurf
 @chapter CMacs Gsurf
@@ -6913,8 +7269,37 @@ blit): @code{cmacs_video_overlay_paint} (@code{HAVE_CMACS_VIDEO}),
 @strong{libregnum pointer input} (@code{HAVE_CMACS_LIBREGNUM}): when the
 selected window shows a libregnum view, route motion / button / scroll into
 the libregnum input controller before Emacs's own mouse machinery; other
-buffers fall through unchanged.
+buffers fall through unchanged.  This is the @emph{only} pgtk hook the editor
+needs --- viewport orbit/pan/zoom, picking, gizmo-handle drags, and object
+move-drags all run through it.
 @end itemize
+
+@subsubsection Editor drag-and-drop needs NO additional upstream change
+
+The libregnum editor's asset drag-and-drop (drag a palette/asset row and drop
+it on a 3-D point in the viewport) is implemented in Lisp plus the existing C
+input controller, with @emph{zero} new edits to @file{src/pgtkselect.c} or any
+other upstream file, deliberately, to keep merges clean:
+
+@itemize
+@item @strong{Intra-Emacs drag} uses Emacs's own @code{drag-mouse-1} event,
+bound buffer-locally in the palette/asset keymaps.  Emacs delivers the drag to
+the start buffer's keymap with the release position, so the handler ray-casts
+the viewport drop point to the ground plane
+(@code{cmacs-libregnum-editor-screen-to-ground}).  The pgtkterm pointer hook
+above does not intercept it: during the drag the selected window is still the
+panel (a non-view buffer), so @code{selected_view_for_frame} returns NULL and
+the release falls through to Emacs's normal @code{drag-mouse-1} synthesis.
+@item @strong{External file drag} (e.g. a @file{.glb} from a file manager) is
+handled by stock @code{pgtk-dnd} via buffer-local @code{pgtk-dnd-types-alist}
+--- again no upstream edit.
+@end itemize
+
+A GTK-native GDK drag-source would be the one thing requiring a
+@file{src/pgtkselect.c} touch; it is intentionally not added (no functional gain
+here, and a new merge point).  If ever pursued it MUST go behind a
+@code{#ifdef HAVE_CMACS_LIBREGNUM} block calling a @code{cmacs_libregnum_*}
+helper in a new file, and be catalogued here.
 
 @subsection src/xwidget.c / src/xwidget.h --- gowl client embedding
 

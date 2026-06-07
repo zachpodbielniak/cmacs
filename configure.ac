@@ -1007,6 +1007,9 @@ if test "$with_cmacs_mcp" != "no"; then
   if test "$with_cmacs_gsurf" != "no"; then
     CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-gsurf.o"
   fi
+  if test "$with_cmacs_libregnum" != "no"; then
+    CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-libregnum.o"
+  fi
 fi
 # CMACS Print: pure-Elisp + shell-script subsystem (no C build artefacts).
 # Probe for runtime tools so install-cmacs-printer can fail loudly at

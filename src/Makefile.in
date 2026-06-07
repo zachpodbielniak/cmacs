@@ -1018,7 +1018,7 @@ ifneq ($(CMACS_LIBREGNUM_OBJ),)
 $(CMACS_LIBREGNUM_STATIC_LIB):
 	$(MAKE) -C $(srcdir)/../deps/libregnum \
 	  WARN_CFLAGS="-Wall -Wextra -Wno-unused-but-set-variable" \
-	  BUILD_GIR=0
+	  BUILD_GIR=0 CRISPY=1
 $(CMACS_LIBREGNUM_OBJ): $(CMACS_LIBREGNUM_STATIC_LIB)
 endif
 

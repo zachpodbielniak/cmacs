@@ -30,6 +30,8 @@ typedef struct
   double        press_x, press_y;   /* left-button-down position */
   bool          dragging_left;
   bool          dragging_right;
+  bool          dragging_object;    /* editor: moving the picked node */
+  bool          dragging_gizmo;     /* editor: dragging a transform handle */
 } DragState;
 
 static DragState drag_state = { 0 };
@@ -69,6 +71,64 @@ click_action_idle (gpointer user)
   return G_SOURCE_REMOVE;
 }
 
+/* Deferred editor selection sync: tell Elisp which node the viewport just
+ * selected, so `cmacs-libregnum-editor--current' and the outliner follow a
+ * mouse pick / drag.  Like ClickAction, the Lisp eval must run on the cmacs
+ * GMainContext, not inside the GTK event handler. */
+typedef struct
+{
+  Lisp_Object buffer;
+  gint        id;
+} SelectSync;
+
+static gboolean
+select_sync_idle (gpointer user)
+{
+  SelectSync *s = user;
+  cmacs_dispatch_safe_call2 (intern ("cmacs-libregnum-editor--on-select"),
+                             s->buffer, make_fixnum (s->id));
+  g_free (s);
+  return G_SOURCE_REMOVE;
+}
+
+static void
+defer_select_sync (CmacsLibregnumView *v, gint id)
+{
+  SelectSync *s = g_new0 (SelectSync, 1);
+  s->buffer = cmacs_libregnum_view_get_buffer (v);
+  s->id = id;
+  g_main_context_invoke (cmacs_glib_get_context (), select_sync_idle, s);
+}
+
+/* Deferred asset drop: Elisp places the armed asset at the clicked ground
+ * point.  Like the others, the eval must run on the cmacs GMainContext. */
+typedef struct
+{
+  Lisp_Object buffer;
+  double      x, y, z;
+} DropAction;
+
+static gboolean
+drop_action_idle (gpointer user)
+{
+  DropAction *d = user;
+  cmacs_dispatch_safe_call2 (intern ("cmacs-libregnum-editor--drop"),
+                             d->buffer,
+                             list3 (make_float (d->x), make_float (d->y),
+                                    make_float (d->z)));
+  g_free (d);
+  return G_SOURCE_REMOVE;
+}
+
+static void
+defer_drop (CmacsLibregnumView *v, double x, double y, double z)
+{
+  DropAction *d = g_new0 (DropAction, 1);
+  d->buffer = cmacs_libregnum_view_get_buffer (v);
+  d->x = x; d->y = y; d->z = z;
+  g_main_context_invoke (cmacs_glib_get_context (), drop_action_idle, d);
+}
+
 /* Convert a frame-pixel click (X,Y) to view-local pixels (origin
  * top-left) for the window showing view V, and report the view size.
  * Returns false if the click is outside the window or sizes are bad. */
@@ -102,19 +162,41 @@ handle_click (struct frame *f, CmacsLibregnumView *v, double x, double y)
   int vw, vh;
   if (!frame_to_view_coords (f, v, x, y, &vx, &vy, &vw, &vh)) return;
   CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+
+  /* Armed asset drop: place the pending asset at the ground point clicked. */
+  if (cmacs_libregnum_render_ctx_editor_active (ctx)
+      && cmacs_libregnum_render_ctx_editor_armed (ctx))
+    {
+      double wx, wy, wz;
+      cmacs_libregnum_render_ctx_editor_set_armed (ctx, FALSE);
+      if (cmacs_libregnum_render_ctx_editor_screen_to_ground
+            (ctx, vx, vy, vw, vh, &wx, &wy, &wz))
+        defer_drop (v, wx, wy, wz);
+      return;
+    }
+
   gint id = cmacs_libregnum_render_ctx_pick (ctx, vx, vy, vw, vh);
   if (id < 0) return;
+
+  /* Visual feedback: select + focus the hit node. */
+  cmacs_libregnum_render_ctx_set_selected (ctx, id);
+  cmacs_libregnum_render_ctx_focus_node (ctx, id);
+  cmacs_libregnum_view_request_redraw (v);
+
+  /* In the editor a node's "path" is its guid, so do NOT find-file it -- just
+   * select it in the engine and tell Elisp so the outliner/keys follow. */
+  if (cmacs_libregnum_render_ctx_editor_active (ctx))
+    {
+      cmacs_libregnum_render_ctx_editor_select_node (ctx, id);
+      defer_select_sync (v, id);
+      return;
+    }
 
   const char *path = NULL;
   gboolean is_dir = FALSE;
   if (!cmacs_libregnum_render_ctx_node_info (ctx, (guint) id, &path, NULL,
                                              &is_dir, NULL, NULL))
     return;
-
-  /* Visual feedback: select + focus the hit node. */
-  cmacs_libregnum_render_ctx_set_selected (ctx, id);
-  cmacs_libregnum_render_ctx_focus_node (ctx, id);
-  cmacs_libregnum_view_request_redraw (v);
 
   /* Defer the Lisp action onto the cmacs context. */
   ClickAction *a = g_new0 (ClickAction, 1);
@@ -166,6 +248,39 @@ cmacs_libregnum_handle_motion (struct frame *f, double x, double y)
       }
   }
 
+  /* Editor: dragging a gizmo handle does an axis-constrained transform. */
+  if (drag_state.frame == f && drag_state.dragging_gizmo)
+    {
+      double vx, vy;
+      int vw, vh;
+      CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+      if (frame_to_view_coords (f, v, x, y, &vx, &vy, &vw, &vh))
+        {
+          cmacs_libregnum_render_ctx_editor_gizmo_drag (ctx, vx, vy, vw, vh);
+          cmacs_libregnum_view_request_redraw (v);
+        }
+      drag_state.last_x = x;
+      drag_state.last_y = y;
+      return true;
+    }
+
+  /* Editor: dragging a picked node moves it on its ground plane (live;
+   * the undo entry is coalesced on button-up). */
+  if (drag_state.frame == f && drag_state.dragging_object)
+    {
+      double vx, vy;
+      int vw, vh;
+      CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+      if (frame_to_view_coords (f, v, x, y, &vx, &vy, &vw, &vh))
+        {
+          cmacs_libregnum_render_ctx_editor_drag_update (ctx, vx, vy, vw, vh);
+          cmacs_libregnum_view_request_redraw (v);
+        }
+      drag_state.last_x = x;
+      drag_state.last_y = y;
+      return true;
+    }
+
   if (drag_state.frame == f
       && (drag_state.dragging_left || drag_state.dragging_right))
     {
@@ -210,17 +325,71 @@ cmacs_libregnum_handle_button (struct frame *f, int button, int press,
   drag_state.last_y = y;
   if (button == 1)
     {
+      CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
       if (press != 0)
         {
           /* Button down: remember where, start a potential drag. */
           drag_state.press_x = x;
           drag_state.press_y = y;
+          drag_state.dragging_object = false;
+          drag_state.dragging_gizmo = false;
+          /* Editor press priority: a gizmo handle (axis transform) beats an
+           * object body (free move) beats empty space (camera orbit). */
+          if (cmacs_libregnum_render_ctx_editor_active (ctx))
+            {
+              double vx, vy;
+              int vw, vh;
+              if (frame_to_view_coords (f, v, x, y, &vx, &vy, &vw, &vh)
+                  && cmacs_libregnum_render_ctx_editor_gizmo_begin
+                       (ctx, vx, vy, vw, vh))
+                {
+                  drag_state.dragging_gizmo = true;
+                  cmacs_libregnum_view_request_redraw (v);
+                  return true;
+                }
+              if (frame_to_view_coords (f, v, x, y, &vx, &vy, &vw, &vh))
+                {
+                  gint id = cmacs_libregnum_render_ctx_pick (ctx, vx, vy,
+                                                             vw, vh);
+                  if (id >= 0)
+                    {
+                      cmacs_libregnum_render_ctx_set_selected (ctx, id);
+                      cmacs_libregnum_render_ctx_editor_select_node (ctx, id);
+                      cmacs_libregnum_render_ctx_editor_drag_begin
+                        (ctx, id, vx, vy, vw, vh);
+                      defer_select_sync (v, id);
+                      drag_state.dragging_object = true;
+                      cmacs_libregnum_view_request_redraw (v);
+                      return true;
+                    }
+                }
+            }
           drag_state.dragging_left = true;
         }
       else
         {
-          /* Button up: a release without meaningful movement is a click
-           * (orbit drags move the pointer); pick + act on it. */
+          /* Button up after dragging a gizmo handle: commit one undo step. */
+          if (drag_state.dragging_gizmo)
+            {
+              cmacs_libregnum_render_ctx_editor_gizmo_end (ctx);
+              drag_state.dragging_gizmo = false;
+              defer_select_sync
+                (v, cmacs_libregnum_render_ctx_get_selected (ctx));
+              cmacs_libregnum_view_request_redraw (v);
+              return true;
+            }
+          /* Button up after grabbing an object: commit one undo step. */
+          if (drag_state.dragging_object)
+            {
+              cmacs_libregnum_render_ctx_editor_drag_end (ctx);
+              drag_state.dragging_object = false;
+              defer_select_sync
+                (v, cmacs_libregnum_render_ctx_get_selected (ctx));
+              cmacs_libregnum_view_request_redraw (v);
+              return true;
+            }
+          /* A release without meaningful movement is a click (orbit drags
+           * move the pointer); pick + act on it. */
           bool moved = (fabs (x - drag_state.press_x)
                         + fabs (y - drag_state.press_y)) > 5.0;
           drag_state.dragging_left = false;

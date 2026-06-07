@@ -102,6 +102,14 @@ extern gboolean cmacs_libregnum_render_ctx_render_to_bgra
                               (CmacsLibregnumRenderCtx *r,
                                unsigned char *dst, int w, int h);
 
+/* Render the current frame and write it to PATH as a PNG.  Synchronous
+ * (renders + reads back immediately, independent of the animation clock),
+ * so it works for headless/automated render verification.  Returns TRUE on
+ * success; on failure sets *ERROR_MSG (caller g_free's). */
+extern gboolean cmacs_libregnum_render_ctx_snapshot_png
+                              (CmacsLibregnumRenderCtx *r,
+                               const char *path, char **error_msg);
+
 /* ── Game-module hosting ─────────────────────────────────────────
  * Load a libregnum game packaged as a shared module (.so) into this
  * view and drive it each frame (instead of a static scene). The game
@@ -152,6 +160,158 @@ extern void cmacs_libregnum_render_ctx_set_camera_state
                                double px, double py, double pz,
                                double tx, double ty, double tz,
                                double fov);
+
+/* ── Editor / level authoring ────────────────────────────────────
+ * Drive an engine-side LrgEditor whose level is baked into this view's
+ * scene drawables (so it renders through the normal scene path and
+ * reuses the node model for picking/labels/outliner).  All parameters
+ * are plain C so the Lisp layer needs no libregnum types.  Node ids are
+ * the scene-node indices (== cmacs-libregnum-tree-nodes ids). */
+extern gboolean cmacs_libregnum_render_ctx_editor_new
+                              (CmacsLibregnumRenderCtx *r);
+extern gboolean cmacs_libregnum_render_ctx_editor_open
+                              (CmacsLibregnumRenderCtx *r,
+                               const char *path, char **error_msg);
+extern gboolean cmacs_libregnum_render_ctx_editor_save
+                              (CmacsLibregnumRenderCtx *r,
+                               const char *path, char **error_msg);
+extern void     cmacs_libregnum_render_ctx_editor_close
+                              (CmacsLibregnumRenderCtx *r);
+extern gboolean cmacs_libregnum_render_ctx_editor_active
+                              (CmacsLibregnumRenderCtx *r);
+/* Add a primitive node (PRIM == LrgPrimitiveType int) and select it.
+ * Returns the new node's scene id, or -1 on failure. */
+extern gint     cmacs_libregnum_render_ctx_editor_add_primitive
+                              (CmacsLibregnumRenderCtx *r,
+                               int prim, const char *name);
+extern void     cmacs_libregnum_render_ctx_editor_delete
+                              (CmacsLibregnumRenderCtx *r, gint node_id);
+extern void     cmacs_libregnum_render_ctx_editor_select_node
+                              (CmacsLibregnumRenderCtx *r, gint node_id);
+extern void     cmacs_libregnum_render_ctx_editor_set_position
+                              (CmacsLibregnumRenderCtx *r, gint node_id,
+                               double x, double y, double z);
+extern void     cmacs_libregnum_render_ctx_editor_undo
+                              (CmacsLibregnumRenderCtx *r);
+extern void     cmacs_libregnum_render_ctx_editor_redo
+                              (CmacsLibregnumRenderCtx *r);
+extern gboolean cmacs_libregnum_render_ctx_editor_can_undo
+                              (CmacsLibregnumRenderCtx *r);
+extern gboolean cmacs_libregnum_render_ctx_editor_can_redo
+                              (CmacsLibregnumRenderCtx *r);
+/* Borrowed guid string for NODE_ID (valid until the next rebuild). */
+extern const char *cmacs_libregnum_render_ctx_editor_node_guid
+                              (CmacsLibregnumRenderCtx *r, gint node_id);
+/* Read NODE_ID's local location.  Returns FALSE if NODE_ID is invalid. */
+extern gboolean cmacs_libregnum_render_ctx_editor_node_location
+                              (CmacsLibregnumRenderCtx *r, gint node_id,
+                               double *x, double *y, double *z);
+/* Translate grid for drag/move (0 disables); applied to drag end-points. */
+extern void     cmacs_libregnum_render_ctx_editor_set_snap
+                              (CmacsLibregnumRenderCtx *r, double snap);
+/* Mouse drag-to-move on the ground plane.  begin grabs NODE_ID at view-local
+ * (VX,VY); update tracks the cursor (live, no undo); end pushes ONE coalesced
+ * transform command (one drag == one undo step).  dragging reports state.
+ * VW,VH are the viewport pixel size. */
+extern gboolean cmacs_libregnum_render_ctx_editor_dragging
+                              (CmacsLibregnumRenderCtx *r);
+extern gboolean cmacs_libregnum_render_ctx_editor_drag_begin
+                              (CmacsLibregnumRenderCtx *r, gint node_id,
+                               double vx, double vy, int vw, int vh);
+extern gboolean cmacs_libregnum_render_ctx_editor_drag_update
+                              (CmacsLibregnumRenderCtx *r,
+                               double vx, double vy, int vw, int vh);
+extern void     cmacs_libregnum_render_ctx_editor_drag_end
+                              (CmacsLibregnumRenderCtx *r);
+/* Read NODE-ID's rotation (radians) / scale.  FALSE if NODE-ID is invalid. */
+extern gboolean cmacs_libregnum_render_ctx_editor_node_rotation
+                              (CmacsLibregnumRenderCtx *r, gint node_id,
+                               double *x, double *y, double *z);
+extern gboolean cmacs_libregnum_render_ctx_editor_node_scale
+                              (CmacsLibregnumRenderCtx *r, gint node_id,
+                               double *x, double *y, double *z);
+/* Set NODE-ID's rotation (radians) / scale as one undoable transform. */
+extern void     cmacs_libregnum_render_ctx_editor_set_rotation
+                              (CmacsLibregnumRenderCtx *r, gint node_id,
+                               double x, double y, double z);
+extern void     cmacs_libregnum_render_ctx_editor_set_scale
+                              (CmacsLibregnumRenderCtx *r, gint node_id,
+                               double x, double y, double z);
+/* Reparent CHILD-ID under PARENT-ID (PARENT-ID < 0 == level root). */
+extern gboolean cmacs_libregnum_render_ctx_editor_reparent
+                              (CmacsLibregnumRenderCtx *r,
+                               gint child_id, gint parent_id);
+/* Add a node of visual KIND (LrgNodeVisualKind int) + optional ASSET path
+ * (MESH_ASSET loads + draws the model; SPRITE/LIGHT/CAMERA/AUDIO = gizmos). */
+extern gint     cmacs_libregnum_render_ctx_editor_add_visual
+                              (CmacsLibregnumRenderCtx *r, int kind,
+                               const char *asset, const char *name);
+/* Attach a script binding (LANGUAGE = LrgScriptLanguage int) to NODE-ID. */
+extern gboolean cmacs_libregnum_render_ctx_editor_attach_script
+                              (CmacsLibregnumRenderCtx *r, gint id,
+                               int language, const char *path);
+extern gint     cmacs_libregnum_render_ctx_editor_node_script_count
+                              (CmacsLibregnumRenderCtx *r, gint id);
+/* Play-in-editor: instantiate the level into a throwaway world + run it. */
+extern gboolean cmacs_libregnum_render_ctx_editor_play
+                              (CmacsLibregnumRenderCtx *r);
+extern void     cmacs_libregnum_render_ctx_editor_stop
+                              (CmacsLibregnumRenderCtx *r);
+extern gboolean cmacs_libregnum_render_ctx_editor_playing
+                              (CmacsLibregnumRenderCtx *r);
+extern gboolean cmacs_libregnum_render_ctx_editor_play_tick
+                              (CmacsLibregnumRenderCtx *r, double delta);
+/* On-screen transform gizmo.  TOOL: 0 select, 1 translate, 2 rotate, 3 scale.
+ * gizmo_hit reports whether a handle is under (VX,VY); begin/drag/end run an
+ * axis-constrained transform (one coalesced undo step), like the move drag. */
+extern void     cmacs_libregnum_render_ctx_editor_set_tool
+                              (CmacsLibregnumRenderCtx *r, int tool);
+extern gint     cmacs_libregnum_render_ctx_editor_get_tool
+                              (CmacsLibregnumRenderCtx *r);
+extern gboolean cmacs_libregnum_render_ctx_editor_gizmo_active
+                              (CmacsLibregnumRenderCtx *r);
+extern gboolean cmacs_libregnum_render_ctx_editor_gizmo_hit
+                              (CmacsLibregnumRenderCtx *r,
+                               double vx, double vy, int vw, int vh);
+extern gboolean cmacs_libregnum_render_ctx_editor_gizmo_begin
+                              (CmacsLibregnumRenderCtx *r,
+                               double vx, double vy, int vw, int vh);
+extern gboolean cmacs_libregnum_render_ctx_editor_gizmo_drag
+                              (CmacsLibregnumRenderCtx *r,
+                               double vx, double vy, int vw, int vh);
+extern void     cmacs_libregnum_render_ctx_editor_gizmo_end
+                              (CmacsLibregnumRenderCtx *r);
+/* Top-down orthographic 2D view toggle (for 2D levels). */
+extern void     cmacs_libregnum_render_ctx_editor_set_view_2d
+                              (CmacsLibregnumRenderCtx *r, gboolean on);
+extern gboolean cmacs_libregnum_render_ctx_editor_view_2d
+                              (CmacsLibregnumRenderCtx *r);
+/* Reflect the running play-world's object positions onto the baked scene. */
+extern void     cmacs_libregnum_render_ctx_editor_sync_play
+                              (CmacsLibregnumRenderCtx *r);
+/* Asset drop-at-point: arm so the next viewport click drops an asset at the
+ * ground point under the cursor.  screen_to_ground reports that world point. */
+extern void     cmacs_libregnum_render_ctx_editor_set_armed
+                              (CmacsLibregnumRenderCtx *r, gboolean on);
+extern gboolean cmacs_libregnum_render_ctx_editor_armed
+                              (CmacsLibregnumRenderCtx *r);
+extern gboolean cmacs_libregnum_render_ctx_editor_screen_to_ground
+                              (CmacsLibregnumRenderCtx *r, double vx, double vy,
+                               int vw, int vh,
+                               double *x, double *y, double *z);
+/* Tilemap data (stored in the node's visual params; persists in .rlevel).
+ * config sets the tileset image + tile/map dimensions (preserving overlapping
+ * cells on resize); set_tile paints one cell; info reports the dimensions. */
+extern void     cmacs_libregnum_render_ctx_editor_tilemap_config
+                              (CmacsLibregnumRenderCtx *r, gint node_id,
+                               const char *tileset, int tw, int th, int cols,
+                               int mw, int mh);
+extern void     cmacs_libregnum_render_ctx_editor_tilemap_set_tile
+                              (CmacsLibregnumRenderCtx *r, gint node_id,
+                               int cx, int cy, int tile);
+extern gboolean cmacs_libregnum_render_ctx_editor_tilemap_info
+                              (CmacsLibregnumRenderCtx *r, gint node_id,
+                               int *mw, int *mh, int *cols, int *tw, int *th);
 
 #endif /* HAVE_CMACS_LIBREGNUM */
 #endif /* CMACS_LIBREGNUM_RENDER_H */

@@ -72,6 +72,20 @@ DEFUN ("cmacs-libregnum-resize", Fcmacs_libregnum_resize,
   return Qt;
 }
 
+DEFUN ("cmacs-libregnum-view-size", Fcmacs_libregnum_view_size,
+       Scmacs_libregnum_view_size, 1, 1, 0,
+       doc: /* Return BUFFER's libregnum view (FBO) size as a list (W H), or
+nil.  Used to map window-relative drop coordinates into view-local pixels.  */)
+  (Lisp_Object buffer)
+{
+  int w = 0, h = 0;
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  cmacs_libregnum_view_get_size (v, &w, &h);
+  return list2 (make_fixnum (w), make_fixnum (h));
+}
+
 DEFUN ("cmacs-libregnum-redraw", Fcmacs_libregnum_redraw,
        Scmacs_libregnum_redraw, 1, 1, 0,
        doc: /* Request a redraw of BUFFER's libregnum view.  */)
@@ -379,6 +393,809 @@ from Elisp rather than read from the hidden window).  */)
   return Qt;
 }
 
+/* ── Editor / level authoring ──────────────────────────────────────
+ * Drive the engine LrgEditor hosted in BUFFER's view.  The level is
+ * baked into the scene drawables, so the existing scene render/pick
+ * path and `cmacs-libregnum-tree-nodes' double as the editor viewport
+ * and outliner.  Node ids are the scene-node ids. */
+
+DEFUN ("cmacs-libregnum-editor-new", Fcmacs_libregnum_editor_new,
+       Scmacs_libregnum_editor_new, 1, 1, 0,
+       doc: /* Start a fresh, empty editable level in BUFFER's view.  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) error ("cmacs-libregnum: no view attached to buffer");
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  if (!cmacs_libregnum_render_ctx_editor_new (ctx))
+    xsignal1 (Qcmacs_libregnum_error, build_string ("editor unavailable"));
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-editor-open", Fcmacs_libregnum_editor_open,
+       Scmacs_libregnum_editor_open, 2, 2, 0,
+       doc: /* Open `.rlevel' file PATH as an editable level in BUFFER's view.  */)
+  (Lisp_Object buffer, Lisp_Object path)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_STRING (path);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) error ("cmacs-libregnum: no view attached to buffer");
+  Lisp_Object encoded = ENCODE_FILE (path);
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  char *err = NULL;
+  if (!cmacs_libregnum_render_ctx_editor_open (ctx, SSDATA (encoded), &err))
+    {
+      Lisp_Object msg = build_string (err ? err : "open failed");
+      g_free (err);
+      xsignal1 (Qcmacs_libregnum_error, msg);
+    }
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-editor-save", Fcmacs_libregnum_editor_save,
+       Scmacs_libregnum_editor_save, 2, 2, 0,
+       doc: /* Save BUFFER's view editable level to `.rlevel' file PATH.  */)
+  (Lisp_Object buffer, Lisp_Object path)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_STRING (path);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) error ("cmacs-libregnum: no view attached to buffer");
+  Lisp_Object encoded = ENCODE_FILE (path);
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  char *err = NULL;
+  if (!cmacs_libregnum_render_ctx_editor_save (ctx, SSDATA (encoded), &err))
+    {
+      Lisp_Object msg = build_string (err ? err : "save failed");
+      g_free (err);
+      xsignal1 (Qcmacs_libregnum_error, msg);
+    }
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-editor-active-p", Fcmacs_libregnum_editor_active_p,
+       Scmacs_libregnum_editor_active_p, 1, 1, 0,
+       doc: /* Return non-nil if BUFFER's view is hosting an editable level.  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  return cmacs_libregnum_render_ctx_editor_active (ctx) ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-libregnum-editor-add-primitive", Fcmacs_libregnum_editor_add_primitive,
+       Scmacs_libregnum_editor_add_primitive, 2, 3, 0,
+       doc: /* Add a primitive node (PRIM is an LrgPrimitiveType int) to BUFFER's
+level and select it.  Optional NAME names the node.  Returns the new node's
+scene id, or nil on failure.  */)
+  (Lisp_Object buffer, Lisp_Object prim, Lisp_Object name)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (prim);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) error ("cmacs-libregnum: no view attached to buffer");
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  const char *nm = NILP (name) ? NULL : (CHECK_STRING (name), SSDATA (name));
+  gint id = cmacs_libregnum_render_ctx_editor_add_primitive
+              (ctx, (int) XFIXNUM (prim), nm);
+  cmacs_libregnum_view_request_redraw (v);
+  return (id < 0) ? Qnil : make_fixnum (id);
+}
+
+DEFUN ("cmacs-libregnum-editor-delete", Fcmacs_libregnum_editor_delete,
+       Scmacs_libregnum_editor_delete, 2, 2, 0,
+       doc: /* Delete scene node NODE-ID from BUFFER's editable level.  */)
+  (Lisp_Object buffer, Lisp_Object node_id)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (node_id);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  cmacs_libregnum_render_ctx_editor_delete (ctx, (gint) XFIXNUM (node_id));
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-editor-select", Fcmacs_libregnum_editor_select,
+       Scmacs_libregnum_editor_select, 2, 2, 0,
+       doc: /* Select scene node NODE-ID in BUFFER's editable level.  */)
+  (Lisp_Object buffer, Lisp_Object node_id)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (node_id);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  cmacs_libregnum_render_ctx_editor_select_node (ctx, (gint) XFIXNUM (node_id));
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-editor-set-position", Fcmacs_libregnum_editor_set_position,
+       Scmacs_libregnum_editor_set_position, 5, 5, 0,
+       doc: /* Set scene node NODE-ID's local position to (X Y Z) as one
+undoable edit, in BUFFER's editable level.  */)
+  (Lisp_Object buffer, Lisp_Object node_id,
+   Lisp_Object x, Lisp_Object y, Lisp_Object z)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (node_id);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  cmacs_libregnum_render_ctx_editor_set_position
+    (ctx, (gint) XFIXNUM (node_id),
+     cmacs_libregnum__to_double (x),
+     cmacs_libregnum__to_double (y),
+     cmacs_libregnum__to_double (z));
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-editor-undo", Fcmacs_libregnum_editor_undo,
+       Scmacs_libregnum_editor_undo, 1, 1, 0,
+       doc: /* Undo the last edit in BUFFER's editable level.  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  cmacs_libregnum_render_ctx_editor_undo (ctx);
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-editor-redo", Fcmacs_libregnum_editor_redo,
+       Scmacs_libregnum_editor_redo, 1, 1, 0,
+       doc: /* Redo the last undone edit in BUFFER's editable level.  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  cmacs_libregnum_render_ctx_editor_redo (ctx);
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-editor-can-undo-p", Fcmacs_libregnum_editor_can_undo_p,
+       Scmacs_libregnum_editor_can_undo_p, 1, 1, 0,
+       doc: /* Return non-nil if BUFFER's editable level has an edit to undo.  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  return cmacs_libregnum_render_ctx_editor_can_undo (ctx) ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-libregnum-editor-node-guid", Fcmacs_libregnum_editor_node_guid,
+       Scmacs_libregnum_editor_node_guid, 2, 2, 0,
+       doc: /* Return the stable guid string of scene NODE-ID in BUFFER's
+editable level, or nil.  */)
+  (Lisp_Object buffer, Lisp_Object node_id)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (node_id);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  const char *guid = cmacs_libregnum_render_ctx_editor_node_guid
+                       (ctx, (gint) XFIXNUM (node_id));
+  return guid ? build_string (guid) : Qnil;
+}
+
+DEFUN ("cmacs-libregnum-editor-node-location",
+       Fcmacs_libregnum_editor_node_location,
+       Scmacs_libregnum_editor_node_location, 2, 2, 0,
+       doc: /* Return scene NODE-ID's local location as a list (X Y Z) of
+floats in BUFFER's editable level, or nil if NODE-ID is invalid.  */)
+  (Lisp_Object buffer, Lisp_Object node_id)
+{
+  double x = 0, y = 0, z = 0;
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (node_id);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  if (!cmacs_libregnum_render_ctx_editor_node_location
+        (ctx, (gint) XFIXNUM (node_id), &x, &y, &z))
+    return Qnil;
+  return list3 (make_float (x), make_float (y), make_float (z));
+}
+
+DEFUN ("cmacs-libregnum-editor-selected-id",
+       Fcmacs_libregnum_editor_selected_id,
+       Scmacs_libregnum_editor_selected_id, 1, 1, 0,
+       doc: /* Return the selected scene node id in BUFFER's editable level,
+or nil if nothing is selected.  Reflects viewport picks as well as Lisp
+selection, so it is the single source of the current selection.  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  gint id = cmacs_libregnum_render_ctx_get_selected (ctx);
+  return (id >= 0) ? make_fixnum (id) : Qnil;
+}
+
+DEFUN ("cmacs-libregnum-editor-set-snap", Fcmacs_libregnum_editor_set_snap,
+       Scmacs_libregnum_editor_set_snap, 2, 2, 0,
+       doc: /* Set the translate grid SNAP (a number, or nil/0 to disable) for
+drag-to-move in BUFFER's editable level.  */)
+  (Lisp_Object buffer, Lisp_Object snap)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  cmacs_libregnum_render_ctx_editor_set_snap
+    (ctx, NILP (snap) ? 0.0 : cmacs_libregnum__to_double (snap));
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-editor-focus", Fcmacs_libregnum_editor_focus,
+       Scmacs_libregnum_editor_focus, 2, 2, 0,
+       doc: /* Frame the camera on scene NODE-ID in BUFFER (animated).  */)
+  (Lisp_Object buffer, Lisp_Object node_id)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (node_id);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  cmacs_libregnum_render_ctx_focus_node (ctx, (gint) XFIXNUM (node_id));
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-editor-drag-begin", Fcmacs_libregnum_editor_drag_begin,
+       Scmacs_libregnum_editor_drag_begin, 6, 6, 0,
+       doc: /* Begin dragging NODE-ID in BUFFER, grabbed at view-local pixel
+\(VX,VY) in a VW-by-VH viewport.  The node moves on the horizontal plane at
+its current height.  Returns non-nil on success.  Mainly for the C input
+layer + scripting/tests; interactive use is the mouse itself.  */)
+  (Lisp_Object buffer, Lisp_Object node_id, Lisp_Object vx, Lisp_Object vy,
+   Lisp_Object vw, Lisp_Object vh)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (node_id);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  gboolean ok = cmacs_libregnum_render_ctx_editor_drag_begin
+                  (ctx, (gint) XFIXNUM (node_id),
+                   cmacs_libregnum__to_double (vx),
+                   cmacs_libregnum__to_double (vy),
+                   (int) XFIXNUM (vw), (int) XFIXNUM (vh));
+  return ok ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-libregnum-editor-drag-update", Fcmacs_libregnum_editor_drag_update,
+       Scmacs_libregnum_editor_drag_update, 5, 5, 0,
+       doc: /* Track an in-progress drag in BUFFER to view-local (VX,VY) in a
+VW-by-VH viewport (live, no undo entry).  Returns non-nil on success.  */)
+  (Lisp_Object buffer, Lisp_Object vx, Lisp_Object vy,
+   Lisp_Object vw, Lisp_Object vh)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  gboolean ok = cmacs_libregnum_render_ctx_editor_drag_update
+                  (ctx, cmacs_libregnum__to_double (vx),
+                   cmacs_libregnum__to_double (vy),
+                   (int) XFIXNUM (vw), (int) XFIXNUM (vh));
+  cmacs_libregnum_view_request_redraw (v);
+  return ok ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-libregnum-editor-drag-end", Fcmacs_libregnum_editor_drag_end,
+       Scmacs_libregnum_editor_drag_end, 1, 1, 0,
+       doc: /* Finish the in-progress drag in BUFFER, recording one coalesced
+undoable move (a no-op drag records nothing).  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  cmacs_libregnum_render_ctx_editor_drag_end (ctx);
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-editor-node-rotation",
+       Fcmacs_libregnum_editor_node_rotation,
+       Scmacs_libregnum_editor_node_rotation, 2, 2, 0,
+       doc: /* Return NODE-ID's local rotation as a list (X Y Z) of euler
+radians in BUFFER's editable level, or nil if NODE-ID is invalid.  */)
+  (Lisp_Object buffer, Lisp_Object node_id)
+{
+  double x = 0, y = 0, z = 0;
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (node_id);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  if (!cmacs_libregnum_render_ctx_editor_node_rotation
+        (ctx, (gint) XFIXNUM (node_id), &x, &y, &z))
+    return Qnil;
+  return list3 (make_float (x), make_float (y), make_float (z));
+}
+
+DEFUN ("cmacs-libregnum-editor-node-scale",
+       Fcmacs_libregnum_editor_node_scale,
+       Scmacs_libregnum_editor_node_scale, 2, 2, 0,
+       doc: /* Return NODE-ID's local scale as a list (X Y Z) in BUFFER's
+editable level, or nil if NODE-ID is invalid.  */)
+  (Lisp_Object buffer, Lisp_Object node_id)
+{
+  double x = 1, y = 1, z = 1;
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (node_id);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  if (!cmacs_libregnum_render_ctx_editor_node_scale
+        (ctx, (gint) XFIXNUM (node_id), &x, &y, &z))
+    return Qnil;
+  return list3 (make_float (x), make_float (y), make_float (z));
+}
+
+DEFUN ("cmacs-libregnum-editor-set-rotation",
+       Fcmacs_libregnum_editor_set_rotation,
+       Scmacs_libregnum_editor_set_rotation, 5, 5, 0,
+       doc: /* Set NODE-ID's local rotation to (X Y Z) euler radians as one
+undoable edit, in BUFFER's editable level.  */)
+  (Lisp_Object buffer, Lisp_Object node_id,
+   Lisp_Object x, Lisp_Object y, Lisp_Object z)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (node_id);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  cmacs_libregnum_render_ctx_editor_set_rotation
+    (ctx, (gint) XFIXNUM (node_id),
+     cmacs_libregnum__to_double (x),
+     cmacs_libregnum__to_double (y),
+     cmacs_libregnum__to_double (z));
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-editor-set-scale", Fcmacs_libregnum_editor_set_scale,
+       Scmacs_libregnum_editor_set_scale, 5, 5, 0,
+       doc: /* Set NODE-ID's local scale to (X Y Z) as one undoable edit, in
+BUFFER's editable level.  */)
+  (Lisp_Object buffer, Lisp_Object node_id,
+   Lisp_Object x, Lisp_Object y, Lisp_Object z)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (node_id);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  cmacs_libregnum_render_ctx_editor_set_scale
+    (ctx, (gint) XFIXNUM (node_id),
+     cmacs_libregnum__to_double (x),
+     cmacs_libregnum__to_double (y),
+     cmacs_libregnum__to_double (z));
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-editor-reparent", Fcmacs_libregnum_editor_reparent,
+       Scmacs_libregnum_editor_reparent, 3, 3, 0,
+       doc: /* Reparent CHILD-ID under PARENT-ID in BUFFER's editable level
+(PARENT-ID negative == the level root).  Returns non-nil on success.  */)
+  (Lisp_Object buffer, Lisp_Object child_id, Lisp_Object parent_id)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (child_id);
+  CHECK_FIXNUM (parent_id);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  gboolean ok = cmacs_libregnum_render_ctx_editor_reparent
+                  (ctx, (gint) XFIXNUM (child_id), (gint) XFIXNUM (parent_id));
+  cmacs_libregnum_view_request_redraw (v);
+  return ok ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-libregnum-editor-add-visual", Fcmacs_libregnum_editor_add_visual,
+       Scmacs_libregnum_editor_add_visual, 2, 4, 0,
+       doc: /* Add a node of visual KIND (an `LrgNodeVisualKind' int) to
+BUFFER's level, with optional ASSET path (for mesh/sprite) and NAME, and select
+it.  Returns the new node's scene id, or nil.  KIND: 2 mesh, 3 sprite, 5 light,
+6 camera, 7 audio, 8 prefab.  */)
+  (Lisp_Object buffer, Lisp_Object kind, Lisp_Object asset, Lisp_Object name)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (kind);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  gint id = cmacs_libregnum_render_ctx_editor_add_visual
+              (ctx, (int) XFIXNUM (kind),
+               STRINGP (asset) ? SSDATA (asset) : NULL,
+               STRINGP (name) ? SSDATA (name) : NULL);
+  cmacs_libregnum_view_request_redraw (v);
+  return (id >= 0) ? make_fixnum (id) : Qnil;
+}
+
+DEFUN ("cmacs-libregnum-editor-attach-script",
+       Fcmacs_libregnum_editor_attach_script,
+       Scmacs_libregnum_editor_attach_script, 4, 4, 0,
+       doc: /* Attach a script to NODE-ID in BUFFER: LANGUAGE is an
+`LrgScriptLanguage' int (1 lua, 2 python, 3 gjs, 4 crispy) and PATH the script
+file.  Persisted in the level.  Returns non-nil on success.  */)
+  (Lisp_Object buffer, Lisp_Object node_id, Lisp_Object language,
+   Lisp_Object path)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (node_id);
+  CHECK_FIXNUM (language);
+  CHECK_STRING (path);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  gboolean ok = cmacs_libregnum_render_ctx_editor_attach_script
+                  (ctx, (gint) XFIXNUM (node_id), (int) XFIXNUM (language),
+                   SSDATA (path));
+  cmacs_libregnum_view_request_redraw (v);
+  return ok ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-libregnum-editor-node-script-count",
+       Fcmacs_libregnum_editor_node_script_count,
+       Scmacs_libregnum_editor_node_script_count, 2, 2, 0,
+       doc: /* Return the number of scripts attached to NODE-ID in BUFFER, or
+nil if NODE-ID is invalid.  */)
+  (Lisp_Object buffer, Lisp_Object node_id)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (node_id);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  gint n = cmacs_libregnum_render_ctx_editor_node_script_count
+             (ctx, (gint) XFIXNUM (node_id));
+  return (n >= 0) ? make_fixnum (n) : Qnil;
+}
+
+DEFUN ("cmacs-libregnum-editor-play", Fcmacs_libregnum_editor_play,
+       Scmacs_libregnum_editor_play, 1, 1, 0,
+       doc: /* Play-in-editor: instantiate BUFFER's level into a throwaway
+runtime world and run it (the level document is not mutated).  Returns non-nil
+on success.  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  gboolean ok = cmacs_libregnum_render_ctx_editor_play (ctx);
+  cmacs_libregnum_view_request_redraw (v);
+  return ok ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-libregnum-editor-stop", Fcmacs_libregnum_editor_stop,
+       Scmacs_libregnum_editor_stop, 1, 1, 0,
+       doc: /* Stop play-in-editor in BUFFER and discard the runtime world.  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  cmacs_libregnum_render_ctx_editor_stop (ctx);
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-editor-playing-p", Fcmacs_libregnum_editor_playing_p,
+       Scmacs_libregnum_editor_playing_p, 1, 1, 0,
+       doc: /* Return non-nil if BUFFER's level is in play-in-editor mode.  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  return cmacs_libregnum_render_ctx_editor_playing (ctx) ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-libregnum-editor-play-tick", Fcmacs_libregnum_editor_play_tick,
+       Scmacs_libregnum_editor_play_tick, 2, 2, 0,
+       doc: /* Advance BUFFER's play-in-editor world by DELTA seconds.  */)
+  (Lisp_Object buffer, Lisp_Object delta)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  gboolean ok = cmacs_libregnum_render_ctx_editor_play_tick
+                  (ctx, cmacs_libregnum__to_double (delta));
+  cmacs_libregnum_view_request_redraw (v);
+  return ok ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-libregnum-editor-set-view-2d",
+       Fcmacs_libregnum_editor_set_view_2d,
+       Scmacs_libregnum_editor_set_view_2d, 2, 2, 0,
+       doc: /* Switch BUFFER's viewport to a top-down orthographic 2D view when
+ON is non-nil, else back to the default perspective.  */)
+  (Lisp_Object buffer, Lisp_Object on)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  cmacs_libregnum_render_ctx_editor_set_view_2d (ctx, !NILP (on));
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-editor-view-2d-p", Fcmacs_libregnum_editor_view_2d_p,
+       Scmacs_libregnum_editor_view_2d_p, 1, 1, 0,
+       doc: /* Return non-nil if BUFFER's viewport is in 2D (orthographic) view.  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  return cmacs_libregnum_render_ctx_editor_view_2d (ctx) ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-libregnum-editor-set-armed", Fcmacs_libregnum_editor_set_armed,
+       Scmacs_libregnum_editor_set_armed, 2, 2, 0,
+       doc: /* Arm BUFFER (ON non-nil) so the next viewport click drops the
+pending asset at the clicked ground point (C defers to
+`cmacs-libregnum-editor--drop').  */)
+  (Lisp_Object buffer, Lisp_Object on)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  cmacs_libregnum_render_ctx_editor_set_armed (ctx, !NILP (on));
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-editor-screen-to-ground",
+       Fcmacs_libregnum_editor_screen_to_ground,
+       Scmacs_libregnum_editor_screen_to_ground, 5, 5, 0,
+       doc: /* World point on the ground plane under view-local (VX,VY) in a
+VW-by-VH viewport of BUFFER, as a list (X Y Z), or nil.  */)
+  (Lisp_Object buffer, Lisp_Object vx, Lisp_Object vy,
+   Lisp_Object vw, Lisp_Object vh)
+{
+  double x = 0, y = 0, z = 0;
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  if (!cmacs_libregnum_render_ctx_editor_screen_to_ground
+        (ctx, cmacs_libregnum__to_double (vx),
+         cmacs_libregnum__to_double (vy),
+         (int) XFIXNUM (vw), (int) XFIXNUM (vh), &x, &y, &z))
+    return Qnil;
+  return list3 (make_float (x), make_float (y), make_float (z));
+}
+
+DEFUN ("cmacs-libregnum-project", Fcmacs_libregnum_project,
+       Scmacs_libregnum_project, 6, 6, 0,
+       doc: /* Project world point (WX WY WZ) in BUFFER to view-local pixels in
+a VW-by-VH viewport.  Returns (SX SY) floats, or nil if behind the camera.  */)
+  (Lisp_Object buffer, Lisp_Object wx, Lisp_Object wy, Lisp_Object wz,
+   Lisp_Object vw, Lisp_Object vh)
+{
+  double sx = 0, sy = 0;
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  if (!cmacs_libregnum_render_ctx_project
+        (ctx, (float) cmacs_libregnum__to_double (wx),
+         (float) cmacs_libregnum__to_double (wy),
+         (float) cmacs_libregnum__to_double (wz),
+         (int) XFIXNUM (vw), (int) XFIXNUM (vh), &sx, &sy))
+    return Qnil;
+  return list2 (make_float (sx), make_float (sy));
+}
+
+DEFUN ("cmacs-libregnum-editor-set-tool", Fcmacs_libregnum_editor_set_tool,
+       Scmacs_libregnum_editor_set_tool, 2, 2, 0,
+       doc: /* Set BUFFER's gizmo TOOL: 0 select, 1 translate, 2 rotate,
+3 scale.  The handles draw over the selection in the viewport.  */)
+  (Lisp_Object buffer, Lisp_Object tool)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (tool);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  cmacs_libregnum_render_ctx_editor_set_tool (ctx, (int) XFIXNUM (tool));
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-editor-get-tool", Fcmacs_libregnum_editor_get_tool,
+       Scmacs_libregnum_editor_get_tool, 1, 1, 0,
+       doc: /* Return BUFFER's current gizmo tool (0..3).  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  return make_fixnum (cmacs_libregnum_render_ctx_editor_get_tool (ctx));
+}
+
+DEFUN ("cmacs-libregnum-editor-gizmo-begin",
+       Fcmacs_libregnum_editor_gizmo_begin,
+       Scmacs_libregnum_editor_gizmo_begin, 5, 5, 0,
+       doc: /* Begin a gizmo drag in BUFFER if a handle is under view-local
+\(VX,VY) in a VW-by-VH viewport.  Returns non-nil if a handle was grabbed.
+Mainly for the C input layer + scripting/tests.  */)
+  (Lisp_Object buffer, Lisp_Object vx, Lisp_Object vy,
+   Lisp_Object vw, Lisp_Object vh)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  gboolean ok = cmacs_libregnum_render_ctx_editor_gizmo_begin
+                  (ctx, cmacs_libregnum__to_double (vx),
+                   cmacs_libregnum__to_double (vy),
+                   (int) XFIXNUM (vw), (int) XFIXNUM (vh));
+  return ok ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-libregnum-editor-gizmo-drag", Fcmacs_libregnum_editor_gizmo_drag,
+       Scmacs_libregnum_editor_gizmo_drag, 5, 5, 0,
+       doc: /* Track an in-progress gizmo drag in BUFFER to view-local (VX,VY)
+in a VW-by-VH viewport (live, no undo entry).  */)
+  (Lisp_Object buffer, Lisp_Object vx, Lisp_Object vy,
+   Lisp_Object vw, Lisp_Object vh)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  gboolean ok = cmacs_libregnum_render_ctx_editor_gizmo_drag
+                  (ctx, cmacs_libregnum__to_double (vx),
+                   cmacs_libregnum__to_double (vy),
+                   (int) XFIXNUM (vw), (int) XFIXNUM (vh));
+  cmacs_libregnum_view_request_redraw (v);
+  return ok ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-libregnum-editor-gizmo-end", Fcmacs_libregnum_editor_gizmo_end,
+       Scmacs_libregnum_editor_gizmo_end, 1, 1, 0,
+       doc: /* Finish the in-progress gizmo drag in BUFFER (one coalesced undo
+step).  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  cmacs_libregnum_render_ctx_editor_gizmo_end (ctx);
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-editor-tilemap-config",
+       Fcmacs_libregnum_editor_tilemap_config,
+       Scmacs_libregnum_editor_tilemap_config, 8, 8, 0,
+       doc: /* Configure NODE-ID in BUFFER as a tilemap: TILESET image,
+TILE-W x TILE-H tile pixels, COLS tileset columns, MAP-W x MAP-H cells.  Tiles
+within the overlap survive a resize.  Persisted in the level.  */)
+  (Lisp_Object buffer, Lisp_Object node_id, Lisp_Object tileset,
+   Lisp_Object tile_w, Lisp_Object tile_h, Lisp_Object cols,
+   Lisp_Object map_w, Lisp_Object map_h)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (node_id);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  cmacs_libregnum_render_ctx_editor_tilemap_config
+    (ctx, (gint) XFIXNUM (node_id),
+     STRINGP (tileset) ? SSDATA (tileset) : NULL,
+     (int) XFIXNUM (tile_w), (int) XFIXNUM (tile_h), (int) XFIXNUM (cols),
+     (int) XFIXNUM (map_w), (int) XFIXNUM (map_h));
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-editor-tilemap-set-tile",
+       Fcmacs_libregnum_editor_tilemap_set_tile,
+       Scmacs_libregnum_editor_tilemap_set_tile, 5, 5, 0,
+       doc: /* Paint cell (CX,CY) of tilemap NODE-ID in BUFFER with TILE
+\(-1 clears).  Persisted in the level.  */)
+  (Lisp_Object buffer, Lisp_Object node_id, Lisp_Object cx, Lisp_Object cy,
+   Lisp_Object tile)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (node_id);
+  CHECK_FIXNUM (cx);
+  CHECK_FIXNUM (cy);
+  CHECK_FIXNUM (tile);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  cmacs_libregnum_render_ctx_editor_tilemap_set_tile
+    (ctx, (gint) XFIXNUM (node_id), (int) XFIXNUM (cx), (int) XFIXNUM (cy),
+     (int) XFIXNUM (tile));
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-editor-tilemap-info",
+       Fcmacs_libregnum_editor_tilemap_info,
+       Scmacs_libregnum_editor_tilemap_info, 2, 2, 0,
+       doc: /* Return NODE-ID's tilemap dimensions in BUFFER as a plist
+\(:map-w W :map-h H :cols C :tile-w TW :tile-h TH), or nil if NODE-ID is not a
+tilemap.  */)
+  (Lisp_Object buffer, Lisp_Object node_id)
+{
+  int mw = 0, mh = 0, cols = 0, tw = 0, th = 0;
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (node_id);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  if (!cmacs_libregnum_render_ctx_editor_tilemap_info
+        (ctx, (gint) XFIXNUM (node_id), &mw, &mh, &cols, &tw, &th))
+    return Qnil;
+  return CALLN (Flist,
+                intern (":map-w"), make_fixnum (mw),
+                intern (":map-h"), make_fixnum (mh),
+                intern (":cols"), make_fixnum (cols),
+                intern (":tile-w"), make_fixnum (tw),
+                intern (":tile-h"), make_fixnum (th));
+}
+
+DEFUN ("cmacs-libregnum-snapshot", Fcmacs_libregnum_snapshot,
+       Scmacs_libregnum_snapshot, 2, 2, 0,
+       doc: /* Render BUFFER's view and write it to PATH as a PNG.
+Synchronous (renders + reads back immediately), so it works for headless or
+automated render verification without a compositor screenshot.  Signals
+`cmacs-libregnum-error' on failure.  */)
+  (Lisp_Object buffer, Lisp_Object path)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_STRING (path);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) error ("cmacs-libregnum: no view attached to buffer");
+  Lisp_Object encoded = ENCODE_FILE (path);
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  char *err = NULL;
+  if (!cmacs_libregnum_render_ctx_snapshot_png (ctx, SSDATA (encoded), &err))
+    {
+      Lisp_Object msg = build_string (err ? err : "snapshot failed");
+      g_free (err);
+      xsignal1 (Qcmacs_libregnum_error, msg);
+    }
+  return Qt;
+}
+
 extern Lisp_Object *cmacs_libregnum__buffers_root  (void);
 extern Lisp_Object *cmacs_libregnum__payloads_root (void);
 
@@ -404,6 +1221,7 @@ syms_of_cmacs_libregnum_defuns (void)
   defsubr (&Scmacs_libregnum_detach);
   defsubr (&Scmacs_libregnum_attached_p);
   defsubr (&Scmacs_libregnum_resize);
+  defsubr (&Scmacs_libregnum_view_size);
   defsubr (&Scmacs_libregnum_redraw);
   defsubr (&Scmacs_libregnum_set_animated);
   defsubr (&Scmacs_libregnum_animated_p);
@@ -418,6 +1236,52 @@ syms_of_cmacs_libregnum_defuns (void)
   defsubr (&Scmacs_libregnum_unload_game);
   defsubr (&Scmacs_libregnum_game_loaded_p);
   defsubr (&Scmacs_libregnum_game_key);
+
+  defsubr (&Scmacs_libregnum_editor_new);
+  defsubr (&Scmacs_libregnum_editor_open);
+  defsubr (&Scmacs_libregnum_editor_save);
+  defsubr (&Scmacs_libregnum_editor_active_p);
+  defsubr (&Scmacs_libregnum_editor_add_primitive);
+  defsubr (&Scmacs_libregnum_editor_delete);
+  defsubr (&Scmacs_libregnum_editor_select);
+  defsubr (&Scmacs_libregnum_editor_set_position);
+  defsubr (&Scmacs_libregnum_editor_undo);
+  defsubr (&Scmacs_libregnum_editor_redo);
+  defsubr (&Scmacs_libregnum_editor_can_undo_p);
+  defsubr (&Scmacs_libregnum_editor_node_guid);
+  defsubr (&Scmacs_libregnum_editor_node_location);
+  defsubr (&Scmacs_libregnum_editor_selected_id);
+  defsubr (&Scmacs_libregnum_editor_set_snap);
+  defsubr (&Scmacs_libregnum_editor_focus);
+  defsubr (&Scmacs_libregnum_editor_drag_begin);
+  defsubr (&Scmacs_libregnum_editor_drag_update);
+  defsubr (&Scmacs_libregnum_editor_drag_end);
+  defsubr (&Scmacs_libregnum_editor_node_rotation);
+  defsubr (&Scmacs_libregnum_editor_node_scale);
+  defsubr (&Scmacs_libregnum_editor_set_rotation);
+  defsubr (&Scmacs_libregnum_editor_set_scale);
+  defsubr (&Scmacs_libregnum_editor_reparent);
+  defsubr (&Scmacs_libregnum_editor_add_visual);
+  defsubr (&Scmacs_libregnum_editor_attach_script);
+  defsubr (&Scmacs_libregnum_editor_node_script_count);
+  defsubr (&Scmacs_libregnum_editor_play);
+  defsubr (&Scmacs_libregnum_editor_stop);
+  defsubr (&Scmacs_libregnum_editor_playing_p);
+  defsubr (&Scmacs_libregnum_editor_play_tick);
+  defsubr (&Scmacs_libregnum_editor_set_view_2d);
+  defsubr (&Scmacs_libregnum_editor_view_2d_p);
+  defsubr (&Scmacs_libregnum_editor_set_armed);
+  defsubr (&Scmacs_libregnum_editor_screen_to_ground);
+  defsubr (&Scmacs_libregnum_editor_tilemap_config);
+  defsubr (&Scmacs_libregnum_editor_tilemap_set_tile);
+  defsubr (&Scmacs_libregnum_editor_tilemap_info);
+  defsubr (&Scmacs_libregnum_project);
+  defsubr (&Scmacs_libregnum_editor_set_tool);
+  defsubr (&Scmacs_libregnum_editor_get_tool);
+  defsubr (&Scmacs_libregnum_editor_gizmo_begin);
+  defsubr (&Scmacs_libregnum_editor_gizmo_drag);
+  defsubr (&Scmacs_libregnum_editor_gizmo_end);
+  defsubr (&Scmacs_libregnum_snapshot);
 }
 
 #endif /* HAVE_CMACS_LIBREGNUM */

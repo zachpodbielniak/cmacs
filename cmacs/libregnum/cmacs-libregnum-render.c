@@ -16,12 +16,22 @@
 
 #include "cmacs-libregnum-render.h"
 
+/* Expose libregnum's editor authoring layer (LrgEditor/LrgLevel/...) from the
+ * umbrella header.  The symbols ship in the linked liblibregnum.a (built with
+ * BUILD_EDITOR=1, the default); this only makes their declarations visible so
+ * the editor host path below can call them. */
+#ifndef LRG_BUILD_EDITOR
+#define LRG_BUILD_EDITOR 1
+#endif
+
 #include <libregnum.h>
 #include <graylib.h>
 #include <raylib.h>
+#include <rlgl.h>     /* rlBegin/rlVertex3f/rlSetTexture for the tilemap quad */
 #include <glib.h>
 #include <string.h>
 #include <math.h>
+#include <cairo.h>
 
 /* Desktop GL 3.3 (GLFW backend) -- we read the FBO colour attachment
  * back with a raw glReadPixels in GL_BGRA so the driver does the
@@ -128,6 +138,33 @@ cmacs_node_clear (gpointer p)
 
 /* ── Per-view render context (opaque to view.c) ────────────────── */
 
+#ifdef LRG_BUILD_EDITOR
+/* A loaded mesh-asset instance baked from a MESH_ASSET node: the GPU model
+ * plus the node's transform, drawn each frame in the 3D layer (LrgShape3D
+ * drawables can't host an arbitrary glTF/OBJ model). */
+typedef struct
+{
+  GrlModel   *model;           /* owned, or NULL */
+  GrlTexture *texture;         /* owned, or NULL */
+  gboolean    flat;            /* texture: TRUE = flat ground quad,
+                                  FALSE = camera-facing billboard (sprite) */
+  /* Tilemap: when `tiles' is non-NULL the texture is a tileset and the entry
+   * draws an mw*mh grid of per-cell tiles (tile index -> tileset sub-rect). */
+  gint       *tiles;           /* owned: mw*mh ints, -1 = empty, or NULL */
+  guint8     *tile_rgb;        /* owned: 3*mw*mh, per-cell colour sampled from
+                                  the tileset (raylib rlgl texturing does not
+                                  composite in the graylib FBO batch, so tiles
+                                  render as colour-sampled cells) */
+  int         mw, mh;          /* map size in tiles */
+  int         tw, th;          /* tile pixel size in the tileset */
+  int         cols;            /* tileset columns */
+  float       x, y, z;
+  float       rx, ry, rz;      /* euler radians */
+  float       sx, sy, sz;
+  guint8      cr, cg, cb;
+} CmacsEditorModel;
+#endif
+
 struct CmacsLibregnumRenderCtx
 {
   LrgRenderer    *renderer;
@@ -155,6 +192,38 @@ struct CmacsLibregnumRenderCtx
   LrgGameTemplate  *game;          /* borrowed from loaded_game */
   LrgGameHost      *game_host;     /* owned (CmacsFboGameHost) */
   LrgInputSoftware *game_input;    /* owned; registered with input manager */
+
+#ifdef LRG_BUILD_EDITOR
+  /* Editor / level authoring.  When `editor' is non-NULL the view hosts an
+   * editable level: its nodes are baked into the scene drawables each
+   * rebuild, so it renders through the normal scene path (NOT game_mode).
+   * editor_node_map[i] is the LrgNode* (borrowed) for scene node id i. */
+  LrgEditor        *editor;          /* owned */
+  GPtrArray        *editor_node_map; /* borrowed LrgNode*, parallel to nodes */
+  GArray           *editor_models;   /* CmacsEditorModel, drawn each frame */
+  gboolean          playing;         /* play-in-editor: world is running */
+  LrgWorld         *play_world;      /* owned during play */
+
+  /* Mouse drag-to-move state.  During a drag the node is moved *live* with
+   * the plain setter (no undo command); a single coalesced transform command
+   * is pushed on drag-end, so one drag == one undo step. */
+  gboolean          editor_dragging;
+  gint              editor_drag_id;       /* baked node id being dragged */
+  float             editor_drag_start[3]; /* node location at drag begin */
+  float             editor_drag_offset[2];/* (x,z) grab offset under cursor */
+  float             editor_snap;          /* translate grid (0 = off) */
+
+  /* On-screen transform gizmo: axis handles drawn at the selection that the
+   * user drags for axis-constrained translate / rotate / scale. */
+  int               gizmo_tool;     /* 0 select, 1 translate, 2 rotate, 3 scale */
+  int               gizmo_axis;     /* active drag axis: 0=X 1=Y 2=Z, -1 none */
+  gboolean          gizmo_dragging;
+  float             gizmo_start[3]; /* node loc/rot/scale triple at drag start */
+  float             gizmo_center0[3];/* selection center at grab (fixed axis origin) */
+  float             gizmo_grab;     /* axis parameter / angle at grab */
+
+  gboolean          place_armed;    /* next viewport click drops the armed asset */
+#endif
 };
 
 CmacsLibregnumRenderCtx *
@@ -187,6 +256,25 @@ cmacs_libregnum_render_ctx_free (CmacsLibregnumRenderCtx *r)
 {
   if (!r) return;
   if (r->game_mode) cmacs_libregnum_render_ctx_unload_game (r);
+#ifdef LRG_BUILD_EDITOR
+  g_clear_object (&r->editor);
+  g_clear_object (&r->play_world);
+  if (r->editor_node_map) g_ptr_array_unref (r->editor_node_map);
+  if (r->editor_models)
+    {
+      guint mi;
+      for (mi = 0; mi < r->editor_models->len; mi++)
+        {
+          CmacsEditorModel *em = &g_array_index (r->editor_models,
+                                                 CmacsEditorModel, mi);
+          g_clear_object (&em->model);
+          g_clear_object (&em->texture);
+          g_clear_pointer (&em->tiles, g_free);
+          g_clear_pointer (&em->tile_rgb, g_free);
+        }
+      g_array_free (r->editor_models, TRUE);
+    }
+#endif
   if (r->fbo_valid) UnloadRenderTexture (r->fbo);
   g_clear_object (&r->camera);
   if (r->drawables) g_ptr_array_unref (r->drawables);
@@ -310,6 +398,8 @@ ctx_raylib_camera (CmacsLibregnumRenderCtx *r)
       if (t) c.target   = (Vector3){ t->x, t->y, t->z };
       if (u) c.up       = (Vector3){ u->x, u->y, u->z };
       c.fovy = lrg_camera3d_get_fovy (c3);
+      if (lrg_camera3d_get_projection (c3) == LRG_PROJECTION_ORTHOGRAPHIC)
+        c.projection = CAMERA_ORTHOGRAPHIC;
     }
   return c;
 }
@@ -706,6 +796,9 @@ cmacs_libregnum_render_ctx_game_mouse_button (CmacsLibregnumRenderCtx *r,
  * The colour data lands in DST bottom-up (glReadPixels' origin is the
  * lower-left corner); the overlay paint hook flips it for free with a
  * cairo matrix, so there is no CPU row-flip or channel-swap here. */
+#ifdef LRG_BUILD_EDITOR
+static void cmacs_editor_draw_gizmo (CmacsLibregnumRenderCtx *r);
+#endif
 gboolean
 cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
                                            unsigned char *dst,
@@ -764,6 +857,91 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
             if (LRG_IS_DRAWABLE (d))
               lrg_drawable_draw (LRG_DRAWABLE (d), 0.0f);
           }
+#ifdef LRG_BUILD_EDITOR
+        /* Draw any baked mesh-asset models (glTF/OBJ), positioned + rotated
+         * (about Y) + scaled per node.  57.2958 = 180/pi (radians -> degrees). */
+        for (guint mi = 0; r->editor_models && mi < r->editor_models->len; mi++)
+          {
+            CmacsEditorModel *em =
+              &g_array_index (r->editor_models, CmacsEditorModel, mi);
+            g_autoptr (GrlVector3) mpos  = grl_vector3_new (em->x, em->y, em->z);
+            g_autoptr (GrlVector3) maxis = grl_vector3_new (0.0f, 1.0f, 0.0f);
+            g_autoptr (GrlVector3) mscl  = grl_vector3_new (em->sx, em->sy,
+                                                            em->sz);
+            g_autoptr (GrlColor)   mtint = grl_color_new (em->cr, em->cg,
+                                                          em->cb, 255);
+            if (em->model)
+              grl_model_draw_ex (em->model, mpos, maxis,
+                                 em->ry * 57.2957795f, mscl, mtint);
+            else if (em->texture && em->tiles)
+              {
+                /* Tilemap: draw each non-empty cell as a textured quad on the
+                 * ground, sampling the tileset sub-rect for its tile index.
+                 * Culling off: the ground-facing winding would otherwise be a
+                 * back face from the orbit camera. */
+                {
+                    float ox = em->x - em->mw * 0.5f;
+                    float oz = em->z - em->mh * 0.5f;
+                    int cx, cy;
+                    for (cy = 0; cy < em->mh; cy++)
+                      for (cx = 0; cx < em->mw; cx++)
+                        {
+                          int idx = cy * em->mw + cx;
+                          gint tile = em->tiles[idx];
+                          Vector3 cpos;
+                          Color col = { 200, 200, 200, 255 };
+                          if (tile < 0) continue;
+                          if (em->tile_rgb)
+                            {
+                              col.r = em->tile_rgb[3 * idx];
+                              col.g = em->tile_rgb[3 * idx + 1];
+                              col.b = em->tile_rgb[3 * idx + 2];
+                            }
+                          cpos = (Vector3){ ox + cx + 0.5f, em->y,
+                                            oz + cy + 0.5f };
+                          DrawCube (cpos, 0.95f, 0.1f, 0.95f, col);
+                          DrawCubeWires (cpos, 0.95f, 0.1f, 0.95f,
+                                         (Color){ 40, 40, 40, 255 });
+                        }
+                  }
+              }
+            else if (em->texture && em->flat)
+              {
+                /* Flat textured quad (legacy / un-configured tilemap). */
+                Texture2D *t = grl_texture_get_handle (em->texture);
+                if (t)
+                  {
+                    float hxq = em->sx, hzq = em->sz, yq = em->y;
+                    rlDisableBackfaceCulling ();
+                    rlSetTexture (t->id);
+                    rlBegin (RL_QUADS);
+                    rlColor4ub (255, 255, 255, 255);
+                    rlTexCoord2f (0.0f, 0.0f);
+                    rlVertex3f (em->x - hxq, yq, em->z - hzq);
+                    rlTexCoord2f (1.0f, 0.0f);
+                    rlVertex3f (em->x + hxq, yq, em->z - hzq);
+                    rlTexCoord2f (1.0f, 1.0f);
+                    rlVertex3f (em->x + hxq, yq, em->z + hzq);
+                    rlTexCoord2f (0.0f, 1.0f);
+                    rlVertex3f (em->x - hxq, yq, em->z + hzq);
+                    rlEnd ();
+                    rlSetTexture (0);
+                    rlEnableBackfaceCulling ();
+                  }
+              }
+            else if (em->texture)
+              {
+                /* Sprite: a camera-facing billboard at the node. */
+                Camera3D bcam = ctx_raylib_camera (r);
+                Texture2D *t = grl_texture_get_handle (em->texture);
+                if (t)
+                  DrawBillboard (bcam, *t,
+                                 (Vector3){ em->x, em->y, em->z },
+                                 fmaxf (em->sx, em->sy),
+                                 (Color){ em->cr, em->cg, em->cb, 255 });
+              }
+          }
+#endif
         /* Selection highlight: a bright wireframe box around the
          * selected node, drawn in the same 3D layer so it depth-sorts
          * against the scene. */
@@ -776,6 +954,10 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
             DrawCubeWires (c, n->hw * 2 + 0.35f, n->hh * 2 + 0.35f,
                            n->hd * 2 + 0.35f, (Color){ 255, 235, 120, 255 });
           }
+#ifdef LRG_BUILD_EDITOR
+        /* Transform gizmo handles over the selection (translate/rotate/scale). */
+        cmacs_editor_draw_gizmo (r);
+#endif
         lrg_renderer_end_layer (r->renderer);
         lrg_renderer_end_frame (r->renderer);
       }
@@ -923,5 +1105,1620 @@ cmacs_libregnum_render_ctx_set_camera_state (CmacsLibregnumRenderCtx *r,
   if (fov > 0.0)
     lrg_camera3d_set_fovy (c3, (float) fov);
 }
+
+/* Render the current frame synchronously and write it to PATH as a PNG.
+ * Used for headless/automated render verification (no compositor capture). */
+gboolean
+cmacs_libregnum_render_ctx_snapshot_png (CmacsLibregnumRenderCtx *r,
+                                         const char *path, char **error_msg)
+{
+  unsigned char   *buf;
+  cairo_surface_t *surface;
+  cairo_status_t   st;
+
+  if (!r || !path)
+    {
+      if (error_msg) *error_msg = g_strdup ("snapshot: invalid arguments");
+      return FALSE;
+    }
+  if (r->width <= 0 || r->height <= 0)
+    {
+      if (error_msg) *error_msg = g_strdup ("snapshot: view has no size");
+      return FALSE;
+    }
+
+  buf = g_malloc0 ((gsize) r->width * (gsize) r->height * 4);
+  if (!cmacs_libregnum_render_ctx_render_to_bgra (r, buf, r->width, r->height))
+    {
+      g_free (buf);
+      if (error_msg) *error_msg = g_strdup ("snapshot: render failed");
+      return FALSE;
+    }
+
+  /* The readback is BGRA which, on little-endian, is cairo's ARGB32 byte
+   * order, so the buffer feeds cairo directly (orientation may be GL
+   * bottom-up; immaterial for verification). */
+  surface = cairo_image_surface_create_for_data (buf, CAIRO_FORMAT_ARGB32,
+                                                 r->width, r->height,
+                                                 r->width * 4);
+  st = cairo_surface_write_to_png (surface, path);
+  cairo_surface_destroy (surface);
+  g_free (buf);
+
+  if (st != CAIRO_STATUS_SUCCESS)
+    {
+      if (error_msg)
+        *error_msg = g_strdup (cairo_status_to_string (st));
+      return FALSE;
+    }
+  return TRUE;
+}
+
+/* ── Editor / level authoring ──────────────────────────────────────
+ * Drive an engine LrgEditor and bake its level into the scene drawables
+ * so it renders through the normal scene path and reuses the node model
+ * (picking, labels, cmacs-libregnum-tree-nodes) for the outliner. */
+#ifdef LRG_BUILD_EDITOR
+
+/* Bake one level node into a drawable + scene node; recurse over children.
+ * Returns nothing; node ids stay in lockstep with editor_node_map. */
+static void
+cmacs_editor_bake_node (CmacsLibregnumRenderCtx *r, LrgNode *node,
+                        int depth, int parent)
+{
+  GrlVector3       *loc  = lrg_node_get_location (node);
+  float             x    = loc ? loc->x : 0.0f;
+  float             y    = loc ? loc->y : 0.0f;
+  float             z    = loc ? loc->z : 0.0f;
+  LrgNodeVisual    *vis  = lrg_node_get_visual (node);
+  LrgNodeVisualKind kind = vis ? lrg_node_visual_get_kind (vis)
+                               : LRG_NODE_VISUAL_NONE;
+  const char       *name = lrg_node_get_name (node);
+  LrgShape         *shape = NULL;
+  float             hw = 0.5f, hh = 0.5f, hd = 0.5f;  /* AABB half-extents */
+  guint8            cr = 170, cg = 170, cb = 180;
+  gint              id;
+  GPtrArray        *children;
+  guint             i;
+  GrlVector3       *nrot = lrg_node_get_rotation (node);
+  GrlVector3       *nscl = lrg_node_get_scale (node);
+  float             rrx = nrot ? nrot->x : 0.0f;
+  float             rry = nrot ? nrot->y : 0.0f;
+  float             rrz = nrot ? nrot->z : 0.0f;
+  float             ssx = nscl ? nscl->x : 1.0f;
+  float             ssy = nscl ? nscl->y : 1.0f;
+  float             ssz = nscl ? nscl->z : 1.0f;
+
+  switch (kind)
+    {
+    case LRG_NODE_VISUAL_PRIMITIVE:       cr = 120; cg = 170; cb = 240; break;
+    case LRG_NODE_VISUAL_MESH_ASSET:      cr = 160; cg = 220; cb = 160; break;
+    case LRG_NODE_VISUAL_SPRITE:          cr = 240; cg = 210; cb = 120; break;
+    case LRG_NODE_VISUAL_LIGHT:           cr = 250; cg = 240; cb = 140; break;
+    case LRG_NODE_VISUAL_CAMERA:          cr = 200; cg = 160; cb = 240; break;
+    case LRG_NODE_VISUAL_AUDIO_EMITTER:   cr = 160; cg = 200; cb = 220; break;
+    case LRG_NODE_VISUAL_PREFAB_INSTANCE: cr = 220; cg = 160; cb = 200; break;
+    default:                              cr = 170; cg = 170; cb = 180; break;
+    }
+
+  /* Build the matching drawable + bounding box.  Each primitive maps to its
+   * OWN LrgShape3D; MESH_ASSET loads + draws a real model; the other visual
+   * kinds get a distinctive gizmo shape.  The AABB half-extents (hw,hh,hd)
+   * drive ray-picking + the selection wireframe, so they track the shape. */
+  if (kind == LRG_NODE_VISUAL_PRIMITIVE)
+    {
+      switch (lrg_node_visual_get_primitive (vis))
+        {
+        case LRG_PRIMITIVE_PLANE:
+          shape = LRG_SHAPE (lrg_plane3d_new_at (x, y, z, 1.0f, 1.0f));
+          hh = 0.1f;   /* flat in Y: keep a clickable slab */
+          break;
+        case LRG_PRIMITIVE_CIRCLE:
+          shape = LRG_SHAPE (lrg_circle3d_new_at (x, y, z, 0.5f));
+          hh = 0.1f;   /* flat disc */
+          break;
+        case LRG_PRIMITIVE_CIRCLE_2D:
+          shape = LRG_SHAPE (lrg_circle3d_new_at (x, y, z, 0.5f));
+          hh = 0.05f;  /* 2D circle shown flat in the 3D view */
+          break;
+        case LRG_PRIMITIVE_RECTANGLE_2D:
+          shape = LRG_SHAPE (lrg_cube3d_new_at (x, y, z, 1.0f, 0.05f, 1.0f));
+          hh = 0.05f;  /* 2D rectangle shown as a flat slab */
+          break;
+        case LRG_PRIMITIVE_GRID:
+          {
+            LrgGrid3D *g = lrg_grid3d_new_sized (10, 0.5f);
+            lrg_shape3d_set_position_xyz (LRG_SHAPE3D (g), x, y, z);
+            shape = LRG_SHAPE (g);
+            hw = 2.5f; hh = 0.1f; hd = 2.5f;
+          }
+          break;
+        case LRG_PRIMITIVE_UV_SPHERE:
+          shape = LRG_SHAPE (lrg_sphere3d_new_at (x, y, z, 0.5f));
+          break;
+        case LRG_PRIMITIVE_ICO_SPHERE:
+          shape = LRG_SHAPE (lrg_icosphere3d_new_at (x, y, z, 0.5f));
+          break;
+        case LRG_PRIMITIVE_CYLINDER:
+          shape = LRG_SHAPE (lrg_cylinder3d_new_at (x, y, z, 0.5f, 1.0f));
+          break;
+        case LRG_PRIMITIVE_CONE:
+          shape = LRG_SHAPE (lrg_cone3d_new_at (x, y, z, 0.5f, 1.0f));
+          break;
+        case LRG_PRIMITIVE_TORUS:
+          shape = LRG_SHAPE (lrg_torus3d_new_at (x, y, z, 0.6f, 0.25f));
+          hw = 0.85f; hh = 0.25f; hd = 0.85f;
+          break;
+        case LRG_PRIMITIVE_CUBE:
+        default:
+          shape = LRG_SHAPE (lrg_cube3d_new_at (x, y, z, 1.0f, 1.0f, 1.0f));
+          break;
+        }
+    }
+  else if (kind == LRG_NODE_VISUAL_MESH_ASSET)
+    {
+      const char *asset = lrg_node_visual_get_asset (vis);
+      GrlModel   *model = (asset && asset[0])
+                            ? grl_model_new_from_file (asset, NULL) : NULL;
+      if (model)
+        {
+          g_autoptr (GrlBoundingBox) bb = grl_model_get_bounding_box (model);
+          CmacsEditorModel em;
+          if (bb)
+            {
+              hw = fmaxf (fabsf (bb->max.x), fabsf (bb->min.x));
+              hh = fmaxf (fabsf (bb->max.y), fabsf (bb->min.y));
+              hd = fmaxf (fabsf (bb->max.z), fabsf (bb->min.z));
+              if (hw < 0.05f) hw = 0.5f;
+              if (hh < 0.05f) hh = 0.5f;
+              if (hd < 0.05f) hd = 0.5f;
+            }
+          em.model = model;
+          em.texture = NULL;
+          em.flat = FALSE;
+          em.tiles = NULL;
+          em.x = x; em.y = y; em.z = z;
+          em.rx = rrx; em.ry = rry; em.rz = rrz;
+          em.sx = ssx; em.sy = ssy; em.sz = ssz;
+          em.cr = 230; em.cg = 230; em.cb = 235;
+          if (r->editor_models)
+            g_array_append_val (r->editor_models, em);
+          else
+            g_object_unref (model);
+          hw *= fabsf (ssx); hh *= fabsf (ssy); hd *= fabsf (ssz);
+        }
+      else
+        /* Missing/failed asset: a green placeholder cube. */
+        shape = LRG_SHAPE (lrg_cube3d_new_at (x, y, z, 1.0f, 1.0f, 1.0f));
+    }
+  else if (kind == LRG_NODE_VISUAL_SPRITE)
+    {
+      const char *asset = lrg_node_visual_get_asset (vis);
+      GrlTexture *tex = (asset && asset[0])
+                          ? grl_texture_new_from_file (asset) : NULL;
+      if (tex)
+        {
+          CmacsEditorModel em;
+          em.model = NULL;
+          em.texture = tex;
+          em.flat = FALSE;          /* sprite = camera-facing billboard */
+          em.tiles = NULL;
+          em.x = x; em.y = y; em.z = z;
+          em.rx = rrx; em.ry = rry; em.rz = rrz;
+          em.sx = ssx; em.sy = ssy; em.sz = ssz;
+          em.cr = 255; em.cg = 255; em.cb = 255;
+          if (r->editor_models)
+            g_array_append_val (r->editor_models, em);
+          else
+            g_object_unref (tex);
+          hw = 0.5f * fabsf (ssx); hh = 0.5f * fabsf (ssy);
+          hd = 0.5f * fabsf (ssz);
+        }
+      else                  /* no/failed image: flat plane gizmo */
+        {
+          shape = LRG_SHAPE (lrg_plane3d_new_at (x, y, z, 1.0f, 1.0f));
+          hh = 0.1f;
+        }
+    }
+  else if (kind == LRG_NODE_VISUAL_TILEMAP)
+    {
+      /* Render an mw*mh grid of per-cell tiles from the tileset image, reading
+       * the tilemap data out of the node's visual params (so it persists in
+       * the .rlevel).  With no tileset/dimensions, show a reference grid. */
+      const char *asset = lrg_node_visual_get_asset (vis);
+      int mw = (int) lrg_node_visual_get_param_double (vis, "mw", 0.0);
+      int mh = (int) lrg_node_visual_get_param_double (vis, "mh", 0.0);
+      GrlTexture *tex = (asset && asset[0])
+                          ? grl_texture_new_from_file (asset) : NULL;
+      if (tex && mw > 0 && mh > 0)
+        {
+          CmacsEditorModel em;
+          const GValue *tv = lrg_node_visual_get_param (vis, "tiles");
+          int n = mw * mh, i;
+          gint *tiles = g_new (gint, n);
+          for (i = 0; i < n; i++)
+            tiles[i] = -1;
+          if (tv != NULL && G_VALUE_HOLDS_STRING (tv))
+            {
+              const char *csv = g_value_get_string (tv);
+              gchar **parts = g_strsplit (csv ? csv : "", ",", -1);
+              for (i = 0; parts && parts[i] != NULL && i < n; i++)
+                if (parts[i][0] != '\0')
+                  tiles[i] = (gint) g_ascii_strtoll (parts[i], NULL, 10);
+              g_strfreev (parts);
+            }
+          else if (tv != NULL && G_VALUE_HOLDS_INT (tv))
+            tiles[0] = g_value_get_int (tv);
+          else if (tv != NULL && G_VALUE_HOLDS_INT64 (tv))
+            tiles[0] = (gint) g_value_get_int64 (tv);
+          em.model = NULL; em.texture = tex; em.flat = TRUE; em.tiles = tiles;
+          em.mw = mw; em.mh = mh;
+          em.tw = (int) lrg_node_visual_get_param_double (vis, "tw", 16.0);
+          em.th = (int) lrg_node_visual_get_param_double (vis, "th", 16.0);
+          em.cols = (int) lrg_node_visual_get_param_double (vis, "cols", 1.0);
+          if (em.cols < 1) em.cols = 1;
+          if (em.tw < 1) em.tw = 1;
+          if (em.th < 1) em.th = 1;
+          /* Sample a representative colour per cell from the tileset image. */
+          em.tile_rgb = g_new0 (guint8, 3 * n);
+          {
+            Image img = LoadImage (asset);
+            if (img.data != NULL)
+              {
+                for (i = 0; i < n; i++)
+                  {
+                    int tile = tiles[i], col, row, px, py;
+                    Color c;
+                    if (tile < 0) continue;
+                    col = tile % em.cols;
+                    row = tile / em.cols;
+                    px = col * em.tw + em.tw / 2;
+                    py = row * em.th + em.th / 2;
+                    if (px >= img.width)  px = img.width - 1;
+                    if (py >= img.height) py = img.height - 1;
+                    c = GetImageColor (img, px, py);
+                    em.tile_rgb[3 * i]     = c.r;
+                    em.tile_rgb[3 * i + 1] = c.g;
+                    em.tile_rgb[3 * i + 2] = c.b;
+                  }
+                UnloadImage (img);
+              }
+          }
+          em.x = x; em.y = y; em.z = z;
+          em.rx = rrx; em.ry = rry; em.rz = rrz;
+          em.sx = ssx; em.sy = ssy; em.sz = ssz;
+          em.cr = 255; em.cg = 255; em.cb = 255;
+          if (r->editor_models)
+            g_array_append_val (r->editor_models, em);
+          else { g_object_unref (tex); g_free (tiles); g_free (em.tile_rgb); }
+          hw = (float) mw * 0.5f; hh = 0.1f; hd = (float) mh * 0.5f;
+        }
+      else
+        {
+          LrgGrid3D *g;
+          if (tex) g_object_unref (tex);
+          g = lrg_grid3d_new_sized (16, 0.5f);
+          lrg_shape3d_set_position_xyz (LRG_SHAPE3D (g), x, y, z);
+          shape = LRG_SHAPE (g);
+          hw = 4.0f; hh = 0.1f; hd = 4.0f;
+        }
+    }
+  else if (kind == LRG_NODE_VISUAL_LIGHT)
+    {
+      shape = LRG_SHAPE (lrg_icosphere3d_new_at (x, y, z, 0.3f));
+      hw = 0.3f; hh = 0.3f; hd = 0.3f;
+    }
+  else if (kind == LRG_NODE_VISUAL_CAMERA)
+    {
+      shape = LRG_SHAPE (lrg_cone3d_new_at (x, y, z, 0.4f, 0.7f));
+      hw = 0.4f; hh = 0.45f; hd = 0.4f;
+    }
+  else if (kind == LRG_NODE_VISUAL_AUDIO_EMITTER)
+    {
+      shape = LRG_SHAPE (lrg_sphere3d_new_at (x, y, z, 0.35f));
+      hw = 0.35f; hh = 0.35f; hd = 0.35f;
+    }
+  else if (kind == LRG_NODE_VISUAL_PREFAB_INSTANCE)
+    {
+      shape = LRG_SHAPE (lrg_cube3d_new_at (x, y, z, 1.0f, 1.0f, 1.0f));
+    }
+
+  if (shape)
+    {
+      g_autoptr (GrlColor) col = grl_color_new (cr, cg, cb, 255);
+      /* Reflect the node's rotation (radians) + scale so move/rotate/scale all
+       * show in the viewport; the pick AABB scales (rotation stays axis-aligned). */
+      lrg_shape3d_set_rotation_xyz (LRG_SHAPE3D (shape), rrx, rry, rrz);
+      lrg_shape3d_set_scale_xyz (LRG_SHAPE3D (shape), ssx, ssy, ssz);
+      hw *= fabsf (ssx); hh *= fabsf (ssy); hd *= fabsf (ssz);
+      lrg_shape_set_color (shape, col);
+      cmacs_libregnum_render_ctx_add_drawable (r, shape);
+    }
+
+  /* Record a scene node (even empties) so the outliner shows the tree.
+   * The node path carries the stable guid for round-tripping. */
+  id = (gint) cmacs_libregnum_render_ctx_add_node
+                (r, lrg_node_get_guid (node), name ? name : "(node)",
+                 FALSE, depth, parent, x, y, z, hw, hh, hd);
+  g_ptr_array_add (r->editor_node_map, node);
+
+  children = lrg_node_get_children (node);
+  for (i = 0; children && i < children->len; i++)
+    cmacs_editor_bake_node (r, g_ptr_array_index (children, i),
+                            depth + 1, id);
+}
+
+static void
+cmacs_editor_rebuild (CmacsLibregnumRenderCtx *r)
+{
+  LrgLevel  *level;
+  LrgNode   *root;
+  GPtrArray *children;
+  guint      i;
+  LrgNode   *sel;
+
+  cmacs_libregnum_render_ctx_clear_drawables (r);  /* clears nodes + selection */
+  if (r->editor_node_map)
+    g_ptr_array_set_size (r->editor_node_map, 0);
+  /* Drop any mesh-asset models from the previous bake. */
+  if (r->editor_models)
+    {
+      guint mi;
+      for (mi = 0; mi < r->editor_models->len; mi++)
+        {
+          CmacsEditorModel *em = &g_array_index (r->editor_models,
+                                                 CmacsEditorModel, mi);
+          g_clear_object (&em->model);
+          g_clear_object (&em->texture);
+          g_clear_pointer (&em->tiles, g_free);
+          g_clear_pointer (&em->tile_rgb, g_free);
+        }
+      g_array_set_size (r->editor_models, 0);
+    }
+  else
+    r->editor_models = g_array_new (FALSE, FALSE, sizeof (CmacsEditorModel));
+  if (!r->editor)
+    return;
+
+  level = lrg_editor_get_level (r->editor);
+  if (!level)
+    return;
+  root = lrg_level_get_root (level);
+  children = lrg_node_get_children (root);
+  for (i = 0; children && i < children->len; i++)
+    cmacs_editor_bake_node (r, g_ptr_array_index (children, i), 0, -1);
+
+  /* Reflect the editor's primary selection as the highlighted node. */
+  sel = lrg_editor_selection_get_primary (lrg_editor_get_selection (r->editor));
+  if (sel)
+    for (i = 0; i < r->editor_node_map->len; i++)
+      if (g_ptr_array_index (r->editor_node_map, i) == sel)
+        {
+          cmacs_libregnum_render_ctx_set_selected (r, (gint) i);
+          break;
+        }
+}
+
+static LrgNode *
+cmacs_editor_node_for_id (CmacsLibregnumRenderCtx *r, gint id)
+{
+  if (!r || !r->editor_node_map || id < 0
+      || (guint) id >= r->editor_node_map->len)
+    return NULL;
+  return g_ptr_array_index (r->editor_node_map, id);
+}
+
+gboolean
+cmacs_libregnum_render_ctx_editor_new (CmacsLibregnumRenderCtx *r)
+{
+  if (!r) return FALSE;
+  g_clear_object (&r->editor);
+  r->editor = lrg_editor_new ();
+  if (!r->editor_node_map) r->editor_node_map = g_ptr_array_new ();
+  if (r->gizmo_tool == 0) r->gizmo_tool = 1;   /* default: translate handles */
+  cmacs_editor_rebuild (r);
+  return TRUE;
+}
+
+gboolean
+cmacs_libregnum_render_ctx_editor_open (CmacsLibregnumRenderCtx *r,
+                                        const char *path, char **error_msg)
+{
+  GError *e = NULL;
+  if (!r) return FALSE;
+  if (!r->editor) r->editor = lrg_editor_new ();
+  if (!r->editor_node_map) r->editor_node_map = g_ptr_array_new ();
+  if (!lrg_editor_load_level (r->editor, path, &e))
+    {
+      if (error_msg) *error_msg = g_strdup (e ? e->message : "load failed");
+      g_clear_error (&e);
+      return FALSE;
+    }
+  cmacs_editor_rebuild (r);
+  return TRUE;
+}
+
+gboolean
+cmacs_libregnum_render_ctx_editor_save (CmacsLibregnumRenderCtx *r,
+                                        const char *path, char **error_msg)
+{
+  GError *e = NULL;
+  if (!r || !r->editor) return FALSE;
+  if (!lrg_editor_save_level (r->editor, path, &e))
+    {
+      if (error_msg) *error_msg = g_strdup (e ? e->message : "save failed");
+      g_clear_error (&e);
+      return FALSE;
+    }
+  return TRUE;
+}
+
+void
+cmacs_libregnum_render_ctx_editor_close (CmacsLibregnumRenderCtx *r)
+{
+  if (!r) return;
+  g_clear_object (&r->editor);
+  if (r->editor_node_map) g_ptr_array_set_size (r->editor_node_map, 0);
+  cmacs_libregnum_render_ctx_clear_drawables (r);
+}
+
+gboolean
+cmacs_libregnum_render_ctx_editor_active (CmacsLibregnumRenderCtx *r)
+{
+  return r && r->editor != NULL;
+}
+
+gint
+cmacs_libregnum_render_ctx_editor_add_primitive (CmacsLibregnumRenderCtx *r,
+                                                 int prim, const char *name)
+{
+  LrgNode       *node;
+  LrgNodeVisual *vis;
+  guint          i;
+
+  if (!r || !r->editor) return -1;
+
+  node = lrg_node_new (name ? name : "Object");
+  vis = lrg_node_visual_new (LRG_NODE_VISUAL_PRIMITIVE);
+  lrg_node_visual_set_primitive (vis, (LrgPrimitiveType) prim);
+  lrg_node_set_visual (node, vis);
+  g_object_unref (vis);
+
+  lrg_editor_add_node (r->editor, node, NULL);   /* selects the new node */
+  g_object_unref (node);                          /* editor holds a ref */
+
+  cmacs_editor_rebuild (r);
+
+  for (i = 0; i < r->editor_node_map->len; i++)
+    if (g_ptr_array_index (r->editor_node_map, i) == node)
+      return (gint) i;
+  return -1;
+}
+
+void
+cmacs_libregnum_render_ctx_editor_delete (CmacsLibregnumRenderCtx *r, gint id)
+{
+  LrgNode *n = cmacs_editor_node_for_id (r, id);
+  if (n && r->editor)
+    {
+      lrg_editor_delete_node (r->editor, n);
+      cmacs_editor_rebuild (r);
+    }
+}
+
+void
+cmacs_libregnum_render_ctx_editor_select_node (CmacsLibregnumRenderCtx *r,
+                                               gint id)
+{
+  LrgNode *n = cmacs_editor_node_for_id (r, id);
+  if (r && r->editor)
+    lrg_editor_select (r->editor, n, FALSE);
+  cmacs_libregnum_render_ctx_set_selected (r, id);
+}
+
+void
+cmacs_libregnum_render_ctx_editor_set_position (CmacsLibregnumRenderCtx *r,
+                                                gint id,
+                                                double x, double y, double z)
+{
+  LrgNode    *n = cmacs_editor_node_for_id (r, id);
+  GrlVector3 *rot, *scl;
+  float       loc3[3], rot3[3], scl3[3];
+
+  if (!n || !r->editor) return;
+
+  rot = lrg_node_get_rotation (n);
+  scl = lrg_node_get_scale (n);
+  loc3[0] = (float) x; loc3[1] = (float) y; loc3[2] = (float) z;
+  rot3[0] = rot ? rot->x : 0.0f; rot3[1] = rot ? rot->y : 0.0f; rot3[2] = rot ? rot->z : 0.0f;
+  scl3[0] = scl ? scl->x : 1.0f; scl3[1] = scl ? scl->y : 1.0f; scl3[2] = scl ? scl->z : 1.0f;
+
+  lrg_editor_set_node_transform (r->editor, n, loc3, rot3, scl3);
+  cmacs_editor_rebuild (r);
+}
+
+void
+cmacs_libregnum_render_ctx_editor_undo (CmacsLibregnumRenderCtx *r)
+{
+  if (r && r->editor) { lrg_editor_undo (r->editor); cmacs_editor_rebuild (r); }
+}
+
+void
+cmacs_libregnum_render_ctx_editor_redo (CmacsLibregnumRenderCtx *r)
+{
+  if (r && r->editor) { lrg_editor_redo (r->editor); cmacs_editor_rebuild (r); }
+}
+
+gboolean
+cmacs_libregnum_render_ctx_editor_can_undo (CmacsLibregnumRenderCtx *r)
+{
+  return r && r->editor && lrg_editor_can_undo (r->editor);
+}
+
+gboolean
+cmacs_libregnum_render_ctx_editor_can_redo (CmacsLibregnumRenderCtx *r)
+{
+  return r && r->editor && lrg_editor_can_redo (r->editor);
+}
+
+const char *
+cmacs_libregnum_render_ctx_editor_node_guid (CmacsLibregnumRenderCtx *r,
+                                             gint id)
+{
+  LrgNode *n = cmacs_editor_node_for_id (r, id);
+  return n ? lrg_node_get_guid (n) : NULL;
+}
+
+/* Intersect the cursor ray (view-local VX,VY in a VW×VH viewport) with the
+ * horizontal plane Y=PLANE_Y; report the world (x,z) hit.  Returns FALSE if
+ * the ray is parallel to the plane or the hit is behind the camera. */
+static gboolean
+ctx_screen_to_plane (CmacsLibregnumRenderCtx *r, double vx, double vy,
+                     int vw, int vh, float plane_y,
+                     float *out_x, float *out_z)
+{
+  Camera3D cam;
+  Ray      ray;
+  float    t;
+
+  if (!r || vw <= 0 || vh <= 0) return FALSE;
+  cam = ctx_raylib_camera (r);
+  ray = GetScreenToWorldRayEx ((Vector2){ (float) vx, (float) vy },
+                               cam, vw, vh);
+  if (fabsf (ray.direction.y) < 1e-5f) return FALSE;
+  t = (plane_y - ray.position.y) / ray.direction.y;
+  if (t < 0.0f) return FALSE;
+  if (out_x) *out_x = ray.position.x + ray.direction.x * t;
+  if (out_z) *out_z = ray.position.z + ray.direction.z * t;
+  return TRUE;
+}
+
+gboolean
+cmacs_libregnum_render_ctx_editor_node_location (CmacsLibregnumRenderCtx *r,
+                                                 gint id, double *x,
+                                                 double *y, double *z)
+{
+  LrgNode    *n = cmacs_editor_node_for_id (r, id);
+  GrlVector3 *l;
+  if (!n) return FALSE;
+  l = lrg_node_get_location (n);
+  if (!l) return FALSE;
+  if (x) *x = l->x;
+  if (y) *y = l->y;
+  if (z) *z = l->z;
+  return TRUE;
+}
+
+void
+cmacs_libregnum_render_ctx_editor_set_snap (CmacsLibregnumRenderCtx *r,
+                                            double snap)
+{
+  if (r) r->editor_snap = (snap > 0.0) ? (float) snap : 0.0f;
+}
+
+gboolean
+cmacs_libregnum_render_ctx_editor_dragging (CmacsLibregnumRenderCtx *r)
+{
+  return r && r->editor_dragging;
+}
+
+/* Begin a drag of baked node ID grabbed at view-local (VX,VY).  Records the
+ * node's start location and the grab offset so it does not jump under the
+ * cursor.  The drag plane is horizontal at the node's current Y. */
+gboolean
+cmacs_libregnum_render_ctx_editor_drag_begin (CmacsLibregnumRenderCtx *r,
+                                              gint id, double vx, double vy,
+                                              int vw, int vh)
+{
+  LrgNode    *n = cmacs_editor_node_for_id (r, id);
+  GrlVector3 *l;
+  float       gx = 0.0f, gz = 0.0f;
+
+  if (!r || !r->editor || !n) return FALSE;
+  l = lrg_node_get_location (n);
+  if (!l) return FALSE;
+  r->editor_drag_start[0] = l->x;
+  r->editor_drag_start[1] = l->y;
+  r->editor_drag_start[2] = l->z;
+  if (ctx_screen_to_plane (r, vx, vy, vw, vh, l->y, &gx, &gz))
+    {
+      r->editor_drag_offset[0] = l->x - gx;
+      r->editor_drag_offset[1] = l->z - gz;
+    }
+  else
+    {
+      r->editor_drag_offset[0] = 0.0f;
+      r->editor_drag_offset[1] = 0.0f;
+    }
+  r->editor_drag_id = id;
+  r->editor_dragging = TRUE;
+  return TRUE;
+}
+
+/* Move the dragged node to track view-local (VX,VY) on its drag plane.
+ * Live (no undo command); rebakes so the viewport updates immediately. */
+gboolean
+cmacs_libregnum_render_ctx_editor_drag_update (CmacsLibregnumRenderCtx *r,
+                                               double vx, double vy,
+                                               int vw, int vh)
+{
+  LrgNode *n;
+  float    gx = 0.0f, gz = 0.0f, y, nx, nz;
+
+  if (!r || !r->editor_dragging) return FALSE;
+  n = cmacs_editor_node_for_id (r, r->editor_drag_id);
+  if (!n) return FALSE;
+  y = r->editor_drag_start[1];
+  if (!ctx_screen_to_plane (r, vx, vy, vw, vh, y, &gx, &gz)) return FALSE;
+  nx = gx + r->editor_drag_offset[0];
+  nz = gz + r->editor_drag_offset[1];
+  if (r->editor_snap > 0.0f)
+    {
+      nx = roundf (nx / r->editor_snap) * r->editor_snap;
+      nz = roundf (nz / r->editor_snap) * r->editor_snap;
+    }
+  lrg_node_set_location_xyz (n, nx, y, nz);
+  cmacs_editor_rebuild (r);
+  return TRUE;
+}
+
+/* Finish a drag: push a single coalesced transform command (start -> final)
+ * so the whole drag is one undo step.  A no-op drag records nothing. */
+void
+cmacs_libregnum_render_ctx_editor_drag_end (CmacsLibregnumRenderCtx *r)
+{
+  LrgNode    *n;
+  GrlVector3 *l, *rot, *scl;
+  float       fx, fy, fz, loc3[3], rot3[3], scl3[3];
+
+  if (!r || !r->editor_dragging) return;
+  r->editor_dragging = FALSE;
+  n = cmacs_editor_node_for_id (r, r->editor_drag_id);
+  if (!n || !r->editor) return;
+  l = lrg_node_get_location (n);
+  if (!l) return;
+  fx = l->x; fy = l->y; fz = l->z;
+  if (fabsf (fx - r->editor_drag_start[0])
+      + fabsf (fy - r->editor_drag_start[1])
+      + fabsf (fz - r->editor_drag_start[2]) < 1e-4f)
+    return;   /* never actually moved -- this was a click-select */
+
+  /* Roll back to the start so set_node_transform records before=start. */
+  lrg_node_set_location_xyz (n, r->editor_drag_start[0],
+                             r->editor_drag_start[1],
+                             r->editor_drag_start[2]);
+  rot = lrg_node_get_rotation (n);
+  scl = lrg_node_get_scale (n);
+  loc3[0] = fx; loc3[1] = fy; loc3[2] = fz;
+  rot3[0] = rot ? rot->x : 0.0f; rot3[1] = rot ? rot->y : 0.0f;
+  rot3[2] = rot ? rot->z : 0.0f;
+  scl3[0] = scl ? scl->x : 1.0f; scl3[1] = scl ? scl->y : 1.0f;
+  scl3[2] = scl ? scl->z : 1.0f;
+  lrg_editor_set_node_transform (r->editor, n, loc3, rot3, scl3);
+  cmacs_editor_rebuild (r);
+}
+
+gboolean
+cmacs_libregnum_render_ctx_editor_node_rotation (CmacsLibregnumRenderCtx *r,
+                                                 gint id, double *x,
+                                                 double *y, double *z)
+{
+  LrgNode    *n = cmacs_editor_node_for_id (r, id);
+  GrlVector3 *v;
+  if (!n) return FALSE;
+  v = lrg_node_get_rotation (n);
+  if (!v) return FALSE;
+  if (x) *x = v->x;
+  if (y) *y = v->y;
+  if (z) *z = v->z;
+  return TRUE;
+}
+
+gboolean
+cmacs_libregnum_render_ctx_editor_node_scale (CmacsLibregnumRenderCtx *r,
+                                              gint id, double *x,
+                                              double *y, double *z)
+{
+  LrgNode    *n = cmacs_editor_node_for_id (r, id);
+  GrlVector3 *v;
+  if (!n) return FALSE;
+  v = lrg_node_get_scale (n);
+  if (!v) return FALSE;
+  if (x) *x = v->x;
+  if (y) *y = v->y;
+  if (z) *z = v->z;
+  return TRUE;
+}
+
+/* Set NODE-ID's rotation (radians), keeping its location + scale, as one
+ * undoable transform command. */
+void
+cmacs_libregnum_render_ctx_editor_set_rotation (CmacsLibregnumRenderCtx *r,
+                                                gint id,
+                                                double x, double y, double z)
+{
+  LrgNode    *n = cmacs_editor_node_for_id (r, id);
+  GrlVector3 *loc, *scl;
+  float       l3[3], r3[3], s3[3];
+  if (!n || !r->editor) return;
+  loc = lrg_node_get_location (n);
+  scl = lrg_node_get_scale (n);
+  l3[0] = loc ? loc->x : 0.0f; l3[1] = loc ? loc->y : 0.0f;
+  l3[2] = loc ? loc->z : 0.0f;
+  r3[0] = (float) x; r3[1] = (float) y; r3[2] = (float) z;
+  s3[0] = scl ? scl->x : 1.0f; s3[1] = scl ? scl->y : 1.0f;
+  s3[2] = scl ? scl->z : 1.0f;
+  lrg_editor_set_node_transform (r->editor, n, l3, r3, s3);
+  cmacs_editor_rebuild (r);
+}
+
+/* Set NODE-ID's scale, keeping its location + rotation, as one undoable
+ * transform command. */
+void
+cmacs_libregnum_render_ctx_editor_set_scale (CmacsLibregnumRenderCtx *r,
+                                             gint id,
+                                             double x, double y, double z)
+{
+  LrgNode    *n = cmacs_editor_node_for_id (r, id);
+  GrlVector3 *loc, *rot;
+  float       l3[3], r3[3], s3[3];
+  if (!n || !r->editor) return;
+  loc = lrg_node_get_location (n);
+  rot = lrg_node_get_rotation (n);
+  l3[0] = loc ? loc->x : 0.0f; l3[1] = loc ? loc->y : 0.0f;
+  l3[2] = loc ? loc->z : 0.0f;
+  r3[0] = rot ? rot->x : 0.0f; r3[1] = rot ? rot->y : 0.0f;
+  r3[2] = rot ? rot->z : 0.0f;
+  s3[0] = (float) x; s3[1] = (float) y; s3[2] = (float) z;
+  lrg_editor_set_node_transform (r->editor, n, l3, r3, s3);
+  cmacs_editor_rebuild (r);
+}
+
+/* Reparent CHILD-ID under PARENT-ID (PARENT-ID < 0 == the level root).
+ * Returns FALSE if the move is invalid (e.g. a cycle). */
+gboolean
+cmacs_libregnum_render_ctx_editor_reparent (CmacsLibregnumRenderCtx *r,
+                                            gint child_id, gint parent_id)
+{
+  LrgNode  *child = cmacs_editor_node_for_id (r, child_id);
+  LrgNode  *parent;
+  gboolean  ok;
+  if (!r || !r->editor || !child) return FALSE;
+  if (parent_id < 0)
+    {
+      LrgLevel *lvl = lrg_editor_get_level (r->editor);
+      parent = lvl ? lrg_level_get_root (lvl) : NULL;
+    }
+  else
+    parent = cmacs_editor_node_for_id (r, parent_id);
+  if (!parent) return FALSE;
+  ok = lrg_editor_reparent_node (r->editor, child, parent);
+  if (ok) cmacs_editor_rebuild (r);
+  return ok;
+}
+
+/* Add a node of visual KIND (LrgNodeVisualKind int) with optional ASSET path
+ * (for MESH_ASSET / SPRITE), select it, and return its baked node id. */
+gint
+cmacs_libregnum_render_ctx_editor_add_visual (CmacsLibregnumRenderCtx *r,
+                                              int kind, const char *asset,
+                                              const char *name)
+{
+  LrgNode       *node;
+  LrgNodeVisual *vis;
+  guint          i;
+
+  if (!r || !r->editor) return -1;
+  node = lrg_node_new (name ? name : "Object");
+  vis = lrg_node_visual_new ((LrgNodeVisualKind) kind);
+  if (asset && asset[0])
+    lrg_node_visual_set_asset (vis, asset);
+  lrg_node_set_visual (node, vis);
+  g_object_unref (vis);
+  lrg_editor_add_node (r->editor, node, NULL);   /* selects the new node */
+  g_object_unref (node);
+  cmacs_editor_rebuild (r);
+  for (i = 0; i < r->editor_node_map->len; i++)
+    if (g_ptr_array_index (r->editor_node_map, i) == node)
+      return (gint) i;
+  return -1;
+}
+
+/* Attach a script binding (LANGUAGE is an LrgScriptLanguage int) to NODE-ID,
+ * persisted in the level.  Returns FALSE if NODE-ID is invalid. */
+gboolean
+cmacs_libregnum_render_ctx_editor_attach_script (CmacsLibregnumRenderCtx *r,
+                                                 gint id, int language,
+                                                 const char *path)
+{
+  LrgNode          *n = cmacs_editor_node_for_id (r, id);
+  LrgScriptBinding *b;
+  if (!n || !r->editor) return FALSE;
+  b = lrg_script_binding_new ((LrgScriptLanguage) language, path);
+  lrg_node_add_script (n, b);
+  g_object_unref (b);
+  cmacs_editor_rebuild (r);
+  return TRUE;
+}
+
+gint
+cmacs_libregnum_render_ctx_editor_node_script_count (CmacsLibregnumRenderCtx *r,
+                                                     gint id)
+{
+  LrgNode   *n = cmacs_editor_node_for_id (r, id);
+  GPtrArray *s;
+  if (!n) return -1;
+  s = lrg_node_get_scripts (n);
+  return s ? (gint) s->len : 0;
+}
+
+/* Play-in-editor: instantiate the level into a throwaway LrgWorld and run it
+ * (logic/components execute; the doc is never mutated).  Returns FALSE if
+ * instantiation fails. */
+gboolean
+cmacs_libregnum_render_ctx_editor_play (CmacsLibregnumRenderCtx *r)
+{
+  LrgLevel  *level;
+  LrgEngine *engine;
+  GError    *e = NULL;
+
+  if (!r || !r->editor) return FALSE;
+  level = lrg_editor_get_level (r->editor);
+  if (!level) return FALSE;
+  g_clear_object (&r->play_world);
+  r->play_world = lrg_world_new ();
+  engine = lrg_engine_get_default ();
+  if (!lrg_level_instantiate (level, r->play_world, engine, &e))
+    {
+      g_clear_error (&e);
+      g_clear_object (&r->play_world);
+      return FALSE;
+    }
+  r->playing = TRUE;
+  return TRUE;
+}
+
+void
+cmacs_libregnum_render_ctx_editor_stop (CmacsLibregnumRenderCtx *r)
+{
+  if (!r) return;
+  r->playing = FALSE;
+  g_clear_object (&r->play_world);
+}
+
+gboolean
+cmacs_libregnum_render_ctx_editor_playing (CmacsLibregnumRenderCtx *r)
+{
+  return r && r->playing;
+}
+
+/* Advance the running world by DELTA seconds (no-op unless playing). */
+gboolean
+cmacs_libregnum_render_ctx_editor_play_tick (CmacsLibregnumRenderCtx *r,
+                                             double delta)
+{
+  if (!r || !r->playing || !r->play_world) return FALSE;
+  lrg_world_update (r->play_world, (gfloat) delta);
+  cmacs_libregnum_render_ctx_editor_sync_play (r);
+  return TRUE;
+}
+
+/* ── On-screen transform gizmo ─────────────────────────────────────── */
+
+static const Vector3 GIZMO_AXES[3] = {
+  { 1.0f, 0.0f, 0.0f }, { 0.0f, 1.0f, 0.0f }, { 0.0f, 0.0f, 1.0f }
+};
+
+/* Parameter s minimising the distance between the axis line (o + s*axis,
+ * axis unit) and the mouse RAY.  Standard closest-point-of-two-lines. */
+static float
+gizmo_axis_param (Vector3 o, Vector3 axis, Ray ray)
+{
+  Vector3 v = ray.direction;
+  float w0x = o.x - ray.position.x;
+  float w0y = o.y - ray.position.y;
+  float w0z = o.z - ray.position.z;
+  float b = axis.x*v.x + axis.y*v.y + axis.z*v.z;
+  float c = v.x*v.x + v.y*v.y + v.z*v.z;
+  float d = axis.x*w0x + axis.y*w0y + axis.z*w0z;
+  float e = v.x*w0x + v.y*w0y + v.z*w0z;
+  float denom = c - b*b;            /* axis.axis == 1 */
+  if (fabsf (denom) < 1e-6f) return 0.0f;
+  return (b*e - c*d) / denom;
+}
+
+/* Two unit vectors spanning the plane perpendicular to axis AX. */
+static void
+gizmo_ring_basis (int ax, Vector3 *u, Vector3 *v)
+{
+  if (ax == 0)      { *u = GIZMO_AXES[1]; *v = GIZMO_AXES[2]; }
+  else if (ax == 1) { *u = GIZMO_AXES[0]; *v = GIZMO_AXES[2]; }
+  else              { *u = GIZMO_AXES[0]; *v = GIZMO_AXES[1]; }
+}
+
+/* Angle (radians) of the mouse RAY's hit on the ring plane (normal = axis AX)
+ * about center C. */
+static float
+gizmo_ring_angle (Vector3 c, int ax, Ray ray)
+{
+  Vector3 nrm = GIZMO_AXES[ax], u, v;
+  float denom = ray.direction.x*nrm.x + ray.direction.y*nrm.y
+              + ray.direction.z*nrm.z;
+  float t, hx, hy, hz;
+  if (fabsf (denom) < 1e-5f) return 0.0f;
+  t = ((c.x-ray.position.x)*nrm.x + (c.y-ray.position.y)*nrm.y
+       + (c.z-ray.position.z)*nrm.z) / denom;
+  hx = ray.position.x + ray.direction.x*t - c.x;
+  hy = ray.position.y + ray.direction.y*t - c.y;
+  hz = ray.position.z + ray.direction.z*t - c.z;
+  gizmo_ring_basis (ax, &u, &v);
+  return atan2f (hx*v.x + hy*v.y + hz*v.z, hx*u.x + hy*u.y + hz*u.z);
+}
+
+/* Selection center + handle length, or FALSE when nothing is selected. */
+static gboolean
+gizmo_center (CmacsLibregnumRenderCtx *r, Vector3 *out_c, float *out_len)
+{
+  CmacsNode *n;
+  if (!r || r->selected < 0 || !r->nodes
+      || (guint) r->selected >= r->nodes->len)
+    return FALSE;
+  n = &g_array_index (r->nodes, CmacsNode, (guint) r->selected);
+  if (out_c) { out_c->x = n->x; out_c->y = n->y; out_c->z = n->z; }
+  if (out_len) *out_len = fmaxf (n->hw, fmaxf (n->hh, n->hd)) + 1.2f;
+  return TRUE;
+}
+
+/* Draw the active tool's handles at the selection (in the 3D layer). */
+static void
+cmacs_editor_draw_gizmo (CmacsLibregnumRenderCtx *r)
+{
+  Vector3 c;
+  float   len;
+  int     ax;
+  Color   cols[3] = { (Color){ 230, 80, 80, 255 },
+                      (Color){ 90, 210, 90, 255 },
+                      (Color){ 90, 140, 240, 255 } };
+  if (!r->editor || r->gizmo_tool == 0 || !gizmo_center (r, &c, &len))
+    return;
+  for (ax = 0; ax < 3; ax++)
+    {
+      Vector3 a = GIZMO_AXES[ax];
+      Vector3 tip = { c.x + a.x*len, c.y + a.y*len, c.z + a.z*len };
+      Color col = (r->gizmo_dragging && r->gizmo_axis == ax)
+                    ? (Color){ 255, 235, 120, 255 } : cols[ax];
+      if (r->gizmo_tool == 1)            /* translate: shaft + cone tip */
+        {
+          Vector3 t2 = { c.x + a.x*(len+0.3f), c.y + a.y*(len+0.3f),
+                         c.z + a.z*(len+0.3f) };
+          DrawLine3D (c, tip, col);
+          DrawCylinderEx (tip, t2, 0.12f, 0.0f, 8, col);
+        }
+      else if (r->gizmo_tool == 3)       /* scale: shaft + cube tip */
+        {
+          DrawLine3D (c, tip, col);
+          DrawCube (tip, 0.22f, 0.22f, 0.22f, col);
+        }
+      else                               /* rotate: ring in the axis plane */
+        {
+          Vector3 u, v;
+          int i;
+          gizmo_ring_basis (ax, &u, &v);
+          for (i = 0; i < 32; i++)
+            {
+              float t0 = (float) i / 32.0f * 2.0f * 3.14159265f;
+              float t1 = (float) (i+1) / 32.0f * 2.0f * 3.14159265f;
+              Vector3 p0 = { c.x + (u.x*cosf(t0)+v.x*sinf(t0))*len,
+                             c.y + (u.y*cosf(t0)+v.y*sinf(t0))*len,
+                             c.z + (u.z*cosf(t0)+v.z*sinf(t0))*len };
+              Vector3 p1 = { c.x + (u.x*cosf(t1)+v.x*sinf(t1))*len,
+                             c.y + (u.y*cosf(t1)+v.y*sinf(t1))*len,
+                             c.z + (u.z*cosf(t1)+v.z*sinf(t1))*len };
+              DrawLine3D (p0, p1, col);
+            }
+        }
+    }
+}
+
+/* Which gizmo axis (0/1/2) the cursor is over, or -1. */
+static int
+cmacs_editor_gizmo_axis_at (CmacsLibregnumRenderCtx *r, double vx, double vy,
+                            int vw, int vh)
+{
+  Vector3 c;
+  float   len, bestd = 0.0f;
+  Camera3D cam;
+  Ray     ray;
+  int     ax, best = -1;
+  if (!r->editor || r->gizmo_tool == 0 || !gizmo_center (r, &c, &len)
+      || vw <= 0 || vh <= 0)
+    return -1;
+  cam = ctx_raylib_camera (r);
+  ray = GetScreenToWorldRayEx ((Vector2){ (float) vx, (float) vy },
+                               cam, vw, vh);
+  if (r->gizmo_tool == 2)               /* rotate: nearest ring */
+    {
+      for (ax = 0; ax < 3; ax++)
+        {
+          Vector3 nrm = GIZMO_AXES[ax];
+          float denom = ray.direction.x*nrm.x + ray.direction.y*nrm.y
+                      + ray.direction.z*nrm.z;
+          float t, hx, hy, hz, dist;
+          if (fabsf (denom) < 1e-5f) continue;
+          t = ((c.x-ray.position.x)*nrm.x + (c.y-ray.position.y)*nrm.y
+               + (c.z-ray.position.z)*nrm.z) / denom;
+          if (t < 0.0f) continue;
+          hx = ray.position.x + ray.direction.x*t - c.x;
+          hy = ray.position.y + ray.direction.y*t - c.y;
+          hz = ray.position.z + ray.direction.z*t - c.z;
+          dist = sqrtf (hx*hx + hy*hy + hz*hz);
+          if (fabsf (dist - len) < 0.4f && (best < 0 || t < bestd))
+            { best = ax; bestd = t; }
+        }
+      return best;
+    }
+  /* translate / scale: thin AABB along each shaft (offset from center so the
+   * node body itself is not mistaken for a handle). */
+  for (ax = 0; ax < 3; ax++)
+    {
+      Vector3 a = GIZMO_AXES[ax];
+      float th = 0.22f;
+      Vector3 s = { c.x + a.x*0.25f*len, c.y + a.y*0.25f*len,
+                    c.z + a.z*0.25f*len };
+      Vector3 e = { c.x + a.x*(len+0.3f), c.y + a.y*(len+0.3f),
+                    c.z + a.z*(len+0.3f) };
+      BoundingBox bb = { { fminf(s.x,e.x)-th, fminf(s.y,e.y)-th,
+                           fminf(s.z,e.z)-th },
+                         { fmaxf(s.x,e.x)+th, fmaxf(s.y,e.y)+th,
+                           fmaxf(s.z,e.z)+th } };
+      RayCollision rc = GetRayCollisionBox (ray, bb);
+      if (rc.hit && (best < 0 || rc.distance < bestd))
+        { best = ax; bestd = rc.distance; }
+    }
+  return best;
+}
+
+gboolean
+cmacs_libregnum_render_ctx_editor_gizmo_active (CmacsLibregnumRenderCtx *r)
+{
+  return r && r->gizmo_dragging;
+}
+
+void
+cmacs_libregnum_render_ctx_editor_set_tool (CmacsLibregnumRenderCtx *r, int tool)
+{
+  if (r) r->gizmo_tool = tool;
+}
+
+gint
+cmacs_libregnum_render_ctx_editor_get_tool (CmacsLibregnumRenderCtx *r)
+{
+  return r ? r->gizmo_tool : 0;
+}
+
+/* Returns TRUE if a gizmo handle is under (VX,VY); used by input routing to
+ * decide between gizmo-drag, object-move, and camera-orbit. */
+gboolean
+cmacs_libregnum_render_ctx_editor_gizmo_hit (CmacsLibregnumRenderCtx *r,
+                                             double vx, double vy,
+                                             int vw, int vh)
+{
+  return cmacs_editor_gizmo_axis_at (r, vx, vy, vw, vh) >= 0;
+}
+
+gboolean
+cmacs_libregnum_render_ctx_editor_gizmo_begin (CmacsLibregnumRenderCtx *r,
+                                               double vx, double vy,
+                                               int vw, int vh)
+{
+  int       ax;
+  LrgNode  *n;
+  GrlVector3 *v;
+  Vector3   c;
+  float     len;
+  Camera3D  cam;
+  Ray       ray;
+
+  if (!r || !r->editor) return FALSE;
+  ax = cmacs_editor_gizmo_axis_at (r, vx, vy, vw, vh);
+  if (ax < 0) return FALSE;
+  n = cmacs_editor_node_for_id (r, r->selected);
+  if (!n) return FALSE;
+  if (r->gizmo_tool == 1)      v = lrg_node_get_location (n);
+  else if (r->gizmo_tool == 3) v = lrg_node_get_scale (n);
+  else                         v = lrg_node_get_rotation (n);
+  if (!v) return FALSE;
+  r->gizmo_start[0] = v->x; r->gizmo_start[1] = v->y; r->gizmo_start[2] = v->z;
+  gizmo_center (r, &c, &len);
+  r->gizmo_center0[0] = c.x; r->gizmo_center0[1] = c.y; r->gizmo_center0[2] = c.z;
+  cam = ctx_raylib_camera (r);
+  ray = GetScreenToWorldRayEx ((Vector2){ (float) vx, (float) vy },
+                               cam, vw, vh);
+  r->gizmo_grab = (r->gizmo_tool == 2)
+                    ? gizmo_ring_angle (c, ax, ray)
+                    : gizmo_axis_param (c, GIZMO_AXES[ax], ray);
+  r->gizmo_axis = ax;
+  r->gizmo_dragging = TRUE;
+  return TRUE;
+}
+
+gboolean
+cmacs_libregnum_render_ctx_editor_gizmo_drag (CmacsLibregnumRenderCtx *r,
+                                              double vx, double vy,
+                                              int vw, int vh)
+{
+  LrgNode    *n;
+  GrlVector3 *gl, *gr, *gs;
+  Vector3     c0;
+  Camera3D    cam;
+  Ray         ray;
+  int         ax;
+  float       cur, delta, t3[3];
+
+  if (!r || !r->gizmo_dragging) return FALSE;
+  n = cmacs_editor_node_for_id (r, r->selected);
+  if (!n) return FALSE;
+  ax = r->gizmo_axis;
+  c0 = (Vector3){ r->gizmo_center0[0], r->gizmo_center0[1],
+                  r->gizmo_center0[2] };
+  cam = ctx_raylib_camera (r);
+  ray = GetScreenToWorldRayEx ((Vector2){ (float) vx, (float) vy },
+                               cam, vw, vh);
+  gl = lrg_node_get_location (n);
+  gr = lrg_node_get_rotation (n);
+  gs = lrg_node_get_scale (n);
+  if (r->gizmo_tool == 1)            /* translate */
+    {
+      cur = gizmo_axis_param (c0, GIZMO_AXES[ax], ray);
+      delta = cur - r->gizmo_grab;
+      t3[0] = gl->x; t3[1] = gl->y; t3[2] = gl->z;
+      t3[ax] = r->gizmo_start[ax] + delta;
+      if (r->editor_snap > 0.0f)
+        t3[ax] = roundf (t3[ax] / r->editor_snap) * r->editor_snap;
+      lrg_node_set_location_xyz (n, t3[0], t3[1], t3[2]);
+    }
+  else if (r->gizmo_tool == 3)       /* scale */
+    {
+      cur = gizmo_axis_param (c0, GIZMO_AXES[ax], ray);
+      delta = cur - r->gizmo_grab;
+      t3[0] = gs->x; t3[1] = gs->y; t3[2] = gs->z;
+      t3[ax] = fmaxf (0.05f, r->gizmo_start[ax] + delta);
+      lrg_node_set_scale_xyz (n, t3[0], t3[1], t3[2]);
+    }
+  else                               /* rotate */
+    {
+      cur = gizmo_ring_angle (c0, ax, ray);
+      delta = cur - r->gizmo_grab;
+      t3[0] = gr->x; t3[1] = gr->y; t3[2] = gr->z;
+      t3[ax] = r->gizmo_start[ax] + delta;
+      lrg_node_set_rotation_xyz (n, t3[0], t3[1], t3[2]);
+    }
+  cmacs_editor_rebuild (r);
+  return TRUE;
+}
+
+void
+cmacs_libregnum_render_ctx_editor_gizmo_end (CmacsLibregnumRenderCtx *r)
+{
+  LrgNode    *n;
+  GrlVector3 *gl, *gr, *gs;
+  float       loc3[3], rot3[3], scl3[3], fin[3];
+  int         ax, tool;
+
+  if (!r || !r->gizmo_dragging) return;
+  tool = r->gizmo_tool;
+  ax = r->gizmo_axis;
+  r->gizmo_dragging = FALSE;
+  r->gizmo_axis = -1;
+  n = cmacs_editor_node_for_id (r, r->selected);
+  if (!n || !r->editor) return;
+
+  gl = lrg_node_get_location (n);
+  gr = lrg_node_get_rotation (n);
+  gs = lrg_node_get_scale (n);
+  /* The tool's component holds the final dragged value. */
+  if (tool == 1)      { fin[0]=gl->x; fin[1]=gl->y; fin[2]=gl->z; }
+  else if (tool == 3) { fin[0]=gs->x; fin[1]=gs->y; fin[2]=gs->z; }
+  else                { fin[0]=gr->x; fin[1]=gr->y; fin[2]=gr->z; }
+
+  if (fabsf (fin[0]-r->gizmo_start[0]) + fabsf (fin[1]-r->gizmo_start[1])
+      + fabsf (fin[2]-r->gizmo_start[2]) < 1e-4f)
+    return;   /* no real change -- record nothing */
+
+  /* Roll the tool's component back to the start so set_node_transform records
+   * before=start; then push one coalesced command applying the final value. */
+  if (tool == 1)      lrg_node_set_location_xyz (n, r->gizmo_start[0],
+                                                 r->gizmo_start[1],
+                                                 r->gizmo_start[2]);
+  else if (tool == 3) lrg_node_set_scale_xyz (n, r->gizmo_start[0],
+                                              r->gizmo_start[1],
+                                              r->gizmo_start[2]);
+  else                lrg_node_set_rotation_xyz (n, r->gizmo_start[0],
+                                                 r->gizmo_start[1],
+                                                 r->gizmo_start[2]);
+  gl = lrg_node_get_location (n);
+  gr = lrg_node_get_rotation (n);
+  gs = lrg_node_get_scale (n);
+  loc3[0]=gl->x; loc3[1]=gl->y; loc3[2]=gl->z;
+  rot3[0]=gr->x; rot3[1]=gr->y; rot3[2]=gr->z;
+  scl3[0]=gs->x; scl3[1]=gs->y; scl3[2]=gs->z;
+  if (tool == 1)      { loc3[0]=fin[0]; loc3[1]=fin[1]; loc3[2]=fin[2]; }
+  else if (tool == 3) { scl3[0]=fin[0]; scl3[1]=fin[1]; scl3[2]=fin[2]; }
+  else                { rot3[0]=fin[0]; rot3[1]=fin[1]; rot3[2]=fin[2]; }
+  (void) ax;
+  lrg_editor_set_node_transform (r->editor, n, loc3, rot3, scl3);
+  cmacs_editor_rebuild (r);
+}
+
+/* Toggle a top-down orthographic 2D view (for 2D levels), or restore the
+ * default perspective.  Picking/projection honour the projection too. */
+void
+cmacs_libregnum_render_ctx_editor_set_view_2d (CmacsLibregnumRenderCtx *r,
+                                               gboolean on)
+{
+  LrgCamera3D *c3;
+  if (!r || !r->camera || !LRG_IS_CAMERA3D (r->camera)) return;
+  c3 = LRG_CAMERA3D (r->camera);
+  if (on)
+    {
+      g_autoptr (GrlVector3) t = lrg_camera3d_get_target (c3);
+      float tx = t ? t->x : 0.0f, tz = t ? t->z : 0.0f;
+      lrg_camera3d_set_target_xyz (c3, tx, 0.0f, tz);
+      lrg_camera3d_set_position_xyz (c3, tx, 20.0f, tz);
+      lrg_camera3d_set_up_xyz (c3, 0.0f, 0.0f, -1.0f);
+      lrg_camera3d_set_fovy (c3, 20.0f);   /* ortho vertical extent */
+      lrg_camera3d_set_projection (c3, LRG_PROJECTION_ORTHOGRAPHIC);
+    }
+  else
+    {
+      lrg_camera3d_set_projection (c3, LRG_PROJECTION_PERSPECTIVE);
+      lrg_camera3d_set_position_xyz (c3, 8.0f, 6.0f, 12.0f);
+      lrg_camera3d_set_target_xyz (c3, 0.0f, 0.0f, 0.0f);
+      lrg_camera3d_set_up_xyz (c3, 0.0f, 1.0f, 0.0f);
+      lrg_camera3d_set_fovy (c3, 60.0f);
+    }
+}
+
+gboolean
+cmacs_libregnum_render_ctx_editor_view_2d (CmacsLibregnumRenderCtx *r)
+{
+  if (!r || !r->camera || !LRG_IS_CAMERA3D (r->camera)) return FALSE;
+  return lrg_camera3d_get_projection (LRG_CAMERA3D (r->camera))
+           == LRG_PROJECTION_ORTHOGRAPHIC;
+}
+
+/* Asset drop-at-point: arm so the next viewport click drops the armed asset
+ * at the ground point under the cursor (the input layer + Elisp cooperate). */
+void
+cmacs_libregnum_render_ctx_editor_set_armed (CmacsLibregnumRenderCtx *r,
+                                             gboolean on)
+{
+  if (r) r->place_armed = on;
+}
+
+gboolean
+cmacs_libregnum_render_ctx_editor_armed (CmacsLibregnumRenderCtx *r)
+{
+  return r && r->place_armed;
+}
+
+/* World point on the ground plane (Y=0) under view-local (VX,VY).  Used to
+ * drop assets where the user clicks. */
+gboolean
+cmacs_libregnum_render_ctx_editor_screen_to_ground (CmacsLibregnumRenderCtx *r,
+                                                    double vx, double vy,
+                                                    int vw, int vh,
+                                                    double *x, double *y,
+                                                    double *z)
+{
+  float gx = 0.0f, gz = 0.0f;
+  if (!ctx_screen_to_plane (r, vx, vy, vw, vh, 0.0f, &gx, &gz))
+    return FALSE;
+  if (x) *x = gx;
+  if (y) *y = 0.0;
+  if (z) *z = gz;
+  return TRUE;
+}
+
+/* ── Tilemap data (stored in the node's visual params; persists in .rlevel) ── */
+
+/* Read the "tiles" CSV param into a fresh mw*mh gint array (-1 default). */
+static gint *
+tilemap_read_tiles (LrgNodeVisual *vis, int mw, int mh)
+{
+  int n = mw * mh, i;
+  gint *tiles = g_new (gint, n > 0 ? n : 1);
+  const GValue *tv = lrg_node_visual_get_param (vis, "tiles");
+  for (i = 0; i < n; i++)
+    tiles[i] = -1;
+  if (tv != NULL && G_VALUE_HOLDS_STRING (tv))
+    {
+      const char *csv = g_value_get_string (tv);
+      gchar **parts = g_strsplit (csv ? csv : "", ",", -1);
+      for (i = 0; parts && parts[i] != NULL && i < n; i++)
+        if (parts[i][0] != '\0')
+          tiles[i] = (gint) g_ascii_strtoll (parts[i], NULL, 10);
+      g_strfreev (parts);
+    }
+  return tiles;
+}
+
+/* Write a gint tile array back to the "tiles" string param as CSV. */
+static void
+tilemap_write_tiles (LrgNodeVisual *vis, const gint *tiles, int n)
+{
+  GString *csv = g_string_new (NULL);
+  GValue v = G_VALUE_INIT;
+  int i;
+  for (i = 0; i < n; i++)
+    g_string_append_printf (csv, (i == 0) ? "%d" : ",%d", tiles[i]);
+  g_value_init (&v, G_TYPE_STRING);
+  g_value_set_string (&v, csv->str);
+  lrg_node_visual_set_param (vis, "tiles", &v);
+  g_value_unset (&v);
+  g_string_free (csv, TRUE);
+}
+
+static LrgNodeVisual *
+tilemap_ensure_visual (LrgNode *n)
+{
+  LrgNodeVisual *vis = lrg_node_get_visual (n);
+  if (vis == NULL)
+    {
+      vis = lrg_node_visual_new (LRG_NODE_VISUAL_TILEMAP);
+      lrg_node_set_visual (n, vis);
+      g_object_unref (vis);
+      vis = lrg_node_get_visual (n);
+    }
+  lrg_node_visual_set_kind (vis, LRG_NODE_VISUAL_TILEMAP);
+  return vis;
+}
+
+/* Configure NODE-ID as a tilemap: TILESET image, TW x TH tile pixels, COLS
+ * tileset columns, MW x MH map cells.  Existing tiles within the overlap are
+ * preserved on resize; new cells are empty (-1). */
+void
+cmacs_libregnum_render_ctx_editor_tilemap_config (CmacsLibregnumRenderCtx *r,
+                                                  gint id, const char *tileset,
+                                                  int tw, int th, int cols,
+                                                  int mw, int mh)
+{
+  LrgNode       *n = cmacs_editor_node_for_id (r, id);
+  LrgNodeVisual *vis;
+  int            old_mw, old_mh, nx, ny, cx, cy;
+  gint          *old_tiles, *new_tiles;
+
+  if (!n || mw <= 0 || mh <= 0) return;
+  vis = tilemap_ensure_visual (n);
+  if (tileset && tileset[0])
+    lrg_node_visual_set_asset (vis, tileset);
+  old_mw = (int) lrg_node_visual_get_param_double (vis, "mw", 0.0);
+  old_mh = (int) lrg_node_visual_get_param_double (vis, "mh", 0.0);
+  old_tiles = tilemap_read_tiles (vis, old_mw, old_mh);
+  new_tiles = g_new (gint, mw * mh);
+  for (cy = 0; cy < mh; cy++)
+    for (cx = 0; cx < mw; cx++)
+      new_tiles[cy * mw + cx] =
+        (cx < old_mw && cy < old_mh) ? old_tiles[cy * old_mw + cx] : -1;
+  (void) nx; (void) ny;
+  lrg_node_visual_set_param_double (vis, "tw", tw > 0 ? tw : 16);
+  lrg_node_visual_set_param_double (vis, "th", th > 0 ? th : 16);
+  lrg_node_visual_set_param_double (vis, "cols", cols > 0 ? cols : 1);
+  lrg_node_visual_set_param_double (vis, "mw", mw);
+  lrg_node_visual_set_param_double (vis, "mh", mh);
+  tilemap_write_tiles (vis, new_tiles, mw * mh);
+  g_free (old_tiles);
+  g_free (new_tiles);
+  cmacs_editor_rebuild (r);
+}
+
+/* Paint cell (CX,CY) of tilemap NODE-ID with TILE (-1 clears). */
+void
+cmacs_libregnum_render_ctx_editor_tilemap_set_tile (CmacsLibregnumRenderCtx *r,
+                                                    gint id, int cx, int cy,
+                                                    int tile)
+{
+  LrgNode       *n = cmacs_editor_node_for_id (r, id);
+  LrgNodeVisual *vis;
+  int            mw, mh;
+  gint          *tiles;
+
+  if (!n) return;
+  vis = lrg_node_get_visual (n);
+  if (!vis) return;
+  mw = (int) lrg_node_visual_get_param_double (vis, "mw", 0.0);
+  mh = (int) lrg_node_visual_get_param_double (vis, "mh", 0.0);
+  if (cx < 0 || cy < 0 || cx >= mw || cy >= mh) return;
+  tiles = tilemap_read_tiles (vis, mw, mh);
+  tiles[cy * mw + cx] = tile;
+  tilemap_write_tiles (vis, tiles, mw * mh);
+  g_free (tiles);
+  cmacs_editor_rebuild (r);
+}
+
+/* Report tilemap NODE-ID's dimensions; FALSE if it is not a tilemap. */
+gboolean
+cmacs_libregnum_render_ctx_editor_tilemap_info (CmacsLibregnumRenderCtx *r,
+                                                gint id, int *mw, int *mh,
+                                                int *cols, int *tw, int *th)
+{
+  LrgNode       *n = cmacs_editor_node_for_id (r, id);
+  LrgNodeVisual *vis;
+  if (!n) return FALSE;
+  vis = lrg_node_get_visual (n);
+  if (!vis || lrg_node_visual_get_kind (vis) != LRG_NODE_VISUAL_TILEMAP)
+    return FALSE;
+  if (mw)   *mw   = (int) lrg_node_visual_get_param_double (vis, "mw", 0.0);
+  if (mh)   *mh   = (int) lrg_node_visual_get_param_double (vis, "mh", 0.0);
+  if (cols) *cols = (int) lrg_node_visual_get_param_double (vis, "cols", 1.0);
+  if (tw)   *tw   = (int) lrg_node_visual_get_param_double (vis, "tw", 16.0);
+  if (th)   *th   = (int) lrg_node_visual_get_param_double (vis, "th", 16.0);
+  return TRUE;
+}
+
+/* Play-rendering: reflect the running world's object positions back onto the
+ * baked scene nodes + drawables, so script-driven motion is visible.  World
+ * objects are created in the same depth-first order as nodes (1:1). */
+void
+cmacs_libregnum_render_ctx_editor_sync_play (CmacsLibregnumRenderCtx *r)
+{
+  GList *objects, *l;
+  guint  i;
+  if (!r || !r->playing || !r->play_world || !r->nodes) return;
+  objects = lrg_world_get_objects (r->play_world);
+  for (l = objects, i = 0; l != NULL && i < r->nodes->len; l = l->next, i++)
+    {
+      LrgGameObject *obj = l->data;
+      g_autoptr (GrlVector2) p = NULL;
+      CmacsNode *n;
+      if (!LRG_IS_GAME_OBJECT (obj)) continue;
+      p = grl_entity_get_position (GRL_ENTITY (obj));
+      if (!p) continue;
+      n = &g_array_index (r->nodes, CmacsNode, i);
+      /* instantiate maps node (x,y) -> entity (x,y); reflect it back. */
+      n->x = p->x;
+      n->y = p->y;
+      /* Move the drawable too when shapes are 1:1 with nodes (the common
+       * all-primitive case); otherwise the wireframe still tracks. */
+      if (r->drawables->len == r->nodes->len)
+        {
+          gpointer d = g_ptr_array_index (r->drawables, i);
+          if (d && LRG_IS_SHAPE3D (d))
+            lrg_shape3d_set_position_xyz (LRG_SHAPE3D (d), p->x, p->y, n->z);
+        }
+    }
+}
+
+#else /* !LRG_BUILD_EDITOR -- stubs so the Lisp layer still links */
+
+gboolean cmacs_libregnum_render_ctx_editor_new (CmacsLibregnumRenderCtx *r)
+{ (void) r; return FALSE; }
+gboolean cmacs_libregnum_render_ctx_editor_open (CmacsLibregnumRenderCtx *r,
+         const char *path, char **error_msg)
+{ (void) r; (void) path; if (error_msg) *error_msg = g_strdup ("editor not built"); return FALSE; }
+gboolean cmacs_libregnum_render_ctx_editor_save (CmacsLibregnumRenderCtx *r,
+         const char *path, char **error_msg)
+{ (void) r; (void) path; if (error_msg) *error_msg = g_strdup ("editor not built"); return FALSE; }
+void cmacs_libregnum_render_ctx_editor_close (CmacsLibregnumRenderCtx *r) { (void) r; }
+gboolean cmacs_libregnum_render_ctx_editor_active (CmacsLibregnumRenderCtx *r) { (void) r; return FALSE; }
+gint cmacs_libregnum_render_ctx_editor_add_primitive (CmacsLibregnumRenderCtx *r,
+         int prim, const char *name) { (void) r; (void) prim; (void) name; return -1; }
+void cmacs_libregnum_render_ctx_editor_delete (CmacsLibregnumRenderCtx *r, gint id) { (void) r; (void) id; }
+void cmacs_libregnum_render_ctx_editor_select_node (CmacsLibregnumRenderCtx *r, gint id) { (void) r; (void) id; }
+void cmacs_libregnum_render_ctx_editor_set_position (CmacsLibregnumRenderCtx *r, gint id,
+         double x, double y, double z) { (void) r; (void) id; (void) x; (void) y; (void) z; }
+void cmacs_libregnum_render_ctx_editor_undo (CmacsLibregnumRenderCtx *r) { (void) r; }
+void cmacs_libregnum_render_ctx_editor_redo (CmacsLibregnumRenderCtx *r) { (void) r; }
+gboolean cmacs_libregnum_render_ctx_editor_can_undo (CmacsLibregnumRenderCtx *r) { (void) r; return FALSE; }
+gboolean cmacs_libregnum_render_ctx_editor_can_redo (CmacsLibregnumRenderCtx *r) { (void) r; return FALSE; }
+const char *cmacs_libregnum_render_ctx_editor_node_guid (CmacsLibregnumRenderCtx *r, gint id)
+{ (void) r; (void) id; return NULL; }
+gboolean cmacs_libregnum_render_ctx_editor_node_location (CmacsLibregnumRenderCtx *r,
+         gint id, double *x, double *y, double *z)
+{ (void) r; (void) id; (void) x; (void) y; (void) z; return FALSE; }
+void cmacs_libregnum_render_ctx_editor_set_snap (CmacsLibregnumRenderCtx *r, double snap)
+{ (void) r; (void) snap; }
+gboolean cmacs_libregnum_render_ctx_editor_dragging (CmacsLibregnumRenderCtx *r)
+{ (void) r; return FALSE; }
+gboolean cmacs_libregnum_render_ctx_editor_drag_begin (CmacsLibregnumRenderCtx *r,
+         gint id, double vx, double vy, int vw, int vh)
+{ (void) r; (void) id; (void) vx; (void) vy; (void) vw; (void) vh; return FALSE; }
+gboolean cmacs_libregnum_render_ctx_editor_drag_update (CmacsLibregnumRenderCtx *r,
+         double vx, double vy, int vw, int vh)
+{ (void) r; (void) vx; (void) vy; (void) vw; (void) vh; return FALSE; }
+void cmacs_libregnum_render_ctx_editor_drag_end (CmacsLibregnumRenderCtx *r) { (void) r; }
+gboolean cmacs_libregnum_render_ctx_editor_node_rotation (CmacsLibregnumRenderCtx *r,
+         gint id, double *x, double *y, double *z)
+{ (void) r; (void) id; (void) x; (void) y; (void) z; return FALSE; }
+gboolean cmacs_libregnum_render_ctx_editor_node_scale (CmacsLibregnumRenderCtx *r,
+         gint id, double *x, double *y, double *z)
+{ (void) r; (void) id; (void) x; (void) y; (void) z; return FALSE; }
+void cmacs_libregnum_render_ctx_editor_set_rotation (CmacsLibregnumRenderCtx *r,
+         gint id, double x, double y, double z)
+{ (void) r; (void) id; (void) x; (void) y; (void) z; }
+void cmacs_libregnum_render_ctx_editor_set_scale (CmacsLibregnumRenderCtx *r,
+         gint id, double x, double y, double z)
+{ (void) r; (void) id; (void) x; (void) y; (void) z; }
+gboolean cmacs_libregnum_render_ctx_editor_reparent (CmacsLibregnumRenderCtx *r,
+         gint child_id, gint parent_id)
+{ (void) r; (void) child_id; (void) parent_id; return FALSE; }
+gint cmacs_libregnum_render_ctx_editor_add_visual (CmacsLibregnumRenderCtx *r,
+         int kind, const char *asset, const char *name)
+{ (void) r; (void) kind; (void) asset; (void) name; return -1; }
+gboolean cmacs_libregnum_render_ctx_editor_attach_script (CmacsLibregnumRenderCtx *r,
+         gint id, int language, const char *path)
+{ (void) r; (void) id; (void) language; (void) path; return FALSE; }
+gint cmacs_libregnum_render_ctx_editor_node_script_count (CmacsLibregnumRenderCtx *r,
+         gint id) { (void) r; (void) id; return -1; }
+gboolean cmacs_libregnum_render_ctx_editor_play (CmacsLibregnumRenderCtx *r)
+{ (void) r; return FALSE; }
+void cmacs_libregnum_render_ctx_editor_stop (CmacsLibregnumRenderCtx *r) { (void) r; }
+gboolean cmacs_libregnum_render_ctx_editor_playing (CmacsLibregnumRenderCtx *r)
+{ (void) r; return FALSE; }
+gboolean cmacs_libregnum_render_ctx_editor_play_tick (CmacsLibregnumRenderCtx *r,
+         double delta) { (void) r; (void) delta; return FALSE; }
+void cmacs_libregnum_render_ctx_editor_set_tool (CmacsLibregnumRenderCtx *r, int tool)
+{ (void) r; (void) tool; }
+gint cmacs_libregnum_render_ctx_editor_get_tool (CmacsLibregnumRenderCtx *r)
+{ (void) r; return 0; }
+gboolean cmacs_libregnum_render_ctx_editor_gizmo_active (CmacsLibregnumRenderCtx *r)
+{ (void) r; return FALSE; }
+gboolean cmacs_libregnum_render_ctx_editor_gizmo_hit (CmacsLibregnumRenderCtx *r,
+         double vx, double vy, int vw, int vh)
+{ (void) r; (void) vx; (void) vy; (void) vw; (void) vh; return FALSE; }
+gboolean cmacs_libregnum_render_ctx_editor_gizmo_begin (CmacsLibregnumRenderCtx *r,
+         double vx, double vy, int vw, int vh)
+{ (void) r; (void) vx; (void) vy; (void) vw; (void) vh; return FALSE; }
+gboolean cmacs_libregnum_render_ctx_editor_gizmo_drag (CmacsLibregnumRenderCtx *r,
+         double vx, double vy, int vw, int vh)
+{ (void) r; (void) vx; (void) vy; (void) vw; (void) vh; return FALSE; }
+void cmacs_libregnum_render_ctx_editor_gizmo_end (CmacsLibregnumRenderCtx *r)
+{ (void) r; }
+void cmacs_libregnum_render_ctx_editor_set_view_2d (CmacsLibregnumRenderCtx *r,
+         gboolean on) { (void) r; (void) on; }
+gboolean cmacs_libregnum_render_ctx_editor_view_2d (CmacsLibregnumRenderCtx *r)
+{ (void) r; return FALSE; }
+void cmacs_libregnum_render_ctx_editor_sync_play (CmacsLibregnumRenderCtx *r)
+{ (void) r; }
+void cmacs_libregnum_render_ctx_editor_set_armed (CmacsLibregnumRenderCtx *r,
+         gboolean on) { (void) r; (void) on; }
+gboolean cmacs_libregnum_render_ctx_editor_armed (CmacsLibregnumRenderCtx *r)
+{ (void) r; return FALSE; }
+gboolean cmacs_libregnum_render_ctx_editor_screen_to_ground (CmacsLibregnumRenderCtx *r,
+         double vx, double vy, int vw, int vh, double *x, double *y, double *z)
+{ (void) r; (void) vx; (void) vy; (void) vw; (void) vh; (void) x; (void) y; (void) z; return FALSE; }
+void cmacs_libregnum_render_ctx_editor_tilemap_config (CmacsLibregnumRenderCtx *r,
+         gint id, const char *tileset, int tw, int th, int cols, int mw, int mh)
+{ (void) r; (void) id; (void) tileset; (void) tw; (void) th; (void) cols;
+  (void) mw; (void) mh; }
+void cmacs_libregnum_render_ctx_editor_tilemap_set_tile (CmacsLibregnumRenderCtx *r,
+         gint id, int cx, int cy, int tile)
+{ (void) r; (void) id; (void) cx; (void) cy; (void) tile; }
+gboolean cmacs_libregnum_render_ctx_editor_tilemap_info (CmacsLibregnumRenderCtx *r,
+         gint id, int *mw, int *mh, int *cols, int *tw, int *th)
+{ (void) r; (void) id; (void) mw; (void) mh; (void) cols; (void) tw; (void) th;
+  return FALSE; }
+
+#endif /* LRG_BUILD_EDITOR */
 
 #endif /* HAVE_CMACS_LIBREGNUM */
