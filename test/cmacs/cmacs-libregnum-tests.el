@@ -117,6 +117,200 @@
   (should (= cmacs-libregnum-primitive-cube 1))
   (should (= cmacs-libregnum-primitive-uv-sphere 3)))
 
+;;; ─── Right-click context menu (pure, batch-safe) ───────────────────────
+
+(defun cmacs-libregnum-tests--ctx-labels (items)
+  "Return the clickable labels of menu ITEMS (dropping (:sep) markers)."
+  (delq nil (mapcar (lambda (it) (and (not (plist-member it :sep))
+                                      (plist-get it :label)))
+                    items)))
+
+(defun cmacs-libregnum-tests--menu-keymap-leaves (km)
+  "Collect (LABEL . BINDING) leaves of menu keymap KM, recursing into submenus.
+Separators (whose real binding is nil) are skipped."
+  (let (out)
+    (map-keymap
+     (lambda (_ev binding)
+       (when (and (consp binding) (eq (car binding) 'menu-item))
+         (let ((label (nth 1 binding)) (real (nth 2 binding)))
+           (cond
+            ((keymapp real)
+             (setq out (append out
+                               (cmacs-libregnum-tests--menu-keymap-leaves real))))
+            ((functionp real) (push (cons label real) out))))))
+     km)
+    out))
+
+(ert-deftest cmacs-libregnum-tests-context-menu-symbols ()
+  "The context-menu functions and the node-kind primitive are all defined."
+  (dolist (fn '(cmacs-libregnum-editor-node-kind
+                cmacs-libregnum-editor-node-primitive
+                cmacs-libregnum-editor-set-name
+                cmacs-libregnum-editor--kind-symbol
+                cmacs-libregnum-editor--type-label
+                cmacs-libregnum-editor--outliner-label
+                cmacs-libregnum-editor--filter-menu-items
+                cmacs-libregnum-editor--menu-keymap
+                cmacs-libregnum-editor--context-menu
+                cmacs-libregnum-editor--popup-context-menu
+                cmacs-libregnum-editor--popup-add-menu
+                cmacs-libregnum-editor--place-item
+                cmacs-libregnum-editor--ctx-rename
+                cmacs-libregnum-editor--ctx-rotate
+                cmacs-libregnum-editor--ctx-reset-transform
+                cmacs-libregnum-editor--ctx-toggle
+                cmacs-libregnum-editor--ctx-open-asset
+                cmacs-libregnum-editor--ctx-duplicate
+                cmacs-libregnum-editor--ctx-new-script
+                cmacs-libregnum-editor--ctx-existing-script))
+    (should (fboundp fn)))
+  (should (listp cmacs-libregnum-editor-context-menu-items))
+  (should (listp cmacs-libregnum-editor-rotate-menu-items))
+  (should (listp cmacs-libregnum-editor-script-menu-items)))
+
+(ert-deftest cmacs-libregnum-tests-context-menu-kind-symbol ()
+  "Integer visual kinds map to the expected menu node-kind symbols."
+  (should (eq (cmacs-libregnum-editor--kind-symbol nil) 'group))
+  (should (eq (cmacs-libregnum-editor--kind-symbol 1) 'primitive))
+  (should (eq (cmacs-libregnum-editor--kind-symbol
+               cmacs-libregnum-visual-mesh-asset) 'mesh))
+  (should (eq (cmacs-libregnum-editor--kind-symbol
+               cmacs-libregnum-visual-sprite) 'sprite))
+  (should (eq (cmacs-libregnum-editor--kind-symbol
+               cmacs-libregnum-visual-tilemap) 'tilemap))
+  (should (eq (cmacs-libregnum-editor--kind-symbol
+               cmacs-libregnum-visual-light) 'light))
+  (should (eq (cmacs-libregnum-editor--kind-symbol
+               cmacs-libregnum-visual-camera) 'camera))
+  (should (eq (cmacs-libregnum-editor--kind-symbol
+               cmacs-libregnum-visual-audio) 'audio))
+  (should (eq (cmacs-libregnum-editor--kind-symbol
+               cmacs-libregnum-visual-prefab) 'prefab))
+  (should (eq (cmacs-libregnum-editor--kind-symbol 999) 'unknown)))
+
+(ert-deftest cmacs-libregnum-tests-context-menu-filter ()
+  "Menu filtering keeps the common items and only the matching kind items."
+  (let ((common (cmacs-libregnum-tests--ctx-labels
+                 (cmacs-libregnum-editor--filter-menu-items 'group)))
+        (lightl (cmacs-libregnum-tests--ctx-labels
+                 (cmacs-libregnum-editor--filter-menu-items 'light)))
+        (meshl  (cmacs-libregnum-tests--ctx-labels
+                 (cmacs-libregnum-editor--filter-menu-items 'mesh))))
+    ;; Common (t) items appear for every kind, incl. a node with no visual.
+    (should (member "Rename…" common))
+    (should (member "Delete" common))
+    (should (member "Duplicate" common))
+    ;; A group node shows no kind-specific items.
+    (should-not (member "Set light range/color…" common))
+    (should-not (member "Open asset file" common))
+    ;; Light shows its own item but not camera/audio/asset items.
+    (should (member "Set light range/color…" lightl))
+    (should-not (member "Set camera FOV…" lightl))
+    (should-not (member "Open asset file" lightl))
+    ;; Mesh assets expose the asset-open item.
+    (should (member "Open asset file" meshl))
+    (should-not (member "Set light range/color…" meshl))))
+
+(ert-deftest cmacs-libregnum-tests-context-menu-submenus ()
+  "The rotate + attach-script submenus are well-formed and wired into the spec."
+  ;; 12 axis rotations (±45/±90 over X/Y/Z) + reset = 13 action items.
+  (let ((acts (delq nil (mapcar (lambda (it) (plist-get it :action))
+                                cmacs-libregnum-editor-rotate-menu-items))))
+    (should (= (length acts) 13))
+    (should-not (memq nil (mapcar #'functionp acts))))
+  ;; New + Existing script.
+  (let ((acts (delq nil (mapcar (lambda (it) (plist-get it :action))
+                                cmacs-libregnum-editor-script-menu-items))))
+    (should (= (length acts) 2))
+    (should-not (memq nil (mapcar #'functionp acts))))
+  ;; The main spec references both submenus by symbol.
+  (should (seq-find (lambda (it)
+                      (eq (plist-get it :submenu)
+                          'cmacs-libregnum-editor-rotate-menu-items))
+                    cmacs-libregnum-editor-context-menu-items))
+  (should (seq-find (lambda (it)
+                      (eq (plist-get it :submenu)
+                          'cmacs-libregnum-editor-script-menu-items))
+                    cmacs-libregnum-editor-context-menu-items)))
+
+(ert-deftest cmacs-libregnum-tests-context-menu-keymap ()
+  "The menu keymap is well-formed: leaves are callable and submenus nest.
+This is the dispatch-correctness invariant — `lookup-key' on the chosen event
+path must resolve to a callable action closure."
+  (dolist (ksym '(group primitive mesh light camera audio tilemap sprite prefab))
+    (let* ((items  (cmacs-libregnum-editor--filter-menu-items ksym))
+           (km     (cmacs-libregnum-editor--menu-keymap items (current-buffer) 0))
+           (leaves (cmacs-libregnum-tests--menu-keymap-leaves km))
+           (labels (mapcar #'car leaves)))
+      (should (keymapp km))
+      ;; every reached leaf binding is callable.
+      (should-not (memq nil (mapcar (lambda (l) (functionp (cdr l))) leaves)))
+      ;; top-level command items.
+      (should (member "Rename…" labels))
+      (should (member "Delete" labels))
+      ;; rotate submenu leaves were reached (recursion into submenus works).
+      (should (member "X axis +90°" labels))
+      (should (member "Reset rotation" labels))
+      ;; attach-script submenu leaves.
+      (should (member "New script…" labels))
+      (should (member "Existing script…" labels)))))
+
+(ert-deftest cmacs-libregnum-tests-context-menu-by-node ()
+  "End-to-end: the C node-kind getter + filter yield per-kind item sets."
+  (cmacs-libregnum-tests--gl-skip-or)
+  (let ((buf (generate-new-buffer "*cmacs-libregnum ctx test*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (cmacs-libregnum-editor-mode)
+          (should (cmacs-libregnum-editor-new buf))
+          (let ((cube  (cmacs-libregnum-editor-add-primitive
+                        buf cmacs-libregnum-primitive-cube "Cube"))
+                (light (cmacs-libregnum-editor-add-visual
+                        buf cmacs-libregnum-visual-light "Light")))
+            (should (= (cmacs-libregnum-editor-node-kind buf cube) 1))
+            (should (= (cmacs-libregnum-editor-node-kind buf light)
+                       cmacs-libregnum-visual-light))
+            (should (eq (cmacs-libregnum-editor--kind-symbol
+                         (cmacs-libregnum-editor-node-kind buf cube)) 'primitive))
+            (should (eq (cmacs-libregnum-editor--kind-symbol
+                         (cmacs-libregnum-editor-node-kind buf light)) 'light))
+            (let ((ll (cmacs-libregnum-tests--ctx-labels
+                       (cmacs-libregnum-editor--filter-menu-items
+                        (cmacs-libregnum-editor--kind-symbol
+                         (cmacs-libregnum-editor-node-kind buf light)))))
+                  (cl (cmacs-libregnum-tests--ctx-labels
+                       (cmacs-libregnum-editor--filter-menu-items
+                        (cmacs-libregnum-editor--kind-symbol
+                         (cmacs-libregnum-editor-node-kind buf cube))))))
+              (should (member "Set light range/color…" ll))
+              (should-not (member "Set light range/color…" cl))
+              (should (member "Delete" cl)))
+            ;; Type labels are name-independent (primitive reports its shape).
+            (should (string= (cmacs-libregnum-editor--type-label buf cube) "Cube"))
+            (should (string= (cmacs-libregnum-editor--type-label buf light) "Light"))
+            ;; Rename re-bakes so the outliner label shows the name in parens.
+            (cmacs-libregnum-editor-set-name buf cube "Player")
+            (should (= (cmacs-libregnum-editor-node-kind buf cube) 1))
+            (should (string= (cmacs-libregnum-editor--outliner-label
+                              buf cube "Player")
+                             "Cube (Player)"))
+            ;; A default-named node shows just its type (no redundant parens).
+            (should (string= (cmacs-libregnum-editor--outliner-label
+                              buf light "Light")
+                             "Light"))
+            ;; End-to-end keymap dispatch: resolve the rotate leaf and run it.
+            (let* ((km (cmacs-libregnum-editor--menu-keymap
+                        (cmacs-libregnum-editor--filter-menu-items 'primitive)
+                        buf cube))
+                   (leaves (cmacs-libregnum-tests--menu-keymap-leaves km))
+                   (x90 (cdr (assoc "X axis +90°" leaves)))
+                   (r0  (cmacs-libregnum-editor-node-rotation buf cube)))
+              (should (functionp x90))
+              (funcall x90)
+              (let ((r1 (cmacs-libregnum-editor-node-rotation buf cube)))
+                (should (> (- (nth 0 r1) (nth 0 r0)) 1.0))))))  ; ~+pi/2
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+
 (ert-deftest cmacs-libregnum-tests-editor-lifecycle ()
   "Open an editor, place + select + move + delete + undo, then save/reopen."
   (cmacs-libregnum-tests--gl-skip-or)

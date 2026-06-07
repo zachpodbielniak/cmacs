@@ -1382,6 +1382,65 @@ tileset), or nil.  */)
   return r;
 }
 
+DEFUN ("cmacs-libregnum-editor-node-kind",
+       Fcmacs_libregnum_editor_node_kind,
+       Scmacs_libregnum_editor_node_kind, 2, 2, 0,
+       doc: /* Return NODE-ID's visual kind in BUFFER as an integer.
+The value matches the `cmacs-libregnum-visual-*' constants (1 = a primitive
+shape).  Returns nil for a group node with no visual, or an unknown id.  */)
+  (Lisp_Object buffer, Lisp_Object node_id)
+{
+  gint kind;
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (node_id);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  kind = cmacs_libregnum_render_ctx_editor_node_kind
+           (ctx, (gint) XFIXNUM (node_id));
+  if (kind < 0) return Qnil;
+  return make_fixnum (kind);
+}
+
+DEFUN ("cmacs-libregnum-editor-node-primitive",
+       Fcmacs_libregnum_editor_node_primitive,
+       Scmacs_libregnum_editor_node_primitive, 2, 2, 0,
+       doc: /* Return NODE-ID's LrgPrimitiveType in BUFFER as an integer
+(see the `cmacs-libregnum-primitive-*' constants), or nil when the node is not
+a primitive shape.  */)
+  (Lisp_Object buffer, Lisp_Object node_id)
+{
+  gint prim;
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (node_id);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  prim = cmacs_libregnum_render_ctx_editor_node_primitive
+           (ctx, (gint) XFIXNUM (node_id));
+  if (prim < 0) return Qnil;
+  return make_fixnum (prim);
+}
+
+DEFUN ("cmacs-libregnum-editor-set-name",
+       Fcmacs_libregnum_editor_set_name,
+       Scmacs_libregnum_editor_set_name, 3, 3, 0,
+       doc: /* Rename NODE-ID in BUFFER to NAME (a string) and re-bake the
+level so the outliner and other baked labels show the new name.  Returns NAME.
+The plain GObject `name' property would not refresh the cached labels.  */)
+  (Lisp_Object buffer, Lisp_Object node_id, Lisp_Object name)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (node_id);
+  CHECK_STRING (name);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  cmacs_libregnum_render_ctx_editor_set_name
+    (ctx, (gint) XFIXNUM (node_id), SSDATA (name));
+  return name;
+}
+
 DEFUN ("cmacs-libregnum-set-mouse-capture",
        Fcmacs_libregnum_set_mouse_capture,
        Scmacs_libregnum_set_mouse_capture, 2, 2, 0,
@@ -1513,6 +1572,9 @@ syms_of_cmacs_libregnum_defuns (void)
   defsubr (&Scmacs_libregnum_assetdb_scan);
   defsubr (&Scmacs_libregnum_editor_set_visual_param);
   defsubr (&Scmacs_libregnum_editor_node_asset);
+  defsubr (&Scmacs_libregnum_editor_node_kind);
+  defsubr (&Scmacs_libregnum_editor_node_primitive);
+  defsubr (&Scmacs_libregnum_editor_set_name);
   defsubr (&Scmacs_libregnum_set_mouse_capture);
   defsubr (&Scmacs_libregnum_project);
   defsubr (&Scmacs_libregnum_editor_set_tool);

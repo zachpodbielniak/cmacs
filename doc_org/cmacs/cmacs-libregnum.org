@@ -683,6 +683,57 @@ rotate/scale gizmo handles and play-in-editor remain planned (see below).
   viewport to drop the item at that 3-D point.  Uses Emacs's own =drag-mouse-1=
   event (and stock =pgtk-dnd= for external file drops), so it needs *no* upstream
   pgtk change --- see =doc_org/cmacs/cmacs-upstream-changes.org=.
+- *Right-click context menu* — *right-click* an entity in the viewport to pop a
+  real GTK menu of actions on it (a *right-drag* still pans the camera, =scroll=
+  still zooms).  It is Emacs's own =x-popup-menu=, which the pgtk build renders
+  as a native =GtkMenu= — so it matches every other right-click menu in Emacs,
+  with *no* raw GTK code.  The C input layer ray-picks the node, captures the
+  ground point, and defers =cmacs-libregnum-editor--context-menu=, which pops the
+  menu from the *command loop* (a 0-delay timer) rather than from the GLib
+  dispatch — a nested GTK menu loop must not run inside the pselect wait.  The
+  picked node is selected first, so the chosen action operates on it.
+
+  The items vary by the node's *kind*: every node gets the common actions
+  (*Rename*, *Set position*, a *Rotate* submenu, *Reset transform*, *Duplicate*,
+  *Toggle visible/locked*, an *Attach script* submenu, *Inspector*, *Focus
+  camera*, *Reparent to root*, *Save as prefab*, *Delete*), while asset and
+  special nodes add their own: *mesh/sprite/audio* get *Open asset file*; *light*
+  gets *Set light range/color*; *camera* gets *Set camera FOV*; *audio* gets *Set
+  audio range* + *Play audio*; *tilemap* gets *Set tilemap brush*.
+  *Right-clicking empty space* pops an *Add* menu (the palette's Primitives /
+  Objects / Assets sections) that places the chosen item at the clicked ground
+  point.
+
+  Two items open real nested GTK *submenus*: *Rotate* offers ±45° and ±90° about
+  *each* axis (X / Y / Z) plus *Reset rotation*; *Attach script* offers *New
+  script…* (scaffolds a starter file in the chosen language, attaches it, and
+  opens it) and *Existing script…* (attach a file already on disk).
+
+  *Rename* showcases the new name in the outliner: each row reads =Type (Name)=
+  when the node has been renamed (e.g. =Cube (Player)=) and just =Type= otherwise
+  (=Cube=, =Light=), so the type is always visible and a custom name stands out.
+  Renaming goes through =cmacs-libregnum-editor-set-name=, which re-bakes the
+  level so the outliner's cached labels refresh (a plain GObject =name= set would
+  not).  The concrete shape label comes from
+  =cmacs-libregnum-editor-node-primitive=.
+
+  The menu is *data-driven and easy to extend*: it is built from the
+  =cmacs-libregnum-editor-context-menu-items= list, where each entry is a plist —
+  =(:label STRING :kinds KINDS :action FN)= for a command,
+  =(:label STRING :kinds KINDS :submenu SYMBOL)= for a submenu (SYMBOL names a
+  list of sub-items in the same shape, e.g.
+  =cmacs-libregnum-editor-rotate-menu-items=), or =(:sep)= for a divider.
+  =KINDS= is =t= (all kinds) or a list of node-kind symbols (=group=,
+  =primitive=, =mesh=, =sprite=, =tilemap=, =light=, =camera=, =audio=,
+  =prefab=), and =FN= is called as =(FN BUFFER ID)= on the right-clicked node.
+  *Adding an item — or a whole submenu — is a one-line edit*; no other code
+  changes.  The node's kind comes from the
+  =cmacs-libregnum-editor-node-kind= DEFUN (an int matching the
+  =cmacs-libregnum-visual-*= constants, =1= = a primitive, =nil= = a group node).
+  The menu is a keymap (so submenus are native), popped with =x-popup-menu= and
+  resolved with =lookup-key=.  Like the Emacs =drag-mouse-1= path, this needs
+  *no* upstream pgtk change: it rides the existing libregnum button hook in
+  =src/pgtkterm.c= and reuses Emacs's own menu machinery.
 - *Tilemaps — paint, render, persist* — =T= (=cmacs-libregnum-editor-tilemap-create=)
   makes a TILEMAP node from a tileset image + tile/map dimensions;
   =cmacs-libregnum-editor-tilemap-paint= arms a sticky brush so each viewport

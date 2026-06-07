@@ -154,6 +154,19 @@ The libregnum editor supports two drag paths that complement each other:
   ="application/x-libregnum"= entry in =pgtk-dnd-types-alist= (pure Elisp,
   no upstream edit).
 
+*** Editor right-click context menu --- NO upstream change needed
+
+The viewport entity context menu (right-click an entity → a GTK menu of
+actions) requires *no new upstream edit*.  It rides the existing *libregnum
+pointer input* hunk above: a right-click (button-3 press+release without
+movement) is detected inside =cmacs_libregnum_handle_button= (pure C in
+=cmacs/libregnum/cmacs-libregnum-input.c=), which ray-picks the node and defers
+=cmacs-libregnum-editor--context-menu= onto the cmacs GMainContext.  The menu
+itself is Emacs's own =x-popup-menu= (a native =GtkMenu= in the pgtk build),
+popped from the command loop via a 0-delay timer — so no GTK-menu code is added
+anywhere, and the existing button hook already routes the event.  A right-drag
+still pans (also handled in that same controller).
+
 ** src/xwidget.c / src/xwidget.h --- gowl client embedding
 
 All gated =HAVE_CMACS_GOWL= (and =HAVE_PGTK= for the event paths).  gowl

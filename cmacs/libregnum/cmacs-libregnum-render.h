@@ -359,6 +359,18 @@ extern void     cmacs_libregnum_render_ctx_editor_set_visual_param
 /* Node's visual asset path (sound/mesh/sprite/tileset), newly-allocated. */
 extern char *   cmacs_libregnum_render_ctx_editor_node_asset
                               (CmacsLibregnumRenderCtx *r, gint node_id);
+/* Node's visual kind (LrgNodeVisualKind int), or -1 if it has no visual (a
+ * group node) or the id is unknown.  Drives the per-kind right-click menu. */
+extern gint     cmacs_libregnum_render_ctx_editor_node_kind
+                              (CmacsLibregnumRenderCtx *r, gint node_id);
+/* Node's LrgPrimitiveType int when it is a primitive, else -1 (used for the
+ * outliner's concrete-shape type label). */
+extern gint     cmacs_libregnum_render_ctx_editor_node_primitive
+                              (CmacsLibregnumRenderCtx *r, gint node_id);
+/* Rename node ID and re-bake so cached labels (outliner) refresh. */
+extern void     cmacs_libregnum_render_ctx_editor_set_name
+                              (CmacsLibregnumRenderCtx *r, gint node_id,
+                               const char *name);
 
 #endif /* HAVE_CMACS_LIBREGNUM */
 #endif /* CMACS_LIBREGNUM_RENDER_H */

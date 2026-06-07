@@ -28,6 +28,7 @@ typedef struct
   struct frame *frame;
   double        last_x, last_y;
   double        press_x, press_y;   /* left-button-down position */
+  double        rpress_x, rpress_y; /* right-button-down position (menu vs pan) */
   bool          dragging_left;
   bool          dragging_right;
   bool          dragging_object;    /* editor: moving the picked node */
@@ -127,6 +128,48 @@ defer_drop (CmacsLibregnumView *v, double x, double y, double z)
   d->buffer = cmacs_libregnum_view_get_buffer (v);
   d->x = x; d->y = y; d->z = z;
   g_main_context_invoke (cmacs_glib_get_context (), drop_action_idle, d);
+}
+
+/* Deferred right-click context menu: Elisp pops a GTK menu (x-popup-menu) over
+ * the entity under the cursor.  The actual menu must NOT pop here -- this idle
+ * runs inside cmacs_glib_dispatch (Emacs's pselect wait), and starting a nested
+ * GTK menu loop there would re-enter the GLib dispatch.  So the Elisp side
+ * (`cmacs-libregnum-editor--context-menu') re-schedules the pop onto the
+ * command loop via a 0-delay timer; here we only hand off buffer + picked node
+ * id (-1 = empty space) + the frame-pixel click point (x-popup-menu POSITION)
+ * + the ground point (so an empty-space "Add" places where you clicked). */
+typedef struct
+{
+  Lisp_Object buffer;
+  gint        id;             /* picked node id, or -1 for empty space */
+  double      fx, fy;         /* frame-relative pixels = menu anchor */
+  double      gx, gy, gz;     /* world ground point under the click */
+  bool        have_ground;
+} ContextMenuAction;
+
+static gboolean
+context_menu_idle (gpointer user)
+{
+  ContextMenuAction *c = user;
+  Lisp_Object pos = c->have_ground
+    ? list5 (make_float (c->fx), make_float (c->fy),
+             make_float (c->gx), make_float (c->gy), make_float (c->gz))
+    : list2 (make_float (c->fx), make_float (c->fy));
+  cmacs_dispatch_safe_call3 (intern ("cmacs-libregnum-editor--context-menu"),
+                             c->buffer, make_fixnum (c->id), pos);
+  g_free (c);
+  return G_SOURCE_REMOVE;
+}
+
+static void
+defer_context_menu (CmacsLibregnumView *v, gint id, double fx, double fy,
+                    bool have_ground, double gx, double gy, double gz)
+{
+  ContextMenuAction *c = g_new0 (ContextMenuAction, 1);
+  c->buffer = cmacs_libregnum_view_get_buffer (v);
+  c->id = id; c->fx = fx; c->fy = fy;
+  c->have_ground = have_ground; c->gx = gx; c->gy = gy; c->gz = gz;
+  g_main_context_invoke (cmacs_glib_get_context (), context_menu_idle, c);
 }
 
 /* Convert a frame-pixel click (X,Y) to view-local pixels (origin
@@ -438,7 +481,40 @@ cmacs_libregnum_handle_button (struct frame *f, int button, int press,
     }
   if (button == 3)
     {
-      drag_state.dragging_right = press != 0;
+      CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+      if (press != 0)
+        {
+          /* Right-press: remember where, arm a potential pan drag. */
+          drag_state.dragging_right = true;
+          drag_state.rpress_x = x;
+          drag_state.rpress_y = y;
+        }
+      else
+        {
+          /* A right-release without meaningful movement is a context-menu
+             click (a pan moves the pointer).  In the editor, ray-pick the node
+             under the cursor (id may be -1 for empty space), capture the ground
+             point, and defer the menu to Elisp -- which pops it from the
+             command loop.  A right-drag still pans (handled in the motion
+             handler off `dragging_right'); only the release branches here. */
+          bool moved = (fabs (x - drag_state.rpress_x)
+                        + fabs (y - drag_state.rpress_y)) > 5.0;
+          drag_state.dragging_right = false;
+          if (!moved && cmacs_libregnum_render_ctx_editor_active (ctx))
+            {
+              double vx, vy, gx = 0, gy = 0, gz = 0;
+              int vw, vh;
+              gint id = -1;
+              bool ground = false;
+              if (frame_to_view_coords (f, v, x, y, &vx, &vy, &vw, &vh))
+                {
+                  id = cmacs_libregnum_render_ctx_pick (ctx, vx, vy, vw, vh);
+                  ground = cmacs_libregnum_render_ctx_editor_screen_to_ground
+                             (ctx, vx, vy, vw, vh, &gx, &gy, &gz);
+                }
+              defer_context_menu (v, id, x, y, ground, gx, gy, gz);
+            }
+        }
       return true;
     }
   return false;

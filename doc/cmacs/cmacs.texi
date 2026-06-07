@@ -6386,6 +6386,52 @@ viewport (no upstream edit); (b) a GTK-native GDK drag-source
 @code{gtk_drag_begin_with_coordinates}) for cross-process DnD to external GTK
 apps.  The latter requires two thin @code{pgtkterm.c} hunks described in the
 Upstream Changes chapter.
+@item @strong{Right-click context menu} --- @strong{right-click} an entity in the
+viewport to pop a real GTK menu of actions on it (a @strong{right-drag} still
+pans, @code{scroll} still zooms).  It is Emacs's own @code{x-popup-menu}, which
+the pgtk build renders as a native @code{GtkMenu}, so it matches every other
+right-click menu in Emacs with no raw GTK code.  The C input layer ray-picks the
+node, captures the ground point, and defers
+@code{cmacs-libregnum-editor--context-menu}, which pops the menu from the command
+loop (a 0-delay timer) --- never from the GLib dispatch, where a nested GTK menu
+loop must not run during the pselect wait.  The picked node is selected first, so
+the chosen action operates on it.  Items vary by the node's @emph{kind}: every
+node gets the common actions (Rename, Set position, a Rotate submenu, Reset
+transform, Duplicate, Toggle visible/locked, an Attach script submenu, Inspector,
+Focus camera, Reparent to root, Save as prefab, Delete); @emph{mesh/sprite/audio}
+add Open asset file; @emph{light} adds Set light range/color; @emph{camera} adds
+Set camera FOV; @emph{audio} adds Set audio range + Play audio; @emph{tilemap}
+adds Set tilemap brush.  Two items open real nested GTK submenus: @emph{Rotate}
+offers ±45° and ±90° about each axis (X / Y / Z) plus Reset rotation;
+@emph{Attach script} offers New script@dots{} (scaffold a starter file in the
+chosen language, attach, and open it) and Existing script@dots{}.
+Right-clicking empty space pops an @emph{Add} menu (the palette's Primitives /
+Objects / Assets sections) that places the chosen item at the clicked ground
+point.
+
+@emph{Rename} showcases the new name in the outliner: each row reads
+@code{Type (Name)} once a node is renamed (e.g.@: @code{Cube (Player)}) and just
+@code{Type} otherwise, so the type stays visible and the custom name stands out.
+Renaming goes through @code{cmacs-libregnum-editor-set-name}, which re-bakes the
+level so the outliner's bake-time-cached labels refresh (a plain GObject
+@code{name} set would not); the concrete shape label comes from
+@code{cmacs-libregnum-editor-node-primitive}.
+
+The menu is data-driven and easy to extend: it is built from
+@code{cmacs-libregnum-editor-context-menu-items}, whose entries are plists ---
+@code{(:label STRING :kinds KINDS :action FN)} for a command,
+@code{(:label STRING :kinds KINDS :submenu SYMBOL)} for a submenu (SYMBOL names a
+list of sub-items in the same shape), or @code{(:sep)} for a divider.  @code{KINDS}
+is @code{t} (all kinds) or a list of node-kind symbols (@code{group},
+@code{primitive}, @code{mesh}, @code{sprite}, @code{tilemap}, @code{light},
+@code{camera}, @code{audio}, @code{prefab}); @code{FN} is called as
+@code{(FN BUFFER ID)}.  Adding an item or a whole submenu is a one-line edit.  The
+menu is a keymap (so submenus are native), popped with @code{x-popup-menu} and
+resolved with @code{lookup-key}.  The node kind comes from the
+@code{cmacs-libregnum-editor-node-kind} DEFUN (an int matching the
+@code{cmacs-libregnum-visual-*} constants; @code{1} = a primitive, @code{nil} = a
+group node).  Like the @code{drag-mouse-1} path, it needs no upstream pgtk change
+--- it rides the existing libregnum button hook.
 @item @strong{Tilemaps --- paint, render, persist} --- @kbd{T}
 (@code{cmacs-libregnum-editor-tilemap-create}) makes a TILEMAP node from a
 tileset image + tile/map dimensions; @code{cmacs-libregnum-editor-tilemap-paint}
@@ -7406,6 +7452,18 @@ handled by stock @code{pgtk-dnd} extended with the
 @code{"application/x-libregnum"} entry in @code{pgtk-dnd-types-alist} (pure
 Elisp, no upstream edit).
 @end itemize
+
+@subsubsection Editor right-click context menu --- no upstream change
+
+The viewport entity context menu (right-click an entity for a GTK menu of
+actions) needs @emph{no new upstream edit}.  It rides the existing libregnum
+pointer-input hunk: a right-click (button-3 press+release without movement) is
+detected in @code{cmacs_libregnum_handle_button} (pure C in
+@file{cmacs/libregnum/cmacs-libregnum-input.c}), which ray-picks the node and
+defers @code{cmacs-libregnum-editor--context-menu}.  The menu itself is Emacs's
+own @code{x-popup-menu} (a native @code{GtkMenu} in the pgtk build), popped from
+the command loop via a 0-delay timer, so no GTK-menu code is added and the
+existing button hook already routes the event.  A right-drag still pans.
 
 @subsection src/xwidget.c / src/xwidget.h --- gowl client embedding
 

@@ -842,7 +842,7 @@ nil means no snapping; numbers snap moves/drags to that grid."
           "[c]ube [b]all [y]cyl [n]plane  "
           "gizmo [w]move [e]rot [r]scale (drag handles)  [v]2D [x]del  "
           "[u]ndo [C-r]edo  [p]al [o]ut [i]nsp [A]ssets [L]ogic [f5]play "
-          "[C-x C-s]save")
+          "[C-x C-s]save  right-click: menu")
   "Header-line hint shown over the editor viewport (the window body is the
 3D view, so on-screen affordances live in the header line until the native
 panels land).")
@@ -1129,6 +1129,80 @@ hook on FILE's buffer."
       (cmacs-libregnum-editor-stop eb)
       (cmacs-libregnum-editor-play eb)
       (message "libregnum: reloaded scripts (replayed)"))))
+
+(defconst cmacs-libregnum-editor--script-templates
+  `((1 ".lua" . ,(concat "-- libregnum node script (Lua)\n"
+                         "-- Define start(node) / update(node, dt) if your\n"
+                         "-- libregnum build calls the script lifecycle hooks.\n\n"
+                         "function start(node)\nend\n\n"
+                         "function update(node, dt)\nend\n"))
+    (2 ".py" . ,(concat "# libregnum node script (Python)\n\n"
+                        "def start(node):\n    pass\n\n"
+                        "def update(node, dt):\n    pass\n"))
+    (3 ".js" . ,(concat "// libregnum node script (GJS)\n\n"
+                        "function start(node) {}\n\n"
+                        "function update(node, dt) {}\n"))
+    (4 ".c" . ,(concat "/* libregnum node script (crispy C).\n"
+                       "   main() runs when the script component starts. */\n"
+                       "#include <glib.h>\n\n"
+                       "int\nmain (void)\n{\n"
+                       "  g_print (\"hello from node script\\n\");\n"
+                       "  return 0;\n}\n")))
+  "Per-language (LANG-INT EXT . TEMPLATE) starter scaffolds for new scripts.
+LANG-INT matches `cmacs-libregnum-script-languages' (1 Lua, 2 Python, 3 GJS,
+4 crispy).")
+
+(defun cmacs-libregnum-editor--script-ext (lang)
+  "File extension for script LANGUAGE int LANG (default \".txt\")."
+  (or (cadr (assq lang cmacs-libregnum-editor--script-templates)) ".txt"))
+
+(defun cmacs-libregnum-editor--script-template (lang)
+  "Starter scaffold text for script LANGUAGE int LANG (default empty)."
+  (or (cddr (assq lang cmacs-libregnum-editor--script-templates)) ""))
+
+(defun cmacs-libregnum-editor--read-language ()
+  "Prompt for an available script language; return (NAME . INT)."
+  (let ((langs (cmacs-libregnum-editor--available-languages)))
+    (when (null langs)
+      (user-error "No scripting backends are built into libregnum"))
+    (let ((name (completing-read "Language: " langs nil t)))
+      (cons name (cdr (assoc name langs))))))
+
+(defun cmacs-libregnum-editor--ctx-existing-script (buffer id)
+  "Attach an EXISTING script file to node ID in BUFFER."
+  (let* ((lang (cmacs-libregnum-editor--read-language))
+         (file (expand-file-name (read-file-name "Existing script file: "
+                                                 nil nil t))))
+    (cond
+     ((null (cdr lang)) (user-error "Unknown/unavailable language: %s" (car lang)))
+     ((not (file-exists-p file)) (user-error "No such file: %s" file))
+     (t (cmacs-libregnum-editor-attach-script buffer id (cdr lang) file)
+        (cmacs-libregnum-editor--watch-script file buffer)
+        (cmacs-libregnum-editor--sync-panels buffer id)
+        (message "Attached %s script to node %d (%d total)" (car lang) id
+                 (or (cmacs-libregnum-editor-node-script-count buffer id) 0))))))
+
+(defun cmacs-libregnum-editor--ctx-new-script (buffer id)
+  "Create a NEW script file (scaffolded), attach it to node ID, and open it."
+  (let* ((lang (cmacs-libregnum-editor--read-language))
+         (lint (cdr lang))
+         (ext  (cmacs-libregnum-editor--script-ext lint))
+         (file (expand-file-name
+                (read-file-name (format "New %s script file: " (car lang))
+                                nil nil nil (concat "node-script" ext)))))
+    (when (null lint)
+      (user-error "Unknown/unavailable language: %s" (car lang)))
+    (when (or (not (file-exists-p file))
+              (yes-or-no-p (format "%s exists; overwrite? " file)))
+      (let ((dir (file-name-directory file)))
+        (when (and dir (not (file-directory-p dir)))
+          (make-directory dir t)))
+      (write-region (cmacs-libregnum-editor--script-template lint) nil file)
+      (cmacs-libregnum-editor-attach-script buffer id lint file)
+      (cmacs-libregnum-editor--watch-script file buffer)
+      (cmacs-libregnum-editor--sync-panels buffer id)
+      (find-file-other-window file)
+      (message "Created + attached %s script to node %d" (car lang) id))))
 
 (defun cmacs-libregnum-editor-prefab-save (file)
   "Save the selected node's subtree to a .rprefab FILE for reuse.
@@ -1527,6 +1601,359 @@ follow the mouse."
             (and (integerp id) (>= id 0) id)))
     (cmacs-libregnum-editor--sync-panels buffer id)))
 
+;;; ─── Right-click context menu ──────────────────────────────────────────
+;;;
+;;; A right-CLICK (press+release without movement) on an entity in the viewport
+;;; pops a real GTK menu (Emacs `x-popup-menu', which the pgtk build renders as
+;;; a native GTK menu) whose items vary by the node's kind.  A right-DRAG still
+;;; pans the camera.  The C input layer (cmacs-libregnum-input.c) ray-picks the
+;;; node and defers `cmacs-libregnum-editor--context-menu' onto the cmacs
+;;; GMainContext; that runs during the pselect wait, so we must NOT pop the menu
+;;; there (a nested GTK menu loop would re-enter the GLib dispatch).  Instead we
+;;; re-schedule the pop onto the Emacs command loop with a 0-delay timer.
+;;;
+;;; The menu is data-driven: add an item by adding one plist to
+;;; `cmacs-libregnum-editor-context-menu-items'.
+
+;; The empty-space "Add" menu reuses the palette sections, which are defined
+;; later in this file (with the palette panel UI); forward-declare so the
+;; byte-compiler does not flag the reference in `--popup-add-menu'.
+(defvar cmacs-libregnum-editor--palette)
+
+(defun cmacs-libregnum-editor--kind-symbol (kind)
+  "Map an integer visual KIND (or nil) to a context-menu node-kind symbol.
+A nil KIND means the node has no visual (a group/transform node)."
+  (cond
+   ((null kind)                                  'group)
+   ((= kind 1)                                   'primitive)
+   ((= kind cmacs-libregnum-visual-mesh-asset)   'mesh)
+   ((= kind cmacs-libregnum-visual-sprite)       'sprite)
+   ((= kind cmacs-libregnum-visual-tilemap)      'tilemap)
+   ((= kind cmacs-libregnum-visual-light)        'light)
+   ((= kind cmacs-libregnum-visual-camera)       'camera)
+   ((= kind cmacs-libregnum-visual-audio)        'audio)
+   ((= kind cmacs-libregnum-visual-prefab)       'prefab)
+   (t                                            'unknown)))
+
+(defconst cmacs-libregnum-editor--primitive-labels
+  '((0 . "Plane") (1 . "Cube") (2 . "Circle") (3 . "Sphere") (4 . "IcoSphere")
+    (5 . "Cylinder") (6 . "Cone") (7 . "Torus") (8 . "Grid") (9 . "Mesh")
+    (10 . "Rectangle") (11 . "Circle2D"))
+  "LrgPrimitiveType int → friendly shape label for the outliner.")
+
+(defun cmacs-libregnum-editor--type-label (src id)
+  "A friendly type label for node ID in SRC, independent of its (renameable) name.
+Primitives report their concrete shape (\"Cube\"); other kinds report their
+kind (\"Light\"); a group node reports \"Group\"."
+  (let ((kind (ignore-errors (cmacs-libregnum-editor-node-kind src id))))
+    (cond
+     ((null kind) "Group")
+     ((= kind 1)
+      (or (and (fboundp 'cmacs-libregnum-editor-node-primitive)
+               (cdr (assq (ignore-errors
+                            (cmacs-libregnum-editor-node-primitive src id))
+                          cmacs-libregnum-editor--primitive-labels)))
+          "Shape"))
+     ((= kind cmacs-libregnum-visual-mesh-asset) "Mesh")
+     ((= kind cmacs-libregnum-visual-sprite)     "Sprite")
+     ((= kind cmacs-libregnum-visual-tilemap)    "Tilemap")
+     ((= kind cmacs-libregnum-visual-light)      "Light")
+     ((= kind cmacs-libregnum-visual-camera)     "Camera")
+     ((= kind cmacs-libregnum-visual-audio)      "Audio")
+     ((= kind cmacs-libregnum-visual-prefab)     "Prefab")
+     (t "Node"))))
+
+(defun cmacs-libregnum-editor--outliner-label (src id name)
+  "Outliner row label: the node's type, with a custom NAME in parentheses.
+A node whose NAME is still its default (equal to the type, e.g. a fresh
+\"Cube\") shows just the type; a renamed node shows e.g. \"Cube (Player)\" so
+the chosen name is clearly showcased."
+  (let ((type (cmacs-libregnum-editor--type-label src id)))
+    (if (and name (stringp name) (not (string-empty-p name))
+             (not (string-equal (downcase name) (downcase type))))
+        (format "%s (%s)" type name)
+      type)))
+
+;;; Helper commands the menu items dispatch to.  Each takes (BUFFER ID).
+
+(defun cmacs-libregnum-editor--ctx-rotate (buffer id drx dry drz)
+  "Add (DRX DRY DRZ) radians to node ID's rotation in BUFFER (undoable)."
+  (let ((r (cmacs-libregnum-editor-node-rotation buffer id)))
+    (when r
+      (cmacs-libregnum-editor-set-rotation
+       buffer id (+ (nth 0 r) drx) (+ (nth 1 r) dry) (+ (nth 2 r) drz))
+      (cmacs-libregnum-editor--sync-panels buffer id))))
+
+(defun cmacs-libregnum-editor--ctx-reset-transform (buffer id)
+  "Reset node ID's position, rotation and scale in BUFFER (undoable)."
+  (cmacs-libregnum-editor-set-position buffer id 0 0 0)
+  (cmacs-libregnum-editor-set-rotation buffer id 0 0 0)
+  (cmacs-libregnum-editor-set-scale    buffer id 1 1 1)
+  (cmacs-libregnum-editor--sync-panels buffer id))
+
+(defun cmacs-libregnum-editor--ctx-toggle (buffer id prop)
+  "Toggle boolean GObject PROP (\"visible\"/\"locked\") on node ID in BUFFER."
+  (let ((obj (cmacs-libregnum-editor-node-object buffer id)))
+    (if (null obj)
+        (user-error "No node object")
+      (gobject-set obj prop (not (gobject-get obj prop)))
+      (cmacs-libregnum-redraw buffer)
+      (cmacs-libregnum-editor--sync-panels buffer id)
+      (message "%s: %s" prop (if (gobject-get obj prop) "on" "off")))))
+
+(defun cmacs-libregnum-editor--ctx-rename (buffer id)
+  "Prompt for and set node ID's name in BUFFER.
+Uses `cmacs-libregnum-editor-set-name', which re-bakes the level so the new
+name shows in the outliner (whose labels are cached at bake time); falls back
+to the GObject `name' property when that primitive is unavailable."
+  (let* ((obj (cmacs-libregnum-editor-node-object buffer id))
+         (old (and obj (gobject-get obj "name")))
+         (new (read-string "Name: " old)))
+    (if (fboundp 'cmacs-libregnum-editor-set-name)
+        (cmacs-libregnum-editor-set-name buffer id new)
+      (when obj (gobject-set obj "name" new)))
+    ;; Rebuild the outliner so the new name shows, then re-sync panels.
+    (when (buffer-live-p (get-buffer "*cmacs-libregnum outliner*"))
+      (with-current-buffer buffer (cmacs-libregnum-editor-outliner)))
+    (cmacs-libregnum-editor--sync-panels buffer id)
+    (message "Renamed node %d to %s" id new)))
+
+(defun cmacs-libregnum-editor--ctx-open-asset (buffer id)
+  "Visit node ID's backing asset file (mesh/sprite/audio) in BUFFER."
+  (let ((asset (cmacs-libregnum-editor-node-asset buffer id)))
+    (if (and asset (not (string-empty-p asset))
+             (file-exists-p (expand-file-name asset)))
+        (find-file-other-window (expand-file-name asset))
+      (user-error "No asset file for this node"))))
+
+(defun cmacs-libregnum-editor--ctx-duplicate (buffer id)
+  "Duplicate node ID in BUFFER.
+Saves the node's subtree to a temporary .rprefab and re-instantiates it under
+the root, nudged slightly so the copy is visible.  (A native engine-side clone
+under the original's parent is a future improvement.)"
+  (let ((tmp (make-temp-file "cmacs-lrg-dup" nil ".rprefab")))
+    (unwind-protect
+        (if (not (cmacs-libregnum-editor-save-prefab buffer id tmp))
+            (user-error "Could not duplicate node")
+          (let ((newid (cmacs-libregnum-editor-instantiate-prefab
+                        buffer tmp -1)))
+            (when newid
+              (let ((loc (cmacs-libregnum-editor-node-location buffer newid)))
+                (when loc
+                  (cmacs-libregnum-editor-set-position
+                   buffer newid (+ (nth 0 loc) 0.5) (nth 1 loc)
+                   (+ (nth 2 loc) 0.5))))
+              (cmacs-libregnum-editor-select buffer newid)
+              (with-current-buffer buffer
+                (setq cmacs-libregnum-editor--current newid))
+              (when (buffer-live-p (get-buffer "*cmacs-libregnum outliner*"))
+                (with-current-buffer buffer (cmacs-libregnum-editor-outliner)))
+              (cmacs-libregnum-editor--sync-panels buffer newid)
+              (message "Duplicated node %d → %d" id newid))))
+      (ignore-errors (delete-file tmp)))))
+
+(defvar cmacs-libregnum-editor-rotate-menu-items
+  `((:label "X axis +45°" :action ,(lambda (b i) (cmacs-libregnum-editor--ctx-rotate b i (/ float-pi 4) 0 0)))
+    (:label "X axis −45°" :action ,(lambda (b i) (cmacs-libregnum-editor--ctx-rotate b i (- (/ float-pi 4)) 0 0)))
+    (:label "X axis +90°" :action ,(lambda (b i) (cmacs-libregnum-editor--ctx-rotate b i (/ float-pi 2) 0 0)))
+    (:label "X axis −90°" :action ,(lambda (b i) (cmacs-libregnum-editor--ctx-rotate b i (- (/ float-pi 2)) 0 0)))
+    (:sep)
+    (:label "Y axis +45°" :action ,(lambda (b i) (cmacs-libregnum-editor--ctx-rotate b i 0 (/ float-pi 4) 0)))
+    (:label "Y axis −45°" :action ,(lambda (b i) (cmacs-libregnum-editor--ctx-rotate b i 0 (- (/ float-pi 4)) 0)))
+    (:label "Y axis +90°" :action ,(lambda (b i) (cmacs-libregnum-editor--ctx-rotate b i 0 (/ float-pi 2) 0)))
+    (:label "Y axis −90°" :action ,(lambda (b i) (cmacs-libregnum-editor--ctx-rotate b i 0 (- (/ float-pi 2)) 0)))
+    (:sep)
+    (:label "Z axis +45°" :action ,(lambda (b i) (cmacs-libregnum-editor--ctx-rotate b i 0 0 (/ float-pi 4))))
+    (:label "Z axis −45°" :action ,(lambda (b i) (cmacs-libregnum-editor--ctx-rotate b i 0 0 (- (/ float-pi 4)))))
+    (:label "Z axis +90°" :action ,(lambda (b i) (cmacs-libregnum-editor--ctx-rotate b i 0 0 (/ float-pi 2))))
+    (:label "Z axis −90°" :action ,(lambda (b i) (cmacs-libregnum-editor--ctx-rotate b i 0 0 (- (/ float-pi 2)))))
+    (:sep)
+    (:label "Reset rotation" :action ,(lambda (b i) (cmacs-libregnum-editor-set-rotation b i 0 0 0))))
+  "Items for the right-click \"Rotate\" submenu: ±45°/±90° about each axis.
+Same plist shape as `cmacs-libregnum-editor-context-menu-items' (no :kinds —
+all rotations apply to every node).")
+
+(defvar cmacs-libregnum-editor-script-menu-items
+  '((:label "New script…"      :action cmacs-libregnum-editor--ctx-new-script)
+    (:label "Existing script…" :action cmacs-libregnum-editor--ctx-existing-script))
+  "Items for the right-click \"Attach script\" submenu.")
+
+(defvar cmacs-libregnum-editor-context-menu-items
+  `((:label "Rename…"            :kinds t :action cmacs-libregnum-editor--ctx-rename)
+    (:label "Set position…"      :kinds t :action ,(lambda (_b _i) (call-interactively #'cmacs-libregnum-editor-move-current)))
+    (:label "Rotate"             :kinds t :submenu cmacs-libregnum-editor-rotate-menu-items)
+    (:sep)
+    (:label "Reset transform"    :kinds t :action cmacs-libregnum-editor--ctx-reset-transform)
+    (:label "Duplicate"          :kinds t :action cmacs-libregnum-editor--ctx-duplicate)
+    (:sep)
+    (:label "Toggle visible"     :kinds t :action ,(lambda (b i) (cmacs-libregnum-editor--ctx-toggle b i "visible")))
+    (:label "Toggle locked"      :kinds t :action ,(lambda (b i) (cmacs-libregnum-editor--ctx-toggle b i "locked")))
+    (:label "Attach script"      :kinds t :submenu cmacs-libregnum-editor-script-menu-items)
+    (:label "Inspector"          :kinds t :action ,(lambda (_b _i) (cmacs-libregnum-editor-inspector)))
+    (:label "Focus camera"       :kinds t :action ,(lambda (_b _i) (cmacs-libregnum-editor-focus-selected)))
+    (:label "Reparent to root"   :kinds t :action ,(lambda (b i) (cmacs-libregnum-editor-reparent b i -1)))
+    (:label "Save as prefab…"    :kinds t :action ,(lambda (_b _i) (call-interactively #'cmacs-libregnum-editor-prefab-save)))
+    (:sep)
+    (:label "Open asset file"      :kinds (mesh sprite audio) :action cmacs-libregnum-editor--ctx-open-asset)
+    (:label "Set light range/color…" :kinds (light)   :action ,(lambda (_b _i) (call-interactively #'cmacs-libregnum-editor-set-light)))
+    (:label "Set camera FOV…"        :kinds (camera)  :action ,(lambda (_b _i) (call-interactively #'cmacs-libregnum-editor-set-camera-fov)))
+    (:label "Set audio range…"       :kinds (audio)   :action ,(lambda (_b _i) (call-interactively #'cmacs-libregnum-editor-set-audio-range)))
+    (:label "Play audio"             :kinds (audio)   :action ,(lambda (_b _i) (cmacs-libregnum-editor-play-audio)))
+    (:label "Set tilemap brush…"     :kinds (tilemap) :action ,(lambda (_b _i) (call-interactively #'cmacs-libregnum-editor-tilemap-set-brush)))
+    (:sep)
+    (:label "Delete"             :kinds t :action ,(lambda (_b _i) (cmacs-libregnum-editor-delete-current))))
+  "Data-driven entity context menu for `cmacs-libregnum-editor-mode'.
+Each entry is a plist, one of:
+
+  (:label STRING :kinds KINDS :action FN)        ; a command item
+  (:label STRING :kinds KINDS :submenu SYMBOL)   ; a real GTK submenu
+  (:sep)                                         ; a divider
+
+KINDS is t (all node kinds) or a list of node-kind symbols; the item shows only
+when the right-clicked node's kind matches.  FN is called as (FN BUFFER ID) on
+the right-clicked node, which is already selected.  SYMBOL names a variable
+holding a list of sub-items in this same plist shape (see
+`cmacs-libregnum-editor-rotate-menu-items').
+
+Node-kind symbols: group primitive mesh sprite tilemap light camera audio
+prefab.  To add a menu item, add one plist here — no other code changes.")
+
+(defun cmacs-libregnum-editor--filter-menu-items (ksym)
+  "Return the menu items applicable to node-kind symbol KSYM.
+Keeps every (:sep) marker and every item whose :kinds is t or contains KSYM, in
+their original order, so indices stay stable for dispatch."
+  (seq-filter
+   (lambda (it)
+     (or (plist-member it :sep)
+         (let ((k (plist-get it :kinds)))
+           (or (eq k t) (memq ksym k)))))
+   cmacs-libregnum-editor-context-menu-items))
+
+(defun cmacs-libregnum-editor--menu-keymap (items buffer id &optional title)
+  "Build a keymap menu from ITEMS for `x-popup-menu'.
+Each command item binds a unique key to an interactive closure that calls its
+:action as (ACTION BUFFER ID); each :submenu becomes a real nested GTK submenu
+(built recursively); (:sep) becomes a divider.  Returns the keymap, which the
+caller pops and then resolves with `lookup-key' on the chosen event path.
+Submenus are NOT kind-filtered (their items apply to every node)."
+  (let ((map (make-sparse-keymap (or title "Entity")))
+        (n 0))
+    (dolist (it items)
+      (let ((key (intern (format "cmacs-lrg-mi-%d" n))))
+        (setq n (1+ n))
+        (cond
+         ((plist-member it :sep)
+          (define-key map (vector key) '(menu-item "--")))
+         ((plist-get it :submenu)
+          (define-key map (vector key)
+            (list 'menu-item (plist-get it :label)
+                  (cmacs-libregnum-editor--menu-keymap
+                   (symbol-value (plist-get it :submenu))
+                   buffer id (plist-get it :label)))))
+         (t
+          (let ((action (plist-get it :action)))
+            (define-key map (vector key)
+              (list 'menu-item (plist-get it :label)
+                    (lambda ()
+                      (interactive)
+                      (when action (funcall action buffer id))))))))))
+    map))
+
+(defun cmacs-libregnum-editor--context-menu (buffer id pos)
+  "Deferred entry point invoked from the C input layer on a viewport right-click.
+ID is the picked node id (or -1 for empty space); POS is (FX FY [GX GY GZ]) with
+FX,FY the frame-pixel click point and GX,GY,GZ the world ground point.  Pops the
+menu from the command loop via a 0-delay timer (never from this GMainContext
+callback) so `x-popup-menu' does not start a nested GTK loop in the pselect
+wait."
+  (when (buffer-live-p buffer)
+    (run-with-timer 0 nil
+                    #'cmacs-libregnum-editor--popup-context-menu
+                    buffer id pos)))
+
+(defun cmacs-libregnum-editor--popup-context-menu (buffer id pos)
+  "Pop the context menu for node ID in BUFFER at POS (see `--context-menu')."
+  (when (and (buffer-live-p buffer) (consp pos))
+    (let ((frame  (or (window-frame (get-buffer-window buffer t))
+                      (selected-frame)))
+          (fx     (round (nth 0 pos)))
+          (fy     (round (nth 1 pos)))
+          (ground (nthcdr 2 pos)))
+      (if (or (null id) (< id 0))
+          (cmacs-libregnum-editor--popup-add-menu buffer fx fy ground frame)
+        ;; Select the right-clicked node so --sel-based actions act on it.
+        (ignore-errors (cmacs-libregnum-editor-select buffer id))
+        (with-current-buffer buffer (setq cmacs-libregnum-editor--current id))
+        (cmacs-libregnum-editor--sync-panels buffer id)
+        (let* ((kind   (cmacs-libregnum-editor-node-kind buffer id))
+               (ksym   (cmacs-libregnum-editor--kind-symbol kind))
+               (items  (cmacs-libregnum-editor--filter-menu-items ksym))
+               (keymap (cmacs-libregnum-editor--menu-keymap items buffer id))
+               (choice (x-popup-menu (list (list fx fy) frame) keymap)))
+          ;; A keymap menu returns the event path of the chosen leaf; resolve it
+          ;; to its (curried) action closure and run it.
+          (when (and choice (listp choice))
+            (let ((binding (lookup-key keymap (apply #'vector choice))))
+              (when (functionp binding) (funcall binding)))))))))
+
+(defun cmacs-libregnum-editor--popup-add-menu (buffer fx fy ground frame)
+  "Pop the empty-space \"Add\" menu at frame pixel (FX FY); place at GROUND.
+GROUND is (GX GY GZ) or nil; a chosen item is placed at that ground point (or
+the origin when GROUND is unavailable)."
+  (let* ((sections cmacs-libregnum-editor--palette)
+         (flat nil) (i 0)
+         (panes
+          (mapcar
+           (lambda (section)
+             (cons (car section)
+                   (mapcar
+                    (lambda (item)
+                      (let ((label (nth 0 item)) (ptype (nth 1 item))
+                            (vsym  (nth 2 item)))
+                        (setq flat (cons (list ptype (and vsym (symbol-value vsym))
+                                               label)
+                                         flat))
+                        (prog1 (cons label i) (setq i (1+ i)))))
+                    (cdr section))))
+           sections))
+         (choice (x-popup-menu (list (list fx fy) frame)
+                               (cons "Add" panes))))
+    (setq flat (nreverse flat))
+    (when (integerp choice)
+      (let* ((entry (nth choice flat))
+             (type  (nth 0 entry))
+             (value (nth 1 entry))
+             (name  (nth 2 entry))
+             (wx (or (nth 0 ground) 0.0))
+             (wy (or (nth 1 ground) 0.0))
+             (wz (or (nth 2 ground) 0.0)))
+        (when (cmacs-libregnum-editor--place-item buffer type value name
+                                                  wx wy wz)
+          (when (buffer-live-p (get-buffer "*cmacs-libregnum outliner*"))
+            (with-current-buffer buffer (cmacs-libregnum-editor-outliner)))
+          (cmacs-libregnum-editor--sync-panels buffer))))))
+
+(defun cmacs-libregnum-editor--place-item (buf type value name wx wy wz)
+  "Add a palette item to BUF and move it to ground point (WX WY WZ).
+TYPE is `prim'/`kind'/`mesh'/`sprite'; VALUE is the primitive/visual int (for
+prim/kind).  Returns the new node id, or nil.  Shared by the palette drop path
+and the right-click \"Add\" menu."
+  (with-current-buffer buf
+    (let ((id (pcase type
+                ('prim (cmacs-libregnum-editor-add-primitive buf value name))
+                ('kind (cmacs-libregnum-editor-add-visual buf value name))
+                ('mesh (let ((f (read-file-name "Mesh: " nil nil t)))
+                         (cmacs-libregnum-editor-add-visual
+                          buf cmacs-libregnum-visual-mesh-asset
+                          (file-name-nondirectory f) (expand-file-name f))))
+                ('sprite (let ((f (read-file-name "Sprite: " nil nil t)))
+                           (cmacs-libregnum-editor-add-visual
+                            buf cmacs-libregnum-visual-sprite
+                            (file-name-nondirectory f) (expand-file-name f))))
+                (_ nil))))
+      (when id (cmacs-libregnum-editor-set-position buf id wx wy wz))
+      id)))
+
 (defun cmacs-libregnum-editor-undo-edit ()
   "Undo the last level edit."
   (interactive)
@@ -1557,11 +1984,12 @@ follow the mouse."
         (erase-buffer)
         (dotimes (i (length nodes))
           (let* ((pl (aref nodes i))
-                 (name (or (plist-get pl :name) "(node)"))
+                 (name (or (plist-get pl :name) ""))
                  (depth (or (plist-get pl :depth) 0))
-                 (id (plist-get pl :id)))
+                 (id (plist-get pl :id))
+                 (label (cmacs-libregnum-editor--outliner-label src id name)))
             (insert (propertize
-                     (format "%s%s\n" (make-string (* 2 depth) ?\s) name)
+                     (format "%s%s\n" (make-string (* 2 depth) ?\s) label)
                      'cmacs-libregnum-node-id id))))
         (goto-char (point-min))))
     (display-buffer-in-side-window out '((side . left) (slot . 1)))))
@@ -1777,20 +2205,7 @@ Called (deferred) from the C input layer on the click that follows arming."
         (value (button-get b 'value))
         (name  (button-get b 'name)))
     (lambda (buf wx wy wz)
-      (with-current-buffer buf
-        (let ((id (pcase ptype
-                    ('prim (cmacs-libregnum-editor-add-primitive buf value name))
-                    ('kind (cmacs-libregnum-editor-add-visual buf value name))
-                    ('mesh (let ((f (read-file-name "Mesh: " nil nil t)))
-                             (cmacs-libregnum-editor-add-visual
-                              buf cmacs-libregnum-visual-mesh-asset
-                              (file-name-nondirectory f) (expand-file-name f))))
-                    ('sprite (let ((f (read-file-name "Sprite: " nil nil t)))
-                               (cmacs-libregnum-editor-add-visual
-                                buf cmacs-libregnum-visual-sprite
-                                (file-name-nondirectory f) (expand-file-name f))))
-                    (_ nil))))
-          (when id (cmacs-libregnum-editor-set-position buf id wx wy wz)))))))
+      (cmacs-libregnum-editor--place-item buf ptype value name wx wy wz))))
 
 (defun cmacs-libregnum-palette-drop ()
   "Arm the palette item on this line for drop-at-click in the viewport."

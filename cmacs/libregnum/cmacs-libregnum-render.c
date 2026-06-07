@@ -3053,6 +3053,44 @@ cmacs_libregnum_render_ctx_editor_node_asset (CmacsLibregnumRenderCtx *r,
   return (asset && asset[0]) ? g_strdup (asset) : NULL;
 }
 
+/* Return node ID's visual kind (LrgNodeVisualKind int), or -1 if the node has
+ * no visual (a group/transform node) or does not exist.  The Lisp layer maps
+ * the int to a menu node-kind symbol so the context menu can vary per kind. */
+gint
+cmacs_libregnum_render_ctx_editor_node_kind (CmacsLibregnumRenderCtx *r, gint id)
+{
+  LrgNode       *n = cmacs_editor_node_for_id (r, id);
+  LrgNodeVisual *vis = n ? lrg_node_get_visual (n) : NULL;
+  return vis ? (gint) lrg_node_visual_get_kind (vis) : -1;
+}
+
+/* Return node ID's LrgPrimitiveType int when it is a primitive shape, else -1.
+ * Lets the outliner show the concrete shape ("Cube") as a type label that is
+ * independent of the node's (renameable) name. */
+gint
+cmacs_libregnum_render_ctx_editor_node_primitive (CmacsLibregnumRenderCtx *r,
+                                                  gint id)
+{
+  LrgNode       *n = cmacs_editor_node_for_id (r, id);
+  LrgNodeVisual *vis = n ? lrg_node_get_visual (n) : NULL;
+  if (!vis || lrg_node_visual_get_kind (vis) != LRG_NODE_VISUAL_PRIMITIVE)
+    return -1;
+  return (gint) lrg_node_visual_get_primitive (vis);
+}
+
+/* Rename node ID and re-bake so the new name shows everywhere the baked node
+ * model is read (the outliner labels via cmacs-libregnum-tree-nodes cache the
+ * name at bake time, so a plain GObject set would not refresh them). */
+void
+cmacs_libregnum_render_ctx_editor_set_name (CmacsLibregnumRenderCtx *r,
+                                            gint id, const char *name)
+{
+  LrgNode *n = cmacs_editor_node_for_id (r, id);
+  if (!n) return;
+  lrg_node_set_name (n, name ? name : "");
+  cmacs_editor_rebuild (r);
+}
+
 #else /* !LRG_BUILD_EDITOR -- stubs so the Lisp layer still links */
 
 gboolean cmacs_libregnum_render_ctx_editor_new (CmacsLibregnumRenderCtx *r)
@@ -3197,6 +3235,12 @@ void cmacs_libregnum_render_ctx_editor_set_visual_param (CmacsLibregnumRenderCtx
 { (void) r; (void) id; (void) name; (void) value; }
 char * cmacs_libregnum_render_ctx_editor_node_asset (CmacsLibregnumRenderCtx *r,
          gint id) { (void) r; (void) id; return NULL; }
+gint cmacs_libregnum_render_ctx_editor_node_kind (CmacsLibregnumRenderCtx *r,
+         gint id) { (void) r; (void) id; return -1; }
+gint cmacs_libregnum_render_ctx_editor_node_primitive (CmacsLibregnumRenderCtx *r,
+         gint id) { (void) r; (void) id; return -1; }
+void cmacs_libregnum_render_ctx_editor_set_name (CmacsLibregnumRenderCtx *r,
+         gint id, const char *name) { (void) r; (void) id; (void) name; }
 
 #endif /* LRG_BUILD_EDITOR */
 
