@@ -105,38 +105,54 @@ raised from a GLib callback aborts with =Fatal error 6: Aborted=.
   window shows a libregnum view, route motion / button / scroll into the
   libregnum input controller (=cmacs_libregnum_handle_motion= /
   =_handle_button= / =_handle_scroll=) before Emacs's own mouse machinery;
-  non-view buffers fall through unchanged.  This is the *only* pgtk hook the
-  libregnum editor needs --- viewport orbit/pan/zoom, node picking, gizmo
-  handle drags, and object move-drags all run here (the controller is pure C
-  in =cmacs/libregnum/cmacs-libregnum-input.c=; this hunk just forwards to it).
+  non-view buffers fall through unchanged.  Viewport orbit/pan/zoom, node
+  picking, gizmo handle drags, and object move-drags all run here (the
+  controller is pure C in =cmacs/libregnum/cmacs-libregnum-input.c=).
+- *libregnum GDK drag-source* (=HAVE_CMACS_LIBREGNUM=): two thin hunks in
+  =pgtk_set_event_handler= and =motion_notify_event= call helpers from the new
+  file =cmacs/libregnum/cmacs-libregnum-dnd.c=:
+  1. =pgtk_set_event_handler= (near end, before closing brace): \
+     =#ifdef HAVE_CMACS_LIBREGNUM= \
+     =/* CMACS: libregnum editor drag-source ... */= \
+     =cmacs_libregnum_dnd_setup_frame (f);= \
+     =#endif= \
+     Connects =drag-data-get= / =drag-end= signals to the frame widget once.
+  2. =motion_notify_event= (inside the existing =#ifdef HAVE_CMACS_LIBREGNUM= block,
+     after the =cmacs_libregnum_handle_motion= check): \
+     =/* CMACS: libregnum editor drag-source ... */= \
+     =if (cmacs_libregnum_dnd_check_motion (frame, event)) return TRUE;= \
+     Initiates =gtk_drag_begin_with_coordinates= when a palette/asset drag was
+     armed from Elisp (=[down-mouse-1]=) and the pointer crossed GTK's threshold.
+  The includes block gains =#include "cmacs-libregnum-dnd.h"= inside the
+  existing =#ifdef HAVE_CMACS_LIBREGNUM= include guard.  All three sub-hunks
+  compile out cleanly when =HAVE_CMACS_LIBREGNUM= is unset.
 
-*** Editor drag-and-drop needs NO additional upstream change
+*** Editor drag-and-drop
 
-The libregnum editor's *asset drag-and-drop* (drag a row from the primitive
-palette / asset browser and drop it on a 3-D point in the viewport) is
-implemented entirely in Lisp + the existing C input controller, with *zero*
-new edits to =src/pgtkselect.c= or any other upstream file, deliberately, to
-keep merges clean:
+The libregnum editor supports two drag paths that complement each other:
 
-- *Intra-Emacs drag* uses Emacs's own =drag-mouse-1= event, bound buffer-locally
-  in =cmacs-libregnum-palette-mode-map= / =-assets-mode-map=
-  (=cmacs-libregnum-palette-drag= / =-assets-drag=).  Emacs delivers the drag to
-  the *start* buffer's keymap with the *release* position, so the panel handler
-  receives the viewport drop point and ray-casts it to the ground plane
-  (=cmacs-libregnum-editor-screen-to-ground=).  The pgtkterm pointer hook above
-  does *not* intercept this: during the drag the frame's selected window is
-  still the panel (a non-view buffer), so =selected_view_for_frame= returns NULL
-  and the release falls through to Emacs's normal =drag-mouse-1= synthesis.
+- *Intra-Emacs drag* (=drag-mouse-1=, no upstream edit beyond the input-routing
+  hook above): Emacs delivers the drag to the *start* buffer's keymap with the
+  *release* position, so the palette/asset handler receives the viewport drop
+  coordinates and ray-casts them to the ground plane
+  (=cmacs-libregnum-editor-screen-to-ground=).  The pgtkterm motion hook does
+  *not* intercept this because the palette buffer has no libregnum view, so
+  =selected_view_for_frame= returns NULL and the motion falls through to Emacs's
+  normal =drag-mouse-1= synthesis.  Good for all in-frame drops.
+- *GTK-native GDK drag-source* (=[down-mouse-1]= → =cmacs-libregnum-dnd-arm= →
+  =cmacs_libregnum_dnd_check_motion= → =gtk_drag_begin_with_coordinates=): adds
+  real OS-level DnD so palette/asset items can be dragged to external GTK apps.
+  The one upstream hunk this requires is the pair in =pgtkterm.c= described above
+  (NOT =pgtkselect.c=; the signal connections live in =pgtk_set_event_handler=
+  which is in =pgtkterm.c=).  All logic is in =cmacs-libregnum-dnd.c=; the hunk
+  is a single call per place.  The key invariant: we do *not* call
+  =gtk_drag_source_set= (which would intercept every button press on the whole
+  frame widget); instead we arm from Elisp and check the threshold in the motion
+  callback.
 - *External file drag* (e.g. dropping a =.glb= from a file manager onto the
-  viewport) is handled by Emacs's stock =pgtk-dnd= via the buffer-local
-  =pgtk-dnd-types-alist= / drop-target variables --- again no upstream edit.
-
-A *GTK-native GDK drag-source* (a GdkDragSource with a drag icon, cross-process
-DnD) would be the one thing that required touching =src/pgtkselect.c=; it is
-*intentionally not added* because it offers no functional gain here and would be
-a new upstream merge point.  If it is ever pursued, it MUST go behind a
-=#ifdef HAVE_CMACS_LIBREGNUM= block calling a =cmacs_libregnum_*= helper in a
-new file, and be catalogued here.
+  viewport): handled by Emacs's stock =pgtk-dnd= extended with our
+  ="application/x-libregnum"= entry in =pgtk-dnd-types-alist= (pure Elisp,
+  no upstream edit).
 
 ** src/xwidget.c / src/xwidget.h --- gowl client embedding
 

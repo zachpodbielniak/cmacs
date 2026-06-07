@@ -660,8 +660,11 @@ rotate/scale gizmo handles and play-in-editor remain planned (see below).
 *** Now also implemented
 
 - *Real mesh + sprite rendering* — MESH_ASSET loads + draws a glTF/OBJ model
-  (=grl_model_new_from_file= + =grl_model_draw_ex=); SPRITE loads a texture and
-  draws a camera-facing billboard (=grl_texture_new_from_file= + =DrawBillboard=).
+  (=grl_model_new_from_file= + =grl_model_draw_ex=); SPRITE loads its texture and
+  draws it as a flat textured quad via a unit-plane =GrlModel= (the mesh/VAO path
+  composites in the editor FBO batch, unlike raylib's =rlgl= textured immediate
+  mode + =DrawBillboard=, which silently drop out — the same reason tilemap tiles
+  are colour-sampled).
 - *On-screen gizmo handles* — draggable translate/rotate/scale axis handles
   (=w= /​ =e= /​ =r=), axis-constrained, one coalesced undo per drag.
 - *2D camera mode* (=v=) — a top-down orthographic view; picking/projection
@@ -687,24 +690,57 @@ rotate/scale gizmo handles and play-in-editor remain planned (see below).
   (=cmacs-libregnum-editor-tilemap-set-brush=, finish with
   =cmacs-libregnum-editor-stop-paint=).  The grid of tiles is stored in the
   node's visual params (=tw= /​ =th= /​ =cols= /​ =mw= /​ =mh= /​ =tiles= CSV) so it
-  round-trips in the =.rlevel=.  Each cell renders as a ground tile coloured by
-  sampling its tile's sub-rect from the tileset (raylib's =rlgl= textured
-  immediate mode does not composite inside the graylib FBO batch, so cells are
-  drawn as colour-sampled quads rather than per-texel blits — the layout, tile
-  identity, and persistence are exact).  DEFUNs:
+  round-trips in the =.rlevel=.  Each non-empty cell renders the *actual tileset
+  art*: the tile's sub-rect is sliced (=grl_image_from_region= →
+  =grl_texture_new_from_image=) into a textured unit-plane =GrlModel= drawn on
+  the ground (the mesh path that composites in the FBO batch), cached per tile
+  index, with a colour-sampled cell as fallback.  DEFUNs:
   =cmacs-libregnum-editor-tilemap-config= /​ =-set-tile= /​ =-info=.
 - *Dedicated MCP tools* — =cmacs/mcp/cmacs-mcp-tools-libregnum.c= registers
   =lrg_editor_object_tree= / =_add_primitive= / =_add_visual= / =_move= /
   =_select= / =_delete= / =_open= / =_save= / =_play= / =_stop=, so an agent can
   author levels with typed tools (the =eval= tool still reaches every DEFUN).
+- *Introspection-driven inspector* — the inspector still shows the undoable
+  transform fields, and now also enumerates the selected node's GObject
+  properties (name / visible / locked / is-2d / …) via a node→GObject bridge
+  (=cmacs-libregnum-editor-node-object=) + =gobject-list-properties= /
+  =gobject-property-info= / =gobject-get= / =gobject-set=.  Editable fields are
+  chosen from each =GParamSpec='s type; writes go straight through the GObject
+  (not the undo stack — transform still is undoable).
+- *Prefabs* — =C-c p= saves the selected node's subtree to a =.rprefab=
+  (=lrg_prefab_save=); =C-c P= instantiates one under the selection or root
+  (=lrg_prefab_load= + =lrg_editor_add_node=).  DEFUNs
+  =cmacs-libregnum-editor-save-prefab= / =-instantiate-prefab=.
+- *Scene import* — =C-c i= imports a Blender-exported =.yaml= scene as the
+  current level (=LrgSceneSerializerBlender= → =lrg_level_from_scene=).
+- *Multi-language scripts* — the =L= script picker now lists only the backends
+  libregnum was actually built with, queried at runtime via
+  =lrg_scripting_manager_get_available= (=cmacs-libregnum-scripting-languages=).
+  Crispy is built in here; Lua/Python/Gjs light up automatically once their
+  =-devel= packages are present at libregnum build time.
+- *Script hot-reload* — attaching a script through =L= opens its file with an
+  =after-save-hook= that, while the level is playing, restarts play so the
+  edited script recompiles + reloads.
+- *Projects + asset database* — =M-x cmacs-libregnum-project-new= scaffolds a
+  project (levels/ assets/ scripts/ + a =project.ryaml= manifest + a starter
+  level); =cmacs-libregnum-project-open= opens one and loads its default level
+  (=LrgProject=).  =cmacs-libregnum-assetdb-scan= classifies a directory's
+  assets via =LrgAssetDatabase= (texture/model/audio/font/script/level/prefab/
+  tileset/scene).  DEFUNs =cmacs-libregnum-project-create= /
+  =cmacs-libregnum-editor-open-project= / =cmacs-libregnum-assetdb-scan=.
 
 *** Planned
 
-Two deep, optional extensions remain: a GTK-native GDK drag-source (the
-=drag-mouse-1= path already does panel→viewport drag; a GdkDragSource would add
-cross-process DnD and is the one thing that would touch =pgtkselect.c=); and
-per-texel tileset blitting in the viewport (blocked by the =rlgl= /​ FBO-batch
-limitation above — tiles render as colour-sampled cells today).
+The remaining items are larger or environment-gated:
+
+- *Lua / Python / Gjs availability* — wired + auto-detected + the picker filters
+  to built backends, but the interpreters are blocked until =luajit-devel= /
+  =python3-devel= / =gjs-devel= are installed at libregnum build time (this host
+  is read-only =bootc=, so only crispy is available here).
+- *Lights / cameras / audio* — store + gizmo only; no real lighting, camera
+  preview, or audio playback in the viewport (a dedicated renderer pass).
+- *Standalone engine-drawn editor* — =src/editor/ui/lrg-editor-app= (a second,
+  non-cmacs frontend behind =BUILD_EDITOR_UI=).
 
 * See also
 

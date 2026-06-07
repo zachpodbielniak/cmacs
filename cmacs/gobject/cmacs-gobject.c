@@ -617,6 +617,36 @@ DEFUN ("gobject-list-properties", Fgobject_list_properties,
   return Fnreverse (result);
 }
 
+DEFUN ("gobject-property-info", Fgobject_property_info,
+       Sgobject_property_info, 2, 2, 0,
+       doc: /* Return metadata for property NAME on OBJECT as a plist
+\(:type TYPE-NAME :writable BOOL :readable BOOL :blurb STRING), or nil if no
+such property.  Used to choose an editing widget.  */)
+  (Lisp_Object object, Lisp_Object name)
+{
+  GObject *obj;
+  GParamSpec *pspec;
+  const char *blurb;
+  obj = cmacs_gobject_unwrap (object);
+  if (obj == NULL)
+    error ("Not a GObject");
+  CHECK_STRING (name);
+  pspec = g_object_class_find_property (G_OBJECT_GET_CLASS (obj),
+                                        SSDATA (name));
+  if (pspec == NULL)
+    return Qnil;
+  blurb = g_param_spec_get_blurb (pspec);
+  return CALLN (Flist,
+                intern (":type"),
+                build_string (g_type_name (pspec->value_type)),
+                intern (":writable"),
+                (pspec->flags & G_PARAM_WRITABLE) ? Qt : Qnil,
+                intern (":readable"),
+                (pspec->flags & G_PARAM_READABLE) ? Qt : Qnil,
+                intern (":blurb"),
+                blurb ? build_string (blurb) : Qnil);
+}
+
 DEFUN ("gobject-list-signals", Fgobject_list_signals,
        Sgobject_list_signals, 1, 1, 0,
        doc: /* Return a list of signal names for OBJECT. */)
@@ -667,6 +697,7 @@ syms_of_cmacs_gobject (void)
   defsubr (&Sgobject_disconnect);
   defsubr (&Sgobject_new);
   defsubr (&Sgobject_list_properties);
+  defsubr (&Sgobject_property_info);
   defsubr (&Sgobject_list_signals);
 
   cmacs_gclosure_init ();

@@ -14,12 +14,19 @@
 extern void syms_of_cmacs_libregnum_defuns   (void);
 extern void cmacs_libregnum_view_registry_init (void);
 
+#ifdef HAVE_PGTK
+extern void syms_of_cmacs_libregnum_dnd (void);
+#endif
+
 static bool init_done = false;
 
 void
 syms_of_cmacs_libregnum (void)
 {
   syms_of_cmacs_libregnum_defuns ();
+#ifdef HAVE_PGTK
+  syms_of_cmacs_libregnum_dnd ();
+#endif
 }
 
 void

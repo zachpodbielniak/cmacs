@@ -79,6 +79,8 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 
 #ifdef HAVE_CMACS_LIBREGNUM
 #include "cmacs-libregnum.h"
+/* CMACS: libregnum editor drag-source -- connect GDK drag-data-get per frame */
+#include "cmacs-libregnum-dnd.h"
 #endif
 
 #ifdef GDK_WINDOWING_WAYLAND
@@ -5998,6 +6000,11 @@ motion_notify_event (GtkWidget *widget, GdkEvent *event,
         && cmacs_libregnum_handle_motion (frame, lx, ly))
       return TRUE;
   }
+  /* CMACS: libregnum editor drag-source -- if a palette/asset drag was
+     armed from Elisp ([down-mouse-1]), check whether the pointer has
+     moved past GTK's drag threshold and, if so, begin a GDK drag. */
+  if (cmacs_libregnum_dnd_check_motion (frame, event))
+    return TRUE;
 #endif
   dpyinfo = FRAME_DISPLAY_INFO (frame);
   f = (gui_mouse_grabbed (dpyinfo) ? dpyinfo->last_mouse_frame
@@ -6955,6 +6962,11 @@ pgtk_set_event_handler (struct frame *f)
 		    G_CALLBACK (touch_event_cb), NULL);
   g_signal_connect (G_OBJECT (FRAME_GTK_WIDGET (f)), "event",
 		    G_CALLBACK (pgtk_handle_event), NULL);
+#ifdef HAVE_CMACS_LIBREGNUM
+  /* CMACS: libregnum editor drag-source -- connect drag-data-get/drag-end
+     to supply the palette/asset payload when a GDK drag is initiated. */
+  cmacs_libregnum_dnd_setup_frame (f);
+#endif
 }
 
 static void

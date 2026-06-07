@@ -122,6 +122,12 @@ extern void cmacs_libregnum_render_ctx_unload_game
                               (CmacsLibregnumRenderCtx *r);
 extern gboolean cmacs_libregnum_render_ctx_is_game
                               (CmacsLibregnumRenderCtx *r);
+/* Full-focus mouse capture: TRUE = view grabs all frame clicks while focused
+ * (game); FALSE (default) = only clicks inside its own window (editor). */
+extern gboolean cmacs_libregnum_render_ctx_get_mouse_capture_all
+                              (CmacsLibregnumRenderCtx *r);
+extern void     cmacs_libregnum_render_ctx_set_mouse_capture_all
+                              (CmacsLibregnumRenderCtx *r, gboolean capture);
 
 /* Input forwarding into the hosted game (GRL_KEY / mouse-button codes are
  * the graylib enum values; PRESS is non-zero for press, 0 for release). */
@@ -312,6 +318,47 @@ extern void     cmacs_libregnum_render_ctx_editor_tilemap_set_tile
 extern gboolean cmacs_libregnum_render_ctx_editor_tilemap_info
                               (CmacsLibregnumRenderCtx *r, gint node_id,
                                int *mw, int *mh, int *cols, int *tw, int *th);
+/* Return node ID's live engine object as a borrowed GObject* (cast to void*),
+ * for the introspection-driven inspector; NULL if absent. */
+extern void *   cmacs_libregnum_render_ctx_editor_node_object
+                              (CmacsLibregnumRenderCtx *r, gint node_id);
+/* Prefabs: save a node subtree to PATH; instantiate a .rprefab under PARENT_ID
+ * (-1 = root), returning the new node id (or -1). */
+extern gboolean cmacs_libregnum_render_ctx_editor_save_prefab
+                              (CmacsLibregnumRenderCtx *r, gint node_id,
+                               const char *path);
+extern gint     cmacs_libregnum_render_ctx_editor_instantiate_prefab
+                              (CmacsLibregnumRenderCtx *r, const char *path,
+                               gint parent_id);
+/* Import a Blender-exported scene YAML as the editor's current level. */
+extern gboolean cmacs_libregnum_render_ctx_editor_import_scene
+                              (CmacsLibregnumRenderCtx *r, const char *path);
+/* Available scripting backends (singleton manager; index 0..count-1). */
+extern gint     cmacs_libregnum_scripting_language_count (void);
+extern gint     cmacs_libregnum_scripting_language_at    (gint index);
+extern char *   cmacs_libregnum_scripting_language_name  (gint index);
+/* Project: create a manifest under ROOT; open ROOT + load its default level. */
+extern gboolean cmacs_libregnum_project_create (const char *root,
+                               const char *name, const char *default_level,
+                               const char *game_output);
+extern gboolean cmacs_libregnum_render_ctx_editor_open_project
+                              (CmacsLibregnumRenderCtx *r, const char *root);
+/* Asset database: scan DIR (opaque handle), enumerate, free.  FIELD: 0 path,
+ * 1 name, 2 guid.  type is an LrgAssetType int. */
+extern void *   cmacs_libregnum_assetdb_scan       (const char *dir);
+extern gint     cmacs_libregnum_assetdb_count      (void *db);
+extern char *   cmacs_libregnum_assetdb_entry      (void *db, gint index,
+                                                    gint field);
+extern gint     cmacs_libregnum_assetdb_entry_type (void *db, gint index);
+extern void     cmacs_libregnum_assetdb_free       (void *db);
+/* Set a numeric visual param on a node (light range/r/g/b, camera fov, audio
+ * range) so the editor's light/camera/audio gizmos reflect authored values. */
+extern void     cmacs_libregnum_render_ctx_editor_set_visual_param
+                              (CmacsLibregnumRenderCtx *r, gint node_id,
+                               const char *name, double value);
+/* Node's visual asset path (sound/mesh/sprite/tileset), newly-allocated. */
+extern char *   cmacs_libregnum_render_ctx_editor_node_asset
+                              (CmacsLibregnumRenderCtx *r, gint node_id);
 
 #endif /* HAVE_CMACS_LIBREGNUM */
 #endif /* CMACS_LIBREGNUM_RENDER_H */

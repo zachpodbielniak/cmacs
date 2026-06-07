@@ -530,5 +530,67 @@ differently from a cube (regression: non-sphere prims all baked as cubes)."
       (when (buffer-live-p buf) (kill-buffer buf))
       (dolist (f (list png empty painted rl)) (ignore-errors (delete-file f))))))
 
+(ert-deftest cmacs-libregnum-tests-scripting-languages ()
+  "The available scripting backends are reported (crispy at minimum)."
+  (skip-unless (fboundp 'cmacs-libregnum-scripting-languages))
+  (let ((langs (cmacs-libregnum-scripting-languages)))
+    (should (listp langs))
+    ;; cmacs builds libregnum with CRISPY=1, so crispy must be present.
+    (should (rassq 4 langs))))
+
+(ert-deftest cmacs-libregnum-tests-editor-inspector-props-prefab ()
+  "The node->GObject bridge enumerates properties and prefabs round-trip."
+  (cmacs-libregnum-tests--gl-skip-or)
+  (let ((buf (generate-new-buffer "*cmacs-lrg insp test*"))
+        (pf (make-temp-file "cmacs-lrg-" nil ".rprefab")))
+    (unwind-protect
+        (with-current-buffer buf
+          (cmacs-libregnum-editor-mode)
+          (cmacs-libregnum-editor-new buf)
+          (let* ((id (cmacs-libregnum-editor-add-primitive
+                      buf cmacs-libregnum-primitive-cube "Cube"))
+                 (obj (cmacs-libregnum-editor-node-object buf id)))
+            ;; gi bridge: the node exposes its GObject properties.
+            (should obj)
+            (should (member "name" (gobject-list-properties obj)))
+            (should (member "visible" (gobject-list-properties obj)))
+            (should (string= (plist-get (gobject-property-info obj "name") :type)
+                             "gchararray"))
+            (should (equal (gobject-get obj "name") "Cube"))
+            ;; prefab save + instantiate round-trip.
+            (should (cmacs-libregnum-editor-save-prefab buf id pf))
+            (should (file-exists-p pf))
+            (let ((before (length (cmacs-libregnum-tree-nodes buf)))
+                  (newid (cmacs-libregnum-editor-instantiate-prefab buf pf nil)))
+              (should (integerp newid))
+              (should (= (length (cmacs-libregnum-tree-nodes buf))
+                         (1+ before))))))
+      (when (buffer-live-p buf) (kill-buffer buf))
+      (ignore-errors (delete-file pf)))))
+
+(ert-deftest cmacs-libregnum-tests-project-and-assetdb ()
+  "Project manifest round-trips and the asset database classifies files.
+Display-free (no GL)."
+  (skip-unless (fboundp 'cmacs-libregnum-project-create))
+  (let* ((root (make-temp-file "cmacs-lrg-proj-" t))
+         (assets (expand-file-name "assets" root)))
+    (unwind-protect
+        (progn
+          (make-directory assets t)
+          ;; a texture + a model so the classifier has something typed to find
+          (with-temp-file (expand-file-name "m.obj" assets) (insert "o c\n"))
+          (with-temp-file (expand-file-name "readme.txt" assets) (insert "x"))
+          ;; project manifest
+          (should (cmacs-libregnum-project-create
+                   root "Test" "levels/main.rlevel" "build/game.so"))
+          (should (file-exists-p (expand-file-name "project.ryaml" root)))
+          ;; asset database scan + classification
+          (let* ((entries (cmacs-libregnum-assetdb-scan assets))
+                 (obj (seq-find (lambda (e) (equal (plist-get e :name) "m.obj"))
+                                entries)))
+            (should obj)
+            (should (= (plist-get obj :type) 2))))   ;; 2 = MODEL
+      (ignore-errors (delete-directory root t)))))
+
 (provide 'cmacs-libregnum-tests)
 ;;; cmacs-libregnum-tests.el ends here

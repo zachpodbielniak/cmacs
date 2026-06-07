@@ -12,6 +12,7 @@
 #include "coding.h"
 #include "cmacs-libregnum.h"
 #include "cmacs-libregnum-scenes.h"
+#include "../gobject/cmacs-gobject.h"   /* cmacs_gobject_wrap for the inspector */
 
 DEFUN ("cmacs-libregnum-supported-p", Fcmacs_libregnum_supported_p,
        Scmacs_libregnum_supported_p, 0, 0, 0,
@@ -1172,6 +1173,233 @@ tilemap.  */)
                 intern (":tile-h"), make_fixnum (th));
 }
 
+DEFUN ("cmacs-libregnum-editor-node-object",
+       Fcmacs_libregnum_editor_node_object,
+       Scmacs_libregnum_editor_node_object, 2, 2, 0,
+       doc: /* Return NODE-ID's live engine object in BUFFER as a wrapped
+GObject (for `gobject-list-properties' / `gobject-get' / `gobject-set'), or
+nil.  */)
+  (Lisp_Object buffer, Lisp_Object node_id)
+{
+  void *obj;
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (node_id);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  obj = cmacs_libregnum_render_ctx_editor_node_object (ctx,
+          (gint) XFIXNUM (node_id));
+  if (!obj) return Qnil;
+  return cmacs_gobject_wrap ((GObject *) obj);   /* takes the fresh ref */
+}
+
+DEFUN ("cmacs-libregnum-editor-save-prefab",
+       Fcmacs_libregnum_editor_save_prefab,
+       Scmacs_libregnum_editor_save_prefab, 3, 3, 0,
+       doc: /* Save NODE-ID's subtree in BUFFER to a .rprefab FILE.  */)
+  (Lisp_Object buffer, Lisp_Object node_id, Lisp_Object file)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (node_id);
+  CHECK_STRING (file);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  return cmacs_libregnum_render_ctx_editor_save_prefab
+           (ctx, (gint) XFIXNUM (node_id), SSDATA (file)) ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-libregnum-editor-instantiate-prefab",
+       Fcmacs_libregnum_editor_instantiate_prefab,
+       Scmacs_libregnum_editor_instantiate_prefab, 2, 3, 0,
+       doc: /* Instantiate .rprefab FILE in BUFFER under PARENT-ID (nil/-1 =
+root).  Return the new node id, or nil.  */)
+  (Lisp_Object buffer, Lisp_Object file, Lisp_Object parent_id)
+{
+  gint pid, nid;
+  CHECK_BUFFER (buffer);
+  CHECK_STRING (file);
+  pid = (FIXNUMP (parent_id)) ? (gint) XFIXNUM (parent_id) : -1;
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  nid = cmacs_libregnum_render_ctx_editor_instantiate_prefab
+          (ctx, SSDATA (file), pid);
+  cmacs_libregnum_view_request_redraw (v);
+  return (nid >= 0) ? make_fixnum (nid) : Qnil;
+}
+
+DEFUN ("cmacs-libregnum-editor-import-scene",
+       Fcmacs_libregnum_editor_import_scene,
+       Scmacs_libregnum_editor_import_scene, 2, 2, 0,
+       doc: /* Import a Blender-exported scene YAML FILE into BUFFER's editor as
+the current level.  */)
+  (Lisp_Object buffer, Lisp_Object file)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_STRING (file);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  if (!cmacs_libregnum_render_ctx_editor_import_scene (ctx, SSDATA (file)))
+    return Qnil;
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-scripting-languages",
+       Fcmacs_libregnum_scripting_languages,
+       Scmacs_libregnum_scripting_languages, 0, 0, 0,
+       doc: /* Return available scripting backends as an alist (NAME . LANG-INT),
+e.g. (("Crispy" . 4)).  Reflects what libregnum was built with.  */)
+  (void)
+{
+  gint n = cmacs_libregnum_scripting_language_count ();
+  gint i;
+  Lisp_Object result = Qnil;
+  for (i = 0; i < n; i++)
+    {
+      gint lang = cmacs_libregnum_scripting_language_at (i);
+      char *name = cmacs_libregnum_scripting_language_name (i);
+      if (name)
+        {
+          result = Fcons (Fcons (build_string (name), make_fixnum (lang)),
+                          result);
+          g_free (name);
+        }
+    }
+  return Fnreverse (result);
+}
+
+DEFUN ("cmacs-libregnum-project-create", Fcmacs_libregnum_project_create,
+       Scmacs_libregnum_project_create, 2, 4, 0,
+       doc: /* Create a project manifest (project.ryaml) under ROOT named NAME.
+Optional DEFAULT-LEVEL (relative path) and GAME-OUTPUT (.so path).  */)
+  (Lisp_Object root, Lisp_Object name, Lisp_Object default_level,
+   Lisp_Object game_output)
+{
+  CHECK_STRING (root);
+  CHECK_STRING (name);
+  return cmacs_libregnum_project_create
+           (SSDATA (root), SSDATA (name),
+            STRINGP (default_level) ? SSDATA (default_level) : NULL,
+            STRINGP (game_output) ? SSDATA (game_output) : NULL) ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-libregnum-editor-open-project",
+       Fcmacs_libregnum_editor_open_project,
+       Scmacs_libregnum_editor_open_project, 2, 2, 0,
+       doc: /* Open the project at ROOT in BUFFER's editor and load its default
+level.  */)
+  (Lisp_Object buffer, Lisp_Object root)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_STRING (root);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  if (!cmacs_libregnum_render_ctx_editor_open_project (ctx, SSDATA (root)))
+    return Qnil;
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-assetdb-scan", Fcmacs_libregnum_assetdb_scan,
+       Scmacs_libregnum_assetdb_scan, 1, 1, 0,
+       doc: /* Scan DIR and return its assets as a list of plists
+\(:path P :name N :guid G :type TYPE-INT).  TYPE: 1 texture, 2 model, 3 audio,
+4 font, 5 script, 6 level, 7 prefab, 8 tileset, 9 scene.  */)
+  (Lisp_Object dir)
+{
+  void *db;
+  gint n, i;
+  Lisp_Object result = Qnil;
+  CHECK_STRING (dir);
+  db = cmacs_libregnum_assetdb_scan (SSDATA (dir));
+  if (!db) return Qnil;
+  n = cmacs_libregnum_assetdb_count (db);
+  for (i = 0; i < n; i++)
+    {
+      char *path = cmacs_libregnum_assetdb_entry (db, i, 0);
+      char *name = cmacs_libregnum_assetdb_entry (db, i, 1);
+      char *guid = cmacs_libregnum_assetdb_entry (db, i, 2);
+      gint  type = cmacs_libregnum_assetdb_entry_type (db, i);
+      result = Fcons (CALLN (Flist,
+                             intern (":path"),
+                             path ? build_string (path) : Qnil,
+                             intern (":name"),
+                             name ? build_string (name) : Qnil,
+                             intern (":guid"),
+                             guid ? build_string (guid) : Qnil,
+                             intern (":type"), make_fixnum (type)),
+                      result);
+      g_free (path); g_free (name); g_free (guid);
+    }
+  cmacs_libregnum_assetdb_free (db);
+  return Fnreverse (result);
+}
+
+DEFUN ("cmacs-libregnum-editor-set-visual-param",
+       Fcmacs_libregnum_editor_set_visual_param,
+       Scmacs_libregnum_editor_set_visual_param, 4, 4, 0,
+       doc: /* Set numeric visual param NAME to VALUE on NODE-ID in BUFFER.
+For lights: "range" + "r"/"g"/"b" (0-255); cameras: "fov"; audio: "range".
+The viewport gizmos update to reflect it.  */)
+  (Lisp_Object buffer, Lisp_Object node_id, Lisp_Object name, Lisp_Object value)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (node_id);
+  CHECK_STRING (name);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  cmacs_libregnum_render_ctx_editor_set_visual_param
+    (ctx, (gint) XFIXNUM (node_id), SSDATA (name),
+     cmacs_libregnum__to_double (value));
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-editor-node-asset",
+       Fcmacs_libregnum_editor_node_asset,
+       Scmacs_libregnum_editor_node_asset, 2, 2, 0,
+       doc: /* Return NODE-ID's visual asset path in BUFFER (sound/mesh/sprite/
+tileset), or nil.  */)
+  (Lisp_Object buffer, Lisp_Object node_id)
+{
+  char *asset;
+  Lisp_Object r;
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (node_id);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  asset = cmacs_libregnum_render_ctx_editor_node_asset
+            (ctx, (gint) XFIXNUM (node_id));
+  if (!asset) return Qnil;
+  r = build_string (asset);
+  g_free (asset);
+  return r;
+}
+
+DEFUN ("cmacs-libregnum-set-mouse-capture",
+       Fcmacs_libregnum_set_mouse_capture,
+       Scmacs_libregnum_set_mouse_capture, 2, 2, 0,
+       doc: /* Set whether BUFFER's view captures ALL mouse input while focused.
+When CAPTURE is non-nil the view grabs every mouse click on the frame ("full
+focus") -- appropriate for a game.  When nil (the default) the view only
+handles events inside its own window, so clicks in other Emacs panes select
+them normally -- appropriate for the editor.  Returns CAPTURE.  */)
+  (Lisp_Object buffer, Lisp_Object capture)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  cmacs_libregnum_render_ctx_set_mouse_capture_all
+    (cmacs_libregnum_view_get_render_ctx (v), !NILP (capture));
+  return capture;
+}
+
 DEFUN ("cmacs-libregnum-snapshot", Fcmacs_libregnum_snapshot,
        Scmacs_libregnum_snapshot, 2, 2, 0,
        doc: /* Render BUFFER's view and write it to PATH as a PNG.
@@ -1275,6 +1503,17 @@ syms_of_cmacs_libregnum_defuns (void)
   defsubr (&Scmacs_libregnum_editor_tilemap_config);
   defsubr (&Scmacs_libregnum_editor_tilemap_set_tile);
   defsubr (&Scmacs_libregnum_editor_tilemap_info);
+  defsubr (&Scmacs_libregnum_editor_node_object);
+  defsubr (&Scmacs_libregnum_editor_save_prefab);
+  defsubr (&Scmacs_libregnum_editor_instantiate_prefab);
+  defsubr (&Scmacs_libregnum_editor_import_scene);
+  defsubr (&Scmacs_libregnum_scripting_languages);
+  defsubr (&Scmacs_libregnum_project_create);
+  defsubr (&Scmacs_libregnum_editor_open_project);
+  defsubr (&Scmacs_libregnum_assetdb_scan);
+  defsubr (&Scmacs_libregnum_editor_set_visual_param);
+  defsubr (&Scmacs_libregnum_editor_node_asset);
+  defsubr (&Scmacs_libregnum_set_mouse_capture);
   defsubr (&Scmacs_libregnum_project);
   defsubr (&Scmacs_libregnum_editor_set_tool);
   defsubr (&Scmacs_libregnum_editor_get_tool);

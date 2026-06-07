@@ -822,6 +822,10 @@ nil means no snapping; numbers snap moves/drags to that grid."
     (define-key map (kbd "A")        #'cmacs-libregnum-editor-assets)
     (define-key map (kbd "L")        #'cmacs-libregnum-editor-add-script)
     (define-key map (kbd "T")        #'cmacs-libregnum-editor-tilemap-create)
+    (define-key map (kbd "C-c p")    #'cmacs-libregnum-editor-prefab-save)
+    (define-key map (kbd "C-c P")    #'cmacs-libregnum-editor-place-prefab)
+    (define-key map (kbd "C-c i")    #'cmacs-libregnum-editor-scene-import)
+    (define-key map (kbd "C-c a")    #'cmacs-libregnum-editor-play-audio)
     (define-key map (kbd "<f5>")     #'cmacs-libregnum-editor-play-toggle)
     (define-key map (kbd "C-x C-s")  #'cmacs-libregnum-editor-save-as)
     ;; Neutralize parent (scene) bindings whose semantics are wrong for an
@@ -902,11 +906,24 @@ an empty level."
     buf))
 
 (defun cmacs-libregnum-editor--add (prim name)
-  "Add a PRIM (LrgPrimitiveType int) primitive named NAME and select it."
+  "Add a PRIM (LrgPrimitiveType int) primitive named NAME, select it, and
+refresh the side panels so the new node shows in the outliner + inspector."
   (let* ((buf (cmacs-libregnum-editor--buffer))
          (id  (cmacs-libregnum-editor-add-primitive buf prim name)))
     (setq cmacs-libregnum-editor--current id)
-    (when id (message "Added %s (node %d)" name id))
+    (when id
+      ;; Select the new node in the engine so the inspector (which reads the
+      ;; engine selection) shows it.
+      (ignore-errors (cmacs-libregnum-editor-select buf id))
+      ;; A node was added: refresh the outliner LIST (so its row exists), then
+      ;; sync point + the inspector to the new selection.
+      (let ((out (get-buffer "*cmacs-libregnum outliner*")))
+        (when (and out (buffer-live-p out))
+          (with-current-buffer out
+            (when (eq cmacs-libregnum-editor--src-buffer buf)
+              (ignore-errors (cmacs-libregnum-outliner-refresh))))))
+      (cmacs-libregnum-editor--sync-panels buf id)
+      (message "Added %s (node %d)" name id))
     id))
 
 (defun cmacs-libregnum-editor-add-cube ()
@@ -1065,23 +1082,180 @@ Each click sets the cell under the cursor to the current brush tile
          (format "tile %d" cmacs-libregnum-editor-tilemap-brush)
          t)))))
 
+(defun cmacs-libregnum-editor--available-languages ()
+  "Languages libregnum was actually built with, as an alist (NAME . INT).
+Falls back to the static list if the runtime query is unavailable."
+  (or (and (fboundp 'cmacs-libregnum-scripting-languages)
+           (ignore-errors (cmacs-libregnum-scripting-languages)))
+      cmacs-libregnum-script-languages))
+
 (defun cmacs-libregnum-editor-add-script (language file)
   "Attach a LANGUAGE script FILE to the selected node (persisted in the level).
-Wraps the `cmacs-libregnum-editor-attach-script' primitive."
+Only languages compiled into libregnum are offered.  Wraps the
+`cmacs-libregnum-editor-attach-script' primitive and installs a hot-reload
+hook on FILE's buffer."
   (interactive
-   (list (completing-read "Language: " cmacs-libregnum-script-languages
-                          nil t)
-         (read-file-name "Script file: ")))
+   (let ((langs (cmacs-libregnum-editor--available-languages)))
+     (when (null langs)
+       (user-error "No scripting backends are built into libregnum"))
+     (list (completing-read "Language: " langs nil t)
+           (read-file-name "Script file: "))))
   (let* ((buf (cmacs-libregnum-editor--buffer))
          (id  (cmacs-libregnum-editor--sel buf))
-         (lang (cdr (assoc language cmacs-libregnum-script-languages))))
+         (langs (cmacs-libregnum-editor--available-languages))
+         (lang (cdr (assoc language langs))))
     (cond
      ((null id) (user-error "No node selected"))
-     ((null lang) (user-error "Unknown language: %s" language))
+     ((null lang) (user-error "Unknown/unavailable language: %s" language))
      (t (cmacs-libregnum-editor-attach-script buf id lang
                                               (expand-file-name file))
+        (cmacs-libregnum-editor--watch-script (expand-file-name file) buf)
         (message "Attached %s script to node %d (%d total)" language id
                  (or (cmacs-libregnum-editor-node-script-count buf id) 0))))))
+
+(defun cmacs-libregnum-editor--watch-script (file editor-buf)
+  "Open FILE and install a hot-reload after-save-hook bound to EDITOR-BUF."
+  (when (file-exists-p file)
+    (with-current-buffer (find-file-noselect file)
+      (setq-local cmacs-libregnum-editor--src-buffer editor-buf)
+      (add-hook 'after-save-hook
+                #'cmacs-libregnum-editor--script-saved nil t))))
+
+(defun cmacs-libregnum-editor--script-saved ()
+  "Hot-reload: when a watched script is saved, re-run the play world if active."
+  (let ((eb cmacs-libregnum-editor--src-buffer))
+    (when (and (buffer-live-p eb)
+               (ignore-errors (cmacs-libregnum-editor-playing-p eb)))
+      (cmacs-libregnum-editor-stop eb)
+      (cmacs-libregnum-editor-play eb)
+      (message "libregnum: reloaded scripts (replayed)"))))
+
+(defun cmacs-libregnum-editor-prefab-save (file)
+  "Save the selected node's subtree to a .rprefab FILE for reuse.
+Wraps the `cmacs-libregnum-editor-save-prefab' primitive."
+  (interactive (list (read-file-name "Save prefab to: " nil nil nil nil
+                                     (lambda (n) (string-suffix-p ".rprefab" n)))))
+  (let* ((buf (cmacs-libregnum-editor--buffer))
+         (id  (cmacs-libregnum-editor--sel buf)))
+    (cond
+     ((null id) (user-error "No node selected"))
+     ((cmacs-libregnum-editor-save-prefab buf id (expand-file-name file))
+      (message "Saved prefab: %s" file))
+     (t (user-error "Could not save prefab")))))
+
+(defun cmacs-libregnum-editor-place-prefab (file)
+  "Instantiate a .rprefab FILE into the level under the selection (or root)."
+  (interactive (list (read-file-name "Prefab: " nil nil t nil
+                                     (lambda (n) (string-suffix-p ".rprefab" n)))))
+  (let* ((buf (cmacs-libregnum-editor--buffer))
+         (parent (cmacs-libregnum-editor--sel buf))
+         (newid (cmacs-libregnum-editor-instantiate-prefab
+                 buf (expand-file-name file) parent)))
+    (if newid
+        (progn
+          (cmacs-libregnum-editor-select buf newid)
+          (when (get-buffer "*cmacs-libregnum outliner*")
+            (cmacs-libregnum-editor-outliner))
+          (cmacs-libregnum-editor--sync-panels buf newid)
+          (message "Placed prefab as node %d" newid))
+      (user-error "Could not load prefab: %s" file))))
+
+(defun cmacs-libregnum-editor-scene-import (file)
+  "Import a Blender-exported scene YAML FILE as the editor's current level.
+Wraps the `cmacs-libregnum-editor-import-scene' primitive."
+  (interactive (list (read-file-name "Import scene (.yaml): " nil nil t)))
+  (let ((buf (cmacs-libregnum-editor--buffer)))
+    (if (cmacs-libregnum-editor-import-scene buf (expand-file-name file))
+        (progn
+          (when (get-buffer "*cmacs-libregnum outliner*")
+            (cmacs-libregnum-editor-outliner))
+          (message "Imported scene: %s" file))
+      (user-error "Could not import scene: %s" file))))
+
+(defun cmacs-libregnum-project-new (root name)
+  "Scaffold a new libregnum project at ROOT named NAME and open its level.
+Creates levels/ assets/ scripts/, a project.ryaml manifest, and a starter
+levels/main.rlevel."
+  (interactive (list (read-directory-name "New project dir: ")
+                     (read-string "Project name: " "Game")))
+  (let* ((root (expand-file-name root))
+         (lvl  (expand-file-name "levels/main.rlevel" root)))
+    (make-directory (expand-file-name "levels" root) t)
+    (make-directory (expand-file-name "assets" root) t)
+    (make-directory (expand-file-name "scripts" root) t)
+    (unless (cmacs-libregnum-project-create root name
+                                            "levels/main.rlevel" "build/game.so")
+      (user-error "Could not write project manifest"))
+    (cmacs-libregnum-editor)
+    (let ((buf (get-buffer "*cmacs-libregnum editor*")))
+      (cmacs-libregnum-editor-save buf lvl))
+    (message "Project created at %s (level %s)" root lvl)))
+
+(defun cmacs-libregnum-project-open (root)
+  "Open the libregnum project at ROOT and load its default level."
+  (interactive (list (read-directory-name "Project dir: ")))
+  (cmacs-libregnum-editor)
+  (let ((buf (get-buffer "*cmacs-libregnum editor*")))
+    (if (cmacs-libregnum-editor-open-project buf (expand-file-name root))
+        (progn
+          (when (get-buffer "*cmacs-libregnum outliner*")
+            (cmacs-libregnum-editor-outliner))
+          (message "Opened project: %s" root))
+      (user-error "No project.ryaml at %s" root))))
+
+;;; Light / camera / audio authoring + audio playback.  The light/audio range
+;;; spheres + camera frustum render live from these visual params.
+
+(defun cmacs-libregnum-editor-set-light (range red green blue)
+  "Set the selected LIGHT node's RANGE and colour (RED GREEN BLUE, 0-255).
+The viewport draws a range sphere in that colour."
+  (interactive (list (read-number "Light range: " 4)
+                     (read-number "R (0-255): " 250)
+                     (read-number "G (0-255): " 240)
+                     (read-number "B (0-255): " 140)))
+  (let* ((buf (cmacs-libregnum-editor--buffer))
+         (id  (cmacs-libregnum-editor--sel buf)))
+    (unless id (user-error "No node selected"))
+    (cmacs-libregnum-editor-set-visual-param buf id "range" range)
+    (cmacs-libregnum-editor-set-visual-param buf id "r" red)
+    (cmacs-libregnum-editor-set-visual-param buf id "g" green)
+    (cmacs-libregnum-editor-set-visual-param buf id "b" blue)
+    (message "Light: range %s, rgb %s/%s/%s" range red green blue)))
+
+(defun cmacs-libregnum-editor-set-camera-fov (fov)
+  "Set the selected CAMERA node's field of view FOV (degrees).
+The viewport draws a frustum at that angle."
+  (interactive (list (read-number "Camera FOV (deg): " 50)))
+  (let* ((buf (cmacs-libregnum-editor--buffer))
+         (id  (cmacs-libregnum-editor--sel buf)))
+    (unless id (user-error "No node selected"))
+    (cmacs-libregnum-editor-set-visual-param buf id "fov" fov)
+    (message "Camera FOV %s" fov)))
+
+(defun cmacs-libregnum-editor-set-audio-range (range)
+  "Set the selected AUDIO node's RANGE (draws a range sphere)."
+  (interactive (list (read-number "Audio range: " 4)))
+  (let* ((buf (cmacs-libregnum-editor--buffer))
+         (id  (cmacs-libregnum-editor--sel buf)))
+    (unless id (user-error "No node selected"))
+    (cmacs-libregnum-editor-set-visual-param buf id "range" range)
+    (message "Audio range %s" range)))
+
+(defun cmacs-libregnum-editor-play-audio ()
+  "Play the selected AUDIO node's sound file (real playback via `play-sound-file').
+Emacs' built-in player handles WAV/AU; other formats may not play."
+  (interactive)
+  (let* ((buf (cmacs-libregnum-editor--buffer))
+         (id  (cmacs-libregnum-editor--sel buf))
+         (asset (and id (cmacs-libregnum-editor-node-asset buf id))))
+    (cond
+     ((null id) (user-error "No node selected"))
+     ((null asset) (user-error "Node %d has no sound asset" id))
+     ((not (file-exists-p asset)) (user-error "Sound file not found: %s" asset))
+     (t (condition-case e
+            (progn (play-sound-file (expand-file-name asset))
+                   (message "Playing %s" (file-name-nondirectory asset)))
+          (error (user-error "Could not play %s: %S" asset e)))))))
 
 (defvar cmacs-libregnum-editor--play-timer nil
   "Repeating timer ticking the play-in-editor world, or nil.")
@@ -1308,25 +1482,50 @@ A numeric prefix argument multiplies it."
     (cmacs-libregnum-editor-set-view-2d buf now)
     (message "View: %s" (if now "2D (top-down ortho)" "3D (perspective)"))))
 
-(defun cmacs-libregnum-editor--on-select (buffer id)
-  "Sync editor BUFFER's selection to node ID picked in the viewport.
-Called (deferred onto the cmacs context) from the C input layer after a
-viewport click or drag, so the keyboard commands and outliner follow the
-mouse."
+(defun cmacs-libregnum-editor--sync-panels (buffer &optional id)
+  "Refresh the outliner + inspector side panels for BUFFER's selection.
+Call this from EVERY path that changes the selection (viewport pick, outliner,
+palette/add, keyboard) so the inspector always tracks what is selected.  When
+ID is a valid node id, the outliner point is moved to its row; the inspector
+always rebuilds from the editor's *current* selection regardless of ID.  Each
+panel only follows BUFFER if it is the editor that panel is showing."
   (when (buffer-live-p buffer)
-    (with-current-buffer buffer
-      (setq cmacs-libregnum-editor--current
-            (and (integerp id) (>= id 0) id)))
     (let ((out (get-buffer "*cmacs-libregnum outliner*")))
-      (when (and out (integerp id) (>= id 0))
+      (when (and out (buffer-live-p out) (integerp id) (>= id 0))
         (with-current-buffer out
           (when (eq cmacs-libregnum-editor--src-buffer buffer)
-            (cmacs-libregnum-outliner--goto-id id)))))
+            (ignore-errors (cmacs-libregnum-outliner--goto-id id))))))
     (let ((insp (get-buffer "*cmacs-libregnum inspector*")))
       (when (and insp (buffer-live-p insp))
         (with-current-buffer insp
           (when (eq cmacs-libregnum-editor--src-buffer buffer)
-            (cmacs-libregnum-inspector--rebuild)))))))
+            (ignore-errors (cmacs-libregnum-inspector--rebuild))))))
+    ;; A viewport pick is consumed in the C input layer and never reaches the
+    ;; command loop, so this runs deferred (via the cmacs GMainContext, inside
+    ;; the pselect wait) with NO redisplay otherwise scheduled -- the rebuilt
+    ;; panels would not repaint until the next user event (the "delayed
+    ;; inspector").  Mark just the panel windows, then force an immediate
+    ;; redisplay so they update the instant you click; targeting only the panels
+    ;; avoids dragging the viewport through its (~35ms) Emacs-redisplay path.
+    ;; From command-loop callers the extra `(redisplay)' is a cheap no-op-ish
+    ;; repaint that the command loop would do anyway.
+    (let ((insp (get-buffer "*cmacs-libregnum inspector*"))
+          (out  (get-buffer "*cmacs-libregnum outliner*")))
+      (when (buffer-live-p insp) (force-window-update insp))
+      (when (buffer-live-p out)  (force-window-update out))
+      (when (or (buffer-live-p insp) (buffer-live-p out))
+        (redisplay)))))
+
+(defun cmacs-libregnum-editor--on-select (buffer id)
+  "Sync editor BUFFER's selection to node ID picked in the viewport.
+Called (deferred onto the cmacs context) from the C input layer after a
+viewport click or drag, so the keyboard commands, outliner and inspector
+follow the mouse."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (setq cmacs-libregnum-editor--current
+            (and (integerp id) (>= id 0) id)))
+    (cmacs-libregnum-editor--sync-panels buffer id)))
 
 (defun cmacs-libregnum-editor-undo-edit ()
   "Undo the last level edit."
@@ -1453,6 +1652,7 @@ Returns non-nil when found."
       (cmacs-libregnum-editor-select src id)
       (with-current-buffer src
         (setq cmacs-libregnum-editor--current id))
+      (cmacs-libregnum-editor--sync-panels src id)
       (message "Selected node %d" id))))
 
 (defun cmacs-libregnum-outliner-refresh ()
@@ -1502,6 +1702,9 @@ TYPE is `prim' (a primitive), `kind' (a visual-kind node), `mesh' or `sprite'
     (define-key map (kbd "g")     #'cmacs-libregnum-palette-refresh)
     (define-key map (kbd "D")     #'cmacs-libregnum-palette-drop)
     (define-key map [drag-mouse-1] #'cmacs-libregnum-palette-drag)
+    ;; GTK drag-source: arm a GDK drag on button-press so the OS drag
+    ;; machinery can carry the payload to other GTK apps / the viewport.
+    (define-key map [down-mouse-1] #'cmacs-libregnum-palette--arm-dnd)
     map)
   "Keymap for `cmacs-libregnum-palette-mode'.")
 
@@ -1559,7 +1762,8 @@ Called (deferred) from the C input layer on the click that follows arming."
       (setq cmacs-libregnum-editor--drop-thunk nil)
       (cmacs-libregnum-editor-set-armed buffer nil))
     (when (buffer-live-p (get-buffer "*cmacs-libregnum outliner*"))
-      (with-current-buffer buffer (cmacs-libregnum-editor-outliner)))))
+      (with-current-buffer buffer (cmacs-libregnum-editor-outliner)))
+    (cmacs-libregnum-editor--sync-panels buffer)))
 
 (defun cmacs-libregnum-palette--button-on-line ()
   "Return the palette/asset button on the current line, or nil."
@@ -1598,11 +1802,16 @@ Called (deferred) from the C input layer on the click that follows arming."
       (cmacs-libregnum-editor--arm src (cmacs-libregnum-palette--thunk b)
                                    (button-get b 'name)))))
 
-;;; True mouse drag: press a palette/asset item and release over the viewport
-;;; to drop it at that 3D point.  This uses Emacs' own `drag-mouse-1' event
-;;; (the drag is delivered to the START buffer's keymap with the release
-;;; position), so NO upstream pgtk change is needed -- see the libregnum entry
-;;; in `doc_org/cmacs/cmacs-upstream-changes.org'.
+;;; True mouse drag (intra-Emacs): press a palette/asset item and release
+;;; over the viewport to drop it at that 3D point.  This uses Emacs' own
+;;; `drag-mouse-1' event (the drag is delivered to the START buffer's keymap
+;;; with the release position) for the common case where the source and target
+;;; are both inside the same Emacs frame.
+;;;
+;;; A GTK-native GDK drag-source (for cross-process drops) is layered on top:
+;;; see the `cmacs-libregnum-palette--arm-dnd' / `cmacs-libregnum-dnd-arm'
+;;; machinery below and in cmacs-libregnum-dnd.c.  The one upstream pgtk hunk
+;;; it requires is catalogued in `doc_org/cmacs/cmacs-upstream-changes.org'.
 
 (defun cmacs-libregnum-editor--view-drop (src thunk win px py)
   "Run THUNK (SRC WX WY WZ) at the ground point under window-pixel (PX,PY) of
@@ -1729,6 +1938,8 @@ images become sprite nodes)."
     (define-key map (kbd "d")   #'cmacs-libregnum-editor-assets)
     (define-key map (kbd "D")   #'cmacs-libregnum-assets-drop)
     (define-key map [drag-mouse-1] #'cmacs-libregnum-assets-drag)
+    ;; GTK drag-source: arm a GDK drag on button-press.
+    (define-key map [down-mouse-1] #'cmacs-libregnum-assets--arm-dnd)
     map)
   "Keymap for `cmacs-libregnum-assets-mode'.")
 
@@ -1854,6 +2065,33 @@ sprite nodes."
   "Node id the inspector is currently showing.")
 (defvar-local cmacs-libregnum-inspector--fields nil
   "Alist (KEY . WIDGET) of the inspector's editable number fields.")
+(defvar-local cmacs-libregnum-inspector--props nil
+  "List of (PROP-NAME WIDGET . KIND) for introspected node properties.
+KIND is `bool', `string' or `number'.")
+
+(defconst cmacs-libregnum-inspector--skip-props '("guid" "visual")
+  "Node properties the inspector does not expose for editing.")
+
+(defun cmacs-libregnum-inspector--prop-kind (type)
+  "Classify a GObject property TYPE name into a widget kind, or nil to skip."
+  (cond ((string= type "gboolean") 'bool)
+        ((string= type "gchararray") 'string)
+        ((member type '("gint" "guint" "glong" "gulong" "gint64" "guint64"
+                        "gfloat" "gdouble")) 'number)
+        (t nil)))                       ;; objects/enums/boxed: not edited here
+
+(defun cmacs-libregnum-inspector--prop-field (obj name kind)
+  "Insert an editable widget for property NAME of KIND on OBJ; return the widget."
+  (let ((val (ignore-errors (gobject-get obj name))))
+    (widget-insert (format "  %-10s " name))
+    (prog1
+        (pcase kind
+          ('bool   (widget-create 'checkbox (and val t)))
+          ('number (widget-create 'editable-field :size 9 :format "%v"
+                                  (format "%.6g" (or val 0))))
+          (_       (widget-create 'editable-field :size 16 :format "%v"
+                                  (or val ""))))
+      (widget-insert "\n"))))
 
 (defun cmacs-libregnum-inspector--node-name (buf id)
   "Return node ID's name from BUF's tree-nodes, or a default."
@@ -1876,7 +2114,8 @@ sprite nodes."
          (id  (and (buffer-live-p src) (cmacs-libregnum-editor--sel src))))
     (let ((inhibit-read-only t)) (erase-buffer) (remove-overlays))
     (setq cmacs-libregnum-inspector--id id
-          cmacs-libregnum-inspector--fields nil)
+          cmacs-libregnum-inspector--fields nil
+          cmacs-libregnum-inspector--props nil)
     (if (null id)
         (progn
           (widget-insert (propertize "Inspector\n\n" 'face 'bold))
@@ -1916,7 +2155,28 @@ shape, then edit it here." 'face 'shadow))
               cmacs-libregnum-inspector--fields)
         (push (cons 'sz (cmacs-libregnum-inspector--field "Z" (nth 2 scl)))
               cmacs-libregnum-inspector--fields)
-        (widget-insert "\n")
+        ;; Introspected node properties (name/visible/locked/is-2d/...), driven
+        ;; by GObject GParamSpecs via the node->GObject bridge.
+        (when (and (fboundp 'cmacs-libregnum-editor-node-object)
+                   (fboundp 'gobject-list-properties))
+          (let ((obj (ignore-errors
+                       (cmacs-libregnum-editor-node-object src id))))
+            (when obj
+              (widget-insert (propertize "Properties\n" 'face 'bold))
+              (dolist (pname (ignore-errors (gobject-list-properties obj)))
+                (unless (member pname cmacs-libregnum-inspector--skip-props)
+                  (let* ((info (ignore-errors
+                                 (gobject-property-info obj pname)))
+                         (kind (and info (plist-get info :writable)
+                                    (cmacs-libregnum-inspector--prop-kind
+                                     (plist-get info :type)))))
+                    (when kind
+                      (push (cons pname
+                                  (cons (cmacs-libregnum-inspector--prop-field
+                                         obj pname kind)
+                                        kind))
+                            cmacs-libregnum-inspector--props)))))
+              (widget-insert "\n"))))
         (widget-create 'push-button
                        :notify (lambda (&rest _)
                                  (cmacs-libregnum-inspector-apply))
@@ -1956,7 +2216,23 @@ shape, then edit it here." 'face 'shadow))
                                         (cmacs-libregnum-inspector--num 'sx)
                                         (cmacs-libregnum-inspector--num 'sy)
                                         (cmacs-libregnum-inspector--num 'sz))
-      (message "Applied transform to node %d" id))))
+      ;; Write back introspected properties via the GObject bridge.  (These go
+      ;; direct, so they are not on the engine undo stack -- transform is.)
+      (when (and cmacs-libregnum-inspector--props
+                 (fboundp 'cmacs-libregnum-editor-node-object))
+        (let ((obj (ignore-errors
+                     (cmacs-libregnum-editor-node-object src id))))
+          (when obj
+            (dolist (p cmacs-libregnum-inspector--props)
+              (let* ((name (car p)) (widget (cadr p)) (kind (cddr p))
+                     (raw (widget-value widget))
+                     (val (pcase kind
+                            ('bool (and raw t))
+                            ('number (string-to-number raw))
+                            (_ raw))))
+                (ignore-errors (gobject-set obj name val)))))
+          (cmacs-libregnum-redraw src)))
+      (message "Applied node %d" id))))
 
 (defun cmacs-libregnum-inspector-refresh ()
   "Rebuild the inspector from its editor buffer's current selection."
@@ -1987,8 +2263,13 @@ shape, then edit it here." 'face 'shadow))
     (evil-set-initial-state 'cmacs-libregnum-palette-mode 'motion)
     (evil-set-initial-state 'cmacs-libregnum-outliner-mode 'motion)
     (evil-set-initial-state 'cmacs-libregnum-assets-mode 'motion)
-    ;; The inspector is an editable widget form, so keep it in Emacs state.
-    (evil-set-initial-state 'cmacs-libregnum-inspector-mode 'emacs))
+    ;; The inspector is an editable widget form, but keep it in Normal state so
+    ;; Evil hjkl navigation + Esc work like any other buffer.  Point starts at
+    ;; column 0 (left of the "  X " field labels), so j/k move down the margin
+    ;; and never land inside a field's self-inserting keymap.  Edit a field with
+    ;; `i'/`a' (Insert state) then `Esc'; toggle checkboxes / press Apply with
+    ;; RET; apply everything with `C-c C-c'.
+    (evil-set-initial-state 'cmacs-libregnum-inspector-mode 'normal))
   ;; In Motion state Evil's own RET/g/m shadow the major-mode map, so register
   ;; the activation keys in each mode's Motion-state overlay.  Use the FUNCTION
   ;; `evil-define-key*', never the `evil-define-key' MACRO: the macro only
@@ -1998,9 +2279,10 @@ shape, then edit it here." 'face 'shadow))
   ;; guard did not catch it.)
   (when (fboundp 'evil-define-key*)
     (evil-define-key* 'motion cmacs-libregnum-palette-mode-map
-      (kbd "RET")     #'cmacs-libregnum-palette-activate
-      (kbd "D")       #'cmacs-libregnum-palette-drop
-      [drag-mouse-1]  #'cmacs-libregnum-palette-drag)
+      (kbd "RET")      #'cmacs-libregnum-palette-activate
+      (kbd "D")        #'cmacs-libregnum-palette-drop
+      [drag-mouse-1]   #'cmacs-libregnum-palette-drag
+      [down-mouse-1]   #'cmacs-libregnum-palette--arm-dnd)
     (evil-define-key* 'motion cmacs-libregnum-outliner-mode-map
       (kbd "RET") #'cmacs-libregnum-outliner-select
       (kbd "g")   #'cmacs-libregnum-outliner-refresh
@@ -2008,11 +2290,208 @@ shape, then edit it here." 'face 'shadow))
       (kbd "P")   #'cmacs-libregnum-outliner-reparent
       (kbd "r")   #'cmacs-libregnum-outliner-reparent-root)
     (evil-define-key* 'motion cmacs-libregnum-assets-mode-map
-      (kbd "RET") #'cmacs-libregnum-palette-activate
-      (kbd "g")       #'cmacs-libregnum-assets-refresh
-      (kbd "d")       #'cmacs-libregnum-editor-assets
-      (kbd "D")       #'cmacs-libregnum-assets-drop
-      [drag-mouse-1]  #'cmacs-libregnum-assets-drag)))
+      (kbd "RET")    #'cmacs-libregnum-palette-activate
+      (kbd "g")      #'cmacs-libregnum-assets-refresh
+      (kbd "d")      #'cmacs-libregnum-editor-assets
+      (kbd "D")      #'cmacs-libregnum-assets-drop
+      [drag-mouse-1] #'cmacs-libregnum-assets-drag
+      [down-mouse-1] #'cmacs-libregnum-assets--arm-dnd)
+    ;; Inspector runs in Normal state (editable widget form): Evil's Normal map
+    ;; would otherwise shadow the widget keys, so re-register RET (activate
+    ;; button / toggle checkbox), TAB / S-TAB (move between fields), and the
+    ;; apply/revert chords.  hjkl + Esc + i/a then fall through to Evil itself.
+    (evil-define-key* 'normal cmacs-libregnum-inspector-mode-map
+      (kbd "RET")       #'widget-button-press
+      (kbd "TAB")       #'widget-forward
+      (kbd "<tab>")     #'widget-forward
+      (kbd "<backtab>") #'widget-backward
+      (kbd "C-c C-c")   #'cmacs-libregnum-inspector-apply
+      (kbd "C-c C-k")   #'cmacs-libregnum-inspector-refresh)))
+
+
+;;; GTK drag-source for palette / asset rows.
+;;;
+;;; When HAVE_PGTK and HAVE_CMACS_LIBREGNUM are both defined, the C side
+;;; provides `cmacs-libregnum-dnd-arm' (cmacs-libregnum-dnd.c).  The Elisp
+;;; side arms it via [down-mouse-1] in the palette/asset mode maps; the C
+;;; motion handler then initiates the GDK drag when the threshold is crossed.
+;;;
+;;; On the receiving side we add "application/x-libregnum" to the pgtk-dnd
+;;; type list so drops on the viewport buffer are decoded and forwarded to the
+;;; existing placement machinery (cmacs-libregnum-editor--view-drop).
+
+(defun cmacs-libregnum-palette--make-payload (button)
+  "Return a payload string for the GDK drag from palette BUTTON.
+Format: \"lrg-prim:NAME\", \"lrg-kind:VALUE\", \"lrg-asset:NAME\" or nil."
+  (when button
+    (let ((ptype (button-get button 'ptype))
+          (value (button-get button 'value))
+          (name  (button-get button 'name)))
+      (pcase ptype
+        ('prim   (format "lrg-prim:%s" name))
+        ('kind   (format "lrg-kind:%s" (or value name)))
+        ('mesh   (format "lrg-asset:%s" (or name "mesh")))
+        ('sprite (format "lrg-asset:%s" (or name "sprite")))
+        (_ nil)))))
+
+(defun cmacs-libregnum-assets--make-payload (button)
+  "Return a payload string for the GDK drag from asset browser BUTTON.
+Format: \"lrg-asset:PATH\" or nil."
+  (when button
+    (let ((path (button-get button 'path)))
+      (when path (format "lrg-asset:%s" path)))))
+
+(defun cmacs-libregnum-palette--arm-dnd (event)
+  "Arm a GDK drag from a [down-mouse-1] press on a palette row.
+Calls `cmacs-libregnum-dnd-arm' so the C motion handler can initiate a
+GTK drag when the pointer crosses the drag threshold.  Falls back silently
+when the C DEFUN is absent (non-pgtk builds)."
+  (interactive "e")
+  ;; Let Emacs process the down-mouse-1 normally too (focus, etc.).
+  ;; We return immediately; the C side does the work on motion events.
+  (when (fboundp 'cmacs-libregnum-dnd-arm)
+    (let* ((pos (event-start event))
+           (win (posn-window pos))
+           (b   (when (windowp win)
+                  (with-current-buffer (window-buffer win)
+                    (save-excursion
+                      (goto-char (posn-point pos))
+                      (cmacs-libregnum-palette--button-on-line)))))
+           (payload (cmacs-libregnum-palette--make-payload b))
+           (xy (posn-x-y pos)))
+      (when (and payload xy)
+        (cmacs-libregnum-dnd-arm payload (car xy) (cdr xy))))))
+
+(defun cmacs-libregnum-assets--arm-dnd (event)
+  "Arm a GDK drag from a [down-mouse-1] press on an asset row."
+  (interactive "e")
+  (when (fboundp 'cmacs-libregnum-dnd-arm)
+    (let* ((pos (event-start event))
+           (win (posn-window pos))
+           (b   (when (windowp win)
+                  (with-current-buffer (window-buffer win)
+                    (save-excursion
+                      (goto-char (posn-point pos))
+                      (cmacs-libregnum-palette--button-on-line)))))
+           (payload (cmacs-libregnum-assets--make-payload b))
+           (xy (posn-x-y pos)))
+      (when (and payload xy)
+        (cmacs-libregnum-dnd-arm payload (car xy) (cdr xy))))))
+
+;;; Viewport drop handler for GTK DnD drops on the libregnum editor buffer.
+;;;
+;;; When a GDK drag (from our palette/asset arm or an external app) is
+;;; dropped over the viewport, pgtk-dnd fires drag-drop → DRAG_N_DROP_EVENT
+;;; → pgtk-dnd-handle-gdk → pgtk-dnd-drop-data → our handler below.
+;;; The handler decodes the "lrg-*" payload and calls the existing
+;;; placement machinery.
+
+(defun cmacs-libregnum--dnd-handle-drop (window _action data)
+  "Handle a GTK DnD drop of an \"application/x-libregnum\" or text/plain
+lrg-* payload onto WINDOW.
+If WINDOW shows a libregnum editor viewport, place the dragged item at
+the drop ground point.  Otherwise return nil (reject)."
+  (when (and (windowp window) (window-live-p window))
+    (let* ((buf (window-buffer window))
+           (payload (if (stringp data)
+                        (string-trim data)
+                      (decode-coding-string data 'utf-8))))
+      (when (and (buffer-live-p buf)
+                 (cmacs-libregnum-attached-p buf)
+                 (string-match
+                  "\`lrg-\(prim\|kind\|asset\):\(.*\)\'" payload))
+        (let* ((kind    (match-string 1 payload))
+               (value   (match-string 2 payload))
+               ;; Build a thunk that places the item: we read the drop
+               ;; coordinates from the event position after the fact.
+               (thunk   (pcase kind
+                          ("prim"
+                           (lambda (b wx wy wz)
+                             (cmacs-libregnum-editor-add-primitive
+                              b value value)
+                             (let ((id (cmacs-libregnum-editor-selected-id b)))
+                               (when id
+                                 (cmacs-libregnum-editor-set-position
+                                  b id wx wy wz)))))
+                          ("kind"
+                           (let ((k (string-to-number value)))
+                             (lambda (b wx wy wz)
+                               (let ((id (cmacs-libregnum-editor-add-visual
+                                          b k value nil)))
+                                 (when id
+                                   (cmacs-libregnum-editor-set-position
+                                    b id wx wy wz))))))
+                          ("asset"
+                           (let ((path (expand-file-name value)))
+                             (lambda (b wx wy wz)
+                               (let* ((ext (downcase
+                                            (or (file-name-extension path)
+                                                "")))
+                                      (mesh-exts
+                                       '("glb" "gltf" "obj"))
+                                      (kind (if (member ext mesh-exts)
+                                                cmacs-libregnum-visual-mesh-asset
+                                              cmacs-libregnum-visual-sprite))
+                                      (name (file-name-nondirectory path))
+                                      (id   (cmacs-libregnum-editor-add-visual
+                                             b kind name path)))
+                                 (when id
+                                   (cmacs-libregnum-editor-set-position
+                                    b id wx wy wz)))))))))
+          ;; Convert the drop window-pixel position to a 3D ground point
+          ;; via the existing screen-to-ground raycaster.
+          (let* ((pos   (event-start last-input-event))
+                 (xy    (posn-x-y pos))
+                 (px    (or (car xy) 0))
+                 (py    (or (cdr xy) 0))
+                 (vs    (cmacs-libregnum-view-size buf))
+                 (vw    (and vs (nth 0 vs)))
+                 (vh    (and vs (nth 1 vs)))
+                 (bw    (window-body-width window t))
+                 (bh    (window-body-height window t)))
+            (when (and vw vh (> vw 0) (> vh 0) (> bw 0) (> bh 0))
+              (let* ((vx  (* px (/ (float vw) bw)))
+                     (vy  (* py (/ (float vh) bh)))
+                     (gnd (cmacs-libregnum-editor-screen-to-ground
+                           buf vx vy vw vh)))
+                (when gnd
+                  (funcall thunk buf
+                           (nth 0 gnd) (nth 1 gnd) (nth 2 gnd))
+                  (when (buffer-live-p
+                         (get-buffer "*cmacs-libregnum outliner*"))
+                    (with-current-buffer buf
+                      (cmacs-libregnum-editor-outliner)))
+                  'copy)))))))))
+
+;;; Register our drop handler with pgtk-dnd when the library is loaded.
+;;; The check for pgtk-dnd-types-alist ensures we don't crash on non-pgtk
+;;; builds or when pgtk-dnd hasn't been loaded yet.
+
+(defun cmacs-libregnum--dnd-register ()
+  "Add libregnum drop targets to `pgtk-dnd-types-alist' and
+`pgtk-dnd-known-types' (both are frame-global, not buffer-local).
+Safe to call multiple times."
+  (when (boundp 'pgtk-dnd-types-alist)
+    (unless (assoc "application/x-libregnum" pgtk-dnd-types-alist)
+      (push (cons "application/x-libregnum"
+                  #'cmacs-libregnum--dnd-handle-drop)
+            pgtk-dnd-types-alist)))
+  ;; Also accept text/plain with an lrg-* prefix from external drag sources
+  ;; (the existing text/plain handler inserts text; ours intercepts first via
+  ;; buffer-local pgtk-dnd-test-function override on viewport buffers -- see
+  ;; cmacs-libregnum-mode setup below).
+  (when (boundp 'pgtk-dnd-known-types)
+    (unless (member "application/x-libregnum" pgtk-dnd-known-types)
+      ;; Prepend so it is preferred over generic text/plain.
+      (setq pgtk-dnd-known-types
+            (cons "application/x-libregnum" pgtk-dnd-known-types)))))
+
+(with-eval-after-load 'pgtk-dnd
+  (cmacs-libregnum--dnd-register))
+
+;; Also register now if pgtk-dnd is already loaded.
+(when (featurep 'pgtk-dnd)
+  (cmacs-libregnum--dnd-register))
 
 (provide 'cmacs-libregnum)
 ;;; cmacs-libregnum.el ends here

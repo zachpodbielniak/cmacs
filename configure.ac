@@ -918,7 +918,7 @@ if test "$with_cmacs_libregnum" != "no"; then
     cmacs-libregnum-view.o cmacs-libregnum-overlay.o \
     cmacs-libregnum-input.o cmacs-libregnum-render.o \
     cmacs-libregnum-scene-tree.o cmacs-libregnum-scene-gobject.o \
-    cmacs-libregnum-scene-mindmap.o"
+    cmacs-libregnum-scene-mindmap.o cmacs-libregnum-dnd.o"
 fi
 if test "$with_cmacs_gsurf" != "no"; then
   if test "$with_cmacs_glib" = "no"; then

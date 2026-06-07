@@ -147,6 +147,12 @@ frame_to_view_coords (struct frame *f, CmacsLibregnumView *v,
   int w = 0, h = 0;
   cmacs_libregnum_view_get_size (v, &w, &h);
   if (pw <= 0 || ph <= 0 || w <= 0 || h <= 0) return false;
+  /* Reject events outside the window's pixel rectangle.  Without this the
+   * function always reported success, so callers (e.g. the button router)
+   * could not distinguish a click in the viewport's own window from one in a
+   * sibling Emacs window -- which made the viewport swallow EVERY click on the
+   * frame and stopped the user selecting any other pane by clicking it. */
+  if (x < px || x >= px + pw || y < py || y >= py + ph) return false;
   *vx = (x - px) * (double) w / pw;
   *vy = (y - py) * (double) h / ph;
   *vw = w; *vh = h;
@@ -238,10 +244,18 @@ cmacs_libregnum_handle_motion (struct frame *f, double x, double y)
 
   {
     /* In game mode, forward the pointer to the hosted game instead of
-     * driving the scene camera. */
+     * driving the scene camera.  Unless the view captures all input (the
+     * opt-in full-focus game mode), only do so while the pointer is over the
+     * game's own window, so motion across other Emacs panes is still routed by
+     * Emacs (and does not pin focus to the viewport). */
     CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
     if (cmacs_libregnum_render_ctx_is_game (ctx))
       {
+        double gx, gy;
+        int gw, gh;
+        if (!cmacs_libregnum_render_ctx_get_mouse_capture_all (ctx)
+            && !frame_to_view_coords (f, v, x, y, &gx, &gy, &gw, &gh))
+          return FALSE;
         cmacs_libregnum_render_ctx_game_mouse_move (ctx, x, y);
         cmacs_libregnum_view_request_redraw (v);
         return true;
@@ -305,6 +319,30 @@ cmacs_libregnum_handle_button (struct frame *f, int button, int press,
 {
   CmacsLibregnumView *v = selected_view_for_frame (f);
   if (!v) return FALSE;
+
+  /* Editor (default): only act on a press that lands inside the viewport's own
+   * Emacs window.  `selected_view_for_frame' returns the *selected* window's
+   * view, so while the viewport is focused every button event on the frame
+   * would otherwise be swallowed here -- including clicks meant for another
+   * Emacs pane, which then could not be selected by clicking (only via C-w).  A
+   * press outside the viewport window must fall through (return FALSE) so Emacs
+   * routes it and selects that pane.  A button-up is still handled when a drag
+   * is in progress, so a drag that runs past the window edge ends cleanly.
+   *
+   * Game (opt-in, mouse_capture_all): the view grabs every frame click while
+   * focused -- "full focus" -- which is what a game usually wants. */
+  {
+    double gx, gy;
+    int gw, gh;
+    gboolean capture_all = cmacs_libregnum_render_ctx_get_mouse_capture_all
+                             (cmacs_libregnum_view_get_render_ctx (v));
+    gboolean in_view = frame_to_view_coords (f, v, x, y, &gx, &gy, &gw, &gh);
+    gboolean drag_active = drag_state.dragging_left || drag_state.dragging_right
+                           || drag_state.dragging_object
+                           || drag_state.dragging_gizmo;
+    if (!capture_all && !in_view && !(press == 0 && drag_active))
+      return FALSE;
+  }
 
   {
     /* In game mode, forward mouse buttons to the hosted game. Map the X11

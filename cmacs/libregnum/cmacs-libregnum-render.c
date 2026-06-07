@@ -158,6 +158,12 @@ typedef struct
   int         mw, mh;          /* map size in tiles */
   int         tw, th;          /* tile pixel size in the tileset */
   int         cols;            /* tileset columns */
+  /* Per-tile textured plane models (tile-index -> GrlModel*), with the tile's
+   * tileset sub-rect on the albedo map; drawn via the working mesh path.  The
+   * sub-textures are kept alive in tile_textures.  Falls back to tile_rgb
+   * colour cells when a model is missing. */
+  GHashTable *tile_models;
+  GPtrArray  *tile_textures;
   float       x, y, z;
   float       rx, ry, rz;      /* euler radians */
   float       sx, sy, sz;
@@ -189,6 +195,11 @@ struct CmacsLibregnumRenderCtx
    * loaded game instead of the scene drawables. */
   gboolean          game_mode;
   LrgLoadedGame    *loaded_game;   /* owned */
+  /* When TRUE the view captures ALL mouse events on the frame while focused
+   * (full-focus, suitable for a game).  When FALSE (the default, suitable for
+   * the editor) the view only handles events inside its own window, so clicks
+   * in other Emacs panes select them normally. */
+  gboolean          mouse_capture_all;
   LrgGameTemplate  *game;          /* borrowed from loaded_game */
   LrgGameHost      *game_host;     /* owned (CmacsFboGameHost) */
   LrgInputSoftware *game_input;    /* owned; registered with input manager */
@@ -271,6 +282,8 @@ cmacs_libregnum_render_ctx_free (CmacsLibregnumRenderCtx *r)
           g_clear_object (&em->texture);
           g_clear_pointer (&em->tiles, g_free);
           g_clear_pointer (&em->tile_rgb, g_free);
+          g_clear_pointer (&em->tile_models, g_hash_table_destroy);
+          g_clear_pointer (&em->tile_textures, g_ptr_array_unref);
         }
       g_array_free (r->editor_models, TRUE);
     }
@@ -758,6 +771,21 @@ cmacs_libregnum_render_ctx_is_game (CmacsLibregnumRenderCtx *r)
   return r && r->game_mode;
 }
 
+/* Whether this view captures all frame mouse events while focused (game) vs
+ * only events inside its own window (editor, the default). */
+gboolean
+cmacs_libregnum_render_ctx_get_mouse_capture_all (CmacsLibregnumRenderCtx *r)
+{
+  return r && r->mouse_capture_all;
+}
+
+void
+cmacs_libregnum_render_ctx_set_mouse_capture_all (CmacsLibregnumRenderCtx *r,
+                                                  gboolean capture)
+{
+  if (r) r->mouse_capture_all = capture;
+}
+
 void
 cmacs_libregnum_render_ctx_game_key (CmacsLibregnumRenderCtx *r,
                                      int grl_key, int press)
@@ -883,25 +911,45 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
                     float ox = em->x - em->mw * 0.5f;
                     float oz = em->z - em->mh * 0.5f;
                     int cx, cy;
+                    g_autoptr (GrlVector3) taxis = grl_vector3_new (0, 1, 0);
+                    g_autoptr (GrlVector3) tscl  = grl_vector3_new (1, 1, 1);
+                    g_autoptr (GrlColor) twhite  = grl_color_new (255, 255,
+                                                                  255, 255);
                     for (cy = 0; cy < em->mh; cy++)
                       for (cx = 0; cx < em->mw; cx++)
                         {
                           int idx = cy * em->mw + cx;
                           gint tile = em->tiles[idx];
                           Vector3 cpos;
+                          GrlModel *tm = NULL;
                           Color col = { 200, 200, 200, 255 };
                           if (tile < 0) continue;
-                          if (em->tile_rgb)
-                            {
-                              col.r = em->tile_rgb[3 * idx];
-                              col.g = em->tile_rgb[3 * idx + 1];
-                              col.b = em->tile_rgb[3 * idx + 2];
-                            }
                           cpos = (Vector3){ ox + cx + 0.5f, em->y,
                                             oz + cy + 0.5f };
-                          DrawCube (cpos, 0.95f, 0.1f, 0.95f, col);
-                          DrawCubeWires (cpos, 0.95f, 0.1f, 0.95f,
-                                         (Color){ 40, 40, 40, 255 });
+                          if (em->tile_models)
+                            tm = g_hash_table_lookup (em->tile_models,
+                                                      GINT_TO_POINTER (tile));
+                          if (tm)
+                            {
+                              /* Real tileset art: textured unit-plane model. */
+                              g_autoptr (GrlVector3) p =
+                                grl_vector3_new (cpos.x, cpos.y, cpos.z);
+                              grl_model_draw_ex (tm, p, taxis, 0.0f, tscl,
+                                                 twhite);
+                            }
+                          else
+                            {
+                              /* Fallback: colour-sampled cell. */
+                              if (em->tile_rgb)
+                                {
+                                  col.r = em->tile_rgb[3 * idx];
+                                  col.g = em->tile_rgb[3 * idx + 1];
+                                  col.b = em->tile_rgb[3 * idx + 2];
+                                }
+                              DrawCube (cpos, 0.95f, 0.1f, 0.95f, col);
+                              DrawCubeWires (cpos, 0.95f, 0.1f, 0.95f,
+                                             (Color){ 40, 40, 40, 255 });
+                            }
                         }
                   }
               }
@@ -939,6 +987,69 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
                                  (Vector3){ em->x, em->y, em->z },
                                  fmaxf (em->sx, em->sy),
                                  (Color){ em->cr, em->cg, em->cb, 255 });
+              }
+          }
+        /* Light/audio range spheres + camera frustum, read live from each
+         * node's visual params so they reflect the authored values. */
+        if (r->editor && r->editor_node_map && r->nodes)
+          {
+            guint li;
+            for (li = 0; li < r->editor_node_map->len
+                         && li < r->nodes->len; li++)
+              {
+                LrgNode          *ln = g_ptr_array_index (r->editor_node_map, li);
+                LrgNodeVisual    *lv = ln ? lrg_node_get_visual (ln) : NULL;
+                LrgNodeVisualKind lk = lv ? lrg_node_visual_get_kind (lv)
+                                          : LRG_NODE_VISUAL_NONE;
+                CmacsNode        *nn = &g_array_index (r->nodes, CmacsNode, li);
+                Vector3           p = (Vector3){ nn->x, nn->y, nn->z };
+                if (lk == LRG_NODE_VISUAL_LIGHT)
+                  {
+                    float rng = (float)
+                      lrg_node_visual_get_param_double (lv, "range", 4.0);
+                    Color lc = {
+                      (guint8)(int) lrg_node_visual_get_param_double (lv, "r", 250.0),
+                      (guint8)(int) lrg_node_visual_get_param_double (lv, "g", 240.0),
+                      (guint8)(int) lrg_node_visual_get_param_double (lv, "b", 140.0),
+                      120 };
+                    DrawSphereWires (p, rng, 6, 8, lc);
+                  }
+                else if (lk == LRG_NODE_VISUAL_AUDIO_EMITTER)
+                  {
+                    float rng = (float)
+                      lrg_node_visual_get_param_double (lv, "range", 4.0);
+                    DrawSphereWires (p, rng, 6, 8,
+                                     (Color){ 120, 200, 230, 120 });
+                  }
+                else if (lk == LRG_NODE_VISUAL_CAMERA)
+                  {
+                    g_autoptr (GrlVector3) rot = lrg_node_get_rotation (ln);
+                    float ry  = rot ? rot->y : 0.0f;
+                    float fov = (float)
+                      lrg_node_visual_get_param_double (lv, "fov", 50.0);
+                    float len  = 2.5f;
+                    float half = tanf (fov * 0.5f * 0.01745329f) * len;
+                    Vector3 fwd = (Vector3){ -sinf (ry), 0.0f, -cosf (ry) };
+                    Vector3 rgt = (Vector3){  cosf (ry), 0.0f, -sinf (ry) };
+                    Vector3 ctr = (Vector3){ p.x + fwd.x * len, p.y,
+                                             p.z + fwd.z * len };
+                    Vector3 c[4];
+                    Color   fc = (Color){ 200, 160, 240, 200 };
+                    int     ci;
+                    c[0] = (Vector3){ ctr.x + rgt.x * half, ctr.y + half,
+                                      ctr.z + rgt.z * half };
+                    c[1] = (Vector3){ ctr.x - rgt.x * half, ctr.y + half,
+                                      ctr.z - rgt.z * half };
+                    c[2] = (Vector3){ ctr.x - rgt.x * half, ctr.y - half,
+                                      ctr.z - rgt.z * half };
+                    c[3] = (Vector3){ ctr.x + rgt.x * half, ctr.y - half,
+                                      ctr.z + rgt.z * half };
+                    for (ci = 0; ci < 4; ci++)
+                      {
+                        DrawLine3D (p, c[ci], fc);             /* apex edges */
+                        DrawLine3D (c[ci], c[(ci + 1) % 4], fc); /* far rect */
+                      }
+                  }
               }
           }
 #endif
@@ -1160,6 +1271,28 @@ cmacs_libregnum_render_ctx_snapshot_png (CmacsLibregnumRenderCtx *r,
  * (picking, labels, cmacs-libregnum-tree-nodes) for the outliner. */
 #ifdef LRG_BUILD_EDITOR
 
+/* Build a unit-plane GrlModel textured with TEX (transfer none).  Drawing this
+ * via grl_model_draw_ex uses the mesh/VAO path, which -- unlike raylib's rlgl
+ * textured immediate mode -- composites correctly inside the editor FBO batch.
+ * Returns a new model (transfer full), or NULL. */
+static GrlModel *
+cmacs_editor_textured_quad (GrlTexture *tex)
+{
+  GrlMesh  *mesh;
+  GrlModel *model;
+  if (tex == NULL)
+    return NULL;
+  mesh = grl_mesh_new_plane (1.0f, 1.0f, 1, 1);
+  if (mesh == NULL)
+    return NULL;
+  model = grl_model_new_from_mesh (mesh);
+  g_object_unref (mesh);
+  if (model == NULL)
+    return NULL;
+  grl_model_set_texture (model, 0, GRL_MATERIAL_MAP_ALBEDO, tex);
+  return model;
+}
+
 /* Bake one level node into a drawable + scene node; recurse over children.
  * Returns nothing; node ids stay in lockstep with editor_node_map. */
 static void
@@ -1277,6 +1410,7 @@ cmacs_editor_bake_node (CmacsLibregnumRenderCtx *r, LrgNode *node,
           em.texture = NULL;
           em.flat = FALSE;
           em.tiles = NULL;
+          em.tile_rgb = NULL; em.tile_models = NULL; em.tile_textures = NULL;
           em.x = x; em.y = y; em.z = z;
           em.rx = rrx; em.ry = rry; em.rz = rrz;
           em.sx = ssx; em.sy = ssy; em.sz = ssz;
@@ -1296,23 +1430,32 @@ cmacs_editor_bake_node (CmacsLibregnumRenderCtx *r, LrgNode *node,
       const char *asset = lrg_node_visual_get_asset (vis);
       GrlTexture *tex = (asset && asset[0])
                           ? grl_texture_new_from_file (asset) : NULL;
-      if (tex)
+      GrlModel *smodel = cmacs_editor_textured_quad (tex);
+      if (tex && smodel)
         {
+          /* Sprite: a flat textured quad on the ground (real texture, drawn via
+           * the working mesh path).  rx tilts it upright if the node is rotated. */
           CmacsEditorModel em;
-          em.model = NULL;
-          em.texture = tex;
-          em.flat = FALSE;          /* sprite = camera-facing billboard */
+          em.model = smodel;
+          em.texture = tex;         /* kept for cleanup */
+          em.flat = FALSE;
           em.tiles = NULL;
+          em.tile_rgb = NULL; em.tile_models = NULL; em.tile_textures = NULL;
           em.x = x; em.y = y; em.z = z;
           em.rx = rrx; em.ry = rry; em.rz = rrz;
           em.sx = ssx; em.sy = ssy; em.sz = ssz;
           em.cr = 255; em.cg = 255; em.cb = 255;
           if (r->editor_models)
             g_array_append_val (r->editor_models, em);
-          else
-            g_object_unref (tex);
+          else { g_object_unref (smodel); g_object_unref (tex); }
           hw = 0.5f * fabsf (ssx); hh = 0.5f * fabsf (ssy);
           hd = 0.5f * fabsf (ssz);
+        }
+      else if (tex)
+        {
+          g_object_unref (tex);
+          shape = LRG_SHAPE (lrg_plane3d_new_at (x, y, z, 1.0f, 1.0f));
+          hh = 0.1f;
         }
       else                  /* no/failed image: flat plane gizmo */
         {
@@ -1384,13 +1527,62 @@ cmacs_editor_bake_node (CmacsLibregnumRenderCtx *r, LrgNode *node,
                 UnloadImage (img);
               }
           }
+          /* Build a textured plane model per distinct tile (real tileset art,
+           * drawn via the mesh path that composites in the FBO batch). */
+          em.tile_models = g_hash_table_new_full (g_direct_hash, g_direct_equal,
+                                                  NULL, g_object_unref);
+          em.tile_textures = g_ptr_array_new_with_free_func (g_object_unref);
+          {
+            GrlImage *isrc = grl_image_new_from_file (asset);
+            if (isrc != NULL)
+              {
+                int iw = grl_image_get_width (isrc);
+                int ih = grl_image_get_height (isrc);
+                for (i = 0; i < n; i++)
+                  {
+                    int tile = tiles[i], col, row;
+                    g_autoptr (GrlRectangle) rect = NULL;
+                    GrlImage *sub;
+                    GrlTexture *ttex;
+                    GrlModel *tmodel;
+                    if (tile < 0
+                        || g_hash_table_contains (em.tile_models,
+                                                  GINT_TO_POINTER (tile)))
+                      continue;
+                    col = tile % em.cols;
+                    row = tile / em.cols;
+                    if (col * em.tw >= iw || row * em.th >= ih)
+                      continue;
+                    rect = grl_rectangle_new ((float) (col * em.tw),
+                                              (float) (row * em.th),
+                                              (float) em.tw, (float) em.th);
+                    sub = grl_image_from_region (isrc, rect);
+                    if (!sub) continue;
+                    ttex = grl_texture_new_from_image (sub);
+                    g_object_unref (sub);
+                    if (!ttex) continue;
+                    tmodel = cmacs_editor_textured_quad (ttex);
+                    if (tmodel)
+                      {
+                        g_ptr_array_add (em.tile_textures, ttex);
+                        g_hash_table_insert (em.tile_models,
+                                             GINT_TO_POINTER (tile), tmodel);
+                      }
+                    else
+                      g_object_unref (ttex);
+                  }
+                g_object_unref (isrc);
+              }
+          }
           em.x = x; em.y = y; em.z = z;
           em.rx = rrx; em.ry = rry; em.rz = rrz;
           em.sx = ssx; em.sy = ssy; em.sz = ssz;
           em.cr = 255; em.cg = 255; em.cb = 255;
           if (r->editor_models)
             g_array_append_val (r->editor_models, em);
-          else { g_object_unref (tex); g_free (tiles); g_free (em.tile_rgb); }
+          else { g_object_unref (tex); g_free (tiles); g_free (em.tile_rgb);
+                 g_clear_pointer (&em.tile_models, g_hash_table_destroy);
+                 g_clear_pointer (&em.tile_textures, g_ptr_array_unref); }
           hw = (float) mw * 0.5f; hh = 0.1f; hd = (float) mh * 0.5f;
         }
       else
@@ -1472,6 +1664,8 @@ cmacs_editor_rebuild (CmacsLibregnumRenderCtx *r)
           g_clear_object (&em->texture);
           g_clear_pointer (&em->tiles, g_free);
           g_clear_pointer (&em->tile_rgb, g_free);
+          g_clear_pointer (&em->tile_models, g_hash_table_destroy);
+          g_clear_pointer (&em->tile_textures, g_ptr_array_unref);
         }
       g_array_set_size (r->editor_models, 0);
     }
@@ -2609,6 +2803,256 @@ cmacs_libregnum_render_ctx_editor_sync_play (CmacsLibregnumRenderCtx *r)
     }
 }
 
+/* Reverse of cmacs_editor_node_for_id: map a node pointer back to its id. */
+static gint
+cmacs_editor_id_for_node (CmacsLibregnumRenderCtx *r, LrgNode *node)
+{
+  guint i;
+  if (!r || !r->editor_node_map || !node)
+    return -1;
+  for (i = 0; i < r->editor_node_map->len; i++)
+    if (g_ptr_array_index (r->editor_node_map, i) == node)
+      return (gint) i;
+  return -1;
+}
+
+/* Return node ID's live LrgNode as a GObject* (cast to void*) with a fresh
+ * reference (transfer full) so the Lisp wrapper's finalizer balances it; NULL
+ * if absent. */
+void *
+cmacs_libregnum_render_ctx_editor_node_object (CmacsLibregnumRenderCtx *r,
+                                               gint id)
+{
+  LrgNode *n = cmacs_editor_node_for_id (r, id);
+  if (!n)
+    return NULL;
+  return g_object_ref (n);
+}
+
+/* Save node ID's subtree to a .rprefab file. */
+gboolean
+cmacs_libregnum_render_ctx_editor_save_prefab (CmacsLibregnumRenderCtx *r,
+                                               gint id, const char *path)
+{
+  LrgNode *n = cmacs_editor_node_for_id (r, id);
+  g_autoptr (GError) error = NULL;
+  if (!n || !path)
+    return FALSE;
+  return lrg_prefab_save (n, path, &error);
+}
+
+/* Instantiate a .rprefab under PARENT_ID (-1 = root); return the new node id. */
+gint
+cmacs_libregnum_render_ctx_editor_instantiate_prefab (CmacsLibregnumRenderCtx *r,
+                                                      const char *path,
+                                                      gint parent_id)
+{
+  LrgNode *node, *parent, *sel;
+  g_autoptr (GError) error = NULL;
+  if (!r || !r->editor || !path)
+    return -1;
+  node = lrg_prefab_load (path, &error);
+  if (!node)
+    return -1;
+  parent = (parent_id >= 0) ? cmacs_editor_node_for_id (r, parent_id) : NULL;
+  lrg_editor_add_node (r->editor, node, parent);   /* refs + selects it */
+  g_object_unref (node);
+  cmacs_editor_rebuild (r);
+  sel = lrg_editor_selection_get_primary (lrg_editor_get_selection (r->editor));
+  return cmacs_editor_id_for_node (r, sel);
+}
+
+/* Import a Blender-exported scene YAML as the editor's current level. */
+gboolean
+cmacs_libregnum_render_ctx_editor_import_scene (CmacsLibregnumRenderCtx *r,
+                                                const char *path)
+{
+  LrgSceneSerializerBlender *ser;
+  LrgScene                  *scene;
+  LrgLevel                  *level;
+  g_autoptr (GError)         error = NULL;
+  if (!r || !r->editor || !path)
+    return FALSE;
+  ser = lrg_scene_serializer_blender_new ();
+  scene = lrg_scene_serializer_load_from_file (LRG_SCENE_SERIALIZER (ser),
+                                               path, &error);
+  g_object_unref (ser);
+  if (!scene)
+    return FALSE;
+  level = lrg_level_from_scene (scene);
+  g_object_unref (scene);
+  if (!level)
+    return FALSE;
+  lrg_editor_set_level (r->editor, level);   /* g_set_object: refs internally */
+  g_object_unref (level);
+  cmacs_editor_rebuild (r);
+  return TRUE;
+}
+
+/* Scripting-backend availability (singleton manager; no ctx needed). */
+gint
+cmacs_libregnum_scripting_language_count (void)
+{
+  LrgScriptingManager *m = lrg_scripting_manager_get_default ();
+  guint n = 0;
+  g_autofree LrgScriptLanguage *a = lrg_scripting_manager_get_available (m, &n);
+  return (gint) n;
+}
+
+gint
+cmacs_libregnum_scripting_language_at (gint index)
+{
+  LrgScriptingManager *m = lrg_scripting_manager_get_default ();
+  guint n = 0;
+  g_autofree LrgScriptLanguage *a = lrg_scripting_manager_get_available (m, &n);
+  if (index < 0 || (guint) index >= n)
+    return -1;
+  return (gint) a[index];
+}
+
+char *
+cmacs_libregnum_scripting_language_name (gint index)
+{
+  LrgScriptingManager *m = lrg_scripting_manager_get_default ();
+  guint n = 0;
+  g_autofree LrgScriptLanguage *a = lrg_scripting_manager_get_available (m, &n);
+  if (index < 0 || (guint) index >= n)
+    return NULL;
+  return g_strdup (lrg_scripting_manager_get_display_name (m, a[index]));
+}
+
+/* ── Project + asset database ──────────────────────────────────────── */
+
+/* Create + save a project manifest (project.ryaml) under ROOT. */
+gboolean
+cmacs_libregnum_project_create (const char *root, const char *name,
+                                const char *default_level,
+                                const char *game_output)
+{
+  g_autoptr (LrgProject) p = NULL;
+  g_autoptr (GError) error = NULL;
+  if (!root)
+    return FALSE;
+  p = lrg_project_new (root, name);
+  if (default_level)
+    lrg_project_set_default_level (p, default_level);
+  if (game_output)
+    lrg_project_set_game_output (p, game_output);
+  lrg_project_add_asset_dir (p, "assets");
+  return lrg_project_save (p, &error);
+}
+
+/* Open the project at ROOT and load its default level into the editor. */
+gboolean
+cmacs_libregnum_render_ctx_editor_open_project (CmacsLibregnumRenderCtx *r,
+                                                const char *root)
+{
+  g_autoptr (LrgProject) p = NULL;
+  g_autoptr (GError) error = NULL;
+  const char *lvl;
+  g_autofree char *path = NULL;
+  if (!r || !r->editor || !root)
+    return FALSE;
+  p = lrg_project_open (root, &error);
+  if (!p)
+    return FALSE;
+  lvl = lrg_project_get_default_level (p);
+  if (!lvl || !lvl[0])
+    return FALSE;
+  path = g_build_filename (root, lvl, NULL);
+  if (!lrg_editor_load_level (r->editor, path, &error))
+    return FALSE;
+  cmacs_editor_rebuild (r);
+  return TRUE;
+}
+
+/* Scan DIR into a fresh LrgAssetDatabase (returned as an owned void*). */
+void *
+cmacs_libregnum_assetdb_scan (const char *dir)
+{
+  LrgAssetDatabase *db;
+  g_autoptr (GError) error = NULL;
+  if (!dir)
+    return NULL;
+  db = lrg_asset_database_new ();
+  lrg_asset_database_add_search_dir (db, dir);
+  lrg_asset_database_scan (db, &error);
+  return db;
+}
+
+gint
+cmacs_libregnum_assetdb_count (void *db)
+{
+  return db ? (gint) lrg_asset_database_get_count (LRG_ASSET_DATABASE (db)) : 0;
+}
+
+/* FIELD: 0 path, 1 name, 2 guid -> newly-allocated string (caller frees). */
+char *
+cmacs_libregnum_assetdb_entry (void *db, gint index, gint field)
+{
+  LrgAssetEntry *e;
+  if (!db)
+    return NULL;
+  e = lrg_asset_database_get_entry (LRG_ASSET_DATABASE (db), (guint) index);
+  if (!e)
+    return NULL;
+  switch (field)
+    {
+    case 1:  return g_strdup (lrg_asset_entry_get_name (e));
+    case 2:  return g_strdup (lrg_asset_entry_get_guid (e));
+    default: return g_strdup (lrg_asset_entry_get_path (e));
+    }
+}
+
+gint
+cmacs_libregnum_assetdb_entry_type (void *db, gint index)
+{
+  LrgAssetEntry *e;
+  if (!db)
+    return 0;
+  e = lrg_asset_database_get_entry (LRG_ASSET_DATABASE (db), (guint) index);
+  return e ? (gint) lrg_asset_entry_get_asset_type (e) : 0;
+}
+
+void
+cmacs_libregnum_assetdb_free (void *db)
+{
+  if (db)
+    g_object_unref (db);
+}
+
+/* Set a numeric visual param on node ID (e.g. light "range"/"r"/"g"/"b",
+ * camera "fov", audio "range") + rebuild so the gizmos reflect it. */
+void
+cmacs_libregnum_render_ctx_editor_set_visual_param (CmacsLibregnumRenderCtx *r,
+                                                    gint id, const char *name,
+                                                    double value)
+{
+  LrgNode       *n = cmacs_editor_node_for_id (r, id);
+  LrgNodeVisual *vis;
+  if (!n || !name) return;
+  vis = lrg_node_get_visual (n);
+  if (!vis) return;
+  lrg_node_visual_set_param_double (vis, name, value);
+  cmacs_editor_rebuild (r);
+}
+
+/* Return node ID's visual asset path (sound file / mesh / sprite / tileset) as
+ * a newly-allocated string, or NULL. */
+char *
+cmacs_libregnum_render_ctx_editor_node_asset (CmacsLibregnumRenderCtx *r,
+                                              gint id)
+{
+  LrgNode       *n = cmacs_editor_node_for_id (r, id);
+  LrgNodeVisual *vis;
+  const char    *asset;
+  if (!n) return NULL;
+  vis = lrg_node_get_visual (n);
+  if (!vis) return NULL;
+  asset = lrg_node_visual_get_asset (vis);
+  return (asset && asset[0]) ? g_strdup (asset) : NULL;
+}
+
 #else /* !LRG_BUILD_EDITOR -- stubs so the Lisp layer still links */
 
 gboolean cmacs_libregnum_render_ctx_editor_new (CmacsLibregnumRenderCtx *r)
@@ -2718,6 +3162,41 @@ gboolean cmacs_libregnum_render_ctx_editor_tilemap_info (CmacsLibregnumRenderCtx
          gint id, int *mw, int *mh, int *cols, int *tw, int *th)
 { (void) r; (void) id; (void) mw; (void) mh; (void) cols; (void) tw; (void) th;
   return FALSE; }
+void * cmacs_libregnum_render_ctx_editor_node_object (CmacsLibregnumRenderCtx *r,
+         gint id)
+{ (void) r; (void) id; return NULL; }
+gboolean cmacs_libregnum_render_ctx_editor_save_prefab (CmacsLibregnumRenderCtx *r,
+         gint id, const char *path)
+{ (void) r; (void) id; (void) path; return FALSE; }
+gint cmacs_libregnum_render_ctx_editor_instantiate_prefab (CmacsLibregnumRenderCtx *r,
+         const char *path, gint parent_id)
+{ (void) r; (void) path; (void) parent_id; return -1; }
+gboolean cmacs_libregnum_render_ctx_editor_import_scene (CmacsLibregnumRenderCtx *r,
+         const char *path)
+{ (void) r; (void) path; return FALSE; }
+gint cmacs_libregnum_scripting_language_count (void) { return 0; }
+gint cmacs_libregnum_scripting_language_at (gint index) { (void) index; return -1; }
+char * cmacs_libregnum_scripting_language_name (gint index)
+{ (void) index; return NULL; }
+gboolean cmacs_libregnum_project_create (const char *root, const char *name,
+         const char *default_level, const char *game_output)
+{ (void) root; (void) name; (void) default_level; (void) game_output;
+  return FALSE; }
+gboolean cmacs_libregnum_render_ctx_editor_open_project (CmacsLibregnumRenderCtx *r,
+         const char *root)
+{ (void) r; (void) root; return FALSE; }
+void * cmacs_libregnum_assetdb_scan (const char *dir) { (void) dir; return NULL; }
+gint cmacs_libregnum_assetdb_count (void *db) { (void) db; return 0; }
+char * cmacs_libregnum_assetdb_entry (void *db, gint index, gint field)
+{ (void) db; (void) index; (void) field; return NULL; }
+gint cmacs_libregnum_assetdb_entry_type (void *db, gint index)
+{ (void) db; (void) index; return 0; }
+void cmacs_libregnum_assetdb_free (void *db) { (void) db; }
+void cmacs_libregnum_render_ctx_editor_set_visual_param (CmacsLibregnumRenderCtx *r,
+         gint id, const char *name, double value)
+{ (void) r; (void) id; (void) name; (void) value; }
+char * cmacs_libregnum_render_ctx_editor_node_asset (CmacsLibregnumRenderCtx *r,
+         gint id) { (void) r; (void) id; return NULL; }
 
 #endif /* LRG_BUILD_EDITOR */
 
