@@ -786,5 +786,292 @@ Display-free (no GL)."
             (should (= (plist-get obj :type) 2))))   ;; 2 = MODEL
       (ignore-errors (delete-directory root t)))))
 
+;;; ─── New right-click menu tests (pure, batch-safe) ──────────────────────────
+
+(ert-deftest cmacs-libregnum-tests-context-menu-new-symbols ()
+  "All new helper commands and submenu vars are defined after the expansion."
+  (dolist (fn '(cmacs-libregnum-editor--ctx-set-color
+                cmacs-libregnum-editor--ctx-set-roughness
+                cmacs-libregnum-editor--ctx-set-metallic
+                cmacs-libregnum-editor--ctx-scale-x2
+                cmacs-libregnum-editor--ctx-scale-half
+                cmacs-libregnum-editor--ctx-reset-scale
+                cmacs-libregnum-editor--ctx-set-scale
+                cmacs-libregnum-editor--ctx-drop-to-ground
+                cmacs-libregnum-editor--ctx-snap-to-grid
+                cmacs-libregnum-editor--ctx-reset-position
+                cmacs-libregnum-editor--ctx-duplicate-native
+                cmacs-libregnum-editor--ctx-copy
+                cmacs-libregnum-editor--ctx-cut
+                cmacs-libregnum-editor--ctx-paste
+                cmacs-libregnum-editor--ctx-copy-guid
+                cmacs-libregnum-editor--ctx-reparent-under
+                cmacs-libregnum-editor--ctx-add-child
+                cmacs-libregnum-editor--ctx-add-empty-group-under
+                cmacs-libregnum-editor--ctx-replace-asset
+                cmacs-libregnum-editor--ctx-manage-scripts-items-fn
+                cmacs-libregnum-editor--ctx-set-light-intensity
+                cmacs-libregnum-editor--ctx-align-camera-to-view
+                cmacs-libregnum-editor--ctx-enter-paint-mode
+                cmacs-libregnum-editor--ctx-clear-tilemap
+                cmacs-libregnum-editor--ctx-resize-tilemap
+                cmacs-libregnum-editor--ctx-unpack-prefab
+                cmacs-libregnum-editor--ctx-select-add
+                cmacs-libregnum-editor--ctx-select-remove
+                cmacs-libregnum-editor--ctx-select-clear
+                cmacs-libregnum-editor--ctx-select-parent
+                cmacs-libregnum-editor--ctx-delete-selected
+                cmacs-libregnum-editor--ctx-group-selected))
+    (should (fboundp fn)))
+  ;; New submenu vars.
+  (dolist (v '(cmacs-libregnum-editor-material-menu-items
+               cmacs-libregnum-editor-scale-menu-items
+               cmacs-libregnum-editor-tool-menu-items
+               cmacs-libregnum-editor-light-type-menu-items
+               cmacs-libregnum-editor-selection-menu-items))
+    (should (boundp v))
+    (should (listp (symbol-value v)))))
+
+(ert-deftest cmacs-libregnum-tests-context-menu-new-submenus ()
+  "New submenus are well-formed lists with functionp actions."
+  ;; Material submenu: 3 items (set-color, set-roughness, set-metallic).
+  (let ((acts (delq nil
+                    (mapcar (lambda (it) (plist-get it :action))
+                            cmacs-libregnum-editor-material-menu-items))))
+    (should (= (length acts) 3))
+    (should-not (memq nil (mapcar #'functionp acts))))
+  ;; Scale submenu: 3 action items + sep + 1 action item = 4 actions.
+  (let ((acts (delq nil
+                    (mapcar (lambda (it) (plist-get it :action))
+                            cmacs-libregnum-editor-scale-menu-items))))
+    (should (= (length acts) 4))
+    (should-not (memq nil (mapcar #'functionp acts))))
+  ;; Tool submenu: 4 actions (Translate/Rotate/Scale/Select).
+  (let ((acts (delq nil
+                    (mapcar (lambda (it) (plist-get it :action))
+                            cmacs-libregnum-editor-tool-menu-items))))
+    (should (= (length acts) 4))
+    (should-not (memq nil (mapcar #'functionp acts))))
+  ;; Light-type submenu: 3 actions (Point/Spot/Directional).
+  (let ((acts (delq nil
+                    (mapcar (lambda (it) (plist-get it :action))
+                            cmacs-libregnum-editor-light-type-menu-items))))
+    (should (= (length acts) 3))
+    (should-not (memq nil (mapcar #'functionp acts))))
+  ;; Selection submenu: at least 4 action items.
+  (let ((acts (delq nil
+                    (mapcar (lambda (it) (plist-get it :action))
+                            cmacs-libregnum-editor-selection-menu-items))))
+    (should (>= (length acts) 4))
+    (should-not (memq nil (mapcar #'functionp acts)))))
+
+(ert-deftest cmacs-libregnum-tests-context-menu-per-kind-filter ()
+  "New per-kind items appear only for the expected node kinds."
+  (let ((priml  (cmacs-libregnum-tests--ctx-labels
+                 (cmacs-libregnum-editor--filter-menu-items 'primitive)))
+        (meshl  (cmacs-libregnum-tests--ctx-labels
+                 (cmacs-libregnum-editor--filter-menu-items 'mesh)))
+        (lightl (cmacs-libregnum-tests--ctx-labels
+                 (cmacs-libregnum-editor--filter-menu-items 'light)))
+        (caml   (cmacs-libregnum-tests--ctx-labels
+                 (cmacs-libregnum-editor--filter-menu-items 'camera)))
+        (tilem  (cmacs-libregnum-tests--ctx-labels
+                 (cmacs-libregnum-editor--filter-menu-items 'tilemap)))
+        (audioL (cmacs-libregnum-tests--ctx-labels
+                 (cmacs-libregnum-editor--filter-menu-items 'audio)))
+        (prefabl (cmacs-libregnum-tests--ctx-labels
+                  (cmacs-libregnum-editor--filter-menu-items 'prefab)))
+        (grpl   (cmacs-libregnum-tests--ctx-labels
+                 (cmacs-libregnum-editor--filter-menu-items 'group))))
+    ;; Material shows for primitive and mesh, not for light/camera/audio/group.
+    (should (member "Material" priml))
+    (should (member "Material" meshl))
+    (should-not (member "Material" lightl))
+    (should-not (member "Material" grpl))
+    ;; Replace asset for mesh/sprite/audio only.
+    (should (member "Replace asset…" meshl))
+    (should (member "Replace asset…" audioL))
+    (should-not (member "Replace asset…" priml))
+    (should-not (member "Replace asset…" grpl))
+    ;; Light type submenu only for light.
+    (should (member "Light type" lightl))
+    (should-not (member "Light type" caml))
+    ;; Set intensity only for light.
+    (should (member "Set intensity…" lightl))
+    (should-not (member "Set intensity…" caml))
+    ;; Align to view only for camera.
+    (should (member "Align to view" caml))
+    (should-not (member "Align to view" lightl))
+    ;; Tilemap specific items.
+    (should (member "Enter paint mode" tilem))
+    (should (member "Clear tilemap" tilem))
+    (should (member "Resize tilemap…" tilem))
+    (should-not (member "Enter paint mode" grpl))
+    ;; Prefab: unpack only for prefab.
+    (should (member "Unpack prefab" prefabl))
+    (should-not (member "Unpack prefab" grpl))
+    ;; Common items appear everywhere.
+    (should (member "Duplicate" grpl))
+    (should (member "Scale" grpl))
+    (should (member "Tool" grpl))
+    (should (member "Select" grpl))
+    (should (member "Drop to ground" grpl))
+    (should (member "Snap to grid" grpl))
+    (should (member "Reset position" grpl))
+    (should (member "Reparent under…" grpl))
+    (should (member "Copy GUID" grpl))
+    (should (member "Manage scripts" grpl))))
+
+(ert-deftest cmacs-libregnum-tests-context-menu-keymap-new-items ()
+  "New items/submenus are reachable in the built keymap for every kind."
+  (dolist (ksym '(group primitive mesh light camera audio tilemap sprite prefab))
+    (let* ((items  (cmacs-libregnum-editor--filter-menu-items ksym))
+           (km     (cmacs-libregnum-editor--menu-keymap
+                    items (current-buffer) 0))
+           (leaves (cmacs-libregnum-tests--menu-keymap-leaves km))
+           (labels (mapcar #'car leaves)))
+      (should (keymapp km))
+      ;; All leaf bindings must be callable.
+      (should-not (memq nil (mapcar (lambda (l) (functionp (cdr l))) leaves)))
+      ;; Common items.
+      (should (member "Drop to ground" labels))
+      (should (member "Snap to grid" labels))
+      (should (member "Reset position" labels))
+      (should (member "Copy GUID" labels))
+      (should (member "Translate" labels))   ; from Tool submenu
+      (should (member "Add to selection" labels))  ; from Select submenu
+      ;; Scale submenu.
+      (should (member "2×" labels))
+      (should (member "0.5×" labels))
+      (should (member "Reset scale" labels))
+      (should (member "Set scale…" labels)))))
+
+(ert-deftest cmacs-libregnum-tests-context-menu-enable-keys ()
+  "The :enable and :keys fields round-trip through --menu-keymap build."
+  ;; Build a minimal item list with :enable and :keys.
+  (let* ((pred-called nil)
+         (items
+          `((:label "With Enable"
+             :kinds t
+             :action ,(lambda (_b _i) t)
+             :enable ,(lambda (_b _i) (setq pred-called t) t)
+             :keys "x")
+            (:label "Always On"
+             :kinds t
+             :action ,(lambda (_b _i) t))))
+         (km    (cmacs-libregnum-editor--menu-keymap
+                 items (current-buffer) 0))
+         (leaves (cmacs-libregnum-tests--menu-keymap-leaves km)))
+    ;; Keymap builds without error.
+    (should (keymapp km))
+    ;; The :enable pred was called during build.
+    (should pred-called)
+    ;; Both items are reachable as callable leaves.
+    (should (member "With Enable" (mapcar #'car leaves)))
+    (should (member "Always On"   (mapcar #'car leaves)))))
+
+(ert-deftest cmacs-libregnum-tests-context-menu-items-fn ()
+  "A dynamic :items-fn entry builds a nested sub-keymap at pop time."
+  (let* ((called-with nil)
+         (stub-fn (lambda (buf id)
+                    (setq called-with (list buf id))
+                    `((:label "Dyn item A"
+                       :action ,(lambda (_b _i) 'a))
+                      (:label "Dyn item B"
+                       :action ,(lambda (_b _i) 'b)))))
+         (items
+          `((:label "Manage scripts"
+             :kinds t
+             :items-fn ,stub-fn)
+            (:label "Static"
+             :kinds t
+             :action ,(lambda (_b _i) t))))
+         (km (cmacs-libregnum-editor--menu-keymap
+              items (current-buffer) 42))
+         (leaves (cmacs-libregnum-tests--menu-keymap-leaves km)))
+    ;; stub-fn was called with (current-buffer) and id 42.
+    (should (equal called-with (list (current-buffer) 42)))
+    ;; Dynamic items appear as leaves.
+    (should (member "Dyn item A" (mapcar #'car leaves)))
+    (should (member "Dyn item B" (mapcar #'car leaves)))
+    ;; Static item also present.
+    (should (member "Static" (mapcar #'car leaves)))))
+
+(ert-deftest cmacs-libregnum-tests-context-menu-clipboard ()
+  "Clipboard defvar exists and starts nil; --ctx-paste guards when empty."
+  (should (boundp 'cmacs-libregnum-editor--clipboard))
+  (let ((cmacs-libregnum-editor--clipboard nil))
+    ;; Paste with empty clipboard signals user-error.
+    (should-error
+     (cmacs-libregnum-editor--ctx-paste (current-buffer) 0)
+     :type 'user-error)))
+
+(ert-deftest cmacs-libregnum-tests-context-menu-outliner-cmd ()
+  "The outliner context-menu command is defined and bound."
+  (should (fboundp 'cmacs-libregnum-outliner-context-menu))
+  (should (keymapp cmacs-libregnum-outliner-mode-map))
+  (should (commandp (lookup-key cmacs-libregnum-outliner-mode-map
+                                [mouse-3])))
+  (should (commandp (lookup-key cmacs-libregnum-outliner-mode-map
+                                [down-mouse-3]))))
+
+(ert-deftest cmacs-libregnum-tests-context-menu-by-node-extended ()
+  "Display-guarded: new filter items appear per-kind via real node-kind."
+  (cmacs-libregnum-tests--gl-skip-or)
+  (let ((buf (generate-new-buffer "*cmacs-lrg ext ctx test*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (cmacs-libregnum-editor-mode)
+          (should (cmacs-libregnum-editor-new buf))
+          (let* ((prim  (cmacs-libregnum-editor-add-primitive
+                         buf cmacs-libregnum-primitive-cube "P"))
+                 (light (cmacs-libregnum-editor-add-visual
+                         buf cmacs-libregnum-visual-light "L"))
+                 (mesh  (cmacs-libregnum-editor-add-visual
+                         buf cmacs-libregnum-visual-mesh-asset "M"))
+                 (cam   (cmacs-libregnum-editor-add-visual
+                         buf cmacs-libregnum-visual-camera "C"))
+                 (priml (cmacs-libregnum-tests--ctx-labels
+                         (cmacs-libregnum-editor--filter-menu-items
+                          (cmacs-libregnum-editor--kind-symbol
+                           (cmacs-libregnum-editor-node-kind buf prim)))))
+                 (lightl (cmacs-libregnum-tests--ctx-labels
+                          (cmacs-libregnum-editor--filter-menu-items
+                           (cmacs-libregnum-editor--kind-symbol
+                            (cmacs-libregnum-editor-node-kind buf light)))))
+                 (meshl (cmacs-libregnum-tests--ctx-labels
+                         (cmacs-libregnum-editor--filter-menu-items
+                          (cmacs-libregnum-editor--kind-symbol
+                           (cmacs-libregnum-editor-node-kind buf mesh)))))
+                 (caml  (cmacs-libregnum-tests--ctx-labels
+                         (cmacs-libregnum-editor--filter-menu-items
+                          (cmacs-libregnum-editor--kind-symbol
+                           (cmacs-libregnum-editor-node-kind buf cam))))))
+            (ignore prim light mesh cam)
+            ;; Material for primitive and mesh.
+            (should (member "Material" priml))
+            (should (member "Material" meshl))
+            (should-not (member "Material" lightl))
+            ;; Light type for light, align-to-view for camera.
+            (should (member "Light type" lightl))
+            (should (member "Set intensity…" lightl))
+            (should (member "Align to view" caml))
+            ;; Replace asset for mesh but not primitive.
+            (should (member "Replace asset…" meshl))
+            (should-not (member "Replace asset…" priml))
+            ;; Keymap for every kind builds without error.
+            (dolist (id (list prim light mesh cam))
+              (let* ((ksym (cmacs-libregnum-editor--kind-symbol
+                             (cmacs-libregnum-editor-node-kind buf id)))
+                     (items (cmacs-libregnum-editor--filter-menu-items ksym))
+                     (km    (cmacs-libregnum-editor--menu-keymap
+                             items buf id)))
+                (should (keymapp km))
+                (let ((leaves (cmacs-libregnum-tests--menu-keymap-leaves km)))
+                  (should-not (memq nil
+                                    (mapcar (lambda (l) (functionp (cdr l)))
+                                            leaves))))))))
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+
 (provide 'cmacs-libregnum-tests)
 ;;; cmacs-libregnum-tests.el ends here

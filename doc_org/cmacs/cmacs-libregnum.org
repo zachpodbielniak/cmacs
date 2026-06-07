@@ -720,20 +720,84 @@ rotate/scale gizmo handles and play-in-editor remain planned (see below).
   The menu is *data-driven and easy to extend*: it is built from the
   =cmacs-libregnum-editor-context-menu-items= list, where each entry is a plist —
   =(:label STRING :kinds KINDS :action FN)= for a command,
-  =(:label STRING :kinds KINDS :submenu SYMBOL)= for a submenu (SYMBOL names a
-  list of sub-items in the same shape, e.g.
-  =cmacs-libregnum-editor-rotate-menu-items=), or =(:sep)= for a divider.
-  =KINDS= is =t= (all kinds) or a list of node-kind symbols (=group=,
-  =primitive=, =mesh=, =sprite=, =tilemap=, =light=, =camera=, =audio=,
-  =prefab=), and =FN= is called as =(FN BUFFER ID)= on the right-clicked node.
-  *Adding an item — or a whole submenu — is a one-line edit*; no other code
-  changes.  The node's kind comes from the
+  =(:label STRING :kinds KINDS :submenu SYMBOL)= for a static submenu (SYMBOL
+  names a list of sub-items in the same shape, e.g.
+  =cmacs-libregnum-editor-rotate-menu-items=),
+  =(:label STRING :kinds KINDS :items-fn FN)= for a *dynamic* submenu (=FN= is
+  called as =(FN BUFFER ID)= to build the item list at pop time — used by the
+  scripts submenu to reflect the node's current attachment list), or =(:sep)= for
+  a divider.  Items may carry =:enable PRED= (a predicate called as =(PRED BUFFER
+  ID)= to grey-out inapplicable entries) and =:keys STRING= to show a keyboard
+  accelerator.  =KINDS= is =t= (all kinds) or a list of node-kind symbols
+  (=group=, =primitive=, =mesh=, =sprite=, =tilemap=, =light=, =camera=,
+  =audio=, =prefab=), and action =FN= is called as =(FN BUFFER ID)= on the
+  right-clicked node.  *Adding an item — or a whole submenu — is a one-line
+  edit*; no other code changes.  The node's kind comes from the
   =cmacs-libregnum-editor-node-kind= DEFUN (an int matching the
   =cmacs-libregnum-visual-*= constants, =1= = a primitive, =nil= = a group node).
   The menu is a keymap (so submenus are native), popped with =x-popup-menu= and
   resolved with =lookup-key=.  Like the Emacs =drag-mouse-1= path, this needs
   *no* upstream pgtk change: it rides the existing libregnum button hook in
-  =src/pgtkterm.c= and reuses Emacs's own menu machinery.
+  =src/pgtkterm.c= and reuses Emacs's own menu machinery.  The menu header shows
+  the right-clicked node's label.  The same menu is available by right-clicking a
+  row in the *outliner* panel, not only in the 3-D viewport.
+
+  *Expanded common items (all kinds)* — the set of actions every node receives
+  was enlarged:
+
+  - *Scale ▸* submenu — *2×*, *½×*, *Reset scale*, *Set scale…* (prompted).
+  - *Drop to ground* — snaps the node's Y position to the ground plane.
+  - *Snap to grid* — rounds the position to the current grid size.
+  - *Reset position* — zeroes the node's translation.
+  - *Tool ▸* submenu — switch the active gizmo to *Translate*, *Rotate*,
+    *Scale*, or *Select* without leaving the menu.
+  - *Cut* / *Copy* / *Paste* — clipboard operations via a temporary prefab;
+    *Copy GUID* copies the node's identifier string.
+  - *Reparent under…* — interactively pick a new parent node (complements the
+    existing *Reparent to root*).
+  - *Add child ▸* — add a new primitive or group directly under this node.
+  - *Add empty group* — inserts a bare group node as a child.
+    DEFUNs: =cmacs-libregnum-editor-node-parent=,
+    =cmacs-libregnum-editor-add-empty=.
+  - *Select ▸* submenu — *Add to selection*, *Remove from selection*, *Clear
+    selection*, *Select parent* — backed by the engine's =LrgEditorSelection=
+    and the new DEFUNs =cmacs-libregnum-editor-select-add= /
+    =-select-remove= / =-select-clear= / =-selected-ids=.
+
+  *Appearance (primitive / mesh kinds)* — a *Material ▸* submenu lets you *Set
+  color* (=cmacs-libregnum-editor-set-color=), *Set roughness*
+  (=-set-roughness=), and *Set metallic* (=-set-metallic=), written through the
+  node's =LrgMaterial3D=.  The bake now honours a node's authored material colour
+  instead of a fixed per-kind colour (=cmacs-libregnum-editor-node-color= reads it
+  back).
+
+  *Duplicate* now performs a native engine deep-clone (fresh GUIDs for the
+  entire subtree) placed under the original node's parent, replacing the older
+  temp-prefab path.  DEFUN: =cmacs-libregnum-editor-duplicate-node=.
+
+  *Manage scripts ▸* — a dynamic submenu (=:items-fn=) that lists each script
+  currently attached to the node with *Edit* and *Detach* sub-actions
+  (=cmacs-libregnum-editor-node-scripts= /​ =-detach-script=), plus *Attach
+  new…* and *Attach existing…* (the existing paths, now also reachable here).
+
+  *Per-kind additions:*
+
+  - *light* — *Set intensity* (=cmacs-libregnum-editor-set-light=) and a *Light
+    type ▸* submenu to switch between *Point*, *Spot*, and *Directional*.
+  - *camera* — *Align to current view* (=cmacs-libregnum-camera-state=) snaps
+    the camera node's transform to the live viewport camera pose.
+  - *audio*, *mesh*, *sprite* — *Replace asset* (=-set-node-asset=) lets you
+    swap the underlying asset file without recreating the node.
+  - *tilemap* — *Enter paint mode*, *Clear*, and *Resize* (in addition to the
+    existing *Set tilemap brush*).
+  - *prefab* — *Unpack* (=cmacs-libregnum-unpack-prefab=) expands the prefab
+    instance into a plain node subtree in place.
+
+  *Multi-selection* — the engine =LrgEditorSelection= is exposed as Lisp:
+  =cmacs-libregnum-editor-select-add= /​ =-select-remove= /​ =-select-clear= /
+  =-selected-ids=.  Several nodes can be selected (each draws its own wireframe)
+  and acted on together; the menu offers *Delete selected* and *Group selected*
+  when a multi-selection is active.
 - *Tilemaps — paint, render, persist* — =T= (=cmacs-libregnum-editor-tilemap-create=)
   makes a TILEMAP node from a tileset image + tile/map dimensions;
   =cmacs-libregnum-editor-tilemap-paint= arms a sticky brush so each viewport
@@ -851,6 +915,27 @@ One item remains:
   but do not yet *illuminate* meshes / drive a camera-preview render / spatialise
   audio; real-time 3-D lighting is a dedicated shader pass on the engine
   renderer (the largest remaining item).
+
+*** Context-menu items deliberately deferred
+
+The following actions were considered for the right-click context menu during the
+expansion pass and left for engine-level work rather than Lisp wiring:
+
+- *Look-through camera* — rendering a picture-in-picture preview from a camera
+  node's point of view requires a secondary FBO render pass driven by the
+  camera's transform; that is part of the full scene-shading work above.
+- *Audio volume / stop* — no engine playback handle is available from the Lisp
+  side; audio playback is delegated to Emacs =play-sound-file=, which returns
+  immediately and does not expose a stop or volume knob.  Proper volume/stop
+  control needs a GStreamer pipeline handle in the C layer.
+- *Wireframe / cast-shadow material flags* — the =LrgMaterial3D= colour,
+  roughness, and metallic fields are wired; per-material wireframe override and
+  shadow-cast toggles exist in the engine data model but are not yet surfaced as
+  =LrgMaterial3D= GObject properties, so there is no DEFUN to call.
+- *Full real-time scene shading* — lights illuminating meshes via a GLSL shader
+  pass; same as the "Planned" item above, listed here to record that it was
+  considered as a menu affordance (*Preview shading* toggle) and deferred along
+  with the renderer work.
 
 * See also
 

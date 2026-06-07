@@ -372,5 +372,58 @@ extern void     cmacs_libregnum_render_ctx_editor_set_name
                               (CmacsLibregnumRenderCtx *r, gint node_id,
                                const char *name);
 
+/* Material / color authoring (floats 0..1).  Returns FALSE if the node or
+ * its visual is absent.  set_color creates a material when one is missing. */
+extern gboolean cmacs_libregnum_render_ctx_editor_set_color
+                              (CmacsLibregnumRenderCtx *r, gint node_id,
+                               float fr, float fg, float fb, float fa);
+extern gboolean cmacs_libregnum_render_ctx_editor_node_color
+                              (CmacsLibregnumRenderCtx *r, gint node_id,
+                               float *fr, float *fg,
+                               float *fb, float *fa);
+extern gboolean cmacs_libregnum_render_ctx_editor_set_roughness
+                              (CmacsLibregnumRenderCtx *r, gint node_id,
+                               float v);
+extern gboolean cmacs_libregnum_render_ctx_editor_set_metallic
+                              (CmacsLibregnumRenderCtx *r, gint node_id,
+                               float v);
+
+/* Clone / hierarchy. */
+extern gint     cmacs_libregnum_render_ctx_editor_duplicate_node
+                              (CmacsLibregnumRenderCtx *r, gint node_id);
+extern gint     cmacs_libregnum_render_ctx_editor_node_parent
+                              (CmacsLibregnumRenderCtx *r, gint node_id);
+extern gint     cmacs_libregnum_render_ctx_editor_add_empty
+                              (CmacsLibregnumRenderCtx *r, const char *name,
+                               gint parent_id);
+
+/* Scripts: node_scripts returns a borrowed GPtrArray of LrgScriptBinding*;
+ * detach_script removes the INDEXth binding (0-based). */
+extern GPtrArray *cmacs_libregnum_render_ctx_editor_node_scripts
+                              (CmacsLibregnumRenderCtx *r, gint node_id);
+extern gboolean cmacs_libregnum_render_ctx_editor_detach_script
+                              (CmacsLibregnumRenderCtx *r, gint node_id,
+                               gint index);
+
+/* Asset: set the visual asset path on NODE_ID. */
+extern gboolean cmacs_libregnum_render_ctx_editor_set_node_asset
+                              (CmacsLibregnumRenderCtx *r, gint node_id,
+                               const char *asset);
+
+/* Unpack prefab: strip the visual (leaves a group). */
+extern gboolean cmacs_libregnum_render_ctx_editor_unpack_prefab
+                              (CmacsLibregnumRenderCtx *r, gint node_id);
+
+/* Multi-select: additive add/remove/clear; selected_ids returns a
+ * transfer-full GArray of gint that the caller g_array_unref()s. */
+extern gboolean cmacs_libregnum_render_ctx_editor_select_add
+                              (CmacsLibregnumRenderCtx *r, gint node_id);
+extern gboolean cmacs_libregnum_render_ctx_editor_select_remove
+                              (CmacsLibregnumRenderCtx *r, gint node_id);
+extern void     cmacs_libregnum_render_ctx_editor_select_clear
+                              (CmacsLibregnumRenderCtx *r);
+extern GArray  *cmacs_libregnum_render_ctx_editor_selected_ids
+                              (CmacsLibregnumRenderCtx *r);
+
 #endif /* HAVE_CMACS_LIBREGNUM */
 #endif /* CMACS_LIBREGNUM_RENDER_H */

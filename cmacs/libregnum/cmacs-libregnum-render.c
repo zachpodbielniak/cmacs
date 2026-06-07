@@ -826,6 +826,8 @@ cmacs_libregnum_render_ctx_game_mouse_button (CmacsLibregnumRenderCtx *r,
  * cairo matrix, so there is no CPU row-flip or channel-swap here. */
 #ifdef LRG_BUILD_EDITOR
 static void cmacs_editor_draw_gizmo (CmacsLibregnumRenderCtx *r);
+static gint cmacs_editor_id_for_node (CmacsLibregnumRenderCtx *r,
+                                      LrgNode *node);
 #endif
 gboolean
 cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
@@ -1007,12 +1009,23 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
                   {
                     float rng = (float)
                       lrg_node_visual_get_param_double (lv, "range", 4.0);
+                    /* Optional "intensity" param scales the sphere radius
+                     * and the alpha of the gizmo color so authored
+                     * intensity changes are visible while editing. */
+                    float intensity = (float)
+                      lrg_node_visual_get_param_double (lv, "intensity", 1.0);
+                    if (intensity < 0.0f) intensity = 0.0f;
+                    if (intensity > 8.0f) intensity = 8.0f;
+                    float viz_rng = rng * (intensity > 0.0f
+                                          ? fmaxf (0.25f, intensity) : 0.25f);
+                    guint8 viz_a = (guint8)(int)
+                      fminf (255.0f, 60.0f + intensity * 30.0f);
                     Color lc = {
                       (guint8)(int) lrg_node_visual_get_param_double (lv, "r", 250.0),
                       (guint8)(int) lrg_node_visual_get_param_double (lv, "g", 240.0),
                       (guint8)(int) lrg_node_visual_get_param_double (lv, "b", 140.0),
-                      120 };
-                    DrawSphereWires (p, rng, 6, 8, lc);
+                      viz_a };
+                    DrawSphereWires (p, viz_rng, 6, 8, lc);
                   }
                 else if (lk == LRG_NODE_VISUAL_AUDIO_EMITTER)
                   {
@@ -1053,9 +1066,56 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
               }
           }
 #endif
-        /* Selection highlight: a bright wireframe box around the
-         * selected node, drawn in the same 3D layer so it depth-sorts
-         * against the scene. */
+        /* Selection highlight: wireframe boxes around selected nodes.
+         * In editor mode, draw ALL nodes in the multi-selection (dimmer
+         * color), plus a bright box around the primary (r->selected).
+         * Outside the editor use the single-select path. */
+#ifdef LRG_BUILD_EDITOR
+        if (r->editor && r->nodes)
+          {
+            LrgEditorSelection *esel =
+              lrg_editor_get_selection (r->editor);
+            GPtrArray *snodes =
+              lrg_editor_selection_get_nodes (esel);
+            if (snodes && snodes->len > 0)
+              {
+                guint si;
+                for (si = 0; si < snodes->len; si++)
+                  {
+                    LrgNode *sn =
+                      (LrgNode *) g_ptr_array_index (snodes, si);
+                    gint sid = cmacs_editor_id_for_node (r, sn);
+                    if (sid < 0 || (guint) sid >= r->nodes->len)
+                      continue;
+                    CmacsNode *cn = &g_array_index (r->nodes, CmacsNode,
+                                                    (guint) sid);
+                    Vector3 cv = (Vector3){ cn->x, cn->y, cn->z };
+                    /* Primary = bright yellow; others = pale cyan. */
+                    Color wc = (sid == r->selected)
+                               ? (Color){ 255, 235, 120, 255 }
+                               : (Color){ 130, 220, 245, 180 };
+                    DrawCubeWires (cv,
+                                   cn->hw * 2 + 0.35f,
+                                   cn->hh * 2 + 0.35f,
+                                   cn->hd * 2 + 0.35f, wc);
+                  }
+              }
+            else if (r->selected >= 0
+                     && (guint) r->selected < r->nodes->len)
+              {
+                /* Fallback: selection set empty but r->selected is set
+                 * (non-editor pick or pre-rebuild state). */
+                CmacsNode *n = &g_array_index (r->nodes, CmacsNode,
+                                               (guint) r->selected);
+                Vector3 c = (Vector3){ n->x, n->y, n->z };
+                DrawCubeWires (c, n->hw * 2 + 0.35f,
+                               n->hh * 2 + 0.35f,
+                               n->hd * 2 + 0.35f,
+                               (Color){ 255, 235, 120, 255 });
+              }
+          }
+        else
+#endif
         if (r->selected >= 0 && r->nodes
             && (guint) r->selected < r->nodes->len)
           {
@@ -1332,6 +1392,21 @@ cmacs_editor_bake_node (CmacsLibregnumRenderCtx *r, LrgNode *node,
     case LRG_NODE_VISUAL_AUDIO_EMITTER:   cr = 160; cg = 200; cb = 220; break;
     case LRG_NODE_VISUAL_PREFAB_INSTANCE: cr = 220; cg = 160; cb = 200; break;
     default:                              cr = 170; cg = 170; cb = 180; break;
+    }
+
+  /* If the visual has a material, use its color instead of the per-kind
+   * default so "Set color" authoring is immediately visible. */
+  if (vis)
+    {
+      LrgMaterial3D *mat = lrg_node_visual_get_material (vis);
+      if (mat)
+        {
+          gfloat mr, mg, mb, ma;
+          lrg_material3d_get_color (mat, &mr, &mg, &mb, &ma);
+          cr = (guint8)(int)(mr * 255.0f + 0.5f);
+          cg = (guint8)(int)(mg * 255.0f + 0.5f);
+          cb = (guint8)(int)(mb * 255.0f + 0.5f);
+        }
     }
 
   /* Build the matching drawable + bounding box.  Each primitive maps to its
@@ -3091,6 +3166,289 @@ cmacs_libregnum_render_ctx_editor_set_name (CmacsLibregnumRenderCtx *r,
   cmacs_editor_rebuild (r);
 }
 
+/* ── Material / color API ───────────────────────────────────────────── */
+
+/* Set or create a material on NODE_ID's visual and apply the given color. */
+gboolean
+cmacs_libregnum_render_ctx_editor_set_color (CmacsLibregnumRenderCtx *r,
+                                             gint id,
+                                             float fr, float fg,
+                                             float fb, float fa)
+{
+  LrgNode      *n   = cmacs_editor_node_for_id (r, id);
+  LrgNodeVisual *vis;
+  LrgMaterial3D *mat;
+  if (!n || !r->editor) return FALSE;
+  vis = lrg_node_get_visual (n);
+  if (!vis) return FALSE;
+  mat = lrg_node_visual_get_material (vis);
+  if (!mat)
+    {
+      mat = lrg_material3d_new_with_color (fr, fg, fb, fa);
+      lrg_node_visual_set_material (vis, mat);
+      g_object_unref (mat);
+    }
+  else
+    lrg_material3d_set_color (mat, fr, fg, fb, fa);
+  cmacs_editor_rebuild (r);
+  return TRUE;
+}
+
+/* Get the material color of NODE_ID's visual; return FALSE if no material. */
+gboolean
+cmacs_libregnum_render_ctx_editor_node_color (CmacsLibregnumRenderCtx *r,
+                                              gint id,
+                                              float *fr, float *fg,
+                                              float *fb, float *fa)
+{
+  LrgNode       *n   = cmacs_editor_node_for_id (r, id);
+  LrgNodeVisual *vis;
+  LrgMaterial3D *mat;
+  if (!n) return FALSE;
+  vis = lrg_node_get_visual (n);
+  if (!vis) return FALSE;
+  mat = lrg_node_visual_get_material (vis);
+  if (!mat) return FALSE;
+  lrg_material3d_get_color (mat, fr, fg, fb, fa);
+  return TRUE;
+}
+
+/* Set the roughness of NODE_ID's material. */
+gboolean
+cmacs_libregnum_render_ctx_editor_set_roughness (CmacsLibregnumRenderCtx *r,
+                                                 gint id, float v)
+{
+  LrgNode       *n   = cmacs_editor_node_for_id (r, id);
+  LrgNodeVisual *vis;
+  LrgMaterial3D *mat;
+  if (!n || !r->editor) return FALSE;
+  vis = lrg_node_get_visual (n);
+  if (!vis) return FALSE;
+  mat = lrg_node_visual_get_material (vis);
+  if (!mat)
+    {
+      mat = lrg_material3d_new ();
+      lrg_node_visual_set_material (vis, mat);
+      g_object_unref (mat);
+      mat = lrg_node_visual_get_material (vis);
+    }
+  lrg_material3d_set_roughness (mat, v);
+  cmacs_editor_rebuild (r);
+  return TRUE;
+}
+
+/* Set the metallic of NODE_ID's material. */
+gboolean
+cmacs_libregnum_render_ctx_editor_set_metallic (CmacsLibregnumRenderCtx *r,
+                                                gint id, float v)
+{
+  LrgNode       *n   = cmacs_editor_node_for_id (r, id);
+  LrgNodeVisual *vis;
+  LrgMaterial3D *mat;
+  if (!n || !r->editor) return FALSE;
+  vis = lrg_node_get_visual (n);
+  if (!vis) return FALSE;
+  mat = lrg_node_visual_get_material (vis);
+  if (!mat)
+    {
+      mat = lrg_material3d_new ();
+      lrg_node_visual_set_material (vis, mat);
+      g_object_unref (mat);
+      mat = lrg_node_visual_get_material (vis);
+    }
+  lrg_material3d_set_metallic (mat, v);
+  cmacs_editor_rebuild (r);
+  return TRUE;
+}
+
+/* ── Clone / hierarchy ──────────────────────────────────────────────── */
+
+/* Deep-clone NODE_ID under its current parent; return the new node id. */
+gint
+cmacs_libregnum_render_ctx_editor_duplicate_node (CmacsLibregnumRenderCtx *r,
+                                                  gint id)
+{
+  LrgNode *n      = cmacs_editor_node_for_id (r, id);
+  LrgNode *parent;
+  LrgNode *clone;
+  LrgNode *sel;
+  if (!n || !r->editor) return -1;
+  parent = lrg_node_get_parent (n);
+  clone  = lrg_prefab_clone (n);   /* transfer full; parentless */
+  lrg_editor_add_node (r->editor, clone, parent);
+  g_object_unref (clone);
+  cmacs_editor_rebuild (r);
+  sel = lrg_editor_selection_get_primary (lrg_editor_get_selection (r->editor));
+  return cmacs_editor_id_for_node (r, sel);
+}
+
+/* Return the editor id of NODE_ID's parent, or -1 for the level root. */
+gint
+cmacs_libregnum_render_ctx_editor_node_parent (CmacsLibregnumRenderCtx *r,
+                                               gint id)
+{
+  LrgNode *n      = cmacs_editor_node_for_id (r, id);
+  LrgNode *parent;
+  if (!n) return -1;
+  parent = lrg_node_get_parent (n);
+  if (!parent) return -1;
+  /* The root node itself is the direct child of the level: if the parent is
+   * not in the baked map it is the invisible level root. */
+  return cmacs_editor_id_for_node (r, parent);
+}
+
+/* Add an empty group node under PARENT_ID (-1 = level root). */
+gint
+cmacs_libregnum_render_ctx_editor_add_empty (CmacsLibregnumRenderCtx *r,
+                                             const char *name,
+                                             gint parent_id)
+{
+  LrgNode *node;
+  LrgNode *parent;
+  LrgNode *sel;
+  if (!r || !r->editor) return -1;
+  node   = lrg_node_new (name ? name : "Group");
+  parent = (parent_id >= 0) ? cmacs_editor_node_for_id (r, parent_id) : NULL;
+  lrg_editor_add_node (r->editor, node, parent);
+  g_object_unref (node);
+  cmacs_editor_rebuild (r);
+  sel = lrg_editor_selection_get_primary (lrg_editor_get_selection (r->editor));
+  return cmacs_editor_id_for_node (r, sel);
+}
+
+/* ── Scripts ────────────────────────────────────────────────────────── */
+
+/* Return the number of script bindings on NODE_ID.  (Same as the existing
+ * node_script_count but defined here for symmetry with detach below.) */
+
+/* Detach the INDEXth script binding from NODE_ID. */
+gboolean
+cmacs_libregnum_render_ctx_editor_detach_script (CmacsLibregnumRenderCtx *r,
+                                                 gint id, gint index)
+{
+  LrgNode   *n = cmacs_editor_node_for_id (r, id);
+  GPtrArray *s;
+  if (!n || !r->editor) return FALSE;
+  s = lrg_node_get_scripts (n);
+  if (!s || index < 0 || (guint) index >= s->len) return FALSE;
+  g_ptr_array_remove_index (s, (guint) index);
+  cmacs_editor_rebuild (r);
+  return TRUE;
+}
+
+/* Return the script bindings of NODE_ID as a list (language, path, enabled)
+ * triples.  Caller uses the returned GPtrArray directly (borrowed); the
+ * calling DEFUN iterates and builds Lisp. */
+GPtrArray *
+cmacs_libregnum_render_ctx_editor_node_scripts (CmacsLibregnumRenderCtx *r,
+                                                gint id)
+{
+  LrgNode *n = cmacs_editor_node_for_id (r, id);
+  if (!n) return NULL;
+  return lrg_node_get_scripts (n);
+}
+
+/* ── Asset ──────────────────────────────────────────────────────────── */
+
+/* Set NODE_ID's visual asset path. */
+gboolean
+cmacs_libregnum_render_ctx_editor_set_node_asset (CmacsLibregnumRenderCtx *r,
+                                                  gint id, const char *asset)
+{
+  LrgNode       *n   = cmacs_editor_node_for_id (r, id);
+  LrgNodeVisual *vis;
+  if (!n || !r->editor) return FALSE;
+  vis = lrg_node_get_visual (n);
+  if (!vis) return FALSE;
+  lrg_node_visual_set_asset (vis, asset);
+  cmacs_editor_rebuild (r);
+  return TRUE;
+}
+
+/* ── Unpack prefab ──────────────────────────────────────────────────── */
+
+/* Strip the visual from NODE_ID, leaving a plain group. */
+gboolean
+cmacs_libregnum_render_ctx_editor_unpack_prefab (CmacsLibregnumRenderCtx *r,
+                                                 gint id)
+{
+  LrgNode *n = cmacs_editor_node_for_id (r, id);
+  if (!n || !r->editor) return FALSE;
+  lrg_node_set_visual (n, NULL);
+  cmacs_editor_rebuild (r);
+  return TRUE;
+}
+
+/* ── Multi-select ───────────────────────────────────────────────────── */
+
+/* Add NODE_ID to the engine selection (additive). */
+gboolean
+cmacs_libregnum_render_ctx_editor_select_add (CmacsLibregnumRenderCtx *r,
+                                              gint id)
+{
+  LrgNode            *n   = cmacs_editor_node_for_id (r, id);
+  LrgEditorSelection *sel;
+  if (!n || !r->editor) return FALSE;
+  sel = lrg_editor_get_selection (r->editor);
+  lrg_editor_selection_add (sel, n);
+  /* Keep r->selected in sync with the new primary. */
+  {
+    LrgNode *prim = lrg_editor_selection_get_primary (sel);
+    r->selected = prim ? cmacs_editor_id_for_node (r, prim) : -1;
+  }
+  return TRUE;
+}
+
+/* Remove NODE_ID from the engine selection. */
+gboolean
+cmacs_libregnum_render_ctx_editor_select_remove (CmacsLibregnumRenderCtx *r,
+                                                 gint id)
+{
+  LrgNode            *n   = cmacs_editor_node_for_id (r, id);
+  LrgEditorSelection *sel;
+  if (!n || !r->editor) return FALSE;
+  sel = lrg_editor_get_selection (r->editor);
+  lrg_editor_selection_remove (sel, n);
+  {
+    LrgNode *prim = lrg_editor_selection_get_primary (sel);
+    r->selected = prim ? cmacs_editor_id_for_node (r, prim) : -1;
+  }
+  return TRUE;
+}
+
+/* Clear the entire engine selection. */
+void
+cmacs_libregnum_render_ctx_editor_select_clear (CmacsLibregnumRenderCtx *r)
+{
+  if (!r || !r->editor) return;
+  lrg_editor_selection_clear (lrg_editor_get_selection (r->editor));
+  r->selected = -1;
+}
+
+/* Return the selected node ids from the engine selection as a GArray of gint.
+ * Transfer-full; caller g_array_unref(). */
+GArray *
+cmacs_libregnum_render_ctx_editor_selected_ids (CmacsLibregnumRenderCtx *r)
+{
+  GArray             *out;
+  LrgEditorSelection *sel;
+  GPtrArray          *nodes;
+  guint               i;
+  out = g_array_new (FALSE, FALSE, sizeof (gint));
+  if (!r || !r->editor) return out;
+  sel   = lrg_editor_get_selection (r->editor);
+  nodes = lrg_editor_selection_get_nodes (sel);
+  if (!nodes) return out;
+  for (i = 0; i < nodes->len; i++)
+    {
+      gint nid = cmacs_editor_id_for_node (r,
+                   (LrgNode *) g_ptr_array_index (nodes, i));
+      if (nid >= 0)
+        g_array_append_val (out, nid);
+    }
+  return out;
+}
+
 #else /* !LRG_BUILD_EDITOR -- stubs so the Lisp layer still links */
 
 gboolean cmacs_libregnum_render_ctx_editor_new (CmacsLibregnumRenderCtx *r)
@@ -3241,6 +3599,51 @@ gint cmacs_libregnum_render_ctx_editor_node_primitive (CmacsLibregnumRenderCtx *
          gint id) { (void) r; (void) id; return -1; }
 void cmacs_libregnum_render_ctx_editor_set_name (CmacsLibregnumRenderCtx *r,
          gint id, const char *name) { (void) r; (void) id; (void) name; }
+gboolean cmacs_libregnum_render_ctx_editor_set_color (CmacsLibregnumRenderCtx *r,
+         gint id, float fr, float fg, float fb, float fa)
+{ (void) r; (void) id; (void) fr; (void) fg; (void) fb; (void) fa;
+  return FALSE; }
+gboolean cmacs_libregnum_render_ctx_editor_node_color (CmacsLibregnumRenderCtx *r,
+         gint id, float *fr, float *fg, float *fb, float *fa)
+{ (void) r; (void) id; (void) fr; (void) fg; (void) fb; (void) fa;
+  return FALSE; }
+gboolean cmacs_libregnum_render_ctx_editor_set_roughness (CmacsLibregnumRenderCtx *r,
+         gint id, float v)
+{ (void) r; (void) id; (void) v; return FALSE; }
+gboolean cmacs_libregnum_render_ctx_editor_set_metallic (CmacsLibregnumRenderCtx *r,
+         gint id, float v)
+{ (void) r; (void) id; (void) v; return FALSE; }
+gint cmacs_libregnum_render_ctx_editor_duplicate_node (CmacsLibregnumRenderCtx *r,
+         gint id)
+{ (void) r; (void) id; return -1; }
+gint cmacs_libregnum_render_ctx_editor_node_parent (CmacsLibregnumRenderCtx *r,
+         gint id)
+{ (void) r; (void) id; return -1; }
+gint cmacs_libregnum_render_ctx_editor_add_empty (CmacsLibregnumRenderCtx *r,
+         const char *name, gint parent_id)
+{ (void) r; (void) name; (void) parent_id; return -1; }
+gboolean cmacs_libregnum_render_ctx_editor_detach_script (CmacsLibregnumRenderCtx *r,
+         gint id, gint index)
+{ (void) r; (void) id; (void) index; return FALSE; }
+GPtrArray * cmacs_libregnum_render_ctx_editor_node_scripts (CmacsLibregnumRenderCtx *r,
+         gint id)
+{ (void) r; (void) id; return NULL; }
+gboolean cmacs_libregnum_render_ctx_editor_set_node_asset (CmacsLibregnumRenderCtx *r,
+         gint id, const char *asset)
+{ (void) r; (void) id; (void) asset; return FALSE; }
+gboolean cmacs_libregnum_render_ctx_editor_unpack_prefab (CmacsLibregnumRenderCtx *r,
+         gint id)
+{ (void) r; (void) id; return FALSE; }
+gboolean cmacs_libregnum_render_ctx_editor_select_add (CmacsLibregnumRenderCtx *r,
+         gint id)
+{ (void) r; (void) id; return FALSE; }
+gboolean cmacs_libregnum_render_ctx_editor_select_remove (CmacsLibregnumRenderCtx *r,
+         gint id)
+{ (void) r; (void) id; return FALSE; }
+void cmacs_libregnum_render_ctx_editor_select_clear (CmacsLibregnumRenderCtx *r)
+{ (void) r; }
+GArray * cmacs_libregnum_render_ctx_editor_selected_ids (CmacsLibregnumRenderCtx *r)
+{ (void) r; return g_array_new (FALSE, FALSE, sizeof (gint)); }
 
 #endif /* LRG_BUILD_EDITOR */
 

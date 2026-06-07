@@ -21,6 +21,7 @@
 #include "cmacs-glib-loop.h"
 
 #include <math.h>
+#include <gtk/gtk.h>
 
 /* Per-frame drag state. */
 typedef struct
@@ -233,9 +234,43 @@ handle_click (struct frame *f, CmacsLibregnumView *v, double x, double y)
   cmacs_libregnum_view_request_redraw (v);
 
   /* In the editor a node's "path" is its guid, so do NOT find-file it -- just
-   * select it in the engine and tell Elisp so the outliner/keys follow. */
+   * select it in the engine and tell Elisp so the outliner/keys follow.
+   * Ctrl+click toggles the node in the multi-selection instead of replacing. */
   if (cmacs_libregnum_render_ctx_editor_active (ctx))
     {
+      /* Query the modifier state via the current GDK event so we do not need
+       * to thread a modifier parameter through pgtkterm.c. */
+      gboolean ctrl_held = FALSE;
+      {
+        GdkEvent *ev = gtk_get_current_event ();
+        if (ev)
+          {
+            GdkModifierType state = 0;
+            gdk_event_get_state (ev, &state);
+            ctrl_held = (state & GDK_CONTROL_MASK) != 0;
+            gdk_event_free (ev);
+          }
+      }
+      if (ctrl_held)
+        {
+          /* Ctrl+click toggles this node in the multi-selection: add if it is
+           * not already in the selection, remove if it is. */
+          GArray *ids = cmacs_libregnum_render_ctx_editor_selected_ids (ctx);
+          gboolean found = FALSE;
+          guint si;
+          for (si = 0; si < ids->len; si++)
+            if (g_array_index (ids, gint, si) == id)
+              { found = TRUE; break; }
+          g_array_unref (ids);
+          if (found)
+            cmacs_libregnum_render_ctx_editor_select_remove (ctx, id);
+          else
+            cmacs_libregnum_render_ctx_editor_select_add (ctx, id);
+          cmacs_libregnum_view_request_redraw (v);
+          defer_select_sync (v, cmacs_libregnum_render_ctx_get_selected (ctx));
+          return;
+        }
+      /* Normal click: replace the selection. */
       cmacs_libregnum_render_ctx_editor_select_node (ctx, id);
       defer_select_sync (v, id);
       return;

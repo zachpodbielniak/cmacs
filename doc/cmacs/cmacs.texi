@@ -6420,18 +6420,94 @@ level so the outliner's bake-time-cached labels refresh (a plain GObject
 The menu is data-driven and easy to extend: it is built from
 @code{cmacs-libregnum-editor-context-menu-items}, whose entries are plists ---
 @code{(:label STRING :kinds KINDS :action FN)} for a command,
-@code{(:label STRING :kinds KINDS :submenu SYMBOL)} for a submenu (SYMBOL names a
-list of sub-items in the same shape), or @code{(:sep)} for a divider.  @code{KINDS}
-is @code{t} (all kinds) or a list of node-kind symbols (@code{group},
+@code{(:label STRING :kinds KINDS :submenu SYMBOL)} for a static submenu (SYMBOL
+names a list of sub-items in the same shape),
+@code{(:label STRING :kinds KINDS :items-fn FN)} for a @emph{dynamic} submenu
+(@code{FN} is called as @code{(FN BUFFER ID)} to build the item list at pop
+time --- used by the scripts submenu to reflect the node's current attachment
+list), or @code{(:sep)} for a divider.  Entries may carry @code{:enable PRED}
+(a predicate called as @code{(PRED BUFFER ID)} to grey out inapplicable items)
+and @code{:keys STRING} to show a keyboard accelerator.  @code{KINDS} is
+@code{t} (all kinds) or a list of node-kind symbols (@code{group},
 @code{primitive}, @code{mesh}, @code{sprite}, @code{tilemap}, @code{light},
-@code{camera}, @code{audio}, @code{prefab}); @code{FN} is called as
-@code{(FN BUFFER ID)}.  Adding an item or a whole submenu is a one-line edit.  The
-menu is a keymap (so submenus are native), popped with @code{x-popup-menu} and
-resolved with @code{lookup-key}.  The node kind comes from the
-@code{cmacs-libregnum-editor-node-kind} DEFUN (an int matching the
-@code{cmacs-libregnum-visual-*} constants; @code{1} = a primitive, @code{nil} = a
-group node).  Like the @code{drag-mouse-1} path, it needs no upstream pgtk change
---- it rides the existing libregnum button hook.
+@code{camera}, @code{audio}, @code{prefab}); action @code{FN} is called as
+@code{(FN BUFFER ID)}.  Adding an item or a whole submenu is a one-line edit.
+The menu header shows the right-clicked node's label.  The same menu is
+available by right-clicking a row in the @strong{outliner} panel, not only in
+the 3-D viewport.  The menu is a keymap (so submenus are native), popped with
+@code{x-popup-menu} and resolved with @code{lookup-key}.  The node kind comes
+from the @code{cmacs-libregnum-editor-node-kind} DEFUN (an int matching the
+@code{cmacs-libregnum-visual-*} constants; @code{1} = a primitive, @code{nil} =
+a group node).  Like the @code{drag-mouse-1} path, it needs no upstream pgtk
+change --- it rides the existing libregnum button hook.
+
+@emph{Expanded common items (all kinds)} --- the set of actions every node
+receives was enlarged:
+
+@itemize @minus
+@item @strong{Scale @U{25B8}} submenu --- @emph{2@U{00D7}}, @emph{@U{00BD}@U{00D7}},
+@emph{Reset scale}, @emph{Set scale@dots{}} (prompted).
+@item @strong{Drop to ground} --- snaps the node's Y position to the ground
+plane.
+@item @strong{Snap to grid} --- rounds the position to the current grid size.
+@item @strong{Reset position} --- zeroes the node's translation.
+@item @strong{Tool @U{25B8}} submenu --- switch the active gizmo to
+@emph{Translate}, @emph{Rotate}, @emph{Scale}, or @emph{Select}.
+@item @strong{Cut} / @strong{Copy} / @strong{Paste} --- clipboard operations
+via a temporary prefab; @strong{Copy GUID} copies the node's identifier string.
+@item @strong{Reparent under@dots{}} --- interactively pick a new parent node
+(complements the existing @emph{Reparent to root}).
+@item @strong{Add child @U{25B8}} --- add a new primitive or group under this
+node.
+@item @strong{Add empty group} --- inserts a bare group node as a child.
+DEFUNs: @code{cmacs-libregnum-editor-node-parent},
+@code{cmacs-libregnum-editor-add-empty}.
+@item @strong{Select @U{25B8}} submenu --- @emph{Add to selection},
+@emph{Remove from selection}, @emph{Clear selection}, @emph{Select parent} ---
+backed by @code{LrgEditorSelection} and
+@code{cmacs-libregnum-editor-select-add} /
+@code{-select-remove} / @code{-select-clear} / @code{-selected-ids}.
+@end itemize
+
+@emph{Appearance (primitive/mesh)} --- a @strong{Material @U{25B8}} submenu
+lets you @emph{Set color} (@code{cmacs-libregnum-editor-set-color}),
+@emph{Set roughness} (@code{-set-roughness}), and @emph{Set metallic}
+(@code{-set-metallic}), written through the node's @code{LrgMaterial3D}.
+The bake now honours a node's authored material colour instead of a fixed
+per-kind colour; @code{cmacs-libregnum-editor-node-color} reads it back.
+
+@emph{Duplicate} now performs a native engine deep-clone (fresh GUIDs for the
+entire subtree) placed under the original node's parent, replacing the older
+temp-prefab path.  DEFUN: @code{cmacs-libregnum-editor-duplicate-node}.
+
+@emph{Manage scripts @U{25B8}} --- a dynamic submenu that lists each script
+currently attached to the node with @emph{Edit} and @emph{Detach} sub-actions
+(@code{cmacs-libregnum-editor-node-scripts} / @code{-detach-script}), plus
+@emph{Attach new@dots{}} and @emph{Attach existing@dots{}}.
+
+@emph{Per-kind additions:}
+
+@itemize @minus
+@item @strong{light} --- @emph{Set intensity} and a @strong{Light type @U{25B8}}
+submenu to switch between @emph{Point}, @emph{Spot}, and @emph{Directional}.
+@item @strong{camera} --- @emph{Align to current view}
+(@code{cmacs-libregnum-camera-state}) snaps the camera node to the live
+viewport camera pose.
+@item @strong{audio}, @strong{mesh}, @strong{sprite} --- @emph{Replace asset}
+(@code{cmacs-libregnum-editor-set-node-asset}) swaps the underlying asset file
+without recreating the node.
+@item @strong{tilemap} --- @emph{Enter paint mode}, @emph{Clear}, and
+@emph{Resize} (in addition to the existing @emph{Set tilemap brush}).
+@item @strong{prefab} --- @emph{Unpack}
+(@code{cmacs-libregnum-editor-unpack-prefab}) expands the prefab instance into a
+plain node subtree in place.
+@end itemize
+
+@emph{Multi-selection} --- the engine @code{LrgEditorSelection} is exposed as
+@code{cmacs-libregnum-editor-select-add} / @code{-select-remove} /
+@code{-select-clear} / @code{-selected-ids}.  Several nodes can be selected
+simultaneously (each draws its own wireframe); the menu offers @emph{Delete
+selected} and @emph{Group selected} when a multi-selection is active.
 @item @strong{Tilemaps --- paint, render, persist} --- @kbd{T}
 (@code{cmacs-libregnum-editor-tilemap-create}) makes a TILEMAP node from a
 tileset image + tile/map dimensions; @code{cmacs-libregnum-editor-tilemap-paint}
@@ -6502,6 +6578,29 @@ render, or spatialise audio; real-time 3-D lighting is a dedicated shader pass o
 the engine renderer (the largest remaining item).  (Lua/Python/Gjs scripting,
 per-texel tilemap art, the GTK GDK drag-source, and the standalone engine-drawn
 editor are all implemented --- see above and the Upstream Changes chapter.)
+
+@subsubsection Context-menu items deliberately deferred
+
+The following actions were considered for the right-click context menu during the
+expansion pass and left for engine-level work:
+
+@itemize @bullet
+@item @strong{Look-through camera} --- rendering a picture-in-picture preview
+from a camera node's point of view requires a secondary FBO render pass driven
+by the camera's transform; that is part of the full scene-shading work above.
+@item @strong{Audio volume / stop} --- no engine playback handle is available
+from the Lisp side; audio playback is delegated to Emacs @code{play-sound-file},
+which returns immediately and exposes no stop or volume knob.  Proper control
+needs a GStreamer pipeline handle in the C layer.
+@item @strong{Wireframe / cast-shadow material flags} --- the @code{LrgMaterial3D}
+colour, roughness, and metallic fields are wired; per-material wireframe override
+and shadow-cast toggles exist in the engine data model but are not yet surfaced
+as @code{LrgMaterial3D} GObject properties, so there is no DEFUN to call.
+@item @strong{Full real-time scene shading} --- lights illuminating meshes via a
+GLSL shader pass; same as the @emph{Planned} item above, listed here to record
+that a @emph{Preview shading} toggle was considered for the menu and deferred
+along with the renderer work.
+@end itemize
 
 @subsubsection Design notes & potential improvements
 

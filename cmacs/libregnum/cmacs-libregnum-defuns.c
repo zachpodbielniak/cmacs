@@ -14,6 +14,20 @@
 #include "cmacs-libregnum-scenes.h"
 #include "../gobject/cmacs-gobject.h"   /* cmacs_gobject_wrap for the inspector */
 
+/* lrg-script-binding.h is GLib-only (no raylib/Color conflict) so it is
+ * safe to include here alongside lisp.h.  We define LIBREGNUM_COMPILATION
+ * to satisfy the "only include via libregnum.h" guard in that header.
+ * Define LRG_BUILD_EDITOR to get the symbols (it is always set in our
+ * build since liblibregnum.a is built with BUILD_EDITOR=1). */
+#ifndef LRG_BUILD_EDITOR
+#define LRG_BUILD_EDITOR 1
+#endif
+#ifndef LIBREGNUM_COMPILATION
+#define LIBREGNUM_COMPILATION
+#endif
+#include "editor/lrg-script-binding.h"
+#undef LIBREGNUM_COMPILATION
+
 DEFUN ("cmacs-libregnum-supported-p", Fcmacs_libregnum_supported_p,
        Scmacs_libregnum_supported_p, 0, 0, 0,
        doc: /* Return t when cmacs-libregnum is built into this cmacs.  */)
@@ -1483,6 +1497,316 @@ automated render verification without a compositor screenshot.  Signals
   return Qt;
 }
 
+/* ── Context-menu / authoring primitives ────────────────────────────── */
+
+DEFUN ("cmacs-libregnum-editor-set-color",
+       Fcmacs_libregnum_editor_set_color,
+       Scmacs_libregnum_editor_set_color, 6, 6, 0,
+       doc: /* Set the material color of NODE-ID in BUFFER.
+R G B A are floats 0..1.  Creates a material if the node has none.
+Returns t on success, nil if NODE-ID is invalid or has no visual.  */)
+  (Lisp_Object buffer, Lisp_Object node_id,
+   Lisp_Object r, Lisp_Object g, Lisp_Object b, Lisp_Object a)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (node_id);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  gboolean ok = cmacs_libregnum_render_ctx_editor_set_color
+                  (ctx, (gint) XFIXNUM (node_id),
+                   (float) cmacs_libregnum__to_double (r),
+                   (float) cmacs_libregnum__to_double (g),
+                   (float) cmacs_libregnum__to_double (b),
+                   (float) cmacs_libregnum__to_double (a));
+  if (ok) cmacs_libregnum_view_request_redraw (v);
+  return ok ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-libregnum-editor-node-color",
+       Fcmacs_libregnum_editor_node_color,
+       Scmacs_libregnum_editor_node_color, 2, 2, 0,
+       doc: /* Return NODE-ID's material color in BUFFER as a list (R G B A)
+of floats, or nil if the node has no material.  */)
+  (Lisp_Object buffer, Lisp_Object node_id)
+{
+  float fr = 0, fg = 0, fb = 0, fa = 1;
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (node_id);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  if (!cmacs_libregnum_render_ctx_editor_node_color
+        (ctx, (gint) XFIXNUM (node_id), &fr, &fg, &fb, &fa))
+    return Qnil;
+  return list4 (make_float (fr), make_float (fg),
+                make_float (fb), make_float (fa));
+}
+
+DEFUN ("cmacs-libregnum-editor-set-roughness",
+       Fcmacs_libregnum_editor_set_roughness,
+       Scmacs_libregnum_editor_set_roughness, 3, 3, 0,
+       doc: /* Set the material roughness of NODE-ID in BUFFER to V (0..1).
+Returns t on success, nil if NODE-ID has no visual.  */)
+  (Lisp_Object buffer, Lisp_Object node_id, Lisp_Object v)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (node_id);
+  CmacsLibregnumView *view = cmacs_libregnum_view_for_buffer (buffer);
+  if (!view) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (view);
+  gboolean ok = cmacs_libregnum_render_ctx_editor_set_roughness
+                  (ctx, (gint) XFIXNUM (node_id),
+                   (float) cmacs_libregnum__to_double (v));
+  if (ok) cmacs_libregnum_view_request_redraw (view);
+  return ok ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-libregnum-editor-set-metallic",
+       Fcmacs_libregnum_editor_set_metallic,
+       Scmacs_libregnum_editor_set_metallic, 3, 3, 0,
+       doc: /* Set the material metallic of NODE-ID in BUFFER to V (0..1).
+Returns t on success, nil if NODE-ID has no visual.  */)
+  (Lisp_Object buffer, Lisp_Object node_id, Lisp_Object v)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (node_id);
+  CmacsLibregnumView *view = cmacs_libregnum_view_for_buffer (buffer);
+  if (!view) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (view);
+  gboolean ok = cmacs_libregnum_render_ctx_editor_set_metallic
+                  (ctx, (gint) XFIXNUM (node_id),
+                   (float) cmacs_libregnum__to_double (v));
+  if (ok) cmacs_libregnum_view_request_redraw (view);
+  return ok ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-libregnum-editor-duplicate-node",
+       Fcmacs_libregnum_editor_duplicate_node,
+       Scmacs_libregnum_editor_duplicate_node, 2, 2, 0,
+       doc: /* Clone NODE-ID in BUFFER under its current parent.
+Returns the new node's scene id (integer), or nil on failure.  */)
+  (Lisp_Object buffer, Lisp_Object node_id)
+{
+  gint nid;
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (node_id);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  nid = cmacs_libregnum_render_ctx_editor_duplicate_node
+          (ctx, (gint) XFIXNUM (node_id));
+  cmacs_libregnum_view_request_redraw (v);
+  return (nid >= 0) ? make_fixnum (nid) : Qnil;
+}
+
+DEFUN ("cmacs-libregnum-editor-node-parent",
+       Fcmacs_libregnum_editor_node_parent,
+       Scmacs_libregnum_editor_node_parent, 2, 2, 0,
+       doc: /* Return the editor id of NODE-ID's parent in BUFFER.
+Returns an integer, or nil if NODE-ID is a root-level node or unknown.  */)
+  (Lisp_Object buffer, Lisp_Object node_id)
+{
+  gint pid;
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (node_id);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  pid = cmacs_libregnum_render_ctx_editor_node_parent
+          (ctx, (gint) XFIXNUM (node_id));
+  return (pid >= 0) ? make_fixnum (pid) : Qnil;
+}
+
+DEFUN ("cmacs-libregnum-editor-add-empty",
+       Fcmacs_libregnum_editor_add_empty,
+       Scmacs_libregnum_editor_add_empty, 2, 3, 0,
+       doc: /* Add an empty group node named NAME to BUFFER's level.
+PARENT-ID is the parent node id; -1 or nil means the level root.
+Returns the new node's scene id, or nil.  */)
+  (Lisp_Object buffer, Lisp_Object name, Lisp_Object parent_id)
+{
+  gint pid, nid;
+  CHECK_BUFFER (buffer);
+  CHECK_STRING (name);
+  pid = FIXNUMP (parent_id) ? (gint) XFIXNUM (parent_id) : -1;
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  nid = cmacs_libregnum_render_ctx_editor_add_empty
+          (ctx, SSDATA (name), pid);
+  cmacs_libregnum_view_request_redraw (v);
+  return (nid >= 0) ? make_fixnum (nid) : Qnil;
+}
+
+DEFUN ("cmacs-libregnum-editor-node-scripts",
+       Fcmacs_libregnum_editor_node_scripts,
+       Scmacs_libregnum_editor_node_scripts, 2, 2, 0,
+       doc: /* Return a list of script bindings on NODE-ID in BUFFER.
+Each element is a plist
+  (:language LANG-INT :path PATH-STRING :enabled BOOL)
+in binding order.  Returns nil if NODE-ID is invalid or has no scripts.  */)
+  (Lisp_Object buffer, Lisp_Object node_id)
+{
+  GPtrArray  *scripts;
+  Lisp_Object result = Qnil;
+  guint       i;
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (node_id);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  scripts = cmacs_libregnum_render_ctx_editor_node_scripts
+              (ctx, (gint) XFIXNUM (node_id));
+  if (!scripts) return Qnil;
+  for (i = scripts->len; i-- > 0; )
+    {
+      LrgScriptBinding *b =
+        (LrgScriptBinding *) g_ptr_array_index (scripts, i);
+      const char *path = lrg_script_binding_get_script (b);
+      int lang = (int) lrg_script_binding_get_language (b);
+      gboolean enabled = lrg_script_binding_get_enabled (b);
+      result = Fcons (CALLN (Flist,
+                             intern (":language"), make_fixnum (lang),
+                             intern (":path"),
+                             path ? build_string (path) : Qnil,
+                             intern (":enabled"), enabled ? Qt : Qnil),
+                      result);
+    }
+  return result;
+}
+
+DEFUN ("cmacs-libregnum-editor-detach-script",
+       Fcmacs_libregnum_editor_detach_script,
+       Scmacs_libregnum_editor_detach_script, 3, 3, 0,
+       doc: /* Remove the INDEX-th script binding (0-based) from NODE-ID
+in BUFFER.  Returns t on success, nil if NODE-ID or INDEX is invalid.  */)
+  (Lisp_Object buffer, Lisp_Object node_id, Lisp_Object index)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (node_id);
+  CHECK_FIXNUM (index);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  gboolean ok = cmacs_libregnum_render_ctx_editor_detach_script
+                  (ctx, (gint) XFIXNUM (node_id), (gint) XFIXNUM (index));
+  if (ok) cmacs_libregnum_view_request_redraw (v);
+  return ok ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-libregnum-editor-set-node-asset",
+       Fcmacs_libregnum_editor_set_node_asset,
+       Scmacs_libregnum_editor_set_node_asset, 3, 3, 0,
+       doc: /* Set NODE-ID's visual asset path in BUFFER to ASSET (a string).
+Calls lrg_node_visual_set_asset + re-bakes.  Returns t on success.  */)
+  (Lisp_Object buffer, Lisp_Object node_id, Lisp_Object asset)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (node_id);
+  CHECK_STRING (asset);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  gboolean ok = cmacs_libregnum_render_ctx_editor_set_node_asset
+                  (ctx, (gint) XFIXNUM (node_id), SSDATA (asset));
+  if (ok) cmacs_libregnum_view_request_redraw (v);
+  return ok ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-libregnum-editor-unpack-prefab",
+       Fcmacs_libregnum_editor_unpack_prefab,
+       Scmacs_libregnum_editor_unpack_prefab, 2, 2, 0,
+       doc: /* Strip the visual from NODE-ID in BUFFER, leaving a plain group.
+This detaches the node from its prefab, making it directly editable.
+Returns t on success, nil if NODE-ID is unknown.  */)
+  (Lisp_Object buffer, Lisp_Object node_id)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (node_id);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  gboolean ok = cmacs_libregnum_render_ctx_editor_unpack_prefab
+                  (ctx, (gint) XFIXNUM (node_id));
+  if (ok) cmacs_libregnum_view_request_redraw (v);
+  return ok ? Qt : Qnil;
+}
+
+/* ── Multi-select ──────────────────────────────────────────────────── */
+
+DEFUN ("cmacs-libregnum-editor-select-add",
+       Fcmacs_libregnum_editor_select_add,
+       Scmacs_libregnum_editor_select_add, 2, 2, 0,
+       doc: /* Add NODE-ID to the multi-selection in BUFFER (additive).
+Returns t on success, nil if NODE-ID is unknown.  */)
+  (Lisp_Object buffer, Lisp_Object node_id)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (node_id);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  gboolean ok = cmacs_libregnum_render_ctx_editor_select_add
+                  (ctx, (gint) XFIXNUM (node_id));
+  if (ok) cmacs_libregnum_view_request_redraw (v);
+  return ok ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-libregnum-editor-select-remove",
+       Fcmacs_libregnum_editor_select_remove,
+       Scmacs_libregnum_editor_select_remove, 2, 2, 0,
+       doc: /* Remove NODE-ID from the multi-selection in BUFFER.
+Returns t on success, nil if NODE-ID is unknown.  */)
+  (Lisp_Object buffer, Lisp_Object node_id)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (node_id);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  gboolean ok = cmacs_libregnum_render_ctx_editor_select_remove
+                  (ctx, (gint) XFIXNUM (node_id));
+  if (ok) cmacs_libregnum_view_request_redraw (v);
+  return ok ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-libregnum-editor-select-clear",
+       Fcmacs_libregnum_editor_select_clear,
+       Scmacs_libregnum_editor_select_clear, 1, 1, 0,
+       doc: /* Clear the entire multi-selection in BUFFER.  Always returns t.  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qt;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  cmacs_libregnum_render_ctx_editor_select_clear (ctx);
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-editor-selected-ids",
+       Fcmacs_libregnum_editor_selected_ids,
+       Scmacs_libregnum_editor_selected_ids, 1, 1, 0,
+       doc: /* Return the list of all selected node ids in BUFFER.
+Returns a list of integers (may be empty), or nil if BUFFER has no view.  */)
+  (Lisp_Object buffer)
+{
+  GArray     *ids;
+  Lisp_Object result = Qnil;
+  guint       i;
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  ids = cmacs_libregnum_render_ctx_editor_selected_ids (ctx);
+  for (i = ids->len; i-- > 0; )
+    result = Fcons (make_fixnum (g_array_index (ids, gint, i)), result);
+  g_array_unref (ids);
+  return result;
+}
+
 extern Lisp_Object *cmacs_libregnum__buffers_root  (void);
 extern Lisp_Object *cmacs_libregnum__payloads_root (void);
 
@@ -1583,6 +1907,23 @@ syms_of_cmacs_libregnum_defuns (void)
   defsubr (&Scmacs_libregnum_editor_gizmo_drag);
   defsubr (&Scmacs_libregnum_editor_gizmo_end);
   defsubr (&Scmacs_libregnum_snapshot);
+
+  /* Context-menu / authoring primitives. */
+  defsubr (&Scmacs_libregnum_editor_set_color);
+  defsubr (&Scmacs_libregnum_editor_node_color);
+  defsubr (&Scmacs_libregnum_editor_set_roughness);
+  defsubr (&Scmacs_libregnum_editor_set_metallic);
+  defsubr (&Scmacs_libregnum_editor_duplicate_node);
+  defsubr (&Scmacs_libregnum_editor_node_parent);
+  defsubr (&Scmacs_libregnum_editor_add_empty);
+  defsubr (&Scmacs_libregnum_editor_node_scripts);
+  defsubr (&Scmacs_libregnum_editor_detach_script);
+  defsubr (&Scmacs_libregnum_editor_set_node_asset);
+  defsubr (&Scmacs_libregnum_editor_unpack_prefab);
+  defsubr (&Scmacs_libregnum_editor_select_add);
+  defsubr (&Scmacs_libregnum_editor_select_remove);
+  defsubr (&Scmacs_libregnum_editor_select_clear);
+  defsubr (&Scmacs_libregnum_editor_selected_ids);
 }
 
 #endif /* HAVE_CMACS_LIBREGNUM */
