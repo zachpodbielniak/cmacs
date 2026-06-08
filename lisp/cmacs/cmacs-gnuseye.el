@@ -61,7 +61,8 @@ Smaller zooms in closer."
   '(cmacs-gnuseye-astro cmacs-gnuseye-air
     cmacs-gnuseye-marine cmacs-gnuseye-weather
     cmacs-gnuseye-natural cmacs-gnuseye-space cmacs-gnuseye-conflict
-    cmacs-gnuseye-infra cmacs-gnuseye-health cmacs-gnuseye-media)
+    cmacs-gnuseye-infra cmacs-gnuseye-health cmacs-gnuseye-media
+    cmacs-gnuseye-keyed)
   "Feature files providing the built-in layers, loaded when the globe opens."
   :type '(repeat symbol)
   :group 'cmacs-gnuseye)
@@ -77,7 +78,7 @@ Read on demand by `cmacs-gnuseye-secret'.  Keep it out of version control."
 (defcustom cmacs-gnuseye-feature-files
   '(cmacs-gnuseye-search cmacs-gnuseye-stats cmacs-gnuseye-geofence
     cmacs-gnuseye-bookmarks cmacs-gnuseye-replay cmacs-gnuseye-intel
-    cmacs-gnuseye-track)
+    cmacs-gnuseye-track cmacs-gnuseye-markets)
   "Interaction/intelligence feature files loaded when the globe opens.
 Distinct from `cmacs-gnuseye-layer-files' (data layers).  Each is required
 softly, so a file that does not exist yet is simply skipped."

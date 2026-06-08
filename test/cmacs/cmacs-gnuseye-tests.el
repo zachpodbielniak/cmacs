@@ -410,6 +410,41 @@ does not."
     (should (<= 0.0 (gethash "IRN" scores) 1.0)))
   (clrhash cmacs-gnuseye--id-index))
 
+;;;; Phase 6: keyed / static layers -------------------------------------------
+
+(ert-deftest cmacs-gnuseye--bases-layer ()
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-keyed)
+  (let (res)
+    (cmacs-gnuseye-bases--fetch (lambda (e) (setq res e)))
+    (should (> (length res) 20))
+    (should (cl-some (lambda (e) (eq (plist-get e :kind) 'spaceport)) res))))
+
+(ert-deftest cmacs-gnuseye--acled-parse ()
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-keyed)
+  (let* ((data '((data ((data_id . 7) (latitude . "35.0") (longitude . "45.0")
+                        (event_type . "Battles") (fatalities . "3")
+                        (country . "Iraq")))))
+         (out (cmacs-gnuseye-acled--parse data)))
+    (should (= (length out) 1))
+    (should (= (plist-get (car out) :lat) 35.0))
+    (should (equal (plist-get (car out) :label) "Battles"))))
+
+;;;; Phase 7: dashboard panels ------------------------------------------------
+
+(ert-deftest cmacs-gnuseye--panels-registered ()
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-markets)
+  (dolist (n '(crypto fear-greed fx predictions))
+    (should (gethash n cmacs-gnuseye--panels)))
+  ;; render on synthetic data yields a string mentioning the symbol
+  (let* ((p (gethash 'crypto cmacs-gnuseye--panels))
+         (s (funcall (plist-get p :render)
+                     '(((symbol . "btc") (current_price . 50000)
+                        (price_change_percentage_24h . 2.5))))))
+    (should (string-match-p "BTC" s))))
+
 (provide 'cmacs-gnuseye-tests)
 
 ;;; cmacs-gnuseye-tests.el ends here
