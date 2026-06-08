@@ -106,6 +106,16 @@ click select):
 | ~c~ | clear filters |
 | ~g~ | refresh all |
 | ~f~ | fly to lat/lon |
+| ~/~ | jump / command palette |
+| ~S~ | live stats pane |
+| ~m~ / ~'~ | bookmark set / jump |
+| ~O~ | start a tour |
+| ~G~ | geofence here |
+| ~T~ | replay (time-scrub) |
+| ~A~ | AI region brief |
+| ~C~ | country-instability choropleth |
+| ~.~ | track selected entity |
+| ~D~ | market dashboards |
 | ~?~ | legend |
 | ~q~ | quit |
 
@@ -116,12 +126,34 @@ search, ~f~ filter, ~c~ clear, ~g~ refresh.  Inspector
 (~cmacs-gnuseye-inspector-mode~, normal): ~f~/~RET~ fly-to, ~q~ close, plus
 any feature-registered actions (see ~cmacs-gnuseye-register-inspector-action~).
 
+* Interaction & intelligence commands
+
+- Search: ~cmacs-gnuseye-jump~ (palette over entities + places + commands);
+  list search matches all ~:data~ values.
+- Stats: ~cmacs-gnuseye-stats~.
+- Bookmarks/tours: ~cmacs-gnuseye-bookmark-set~ / ~-bookmark-jump~,
+  ~cmacs-gnuseye-tour-start~ / ~-tour-stop~ / ~-tour-from-bookmarks~.
+- Geofence: ~cmacs-gnuseye-add-geofence~ ~(NAME LAT LON RADIUS-KM &optional
+  KINDS)~, ~-geofence-here~, ~-remove-geofence~.  Emits podomation
+  ~on_geofence_enter~ / ~on_geofence_exit~.
+- Replay: ~cmacs-gnuseye-replay-toggle~ then ~<~/~>~/~SPC~/~=~.
+- Intelligence: ~cmacs-gnuseye-intel-cii~ (+ ~-cii-clear~),
+  ~cmacs-gnuseye-ai-ask-entity~, ~-ai-brief~ (cmacs-ai; graceful when
+  absent); the ~hotspots~ layer is cross-source correlation.
+- Follow / detail: ~cmacs-gnuseye-track-toggle~,
+  ~-inspector-open-stream~, ~-inspector-open-news~.
+- Inspector actions are pluggable via
+  ~cmacs-gnuseye-register-inspector-action~ ~(KEY LABEL FN &optional PRED)~.
+- Panels: ~cmacs-gnuseye-define-panel~, ~cmacs-gnuseye-panel~,
+  ~cmacs-gnuseye-dashboard~.
+
 * MCP tools
 
 With ~--with-cmacs-mcp~: ~gnuseye_open~, ~gnuseye_list_layers~,
-~gnuseye_toggle_layer~, ~gnuseye_fly_to~, ~gnuseye_refresh~.  (More — query,
-brief, geofence, bookmark, replay — arrive with the interaction/intel
-phases.)  The MCP ~eval~ tool reaches every gnuseye DEFUN directly.
+~gnuseye_toggle_layer~, ~gnuseye_fly_to~, ~gnuseye_refresh~,
+~gnuseye_query_entities~ (kind/bbox → JSON), ~gnuseye_brief~,
+~gnuseye_add_geofence~, ~gnuseye_cii~.  The MCP ~eval~ tool reaches every
+gnuseye DEFUN directly.
 
 * API keys
 

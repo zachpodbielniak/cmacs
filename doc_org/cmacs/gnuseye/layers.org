@@ -98,11 +98,64 @@ enable them from the toggle pane (left).  Layer files are listed in
 - Config: ~cmacs-gnuseye-gdelt-query~ (default a conflict query),
   ~-gdelt-timespan~ ("1d"), ~-gdelt-max~ (250).
 
-* Planned layers
+* Infrastructure — ~cmacs-gnuseye-infra.el~ / ~-keyed.el~
 
-Infrastructure (submarine cables, cyber-threat IPs, ports/chokepoints),
-health & society (OpenAQ air quality, Safecast radiation, disease outbreaks,
-UNHCR displacement), media & cameras (ISS live stream → ~cmacs-video~, GDELT
-news → ~gsurf~), and keyed feeds (ACLED, Windy webcams, Cloudflare outages,
-military bases / spaceports).  Each is a ~1-file ~cmacs-gnuseye-define-layer~
-on the same model.
+** cables
+TeleGeography submarine-cable GeoJSON (~cmacs-gnuseye-cables-url~; no key,
+fetched once).  Each cable segment is drawn as a polyline trail.
+
+** ports
+A built-in static set of major seaports and maritime chokepoints
+(~cmacs-gnuseye-ports~).  Offline, no key.
+
+** bases (in ~-keyed.el~)
+A built-in static set of notable military bases and spaceports
+(~cmacs-gnuseye-bases~), kinds ~base~ / ~spaceport~.  Offline, no key.
+
+* Health & society — ~cmacs-gnuseye-health.el~
+
+** radiation
+Safecast crowdsourced radiation measurements (~cmacs-gnuseye-radiation-url~;
+no key).  Sized by reading.
+
+** airquality
+OpenAQ latest measurements (~cmacs-gnuseye-airquality-url~).  OpenAQ v3 needs
+~OPENAQ_API_KEY~ (declared ~:needs-key~).
+
+* Media & cameras — ~cmacs-gnuseye-media.el~
+
+** iss
+The ISS as a moving ~camera~ marker (keyless wheretheiss.at) carrying a
+configurable live-stream URL (~cmacs-gnuseye-iss-stream-url~) opened from the
+inspector's ~[w]~ action.
+
+** webcams
+Live webcams from ~cmacs-gnuseye-webcams-url~ (keyless) or the Windy API
+(~WINDY_WEBCAMS_KEY~); ~camera~ markers with a stream URL in ~:data~.
+
+* Conflict & intelligence (keyed / derived)
+
+** acled (in ~-keyed.el~)
+ACLED armed-conflict events; needs ~ACLED_KEY~ + ~ACLED_EMAIL~.  Clustered,
+sized by fatalities.
+
+** sirens (in ~-keyed.el~)
+Regional alert/siren feed from a configurable URL (~cmacs-gnuseye-sirens-url~;
+OREF mirror or a civil-alert endpoint).
+
+** hotspots (in ~cmacs-gnuseye-intel.el~)
+A *derived* layer: cross-source correlation surfaces grid cells holding two
+or more distinct co-located signal kinds, scored by density.  See
+[[file:reference.org][reference.org]] (intelligence).
+
+* Non-geospatial panels — ~cmacs-gnuseye-markets.el~
+
+Table feeds rendered as side buffers via ~cmacs-gnuseye-define-panel~ (never
+the globe): ~crypto~ (CoinGecko), ~fear-greed~ (alternative.me), ~fx~
+(Frankfurter/ECB), ~predictions~ (Polymarket) — all keyless.
+~cmacs-gnuseye-dashboard~ opens them all.
+
+* Planned follow-ons
+
+Cyber-threat IP feeds (Feodo/URLhaus) and Cloudflare Radar outages (both need
+an IP/country → location geocode), disease outbreaks, and UNHCR displacement.

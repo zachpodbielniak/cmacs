@@ -167,6 +167,35 @@ new moving layer gets the same behaviour by setting
 ~:advance #'cmacs-gnuseye-dead-reckon-layer~ and reporting ~:speed~ (m/s) +
 ~:heading~.
 
+* Interaction and intelligence
+
+These are loaded from ~cmacs-gnuseye-feature-files~ when the globe opens.
+
+- *Search everything + command palette.*  The entity-list search (~s~)
+  matches across all fields including every ~:data~ value (callsign, MMSI,
+  NORAD id, country).  ~cmacs-gnuseye-jump~ (~/~) is a command palette over
+  every entity, named places/countries, and commands (toggle any layer, open
+  stats, refresh).
+- *Live stats pane* (~S~): per-layer counts, freshness, errors, on-screen
+  total, kind tally; debounced off the reindex hook.
+- *Bookmarks & tours*: ~m~ saves a viewpoint, ~'~ flies to one, ~O~ starts an
+  auto-flying tour; persisted under the config dir.
+- *Geofences*: ~cmacs-gnuseye-add-geofence~ / ~-geofence-here~ (~G~) — a
+  throttled tick test emits podomation ~on_geofence_enter~ /
+  ~on_geofence_exit~ events with the entity data, and can draw a range ring.
+- *Time-scrub / replay* (~T~): a bounded ring buffer of position snapshots
+  with a header-line scrubber (~<~/~>~ step, ~SPC~ play, ~=~ live).
+- *AI intelligence* (cmacs-ai, when built): inspector ~[a]~ asks about the
+  selected entity; ~A~ briefs the on-screen region into an Org SITREP; a
+  ~hotspots~ layer surfaces co-located multi-kind signal clusters; ~C~
+  computes the country-instability index and paints it as a choropleth.
+- *Follow + click-through*: ~.~ locks the camera onto the selected entity;
+  inspector ~[w]~ opens a marker's live stream (cmacs-video), ~[n]~ its
+  article (gsurf).
+- *Non-geospatial dashboards*: table feeds (markets, macro) render as
+  side-buffer panels via ~cmacs-gnuseye-define-panel~; ~D~ opens the keyless
+  market panels (crypto, Fear & Greed, FX, predictions).
+
 * Architecture
 
 #+begin_example
@@ -281,6 +310,16 @@ Helpers:
 | ~nws-alerts~     | natural       | US NWS active alerts          | no  | filled zone |
 | ~aurora~         | space-weather | NOAA SWPC OVATION             | no  | point band |
 | ~gdelt~          | conflict      | GDELT GEO 2.0 (query)         | no  | point (clustered) |
+| ~hotspots~       | conflict      | cross-source correlation       | no  | point (derived) |
+| ~acled~          | conflict      | ACLED armed conflict          | key | point (clustered) |
+| ~sirens~         | conflict      | OREF/regional (configurable)  | url | point    |
+| ~cables~         | infra         | TeleGeography GeoJSON         | no  | polyline |
+| ~ports~          | infra         | built-in static set          | no  | point    |
+| ~bases~          | infra         | built-in static set          | no  | point    |
+| ~radiation~      | health        | Safecast                     | no  | point    |
+| ~airquality~     | health        | OpenAQ                       | key | point    |
+| ~iss~            | media         | wheretheiss.at + stream      | no  | camera   |
+| ~webcams~        | media         | Windy / configurable         | url | camera   |
 
 Everything is *off by default*; enable from the toggle pane.  ~natural-events~
 is one rich keyless feed (volcanoes, severe storms, wildfires, icebergs,
@@ -377,22 +416,21 @@ escalation path for tens of thousands of contacts.
 
 * Roadmap
 
-Done: dynamic day/night terminator, filled-polygon primitive, NWS alert
-zones, NOAA aurora oval, GDELT geocoded news, NASA EONET, range/coverage
-rings, country choropleth, low-zoom clustering, atomic disable, and
-dead-reckoning on every moving layer.
+Shipped: the filled-polygon primitive and dynamic day/night terminator;
+range/coverage rings, country choropleth, low-zoom clustering; atomic
+disable and dead-reckoning on every moving layer; ~20 layers across 10
+categories (EONET, NWS alert zones, aurora, GDELT, submarine cables, ports,
+bases, Safecast radiation, OpenAQ, ISS/webcams, ACLED, sirens, hotspots);
+search-everything + command palette, a live stats pane, bookmarks & camera
+tours, geofence alerts via podomation, time-scrub/replay; an AI
+intelligence layer (entity asks, region briefs, cross-source correlation
+hotspots, a country-instability index driving the choropleth); keyed feeds
+(graceful-off); and non-geospatial market dashboards.
 
-Planned (each a ~1-file layer or a focused feature, on the same model):
-submarine cables, cyber-threat IPs, ports/chokepoints, OpenAQ air quality,
-Safecast radiation, disease outbreaks, UNHCR displacement, ISS live video
-(a camera marker → ~cmacs-video-open~) and GDELT news → ~gsurf~; then
-search-everything + a command palette, a live stats pane, bookmarks &
-camera tours, geofence alerts via podomation, time-scrubbing/replay (every
-push carries ~:ts~), an AI intelligence layer (region briefs, cross-source
-correlation, a country-instability index driving the choropleth), keyed
-feeds (ACLED, Windy webcams, Cloudflare outages, military bases), and
-non-geospatial market/macro dashboards.  Track-history fade trails are a
-small follow-on.
+Planned follow-ons: cyber-threat IP feeds + Cloudflare outages (both need an
+IP/country → location geocode), disease outbreaks, UNHCR displacement,
+track-history fade trails, a curated polygon (ear-clip) triangulator for
+strongly-concave country fills, and full SGP4/SDP4 satellite propagation.
 
 * Files
 

@@ -142,6 +142,43 @@ Everything is off by default.  API keys resolve via
 @file{$XDG_CONFIG_HOME/cmacs/gnuseye/keys.el}, then a default.  A layer
 declaring @code{:needs-key} stays off, showing ``needs NAME'', until set.
 
+Wave-2 and keyed layers add ~20 layers across 10 categories: submarine
+cables and ports (infra), Safecast radiation and OpenAQ (health), the ISS and
+webcams (media), ACLED and a configurable siren feed (conflict), military
+bases & spaceports, and a derived @code{hotspots} correlation layer.
+
+@section Interaction and intelligence
+
+Loaded from @code{cmacs-gnuseye-feature-files}:
+
+@itemize @bullet
+@item @strong{Search + palette.}  The list search (@code{s}) matches across
+all @code{:data} values (callsign / MMSI / NORAD id / country);
+@code{cmacs-gnuseye-jump} (@code{/}) is a command palette over entities,
+places, and commands.
+@item @strong{Stats pane} (@code{S}): per-layer counts, freshness, errors,
+on-screen total, kind tally.
+@item @strong{Bookmarks & tours} (@code{m} / @code{'} / @code{O}), persisted
+under the config dir.
+@item @strong{Geofences} (@code{G}): a throttled tick test emits podomation
+@code{on_geofence_enter} / @code{on_geofence_exit} events with the entity
+data, and can draw a range ring.
+@item @strong{Time-scrub / replay} (@code{T}): a bounded snapshot ring with a
+header-line scrubber.
+@item @strong{AI intelligence} (cmacs-ai, when built): inspector @code{[a]}
+asks about the selected entity; @code{A} briefs the region; the
+@code{hotspots} layer correlates co-located signals; @code{C} computes the
+country-instability index and paints it as a choropleth.
+@item @strong{Follow + click-through}: @code{.} tracks the selection;
+inspector @code{[w]} opens a live stream (cmacs-video), @code{[n]} an article
+(gsurf).
+@item @strong{Dashboards} (@code{D}): table feeds (markets, macro) render as
+side-buffer panels via @code{cmacs-gnuseye-define-panel} — never the globe.
+@end itemize
+
+New MCP tools: @code{gnuseye_query_entities}, @code{gnuseye_brief},
+@code{gnuseye_add_geofence}, @code{gnuseye_cii}.
+
 @section Architecture notes
 
 Only @file{cmacs-gnuseye-globe.c} (the render half) includes
