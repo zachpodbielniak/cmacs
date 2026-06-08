@@ -1252,9 +1252,17 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
                       continue;
                     Texture2D *t = grl_texture_get_handle (bb->tex);
                     if (t && t->id)
-                      DrawBillboard (bcam, *t,
-                                     (Vector3){ bb->x, bb->y, bb->z },
-                                     bb->size, bw);
+                      {
+                        /* Scale to the zoom so the flag keeps a roughly
+                         * constant on-screen size (world size grows with
+                         * distance from the camera to the near surface). */
+                        double near = cdist - r->occluder_radius;
+                        if (near < 0.6) near = 0.6;
+                        float esize = bb->size * (float) near;
+                        DrawBillboard (bcam, *t,
+                                       (Vector3){ bb->x, bb->y, bb->z },
+                                       esize, bw);
+                      }
                   }
               }
           }

@@ -447,6 +447,25 @@ DEFUN ("cmacs-gnuseye-label-count", Fcmacs_gnuseye_label_count,
                         cmacs_libregnum_view_get_render_ctx (v)));
 }
 
+DEFUN ("cmacs-gnuseye-view-center", Fcmacs_gnuseye_view_center,
+       Scmacs_gnuseye_view_center, 1, 1, 0,
+       doc: /* Return (LAT . LON) of the point BUFFER's globe camera looks at.
+That is the sub-camera point (the centre of the visible hemisphere), handy
+for scoping a regional data fetch to what the user is viewing.  Returns nil
+if BUFFER has no globe.  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  double px, py, pz, tx, ty, tz, fov, lat, lon, alt;
+  cmacs_libregnum_render_ctx_get_camera_state (
+    cmacs_libregnum_view_get_render_ctx (v),
+    &px, &py, &pz, &tx, &ty, &tz, &fov);
+  gnuseye_xyz_to_latlon (px, py, pz, &lat, &lon, &alt);
+  return Fcons (make_float (lat), make_float (lon));
+}
+
 DEFUN ("cmacs-gnuseye-add-flag", Fcmacs_gnuseye_add_flag,
        Scmacs_gnuseye_add_flag, 4, 5, 0,
        doc: /* Add a country flag billboard at LAT, LON on BUFFER's globe.
@@ -545,6 +564,7 @@ syms_of_cmacs_gnuseye_defuns (void)
   defsubr (&Scmacs_gnuseye_add_flag);
   defsubr (&Scmacs_gnuseye_clear_flags);
   defsubr (&Scmacs_gnuseye_flag_count);
+  defsubr (&Scmacs_gnuseye_view_center);
 }
 
 #endif /* HAVE_CMACS_GNUSEYE */

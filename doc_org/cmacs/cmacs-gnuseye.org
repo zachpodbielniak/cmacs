@@ -180,7 +180,7 @@ Helpers:
 | Layer        | Source                       | Key | Default |
 |--------------+------------------------------+-----+---------|
 | ~satellites~ | CelesTrak TLE + propagation  | no  | on      |
-| ~aircraft~   | OpenSky Network (ADS-B)      | opt | on      |
+| ~aircraft~   | adsb.lol ADS-B (keyless)     | no  | on      |
 | ~vessels~    | AIS (configurable URL)       | opt | off     |
 | ~quakes~     | USGS earthquakes (GeoJSON)   | no  | on      |
 | ~launches~   | Launch Library 2             | no  | off     |
@@ -190,9 +190,12 @@ Helpers:
   (~cmacs-gnuseye-astro-group~, default "stations") and re-propagate them
   locally to "now" on a fast (5 s) timer — live motion needs no network.
   Each satellite carries its one-orbit ground track as a trail.
-- *Aircraft* request OpenSky ~/states/all~ (set ~cmacs-gnuseye-air-bbox~ to
-  scope the fetch and respect rate limits; ~OPENSKY_USER~/~OPENSKY_PASS~
-  raise the budget).
+- *Aircraft* come from adsb.lol by default --- a free, keyless community
+  ADS-B aggregator queried by centre + radius around whatever the globe is
+  currently looking at (~cmacs-gnuseye-air-radius-nm~, max 250 nm), so the
+  planes follow your view.  Set ~cmacs-gnuseye-air-source~ to ~opensky~ to
+  use OpenSky instead (its anonymous API now returns HTTP 429; put a free
+  account in ~OPENSKY_USER~/~OPENSKY_PASS~ to use it).
 - *Vessels* parse a vessel JSON feed from ~cmacs-gnuseye-marine-url~ (nil =
   off).  Free *global* AIS is mostly websocket + key; point this at a
   regional open-AIS REST endpoint or a LAN AIS-catcher/rtl-ais server.

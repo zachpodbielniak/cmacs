@@ -6726,8 +6726,10 @@ and @code{:data} (an opaque record surfaced in the detail view).
 @itemize @bullet
 @item @code{satellites} --- CelesTrak TLE + local two-body propagation
 (orbit trails); no key; on by default.
-@item @code{aircraft} --- OpenSky Network ADS-B; optional account for a
-higher rate-limit budget; on by default.
+@item @code{aircraft} --- adsb.lol ADS-B (keyless), queried around the
+current view centre so planes follow your view; set
+@code{cmacs-gnuseye-air-source} to @code{opensky} for OpenSky instead; on
+by default.
 @item @code{vessels} --- AIS from a configurable JSON feed
 (@code{cmacs-gnuseye-marine-url}); off by default (free global AIS needs a
 key/websocket or a regional/SDR source).

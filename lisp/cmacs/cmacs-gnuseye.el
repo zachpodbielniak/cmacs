@@ -806,9 +806,11 @@ and clicking one selects it (inspector + recentre)."
 Flag images (flagcdn.com) are downloaded once and cached; the first time
 they trickle in over a short while, then load instantly."
   :type 'boolean :group 'cmacs-gnuseye)
-(defcustom cmacs-gnuseye-flag-size 0.3
-  "Country flag billboard size in world units." :type 'number
-  :group 'cmacs-gnuseye)
+(defcustom cmacs-gnuseye-flag-size 0.05
+  "Country flag apparent size.
+Flags are scaled by the zoom so they keep a roughly constant on-screen
+size; this is that size as a fraction of the camera's near distance."
+  :type 'number :group 'cmacs-gnuseye)
 (defcustom cmacs-gnuseye-flag-url-format "https://flagcdn.com/w80/%s.png"
   "Flag image URL; %s is the lowercase ISO-A2 country code."
   :type 'string :group 'cmacs-gnuseye)
