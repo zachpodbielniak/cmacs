@@ -59,7 +59,8 @@ Smaller zooms in closer."
 
 (defcustom cmacs-gnuseye-layer-files
   '(cmacs-gnuseye-astro cmacs-gnuseye-air
-    cmacs-gnuseye-marine cmacs-gnuseye-weather)
+    cmacs-gnuseye-marine cmacs-gnuseye-weather
+    cmacs-gnuseye-natural cmacs-gnuseye-space cmacs-gnuseye-conflict)
   "Feature files providing the built-in layers, loaded when the globe opens."
   :type '(repeat symbol)
   :group 'cmacs-gnuseye)
@@ -124,14 +125,21 @@ to e.g. only planes, or planes and boats.")
   "The :id of the currently selected entity (labelled + highlighted).")
 
 (defconst cmacs-gnuseye--known-kinds
-  '(satellite aircraft ship quake fire launch storm camera city)
+  '(satellite aircraft ship quake fire launch storm camera city
+    event volcano alert cyber outage cable port health radiation airq
+    displaced base spaceport hotspot)
   "Selectable marker kinds for filtering.")
 
 ;;;; Kind styles -------------------------------------------------------------
 
 (defconst cmacs-gnuseye--kind-codes
   '((generic . 0) (satellite . 1) (aircraft . 2) (ship . 3)
-    (quake . 4) (fire . 5) (launch . 6) (storm . 7) (camera . 8) (city . 9))
+    (quake . 4) (fire . 5) (launch . 6) (storm . 7) (camera . 8) (city . 9)
+    ;; Extended kinds reuse the nearest C marker mesh (0-9) until they get
+    ;; bespoke icons; their distinct colour carries the meaning meanwhile.
+    (event . 7) (volcano . 5) (alert . 7) (cyber . 0) (outage . 0)
+    (cable . 0) (port . 9) (health . 0) (radiation . 0) (airq . 0)
+    (displaced . 9) (base . 9) (spaceport . 6) (hotspot . 4))
   "Marker kind symbol -> C CmacsGnuseyeMarkerKind code.")
 
 (defcustom cmacs-gnuseye-kind-styles
@@ -144,7 +152,22 @@ to e.g. only planes, or planes and boats.")
     (storm     :color "#b0b0ff" :scale 1.2)
     (camera    :color "#7ad7ff" :scale 1.0)
     (city      :color "#dddddd" :scale 0.8)
-    (generic   :color "#ffd24a" :scale 1.0))
+    (generic   :color "#ffd24a" :scale 1.0)
+    ;; Extended kinds (Phase 2+).
+    (event     :color "#c0a0ff" :scale 1.1)
+    (volcano   :color "#ff7038" :scale 1.2)
+    (alert     :color "#ffd23a" :scale 1.0)
+    (cyber     :color "#ff3df0" :scale 0.9)
+    (outage    :color "#ff9030" :scale 1.0)
+    (cable     :color "#7ad7ff" :scale 0.8)
+    (port      :color "#7cfc98" :scale 0.9)
+    (health    :color "#ff6b6b" :scale 1.0)
+    (radiation :color "#c8ff3a" :scale 1.0)
+    (airq      :color "#b0d0a0" :scale 0.9)
+    (displaced :color "#ffb870" :scale 1.0)
+    (base      :color "#9aa6b2" :scale 0.9)
+    (spaceport :color "#ff7be5" :scale 1.0)
+    (hotspot   :color "#ff2a2a" :scale 1.7))
   "Per-kind default marker style (:color hex, :scale multiplier)."
   :type '(alist :key-type symbol :value-type plist)
   :group 'cmacs-gnuseye)

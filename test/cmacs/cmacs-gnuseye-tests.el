@@ -238,6 +238,59 @@ marker individual."
         (should (equal (plist-get badge :label) "3")))
     (remhash 'cmacs-gnuseye--cltest cmacs-gnuseye--layers)))
 
+;;;; Phase 2: keyless data-layer parsers -------------------------------------
+
+(ert-deftest cmacs-gnuseye--eonet-parse ()
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-natural)
+  (let* ((data '((events
+                  ((id . "E1") (title . "Volcano X")
+                   (categories ((id . "volcanoes") (title . "Volcanoes")))
+                   (geometry ((type . "Point") (date . "2026-01-01")
+                              (coordinates 10.0 20.0)))))))
+         (out (cmacs-gnuseye-eonet--parse data)))
+    (should (= (length out) 1))
+    (should (eq (plist-get (car out) :kind) 'volcano))
+    (should (= (plist-get (car out) :lat) 20.0))   ; coords are (lon lat)
+    (should (= (plist-get (car out) :lon) 10.0))))
+
+(ert-deftest cmacs-gnuseye--nws-parse ()
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-natural)
+  (let* ((data '((features
+                  ((properties (event . "Tornado Warning") (severity . "Extreme")
+                               (areaDesc . "County") (id . "A1"))
+                   (geometry (type . "Polygon")
+                             (coordinates ((-100.0 40.0) (-99.0 40.0)
+                                           (-99.0 41.0) (-100.0 41.0)
+                                           (-100.0 40.0))))))))
+         (out (cmacs-gnuseye-nws--parse data)))
+    (should (= (length out) 1))
+    (should (eq (plist-get (car out) :kind) 'alert))
+    (should (vectorp (plist-get (car out) :polygon)))
+    (should (>= (length (plist-get (car out) :polygon)) 4))))
+
+(ert-deftest cmacs-gnuseye--aurora-parse ()
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-space)
+  (let* ((cmacs-gnuseye-aurora-step 1)
+         (cmacs-gnuseye-aurora-threshold 25)
+         (data '((coordinates (100.0 65.0 40) (200.0 70.0 10) (270.0 -60.0 50))))
+         (out (cmacs-gnuseye-aurora--parse data)))
+    (should (= (length out) 2))                    ; the 10% point is below thr
+    (should (member -90.0 (mapcar (lambda (e) (plist-get e :lon)) out)))))
+
+(ert-deftest cmacs-gnuseye--gdelt-parse ()
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-conflict)
+  (let* ((data '((features
+                  ((geometry (type . "Point") (coordinates 30.0 50.0))
+                   (properties (name . "Kyiv") (count . 12))))))
+         (out (cmacs-gnuseye-gdelt--parse data)))
+    (should (= (length out) 1))
+    (should (equal (plist-get (car out) :label) "Kyiv"))
+    (should (= (plist-get (car out) :lon) 30.0))))
+
 (provide 'cmacs-gnuseye-tests)
 
 ;;; cmacs-gnuseye-tests.el ends here

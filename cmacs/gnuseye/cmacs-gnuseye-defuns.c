@@ -161,7 +161,10 @@ render_entity (CmacsLibregnumView *v, CmacsLibregnumRenderCtx *ctx,
             }
           la[i] = a; lo[i] = b;
         }
-      cmacs_gnuseye_add_polygon (ctx, la, lo, (int) n, rgba, FALSE);
+      /* Force a translucent wash for the fill regardless of the entity's
+       * (opaque) marker colour, so a zone overlay stays see-through. */
+      cmacs_gnuseye_add_polygon (ctx, la, lo, (int) n,
+                                 (rgba & 0xffffff00u) | 0x66u, FALSE);
       xfree (la); xfree (lo);
     }
   return nid;
