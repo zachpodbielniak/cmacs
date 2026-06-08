@@ -26,7 +26,8 @@
 ;;;; Geodesy -----------------------------------------------------------------
 
 (ert-deftest cmacs-gnuseye--latlon-axes ()
-  "Equator/prime-meridian on +X, north pole on +Y, lon east toward +Z."
+  "Equator/prime-meridian on +X, north pole on +Y, east toward -Z so the
+globe is not east-west mirrored."
   (cmacs-gnuseye-tests--skip)
   (let ((o (cmacs-gnuseye-latlon-to-xyz 0 0))
         (np (cmacs-gnuseye-latlon-to-xyz 90 0))
@@ -34,7 +35,7 @@
     (should (< (abs (- (aref o 0) 6.371)) 1e-3))
     (should (< (abs (aref o 1)) 1e-3))
     (should (< (abs (- (aref np 1) 6.371)) 1e-3))
-    (should (< (abs (- (aref e 2) 6.371)) 1e-3))))
+    (should (< (abs (- (aref e 2) -6.371)) 1e-3))))
 
 (ert-deftest cmacs-gnuseye--latlon-roundtrip ()
   (cmacs-gnuseye-tests--skip)

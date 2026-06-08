@@ -14,7 +14,8 @@
  * 1 world unit == 1000 km, so altitudes (in metres) lift markers off the
  * surface at a natural scale and a 400 km LEO satellite sits visibly
  * above the limb.  lat=0,lon=0 is at (+R,0,0); the north pole at (0,+R,0);
- * longitude increases eastward toward +Z. */
+ * longitude increases eastward toward -Z (so, viewed from outside with
+ * north up, east is to the right -- a standard, un-mirrored globe). */
 
 #ifndef CMACS_GNUSEYE_GEOMATH_H
 #define CMACS_GNUSEYE_GEOMATH_H
@@ -46,7 +47,9 @@ gnuseye_latlon_to_xyz (double lat_deg, double lon_deg, double alt_m,
   double cl = cos (lat);
   *x = r * cl * cos (lon);
   *y = r * sin (lat);
-  *z = r * cl * sin (lon);
+  /* Longitude winds toward -Z so that, viewed from outside with north up,
+   * east is to the right (a standard globe) rather than mirrored. */
+  *z = -r * cl * sin (lon);
 }
 
 /* World XYZ -> geodetic (lat, lon degrees, altitude metres). */
@@ -61,7 +64,7 @@ gnuseye_xyz_to_latlon (double x, double y, double z,
       return;
     }
   *lat_deg = asin (y / r) * GNUSEYE_RAD2DEG;
-  *lon_deg = atan2 (z, x) * GNUSEYE_RAD2DEG;
+  *lon_deg = atan2 (-z, x) * GNUSEYE_RAD2DEG;   /* match the -Z winding */
   *alt_m = (r / GNUSEYE_GLOBE_RADIUS - 1.0) * GNUSEYE_EARTH_RADIUS_M;
 }
 
@@ -76,9 +79,11 @@ gnuseye_enu_basis (double lat_deg, double lon_deg,
   double lon = lon_deg * GNUSEYE_DEG2RAD;
   double sla = sin (lat), cla = cos (lat);
   double slo = sin (lon), clo = cos (lon);
-  up[0] = cla * clo;  up[1] = sla;  up[2] = cla * slo;
-  east[0] = -slo;     east[1] = 0.0; east[2] = clo;
-  north[0] = -sla * clo; north[1] = cla; north[2] = -sla * slo;
+  /* Z components negated to match the -Z longitude winding in
+   * gnuseye_latlon_to_xyz (keeps east/north/up a consistent tangent frame). */
+  up[0] = cla * clo;  up[1] = sla;  up[2] = -cla * slo;
+  east[0] = -slo;     east[1] = 0.0; east[2] = -clo;
+  north[0] = -sla * clo; north[1] = cla; north[2] = sla * slo;
 }
 
 /* Forward direction (unit world vector) for an object at (lat, lon)
