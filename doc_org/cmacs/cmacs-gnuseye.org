@@ -28,9 +28,16 @@ Enable with ~--with-cmacs-gnuseye~ (requires ~--with-cmacs-libregnum~ and
 (cmacs-gnuseye)            ; M-x cmacs-gnuseye — opens *GNU's Eye*
 #+end_src
 
-~M-x cmacs-gnuseye~ opens a *dashboard*: the globe viewport in the centre,
-a searchable/filterable *entity list* on the left, and an *inspector* on
-the right.  (A prefix arg opens just the globe.)
+~M-x cmacs-gnuseye~ opens a *dashboard*: the globe viewport in the centre;
+on the left an *entity-type toggle* pane over a searchable/filterable
+*entity list*; and an *inspector* on the right.  (A prefix arg opens just
+the globe.)
+
+*Everything starts off.*  The top-left pane is a checkbox per entity type
+(Aircraft, Satellites, Vessels, Quakes, Launches, Fires); ~SPC~/~RET~ (or a
+click) toggles rendering of that type on/off (☑/☐).  Enabling a type starts
+its data feed and draws it; disabling clears it.  Navigation works in both
+vanilla Emacs (~n~/~p~, arrows) and Doom/Evil (~j~/~k~, motion state).
 
 In the globe viewport: drag to orbit, scroll to zoom, right-drag to pan,
 *hover* a marker to see its label, and *click* it to select it (recentre +

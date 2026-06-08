@@ -6687,8 +6687,12 @@ clickable, heading-oriented markers on a textured globe.  It is rendered
 @option{--with-cmacs-glib}; off by default).
 
 @code{M-x cmacs-gnuseye} opens a dashboard: the globe viewport in the
-centre, a searchable/filterable entity list on the left, and an inspector
-on the right.  Drag to orbit, scroll to zoom, right-drag to pan, hover a
+centre; on the left an entity-type toggle pane over a
+searchable/filterable entity list; and an inspector on the right.
+Everything starts off --- the top-left pane is a checkbox per entity type
+(Aircraft, Satellites, Vessels, Quakes, Launches, Fires); @code{SPC}/@code{RET}
+or a click toggles that type's rendering on/off, in both vanilla Emacs and
+Doom/Evil.  Drag to orbit, scroll to zoom, right-drag to pan, hover a
 marker to identify it, and click (or select its list row) to recentre on it
 and fill the inspector.  @code{s} searches by name; @code{F} filters by
 kind (e.g. only planes, or planes and boats) on both the list and the

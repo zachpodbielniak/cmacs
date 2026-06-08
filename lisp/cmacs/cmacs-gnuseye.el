@@ -710,7 +710,8 @@ keeps the expensive reindex + list paint off the hot path."
          (lambda ()
            (setq cmacs-gnuseye--index-refresh-timer nil)
            (cmacs-gnuseye--reindex)
-           (cmacs-gnuseye--list-refresh-now)))))
+           (cmacs-gnuseye--list-refresh-now)
+           (cmacs-gnuseye-layers-refresh)))))
 
 (defun cmacs-gnuseye--list-update-header ()
   (let ((shown (length tabulated-list-entries)))
@@ -814,77 +815,106 @@ Pick one or more of e.g. aircraft, ship, satellite, quake."
       (tabulated-list-print)
       (cmacs-gnuseye--list-update-header))
     (display-buffer-in-side-window
-     b '((side . left) (slot . 0) (window-width . 0.24)))
+     b '((side . left) (slot . 1) (window-width . 0.24)))
     b))
 
-;;;; Layers UI ---------------------------------------------------------------
+;;;; Entity-type toggles (checkbox pane) -------------------------------------
+
+;; A checkbox per entity type (data layer): checking it turns that type's
+;; rendering on (the layer fetches + draws); unchecking turns it off and
+;; clears its markers.  Everything starts off.
+
+(defconst cmacs-gnuseye--types-name "*GNU's Eye Types*")
 
 (defun cmacs-gnuseye--layers-entries ()
-  "Tabulated-list entries for the layers buffer."
+  "Tabulated-list rows for the entity-type toggle pane (one per layer)."
   (let (rows)
     (maphash
      (lambda (name layer)
-       (push
-        (list name
-              (vector
-               (if (cmacs-gnuseye-layer-enabled layer) "on" "off")
-               (format "%s" (or (cmacs-gnuseye-layer-group layer) ""))
-               (or (cmacs-gnuseye-layer-title layer) (symbol-name name))
-               (let ((lf (cmacs-gnuseye-layer-last-fetch layer)))
-                 (if lf (format "%ds ago" (truncate (- (float-time) lf))) "-"))
-               (or (and (cmacs-gnuseye-layer-needs-key layer)
-                        (not (cmacs-gnuseye-secret
-                              (cmacs-gnuseye-layer-needs-key layer)))
-                        (format "needs %s" (cmacs-gnuseye-layer-needs-key layer)))
-                   (or (cmacs-gnuseye-layer-last-error layer) ""))))
-        rows))
+       (let* ((on (cmacs-gnuseye-layer-enabled layer))
+              (needs (cmacs-gnuseye-layer-needs-key layer))
+              (missing (and needs (not (cmacs-gnuseye-secret needs))))
+              (status
+               (cond
+                (missing (format "needs %s" needs))
+                ((and on (cmacs-gnuseye-layer-last-error layer))
+                 (truncate-string-to-width
+                  (cmacs-gnuseye-layer-last-error layer) 14))
+                (on (let ((lf (cmacs-gnuseye-layer-last-fetch layer)))
+                      (if lf (format "%ds" (truncate (- (float-time) lf)))
+                        "loading…")))
+                (t ""))))
+         (push (list name
+                     (vector (if on "☑" "☐")
+                             (capitalize (symbol-name name))
+                             status))
+               rows)))
      cmacs-gnuseye--layers)
-    (nreverse rows)))
+    (sort rows (lambda (a b) (string< (symbol-name (car a))
+                                      (symbol-name (car b)))))))
 
 (defvar cmacs-gnuseye-layers-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "RET") #'cmacs-gnuseye-layers-toggle)
+    (define-key map (kbd "SPC") #'cmacs-gnuseye-layers-toggle)
     (define-key map (kbd "t")   #'cmacs-gnuseye-layers-toggle)
     (define-key map (kbd "g")   #'cmacs-gnuseye-layers-refresh)
+    (define-key map (kbd "q")   #'quit-window)
+    (define-key map [mouse-1]   #'cmacs-gnuseye-layers-toggle)
     map)
-  "Keymap for `cmacs-gnuseye-layers-mode'.")
+  "Keymap for `cmacs-gnuseye-layers-mode' (the entity-type toggle pane).")
 
-(define-derived-mode cmacs-gnuseye-layers-mode tabulated-list-mode "Gnuseye-Layers"
-  "Major mode listing GNU's Eye data layers."
-  (setq tabulated-list-format
-        [("State" 5 t) ("Group" 12 t) ("Layer" 30 t)
-         ("Fetched" 10 t) ("Note" 24 t)])
-  (tabulated-list-init-header))
+(define-derived-mode cmacs-gnuseye-layers-mode tabulated-list-mode "GnuseyeTypes"
+  "Checkbox list toggling which entity types are rendered on the globe."
+  (setq tabulated-list-format [("" 2 nil) ("Type" 14 t) ("" 14 nil)]
+        tabulated-list-sort-key nil)
+  (tabulated-list-init-header)
+  (setq header-line-format " Entity types · SPC/RET toggles · g refresh"))
 
 (defun cmacs-gnuseye-layers-refresh ()
-  "Refresh the layers list."
+  "Repaint the entity-type toggle pane."
   (interactive)
-  (setq tabulated-list-entries (cmacs-gnuseye--layers-entries))
-  (tabulated-list-print t))
+  (let ((b (get-buffer cmacs-gnuseye--types-name)))
+    (when (and b (buffer-live-p b))
+      (with-current-buffer b
+        (setq tabulated-list-entries (cmacs-gnuseye--layers-entries))
+        (tabulated-list-print t)))))
 
-(defun cmacs-gnuseye-layers-toggle ()
-  "Toggle the layer at point on/off."
-  (interactive)
+(defun cmacs-gnuseye-layers-toggle (&optional event)
+  "Toggle rendering of the entity type on the current row."
+  (interactive (list last-nonmenu-event))
+  (when (mouse-event-p event) (ignore-errors (mouse-set-point event)))
   (let* ((name (tabulated-list-get-id))
          (layer (and name (gethash name cmacs-gnuseye--layers))))
     (when layer
       (if (cmacs-gnuseye-layer-enabled layer)
           (cmacs-gnuseye--disable-layer layer)
-        (cmacs-gnuseye--enable-layer layer))
+        (let ((needs (cmacs-gnuseye-layer-needs-key layer)))
+          (if (and needs (not (cmacs-gnuseye-secret needs)))
+              (message "GNU's Eye: %s needs %s to enable"
+                       (capitalize (symbol-name name)) needs)
+            (cmacs-gnuseye--enable-layer layer))))
       (cmacs-gnuseye-layers-refresh))))
+
+(defun cmacs-gnuseye--show-types ()
+  "Show the entity-type checkbox pane (above the entity list)."
+  (let ((b (get-buffer-create cmacs-gnuseye--types-name)))
+    (with-current-buffer b
+      (unless (derived-mode-p 'cmacs-gnuseye-layers-mode)
+        (cmacs-gnuseye-layers-mode))
+      (setq tabulated-list-entries (cmacs-gnuseye--layers-entries))
+      (tabulated-list-print))
+    (display-buffer-in-side-window
+     b '((side . left) (slot . 0) (window-width . 0.24)
+         (window-height . 10) (preserve-size . (nil . t))))
+    b))
 
 ;;;###autoload
 (defun cmacs-gnuseye-layers ()
-  "Open the GNU's Eye layers control panel."
+  "Open the GNU's Eye entity-type toggle pane."
   (interactive)
   (cmacs-gnuseye--load-layers)
-  (let ((buf (get-buffer-create "*GNU's Eye Layers*")))
-    (with-current-buffer buf
-      (cmacs-gnuseye-layers-mode)
-      (cmacs-gnuseye-layers-refresh))
-    (select-window
-     (display-buffer-in-side-window
-      buf '((side . left) (slot . 1) (window-width . 0.24))))))
+  (select-window (get-buffer-window (cmacs-gnuseye--show-types))))
 
 ;;;; Mode + entry point ------------------------------------------------------
 
@@ -1306,20 +1336,15 @@ just the globe viewport."
          (and cmacs-gnuseye-base-texture
               (file-exists-p cmacs-gnuseye-base-texture)
               (expand-file-name cmacs-gnuseye-base-texture))))
-      (cmacs-gnuseye--load-layers)
-      (maphash
-       (lambda (name layer)
-         (when (and (cmacs-gnuseye-layer-default-on layer)
-                    (memq name cmacs-gnuseye-default-layers)
-                    (or (null (cmacs-gnuseye-layer-needs-key layer))
-                        (cmacs-gnuseye-secret
-                         (cmacs-gnuseye-layer-needs-key layer))))
-           (cmacs-gnuseye--enable-layer layer)))
-       cmacs-gnuseye--layers))
-    ;; Lay out the dashboard: globe centre, entity list left, inspector right.
+      ;; Start with every entity type OFF -- the user enables them from the
+      ;; type-toggle pane.  (Layers are only loaded/registered here.)
+      (cmacs-gnuseye--load-layers))
+    ;; Lay out the dashboard: globe centre; entity-type toggles over the
+    ;; entity list on the left; inspector on the right.
     (switch-to-buffer buf)
     (delete-other-windows)
     (unless no-dashboard
+      (cmacs-gnuseye--show-types)
       (cmacs-gnuseye--show-list)
       (cmacs-gnuseye--show-inspector)
       (select-window (get-buffer-window buf)))
@@ -1362,6 +1387,7 @@ just the globe viewport."
       "q" #'quit-window)
     (evil-define-key* 'motion cmacs-gnuseye-layers-mode-map
       (kbd "RET") #'cmacs-gnuseye-layers-toggle
+      (kbd "SPC") #'cmacs-gnuseye-layers-toggle
       "t" #'cmacs-gnuseye-layers-toggle
       "g" #'cmacs-gnuseye-layers-refresh
       "q" #'quit-window)))
