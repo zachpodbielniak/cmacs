@@ -195,9 +195,13 @@ Helpers:
   swept with several large overlapping queries
   (~cmacs-gnuseye-air-global-tiles~) and merged by ICAO hex, so *every*
   aircraft adsb.lol can see (typically 5--6 k) is indexed and searchable in
-  the entity list.  Drawing is capped to the nearest
+  the entity list.  The tiles all run at once on their own C worker
+  threads, a small fast query around the current view fires first, and the
+  map fills in progressively as each returns (so planes appear quickly
+  rather than after the slowest tile).  Drawing is capped to the nearest
   ~cmacs-gnuseye-render-max~ markers in the current view (default 700; the
-  rest stay searchable), and re-picked as you navigate.  Set
+  rest stay searchable), re-picked as you navigate, and each plane icon is
+  small (~cmacs-gnuseye-air-marker-scale~) and zoom-scaled.  Set
   ~cmacs-gnuseye-air-global~ nil to instead query only the current view
   (lighter), or ~cmacs-gnuseye-air-source~ to ~opensky~ for OpenSky (its
   anonymous API now returns HTTP 429; ~OPENSKY_USER~/~OPENSKY_PASS~ help).

@@ -50,9 +50,11 @@ Rendering is capped separately by `cmacs-gnuseye-render-max'."
   :type '(choice (const :tag "Keep all" nil) integer)
   :group 'cmacs-gnuseye)
 
-(defcustom cmacs-gnuseye-air-marker-scale 0.45
+(defcustom cmacs-gnuseye-air-marker-scale 0.15
   "Size of aircraft markers, relative to the default icon size.
-Smaller values keep the globe readable when many planes are shown."
+Small by design: with thousands of planes the globe is only readable when
+each icon is tiny.  Markers are additionally zoom-scaled for a constant
+on-screen size."
   :type 'number :group 'cmacs-gnuseye)
 
 (defcustom cmacs-gnuseye-air-smooth t
@@ -191,27 +193,41 @@ The radius covers the visible area at the current zoom unless
               (throw 'done nil))))))
     (nreverse out)))
 
+(defcustom cmacs-gnuseye-air-priority-radius-nm 350
+  "Radius (nm) of the small fast query fired first, around the view centre.
+Its planes show almost immediately while the larger global tiles download
+in parallel."
+  :type 'integer :group 'cmacs-gnuseye)
+
 (defun cmacs-gnuseye-air--fetch-global (cb)
-  "Sweep the globe with several large tile queries; call (CB MERGED).
-Aircraft are merged by id across all tiles so the full worldwide set is
-indexed."
-  (let* ((tiles cmacs-gnuseye-air-global-tiles)
-         (radius cmacs-gnuseye-air-global-radius-nm)
-         (pending (length tiles))
+  "Sweep the globe with several queries in parallel; call (CB MERGED).
+All run on their own C worker threads at once.  A small query around the
+current view fires first so local planes appear right away, and CB is
+invoked after EACH query completes (with the cumulative set merged by id),
+so the map fills in progressively instead of waiting for the slowest tile."
+  (let* ((radius cmacs-gnuseye-air-global-radius-nm)
+         (view (cmacs-gnuseye-air--view))
+         (queries
+          (append
+           ;; Fast, relevant first: a small circle around what you're viewing.
+           (when (and (consp view) (numberp (nth 0 view)))
+             (list (list (float (nth 0 view)) (float (nth 1 view))
+                         cmacs-gnuseye-air-priority-radius-nm)))
+           ;; Then the worldwide tiles.
+           (mapcar (lambda (tc)
+                     (list (float (car tc)) (float (cdr tc)) radius))
+                   cmacs-gnuseye-air-global-tiles)))
          (acc (make-hash-table :test 'equal)))
-    (if (zerop pending)
+    (if (null queries)
         (funcall cb nil)
-      (dolist (tile tiles)
+      (dolist (q queries)
         (cmacs-gnuseye-fetch-json
-         (cmacs-gnuseye-air--adsblol-url (float (car tile)) (float (cdr tile))
-                                         radius)
+         (cmacs-gnuseye-air--adsblol-url (nth 0 q) (nth 1 q) (nth 2 q))
          (lambda (data)
            (when data
              (dolist (e (cmacs-gnuseye-air--parse-adsblol data))
                (puthash (plist-get e :id) e acc)))
-           (setq pending (1- pending))
-           (when (<= pending 0)
-             (funcall cb (hash-table-values acc)))))))))
+           (funcall cb (hash-table-values acc))))))))
 
 ;; ── OpenSky (optional, needs creds) ─────────────────────────────────────
 
