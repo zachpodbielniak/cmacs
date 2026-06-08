@@ -50,6 +50,11 @@ Rendering is capped separately by `cmacs-gnuseye-render-max'."
   :type '(choice (const :tag "Keep all" nil) integer)
   :group 'cmacs-gnuseye)
 
+(defcustom cmacs-gnuseye-air-marker-scale 0.45
+  "Size of aircraft markers, relative to the default icon size.
+Smaller values keep the globe readable when many planes are shown."
+  :type 'number :group 'cmacs-gnuseye)
+
 (defcustom cmacs-gnuseye-air-radius-nm nil
   "Radius in nautical miles around the view centre for adsb.lol.
 When nil, the radius is chosen automatically to cover the visible area at
@@ -113,6 +118,7 @@ The radius covers the visible area at the current zoom unless
                         :lat lat :lon lon :alt alt-m
                         :heading (if (numberp track) track -1)
                         :speed spd-ms
+                        :scale cmacs-gnuseye-air-marker-scale
                         :data `((registration . ,reg) (type . ,typ)
                                 (hex . ,hex) (altitude-ft . ,altb)
                                 (ground-speed-kt . ,gs)))
@@ -182,6 +188,7 @@ indexed."
                         :label (and call (string-trim call))
                         :lat lat :lon lon :alt (or geo baro 0)
                         :heading (or track -1) :speed vel
+                        :scale cmacs-gnuseye-air-marker-scale
                         :data `((country . ,origin) (squawk . ,squawk)
                                 (velocity-ms . ,vel)))
                   out)
