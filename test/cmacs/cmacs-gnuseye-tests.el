@@ -178,6 +178,66 @@ collapsed category shows only its header, expanding reveals its layers."
     (remhash 'cmacs-gnuseye--cat-a cmacs-gnuseye--layers)
     (remhash 'cmacs-gnuseye--cat-b cmacs-gnuseye--layers)))
 
+;;;; Phase 1: rings, dead reckoning, clustering, choropleth ramp -------------
+
+(ert-deftest cmacs-gnuseye--destination ()
+  "Destination point: 111.195 km east of the equator ~ 1 deg of longitude."
+  (cmacs-gnuseye-tests--skip)
+  (let ((d (cmacs-gnuseye-destination 0 0 90 111195.0)))
+    (should (< (abs (- (car d) 0.0)) 1e-3))      ; stays on the equator
+    (should (< (abs (- (cdr d) 1.0)) 0.02))))    ; ~1 deg east
+
+(ert-deftest cmacs-gnuseye--circle-points ()
+  "A range ring is N equidistant points all RADIUS from the centre."
+  (cmacs-gnuseye-tests--skip)
+  (let* ((c (cmacs-gnuseye-circle-points 40 -100 200000.0 24)))
+    (should (= (length c) 24))
+    (dotimes (i 24)
+      (let ((p (aref c i)))
+        (should (< (abs (- (cmacs-gnuseye-haversine 40 -100 (aref p 0) (aref p 1))
+                           200000.0))
+                   2000.0))))))
+
+(ert-deftest cmacs-gnuseye--dead-reckon ()
+  "Dead reckoning moves north at the right rate and no-ops without motion."
+  (cmacs-gnuseye-tests--skip)
+  (let ((np (cmacs-gnuseye-dead-reckon 0 0 100.0 0 10.0)))   ; 100 m/s N, 10 s
+    (should np)
+    (should (> (car np) 0.0))                                ; moved north
+    (should (< (abs (cdr np)) 1e-6)))                        ; same meridian
+  (should (null (cmacs-gnuseye-dead-reckon 0 0 0 90 10)))    ; no speed
+  (should (null (cmacs-gnuseye-dead-reckon 0 0 100 -1 10)))) ; no heading
+
+(ert-deftest cmacs-gnuseye--risk-ramp ()
+  "Risk ramp: 0 -> green-ish, 1 -> red-ish, alpha preserved."
+  (cmacs-gnuseye-tests--skip)
+  (let ((lo (cmacs-gnuseye--risk->rgba 0.0 90))
+        (hi (cmacs-gnuseye--risk->rgba 1.0 90)))
+    (should (= (logand lo #xff) 90))                 ; alpha
+    (should (> (logand (ash lo -16) #xff) 200))      ; low risk: green high
+    (should (> (logand (ash hi -24) #xff) 200))))    ; high risk: red high
+
+(ert-deftest cmacs-gnuseye--clustering ()
+  "Clustering collapses a dense cell to one count badge but keeps a lone
+marker individual."
+  (cmacs-gnuseye-tests--skip)
+  (cmacs-gnuseye-define-layer cmacs-gnuseye--cltest
+    :title "Cl" :group 'test :kind 'aircraft :cluster t
+    :fetch (lambda (cb) (funcall cb nil)))
+  (unwind-protect
+      (let* ((layer (gethash 'cmacs-gnuseye--cltest cmacs-gnuseye--layers))
+             ;; three markers in one 10-deg cell + one far away
+             (ents (list (list :id "a" :lat 40.1 :lon -100.1)
+                         (list :id "b" :lat 40.2 :lon -100.2)
+                         (list :id "c" :lat 40.3 :lon -100.3)
+                         (list :id "d" :lat -30.0 :lon 150.0)))
+             (out (cmacs-gnuseye--cluster ents 10.0 layer))
+             (badge (seq-find (lambda (e) (assq :cluster (plist-get e :data))) out)))
+        (should (= (length out) 2))                 ; one badge + the lone one
+        (should badge)
+        (should (equal (plist-get badge :label) "3")))
+    (remhash 'cmacs-gnuseye--cltest cmacs-gnuseye--layers)))
+
 (provide 'cmacs-gnuseye-tests)
 
 ;;; cmacs-gnuseye-tests.el ends here

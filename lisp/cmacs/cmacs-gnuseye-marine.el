@@ -52,12 +52,15 @@ course-over-ground, speed-over-ground and name under common key names."
                (cog (cmacs-gnuseye-marine--get props 'cog 'course 'heading 'COG))
                (sog (cmacs-gnuseye-marine--get props 'sog 'speed 'SOG)))
           (when (and (numberp lat) (numberp lon))
+            ;; AIS speed-over-ground is knots; store m/s so the shared
+            ;; dead-reckoning :advance moves the vessel correctly.
             (push (list :id (format "ship:%s" (or mmsi name lat))
                         :kind 'ship
                         :label (and name (format "%s" name))
                         :lat lat :lon lon
-                        :heading (if (numberp cog) cog -1) :speed sog
-                        :data `((mmsi . ,mmsi) (sog . ,sog) (cog . ,cog)))
+                        :heading (if (numberp cog) cog -1)
+                        :speed (and (numberp sog) (* sog 0.514444))
+                        :data `((mmsi . ,mmsi) (sog-kt . ,sog) (cog . ,cog)))
                   out)
             (setq n (1+ n))
             (when (>= n cmacs-gnuseye-marine-max) (throw 'done nil))))))
@@ -77,7 +80,10 @@ course-over-ground, speed-over-ground and name under common key names."
   :kind 'ship
   :interval 30
   :default-on nil
-  :fetch #'cmacs-gnuseye-marine--fetch)
+  :cluster t
+  :fetch #'cmacs-gnuseye-marine--fetch
+  ;; Glide vessels along their course between AIS fixes; fetches correct them.
+  :advance #'cmacs-gnuseye-dead-reckon-layer)
 
 (provide 'cmacs-gnuseye-marine)
 ;;; cmacs-gnuseye-marine.el ends here

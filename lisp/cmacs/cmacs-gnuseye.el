@@ -282,6 +282,51 @@ HEADERS is an alist of (NAME . VALUE).  ARRAY-TYPE is passed to
           (setq cmacs-gnuseye--keys (read (current-buffer)))))))
   (or (getenv name) (cdr (assoc name cmacs-gnuseye--keys)) default))
 
+;;;; Geometry helpers: dead reckoning, rings, routes -------------------------
+
+(defun cmacs-gnuseye-dead-reckon (lat lon speed-ms heading-deg dt)
+  "Great-circle destination from LAT,LON after SPEED-MS for DT s on HEADING-DEG.
+Returns (LAT2 . LON2), or nil when there is nothing to move (no speed/heading)."
+  (when (and (numberp lat) (numberp lon) (numberp speed-ms) (> speed-ms 0)
+             (numberp heading-deg) (>= heading-deg 0) (> dt 0))
+    (let* ((r 6371000.0) (d (/ (* speed-ms dt) r)) (d2r (/ float-pi 180.0))
+           (la (* lat d2r)) (lo (* lon d2r)) (th (* heading-deg d2r))
+           (sla (sin la)) (cla (cos la)) (sd (sin d)) (cd (cos d))
+           (la2 (asin (max -1.0 (min 1.0 (+ (* sla cd) (* cla sd (cos th)))))))
+           (lo2 (+ lo (atan (* (sin th) sd cla) (- cd (* sla (sin la2)))))))
+      (cons (/ la2 d2r) (/ lo2 d2r)))))
+
+(defun cmacs-gnuseye-dead-reckon-layer (entities dt _now)
+  "Generic :advance hook: dead-reckon each of ENTITIES forward DT seconds along
+its :heading at its :speed (metres/second).  Fresh fetches course-correct the
+extrapolated positions.  Use as a moving layer's :advance."
+  (dolist (e entities)
+    (let ((np (cmacs-gnuseye-dead-reckon
+               (plist-get e :lat) (plist-get e :lon)
+               (plist-get e :speed) (plist-get e :heading) dt)))
+      (when np (plist-put e :lat (car np)) (plist-put e :lon (cdr np))))))
+
+(defun cmacs-gnuseye-destination (lat lon brg-deg dist-m)
+  "Destination DIST-M metres from (LAT LON) on initial bearing BRG-DEG.
+Returns (LAT . LON), longitude normalised to [-180,180]."
+  (let* ((r 6371000.0) (dr (/ dist-m r)) (d2r (/ float-pi 180.0))
+         (p1 (* lat d2r)) (l1 (* lon d2r)) (b (* brg-deg d2r))
+         (sp (sin p1)) (cp (cos p1)) (sd (sin dr)) (cd (cos dr))
+         (p2 (asin (max -1.0 (min 1.0 (+ (* sp cd) (* cp sd (cos b)))))))
+         (l2 (+ l1 (atan (* (sin b) sd cp) (- cd (* sp (sin p2)))))))
+    (cons (/ p2 d2r) (- (mod (+ (/ l2 d2r) 540.0) 360.0) 180.0))))
+
+(defun cmacs-gnuseye-circle-points (lat lon radius-m &optional n)
+  "Vector of N [LAT LON] vertices forming a small circle of RADIUS-M about
+\(LAT LON).  For coverage/range rings (satellite footprints, geofence circles),
+usable as an entity :polygon (filled) or fed to a polyline.  N defaults to 48."
+  (let ((n (or n 48)) (pts nil))
+    (dotimes (i n)
+      (let ((d (cmacs-gnuseye-destination
+                lat lon (* 360.0 (/ (float i) n)) radius-m)))
+        (push (vector (car d) (cdr d)) pts)))
+    (vconcat (nreverse pts))))
+
 ;;;; Layer registry ----------------------------------------------------------
 
 (cl-defstruct (cmacs-gnuseye-layer (:constructor cmacs-gnuseye--make-layer))
@@ -291,7 +336,10 @@ HEADERS is an alist of (NAME . VALUE).  ARRAY-TYPE is passed to
   ;; dispatch; a callback whose captured value no longer matches (the layer was
   ;; toggled mid-flight) is dropped, so a late response can never re-add the
   ;; markers of a layer the user has switched off.  See `--refresh-layer'.
-  (generation 0))
+  (generation 0)
+  ;; Non-nil to cluster this layer's markers when zoomed out (dense point
+  ;; layers like aircraft/vessels): nearby markers collapse to one count badge.
+  cluster)
 
 (defvar cmacs-gnuseye--layers (make-hash-table :test 'eq)
   "Registry of defined layers: NAME symbol -> `cmacs-gnuseye-layer'.")
@@ -309,7 +357,10 @@ PROPS is a plist with:
   :needs-key  a key name string this layer requires (optional)
   :advance    (lambda (ENTITIES DT NOW) ...) called between fetches to move
               this layer's entities smoothly (dead reckoning / re-propagation);
-              mutate the entity plists in place (optional)"
+              mutate the entity plists in place (optional).  Generic moving
+              layers can use `cmacs-gnuseye-dead-reckon-layer'.
+  :cluster    non-nil to collapse dense markers into count badges when zoomed
+              out (good for aircraft/vessels)"
   (declare (indent 1))
   `(progn
      (puthash ',name
@@ -323,7 +374,8 @@ PROPS is a plist with:
                :default-on ,(plist-get props :default-on)
                :detail ,(plist-get props :detail)
                :needs-key ,(plist-get props :needs-key)
-               :advance ,(plist-get props :advance))
+               :advance ,(plist-get props :advance)
+               :cluster ,(plist-get props :cluster))
               cmacs-gnuseye--layers)
      ',name))
 
@@ -428,14 +480,67 @@ drawn set stays stable between updates instead of flickering."
         (max 0.25 (min 3.0 (/ (- (nth 2 vc) 6.371) 3.0)))
       1.0)))
 
+;;;; Low-zoom clustering ------------------------------------------------------
+
+(defcustom cmacs-gnuseye-cluster t
+  "Collapse dense point markers into count badges when zoomed out.
+Only applies to layers declared with :cluster (aircraft, vessels).  Zooming
+in dissolves the clusters back into individual markers."
+  :type 'boolean :group 'cmacs-gnuseye)
+
+(defcustom cmacs-gnuseye-cluster-min 8
+  "Do not cluster a layer with fewer than this many in-view markers."
+  :type 'integer :group 'cmacs-gnuseye)
+
+(defun cmacs-gnuseye--cluster-cell-deg (buf)
+  "Grid cell size in degrees for clustering at BUF's zoom, or nil when zoomed
+in close enough to show individual markers."
+  (let ((vc (ignore-errors (cmacs-gnuseye-view-center buf))))
+    (when (and (consp vc) (numberp (nth 2 vc)) (> (nth 2 vc) 8.5))
+      (max 2.0 (min 24.0 (* (- (nth 2 vc) 6.371) 1.2))))))
+
+(defun cmacs-gnuseye--cluster (entities cell layer)
+  "Bucket ENTITIES into a CELL-degree grid; collapse multi-member cells to one
+synthetic cluster marker (count badge), passing single-member cells through.
+Cluster ids are stable per cell so the sticky render set does not flicker."
+  (let ((buckets (make-hash-table :test 'equal)) (out nil)
+        (kind (or (cmacs-gnuseye-layer-kind layer) 'generic))
+        (lname (cmacs-gnuseye-layer-name layer)))
+    (dolist (e entities)
+      (let* ((lat (or (plist-get e :lat) 0.0)) (lon (or (plist-get e :lon) 0.0))
+             (key (cons (floor (/ lat cell)) (floor (/ lon cell)))))
+        (push e (gethash key buckets))))
+    (maphash
+     (lambda (key members)
+       (if (= (length members) 1)
+           (push (car members) out)
+         (let ((slat 0.0) (slon 0.0) (n 0))
+           (dolist (m members)
+             (setq slat (+ slat (or (plist-get m :lat) 0.0))
+                   slon (+ slon (or (plist-get m :lon) 0.0)) n (1+ n)))
+           (push (list :id (format "cluster:%s:%s:%s" lname (car key) (cdr key))
+                       :kind kind :lat (/ slat n) :lon (/ slon n)
+                       :label (number-to-string n) :scale 1.5 :label-mode 3
+                       :data `((:cluster . t) (:count . ,n) (:layer . ,lname)))
+                 out))))
+     buckets)
+    out))
+
 (defun cmacs-gnuseye--render-layer (buf lname)
   "Push LNAME's kind-filtered entities from the index to BUF's globe.
 All entities stay in the index; only up to `cmacs-gnuseye-render-max'
-nearest the view are drawn."
+nearest the view are drawn.  Layers declared :cluster collapse to count
+badges when zoomed out (`cmacs-gnuseye-cluster')."
   (setq cmacs-gnuseye--zoom-scale (cmacs-gnuseye--zoom-scale-for buf))
   (when (and buf (buffer-live-p buf) (cmacs-gnuseye-attached-p buf))
-    (let* ((all (seq-filter #'cmacs-gnuseye--entity-visible-p
+    (let* ((layer (gethash lname cmacs-gnuseye--layers))
+           (all (seq-filter #'cmacs-gnuseye--entity-visible-p
                             (gethash lname cmacs-gnuseye--layer-entities)))
+           (cell (and cmacs-gnuseye-cluster layer
+                      (cmacs-gnuseye-layer-cluster layer)
+                      (>= (length all) cmacs-gnuseye-cluster-min)
+                      (cmacs-gnuseye--cluster-cell-deg buf)))
+           (all (if cell (cmacs-gnuseye--cluster all cell layer) all))
            (ents (cmacs-gnuseye--select-render
                   all lname buf cmacs-gnuseye-render-max)))
       (cmacs-gnuseye-set-entities
@@ -655,13 +760,24 @@ and (unless NO-FLY) recentre the camera on it."
     e))
 
 (defun cmacs-gnuseye--on-pick (buffer node-id)
-  "Handle a marker click: select the entity (inspector + highlight + list).
+  "Handle a marker click: select the entity (inspector + highlight + list),
+or, for a cluster badge, zoom toward it so it dissolves into individuals.
 Called from `cmacs-libregnum--node-clicked' on the cmacs context."
   (when (and (integerp node-id) (>= node-id 0))
     (let ((e (ignore-errors (cmacs-gnuseye-entity-at buffer node-id))))
       (when e
-        (cmacs-gnuseye--select-entity (plist-get e :id))
-        (cmacs-gnuseye--list-goto (plist-get e :id))))))
+        (let ((data (plist-get e :data)))
+          (if (and (listp data) (assq :cluster data))
+              ;; Cluster: fly in closer; the next render shows individuals.
+              (let* ((vc (ignore-errors (cmacs-gnuseye-view-center buffer)))
+                     (dist (if (and (consp vc) (numberp (nth 2 vc)))
+                               (nth 2 vc) 12.0)))
+                (ignore-errors
+                  (cmacs-gnuseye-fly-to buffer (float (plist-get e :lat))
+                                        (float (plist-get e :lon))
+                                        (max 7.4 (* 0.55 dist)) t)))
+            (cmacs-gnuseye--select-entity (plist-get e :id))
+            (cmacs-gnuseye--list-goto (plist-get e :id))))))))
 
 (defvar cmacs-gnuseye-inspector-mode-map
   (let ((map (make-sparse-keymap)))
@@ -1380,6 +1496,76 @@ size; this is that size as a fraction of the camera's near distance."
         (when (and (stringp name) (numberp lx) (numberp ly))
           (ignore-errors
             (cmacs-gnuseye-add-label buffer (float ly) (float lx) name rgba)))))))
+
+;;;; Choropleth (country fill by a scalar; driven by the CII intel layer) -----
+
+(defun cmacs-gnuseye--risk->rgba (scalar &optional alpha)
+  "Map SCALAR in [0,1] to a green->yellow->red translucent wash RGBA.
+ALPHA (0-255) is the wash opacity (default 90 -- see-through)."
+  (let* ((s (max 0.0 (min 1.0 (or scalar 0.0))))
+         (a (or alpha 90))
+         (r (round (* 255 (min 1.0 (* 2.0 s)))))
+         (g (round (* 255 (min 1.0 (* 2.0 (- 1.0 s)))))))
+    (logior (ash r 24) (ash g 16) (ash 40 8) a)))
+
+(defun cmacs-gnuseye--choropleth-iso (props)
+  "ISO-A3 code from a Natural Earth admin-0 feature's PROPS, or nil."
+  (or (alist-get 'ISO_A3 props) (alist-get 'adm0_a3 props)
+      (alist-get 'ADM0_A3 props) (alist-get 'iso_a3 props)))
+
+(defun cmacs-gnuseye--choropleth-ring (buffer ring rgba step)
+  "Fill one outer RING (list of (LON LAT)) as a persistent polygon on BUFFER."
+  (let* ((pts (cmacs-gnuseye--decimate ring (or step 1)))
+         (n (length pts)))
+    (when (>= n 3)
+      (let ((lats (make-vector n 0.0)) (lons (make-vector n 0.0)) (i 0))
+        (dolist (p pts)
+          (aset lons i (float (or (nth 0 p) 0.0)))
+          (aset lats i (float (or (nth 1 p) 0.0)))
+          (setq i (1+ i)))
+        (ignore-errors (cmacs-gnuseye-add-polygon buffer lats lons rgba t))))))
+
+(defun cmacs-gnuseye-choropleth (buffer scores &optional alpha step)
+  "Fill countries on BUFFER's globe by SCORES (a hash or alist of ISO-A3 ->
+scalar in [0,1]).  Clears any previous choropleth fills first.  ALPHA sets the
+wash opacity; STEP decimates rings (default 3).  Uses the cached Natural Earth
+admin-0 countries.  Outer rings only; antimeridian-crossing countries may
+smear (a documented refinement)."
+  (let ((step (or step 3)))
+    (when (and buffer (buffer-live-p buffer) (cmacs-gnuseye-attached-p buffer))
+      (ignore-errors (cmacs-gnuseye-clear-polygons buffer t))
+      (cmacs-gnuseye--geojson
+       "ne_110m_admin_0_countries.geojson"
+       (lambda (d)
+         (when (buffer-live-p buffer)
+           (dolist (f (alist-get 'features d))
+             (let* ((props (alist-get 'properties f))
+                    (iso (cmacs-gnuseye--choropleth-iso props))
+                    (sc (and iso (if (hash-table-p scores)
+                                     (gethash iso scores)
+                                   (cdr (assoc iso scores))))))
+               (when (numberp sc)
+                 (let* ((rgba (cmacs-gnuseye--risk->rgba sc alpha))
+                        (geom (alist-get 'geometry f))
+                        (gt (alist-get 'type geom))
+                        (coords (alist-get 'coordinates geom)))
+                   (cond
+                    ((equal gt "Polygon")
+                     (cmacs-gnuseye--choropleth-ring buffer (car coords)
+                                                     rgba step))
+                    ((equal gt "MultiPolygon")
+                     (dolist (poly coords)
+                       (cmacs-gnuseye--choropleth-ring buffer (car poly)
+                                                       rgba step))))))))
+           (cmacs-gnuseye-redraw buffer)))))))
+
+(defun cmacs-gnuseye-choropleth-clear (&optional buffer)
+  "Remove the choropleth fills from BUFFER (or the active globe)."
+  (interactive)
+  (let ((buffer (or buffer cmacs-gnuseye-buffer)))
+    (when (and buffer (buffer-live-p buffer) (cmacs-gnuseye-attached-p buffer))
+      (ignore-errors (cmacs-gnuseye-clear-polygons buffer t))
+      (cmacs-gnuseye-redraw buffer))))
 
 (defun cmacs-gnuseye--flag-path (cc)
   (expand-file-name (format "cmacs/gnuseye/flags/%s.png" (downcase cc))

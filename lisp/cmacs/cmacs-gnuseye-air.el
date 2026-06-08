@@ -265,6 +265,7 @@ so the map fills in progressively instead of waiting for the slowest tile."
   :kind 'aircraft
   :interval 20
   :default-on t
+  :cluster t
   :fetch #'cmacs-gnuseye-air--fetch
   :advance #'cmacs-gnuseye-air--advance-layer)
 
