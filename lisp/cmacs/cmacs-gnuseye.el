@@ -771,11 +771,24 @@ and clicking one selects it (inspector + recentre)."
            cmacs-gnuseye--layers)
   (message "GNU's Eye: refreshing enabled layers"))
 
+(defun cmacs-gnuseye-refresh-view-layers ()
+  "Re-fetch view-dependent layers (e.g. aircraft) for the current view.
+Aircraft are scoped to what the globe is looking at, so they should be
+re-fetched after the camera moves."
+  (interactive)
+  (dolist (name '(aircraft))
+    (let ((layer (and (boundp 'cmacs-gnuseye--layers)
+                      (gethash name cmacs-gnuseye--layers))))
+      (when (and layer (cmacs-gnuseye-layer-enabled layer))
+        (cmacs-gnuseye--refresh-layer layer)))))
+
 (defun cmacs-gnuseye-fly-to-place (lat lon)
   "Fly the globe camera to LAT, LON (degrees, read from the minibuffer)."
   (interactive "nLatitude: \nnLongitude: ")
   (when (and cmacs-gnuseye-buffer (buffer-live-p cmacs-gnuseye-buffer))
-    (cmacs-gnuseye-fly-to cmacs-gnuseye-buffer (float lat) (float lon) 14.0 t)))
+    (cmacs-gnuseye-fly-to cmacs-gnuseye-buffer (float lat) (float lon) 14.0 t)
+    ;; Let the fly-to tween settle, then re-scope aircraft to the new view.
+    (run-with-timer 2.0 nil #'cmacs-gnuseye-refresh-view-layers)))
 
 ;;;; The map: coastlines, borders, labels, admin-1, all aligned ------------
 
@@ -806,8 +819,8 @@ and clicking one selects it (inspector + recentre)."
 Flag images (flagcdn.com) are downloaded once and cached; the first time
 they trickle in over a short while, then load instantly."
   :type 'boolean :group 'cmacs-gnuseye)
-(defcustom cmacs-gnuseye-flag-size 0.05
-  "Country flag apparent size.
+(defcustom cmacs-gnuseye-flag-size 0.02
+  "Country flag apparent size (a little larger than the label text).
 Flags are scaled by the zoom so they keep a roughly constant on-screen
 size; this is that size as a fraction of the camera's near distance."
   :type 'number :group 'cmacs-gnuseye)

@@ -191,10 +191,13 @@ Helpers:
   locally to "now" on a fast (5 s) timer — live motion needs no network.
   Each satellite carries its one-orbit ground track as a trail.
 - *Aircraft* come from adsb.lol by default --- a free, keyless community
-  ADS-B aggregator queried by centre + radius around whatever the globe is
-  currently looking at (~cmacs-gnuseye-air-radius-nm~, max 250 nm), so the
-  planes follow your view.  Set ~cmacs-gnuseye-air-source~ to ~opensky~ to
-  use OpenSky instead (its anonymous API now returns HTTP 429; put a free
+  ADS-B aggregator queried around whatever the globe is currently looking
+  at.  The query radius is chosen automatically to cover the visible area
+  at the current zoom (override with ~cmacs-gnuseye-air-radius-nm~), so the
+  planes fill the view rather than a single patch and follow it as you
+  navigate (re-fetched on fly-to; ~cmacs-gnuseye-refresh-view-layers~
+  re-scopes manually).  Set ~cmacs-gnuseye-air-source~ to ~opensky~ to use
+  OpenSky instead (its anonymous API now returns HTTP 429; put a free
   account in ~OPENSKY_USER~/~OPENSKY_PASS~ to use it).
 - *Vessels* parse a vessel JSON feed from ~cmacs-gnuseye-marine-url~ (nil =
   off).  Free *global* AIS is mostly websocket + key; point this at a

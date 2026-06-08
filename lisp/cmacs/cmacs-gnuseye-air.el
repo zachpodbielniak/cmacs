@@ -25,14 +25,16 @@ useful (anonymous access returns HTTP 429 \"Too many requests\")."
                  (const :tag "OpenSky Network" opensky))
   :group 'cmacs-gnuseye)
 
-(defcustom cmacs-gnuseye-air-max 200
+(defcustom cmacs-gnuseye-air-max 250
   "Maximum number of aircraft markers to render."
   :type 'integer
   :group 'cmacs-gnuseye)
 
-(defcustom cmacs-gnuseye-air-radius-nm 250
-  "Radius in nautical miles (max 250) around the view centre for adsb.lol."
-  :type 'integer
+(defcustom cmacs-gnuseye-air-radius-nm nil
+  "Radius in nautical miles around the view centre for adsb.lol.
+When nil, the radius is chosen automatically to cover the visible area at
+the current zoom (so aircraft fill the view rather than a single patch)."
+  :type '(choice (const :tag "Automatic (fit the view)" nil) integer)
   :group 'cmacs-gnuseye)
 
 (defcustom cmacs-gnuseye-air-center nil
@@ -45,17 +47,30 @@ skipped (no aircraft until a globe is open)."
 
 ;; ── adsb.lol (keyless, default) ─────────────────────────────────────────
 
-(defun cmacs-gnuseye-air--center ()
-  "Centre (LAT . LON) for the regional aircraft query."
-  (or (and (boundp 'cmacs-gnuseye-buffer) cmacs-gnuseye-buffer
-           (buffer-live-p cmacs-gnuseye-buffer)
-           (fboundp 'cmacs-gnuseye-view-center)
-           (ignore-errors (cmacs-gnuseye-view-center cmacs-gnuseye-buffer)))
-      cmacs-gnuseye-air-center))
+(defun cmacs-gnuseye-air--view ()
+  "Return (LAT LON RADIUS-NM) for the aircraft query, or nil.
+The radius covers the visible area at the current zoom unless
+`cmacs-gnuseye-air-radius-nm' overrides it."
+  (let ((vc (and (boundp 'cmacs-gnuseye-buffer) cmacs-gnuseye-buffer
+                 (buffer-live-p cmacs-gnuseye-buffer)
+                 (fboundp 'cmacs-gnuseye-view-center)
+                 (ignore-errors
+                   (cmacs-gnuseye-view-center cmacs-gnuseye-buffer)))))
+    (cond
+     ((and (consp vc) (numberp (nth 2 vc)))
+      ;; (lat lon distance): radius ~ the on-screen ground extent.
+      (let* ((dist (nth 2 vc))
+             (r (or cmacs-gnuseye-air-radius-nm
+                    (max 250 (min 2200 (round (* (- dist 6.371) 290)))))))
+        (list (nth 0 vc) (nth 1 vc) r)))
+     ((consp cmacs-gnuseye-air-center)
+      (list (car cmacs-gnuseye-air-center) (cdr cmacs-gnuseye-air-center)
+            (or cmacs-gnuseye-air-radius-nm 600)))
+     (t nil))))
 
-(defun cmacs-gnuseye-air--adsblol-url (lat lon)
+(defun cmacs-gnuseye-air--adsblol-url (lat lon radius-nm)
   (format "https://api.adsb.lol/v2/lat/%.4f/lon/%.4f/dist/%d"
-          lat lon (min 250 (max 1 cmacs-gnuseye-air-radius-nm))))
+          lat lon (max 1 radius-nm)))
 
 (defun cmacs-gnuseye-air--parse-adsblol (data)
   "Turn an adsb.lol DATA alist (the `ac' array) into aircraft entities."
@@ -140,11 +155,12 @@ skipped (no aircraft until a globe is open)."
        (lambda (data) (funcall cb (and data (cmacs-gnuseye-air--parse-opensky
                                              data))))
        (cmacs-gnuseye-air--opensky-headers) 'list)
-    (let ((c (cmacs-gnuseye-air--center)))
-      (if (not (consp c))
+    (let ((v (cmacs-gnuseye-air--view)))
+      (if (not v)
           (funcall cb nil)
         (cmacs-gnuseye-fetch-json
-         (cmacs-gnuseye-air--adsblol-url (float (car c)) (float (cdr c)))
+         (cmacs-gnuseye-air--adsblol-url (float (nth 0 v)) (float (nth 1 v))
+                                         (nth 2 v))
          (lambda (data) (funcall cb (and data (cmacs-gnuseye-air--parse-adsblol
                                                data)))))))))
 
@@ -152,7 +168,7 @@ skipped (no aircraft until a globe is open)."
   :title "Air traffic (ADS-B)"
   :group 'air
   :kind 'aircraft
-  :interval 15
+  :interval 10
   :default-on t
   :fetch #'cmacs-gnuseye-air--fetch)
 

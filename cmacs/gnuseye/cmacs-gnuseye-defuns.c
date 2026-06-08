@@ -449,10 +449,11 @@ DEFUN ("cmacs-gnuseye-label-count", Fcmacs_gnuseye_label_count,
 
 DEFUN ("cmacs-gnuseye-view-center", Fcmacs_gnuseye_view_center,
        Scmacs_gnuseye_view_center, 1, 1, 0,
-       doc: /* Return (LAT . LON) of the point BUFFER's globe camera looks at.
-That is the sub-camera point (the centre of the visible hemisphere), handy
-for scoping a regional data fetch to what the user is viewing.  Returns nil
-if BUFFER has no globe.  */)
+       doc: /* Return (LAT LON DISTANCE) for BUFFER's globe camera.
+LAT/LON are the sub-camera point (centre of the visible hemisphere) and
+DISTANCE is the camera's distance from the globe centre (a zoom measure),
+handy for scoping a regional data fetch to what the user is viewing.
+Returns nil if BUFFER has no globe.  */)
   (Lisp_Object buffer)
 {
   CHECK_BUFFER (buffer);
@@ -463,7 +464,8 @@ if BUFFER has no globe.  */)
     cmacs_libregnum_view_get_render_ctx (v),
     &px, &py, &pz, &tx, &ty, &tz, &fov);
   gnuseye_xyz_to_latlon (px, py, pz, &lat, &lon, &alt);
-  return Fcons (make_float (lat), make_float (lon));
+  double dist = sqrt (px * px + py * py + pz * pz);
+  return list3 (make_float (lat), make_float (lon), make_float (dist));
 }
 
 DEFUN ("cmacs-gnuseye-add-flag", Fcmacs_gnuseye_add_flag,
