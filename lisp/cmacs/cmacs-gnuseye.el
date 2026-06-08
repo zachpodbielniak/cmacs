@@ -890,8 +890,14 @@ size; this is that size as a fraction of the camera's near distance."
   "Flag image URL; %s is the lowercase ISO-A2 country code."
   :type 'string :group 'cmacs-gnuseye)
 
+(defcustom cmacs-gnuseye-lakes t
+  "Draw major lakes (incl. the Great Lakes) on the globe." :type 'boolean
+  :group 'cmacs-gnuseye)
 (defcustom cmacs-gnuseye-coastline-color "#c8a96f"
   "Coastline colour." :type 'string :group 'cmacs-gnuseye)
+(defcustom cmacs-gnuseye-lake-color "#5b86b0"
+  "Lake-shore colour (a muted water blue)." :type 'string
+  :group 'cmacs-gnuseye)
 (defcustom cmacs-gnuseye-border-color "#6f93ba"
   "Country border colour." :type 'string :group 'cmacs-gnuseye)
 (defcustom cmacs-gnuseye-admin1-color "#48627f"
@@ -1063,6 +1069,15 @@ Each layer's data is downloaded + cached once.  Honours the
            (when (buffer-live-p buffer)
              (cmacs-gnuseye--draw-lines
               buffer d (cmacs-gnuseye--color->rgba cmacs-gnuseye-coastline-color))
+             (cmacs-gnuseye-redraw buffer)))))
+      (when cmacs-gnuseye-lakes
+        (cmacs-gnuseye--geojson
+         "ne_50m_lakes.geojson"
+         (lambda (d)
+           (when (buffer-live-p buffer)
+             (cmacs-gnuseye--draw-polygons
+              buffer d (cmacs-gnuseye--color->rgba cmacs-gnuseye-lake-color)
+              nil)
              (cmacs-gnuseye-redraw buffer)))))
       (when cmacs-gnuseye-borders
         (cmacs-gnuseye--geojson
