@@ -39,9 +39,16 @@ inspector).  Keys: ~e~ entity list, ~i~ inspector, ~l~ layers, ~s~ search,
 legend, ~q~ quit.
 
 The globe is a sun-lit 3D sphere (soft day/night terminator; the night
-side stays partly lit so markers everywhere remain readable).  For
-photoreal continents, point ~cmacs-gnuseye-base-texture~ at an
-equirectangular Earth image (e.g. NASA Blue Marble).
+side stays partly lit so markers everywhere remain readable) with real
+*vector coastlines* (Natural Earth, downloaded + cached once).  The
+coastlines are drawn in the globe's own lat/lon convention, so they always
+line up with the markers --- a plane over France is over France.  Disable
+with ~cmacs-gnuseye-coastlines~ nil.
+
+(A raster ~cmacs-gnuseye-base-texture~ is also supported but experimental:
+the sphere mesh's UV layout does not match the marker convention, so a
+photographic texture will not align with the markers --- prefer the
+coastlines for an accurate, aligned Earth.)
 
 Markers are recognisable, heading-oriented 3D icons: aircraft are little
 planes (tapered nose, wings, engines, tail) floating at

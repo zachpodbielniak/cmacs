@@ -81,6 +81,16 @@ extern int  cmacs_gnuseye_add_marker (CmacsLibregnumRenderCtx *r,
                                       const char *id, const char *label,
                                       int label_mode);
 
+/* Persistent coastline/landmass overlay drawn in OUR lat/lon convention, so
+ * it always aligns with the markers (unlike a raster texture, which is bound
+ * to the sphere mesh's own UV layout).  add appends one polyline (lat/lon
+ * arrays, degrees) as a static drawable lifted just above the surface; clear
+ * removes them all. */
+extern void cmacs_gnuseye_add_coastline (CmacsLibregnumRenderCtx *r,
+                                         const double *lats, const double *lons,
+                                         int n, unsigned int rgba);
+extern void cmacs_gnuseye_clear_coastlines (CmacsLibregnumRenderCtx *r);
+
 /* Polyline arc following a sampled (lat,lon[,alt_m]) path (ALTS may be NULL
  * for a surface track).  For orbits, flight paths, ship wakes, cables. */
 extern void cmacs_gnuseye_add_arc (CmacsLibregnumRenderCtx *r,

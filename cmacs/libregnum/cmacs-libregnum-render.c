@@ -214,6 +214,11 @@ struct CmacsLibregnumRenderCtx
   GrlModel         *background_model;     /* owned, or NULL */
   float             background_spin_deg;  /* rotation about +Y, degrees */
 
+  /* Persistent static drawables (e.g. the gnuseye coastline overlay):
+   * drawn every frame after the background model and NOT cleared by
+   * clear_drawables.  Owned (g_object_unref per element). */
+  GPtrArray        *static_drawables;
+
   /* Hovered scene node id (-1 none); drives hover label policy. */
   gint              hovered;
 
@@ -278,6 +283,7 @@ cmacs_libregnum_render_ctx_new (int w, int h)
   r->hovered = -1;
   r->renderer  = lrg_renderer_new (LRG_WINDOW (shared_window));
   r->drawables = g_ptr_array_new_with_free_func (g_object_unref);
+  r->static_drawables = g_ptr_array_new_with_free_func (g_object_unref);
   r->nodes = g_array_new (FALSE, TRUE, sizeof (CmacsNode));
   g_array_set_clear_func (r->nodes, cmacs_node_clear);
 
@@ -324,6 +330,7 @@ cmacs_libregnum_render_ctx_free (CmacsLibregnumRenderCtx *r)
 #endif
   if (r->fbo_valid) UnloadRenderTexture (r->fbo);
   g_clear_object (&r->background_model);
+  if (r->static_drawables) g_ptr_array_unref (r->static_drawables);
   g_clear_object (&r->camera);
   if (r->drawables) g_ptr_array_unref (r->drawables);
   if (r->nodes) g_array_free (r->nodes, TRUE);
@@ -382,6 +389,21 @@ cmacs_libregnum_render_ctx_set_background_spin (CmacsLibregnumRenderCtx *r,
                                                 double deg)
 {
   if (r) r->background_spin_deg = (float) deg;
+}
+
+void
+cmacs_libregnum_render_ctx_add_static_drawable (CmacsLibregnumRenderCtx *r,
+                                                void *drawable)
+{
+  if (!r || !drawable) return;
+  g_ptr_array_add (r->static_drawables, drawable);   /* ownership transfers */
+}
+
+void
+cmacs_libregnum_render_ctx_clear_static_drawables (CmacsLibregnumRenderCtx *r)
+{
+  if (r && r->static_drawables)
+    g_ptr_array_set_size (r->static_drawables, 0);
 }
 
 /* ── Per-node label policy + hover ───────────────────────────────── */
@@ -1034,6 +1056,14 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
             g_autoptr (GrlColor)   bwhite = grl_color_new (255, 255, 255, 255);
             grl_model_draw_ex (r->background_model, bpos, baxis,
                                r->background_spin_deg, bscl, bwhite);
+          }
+        /* Persistent static overlay (coastlines etc.), behind markers. */
+        for (guint i = 0;
+             r->static_drawables && i < r->static_drawables->len; i++)
+          {
+            gpointer d = g_ptr_array_index (r->static_drawables, i);
+            if (LRG_IS_DRAWABLE (d))
+              lrg_drawable_draw (LRG_DRAWABLE (d), 0.0f);
           }
         for (guint i = 0; r->drawables && i < r->drawables->len; i++)
           {

@@ -103,6 +103,64 @@ globe_state (CmacsLibregnumRenderCtx *r)
   return m ? g_object_get_data (G_OBJECT (m), "gnuseye-globe") : NULL;
 }
 
+/* ── Real-texture warp ───────────────────────────────────────────────
+ * graylib's sphere mesh (raylib GenMeshSphere -> par_shapes) has poles on
+ * +-Z and its texcoords transposed vs a standard equirectangular image, so
+ * a plain Earth texture does NOT line up with our Y-up lat/lon markers.
+ * Rather than rewrite the (intuitive, working) marker convention, we warp
+ * the source image ONCE into the mesh's UV space: for each output texel we
+ * take the mesh position par_shapes would put there, convert it to our
+ * Y-up lat/lon, and sample the source equirectangular Earth.  The result,
+ * sampled by the mesh, shows real geography exactly where our markers sit.
+ *
+ *   par_shapes position(phi,theta) = (cos t sin p, sin t sin p, cos p)
+ *   texcoord = (phi/PI, theta/2PI)
+ *   our Y-up: lat = asin(y), lon = atan2(z, x) */
+#define GLOBE_WARP_W 640
+#define GLOBE_WARP_H 1280
+
+static GrlImage *
+warp_equirect_to_mesh (GrlImage *src)
+{
+  int sw = grl_image_get_width (src), sh = grl_image_get_height (src);
+  if (sw <= 0 || sh <= 0) return NULL;
+  g_autoptr (GrlColor) bg = grl_color_new (8, 22, 50, 255);
+  GrlImage *out = grl_image_new_color (GLOBE_WARP_W, GLOBE_WARP_H, bg);
+  if (!out) return NULL;
+  for (int oy = 0; oy < GLOBE_WARP_H; oy++)
+    {
+      double theta = ((double) oy + 0.5) / GLOBE_WARP_H * (2.0 * M_PI);
+      double st = sin (theta), ct = cos (theta);
+      for (int ox = 0; ox < GLOBE_WARP_W; ox++)
+        {
+          double phi = ((double) ox + 0.5) / GLOBE_WARP_W * M_PI;
+          double sp = sin (phi), cp = cos (phi);
+          double px = ct * sp, py = st * sp, pz = cp;   /* mesh unit pos */
+          double lat = asin (py < -1 ? -1 : (py > 1 ? 1 : py));
+          double lon = atan2 (pz, px);
+          double u = (lon / (2.0 * M_PI)) + 0.5;         /* 0..1 (lon) */
+          double v = 0.5 - (lat / M_PI);                 /* 0 top=north */
+          int sx = (int) (u * sw), sy = (int) (v * sh);
+          if (sx < 0) sx = 0; else if (sx >= sw) sx = sw - 1;
+          if (sy < 0) sy = 0; else if (sy >= sh) sy = sh - 1;
+          g_autoptr (GrlColor) col = grl_image_get_pixel (src, sx, sy);
+          if (col) grl_image_draw_pixel (out, ox, oy, col);
+        }
+    }
+  return out;
+}
+
+/* Load an equirectangular Earth image from PATH and warp it for the mesh.
+ * Returns NULL on failure (caller falls back to the procedural globe). */
+static GrlImage *
+load_earth_texture (const char *path)
+{
+  if (!path || !*path) return NULL;
+  g_autoptr (GrlImage) src = grl_image_new_from_file (path);
+  if (!src) return NULL;
+  return warp_equirect_to_mesh (src);
+}
+
 /* ── Procedural fallback texture ─────────────────────────────────────
  * An equirectangular ocean with a lat/lon graticule and polar caps -- a
  * recognisable, orientation-bearing globe when no Blue-Marble image is
@@ -172,7 +230,7 @@ cmacs_gnuseye_build (CmacsLibregnumRenderCtx *r, const char *base_texture_path)
 
   GnuseyeGlobe *g = g_new0 (GnuseyeGlobe, 1);
   if (base_texture_path && *base_texture_path)
-    g->img = grl_image_new_from_file (base_texture_path);
+    g->img = load_earth_texture (base_texture_path);
   if (!g->img)
     g->img = make_procedural_earth (GLOBE_TEX_W, GLOBE_TEX_H);
   if (!g->img)
@@ -226,7 +284,7 @@ cmacs_gnuseye_globe_set_base_texture (CmacsLibregnumRenderCtx *r,
   GnuseyeGlobe *g = globe_state (r);
   GrlModel *m = cmacs_libregnum_render_ctx_get_background_model (r);
   if (!g || !m || !path) return FALSE;
-  GrlImage *img = grl_image_new_from_file (path);
+  GrlImage *img = load_earth_texture (path);
   if (!img) return FALSE;
   g_clear_object (&g->img);
   g_clear_object (&g->tex);
@@ -508,6 +566,40 @@ cmacs_gnuseye_add_arc (CmacsLibregnumRenderCtx *r,
       lrg_shape_set_color (LRG_SHAPE (seg), col);
       cmacs_libregnum_render_ctx_add_drawable (r, seg);
     }
+}
+
+/* ── Coastline overlay (vector continents, our convention) ──────────── */
+
+#define COAST_LIFT_M 9000.0   /* lift coastlines just above the ocean skin */
+
+void
+cmacs_gnuseye_add_coastline (CmacsLibregnumRenderCtx *r,
+                             const double *lats, const double *lons,
+                             int n, unsigned int rgba)
+{
+  if (!r || !lats || !lons || n < 2) return;
+  guint8 cr = (rgba >> 24) & 0xff, cg = (rgba >> 16) & 0xff;
+  guint8 cb = (rgba >> 8) & 0xff,  ca = rgba & 0xff;
+  if (ca == 0) ca = 255;
+  for (int i = 0; i + 1 < n; i++)
+    {
+      double x0, y0, z0, x1, y1, z1;
+      gnuseye_latlon_to_xyz (lats[i], lons[i], COAST_LIFT_M, &x0, &y0, &z0);
+      gnuseye_latlon_to_xyz (lats[i+1], lons[i+1], COAST_LIFT_M,
+                             &x1, &y1, &z1);
+      LrgLine3D *seg =
+        lrg_line3d_new_from_to ((gfloat) x0, (gfloat) y0, (gfloat) z0,
+                                (gfloat) x1, (gfloat) y1, (gfloat) z1);
+      g_autoptr (GrlColor) col = grl_color_new (cr, cg, cb, ca);
+      lrg_shape_set_color (LRG_SHAPE (seg), col);
+      cmacs_libregnum_render_ctx_add_static_drawable (r, seg);
+    }
+}
+
+void
+cmacs_gnuseye_clear_coastlines (CmacsLibregnumRenderCtx *r)
+{
+  if (r) cmacs_libregnum_render_ctx_clear_static_drawables (r);
 }
 
 /* ── Camera ─────────────────────────────────────────────────────────── */

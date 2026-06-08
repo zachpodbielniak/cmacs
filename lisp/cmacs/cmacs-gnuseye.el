@@ -777,6 +777,91 @@ and clicking one selects it (inspector + recentre)."
   (when (and cmacs-gnuseye-buffer (buffer-live-p cmacs-gnuseye-buffer))
     (cmacs-gnuseye-fly-to cmacs-gnuseye-buffer (float lat) (float lon) 14.0 t)))
 
+;;;; Coastlines: real continents, drawn aligned with the markers -----------
+
+(defcustom cmacs-gnuseye-coastlines t
+  "When non-nil, draw real coastlines on the globe.
+The data (Natural Earth, public domain) is downloaded once and cached.
+Coastlines are drawn in the globe's own lat/lon convention, so unlike a
+raster texture they always line up with the markers."
+  :type 'boolean
+  :group 'cmacs-gnuseye)
+
+(defcustom cmacs-gnuseye-coastline-url
+  "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_coastline.geojson"
+  "GeoJSON coastline source (LineString/MultiLineString features)."
+  :type 'string
+  :group 'cmacs-gnuseye)
+
+(defcustom cmacs-gnuseye-coastline-color "#c7a86e"
+  "Coastline colour (a land-tan by default)."
+  :type 'string
+  :group 'cmacs-gnuseye)
+
+(defvar cmacs-gnuseye--coastline-cache
+  (expand-file-name "cmacs/gnuseye/ne_110m_coastline.geojson"
+                    (or (getenv "XDG_CACHE_HOME") "~/.cache"))
+  "Local cache path for the coastline GeoJSON.")
+
+(defun cmacs-gnuseye--draw-coast-line (buffer coords rgba)
+  "Draw one COORDS polyline (list of (LON LAT) pairs) on BUFFER's globe."
+  (let ((n (length coords)))
+    (when (>= n 2)
+      (let ((lats (make-vector n 0.0))
+            (lons (make-vector n 0.0))
+            (i 0))
+        (dolist (p coords)
+          (aset lons i (float (or (nth 0 p) 0.0)))
+          (aset lats i (float (or (nth 1 p) 0.0)))
+          (setq i (1+ i)))
+        (ignore-errors
+          (cmacs-gnuseye-add-coastline buffer lats lons rgba))))))
+
+(defun cmacs-gnuseye--draw-coastlines (buffer geojson)
+  "Parse GEOJSON and draw its coastlines on BUFFER's globe."
+  (when (and (buffer-live-p buffer) (cmacs-gnuseye-attached-p buffer))
+    (let* ((data (condition-case nil
+                     (json-parse-string geojson :object-type 'alist
+                                        :array-type 'list)
+                   (error nil)))
+           (features (alist-get 'features data))
+           (rgba (cmacs-gnuseye--color->rgba cmacs-gnuseye-coastline-color)))
+      (when features
+        (cmacs-gnuseye-clear-coastlines buffer)
+        (dolist (f features)
+          (let* ((geom (alist-get 'geometry f))
+                 (gtype (alist-get 'type geom))
+                 (coords (alist-get 'coordinates geom)))
+            (cond
+             ((equal gtype "LineString")
+              (cmacs-gnuseye--draw-coast-line buffer coords rgba))
+             ((equal gtype "MultiLineString")
+              (dolist (line coords)
+                (cmacs-gnuseye--draw-coast-line buffer line rgba))))))
+        (cmacs-gnuseye-redraw buffer)))))
+
+(defun cmacs-gnuseye-load-coastlines (&optional buffer)
+  "Draw real coastlines on BUFFER's globe (downloading + caching once)."
+  (interactive)
+  (let ((buffer (or buffer cmacs-gnuseye-buffer)))
+    (when (and buffer (buffer-live-p buffer) cmacs-gnuseye-coastlines
+               (fboundp 'cmacs-gnuseye-add-coastline))
+      (if (file-readable-p cmacs-gnuseye--coastline-cache)
+          (cmacs-gnuseye--draw-coastlines
+           buffer
+           (with-temp-buffer
+             (insert-file-contents cmacs-gnuseye--coastline-cache)
+             (buffer-string)))
+        (cmacs-gnuseye-fetch-text
+         cmacs-gnuseye-coastline-url
+         (lambda (body)
+           (when (and body (> (length body) 100))
+             (ignore-errors
+               (make-directory
+                (file-name-directory cmacs-gnuseye--coastline-cache) t)
+               (with-temp-file cmacs-gnuseye--coastline-cache (insert body)))
+             (cmacs-gnuseye--draw-coastlines buffer body))))))))
+
 ;;;; Keep the globe round: track the window's aspect ratio ------------------
 
 (defvar cmacs-gnuseye--resize-timer nil)
@@ -850,6 +935,8 @@ just the globe viewport."
     (add-hook 'window-size-change-functions #'cmacs-gnuseye--on-size-change)
     (cmacs-gnuseye--fit-window-now)
     (cmacs-gnuseye--on-size-change)
+    ;; Real continents (vector coastlines, aligned with the markers).
+    (cmacs-gnuseye-load-coastlines buf)
     buf))
 
 ;;;; Evil (Doom) + vanilla navigation -----------------------------------------

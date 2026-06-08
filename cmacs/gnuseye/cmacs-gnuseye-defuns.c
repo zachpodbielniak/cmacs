@@ -352,6 +352,49 @@ Returns t on success or signals `cmacs-gnuseye-error' with the reason.  */)
   return Qt;
 }
 
+DEFUN ("cmacs-gnuseye-add-coastline", Fcmacs_gnuseye_add_coastline,
+       Scmacs_gnuseye_add_coastline, 3, 4, 0,
+       doc: /* Add one coastline polyline to BUFFER's globe.
+LATS and LONS are equal-length vectors of degrees.  COLOR is a packed
+integer 0xRRGGBBAA (default a land tan).  Coastlines are drawn in the
+globe's own lat/lon convention, so they always align with the markers,
+and persist across marker refreshes.  */)
+  (Lisp_Object buffer, Lisp_Object lats, Lisp_Object lons, Lisp_Object color)
+{
+  CHECK_BUFFER (buffer);
+  if (!VECTORP (lats) || !VECTORP (lons)) return Qnil;
+  ptrdiff_t n = ASIZE (lats);
+  if (ASIZE (lons) < n) n = ASIZE (lons);
+  if (n < 2) return Qnil;
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  unsigned int rgba = 0xd2c39bffu;            /* land tan default */
+  if (FIXNUMP (color)) rgba = (unsigned int) XFIXNUM (color);
+  double *la = xmalloc (sizeof (double) * n);
+  double *lo = xmalloc (sizeof (double) * n);
+  for (ptrdiff_t i = 0; i < n; i++)
+    {
+      la[i] = XFLOATINT (AREF (lats, i));
+      lo[i] = XFLOATINT (AREF (lons, i));
+    }
+  cmacs_gnuseye_add_coastline (cmacs_libregnum_view_get_render_ctx (v),
+                              la, lo, (int) n, rgba);
+  xfree (la); xfree (lo);
+  return Qt;
+}
+
+DEFUN ("cmacs-gnuseye-clear-coastlines", Fcmacs_gnuseye_clear_coastlines,
+       Scmacs_gnuseye_clear_coastlines, 1, 1, 0,
+       doc: /* Remove BUFFER's globe coastline overlay.  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (v)
+    cmacs_gnuseye_clear_coastlines (cmacs_libregnum_view_get_render_ctx (v));
+  return Qt;
+}
+
 void
 syms_of_cmacs_gnuseye_defuns (void)
 {
@@ -398,6 +441,8 @@ syms_of_cmacs_gnuseye_defuns (void)
   defsubr (&Scmacs_gnuseye_set_spin);
   defsubr (&Scmacs_gnuseye_redraw);
   defsubr (&Scmacs_gnuseye_snapshot);
+  defsubr (&Scmacs_gnuseye_add_coastline);
+  defsubr (&Scmacs_gnuseye_clear_coastlines);
 }
 
 #endif /* HAVE_CMACS_GNUSEYE */

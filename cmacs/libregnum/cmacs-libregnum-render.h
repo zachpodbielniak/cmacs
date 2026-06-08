@@ -66,6 +66,14 @@ extern void *cmacs_libregnum_render_ctx_get_background_model
 extern void  cmacs_libregnum_render_ctx_set_background_spin
                               (CmacsLibregnumRenderCtx *r, double deg);
 
+/* Persistent static drawables (e.g. a coastline overlay): drawn every frame
+ * after the background model, NOT cleared by clear_drawables.  add transfers
+ * ownership of DRAWABLE (an LrgDrawable*, void* to keep the header clean). */
+extern void  cmacs_libregnum_render_ctx_add_static_drawable
+                              (CmacsLibregnumRenderCtx *r, void *drawable);
+extern void  cmacs_libregnum_render_ctx_clear_static_drawables
+                              (CmacsLibregnumRenderCtx *r);
+
 /* ── Per-node label policy ───────────────────────────────────────
  * Generalises the overlay's label filter.  LEGACY (-1) keeps the original
  * behaviour (label directories + the selected node); the others let a
