@@ -20,7 +20,7 @@
   :type 'string
   :group 'cmacs-gnuseye)
 
-(defcustom cmacs-gnuseye-astro-max 60
+(defcustom cmacs-gnuseye-astro-max 40
   "Maximum number of satellites to render (bounds marker/trail count)."
   :type 'integer
   :group 'cmacs-gnuseye)

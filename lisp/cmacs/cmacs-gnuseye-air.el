@@ -23,7 +23,7 @@ to your area of interest is strongly recommended."
                        (number :tag "lat max") (number :tag "lon max")))
   :group 'cmacs-gnuseye)
 
-(defcustom cmacs-gnuseye-air-max 300
+(defcustom cmacs-gnuseye-air-max 150
   "Maximum number of aircraft markers to render."
   :type 'integer
   :group 'cmacs-gnuseye)

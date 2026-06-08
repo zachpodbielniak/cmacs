@@ -64,29 +64,56 @@ globe_state (CmacsLibregnumRenderCtx *r)
 static GrlImage *
 make_procedural_earth (int w, int h)
 {
-  g_autoptr (GrlColor) ocean = grl_color_new (24, 52, 96, 255);
+  g_autoptr (GrlColor) ocean = grl_color_new (18, 42, 78, 255);
   GrlImage *img = grl_image_new_color (w, h, ocean);
   if (!img) return NULL;
 
-  g_autoptr (GrlColor) grid  = grl_color_new (60, 96, 140, 255);
-  g_autoptr (GrlColor) axis  = grl_color_new (110, 150, 200, 255);
-  g_autoptr (GrlColor) cap   = grl_color_new (210, 224, 240, 255);
+  g_autoptr (GrlColor) minor = grl_color_new (40, 72, 112, 255);
+  g_autoptr (GrlColor) major = grl_color_new (84, 128, 180, 255);
+  g_autoptr (GrlColor) tropic = grl_color_new (70, 150, 150, 255);
+  g_autoptr (GrlColor) cap   = grl_color_new (208, 222, 238, 255);
+  g_autoptr (GrlColor) band  = grl_color_new (24, 54, 96, 255);
 
-  /* Parallels every 15 degrees; equator brighter. */
-  for (int lat = -75; lat <= 75; lat += 15)
+  /* Subtle equatorial brightening band for depth. */
+  for (int lat = -25; lat <= 25; lat += 1)
     {
       int y = (int) ((90.0 - lat) / 180.0 * h);
-      grl_image_draw_line (img, 0, y, w - 1, y, lat == 0 ? axis : grid);
+      grl_image_draw_line (img, 0, y, w - 1, y, band);
     }
-  /* Meridians every 30 degrees; prime meridian brighter. */
-  for (int lon = -180; lon <= 180; lon += 30)
+
+  /* Minor parallels every 10 deg, meridians every 15 deg. */
+  for (int lat = -80; lat <= 80; lat += 10)
+    {
+      int y = (int) ((90.0 - lat) / 180.0 * h);
+      grl_image_draw_line (img, 0, y, w - 1, y, minor);
+    }
+  for (int lon = -180; lon <= 180; lon += 15)
     {
       int x = (int) ((lon + 180.0) / 360.0 * w);
       if (x >= w) x = w - 1;
-      grl_image_draw_line (img, x, 0, x, h - 1, lon == 0 ? axis : grid);
+      grl_image_draw_line (img, x, 0, x, h - 1, minor);
     }
-  /* Polar caps (top/bottom ~10 deg). */
-  int cap_h = (int) (10.0 / 180.0 * h);
+
+  /* Emphasised reference lines (2 px): equator, prime meridian, tropics
+   * (+-23.5), polar circles (+-66.5). */
+  const double majlat[] = { 0, 23.5, -23.5, 66.5, -66.5 };
+  for (unsigned i = 0; i < G_N_ELEMENTS (majlat); i++)
+    {
+      int y = (int) ((90.0 - majlat[i]) / 180.0 * h);
+      const GrlColor *c = (i >= 1 && i <= 2) ? tropic : major;
+      grl_image_draw_line (img, 0, y, w - 1, y, c);
+      grl_image_draw_line (img, 0, y + 1, w - 1, y + 1, c);
+    }
+  for (int lon = -180; lon <= 180; lon += 90)   /* meridians + antimeridian */
+    {
+      int x = (int) ((lon + 180.0) / 360.0 * w);
+      if (x >= w - 1) x = w - 2;
+      grl_image_draw_line (img, x, 0, x, h - 1, major);
+      grl_image_draw_line (img, x + 1, 0, x + 1, h - 1, major);
+    }
+
+  /* Polar caps (top/bottom ~12 deg). */
+  int cap_h = (int) (12.0 / 180.0 * h);
   for (int y = 0; y < cap_h; y++)
     {
       grl_image_draw_line (img, 0, y, w - 1, y, cap);
@@ -200,7 +227,91 @@ cmacs_gnuseye_globe_get_spin (CmacsLibregnumRenderCtx *r)
   return g ? g->spin : 0.0;
 }
 
-/* ── Markers + arcs ─────────────────────────────────────────────────── */
+/* ── Markers: oriented 3D icons ─────────────────────────────────────── */
+
+static void
+v_norm (double v[3])
+{
+  double n = sqrt (v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
+  if (n > 1e-12) { v[0]/=n; v[1]/=n; v[2]/=n; }
+}
+
+static void
+v_cross (const double a[3], const double b[3], double o[3])
+{
+  o[0] = a[1]*b[2] - a[2]*b[1];
+  o[1] = a[2]*b[0] - a[0]*b[2];
+  o[2] = a[0]*b[1] - a[1]*b[0];
+}
+
+/* Euler angles (radians) for the rotation whose columns are (right, up,
+ * fwd), matching the Rx*Ry*Rz order LrgShape3D applies at draw time.  The
+ * icon is authored in a local frame x=right, y=up, z=forward(travel). */
+static void
+frame_euler (const double up[3], const double fwd[3], const double right[3],
+             float *rx, float *ry, float *rz)
+{
+  double fx = fwd[0];
+  if (fx > 1.0) fx = 1.0; else if (fx < -1.0) fx = -1.0;
+  *ry = (float) asin (fx);
+  double cb = cos (*ry);
+  if (fabs (cb) > 1e-4)
+    {
+      *rx = (float) atan2 (-fwd[1], fwd[2]);
+      *rz = (float) atan2 (-up[0], right[0]);
+    }
+  else
+    {
+      *rx = (float) atan2 (right[1], up[1]);
+      *rz = 0.0f;
+    }
+}
+
+/* A solid box of dims (w,h,d) along the local (right,up,fwd) axes, centred
+ * at world P + lx*right + ly*up + lz*fwd, oriented by (rx,ry,rz). */
+static void
+add_box (CmacsLibregnumRenderCtx *r, const double P[3],
+         const double R[3], const double U[3], const double F[3],
+         float rx, float ry, float rz,
+         double lx, double ly, double lz, double w, double h, double d,
+         guint8 cr, guint8 cg, guint8 cb, guint8 ca)
+{
+  double wx = P[0] + lx*R[0] + ly*U[0] + lz*F[0];
+  double wy = P[1] + lx*R[1] + ly*U[1] + lz*F[1];
+  double wz = P[2] + lx*R[2] + ly*U[2] + lz*F[2];
+  LrgCube3D *c = lrg_cube3d_new_at ((gfloat) wx, (gfloat) wy, (gfloat) wz,
+                                    (gfloat) w, (gfloat) h, (gfloat) d);
+  lrg_shape3d_set_rotation_xyz (LRG_SHAPE3D (c), rx, ry, rz);
+  g_autoptr (GrlColor) col = grl_color_new (cr, cg, cb, ca);
+  lrg_shape_set_color (LRG_SHAPE (c), col);
+  cmacs_libregnum_render_ctx_add_drawable (r, c);
+}
+
+static void
+add_sphere (CmacsLibregnumRenderCtx *r, const double P[3], double radius,
+            guint8 cr, guint8 cg, guint8 cb, guint8 ca)
+{
+  LrgSphere3D *s = lrg_sphere3d_new_at ((gfloat) P[0], (gfloat) P[1],
+                                        (gfloat) P[2], (gfloat) radius);
+  g_autoptr (GrlColor) col = grl_color_new (cr, cg, cb, ca);
+  lrg_shape_set_color (LRG_SHAPE (s), col);
+  cmacs_libregnum_render_ctx_add_drawable (r, s);
+}
+
+/* Vertical altitude exaggeration so markers separate visibly from the
+ * surface (10 km of real aircraft altitude is sub-pixel otherwise).  The
+ * detail view still reports the true altitude. */
+static double
+kind_alt_exag (int kind)
+{
+  switch (kind)
+    {
+    case CMACS_GNUSEYE_MARKER_AIRCRAFT:  return 45.0;
+    case CMACS_GNUSEYE_MARKER_SATELLITE: return 1.0;
+    case CMACS_GNUSEYE_MARKER_LAUNCH:    return 4.0;
+    default:                             return 0.0;
+    }
+}
 
 void
 cmacs_gnuseye_clear_markers (CmacsLibregnumRenderCtx *r)
@@ -216,45 +327,103 @@ cmacs_gnuseye_add_marker (CmacsLibregnumRenderCtx *r, int kind,
                           double scale, unsigned int rgba,
                           const char *id, const char *label, int label_mode)
 {
-  (void) kind;
   if (!r) return -1;
-  double x, y, z;
-  gnuseye_latlon_to_xyz (lat, lon, alt_m, &x, &y, &z);
-
-  double radius = 0.045 * (scale > 0 ? scale : 1.0);
-  if (radius < 0.02) radius = 0.02;
 
   guint8 cr = (rgba >> 24) & 0xff, cg = (rgba >> 16) & 0xff;
   guint8 cb = (rgba >> 8) & 0xff,  ca = rgba & 0xff;
   if (ca == 0) ca = 255;
+  double s = 0.11 * (scale > 0 ? scale : 1.0);   /* icon base size */
 
-  LrgSphere3D *s = lrg_sphere3d_new_at ((gfloat) x, (gfloat) y, (gfloat) z,
-                                        (gfloat) radius);
-  g_autoptr (GrlColor) col = grl_color_new (cr, cg, cb, ca);
-  lrg_shape_set_color (LRG_SHAPE (s), col);
-  cmacs_libregnum_render_ctx_add_drawable (r, s);
-
-  /* Heading tick: a short line from the marker along the travel direction,
-   * tangent to the surface -- "drawn in the direction it is travelling". */
+  /* Local tangent frame: up = surface normal, fwd = travel direction. */
+  double up[3], east[3], north[3], fwd[3], right[3];
+  gnuseye_enu_basis (lat, lon, up, east, north);
   if (heading >= 0.0)
     {
-      double fx, fy, fz;
-      gnuseye_heading_forward (lat, lon, heading, &fx, &fy, &fz);
-      double tlen = radius * 5.0 + 0.12 * (scale > 0 ? scale : 1.0);
-      LrgLine3D *tick =
-        lrg_line3d_new_from_to ((gfloat) x, (gfloat) y, (gfloat) z,
-                                (gfloat) (x + fx * tlen),
-                                (gfloat) (y + fy * tlen),
-                                (gfloat) (z + fz * tlen));
-      g_autoptr (GrlColor) tcol = grl_color_new (cr, cg, cb, 255);
-      lrg_shape_set_color (LRG_SHAPE (tick), tcol);
-      cmacs_libregnum_render_ctx_add_drawable (r, tick);
+      double h = heading * GNUSEYE_DEG2RAD, ch = cos (h), sh = sin (h);
+      fwd[0] = ch*north[0] + sh*east[0];
+      fwd[1] = ch*north[1] + sh*east[1];
+      fwd[2] = ch*north[2] + sh*east[2];
+    }
+  else { fwd[0]=north[0]; fwd[1]=north[1]; fwd[2]=north[2]; }
+  v_norm (fwd);
+  v_cross (up, fwd, right); v_norm (right);
+  float rx, ry, rz;
+  frame_euler (up, fwd, right, &rx, &ry, &rz);
+
+  /* Elevated position P (render altitude) and surface point P0. */
+  double render_alt = alt_m * kind_alt_exag (kind);
+  double P[3], P0[3];
+  gnuseye_latlon_to_xyz (lat, lon, render_alt, &P[0], &P[1], &P[2]);
+  gnuseye_latlon_to_xyz (lat, lon, 0.0, &P0[0], &P0[1], &P0[2]);
+  /* Sit surface icons just above the skin to avoid z-fighting. */
+  if (render_alt <= 0.0)
+    { P[0]+=up[0]*s*0.5; P[1]+=up[1]*s*0.5; P[2]+=up[2]*s*0.5; }
+
+  switch (kind)
+    {
+    case CMACS_GNUSEYE_MARKER_AIRCRAFT:
+      /* fuselage + swept wings + tailplane + fin (nose at +fwd). */
+      add_box (r, P, right, up, fwd, rx,ry,rz, 0,0,0,      0.22*s,0.20*s,1.30*s, cr,cg,cb,ca);
+      add_box (r, P, right, up, fwd, rx,ry,rz, 0,0,-0.05*s,1.55*s,0.05*s,0.34*s, cr,cg,cb,ca);
+      add_box (r, P, right, up, fwd, rx,ry,rz, 0,0,-0.55*s,0.62*s,0.05*s,0.22*s, cr,cg,cb,ca);
+      add_box (r, P, right, up, fwd, rx,ry,rz, 0,0.16*s,-0.55*s,0.05*s,0.32*s,0.22*s, cr,cg,cb,ca);
+      break;
+    case CMACS_GNUSEYE_MARKER_SHIP:
+      /* hull + superstructure (bow at +fwd). */
+      add_box (r, P, right, up, fwd, rx,ry,rz, 0,0,0,       0.42*s,0.20*s,1.45*s, cr,cg,cb,ca);
+      add_box (r, P, right, up, fwd, rx,ry,rz, 0,0.20*s,-0.12*s,0.30*s,0.22*s,0.5*s, 235,235,245,ca);
+      break;
+    case CMACS_GNUSEYE_MARKER_SATELLITE:
+      /* body + two solar panels along the right axis. */
+      add_box (r, P, right, up, fwd, rx,ry,rz, 0,0,0,        0.32*s,0.30*s,0.42*s, cr,cg,cb,ca);
+      add_box (r, P, right, up, fwd, rx,ry,rz, -0.78*s,0,0,  0.75*s,0.04*s,0.55*s, 40,90,160,ca);
+      add_box (r, P, right, up, fwd, rx,ry,rz,  0.78*s,0,0,  0.75*s,0.04*s,0.55*s, 40,90,160,ca);
+      break;
+    case CMACS_GNUSEYE_MARKER_LAUNCH:
+      /* upright rocket: body + nose. */
+      add_box (r, P, right, up, fwd, rx,ry,rz, 0,0.45*s,0,   0.18*s,0.95*s,0.18*s, cr,cg,cb,ca);
+      add_box (r, P, right, up, fwd, rx,ry,rz, 0,1.02*s,0,   0.13*s,0.22*s,0.13*s, 255,255,255,ca);
+      break;
+    case CMACS_GNUSEYE_MARKER_QUAKE:
+      /* magnitude-sized glowing sphere. */
+      add_sphere (r, P, 0.9*s, cr,cg,cb,ca);
+      break;
+    case CMACS_GNUSEYE_MARKER_FIRE:
+      /* small flame: tapered stack of boxes. */
+      add_box (r, P, right, up, fwd, rx,ry,rz, 0,0.18*s,0,   0.35*s,0.36*s,0.35*s, cr,cg,cb,ca);
+      add_box (r, P, right, up, fwd, rx,ry,rz, 0,0.45*s,0,   0.18*s,0.30*s,0.18*s, 255,230,120,ca);
+      break;
+    case CMACS_GNUSEYE_MARKER_CAMERA:
+      add_box (r, P, right, up, fwd, rx,ry,rz, 0,0,0,        0.4*s,0.3*s,0.5*s, cr,cg,cb,ca);
+      add_box (r, P, right, up, fwd, rx,ry,rz, 0,0,0.35*s,   0.18*s,0.18*s,0.2*s, 30,30,40,ca);
+      break;
+    case CMACS_GNUSEYE_MARKER_CITY:
+    default:
+      /* pin: stalk + bead. */
+      add_box (r, P, right, up, fwd, rx,ry,rz, 0,0.18*s,0,   0.05*s,0.36*s,0.05*s, cr,cg,cb,ca);
+      { double bead[3] = { P[0]+up[0]*0.42*s, P[1]+up[1]*0.42*s,
+                           P[2]+up[2]*0.42*s };
+        add_sphere (r, bead, 0.12*s, cr,cg,cb,ca); }
+      break;
     }
 
-  float hw = (gfloat) (radius * 1.8);
+  /* Drop-line from an elevated marker to its ground point: reads altitude
+   * and pins the marker to a lat/lon, like a flight tracker. */
+  if (render_alt > 0.0)
+    {
+      LrgLine3D *drop = lrg_line3d_new_from_to (
+        (gfloat) P[0], (gfloat) P[1], (gfloat) P[2],
+        (gfloat) P0[0], (gfloat) P0[1], (gfloat) P0[2]);
+      g_autoptr (GrlColor) dc = grl_color_new (cr, cg, cb, 70);
+      lrg_shape_set_color (LRG_SHAPE (drop), dc);
+      cmacs_libregnum_render_ctx_add_drawable (r, drop);
+    }
+
+  /* Pickable node at the icon centre, AABB sized to the icon. */
+  float hw = (gfloat) (s * 1.1);
   guint nid = cmacs_libregnum_render_ctx_add_node (r, id, label, FALSE, 0, -1,
-                                                   (gfloat) x, (gfloat) y,
-                                                   (gfloat) z, hw, hw, hw);
+                                                   (gfloat) P[0], (gfloat) P[1],
+                                                   (gfloat) P[2], hw, hw, hw);
   cmacs_libregnum_render_ctx_set_node_label_mode (r, (gint) nid, label_mode);
   return (int) nid;
 }

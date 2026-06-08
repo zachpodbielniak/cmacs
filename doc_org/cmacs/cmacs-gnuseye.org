@@ -28,9 +28,17 @@ Enable with ~--with-cmacs-gnuseye~ (requires ~--with-cmacs-libregnum~ and
 (cmacs-gnuseye)            ; M-x cmacs-gnuseye — opens *GNU's Eye*
 #+end_src
 
-In the globe buffer: drag to orbit, scroll to zoom, right-drag to pan, and
-click a marker to open its detail view.  Keys: ~l~ layers panel, ~g~
-refresh, ~f~ fly-to lat/lon, ~q~ quit.
+In the globe buffer: drag to orbit, scroll to zoom, right-drag to pan,
+*hover* a marker to see its label, and *click* it to recentre (zoom in) and
+open its detail view.  Keys: ~l~ layers panel, ~g~ refresh, ~f~ fly-to
+lat/lon, ~?~ legend, ~q~ quit.
+
+Markers are recognisable, heading-oriented 3D icons: aircraft are little
+planes (nose along their track) floating at exaggerated-but-readable
+altitude with a drop-line to their ground point; ships are hulls with a
+superstructure; satellites are winged bodies high above with an orbit
+trail; rockets stand on the pad; earthquakes are magnitude-sized spheres.
+Zoom in to resolve the shapes; the detail view reports the true altitude.
 
 ~M-x cmacs-gnuseye-layers~ opens the layer control panel (toggle layers
 with ~RET~; ~g~ refreshes the list).

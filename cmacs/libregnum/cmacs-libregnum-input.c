@@ -388,6 +388,25 @@ cmacs_libregnum_handle_motion (struct frame *f, double x, double y)
         cmacs_libregnum_render_ctx_pan_camera (ctx, dx, dy);
       cmacs_libregnum_view_request_redraw (v);
     }
+  else
+    {
+      /* Idle hover: ray-pick the node under the cursor so the overlay can
+       * label it (markers with label-mode "hover").  Cheap (AABB tests);
+       * only redraw when the hovered node changes.  Harmless for scenes
+       * whose nodes use the legacy label policy. */
+      CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+      double vx, vy;
+      int vw, vh;
+      if (frame_to_view_coords (f, v, x, y, &vx, &vy, &vw, &vh))
+        {
+          gint hit = cmacs_libregnum_render_ctx_pick (ctx, vx, vy, vw, vh);
+          if (hit != cmacs_libregnum_render_ctx_get_hovered (ctx))
+            {
+              cmacs_libregnum_render_ctx_set_hovered (ctx, hit);
+              cmacs_libregnum_view_request_redraw (v);
+            }
+        }
+    }
   drag_state.frame  = f;
   drag_state.last_x = x;
   drag_state.last_y = y;

@@ -48,6 +48,12 @@ When nil or missing, a procedural ocean+graticule globe is used."
   :type '(repeat symbol)
   :group 'cmacs-gnuseye)
 
+(defcustom cmacs-gnuseye-focus-range 5.0
+  "Camera range (world units) used when clicking a marker to recentre on it.
+Smaller zooms in closer."
+  :type 'number
+  :group 'cmacs-gnuseye)
+
 (defcustom cmacs-gnuseye-layer-files
   '(cmacs-gnuseye-astro cmacs-gnuseye-air
     cmacs-gnuseye-marine cmacs-gnuseye-weather)
@@ -133,7 +139,8 @@ stored payload drives the detail view."
           :kind-name kind
           :color     (cmacs-gnuseye--color->rgba color)
           :label     (and lab (format "%s" lab))
-          :label-mode (or (plist-get e :label-mode) 1) ; selected
+          ;; Default to "hover" so mousing over any marker identifies it.
+          :label-mode (or (plist-get e :label-mode) 2)
           :trail     (cmacs-gnuseye--normalize-trail (plist-get e :trail))
           :detail    (plist-get e :detail)
           :data      (plist-get e :data)
@@ -298,6 +305,12 @@ Called from `cmacs-libregnum--node-clicked' on the cmacs context."
   (when (and (integerp node-id) (>= node-id 0))
     (let ((e (ignore-errors (cmacs-gnuseye-entity-at buffer node-id))))
       (when e
+        ;; Recentre the globe on the clicked entity (zoom-to-showcase).
+        (when (and (plist-get e :lat) (plist-get e :lon))
+          (ignore-errors
+            (cmacs-gnuseye-fly-to buffer (float (plist-get e :lat))
+                                  (float (plist-get e :lon))
+                                  cmacs-gnuseye-focus-range t)))
         (let ((detail (plist-get e :detail)))
           (if (functionp detail)
               (funcall detail e)
@@ -405,11 +418,41 @@ Called from `cmacs-libregnum--node-clicked' on the cmacs context."
 
 ;;;; Mode + entry point ------------------------------------------------------
 
+(defun cmacs-gnuseye-legend ()
+  "Show a legend of marker kinds, shapes, and colours."
+  (interactive)
+  (let ((buf (get-buffer-create "*GNU's Eye Legend*")))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (propertize "GNU's Eye — marker legend\n" 'face 'bold))
+        (insert "─────────────────────────\n\n")
+        (dolist (row '(("satellite" "winged body + solar panels, high, orbit trail")
+                       ("aircraft"  "plane (nose = heading), floats at altitude + drop-line")
+                       ("ship"      "hull + superstructure (bow = heading), on the water")
+                       ("quake"     "sphere sized by magnitude, on the surface")
+                       ("fire"      "flame, on the surface")
+                       ("launch"    "upright rocket at the pad")
+                       ("camera"    "camera body")
+                       ("city"      "pin")))
+          (let* ((kind (intern (car row)))
+                 (style (alist-get kind cmacs-gnuseye-kind-styles))
+                 (color (or (plist-get style :color) "#ffd24a")))
+            (insert (propertize "  ███  " 'face (list :foreground color)))
+            (insert (format "%-10s %s\n" (car row) (cadr row)))))
+        (insert "\nInteract: drag = orbit, scroll = zoom, right-drag = pan,\n")
+        (insert "hover = identify, click = recentre + details.\n"))
+      (goto-char (point-min))
+      (special-mode))
+    (display-buffer
+     buf '((display-buffer-in-side-window) (side . right) (window-width . 0.34)))))
+
 (defvar cmacs-gnuseye-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "l") #'cmacs-gnuseye-layers)
     (define-key map (kbd "g") #'cmacs-gnuseye-refresh-all)
     (define-key map (kbd "f") #'cmacs-gnuseye-fly-to-place)
+    (define-key map (kbd "?") #'cmacs-gnuseye-legend)
     (define-key map (kbd "q") #'quit-window)
     map)
   "Keymap for `cmacs-gnuseye-mode'.")
@@ -422,7 +465,8 @@ its detail view."
   (setq-local cursor-type nil)
   (buffer-disable-undo)
   (setq-local mode-line-format
-              '(" GNU's Eye  [l]ayers  [g]refresh  [f]ly-to  [q]uit")))
+              '(" GNU's Eye  drag=orbit scroll=zoom hover=id click=focus \
+ [l]ayers [g]refresh [f]ly [?]legend [q]uit")))
 
 (defun cmacs-gnuseye-refresh-all ()
   "Refresh every enabled layer now."
