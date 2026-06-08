@@ -53,21 +53,23 @@ typedef struct
   Lisp_Object buffer;
   gchar      *path;
   bool        is_dir;
+  gint        id;
 } ClickAction;
 
 static gboolean
 click_action_idle (gpointer user)
 {
   ClickAction *a = user;
-  if (a->path && a->path[0])
-    {
-      if (a->is_dir)
-        cmacs_dispatch_safe_call2 (intern ("cmacs-libregnum--drill-to"),
-                                   a->buffer, build_string (a->path));
-      else
-        cmacs_dispatch_safe_call1 (intern ("find-file"),
-                                   build_string (a->path));
-    }
+  /* Route through one Elisp dispatcher so each mode decides what a node
+   * click means.  Its default preserves the tree behaviour (find-file /
+   * drill-to); the gnuseye globe routes to its entity detail view.  Args:
+   * (BUFFER (ID PATH IS-DIR)). */
+  cmacs_dispatch_safe_call2 (intern ("cmacs-libregnum--node-clicked"),
+                             a->buffer,
+                             list3 (make_fixnum (a->id),
+                                    (a->path && a->path[0])
+                                      ? build_string (a->path) : Qnil,
+                                    a->is_dir ? Qt : Qnil));
   g_free (a->path);
   g_free (a);
   return G_SOURCE_REMOVE;
@@ -287,6 +289,7 @@ handle_click (struct frame *f, CmacsLibregnumView *v, double x, double y)
   a->buffer = cmacs_libregnum_view_get_buffer (v);
   a->path = g_strdup (path);
   a->is_dir = is_dir;
+  a->id = id;
   g_main_context_invoke (cmacs_glib_get_context (), click_action_idle, a);
 }
 

@@ -49,6 +49,7 @@ cmacs_libregnum__draw_labels (cairo_t *cr, CmacsLibregnumView *v,
   guint nc = cmacs_libregnum_render_ctx_node_count (ctx);
   if (nc == 0) return;
   gint sel = cmacs_libregnum_render_ctx_get_selected (ctx);
+  gint hov = cmacs_libregnum_render_ctx_get_hovered (ctx);
   double sxv = (double) pw / vw;
   double syv = (double) ph / vh;
 
@@ -65,7 +66,26 @@ cmacs_libregnum__draw_labels (cairo_t *cr, CmacsLibregnumView *v,
                                                 &name, &is_dir))
         continue;
       gboolean selected = ((gint) i == sel);
-      if (!is_dir && !selected) continue;   /* dirs + selection only */
+      gboolean hovered  = ((gint) i == hov);
+      /* Per-node label policy.  LEGACY keeps the original behaviour
+       * (label directories + the selected node); explicit modes let a
+       * scene builder (e.g. the gnuseye globe) label per node. */
+      switch (cmacs_libregnum_render_ctx_get_node_label_mode (ctx, i))
+        {
+        case CMACS_LIBREGNUM_LABEL_NEVER:
+          continue;
+        case CMACS_LIBREGNUM_LABEL_SELECTED:
+          if (!selected) continue;
+          break;
+        case CMACS_LIBREGNUM_LABEL_HOVER:
+          if (!selected && !hovered) continue;
+          break;
+        case CMACS_LIBREGNUM_LABEL_ALWAYS:
+          break;
+        default: /* CMACS_LIBREGNUM_LABEL_LEGACY */
+          if (!is_dir && !selected) continue;
+          break;
+        }
       if (!name || !name[0]) continue;
 
       double fx = px + lx * sxv;

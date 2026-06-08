@@ -126,6 +126,7 @@ typedef struct
   int      parent;        /* node index, -1 for root */
   float    x, y, z;       /* center */
   float    hw, hh, hd;    /* half-extents (AABB) */
+  int      label_mode;    /* CmacsLibregnumLabelMode; -1 == legacy default */
 } CmacsNode;
 
 static void
@@ -205,6 +206,17 @@ struct CmacsLibregnumRenderCtx
   LrgGameHost      *game_host;     /* owned (CmacsFboGameHost) */
   LrgInputSoftware *game_input;    /* owned; registered with input manager */
 
+  /* ── Persistent background model ──────────────────────────────────
+   * Drawn first every frame (behind the per-tick scene drawables) and
+   * NOT cleared by clear_drawables.  Used by the gnuseye globe: its
+   * textured Earth sphere lives here so it survives marker rebuilds.
+   * Owned by the ctx; the builder keeps its own refs for texture updates. */
+  GrlModel         *background_model;     /* owned, or NULL */
+  float             background_spin_deg;  /* rotation about +Y, degrees */
+
+  /* Hovered scene node id (-1 none); drives hover label policy. */
+  gint              hovered;
+
 #ifdef LRG_BUILD_EDITOR
   /* Editor / level authoring.  When `editor' is non-NULL the view hosts an
    * editable level: its nodes are baked into the scene drawables each
@@ -263,6 +275,7 @@ cmacs_libregnum_render_ctx_new (int w, int h)
   r->width  = w;
   r->height = h;
   r->selected = -1;
+  r->hovered = -1;
   r->renderer  = lrg_renderer_new (LRG_WINDOW (shared_window));
   r->drawables = g_ptr_array_new_with_free_func (g_object_unref);
   r->nodes = g_array_new (FALSE, TRUE, sizeof (CmacsNode));
@@ -310,6 +323,7 @@ cmacs_libregnum_render_ctx_free (CmacsLibregnumRenderCtx *r)
   g_clear_object (&r->lighting_material);
 #endif
   if (r->fbo_valid) UnloadRenderTexture (r->fbo);
+  g_clear_object (&r->background_model);
   g_clear_object (&r->camera);
   if (r->drawables) g_ptr_array_unref (r->drawables);
   if (r->nodes) g_array_free (r->nodes, TRUE);
@@ -345,6 +359,61 @@ cmacs_libregnum_render_ctx_add_drawable (CmacsLibregnumRenderCtx *r,
   g_ptr_array_add (r->drawables, drawable);
 }
 
+/* ── Persistent background model (gnuseye globe) ─────────────────── */
+
+void
+cmacs_libregnum_render_ctx_set_background_model (CmacsLibregnumRenderCtx *r,
+                                                 void *model)
+{
+  if (!r) return;
+  if (r->background_model == (GrlModel *) model) return;
+  g_clear_object (&r->background_model);
+  r->background_model = (GrlModel *) model;   /* takes ownership */
+}
+
+void *
+cmacs_libregnum_render_ctx_get_background_model (CmacsLibregnumRenderCtx *r)
+{
+  return r ? r->background_model : NULL;
+}
+
+void
+cmacs_libregnum_render_ctx_set_background_spin (CmacsLibregnumRenderCtx *r,
+                                                double deg)
+{
+  if (r) r->background_spin_deg = (float) deg;
+}
+
+/* ── Per-node label policy + hover ───────────────────────────────── */
+
+void
+cmacs_libregnum_render_ctx_set_node_label_mode (CmacsLibregnumRenderCtx *r,
+                                                gint id, int mode)
+{
+  if (!r || !r->nodes || id < 0 || (guint) id >= r->nodes->len) return;
+  g_array_index (r->nodes, CmacsNode, id).label_mode = mode;
+}
+
+int
+cmacs_libregnum_render_ctx_get_node_label_mode (CmacsLibregnumRenderCtx *r,
+                                                gint id)
+{
+  if (!r || !r->nodes || id < 0 || (guint) id >= r->nodes->len) return -1;
+  return g_array_index (r->nodes, CmacsNode, id).label_mode;
+}
+
+void
+cmacs_libregnum_render_ctx_set_hovered (CmacsLibregnumRenderCtx *r, gint id)
+{
+  if (r) r->hovered = id;
+}
+
+gint
+cmacs_libregnum_render_ctx_get_hovered (CmacsLibregnumRenderCtx *r)
+{
+  return r ? r->hovered : -1;
+}
+
 void
 cmacs_libregnum_render_ctx_clear_drawables (CmacsLibregnumRenderCtx *r)
 {
@@ -374,6 +443,7 @@ cmacs_libregnum_render_ctx_add_node (CmacsLibregnumRenderCtx *r,
   n.parent = parent;
   n.x = x; n.y = y; n.z = z;
   n.hw = hw; n.hh = hh; n.hd = hd;
+  n.label_mode = -1;   /* legacy: dir-or-selected (see overlay) */
   g_array_append_val (r->nodes, n);
   return r->nodes->len - 1;
 }
@@ -952,6 +1022,19 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
       {
         lrg_renderer_begin_frame (r->renderer);
         lrg_renderer_begin_layer (r->renderer, LRG_RENDER_LAYER_WORLD);
+        /* Persistent background model (e.g. the gnuseye Earth sphere):
+         * drawn first, behind the per-tick scene drawables, with an
+         * optional spin about +Y.  Depth-tested so surface markers
+         * occlude correctly against the far limb. */
+        if (r->background_model)
+          {
+            g_autoptr (GrlVector3) bpos  = grl_vector3_new (0.0f, 0.0f, 0.0f);
+            g_autoptr (GrlVector3) baxis = grl_vector3_new (0.0f, 1.0f, 0.0f);
+            g_autoptr (GrlVector3) bscl  = grl_vector3_new (1.0f, 1.0f, 1.0f);
+            g_autoptr (GrlColor)   bwhite = grl_color_new (255, 255, 255, 255);
+            grl_model_draw_ex (r->background_model, bpos, baxis,
+                               r->background_spin_deg, bscl, bwhite);
+          }
         for (guint i = 0; r->drawables && i < r->drawables->len; i++)
           {
             gpointer d = g_ptr_array_index (r->drawables, i);

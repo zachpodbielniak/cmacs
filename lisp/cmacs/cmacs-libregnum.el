@@ -340,6 +340,22 @@ on-screen; static views render only on demand."
           (cmacs-libregnum--serialise-buffer alist))
         (cmacs-libregnum--load-model)))))
 
+(defun cmacs-libregnum--node-clicked (buffer info)
+  "Dispatch a viewport node click in BUFFER.
+INFO is (ID PATH IS-DIR) from the C input layer.  This single entry
+point lets each scene/mode decide what a click means: the gnuseye globe
+opens an entity detail view, while the default tree behaviour drills into
+a directory or visits a file.  Called on the cmacs GMainContext."
+  (when (buffer-live-p buffer)
+    (let ((id (nth 0 info)) (path (nth 1 info)) (is-dir (nth 2 info)))
+      (with-current-buffer buffer
+        (cond
+         ((and (fboundp 'cmacs-gnuseye--on-pick)
+               (derived-mode-p 'cmacs-gnuseye-mode))
+          (cmacs-gnuseye--on-pick buffer id))
+         (is-dir (cmacs-libregnum--drill-to buffer path))
+         ((and (stringp path) (> (length path) 0)) (find-file path)))))))
+
 (defun cmacs-libregnum-up ()
   "Re-root the tree at the parent of the current root directory."
   (interactive)

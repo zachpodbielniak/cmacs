@@ -52,6 +52,43 @@ extern void cmacs_libregnum_render_ctx_add_drawable
 extern void cmacs_libregnum_render_ctx_clear_drawables
                               (CmacsLibregnumRenderCtx *r);
 
+/* ── Persistent background model ─────────────────────────────────
+ * A single model drawn first every frame, behind the scene drawables,
+ * and NOT cleared by clear_drawables.  Used by the gnuseye globe to keep
+ * the textured Earth sphere resident across per-tick marker rebuilds.
+ * set_background_model takes ownership of MODEL (a GrlModel*, void* to
+ * keep this header free of raylib/libregnum types); get returns it borrowed
+ * so the builder can update its texture in place. */
+extern void  cmacs_libregnum_render_ctx_set_background_model
+                              (CmacsLibregnumRenderCtx *r, void *model);
+extern void *cmacs_libregnum_render_ctx_get_background_model
+                              (CmacsLibregnumRenderCtx *r);
+extern void  cmacs_libregnum_render_ctx_set_background_spin
+                              (CmacsLibregnumRenderCtx *r, double deg);
+
+/* ── Per-node label policy ───────────────────────────────────────
+ * Generalises the overlay's label filter.  LEGACY (-1) keeps the original
+ * behaviour (label directories + the selected node); the others let a
+ * scene builder pick per node.  HOVER labels the node under the cursor
+ * (set via set_hovered) plus the selection. */
+typedef enum
+{
+  CMACS_LIBREGNUM_LABEL_LEGACY   = -1,
+  CMACS_LIBREGNUM_LABEL_NEVER    = 0,
+  CMACS_LIBREGNUM_LABEL_SELECTED = 1,
+  CMACS_LIBREGNUM_LABEL_HOVER    = 2,
+  CMACS_LIBREGNUM_LABEL_ALWAYS   = 3
+} CmacsLibregnumLabelMode;
+
+extern void cmacs_libregnum_render_ctx_set_node_label_mode
+                              (CmacsLibregnumRenderCtx *r, gint id, int mode);
+extern int  cmacs_libregnum_render_ctx_get_node_label_mode
+                              (CmacsLibregnumRenderCtx *r, gint id);
+extern void cmacs_libregnum_render_ctx_set_hovered
+                              (CmacsLibregnumRenderCtx *r, gint id);
+extern gint cmacs_libregnum_render_ctx_get_hovered
+                              (CmacsLibregnumRenderCtx *r);
+
 /* ── Scene node model ────────────────────────────────────────────
  * A scene builder records one entry per pickable/labelable node,
  * parallel to the drawables.  Node id == insertion index.  Cleared
