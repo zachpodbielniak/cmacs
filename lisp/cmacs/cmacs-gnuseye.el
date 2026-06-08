@@ -247,7 +247,7 @@ HEADERS is an alist of (NAME . VALUE).  ARRAY-TYPE is passed to
 ;;;; Layer registry ----------------------------------------------------------
 
 (cl-defstruct (cmacs-gnuseye-layer (:constructor cmacs-gnuseye--make-layer))
-  name title group fetch interval default-on detail kind needs-key
+  name title group fetch interval default-on detail kind needs-key advance
   timer enabled last-fetch last-error in-flight)
 
 (defvar cmacs-gnuseye--layers (make-hash-table :test 'eq)
@@ -263,7 +263,10 @@ PROPS is a plist with:
   :interval   refresh seconds (nil = fetch once)
   :default-on non-nil to allow auto-enable
   :detail     (lambda (ENTITY) ...) to render a clicked entity (optional)
-  :needs-key  a key name string this layer requires (optional)"
+  :needs-key  a key name string this layer requires (optional)
+  :advance    (lambda (ENTITIES DT NOW) ...) called between fetches to move
+              this layer's entities smoothly (dead reckoning / re-propagation);
+              mutate the entity plists in place (optional)"
   (declare (indent 1))
   `(progn
      (puthash ',name
@@ -276,7 +279,8 @@ PROPS is a plist with:
                :interval ,(plist-get props :interval)
                :default-on ,(plist-get props :default-on)
                :detail ,(plist-get props :detail)
-               :needs-key ,(plist-get props :needs-key))
+               :needs-key ,(plist-get props :needs-key)
+               :advance ,(plist-get props :advance))
               cmacs-gnuseye--layers)
      ',name))
 
@@ -377,6 +381,59 @@ nearest the view are drawn."
     (when (and buf (buffer-live-p buf))
       (maphash (lambda (lname _) (cmacs-gnuseye--render-layer buf lname))
                cmacs-gnuseye--layer-entities))))
+
+;;;; Smooth motion: move markers between fetches -----------------------------
+
+;; Any layer with an :advance function is advanced on a fast timer and
+;; re-rendered, so its markers glide between the (slower) data fetches; the
+;; next fetch corrects the extrapolated positions.  Aircraft dead-reckon
+;; along their heading; satellites re-propagate their orbit with SGP4.
+
+(defcustom cmacs-gnuseye-smooth t
+  "Smoothly move markers between data fetches.
+Each layer with an :advance function (aircraft, satellites) is advanced
+every `cmacs-gnuseye-smooth-interval' seconds and re-rendered."
+  :type 'boolean :group 'cmacs-gnuseye)
+
+(defcustom cmacs-gnuseye-smooth-interval 0.4
+  "Seconds between smooth-motion updates (lower = smoother, heavier)."
+  :type 'number :group 'cmacs-gnuseye)
+
+(defvar cmacs-gnuseye--smooth-timer nil)
+(defvar cmacs-gnuseye--smooth-last nil)
+
+(defun cmacs-gnuseye--smooth-tick ()
+  "Advance every enabled layer that has an :advance fn, then re-render it."
+  (let ((buf cmacs-gnuseye-buffer))
+    (cond
+     ((not (and buf (buffer-live-p buf)))
+      (when cmacs-gnuseye--smooth-timer
+        (cancel-timer cmacs-gnuseye--smooth-timer)
+        (setq cmacs-gnuseye--smooth-timer nil)))
+     ((and cmacs-gnuseye-smooth (cmacs-gnuseye-attached-p buf))
+      (let* ((now (float-time))
+             (dt (if cmacs-gnuseye--smooth-last
+                     (- now cmacs-gnuseye--smooth-last) 0.0)))
+        (setq cmacs-gnuseye--smooth-last now)
+        (when (and (> dt 0.0) (< dt 5.0))
+          (maphash
+           (lambda (name layer)
+             (let ((adv (cmacs-gnuseye-layer-advance layer)))
+               (when (and adv (cmacs-gnuseye-layer-enabled layer))
+                 (let ((ents (gethash name cmacs-gnuseye--layer-entities)))
+                   (when ents
+                     (ignore-errors (funcall adv ents dt now))
+                     (cmacs-gnuseye--render-layer buf name))))))
+           cmacs-gnuseye--layers)))))))
+
+(defun cmacs-gnuseye--smooth-start ()
+  "Start the shared smooth-motion tick if not already running."
+  (unless cmacs-gnuseye--smooth-timer
+    (setq cmacs-gnuseye--smooth-last nil
+          cmacs-gnuseye--smooth-timer
+          (run-with-timer cmacs-gnuseye-smooth-interval
+                          (max 0.1 cmacs-gnuseye-smooth-interval)
+                          #'cmacs-gnuseye--smooth-tick))))
 
 (defun cmacs-gnuseye--refresh-layer (layer)
   "Run LAYER's fetch, store its entities in the index, and render them."
@@ -1204,9 +1261,9 @@ just the globe viewport."
     ;; Real geography (coastlines, borders, labels, admin-1) aligned with
     ;; the markers.
     (cmacs-gnuseye-load-map buf)
-    ;; Smoothly dead-reckon aircraft + re-apply the zoom scale between fetches.
-    (when (fboundp 'cmacs-gnuseye-air--smooth-start)
-      (cmacs-gnuseye-air--smooth-start))
+    ;; Smoothly move markers (aircraft dead-reckon, satellites re-propagate)
+    ;; and re-apply the zoom scale between fetches.
+    (cmacs-gnuseye--smooth-start)
     buf))
 
 ;;;; Evil (Doom) + vanilla navigation -----------------------------------------

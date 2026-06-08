@@ -188,8 +188,11 @@ Helpers:
 
 - *Satellites* fetch TLEs from CelesTrak at most every few hours
   (~cmacs-gnuseye-astro-group~, default "stations") and re-propagate them
-  locally to "now" on a fast (5 s) timer — live motion needs no network.
-  Each satellite carries its one-orbit ground track as a trail.
+  locally to "now" — live motion needs no network.  Between fetches the
+  shared smooth-motion tick (~cmacs-gnuseye-smooth~) re-propagates each
+  satellite with SGP4 every ~0.4 s so it glides along its orbit (the same
+  mechanism that dead-reckons aircraft).  Each satellite carries its
+  one-orbit ground track as a trail.
 - *Aircraft* come from adsb.lol --- a free, keyless community ADS-B
   aggregator.  By default (~cmacs-gnuseye-air-global~) the whole globe is
   swept with several large overlapping queries

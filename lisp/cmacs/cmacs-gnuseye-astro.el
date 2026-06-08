@@ -103,13 +103,34 @@
                  cmacs-gnuseye-astro--tle-time now))
          (funcall cb (cmacs-gnuseye-astro--entities now)))))))
 
+(defun cmacs-gnuseye-astro--advance (entities _dt now)
+  "Re-propagate each satellite to NOW so it glides along its orbit.
+The shared smooth-motion tick (`cmacs-gnuseye--smooth-tick') calls this
+between the slower fetches; SGP4 to the exact time beats velocity
+extrapolation for orbits.  Updates position (and heading); trail/data stay."
+  (dolist (e entities)
+    (let* ((id (plist-get e :id))
+           (name (and (stringp id) (string-prefix-p "sat:" id) (substring id 4)))
+           (elset (and name (cdr (assoc name cmacs-gnuseye-astro--elsets))))
+           (pos (and elset (cmacs-gnuseye-sat-propagate elset now)))
+           (ahead (and elset (cmacs-gnuseye-sat-propagate elset (+ now 30)))))
+      (when pos
+        (plist-put e :lat (nth 0 pos))
+        (plist-put e :lon (nth 1 pos))
+        (plist-put e :alt (nth 2 pos))
+        (when ahead
+          (plist-put e :heading
+                     (cmacs-gnuseye-bearing (nth 0 pos) (nth 1 pos)
+                                            (nth 0 ahead) (nth 1 ahead))))))))
+
 (cmacs-gnuseye-define-layer satellites
   :title "Satellites (CelesTrak TLE)"
   :group 'astronomical
   :kind 'satellite
   :interval 5
   :default-on t
-  :fetch #'cmacs-gnuseye-astro--fetch)
+  :fetch #'cmacs-gnuseye-astro--fetch
+  :advance #'cmacs-gnuseye-astro--advance)
 
 (provide 'cmacs-gnuseye-astro)
 ;;; cmacs-gnuseye-astro.el ends here

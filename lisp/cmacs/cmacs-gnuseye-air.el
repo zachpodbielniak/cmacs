@@ -57,20 +57,6 @@ each icon is tiny.  Markers are additionally zoom-scaled for a constant
 on-screen size."
   :type 'number :group 'cmacs-gnuseye)
 
-(defcustom cmacs-gnuseye-air-smooth t
-  "Smoothly move aircraft between data updates.
-Each tick advances every aircraft along its heading at its ground speed
-\(dead reckoning) and re-renders, also re-applying the zoom scale; the next
-fetch corrects the positions.  Off keeps the cheaper jump-on-fetch motion."
-  :type 'boolean :group 'cmacs-gnuseye)
-
-(defcustom cmacs-gnuseye-air-smooth-interval 0.4
-  "Seconds between aircraft dead-reckoning updates (lower = smoother, heavier)."
-  :type 'number :group 'cmacs-gnuseye)
-
-(defvar cmacs-gnuseye-air--smooth-timer nil)
-(defvar cmacs-gnuseye-air--smooth-last nil)
-
 (defun cmacs-gnuseye-air--advance (lat lon speed-ms heading-deg dt)
   "Great-circle destination from LAT,LON after SPEED-MS for DT s on HEADING.
 Returns (LAT2 . LON2), or nil when there is nothing to advance."
@@ -85,40 +71,16 @@ Returns (LAT2 . LON2), or nil when there is nothing to advance."
                             (- cd (* sla (sin la2)))))))
       (cons (/ la2 d2r) (/ lo2 d2r)))))
 
-(defun cmacs-gnuseye-air--smooth-tick ()
-  "Advance aircraft by dead reckoning and re-render (zoom-scaled)."
-  (let ((buf (and (boundp 'cmacs-gnuseye-buffer) cmacs-gnuseye-buffer)))
-    (cond
-     ((not (and buf (buffer-live-p buf)))
-      (when cmacs-gnuseye-air--smooth-timer
-        (cancel-timer cmacs-gnuseye-air--smooth-timer)
-        (setq cmacs-gnuseye-air--smooth-timer nil)))
-     ((and cmacs-gnuseye-air-smooth
-           (cmacs-gnuseye-attached-p buf)
-           (let ((l (gethash 'aircraft cmacs-gnuseye--layers)))
-             (and l (cmacs-gnuseye-layer-enabled l))))
-      (let* ((now (float-time))
-             (dt (if cmacs-gnuseye-air--smooth-last
-                     (- now cmacs-gnuseye-air--smooth-last) 0.0)))
-        (setq cmacs-gnuseye-air--smooth-last now)
-        (when (and (> dt 0.0) (< dt 5.0))
-          (dolist (e (gethash 'aircraft cmacs-gnuseye--layer-entities))
-            (let ((np (cmacs-gnuseye-air--advance
-                       (plist-get e :lat) (plist-get e :lon)
-                       (plist-get e :speed) (plist-get e :heading) dt)))
-              (when np
-                (plist-put e :lat (car np))
-                (plist-put e :lon (cdr np))))))
-        (cmacs-gnuseye--render-layer buf 'aircraft))))))
-
-(defun cmacs-gnuseye-air--smooth-start ()
-  "Start the aircraft dead-reckoning/zoom-rescale tick if not running."
-  (unless cmacs-gnuseye-air--smooth-timer
-    (setq cmacs-gnuseye-air--smooth-last nil
-          cmacs-gnuseye-air--smooth-timer
-          (run-with-timer cmacs-gnuseye-air-smooth-interval
-                          (max 0.1 cmacs-gnuseye-air-smooth-interval)
-                          #'cmacs-gnuseye-air--smooth-tick))))
+(defun cmacs-gnuseye-air--advance-layer (entities dt _now)
+  "Dead-reckon each of ENTITIES forward DT seconds along its heading.
+The shared smooth-motion tick (`cmacs-gnuseye--smooth-tick') calls this."
+  (dolist (e entities)
+    (let ((np (cmacs-gnuseye-air--advance
+               (plist-get e :lat) (plist-get e :lon)
+               (plist-get e :speed) (plist-get e :heading) dt)))
+      (when np
+        (plist-put e :lat (car np))
+        (plist-put e :lon (cdr np))))))
 
 (defcustom cmacs-gnuseye-air-radius-nm nil
   "Radius in nautical miles around the view centre for adsb.lol.
@@ -303,7 +265,8 @@ so the map fills in progressively instead of waiting for the slowest tile."
   :kind 'aircraft
   :interval 20
   :default-on t
-  :fetch #'cmacs-gnuseye-air--fetch)
+  :fetch #'cmacs-gnuseye-air--fetch
+  :advance #'cmacs-gnuseye-air--advance-layer)
 
 (provide 'cmacs-gnuseye-air)
 ;;; cmacs-gnuseye-air.el ends here
