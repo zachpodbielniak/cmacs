@@ -93,6 +93,19 @@ extern gboolean cmacs_libregnum_render_ctx_map_label_at
 extern double cmacs_libregnum_render_ctx_camera_distance
                               (CmacsLibregnumRenderCtx *r);
 
+/* ── Billboards ──────────────────────────────────────────────────
+ * Camera-facing textured quads (e.g. country flags) at fixed world points.
+ * add takes ownership of TEXTURE (a GrlTexture*, void* to keep the header
+ * clean).  Drawn each frame; the caller's render path may gate by zoom. */
+extern void  cmacs_libregnum_render_ctx_add_billboard
+                              (CmacsLibregnumRenderCtx *r,
+                               float x, float y, float z,
+                               void *texture, float size);
+extern void  cmacs_libregnum_render_ctx_clear_billboards
+                              (CmacsLibregnumRenderCtx *r);
+extern guint cmacs_libregnum_render_ctx_billboard_count
+                              (CmacsLibregnumRenderCtx *r);
+
 /* ── Per-node label policy ───────────────────────────────────────
  * Generalises the overlay's label filter.  LEGACY (-1) keeps the original
  * behaviour (label directories + the selected node); the others let a

@@ -6696,10 +6696,13 @@ globe; @code{l} toggles data layers.  Navigation works in vanilla Emacs and
 Evil/Doom (the viewport runs in Evil @code{emacs} state, the panels in
 @code{motion} state).
 
-The globe is a sun-lit 3D sphere with a soft day/night terminator and real
-vector coastlines (Natural Earth, downloaded + cached once) drawn in the
-globe's own lat/lon convention so they always align with the markers.
-Markers are heading-oriented 3D icons (planes,
+The globe is a sun-lit 3D sphere with a soft day/night terminator and a
+real political map -- coastlines, country borders, country name labels,
+admin-1 states/provinces (US + Canada by default), and country flags --
+from Natural Earth + flagcdn (downloaded + cached once) and drawn in the
+globe's own lat/lon convention so it always aligns with the markers.
+Labels and flags appear once zoomed in.  Markers are heading-oriented 3D
+icons (planes,
 ships, satellites with orbit trails, rockets, magnitude-sized quake
 spheres); aircraft float at a readable altitude with a drop-line to the
 ground.

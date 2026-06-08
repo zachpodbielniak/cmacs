@@ -154,6 +154,21 @@ cmacs_map_label_clear (gpointer p)
   g_clear_pointer (&l->text, g_free);
 }
 
+/* A persistent camera-facing billboard (e.g. a country flag) at a fixed
+ * world point, drawn each frame via raylib DrawBillboard. */
+typedef struct
+{
+  float       x, y, z, size;
+  GrlTexture *tex;       /* owned */
+} CmacsBillboard;
+
+static void
+cmacs_billboard_clear (gpointer p)
+{
+  CmacsBillboard *b = p;
+  g_clear_object (&b->tex);
+}
+
 /* ── Per-view render context (opaque to view.c) ────────────────── */
 
 #ifdef LRG_BUILD_EDITOR
@@ -239,6 +254,9 @@ struct CmacsLibregnumRenderCtx
   /* Persistent map labels (country/region names), drawn by the overlay. */
   GArray           *map_labels;       /* CmacsMapLabel */
 
+  /* Persistent camera-facing billboards (e.g. country flags). */
+  GArray           *billboards;       /* CmacsBillboard */
+
   /* Hovered scene node id (-1 none); drives hover label policy. */
   gint              hovered;
 
@@ -306,6 +324,8 @@ cmacs_libregnum_render_ctx_new (int w, int h)
   r->static_drawables = g_ptr_array_new_with_free_func (g_object_unref);
   r->map_labels = g_array_new (FALSE, TRUE, sizeof (CmacsMapLabel));
   g_array_set_clear_func (r->map_labels, cmacs_map_label_clear);
+  r->billboards = g_array_new (FALSE, TRUE, sizeof (CmacsBillboard));
+  g_array_set_clear_func (r->billboards, cmacs_billboard_clear);
   r->nodes = g_array_new (FALSE, TRUE, sizeof (CmacsNode));
   g_array_set_clear_func (r->nodes, cmacs_node_clear);
 
@@ -354,6 +374,7 @@ cmacs_libregnum_render_ctx_free (CmacsLibregnumRenderCtx *r)
   g_clear_object (&r->background_model);
   if (r->static_drawables) g_ptr_array_unref (r->static_drawables);
   if (r->map_labels) g_array_free (r->map_labels, TRUE);
+  if (r->billboards) g_array_free (r->billboards, TRUE);
   g_clear_object (&r->camera);
   if (r->drawables) g_ptr_array_unref (r->drawables);
   if (r->nodes) g_array_free (r->nodes, TRUE);
@@ -487,6 +508,32 @@ cmacs_libregnum_render_ctx_camera_distance (CmacsLibregnumRenderCtx *r)
   cmacs_libregnum_render_ctx_get_camera_state (r, &px, &py, &pz,
                                                &tx, &ty, &tz, &fov);
   return sqrt (px*px + py*py + pz*pz);
+}
+
+/* ── Billboards (country flags) ──────────────────────────────────── */
+
+void
+cmacs_libregnum_render_ctx_add_billboard (CmacsLibregnumRenderCtx *r,
+                                          float x, float y, float z,
+                                          void *texture, float size)
+{
+  if (!r || !r->billboards || !texture) return;
+  CmacsBillboard b = { 0 };
+  b.x = x; b.y = y; b.z = z; b.size = size;
+  b.tex = (GrlTexture *) texture;     /* ownership transfers */
+  g_array_append_val (r->billboards, b);
+}
+
+void
+cmacs_libregnum_render_ctx_clear_billboards (CmacsLibregnumRenderCtx *r)
+{
+  if (r && r->billboards) g_array_set_size (r->billboards, 0);
+}
+
+guint
+cmacs_libregnum_render_ctx_billboard_count (CmacsLibregnumRenderCtx *r)
+{
+  return (r && r->billboards) ? r->billboards->len : 0;
 }
 
 /* ── Per-node label policy + hover ───────────────────────────────── */
@@ -1153,6 +1200,29 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
             gpointer d = g_ptr_array_index (r->drawables, i);
             if (LRG_IS_DRAWABLE (d))
               lrg_drawable_draw (LRG_DRAWABLE (d), 0.0f);
+          }
+        /* Camera-facing billboards (country flags), only once zoomed in. */
+        if (r->billboards && r->billboards->len > 0)
+          {
+            Camera3D bcam = ctx_raylib_camera (r);
+            double cdist = sqrt (bcam.position.x*bcam.position.x
+                                 + bcam.position.y*bcam.position.y
+                                 + bcam.position.z*bcam.position.z);
+            if (cdist < 13.0)
+              {
+                Color bw = (Color){ 255, 255, 255, 255 };
+                for (guint i = 0; i < r->billboards->len; i++)
+                  {
+                    CmacsBillboard *bb =
+                      &g_array_index (r->billboards, CmacsBillboard, i);
+                    if (!bb->tex) continue;
+                    Texture2D *t = grl_texture_get_handle (bb->tex);
+                    if (t && t->id)
+                      DrawBillboard (bcam, *t,
+                                     (Vector3){ bb->x, bb->y, bb->z },
+                                     bb->size, bw);
+                  }
+              }
           }
 #ifdef LRG_BUILD_EDITOR
         /* Feature 1: shading — push lights to the shader once per frame

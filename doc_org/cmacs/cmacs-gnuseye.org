@@ -39,11 +39,21 @@ inspector).  Keys: ~e~ entity list, ~i~ inspector, ~l~ layers, ~s~ search,
 legend, ~q~ quit.
 
 The globe is a sun-lit 3D sphere (soft day/night terminator; the night
-side stays partly lit so markers everywhere remain readable) with real
-*vector coastlines* (Natural Earth, downloaded + cached once).  The
-coastlines are drawn in the globe's own lat/lon convention, so they always
-line up with the markers --- a plane over France is over France.  Disable
-with ~cmacs-gnuseye-coastlines~ nil.
+side stays partly lit so markers everywhere remain readable) drawn as a
+real *political map* from Natural Earth + flagcdn data (downloaded +
+cached once), all in the globe's own lat/lon convention so it always lines
+up with the markers --- a plane over France is over France:
+
+- coastlines (~cmacs-gnuseye-coastlines~)
+- country borders (~cmacs-gnuseye-borders~)
+- country name labels, shown once zoomed in (~cmacs-gnuseye-labels~)
+- admin-1 states/provinces for ~cmacs-gnuseye-admin1-countries~ (default
+  USA + Canada; ~cmacs-gnuseye-admin1~)
+- country flags as camera-facing billboards, shown once zoomed in
+  (~cmacs-gnuseye-flags~; first load trickles in, then cached)
+
+Colours are configurable (~cmacs-gnuseye-coastline-color~,
+~-border-color~, ~-admin1-color~, ~-label-color~).
 
 (A raster ~cmacs-gnuseye-base-texture~ is also supported but experimental:
 the sphere mesh's UV layout does not match the marker convention, so a

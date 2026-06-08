@@ -602,6 +602,31 @@ cmacs_gnuseye_clear_coastlines (CmacsLibregnumRenderCtx *r)
   if (r) cmacs_libregnum_render_ctx_clear_static_drawables (r);
 }
 
+/* ── Country flags (camera-facing billboards) ───────────────────────── */
+
+#define FLAG_LIFT_M 25000.0
+
+int
+cmacs_gnuseye_add_flag (CmacsLibregnumRenderCtx *r, double lat, double lon,
+                        const char *flag_path, double size)
+{
+  if (!r || !flag_path) return -1;
+  GrlTexture *tex = grl_texture_new_from_file (flag_path);
+  if (!tex) return -1;
+  double x, y, z;
+  gnuseye_latlon_to_xyz (lat, lon, FLAG_LIFT_M, &x, &y, &z);
+  cmacs_libregnum_render_ctx_add_billboard (r, (float) x, (float) y, (float) z,
+                                            tex, (float) (size > 0 ? size
+                                                                   : 0.25));
+  return 0;
+}
+
+void
+cmacs_gnuseye_clear_flags (CmacsLibregnumRenderCtx *r)
+{
+  if (r) cmacs_libregnum_render_ctx_clear_billboards (r);
+}
+
 /* ── Camera ─────────────────────────────────────────────────────────── */
 
 void

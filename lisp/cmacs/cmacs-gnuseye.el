@@ -801,6 +801,17 @@ and clicking one selects it (inspector + recentre)."
 (defcustom cmacs-gnuseye-admin1-countries '("USA" "CAN")
   "ISO-A3 country codes whose states/provinces are drawn (admin-1)."
   :type '(repeat string) :group 'cmacs-gnuseye)
+(defcustom cmacs-gnuseye-flags t
+  "Draw country flags on the globe (shown once zoomed in).
+Flag images (flagcdn.com) are downloaded once and cached; the first time
+they trickle in over a short while, then load instantly."
+  :type 'boolean :group 'cmacs-gnuseye)
+(defcustom cmacs-gnuseye-flag-size 0.3
+  "Country flag billboard size in world units." :type 'number
+  :group 'cmacs-gnuseye)
+(defcustom cmacs-gnuseye-flag-url-format "https://flagcdn.com/w80/%s.png"
+  "Flag image URL; %s is the lowercase ISO-A2 country code."
+  :type 'string :group 'cmacs-gnuseye)
 
 (defcustom cmacs-gnuseye-coastline-color "#c8a96f"
   "Coastline colour." :type 'string :group 'cmacs-gnuseye)
@@ -893,6 +904,67 @@ and clicking one selects it (inspector + recentre)."
           (ignore-errors
             (cmacs-gnuseye-add-label buffer (float ly) (float lx) name rgba)))))))
 
+(defun cmacs-gnuseye--flag-path (cc)
+  (expand-file-name (format "cmacs/gnuseye/flags/%s.png" (downcase cc))
+                    (or (getenv "XDG_CACHE_HOME") "~/.cache")))
+
+(defun cmacs-gnuseye--fetch-flag (cc path callback)
+  "Download the flag for ISO-A2 code CC to PATH (binary); call (CALLBACK OK)."
+  (url-retrieve
+   (format cmacs-gnuseye-flag-url-format (downcase cc))
+   (lambda (status)
+     (let ((ok nil))
+       (unless (plist-get status :error)
+         (goto-char (point-min))
+         (when (re-search-forward "\r?\n\r?\n" nil t)
+           (let ((data (buffer-substring-no-properties (point) (point-max))))
+             (ignore-errors
+               (make-directory (file-name-directory path) t)
+               (let ((coding-system-for-write 'binary))
+                 (with-temp-file path
+                   (set-buffer-multibyte nil)
+                   (insert data)))
+               (setq ok (file-readable-p path))))))
+       (when callback (funcall callback ok))))
+   nil t t))
+
+(defun cmacs-gnuseye--flag-fetch-queue (buffer queue size)
+  "Fetch missing flags in QUEUE one at a time, adding each as it arrives."
+  (when (and queue (buffer-live-p buffer))
+    (let ((item (car queue)))
+      (cmacs-gnuseye--fetch-flag
+       (nth 0 item) (nth 3 item)
+       (lambda (ok)
+         (when (and ok (buffer-live-p buffer)
+                    (cmacs-gnuseye-attached-p buffer))
+           (ignore-errors
+             (cmacs-gnuseye-add-flag buffer (nth 1 item) (nth 2 item)
+                                     (nth 3 item) size))
+           (cmacs-gnuseye-redraw buffer))
+         (cmacs-gnuseye--flag-fetch-queue buffer (cdr queue) size))))))
+
+(defun cmacs-gnuseye--load-flags (buffer data)
+  "Place a flag at each country's anchor (cached flags now, missing async)."
+  (let ((size cmacs-gnuseye-flag-size) (queue nil))
+    (dolist (f (alist-get 'features data))
+      (let* ((props (alist-get 'properties f))
+             (cc (seq-find (lambda (c) (and (stringp c) (= (length c) 2)
+                                            (not (string= c "-99"))))
+                           (list (alist-get 'ISO_A2_EH props)
+                                 (alist-get 'ISO_A2 props)
+                                 (alist-get 'iso_a2 props))))
+             (lx (alist-get 'LABEL_X props))
+             (ly (alist-get 'LABEL_Y props)))
+        (when (and (stringp cc) (numberp lx) (numberp ly))
+          (let ((path (cmacs-gnuseye--flag-path cc)))
+            (if (file-readable-p path)
+                (ignore-errors
+                  (cmacs-gnuseye-add-flag buffer (float ly) (float lx)
+                                          path size))
+              (push (list cc (float ly) (float lx) path) queue))))))
+    (cmacs-gnuseye-redraw buffer)
+    (cmacs-gnuseye--flag-fetch-queue buffer (nreverse queue) size)))
+
 ;;;###autoload
 (defun cmacs-gnuseye-load-map (&optional buffer)
   "Draw the world map (coastlines, borders, labels, admin-1) on BUFFER's globe.
@@ -905,6 +977,8 @@ Each layer's data is downloaded + cached once.  Honours the
                (fboundp 'cmacs-gnuseye-add-coastline))
       (cmacs-gnuseye-clear-coastlines buffer)
       (cmacs-gnuseye-clear-labels buffer)
+      (when (fboundp 'cmacs-gnuseye-clear-flags)
+        (cmacs-gnuseye-clear-flags buffer))
       (when cmacs-gnuseye-coastlines
         (cmacs-gnuseye--geojson
          "ne_110m_coastline.geojson"
@@ -933,12 +1007,16 @@ Each layer's data is downloaded + cached once.  Honours the
                         cmacs-gnuseye-admin1-countries))
               2)
              (cmacs-gnuseye-redraw buffer)))))
-      (when cmacs-gnuseye-labels
+      (when (or cmacs-gnuseye-labels cmacs-gnuseye-flags)
         (cmacs-gnuseye--geojson
          "ne_110m_admin_0_countries.geojson"
          (lambda (d)
            (when (buffer-live-p buffer)
-             (cmacs-gnuseye--draw-country-labels buffer d)
+             (when cmacs-gnuseye-labels
+               (cmacs-gnuseye--draw-country-labels buffer d))
+             (when (and cmacs-gnuseye-flags
+                        (fboundp 'cmacs-gnuseye-add-flag))
+               (cmacs-gnuseye--load-flags buffer d))
              (cmacs-gnuseye-redraw buffer))))))))
 
 (defalias 'cmacs-gnuseye-load-coastlines 'cmacs-gnuseye-load-map)

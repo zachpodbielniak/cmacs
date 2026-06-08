@@ -91,6 +91,14 @@ extern void cmacs_gnuseye_add_coastline (CmacsLibregnumRenderCtx *r,
                                          int n, unsigned int rgba);
 extern void cmacs_gnuseye_clear_coastlines (CmacsLibregnumRenderCtx *r);
 
+/* Country flag: a camera-facing billboard at (lat,lon) textured with the
+ * image at FLAG_PATH (PNG), SIZE world units.  Shown only when zoomed in.
+ * Returns 0 on success, -1 if the image failed to load. */
+extern int  cmacs_gnuseye_add_flag (CmacsLibregnumRenderCtx *r,
+                                    double lat, double lon,
+                                    const char *flag_path, double size);
+extern void cmacs_gnuseye_clear_flags (CmacsLibregnumRenderCtx *r);
+
 /* Polyline arc following a sampled (lat,lon[,alt_m]) path (ALTS may be NULL
  * for a surface track).  For orbits, flight paths, ship wakes, cables. */
 extern void cmacs_gnuseye_add_arc (CmacsLibregnumRenderCtx *r,

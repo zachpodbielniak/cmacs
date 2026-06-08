@@ -447,6 +447,50 @@ DEFUN ("cmacs-gnuseye-label-count", Fcmacs_gnuseye_label_count,
                         cmacs_libregnum_view_get_render_ctx (v)));
 }
 
+DEFUN ("cmacs-gnuseye-add-flag", Fcmacs_gnuseye_add_flag,
+       Scmacs_gnuseye_add_flag, 4, 5, 0,
+       doc: /* Add a country flag billboard at LAT, LON on BUFFER's globe.
+FLAG-PATH is a PNG image; SIZE is the billboard size in world units
+(default 0.25).  Flags face the camera and show only when zoomed in.
+Returns t on success, nil if the image could not be loaded.  */)
+  (Lisp_Object buffer, Lisp_Object lat, Lisp_Object lon, Lisp_Object flag_path,
+   Lisp_Object size)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_STRING (flag_path);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  Lisp_Object enc = ENCODE_FILE (flag_path);
+  double sz = NILP (size) ? 0.25 : XFLOATINT (size);
+  int rc = cmacs_gnuseye_add_flag (cmacs_libregnum_view_get_render_ctx (v),
+                                   XFLOATINT (lat), XFLOATINT (lon),
+                                   SSDATA (enc), sz);
+  return rc == 0 ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-gnuseye-clear-flags", Fcmacs_gnuseye_clear_flags,
+       Scmacs_gnuseye_clear_flags, 1, 1, 0,
+       doc: /* Remove BUFFER's globe country flags.  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (v) cmacs_gnuseye_clear_flags (cmacs_libregnum_view_get_render_ctx (v));
+  return Qt;
+}
+
+DEFUN ("cmacs-gnuseye-flag-count", Fcmacs_gnuseye_flag_count,
+       Scmacs_gnuseye_flag_count, 1, 1, 0,
+       doc: /* Return the number of flag billboards on BUFFER's globe.  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return make_fixnum (0);
+  return make_fixnum (cmacs_libregnum_render_ctx_billboard_count (
+                        cmacs_libregnum_view_get_render_ctx (v)));
+}
+
 void
 syms_of_cmacs_gnuseye_defuns (void)
 {
@@ -498,6 +542,9 @@ syms_of_cmacs_gnuseye_defuns (void)
   defsubr (&Scmacs_gnuseye_add_label);
   defsubr (&Scmacs_gnuseye_clear_labels);
   defsubr (&Scmacs_gnuseye_label_count);
+  defsubr (&Scmacs_gnuseye_add_flag);
+  defsubr (&Scmacs_gnuseye_clear_flags);
+  defsubr (&Scmacs_gnuseye_flag_count);
 }
 
 #endif /* HAVE_CMACS_GNUSEYE */
