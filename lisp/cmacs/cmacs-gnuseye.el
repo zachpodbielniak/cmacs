@@ -313,36 +313,64 @@ fast.  nil renders everything (heavy with worldwide aircraft)."
   :type '(choice (const :tag "Render all" nil) integer)
   :group 'cmacs-gnuseye)
 
-(defun cmacs-gnuseye--visible-entities (ents n buf)
-  "Up to N entities of ENTS within the viewport, spread out (not clumped).
-Filters to those within the on-screen angular radius of BUF's view centre,
-then evenly subsamples so the markers spread across the view rather than
-piling into the densest spot."
+(defvar cmacs-gnuseye--rendered-ids (make-hash-table :test 'eq)
+  "Layer name -> hash of entity ids currently drawn on the globe.
+Used for a STICKY render set: an entity that is already drawn stays drawn
+while it remains in view, so incremental data chunks and the smooth-motion
+tick do not re-pick a different subset each time (which flickered).")
+
+(defun cmacs-gnuseye--record-rendered (lname ents)
+  "Record ENTS as LNAME's currently-drawn set."
+  (let ((h (make-hash-table :test 'equal)))
+    (dolist (e ents) (puthash (format "%s" (plist-get e :id)) t h))
+    (puthash lname h cmacs-gnuseye--rendered-ids)))
+
+(defun cmacs-gnuseye--viewport-predicate (buf)
+  "Return a predicate (ENTITY) -> non-nil if within BUF's on-screen radius."
   (let ((vc (ignore-errors (cmacs-gnuseye-view-center buf))))
     (if (not (and (consp vc) (numberp (nth 0 vc))))
-        (seq-take ents n)
+        (lambda (_e) t)
       (let* ((d2r (/ float-pi 180.0))
              (clat (* d2r (nth 0 vc))) (clon (* d2r (nth 1 vc)))
              (dist (or (nth 2 vc) 12.0))
-             ;; On-screen angular radius (rad) from the zoom, with margin.
              (vrad (min float-pi (max 0.08 (* (- dist 6.371) 0.10))))
-             (cosr (cos vrad))
-             (scl (sin clat)) (ccl (cos clat))
-             (vis nil) (len 0))
-        (dolist (e ents)
-          (let* ((la (* d2r (or (plist-get e :lat) 0)))
-                 (lo (* d2r (or (plist-get e :lon) 0)))
-                 (cosd (+ (* scl (sin la))
-                          (* ccl (cos la) (cos (- lo clon))))))
-            (when (>= cosd cosr) (push e vis) (setq len (1+ len)))))
-        (if (<= len n)
-            vis
-          ;; Evenly subsample VIS to ~N, single pass.
-          (let ((step (max 1 (/ len n))) (i 0) (out nil))
-            (dolist (e vis)
-              (when (zerop (mod i step)) (push e out))
-              (setq i (1+ i)))
-            out))))))
+             (cosr (cos vrad)) (scl (sin clat)) (ccl (cos clat)))
+        (lambda (e)
+          (let ((la (* d2r (or (plist-get e :lat) 0)))
+                (lo (* d2r (or (plist-get e :lon) 0))))
+            (>= (+ (* scl (sin la)) (* ccl (cos la) (cos (- lo clon)))) cosr)))))))
+
+(defun cmacs-gnuseye--select-render (all lname buf cap)
+  "Choose up to CAP of ALL to draw for LNAME, stickily.
+Keep entities already drawn that are still in view, fill remaining slots
+with new in-view entities, and drop those that have left the view -- so the
+drawn set stays stable between updates instead of flickering."
+  (if (or (null cap) (<= (length all) cap))
+      (progn (cmacs-gnuseye--record-rendered lname all) all)
+    (let* ((vp (cmacs-gnuseye--viewport-predicate buf))
+           (prev (gethash lname cmacs-gnuseye--rendered-ids))
+           (kept nil) (fresh nil) (keptn 0))
+      (dolist (e all)
+        (when (funcall vp e)
+          (if (and prev (gethash (format "%s" (plist-get e :id)) prev))
+              (progn (push e kept) (setq keptn (1+ keptn)))
+            (push e fresh))))
+      (let ((out kept) (slots (- cap keptn)))
+        (while (and fresh (> slots 0))
+          (push (pop fresh) out)
+          (setq slots (1- slots)))
+        ;; Always include the selected entity, even off-view.
+        (when cmacs-gnuseye--selected-id
+          (unless (seq-find (lambda (e) (equal (format "%s" (plist-get e :id))
+                                               cmacs-gnuseye--selected-id))
+                            out)
+            (let ((sel (seq-find
+                        (lambda (e) (equal (format "%s" (plist-get e :id))
+                                           cmacs-gnuseye--selected-id))
+                        all)))
+              (when sel (push sel out)))))
+        (cmacs-gnuseye--record-rendered lname out)
+        out))))
 
 (defun cmacs-gnuseye--zoom-scale-for (buf)
   "Zoom-dependent marker scale for BUF (constant on-screen size)."
@@ -359,19 +387,8 @@ nearest the view are drawn."
   (when (and buf (buffer-live-p buf) (cmacs-gnuseye-attached-p buf))
     (let* ((all (seq-filter #'cmacs-gnuseye--entity-visible-p
                             (gethash lname cmacs-gnuseye--layer-entities)))
-           (ents all))
-      (when (and cmacs-gnuseye-render-max
-                 (> (length all) cmacs-gnuseye-render-max))
-        (setq ents (cmacs-gnuseye--visible-entities
-                    all cmacs-gnuseye-render-max buf))
-        ;; Always draw the selected marker, even if it is far from the view.
-        (when cmacs-gnuseye--selected-id
-          (let ((sel (seq-find
-                      (lambda (e) (equal (format "%s" (plist-get e :id))
-                                         cmacs-gnuseye--selected-id))
-                      all)))
-            (when (and sel (not (memq sel ents)))
-              (setq ents (cons sel ents))))))
+           (ents (cmacs-gnuseye--select-render
+                  all lname buf cmacs-gnuseye-render-max)))
       (cmacs-gnuseye-set-entities
        buf lname (cmacs-gnuseye--entities->vector ents)))))
 

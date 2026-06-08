@@ -800,7 +800,12 @@ cmacs_libregnum_render_ctx_label_at (CmacsLibregnumRenderCtx *r, guint id,
   if (is_dir) *is_dir = n->is_dir;
   /* Hide labels for nodes on the far side of the globe. */
   if (!ctx_point_near_side (r, n->x, n->y, n->z)) return FALSE;
-  return cmacs_libregnum_render_ctx_project (r, n->x, n->y + n->hh + 0.25f,
+  /* Gap above the marker, proportional to its size (so labels sit close to
+   * small markers like aircraft) but capped so big nodes (editor cubes)
+   * keep their original spacing. */
+  float gap = n->hh * 1.6f;
+  if (gap > 0.25f) gap = 0.25f;
+  return cmacs_libregnum_render_ctx_project (r, n->x, n->y + n->hh + gap,
                                              n->z, vw, vh, sx, sy);
 }
 

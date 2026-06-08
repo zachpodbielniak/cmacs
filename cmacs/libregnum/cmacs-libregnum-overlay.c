@@ -52,9 +52,10 @@ cmacs_libregnum__draw_map_labels (cairo_t *cr, CmacsLibregnumView *v,
   if (nc == 0) return;
   if (cmacs_libregnum_render_ctx_camera_distance (ctx) > 13.0) return;
   double sxv = (double) pw / vw, syv = (double) ph / vh;
-  /* Drop the name below the flag (if any) so the flag does not cover it. */
+  /* Drop the name just below the flag (if any) so the flag does not cover
+   * it.  Flags are zoom-scaled small, so keep this gap modest. */
   double yoff = (cmacs_libregnum_render_ctx_billboard_count (ctx) > 0)
-                ? ph * 0.045 + 6.0 : 12.0;
+                ? ph * 0.018 + 4.0 : 10.0;
   cairo_save (cr);
   cairo_select_font_face (cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL,
                           CAIRO_FONT_WEIGHT_BOLD);
