@@ -453,10 +453,13 @@ every `cmacs-gnuseye-smooth-interval' seconds and re-rendered."
                  (progn
                    (puthash (cmacs-gnuseye-layer-name layer) (or entities nil)
                             cmacs-gnuseye--layer-entities)
-                   (cmacs-gnuseye--reindex)
+                   ;; Markers now (render-layer reads layer-entities, not the
+                   ;; id-index) for fast first paint; the costly reindex + list
+                   ;; repaint are debounced so a burst of incremental chunks
+                   ;; collapses to one.
                    (cmacs-gnuseye--render-layer buf
                                                 (cmacs-gnuseye-layer-name layer))
-                   (cmacs-gnuseye--list-refresh-soon))
+                   (cmacs-gnuseye--schedule-index-refresh))
                (error
                 (setf (cmacs-gnuseye-layer-last-error layer)
                       (error-message-string e2))))))
@@ -616,28 +619,46 @@ Called from `cmacs-libregnum--node-clicked' on the cmacs context."
             (string-search q (downcase (format "%s" (or (plist-get e :id) ""))))
             (string-search q (symbol-name (or (plist-get e :kind) 'generic)))))))
 
+(defcustom cmacs-gnuseye-list-max 500
+  "Maximum rows shown in the entity list at once.
+Search/filter still scan the full index; this only bounds how many rows
+are painted, because a tabulated-list of thousands of rows is very slow to
+build.  Narrow with the search to see specific entities."
+  :type 'integer :group 'cmacs-gnuseye)
+
+(defvar cmacs-gnuseye--list-total 0
+  "Total entities matching the current filter/search (may exceed what is shown).")
+
 (defun cmacs-gnuseye--list-entries ()
-  "Tabulated-list rows for the entity list, honouring kind filter + search."
-  (let (rows)
-    (maphash
-     (lambda (id e)
-       (when (and (cmacs-gnuseye--entity-visible-p e)
-                  (cmacs-gnuseye--search-match-p e))
-         (let ((a (plist-get e :alt)))
-           (push (list id
-                       (vector
-                        (symbol-name (or (plist-get e :kind) 'generic))
-                        (or (plist-get e :label) id)
-                        (format "%.2f" (or (plist-get e :lat) 0.0))
-                        (format "%.2f" (or (plist-get e :lon) 0.0))
-                        (if (and (numberp a) (> a 0))
-                            (format "%.0f" (/ a 1000.0)) "-")
-                        (format "%s" (or (plist-get e :layer) ""))))
-                 rows))))
-     cmacs-gnuseye--id-index)
+  "Tabulated-list rows for the entity list, honouring kind filter + search.
+Capped at `cmacs-gnuseye-list-max' rows; `cmacs-gnuseye--list-total' records
+how many matched."
+  (let ((rows nil) (shown 0) (total 0)
+        (cap (or cmacs-gnuseye-list-max most-positive-fixnum)))
+    (catch 'full
+      (maphash
+       (lambda (id e)
+         (when (and (cmacs-gnuseye--entity-visible-p e)
+                    (cmacs-gnuseye--search-match-p e))
+           (setq total (1+ total))
+           (when (< shown cap)
+             (let ((a (plist-get e :alt)))
+               (push (list id
+                           (vector
+                            (symbol-name (or (plist-get e :kind) 'generic))
+                            (or (plist-get e :label) id)
+                            (format "%.2f" (or (plist-get e :lat) 0.0))
+                            (format "%.2f" (or (plist-get e :lon) 0.0))
+                            (if (and (numberp a) (> a 0))
+                                (format "%.0f" (/ a 1000.0)) "-")
+                            (format "%s" (or (plist-get e :layer) ""))))
+                     rows)
+               (setq shown (1+ shown))))))
+       cmacs-gnuseye--id-index))
+    (setq cmacs-gnuseye--list-total total)
     rows))
 
-(defun cmacs-gnuseye--list-refresh-soon ()
+(defun cmacs-gnuseye--list-refresh-now ()
   "Repaint the entity list buffer if it exists, keeping point."
   (let ((b (get-buffer cmacs-gnuseye--list-name)))
     (when (and b (buffer-live-p b))
@@ -646,15 +667,47 @@ Called from `cmacs-libregnum--node-clicked' on the cmacs context."
         (tabulated-list-print t)
         (cmacs-gnuseye--list-update-header)))))
 
+(defvar cmacs-gnuseye--list-refresh-timer nil)
+
+(defun cmacs-gnuseye--list-refresh-soon ()
+  "Repaint the entity list, debounced so rapid updates coalesce into one.
+Painting a large tabulated-list is expensive, so callers that fire in
+bursts (the incremental fetch, search-as-you-type) must not paint every
+time."
+  (when (timerp cmacs-gnuseye--list-refresh-timer)
+    (cancel-timer cmacs-gnuseye--list-refresh-timer))
+  (setq cmacs-gnuseye--list-refresh-timer
+        (run-with-timer 0.35 nil #'cmacs-gnuseye--list-refresh-now)))
+
+(defvar cmacs-gnuseye--index-refresh-timer nil)
+
+(defun cmacs-gnuseye--schedule-index-refresh ()
+  "Debounced rebuild of the id-index + entity list.
+The fetch callback fires this once per (incremental) chunk; coalescing
+keeps the expensive reindex + list paint off the hot path."
+  (when (timerp cmacs-gnuseye--index-refresh-timer)
+    (cancel-timer cmacs-gnuseye--index-refresh-timer))
+  (setq cmacs-gnuseye--index-refresh-timer
+        (run-with-timer
+         0.4 nil
+         (lambda ()
+           (setq cmacs-gnuseye--index-refresh-timer nil)
+           (cmacs-gnuseye--reindex)
+           (cmacs-gnuseye--list-refresh-now)))))
+
 (defun cmacs-gnuseye--list-update-header ()
-  (setq header-line-format
-        (format " entities: %d   filter: %s   search: %s"
-                (length tabulated-list-entries)
-                (if cmacs-gnuseye-active-kinds
-                    (mapconcat #'symbol-name cmacs-gnuseye-active-kinds ",")
-                  "all")
-                (if (string-empty-p cmacs-gnuseye--search) "-"
-                  cmacs-gnuseye--search))))
+  (let ((shown (length tabulated-list-entries)))
+    (setq header-line-format
+          (format " entities: %s   filter: %s   search: %s"
+                  (if (> cmacs-gnuseye--list-total shown)
+                      (format "%d of %d (search to narrow)"
+                              shown cmacs-gnuseye--list-total)
+                    (format "%d" shown))
+                  (if cmacs-gnuseye-active-kinds
+                      (mapconcat #'symbol-name cmacs-gnuseye-active-kinds ",")
+                    "all")
+                  (if (string-empty-p cmacs-gnuseye--search) "-"
+                    cmacs-gnuseye--search)))))
 
 (defun cmacs-gnuseye--list-goto (id)
   "Move point to the row for ID in the list buffer, if shown."
