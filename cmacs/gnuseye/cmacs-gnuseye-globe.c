@@ -78,11 +78,12 @@ static const char *s_globe_fs =
  * so it is freed when the render ctx releases the background model. */
 typedef struct
 {
-  GrlImage   *img;    /* CPU master (owned) for region recompositing */
-  GrlTexture *tex;    /* GPU albedo texture (owned ref) */
-  GrlShader  *shader; /* owned ref, or NULL (unlit fallback) */
-  int         tw, th; /* texture dimensions */
-  double      spin;   /* current spin (degrees) */
+  GrlImage   *img;     /* CPU master (owned) for region recompositing */
+  GrlTexture *tex;     /* GPU albedo texture (owned ref) */
+  GrlShader  *shader;  /* owned ref, or NULL (unlit fallback) */
+  gint        sun_loc; /* cached "sunDir" uniform location, or -1 */
+  int         tw, th;  /* texture dimensions */
+  double      spin;    /* current spin (degrees) */
 } GnuseyeGlobe;
 
 static void
@@ -229,6 +230,7 @@ cmacs_gnuseye_build (CmacsLibregnumRenderCtx *r, const char *base_texture_path)
   if (!model) return FALSE;
 
   GnuseyeGlobe *g = g_new0 (GnuseyeGlobe, 1);
+  g->sun_loc = -1;
   if (base_texture_path && *base_texture_path)
     g->img = load_earth_texture (base_texture_path);
   if (!g->img)
@@ -254,9 +256,10 @@ cmacs_gnuseye_build (CmacsLibregnumRenderCtx *r, const char *base_texture_path)
       if (g->shader)
         {
           grl_material_set_shader (mat, g->shader);
-          gint loc = grl_shader_get_location (g->shader, "sunDir");
-          if (loc >= 0)
-            grl_shader_set_value_vec3 (g->shader, loc, 0.90f, 0.25f, -0.35f);
+          g->sun_loc = grl_shader_get_location (g->shader, "sunDir");
+          if (g->sun_loc >= 0)
+            grl_shader_set_value_vec3 (g->shader, g->sun_loc,
+                                       0.90f, 0.25f, -0.35f);
         }
       grl_model_set_material (model, 0, mat);
     }
@@ -336,6 +339,29 @@ cmacs_gnuseye_globe_get_spin (CmacsLibregnumRenderCtx *r)
 {
   GnuseyeGlobe *g = globe_state (r);
   return g ? g->spin : 0.0;
+}
+
+/* ── Day/night terminator (dynamic sun direction) ───────────────────── */
+
+void
+cmacs_gnuseye_set_sun_direction (CmacsLibregnumRenderCtx *r,
+                                 double x, double y, double z)
+{
+  GnuseyeGlobe *g = globe_state (r);
+  if (!g || !g->shader || g->sun_loc < 0) return;
+  /* Runs on the main thread, where the shared raylib GL context is current
+   * (the same place cmacs_gnuseye_build sets this uniform), so the immediate
+   * glUniform issued by grl_shader_set_value_vec3 takes effect. */
+  grl_shader_set_value_vec3 (g->shader, g->sun_loc,
+                             (gfloat) x, (gfloat) y, (gfloat) z);
+}
+
+void
+cmacs_gnuseye_set_sun_time (CmacsLibregnumRenderCtx *r, double unix_s)
+{
+  double x, y, z;
+  gnuseye_sun_unit (unix_s, &x, &y, &z);
+  cmacs_gnuseye_set_sun_direction (r, x, y, z);
 }
 
 /* ── Markers: oriented 3D icons ─────────────────────────────────────── */
@@ -428,8 +454,14 @@ void
 cmacs_gnuseye_clear_markers (CmacsLibregnumRenderCtx *r)
 {
   /* The persistent globe is the background model, not a drawable, so a
-   * full drawable clear wipes only the per-tick markers/arcs. */
-  if (r) cmacs_libregnum_render_ctx_clear_drawables (r);
+   * full drawable clear wipes only the per-tick markers/arcs.  Also drop
+   * the per-tick polygon fills (alert zones), which are rebuilt with the
+   * markers; the persistent (choropleth/aurora) fills survive. */
+  if (r)
+    {
+      cmacs_libregnum_render_ctx_clear_drawables (r);
+      cmacs_libregnum_render_ctx_clear_polygon_models (r);
+    }
 }
 
 int
@@ -602,6 +634,162 @@ void
 cmacs_gnuseye_clear_coastlines (CmacsLibregnumRenderCtx *r)
 {
   if (r) cmacs_libregnum_render_ctx_clear_static_drawables (r);
+}
+
+/* ── Filled polygons (translucent draped regions) ───────────────────── */
+
+#define POLY_LIFT_M     5000.0    /* drape fills above the skin, below coasts */
+#define POLY_EDGE_STEP_M 150000.0 /* great-circle densify: ~one sample/150 km */
+#define POLY_MAX_VERTS  65000     /* guint16 index ceiling (leave headroom) */
+
+/* Build a translucent draped polygon model from a lat/lon ring.  The ring is
+ * densified along great circles, then triangulated as a POLAR GRID: concentric
+ * rings interpolated from the centroid out to the perimeter, so every triangle
+ * is small and hugs the sphere (a plain centroid fan chords below the surface
+ * for large spans and gets occluded by the globe).  Robust for the convex /
+ * star-shaped regions we draw (alert zones, aurora bands, countries); strongly
+ * concave rings may show minor artifacts (ear-clip is the future refinement).
+ * Returns a GrlModel* (transfer full) or NULL. */
+static GrlModel *
+build_polygon_model (const double *lats, const double *lons, int n,
+                     guint8 cr, guint8 cg, guint8 cb, guint8 ca)
+{
+  if (!lats || !lons || n < 3) return NULL;
+
+  /* Drop an explicit closing vertex if the ring repeats its first point. */
+  int m = n;
+  if (m >= 4 && fabs (lats[0] - lats[m-1]) < 1e-9
+      && fabs (lons[0] - lons[m-1]) < 1e-9)
+    m--;
+  if (m < 3) return NULL;
+
+  /* Centroid (mean of surface vectors -> back to lat/lon). */
+  double cx = 0, cy = 0, cz = 0;
+  for (int i = 0; i < m; i++)
+    {
+      double x, y, z;
+      gnuseye_latlon_to_xyz (lats[i], lons[i], 0.0, &x, &y, &z);
+      cx += x; cy += y; cz += z;
+    }
+  double clat, clon, cdummy;
+  gnuseye_xyz_to_latlon (cx, cy, cz, &clat, &clon, &cdummy);
+
+  /* Densified perimeter as lat/lon (great-circle samples along each edge). */
+  GArray *plat = g_array_new (FALSE, FALSE, sizeof (double));
+  GArray *plon = g_array_new (FALSE, FALSE, sizeof (double));
+  double maxd = 0.0;
+  for (int i = 0; i < m; i++)
+    {
+      double la0 = lats[i], lo0 = lons[i];
+      double la1 = lats[(i + 1) % m], lo1 = lons[(i + 1) % m];
+      double dseg = gnuseye_haversine_m (la0, lo0, la1, lo1);
+      int steps = (int) (dseg / POLY_EDGE_STEP_M);
+      if (steps < 1) steps = 1;
+      if (steps > 128) steps = 128;
+      for (int s = 0; s < steps; s++)
+        {
+          double t = (double) s / steps, la, lo;
+          gnuseye_great_circle_point (la0, lo0, la1, lo1, t, &la, &lo);
+          g_array_append_val (plat, la);
+          g_array_append_val (plon, lo);
+          double d = gnuseye_haversine_m (clat, clon, la, lo);
+          if (d > maxd) maxd = d;
+        }
+    }
+  guint perim = plat->len;
+  if (perim < 3)
+    { g_array_free (plat, TRUE); g_array_free (plon, TRUE); return NULL; }
+
+  /* Radial ring count: one ring per ~200 km of the largest radius keeps the
+   * fill draped without exploding the vertex count. */
+  int rings = (int) (maxd / 200000.0);
+  if (rings < 1) rings = 1;
+  if (rings > 24) rings = 24;
+  /* Keep within the guint16 index ceiling. */
+  while ((guint) (rings + 1) * perim > POLY_MAX_VERTS && rings > 1)
+    rings--;
+
+  GArray *verts = g_array_new (FALSE, FALSE, sizeof (gfloat)); /* xyz triples */
+  GArray *idx   = g_array_new (FALSE, FALSE, sizeof (guint16));
+
+  /* Vertex grid: ring r in 0..rings, perimeter index i in 0..perim-1.
+   * Ring 0 collapses onto the centroid; ring `rings' is the perimeter. */
+  for (int r = 0; r <= rings; r++)
+    {
+      double frac = (double) r / rings;
+      for (guint i = 0; i < perim; i++)
+        {
+          double la, lo;
+          gnuseye_great_circle_point (clat, clon,
+                                      g_array_index (plat, double, i),
+                                      g_array_index (plon, double, i),
+                                      frac, &la, &lo);
+          double x, y, z;
+          gnuseye_latlon_to_xyz (la, lo, POLY_LIFT_M, &x, &y, &z);
+          gfloat v[3] = { (gfloat) x, (gfloat) y, (gfloat) z };
+          g_array_append_vals (verts, v, 3);
+        }
+    }
+  g_array_free (plat, TRUE);
+  g_array_free (plon, TRUE);
+
+  for (int r = 0; r < rings; r++)
+    for (guint i = 0; i < perim; i++)
+      {
+        guint inext = (i + 1) % perim;
+        guint16 v00 = (guint16) (r * perim + i);
+        guint16 v01 = (guint16) (r * perim + inext);
+        guint16 v10 = (guint16) ((r + 1) * perim + i);
+        guint16 v11 = (guint16) ((r + 1) * perim + inext);
+        guint16 t1[3] = { v00, v10, v11 };
+        guint16 t2[3] = { v00, v11, v01 };
+        g_array_append_vals (idx, t1, 3);
+        g_array_append_vals (idx, t2, 3);
+      }
+
+  GrlMesh *mesh = grl_mesh_new_custom ((const gfloat *) verts->data,
+                                       verts->len / 3, NULL,
+                                       (const guint16 *) idx->data, idx->len);
+  g_array_free (verts, TRUE);
+  g_array_free (idx, TRUE);
+  if (!mesh) return NULL;
+
+  GrlModel *model = grl_model_new_from_mesh (mesh);
+  g_object_unref (mesh);
+  if (!model) return NULL;
+
+  GrlMaterial *mat = grl_material_new_default ();
+  g_autoptr (GrlColor) col = grl_color_new (cr, cg, cb, ca);
+  grl_material_set_map_color (mat, GRL_MATERIAL_MAP_ALBEDO, col);
+  grl_model_set_material (model, 0, mat);
+  return model;
+}
+
+void
+cmacs_gnuseye_add_polygon (CmacsLibregnumRenderCtx *r,
+                           const double *lats, const double *lons,
+                           int n, unsigned int rgba, gboolean persistent)
+{
+  if (!r || !lats || !lons || n < 3) return;
+  guint8 cr = (rgba >> 24) & 0xff, cg = (rgba >> 16) & 0xff;
+  guint8 cb = (rgba >> 8) & 0xff,  ca = rgba & 0xff;
+  if (ca == 0) ca = 110;                       /* default see-through wash */
+  GrlModel *model = build_polygon_model (lats, lons, n, cr, cg, cb, ca);
+  if (!model) return;
+  if (persistent)
+    cmacs_libregnum_render_ctx_add_static_polygon_model (r, model);
+  else
+    cmacs_libregnum_render_ctx_add_polygon_model (r, model);
+}
+
+void
+cmacs_gnuseye_clear_polygons (CmacsLibregnumRenderCtx *r, gboolean persistent)
+{
+  if (!r) return;
+  if (persistent)
+    cmacs_libregnum_render_ctx_clear_static_polygon_models (r);
+  else
+    cmacs_libregnum_render_ctx_clear_polygon_models (r);
 }
 
 /* ── Country flags (camera-facing billboards) ───────────────────────── */

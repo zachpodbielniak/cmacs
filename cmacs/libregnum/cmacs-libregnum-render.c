@@ -256,6 +256,12 @@ struct CmacsLibregnumRenderCtx
    * clear_drawables.  Owned (g_object_unref per element). */
   GPtrArray        *static_drawables;
 
+  /* Filled translucent polygon models (GrlModel*) draped on the globe:
+   * `polygon_models' is per-tick (alert zones), `static_polygon_models' is
+   * persistent (choropleth/aurora).  Owned (g_object_unref per element). */
+  GPtrArray        *polygon_models;
+  GPtrArray        *static_polygon_models;
+
   /* Persistent map labels (country/region names), drawn by the overlay. */
   GArray           *map_labels;       /* CmacsMapLabel */
 
@@ -327,6 +333,8 @@ cmacs_libregnum_render_ctx_new (int w, int h)
   r->renderer  = lrg_renderer_new (LRG_WINDOW (shared_window));
   r->drawables = g_ptr_array_new_with_free_func (g_object_unref);
   r->static_drawables = g_ptr_array_new_with_free_func (g_object_unref);
+  r->polygon_models = g_ptr_array_new_with_free_func (g_object_unref);
+  r->static_polygon_models = g_ptr_array_new_with_free_func (g_object_unref);
   r->map_labels = g_array_new (FALSE, TRUE, sizeof (CmacsMapLabel));
   g_array_set_clear_func (r->map_labels, cmacs_map_label_clear);
   r->billboards = g_array_new (FALSE, TRUE, sizeof (CmacsBillboard));
@@ -377,6 +385,8 @@ cmacs_libregnum_render_ctx_free (CmacsLibregnumRenderCtx *r)
 #endif
   if (r->fbo_valid) UnloadRenderTexture (r->fbo);
   g_clear_object (&r->background_model);
+  if (r->polygon_models) g_ptr_array_unref (r->polygon_models);
+  if (r->static_polygon_models) g_ptr_array_unref (r->static_polygon_models);
   if (r->static_drawables) g_ptr_array_unref (r->static_drawables);
   if (r->map_labels) g_array_free (r->map_labels, TRUE);
   if (r->billboards) g_array_free (r->billboards, TRUE);
@@ -475,6 +485,39 @@ cmacs_libregnum_render_ctx_clear_static_drawables (CmacsLibregnumRenderCtx *r)
 {
   if (r && r->static_drawables)
     g_ptr_array_set_size (r->static_drawables, 0);
+}
+
+/* ── Filled polygon models (translucent draped fills) ────────────── */
+
+void
+cmacs_libregnum_render_ctx_add_polygon_model (CmacsLibregnumRenderCtx *r,
+                                              void *model)
+{
+  if (!r || !model) return;
+  g_ptr_array_add (r->polygon_models, model);          /* ownership transfers */
+}
+
+void
+cmacs_libregnum_render_ctx_clear_polygon_models (CmacsLibregnumRenderCtx *r)
+{
+  if (r && r->polygon_models)
+    g_ptr_array_set_size (r->polygon_models, 0);
+}
+
+void
+cmacs_libregnum_render_ctx_add_static_polygon_model (CmacsLibregnumRenderCtx *r,
+                                                     void *model)
+{
+  if (!r || !model) return;
+  g_ptr_array_add (r->static_polygon_models, model);   /* ownership transfers */
+}
+
+void
+cmacs_libregnum_render_ctx_clear_static_polygon_models
+                                              (CmacsLibregnumRenderCtx *r)
+{
+  if (r && r->static_polygon_models)
+    g_ptr_array_set_size (r->static_polygon_models, 0);
 }
 
 /* ── Map labels ──────────────────────────────────────────────────── */
@@ -1222,6 +1265,33 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
             g_autoptr (GrlColor)   bwhite = grl_color_new (255, 255, 255, 255);
             grl_model_draw_ex (r->background_model, bpos, baxis,
                                r->background_spin_deg, bscl, bwhite);
+          }
+        /* Filled translucent polygon fills (alert zones, choropleth, aurora):
+         * drawn after the globe but before coastlines/markers so those
+         * overlay them.  Alpha-blended and two-sided (cull disabled) so the
+         * translucent drape shows from any viewing angle; positioned in world
+         * space at angle 0 to match the coastline/marker overlays. */
+        if ((r->static_polygon_models && r->static_polygon_models->len)
+            || (r->polygon_models && r->polygon_models->len))
+          {
+            g_autoptr (GrlVector3) ppos  = grl_vector3_new (0.0f, 0.0f, 0.0f);
+            g_autoptr (GrlVector3) paxis = grl_vector3_new (0.0f, 1.0f, 0.0f);
+            g_autoptr (GrlVector3) pscl  = grl_vector3_new (1.0f, 1.0f, 1.0f);
+            g_autoptr (GrlColor)   pw     = grl_color_new (255, 255, 255, 255);
+            BeginBlendMode (BLEND_ALPHA);
+            rlDisableBackfaceCulling ();
+            for (guint i = 0;
+                 r->static_polygon_models && i < r->static_polygon_models->len;
+                 i++)
+              grl_model_draw_ex (
+                g_ptr_array_index (r->static_polygon_models, i),
+                ppos, paxis, 0.0f, pscl, pw);
+            for (guint i = 0;
+                 r->polygon_models && i < r->polygon_models->len; i++)
+              grl_model_draw_ex (g_ptr_array_index (r->polygon_models, i),
+                                 ppos, paxis, 0.0f, pscl, pw);
+            rlEnableBackfaceCulling ();
+            EndBlendMode ();
           }
         /* Persistent static overlay (coastlines etc.), behind markers. */
         for (guint i = 0;

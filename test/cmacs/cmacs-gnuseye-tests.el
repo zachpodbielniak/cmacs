@@ -115,6 +115,69 @@ globe is not east-west mirrored."
         (should (= (cmacs-gnuseye-layer-interval l) 99)))
     (remhash 'cmacs-gnuseye--test-layer cmacs-gnuseye--layers)))
 
+;;;; Phase 0: polygons, lifecycle, categories --------------------------------
+
+(ert-deftest cmacs-gnuseye--normalize-poly ()
+  "A :polygon ring normalises to a vector of [LAT LON] vertices and rides
+through entity normalisation."
+  (cmacs-gnuseye-tests--skip)
+  (let ((p (cmacs-gnuseye--normalize-poly '((10 20) (11 21) (12 22)))))
+    (should (vectorp p))
+    (should (= (length p) 3))
+    (should (equal (aref (aref p 0) 0) 10.0)))
+  ;; too few vertices => nil (not a polygon)
+  (should (null (cmacs-gnuseye--normalize-poly '((1 2) (3 4)))))
+  (let ((e (cmacs-gnuseye--normalize-entity
+            (list :id 'Z :lat 0 :lon 0 :kind 'generic
+                  :polygon '((0 0) (0 10) (10 10) (10 0))))))
+    (should (vectorp (plist-get e :polygon)))
+    (should (= (length (plist-get e :polygon)) 4))))
+
+(ert-deftest cmacs-gnuseye--polygon-defuns ()
+  "The filled-polygon and dynamic-sun primitives are present."
+  (cmacs-gnuseye-tests--skip)
+  (should (fboundp 'cmacs-gnuseye-add-polygon))
+  (should (fboundp 'cmacs-gnuseye-clear-polygons))
+  (should (fboundp 'cmacs-gnuseye-set-sun-time)))
+
+(ert-deftest cmacs-gnuseye--layer-generation ()
+  "Enabling and disabling a layer bumps its generation token (so a late
+async fetch can be detected as stale) and clears its enabled flag."
+  (cmacs-gnuseye-tests--skip)
+  (cmacs-gnuseye-define-layer cmacs-gnuseye--gentest
+    :title "Gen" :group 'test :kind 'generic
+    :fetch (lambda (cb) (funcall cb nil)))
+  (unwind-protect
+      (let* ((l (gethash 'cmacs-gnuseye--gentest cmacs-gnuseye--layers))
+             (g0 (cmacs-gnuseye-layer-generation l)))
+        (cmacs-gnuseye--disable-layer l)
+        (should (> (cmacs-gnuseye-layer-generation l) g0))
+        (should-not (cmacs-gnuseye-layer-enabled l)))
+    (remhash 'cmacs-gnuseye--gentest cmacs-gnuseye--layers)))
+
+(ert-deftest cmacs-gnuseye--toggle-pane-groups ()
+  "The toggle pane groups layers under collapsible category headers; a
+collapsed category shows only its header, expanding reveals its layers."
+  (cmacs-gnuseye-tests--skip)
+  (cmacs-gnuseye-define-layer cmacs-gnuseye--cat-a
+    :title "Cat A" :group 'natural :fetch (lambda (cb) (funcall cb nil)))
+  (cmacs-gnuseye-define-layer cmacs-gnuseye--cat-b
+    :title "Cat B" :group 'natural :fetch (lambda (cb) (funcall cb nil)))
+  (unwind-protect
+      (let ((cmacs-gnuseye--expanded-groups (make-hash-table :test 'eq)))
+        ;; Collapsed: a (:group . natural) header exists, no layer rows for it.
+        (let* ((rows (cmacs-gnuseye--layers-entries))
+               (hdr (assoc '(:group . natural) rows)))
+          (should hdr)
+          (should-not (assq 'cmacs-gnuseye--cat-a rows)))
+        ;; Expanded: the two layers now appear as rows.
+        (puthash 'natural t cmacs-gnuseye--expanded-groups)
+        (let ((rows (cmacs-gnuseye--layers-entries)))
+          (should (assq 'cmacs-gnuseye--cat-a rows))
+          (should (assq 'cmacs-gnuseye--cat-b rows))))
+    (remhash 'cmacs-gnuseye--cat-a cmacs-gnuseye--layers)
+    (remhash 'cmacs-gnuseye--cat-b cmacs-gnuseye--layers)))
+
 (provide 'cmacs-gnuseye-tests)
 
 ;;; cmacs-gnuseye-tests.el ends here

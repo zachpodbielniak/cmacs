@@ -72,6 +72,33 @@ Read on demand by `cmacs-gnuseye-secret'.  Keep it out of version control."
   :type 'file
   :group 'cmacs-gnuseye)
 
+(defcustom cmacs-gnuseye-feature-files
+  '(cmacs-gnuseye-search cmacs-gnuseye-stats cmacs-gnuseye-geofence
+    cmacs-gnuseye-bookmarks cmacs-gnuseye-replay cmacs-gnuseye-intel
+    cmacs-gnuseye-track)
+  "Interaction/intelligence feature files loaded when the globe opens.
+Distinct from `cmacs-gnuseye-layer-files' (data layers).  Each is required
+softly, so a file that does not exist yet is simply skipped."
+  :type '(repeat symbol)
+  :group 'cmacs-gnuseye)
+
+(defun cmacs-gnuseye--config-dir ()
+  "Directory holding GNU's Eye user config (bookmarks, tours, geofences)."
+  (expand-file-name "cmacs/gnuseye/"
+                    (or (getenv "XDG_CONFIG_HOME") "~/.config")))
+
+(defun cmacs-gnuseye--config-file (name)
+  "Absolute path of config file NAME under the GNU's Eye config dir.
+Ensures the directory exists."
+  (let ((dir (cmacs-gnuseye--config-dir)))
+    (unless (file-directory-p dir) (ignore-errors (make-directory dir t)))
+    (expand-file-name name dir)))
+
+(defun cmacs-gnuseye--load-features ()
+  "Load the interaction/intelligence feature files (soft require)."
+  (dolist (f cmacs-gnuseye-feature-files)
+    (require f nil t)))
+
 (defvar cmacs-gnuseye-buffer nil
   "The active GNU's Eye globe buffer that layer timers push entities to.")
 
@@ -146,6 +173,16 @@ ALPHA (0-255) is applied when COLOR has no alpha (default 255)."
                        (float (or (and (> (length p) 2) (elt p 2)) 0.0))))
              (append trail nil)))))
 
+(defun cmacs-gnuseye--normalize-poly (poly)
+  "Normalise POLY (list/vector of (LAT LON)) to a vector of [LAT LON] vertices.
+For a filled region draped on the globe (alert zones, AOIs, aurora bands)."
+  (when (and poly (> (length poly) 2))
+    (vconcat
+     (mapcar (lambda (p)
+               (vector (float (or (elt p 0) 0.0))
+                       (float (or (elt p 1) 0.0))))
+             (append poly nil)))))
+
 (defvar cmacs-gnuseye--zoom-scale 1.0
   "Marker scale factor for the current zoom (set per render).
 Keeps aircraft a roughly constant on-screen size, so zooming into a busy
@@ -181,6 +218,7 @@ stored payload drives the detail view."
           ;; Default "hover" (mouse over to identify); "always" when selected.
           :label-mode (if sel 3 (or (plist-get e :label-mode) 2))
           :trail     (cmacs-gnuseye--normalize-trail (plist-get e :trail))
+          :polygon   (cmacs-gnuseye--normalize-poly (plist-get e :polygon))
           :detail    (plist-get e :detail)
           :data      (plist-get e :data)
           :speed     (plist-get e :speed)
@@ -248,7 +286,12 @@ HEADERS is an alist of (NAME . VALUE).  ARRAY-TYPE is passed to
 
 (cl-defstruct (cmacs-gnuseye-layer (:constructor cmacs-gnuseye--make-layer))
   name title group fetch interval default-on detail kind needs-key advance
-  timer enabled last-fetch last-error in-flight)
+  timer enabled last-fetch last-error in-flight
+  ;; Bumped on every enable AND disable.  An async fetch captures the value at
+  ;; dispatch; a callback whose captured value no longer matches (the layer was
+  ;; toggled mid-flight) is dropped, so a late response can never re-add the
+  ;; markers of a layer the user has switched off.  See `--refresh-layer'.
+  (generation 0))
 
 (defvar cmacs-gnuseye--layers (make-hash-table :test 'eq)
   "Registry of defined layers: NAME symbol -> `cmacs-gnuseye-layer'.")
@@ -293,6 +336,11 @@ PROPS is a plist with:
   "Non-nil if entity E passes the active-kinds filter."
   (cmacs-gnuseye--kind-visible-p (or (plist-get e :kind) 'generic)))
 
+(defvar cmacs-gnuseye--reindex-functions nil
+  "Abnormal hook run (no args) after `cmacs-gnuseye--reindex' rebuilds the index.
+Features (search index, stats pane, replay capture) subscribe here so they
+refresh off the single debounced reindex rather than every fetch chunk.")
+
 (defun cmacs-gnuseye--reindex ()
   "Rebuild the id -> entity index from `cmacs-gnuseye--layer-entities'."
   (clrhash cmacs-gnuseye--id-index)
@@ -303,7 +351,8 @@ PROPS is a plist with:
          (unless (string-empty-p id)
            (puthash id (append (list :layer lname) e)
                     cmacs-gnuseye--id-index)))))
-   cmacs-gnuseye--layer-entities))
+   cmacs-gnuseye--layer-entities)
+  (run-hook-with-args 'cmacs-gnuseye--reindex-functions))
 
 (defcustom cmacs-gnuseye-render-max 700
   "Maximum markers rendered per layer on the globe.
@@ -419,6 +468,12 @@ every `cmacs-gnuseye-smooth-interval' seconds and re-rendered."
 (defvar cmacs-gnuseye--smooth-timer nil)
 (defvar cmacs-gnuseye--smooth-last nil)
 
+(defvar cmacs-gnuseye--tick-functions nil
+  "Abnormal hook run as (BUF NOW DT) at the end of each smooth-motion tick.
+Lets features (geofence evaluation, follow-camera) hang cheap periodic work
+off the single shared timer.  Subscribers MUST stay cheap and throttle their
+own heavier work; the tick fires every `cmacs-gnuseye-smooth-interval'.")
+
 (defun cmacs-gnuseye--smooth-tick ()
   "Advance every enabled layer that has an :advance fn, then re-render it."
   (let ((buf cmacs-gnuseye-buffer))
@@ -427,12 +482,12 @@ every `cmacs-gnuseye-smooth-interval' seconds and re-rendered."
       (when cmacs-gnuseye--smooth-timer
         (cancel-timer cmacs-gnuseye--smooth-timer)
         (setq cmacs-gnuseye--smooth-timer nil)))
-     ((and cmacs-gnuseye-smooth (cmacs-gnuseye-attached-p buf))
+     ((cmacs-gnuseye-attached-p buf)
       (let* ((now (float-time))
              (dt (if cmacs-gnuseye--smooth-last
                      (- now cmacs-gnuseye--smooth-last) 0.0)))
         (setq cmacs-gnuseye--smooth-last now)
-        (when (and (> dt 0.0) (< dt 5.0))
+        (when (and cmacs-gnuseye-smooth (> dt 0.0) (< dt 5.0))
           (maphash
            (lambda (name layer)
              (let ((adv (cmacs-gnuseye-layer-advance layer)))
@@ -441,7 +496,11 @@ every `cmacs-gnuseye-smooth-interval' seconds and re-rendered."
                    (when ents
                      (ignore-errors (funcall adv ents dt now))
                      (cmacs-gnuseye--render-layer buf name))))))
-           cmacs-gnuseye--layers)))))))
+           cmacs-gnuseye--layers))
+        ;; Feature hooks (geofence, follow-camera) run every tick regardless of
+        ;; the smooth setting, but should throttle their own heavier work.
+        (when (and (> dt 0.0) (< dt 5.0))
+          (run-hook-with-args 'cmacs-gnuseye--tick-functions buf now dt)))))))
 
 (defun cmacs-gnuseye--smooth-start ()
   "Start the shared smooth-motion tick if not already running."
@@ -452,34 +511,77 @@ every `cmacs-gnuseye-smooth-interval' seconds and re-rendered."
                           (max 0.1 cmacs-gnuseye-smooth-interval)
                           #'cmacs-gnuseye--smooth-tick))))
 
-(defun cmacs-gnuseye--refresh-layer (layer)
-  "Run LAYER's fetch, store its entities in the index, and render them."
+;;;; Day/night terminator -----------------------------------------------------
+
+(defcustom cmacs-gnuseye-day-night t
+  "Light the globe's day side for the real time of day.
+The globe shader already shades a soft terminator; when non-nil the sun
+direction tracks the actual subsolar point and is refreshed periodically."
+  :type 'boolean :group 'cmacs-gnuseye)
+
+(defcustom cmacs-gnuseye-sun-interval 60
+  "Seconds between day/night terminator updates."
+  :type 'number :group 'cmacs-gnuseye)
+
+(defvar cmacs-gnuseye--sun-timer nil)
+
+(defun cmacs-gnuseye--sun-update ()
+  "Point the globe's sun at the current subsolar point."
   (let ((buf cmacs-gnuseye-buffer))
+    (if (not (and buf (buffer-live-p buf) (cmacs-gnuseye-attached-p buf)))
+        (when cmacs-gnuseye--sun-timer
+          (cancel-timer cmacs-gnuseye--sun-timer)
+          (setq cmacs-gnuseye--sun-timer nil))
+      (when cmacs-gnuseye-day-night
+        (ignore-errors (cmacs-gnuseye-set-sun-time buf nil))))))
+
+(defun cmacs-gnuseye--sun-start ()
+  "Apply the terminator now and arm the periodic sun update."
+  (when (and cmacs-gnuseye-day-night (not cmacs-gnuseye--sun-timer))
+    (cmacs-gnuseye--sun-update)
+    (setq cmacs-gnuseye--sun-timer
+          (run-with-timer cmacs-gnuseye-sun-interval
+                          cmacs-gnuseye-sun-interval
+                          #'cmacs-gnuseye--sun-update))))
+
+(defun cmacs-gnuseye--refresh-layer (layer)
+  "Run LAYER's fetch, store its entities in the index, and render them.
+The fetch callback is guarded by the layer's generation token: if the layer
+is disabled (or toggled) while the fetch is in flight, the late response is
+dropped silently, so a disabled layer can never be re-drawn by a stale async
+reply."
+  (let ((buf cmacs-gnuseye-buffer)
+        (gen (cmacs-gnuseye-layer-generation layer)))
     (when (and buf (buffer-live-p buf)
                (cmacs-gnuseye-attached-p buf)
+               (cmacs-gnuseye-layer-enabled layer)
                (not (cmacs-gnuseye-layer-in-flight layer)))
       (setf (cmacs-gnuseye-layer-in-flight layer) t)
       (condition-case err
           (funcall
            (cmacs-gnuseye-layer-fetch layer)
            (lambda (entities)
-             (setf (cmacs-gnuseye-layer-in-flight layer) nil
-                   (cmacs-gnuseye-layer-last-fetch layer) (float-time)
-                   (cmacs-gnuseye-layer-last-error layer) nil)
-             (condition-case e2
-                 (progn
-                   (puthash (cmacs-gnuseye-layer-name layer) (or entities nil)
-                            cmacs-gnuseye--layer-entities)
-                   ;; Markers now (render-layer reads layer-entities, not the
-                   ;; id-index) for fast first paint; the costly reindex + list
-                   ;; repaint are debounced so a burst of incremental chunks
-                   ;; collapses to one.
-                   (cmacs-gnuseye--render-layer buf
-                                                (cmacs-gnuseye-layer-name layer))
-                   (cmacs-gnuseye--schedule-index-refresh))
-               (error
-                (setf (cmacs-gnuseye-layer-last-error layer)
-                      (error-message-string e2))))))
+             ;; Drop the response if the layer was toggled since dispatch.
+             (when (and (cmacs-gnuseye-layer-enabled layer)
+                        (= gen (cmacs-gnuseye-layer-generation layer)))
+               (setf (cmacs-gnuseye-layer-in-flight layer) nil
+                     (cmacs-gnuseye-layer-last-fetch layer) (float-time)
+                     (cmacs-gnuseye-layer-last-error layer) nil)
+               (condition-case e2
+                   (let ((buf cmacs-gnuseye-buffer))
+                     (puthash (cmacs-gnuseye-layer-name layer) (or entities nil)
+                              cmacs-gnuseye--layer-entities)
+                     ;; Markers now (render-layer reads layer-entities, not the
+                     ;; id-index) for fast first paint; the costly reindex +
+                     ;; list repaint are debounced so a burst of incremental
+                     ;; chunks collapses to one.
+                     (when (and buf (buffer-live-p buf))
+                       (cmacs-gnuseye--render-layer
+                        buf (cmacs-gnuseye-layer-name layer)))
+                     (cmacs-gnuseye--schedule-index-refresh))
+                 (error
+                  (setf (cmacs-gnuseye-layer-last-error layer)
+                        (error-message-string e2)))))))
         (error
          (setf (cmacs-gnuseye-layer-in-flight layer) nil
                (cmacs-gnuseye-layer-last-error layer)
@@ -488,6 +590,9 @@ every `cmacs-gnuseye-smooth-interval' seconds and re-rendered."
 (defun cmacs-gnuseye--enable-layer (layer)
   "Enable LAYER: fetch now and (re)arm its refresh timer."
   (cmacs-gnuseye--disable-layer layer)
+  ;; Bump generation so any fetch dispatched under the previous enable/disable
+  ;; cannot land as ours (and our own fetches capture this fresh value).
+  (cl-incf (cmacs-gnuseye-layer-generation layer))
   (setf (cmacs-gnuseye-layer-enabled layer) t)
   (cmacs-gnuseye--refresh-layer layer)
   (let ((iv (cmacs-gnuseye-layer-interval layer)))
@@ -497,11 +602,16 @@ every `cmacs-gnuseye-smooth-interval' seconds and re-rendered."
                             #'cmacs-gnuseye--refresh-layer layer)))))
 
 (defun cmacs-gnuseye--disable-layer (layer)
-  "Disable LAYER: cancel its timer and clear its markers."
+  "Disable LAYER atomically: cancel its timer, invalidate any in-flight fetch,
+and clear every trace of it from the index and the globe.
+Bumping the generation makes a late async fetch callback a no-op, so nothing
+the layer had in flight can re-draw it after it is switched off."
   (when (timerp (cmacs-gnuseye-layer-timer layer))
     (cancel-timer (cmacs-gnuseye-layer-timer layer)))
+  (cl-incf (cmacs-gnuseye-layer-generation layer))   ; invalidate in-flight
   (setf (cmacs-gnuseye-layer-timer layer) nil
-        (cmacs-gnuseye-layer-enabled layer) nil)
+        (cmacs-gnuseye-layer-enabled layer) nil
+        (cmacs-gnuseye-layer-in-flight layer) nil)
   (remhash (cmacs-gnuseye-layer-name layer) cmacs-gnuseye--layer-entities)
   (cmacs-gnuseye--reindex)
   (when (and cmacs-gnuseye-buffer (buffer-live-p cmacs-gnuseye-buffer)
@@ -564,6 +674,24 @@ Called from `cmacs-libregnum--node-clicked' on the cmacs context."
 (define-derived-mode cmacs-gnuseye-inspector-mode special-mode "GnuseyeInspect"
   "GNU's Eye entity inspector pane.")
 
+(defvar cmacs-gnuseye-inspector-actions nil
+  "Alist of extra inspector actions: (KEY LABEL FN PRED).
+KEY is a key-description string, LABEL a footer hint, FN a command (called
+with no args; it reads `cmacs-gnuseye--selected-id'), PRED an optional
+predicate of the selected entity gating whether the action is offered.
+Feature files add to this via `cmacs-gnuseye-register-inspector-action' so
+they can extend the inspector (ask-AI, track, open stream/news) without
+editing the renderer.")
+
+(defun cmacs-gnuseye-register-inspector-action (key label fn &optional pred)
+  "Register an inspector action: press KEY to run FN, shown in the footer as
+LABEL.  PRED, if non-nil, is called with the selected entity and must return
+non-nil for the action to be offered.  Binds KEY in the inspector keymap."
+  (setq cmacs-gnuseye-inspector-actions
+        (cons (list key label fn pred)
+              (assoc-delete-all key cmacs-gnuseye-inspector-actions)))
+  (define-key cmacs-gnuseye-inspector-mode-map (kbd key) fn))
+
 (defun cmacs-gnuseye-inspector-fly ()
   "Recentre the globe on the inspected entity."
   (interactive)
@@ -610,7 +738,14 @@ Called from `cmacs-libregnum--node-clicked' on the cmacs context."
               (dolist (kv data)
                 (cmacs-gnuseye--insp-row (format "%s" (car kv)) (cdr kv))))
              (t (insert (format "  %S\n" data))))))
-        (insert "\n[f] fly-to   [q] close\n")))
+        (insert "\n")
+        ;; Feature-registered actions (ask-AI, track, open stream/news…),
+        ;; offered only when their predicate matches this entity.
+        (dolist (a (reverse cmacs-gnuseye-inspector-actions))
+          (let ((pred (nth 3 a)))
+            (when (or (null pred) (ignore-errors (funcall pred e)))
+              (insert (format "[%s] %s   " (nth 0 a) (nth 1 a))))))
+        (insert "[f] fly-to   [q] close\n")))
     (goto-char (point-min))))
 
 (defun cmacs-gnuseye--show-inspector (&optional e)
@@ -826,32 +961,100 @@ Pick one or more of e.g. aircraft, ship, satellite, quake."
 
 (defconst cmacs-gnuseye--types-name "*GNU's Eye Types*")
 
+(defcustom cmacs-gnuseye-group-order
+  '(astronomical air marine weather natural space-weather conflict
+    infra health media markets)
+  "Order the entity-type categories appear in the toggle pane.
+Groups not listed here are appended alphabetically after these."
+  :type '(repeat symbol)
+  :group 'cmacs-gnuseye)
+
+(defcustom cmacs-gnuseye-group-titles
+  '((astronomical . "Astronomical") (air . "Air traffic")
+    (marine . "Marine") (weather . "Weather & events")
+    (natural . "Natural events") (space-weather . "Space weather")
+    (conflict . "Conflict & geopolitics") (infra . "Infrastructure")
+    (health . "Health & society") (media . "Media & cameras")
+    (markets . "Markets") (other . "Other"))
+  "Human titles for entity-type categories in the toggle pane."
+  :type '(alist :key-type symbol :value-type string)
+  :group 'cmacs-gnuseye)
+
+(defvar cmacs-gnuseye--expanded-groups (make-hash-table :test 'eq)
+  "Category symbol -> non-nil when that group is expanded in the toggle pane.
+Absent means collapsed: every category starts collapsed, so the pane opens as
+a short list of categories the user expands to reveal and enable layers.")
+
+(defun cmacs-gnuseye--group-of (layer)
+  "The category symbol for LAYER (`other' when it declares no :group)."
+  (or (cmacs-gnuseye-layer-group layer) 'other))
+
+(defun cmacs-gnuseye--group-title (g)
+  "Human title for category symbol G."
+  (or (alist-get g cmacs-gnuseye-group-titles)
+      (capitalize (symbol-name g))))
+
+(defun cmacs-gnuseye--group-expanded-p (g)
+  "Non-nil when category G is expanded."
+  (gethash g cmacs-gnuseye--expanded-groups))
+
+(defun cmacs-gnuseye--layer-status (layer)
+  "Short status string for LAYER in the toggle pane."
+  (let* ((on (cmacs-gnuseye-layer-enabled layer))
+         (needs (cmacs-gnuseye-layer-needs-key layer))
+         (missing (and needs (not (cmacs-gnuseye-secret needs)))))
+    (cond
+     (missing (format "needs %s" needs))
+     ((and on (cmacs-gnuseye-layer-last-error layer))
+      (truncate-string-to-width (cmacs-gnuseye-layer-last-error layer) 12))
+     (on (let ((lf (cmacs-gnuseye-layer-last-fetch layer)))
+           (if lf (format "%ds" (truncate (- (float-time) lf))) "loading…")))
+     (t ""))))
+
 (defun cmacs-gnuseye--layers-entries ()
-  "Tabulated-list rows for the entity-type toggle pane (one per layer)."
-  (let (rows)
-    (maphash
-     (lambda (name layer)
-       (let* ((on (cmacs-gnuseye-layer-enabled layer))
-              (needs (cmacs-gnuseye-layer-needs-key layer))
-              (missing (and needs (not (cmacs-gnuseye-secret needs))))
-              (status
-               (cond
-                (missing (format "needs %s" needs))
-                ((and on (cmacs-gnuseye-layer-last-error layer))
-                 (truncate-string-to-width
-                  (cmacs-gnuseye-layer-last-error layer) 14))
-                (on (let ((lf (cmacs-gnuseye-layer-last-fetch layer)))
-                      (if lf (format "%ds" (truncate (- (float-time) lf)))
-                        "loading…")))
-                (t ""))))
-         (push (list name
-                     (vector (if on "☑" "☐")
-                             (capitalize (symbol-name name))
-                             status))
-               rows)))
-     cmacs-gnuseye--layers)
-    (sort rows (lambda (a b) (string< (symbol-name (car a))
-                                      (symbol-name (car b)))))))
+  "Tabulated-list rows for the entity-type toggle pane.
+Layers are grouped under collapsible category headers; a header row has id
+\\=(:group . SYM), a layer row has the layer name as its id.  Everything is off
+by default and categories start collapsed."
+  (let ((buckets (make-hash-table :test 'eq)))
+    (maphash (lambda (_ layer)
+               (push layer (gethash (cmacs-gnuseye--group-of layer) buckets)))
+             cmacs-gnuseye--layers)
+    (let* ((present (hash-table-keys buckets))
+           (ordered (append
+                     (seq-filter (lambda (g) (memq g present))
+                                 cmacs-gnuseye-group-order)
+                     (sort (seq-remove (lambda (g)
+                                         (memq g cmacs-gnuseye-group-order))
+                                       present)
+                           (lambda (a b) (string< (symbol-name a)
+                                                  (symbol-name b))))))
+           rows)
+      (dolist (g ordered)
+        (let* ((layers (sort (gethash g buckets)
+                             (lambda (a b)
+                               (string< (format "%s" (cmacs-gnuseye-layer-title a))
+                                        (format "%s" (cmacs-gnuseye-layer-title b))))))
+               (on-count (seq-count #'cmacs-gnuseye-layer-enabled layers))
+               (expanded (cmacs-gnuseye--group-expanded-p g)))
+          (push (list (cons :group g)
+                      (vector (if expanded "▾" "▸")
+                              (cmacs-gnuseye--group-title g)
+                              (if (> on-count 0) (format "%d on" on-count) "")))
+                rows)
+          (when expanded
+            (dolist (layer layers)
+              (let ((name (cmacs-gnuseye-layer-name layer)))
+                (push (list name
+                            (vector (concat " " (if (cmacs-gnuseye-layer-enabled
+                                                     layer)
+                                                    "☑" "☐"))
+                                    (concat "  " (or (cmacs-gnuseye-layer-title layer)
+                                                     (capitalize
+                                                      (symbol-name name))))
+                                    (cmacs-gnuseye--layer-status layer)))
+                      rows))))))
+      (nreverse rows))))
 
 (defvar cmacs-gnuseye-layers-mode-map
   (let ((map (make-sparse-keymap)))
@@ -865,11 +1068,12 @@ Pick one or more of e.g. aircraft, ship, satellite, quake."
   "Keymap for `cmacs-gnuseye-layers-mode' (the entity-type toggle pane).")
 
 (define-derived-mode cmacs-gnuseye-layers-mode tabulated-list-mode "GnuseyeTypes"
-  "Checkbox list toggling which entity types are rendered on the globe."
-  (setq tabulated-list-format [("" 2 nil) ("Type" 14 t) ("" 14 nil)]
+  "Checkbox list toggling which entity types are rendered on the globe.
+Categories collapse/expand; layers are checkboxes.  Everything starts off."
+  (setq tabulated-list-format [("" 2 nil) ("Type" 20 nil) ("" 12 nil)]
         tabulated-list-sort-key nil)
   (tabulated-list-init-header)
-  (setq header-line-format " Entity types · SPC/RET toggles · g refresh"))
+  (setq header-line-format " Categories · SPC/RET expand+toggle · g refresh"))
 
 (defun cmacs-gnuseye-layers-refresh ()
   "Repaint the entity-type toggle pane."
@@ -881,20 +1085,35 @@ Pick one or more of e.g. aircraft, ship, satellite, quake."
         (tabulated-list-print t)))))
 
 (defun cmacs-gnuseye-layers-toggle (&optional event)
-  "Toggle rendering of the entity type on the current row."
+  "Act on the current toggle-pane row.
+On a category header, expand or collapse that category.  On a layer row,
+turn that entity type on or off (enabling fetches + draws; disabling clears
+it).  Layers needing an API key that is unset cannot be enabled."
   (interactive (list last-nonmenu-event))
   (when (mouse-event-p event) (ignore-errors (mouse-set-point event)))
-  (let* ((name (tabulated-list-get-id))
-         (layer (and name (gethash name cmacs-gnuseye--layers))))
-    (when layer
-      (if (cmacs-gnuseye-layer-enabled layer)
-          (cmacs-gnuseye--disable-layer layer)
-        (let ((needs (cmacs-gnuseye-layer-needs-key layer)))
-          (if (and needs (not (cmacs-gnuseye-secret needs)))
-              (message "GNU's Eye: %s needs %s to enable"
-                       (capitalize (symbol-name name)) needs)
-            (cmacs-gnuseye--enable-layer layer))))
-      (cmacs-gnuseye-layers-refresh))))
+  (let ((id (tabulated-list-get-id)))
+    (cond
+     ;; Category header: toggle collapse/expand.
+     ((and (consp id) (eq (car id) :group))
+      (let ((g (cdr id)))
+        (if (cmacs-gnuseye--group-expanded-p g)
+            (remhash g cmacs-gnuseye--expanded-groups)
+          (puthash g t cmacs-gnuseye--expanded-groups)))
+      (cmacs-gnuseye-layers-refresh))
+     ;; Layer row: enable/disable.
+     ((symbolp id)
+      (let ((layer (and id (gethash id cmacs-gnuseye--layers))))
+        (when layer
+          (if (cmacs-gnuseye-layer-enabled layer)
+              (cmacs-gnuseye--disable-layer layer)
+            (let ((needs (cmacs-gnuseye-layer-needs-key layer)))
+              (if (and needs (not (cmacs-gnuseye-secret needs)))
+                  (message "GNU's Eye: %s needs %s to enable"
+                           (or (cmacs-gnuseye-layer-title layer)
+                               (capitalize (symbol-name id)))
+                           needs)
+                (cmacs-gnuseye--enable-layer layer))))
+          (cmacs-gnuseye-layers-refresh)))))))
 
 (defun cmacs-gnuseye--show-types ()
   "Show the entity-type checkbox pane (above the entity list)."
@@ -965,6 +1184,9 @@ Pick one or more of e.g. aircraft, ship, satellite, quake."
 (defun cmacs-gnuseye--on-kill ()
   "Tear down the globe view and stop tracking the window when the buffer dies."
   (remove-hook 'window-size-change-functions #'cmacs-gnuseye--on-size-change)
+  (when cmacs-gnuseye--sun-timer
+    (cancel-timer cmacs-gnuseye--sun-timer)
+    (setq cmacs-gnuseye--sun-timer nil))
   (ignore-errors (cmacs-gnuseye-detach (current-buffer)))
   (when (eq (current-buffer) cmacs-gnuseye-buffer)
     (setq cmacs-gnuseye-buffer nil)))
@@ -1338,7 +1560,8 @@ just the globe viewport."
               (expand-file-name cmacs-gnuseye-base-texture))))
       ;; Start with every entity type OFF -- the user enables them from the
       ;; type-toggle pane.  (Layers are only loaded/registered here.)
-      (cmacs-gnuseye--load-layers))
+      (cmacs-gnuseye--load-layers)
+      (cmacs-gnuseye--load-features))
     ;; Lay out the dashboard: globe centre; entity-type toggles over the
     ;; entity list on the left; inspector on the right.
     (switch-to-buffer buf)
@@ -1359,6 +1582,8 @@ just the globe viewport."
     ;; Smoothly move markers (aircraft dead-reckon, satellites re-propagate)
     ;; and re-apply the zoom scale between fetches.
     (cmacs-gnuseye--smooth-start)
+    ;; Track the real day/night terminator.
+    (cmacs-gnuseye--sun-start)
     buf))
 
 ;;;; Evil (Doom) + vanilla navigation -----------------------------------------

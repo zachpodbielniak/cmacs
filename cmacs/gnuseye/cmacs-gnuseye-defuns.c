@@ -17,6 +17,7 @@
 #include "lisp.h"
 #include "buffer.h"
 #include "coding.h"
+#include "systime.h"
 #include "cmacs-gnuseye.h"
 #include "cmacs-gnuseye-globe.h"
 #include "cmacs-gnuseye-geomath.h"
@@ -25,7 +26,8 @@
 
 /* Cached keyword symbols for the normalised entity plist (set in syms_of). */
 static Lisp_Object QCge_id, QCge_lat, QCge_lon, QCge_alt, QCge_heading,
-  QCge_scale, QCge_kind, QCge_color, QCge_label, QCge_label_mode, QCge_trail;
+  QCge_scale, QCge_kind, QCge_color, QCge_label, QCge_label_mode, QCge_trail,
+  QCge_polygon;
 
 /* buffer -> (hash layer-id -> entity-vector).  GC-rooted via staticpro. */
 static Lisp_Object Vcmacs_gnuseye__layers;
@@ -134,6 +136,33 @@ render_entity (CmacsLibregnumView *v, CmacsLibregnumRenderCtx *ctx,
         }
       cmacs_gnuseye_add_arc (ctx, la, lo, al, (int) n, rgba & 0xffffffb0);
       xfree (la); xfree (lo); xfree (al);
+    }
+
+  /* Optional polygon: a vector/list of [lat lon] vertices -> a translucent
+   * filled region draped on the globe (weather alert zones, AOIs).  Drawn
+   * per-tick (cleared with the markers).  The entity's :color carries the
+   * fill colour + alpha (use "#rrggbbaa" for a see-through wash). */
+  Lisp_Object poly = plist_get (e, QCge_polygon);
+  if (VECTORP (poly) && ASIZE (poly) >= 3)
+    {
+      ptrdiff_t n = ASIZE (poly);
+      double *la = xmalloc (sizeof (double) * n);
+      double *lo = xmalloc (sizeof (double) * n);
+      for (ptrdiff_t i = 0; i < n; i++)
+        {
+          Lisp_Object p = AREF (poly, i);
+          double a = 0, b = 0;
+          if (VECTORP (p) && ASIZE (p) >= 2)
+            { a = XFLOATINT (AREF (p, 0)); b = XFLOATINT (AREF (p, 1)); }
+          else if (CONSP (p))
+            {
+              a = XFLOATINT (XCAR (p));
+              if (CONSP (XCDR (p))) b = XFLOATINT (XCAR (XCDR (p)));
+            }
+          la[i] = a; lo[i] = b;
+        }
+      cmacs_gnuseye_add_polygon (ctx, la, lo, (int) n, rgba, FALSE);
+      xfree (la); xfree (lo);
     }
   return nid;
 }
@@ -397,6 +426,73 @@ DEFUN ("cmacs-gnuseye-clear-coastlines", Fcmacs_gnuseye_clear_coastlines,
   return Qt;
 }
 
+DEFUN ("cmacs-gnuseye-add-polygon", Fcmacs_gnuseye_add_polygon,
+       Scmacs_gnuseye_add_polygon, 3, 5, 0,
+       doc: /* Add a filled translucent polygon to BUFFER's globe.
+LATS and LONS are equal-length vectors of degrees forming the boundary ring.
+COLOR is a packed integer 0xRRGGBBAA (a moderate alpha gives a see-through
+wash; default a light blue wash).  When PERSISTENT is non-nil the fill
+survives marker refreshes (use for choropleth / aurora / AOIs and clear it
+with `cmacs-gnuseye-clear-polygons' with PERSISTENT non-nil); otherwise it is
+a per-tick fill cleared with the markers.  */)
+  (Lisp_Object buffer, Lisp_Object lats, Lisp_Object lons, Lisp_Object color,
+   Lisp_Object persistent)
+{
+  CHECK_BUFFER (buffer);
+  if (!VECTORP (lats) || !VECTORP (lons)) return Qnil;
+  ptrdiff_t n = ASIZE (lats);
+  if (ASIZE (lons) < n) n = ASIZE (lons);
+  if (n < 3) return Qnil;
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  unsigned int rgba = 0x6f93ba66u;             /* light blue wash default */
+  if (FIXNUMP (color)) rgba = (unsigned int) XFIXNUM (color);
+  double *la = xmalloc (sizeof (double) * n);
+  double *lo = xmalloc (sizeof (double) * n);
+  for (ptrdiff_t i = 0; i < n; i++)
+    {
+      la[i] = XFLOATINT (AREF (lats, i));
+      lo[i] = XFLOATINT (AREF (lons, i));
+    }
+  cmacs_gnuseye_add_polygon (cmacs_libregnum_view_get_render_ctx (v),
+                             la, lo, (int) n, rgba, !NILP (persistent));
+  xfree (la); xfree (lo);
+  return Qt;
+}
+
+DEFUN ("cmacs-gnuseye-clear-polygons", Fcmacs_gnuseye_clear_polygons,
+       Scmacs_gnuseye_clear_polygons, 1, 2, 0,
+       doc: /* Remove BUFFER's globe polygon fills.
+With PERSISTENT non-nil, clear the persistent (choropleth/aurora) fills;
+otherwise clear the per-tick fills (also cleared automatically on rebuild).  */)
+  (Lisp_Object buffer, Lisp_Object persistent)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (v)
+    cmacs_gnuseye_clear_polygons (cmacs_libregnum_view_get_render_ctx (v),
+                                  !NILP (persistent));
+  return Qt;
+}
+
+DEFUN ("cmacs-gnuseye-set-sun-time", Fcmacs_gnuseye_set_sun_time,
+       Scmacs_gnuseye_set_sun_time, 1, 2, 0,
+       doc: /* Set BUFFER's globe day/night terminator for TIME.
+TIME is an Emacs time value (default: now).  Computes the real subsolar
+point and points the globe shader's sun toward it, so the lit hemisphere
+tracks the actual time of day.  No-op if the globe lacks the lit shader.  */)
+  (Lisp_Object buffer, Lisp_Object time)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  double unix_s = NILP (time) ? (double) current_timespec ().tv_sec
+                              : (double) lisp_time_argument (time).tv_sec;
+  cmacs_gnuseye_set_sun_time (cmacs_libregnum_view_get_render_ctx (v), unix_s);
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
 DEFUN ("cmacs-gnuseye-add-label", Fcmacs_gnuseye_add_label,
        Scmacs_gnuseye_add_label, 4, 5, 0,
        doc: /* Add a persistent map label TEXT at LAT, LON on BUFFER's globe.
@@ -532,6 +628,7 @@ syms_of_cmacs_gnuseye_defuns (void)
   QCge_label      = intern_c_string (":label");
   QCge_label_mode = intern_c_string (":label-mode");
   QCge_trail      = intern_c_string (":trail");
+  QCge_polygon    = intern_c_string (":polygon");
   staticpro (&QCge_id);
   staticpro (&QCge_lat);
   staticpro (&QCge_lon);
@@ -543,6 +640,7 @@ syms_of_cmacs_gnuseye_defuns (void)
   staticpro (&QCge_label);
   staticpro (&QCge_label_mode);
   staticpro (&QCge_trail);
+  staticpro (&QCge_polygon);
 
   Vcmacs_gnuseye__layers = Qnil;
   staticpro (&Vcmacs_gnuseye__layers);
@@ -560,6 +658,9 @@ syms_of_cmacs_gnuseye_defuns (void)
   defsubr (&Scmacs_gnuseye_snapshot);
   defsubr (&Scmacs_gnuseye_add_coastline);
   defsubr (&Scmacs_gnuseye_clear_coastlines);
+  defsubr (&Scmacs_gnuseye_add_polygon);
+  defsubr (&Scmacs_gnuseye_clear_polygons);
+  defsubr (&Scmacs_gnuseye_set_sun_time);
   defsubr (&Scmacs_gnuseye_add_label);
   defsubr (&Scmacs_gnuseye_clear_labels);
   defsubr (&Scmacs_gnuseye_label_count);

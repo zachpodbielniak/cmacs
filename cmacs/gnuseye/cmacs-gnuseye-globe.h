@@ -112,5 +112,27 @@ extern void cmacs_gnuseye_camera_goto (CmacsLibregnumRenderCtx *r,
                                        double lat, double lon, double range,
                                        gboolean animate);
 
+/* Day/night terminator: set the globe shader's sun direction.  set_direction
+ * takes a world-space unit vector (gnuseye -Z winding); set_time computes the
+ * real subsolar unit vector for Unix time UNIX_S and applies it.  No-op when
+ * the globe was built without the lit shader. */
+extern void cmacs_gnuseye_set_sun_direction (CmacsLibregnumRenderCtx *r,
+                                             double x, double y, double z);
+extern void cmacs_gnuseye_set_sun_time (CmacsLibregnumRenderCtx *r,
+                                        double unix_s);
+
+/* Filled translucent polygon draped on the globe (alert zones, choropleth,
+ * aurora, AOIs).  LATS/LONS are an equal-length ring of degrees (the closing
+ * vertex may be omitted).  RGBA is packed 0xRRGGBBAA; a moderate alpha gives a
+ * see-through wash.  When PERSISTENT, the fill survives marker rebuilds (use
+ * for choropleth/aurora and clear with clear_polygons(r,TRUE)); otherwise it is
+ * a per-tick fill cleared with the markers. */
+extern void cmacs_gnuseye_add_polygon (CmacsLibregnumRenderCtx *r,
+                                       const double *lats, const double *lons,
+                                       int n, unsigned int rgba,
+                                       gboolean persistent);
+extern void cmacs_gnuseye_clear_polygons (CmacsLibregnumRenderCtx *r,
+                                          gboolean persistent);
+
 #endif /* HAVE_CMACS_GNUSEYE */
 #endif /* CMACS_GNUSEYE_GLOBE_H */

@@ -162,4 +162,66 @@ gnuseye_bearing_deg (double lat1, double lon1, double lat2, double lon2)
   return fmod (br + 360.0, 360.0);
 }
 
+/* Destination point: starting at (lat,lon), travel DIST_M metres along the
+ * great circle on initial bearing BRG_DEG (degrees clockwise from north).
+ * Writes the destination (lat, lon) in degrees.  Used to draw range/coverage
+ * rings (sample bearings 0..360 at a fixed distance) and geofence circles. */
+static inline void
+gnuseye_destination (double lat_deg, double lon_deg, double brg_deg,
+                     double dist_m, double *out_lat, double *out_lon)
+{
+  double dr = dist_m / GNUSEYE_EARTH_RADIUS_M;       /* angular distance */
+  double p1 = lat_deg * GNUSEYE_DEG2RAD;
+  double l1 = lon_deg * GNUSEYE_DEG2RAD;
+  double br = brg_deg * GNUSEYE_DEG2RAD;
+  double sp = sin (p1), cp = cos (p1), sd = sin (dr), cd = cos (dr);
+  double p2 = asin (sp * cd + cp * sd * cos (br));
+  double l2 = l1 + atan2 (sin (br) * sd * cp, cd - sp * sin (p2));
+  *out_lat = p2 * GNUSEYE_RAD2DEG;
+  /* Normalise longitude to [-180,180]. */
+  double lon = l2 * GNUSEYE_RAD2DEG;
+  lon = fmod (lon + 540.0, 360.0) - 180.0;
+  *out_lon = lon;
+}
+
+/* Subsolar point (lat, lon in degrees) at Unix time UNIX_S: the geographic
+ * point where the Sun is directly overhead.  Low-precision NOAA almanac
+ * (~0.01 deg) -- ample for a day/night terminator.  The terminator is the
+ * great circle 90 deg from this point; the night hemisphere is the far side
+ * of the sun-unit vector. */
+static inline void
+gnuseye_subsolar_point (double unix_s, double *out_lat, double *out_lon)
+{
+  double jd = unix_s / 86400.0 + 2440587.5;
+  double n  = jd - 2451545.0;                         /* days since J2000 */
+  double L  = fmod (280.460 + 0.9856474 * n, 360.0);  /* mean longitude */
+  double g  = fmod (357.528 + 0.9856003 * n, 360.0) * GNUSEYE_DEG2RAD;
+  if (L < 0) L += 360.0;
+  /* Apparent ecliptic longitude + obliquity. */
+  double lam = (L + 1.915 * sin (g) + 0.020 * sin (2.0 * g)) * GNUSEYE_DEG2RAD;
+  double eps = (23.439 - 0.0000004 * n) * GNUSEYE_DEG2RAD;
+  double dec = asin (sin (eps) * sin (lam));           /* declination */
+  double ra  = atan2 (cos (eps) * sin (lam), cos (lam)); /* right ascension */
+  /* GMST in degrees (same series as cmacs-gnuseye-sgp4.c gmst_rad). */
+  double gmst = fmod (280.46061837 + 360.98564736629 * n, 360.0);
+  if (gmst < 0) gmst += 360.0;
+  *out_lat = dec * GNUSEYE_RAD2DEG;
+  double lon = ra * GNUSEYE_RAD2DEG - gmst;            /* east-positive */
+  lon = fmod (lon + 540.0, 360.0) - 180.0;
+  *out_lon = lon;
+}
+
+/* Unit world vector from the globe centre toward the Sun at Unix time
+ * UNIX_S, in the SAME -Z-winding frame as gnuseye_latlon_to_xyz, so it can
+ * drive the globe shader's `sunDir' uniform consistently with the markers. */
+static inline void
+gnuseye_sun_unit (double unix_s, double *x, double *y, double *z)
+{
+  double slat, slon;
+  gnuseye_subsolar_point (unix_s, &slat, &slon);
+  gnuseye_latlon_to_xyz (slat, slon, 0.0, x, y, z);
+  double n = sqrt ((*x) * (*x) + (*y) * (*y) + (*z) * (*z));
+  if (n > 1e-12) { *x /= n; *y /= n; *z /= n; }
+}
+
 #endif /* CMACS_GNUSEYE_GEOMATH_H */

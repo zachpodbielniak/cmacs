@@ -80,6 +80,25 @@ extern void  cmacs_libregnum_render_ctx_add_static_drawable
 extern void  cmacs_libregnum_render_ctx_clear_static_drawables
                               (CmacsLibregnumRenderCtx *r);
 
+/* ── Filled polygon models ───────────────────────────────────────
+ * Translucent triangulated meshes (a GrlModel*, void* to keep this header
+ * free of raylib/libregnum types) draped on the globe surface: weather
+ * alert zones, choropleth country fills, aurora ovals, AOIs.  Drawn after
+ * the background model and BEFORE static drawables/markers, alpha-blended
+ * and two-sided (backface cull disabled) so the translucent surface shows
+ * from any angle and the coastlines/markers overlay it.  Two lists:
+ * `polygon' is per-tick (cleared with the markers); `static_polygon' is
+ * persistent (cleared only explicitly, like the coastline overlay).
+ * add takes ownership of MODEL. */
+extern void  cmacs_libregnum_render_ctx_add_polygon_model
+                              (CmacsLibregnumRenderCtx *r, void *model);
+extern void  cmacs_libregnum_render_ctx_clear_polygon_models
+                              (CmacsLibregnumRenderCtx *r);
+extern void  cmacs_libregnum_render_ctx_add_static_polygon_model
+                              (CmacsLibregnumRenderCtx *r, void *model);
+extern void  cmacs_libregnum_render_ctx_clear_static_polygon_models
+                              (CmacsLibregnumRenderCtx *r);
+
 /* ── Map labels ──────────────────────────────────────────────────
  * Persistent text labels at fixed world points (country/region names),
  * projected + drawn by the overlay.  Survive marker rebuilds. */
