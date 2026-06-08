@@ -291,6 +291,48 @@ marker individual."
     (should (equal (plist-get (car out) :label) "Kyiv"))
     (should (= (plist-get (car out) :lon) 30.0))))
 
+;;;; Phase 3: wave-2 keyless layer parsers -----------------------------------
+
+(ert-deftest cmacs-gnuseye--cables-parse ()
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-infra)
+  (let* ((data '((features
+                  ((properties (name . "Cable A") (id . "c1"))
+                   (geometry (type . "MultiLineString")
+                             (coordinates ((0.0 0.0) (10.0 10.0) (20.0 20.0))))))))
+         (out (cmacs-gnuseye-cables--parse data)))
+    (should (= (length out) 1))
+    (should (eq (plist-get (car out) :kind) 'cable))
+    (should (listp (plist-get (car out) :trail)))
+    (should (= (length (plist-get (car out) :trail)) 3))))
+
+(ert-deftest cmacs-gnuseye--ports-layer ()
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-infra)
+  (let (res)
+    (cmacs-gnuseye-ports--fetch (lambda (e) (setq res e)))
+    (should (> (length res) 10))
+    (should (eq (plist-get (car res) :kind) 'port))))
+
+(ert-deftest cmacs-gnuseye--radiation-parse ()
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-health)
+  (let* ((data '(((id . 1) (latitude . 37.5) (longitude . 140.0)
+                  (value . 0.3) (unit . "usv"))
+                 ((id . 2) (latitude . "x") (longitude . 1.0))))
+         (out (cmacs-gnuseye-radiation--parse data)))
+    (should (= (length out) 1))                ; the bad-lat row is skipped
+    (should (eq (plist-get (car out) :kind) 'radiation))))
+
+(ert-deftest cmacs-gnuseye--iss-parse ()
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-media)
+  (let* ((data '((latitude . 12.3) (longitude . -45.6) (altitude . 420.0)))
+         (out (cmacs-gnuseye-iss--parse data)))
+    (should (= (length out) 1))
+    (should (eq (plist-get (car out) :kind) 'camera))
+    (should (assq 'stream (plist-get (car out) :data)))))
+
 (provide 'cmacs-gnuseye-tests)
 
 ;;; cmacs-gnuseye-tests.el ends here

@@ -60,7 +60,8 @@ Smaller zooms in closer."
 (defcustom cmacs-gnuseye-layer-files
   '(cmacs-gnuseye-astro cmacs-gnuseye-air
     cmacs-gnuseye-marine cmacs-gnuseye-weather
-    cmacs-gnuseye-natural cmacs-gnuseye-space cmacs-gnuseye-conflict)
+    cmacs-gnuseye-natural cmacs-gnuseye-space cmacs-gnuseye-conflict
+    cmacs-gnuseye-infra cmacs-gnuseye-health cmacs-gnuseye-media)
   "Feature files providing the built-in layers, loaded when the globe opens."
   :type '(repeat symbol)
   :group 'cmacs-gnuseye)
