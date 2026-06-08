@@ -32,6 +32,9 @@
 (require 'json)
 (require 'url)
 
+(declare-function cmacs-libregnum-resize "cmacs-libregnum-defuns.c"
+                  (buffer width height))
+
 (defgroup cmacs-gnuseye nil
   "GNU's Eye live planetary globe."
   :group 'cmacs
@@ -730,6 +733,13 @@ Pick one or more of e.g. aircraft, ship, satellite, quake."
     map)
   "Keymap for `cmacs-gnuseye-mode'.")
 
+(defun cmacs-gnuseye--on-kill ()
+  "Tear down the globe view and stop tracking the window when the buffer dies."
+  (remove-hook 'window-size-change-functions #'cmacs-gnuseye--on-size-change)
+  (ignore-errors (cmacs-gnuseye-detach (current-buffer)))
+  (when (eq (current-buffer) cmacs-gnuseye-buffer)
+    (setq cmacs-gnuseye-buffer nil)))
+
 (define-derived-mode cmacs-gnuseye-mode special-mode "GNU's-Eye"
   "Major mode for the GNU's Eye live globe.
 The buffer's text area is covered by the libregnum globe blit; mouse
@@ -737,6 +747,7 @@ drag orbits, scroll zooms, right-drag pans, hover identifies a marker,
 and clicking one selects it (inspector + recentre)."
   (setq-local cursor-type nil)
   (buffer-disable-undo)
+  (add-hook 'kill-buffer-hook #'cmacs-gnuseye--on-kill nil t)
   (setq-local mode-line-format
               '(" GNU's Eye  drag=orbit scroll=zoom hover=id click=select \
  [e]ntities [i]nspect [l]ayers [s]earch [F]ilter [g]refresh [?]legend [q]uit")))
@@ -765,6 +776,34 @@ and clicking one selects it (inspector + recentre)."
   (interactive "nLatitude: \nnLongitude: ")
   (when (and cmacs-gnuseye-buffer (buffer-live-p cmacs-gnuseye-buffer))
     (cmacs-gnuseye-fly-to cmacs-gnuseye-buffer (float lat) (float lon) 14.0 t)))
+
+;;;; Keep the globe round: track the window's aspect ratio ------------------
+
+(defvar cmacs-gnuseye--resize-timer nil)
+
+(defun cmacs-gnuseye--fit-window-now ()
+  "Resize the globe's render target (FBO) to its window's pixel size.
+The overlay blits the FBO 1:1 across the window's pixel rectangle, so the
+FBO must share the window's exact dimensions or the sphere is stretched
+into an oval.  No-ops when the size is unchanged (the C side guards)."
+  (setq cmacs-gnuseye--resize-timer nil)
+  (when (and cmacs-gnuseye-buffer (buffer-live-p cmacs-gnuseye-buffer)
+             (fboundp 'cmacs-gnuseye-attached-p)
+             (cmacs-gnuseye-attached-p cmacs-gnuseye-buffer)
+             (fboundp 'cmacs-libregnum-resize))
+    (let ((win (get-buffer-window cmacs-gnuseye-buffer t)))
+      (when (window-live-p win)
+        (let ((w (window-pixel-width win))
+              (h (window-pixel-height win)))
+          (when (and (> w 1) (> h 1))
+            (ignore-errors
+              (cmacs-libregnum-resize cmacs-gnuseye-buffer w h))))))))
+
+(defun cmacs-gnuseye--on-size-change (&optional _frame)
+  "Coalesce window size changes, then refit the globe (see `…-fit-window-now')."
+  (unless cmacs-gnuseye--resize-timer
+    (setq cmacs-gnuseye--resize-timer
+          (run-with-idle-timer 0.06 nil #'cmacs-gnuseye--fit-window-now))))
 
 ;;;###autoload
 (defun cmacs-gnuseye (&optional no-dashboard)
@@ -806,6 +845,11 @@ just the globe viewport."
       (cmacs-gnuseye--show-list)
       (cmacs-gnuseye--show-inspector)
       (select-window (get-buffer-window buf)))
+    ;; Keep the sphere round at any window aspect: match the FBO to the
+    ;; window now, and on every later size change.
+    (add-hook 'window-size-change-functions #'cmacs-gnuseye--on-size-change)
+    (cmacs-gnuseye--fit-window-now)
+    (cmacs-gnuseye--on-size-change)
     buf))
 
 ;;;; Evil (Doom) + vanilla navigation -----------------------------------------
