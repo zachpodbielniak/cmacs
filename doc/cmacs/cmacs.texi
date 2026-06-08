@@ -6318,6 +6318,12 @@ pipeline (view pixels → ground-plane move, one coalesced undo step per drag),
 (BUFFER PATH), which
 renders the view synchronously to a PNG via engine FBO read-back (works
 headless; used by the render/move ERT tests).
+@code{cmacs-libregnum-editor-set-shading}/@code{-shading-p}/@code{-toggle-shading}
+enable/query/flip the Blinn-Phong shader pass for mesh geometry;
+@code{cmacs-libregnum-editor-look-through} (@var{buffer} @var{node-id}) renders
+the viewport from a CAMERA node's transform,
+@code{cmacs-libregnum-editor-look-through-off} restores the edit camera, and
+@code{cmacs-libregnum-editor-look-through-p} queries the state.
 
 @item Elisp layer
 In @file{lisp/cmacs/cmacs-libregnum.el}: @code{cmacs-libregnum-editor} (entry
@@ -6475,6 +6481,10 @@ lets you @emph{Set color} (@code{cmacs-libregnum-editor-set-color}),
 (@code{-set-metallic}), written through the node's @code{LrgMaterial3D}.
 The bake now honours a node's authored material colour instead of a fixed
 per-kind colour; @code{cmacs-libregnum-editor-node-color} reads it back.
+@emph{Toggle wireframe} authors a @code{"wireframe"} visual param rendered via
+@code{grl_model_draw_wires_ex}; @emph{Toggle cast shadow} authors a
+@code{"cast_shadow"} param (persisted in the @file{.rlevel}; shadow mapping
+is not yet implemented).
 
 @emph{Duplicate} now performs a native engine deep-clone (fresh GUIDs for the
 entire subtree) placed under the original node's parent, replacing the older
@@ -6492,7 +6502,9 @@ currently attached to the node with @emph{Edit} and @emph{Detach} sub-actions
 submenu to switch between @emph{Point}, @emph{Spot}, and @emph{Directional}.
 @item @strong{camera} --- @emph{Align to current view}
 (@code{cmacs-libregnum-camera-state}) snaps the camera node to the live
-viewport camera pose.
+viewport camera pose; @emph{Look through this camera}
+(@code{cmacs-libregnum-editor-look-through}) renders the viewport from that
+camera until @code{cmacs-libregnum-editor-look-through-off} is called.
 @item @strong{audio}, @strong{mesh}, @strong{sprite} --- @emph{Replace asset}
 (@code{cmacs-libregnum-editor-set-node-asset}) swaps the underlying asset file
 without recreating the node.
@@ -6553,7 +6565,10 @@ draws each light's range as a wireframe sphere in its authored colour, each
 camera as a frustum at its FOV, and each audio emitter as a range sphere (live
 from the node's visual params).  Author with @code{cmacs-libregnum-editor-set-light}
 / @code{-set-camera-fov} / @code{-set-audio-range}, and play an emitter's sound
-with @kbd{C-c a} (@code{play-sound-file}).
+with @kbd{C-c a} (@code{cmacs-libregnum-editor-play-audio}, via the cmacs
+GStreamer audio subsystem when @option{--with-cmacs-audio} is present, falling
+back to @code{play-sound-file}).  The context menu exposes @emph{Stop audio}
+and @emph{Set volume}; volume persists as a node param.
 @item @strong{GObject Introspection (gjs + Python-GI)} --- the cmacs build
 auto-builds @code{Libregnum-1.typelib} (when @code{g-ir-scanner} is present) so
 the editor/authoring types (@code{LrgLevel}, @code{LrgNode}, @code{LrgEditor},
@@ -6568,38 +6583,65 @@ the typelib has no unresolvable @code{GIRepository-2.0} dependency.  (Caveat: a
 gjs/python script run @emph{embedded inside} cmacs still conflicts with cmacs's
 own @code{libgirepository} --- two GI runtimes in one process --- which is
 deferred; see the Design notes.)
+@item @strong{Real-time scene shading} --- an opt-in toggle
+(@code{cmacs-libregnum-editor-toggle-shading}; getter/setter
+@code{cmacs-libregnum-editor-set-shading}/@code{-shading-p}) loads a
+Blinn-Phong GLSL shader and illuminates MESH_ASSET geometry from the scene's
+LIGHT nodes (position, colour, intensity).  Imported glTF/OBJ models are lit in
+the editor viewport.  Scope: only the shaderable VAO/mesh path; primitive
+immediate-mode shapes and editor gizmos stay flat by design; no shadow mapping
+yet.
+@item @strong{Look-through camera} --- @emph{Look through this camera} in the
+right-click context menu renders the viewport from the selected camera node's
+transform (position, yaw/pitch, and its @code{fov} param).  Implemented by
+overriding the single camera chokepoint so picking, projection, and gizmos stay
+consistent; orbit/pan/zoom are suspended while looking through.
+DEFUNs: @code{cmacs-libregnum-editor-look-through} (@var{buffer} @var{node-id}),
+@code{cmacs-libregnum-editor-look-through-off} (@var{buffer}),
+@code{cmacs-libregnum-editor-look-through-p} (@var{buffer}).
+@item @strong{Audio volume + stop} --- audio nodes are now played through the
+cmacs GStreamer audio subsystem (async, with a pipeline handle) so @emph{Stop
+audio} and @emph{Set volume} work in the context menu; volume persists as a
+node param.  Falls back to @code{play-sound-file} when
+@option{--with-cmacs-audio} is absent.
+@item @strong{Wireframe per node} --- @emph{Toggle wireframe} in the context
+menu authors a @code{"wireframe"} visual param honoured by the render loop
+(mesh assets via @code{grl_model_draw_wires_ex}).  @emph{Toggle cast shadow}
+authors a @code{"cast_shadow"} param persisted in the @file{.rlevel}; actual
+shadow mapping remains deferred.
 @end itemize
 
 @subsubsection Planned
 
-One item remains: @strong{full scene shading} --- lights/cameras/audio are
-visualised accurately but do not yet illuminate meshes, drive a camera-preview
-render, or spatialise audio; real-time 3-D lighting is a dedicated shader pass on
-the engine renderer (the largest remaining item).  (Lua/Python/Gjs scripting,
-per-texel tilemap art, the GTK GDK drag-source, and the standalone engine-drawn
-editor are all implemented --- see above and the Upstream Changes chapter.)
-
-@subsubsection Context-menu items deliberately deferred
-
-The following actions were considered for the right-click context menu during the
-expansion pass and left for engine-level work:
+The following items remain for future renderer work:
 
 @itemize @bullet
-@item @strong{Look-through camera} --- rendering a picture-in-picture preview
-from a camera node's point of view requires a secondary FBO render pass driven
-by the camera's transform; that is part of the full scene-shading work above.
-@item @strong{Audio volume / stop} --- no engine playback handle is available
-from the Lisp side; audio playback is delegated to Emacs @code{play-sound-file},
-which returns immediately and exposes no stop or volume knob.  Proper control
-needs a GStreamer pipeline handle in the C layer.
-@item @strong{Wireframe / cast-shadow material flags} --- the @code{LrgMaterial3D}
-colour, roughness, and metallic fields are wired; per-material wireframe override
-and shadow-cast toggles exist in the engine data model but are not yet surfaced
-as @code{LrgMaterial3D} GObject properties, so there is no DEFUN to call.
-@item @strong{Full real-time scene shading} --- lights illuminating meshes via a
-GLSL shader pass; same as the @emph{Planned} item above, listed here to record
-that a @emph{Preview shading} toggle was considered for the menu and deferred
-along with the renderer work.
+@item @strong{Shadow mapping} --- real-time shadows from LIGHT nodes; the
+@code{"cast_shadow"} node param is authored now but not yet consumed by a
+shadow pass.
+@item @strong{Shading of primitive immediate-mode shapes} --- the Blinn-Phong
+shader covers the mesh/VAO path; primitive shapes drawn via immediate-mode
+calls stay flat.
+@item @strong{Spatial/3D audio attenuation} --- audio range is visualised and
+the volume knob persists as a param, but distance-based attenuation is not yet
+wired in the GStreamer pipeline.
+@end itemize
+
+@subsubsection Context-menu items formerly deferred --- now implemented
+
+The following four items were carried as deferred in earlier versions and are
+now implemented:
+
+@itemize @bullet
+@item @strong{Real-time scene shading} --- Blinn-Phong GLSL shader for
+mesh/model geometry.
+@item @strong{Look-through camera} --- viewport renders from the selected
+camera node.
+@item @strong{Audio volume / stop} --- GStreamer pipeline handle; volume
+persists as a node param; fallback to @code{play-sound-file} when absent.
+@item @strong{Wireframe / cast-shadow flags} --- @code{"wireframe"} and
+@code{"cast_shadow"} visual params authored per node; shadow mapping remains
+deferred.
 @end itemize
 
 @subsubsection Design notes & potential improvements
@@ -6608,9 +6650,9 @@ along with the renderer work.
 scope boundaries (with rationale + an improvement path each).  In brief:
 
 @itemize @bullet
-@item @strong{Full scene shading} --- the large remaining feature (above): real
-3-D lighting / camera preview / spatial audio is a renderer shader pass;
-lights/cameras/audio are accurately @emph{visualised} today.
+@item @strong{Remaining renderer work} --- shadow mapping (the @code{"cast_shadow"}
+param is authored, not yet consumed), shading of primitive immediate-mode shapes
+(only mesh/VAO geometry is lit), spatial audio attenuation.
 @item @strong{Component authoring} --- the inspector edits node GObject props +
 attaches scripts, but there is no in-editor "Add Component" + property grid for
 @code{LrgComponentDesc} (components still instantiate at play + persist).

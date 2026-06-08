@@ -603,6 +603,13 @@ rotate/scale gizmo handles and play-in-editor remain planned (see below).
     view-local pixels (used to aim the gizmo + for scripting/tests)
   - =cmacs-libregnum-snapshot= (BUFFER PATH) — render the view synchronously to
     a PNG (engine FBO read-back); works headless, used by the render ERT test
+  - =cmacs-libregnum-editor-set-shading= (BUFFER BOOL) /
+    =cmacs-libregnum-editor-shading-p= (BUFFER) — enable/query the Blinn-Phong
+    shader pass; =cmacs-libregnum-editor-toggle-shading= (BUFFER) flips it
+  - =cmacs-libregnum-editor-look-through= (BUFFER NODE-ID) — render the
+    viewport from the given CAMERA node's transform and =fov= param;
+    =cmacs-libregnum-editor-look-through-off= (BUFFER) restores the edit
+    camera; =cmacs-libregnum-editor-look-through-p= (BUFFER) → t/nil
 
 - *Elisp layer* (in =lisp/cmacs/cmacs-libregnum.el=) —
   - =cmacs-libregnum-editor= — entry command; opens =*cmacs-libregnum editor*=
@@ -769,7 +776,9 @@ rotate/scale gizmo handles and play-in-editor remain planned (see below).
   (=-set-roughness=), and *Set metallic* (=-set-metallic=), written through the
   node's =LrgMaterial3D=.  The bake now honours a node's authored material colour
   instead of a fixed per-kind colour (=cmacs-libregnum-editor-node-color= reads it
-  back).
+  back).  *Toggle wireframe* authors a ="wireframe"= visual param rendered via
+  =grl_model_draw_wires_ex=; *Toggle cast shadow* authors a ="cast_shadow"= param
+  (persisted in the =.rlevel=; shadow mapping is not yet implemented).
 
   *Duplicate* now performs a native engine deep-clone (fresh GUIDs for the
   entire subtree) placed under the original node's parent, replacing the older
@@ -785,7 +794,9 @@ rotate/scale gizmo handles and play-in-editor remain planned (see below).
   - *light* — *Set intensity* (=cmacs-libregnum-editor-set-light=) and a *Light
     type ▸* submenu to switch between *Point*, *Spot*, and *Directional*.
   - *camera* — *Align to current view* (=cmacs-libregnum-camera-state=) snaps
-    the camera node's transform to the live viewport camera pose.
+    the camera node's transform to the live viewport camera pose; *Look through
+    this camera* (=cmacs-libregnum-editor-look-through=) renders the viewport
+    from that camera until =cmacs-libregnum-editor-look-through-off= is called.
   - *audio*, *mesh*, *sprite* — *Replace asset* (=-set-node-asset=) lets you
     swap the underlying asset file without recreating the node.
   - *tilemap* — *Enter paint mode*, *Clear*, and *Resize* (in addition to the
@@ -869,8 +880,39 @@ rotate/scale gizmo handles and play-in-editor remain planned (see below).
   =cmacs-libregnum-editor-set-light= (range + r/g/b),
   =-set-camera-fov=, =-set-audio-range= (over the
   =cmacs-libregnum-editor-set-visual-param= primitive), and *play* an emitter's
-  sound with =C-c a= (=cmacs-libregnum-editor-play-audio=, via Emacs'
-  =play-sound-file=).
+  sound with =C-c a= (=cmacs-libregnum-editor-play-audio=, via the cmacs
+  GStreamer audio subsystem when =--with-cmacs-audio= is present, falling back
+  to Emacs' =play-sound-file=).  The context menu also exposes *Stop audio* and
+  *Set volume* (volume persists as a node param).
+
+*** Also implemented (shading, look-through, audio controls, wireframe)
+
+- *Real-time scene shading* — an opt-in toggle
+  (=cmacs-libregnum-editor-toggle-shading=, with getters/setters
+  =cmacs-libregnum-editor-set-shading= / =-shading-p=) loads a Blinn-Phong GLSL
+  shader and illuminates MESH_ASSET geometry from the scene's LIGHT nodes
+  (position, colour, and intensity).  Imported glTF/OBJ models are lit in the
+  editor viewport by the scene lights.  Scope boundary: only the shaderable VAO
+  / mesh path is lit; primitive immediate-mode shapes and editor gizmos stay
+  flat by design; no shadow mapping yet.
+- *Look-through camera* — right-click a camera node → *Look through this
+  camera* renders the viewport from that camera's transform (position, yaw/pitch,
+  and its =fov= param).  Implemented by overriding the single camera chokepoint
+  so picking, projection, and gizmos stay consistent; orbit/pan/zoom are
+  suspended while looking through.  A command restores the edit camera.  DEFUNs:
+  =cmacs-libregnum-editor-look-through= (BUFFER NODE-ID),
+  =cmacs-libregnum-editor-look-through-off= (BUFFER),
+  =cmacs-libregnum-editor-look-through-p= (BUFFER).
+- *Audio volume + stop* — the editor now plays audio nodes through the cmacs
+  GStreamer audio subsystem (async, with a pipeline handle) instead of the
+  blocking =play-sound-file=, so *Stop audio* and *Set volume* work in the
+  context menu; volume persists as a node param.  Falls back to
+  =play-sound-file= when =--with-cmacs-audio= is absent.
+- *Wireframe per node* — *Toggle wireframe* in the context menu authors a
+  ="wireframe"= visual param honoured by the render loop (mesh assets via
+  =grl_model_draw_wires_ex=).  *Toggle cast shadow* authors a ="cast_shadow"=
+  param (metadata persisted in the =.rlevel=; actual shadow mapping remains
+  deferred).
 
 *** GObject Introspection (gjs + Python-GI bindings)
 
@@ -909,39 +951,34 @@ cmacs *auto-builds* the typelib so scripts can drive it:
 
 *** Planned
 
-One item remains:
+The following items remain for future renderer work:
 
-- *Full scene shading* — lights/cameras/audio are visualised accurately (above)
-  but do not yet *illuminate* meshes / drive a camera-preview render / spatialise
-  audio; real-time 3-D lighting is a dedicated shader pass on the engine
-  renderer (the largest remaining item).
+- *Shadow mapping* — real-time shadows from LIGHT nodes; the ="cast_shadow"=
+  node param is authored now but not yet consumed by a shadow pass.
+- *Shading of primitive immediate-mode shapes* — the Blinn-Phong shader covers
+  the mesh/VAO path; primitive shapes drawn via immediate-mode calls stay flat.
+- *Spatial/3D audio attenuation* — audio range is visualised and the volume
+  knob persists as a param, but distance-based attenuation is not yet wired in
+  the GStreamer pipeline.
 
-*** Context-menu items deliberately deferred
+*** Context-menu items formerly deferred — now implemented
 
-The following actions were considered for the right-click context menu during the
-expansion pass and left for engine-level work rather than Lisp wiring:
+The following four items were carried as deferred in earlier versions and are
+now implemented (see the sections above):
 
-- *Look-through camera* — rendering a picture-in-picture preview from a camera
-  node's point of view requires a secondary FBO render pass driven by the
-  camera's transform; that is part of the full scene-shading work above.
-- *Audio volume / stop* — no engine playback handle is available from the Lisp
-  side; audio playback is delegated to Emacs =play-sound-file=, which returns
-  immediately and does not expose a stop or volume knob.  Proper volume/stop
-  control needs a GStreamer pipeline handle in the C layer.
-- *Wireframe / cast-shadow material flags* — the =LrgMaterial3D= colour,
-  roughness, and metallic fields are wired; per-material wireframe override and
-  shadow-cast toggles exist in the engine data model but are not yet surfaced as
-  =LrgMaterial3D= GObject properties, so there is no DEFUN to call.
-- *Full real-time scene shading* — lights illuminating meshes via a GLSL shader
-  pass; same as the "Planned" item above, listed here to record that it was
-  considered as a menu affordance (*Preview shading* toggle) and deferred along
-  with the renderer work.
+- *Real-time scene shading* — Blinn-Phong GLSL shader for mesh/model geometry.
+- *Look-through camera* — viewport renders from the selected camera node.
+- *Audio volume / stop* — GStreamer pipeline handle; volume persists as a node
+  param; fallback to =play-sound-file= when audio subsystem absent.
+- *Wireframe / cast-shadow flags* — ="wireframe"= and ="cast_shadow"= visual
+  params authored per node; shadow mapping remains deferred.
 
 * See also
 
 - =doc_org/cmacs/cmacs-libregnum-design-notes.org= — deliberate scope
   boundaries + potential improvements (the "Planned" items above, with
-  rationale: scene shading, component authoring, project build/play, etc.).
+  rationale: shadow mapping, primitive shading, spatial audio, component
+  authoring, project build/play, etc.).
 - =doc_org/cmacs/cmacs-video.org= — the BGRA-blit pattern used by
   this subsystem mirrors cmacs-video's GStreamer overlay pass.
 - =deps/libregnum/README.md= — upstream libregnum docs.

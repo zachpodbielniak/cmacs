@@ -1073,5 +1073,210 @@ Display-free (no GL)."
                                             leaves))))))))
       (when (buffer-live-p buf) (kill-buffer buf)))))
 
+;;; ─── New feature tests: audio rewrite, shading, look-through, wireframe ─────
+
+(ert-deftest cmacs-libregnum-tests-new-commands-fboundp ()
+  "All new Elisp commands and variables from the feature branch are defined."
+  (dolist (fn '(cmacs-libregnum-editor-stop-audio
+                cmacs-libregnum-editor-set-audio-volume
+                cmacs-libregnum-editor-toggle-shading
+                cmacs-libregnum-editor-stop-look-through
+                cmacs-libregnum-editor--ctx-toggle-wireframe
+                cmacs-libregnum-editor--ctx-toggle-cast-shadow))
+    (should (fboundp fn)))
+  ;; Buffer-local audio handle var.
+  (should (boundp 'cmacs-libregnum-editor--audio-handle))
+  ;; Display submenu var.
+  (should (boundp 'cmacs-libregnum-editor-display-menu-items))
+  (should (listp cmacs-libregnum-editor-display-menu-items)))
+
+(ert-deftest cmacs-libregnum-tests-display-submenu-shape ()
+  "Display submenu has exactly 2 action items (wireframe + cast-shadow)."
+  (let ((acts (delq nil
+                    (mapcar (lambda (it) (plist-get it :action))
+                            cmacs-libregnum-editor-display-menu-items))))
+    (should (= (length acts) 2))
+    (should-not (memq nil (mapcar #'functionp acts)))))
+
+(ert-deftest cmacs-libregnum-tests-audio-fallback-defined ()
+  "play-audio is defined and does not error when cmacs-audio is absent.
+The test just checks the function is fboundp; it does NOT call it (doing so
+would open a real audio device / file, which is unsafe in batch mode)."
+  (should (fboundp 'cmacs-libregnum-editor-play-audio)))
+
+(ert-deftest cmacs-libregnum-tests-audio-handle-local ()
+  "The audio-handle var is declared (defvar-local), has a nil default,
+and becomes buffer-local once set in any buffer."
+  ;; The variable must be bound (declared by defvar-local).
+  (should (boundp 'cmacs-libregnum-editor--audio-handle))
+  ;; The global default is nil.
+  (should (null (default-value 'cmacs-libregnum-editor--audio-handle)))
+  ;; Setting it in a temp buffer makes it buffer-local in that buffer.
+  (with-temp-buffer
+    (setq cmacs-libregnum-editor--audio-handle 42)
+    (should (local-variable-p 'cmacs-libregnum-editor--audio-handle
+                              (current-buffer)))
+    (should (= cmacs-libregnum-editor--audio-handle 42)))
+  ;; The global default is still nil (we didn't stomp it).
+  (should (null (default-value 'cmacs-libregnum-editor--audio-handle))))
+
+(ert-deftest cmacs-libregnum-tests-stop-audio-no-handle ()
+  "stop-audio signals user-error when no handle is live."
+  (with-temp-buffer
+    (setq cmacs-libregnum-editor--audio-handle nil)
+    (should-error (cmacs-libregnum-editor-stop-audio) :type 'user-error)))
+
+(ert-deftest cmacs-libregnum-tests-context-menu-new-audio-camera ()
+  "New audio and camera items appear in the context-menu filter."
+  (let ((audioL (cmacs-libregnum-tests--ctx-labels
+                 (cmacs-libregnum-editor--filter-menu-items 'audio)))
+        (caml   (cmacs-libregnum-tests--ctx-labels
+                 (cmacs-libregnum-editor--filter-menu-items 'camera))))
+    ;; Audio: existing items still present.
+    (should (member "Set audio range…" audioL))
+    (should (member "Play audio" audioL))
+    ;; Audio: new items.
+    (should (member "Set volume…" audioL))
+    (should (member "Stop audio" audioL))
+    ;; Camera: existing items.
+    (should (member "Set camera FOV…" caml))
+    (should (member "Align to view" caml))
+    ;; Camera: new look-through item.
+    (should (member "Look through this camera" caml))
+    ;; Stop look-through is :kinds t so appears everywhere.
+    (let ((grpl (cmacs-libregnum-tests--ctx-labels
+                 (cmacs-libregnum-editor--filter-menu-items 'group))))
+      (should (member "Stop look-through" grpl)))))
+
+(ert-deftest cmacs-libregnum-tests-context-menu-wireframe-filter ()
+  "Wireframe and cast-shadow items appear for primitive and mesh, not others."
+  (let ((priml  (cmacs-libregnum-tests--ctx-labels
+                 (cmacs-libregnum-editor--filter-menu-items 'primitive)))
+        (meshl  (cmacs-libregnum-tests--ctx-labels
+                 (cmacs-libregnum-editor--filter-menu-items 'mesh)))
+        (lightl (cmacs-libregnum-tests--ctx-labels
+                 (cmacs-libregnum-editor--filter-menu-items 'light)))
+        (grpl   (cmacs-libregnum-tests--ctx-labels
+                 (cmacs-libregnum-editor--filter-menu-items 'group))))
+    ;; Display submenu for primitive and mesh.
+    (should (member "Display" priml))
+    (should (member "Display" meshl))
+    ;; Not for light, group, etc.
+    (should-not (member "Display" lightl))
+    (should-not (member "Display" grpl))))
+
+(ert-deftest cmacs-libregnum-tests-context-menu-wireframe-keymap ()
+  "Toggle wireframe and cast-shadow are reachable in the built keymap."
+  (dolist (ksym '(primitive mesh))
+    (let* ((items  (cmacs-libregnum-editor--filter-menu-items ksym))
+           (km     (cmacs-libregnum-editor--menu-keymap
+                    items (current-buffer) 0))
+           (leaves (cmacs-libregnum-tests--menu-keymap-leaves km))
+           (labels (mapcar #'car leaves)))
+      (should (keymapp km))
+      (should-not (memq nil (mapcar (lambda (l) (functionp (cdr l))) leaves)))
+      ;; Display submenu leaves are reachable.
+      (should (member "Toggle wireframe" labels))
+      (should (member "Toggle cast shadow" labels)))))
+
+(ert-deftest cmacs-libregnum-tests-context-menu-new-audio-keymap ()
+  "New audio menu items are reachable in the built keymap for audio nodes."
+  (let* ((items  (cmacs-libregnum-editor--filter-menu-items 'audio))
+         (km     (cmacs-libregnum-editor--menu-keymap
+                  items (current-buffer) 0))
+         (leaves (cmacs-libregnum-tests--menu-keymap-leaves km))
+         (labels (mapcar #'car leaves)))
+    (should (keymapp km))
+    (should-not (memq nil (mapcar (lambda (l) (functionp (cdr l))) leaves)))
+    (should (member "Set volume…" labels))
+    (should (member "Stop audio" labels))))
+
+(ert-deftest cmacs-libregnum-tests-context-menu-look-through-keymap ()
+  "Look-through camera item is reachable in the built keymap for cameras."
+  (let* ((items  (cmacs-libregnum-editor--filter-menu-items 'camera))
+         (km     (cmacs-libregnum-editor--menu-keymap
+                  items (current-buffer) 0))
+         (leaves (cmacs-libregnum-tests--menu-keymap-leaves km))
+         (labels (mapcar #'car leaves)))
+    (should (keymapp km))
+    (should-not (memq nil (mapcar (lambda (l) (functionp (cdr l))) leaves)))
+    (should (member "Look through this camera" labels))))
+
+(ert-deftest cmacs-libregnum-tests-shading-toggle-guarded ()
+  "toggle-shading is a no-op (not an error) when the C DEFUN is absent."
+  ;; We cannot test the actual toggle without a running engine, but we can
+  ;; confirm the command does not signal when the DEFUN is absent.
+  (skip-unless (not (fboundp 'cmacs-libregnum-editor-set-shading)))
+  ;; Even without the C DEFUN, calling it in an editor buffer must not signal.
+  (with-temp-buffer
+    ;; Pretend we are in an editor buffer by satisfying the buffer check.
+    (let ((buf (current-buffer)))
+      (cl-letf (((symbol-function 'cmacs-libregnum-editor--buffer)
+                 (lambda () buf)))
+        (should-not (condition-case nil
+                        (progn (cmacs-libregnum-editor-toggle-shading) nil)
+                      (error t)))))))
+
+(ert-deftest cmacs-libregnum-tests-wireframe-toggle-logic ()
+  "Wireframe toggle flips 0.0->1.0 and 1.0->0.0 using set-visual-param.
+Batch-safe: stubs out the C DEFUNs with Lisp flets."
+  (let ((buf (current-buffer))
+        (last-set nil))
+    ;; Stub: get returns 0.0 (wireframe off), set records the value.
+    (cl-letf (((symbol-function 'cmacs-libregnum-editor-get-visual-param)
+               (lambda (_b _i _n _d) 0.0))
+              ((symbol-function 'cmacs-libregnum-editor-set-visual-param)
+               (lambda (_b _i _n v) (setq last-set v)))
+              ((symbol-function 'cmacs-libregnum-editor--sync-panels)
+               (lambda (&rest _) nil)))
+      (cmacs-libregnum-editor--ctx-toggle-wireframe buf 0)
+      (should (= last-set 1.0)))
+    ;; Now get returns 1.0 (wireframe on) -> toggling sets to 0.0.
+    (setq last-set nil)
+    (cl-letf (((symbol-function 'cmacs-libregnum-editor-get-visual-param)
+               (lambda (_b _i _n _d) 1.0))
+              ((symbol-function 'cmacs-libregnum-editor-set-visual-param)
+               (lambda (_b _i _n v) (setq last-set v)))
+              ((symbol-function 'cmacs-libregnum-editor--sync-panels)
+               (lambda (&rest _) nil)))
+      (cmacs-libregnum-editor--ctx-toggle-wireframe buf 0)
+      (should (= last-set 0.0)))))
+
+(ert-deftest cmacs-libregnum-tests-cast-shadow-toggle-logic ()
+  "Cast-shadow toggle flips 1.0->0.0 and 0.0->1.0 (default is on)."
+  (let ((buf (current-buffer))
+        (last-set nil))
+    ;; Default 1.0 (shadow on) -> toggling sets to 0.0.
+    (cl-letf (((symbol-function 'cmacs-libregnum-editor-get-visual-param)
+               (lambda (_b _i _n _d) 1.0))
+              ((symbol-function 'cmacs-libregnum-editor-set-visual-param)
+               (lambda (_b _i _n v) (setq last-set v)))
+              ((symbol-function 'cmacs-libregnum-editor--sync-panels)
+               (lambda (&rest _) nil)))
+      (cmacs-libregnum-editor--ctx-toggle-cast-shadow buf 0)
+      (should (= last-set 0.0)))
+    ;; 0.0 (shadow off) -> toggling sets to 1.0.
+    (setq last-set nil)
+    (cl-letf (((symbol-function 'cmacs-libregnum-editor-get-visual-param)
+               (lambda (_b _i _n _d) 0.0))
+              ((symbol-function 'cmacs-libregnum-editor-set-visual-param)
+               (lambda (_b _i _n v) (setq last-set v)))
+              ((symbol-function 'cmacs-libregnum-editor--sync-panels)
+               (lambda (&rest _) nil)))
+      (cmacs-libregnum-editor--ctx-toggle-cast-shadow buf 0)
+      (should (= last-set 1.0)))))
+
+(ert-deftest cmacs-libregnum-tests-context-menu-keymap-all-kinds-new ()
+  "The full keymap builds without error for all kinds including new items."
+  (dolist (ksym '(group primitive mesh light camera audio tilemap sprite prefab))
+    (let* ((items  (cmacs-libregnum-editor--filter-menu-items ksym))
+           (km     (cmacs-libregnum-editor--menu-keymap
+                    items (current-buffer) 0))
+           (leaves (cmacs-libregnum-tests--menu-keymap-leaves km)))
+      (should (keymapp km))
+      (should-not (memq nil
+                        (mapcar (lambda (l) (functionp (cdr l)))
+                                leaves))))))
+
 (provide 'cmacs-libregnum-tests)
 ;;; cmacs-libregnum-tests.el ends here

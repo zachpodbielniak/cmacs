@@ -168,6 +168,7 @@ typedef struct
   float       rx, ry, rz;      /* euler radians */
   float       sx, sy, sz;
   guint8      cr, cg, cb;
+  gint        node_id;          /* baked scene node id (for wireframe param) */
 } CmacsEditorModel;
 #endif
 
@@ -234,6 +235,23 @@ struct CmacsLibregnumRenderCtx
   float             gizmo_grab;     /* axis parameter / angle at grab */
 
   gboolean          place_armed;    /* next viewport click drops the armed asset */
+
+  /* ── Feature: real-time scene shading ─────────────────────────────── */
+  /* Blinn-Phong lighting shader + material.  Lazily created on first
+   * enable (cmacs_libregnum_render_ctx_editor_set_shading).  When
+   * `shading' is TRUE, MESH_ASSET models use lighting_material which has
+   * lighting_shader bound, and up to 4 LIGHT nodes are pushed to the
+   * shader each frame.  When FALSE the models draw unlit (default). */
+  GrlShader        *lighting_shader;   /* owned; NULL until first enable */
+  GrlMaterial      *lighting_material; /* owned; NULL until first enable */
+  gboolean          shading;           /* TRUE = lit render mode */
+
+  /* ── Feature: look-through camera ─────────────────────────────────── */
+  /* When camera_lookthrough is TRUE, ctx_raylib_camera() builds the
+   * Camera3D from the CAMERA node at camera_lookthrough_id rather than
+   * the orbit camera.  Orbit/pan/zoom/focus are suppressed while active. */
+  gboolean          camera_lookthrough;
+  gint              camera_lookthrough_id;
 #endif
 };
 
@@ -287,6 +305,9 @@ cmacs_libregnum_render_ctx_free (CmacsLibregnumRenderCtx *r)
         }
       g_array_free (r->editor_models, TRUE);
     }
+  /* Shading resources. */
+  g_clear_object (&r->lighting_shader);
+  g_clear_object (&r->lighting_material);
 #endif
   if (r->fbo_valid) UnloadRenderTexture (r->fbo);
   g_clear_object (&r->camera);
@@ -393,7 +414,13 @@ cmacs_libregnum_render_ctx_get_selected (CmacsLibregnumRenderCtx *r)
   return r ? r->selected : -1;
 }
 
-/* Build a raylib Camera3D snapshot from the live LrgCamera3D. */
+/* Build a raylib Camera3D snapshot from the live LrgCamera3D.
+ *
+ * Feature: look-through camera.  When camera_lookthrough is TRUE, we build
+ * the Camera3D from the CAMERA node at camera_lookthrough_id: position from
+ * the node's world location, yaw/pitch from the node's rotation, fov from
+ * the "fov" visual param.  All other callers (pick, project, gizmo, etc.)
+ * call ctx_raylib_camera() so they all stay consistent with the override. */
 static Camera3D
 ctx_raylib_camera (CmacsLibregnumRenderCtx *r)
 {
@@ -401,6 +428,42 @@ ctx_raylib_camera (CmacsLibregnumRenderCtx *r)
   c.up = (Vector3){ 0.0f, 1.0f, 0.0f };
   c.fovy = 60.0f;
   c.projection = CAMERA_PERSPECTIVE;
+
+#ifdef LRG_BUILD_EDITOR
+  /* Look-through override: build camera from a CAMERA node's pose. */
+  if (r && r->camera_lookthrough && r->editor_node_map
+      && r->camera_lookthrough_id >= 0
+      && (guint) r->camera_lookthrough_id < r->editor_node_map->len)
+    {
+      LrgNode      *ln = g_ptr_array_index (r->editor_node_map,
+                                            r->camera_lookthrough_id);
+      LrgNodeVisual *lv = ln ? lrg_node_get_visual (ln) : NULL;
+      if (ln)
+        {
+          GrlVector3 *loc = lrg_node_get_location (ln);
+          GrlVector3 *rot = lrg_node_get_rotation (ln);
+          float px = loc ? loc->x : 0.0f;
+          float py = loc ? loc->y : 0.0f;
+          float pz = loc ? loc->z : 0.0f;
+          float yaw   = rot ? rot->y : 0.0f;
+          float pitch = rot ? rot->x : 0.0f;
+          /* Forward vector from yaw + pitch (OpenGL right-hand, -Z forward). */
+          float fwd_x = -sinf (yaw) * cosf (pitch);
+          float fwd_y =  sinf (pitch);
+          float fwd_z = -cosf (yaw) * cosf (pitch);
+          float fov   = lv ? (float)
+                          lrg_node_visual_get_param_double (lv, "fov", 50.0)
+                           : 50.0f;
+          c.position   = (Vector3){ px, py, pz };
+          c.target     = (Vector3){ px + fwd_x, py + fwd_y, pz + fwd_z };
+          c.up         = (Vector3){ 0.0f, 1.0f, 0.0f };
+          c.fovy       = fov;
+          c.projection = CAMERA_PERSPECTIVE;
+          return c;
+        }
+    }
+#endif
+
   if (r && r->camera && LRG_IS_CAMERA3D (r->camera))
     {
       LrgCamera3D *c3 = LRG_CAMERA3D (r->camera);
@@ -495,6 +558,9 @@ void
 cmacs_libregnum_render_ctx_focus_node (CmacsLibregnumRenderCtx *r, gint id)
 {
   if (!r || !r->nodes || id < 0 || (guint) id >= r->nodes->len) return;
+#ifdef LRG_BUILD_EDITOR
+  if (r->camera_lookthrough) return; /* suppressed during look-through */
+#endif
   CmacsNode *n = &g_array_index (r->nodes, CmacsNode, id);
   Camera3D cam = ctx_raylib_camera (r);
   /* Current view direction (from target back to camera), normalized. */
@@ -828,6 +894,11 @@ cmacs_libregnum_render_ctx_game_mouse_button (CmacsLibregnumRenderCtx *r,
 static void cmacs_editor_draw_gizmo (CmacsLibregnumRenderCtx *r);
 static gint cmacs_editor_id_for_node (CmacsLibregnumRenderCtx *r,
                                       LrgNode *node);
+/* Feature 1 helpers defined after the render loop (see below). */
+static gboolean ctx_ensure_lighting_shader (CmacsLibregnumRenderCtx *r);
+static void     ctx_push_lights_to_shader  (CmacsLibregnumRenderCtx *r);
+static void     ctx_attach_shading_materials (CmacsLibregnumRenderCtx *r,
+                                              gboolean on);
 #endif
 gboolean
 cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
@@ -888,8 +959,17 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
               lrg_drawable_draw (LRG_DRAWABLE (d), 0.0f);
           }
 #ifdef LRG_BUILD_EDITOR
+        /* Feature 1: shading — push lights to the shader once per frame
+         * before drawing any mesh-asset models.  This is a no-op when
+         * shading is OFF (lighting_shader is NULL). */
+        if (r->shading)
+          ctx_push_lights_to_shader (r);
+
         /* Draw any baked mesh-asset models (glTF/OBJ), positioned + rotated
-         * (about Y) + scaled per node.  57.2958 = 180/pi (radians -> degrees). */
+         * (about Y) + scaled per node.  57.2958 = 180/pi (radians -> degrees).
+         *
+         * Feature 3: per-node wireframe.  If the node's "wireframe" visual
+         * param > 0.5, draw via grl_model_draw_wires_ex instead. */
         for (guint mi = 0; r->editor_models && mi < r->editor_models->len; mi++)
           {
             CmacsEditorModel *em =
@@ -901,8 +981,26 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
             g_autoptr (GrlColor)   mtint = grl_color_new (em->cr, em->cg,
                                                           em->cb, 255);
             if (em->model)
-              grl_model_draw_ex (em->model, mpos, maxis,
-                                 em->ry * 57.2957795f, mscl, mtint);
+              {
+                /* Determine wireframe mode from the node's visual param. */
+                gboolean wireframe = FALSE;
+                if (em->node_id >= 0 && r->editor_node_map
+                    && (guint) em->node_id < r->editor_node_map->len)
+                  {
+                    LrgNode       *wn  = g_ptr_array_index (r->editor_node_map,
+                                                            em->node_id);
+                    LrgNodeVisual *wv  = wn ? lrg_node_get_visual (wn) : NULL;
+                    if (wv)
+                      wireframe = lrg_node_visual_get_param_double
+                                    (wv, "wireframe", 0.0) > 0.5;
+                  }
+                if (wireframe)
+                  grl_model_draw_wires_ex (em->model, mpos, maxis,
+                                           em->ry * 57.2957795f, mscl, mtint);
+                else
+                  grl_model_draw_ex (em->model, mpos, maxis,
+                                     em->ry * 57.2957795f, mscl, mtint);
+              }
             else if (em->texture && em->tiles)
               {
                 /* Tilemap: draw each non-empty cell as a textured quad on the
@@ -1153,6 +1251,9 @@ cmacs_libregnum_render_ctx_orbit_camera (CmacsLibregnumRenderCtx *r,
                                          double dx_px, double dy_px)
 {
   if (!r || !r->camera || !LRG_IS_CAMERA3D (r->camera)) return;
+#ifdef LRG_BUILD_EDITOR
+  if (r->camera_lookthrough) return; /* suppressed during look-through */
+#endif
   r->focusing = FALSE;   /* manual control cancels an in-flight focus */
   LrgCamera3D *c3 = LRG_CAMERA3D (r->camera);
   g_autoptr (GrlVector3) pos = lrg_camera3d_get_position (c3);
@@ -1180,6 +1281,9 @@ cmacs_libregnum_render_ctx_zoom_camera (CmacsLibregnumRenderCtx *r,
                                         double wheel_dy)
 {
   if (!r || !r->camera || !LRG_IS_CAMERA3D (r->camera)) return;
+#ifdef LRG_BUILD_EDITOR
+  if (r->camera_lookthrough) return;
+#endif
   r->focusing = FALSE;
   LrgCamera3D *c3 = LRG_CAMERA3D (r->camera);
   g_autoptr (GrlVector3) pos = lrg_camera3d_get_position (c3);
@@ -1202,6 +1306,9 @@ cmacs_libregnum_render_ctx_pan_camera (CmacsLibregnumRenderCtx *r,
                                        double dx_px, double dy_px)
 {
   if (!r || !r->camera || !LRG_IS_CAMERA3D (r->camera)) return;
+#ifdef LRG_BUILD_EDITOR
+  if (r->camera_lookthrough) return;
+#endif
   r->focusing = FALSE;
   LrgCamera3D *c3 = LRG_CAMERA3D (r->camera);
   g_autoptr (GrlVector3) pos = lrg_camera3d_get_position (c3);
@@ -1330,6 +1437,266 @@ cmacs_libregnum_render_ctx_snapshot_png (CmacsLibregnumRenderCtx *r,
  * so it renders through the normal scene path and reuses the node model
  * (picking, labels, cmacs-libregnum-tree-nodes) for the outliner. */
 #ifdef LRG_BUILD_EDITOR
+
+/* ── Feature: real-time scene shading (Feature 1) ───────────────────
+ *
+ * Blinn-Phong lighting shader embedded as C string literals.  The GLSL
+ * source comes from:
+ *   deps/libregnum/deps/graylib/deps/raylib/examples/shaders/
+ *       resources/shaders/glsl330/lighting.vs + lighting.fs
+ *
+ * The vertex shader passes world-space position, normal and the tint
+ * colour to the fragment shader.  The fragment shader accumulates
+ * contributions from up to 4 lights[] and adds an ambient term.
+ *
+ * Uniform names used (raylib/rlights convention, must match exactly):
+ *   matModel  mat4  -- model matrix (sent by DrawMesh/grl_model_draw_ex)
+ *   matNormal mat4  -- normal matrix (sent by DrawMesh)
+ *   mvp       mat4  -- model-view-projection (sent by DrawMesh)
+ *   viewPos   vec3  -- camera world position (set per-frame below)
+ *   ambient   vec4  -- ambient colour (set once)
+ *   lights[i].enabled    int
+ *   lights[i].type       int  (0=directional, 1=point)
+ *   lights[i].position   vec3
+ *   lights[i].target     vec3
+ *   lights[i].color      vec4
+ */
+static const char *s_lighting_vs =
+  "#version 330\n"
+  "in vec3 vertexPosition;\n"
+  "in vec2 vertexTexCoord;\n"
+  "in vec3 vertexNormal;\n"
+  "in vec4 vertexColor;\n"
+  "uniform mat4 mvp;\n"
+  "uniform mat4 matModel;\n"
+  "uniform mat4 matNormal;\n"
+  "out vec3 fragPosition;\n"
+  "out vec2 fragTexCoord;\n"
+  "out vec4 fragColor;\n"
+  "out vec3 fragNormal;\n"
+  "void main() {\n"
+  "    fragPosition = vec3(matModel*vec4(vertexPosition, 1.0));\n"
+  "    fragTexCoord = vertexTexCoord;\n"
+  "    fragColor    = vertexColor;\n"
+  "    fragNormal   = normalize(vec3(matNormal*vec4(vertexNormal, 1.0)));\n"
+  "    gl_Position  = mvp*vec4(vertexPosition, 1.0);\n"
+  "}\n";
+
+static const char *s_lighting_fs =
+  "#version 330\n"
+  "in vec3 fragPosition;\n"
+  "in vec2 fragTexCoord;\n"
+  "in vec4 fragColor;\n"
+  "in vec3 fragNormal;\n"
+  "uniform sampler2D texture0;\n"
+  "uniform vec4 colDiffuse;\n"
+  "out vec4 finalColor;\n"
+  "#define MAX_LIGHTS 4\n"
+  "#define LIGHT_DIRECTIONAL 0\n"
+  "#define LIGHT_POINT 1\n"
+  "struct Light {\n"
+  "    int enabled;\n"
+  "    int type;\n"
+  "    vec3 position;\n"
+  "    vec3 target;\n"
+  "    vec4 color;\n"
+  "};\n"
+  "uniform Light lights[MAX_LIGHTS];\n"
+  "uniform vec4 ambient;\n"
+  "uniform vec3 viewPos;\n"
+  "void main() {\n"
+  "    vec4 texelColor = texture(texture0, fragTexCoord);\n"
+  "    vec3 base   = (texelColor*colDiffuse*fragColor).rgb;\n"
+  "    vec3 normal = normalize(fragNormal);\n"
+  "    vec3 viewD  = normalize(viewPos - fragPosition);\n"
+  "    vec3 light_accum = ambient.rgb;\n"
+  "    vec3 specular    = vec3(0.0);\n"
+  "    for (int i = 0; i < MAX_LIGHTS; i++) {\n"
+  "        if (lights[i].enabled == 1) {\n"
+  "            vec3 L;\n"
+  "            if (lights[i].type == LIGHT_DIRECTIONAL)\n"
+  "                L = normalize(lights[i].position - lights[i].target);\n"
+  "            else\n"
+  "                L = normalize(lights[i].position - fragPosition);\n"
+  "            /* Two-sided diffuse: an editor preview must light the faces the\n"
+  "             * user sees regardless of an imported mesh's normal winding. */\n"
+  "            float NdotL = abs(dot(normal, L));\n"
+  "            light_accum += lights[i].color.rgb*NdotL;\n"
+  "            float specCo = pow(max(0.0, dot(viewD, reflect(-L, normal))), 16.0);\n"
+  "            specular += lights[i].color.rgb*specCo*0.3;\n"
+  "        }\n"
+  "    }\n"
+  "    vec3 c = base*light_accum + specular;\n"
+  "    finalColor = vec4(min(c, vec3(1.0)), 1.0);\n"
+  "}\n";
+
+/* Lazily create the lighting shader + a GrlMaterial that binds it.
+ * Returns TRUE if the shader is ready (created or already existed).
+ * Must be called from within an active GL context (inside the render
+ * loop, i.e. between BeginTextureMode and EndTextureMode). */
+static gboolean
+ctx_ensure_lighting_shader (CmacsLibregnumRenderCtx *r)
+{
+  GError *err = NULL;
+  if (r->lighting_shader && r->lighting_material)
+    return TRUE;
+  g_clear_object (&r->lighting_shader);
+  g_clear_object (&r->lighting_material);
+  r->lighting_shader = grl_shader_new_from_memory (s_lighting_vs,
+                                                   s_lighting_fs,
+                                                   &err);
+  if (!r->lighting_shader)
+    {
+      g_warning ("cmacs-libregnum: lighting shader compile failed: %s",
+                 err ? err->message : "(unknown)");
+      g_clear_error (&err);
+      return FALSE;
+    }
+  r->lighting_material = grl_material_new_default ();
+  if (!r->lighting_material)
+    {
+      g_warning ("cmacs-libregnum: failed to create lighting material");
+      g_clear_object (&r->lighting_shader);
+      return FALSE;
+    }
+  grl_material_set_shader (r->lighting_material, r->lighting_shader);
+  /* Set a soft warm ambient once (can be overridden by Lisp in the future). */
+  {
+    gint loc = grl_shader_get_location (r->lighting_shader, "ambient");
+    if (loc >= 0)
+      grl_shader_set_value_vec4 (r->lighting_shader, loc,
+                                 0.25f, 0.25f, 0.25f, 1.0f);
+  }
+  return TRUE;
+}
+
+/* Push up to 4 LIGHT nodes from the current scene to the lighting shader,
+ * and set the viewPos uniform.  Call just before drawing lit models.
+ *
+ * Light layout in the shader: lights[0..3] with sub-fields
+ *   lights[i].enabled, lights[i].type, lights[i].position, lights[i].color
+ * We use LIGHT_POINT (type=1) for all point lights.
+ * Format strings for location lookup must match the fragment shader exactly. */
+static void
+ctx_push_lights_to_shader (CmacsLibregnumRenderCtx *r)
+{
+  /* raw Shader* from the GrlShader wrapper */
+  Shader *sh;
+  Camera3D cam;
+  int light_count = 0;
+  int i;
+  char name_buf[64];
+  int loc;
+
+  if (!r->lighting_shader) return;
+  sh = (Shader *) grl_shader_get_handle (r->lighting_shader);
+  if (!sh) return;
+
+  /* Camera world position -> viewPos. */
+  cam = ctx_raylib_camera (r);
+  loc = GetShaderLocation (*sh, "viewPos");
+  if (loc >= 0)
+    {
+      float vp[3] = { cam.position.x, cam.position.y, cam.position.z };
+      SetShaderValue (*sh, loc, vp, SHADER_UNIFORM_VEC3);
+    }
+
+  /* Zero all 4 light slots first so stale data does not persist. */
+  for (i = 0; i < 4; i++)
+    {
+      int en = 0;
+      g_snprintf (name_buf, sizeof (name_buf), "lights[%d].enabled", i);
+      loc = GetShaderLocation (*sh, name_buf);
+      if (loc >= 0)
+        SetShaderValue (*sh, loc, &en, SHADER_UNIFORM_INT);
+    }
+
+  /* Iterate the node map and fill up to 4 LIGHT nodes. */
+  if (r->editor_node_map && r->nodes)
+    {
+      guint li;
+      for (li = 0;
+           li < r->editor_node_map->len && li < r->nodes->len
+             && light_count < 4;
+           li++)
+        {
+          LrgNode       *ln = g_ptr_array_index (r->editor_node_map, li);
+          LrgNodeVisual *lv = ln ? lrg_node_get_visual (ln) : NULL;
+          LrgNodeVisualKind lk;
+          CmacsNode     *nn;
+          float pos[3], col[4];
+          int en = 1, type = 1;
+
+          if (!lv) continue;
+          lk = lrg_node_visual_get_kind (lv);
+          if (lk != LRG_NODE_VISUAL_LIGHT) continue;
+
+          nn = &g_array_index (r->nodes, CmacsNode, li);
+          pos[0] = nn->x; pos[1] = nn->y; pos[2] = nn->z;
+          col[0] = (float) lrg_node_visual_get_param_double (lv, "r", 250.0)
+                   / 255.0f;
+          col[1] = (float) lrg_node_visual_get_param_double (lv, "g", 240.0)
+                   / 255.0f;
+          col[2] = (float) lrg_node_visual_get_param_double (lv, "b", 140.0)
+                   / 255.0f;
+          col[3] = 1.0f;
+
+          g_snprintf (name_buf, sizeof (name_buf),
+                      "lights[%d].enabled", light_count);
+          loc = GetShaderLocation (*sh, name_buf);
+          if (loc >= 0)
+            SetShaderValue (*sh, loc, &en, SHADER_UNIFORM_INT);
+
+          g_snprintf (name_buf, sizeof (name_buf),
+                      "lights[%d].type", light_count);
+          loc = GetShaderLocation (*sh, name_buf);
+          if (loc >= 0)
+            SetShaderValue (*sh, loc, &type, SHADER_UNIFORM_INT);
+
+          g_snprintf (name_buf, sizeof (name_buf),
+                      "lights[%d].position", light_count);
+          loc = GetShaderLocation (*sh, name_buf);
+          if (loc >= 0)
+            SetShaderValue (*sh, loc, pos, SHADER_UNIFORM_VEC3);
+
+          g_snprintf (name_buf, sizeof (name_buf),
+                      "lights[%d].color", light_count);
+          loc = GetShaderLocation (*sh, name_buf);
+          if (loc >= 0)
+            SetShaderValue (*sh, loc, col, SHADER_UNIFORM_VEC4);
+
+          light_count++;
+        }
+    }
+}
+
+/* Attach (or detach) the lighting material on all MESH_ASSET models.
+ * Called at bake time when shading is toggled: iterates editor_models,
+ * finds those with a GrlModel (the MESH_ASSET entries), and calls
+ * grl_model_set_material(model, 0, lighting_material) when on, or
+ * grl_model_set_material(model, 0, default_material) when off.
+ * Sprite textured-quad models are also shaded (they have normals). */
+static void
+ctx_attach_shading_materials (CmacsLibregnumRenderCtx *r, gboolean on)
+{
+  guint mi;
+  if (!r->editor_models) return;
+  for (mi = 0; mi < r->editor_models->len; mi++)
+    {
+      CmacsEditorModel *em = &g_array_index (r->editor_models,
+                                             CmacsEditorModel, mi);
+      if (!em->model) continue;
+      if (on && r->lighting_material)
+        grl_model_set_material (em->model, 0, r->lighting_material);
+      else
+        {
+          /* Restore a plain default material (no custom shader). */
+          GrlMaterial *def = grl_material_new_default ();
+          grl_model_set_material (em->model, 0, def);
+          g_object_unref (def);
+        }
+    }
+}
 
 /* Build a unit-plane GrlModel textured with TEX (transfer none).  Drawing this
  * via grl_model_draw_ex uses the mesh/VAO path, which -- unlike raylib's rlgl
@@ -1490,6 +1857,7 @@ cmacs_editor_bake_node (CmacsLibregnumRenderCtx *r, LrgNode *node,
           em.rx = rrx; em.ry = rry; em.rz = rrz;
           em.sx = ssx; em.sy = ssy; em.sz = ssz;
           em.cr = 230; em.cg = 230; em.cb = 235;
+          em.node_id = (gint) r->nodes->len; /* id add_node will assign */
           if (r->editor_models)
             g_array_append_val (r->editor_models, em);
           else
@@ -1520,6 +1888,7 @@ cmacs_editor_bake_node (CmacsLibregnumRenderCtx *r, LrgNode *node,
           em.rx = rrx; em.ry = rry; em.rz = rrz;
           em.sx = ssx; em.sy = ssy; em.sz = ssz;
           em.cr = 255; em.cg = 255; em.cb = 255;
+          em.node_id = (gint) r->nodes->len; /* id add_node will assign */
           if (r->editor_models)
             g_array_append_val (r->editor_models, em);
           else { g_object_unref (smodel); g_object_unref (tex); }
@@ -1653,6 +2022,7 @@ cmacs_editor_bake_node (CmacsLibregnumRenderCtx *r, LrgNode *node,
           em.rx = rrx; em.ry = rry; em.rz = rrz;
           em.sx = ssx; em.sy = ssy; em.sz = ssz;
           em.cr = 255; em.cg = 255; em.cb = 255;
+          em.node_id = (gint) r->nodes->len; /* id add_node will assign */
           if (r->editor_models)
             g_array_append_val (r->editor_models, em);
           else { g_object_unref (tex); g_free (tiles); g_free (em.tile_rgb);
@@ -1766,6 +2136,11 @@ cmacs_editor_rebuild (CmacsLibregnumRenderCtx *r)
           cmacs_libregnum_render_ctx_set_selected (r, (gint) i);
           break;
         }
+
+  /* If shading was already ON before this rebuild, re-attach the lighting
+   * material to the freshly-baked models so they stay lit. */
+  if (r->shading)
+    ctx_attach_shading_materials (r, TRUE);
 }
 
 static LrgNode *
@@ -3449,6 +3824,91 @@ cmacs_libregnum_render_ctx_editor_selected_ids (CmacsLibregnumRenderCtx *r)
   return out;
 }
 
+/* ── Feature 1: real-time scene shading ─────────────────────────────── */
+
+/* Enable or disable Blinn-Phong shading.  On first enable the shader +
+ * material are lazily created.  Attached/detached to all baked
+ * MESH_ASSET models immediately; future rebuilds re-attach automatically
+ * (see cmacs_editor_rebuild). */
+void
+cmacs_libregnum_render_ctx_editor_set_shading (CmacsLibregnumRenderCtx *r,
+                                                gboolean on)
+{
+  if (!r || !r->editor) return;
+  if (on)
+    ctx_ensure_lighting_shader (r);
+  ctx_attach_shading_materials (r, on);
+  r->shading = on;
+}
+
+gboolean
+cmacs_libregnum_render_ctx_editor_shading_p (CmacsLibregnumRenderCtx *r)
+{
+  if (!r) return FALSE;
+  return r->shading;
+}
+
+/* ── Feature 2: look-through camera ─────────────────────────────────── */
+
+/* Drive the viewport camera from the CAMERA node at `id'.
+ * Returns FALSE if `id' is out of range or not a CAMERA node. */
+gboolean
+cmacs_libregnum_render_ctx_editor_look_through (CmacsLibregnumRenderCtx *r,
+                                                 gint id)
+{
+  LrgNode       *ln;
+  LrgNodeVisual *lv;
+  if (!r || !r->editor_node_map) return FALSE;
+  if (id < 0 || (guint) id >= r->editor_node_map->len) return FALSE;
+  ln = g_ptr_array_index (r->editor_node_map, id);
+  if (!ln) return FALSE;
+  lv = lrg_node_get_visual (ln);
+  if (!lv || lrg_node_visual_get_kind (lv) != LRG_NODE_VISUAL_CAMERA)
+    return FALSE;
+  r->camera_lookthrough    = TRUE;
+  r->camera_lookthrough_id = id;
+  return TRUE;
+}
+
+/* Cancel look-through and return to orbit camera. */
+void
+cmacs_libregnum_render_ctx_editor_look_through_off (CmacsLibregnumRenderCtx *r)
+{
+  if (!r) return;
+  r->camera_lookthrough    = FALSE;
+  r->camera_lookthrough_id = -1;
+}
+
+/* Returns the look-through node id, or -1 if not active. */
+gint
+cmacs_libregnum_render_ctx_editor_look_through_p (CmacsLibregnumRenderCtx *r)
+{
+  if (!r || !r->camera_lookthrough) return -1;
+  return r->camera_lookthrough_id;
+}
+
+/* ── Feature 3: per-node visual param read-back ─────────────────────── */
+
+/* Return the named visual param for node `id' as a double.
+ * Returns `def' if the id is invalid, the node has no visual, or the
+ * param is not set. */
+double
+cmacs_libregnum_render_ctx_editor_get_visual_param (CmacsLibregnumRenderCtx *r,
+                                                     gint id,
+                                                     const char *name,
+                                                     double def)
+{
+  LrgNode       *ln;
+  LrgNodeVisual *lv;
+  if (!r || !r->editor_node_map) return def;
+  if (id < 0 || (guint) id >= r->editor_node_map->len) return def;
+  ln = g_ptr_array_index (r->editor_node_map, id);
+  if (!ln) return def;
+  lv = lrg_node_get_visual (ln);
+  if (!lv) return def;
+  return lrg_node_visual_get_param_double (lv, name, def);
+}
+
 #else /* !LRG_BUILD_EDITOR -- stubs so the Lisp layer still links */
 
 gboolean cmacs_libregnum_render_ctx_editor_new (CmacsLibregnumRenderCtx *r)
@@ -3644,6 +4104,19 @@ void cmacs_libregnum_render_ctx_editor_select_clear (CmacsLibregnumRenderCtx *r)
 { (void) r; }
 GArray * cmacs_libregnum_render_ctx_editor_selected_ids (CmacsLibregnumRenderCtx *r)
 { (void) r; return g_array_new (FALSE, FALSE, sizeof (gint)); }
+void cmacs_libregnum_render_ctx_editor_set_shading (CmacsLibregnumRenderCtx *r,
+         gboolean on) { (void) r; (void) on; }
+gboolean cmacs_libregnum_render_ctx_editor_shading_p (CmacsLibregnumRenderCtx *r)
+{ (void) r; return FALSE; }
+gboolean cmacs_libregnum_render_ctx_editor_look_through (CmacsLibregnumRenderCtx *r,
+         gint id) { (void) r; (void) id; return FALSE; }
+void cmacs_libregnum_render_ctx_editor_look_through_off (CmacsLibregnumRenderCtx *r)
+{ (void) r; }
+gint cmacs_libregnum_render_ctx_editor_look_through_p (CmacsLibregnumRenderCtx *r)
+{ (void) r; return -1; }
+double cmacs_libregnum_render_ctx_editor_get_visual_param (CmacsLibregnumRenderCtx *r,
+         gint id, const char *name, double def)
+{ (void) r; (void) id; (void) name; return def; }
 
 #endif /* LRG_BUILD_EDITOR */
 

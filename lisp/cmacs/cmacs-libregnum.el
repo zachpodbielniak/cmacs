@@ -774,6 +774,10 @@ nil means no snapping; numbers snap moves/drags to that grid."
 (defvar-local cmacs-libregnum-editor--snap nil
   "Current translate grid (a number) for keyboard nudge + mouse drag, or nil.")
 
+(defvar-local cmacs-libregnum-editor--audio-handle nil
+  "Integer handle from `cmacs-audio-play-file' for the currently-playing audio
+node in this editor buffer, or nil when nothing is playing.")
+
 (defvar cmacs-libregnum-editor-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "c")        #'cmacs-libregnum-editor-add-cube)
@@ -822,10 +826,15 @@ nil means no snapping; numbers snap moves/drags to that grid."
     (define-key map (kbd "A")        #'cmacs-libregnum-editor-assets)
     (define-key map (kbd "L")        #'cmacs-libregnum-editor-add-script)
     (define-key map (kbd "T")        #'cmacs-libregnum-editor-tilemap-create)
+    ;; Scene-shading toggle (G for Global illumination).
+    (define-key map (kbd "G")        #'cmacs-libregnum-editor-toggle-shading)
+    ;; Stop look-through camera.
+    (define-key map (kbd "C-c l")    #'cmacs-libregnum-editor-stop-look-through)
     (define-key map (kbd "C-c p")    #'cmacs-libregnum-editor-prefab-save)
     (define-key map (kbd "C-c P")    #'cmacs-libregnum-editor-place-prefab)
     (define-key map (kbd "C-c i")    #'cmacs-libregnum-editor-scene-import)
     (define-key map (kbd "C-c a")    #'cmacs-libregnum-editor-play-audio)
+    (define-key map (kbd "C-c A")    #'cmacs-libregnum-editor-stop-audio)
     (define-key map (kbd "<f5>")     #'cmacs-libregnum-editor-play-toggle)
     (define-key map (kbd "C-x C-s")  #'cmacs-libregnum-editor-save-as)
     ;; Neutralize parent (scene) bindings whose semantics are wrong for an
@@ -841,11 +850,11 @@ nil means no snapping; numbers snap moves/drags to that grid."
   (concat " Libregnum editor — "
           "[c]ube [b]all [y]cyl [n]plane  "
           "gizmo [w]move [e]rot [r]scale (drag handles)  [v]2D [x]del  "
-          "[u]ndo [C-r]edo  [p]al [o]ut [i]nsp [A]ssets [L]ogic [f5]play "
+          "[u]ndo [C-r]edo  [p]al [o]ut [i]nsp [A]ssets [L]ogic [G]I [f5]play "
           "[C-x C-s]save  right-click: menu")
   "Header-line hint shown over the editor viewport (the window body is the
 3D view, so on-screen affordances live in the header line until the native
-panels land).")
+panels land).  [G] toggles scene-wide shading (global illumination).")
 
 (define-derived-mode cmacs-libregnum-editor-mode cmacs-libregnum-mode
   "cmacs-Editor"
@@ -1316,20 +1325,141 @@ The viewport draws a frustum at that angle."
     (message "Audio range %s" range)))
 
 (defun cmacs-libregnum-editor-play-audio ()
-  "Play the selected AUDIO node's sound file (real playback via `play-sound-file').
-Emacs' built-in player handles WAV/AU; other formats may not play."
+  "Play the selected AUDIO node's sound file.
+When `cmacs-audio-supported-p' is non-nil, uses the cmacs-audio subsystem
+\(GStreamer-backed): stores the playback handle buffer-locally, reads the
+node's \"volume\" visual param, and registers a state-handler to clear the
+handle on EOS/error/closed.  Falls back to `play-sound-file' (synchronous,
+WAV/AU only) when the cmacs-audio subsystem is absent."
   (interactive)
-  (let* ((buf (cmacs-libregnum-editor--buffer))
-         (id  (cmacs-libregnum-editor--sel buf))
+  (let* ((buf   (cmacs-libregnum-editor--buffer))
+         (id    (cmacs-libregnum-editor--sel buf))
          (asset (and id (cmacs-libregnum-editor-node-asset buf id))))
     (cond
-     ((null id) (user-error "No node selected"))
+     ((null id)    (user-error "No node selected"))
      ((null asset) (user-error "Node %d has no sound asset" id))
-     ((not (file-exists-p asset)) (user-error "Sound file not found: %s" asset))
-     (t (condition-case e
-            (progn (play-sound-file (expand-file-name asset))
-                   (message "Playing %s" (file-name-nondirectory asset)))
-          (error (user-error "Could not play %s: %S" asset e)))))))
+     ((not (file-exists-p asset))
+      (user-error "Sound file not found: %s" asset))
+     ;; cmacs-audio path (preferred).  Note `cmacs-audio-supported-p' is a C
+     ;; primitive (always present in an audio build), but `cmacs-audio-play-file'
+     ;; lives in cmacs-audio.el, which may not be loaded yet -- load it before
+     ;; relying on it, and fall back to `play-sound-file' if it (or playback)
+     ;; is unavailable.
+     ((and (fboundp 'cmacs-audio-supported-p)
+           (cmacs-audio-supported-p)
+           (progn (unless (fboundp 'cmacs-audio-play-file)
+                    (ignore-errors (require 'cmacs-audio nil t)))
+                  (fboundp 'cmacs-audio-play-file)))
+      (let* ((abs (expand-file-name asset))
+             (vol (if (fboundp 'cmacs-libregnum-editor-get-visual-param)
+                      (ignore-errors
+                        (cmacs-libregnum-editor-get-visual-param
+                         buf id "volume" 1.0))
+                    1.0))
+             (handle (ignore-errors (cmacs-audio-play-file abs))))
+        (if (null handle)
+            ;; Playback could not start (no audio sink, unreadable file, ...);
+            ;; fall back to the synchronous built-in player.
+            (condition-case e
+                (progn (play-sound-file abs)
+                       (message "Playing %s" (file-name-nondirectory asset)))
+              (error (user-error "Could not play %s: %S" asset e)))
+          ;; Stop any previously playing handle in this buffer.
+          (when-let* ((old (buffer-local-value
+                            'cmacs-libregnum-editor--audio-handle buf)))
+            (ignore-errors (cmacs-audio-close old)))
+          (with-current-buffer buf
+            (setq cmacs-libregnum-editor--audio-handle handle))
+          ;; Honour the node's volume param.
+          (when (and vol (numberp vol))
+            (ignore-errors (cmacs-audio-set-volume handle vol)))
+          ;; Clear the handle automatically on end-of-stream / error / close.
+          (when (fboundp 'cmacs-audio-add-state-handler)
+            (ignore-errors
+              (cmacs-audio-add-state-handler
+               handle
+               (let ((b buf))
+                 (lambda (_h state)
+                   (when (memq state '(eos error closed))
+                     (when (buffer-live-p b)
+                       (with-current-buffer b
+                         (setq cmacs-libregnum-editor--audio-handle nil)))))))))
+          (message "Playing %s (handle %s)"
+                   (file-name-nondirectory asset) handle))))
+     ;; Fallback: synchronous built-in player.
+     (t
+      (condition-case e
+          (progn (play-sound-file (expand-file-name asset))
+                 (message "Playing %s" (file-name-nondirectory asset)))
+        (error (user-error "Could not play %s: %S" asset e)))))))
+
+(defun cmacs-libregnum-editor-stop-audio ()
+  "Stop the currently-playing audio in this editor buffer.
+Closes the buffer-local cmacs-audio handle if one is live; no-op otherwise."
+  (interactive)
+  (let ((handle cmacs-libregnum-editor--audio-handle))
+    (cond
+     ((null handle)
+      (user-error "No audio is playing in this buffer"))
+     ((not (fboundp 'cmacs-audio-close))
+      (user-error "cmacs-audio not available"))
+     (t
+      (ignore-errors (cmacs-audio-stop handle))
+      (ignore-errors (cmacs-audio-close handle))
+      (setq cmacs-libregnum-editor--audio-handle nil)
+      (message "Audio stopped")))))
+
+(defun cmacs-libregnum-editor-set-audio-volume (volume)
+  "Set the selected AUDIO node's volume to VOLUME (0.0 to 1.0).
+Persists the value via the visual-param \"volume\" (read back at next
+`cmacs-libregnum-editor-play-audio').  If audio is currently playing, also
+adjusts the live handle immediately."
+  (interactive (list (read-number "Volume (0.0 to 1.0): " 1.0)))
+  (let* ((buf (cmacs-libregnum-editor--buffer))
+         (id  (cmacs-libregnum-editor--sel buf))
+         (v   (max 0.0 (min 1.0 (float volume)))))
+    (unless id (user-error "No node selected"))
+    (cmacs-libregnum-editor-set-visual-param buf id "volume" v)
+    ;; Apply to the live handle if one exists.
+    (when-let* ((handle cmacs-libregnum-editor--audio-handle))
+      (when (fboundp 'cmacs-audio-set-volume)
+        (ignore-errors (cmacs-audio-set-volume handle v))))
+    (message "Audio volume set to %.2f" v)))
+
+;;; ─── Scene-shading (global illumination / ambient) toggle ──────────────────
+
+(defun cmacs-libregnum-editor-toggle-shading ()
+  "Toggle scene-wide shading (global illumination / ambient) for this buffer.
+When on, the renderer applies ambient + GI; when off it shows flat unlit colour.
+Requires the `cmacs-libregnum-editor-set-shading' C DEFUN (built in parallel);
+the command is a no-op + message if that DEFUN is absent."
+  (interactive)
+  (let ((buf (cmacs-libregnum-editor--buffer)))
+    (cond
+     ((not (fboundp 'cmacs-libregnum-editor-set-shading))
+      (message "cmacs-libregnum-editor-set-shading not yet available"))
+     (t
+      (let* ((on (if (fboundp 'cmacs-libregnum-editor-shading-p)
+                     (ignore-errors (cmacs-libregnum-editor-shading-p buf))
+                   nil))
+             (next (not on)))
+        (ignore-errors (cmacs-libregnum-editor-set-shading buf next))
+        (message "Scene shading %s" (if next "on (GI / ambient)" "off")))))))
+
+;;; ─── Look-through camera ────────────────────────────────────────────────────
+
+(defun cmacs-libregnum-editor-stop-look-through ()
+  "Stop look-through-camera mode and restore the free-fly viewport camera.
+Wraps `cmacs-libregnum-editor-look-through-off'; no-op if the DEFUN is absent."
+  (interactive)
+  (cond
+   ((not (fboundp 'cmacs-libregnum-editor-look-through-off))
+    (message "cmacs-libregnum-editor-look-through-off not yet available"))
+   (t
+    (ignore-errors
+      (cmacs-libregnum-editor-look-through-off
+       (cmacs-libregnum-editor--buffer)))
+    (message "Stopped look-through; back to free-fly camera"))))
 
 (defvar cmacs-libregnum-editor--play-timer nil
   "Repeating timer ticking the play-in-editor world, or nil.")
@@ -1617,6 +1747,34 @@ follow the mouse."
 
 ;;; Declare new C DEFUNs being built in parallel.  All calls are fboundp-guarded
 ;;; so the file byte-compiles cleanly when they are absent.
+
+;;; Scene-shading (global illumination / ambient) toggle.
+(declare-function cmacs-libregnum-editor-set-shading
+                  "cmacs-libregnum-defuns.c" (buffer on))
+(declare-function cmacs-libregnum-editor-shading-p
+                  "cmacs-libregnum-defuns.c" (buffer))
+
+;;; Look-through camera.
+(declare-function cmacs-libregnum-editor-look-through
+                  "cmacs-libregnum-defuns.c" (buffer id))
+(declare-function cmacs-libregnum-editor-look-through-off
+                  "cmacs-libregnum-defuns.c" (buffer))
+(declare-function cmacs-libregnum-editor-look-through-p
+                  "cmacs-libregnum-defuns.c" (buffer))
+
+;;; Per-node visual param reader (for wireframe, cast_shadow, volume, ...).
+(declare-function cmacs-libregnum-editor-get-visual-param
+                  "cmacs-libregnum-defuns.c" (buffer id name default))
+
+;;; cmacs-audio subsystem (--with-cmacs-audio gated; all calls fboundp-guarded).
+(declare-function cmacs-audio-supported-p   "cmacs-audio.c" ())
+(declare-function cmacs-audio-play-file     "cmacs-audio.c" (path))
+(declare-function cmacs-audio-stop          "cmacs-audio.c" (handle))
+(declare-function cmacs-audio-close         "cmacs-audio.c" (handle))
+(declare-function cmacs-audio-set-volume    "cmacs-audio.c" (handle v))
+(declare-function cmacs-audio-state         "cmacs-audio.c" (handle))
+(declare-function cmacs-audio-add-state-handler "cmacs-audio.c" (handle fn))
+
 (declare-function cmacs-libregnum-editor-set-color
                   "cmacs-libregnum-defuns.c" (buffer id r g b a))
 (declare-function cmacs-libregnum-editor-node-color
@@ -2230,6 +2388,46 @@ Called at pop time so script list is always current."
           (cmacs-libregnum-editor--sync-panels buffer grp)
           (message "Grouped %d nodes under node %d" (length ids) grp))))))
 
+(defun cmacs-libregnum-editor--ctx-toggle-wireframe (buffer id)
+  "Toggle the wireframe overlay on node ID in BUFFER.
+Reads \"wireframe\" via `cmacs-libregnum-editor-get-visual-param' (default 0.0)
+and flips it.  The renderer's display layer honours this flag.  Persisted via
+`cmacs-libregnum-editor-set-visual-param'."
+  (let* ((cur (if (fboundp 'cmacs-libregnum-editor-get-visual-param)
+                  (ignore-errors
+                    (cmacs-libregnum-editor-get-visual-param
+                     buffer id "wireframe" 0.0))
+                0.0))
+         (next (if (and (numberp cur) (> cur 0.5)) 0.0 1.0)))
+    (cmacs-libregnum-editor-set-visual-param buffer id "wireframe" next)
+    (cmacs-libregnum-editor--sync-panels buffer id)
+    (message "Wireframe: %s" (if (> next 0.5) "on" "off"))))
+
+(defun cmacs-libregnum-editor--ctx-toggle-cast-shadow (buffer id)
+  "Toggle the cast-shadow flag on node ID in BUFFER.
+Authors the \"cast_shadow\" visual param (1.0 = shadows on, 0.0 = off).
+This is metadata only until shadow-map rendering is implemented — it is
+already persisted in the level so it takes effect the moment the render layer
+is wired up.  Reads current value via `cmacs-libregnum-editor-get-visual-param'
+\(default 1.0 — shadows on by default)."
+  (let* ((cur (if (fboundp 'cmacs-libregnum-editor-get-visual-param)
+                  (ignore-errors
+                    (cmacs-libregnum-editor-get-visual-param
+                     buffer id "cast_shadow" 1.0))
+                1.0))
+         (next (if (and (numberp cur) (< cur 0.5)) 1.0 0.0)))
+    (cmacs-libregnum-editor-set-visual-param buffer id "cast_shadow" next)
+    (cmacs-libregnum-editor--sync-panels buffer id)
+    (message "Cast shadow: %s (metadata — effective when shadow mapping lands)"
+             (if (> next 0.5) "on" "off"))))
+
+(defvar cmacs-libregnum-editor-display-menu-items
+  `((:label "Toggle wireframe"
+     :action cmacs-libregnum-editor--ctx-toggle-wireframe)
+    (:label "Toggle cast shadow"
+     :action cmacs-libregnum-editor--ctx-toggle-cast-shadow))
+  "Items for the right-click \"Display\" submenu (primitives and meshes).")
+
 (defvar cmacs-libregnum-editor-material-menu-items
   `((:label "Set color…"     :action cmacs-libregnum-editor--ctx-set-color)
     (:label "Set roughness…" :action cmacs-libregnum-editor--ctx-set-roughness)
@@ -2403,6 +2601,9 @@ all rotations apply to every node).")
     (:label "Material"
      :kinds (primitive mesh)
      :submenu cmacs-libregnum-editor-material-menu-items)
+    (:label "Display"
+     :kinds (primitive mesh)
+     :submenu cmacs-libregnum-editor-display-menu-items)
     (:label "Open asset file"
      :kinds (mesh sprite audio)
      :action cmacs-libregnum-editor--ctx-open-asset
@@ -2434,14 +2635,48 @@ all rotations apply to every node).")
     (:label "Align to view"
      :kinds (camera)
      :action cmacs-libregnum-editor--ctx-align-camera-to-view)
+    (:label "Look through this camera"
+     :kinds (camera)
+     :action ,(lambda (b i)
+                (if (fboundp 'cmacs-libregnum-editor-look-through)
+                    (ignore-errors (cmacs-libregnum-editor-look-through b i))
+                  (user-error
+                   "cmacs-libregnum-editor-look-through not yet available")))
+     :enable ,(lambda (_b _i)
+                (fboundp 'cmacs-libregnum-editor-look-through)))
+    (:label "Stop look-through"
+     :kinds t
+     :action ,(lambda (b _i)
+                (if (fboundp 'cmacs-libregnum-editor-look-through-off)
+                    (progn
+                      (ignore-errors
+                        (cmacs-libregnum-editor-look-through-off b))
+                      (message "Stopped look-through; back to free-fly camera"))
+                  (user-error
+                   "cmacs-libregnum-editor-look-through-off not yet available")))
+     :enable ,(lambda (b _i)
+                (and (fboundp 'cmacs-libregnum-editor-look-through-p)
+                     (ignore-errors
+                       (cmacs-libregnum-editor-look-through-p b)))))
     (:sep)
     (:label "Set audio range…"
      :kinds (audio)
      :action ,(lambda (_b _i)
                 (call-interactively #'cmacs-libregnum-editor-set-audio-range)))
+    (:label "Set volume…"
+     :kinds (audio)
+     :action ,(lambda (_b _i)
+                (call-interactively
+                 #'cmacs-libregnum-editor-set-audio-volume)))
     (:label "Play audio"
      :kinds (audio)
      :action ,(lambda (_b _i) (cmacs-libregnum-editor-play-audio)))
+    (:label "Stop audio"
+     :kinds (audio)
+     :action ,(lambda (_b _i) (cmacs-libregnum-editor-stop-audio))
+     :enable ,(lambda (b _i)
+                (with-current-buffer b
+                  cmacs-libregnum-editor--audio-handle)))
     (:sep)
     (:label "Set tilemap brush…"
      :kinds (tilemap)

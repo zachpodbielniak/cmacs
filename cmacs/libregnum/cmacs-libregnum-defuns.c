@@ -1807,6 +1807,114 @@ Returns a list of integers (may be empty), or nil if BUFFER has no view.  */)
   return result;
 }
 
+/* ── Feature 1: real-time scene shading ─────────────────────────────── */
+
+DEFUN ("cmacs-libregnum-editor-set-shading",
+       Fcmacs_libregnum_editor_set_shading,
+       Scmacs_libregnum_editor_set_shading, 2, 2, 0,
+       doc: /* Enable or disable Blinn-Phong shading in BUFFER's editor.
+ON non-nil enables lit rendering (up to 4 LIGHT nodes drive the shader);
+nil disables it and reverts to the default unlit material.
+Returns t on success, nil if BUFFER has no editor view.  */)
+  (Lisp_Object buffer, Lisp_Object on)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  cmacs_libregnum_render_ctx_editor_set_shading (ctx, !NILP (on));
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-editor-shading-p",
+       Fcmacs_libregnum_editor_shading_p,
+       Scmacs_libregnum_editor_shading_p, 1, 1, 0,
+       doc: /* Return t if BUFFER's editor has shading enabled, nil otherwise.  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  return cmacs_libregnum_render_ctx_editor_shading_p (ctx) ? Qt : Qnil;
+}
+
+/* ── Feature 2: look-through camera ─────────────────────────────────── */
+
+DEFUN ("cmacs-libregnum-editor-look-through",
+       Fcmacs_libregnum_editor_look_through,
+       Scmacs_libregnum_editor_look_through, 2, 2, 0,
+       doc: /* Drive BUFFER's viewport from the CAMERA node at ID.
+Returns t if ID is a valid CAMERA node; nil otherwise.
+While active, orbit/pan/zoom/focus are suppressed.  */)
+  (Lisp_Object buffer, Lisp_Object id)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (id);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  gboolean ok = cmacs_libregnum_render_ctx_editor_look_through
+                  (ctx, (gint) XFIXNUM (id));
+  if (ok) cmacs_libregnum_view_request_redraw (v);
+  return ok ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-libregnum-editor-look-through-off",
+       Fcmacs_libregnum_editor_look_through_off,
+       Scmacs_libregnum_editor_look_through_off, 1, 1, 0,
+       doc: /* Cancel look-through in BUFFER and restore the orbit camera.
+Always returns t.  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qt;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  cmacs_libregnum_render_ctx_editor_look_through_off (ctx);
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-editor-look-through-p",
+       Fcmacs_libregnum_editor_look_through_p,
+       Scmacs_libregnum_editor_look_through_p, 1, 1, 0,
+       doc: /* Return the look-through node id if active in BUFFER, nil otherwise.  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  gint result = cmacs_libregnum_render_ctx_editor_look_through_p (ctx);
+  return (result >= 0) ? make_fixnum (result) : Qnil;
+}
+
+/* ── Feature 3: per-node visual param read-back ─────────────────────── */
+
+DEFUN ("cmacs-libregnum-editor-get-visual-param",
+       Fcmacs_libregnum_editor_get_visual_param,
+       Scmacs_libregnum_editor_get_visual_param, 4, 4, 0,
+       doc: /* Return the named visual param of node ID in BUFFER as a float.
+NAME is the param name string (e.g. \"wireframe\", \"fov\").
+DEFAULT is returned when ID is invalid or the param is not set.  */)
+  (Lisp_Object buffer, Lisp_Object id, Lisp_Object name, Lisp_Object defval)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (id);
+  CHECK_STRING (name);
+  CHECK_NUMBER (defval);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return defval;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  double result = cmacs_libregnum_render_ctx_editor_get_visual_param
+                    (ctx, (gint) XFIXNUM (id),
+                     SSDATA (name),
+                     XFLOATINT (defval));
+  return make_float (result);
+}
+
 extern Lisp_Object *cmacs_libregnum__buffers_root  (void);
 extern Lisp_Object *cmacs_libregnum__payloads_root (void);
 
@@ -1924,6 +2032,14 @@ syms_of_cmacs_libregnum_defuns (void)
   defsubr (&Scmacs_libregnum_editor_select_remove);
   defsubr (&Scmacs_libregnum_editor_select_clear);
   defsubr (&Scmacs_libregnum_editor_selected_ids);
+
+  /* Render features: shading, look-through, visual param. */
+  defsubr (&Scmacs_libregnum_editor_set_shading);
+  defsubr (&Scmacs_libregnum_editor_shading_p);
+  defsubr (&Scmacs_libregnum_editor_look_through);
+  defsubr (&Scmacs_libregnum_editor_look_through_off);
+  defsubr (&Scmacs_libregnum_editor_look_through_p);
+  defsubr (&Scmacs_libregnum_editor_get_visual_param);
 }
 
 #endif /* HAVE_CMACS_LIBREGNUM */

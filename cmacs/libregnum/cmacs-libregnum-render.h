@@ -425,5 +425,31 @@ extern void     cmacs_libregnum_render_ctx_editor_select_clear
 extern GArray  *cmacs_libregnum_render_ctx_editor_selected_ids
                               (CmacsLibregnumRenderCtx *r);
 
+/* Render features: shading, look-through camera, visual param read-back. */
+
+/* Feature 1: real-time Blinn-Phong scene shading.
+ * set_shading enables/disables lit rendering; shading_p queries the state. */
+extern void     cmacs_libregnum_render_ctx_editor_set_shading
+                              (CmacsLibregnumRenderCtx *r, gboolean on);
+extern gboolean cmacs_libregnum_render_ctx_editor_shading_p
+                              (CmacsLibregnumRenderCtx *r);
+
+/* Feature 2: look-through camera.
+ * look_through drives the viewport from CAMERA node ID (returns FALSE if not
+ * a CAMERA node); look_through_off restores orbit; look_through_p returns
+ * the active node id or -1. */
+extern gboolean cmacs_libregnum_render_ctx_editor_look_through
+                              (CmacsLibregnumRenderCtx *r, gint id);
+extern void     cmacs_libregnum_render_ctx_editor_look_through_off
+                              (CmacsLibregnumRenderCtx *r);
+extern gint     cmacs_libregnum_render_ctx_editor_look_through_p
+                              (CmacsLibregnumRenderCtx *r);
+
+/* Feature 3: per-node visual param read-back.
+ * Returns the named param for node ID as a double, or DEF on any error. */
+extern double   cmacs_libregnum_render_ctx_editor_get_visual_param
+                              (CmacsLibregnumRenderCtx *r, gint id,
+                               const char *name, double def);
+
 #endif /* HAVE_CMACS_LIBREGNUM */
 #endif /* CMACS_LIBREGNUM_RENDER_H */
