@@ -1,0 +1,108 @@
+#+TITLE: GNU's Eye — Layer Catalogue
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:2 num:t
+
+Every shipped data layer, by category.  All layers are *off by default*;
+enable them from the toggle pane (left).  Layer files are listed in
+~cmacs-gnuseye-layer-files~ and loaded when the globe opens.
+
+* Astronomical
+
+** satellites — ~cmacs-gnuseye-astro.el~
+- Source: CelesTrak GP element sets (TLE), no key.
+- Endpoint: ~https://celestrak.org/NORAD/elements/gp.php?GROUP=<group>&FORMAT=tle~.
+- Refresh: TLEs at most every ~cmacs-gnuseye-astro-tle-ttl~ (6 h, cached);
+  positions re-propagated locally every smooth tick (no network).
+- Geometry: heading-oriented satellite icon high above the surface + a
+  one-orbit ground-track trail.
+- Motion: ~:advance~ re-propagates each satellite (two-body Keplerian) to now.
+- Config: ~cmacs-gnuseye-astro-group~ (default "stations"),
+  ~-astro-max~ (40), ~-astro-show-orbits~ (t), ~-astro-tle-ttl~.
+
+* Air
+
+** aircraft — ~cmacs-gnuseye-air.el~
+- Source: adsb.lol, a free keyless community ADS-B aggregator (fallback:
+  OpenSky with ~OPENSKY_USER~/~OPENSKY_PASS~).
+- Endpoint: ~https://api.adsb.lol/v2/lat/LAT/lon/LON/dist/NM~.
+- Refresh: 20 s.  Geometry: little-plane icon at exaggerated altitude with a
+  drop-line; ~:cluster~ on (count badges when zoomed out).
+- Motion: great-circle dead reckoning between fetches.
+- Global sweep: ~cmacs-gnuseye-air-global~ (t) sweeps the whole globe with
+  ~-air-global-tiles~ overlapping queries (~-air-global-radius-nm~ 5000)
+  merged by ICAO hex, fired in parallel on C worker threads with a fast
+  view-local query first.  ~-air-marker-scale~ (0.15), ~-air-source~.
+
+* Marine
+
+** vessels — ~cmacs-gnuseye-marine.el~
+- Source: an AIS vessel JSON feed at ~cmacs-gnuseye-marine-url~ (nil = off).
+  Free *global* AIS is mostly websocket + key; point this at a regional
+  open-AIS REST endpoint or a LAN AIS-catcher / rtl-ais server.
+- Refresh: 30 s.  Geometry: hull + superstructure, bow = heading;
+  ~:cluster~ on.  Motion: dead reckoning (SOG converted knots → m/s).
+- Config: ~cmacs-gnuseye-marine-url~, ~-marine-max~ (300).
+
+* Weather & events
+
+** quakes — ~cmacs-gnuseye-weather.el~
+- Source: USGS earthquakes GeoJSON, no key.  Endpoint
+  ~.../summary/all_hour.geojson~ (~cmacs-gnuseye-quakes-url~).  Refresh 300 s.
+- Geometry: magnitude-sized sphere.
+
+** launches — ~cmacs-gnuseye-weather.el~
+- Source: Launch Library 2 upcoming launches, no key (rate-limited).
+  ~cmacs-gnuseye-launches-url~.  Refresh 1800 s.  Geometry: rocket on the pad.
+
+** fires — ~cmacs-gnuseye-weather.el~
+- Source: NASA FIRMS active fires (CSV); needs ~FIRMS_MAP_KEY~.  Refresh 900 s.
+  ~cmacs-gnuseye-fires-source~ (default VIIRS_SNPP_NRT).  Geometry: flame
+  sized by fire radiative power.
+
+* Natural events
+
+** natural-events — ~cmacs-gnuseye-natural.el~
+- Source: NASA EONET v3 (one rich keyless feed): volcanoes, severe storms,
+  wildfires, sea/lake ice & icebergs, floods, landslides, …
+- Endpoint: ~https://eonet.gsfc.nasa.gov/api/v3/events?status=open&limit=200~
+  (~cmacs-gnuseye-eonet-url~).  Refresh 1800 s.
+- Geometry: point at each event's most recent fix; the category maps to a
+  marker kind (fire / volcano / storm / event).
+
+** nws-alerts — ~cmacs-gnuseye-natural.el~
+- Source: US NWS active alerts (GeoJSON), no key.  *Requires a descriptive
+  User-Agent* (~cmacs-gnuseye-nws-user-agent~) — NWS returns 403 otherwise.
+- Endpoint: ~https://api.weather.gov/alerts/active~ (~cmacs-gnuseye-nws-url~).
+  Refresh 300 s; cap ~cmacs-gnuseye-nws-max~ (150).
+- Geometry: each polygon-bearing warning becomes a *filled, severity-coloured
+  zone* (~:polygon~) plus a centroid ~alert~ marker.  Extreme→red,
+  Severe→orange, Moderate→yellow, Minor→blue.
+
+* Space weather
+
+** aurora — ~cmacs-gnuseye-space.el~
+- Source: NOAA SWPC OVATION auroral-oval forecast, no key.
+- Endpoint: ~https://services.swpc.noaa.gov/json/ovation_aurora_latest.json~
+  (~cmacs-gnuseye-aurora-url~).  Refresh 300 s.
+- Geometry: a band of probability-coloured dots (brighter green = higher
+  probability).  Config: ~-aurora-threshold~ (25 %), ~-aurora-step~ (2),
+  ~-aurora-max~ (600).
+
+* Conflict & geopolitics
+
+** gdelt — ~cmacs-gnuseye-conflict.el~
+- Source: GDELT GEO 2.0 geolocated news, no key (~1 req/s).
+- Endpoint: ~https://api.gdeltproject.org/api/v2/geo/geo?query=...&format=GeoJSON~.
+  Refresh 900 s.  Geometry: a point per location, sized by mention volume;
+  ~:cluster~ on.
+- Config: ~cmacs-gnuseye-gdelt-query~ (default a conflict query),
+  ~-gdelt-timespan~ ("1d"), ~-gdelt-max~ (250).
+
+* Planned layers
+
+Infrastructure (submarine cables, cyber-threat IPs, ports/chokepoints),
+health & society (OpenAQ air quality, Safecast radiation, disease outbreaks,
+UNHCR displacement), media & cameras (ISS live stream → ~cmacs-video~, GDELT
+news → ~gsurf~), and keyed feeds (ACLED, Windy webcams, Cloudflare outages,
+military bases / spaceports).  Each is a ~1-file ~cmacs-gnuseye-define-layer~
+on the same model.

@@ -96,6 +96,77 @@ list/layers panels run in ~motion~ state so ~hjkl~ navigation works while
 ~M-x cmacs-gnuseye-layers~ opens the layer control panel (toggle layers
 with ~RET~; ~g~ refreshes the list).
 
+** Entity-type toggle pane (categories)
+
+The top-left pane organises layers into *collapsible categories* (Air
+traffic, Astronomical, Marine, Weather & events, Natural events, Space
+weather, Conflict & geopolitics, Infrastructure, Health & society, Media &
+cameras, Markets).  A row whose id is a category header shows ~▸~/~▾~ and a
+count of how many of its layers are on; ~SPC~/~RET~ on a header expands or
+collapses it, on a layer toggles that layer.  *Everything starts off and
+every category starts collapsed*, so the globe opens clean (map only) and you
+opt into exactly the feeds you want.  Order and titles are configurable via
+~cmacs-gnuseye-group-order~ and ~cmacs-gnuseye-group-titles~.
+
+* Globe visualization
+
+Beyond markers and trails the globe supports:
+
+- *Day/night terminator.*  The globe is lit by the real Sun: the subsolar
+  point is computed for the current time and fed to the globe shader, so the
+  lit hemisphere tracks the actual time of day (refreshed every
+  ~cmacs-gnuseye-sun-interval~ seconds; toggle with ~cmacs-gnuseye-day-night~).
+  The night side stays partly lit with a cool tint so markers remain readable.
+- *Filled polygons.*  Translucent regions draped on the sphere — weather
+  *alert zones* (US NWS), aurora bands, country *choropleth* fills, and any
+  AOI.  An entity may carry a ~:polygon~ ring (drawn per-tick, cleared with
+  the markers); persistent fills (choropleth/aurora) are added directly via
+  ~cmacs-gnuseye-add-polygon~ with PERSISTENT non-nil.  Fills are triangulated
+  as a polar grid of great-circle rings so they drape correctly at any size,
+  alpha-blended and two-sided.
+- *Range / coverage rings.*  ~cmacs-gnuseye-circle-points~ (built on
+  ~cmacs-gnuseye-destination~) returns a small-circle of a given radius about
+  a point — for satellite footprints, base/detection radii, and geofence
+  circles — usable as a polyline outline or a filled footprint.
+- *Great-circle routes.*  ~cmacs-gnuseye-great-circle~ samples a route
+  (trade lanes, cables, flight paths) for use as a ~:trail~.
+- *Choropleth.*  ~cmacs-gnuseye-choropleth~ fills countries by a scalar map
+  (ISO-A3 → 0..1) through a green→red translucent ramp on the cached Natural
+  Earth admin-0 set; ~cmacs-gnuseye-choropleth-clear~ removes it.  The
+  intelligence layer's country-instability index drives it.
+- *Low-zoom clustering.*  Dense point layers declared ~:cluster~ (aircraft,
+  vessels, GDELT) collapse nearby markers into a single count badge when
+  zoomed out, so a continent's worth of aircraft reads as a few numbers
+  instead of an unreadable pile.  Cluster cells are stable, so they don't
+  flicker; clicking a badge flies in and dissolves it.  Toggle with
+  ~cmacs-gnuseye-cluster~.
+
+* Layer lifecycle and motion
+
+** Atomic enable / disable
+
+Toggling a type off is *atomic and complete*: its refresh timer is
+cancelled, its entities are dropped from the index, and all its markers,
+arcs, and per-tick polygons are cleared from the globe immediately.  A
+*generation token* on each layer is bumped on every enable and disable, and
+every async fetch captures the token at dispatch; a response that arrives
+after the layer was toggled (a slow HTTP reply still in flight) finds a stale
+token and is dropped silently.  So a disabled layer can never be re-drawn by
+an in-flight update — no ghost markers, no flicker back to life.
+
+** Dead reckoning (smooth motion)
+
+Every layer whose entities move declares an ~:advance~ hook.  Between the
+(slower) data fetches the shared smooth-motion tick
+(~cmacs-gnuseye-smooth~, every ~cmacs-gnuseye-smooth-interval~ ≈ 0.4 s) calls
+it to glide each entity along its current heading and speed; the next fetch
+*course-corrects* the extrapolated position back to truth.  Aircraft and
+vessels great-circle dead-reckon (the shared
+~cmacs-gnuseye-dead-reckon-layer~); satellites re-propagate their orbit.  Any
+new moving layer gets the same behaviour by setting
+~:advance #'cmacs-gnuseye-dead-reckon-layer~ and reporting ~:speed~ (m/s) +
+~:heading~.
+
 * Architecture
 
 #+begin_example
@@ -138,6 +209,8 @@ A layer's fetch function returns a list of entity plists.  Only ~:id~,
 | ~:color~     | "#rrggbb" override; nil = derive from ~:kind~.             |
 | ~:scale~     | marker size multiplier (default 1.0).                      |
 | ~:trail~     | list of (LAT LON ALT) → polyline (orbit/track/wake).       |
+| ~:polygon~   | list of (LAT LON) → filled translucent region draped on the globe (alert zone, AOI). |
+| ~:label-mode~ | 0 never / 1 selected / 2 hover (default) / 3 always.      |
 | ~:detail~    | (lambda (ENTITY) …) override of the layer detail fn.       |
 | ~:data~      | opaque record surfaced in the detail view (the escape hatch). |
 | ~:ts~        | epoch seconds of this fix.                                  |
@@ -173,25 +246,48 @@ returns the full record to the layer's detail function.
 Re-evaluate the form to redefine the layer; toggle it on in the layers
 panel.  No rebuild required.
 
+~cmacs-gnuseye-define-layer~ keys: ~:title :group :kind :fetch :interval
+:default-on :detail :needs-key :advance :cluster~ (see *Layer lifecycle and
+motion* for ~:advance~ and *Globe visualization* for ~:cluster~).
+
 Helpers:
 - ~cmacs-gnuseye-fetch-json~ / ~cmacs-gnuseye-fetch-text~ — async GET that
-  prefers the native libsoup client and falls back to ~url-retrieve~.
+  prefers the native libsoup client and falls back to ~url-retrieve~.  A
+  HEADERS alist is supported (e.g. a ~User-Agent~ for NWS).
 - ~cmacs-gnuseye-secret~ — resolve an API key from an env var,
   ~$XDG_CONFIG_HOME/cmacs/gnuseye/keys.el~, or a default.
 - Geodesy DEFUNs: ~cmacs-gnuseye-latlon-to-xyz~, ~-haversine~, ~-bearing~,
   ~-great-circle~.
+- Motion + geometry (Elisp): ~cmacs-gnuseye-dead-reckon~,
+  ~-dead-reckon-layer~ (a ready-made ~:advance~), ~-destination~,
+  ~-circle-points~ (range rings).
+- Globe drawing DEFUNs: ~cmacs-gnuseye-add-polygon~ / ~-clear-polygons~
+  (filled regions), ~-add-coastline~ (polylines), ~-add-label~, ~-add-flag~,
+  ~-set-sun-time~ (terminator), ~-fly-to~, ~-view-center~.
+- Choropleth: ~cmacs-gnuseye-choropleth~ / ~-choropleth-clear~.
 - Satellites: ~cmacs-gnuseye-tle-parse~, ~-sat-propagate~, ~-sat-track~.
 
 * Built-in layers
 
-| Layer        | Source                       | Key | Default |
-|--------------+------------------------------+-----+---------|
-| ~satellites~ | CelesTrak TLE + propagation  | no  | on      |
-| ~aircraft~   | adsb.lol ADS-B (keyless)     | no  | on      |
-| ~vessels~    | AIS (configurable URL)       | opt | off     |
-| ~quakes~     | USGS earthquakes (GeoJSON)   | no  | on      |
-| ~launches~   | Launch Library 2             | no  | off     |
-| ~fires~      | NASA FIRMS                   | yes | off     |
+| Layer            | Category      | Source                        | Key | Geometry |
+|------------------+---------------+-------------------------------+-----+----------|
+| ~satellites~     | astronomical  | CelesTrak TLE + propagation   | no  | point+orbit |
+| ~aircraft~       | air           | adsb.lol ADS-B (keyless)      | no  | point (clustered) |
+| ~vessels~        | marine        | AIS (configurable URL)        | opt | point (clustered) |
+| ~quakes~         | weather       | USGS earthquakes (GeoJSON)    | no  | point    |
+| ~launches~       | weather       | Launch Library 2              | no  | point    |
+| ~fires~          | weather       | NASA FIRMS                    | yes | point    |
+| ~natural-events~ | natural       | NASA EONET v3                 | no  | point    |
+| ~nws-alerts~     | natural       | US NWS active alerts          | no  | filled zone |
+| ~aurora~         | space-weather | NOAA SWPC OVATION             | no  | point band |
+| ~gdelt~          | conflict      | GDELT GEO 2.0 (query)         | no  | point (clustered) |
+
+Everything is *off by default*; enable from the toggle pane.  ~natural-events~
+is one rich keyless feed (volcanoes, severe storms, wildfires, icebergs,
+floods, landslides).  ~nws-alerts~ draws each US warning as a filled,
+severity-coloured zone polygon plus a centroid marker.  ~aurora~ plots the
+OVATION oval as a band of probability-coloured dots.  ~gdelt~ geolocates news
+for ~cmacs-gnuseye-gdelt-query~, points sized by mention volume.
 
 - *Satellites* fetch TLEs from CelesTrak at most every few hours
   (~cmacs-gnuseye-astro-group~, default "stations") and re-propagate them
@@ -256,7 +352,11 @@ libregnum:
 Right-handed, Y-up, matching libregnum scenes.  The globe is a sphere of
 radius 6.371 world units, with 1 unit == 1000 km, so altitudes lift markers
 off the surface at a natural scale.  ~lat=0,lon=0~ is at ~(+R,0,0)~; the
-north pole at ~(0,+R,0)~; longitude increases eastward toward ~+Z~.
+north pole at ~(0,+R,0)~; longitude increases eastward toward ~-Z~ (so,
+viewed from outside with north up, east is to the right — a standard,
+un-mirrored globe).  All vector geography, polygons, rings, and the
+day/night sun vector are computed in this same convention so they always
+align with the markers.
 
 * Satellite propagation accuracy
 
@@ -277,12 +377,22 @@ escalation path for tens of thousands of contacts.
 
 * Roadmap
 
-The Elisp-layer model makes these cheap to add: a day/night terminator and
-city-lights overlay (from the existing solar math), NOAA space-weather /
-aurora ovals, NWS alert polygons, OpenAQ air quality, Blitzortung lightning,
-ISS live video (a camera marker → ~cmacs-video-open~), GDELT geocoded news,
-submarine cables (great-circle polylines), time-scrubbing/replay (every
-push carries ~:ts~), and podomation geofence alerts.
+Done: dynamic day/night terminator, filled-polygon primitive, NWS alert
+zones, NOAA aurora oval, GDELT geocoded news, NASA EONET, range/coverage
+rings, country choropleth, low-zoom clustering, atomic disable, and
+dead-reckoning on every moving layer.
+
+Planned (each a ~1-file layer or a focused feature, on the same model):
+submarine cables, cyber-threat IPs, ports/chokepoints, OpenAQ air quality,
+Safecast radiation, disease outbreaks, UNHCR displacement, ISS live video
+(a camera marker → ~cmacs-video-open~) and GDELT news → ~gsurf~; then
+search-everything + a command palette, a live stats pane, bookmarks &
+camera tours, geofence alerts via podomation, time-scrubbing/replay (every
+push carries ~:ts~), an AI intelligence layer (region briefs, cross-source
+correlation, a country-instability index driving the choropleth), keyed
+feeds (ACLED, Windy webcams, Cloudflare outages, military bases), and
+non-geospatial market/macro dashboards.  Track-history fade trails are a
+small follow-on.
 
 * Files
 
@@ -293,7 +403,11 @@ push carries ~:ts~), and podomation geofence alerts.
 | ~cmacs/gnuseye/cmacs-gnuseye-sgp4.c~   | TLE parse + propagation           |
 | ~cmacs/gnuseye/cmacs-gnuseye-http.c~   | async HTTP                        |
 | ~cmacs/gnuseye/cmacs-gnuseye-defuns.c~ | Elisp ↔ globe boundary            |
-| ~lisp/cmacs/cmacs-gnuseye.el~          | layer model, mode, command, UI    |
-| ~lisp/cmacs/cmacs-gnuseye-{astro,air,marine,weather}.el~ | the layers |
+| ~lisp/cmacs/cmacs-gnuseye.el~          | layer model, mode, UI, viz, motion |
+| ~lisp/cmacs/cmacs-gnuseye-{astro,air,marine,weather}.el~ | core layers |
+| ~lisp/cmacs/cmacs-gnuseye-{natural,space,conflict}.el~ | wave-1 layers |
+| ~cmacs/gnuseye/cmacs-gnuseye-geomath.h~ | shared geodesy (subsolar, destination) |
+| ~cmacs/libregnum/cmacs-libregnum-render.{c,h}~ | polygon-model lists + draw |
 | ~cmacs/mcp/cmacs-mcp-tools-gnuseye.c~  | MCP tools                         |
+| ~doc_org/cmacs/gnuseye/~                | comprehensive reference (this dir) |
 | ~test/cmacs/cmacs-gnuseye-tests.el~    | ERT tests                         |
