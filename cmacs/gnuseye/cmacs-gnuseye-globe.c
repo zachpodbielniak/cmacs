@@ -30,12 +30,57 @@
 #define GLOBE_TEX_W 2048
 #define GLOBE_TEX_H 1024
 
+/* Sun-lit globe shader: a soft day/night terminator from a fixed world sun
+ * direction, with the night side kept partly visible (so markers anywhere
+ * stay readable) and a cool tint.  Needs no per-frame uniforms beyond the
+ * matrices raylib sets automatically -- sunDir is a constant -- so it is
+ * built entirely here at globe-build time.  Uniform/attribute names match
+ * raylib's auto-detected defaults (mvp/matModel/matNormal/texture0/...). */
+static const char *s_globe_vs =
+  "#version 330\n"
+  "in vec3 vertexPosition;\n"
+  "in vec2 vertexTexCoord;\n"
+  "in vec3 vertexNormal;\n"
+  "in vec4 vertexColor;\n"
+  "uniform mat4 mvp;\n"
+  "uniform mat4 matModel;\n"
+  "uniform mat4 matNormal;\n"
+  "out vec2 fragTexCoord;\n"
+  "out vec4 fragColor;\n"
+  "out vec3 fragNormal;\n"
+  "void main(){\n"
+  "  fragTexCoord = vertexTexCoord;\n"
+  "  fragColor = vertexColor;\n"
+  "  fragNormal = normalize(vec3(matNormal*vec4(vertexNormal,1.0)));\n"
+  "  gl_Position = mvp*vec4(vertexPosition,1.0);\n"
+  "}\n";
+static const char *s_globe_fs =
+  "#version 330\n"
+  "in vec2 fragTexCoord;\n"
+  "in vec4 fragColor;\n"
+  "in vec3 fragNormal;\n"
+  "uniform sampler2D texture0;\n"
+  "uniform vec4 colDiffuse;\n"
+  "uniform vec3 sunDir;\n"
+  "out vec4 finalColor;\n"
+  "void main(){\n"
+  "  vec3 N = normalize(fragNormal);\n"
+  "  vec3 base = (texture(texture0,fragTexCoord)*colDiffuse*fragColor).rgb;\n"
+  "  float ndl = dot(N, normalize(sunDir));\n"
+  "  float day = smoothstep(-0.35, 0.45, ndl);\n"   /* soft wide terminator */
+  "  float shade = 0.40 + 0.60*day;\n"              /* 0.40 night .. 1.0 day */
+  "  vec3 c = base*shade;\n"
+  "  c = mix(c*vec3(0.55,0.68,1.10), c, day);\n"     /* cool night tint */
+  "  finalColor = vec4(min(c,vec3(1.0)),1.0);\n"
+  "}\n";
+
 /* Per-globe state attached to the sphere model via g_object_set_data_full,
  * so it is freed when the render ctx releases the background model. */
 typedef struct
 {
   GrlImage   *img;    /* CPU master (owned) for region recompositing */
   GrlTexture *tex;    /* GPU albedo texture (owned ref) */
+  GrlShader  *shader; /* owned ref, or NULL (unlit fallback) */
   int         tw, th; /* texture dimensions */
   double      spin;   /* current spin (degrees) */
 } GnuseyeGlobe;
@@ -45,6 +90,7 @@ gnuseye_globe_free (gpointer p)
 {
   GnuseyeGlobe *g = p;
   if (!g) return;
+  g_clear_object (&g->shader);
   g_clear_object (&g->tex);
   g_clear_object (&g->img);
   g_free (g);
@@ -64,24 +110,26 @@ globe_state (CmacsLibregnumRenderCtx *r)
 static GrlImage *
 make_procedural_earth (int w, int h)
 {
-  g_autoptr (GrlColor) ocean = grl_color_new (18, 42, 78, 255);
-  GrlImage *img = grl_image_new_color (w, h, ocean);
+  g_autoptr (GrlColor) seed = grl_color_new (16, 36, 70, 255);
+  GrlImage *img = grl_image_new_color (w, h, seed);
   if (!img) return NULL;
 
-  g_autoptr (GrlColor) minor = grl_color_new (40, 72, 112, 255);
-  g_autoptr (GrlColor) major = grl_color_new (84, 128, 180, 255);
-  g_autoptr (GrlColor) tropic = grl_color_new (70, 150, 150, 255);
-  g_autoptr (GrlColor) cap   = grl_color_new (208, 222, 238, 255);
-  g_autoptr (GrlColor) band  = grl_color_new (24, 54, 96, 255);
-
-  /* Subtle equatorial brightening band for depth. */
-  for (int lat = -25; lat <= 25; lat += 1)
+  /* Smooth ocean gradient: deep navy at the poles -> brighter teal toward
+   * the equator (a per-row fill, cheap and soft). */
+  for (int y = 0; y < h; y++)
     {
-      int y = (int) ((90.0 - lat) / 180.0 * h);
-      grl_image_draw_line (img, 0, y, w - 1, y, band);
+      double lat = 90.0 - (double) y / h * 180.0;
+      double t = cos (lat * GNUSEYE_DEG2RAD);   /* 1 equator .. 0 poles */
+      guint8 rr = (guint8) (13 + 16 * t);
+      guint8 gg = (guint8) (30 + 44 * t);
+      guint8 bb = (guint8) (62 + 52 * t);
+      g_autoptr (GrlColor) oc = grl_color_new (rr, gg, bb, 255);
+      grl_image_draw_line (img, 0, y, w - 1, y, oc);
     }
 
-  /* Minor parallels every 10 deg, meridians every 15 deg. */
+  /* Faint graticule -- a reference grid, not a wireframe. */
+  g_autoptr (GrlColor) minor = grl_color_new (30, 58, 96, 255);
+  g_autoptr (GrlColor) major = grl_color_new (46, 84, 124, 255);
   for (int lat = -80; lat <= 80; lat += 10)
     {
       int y = (int) ((90.0 - lat) / 180.0 * h);
@@ -93,32 +141,20 @@ make_procedural_earth (int w, int h)
       if (x >= w) x = w - 1;
       grl_image_draw_line (img, x, 0, x, h - 1, minor);
     }
-
-  /* Emphasised reference lines (2 px): equator, prime meridian, tropics
-   * (+-23.5), polar circles (+-66.5). */
-  const double majlat[] = { 0, 23.5, -23.5, 66.5, -66.5 };
-  for (unsigned i = 0; i < G_N_ELEMENTS (majlat); i++)
-    {
-      int y = (int) ((90.0 - majlat[i]) / 180.0 * h);
-      const GrlColor *c = (i >= 1 && i <= 2) ? tropic : major;
-      grl_image_draw_line (img, 0, y, w - 1, y, c);
-      grl_image_draw_line (img, 0, y + 1, w - 1, y + 1, c);
-    }
-  for (int lon = -180; lon <= 180; lon += 90)   /* meridians + antimeridian */
+  /* Equator + prime/antimeridian a touch brighter (1 px). */
+  { int y = h / 2;
+    grl_image_draw_line (img, 0, y, w - 1, y, major); }
+  for (int lon = -180; lon <= 180; lon += 90)
     {
       int x = (int) ((lon + 180.0) / 360.0 * w);
-      if (x >= w - 1) x = w - 2;
+      if (x >= w) x = w - 1;
       grl_image_draw_line (img, x, 0, x, h - 1, major);
-      grl_image_draw_line (img, x + 1, 0, x + 1, h - 1, major);
     }
 
-  /* Polar caps (top/bottom ~12 deg). */
-  int cap_h = (int) (12.0 / 180.0 * h);
-  for (int y = 0; y < cap_h; y++)
-    {
-      grl_image_draw_line (img, 0, y, w - 1, y, cap);
-      grl_image_draw_line (img, 0, h - 1 - y, w - 1, h - 1 - y, cap);
-    }
+  /* No distinct polar ice band: a UV sphere's pole singularity smears the
+   * topmost texture rows into a wide fan, so any bright cap colour shows as
+   * an ugly band.  The latitude gradient already darkens the poles, which
+   * the pole singularity hides cleanly. */
   return img;
 }
 
@@ -150,7 +186,22 @@ cmacs_gnuseye_build (CmacsLibregnumRenderCtx *r, const char *base_texture_path)
   g->tex = grl_texture_new_from_image (g->img);
   g->spin = 0.0;
   if (g->tex)
-    grl_model_set_texture (model, 0, GRL_MATERIAL_MAP_ALBEDO, g->tex);
+    {
+      /* Build a lit material: albedo = earth texture, bound to the sun
+       * shader.  Falls back to a plain textured model if the shader fails
+       * to compile. */
+      GrlMaterial *mat = grl_material_new_default ();
+      grl_material_set_texture (mat, GRL_MATERIAL_MAP_ALBEDO, g->tex);
+      g->shader = grl_shader_new_from_memory (s_globe_vs, s_globe_fs, NULL);
+      if (g->shader)
+        {
+          grl_material_set_shader (mat, g->shader);
+          gint loc = grl_shader_get_location (g->shader, "sunDir");
+          if (loc >= 0)
+            grl_shader_set_value_vec3 (g->shader, loc, 0.90f, 0.25f, -0.35f);
+        }
+      grl_model_set_material (model, 0, mat);
+    }
 
   g_object_set_data_full (G_OBJECT (model), "gnuseye-globe", g,
                           gnuseye_globe_free);
@@ -362,16 +413,22 @@ cmacs_gnuseye_add_marker (CmacsLibregnumRenderCtx *r, int kind,
   switch (kind)
     {
     case CMACS_GNUSEYE_MARKER_AIRCRAFT:
-      /* fuselage + swept wings + tailplane + fin (nose at +fwd). */
-      add_box (r, P, right, up, fwd, rx,ry,rz, 0,0,0,      0.22*s,0.20*s,1.30*s, cr,cg,cb,ca);
-      add_box (r, P, right, up, fwd, rx,ry,rz, 0,0,-0.05*s,1.55*s,0.05*s,0.34*s, cr,cg,cb,ca);
-      add_box (r, P, right, up, fwd, rx,ry,rz, 0,0,-0.55*s,0.62*s,0.05*s,0.22*s, cr,cg,cb,ca);
-      add_box (r, P, right, up, fwd, rx,ry,rz, 0,0.16*s,-0.55*s,0.05*s,0.32*s,0.22*s, cr,cg,cb,ca);
+      /* tapered nose + fuselage + swept wings + 2 engines + tailplane +
+       * fin (nose at +fwd). */
+      add_box (r, P, right, up, fwd, rx,ry,rz, 0,0,0.62*s,  0.12*s,0.12*s,0.40*s, cr,cg,cb,ca);
+      add_box (r, P, right, up, fwd, rx,ry,rz, 0,0,0,       0.20*s,0.20*s,1.10*s, cr,cg,cb,ca);
+      add_box (r, P, right, up, fwd, rx,ry,rz, 0,0,-0.04*s, 1.62*s,0.05*s,0.36*s, cr,cg,cb,ca);
+      add_box (r, P, right, up, fwd, rx,ry,rz, -0.52*s,-0.09*s,0.02*s, 0.13*s,0.13*s,0.34*s, 70,70,80,ca);
+      add_box (r, P, right, up, fwd, rx,ry,rz,  0.52*s,-0.09*s,0.02*s, 0.13*s,0.13*s,0.34*s, 70,70,80,ca);
+      add_box (r, P, right, up, fwd, rx,ry,rz, 0,0,-0.58*s, 0.66*s,0.05*s,0.22*s, cr,cg,cb,ca);
+      add_box (r, P, right, up, fwd, rx,ry,rz, 0,0.17*s,-0.58*s,0.05*s,0.34*s,0.24*s, cr,cg,cb,ca);
       break;
     case CMACS_GNUSEYE_MARKER_SHIP:
-      /* hull + superstructure (bow at +fwd). */
-      add_box (r, P, right, up, fwd, rx,ry,rz, 0,0,0,       0.42*s,0.20*s,1.45*s, cr,cg,cb,ca);
-      add_box (r, P, right, up, fwd, rx,ry,rz, 0,0.20*s,-0.12*s,0.30*s,0.22*s,0.5*s, 235,235,245,ca);
+      /* tapered bow + hull + white superstructure + funnel (bow at +fwd). */
+      add_box (r, P, right, up, fwd, rx,ry,rz, 0,0.02*s,0.72*s, 0.22*s,0.17*s,0.32*s, cr,cg,cb,ca);
+      add_box (r, P, right, up, fwd, rx,ry,rz, 0,0,0,        0.40*s,0.20*s,1.30*s, cr,cg,cb,ca);
+      add_box (r, P, right, up, fwd, rx,ry,rz, 0,0.20*s,-0.15*s,0.28*s,0.22*s,0.45*s, 235,235,245,ca);
+      add_box (r, P, right, up, fwd, rx,ry,rz, 0,0.40*s,-0.30*s,0.10*s,0.20*s,0.12*s, 60,60,70,ca);
       break;
     case CMACS_GNUSEYE_MARKER_SATELLITE:
       /* body + two solar panels along the right axis. */
