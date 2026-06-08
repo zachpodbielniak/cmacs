@@ -377,6 +377,39 @@ marker individual."
   (clrhash cmacs-gnuseye--id-index)
   (clrhash cmacs-gnuseye--geofences))
 
+;;;; Phase 5: intelligence ----------------------------------------------------
+
+(ert-deftest cmacs-gnuseye--correlation-hotspot ()
+  "Co-located signals of >=2 distinct kinds form one hotspot; a lone signal
+does not."
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-intel)
+  (clrhash cmacs-gnuseye--id-index)
+  (puthash "q" (list :layer 'weather :id "q" :kind 'quake :lat 35.0 :lon 45.0)
+           cmacs-gnuseye--id-index)
+  (puthash "f" (list :layer 'natural :id "f" :kind 'fire :lat 35.4 :lon 45.3)
+           cmacs-gnuseye--id-index)
+  (puthash "lone" (list :layer 'weather :id "lone" :kind 'quake :lat -10.0 :lon 80.0)
+           cmacs-gnuseye--id-index)
+  (let* ((cmacs-gnuseye-intel-cell-deg 3.0)
+         (hs (cmacs-gnuseye-intel--compute-hotspots)))
+    (should (= (length hs) 1))
+    (should (eq (plist-get (car hs) :kind) 'hotspot)))
+  (clrhash cmacs-gnuseye--id-index))
+
+(ert-deftest cmacs-gnuseye--cii-scoring ()
+  "Signals near a country centroid score that country in [0,1]."
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-intel)
+  (should (equal (cmacs-gnuseye-intel--nearest-country 32.0 53.0) "IRN"))
+  (clrhash cmacs-gnuseye--id-index)
+  (puthash "s1" (list :layer 'x :id "s1" :kind 'quake :lat 32.0 :lon 53.0)
+           cmacs-gnuseye--id-index)
+  (let ((scores (cmacs-gnuseye-intel--compute-cii)))
+    (should (numberp (gethash "IRN" scores)))
+    (should (<= 0.0 (gethash "IRN" scores) 1.0)))
+  (clrhash cmacs-gnuseye--id-index))
+
 (provide 'cmacs-gnuseye-tests)
 
 ;;; cmacs-gnuseye-tests.el ends here

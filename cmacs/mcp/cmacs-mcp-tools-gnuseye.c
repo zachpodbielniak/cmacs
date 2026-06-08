@@ -115,6 +115,78 @@ handle_refresh (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
     ("(progn (require 'cmacs-gnuseye) (cmacs-gnuseye-refresh-all) \"refreshing\")"));
 }
 
+static McpToolResult *
+handle_query_entities (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
+{
+  g_autofree gchar *kind = ge_lisp_str (json_object_has_member (a, "kind")
+    ? json_object_get_string_member (a, "kind") : NULL);
+  double w = json_object_has_member (a, "west")  ? json_object_get_double_member (a, "west")  : -180.0;
+  double e = json_object_has_member (a, "east")  ? json_object_get_double_member (a, "east")  :  180.0;
+  double so = json_object_has_member (a, "south") ? json_object_get_double_member (a, "south") :  -90.0;
+  double no = json_object_has_member (a, "north") ? json_object_get_double_member (a, "north") :   90.0;
+  int limit = json_object_has_member (a, "limit")
+    ? (int) json_object_get_int_member (a, "limit") : 200;
+  (void) s; (void) n; (void) u;
+  return ge_eval_result (g_strdup_printf
+    ("(progn (require 'cmacs-gnuseye)"
+     " (let ((kf %s) (rows nil) (n 0))"
+     "  (catch 'done (maphash (lambda (id e)"
+     "    (when (and (or (null kf) (eq (plist-get e :kind) (intern kf)))"
+     "               (>= (or (plist-get e :lat) 0) %g) (<= (or (plist-get e :lat) 0) %g)"
+     "               (>= (or (plist-get e :lon) 0) %g) (<= (or (plist-get e :lon) 0) %g))"
+     "      (push (list :id id :kind (plist-get e :kind) :label (plist-get e :label)"
+     "                  :lat (plist-get e :lat) :lon (plist-get e :lon)) rows)"
+     "      (when (>= (setq n (1+ n)) %d) (throw 'done nil))))"
+     "   cmacs-gnuseye--id-index))"
+     "  (require 'json) (json-encode (nreverse rows))))",
+     kind, so, no, w, e, limit));
+}
+
+static McpToolResult *
+handle_brief (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
+{
+  (void) s; (void) n; (void) a; (void) u;
+  return ge_eval_result (g_strdup
+    ("(progn (require 'cmacs-gnuseye)"
+     " (let ((counts (make-hash-table :test 'eq)) (total 0))"
+     "  (maphash (lambda (_ e) (setq total (1+ total))"
+     "    (cl-incf (gethash (or (plist-get e :kind) 'generic) counts 0)))"
+     "   cmacs-gnuseye--id-index)"
+     "  (let (parts) (maphash (lambda (k c) (push (format \"%s:%d\" k c) parts)) counts)"
+     "   (format \"%d entities indexed; by kind: %s\""
+     "     total (string-join (sort parts #'string<) \", \")))))"));
+}
+
+static McpToolResult *
+handle_add_geofence (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
+{
+  g_autofree gchar *name = ge_lisp_str (json_object_has_member (a, "name")
+    ? json_object_get_string_member (a, "name") : "fence");
+  double lat = json_object_has_member (a, "lat") ? json_object_get_double_member (a, "lat") : 0.0;
+  double lon = json_object_has_member (a, "lon") ? json_object_get_double_member (a, "lon") : 0.0;
+  double rad = json_object_has_member (a, "radius_km")
+    ? json_object_get_double_member (a, "radius_km") : 100.0;
+  (void) s; (void) n; (void) u;
+  return ge_eval_result (g_strdup_printf
+    ("(progn (require 'cmacs-gnuseye) (require 'cmacs-gnuseye-geofence)"
+     " (cmacs-gnuseye-add-geofence %s %g %g %g)"
+     " (format \"geofence %s @ %g,%g r=%gkm\"))",
+     name, lat, lon, rad, name, lat, lon, rad));
+}
+
+static McpToolResult *
+handle_cii (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
+{
+  (void) s; (void) n; (void) a; (void) u;
+  return ge_eval_result (g_strdup
+    ("(progn (require 'cmacs-gnuseye) (require 'cmacs-gnuseye-intel)"
+     " (cmacs-gnuseye-intel--compute-cii)"
+     " (let (r) (maphash (lambda (iso v) (push (cons iso v) r))"
+     "   cmacs-gnuseye-cii--scores)"
+     "  (require 'json)"
+     "  (json-encode (seq-take (sort r (lambda (x y) (> (cdr x) (cdr y)))) 15))))"));
+}
+
 static void
 ge_add (McpServer *server, const gchar *name, const gchar *desc,
         const gchar *schema_json, gboolean read_only,
@@ -157,6 +229,33 @@ cmacs_mcp_tools_gnuseye_register (McpServer *server)
   ge_add (server, "gnuseye_refresh",
     "Refresh every enabled GNU's Eye layer now.",
     NULL, FALSE, handle_refresh);
+
+  ge_add (server, "gnuseye_query_entities",
+    "Query indexed entities by KIND and/or a bounding box "
+    "(WEST/SOUTH/EAST/NORTH degrees); returns JSON (capped by LIMIT).",
+    "{\"type\":\"object\",\"properties\":{"
+    "\"kind\":{\"type\":\"string\"},\"west\":{\"type\":\"number\"},"
+    "\"south\":{\"type\":\"number\"},\"east\":{\"type\":\"number\"},"
+    "\"north\":{\"type\":\"number\"},\"limit\":{\"type\":\"integer\"}}}",
+    TRUE, handle_query_entities);
+
+  ge_add (server, "gnuseye_brief",
+    "Summarise the entities currently indexed on the globe (counts by kind).",
+    NULL, TRUE, handle_brief);
+
+  ge_add (server, "gnuseye_add_geofence",
+    "Add a geofence: a circle of RADIUS_KM about LAT, LON named NAME.  "
+    "Entities entering/leaving emit podomation events.",
+    "{\"type\":\"object\",\"properties\":{"
+    "\"name\":{\"type\":\"string\"},\"lat\":{\"type\":\"number\"},"
+    "\"lon\":{\"type\":\"number\"},\"radius_km\":{\"type\":\"number\"}},"
+    "\"required\":[\"name\",\"lat\",\"lon\",\"radius_km\"]}",
+    FALSE, handle_add_geofence);
+
+  ge_add (server, "gnuseye_cii",
+    "Compute the country-instability index from active signals; returns the "
+    "ranked ISO-A3 -> score JSON.",
+    NULL, TRUE, handle_cii);
 }
 
 #endif /* HAVE_CMACS_MCP && HAVE_CMACS_GNUSEYE */
