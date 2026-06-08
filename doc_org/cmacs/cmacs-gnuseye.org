@@ -190,15 +190,17 @@ Helpers:
   (~cmacs-gnuseye-astro-group~, default "stations") and re-propagate them
   locally to "now" on a fast (5 s) timer — live motion needs no network.
   Each satellite carries its one-orbit ground track as a trail.
-- *Aircraft* come from adsb.lol by default --- a free, keyless community
-  ADS-B aggregator queried around whatever the globe is currently looking
-  at.  The query radius is chosen automatically to cover the visible area
-  at the current zoom (override with ~cmacs-gnuseye-air-radius-nm~), so the
-  planes fill the view rather than a single patch and follow it as you
-  navigate (re-fetched on fly-to; ~cmacs-gnuseye-refresh-view-layers~
-  re-scopes manually).  Set ~cmacs-gnuseye-air-source~ to ~opensky~ to use
-  OpenSky instead (its anonymous API now returns HTTP 429; put a free
-  account in ~OPENSKY_USER~/~OPENSKY_PASS~ to use it).
+- *Aircraft* come from adsb.lol --- a free, keyless community ADS-B
+  aggregator.  By default (~cmacs-gnuseye-air-global~) the whole globe is
+  swept with several large overlapping queries
+  (~cmacs-gnuseye-air-global-tiles~) and merged by ICAO hex, so *every*
+  aircraft adsb.lol can see (typically 5--6 k) is indexed and searchable in
+  the entity list.  Drawing is capped to the nearest
+  ~cmacs-gnuseye-render-max~ markers in the current view (default 700; the
+  rest stay searchable), and re-picked as you navigate.  Set
+  ~cmacs-gnuseye-air-global~ nil to instead query only the current view
+  (lighter), or ~cmacs-gnuseye-air-source~ to ~opensky~ for OpenSky (its
+  anonymous API now returns HTTP 429; ~OPENSKY_USER~/~OPENSKY_PASS~ help).
 - *Vessels* parse a vessel JSON feed from ~cmacs-gnuseye-marine-url~ (nil =
   off).  Free *global* AIS is mostly websocket + key; point this at a
   regional open-AIS REST endpoint or a LAN AIS-catcher/rtl-ais server.

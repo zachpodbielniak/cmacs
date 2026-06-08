@@ -294,11 +294,65 @@ PROPS is a plist with:
                     cmacs-gnuseye--id-index)))))
    cmacs-gnuseye--layer-entities))
 
+(defcustom cmacs-gnuseye-render-max 700
+  "Maximum markers rendered per layer on the globe.
+The full set stays in the entity index (so it is all searchable in the
+list); only the markers nearest the view are drawn, to keep the globe
+fast.  nil renders everything (heavy with worldwide aircraft)."
+  :type '(choice (const :tag "Render all" nil) integer)
+  :group 'cmacs-gnuseye)
+
+(defun cmacs-gnuseye--visible-entities (ents n buf)
+  "Up to N entities of ENTS within the viewport, spread out (not clumped).
+Filters to those within the on-screen angular radius of BUF's view centre,
+then evenly subsamples so the markers spread across the view rather than
+piling into the densest spot."
+  (let ((vc (ignore-errors (cmacs-gnuseye-view-center buf))))
+    (if (not (and (consp vc) (numberp (nth 0 vc))))
+        (seq-take ents n)
+      (let* ((d2r (/ float-pi 180.0))
+             (clat (* d2r (nth 0 vc))) (clon (* d2r (nth 1 vc)))
+             (dist (or (nth 2 vc) 12.0))
+             ;; On-screen angular radius (rad) from the zoom, with margin.
+             (vrad (min float-pi (max 0.08 (* (- dist 6.371) 0.10))))
+             (cosr (cos vrad))
+             (scl (sin clat)) (ccl (cos clat))
+             (vis nil) (len 0))
+        (dolist (e ents)
+          (let* ((la (* d2r (or (plist-get e :lat) 0)))
+                 (lo (* d2r (or (plist-get e :lon) 0)))
+                 (cosd (+ (* scl (sin la))
+                          (* ccl (cos la) (cos (- lo clon))))))
+            (when (>= cosd cosr) (push e vis) (setq len (1+ len)))))
+        (if (<= len n)
+            vis
+          ;; Evenly subsample VIS to ~N, single pass.
+          (let ((step (max 1 (/ len n))) (i 0) (out nil))
+            (dolist (e vis)
+              (when (zerop (mod i step)) (push e out))
+              (setq i (1+ i)))
+            out))))))
+
 (defun cmacs-gnuseye--render-layer (buf lname)
-  "Push LNAME's kind-filtered entities from the index to BUF's globe."
+  "Push LNAME's kind-filtered entities from the index to BUF's globe.
+All entities stay in the index; only up to `cmacs-gnuseye-render-max'
+nearest the view are drawn."
   (when (and buf (buffer-live-p buf) (cmacs-gnuseye-attached-p buf))
-    (let ((ents (seq-filter #'cmacs-gnuseye--entity-visible-p
-                            (gethash lname cmacs-gnuseye--layer-entities))))
+    (let* ((all (seq-filter #'cmacs-gnuseye--entity-visible-p
+                            (gethash lname cmacs-gnuseye--layer-entities)))
+           (ents all))
+      (when (and cmacs-gnuseye-render-max
+                 (> (length all) cmacs-gnuseye-render-max))
+        (setq ents (cmacs-gnuseye--visible-entities
+                    all cmacs-gnuseye-render-max buf))
+        ;; Always draw the selected marker, even if it is far from the view.
+        (when cmacs-gnuseye--selected-id
+          (let ((sel (seq-find
+                      (lambda (e) (equal (format "%s" (plist-get e :id))
+                                         cmacs-gnuseye--selected-id))
+                      all)))
+            (when (and sel (not (memq sel ents)))
+              (setq ents (cons sel ents))))))
       (cmacs-gnuseye-set-entities
        buf lname (cmacs-gnuseye--entities->vector ents)))))
 
@@ -389,7 +443,10 @@ and (unless NO-FLY) recentre the camera on it."
             (cmacs-gnuseye-fly-to cmacs-gnuseye-buffer
                                   (float (plist-get e :lat))
                                   (float (plist-get e :lon))
-                                  cmacs-gnuseye-focus-range t))))
+                                  cmacs-gnuseye-focus-range t))
+          ;; After the fly-to tween settles, re-pick nearest so the
+          ;; destination region's other markers fill in around it.
+          (run-with-timer 1.5 nil #'cmacs-gnuseye-refresh-view-layers)))
       (cmacs-gnuseye--show-inspector e)
       ;; Re-render so the selected marker is enlarged/brightened/labelled.
       (cmacs-gnuseye--render-all))
@@ -772,15 +829,20 @@ and clicking one selects it (inspector + recentre)."
   (message "GNU's Eye: refreshing enabled layers"))
 
 (defun cmacs-gnuseye-refresh-view-layers ()
-  "Re-fetch view-dependent layers (e.g. aircraft) for the current view.
-Aircraft are scoped to what the globe is looking at, so they should be
-re-fetched after the camera moves."
+  "Re-pick which markers are drawn for the current view.
+With worldwide aircraft the full set is already indexed, so this just
+re-renders the nearest `cmacs-gnuseye-render-max' to the new view centre
+\(instant, no network); fresh positions arrive on the layer timer.  In
+view-scoped (non-global) mode it also re-fetches aircraft."
   (interactive)
-  (dolist (name '(aircraft))
-    (let ((layer (and (boundp 'cmacs-gnuseye--layers)
-                      (gethash name cmacs-gnuseye--layers))))
-      (when (and layer (cmacs-gnuseye-layer-enabled layer))
-        (cmacs-gnuseye--refresh-layer layer)))))
+  (when (and cmacs-gnuseye-buffer (buffer-live-p cmacs-gnuseye-buffer))
+    (cmacs-gnuseye--render-all cmacs-gnuseye-buffer)
+    (when (and (boundp 'cmacs-gnuseye-air-global)
+               (not cmacs-gnuseye-air-global))
+      (let ((layer (and (boundp 'cmacs-gnuseye--layers)
+                        (gethash 'aircraft cmacs-gnuseye--layers))))
+        (when (and layer (cmacs-gnuseye-layer-enabled layer))
+          (cmacs-gnuseye--refresh-layer layer))))))
 
 (defun cmacs-gnuseye-fly-to-place (lat lon)
   "Fly the globe camera to LAT, LON (degrees, read from the minibuffer)."

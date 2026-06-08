@@ -25,9 +25,29 @@ useful (anonymous access returns HTTP 429 \"Too many requests\")."
                  (const :tag "OpenSky Network" opensky))
   :group 'cmacs-gnuseye)
 
-(defcustom cmacs-gnuseye-air-max 250
-  "Maximum number of aircraft markers to render."
-  :type 'integer
+(defcustom cmacs-gnuseye-air-global t
+  "When non-nil, track ALL aircraft worldwide, not just the current view.
+A handful of large overlapping queries sweep the globe and are merged by
+ICAO hex, so every aircraft adsb.lol can see is indexed and searchable.
+Rendering is still capped (`cmacs-gnuseye-render-max') for performance, but
+the full set is in the entity list."
+  :type 'boolean :group 'cmacs-gnuseye)
+
+(defcustom cmacs-gnuseye-air-global-tiles
+  '((0 . 0) (0 . 90) (0 . 180) (0 . -90) (50 . 10) (40 . -100))
+  "Query centres (LAT . LON) for the global aircraft sweep.
+The defaults (four equatorial points plus dense Europe/US) cover the world
+with overlap when combined with `cmacs-gnuseye-air-global-radius-nm'."
+  :type '(repeat (cons number number)) :group 'cmacs-gnuseye)
+
+(defcustom cmacs-gnuseye-air-global-radius-nm 5000
+  "Radius (nautical miles) for each global-sweep tile query."
+  :type 'integer :group 'cmacs-gnuseye)
+
+(defcustom cmacs-gnuseye-air-max nil
+  "Optional hard cap on indexed aircraft (nil = keep all that are fetched).
+Rendering is capped separately by `cmacs-gnuseye-render-max'."
+  :type '(choice (const :tag "Keep all" nil) integer)
   :group 'cmacs-gnuseye)
 
 (defcustom cmacs-gnuseye-air-radius-nm nil
@@ -98,8 +118,31 @@ The radius covers the visible area at the current zoom unless
                                 (ground-speed-kt . ,gs)))
                   out)
             (setq n (1+ n))
-            (when (>= n cmacs-gnuseye-air-max) (throw 'done nil))))))
+            (when (and cmacs-gnuseye-air-max (>= n cmacs-gnuseye-air-max))
+              (throw 'done nil))))))
     (nreverse out)))
+
+(defun cmacs-gnuseye-air--fetch-global (cb)
+  "Sweep the globe with several large tile queries; call (CB MERGED).
+Aircraft are merged by id across all tiles so the full worldwide set is
+indexed."
+  (let* ((tiles cmacs-gnuseye-air-global-tiles)
+         (radius cmacs-gnuseye-air-global-radius-nm)
+         (pending (length tiles))
+         (acc (make-hash-table :test 'equal)))
+    (if (zerop pending)
+        (funcall cb nil)
+      (dolist (tile tiles)
+        (cmacs-gnuseye-fetch-json
+         (cmacs-gnuseye-air--adsblol-url (float (car tile)) (float (cdr tile))
+                                         radius)
+         (lambda (data)
+           (when data
+             (dolist (e (cmacs-gnuseye-air--parse-adsblol data))
+               (puthash (plist-get e :id) e acc)))
+           (setq pending (1- pending))
+           (when (<= pending 0)
+             (funcall cb (hash-table-values acc)))))))))
 
 ;; ── OpenSky (optional, needs creds) ─────────────────────────────────────
 
@@ -149,12 +192,16 @@ The radius covers the visible area at the current zoom unless
 ;; ── Dispatch ────────────────────────────────────────────────────────────
 
 (defun cmacs-gnuseye-air--fetch (cb)
-  (if (eq cmacs-gnuseye-air-source 'opensky)
-      (cmacs-gnuseye-fetch-json
-       (cmacs-gnuseye-air--opensky-url)
-       (lambda (data) (funcall cb (and data (cmacs-gnuseye-air--parse-opensky
-                                             data))))
-       (cmacs-gnuseye-air--opensky-headers) 'list)
+  (cond
+   ((eq cmacs-gnuseye-air-source 'opensky)
+    (cmacs-gnuseye-fetch-json
+     (cmacs-gnuseye-air--opensky-url)
+     (lambda (data) (funcall cb (and data (cmacs-gnuseye-air--parse-opensky
+                                           data))))
+     (cmacs-gnuseye-air--opensky-headers) 'list))
+   (cmacs-gnuseye-air-global
+    (cmacs-gnuseye-air--fetch-global cb))
+   (t
     (let ((v (cmacs-gnuseye-air--view)))
       (if (not v)
           (funcall cb nil)
@@ -162,13 +209,13 @@ The radius covers the visible area at the current zoom unless
          (cmacs-gnuseye-air--adsblol-url (float (nth 0 v)) (float (nth 1 v))
                                          (nth 2 v))
          (lambda (data) (funcall cb (and data (cmacs-gnuseye-air--parse-adsblol
-                                               data)))))))))
+                                               data))))))))))
 
 (cmacs-gnuseye-define-layer aircraft
-  :title "Air traffic (ADS-B)"
+  :title "Air traffic (ADS-B, worldwide)"
   :group 'air
   :kind 'aircraft
-  :interval 10
+  :interval 20
   :default-on t
   :fetch #'cmacs-gnuseye-air--fetch)
 
