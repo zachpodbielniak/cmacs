@@ -79,6 +79,7 @@ C source `cmacs/<name>/`, Elisp `lisp/cmacs/`, tests `test/cmacs/`, docs
 | **cintrospect** | `cmacs/cintrospect/` | Runtime C self-introspection (DWARF + libgccjit JIT). Default-on |
 | **cpatch** | `cmacs/cpatch/` | Runtime C hot-patching (Lisp_Subr swap + detours). Off by default |
 | **libregnum** | `cmacs/libregnum/` | raylib game engine as embedded 3D scene buffers (project tree, gobject graph, mind map). Off by default |
+| **gnuseye** | `cmacs/gnuseye/` | "GNU's Eye": live planetary situational-awareness globe (satellites/aircraft/vessels/weather) rendered through libregnum; data layers defined in Elisp. Off by default |
 
 The large subsystems have non-obvious internals (gsurf's focus-handoff model, libregnum's
 real-time render pipeline, the ai/MCP tool bridge). Read `doc_org/cmacs/*.org` and the

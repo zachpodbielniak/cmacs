@@ -1,0 +1,223 @@
+#+TITLE: GNU's Eye — Live Planetary Situational-Awareness Globe
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:2 num:t
+
+* Overview
+
+GNU's Eye (~gnuseye~) is a Google-Earth / Palantir-style live 3D globe
+embedded in a cmacs buffer.  It overlays everything that can be tracked on
+and above the Earth — satellites and spacecraft, aircraft, marine vessels,
+weather and geo-events — as clickable, heading-oriented markers on a
+textured globe.
+
+The globe is *rendered through the libregnum subsystem*: a gnuseye buffer
+owns a libregnum view whose render context holds a persistent textured
+Earth sphere plus per-tick marker and arc drawables built from live feeds.
+
+The design goal is *extensibility*: data sources are **layers defined in
+Elisp** via ~cmacs-gnuseye-define-layer~, over a tiny, stable C boundary.
+Adding a new feed is one macro call — no rebuild.
+
+Enable with ~--with-cmacs-gnuseye~ (requires ~--with-cmacs-libregnum~ and
+~--with-cmacs-glib~).  Off by default.
+
+* Quick start
+
+#+begin_src elisp
+(require 'cmacs-gnuseye)
+(cmacs-gnuseye)            ; M-x cmacs-gnuseye — opens *GNU's Eye*
+#+end_src
+
+In the globe buffer: drag to orbit, scroll to zoom, right-drag to pan, and
+click a marker to open its detail view.  Keys: ~l~ layers panel, ~g~
+refresh, ~f~ fly-to lat/lon, ~q~ quit.
+
+~M-x cmacs-gnuseye-layers~ opens the layer control panel (toggle layers
+with ~RET~; ~g~ refreshes the list).
+
+* Architecture
+
+#+begin_example
+ Elisp layers ──set-entities──▶ C core ──render API──▶ globe (libregnum)
+ (fetch feeds)  (entity plists)   (markers+payload)     (sphere+markers)
+        ▲                                    │
+        └──────── click → pick → entity ◀────┘
+#+end_example
+
+- *C core* (~cmacs/gnuseye/~) owns the fast/shared/unsafe parts: globe and
+  marker rendering, geodesy, satellite propagation, async HTTP, and the
+  ray-pick → deferred-dispatch click path.
+- *Elisp* owns everything per-source: endpoints, JSON shaping, refresh
+  cadence, detail rendering, and toggling.
+
+** Translation-unit firewall
+
+raylib's ~Color~ struct clashes with cmacs's ~Color~ typedef, so only
+~cmacs-gnuseye-globe.c~ (the "render half") includes ~<libregnum.h>~; every
+other gnuseye source includes ~lisp.h~ and talks to the render half through
+the plain-C API in ~cmacs-gnuseye-globe.h~.  Pure geodesy lives in
+~cmacs-gnuseye-geomath.h~ (no Lisp, no libregnum) so both halves share it.
+
+This mirrors the libregnum ~scene-*.c~ builder pattern.
+
+* The entity schema
+
+A layer's fetch function returns a list of entity plists.  Only ~:id~,
+~:lat~, and ~:lon~ are required:
+
+| Key          | Meaning                                                    |
+|--------------+------------------------------------------------------------|
+| ~:id~        | stable per-entity key (drives diff/pick).  Required.       |
+| ~:lat :lon~  | degrees, WGS84.  Required.                                  |
+| ~:alt~       | metres above the sphere (default 0).                       |
+| ~:heading~   | degrees clockwise from true north; nil = unoriented.       |
+| ~:speed~     | m/s (surfaced in the detail view).                         |
+| ~:kind~      | symbol → icon/colour style (satellite/aircraft/ship/…).    |
+| ~:label~     | short on-globe label (callsign, name).                     |
+| ~:color~     | "#rrggbb" override; nil = derive from ~:kind~.             |
+| ~:scale~     | marker size multiplier (default 1.0).                      |
+| ~:trail~     | list of (LAT LON ALT) → polyline (orbit/track/wake).       |
+| ~:detail~    | (lambda (ENTITY) …) override of the layer detail fn.       |
+| ~:data~      | opaque record surfaced in the detail view (the escape hatch). |
+| ~:ts~        | epoch seconds of this fix.                                  |
+
+The C core normalises ~:kind~ to an integer code and ~:color~ to packed
+RGBA, then stores the whole plist as the marker's pick payload — so a click
+returns the full record to the layer's detail function.
+
+* Defining a layer
+
+#+begin_src elisp
+(cmacs-gnuseye-define-layer openaq
+  :title "Air quality (OpenAQ)"
+  :group 'weather
+  :kind 'storm
+  :interval 600
+  :default-on nil
+  :fetch
+  (lambda (cb)
+    (cmacs-gnuseye-fetch-json
+     "https://api.openaq.org/v3/latest?limit=200"
+     (lambda (data)
+       (funcall cb
+         (mapcar (lambda (r)
+                   (list :id (alist-get 'location r)
+                         :lat (alist-get 'latitude r)
+                         :lon (alist-get 'longitude r)
+                         :label (alist-get 'location r)
+                         :data r))
+                 (alist-get 'results data)))))))
+#+end_src
+
+Re-evaluate the form to redefine the layer; toggle it on in the layers
+panel.  No rebuild required.
+
+Helpers:
+- ~cmacs-gnuseye-fetch-json~ / ~cmacs-gnuseye-fetch-text~ — async GET that
+  prefers the native libsoup client and falls back to ~url-retrieve~.
+- ~cmacs-gnuseye-secret~ — resolve an API key from an env var,
+  ~$XDG_CONFIG_HOME/cmacs/gnuseye/keys.el~, or a default.
+- Geodesy DEFUNs: ~cmacs-gnuseye-latlon-to-xyz~, ~-haversine~, ~-bearing~,
+  ~-great-circle~.
+- Satellites: ~cmacs-gnuseye-tle-parse~, ~-sat-propagate~, ~-sat-track~.
+
+* Built-in layers
+
+| Layer        | Source                       | Key | Default |
+|--------------+------------------------------+-----+---------|
+| ~satellites~ | CelesTrak TLE + propagation  | no  | on      |
+| ~aircraft~   | OpenSky Network (ADS-B)      | opt | on      |
+| ~vessels~    | AIS (configurable URL)       | opt | off     |
+| ~quakes~     | USGS earthquakes (GeoJSON)   | no  | on      |
+| ~launches~   | Launch Library 2             | no  | off     |
+| ~fires~      | NASA FIRMS                   | yes | off     |
+
+- *Satellites* fetch TLEs from CelesTrak at most every few hours
+  (~cmacs-gnuseye-astro-group~, default "stations") and re-propagate them
+  locally to "now" on a fast (5 s) timer — live motion needs no network.
+  Each satellite carries its one-orbit ground track as a trail.
+- *Aircraft* request OpenSky ~/states/all~ (set ~cmacs-gnuseye-air-bbox~ to
+  scope the fetch and respect rate limits; ~OPENSKY_USER~/~OPENSKY_PASS~
+  raise the budget).
+- *Vessels* parse a vessel JSON feed from ~cmacs-gnuseye-marine-url~ (nil =
+  off).  Free *global* AIS is mostly websocket + key; point this at a
+  regional open-AIS REST endpoint or a LAN AIS-catcher/rtl-ais server.
+- *Weather/geo-events* ship earthquakes (on), rocket launches, and NASA
+  FIRMS fires (needs ~FIRMS_MAP_KEY~).
+
+* API keys
+
+Resolved by ~cmacs-gnuseye-secret~ in order: environment variable →
+~$XDG_CONFIG_HOME/cmacs/gnuseye/keys.el~ (an alist, keep out of version
+control) → default.  Relevant names: ~OPENSKY_USER~, ~OPENSKY_PASS~,
+~FIRMS_MAP_KEY~.  A layer that declares ~:needs-key~ is shown as disabled
+until the key is present.
+
+* MCP tools
+
+When ~--with-cmacs-mcp~ is also enabled, agents get typed tools:
+~gnuseye_open~, ~gnuseye_list_layers~, ~gnuseye_toggle_layer~,
+~gnuseye_fly_to~, ~gnuseye_refresh~.  (The MCP ~eval~ tool already reaches
+every gnuseye DEFUN; these are convenience wrappers.)
+
+* libregnum additions
+
+gnuseye needed three small, generic (gnuseye-agnostic) additions to
+libregnum:
+
+- A *persistent background-model slot* on the render context, drawn first
+  every frame and not cleared by ~clear_drawables~ — so the Earth sphere and
+  its textures survive the per-tick marker rebuilds.
+- A *per-node label mode* generalising the overlay's label filter
+  (~never~/~selected~/~hover~/~always~), so the globe can label
+  hovered/selected markers without flooding the screen.
+- A single *click router* (~cmacs-libregnum--node-clicked~) so each scene
+  mode decides what a node click means; the globe routes it to the entity
+  detail view, the tree keeps drilling/visiting files.
+
+* Coordinate system
+
+Right-handed, Y-up, matching libregnum scenes.  The globe is a sphere of
+radius 6.371 world units, with 1 unit == 1000 km, so altitudes lift markers
+off the surface at a natural scale.  ~lat=0,lon=0~ is at ~(+R,0,0)~; the
+north pole at ~(0,+R,0)~; longitude increases eastward toward ~+Z~.
+
+* Satellite propagation accuracy
+
+v1 uses an exact *two-body (Keplerian)* propagator derived from the TLE mean
+elements.  It omits the SGP4 secular/periodic perturbations (J2 nodal
+regression, atmospheric drag); over the short windows the globe propagates
+(minutes ahead, with TLEs refreshed every few hours) the visual error is
+small.  Full SGP4/SDP4 is a future upgrade — vendor a public-domain
+reference (Vallado/CelesTrak) and validate against its test vectors.
+
+* Performance notes
+
+Markers and arcs are individual drawables with per-marker pick, capped
+around a few thousand at 60 FPS through the FBO.  Layers bound their marker
+count (e.g. ~cmacs-gnuseye-air-max~) and should scope fetches to the area of
+interest.  A batched dynamic mesh (one draw call, no per-marker pick) is the
+escalation path for tens of thousands of contacts.
+
+* Roadmap
+
+The Elisp-layer model makes these cheap to add: a day/night terminator and
+city-lights overlay (from the existing solar math), NOAA space-weather /
+aurora ovals, NWS alert polygons, OpenAQ air quality, Blitzortung lightning,
+ISS live video (a camera marker → ~cmacs-video-open~), GDELT geocoded news,
+submarine cables (great-circle polylines), time-scrubbing/replay (every
+push carries ~:ts~), and podomation geofence alerts.
+
+* Files
+
+| Path                                   | Role                              |
+|----------------------------------------+-----------------------------------|
+| ~cmacs/gnuseye/cmacs-gnuseye-globe.c~  | render half (textured globe etc.) |
+| ~cmacs/gnuseye/cmacs-gnuseye-geo.c~    | geodesy DEFUNs                    |
+| ~cmacs/gnuseye/cmacs-gnuseye-sgp4.c~   | TLE parse + propagation           |
+| ~cmacs/gnuseye/cmacs-gnuseye-http.c~   | async HTTP                        |
+| ~cmacs/gnuseye/cmacs-gnuseye-defuns.c~ | Elisp ↔ globe boundary            |
+| ~lisp/cmacs/cmacs-gnuseye.el~          | layer model, mode, command, UI    |
+| ~lisp/cmacs/cmacs-gnuseye-{astro,air,marine,weather}.el~ | the layers |
+| ~cmacs/mcp/cmacs-mcp-tools-gnuseye.c~  | MCP tools                         |
+| ~test/cmacs/cmacs-gnuseye-tests.el~    | ERT tests                         |

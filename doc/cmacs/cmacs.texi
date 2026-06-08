@@ -56,6 +56,7 @@ interaction.
 * Cpatch::                      Runtime C hot-patching (DEFUN swap + detours).
 * CMacs AI::                    ai-glib multi-provider coding agent.
 * CMacs Libregnum::             Embedded libregnum 3D scene buffers.
+* CMacs Gnuseye::               GNU's Eye live planetary globe.
 * CMacs Gsurf::                 Embedded gsurf web browser buffers.
 * Build Configuration::         Configure flags and dependencies.
 * Upstream Changes::            Every edit cmacs makes to stock Emacs sources.
@@ -6670,6 +6671,73 @@ features lack dedicated ERT tests.
 mode does not composite in the editor FBO batch, so sprites/tiles use textured
 @code{GrlModel} planes (mesh/VAO path) and ranges/frustums use untextured lines.
 @end itemize
+
+@c ===================================================================
+@node CMacs Gnuseye
+@chapter CMacs Gnuseye: GNU's Eye Live Planetary Globe
+
+This chapter mirrors @file{doc_org/cmacs/cmacs-gnuseye.org}.
+
+GNU's Eye (@code{gnuseye}) is a Google-Earth / Palantir-style live 3D globe
+embedded in a cmacs buffer.  It overlays trackable objects --- satellites
+and spacecraft, aircraft, marine vessels, weather and geo-events --- as
+clickable, heading-oriented markers on a textured globe.  It is rendered
+@emph{through} the libregnum subsystem and enabled with
+@option{--with-cmacs-gnuseye} (requires @option{--with-cmacs-libregnum} and
+@option{--with-cmacs-glib}; off by default).
+
+@code{M-x cmacs-gnuseye} opens the @file{*GNU's Eye*} buffer.  Drag to
+orbit, scroll to zoom, right-drag to pan, and click a marker for its detail
+view.  @code{M-x cmacs-gnuseye-layers} toggles data layers.
+
+@section Extensibility
+
+The crux is extensibility: data sources are @emph{layers defined in Elisp}
+via @code{cmacs-gnuseye-define-layer}, over a small stable C boundary.  A
+layer supplies an async @code{:fetch} function returning a list of entity
+plists; the C core renders whatever entities a layer pushes (via
+@code{cmacs-gnuseye-set-entities}) and stashes each entity as its marker's
+pick payload.  Adding a feed is one macro call --- no rebuild.
+
+The entity plist requires only @code{:id}, @code{:lat}, and @code{:lon};
+optional keys include @code{:alt}, @code{:heading}, @code{:kind},
+@code{:label}, @code{:color}, @code{:scale}, @code{:trail}, @code{:detail},
+and @code{:data} (an opaque record surfaced in the detail view).
+
+@section Built-in layers
+
+@itemize @bullet
+@item @code{satellites} --- CelesTrak TLE + local two-body propagation
+(orbit trails); no key; on by default.
+@item @code{aircraft} --- OpenSky Network ADS-B; optional account for a
+higher rate-limit budget; on by default.
+@item @code{vessels} --- AIS from a configurable JSON feed
+(@code{cmacs-gnuseye-marine-url}); off by default (free global AIS needs a
+key/websocket or a regional/SDR source).
+@item @code{quakes} --- USGS earthquakes (GeoJSON); no key; on by default.
+@item @code{launches} --- Launch Library 2; no key; off by default.
+@item @code{fires} --- NASA FIRMS; needs @code{FIRMS_MAP_KEY}; off by
+default.
+@end itemize
+
+API keys resolve via @code{cmacs-gnuseye-secret}: environment variable, then
+@file{$XDG_CONFIG_HOME/cmacs/gnuseye/keys.el}, then a default.
+
+@section Architecture notes
+
+Only @file{cmacs-gnuseye-globe.c} (the render half) includes
+@file{<libregnum.h>}; everything else talks to it through the plain-C API in
+@file{cmacs-gnuseye-globe.h}, mirroring libregnum's @code{Color}-typedef
+firewall.  gnuseye adds three generic pieces to libregnum: a persistent
+background-model slot (the Earth sphere survives marker rebuilds), a
+per-node label mode, and a single click router so each mode handles picks.
+
+Satellite positions use an exact two-body propagator from the TLE mean
+elements (omitting SGP4 perturbations); accurate enough for the short
+propagation windows the globe uses.  When @option{--with-cmacs-mcp} is
+enabled, agents get @code{gnuseye_open}, @code{gnuseye_list_layers},
+@code{gnuseye_toggle_layer}, @code{gnuseye_fly_to}, and
+@code{gnuseye_refresh} tools.
 
 @c ===================================================================
 @node CMacs Gsurf
