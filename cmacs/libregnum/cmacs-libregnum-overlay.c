@@ -40,6 +40,46 @@
  * render size.  Projection returns view-local pixels; we map them into
  * the window rect (no Y flip -- the projection already matches the
  * displayed, un-flipped orientation). */
+/* Draw persistent map labels (country/region names), but only once the
+ * camera has zoomed in, so a full-globe view is not buried in text. */
+static void
+cmacs_libregnum__draw_map_labels (cairo_t *cr, CmacsLibregnumView *v,
+                                  int px, int py, int pw, int ph,
+                                  int vw, int vh)
+{
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  guint nc = cmacs_libregnum_render_ctx_map_label_count (ctx);
+  if (nc == 0) return;
+  if (cmacs_libregnum_render_ctx_camera_distance (ctx) > 13.0) return;
+  double sxv = (double) pw / vw, syv = (double) ph / vh;
+  cairo_save (cr);
+  cairo_select_font_face (cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL,
+                          CAIRO_FONT_WEIGHT_BOLD);
+  cairo_set_font_size (cr, 11.0);
+  for (guint i = 0; i < nc; i++)
+    {
+      const char *text = NULL;
+      double lx = 0, ly = 0;
+      guint8 r = 255, g = 255, b = 255;
+      if (!cmacs_libregnum_render_ctx_map_label_at (ctx, i, vw, vh, &lx, &ly,
+                                                    &text, &r, &g, &b))
+        continue;
+      if (!text || !text[0]) continue;
+      double fx = px + lx * sxv;
+      double fy = py + ly * syv;
+      cairo_text_extents_t ext;
+      cairo_text_extents (cr, text, &ext);
+      fx -= ext.width * 0.5;
+      cairo_set_source_rgba (cr, 0.0, 0.0, 0.0, 0.8);
+      cairo_move_to (cr, fx + 1.0, fy + 1.0);
+      cairo_show_text (cr, text);
+      cairo_set_source_rgba (cr, r / 255.0, g / 255.0, b / 255.0, 0.95);
+      cairo_move_to (cr, fx, fy);
+      cairo_show_text (cr, text);
+    }
+  cairo_restore (cr);
+}
+
 static void
 cmacs_libregnum__draw_labels (cairo_t *cr, CmacsLibregnumView *v,
                               int px, int py, int pw, int ph,
@@ -165,6 +205,8 @@ cmacs_libregnum__walk_windows (struct frame *f, cairo_t *cr, Lisp_Object w)
                    * draw its name in cairo, on top of the blit.  Pure
                    * C + cairo -- no Lisp re-entry.  Files stay unlabeled
                    * to avoid clutter (they label when selected). */
+                  cmacs_libregnum__draw_map_labels (cr, v, px, py, pw, ph,
+                                                    vw, vh);
                   cmacs_libregnum__draw_labels (cr, v, px, py, pw, ph,
                                                 vw, vh);
                 }

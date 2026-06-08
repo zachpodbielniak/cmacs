@@ -74,6 +74,25 @@ extern void  cmacs_libregnum_render_ctx_add_static_drawable
 extern void  cmacs_libregnum_render_ctx_clear_static_drawables
                               (CmacsLibregnumRenderCtx *r);
 
+/* ── Map labels ──────────────────────────────────────────────────
+ * Persistent text labels at fixed world points (country/region names),
+ * projected + drawn by the overlay.  Survive marker rebuilds. */
+extern void  cmacs_libregnum_render_ctx_add_map_label
+                              (CmacsLibregnumRenderCtx *r,
+                               float x, float y, float z, const char *text,
+                               guint8 cr, guint8 cg, guint8 cb);
+extern void  cmacs_libregnum_render_ctx_clear_map_labels
+                              (CmacsLibregnumRenderCtx *r);
+extern guint cmacs_libregnum_render_ctx_map_label_count
+                              (CmacsLibregnumRenderCtx *r);
+extern gboolean cmacs_libregnum_render_ctx_map_label_at
+                              (CmacsLibregnumRenderCtx *r, guint id,
+                               int vw, int vh, double *sx, double *sy,
+                               const char **text,
+                               guint8 *cr, guint8 *cg, guint8 *cb);
+extern double cmacs_libregnum_render_ctx_camera_distance
+                              (CmacsLibregnumRenderCtx *r);
+
 /* ── Per-node label policy ───────────────────────────────────────
  * Generalises the overlay's label filter.  LEGACY (-1) keeps the original
  * behaviour (label directories + the selected node); the others let a

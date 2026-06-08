@@ -19,7 +19,9 @@
 #include "coding.h"
 #include "cmacs-gnuseye.h"
 #include "cmacs-gnuseye-globe.h"
+#include "cmacs-gnuseye-geomath.h"
 #include "cmacs-libregnum.h"
+#include "cmacs-libregnum-render.h"
 
 /* Cached keyword symbols for the normalised entity plist (set in syms_of). */
 static Lisp_Object QCge_id, QCge_lat, QCge_lon, QCge_alt, QCge_heading,
@@ -395,6 +397,56 @@ DEFUN ("cmacs-gnuseye-clear-coastlines", Fcmacs_gnuseye_clear_coastlines,
   return Qt;
 }
 
+DEFUN ("cmacs-gnuseye-add-label", Fcmacs_gnuseye_add_label,
+       Scmacs_gnuseye_add_label, 4, 5, 0,
+       doc: /* Add a persistent map label TEXT at LAT, LON on BUFFER's globe.
+COLOR is a packed integer 0xRRGGBBAA (default a soft white).  Labels show
+only once the camera is zoomed in, and persist across marker refreshes.  */)
+  (Lisp_Object buffer, Lisp_Object lat, Lisp_Object lon, Lisp_Object text,
+   Lisp_Object color)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_STRING (text);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  double x, y, z;
+  gnuseye_latlon_to_xyz (XFLOATINT (lat), XFLOATINT (lon), 20000.0,
+                         &x, &y, &z);
+  unsigned int rgba = FIXNUMP (color) ? (unsigned int) XFIXNUM (color)
+                                      : 0xf0f0f0ffu;
+  Lisp_Object enc = ENCODE_UTF_8 (text);
+  cmacs_libregnum_render_ctx_add_map_label (
+    cmacs_libregnum_view_get_render_ctx (v),
+    (float) x, (float) y, (float) z, SSDATA (enc),
+    (rgba >> 24) & 0xff, (rgba >> 16) & 0xff, (rgba >> 8) & 0xff);
+  return Qt;
+}
+
+DEFUN ("cmacs-gnuseye-clear-labels", Fcmacs_gnuseye_clear_labels,
+       Scmacs_gnuseye_clear_labels, 1, 1, 0,
+       doc: /* Remove BUFFER's globe map labels.  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (v)
+    cmacs_libregnum_render_ctx_clear_map_labels (
+      cmacs_libregnum_view_get_render_ctx (v));
+  return Qt;
+}
+
+DEFUN ("cmacs-gnuseye-label-count", Fcmacs_gnuseye_label_count,
+       Scmacs_gnuseye_label_count, 1, 1, 0,
+       doc: /* Return the number of map labels on BUFFER's globe.  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return make_fixnum (0);
+  return make_fixnum (cmacs_libregnum_render_ctx_map_label_count (
+                        cmacs_libregnum_view_get_render_ctx (v)));
+}
+
 void
 syms_of_cmacs_gnuseye_defuns (void)
 {
@@ -443,6 +495,9 @@ syms_of_cmacs_gnuseye_defuns (void)
   defsubr (&Scmacs_gnuseye_snapshot);
   defsubr (&Scmacs_gnuseye_add_coastline);
   defsubr (&Scmacs_gnuseye_clear_coastlines);
+  defsubr (&Scmacs_gnuseye_add_label);
+  defsubr (&Scmacs_gnuseye_clear_labels);
+  defsubr (&Scmacs_gnuseye_label_count);
 }
 
 #endif /* HAVE_CMACS_GNUSEYE */

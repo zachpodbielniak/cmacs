@@ -137,6 +137,23 @@ cmacs_node_clear (gpointer p)
   g_clear_pointer (&n->name, g_free);
 }
 
+/* A persistent map label (country/region name) at a fixed world point,
+ * projected + drawn by the overlay.  Parallel to but independent of the
+ * pickable node table, so it survives marker rebuilds. */
+typedef struct
+{
+  float    x, y, z;
+  gchar   *text;        /* owned */
+  guint8   r, g, b;
+} CmacsMapLabel;
+
+static void
+cmacs_map_label_clear (gpointer p)
+{
+  CmacsMapLabel *l = p;
+  g_clear_pointer (&l->text, g_free);
+}
+
 /* ── Per-view render context (opaque to view.c) ────────────────── */
 
 #ifdef LRG_BUILD_EDITOR
@@ -219,6 +236,9 @@ struct CmacsLibregnumRenderCtx
    * clear_drawables.  Owned (g_object_unref per element). */
   GPtrArray        *static_drawables;
 
+  /* Persistent map labels (country/region names), drawn by the overlay. */
+  GArray           *map_labels;       /* CmacsMapLabel */
+
   /* Hovered scene node id (-1 none); drives hover label policy. */
   gint              hovered;
 
@@ -284,6 +304,8 @@ cmacs_libregnum_render_ctx_new (int w, int h)
   r->renderer  = lrg_renderer_new (LRG_WINDOW (shared_window));
   r->drawables = g_ptr_array_new_with_free_func (g_object_unref);
   r->static_drawables = g_ptr_array_new_with_free_func (g_object_unref);
+  r->map_labels = g_array_new (FALSE, TRUE, sizeof (CmacsMapLabel));
+  g_array_set_clear_func (r->map_labels, cmacs_map_label_clear);
   r->nodes = g_array_new (FALSE, TRUE, sizeof (CmacsNode));
   g_array_set_clear_func (r->nodes, cmacs_node_clear);
 
@@ -331,6 +353,7 @@ cmacs_libregnum_render_ctx_free (CmacsLibregnumRenderCtx *r)
   if (r->fbo_valid) UnloadRenderTexture (r->fbo);
   g_clear_object (&r->background_model);
   if (r->static_drawables) g_ptr_array_unref (r->static_drawables);
+  if (r->map_labels) g_array_free (r->map_labels, TRUE);
   g_clear_object (&r->camera);
   if (r->drawables) g_ptr_array_unref (r->drawables);
   if (r->nodes) g_array_free (r->nodes, TRUE);
@@ -404,6 +427,66 @@ cmacs_libregnum_render_ctx_clear_static_drawables (CmacsLibregnumRenderCtx *r)
 {
   if (r && r->static_drawables)
     g_ptr_array_set_size (r->static_drawables, 0);
+}
+
+/* ── Map labels ──────────────────────────────────────────────────── */
+
+void
+cmacs_libregnum_render_ctx_add_map_label (CmacsLibregnumRenderCtx *r,
+                                          float x, float y, float z,
+                                          const char *text,
+                                          guint8 cr, guint8 cg, guint8 cb)
+{
+  if (!r || !r->map_labels) return;
+  CmacsMapLabel l = { 0 };
+  l.x = x; l.y = y; l.z = z;
+  l.text = g_strdup (text ? text : "");
+  l.r = cr; l.g = cg; l.b = cb;
+  g_array_append_val (r->map_labels, l);
+}
+
+void
+cmacs_libregnum_render_ctx_clear_map_labels (CmacsLibregnumRenderCtx *r)
+{
+  if (r && r->map_labels) g_array_set_size (r->map_labels, 0);
+}
+
+guint
+cmacs_libregnum_render_ctx_map_label_count (CmacsLibregnumRenderCtx *r)
+{
+  return (r && r->map_labels) ? r->map_labels->len : 0;
+}
+
+/* Project map label ID to view-local pixels + report its TEXT (borrowed)
+ * and colour.  FALSE if out of range or behind the camera (so back-of-globe
+ * labels are hidden). */
+gboolean
+cmacs_libregnum_render_ctx_map_label_at (CmacsLibregnumRenderCtx *r, guint id,
+                                         int vw, int vh, double *sx, double *sy,
+                                         const char **text,
+                                         guint8 *cr, guint8 *cg, guint8 *cb)
+{
+  if (!r || !r->map_labels || id >= r->map_labels->len) return FALSE;
+  CmacsMapLabel *l = &g_array_index (r->map_labels, CmacsMapLabel, id);
+  if (!cmacs_libregnum_render_ctx_project (r, l->x, l->y, l->z, vw, vh, sx, sy))
+    return FALSE;
+  if (text) *text = l->text;
+  if (cr) *cr = l->r;
+  if (cg) *cg = l->g;
+  if (cb) *cb = l->b;
+  return TRUE;
+}
+
+/* Distance from the camera to the origin (the globe centre); lets the
+ * overlay show map labels only once the user has zoomed in. */
+double
+cmacs_libregnum_render_ctx_camera_distance (CmacsLibregnumRenderCtx *r)
+{
+  if (!r) return 0.0;
+  double px, py, pz, tx, ty, tz, fov;
+  cmacs_libregnum_render_ctx_get_camera_state (r, &px, &py, &pz,
+                                               &tx, &ty, &tz, &fov);
+  return sqrt (px*px + py*py + pz*pz);
 }
 
 /* ── Per-node label policy + hover ───────────────────────────────── */

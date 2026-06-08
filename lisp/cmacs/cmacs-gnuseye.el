@@ -777,90 +777,171 @@ and clicking one selects it (inspector + recentre)."
   (when (and cmacs-gnuseye-buffer (buffer-live-p cmacs-gnuseye-buffer))
     (cmacs-gnuseye-fly-to cmacs-gnuseye-buffer (float lat) (float lon) 14.0 t)))
 
-;;;; Coastlines: real continents, drawn aligned with the markers -----------
+;;;; The map: coastlines, borders, labels, admin-1, all aligned ------------
+
+;; Real geography drawn in the globe's own lat/lon convention, so (unlike a
+;; raster texture) it always lines up with the markers.  Data is Natural
+;; Earth (public domain), downloaded once and cached under the gnuseye
+;; cache directory.
+
+(defconst cmacs-gnuseye--ne-base
+  "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/")
 
 (defcustom cmacs-gnuseye-coastlines t
-  "When non-nil, draw real coastlines on the globe.
-The data (Natural Earth, public domain) is downloaded once and cached.
-Coastlines are drawn in the globe's own lat/lon convention, so unlike a
-raster texture they always line up with the markers."
-  :type 'boolean
+  "Draw continent coastlines on the globe." :type 'boolean
   :group 'cmacs-gnuseye)
-
-(defcustom cmacs-gnuseye-coastline-url
-  "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_coastline.geojson"
-  "GeoJSON coastline source (LineString/MultiLineString features)."
-  :type 'string
+(defcustom cmacs-gnuseye-borders t
+  "Draw country borders on the globe." :type 'boolean :group 'cmacs-gnuseye)
+(defcustom cmacs-gnuseye-labels t
+  "Draw country name labels (shown once zoomed in)." :type 'boolean
   :group 'cmacs-gnuseye)
+(defcustom cmacs-gnuseye-admin1 t
+  "Draw admin-1 boundaries (states/provinces) for `cmacs-gnuseye-admin1-countries'."
+  :type 'boolean :group 'cmacs-gnuseye)
+(defcustom cmacs-gnuseye-admin1-countries '("USA" "CAN")
+  "ISO-A3 country codes whose states/provinces are drawn (admin-1)."
+  :type '(repeat string) :group 'cmacs-gnuseye)
 
-(defcustom cmacs-gnuseye-coastline-color "#c7a86e"
-  "Coastline colour (a land-tan by default)."
-  :type 'string
+(defcustom cmacs-gnuseye-coastline-color "#c8a96f"
+  "Coastline colour." :type 'string :group 'cmacs-gnuseye)
+(defcustom cmacs-gnuseye-border-color "#6f93ba"
+  "Country border colour." :type 'string :group 'cmacs-gnuseye)
+(defcustom cmacs-gnuseye-admin1-color "#48627f"
+  "Admin-1 (state/province) border colour." :type 'string
   :group 'cmacs-gnuseye)
+(defcustom cmacs-gnuseye-label-color "#e8eff6"
+  "Country label colour." :type 'string :group 'cmacs-gnuseye)
 
-(defvar cmacs-gnuseye--coastline-cache
-  (expand-file-name "cmacs/gnuseye/ne_110m_coastline.geojson"
-                    (or (getenv "XDG_CACHE_HOME") "~/.cache"))
-  "Local cache path for the coastline GeoJSON.")
-
-(defun cmacs-gnuseye--draw-coast-line (buffer coords rgba)
-  "Draw one COORDS polyline (list of (LON LAT) pairs) on BUFFER's globe."
-  (let ((n (length coords)))
-    (when (>= n 2)
-      (let ((lats (make-vector n 0.0))
-            (lons (make-vector n 0.0))
-            (i 0))
-        (dolist (p coords)
-          (aset lons i (float (or (nth 0 p) 0.0)))
-          (aset lats i (float (or (nth 1 p) 0.0)))
-          (setq i (1+ i)))
-        (ignore-errors
-          (cmacs-gnuseye-add-coastline buffer lats lons rgba))))))
-
-(defun cmacs-gnuseye--draw-coastlines (buffer geojson)
-  "Parse GEOJSON and draw its coastlines on BUFFER's globe."
-  (when (and (buffer-live-p buffer) (cmacs-gnuseye-attached-p buffer))
-    (let* ((data (condition-case nil
-                     (json-parse-string geojson :object-type 'alist
-                                        :array-type 'list)
-                   (error nil)))
-           (features (alist-get 'features data))
-           (rgba (cmacs-gnuseye--color->rgba cmacs-gnuseye-coastline-color)))
-      (when features
-        (cmacs-gnuseye-clear-coastlines buffer)
-        (dolist (f features)
-          (let* ((geom (alist-get 'geometry f))
-                 (gtype (alist-get 'type geom))
-                 (coords (alist-get 'coordinates geom)))
-            (cond
-             ((equal gtype "LineString")
-              (cmacs-gnuseye--draw-coast-line buffer coords rgba))
-             ((equal gtype "MultiLineString")
-              (dolist (line coords)
-                (cmacs-gnuseye--draw-coast-line buffer line rgba))))))
-        (cmacs-gnuseye-redraw buffer)))))
-
-(defun cmacs-gnuseye-load-coastlines (&optional buffer)
-  "Draw real coastlines on BUFFER's globe (downloading + caching once)."
-  (interactive)
-  (let ((buffer (or buffer cmacs-gnuseye-buffer)))
-    (when (and buffer (buffer-live-p buffer) cmacs-gnuseye-coastlines
-               (fboundp 'cmacs-gnuseye-add-coastline))
-      (if (file-readable-p cmacs-gnuseye--coastline-cache)
-          (cmacs-gnuseye--draw-coastlines
-           buffer
-           (with-temp-buffer
-             (insert-file-contents cmacs-gnuseye--coastline-cache)
-             (buffer-string)))
+(defun cmacs-gnuseye--geojson (file callback)
+  "Fetch+cache Natural Earth FILE under the gnuseye cache; call (CALLBACK DATA)."
+  (let ((path (expand-file-name (concat "cmacs/gnuseye/" file)
+                                (or (getenv "XDG_CACHE_HOME") "~/.cache"))))
+    (cl-flet ((parse (s) (ignore-errors
+                           (json-parse-string s :object-type 'alist
+                                              :array-type 'list))))
+      (if (file-readable-p path)
+          (funcall callback
+                   (parse (with-temp-buffer (insert-file-contents path)
+                                            (buffer-string))))
         (cmacs-gnuseye-fetch-text
-         cmacs-gnuseye-coastline-url
+         (concat cmacs-gnuseye--ne-base file)
          (lambda (body)
            (when (and body (> (length body) 100))
              (ignore-errors
-               (make-directory
-                (file-name-directory cmacs-gnuseye--coastline-cache) t)
-               (with-temp-file cmacs-gnuseye--coastline-cache (insert body)))
-             (cmacs-gnuseye--draw-coastlines buffer body))))))))
+               (make-directory (file-name-directory path) t)
+               (with-temp-file path (insert body)))
+             (funcall callback (parse body)))))))))
+
+(defun cmacs-gnuseye--decimate (coords step)
+  "Keep every STEP-th point of COORDS, always including the last."
+  (if (<= step 1) coords
+    (let ((out nil) (i 0) (n (length coords)))
+      (dolist (p coords)
+        (when (or (zerop (mod i step)) (= i (1- n))) (push p out))
+        (setq i (1+ i)))
+      (nreverse out))))
+
+(defun cmacs-gnuseye--draw-line (buffer coords rgba &optional step)
+  "Draw one COORDS polyline (list of (LON LAT)) on BUFFER's globe."
+  (let* ((pts (cmacs-gnuseye--decimate coords (or step 1)))
+         (n (length pts)))
+    (when (>= n 2)
+      (let ((lats (make-vector n 0.0)) (lons (make-vector n 0.0)) (i 0))
+        (dolist (p pts)
+          (aset lons i (float (or (nth 0 p) 0.0)))
+          (aset lats i (float (or (nth 1 p) 0.0)))
+          (setq i (1+ i)))
+        (ignore-errors (cmacs-gnuseye-add-coastline buffer lats lons rgba))))))
+
+(defun cmacs-gnuseye--draw-lines (buffer data rgba &optional step)
+  "Draw all LineString/MultiLineString features of DATA."
+  (dolist (f (alist-get 'features data))
+    (let* ((geom (alist-get 'geometry f))
+           (gt (alist-get 'type geom))
+           (coords (alist-get 'coordinates geom)))
+      (cond
+       ((equal gt "LineString")
+        (cmacs-gnuseye--draw-line buffer coords rgba step))
+       ((equal gt "MultiLineString")
+        (dolist (l coords) (cmacs-gnuseye--draw-line buffer l rgba step)))))))
+
+(defun cmacs-gnuseye--draw-polygons (buffer data rgba filter &optional step)
+  "Draw the rings of Polygon/MultiPolygon features passing FILTER."
+  (dolist (f (alist-get 'features data))
+    (when (or (null filter) (funcall filter f))
+      (let* ((geom (alist-get 'geometry f))
+             (gt (alist-get 'type geom))
+             (coords (alist-get 'coordinates geom)))
+        (cond
+         ((equal gt "Polygon")
+          (dolist (ring coords)
+            (cmacs-gnuseye--draw-line buffer ring rgba step)))
+         ((equal gt "MultiPolygon")
+          (dolist (poly coords)
+            (dolist (ring poly)
+              (cmacs-gnuseye--draw-line buffer ring rgba step)))))))))
+
+(defun cmacs-gnuseye--draw-country-labels (buffer data)
+  "Add a label at each country's anchor point (NAME + LABEL_X/LABEL_Y)."
+  (let ((rgba (cmacs-gnuseye--color->rgba cmacs-gnuseye-label-color)))
+    (dolist (f (alist-get 'features data))
+      (let* ((props (alist-get 'properties f))
+             (name (or (alist-get 'NAME props) (alist-get 'name props)))
+             (lx (alist-get 'LABEL_X props))
+             (ly (alist-get 'LABEL_Y props)))
+        (when (and (stringp name) (numberp lx) (numberp ly))
+          (ignore-errors
+            (cmacs-gnuseye-add-label buffer (float ly) (float lx) name rgba)))))))
+
+;;;###autoload
+(defun cmacs-gnuseye-load-map (&optional buffer)
+  "Draw the world map (coastlines, borders, labels, admin-1) on BUFFER's globe.
+Each layer's data is downloaded + cached once.  Honours the
+`cmacs-gnuseye-coastlines'/`-borders'/`-labels'/`-admin1' toggles."
+  (interactive)
+  (let ((buffer (or buffer cmacs-gnuseye-buffer)))
+    (when (and buffer (buffer-live-p buffer)
+               (cmacs-gnuseye-attached-p buffer)
+               (fboundp 'cmacs-gnuseye-add-coastline))
+      (cmacs-gnuseye-clear-coastlines buffer)
+      (cmacs-gnuseye-clear-labels buffer)
+      (when cmacs-gnuseye-coastlines
+        (cmacs-gnuseye--geojson
+         "ne_110m_coastline.geojson"
+         (lambda (d)
+           (when (buffer-live-p buffer)
+             (cmacs-gnuseye--draw-lines
+              buffer d (cmacs-gnuseye--color->rgba cmacs-gnuseye-coastline-color))
+             (cmacs-gnuseye-redraw buffer)))))
+      (when cmacs-gnuseye-borders
+        (cmacs-gnuseye--geojson
+         "ne_110m_admin_0_boundary_lines_land.geojson"
+         (lambda (d)
+           (when (buffer-live-p buffer)
+             (cmacs-gnuseye--draw-lines
+              buffer d (cmacs-gnuseye--color->rgba cmacs-gnuseye-border-color))
+             (cmacs-gnuseye-redraw buffer)))))
+      (when cmacs-gnuseye-admin1
+        (cmacs-gnuseye--geojson
+         "ne_50m_admin_1_states_provinces.geojson"
+         (lambda (d)
+           (when (buffer-live-p buffer)
+             (cmacs-gnuseye--draw-polygons
+              buffer d (cmacs-gnuseye--color->rgba cmacs-gnuseye-admin1-color)
+              (lambda (f)
+                (member (alist-get 'adm0_a3 (alist-get 'properties f))
+                        cmacs-gnuseye-admin1-countries))
+              2)
+             (cmacs-gnuseye-redraw buffer)))))
+      (when cmacs-gnuseye-labels
+        (cmacs-gnuseye--geojson
+         "ne_110m_admin_0_countries.geojson"
+         (lambda (d)
+           (when (buffer-live-p buffer)
+             (cmacs-gnuseye--draw-country-labels buffer d)
+             (cmacs-gnuseye-redraw buffer))))))))
+
+(defalias 'cmacs-gnuseye-load-coastlines 'cmacs-gnuseye-load-map)
 
 ;;;; Keep the globe round: track the window's aspect ratio ------------------
 
@@ -935,8 +1016,9 @@ just the globe viewport."
     (add-hook 'window-size-change-functions #'cmacs-gnuseye--on-size-change)
     (cmacs-gnuseye--fit-window-now)
     (cmacs-gnuseye--on-size-change)
-    ;; Real continents (vector coastlines, aligned with the markers).
-    (cmacs-gnuseye-load-coastlines buf)
+    ;; Real geography (coastlines, borders, labels, admin-1) aligned with
+    ;; the markers.
+    (cmacs-gnuseye-load-map buf)
     buf))
 
 ;;;; Evil (Doom) + vanilla navigation -----------------------------------------
