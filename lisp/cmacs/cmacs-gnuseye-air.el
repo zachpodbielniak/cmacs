@@ -55,6 +55,69 @@ Rendering is capped separately by `cmacs-gnuseye-render-max'."
 Smaller values keep the globe readable when many planes are shown."
   :type 'number :group 'cmacs-gnuseye)
 
+(defcustom cmacs-gnuseye-air-smooth t
+  "Smoothly move aircraft between data updates.
+Each tick advances every aircraft along its heading at its ground speed
+\(dead reckoning) and re-renders, also re-applying the zoom scale; the next
+fetch corrects the positions.  Off keeps the cheaper jump-on-fetch motion."
+  :type 'boolean :group 'cmacs-gnuseye)
+
+(defcustom cmacs-gnuseye-air-smooth-interval 0.4
+  "Seconds between aircraft dead-reckoning updates (lower = smoother, heavier)."
+  :type 'number :group 'cmacs-gnuseye)
+
+(defvar cmacs-gnuseye-air--smooth-timer nil)
+(defvar cmacs-gnuseye-air--smooth-last nil)
+
+(defun cmacs-gnuseye-air--advance (lat lon speed-ms heading-deg dt)
+  "Great-circle destination from LAT,LON after SPEED-MS for DT s on HEADING.
+Returns (LAT2 . LON2), or nil when there is nothing to advance."
+  (when (and (numberp lat) (numberp lon) (numberp speed-ms) (> speed-ms 0)
+             (numberp heading-deg) (>= heading-deg 0) (> dt 0))
+    (let* ((r 6371000.0) (d (/ (* speed-ms dt) r))
+           (d2r (/ float-pi 180.0))
+           (la (* lat d2r)) (lo (* lon d2r)) (th (* heading-deg d2r))
+           (sla (sin la)) (cla (cos la)) (sd (sin d)) (cd (cos d))
+           (la2 (asin (max -1.0 (min 1.0 (+ (* sla cd) (* cla sd (cos th)))))))
+           (lo2 (+ lo (atan (* (sin th) sd cla)
+                            (- cd (* sla (sin la2)))))))
+      (cons (/ la2 d2r) (/ lo2 d2r)))))
+
+(defun cmacs-gnuseye-air--smooth-tick ()
+  "Advance aircraft by dead reckoning and re-render (zoom-scaled)."
+  (let ((buf (and (boundp 'cmacs-gnuseye-buffer) cmacs-gnuseye-buffer)))
+    (cond
+     ((not (and buf (buffer-live-p buf)))
+      (when cmacs-gnuseye-air--smooth-timer
+        (cancel-timer cmacs-gnuseye-air--smooth-timer)
+        (setq cmacs-gnuseye-air--smooth-timer nil)))
+     ((and cmacs-gnuseye-air-smooth
+           (cmacs-gnuseye-attached-p buf)
+           (let ((l (gethash 'aircraft cmacs-gnuseye--layers)))
+             (and l (cmacs-gnuseye-layer-enabled l))))
+      (let* ((now (float-time))
+             (dt (if cmacs-gnuseye-air--smooth-last
+                     (- now cmacs-gnuseye-air--smooth-last) 0.0)))
+        (setq cmacs-gnuseye-air--smooth-last now)
+        (when (and (> dt 0.0) (< dt 5.0))
+          (dolist (e (gethash 'aircraft cmacs-gnuseye--layer-entities))
+            (let ((np (cmacs-gnuseye-air--advance
+                       (plist-get e :lat) (plist-get e :lon)
+                       (plist-get e :speed) (plist-get e :heading) dt)))
+              (when np
+                (plist-put e :lat (car np))
+                (plist-put e :lon (cdr np))))))
+        (cmacs-gnuseye--render-layer buf 'aircraft))))))
+
+(defun cmacs-gnuseye-air--smooth-start ()
+  "Start the aircraft dead-reckoning/zoom-rescale tick if not running."
+  (unless cmacs-gnuseye-air--smooth-timer
+    (setq cmacs-gnuseye-air--smooth-last nil
+          cmacs-gnuseye-air--smooth-timer
+          (run-with-timer cmacs-gnuseye-air-smooth-interval
+                          (max 0.1 cmacs-gnuseye-air-smooth-interval)
+                          #'cmacs-gnuseye-air--smooth-tick))))
+
 (defcustom cmacs-gnuseye-air-radius-nm nil
   "Radius in nautical miles around the view centre for adsb.lol.
 When nil, the radius is chosen automatically to cover the visible area at

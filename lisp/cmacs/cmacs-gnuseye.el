@@ -146,6 +146,11 @@ ALPHA (0-255) is applied when COLOR has no alpha (default 255)."
                        (float (or (and (> (length p) 2) (elt p 2)) 0.0))))
              (append trail nil)))))
 
+(defvar cmacs-gnuseye--zoom-scale 1.0
+  "Marker scale factor for the current zoom (set per render).
+Keeps aircraft a roughly constant on-screen size, so zooming into a busy
+airport spreads them out instead of leaving a fixed-size pile.")
+
 (defun cmacs-gnuseye--normalize-entity (e)
   "Normalise a layer entity plist E into the C-facing form.
 Resolves :kind to its integer code and :color to packed RGBA, defaults
@@ -155,6 +160,8 @@ stored payload drives the detail view."
          (style (alist-get kind cmacs-gnuseye-kind-styles))
          (color (or (plist-get e :color) (plist-get style :color) "#ffd24a"))
          (scale (float (or (plist-get e :scale) (plist-get style :scale) 1.0)))
+         (scale (if (eq kind 'aircraft) (* scale cmacs-gnuseye--zoom-scale)
+                  scale))
          (code  (or (alist-get kind cmacs-gnuseye--kind-codes) 0))
          (lab   (plist-get e :label))
          (id    (format "%s" (or (plist-get e :id) "")))
@@ -333,10 +340,18 @@ piling into the densest spot."
               (setq i (1+ i)))
             out))))))
 
+(defun cmacs-gnuseye--zoom-scale-for (buf)
+  "Zoom-dependent marker scale for BUF (constant on-screen size)."
+  (let ((vc (ignore-errors (cmacs-gnuseye-view-center buf))))
+    (if (and (consp vc) (numberp (nth 2 vc)))
+        (max 0.25 (min 3.0 (/ (- (nth 2 vc) 6.371) 3.0)))
+      1.0)))
+
 (defun cmacs-gnuseye--render-layer (buf lname)
   "Push LNAME's kind-filtered entities from the index to BUF's globe.
 All entities stay in the index; only up to `cmacs-gnuseye-render-max'
 nearest the view are drawn."
+  (setq cmacs-gnuseye--zoom-scale (cmacs-gnuseye--zoom-scale-for buf))
   (when (and buf (buffer-live-p buf) (cmacs-gnuseye-attached-p buf))
     (let* ((all (seq-filter #'cmacs-gnuseye--entity-visible-p
                             (gethash lname cmacs-gnuseye--layer-entities)))
@@ -1189,6 +1204,9 @@ just the globe viewport."
     ;; Real geography (coastlines, borders, labels, admin-1) aligned with
     ;; the markers.
     (cmacs-gnuseye-load-map buf)
+    ;; Smoothly dead-reckon aircraft + re-apply the zoom scale between fetches.
+    (when (fboundp 'cmacs-gnuseye-air--smooth-start)
+      (cmacs-gnuseye-air--smooth-start))
     buf))
 
 ;;;; Evil (Doom) + vanilla navigation -----------------------------------------
