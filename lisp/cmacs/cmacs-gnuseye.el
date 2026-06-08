@@ -72,6 +72,31 @@ Read on demand by `cmacs-gnuseye-secret'.  Keep it out of version control."
 (defvar cmacs-gnuseye-buffer nil
   "The active GNU's Eye globe buffer that layer timers push entities to.")
 
+;;;; Entity index, filter, and selection state -------------------------------
+
+(defvar cmacs-gnuseye--layer-entities (make-hash-table :test 'eq)
+  "Layer-name symbol -> list of the layer's current (rich) entity plists.
+The source of truth the dashboard list, search, and filter operate on, and
+what the globe is (re)rendered from.")
+
+(defvar cmacs-gnuseye--id-index (make-hash-table :test 'equal)
+  "Entity :id string -> entity plist (tagged with :layer) for quick lookup.")
+
+(defvar cmacs-gnuseye-active-kinds nil
+  "When nil, show every marker kind; otherwise a list of kind symbols to
+show.  Applies to BOTH the globe and the entity list, so you can declutter
+to e.g. only planes, or planes and boats.")
+
+(defvar cmacs-gnuseye--search ""
+  "Case-insensitive substring narrowing the entity list (label/id/kind).")
+
+(defvar cmacs-gnuseye--selected-id nil
+  "The :id of the currently selected entity (labelled + highlighted).")
+
+(defconst cmacs-gnuseye--known-kinds
+  '(satellite aircraft ship quake fire launch storm camera city)
+  "Selectable marker kinds for filtering.")
+
 ;;;; Kind styles -------------------------------------------------------------
 
 (defconst cmacs-gnuseye--kind-codes
@@ -128,19 +153,23 @@ stored payload drives the detail view."
          (color (or (plist-get e :color) (plist-get style :color) "#ffd24a"))
          (scale (float (or (plist-get e :scale) (plist-get style :scale) 1.0)))
          (code  (or (alist-get kind cmacs-gnuseye--kind-codes) 0))
-         (lab   (plist-get e :label)))
-    (list :id        (format "%s" (or (plist-get e :id) ""))
+         (lab   (plist-get e :label))
+         (id    (format "%s" (or (plist-get e :id) "")))
+         (sel   (and cmacs-gnuseye--selected-id
+                     (equal id cmacs-gnuseye--selected-id))))
+    (list :id        id
           :lat       (float (or (plist-get e :lat) 0.0))
           :lon       (float (or (plist-get e :lon) 0.0))
           :alt       (float (or (plist-get e :alt) 0.0))
           :heading   (float (or (plist-get e :heading) -1.0))
-          :scale     scale
+          ;; The selected entity is enlarged, brightened, and always labelled.
+          :scale     (if sel (* scale 1.6) scale)
           :kind      code
           :kind-name kind
-          :color     (cmacs-gnuseye--color->rgba color)
+          :color     (cmacs-gnuseye--color->rgba (if sel "#ffffff" color))
           :label     (and lab (format "%s" lab))
-          ;; Default to "hover" so mousing over any marker identifies it.
-          :label-mode (or (plist-get e :label-mode) 2)
+          ;; Default "hover" (mouse over to identify); "always" when selected.
+          :label-mode (if sel 3 (or (plist-get e :label-mode) 2))
           :trail     (cmacs-gnuseye--normalize-trail (plist-get e :trail))
           :detail    (plist-get e :detail)
           :data      (plist-get e :data)
@@ -241,8 +270,44 @@ PROPS is a plist with:
               cmacs-gnuseye--layers)
      ',name))
 
+(defun cmacs-gnuseye--kind-visible-p (kind)
+  "Non-nil if KIND passes the active-kinds filter."
+  (or (null cmacs-gnuseye-active-kinds)
+      (memq kind cmacs-gnuseye-active-kinds)))
+
+(defun cmacs-gnuseye--entity-visible-p (e)
+  "Non-nil if entity E passes the active-kinds filter."
+  (cmacs-gnuseye--kind-visible-p (or (plist-get e :kind) 'generic)))
+
+(defun cmacs-gnuseye--reindex ()
+  "Rebuild the id -> entity index from `cmacs-gnuseye--layer-entities'."
+  (clrhash cmacs-gnuseye--id-index)
+  (maphash
+   (lambda (lname ents)
+     (dolist (e ents)
+       (let ((id (format "%s" (or (plist-get e :id) ""))))
+         (unless (string-empty-p id)
+           (puthash id (append (list :layer lname) e)
+                    cmacs-gnuseye--id-index)))))
+   cmacs-gnuseye--layer-entities))
+
+(defun cmacs-gnuseye--render-layer (buf lname)
+  "Push LNAME's kind-filtered entities from the index to BUF's globe."
+  (when (and buf (buffer-live-p buf) (cmacs-gnuseye-attached-p buf))
+    (let ((ents (seq-filter #'cmacs-gnuseye--entity-visible-p
+                            (gethash lname cmacs-gnuseye--layer-entities))))
+      (cmacs-gnuseye-set-entities
+       buf lname (cmacs-gnuseye--entities->vector ents)))))
+
+(defun cmacs-gnuseye--render-all (&optional buf)
+  "Re-render every layer's markers (e.g. after a filter change)."
+  (let ((buf (or buf cmacs-gnuseye-buffer)))
+    (when (and buf (buffer-live-p buf))
+      (maphash (lambda (lname _) (cmacs-gnuseye--render-layer buf lname))
+               cmacs-gnuseye--layer-entities))))
+
 (defun cmacs-gnuseye--refresh-layer (layer)
-  "Run LAYER's fetch and push its entities to the globe."
+  "Run LAYER's fetch, store its entities in the index, and render them."
   (let ((buf cmacs-gnuseye-buffer))
     (when (and buf (buffer-live-p buf)
                (cmacs-gnuseye-attached-p buf)
@@ -255,15 +320,17 @@ PROPS is a plist with:
              (setf (cmacs-gnuseye-layer-in-flight layer) nil
                    (cmacs-gnuseye-layer-last-fetch layer) (float-time)
                    (cmacs-gnuseye-layer-last-error layer) nil)
-             (when (and buf (buffer-live-p buf)
-                        (cmacs-gnuseye-attached-p buf))
-               (condition-case e2
-                   (cmacs-gnuseye-set-entities
-                    buf (cmacs-gnuseye-layer-name layer)
-                    (cmacs-gnuseye--entities->vector (or entities nil)))
-                 (error
-                  (setf (cmacs-gnuseye-layer-last-error layer)
-                        (error-message-string e2)))))))
+             (condition-case e2
+                 (progn
+                   (puthash (cmacs-gnuseye-layer-name layer) (or entities nil)
+                            cmacs-gnuseye--layer-entities)
+                   (cmacs-gnuseye--reindex)
+                   (cmacs-gnuseye--render-layer buf
+                                                (cmacs-gnuseye-layer-name layer))
+                   (cmacs-gnuseye--list-refresh-soon))
+               (error
+                (setf (cmacs-gnuseye-layer-last-error layer)
+                      (error-message-string e2))))))
         (error
          (setf (cmacs-gnuseye-layer-in-flight layer) nil
                (cmacs-gnuseye-layer-last-error layer)
@@ -286,68 +353,267 @@ PROPS is a plist with:
     (cancel-timer (cmacs-gnuseye-layer-timer layer)))
   (setf (cmacs-gnuseye-layer-timer layer) nil
         (cmacs-gnuseye-layer-enabled layer) nil)
+  (remhash (cmacs-gnuseye-layer-name layer) cmacs-gnuseye--layer-entities)
+  (cmacs-gnuseye--reindex)
   (when (and cmacs-gnuseye-buffer (buffer-live-p cmacs-gnuseye-buffer)
              (cmacs-gnuseye-attached-p cmacs-gnuseye-buffer))
     (ignore-errors
       (cmacs-gnuseye-clear-layer cmacs-gnuseye-buffer
-                                 (cmacs-gnuseye-layer-name layer)))))
+                                 (cmacs-gnuseye-layer-name layer))))
+  (cmacs-gnuseye--list-refresh-soon))
 
 (defun cmacs-gnuseye--load-layers ()
   "Load the built-in layer feature files."
   (dolist (f cmacs-gnuseye-layer-files)
     (require f nil t)))
 
-;;;; Pick + detail -----------------------------------------------------------
+;;;; Selection + inspector pane ----------------------------------------------
+
+(defconst cmacs-gnuseye--inspector-name "*GNU's Eye Inspector*")
+(defconst cmacs-gnuseye--list-name "*GNU's Eye Entities*")
+
+(defun cmacs-gnuseye--select-entity (id &optional no-fly)
+  "Select entity ID: show it in the inspector, highlight it on the globe,
+and (unless NO-FLY) recentre the camera on it."
+  (setq cmacs-gnuseye--selected-id (and id (format "%s" id)))
+  (let ((e (and cmacs-gnuseye--selected-id
+                (gethash cmacs-gnuseye--selected-id cmacs-gnuseye--id-index))))
+    (when e
+      (unless no-fly
+        (when (and cmacs-gnuseye-buffer (buffer-live-p cmacs-gnuseye-buffer)
+                   (plist-get e :lat))
+          (ignore-errors
+            (cmacs-gnuseye-fly-to cmacs-gnuseye-buffer
+                                  (float (plist-get e :lat))
+                                  (float (plist-get e :lon))
+                                  cmacs-gnuseye-focus-range t))))
+      (cmacs-gnuseye--show-inspector e)
+      ;; Re-render so the selected marker is enlarged/brightened/labelled.
+      (cmacs-gnuseye--render-all))
+    e))
 
 (defun cmacs-gnuseye--on-pick (buffer node-id)
-  "Handle a marker click: look up the entity and show its detail view.
+  "Handle a marker click: select the entity (inspector + highlight + list).
 Called from `cmacs-libregnum--node-clicked' on the cmacs context."
   (when (and (integerp node-id) (>= node-id 0))
     (let ((e (ignore-errors (cmacs-gnuseye-entity-at buffer node-id))))
       (when e
-        ;; Recentre the globe on the clicked entity (zoom-to-showcase).
-        (when (and (plist-get e :lat) (plist-get e :lon))
-          (ignore-errors
-            (cmacs-gnuseye-fly-to buffer (float (plist-get e :lat))
-                                  (float (plist-get e :lon))
-                                  cmacs-gnuseye-focus-range t)))
-        (let ((detail (plist-get e :detail)))
-          (if (functionp detail)
-              (funcall detail e)
-            (cmacs-gnuseye--default-detail e)))))))
+        (cmacs-gnuseye--select-entity (plist-get e :id))
+        (cmacs-gnuseye--list-goto (plist-get e :id))))))
 
-(defun cmacs-gnuseye--default-detail (e)
-  "Render entity E into a side detail buffer."
-  (let* ((label (or (plist-get e :label) (plist-get e :id) "entity"))
-         (buf (get-buffer-create (format "*gnuseye: %s*" label))))
-    (with-current-buffer buf
-      (let ((inhibit-read-only t))
-        (erase-buffer)
-        (insert (propertize (format "%s\n" label) 'face 'bold))
-        (insert (make-string (max 8 (length label)) ?─) "\n\n")
-        (insert (format "kind     : %s\n" (or (plist-get e :kind-name) "?")))
-        (insert (format "lat,lon  : %.4f, %.4f\n"
-                        (plist-get e :lat) (plist-get e :lon)))
-        (when (and (plist-get e :alt) (> (plist-get e :alt) 0))
-          (insert (format "altitude : %.1f km\n"
-                          (/ (plist-get e :alt) 1000.0))))
+(defvar cmacs-gnuseye-inspector-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "f") #'cmacs-gnuseye-inspector-fly)
+    (define-key map (kbd "RET") #'cmacs-gnuseye-inspector-fly)
+    (define-key map (kbd "q") #'quit-window)
+    map)
+  "Keymap for `cmacs-gnuseye-inspector-mode'.")
+
+(define-derived-mode cmacs-gnuseye-inspector-mode special-mode "GnuseyeInspect"
+  "GNU's Eye entity inspector pane.")
+
+(defun cmacs-gnuseye-inspector-fly ()
+  "Recentre the globe on the inspected entity."
+  (interactive)
+  (when cmacs-gnuseye--selected-id
+    (cmacs-gnuseye--select-entity cmacs-gnuseye--selected-id)))
+
+(defun cmacs-gnuseye--insp-row (k v)
+  (when (and v (not (and (stringp v) (string-empty-p v))))
+    (insert (format "  %-10s %s\n" k v))))
+
+(defun cmacs-gnuseye--inspector-render (e)
+  "Render entity E (a rich layer plist) into the current inspector buffer."
+  (let ((inhibit-read-only t))
+    (erase-buffer)
+    (if (null e)
+        (insert "No entity selected.\n\n"
+                "Click a marker on the globe, or select a row\n"
+                "in the entity list with RET.\n")
+      (let ((label (or (plist-get e :label)
+                       (format "%s" (or (plist-get e :id) "entity")))))
+        (insert (propertize (format "%s\n" label) 'face '(bold)))
+        (insert (make-string (max 10 (string-width label)) ?─) "\n\n")
+        (cmacs-gnuseye--insp-row "kind" (plist-get e :kind))
+        (cmacs-gnuseye--insp-row "layer" (plist-get e :layer))
+        (cmacs-gnuseye--insp-row "id" (plist-get e :id))
+        (when (plist-get e :lat)
+          (cmacs-gnuseye--insp-row "lat" (format "%.4f" (plist-get e :lat))))
+        (when (plist-get e :lon)
+          (cmacs-gnuseye--insp-row "lon" (format "%.4f" (plist-get e :lon))))
+        (let ((a (plist-get e :alt)))
+          (when (and (numberp a) (> a 0))
+            (cmacs-gnuseye--insp-row "altitude" (format "%.1f km" (/ a 1000.0)))))
         (when (plist-get e :speed)
-          (insert (format "speed    : %s\n" (plist-get e :speed))))
-        (when (plist-get e :heading)
-          (insert (format "heading  : %s\n" (plist-get e :heading))))
+          (cmacs-gnuseye--insp-row "speed" (plist-get e :speed)))
+        (when (and (numberp (plist-get e :heading))
+                   (>= (plist-get e :heading) 0))
+          (cmacs-gnuseye--insp-row "heading"
+                                   (format "%s°" (plist-get e :heading))))
         (let ((data (plist-get e :data)))
           (when data
-            (insert "\ndata:\n")
+            (insert "\n" (propertize "data\n" 'face '(bold)))
             (cond
              ((and (consp data) (consp (car data)))
               (dolist (kv data)
-                (insert (format "  %s: %s\n" (car kv) (cdr kv)))))
-             (t (insert (format "  %S\n" data)))))))
-      (goto-char (point-min))
-      (special-mode))
-    (display-buffer
-     buf '((display-buffer-in-side-window) (side . right) (window-width . 0.32)))
-    buf))
+                (cmacs-gnuseye--insp-row (format "%s" (car kv)) (cdr kv))))
+             (t (insert (format "  %S\n" data))))))
+        (insert "\n[f] fly-to   [q] close\n")))
+    (goto-char (point-min))))
+
+(defun cmacs-gnuseye--show-inspector (&optional e)
+  "Show the inspector pane for entity E (or the current selection)."
+  (let ((b (get-buffer-create cmacs-gnuseye--inspector-name)))
+    (with-current-buffer b
+      (unless (derived-mode-p 'cmacs-gnuseye-inspector-mode)
+        (cmacs-gnuseye-inspector-mode))
+      (cmacs-gnuseye--inspector-render
+       (or e (and cmacs-gnuseye--selected-id
+                  (gethash cmacs-gnuseye--selected-id
+                           cmacs-gnuseye--id-index)))))
+    (display-buffer-in-side-window
+     b '((side . right) (slot . 0) (window-width . 0.26)))
+    b))
+
+;;;; Entity list pane (search + filter) --------------------------------------
+
+(defun cmacs-gnuseye--search-match-p (e)
+  (or (string-empty-p cmacs-gnuseye--search)
+      (let ((q (downcase cmacs-gnuseye--search)))
+        (or (string-search q (downcase (or (plist-get e :label) "")))
+            (string-search q (downcase (format "%s" (or (plist-get e :id) ""))))
+            (string-search q (symbol-name (or (plist-get e :kind) 'generic)))))))
+
+(defun cmacs-gnuseye--list-entries ()
+  "Tabulated-list rows for the entity list, honouring kind filter + search."
+  (let (rows)
+    (maphash
+     (lambda (id e)
+       (when (and (cmacs-gnuseye--entity-visible-p e)
+                  (cmacs-gnuseye--search-match-p e))
+         (let ((a (plist-get e :alt)))
+           (push (list id
+                       (vector
+                        (symbol-name (or (plist-get e :kind) 'generic))
+                        (or (plist-get e :label) id)
+                        (format "%.2f" (or (plist-get e :lat) 0.0))
+                        (format "%.2f" (or (plist-get e :lon) 0.0))
+                        (if (and (numberp a) (> a 0))
+                            (format "%.0f" (/ a 1000.0)) "-")
+                        (format "%s" (or (plist-get e :layer) ""))))
+                 rows))))
+     cmacs-gnuseye--id-index)
+    rows))
+
+(defun cmacs-gnuseye--list-refresh-soon ()
+  "Repaint the entity list buffer if it exists, keeping point."
+  (let ((b (get-buffer cmacs-gnuseye--list-name)))
+    (when (and b (buffer-live-p b))
+      (with-current-buffer b
+        (setq tabulated-list-entries (cmacs-gnuseye--list-entries))
+        (tabulated-list-print t)
+        (cmacs-gnuseye--list-update-header)))))
+
+(defun cmacs-gnuseye--list-update-header ()
+  (setq header-line-format
+        (format " entities: %d   filter: %s   search: %s"
+                (length tabulated-list-entries)
+                (if cmacs-gnuseye-active-kinds
+                    (mapconcat #'symbol-name cmacs-gnuseye-active-kinds ",")
+                  "all")
+                (if (string-empty-p cmacs-gnuseye--search) "-"
+                  cmacs-gnuseye--search))))
+
+(defun cmacs-gnuseye--list-goto (id)
+  "Move point to the row for ID in the list buffer, if shown."
+  (let ((b (get-buffer cmacs-gnuseye--list-name)))
+    (when (and b (buffer-live-p b) (get-buffer-window b))
+      (with-current-buffer b
+        (goto-char (point-min))
+        (let ((target (format "%s" id)))
+          (while (and (not (eobp))
+                      (not (equal (tabulated-list-get-id) target)))
+            (forward-line 1)))))))
+
+(defvar cmacs-gnuseye-list-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "RET") #'cmacs-gnuseye-list-select)
+    (define-key map (kbd "s")   #'cmacs-gnuseye-search)
+    (define-key map (kbd "f")   #'cmacs-gnuseye-filter-kinds)
+    (define-key map (kbd "c")   #'cmacs-gnuseye-filter-clear)
+    (define-key map (kbd "g")   #'cmacs-gnuseye-list-refresh)
+    (define-key map (kbd "q")   #'quit-window)
+    (define-key map [mouse-1]   #'cmacs-gnuseye-list-select)
+    map)
+  "Keymap for `cmacs-gnuseye-list-mode'.")
+
+(define-derived-mode cmacs-gnuseye-list-mode tabulated-list-mode "GnuseyeEntities"
+  "Searchable, filterable list of the globe's live entities."
+  (setq tabulated-list-format
+        [("Kind" 10 t) ("Label" 18 t) ("Lat" 8 t) ("Lon" 9 t)
+         ("Alt" 6 t) ("Layer" 10 t)])
+  (setq tabulated-list-sort-key '("Kind" . nil))
+  (tabulated-list-init-header))
+
+(defun cmacs-gnuseye-list-select (&optional event)
+  "Select the entity on the current list row (inspector + globe)."
+  (interactive (list last-nonmenu-event))
+  (when event (ignore-errors (mouse-set-point event)))
+  (let ((id (tabulated-list-get-id)))
+    (when id (cmacs-gnuseye--select-entity id))))
+
+(defun cmacs-gnuseye-list-refresh ()
+  "Repaint the entity list."
+  (interactive)
+  (cmacs-gnuseye--list-refresh-soon))
+
+(defun cmacs-gnuseye-search (query)
+  "Narrow the entity list to rows matching QUERY (empty clears)."
+  (interactive
+   (list (read-string "Search entities (label/id/kind, empty clears): "
+                      cmacs-gnuseye--search)))
+  (setq cmacs-gnuseye--search (or query ""))
+  (cmacs-gnuseye--list-refresh-soon))
+
+(defun cmacs-gnuseye-filter-kinds (kinds)
+  "Show only KINDS on the globe and in the list (empty selection = all).
+Pick one or more of e.g. aircraft, ship, satellite, quake."
+  (interactive
+   (list (completing-read-multiple
+          "Show kinds (comma-separated, empty = all): "
+          (mapcar #'symbol-name cmacs-gnuseye--known-kinds))))
+  (setq cmacs-gnuseye-active-kinds
+        (delq nil (mapcar (lambda (s) (and (stringp s) (not (string-empty-p s))
+                                           (intern s)))
+                          kinds)))
+  (cmacs-gnuseye--render-all)
+  (cmacs-gnuseye--list-refresh-soon)
+  (message "GNU's Eye showing: %s"
+           (if cmacs-gnuseye-active-kinds
+               (mapconcat #'symbol-name cmacs-gnuseye-active-kinds ", ")
+             "all kinds")))
+
+(defun cmacs-gnuseye-filter-clear ()
+  "Clear the kind filter and the search."
+  (interactive)
+  (setq cmacs-gnuseye-active-kinds nil
+        cmacs-gnuseye--search "")
+  (cmacs-gnuseye--render-all)
+  (cmacs-gnuseye--list-refresh-soon)
+  (message "GNU's Eye filters cleared"))
+
+(defun cmacs-gnuseye--show-list ()
+  "Show the entity list pane."
+  (let ((b (get-buffer-create cmacs-gnuseye--list-name)))
+    (with-current-buffer b
+      (unless (derived-mode-p 'cmacs-gnuseye-list-mode)
+        (cmacs-gnuseye-list-mode))
+      (setq tabulated-list-entries (cmacs-gnuseye--list-entries))
+      (tabulated-list-print)
+      (cmacs-gnuseye--list-update-header))
+    (display-buffer-in-side-window
+     b '((side . left) (slot . 0) (window-width . 0.24)))
+    b))
 
 ;;;; Layers UI ---------------------------------------------------------------
 
@@ -414,7 +680,9 @@ Called from `cmacs-libregnum--node-clicked' on the cmacs context."
     (with-current-buffer buf
       (cmacs-gnuseye-layers-mode)
       (cmacs-gnuseye-layers-refresh))
-    (pop-to-buffer buf)))
+    (select-window
+     (display-buffer-in-side-window
+      buf '((side . left) (slot . 1) (window-width . 0.24))))))
 
 ;;;; Mode + entry point ------------------------------------------------------
 
@@ -449,7 +717,12 @@ Called from `cmacs-libregnum--node-clicked' on the cmacs context."
 
 (defvar cmacs-gnuseye-mode-map
   (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "e") #'cmacs-gnuseye-entities)
+    (define-key map (kbd "i") #'cmacs-gnuseye-inspector)
     (define-key map (kbd "l") #'cmacs-gnuseye-layers)
+    (define-key map (kbd "s") #'cmacs-gnuseye-search)
+    (define-key map (kbd "F") #'cmacs-gnuseye-filter-kinds)
+    (define-key map (kbd "c") #'cmacs-gnuseye-filter-clear)
     (define-key map (kbd "g") #'cmacs-gnuseye-refresh-all)
     (define-key map (kbd "f") #'cmacs-gnuseye-fly-to-place)
     (define-key map (kbd "?") #'cmacs-gnuseye-legend)
@@ -460,13 +733,23 @@ Called from `cmacs-libregnum--node-clicked' on the cmacs context."
 (define-derived-mode cmacs-gnuseye-mode special-mode "GNU's-Eye"
   "Major mode for the GNU's Eye live globe.
 The buffer's text area is covered by the libregnum globe blit; mouse
-drag orbits, scroll zooms, right-drag pans, and clicking a marker opens
-its detail view."
+drag orbits, scroll zooms, right-drag pans, hover identifies a marker,
+and clicking one selects it (inspector + recentre)."
   (setq-local cursor-type nil)
   (buffer-disable-undo)
   (setq-local mode-line-format
-              '(" GNU's Eye  drag=orbit scroll=zoom hover=id click=focus \
- [l]ayers [g]refresh [f]ly [?]legend [q]uit")))
+              '(" GNU's Eye  drag=orbit scroll=zoom hover=id click=select \
+ [e]ntities [i]nspect [l]ayers [s]earch [F]ilter [g]refresh [?]legend [q]uit")))
+
+(defun cmacs-gnuseye-entities ()
+  "Show (and select) the entity list pane."
+  (interactive)
+  (select-window (get-buffer-window (cmacs-gnuseye--show-list))))
+
+(defun cmacs-gnuseye-inspector ()
+  "Show the inspector pane for the current selection."
+  (interactive)
+  (cmacs-gnuseye--show-inspector))
 
 (defun cmacs-gnuseye-refresh-all ()
   "Refresh every enabled layer now."
@@ -484,9 +767,12 @@ its detail view."
     (cmacs-gnuseye-fly-to cmacs-gnuseye-buffer (float lat) (float lon) 14.0 t)))
 
 ;;;###autoload
-(defun cmacs-gnuseye ()
-  "Open the GNU's Eye live planetary globe."
-  (interactive)
+(defun cmacs-gnuseye (&optional no-dashboard)
+  "Open the GNU's Eye live planetary globe dashboard.
+The globe viewport sits in the centre with an entity list on the left
+and an inspector on the right.  With a prefix arg (NO-DASHBOARD), open
+just the globe viewport."
+  (interactive "P")
   (unless (and (fboundp 'cmacs-gnuseye-supported-p) (cmacs-gnuseye-supported-p))
     (user-error "This cmacs was not built with --with-cmacs-gnuseye"))
   (let ((buf (get-buffer-create "*GNU's Eye*")))
@@ -513,8 +799,44 @@ its detail view."
                          (cmacs-gnuseye-layer-needs-key layer))))
            (cmacs-gnuseye--enable-layer layer)))
        cmacs-gnuseye--layers))
-    (pop-to-buffer buf)
+    ;; Lay out the dashboard: globe centre, entity list left, inspector right.
+    (switch-to-buffer buf)
+    (delete-other-windows)
+    (unless no-dashboard
+      (cmacs-gnuseye--show-list)
+      (cmacs-gnuseye--show-inspector)
+      (select-window (get-buffer-window buf)))
     buf))
+
+;;;; Evil (Doom) + vanilla navigation -----------------------------------------
+
+;; Make every pane usable with both vanilla Emacs and Evil/Doom:
+;;  - Globe viewport: Emacs state, so its single-key commands reach the
+;;    keymap instead of Evil operators (mouse drives the camera anyway).
+;;  - Entity list + layers: Motion state, so Evil hjkl navigation works
+;;    while they stay read-only; RET / s / f / g activate via the keymap.
+;;  - Inspector: Normal state so Evil motion + Esc behave normally.
+(with-eval-after-load 'evil
+  (when (fboundp 'evil-set-initial-state)
+    (evil-set-initial-state 'cmacs-gnuseye-mode 'emacs)
+    (evil-set-initial-state 'cmacs-gnuseye-list-mode 'motion)
+    (evil-set-initial-state 'cmacs-gnuseye-inspector-mode 'normal)
+    (evil-set-initial-state 'cmacs-gnuseye-layers-mode 'motion))
+  ;; Bind the list/layers actions in Motion state too (Motion otherwise
+  ;; swallows single keys like s/f/g), keeping hjkl navigation.
+  (when (fboundp 'evil-define-key*)
+    (evil-define-key* 'motion cmacs-gnuseye-list-mode-map
+      (kbd "RET") #'cmacs-gnuseye-list-select
+      "s" #'cmacs-gnuseye-search
+      "f" #'cmacs-gnuseye-filter-kinds
+      "c" #'cmacs-gnuseye-filter-clear
+      "g" #'cmacs-gnuseye-list-refresh
+      "q" #'quit-window)
+    (evil-define-key* 'motion cmacs-gnuseye-layers-mode-map
+      (kbd "RET") #'cmacs-gnuseye-layers-toggle
+      "t" #'cmacs-gnuseye-layers-toggle
+      "g" #'cmacs-gnuseye-layers-refresh
+      "q" #'quit-window)))
 
 (provide 'cmacs-gnuseye)
 ;;; cmacs-gnuseye.el ends here

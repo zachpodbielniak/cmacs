@@ -6686,9 +6686,22 @@ clickable, heading-oriented markers on a textured globe.  It is rendered
 @option{--with-cmacs-gnuseye} (requires @option{--with-cmacs-libregnum} and
 @option{--with-cmacs-glib}; off by default).
 
-@code{M-x cmacs-gnuseye} opens the @file{*GNU's Eye*} buffer.  Drag to
-orbit, scroll to zoom, right-drag to pan, and click a marker for its detail
-view.  @code{M-x cmacs-gnuseye-layers} toggles data layers.
+@code{M-x cmacs-gnuseye} opens a dashboard: the globe viewport in the
+centre, a searchable/filterable entity list on the left, and an inspector
+on the right.  Drag to orbit, scroll to zoom, right-drag to pan, hover a
+marker to identify it, and click (or select its list row) to recentre on it
+and fill the inspector.  @code{s} searches by name; @code{F} filters by
+kind (e.g. only planes, or planes and boats) on both the list and the
+globe; @code{l} toggles data layers.  Navigation works in vanilla Emacs and
+Evil/Doom (the viewport runs in Evil @code{emacs} state, the panels in
+@code{motion} state).
+
+The globe is a sun-lit 3D sphere with a soft day/night terminator; point
+@code{cmacs-gnuseye-base-texture} at an equirectangular Earth image for
+photoreal continents.  Markers are heading-oriented 3D icons (planes,
+ships, satellites with orbit trails, rockets, magnitude-sized quake
+spheres); aircraft float at a readable altitude with a drop-line to the
+ground.
 
 @section Extensibility
 
