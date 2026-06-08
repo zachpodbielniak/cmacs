@@ -246,6 +246,11 @@ struct CmacsLibregnumRenderCtx
   GrlModel         *background_model;     /* owned, or NULL */
   float             background_spin_deg;  /* rotation about +Y, degrees */
 
+  /* Occluding sphere radius at the origin (the gnuseye globe), or 0 for
+   * none.  Labels/billboards on the FAR side of this sphere (behind the
+   * limb) are culled so they do not show through the globe. */
+  double            occluder_radius;
+
   /* Persistent static drawables (e.g. the gnuseye coastline overlay):
    * drawn every frame after the background model and NOT cleared by
    * clear_drawables.  Owned (g_object_unref per element). */
@@ -436,6 +441,28 @@ cmacs_libregnum_render_ctx_set_background_spin (CmacsLibregnumRenderCtx *r,
 }
 
 void
+cmacs_libregnum_render_ctx_set_occluder_radius (CmacsLibregnumRenderCtx *r,
+                                                double radius)
+{
+  if (r) r->occluder_radius = radius;
+}
+
+/* TRUE if world point (X,Y,Z) is on the near side of the occluding sphere
+ * (visible to the camera), i.e. not hidden behind the globe.  A surface
+ * point P at radius R is visible from camera C iff dot(P,C) > R*R; this
+ * also passes points well above the surface (satellites, lifted labels). */
+static gboolean
+ctx_point_near_side (CmacsLibregnumRenderCtx *r, double x, double y, double z)
+{
+  if (!r || r->occluder_radius <= 0.0) return TRUE;
+  double px, py, pz, tx, ty, tz, fov;
+  cmacs_libregnum_render_ctx_get_camera_state (r, &px, &py, &pz,
+                                               &tx, &ty, &tz, &fov);
+  double dot = x * px + y * py + z * pz;
+  return dot > r->occluder_radius * r->occluder_radius;
+}
+
+void
 cmacs_libregnum_render_ctx_add_static_drawable (CmacsLibregnumRenderCtx *r,
                                                 void *drawable)
 {
@@ -489,6 +516,8 @@ cmacs_libregnum_render_ctx_map_label_at (CmacsLibregnumRenderCtx *r, guint id,
 {
   if (!r || !r->map_labels || id >= r->map_labels->len) return FALSE;
   CmacsMapLabel *l = &g_array_index (r->map_labels, CmacsMapLabel, id);
+  /* Hide labels on the far side of the globe (behind the limb). */
+  if (!ctx_point_near_side (r, l->x, l->y, l->z)) return FALSE;
   if (!cmacs_libregnum_render_ctx_project (r, l->x, l->y, l->z, vw, vh, sx, sy))
     return FALSE;
   if (text) *text = l->text;
@@ -769,6 +798,8 @@ cmacs_libregnum_render_ctx_label_at (CmacsLibregnumRenderCtx *r, guint id,
   CmacsNode *n = &g_array_index (r->nodes, CmacsNode, id);
   if (name)   *name   = n->name;
   if (is_dir) *is_dir = n->is_dir;
+  /* Hide labels for nodes on the far side of the globe. */
+  if (!ctx_point_near_side (r, n->x, n->y, n->z)) return FALSE;
   return cmacs_libregnum_render_ctx_project (r, n->x, n->y + n->hh + 0.25f,
                                              n->z, vw, vh, sx, sy);
 }
@@ -1216,6 +1247,9 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
                     CmacsBillboard *bb =
                       &g_array_index (r->billboards, CmacsBillboard, i);
                     if (!bb->tex) continue;
+                    /* Skip flags on the far side of the globe. */
+                    if (!ctx_point_near_side (r, bb->x, bb->y, bb->z))
+                      continue;
                     Texture2D *t = grl_texture_get_handle (bb->tex);
                     if (t && t->id)
                       DrawBillboard (bcam, *t,

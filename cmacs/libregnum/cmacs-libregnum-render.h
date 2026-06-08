@@ -66,6 +66,12 @@ extern void *cmacs_libregnum_render_ctx_get_background_model
 extern void  cmacs_libregnum_render_ctx_set_background_spin
                               (CmacsLibregnumRenderCtx *r, double deg);
 
+/* Radius of an occluding sphere at the origin (the globe), or 0 for none.
+ * Labels/billboards behind this sphere's limb are culled so they do not
+ * show through from the far side. */
+extern void  cmacs_libregnum_render_ctx_set_occluder_radius
+                              (CmacsLibregnumRenderCtx *r, double radius);
+
 /* Persistent static drawables (e.g. a coastline overlay): drawn every frame
  * after the background model, NOT cleared by clear_drawables.  add transfers
  * ownership of DRAWABLE (an LrgDrawable*, void* to keep the header clean). */

@@ -268,6 +268,8 @@ cmacs_gnuseye_build (CmacsLibregnumRenderCtx *r, const char *base_texture_path)
    * g->img/g->tex) is freed when the ctx releases the background model. */
   cmacs_libregnum_render_ctx_set_background_model (r, model);
   cmacs_libregnum_render_ctx_set_background_spin (r, 0.0);
+  /* The globe occludes labels/flags on its far side. */
+  cmacs_libregnum_render_ctx_set_occluder_radius (r, GNUSEYE_GLOBE_RADIUS);
   return TRUE;
 }
 
