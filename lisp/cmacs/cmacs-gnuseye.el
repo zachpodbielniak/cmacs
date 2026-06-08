@@ -904,12 +904,24 @@ non-nil for the action to be offered.  Binds KEY in the inspector keymap."
 
 ;;;; Entity list pane (search + filter) --------------------------------------
 
+(defun cmacs-gnuseye--data-haystack (e)
+  "Lowercased text of E's :data alist values (callsign, MMSI, country, …)."
+  (let ((d (plist-get e :data)) (acc ""))
+    (when (and (consp d) (consp (car d)))
+      (dolist (kv d)
+        (setq acc (concat acc " " (format "%s" (cdr-safe kv))))))
+    (downcase acc)))
+
 (defun cmacs-gnuseye--search-match-p (e)
+  "Non-nil if entity E matches the current list search across all its fields
+\(label, id, kind, and every :data value — so a callsign / MMSI / NORAD id /
+country matches too)."
   (or (string-empty-p cmacs-gnuseye--search)
       (let ((q (downcase cmacs-gnuseye--search)))
         (or (string-search q (downcase (or (plist-get e :label) "")))
             (string-search q (downcase (format "%s" (or (plist-get e :id) ""))))
-            (string-search q (symbol-name (or (plist-get e :kind) 'generic)))))))
+            (string-search q (symbol-name (or (plist-get e :kind) 'generic)))
+            (string-search q (cmacs-gnuseye--data-haystack e))))))
 
 (defcustom cmacs-gnuseye-list-max 500
   "Maximum rows shown in the entity list at once.

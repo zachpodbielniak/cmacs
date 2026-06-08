@@ -333,6 +333,50 @@ marker individual."
     (should (eq (plist-get (car out) :kind) 'camera))
     (should (assq 'stream (plist-get (car out) :data)))))
 
+;;;; Phase 4: interaction -----------------------------------------------------
+
+(ert-deftest cmacs-gnuseye--search-data ()
+  "List search matches across :data values, not just label/id/kind."
+  (cmacs-gnuseye-tests--skip)
+  (let ((e (list :id "x" :label "" :kind 'aircraft
+                 :data '((registration . "N12345") (origin . "US")))))
+    (let ((cmacs-gnuseye--search "n12345"))
+      (should (cmacs-gnuseye--search-match-p e)))
+    (let ((cmacs-gnuseye--search "zzz"))
+      (should-not (cmacs-gnuseye--search-match-p e)))))
+
+(ert-deftest cmacs-gnuseye--jump-candidates ()
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-search)
+  (clrhash cmacs-gnuseye--id-index)
+  (puthash "a1" (list :layer 'aircraft :id "a1" :kind 'aircraft :label "UAL1"
+                      :lat 1 :lon 2 :data '((callsign . "UAL1")))
+           cmacs-gnuseye--id-index)
+  (let ((cands (cmacs-gnuseye--jump-candidates)))
+    (should (cl-some (lambda (c) (equal (cdr c) '(:entity "a1"))) cands))
+    (should (cl-some (lambda (c) (eq (car-safe (cdr c)) :place)) cands))
+    (should (cl-some (lambda (c) (eq (car-safe (cdr c)) :command)) cands)))
+  (clrhash cmacs-gnuseye--id-index))
+
+(ert-deftest cmacs-gnuseye--geofence-enter ()
+  "An entity inside the fence radius is recorded inside; outside is not."
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-geofence)
+  (clrhash cmacs-gnuseye--id-index)
+  (clrhash cmacs-gnuseye--geofences)
+  (puthash "in" (list :layer 'test :id "in" :kind 'ship :lat 26.6 :lon 56.3)
+           cmacs-gnuseye--id-index)
+  (puthash "out" (list :layer 'test :id "out" :kind 'ship :lat 0.0 :lon 0.0)
+           cmacs-gnuseye--id-index)
+  (cmacs-gnuseye-add-geofence "hormuz" 26.57 56.25 60.0)
+  (setq cmacs-gnuseye--geofence-last 0.0)
+  (cmacs-gnuseye--geofence-eval)
+  (let ((g (gethash "hormuz" cmacs-gnuseye--geofences)))
+    (should (gethash "in" (cmacs-gnuseye-geofence-inside g)))
+    (should-not (gethash "out" (cmacs-gnuseye-geofence-inside g))))
+  (clrhash cmacs-gnuseye--id-index)
+  (clrhash cmacs-gnuseye--geofences))
+
 (provide 'cmacs-gnuseye-tests)
 
 ;;; cmacs-gnuseye-tests.el ends here
