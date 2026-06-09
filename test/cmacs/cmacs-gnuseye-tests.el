@@ -555,6 +555,46 @@ does not."
   (should (fboundp 'cmacs-gnuseye-flat-p))
   (should (fboundp 'cmacs-gnuseye-toggle-2d)))
 
+;;;; v2 Phase 12: measurement, export, watchlists -----------------------------
+
+(ert-deftest cmacs-gnuseye--export-geojson ()
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-export)
+  (let* ((ents (list (list :id "a" :kind 'quake :label "M5" :lat 10 :lon 20
+                           :layer 'weather)))
+         (s (cmacs-gnuseye-export--geojson-string ents))
+         (parsed (json-parse-string s :object-type 'alist :array-type 'list)))
+    (should (equal (alist-get 'type parsed) "FeatureCollection"))
+    (let* ((f (car (alist-get 'features parsed)))
+           (coords (alist-get 'coordinates (alist-get 'geometry f))))
+      (should (= (elt coords 0) 20))      ; lon first (GeoJSON order)
+      (should (= (elt coords 1) 10)))))
+
+(ert-deftest cmacs-gnuseye--export-csv ()
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-export)
+  (let* ((ents (list (list :id "x,1" :kind 'fire :label "a\"b" :lat 1 :lon 2
+                           :layer 'natural)))
+         (s (cmacs-gnuseye-export--csv-string ents)))
+    (should (string-prefix-p "id,kind,label,lat,lon,layer" s))
+    (should (string-match-p "\"x,1\"" s))      ; comma-quoted
+    (should (string-match-p "\"a\"\"b\"" s)))) ; quote-escaped
+
+(ert-deftest cmacs-gnuseye--watch-cmp ()
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-watch)
+  (should (cmacs-gnuseye--watch-cmp 7 ">" "5"))
+  (should-not (cmacs-gnuseye--watch-cmp 3 ">" "5"))
+  (should (cmacs-gnuseye--watch-cmp "Tornado Warning" "~" "tornado"))
+  (let ((e (list :speed 300 :data '((country . "US")))))
+    (should (= (cmacs-gnuseye--watch-field e "speed") 300))
+    (should (equal (cmacs-gnuseye--watch-field e "country") "US"))))
+
+(ert-deftest cmacs-gnuseye--measure-defun ()
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-measure)
+  (should (fboundp 'cmacs-gnuseye-measure)))
+
 (provide 'cmacs-gnuseye-tests)
 
 ;;; cmacs-gnuseye-tests.el ends here
