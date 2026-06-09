@@ -271,7 +271,18 @@ build_globe (CmacsLibregnumRenderCtx *r, const char *base_texture_path,
       if (base_texture_path && *base_texture_path)
         g->img = load_earth_texture (base_texture_path);
       if (!g->img)
-        g->img = make_procedural_earth (GLOBE_TEX_W, GLOBE_TEX_H);
+        {
+          /* Warp the procedural equirectangular ocean into the mesh's UV
+           * space, exactly as a real texture is, so its graticule + polar
+           * gradient land at the geometric poles -- the par_shapes sphere's
+           * own UV poles sit on the equator at lon +-90 (off Ecuador), which
+           * is where the unwarped texture's poles used to show. */
+          g_autoptr (GrlImage) proc =
+            make_procedural_earth (GLOBE_TEX_W, GLOBE_TEX_H);
+          if (proc) g->img = warp_equirect_to_mesh (proc);
+          if (!g->img)               /* warp failed: unwarped fallback */
+            g->img = make_procedural_earth (GLOBE_TEX_W, GLOBE_TEX_H);
+        }
       if (!g->img)
         { g_free (g); g_object_unref (model); return FALSE; }
       g->tw = grl_image_get_width (g->img);
