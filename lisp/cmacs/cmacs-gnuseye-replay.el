@@ -151,6 +151,82 @@
       (cmacs-gnuseye-replay--show)
       (message "GNU's Eye: replay — < > step, SPC play, = live"))))
 
+;;; History-backed replay + backtesting --------------------------------------
+
+(defun cmacs-gnuseye-replay--history-ring (since until)
+  "Build a newest-first replay ring from disk history between SINCE and UNTIL."
+  (require 'cmacs-gnuseye-history)
+  (let ((recs (cmacs-gnuseye-history-load since until))
+        (by-ts (make-hash-table :test 'equal)) ring tss)
+    (dolist (r recs)
+      (let* ((ts (nth 0 r)) (layer (nth 1 r)) (ents (nth 2 r))
+             (h (or (gethash ts by-ts)
+                    (puthash ts (make-hash-table :test 'eq) by-ts))))
+        (puthash layer
+                 (mapcar (lambda (v)
+                           (list :id (aref v 0) :lat (aref v 1) :lon (aref v 2)
+                                 :kind (aref v 3) :label (aref v 4)))
+                         (append ents nil))
+                 h)))
+    (maphash (lambda (ts _) (push ts tss)) by-ts)
+    (dolist (ts (sort tss #'<)) (push (cons ts (gethash ts by-ts)) ring))
+    ring))
+
+;;;###autoload
+(defun cmacs-gnuseye-replay-from-history (hours)
+  "Replay the last HOURS of recorded disk history (days/weeks possible)."
+  (interactive "nReplay how many hours of history: ")
+  (let* ((now (float-time))
+         (ring (cmacs-gnuseye-replay--history-ring (- now (* hours 3600)) now)))
+    (if (null ring)
+        (user-error "No recorded history in that window")
+      (setq cmacs-gnuseye-replay--ring ring
+            cmacs-gnuseye-replay--active t
+            cmacs-gnuseye-replay--idx 0)
+      (set-transient-map cmacs-gnuseye-replay-mode-map
+                         (lambda () cmacs-gnuseye-replay--active))
+      (cmacs-gnuseye-replay--show)
+      (message "GNU's Eye: replaying %d history snapshots" (length ring)))))
+
+;;;###autoload
+(defun cmacs-gnuseye-backtest (hours)
+  "Run the correlation + CII engines over the last HOURS of history and report
+the peak instability over time."
+  (interactive "nBacktest how many hours of history: ")
+  (require 'cmacs-gnuseye-intel)
+  (require 'cmacs-gnuseye-history)
+  (let* ((now (float-time))
+         (ring (cmacs-gnuseye-replay--history-ring (- now (* hours 3600)) now))
+         (b (get-buffer-create "*GNU's Eye Backtest*")))
+    (with-current-buffer b
+      (let ((inhibit-read-only t))
+        (special-mode)
+        (erase-buffer)
+        (insert (propertize (format "Backtest — last %dh, %d snapshots\n"
+                                    hours (length ring)) 'face 'bold))
+        (insert "─────────────────────────────────────\n")
+        (insert "time      hotspots  top-country (score)\n")
+        (dolist (snap ring)
+          (let ((ts (car snap)) (lh (cdr snap)))
+            ;; reconstruct the index from this snapshot
+            (clrhash cmacs-gnuseye--id-index)
+            (maphash (lambda (layer ents)
+                       (dolist (e ents)
+                         (puthash (format "%s" (plist-get e :id))
+                                  (append (list :layer layer) e)
+                                  cmacs-gnuseye--id-index)))
+                     lh)
+            (let* ((hs (length (cmacs-gnuseye-intel--compute-hotspots)))
+                   (scores (cmacs-gnuseye-intel--compute-cii))
+                   (top nil) (topv 0.0))
+              (maphash (lambda (iso v) (when (> v topv) (setq top iso topv v)))
+                       scores)
+              (insert (format "%s   %4d      %s\n"
+                              (format-time-string "%m-%d %H:%M" ts)
+                              hs (if top (format "%s (%.2f)" top topv) "—"))))))
+        (goto-char (point-min))))
+    (display-buffer b)))
+
 (add-hook 'cmacs-gnuseye--reindex-functions #'cmacs-gnuseye-replay--capture)
 
 (with-eval-after-load 'cmacs-gnuseye

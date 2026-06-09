@@ -624,6 +624,43 @@ does not."
                      '((hits ((points . 120) (title . "Cool thing")))))))
     (should (string-match-p "Cool thing" s))))
 
+;;;; v2 Phase 15-16: history replay + analytics engines -----------------------
+
+(ert-deftest cmacs-gnuseye--history-ring ()
+  "A disk-history window builds a newest-first replay ring of layer hashes."
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-replay)
+  (require 'cmacs-gnuseye-history)
+  (let ((tmp (make-temp-file "ge-hist" nil ".eld")))
+    (cl-letf (((symbol-function 'cmacs-gnuseye-history-file) (lambda () tmp)))
+      (with-temp-file tmp
+        (insert (prin1-to-string (list 100.0 'quakes (vector (vector "q" 1 2 'quake "M5"))))
+                "\n"
+                (prin1-to-string (list 200.0 'quakes (vector (vector "q" 3 4 'quake "M6"))))
+                "\n"))
+      (let ((ring (cmacs-gnuseye-replay--history-ring 0.0 1000.0)))
+        (should (= (length ring) 2))
+        (should (= (car (car ring)) 200.0))   ; newest first
+        (should (hash-table-p (cdr (car ring))))))
+    (ignore-errors (delete-file tmp))))
+
+(ert-deftest cmacs-gnuseye--engines ()
+  "The analytics-engine commands and region context exist + work."
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-intel)
+  (require 'cmacs-gnuseye-replay)
+  (dolist (fn '(cmacs-gnuseye-ai-deduce cmacs-gnuseye-ai-market-implication
+                cmacs-gnuseye-ai-resilience cmacs-gnuseye-ai-country-brief
+                cmacs-gnuseye-replay-from-history cmacs-gnuseye-backtest))
+    (should (fboundp fn)))
+  (clrhash cmacs-gnuseye--id-index)
+  (puthash "a" (list :layer 'air :id "a" :kind 'aircraft :label "UAL1"
+                     :lat 40 :lon -100) cmacs-gnuseye--id-index)
+  (let ((ctx (cmacs-gnuseye-intel--region-context)))
+    (should (stringp ctx))
+    (should (string-match-p "aircraft" ctx)))
+  (clrhash cmacs-gnuseye--id-index))
+
 (provide 'cmacs-gnuseye-tests)
 
 ;;; cmacs-gnuseye-tests.el ends here

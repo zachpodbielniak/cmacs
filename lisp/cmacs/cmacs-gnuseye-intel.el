@@ -235,6 +235,78 @@ ground every statement in the supplied data; flag gaps explicitly.")
                                         cmacs-gnuseye-intel--brief-system)))
         (cmacs-gnuseye-intel--ai-buffer "Region SITREP" out)))))
 
+;;; Heavy engines (structured cmacs-ai prompts) ------------------------------
+
+(defun cmacs-gnuseye-intel--region-context (&optional limit)
+  "Compact text summary of the on-screen entities for an LLM prompt."
+  (let ((counts (make-hash-table :test 'eq)) (notable nil) (total 0))
+    (maphash (lambda (_ e)
+               (when (cmacs-gnuseye--entity-visible-p e)
+                 (cl-incf total)
+                 (cl-incf (gethash (or (plist-get e :kind) 'generic) counts 0))
+                 (when (and (< (length notable) (or limit 30)) (plist-get e :label))
+                   (push (format "%s (%s @ %.1f,%.1f)" (plist-get e :label)
+                                 (plist-get e :kind) (or (plist-get e :lat) 0)
+                                 (or (plist-get e :lon) 0))
+                         notable))))
+             cmacs-gnuseye--id-index)
+    (let (kinds) (maphash (lambda (k n) (push (format "%s:%d" k n) kinds)) counts)
+         (format "On screen: %d entities.\nBy kind: %s\nNotable: %s"
+                 total (string-join kinds ", ")
+                 (string-join (nreverse notable) "; ")))))
+
+(defmacro cmacs-gnuseye-intel--defengine (name key title system prompt-form)
+  "Define an LLM engine command NAME (bound under inspector/globe via KEY)."
+  `(defun ,name ()
+     ,(format "%s (cmacs-ai)." title)
+     (interactive)
+     (if (not (cmacs-gnuseye-intel--ai-available-p))
+         (user-error "cmacs-ai is not available in this build")
+       (cmacs-gnuseye-intel--ai-buffer
+        ,title (cmacs-ai-prompt-sync ,prompt-form nil ,system)))))
+
+(cmacs-gnuseye-intel--defengine cmacs-gnuseye-ai-deduce nil
+  "Situation deduction"
+  "You are a fusion-intelligence analyst.  From the geospatial signals
+provided, deduce the most probable ongoing situation(s) with explicit
+confidence and the inference chain (which signals support / contradict).
+Correlation is not causation.  Org markup, BLUF first."
+  (concat (cmacs-gnuseye-intel--region-context 40)
+          "\n\nDeduce the situation."))
+
+(cmacs-gnuseye-intel--defengine cmacs-gnuseye-ai-market-implication nil
+  "Market implication"
+  "You are a geo-macro strategist.  Given the geospatial situation, project the
+likely impact on equities, commodities (esp. energy), FX, and rates, with a
+confidence and the mechanism.  Be explicit that this is a scenario, not advice.
+Org markup, BLUF first."
+  (concat (cmacs-gnuseye-intel--region-context 40)
+          "\n\nWhat are the market implications?"))
+
+(cmacs-gnuseye-intel--defengine cmacs-gnuseye-ai-resilience nil
+  "Resilience / shock simulation"
+  "You are a resilience analyst.  Given the visible disruptions, simulate a
+plausible escalation (energy shock, supply-chain break, conflict spread): the
+cascade, who is exposed, mitigations, and a confidence.  Org markup, BLUF
+first."
+  (concat (cmacs-gnuseye-intel--region-context 40)
+          "\n\nSimulate the resilience / shock scenario."))
+
+;;;###autoload
+(defun cmacs-gnuseye-ai-country-brief (iso)
+  "Brief the AI on country ISO using its current signals + instability score."
+  (interactive "sCountry ISO-A3: ")
+  (if (not (cmacs-gnuseye-intel--ai-available-p))
+      (user-error "cmacs-ai is not available in this build")
+    (cmacs-gnuseye-intel--compute-cii)
+    (let* ((score (gethash (upcase iso) cmacs-gnuseye-cii--scores))
+           (prompt (format "Country %s; instability index %s.\n%s\n\nProduce a country SITREP."
+                           (upcase iso) (if score (format "%.2f" score) "n/a")
+                           (cmacs-gnuseye-intel--region-context 25))))
+      (cmacs-gnuseye-intel--ai-buffer
+       (format "SITREP: %s" (upcase iso))
+       (cmacs-ai-prompt-sync prompt nil cmacs-gnuseye-intel--brief-system)))))
+
 (with-eval-after-load 'cmacs-gnuseye
   (define-key cmacs-gnuseye-mode-map (kbd "A") #'cmacs-gnuseye-ai-brief)
   (define-key cmacs-gnuseye-mode-map (kbd "C") #'cmacs-gnuseye-intel-cii)
