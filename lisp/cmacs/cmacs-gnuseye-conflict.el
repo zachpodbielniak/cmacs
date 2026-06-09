@@ -79,5 +79,49 @@
   :cluster t
   :fetch #'cmacs-gnuseye-gdelt--fetch)
 
+;;;; UCDP georeferenced event dataset -----------------------------------------
+
+(defcustom cmacs-gnuseye-ucdp-url
+  "https://ucdpapi.pcr.uu.se/api/gedevents/24.1?pagesize=300"
+  "UCDP GED API endpoint (keyless; bump the dataset version as released)."
+  :type 'string :group 'cmacs-gnuseye)
+
+(defun cmacs-gnuseye-ucdp--num (v)
+  (cond ((numberp v) v) ((stringp v) (string-to-number v)) (t nil)))
+
+(defun cmacs-gnuseye-ucdp--parse (data)
+  (let (out)
+    (dolist (r (alist-get 'Result data))
+      (let ((lat (cmacs-gnuseye-ucdp--num (alist-get 'latitude r)))
+            (lon (cmacs-gnuseye-ucdp--num (alist-get 'longitude r))))
+        (when (and (numberp lat) (numberp lon))
+          (push (list :id (format "ucdp:%s" (alist-get 'id r))
+                      :kind 'event
+                      :label (format "%s" (or (alist-get 'country r) "conflict"))
+                      :lat lat :lon lon
+                      :scale (let ((b (cmacs-gnuseye-ucdp--num (alist-get 'best r))))
+                               (if (and b (> b 0)) (min 2.0 (+ 0.8 (/ b 25.0))) 0.8))
+                      :data `((deaths . ,(alist-get 'best r))
+                              (date . ,(alist-get 'date_start r))
+                              (side_a . ,(alist-get 'side_a r))
+                              (side_b . ,(alist-get 'side_b r))))
+                out))))
+    (nreverse out)))
+
+(defun cmacs-gnuseye-ucdp--fetch (cb)
+  (cmacs-gnuseye-fetch-json
+   cmacs-gnuseye-ucdp-url
+   (lambda (data) (funcall cb (and data (cmacs-gnuseye-ucdp--parse data))))
+   nil 'list))
+
+(cmacs-gnuseye-define-layer ucdp
+  :title "Conflict events (UCDP GED)"
+  :group 'conflict
+  :kind 'event
+  :interval 86400
+  :default-on nil
+  :cluster t
+  :fetch #'cmacs-gnuseye-ucdp--fetch)
+
 (provide 'cmacs-gnuseye-conflict)
 ;;; cmacs-gnuseye-conflict.el ends here

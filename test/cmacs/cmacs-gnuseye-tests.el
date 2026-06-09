@@ -493,6 +493,41 @@ does not."
     (clrhash cmacs-gnuseye--layer-entities)
     (ignore-errors (delete-file tmp))))
 
+;;;; v2 Phase 9: new geospatial layer parsers --------------------------------
+
+(ert-deftest cmacs-gnuseye--ucdp-parse ()
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-conflict)
+  (let* ((data '((Result ((id . 1) (latitude . "34.5") (longitude . "43.7")
+                          (best . "10") (country . "Iraq")
+                          (date_start . "2026-01-01")))))
+         (out (cmacs-gnuseye-ucdp--parse data)))
+    (should (= (length out) 1))
+    (should (= (plist-get (car out) :lat) 34.5))
+    (should (eq (plist-get (car out) :kind) 'event))))
+
+(ert-deftest cmacs-gnuseye--disasters-parse ()
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-health)
+  (let* ((data '((data ((id . "5")
+                        (fields (name . "Flood X")
+                                (status . "ongoing")
+                                (country ((name . "Pakistan")
+                                          (location (lat . 30.0) (lon . 70.0)))))))))
+         (out (cmacs-gnuseye-disasters--parse data)))
+    (should (= (length out) 1))
+    (should (= (plist-get (car out) :lon) 70.0))
+    (should (equal (plist-get (car out) :label) "Flood X"))))
+
+(ert-deftest cmacs-gnuseye--cyber-registered ()
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-infra)
+  (require 'cmacs-gnuseye-conflict)
+  (require 'cmacs-gnuseye-health)
+  (should (gethash 'cyber cmacs-gnuseye--layers))
+  (should (gethash 'ucdp cmacs-gnuseye--layers))
+  (should (gethash 'disasters cmacs-gnuseye--layers)))
+
 (provide 'cmacs-gnuseye-tests)
 
 ;;; cmacs-gnuseye-tests.el ends here

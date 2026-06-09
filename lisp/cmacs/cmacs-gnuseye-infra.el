@@ -116,5 +116,54 @@
   :default-on nil
   :fetch #'cmacs-gnuseye-ports--fetch)
 
+;;;; Cyber-threat IPs (Feodo Tracker, geolocated) -----------------------------
+
+(require 'cmacs-gnuseye-geoloc)
+
+(defcustom cmacs-gnuseye-cyber-url
+  "https://feodotracker.abuse.ch/downloads/ipblocklist.json"
+  "Feodo Tracker C2 IP blocklist (keyless JSON array)."
+  :type 'string :group 'cmacs-gnuseye)
+
+(defcustom cmacs-gnuseye-cyber-max 30
+  "Maximum C2 IPs to geolocate + plot (bounded by the geoloc rate limit)."
+  :type 'integer :group 'cmacs-gnuseye)
+
+(defun cmacs-gnuseye-cyber--fetch (cb)
+  (cmacs-gnuseye-fetch-json
+   cmacs-gnuseye-cyber-url
+   (lambda (data)
+     (let* ((rows (seq-take (or data nil) cmacs-gnuseye-cyber-max))
+            (out nil) (pending (length rows)))
+       (if (zerop pending)
+           (funcall cb nil)
+         (dolist (r rows)
+           (let ((ip (alist-get 'ip_address r))
+                 (mal (alist-get 'malware r)))
+             (if (not (stringp ip))
+                 (when (zerop (setq pending (1- pending))) (funcall cb out))
+               (cmacs-gnuseye-geolocate-ip
+                ip
+                (lambda (res)
+                  (when res
+                    (push (list :id (format "cyber:%s" ip)
+                                :kind 'cyber :label ip
+                                :lat (nth 0 res) :lon (nth 1 res)
+                                :data `((ip . ,ip) (malware . ,mal)
+                                        (country . ,(nth 2 res))))
+                          out))
+                  (when (zerop (setq pending (1- pending)))
+                    (funcall cb out))))))))))
+   nil 'list))
+
+(cmacs-gnuseye-define-layer cyber
+  :title "Cyber C2 servers (Feodo)"
+  :group 'infra
+  :kind 'cyber
+  :interval 3600
+  :default-on nil
+  :cluster t
+  :fetch #'cmacs-gnuseye-cyber--fetch)
+
 (provide 'cmacs-gnuseye-infra)
 ;;; cmacs-gnuseye-infra.el ends here

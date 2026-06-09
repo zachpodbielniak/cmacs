@@ -107,5 +107,48 @@
   :needs-key "OPENAQ_API_KEY"
   :fetch #'cmacs-gnuseye-airquality--fetch)
 
+;;;; Disasters / humanitarian (ReliefWeb) -------------------------------------
+
+(defcustom cmacs-gnuseye-disasters-url
+  (concat "https://api.reliefweb.int/v1/disasters?appname=cmacs-gnuseye"
+          "&profile=list&limit=100"
+          "&filter[field]=status&filter[value]=ongoing")
+  "ReliefWeb ongoing-disasters endpoint (keyless)."
+  :type 'string :group 'cmacs-gnuseye)
+
+(defun cmacs-gnuseye-disasters--parse (data)
+  (let (out)
+    (dolist (d (alist-get 'data data))
+      (let* ((f (alist-get 'fields d))
+             (countries (alist-get 'country f))
+             (c (car (if (and (listp countries) (not (alist-get 'name countries)))
+                         countries (list countries))))
+             (loc (and c (alist-get 'location c)))
+             (lat (and loc (alist-get 'lat loc)))
+             (lon (and loc (alist-get 'lon loc)))
+             (name (alist-get 'name f)))
+        (when (and (numberp lat) (numberp lon))
+          (push (list :id (format "rwdis:%s" (alist-get 'id d))
+                      :kind 'event :label (and name (format "%s" name))
+                      :lat lat :lon lon :scale 1.2
+                      :data `((country . ,(and c (alist-get 'name c)))
+                              (status . ,(alist-get 'status f))))
+                out))))
+    (nreverse out)))
+
+(defun cmacs-gnuseye-disasters--fetch (cb)
+  (cmacs-gnuseye-fetch-json
+   cmacs-gnuseye-disasters-url
+   (lambda (data) (funcall cb (and data (cmacs-gnuseye-disasters--parse data))))
+   nil 'list))
+
+(cmacs-gnuseye-define-layer disasters
+  :title "Disasters (ReliefWeb)"
+  :group 'health
+  :kind 'event
+  :interval 3600
+  :default-on nil
+  :fetch #'cmacs-gnuseye-disasters--fetch)
+
 (provide 'cmacs-gnuseye-health)
 ;;; cmacs-gnuseye-health.el ends here
