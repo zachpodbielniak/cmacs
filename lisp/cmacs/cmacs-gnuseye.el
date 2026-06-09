@@ -806,6 +806,27 @@ and (unless NO-FLY) recentre the camera on it."
       (cmacs-gnuseye--render-all))
     e))
 
+;;;###autoload
+(defun cmacs-gnuseye-deselect ()
+  "Deselect the current entity and recentre the orbit on Earth's centre.
+Clicking a marker focuses the camera's orbit onto that object (so dragging
+rotates around it); this clears the selection and flies to the current
+sub-camera point with the target back at the globe centre, keeping your
+heading and zoom, so dragging orbits Earth again.  Clicking empty space on
+the globe does the same."
+  (interactive)
+  (setq cmacs-gnuseye--selected-id nil)
+  (let ((buf cmacs-gnuseye-buffer))
+    (when (and buf (buffer-live-p buf) (cmacs-gnuseye-attached-p buf))
+      (let ((vc (ignore-errors (cmacs-gnuseye-view-center buf))))
+        (when (and (consp vc) (numberp (nth 2 vc)))
+          (ignore-errors
+            (cmacs-gnuseye-fly-to buf (nth 0 vc) (nth 1 vc)
+                                  (max 0.5 (- (nth 2 vc) 6.371)) nil))))
+      (cmacs-gnuseye--render-all buf)
+      (ignore-errors (cmacs-gnuseye-redraw buf))
+      (cmacs-gnuseye--show-inspector nil))))
+
 (defvar cmacs-gnuseye--click-functions nil
   "Abnormal hook run as (BUFFER NODE-ID VX VY) on each globe click before the
 default select.  VX/VY are the view-local click pixel (map to a lat/lon with
@@ -826,8 +847,10 @@ Called from `cmacs-libregnum--node-clicked' on the cmacs context."
     (setq cmacs-gnuseye--last-click (cons vx vy)))
   (unless (run-hook-with-args-until-success
            'cmacs-gnuseye--click-functions buffer node-id vx vy)
-    (when (and (integerp node-id) (>= node-id 0))
-      (cmacs-gnuseye--on-pick-1 buffer node-id))))
+    (if (and (integerp node-id) (>= node-id 0))
+        (cmacs-gnuseye--on-pick-1 buffer node-id)
+      ;; Empty-globe click: deselect + recentre the orbit on Earth.
+      (cmacs-gnuseye-deselect))))
 
 (defun cmacs-gnuseye--on-pick-1 (buffer node-id)
   "Default click handling: select/zoom the picked NODE-ID."
@@ -1374,6 +1397,8 @@ it).  Layers needing an API key that is unset cannot be enabled."
     (define-key map (kbd "f") #'cmacs-gnuseye-fly-to-place)
     (define-key map (kbd "?") #'cmacs-gnuseye-legend)
     (define-key map (kbd "2") #'cmacs-gnuseye-toggle-2d)
+    (define-key map (kbd "u") #'cmacs-gnuseye-deselect)
+    (define-key map (kbd "<escape>") #'cmacs-gnuseye-deselect)
     (define-key map (kbd "q") #'quit-window)
     map)
   "Keymap for `cmacs-gnuseye-mode'.")
@@ -1398,7 +1423,7 @@ and clicking one selects it (inspector + recentre)."
   (add-hook 'kill-buffer-hook #'cmacs-gnuseye--on-kill nil t)
   (setq-local mode-line-format
               '(" GNU's Eye  drag=orbit scroll=zoom hover=id click=select \
- [e]ntities [i]nspect [l]ayers [s]earch [F]ilter [g]refresh [?]legend [q]uit")))
+ [e]ntities [i]nspect [l]ayers [s]earch [u]nselect [?]legend [q]uit")))
 
 (defun cmacs-gnuseye-entities ()
   "Show (and select) the entity list pane."
