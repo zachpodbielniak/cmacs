@@ -528,6 +528,25 @@ does not."
   (should (gethash 'ucdp cmacs-gnuseye--layers))
   (should (gethash 'disasters cmacs-gnuseye--layers)))
 
+;;;; v2 Phase 10: visualization upgrades --------------------------------------
+
+(ert-deftest cmacs-gnuseye--heatmap-cells ()
+  "Density binning groups co-cell entities and counts them."
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-viz)
+  (let* ((ents (list (list :lat 40.1 :lon -100.1) (list :lat 40.9 :lon -100.9)
+                     (list :lat -20.0 :lon 30.0)))
+         (cells (cmacs-gnuseye-heatmap-cells ents 4.0)))
+    (should (= (length cells) 2))          ; two occupied 4-deg cells
+    (should (= 2 (apply #'max (mapcar (lambda (c) (nth 2 c)) cells))))))
+
+(ert-deftest cmacs-gnuseye--footprint-radius ()
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-viz)
+  ;; ISS (~420 km) horizon radius is ~2200 km.
+  (let ((r (/ (cmacs-gnuseye-footprint-radius-m 420000.0) 1000.0)))
+    (should (and (> r 1900) (< r 2500)))))
+
 (provide 'cmacs-gnuseye-tests)
 
 ;;; cmacs-gnuseye-tests.el ends here

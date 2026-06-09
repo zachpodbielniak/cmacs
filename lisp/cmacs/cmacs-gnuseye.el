@@ -77,6 +77,7 @@ Read on demand by `cmacs-gnuseye-secret'.  Keep it out of version control."
 
 (defcustom cmacs-gnuseye-feature-files
   '(cmacs-gnuseye-geoloc cmacs-gnuseye-charts cmacs-gnuseye-history
+    cmacs-gnuseye-viz
     cmacs-gnuseye-search cmacs-gnuseye-stats cmacs-gnuseye-geofence
     cmacs-gnuseye-bookmarks cmacs-gnuseye-replay cmacs-gnuseye-intel
     cmacs-gnuseye-track cmacs-gnuseye-markets)
