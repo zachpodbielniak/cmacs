@@ -595,6 +595,35 @@ does not."
   (require 'cmacs-gnuseye-measure)
   (should (fboundp 'cmacs-gnuseye-measure)))
 
+;;;; v2 Phase 13-14: news + panels --------------------------------------------
+
+(ert-deftest cmacs-gnuseye--news-parse ()
+  "RSS items parse into (TITLE . LINK) pairs."
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-news)
+  (when (fboundp 'libxml-parse-xml-region)
+    (let* ((xml (concat "<rss><channel>"
+                        "<item><title>Headline A</title>"
+                        "<link>https://x/a</link></item>"
+                        "<item><title>Headline B</title>"
+                        "<link>https://x/b</link></item>"
+                        "</channel></rss>"))
+           (out (cmacs-gnuseye-news--parse xml)))
+      (should (= (length out) 2))
+      (should (equal (caar out) "Headline A"))
+      (should (equal (cdar out) "https://x/a")))))
+
+(ert-deftest cmacs-gnuseye--new-panels ()
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-markets)
+  (dolist (n '(crypto-treemap hackernews fred))
+    (should (gethash n cmacs-gnuseye--panels)))
+  ;; HN render on synthetic data
+  (let* ((p (gethash 'hackernews cmacs-gnuseye--panels))
+         (s (funcall (plist-get p :render)
+                     '((hits ((points . 120) (title . "Cool thing")))))))
+    (should (string-match-p "Cool thing" s))))
+
 (provide 'cmacs-gnuseye-tests)
 
 ;;; cmacs-gnuseye-tests.el ends here

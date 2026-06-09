@@ -147,6 +147,78 @@ PROPS: :title, :fetch (lambda (CB) -> calls (CB DATA) async), :render
          (format "• %s" (truncate-string-to-width (format "%s" q) 60))))
      data "\n")))
 
+;;;; Crypto market-cap treemap (SVG) ------------------------------------------
+
+(require 'cmacs-gnuseye-charts nil t)
+
+(cmacs-gnuseye-define-panel crypto-treemap
+  :title "Crypto market caps"
+  :fetch (lambda (cb)
+           (cmacs-gnuseye-fetch-json
+            (concat "https://api.coingecko.com/api/v3/coins/markets"
+                    "?vs_currency=usd&order=market_cap_desc&per_page=20&page=1")
+            cb nil 'list))
+  :render
+  (lambda (data)
+    (if (fboundp 'cmacs-gnuseye-chart-treemap)
+        (concat (cmacs-gnuseye-chart-treemap
+                 (mapcar (lambda (c)
+                           (cons (upcase (format "%s" (alist-get 'symbol c)))
+                                 (or (alist-get 'market_cap c) 0)))
+                         data)
+                 320 200)
+                "\n")
+      "svg charts unavailable")))
+
+;;;; Hacker News front page (keyless) -----------------------------------------
+
+(cmacs-gnuseye-define-panel hackernews
+  :title "Hacker News"
+  :fetch (lambda (cb)
+           (cmacs-gnuseye-fetch-json
+            "https://hn.algolia.com/api/v1/search?tags=front_page" cb))
+  :render
+  (lambda (data)
+    (mapconcat
+     (lambda (h)
+       (format "%4s  %s" (or (alist-get 'points h) "")
+               (truncate-string-to-width
+                (format "%s" (or (alist-get 'title h) "")) 56)))
+     (seq-take (alist-get 'hits data) 20) "\n")))
+
+;;;; FRED macro series (keyed stub) -------------------------------------------
+
+(defcustom cmacs-gnuseye-fred-series "DGS10"
+  "FRED series id for the macro panel (e.g. DGS10 = 10y Treasury)."
+  :type 'string :group 'cmacs-gnuseye)
+
+(cmacs-gnuseye-define-panel fred
+  :title "FRED macro (needs FRED_API_KEY)"
+  :fetch (lambda (cb)
+           (let ((key (cmacs-gnuseye-secret "FRED_API_KEY")))
+             (if (not key)
+                 (funcall cb nil)
+               (cmacs-gnuseye-fetch-json
+                (format (concat "https://api.stlouisfed.org/fred/series/"
+                                "observations?series_id=%s&api_key=%s"
+                                "&file_type=json&sort_order=desc&limit=20")
+                        cmacs-gnuseye-fred-series key)
+                cb))))
+  :render
+  (lambda (data)
+    (if (null data) "Set FRED_API_KEY to enable."
+      (let ((obs (reverse (alist-get 'observations data))))
+        (concat
+         (when (fboundp 'cmacs-gnuseye-chart-sparkline)
+           (concat (cmacs-gnuseye-chart-sparkline
+                    (mapcar (lambda (o) (string-to-number
+                                         (or (alist-get 'value o) "0")))
+                            obs)
+                    160 24) "\n"))
+         (format "%s: latest %s"
+                 cmacs-gnuseye-fred-series
+                 (alist-get 'value (car (last obs)))))))))
+
 (with-eval-after-load 'cmacs-gnuseye
   (define-key cmacs-gnuseye-mode-map (kbd "D") #'cmacs-gnuseye-dashboard))
 
