@@ -342,17 +342,20 @@ on-screen; static views render only on demand."
 
 (defun cmacs-libregnum--node-clicked (buffer info)
   "Dispatch a viewport node click in BUFFER.
-INFO is (ID PATH IS-DIR) from the C input layer.  This single entry
-point lets each scene/mode decide what a click means: the gnuseye globe
-opens an entity detail view, while the default tree behaviour drills into
-a directory or visits a file.  Called on the cmacs GMainContext."
+INFO is (ID PATH IS-DIR VX VY) from the C input layer (VX/VY are the
+view-local click pixel; ID is -1 for an empty-space miss).  This single
+entry point lets each scene/mode decide what a click means: the gnuseye
+globe opens an entity detail view or measures, while the default tree
+behaviour drills into a directory or visits a file.  Called on the cmacs
+GMainContext."
   (when (buffer-live-p buffer)
-    (let ((id (nth 0 info)) (path (nth 1 info)) (is-dir (nth 2 info)))
+    (let ((id (nth 0 info)) (path (nth 1 info)) (is-dir (nth 2 info))
+          (vx (nth 3 info)) (vy (nth 4 info)))
       (with-current-buffer buffer
         (cond
          ((and (fboundp 'cmacs-gnuseye--on-pick)
                (derived-mode-p 'cmacs-gnuseye-mode))
-          (cmacs-gnuseye--on-pick buffer id))
+          (cmacs-gnuseye--on-pick buffer id vx vy))
          (is-dir (cmacs-libregnum--drill-to buffer path))
          ((and (stringp path) (> (length path) 0)) (find-file path)))))))
 

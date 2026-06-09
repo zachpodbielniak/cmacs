@@ -76,7 +76,8 @@ Read on demand by `cmacs-gnuseye-secret'.  Keep it out of version control."
   :group 'cmacs-gnuseye)
 
 (defcustom cmacs-gnuseye-feature-files
-  '(cmacs-gnuseye-search cmacs-gnuseye-stats cmacs-gnuseye-geofence
+  '(cmacs-gnuseye-geoloc cmacs-gnuseye-charts cmacs-gnuseye-history
+    cmacs-gnuseye-search cmacs-gnuseye-stats cmacs-gnuseye-geofence
     cmacs-gnuseye-bookmarks cmacs-gnuseye-replay cmacs-gnuseye-intel
     cmacs-gnuseye-track cmacs-gnuseye-markets)
   "Interaction/intelligence feature files loaded when the globe opens.
@@ -213,6 +214,17 @@ For a filled region draped on the globe (alert zones, AOIs, aurora bands)."
 Keeps aircraft a roughly constant on-screen size, so zooming into a busy
 airport spreads them out instead of leaving a fixed-size pile.")
 
+(defvar cmacs-gnuseye--render-opacity 1.0
+  "Alpha multiplier for the layer being rendered (set per render from
+the layer's :opacity).")
+
+(defun cmacs-gnuseye--apply-opacity (rgba mult)
+  "Scale the alpha byte of packed RGBA by MULT in [0,1]."
+  (if (and (numberp mult) (< mult 1.0))
+      (let ((a (round (* (logand rgba #xff) (max 0.0 (min 1.0 mult))))))
+        (logior (logand rgba #xffffff00) (logand a #xff)))
+    rgba))
+
 (defun cmacs-gnuseye--normalize-entity (e)
   "Normalise a layer entity plist E into the C-facing form.
 Resolves :kind to its integer code and :color to packed RGBA, defaults
@@ -238,7 +250,9 @@ stored payload drives the detail view."
           :scale     (if sel (* scale 1.6) scale)
           :kind      code
           :kind-name kind
-          :color     (cmacs-gnuseye--color->rgba (if sel "#ffffff" color))
+          :color     (cmacs-gnuseye--apply-opacity
+                      (cmacs-gnuseye--color->rgba (if sel "#ffffff" color))
+                      cmacs-gnuseye--render-opacity)
           :label     (and lab (format "%s" lab))
           ;; Default "hover" (mouse over to identify); "always" when selected.
           :label-mode (if sel 3 (or (plist-get e :label-mode) 2))
@@ -364,7 +378,9 @@ usable as an entity :polygon (filled) or fed to a polyline.  N defaults to 48."
   (generation 0)
   ;; Non-nil to cluster this layer's markers when zoomed out (dense point
   ;; layers like aircraft/vessels): nearby markers collapse to one count badge.
-  cluster)
+  cluster
+  ;; Marker/polygon alpha multiplier in [0,1] (nil = 1.0); per-layer opacity.
+  opacity)
 
 (defvar cmacs-gnuseye--layers (make-hash-table :test 'eq)
   "Registry of defined layers: NAME symbol -> `cmacs-gnuseye-layer'.")
@@ -385,7 +401,8 @@ PROPS is a plist with:
               mutate the entity plists in place (optional).  Generic moving
               layers can use `cmacs-gnuseye-dead-reckon-layer'.
   :cluster    non-nil to collapse dense markers into count badges when zoomed
-              out (good for aircraft/vessels)"
+              out (good for aircraft/vessels)
+  :opacity    marker/polygon alpha multiplier in [0,1] (default 1.0)"
   (declare (indent 1))
   `(progn
      (puthash ',name
@@ -400,7 +417,8 @@ PROPS is a plist with:
                :detail ,(plist-get props :detail)
                :needs-key ,(plist-get props :needs-key)
                :advance ,(plist-get props :advance)
-               :cluster ,(plist-get props :cluster))
+               :cluster ,(plist-get props :cluster)
+               :opacity ,(plist-get props :opacity))
               cmacs-gnuseye--layers)
      ',name))
 
@@ -559,6 +577,8 @@ badges when zoomed out (`cmacs-gnuseye-cluster')."
   (setq cmacs-gnuseye--zoom-scale (cmacs-gnuseye--zoom-scale-for buf))
   (when (and buf (buffer-live-p buf) (cmacs-gnuseye-attached-p buf))
     (let* ((layer (gethash lname cmacs-gnuseye--layers))
+           (cmacs-gnuseye--render-opacity
+            (or (and layer (cmacs-gnuseye-layer-opacity layer)) 1.0))
            (all (seq-filter #'cmacs-gnuseye--entity-visible-p
                             (gethash lname cmacs-gnuseye--layer-entities)))
            (cell (and cmacs-gnuseye-cluster layer
@@ -784,10 +804,31 @@ and (unless NO-FLY) recentre the camera on it."
       (cmacs-gnuseye--render-all))
     e))
 
-(defun cmacs-gnuseye--on-pick (buffer node-id)
-  "Handle a marker click: select the entity (inspector + highlight + list),
+(defvar cmacs-gnuseye--click-functions nil
+  "Abnormal hook run as (BUFFER NODE-ID VX VY) on each globe click before the
+default select.  VX/VY are the view-local click pixel (map to a lat/lon with
+`cmacs-gnuseye-screen-to-globe').  A function returning non-nil CONSUMES the
+click (default select/cluster handling is skipped) — used by the measurement
+tool.")
+
+(defvar cmacs-gnuseye--last-click nil
+  "Last globe click as (VX . VY) view-local pixel.")
+
+(defun cmacs-gnuseye--on-pick (buffer node-id &optional vx vy)
+  "Handle a globe click: select the entity (inspector + highlight + list),
 or, for a cluster badge, zoom toward it so it dissolves into individuals.
+NODE-ID is -1 for an empty-globe click; VX/VY are the click pixel.  Features
+on `cmacs-gnuseye--click-functions' may intercept first (e.g. measurement).
 Called from `cmacs-libregnum--node-clicked' on the cmacs context."
+  (when (and (numberp vx) (numberp vy))
+    (setq cmacs-gnuseye--last-click (cons vx vy)))
+  (unless (run-hook-with-args-until-success
+           'cmacs-gnuseye--click-functions buffer node-id vx vy)
+    (when (and (integerp node-id) (>= node-id 0))
+      (cmacs-gnuseye--on-pick-1 buffer node-id))))
+
+(defun cmacs-gnuseye--on-pick-1 (buffer node-id)
+  "Default click handling: select/zoom the picked NODE-ID."
   (when (and (integerp node-id) (>= node-id 0))
     (let ((e (ignore-errors (cmacs-gnuseye-entity-at buffer node-id))))
       (when e

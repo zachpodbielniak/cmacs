@@ -54,6 +54,7 @@ typedef struct
   gchar      *path;
   bool        is_dir;
   gint        id;
+  double      vx, vy;        /* view-local click pixel (for globe ray-pick) */
 } ClickAction;
 
 static gboolean
@@ -66,10 +67,12 @@ click_action_idle (gpointer user)
    * (BUFFER (ID PATH IS-DIR)). */
   cmacs_dispatch_safe_call2 (intern ("cmacs-libregnum--node-clicked"),
                              a->buffer,
-                             list3 (make_fixnum (a->id),
+                             list5 (make_fixnum (a->id),
                                     (a->path && a->path[0])
                                       ? build_string (a->path) : Qnil,
-                                    a->is_dir ? Qt : Qnil));
+                                    a->is_dir ? Qt : Qnil,
+                                    make_float (a->vx),
+                                    make_float (a->vy)));
   g_free (a->path);
   g_free (a);
   return G_SOURCE_REMOVE;
@@ -228,18 +231,21 @@ handle_click (struct frame *f, CmacsLibregnumView *v, double x, double y)
     }
 
   gint id = cmacs_libregnum_render_ctx_pick (ctx, vx, vy, vw, vh);
-  if (id < 0) return;
 
-  /* Visual feedback: select + focus the hit node. */
-  cmacs_libregnum_render_ctx_set_selected (ctx, id);
-  cmacs_libregnum_render_ctx_focus_node (ctx, id);
-  cmacs_libregnum_view_request_redraw (v);
+  /* Visual feedback: select + focus the hit node (only on a hit). */
+  if (id >= 0)
+    {
+      cmacs_libregnum_render_ctx_set_selected (ctx, id);
+      cmacs_libregnum_render_ctx_focus_node (ctx, id);
+      cmacs_libregnum_view_request_redraw (v);
+    }
 
   /* In the editor a node's "path" is its guid, so do NOT find-file it -- just
    * select it in the engine and tell Elisp so the outliner/keys follow.
    * Ctrl+click toggles the node in the multi-selection instead of replacing. */
   if (cmacs_libregnum_render_ctx_editor_active (ctx))
     {
+      if (id < 0) return;            /* editor: empty-space click is a no-op */
       /* Query the modifier state via the current GDK event so we do not need
        * to thread a modifier parameter through pgtkterm.c. */
       gboolean ctrl_held = FALSE;
@@ -278,18 +284,22 @@ handle_click (struct frame *f, CmacsLibregnumView *v, double x, double y)
       return;
     }
 
+  /* Non-editor (e.g. the gnuseye globe): defer the click onto the cmacs
+   * context -- INCLUDING an empty-globe miss (id == -1), carrying the view
+   * pixel so the globe can map it to a lat/lon (measurement, deselect). */
   const char *path = NULL;
   gboolean is_dir = FALSE;
-  if (!cmacs_libregnum_render_ctx_node_info (ctx, (guint) id, &path, NULL,
-                                             &is_dir, NULL, NULL))
-    return;
+  if (id >= 0)
+    cmacs_libregnum_render_ctx_node_info (ctx, (guint) id, &path, NULL,
+                                          &is_dir, NULL, NULL);
 
-  /* Defer the Lisp action onto the cmacs context. */
   ClickAction *a = g_new0 (ClickAction, 1);
   a->buffer = cmacs_libregnum_view_get_buffer (v);
-  a->path = g_strdup (path);
+  a->path = (path && path[0]) ? g_strdup (path) : NULL;
   a->is_dir = is_dir;
   a->id = id;
+  a->vx = vx;
+  a->vy = vy;
   g_main_context_invoke (cmacs_glib_get_context (), click_action_idle, a);
 }
 

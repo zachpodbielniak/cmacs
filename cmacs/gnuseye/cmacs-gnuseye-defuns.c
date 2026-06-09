@@ -567,6 +567,27 @@ Returns nil if BUFFER has no globe.  */)
   return list3 (make_float (lat), make_float (lon), make_float (dist));
 }
 
+DEFUN ("cmacs-gnuseye-screen-to-globe", Fcmacs_gnuseye_screen_to_globe,
+       Scmacs_gnuseye_screen_to_globe, 3, 3, 0,
+       doc: /* Return (LAT LON) under view pixel (VX, VY) on BUFFER's globe.
+VX/VY are view-local pixels (as delivered by the click hook).  Casts the
+camera ray through the pixel and intersects the globe; returns nil if the
+pixel is off the globe.  */)
+  (Lisp_Object buffer, Lisp_Object vx, Lisp_Object vy)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  int vw = 0, vh = 0;
+  cmacs_libregnum_view_get_size (v, &vw, &vh);
+  double lat = 0, lon = 0;
+  if (cmacs_gnuseye_screen_to_globe (cmacs_libregnum_view_get_render_ctx (v),
+                                     XFLOATINT (vx), XFLOATINT (vy), vw, vh,
+                                     &lat, &lon))
+    return list2 (make_float (lat), make_float (lon));
+  return Qnil;
+}
+
 DEFUN ("cmacs-gnuseye-add-flag", Fcmacs_gnuseye_add_flag,
        Scmacs_gnuseye_add_flag, 4, 5, 0,
        doc: /* Add a country flag billboard at LAT, LON on BUFFER's globe.
@@ -671,6 +692,7 @@ syms_of_cmacs_gnuseye_defuns (void)
   defsubr (&Scmacs_gnuseye_clear_flags);
   defsubr (&Scmacs_gnuseye_flag_count);
   defsubr (&Scmacs_gnuseye_view_center);
+  defsubr (&Scmacs_gnuseye_screen_to_globe);
 }
 
 #endif /* HAVE_CMACS_GNUSEYE */

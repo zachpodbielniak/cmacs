@@ -445,6 +445,54 @@ does not."
                         (price_change_percentage_24h . 2.5))))))
     (should (string-match-p "BTC" s))))
 
+;;;; v2 Phase 8: shared building blocks ---------------------------------------
+
+(ert-deftest cmacs-gnuseye--screen-to-globe-defun ()
+  (cmacs-gnuseye-tests--skip)
+  (should (fboundp 'cmacs-gnuseye-screen-to-globe)))
+
+(ert-deftest cmacs-gnuseye--opacity ()
+  "Per-layer opacity scales the marker alpha byte."
+  (cmacs-gnuseye-tests--skip)
+  (should (= (cmacs-gnuseye--apply-opacity #xff0000ff 0.5) #xff000080))
+  (should (= (cmacs-gnuseye--apply-opacity #xff0000ff 1.0) #xff0000ff))
+  (let ((cmacs-gnuseye--render-opacity 0.5))
+    (let ((e (cmacs-gnuseye--normalize-entity
+              (list :id "z" :lat 0 :lon 0 :kind 'quake))))
+      (should (= (logand (plist-get e :color) #xff) 128)))))
+
+(ert-deftest cmacs-gnuseye--geoloc-nearest ()
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-geoloc)
+  (should (equal (cmacs-gnuseye-nearest-country 32.0 53.0) "IRN"))
+  (should (equal (cmacs-gnuseye-nearest-country 39.0 -98.0) "USA"))
+  (should (consp (cmacs-gnuseye-country-latlon "FRA"))))
+
+(ert-deftest cmacs-gnuseye--charts ()
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-charts)
+  ;; unicode sparkline fallback always returns a non-empty string for >=2 vals
+  (should (> (length (cmacs-gnuseye-charts--unicode-spark '(1 2 3 2 5))) 0)))
+
+(ert-deftest cmacs-gnuseye--history-roundtrip ()
+  "History capture writes records that load back within a time window."
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-history)
+  (let* ((tmp (make-temp-file "ge-hist" nil ".eld"))
+         (cmacs-gnuseye-history-interval 0.0)
+         (cmacs-gnuseye-history--last 0.0))
+    (cl-letf (((symbol-function 'cmacs-gnuseye-history-file) (lambda () tmp)))
+      (clrhash cmacs-gnuseye--layer-entities)
+      (puthash 'test (list (list :id "a" :lat 10 :lon 20 :kind 'quake :label "M5"))
+               cmacs-gnuseye--layer-entities)
+      (cmacs-gnuseye-history--capture)
+      (let ((recs (cmacs-gnuseye-history-load 0.0 (* 2 (float-time)) 'test)))
+        (should (= (length recs) 1))
+        (should (eq (nth 1 (car recs)) 'test))
+        (should (vectorp (nth 2 (car recs))))))
+    (clrhash cmacs-gnuseye--layer-entities)
+    (ignore-errors (delete-file tmp))))
+
 (provide 'cmacs-gnuseye-tests)
 
 ;;; cmacs-gnuseye-tests.el ends here

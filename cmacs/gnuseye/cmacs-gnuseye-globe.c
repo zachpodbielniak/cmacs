@@ -364,6 +364,60 @@ cmacs_gnuseye_set_sun_time (CmacsLibregnumRenderCtx *r, double unix_s)
   cmacs_gnuseye_set_sun_direction (r, x, y, z);
 }
 
+/* ── Screen → globe ray pick ─────────────────────────────────────────── */
+
+gboolean
+cmacs_gnuseye_screen_to_globe (CmacsLibregnumRenderCtx *r,
+                               double vx, double vy, int vw, int vh,
+                               double *out_lat, double *out_lon)
+{
+  if (!r || vw <= 0 || vh <= 0 || !out_lat || !out_lon) return FALSE;
+
+  double px, py, pz, tx, ty, tz, fov;
+  cmacs_libregnum_render_ctx_get_camera_state (r, &px, &py, &pz,
+                                               &tx, &ty, &tz, &fov);
+  /* Camera basis: forward, right = forward x worldUp, up = right x forward. */
+  double fx = tx - px, fy = ty - py, fz = tz - pz;
+  double fn = sqrt (fx*fx + fy*fy + fz*fz);
+  if (fn < 1e-9) return FALSE;
+  fx /= fn; fy /= fn; fz /= fn;
+  double ux = 0.0, uy = 1.0, uz = 0.0;       /* world up */
+  double rx = fy*uz - fz*uy, ry = fz*ux - fx*uz, rz = fx*uy - fy*ux;
+  double rn = sqrt (rx*rx + ry*ry + rz*rz);
+  if (rn < 1e-6)                              /* looking along the pole */
+    { ux = 0.0; uy = 0.0; uz = 1.0;
+      rx = fy*uz - fz*uy; ry = fz*ux - fx*uz; rz = fx*uy - fy*ux;
+      rn = sqrt (rx*rx + ry*ry + rz*rz); }
+  rx /= rn; ry /= rn; rz /= rn;
+  double tuxx = ry*fz - rz*fy, tuyy = rz*fx - rx*fz, tuzz = rx*fy - ry*fx;
+
+  /* Pixel → camera-space ray direction (perspective). */
+  double aspect = (double) vw / (double) vh;
+  double th = tan (fov * 0.5 * GNUSEYE_DEG2RAD);
+  double ndx = (2.0 * vx / vw - 1.0) * th * aspect;
+  double ndy = (1.0 - 2.0 * vy / vh) * th;
+  double dx = fx + ndx*rx + ndy*tuxx;
+  double dy = fy + ndx*ry + ndy*tuyy;
+  double dz = fz + ndx*rz + ndy*tuzz;
+  double dn = sqrt (dx*dx + dy*dy + dz*dz);
+  if (dn < 1e-9) return FALSE;
+  dx /= dn; dy /= dn; dz /= dn;
+
+  /* Ray (origin = camera, dir D) ∩ sphere (centre origin, radius R). */
+  double rad = GNUSEYE_GLOBE_RADIUS;
+  double b = px*dx + py*dy + pz*dz;
+  double c = px*px + py*py + pz*pz - rad*rad;
+  double disc = b*b - c;
+  if (disc < 0.0) return FALSE;              /* misses the globe */
+  double sq = sqrt (disc);
+  double t = -b - sq;
+  if (t < 0.0) t = -b + sq;
+  if (t < 0.0) return FALSE;
+  double hx = px + t*dx, hy = py + t*dy, hz = pz + t*dz, alt;
+  gnuseye_xyz_to_latlon (hx, hy, hz, out_lat, out_lon, &alt);
+  return TRUE;
+}
+
 /* ── Markers: oriented 3D icons ─────────────────────────────────────── */
 
 static void

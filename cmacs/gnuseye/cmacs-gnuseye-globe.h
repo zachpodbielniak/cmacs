@@ -112,6 +112,16 @@ extern void cmacs_gnuseye_camera_goto (CmacsLibregnumRenderCtx *r,
                                        double lat, double lon, double range,
                                        gboolean animate);
 
+/* Ray-pick a view-local pixel (VX,VY) in a VW x VH viewport to the geographic
+ * point under it: casts the camera ray through the pixel and intersects the
+ * globe sphere, writing (lat,lon) in degrees.  Returns FALSE if the pixel is
+ * off the globe (the ray misses the sphere).  Powers the measurement tool and
+ * click-on-empty-globe. */
+extern gboolean cmacs_gnuseye_screen_to_globe (CmacsLibregnumRenderCtx *r,
+                                               double vx, double vy,
+                                               int vw, int vh,
+                                               double *out_lat, double *out_lon);
+
 /* Day/night terminator: set the globe shader's sun direction.  set_direction
  * takes a world-space unit vector (gnuseye -Z winding); set_time computes the
  * real subsolar unit vector for Unix time UNIX_S and applies it.  No-op when
