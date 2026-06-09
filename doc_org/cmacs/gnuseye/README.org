@@ -19,6 +19,15 @@ mirrored Info chapter); this directory drills into the full detail:
   with worked recipes for points, filled regions, rings/footprints,
   great-circle routes, dead-reckoned moving layers, and keyed feeds.
 
+The *v2 feature modules* (the 2D flat map, measurement, heatmap/opacity,
+export, watchlists, live news, the disk history store + backtesting, the
+LLM analytics engines, and the ~geoloc~ / ~charts~ / ~history~ building
+blocks) are documented in [[file:reference.org][reference.org]] under *v2 feature modules* and
+*C primitives*; the v2 data layers (~cyber~, ~ucdp~, ~disasters~) are in
+[[file:layers.org][layers.org]].  The narrative overview lives in
+[[file:../cmacs-gnuseye.org][../cmacs-gnuseye.org]] (section *v2 additions*) and the Info chapter
+[[file:../../doc/cmacs/gnuseye/gnuseye.texi][doc/cmacs/gnuseye/gnuseye.texi]].
+
 * What GNU's Eye is
 
 A Google-Earth / Palantir-style 3D globe embedded in an Emacs buffer,

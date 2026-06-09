@@ -102,9 +102,17 @@ until the key resolves (env var or the keys file):
   or just ~require~ it.
 - For a brand-new ~:kind~, add an entry to ~cmacs-gnuseye-kind-styles~
   (colour + scale) and ~cmacs-gnuseye--kind-codes~ (map to a C marker mesh).
-- Set ~:cluster t~ for dense point feeds so they read well when zoomed out.
+- Set ~:cluster t~ for dense point feeds so they read well when zoomed out,
+  and ~:opacity~ (0..1) to wash a layer back.
 - Keep fetches scoped and intervals generous; honour rate limits (cache to
   ~$XDG_CACHE_HOME/cmacs/gnuseye/~ for static data, as the geography loader
   does).
 - The whole entity plist is stored as the marker's pick payload, so ~:data~
-  is available verbatim in the inspector and to a ~:detail~ function.
+  is available verbatim in the inspector and to a ~:detail~ function.  Carry a
+  ~stream~ / ~url~ in ~:data~ to enable the inspector ~[w]~ / ~[n]~ actions.
+
+For a country-only feed, geolocate with ~cmacs-gnuseye-nearest-country~ /
+~-country-latlon~ (from ~cmacs-gnuseye-geoloc~); for an IP feed use
+~cmacs-gnuseye-geolocate-ip~.  A *non-geospatial* table is a
+~cmacs-gnuseye-define-panel~ (see [[file:reference.org][reference.org]]), rendered with the
+~cmacs-gnuseye-charts~ sparkline/treemap helpers — never on the globe.

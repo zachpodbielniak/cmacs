@@ -50,6 +50,7 @@ meshes until they get bespoke icons).
 | ~:needs-key~ | env-var name the layer needs; shown "needs KEY" until set. |
 | ~:advance~   | ~(lambda (ENTITIES DT NOW) …)~ smooth-motion hook; use ~cmacs-gnuseye-dead-reckon-layer~ for generic moving layers. |
 | ~:cluster~   | non-nil to collapse dense markers into count badges when zoomed out. |
+| ~:opacity~   | marker/polygon alpha multiplier in [0,1] (default 1.0). |
 
 * Elisp helpers
 
@@ -78,9 +79,41 @@ meshes until they get bespoke icons).
 - Polygons: ~cmacs-gnuseye-add-polygon~ ~(BUFFER LATS LONS &optional COLOR
   PERSISTENT)~, ~-clear-polygons~ ~(BUFFER &optional PERSISTENT)~.
 - Day/night: ~cmacs-gnuseye-set-sun-time~ ~(BUFFER &optional TIME)~.
+- Projection (v2): ~cmacs-gnuseye-set-projection~ ~(BUFFER FLAT)~ (3D globe ↔
+  2D flat map), ~-flat-p~ ~(BUFFER)~, and ~cmacs-gnuseye-screen-to-globe~
+  ~(BUFFER VX VY)~ → ~(LAT LON)~ (camera-ray globe pick, for measurement).
 - Geodesy: ~cmacs-gnuseye-latlon-to-xyz~, ~-xyz-to-latlon~, ~-haversine~,
   ~-bearing~, ~-great-circle~, ~-heading-vector~.
 - Satellites: ~cmacs-gnuseye-tle-parse~, ~-sat-propagate~, ~-sat-track~.
+
+* v2 feature modules
+
+Loaded via ~cmacs-gnuseye-feature-files~.  Each is self-contained:
+
+- ~cmacs-gnuseye-geoloc~ — ~cmacs-gnuseye-country-centroids~,
+  ~-nearest-country~ ~(LAT LON &optional MAX-KM)~, ~-country-latlon~ ~(ISO)~,
+  and ~-geolocate-ip~ ~(IP CALLBACK)~ (keyless, disk-cached).
+- ~cmacs-gnuseye-charts~ — ~cmacs-gnuseye-chart-sparkline~ ~(VALUES &optional W
+  H COLOR)~ and ~-chart-treemap~ ~(PAIRS &optional W H)~ (svg, unicode fallback).
+- ~cmacs-gnuseye-history~ — the disk time-series store:
+  ~cmacs-gnuseye-history-load~ ~(SINCE UNTIL &optional LAYER)~, ~-history-span~,
+  capture auto-enabled off the reindex hook (~cmacs-gnuseye-history-enabled~).
+- ~cmacs-gnuseye-viz~ — ~cmacs-gnuseye-heatmap-layer~ (~H~) / ~-heatmap-clear~,
+  ~-set-layer-opacity~, ~-sat-footprints~.
+- ~cmacs-gnuseye-measure~ — ~cmacs-gnuseye-measure~ (~M~): two-click
+  great-circle distance + bearing with the arc drawn.
+- ~cmacs-gnuseye-export~ — ~cmacs-gnuseye-export-geojson~ / ~-csv~ / ~-png~.
+- ~cmacs-gnuseye-watch~ — ~cmacs-gnuseye-watch-add~ ~(NAME LAYER FIELD OP
+  VALUE)~ / ~-watch-clear~ / ~-alerts~ (threshold alerts via ~cmacs-notify~).
+- ~cmacs-gnuseye-news~ — ~cmacs-gnuseye-news~ (~N~): RSS/Atom aggregation,
+  clickable headlines (~cmacs-gnuseye-news-feeds~).
+- ~cmacs-gnuseye-replay~ — also ~cmacs-gnuseye-replay-from-history~ ~(HOURS)~
+  and ~cmacs-gnuseye-backtest~ ~(HOURS)~ over the disk store.
+- ~cmacs-gnuseye-intel~ — also the engines ~cmacs-gnuseye-ai-deduce~,
+  ~-ai-market-implication~, ~-ai-resilience~, ~-ai-country-brief~ (cmacs-ai).
+- ~cmacs-gnuseye-markets~ — ~cmacs-gnuseye-define-panel~ + the dashboard.
+
+The 2D flat map is toggled with ~cmacs-gnuseye-toggle-2d~ (~2~).
 
 * Render-context additions (libregnum)
 

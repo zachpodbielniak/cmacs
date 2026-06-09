@@ -98,6 +98,10 @@ enable them from the toggle pane (left).  Layer files are listed in
 - Config: ~cmacs-gnuseye-gdelt-query~ (default a conflict query),
   ~-gdelt-timespan~ ("1d"), ~-gdelt-max~ (250).
 
+** ucdp (v2) — ~cmacs-gnuseye-conflict.el~
+UCDP georeferenced conflict events (GED API, ~cmacs-gnuseye-ucdp-url~;
+keyless), sized by deaths; clustered.  Refresh daily.
+
 * Infrastructure — ~cmacs-gnuseye-infra.el~ / ~-keyed.el~
 
 ** cables
@@ -112,6 +116,11 @@ A built-in static set of major seaports and maritime chokepoints
 A built-in static set of notable military bases and spaceports
 (~cmacs-gnuseye-bases~), kinds ~base~ / ~spaceport~.  Offline, no key.
 
+** cyber (v2)
+Feodo Tracker C2 IP blocklist (~cmacs-gnuseye-cyber-url~; keyless), geolocated
+via the keyless IP resolver in ~cmacs-gnuseye-geoloc~ (capped + cached);
+clustered.  Refresh 1 h.
+
 * Health & society — ~cmacs-gnuseye-health.el~
 
 ** radiation
@@ -121,6 +130,10 @@ no key).  Sized by reading.
 ** airquality
 OpenAQ latest measurements (~cmacs-gnuseye-airquality-url~).  OpenAQ v3 needs
 ~OPENAQ_API_KEY~ (declared ~:needs-key~).
+
+** disasters (v2)
+ReliefWeb ongoing disasters (~cmacs-gnuseye-disasters-url~; keyless), placed at
+the affected country's location.  Refresh 1 h.
 
 * Media & cameras — ~cmacs-gnuseye-media.el~
 
