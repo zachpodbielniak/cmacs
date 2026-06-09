@@ -116,8 +116,19 @@ click select):
 | ~C~ | country-instability choropleth |
 | ~.~ | track selected entity |
 | ~D~ | market dashboards |
+| ~2~ | toggle 2D flat map / 3D globe |
+| ~M~ | measure (two-click distance + bearing) |
+| ~H~ | density heatmap of a layer |
+| ~N~ | live news panel |
 | ~?~ | legend |
 | ~q~ | quit |
+
+v2 commands (no default key): ~cmacs-gnuseye-export-geojson~ / ~-csv~ /
+~-png~; ~cmacs-gnuseye-watch-add~ / ~-watch-clear~ / ~-alerts~;
+~cmacs-gnuseye-set-layer-opacity~; ~cmacs-gnuseye-sat-footprints~;
+~cmacs-gnuseye-replay-from-history~ / ~cmacs-gnuseye-backtest~;
+~cmacs-gnuseye-ai-deduce~ / ~-ai-market-implication~ / ~-ai-resilience~ /
+~-ai-country-brief~; ~cmacs-gnuseye-measure~.
 
 Toggle pane (~cmacs-gnuseye-layers-mode~, motion state): ~SPC~/~RET~/~t~
 expand a category or toggle a layer, ~g~ refresh, ~q~ quit, mouse-1 acts on

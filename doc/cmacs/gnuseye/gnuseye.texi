@@ -179,6 +179,27 @@ side-buffer panels via @code{cmacs-gnuseye-define-panel} — never the globe.
 New MCP tools: @code{gnuseye_query_entities}, @code{gnuseye_brief},
 @code{gnuseye_add_geofence}, @code{gnuseye_cii}.
 
+@section v2 additions
+
+A second wave closing the remaining worldmonitor gaps:
+
+@itemize @bullet
+@item @strong{2D flat-map mode} (@code{2}): reproject the globe onto an
+equirectangular flat map (north up) and back.
+@item @strong{Measurement} (@code{M}): click two points for great-circle
+distance + bearing (camera-ray globe pick), with the arc drawn.
+@item @strong{Heatmap} (@code{H}), per-layer @strong{opacity}, and satellite
+@strong{footprint rings}.
+@item @strong{Export} GeoJSON / CSV / PNG; @strong{watchlists} that alert via
+@code{cmacs-notify}; a @strong{live-news} panel (@code{N}, RSS, clickable).
+@item @strong{More layers}: cyber C2 IPs (geolocated), UCDP conflict,
+ReliefWeb disasters; @strong{more panels}: crypto treemap, Hacker News, FRED.
+@item @strong{History + backtest}: a disk time-series feeds long replay
+(@code{cmacs-gnuseye-replay-from-history}) and @code{cmacs-gnuseye-backtest}.
+@item @strong{Analytics engines} (cmacs-ai): situation deduction,
+market-implication, resilience simulation, country SITREPs.
+@end itemize
+
 @section Architecture notes
 
 Only @file{cmacs-gnuseye-globe.c} (the render half) includes

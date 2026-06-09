@@ -196,6 +196,34 @@ These are loaded from ~cmacs-gnuseye-feature-files~ when the globe opens.
   side-buffer panels via ~cmacs-gnuseye-define-panel~; ~D~ opens the keyless
   market panels (crypto, Fear & Greed, FX, predictions).
 
+* v2 additions
+
+A second wave closing the remaining worldmonitor gaps:
+
+- *2D flat-map mode* (~2~): ~cmacs-gnuseye-toggle-2d~ reprojects all geography
+  and markers from the globe sphere onto an equirectangular flat map (north
+  up, east right) and back.
+- *Measurement tool* (~M~): click two points → great-circle distance (km +
+  nmi) and bearing, with the measured arc drawn (uses a camera-ray ∩ globe
+  pick, ~cmacs-gnuseye-screen-to-globe~).
+- *Density heatmap* (~H~): a layer's entities binned into translucent grid
+  cells coloured by density; plus per-layer *opacity*
+  (~cmacs-gnuseye-set-layer-opacity~) and satellite *footprint rings*.
+- *Export*: ~cmacs-gnuseye-export-geojson~ / ~-csv~ / ~-png~.
+- *Watchlists*: ~cmacs-gnuseye-watch-add~ alerts (desktop ~cmacs-notify~ + an
+  alerts buffer) when a layer field crosses a threshold.
+- *Live news* (~N~): RSS/Atom aggregation with clickable headlines (→ gsurf).
+- *More layers*: cyber C2 IPs (geolocated), UCDP conflict, ReliefWeb
+  disasters; *more panels*: a crypto market-cap treemap, Hacker News, FRED.
+- *History + backtest*: a bounded disk time-series of positions feeds
+  ~cmacs-gnuseye-replay-from-history~ (days/weeks) and ~cmacs-gnuseye-backtest~
+  (re-runs correlation + CII over a past window).
+- *Analytics engines* (cmacs-ai): situation deduction, market-implication,
+  resilience/shock simulation, and country SITREPs over the on-screen context.
+- *Shared building blocks*: a keyless IP/centroid geolocator
+  (~cmacs-gnuseye-geoloc~), svg sparkline/treemap charts (~cmacs-gnuseye-charts~),
+  and the disk history store (~cmacs-gnuseye-history~).
+
 * Architecture
 
 #+begin_example
@@ -320,6 +348,9 @@ Helpers:
 | ~airquality~     | health        | OpenAQ                       | key | point    |
 | ~iss~            | media         | wheretheiss.at + stream      | no  | camera   |
 | ~webcams~        | media         | Windy / configurable         | url | camera   |
+| ~cyber~          | infra         | Feodo C2 IPs (geolocated)    | no  | point    |
+| ~ucdp~           | conflict      | UCDP GED conflict events     | no  | point    |
+| ~disasters~      | health        | ReliefWeb ongoing disasters  | no  | point    |
 
 Everything is *off by default*; enable from the toggle pane.  ~natural-events~
 is one rich keyless feed (volcanoes, severe storms, wildfires, icebergs,
@@ -427,10 +458,16 @@ intelligence layer (entity asks, region briefs, cross-source correlation
 hotspots, a country-instability index driving the choropleth); keyed feeds
 (graceful-off); and non-geospatial market dashboards.
 
-Planned follow-ons: cyber-threat IP feeds + Cloudflare outages (both need an
-IP/country → location geocode), disease outbreaks, UNHCR displacement,
-track-history fade trails, a curated polygon (ear-clip) triangulator for
-strongly-concave country fills, and full SGP4/SDP4 satellite propagation.
+v2 added (see *v2 additions*): the 2D flat map, measurement, heatmap, opacity,
+satellite footprints, export, watchlists, live news, cyber/UCDP/disasters
+layers, more panels, a disk history store with long replay + backtesting, and
+the LLM analytics engines.
+
+Planned follow-ons: Cloudflare outages + PortWatch + NGA nav-warnings (keyed
+or country-only geocode), climate anomalies / ocean ice, GPSJAM, military-
+flight derivation, track-history fade trails, weighted/animated flow arcs,
+share/permalink, an embeddings-backed headline-novelty store, an ear-clip
+triangulator for strongly-concave country fills, and full SGP4/SDP4.
 
 * Files
 
