@@ -211,6 +211,32 @@ gnuseye_subsolar_point (double unix_s, double *out_lat, double *out_lon)
   *out_lon = lon;
 }
 
+/* Equirectangular FLAT-MAP projection: lay lat/lon out on the XZ plane (the
+ * top-down ground plane) instead of the sphere.  Longitude -> X, latitude ->
+ * -Z (north toward -Z so it reads "up" from above), altitude -> +Y (lifts
+ * markers off the map).  Scaled by the globe radius so the flat map is the
+ * same size class as the globe (width 2*pi*R, height pi*R). */
+static inline void
+gnuseye_latlon_to_flat (double lat_deg, double lon_deg, double alt_m,
+                        double *x, double *y, double *z)
+{
+  double s = GNUSEYE_GLOBE_RADIUS;
+  *x = lon_deg * GNUSEYE_DEG2RAD * s;
+  *z = lat_deg * GNUSEYE_DEG2RAD * s;   /* +Z = north (reads up in the view) */
+  *y = (alt_m / GNUSEYE_EARTH_RADIUS_M) * s;
+}
+
+/* Inverse of gnuseye_latlon_to_flat (for ray-plane picking in flat mode). */
+static inline void
+gnuseye_flat_to_latlon (double x, double y, double z,
+                        double *lat_deg, double *lon_deg, double *alt_m)
+{
+  double s = GNUSEYE_GLOBE_RADIUS;
+  *lon_deg = (x / s) * GNUSEYE_RAD2DEG;
+  *lat_deg = (z / s) * GNUSEYE_RAD2DEG;
+  *alt_m = (y / s) * GNUSEYE_EARTH_RADIUS_M;
+}
+
 /* Unit world vector from the globe centre toward the Sun at Unix time
  * UNIX_S, in the SAME -Z-winding frame as gnuseye_latlon_to_xyz, so it can
  * drive the globe shader's `sunDir' uniform consistently with the markers. */

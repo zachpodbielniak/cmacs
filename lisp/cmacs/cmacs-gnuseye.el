@@ -1372,6 +1372,7 @@ it).  Layers needing an API key that is unset cannot be enabled."
     (define-key map (kbd "g") #'cmacs-gnuseye-refresh-all)
     (define-key map (kbd "f") #'cmacs-gnuseye-fly-to-place)
     (define-key map (kbd "?") #'cmacs-gnuseye-legend)
+    (define-key map (kbd "2") #'cmacs-gnuseye-toggle-2d)
     (define-key map (kbd "q") #'quit-window)
     map)
   "Keymap for `cmacs-gnuseye-mode'.")
@@ -1771,6 +1772,21 @@ Each layer's data is downloaded + cached once.  Honours the
              (cmacs-gnuseye-redraw buffer))))))))
 
 (defalias 'cmacs-gnuseye-load-coastlines 'cmacs-gnuseye-load-map)
+
+;;;###autoload
+(defun cmacs-gnuseye-toggle-2d ()
+  "Toggle between the 3D globe and a 2D equirectangular flat map.
+Reprojects all geography and markers onto the chosen surface."
+  (interactive)
+  (let ((buf cmacs-gnuseye-buffer))
+    (when (and buf (buffer-live-p buf) (cmacs-gnuseye-attached-p buf)
+               (fboundp 'cmacs-gnuseye-set-projection))
+      (let ((flat (not (cmacs-gnuseye-flat-p buf))))
+        (cmacs-gnuseye-set-projection buf flat)
+        (cmacs-gnuseye-load-map buf)
+        (cmacs-gnuseye--render-all buf)
+        (cmacs-gnuseye-redraw buf)
+        (message "GNU's Eye: %s" (if flat "2D flat map" "3D globe"))))))
 
 ;;;; Keep the globe round: track the window's aspect ratio ------------------
 

@@ -509,8 +509,7 @@ only once the camera is zoomed in, and persist across marker refreshes.  */)
   CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
   if (!v) return Qnil;
   double x, y, z;
-  gnuseye_latlon_to_xyz (XFLOATINT (lat), XFLOATINT (lon), 20000.0,
-                         &x, &y, &z);
+  cmacs_gnuseye_project (XFLOATINT (lat), XFLOATINT (lon), 20000.0, &x, &y, &z);
   unsigned int rgba = FIXNUMP (color) ? (unsigned int) XFIXNUM (color)
                                       : 0xf0f0f0ffu;
   Lisp_Object enc = ENCODE_UTF_8 (text);
@@ -586,6 +585,32 @@ pixel is off the globe.  */)
                                      &lat, &lon))
     return list2 (make_float (lat), make_float (lon));
   return Qnil;
+}
+
+DEFUN ("cmacs-gnuseye-set-projection", Fcmacs_gnuseye_set_projection,
+       Scmacs_gnuseye_set_projection, 2, 2, 0,
+       doc: /* Set BUFFER's globe projection: FLAT non-nil = 2D flat map,
+nil = 3D globe.  Rebuilds the background and repositions the camera; the
+caller should reload the map overlay and re-render markers.  */)
+  (Lisp_Object buffer, Lisp_Object flat)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  cmacs_gnuseye_set_projection (cmacs_libregnum_view_get_render_ctx (v),
+                                !NILP (flat));
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-gnuseye-flat-p", Fcmacs_gnuseye_flat_p, Scmacs_gnuseye_flat_p,
+       1, 1, 0, doc: /* Return t when BUFFER's globe is in 2D flat-map mode.  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  return (v && cmacs_gnuseye_flat_p (cmacs_libregnum_view_get_render_ctx (v)))
+         ? Qt : Qnil;
 }
 
 DEFUN ("cmacs-gnuseye-add-flag", Fcmacs_gnuseye_add_flag,
@@ -693,6 +718,8 @@ syms_of_cmacs_gnuseye_defuns (void)
   defsubr (&Scmacs_gnuseye_flag_count);
   defsubr (&Scmacs_gnuseye_view_center);
   defsubr (&Scmacs_gnuseye_screen_to_globe);
+  defsubr (&Scmacs_gnuseye_set_projection);
+  defsubr (&Scmacs_gnuseye_flat_p);
 }
 
 #endif /* HAVE_CMACS_GNUSEYE */

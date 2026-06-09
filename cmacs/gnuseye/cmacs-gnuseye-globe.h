@@ -122,6 +122,19 @@ extern gboolean cmacs_gnuseye_screen_to_globe (CmacsLibregnumRenderCtx *r,
                                                int vw, int vh,
                                                double *out_lat, double *out_lon);
 
+/* Projection mode: rebuild the background as the 3D globe sphere (FLAT false)
+ * or a 2D equirectangular flat map (FLAT true), reposition the camera, and
+ * make subsequent geography/markers project accordingly.  After calling, the
+ * caller should reload the map overlay and re-render the markers. */
+extern gboolean cmacs_gnuseye_set_projection (CmacsLibregnumRenderCtx *r,
+                                              gboolean flat);
+extern gboolean cmacs_gnuseye_flat_p (CmacsLibregnumRenderCtx *r);
+
+/* Project (LAT,LON,ALT) to world XYZ in the current projection mode (sphere or
+ * flat).  Exposed so the lisp.h-side label path projects consistently. */
+extern void cmacs_gnuseye_project (double lat, double lon, double alt,
+                                   double *x, double *y, double *z);
+
 /* Day/night terminator: set the globe shader's sun direction.  set_direction
  * takes a world-space unit vector (gnuseye -Z winding); set_time computes the
  * real subsolar unit vector for Unix time UNIX_S and applies it.  No-op when

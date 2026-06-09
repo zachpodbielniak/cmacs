@@ -547,6 +547,14 @@ does not."
   (let ((r (/ (cmacs-gnuseye-footprint-radius-m 420000.0) 1000.0)))
     (should (and (> r 1900) (< r 2500)))))
 
+;;;; v2 Phase 11: 2D flat-map mode --------------------------------------------
+
+(ert-deftest cmacs-gnuseye--flat-defuns ()
+  (cmacs-gnuseye-tests--skip)
+  (should (fboundp 'cmacs-gnuseye-set-projection))
+  (should (fboundp 'cmacs-gnuseye-flat-p))
+  (should (fboundp 'cmacs-gnuseye-toggle-2d)))
+
 (provide 'cmacs-gnuseye-tests)
 
 ;;; cmacs-gnuseye-tests.el ends here

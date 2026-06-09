@@ -84,7 +84,23 @@ typedef struct
   gint        sun_loc; /* cached "sunDir" uniform location, or -1 */
   int         tw, th;  /* texture dimensions */
   double      spin;    /* current spin (degrees) */
+  gboolean    flat;    /* TRUE = 2D flat-map projection (XZ plane) */
 } GnuseyeGlobe;
+
+/* Process-level flat-map flag.  gnuseye drives a single globe (the
+ * `cmacs-gnuseye-buffer' singleton), so a file static is sufficient and lets
+ * the coordinate wrapper stay parameter-free at the many marker/coastline/
+ * polygon call sites.  Set by cmacs_gnuseye_set_projection. */
+static gboolean s_flat_mode = FALSE;
+
+/* Project (lat,lon,alt) to world space in the current projection mode:
+ * the globe sphere, or the equirectangular flat map. */
+static void
+gxyz (double lat, double lon, double alt, double *x, double *y, double *z)
+{
+  if (s_flat_mode) gnuseye_latlon_to_flat (lat, lon, alt, x, y, z);
+  else             gnuseye_latlon_to_xyz  (lat, lon, alt, x, y, z);
+}
 
 static void
 gnuseye_globe_free (gpointer p)
@@ -219,61 +235,119 @@ make_procedural_earth (int w, int h)
 
 /* ── Build / teardown ───────────────────────────────────────────────── */
 
-gboolean
-cmacs_gnuseye_build (CmacsLibregnumRenderCtx *r, const char *base_texture_path)
+/* Build the background as either the textured Earth sphere or a flat
+ * equirectangular ocean plane (vector geography drapes onto both via gxyz). */
+static gboolean
+build_globe (CmacsLibregnumRenderCtx *r, const char *base_texture_path,
+             gboolean flat)
 {
   if (!r) return FALSE;
 
-  g_autoptr (GrlMesh) mesh = grl_mesh_new_sphere (GNUSEYE_GLOBE_RADIUS, 48, 96);
+  GrlMesh *mesh = flat
+    ? grl_mesh_new_plane ((gfloat) (2.0 * M_PI * GNUSEYE_GLOBE_RADIUS),
+                          (gfloat) (M_PI * GNUSEYE_GLOBE_RADIUS), 1, 1)
+    : grl_mesh_new_sphere (GNUSEYE_GLOBE_RADIUS, 48, 96);
   if (!mesh) return FALSE;
   GrlModel *model = grl_model_new_from_mesh (mesh);
+  g_object_unref (mesh);
   if (!model) return FALSE;
 
   GnuseyeGlobe *g = g_new0 (GnuseyeGlobe, 1);
   g->sun_loc = -1;
-  if (base_texture_path && *base_texture_path)
-    g->img = load_earth_texture (base_texture_path);
-  if (!g->img)
-    g->img = make_procedural_earth (GLOBE_TEX_W, GLOBE_TEX_H);
-  if (!g->img)
-    {
-      g_free (g);
-      g_object_unref (model);
-      return FALSE;
-    }
-  g->tw = grl_image_get_width (g->img);
-  g->th = grl_image_get_height (g->img);
-  g->tex = grl_texture_new_from_image (g->img);
   g->spin = 0.0;
-  if (g->tex)
+  g->flat = flat;
+
+  if (flat)
     {
-      /* Build a lit material: albedo = earth texture, bound to the sun
-       * shader.  Falls back to a plain textured model if the shader fails
-       * to compile. */
+      /* Flat map: a solid dark-ocean plane; the vector coastlines/borders
+       * carry the geography, so no texture or day/night shader. */
       GrlMaterial *mat = grl_material_new_default ();
-      grl_material_set_texture (mat, GRL_MATERIAL_MAP_ALBEDO, g->tex);
-      g->shader = grl_shader_new_from_memory (s_globe_vs, s_globe_fs, NULL);
-      if (g->shader)
-        {
-          grl_material_set_shader (mat, g->shader);
-          g->sun_loc = grl_shader_get_location (g->shader, "sunDir");
-          if (g->sun_loc >= 0)
-            grl_shader_set_value_vec3 (g->shader, g->sun_loc,
-                                       0.90f, 0.25f, -0.35f);
-        }
+      g_autoptr (GrlColor) sea = grl_color_new (16, 36, 70, 255);
+      grl_material_set_map_color (mat, GRL_MATERIAL_MAP_ALBEDO, sea);
       grl_model_set_material (model, 0, mat);
+    }
+  else
+    {
+      if (base_texture_path && *base_texture_path)
+        g->img = load_earth_texture (base_texture_path);
+      if (!g->img)
+        g->img = make_procedural_earth (GLOBE_TEX_W, GLOBE_TEX_H);
+      if (!g->img)
+        { g_free (g); g_object_unref (model); return FALSE; }
+      g->tw = grl_image_get_width (g->img);
+      g->th = grl_image_get_height (g->img);
+      g->tex = grl_texture_new_from_image (g->img);
+      if (g->tex)
+        {
+          GrlMaterial *mat = grl_material_new_default ();
+          grl_material_set_texture (mat, GRL_MATERIAL_MAP_ALBEDO, g->tex);
+          g->shader = grl_shader_new_from_memory (s_globe_vs, s_globe_fs, NULL);
+          if (g->shader)
+            {
+              grl_material_set_shader (mat, g->shader);
+              g->sun_loc = grl_shader_get_location (g->shader, "sunDir");
+              if (g->sun_loc >= 0)
+                grl_shader_set_value_vec3 (g->shader, g->sun_loc,
+                                           0.90f, 0.25f, -0.35f);
+            }
+          grl_model_set_material (model, 0, mat);
+        }
     }
 
   g_object_set_data_full (G_OBJECT (model), "gnuseye-globe", g,
                           gnuseye_globe_free);
-
-  /* Transfers ownership of MODEL to the render ctx; its qdata (and thus
-   * g->img/g->tex) is freed when the ctx releases the background model. */
   cmacs_libregnum_render_ctx_set_background_model (r, model);
   cmacs_libregnum_render_ctx_set_background_spin (r, 0.0);
-  /* The globe occludes labels/flags on its far side. */
-  cmacs_libregnum_render_ctx_set_occluder_radius (r, GNUSEYE_GLOBE_RADIUS);
+  /* The sphere occludes far-side labels/flags; the flat map does not. */
+  cmacs_libregnum_render_ctx_set_occluder_radius (r,
+    flat ? 0.0 : GNUSEYE_GLOBE_RADIUS);
   return TRUE;
+}
+
+gboolean
+cmacs_gnuseye_build (CmacsLibregnumRenderCtx *r, const char *base_texture_path)
+{
+  return build_globe (r, base_texture_path, s_flat_mode);
+}
+
+gboolean
+cmacs_gnuseye_set_projection (CmacsLibregnumRenderCtx *r, gboolean flat)
+{
+  if (!r) return FALSE;
+  s_flat_mode = flat;
+  if (!build_globe (r, NULL, flat)) return FALSE;
+  /* Reposition the camera via set_camera_state (which the orbit controller
+   * honours).  The flat map uses a near-overhead view with a slight Z lean so
+   * the default +Y up stays well-defined and north (−Z) reads upward — a
+   * perfectly straight-down view would be a degenerate up vector. */
+  if (flat)
+    cmacs_libregnum_render_ctx_set_camera_state (r, 0.0, 34.0, 5.0,
+                                                 0.0, 0.0, 0.0, 55.0);
+  else
+    {
+      double cx, cy, cz;
+      gnuseye_latlon_to_xyz (10.0, 0.0, 0.0, &cx, &cy, &cz);
+      double n = sqrt (cx*cx + cy*cy + cz*cz);
+      double k = 13.0 / (n > 0 ? n : 1.0);
+      cmacs_libregnum_render_ctx_set_camera_state (r, cx*k, cy*k, cz*k,
+                                                   0.0, 0.0, 0.0, 55.0);
+    }
+  return TRUE;
+}
+
+gboolean
+cmacs_gnuseye_flat_p (CmacsLibregnumRenderCtx *r)
+{
+  (void) r;
+  return s_flat_mode;
+}
+
+/* Public projection wrapper for the lisp.h side (e.g. add-label). */
+void
+cmacs_gnuseye_project (double lat, double lon, double alt,
+                       double *x, double *y, double *z)
+{
+  gxyz (lat, lon, alt, x, y, z);
 }
 
 gboolean
@@ -531,9 +605,17 @@ cmacs_gnuseye_add_marker (CmacsLibregnumRenderCtx *r, int kind,
   if (ca == 0) ca = 255;
   double s = 0.11 * (scale > 0 ? scale : 1.0);   /* icon base size */
 
-  /* Local tangent frame: up = surface normal, fwd = travel direction. */
+  /* Local tangent frame: up = surface normal, fwd = travel direction.  On the
+   * flat map the frame is constant: up = +Y (out of the plane), east = +X,
+   * north = -Z. */
   double up[3], east[3], north[3], fwd[3], right[3];
-  gnuseye_enu_basis (lat, lon, up, east, north);
+  if (s_flat_mode)
+    {
+      up[0]=0; up[1]=1; up[2]=0;  east[0]=1; east[1]=0; east[2]=0;
+      north[0]=0; north[1]=0; north[2]=1;
+    }
+  else
+    gnuseye_enu_basis (lat, lon, up, east, north);
   if (heading >= 0.0)
     {
       double h = heading * GNUSEYE_DEG2RAD, ch = cos (h), sh = sin (h);
@@ -550,8 +632,8 @@ cmacs_gnuseye_add_marker (CmacsLibregnumRenderCtx *r, int kind,
   /* Elevated position P (render altitude) and surface point P0. */
   double render_alt = alt_m * kind_alt_exag (kind);
   double P[3], P0[3];
-  gnuseye_latlon_to_xyz (lat, lon, render_alt, &P[0], &P[1], &P[2]);
-  gnuseye_latlon_to_xyz (lat, lon, 0.0, &P0[0], &P0[1], &P0[2]);
+  gxyz (lat, lon, render_alt, &P[0], &P[1], &P[2]);
+  gxyz (lat, lon, 0.0, &P0[0], &P0[1], &P0[2]);
   /* Sit surface icons just above the skin to avoid z-fighting. */
   if (render_alt <= 0.0)
     { P[0]+=up[0]*s*0.5; P[1]+=up[1]*s*0.5; P[2]+=up[2]*s*0.5; }
@@ -643,9 +725,9 @@ cmacs_gnuseye_add_arc (CmacsLibregnumRenderCtx *r,
   for (int i = 0; i + 1 < n; i++)
     {
       double x0, y0, z0, x1, y1, z1;
-      gnuseye_latlon_to_xyz (lats[i], lons[i], alts ? alts[i] : 0.0,
+      gxyz (lats[i], lons[i], alts ? alts[i] : 0.0,
                              &x0, &y0, &z0);
-      gnuseye_latlon_to_xyz (lats[i+1], lons[i+1], alts ? alts[i+1] : 0.0,
+      gxyz (lats[i+1], lons[i+1], alts ? alts[i+1] : 0.0,
                              &x1, &y1, &z1);
       LrgLine3D *seg =
         lrg_line3d_new_from_to ((gfloat) x0, (gfloat) y0, (gfloat) z0,
@@ -672,8 +754,8 @@ cmacs_gnuseye_add_coastline (CmacsLibregnumRenderCtx *r,
   for (int i = 0; i + 1 < n; i++)
     {
       double x0, y0, z0, x1, y1, z1;
-      gnuseye_latlon_to_xyz (lats[i], lons[i], COAST_LIFT_M, &x0, &y0, &z0);
-      gnuseye_latlon_to_xyz (lats[i+1], lons[i+1], COAST_LIFT_M,
+      gxyz (lats[i], lons[i], COAST_LIFT_M, &x0, &y0, &z0);
+      gxyz (lats[i+1], lons[i+1], COAST_LIFT_M,
                              &x1, &y1, &z1);
       LrgLine3D *seg =
         lrg_line3d_new_from_to ((gfloat) x0, (gfloat) y0, (gfloat) z0,
@@ -722,7 +804,7 @@ build_polygon_model (const double *lats, const double *lons, int n,
   for (int i = 0; i < m; i++)
     {
       double x, y, z;
-      gnuseye_latlon_to_xyz (lats[i], lons[i], 0.0, &x, &y, &z);
+      gxyz (lats[i], lons[i], 0.0, &x, &y, &z);
       cx += x; cy += y; cz += z;
     }
   double clat, clon, cdummy;
@@ -779,7 +861,7 @@ build_polygon_model (const double *lats, const double *lons, int n,
                                       g_array_index (plon, double, i),
                                       frac, &la, &lo);
           double x, y, z;
-          gnuseye_latlon_to_xyz (la, lo, POLY_LIFT_M, &x, &y, &z);
+          gxyz (la, lo, POLY_LIFT_M, &x, &y, &z);
           gfloat v[3] = { (gfloat) x, (gfloat) y, (gfloat) z };
           g_array_append_vals (verts, v, 3);
         }
@@ -858,7 +940,7 @@ cmacs_gnuseye_add_flag (CmacsLibregnumRenderCtx *r, double lat, double lon,
   GrlTexture *tex = grl_texture_new_from_file (flag_path);
   if (!tex) return -1;
   double x, y, z;
-  gnuseye_latlon_to_xyz (lat, lon, FLAG_LIFT_M, &x, &y, &z);
+  gxyz (lat, lon, FLAG_LIFT_M, &x, &y, &z);
   cmacs_libregnum_render_ctx_add_billboard (r, (float) x, (float) y, (float) z,
                                             tex, (float) (size > 0 ? size
                                                                    : 0.25));
@@ -881,7 +963,7 @@ cmacs_gnuseye_camera_goto (CmacsLibregnumRenderCtx *r,
   (void) animate;   /* v1: snap; smooth fly-to is a later refinement */
   if (!r) return;
   double dx, dy, dz;
-  gnuseye_latlon_to_xyz (lat, lon, 0.0, &dx, &dy, &dz);
+  gxyz (lat, lon, 0.0, &dx, &dy, &dz);
   double len = sqrt (dx*dx + dy*dy + dz*dz);
   if (len <= 0) return;
   dx /= len; dy /= len; dz /= len;
