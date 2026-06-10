@@ -201,7 +201,8 @@ These are loaded from ~cmacs-gnuseye-feature-files~ when the globe opens.
 
 A second wave closing the remaining worldmonitor gaps:
 
-- *2D flat-map mode* (~2~): ~cmacs-gnuseye-toggle-2d~ reprojects all geography
+- *2D flat-map mode* (~2~; ~3~ returns to the globe): ~cmacs-gnuseye-view-2d~ /
+  ~-view-3d~ (and ~-toggle-2d~) reproject all geography
   and markers from the globe sphere onto an equirectangular flat map (north
   up, east right) and back.
 - *Measurement tool* (~M~): click two points → great-circle distance (km +

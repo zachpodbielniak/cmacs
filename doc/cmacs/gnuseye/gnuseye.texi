@@ -205,8 +205,9 @@ New MCP tools: @code{gnuseye_query_entities}, @code{gnuseye_brief},
 A second wave closing the remaining worldmonitor gaps:
 
 @itemize @bullet
-@item @strong{2D flat-map mode} (@code{2}): reproject the globe onto an
-equirectangular flat map (north up) and back.
+@item @strong{2D flat-map mode} (@code{2}; @code{3} returns to the 3D
+globe): reproject the globe onto an equirectangular flat map (north up)
+and back.
 @item @strong{Measurement} (@code{M}): click two points for great-circle
 distance + bearing (camera-ray globe pick), with the arc drawn.
 @item @strong{Heatmap} (@code{H}), per-layer @strong{opacity}, and satellite

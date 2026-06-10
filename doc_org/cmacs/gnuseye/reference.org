@@ -113,7 +113,8 @@ Loaded via ~cmacs-gnuseye-feature-files~.  Each is self-contained:
   ~-ai-market-implication~, ~-ai-resilience~, ~-ai-country-brief~ (cmacs-ai).
 - ~cmacs-gnuseye-markets~ — ~cmacs-gnuseye-define-panel~ + the dashboard.
 
-The 2D flat map is toggled with ~cmacs-gnuseye-toggle-2d~ (~2~).
+The 2D flat map is entered with ~cmacs-gnuseye-view-2d~ (~2~) and left
+with ~cmacs-gnuseye-view-3d~ (~3~); ~cmacs-gnuseye-toggle-2d~ still toggles.
 
 v3 solar system: ~cmacs-gnuseye-ephem-body~ ~(BODY &optional TIME)~ →
 ~(:sublat :sublon :dist-km)~ for ~sun moon mercury…neptune~ (local Standish /
@@ -156,7 +157,8 @@ click select):
 | ~C~ | country-instability choropleth |
 | ~.~ | track selected entity |
 | ~D~ | market dashboards |
-| ~2~ | toggle 2D flat map / 3D globe |
+| ~2~ | 2D flat map |
+| ~3~ | back to the 3D globe |
 | ~0~ / ~Home~ | go back to Earth (reset view from the solar system) |
 | ~u~ / ~Esc~ | deselect + re-orbit Earth |
 | ~+~ / ~-~ | keyboard zoom (altitude-proportional) |

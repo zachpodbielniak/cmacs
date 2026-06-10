@@ -1546,7 +1546,8 @@ it).  Layers needing an API key that is unset cannot be enabled."
     (define-key map (kbd "g") #'cmacs-gnuseye-refresh-all)
     (define-key map (kbd "f") #'cmacs-gnuseye-fly-to-place)
     (define-key map (kbd "?") #'cmacs-gnuseye-legend)
-    (define-key map (kbd "2") #'cmacs-gnuseye-toggle-2d)
+    (define-key map (kbd "2") #'cmacs-gnuseye-view-2d)
+    (define-key map (kbd "3") #'cmacs-gnuseye-view-3d)
     (define-key map (kbd "u") #'cmacs-gnuseye-deselect)
     (define-key map (kbd "<escape>") #'cmacs-gnuseye-deselect)
     (define-key map (kbd "0") #'cmacs-gnuseye-home)
@@ -1968,6 +1969,32 @@ Each layer's data is downloaded + cached once.  Honours the
              (fboundp 'cmacs-gnuseye-zoom))
     (cmacs-gnuseye-zoom cmacs-gnuseye-buffer -1.0)))
 
+(defun cmacs-gnuseye--set-projection-1 (flat)
+  "Switch the view to the 2D flat map (FLAT non-nil) or the 3D globe."
+  (let ((buf cmacs-gnuseye-buffer))
+    (when (and buf (buffer-live-p buf) (cmacs-gnuseye-attached-p buf)
+               (fboundp 'cmacs-gnuseye-set-projection))
+      (if (eq (and (cmacs-gnuseye-flat-p buf) t) (and flat t))
+          (message "GNU's Eye: already the %s"
+                   (if flat "2D flat map" "3D globe"))
+        (cmacs-gnuseye-set-projection buf flat)
+        (cmacs-gnuseye-load-map buf)
+        (cmacs-gnuseye--render-all buf)
+        (cmacs-gnuseye-redraw buf)
+        (message "GNU's Eye: %s" (if flat "2D flat map" "3D globe"))))))
+
+;;;###autoload
+(defun cmacs-gnuseye-view-2d ()
+  "Switch to the 2D equirectangular flat map (key `2'; `3' returns to 3D)."
+  (interactive)
+  (cmacs-gnuseye--set-projection-1 t))
+
+;;;###autoload
+(defun cmacs-gnuseye-view-3d ()
+  "Switch back to the 3D globe (key `3')."
+  (interactive)
+  (cmacs-gnuseye--set-projection-1 nil))
+
 ;;;###autoload
 (defun cmacs-gnuseye-toggle-2d ()
   "Toggle between the 3D globe and a 2D equirectangular flat map.
@@ -1975,13 +2002,8 @@ Reprojects all geography and markers onto the chosen surface."
   (interactive)
   (let ((buf cmacs-gnuseye-buffer))
     (when (and buf (buffer-live-p buf) (cmacs-gnuseye-attached-p buf)
-               (fboundp 'cmacs-gnuseye-set-projection))
-      (let ((flat (not (cmacs-gnuseye-flat-p buf))))
-        (cmacs-gnuseye-set-projection buf flat)
-        (cmacs-gnuseye-load-map buf)
-        (cmacs-gnuseye--render-all buf)
-        (cmacs-gnuseye-redraw buf)
-        (message "GNU's Eye: %s" (if flat "2D flat map" "3D globe"))))))
+               (fboundp 'cmacs-gnuseye-flat-p))
+      (cmacs-gnuseye--set-projection-1 (not (cmacs-gnuseye-flat-p buf))))))
 
 ;;;; Keep the globe round: track the window's aspect ratio ------------------
 
