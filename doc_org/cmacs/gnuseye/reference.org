@@ -210,6 +210,16 @@ any feature-registered actions (see ~cmacs-gnuseye-register-inspector-action~).
 - *Click resolution* survives the per-tick marker rebuilds: the pick carries
   the entity-id string (stable), so clicking an aircraft/planet always
   selects it even while layers re-render — including celestial bodies.
+  Every click reports its outcome in the echo area (~selected X~,
+  ~cluster of N — zooming in~, or ~click did not resolve~ with the values).
+- *Loading invariant*: the C input layer dispatches clicks to
+  ~cmacs-libregnum--node-clicked~ (defined in ~cmacs-libregnum.el~) through
+  ~safe_call~, which *mutes* a void-function error — so ~cmacs-gnuseye.el~
+  requires ~cmacs-libregnum~ to guarantee the dispatcher exists.  If clicks
+  ever "do nothing", check ~*Messages*~ for "Error muted by safe_call"
+  lines first.  (Full dispatch architecture, including why the level editor
+  is immune by construction: the *Click dispatch* section of
+  [[file:../cmacs-libregnum.org][cmacs-libregnum.org]].)
 - ~C-w~ in the globe viewport is the Evil *window map* (the globe runs in
   Emacs state, where ~C-w~ would otherwise be ~kill-region~), so Doom's
   ~C-w h/j/k/l~ window movement works from the render window.

@@ -181,6 +181,13 @@ movement works from the render window).
 inspector shows population, GDP, GDP/capita, unemployment, life expectancy,
 inflation, and income group -- instant Natural Earth figures plus live
 keyless World Bank indicators (cached).  Ocean clicks deselect.
+@item @strong{Click dispatch}: every click reports its outcome in the echo
+area (@samp{selected X}, @samp{cluster of N}, or @samp{click did not
+resolve}).  The C input layer dispatches clicks to
+@code{cmacs-libregnum--node-clicked} through @code{safe_call}, which mutes
+void-function errors -- @file{cmacs-gnuseye.el} therefore requires
+@code{cmacs-libregnum} so the dispatcher always exists.  If clicks ever do
+nothing, check @file{*Messages*} for ``Error muted by safe_call'' lines.
 @item @strong{Dashboards} (@code{D}): table feeds (markets, macro) render as
 side-buffer panels via @code{cmacs-gnuseye-define-panel} — never the globe.
 @end itemize

@@ -5891,6 +5891,27 @@ directory to drill in (the scene re-roots there).  Left-drag still
 orbits, right-drag pans, scroll zooms; a click is told from a drag by
 whether the pointer moved.
 
+@subsubheading Click dispatch and the loading invariant
+
+Viewport clicks are handled in C: the click ray-picks a node
+synchronously, then @emph{defers} a dispatch onto the cmacs GMainContext
+to one of four Elisp entry points
+(@code{cmacs-libregnum--node-clicked} for scenes + gnuseye, and the
+editor's @code{--on-select} / @code{--drop} / @code{--context-menu}).
+Two invariants follow.  First, @emph{the dispatcher's file must be
+loaded before a view can exist}: the dispatch goes through
+@code{safe_call}, which mutes a @code{void-function} error -- the click
+dies silently (the only trace is an ``Error muted by safe_call'' line
+in @file{*Messages*}).  @file{cmacs-gnuseye.el} requires
+@code{cmacs-libregnum} for exactly this reason; the editor's
+dispatchers live in the same file as its entry command; the MCP
+@code{lrg_editor_open} tool requires the file first.  Second,
+@emph{numeric node ids go stale across scene rebuilds} (gnuseye's
+smooth tick renumbers them every ~0.4 s), so gnuseye resolves clicks
+by the pick-time @emph{path string} (its entity id); the editor is safe
+by construction -- its node table changes only on explicit edits and
+the engine-side selection happens synchronously at click time.
+
 Keyboard (a highlighted selection cursor; the camera eases to frame
 it and its name is echoed):
 

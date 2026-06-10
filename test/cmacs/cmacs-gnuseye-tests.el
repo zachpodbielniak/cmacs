@@ -896,6 +896,21 @@ payload entity, the inspector still shows it and the selection is set."
   (should (equal (cmacs-gnuseye-country--fmt-num 27.36e12) "27.36 trillion"))
   (should (equal (cmacs-gnuseye-country--fmt-num 4.2) "4.2")))
 
+(ert-deftest cmacs-gnuseye--click-dispatcher-loaded ()
+  "Loading cmacs-gnuseye must bring in the C->Elisp click dispatchers.
+The C input layer dispatches every globe click to
+`cmacs-libregnum--node-clicked' (cmacs-libregnum.el); a gnuseye-only
+session that never loaded that file dropped every click as
+\(void-function ...) muted inside safe_call.  Pin the transitive require."
+  (cmacs-gnuseye-tests--skip)
+  (should (featurep 'cmacs-libregnum))
+  (should (fboundp 'cmacs-libregnum--node-clicked))
+  ;; The editor's dispatchers live in the same file as its entry command,
+  ;; so they share the guarantee.
+  (should (fboundp 'cmacs-libregnum-editor--on-select))
+  (should (fboundp 'cmacs-libregnum-editor--drop))
+  (should (fboundp 'cmacs-libregnum-editor--context-menu)))
+
 (provide 'cmacs-gnuseye-tests)
 
 ;;; cmacs-gnuseye-tests.el ends here
