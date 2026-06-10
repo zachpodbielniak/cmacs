@@ -956,8 +956,14 @@ id disagrees with PATH, or the payload is gone, fall back to the id index."
                   (cmacs-gnuseye-fly-to buffer (float (plist-get e :lat))
                                         (float (plist-get e :lon))
                                         (max 7.4 (* 0.55 dist)) t)))
-            (cmacs-gnuseye--select-entity (plist-get e :id))
-            (cmacs-gnuseye--list-goto (plist-get e :id))))))))
+            (unless (cmacs-gnuseye--select-entity (plist-get e :id))
+              ;; Index miss (mid-rebuild debounce): still show what was
+              ;; clicked -- the resolved entity is fully displayable.
+              (setq cmacs-gnuseye--selected-id
+                    (format "%s" (plist-get e :id)))
+              (cmacs-gnuseye--show-inspector e)
+              (cmacs-gnuseye--render-all))
+            (ignore-errors (cmacs-gnuseye--list-goto (plist-get e :id)))))))))
 
 (defvar cmacs-gnuseye-inspector-mode-map
   (let ((map (make-sparse-keymap)))

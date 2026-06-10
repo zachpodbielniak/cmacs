@@ -838,6 +838,28 @@ marker rebuilds renumber node ids between pick and dispatch."
                    "real")))
   (clrhash cmacs-gnuseye--id-index))
 
+(ert-deftest cmacs-gnuseye--pick-index-miss-fallback ()
+  "If the id index misses (mid-rebuild) but the click resolved to a valid
+payload entity, the inspector still shows it and the selection is set."
+  (cmacs-gnuseye-tests--skip)
+  (clrhash cmacs-gnuseye--id-index)
+  (setq cmacs-gnuseye--selected-id nil)
+  (cl-letf (((symbol-function 'cmacs-gnuseye-entity-at)
+             (lambda (_b _id)
+               (list :id "cel:jupiter" :kind 'planet :label "Jupiter"
+                     :lat 10.0 :lon 20.0 :alt 1.0e9
+                     :data '((body . jupiter)))))
+            ;; no globe attached in batch: stub the camera/redraw paths
+            ((symbol-function 'cmacs-gnuseye--render-all) #'ignore)
+            ((symbol-function 'cmacs-gnuseye--list-goto) #'ignore))
+    (cmacs-gnuseye--on-pick-1 nil 7 "cel:jupiter")
+    (should (equal cmacs-gnuseye--selected-id "cel:jupiter"))
+    (let ((b (get-buffer "*GNU's Eye Inspector*")))
+      (should b)
+      (with-current-buffer b
+        (should (string-match-p "Jupiter" (buffer-string))))))
+  (setq cmacs-gnuseye--selected-id nil))
+
 (ert-deftest cmacs-gnuseye--country-pip ()
   "Point-in-country: inside a square ring, outside it, and hole handling."
   (cmacs-gnuseye-tests--skip)
