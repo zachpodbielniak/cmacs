@@ -31,6 +31,12 @@
 (require 'subr-x)
 (require 'json)
 (require 'url)
+;; The C input handler dispatches every globe click to
+;; `cmacs-libregnum--node-clicked' (defined in cmacs-libregnum.el), which
+;; routes it back to `cmacs-gnuseye--on-pick'.  Without this require, a
+;; gnuseye-only session never loads that dispatcher and every click dies
+;; inside safe_call with (void-function cmacs-libregnum--node-clicked).
+(require 'cmacs-libregnum)
 
 (declare-function cmacs-libregnum-resize "cmacs-libregnum-defuns.c"
                   (buffer width height))
