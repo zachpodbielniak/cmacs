@@ -197,7 +197,22 @@ any feature-registered actions (see ~cmacs-gnuseye-register-inspector-action~).
 - Follow / detail: ~cmacs-gnuseye-track-toggle~,
   ~-inspector-open-stream~, ~-inspector-open-news~.
 - Inspector actions are pluggable via
-  ~cmacs-gnuseye-register-inspector-action~ ~(KEY LABEL FN &optional PRED)~.
+  ~cmacs-gnuseye-register-inspector-action~ ~(KEY LABEL FN &optional PRED)~
+  (bound in the major-mode map AND Evil normal/motion state, so they work
+  under Doom).
+- *Country details*: click a country on the globe (off any marker) and the
+  inspector shows its properties — instant Natural Earth figures (population
+  est, GDP est, income group, continent) plus live World Bank indicators
+  (population, GDP, GDP/capita, unemployment, life expectancy, inflation;
+  keyless, latest year, cached).  Ocean clicks deselect as before.
+  Implemented in ~cmacs-gnuseye-country.el~ (point-in-country over the cached
+  admin-0 polygons).
+- *Click resolution* survives the per-tick marker rebuilds: the pick carries
+  the entity-id string (stable), so clicking an aircraft/planet always
+  selects it even while layers re-render — including celestial bodies.
+- ~C-w~ in the globe viewport is the Evil *window map* (the globe runs in
+  Emacs state, where ~C-w~ would otherwise be ~kill-region~), so Doom's
+  ~C-w h/j/k/l~ window movement works from the render window.
 - Panels: ~cmacs-gnuseye-define-panel~, ~cmacs-gnuseye-panel~,
   ~cmacs-gnuseye-dashboard~.
 

@@ -815,6 +815,65 @@ RA - GMST as time advances (~15 deg/hour westward)."
       (should (numberp (plist-get e :lat)))
       (should (> (plist-get e :alt) 5e6)))))   ; well above the surface
 
+;;;; Click resolution + country details ---------------------------------------
+
+(ert-deftest cmacs-gnuseye--resolve-pick-stale ()
+  "A stale node payload is overridden by the pick-time entity id (PATH):
+marker rebuilds renumber node ids between pick and dispatch."
+  (cmacs-gnuseye-tests--skip)
+  (clrhash cmacs-gnuseye--id-index)
+  (puthash "real" (list :layer 'air :id "real" :kind 'aircraft :lat 1 :lon 2)
+           cmacs-gnuseye--id-index)
+  (cl-letf (((symbol-function 'cmacs-gnuseye-entity-at)
+             (lambda (_b _id) (list :id "stale" :kind 'ship))))
+    ;; payload disagrees with path -> index wins
+    (should (equal (plist-get (cmacs-gnuseye--resolve-pick nil 5 "real") :id)
+                   "real"))
+    ;; payload agrees -> payload used
+    (should (equal (plist-get (cmacs-gnuseye--resolve-pick nil 5 "stale") :id)
+                   "stale")))
+  ;; payload gone entirely -> index by path
+  (cl-letf (((symbol-function 'cmacs-gnuseye-entity-at) (lambda (_b _id) nil)))
+    (should (equal (plist-get (cmacs-gnuseye--resolve-pick nil 5 "real") :id)
+                   "real")))
+  (clrhash cmacs-gnuseye--id-index))
+
+(ert-deftest cmacs-gnuseye--country-pip ()
+  "Point-in-country: inside a square ring, outside it, and hole handling."
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-country)
+  (let ((square '(((0 0) (10 0) (10 10) (0 10) (0 0)))))
+    (should (cmacs-gnuseye-country--pip 5 5 square))
+    (should-not (cmacs-gnuseye-country--pip 15 5 square))
+    (should-not (cmacs-gnuseye-country--pip 5 -1 square)))
+  ;; even-odd: a hole ring excludes its interior
+  (let ((holed '(((0 0) (10 0) (10 10) (0 10) (0 0))
+                 ((4 4) (6 4) (6 6) (4 6) (4 4)))))
+    (should (cmacs-gnuseye-country--pip 2 2 holed))
+    (should-not (cmacs-gnuseye-country--pip 5 5 holed))))
+
+(ert-deftest cmacs-gnuseye--country-entity ()
+  "A country pseudo-entity carries NE population/GDP/income rows."
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-country)
+  (let* ((c (list "TST" "Testland"
+                  '((POP_EST . 5000000) (GDP_MD . 250000)
+                    (INCOME_GRP . "2. High income") (CONTINENT . "Europe"))
+                  '(-10 10 -10 10) nil))
+         (e (cmacs-gnuseye-country--entity c))
+         (data (plist-get e :data)))
+    (should (equal (plist-get e :label) "Testland"))
+    (should (eq (plist-get e :kind) 'country))
+    (should (equal (cdr (assq 'population\ \(est\) data)) "5.00 million"))
+    (should (cl-some (lambda (kv) (string-match-p "billion" (format "%s" (cdr kv))))
+                     data))))
+
+(ert-deftest cmacs-gnuseye--country-fmt ()
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-country)
+  (should (equal (cmacs-gnuseye-country--fmt-num 27.36e12) "27.36 trillion"))
+  (should (equal (cmacs-gnuseye-country--fmt-num 4.2) "4.2")))
+
 (provide 'cmacs-gnuseye-tests)
 
 ;;; cmacs-gnuseye-tests.el ends here

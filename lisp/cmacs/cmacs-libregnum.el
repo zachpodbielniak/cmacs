@@ -355,7 +355,10 @@ GMainContext."
         (cond
          ((and (fboundp 'cmacs-gnuseye--on-pick)
                (derived-mode-p 'cmacs-gnuseye-mode))
-          (cmacs-gnuseye--on-pick buffer id vx vy))
+          ;; PATH is the marker's entity-id string, captured synchronously at
+          ;; pick time -- stable across the per-tick marker rebuilds (the
+          ;; numeric node id is NOT: it may be stale by dispatch time).
+          (cmacs-gnuseye--on-pick buffer id vx vy path))
          (is-dir (cmacs-libregnum--drill-to buffer path))
          ((and (stringp path) (> (length path) 0)) (find-file path)))))))
 

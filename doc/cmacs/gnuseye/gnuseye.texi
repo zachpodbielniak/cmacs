@@ -174,7 +174,13 @@ asks about the selected entity; @code{A} briefs the region; the
 country-instability index and paints it as a choropleth.
 @item @strong{Follow + click-through}: @code{.} tracks the selection;
 inspector @code{[w]} opens a live stream (cmacs-video), @code{[n]} an article
-(gsurf).
+(gsurf).  Inspector actions are bound in Evil normal/motion state too, and
+@code{C-w} in the globe viewport is the Evil window map (Doom window
+movement works from the render window).
+@item @strong{Country details}: click a country (off any marker) and the
+inspector shows population, GDP, GDP/capita, unemployment, life expectancy,
+inflation, and income group -- instant Natural Earth figures plus live
+keyless World Bank indicators (cached).  Ocean clicks deselect.
 @item @strong{Dashboards} (@code{D}): table feeds (markets, macro) render as
 side-buffer panels via @code{cmacs-gnuseye-define-panel} — never the globe.
 @end itemize

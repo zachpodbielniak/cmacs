@@ -78,7 +78,7 @@ Read on demand by `cmacs-gnuseye-secret'.  Keep it out of version control."
 (defcustom cmacs-gnuseye-feature-files
   '(cmacs-gnuseye-geoloc cmacs-gnuseye-charts cmacs-gnuseye-history
     cmacs-gnuseye-viz cmacs-gnuseye-measure cmacs-gnuseye-export
-    cmacs-gnuseye-watch cmacs-gnuseye-news
+    cmacs-gnuseye-watch cmacs-gnuseye-news cmacs-gnuseye-country
     cmacs-gnuseye-search cmacs-gnuseye-stats cmacs-gnuseye-geofence
     cmacs-gnuseye-bookmarks cmacs-gnuseye-replay cmacs-gnuseye-intel
     cmacs-gnuseye-track cmacs-gnuseye-markets)
@@ -901,25 +901,50 @@ tool.")
 (defvar cmacs-gnuseye--last-click nil
   "Last globe click as (VX . VY) view-local pixel.")
 
-(defun cmacs-gnuseye--on-pick (buffer node-id &optional vx vy)
+(defun cmacs-gnuseye--on-pick (buffer node-id &optional vx vy path)
   "Handle a globe click: select the entity (inspector + highlight + list),
 or, for a cluster badge, zoom toward it so it dissolves into individuals.
-NODE-ID is -1 for an empty-globe click; VX/VY are the click pixel.  Features
-on `cmacs-gnuseye--click-functions' may intercept first (e.g. measurement).
-Called from `cmacs-libregnum--node-clicked' on the cmacs context."
+NODE-ID is -1 for an empty-globe click; VX/VY are the click pixel; PATH is
+the picked marker's entity-id string (stable across marker rebuilds, unlike
+NODE-ID).  Features on `cmacs-gnuseye--click-functions' may intercept first
+\(measurement, country details).  Called from
+`cmacs-libregnum--node-clicked' on the cmacs context."
   (when (and (numberp vx) (numberp vy))
     (setq cmacs-gnuseye--last-click (cons vx vy)))
   (unless (run-hook-with-args-until-success
            'cmacs-gnuseye--click-functions buffer node-id vx vy)
     (if (and (integerp node-id) (>= node-id 0))
-        (cmacs-gnuseye--on-pick-1 buffer node-id)
+        (cmacs-gnuseye--on-pick-1 buffer node-id path)
       ;; Empty-globe click: deselect + recentre the orbit on Earth.
       (cmacs-gnuseye-deselect))))
 
-(defun cmacs-gnuseye--on-pick-1 (buffer node-id)
-  "Default click handling: select/zoom the picked NODE-ID."
-  (when (and (integerp node-id) (>= node-id 0))
-    (let ((e (ignore-errors (cmacs-gnuseye-entity-at buffer node-id))))
+(defun cmacs-gnuseye--resolve-pick (buffer node-id path)
+  "Resolve a click to its entity, surviving marker-rebuild id churn.
+The smooth tick rebuilds markers every ~0.4 s, renumbering node ids; the
+payload looked up by NODE-ID can therefore be stale by dispatch time.  PATH
+\(the entity id captured at pick time) is authoritative: when the payload's
+id disagrees with PATH, or the payload is gone, fall back to the id index."
+  (let ((e (and (integerp node-id) (>= node-id 0)
+                (ignore-errors (cmacs-gnuseye-entity-at buffer node-id)))))
+    (cond
+     ;; Payload agrees with the picked path (or no path): trust it.
+     ((and e (or (null path)
+                 (equal (format "%s" (plist-get e :id)) path)))
+      e)
+     ;; Cluster badges are synthetic (not in the index): only a matching
+     ;; payload is usable; a stale one is dropped.
+     ((and path (string-prefix-p "cluster:" path))
+      (and e (string-prefix-p "cluster:"
+                              (format "%s" (plist-get e :id)))
+           e))
+     ;; Stale or missing payload: the id index has the real entity.
+     (path (gethash path cmacs-gnuseye--id-index))
+     (t e))))
+
+(defun cmacs-gnuseye--on-pick-1 (buffer node-id &optional path)
+  "Default click handling: select/zoom the picked NODE-ID (PATH = entity id)."
+  (when (or (and (integerp node-id) (>= node-id 0)) path)
+    (let ((e (cmacs-gnuseye--resolve-pick buffer node-id path)))
       (when e
         (let ((data (plist-get e :data)))
           (if (and (listp data) (assq :cluster data))
@@ -957,11 +982,16 @@ editing the renderer.")
 (defun cmacs-gnuseye-register-inspector-action (key label fn &optional pred)
   "Register an inspector action: press KEY to run FN, shown in the footer as
 LABEL.  PRED, if non-nil, is called with the selected entity and must return
-non-nil for the action to be offered.  Binds KEY in the inspector keymap."
+non-nil for the action to be offered.  Binds KEY in the inspector keymap --
+and in Evil normal/motion state too, where the major-mode map is shadowed
+\(otherwise `a' is evil-append and the action never fires under Doom)."
   (setq cmacs-gnuseye-inspector-actions
         (cons (list key label fn pred)
               (assoc-delete-all key cmacs-gnuseye-inspector-actions)))
-  (define-key cmacs-gnuseye-inspector-mode-map (kbd key) fn))
+  (define-key cmacs-gnuseye-inspector-mode-map (kbd key) fn)
+  (when (fboundp 'evil-define-key*)
+    (evil-define-key* '(normal motion) cmacs-gnuseye-inspector-mode-map
+      (kbd key) fn)))
 
 (defun cmacs-gnuseye-inspector-fly ()
   "Recentre the globe on the inspected entity."
@@ -2006,7 +2036,24 @@ just the globe viewport."
       (kbd "SPC") #'cmacs-gnuseye-layers-toggle
       "t" #'cmacs-gnuseye-layers-toggle
       "g" #'cmacs-gnuseye-layers-refresh
-      "q" #'quit-window)))
+      "q" #'quit-window)
+    ;; Inspector: Normal state shadows the major-mode map (a = evil-append,
+    ;; q = record macro...), so bind the built-in actions in-state; feature
+    ;; actions ([a]sk AI, [.]track, [w]atch, [n]ews) bind themselves via
+    ;; `cmacs-gnuseye-register-inspector-action'.
+    (evil-define-key* '(normal motion) cmacs-gnuseye-inspector-mode-map
+      "f" #'cmacs-gnuseye-inspector-fly
+      (kbd "RET") #'cmacs-gnuseye-inspector-fly
+      "q" #'quit-window)
+    ;; Re-bind any actions registered before Evil loaded.
+    (dolist (a cmacs-gnuseye-inspector-actions)
+      (evil-define-key* '(normal motion) cmacs-gnuseye-inspector-mode-map
+        (kbd (nth 0 a)) (nth 2 a))))
+  ;; The globe runs in Emacs state (single keys reach its commands), where
+  ;; C-w is kill-region -- so Doom's C-w h/l window movement died in the
+  ;; render window.  Hand C-w to the Evil window map there.
+  (when (boundp 'evil-window-map)
+    (define-key cmacs-gnuseye-mode-map (kbd "C-w") evil-window-map)))
 
 (provide 'cmacs-gnuseye)
 ;;; cmacs-gnuseye.el ends here
