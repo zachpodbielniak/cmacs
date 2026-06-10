@@ -22,10 +22,12 @@
 #include "cmacs-gnuseye-globe.h"
 #include "cmacs-gnuseye-geomath.h"
 #include "cmacs-libregnum-render.h"
+#include <gdk-pixbuf/gdk-pixbuf.h>
 
 #include <libregnum.h>
 #include <glib.h>
 #include <math.h>
+#include <string.h>
 
 #define GLOBE_TEX_W 2048
 #define GLOBE_TEX_H 1024
@@ -73,6 +75,23 @@ static const char *s_globe_fs =
   "  c = mix(c*vec3(0.55,0.68,1.10), c, day);\n"     /* cool night tint */
   "  finalColor = vec4(min(c,vec3(1.0)),1.0);\n"
   "}\n";
+
+/* Unlit body shader (the Sun's own texture must not be sun-shaded). */
+static const char *s_body_fs_unlit =
+  "#version 330\n"
+  "in vec2 fragTexCoord;\n"
+  "in vec4 fragColor;\n"
+  "in vec3 fragNormal;\n"
+  "uniform sampler2D texture0;\n"
+  "uniform vec4 colDiffuse;\n"
+  "out vec4 finalColor;\n"
+  "void main(){\n"
+  "  finalColor = texture(texture0,fragTexCoord)*colDiffuse*fragColor;\n"
+  "}\n";
+
+/* Last sun unit direction, shared with the textured celestial bodies so
+ * planets get the same day/night terminator as the Earth. */
+static float s_sun_dir[3] = { 0.90f, 0.25f, -0.35f };
 
 /* Per-globe state attached to the sphere model via g_object_set_data_full,
  * so it is freed when the render ctx releases the background model. */
@@ -153,8 +172,13 @@ warp_equirect_to_mesh (GrlImage *src)
           double phi = ((double) ox + 0.5) / GLOBE_WARP_W * M_PI;
           double sp = sin (phi), cp = cos (phi);
           double px = ct * sp, py = st * sp, pz = cp;   /* mesh unit pos */
-          double lat = asin (py < -1 ? -1 : (py > 1 ? 1 : py));
-          double lon = atan2 (pz, px);
+          /* Texture v runs bottom-up through this pipeline (GL origin), so
+           * latitude flips; and our marker frame winds longitude toward -Z
+           * (east right on a standard globe), so lon is atan2(-z, x).  Both
+           * signs verified against city markers on the real Earth map. */
+          double mlat = -py;
+          double lat = asin (mlat < -1 ? -1 : (mlat > 1 ? 1 : mlat));
+          double lon = atan2 (-pz, px);
           double u = (lon / (2.0 * M_PI)) + 0.5;         /* 0..1 (lon) */
           double v = 0.5 - (lat / M_PI);                 /* 0 top=north */
           int sx = (int) (u * sw), sy = (int) (v * sh);
@@ -432,6 +456,8 @@ void
 cmacs_gnuseye_set_sun_direction (CmacsLibregnumRenderCtx *r,
                                  double x, double y, double z)
 {
+  s_sun_dir[0] = (float) x; s_sun_dir[1] = (float) y;
+  s_sun_dir[2] = (float) z;
   GnuseyeGlobe *g = globe_state (r);
   if (!g || !g->shader || g->sun_loc < 0) return;
   /* Runs on the main thread, where the shared raylib GL context is current
@@ -996,6 +1022,98 @@ cmacs_gnuseye_camera_goto (CmacsLibregnumRenderCtx *r,
                                                dx * dist, dy * dist, dz * dist,
                                                0.0, 0.0, 0.0,
                                                fov > 0 ? fov : 45.0);
+}
+
+/* ── Textured celestial bodies ─────────────────────────────────────────────
+ * Each body is a small textured sphere (the same equirect-warp pipeline as
+ * the Earth) registered in the render ctx's persistent body-model list and
+ * positioned per tick.  The flat marker sphere stays underneath (slightly
+ * smaller) as the pick target and keyless fallback. */
+
+gboolean
+cmacs_gnuseye_set_body (CmacsLibregnumRenderCtx *r, const char *key,
+                        double lat, double lon, double alt_m,
+                        double radius, const char *texture_path)
+{
+  if (!r || !key || radius <= 0.0) return FALSE;
+  double x, y, z;
+  gxyz (lat, lon, alt_m, &x, &y, &z);
+  /* Cheap path: the model exists, only the position moves. */
+  if (cmacs_libregnum_render_ctx_body_model_update (r, key, x, y, z))
+    return TRUE;
+  if (!texture_path || !*texture_path) return FALSE;
+  g_autoptr (GrlImage) img = load_earth_texture (texture_path);
+  if (!img) return FALSE;
+  GrlMesh *mesh = grl_mesh_new_sphere ((gfloat) radius, 24, 48);
+  if (!mesh) return FALSE;
+  GrlModel *model = grl_model_new_from_mesh (mesh);
+  g_object_unref (mesh);
+  if (!model) return FALSE;
+  GrlTexture *tex = grl_texture_new_from_image (img);
+  if (!tex) { g_object_unref (model); return FALSE; }
+  GrlMaterial *mat = grl_material_new_default ();
+  grl_material_set_texture (mat, GRL_MATERIAL_MAP_ALBEDO, tex);
+  /* Same shader pipeline as the Earth sphere (the proven textured path):
+   * sun-lit day/night for planets and the Moon, unlit for the Sun. */
+  {
+    gboolean is_sun = strstr (key, "sun") != NULL;
+    GrlShader *sh = grl_shader_new_from_memory
+      (s_globe_vs, is_sun ? s_body_fs_unlit : s_globe_fs, NULL);
+    if (sh)
+      {
+        grl_material_set_shader (mat, sh);
+        if (!is_sun)
+          {
+            gint loc = grl_shader_get_location (sh, "sunDir");
+            if (loc >= 0)
+              grl_shader_set_value_vec3 (sh, loc, s_sun_dir[0],
+                                         s_sun_dir[1], s_sun_dir[2]);
+          }
+        g_object_unref (sh);
+      }
+  }
+  grl_model_set_material (model, 0, mat);
+  /* grl_model_set_material copies the raw raylib struct WITHOUT taking a
+   * reference: unreffing the material here would finalize it and delete
+   * the GL texture (black bodies).  Park the refs on the model so they
+   * live exactly as long as it does -- the same reason build_globe keeps
+   * g->tex/g->shader alive. */
+  g_object_set_data_full (G_OBJECT (model), "gnuseye-body-mat", mat,
+                          g_object_unref);
+  g_object_set_data_full (G_OBJECT (model), "gnuseye-body-tex", tex,
+                          g_object_unref);
+  cmacs_libregnum_render_ctx_body_model_add (r, key, model, x, y, z);
+  g_debug ("gnuseye: body %s built (radius %.1f, %s)", key, radius,
+           texture_path);
+  return TRUE;
+}
+
+void
+cmacs_gnuseye_clear_bodies (CmacsLibregnumRenderCtx *r)
+{
+  cmacs_libregnum_render_ctx_clear_body_models (r);
+}
+
+/* Convert any gdk-pixbuf-readable image (notably JPEG planet maps -- the
+ * vendored raylib is built without JPG support) to PNG for GrlImage. */
+gboolean
+cmacs_gnuseye_convert_image_to_png (const char *src, const char *dst)
+{
+  if (!src || !dst) return FALSE;
+  g_autoptr (GError) err = NULL;
+  GdkPixbuf *pb = gdk_pixbuf_new_from_file (src, &err);
+  if (!pb)
+    {
+      g_warning ("gnuseye: cannot read %s: %s", src,
+                 err ? err->message : "?");
+      return FALSE;
+    }
+  gboolean ok = gdk_pixbuf_save (pb, dst, "png", &err, NULL);
+  if (!ok)
+    g_warning ("gnuseye: cannot write %s: %s", dst,
+               err ? err->message : "?");
+  g_object_unref (pb);
+  return ok;
 }
 
 #endif /* HAVE_CMACS_GNUSEYE */

@@ -259,6 +259,16 @@ light-time.
   (geocentric observer ephemerides), refreshed every 6 h.  Configure the
   body lists with ~cmacs-gnuseye-probes~ and ~cmacs-gnuseye-asteroids~.
 
+*Realistic surface maps*: each body renders as a textured sphere — real
+equirectangular maps (Solar System Scope, CC BY 4.0) fetched once into
+~~/.cache/cmacs/gnuseye/textures/~ and converted in-process to PNG via
+gdk-pixbuf.  Planets and the Moon get the same sun-lit day/night terminator
+as the Earth; the Sun renders unlit (self-luminous).  The Earth daymap
+doubles as the globe's default base texture (Blue-Marble style geography)
+when no ~cmacs-gnuseye-base-texture~ is configured.  Without the cache the
+bodies fall back to flat-coloured spheres (~cmacs-gnuseye-celestial-textures~
+toggles the whole feature).
+
 Click a body to fly out and frame it (the camera moves just outside its
 shell, with Earth behind it); ~.~ tracks it as it moves.  *~0~ (or Home) is
 the "go back to Earth" button*: it clears the selection and returns to the

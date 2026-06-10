@@ -27,7 +27,7 @@
 /* Cached keyword symbols for the normalised entity plist (set in syms_of). */
 static Lisp_Object QCge_id, QCge_lat, QCge_lon, QCge_alt, QCge_heading,
   QCge_scale, QCge_kind, QCge_color, QCge_label, QCge_label_mode, QCge_trail,
-  QCge_polygon;
+  QCge_polygon, QCge_texture;
 
 /* buffer -> (hash layer-id -> entity-vector).  GC-rooted via staticpro. */
 static Lisp_Object Vcmacs_gnuseye__layers;
@@ -102,7 +102,16 @@ render_entity (CmacsLibregnumView *v, CmacsLibregnumRenderCtx *ctx,
   const char *id = ge_string (e, QCge_id, &keep_id);
   const char *label = ge_string (e, QCge_label, &keep_label);
 
-  int nid = cmacs_gnuseye_add_marker (ctx, kind, lat, lon, alt, hdg, scl,
+  /* Optional :texture -- a textured sphere (real planet map) at the
+   * entity's exact scale; the flat marker shrinks well inside it (it stays
+   * the pick target + the keyless fallback when the map file is absent). */
+  Lisp_Object keep_tex = Qnil;
+  const char *tex = ge_string (e, QCge_texture, &keep_tex);
+  gboolean textured = (tex && *tex && id && *id)
+    && cmacs_gnuseye_set_body (ctx, id, lat, lon, alt, 0.099 * scl, tex);
+
+  int nid = cmacs_gnuseye_add_marker (ctx, kind, lat, lon, alt, hdg,
+                                      textured ? scl * 0.80 : scl,
                                       rgba, id, label, lmode);
   if (nid >= 0)
     cmacs_libregnum_view_set_payload (v, (guint) nid, e);
@@ -587,6 +596,36 @@ pixel is off the globe.  */)
   return Qnil;
 }
 
+DEFUN ("cmacs-gnuseye-clear-bodies", Fcmacs_gnuseye_clear_bodies,
+       Scmacs_gnuseye_clear_bodies, 1, 1, 0,
+       doc: /* Remove all textured celestial body models from BUFFER.
+Called when the celestial layers disable (their textured spheres persist
+across marker rebuilds, so the marker clear alone leaves them behind).  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  cmacs_gnuseye_clear_bodies (cmacs_libregnum_view_get_render_ctx (v));
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-gnuseye-convert-image", Fcmacs_gnuseye_convert_image,
+       Scmacs_gnuseye_convert_image, 2, 2, 0,
+       doc: /* Convert image file SRC to PNG at DST (via gdk-pixbuf).
+Used by the celestial texture fetcher: planet maps are published as JPEG,
+which the bundled renderer cannot read.  Returns t on success.  */)
+  (Lisp_Object src, Lisp_Object dst)
+{
+  CHECK_STRING (src);
+  CHECK_STRING (dst);
+  Lisp_Object s = ENCODE_FILE (Fexpand_file_name (src, Qnil));
+  Lisp_Object d = ENCODE_FILE (Fexpand_file_name (dst, Qnil));
+  return cmacs_gnuseye_convert_image_to_png (SSDATA (s), SSDATA (d))
+    ? Qt : Qnil;
+}
+
 DEFUN ("cmacs-gnuseye-orbit-point", Fcmacs_gnuseye_orbit_point,
        Scmacs_gnuseye_orbit_point, 5, 6, 0,
        doc: /* Orbit BUFFER's camera around the point at LAT LON ALT-M.
@@ -733,6 +772,7 @@ syms_of_cmacs_gnuseye_defuns (void)
   QCge_label_mode = intern_c_string (":label-mode");
   QCge_trail      = intern_c_string (":trail");
   QCge_polygon    = intern_c_string (":polygon");
+  QCge_texture = intern_c_string (":texture");
   staticpro (&QCge_id);
   staticpro (&QCge_lat);
   staticpro (&QCge_lon);
@@ -745,6 +785,7 @@ syms_of_cmacs_gnuseye_defuns (void)
   staticpro (&QCge_label_mode);
   staticpro (&QCge_trail);
   staticpro (&QCge_polygon);
+  staticpro (&QCge_texture);
 
   Vcmacs_gnuseye__layers = Qnil;
   staticpro (&Vcmacs_gnuseye__layers);
@@ -777,6 +818,8 @@ syms_of_cmacs_gnuseye_defuns (void)
   defsubr (&Scmacs_gnuseye_flat_p);
   defsubr (&Scmacs_gnuseye_zoom);
   defsubr (&Scmacs_gnuseye_orbit_point);
+  defsubr (&Scmacs_gnuseye_clear_bodies);
+  defsubr (&Scmacs_gnuseye_convert_image);
 }
 
 #endif /* HAVE_CMACS_GNUSEYE */

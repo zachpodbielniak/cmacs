@@ -211,6 +211,23 @@ typedef struct
 } CmacsEditorModel;
 #endif
 
+/* A persistent positioned textured model (gnuseye celestial body). */
+typedef struct
+{
+  gchar    *key;
+  GrlModel *model;     /* owned */
+  double    x, y, z;
+} BodyModel;
+
+static void
+body_model_free (gpointer p)
+{
+  BodyModel *b = p;
+  g_free (b->key);
+  g_clear_object (&b->model);
+  g_free (b);
+}
+
 struct CmacsLibregnumRenderCtx
 {
   LrgRenderer    *renderer;
@@ -268,6 +285,11 @@ struct CmacsLibregnumRenderCtx
    * drawn every frame after the background model and NOT cleared by
    * clear_drawables.  Owned (g_object_unref per element). */
   GPtrArray        *static_drawables;
+
+  /* Positioned textured models that persist across marker rebuilds (the
+   * gnuseye celestial bodies: textured planet spheres).  Keyed BodyModel
+   * entries, drawn right after the background model.  Owned. */
+  GPtrArray        *body_models;
 
   /* Filled translucent polygon models (GrlModel*) draped on the globe:
    * `polygon_models' is per-tick (alert zones), `static_polygon_models' is
@@ -346,6 +368,7 @@ cmacs_libregnum_render_ctx_new (int w, int h)
   r->renderer  = lrg_renderer_new (LRG_WINDOW (shared_window));
   r->drawables = g_ptr_array_new_with_free_func (g_object_unref);
   r->static_drawables = g_ptr_array_new_with_free_func (g_object_unref);
+  r->body_models = g_ptr_array_new_with_free_func (body_model_free);
   r->polygon_models = g_ptr_array_new_with_free_func (g_object_unref);
   r->static_polygon_models = g_ptr_array_new_with_free_func (g_object_unref);
   r->map_labels = g_array_new (FALSE, TRUE, sizeof (CmacsMapLabel));
@@ -401,6 +424,7 @@ cmacs_libregnum_render_ctx_free (CmacsLibregnumRenderCtx *r)
   if (r->polygon_models) g_ptr_array_unref (r->polygon_models);
   if (r->static_polygon_models) g_ptr_array_unref (r->static_polygon_models);
   if (r->static_drawables) g_ptr_array_unref (r->static_drawables);
+  if (r->body_models) g_ptr_array_unref (r->body_models);
   if (r->map_labels) g_array_free (r->map_labels, TRUE);
   if (r->billboards) g_array_free (r->billboards, TRUE);
   g_clear_object (&r->camera);
@@ -475,6 +499,60 @@ cmacs_libregnum_render_ctx_set_focus_min (CmacsLibregnumRenderCtx *r,
                                           double dist)
 {
   if (r) r->focus_min_dist = dist > 0.0 ? dist : 0.0;
+}
+
+static BodyModel *
+ctx_find_body (CmacsLibregnumRenderCtx *r, const gchar *key)
+{
+  if (!r || !r->body_models || !key) return NULL;
+  for (guint i = 0; i < r->body_models->len; i++)
+    {
+      BodyModel *b = g_ptr_array_index (r->body_models, i);
+      if (g_strcmp0 (b->key, key) == 0) return b;
+    }
+  return NULL;
+}
+
+/* Update the position of body KEY; FALSE if it does not exist yet. */
+gboolean
+cmacs_libregnum_render_ctx_body_model_update (CmacsLibregnumRenderCtx *r,
+                                              const gchar *key,
+                                              double x, double y, double z)
+{
+  BodyModel *b = ctx_find_body (r, key);
+  if (!b) return FALSE;
+  b->x = x; b->y = y; b->z = z;
+  return TRUE;
+}
+
+/* Register (or replace) body KEY with MODEL (a GrlModel*, ownership
+ * transferred). */
+void
+cmacs_libregnum_render_ctx_body_model_add (CmacsLibregnumRenderCtx *r,
+                                           const gchar *key, gpointer model,
+                                           double x, double y, double z)
+{
+  if (!r || !key || !model) return;
+  BodyModel *b = ctx_find_body (r, key);
+  if (b)
+    {
+      g_clear_object (&b->model);
+      b->model = model;
+      b->x = x; b->y = y; b->z = z;
+      return;
+    }
+  b = g_new0 (BodyModel, 1);
+  b->key = g_strdup (key);
+  b->model = model;
+  b->x = x; b->y = y; b->z = z;
+  g_ptr_array_add (r->body_models, b);
+}
+
+void
+cmacs_libregnum_render_ctx_clear_body_models (CmacsLibregnumRenderCtx *r)
+{
+  if (r && r->body_models)
+    g_ptr_array_set_size (r->body_models, 0);
 }
 
 /* TRUE if world point (X,Y,Z) is visible from the camera, i.e. the globe
@@ -1299,6 +1377,28 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
             g_autoptr (GrlColor)   bwhite = grl_color_new (255, 255, 255, 255);
             grl_model_draw_ex (r->background_model, bpos, baxis,
                                r->background_spin_deg, bscl, bwhite);
+          }
+
+        /* Persistent positioned textured models (celestial bodies): drawn
+         * like the background globe, opaque, at their own positions. */
+        if (r->body_models && r->body_models->len)
+          {
+            static guint dbg_once = 0;
+            if (dbg_once++ < 3)
+              g_debug ("render: drawing %u body models", r->body_models->len);
+            g_autoptr (GrlVector3) naxis = grl_vector3_new (0.0f, 1.0f, 0.0f);
+            g_autoptr (GrlVector3) nscl  = grl_vector3_new (1.0f, 1.0f, 1.0f);
+            g_autoptr (GrlColor)   nwhite = grl_color_new (255, 255, 255,
+                                                           255);
+            for (guint i = 0; i < r->body_models->len; i++)
+              {
+                BodyModel *b = g_ptr_array_index (r->body_models, i);
+                if (!b->model) continue;
+                g_autoptr (GrlVector3) bp =
+                  grl_vector3_new ((gfloat) b->x, (gfloat) b->y,
+                                   (gfloat) b->z);
+                grl_model_draw_ex (b->model, bp, naxis, 0.0f, nscl, nwhite);
+              }
           }
         /* Filled translucent polygon fills (alert zones, choropleth, aurora):
          * drawn after the globe but before coastlines/markers so those

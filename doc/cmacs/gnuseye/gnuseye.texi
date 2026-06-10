@@ -240,6 +240,14 @@ Earth's rotation) at @emph{linearly true distances} -- 290 world units per
 AU, one uniform scale, so the orbital geometry is exact (the Sun 290 units
 out, Jupiter 5.2x as far from the Sun as Earth, Neptune at 29.9 AU; the Moon
 floored at 26 units, deep-space probes capped at the 9000-unit chart edge).
+Every body renders as a @emph{textured sphere} with its real surface map
+(Solar System Scope, CC BY 4.0; auto-fetched once into the cache and
+converted to PNG in-process via gdk-pixbuf), sun-lit with the same
+day/night terminator as the Earth (the Sun unlit -- self-luminous).  The
+Earth daymap doubles as the globe's default base texture.  Flat-coloured
+spheres remain the keyless fallback
+(@code{cmacs-gnuseye-celestial-textures}).
+
 Sizes follow one sqrt-law for every body, the Sun included (radius =
 @code{6.371*sqrt(R/R_earth)}): the Sun renders 3.2x Jupiter, Jupiter 3.3x
 Earth, Venus ~ Earth.  The inspector reports each body's true ratio, real

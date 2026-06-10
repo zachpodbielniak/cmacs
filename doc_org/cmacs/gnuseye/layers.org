@@ -17,6 +17,12 @@ inspector shows the true ratio, real distance + light-time.  ~0~ returns to
 Earth.
 
 ** solar-system
+
+Bodies render as *textured spheres* with real surface maps (Solar System
+Scope, CC BY 4.0; auto-fetched + cached, JPEG→PNG via gdk-pixbuf), sun-lit
+like the Earth (the Sun unlit).  Flat-coloured fallback when uncached;
+~cmacs-gnuseye-celestial-textures~ / ~-celestial-texture-url~ configure it.
+The Earth daymap becomes the globe's default base texture.
 Sun + Moon + Mercury…Neptune from local ephemerides
 (~cmacs-gnuseye-ephem.el~: Standish planetary elements + low-precision Moon;
 no key, no network, validated against Horizons fixtures).  Positions

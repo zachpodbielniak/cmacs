@@ -135,6 +135,21 @@ extern gboolean cmacs_gnuseye_flat_p (CmacsLibregnumRenderCtx *r);
 extern void cmacs_gnuseye_project (double lat, double lon, double alt,
                                    double *x, double *y, double *z);
 
+/* Textured celestial bodies: persistent positioned textured spheres (same
+ * equirect-warp pipeline as the Earth).  set_body upserts KEY -- a cheap
+ * position move when the model exists, else builds it from TEXTURE_PATH
+ * (PNG; FALSE when the texture is missing/unreadable).  clear removes all.
+ * convert_image_to_png converts any gdk-pixbuf-readable file (JPEG maps)
+ * to PNG for the raylib loader. */
+extern gboolean cmacs_gnuseye_set_body (CmacsLibregnumRenderCtx *r,
+                                        const char *key,
+                                        double lat, double lon, double alt_m,
+                                        double radius,
+                                        const char *texture_path);
+extern void cmacs_gnuseye_clear_bodies (CmacsLibregnumRenderCtx *r);
+extern gboolean cmacs_gnuseye_convert_image_to_png (const char *src,
+                                                    const char *dst);
+
 /* Day/night terminator: set the globe shader's sun direction.  set_direction
  * takes a world-space unit vector (gnuseye -Z winding); set_time computes the
  * real subsolar unit vector for Unix time UNIX_S and applies it.  No-op when

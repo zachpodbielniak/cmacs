@@ -922,6 +922,26 @@ payload entity, the inspector still shows it and the selection is set."
   (should (fboundp 'cmacs-gnuseye-compose-about-entity))
   (should (assoc "c" cmacs-gnuseye-inspector-actions)))
 
+(ert-deftest cmacs-gnuseye--celestial-texture-plumbing ()
+  "Bodies carry :texture when the cached map exists; normalize passes it on."
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-celestial)
+  (cl-letf (((symbol-function 'file-exists-p) (lambda (_f) t)))
+    (let* ((spec (assq 'jupiter cmacs-gnuseye-celestial--bodies))
+           (e (cmacs-gnuseye-celestial--body-entity
+               spec cmacs-gnuseye-tests--epoch)))
+      (should (stringp (plist-get e :texture)))
+      (should (string-match-p "2k_jupiter\\.png\\'" (plist-get e :texture)))
+      ;; normalize must pass :texture through to the C side
+      (let ((n (cmacs-gnuseye--normalize-entity e)))
+        (should (equal (plist-get n :texture) (plist-get e :texture))))))
+  ;; without the cache the entity gracefully has no texture
+  (cl-letf (((symbol-function 'file-exists-p) (lambda (_f) nil)))
+    (let* ((spec (assq 'moon cmacs-gnuseye-celestial--bodies))
+           (e (cmacs-gnuseye-celestial--body-entity
+               spec cmacs-gnuseye-tests--epoch)))
+      (should (null (plist-get e :texture))))))
+
 (ert-deftest cmacs-gnuseye--context-menu-items ()
   "Right-click menus: entity menus carry fly/inspect + registered inspector
 actions (pred-filtered) + copy; empty-space menus carry view actions."

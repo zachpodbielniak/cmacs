@@ -78,6 +78,19 @@ extern void  cmacs_libregnum_render_ctx_set_occluder_radius
 extern void  cmacs_libregnum_render_ctx_set_focus_min
                               (CmacsLibregnumRenderCtx *r, double dist);
 
+/* Persistent positioned textured models (gnuseye celestial bodies), keyed
+ * by a stable string and drawn right after the background model.  `update'
+ * moves an existing body (FALSE if missing); `add' registers/replaces KEY
+ * with a GrlModel* (ownership transferred). */
+extern gboolean cmacs_libregnum_render_ctx_body_model_update
+                              (CmacsLibregnumRenderCtx *r, const gchar *key,
+                               double x, double y, double z);
+extern void  cmacs_libregnum_render_ctx_body_model_add
+                              (CmacsLibregnumRenderCtx *r, const gchar *key,
+                               gpointer model, double x, double y, double z);
+extern void  cmacs_libregnum_render_ctx_clear_body_models
+                              (CmacsLibregnumRenderCtx *r);
+
 /* Persistent static drawables (e.g. a coastline overlay): drawn every frame
  * after the background model, NOT cleared by clear_drawables.  add transfers
  * ownership of DRAWABLE (an LrgDrawable*, void* to keep the header clean). */

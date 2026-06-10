@@ -286,6 +286,7 @@ stored payload drives the detail view."
           :label-mode (if sel 3 (or (plist-get e :label-mode) 2))
           :trail     (cmacs-gnuseye--normalize-trail (plist-get e :trail))
           :polygon   (cmacs-gnuseye--normalize-poly (plist-get e :polygon))
+          :texture   (plist-get e :texture)
           :detail    (plist-get e :detail)
           :data      (plist-get e :data)
           :speed     (plist-get e :speed)
@@ -811,7 +812,13 @@ the layer had in flight can re-draw it after it is switched off."
              (cmacs-gnuseye-attached-p cmacs-gnuseye-buffer))
     (ignore-errors
       (cmacs-gnuseye-clear-layer cmacs-gnuseye-buffer
-                                 (cmacs-gnuseye-layer-name layer))))
+                                 (cmacs-gnuseye-layer-name layer)))
+    ;; Textured celestial spheres persist across marker rebuilds, so the
+    ;; marker clear leaves them behind: drop them all; any still-enabled
+    ;; celestial layer re-adds its own on the next tick.
+    (when (and (eq (cmacs-gnuseye-layer-group layer) 'celestial)
+               (fboundp 'cmacs-gnuseye-clear-bodies))
+      (ignore-errors (cmacs-gnuseye-clear-bodies cmacs-gnuseye-buffer))))
   (cmacs-gnuseye--list-refresh-soon))
 
 (defun cmacs-gnuseye--load-layers ()
@@ -2126,9 +2133,14 @@ just the globe viewport."
       (unless (cmacs-gnuseye-attached-p buf)
         (cmacs-gnuseye-attach
          buf 900 600
-         (and cmacs-gnuseye-base-texture
-              (file-exists-p cmacs-gnuseye-base-texture)
-              (expand-file-name cmacs-gnuseye-base-texture))))
+         (or (and cmacs-gnuseye-base-texture
+                  (file-exists-p cmacs-gnuseye-base-texture)
+                  (expand-file-name cmacs-gnuseye-base-texture))
+             ;; Real Blue-Marble style Earth when the celestial texture
+             ;; fetcher has cached one (cmacs-gnuseye-celestial.el).
+             (let ((f (expand-file-name
+                       "~/.cache/cmacs/gnuseye/textures/2k_earth_daymap.png")))
+               (and (file-exists-p f) f)))))
       ;; Start with every entity type OFF -- the user enables them from the
       ;; type-toggle pane.  (Layers are only loaded/registered here.)
       (cmacs-gnuseye--load-layers)

@@ -63,6 +63,92 @@ is in the linear regime, so the orbital structure is exact."
                     (number-to-string k)))
                 lt-s)))))
 
+;;;; Realistic body textures ---------------------------------------------------
+;;
+;; Equirectangular planet maps (Solar System Scope, CC BY 4.0) are fetched
+;; once into the cache, converted JPEG -> PNG in-process via gdk-pixbuf (the
+;; bundled renderer reads PNG only), and rendered as textured spheres over
+;; the flat marker (which remains the pick target + keyless fallback).  The
+;; Earth daymap doubles as the globe's base texture on next launch.
+
+(defcustom cmacs-gnuseye-celestial-textures t
+  "Non-nil renders Sun/Moon/planets with real surface maps (auto-fetched)."
+  :type 'boolean :group 'cmacs-gnuseye)
+
+(defcustom cmacs-gnuseye-celestial-texture-url
+  "https://www.solarsystemscope.com/textures/download/2k_%s.jpg"
+  "URL pattern for the equirectangular body maps (%s = body map name)."
+  :type 'string :group 'cmacs-gnuseye)
+
+(defconst cmacs-gnuseye-celestial--texture-names
+  '((sun . "sun") (moon . "moon") (mercury . "mercury")
+    (venus . "venus_atmosphere") (mars . "mars") (jupiter . "jupiter")
+    (saturn . "saturn") (uranus . "uranus") (neptune . "neptune")
+    (earth . "earth_daymap"))
+  "BODY -> Solar System Scope map name.")
+
+(defun cmacs-gnuseye-celestial--texture-dir ()
+  (expand-file-name "~/.cache/cmacs/gnuseye/textures/"))
+
+(defun cmacs-gnuseye-celestial--texture-file (body)
+  "Cached PNG path for BODY's map, or nil when not (yet) available."
+  (let ((name (alist-get body cmacs-gnuseye-celestial--texture-names)))
+    (when name
+      (let ((f (concat (cmacs-gnuseye-celestial--texture-dir)
+                       "2k_" name ".png")))
+        (and (file-exists-p f) f)))))
+
+(defvar cmacs-gnuseye-celestial--fetching nil)
+
+(defun cmacs-gnuseye-celestial--fetch-texture (name done)
+  "Download map NAME (jpg), convert to PNG in the cache, then call DONE."
+  (let* ((dir (cmacs-gnuseye-celestial--texture-dir))
+         (jpg (concat dir "2k_" name ".jpg"))
+         (png (concat dir "2k_" name ".png"))
+         (url (format cmacs-gnuseye-celestial-texture-url name)))
+    (make-directory dir t)
+    (url-retrieve
+     url
+     (lambda (status)
+       (unwind-protect
+           (when (and (not (plist-get status :error))
+                      (re-search-forward "\n\n" nil t))
+             (let ((coding-system-for-write 'binary))
+               (write-region (point) (point-max) jpg nil 'silent))
+             (when (and (fboundp 'cmacs-gnuseye-convert-image)
+                        (cmacs-gnuseye-convert-image jpg png))
+               (ignore-errors (delete-file jpg))))
+         (kill-buffer (current-buffer))
+         (funcall done)))
+     nil t t)))
+
+(defun cmacs-gnuseye-celestial-ensure-textures ()
+  "Fetch any missing body maps (once), then re-render the celestial layers."
+  (interactive)
+  (when (and cmacs-gnuseye-celestial-textures
+             (not cmacs-gnuseye-celestial--fetching))
+    (let ((missing (delq nil
+                         (mapcar (lambda (kv)
+                                   (unless (cmacs-gnuseye-celestial--texture-file
+                                            (car kv))
+                                     (cdr kv)))
+                                 cmacs-gnuseye-celestial--texture-names))))
+      (when missing
+        (setq cmacs-gnuseye-celestial--fetching t)
+        (message "GNU's Eye: fetching %d body maps…" (length missing))
+        (let ((pending (length missing)))
+          (dolist (name missing)
+            (cmacs-gnuseye-celestial--fetch-texture
+             name
+             (lambda ()
+               (when (zerop (setq pending (1- pending)))
+                 (setq cmacs-gnuseye-celestial--fetching nil)
+                 (message "GNU's Eye: body maps ready")
+                 (when (and (fboundp 'cmacs-gnuseye--render-all)
+                            cmacs-gnuseye-buffer
+                            (buffer-live-p cmacs-gnuseye-buffer))
+                   (cmacs-gnuseye--render-all)))))))))))
+
 ;;;; Sun + Moon + planets (local ephemeris; always live) ----------------------
 
 (defconst cmacs-gnuseye-celestial--bodies
@@ -99,6 +185,8 @@ The C sphere radius is 0.9 * 0.11 * scale = 0.099 * scale world units."
                 :scale (cmacs-gnuseye-celestial--ratio->scale ratio)
                 :lat (plist-get p :sublat) :lon (plist-get p :sublon)
                 :alt (cmacs-gnuseye-celestial-shell-alt dist)
+                :texture (and cmacs-gnuseye-celestial-textures
+                              (cmacs-gnuseye-celestial--texture-file body))
                 :label-mode 3
                 :data `((body . ,body)
                         (distance . ,(cmacs-gnuseye-celestial--fmt-dist dist))
@@ -249,6 +337,10 @@ RA - GMST and moves ~15 deg/hour."
            (cmacs-gnuseye-celestial--horizons-fetch
             cmacs-gnuseye-asteroids 'asteroid cb))
   :advance #'cmacs-gnuseye-celestial--horizons-advance)
+
+;; Kick the one-time texture fetch in the background (no-op once cached);
+;; bodies render flat-coloured until the maps arrive, then re-render.
+(run-with-idle-timer 2 nil #'cmacs-gnuseye-celestial-ensure-textures)
 
 (provide 'cmacs-gnuseye-celestial)
 ;;; cmacs-gnuseye-celestial.el ends here
