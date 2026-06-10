@@ -36,12 +36,17 @@ enable them from the toggle pane (left).  Layer files are listed in
 * Marine
 
 ** vessels — ~cmacs-gnuseye-marine.el~
-- Source: an AIS vessel JSON feed at ~cmacs-gnuseye-marine-url~ (nil = off).
-  Free *global* AIS is mostly websocket + key; point this at a regional
-  open-AIS REST endpoint or a LAN AIS-catcher / rtl-ais server.
+- Source: live AIS from ~cmacs-gnuseye-marine-url~.  The default is the
+  *Digitraffic open AIS* (~https://meri.digitraffic.fi/api/ais/v1/locations~;
+  keyless GeoJSON, live Baltic / Gulf of Finland coverage — fly to ~59N 21E~
+  to see it).  Free *global* AIS is websocket + key (aisstream.io) or
+  regional; point the URL at any other feed — the parser reads GeoJSON
+  FeatureCollections (position from geometry) and flat arrays
+  (mmsi/lat/lon/cog/sog/name), honouring the AIS not-available sentinels
+  (heading 511, cog 360).
 - Refresh: 30 s.  Geometry: hull + superstructure, bow = heading;
   ~:cluster~ on.  Motion: dead reckoning (SOG converted knots → m/s).
-- Config: ~cmacs-gnuseye-marine-url~, ~-marine-max~ (300).
+- Config: ~cmacs-gnuseye-marine-url~, ~-marine-max~ (1000).
 
 * Weather & events
 

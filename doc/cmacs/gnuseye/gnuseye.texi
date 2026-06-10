@@ -121,8 +121,10 @@ optional keys include @code{:alt}, @code{:heading}, @code{:speed},
 @item @code{aircraft} --- adsb.lol ADS-B (keyless), worldwide sweep, indexed
 and searchable; clustered when zoomed out.  @code{cmacs-gnuseye-air-global},
 @code{-air-source}.
-@item @code{vessels} --- AIS from a configurable JSON feed
-(@code{cmacs-gnuseye-marine-url}); dead-reckoned, clustered.
+@item @code{vessels} --- live AIS from @code{cmacs-gnuseye-marine-url}; the
+default is the keyless Digitraffic open AIS (Baltic / Gulf of Finland
+coverage).  Dead-reckoned, clustered.  Point the URL at any other regional
+feed (GeoJSON or flat-array shapes both parse).
 @item @code{quakes} --- USGS earthquakes (GeoJSON); no key.
 @item @code{launches} --- Launch Library 2; no key.
 @item @code{fires} --- NASA FIRMS; needs @code{FIRMS_MAP_KEY}.

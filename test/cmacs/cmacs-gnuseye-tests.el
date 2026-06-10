@@ -661,6 +661,32 @@ does not."
     (should (string-match-p "aircraft" ctx)))
   (clrhash cmacs-gnuseye--id-index))
 
+;;;; Marine: GeoJSON AIS (Digitraffic shape) ----------------------------------
+
+(ert-deftest cmacs-gnuseye--marine-geojson-parse ()
+  "The marine parser reads GeoJSON features (lat/lon from geometry) and
+honours the AIS not-available sentinels (heading 511, cog 360)."
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-marine)
+  (let* ((data '((type . "FeatureCollection")
+                 (features
+                  ((mmsi . 230994270)
+                   (geometry (type . "Point") (coordinates 24.96 60.15))
+                   (properties (mmsi . 230994270) (sog . 10.0) (cog . 235.0)
+                               (heading . 511)))
+                  ((mmsi . 1)
+                   (geometry (type . "Point") (coordinates 25.0 59.9))
+                   (properties (mmsi . 1) (sog . 0.0) (cog . 360.0)
+                               (heading . 511))))))
+         (out (cmacs-gnuseye-marine--parse data)))
+    (should (= (length out) 2))
+    (let ((a (car out)) (b (cadr out)))
+      (should (= (plist-get a :lat) 60.15))      ; from geometry (lon lat)
+      (should (= (plist-get a :lon) 24.96))
+      (should (= (plist-get a :heading) 235.0))  ; heading 511 -> cog
+      (should (< (abs (- (plist-get a :speed) 5.14444)) 1e-3)) ; kt -> m/s
+      (should (= (plist-get b :heading) -1)))))  ; both unavailable
+
 (provide 'cmacs-gnuseye-tests)
 
 ;;; cmacs-gnuseye-tests.el ends here

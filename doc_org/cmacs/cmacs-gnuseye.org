@@ -330,7 +330,7 @@ Helpers:
 |------------------+---------------+-------------------------------+-----+----------|
 | ~satellites~     | astronomical  | CelesTrak TLE + propagation   | no  | point+orbit |
 | ~aircraft~       | air           | adsb.lol ADS-B (keyless)      | no  | point (clustered) |
-| ~vessels~        | marine        | AIS (configurable URL)        | opt | point (clustered) |
+| ~vessels~        | marine        | AIS (Digitraffic Baltic dflt) | no  | point (clustered) |
 | ~quakes~         | weather       | USGS earthquakes (GeoJSON)    | no  | point    |
 | ~launches~       | weather       | Launch Library 2              | no  | point    |
 | ~fires~          | weather       | NASA FIRMS                    | yes | point    |
@@ -381,9 +381,11 @@ for ~cmacs-gnuseye-gdelt-query~, points sized by mention volume.
   ~cmacs-gnuseye-air-global~ nil to instead query only the current view
   (lighter), or ~cmacs-gnuseye-air-source~ to ~opensky~ for OpenSky (its
   anonymous API now returns HTTP 429; ~OPENSKY_USER~/~OPENSKY_PASS~ help).
-- *Vessels* parse a vessel JSON feed from ~cmacs-gnuseye-marine-url~ (nil =
-  off).  Free *global* AIS is mostly websocket + key; point this at a
-  regional open-AIS REST endpoint or a LAN AIS-catcher/rtl-ais server.
+- *Vessels* fetch live AIS from ~cmacs-gnuseye-marine-url~ — by default the
+  keyless Digitraffic open AIS (Baltic / Gulf of Finland coverage; fly to
+  ~59N 21E~ to see it).  Free *global* AIS is websocket + key; point the URL
+  at another regional open-AIS endpoint or a LAN AIS-catcher/rtl-ais server
+  (GeoJSON or flat-array shapes both parse).
 - *Weather/geo-events* ship earthquakes (on), rocket launches, and NASA
   FIRMS fires (needs ~FIRMS_MAP_KEY~).
 

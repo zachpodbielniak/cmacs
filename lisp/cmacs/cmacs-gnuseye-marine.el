@@ -5,26 +5,31 @@
 
 ;;; Commentary:
 
-;; Marine vessels via AIS.  NOTE: free *global* AIS is hard -- it is mostly
-;; websocket + key (aisstream.io) or regional/SDR.  This layer fetches a
-;; vessel JSON feed from `cmacs-gnuseye-marine-url' (default nil = off) so
-;; you can point it at a regional open-AIS REST endpoint or a LAN
-;; AIS-catcher / rtl-ais JSON server.  It parses a flexible record shape
-;; (mmsi/lat/lon/cog/sog/name under common key spellings).  Off by default.
+;; Marine vessels via AIS.  Free *global* AIS does not exist as keyless REST
+;; -- it is websocket + key (aisstream.io) or regional -- so the default feed
+;; is the Finnish Transport Infrastructure Agency's open Digitraffic AIS
+;; (keyless GeoJSON; live coverage of the Baltic / Gulf of Finland, one of
+;; the densest shipping areas in the world).  Point
+;; `cmacs-gnuseye-marine-url' at any other vessel JSON feed (a regional
+;; open-AIS REST endpoint or a LAN AIS-catcher / rtl-ais server): the parser
+;; reads both GeoJSON FeatureCollections (lat/lon from geometry) and flat
+;; arrays (mmsi/lat/lon/cog/sog/name under common key spellings).
 
 ;;; Code:
 
 (require 'cmacs-gnuseye)
 
-(defcustom cmacs-gnuseye-marine-url nil
-  "URL of a vessel JSON feed (array of objects), or nil to disable.
-Each object should provide a latitude, longitude, and ideally an MMSI,
-course-over-ground, speed-over-ground and name under common key names."
+(defcustom cmacs-gnuseye-marine-url
+  "https://meri.digitraffic.fi/api/ais/v1/locations"
+  "URL of a vessel JSON/GeoJSON feed, or nil to disable.
+The default is Digitraffic's open AIS (keyless; Baltic coverage).  Any feed
+whose records carry a position (GeoJSON geometry, or lat/lon fields) and
+ideally MMSI, course- and speed-over-ground works."
   :type '(choice (const :tag "Disabled" nil) (string :tag "URL"))
   :group 'cmacs-gnuseye)
 
-(defcustom cmacs-gnuseye-marine-max 300
-  "Maximum number of vessel markers to render."
+(defcustom cmacs-gnuseye-marine-max 1000
+  "Maximum number of vessels kept from one fetch."
   :type 'integer
   :group 'cmacs-gnuseye)
 
@@ -37,7 +42,7 @@ course-over-ground, speed-over-ground and name under common key names."
     nil))
 
 (defun cmacs-gnuseye-marine--parse (data)
-  "Parse a vessel array DATA (list of alists) into ship entities."
+  "Parse a vessel feed DATA (GeoJSON FeatureCollection or array) into entities."
   (let ((records (if (and (listp data) (alist-get 'features data))
                      (alist-get 'features data)   ; GeoJSON
                    data))
@@ -45,20 +50,32 @@ course-over-ground, speed-over-ground and name under common key names."
     (catch 'done
       (dolist (r records)
         (let* ((props (or (alist-get 'properties r) r))
-               (lat (cmacs-gnuseye-marine--get props 'lat 'latitude 'LAT 'y))
-               (lon (cmacs-gnuseye-marine--get props 'lon 'longitude 'LON 'lng 'x))
-               (mmsi (cmacs-gnuseye-marine--get props 'mmsi 'MMSI 'userid))
+               (geom (alist-get 'geometry r))
+               (coords (and geom (alist-get 'coordinates geom)))
+               (lat (or (cmacs-gnuseye-marine--get props 'lat 'latitude 'LAT 'y)
+                        (and (consp coords) (nth 1 coords))))
+               (lon (or (cmacs-gnuseye-marine--get props 'lon 'longitude 'LON
+                                                   'lng 'x)
+                        (and (consp coords) (nth 0 coords))))
+               (mmsi (or (cmacs-gnuseye-marine--get props 'mmsi 'MMSI 'userid)
+                         (alist-get 'mmsi r)))
                (name (cmacs-gnuseye-marine--get props 'name 'shipname 'NAME))
-               (cog (cmacs-gnuseye-marine--get props 'cog 'course 'heading 'COG))
-               (sog (cmacs-gnuseye-marine--get props 'sog 'speed 'SOG)))
+               (cog (cmacs-gnuseye-marine--get props 'cog 'course 'COG))
+               (hdg (cmacs-gnuseye-marine--get props 'heading 'HEADING))
+               (sog (cmacs-gnuseye-marine--get props 'sog 'speed 'SOG))
+               ;; AIS "not available" sentinels: heading 511, cog 360.
+               (course (cond ((and (numberp hdg) (< hdg 360)) hdg)
+                             ((and (numberp cog) (< cog 360)) cog)
+                             (t -1))))
           (when (and (numberp lat) (numberp lon))
             ;; AIS speed-over-ground is knots; store m/s so the shared
             ;; dead-reckoning :advance moves the vessel correctly.
             (push (list :id (format "ship:%s" (or mmsi name lat))
                         :kind 'ship
-                        :label (and name (format "%s" name))
-                        :lat lat :lon lon
-                        :heading (if (numberp cog) cog -1)
+                        :label (cond (name (format "%s" name))
+                                     (mmsi (format "%s" mmsi)))
+                        :lat (float lat) :lon (float lon)
+                        :heading course
                         :speed (and (numberp sog) (* sog 0.514444))
                         :data `((mmsi . ,mmsi) (sog-kt . ,sog) (cog . ,cog)))
                   out)
@@ -68,14 +85,17 @@ course-over-ground, speed-over-ground and name under common key names."
 
 (defun cmacs-gnuseye-marine--fetch (cb)
   (if (not cmacs-gnuseye-marine-url)
-      (funcall cb nil)
+      (progn
+        (message "GNU's Eye: set `cmacs-gnuseye-marine-url' to an AIS feed")
+        (funcall cb nil))
     (cmacs-gnuseye-fetch-json
      cmacs-gnuseye-marine-url
      (lambda (data) (funcall cb (and data (cmacs-gnuseye-marine--parse data))))
-     nil 'list)))
+     '(("Digitraffic-User" . "cmacs-gnuseye/1.0"))
+     'list)))
 
 (cmacs-gnuseye-define-layer vessels
-  :title "Marine vessels (AIS — set cmacs-gnuseye-marine-url)"
+  :title "Marine vessels (AIS, Baltic default)"
   :group 'marine
   :kind 'ship
   :interval 30
