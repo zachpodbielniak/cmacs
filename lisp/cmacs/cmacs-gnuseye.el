@@ -942,16 +942,22 @@ id disagrees with PATH, or the payload is gone, fall back to the id index."
      (t e))))
 
 (defun cmacs-gnuseye--on-pick-1 (buffer node-id &optional path)
-  "Default click handling: select/zoom the picked NODE-ID (PATH = entity id)."
+  "Default click handling: select/zoom the picked NODE-ID (PATH = entity id).
+Always reports the outcome in the echo area, so a click that fails to
+resolve says so (and why) instead of failing silently."
   (when (or (and (integerp node-id) (>= node-id 0)) path)
     (let ((e (cmacs-gnuseye--resolve-pick buffer node-id path)))
-      (when e
+      (if (null e)
+          (message "GNU's Eye: click did not resolve (node %s, id %s)"
+                   node-id (or path "?"))
         (let ((data (plist-get e :data)))
           (if (and (listp data) (assq :cluster data))
               ;; Cluster: fly in closer; the next render shows individuals.
               (let* ((vc (ignore-errors (cmacs-gnuseye-view-center buffer)))
                      (dist (if (and (consp vc) (numberp (nth 2 vc)))
                                (nth 2 vc) 12.0)))
+                (message "GNU's Eye: cluster of %s — zooming in"
+                         (or (cdr (assq :count data)) "?"))
                 (ignore-errors
                   (cmacs-gnuseye-fly-to buffer (float (plist-get e :lat))
                                         (float (plist-get e :lon))
@@ -963,6 +969,8 @@ id disagrees with PATH, or the payload is gone, fall back to the id index."
                     (format "%s" (plist-get e :id)))
               (cmacs-gnuseye--show-inspector e)
               (cmacs-gnuseye--render-all))
+            (message "GNU's Eye: selected %s"
+                     (or (plist-get e :label) (plist-get e :id)))
             (ignore-errors (cmacs-gnuseye--list-goto (plist-get e :id)))))))))
 
 (defvar cmacs-gnuseye-inspector-mode-map
