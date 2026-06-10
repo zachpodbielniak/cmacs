@@ -19,7 +19,8 @@ Elisp** via ~cmacs-gnuseye-define-layer~, over a tiny, stable C boundary.
 Adding a new feed is one macro call — no rebuild.
 
 Enable with ~--with-cmacs-gnuseye~ (requires ~--with-cmacs-libregnum~ and
-~--with-cmacs-glib~).  Off by default.
+~--with-cmacs-glib~).  Part of the standard cmacs flag set: ~just
+bootstrap~ and the container build (~Containerfile~) enable it by default.
 
 * Quick start
 

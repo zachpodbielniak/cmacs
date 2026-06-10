@@ -18,8 +18,9 @@ events, weather alert zones, aurora, geolocated news --- as clickable,
 heading-oriented markers, filled regions, rings, and arcs on a sun-lit,
 politically-mapped sphere.  It is rendered @emph{through} the libregnum
 subsystem and enabled with @option{--with-cmacs-gnuseye} (requires
-@option{--with-cmacs-libregnum} and @option{--with-cmacs-glib}; off by
-default).
+@option{--with-cmacs-libregnum} and @option{--with-cmacs-glib}).  It is part
+of the standard cmacs flag set: @command{just bootstrap} and the container
+build enable it by default.
 
 @code{M-x cmacs-gnuseye} opens a dashboard: the globe viewport in the
 centre; on the left an entity-type toggle pane over a searchable/filterable

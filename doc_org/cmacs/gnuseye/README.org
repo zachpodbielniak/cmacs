@@ -63,4 +63,6 @@ boundary.  Adding a feed is one macro call — no rebuild, hot-reloadable.
 * Build
 
 Enable with ~--with-cmacs-gnuseye~ (requires ~--with-cmacs-libregnum~ and
-~--with-cmacs-glib~).  Off by default.  Open with ~M-x cmacs-gnuseye~.
+~--with-cmacs-glib~).  Part of the standard cmacs flag set — ~just
+bootstrap~ and the container build enable it by default.  Open with
+~M-x cmacs-gnuseye~.
