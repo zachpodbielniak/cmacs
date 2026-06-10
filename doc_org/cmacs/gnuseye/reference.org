@@ -221,6 +221,18 @@ any feature-registered actions (see ~cmacs-gnuseye-register-inspector-action~).
   selects it even while layers re-render — including celestial bodies.
   Every click reports its outcome in the echo area (~selected X~,
   ~cluster of N — zooming in~, or ~click did not resolve~ with the values).
+- *Right-click context menu*: right-click an entity (no drag) to pop a
+  native menu — *Fly to*, *Inspect (no fly)*, every registered inspector
+  action whose predicate passes (*Ask AI*, *Compose*, *Track*, …), and
+  *Copy coordinates*; right-clicking empty space offers *Deselect*, *Back
+  to Earth*, and *Measure*.  Same deferred-dispatch design as the editor's
+  menu (the popup is re-scheduled onto the command loop).
+- *Orbit the body*: selecting a celestial body (click or list ~RET~) now
+  re-targets the camera onto the body itself via ~cmacs-gnuseye-orbit-point~
+  ~(BUFFER LAT LON ALT-M RADIUS &optional ANIMATE)~ — drag revolves around
+  *it*, and zoom approaches *it* asymptotically (floor just outside its
+  surface) instead of Earth's.  Any fly-to / ~0~ home / deselect restores
+  the Earth orbit and globe-relative zoom.
 - *Loading invariant*: the C input layer dispatches clicks to
   ~cmacs-libregnum--node-clicked~ (defined in ~cmacs-libregnum.el~) through
   ~safe_call~, which *mutes* a void-function error — so ~cmacs-gnuseye.el~

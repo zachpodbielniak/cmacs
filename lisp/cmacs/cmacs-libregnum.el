@@ -362,6 +362,20 @@ GMainContext."
          (is-dir (cmacs-libregnum--drill-to buffer path))
          ((and (stringp path) (> (length path) 0)) (find-file path)))))))
 
+(defun cmacs-libregnum--node-context-menu (buffer info)
+  "Dispatch a viewport RIGHT-click in BUFFER to the mode's context menu.
+INFO is (ID PATH IS-DIR VX VY) like `cmacs-libregnum--node-clicked'.
+Runs on the cmacs GMainContext (inside the pselect wait), so handlers must
+NOT pop a menu here -- re-schedule onto the command loop with a 0-delay
+timer (the editor does the same)."
+  (when (buffer-live-p buffer)
+    (let ((id (nth 0 info)) (path (nth 1 info))
+          (vx (nth 3 info)) (vy (nth 4 info)))
+      (with-current-buffer buffer
+        (when (and (fboundp 'cmacs-gnuseye--context-menu)
+                   (derived-mode-p 'cmacs-gnuseye-mode))
+          (cmacs-gnuseye--context-menu buffer id path vx vy))))))
+
 (defun cmacs-libregnum-up ()
   "Re-root the tree at the parent of the current root directory."
   (interactive)

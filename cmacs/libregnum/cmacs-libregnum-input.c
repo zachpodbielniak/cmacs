@@ -78,6 +78,46 @@ click_action_idle (gpointer user)
   return G_SOURCE_REMOVE;
 }
 
+/* Non-editor right-click: same capture as a left click (id + stable path +
+ * view pixel), dispatched to the context-menu router instead.  The Elisp
+ * side must NOT pop the menu inside this dispatch (it runs during the
+ * pselect wait) -- it re-schedules onto the command loop. */
+static gboolean
+node_menu_idle (gpointer user)
+{
+  ClickAction *a = user;
+  cmacs_dispatch_safe_call2 (intern ("cmacs-libregnum--node-context-menu"),
+                             a->buffer,
+                             list5 (make_fixnum (a->id),
+                                    (a->path && a->path[0])
+                                      ? build_string (a->path) : Qnil,
+                                    a->is_dir ? Qt : Qnil,
+                                    make_float (a->vx),
+                                    make_float (a->vy)));
+  g_free (a->path);
+  g_free (a);
+  return G_SOURCE_REMOVE;
+}
+
+static void
+defer_node_menu (CmacsLibregnumView *v, CmacsLibregnumRenderCtx *ctx,
+                 gint id, double vx, double vy)
+{
+  const gchar *path = NULL;
+  gboolean is_dir = FALSE;
+  if (id >= 0)
+    cmacs_libregnum_render_ctx_node_info (ctx, (guint) id, &path, NULL,
+                                          &is_dir, NULL, NULL);
+  ClickAction *a = g_new0 (ClickAction, 1);
+  a->buffer = cmacs_libregnum_view_get_buffer (v);
+  a->path = (path && path[0]) ? g_strdup (path) : NULL;
+  a->is_dir = is_dir;
+  a->id = id;
+  a->vx = vx;
+  a->vy = vy;
+  g_main_context_invoke (cmacs_glib_get_context (), node_menu_idle, a);
+}
+
 /* Deferred editor selection sync: tell Elisp which node the viewport just
  * selected, so `cmacs-libregnum-editor--current' and the outliner follow a
  * mouse pick / drag.  Like ClickAction, the Lisp eval must run on the cmacs
@@ -580,6 +620,18 @@ cmacs_libregnum_handle_button (struct frame *f, int button, int press,
                              (ctx, vx, vy, vw, vh, &gx, &gy, &gz);
                 }
               defer_context_menu (v, id, x, y, ground, gx, gy, gz);
+            }
+          else if (!moved)
+            {
+              /* Non-editor views (scenes, the gnuseye globe): right-click
+               * pops an entity / view context menu, routed like a left
+               * click (id + stable path + view pixel). */
+              double vx = 0.0, vy = 0.0;
+              int vw, vh;
+              gint id = -1;
+              if (frame_to_view_coords (f, v, x, y, &vx, &vy, &vw, &vh))
+                id = cmacs_libregnum_render_ctx_pick (ctx, vx, vy, vw, vh);
+              defer_node_menu (v, ctx, id, vx, vy);
             }
         }
       return true;

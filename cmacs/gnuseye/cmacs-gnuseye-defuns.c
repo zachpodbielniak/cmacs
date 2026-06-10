@@ -587,6 +587,44 @@ pixel is off the globe.  */)
   return Qnil;
 }
 
+DEFUN ("cmacs-gnuseye-orbit-point", Fcmacs_gnuseye_orbit_point,
+       Scmacs_gnuseye_orbit_point, 5, 6, 0,
+       doc: /* Orbit BUFFER's camera around the point at LAT LON ALT-M.
+RADIUS is the focused body's world radius: the camera stands back ~6
+radii looking at the body (Earth behind it), drag-orbit revolves around
+the BODY, and zoom approaches the body asymptotically (floor just
+outside its surface).  Any fly-to / home / deselect restores the normal
+Earth orbit.  ANIMATE is reserved.  */)
+  (Lisp_Object buffer, Lisp_Object lat, Lisp_Object lon, Lisp_Object alt_m,
+   Lisp_Object radius, Lisp_Object animate)
+{
+  (void) animate;
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *r = cmacs_libregnum_view_get_render_ctx (v);
+  double br = XFLOATINT (radius);
+  if (br < 0.05) br = 0.05;
+  double px, py, pz;
+  cmacs_gnuseye_project (XFLOATINT (lat), XFLOATINT (lon),
+                         XFLOATINT (alt_m), &px, &py, &pz);
+  double plen = sqrt (px*px + py*py + pz*pz);
+  if (plen < 1e-9) return Qnil;
+  /* Camera radially outward of the body so Earth sits behind it. */
+  double back = 6.0 * br;
+  double cx = px * (1.0 + back / plen);
+  double cy = py * (1.0 + back / plen);
+  double cz = pz * (1.0 + back / plen);
+  double opx, opy, opz, otx, oty, otz, fov;
+  cmacs_libregnum_render_ctx_get_camera_state (r, &opx, &opy, &opz,
+                                               &otx, &oty, &otz, &fov);
+  cmacs_libregnum_render_ctx_set_camera_state (r, cx, cy, cz, px, py, pz,
+                                               fov > 0 ? fov : 45.0);
+  cmacs_libregnum_render_ctx_set_focus_min (r, br * 1.35);
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
 DEFUN ("cmacs-gnuseye-zoom", Fcmacs_gnuseye_zoom, Scmacs_gnuseye_zoom,
        2, 2, 0,
        doc: /* Zoom BUFFER's globe camera by TICKS (positive = in).
@@ -738,6 +776,7 @@ syms_of_cmacs_gnuseye_defuns (void)
   defsubr (&Scmacs_gnuseye_set_projection);
   defsubr (&Scmacs_gnuseye_flat_p);
   defsubr (&Scmacs_gnuseye_zoom);
+  defsubr (&Scmacs_gnuseye_orbit_point);
 }
 
 #endif /* HAVE_CMACS_GNUSEYE */

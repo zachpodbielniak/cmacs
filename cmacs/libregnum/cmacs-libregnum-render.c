@@ -257,6 +257,13 @@ struct CmacsLibregnumRenderCtx
    * limb) are culled so they do not show through the globe. */
   double            occluder_radius;
 
+  /* When > 0 the camera is orbiting an OFF-ORIGIN focus (a selected
+   * celestial body): zoom becomes proportional to the distance to the
+   * TARGET with this floor, instead of to the altitude above the origin
+   * sphere.  Reset to 0 whenever the camera is re-aimed at the globe
+   * (gnuseye camera_goto / home / deselect). */
+  double            focus_min_dist;
+
   /* Persistent static drawables (e.g. the gnuseye coastline overlay):
    * drawn every frame after the background model and NOT cleared by
    * clear_drawables.  Owned (g_object_unref per element). */
@@ -461,6 +468,13 @@ cmacs_libregnum_render_ctx_set_occluder_radius (CmacsLibregnumRenderCtx *r,
                                                 double radius)
 {
   if (r) r->occluder_radius = radius;
+}
+
+void
+cmacs_libregnum_render_ctx_set_focus_min (CmacsLibregnumRenderCtx *r,
+                                          double dist)
+{
+  if (r) r->focus_min_dist = dist > 0.0 ? dist : 0.0;
 }
 
 /* TRUE if world point (X,Y,Z) is visible from the camera, i.e. the globe
@@ -1715,6 +1729,34 @@ cmacs_libregnum_render_ctx_zoom_camera (CmacsLibregnumRenderCtx *r,
   LrgCamera3D *c3 = LRG_CAMERA3D (r->camera);
   g_autoptr (GrlVector3) pos = lrg_camera3d_get_position (c3);
   g_autoptr (GrlVector3) tgt = lrg_camera3d_get_target   (c3);
+
+  if (r->focus_min_dist > 0.0)
+    {
+      /* Orbiting an off-origin focus (a selected celestial body): zoom is
+       * proportional to the distance to the TARGET, asymptotic to the
+       * body's own floor -- you can get ever closer to the planet, never
+       * inside it, and never shoot past it. */
+      double ox = pos->x - tgt->x, oy = pos->y - tgt->y, oz = pos->z - tgt->z;
+      double vlen = sqrt (ox*ox + oy*oy + oz*oz);
+      if (vlen < 1e-9) return;
+      double above = vlen - r->focus_min_dist;
+      if (above < 1e-3) above = 1e-3;
+      double nabove = above * pow (0.9, wheel_dy);
+      if (nabove < 1e-3) nabove = 1e-3;
+      double k = (r->focus_min_dist + nabove) / vlen;
+      double wx = tgt->x + ox * k, wy = tgt->y + oy * k, wz = tgt->z + oz * k;
+      /* Stay outside the Earth globe and inside the world ceiling. */
+      ctx_clamp_above_occluder (r, &wx, &wy, &wz);
+      if (r->occluder_radius > 0.0)
+        {
+          double maxd = r->occluder_radius * CTX_OCCLUDER_CEIL;
+          double wlen = sqrt (wx*wx + wy*wy + wz*wz);
+          if (wlen > maxd && wlen > 1e-9)
+            { double s = maxd / wlen; wx *= s; wy *= s; wz *= s; }
+        }
+      lrg_camera3d_set_position_xyz (c3, (float) wx, (float) wy, (float) wz);
+      return;
+    }
 
   if (r->occluder_radius > 0.0)
     {

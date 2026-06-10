@@ -72,6 +72,12 @@ extern void  cmacs_libregnum_render_ctx_set_background_spin
 extern void  cmacs_libregnum_render_ctx_set_occluder_radius
                               (CmacsLibregnumRenderCtx *r, double radius);
 
+/* When DIST > 0 the camera orbits an off-origin focus (a selected celestial
+ * body): zoom becomes proportional to the camera-to-target distance with
+ * floor DIST.  Pass 0 to restore globe-relative zoom. */
+extern void  cmacs_libregnum_render_ctx_set_focus_min
+                              (CmacsLibregnumRenderCtx *r, double dist);
+
 /* Persistent static drawables (e.g. a coastline overlay): drawn every frame
  * after the background model, NOT cleared by clear_drawables.  add transfers
  * ownership of DRAWABLE (an LrgDrawable*, void* to keep the header clean). */

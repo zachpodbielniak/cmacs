@@ -979,6 +979,9 @@ cmacs_gnuseye_camera_goto (CmacsLibregnumRenderCtx *r,
 {
   (void) animate;   /* v1: snap; smooth fly-to is a later refinement */
   if (!r) return;
+  /* Re-aiming at the globe ends any off-origin body orbit (zoom returns to
+   * globe-relative); home / deselect / every fly-to route through here. */
+  cmacs_libregnum_render_ctx_set_focus_min (r, 0.0);
   double dx, dy, dz;
   gxyz (lat, lon, 0.0, &dx, &dy, &dz);
   double len = sqrt (dx*dx + dy*dy + dz*dz);

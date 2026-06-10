@@ -922,6 +922,25 @@ payload entity, the inspector still shows it and the selection is set."
   (should (fboundp 'cmacs-gnuseye-compose-about-entity))
   (should (assoc "c" cmacs-gnuseye-inspector-actions)))
 
+(ert-deftest cmacs-gnuseye--context-menu-items ()
+  "Right-click menus: entity menus carry fly/inspect + registered inspector
+actions (pred-filtered) + copy; empty-space menus carry view actions."
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-intel)
+  (let* ((e (list :id "cel:jupiter" :kind 'planet :label "Jupiter"
+                  :lat 10.0 :lon 20.0))
+         (labels (delq nil (mapcar #'car-safe
+                                   (cmacs-gnuseye--context-menu-items e)))))
+    (should (member "Fly to Jupiter" labels))
+    (should (member "Inspect (no fly)" labels))
+    (should (member "Ask AI" labels))
+    (should (member "Compose" labels))
+    (should (member "Copy coordinates" labels)))
+  (let ((labels (delq nil (mapcar #'car-safe
+                                  (cmacs-gnuseye--context-menu-items nil)))))
+    (should (member "Back to Earth (home)" labels))
+    (should (member "Deselect / re-orbit Earth" labels))))
+
 (ert-deftest cmacs-gnuseye--click-dispatcher-loaded ()
   "Loading cmacs-gnuseye must bring in the C->Elisp click dispatchers.
 The C input layer dispatches every globe click to

@@ -186,6 +186,15 @@ movement works from the render window).
 inspector shows population, GDP, GDP/capita, unemployment, life expectancy,
 inflation, and income group -- instant Natural Earth figures plus live
 keyless World Bank indicators (cached).  Ocean clicks deselect.
+@item @strong{Right-click menu}: right-click an entity for a native context
+menu (Fly to, Inspect, Ask AI, Compose, Track, Copy coordinates -- the
+registered inspector actions, predicate-filtered); empty space offers
+Deselect / Back to Earth / Measure.
+@item @strong{Orbit the body}: selecting a celestial body re-targets the
+camera onto it -- drag revolves around @emph{it} and zoom approaches
+@emph{it} asymptotically (floor just outside its surface) instead of
+Earth's; any fly-to / home / deselect restores the Earth orbit
+(@code{cmacs-gnuseye-orbit-point}).
 @item @strong{Click dispatch}: every click reports its outcome in the echo
 area (@samp{selected X}, @samp{cluster of N}, or @samp{click did not
 resolve}).  The C input layer dispatches clicks to

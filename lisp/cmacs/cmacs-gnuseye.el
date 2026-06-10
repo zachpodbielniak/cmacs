@@ -834,22 +834,25 @@ and (unless NO-FLY) recentre the camera on it."
       (unless no-fly
         (when (and cmacs-gnuseye-buffer (buffer-live-p cmacs-gnuseye-buffer)
                    (plist-get e :lat))
-          ;; Celestial bodies sit on a shell far above the surface: fly to
-          ;; just OUTSIDE the body (its shell + its rendered radius) so it is
-          ;; framed in front of Earth (the default range would park it
-          ;; behind the camera, or inside a true-scale giant).
+          ;; Celestial bodies sit far off the surface: ORBIT THE BODY --
+          ;; the camera target moves onto it (drag revolves around it, zoom
+          ;; approaches *it* asymptotically), standing back ~6 radii with
+          ;; Earth behind.  Any fly-to / home / deselect restores the Earth
+          ;; orbit.  Surface entities keep the normal fly-to.
           (let* ((alt (or (plist-get e :alt) 0.0))
                  (shell-r (* 6.371 (+ 1.0 (/ (float alt) 6371000.0))))
-                 (body-r (* 0.099 (float (or (plist-get e :scale) 1.0))))
-                 ;; Stand back ~6 body radii so the body subtends ~20 deg.
-                 (range (if (> shell-r 9.0)
-                            (+ (- shell-r 6.371) (max 3.0 (* 6.0 body-r)))
-                          cmacs-gnuseye-focus-range)))
-            (ignore-errors
-              (cmacs-gnuseye-fly-to cmacs-gnuseye-buffer
-                                    (float (plist-get e :lat))
-                                    (float (plist-get e :lon))
-                                    range t)))
+                 (body-r (* 0.099 (float (or (plist-get e :scale) 1.0)))))
+            (if (and (> shell-r 9.0) (fboundp 'cmacs-gnuseye-orbit-point))
+                (ignore-errors
+                  (cmacs-gnuseye-orbit-point cmacs-gnuseye-buffer
+                                             (float (plist-get e :lat))
+                                             (float (plist-get e :lon))
+                                             (float alt) body-r t))
+              (ignore-errors
+                (cmacs-gnuseye-fly-to cmacs-gnuseye-buffer
+                                      (float (plist-get e :lat))
+                                      (float (plist-get e :lon))
+                                      cmacs-gnuseye-focus-range t))))
           ;; After the fly-to tween settles, re-pick nearest so the
           ;; destination region's other markers fill in around it.
           (run-with-timer 1.5 nil #'cmacs-gnuseye-refresh-view-layers)))
@@ -978,6 +981,76 @@ resolve says so (and why) instead of failing silently."
             (message "GNU's Eye: selected %s"
                      (or (plist-get e :label) (plist-get e :id)))
             (ignore-errors (cmacs-gnuseye--list-goto (plist-get e :id)))))))))
+
+;;;; Right-click context menu --------------------------------------------------
+
+(defun cmacs-gnuseye--context-menu-items (e)
+  "Menu item list ((LABEL . FN) or nil separator) for entity E (or nil).
+With E: select/fly plus every registered inspector action whose predicate
+passes.  Without E (empty-space right-click): view-level actions."
+  (if e
+      (append
+       (list (cons (format "Fly to %s"
+                           (or (plist-get e :label) (plist-get e :id)))
+                   (lambda ()
+                     (cmacs-gnuseye--select-entity (plist-get e :id))))
+             (cons "Inspect (no fly)"
+                   (lambda ()
+                     (or (cmacs-gnuseye--select-entity (plist-get e :id) t)
+                         (progn (setq cmacs-gnuseye--selected-id
+                                      (format "%s" (plist-get e :id)))
+                                (cmacs-gnuseye--show-inspector e)))))
+             nil)
+       ;; Registered inspector actions (ask AI, compose, track, watch, ...)
+       ;; operate on the inspected entity: show E first, then run.
+       (delq nil
+             (mapcar
+              (lambda (a)
+                (pcase-let ((`(,_key ,label ,fn ,pred) a))
+                  (when (or (null pred) (ignore-errors (funcall pred e)))
+                    (cons (concat (upcase (substring label 0 1))
+                                  (substring label 1))
+                          (lambda ()
+                            (setq cmacs-gnuseye--selected-id
+                                  (format "%s" (plist-get e :id)))
+                            (cmacs-gnuseye--show-inspector e)
+                            (call-interactively fn))))))
+              (reverse cmacs-gnuseye-inspector-actions)))
+       (list nil
+             (cons "Copy coordinates"
+                   (lambda ()
+                     (let ((s (format "%.5f, %.5f"
+                                      (or (plist-get e :lat) 0)
+                                      (or (plist-get e :lon) 0))))
+                       (kill-new s)
+                       (message "GNU's Eye: copied %s" s))))))
+    (list (cons "Deselect / re-orbit Earth" #'cmacs-gnuseye-deselect)
+          (cons "Back to Earth (home)" #'cmacs-gnuseye-home)
+          nil
+          (cons "Measure from here" (lambda ()
+                                      (when (fboundp 'cmacs-gnuseye-measure)
+                                        (call-interactively
+                                         #'cmacs-gnuseye-measure)))))))
+
+(defun cmacs-gnuseye--context-menu (buffer node-id path _vx _vy)
+  "Pop a context menu for the right-clicked entity (or empty space).
+Called from `cmacs-libregnum--node-context-menu' on the cmacs GMainContext;
+the actual popup is re-scheduled onto the command loop (a nested GTK menu
+loop inside the GLib dispatch would re-enter the event machinery)."
+  (let* ((e (cmacs-gnuseye--resolve-pick buffer node-id path))
+         (items (cmacs-gnuseye--context-menu-items e))
+         (title (if e (format "%s" (or (plist-get e :label) (plist-get e :id)))
+                  "GNU's Eye")))
+    (run-with-timer
+     0 nil
+     (lambda ()
+       (let ((choice (x-popup-menu
+                      t (list title
+                              (cons "" (mapcar (lambda (it)
+                                                 (if it (cons (car it) (cdr it))
+                                                   '("--")))
+                                               items))))))
+         (when (functionp choice) (funcall choice)))))))
 
 (defvar cmacs-gnuseye-inspector-mode-map
   (let ((map (make-sparse-keymap)))
