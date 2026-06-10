@@ -62,6 +62,11 @@ static const gchar *source_events[] = {
   "on_gsurf_download",
   "on_gsurf_permission",
   "on_gsurf_crash",
+  /* GNU's Eye geofence events.  Fired by `cmacs-gnuseye-geofence.el' when a
+   * tracked entity enters or leaves a geofence.  Event data: fence, entity_id,
+   * kind, label, lat, lon, distance_km, layer. */
+  "on_geofence_enter",
+  "on_geofence_exit",
   NULL
 };
 

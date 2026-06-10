@@ -661,6 +661,7 @@ OPTION_DEFAULT_OFF([cmacs-podomation], [CMacs podomation automation engine])
 OPTION_DEFAULT_OFF([cmacs-libreclaw], [CMacs libreclaw chat/Matrix client integration])
 OPTION_DEFAULT_OFF([cmacs-ai], [CMacs ai-glib AI subsystem (multi-provider chat, tools, voice)])
 OPTION_DEFAULT_OFF([cmacs-libregnum], [CMacs libregnum 3D scene buffers (raylib + GObject scene graph)])
+OPTION_DEFAULT_OFF([cmacs-gnuseye], [CMacs gnuseye live planetary globe (GNU's Eye; requires libregnum)])
 OPTION_DEFAULT_OFF([cmacs-org-ex], [CMacs org-ex interactive widgets])
 OPTION_DEFAULT_OFF([cmacs-mcp], [CMacs MCP server])
 OPTION_DEFAULT_OFF([cmacs-print], [Print to cmacs virtual printer + PDF intake])
@@ -930,6 +931,28 @@ if test "$with_cmacs_libregnum" != "no"; then
     cmacs-libregnum-scene-tree.o cmacs-libregnum-scene-gobject.o \
     cmacs-libregnum-scene-mindmap.o cmacs-libregnum-dnd.o"
 fi
+if test "$with_cmacs_gnuseye" != "no"; then
+  if test "$with_cmacs_libregnum" = "no"; then
+    AC_MSG_ERROR([--with-cmacs-gnuseye requires --with-cmacs-libregnum (the globe is rendered through libregnum)])
+  fi
+  if test "$with_cmacs_glib" = "no"; then
+    AC_MSG_ERROR([--with-cmacs-gnuseye requires --with-cmacs-glib (async feed timers run on the cmacs GMainContext)])
+  fi
+  # gnuseye (GNU's Eye) renders a live planetary globe through libregnum
+  # and ingests real-time geo feeds (satellites, aircraft, vessels,
+  # weather) over libsoup + json-glib.  Its render half
+  # (cmacs-gnuseye-globe.c) includes libregnum.h, so it reuses the
+  # libregnum/graylib include paths already folded into CMACS_CFLAGS;
+  # gnuseye itself only adds the HTTP/JSON client deps here.
+  PKG_CHECK_MODULES([CMACS_GNUSEYE_DEPS],
+    [glib-2.0 gobject-2.0 gio-2.0 libsoup-3.0 json-glib-1.0])
+  CMACS_GNUSEYE_CFLAGS="$CMACS_GNUSEYE_DEPS_CFLAGS"
+  CMACS_GNUSEYE_LIBS="$CMACS_GNUSEYE_DEPS_LIBS"
+  AC_DEFINE([HAVE_CMACS_GNUSEYE], 1, [CMacs gnuseye live planetary globe])
+  CMACS_GNUSEYE_OBJ="cmacs-gnuseye-init.o cmacs-gnuseye-defuns.o \
+    cmacs-gnuseye-geo.o cmacs-gnuseye-sgp4.o cmacs-gnuseye-http.o \
+    cmacs-gnuseye-globe.o"
+fi
 if test "$with_cmacs_gsurf" != "no"; then
   if test "$with_cmacs_glib" = "no"; then
     AC_MSG_ERROR([--with-cmacs-gsurf requires --with-cmacs-glib])
@@ -1019,6 +1042,9 @@ if test "$with_cmacs_mcp" != "no"; then
   fi
   if test "$with_cmacs_libregnum" != "no"; then
     CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-libregnum.o"
+  fi
+  if test "$with_cmacs_gnuseye" != "no"; then
+    CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-gnuseye.o"
   fi
 fi
 # CMACS Print: pure-Elisp + shell-script subsystem (no C build artefacts).
@@ -1322,6 +1348,9 @@ AC_SUBST(CMACS_AI_LIBS)
 AC_SUBST(CMACS_LIBREGNUM_OBJ)
 AC_SUBST(CMACS_LIBREGNUM_CFLAGS)
 AC_SUBST(CMACS_LIBREGNUM_LIBS)
+AC_SUBST(CMACS_GNUSEYE_OBJ)
+AC_SUBST(CMACS_GNUSEYE_CFLAGS)
+AC_SUBST(CMACS_GNUSEYE_LIBS)
 
 # CMacs API library: built as a shared library in cmacs/api/ and used
 # by both the bacon cmacsgi module and crispy scripts (in-process).

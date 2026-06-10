@@ -53,24 +53,69 @@ typedef struct
   Lisp_Object buffer;
   gchar      *path;
   bool        is_dir;
+  gint        id;
+  double      vx, vy;        /* view-local click pixel (for globe ray-pick) */
 } ClickAction;
 
 static gboolean
 click_action_idle (gpointer user)
 {
   ClickAction *a = user;
-  if (a->path && a->path[0])
-    {
-      if (a->is_dir)
-        cmacs_dispatch_safe_call2 (intern ("cmacs-libregnum--drill-to"),
-                                   a->buffer, build_string (a->path));
-      else
-        cmacs_dispatch_safe_call1 (intern ("find-file"),
-                                   build_string (a->path));
-    }
+  /* Route through one Elisp dispatcher so each mode decides what a node
+   * click means.  Its default preserves the tree behaviour (find-file /
+   * drill-to); the gnuseye globe routes to its entity detail view.  Args:
+   * (BUFFER (ID PATH IS-DIR)). */
+  cmacs_dispatch_safe_call2 (intern ("cmacs-libregnum--node-clicked"),
+                             a->buffer,
+                             list5 (make_fixnum (a->id),
+                                    (a->path && a->path[0])
+                                      ? build_string (a->path) : Qnil,
+                                    a->is_dir ? Qt : Qnil,
+                                    make_float (a->vx),
+                                    make_float (a->vy)));
   g_free (a->path);
   g_free (a);
   return G_SOURCE_REMOVE;
+}
+
+/* Non-editor right-click: same capture as a left click (id + stable path +
+ * view pixel), dispatched to the context-menu router instead.  The Elisp
+ * side must NOT pop the menu inside this dispatch (it runs during the
+ * pselect wait) -- it re-schedules onto the command loop. */
+static gboolean
+node_menu_idle (gpointer user)
+{
+  ClickAction *a = user;
+  cmacs_dispatch_safe_call2 (intern ("cmacs-libregnum--node-context-menu"),
+                             a->buffer,
+                             list5 (make_fixnum (a->id),
+                                    (a->path && a->path[0])
+                                      ? build_string (a->path) : Qnil,
+                                    a->is_dir ? Qt : Qnil,
+                                    make_float (a->vx),
+                                    make_float (a->vy)));
+  g_free (a->path);
+  g_free (a);
+  return G_SOURCE_REMOVE;
+}
+
+static void
+defer_node_menu (CmacsLibregnumView *v, CmacsLibregnumRenderCtx *ctx,
+                 gint id, double vx, double vy)
+{
+  const gchar *path = NULL;
+  gboolean is_dir = FALSE;
+  if (id >= 0)
+    cmacs_libregnum_render_ctx_node_info (ctx, (guint) id, &path, NULL,
+                                          &is_dir, NULL, NULL);
+  ClickAction *a = g_new0 (ClickAction, 1);
+  a->buffer = cmacs_libregnum_view_get_buffer (v);
+  a->path = (path && path[0]) ? g_strdup (path) : NULL;
+  a->is_dir = is_dir;
+  a->id = id;
+  a->vx = vx;
+  a->vy = vy;
+  g_main_context_invoke (cmacs_glib_get_context (), node_menu_idle, a);
 }
 
 /* Deferred editor selection sync: tell Elisp which node the viewport just
@@ -226,18 +271,21 @@ handle_click (struct frame *f, CmacsLibregnumView *v, double x, double y)
     }
 
   gint id = cmacs_libregnum_render_ctx_pick (ctx, vx, vy, vw, vh);
-  if (id < 0) return;
 
-  /* Visual feedback: select + focus the hit node. */
-  cmacs_libregnum_render_ctx_set_selected (ctx, id);
-  cmacs_libregnum_render_ctx_focus_node (ctx, id);
-  cmacs_libregnum_view_request_redraw (v);
+  /* Visual feedback: select + focus the hit node (only on a hit). */
+  if (id >= 0)
+    {
+      cmacs_libregnum_render_ctx_set_selected (ctx, id);
+      cmacs_libregnum_render_ctx_focus_node (ctx, id);
+      cmacs_libregnum_view_request_redraw (v);
+    }
 
   /* In the editor a node's "path" is its guid, so do NOT find-file it -- just
    * select it in the engine and tell Elisp so the outliner/keys follow.
    * Ctrl+click toggles the node in the multi-selection instead of replacing. */
   if (cmacs_libregnum_render_ctx_editor_active (ctx))
     {
+      if (id < 0) return;            /* editor: empty-space click is a no-op */
       /* Query the modifier state via the current GDK event so we do not need
        * to thread a modifier parameter through pgtkterm.c. */
       gboolean ctrl_held = FALSE;
@@ -276,17 +324,22 @@ handle_click (struct frame *f, CmacsLibregnumView *v, double x, double y)
       return;
     }
 
+  /* Non-editor (e.g. the gnuseye globe): defer the click onto the cmacs
+   * context -- INCLUDING an empty-globe miss (id == -1), carrying the view
+   * pixel so the globe can map it to a lat/lon (measurement, deselect). */
   const char *path = NULL;
   gboolean is_dir = FALSE;
-  if (!cmacs_libregnum_render_ctx_node_info (ctx, (guint) id, &path, NULL,
-                                             &is_dir, NULL, NULL))
-    return;
+  if (id >= 0)
+    cmacs_libregnum_render_ctx_node_info (ctx, (guint) id, &path, NULL,
+                                          &is_dir, NULL, NULL);
 
-  /* Defer the Lisp action onto the cmacs context. */
   ClickAction *a = g_new0 (ClickAction, 1);
   a->buffer = cmacs_libregnum_view_get_buffer (v);
-  a->path = g_strdup (path);
+  a->path = (path && path[0]) ? g_strdup (path) : NULL;
   a->is_dir = is_dir;
+  a->id = id;
+  a->vx = vx;
+  a->vy = vy;
   g_main_context_invoke (cmacs_glib_get_context (), click_action_idle, a);
 }
 
@@ -384,6 +437,25 @@ cmacs_libregnum_handle_motion (struct frame *f, double x, double y)
       else /* right-drag pans the viewport so you can reach things */
         cmacs_libregnum_render_ctx_pan_camera (ctx, dx, dy);
       cmacs_libregnum_view_request_redraw (v);
+    }
+  else
+    {
+      /* Idle hover: ray-pick the node under the cursor so the overlay can
+       * label it (markers with label-mode "hover").  Cheap (AABB tests);
+       * only redraw when the hovered node changes.  Harmless for scenes
+       * whose nodes use the legacy label policy. */
+      CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+      double vx, vy;
+      int vw, vh;
+      if (frame_to_view_coords (f, v, x, y, &vx, &vy, &vw, &vh))
+        {
+          gint hit = cmacs_libregnum_render_ctx_pick (ctx, vx, vy, vw, vh);
+          if (hit != cmacs_libregnum_render_ctx_get_hovered (ctx))
+            {
+              cmacs_libregnum_render_ctx_set_hovered (ctx, hit);
+              cmacs_libregnum_view_request_redraw (v);
+            }
+        }
     }
   drag_state.frame  = f;
   drag_state.last_x = x;
@@ -548,6 +620,18 @@ cmacs_libregnum_handle_button (struct frame *f, int button, int press,
                              (ctx, vx, vy, vw, vh, &gx, &gy, &gz);
                 }
               defer_context_menu (v, id, x, y, ground, gx, gy, gz);
+            }
+          else if (!moved)
+            {
+              /* Non-editor views (scenes, the gnuseye globe): right-click
+               * pops an entity / view context menu, routed like a left
+               * click (id + stable path + view pixel). */
+              double vx = 0.0, vy = 0.0;
+              int vw, vh;
+              gint id = -1;
+              if (frame_to_view_coords (f, v, x, y, &vx, &vy, &vw, &vh))
+                id = cmacs_libregnum_render_ctx_pick (ctx, vx, vy, vw, vh);
+              defer_node_menu (v, ctx, id, vx, vy);
             }
         }
       return true;

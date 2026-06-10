@@ -1,0 +1,118 @@
+#+TITLE: GNU's Eye — Adding Your Own Layer
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:2 num:t
+
+A new data source is one ~cmacs-gnuseye-define-layer~ call — pure Elisp, no
+rebuild, hot-reloadable.  Evaluate the form (e.g. ~C-M-x~), then toggle the
+layer on in the type pane.  Re-evaluating redefines it.
+
+* The 10-line layer
+
+#+begin_src elisp
+(cmacs-gnuseye-define-layer openaq
+  :title "Air quality (OpenAQ)"
+  :group 'health
+  :kind 'airq
+  :interval 600
+  :fetch
+  (lambda (cb)
+    (cmacs-gnuseye-fetch-json
+     "https://api.openaq.org/v3/latest?limit=200"
+     (lambda (data)
+       (funcall cb
+         (mapcar (lambda (r)
+                   (list :id (alist-get 'location r)
+                         :lat (alist-get 'latitude r)
+                         :lon (alist-get 'longitude r)
+                         :label (alist-get 'location r)
+                         :data r))
+                 (alist-get 'results data)))))))
+#+end_src
+
+The fetch is async: it must call ~cb~ with the entity list when the data is
+ready (here, inside the JSON callback).  It may call ~cb~ more than once
+(incremental sources) — each call replaces the layer's set.
+
+* Recipe: a filled region (alert zone / AOI)
+
+Give the entity a ~:polygon~ — a list of ~(LAT LON)~ vertices.  It draws as a
+translucent draped fill (the marker keeps the entity colour; the fill is
+washed out automatically):
+
+#+begin_src elisp
+(list :id "aoi-1" :kind 'alert :label "Restricted"
+      :lat 35.0 :lon 45.0
+      :color "#ff5a5a"
+      :polygon '((33 43) (37 43) (37 47) (33 47)))
+#+end_src
+
+* Recipe: a coverage / range ring (footprint, geofence circle)
+
+Build the ring with ~cmacs-gnuseye-circle-points~ and use it as a ~:polygon~
+(filled footprint) or convert to a ~:trail~ (outline):
+
+#+begin_src elisp
+(let ((ring (cmacs-gnuseye-circle-points 28.5 -80.6 500000.0 48)))
+  (list :id "ksc-range" :kind 'spaceport :label "KSC 500 km"
+        :lat 28.5 :lon -80.6
+        :polygon (append ring nil)))
+#+end_src
+
+* Recipe: a great-circle route
+
+#+begin_src elisp
+(list :id "route-1" :kind 'cable :label "Trans-Atlantic"
+      :lat 40.7 :lon -74.0
+      :trail (append (cmacs-gnuseye-great-circle 40.7 -74.0 51.5 -0.1 64) nil))
+#+end_src
+
+* Recipe: a moving layer (dead reckoning)
+
+Report ~:speed~ (m/s) and ~:heading~ (deg CW from north), and use the shared
+~:advance~ so markers glide between fetches and snap to truth on refresh:
+
+#+begin_src elisp
+(cmacs-gnuseye-define-layer drones
+  :title "Drones" :group 'air :kind 'aircraft :interval 5
+  :cluster t
+  :advance #'cmacs-gnuseye-dead-reckon-layer
+  :fetch (lambda (cb) (funcall cb (my-drone-fixes))))
+#+end_src
+
+* Recipe: a keyed feed (graceful-off)
+
+Declare ~:needs-key~; the layer shows "needs NAME" and cannot be enabled
+until the key resolves (env var or the keys file):
+
+#+begin_src elisp
+(cmacs-gnuseye-define-layer my-feed
+  :title "My premium feed" :group 'infra :needs-key "MY_API_KEY"
+  :interval 300
+  :fetch
+  (lambda (cb)
+    (let ((key (cmacs-gnuseye-secret "MY_API_KEY")))
+      (cmacs-gnuseye-fetch-json
+       (format "https://example.com/data?key=%s" key)
+       (lambda (data) (funcall cb (my-parse data)))))))
+#+end_src
+
+* Tips
+
+- Add your file to ~cmacs-gnuseye-layer-files~ so it loads with the globe,
+  or just ~require~ it.
+- For a brand-new ~:kind~, add an entry to ~cmacs-gnuseye-kind-styles~
+  (colour + scale) and ~cmacs-gnuseye--kind-codes~ (map to a C marker mesh).
+- Set ~:cluster t~ for dense point feeds so they read well when zoomed out,
+  and ~:opacity~ (0..1) to wash a layer back.
+- Keep fetches scoped and intervals generous; honour rate limits (cache to
+  ~$XDG_CACHE_HOME/cmacs/gnuseye/~ for static data, as the geography loader
+  does).
+- The whole entity plist is stored as the marker's pick payload, so ~:data~
+  is available verbatim in the inspector and to a ~:detail~ function.  Carry a
+  ~stream~ / ~url~ in ~:data~ to enable the inspector ~[w]~ / ~[n]~ actions.
+
+For a country-only feed, geolocate with ~cmacs-gnuseye-nearest-country~ /
+~-country-latlon~ (from ~cmacs-gnuseye-geoloc~); for an IP feed use
+~cmacs-gnuseye-geolocate-ip~.  A *non-geospatial* table is a
+~cmacs-gnuseye-define-panel~ (see [[file:reference.org][reference.org]]), rendered with the
+~cmacs-gnuseye-charts~ sparkline/treemap helpers — never on the globe.

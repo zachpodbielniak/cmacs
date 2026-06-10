@@ -340,6 +340,42 @@ on-screen; static views render only on demand."
           (cmacs-libregnum--serialise-buffer alist))
         (cmacs-libregnum--load-model)))))
 
+(defun cmacs-libregnum--node-clicked (buffer info)
+  "Dispatch a viewport node click in BUFFER.
+INFO is (ID PATH IS-DIR VX VY) from the C input layer (VX/VY are the
+view-local click pixel; ID is -1 for an empty-space miss).  This single
+entry point lets each scene/mode decide what a click means: the gnuseye
+globe opens an entity detail view or measures, while the default tree
+behaviour drills into a directory or visits a file.  Called on the cmacs
+GMainContext."
+  (when (buffer-live-p buffer)
+    (let ((id (nth 0 info)) (path (nth 1 info)) (is-dir (nth 2 info))
+          (vx (nth 3 info)) (vy (nth 4 info)))
+      (with-current-buffer buffer
+        (cond
+         ((and (fboundp 'cmacs-gnuseye--on-pick)
+               (derived-mode-p 'cmacs-gnuseye-mode))
+          ;; PATH is the marker's entity-id string, captured synchronously at
+          ;; pick time -- stable across the per-tick marker rebuilds (the
+          ;; numeric node id is NOT: it may be stale by dispatch time).
+          (cmacs-gnuseye--on-pick buffer id vx vy path))
+         (is-dir (cmacs-libregnum--drill-to buffer path))
+         ((and (stringp path) (> (length path) 0)) (find-file path)))))))
+
+(defun cmacs-libregnum--node-context-menu (buffer info)
+  "Dispatch a viewport RIGHT-click in BUFFER to the mode's context menu.
+INFO is (ID PATH IS-DIR VX VY) like `cmacs-libregnum--node-clicked'.
+Runs on the cmacs GMainContext (inside the pselect wait), so handlers must
+NOT pop a menu here -- re-schedule onto the command loop with a 0-delay
+timer (the editor does the same)."
+  (when (buffer-live-p buffer)
+    (let ((id (nth 0 info)) (path (nth 1 info))
+          (vx (nth 3 info)) (vy (nth 4 info)))
+      (with-current-buffer buffer
+        (when (and (fboundp 'cmacs-gnuseye--context-menu)
+                   (derived-mode-p 'cmacs-gnuseye-mode))
+          (cmacs-gnuseye--context-menu buffer id path vx vy))))))
+
 (defun cmacs-libregnum-up ()
   "Re-root the tree at the parent of the current root directory."
   (interactive)

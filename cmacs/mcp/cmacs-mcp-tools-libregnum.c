@@ -156,8 +156,12 @@ handle_open (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
   g_autofree gchar *path = lrg_lisp_str (json_object_has_member (a, "path")
     ? json_object_get_string_member (a, "path") : "level.rlevel");
   (void) s; (void) n; (void) u;
+  /* Require first: in a session that never loaded cmacs-libregnum.el the
+   * entry command -- and the C->Elisp click dispatchers defined alongside
+   * it -- would be void (the same class as the gnuseye click bug). */
   return lrg_eval_result (g_strdup_printf
-    ("(progn (cmacs-libregnum-editor %s) \"opened\")", path));
+    ("(progn (require 'cmacs-libregnum) (cmacs-libregnum-editor %s)"
+     " \"opened\")", path));
 }
 
 static McpToolResult *

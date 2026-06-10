@@ -52,6 +52,127 @@ extern void cmacs_libregnum_render_ctx_add_drawable
 extern void cmacs_libregnum_render_ctx_clear_drawables
                               (CmacsLibregnumRenderCtx *r);
 
+/* ── Persistent background model ─────────────────────────────────
+ * A single model drawn first every frame, behind the scene drawables,
+ * and NOT cleared by clear_drawables.  Used by the gnuseye globe to keep
+ * the textured Earth sphere resident across per-tick marker rebuilds.
+ * set_background_model takes ownership of MODEL (a GrlModel*, void* to
+ * keep this header free of raylib/libregnum types); get returns it borrowed
+ * so the builder can update its texture in place. */
+extern void  cmacs_libregnum_render_ctx_set_background_model
+                              (CmacsLibregnumRenderCtx *r, void *model);
+extern void *cmacs_libregnum_render_ctx_get_background_model
+                              (CmacsLibregnumRenderCtx *r);
+extern void  cmacs_libregnum_render_ctx_set_background_spin
+                              (CmacsLibregnumRenderCtx *r, double deg);
+
+/* Radius of an occluding sphere at the origin (the globe), or 0 for none.
+ * Labels/billboards behind this sphere's limb are culled so they do not
+ * show through from the far side. */
+extern void  cmacs_libregnum_render_ctx_set_occluder_radius
+                              (CmacsLibregnumRenderCtx *r, double radius);
+
+/* When DIST > 0 the camera orbits an off-origin focus (a selected celestial
+ * body): zoom becomes proportional to the camera-to-target distance with
+ * floor DIST.  Pass 0 to restore globe-relative zoom. */
+extern void  cmacs_libregnum_render_ctx_set_focus_min
+                              (CmacsLibregnumRenderCtx *r, double dist);
+
+/* Persistent positioned textured models (gnuseye celestial bodies), keyed
+ * by a stable string and drawn right after the background model.  `update'
+ * moves an existing body (FALSE if missing); `add' registers/replaces KEY
+ * with a GrlModel* (ownership transferred). */
+extern gboolean cmacs_libregnum_render_ctx_body_model_update
+                              (CmacsLibregnumRenderCtx *r, const gchar *key,
+                               double x, double y, double z);
+extern void  cmacs_libregnum_render_ctx_body_model_add
+                              (CmacsLibregnumRenderCtx *r, const gchar *key,
+                               gpointer model, double x, double y, double z);
+extern void  cmacs_libregnum_render_ctx_clear_body_models
+                              (CmacsLibregnumRenderCtx *r);
+
+/* Persistent static drawables (e.g. a coastline overlay): drawn every frame
+ * after the background model, NOT cleared by clear_drawables.  add transfers
+ * ownership of DRAWABLE (an LrgDrawable*, void* to keep the header clean). */
+extern void  cmacs_libregnum_render_ctx_add_static_drawable
+                              (CmacsLibregnumRenderCtx *r, void *drawable);
+extern void  cmacs_libregnum_render_ctx_clear_static_drawables
+                              (CmacsLibregnumRenderCtx *r);
+
+/* ── Filled polygon models ───────────────────────────────────────
+ * Translucent triangulated meshes (a GrlModel*, void* to keep this header
+ * free of raylib/libregnum types) draped on the globe surface: weather
+ * alert zones, choropleth country fills, aurora ovals, AOIs.  Drawn after
+ * the background model and BEFORE static drawables/markers, alpha-blended
+ * and two-sided (backface cull disabled) so the translucent surface shows
+ * from any angle and the coastlines/markers overlay it.  Two lists:
+ * `polygon' is per-tick (cleared with the markers); `static_polygon' is
+ * persistent (cleared only explicitly, like the coastline overlay).
+ * add takes ownership of MODEL. */
+extern void  cmacs_libregnum_render_ctx_add_polygon_model
+                              (CmacsLibregnumRenderCtx *r, void *model);
+extern void  cmacs_libregnum_render_ctx_clear_polygon_models
+                              (CmacsLibregnumRenderCtx *r);
+extern void  cmacs_libregnum_render_ctx_add_static_polygon_model
+                              (CmacsLibregnumRenderCtx *r, void *model);
+extern void  cmacs_libregnum_render_ctx_clear_static_polygon_models
+                              (CmacsLibregnumRenderCtx *r);
+
+/* ── Map labels ──────────────────────────────────────────────────
+ * Persistent text labels at fixed world points (country/region names),
+ * projected + drawn by the overlay.  Survive marker rebuilds. */
+extern void  cmacs_libregnum_render_ctx_add_map_label
+                              (CmacsLibregnumRenderCtx *r,
+                               float x, float y, float z, const char *text,
+                               guint8 cr, guint8 cg, guint8 cb);
+extern void  cmacs_libregnum_render_ctx_clear_map_labels
+                              (CmacsLibregnumRenderCtx *r);
+extern guint cmacs_libregnum_render_ctx_map_label_count
+                              (CmacsLibregnumRenderCtx *r);
+extern gboolean cmacs_libregnum_render_ctx_map_label_at
+                              (CmacsLibregnumRenderCtx *r, guint id,
+                               int vw, int vh, double *sx, double *sy,
+                               const char **text,
+                               guint8 *cr, guint8 *cg, guint8 *cb);
+extern double cmacs_libregnum_render_ctx_camera_distance
+                              (CmacsLibregnumRenderCtx *r);
+
+/* ── Billboards ──────────────────────────────────────────────────
+ * Camera-facing textured quads (e.g. country flags) at fixed world points.
+ * add takes ownership of TEXTURE (a GrlTexture*, void* to keep the header
+ * clean).  Drawn each frame; the caller's render path may gate by zoom. */
+extern void  cmacs_libregnum_render_ctx_add_billboard
+                              (CmacsLibregnumRenderCtx *r,
+                               float x, float y, float z,
+                               void *texture, float size);
+extern void  cmacs_libregnum_render_ctx_clear_billboards
+                              (CmacsLibregnumRenderCtx *r);
+extern guint cmacs_libregnum_render_ctx_billboard_count
+                              (CmacsLibregnumRenderCtx *r);
+
+/* ── Per-node label policy ───────────────────────────────────────
+ * Generalises the overlay's label filter.  LEGACY (-1) keeps the original
+ * behaviour (label directories + the selected node); the others let a
+ * scene builder pick per node.  HOVER labels the node under the cursor
+ * (set via set_hovered) plus the selection. */
+typedef enum
+{
+  CMACS_LIBREGNUM_LABEL_LEGACY   = -1,
+  CMACS_LIBREGNUM_LABEL_NEVER    = 0,
+  CMACS_LIBREGNUM_LABEL_SELECTED = 1,
+  CMACS_LIBREGNUM_LABEL_HOVER    = 2,
+  CMACS_LIBREGNUM_LABEL_ALWAYS   = 3
+} CmacsLibregnumLabelMode;
+
+extern void cmacs_libregnum_render_ctx_set_node_label_mode
+                              (CmacsLibregnumRenderCtx *r, gint id, int mode);
+extern int  cmacs_libregnum_render_ctx_get_node_label_mode
+                              (CmacsLibregnumRenderCtx *r, gint id);
+extern void cmacs_libregnum_render_ctx_set_hovered
+                              (CmacsLibregnumRenderCtx *r, gint id);
+extern gint cmacs_libregnum_render_ctx_get_hovered
+                              (CmacsLibregnumRenderCtx *r);
+
 /* ── Scene node model ────────────────────────────────────────────
  * A scene builder records one entry per pickable/labelable node,
  * parallel to the drawables.  Node id == insertion index.  Cleared

@@ -73,6 +73,7 @@ configure_flags := """
     --with-cmacs-piper
     --with-cmacs-cintrospect
     --with-cmacs-libregnum
+    --with-cmacs-gnuseye
     --with-cmacs-gsurf
     --enable-cmacs-cpatch
 """

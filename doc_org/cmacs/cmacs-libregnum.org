@@ -175,6 +175,39 @@ Mouse:
 - *Left-drag* still orbits, *right-drag* pans, *scroll* zooms.  A
   click is distinguished from a drag by whether the pointer moved.
 
+** Click dispatch & the loading invariant
+
+All viewport clicks are handled in C (=cmacs-libregnum-input.c=): the click
+ray-picks a node synchronously, then *defers* a dispatch onto the cmacs
+GMainContext to one of four Elisp entry points — =cmacs-libregnum--node-clicked=
+(scenes + gnuseye, with the node id, its *path string*, is-dir flag, and the
+view-local click pixel), =cmacs-libregnum-editor--on-select=,
+=cmacs-libregnum-editor--drop=, and =cmacs-libregnum-editor--context-menu=.
+
+Two invariants follow from this design — both learned the hard way:
+
+1. *The dispatcher's file must be loaded before a view can exist.*  The C
+   side calls =intern= + =safe_call=, which *mutes* a =void-function= error
+   — the click dies silently (the only trace is an "Error muted by
+   safe_call" line in =*Messages*=).  Every entry point that creates a view
+   must guarantee the load: =cmacs-gnuseye.el= ~(require 'cmacs-libregnum)~
+   for exactly this reason (a globe-only session never loaded the
+   dispatcher and *every* click was dropped); the editor's dispatchers live
+   in the same file as its =cmacs-libregnum-editor= entry command, and the
+   MCP =lrg_editor_open= tool requires the file before calling it.
+2. *Numeric node ids go stale across scene rebuilds; path strings do not.*
+   The dispatch is deferred, so anything that rebuilds the node table
+   between pick and dispatch (gnuseye's smooth tick re-renders moving
+   layers every ~0.4 s) renumbers the ids.  gnuseye therefore resolves
+   clicks by the pick-time *path* (its entity id) and uses the numeric id
+   only as a fast hint.  The editor is safe by construction: its node table
+   only changes on explicit edit operations, and the engine-side selection
+   (=set_selected=) happens *synchronously* at click time — the deferred
+   Elisp call only syncs the outliner/inspector panels.
+
+When debugging "clicks do nothing": check =*Messages*= for muted
+=safe_call= errors first.
+
 Keyboard (a selection cursor highlights one node; the camera eases
 to frame it, and its name is echoed):
 

@@ -1,0 +1,68 @@
+#+TITLE: GNU's Eye — Comprehensive Reference
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:2 num:t
+
+This directory is the *comprehensive reference* for GNU's Eye (~gnuseye~),
+the live planetary situational-awareness globe.  The narrative overview and
+quick-start live in [[file:../cmacs-gnuseye.org][../cmacs-gnuseye.org]] (and the
+mirrored Info chapter); this directory drills into the full detail:
+
+- [[file:layers.org][layers.org]] — the complete catalogue of every shipped data layer: its
+  category, data source and endpoint, whether it needs a key, refresh
+  interval, the geometry it draws, the marker kind(s) it uses, and every
+  configuration variable.
+- [[file:reference.org][reference.org]] — the API surface: the entity-plist schema, the
+  ~cmacs-gnuseye-define-layer~ keys, every C primitive / DEFUN with its
+  signature, the render-context additions, the MCP tools, all keybindings
+  (vanilla + Doom/Evil), and the API-key resolution rules.
+- [[file:extending.org][extending.org]] — how to add your own data layer in ~10 lines of Elisp,
+  with worked recipes for points, filled regions, rings/footprints,
+  great-circle routes, dead-reckoned moving layers, and keyed feeds.
+
+The *v2 feature modules* (the 2D flat map, measurement, heatmap/opacity,
+export, watchlists, live news, the disk history store + backtesting, the
+LLM analytics engines, and the ~geoloc~ / ~charts~ / ~history~ building
+blocks) are documented in [[file:reference.org][reference.org]] under *v2 feature modules* and
+*C primitives*; the v2 data layers (~cyber~, ~ucdp~, ~disasters~) are in
+[[file:layers.org][layers.org]].  The narrative overview lives in
+[[file:../cmacs-gnuseye.org][../cmacs-gnuseye.org]] (section *v2 additions*) and the Info chapter
+[[file:../../doc/cmacs/gnuseye/gnuseye.texi][doc/cmacs/gnuseye/gnuseye.texi]].
+
+* What GNU's Eye is
+
+A Google-Earth / Palantir-style 3D globe embedded in an Emacs buffer,
+rendered through the *libregnum* engine, that overlays everything trackable
+on and above the Earth — satellites, aircraft, vessels, earthquakes, fires,
+launches, natural events, weather alert zones, aurora, geolocated news, and
+more — as clickable, heading-oriented markers, filled regions, rings, and
+arcs on a sun-lit, politically-mapped sphere.
+
+Its organising principle is *extensibility*: every data source is a *layer
+defined in Elisp* via ~cmacs-gnuseye-define-layer~, over a small, stable C
+boundary.  Adding a feed is one macro call — no rebuild, hot-reloadable.
+
+* Design pillars
+
+- *Keyless-first.*  Every feed that has a no-key source ships ready to
+  enable; keyed feeds declare ~:needs-key~ and degrade gracefully (they stay
+  off and show "needs KEY" until configured).
+- *Elisp owns data, C owns rendering + geo math.*  A new feed never touches
+  C.  The only C is the render half, geodesy, satellite propagation, async
+  HTTP, and the click router.
+- *Everything off by default; opt in by category.*  The toggle pane opens to
+  a short list of collapsible categories; you enable exactly what you want.
+- *Disable means gone, atomically.*  Turning a layer off cancels its timer,
+  clears all its drawables, and invalidates any in-flight fetch (a
+  generation token) so a late reply can never re-draw it.
+- *Dead-reckoning everywhere.*  Every moving layer glides between fetches
+  from its heading + speed and course-corrects on the next fetch.
+- *One new render primitive.*  Rings, routes, trails, clustering, and
+  heatmaps are all Elisp on the existing marker/arc/polygon primitives;
+  filled spherical polygons are the only primitive added beyond markers.
+
+* Build
+
+Enable with ~--with-cmacs-gnuseye~ (requires ~--with-cmacs-libregnum~ and
+~--with-cmacs-glib~).  Part of the standard cmacs flag set — ~just
+bootstrap~ and the container build enable it by default.  Open with
+~M-x cmacs-gnuseye~.

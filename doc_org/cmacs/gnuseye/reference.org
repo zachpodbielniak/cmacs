@@ -1,0 +1,270 @@
+#+TITLE: GNU's Eye — API & Interaction Reference
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:2 num:t
+
+* Entity plist schema
+
+A layer's fetch returns a list of entity plists; only ~:id~, ~:lat~, ~:lon~
+are required.
+
+| Key          | Meaning |
+|--------------+---------|
+| ~:id~        | stable per-entity key (diff + pick).  Required. |
+| ~:lat :lon~  | degrees, WGS84.  Required. |
+| ~:alt~       | metres above the sphere (default 0). |
+| ~:heading~   | degrees CW from true north; nil/-1 = unoriented. |
+| ~:speed~     | m/s (drives dead reckoning; shown in the inspector). |
+| ~:kind~      | symbol → icon/colour (see kinds below). |
+| ~:label~     | short on-globe label. |
+| ~:color~     | "#rrggbb" or "#rrggbbaa" override; nil = from kind. |
+| ~:scale~     | size multiplier (default 1.0). |
+| ~:trail~     | list of (LAT LON [ALT]) → polyline. |
+| ~:polygon~   | list of (LAT LON) → filled translucent region. |
+| ~:label-mode~ | 0 never / 1 selected / 2 hover (default) / 3 always. |
+| ~:detail~    | (lambda (ENTITY) …) per-entity detail override. |
+| ~:data~      | opaque record surfaced in the inspector (escape hatch). |
+| ~:ts~        | epoch seconds of this fix. |
+
+** Marker kinds
+
+Built-in: ~satellite aircraft ship quake fire launch storm camera city
+generic~.  Extended (Phase 2+): ~event volcano alert cyber outage cable port
+health radiation airq displaced base spaceport hotspot~.  Each kind has a
+default colour + scale in ~cmacs-gnuseye-kind-styles~ and a C marker code in
+~cmacs-gnuseye--kind-codes~ (extended kinds reuse the nearest of the 10 C
+meshes until they get bespoke icons).
+
+* Defining a layer
+
+~(cmacs-gnuseye-define-layer NAME &rest PROPS)~ with PROPS:
+
+| Key          | Meaning |
+|--------------+---------|
+| ~:title~     | human title (toggle pane + list). |
+| ~:group~     | category symbol (astronomical/air/marine/weather/natural/space-weather/conflict/infra/health/media/markets). |
+| ~:kind~      | default marker kind for the layer. |
+| ~:fetch~     | ~(lambda (CALLBACK) …)~ that calls ~(CALLBACK ENTITIES)~ async. |
+| ~:interval~  | refresh seconds (nil = fetch once). |
+| ~:default-on~ | non-nil to *allow* auto-enable (the dashboard still starts off). |
+| ~:detail~    | ~(lambda (ENTITY) …)~ inspector override. |
+| ~:needs-key~ | env-var name the layer needs; shown "needs KEY" until set. |
+| ~:advance~   | ~(lambda (ENTITIES DT NOW) …)~ smooth-motion hook; use ~cmacs-gnuseye-dead-reckon-layer~ for generic moving layers. |
+| ~:cluster~   | non-nil to collapse dense markers into count badges when zoomed out. |
+| ~:opacity~   | marker/polygon alpha multiplier in [0,1] (default 1.0). |
+
+* Elisp helpers
+
+- Fetch: ~cmacs-gnuseye-fetch-json~ ~(URL CALLBACK &optional HEADERS ARRAY-TYPE)~,
+  ~cmacs-gnuseye-fetch-text~ ~(URL CALLBACK &optional HEADERS)~.
+- Secrets: ~cmacs-gnuseye-secret~ ~(NAME &optional DEFAULT)~.
+- Motion: ~cmacs-gnuseye-dead-reckon~ ~(LAT LON SPEED-MS HEADING-DEG DT)~ →
+  ~(LAT2 . LON2)~; ~cmacs-gnuseye-dead-reckon-layer~ (a ready ~:advance~).
+- Geometry: ~cmacs-gnuseye-destination~ ~(LAT LON BRG-DEG DIST-M)~ →
+  ~(LAT . LON)~; ~cmacs-gnuseye-circle-points~ ~(LAT LON RADIUS-M &optional N)~
+  → vector of [LAT LON] (range/footprint ring).
+- Choropleth: ~cmacs-gnuseye-choropleth~ ~(BUFFER SCORES &optional ALPHA STEP)~
+  where SCORES is a hash/alist ISO-A3 → 0..1; ~cmacs-gnuseye-choropleth-clear~.
+
+* C primitives (DEFUNs)
+
+- Lifecycle: ~cmacs-gnuseye-attach~ ~(BUFFER W H &optional TEXTURE)~,
+  ~-detach~, ~-attached-p~, ~-supported-p~, ~-snapshot~ ~(BUFFER PATH)~.
+- Entities: ~cmacs-gnuseye-set-entities~ ~(BUFFER LAYER VECTOR)~,
+  ~-clear-layer~ ~(BUFFER LAYER)~, ~-entity-at~ ~(BUFFER NODE-ID)~.
+- Camera: ~cmacs-gnuseye-fly-to~ ~(BUFFER LAT LON &optional RANGE ANIMATE)~,
+  ~-set-spin~, ~-view-center~ ~(BUFFER)~ → ~(LAT LON DISTANCE)~, ~-redraw~.
+- Geography: ~cmacs-gnuseye-add-coastline~ ~(BUFFER LATS LONS &optional COLOR)~,
+  ~-clear-coastlines~, ~-add-label~, ~-clear-labels~, ~-label-count~,
+  ~-add-flag~, ~-clear-flags~, ~-flag-count~.
+- Polygons: ~cmacs-gnuseye-add-polygon~ ~(BUFFER LATS LONS &optional COLOR
+  PERSISTENT)~, ~-clear-polygons~ ~(BUFFER &optional PERSISTENT)~.
+- Day/night: ~cmacs-gnuseye-set-sun-time~ ~(BUFFER &optional TIME)~.
+- Projection (v2): ~cmacs-gnuseye-set-projection~ ~(BUFFER FLAT)~ (3D globe ↔
+  2D flat map), ~-flat-p~ ~(BUFFER)~, and ~cmacs-gnuseye-screen-to-globe~
+  ~(BUFFER VX VY)~ → ~(LAT LON)~ (camera-ray globe pick, for measurement).
+- Geodesy: ~cmacs-gnuseye-latlon-to-xyz~, ~-xyz-to-latlon~, ~-haversine~,
+  ~-bearing~, ~-great-circle~, ~-heading-vector~.
+- Satellites: ~cmacs-gnuseye-tle-parse~, ~-sat-propagate~, ~-sat-track~.
+
+* v2 feature modules
+
+Loaded via ~cmacs-gnuseye-feature-files~.  Each is self-contained:
+
+- ~cmacs-gnuseye-geoloc~ — ~cmacs-gnuseye-country-centroids~,
+  ~-nearest-country~ ~(LAT LON &optional MAX-KM)~, ~-country-latlon~ ~(ISO)~,
+  and ~-geolocate-ip~ ~(IP CALLBACK)~ (keyless, disk-cached).
+- ~cmacs-gnuseye-charts~ — ~cmacs-gnuseye-chart-sparkline~ ~(VALUES &optional W
+  H COLOR)~ and ~-chart-treemap~ ~(PAIRS &optional W H)~ (svg, unicode fallback).
+- ~cmacs-gnuseye-history~ — the disk time-series store:
+  ~cmacs-gnuseye-history-load~ ~(SINCE UNTIL &optional LAYER)~, ~-history-span~,
+  capture auto-enabled off the reindex hook (~cmacs-gnuseye-history-enabled~).
+- ~cmacs-gnuseye-viz~ — ~cmacs-gnuseye-heatmap-layer~ (~H~) / ~-heatmap-clear~,
+  ~-set-layer-opacity~, ~-sat-footprints~.
+- ~cmacs-gnuseye-measure~ — ~cmacs-gnuseye-measure~ (~M~): two-click
+  great-circle distance + bearing with the arc drawn.
+- ~cmacs-gnuseye-export~ — ~cmacs-gnuseye-export-geojson~ / ~-csv~ / ~-png~.
+- ~cmacs-gnuseye-watch~ — ~cmacs-gnuseye-watch-add~ ~(NAME LAYER FIELD OP
+  VALUE)~ / ~-watch-clear~ / ~-alerts~ (threshold alerts via ~cmacs-notify~).
+- ~cmacs-gnuseye-news~ — ~cmacs-gnuseye-news~ (~N~): RSS/Atom aggregation,
+  clickable headlines (~cmacs-gnuseye-news-feeds~).
+- ~cmacs-gnuseye-replay~ — also ~cmacs-gnuseye-replay-from-history~ ~(HOURS)~
+  and ~cmacs-gnuseye-backtest~ ~(HOURS)~ over the disk store.
+- ~cmacs-gnuseye-intel~ — also the engines ~cmacs-gnuseye-ai-deduce~,
+  ~-ai-market-implication~, ~-ai-resilience~, ~-ai-country-brief~ (cmacs-ai).
+- ~cmacs-gnuseye-markets~ — ~cmacs-gnuseye-define-panel~ + the dashboard.
+
+The 2D flat map is entered with ~cmacs-gnuseye-view-2d~ (~2~) and left
+with ~cmacs-gnuseye-view-3d~ (~3~); ~cmacs-gnuseye-toggle-2d~ still toggles.
+
+v3 solar system: ~cmacs-gnuseye-ephem-body~ ~(BODY &optional TIME)~ →
+~(:sublat :sublon :dist-km)~ for ~sun moon mercury…neptune~ (local Standish /
+Meeus ephemerides; ~cmacs-gnuseye-ephem-gmst~ exposed too);
+~cmacs-gnuseye-celestial-shell-alt~ ~(DIST-KM)~ maps a real distance to the
+compressed-shell ~:alt~; ~cmacs-gnuseye-home~ (~0~) resets to the Earth view;
+defcustoms ~cmacs-gnuseye-probes~ / ~-asteroids~ pick the Horizons bodies.
+
+* Render-context additions (libregnum)
+
+- Persistent *background model* (the Earth sphere) drawn first and not
+  cleared by ~clear_drawables~.
+- *Static drawables* (coastlines) and *static / per-tick polygon-model
+  lists* (fills), drawn after the globe, the fills alpha-blended + two-sided.
+- Per-node *label mode* (never/selected/hover/always) and a *click router*.
+
+* Keybindings
+
+Globe viewport (~cmacs-gnuseye-mode~, Evil ~emacs~ state so single keys
+reach the map; mouse: drag orbit, scroll zoom, right-drag pan, hover id,
+click select):
+
+| Key | Action |
+|-----+--------|
+| ~e~ | entity list |
+| ~i~ | inspector |
+| ~l~ | layer / type pane |
+| ~s~ | search list |
+| ~F~ | filter by kind |
+| ~c~ | clear filters |
+| ~g~ | refresh all |
+| ~f~ | fly to lat/lon |
+| ~/~ | jump / command palette |
+| ~S~ | live stats pane |
+| ~m~ / ~'~ | bookmark set / jump |
+| ~O~ | start a tour |
+| ~G~ | geofence here |
+| ~T~ | replay (time-scrub) |
+| ~A~ | AI region brief |
+| ~C~ | country-instability choropleth |
+| ~.~ | track selected entity |
+| ~D~ | market dashboards |
+| ~2~ | 2D flat map |
+| ~3~ | back to the 3D globe |
+| ~0~ / ~Home~ | go back to Earth (reset view from the solar system) |
+| ~u~ / ~Esc~ | deselect + re-orbit Earth |
+| ~+~ / ~-~ | keyboard zoom (altitude-proportional) |
+| ~M~ | measure (two-click distance + bearing) |
+| ~H~ | density heatmap of a layer |
+| ~N~ | live news panel |
+| ~?~ | legend |
+| ~q~ | quit |
+
+v2 commands (no default key): ~cmacs-gnuseye-export-geojson~ / ~-csv~ /
+~-png~; ~cmacs-gnuseye-watch-add~ / ~-watch-clear~ / ~-alerts~;
+~cmacs-gnuseye-set-layer-opacity~; ~cmacs-gnuseye-sat-footprints~;
+~cmacs-gnuseye-replay-from-history~ / ~cmacs-gnuseye-backtest~;
+~cmacs-gnuseye-ai-deduce~ / ~-ai-market-implication~ / ~-ai-resilience~ /
+~-ai-country-brief~; ~cmacs-gnuseye-measure~.
+
+Toggle pane (~cmacs-gnuseye-layers-mode~, motion state): ~SPC~/~RET~/~t~
+expand a category or toggle a layer, ~g~ refresh, ~q~ quit, mouse-1 acts on
+the row.  Entity list (~cmacs-gnuseye-list-mode~, motion): ~RET~ select, ~s~
+search, ~f~ filter, ~c~ clear, ~g~ refresh.  Inspector
+(~cmacs-gnuseye-inspector-mode~, normal): ~f~/~RET~ fly-to, ~q~ close, plus
+any feature-registered actions (see ~cmacs-gnuseye-register-inspector-action~).
+
+* Interaction & intelligence commands
+
+- Search: ~cmacs-gnuseye-jump~ (palette over entities + places + commands);
+  list search matches all ~:data~ values.
+- Stats: ~cmacs-gnuseye-stats~.
+- Bookmarks/tours: ~cmacs-gnuseye-bookmark-set~ / ~-bookmark-jump~,
+  ~cmacs-gnuseye-tour-start~ / ~-tour-stop~ / ~-tour-from-bookmarks~.
+- Geofence: ~cmacs-gnuseye-add-geofence~ ~(NAME LAT LON RADIUS-KM &optional
+  KINDS)~, ~-geofence-here~, ~-remove-geofence~.  Emits podomation
+  ~on_geofence_enter~ / ~on_geofence_exit~.
+- Replay: ~cmacs-gnuseye-replay-toggle~ then ~<~/~>~/~SPC~/~=~.
+- Intelligence: ~cmacs-gnuseye-intel-cii~ (+ ~-cii-clear~),
+  ~cmacs-gnuseye-ai-ask-entity~ (inspector ~a~ — one-shot analysis),
+  ~cmacs-gnuseye-compose-about-entity~ (inspector ~c~ — opens a full
+  ~cmacs-ai-chat~ buffer with the entity's context pre-filled in the
+  Compose section, so follow-up questions carry the conversation),
+  ~-ai-brief~ (cmacs-ai; graceful when absent); the ~hotspots~ layer is
+  cross-source correlation.  Both ~a~ and ~c~ resolve the entity *shown in
+  the inspector* (~cmacs-gnuseye-inspector-entity~), so they work on marker
+  selections, clicked countries (population/GDP/World-Bank rows feed the
+  prompt), and celestial bodies alike.
+- Follow / detail: ~cmacs-gnuseye-track-toggle~,
+  ~-inspector-open-stream~, ~-inspector-open-news~.
+- Inspector actions are pluggable via
+  ~cmacs-gnuseye-register-inspector-action~ ~(KEY LABEL FN &optional PRED)~
+  (bound in the major-mode map AND Evil normal/motion state, so they work
+  under Doom).
+- *Country details*: click a country on the globe (off any marker) and the
+  inspector shows its properties — instant Natural Earth figures (population
+  est, GDP est, income group, continent) plus live World Bank indicators
+  (population, GDP, GDP/capita, unemployment, life expectancy, inflation;
+  keyless, latest year, cached).  Ocean clicks deselect as before.
+  Implemented in ~cmacs-gnuseye-country.el~ (point-in-country over the cached
+  admin-0 polygons).
+- *Click resolution* survives the per-tick marker rebuilds: the pick carries
+  the entity-id string (stable), so clicking an aircraft/planet always
+  selects it even while layers re-render — including celestial bodies.
+  Every click reports its outcome in the echo area (~selected X~,
+  ~cluster of N — zooming in~, or ~click did not resolve~ with the values).
+- *Right-click context menu*: right-click an entity (no drag) to pop a
+  native menu — *Fly to*, *Inspect (no fly)*, every registered inspector
+  action whose predicate passes (*Ask AI*, *Compose*, *Track*, …), and
+  *Copy coordinates*; right-clicking empty space offers *Deselect*, *Back
+  to Earth*, and *Measure*.  Same deferred-dispatch design as the editor's
+  menu (the popup is re-scheduled onto the command loop).
+- *Orbit the body*: selecting a celestial body (click or list ~RET~) now
+  re-targets the camera onto the body itself via ~cmacs-gnuseye-orbit-point~
+  ~(BUFFER LAT LON ALT-M RADIUS &optional ANIMATE)~ — drag revolves around
+  *it*, and zoom approaches *it* asymptotically (floor just outside its
+  surface) instead of Earth's.  Any fly-to / ~0~ home / deselect restores
+  the Earth orbit and globe-relative zoom.
+- *Loading invariant*: the C input layer dispatches clicks to
+  ~cmacs-libregnum--node-clicked~ (defined in ~cmacs-libregnum.el~) through
+  ~safe_call~, which *mutes* a void-function error — so ~cmacs-gnuseye.el~
+  requires ~cmacs-libregnum~ to guarantee the dispatcher exists.  If clicks
+  ever "do nothing", check ~*Messages*~ for "Error muted by safe_call"
+  lines first.  (Full dispatch architecture, including why the level editor
+  is immune by construction: the *Click dispatch* section of
+  [[file:../cmacs-libregnum.org][cmacs-libregnum.org]].)
+- ~C-w~ in the globe viewport is the Evil *window map* (the globe runs in
+  Emacs state, where ~C-w~ would otherwise be ~kill-region~), so Doom's
+  ~C-w h/j/k/l~ window movement works from the render window.
+- Panels: ~cmacs-gnuseye-define-panel~, ~cmacs-gnuseye-panel~,
+  ~cmacs-gnuseye-dashboard~.
+
+* MCP tools
+
+With ~--with-cmacs-mcp~: ~gnuseye_open~, ~gnuseye_list_layers~,
+~gnuseye_toggle_layer~, ~gnuseye_fly_to~, ~gnuseye_refresh~,
+~gnuseye_query_entities~ (kind/bbox → JSON), ~gnuseye_brief~,
+~gnuseye_add_geofence~, ~gnuseye_cii~.  The MCP ~eval~ tool reaches every
+gnuseye DEFUN directly.
+
+* API keys
+
+~cmacs-gnuseye-secret~ resolves a name in order: environment variable →
+~$XDG_CONFIG_HOME/cmacs/gnuseye/keys.el~ (an alist; keep out of version
+control) → default.  Names in use: ~OPENSKY_USER~, ~OPENSKY_PASS~,
+~FIRMS_MAP_KEY~.  A layer declaring ~:needs-key~ stays off, showing "needs
+NAME", until the key is present.
+
+* User config directory
+
+~cmacs-gnuseye--config-dir~ → ~$XDG_CONFIG_HOME/cmacs/gnuseye/~ holds user
+config (keys, and — as the interaction phases land — bookmarks, tours, and
+geofences).

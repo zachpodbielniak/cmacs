@@ -75,6 +75,12 @@ cmacs_libregnum_render_window_acquire (gchar **error_msg)
   shared_engine = lrg_engine_get_default ();
   lrg_engine_set_window (shared_engine, LRG_WINDOW (shared_window));
 
+  /* Extend the projection far cull plane (default 1000) so the gnuseye
+   * solar-system chart -- linearly true distances at 290 units/AU, Neptune
+   * ~8700 out -- renders without clipping.  Depth precision near the globe
+   * stays ample (near plane 0.01).  Runtime API, raylib >= 5.5. */
+  rlSetClipPlanes (0.01, 20000.0);
+
   GError *eng_err = NULL;
   if (!lrg_engine_startup (shared_engine, &eng_err))
     {
@@ -126,6 +132,7 @@ typedef struct
   int      parent;        /* node index, -1 for root */
   float    x, y, z;       /* center */
   float    hw, hh, hd;    /* half-extents (AABB) */
+  int      label_mode;    /* CmacsLibregnumLabelMode; -1 == legacy default */
 } CmacsNode;
 
 static void
@@ -134,6 +141,38 @@ cmacs_node_clear (gpointer p)
   CmacsNode *n = p;
   g_clear_pointer (&n->path, g_free);
   g_clear_pointer (&n->name, g_free);
+}
+
+/* A persistent map label (country/region name) at a fixed world point,
+ * projected + drawn by the overlay.  Parallel to but independent of the
+ * pickable node table, so it survives marker rebuilds. */
+typedef struct
+{
+  float    x, y, z;
+  gchar   *text;        /* owned */
+  guint8   r, g, b;
+} CmacsMapLabel;
+
+static void
+cmacs_map_label_clear (gpointer p)
+{
+  CmacsMapLabel *l = p;
+  g_clear_pointer (&l->text, g_free);
+}
+
+/* A persistent camera-facing billboard (e.g. a country flag) at a fixed
+ * world point, drawn each frame via raylib DrawBillboard. */
+typedef struct
+{
+  float       x, y, z, size;
+  GrlTexture *tex;       /* owned */
+} CmacsBillboard;
+
+static void
+cmacs_billboard_clear (gpointer p)
+{
+  CmacsBillboard *b = p;
+  g_clear_object (&b->tex);
 }
 
 /* ── Per-view render context (opaque to view.c) ────────────────── */
@@ -172,6 +211,23 @@ typedef struct
 } CmacsEditorModel;
 #endif
 
+/* A persistent positioned textured model (gnuseye celestial body). */
+typedef struct
+{
+  gchar    *key;
+  GrlModel *model;     /* owned */
+  double    x, y, z;
+} BodyModel;
+
+static void
+body_model_free (gpointer p)
+{
+  BodyModel *b = p;
+  g_free (b->key);
+  g_clear_object (&b->model);
+  g_free (b);
+}
+
 struct CmacsLibregnumRenderCtx
 {
   LrgRenderer    *renderer;
@@ -204,6 +260,51 @@ struct CmacsLibregnumRenderCtx
   LrgGameTemplate  *game;          /* borrowed from loaded_game */
   LrgGameHost      *game_host;     /* owned (CmacsFboGameHost) */
   LrgInputSoftware *game_input;    /* owned; registered with input manager */
+
+  /* ── Persistent background model ──────────────────────────────────
+   * Drawn first every frame (behind the per-tick scene drawables) and
+   * NOT cleared by clear_drawables.  Used by the gnuseye globe: its
+   * textured Earth sphere lives here so it survives marker rebuilds.
+   * Owned by the ctx; the builder keeps its own refs for texture updates. */
+  GrlModel         *background_model;     /* owned, or NULL */
+  float             background_spin_deg;  /* rotation about +Y, degrees */
+
+  /* Occluding sphere radius at the origin (the gnuseye globe), or 0 for
+   * none.  Labels/billboards on the FAR side of this sphere (behind the
+   * limb) are culled so they do not show through the globe. */
+  double            occluder_radius;
+
+  /* When > 0 the camera is orbiting an OFF-ORIGIN focus (a selected
+   * celestial body): zoom becomes proportional to the distance to the
+   * TARGET with this floor, instead of to the altitude above the origin
+   * sphere.  Reset to 0 whenever the camera is re-aimed at the globe
+   * (gnuseye camera_goto / home / deselect). */
+  double            focus_min_dist;
+
+  /* Persistent static drawables (e.g. the gnuseye coastline overlay):
+   * drawn every frame after the background model and NOT cleared by
+   * clear_drawables.  Owned (g_object_unref per element). */
+  GPtrArray        *static_drawables;
+
+  /* Positioned textured models that persist across marker rebuilds (the
+   * gnuseye celestial bodies: textured planet spheres).  Keyed BodyModel
+   * entries, drawn right after the background model.  Owned. */
+  GPtrArray        *body_models;
+
+  /* Filled translucent polygon models (GrlModel*) draped on the globe:
+   * `polygon_models' is per-tick (alert zones), `static_polygon_models' is
+   * persistent (choropleth/aurora).  Owned (g_object_unref per element). */
+  GPtrArray        *polygon_models;
+  GPtrArray        *static_polygon_models;
+
+  /* Persistent map labels (country/region names), drawn by the overlay. */
+  GArray           *map_labels;       /* CmacsMapLabel */
+
+  /* Persistent camera-facing billboards (e.g. country flags). */
+  GArray           *billboards;       /* CmacsBillboard */
+
+  /* Hovered scene node id (-1 none); drives hover label policy. */
+  gint              hovered;
 
 #ifdef LRG_BUILD_EDITOR
   /* Editor / level authoring.  When `editor' is non-NULL the view hosts an
@@ -263,8 +364,17 @@ cmacs_libregnum_render_ctx_new (int w, int h)
   r->width  = w;
   r->height = h;
   r->selected = -1;
+  r->hovered = -1;
   r->renderer  = lrg_renderer_new (LRG_WINDOW (shared_window));
   r->drawables = g_ptr_array_new_with_free_func (g_object_unref);
+  r->static_drawables = g_ptr_array_new_with_free_func (g_object_unref);
+  r->body_models = g_ptr_array_new_with_free_func (body_model_free);
+  r->polygon_models = g_ptr_array_new_with_free_func (g_object_unref);
+  r->static_polygon_models = g_ptr_array_new_with_free_func (g_object_unref);
+  r->map_labels = g_array_new (FALSE, TRUE, sizeof (CmacsMapLabel));
+  g_array_set_clear_func (r->map_labels, cmacs_map_label_clear);
+  r->billboards = g_array_new (FALSE, TRUE, sizeof (CmacsBillboard));
+  g_array_set_clear_func (r->billboards, cmacs_billboard_clear);
   r->nodes = g_array_new (FALSE, TRUE, sizeof (CmacsNode));
   g_array_set_clear_func (r->nodes, cmacs_node_clear);
 
@@ -310,6 +420,13 @@ cmacs_libregnum_render_ctx_free (CmacsLibregnumRenderCtx *r)
   g_clear_object (&r->lighting_material);
 #endif
   if (r->fbo_valid) UnloadRenderTexture (r->fbo);
+  g_clear_object (&r->background_model);
+  if (r->polygon_models) g_ptr_array_unref (r->polygon_models);
+  if (r->static_polygon_models) g_ptr_array_unref (r->static_polygon_models);
+  if (r->static_drawables) g_ptr_array_unref (r->static_drawables);
+  if (r->body_models) g_ptr_array_unref (r->body_models);
+  if (r->map_labels) g_array_free (r->map_labels, TRUE);
+  if (r->billboards) g_array_free (r->billboards, TRUE);
   g_clear_object (&r->camera);
   if (r->drawables) g_ptr_array_unref (r->drawables);
   if (r->nodes) g_array_free (r->nodes, TRUE);
@@ -345,6 +462,294 @@ cmacs_libregnum_render_ctx_add_drawable (CmacsLibregnumRenderCtx *r,
   g_ptr_array_add (r->drawables, drawable);
 }
 
+/* ── Persistent background model (gnuseye globe) ─────────────────── */
+
+void
+cmacs_libregnum_render_ctx_set_background_model (CmacsLibregnumRenderCtx *r,
+                                                 void *model)
+{
+  if (!r) return;
+  if (r->background_model == (GrlModel *) model) return;
+  g_clear_object (&r->background_model);
+  r->background_model = (GrlModel *) model;   /* takes ownership */
+}
+
+void *
+cmacs_libregnum_render_ctx_get_background_model (CmacsLibregnumRenderCtx *r)
+{
+  return r ? r->background_model : NULL;
+}
+
+void
+cmacs_libregnum_render_ctx_set_background_spin (CmacsLibregnumRenderCtx *r,
+                                                double deg)
+{
+  if (r) r->background_spin_deg = (float) deg;
+}
+
+void
+cmacs_libregnum_render_ctx_set_occluder_radius (CmacsLibregnumRenderCtx *r,
+                                                double radius)
+{
+  if (r) r->occluder_radius = radius;
+}
+
+void
+cmacs_libregnum_render_ctx_set_focus_min (CmacsLibregnumRenderCtx *r,
+                                          double dist)
+{
+  if (r) r->focus_min_dist = dist > 0.0 ? dist : 0.0;
+}
+
+static BodyModel *
+ctx_find_body (CmacsLibregnumRenderCtx *r, const gchar *key)
+{
+  if (!r || !r->body_models || !key) return NULL;
+  for (guint i = 0; i < r->body_models->len; i++)
+    {
+      BodyModel *b = g_ptr_array_index (r->body_models, i);
+      if (g_strcmp0 (b->key, key) == 0) return b;
+    }
+  return NULL;
+}
+
+/* Update the position of body KEY; FALSE if it does not exist yet. */
+gboolean
+cmacs_libregnum_render_ctx_body_model_update (CmacsLibregnumRenderCtx *r,
+                                              const gchar *key,
+                                              double x, double y, double z)
+{
+  BodyModel *b = ctx_find_body (r, key);
+  if (!b) return FALSE;
+  b->x = x; b->y = y; b->z = z;
+  return TRUE;
+}
+
+/* Register (or replace) body KEY with MODEL (a GrlModel*, ownership
+ * transferred). */
+void
+cmacs_libregnum_render_ctx_body_model_add (CmacsLibregnumRenderCtx *r,
+                                           const gchar *key, gpointer model,
+                                           double x, double y, double z)
+{
+  if (!r || !key || !model) return;
+  BodyModel *b = ctx_find_body (r, key);
+  if (b)
+    {
+      g_clear_object (&b->model);
+      b->model = model;
+      b->x = x; b->y = y; b->z = z;
+      return;
+    }
+  b = g_new0 (BodyModel, 1);
+  b->key = g_strdup (key);
+  b->model = model;
+  b->x = x; b->y = y; b->z = z;
+  g_ptr_array_add (r->body_models, b);
+}
+
+void
+cmacs_libregnum_render_ctx_clear_body_models (CmacsLibregnumRenderCtx *r)
+{
+  if (r && r->body_models)
+    g_ptr_array_set_size (r->body_models, 0);
+}
+
+/* TRUE if world point (X,Y,Z) is visible from the camera, i.e. the globe
+ * does not block the line of sight.  The point is occluded only when the
+ * SEGMENT from the camera to the point passes through the occluder sphere
+ * before reaching it -- the correct test for points at any altitude.  (The
+ * old dot(P,C) > R*R limb test was only right for surface points: it
+ * wrongly culled far-side celestial bodies that float high above the globe
+ * and are plainly visible beside the limb.) */
+static gboolean
+ctx_point_near_side (CmacsLibregnumRenderCtx *r, double x, double y, double z)
+{
+  if (!r || r->occluder_radius <= 0.0) return TRUE;
+  double px, py, pz, tx, ty, tz, fov;
+  cmacs_libregnum_render_ctx_get_camera_state (r, &px, &py, &pz,
+                                               &tx, &ty, &tz, &fov);
+  double r2 = r->occluder_radius * r->occluder_radius;
+  double c2 = px * px + py * py + pz * pz;
+  if (c2 <= r2) return TRUE;            /* camera inside the sphere: show */
+  double dx = x - px, dy = y - py, dz = z - pz;
+  double len2 = dx * dx + dy * dy + dz * dz;
+  if (len2 < 1e-12) return TRUE;
+  /* Closest approach of the segment C + t*(P-C), t in [0,1], to the
+   * origin: t* = -(C . D) / |D|^2.  Outside (0,1) the sphere cannot sit
+   * between the camera and the point. */
+  double t = -(px * dx + py * dy + pz * dz) / len2;
+  if (t <= 0.0 || t >= 1.0) return TRUE;
+  double qx = px + t * dx, qy = py + t * dy, qz = pz + t * dz;
+  return (qx * qx + qy * qy + qz * qz) > r2;
+}
+
+void
+cmacs_libregnum_render_ctx_add_static_drawable (CmacsLibregnumRenderCtx *r,
+                                                void *drawable)
+{
+  if (!r || !drawable) return;
+  g_ptr_array_add (r->static_drawables, drawable);   /* ownership transfers */
+}
+
+void
+cmacs_libregnum_render_ctx_clear_static_drawables (CmacsLibregnumRenderCtx *r)
+{
+  if (r && r->static_drawables)
+    g_ptr_array_set_size (r->static_drawables, 0);
+}
+
+/* ── Filled polygon models (translucent draped fills) ────────────── */
+
+void
+cmacs_libregnum_render_ctx_add_polygon_model (CmacsLibregnumRenderCtx *r,
+                                              void *model)
+{
+  if (!r || !model) return;
+  g_ptr_array_add (r->polygon_models, model);          /* ownership transfers */
+}
+
+void
+cmacs_libregnum_render_ctx_clear_polygon_models (CmacsLibregnumRenderCtx *r)
+{
+  if (r && r->polygon_models)
+    g_ptr_array_set_size (r->polygon_models, 0);
+}
+
+void
+cmacs_libregnum_render_ctx_add_static_polygon_model (CmacsLibregnumRenderCtx *r,
+                                                     void *model)
+{
+  if (!r || !model) return;
+  g_ptr_array_add (r->static_polygon_models, model);   /* ownership transfers */
+}
+
+void
+cmacs_libregnum_render_ctx_clear_static_polygon_models
+                                              (CmacsLibregnumRenderCtx *r)
+{
+  if (r && r->static_polygon_models)
+    g_ptr_array_set_size (r->static_polygon_models, 0);
+}
+
+/* ── Map labels ──────────────────────────────────────────────────── */
+
+void
+cmacs_libregnum_render_ctx_add_map_label (CmacsLibregnumRenderCtx *r,
+                                          float x, float y, float z,
+                                          const char *text,
+                                          guint8 cr, guint8 cg, guint8 cb)
+{
+  if (!r || !r->map_labels) return;
+  CmacsMapLabel l = { 0 };
+  l.x = x; l.y = y; l.z = z;
+  l.text = g_strdup (text ? text : "");
+  l.r = cr; l.g = cg; l.b = cb;
+  g_array_append_val (r->map_labels, l);
+}
+
+void
+cmacs_libregnum_render_ctx_clear_map_labels (CmacsLibregnumRenderCtx *r)
+{
+  if (r && r->map_labels) g_array_set_size (r->map_labels, 0);
+}
+
+guint
+cmacs_libregnum_render_ctx_map_label_count (CmacsLibregnumRenderCtx *r)
+{
+  return (r && r->map_labels) ? r->map_labels->len : 0;
+}
+
+/* Project map label ID to view-local pixels + report its TEXT (borrowed)
+ * and colour.  FALSE if out of range or behind the camera (so back-of-globe
+ * labels are hidden). */
+gboolean
+cmacs_libregnum_render_ctx_map_label_at (CmacsLibregnumRenderCtx *r, guint id,
+                                         int vw, int vh, double *sx, double *sy,
+                                         const char **text,
+                                         guint8 *cr, guint8 *cg, guint8 *cb)
+{
+  if (!r || !r->map_labels || id >= r->map_labels->len) return FALSE;
+  CmacsMapLabel *l = &g_array_index (r->map_labels, CmacsMapLabel, id);
+  /* Hide labels on the far side of the globe (behind the limb). */
+  if (!ctx_point_near_side (r, l->x, l->y, l->z)) return FALSE;
+  if (!cmacs_libregnum_render_ctx_project (r, l->x, l->y, l->z, vw, vh, sx, sy))
+    return FALSE;
+  if (text) *text = l->text;
+  if (cr) *cr = l->r;
+  if (cg) *cg = l->g;
+  if (cb) *cb = l->b;
+  return TRUE;
+}
+
+/* Distance from the camera to the origin (the globe centre); lets the
+ * overlay show map labels only once the user has zoomed in. */
+double
+cmacs_libregnum_render_ctx_camera_distance (CmacsLibregnumRenderCtx *r)
+{
+  if (!r) return 0.0;
+  double px, py, pz, tx, ty, tz, fov;
+  cmacs_libregnum_render_ctx_get_camera_state (r, &px, &py, &pz,
+                                               &tx, &ty, &tz, &fov);
+  return sqrt (px*px + py*py + pz*pz);
+}
+
+/* ── Billboards (country flags) ──────────────────────────────────── */
+
+void
+cmacs_libregnum_render_ctx_add_billboard (CmacsLibregnumRenderCtx *r,
+                                          float x, float y, float z,
+                                          void *texture, float size)
+{
+  if (!r || !r->billboards || !texture) return;
+  CmacsBillboard b = { 0 };
+  b.x = x; b.y = y; b.z = z; b.size = size;
+  b.tex = (GrlTexture *) texture;     /* ownership transfers */
+  g_array_append_val (r->billboards, b);
+}
+
+void
+cmacs_libregnum_render_ctx_clear_billboards (CmacsLibregnumRenderCtx *r)
+{
+  if (r && r->billboards) g_array_set_size (r->billboards, 0);
+}
+
+guint
+cmacs_libregnum_render_ctx_billboard_count (CmacsLibregnumRenderCtx *r)
+{
+  return (r && r->billboards) ? r->billboards->len : 0;
+}
+
+/* ── Per-node label policy + hover ───────────────────────────────── */
+
+void
+cmacs_libregnum_render_ctx_set_node_label_mode (CmacsLibregnumRenderCtx *r,
+                                                gint id, int mode)
+{
+  if (!r || !r->nodes || id < 0 || (guint) id >= r->nodes->len) return;
+  g_array_index (r->nodes, CmacsNode, id).label_mode = mode;
+}
+
+int
+cmacs_libregnum_render_ctx_get_node_label_mode (CmacsLibregnumRenderCtx *r,
+                                                gint id)
+{
+  if (!r || !r->nodes || id < 0 || (guint) id >= r->nodes->len) return -1;
+  return g_array_index (r->nodes, CmacsNode, id).label_mode;
+}
+
+void
+cmacs_libregnum_render_ctx_set_hovered (CmacsLibregnumRenderCtx *r, gint id)
+{
+  if (r) r->hovered = id;
+}
+
+gint
+cmacs_libregnum_render_ctx_get_hovered (CmacsLibregnumRenderCtx *r)
+{
+  return r ? r->hovered : -1;
+}
+
 void
 cmacs_libregnum_render_ctx_clear_drawables (CmacsLibregnumRenderCtx *r)
 {
@@ -374,6 +779,7 @@ cmacs_libregnum_render_ctx_add_node (CmacsLibregnumRenderCtx *r,
   n.parent = parent;
   n.x = x; n.y = y; n.z = z;
   n.hw = hw; n.hh = hh; n.hd = hd;
+  n.label_mode = -1;   /* legacy: dir-or-selected (see overlay) */
   g_array_append_val (r->nodes, n);
   return r->nodes->len - 1;
 }
@@ -547,7 +953,14 @@ cmacs_libregnum_render_ctx_label_at (CmacsLibregnumRenderCtx *r, guint id,
   CmacsNode *n = &g_array_index (r->nodes, CmacsNode, id);
   if (name)   *name   = n->name;
   if (is_dir) *is_dir = n->is_dir;
-  return cmacs_libregnum_render_ctx_project (r, n->x, n->y + n->hh + 0.25f,
+  /* Hide labels for nodes on the far side of the globe. */
+  if (!ctx_point_near_side (r, n->x, n->y, n->z)) return FALSE;
+  /* Gap above the marker, proportional to its size (so labels sit close to
+   * small markers like aircraft) but capped so big nodes (editor cubes)
+   * keep their original spacing. */
+  float gap = n->hh * 1.6f;
+  if (gap > 0.25f) gap = 0.25f;
+  return cmacs_libregnum_render_ctx_project (r, n->x, n->y + n->hh + gap,
                                              n->z, vw, vh, sx, sy);
 }
 
@@ -952,11 +1365,115 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
       {
         lrg_renderer_begin_frame (r->renderer);
         lrg_renderer_begin_layer (r->renderer, LRG_RENDER_LAYER_WORLD);
+        /* Persistent background model (e.g. the gnuseye Earth sphere):
+         * drawn first, behind the per-tick scene drawables, with an
+         * optional spin about +Y.  Depth-tested so surface markers
+         * occlude correctly against the far limb. */
+        if (r->background_model)
+          {
+            g_autoptr (GrlVector3) bpos  = grl_vector3_new (0.0f, 0.0f, 0.0f);
+            g_autoptr (GrlVector3) baxis = grl_vector3_new (0.0f, 1.0f, 0.0f);
+            g_autoptr (GrlVector3) bscl  = grl_vector3_new (1.0f, 1.0f, 1.0f);
+            g_autoptr (GrlColor)   bwhite = grl_color_new (255, 255, 255, 255);
+            grl_model_draw_ex (r->background_model, bpos, baxis,
+                               r->background_spin_deg, bscl, bwhite);
+          }
+
+        /* Persistent positioned textured models (celestial bodies): drawn
+         * like the background globe, opaque, at their own positions. */
+        if (r->body_models && r->body_models->len)
+          {
+            static guint dbg_once = 0;
+            if (dbg_once++ < 3)
+              g_debug ("render: drawing %u body models", r->body_models->len);
+            g_autoptr (GrlVector3) naxis = grl_vector3_new (0.0f, 1.0f, 0.0f);
+            g_autoptr (GrlVector3) nscl  = grl_vector3_new (1.0f, 1.0f, 1.0f);
+            g_autoptr (GrlColor)   nwhite = grl_color_new (255, 255, 255,
+                                                           255);
+            for (guint i = 0; i < r->body_models->len; i++)
+              {
+                BodyModel *b = g_ptr_array_index (r->body_models, i);
+                if (!b->model) continue;
+                g_autoptr (GrlVector3) bp =
+                  grl_vector3_new ((gfloat) b->x, (gfloat) b->y,
+                                   (gfloat) b->z);
+                grl_model_draw_ex (b->model, bp, naxis, 0.0f, nscl, nwhite);
+              }
+          }
+        /* Filled translucent polygon fills (alert zones, choropleth, aurora):
+         * drawn after the globe but before coastlines/markers so those
+         * overlay them.  Alpha-blended and two-sided (cull disabled) so the
+         * translucent drape shows from any viewing angle; positioned in world
+         * space at angle 0 to match the coastline/marker overlays. */
+        if ((r->static_polygon_models && r->static_polygon_models->len)
+            || (r->polygon_models && r->polygon_models->len))
+          {
+            g_autoptr (GrlVector3) ppos  = grl_vector3_new (0.0f, 0.0f, 0.0f);
+            g_autoptr (GrlVector3) paxis = grl_vector3_new (0.0f, 1.0f, 0.0f);
+            g_autoptr (GrlVector3) pscl  = grl_vector3_new (1.0f, 1.0f, 1.0f);
+            g_autoptr (GrlColor)   pw     = grl_color_new (255, 255, 255, 255);
+            BeginBlendMode (BLEND_ALPHA);
+            rlDisableBackfaceCulling ();
+            for (guint i = 0;
+                 r->static_polygon_models && i < r->static_polygon_models->len;
+                 i++)
+              grl_model_draw_ex (
+                g_ptr_array_index (r->static_polygon_models, i),
+                ppos, paxis, 0.0f, pscl, pw);
+            for (guint i = 0;
+                 r->polygon_models && i < r->polygon_models->len; i++)
+              grl_model_draw_ex (g_ptr_array_index (r->polygon_models, i),
+                                 ppos, paxis, 0.0f, pscl, pw);
+            rlEnableBackfaceCulling ();
+            EndBlendMode ();
+          }
+        /* Persistent static overlay (coastlines etc.), behind markers. */
+        for (guint i = 0;
+             r->static_drawables && i < r->static_drawables->len; i++)
+          {
+            gpointer d = g_ptr_array_index (r->static_drawables, i);
+            if (LRG_IS_DRAWABLE (d))
+              lrg_drawable_draw (LRG_DRAWABLE (d), 0.0f);
+          }
         for (guint i = 0; r->drawables && i < r->drawables->len; i++)
           {
             gpointer d = g_ptr_array_index (r->drawables, i);
             if (LRG_IS_DRAWABLE (d))
               lrg_drawable_draw (LRG_DRAWABLE (d), 0.0f);
+          }
+        /* Camera-facing billboards (country flags), only once zoomed in. */
+        if (r->billboards && r->billboards->len > 0)
+          {
+            Camera3D bcam = ctx_raylib_camera (r);
+            double cdist = sqrt (bcam.position.x*bcam.position.x
+                                 + bcam.position.y*bcam.position.y
+                                 + bcam.position.z*bcam.position.z);
+            if (cdist < 13.0)
+              {
+                Color bw = (Color){ 255, 255, 255, 255 };
+                for (guint i = 0; i < r->billboards->len; i++)
+                  {
+                    CmacsBillboard *bb =
+                      &g_array_index (r->billboards, CmacsBillboard, i);
+                    if (!bb->tex) continue;
+                    /* Skip flags on the far side of the globe. */
+                    if (!ctx_point_near_side (r, bb->x, bb->y, bb->z))
+                      continue;
+                    Texture2D *t = grl_texture_get_handle (bb->tex);
+                    if (t && t->id)
+                      {
+                        /* Scale to the zoom so the flag keeps a roughly
+                         * constant on-screen size (world size grows with
+                         * distance from the camera to the near surface). */
+                        double near = cdist - r->occluder_radius;
+                        if (near < 0.6) near = 0.6;
+                        float esize = bb->size * (float) near;
+                        DrawBillboard (bcam, *t,
+                                       (Vector3){ bb->x, bb->y, bb->z },
+                                       esize, bw);
+                      }
+                  }
+              }
           }
 #ifdef LRG_BUILD_EDITOR
         /* Feature 1: shading — push lights to the shader once per frame
@@ -1246,6 +1763,29 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
 
 #include <math.h>
 
+/* Keep a camera position outside the occluding sphere (the gnuseye globe):
+ * push it radially out to a floor just above the surface so no camera motion
+ * (zoom, orbit around an off-centre target, pan) can pass through the globe.
+ * No-op when no occluder is set (editor scenes, the flat map). */
+#define CTX_OCCLUDER_FLOOR  1.002   /* min camera radius, x surface radius */
+#define CTX_OCCLUDER_CEIL   1500.0  /* max camera radius, x surface radius
+                                     * (~9550 units: frames the linearly-true
+                                     * solar system, Neptune ~8700 out; the
+                                     * far cull plane is raised to 20000 at
+                                     * window acquire) */
+
+static void
+ctx_clamp_above_occluder (CmacsLibregnumRenderCtx *r,
+                          double *x, double *y, double *z)
+{
+  if (!r || r->occluder_radius <= 0.0) return;
+  double mind = r->occluder_radius * CTX_OCCLUDER_FLOOR;
+  double len = sqrt ((*x) * (*x) + (*y) * (*y) + (*z) * (*z));
+  if (len < 1e-9) { *x = 0.0; *y = mind; *z = 0.0; return; }
+  if (len < mind)
+    { double k = mind / len; *x *= k; *y *= k; *z *= k; }
+}
+
 void
 cmacs_libregnum_render_ctx_orbit_camera (CmacsLibregnumRenderCtx *r,
                                          double dx_px, double dy_px)
@@ -1270,10 +1810,11 @@ cmacs_libregnum_render_ctx_orbit_camera (CmacsLibregnumRenderCtx *r,
   double nx = rad * cos (pitch) * sin (yaw);
   double ny = rad * sin (pitch);
   double nz = rad * cos (pitch) * cos (yaw);
-  lrg_camera3d_set_position_xyz (c3,
-                                  tgt->x + (float) nx,
-                                  tgt->y + (float) ny,
-                                  tgt->z + (float) nz);
+  /* Orbiting an off-centre target (a selected entity) can swing the camera
+   * into the globe; keep it above the surface. */
+  double wx = tgt->x + nx, wy = tgt->y + ny, wz = tgt->z + nz;
+  ctx_clamp_above_occluder (r, &wx, &wy, &wz);
+  lrg_camera3d_set_position_xyz (c3, (float) wx, (float) wy, (float) wz);
 }
 
 void
@@ -1288,6 +1829,71 @@ cmacs_libregnum_render_ctx_zoom_camera (CmacsLibregnumRenderCtx *r,
   LrgCamera3D *c3 = LRG_CAMERA3D (r->camera);
   g_autoptr (GrlVector3) pos = lrg_camera3d_get_position (c3);
   g_autoptr (GrlVector3) tgt = lrg_camera3d_get_target   (c3);
+
+  if (r->focus_min_dist > 0.0)
+    {
+      /* Orbiting an off-origin focus (a selected celestial body): zoom is
+       * proportional to the distance to the TARGET, asymptotic to the
+       * body's own floor -- you can get ever closer to the planet, never
+       * inside it, and never shoot past it. */
+      double ox = pos->x - tgt->x, oy = pos->y - tgt->y, oz = pos->z - tgt->z;
+      double vlen = sqrt (ox*ox + oy*oy + oz*oz);
+      if (vlen < 1e-9) return;
+      double above = vlen - r->focus_min_dist;
+      if (above < 1e-3) above = 1e-3;
+      double nabove = above * pow (0.9, wheel_dy);
+      if (nabove < 1e-3) nabove = 1e-3;
+      double k = (r->focus_min_dist + nabove) / vlen;
+      double wx = tgt->x + ox * k, wy = tgt->y + oy * k, wz = tgt->z + oz * k;
+      /* Stay outside the Earth globe and inside the world ceiling. */
+      ctx_clamp_above_occluder (r, &wx, &wy, &wz);
+      if (r->occluder_radius > 0.0)
+        {
+          double maxd = r->occluder_radius * CTX_OCCLUDER_CEIL;
+          double wlen = sqrt (wx*wx + wy*wy + wz*wz);
+          if (wlen > maxd && wlen > 1e-9)
+            { double s = maxd / wlen; wx *= s; wy *= s; wz *= s; }
+        }
+      lrg_camera3d_set_position_xyz (c3, (float) wx, (float) wy, (float) wz);
+      return;
+    }
+
+  if (r->occluder_radius > 0.0)
+    {
+      /* Globe zoom: scale the camera's ALTITUDE above the occluder surface,
+       * not its distance to the target.  Each wheel tick consumes a fixed
+       * fraction of the remaining altitude, so steps shrink as you get
+       * closer (ever-finer zoom near the surface) and the surface is an
+       * asymptote -- with a hard radial floor so the camera can never pass
+       * through the globe, and a ceiling so it cannot get lost in space. */
+      double vx = tgt->x - pos->x, vy = tgt->y - pos->y, vz = tgt->z - pos->z;
+      double vlen = sqrt (vx*vx + vy*vy + vz*vz);
+      if (vlen < 1e-9) return;
+      vx /= vlen; vy /= vlen; vz /= vlen;
+      double mind = r->occluder_radius * CTX_OCCLUDER_FLOOR;
+      double maxd = r->occluder_radius * CTX_OCCLUDER_CEIL;
+      double clen = sqrt (pos->x * pos->x + pos->y * pos->y
+                          + pos->z * pos->z);
+      double above = clen - mind;
+      if (above < 5e-4) above = 5e-4;
+      double nabove = above * pow (0.9, wheel_dy);
+      if (nabove < 5e-4) nabove = 5e-4;
+      if (nabove > maxd - mind) nabove = maxd - mind;
+      double step = above - nabove;            /* + = toward the target */
+      double wx = pos->x + vx * step;
+      double wy = pos->y + vy * step;
+      double wz = pos->z + vz * step;
+      ctx_clamp_above_occluder (r, &wx, &wy, &wz);
+      /* Ceiling: zooming out stops before the globe becomes a speck. */
+      double wlen = sqrt (wx*wx + wy*wy + wz*wz);
+      if (wlen > maxd && wlen > 1e-9)
+        { double k = maxd / wlen; wx *= k; wy *= k; wz *= k; }
+      lrg_camera3d_set_position_xyz (c3, (float) wx, (float) wy, (float) wz);
+      return;
+    }
+
+  /* No occluder (editor scenes, the flat map): scale the distance to the
+   * target -- asymptotic toward it, so it cannot invert through. */
   double ox = pos->x - tgt->x, oy = pos->y - tgt->y, oz = pos->z - tgt->z;
   double scale = pow (0.9, wheel_dy);
   ox *= scale; oy *= scale; oz *= scale;
@@ -1334,8 +1940,11 @@ cmacs_libregnum_render_ctx_pan_camera (CmacsLibregnumRenderCtx *r,
   double mx = (-dx_px) * rx * s + dy_px * cux * s;
   double my = (-dx_px) * ry * s + dy_px * cuy * s;
   double mz = (-dx_px) * rz * s + dy_px * cuz * s;
-  lrg_camera3d_set_position_xyz (c3, (float)(pos->x + mx),
-                                 (float)(pos->y + my), (float)(pos->z + mz));
+  /* Panning translates the camera in the view plane, which on a sphere can
+   * dip it below the surface near the limb; keep it above. */
+  double wx = pos->x + mx, wy = pos->y + my, wz = pos->z + mz;
+  ctx_clamp_above_occluder (r, &wx, &wy, &wz);
+  lrg_camera3d_set_position_xyz (c3, (float) wx, (float) wy, (float) wz);
   lrg_camera3d_set_target_xyz   (c3, (float)(tgt->x + mx),
                                  (float)(tgt->y + my), (float)(tgt->z + mz));
 }
@@ -1414,8 +2023,23 @@ cmacs_libregnum_render_ctx_snapshot_png (CmacsLibregnumRenderCtx *r,
     }
 
   /* The readback is BGRA which, on little-endian, is cairo's ARGB32 byte
-   * order, so the buffer feeds cairo directly (orientation may be GL
-   * bottom-up; immaterial for verification). */
+   * order, so the buffer feeds cairo directly.  glReadPixels' origin is
+   * the lower-left corner: the GUI paint hook flips with a cairo matrix,
+   * but a PNG written straight from this buffer is upside down -- which
+   * silently inverted every snapshot-based orientation check.  Flip the
+   * rows so snapshots match what the user sees. */
+  {
+    gsize stride = (gsize) r->width * 4;
+    g_autofree unsigned char *tmp = g_malloc (stride);
+    for (int y = 0; y < r->height / 2; y++)
+      {
+        unsigned char *a = buf + (gsize) y * stride;
+        unsigned char *b = buf + (gsize) (r->height - 1 - y) * stride;
+        memcpy (tmp, a, stride);
+        memcpy (a, b, stride);
+        memcpy (b, tmp, stride);
+      }
+  }
   surface = cairo_image_surface_create_for_data (buf, CAIRO_FORMAT_ARGB32,
                                                  r->width, r->height,
                                                  r->width * 4);
