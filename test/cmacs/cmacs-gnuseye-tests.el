@@ -896,6 +896,32 @@ payload entity, the inspector still shows it and the selection is set."
   (should (equal (cmacs-gnuseye-country--fmt-num 27.36e12) "27.36 trillion"))
   (should (equal (cmacs-gnuseye-country--fmt-num 4.2) "4.2")))
 
+(ert-deftest cmacs-gnuseye--inspector-entity-pseudo ()
+  "Inspector actions resolve the DISPLAYED entity, so pseudo-entities
+\(countries shown with no marker selection) work for [a]sk / [c]ompose."
+  (cmacs-gnuseye-tests--skip)
+  (setq cmacs-gnuseye--selected-id nil)
+  (let ((country (list :id "country:TST" :kind 'country :label "Testland"
+                       :data '((population . "5.00 million")
+                               (\GDP\ \(est\) . "250.00 billion US$")))))
+    (cmacs-gnuseye--show-inspector country)
+    (should (eq (cmacs-gnuseye-inspector-entity) country))
+    ;; the AI context block carries the country's data rows
+    (let ((ctx (cmacs-gnuseye-entity-context-string country)))
+      (should (string-match-p "Testland" ctx))
+      (should (string-match-p "population: 5.00 million" ctx))
+      (should (string-match-p "250.00 billion" ctx))))
+  ;; deselect clears the displayed entity
+  (cmacs-gnuseye--show-inspector nil)
+  (should (null (cmacs-gnuseye-inspector-entity))))
+
+(ert-deftest cmacs-gnuseye--compose-registered ()
+  "The compose chat action exists and is registered on `c'."
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-intel)
+  (should (fboundp 'cmacs-gnuseye-compose-about-entity))
+  (should (assoc "c" cmacs-gnuseye-inspector-actions)))
+
 (ert-deftest cmacs-gnuseye--click-dispatcher-loaded ()
   "Loading cmacs-gnuseye must bring in the C->Elisp click dispatchers.
 The C input layer dispatches every globe click to

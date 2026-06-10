@@ -192,8 +192,15 @@ any feature-registered actions (see ~cmacs-gnuseye-register-inspector-action~).
   ~on_geofence_enter~ / ~on_geofence_exit~.
 - Replay: ~cmacs-gnuseye-replay-toggle~ then ~<~/~>~/~SPC~/~=~.
 - Intelligence: ~cmacs-gnuseye-intel-cii~ (+ ~-cii-clear~),
-  ~cmacs-gnuseye-ai-ask-entity~, ~-ai-brief~ (cmacs-ai; graceful when
-  absent); the ~hotspots~ layer is cross-source correlation.
+  ~cmacs-gnuseye-ai-ask-entity~ (inspector ~a~ — one-shot analysis),
+  ~cmacs-gnuseye-compose-about-entity~ (inspector ~c~ — opens a full
+  ~cmacs-ai-chat~ buffer with the entity's context pre-filled in the
+  Compose section, so follow-up questions carry the conversation),
+  ~-ai-brief~ (cmacs-ai; graceful when absent); the ~hotspots~ layer is
+  cross-source correlation.  Both ~a~ and ~c~ resolve the entity *shown in
+  the inspector* (~cmacs-gnuseye-inspector-entity~), so they work on marker
+  selections, clicked countries (population/GDP/World-Bank rows feed the
+  prompt), and celestial bodies alike.
 - Follow / detail: ~cmacs-gnuseye-track-toggle~,
   ~-inspector-open-stream~, ~-inspector-open-news~.
 - Inspector actions are pluggable via

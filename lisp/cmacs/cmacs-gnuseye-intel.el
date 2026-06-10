@@ -191,18 +191,41 @@ use Org markup, and reason ONLY from the provided fields.")
 
 ;;;###autoload
 (defun cmacs-gnuseye-ai-ask-entity ()
-  "Ask the AI about the selected entity."
+  "Ask the AI about the entity shown in the inspector.
+Resolves through `cmacs-gnuseye-inspector-entity', so it works for marker
+selections AND for pseudo-entities shown without one -- countries (with
+their population/GDP/World-Bank rows) and celestial bodies included."
   (interactive)
   (if (not (cmacs-gnuseye-intel--ai-available-p))
       (user-error "cmacs-ai is not available in this build")
-    (let ((e (and cmacs-gnuseye--selected-id
-                  (gethash cmacs-gnuseye--selected-id cmacs-gnuseye--id-index))))
+    (let ((e (cmacs-gnuseye-inspector-entity)))
       (unless e (user-error "No entity selected"))
-      (let* ((prompt (format "Entity:\n%S\n\nAnalyse it." e))
+      (let* ((prompt (format "%s\n\nAnalyse it."
+                             (cmacs-gnuseye-entity-context-string e)))
              (out (cmacs-ai-prompt-sync prompt nil
                                         cmacs-gnuseye-intel--entity-system)))
         (cmacs-gnuseye-intel--ai-buffer
          (format "Intel: %s" (or (plist-get e :label) (plist-get e :id))) out)))))
+
+;;;###autoload
+(defun cmacs-gnuseye-compose-about-entity ()
+  "Open a cmacs-ai chat seeded with the inspected entity's context.
+Unlike the one-shot [a]sk, this is a full conversational chat buffer
+\(`cmacs-ai-chat'): the entity's details land in the Compose section with
+point ready for your question, and every follow-up turn carries the
+conversation history."
+  (interactive)
+  (unless (require 'cmacs-ai-chat nil t)
+    (user-error "cmacs-ai is not available in this build"))
+  (let ((e (cmacs-gnuseye-inspector-entity)))
+    (unless e (user-error "No entity selected"))
+    (let ((buf (cmacs-ai-chat-open)))
+      (with-current-buffer buf
+        (goto-char (point-max))
+        (insert "Context — GNU's Eye entity under inspection:\n\n"
+                (cmacs-gnuseye-entity-context-string e)
+                "\n\nQuestion: "))
+      buf)))
 
 (defconst cmacs-gnuseye-intel--brief-system
   "You are a senior geospatial intelligence analyst producing a SITREP for \
@@ -312,7 +335,9 @@ first."
   (define-key cmacs-gnuseye-mode-map (kbd "C") #'cmacs-gnuseye-intel-cii)
   (when (fboundp 'cmacs-gnuseye-register-inspector-action)
     (cmacs-gnuseye-register-inspector-action
-     "a" "ask AI" #'cmacs-gnuseye-ai-ask-entity)))
+     "a" "ask AI" #'cmacs-gnuseye-ai-ask-entity)
+    (cmacs-gnuseye-register-inspector-action
+     "c" "compose" #'cmacs-gnuseye-compose-about-entity)))
 
 (provide 'cmacs-gnuseye-intel)
 ;;; cmacs-gnuseye-intel.el ends here

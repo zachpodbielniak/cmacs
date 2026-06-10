@@ -1069,16 +1069,51 @@ and in Evil normal/motion state too, where the major-mode map is shadowed
         (insert "[f] fly-to   [q] close\n")))
     (goto-char (point-min))))
 
+(defvar cmacs-gnuseye--inspector-entity nil
+  "The entity plist currently displayed in the inspector pane.
+This is what inspector actions operate on -- NOT the marker selection:
+pseudo-entities (countries, index-miss fallbacks) are displayed without a
+marker selection, so resolving actions through `cmacs-gnuseye--selected-id'
+alone wrongly reported \"No entity selected\" for them.")
+
+(defun cmacs-gnuseye-inspector-entity ()
+  "Return the entity the inspector is showing (or the marker selection)."
+  (or cmacs-gnuseye--inspector-entity
+      (and cmacs-gnuseye--selected-id
+           (gethash cmacs-gnuseye--selected-id cmacs-gnuseye--id-index))))
+
+(defun cmacs-gnuseye-entity-context-string (e)
+  "Readable one-entity context block for AI prompts (chat / ask)."
+  (when e
+    (concat
+     (format "Entity: %s\n" (or (plist-get e :label) (plist-get e :id)))
+     (format "Kind: %s\n" (or (plist-get e :kind) 'generic))
+     (let ((layer (plist-get e :layer)))
+       (if layer (format "Layer: %s\n" layer) ""))
+     (if (numberp (plist-get e :lat))
+         (format "Position: %.4f, %.4f\n"
+                 (plist-get e :lat) (plist-get e :lon))
+       "")
+     (let ((data (plist-get e :data)))
+       (if (consp data)
+           (mapconcat (lambda (kv)
+                        (format "%s: %s" (car kv) (cdr kv)))
+                      (seq-filter (lambda (kv) (and (consp kv) (cdr kv)))
+                                  data)
+                      "\n")
+         "")))))
+
 (defun cmacs-gnuseye--show-inspector (&optional e)
   "Show the inspector pane for entity E (or the current selection)."
-  (let ((b (get-buffer-create cmacs-gnuseye--inspector-name)))
+  (let ((b (get-buffer-create cmacs-gnuseye--inspector-name))
+        (shown (or e (and cmacs-gnuseye--selected-id
+                          (gethash cmacs-gnuseye--selected-id
+                                   cmacs-gnuseye--id-index)))))
+    (setq cmacs-gnuseye--inspector-entity shown)
     (with-current-buffer b
       (unless (derived-mode-p 'cmacs-gnuseye-inspector-mode)
         (cmacs-gnuseye-inspector-mode))
-      (cmacs-gnuseye--inspector-render
-       (or e (and cmacs-gnuseye--selected-id
-                  (gethash cmacs-gnuseye--selected-id
-                           cmacs-gnuseye--id-index)))))
+      (cmacs-gnuseye--inspector-render shown))
     (display-buffer-in-side-window
      b '((side . right) (slot . 0) (window-width . 0.26)))
     b))

@@ -169,7 +169,12 @@ data, and can draw a range ring.
 @item @strong{Time-scrub / replay} (@code{T}): a bounded snapshot ring with a
 header-line scrubber.
 @item @strong{AI intelligence} (cmacs-ai, when built): inspector @code{[a]}
-asks about the selected entity; @code{A} briefs the region; the
+asks about the inspected entity (one-shot analysis) and @code{[c]} composes
+-- it opens a full @code{cmacs-ai-chat} buffer with the entity's context
+pre-filled, so follow-up questions carry the conversation.  Both resolve
+the entity @emph{shown in the inspector}, so they work on marker
+selections, clicked countries (population/GDP/World-Bank rows feed the
+prompt), and celestial bodies alike.  @code{A} briefs the region; the
 @code{hotspots} layer correlates co-located signals; @code{C} computes the
 country-instability index and paints it as a choropleth.
 @item @strong{Follow + click-through}: @code{.} tracks the selection;
