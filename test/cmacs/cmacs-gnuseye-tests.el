@@ -766,6 +766,21 @@ honours the AIS not-available sentinels (heading 511, cog 360)."
       (should (< (abs (- dec 22.879)) 1e-6))
       (should (< (abs (- delta 1.0150297)) 1e-6)))))
 
+(ert-deftest cmacs-gnuseye--horizons-advance ()
+  "Horizons bodies sweep with Earth's rotation: the sub-longitude follows
+RA - GMST as time advances (~15 deg/hour westward)."
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-celestial)
+  (let* ((e (cmacs-gnuseye-celestial--horizons-entity
+             "-31" "Voyager 1" 'probe (list 158.0 12.0 170.0)))
+         (lon0 (plist-get e :lon)))
+    (should (numberp (cdr (assq 'ra (plist-get e :data)))))
+    ;; Advance one hour: sub-lon must move ~15.04 deg west.
+    (cmacs-gnuseye-celestial--horizons-advance
+     (list e) 3600.0 (+ (float-time) 3600.0))
+    (let ((dlon (- (mod (+ (- (plist-get e :lon) lon0) 540.0) 360.0) 180.0)))
+      (should (< (abs (+ dlon 15.04)) 0.2)))))
+
 (ert-deftest cmacs-gnuseye--celestial-layers ()
   "The celestial layers + home command register."
   (cmacs-gnuseye-tests--skip)

@@ -55,16 +55,18 @@ Maps the body's true distance to a world radius in [12, 74] via
 ;;;; Sun + Moon + planets (local ephemeris; always live) ----------------------
 
 (defconst cmacs-gnuseye-celestial--bodies
-  ;; (BODY KIND LABEL COLOR SCALE)
-  '((sun     sun    "Sun"     "#ffd96a" 22.0)
-    (moon    moon   "Moon"    "#cfd2d6" 10.0)
-    (mercury planet "Mercury" "#b3a08a" 5.0)
-    (venus   planet "Venus"   "#f2e3c0" 7.0)
-    (mars    planet "Mars"    "#e07a4f" 6.5)
-    (jupiter planet "Jupiter" "#e0bc8f" 9.0)
-    (saturn  planet "Saturn"  "#e8d8a8" 8.5)
-    (uranus  planet "Uranus"  "#9adfe0" 7.0)
-    (neptune planet "Neptune" "#7aa8ff" 7.0))
+  ;; (BODY KIND LABEL COLOR SCALE) -- scales tuned for apparent size at each
+  ;; body's shell distance: the Sun unmistakably dominant, gas giants larger
+  ;; than rocky planets, the (near-shell) Moon naturally big in the sky.
+  '((sun     sun    "Sun"     "#ffd96a" 40.0)
+    (moon    moon   "Moon"    "#cfd2d6" 12.0)
+    (mercury planet "Mercury" "#b3a08a" 6.0)
+    (venus   planet "Venus"   "#f2e3c0" 9.0)
+    (mars    planet "Mars"    "#e07a4f" 8.0)
+    (jupiter planet "Jupiter" "#e0bc8f" 16.0)
+    (saturn  planet "Saturn"  "#e8d8a8" 14.0)
+    (uranus  planet "Uranus"  "#9adfe0" 11.0)
+    (neptune planet "Neptune" "#7aa8ff" 11.0))
   "The locally-computed bodies and their marker styles.")
 
 (defun cmacs-gnuseye-celestial--body-entity (spec &optional time)
@@ -155,7 +157,9 @@ Reads the first data row between $$SOE and $$EOE."
               (string-to-number (nth 5 f)))))))
 
 (defun cmacs-gnuseye-celestial--horizons-entity (id label kind radec)
-  "Entity for Horizons body ID/LABEL of KIND from RADEC (RA DEC DELTA-AU)."
+  "Entity for Horizons body ID/LABEL of KIND from RADEC (RA DEC DELTA-AU).
+RA/Dec are stored in :data so the :advance hook can re-derive the sub-point
+as Earth rotates (the sub-longitude moves ~15 deg/hour)."
   (pcase-let ((`(,ra ,dec ,delta) radec))
     (let* ((now (float-time))
            (dist-km (* delta 149597870.7))
@@ -165,13 +169,24 @@ Reads the first data row between $$SOE and $$EOE."
       (list :id (format "cel:%s" id)
             :kind kind :label label
             :color (if (eq kind 'probe) "#7ad7ff" "#b9b3a8")
-            :scale (if (eq kind 'probe) 4.0 3.5)
+            :scale (if (eq kind 'probe) 5.0 4.0)
             :lat dec :lon sublon
             :alt (cmacs-gnuseye-celestial-shell-alt dist-km)
             :label-mode 3
             :data `((horizons-id . ,id)
+                    (ra . ,ra) (dec . ,dec)
                     (distance . ,(cmacs-gnuseye-celestial--fmt-dist dist-km))
                     (dist-km . ,dist-km))))))
+
+(defun cmacs-gnuseye-celestial--horizons-advance (entities _dt now)
+  "Sweep Horizons bodies with Earth's rotation between (slow) refetches:
+their RA/Dec is essentially fixed over hours, but the sub-longitude is
+RA - GMST and moves ~15 deg/hour."
+  (let ((gmst (cmacs-gnuseye-ephem-gmst now)))
+    (dolist (e entities)
+      (let ((ra (cdr (assq 'ra (plist-get e :data)))))
+        (when (numberp ra)
+          (plist-put e :lon (- (mod (+ (- ra gmst) 540.0) 360.0) 180.0)))))))
 
 (defun cmacs-gnuseye-celestial--horizons-fetch (bodies kind cb)
   "Fetch every (ID LABEL) in BODIES from Horizons; CB gets the entity list."
@@ -199,7 +214,8 @@ Reads the first data row between $$SOE and $$EOE."
   :default-on nil
   :fetch (lambda (cb)
            (cmacs-gnuseye-celestial--horizons-fetch
-            cmacs-gnuseye-probes 'probe cb)))
+            cmacs-gnuseye-probes 'probe cb))
+  :advance #'cmacs-gnuseye-celestial--horizons-advance)
 
 (cmacs-gnuseye-define-layer asteroids
   :title "Asteroids (Horizons)"
@@ -209,7 +225,8 @@ Reads the first data row between $$SOE and $$EOE."
   :default-on nil
   :fetch (lambda (cb)
            (cmacs-gnuseye-celestial--horizons-fetch
-            cmacs-gnuseye-asteroids 'asteroid cb)))
+            cmacs-gnuseye-asteroids 'asteroid cb))
+  :advance #'cmacs-gnuseye-celestial--horizons-advance)
 
 (provide 'cmacs-gnuseye-celestial)
 ;;; cmacs-gnuseye-celestial.el ends here

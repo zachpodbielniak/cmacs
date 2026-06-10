@@ -457,10 +457,13 @@ cmacs_libregnum_render_ctx_set_occluder_radius (CmacsLibregnumRenderCtx *r,
   if (r) r->occluder_radius = radius;
 }
 
-/* TRUE if world point (X,Y,Z) is on the near side of the occluding sphere
- * (visible to the camera), i.e. not hidden behind the globe.  A surface
- * point P at radius R is visible from camera C iff dot(P,C) > R*R; this
- * also passes points well above the surface (satellites, lifted labels). */
+/* TRUE if world point (X,Y,Z) is visible from the camera, i.e. the globe
+ * does not block the line of sight.  The point is occluded only when the
+ * SEGMENT from the camera to the point passes through the occluder sphere
+ * before reaching it -- the correct test for points at any altitude.  (The
+ * old dot(P,C) > R*R limb test was only right for surface points: it
+ * wrongly culled far-side celestial bodies that float high above the globe
+ * and are plainly visible beside the limb.) */
 static gboolean
 ctx_point_near_side (CmacsLibregnumRenderCtx *r, double x, double y, double z)
 {
@@ -468,8 +471,19 @@ ctx_point_near_side (CmacsLibregnumRenderCtx *r, double x, double y, double z)
   double px, py, pz, tx, ty, tz, fov;
   cmacs_libregnum_render_ctx_get_camera_state (r, &px, &py, &pz,
                                                &tx, &ty, &tz, &fov);
-  double dot = x * px + y * py + z * pz;
-  return dot > r->occluder_radius * r->occluder_radius;
+  double r2 = r->occluder_radius * r->occluder_radius;
+  double c2 = px * px + py * py + pz * pz;
+  if (c2 <= r2) return TRUE;            /* camera inside the sphere: show */
+  double dx = x - px, dy = y - py, dz = z - pz;
+  double len2 = dx * dx + dy * dy + dz * dz;
+  if (len2 < 1e-12) return TRUE;
+  /* Closest approach of the segment C + t*(P-C), t in [0,1], to the
+   * origin: t* = -(C . D) / |D|^2.  Outside (0,1) the sphere cannot sit
+   * between the camera and the point. */
+  double t = -(px * dx + py * dy + pz * dz) / len2;
+  if (t <= 0.0 || t >= 1.0) return TRUE;
+  double qx = px + t * dx, qy = py + t * dy, qz = pz + t * dz;
+  return (qx * qx + qy * qy + qz * qz) > r2;
 }
 
 void
