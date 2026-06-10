@@ -28,9 +28,24 @@ ideally MMSI, course- and speed-over-ground works."
   :type '(choice (const :tag "Disabled" nil) (string :tag "URL"))
   :group 'cmacs-gnuseye)
 
+(defcustom cmacs-gnuseye-marine-urls nil
+  "Additional vessel feed URLs merged with `cmacs-gnuseye-marine-url'.
+Coverage is the union of the feeds: the keyless default only covers the
+Baltic (free global AIS does not exist as keyless REST), so add other
+regional open-AIS endpoints or LAN AIS-catcher / rtl-ais servers here to
+widen it.  Records are merged by MMSI."
+  :type '(repeat string)
+  :group 'cmacs-gnuseye)
+
 (defcustom cmacs-gnuseye-marine-max 1000
   "Maximum number of vessels kept from one fetch."
   :type 'integer
+  :group 'cmacs-gnuseye)
+
+(defcustom cmacs-gnuseye-marine-marker-scale 0.15
+  "Ship marker size multiplier (ships are dense; keep them small).
+Combined with the zoom scaling, ships keep a constant on-screen size."
+  :type 'number
   :group 'cmacs-gnuseye)
 
 (defun cmacs-gnuseye-marine--get (obj &rest keys)
@@ -76,6 +91,7 @@ ideally MMSI, course- and speed-over-ground works."
                                      (mmsi (format "%s" mmsi)))
                         :lat (float lat) :lon (float lon)
                         :heading course
+                        :scale cmacs-gnuseye-marine-marker-scale
                         :speed (and (numberp sog) (* sog 0.514444))
                         :data `((mmsi . ,mmsi) (sog-kt . ,sog) (cog . ,cog)))
                   out)
@@ -84,15 +100,30 @@ ideally MMSI, course- and speed-over-ground works."
     (nreverse out)))
 
 (defun cmacs-gnuseye-marine--fetch (cb)
-  (if (not cmacs-gnuseye-marine-url)
-      (progn
-        (message "GNU's Eye: set `cmacs-gnuseye-marine-url' to an AIS feed")
-        (funcall cb nil))
-    (cmacs-gnuseye-fetch-json
-     cmacs-gnuseye-marine-url
-     (lambda (data) (funcall cb (and data (cmacs-gnuseye-marine--parse data))))
-     '(("Digitraffic-User" . "cmacs-gnuseye/1.0"))
-     'list)))
+  "Fetch every configured AIS feed, merge by vessel id, and call CB once."
+  (let ((urls (delete-dups
+               (delq nil (cons cmacs-gnuseye-marine-url
+                               (copy-sequence cmacs-gnuseye-marine-urls))))))
+    (if (null urls)
+        (progn
+          (message "GNU's Eye: set `cmacs-gnuseye-marine-url' to an AIS feed")
+          (funcall cb nil))
+      (let ((pending (length urls))
+            (seen (make-hash-table :test 'equal))
+            (acc nil))
+        (dolist (u urls)
+          (cmacs-gnuseye-fetch-json
+           u
+           (lambda (data)
+             (dolist (e (and data (cmacs-gnuseye-marine--parse data)))
+               (let ((id (plist-get e :id)))
+                 (unless (gethash id seen)
+                   (puthash id t seen)
+                   (push e acc))))
+             (when (zerop (setq pending (1- pending)))
+               (funcall cb (nreverse acc))))
+           '(("Digitraffic-User" . "cmacs-gnuseye/1.0"))
+           'list))))))
 
 (cmacs-gnuseye-define-layer vessels
   :title "Marine vessels (AIS, Baltic default)"

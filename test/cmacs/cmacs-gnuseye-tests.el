@@ -235,7 +235,12 @@ marker individual."
              (badge (seq-find (lambda (e) (assq :cluster (plist-get e :data))) out)))
         (should (= (length out) 2))                 ; one badge + the lone one
         (should badge)
-        (should (equal (plist-get badge :label) "3")))
+        (should (equal (plist-get badge :label) "3"))
+        ;; A badge is a small count bubble tinted with the layer kind's
+        ;; colour -- not the layer's icon (which zoom-scaled to a giant).
+        (should (eq (plist-get badge :kind) 'cluster))
+        (should (equal (plist-get badge :color) "#ffd24a"))  ; aircraft tint
+        (should (< (plist-get badge :scale) 1.0)))
     (remhash 'cmacs-gnuseye--cltest cmacs-gnuseye--layers)))
 
 ;;;; Phase 2: keyless data-layer parsers -------------------------------------
@@ -685,6 +690,7 @@ honours the AIS not-available sentinels (heading 511, cog 360)."
       (should (= (plist-get a :lon) 24.96))
       (should (= (plist-get a :heading) 235.0))  ; heading 511 -> cog
       (should (< (abs (- (plist-get a :speed) 5.14444)) 1e-3)) ; kt -> m/s
+      (should (= (plist-get a :scale) cmacs-gnuseye-marine-marker-scale))
       (should (= (plist-get b :heading) -1)))))  ; both unavailable
 
 (provide 'cmacs-gnuseye-tests)

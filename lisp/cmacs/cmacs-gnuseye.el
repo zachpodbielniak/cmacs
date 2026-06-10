@@ -144,7 +144,9 @@ to e.g. only planes, or planes and boats.")
     ;; bespoke icons; their distinct colour carries the meaning meanwhile.
     (event . 7) (volcano . 5) (alert . 7) (cyber . 0) (outage . 0)
     (cable . 0) (port . 9) (health . 0) (radiation . 0) (airq . 0)
-    (displaced . 9) (base . 9) (spaceport . 6) (hotspot . 4))
+    (displaced . 9) (base . 9) (spaceport . 6) (hotspot . 4)
+    ;; Cluster count badges render as small spheres (the quake mesh).
+    (cluster . 4))
   "Marker kind symbol -> C CmacsGnuseyeMarkerKind code.")
 
 (defcustom cmacs-gnuseye-kind-styles
@@ -172,7 +174,8 @@ to e.g. only planes, or planes and boats.")
     (displaced :color "#ffb870" :scale 1.0)
     (base      :color "#9aa6b2" :scale 0.9)
     (spaceport :color "#ff7be5" :scale 1.0)
-    (hotspot   :color "#ff2a2a" :scale 1.7))
+    (hotspot   :color "#ff2a2a" :scale 1.7)
+    (cluster   :color "#9ab8d8" :scale 0.6))
   "Per-kind default marker style (:color hex, :scale multiplier)."
   :type '(alist :key-type symbol :value-type plist)
   :group 'cmacs-gnuseye)
@@ -236,7 +239,9 @@ stored payload drives the detail view."
          (style (alist-get kind cmacs-gnuseye-kind-styles))
          (color (or (plist-get e :color) (plist-get style :color) "#ffd24a"))
          (scale (float (or (plist-get e :scale) (plist-get style :scale) 1.0)))
-         (scale (if (eq kind 'aircraft) (* scale cmacs-gnuseye--zoom-scale)
+         ;; Dense moving kinds keep a roughly constant on-screen size.
+         (scale (if (memq kind '(aircraft ship))
+                    (* scale cmacs-gnuseye--zoom-scale)
                   scale))
          (code  (or (alist-get kind cmacs-gnuseye--kind-codes) 0))
          (lab   (plist-get e :label))
@@ -472,15 +477,20 @@ tick do not re-pick a different subset each time (which flickered).")
     (puthash lname h cmacs-gnuseye--rendered-ids)))
 
 (defun cmacs-gnuseye--viewport-predicate (buf)
-  "Return a predicate (ENTITY) -> non-nil if within BUF's on-screen radius."
+  "Return a predicate (ENTITY) -> non-nil if within BUF's on-screen radius.
+The radius is the camera's true horizon angle acos(R/d) (the geometry of how
+much of the sphere a camera at distance D can see), plus a small margin --
+so zoomed out the whole visible hemisphere qualifies, and zoomed in only the
+local region does."
   (let ((vc (ignore-errors (cmacs-gnuseye-view-center buf))))
     (if (not (and (consp vc) (numberp (nth 0 vc))))
         (lambda (_e) t)
       (let* ((d2r (/ float-pi 180.0))
              (clat (* d2r (nth 0 vc))) (clon (* d2r (nth 1 vc)))
-             (dist (or (nth 2 vc) 12.0))
-             (vrad (min float-pi (max 0.08 (* (- dist 6.371) 0.10))))
-             (cosr (cos vrad)) (scl (sin clat)) (ccl (cos clat)))
+             (dist (max 6.372 (or (nth 2 vc) 12.0)))
+             (vrad (max 0.12 (* 1.06 (acos (min 1.0 (/ 6.371 dist))))))
+             (cosr (cos (min float-pi vrad)))
+             (scl (sin clat)) (ccl (cos clat)))
         (lambda (e)
           (let ((la (* d2r (or (plist-get e :lat) 0)))
                 (lo (* d2r (or (plist-get e :lon) 0))))
@@ -559,13 +569,23 @@ Cluster ids are stable per cell so the sticky render set does not flicker."
      (lambda (key members)
        (if (= (length members) 1)
            (push (car members) out)
-         (let ((slat 0.0) (slon 0.0) (n 0))
+         (let ((slat 0.0) (slon 0.0) (n 0)
+               ;; A badge is a small count bubble (sphere) tinted with the
+               ;; layer kind's colour -- NOT the layer's icon: a plane/ship
+               ;; mesh at badge scale (worse, zoom-multiplied for aircraft)
+               ;; reads as a giant rogue marker when zoomed out.
+               (color (or (plist-get (alist-get kind cmacs-gnuseye-kind-styles)
+                                     :color)
+                          "#9ab8d8")))
            (dolist (m members)
              (setq slat (+ slat (or (plist-get m :lat) 0.0))
                    slon (+ slon (or (plist-get m :lon) 0.0)) n (1+ n)))
            (push (list :id (format "cluster:%s:%s:%s" lname (car key) (cdr key))
-                       :kind kind :lat (/ slat n) :lon (/ slon n)
-                       :label (number-to-string n) :scale 1.5 :label-mode 3
+                       :kind 'cluster :lat (/ slat n) :lon (/ slon n)
+                       :color color
+                       :label (number-to-string n)
+                       :scale (min 1.6 (+ 0.5 (* 0.04 n)))
+                       :label-mode 3
                        :data `((:cluster . t) (:count . ,n) (:layer . ,lname)))
                  out))))
      buckets)

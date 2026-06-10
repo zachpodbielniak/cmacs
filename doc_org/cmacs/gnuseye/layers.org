@@ -44,9 +44,12 @@ enable them from the toggle pane (left).  Layer files are listed in
   FeatureCollections (position from geometry) and flat arrays
   (mmsi/lat/lon/cog/sog/name), honouring the AIS not-available sentinels
   (heading 511, cog 360).
-- Refresh: 30 s.  Geometry: hull + superstructure, bow = heading;
-  ~:cluster~ on.  Motion: dead reckoning (SOG converted knots → m/s).
-- Config: ~cmacs-gnuseye-marine-url~, ~-marine-max~ (1000).
+- Refresh: 30 s.  Geometry: hull + superstructure, bow = heading, small and
+  zoom-scaled to a constant on-screen size (~cmacs-gnuseye-marine-marker-scale~,
+  0.15); ~:cluster~ on.  Motion: dead reckoning (SOG converted knots → m/s).
+- Config: ~cmacs-gnuseye-marine-url~, ~-marine-urls~ (extra feeds, merged by
+  MMSI — widen the regional coverage), ~-marine-max~ (1000),
+  ~-marine-marker-scale~.
 
 * Weather & events
 
