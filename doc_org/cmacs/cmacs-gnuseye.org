@@ -233,11 +233,16 @@ sub-point (latitude = declination, longitude = RA − GMST), sweeping westward
 live as the Earth rotates — on a *log-compressed celestial shell*:
 
 #+begin_example
-world radius = clamp(20 + 10·log10(distance_km / 1e5), 12, 74)
-Moon ≈ 26 · Sun ≈ 52 · Mars ≈ 55 · Neptune ≈ 66 · Voyager 1 ≈ 74
+world radius = clamp(80 + 76.8·(log10(distance_km) − 5.585), 78, 450)
+Moon ≈ 80 · Sun ≈ 279 · Jupiter ≈ 339 · Neptune ≈ 392 · Voyager 1 ≈ 450
 #+end_example
 
-True scale is impossible (and invisible); direction and ordering are
+*Sizes are true to scale with Earth*: every body renders at its real radius
+relative to the Earth globe — Jupiter 10.97×, Saturn 9.14×, Venus 0.95×, the
+Moon 0.27× — except the Sun, whose true 109× would engulf the scene; it is
+drawn at 15× Earth (still unmistakably the largest, and labelled
+not-to-scale in the inspector).  Distances are log-compressed (true scale
+would put Neptune 4.3 million Earth-radii away); ordering and direction stay
 truthful, and the inspector shows the real distance (km / AU) and
 light-time.
 

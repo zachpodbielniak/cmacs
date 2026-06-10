@@ -179,9 +179,11 @@ to e.g. only planes, or planes and boats.")
     (spaceport :color "#ff7be5" :scale 1.0)
     (hotspot   :color "#ff2a2a" :scale 1.7)
     (cluster   :color "#9ab8d8" :scale 0.6)
-    (sun       :color "#ffd96a" :scale 40.0)
-    (moon      :color "#cfd2d6" :scale 12.0)
-    (planet    :color "#e0bc8f" :scale 9.0)
+    ;; Celestial fallbacks; real per-body true-scale values come from
+    ;; cmacs-gnuseye-celestial--bodies (Jupiter ~706 = 10.97 x Earth).
+    (sun       :color "#ffd96a" :scale 965.0)
+    (moon      :color "#cfd2d6" :scale 17.6)
+    (planet    :color "#e0bc8f" :scale 60.0)
     (asteroid  :color "#b9b3a8" :scale 4.0)
     (probe     :color "#7ad7ff" :scale 5.0))
   "Per-kind default marker style (:color hex, :scale multiplier)."
@@ -255,18 +257,23 @@ stored payload drives the detail view."
          (lab   (plist-get e :label))
          (id    (format "%s" (or (plist-get e :id) "")))
          (sel   (and cmacs-gnuseye--selected-id
-                     (equal id cmacs-gnuseye--selected-id))))
+                     (equal id cmacs-gnuseye--selected-id)))
+         ;; Celestial bodies are true-scale globes: enlarging or whitening
+         ;; them on selection would destroy the scale/look, so they keep
+         ;; their size and colour (their label is always on anyway).
+         (celestial (memq kind '(sun moon planet asteroid probe))))
     (list :id        id
           :lat       (float (or (plist-get e :lat) 0.0))
           :lon       (float (or (plist-get e :lon) 0.0))
           :alt       (float (or (plist-get e :alt) 0.0))
           :heading   (float (or (plist-get e :heading) -1.0))
           ;; The selected entity is enlarged, brightened, and always labelled.
-          :scale     (if sel (* scale 1.6) scale)
+          :scale     (if (and sel (not celestial)) (* scale 1.6) scale)
           :kind      code
           :kind-name kind
           :color     (cmacs-gnuseye--apply-opacity
-                      (cmacs-gnuseye--color->rgba (if sel "#ffffff" color))
+                      (cmacs-gnuseye--color->rgba
+                       (if (and sel (not celestial)) "#ffffff" color))
                       cmacs-gnuseye--render-opacity)
           :label     (and lab (format "%s" lab))
           ;; Default "hover" (mouse over to identify); "always" when selected.
@@ -822,12 +829,15 @@ and (unless NO-FLY) recentre the camera on it."
         (when (and cmacs-gnuseye-buffer (buffer-live-p cmacs-gnuseye-buffer)
                    (plist-get e :lat))
           ;; Celestial bodies sit on a shell far above the surface: fly to
-          ;; just OUTSIDE the body's shell so it is framed in front of Earth
-          ;; (the default range would park it behind the camera).
+          ;; just OUTSIDE the body (its shell + its rendered radius) so it is
+          ;; framed in front of Earth (the default range would park it
+          ;; behind the camera, or inside a true-scale giant).
           (let* ((alt (or (plist-get e :alt) 0.0))
                  (shell-r (* 6.371 (+ 1.0 (/ (float alt) 6371000.0))))
+                 (body-r (* 0.099 (float (or (plist-get e :scale) 1.0))))
+                 ;; Stand back ~6 body radii so the body subtends ~20 deg.
                  (range (if (> shell-r 9.0)
-                            (+ (- shell-r 6.371) 3.0)
+                            (+ (- shell-r 6.371) (max 3.0 (* 6.0 body-r)))
                           cmacs-gnuseye-focus-range)))
             (ignore-errors
               (cmacs-gnuseye-fly-to cmacs-gnuseye-buffer

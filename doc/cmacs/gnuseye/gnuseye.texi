@@ -208,9 +208,11 @@ The @emph{Solar system} category renders the Sun, the Moon, the planets,
 deep-space probes (Voyager 1/2, New Horizons, JWST), and asteroids at their
 @emph{true geocentric direction} (above their sub-point, sweeping live with
 Earth's rotation) on log-compressed celestial shells (world radius
-@code{20 + 10*log10(km/1e5)}, clamped to [12, 74]; Moon ~26, Sun ~52,
-Voyager ~74).  Direction and ordering are truthful; the inspector reports the
-real distance (km / AU) and light-time.
+@code{80 + 76.8*(log10(km)-5.585)}, clamped to [78, 450]; Moon ~80, Sun
+~279, Voyager ~450), at @emph{true size relative to Earth} (Jupiter 10.97x,
+the Moon 0.27x; the Sun capped at 15x -- its real 109x would engulf the
+scene).  Direction and ordering are truthful; the inspector reports the
+real distance (km / AU), light-time, and the size note.
 
 Sun/Moon/planets come from local ephemerides (@file{cmacs-gnuseye-ephem.el}:
 JPL/Standish approximate elements + the low-precision Almanac Moon; no

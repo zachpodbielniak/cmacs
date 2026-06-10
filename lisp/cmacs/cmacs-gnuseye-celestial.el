@@ -25,15 +25,19 @@
 
 ;;;; Celestial shell ----------------------------------------------------------
 
+(defun cmacs-gnuseye-celestial-shell-radius (dist-km)
+  "Compressed shell WORLD RADIUS for a body DIST-KM away.
+Log-compressed so true-scale bodies fit the renderer's depth budget while
+distance ordering stays truthful: the Moon lands near 80 world units, the
+Sun near 280, Jupiter near 340, Voyager 1 at the 450 cap."
+  (max 78.0 (min 450.0 (+ 80.0 (* 76.8 (- (log (max 1.0 dist-km) 10)
+                                          5.585))))))
+
 (defun cmacs-gnuseye-celestial-shell-alt (dist-km)
-  "Compressed shell altitude (:alt metres) for a body DIST-KM away.
-Maps the body's true distance to a world radius in [12, 74] via
-20 + 10*log10(dist_km/1e5), then to the :alt that places a marker there."
-  (let* ((wr (max 12.0 (min 74.0 (+ 20.0 (* 10.0 (log (max 1.0 (/ dist-km 1e5))
-                                                      10))))))
-         ;; world_r = R*(1 + alt/Re)  =>  alt = (world_r/R - 1) * Re
-         (alt (* (- (/ wr 6.371) 1.0) 6371000.0)))
-    alt))
+  "Compressed shell altitude (:alt metres) for a body DIST-KM away."
+  ;; world_r = R*(1 + alt/Re)  =>  alt = (world_r/R - 1) * Re
+  (* (- (/ (cmacs-gnuseye-celestial-shell-radius dist-km) 6.371) 1.0)
+     6371000.0))
 
 (defun cmacs-gnuseye-celestial--fmt-dist (dist-km)
   "Human distance string: km, with AU and light-time when far."
@@ -55,34 +59,47 @@ Maps the body's true distance to a world radius in [12, 74] via
 ;;;; Sun + Moon + planets (local ephemeris; always live) ----------------------
 
 (defconst cmacs-gnuseye-celestial--bodies
-  ;; (BODY KIND LABEL COLOR SCALE) -- scales tuned for apparent size at each
-  ;; body's shell distance: the Sun unmistakably dominant, gas giants larger
-  ;; than rocky planets, the (near-shell) Moon naturally big in the sky.
-  '((sun     sun    "Sun"     "#ffd96a" 40.0)
-    (moon    moon   "Moon"    "#cfd2d6" 12.0)
-    (mercury planet "Mercury" "#b3a08a" 6.0)
-    (venus   planet "Venus"   "#f2e3c0" 9.0)
-    (mars    planet "Mars"    "#e07a4f" 8.0)
-    (jupiter planet "Jupiter" "#e0bc8f" 16.0)
-    (saturn  planet "Saturn"  "#e8d8a8" 14.0)
-    (uranus  planet "Uranus"  "#9adfe0" 11.0)
-    (neptune planet "Neptune" "#7aa8ff" 11.0))
-  "The locally-computed bodies and their marker styles.")
+  ;; (BODY KIND LABEL COLOR RADIUS-RATIO) -- RADIUS-RATIO is the body's TRUE
+  ;; radius relative to Earth, so every body renders at correct scale to the
+  ;; Earth globe (Jupiter ~11x, the Moon 0.27x, ...).  The one exception is
+  ;; the Sun: its true 109x would engulf the whole scene, so it is drawn at
+  ;; 15x Earth -- still unmistakably the largest body (noted not-to-scale in
+  ;; the inspector).
+  '((sun     sun    "Sun"     "#ffd96a" 15.0)
+    (moon    moon   "Moon"    "#cfd2d6" 0.273)
+    (mercury planet "Mercury" "#b3a08a" 0.383)
+    (venus   planet "Venus"   "#f2e3c0" 0.950)
+    (mars    planet "Mars"    "#e07a4f" 0.532)
+    (jupiter planet "Jupiter" "#e0bc8f" 10.97)
+    (saturn  planet "Saturn"  "#e8d8a8" 9.14)
+    (uranus  planet "Uranus"  "#9adfe0" 3.98)
+    (neptune planet "Neptune" "#7aa8ff" 3.87))
+  "The locally-computed bodies: true Earth-relative radii (Sun capped).")
+
+(defun cmacs-gnuseye-celestial--ratio->scale (ratio)
+  "Marker :scale that renders a sphere of RATIO x Earth's radius.
+The C sphere radius is 0.9 * 0.11 * scale world units; Earth is 6.371."
+  (/ (* ratio 6.371) 0.099))
 
 (defun cmacs-gnuseye-celestial--body-entity (spec &optional time)
-  "Entity plist for body SPEC ((BODY KIND LABEL COLOR SCALE)) at TIME."
-  (pcase-let ((`(,body ,kind ,label ,color ,scale) spec))
+  "Entity plist for body SPEC ((BODY KIND LABEL COLOR RATIO)) at TIME."
+  (pcase-let ((`(,body ,kind ,label ,color ,ratio) spec))
     (let ((p (cmacs-gnuseye-ephem-body body time)))
       (when p
         (let ((dist (plist-get p :dist-km)))
           (list :id (format "cel:%s" body)
-                :kind kind :label label :color color :scale scale
+                :kind kind :label label :color color
+                :scale (cmacs-gnuseye-celestial--ratio->scale ratio)
                 :lat (plist-get p :sublat) :lon (plist-get p :sublon)
                 :alt (cmacs-gnuseye-celestial-shell-alt dist)
                 :label-mode 3
                 :data `((body . ,body)
                         (distance . ,(cmacs-gnuseye-celestial--fmt-dist dist))
                         (dist-km . ,dist)
+                        (size . ,(if (eq body 'sun)
+                                     "shown 15x Earth (true: 109x)"
+                                   (format "%.2fx Earth radius (true scale)"
+                                           ratio)))
                         (sub-point . ,(format "%.2f, %.2f"
                                               (plist-get p :sublat)
                                               (plist-get p :sublon))))))))))

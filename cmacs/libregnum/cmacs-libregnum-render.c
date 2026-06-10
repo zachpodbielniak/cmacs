@@ -1648,9 +1648,11 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
  * (zoom, orbit around an off-centre target, pan) can pass through the globe.
  * No-op when no occluder is set (editor scenes, the flat map). */
 #define CTX_OCCLUDER_FLOOR  1.002   /* min camera radius, x surface radius */
-#define CTX_OCCLUDER_CEIL   20.0    /* max camera radius, x surface radius
-                                     * (high enough to frame the celestial
-                                     * shells, which top out near 12 x R) */
+#define CTX_OCCLUDER_CEIL   80.0    /* max camera radius, x surface radius
+                                     * (frames the celestial shells, which
+                                     * top out near 450 world units; keeps
+                                     * camera+shell depth inside raylib's
+                                     * 1000-unit far cull plane) */
 
 static void
 ctx_clamp_above_occluder (CmacsLibregnumRenderCtx *r,

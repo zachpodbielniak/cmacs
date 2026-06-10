@@ -743,15 +743,29 @@ honours the AIS not-available sentinels (heading 511, cog 360)."
     (should (< (abs (- (/ (plist-get p :dist-km) 149597870.7) 2.16556)) 0.05))))
 
 (ert-deftest cmacs-gnuseye--celestial-shell ()
-  "The shell maps real distances monotonically into world radius [12, 74]."
+  "The shell maps real distances monotonically into world radius [78, 450]."
   (cmacs-gnuseye-tests--skip)
   (require 'cmacs-gnuseye-celestial)
-  (cl-flet ((wr (km) (* 6.371 (+ 1.0 (/ (cmacs-gnuseye-celestial-shell-alt km)
-                                        6371000.0)))))
-    (should (< (abs (- (wr 384400.0) 25.85)) 0.5))        ; Moon
-    (should (< (abs (- (wr 1.496e8) 51.75)) 0.5))         ; Sun
+  (cl-flet ((wr (km) (cmacs-gnuseye-celestial-shell-radius km)))
+    (should (< (abs (- (wr 384400.0) 80.0)) 2.0))         ; Moon ~ 80
+    (should (< (abs (- (wr 1.496e8) 279.0)) 3.0))         ; Sun ~ 279
     (should (< (wr 1.496e8) (wr 4.3e9)))                  ; monotonic
-    (should (<= (wr 2.6e10) 74.001))))                    ; Voyager clamped
+    (should (<= (wr 2.6e10) 450.001))))                   ; Voyager clamped
+
+(ert-deftest cmacs-gnuseye--celestial-true-scale ()
+  "Bodies render at true radius relative to Earth (sphere r = 0.099*scale):
+Jupiter ~10.97x Earth, the Moon ~0.273x; the Sun is capped but dominant."
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-celestial)
+  (cl-flet ((r-of (body)
+              (let* ((spec (assq body cmacs-gnuseye-celestial--bodies))
+                     (e (cmacs-gnuseye-celestial--body-entity
+                         spec cmacs-gnuseye-tests--epoch)))
+                (* 0.099 (plist-get e :scale)))))
+    (should (< (abs (- (r-of 'jupiter) (* 10.97 6.371))) 0.5))
+    (should (< (abs (- (r-of 'moon) (* 0.273 6.371))) 0.1))
+    (should (< (abs (- (r-of 'venus) (* 0.950 6.371))) 0.1))
+    (should (> (r-of 'sun) (r-of 'jupiter)))))            ; Sun stays biggest
 
 (ert-deftest cmacs-gnuseye--horizons-parse ()
   "The Horizons CSV $$SOE block parses to (RA DEC DELTA)."
