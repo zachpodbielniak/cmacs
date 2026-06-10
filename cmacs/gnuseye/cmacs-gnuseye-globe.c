@@ -172,12 +172,13 @@ warp_equirect_to_mesh (GrlImage *src)
           double phi = ((double) ox + 0.5) / GLOBE_WARP_W * M_PI;
           double sp = sin (phi), cp = cos (phi);
           double px = ct * sp, py = st * sp, pz = cp;   /* mesh unit pos */
-          /* Texture v runs bottom-up through this pipeline (GL origin), so
-           * latitude flips; and our marker frame winds longitude toward -Z
-           * (east right on a standard globe), so lon is atan2(-z, x).  Both
-           * signs verified against city markers on the real Earth map. */
-          double mlat = -py;
-          double lat = asin (mlat < -1 ? -1 : (mlat > 1 ? 1 : mlat));
+          /* Our marker frame winds longitude toward -Z (east right on a
+           * standard globe), so the matching source lon is atan2(-z, x);
+           * latitude maps directly (lat = asin(y)).  Verified numerically
+           * with a lat/lon-encoding gradient texture -- earlier sign
+           * "fixes" here were calibrated against snapshot PNGs that were
+           * themselves vertically flipped (see snapshot_png). */
+          double lat = asin (py < -1 ? -1 : (py > 1 ? 1 : py));
           double lon = atan2 (-pz, px);
           double u = (lon / (2.0 * M_PI)) + 0.5;         /* 0..1 (lon) */
           double v = 0.5 - (lat / M_PI);                 /* 0 top=north */

@@ -2023,8 +2023,23 @@ cmacs_libregnum_render_ctx_snapshot_png (CmacsLibregnumRenderCtx *r,
     }
 
   /* The readback is BGRA which, on little-endian, is cairo's ARGB32 byte
-   * order, so the buffer feeds cairo directly (orientation may be GL
-   * bottom-up; immaterial for verification). */
+   * order, so the buffer feeds cairo directly.  glReadPixels' origin is
+   * the lower-left corner: the GUI paint hook flips with a cairo matrix,
+   * but a PNG written straight from this buffer is upside down -- which
+   * silently inverted every snapshot-based orientation check.  Flip the
+   * rows so snapshots match what the user sees. */
+  {
+    gsize stride = (gsize) r->width * 4;
+    g_autofree unsigned char *tmp = g_malloc (stride);
+    for (int y = 0; y < r->height / 2; y++)
+      {
+        unsigned char *a = buf + (gsize) y * stride;
+        unsigned char *b = buf + (gsize) (r->height - 1 - y) * stride;
+        memcpy (tmp, a, stride);
+        memcpy (a, b, stride);
+        memcpy (b, tmp, stride);
+      }
+  }
   surface = cairo_image_surface_create_for_data (buf, CAIRO_FORMAT_ARGB32,
                                                  r->width, r->height,
                                                  r->width * 4);
