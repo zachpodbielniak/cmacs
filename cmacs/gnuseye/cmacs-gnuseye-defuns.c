@@ -587,6 +587,23 @@ pixel is off the globe.  */)
   return Qnil;
 }
 
+DEFUN ("cmacs-gnuseye-zoom", Fcmacs_gnuseye_zoom, Scmacs_gnuseye_zoom,
+       2, 2, 0,
+       doc: /* Zoom BUFFER's globe camera by TICKS (positive = in).
+Each tick consumes a fraction of the camera's remaining altitude above the
+surface, so zoom refines as you approach and can never pass through the
+globe.  */)
+  (Lisp_Object buffer, Lisp_Object ticks)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  cmacs_libregnum_render_ctx_zoom_camera (
+    cmacs_libregnum_view_get_render_ctx (v), XFLOATINT (ticks));
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
 DEFUN ("cmacs-gnuseye-set-projection", Fcmacs_gnuseye_set_projection,
        Scmacs_gnuseye_set_projection, 2, 2, 0,
        doc: /* Set BUFFER's globe projection: FLAT non-nil = 2D flat map,
@@ -720,6 +737,7 @@ syms_of_cmacs_gnuseye_defuns (void)
   defsubr (&Scmacs_gnuseye_screen_to_globe);
   defsubr (&Scmacs_gnuseye_set_projection);
   defsubr (&Scmacs_gnuseye_flat_p);
+  defsubr (&Scmacs_gnuseye_zoom);
 }
 
 #endif /* HAVE_CMACS_GNUSEYE */

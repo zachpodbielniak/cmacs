@@ -1629,6 +1629,25 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
 
 #include <math.h>
 
+/* Keep a camera position outside the occluding sphere (the gnuseye globe):
+ * push it radially out to a floor just above the surface so no camera motion
+ * (zoom, orbit around an off-centre target, pan) can pass through the globe.
+ * No-op when no occluder is set (editor scenes, the flat map). */
+#define CTX_OCCLUDER_FLOOR  1.002   /* min camera radius, x surface radius */
+#define CTX_OCCLUDER_CEIL   12.0    /* max camera radius, x surface radius */
+
+static void
+ctx_clamp_above_occluder (CmacsLibregnumRenderCtx *r,
+                          double *x, double *y, double *z)
+{
+  if (!r || r->occluder_radius <= 0.0) return;
+  double mind = r->occluder_radius * CTX_OCCLUDER_FLOOR;
+  double len = sqrt ((*x) * (*x) + (*y) * (*y) + (*z) * (*z));
+  if (len < 1e-9) { *x = 0.0; *y = mind; *z = 0.0; return; }
+  if (len < mind)
+    { double k = mind / len; *x *= k; *y *= k; *z *= k; }
+}
+
 void
 cmacs_libregnum_render_ctx_orbit_camera (CmacsLibregnumRenderCtx *r,
                                          double dx_px, double dy_px)
@@ -1653,10 +1672,11 @@ cmacs_libregnum_render_ctx_orbit_camera (CmacsLibregnumRenderCtx *r,
   double nx = rad * cos (pitch) * sin (yaw);
   double ny = rad * sin (pitch);
   double nz = rad * cos (pitch) * cos (yaw);
-  lrg_camera3d_set_position_xyz (c3,
-                                  tgt->x + (float) nx,
-                                  tgt->y + (float) ny,
-                                  tgt->z + (float) nz);
+  /* Orbiting an off-centre target (a selected entity) can swing the camera
+   * into the globe; keep it above the surface. */
+  double wx = tgt->x + nx, wy = tgt->y + ny, wz = tgt->z + nz;
+  ctx_clamp_above_occluder (r, &wx, &wy, &wz);
+  lrg_camera3d_set_position_xyz (c3, (float) wx, (float) wy, (float) wz);
 }
 
 void
@@ -1671,6 +1691,43 @@ cmacs_libregnum_render_ctx_zoom_camera (CmacsLibregnumRenderCtx *r,
   LrgCamera3D *c3 = LRG_CAMERA3D (r->camera);
   g_autoptr (GrlVector3) pos = lrg_camera3d_get_position (c3);
   g_autoptr (GrlVector3) tgt = lrg_camera3d_get_target   (c3);
+
+  if (r->occluder_radius > 0.0)
+    {
+      /* Globe zoom: scale the camera's ALTITUDE above the occluder surface,
+       * not its distance to the target.  Each wheel tick consumes a fixed
+       * fraction of the remaining altitude, so steps shrink as you get
+       * closer (ever-finer zoom near the surface) and the surface is an
+       * asymptote -- with a hard radial floor so the camera can never pass
+       * through the globe, and a ceiling so it cannot get lost in space. */
+      double vx = tgt->x - pos->x, vy = tgt->y - pos->y, vz = tgt->z - pos->z;
+      double vlen = sqrt (vx*vx + vy*vy + vz*vz);
+      if (vlen < 1e-9) return;
+      vx /= vlen; vy /= vlen; vz /= vlen;
+      double mind = r->occluder_radius * CTX_OCCLUDER_FLOOR;
+      double maxd = r->occluder_radius * CTX_OCCLUDER_CEIL;
+      double clen = sqrt (pos->x * pos->x + pos->y * pos->y
+                          + pos->z * pos->z);
+      double above = clen - mind;
+      if (above < 5e-4) above = 5e-4;
+      double nabove = above * pow (0.9, wheel_dy);
+      if (nabove < 5e-4) nabove = 5e-4;
+      if (nabove > maxd - mind) nabove = maxd - mind;
+      double step = above - nabove;            /* + = toward the target */
+      double wx = pos->x + vx * step;
+      double wy = pos->y + vy * step;
+      double wz = pos->z + vz * step;
+      ctx_clamp_above_occluder (r, &wx, &wy, &wz);
+      /* Ceiling: zooming out stops before the globe becomes a speck. */
+      double wlen = sqrt (wx*wx + wy*wy + wz*wz);
+      if (wlen > maxd && wlen > 1e-9)
+        { double k = maxd / wlen; wx *= k; wy *= k; wz *= k; }
+      lrg_camera3d_set_position_xyz (c3, (float) wx, (float) wy, (float) wz);
+      return;
+    }
+
+  /* No occluder (editor scenes, the flat map): scale the distance to the
+   * target -- asymptotic toward it, so it cannot invert through. */
   double ox = pos->x - tgt->x, oy = pos->y - tgt->y, oz = pos->z - tgt->z;
   double scale = pow (0.9, wheel_dy);
   ox *= scale; oy *= scale; oz *= scale;
@@ -1717,8 +1774,11 @@ cmacs_libregnum_render_ctx_pan_camera (CmacsLibregnumRenderCtx *r,
   double mx = (-dx_px) * rx * s + dy_px * cux * s;
   double my = (-dx_px) * ry * s + dy_px * cuy * s;
   double mz = (-dx_px) * rz * s + dy_px * cuz * s;
-  lrg_camera3d_set_position_xyz (c3, (float)(pos->x + mx),
-                                 (float)(pos->y + my), (float)(pos->z + mz));
+  /* Panning translates the camera in the view plane, which on a sphere can
+   * dip it below the surface near the limb; keep it above. */
+  double wx = pos->x + mx, wy = pos->y + my, wz = pos->z + mz;
+  ctx_clamp_above_occluder (r, &wx, &wy, &wz);
+  lrg_camera3d_set_position_xyz (c3, (float) wx, (float) wy, (float) wz);
   lrg_camera3d_set_target_xyz   (c3, (float)(tgt->x + mx),
                                  (float)(tgt->y + my), (float)(tgt->z + mz));
 }

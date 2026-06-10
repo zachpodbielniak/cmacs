@@ -1419,6 +1419,9 @@ it).  Layers needing an API key that is unset cannot be enabled."
     (define-key map (kbd "2") #'cmacs-gnuseye-toggle-2d)
     (define-key map (kbd "u") #'cmacs-gnuseye-deselect)
     (define-key map (kbd "<escape>") #'cmacs-gnuseye-deselect)
+    (define-key map (kbd "+") #'cmacs-gnuseye-zoom-in)
+    (define-key map (kbd "=") #'cmacs-gnuseye-zoom-in)
+    (define-key map (kbd "-") #'cmacs-gnuseye-zoom-out)
     (define-key map (kbd "q") #'quit-window)
     map)
   "Keymap for `cmacs-gnuseye-mode'.")
@@ -1818,6 +1821,20 @@ Each layer's data is downloaded + cached once.  Honours the
              (cmacs-gnuseye-redraw buffer))))))))
 
 (defalias 'cmacs-gnuseye-load-coastlines 'cmacs-gnuseye-load-map)
+
+(defun cmacs-gnuseye-zoom-in ()
+  "Zoom the globe camera in one step (altitude-proportional, never through)."
+  (interactive)
+  (when (and cmacs-gnuseye-buffer (cmacs-gnuseye-attached-p cmacs-gnuseye-buffer)
+             (fboundp 'cmacs-gnuseye-zoom))
+    (cmacs-gnuseye-zoom cmacs-gnuseye-buffer 1.0)))
+
+(defun cmacs-gnuseye-zoom-out ()
+  "Zoom the globe camera out one step."
+  (interactive)
+  (when (and cmacs-gnuseye-buffer (cmacs-gnuseye-attached-p cmacs-gnuseye-buffer)
+             (fboundp 'cmacs-gnuseye-zoom))
+    (cmacs-gnuseye-zoom cmacs-gnuseye-buffer -1.0)))
 
 ;;;###autoload
 (defun cmacs-gnuseye-toggle-2d ()
