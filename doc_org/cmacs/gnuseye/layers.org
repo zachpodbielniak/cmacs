@@ -6,6 +6,28 @@ Every shipped data layer, by category.  All layers are *off by default*;
 enable them from the toggle pane (left).  Layer files are listed in
 ~cmacs-gnuseye-layer-files~ and loaded when the globe opens.
 
+* Solar system — ~cmacs-gnuseye-celestial.el~ (v3)
+
+Bodies render at their true geocentric direction (sub-point) on
+log-compressed shells (world radius 20 + 10·log10(km/1e5), clamped [12,74]);
+the inspector shows real distance + light-time.  ~0~ returns to Earth.
+
+** solar-system
+Sun + Moon + Mercury…Neptune from local ephemerides
+(~cmacs-gnuseye-ephem.el~: Standish planetary elements + low-precision Moon;
+no key, no network, validated against Horizons fixtures).  Positions
+recomputed every smooth tick — the sky sweeps live with Earth's rotation.
+
+** probes
+Deep-space spacecraft from keyless JPL Horizons (geocentric observer
+ephemeris): Voyager 1/2, New Horizons, JWST by default
+(~cmacs-gnuseye-probes~).  Refresh 6 h.
+
+** asteroids
+Asteroids from Horizons: Apophis, Ceres, Bennu, Eros by default
+(~cmacs-gnuseye-asteroids~ — any Horizons small-body designation).
+Refresh 6 h.
+
 * Astronomical
 
 ** satellites — ~cmacs-gnuseye-astro.el~

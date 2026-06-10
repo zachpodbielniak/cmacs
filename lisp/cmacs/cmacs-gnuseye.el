@@ -62,7 +62,7 @@ Smaller zooms in closer."
     cmacs-gnuseye-marine cmacs-gnuseye-weather
     cmacs-gnuseye-natural cmacs-gnuseye-space cmacs-gnuseye-conflict
     cmacs-gnuseye-infra cmacs-gnuseye-health cmacs-gnuseye-media
-    cmacs-gnuseye-keyed)
+    cmacs-gnuseye-keyed cmacs-gnuseye-celestial)
   "Feature files providing the built-in layers, loaded when the globe opens."
   :type '(repeat symbol)
   :group 'cmacs-gnuseye)
@@ -132,7 +132,8 @@ to e.g. only planes, or planes and boats.")
 (defconst cmacs-gnuseye--known-kinds
   '(satellite aircraft ship quake fire launch storm camera city
     event volcano alert cyber outage cable port health radiation airq
-    displaced base spaceport hotspot)
+    displaced base spaceport hotspot
+    sun moon planet asteroid probe)
   "Selectable marker kinds for filtering.")
 
 ;;;; Kind styles -------------------------------------------------------------
@@ -146,7 +147,9 @@ to e.g. only planes, or planes and boats.")
     (cable . 0) (port . 9) (health . 0) (radiation . 0) (airq . 0)
     (displaced . 9) (base . 9) (spaceport . 6) (hotspot . 4)
     ;; Cluster count badges render as small spheres (the quake mesh).
-    (cluster . 4))
+    (cluster . 4)
+    ;; Celestial bodies: spheres for worlds, the satellite mesh for probes.
+    (sun . 4) (moon . 4) (planet . 4) (asteroid . 4) (probe . 1))
   "Marker kind symbol -> C CmacsGnuseyeMarkerKind code.")
 
 (defcustom cmacs-gnuseye-kind-styles
@@ -175,7 +178,12 @@ to e.g. only planes, or planes and boats.")
     (base      :color "#9aa6b2" :scale 0.9)
     (spaceport :color "#ff7be5" :scale 1.0)
     (hotspot   :color "#ff2a2a" :scale 1.7)
-    (cluster   :color "#9ab8d8" :scale 0.6))
+    (cluster   :color "#9ab8d8" :scale 0.6)
+    (sun       :color "#ffd96a" :scale 22.0)
+    (moon      :color "#cfd2d6" :scale 10.0)
+    (planet    :color "#e0bc8f" :scale 7.0)
+    (asteroid  :color "#b9b3a8" :scale 3.5)
+    (probe     :color "#7ad7ff" :scale 4.0))
   "Per-kind default marker style (:color hex, :scale multiplier)."
   :type '(alist :key-type symbol :value-type plist)
   :group 'cmacs-gnuseye)
@@ -813,11 +821,19 @@ and (unless NO-FLY) recentre the camera on it."
       (unless no-fly
         (when (and cmacs-gnuseye-buffer (buffer-live-p cmacs-gnuseye-buffer)
                    (plist-get e :lat))
-          (ignore-errors
-            (cmacs-gnuseye-fly-to cmacs-gnuseye-buffer
-                                  (float (plist-get e :lat))
-                                  (float (plist-get e :lon))
-                                  cmacs-gnuseye-focus-range t))
+          ;; Celestial bodies sit on a shell far above the surface: fly to
+          ;; just OUTSIDE the body's shell so it is framed in front of Earth
+          ;; (the default range would park it behind the camera).
+          (let* ((alt (or (plist-get e :alt) 0.0))
+                 (shell-r (* 6.371 (+ 1.0 (/ (float alt) 6371000.0))))
+                 (range (if (> shell-r 9.0)
+                            (+ (- shell-r 6.371) 3.0)
+                          cmacs-gnuseye-focus-range)))
+            (ignore-errors
+              (cmacs-gnuseye-fly-to cmacs-gnuseye-buffer
+                                    (float (plist-get e :lat))
+                                    (float (plist-get e :lon))
+                                    range t)))
           ;; After the fly-to tween settles, re-pick nearest so the
           ;; destination region's other markers fill in around it.
           (run-with-timer 1.5 nil #'cmacs-gnuseye-refresh-view-layers)))
@@ -846,6 +862,24 @@ the globe does the same."
       (cmacs-gnuseye--render-all buf)
       (ignore-errors (cmacs-gnuseye-redraw buf))
       (cmacs-gnuseye--show-inspector nil))))
+
+;;;###autoload
+(defun cmacs-gnuseye-home ()
+  "Go back to Earth: clear the selection and reset to the default Earth view.
+After flying out to the Moon, a planet, or a probe on the celestial shells,
+this recentres the orbit on Earth's centre at the standard distance."
+  (interactive)
+  (setq cmacs-gnuseye--selected-id nil)
+  (let ((buf cmacs-gnuseye-buffer))
+    (when (and buf (buffer-live-p buf) (cmacs-gnuseye-attached-p buf))
+      (let* ((vc (ignore-errors (cmacs-gnuseye-view-center buf)))
+             (lat (if (consp vc) (nth 0 vc) 20.0))
+             (lon (if (consp vc) (nth 1 vc) -30.0)))
+        (ignore-errors (cmacs-gnuseye-fly-to buf lat lon 6.6 t)))
+      (cmacs-gnuseye--render-all buf)
+      (ignore-errors (cmacs-gnuseye-redraw buf))
+      (cmacs-gnuseye--show-inspector nil)
+      (message "GNU's Eye: back to Earth"))))
 
 (defvar cmacs-gnuseye--click-functions nil
   "Abnormal hook run as (BUFFER NODE-ID VX VY) on each globe click before the
@@ -1201,7 +1235,7 @@ Pick one or more of e.g. aircraft, ship, satellite, quake."
 (defconst cmacs-gnuseye--types-name "*GNU's Eye Types*")
 
 (defcustom cmacs-gnuseye-group-order
-  '(astronomical air marine weather natural space-weather conflict
+  '(celestial astronomical air marine weather natural space-weather conflict
     infra health media markets)
   "Order the entity-type categories appear in the toggle pane.
 Groups not listed here are appended alphabetically after these."
@@ -1209,7 +1243,8 @@ Groups not listed here are appended alphabetically after these."
   :group 'cmacs-gnuseye)
 
 (defcustom cmacs-gnuseye-group-titles
-  '((astronomical . "Astronomical") (air . "Air traffic")
+  '((celestial . "Solar system") (astronomical . "Astronomical")
+    (air . "Air traffic")
     (marine . "Marine") (weather . "Weather & events")
     (natural . "Natural events") (space-weather . "Space weather")
     (conflict . "Conflict & geopolitics") (infra . "Infrastructure")
@@ -1419,6 +1454,8 @@ it).  Layers needing an API key that is unset cannot be enabled."
     (define-key map (kbd "2") #'cmacs-gnuseye-toggle-2d)
     (define-key map (kbd "u") #'cmacs-gnuseye-deselect)
     (define-key map (kbd "<escape>") #'cmacs-gnuseye-deselect)
+    (define-key map (kbd "0") #'cmacs-gnuseye-home)
+    (define-key map (kbd "<home>") #'cmacs-gnuseye-home)
     (define-key map (kbd "+") #'cmacs-gnuseye-zoom-in)
     (define-key map (kbd "=") #'cmacs-gnuseye-zoom-in)
     (define-key map (kbd "-") #'cmacs-gnuseye-zoom-out)
@@ -1446,7 +1483,7 @@ and clicking one selects it (inspector + recentre)."
   (add-hook 'kill-buffer-hook #'cmacs-gnuseye--on-kill nil t)
   (setq-local mode-line-format
               '(" GNU's Eye  drag=orbit scroll=zoom hover=id click=select \
- [e]ntities [i]nspect [l]ayers [s]earch [u]nselect [?]legend [q]uit")))
+ [e]ntities [i]nspect [l]ayers [s]earch [u]nselect [0]home [?]legend [q]uit")))
 
 (defun cmacs-gnuseye-entities ()
   "Show (and select) the entity list pane."

@@ -115,6 +115,13 @@ Loaded via ~cmacs-gnuseye-feature-files~.  Each is self-contained:
 
 The 2D flat map is toggled with ~cmacs-gnuseye-toggle-2d~ (~2~).
 
+v3 solar system: ~cmacs-gnuseye-ephem-body~ ~(BODY &optional TIME)~ →
+~(:sublat :sublon :dist-km)~ for ~sun moon mercury…neptune~ (local Standish /
+Meeus ephemerides; ~cmacs-gnuseye-ephem-gmst~ exposed too);
+~cmacs-gnuseye-celestial-shell-alt~ ~(DIST-KM)~ maps a real distance to the
+compressed-shell ~:alt~; ~cmacs-gnuseye-home~ (~0~) resets to the Earth view;
+defcustoms ~cmacs-gnuseye-probes~ / ~-asteroids~ pick the Horizons bodies.
+
 * Render-context additions (libregnum)
 
 - Persistent *background model* (the Earth sphere) drawn first and not
@@ -150,6 +157,9 @@ click select):
 | ~.~ | track selected entity |
 | ~D~ | market dashboards |
 | ~2~ | toggle 2D flat map / 3D globe |
+| ~0~ / ~Home~ | go back to Earth (reset view from the solar system) |
+| ~u~ / ~Esc~ | deselect + re-orbit Earth |
+| ~+~ / ~-~ | keyboard zoom (altitude-proportional) |
 | ~M~ | measure (two-click distance + bearing) |
 | ~H~ | density heatmap of a layer |
 | ~N~ | live news panel |

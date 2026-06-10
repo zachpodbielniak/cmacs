@@ -202,6 +202,26 @@ ReliefWeb disasters; @strong{more panels}: crypto treemap, Hacker News, FRED.
 market-implication, resilience simulation, country SITREPs.
 @end itemize
 
+@section v3: the solar system
+
+The @emph{Solar system} category renders the Sun, the Moon, the planets,
+deep-space probes (Voyager 1/2, New Horizons, JWST), and asteroids at their
+@emph{true geocentric direction} (above their sub-point, sweeping live with
+Earth's rotation) on log-compressed celestial shells (world radius
+@code{20 + 10*log10(km/1e5)}, clamped to [12, 74]; Moon ~26, Sun ~52,
+Voyager ~74).  Direction and ordering are truthful; the inspector reports the
+real distance (km / AU) and light-time.
+
+Sun/Moon/planets come from local ephemerides (@file{cmacs-gnuseye-ephem.el}:
+JPL/Standish approximate elements + the low-precision Almanac Moon; no
+network, validated against Horizons fixtures), recomputed every smooth tick.
+Probes and asteroids come from the keyless JPL Horizons API
+(@code{cmacs-gnuseye-probes}, @code{cmacs-gnuseye-asteroids}; 6 h refresh).
+
+Click a body to fly out and frame it; @code{.} tracks it.  @strong{@code{0}
+(or Home) is the ``go back to Earth'' button}: it clears the selection and
+returns to the standard Earth orbit view.
+
 @section Architecture notes
 
 Only @file{cmacs-gnuseye-globe.c} (the render half) includes

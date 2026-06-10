@@ -585,7 +585,10 @@ kind_alt_exag (int kind)
     case CMACS_GNUSEYE_MARKER_AIRCRAFT:  return 45.0;
     case CMACS_GNUSEYE_MARKER_SATELLITE: return 1.0;
     case CMACS_GNUSEYE_MARKER_LAUNCH:    return 4.0;
-    default:                             return 0.0;
+    /* Default 1.0 (honour :alt verbatim) so celestial bodies -- the Moon,
+     * planets, probes on their compressed shells -- lift off the surface.
+     * Surface feeds pass alt 0, so they are unaffected. */
+    default:                             return 1.0;
     }
 }
 
@@ -704,8 +707,11 @@ cmacs_gnuseye_add_marker (CmacsLibregnumRenderCtx *r, int kind,
     }
 
   /* Drop-line from an elevated marker to its ground point: reads altitude
-   * and pins the marker to a lat/lon, like a flight tracker. */
-  if (render_alt > 0.0)
+   * and pins the marker to a lat/lon, like a flight tracker.  Capped so
+   * near-Earth traffic (aircraft ~4.5e5 m exaggerated, LEO satellites
+   * ~4e5 m) keeps its line, but celestial bodies on their shells do not
+   * drag a giant line to their subpoint. */
+  if (render_alt > 0.0 && render_alt <= 2.0e6)
     {
       LrgLine3D *drop = lrg_line3d_new_from_to (
         (gfloat) P[0], (gfloat) P[1], (gfloat) P[2],

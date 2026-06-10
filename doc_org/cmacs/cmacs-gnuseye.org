@@ -224,6 +224,38 @@ A second wave closing the remaining worldmonitor gaps:
   (~cmacs-gnuseye-geoloc~), svg sparkline/treemap charts (~cmacs-gnuseye-charts~),
   and the disk history store (~cmacs-gnuseye-history~).
 
+* v3: the solar system
+
+The ~Solar system~ category puts the sky on the globe: the Sun, the Moon, the
+planets, deep-space probes (Voyager 1/2, New Horizons, JWST), and asteroids,
+each rendered at its *true geocentric direction* — directly above its
+sub-point (latitude = declination, longitude = RA − GMST), sweeping westward
+live as the Earth rotates — on a *log-compressed celestial shell*:
+
+#+begin_example
+world radius = clamp(20 + 10·log10(distance_km / 1e5), 12, 74)
+Moon ≈ 26 · Sun ≈ 52 · Mars ≈ 55 · Neptune ≈ 66 · Voyager 1 ≈ 74
+#+end_example
+
+True scale is impossible (and invisible); direction and ordering are
+truthful, and the inspector shows the real distance (km / AU) and
+light-time.
+
+- ~solar-system~ — Sun + Moon + 7 planets from *local ephemerides* (no
+  network, always current): the JPL/Standish approximate planetary elements
+  (1800–2050, arcminute class) and the Astronomical Almanac low-precision
+  Moon (~0.3°), in ~cmacs-gnuseye-ephem.el~.  Re-computed every smooth tick,
+  so the sky moves in real time.  Validated against JPL Horizons fixtures
+  in the ERT suite.
+- ~probes~ / ~asteroids~ — positions from the keyless *JPL Horizons* API
+  (geocentric observer ephemerides), refreshed every 6 h.  Configure the
+  body lists with ~cmacs-gnuseye-probes~ and ~cmacs-gnuseye-asteroids~.
+
+Click a body to fly out and frame it (the camera moves just outside its
+shell, with Earth behind it); ~.~ tracks it as it moves.  *~0~ (or Home) is
+the "go back to Earth" button*: it clears the selection and returns to the
+standard Earth orbit view from anywhere in the system.
+
 * Architecture
 
 #+begin_example

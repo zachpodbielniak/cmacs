@@ -693,6 +693,94 @@ honours the AIS not-available sentinels (heading 511, cog 360)."
       (should (= (plist-get a :scale) cmacs-gnuseye-marine-marker-scale))
       (should (= (plist-get b :heading) -1)))))  ; both unavailable
 
+;;;; v3: solar-system ephemerides + celestial layers --------------------------
+
+;; Reference epoch 2026-06-09 00:00 UT (unix 1780963200); geocentric RA/Dec
+;; (deg, ICRF) + delta (AU) captured from JPL Horizons this session.
+
+(defconst cmacs-gnuseye-tests--epoch 1780963200.0)
+
+(defun cmacs-gnuseye-tests--ra (p)
+  "Reconstruct RA (deg) from a sub-point plist P at the test epoch."
+  (mod (+ (plist-get p :sublon)
+          (cmacs-gnuseye-ephem-gmst cmacs-gnuseye-tests--epoch))
+       360.0))
+
+(ert-deftest cmacs-gnuseye--ephem-gmst ()
+  "GMST at the J2000 epoch (2000-01-01 12:00 UT) is ~280.46 deg."
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-ephem)
+  (should (< (abs (- (cmacs-gnuseye-ephem-gmst 946728000.0) 280.46061837))
+             0.01)))
+
+(ert-deftest cmacs-gnuseye--ephem-sun ()
+  "Sun vs Horizons: RA 76.77464, Dec +22.87900, 1.01503 AU."
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-ephem)
+  (let ((p (cmacs-gnuseye-ephem-body 'sun cmacs-gnuseye-tests--epoch)))
+    (should (< (abs (- (plist-get p :sublat) 22.87900)) 1.0))
+    (should (< (abs (- (cmacs-gnuseye-tests--ra p) 76.77464)) 1.0))
+    (should (< (abs (- (/ (plist-get p :dist-km) 149597870.7) 1.01503)) 0.01))))
+
+(ert-deftest cmacs-gnuseye--ephem-moon ()
+  "Moon vs Horizons: RA 354.55116, Dec -0.26075, 382,250 km."
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-ephem)
+  (let ((p (cmacs-gnuseye-ephem-body 'moon cmacs-gnuseye-tests--epoch)))
+    (should (< (abs (- (plist-get p :sublat) -0.26075)) 2.0))
+    (should (< (abs (cmacs-gnuseye-ephem--norm180
+                     (- (cmacs-gnuseye-tests--ra p) 354.55116)))
+               2.0))
+    (should (< (abs (- (plist-get p :dist-km) 382250.0)) 12000.0))))
+
+(ert-deftest cmacs-gnuseye--ephem-mars ()
+  "Mars vs Horizons: RA 42.99427, Dec +15.89768, 2.16556 AU."
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-ephem)
+  (let ((p (cmacs-gnuseye-ephem-body 'mars cmacs-gnuseye-tests--epoch)))
+    (should (< (abs (- (plist-get p :sublat) 15.89768)) 1.0))
+    (should (< (abs (- (cmacs-gnuseye-tests--ra p) 42.99427)) 1.0))
+    (should (< (abs (- (/ (plist-get p :dist-km) 149597870.7) 2.16556)) 0.05))))
+
+(ert-deftest cmacs-gnuseye--celestial-shell ()
+  "The shell maps real distances monotonically into world radius [12, 74]."
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-celestial)
+  (cl-flet ((wr (km) (* 6.371 (+ 1.0 (/ (cmacs-gnuseye-celestial-shell-alt km)
+                                        6371000.0)))))
+    (should (< (abs (- (wr 384400.0) 25.85)) 0.5))        ; Moon
+    (should (< (abs (- (wr 1.496e8) 51.75)) 0.5))         ; Sun
+    (should (< (wr 1.496e8) (wr 4.3e9)))                  ; monotonic
+    (should (<= (wr 2.6e10) 74.001))))                    ; Voyager clamped
+
+(ert-deftest cmacs-gnuseye--horizons-parse ()
+  "The Horizons CSV $$SOE block parses to (RA DEC DELTA)."
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-celestial)
+  (let ((res (concat "stuff\n$$SOE\n"
+                     " 2026-Jun-09 00:00, , ,    76.77464,   22.87900,"
+                     "  1.01502972366930,  0.2220795,\n$$EOE\n")))
+    (pcase-let ((`(,ra ,dec ,delta)
+                 (cmacs-gnuseye-celestial--horizons-parse res)))
+      (should (< (abs (- ra 76.77464)) 1e-6))
+      (should (< (abs (- dec 22.879)) 1e-6))
+      (should (< (abs (- delta 1.0150297)) 1e-6)))))
+
+(ert-deftest cmacs-gnuseye--celestial-layers ()
+  "The celestial layers + home command register."
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-celestial)
+  (dolist (l '(solar-system probes asteroids))
+    (should (gethash l cmacs-gnuseye--layers)))
+  (should (fboundp 'cmacs-gnuseye-home))
+  ;; A solar-system fetch yields 9 bodies with shells + live sub-points.
+  (let (res)
+    (cmacs-gnuseye-celestial--fetch (lambda (e) (setq res e)))
+    (should (= (length res) 9))
+    (dolist (e res)
+      (should (numberp (plist-get e :lat)))
+      (should (> (plist-get e :alt) 5e6)))))   ; well above the surface
+
 (provide 'cmacs-gnuseye-tests)
 
 ;;; cmacs-gnuseye-tests.el ends here
