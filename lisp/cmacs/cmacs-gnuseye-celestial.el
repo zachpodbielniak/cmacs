@@ -25,16 +25,23 @@
 
 ;;;; Celestial shell ----------------------------------------------------------
 
+(defconst cmacs-gnuseye-celestial-au-scale 290.0
+  "World units per astronomical unit for the solar-system chart.
+Distances are LINEAR (one uniform scale), so all relative geometry is
+exactly true: Jupiter really is ~5.2x as far from the Sun as Earth is.")
+
 (defun cmacs-gnuseye-celestial-shell-radius (dist-km)
-  "Compressed shell WORLD RADIUS for a body DIST-KM away.
-Log-compressed so true-scale bodies fit the renderer's depth budget while
-distance ordering stays truthful: the Moon lands near 80 world units, the
-Sun near 280, Jupiter near 340, Voyager 1 at the 450 cap."
-  (max 78.0 (min 450.0 (+ 80.0 (* 76.8 (- (log (max 1.0 dist-km) 10)
-                                          5.585))))))
+  "World radius for a body DIST-KM from Earth: linearly true distance.
+dist x 290 units/AU, with two documented exceptions: a floor of 26 (only
+the Moon hits it -- its true scaled distance, 0.75, would sit inside the
+Earth globe) and a 9000-unit chart edge (only deep-space probes hit it --
+Voyager's true 49,000 would sit beyond the render horizon).  Every planet
+is in the linear regime, so the orbital structure is exact."
+  (max 26.0 (min 9000.0 (* cmacs-gnuseye-celestial-au-scale
+                           (/ dist-km 149597870.7)))))
 
 (defun cmacs-gnuseye-celestial-shell-alt (dist-km)
-  "Compressed shell altitude (:alt metres) for a body DIST-KM away."
+  "Chart altitude (:alt metres) for a body DIST-KM from Earth."
   ;; world_r = R*(1 + alt/Re)  =>  alt = (world_r/R - 1) * Re
   (* (- (/ (cmacs-gnuseye-celestial-shell-radius dist-km) 6.371) 1.0)
      6371000.0))
@@ -60,12 +67,8 @@ Sun near 280, Jupiter near 340, Voyager 1 at the 450 cap."
 
 (defconst cmacs-gnuseye-celestial--bodies
   ;; (BODY KIND LABEL COLOR RADIUS-RATIO) -- RADIUS-RATIO is the body's TRUE
-  ;; radius relative to Earth, so every body renders at correct scale to the
-  ;; Earth globe (Jupiter ~11x, the Moon 0.27x, ...).  The one exception is
-  ;; the Sun: its true 109x would engulf the whole scene, so it is drawn at
-  ;; 15x Earth -- still unmistakably the largest body (noted not-to-scale in
-  ;; the inspector).
-  '((sun     sun    "Sun"     "#ffd96a" 15.0)
+  ;; radius relative to Earth (the Sun's real 109.2 included: no caps).
+  '((sun     sun    "Sun"     "#ffd96a" 109.2)
     (moon    moon   "Moon"    "#cfd2d6" 0.273)
     (mercury planet "Mercury" "#b3a08a" 0.383)
     (venus   planet "Venus"   "#f2e3c0" 0.950)
@@ -74,12 +77,16 @@ Sun near 280, Jupiter near 340, Voyager 1 at the 450 cap."
     (saturn  planet "Saturn"  "#e8d8a8" 9.14)
     (uranus  planet "Uranus"  "#9adfe0" 3.98)
     (neptune planet "Neptune" "#7aa8ff" 3.87))
-  "The locally-computed bodies: true Earth-relative radii (Sun capped).")
+  "The locally-computed bodies and their true Earth-relative radii.")
 
 (defun cmacs-gnuseye-celestial--ratio->scale (ratio)
-  "Marker :scale that renders a sphere of RATIO x Earth's radius.
-The C sphere radius is 0.9 * 0.11 * scale world units; Earth is 6.371."
-  (/ (* ratio 6.371) 0.099))
+  "Marker :scale rendering a body of true radius RATIO x Earth.
+One sqrt size law for every body (the Sun included -- no arbitrary caps):
+rendered radius = 6.371 * sqrt(RATIO), so size ORDER and the dominance
+hierarchy are exact while a 109x Sun does not engulf the chart: the Sun
+renders 10.4x Earth and 3.2x Jupiter; Venus ~ Earth; the Moon ~ half.
+The C sphere radius is 0.9 * 0.11 * scale = 0.099 * scale world units."
+  (/ (* (sqrt ratio) 6.371) 0.099))
 
 (defun cmacs-gnuseye-celestial--body-entity (spec &optional time)
   "Entity plist for body SPEC ((BODY KIND LABEL COLOR RATIO)) at TIME."
@@ -96,10 +103,8 @@ The C sphere radius is 0.9 * 0.11 * scale world units; Earth is 6.371."
                 :data `((body . ,body)
                         (distance . ,(cmacs-gnuseye-celestial--fmt-dist dist))
                         (dist-km . ,dist)
-                        (size . ,(if (eq body 'sun)
-                                     "shown 15x Earth (true: 109x)"
-                                   (format "%.2fx Earth radius (true scale)"
-                                           ratio)))
+                        (size . ,(format "true %.2fx Earth (drawn sqrt: %.1fx)"
+                                         ratio (sqrt ratio)))
                         (sub-point . ,(format "%.2f, %.2f"
                                               (plist-get p :sublat)
                                               (plist-get p :sublon))))))))))

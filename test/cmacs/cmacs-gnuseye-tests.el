@@ -743,18 +743,22 @@ honours the AIS not-available sentinels (heading 511, cog 360)."
     (should (< (abs (- (/ (plist-get p :dist-km) 149597870.7) 2.16556)) 0.05))))
 
 (ert-deftest cmacs-gnuseye--celestial-shell ()
-  "The shell maps real distances monotonically into world radius [78, 450]."
+  "Distances are linearly true at 290 units/AU (Moon floored, probes capped)."
   (cmacs-gnuseye-tests--skip)
   (require 'cmacs-gnuseye-celestial)
   (cl-flet ((wr (km) (cmacs-gnuseye-celestial-shell-radius km)))
-    (should (< (abs (- (wr 384400.0) 80.0)) 2.0))         ; Moon ~ 80
-    (should (< (abs (- (wr 1.496e8) 279.0)) 3.0))         ; Sun ~ 279
-    (should (< (wr 1.496e8) (wr 4.3e9)))                  ; monotonic
-    (should (<= (wr 2.6e10) 450.001))))                   ; Voyager clamped
+    (should (< (abs (- (wr 1.496e8) 290.0)) 0.5))         ; Sun = 1 AU
+    (should (< (abs (- (wr 4.498e9) (* 290 30.07))) 30))  ; Neptune linear
+    (should (= (wr 384400.0) 26.0))                       ; Moon floored
+    (should (<= (wr 2.54e10) 9000.001))                   ; Voyager capped
+    ;; THE ORBIT CHECK: Jupiter at opposition (4.2 AU from Earth, 5.2 from
+    ;; the Sun) must land 4.2x the Sun's distance from Earth -- the linear
+    ;; law preserves all relative geometry by construction.
+    (should (< (abs (- (/ (wr (* 4.2 1.496e8)) (wr 1.496e8)) 4.2)) 0.01))))
 
 (ert-deftest cmacs-gnuseye--celestial-true-scale ()
-  "Bodies render at true radius relative to Earth (sphere r = 0.099*scale):
-Jupiter ~10.97x Earth, the Moon ~0.273x; the Sun is capped but dominant."
+  "One sqrt size law for every body (no caps): rendered radius =
+6.371*sqrt(R/R_earth).  The Sun dominates Jupiter ~3.2x; Venus ~ Earth."
   (cmacs-gnuseye-tests--skip)
   (require 'cmacs-gnuseye-celestial)
   (cl-flet ((r-of (body)
@@ -762,10 +766,11 @@ Jupiter ~10.97x Earth, the Moon ~0.273x; the Sun is capped but dominant."
                      (e (cmacs-gnuseye-celestial--body-entity
                          spec cmacs-gnuseye-tests--epoch)))
                 (* 0.099 (plist-get e :scale)))))
-    (should (< (abs (- (r-of 'jupiter) (* 10.97 6.371))) 0.5))
-    (should (< (abs (- (r-of 'moon) (* 0.273 6.371))) 0.1))
-    (should (< (abs (- (r-of 'venus) (* 0.950 6.371))) 0.1))
-    (should (> (r-of 'sun) (r-of 'jupiter)))))            ; Sun stays biggest
+    (should (< (abs (- (r-of 'sun) (* 6.371 (sqrt 109.2)))) 0.5))    ; 66.6
+    (should (< (abs (- (r-of 'jupiter) (* 6.371 (sqrt 10.97)))) 0.3)); 21.1
+    (should (> (/ (r-of 'sun) (r-of 'jupiter)) 3.0))   ; Sun >> Jupiter
+    (should (< (abs (- (r-of 'venus) 6.21)) 0.1))      ; Venus ~ Earth
+    (should (< (abs (- (r-of 'moon) 3.33)) 0.1))))
 
 (ert-deftest cmacs-gnuseye--horizons-parse ()
   "The Horizons CSV $$SOE block parses to (RA DEC DELTA)."

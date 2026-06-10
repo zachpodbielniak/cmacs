@@ -179,11 +179,11 @@ to e.g. only planes, or planes and boats.")
     (spaceport :color "#ff7be5" :scale 1.0)
     (hotspot   :color "#ff2a2a" :scale 1.7)
     (cluster   :color "#9ab8d8" :scale 0.6)
-    ;; Celestial fallbacks; real per-body true-scale values come from
-    ;; cmacs-gnuseye-celestial--bodies (Jupiter ~706 = 10.97 x Earth).
-    (sun       :color "#ffd96a" :scale 965.0)
-    (moon      :color "#cfd2d6" :scale 17.6)
-    (planet    :color "#e0bc8f" :scale 60.0)
+    ;; Celestial fallbacks; real per-body sqrt-law values come from
+    ;; cmacs-gnuseye-celestial--bodies (radius = 6.371*sqrt(R/R_earth)).
+    (sun       :color "#ffd96a" :scale 673.0)
+    (moon      :color "#cfd2d6" :scale 33.6)
+    (planet    :color "#e0bc8f" :scale 129.0)
     (asteroid  :color "#b9b3a8" :scale 4.0)
     (probe     :color "#7ad7ff" :scale 5.0))
   "Per-kind default marker style (:color hex, :scale multiplier)."

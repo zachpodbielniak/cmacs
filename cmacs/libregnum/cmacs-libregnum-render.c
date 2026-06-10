@@ -75,6 +75,12 @@ cmacs_libregnum_render_window_acquire (gchar **error_msg)
   shared_engine = lrg_engine_get_default ();
   lrg_engine_set_window (shared_engine, LRG_WINDOW (shared_window));
 
+  /* Extend the projection far cull plane (default 1000) so the gnuseye
+   * solar-system chart -- linearly true distances at 290 units/AU, Neptune
+   * ~8700 out -- renders without clipping.  Depth precision near the globe
+   * stays ample (near plane 0.01).  Runtime API, raylib >= 5.5. */
+  rlSetClipPlanes (0.01, 20000.0);
+
   GError *eng_err = NULL;
   if (!lrg_engine_startup (shared_engine, &eng_err))
     {
@@ -1648,11 +1654,11 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
  * (zoom, orbit around an off-centre target, pan) can pass through the globe.
  * No-op when no occluder is set (editor scenes, the flat map). */
 #define CTX_OCCLUDER_FLOOR  1.002   /* min camera radius, x surface radius */
-#define CTX_OCCLUDER_CEIL   80.0    /* max camera radius, x surface radius
-                                     * (frames the celestial shells, which
-                                     * top out near 450 world units; keeps
-                                     * camera+shell depth inside raylib's
-                                     * 1000-unit far cull plane) */
+#define CTX_OCCLUDER_CEIL   1500.0  /* max camera radius, x surface radius
+                                     * (~9550 units: frames the linearly-true
+                                     * solar system, Neptune ~8700 out; the
+                                     * far cull plane is raised to 20000 at
+                                     * window acquire) */
 
 static void
 ctx_clamp_above_occluder (CmacsLibregnumRenderCtx *r,

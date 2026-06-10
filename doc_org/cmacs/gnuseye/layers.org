@@ -8,11 +8,13 @@ enable them from the toggle pane (left).  Layer files are listed in
 
 * Solar system — ~cmacs-gnuseye-celestial.el~ (v3)
 
-Bodies render at their true geocentric direction (sub-point) on
-log-compressed shells (world radius 80 + 76.8·(log10(km)−5.585), clamped
-[78,450]), at *true size relative to Earth* (Jupiter 10.97×, Moon 0.27×; the
-Sun capped at 15× — its real 109× would engulf the scene).  The inspector
-shows real distance + light-time + the size note.  ~0~ returns to Earth.
+Bodies render at their true geocentric direction (sub-point) at *linearly
+true distances* (290 world units per AU; Moon floored at 26, probes capped
+at 9000), so the orbital geometry is exact — Jupiter really is 5.2× as far
+from the Sun as Earth.  Sizes follow one √-law (radius = 6.371·√(R/R⊕), the
+Sun included): Sun 3.2× Jupiter, Jupiter 3.3× Earth, Venus ≈ Earth.  The
+inspector shows the true ratio, real distance + light-time.  ~0~ returns to
+Earth.
 
 ** solar-system
 Sun + Moon + Mercury…Neptune from local ephemerides

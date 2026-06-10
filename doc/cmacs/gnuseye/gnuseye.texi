@@ -207,12 +207,14 @@ market-implication, resilience simulation, country SITREPs.
 The @emph{Solar system} category renders the Sun, the Moon, the planets,
 deep-space probes (Voyager 1/2, New Horizons, JWST), and asteroids at their
 @emph{true geocentric direction} (above their sub-point, sweeping live with
-Earth's rotation) on log-compressed celestial shells (world radius
-@code{80 + 76.8*(log10(km)-5.585)}, clamped to [78, 450]; Moon ~80, Sun
-~279, Voyager ~450), at @emph{true size relative to Earth} (Jupiter 10.97x,
-the Moon 0.27x; the Sun capped at 15x -- its real 109x would engulf the
-scene).  Direction and ordering are truthful; the inspector reports the
-real distance (km / AU), light-time, and the size note.
+Earth's rotation) at @emph{linearly true distances} -- 290 world units per
+AU, one uniform scale, so the orbital geometry is exact (the Sun 290 units
+out, Jupiter 5.2x as far from the Sun as Earth, Neptune at 29.9 AU; the Moon
+floored at 26 units, deep-space probes capped at the 9000-unit chart edge).
+Sizes follow one sqrt-law for every body, the Sun included (radius =
+@code{6.371*sqrt(R/R_earth)}): the Sun renders 3.2x Jupiter, Jupiter 3.3x
+Earth, Venus ~ Earth.  The inspector reports each body's true ratio, real
+distance (km / AU), and light-time.
 
 Sun/Moon/planets come from local ephemerides (@file{cmacs-gnuseye-ephem.el}:
 JPL/Standish approximate elements + the low-precision Almanac Moon; no
