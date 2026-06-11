@@ -4,7 +4,9 @@
  */
 
 /* cmacs-dbus-iface-text.c --- text editing.
- * Mirrors cmacsgi insert/delete/line/append. */
+ * Mirrors cmacsgi insert/delete/line/append.  Every method takes a
+ * trailing BUFFER argument; the empty string means "the current
+ * buffer" (the original point-relative behavior). */
 
 #include <config.h>
 #ifdef HAVE_CMACS_GLIB
@@ -15,17 +17,27 @@
 static const gchar *iface_xml =
   "<node><interface name='org.cmacs.Editor1.Text'>"
   "  <method name='Insert'><arg type='s' name='text' direction='in'/>"
+  "    <arg type='s' name='buffer' direction='in'/>"
   "    <arg type='s' name='ack' direction='out'/></method>"
   "  <method name='Delete'><arg type='x' name='start' direction='in'/>"
   "    <arg type='x' name='end' direction='in'/>"
+  "    <arg type='s' name='buffer' direction='in'/>"
   "    <arg type='s' name='deleted' direction='out'/></method>"
   "  <method name='Line'><arg type='x' name='n' direction='in'/>"
+  "    <arg type='s' name='buffer' direction='in'/>"
   "    <arg type='s' name='content' direction='out'/></method>"
   "  <method name='Append'><arg type='s' name='text' direction='in'/>"
+  "    <arg type='s' name='buffer' direction='in'/>"
   "    <arg type='s' name='ack' direction='out'/></method>"
   "</interface></node>";
 
 static GDBusNodeInfo *iface_info = NULL;
+
+/* Elisp prelude selecting BUFFER ("" -> current buffer).  The two %s
+ * placeholders both receive the buffer name. */
+#define TEXT_IN_BUFFER                                                  \
+  "(with-current-buffer (if (string= \"%s\" \"\")"                     \
+  "                         (current-buffer) \"%s\")"
 
 static void
 on_method (GDBusConnection *c, const gchar *s, const gchar *o,
@@ -36,43 +48,60 @@ on_method (GDBusConnection *c, const gchar *s, const gchar *o,
 
   if (g_strcmp0 (m, "Insert") == 0)
     {
-      const gchar *text; const gchar *args[1];
-      g_variant_get (p, "(&s)", &text); args[0] = text;
-      cmacs_dbus_eval_to_reply (iv,
-        "(progn (insert \"%s\") \"ok\")", args, 1);
+      const gchar *text, *buffer;
+      const gchar *args[3];
+      g_variant_get (p, "(&s&s)", &text, &buffer);
+      args[0] = buffer; args[1] = buffer; args[2] = text;
+      cmacs_dbus_eval_to_reply_string (iv,
+        TEXT_IN_BUFFER " (insert \"%s\") \"ok\")", args, 3);
     }
   else if (g_strcmp0 (m, "Delete") == 0)
     {
       gint64 start, end;
+      const gchar *buffer;
       gchar sbuf[24], ebuf[24];
-      const gchar *args[2];
-      g_variant_get (p, "(xx)", &start, &end);
+      const gchar *args[6];
+      g_variant_get (p, "(xx&s)", &start, &end, &buffer);
       g_snprintf (sbuf, sizeof sbuf, "%" G_GINT64_FORMAT, start);
       g_snprintf (ebuf, sizeof ebuf, "%" G_GINT64_FORMAT, end);
-      args[0] = sbuf; args[1] = ebuf;
-      cmacs_dbus_eval_to_reply (iv,
-        "(let ((s (buffer-substring-no-properties %s %s)))"
-        " (delete-region %s %s) s)",
-        (const gchar *[]) { sbuf, ebuf, sbuf, ebuf }, 4);
+      args[0] = buffer; args[1] = buffer;
+      args[2] = sbuf; args[3] = ebuf;
+      args[4] = sbuf; args[5] = ebuf;
+      cmacs_dbus_eval_to_reply_string (iv,
+        TEXT_IN_BUFFER
+        " (let ((s (buffer-substring-no-properties %s %s)))"
+        "  (delete-region %s %s) s))",
+        args, 6);
     }
   else if (g_strcmp0 (m, "Line") == 0)
     {
-      gint64 n; gchar nbuf[24]; const gchar *args[1];
-      g_variant_get (p, "(x)", &n);
+      gint64 n;
+      const gchar *buffer;
+      gchar nbuf[24];
+      const gchar *args[3];
+      g_variant_get (p, "(x&s)", &n, &buffer);
       g_snprintf (nbuf, sizeof nbuf, "%" G_GINT64_FORMAT, n);
-      args[0] = nbuf;
-      cmacs_dbus_eval_to_reply (iv,
-        "(save-excursion (goto-line %s)"
-        " (buffer-substring-no-properties (line-beginning-position)"
-        "                                  (line-end-position)))",
-        args, 1);
+      args[0] = buffer; args[1] = buffer; args[2] = nbuf;
+      cmacs_dbus_eval_to_reply_string (iv,
+        TEXT_IN_BUFFER
+        " (save-excursion"
+        "  (goto-char (point-min))"
+        "  (forward-line (1- %s))"
+        "  (buffer-substring-no-properties (line-beginning-position)"
+        "                                   (line-end-position))))",
+        args, 3);
     }
   else if (g_strcmp0 (m, "Append") == 0)
     {
-      const gchar *text; const gchar *args[1];
-      g_variant_get (p, "(&s)", &text); args[0] = text;
-      cmacs_dbus_eval_to_reply (iv,
-        "(progn (goto-char (point-max)) (insert \"%s\") \"ok\")", args, 1);
+      const gchar *text, *buffer;
+      const gchar *args[3];
+      g_variant_get (p, "(&s&s)", &text, &buffer);
+      args[0] = buffer; args[1] = buffer; args[2] = text;
+      cmacs_dbus_eval_to_reply_string (iv,
+        TEXT_IN_BUFFER
+        " (save-excursion (goto-char (point-max)) (insert \"%s\"))"
+        " \"ok\")",
+        args, 3);
     }
 }
 

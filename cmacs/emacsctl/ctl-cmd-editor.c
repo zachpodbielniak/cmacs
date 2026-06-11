@@ -12,7 +12,171 @@
 #include "ctl-command-registry.h"
 #include "ctl-ifaces.h"
 
+#include <stdio.h>
+#include <string.h>
+
 void ctl_cmd_editor_register (CtlCommandRegistry *registry);
+
+/* ── text group ─────────────────────────────────────────────────────
+ *
+ * The text verbs are CtlSimpleCommands rather than table rows: they
+ * share a --buffer flag (empty = the editor's current buffer) and
+ * `insert' / `append' read the text from stdin when no argument is
+ * given, so files and pipelines feed straight into a buffer:
+ *
+ *   emacsctl text insert --buffer '*scratch*' "some text"
+ *   make 2>&1 | emacsctl text append --buffer '*build-log*'
+ */
+
+static gchar *text_opt_buffer = NULL;
+
+static const GOptionEntry text_entries[] = {
+  { "buffer", 'b', 0, G_OPTION_ARG_STRING, &text_opt_buffer,
+    "Target buffer (default: the editor's current buffer)", "NAME" },
+  { NULL, 0, 0, 0, NULL, NULL, NULL }
+};
+
+/* Read all of stdin (for `text insert/append' with no argument).
+ * Caller g_frees. */
+static gchar *
+text_read_stdin (void)
+{
+  GString *buf = g_string_new (NULL);
+  gchar chunk[4096];
+  gsize got;
+
+  while ((got = fread (chunk, 1, sizeof chunk, stdin)) > 0)
+    g_string_append_len (buf, chunk, got);
+  return g_string_free (buf, FALSE);
+}
+
+/* Call a Text method and emit its (s) reply. */
+static gint
+text_call (CtlInvocation *inv, const gchar *method, GVariant *params,
+           GError **error)
+{
+  CtlTransport *transport;
+  GVariant *reply;
+  const gchar *ack;
+  CtlResult *result;
+  gboolean ok;
+
+  transport = ctl_invocation_get_transport (inv, error);
+  if (transport == NULL)
+    {
+      if (params != NULL)
+        g_variant_unref (g_variant_ref_sink (params));
+      return CTL_EXIT_NO_INSTANCE;
+    }
+  reply = ctl_transport_call (transport, CTL_IFACE_TEXT, method,
+                              params,
+                              ctl_invocation_get_timeout_ms (inv),
+                              error);
+  if (reply == NULL)
+    return ctl_exit_code_for_error (error != NULL ? *error : NULL);
+
+  g_variant_get (reply, "(&s)", &ack);
+  result = ctl_result_new_scalar (ack);
+  ok = ctl_invocation_emit (inv, result, error);
+  ctl_result_unref (result);
+  g_variant_unref (reply);
+  return ok ? CTL_EXIT_OK : CTL_EXIT_ERROR;
+}
+
+/* Shared body for insert/append: positional text, or stdin. */
+static gint
+text_insert_or_append (CtlInvocation *inv, const gchar *method,
+                       GError **error)
+{
+  const gchar *buffer =
+    text_opt_buffer != NULL ? text_opt_buffer : "";
+  const gchar *arg = ctl_invocation_get_arg (inv, 0);
+  gchar *from_stdin = NULL;
+  gint code;
+
+  if (arg == NULL)
+    {
+      from_stdin = text_read_stdin ();
+      if (*from_stdin == '\0')
+        {
+          g_free (from_stdin);
+          g_set_error (error, CTL_ERROR, CTL_ERROR_USAGE,
+                       "no text given and stdin was empty "
+                       "(see 'text %s --help')",
+                       g_ascii_strcasecmp (method, "Insert") == 0
+                       ? "insert" : "append");
+          return CTL_EXIT_USAGE;
+        }
+      arg = from_stdin;
+    }
+
+  code = text_call (inv, method,
+                    g_variant_new ("(ss)", arg, buffer), error);
+  g_free (from_stdin);
+  return code;
+}
+
+static gint
+cmd_text_insert (CtlCommand *self, CtlInvocation *inv, GError **error)
+{
+  (void) self;
+  return text_insert_or_append (inv, "Insert", error);
+}
+
+static gint
+cmd_text_append (CtlCommand *self, CtlInvocation *inv, GError **error)
+{
+  (void) self;
+  return text_insert_or_append (inv, "Append", error);
+}
+
+static gint
+cmd_text_line (CtlCommand *self, CtlInvocation *inv, GError **error)
+{
+  const gchar *buffer =
+    text_opt_buffer != NULL ? text_opt_buffer : "";
+  const gchar *n = ctl_invocation_get_arg (inv, 0);
+
+  (void) self;
+
+  if (n == NULL)
+    {
+      g_set_error (error, CTL_ERROR, CTL_ERROR_USAGE,
+                   "missing required argument <line> "
+                   "(see 'text line --help')");
+      return CTL_EXIT_USAGE;
+    }
+  return text_call (inv, "Line",
+                    g_variant_new ("(xs)",
+                                   g_ascii_strtoll (n, NULL, 10),
+                                   buffer),
+                    error);
+}
+
+static gint
+cmd_text_delete (CtlCommand *self, CtlInvocation *inv, GError **error)
+{
+  const gchar *buffer =
+    text_opt_buffer != NULL ? text_opt_buffer : "";
+  const gchar *start = ctl_invocation_get_arg (inv, 0);
+  const gchar *end = ctl_invocation_get_arg (inv, 1);
+
+  (void) self;
+
+  if (start == NULL || end == NULL)
+    {
+      g_set_error (error, CTL_ERROR, CTL_ERROR_USAGE,
+                   "missing required arguments <start> <end> "
+                   "(see 'text delete --help')");
+      return CTL_EXIT_USAGE;
+    }
+  return text_call (inv, "Delete",
+                    g_variant_new ("(xxs)",
+                                   g_ascii_strtoll (start, NULL, 10),
+                                   g_ascii_strtoll (end, NULL, 10),
+                                   buffer),
+                    error);
+}
 
 static const CtlMethodSpec editor_specs[] = {
   /* get <resource> --- kubectl-style nouns. */
@@ -83,15 +247,8 @@ static const CtlMethodSpec editor_specs[] = {
   { "file recent", "Recently opened files",
     CTL_IFACE_FILE, "Recent", "i?:count", CTL_REPLY_STRING },
 
-  /* text */
-  { "text insert", "Insert text at point",
-    CTL_IFACE_TEXT, "Insert", "s:text", CTL_REPLY_STRING },
-  { "text append", "Append text to the current buffer",
-    CTL_IFACE_TEXT, "Append", "s:text", CTL_REPLY_STRING },
-  { "text line", "Print line N",
-    CTL_IFACE_TEXT, "Line", "x:line", CTL_REPLY_STRING },
-  { "text delete", "Delete a region",
-    CTL_IFACE_TEXT, "Delete", "x:start x:end", CTL_REPLY_STRING },
+  /* text: registered separately below --- the verbs take a --buffer
+     flag and insert/append fall back to stdin for the text. */
 
   /* nav */
   { "nav point", "Current line and column",
@@ -282,4 +439,21 @@ ctl_cmd_editor_register (CtlCommandRegistry *registry)
   for (k = 0; editor_specs[k].name != NULL; k++)
     ctl_command_registry_add (registry,
                               ctl_method_command_new (&editor_specs[k]));
+
+  ctl_command_registry_add (registry,
+    ctl_simple_command_new_with_options (
+      "text insert", "Insert text at point (stdin when no TEXT)",
+      "[TEXT]", text_entries, cmd_text_insert));
+  ctl_command_registry_add (registry,
+    ctl_simple_command_new_with_options (
+      "text append", "Append text to a buffer (stdin when no TEXT)",
+      "[TEXT]", text_entries, cmd_text_append));
+  ctl_command_registry_add (registry,
+    ctl_simple_command_new_with_options (
+      "text line", "Print line N of a buffer",
+      "LINE", text_entries, cmd_text_line));
+  ctl_command_registry_add (registry,
+    ctl_simple_command_new_with_options (
+      "text delete", "Delete a region of a buffer",
+      "START END", text_entries, cmd_text_delete));
 }

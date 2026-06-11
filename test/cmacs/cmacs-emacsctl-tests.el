@@ -272,6 +272,74 @@ D-Bus service can dispatch the inbound calls."
     (should (= 0 (car (cmacs-emacsctl-tests--run
                        "input" "command" "ignore"))))))
 
+(ert-deftest cmacs-emacsctl-text-buffer-flag ()
+  "text insert/append/line/delete target a buffer via --buffer."
+  (skip-unless (cmacs-emacsctl-tests--available-p))
+  (cmacs-emacsctl-tests--with-service
+    (let ((buf "*ctl-text-ert*"))
+      (unwind-protect
+          (progn
+            (should (= 0 (car (cmacs-emacsctl-tests--run
+                               "buffer" "create" buf))))
+            (should (= 0 (car (cmacs-emacsctl-tests--run
+                               "text" "insert" "--buffer" buf
+                               "alpha"))))
+            ;; Dash-leading text needs the standard `--' separator.
+            (should (= 0 (car (cmacs-emacsctl-tests--run
+                               "text" "append" "-b" buf
+                               "--" "-beta"))))
+            (should (equal "alpha-beta"
+                           (with-current-buffer buf
+                             (buffer-substring-no-properties
+                              (point-min) (point-max)))))
+            (should (equal "alpha-beta\n"
+                           (cdr (cmacs-emacsctl-tests--run
+                                 "text" "line" "1" "--buffer" buf))))
+            ;; Delete "alpha" (chars 1..6), leaving "-beta".
+            (should (equal "alpha\n"
+                           (cdr (cmacs-emacsctl-tests--run
+                                 "text" "delete" "1" "6"
+                                 "--buffer" buf))))
+            (should (equal "-beta"
+                           (with-current-buffer buf
+                             (buffer-substring-no-properties
+                              (point-min) (point-max))))))
+        (ignore-errors (kill-buffer buf))))))
+
+(ert-deftest cmacs-emacsctl-text-stdin ()
+  "text insert reads from stdin when no TEXT argument is given."
+  (skip-unless (cmacs-emacsctl-tests--available-p))
+  (cmacs-emacsctl-tests--with-service
+    (let ((buf "*ctl-text-stdin*"))
+      (unwind-protect
+          (progn
+            (should (= 0 (car (cmacs-emacsctl-tests--run
+                               "buffer" "create" buf))))
+            (let* ((outbuf (generate-new-buffer " *emacsctl-stdin*"))
+                   (proc (make-process
+                          :name "emacsctl-stdin"
+                          :command (list
+                                    "sh" "-c"
+                                    (format
+                                     "printf 'piped-text' | %s --instance %d text insert --buffer '%s'"
+                                     (shell-quote-argument
+                                      cmacs-emacsctl-tests--binary)
+                                     (emacs-pid) buf))
+                          :buffer outbuf :noquery t
+                          :sentinel #'ignore)))
+              (unwind-protect
+                  (progn
+                    (while (process-live-p proc)
+                      (accept-process-output proc 0.1)
+                      (sit-for 0.05))
+                    (should (= 0 (process-exit-status proc))))
+                (kill-buffer outbuf)))
+            (should (equal "piped-text"
+                           (with-current-buffer buf
+                             (buffer-substring-no-properties
+                              (point-min) (point-max))))))
+        (ignore-errors (kill-buffer buf))))))
+
 (defun cmacs-emacsctl-tests--make-org-buffer (name)
   "Fill buffer NAME with a small org document."
   (with-current-buffer (get-buffer-create name)

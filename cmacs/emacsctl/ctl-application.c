@@ -435,14 +435,28 @@ parse_command_options (CtlCommand *cmd, const gchar *prog,
       return FALSE;
     }
 
-  /* Copy the surviving positionals back. */
+  /* Copy the surviving positionals back, dropping the first bare
+   * "--" separator: GOption keeps it in argv when unparsed options
+   * preceded it during the global pass, but to the command it is
+   * pure syntax, never data. */
   for (k = 0; k < *argc; k++)
     g_free (argv[k]);
-  for (k = 1; k < parse_argc; k++)
-    argv[k - 1] = g_strdup (parse_argv[k]);
-  for (k = parse_argc - 1; k < *argc; k++)
-    argv[k] = NULL;
-  *argc = parse_argc - 1;
+  {
+    gint w = 0;
+    gboolean separator_dropped = FALSE;
+    for (k = 1; k < parse_argc; k++)
+      {
+        if (!separator_dropped && g_strcmp0 (parse_argv[k], "--") == 0)
+          {
+            separator_dropped = TRUE;
+            continue;
+          }
+        argv[w++] = g_strdup (parse_argv[k]);
+      }
+    for (k = w; k < *argc; k++)
+      argv[k] = NULL;
+    *argc = w;
+  }
   g_strfreev (parse_argv);
   return TRUE;
 }

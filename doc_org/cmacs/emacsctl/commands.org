@@ -63,7 +63,7 @@ gets a did-you-mean suggestion.
 | =edit=      | =exact= (string replace), =replace= (regexp), =search=, =goto-line= |
 | =file=      | =open=, =save=, =close=, =recent=                            |
 | =find-file= | open a path via the root interface                           |
-| =text=      | =insert=, =append=, =line=, =delete=                         |
+| =text=      | =insert=, =append=, =line=, =delete= — all take =-b/--buffer NAME= (default: current buffer); =insert=/=append= read stdin when no TEXT (=make 2>&1 \vert{} emacsctl text append -b '*log*'=) |
 | =nav=       | =point=, =goto=                                              |
 | =search=    | =find=, =replace=, =occur= (current buffer)                  |
 | =vc=        | =status=, =diff=, =log=, =blame=                             |

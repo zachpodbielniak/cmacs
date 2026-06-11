@@ -73,7 +73,9 @@ shell completion script
 @subsection Editor surface
 
 Groups @code{get}, @code{buffer}, @code{edit}, @code{file},
-@code{find-file}, @code{text}, @code{nav}, @code{search}, @code{vc},
+@code{find-file}, @code{text} (whose verbs all take
+@option{-b/--buffer NAME} and whose @code{insert}/@code{append} read
+stdin when no TEXT argument is given), @code{nav}, @code{search}, @code{vc},
 @code{project}, @code{clip}, @code{bookmark}, @code{pkg},
 @code{var}, @code{input}, @code{window}, @code{process},
 @code{message}, @code{debug}, @code{c} (cintrospect/cpatch) and
