@@ -75,6 +75,22 @@ gchar *cmacs_dispatch_eval (const gchar *expression, GError **error);
 gchar *cmacs_dispatch_eval_string (const gchar *expression,
                                    GError **error);
 
+/* Parse the org-mode buffer BUFFER into a JSON document: buffer-level
+   keywords (#+TITLE etc.) plus a nested headline tree (title, level,
+   todo, priority, tags, scheduled/deadline/closed, property drawer,
+   body text, children).  MATCH is an org agenda match string
+   ("work+urgent/TODO" syntax) filtering entries, or NULL/"" for all.
+   MAX_DEPTH > 0 limits headline depth.  Returns the JSON string
+   (caller g_frees), or NULL with *ERROR set.  Shared by the D-Bus
+   Edit.GetOrgContent method and the MCP get_org_content tool so the
+   two surfaces stay identical. */
+gchar *cmacs_dispatch_org_content (const gchar *buffer,
+                                   const gchar *match,
+                                   gint         max_depth,
+                                   gboolean     include_body,
+                                   gboolean     include_properties,
+                                   GError     **error);
+
 /* Open PATH in Emacs via find-file. */
 void cmacs_dispatch_find_file (const gchar *path);
 

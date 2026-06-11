@@ -239,6 +239,153 @@ cmacs_dispatch_eval_string (const gchar *expression, GError **error)
   return g_strdup (SSDATA (printed));
 }
 
+/* The org walker behind Edit.GetOrgContent and the MCP
+   get_org_content tool.  Entirely org "porcelain" (org-map-entries,
+   org-entry-get, org-collect-keywords), so it tracks org-mode's own
+   notion of headlines, planning, and the agenda match syntax instead
+   of reimplementing a parser.  The flat (LEVEL . ALIST) list is
+   rebuilt into a nested tree, then json-encoded.  Runs under dynamic
+   binding: the `build' lambda recurses via its dynamically bound
+   name. */
+static const gchar *org_content_template =
+  "(with-current-buffer \"%s\""
+  " (require 'org)"
+  " (require 'json)"
+  " (unless (derived-mode-p 'org-mode)"
+  "   (error \"%%s is not an org-mode buffer\" (buffer-name)))"
+  " (save-excursion"
+  "  (save-restriction"
+  "   (widen)"
+  "   (let ((max-depth %d)"
+  "         (include-body %s)"
+  "         (include-props %s)"
+  "         (entries nil))"
+  "    (org-map-entries"
+  "     (lambda ()"
+  "      (let* ((comps (org-heading-components))"
+  "             (level (nth 0 comps))"
+  "             (todo (nth 2 comps))"
+  "             (prio (nth 3 comps))"
+  "             (title (or (nth 4 comps) \"\"))"
+  "             (tags (mapcar #'substring-no-properties"
+  "                           (org-get-tags nil t)))"
+  "             (sched (org-entry-get nil \"SCHEDULED\"))"
+  "             (deadl (org-entry-get nil \"DEADLINE\"))"
+  "             (closed (org-entry-get nil \"CLOSED\"))"
+  "             (props (and include-props"
+  "                         (let (out)"
+  "                          (dolist (kv (org-entry-properties"
+  "                                       nil 'standard)"
+  "                                      (nreverse out))"
+  "                           (unless (or (equal (car kv) \"ITEM\")"
+  "                                       (equal (car kv) \"FILE\")"
+  "                                       (equal (car kv) \"BLOCKED\")"
+  "                                       (and (equal (car kv)"
+  "                                                   \"CATEGORY\")"
+  "                                            (equal (cdr kv)"
+  "                                                   \"???\")))"
+  "                            (push kv out))))))"
+  "             (body (and include-body"
+  "                        (save-excursion"
+  "                         (let ((limit (save-excursion"
+  "                                       (outline-next-heading)"
+  "                                       (point))))"
+  "                          (org-end-of-meta-data t)"
+  "                          (if (>= (point) limit) \"\""
+  "                           (string-trim"
+  "                            (buffer-substring-no-properties"
+  "                             (point) limit))))))))"
+  "       (when (or (= max-depth 0) (<= level max-depth))"
+  "        (push (cons level"
+  "                    (nconc"
+  "                     (list (cons 'title"
+  "                                 (substring-no-properties title))"
+  "                           (cons 'level level))"
+  "                     (and todo (list (cons 'todo"
+  "                                           (substring-no-properties"
+  "                                            todo))))"
+  "                     (and prio (list (cons 'priority"
+  "                                           (char-to-string prio))))"
+  "                     (and tags (list (cons 'tags (vconcat tags))))"
+  "                     (and sched (list (cons 'scheduled sched)))"
+  "                     (and deadl (list (cons 'deadline deadl)))"
+  "                     (and closed (list (cons 'closed closed)))"
+  "                     (and props (list (cons 'properties props)))"
+  "                     (and body (> (length body) 0)"
+  "                          (list (cons 'body body)))))"
+  "              entries))))"
+  "     %s)"
+  "    (setq entries (nreverse entries))"
+  "    (let ((remaining entries)"
+  "          (build nil))"
+  "     (setq build"
+  "           (lambda (parent-level)"
+  "            (let (nodes)"
+  "             (while (and remaining"
+  "                         (> (car (car remaining)) parent-level))"
+  "              (let* ((e (pop remaining))"
+  "                     (lvl (car e))"
+  "                     (node (cdr e))"
+  "                     (kids (funcall build lvl)))"
+  "               (when kids"
+  "                (setq node (nconc node"
+  "                                  (list (cons 'children"
+  "                                              (vconcat kids))))))"
+  "               (push node nodes)))"
+  "             (nreverse nodes))))"
+  "     (let ((tree (funcall build 0))"
+  "           (kw (org-collect-keywords"
+  "                '(\"TITLE\" \"AUTHOR\" \"DATE\" \"FILETAGS\"))))"
+  "      (json-encode"
+  "       (nconc"
+  "        (list (cons 'buffer (buffer-name)))"
+  "        (and (buffer-file-name)"
+  "             (list (cons 'file (buffer-file-name))))"
+  "        (let ((v (cadr (assoc \"TITLE\" kw))))"
+  "         (and v (list (cons 'title v))))"
+  "        (let ((v (cadr (assoc \"AUTHOR\" kw))))"
+  "         (and v (list (cons 'author v))))"
+  "        (let ((v (cadr (assoc \"DATE\" kw))))"
+  "         (and v (list (cons 'date v))))"
+  "        (let ((v (cadr (assoc \"FILETAGS\" kw))))"
+  "         (and v (list (cons 'filetags v))))"
+  "        (list (cons 'headlines (vconcat tree)))))))))))";
+
+gchar *
+cmacs_dispatch_org_content (const gchar *buffer, const gchar *match,
+                            gint max_depth, gboolean include_body,
+                            gboolean include_properties,
+                            GError **error)
+{
+  gchar *escaped_buffer;
+  gchar *match_form;
+  gchar *expr;
+  gchar *result;
+
+  escaped_buffer = g_strescape (buffer != NULL ? buffer : "", NULL);
+  if (match != NULL && *match != '\0')
+    {
+      gchar *escaped_match = g_strescape (match, NULL);
+      match_form = g_strdup_printf ("\"%s\"", escaped_match);
+      g_free (escaped_match);
+    }
+  else
+    match_form = g_strdup ("nil");
+
+  expr = g_strdup_printf (org_content_template,
+                          escaped_buffer,
+                          max_depth > 0 ? max_depth : 0,
+                          include_body ? "t" : "nil",
+                          include_properties ? "t" : "nil",
+                          match_form);
+  g_free (escaped_buffer);
+  g_free (match_form);
+
+  result = cmacs_dispatch_eval_string (expr, error);
+  g_free (expr);
+  return result;
+}
+
 /* Same waiting_for_input guard as dispatch_safe_eval -- see the
    comment there.  safe_calln's internal condition-case is still
    entered too late to catch an error signaled while

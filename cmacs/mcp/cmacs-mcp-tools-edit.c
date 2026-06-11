@@ -38,6 +38,43 @@ edit_dispatch (const gchar *expr)
   return result;
 }
 
+/* ── get_org_content ──────────────────────────────────────────────── */
+
+/* D-Bus parity: Edit.GetOrgContent in cmacs-dbus-iface-edit.c (both
+   call cmacs_dispatch_org_content). */
+static McpToolResult *
+handle_get_org_content (McpServer *s, const gchar *n,
+                        JsonObject *a, gpointer u)
+{
+  const gchar *buffer, *match;
+  gint64 max_depth;
+  gboolean include_body, include_props;
+  g_autoptr (GError) error = NULL;
+  g_autofree gchar *json = NULL;
+  McpToolResult *result;
+
+  (void) s; (void) n; (void) u;
+
+  buffer = json_object_get_string_member_with_default (a, "buffer",
+                                                       NULL);
+  if (buffer == NULL)
+    return edit_error ("Missing required argument: buffer");
+  match = json_object_get_string_member_with_default (a, "match", NULL);
+  max_depth = json_object_get_int_member_with_default (a, "max_depth",
+                                                       0);
+  include_body = json_object_get_boolean_member_with_default (
+    a, "include_body", TRUE);
+  include_props = json_object_get_boolean_member_with_default (
+    a, "include_properties", TRUE);
+
+  json = cmacs_dispatch_org_content (buffer, match, (gint) max_depth,
+                                     include_body, include_props,
+                                     &error);
+  result = mcp_tool_result_new (json == NULL);
+  mcp_tool_result_add_text (result, json ? json : error->message);
+  return result;
+}
+
 /* ── edit_buffer ──────────────────────────────────────────────────── */
 
 static McpToolResult *
@@ -250,6 +287,31 @@ cmacs_mcp_tools_edit_register (McpServer *server)
 {
   McpTool *tool;
   JsonNode *schema;
+
+  /* get_org_content */
+  tool = mcp_tool_new ("get_org_content",
+    "Parse an org-mode buffer into a structured JSON document: "
+    "buffer keywords (#+TITLE etc.) plus a nested headline tree with "
+    "title, level, todo, priority, tags, scheduled/deadline/closed, "
+    "property drawers, and body text. match filters entries with "
+    "org's agenda match syntax (e.g. \"work+urgent/TODO\").");
+  schema = cmacs_mcp_schema_from_string (
+    "{\"type\":\"object\",\"properties\":{"
+    "\"buffer\":{\"type\":\"string\",\"description\":\"Buffer name\"},"
+    "\"match\":{\"type\":\"string\","
+      "\"description\":\"org agenda match string (tags/todo/property "
+      "query); empty for all entries\"},"
+    "\"max_depth\":{\"type\":\"integer\","
+      "\"description\":\"Limit headline depth (0 = unlimited)\"},"
+    "\"include_body\":{\"type\":\"boolean\","
+      "\"description\":\"Include entry body text (default true)\"},"
+    "\"include_properties\":{\"type\":\"boolean\","
+      "\"description\":\"Include property drawers (default true)\"}"
+    "},\"required\":[\"buffer\"]}");
+  mcp_tool_set_input_schema (tool, schema);
+  mcp_tool_set_read_only_hint (tool, TRUE);
+  mcp_server_add_tool (server, tool, handle_get_org_content, NULL, NULL);
+  g_object_unref (tool);
 
   /* edit_buffer */
   tool = mcp_tool_new ("edit_buffer",
