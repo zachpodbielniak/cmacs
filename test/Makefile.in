@@ -122,6 +122,12 @@ emacs = LANG=C EMACS_TEST_DIRECTORY=$(abspath $(srcdir)) \
 # startup.el must be updated too.
 TEST_HOME = /nonexistent
 
+## CMACS: crispy tests compile C via gcc into the user cache dir
+## (g_get_user_cache_dir), which does not exist under the sandboxed
+## HOME above.  Give the test environment a writable cache instead;
+## it persists between runs so crispy's content-hash cache works.
+TEST_XDG_CACHE = $(CURDIR)/cmacs-test-cache
+
 test_module_dir := src/emacs-module-resources
 
 .PHONY: all check
@@ -182,7 +188,8 @@ endif
 
 %.log: %.elc
 	$(AM_V_GEN)${MKDIR_P} $(dir $@)
-	$(AM_V_at)HOME=$(TEST_HOME) $(emacs) \
+	$(AM_V_at)HOME=$(TEST_HOME) XDG_CACHE_HOME=$(TEST_XDG_CACHE) \
+	  $(emacs) \
 	  -l ert ${ert_opts} -l $(testloadfile) \
 	  $(TEST_RUN_ERT)
 
@@ -242,7 +249,9 @@ define test_template
   ## The similar name is FOO.c if FOO begins with '{lib-,}src/', FOO.el
   ## otherwise.  Although this heuristic does not identify all the
   ## dependencies, it is better than nothing.
-  ifeq (,$(patsubst %-tests,,$(1))$(findstring -tests/,$(1)))
+  ## CMACS: skip the heuristic for cmacs/ tests — their sources live
+  ## in lisp/cmacs/ and cmacs/<subsystem>/, not in a parallel tree.
+  ifeq (,$(patsubst %-tests,,$(1))$(findstring -tests/,$(1))$(filter cmacs/%,$(1)))
     $(1).log: $(patsubst %-tests,$(srcdir)/../%,$(1))$(if \
 					$(patsubst src/%,,$(patsubst lib-src/%,,$(1))),.el,.c)
     $(notdir $(1).log): $(1).log
@@ -260,7 +269,8 @@ endef
 $(foreach test,${TESTS},$(eval $(call test_template,${test})))
 
 ## Get the tests for only a specific directory.
-SUBDIRS = $(sort $(shell cd ${srcdir} && find lib-src lisp misc src -type d \
+## CMACS: include cmacs/ so `make -C test check-cmacs' works.
+SUBDIRS = $(sort $(shell cd ${srcdir} && find lib-src lisp misc src cmacs -type d \
 		\( -name '*resources*' -prune \
 		   -o ! -name '*auto-save-list' -print \)))
 SUBDIR_TARGETS =
@@ -352,7 +362,7 @@ check-byte-compile:
 ## summarizing step from running when there is an error.
 check-doit:
 ifeq ($(TEST_INTERACTIVE), yes)
-	HOME=$(TEST_HOME) $(emacs) \
+	HOME=$(TEST_HOME) XDG_CACHE_HOME=$(TEST_XDG_CACHE) $(emacs) \
 	  -l ert ${ert_opts} \
 	  $(patsubst %,-l %,$(if $(findstring $(TEST_LOAD_EL),yes),$ELFILES,$(ELFILES:.el=))) \
 	  $(TEST_RUN_ERT)

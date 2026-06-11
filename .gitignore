@@ -412,3 +412,6 @@ exec/*.s.s
 # tools/sync-deps-docs.sh at build time (Makefile.in: cmacs-deps-docs).
 # Generated build artifact — never committed.
 /doc_org/cmacs/deps/
+
+# cmacs: writable XDG_CACHE_HOME for the test harness (crispy gcc cache)
+/test/cmacs-test-cache/
