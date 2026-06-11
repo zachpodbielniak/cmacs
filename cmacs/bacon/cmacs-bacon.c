@@ -562,7 +562,8 @@ DEFUN ("bacon-ipc-stop", Fbacon_ipc_stop, Sbacon_ipc_stop, 0, 0, 0,
 
    Arguments after --bacon select a batch mode:
 
-     emacs --bacon                 interactive shell (REPL)
+     emacs --bacon                 interactive shell (REPL) on a tty;
+                                   with piped stdin, execute it quietly
      emacs --bacon -c CMD          execute one command, exit with status
      emacs --bacon SCRIPT          source a script file, then exit
 
@@ -575,6 +576,7 @@ cmacs_bacon_main (int argc, char **argv, int bacon_idx)
   const gchar *module_dir;
   const gchar *batch_cmd = NULL;
   const gchar *batch_script = NULL;
+  gboolean batch_stdin = FALSE;
   gint i, j;
   int first = bacon_idx + 1;
   int new_argc;
@@ -595,6 +597,10 @@ cmacs_bacon_main (int argc, char **argv, int bacon_idx)
       else
         batch_script = argv[first];
     }
+  else
+    /* No arguments and stdin is a pipe: execute the piped input
+       without the interactive banner/prompts. */
+    batch_stdin = !isatty (STDIN_FILENO);
 
   /* Strip --bacon from argv. */
   new_argc = argc - 1;
@@ -607,7 +613,8 @@ cmacs_bacon_main (int argc, char **argv, int bacon_idx)
   new_argv[j] = NULL;
 
   /* Create the shell; batch modes are non-interactive. */
-  shell = bacon_shell_new ((batch_cmd != NULL || batch_script != NULL)
+  shell = bacon_shell_new ((batch_cmd != NULL || batch_script != NULL
+                            || batch_stdin)
                            ? BACON_FLAG_NONE
                            : BACON_FLAG_INTERACTIVE);
   if (shell == NULL)
@@ -644,7 +651,7 @@ cmacs_bacon_main (int argc, char **argv, int bacon_idx)
      ignored or the shell is stopped by SIGTTOU when it calls
      tcsetpgrp() to reclaim the terminal after a foreground child.
      Batch modes never touch the terminal, so leave signals alone. */
-  if (batch_cmd == NULL && batch_script == NULL)
+  if (batch_cmd == NULL && batch_script == NULL && !batch_stdin)
     {
       struct sigaction sa;
       memset (&sa, 0, sizeof (sa));
@@ -672,6 +679,27 @@ cmacs_bacon_main (int argc, char **argv, int bacon_idx)
       g_object_unref (shell);
       g_free (new_argv);
       exit (status < 0 ? 1 : status);
+    }
+
+  /* Batch: piped stdin -- execute its lines without banner/prompts.
+     bacon_shell_execute_lines handles multi-line { } C blocks. */
+  if (batch_stdin)
+    {
+      GString *all = g_string_new (NULL);
+      gchar **lines;
+      char buf[4096];
+      size_t n;
+
+      while ((n = fread (buf, 1, sizeof buf, stdin)) > 0)
+        g_string_append_len (all, buf, n);
+
+      lines = g_strsplit (all->str, "\n", -1);
+      bacon_shell_execute_lines (shell, lines);
+      g_strfreev (lines);
+      g_string_free (all, TRUE);
+      g_object_unref (shell);
+      g_free (new_argv);
+      exit (0);
     }
 
   /* Batch: source a script file, then exit. */

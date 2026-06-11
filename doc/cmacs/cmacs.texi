@@ -484,7 +484,8 @@ Arguments after @option{--bacon} select a non-interactive batch mode,
 analogous to @option{--batch} for Lisp and @option{--crispy} for C:
 
 @example
-emacs --bacon                 # interactive shell (REPL)
+emacs --bacon                 # tty: interactive shell (REPL);
+                              # pipe: execute stdin quietly
 emacs --bacon -c CMD          # execute one command, exit with status
 emacs --bacon SCRIPT          # source a script file, then exit
 @end example
@@ -492,7 +493,8 @@ emacs --bacon SCRIPT          # source a script file, then exit
 Batch modes still register builtins, load modules, and source
 @file{~/.baconrc}, but skip the interactive terminal and signal setup.
 With @option{-c}, the exit status of the command becomes the process
-exit code.
+exit code.  With no arguments and piped stdin, the lines are executed
+without the banner or prompts --- only command output is printed.
 
 @subsection Loading the cmacsgi builtin
 
@@ -1673,12 +1675,21 @@ checked before any Emacs initialization, like @option{--bacon}:
 emacs --crispy SCRIPT [ARGS...]   # run a .c script; exit code propagates
 emacs --crispy -i CODE            # run inline C statements
 emacs --crispy -                  # read a full script from stdin
-emacs --crispy                    # interactive terminal REPL (readline)
+emacs --crispy                    # tty: interactive terminal REPL;
+                                  # pipe: evaluate stdin quietly
 @end example
 
+With no arguments and piped stdin, the input is evaluated with full
+REPL semantics (preamble accumulation, @samp{=> VALUE} auto-print,
+multi-line @code{@{ @}} blocks) but with no banner and no prompts ---
+only the code's own output reaches stdout; compile errors go to
+stderr and the exit code is nonzero.  As at the REPL prompt, plain
+statements do not persist between chunks --- group statements that
+share locals in one @code{@{ ... @}} block.
+
 @option{-i} wraps bare statements in a @code{main()} with GLib
-includes; script-file and stdin modes expect a complete translation
-unit with its own @code{main()}.  Since no Emacs is running in this
+includes; script-file and explicit @option{-} stdin modes expect a
+complete translation unit with its own @code{main()}.  Since no Emacs is running in this
 mode, the CMacs API's in-process DIRECT transport is unavailable, but
 the other transports can reach a separately running cmacs.
 

@@ -579,13 +579,160 @@ DEFUN ("crispy-cache-status", Fcrispy_cache_status, Scrispy_cache_status,
 /* cmacs --crispy: batch script mode (no Emacs initialization)         */
 /* ──────────────────────────────────────────────────────────────────── */
 
+/* State for scanning C chunk boundaries in piped REPL input. */
+struct cmacs_crispy_scan
+{
+  int depth;            /* net {([ vs })] depth */
+  bool in_string;
+  bool in_char;
+  bool in_comment;      /* inside a block comment */
+};
+
+/* Update SCAN with one LINE of C code, ignoring delimiters inside
+   string/character literals and comments.  Line comments end at the
+   line; strings and character literals do not span lines. */
+static void
+cmacs_crispy_scan_line (struct cmacs_crispy_scan *scan, const char *line)
+{
+  const char *p;
+  bool in_line_comment = false;
+
+  for (p = line; *p != '\0'; p++)
+    {
+      char c = *p;
+
+      if (in_line_comment)
+        continue;
+      if (scan->in_comment)
+        {
+          if (c == '*' && p[1] == '/')
+            {
+              scan->in_comment = false;
+              p++;
+            }
+          continue;
+        }
+      if (scan->in_string)
+        {
+          if (c == '\\' && p[1] != '\0')
+            p++;
+          else if (c == '"')
+            scan->in_string = false;
+          continue;
+        }
+      if (scan->in_char)
+        {
+          if (c == '\\' && p[1] != '\0')
+            p++;
+          else if (c == '\'')
+            scan->in_char = false;
+          continue;
+        }
+
+      switch (c)
+        {
+        case '"':
+          scan->in_string = true;
+          break;
+        case '\'':
+          scan->in_char = true;
+          break;
+        case '/':
+          if (p[1] == '/')
+            in_line_comment = true;
+          else if (p[1] == '*')
+            {
+              scan->in_comment = true;
+              p++;
+            }
+          break;
+        case '{': case '(': case '[':
+          scan->depth++;
+          break;
+        case '}': case ')': case ']':
+          scan->depth--;
+          break;
+        }
+    }
+
+  scan->in_string = false;
+  scan->in_char = false;
+}
+
+/* Evaluate piped stdin through the persistent REPL without printing
+   the banner or prompts: lines accumulate until braces balance, then
+   each chunk is evaluated with full REPL semantics (preamble
+   accumulation, "=> VALUE" auto-print).  Only the evaluated code's
+   own output reaches stdout; errors go to stderr.  Returns the
+   process exit code. */
+static int
+cmacs_crispy_eval_stdin (CrispyRepl *repl)
+{
+  GString *all = g_string_new (NULL);
+  GString *accum = g_string_new (NULL);
+  struct cmacs_crispy_scan scan = { 0, false, false, false };
+  char buf[4096];
+  size_t n;
+  gchar **lines, **lp;
+  int rc = 0;
+  bool had_error = false;
+
+  while ((n = fread (buf, 1, sizeof buf, stdin)) > 0)
+    g_string_append_len (all, buf, n);
+
+  lines = g_strsplit (all->str, "\n", -1);
+  for (lp = lines; *lp != NULL; lp++)
+    {
+      cmacs_crispy_scan_line (&scan, *lp);
+      if (accum->len > 0)
+        g_string_append_c (accum, '\n');
+      g_string_append (accum, *lp);
+
+      /* Keep accumulating inside a brace block or comment. */
+      if (*(lp + 1) != NULL && (scan.depth > 0 || scan.in_comment))
+        continue;
+      scan.depth = 0;
+
+      {
+        gchar *trimmed = g_strstrip (g_strdup (accum->str));
+
+        if (*trimmed != '\0')
+          {
+            GError *err = NULL;
+
+            rc = crispy_repl_eval (repl, accum->str, &err);
+            if (err != NULL)
+              {
+                fprintf (stderr, "cmacs --crispy: %s%s", err->message,
+                         g_str_has_suffix (err->message, "\n")
+                         ? "" : "\n");
+                g_error_free (err);
+                had_error = true;
+              }
+          }
+        g_free (trimmed);
+      }
+      g_string_truncate (accum, 0);
+    }
+
+  g_strfreev (lines);
+  g_string_free (accum, TRUE);
+  g_string_free (all, TRUE);
+
+  if (had_error)
+    return 1;
+  return rc < 0 ? 1 : rc;
+}
+
 /* Called from main() in emacs.c when --crispy is detected, before any
    Emacs initialization.  Runs crispy code without the editor:
 
      emacs --crispy SCRIPT [ARGS...]   run a .c script, propagate exit code
      emacs --crispy -i CODE            run inline C code
      emacs --crispy -                  read a script from stdin
-     emacs --crispy                    interactive terminal REPL
+     emacs --crispy                    interactive terminal REPL on a
+                                       tty; with piped stdin, evaluate
+                                       it quietly with REPL semantics
 
    No Lisp exists at this point, so the in-process Emacs dispatch table
    is not registered; scripts still compile and link against
@@ -612,12 +759,16 @@ cmacs_crispy_main (int argc, char **argv, int crispy_idx)
 
   if (first >= argc)
     {
-      /* No arguments: interactive terminal REPL (readline loop with
-         its own :help / :type / :load / :preamble commands). */
+      /* No arguments: on a tty, the interactive terminal REPL
+         (readline loop with its own :help / :type / :load /
+         :preamble commands); with piped stdin, evaluate it quietly
+         -- no banner, no prompts, just the code's output. */
       CrispyRepl *repl = crispy_repl_new (CRISPY_COMPILER (compiler),
                                           CRISPY_CACHE_PROVIDER (cache));
       crispy_repl_set_extra_flags (repl, api_flags);
-      if (!crispy_repl_start (repl, &err))
+      if (!isatty (STDIN_FILENO))
+        rc = cmacs_crispy_eval_stdin (repl);
+      else if (!crispy_repl_start (repl, &err))
         {
           fprintf (stderr, "cmacs --crispy: %s\n", err->message);
           g_error_free (err);

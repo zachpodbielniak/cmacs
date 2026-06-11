@@ -92,7 +92,8 @@ Arguments after =--bacon= select a non-interactive batch mode,
 analogous to =--batch= for Lisp and =--crispy= for C:
 
 #+begin_example
-emacs --bacon                 # interactive shell (REPL)
+emacs --bacon                 # tty: interactive shell (REPL);
+                              # pipe: execute stdin quietly
 emacs --bacon -c CMD          # execute one command, exit with status
 emacs --bacon SCRIPT          # source a script file, then exit
 #+end_example
@@ -101,8 +102,13 @@ emacs --bacon SCRIPT          # source a script file, then exit
 $ emacs --bacon -c 'echo hello'; echo $?
 hello
 0
+$ echo 'echo hello from a pipe' | emacs --bacon
+hello from a pipe
 $ emacs --bacon /tmp/setup.bacon
 #+end_src
+
+With no arguments and piped stdin, the lines are executed without the
+banner or prompts --- only command output is printed.
 
 Batch modes still register builtins, load modules, and source
 =~/.baconrc=, but skip the interactive terminal/signal setup.
