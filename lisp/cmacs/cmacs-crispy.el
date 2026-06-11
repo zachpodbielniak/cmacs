@@ -156,7 +156,8 @@ normalized to (\":!\" . \"CMD\")."
    "  Expressions (no trailing `;') are auto-printed:  1 + 2  =>  3\n"
    "  Statements execute as-is:  g_print(\"hi\\n\");\n"
    "  #include/#define, functions, and types accumulate in the preamble.\n"
-   "  RET evaluates when braces balance; C-j forces a continuation line.\n"))
+   "  RET evaluates when braces balance; C-j forces a continuation line.\n"
+   "  RET on a blank line evaluates pending input even if unbalanced.\n"))
 
 (defvar crispy-repl--type-candidates
   '("int" "unsigned int" "long" "unsigned long" "short" "char"
@@ -420,14 +421,21 @@ and /* */ block comments."
     depth))
 
 (defun crispy-repl-return ()
-  "Send the input if its delimiters balance, else continue on a new line."
+  "Send the input if its delimiters balance, else continue on a new line.
+RET on a blank line always sends, even with unbalanced delimiters:
+a typo (e.g. an unclosed paren inside a string literal) would
+otherwise trap the REPL in continuation mode -- force-sending lets
+gcc report the real error instead."
   (interactive)
   (let* ((proc (get-buffer-process (current-buffer)))
          (input (and proc
                      (buffer-substring-no-properties
                       (process-mark proc) (point-max))))
-         (depth (if input (crispy-repl--depth-delta input) 0)))
-    (if (> depth 0)
+         (depth (if input (crispy-repl--depth-delta input) 0))
+         (blank-line (save-excursion
+                       (beginning-of-line)
+                       (looking-at-p "[ \t]*$"))))
+    (if (and (> depth 0) (not blank-line))
         (insert "\n" (make-string (* 2 depth) ?\s))
       (comint-send-input))))
 

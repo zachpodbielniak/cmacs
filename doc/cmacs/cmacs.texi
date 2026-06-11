@@ -1588,8 +1588,12 @@ declarations accumulate in the preamble; bare expressions auto-print
 as @samp{=> VALUE}.  @kbd{RET} evaluates only when braces balance ---
 an unclosed @code{@{} continues on an indented new line (@kbd{C-c C-c}
 or @kbd{M-RET} force-send, @kbd{C-j} forces a continuation).
-@kbd{TAB} completes colon commands.  REPL state is shared with
-@code{%crispy} scratchpad blocks.
+@kbd{RET} on a blank line always sends, even when unbalanced, so a
+typo like @code{g_print("world)";} cannot trap the REPL in
+continuation mode --- gcc reports the real error instead; the
+terminal REPL treats a blank line the same way.  @kbd{TAB} completes
+colon commands.  REPL state is shared with @code{%crispy} scratchpad
+blocks.
 
 GHCi-style colon commands (aliases in parentheses):
 

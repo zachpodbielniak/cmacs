@@ -275,7 +275,12 @@ backed by the persistent =crispy-repl-eval-string= primitive:
 - Bare expressions auto-print: typing =1 + 2= prints ~=> 3~.
 - =RET= evaluates only when braces/parens/brackets balance; an
   unclosed ={= continues on an indented new line.  =C-j= forces a
-  continuation line; =C-c C-c= / =M-RET= force-send.
+  continuation line; =C-c C-c= / =M-RET= force-send.  =RET= on a
+  blank line always sends, even when unbalanced --- so a typo like
+  =g_print("world)";= (the closing paren hidden inside the string)
+  cannot trap the REPL in continuation mode; gcc reports the real
+  error instead.  The terminal REPL (=emacs --crispy= /
+  =crispy repl=) treats a blank line the same way.
 - =TAB= at the start of input completes colon commands.
 - REPL state is shared with =%crispy= scratchpad blocks.
 

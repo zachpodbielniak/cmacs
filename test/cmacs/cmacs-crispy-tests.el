@@ -382,6 +382,40 @@ crispy_repl_start, a blocking readline loop on stdin)."
           (let ((kill-buffer-query-functions nil))
             (kill-buffer buf-name)))))))
 
+(ert-deftest cmacs-crispy-repl-return-blank-line-force-sends ()
+  "Unbalanced input continues on RET, but RET on a blank line sends.
+Regression: a typo like g_print(\"world)\"; trapped the REPL in
+continuation mode with no way to flush the input."
+  (skip-unless (fboundp 'crispy-repl-eval-string))
+  (let ((buf-name " *crispy-test-repl3*"))
+    (let ((crispy-repl-buffer-name buf-name))
+      (unwind-protect
+          (progn
+            (save-window-excursion (crispy-repl))
+            (with-current-buffer buf-name
+              (goto-char (point-max))
+              (insert "g_print(\"world)\";")
+              (let ((mark-before (marker-position
+                                  (process-mark
+                                   (get-buffer-process (current-buffer))))))
+                ;; Unbalanced: RET continues instead of sending.
+                (crispy-repl-return)
+                (should (= mark-before
+                           (marker-position
+                            (process-mark
+                             (get-buffer-process (current-buffer))))))
+                ;; Point now sits on a blank continuation line:
+                ;; RET force-sends, the compile error is printed,
+                ;; and a fresh prompt appears.
+                (crispy-repl-return)
+                (let ((tail (buffer-substring-no-properties
+                             mark-before (point-max))))
+                  (should (string-match-p "error" tail))
+                  (should (string-suffix-p crispy-repl-prompt tail))))))
+        (when (get-buffer buf-name)
+          (let ((kill-buffer-query-functions nil))
+            (kill-buffer buf-name)))))))
+
 (ert-deftest cmacs-crispy-repl-buffer-eval ()
   "Sending input through the comint REPL prints => VALUE and a prompt."
   (skip-unless (fboundp 'crispy-repl-eval-string))
