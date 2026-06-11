@@ -559,6 +559,13 @@ DEFUN ("bacon-ipc-stop", Fbacon_ipc_stop, Sbacon_ipc_stop, 0, 0, 0,
 
 /* Called from main() in emacs.c when --bacon is detected.
    This replaces deps/bacon/src/main.c for the embedded case.
+
+   Arguments after --bacon select a batch mode:
+
+     emacs --bacon                 interactive shell (REPL)
+     emacs --bacon -c CMD          execute one command, exit with status
+     emacs --bacon SCRIPT          source a script file, then exit
+
    Never returns. */
 _Noreturn void
 cmacs_bacon_main (int argc, char **argv, int bacon_idx)
@@ -566,9 +573,28 @@ cmacs_bacon_main (int argc, char **argv, int bacon_idx)
   BaconShell *shell;
   BaconModuleManager *mm;
   const gchar *module_dir;
+  const gchar *batch_cmd = NULL;
+  const gchar *batch_script = NULL;
   gint i, j;
+  int first = bacon_idx + 1;
   int new_argc;
   char **new_argv;
+
+  /* Batch modes: only arguments AFTER --bacon belong to bacon. */
+  if (first < argc)
+    {
+      if (strcmp (argv[first], "-c") == 0)
+        {
+          if (first + 1 >= argc)
+            {
+              fprintf (stderr, "cmacs --bacon: -c requires CMD\n");
+              exit (1);
+            }
+          batch_cmd = argv[first + 1];
+        }
+      else
+        batch_script = argv[first];
+    }
 
   /* Strip --bacon from argv. */
   new_argc = argc - 1;
@@ -580,8 +606,10 @@ cmacs_bacon_main (int argc, char **argv, int bacon_idx)
     }
   new_argv[j] = NULL;
 
-  /* Create the shell with interactive flag. */
-  shell = bacon_shell_new (BACON_FLAG_INTERACTIVE);
+  /* Create the shell; batch modes are non-interactive. */
+  shell = bacon_shell_new ((batch_cmd != NULL || batch_script != NULL)
+                           ? BACON_FLAG_NONE
+                           : BACON_FLAG_INTERACTIVE);
   if (shell == NULL)
     {
       fprintf (stderr, "cmacs --bacon: failed to create shell\n");
@@ -614,18 +642,20 @@ cmacs_bacon_main (int argc, char **argv, int bacon_idx)
 
   /* Set up signals for interactive mode.  SIGTTIN/SIGTTOU must be
      ignored or the shell is stopped by SIGTTOU when it calls
-     tcsetpgrp() to reclaim the terminal after a foreground child. */
-  {
-    struct sigaction sa;
-    memset (&sa, 0, sizeof (sa));
-    sigemptyset (&sa.sa_mask);
-    sa.sa_handler = SIG_IGN;
-    sa.sa_flags = 0;
-    sigaction (SIGTTIN, &sa, NULL);
-    sigaction (SIGTTOU, &sa, NULL);
-    sigaction (SIGTSTP, &sa, NULL);
-    sigaction (SIGQUIT, &sa, NULL);
-  }
+     tcsetpgrp() to reclaim the terminal after a foreground child.
+     Batch modes never touch the terminal, so leave signals alone. */
+  if (batch_cmd == NULL && batch_script == NULL)
+    {
+      struct sigaction sa;
+      memset (&sa, 0, sizeof (sa));
+      sigemptyset (&sa.sa_mask);
+      sa.sa_handler = SIG_IGN;
+      sa.sa_flags = 0;
+      sigaction (SIGTTIN, &sa, NULL);
+      sigaction (SIGTTOU, &sa, NULL);
+      sigaction (SIGTSTP, &sa, NULL);
+      sigaction (SIGQUIT, &sa, NULL);
+    }
 
   /* Source RC files. */
   {
@@ -634,6 +664,31 @@ cmacs_bacon_main (int argc, char **argv, int bacon_idx)
       bacon_shell_source_file (shell, rc_path, NULL);
     g_free (rc_path);
   }
+
+  /* Batch: one command, exit with its status. */
+  if (batch_cmd != NULL)
+    {
+      int status = bacon_shell_execute_line (shell, batch_cmd);
+      g_object_unref (shell);
+      g_free (new_argv);
+      exit (status < 0 ? 1 : status);
+    }
+
+  /* Batch: source a script file, then exit. */
+  if (batch_script != NULL)
+    {
+      GError *err = NULL;
+      gboolean ok = bacon_shell_source_file (shell, batch_script, &err);
+      if (!ok)
+        {
+          fprintf (stderr, "cmacs --bacon: %s\n",
+                   err != NULL ? err->message : "failed to source script");
+          g_clear_error (&err);
+        }
+      g_object_unref (shell);
+      g_free (new_argv);
+      exit (ok ? 0 : 1);
+    }
 
   /* Run the shell REPL — this blocks until exit. */
   bacon_shell_run (shell);
