@@ -476,6 +476,24 @@ bacon$ cmacsgi eval "(+ 1 2)"    # only works with IPC fd
 When run standalone (outside of @code{M-x bacon}), the @command{cmacsgi}
 builtin falls back to D-Bus if @env{CMACS_IPC_FD} is not set.
 
+@subsection Batch modes
+
+@cindex bacon batch mode
+
+Arguments after @option{--bacon} select a non-interactive batch mode,
+analogous to @option{--batch} for Lisp and @option{--crispy} for C:
+
+@example
+emacs --bacon                 # interactive shell (REPL)
+emacs --bacon -c CMD          # execute one command, exit with status
+emacs --bacon SCRIPT          # source a script file, then exit
+@end example
+
+Batch modes still register builtins, load modules, and source
+@file{~/.baconrc}, but skip the interactive terminal and signal setup.
+With @option{-c}, the exit status of the command becomes the process
+exit code.
+
 @subsection Loading the cmacsgi builtin
 
 The @command{cmacsgi} command is registered by @file{cmacs_gi.so}, a
@@ -1538,21 +1556,144 @@ Compile and execute a @file{.c} file with arguments.
 @item crispy-compile FILE
 Compile @var{FILE}, return the cached binary path.
 @item crispy-repl-eval CODE
-Evaluate in the persistent REPL.
+Evaluate in the persistent REPL; returns the exit code.  Preprocessor
+directives, function definitions, and type declarations accumulate in
+a preamble that stays in scope for later calls.  Output goes to
+Emacs's own stdout.
+@item crispy-repl-eval-string CODE
+Like @code{crispy-repl-eval}, but returns the combined stdout and
+stderr output as a string.  Bare expressions auto-print as
+@samp{=> VALUE}.  Compilation errors signal @code{crispy-error} with
+the gcc diagnostic.  This is what the @file{*crispy*} REPL buffer and
+the scratchpad use.
+@item crispy-repl-preamble
+Return the accumulated REPL preamble as a string.
 @item crispy-repl-reset
-Reset persistent REPL state.
+Reset persistent REPL state (clear the preamble).
 @item crispy-cache-status
 Return the crispy cache directory path.
 @end table
+
+@section The Crispy REPL
+
+@cindex crispy REPL
+@cindex colon commands
+
+@kbd{M-x crispy-repl} opens the @file{*crispy*} buffer, a comint-based
+C REPL backed by @code{crispy-repl-eval-string}.  The prompt is
+read-only; @code{#include} directives, function definitions, and type
+declarations accumulate in the preamble; bare expressions auto-print
+as @samp{=> VALUE}.  @kbd{RET} evaluates only when braces balance ---
+an unclosed @code{@{} continues on an indented new line (@kbd{C-c C-c}
+or @kbd{M-RET} force-send, @kbd{C-j} forces a continuation).
+@kbd{TAB} completes colon commands.  REPL state is shared with
+@code{%crispy} scratchpad blocks.
+
+GHCi-style colon commands (aliases in parentheses):
+
+@table @code
+@item :help (:h :?)
+Show command help.
+@item :type EXPR (:t)
+Show the C type of @var{EXPR}, with the preamble in scope.  Compiles
+a probe using @code{__typeof__} and
+@code{__builtin_types_compatible_p}.
+@item :info NAME (:i)
+cintrospect information: struct/enum layout, symbol info, or DEFUN
+info for @var{NAME}.
+@item :def NAME (:d)
+Show @samp{file:line} of C function @var{NAME} and visit it in
+another window.
+@item :doc NAME
+Docstring of Lisp function or variable @var{NAME}.
+@item :browse GLOB (:b)
+List C symbols matching @var{GLOB} via cintrospect.
+@item :preamble (:p)
+Show the accumulated preamble.
+@item :load FILE (:l)
+Load a C file into the preamble.
+@item :reset (:r)
+Reset REPL state (clear the preamble).
+@item :clear
+Clear the REPL buffer.
+@item :cache
+Show the crispy cache directory.
+@item :elisp EXPR (:e)
+Evaluate @var{EXPR} as Emacs Lisp.
+@item :bacon CMD (:!)
+Run @var{CMD} in bacon when running, else via the shell.
+@item :quit (:q)
+Bury the REPL buffer.
+@end table
+
+The cintrospect-backed commands (@code{:info}, @code{:def},
+@code{:browse}) degrade gracefully with a message when cmacs is built
+without @option{--with-cmacs-cintrospect}.
+
+@section Scratch Buffer Polyglot Eval
+
+@cindex scratchpad
+@cindex polyglot scratch buffer
+
+@code{cmacs-scratchpad-mode} (auto-enabled in @file{*scratch*} and
+Doom scratch buffers; see @code{cmacs-scratchpad-buffer-regexp}) lets
+the scratch buffer execute crispy and bacon blocks alongside ordinary
+Emacs Lisp.  A block starts with a @code{%crispy} or @code{%bacon}
+marker line and ends at a blank line, the next marker, previous
+output, or end of buffer; without a marker the block is Emacs Lisp.
+
+@example
+;; plain elisp -- C-j still works, or C-c C-c:
+(+ 1 2)
+
+%crispy
+for (int i = 0; i < 3; i++)
+    g_print("%d\n", i);
+
+%bacon
+ls /tmp | head -2
+@end example
+
+@kbd{C-c C-c} (@code{cmacs-scratchpad-eval-block}) evaluates the
+block at point and inserts the output inline below it; re-evaluation
+replaces the previous output instead of stacking.  @kbd{C-c C-k}
+(@code{cmacs-scratchpad-clear-output}) deletes the output at point
+(prefix argument: all output in the buffer).  Crispy blocks share the
+persistent REPL with the @file{*crispy*} buffer.
+
+@section Command-line Usage
+
+@cindex --crispy
+
+@option{--crispy} runs crispy code from the command line without
+starting the editor, analogous to @option{--batch} for Lisp.  It is
+checked before any Emacs initialization, like @option{--bacon}:
+
+@example
+emacs --crispy SCRIPT [ARGS...]   # run a .c script; exit code propagates
+emacs --crispy -i CODE            # run inline C statements
+emacs --crispy -                  # read a full script from stdin
+emacs --crispy                    # interactive terminal REPL (readline)
+@end example
+
+@option{-i} wraps bare statements in a @code{main()} with GLib
+includes; script-file and stdin modes expect a complete translation
+unit with its own @code{main()}.  Since no Emacs is running in this
+mode, the CMacs API's in-process DIRECT transport is unavailable, but
+the other transports can reach a separately running cmacs.
 
 @section Files
 
 @table @file
 @item cmacs/crispy/cmacs-crispy.c
 C primitive implementation.  Registers the CMacs API direct dispatch
-table so crispy scripts can call back into Emacs without IPC.
+table so crispy scripts can call back into Emacs without IPC.  Also
+provides @code{cmacs_crispy_main}, the @option{--crispy} entry point.
 @item lisp/cmacs/cmacs-crispy.el
-Elisp layer: REPL, minor mode, region/buffer evaluation.
+Elisp layer: REPL with colon commands, minor mode, region/buffer
+evaluation.
+@item lisp/cmacs/cmacs-scratchpad.el
+Polyglot scratch-buffer eval (@code{%crispy} / @code{%bacon} blocks).
 @end table
 
 @c ===================================================================
@@ -7482,12 +7623,19 @@ Several small hunks in @code{main()} / its init path:
 
 @itemize @bullet
 @item
-@strong{Includes} (gated): @file{cmacs-bacon.h}, @file{<gowl.h>} /
-@file{<wayland-server-core.h>}.
+@strong{Includes} (gated): @file{cmacs-bacon.h}, @file{cmacs-crispy.h},
+@file{<gowl.h>} / @file{<wayland-server-core.h>}.
 @item
 @strong{@option{--bacon} entry} (@code{HAVE_CMACS_BACON}): scan @code{argv}
 and enter the embedded shell via @code{cmacs_bacon_main} before any Emacs
-init; never returns.
+init; never returns.  @code{cmacs_bacon_main} itself also handles the
+batch forms @option{--bacon -c CMD} and @option{--bacon SCRIPT} (no
+extra @file{emacs.c} hunk).
+@item
+@strong{@option{--crispy} entry} (@code{HAVE_CMACS_CRISPY}): identical
+shape to the @option{--bacon} scan, directly below it.  Calls
+@code{cmacs_crispy_main} to run a crispy script / inline code / stdin /
+terminal REPL without any Emacs initialization; never returns.
 @item
 @strong{@option{--gowl} early start} (@code{HAVE_CMACS_GOWL}): create and
 configure the @code{GowlCompositor} (including the
@@ -7734,6 +7882,28 @@ statics, so no @code{LD_LIBRARY_PATH} is added).  It deliberately does @emph{not
 pass @code{BUILD_EDITOR_UI=1}, so the engine's standalone editor app stays out of
 temacs (a separate optional frontend).  @code{deps/gsurf} pins
 @code{STATIC=1 BUILD_GIR=1 GTK_BACKEND=gtk3}.
+@end itemize
+
+@subsection test/Makefile.in --- cmacs test-suite support
+
+Three small hunks (each marked @code{## CMACS: ...}):
+
+@itemize @bullet
+@item
+Add @code{cmacs} to the @code{SUBDIRS} find so the @code{check-cmacs}
+target exists (runs every @file{test/cmacs/*-tests.el}).
+@item
+Skip the test-to-source dependency heuristic for @code{cmacs/%} tests
+(@code{$(filter cmacs/%,$(1))} in the @code{test_template} condition):
+the heuristic derives @file{../cmacs/FOO.el}, but cmacs sources live in
+@file{lisp/cmacs/} and @file{cmacs/<subsystem>/}, so the bogus
+prerequisite made every individual @code{make -C test cmacs/FOO-tests}
+target fail.
+@item
+Export a writable @env{XDG_CACHE_HOME} (@code{TEST_XDG_CACHE}, next to
+@code{TEST_HOME}) in the two test-running recipes: crispy tests compile
+C via gcc into the user cache dir, which cannot be created under the
+sandboxed @code{HOME=/nonexistent}.
 @end itemize
 
 @node Upstream Lisp

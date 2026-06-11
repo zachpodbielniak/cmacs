@@ -199,13 +199,48 @@ executing it).
 (crispy-repl-eval CODE)
 #+end_example
 
-Evaluate code in the persistent REPL.  The REPL maintains state across
-calls --- variables and functions defined in previous calls are available.
+Evaluate code in the persistent REPL and return the exit code.
+Preprocessor directives (=#include=, =#define=), function definitions,
+and type declarations accumulate in a *preamble* that stays in scope
+for later calls; plain statements are compiled and executed once.
+Output goes to Emacs's own stdout --- use =crispy-repl-eval-string=
+to capture it.
 
 #+begin_src emacs-lisp
-(crispy-repl-eval "int x = 42;")
-(crispy-repl-eval "printf(\"%d\\n\", x);")  ;; prints 42
+(crispy-repl-eval "int square(int x) { return x * x; }")  ;; persists
+(crispy-repl-eval "g_print(\"%d\\n\", square(7));")       ;; uses it
 #+end_src
+
+** crispy-repl-eval-string
+
+#+begin_example
+(crispy-repl-eval-string CODE)
+#+end_example
+
+Like =crispy-repl-eval=, but returns the combined stdout and stderr
+output as a string.  Bare expressions (no trailing semicolon) are
+auto-printed as ~=> VALUE~.  Compilation errors signal =crispy-error=
+with the gcc diagnostic.  This is what the =*crispy*= REPL buffer and
+the scratchpad use.
+
+#+begin_src emacs-lisp
+(crispy-repl-eval-string "1 + 2")
+;; => "=> 3\n"
+
+(crispy-repl-eval-string "#include <math.h>")          ;; preamble
+(crispy-repl-eval-string "int sq(int x){return x*x;}") ;; preamble
+(crispy-repl-eval-string "sq(7)")
+;; => "=> 49\n"
+#+end_src
+
+** crispy-repl-preamble
+
+#+begin_example
+(crispy-repl-preamble)
+#+end_example
+
+Return the accumulated REPL preamble as a string (empty if the REPL
+has not evaluated anything yet).
 
 ** crispy-repl-reset
 
@@ -213,8 +248,8 @@ calls --- variables and functions defined in previous calls are available.
 (crispy-repl-reset)
 #+end_example
 
-Reset the persistent REPL state.  All previously defined variables and
-functions are cleared.
+Reset the persistent REPL state.  The accumulated preamble (includes,
+functions, types) is cleared.
 
 ** crispy-cache-status
 
@@ -229,18 +264,150 @@ Return the crispy cache directory path.
 ;; => "/home/zach/.cache/crispy"
 #+end_src
 
+* The Crispy REPL
+
+=M-x crispy-repl= opens the =*crispy*= buffer, a comint-based C REPL
+backed by the persistent =crispy-repl-eval-string= primitive:
+
+- The prompt is *read-only* (it cannot be deleted or edited).
+- =#include= / =#define= directives, function definitions, and type
+  declarations accumulate in the preamble and stay in scope.
+- Bare expressions auto-print: typing =1 + 2= prints ~=> 3~.
+- =RET= evaluates only when braces/parens/brackets balance; an
+  unclosed ={= continues on an indented new line.  =C-j= forces a
+  continuation line; =C-c C-c= / =M-RET= force-send.
+- =TAB= at the start of input completes colon commands.
+- REPL state is shared with =%crispy= scratchpad blocks.
+
+** Colon Commands
+
+GHCi-style meta-commands, typed at the prompt:
+
+| Command          | Alias    | Description                                       |
+|------------------+----------+---------------------------------------------------|
+| =:help=          | =:h :?=  | Show command help                                 |
+| =:type EXPR=     | =:t=     | Show the C type of EXPR (preamble in scope)       |
+| =:info NAME=     | =:i=     | cintrospect info: type layout / symbol / DEFUN    |
+| =:def NAME=      | =:d=     | Show =file:line= of C function NAME and visit it  |
+| =:doc NAME=      |          | Docstring of Lisp function or variable NAME       |
+| =:browse GLOB=   | =:b=     | List C symbols matching GLOB (cintrospect)        |
+| =:preamble=      | =:p=     | Show the accumulated preamble                     |
+| =:load FILE=     | =:l=     | Load a C file into the preamble                   |
+| =:reset=         | =:r=     | Reset REPL state (clear the preamble)             |
+| =:clear=         |          | Clear the REPL buffer                             |
+| =:cache=         |          | Show the crispy cache directory                   |
+| =:elisp EXPR=    | =:e=     | Evaluate EXPR as Emacs Lisp                       |
+| =:bacon CMD=     | =:!=     | Run CMD in bacon (shell fallback if not running)  |
+| =:quit=          | =:q=     | Bury the REPL buffer                              |
+
+=:type= compiles a probe using =__typeof__= and
+=__builtin_types_compatible_p= --- the same trick as the standalone
+=crispy repl= --- so it works for expressions involving preamble
+definitions.  =:info=, =:def=, and =:browse= are powered by the
+[[file:cintrospect.org][cintrospect]] subsystem (DWARF introspection of the running binary)
+and degrade gracefully with a message when cmacs is built without it.
+
+Example session:
+
+#+begin_example
+crispy> :t 1 + 2.0
+double
+crispy> int fib(int n) { return n < 2 ? n : fib(n-1) + fib(n-2); }
+crispy> fib(10)
+=> 55
+crispy> :i Lisp_String
+type Lisp_String
+  symbol-name  Lisp_String
+  kind         struct
+  size         32
+  ...
+crispy> :d Fcar
+Fcar → /path/to/src/data.c:713
+#+end_example
+
+* Scratch Buffer Polyglot Eval
+
+=cmacs-scratchpad-mode= (auto-enabled in =*scratch*= and Doom scratch
+buffers) lets the scratch buffer execute crispy and bacon blocks
+alongside ordinary Emacs Lisp.
+
+A block starts with a marker line and ends at a blank line, the next
+marker, previous output, or end of buffer:
+
+#+begin_example
+;; plain elisp -- C-j still works, or C-c C-c:
+(+ 1 2)
+
+%crispy
+for (int i = 0; i < 3; i++)
+    g_print("%d\n", i);
+
+%bacon
+ls /tmp | head -2
+#+end_example
+
+- =C-c C-c= (=cmacs-scratchpad-eval-block=) evaluates the block at
+  point; output is inserted *inline* right below the block, shown in
+  the =shadow= face.
+- Re-evaluating a block *replaces* its previous output instead of
+  stacking copies.
+- =C-c C-k= (=cmacs-scratchpad-clear-output=) deletes the output at
+  point; with a prefix argument it clears all output in the buffer.
+- Crispy blocks share the persistent REPL with the =*crispy*= buffer:
+  a function defined in the scratchpad is callable at the REPL prompt
+  and vice versa.
+- Bacon blocks run line-by-line through =bacon-eval= when the bacon
+  shell is running, falling back to =shell-command-to-string=.
+- Elisp blocks may contain several forms; they are wrapped in =progn=
+  and the final value prints as ~=> VALUE~.
+
+The buffers affected are controlled by
+=cmacs-scratchpad-buffer-regexp= (default: =*scratch*= and
+=*doom:scratch...*=).
+
+* Command-line Usage
+
+=--crispy= runs crispy code from the command line without starting
+the editor, analogous to =--batch= for Lisp.  It is checked before
+any Emacs initialization (like =--bacon=):
+
+#+begin_example
+emacs --crispy SCRIPT [ARGS...]   # run a .c script; exit code propagates
+emacs --crispy -i CODE            # run inline C statements
+emacs --crispy -                  # read a full script from stdin
+emacs --crispy                    # interactive terminal REPL (readline)
+#+end_example
+
+#+begin_src sh
+$ emacs --crispy -i 'g_print("hi\n");'
+hi
+$ echo 'int main(void){ return 3; }' | emacs --crispy -; echo $?
+3
+#+end_src
+
+Note that =-i= wraps bare statements in a =main()= with GLib includes,
+while script-file and stdin modes expect a complete translation unit
+with its own =main()=.  Scripts compile and link against
+=libcmacs-api=; since no Emacs is running in this mode, the API's
+in-process DIRECT transport is unavailable, but the other transports
+can reach a separately running cmacs.
+
 * Customization
 
 | Variable                    | Description                            | Default |
 |-----------------------------+----------------------------------------+---------|
 | =cmacs-config-load-crispy=  | Whether to load init.c at startup      | =t=     |
 | =cmacs-config-directory=    | Where to look for init.c first         | =~/.config/cmacs= |
+| =crispy-repl-buffer-name=   | Name of the REPL buffer                | =*crispy*= |
+| =crispy-repl-prompt=        | REPL prompt string                     | =crispy>= |
+| =cmacs-scratchpad-buffer-regexp= | Buffers that auto-enable scratchpad mode | =*scratch*= / Doom |
 
 * Files
 
 | File                               | Purpose                                       |
 |------------------------------------+-----------------------------------------------|
-| =cmacs/crispy/cmacs-crispy.c=      | C primitives, DIRECT dispatch registration    |
-| =lisp/cmacs/cmacs-crispy.el=       | Elisp layer: REPL, minor mode, evaluation     |
+| =cmacs/crispy/cmacs-crispy.c=      | C primitives, DIRECT dispatch, =--crispy= entry |
+| =lisp/cmacs/cmacs-crispy.el=       | Elisp layer: REPL, colon commands, minor mode |
+| =lisp/cmacs/cmacs-scratchpad.el=   | Polyglot scratch-buffer eval (%crispy/%bacon) |
 | =lisp/cmacs/cmacs-config.el=       | Config file loading (init.c discovery)        |
 | =deps/crispy/=                     | Crispy library (git submodule)                |

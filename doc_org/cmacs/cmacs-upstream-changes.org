@@ -38,11 +38,16 @@ sources below --- do not edit them, and ignore them in a merge:
 
 Several small hunks, all in =main()= / its init path:
 
-- *Includes* (gated): =cmacs-bacon.h=, =<gowl.h>= /
+- *Includes* (gated): =cmacs-bacon.h=, =cmacs-crispy.h=, =<gowl.h>= /
   =<wayland-server-core.h>=.
 - *=--bacon= entry* (=HAVE_CMACS_BACON=): scan =argv= and enter the
   embedded shell via =cmacs_bacon_main= before any Emacs init; never
-  returns.
+  returns.  =cmacs_bacon_main= itself also handles the batch forms
+  =--bacon -c CMD= and =--bacon SCRIPT= (no extra emacs.c hunk).
+- *=--crispy= entry* (=HAVE_CMACS_CRISPY=): identical shape to the
+  =--bacon= scan, directly below it.  Calls =cmacs_crispy_main= to run
+  a crispy script / inline code / stdin / terminal REPL without any
+  Emacs initialization; never returns.
 - *=--gowl= early start* (=HAVE_CMACS_GOWL=): create + configure the
   =GowlCompositor= (incl. the =evaluate-gowl-config-with-cmacs= /
   =evaluate-c-config-with-cmacs= gates) and start it before display init,
@@ -265,6 +270,22 @@ embedded Doom config.
   =BUILD_EDITOR_UI=1=, so the engine's standalone editor app is not compiled
   into temacs (a separate, optional frontend).  The =deps/gsurf= rule
   similarly pins =STATIC=1 BUILD_GIR=1 GTK_BACKEND=gtk3=.
+
+** test/Makefile.in --- cmacs test-suite support
+
+Three small hunks (each marked =## CMACS: ...=):
+
+- Add =cmacs= to the =SUBDIRS= find so the =check-cmacs= target exists
+  (runs every =test/cmacs/*-tests.el=).
+- Skip the test-to-source dependency heuristic for =cmacs/%= tests
+  (=$(filter cmacs/%,$(1))= in the =test_template= condition): the
+  heuristic derives =../cmacs/FOO.el=, but cmacs sources live in
+  =lisp/cmacs/= and =cmacs/<subsystem>/=, so the bogus prerequisite
+  made every individual =make -C test cmacs/FOO-tests= target fail.
+- Export a writable =XDG_CACHE_HOME= (=TEST_XDG_CACHE=, next to
+  =TEST_HOME=) in the two test-running recipes: crispy tests compile C
+  via gcc into the user cache dir, which cannot be created under the
+  sandboxed =HOME=/nonexistent=.
 
 * Lisp
 

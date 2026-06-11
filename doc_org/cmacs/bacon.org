@@ -86,6 +86,27 @@ bacon> cmacsgi eval '(+ 40 2)'
 bacon> exit
 #+end_example
 
+** Batch modes
+
+Arguments after =--bacon= select a non-interactive batch mode,
+analogous to =--batch= for Lisp and =--crispy= for C:
+
+#+begin_example
+emacs --bacon                 # interactive shell (REPL)
+emacs --bacon -c CMD          # execute one command, exit with status
+emacs --bacon SCRIPT          # source a script file, then exit
+#+end_example
+
+#+begin_src sh
+$ emacs --bacon -c 'echo hello'; echo $?
+hello
+0
+$ emacs --bacon /tmp/setup.bacon
+#+end_src
+
+Batch modes still register builtins, load modules, and source
+=~/.baconrc=, but skip the interactive terminal/signal setup.
+
 ** Loading the cmacsgi builtin
 
 The =cmacsgi= command is registered by =cmacs_gi.so=, a Bacon module
