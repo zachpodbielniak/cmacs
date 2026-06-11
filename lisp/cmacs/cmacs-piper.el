@@ -62,9 +62,43 @@ English voice here).  User-installed voices take precedence."
 ;; cookies) so the startup bootstrap can read them BEFORE this file loads.
 ;; Customize them as usual via M-x customize-group RET cmacs-piper RET.
 
-(defvar cmacs-piper--playback-stack nil
-  "LIFO stack of currently-playing audio handles (so `cmacs-piper-stop'
-can interrupt the most recent one).")
+(defvar cmacs-piper--playback-handle nil
+  "Shared playback handle, reused across utterances.
+Opening a `cmacs-audio' playback stream creates a system audio
+output (a PulseAudio sink input), so each utterance must NOT open
+its own --- they would accumulate forever, one per `speak'.  All
+piper speech funnels through this one handle; pushed PCM is
+timestamped on arrival (appsrc do-timestamp), so feeding an
+already-playing pipeline plays immediately.")
+
+(defvar cmacs-piper--playback-rate nil
+  "Sample rate (Hz) of `cmacs-piper--playback-handle'.")
+
+(defun cmacs-piper--playback-live-p (handle)
+  "Non-nil when HANDLE still exists in the audio registry."
+  (and handle (ignore-errors (cmacs-audio-state handle) t)))
+
+(defun cmacs-piper--ensure-playback (rate)
+  "Return the shared playback handle at RATE Hz, opening it on demand.
+The handle (and its audio output) persists across utterances; only a
+RATE change (a different voice) replaces it.  The pipeline is set
+PLAYING before returning: a stopped appsrc flushes pushed buffers,
+so callers must only push PCM into a started handle."
+  (if (and (eql cmacs-piper--playback-rate rate)
+           (cmacs-piper--playback-live-p cmacs-piper--playback-handle))
+      (cmacs-audio-start cmacs-piper--playback-handle)
+    (when cmacs-piper--playback-handle
+      (ignore-errors (cmacs-audio-close cmacs-piper--playback-handle)))
+    (setq cmacs-piper--playback-handle
+          (cmacs-audio--playback-open-pcm-1 rate 1)
+          cmacs-piper--playback-rate rate)
+    (cmacs-audio-start cmacs-piper--playback-handle))
+  cmacs-piper--playback-handle)
+
+(defun cmacs-piper-speaking-p ()
+  "Non-nil when piper playback is active (or has queued audio)."
+  (and (cmacs-piper--playback-live-p cmacs-piper--playback-handle)
+       (eq (cmacs-audio-state cmacs-piper--playback-handle) 'playing)))
 
 (defun cmacs-piper-voice-path (&optional name)
   "Resolve NAME (or `cmacs-piper-default-voice') to an absolute path.
@@ -110,10 +144,9 @@ match.  Falls back to the user dir (download target) if absent."
   (let* ((v   (cmacs-piper-voice-path voice))
          (pcm (cmacs-piper--synth-sync-1 v text))
          (rate (cmacs-piper--voice-sample-rate v))
-         (h   (cmacs-audio--playback-open-pcm-1 rate 1)))
+         (h   (cmacs-piper--ensure-playback rate)))
     (cmacs-audio-push-pcm h pcm)
     (cmacs-audio-start h)
-    (push h cmacs-piper--playback-stack)
     h))
 
 ;;;###autoload
@@ -133,10 +166,9 @@ Optional CALLBACK is called with the audio handle when playback starts."
          (message "cmacs-piper: %s" (cdar result)))
         ((stringp result)
          (let* ((rate (cmacs-piper--voice-sample-rate v))
-                (h    (cmacs-audio--playback-open-pcm-1 rate 1)))
+                (h    (cmacs-piper--ensure-playback rate)))
            (cmacs-audio-push-pcm h result)
            (cmacs-audio-start h)
-           (push h cmacs-piper--playback-stack)
            (when callback (funcall callback h)))))))))
 
 ;;;###autoload
@@ -160,17 +192,21 @@ Optional CALLBACK is called with the audio handle when playback starts."
 
 ;;;###autoload
 (defun cmacs-piper-stop ()
-  "Stop the most recent in-flight playback."
+  "Interrupt in-flight playback, flushing anything still queued.
+The shared audio output is kept open for reuse by the next
+utterance."
   (interactive)
-  (let ((h (pop cmacs-piper--playback-stack)))
-    (when h (ignore-errors (cmacs-audio-close h)))))
+  (when (cmacs-piper--playback-live-p cmacs-piper--playback-handle)
+    (ignore-errors (cmacs-audio-stop cmacs-piper--playback-handle))))
 
 ;;;###autoload
 (defun cmacs-piper-stop-all ()
-  "Stop every in-flight piper playback."
+  "Interrupt playback and release the shared audio output entirely."
   (interactive)
-  (while cmacs-piper--playback-stack
-    (cmacs-piper-stop)))
+  (when cmacs-piper--playback-handle
+    (ignore-errors (cmacs-audio-close cmacs-piper--playback-handle))
+    (setq cmacs-piper--playback-handle nil
+          cmacs-piper--playback-rate nil)))
 
 ;; --- Voice keymap entries -------------------------------------------
 

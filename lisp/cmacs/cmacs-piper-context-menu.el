@@ -35,7 +35,7 @@
 (require 'menu-bar)
 (declare-function cmacs-piper-speak-region "cmacs-piper" (beg end))
 (declare-function cmacs-piper-stop         "cmacs-piper" ())
-(defvar cmacs-piper--playback-stack)
+(declare-function cmacs-piper-speaking-p   "cmacs-piper" ())
 
 ;;;###autoload
 (defvar cmacs-piper-auto-enable-context-menu t
@@ -74,12 +74,12 @@ Set to nil if you want to keep your existing mouse-3 binding.")
                                (end (progn (forward-sentence) (point))))
                           (cmacs-piper-speak-region beg end))))
                     :help "Synthesise the sentence at point"))))
-    (when (and (boundp 'cmacs-piper--playback-stack)
-               cmacs-piper--playback-stack)
+    (when (and (fboundp 'cmacs-piper-speaking-p)
+               (cmacs-piper-speaking-p))
       (define-key-after menu [cmacs-piper-stop]
         '(menu-item "Stop speaking"
                     cmacs-piper-stop
-                    :help "Interrupt the most recent in-flight playback"))))
+                    :help "Interrupt in-flight playback"))))
   menu)
 
 ;; ── Minor mode (interactive toggle) ────────────────────────────────
