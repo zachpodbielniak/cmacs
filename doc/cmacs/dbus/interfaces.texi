@@ -123,3 +123,30 @@ This dumps the raw introspection XML, the source of truth.  Pipe
 through @command{xmllint --format -} for readability.  D-Spy
 (@command{flatpak run org.gnome.dspy}) gives you the same thing as a
 GUI tree.
+
+@subsection Phase 6: MCP-parity interfaces
+
+Every MCP tool capability now has a typed D-Bus method, so AI agents
+(MCP) and scripts/humans (@pxref{emacsctl CLI}) see the same
+surface.  One interface per subsystem, registered at
+@file{/org/cmacs/Editor} and gated on the matching
+@code{HAVE_CMACS_*} build flag: @code{Editor1.Crispy},
+@code{.Bacon}, @code{.Eshell} (@file{cmacs-dbus-iface-lang.c});
+@code{.Edit}; @code{.Input}; @code{.Debug}; @code{.Ai};
+@code{.Gsurf}; @code{.GnusEye}; @code{.Podomation}; @code{.Video},
+@code{.Audio}, @code{.Speech} (@file{cmacs-dbus-iface-media.c});
+@code{.Lrg}; @code{.Instance} (identity: pid, version, features[]);
+and @code{.Log} (@code{RecentMessages} plus the live
+@code{MessageLogged} signal).
+
+Earlier interfaces also grew parity methods: BufferManager
+@code{Create/Switch/Save}, WindowManager
+@code{Delete/SelectByBuffer}, ProcessManager @code{SendTo}, Project
+@code{ListFiles/ReadFile/WriteFile}, and Compositor
+@code{FocusClient/CloseClient/SetClientGeometry/SetLayout/
+WorkspaceList/WorkspaceSwitch/Screenshot}.
+
+Sync discipline: adding a tool in
+@file{cmacs/mcp/cmacs-mcp-tools-*.c} requires a matching method in
+the paired @file{cmacs/dbus/cmacs-dbus-iface-*.c} (and vice versa);
+each file's header comment names its partner.

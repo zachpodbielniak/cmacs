@@ -1,0 +1,73 @@
+#+TITLE: emacsctl over SSH
+#+STARTUP: showall
+#+OPTIONS: toc:2 num:nil
+
+* Usage
+
+#+begin_src sh
+  emacsctl --host user@machine instances
+  emacsctl --host user@machine eval '(emacs-version)'
+  emacsctl --host user@machine logs -f          # live streaming works
+  emacsctl --host user@machine repl --lang bacon
+#+end_src
+
+Or persist it as a context:
+
+#+begin_src yaml
+  contexts:
+    - name: buildbox
+      host: zach@buildbox
+      instance: auto
+#+end_src
+
+Requirements on the *remote* host: a running cmacs, and =emacsctl= on
+the non-interactive ssh =PATH= (set =$EMACSCTL_REMOTE_COMMAND= locally
+to an absolute remote path if it lives elsewhere).
+
+* How it works
+
+=--host= spawns:
+
+#+begin_example
+  ssh -o BatchMode=yes -- HOST emacsctl proxy [--instance N]
+#+end_example
+
+The remote =emacsctl proxy= (a hidden command) bridges its
+stdin/stdout to the *remote* session D-Bus.  Both ends speak a
+length-prefixed JSON frame protocol over the ssh pipes — the same
+4-byte big-endian framing the cmacs FD transport uses:
+
+| Frame                                                     | Direction      |
+|-----------------------------------------------------------+----------------|
+| ={"type":"hello","proto":1,"version":...}=                | both, first    |
+| ={"id":N,"type":"call","iface":I,"method":M,"params":..,"params_sig":"(ss)"}= | client → proxy |
+| ={"id":N,"type":"reply","result":..,"result_sig":..}=     | proxy → client |
+| ={"id":N,"type":"error","name":..,"message":..}=          | proxy → client |
+| ={"id":N,"type":"subscribe","iface":I,"signal":S}=        | client → proxy |
+| ={"type":"unsubscribe","sub":N}=                          | client → proxy |
+| ={"type":"signal","sub":N,"iface":I,"signal":S,"args":..}= | proxy → client, async |
+
+GVariant payloads cross the wire as JSON via json-glib's
+signature-directed =json_gvariant_serialize= /​ =deserialize= — no
+hand-rolled marshalling.  Signal frames interleave with replies on
+one full-duplex stream, which is what makes =logs -f=, =watch
+stream= and REPLs work remotely.
+
+This design was chosen over forwarding the remote bus socket
+(D-Bus EXTERNAL auth validates uids and breaks across forwarding)
+and over one-shot =ssh emacsctl ... -o json= execs (per-call
+handshake cost, no streaming).  Authentication and encryption are
+plain ssh; the proxy listens on nothing — it only ever bridges the
+stdio ssh gave it.
+
+* Troubleshooting
+
+- "ssh connection ... failed before handshake (is emacsctl installed
+  remotely?)" — the remote command didn't start.  Try
+  =ssh HOST emacsctl --version= yourself, or set
+  =$EMACSCTL_REMOTE_COMMAND=.
+- "proxy protocol mismatch" — remote emacsctl is older/newer than
+  the local one; upgrade the remote binary.
+- =BatchMode=yes= means no password prompts: set up keys/agent.
+- Exit 4 from the far end means the *remote* instance selector
+  failed; pass =--instance <remote-pid>=.

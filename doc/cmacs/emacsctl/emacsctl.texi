@@ -1,0 +1,46 @@
+@c emacsctl.texi --- master file for the emacsctl CLI docs
+@c Copyright (C) 2026 Zach Podbielniak
+@c SPDX-License-Identifier: AGPL-3.0-or-later
+
+@node emacsctl CLI
+@chapter emacsctl CLI
+
+@cindex emacsctl
+@cindex cmacsctl
+@cindex command-line control
+
+@command{emacsctl} (also installed as @command{cmacsctl} --- the two
+names behave identically) is a standalone command-line client that
+controls a running cmacs the way @command{kubectl} controls a
+cluster: resource-style commands, structured @option{-o json/yaml}
+output for scripting, named contexts, live watch streams, an
+interactive multi-language REPL, and ssh-tunnelled remote instances.
+
+It is pure GNU89 C over GLib/GObject, talks to the editor through
+the typed D-Bus interfaces (@pxref{D-Bus Service}), and links no
+Emacs objects.  Build with @option{--with-cmacs-emacsctl}; the
+binary lands at @file{src/emacsctl}.
+
+This chapter is mirrored in @file{doc_org/cmacs/emacsctl/} --- the
+Org files are the primary interactive reference and the two
+directories must stay in sync (run @file{tools/sync-docs.sh}).
+
+@menu
+* emacsctl Overview::
+* emacsctl Commands::
+* emacsctl Contexts::
+* emacsctl REPL::
+* emacsctl over SSH::
+* emacsctl Architecture::
+* Extending emacsctl::
+* emacsctl Internals::
+@end menu
+
+@include emacsctl/overview.texi
+@include emacsctl/commands.texi
+@include emacsctl/config-contexts.texi
+@include emacsctl/repl.texi
+@include emacsctl/ssh.texi
+@include emacsctl/architecture.texi
+@include emacsctl/extending.texi
+@include emacsctl/internals.texi

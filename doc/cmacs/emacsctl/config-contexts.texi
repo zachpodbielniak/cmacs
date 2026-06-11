@@ -1,0 +1,56 @@
+@c config-contexts.texi --- the emacsctl config file
+@c SPDX-License-Identifier: AGPL-3.0-or-later
+
+@node emacsctl Contexts
+@section emacsctl Contexts
+
+@file{~/.config/cmacs/emacsctl.yaml} (override per-invocation with
+@option{--config PATH} or globally with @env{EMACSCTL_CONFIG}).
+Parsed with yaml-glib; @emph{unknown keys are ignored, never
+errors}, so the schema can grow without breaking older clients.
+
+Generate a commented starter file with @code{emacsctl config init}:
+
+@example
+apiVersion: cmacs.org/v1
+kind: EmacsctlConfig
+current-context: local
+contexts:
+  - name: local
+    instance: primary      # primary | auto (newest) | <pid>
+    output: table          # table | json | yaml | raw
+  # - name: laptop
+  #   host: user@@laptop   # tunneled via `emacsctl proxy` over ssh
+  #   instance: auto
+aliases:
+  # b: get buffers
+settings:
+  timeout: 30
+@end example
+
+A context bundles @code{name}, @code{instance}, optional ssh
+@code{host}, default @code{output} format, and a per-context
+@code{timeout}.
+
+@example
+emacsctl config get-contexts        # NAME / CURRENT table
+emacsctl config use-context laptop  # persisted; comments survive
+emacsctl config view                # print the file
+emacsctl --context laptop get buffers
+@end example
+
+@code{config use-context} rewrites only the @code{current-context:}
+line textually, so comments in the file are preserved.
+
+Top-level @code{aliases:} maps a word to a replacement command line,
+expanded in command position only: with @code{b: get buffers},
+@code{emacsctl b -o json} runs @code{get buffers -o json}.
+
+Instance auto-selection (@code{instance: auto} or nothing
+configured): @env{CMACS_DBUS_NAME} if set; else the single
+@code{org.cmacs.Editor.Pid*} instance if exactly one exists; with
+several instances running, the @emph{newest} one (most recently
+started process, by kernel start time); no instances at all is exit
+4.  Use @code{instance: primary} / @option{--instance primary} to
+pin the well-known @code{org.cmacs.Editor} holder instead, or an
+explicit PID for full control.

@@ -1,0 +1,69 @@
+#+TITLE: emacsctl REPL
+#+STARTUP: showall
+#+OPTIONS: toc:2 num:nil
+
+* Usage
+
+#+begin_src sh
+  emacsctl repl                  # elisp (default)
+  emacsctl repl --lang crispy    # inline C, compiled in the editor
+  emacsctl repl --lang bacon     # the editor's bacon shell
+  emacsctl repl --lang eshell    # the editor's eshell
+#+end_src
+
+Every expression is evaluated *inside the target cmacs* — the REPL
+sees the live editor state, and works identically over =--host=
+(the whole session rides one ssh connection).
+
+#+begin_example
+  elisp REPL on the live editor --- C-d exits.
+  elisp> (buffer-name (current-buffer))
+  "*scratch*"
+  elisp> (+ 1
+  ...        2)
+  3
+#+end_example
+
+* Languages
+
+| Language | Evaluates via                       | Multi-line rule       | Result            |
+|----------+-------------------------------------+-----------------------+-------------------|
+| =elisp=  | =org.cmacs.Editor1.Eval=            | balanced parens/strings | printed value   |
+| =crispy= | =Editor1.Crispy.EvalString=         | balanced braces       | captured stdout   |
+| =bacon=  | =Editor1.Bacon.Eval=                | one line              | output, =[exit N]= on failure |
+| =eshell= | =Editor1.Eshell.Eval=               | one line              | command output    |
+
+Unbalanced input continues on a =...= prompt, so multi-line defuns
+and C blocks paste naturally.
+
+* Line editing and history
+
+When built against GNU readline (auto-detected; the canonical cmacs
+build has it) you get full readline editing, and history persists
+per-language at =~/.local/state/cmacs/emacsctl_history.<lang>=.
+Without readline — or whenever stdin is not a tty — input falls back
+to plain line reading, which makes the REPL pipeable:
+
+#+begin_src sh
+  printf '(emacs-pid)\n(emacs-uptime)\n' | emacsctl repl
+#+end_src
+
+* One-shot evaluation
+
+=eval= shares the language layer:
+
+#+begin_src sh
+  emacsctl eval '(emacs-version)'
+  emacsctl eval --lang crispy 'g_print("%d", 6 * 7);'
+  emacsctl eval --lang bacon  'git -C ~/src/cmacs status -sb'
+  emacsctl eval --lang eshell 'echo $user-login-name'
+#+end_src
+
+* Adding a language
+
+The REPL is built on an abstract =CtlReplRuntime= GObject class plus
+a name→factory registry.  The four built-ins share one spec-driven
+subclass, so a new language whose evaluator is "one D-Bus method
+taking a string" is a single spec row + one
+=ctl_repl_runtime_register()= call; anything fancier subclasses
+=CtlReplRuntime= directly.  See [[file:extending.org][extending.org]].

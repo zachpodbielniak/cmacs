@@ -1,0 +1,62 @@
+@c extending.texi --- emacsctl extension points
+@c SPDX-License-Identifier: AGPL-3.0-or-later
+
+@node Extending emacsctl
+@section Extending emacsctl
+
+The extension points, cheapest first:
+
+@subsection A command bound to a D-Bus method (one table row)
+
+Add a row to the right spec table (@file{ctl-cmd-editor.c},
+@file{ctl-cmd-subsys.c}, or @file{ctl-cmd-gowl.c}):
+
+@example
+@{ "gsurf mute", "Mute the page",
+  CTL_IFACE_GSURF, "Mute", "s?:buffer", CTL_REPLY_STRING @},
+@end example
+
+Argspec tokens: @code{s} string, @code{o} object path,
+@code{i}/@code{u} int32/uint32, @code{x}/@code{t} int64/uint64,
+@code{d} double, @code{b} bool, @code{?} marks optional,
+@code{D:name} consumes trailing @code{KEY=VALUE} pairs as
+@code{a@{ss@}}.  Reply kinds: @code{STRING}, @code{JSON},
+@code{BOOL}, @code{INT}, @code{STRLIST}, @code{EXIT_OUTPUT},
+@code{NONE}.  Usage text, @code{help} listing, all four output
+formats and group completion derive automatically.
+
+@subsection A local or composite command
+
+@code{ctl_simple_command_new (name, summary, usage, callback)} plus
+one @code{ctl_command_registry_add()} call in
+@code{ctl_builtin_register_all()}.  For per-command flags or custom
+completion, subclass @code{CtlCommand} and override the vtable.
+
+@subsection A REPL language
+
+One-method-per-eval languages are a @code{CtlReplSpec} row in
+@file{ctl-repl.c} plus one @code{ctl_repl_runtime_register()} call;
+richer languages subclass @code{CtlReplRuntime} and implement
+@code{is_complete} / @code{eval} themselves.
+
+@subsection An output format
+
+Implement the one-method @code{CtlFormatter} interface (copy
+@file{ctl-formatter-raw.c}) and add a branch to
+@code{ctl_formatter_for_name()}.
+
+@subsection A transport
+
+Implement @code{CtlTransport} (@code{call}, @code{subscribe},
+@code{unsubscribe}, @code{list_instances}, @code{close}; emit
+@code{closed} on drop) and construct it in
+@code{ctl_invocation_get_transport()}.  Everything above the
+interface is transport-blind.
+
+@subsection Keeping the server in sync
+
+The sync discipline is bidirectional: a new MCP tool in
+@file{cmacs/mcp/cmacs-mcp-tools-*.c} gets a matching typed method in
+the paired @file{cmacs/dbus/cmacs-dbus-iface-*.c} (and vice versa),
+and a new D-Bus method gets its emacsctl table row.  Each file's
+header comment names its partner.

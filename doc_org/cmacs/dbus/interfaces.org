@@ -135,6 +135,44 @@ group structure with proper return types.  The =Editor1= surface
 stays untouched; it just becomes the "low-level escape hatch" for
 arbitrary elisp.
 
+
+* Phase 6: MCP-parity interfaces
+
+Every MCP tool capability now has a typed D-Bus method, so AI agents
+(MCP) and scripts/humans ([[file:../emacsctl/index.org][emacsctl]]) see the same surface.  One
+interface per subsystem, registered at =/org/cmacs/Editor= and gated
+on the matching =HAVE_CMACS_*= build flag:
+
+| Interface                      | File (cmacs/dbus/)              | Mirrors (cmacs/mcp/)        |
+|--------------------------------+---------------------------------+-----------------------------|
+| =org.cmacs.Editor1.Crispy=     | =cmacs-dbus-iface-lang.c=       | =crispy_eval=               |
+| =org.cmacs.Editor1.Bacon=      | =cmacs-dbus-iface-lang.c=       | =bacon_eval=                |
+| =org.cmacs.Editor1.Eshell=     | =cmacs-dbus-iface-lang.c=       | (eshell eval)               |
+| =org.cmacs.Editor1.Edit=       | =cmacs-dbus-iface-edit.c=       | =edit_buffer= family        |
+| =org.cmacs.Editor1.Input=      | =cmacs-dbus-iface-input.c=      | =send_keys=, =execute_command= |
+| =org.cmacs.Editor1.Debug=      | =cmacs-dbus-iface-debug.c=      | =backtrace=, =memory_info=, profiler, describe_* |
+| =org.cmacs.Editor1.Ai=         | =cmacs-dbus-iface-ai.c=         | =ai_*=                      |
+| =org.cmacs.Editor1.Gsurf=      | =cmacs-dbus-iface-gsurf.c=      | =gsurf_*= (~20 tools)       |
+| =org.cmacs.Editor1.GnusEye=    | =cmacs-dbus-iface-gnuseye.c=    | =gnuseye_*=                 |
+| =org.cmacs.Editor1.Podomation= | =cmacs-dbus-iface-podomation.c= | =podomation_*=              |
+| =org.cmacs.Editor1.Video=      | =cmacs-dbus-iface-media.c=      | =video_*=                   |
+| =org.cmacs.Editor1.Audio=      | =cmacs-dbus-iface-media.c=      | =record_audio=              |
+| =org.cmacs.Editor1.Speech=     | =cmacs-dbus-iface-media.c=      | =transcribe=, =synthesize_speech= |
+| =org.cmacs.Editor1.Lrg=        | =cmacs-dbus-iface-lrg.c=        | =lrg_editor_*=              |
+| =org.cmacs.Editor1.Instance=   | =cmacs-dbus-iface-instance.c=   | (identity: pid, features[]) |
+| =org.cmacs.Editor1.Log=        | =cmacs-dbus-iface-log.c=        | =recent_messages= + live =MessageLogged= signal |
+
+Earlier interfaces also grew parity methods: BufferManager
+=Create/Switch/Save=, WindowManager =Delete/SelectByBuffer=,
+ProcessManager =SendTo=, Project =ListFiles/ReadFile/WriteFile=, and
+Compositor =FocusClient/CloseClient/SetClientGeometry/SetLayout/
+WorkspaceList/WorkspaceSwitch/Screenshot=.
+
+Sync discipline: adding a tool in =cmacs/mcp/cmacs-mcp-tools-*.c=
+requires a matching method in the paired
+=cmacs/dbus/cmacs-dbus-iface-*.c= (and vice versa); each file's
+header comment names its partner.
+
 * Inspecting the live surface
 
 #+begin_src shell

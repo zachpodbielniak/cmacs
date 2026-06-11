@@ -41,6 +41,7 @@ interaction.
 * Bacon Shell::                 Interactive shell via vterm.
 * cmacsgi Builtin::             Calling CMacs from the Bacon shell.
 * CMacs API::                   Shared C library for scripting integration.
+* emacsctl CLI::                kubectl-style command-line control client.
 * Crispy C Scripting::          Inline C evaluation and config.
 * Gowl Wayland Compositor::    Tiling WM and client embedding.
 * Podomation Automation::      Event-driven automation engine.
@@ -1520,6 +1521,9 @@ Command group implementations (12 files).
 @item cmacs/api/Makefile
 Builds @file{libcmacs-api.so}.
 @end table
+
+@c ===================================================================
+@include emacsctl/emacsctl.texi
 
 @c ===================================================================
 @node Crispy C Scripting

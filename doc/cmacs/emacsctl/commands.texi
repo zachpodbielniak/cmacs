@@ -1,0 +1,144 @@
+@c commands.texi --- the emacsctl command reference
+@c SPDX-License-Identifier: AGPL-3.0-or-later
+
+@node emacsctl Commands
+@section emacsctl Commands
+
+@subsection Global flags
+
+Accepted anywhere on the command line:
+
+@table @option
+@item -c, --context NAME
+use a named context from the config file
+@item --instance SEL
+target instance: @code{<pid>}, @code{primary}, or @code{auto}
+@item --host DEST
+remote editor over ssh (@code{user@@machine})
+@item -o, --output FMT
+@code{table} (default), @code{json}, @code{yaml}, @code{raw}
+@item -w, --watch
+stream changes where supported (@code{logs})
+@item --timeout SECS
+RPC timeout (default 30)
+@item --config PATH
+config file (default @file{~/.config/cmacs/emacsctl.yaml}, or
+@env{EMACSCTL_CONFIG})
+@item -q, --quiet
+suppress non-essential output
+@item --version
+client version
+@end table
+
+Precedence: command-line flags > the selected context > config
+@code{settings:} > built-in defaults.
+
+@subsection Core commands
+
+@table @code
+@item instances
+list running cmacs instances (pid, version, primary, uptime)
+@item describe instance
+full identity JSON: pid, version, features[], start time, MCP socket
+@item eval [--lang L] EXPR...
+evaluate in the editor; L: @code{elisp} (default), @code{crispy},
+@code{bacon}, @code{eshell}
+@item repl [--lang L]
+interactive REPL (@pxref{emacsctl REPL})
+@item logs [-f] [-n N]
+tail @file{*Messages*}; @option{-f} follows live via the
+@code{MessageLogged} signal
+@item watch stream
+stream BufferAdded/Removed + FrameAdded/Removed events
+@item config @dots{}
+contexts (@pxref{emacsctl Contexts})
+@item completion bash|zsh
+shell completion script
+@end table
+
+@subsection Editor surface
+
+Groups @code{get}, @code{buffer}, @code{edit}, @code{file},
+@code{find-file}, @code{text}, @code{nav}, @code{search}, @code{vc},
+@code{project}, @code{clip}, @code{bookmark}, @code{pkg},
+@code{var}, @code{input}, @code{window}, @code{process},
+@code{message}, @code{debug}, @code{c} (cintrospect/cpatch) and
+@code{watch} cover the classic editing surface.  Run
+@code{emacsctl help} for the live list with one-line summaries ---
+the help output is generated from the same table that drives
+dispatch, so it cannot go stale.
+
+@subsection Subsystem groups
+
+Available when the @emph{target} cmacs was built with the subsystem;
+a missing subsystem maps to exit code 3 with a clear message:
+@code{crispy}, @code{bacon}, @code{eshell}, @code{ai}, @code{gsurf},
+@code{gnuseye}, @code{pod} (podomation), @code{video}, @code{audio},
+@code{speech} (whisper + piper), @code{lrg} (libregnum editor),
+@code{compositor} and @code{monitor} (gowl).
+
+@subsection Org buffers: get content-org
+
+@code{get content BUFFER} prints a buffer verbatim.  For org-mode
+buffers, @code{get content-org} parses the document @emph{in the
+editor} (org's own parser --- @code{org-map-entries}, planning info,
+property drawers, the agenda match syntax) and returns a structured
+tree, so @option{-o yaml} / @option{-o json} give you real data
+instead of a text blob:
+
+@example
+emacsctl get content-org notes.org                # outline table
+emacsctl get content-org notes.org -o yaml        # nested tree
+emacsctl get content-org notes.org --match "/TODO" -o json
+emacsctl get content-org notes.org --match "work+urgent" --depth 2
+emacsctl get content-org notes.org --no-body --no-properties
+@end example
+
+@table @option
+@item --match EXPR
+org agenda match string: tags/todo/property queries like
+@code{work+urgent/TODO} or @code{/DONE}
+@item --depth N
+limit headline depth
+@item --no-body
+structure only, drop entry body text
+@item --no-properties
+drop property drawers
+@end table
+
+Each headline carries @code{title}, @code{level}, @code{todo},
+@code{priority}, @code{tags}, @code{scheduled} / @code{deadline} /
+@code{closed}, @code{properties}, @code{body}, and @code{children};
+the document carries @code{buffer}, @code{file}, and the
+@code{#+TITLE} / @code{#+AUTHOR} / @code{#+DATE} / @code{#+FILETAGS}
+keywords.  Keys are omitted when empty.  The default table output
+renders an indented outline.
+
+The underlying typed method is @code{Editor1.Edit.GetOrgContent},
+with MCP parity via the @code{get_org_content} tool.
+
+@subsection Output formats
+
+@example
+emacsctl get buffers                # aligned table (human)
+emacsctl get buffers -o json        # pretty JSON array
+emacsctl get buffers -o yaml        # YAML sequence
+emacsctl get buffers -o raw         # one name per line, stable
+emacsctl eval '(+ 1 2)' -o raw      # "3" --- byte-exact, no newline
+@end example
+
+@subsection Examples
+
+@example
+# Save every modified buffer whose name ends in .org:
+emacsctl get buffers -o raw \
+  | grep '\.org$' \
+  | while read -r b; do emacsctl buffer save "$b"; done
+
+# Editor health one-liner for a status bar:
+emacsctl describe instance -o json | jq -r .uptime
+
+# Hot-patch a C primitive, then verify:
+emacsctl c patch some-defun my_replacement_fn
+emacsctl c patch-log
+@end example

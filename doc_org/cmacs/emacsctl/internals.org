@@ -1,0 +1,76 @@
+#+TITLE: emacsctl Internals
+#+STARTUP: showall
+#+OPTIONS: toc:2 num:nil
+
+* Instance resolution
+
+=ctl-transport-dbus.c= resolves the =--instance= selector to a bus
+name:
+
+1. explicit PID → =org.cmacs.Editor.Pid<PID>=,
+2. =primary= → the well-known =org.cmacs.Editor=,
+3. a full =org.cmacs.*= name → used verbatim,
+4. =auto= / unset → =$CMACS_DBUS_NAME= if set; else the single
+   =Pid*= name if exactly one instance is on the bus; else the
+   *newest* instance — most recently started process, compared by
+   =/proc/<pid>/stat= start time with a highest-PID fallback on
+   hosts without procfs; no instances at all is exit 4.
+
+Enumeration uses =ListNames= only (never =ListActivatableNames=) and
+every call passes =G_DBUS_CALL_FLAGS_NO_AUTO_START=, so emacsctl can
+never D-Bus-activate a stray editor.
+
+* Exit-code mapping
+
+=ctl-error.c= maps errors to the stable exit codes: the
+=CTL_ERROR= domain carries usage/unsupported/no-instance directly;
+=G_DBUS_ERROR_UNKNOWN_INTERFACE= / =UNKNOWN_METHOD= → 3;
+=SERVICE_UNKNOWN= / =NAME_HAS_NO_OWNER= → 4; everything else → 1.
+The ssh transport re-materializes remote D-Bus error *names* across
+the tunnel so the same mapping applies to remote calls.
+
+* The frame codec
+
+=ctl-frame.c=: 4-byte big-endian length + one JSON object, capped at
+64 MiB.  Variants are embedded as two members — =KEY= (JSON via
+=json_gvariant_serialize=) and =KEY_sig= (the GVariant type string
+that directs deserialization).  Truncated headers/payloads and
+non-object payloads produce errors, clean EOF reports via an out
+parameter; all three paths are unit-tested
+(=cmacs/emacsctl/tests/test-ctl.c=).
+
+* The proxy event loop
+
+=ctl-proxy.c= runs a GMainLoop with a pollable source on stdin.
+Calls dispatch synchronously to a =CtlDbusTransport=; subscriptions
+register a forwarder that writes =signal= frames whenever the
+underlying D-Bus signal fires.  Replies and signal frames share
+stdout; the client demultiplexes by frame type and id
+(=ctl-transport-ssh.c=), dispatching interleaved signal frames even
+while a synchronous call is waiting on its reply.
+
+* Watch plumbing
+
+=CtlWatcher= subscribes through the *transport interface*, so
+=logs -f= / =watch stream= are identical locally and over ssh.  Each
+incoming signal becomes an =event= GObject-signal carrying a
+=CtlResult= (single-string signals stream as their payload; anything
+else as the printed tuple), which the caller renders through the
+active formatter — =-o json= log streaming works.  A polling mode
+(=ctl_watcher_set_poll=) re-runs a producer on an interval and emits
+only when the canonical JSON rendering changes, as the fallback for
+state without signals.
+
+On the server side, =MessageLogged= is driven by a 500 ms GLib tick
+in =cmacs/dbus/cmacs-dbus-iface-log.c= that diffs =*Messages*= by
+position — catching both C- and Lisp-originated messages with zero
+upstream-file edits (see the upstream-merge discipline in
+=CLAUDE.md=).
+
+* Memory and threading
+
+Single-threaded throughout; the only main loops are the proxy's, the
+watcher's, and readline's internals.  All Lisp evaluation happens in
+the *editor's* process via its safe dispatch layer
+(=cmacs/glib/cmacs-eval-dispatch.c=) — emacsctl itself never embeds
+a Lisp.

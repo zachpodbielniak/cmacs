@@ -1,0 +1,89 @@
+#+TITLE: Extending emacsctl
+#+STARTUP: showall
+#+OPTIONS: toc:2 num:nil
+
+emacsctl is built to grow.  The extension points, cheapest first:
+
+* Add a command bound to a D-Bus method (one table row)
+
+If the server method exists (or you just added it to a
+=cmacs/dbus/cmacs-dbus-iface-*.c=), add a row to the right spec
+table — =ctl-cmd-editor.c=, =ctl-cmd-subsys.c=, or =ctl-cmd-gowl.c=:
+
+#+begin_src c
+  { "gsurf mute", "Mute the page",
+    CTL_IFACE_GSURF, "Mute", "s?:buffer", CTL_REPLY_STRING },
+#+end_src
+
+Argspec tokens: =s= string, =o= object path, =i=/=u= int32/uint32,
+=x=/=t= int64/uint64, =d= double, =b= bool, =?= marks optional,
+=D:name= consumes trailing =KEY=VALUE= pairs as =a{ss}=.  Reply
+kinds: =STRING=, =JSON= (string holding JSON → document), =BOOL=,
+=INT=, =STRLIST=, =EXIT_OUTPUT= (=(is)= → print output, exit with
+code), =NONE=.
+
+Usage text, =help= listing, table/json/yaml/raw output and group
+completion all derive automatically.
+
+* Add a local or composite command
+
+Subclass-by-callback with =ctl_simple_command_new()= in
+=ctl-cmd-core.c= (or a new file + one call in
+=ctl_builtin_register_all()=):
+
+#+begin_src c
+  static gint
+  cmd_thing (CtlCommand *self, CtlInvocation *inv, GError **error)
+  {
+    CtlTransport *t = ctl_invocation_get_transport (inv, error);
+    /* ... any number of calls, then: */
+    CtlResult *r = ctl_result_new_scalar ("done");
+    ctl_invocation_emit (inv, r, error);
+    ctl_result_unref (r);
+    return CTL_EXIT_OK;
+  }
+  ctl_command_registry_add (registry,
+    ctl_simple_command_new ("thing", "Do the thing", "", cmd_thing));
+#+end_src
+
+For full control (per-command flags, custom completion), subclass
+=CtlCommand= directly and override the vtable.
+
+* Add a REPL language
+
+One-method-per-eval languages are a spec row in =ctl-repl.c=:
+
+#+begin_src c
+  static const CtlReplSpec mylang_spec = {
+    "mylang", "mylang> ", "org.cmacs.Editor1.MyLang", "Eval",
+    CTL_REPL_COMPLETE_LINE, CTL_REPL_REPLY_STRING
+  };
+#+end_src
+
+plus a factory + =ctl_repl_runtime_register ("mylang", factory)= in
+=ctl_repl_register_builtin_runtimes()=.  Richer languages subclass
+=CtlReplRuntime= and implement =is_complete= / =eval= themselves.
+=eval --lang mylang= works the moment the runtime is registered.
+
+* Add an output format
+
+Implement the one-method =CtlFormatter= interface (copy
+=ctl-formatter-raw.c=, ~90 lines) and add a branch to
+=ctl_formatter_for_name()=.  Formatters consume the canonical
+=CtlResult= JSON tree, so they never care which command ran.
+
+* Add a transport
+
+Implement =CtlTransport= (=call=, =subscribe=, =unsubscribe=,
+=list_instances=, =close=, emit =closed= on drop) and construct it
+in =ctl_invocation_get_transport()=.  The D-Bus and ssh transports
+are reference implementations; everything above the interface —
+commands, REPLs, watchers, formatters — is transport-blind.
+
+* Keep the server in sync
+
+The sync discipline is bidirectional: a new MCP tool in
+=cmacs/mcp/cmacs-mcp-tools-*.c= gets a matching typed method in the
+paired =cmacs/dbus/cmacs-dbus-iface-*.c= (and vice versa), and a new
+D-Bus method gets its emacsctl table row.  Each file's header
+comment names its partner.

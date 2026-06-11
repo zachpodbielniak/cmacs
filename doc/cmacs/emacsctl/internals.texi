@@ -1,0 +1,56 @@
+@c internals.texi --- emacsctl internals
+@c SPDX-License-Identifier: AGPL-3.0-or-later
+
+@node emacsctl Internals
+@section emacsctl Internals
+
+@subsection Instance resolution
+
+@file{ctl-transport-dbus.c} resolves the @option{--instance}
+selector to a bus name: explicit PID ->
+@code{org.cmacs.Editor.Pid<PID>}; @code{primary} -> the well-known
+@code{org.cmacs.Editor}; @code{auto}/unset -> @env{CMACS_DBUS_NAME}
+if set, else the single @code{Pid*} name if exactly one instance
+exists, else the @emph{newest} instance --- most recently started
+process, compared by @file{/proc/<pid>/stat} start time with a
+highest-PID fallback on hosts without procfs; no instances at all is
+exit 4.  Enumeration uses @code{ListNames} only and every call
+passes @code{G_DBUS_CALL_FLAGS_NO_AUTO_START}, so emacsctl can never
+D-Bus-activate a stray editor.
+
+@subsection Exit-code mapping
+
+@file{ctl-error.c}: the @code{CTL_ERROR} domain carries
+usage/unsupported/no-instance directly;
+@code{G_DBUS_ERROR_UNKNOWN_INTERFACE} / @code{UNKNOWN_METHOD} -> 3;
+@code{SERVICE_UNKNOWN} / @code{NAME_HAS_NO_OWNER} -> 4; everything
+else -> 1.  The ssh transport re-materializes remote D-Bus error
+names across the tunnel so the same mapping applies remotely.
+
+@subsection The frame codec
+
+@file{ctl-frame.c}: 4-byte big-endian length + one JSON object,
+capped at 64 MiB.  Variants are embedded as two members ---
+@code{KEY} (JSON) and @code{KEY_sig} (the GVariant type string that
+directs deserialization).  Truncation and malformed payloads error;
+clean EOF reports via an out parameter; all paths are unit-tested in
+@file{cmacs/emacsctl/tests/test-ctl.c}.
+
+@subsection Watch plumbing
+
+@code{CtlWatcher} subscribes through the @emph{transport interface},
+so @code{logs -f} / @code{watch stream} are identical locally and
+over ssh.  Each incoming D-Bus signal becomes an @code{event}
+GObject-signal carrying a @code{CtlResult}, rendered through the
+active formatter --- @option{-o json} log streaming works.  On the
+server side, @code{MessageLogged} is driven by a 500 ms GLib tick in
+@file{cmacs/dbus/cmacs-dbus-iface-log.c} that diffs
+@file{*Messages*} by position, catching both C- and Lisp-originated
+messages with zero upstream-file edits.
+
+@subsection Memory and threading
+
+Single-threaded throughout.  All Lisp evaluation happens in the
+@emph{editor's} process via its safe dispatch layer
+(@file{cmacs/glib/cmacs-eval-dispatch.c}) --- emacsctl itself never
+embeds a Lisp.

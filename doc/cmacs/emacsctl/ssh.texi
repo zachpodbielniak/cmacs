@@ -1,0 +1,38 @@
+@c ssh.texi --- emacsctl over SSH
+@c SPDX-License-Identifier: AGPL-3.0-or-later
+
+@node emacsctl over SSH
+@section emacsctl over SSH
+
+@example
+emacsctl --host user@@machine instances
+emacsctl --host user@@machine logs -f      # live streaming works
+emacsctl --host user@@machine repl --lang bacon
+@end example
+
+Requirements on the @emph{remote} host: a running cmacs, and
+@command{emacsctl} on the non-interactive ssh @env{PATH} (set
+@env{EMACSCTL_REMOTE_COMMAND} locally to an absolute remote path if
+it lives elsewhere).
+
+@option{--host} spawns @code{ssh -o BatchMode=yes -- HOST emacsctl
+proxy [--instance N]}.  The remote @code{emacsctl proxy} (a hidden
+command) bridges its stdin/stdout to the @emph{remote} session
+D-Bus.  Both ends speak a length-prefixed JSON frame protocol over
+the ssh pipes (4-byte big-endian length + JSON object): @code{hello}
+handshake, id-correlated @code{call}/@code{reply}/@code{error}
+frames, and @code{subscribe}/@code{signal} frames for live
+streaming.  GVariant payloads cross as JSON via json-glib's
+signature-directed @code{json_gvariant_serialize} /
+@code{deserialize}.
+
+Signal frames interleave with replies on one full-duplex stream,
+which is what makes @code{logs -f}, @code{watch stream} and REPLs
+work remotely.  Authentication and encryption are plain ssh; the
+proxy listens on nothing --- it only bridges the stdio ssh gave it.
+
+Troubleshooting: ``failed before handshake'' means the remote
+command didn't start (try @code{ssh HOST emacsctl --version});
+``proxy protocol mismatch'' means the remote binary is a different
+protocol generation; @code{BatchMode=yes} means no password prompts,
+so set up keys.

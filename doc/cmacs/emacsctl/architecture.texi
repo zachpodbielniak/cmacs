@@ -1,0 +1,50 @@
+@c architecture.texi --- emacsctl class design
+@c SPDX-License-Identifier: AGPL-3.0-or-later
+
+@node emacsctl Architecture
+@section emacsctl Architecture
+
+emacsctl lives in @file{cmacs/emacsctl/} (@file{ctl-*.c}, @code{Ctl}
+GType namespace), builds standalone via its own Makefile (invoked
+from @file{src/Makefile.in}), and links @emph{no Emacs objects} ---
+just GLib, GObject, GIO, json-glib, yaml-glib, and optionally
+readline.
+
+The pipeline for every command:
+
+@example
+argv -> CtlApplication -> CtlCommandRegistry -> CtlCommand.run()
+            |                                        |
+      CtlConfig/CtlContext                     CtlInvocation
+      (contexts, aliases)                      |          |
+                                        CtlTransport   CtlResult
+                                        (D-Bus | ssh)      |
+                                                     CtlFormatter
+                                                (table|json|yaml|raw)
+@end example
+
+GObject is used deliberately: @emph{abstract classes} where behavior
+is extended (@code{CtlCommand}, @code{CtlReplRuntime}),
+@emph{interfaces} where implementations swap (@code{CtlTransport}
+with D-Bus and ssh implementations, @code{CtlFormatter} with four
+renderers), @emph{boxed types} for values (@code{CtlResult},
+@code{CtlInvocation}, @code{CtlContext}), and @emph{signals} for
+events (@code{CtlTransport::closed}, @code{CtlWatcher::event},
+@code{CtlCommandRegistry::command-added}).
+
+Nearly every subsystem verb is @emph{one table row} --- a
+@code{CtlMethodSpec} naming the CLI path, D-Bus interface/method, a
+positional argspec, and a reply kind.  @code{CtlMethodCommand}
+parses the argspec, builds the GVariant tuple, calls through
+whatever transport the invocation resolved, and maps the reply into
+a @code{CtlResult} for the formatter.  Adding a server method to the
+CLI is one row; usage strings and completion fall out for free.
+
+The typed interfaces emacsctl consumes are implemented in
+@file{cmacs/dbus/cmacs-dbus-iface-*.c} (@pxref{D-Bus Service}).  The
+MCP-parity set (Crispy, Bacon, Eshell, Edit, Input, Debug, Ai,
+Gsurf, GnusEye, Podomation, Video, Audio, Speech, Lrg, Instance,
+Log) mirrors the MCP tool registry one-to-one, so AI agents (MCP)
+and humans/scripts (emacsctl) see the same capability surface.
+Interface name constants live in one header,
+@file{cmacs/emacsctl/ctl-ifaces.h}.

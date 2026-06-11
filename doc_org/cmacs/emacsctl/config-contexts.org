@@ -1,0 +1,92 @@
+#+TITLE: emacsctl Contexts and Configuration
+#+STARTUP: showall
+#+OPTIONS: toc:2 num:nil
+
+* The config file
+
+=~/.config/cmacs/emacsctl.yaml= (override per-invocation with
+=--config PATH= or globally with =$EMACSCTL_CONFIG=).  It is parsed
+with yaml-glib; *unknown keys are ignored, never errors*, so the
+schema can grow without breaking older clients.
+
+Generate a commented starter file:
+
+#+begin_src sh
+  emacsctl config init          # writes the default path
+  emacsctl config init ./x.yaml # or anywhere you like
+#+end_src
+
+The boilerplate:
+
+#+begin_src yaml
+  apiVersion: cmacs.org/v1
+  kind: EmacsctlConfig
+  current-context: local
+  contexts:
+    - name: local
+      instance: primary      # primary | auto (newest) | <pid>
+      output: table          # table | json | yaml | raw
+    # - name: laptop
+    #   host: user@laptop    # tunneled via `emacsctl proxy` over ssh
+    #   instance: auto
+  aliases:
+    # b: get buffers
+  settings:
+    timeout: 30
+#+end_src
+
+* Contexts
+
+A context bundles a target and presentation defaults:
+
+| Key        | Meaning                                              |
+|------------+------------------------------------------------------|
+| =name=     | what =--context= / =config use-context= select       |
+| =instance= | =primary= (the well-known-name holder), =auto=, or a PID |
+| =host=     | optional ssh destination — makes the context remote |
+| =output=   | default =-o= format for this context                 |
+| =timeout=  | per-context RPC timeout (seconds)                    |
+
+Commands:
+
+#+begin_src sh
+  emacsctl config get-contexts        # NAME / CURRENT table
+  emacsctl config use-context laptop  # persisted; comments survive
+  emacsctl config view                # print the file
+  emacsctl --context laptop get buffers   # one-shot selection
+#+end_src
+
+=config use-context= rewrites only the =current-context:= line
+textually, so the comments you add to the file are preserved.
+
+* Aliases
+
+Top-level =aliases:= maps a word to a replacement command line.  The
+alias expands only in command position:
+
+#+begin_src yaml
+  aliases:
+    b: get buffers
+    msgs: logs -n 100
+#+end_src
+
+#+begin_src sh
+  emacsctl b -o json      # == emacsctl get buffers -o json
+#+end_src
+
+* Resolution order
+
+For every setting: *command-line flag* beats *selected context* beats
+*top-level =settings:=* beats built-in defaults.
+
+Instance auto-selection (=instance: auto= or nothing configured):
+
+1. =$CMACS_DBUS_NAME= if set (inherited inside bacon children),
+2. the single =org.cmacs.Editor.Pid*= instance if exactly one exists,
+3. with several instances running, the *newest* one (most recently
+   started process, by kernel start time),
+4. no instances at all → exit 4.
+
+Use =instance: primary= / =--instance primary= to pin the well-known
+=org.cmacs.Editor= holder (usually the longest-running editor)
+instead, or an explicit PID for full control.

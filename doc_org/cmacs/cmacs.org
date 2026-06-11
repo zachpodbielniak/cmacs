@@ -31,6 +31,7 @@ embedded dependency docs (see [[*Dependency Documentation][Dependency Documentat
 | [[file:bacon.org][Bacon Shell]]                      | =bacon.org=         | Embedded shell, IPC, =cmacs --bacon=           |
 | [[file:cmacsgi.org][cmacsgi Command Reference]]        | =cmacsgi.org=       | All 50+ shell commands for controlling Emacs   |
 | [[file:api.org][CMacs API (C Library)]]            | =api.org=           | libcmacs-api.so --- transports, helpers, API   |
+| [[file:emacsctl/index.org][emacsctl CLI]]                     | =emacsctl/index.org= | kubectl-style CLI: instances, eval, REPL, ssh |
 | [[file:crispy.org][Crispy C Scripting]]               | =crispy.org=        | Write config and scripts in C                   |
 | [[file:gowl.org][Gowl Wayland Compositor]]          | =gowl.org=          | Tiling WM, client embedding, 70+ DEFUNs        |
 | [[file:org-ex/org-ex.org][Org-Ex Interactive Widgets]]       | =org-ex/org-ex.org= | Widget embedding in Org buffers                 |

@@ -53,61 +53,72 @@ for arg in "$@"; do
 done
 
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-org_dir="${repo_root}/doc_org/cmacs/libreclaw"
-tex_dir="${repo_root}/doc/cmacs/libreclaw"
 
-if [[ ! -d "${org_dir}" ]]; then
-    echo "sync-docs.sh: missing ${org_dir}" >&2
-    exit 2
-fi
-if [[ ! -d "${tex_dir}" ]]; then
-    echo "sync-docs.sh: missing ${tex_dir}" >&2
-    exit 2
-fi
-
-# Collect org basenames, excluding the master index.org.
-mapfile -t org_files < <(
-    cd "${org_dir}"
-    find . -maxdepth 1 -name '*.org' -printf '%f\n' \
-        | sed 's/\.org$//' \
-        | grep -v '^index$' \
-        | sort
-)
-
-# Collect texi basenames, excluding the master libreclaw.texi.
-mapfile -t tex_files < <(
-    cd "${tex_dir}"
-    find . -maxdepth 1 -name '*.texi' -printf '%f\n' \
-        | sed 's/\.texi$//' \
-        | grep -v '^libreclaw$' \
-        | sort
-)
-
-# Compute set differences without writing temp files.
-only_in_org=$(comm -23 \
-    <(printf '%s\n' "${org_files[@]}") \
-    <(printf '%s\n' "${tex_files[@]}"))
-only_in_tex=$(comm -13 \
-    <(printf '%s\n' "${org_files[@]}") \
-    <(printf '%s\n' "${tex_files[@]}"))
+# Doc pairs to verify: doc_org/cmacs/<name>/ vs doc/cmacs/<name>/.
+# The master files (index.org and <name>.texi) are excluded --- they
+# are TOC/@include bootstraps and need no per-section parity.
+pairs=(libreclaw emacsctl)
 
 status=0
 
-if [[ -n "${only_in_org}" ]]; then
-    echo "sync-docs.sh: topics only in doc_org/cmacs/libreclaw/:" >&2
-    printf '  %s\n' ${only_in_org} >&2
-    status=1
-fi
+check_pair () {
+    local name="$1"
+    local org_dir="${repo_root}/doc_org/cmacs/${name}"
+    local tex_dir="${repo_root}/doc/cmacs/${name}"
 
-if [[ -n "${only_in_tex}" ]]; then
-    echo "sync-docs.sh: topics only in doc/cmacs/libreclaw/:" >&2
-    printf '  %s\n' ${only_in_tex} >&2
-    status=1
-fi
+    if [[ ! -d "${org_dir}" ]]; then
+        echo "sync-docs.sh: missing ${org_dir}" >&2
+        return 2
+    fi
+    if [[ ! -d "${tex_dir}" ]]; then
+        echo "sync-docs.sh: missing ${tex_dir}" >&2
+        return 2
+    fi
 
-if [[ ${status} -eq 0 && ${quiet} -eq 0 ]]; then
-    printf '%d topic files, in sync (%s)\n' "${#org_files[@]}" \
-        "$(printf '%s ' "${org_files[@]}")"
-fi
+    local -a org_files tex_files
+    mapfile -t org_files < <(
+        cd "${org_dir}"
+        find . -maxdepth 1 -name '*.org' -printf '%f\n' \
+            | sed 's/\.org$//' \
+            | grep -v '^index$' \
+            | sort
+    )
+    mapfile -t tex_files < <(
+        cd "${tex_dir}"
+        find . -maxdepth 1 -name '*.texi' -printf '%f\n' \
+            | sed 's/\.texi$//' \
+            | grep -v "^${name}$" \
+            | sort
+    )
+
+    local only_in_org only_in_tex
+    only_in_org=$(comm -23 \
+        <(printf '%s\n' "${org_files[@]}") \
+        <(printf '%s\n' "${tex_files[@]}"))
+    only_in_tex=$(comm -13 \
+        <(printf '%s\n' "${org_files[@]}") \
+        <(printf '%s\n' "${tex_files[@]}"))
+
+    local rc=0
+    if [[ -n "${only_in_org}" ]]; then
+        echo "sync-docs.sh: topics only in doc_org/cmacs/${name}/:" >&2
+        printf '  %s\n' ${only_in_org} >&2
+        rc=1
+    fi
+    if [[ -n "${only_in_tex}" ]]; then
+        echo "sync-docs.sh: topics only in doc/cmacs/${name}/:" >&2
+        printf '  %s\n' ${only_in_tex} >&2
+        rc=1
+    fi
+    if [[ ${rc} -eq 0 && ${quiet} -eq 0 ]]; then
+        printf '%s: %d topic files, in sync (%s)\n' "${name}" \
+            "${#org_files[@]}" "$(printf '%s ' "${org_files[@]}")"
+    fi
+    return ${rc}
+}
+
+for pair in "${pairs[@]}"; do
+    check_pair "${pair}" || status=1
+done
 
 exit ${status}

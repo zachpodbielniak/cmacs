@@ -1,0 +1,57 @@
+#+TITLE: emacsctl — kubectl for cmacs
+#+STARTUP: showall
+#+OPTIONS: toc:2 num:nil
+
+* Welcome
+
+=emacsctl= (also installed as =cmacsctl= — the two names behave
+identically) is a standalone command-line client that controls a
+running cmacs the way =kubectl= controls a cluster: resource-style
+commands, structured =-o json/yaml= output for scripting, named
+contexts, live watch streams, an interactive multi-language REPL, and
+ssh-tunnelled remote instances.
+
+It is pure GNU89 C over GLib/GObject and talks to the editor through
+the typed D-Bus interfaces documented in [[file:../dbus/index.org][doc_org/cmacs/dbus/]].  It
+links no Emacs objects: build it once, point it at any cmacs.
+
+This subdirectory is the canonical reference.  The texi mirror is at
+[[file:../../doc/cmacs/emacsctl/][doc/cmacs/emacsctl/]]; the two must stay in sync
+(=tools/sync-docs.sh=).
+
+* Document index
+
+| File                                      | What it covers                                       |
+|-------------------------------------------+------------------------------------------------------|
+| [[file:overview.org][overview.org]]       | What emacsctl is, when to use it vs cmacsgi /        |
+|                                           | emacsclient / gdbus; a five-minute tour              |
+| [[file:commands.org][commands.org]]       | The full command tree, global flags, output formats, |
+|                                           | exit codes                                           |
+| [[file:config-contexts.org][config-contexts.org]] | =~/.config/cmacs/emacsctl.yaml=: contexts,     |
+|                                           | aliases, =config init/use-context=                   |
+| [[file:repl.org][repl.org]]               | =emacsctl repl=: elisp/crispy/bacon/eshell, multi-   |
+|                                           | line input, history, adding languages                |
+| [[file:ssh.org][ssh.org]]                 | =--host user@machine=: the stdio proxy protocol,    |
+|                                           | security model, troubleshooting                      |
+| [[file:architecture.org][architecture.org]] | Class inventory (GObject design), the              |
+|                                           | transport/formatter/result pipeline                  |
+| [[file:extending.org][extending.org]]     | Add a command, a resource, a REPL language, a       |
+|                                           | formatter, a transport                               |
+| [[file:internals.org][internals.org]]     | Frame codec, instance resolution, watch plumbing,   |
+|                                           | exit-code mapping                                    |
+
+* Quick start
+
+#+begin_src sh
+  # Build (part of the normal cmacs build):
+  ./configure ... --with-cmacs-emacsctl && make
+  # Binary lands at ./src/emacsctl (+ ./src/cmacsctl symlink).
+
+  emacsctl instances                 # list running editors
+  emacsctl eval '(emacs-version)'    # evaluate elisp
+  emacsctl get buffers -o json       # scriptable buffer list
+  emacsctl bacon eval 'ls | wc -l'   # bacon shell in the editor
+  emacsctl repl --lang crispy        # interactive C REPL
+  emacsctl logs -f                   # follow *Messages* live
+  emacsctl --host dev@box eval t     # remote editor over ssh
+#+end_src

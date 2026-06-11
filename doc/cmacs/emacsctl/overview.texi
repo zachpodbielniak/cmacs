@@ -1,0 +1,82 @@
+@c overview.texi --- what emacsctl is and when to use it
+@c SPDX-License-Identifier: AGPL-3.0-or-later
+
+@node emacsctl Overview
+@section emacsctl Overview
+
+@command{emacsctl} is cmacs's external control plane.  Every cmacs
+subsystem reachable over the typed D-Bus interfaces --- buffers,
+windows, projects, the gowl compositor, crispy, bacon, eshell, the
+AI subsystem, gsurf, gnuseye, podomation, video/audio/speech, the
+libregnum editor, cintrospect/cpatch --- is a first-class command.
+
+Design pillars:
+
+@table @strong
+@item Scriptable
+Every command takes @option{-o table|json|yaml|raw}.  @code{table}
+is the human default; @code{raw} is byte-exact for shell
+substitution; @code{json} / @code{yaml} parse cleanly.
+
+@item Multi-instance
+Every running cmacs claims @code{org.cmacs.Editor.Pid<N>} on the
+session bus.  @code{emacsctl instances} enumerates them;
+@option{--instance <pid>} targets one; by default the @emph{newest}
+running instance is selected automatically (@option{--instance
+primary} pins the well-known-name holder instead).
+
+@item Multi-language
+@code{eval} and @code{repl} speak elisp, crispy (inline C), bacon
+(shell), and eshell --- all evaluated @emph{inside} the target
+editor.  The language layer is an abstract runtime registry.
+
+@item Remote
+@option{--host user@@machine} tunnels everything (calls @emph{and}
+live signal streams) over a single ssh connection.
+
+@item Contexts
+A kubeconfig-style file (@file{~/.config/cmacs/emacsctl.yaml}) names
+instance/host/output combinations; @option{--context laptop}
+switches everything at once.
+@end table
+
+@subsection When to use what
+
+@multitable @columnfractions .2 .35 .45
+@headitem Tool @tab Reaches @tab Best at
+@item @command{emacsctl}
+@tab any cmacs, from anywhere (incl. ssh)
+@tab scripting, ops, REPLs, watching, multi-instance
+@item @command{cmacsgi}
+@tab the parent cmacs, from a bacon child
+@tab in-shell editor calls while you work in bacon
+@item @command{emacsclient}
+@tab the Emacs server
+@tab opening files, @env{EDITOR} protocol
+@item @command{gdbus}
+@tab any cmacs
+@tab one-off raw D-Bus pokes, debugging the service
+@item MCP socket
+@tab one cmacs
+@tab AI agents speaking the MCP protocol
+@end multitable
+
+emacsctl and the MCP server expose the @emph{same} capability set by
+design: every MCP tool has a typed D-Bus method (the ``MCP parity''
+interfaces), and emacsctl wraps those methods.
+
+@subsection Exit codes
+
+@table @code
+@item 0
+success
+@item 1
+generic or remote error
+@item 2
+usage error (unknown command, bad arguments)
+@item 3
+interface missing on the server (older cmacs, or subsystem not
+compiled in)
+@item 4
+no instance found / selector ambiguous or invalid
+@end table

@@ -1,0 +1,162 @@
+#+TITLE: emacsctl Command Reference
+#+STARTUP: showall
+#+OPTIONS: toc:2 num:nil
+
+* Global flags
+
+Accepted anywhere on the command line:
+
+| Flag                | Meaning                                          |
+|---------------------+--------------------------------------------------|
+| =-c=, =--context=   | use a named context from the config file         |
+| =--instance SEL=    | target instance: =<pid>=, =primary=, or =auto=   |
+| =--host DEST=       | remote editor over ssh (=user@machine=)          |
+| =-o=, =--output=    | =table= (default), =json=, =yaml=, =raw=         |
+| =-w=, =--watch=     | stream changes where supported (=logs=)          |
+| =--timeout SECS=    | RPC timeout (default 30; long evals may need more) |
+| =--config PATH=     | config file (default =~/.config/cmacs/emacsctl.yaml=, or =$EMACSCTL_CONFIG=) |
+| =-q=, =--quiet=     | suppress non-essential output                    |
+| =--version=         | client version                                   |
+
+Precedence: command-line flags > the selected context > config
+=settings:= > built-in defaults.
+
+* Core
+
+| Command                   | Does                                            |
+|---------------------------+-------------------------------------------------|
+| =instances=               | list running cmacs instances (pid, version, primary, uptime) |
+| =describe instance=       | full identity JSON: pid, version, features[], start time, MCP socket |
+| =eval [--lang L] EXPR...= | evaluate in the editor; L: =elisp= (default), =crispy=, =bacon=, =eshell= |
+| =repl [--lang L]=         | interactive REPL ([[file:repl.org][repl.org]])  |
+| =logs [-f] [-n N]=        | tail =*Messages*=; =-f= follows live via the =MessageLogged= signal |
+| =watch stream=            | stream BufferAdded/Removed + FrameAdded/Removed events |
+| =version=                 | client (and, if reachable, server) version      |
+| =help [COMMAND]=          | command list / per-command usage                |
+| =config ...=              | contexts ([[file:config-contexts.org][config-contexts.org]]) |
+| =completion bash\vert{}zsh= | shell completion script (eval it in your rc)  |
+
+* Editor surface
+
+| Group       | Verbs                                                        |
+|-------------+--------------------------------------------------------------|
+| =get=       | =buffers=, =frames=, =windows=, =processes=, =bookmarks=, =packages=, =watches=, =instances=, =contexts=, =content=, =content-org= |
+| =buffer=    | =list=, =current=, =exists=, =file=, =modified=, =create=, =switch=, =save=, =kill=, =show=, =set= |
+| =edit=      | =exact= (string replace), =replace= (regexp), =search=, =goto-line= |
+| =file=      | =open=, =save=, =close=, =recent=                            |
+| =find-file= | open a path via the root interface                           |
+| =text=      | =insert=, =append=, =line=, =delete=                         |
+| =nav=       | =point=, =goto=                                              |
+| =search=    | =find=, =replace=, =occur= (current buffer)                  |
+| =vc=        | =status=, =diff=, =log=, =blame=                             |
+| =project=   | =root=, =grep=, =find=, =files=, =read=, =write=, =compile=  |
+| =clip=      | =get=, =put=, =list=, =paste=                                |
+| =bookmark=  | =list=, =set=, =jump=, =delete=                              |
+| =pkg=       | =list=, =install=, =remove=, =refresh=                       |
+| =var=       | =get=, =set=, =theme=, =font=, =mode=                        |
+| =input=     | =keys= (kbd syntax), =command= (M-x)                         |
+| =window=    | =split=, =vsplit=, =other=, =delete=, =select=               |
+| =process=   | =status=, =pid=, =kill=, =send=                              |
+| =message=   | echo-area message                                            |
+
+* Debugging and C runtime
+
+| Group    | Verbs                                                          |
+|----------+----------------------------------------------------------------|
+| =debug=  | =backtrace=, =memory=, =hooks=, =mode=, =function=, =variable=, =apropos=, =completions=, =profiler-start/stop/report= |
+| =c=      | =list=, =symbol=, =type=, =source=, =defuns=, =defun-info=, =stack=, =patch=, =unpatch=, =patch-log= |
+| =watch=  | =add EXPR=, =rm HANDLE=, =list=, =stream=                      |
+
+* Subsystems
+
+Available when the *target* cmacs was built with the subsystem; a
+missing subsystem maps to exit code 3 with a clear message.
+
+| Group       | Verbs                                                       |
+|-------------+-------------------------------------------------------------|
+| =crispy=    | =eval= (captured stdout), =run= (exit code)                 |
+| =bacon=     | =eval=, =eval-c=, =complete=                                |
+| =eshell=    | =eval=                                                      |
+| =ai=        | =providers=, =prompt=, =chat=                               |
+| =gsurf=     | =open=, =navigate=, =back=, =forward=, =reload=, =stop=, =url=, =title=, =current=, =list=, =modules=, =js=, =zoom=, =lite=, =text=, =downloads=, =download-cancel=, =snapshot=, =pdf=, =permission= |
+| =gnuseye=   | =open=, =brief=, =layers=, =toggle=, =fly-to=, =refresh=, =query=, =geofence=, =cii= |
+| =pod=       | =status=, =pods=, =modules=, =stats=, =emit=, =eval=, =repl-eval=, =load=, =reload=, =set-context= |
+| =video=     | =list=, =snapshot=                                          |
+| =audio=     | =record=                                                    |
+| =speech=    | =transcribe=, =models=, =say=, =voices=                     |
+| =lrg=       | =open=, =play=, =stop=, =save=, =tree=, =select=, =move=, =delete=, =add-primitive=, =add-visual= |
+| =compositor=| =clients=, =focused=, =spawn=, =find=, =focus=, =close=, =geometry=, =layout=, =workspaces=, =workspace=, =screenshot=, =keybinds=, =mfact=, =nmaster=, =tags=, =lock=, =unlock=, =reload=, =config= |
+| =monitor=   | =list=, =info=, =modes=, =set-mode=, =position=, =set-position=, =enable=, =scale=, =transform= |
+
+* Org buffers: =get content-org=
+
+=get content BUFFER= prints a buffer verbatim.  For org-mode buffers,
+=get content-org= parses the document *in the editor* (org's own
+parser — =org-map-entries=, planning info, property drawers, the
+agenda match syntax) and returns a structured tree, so =-o yaml= /
+=-o json= give you real data instead of a text blob:
+
+#+begin_src sh
+  emacsctl get content-org notes.org                # outline table
+  emacsctl get content-org notes.org -o yaml        # nested tree
+  emacsctl get content-org notes.org --match "/TODO" -o json
+  emacsctl get content-org notes.org --match "work+urgent" --depth 2
+  emacsctl get content-org notes.org --no-body --no-properties
+#+end_src
+
+| Flag                | Meaning                                        |
+|---------------------+------------------------------------------------|
+| =--match EXPR=      | org agenda match string: tags/todo/property    |
+|                     | queries like =work+urgent/TODO= or =/DONE=     |
+| =--depth N=         | limit headline depth                           |
+| =--no-body=         | structure only, drop entry body text           |
+| =--no-properties=   | drop property drawers                          |
+
+Each headline carries =title=, =level=, =todo=, =priority=, =tags=,
+=scheduled= / =deadline= / =closed=, =properties=, =body=, and
+=children=; the document carries =buffer=, =file=, and the =#+TITLE= /
+=#+AUTHOR= / =#+DATE= / =#+FILETAGS= keywords.  Keys are omitted when
+empty, so the YAML stays tight.  The default table output renders an
+indented outline (level, todo, title, tags, scheduled).
+
+#+begin_src sh
+  # All TODO deadlines this file knows about, as JSON:
+  emacsctl get content-org work.org --match "/TODO" --no-body \
+    -o json | jq -r '.. | .deadline? // empty'
+#+end_src
+
+* Output formats
+
+#+begin_src sh
+  emacsctl get buffers                # aligned table (human)
+  emacsctl get buffers -o json        # pretty JSON array
+  emacsctl get buffers -o yaml        # YAML sequence
+  emacsctl get buffers -o raw         # one name per line, stable
+  emacsctl eval '(+ 1 2)' -o raw      # "3" — byte-exact, no newline
+#+end_src
+
+- *table* — aligned columns with an upper-case header for lists;
+  =key: value= lines for documents; scalars verbatim.
+- *json* — the canonical data, pretty-printed (indent 2).
+- *yaml* — same data through yaml-glib.
+- *raw* — for scripts: scalars byte-exact, lists one-per-line,
+  documents as compact one-line JSON.
+
+* Examples
+
+#+begin_src sh
+  # Save every modified buffer whose name ends in .org:
+  emacsctl get buffers -o raw \
+    | grep '\.org$' \
+    | while read -r b; do emacsctl buffer save "$b"; done
+
+  # Jump the compositor to whatever workspace firefox is on:
+  emacsctl compositor find firefox -o json | jq .
+
+  # Editor health one-liner for a status bar:
+  emacsctl describe instance -o json | jq -r .uptime
+
+  # Hot-patch a C primitive, then verify:
+  emacsctl c patch some-defun my_replacement_fn
+  emacsctl c patch-log
+#+end_src

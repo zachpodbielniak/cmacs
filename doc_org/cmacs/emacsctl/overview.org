@@ -1,0 +1,96 @@
+#+TITLE: emacsctl Overview
+#+STARTUP: showall
+#+OPTIONS: toc:2 num:nil
+
+* What emacsctl is
+
+=emacsctl= is cmacs's external control plane.  Where =kubectl= turns a
+Kubernetes API server into a usable terminal tool, =emacsctl= does the
+same for a live cmacs process: every cmacs subsystem that is reachable
+over the typed D-Bus interfaces — buffers, windows, projects, the
+gowl compositor, crispy, bacon, eshell, the AI subsystem, gsurf,
+gnuseye, podomation, video/audio/speech, the libregnum editor,
+cintrospect/cpatch — is a first-class command.
+
+Design pillars:
+
+- *Scriptable.*  Every command takes =-o table|json|yaml|raw=.
+  =table= is the human default; =raw= is byte-exact for shell
+  substitution; =json= / =yaml= parse cleanly.
+- *Multi-instance.*  Every running cmacs claims
+  =org.cmacs.Editor.Pid<N>= on the session bus.  =emacsctl instances=
+  enumerates them; =--instance <pid>= targets one; by default the
+  *newest* running instance is selected automatically
+  (=--instance primary= pins the well-known-name holder instead).
+- *Multi-language.*  =eval= and =repl= speak elisp, crispy (inline C),
+  bacon (shell), and eshell — all evaluated *inside* the target
+  editor.  The language layer is an abstract runtime registry, so new
+  languages are one registration away.
+- *Remote.*  =--host user@machine= tunnels everything (calls *and*
+  live signal streams) over a single ssh connection to the remote
+  host's emacsctl in hidden proxy mode.
+- *Contexts.*  A kubeconfig-style file
+  (=~/.config/cmacs/emacsctl.yaml=) names instance/host/output
+  combinations; =--context laptop= switches everything at once.
+
+* When to use what
+
+| Tool          | Reaches            | Best at                                     |
+|---------------+--------------------+---------------------------------------------|
+| =emacsctl=    | any cmacs, from anywhere (incl. ssh) | scripting, ops, REPLs, watching, multi-instance |
+| =cmacsgi=     | the parent cmacs, from a bacon child | in-shell editor calls while you work in bacon |
+| =emacsclient= | the Emacs server   | opening files, =$EDITOR= protocol            |
+| =gdbus=       | any cmacs          | one-off raw D-Bus pokes, debugging the service |
+| MCP socket    | one cmacs          | AI agents speaking the MCP protocol          |
+
+emacsctl and the MCP server expose the *same* capability set by
+design: every MCP tool has a typed D-Bus method (the "MCP parity"
+interfaces), and emacsctl wraps those methods.  See
+[[file:../dbus/interfaces.org][dbus/interfaces.org]].
+
+* Five-minute tour
+
+#+begin_src sh
+  # Who's running?
+  emacsctl instances
+  # PID      VERSION   PRIMARY   UPTIME       BUS NAME
+  # 12795    32.0.50   true      3 days       org.cmacs.Editor
+  # 586408   32.0.50   false     29 minutes   org.cmacs.Editor.Pid586408
+
+  # Everything about one instance (features = compiled-in subsystems):
+  emacsctl --instance 586408 describe instance -o yaml
+
+  # The classics:
+  emacsctl eval '(buffer-list)'
+  emacsctl get buffers
+  emacsctl buffer show '*scratch*'
+  emacsctl find-file /etc/hostname
+  emacsctl input command save-some-buffers
+
+  # Embedded languages, evaluated in the editor:
+  emacsctl crispy eval 'g_print("hello from C");'
+  emacsctl bacon eval 'ps aux | grep emacs'
+  emacsctl eshell eval 'ls ~/src'
+
+  # Watch things happen:
+  emacsctl logs -f                  # *Messages*, live
+  emacsctl watch stream             # buffer/frame add/remove events
+
+  # Compositor control (gowl builds):
+  emacsctl compositor clients -o json
+  emacsctl compositor focus firefox
+
+  # Remote (needs emacsctl on the remote host's PATH):
+  emacsctl --host dev@buildbox get buffers
+#+end_src
+
+* Exit codes
+
+| Code | Meaning                                            |
+|------+----------------------------------------------------|
+|    0 | success                                            |
+|    1 | generic or remote error                            |
+|    2 | usage error (unknown command, bad arguments)       |
+|    3 | interface missing on the server (older cmacs, or  |
+|      | subsystem not compiled in)                         |
+|    4 | no instance found / selector ambiguous or invalid |

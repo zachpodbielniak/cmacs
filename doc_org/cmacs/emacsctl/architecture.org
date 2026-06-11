@@ -1,0 +1,80 @@
+#+TITLE: emacsctl Architecture
+#+STARTUP: showall
+#+OPTIONS: toc:2 num:nil
+
+* Shape
+
+emacsctl lives in =cmacs/emacsctl/= (=ctl-*.c=, =Ctl= GType
+namespace), builds standalone via its own Makefile (invoked from
+=src/Makefile.in=), and links *no Emacs objects* — just GLib,
+GObject, GIO, json-glib, yaml-glib, and optionally readline.  Output
+lands at =src/emacsctl= with a =src/cmacsctl= symlink; both names
+behave identically.
+
+The pipeline for every command:
+
+#+begin_example
+  argv ─▶ CtlApplication ─▶ CtlCommandRegistry ─▶ CtlCommand.run()
+                │                                      │
+          CtlConfig/CtlContext                   CtlInvocation
+          (contexts, aliases)                    │         │
+                                          CtlTransport   CtlResult
+                                          (D-Bus | ssh)      │
+                                                       CtlFormatter
+                                                  (table|json|yaml|raw)
+#+end_example
+
+* Class inventory
+
+GObject is used deliberately: abstract classes where behavior is
+extended, interfaces where implementations swap, boxed types for
+values, signals for events.
+
+| Type                  | Kind                | Role                                                |
+|-----------------------+---------------------+-----------------------------------------------------|
+| =CtlApplication=      | final GObject       | global flags, config/context resolution, alias expansion, dispatch |
+| =CtlCommandRegistry=  | final GObject       | "group verb" → command map; *signal* =command-added= |
+| =CtlCommand=          | *abstract* GObject  | vtable: =run()=, =complete()=; props name/summary/usage |
+| =CtlSimpleCommand=    | final : CtlCommand  | wraps a C callback (version, logs, repl, config, ...) |
+| =CtlMethodCommand=    | final : CtlCommand  | *table-driven* D-Bus call from a =CtlMethodSpec= row |
+| =CtlInvocation=       | *boxed*             | per-run context: args, instance/host/output/timeout, lazy transport |
+| =CtlResult=           | *boxed*             | uniform data model: SCALAR / LIST(+columns) / DOCUMENT on json-glib nodes |
+| =CtlTransport=        | *GInterface*        | =call/subscribe/unsubscribe/list_instances/close=; *signal* =closed= |
+| =CtlDbusTransport=    | final, impl         | session =GDBusConnection=, =NO_AUTO_START= everywhere |
+| =CtlSshTransport=     | final, impl         | =ssh ... emacsctl proxy= subprocess + frame codec   |
+| =CtlProxyServer=      | final GObject       | the remote end of =--host= (hidden =proxy= command) |
+| =CtlFormatter=        | *GInterface*        | =emit(result, FILE*)=                               |
+| =CtlTable/Json/Yaml/RawFormatter= | finals, impl | the four =-o= renderings                       |
+| =CtlConfig=           | final GObject       | yaml config load, =config init/use-context=         |
+| =CtlContext=          | *boxed*             | name/instance/host/output/timeout                   |
+| =CtlReplRuntime=      | *abstract* GObject  | language vtable: prompt, =is_complete=, =eval=      |
+| =CtlMethodReplRuntime=| final : ReplRuntime | spec-driven elisp/crispy/bacon/eshell               |
+| =CtlWatcher=          | final GObject       | signal subscriptions + main loop; *signal* =event=  |
+
+* The method-spec engine
+
+Nearly every subsystem verb is *one table row*:
+
+#+begin_src c
+  { "crispy eval", "Run inline crispy C, printing captured stdout",
+    CTL_IFACE_CRISPY, "EvalString", "s:code", CTL_REPLY_STRING },
+#+end_src
+
+=CtlMethodCommand= parses the argspec (=s:name=, =i?:line=, =d:lat=,
+=x:id=, =u:tags=, =b?:flag=, =D:payload= for trailing =KEY=VALUE=
+dicts), builds the GVariant tuple, calls the interface through
+whatever transport the invocation resolved, and maps the reply kind
+(=STRING=, =JSON=, =BOOL=, =INT=, =STRLIST=, =EXIT_OUTPUT=, =NONE=)
+into a =CtlResult= for the formatter.  Adding a server method to the
+CLI is one row; usage strings and completion fall out for free.
+
+* Server counterpart
+
+The typed interfaces emacsctl consumes are implemented in
+=cmacs/dbus/cmacs-dbus-iface-*.c= and documented in
+[[file:../dbus/index.org][doc_org/cmacs/dbus/]].  The MCP-parity set (Crispy, Bacon, Eshell,
+Edit, Input, Debug, Ai, Gsurf, GnusEye, Podomation, Video, Audio,
+Speech, Lrg, Instance, Log) mirrors the MCP tool registry one-to-one
+so AI agents (MCP) and humans/scripts (emacsctl) see the same
+capability surface.  Interface name constants live in one header,
+=cmacs/emacsctl/ctl-ifaces.h=.

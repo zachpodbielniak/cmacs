@@ -1,0 +1,54 @@
+@c repl.texi --- the emacsctl interactive REPL
+@c SPDX-License-Identifier: AGPL-3.0-or-later
+
+@node emacsctl REPL
+@section emacsctl REPL
+
+@example
+emacsctl repl                  # elisp (default)
+emacsctl repl --lang crispy    # inline C, compiled in the editor
+emacsctl repl --lang bacon     # the editor's bacon shell
+emacsctl repl --lang eshell    # the editor's eshell
+@end example
+
+Every expression is evaluated @emph{inside the target cmacs} --- the
+REPL sees the live editor state, and works identically over
+@option{--host} (the whole session rides one ssh connection).
+
+@multitable @columnfractions .12 .38 .25 .25
+@headitem Language @tab Evaluates via @tab Multi-line rule @tab Result
+@item @code{elisp}
+@tab @code{org.cmacs.Editor1.Eval}
+@tab balanced parens/strings
+@tab printed value
+@item @code{crispy}
+@tab @code{Editor1.Crispy.EvalString}
+@tab balanced braces
+@tab captured stdout
+@item @code{bacon}
+@tab @code{Editor1.Bacon.Eval}
+@tab one line
+@tab output, @code{[exit N]} on failure
+@item @code{eshell}
+@tab @code{Editor1.Eshell.Eval}
+@tab one line
+@tab command output
+@end multitable
+
+Unbalanced input continues on a @code{...} prompt, so multi-line
+defuns and C blocks paste naturally.
+
+When built against GNU readline (auto-detected) you get full
+readline editing, with per-language history at
+@file{~/.local/state/cmacs/emacsctl_history.<lang>}.  Without
+readline --- or whenever stdin is not a tty --- input falls back to
+plain line reading, which makes the REPL pipeable:
+
+@example
+printf '(emacs-pid)\n(emacs-uptime)\n' | emacsctl repl
+@end example
+
+The REPL is built on an abstract @code{CtlReplRuntime} GObject class
+plus a name->factory registry; adding a language is one spec row +
+one @code{ctl_repl_runtime_register()} call
+(@pxref{Extending emacsctl}).
