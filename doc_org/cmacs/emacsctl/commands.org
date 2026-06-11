@@ -17,9 +17,27 @@ Accepted anywhere on the command line:
 | =--config PATH=     | config file (default =~/.config/cmacs/emacsctl.yaml=, or =$EMACSCTL_CONFIG=) |
 | =-q=, =--quiet=     | suppress non-essential output                    |
 | =--version=         | client version                                   |
+| =-h=, =--help=      | contextual help (see below)                      |
 
 Precedence: command-line flags > the selected context > config
 =settings:= > built-in defaults.
+
+* Getting help
+
+Help is contextual and available everywhere (all generated through
+GLib's option parser, so flag listings can never drift from the
+parser):
+
+#+begin_src sh
+  emacsctl --help                   # global: commands, groups, options
+  emacsctl get --help               # a group: all of get's subcommands
+  emacsctl logs --help              # a command: its flags + globals
+  emacsctl help get content-org     # `help WORDS…' == `WORDS… --help'
+#+end_src
+
+A bare group (=emacsctl get=) prints the same subcommand listing and
+exits 2; an unknown flag exits 2 with a =--help= hint; a typo'd verb
+gets a did-you-mean suggestion.
 
 * Core
 

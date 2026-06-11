@@ -261,17 +261,34 @@ org_flatten_headlines (JsonArray *headlines, JsonArray *rows)
     }
 }
 
+static gchar *content_org_opt_match = NULL;
+static gint content_org_opt_depth = 0;
+static gboolean content_org_opt_no_body = FALSE;
+static gboolean content_org_opt_no_props = FALSE;
+
+static const GOptionEntry content_org_entries[] = {
+  { "match", 'm', 0, G_OPTION_ARG_STRING, &content_org_opt_match,
+    "org agenda match string (tags/todo/property query), e.g. "
+    "\"work+urgent/TODO\"", "EXPR" },
+  { "depth", 'd', 0, G_OPTION_ARG_INT, &content_org_opt_depth,
+    "Limit headline depth (0 = unlimited)", "N" },
+  { "no-body", 0, 0, G_OPTION_ARG_NONE, &content_org_opt_no_body,
+    "Structure only: drop entry body text", NULL },
+  { "no-properties", 0, 0, G_OPTION_ARG_NONE,
+    &content_org_opt_no_props, "Drop property drawers", NULL },
+  { NULL, 0, 0, 0, NULL, NULL, NULL }
+};
+
 static gint
 cmd_get_content_org (CtlCommand *self, CtlInvocation *inv,
                      GError **error)
 {
-  gint argc = 0;
-  gchar **argv = ctl_invocation_get_args (inv, &argc);
-  const gchar *buffer = NULL;
-  const gchar *match = "";
-  gint max_depth = 0;
-  gboolean include_body = TRUE, include_props = TRUE;
-  gint k;
+  const gchar *buffer = ctl_invocation_get_arg (inv, 0);
+  const gchar *match =
+    content_org_opt_match != NULL ? content_org_opt_match : "";
+  gint max_depth = content_org_opt_depth;
+  gboolean include_body = !content_org_opt_no_body;
+  gboolean include_props = !content_org_opt_no_props;
   CtlTransport *transport;
   GVariant *reply;
   const gchar *json;
@@ -281,24 +298,11 @@ cmd_get_content_org (CtlCommand *self, CtlInvocation *inv,
 
   (void) self;
 
-  for (k = 0; k < argc; k++)
-    {
-      if (g_strcmp0 (argv[k], "--match") == 0 && k + 1 < argc)
-        match = argv[++k];
-      else if (g_strcmp0 (argv[k], "--depth") == 0 && k + 1 < argc)
-        max_depth = (gint) g_ascii_strtoll (argv[++k], NULL, 10);
-      else if (g_strcmp0 (argv[k], "--no-body") == 0)
-        include_body = FALSE;
-      else if (g_strcmp0 (argv[k], "--no-properties") == 0)
-        include_props = FALSE;
-      else if (buffer == NULL)
-        buffer = argv[k];
-    }
   if (buffer == NULL)
     {
       g_set_error (error, CTL_ERROR, CTL_ERROR_USAGE,
-                   "usage: get content-org BUFFER [--match EXPR] "
-                   "[--depth N] [--no-body] [--no-properties]");
+                   "missing required argument <buffer> "
+                   "(see 'get content-org --help')");
       return CTL_EXIT_USAGE;
     }
 
@@ -352,37 +356,39 @@ cmd_get_content_org (CtlCommand *self, CtlInvocation *inv,
 
 /* ── eval (multi-language) ─────────────────────────────────────────── */
 
+static gchar *eval_opt_lang = NULL;
+
+static const GOptionEntry eval_entries[] = {
+  { "lang", 'l', 0, G_OPTION_ARG_STRING, &eval_opt_lang,
+    "Language: elisp (default), crispy, bacon, or eshell", "LANG" },
+  { NULL, 0, 0, 0, NULL, NULL, NULL }
+};
+
 static gint
 cmd_eval (CtlCommand *self, CtlInvocation *inv, GError **error)
 {
   gint argc = 0;
   gchar **argv = ctl_invocation_get_args (inv, &argc);
-  const gchar *lang = "elisp";
+  const gchar *lang = eval_opt_lang != NULL ? eval_opt_lang : "elisp";
   GString *expr;
   CtlReplRuntime *runtime;
   CtlTransport *transport;
   gchar *output;
-  gint k, start = 0;
+  gint k;
 
   (void) self;
 
-  if (argc >= 2 && g_strcmp0 (argv[0], "--lang") == 0)
-    {
-      lang = argv[1];
-      start = 2;
-    }
-  if (start >= argc)
+  if (argc == 0)
     {
       g_set_error (error, CTL_ERROR, CTL_ERROR_USAGE,
-                   "usage: eval [--lang elisp|crispy|bacon|eshell] "
-                   "EXPR...");
+                   "missing expression (see 'eval --help')");
       return CTL_EXIT_USAGE;
     }
 
   expr = g_string_new (NULL);
-  for (k = start; k < argc; k++)
+  for (k = 0; k < argc; k++)
     {
-      if (k > start)
+      if (k > 0)
         g_string_append_c (expr, ' ');
       g_string_append (expr, argv[k]);
     }
@@ -434,28 +440,25 @@ logs_print_event (CtlWatcher *watcher, CtlResult *result,
   fflush (stdout);
 }
 
+static gboolean logs_opt_follow = FALSE;
+static gint logs_opt_lines = 50;
+
+static const GOptionEntry logs_entries[] = {
+  { "follow", 'f', 0, G_OPTION_ARG_NONE, &logs_opt_follow,
+    "Keep streaming new lines as they are logged", NULL },
+  { "lines", 'n', 0, G_OPTION_ARG_INT, &logs_opt_lines,
+    "Number of backlog lines to print (default 50)", "N" },
+  { NULL, 0, 0, 0, NULL, NULL, NULL }
+};
+
 static gint
 cmd_logs (CtlCommand *self, CtlInvocation *inv, GError **error)
 {
-  gint argc = 0;
-  gchar **argv = ctl_invocation_get_args (inv, &argc);
-  gboolean follow = ctl_invocation_get_watch (inv);
-  gint lines = 50;
-  gint k;
+  gboolean follow = logs_opt_follow || ctl_invocation_get_watch (inv);
+  gint lines = logs_opt_lines;
   CtlTransport *transport;
 
   (void) self;
-
-  for (k = 0; k < argc; k++)
-    {
-      if (g_strcmp0 (argv[k], "-f") == 0
-          || g_strcmp0 (argv[k], "--follow") == 0)
-        follow = TRUE;
-      else if ((g_strcmp0 (argv[k], "-n") == 0
-                || g_strcmp0 (argv[k], "--lines") == 0)
-               && k + 1 < argc)
-        lines = (gint) g_ascii_strtoll (argv[++k], NULL, 10);
-    }
 
   transport = ctl_invocation_get_transport (inv, error);
   if (transport == NULL)
@@ -526,21 +529,21 @@ cmd_watch_stream (CtlCommand *self, CtlInvocation *inv, GError **error)
 
 /* ── repl ──────────────────────────────────────────────────────────── */
 
+static gchar *repl_opt_lang = NULL;
+
+static const GOptionEntry repl_entries[] = {
+  { "lang", 'l', 0, G_OPTION_ARG_STRING, &repl_opt_lang,
+    "Language: elisp (default), crispy, bacon, or eshell", "LANG" },
+  { NULL, 0, 0, 0, NULL, NULL, NULL }
+};
+
 static gint
 cmd_repl (CtlCommand *self, CtlInvocation *inv, GError **error)
 {
-  gint argc = 0;
-  gchar **argv = ctl_invocation_get_args (inv, &argc);
-  const gchar *lang = "elisp";
-  gint k;
-
   (void) self;
-
-  for (k = 0; k < argc; k++)
-    if (g_strcmp0 (argv[k], "--lang") == 0 && k + 1 < argc)
-      lang = argv[k + 1];
-
-  return ctl_repl_run (inv, lang, error);
+  return ctl_repl_run (inv,
+                       repl_opt_lang != NULL ? repl_opt_lang : "elisp",
+                       error);
 }
 
 /* ── config group ──────────────────────────────────────────────────── */
@@ -688,20 +691,23 @@ ctl_cmd_core_register (CtlCommandRegistry *registry)
   ctl_command_registry_add (registry, ctl_simple_command_new (
     "describe instance", "Full identity of the target instance", "",
     cmd_describe_instance));
-  ctl_command_registry_add (registry, ctl_simple_command_new (
-    "get content-org", "Structured org buffer content "
-    "(headline tree; filterable)",
-    "BUFFER [--match EXPR] [--depth N] [--no-body] [--no-properties]",
-    cmd_get_content_org));
-  ctl_command_registry_add (registry, ctl_simple_command_new (
-    "eval", "Evaluate an expression in the editor",
-    "[--lang elisp|crispy|bacon|eshell] EXPR...", cmd_eval));
-  ctl_command_registry_add (registry, ctl_simple_command_new (
-    "logs", "Show (and follow) *Messages*", "[-f] [-n LINES]",
-    cmd_logs));
-  ctl_command_registry_add (registry, ctl_simple_command_new (
-    "repl", "Interactive REPL on the live editor",
-    "[--lang elisp|crispy|bacon|eshell]", cmd_repl));
+  ctl_command_registry_add (registry,
+    ctl_simple_command_new_with_options (
+      "get content-org",
+      "Structured org buffer content (headline tree; filterable)",
+      "BUFFER", content_org_entries, cmd_get_content_org));
+  ctl_command_registry_add (registry,
+    ctl_simple_command_new_with_options (
+      "eval", "Evaluate an expression in the editor", "EXPR…",
+      eval_entries, cmd_eval));
+  ctl_command_registry_add (registry,
+    ctl_simple_command_new_with_options (
+      "logs", "Show (and follow) *Messages*", "",
+      logs_entries, cmd_logs));
+  ctl_command_registry_add (registry,
+    ctl_simple_command_new_with_options (
+      "repl", "Interactive REPL on the live editor", "",
+      repl_entries, cmd_repl));
   ctl_command_registry_add (registry, ctl_simple_command_new (
     "watch stream", "Stream buffer/frame change events", "",
     cmd_watch_stream));

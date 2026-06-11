@@ -71,12 +71,45 @@ D-Bus service can dispatch the inbound calls."
     (should (string-match-p "emacsctl" (cdr result)))))
 
 (ert-deftest cmacs-emacsctl-help ()
-  "help lists commands and global flags, exits 0."
+  "help lists commands, groups and global flags, exits 0."
   (skip-unless (cmacs-emacsctl-tests--available-p))
   (let ((result (cmacs-emacsctl-tests--run "help")))
     (should (= 0 (car result)))
-    (should (string-match-p "Global flags" (cdr result)))
-    (should (string-match-p "crispy eval" (cdr result)))))
+    (should (string-match-p "Usage:" (cdr result)))
+    (should (string-match-p "Command groups" (cdr result)))
+    (should (string-match-p "--output" (cdr result)))
+    (should (string-match-p "crispy" (cdr result)))))
+
+(ert-deftest cmacs-emacsctl-group-help ()
+  "GROUP --help lists the group's subcommands, exits 0."
+  (skip-unless (cmacs-emacsctl-tests--available-p))
+  (let ((result (cmacs-emacsctl-tests--run "get" "--help")))
+    (should (= 0 (car result)))
+    (should (string-match-p "Subcommands of 'get'" (cdr result)))
+    (should (string-match-p "content-org" (cdr result))))
+  ;; A bare group prints the same listing but fails (exit 2).
+  (should (= 2 (car (cmacs-emacsctl-tests--run "get")))))
+
+(ert-deftest cmacs-emacsctl-command-help ()
+  "CMD --help shows the command's own flags and the global options."
+  (skip-unless (cmacs-emacsctl-tests--available-p))
+  (let ((result (cmacs-emacsctl-tests--run "logs" "--help")))
+    (should (= 0 (car result)))
+    (should (string-match-p "emacsctl logs" (cdr result)))
+    (should (string-match-p "--lines" (cdr result)))
+    (should (string-match-p "Global Options" (cdr result))))
+  ;; help WORDS… is equivalent to WORDS… --help.
+  (let ((result (cmacs-emacsctl-tests--run "help" "get"
+                                           "content-org")))
+    (should (= 0 (car result)))
+    (should (string-match-p "--no-body" (cdr result)))))
+
+(ert-deftest cmacs-emacsctl-unknown-flag ()
+  "An unknown per-command flag exits 2 with a --help hint."
+  (skip-unless (cmacs-emacsctl-tests--available-p))
+  (let ((result (cmacs-emacsctl-tests--run "logs" "--bogus")))
+    (should (= 2 (car result)))
+    (should (string-match-p "logs --help" (cdr result)))))
 
 (ert-deftest cmacs-emacsctl-unknown-command ()
   "An unknown command exits 2."
@@ -84,11 +117,11 @@ D-Bus service can dispatch the inbound calls."
   (should (= 2 (car (cmacs-emacsctl-tests--run "frobnicate")))))
 
 (ert-deftest cmacs-emacsctl-typo-suggestion ()
-  "A typo'd verb blames the full command and suggests the fix."
+  "A typo'd verb blames the subcommand and suggests the fix."
   (skip-unless (cmacs-emacsctl-tests--available-p))
   (let ((result (cmacs-emacsctl-tests--run "get" "nuffers")))
     (should (= 2 (car result)))
-    (should (string-match-p "unknown command 'get nuffers'"
+    (should (string-match-p "unknown subcommand 'nuffers' for 'get'"
                             (cdr result)))
     (should (string-match-p "get buffers" (cdr result)))))
 

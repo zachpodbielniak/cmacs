@@ -28,10 +28,24 @@ config file (default @file{~/.config/cmacs/emacsctl.yaml}, or
 suppress non-essential output
 @item --version
 client version
+@item -h, --help
+contextual help (see below)
 @end table
 
 Precedence: command-line flags > the selected context > config
 @code{settings:} > built-in defaults.
+
+@subsection Getting help
+
+Help is contextual and available everywhere (generated through
+GLib's option parser, so flag listings can never drift from the
+parser): @code{emacsctl --help} for the global overview,
+@code{emacsctl GROUP --help} for a group's subcommands,
+@code{emacsctl CMD --help} for one command's flags plus the global
+options, and @code{emacsctl help WORDS@dots{}} as an equivalent
+spelling.  A bare group prints its subcommand listing and exits 2;
+an unknown flag exits 2 with a @option{--help} hint; a typo'd verb
+gets a did-you-mean suggestion.
 
 @subsection Core commands
 

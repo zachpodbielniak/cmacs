@@ -147,12 +147,22 @@ ctl_command_complete (CtlCommand *self, CtlInvocation *inv, gint argi,
   return klass->complete (self, inv, argi, prefix);
 }
 
+const GOptionEntry *
+ctl_command_get_option_entries (CtlCommand *self)
+{
+  CtlCommandClass *klass = CTL_COMMAND_GET_CLASS (self);
+  if (klass->get_option_entries == NULL)
+    return NULL;
+  return klass->get_option_entries (self);
+}
+
 /* ── CtlSimpleCommand ──────────────────────────────────────────────── */
 
 struct _CtlSimpleCommand
 {
   CtlCommand parent_instance;
   CtlCommandFunc func;
+  const GOptionEntry *entries;
 };
 
 G_DEFINE_FINAL_TYPE (CtlSimpleCommand, ctl_simple_command,
@@ -165,10 +175,18 @@ simple_run (CtlCommand *self, CtlInvocation *inv, GError **error)
   return simple->func (self, inv, error);
 }
 
+static const GOptionEntry *
+simple_get_option_entries (CtlCommand *self)
+{
+  return CTL_SIMPLE_COMMAND (self)->entries;
+}
+
 static void
 ctl_simple_command_class_init (CtlSimpleCommandClass *klass)
 {
   CTL_COMMAND_CLASS (klass)->run = simple_run;
+  CTL_COMMAND_CLASS (klass)->get_option_entries =
+    simple_get_option_entries;
 }
 
 static void
@@ -181,12 +199,24 @@ CtlCommand *
 ctl_simple_command_new (const gchar *name, const gchar *summary,
                         const gchar *usage, CtlCommandFunc func)
 {
+  return ctl_simple_command_new_with_options (name, summary, usage,
+                                              NULL, func);
+}
+
+CtlCommand *
+ctl_simple_command_new_with_options (const gchar *name,
+                                     const gchar *summary,
+                                     const gchar *usage,
+                                     const GOptionEntry *entries,
+                                     CtlCommandFunc func)
+{
   CtlSimpleCommand *self = g_object_new (CTL_TYPE_SIMPLE_COMMAND,
                                          "name", name,
                                          "summary", summary,
                                          "usage", usage,
                                          NULL);
   self->func = func;
+  self->entries = entries;
   return CTL_COMMAND (self);
 }
 
