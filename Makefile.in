@@ -664,6 +664,17 @@ ifeq (${ns_self_contained},no)
 	umask 022; ${MKDIR_P} "$(DESTDIR)${cmacsapidir}"
 	${INSTALL_PROGRAM} $(srcdir)/cmacs/api/libcmacs-api.so "$(DESTDIR)${cmacsapidir}/libcmacs-api.so"
 	${INSTALL_DATA} $(srcdir)/cmacs/api/cmacs-api.h "$(DESTDIR)${cmacsapidir}/cmacs-api.h"
+	@if test -f src/emacsctl${EXEEXT}; then \
+	  ctl_name=`echo emacsctl | sed '$(TRANSFORM)'`${EXEEXT}; \
+	  cctl_name=`echo cmacsctl | sed '$(TRANSFORM)'`${EXEEXT}; \
+	  umask 022; ${MKDIR_P} "$(DESTDIR)${bindir}"; \
+	  ${INSTALL_PROGRAM} $(INSTALL_STRIP) src/emacsctl${EXEEXT} \
+	    "$(DESTDIR)${bindir}/$$ctl_name"; \
+	  rm -f "$(DESTDIR)${bindir}/$$cctl_name"; \
+	  cd "$(DESTDIR)${bindir}" && \
+	    $(LN_S_FILEONLY) "$$ctl_name" "$$cctl_name"; \
+	  echo "Installed $$ctl_name (+ $$cctl_name symlink) in ${bindir}"; \
+	fi
 	@if test -d $(srcdir)/deps/gowl/build/release/modules; then \
 		umask 022; ${MKDIR_P} "$(DESTDIR)${archlibdir}/gowl-modules"; \
 		for f in $(srcdir)/deps/gowl/build/release/modules/*.so; do \
@@ -989,6 +1000,8 @@ install-strip:
 ### Don't delete the lisp and etc directories if they're in the source tree.
 uninstall: uninstall-$(NTDIR) uninstall-doc uninstall-gsettings-schemas
 	rm -f "$(DESTDIR)$(includedir)/emacs-module.h"
+	rm -f "$(DESTDIR)${bindir}/`echo emacsctl | sed '$(TRANSFORM)'`${EXEEXT}" \
+	      "$(DESTDIR)${bindir}/`echo cmacsctl | sed '$(TRANSFORM)'`${EXEEXT}"
 	$(MAKE) -C lib-src uninstall
 	-unset CDPATH; \
 	for dir in "$(DESTDIR)${lispdir}" "$(DESTDIR)${etcdir}" '$(ELN_DESTDIR)' ; do 	\

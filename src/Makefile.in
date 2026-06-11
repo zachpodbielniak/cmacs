@@ -1123,6 +1123,18 @@ endif
 .PHONY: FORCE
 FORCE:
 
+## CMACS: Build emacsctl/cmacsctl (standalone kubectl-style control
+## client; links NO Emacs objects --- pure GLib + json-glib +
+## yaml-glib).  The inner Makefile does its own up-to-date check, so
+## the FORCE hook is cheap on no-op runs.  Produces ./emacsctl and the
+## ./cmacsctl symlink in the build's src/ directory.
+CMACS_EMACSCTL_BIN = @CMACS_EMACSCTL_BIN@
+ifneq ($(CMACS_EMACSCTL_BIN),)
+all: emacsctl$(EXEEXT)
+emacsctl$(EXEEXT): FORCE
+	$(MAKE) -C $(srcdir)/../cmacs/emacsctl OUTDIR=$(abspath .) all
+endif
+
 ## Build libmcp-glib-1.0.a (MCP server library)
 ifneq ($(CMACS_MCP_OBJ),)
 ifeq ($(CMACS_MCP_BUNDLED),yes)
@@ -1363,6 +1375,7 @@ versionclean:
 	rm -f ../etc/DOC*
 clean: mostlyclean versionclean
 	rm -f $(DEPDIR)/*
+	rm -f emacsctl$(EXEEXT) cmacsctl$(EXEEXT)
 
 ## bootstrap-clean is used to clean up just before a bootstrap.
 ## It should remove all files generated during a compilation/bootstrap,

@@ -1,0 +1,113 @@
+/*
+ * Copyright (C) 2026 Zach Podbielniak
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
+/* ctl-command.h --- CtlCommand, the abstract command base class.
+ *
+ * Every CLI verb is a CtlCommand.  Two stock subclasses cover almost
+ * everything:
+ *
+ *   CtlSimpleCommand  wraps a C callback (local logic, special cases)
+ *   CtlMethodCommand  fully data-driven D-Bus method call, built from
+ *                     a CtlMethodSpec table row --- adding a server
+ *                     method to the CLI is ONE struct entry
+ *
+ * Future commands can also subclass CtlCommand directly. */
+
+#ifndef CTL_COMMAND_H
+#define CTL_COMMAND_H
+
+#include "ctl.h"
+#include "ctl-invocation.h"
+
+G_BEGIN_DECLS
+
+#define CTL_TYPE_COMMAND (ctl_command_get_type ())
+G_DECLARE_DERIVABLE_TYPE (CtlCommand, ctl_command, CTL, COMMAND, GObject)
+
+struct _CtlCommandClass
+{
+  GObjectClass parent_class;
+
+  /* Run with INV; return an exit code (CTL_EXIT_*). */
+  gint    (*run)      (CtlCommand *self, CtlInvocation *inv,
+                       GError **error);
+
+  /* Dynamic completion for positional ARGI with PREFIX typed so far.
+   * NULL-terminated candidates, or NULL.  Optional. */
+  gchar **(*complete) (CtlCommand *self, CtlInvocation *inv,
+                       gint argi, const gchar *prefix);
+};
+
+/* Properties (construct-only): name, summary, usage. */
+const gchar *ctl_command_get_name    (CtlCommand *self);
+const gchar *ctl_command_get_summary (CtlCommand *self);
+const gchar *ctl_command_get_usage   (CtlCommand *self);
+
+gint    ctl_command_run      (CtlCommand *self, CtlInvocation *inv,
+                              GError **error);
+gchar **ctl_command_complete (CtlCommand *self, CtlInvocation *inv,
+                              gint argi, const gchar *prefix);
+
+/* ── CtlSimpleCommand ──────────────────────────────────────────────── */
+
+typedef gint (*CtlCommandFunc) (CtlCommand *self, CtlInvocation *inv,
+                                GError **error);
+
+#define CTL_TYPE_SIMPLE_COMMAND (ctl_simple_command_get_type ())
+G_DECLARE_FINAL_TYPE (CtlSimpleCommand, ctl_simple_command,
+                      CTL, SIMPLE_COMMAND, CtlCommand)
+
+CtlCommand *ctl_simple_command_new (const gchar *name,
+                                    const gchar *summary,
+                                    const gchar *usage,
+                                    CtlCommandFunc func);
+
+/* ── CtlMethodCommand (table-driven D-Bus call) ────────────────────── */
+
+/* Reply rendering. */
+typedef enum
+{
+  CTL_REPLY_STRING,        /* (s)  -> scalar */
+  CTL_REPLY_JSON,          /* (s) holding JSON -> document */
+  CTL_REPLY_BOOL,          /* (b)  -> scalar "true"/"false" */
+  CTL_REPLY_INT,           /* (i)  -> scalar number */
+  CTL_REPLY_STRLIST,       /* (as) -> list */
+  CTL_REPLY_EXIT_OUTPUT,   /* (is) -> print output; exit with code */
+  CTL_REPLY_NONE           /* ()   -> nothing printed */
+} CtlReplyKind;
+
+/* One table row = one CLI verb bound to one D-Bus method.
+ *
+ * ARGSPEC is a space-separated positional argument list:
+ *   s:name      required string
+ *   s?:name     optional string (default "")
+ *   o:name      object path
+ *   i:name      int32        i?:name   optional (default 0)
+ *   u:name      uint32       t:name    uint64
+ *   x:name      int64        x?:name   optional (default 0)
+ *   d:name      double       d?:name   optional (default 0)
+ *   b:name      bool ("true"/"false"/"t"/"1")   b?:name (default false)
+ *   D:name      a{ss} dict consuming remaining KEY=VALUE args
+ * NULL or "" means the method takes no arguments. */
+typedef struct
+{
+  const gchar *name;        /* "crispy eval" (group + verb, or verb) */
+  const gchar *summary;
+  const gchar *iface;       /* CTL_IFACE_* */
+  const gchar *method;
+  const gchar *argspec;
+  CtlReplyKind reply;
+} CtlMethodSpec;
+
+#define CTL_TYPE_METHOD_COMMAND (ctl_method_command_get_type ())
+G_DECLARE_FINAL_TYPE (CtlMethodCommand, ctl_method_command,
+                      CTL, METHOD_COMMAND, CtlCommand)
+
+/* SPEC must be static storage (the table rows are). */
+CtlCommand *ctl_method_command_new (const CtlMethodSpec *spec);
+
+G_END_DECLS
+
+#endif /* CTL_COMMAND_H */

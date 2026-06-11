@@ -680,6 +680,9 @@ AC_ARG_WITH([gsurf],
   [AS_HELP_STRING([--with-gsurf], [alias for --with-cmacs-gsurf])],
   [with_cmacs_gsurf=$withval])
 
+OPTION_DEFAULT_OFF([cmacs-emacsctl],
+  [emacsctl/cmacsctl kubectl-style command-line control client])
+
 # CMACS: pkg-config checks when enabled
 if test "$with_cmacs_glib" != "no"; then
   PKG_CHECK_MODULES([CMACS_GLIB], [glib-2.0 gobject-2.0 gio-2.0 gmodule-2.0])
@@ -1002,6 +1005,22 @@ AC_SUBST(CMACS_GSURF_OBJ)
 AC_SUBST(CMACS_GSURF_CFLAGS)
 AC_SUBST(CMACS_GSURF_LIBS)
 AC_SUBST(CMACS_GSURF_BUNDLED)
+
+dnl emacsctl: a STANDALONE client binary (links no Emacs objects).
+dnl Built by cmacs/emacsctl/Makefile, hooked from src/Makefile.in; the
+dnl configure check only gates the build and surfaces missing deps
+dnl early.  The sub-Makefile self-probes optional readline.
+CMACS_EMACSCTL_BIN=
+if test "$with_cmacs_emacsctl" != "no"; then
+  PKG_CHECK_MODULES([CMACS_EMACSCTL],
+    [glib-2.0 gobject-2.0 gio-2.0 gio-unix-2.0 json-glib-1.0 yaml-glib-1.0],
+    [],
+    [AC_MSG_ERROR([--with-cmacs-emacsctl requires glib-2.0 gobject-2.0 gio-2.0 gio-unix-2.0 json-glib-1.0 yaml-glib-1.0 (pkg-config)])])
+  AC_DEFINE([HAVE_CMACS_EMACSCTL], 1,
+    [Build the emacsctl/cmacsctl control client])
+  CMACS_EMACSCTL_BIN="emacsctl"
+fi
+AC_SUBST(CMACS_EMACSCTL_BIN)
 if test "$with_cmacs_org_ex" != "no"; then
   AC_DEFINE([HAVE_CMACS_ORG_EX], 1, [CMacs org-ex interactive widgets])
   CMACS_ORG_EX_OBJ="cmacs-org-ex.o cmacs-org-ex-ink-capture.o"

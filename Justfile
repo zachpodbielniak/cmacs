@@ -75,6 +75,7 @@ configure_flags := """
     --with-cmacs-libregnum
     --with-cmacs-gnuseye
     --with-cmacs-gsurf
+    --with-cmacs-emacsctl
     --enable-cmacs-cpatch
 """
 
@@ -252,6 +253,12 @@ run *ARGS:
     CMACS_GSURF_MODULE_DIR={{ justfile_directory() }}/cmacs/gsurf/modules \
     GI_TYPELIB_PATH="{{ justfile_directory() }}/deps/libregnum/build/release/gir:{{ justfile_directory() }}/deps/libregnum/deps/graylib/build/gir${GI_TYPELIB_PATH:+:$GI_TYPELIB_PATH}" \
         {{ emacs }} {{ ARGS }}
+
+# Control a running cmacs from the CLI (kubectl-style).
+[group('run')]
+[positional-arguments]
+ctl *ARGS:
+    @./src/emacsctl "$@"
 
 # Run cmacs as a Wayland compositor (`--gowl`).
 [group('run')]

@@ -268,6 +268,11 @@ nextstep/GNUstep/Emacs.base/Resources/Info-gnustep.plist
 src/bootstrap-emacs
 src/emacs
 src/emacs-[0-9]*
+src/emacsctl
+src/cmacsctl
+cmacs/emacsctl/emacsctl
+cmacs/emacsctl/cmacsctl
+cmacs/emacsctl/tests/test-ctl
 src/sfnt
 src/Emacs
 src/temacs
