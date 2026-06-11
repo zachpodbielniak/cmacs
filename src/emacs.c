@@ -308,6 +308,20 @@ Initialization options:\n\
 --debug-init                enable Emacs Lisp debugger for init file\n\
 --display, -d DISPLAY       use X server DISPLAY\n\
 ",
+/* CMACS: batch-mode entry points (see cmacs_bacon_main /
+   cmacs_crispy_main below).  */
+#ifdef HAVE_CMACS_BACON
+    "\
+--bacon [-c CMD | SCRIPT]   run the embedded bacon shell, no editor\n\
+",
+#endif
+#ifdef HAVE_CMACS_CRISPY
+    "\
+--crispy [SCRIPT [ARGS...] | -i CODE | -]\n\
+                            run crispy C code, no editor; with no\n\
+                              arguments, start the terminal C REPL\n\
+",
+#endif
 #ifdef HAVE_MODULES
     "\
 --module-assertions         assert behavior of dynamic modules\n\

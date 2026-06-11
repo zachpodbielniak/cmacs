@@ -48,6 +48,9 @@ Several small hunks, all in =main()= / its init path:
   =--bacon= scan, directly below it.  Calls =cmacs_crispy_main= to run
   a crispy script / inline code / stdin / terminal REPL without any
   Emacs initialization; never returns.
+- *=usage_message= entries* (gated, =/* CMACS: ... */=-marked): one
+  line each for =--bacon= and =--crispy= so =emacs --help= documents
+  the batch entry points.
 - *=--gowl= early start* (=HAVE_CMACS_GOWL=): create + configure the
   =GowlCompositor= (incl. the =evaluate-gowl-config-with-cmacs= /
   =evaluate-c-config-with-cmacs= gates) and start it before display init,

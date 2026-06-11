@@ -7637,6 +7637,10 @@ shape to the @option{--bacon} scan, directly below it.  Calls
 @code{cmacs_crispy_main} to run a crispy script / inline code / stdin /
 terminal REPL without any Emacs initialization; never returns.
 @item
+@strong{@code{usage_message} entries} (gated, @code{/* CMACS: ... */}
+marked): one line each for @option{--bacon} and @option{--crispy} so
+@command{emacs --help} documents the batch entry points.
+@item
 @strong{@option{--gowl} early start} (@code{HAVE_CMACS_GOWL}): create and
 configure the @code{GowlCompositor} (including the
 @code{evaluate-gowl-config-with-cmacs} / @code{evaluate-c-config-with-cmacs}
