@@ -13,8 +13,14 @@
 
 #ifdef HAVE_CMACS_CRISPY
 
-/* Register DEFUN primitives. */
-extern void syms_of_cmacs_crispy (void);
+/* syms_of_cmacs_crispy is declared in lisp.h alongside the other
+   cmacs subsystems. */
+
+/* Entry point for `emacs --crispy' batch mode: run a crispy script,
+   inline code, stdin, or the terminal REPL without initializing
+   Emacs.  Called from main() in emacs.c.  Never returns. */
+extern _Noreturn void cmacs_crispy_main (int argc, char **argv,
+                                         int crispy_idx);
 
 #endif /* HAVE_CMACS_CRISPY */
 #endif /* CMACS_CRISPY_H */

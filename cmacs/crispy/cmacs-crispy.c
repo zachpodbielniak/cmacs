@@ -14,11 +14,14 @@
 
 #include "lisp.h"
 #include "epaths.h"
+#include "cmacs-crispy.h"
 #include "cmacs-eval-dispatch.h"
 #include <crispy.h>
 #include <gmodule.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 /* Persistent objects — created once, reused across calls. */
 static CrispyGccCompiler *cmacs_crispy_compiler = NULL;
@@ -162,6 +165,133 @@ cmacs_crispy_inject_api_flags (CrispyScript *script)
 }
 
 /* ──────────────────────────────────────────────────────────────────── */
+/* stdout/stderr capture                                               */
+/* ──────────────────────────────────────────────────────────────────── */
+
+/* Crispy code runs in-process and prints to the real stdout/stderr.
+   To return its output as a Lisp string we redirect both fds into a
+   tmpfile around execution.  Restoration is registered on the specpdl
+   (record_unwind_protect_ptr) because executed code can call back into
+   Lisp via cmacs_dispatch_eval, and a signal there would otherwise
+   longjmp past the manual restore, leaving Emacs's stdout redirected. */
+
+struct cmacs_crispy_capture
+{
+  FILE *tmp;            /* tmpfile receiving stdout + stderr */
+  int saved_out;        /* dup of the original stdout */
+  int saved_err;        /* dup of the original stderr */
+  bool active;          /* fds currently redirected */
+};
+
+static bool
+cmacs_crispy_capture_begin (struct cmacs_crispy_capture *cap)
+{
+  cap->tmp = tmpfile ();
+  if (cap->tmp == NULL)
+    return false;
+
+  /* Flush pending Emacs output first, or it would be flushed into
+     the tmpfile after the redirect and stolen from the real stdout
+     (visible in --batch: princ output vanishing into captures). */
+  fflush (stdout);
+  fflush (stderr);
+
+  cap->saved_out = dup (STDOUT_FILENO);
+  cap->saved_err = dup (STDERR_FILENO);
+  dup2 (fileno (cap->tmp), STDOUT_FILENO);
+  dup2 (fileno (cap->tmp), STDERR_FILENO);
+  cap->active = true;
+  return true;
+}
+
+/* Restore the real stdout/stderr.  Safe to call more than once. */
+static void
+cmacs_crispy_capture_restore (struct cmacs_crispy_capture *cap)
+{
+  if (!cap->active)
+    return;
+
+  fflush (stdout);
+  fflush (stderr);
+  dup2 (cap->saved_out, STDOUT_FILENO);
+  dup2 (cap->saved_err, STDERR_FILENO);
+  close (cap->saved_out);
+  close (cap->saved_err);
+  cap->active = false;
+}
+
+/* Unwind handler: runs on non-local exit while a capture is active.
+   The captured output is discarded; the signal is what matters. */
+static void
+cmacs_crispy_capture_unwind (void *arg)
+{
+  struct cmacs_crispy_capture *cap = arg;
+
+  cmacs_crispy_capture_restore (cap);
+  if (cap->tmp != NULL)
+    {
+      fclose (cap->tmp);
+      cap->tmp = NULL;
+    }
+}
+
+/* Restore the fds and return the captured output as a Lisp string.
+   The later unbind_to of the unwind entry becomes a no-op. */
+static Lisp_Object
+cmacs_crispy_capture_end (struct cmacs_crispy_capture *cap)
+{
+  int tmpfd;
+  off_t size;
+  Lisp_Object result = empty_unibyte_string;
+
+  cmacs_crispy_capture_restore (cap);
+
+  tmpfd = fileno (cap->tmp);
+  size = lseek (tmpfd, 0, SEEK_END);
+  if (size > 0)
+    {
+      char *buf = xmalloc (size + 1);
+      ssize_t nread;
+
+      lseek (tmpfd, 0, SEEK_SET);
+      nread = read (tmpfd, buf, size);
+      if (nread > 0)
+        result = make_string (buf, nread);
+      xfree (buf);
+    }
+
+  fclose (cap->tmp);
+  cap->tmp = NULL;
+  return result;
+}
+
+/* Lazily create the persistent CrispyRepl.  Deliberately does NOT call
+   crispy_repl_start: that enters a blocking readline loop on stdin and
+   is only for the terminal REPL (cmacs --crispy).  crispy_repl_eval
+   works standalone. */
+static void
+cmacs_crispy_ensure_repl (void)
+{
+  cmacs_crispy_ensure_init ();
+  cmacs_crispy_register_dispatch ();
+
+  if (cmacs_crispy_repl == NULL)
+    {
+      gchar *flags;
+
+      cmacs_crispy_repl = crispy_repl_new (
+        CRISPY_COMPILER (cmacs_crispy_compiler),
+        CRISPY_CACHE_PROVIDER (cmacs_crispy_cache));
+
+      /* Let REPL code call back into Emacs through libcmacs-api,
+         like one-shot scripts do (cmacs_crispy_inject_api_flags). */
+      flags = cmacs_api_extra_flags ();
+      crispy_repl_set_extra_flags (cmacs_crispy_repl, flags);
+      g_free (flags);
+    }
+}
+
+/* ──────────────────────────────────────────────────────────────────── */
 /* DEFUN primitives                                                    */
 /* ──────────────────────────────────────────────────────────────────── */
 
@@ -213,26 +343,19 @@ Returns stdout output. */)
 {
   CrispyScript *script;
   GError *err = NULL;
-  gint rc;
-  FILE *tmp;
-  int tmpfd, saved_out, saved_err;
-  off_t size;
-  char *buf;
+  struct cmacs_crispy_capture cap = { 0 };
+  specpdl_ref count;
   Lisp_Object result;
 
   CHECK_STRING (code);
   cmacs_crispy_ensure_init ();
   cmacs_crispy_register_dispatch ();
 
-  tmp = tmpfile ();
-  if (tmp == NULL)
-    error ("crispy-eval-string: tmpfile() failed");
+  count = SPECPDL_INDEX ();
+  record_unwind_protect_ptr (cmacs_crispy_capture_unwind, &cap);
 
-  tmpfd = fileno (tmp);
-  saved_out = dup (STDOUT_FILENO);
-  saved_err = dup (STDERR_FILENO);
-  dup2 (tmpfd, STDOUT_FILENO);
-  dup2 (tmpfd, STDERR_FILENO);
+  if (!cmacs_crispy_capture_begin (&cap))
+    error ("crispy-eval-string: tmpfile() failed");
 
   script = crispy_script_new_from_inline (
     SSDATA (code), NULL,
@@ -242,43 +365,17 @@ Returns stdout output. */)
 
   if (script == NULL)
     {
-      dup2 (saved_out, STDOUT_FILENO);
-      dup2 (saved_err, STDERR_FILENO);
-      close (saved_out);
-      close (saved_err);
-      fclose (tmp);
-
       Lisp_Object msg = build_string (err->message);
       g_error_free (err);
-      xsignal1 (Qcrispy_error, msg);
+      xsignal1 (Qcrispy_error, msg);     /* unwind restores the fds */
     }
 
   cmacs_crispy_inject_api_flags (script);
-  rc = crispy_script_execute (script, 0, NULL, &err);
+  crispy_script_execute (script, 0, NULL, &err);
   g_object_unref (script);
 
-  fflush (stdout);
-  fflush (stderr);
-  dup2 (saved_out, STDOUT_FILENO);
-  dup2 (saved_err, STDERR_FILENO);
-  close (saved_out);
-  close (saved_err);
-
-  /* Read captured output. */
-  size = lseek (tmpfd, 0, SEEK_END);
-  if (size > 0)
-    {
-      lseek (tmpfd, 0, SEEK_SET);
-      buf = xmalloc (size + 1);
-      read (tmpfd, buf, size);
-      buf[size] = '\0';
-      result = make_string (buf, size);
-      xfree (buf);
-    }
-  else
-    result = empty_unibyte_string;
-
-  fclose (tmp);
+  result = cmacs_crispy_capture_end (&cap);
+  unbind_to (count, Qnil);
 
   if (err != NULL)
     {
@@ -287,7 +384,6 @@ Returns stdout output. */)
       xsignal1 (Qcrispy_error, msg);
     }
 
-  (void)rc;
   return result;
 }
 
@@ -380,30 +476,15 @@ usage: (crispy-run FILE &rest ARGS) */)
 
 DEFUN ("crispy-repl-eval", Fcrispy_repl_eval, Scrispy_repl_eval, 1, 1, 0,
        doc: /* Evaluate CODE in the persistent crispy REPL.
-Returns the exit code. */)
+Returns the exit code.  Output goes to Emacs's own stdout; use
+`crispy-repl-eval-string' to capture it instead. */)
   (Lisp_Object code)
 {
   GError *err = NULL;
   gint rc;
 
   CHECK_STRING (code);
-  cmacs_crispy_ensure_init ();
-  cmacs_crispy_register_dispatch ();
-
-  if (cmacs_crispy_repl == NULL)
-    {
-      cmacs_crispy_repl = crispy_repl_new (
-        CRISPY_COMPILER (cmacs_crispy_compiler),
-        CRISPY_CACHE_PROVIDER (cmacs_crispy_cache));
-
-      if (!crispy_repl_start (cmacs_crispy_repl, &err))
-        {
-          g_clear_object (&cmacs_crispy_repl);
-          Lisp_Object msg = build_string (err->message);
-          g_error_free (err);
-          xsignal1 (Qcrispy_error, msg);
-        }
-    }
+  cmacs_crispy_ensure_repl ();
 
   rc = crispy_repl_eval (cmacs_crispy_repl, SSDATA (code), &err);
 
@@ -415,6 +496,61 @@ Returns the exit code. */)
     }
 
   return make_fixnum (rc);
+}
+
+DEFUN ("crispy-repl-eval-string", Fcrispy_repl_eval_string,
+       Scrispy_repl_eval_string, 1, 1, 0,
+       doc: /* Evaluate CODE in the persistent crispy REPL, capturing output.
+Preprocessor directives, function definitions, and type declarations
+accumulate in the REPL preamble and stay in scope for later calls.
+Bare expressions (no trailing semicolon) are auto-printed as
+"=> VALUE".  Returns the combined stdout and stderr output as a
+string.  Compilation errors signal `crispy-error' with the gcc
+diagnostic. */)
+  (Lisp_Object code)
+{
+  GError *err = NULL;
+  struct cmacs_crispy_capture cap = { 0 };
+  specpdl_ref count;
+  Lisp_Object result;
+
+  CHECK_STRING (code);
+  cmacs_crispy_ensure_repl ();
+
+  count = SPECPDL_INDEX ();
+  record_unwind_protect_ptr (cmacs_crispy_capture_unwind, &cap);
+
+  if (!cmacs_crispy_capture_begin (&cap))
+    error ("crispy-repl-eval-string: tmpfile() failed");
+
+  crispy_repl_eval (cmacs_crispy_repl, SSDATA (code), &err);
+
+  result = cmacs_crispy_capture_end (&cap);
+  unbind_to (count, Qnil);
+
+  if (err != NULL)
+    {
+      Lisp_Object msg = build_string (err->message);
+      g_error_free (err);
+      xsignal1 (Qcrispy_error, msg);
+    }
+
+  return result;
+}
+
+DEFUN ("crispy-repl-preamble", Fcrispy_repl_preamble,
+       Scrispy_repl_preamble, 0, 0, 0,
+       doc: /* Return the accumulated crispy REPL preamble as a string.
+Returns an empty string if the REPL has not evaluated anything yet. */)
+  (void)
+{
+  const gchar *preamble;
+
+  if (cmacs_crispy_repl == NULL)
+    return empty_unibyte_string;
+
+  preamble = crispy_repl_get_preamble (cmacs_crispy_repl);
+  return preamble ? build_string (preamble) : empty_unibyte_string;
 }
 
 DEFUN ("crispy-repl-reset", Fcrispy_repl_reset, Scrispy_repl_reset,
@@ -440,6 +576,118 @@ DEFUN ("crispy-cache-status", Fcrispy_cache_status, Scrispy_cache_status,
 }
 
 /* ──────────────────────────────────────────────────────────────────── */
+/* cmacs --crispy: batch script mode (no Emacs initialization)         */
+/* ──────────────────────────────────────────────────────────────────── */
+
+/* Called from main() in emacs.c when --crispy is detected, before any
+   Emacs initialization.  Runs crispy code without the editor:
+
+     emacs --crispy SCRIPT [ARGS...]   run a .c script, propagate exit code
+     emacs --crispy -i CODE            run inline C code
+     emacs --crispy -                  read a script from stdin
+     emacs --crispy                    interactive terminal REPL
+
+   No Lisp exists at this point, so the in-process Emacs dispatch table
+   is not registered; scripts still compile and link against
+   libcmacs-api, whose transports can reach a separately running cmacs.
+   Never returns. */
+_Noreturn void
+cmacs_crispy_main (int argc, char **argv, int crispy_idx)
+{
+  CrispyGccCompiler *compiler;
+  CrispyFileCache *cache;
+  GError *err = NULL;
+  gchar *api_flags;
+  int first = crispy_idx + 1;
+  int rc = 0;
+
+  compiler = crispy_gcc_compiler_new (&err);
+  if (compiler == NULL)
+    {
+      fprintf (stderr, "cmacs --crispy: %s\n", err->message);
+      exit (1);
+    }
+  cache = crispy_file_cache_new ();
+  api_flags = cmacs_api_extra_flags ();
+
+  if (first >= argc)
+    {
+      /* No arguments: interactive terminal REPL (readline loop with
+         its own :help / :type / :load / :preamble commands). */
+      CrispyRepl *repl = crispy_repl_new (CRISPY_COMPILER (compiler),
+                                          CRISPY_CACHE_PROVIDER (cache));
+      crispy_repl_set_extra_flags (repl, api_flags);
+      if (!crispy_repl_start (repl, &err))
+        {
+          fprintf (stderr, "cmacs --crispy: %s\n", err->message);
+          g_error_free (err);
+          rc = 1;
+        }
+      g_object_unref (repl);
+    }
+  else
+    {
+      CrispyScript *script;
+      int exec_argc;
+      char **exec_argv;
+
+      if (strcmp (argv[first], "-i") == 0
+          || strcmp (argv[first], "--inline") == 0)
+        {
+          if (first + 1 >= argc)
+            {
+              fprintf (stderr, "cmacs --crispy: -i requires CODE\n");
+              exit (1);
+            }
+          script = crispy_script_new_from_inline (
+            argv[first + 1], NULL, CRISPY_COMPILER (compiler),
+            CRISPY_CACHE_PROVIDER (cache), CRISPY_FLAG_NONE, &err);
+          exec_argc = argc - (first + 1);
+          exec_argv = &argv[first + 1];
+        }
+      else if (strcmp (argv[first], "-") == 0)
+        {
+          script = crispy_script_new_from_stdin (
+            CRISPY_COMPILER (compiler), CRISPY_CACHE_PROVIDER (cache),
+            CRISPY_FLAG_NONE, &err);
+          exec_argc = argc - first;
+          exec_argv = &argv[first];
+        }
+      else
+        {
+          script = crispy_script_new_from_file (
+            argv[first], CRISPY_COMPILER (compiler),
+            CRISPY_CACHE_PROVIDER (cache), CRISPY_FLAG_NONE, &err);
+          exec_argc = argc - first;
+          exec_argv = &argv[first];
+        }
+
+      if (script == NULL)
+        {
+          fprintf (stderr, "cmacs --crispy: %s\n", err->message);
+          exit (1);
+        }
+
+      crispy_script_set_extra_flags (script, api_flags);
+      rc = crispy_script_execute (script, exec_argc, exec_argv, &err);
+      g_object_unref (script);
+
+      if (err != NULL)
+        {
+          fprintf (stderr, "cmacs --crispy: %s\n", err->message);
+          g_error_free (err);
+          if (rc == 0)
+            rc = 1;
+        }
+    }
+
+  g_free (api_flags);
+  g_object_unref (cache);
+  g_object_unref (compiler);
+  exit (rc < 0 ? 1 : rc);
+}
+
+/* ──────────────────────────────────────────────────────────────────── */
 /* Init                                                                */
 /* ──────────────────────────────────────────────────────────────────── */
 
@@ -458,6 +706,8 @@ syms_of_cmacs_crispy (void)
   defsubr (&Scrispy_compile);
   defsubr (&Scrispy_run);
   defsubr (&Scrispy_repl_eval);
+  defsubr (&Scrispy_repl_eval_string);
+  defsubr (&Scrispy_repl_preamble);
   defsubr (&Scrispy_repl_reset);
   defsubr (&Scrispy_cache_status);
 }

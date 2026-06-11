@@ -160,6 +160,11 @@ extern char etext;
 #include "cmacs-bacon.h"
 #endif
 
+/* CMACS: --crispy batch-mode entry (cmacs_crispy_main).  */
+#ifdef HAVE_CMACS_CRISPY
+#include "cmacs-crispy.h"
+#endif
+
 #ifdef HAVE_CMACS_GOWL
 #include <gowl.h>
 #include <wayland-server-core.h>
@@ -1387,6 +1392,23 @@ android_emacs_init (int argc, char **argv, char *dump_file)
       {
         if (strcmp (argv[i], "--bacon") == 0)
           cmacs_bacon_main (argc, argv, i);
+        if (strcmp (argv[i], "--") == 0)
+          break;
+      }
+  }
+#endif
+
+  /* CMACS: Check for --crispy before ANY Emacs initialization.
+     If present, run crispy batch mode (script / inline / stdin /
+     terminal REPL) and never return.  Mirrors the --bacon hook
+     above; see doc_org/cmacs/cmacs-upstream-changes.org.  */
+#ifdef HAVE_CMACS_CRISPY
+  {
+    int i;
+    for (i = 1; i < argc; i++)
+      {
+        if (strcmp (argv[i], "--crispy") == 0)
+          cmacs_crispy_main (argc, argv, i);
         if (strcmp (argv[i], "--") == 0)
           break;
       }
