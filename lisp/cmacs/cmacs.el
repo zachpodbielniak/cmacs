@@ -159,6 +159,12 @@ embedded dependency docs both appear."
 (autoload 'crispy-eval-buffer "cmacs-crispy"
   "Evaluate the current buffer as a C script via Crispy." t)
 
+(autoload 'cmacs-scratchpad-mode "cmacs-scratchpad"
+  "Toggle polyglot eval (%crispy / %bacon blocks) in scratch buffers." t)
+
+(autoload 'cmacs-scratchpad-eval-block "cmacs-scratchpad"
+  "Evaluate the scratchpad block at point and insert its output." t)
+
 (autoload 'bacon "cmacs-bacon"
   "Open a Bacon shell buffer." t)
 
