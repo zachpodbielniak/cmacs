@@ -179,6 +179,69 @@ service can dispatch the inbound call."
       ;; Empty dict prints as "({},)" on gdbus.
       (should (string-match-p "{}" out)))))
 
+;;; Phase 6 MCP-parity interfaces (consumed by emacsctl)
+
+(ert-deftest cmacs-dbus-parity-ifaces-present ()
+  "Introspection lists the Phase 6 parity interfaces."
+  (skip-unless (fboundp 'cmacs-dbus-start))
+  (skip-unless (executable-find "gdbus"))
+  (cmacs-dbus-tests--with-service
+    (let* ((dest (cmacs-dbus-per-pid-name))
+           (out  (cmacs-dbus-tests--gdbus
+                  "introspect" "--session"
+                  "--dest" dest
+                  "--object-path" "/org/cmacs/Editor")))
+      (dolist (iface '("org.cmacs.Editor1.Eshell"
+                       "org.cmacs.Editor1.Edit"
+                       "org.cmacs.Editor1.Input"
+                       "org.cmacs.Editor1.Debug"
+                       "org.cmacs.Editor1.Instance"
+                       "org.cmacs.Editor1.Log"))
+        (should (string-match-p (regexp-quote iface) out))))))
+
+(ert-deftest cmacs-dbus-instance-info-json ()
+  "Instance.Info returns JSON with this process's pid and features."
+  (skip-unless (fboundp 'cmacs-dbus-start))
+  (skip-unless (executable-find "gdbus"))
+  (cmacs-dbus-tests--with-service
+    (let* ((dest (cmacs-dbus-per-pid-name))
+           (out  (cmacs-dbus-tests--gdbus
+                  "call" "--session"
+                  "--dest" dest
+                  "--object-path" "/org/cmacs/Editor"
+                  "--method" "org.cmacs.Editor1.Instance.Info")))
+      (should (string-match-p (format "pid.:%d" (emacs-pid)) out))
+      (should (string-match-p "features" out)))))
+
+(ert-deftest cmacs-dbus-log-recent-messages ()
+  "Log.RecentMessages returns the tail of *Messages*."
+  (skip-unless (fboundp 'cmacs-dbus-start))
+  (skip-unless (executable-find "gdbus"))
+  (cmacs-dbus-tests--with-service
+    (message "cmacs-dbus-log-test-marker")
+    (let* ((dest (cmacs-dbus-per-pid-name))
+           (out  (cmacs-dbus-tests--gdbus
+                  "call" "--session"
+                  "--dest" dest
+                  "--object-path" "/org/cmacs/Editor"
+                  "--method" "org.cmacs.Editor1.Log.RecentMessages"
+                  "5")))
+      (should (string-match-p "cmacs-dbus-log-test-marker" out)))))
+
+(ert-deftest cmacs-dbus-eshell-eval ()
+  "Eshell.Eval runs a command and returns its output."
+  (skip-unless (fboundp 'cmacs-dbus-start))
+  (skip-unless (executable-find "gdbus"))
+  (cmacs-dbus-tests--with-service
+    (let* ((dest (cmacs-dbus-per-pid-name))
+           (out  (cmacs-dbus-tests--gdbus
+                  "call" "--session"
+                  "--dest" dest
+                  "--object-path" "/org/cmacs/Editor"
+                  "--method" "org.cmacs.Editor1.Eshell.Eval"
+                  "echo dbus-eshell-ok")))
+      (should (string-match-p "dbus-eshell-ok" out)))))
+
 (provide 'cmacs-dbus-tests)
 
 ;;; cmacs-dbus-tests.el ends here

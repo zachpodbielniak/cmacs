@@ -62,6 +62,18 @@ static const gchar *iface_xml =
   "    <method name='SaveCurrent'>"
   "      <arg type='b' name='saved' direction='out'/>"
   "    </method>"
+  "    <method name='Create'>"
+  "      <arg type='s' name='name' direction='in'/>"
+  "      <arg type='b' name='created' direction='out'/>"
+  "    </method>"
+  "    <method name='Switch'>"
+  "      <arg type='s' name='name' direction='in'/>"
+  "      <arg type='b' name='switched' direction='out'/>"
+  "    </method>"
+  "    <method name='Save'>"
+  "      <arg type='s' name='name' direction='in'/>"
+  "      <arg type='b' name='saved' direction='out'/>"
+  "    </method>"
   "    <signal name='BufferAdded'>"
   "      <arg type='s' name='name'/>"
   "    </signal>"
@@ -318,6 +330,86 @@ on_method_call (GDBusConnection       *conn,
       gchar *result = cmacs_dispatch_eval (
         "(progn (save-buffer) t)", &err);
       gboolean ok;
+
+      if (result == NULL)
+        {
+          cmacs_dbus_return_gerror (invocation, err);
+          return;
+        }
+      ok = g_strcmp0 (result, "t") == 0;
+      g_free (result);
+      g_dbus_method_invocation_return_value (
+        invocation, g_variant_new ("(b)", ok));
+    }
+  else if (g_strcmp0 (method_name, "Create") == 0)
+    {
+      /* MCP parity: create_buffer in cmacs-mcp-tools-buffer.c. */
+      const gchar *name;
+      gchar *escaped, *elisp, *result;
+      GError *err = NULL;
+      gboolean ok;
+
+      g_variant_get (parameters, "(&s)", &name);
+      escaped = cmacs_dbus_lisp_escape (name);
+      elisp = g_strdup_printf (
+        "(and (get-buffer-create \"%s\") t)", escaped);
+      result = cmacs_dispatch_eval (elisp, &err);
+      g_free (elisp);
+      g_free (escaped);
+
+      if (result == NULL)
+        {
+          cmacs_dbus_return_gerror (invocation, err);
+          return;
+        }
+      ok = g_strcmp0 (result, "t") == 0;
+      g_free (result);
+      g_dbus_method_invocation_return_value (
+        invocation, g_variant_new ("(b)", ok));
+    }
+  else if (g_strcmp0 (method_name, "Switch") == 0)
+    {
+      /* MCP parity: switch_to_buffer in cmacs-mcp-tools-buffer.c. */
+      const gchar *name;
+      gchar *escaped, *elisp, *result;
+      GError *err = NULL;
+      gboolean ok;
+
+      g_variant_get (parameters, "(&s)", &name);
+      escaped = cmacs_dbus_lisp_escape (name);
+      elisp = g_strdup_printf (
+        "(let ((b (get-buffer \"%s\")))"
+        " (and b (progn (switch-to-buffer b) t)))", escaped);
+      result = cmacs_dispatch_eval (elisp, &err);
+      g_free (elisp);
+      g_free (escaped);
+
+      if (result == NULL)
+        {
+          cmacs_dbus_return_gerror (invocation, err);
+          return;
+        }
+      ok = g_strcmp0 (result, "t") == 0;
+      g_free (result);
+      g_dbus_method_invocation_return_value (
+        invocation, g_variant_new ("(b)", ok));
+    }
+  else if (g_strcmp0 (method_name, "Save") == 0)
+    {
+      /* MCP parity: save_buffer in cmacs-mcp-tools-buffer.c. */
+      const gchar *name;
+      gchar *escaped, *elisp, *result;
+      GError *err = NULL;
+      gboolean ok;
+
+      g_variant_get (parameters, "(&s)", &name);
+      escaped = cmacs_dbus_lisp_escape (name);
+      elisp = g_strdup_printf (
+        "(let ((b (get-buffer \"%s\")))"
+        " (and b (with-current-buffer b (save-buffer) t)))", escaped);
+      result = cmacs_dispatch_eval (elisp, &err);
+      g_free (elisp);
+      g_free (escaped);
 
       if (result == NULL)
         {

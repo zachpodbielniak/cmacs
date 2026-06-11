@@ -89,6 +89,43 @@ static guint reg_iface_watch    = 0;
 static guint reg_iface_compositor = 0;
 static guint reg_iface_monitor    = 0;
 #endif
+/* Phase 6 MCP-parity ifaces (consumed by emacsctl). */
+static guint reg_iface_eshell   = 0;
+static guint reg_iface_edit     = 0;
+static guint reg_iface_input    = 0;
+static guint reg_iface_debug    = 0;
+static guint reg_iface_instance = 0;
+static guint reg_iface_log      = 0;
+#ifdef HAVE_CMACS_CRISPY
+static guint reg_iface_crispy   = 0;
+#endif
+#ifdef HAVE_CMACS_BACON
+static guint reg_iface_bacon    = 0;
+#endif
+#ifdef HAVE_CMACS_AI
+static guint reg_iface_ai       = 0;
+#endif
+#ifdef HAVE_CMACS_GSURF
+static guint reg_iface_gsurf    = 0;
+#endif
+#ifdef HAVE_CMACS_GNUSEYE
+static guint reg_iface_gnuseye  = 0;
+#endif
+#ifdef HAVE_CMACS_PODOMATION
+static guint reg_iface_podomation = 0;
+#endif
+#ifdef HAVE_CMACS_VIDEO
+static guint reg_iface_video    = 0;
+#endif
+#ifdef HAVE_CMACS_AUDIO
+static guint reg_iface_audio    = 0;
+#endif
+#if defined(HAVE_CMACS_WHISPER) || defined(HAVE_CMACS_PIPER)
+static guint reg_iface_speech   = 0;
+#endif
+#ifdef HAVE_CMACS_LIBREGNUM
+static guint reg_iface_lrg      = 0;
+#endif
 
 /* ── Public connection / name accessors ─────────────────────────── */
 
@@ -285,12 +322,169 @@ register_modules (GDBusConnection *conn, GError **error)
   if (reg_iface_monitor == 0) return FALSE;
 #endif
 
+  /* Phase 6: MCP-parity ifaces (consumed by emacsctl).  Sync
+     discipline: every tool in cmacs/mcp/cmacs-mcp-tools-*.c has a
+     matching method on one of these (or an earlier) interfaces. */
+  reg_iface_eshell = cmacs_dbus_iface_eshell_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_eshell == 0) return FALSE;
+
+  reg_iface_edit = cmacs_dbus_iface_edit_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_edit == 0) return FALSE;
+
+  reg_iface_input = cmacs_dbus_iface_input_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_input == 0) return FALSE;
+
+  reg_iface_debug = cmacs_dbus_iface_debug_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_debug == 0) return FALSE;
+
+  reg_iface_instance = cmacs_dbus_iface_instance_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_instance == 0) return FALSE;
+
+  reg_iface_log = cmacs_dbus_iface_log_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_log == 0) return FALSE;
+
+#ifdef HAVE_CMACS_CRISPY
+  reg_iface_crispy = cmacs_dbus_iface_crispy_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_crispy == 0) return FALSE;
+#endif
+
+#ifdef HAVE_CMACS_BACON
+  reg_iface_bacon = cmacs_dbus_iface_bacon_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_bacon == 0) return FALSE;
+#endif
+
+#ifdef HAVE_CMACS_AI
+  reg_iface_ai = cmacs_dbus_iface_ai_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_ai == 0) return FALSE;
+#endif
+
+#ifdef HAVE_CMACS_GSURF
+  reg_iface_gsurf = cmacs_dbus_iface_gsurf_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_gsurf == 0) return FALSE;
+#endif
+
+#ifdef HAVE_CMACS_GNUSEYE
+  reg_iface_gnuseye = cmacs_dbus_iface_gnuseye_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_gnuseye == 0) return FALSE;
+#endif
+
+#ifdef HAVE_CMACS_PODOMATION
+  reg_iface_podomation = cmacs_dbus_iface_podomation_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_podomation == 0) return FALSE;
+#endif
+
+#ifdef HAVE_CMACS_VIDEO
+  reg_iface_video = cmacs_dbus_iface_video_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_video == 0) return FALSE;
+#endif
+
+#ifdef HAVE_CMACS_AUDIO
+  reg_iface_audio = cmacs_dbus_iface_audio_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_audio == 0) return FALSE;
+#endif
+
+#if defined(HAVE_CMACS_WHISPER) || defined(HAVE_CMACS_PIPER)
+  reg_iface_speech = cmacs_dbus_iface_speech_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_speech == 0) return FALSE;
+#endif
+
+#ifdef HAVE_CMACS_LIBREGNUM
+  reg_iface_lrg = cmacs_dbus_iface_lrg_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_lrg == 0) return FALSE;
+#endif
+
   return TRUE;
 }
 
 static void
 unregister_modules (GDBusConnection *conn)
 {
+  /* Phase 6 MCP-parity ifaces (reverse registration order). */
+#ifdef HAVE_CMACS_LIBREGNUM
+  if (reg_iface_lrg)
+    { cmacs_dbus_iface_lrg_unregister (conn, reg_iface_lrg);
+      reg_iface_lrg = 0; }
+#endif
+#if defined(HAVE_CMACS_WHISPER) || defined(HAVE_CMACS_PIPER)
+  if (reg_iface_speech)
+    { cmacs_dbus_iface_speech_unregister (conn, reg_iface_speech);
+      reg_iface_speech = 0; }
+#endif
+#ifdef HAVE_CMACS_AUDIO
+  if (reg_iface_audio)
+    { cmacs_dbus_iface_audio_unregister (conn, reg_iface_audio);
+      reg_iface_audio = 0; }
+#endif
+#ifdef HAVE_CMACS_VIDEO
+  if (reg_iface_video)
+    { cmacs_dbus_iface_video_unregister (conn, reg_iface_video);
+      reg_iface_video = 0; }
+#endif
+#ifdef HAVE_CMACS_PODOMATION
+  if (reg_iface_podomation)
+    { cmacs_dbus_iface_podomation_unregister (conn, reg_iface_podomation);
+      reg_iface_podomation = 0; }
+#endif
+#ifdef HAVE_CMACS_GNUSEYE
+  if (reg_iface_gnuseye)
+    { cmacs_dbus_iface_gnuseye_unregister (conn, reg_iface_gnuseye);
+      reg_iface_gnuseye = 0; }
+#endif
+#ifdef HAVE_CMACS_GSURF
+  if (reg_iface_gsurf)
+    { cmacs_dbus_iface_gsurf_unregister (conn, reg_iface_gsurf);
+      reg_iface_gsurf = 0; }
+#endif
+#ifdef HAVE_CMACS_AI
+  if (reg_iface_ai)
+    { cmacs_dbus_iface_ai_unregister (conn, reg_iface_ai);
+      reg_iface_ai = 0; }
+#endif
+#ifdef HAVE_CMACS_BACON
+  if (reg_iface_bacon)
+    { cmacs_dbus_iface_bacon_unregister (conn, reg_iface_bacon);
+      reg_iface_bacon = 0; }
+#endif
+#ifdef HAVE_CMACS_CRISPY
+  if (reg_iface_crispy)
+    { cmacs_dbus_iface_crispy_unregister (conn, reg_iface_crispy);
+      reg_iface_crispy = 0; }
+#endif
+  if (reg_iface_log)
+    { cmacs_dbus_iface_log_unregister (conn, reg_iface_log);
+      reg_iface_log = 0; }
+  if (reg_iface_instance)
+    { cmacs_dbus_iface_instance_unregister (conn, reg_iface_instance);
+      reg_iface_instance = 0; }
+  if (reg_iface_debug)
+    { cmacs_dbus_iface_debug_unregister (conn, reg_iface_debug);
+      reg_iface_debug = 0; }
+  if (reg_iface_input)
+    { cmacs_dbus_iface_input_unregister (conn, reg_iface_input);
+      reg_iface_input = 0; }
+  if (reg_iface_edit)
+    { cmacs_dbus_iface_edit_unregister (conn, reg_iface_edit);
+      reg_iface_edit = 0; }
+  if (reg_iface_eshell)
+    { cmacs_dbus_iface_eshell_unregister (conn, reg_iface_eshell);
+      reg_iface_eshell = 0; }
+
 #ifdef HAVE_CMACS_GOWL
   if (reg_iface_monitor)
     { cmacs_dbus_iface_monitor_unregister (conn, reg_iface_monitor);

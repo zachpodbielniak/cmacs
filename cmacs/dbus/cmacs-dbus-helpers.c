@@ -102,21 +102,50 @@ cmacs_dbus_eval_to_reply (GDBusMethodInvocation *invocation,
                           const gchar          **args,
                           gint                   n_args)
 {
-  GString *expr;
-  const gchar *p = elisp_template;
-  gint arg_index = 0;
+  gchar *expr;
   gchar *result;
   GError *err = NULL;
 
   /* Substitute %s placeholders with lisp-escaped argv values.
      %% emits a literal %.  Other % escapes are kept verbatim. */
+  expr = cmacs_dbus_build_elisp (elisp_template, args, n_args);
+
+  result = cmacs_dispatch_eval (expr, &err);
+  g_free (expr);
+
+  if (result == NULL)
+    {
+      cmacs_dbus_return_gerror (invocation, err);
+      return;
+    }
+  g_dbus_method_invocation_return_value (
+    invocation, g_variant_new ("(s)", result));
+  g_free (result);
+}
+
+/* ── Raw-string variant ──────────────────────────────────────────────
+ *
+ * Like cmacs_dbus_eval_to_reply, but string results come back verbatim
+ * (no prin1 quoting).  Used by the parity ifaces that surface raw text
+ * such as buffer contents, shell output, or generated reports. */
+
+gchar *
+cmacs_dbus_build_elisp (const gchar  *elisp_template,
+                        const gchar **args,
+                        gint          n_args)
+{
+  GString *expr;
+  const gchar *p = elisp_template;
+  gint arg_index = 0;
+
   expr = g_string_new (NULL);
   while (*p != '\0')
     {
       if (p[0] == '%' && p[1] == 's' && arg_index < n_args)
         {
           gchar *escaped =
-            cmacs_dbus_lisp_escape (args[arg_index++] ? args[arg_index - 1] : "");
+            cmacs_dbus_lisp_escape (args[arg_index] ? args[arg_index] : "");
+          arg_index++;
           g_string_append (expr, escaped);
           g_free (escaped);
           p += 2;
@@ -132,9 +161,22 @@ cmacs_dbus_eval_to_reply (GDBusMethodInvocation *invocation,
           p++;
         }
     }
+  return g_string_free (expr, FALSE);
+}
 
-  result = cmacs_dispatch_eval (expr->str, &err);
-  g_string_free (expr, TRUE);
+void
+cmacs_dbus_eval_to_reply_string (GDBusMethodInvocation *invocation,
+                                 const gchar           *elisp_template,
+                                 const gchar          **args,
+                                 gint                   n_args)
+{
+  gchar *expr;
+  gchar *result;
+  GError *err = NULL;
+
+  expr = cmacs_dbus_build_elisp (elisp_template, args, n_args);
+  result = cmacs_dispatch_eval_string (expr, &err);
+  g_free (expr);
 
   if (result == NULL)
     {

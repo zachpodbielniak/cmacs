@@ -193,6 +193,13 @@ static const gchar *win_xml =
   "    <method name='Other'>"
   "      <arg type='s' name='new_buffer_name' direction='out'/>"
   "    </method>"
+  "    <method name='Delete'>"
+  "      <arg type='b' name='ok' direction='out'/>"
+  "    </method>"
+  "    <method name='SelectByBuffer'>"
+  "      <arg type='s' name='buffer' direction='in'/>"
+  "      <arg type='b' name='ok' direction='out'/>"
+  "    </method>"
   "  </interface>"
   "</node>";
 
@@ -265,6 +272,34 @@ win_method (GDBusConnection *c, const gchar *s, const gchar *o,
       g_dbus_method_invocation_return_value (iv, g_variant_new ("(s)", r));
       g_free (r);
     }
+  else if (g_strcmp0 (m, "Delete") == 0)
+    {
+      /* MCP parity: delete_window in cmacs-mcp-tools-window.c. */
+      r = cmacs_dispatch_eval ("(progn (delete-window) t)", &err);
+      if (r == NULL) { cmacs_dbus_return_gerror (iv, err); return; }
+      g_dbus_method_invocation_return_value (iv,
+        g_variant_new ("(b)", result_is_t (r)));
+      g_free (r);
+    }
+  else if (g_strcmp0 (m, "SelectByBuffer") == 0)
+    {
+      /* MCP parity: select_window in cmacs-mcp-tools-window.c ---
+         selects the window currently displaying BUFFER. */
+      const gchar *buffer;
+      gchar *escaped, *elisp;
+      g_variant_get (p, "(&s)", &buffer);
+      escaped = cmacs_dbus_lisp_escape (buffer);
+      elisp = g_strdup_printf (
+        "(let ((w (get-buffer-window \"%s\" t)))"
+        " (and w (progn (select-window w) t)))", escaped);
+      r = cmacs_dispatch_eval (elisp, &err);
+      g_free (elisp);
+      g_free (escaped);
+      if (r == NULL) { cmacs_dbus_return_gerror (iv, err); return; }
+      g_dbus_method_invocation_return_value (iv,
+        g_variant_new ("(b)", result_is_t (r)));
+      g_free (r);
+    }
 }
 
 static const GDBusInterfaceVTable win_vtable = {
@@ -311,6 +346,11 @@ static const gchar *proc_xml =
   "      <arg type='s' name='name' direction='in'/>"
   "      <arg type='b' name='killed' direction='out'/>"
   "    </method>"
+  "    <method name='SendTo'>"
+  "      <arg type='s' name='name' direction='in'/>"
+  "      <arg type='s' name='input' direction='in'/>"
+  "      <arg type='b' name='ok' direction='out'/>"
+  "    </method>"
   "  </interface>"
   "</node>";
 
@@ -345,6 +385,29 @@ proc_method (GDBusConnection *c, const gchar *s, const gchar *o,
         g_dbus_method_invocation_return_value (iv,
           g_variant_new ("(as)", &b));
       }
+      return;
+    }
+
+  if (g_strcmp0 (m, "SendTo") == 0)
+    {
+      /* MCP parity: send_to_process in cmacs-mcp-tools-process.c. */
+      const gchar *input;
+      gchar *escaped_input;
+      g_variant_get (p, "(&s&s)", &name, &input);
+      escaped = cmacs_dbus_lisp_escape (name);
+      escaped_input = cmacs_dbus_lisp_escape (input);
+      elisp = g_strdup_printf (
+        "(let ((p (get-process \"%s\")))"
+        " (and p (progn (process-send-string p \"%s\\n\") t)))",
+        escaped, escaped_input);
+      g_free (escaped_input);
+      g_free (escaped);
+      r = cmacs_dispatch_eval (elisp, &err);
+      g_free (elisp);
+      if (r == NULL) { cmacs_dbus_return_gerror (iv, err); return; }
+      g_dbus_method_invocation_return_value (iv,
+        g_variant_new ("(b)", result_is_t (r)));
+      g_free (r);
       return;
     }
 

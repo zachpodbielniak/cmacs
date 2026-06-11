@@ -68,9 +68,51 @@ static const gchar *iface_xml =
   "    <arg type='s' name='pattern' direction='in'/>"
   "    <arg type='s' name='by' direction='in'/>"
   "    <arg type='s' name='result' direction='out'/></method>"
+  "  <method name='FocusClient'>"
+  "    <arg type='s' name='pattern' direction='in'/>"
+  "    <arg type='s' name='by' direction='in'/>"
+  "    <arg type='s' name='result' direction='out'/></method>"
+  "  <method name='CloseClient'>"
+  "    <arg type='s' name='pattern' direction='in'/>"
+  "    <arg type='s' name='by' direction='in'/>"
+  "    <arg type='s' name='result' direction='out'/></method>"
+  "  <method name='SetClientGeometry'>"
+  "    <arg type='s' name='pattern' direction='in'/>"
+  "    <arg type='s' name='by' direction='in'/>"
+  "    <arg type='i' name='x' direction='in'/>"
+  "    <arg type='i' name='y' direction='in'/>"
+  "    <arg type='i' name='width' direction='in'/>"
+  "    <arg type='i' name='height' direction='in'/>"
+  "    <arg type='s' name='result' direction='out'/></method>"
+  "  <method name='SetLayout'>"
+  "    <arg type='s' name='layout' direction='in'/>"
+  "    <arg type='s' name='result' direction='out'/></method>"
+  "  <method name='WorkspaceList'>"
+  "    <arg type='s' name='result' direction='out'/></method>"
+  "  <method name='WorkspaceSwitch'>"
+  "    <arg type='i' name='id' direction='in'/>"
+  "    <arg type='s' name='result' direction='out'/></method>"
+  "  <method name='Screenshot'>"
+  "    <arg type='s' name='mode' direction='in'/>"
+  "    <arg type='s' name='client' direction='in'/>"
+  "    <arg type='s' name='by' direction='in'/>"
+  "    <arg type='s' name='file' direction='in'/>"
+  "    <arg type='s' name='path' direction='out'/></method>"
   "</interface></node>";
 
 static GDBusNodeInfo *iface_info = NULL;
+
+/* Validate a "by" selector, defaulting to app-id (mirrors
+ * gowl_by_field in cmacs-mcp-tools-gowl.c).  The returned value is
+ * spliced into elisp as a quoted symbol, so it MUST come from this
+ * whitelist. */
+static const gchar *
+by_field (const gchar *by)
+{
+  if (by != NULL && g_strcmp0 (by, "title") == 0)
+    return "title";
+  return "app-id";
+}
 
 #define RETURN_STR(call_)                                              \
   do {                                                                 \
@@ -158,6 +200,113 @@ on_method (GDBusConnection *c, const gchar *s, const gchar *o,
       const gchar *pattern, *by;
       g_variant_get (p, "(&s&s)", &pattern, &by);
       RETURN_STR (cmacs_dispatch_gowl_find_client (pattern, by, &err));
+    }
+  else if (g_strcmp0 (m, "FocusClient") == 0)
+    {
+      const gchar *pattern, *by;
+      const gchar *args[1];
+      gchar *tmpl;
+      g_variant_get (p, "(&s&s)", &pattern, &by);
+      args[0] = pattern;
+      tmpl = g_strdup_printf (
+        "(let ((c (gowl-find-client \"%%s\" '%s)))"
+        "  (if c (progn (gowl-focus-client c) \"focused\")"
+        "    (error \"no client matching pattern\")))",
+        by_field (by));
+      cmacs_dbus_eval_to_reply_string (iv, tmpl, args, 1);
+      g_free (tmpl);
+    }
+  else if (g_strcmp0 (m, "CloseClient") == 0)
+    {
+      const gchar *pattern, *by;
+      const gchar *args[1];
+      gchar *tmpl;
+      g_variant_get (p, "(&s&s)", &pattern, &by);
+      args[0] = pattern;
+      tmpl = g_strdup_printf (
+        "(let ((c (gowl-find-client \"%%s\" '%s)))"
+        "  (if c (progn (gowl-close-client c) \"closed\")"
+        "    (error \"no client matching pattern\")))",
+        by_field (by));
+      cmacs_dbus_eval_to_reply_string (iv, tmpl, args, 1);
+      g_free (tmpl);
+    }
+  else if (g_strcmp0 (m, "SetClientGeometry") == 0)
+    {
+      const gchar *pattern, *by;
+      gint x, y, w, h;
+      const gchar *args[1];
+      gchar *tmpl;
+      g_variant_get (p, "(&s&siiii)", &pattern, &by, &x, &y, &w, &h);
+      args[0] = pattern;
+      tmpl = g_strdup_printf (
+        "(let ((c (gowl-find-client \"%%s\" '%s)))"
+        "  (if c (progn (gowl-client-set-geometry c %d %d %d %d)"
+        "               \"geometry set\")"
+        "    (error \"no client matching pattern\")))",
+        by_field (by), x, y, w, h);
+      cmacs_dbus_eval_to_reply_string (iv, tmpl, args, 1);
+      g_free (tmpl);
+    }
+  else if (g_strcmp0 (m, "SetLayout") == 0)
+    {
+      const gchar *layout;
+      const gchar *args[1];
+      g_variant_get (p, "(&s)", &layout);
+      args[0] = layout;
+      cmacs_dbus_eval_to_reply_string (iv,
+        "(progn (gowl-set-layout \"%s\") \"layout set\")", args, 1);
+    }
+  else if (g_strcmp0 (m, "WorkspaceList") == 0)
+    cmacs_dbus_eval_to_reply_string (iv,
+      "(prin1-to-string (gowl-workspace-list))", NULL, 0);
+  else if (g_strcmp0 (m, "WorkspaceSwitch") == 0)
+    {
+      gint id;
+      gchar *tmpl;
+      g_variant_get (p, "(i)", &id);
+      tmpl = g_strdup_printf (
+        "(if (gowl-workspace-switch %d) \"switched\""
+        "  \"workspace unchanged or unknown id\")", id);
+      cmacs_dbus_eval_to_reply_string (iv, tmpl, NULL, 0);
+      g_free (tmpl);
+    }
+  else if (g_strcmp0 (m, "Screenshot") == 0)
+    {
+      const gchar *mode, *client, *by, *file;
+      g_variant_get (p, "(&s&s&s&s)", &mode, &client, &by, &file);
+      if (g_strcmp0 (mode, "desktop") != 0
+          && g_strcmp0 (mode, "window") != 0
+          && g_strcmp0 (mode, "all") != 0)
+        mode = "desktop";
+      if (client != NULL && *client != '\0')
+        {
+          const gchar *args[3];
+          gchar *tmpl;
+          args[0] = client; args[1] = file; args[2] = file;
+          tmpl = g_strdup_printf (
+            "(let ((c (gowl-find-client \"%%s\" '%s)))"
+            "  (if c (let ((shot (gowl-screenshot-client c)))"
+            "          (if shot"
+            "              (progn (apply #'gowl-screenshot-save-png"
+            "                            (append shot (list \"%%s\")))"
+            "                     \"%%s\")"
+            "            (error \"screenshot capture produced no image\")))"
+            "    (error \"no client matching pattern\")))",
+            by_field (by));
+          cmacs_dbus_eval_to_reply_string (iv, tmpl, args, 3);
+          g_free (tmpl);
+        }
+      else
+        {
+          const gchar *args[2];
+          gchar *tmpl;
+          args[0] = file; args[1] = file;
+          tmpl = g_strdup_printf (
+            "(progn (gowl-screenshot '%s \"%%s\" t) \"%%s\")", mode);
+          cmacs_dbus_eval_to_reply_string (iv, tmpl, args, 2);
+          g_free (tmpl);
+        }
     }
 }
 

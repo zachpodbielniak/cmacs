@@ -10,6 +10,7 @@
 #ifdef HAVE_CMACS_GLIB
 #include "cmacs-dbus.h"
 #include "cmacs-dbus-internal.h"
+#include "cmacs-eval-dispatch.h"
 #include <gio/gio.h>
 
 static const gchar *iface_xml =
@@ -31,6 +32,15 @@ static const gchar *iface_xml =
   "    <arg type='s' name='ack' direction='out'/></method>"
   "  <method name='PrevError'>"
   "    <arg type='s' name='ack' direction='out'/></method>"
+  "  <method name='ListFiles'>"
+  "    <arg type='s' name='files' direction='out'/></method>"
+  "  <method name='ReadFile'>"
+  "    <arg type='s' name='path' direction='in'/>"
+  "    <arg type='s' name='content' direction='out'/></method>"
+  "  <method name='WriteFile'>"
+  "    <arg type='s' name='path' direction='in'/>"
+  "    <arg type='s' name='content' direction='in'/>"
+  "    <arg type='b' name='ok' direction='out'/></method>"
   "</interface></node>";
 
 static GDBusNodeInfo *iface_info = NULL;
@@ -84,6 +94,44 @@ on_method (GDBusConnection *c, const gchar *s, const gchar *o,
   else if (g_strcmp0 (m, "PrevError") == 0)
     cmacs_dbus_eval_to_reply (iv,
       "(progn (previous-error) \"ok\")", NULL, 0);
+  else if (g_strcmp0 (m, "ListFiles") == 0)
+    /* MCP parity: project_list_files in cmacs-mcp-tools-project.c. */
+    cmacs_dbus_eval_to_reply_string (iv,
+      "(let ((pr (project-current)))"
+      "  (if pr (mapconcat #'identity (project-files pr) \"\\n\")"
+      "    (error \"no project here\")))", NULL, 0);
+  else if (g_strcmp0 (m, "ReadFile") == 0)
+    {
+      /* MCP parity: project_read_file in cmacs-mcp-tools-project.c. */
+      const gchar *path;
+      const gchar *args[1];
+      g_variant_get (p, "(&s)", &path);
+      args[0] = path;
+      cmacs_dbus_eval_to_reply_string (iv,
+        "(with-temp-buffer"
+        " (insert-file-contents (expand-file-name \"%s\"))"
+        " (buffer-string))", args, 1);
+    }
+  else if (g_strcmp0 (m, "WriteFile") == 0)
+    {
+      /* MCP parity: project_write_file in cmacs-mcp-tools-project.c. */
+      const gchar *path, *content;
+      const gchar *args[2];
+      gchar *expr;
+      gchar *r;
+      GError *err = NULL;
+      g_variant_get (p, "(&s&s)", &path, &content);
+      args[0] = path; args[1] = content;
+      expr = cmacs_dbus_build_elisp (
+        "(progn (with-temp-file (expand-file-name \"%s\")"
+        " (insert \"%s\")) t)", args, 2);
+      r = cmacs_dispatch_eval (expr, &err);
+      g_free (expr);
+      if (r == NULL) { cmacs_dbus_return_gerror (iv, err); return; }
+      g_dbus_method_invocation_return_value (iv,
+        g_variant_new ("(b)", g_strcmp0 (r, "t") == 0));
+      g_free (r);
+    }
 }
 
 static const GDBusInterfaceVTable vtable = { on_method, NULL, NULL, { NULL } };

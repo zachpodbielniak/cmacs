@@ -100,6 +100,52 @@ CMACS_DBUS_IFACE_DECL (text)
 CMACS_DBUS_IFACE_DECL (nav)
 CMACS_DBUS_IFACE_DECL (config)
 
+/* ── MCP-parity ifaces (Phase 6) ────────────────────────────────────
+ *
+ * One iface per subsystem so every MCP tool capability is reachable
+ * over D-Bus (consumed by emacsctl).  Sync discipline: adding a tool
+ * in cmacs/mcp/cmacs-mcp-tools-*.c requires a matching method in the
+ * paired cmacs-dbus-iface-*.c, and vice versa. */
+
+/* Always available with cmacs-glib. */
+CMACS_DBUS_IFACE_DECL (eshell)
+CMACS_DBUS_IFACE_DECL (edit)
+CMACS_DBUS_IFACE_DECL (input)
+CMACS_DBUS_IFACE_DECL (debug)
+CMACS_DBUS_IFACE_DECL (instance)
+CMACS_DBUS_IFACE_DECL (log)
+
+#ifdef HAVE_CMACS_CRISPY
+CMACS_DBUS_IFACE_DECL (crispy)
+#endif
+#ifdef HAVE_CMACS_BACON
+CMACS_DBUS_IFACE_DECL (bacon)
+#endif
+#ifdef HAVE_CMACS_AI
+CMACS_DBUS_IFACE_DECL (ai)
+#endif
+#ifdef HAVE_CMACS_GSURF
+CMACS_DBUS_IFACE_DECL (gsurf)
+#endif
+#ifdef HAVE_CMACS_GNUSEYE
+CMACS_DBUS_IFACE_DECL (gnuseye)
+#endif
+#ifdef HAVE_CMACS_PODOMATION
+CMACS_DBUS_IFACE_DECL (podomation)
+#endif
+#ifdef HAVE_CMACS_VIDEO
+CMACS_DBUS_IFACE_DECL (video)
+#endif
+#ifdef HAVE_CMACS_AUDIO
+CMACS_DBUS_IFACE_DECL (audio)
+#endif
+#if defined(HAVE_CMACS_WHISPER) || defined(HAVE_CMACS_PIPER)
+CMACS_DBUS_IFACE_DECL (speech)
+#endif
+#ifdef HAVE_CMACS_LIBREGNUM
+CMACS_DBUS_IFACE_DECL (lrg)
+#endif
+
 /* Phase 4 desktop integration. */
 guint cmacs_dbus_application_register   (GDBusConnection *, const gchar *, GError **);
 void  cmacs_dbus_application_unregister (GDBusConnection *, guint);
@@ -132,6 +178,23 @@ void cmacs_dbus_eval_to_reply (GDBusMethodInvocation *invocation,
                                const gchar           *elisp_template,
                                const gchar          **args,
                                gint                   n_args);
+
+/* Like cmacs_dbus_eval_to_reply but string results are returned
+ * verbatim (cmacs_dispatch_eval_string), not prin1-quoted.  For
+ * methods surfacing raw text: buffer contents, shell output,
+ * generated reports. */
+void cmacs_dbus_eval_to_reply_string (GDBusMethodInvocation *invocation,
+                                      const gchar           *elisp_template,
+                                      const gchar          **args,
+                                      gint                   n_args);
+
+/* Substitute %s placeholders in ELISP_TEMPLATE with lisp-escaped ARGS
+ * (%% emits a literal %).  Caller g_frees the result.  Shared by the
+ * reply helpers above and by handlers that post-process the eval
+ * result before replying with a typed signature. */
+gchar *cmacs_dbus_build_elisp (const gchar  *elisp_template,
+                               const gchar **args,
+                               gint          n_args);
 
 /* ── Object Manager: managed-object registry ─────────────────────────
  *
