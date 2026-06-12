@@ -395,7 +395,7 @@ cmd_ai_models (CtlCommand *self, CtlInvocation *inv, GError **error)
 
   /* Reply is a JSON object provider -> [models].  Tables flatten it
    * to one provider/model row per model; -o json/yaml emit the
-   * object as-is. */
+   * object as-is; -o raw prints bare model names, one per line. */
   parser = json_parser_new ();
   if (!json_parser_load_from_data (parser, json, -1, NULL))
     {
@@ -406,6 +406,29 @@ cmd_ai_models (CtlCommand *self, CtlInvocation *inv, GError **error)
     {
       result = ctl_result_new_document (
         json_node_copy (json_parser_get_root (parser)));
+    }
+  else if (g_strcmp0 (ctl_invocation_get_output (inv), "raw") == 0)
+    {
+      JsonObject *by_provider =
+        json_node_get_object (json_parser_get_root (parser));
+      JsonObjectIter iter;
+      const gchar *prov_name;
+      JsonNode *models_node;
+      JsonArray *rows = json_array_new ();
+
+      json_object_iter_init_ordered (&iter, by_provider);
+      while (json_object_iter_next_ordered (&iter, &prov_name,
+                                            &models_node))
+        {
+          JsonArray *models = json_node_get_array (models_node);
+          guint n = json_array_get_length (models);
+          guint j;
+
+          for (j = 0; j < n; j++)
+            json_array_add_string_element (
+              rows, json_array_get_string_element (models, j));
+        }
+      result = ctl_result_new_list (rows);
     }
   else
     {
