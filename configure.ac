@@ -922,7 +922,10 @@ if test "$with_cmacs_libregnum" != "no"; then
   # archived into temacs, so those libs must be on the final link line too.
   # Append each backend's libs when its -devel package is present; absent ones
   # are silently skipped (so a host with only crispy still links cleanly).
-  for cmacs_lrg_sm in luajit python3-embed gjs-1.0; do
+  # girepository-2.0 (GLib's integrated GIRepository 3.0) is the GI runtime
+  # libregnum's scripting backend links against since its migration off the
+  # legacy libgirepository-1.0.
+  for cmacs_lrg_sm in luajit python3-embed gjs-1.0 girepository-2.0; do
     if $PKG_CONFIG --exists "$cmacs_lrg_sm" 2>/dev/null; then
       CMACS_LIBREGNUM_LIBS="$CMACS_LIBREGNUM_LIBS `$PKG_CONFIG --libs $cmacs_lrg_sm`"
     fi
