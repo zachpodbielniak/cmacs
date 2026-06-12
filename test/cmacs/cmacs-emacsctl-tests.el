@@ -265,6 +265,56 @@ D-Bus service can dispatch the inbound calls."
       (should (= 0 (car result)))
       (should (string-match-p "emacsctl-bacon-ok" (cdr result))))))
 
+(ert-deftest cmacs-emacsctl-ai-help ()
+  "ai prompt --help lists the provider/model/system/file flags."
+  (skip-unless (cmacs-emacsctl-tests--available-p))
+  (let ((result (cmacs-emacsctl-tests--run "ai" "prompt" "--help")))
+    (should (= 0 (car result)))
+    (should (string-match-p "--provider" (cdr result)))
+    (should (string-match-p "--model" (cdr result)))
+    (should (string-match-p "--system" (cdr result)))
+    (should (string-match-p "--file" (cdr result))))
+  (let ((result (cmacs-emacsctl-tests--run "ai" "models" "--help")))
+    (should (= 0 (car result)))
+    (should (string-match-p "--provider" (cdr result)))))
+
+(ert-deftest cmacs-emacsctl-ai-models ()
+  "ai models -p PROVIDER returns the provider's model map."
+  (skip-unless (cmacs-emacsctl-tests--available-p))
+  (skip-unless (fboundp 'cmacs-ai-list-models))
+  (cmacs-emacsctl-tests--with-service
+    ;; claude-code's model list is a static table in ai-glib, so this
+    ;; works offline; an unavailable provider still reports inline.
+    (let ((result (cmacs-emacsctl-tests--run
+                   "ai" "models" "-p" "claude-code" "-o" "json")))
+      (should (= 0 (car result)))
+      (should (string-match-p "claude-code" (cdr result))))))
+
+(ert-deftest cmacs-emacsctl-ai-prompt-usage ()
+  "ai prompt with no prompt and empty stdin is a usage error."
+  (skip-unless (cmacs-emacsctl-tests--available-p))
+  (let* ((outbuf (generate-new-buffer " *emacsctl-ai-usage*"))
+         (proc (make-process
+                :name "emacsctl-ai-usage"
+                :command (list
+                          "sh" "-c"
+                          (format "%s --instance %d ai prompt </dev/null"
+                                  (shell-quote-argument
+                                   cmacs-emacsctl-tests--binary)
+                                  (emacs-pid)))
+                :buffer outbuf :noquery t
+                :sentinel #'ignore)))
+    (unwind-protect
+        (progn
+          (while (process-live-p proc)
+            (accept-process-output proc 0.1)
+            (sit-for 0.05))
+          (should (= 2 (process-exit-status proc)))
+          (should (string-match-p
+                   "no prompt"
+                   (with-current-buffer outbuf (buffer-string)))))
+      (kill-buffer outbuf))))
+
 (ert-deftest cmacs-emacsctl-input-command ()
   "input command runs an interactive command."
   (skip-unless (cmacs-emacsctl-tests--available-p))

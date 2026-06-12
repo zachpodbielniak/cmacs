@@ -14,6 +14,9 @@
 #include "ctl-command-registry.h"
 #include "ctl-ifaces.h"
 
+#include <stdio.h>
+#include <string.h>
+
 void ctl_cmd_subsys_register (CtlCommandRegistry *registry);
 
 static const CtlMethodSpec subsys_specs[] = {
@@ -35,15 +38,10 @@ static const CtlMethodSpec subsys_specs[] = {
   { "eshell eval", "Run an eshell command line",
     CTL_IFACE_ESHELL, "Eval", "s:command", CTL_REPLY_STRING },
 
-  /* ai */
+  /* ai --- prompt/models/chat are flag-driven CtlSimpleCommands
+   * below; only the no-argument verb stays a table row. */
   { "ai providers", "List configured AI providers",
     CTL_IFACE_AI, "ListProviders", NULL, CTL_REPLY_STRING },
-  { "ai prompt", "One-shot AI prompt (blocking)",
-    CTL_IFACE_AI, "Prompt", "s:prompt s?:provider s?:system",
-    CTL_REPLY_STRING },
-  { "ai chat", "Open a chat buffer (optionally sending a prompt)",
-    CTL_IFACE_AI, "OpenChat", "s?:provider s?:prompt",
-    CTL_REPLY_STRING },
 
   /* gsurf */
   { "gsurf open", "Open a URL in a new gsurf buffer",
@@ -197,6 +195,288 @@ static const CtlMethodSpec subsys_specs[] = {
   { NULL, NULL, NULL, NULL, NULL, 0 }
 };
 
+/* ── ai group ───────────────────────────────────────────────────────
+ *
+ * The ai verbs take their provider / model / system prompt as flags
+ * (kubectl-style) instead of fragile positional slots, and `prompt'
+ * composes its text from positionals, stdin, and -f/--file
+ * attachments:
+ *
+ *   emacsctl ai prompt -p ollama -m llama3.2 'why is the sky blue?'
+ *   git diff | emacsctl ai prompt -s 'Review this diff'
+ *   emacsctl ai prompt -f main.c -f util.c 'find the bug'
+ *   emacsctl ai models -p claude
+ *   emacsctl ai chat -p claude -m claude-opus-4-8 'hello'
+ */
+
+static gchar  *ai_opt_provider = NULL;
+static gchar  *ai_opt_model = NULL;
+static gchar  *ai_opt_system = NULL;
+static gchar **ai_opt_files = NULL;
+
+#define AI_PROVIDER_ENTRY \
+  { "provider", 'p', 0, G_OPTION_ARG_STRING, &ai_opt_provider, \
+    "AI provider (claude / openai / gemini / grok / ollama / " \
+    "claude-code / opencode / claude-tmux; default: configured)", \
+    "NAME" }
+#define AI_MODEL_ENTRY \
+  { "model", 'm', 0, G_OPTION_ARG_STRING, &ai_opt_model, \
+    "Model name overriding the provider's default " \
+    "(see 'ai models')", "MODEL" }
+
+static const GOptionEntry ai_prompt_entries[] = {
+  AI_PROVIDER_ENTRY,
+  AI_MODEL_ENTRY,
+  { "system", 's', 0, G_OPTION_ARG_STRING, &ai_opt_system,
+    "System prompt", "TEXT" },
+  { "file", 'f', 0, G_OPTION_ARG_FILENAME_ARRAY, &ai_opt_files,
+    "Append FILE's contents to the prompt (repeatable)", "FILE" },
+  { NULL, 0, 0, 0, NULL, NULL, NULL }
+};
+
+static const GOptionEntry ai_models_entries[] = {
+  AI_PROVIDER_ENTRY,
+  { NULL, 0, 0, 0, NULL, NULL, NULL }
+};
+
+static const GOptionEntry ai_chat_entries[] = {
+  AI_PROVIDER_ENTRY,
+  AI_MODEL_ENTRY,
+  { NULL, 0, 0, 0, NULL, NULL, NULL }
+};
+
+/* Read all of stdin (for `ai prompt' with no argument).
+ * Caller g_frees. */
+static gchar *
+ai_read_stdin (void)
+{
+  GString *buf = g_string_new (NULL);
+  gchar chunk[4096];
+  gsize got;
+
+  while ((got = fread (chunk, 1, sizeof chunk, stdin)) > 0)
+    g_string_append_len (buf, chunk, got);
+  return g_string_free (buf, FALSE);
+}
+
+/* Join the command's positionals with single spaces; NULL when there
+ * are none.  Caller g_frees. */
+static gchar *
+ai_join_args (CtlInvocation *inv)
+{
+  gint argc = 0;
+  gchar **argv = ctl_invocation_get_args (inv, &argc);
+
+  if (argc == 0)
+    return NULL;
+  return g_strjoinv (" ", argv);
+}
+
+/* Call an Ai method and return its (s) reply.  Caller g_frees. */
+static gchar *
+ai_call (CtlInvocation *inv, const gchar *method, GVariant *params,
+         GError **error)
+{
+  CtlTransport *transport;
+  GVariant *reply;
+  gchar *out;
+
+  transport = ctl_invocation_get_transport (inv, error);
+  if (transport == NULL)
+    {
+      if (params != NULL)
+        g_variant_unref (g_variant_ref_sink (params));
+      return NULL;
+    }
+  reply = ctl_transport_call (transport, CTL_IFACE_AI, method, params,
+                              ctl_invocation_get_timeout_ms (inv),
+                              error);
+  if (reply == NULL)
+    return NULL;
+  g_variant_get (reply, "(s)", &out);
+  g_variant_unref (reply);
+  return out;
+}
+
+static gint
+cmd_ai_prompt (CtlCommand *self, CtlInvocation *inv, GError **error)
+{
+  const gchar *provider =
+    ai_opt_provider != NULL ? ai_opt_provider : "";
+  const gchar *system =
+    ai_opt_system != NULL ? ai_opt_system : "";
+  const gchar *model =
+    ai_opt_model != NULL ? ai_opt_model : "";
+  gchar *prompt;
+  GString *text;
+  gchar *response;
+  CtlResult *result;
+  gboolean ok;
+  gint k;
+
+  (void) self;
+
+  /* Prompt text: positionals, else stdin --- but only when no -f
+   * attachments could stand alone (an interactive tty with -f given
+   * should not block on stdin). */
+  prompt = ai_join_args (inv);
+  if (prompt == NULL && ai_opt_files == NULL)
+    {
+      prompt = ai_read_stdin ();
+      if (*prompt == '\0')
+        {
+          g_free (prompt);
+          prompt = NULL;
+        }
+    }
+  if (prompt == NULL && ai_opt_files == NULL)
+    {
+      g_set_error (error, CTL_ERROR, CTL_ERROR_USAGE,
+                   "no prompt given and stdin was empty "
+                   "(see 'ai prompt --help')");
+      return CTL_EXIT_USAGE;
+    }
+
+  text = g_string_new (prompt != NULL ? prompt : "");
+  g_free (prompt);
+
+  /* Append -f/--file attachments with filename headers, so the model
+   * can tell the sources apart. */
+  for (k = 0; ai_opt_files != NULL && ai_opt_files[k] != NULL; k++)
+    {
+      gchar *contents = NULL;
+      gsize len = 0;
+
+      if (!g_file_get_contents (ai_opt_files[k], &contents, &len,
+                                error))
+        {
+          g_string_free (text, TRUE);
+          return CTL_EXIT_ERROR;
+        }
+      if (text->len > 0)
+        g_string_append (text, "\n\n");
+      g_string_append_printf (text, "--- FILE: %s ---\n",
+                              ai_opt_files[k]);
+      g_string_append_len (text, contents, (gssize) len);
+      g_free (contents);
+    }
+
+  response = ai_call (inv, "Prompt",
+                      g_variant_new ("(ssss)", text->str, provider,
+                                     system, model),
+                      error);
+  g_string_free (text, TRUE);
+  if (response == NULL)
+    return ctl_exit_code_for_error (error != NULL ? *error : NULL);
+
+  result = ctl_result_new_scalar (response);
+  ok = ctl_invocation_emit (inv, result, error);
+  ctl_result_unref (result);
+  g_free (response);
+  return ok ? CTL_EXIT_OK : CTL_EXIT_ERROR;
+}
+
+static gint
+cmd_ai_models (CtlCommand *self, CtlInvocation *inv, GError **error)
+{
+  const gchar *provider =
+    ai_opt_provider != NULL ? ai_opt_provider : "";
+  gchar *json;
+  JsonParser *parser;
+  CtlResult *result;
+  gboolean ok;
+
+  (void) self;
+
+  json = ai_call (inv, "ListModels", g_variant_new ("(s)", provider),
+                  error);
+  if (json == NULL)
+    return ctl_exit_code_for_error (error != NULL ? *error : NULL);
+
+  /* Reply is a JSON object provider -> [models].  Tables flatten it
+   * to one provider/model row per model; -o json/yaml emit the
+   * object as-is. */
+  parser = json_parser_new ();
+  if (!json_parser_load_from_data (parser, json, -1, NULL))
+    {
+      result = ctl_result_new_scalar (json);
+    }
+  else if (g_strcmp0 (ctl_invocation_get_output (inv), "json") == 0
+           || g_strcmp0 (ctl_invocation_get_output (inv), "yaml") == 0)
+    {
+      result = ctl_result_new_document (
+        json_node_copy (json_parser_get_root (parser)));
+    }
+  else
+    {
+      JsonObject *by_provider =
+        json_node_get_object (json_parser_get_root (parser));
+      JsonObjectIter iter;
+      const gchar *prov_name;
+      JsonNode *models_node;
+      JsonArray *rows = json_array_new ();
+
+      json_object_iter_init_ordered (&iter, by_provider);
+      while (json_object_iter_next_ordered (&iter, &prov_name,
+                                            &models_node))
+        {
+          JsonArray *models = json_node_get_array (models_node);
+          guint n = json_array_get_length (models);
+          guint j;
+
+          for (j = 0; j < n; j++)
+            {
+              JsonObject *row = json_object_new ();
+              json_object_set_string_member (row, "provider",
+                                             prov_name);
+              json_object_set_string_member (
+                row, "model",
+                json_array_get_string_element (models, j));
+              json_array_add_object_element (rows, row);
+            }
+        }
+      result = ctl_result_new_list (rows);
+      ctl_result_add_column (result, "Provider", "provider");
+      ctl_result_add_column (result, "Model", "model");
+    }
+  g_object_unref (parser);
+  g_free (json);
+
+  ok = ctl_invocation_emit (inv, result, error);
+  ctl_result_unref (result);
+  return ok ? CTL_EXIT_OK : CTL_EXIT_ERROR;
+}
+
+static gint
+cmd_ai_chat (CtlCommand *self, CtlInvocation *inv, GError **error)
+{
+  const gchar *provider =
+    ai_opt_provider != NULL ? ai_opt_provider : "";
+  const gchar *model =
+    ai_opt_model != NULL ? ai_opt_model : "";
+  gchar *prompt = ai_join_args (inv);
+  gchar *buffer;
+  CtlResult *result;
+  gboolean ok;
+
+  (void) self;
+
+  buffer = ai_call (inv, "OpenChat",
+                    g_variant_new ("(sss)", provider,
+                                   prompt != NULL ? prompt : "",
+                                   model),
+                    error);
+  g_free (prompt);
+  if (buffer == NULL)
+    return ctl_exit_code_for_error (error != NULL ? *error : NULL);
+
+  result = ctl_result_new_scalar (buffer);
+  ok = ctl_invocation_emit (inv, result, error);
+  ctl_result_unref (result);
+  g_free (buffer);
+  return ok ? CTL_EXIT_OK : CTL_EXIT_ERROR;
+}
+
 void
 ctl_cmd_subsys_register (CtlCommandRegistry *registry)
 {
@@ -204,4 +484,17 @@ ctl_cmd_subsys_register (CtlCommandRegistry *registry)
   for (k = 0; subsys_specs[k].name != NULL; k++)
     ctl_command_registry_add (registry,
                               ctl_method_command_new (&subsys_specs[k]));
+
+  ctl_command_registry_add (registry,
+    ctl_simple_command_new_with_options (
+      "ai prompt", "One-shot AI prompt (blocking)",
+      "[PROMPT...]", ai_prompt_entries, cmd_ai_prompt));
+  ctl_command_registry_add (registry,
+    ctl_simple_command_new_with_options (
+      "ai models", "List the models each AI provider offers",
+      NULL, ai_models_entries, cmd_ai_models));
+  ctl_command_registry_add (registry,
+    ctl_simple_command_new_with_options (
+      "ai chat", "Open a chat buffer (optionally sending a prompt)",
+      "[PROMPT...]", ai_chat_entries, cmd_ai_chat));
 }
