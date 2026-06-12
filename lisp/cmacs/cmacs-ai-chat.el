@@ -170,24 +170,25 @@ ai-glib's web_search backend.  Shared by `cmacs-ai-chat--init' and
       (error
        (message "cmacs-ai: web_search unavailable: %S" err)))))
 
-(defun cmacs-ai-chat--init (buf provider)
+(defun cmacs-ai-chat--init (buf provider &optional model)
   (with-current-buffer buf
-    (let ((inhibit-read-only t))
+    (let ((inhibit-read-only t)
+          (m (or model cmacs-ai-default-model)))
       (erase-buffer)
       (insert (format "#+TITLE: cmacs-ai -- %s\n"
                       (format-time-string "%Y-%m-%d %H:%M:%S")))
       (insert "#+STARTUP: showall indent\n")
       (insert "#+OPTIONS: toc:nil num:nil\n")
       (insert (format "#+PROPERTY: provider %s\n" provider))
-      (when cmacs-ai-default-model
-        (insert (format "#+PROPERTY: model %s\n" cmacs-ai-default-model)))
+      (when m
+        (insert (format "#+PROPERTY: model %s\n" m)))
       (insert "\n")
       (insert "* Conversation\n\n")
       (insert "* Compose                                              :compose:\n"))
     (cmacs-ai-chat-mode)
     (setq-local cmacs-ai-chat-provider provider)
     (setq-local cmacs-ai-chat-session-pair
-                (cmacs-ai-make-session provider))
+                (cmacs-ai-make-session provider model))
     (cmacs-ai-chat--setup-executor)
     (setq-local cmacs-ai-chat--created-at (current-time))
     (setq-local cmacs-ai-chat--compose-marker
@@ -195,14 +196,15 @@ ai-glib's web_search backend.  Shared by `cmacs-ai-chat--init' and
     (set-marker-insertion-type cmacs-ai-chat--compose-marker nil)
     (goto-char (point-max))))
 
-(defun cmacs-ai-chat-open (&optional provider)
+(defun cmacs-ai-chat-open (&optional provider model)
   "Open a fresh chat buffer with PROVIDER (default
-`cmacs-ai-default-provider')."
+`cmacs-ai-default-provider').  Optional MODEL overrides the
+provider's default model for this chat's session."
   (interactive)
   (cmacs-ai--ensure)
   (let* ((p (or provider cmacs-ai-default-provider))
          (buf (get-buffer-create (cmacs-ai-chat--buffer-name p))))
-    (cmacs-ai-chat--init buf p)
+    (cmacs-ai-chat--init buf p model)
     (switch-to-buffer buf)
     buf))
 

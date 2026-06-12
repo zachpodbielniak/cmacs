@@ -359,36 +359,64 @@ DEFUN ("cmacs-ai-chat-cancel", Fcmacs_ai_chat_cancel,
   return Qt;
 }
 
+/* Map a provider symbol to an AiProviderType.  Errors on unknown
+ * symbols (deliberately stricter than ai_provider_type_from_string,
+ * which silently falls back to Claude). */
+static AiProviderType
+cmacs_ai__provider_type (Lisp_Object provider)
+{
+  CHECK_SYMBOL (provider);
+  if (EQ (provider, intern ("claude")))      return AI_PROVIDER_CLAUDE;
+  if (EQ (provider, intern ("openai")))      return AI_PROVIDER_OPENAI;
+  if (EQ (provider, intern ("gemini")))      return AI_PROVIDER_GEMINI;
+  if (EQ (provider, intern ("grok")))        return AI_PROVIDER_GROK;
+  if (EQ (provider, intern ("ollama")))      return AI_PROVIDER_OLLAMA;
+  if (EQ (provider, intern ("claude-code"))) return AI_PROVIDER_CLAUDE_CODE;
+  if (EQ (provider, intern ("opencode")))    return AI_PROVIDER_OPENCODE;
+  if (EQ (provider, intern ("claude-tmux"))) return AI_PROVIDER_CLAUDE_TMUX;
+  error ("cmacs-ai: unknown provider %s",
+         SSDATA (SYMBOL_NAME (provider)));
+}
+
+/* Build an AiSimple for optional PROVIDER (symbol or nil) and
+ * optional MODEL (string or nil).  A model with no provider pins
+ * the model on the configured default provider. */
+static AiSimple *
+cmacs_ai__simple_for (Lisp_Object provider, Lisp_Object model)
+{
+  const gchar *model_str = NULL;
+
+  if (!NILP (model))
+    {
+      CHECK_STRING (model);
+      model_str = SSDATA (model);
+    }
+
+  if (!NILP (provider))
+    return ai_simple_new_with_provider (cmacs_ai__provider_type (provider),
+                                        model_str);
+  if (model_str != NULL)
+    return ai_simple_new_with_provider
+      (ai_config_get_default_provider (ai_config_get_default ()),
+       model_str);
+  return ai_simple_new ();
+}
+
 DEFUN ("cmacs-ai-prompt-sync", Fcmacs_ai_prompt_sync,
-       Scmacs_ai_prompt_sync, 1, 3, 0,
+       Scmacs_ai_prompt_sync, 1, 4, 0,
        doc: /* Send PROMPT to the default provider synchronously.
 Returns the response text (string), or signals `cmacs-ai-error' on
 failure.  Optional PROVIDER (symbol: claude / openai / ...) overrides
-the default; optional SYSTEM is a string system prompt.  This is a
-stateless single-shot wrapper (`ai_simple_prompt') -- it does not
-maintain conversation history.  */)
-  (Lisp_Object prompt, Lisp_Object provider, Lisp_Object system)
+the default; optional SYSTEM is a string system prompt; optional
+MODEL is a model name string overriding the provider's default
+\(e.g. "claude-opus-4-8", "fable").  This is a stateless single-shot
+wrapper (`ai_simple_prompt') -- it does not maintain conversation
+history.  */)
+  (Lisp_Object prompt, Lisp_Object provider, Lisp_Object system,
+   Lisp_Object model)
 {
   CHECK_STRING (prompt);
-  g_autoptr (AiSimple) ai = NULL;
-  if (NILP (provider))
-    ai = ai_simple_new ();
-  else
-    {
-      CHECK_SYMBOL (provider);
-      AiProviderType pt;
-      if      (EQ (provider, intern ("claude")))       pt = AI_PROVIDER_CLAUDE;
-      else if (EQ (provider, intern ("openai")))       pt = AI_PROVIDER_OPENAI;
-      else if (EQ (provider, intern ("gemini")))       pt = AI_PROVIDER_GEMINI;
-      else if (EQ (provider, intern ("grok")))         pt = AI_PROVIDER_GROK;
-      else if (EQ (provider, intern ("ollama")))       pt = AI_PROVIDER_OLLAMA;
-      else if (EQ (provider, intern ("claude-code"))) pt = AI_PROVIDER_CLAUDE_CODE;
-      else if (EQ (provider, intern ("opencode")))    pt = AI_PROVIDER_OPENCODE;
-      else if (EQ (provider, intern ("claude-tmux")))  pt = AI_PROVIDER_CLAUDE_TMUX;
-      else error ("cmacs-ai: unknown provider %s",
-                  SSDATA (SYMBOL_NAME (provider)));
-      ai = ai_simple_new_with_provider (pt, NULL);
-    }
+  g_autoptr (AiSimple) ai = cmacs_ai__simple_for (provider, model);
   if (!NILP (system))
     {
       CHECK_STRING (system);
@@ -400,6 +428,94 @@ maintain conversation history.  */)
     xsignal1 (intern ("cmacs-ai-error"),
               build_string (err ? err->message : "ai_simple_prompt failed"));
   return build_string (out);
+}
+
+/* ── Model listing (sync wrapper over the async provider API) ───── */
+
+struct cmacs_ai__models_state
+{
+  gboolean done;
+  GList *models;                /* of gchar*, owned */
+  GError *error;                /* owned */
+};
+
+static void
+cmacs_ai__models_cb (GObject *source, GAsyncResult *result,
+                     gpointer user_data)
+{
+  struct cmacs_ai__models_state *st = user_data;
+  st->models = ai_provider_list_models_finish (AI_PROVIDER (source),
+                                               result, &st->error);
+  st->done = TRUE;
+}
+
+static gboolean
+cmacs_ai__models_timeout (gpointer user_data)
+{
+  g_cancellable_cancel ((GCancellable *) user_data);
+  return G_SOURCE_REMOVE;
+}
+
+DEFUN ("cmacs-ai-list-models", Fcmacs_ai_list_models,
+       Scmacs_ai_list_models, 0, 1, 0,
+       doc: /* Return the list of model names PROVIDER offers.
+PROVIDER is a symbol (claude / openai / gemini / grok / ollama /
+claude-code / opencode / claude-tmux), or nil for the configured
+default.  Queries the provider (network for API providers, static
+tables for CLI providers) with a 30 second timeout; signals
+`cmacs-ai-error' on failure.  */)
+  (Lisp_Object provider)
+{
+  g_autoptr (AiSimple) ai = NULL;
+  g_autoptr (GCancellable) cancellable = NULL;
+  GMainContext *ctx;
+  GSource *timeout;
+  struct cmacs_ai__models_state st = { FALSE, NULL, NULL };
+  Lisp_Object out = Qnil;
+  GList *l;
+
+  /* Resolve the provider before pushing the private context:
+   * cmacs_ai__simple_for can longjmp on an unknown symbol, which
+   * must not leave the thread-default stack unbalanced. */
+  ai = cmacs_ai__simple_for (provider, Qnil);
+
+  /* The async op and everything it schedules runs on a private
+   * thread-default context, so iterating it to completion here
+   * cannot re-enter Emacs's own GLib dispatch. */
+  ctx = g_main_context_new ();
+  g_main_context_push_thread_default (ctx);
+
+  cancellable = g_cancellable_new ();
+  timeout = g_timeout_source_new_seconds (30);
+  g_source_set_callback (timeout, cmacs_ai__models_timeout,
+                         cancellable, NULL);
+  g_source_attach (timeout, ctx);
+
+  ai_provider_list_models_async (ai_simple_get_provider (ai),
+                                 cancellable, cmacs_ai__models_cb, &st);
+  while (!st.done)
+    g_main_context_iteration (ctx, TRUE);
+
+  g_source_destroy (timeout);
+  g_source_unref (timeout);
+  g_clear_object (&ai);
+  g_main_context_pop_thread_default (ctx);
+  g_main_context_unref (ctx);
+
+  if (st.error != NULL)
+    {
+      /* xsignal longjmps past the g_autoptr cleanups -- free here. */
+      Lisp_Object msg = build_string (st.error->message);
+      g_error_free (st.error);
+      g_list_free_full (st.models, g_free);
+      g_clear_object (&cancellable);
+      xsignal1 (intern ("cmacs-ai-error"), msg);
+    }
+
+  for (l = st.models; l != NULL; l = l->next)
+    out = Fcons (build_string ((const gchar *) l->data), out);
+  g_list_free_full (st.models, g_free);
+  return Fnreverse (out);
 }
 
 void syms_of_cmacs_ai_stream_defuns (void);
@@ -419,6 +535,7 @@ syms_of_cmacs_ai_stream_defuns (void)
   defsubr (&Scmacs_ai_chat_continue_stream);
   defsubr (&Scmacs_ai_chat_cancel);
   defsubr (&Scmacs_ai_prompt_sync);
+  defsubr (&Scmacs_ai_list_models);
 }
 
 #endif /* HAVE_CMACS_AI */

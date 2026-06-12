@@ -98,6 +98,51 @@ cmacs_ai__make_client (Lisp_Object provider_sym)
   return NULL;
 }
 
+/* ── Type-routed setters/getters ────────────────────────────────────
+ *
+ * The registry holds AiProvider implementors of two unrelated GObject
+ * hierarchies: AiClient (HTTP API providers) and AiCliClient
+ * (claude-code / opencode / claude-tmux).  Calling ai_client_* on a
+ * CLI client is a CRITICAL + silent no-op, so every property access
+ * routes on the instance type. */
+
+static void
+cmacs_ai__provider_set_model (gpointer p, const gchar *model)
+{
+  if (AI_IS_CLIENT (p))
+    ai_client_set_model (AI_CLIENT (p), model);
+  else if (AI_IS_CLI_CLIENT (p))
+    ai_cli_client_set_model (AI_CLI_CLIENT (p), model);
+}
+
+static const gchar *
+cmacs_ai__provider_get_model (gpointer p)
+{
+  if (AI_IS_CLIENT (p))
+    return ai_client_get_model (AI_CLIENT (p));
+  if (AI_IS_CLI_CLIENT (p))
+    return ai_cli_client_get_model (AI_CLI_CLIENT (p));
+  return NULL;
+}
+
+static void
+cmacs_ai__provider_set_system_prompt (gpointer p, const gchar *prompt)
+{
+  if (AI_IS_CLIENT (p))
+    ai_client_set_system_prompt (AI_CLIENT (p), prompt);
+  else if (AI_IS_CLI_CLIENT (p))
+    ai_cli_client_set_system_prompt (AI_CLI_CLIENT (p), prompt);
+}
+
+static void
+cmacs_ai__provider_set_max_tokens (gpointer p, gint max)
+{
+  if (AI_IS_CLIENT (p))
+    ai_client_set_max_tokens (AI_CLIENT (p), max);
+  else if (AI_IS_CLI_CLIENT (p))
+    ai_cli_client_set_max_tokens (AI_CLI_CLIENT (p), max);
+}
+
 /* ── DEFUNs ─────────────────────────────────────────────────────── */
 
 DEFUN ("cmacs-ai-client-new", Fcmacs_ai_client_new,
@@ -116,7 +161,7 @@ to `ai-client-set-model').  Returns an integer handle.  Free with
   if (!NILP (model))
     {
       CHECK_STRING (model);
-      ai_client_set_model (AI_CLIENT (p), SSDATA (model));
+      cmacs_ai__provider_set_model (p, SSDATA (model));
     }
   guint h = cmacs_ai_client_register (p);
   g_object_unref (p);   /* registry holds the only ref now */
@@ -140,9 +185,9 @@ DEFUN ("cmacs-ai-client-set-model", Fcmacs_ai_client_set_model,
 {
   CHECK_FIXNAT (handle);
   CHECK_STRING (model);
-  AiClient *c = cmacs_ai_client_lookup (XFIXNUM (handle));
+  gpointer c = cmacs_ai_client_lookup (XFIXNUM (handle));
   if (c == NULL) error ("cmacs-ai: bad client handle");
-  ai_client_set_model (c, SSDATA (model));
+  cmacs_ai__provider_set_model (c, SSDATA (model));
   return Qt;
 }
 
@@ -152,9 +197,9 @@ DEFUN ("cmacs-ai-client-get-model", Fcmacs_ai_client_get_model,
   (Lisp_Object handle)
 {
   CHECK_FIXNAT (handle);
-  AiClient *c = cmacs_ai_client_lookup (XFIXNUM (handle));
+  gpointer c = cmacs_ai_client_lookup (XFIXNUM (handle));
   if (c == NULL) error ("cmacs-ai: bad client handle");
-  const gchar *m = ai_client_get_model (c);
+  const gchar *m = cmacs_ai__provider_get_model (c);
   return m ? build_string (m) : Qnil;
 }
 
@@ -169,9 +214,9 @@ available.  */)
   (Lisp_Object handle)
 {
   CHECK_FIXNAT (handle);
-  AiClient *c = cmacs_ai_client_lookup (XFIXNUM (handle));
+  gpointer c = cmacs_ai_client_lookup (XFIXNUM (handle));
   if (c == NULL) error ("cmacs-ai: bad client handle");
-  const gchar *m = ai_client_get_model (c);
+  const gchar *m = cmacs_ai__provider_get_model (c);
   if (m == NULL || *m == '\0')
     m = ai_provider_get_default_model (AI_PROVIDER (c));
   return (m && *m) ? build_string (m) : Qnil;
@@ -186,7 +231,7 @@ itself uses, not the Elisp symbol.  */)
   (Lisp_Object handle)
 {
   CHECK_FIXNAT (handle);
-  AiClient *c = cmacs_ai_client_lookup (XFIXNUM (handle));
+  gpointer c = cmacs_ai_client_lookup (XFIXNUM (handle));
   if (c == NULL) error ("cmacs-ai: bad client handle");
   const gchar *n = ai_provider_get_name (AI_PROVIDER (c));
   return n ? build_string (n) : Qnil;
@@ -199,14 +244,14 @@ A nil PROMPT clears any previously-set prompt.  */)
   (Lisp_Object handle, Lisp_Object prompt)
 {
   CHECK_FIXNAT (handle);
-  AiClient *c = cmacs_ai_client_lookup (XFIXNUM (handle));
+  gpointer c = cmacs_ai_client_lookup (XFIXNUM (handle));
   if (c == NULL) error ("cmacs-ai: bad client handle");
   if (NILP (prompt))
-    ai_client_set_system_prompt (c, NULL);
+    cmacs_ai__provider_set_system_prompt (c, NULL);
   else
     {
       CHECK_STRING (prompt);
-      ai_client_set_system_prompt (c, SSDATA (prompt));
+      cmacs_ai__provider_set_system_prompt (c, SSDATA (prompt));
     }
   return Qt;
 }
@@ -218,9 +263,9 @@ DEFUN ("cmacs-ai-client-set-max-tokens", Fcmacs_ai_client_set_max_tokens,
 {
   CHECK_FIXNAT (handle);
   CHECK_FIXNAT (max);
-  AiClient *c = cmacs_ai_client_lookup (XFIXNUM (handle));
+  gpointer c = cmacs_ai_client_lookup (XFIXNUM (handle));
   if (c == NULL) error ("cmacs-ai: bad client handle");
-  ai_client_set_max_tokens (c, XFIXNUM (max));
+  cmacs_ai__provider_set_max_tokens (c, XFIXNUM (max));
   return Qt;
 }
 
@@ -231,9 +276,11 @@ DEFUN ("cmacs-ai-client-set-temperature", Fcmacs_ai_client_set_temperature,
 {
   CHECK_FIXNAT (handle);
   CHECK_NUMBER (temp);
-  AiClient *c = cmacs_ai_client_lookup (XFIXNUM (handle));
+  gpointer c = cmacs_ai_client_lookup (XFIXNUM (handle));
   if (c == NULL) error ("cmacs-ai: bad client handle");
-  ai_client_set_temperature (c, XFLOATINT (temp));
+  /* CLI providers have no sampling temperature; quietly skip. */
+  if (AI_IS_CLIENT (c))
+    ai_client_set_temperature (AI_CLIENT (c), XFLOATINT (temp));
   return Qt;
 }
 

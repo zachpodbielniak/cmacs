@@ -336,7 +336,10 @@ informational and is not auto-loaded -- ai-glib reads it directly."
                   "cmacs-ai-stream.c" (session prompt callback))
 (declare-function cmacs-ai-chat-cancel "cmacs-ai-stream.c" (session))
 (declare-function cmacs-ai-prompt-sync
-                  "cmacs-ai-stream.c" (prompt &optional provider system))
+                  "cmacs-ai-stream.c"
+                  (prompt &optional provider system model))
+(declare-function cmacs-ai-list-models
+                  "cmacs-ai-stream.c" (&optional provider))
 
 (defun cmacs-ai--available-p ()
   "Return non-nil when the cmacs-ai C subsystem is linked in."
