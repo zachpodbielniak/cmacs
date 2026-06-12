@@ -74,8 +74,9 @@ shell completion script
 
 Groups @code{get}, @code{buffer}, @code{edit}, @code{file},
 @code{find-file}, @code{text} (whose verbs all take
-@option{-b/--buffer NAME} and whose @code{insert}/@code{append} read
-stdin when no TEXT argument is given), @code{nav}, @code{search}, @code{vc},
+@option{-b/--buffer NAME} and whose @code{insert}/@code{append} take @option{-e} to expand
+backslash escapes like @command{echo -e} and read stdin when no
+TEXT argument is given), @code{nav}, @code{search}, @code{vc},
 @code{project}, @code{clip}, @code{bookmark}, @code{pkg},
 @code{var}, @code{input}, @code{window}, @code{process},
 @code{message}, @code{debug}, @code{c} (cintrospect/cpatch) and

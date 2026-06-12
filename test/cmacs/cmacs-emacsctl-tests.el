@@ -306,6 +306,31 @@ D-Bus service can dispatch the inbound calls."
                               (point-min) (point-max))))))
         (ignore-errors (kill-buffer buf))))))
 
+(ert-deftest cmacs-emacsctl-text-escapes ()
+  "text insert -e expands backslash escapes like echo -e."
+  (skip-unless (cmacs-emacsctl-tests--available-p))
+  (cmacs-emacsctl-tests--with-service
+    (let ((buf "*ctl-text-esc*"))
+      (unwind-protect
+          (progn
+            (should (= 0 (car (cmacs-emacsctl-tests--run
+                               "buffer" "create" buf))))
+            (should (= 0 (car (cmacs-emacsctl-tests--run
+                               "text" "insert" "-e" "--buffer" buf
+                               "a\\tb\\n\\x41\\0102\\\\\\q"))))
+            (should (equal "a\tb\nAB\\\\q"
+                           (with-current-buffer buf
+                             (buffer-substring-no-properties
+                              (point-min) (point-max)))))
+            ;; Without -e the backslashes stay literal.
+            (should (= 0 (car (cmacs-emacsctl-tests--run
+                               "text" "insert" "--buffer" buf
+                               "\\n"))))
+            (should (string-suffix-p "\\n"
+                                     (with-current-buffer buf
+                                       (buffer-string)))))
+        (ignore-errors (kill-buffer buf))))))
+
 (ert-deftest cmacs-emacsctl-text-stdin ()
   "text insert reads from stdin when no TEXT argument is given."
   (skip-unless (cmacs-emacsctl-tests--available-p))

@@ -29,12 +29,84 @@ void ctl_cmd_editor_register (CtlCommandRegistry *registry);
  */
 
 static gchar *text_opt_buffer = NULL;
+static gboolean text_opt_escapes = FALSE;
 
 static const GOptionEntry text_entries[] = {
   { "buffer", 'b', 0, G_OPTION_ARG_STRING, &text_opt_buffer,
     "Target buffer (default: the editor's current buffer)", "NAME" },
+  { "escapes", 'e', 0, G_OPTION_ARG_NONE, &text_opt_escapes,
+    "Interpret backslash escapes in TEXT (\\n, \\t, \\xHH, \\0NNN, "
+    "...) like `echo -e'", NULL },
   { NULL, 0, 0, 0, NULL, NULL, NULL }
 };
+
+/* Expand backslash escapes the way `echo -e' does: \\a \\b \\e \\f
+ * \\n \\r \\t \\v \\\\, \\xHH (1-2 hex digits) and \\0NNN (0-3 octal
+ * digits).  Unknown escapes pass through verbatim.  Caller g_frees. */
+static gchar *
+text_expand_escapes (const gchar *s)
+{
+  GString *out = g_string_new (NULL);
+
+  while (*s != '\0')
+    {
+      if (*s != '\\' || s[1] == '\0')
+        {
+          g_string_append_c (out, *s++);
+          continue;
+        }
+      s++;                      /* past the backslash */
+      switch (*s)
+        {
+        case 'a':  g_string_append_c (out, '\a'); s++; break;
+        case 'b':  g_string_append_c (out, '\b'); s++; break;
+        case 'e':  g_string_append_c (out, '\033'); s++; break;
+        case 'f':  g_string_append_c (out, '\f'); s++; break;
+        case 'n':  g_string_append_c (out, '\n'); s++; break;
+        case 'r':  g_string_append_c (out, '\r'); s++; break;
+        case 't':  g_string_append_c (out, '\t'); s++; break;
+        case 'v':  g_string_append_c (out, '\v'); s++; break;
+        case '\\': g_string_append_c (out, '\\'); s++; break;
+        case 'x':
+          {
+            guint value = 0;
+            gint digits = 0;
+            s++;
+            while (digits < 2 && g_ascii_isxdigit (*s))
+              {
+                value = value * 16 + g_ascii_xdigit_value (*s);
+                s++;
+                digits++;
+              }
+            if (digits > 0)
+              g_string_append_c (out, (gchar) value);
+            else
+              g_string_append (out, "\\x");
+          }
+          break;
+        case '0':
+          {
+            guint value = 0;
+            gint digits = 0;
+            s++;
+            while (digits < 3 && *s >= '0' && *s <= '7')
+              {
+                value = value * 8 + (guint) (*s - '0');
+                s++;
+                digits++;
+              }
+            if (value != 0 || digits > 0)
+              g_string_append_c (out, (gchar) value);
+          }
+          break;
+        default:
+          /* Unknown escape: keep it verbatim, like echo -e. */
+          g_string_append_c (out, '\\');
+          g_string_append_c (out, *s++);
+        }
+    }
+  return g_string_free (out, FALSE);
+}
 
 /* Read all of stdin (for `text insert/append' with no argument).
  * Caller g_frees. */
@@ -92,6 +164,7 @@ text_insert_or_append (CtlInvocation *inv, const gchar *method,
     text_opt_buffer != NULL ? text_opt_buffer : "";
   const gchar *arg = ctl_invocation_get_arg (inv, 0);
   gchar *from_stdin = NULL;
+  gchar *expanded = NULL;
   gint code;
 
   if (arg == NULL)
@@ -110,9 +183,16 @@ text_insert_or_append (CtlInvocation *inv, const gchar *method,
       arg = from_stdin;
     }
 
+  if (text_opt_escapes)
+    {
+      expanded = text_expand_escapes (arg);
+      arg = expanded;
+    }
+
   code = text_call (inv, method,
                     g_variant_new ("(ss)", arg, buffer), error);
   g_free (from_stdin);
+  g_free (expanded);
   return code;
 }
 
