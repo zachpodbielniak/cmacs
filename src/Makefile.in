@@ -968,9 +968,12 @@ endif
 ## yaml-glib is linked into the .so but NOT embedded in the .a),
 ## so there is no duplicate-symbol risk against libbacon-1.0.a's
 ## canonical yaml_* set and no dedup rule is needed below.
+## FORCE so edits under deps/ai-glib/src are picked up: the sub-make
+## decides incrementality and only touches the archive when objects
+## actually changed (same pattern as the org-ex hook below).
 CMACS_AI_GLIB_STATIC_LIB = $(srcdir)/../deps/ai-glib/build/release/libai-glib-1.0.a
 ifneq ($(CMACS_AI_OBJ)$(CMACS_LIBRECLAW_OBJ),)
-$(CMACS_AI_GLIB_STATIC_LIB):
+$(CMACS_AI_GLIB_STATIC_LIB): FORCE
 	$(MAKE) -C $(srcdir)/../deps/ai-glib GIR=1 all
 endif
 
