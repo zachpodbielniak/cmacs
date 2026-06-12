@@ -8,7 +8,12 @@
  * Claude Code instance) can drive the cmacs-local AI:
  *   - ai_prompt:        one-shot prompt to the default provider
  *   - ai_list_providers: enumerate provider symbols
+ *   - ai_list_models:   enumerate model names per provider
  *   - ai_open_chat:     open a chat buffer with an initial prompt
+ *
+ * D-Bus parity: org.cmacs.Editor1.Ai in
+ * cmacs/dbus/cmacs-dbus-iface-ai.c (sync discipline: adding a tool
+ * here requires a matching method there, and vice versa).
  *
  * All handlers route through the Elisp dispatch path so the
  * implementation stays compact and re-uses the same code the
@@ -54,6 +59,8 @@ handle_ai_prompt (McpServer *server, const gchar *name,
     ? json_object_get_string_member (arguments, "provider") : NULL;
   const gchar *system   = json_object_has_member (arguments, "system")
     ? json_object_get_string_member (arguments, "system") : NULL;
+  const gchar *model    = json_object_has_member (arguments, "model")
+    ? json_object_get_string_member (arguments, "model") : NULL;
 
   if (prompt == NULL || *prompt == '\0')
     {
@@ -70,12 +77,16 @@ handle_ai_prompt (McpServer *server, const gchar *name,
   g_autofree gchar *system_arg = system && *system
     ? g_strdup_printf ("\"%s\"", system_esc)
     : g_strdup ("nil");
+  g_autofree gchar *model_esc = escape_for_lisp (model ? model : "");
+  g_autofree gchar *model_arg = model && *model
+    ? g_strdup_printf ("\"%s\"", model_esc)
+    : g_strdup ("nil");
 
   g_autoptr (GError) err = NULL;
   g_autofree gchar *expr = g_strdup_printf (
-    "(condition-case e (cmacs-ai-prompt-sync \"%s\" %s %s)"
+    "(condition-case e (cmacs-ai-prompt-sync \"%s\" %s %s %s)"
     " (error (format \"error: %%S\" e)))",
-    prompt_esc, provider_arg, system_arg);
+    prompt_esc, provider_arg, system_arg, model_arg);
   g_autofree gchar *res = cmacs_dispatch_eval_string (expr, &err);
   McpToolResult *r = mcp_tool_result_new (res == NULL);
   mcp_tool_result_add_text (r,
@@ -98,6 +109,40 @@ handle_ai_list_providers (McpServer *server, const gchar *name,
 }
 
 static McpToolResult *
+handle_ai_list_models (McpServer *server, const gchar *name,
+                       JsonObject *arguments, gpointer user_data)
+{
+  (void) server; (void) name; (void) user_data;
+  const gchar *provider = json_object_has_member (arguments, "provider")
+    ? json_object_get_string_member (arguments, "provider") : NULL;
+
+  /* No provider = every supported provider; each one guarded so a
+   * keyless/offline provider reports instead of failing the whole
+   * call.  Result is a JSON object provider -> [models]. */
+  g_autofree gchar *providers_form = provider && *provider
+    ? g_strdup_printf ("(list (quote %s))", provider)
+    : g_strdup ("(cmacs-ai-providers)");
+
+  g_autoptr (GError) err = NULL;
+  g_autofree gchar *expr = g_strdup_printf (
+    "(let ((tbl (make-hash-table :test (quote equal))))"
+    " (dolist (pv %s)"
+    "  (puthash (symbol-name pv)"
+    "   (condition-case e"
+    "    (apply (function vector) (cmacs-ai-list-models pv))"
+    "    (error (vector (format \"(unavailable: %%s)\""
+    "                    (error-message-string e)))))"
+    "   tbl))"
+    " (json-serialize tbl))",
+    providers_form);
+  g_autofree gchar *res = cmacs_dispatch_eval_string (expr, &err);
+  McpToolResult *r = mcp_tool_result_new (res == NULL);
+  mcp_tool_result_add_text (r,
+    res ? res : (err ? err->message : "ai_list_models failed"));
+  return r;
+}
+
+static McpToolResult *
 handle_ai_open_chat (McpServer *server, const gchar *name,
                      JsonObject *arguments, gpointer user_data)
 {
@@ -106,23 +151,29 @@ handle_ai_open_chat (McpServer *server, const gchar *name,
     ? json_object_get_string_member (arguments, "prompt") : NULL;
   const gchar *provider = json_object_has_member (arguments, "provider")
     ? json_object_get_string_member (arguments, "provider") : NULL;
+  const gchar *model = json_object_has_member (arguments, "model")
+    ? json_object_get_string_member (arguments, "model") : NULL;
 
   g_autofree gchar *provider_arg = provider && *provider
     ? g_strdup_printf ("(quote %s)", provider)
+    : g_strdup ("nil");
+  g_autofree gchar *model_esc = escape_for_lisp (model ? model : "");
+  g_autofree gchar *model_arg = model && *model
+    ? g_strdup_printf ("\"%s\"", model_esc)
     : g_strdup ("nil");
   g_autofree gchar *prompt_esc = escape_for_lisp (prompt ? prompt : "");
 
   g_autoptr (GError) err = NULL;
   g_autofree gchar *expr = g_strdup_printf (
     "(progn (require 'cmacs-ai-chat) "
-    " (let ((buf (cmacs-ai-chat-open %s))) "
+    " (let ((buf (cmacs-ai-chat-open %s %s))) "
     "   (when (and \"%s\" (not (string-empty-p \"%s\"))) "
     "     (with-current-buffer buf "
     "       (goto-char (point-max)) "
     "       (insert \"%s\") "
     "       (cmacs-ai-chat-send-compose))) "
     "   (buffer-name buf)))",
-    provider_arg, prompt_esc, prompt_esc, prompt_esc);
+    provider_arg, model_arg, prompt_esc, prompt_esc, prompt_esc);
   g_autofree gchar *res = cmacs_dispatch_eval_string (expr, &err);
   McpToolResult *r = mcp_tool_result_new (res == NULL);
   mcp_tool_result_add_text (r,
@@ -140,12 +191,14 @@ cmacs_mcp_tools_ai_register (McpServer *server)
     "Send PROMPT to an AI provider via cmacs-ai (synchronous).  "
     "Optional 'provider' (claude / openai / gemini / grok / ollama / "
     "claude-code / opencode / claude-tmux) overrides the default; "
-    "optional 'system' is a system prompt.");
+    "optional 'system' is a system prompt; optional 'model' overrides "
+    "the provider's default model.");
   schema = cmacs_mcp_schema_from_string (
     "{\"type\":\"object\",\"properties\":{"
     "\"prompt\":{\"type\":\"string\",\"description\":\"User prompt\"},"
     "\"provider\":{\"type\":\"string\",\"description\":\"Provider name\"},"
-    "\"system\":{\"type\":\"string\",\"description\":\"System prompt\"}"
+    "\"system\":{\"type\":\"string\",\"description\":\"System prompt\"},"
+    "\"model\":{\"type\":\"string\",\"description\":\"Model name\"}"
     "},\"required\":[\"prompt\"]}");
   mcp_tool_set_input_schema (tool, schema);
   mcp_server_add_tool (server, tool, handle_ai_prompt, NULL, NULL);
@@ -160,14 +213,30 @@ cmacs_mcp_tools_ai_register (McpServer *server)
   mcp_server_add_tool (server, tool, handle_ai_list_providers, NULL, NULL);
   g_object_unref (tool);
 
+  tool = mcp_tool_new ("ai_list_models",
+    "List the model names each cmacs-ai provider offers, as a JSON "
+    "object mapping provider to an array of models.  Optional "
+    "'provider' restricts the query to one provider; otherwise all "
+    "providers are queried (unavailable ones report inline).");
+  schema = cmacs_mcp_schema_from_string (
+    "{\"type\":\"object\",\"properties\":{"
+    "\"provider\":{\"type\":\"string\",\"description\":\"Provider name\"}"
+    "}}");
+  mcp_tool_set_input_schema (tool, schema);
+  mcp_tool_set_read_only_hint (tool, TRUE);
+  mcp_server_add_tool (server, tool, handle_ai_list_models, NULL, NULL);
+  g_object_unref (tool);
+
   tool = mcp_tool_new ("ai_open_chat",
     "Open a cmacs-ai chat buffer.  If PROMPT is given, the prompt "
-    "is sent as the first user turn and streamed.  Returns the "
-    "buffer name.");
+    "is sent as the first user turn and streamed.  Optional 'model' "
+    "overrides the provider's default model.  Returns the buffer "
+    "name.");
   schema = cmacs_mcp_schema_from_string (
     "{\"type\":\"object\",\"properties\":{"
     "\"prompt\":{\"type\":\"string\",\"description\":\"Optional initial prompt\"},"
-    "\"provider\":{\"type\":\"string\",\"description\":\"Provider name\"}"
+    "\"provider\":{\"type\":\"string\",\"description\":\"Provider name\"},"
+    "\"model\":{\"type\":\"string\",\"description\":\"Model name\"}"
     "}}");
   mcp_tool_set_input_schema (tool, schema);
   mcp_server_add_tool (server, tool, handle_ai_open_chat, NULL, NULL);
