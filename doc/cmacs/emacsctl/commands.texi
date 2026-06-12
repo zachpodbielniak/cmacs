@@ -94,6 +94,41 @@ a missing subsystem maps to exit code 3 with a clear message:
 @code{speech} (whisper + piper), @code{lrg} (libregnum editor),
 @code{compositor} and @code{monitor} (gowl).
 
+@subsection AI: ai prompt / ai models / ai chat
+
+The ai verbs take provider, model, and system prompt as flags
+(@option{-p/--provider}, @option{-m/--model}, @option{-s/--system})
+instead of positional slots.  @code{ai prompt} composes its text
+from positionals, stdin, and @option{-f/--file} attachments
+(repeatable; each file is appended with a @code{--- FILE: name ---}
+header so the model can tell sources apart):
+
+@example
+emacsctl ai prompt 'why is the sky blue?'
+emacsctl ai prompt -p ollama -m llama3.2 'one-liner: rsync a dir'
+git diff | emacsctl ai prompt -s 'Review this diff for bugs'
+emacsctl ai prompt -f main.c -f util.c 'find the bug'
+
+emacsctl ai models                      # provider/model table, all
+emacsctl ai models -p claude            # one provider
+emacsctl ai models -p ollama -o json
+
+emacsctl ai chat -p claude -m claude-opus-4-8 'hello'
+@end example
+
+@code{ai models} renders a provider/model table; @option{-o json} /
+@option{-o yaml} emit the provider-to-models map as structured data.
+Without @option{-p} every provider is queried (API providers over
+the network, CLI providers from static tables) and unavailable ones
+report inline, so the call never fails outright --- but it can take
+a while; @option{-p} keeps it fast.  The model names that
+@code{ai models} prints are exactly what @option{-m/--model}
+accepts.
+
+The underlying typed methods are @code{Editor1.Ai} @code{Prompt} /
+@code{ListModels} / @code{OpenChat}, with MCP parity via
+@code{ai_prompt} / @code{ai_list_models} / @code{ai_open_chat}.
+
 @subsection Org buffers: text insert-org
 
 Org-aware insertion: target a headline (@option{-H} takes an exact

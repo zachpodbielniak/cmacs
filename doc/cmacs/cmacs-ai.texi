@@ -335,22 +335,35 @@ libraries; no per-class binding code is needed.
 @node CMacs AI MCP Tools
 @section MCP Tools
 
-Built with @option{--with-cmacs-mcp}, three tools are exposed on the
+Built with @option{--with-cmacs-mcp}, four tools are exposed on the
 cmacs MCP socket:
 
 @table @code
 @item ai_prompt
 One-shot synchronous prompt.  Args: @code{prompt} (required),
-@code{provider}, @code{system}.
+@code{provider}, @code{system}, @code{model}.
 @item ai_list_providers
 Enumerate provider symbols.
+@item ai_list_models
+List the model names each provider offers, as a JSON object mapping
+provider to a model-name array (network for API providers, static
+tables for CLI providers).  Optional @code{provider} restricts the
+query; otherwise all providers are queried and unavailable ones
+report inline instead of failing the call.
 @item ai_open_chat
-Open a chat buffer (optionally seeded with a first prompt).  Returns
-the buffer name.
+Open a chat buffer (optionally seeded with a first prompt; optional
+@code{model} overrides the provider's default).  Returns the buffer
+name.
 @end table
 
 External agents (e.g. an outer Claude Code instance) can drive the
-in-editor AI through these tools.
+in-editor AI through these tools.  The underlying DEFUNs are
+@code{cmacs-ai-prompt-sync} (@var{prompt} @code{&optional}
+@var{provider} @var{system} @var{model}) and
+@code{cmacs-ai-list-models} (@code{&optional} @var{provider});
+D-Bus parity lives on @code{org.cmacs.Editor1.Ai}
+(@code{ListProviders} / @code{ListModels} / @code{Prompt} /
+@code{OpenChat}).
 
 @node CMacs AI MCP Bridge
 @section MCP Bridge

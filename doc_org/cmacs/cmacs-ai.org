@@ -245,13 +245,23 @@ runs, the typelib is reachable from:
 
 * MCP tools
 
-Built with =--with-cmacs-mcp=, three tools are exposed:
+Built with =--with-cmacs-mcp=, four tools are exposed:
 
-| Tool               | Args                              |
-|--------------------+-----------------------------------|
-| =ai_prompt=        | =prompt= req, =provider=, =system= |
-| =ai_list_providers= | (none)                            |
-| =ai_open_chat=     | =prompt=, =provider= (opt)        |
+| Tool                | Args                                       |
+|---------------------+--------------------------------------------|
+| =ai_prompt=         | =prompt= req, =provider=, =system=, =model= |
+| =ai_list_providers= | (none)                                     |
+| =ai_list_models=    | =provider= (opt; default: all providers)   |
+| =ai_open_chat=      | =prompt=, =provider=, =model= (all opt)    |
+
+=ai_list_models= returns a JSON object mapping each provider to its
+model-name array (network for API providers, static tables for CLI
+providers); an unavailable provider reports inline instead of
+failing the call.  The underlying DEFUNs are
+=cmacs-ai-list-models PROVIDER= and =cmacs-ai-prompt-sync PROMPT
+&optional PROVIDER SYSTEM MODEL=.  D-Bus parity:
+=org.cmacs.Editor1.Ai= (=ListProviders= / =ListModels= / =Prompt= /
+=OpenChat=).
 
 * MCP bridge
 

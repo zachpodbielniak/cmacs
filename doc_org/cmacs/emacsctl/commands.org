@@ -95,7 +95,7 @@ missing subsystem maps to exit code 3 with a clear message.
 | =crispy=    | =eval= (captured stdout), =run= (exit code)                 |
 | =bacon=     | =eval=, =eval-c=, =complete=                                |
 | =eshell=    | =eval=                                                      |
-| =ai=        | =providers=, =prompt=, =chat=                               |
+| =ai=        | =providers=, =models=, =prompt=, =chat=                     |
 | =gsurf=     | =open=, =navigate=, =back=, =forward=, =reload=, =stop=, =url=, =title=, =current=, =list=, =modules=, =js=, =zoom=, =lite=, =text=, =downloads=, =download-cancel=, =snapshot=, =pdf=, =permission= |
 | =gnuseye=   | =open=, =brief=, =layers=, =toggle=, =fly-to=, =refresh=, =query=, =geofence=, =cii= |
 | =pod=       | =status=, =pods=, =modules=, =stats=, =emit=, =eval=, =repl-eval=, =load=, =reload=, =set-context= |
@@ -105,6 +105,39 @@ missing subsystem maps to exit code 3 with a clear message.
 | =lrg=       | =open=, =play=, =stop=, =save=, =tree=, =select=, =move=, =delete=, =add-primitive=, =add-visual= |
 | =compositor=| =clients=, =focused=, =spawn=, =find=, =focus=, =close=, =geometry=, =layout=, =workspaces=, =workspace=, =screenshot=, =keybinds=, =mfact=, =nmaster=, =tags=, =lock=, =unlock=, =reload=, =config= |
 | =monitor=   | =list=, =info=, =modes=, =set-mode=, =position=, =set-position=, =enable=, =scale=, =transform= |
+
+* AI: =ai prompt= / =ai models= / =ai chat=
+
+The ai verbs take provider, model, and system prompt as flags
+(=-p/--provider=, =-m/--model=, =-s/--system=) instead of positional
+slots.  =ai prompt= composes its text from positionals, stdin, and
+=-f/--file= attachments (repeatable; each file is appended with a
+=--- FILE: name ---= header so the model can tell sources apart):
+
+#+begin_src sh
+  emacsctl ai prompt 'why is the sky blue?'
+  emacsctl ai prompt -p ollama -m llama3.2 'one-liner: rsync a dir'
+  git diff | emacsctl ai prompt -s 'Review this diff for bugs'
+  emacsctl ai prompt -f main.c -f util.c 'find the bug'
+
+  emacsctl ai models                      # provider/model table, all
+  emacsctl ai models -p claude            # one provider
+  emacsctl ai models -p ollama -o json    # {"ollama": ["llama3.2", ...]}
+
+  emacsctl ai chat -p claude -m claude-opus-4-8 'hello'
+#+end_src
+
+=ai models= renders a provider/model table; =-o json= / =-o yaml=
+emit the provider→models map as structured data.  Without =-p= every
+provider is queried (API providers over the network, CLI providers
+from static tables) and unavailable ones report inline, so the call
+never fails outright --- but it can take a while; =-p= keeps it
+fast.  The model names that =ai models= prints are exactly what
+=-m/--model= accepts.
+
+The underlying typed methods are =Editor1.Ai= =Prompt= /
+=ListModels= / =OpenChat=, with MCP parity via =ai_prompt= /
+=ai_list_models= / =ai_open_chat=.
 
 * Org buffers: =text insert-org=
 
