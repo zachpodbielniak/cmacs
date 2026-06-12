@@ -1012,10 +1012,13 @@ dnl configure check only gates the build and surfaces missing deps
 dnl early.  The sub-Makefile self-probes optional readline.
 CMACS_EMACSCTL_BIN=
 if test "$with_cmacs_emacsctl" != "no"; then
+  dnl yaml-glib is statically vendored from deps/bacon/deps/yaml-glib
+  dnl (the same sources the bacon archive compiles into src/emacs), so
+  dnl only libyaml (yaml-0.1) is required from the system.
   PKG_CHECK_MODULES([CMACS_EMACSCTL],
-    [glib-2.0 gobject-2.0 gio-2.0 gio-unix-2.0 json-glib-1.0 yaml-glib-1.0],
+    [glib-2.0 gobject-2.0 gio-2.0 gio-unix-2.0 json-glib-1.0 yaml-0.1],
     [],
-    [AC_MSG_ERROR([--with-cmacs-emacsctl requires glib-2.0 gobject-2.0 gio-2.0 gio-unix-2.0 json-glib-1.0 yaml-glib-1.0 (pkg-config)])])
+    [AC_MSG_ERROR([--with-cmacs-emacsctl requires glib-2.0 gobject-2.0 gio-2.0 gio-unix-2.0 json-glib-1.0 yaml-0.1 (pkg-config)])])
   AC_DEFINE([HAVE_CMACS_EMACSCTL], 1,
     [Build the emacsctl/cmacsctl control client])
   CMACS_EMACSCTL_BIN="emacsctl"

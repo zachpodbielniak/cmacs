@@ -34,6 +34,7 @@ All CMacs features are auto-detected.  You can force them on or off:
 | =--with-cmacs-mcp=            | MCP server for AI-native control        |
 | =--with-cmacs-video=          | GStreamer video overlay + =#+BEGIN_VIDEO= blocks |
 | =--with-cmacs-cintrospect=    | Runtime C self-introspection (libdw+JIT)|
+| =--with-cmacs-emacsctl=       | emacsctl/cmacsctl CLI (standalone binary)|
 | =--enable-cmacs-cpatch=       | Runtime C hot-patching (DANGEROUS)      |
 
 Example with explicit flags:
@@ -68,6 +69,7 @@ Example with explicit flags:
   --with-cmacs-mcp \
   --with-cmacs-video \
   --with-cmacs-cintrospect \
+  --with-cmacs-emacsctl \
   --enable-cmacs-cpatch
 #+end_example
 

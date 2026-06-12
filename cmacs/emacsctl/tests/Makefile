@@ -5,9 +5,23 @@
 
 CC       ?= gcc
 PKGS     := glib-2.0 gobject-2.0 gio-2.0 gio-unix-2.0 \
-            json-glib-1.0 yaml-glib-1.0
+            json-glib-1.0 yaml-0.1
 PKG_CFLAGS := $(shell pkg-config --cflags $(PKGS))
 PKG_LIBS   := $(shell pkg-config --libs $(PKGS))
+
+# Statically vendored yaml-glib, mirroring ../Makefile.
+YAMLGLIB_DIR ?= ../../../deps/bacon/deps/yaml-glib
+YAMLGLIB_SRCS := \
+        $(YAMLGLIB_DIR)/src/yaml-builder.c \
+        $(YAMLGLIB_DIR)/src/yaml-document.c \
+        $(YAMLGLIB_DIR)/src/yaml-generator.c \
+        $(YAMLGLIB_DIR)/src/yaml-gobject.c \
+        $(YAMLGLIB_DIR)/src/yaml-mapping.c \
+        $(YAMLGLIB_DIR)/src/yaml-node.c \
+        $(YAMLGLIB_DIR)/src/yaml-parser.c \
+        $(YAMLGLIB_DIR)/src/yaml-schema.c \
+        $(YAMLGLIB_DIR)/src/yaml-sequence.c \
+        $(YAMLGLIB_DIR)/src/yaml-serializable.c
 
 HAVE_READLINE := $(shell pkg-config --exists readline && echo yes)
 ifeq ($(HAVE_READLINE),yes)
@@ -27,7 +41,7 @@ UNITS := ../ctl-error.c ../ctl-result.c ../ctl-json-yaml.c ../ctl-frame.c \
          ../ctl-formatter-raw.c
 
 CFLAGS += -std=gnu89 -Wall -Wextra -Wno-unused-parameter \
-          -I.. $(PKG_CFLAGS)
+          -I.. -I$(YAMLGLIB_DIR)/src $(PKG_CFLAGS)
 
 .PHONY: check clean
 
@@ -35,7 +49,7 @@ check: test-ctl
 	./test-ctl
 
 test-ctl: test-ctl.c $(UNITS)
-	$(CC) $(CFLAGS) -o $@ test-ctl.c $(UNITS) $(PKG_LIBS)
+	$(CC) $(CFLAGS) -o $@ test-ctl.c $(UNITS) $(YAMLGLIB_SRCS) $(PKG_LIBS)
 
 clean:
 	rm -f test-ctl

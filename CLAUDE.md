@@ -33,7 +33,8 @@ Current upstream touch-points (keep minimal): `process.c` pselect hooks (GLib lo
             --with-modules --with-native-compilation=aot \
             --with-tree-sitter --with-xwidgets \
             --with-cmacs-glib --with-cmacs-gi ... --with-cmacs-gnuseye \
-            --with-cmacs-gsurf --enable-cmacs-cpatch  # full flag set: README.org
+            --with-cmacs-gsurf --with-cmacs-emacsctl \
+            --enable-cmacs-cpatch  # full flag set: README.org
 make -j$(nproc)           # builds deps + emacs
 just run                  # run it
 ```
@@ -79,6 +80,7 @@ C source `cmacs/<name>/`, Elisp `lisp/cmacs/`, tests `test/cmacs/`, docs
 | **cintrospect** | `cmacs/cintrospect/` | Runtime C self-introspection (DWARF + libgccjit JIT). Default-on |
 | **cpatch** | `cmacs/cpatch/` | Runtime C hot-patching (Lisp_Subr swap + detours). Off by default |
 | **libregnum** | `cmacs/libregnum/` | raylib game engine as embedded 3D scene buffers (project tree, gobject graph, mind map). Off by default |
+| **emacsctl** | `cmacs/emacsctl/` | kubectl-style CLI (`emacsctl`/`cmacsctl`) over the D-Bus surface — instances, eval (elisp/crispy/bacon/eshell), REPL, watch/logs, contexts, ssh tunnelling. Standalone binary at `src/emacsctl`, links no Emacs objects |
 | **gnuseye** | `cmacs/gnuseye/` | "GNU's Eye": live planetary situational-awareness globe (satellites/aircraft/vessels/weather/solar-system) rendered through libregnum; data layers defined in Elisp. In the default flag set (`just bootstrap`/Containerfile) |
 
 The large subsystems have non-obvious internals (gsurf's focus-handoff model, libregnum's

@@ -169,6 +169,7 @@ RUN ./autogen.sh \
         --with-cmacs-libregnum \
         --with-cmacs-gnuseye \
         --with-cmacs-gsurf \
+        --with-cmacs-emacsctl \
         --enable-cmacs-cpatch \
     && make -j"$(nproc)" \
     && make install DESTDIR=/build/stage

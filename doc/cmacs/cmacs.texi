@@ -7352,6 +7352,7 @@ fully-featured build matching Fedora defaults, use:
   --with-cmacs-cintrospect \
   --with-cmacs-libregnum \
   --with-cmacs-gsurf \
+  --with-cmacs-emacsctl \
   --enable-cmacs-cpatch
 @end example
 
@@ -7424,6 +7425,11 @@ system-installed @code{bacon-1.0} via pkg-config instead.
   @option{--with-cmacs-audio}
 @item cmacs-whisper (system) @tab whisper
   @tab Offline STT via system @code{whisper.pc}
+@item cmacs-emacsctl @tab glib-2.0 gobject-2.0 gio-2.0
+  gio-unix-2.0 json-glib-1.0 yaml-0.1 (+ optional readline)
+  @tab emacsctl/cmacsctl CLI; yaml-glib is statically vendored from
+  deps/bacon/deps/yaml-glib, so no yaml-glib system package is
+  needed --- only libyaml
 @item cmacs-piper @tab glib-2.0 gio-2.0 gio-unix-2.0
   + @code{piper} on PATH (@code{pipx install piper-tts}) +
   @code{espeak-ng} (runtime)

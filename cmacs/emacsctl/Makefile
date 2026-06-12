@@ -27,9 +27,27 @@ HDRS := ctl.h ctl-ifaces.h ctl-application.h ctl-command.h \
 
 CC       ?= gcc
 PKGS     := glib-2.0 gobject-2.0 gio-2.0 gio-unix-2.0 \
-            json-glib-1.0 yaml-glib-1.0
+            json-glib-1.0 yaml-0.1
 PKG_CFLAGS := $(shell pkg-config --cflags $(PKGS))
 PKG_LIBS   := $(shell pkg-config --libs $(PKGS))
+
+# yaml-glib is statically vendored (same sources the bacon/podomation
+# archives compile into src/emacs), so emacsctl needs no system
+# yaml-glib package --- only libyaml (yaml-0.1 above).  Exactly one
+# copy links into this binary, so the static-library dedup concern
+# from src/Makefile.in does not apply here.
+YAMLGLIB_DIR ?= ../../deps/bacon/deps/yaml-glib
+YAMLGLIB_SRCS := \
+        $(YAMLGLIB_DIR)/src/yaml-builder.c \
+        $(YAMLGLIB_DIR)/src/yaml-document.c \
+        $(YAMLGLIB_DIR)/src/yaml-generator.c \
+        $(YAMLGLIB_DIR)/src/yaml-gobject.c \
+        $(YAMLGLIB_DIR)/src/yaml-mapping.c \
+        $(YAMLGLIB_DIR)/src/yaml-node.c \
+        $(YAMLGLIB_DIR)/src/yaml-parser.c \
+        $(YAMLGLIB_DIR)/src/yaml-schema.c \
+        $(YAMLGLIB_DIR)/src/yaml-sequence.c \
+        $(YAMLGLIB_DIR)/src/yaml-serializable.c
 
 # Optional GNU readline for REPL line editing (fgets fallback).
 HAVE_READLINE := $(shell pkg-config --exists readline && echo yes)
@@ -40,7 +58,7 @@ PKG_LIBS   += $(shell pkg-config --libs readline)
 endif
 
 CFLAGS   += -std=gnu89 -Wall -Wextra -Wno-unused-parameter \
-            -I. $(PKG_CFLAGS)
+            -I. -I$(YAMLGLIB_DIR)/src $(PKG_CFLAGS)
 LDFLAGS  += $(PKG_LIBS)
 
 OUTDIR   ?= .
@@ -50,7 +68,7 @@ OUTDIR   ?= .
 all: $(OUTDIR)/emacsctl $(OUTDIR)/cmacsctl
 
 $(OUTDIR)/emacsctl: $(SRCS) $(HDRS)
-	$(CC) $(CFLAGS) -o $@ $(SRCS) $(LDFLAGS)
+	$(CC) $(CFLAGS) -o $@ $(SRCS) $(YAMLGLIB_SRCS) $(LDFLAGS)
 
 # cmacsctl is the same binary by another name (argv[0]-insensitive).
 $(OUTDIR)/cmacsctl: $(OUTDIR)/emacsctl
