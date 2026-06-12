@@ -91,6 +91,33 @@ gchar *cmacs_dispatch_org_content (const gchar *buffer,
                                    gboolean     include_properties,
                                    GError     **error);
 
+/* Insert TEXT into the org-mode buffer BUFFER, org-aware.  HEADING
+   targets a headline by exact title or by a slash-separated outline
+   path ("Projects/cmacs/Log"); empty inserts relative to the whole
+   buffer.  CREATE makes missing path components.  POSITION is one of
+   "top" (after the entry's meta data), "bottom" (end of the entry's
+   own body, before the first child; the default), "subtree-end", or
+   "point".  WRAP names an org block ("src" with LANG, "quote",
+   "example", "verse", "center", or any custom #+begin_ name); DRAWER
+   wraps in a :DRAWER: drawer; CHILD creates a new child headline
+   (with optional TODO keyword and colon-separated TAGS) whose body
+   is the text; TIMESTAMP prepends an inactive org timestamp.
+   Returns a status string (caller g_frees) or NULL with *ERROR.
+   Shared by D-Bus Edit.InsertOrg and the MCP insert_org tool. */
+gchar *cmacs_dispatch_org_insert (const gchar *buffer,
+                                  const gchar *text,
+                                  const gchar *heading,
+                                  const gchar *position,
+                                  const gchar *wrap,
+                                  const gchar *lang,
+                                  const gchar *drawer,
+                                  const gchar *child,
+                                  const gchar *todo,
+                                  const gchar *tags,
+                                  gboolean     create,
+                                  gboolean     timestamp,
+                                  GError     **error);
+
 /* Open PATH in Emacs via find-file. */
 void cmacs_dispatch_find_file (const gchar *path);
 

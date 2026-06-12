@@ -75,6 +75,46 @@ handle_get_org_content (McpServer *s, const gchar *n,
   return result;
 }
 
+/* ── insert_org ───────────────────────────────────────────────────── */
+
+/* D-Bus parity: Edit.InsertOrg in cmacs-dbus-iface-edit.c (both call
+   cmacs_dispatch_org_insert). */
+static McpToolResult *
+handle_insert_org (McpServer *s, const gchar *n,
+                   JsonObject *a, gpointer u)
+{
+  const gchar *buffer, *text;
+  g_autoptr (GError) error = NULL;
+  g_autofree gchar *status = NULL;
+  McpToolResult *result;
+
+  (void) s; (void) n; (void) u;
+
+  buffer = json_object_get_string_member_with_default (a, "buffer",
+                                                       NULL);
+  text = json_object_get_string_member_with_default (a, "text", NULL);
+  if (buffer == NULL || text == NULL)
+    return edit_error ("Missing required arguments: buffer, text");
+
+  status = cmacs_dispatch_org_insert (
+    buffer, text,
+    json_object_get_string_member_with_default (a, "heading", ""),
+    json_object_get_string_member_with_default (a, "position", ""),
+    json_object_get_string_member_with_default (a, "wrap", ""),
+    json_object_get_string_member_with_default (a, "lang", ""),
+    json_object_get_string_member_with_default (a, "drawer", ""),
+    json_object_get_string_member_with_default (a, "child", ""),
+    json_object_get_string_member_with_default (a, "todo", ""),
+    json_object_get_string_member_with_default (a, "tags", ""),
+    json_object_get_boolean_member_with_default (a, "create", FALSE),
+    json_object_get_boolean_member_with_default (a, "timestamp",
+                                                 FALSE),
+    &error);
+  result = mcp_tool_result_new (status == NULL);
+  mcp_tool_result_add_text (result, status ? status : error->message);
+  return result;
+}
+
 /* ── edit_buffer ──────────────────────────────────────────────────── */
 
 static McpToolResult *
@@ -311,6 +351,50 @@ cmacs_mcp_tools_edit_register (McpServer *server)
   mcp_tool_set_input_schema (tool, schema);
   mcp_tool_set_read_only_hint (tool, TRUE);
   mcp_server_add_tool (server, tool, handle_get_org_content, NULL, NULL);
+  g_object_unref (tool);
+
+  /* insert_org */
+  tool = mcp_tool_new ("insert_org",
+    "Insert text into an org buffer, org-aware: target a headline by "
+    "exact title or slash outline path (creating missing components "
+    "with create), position at the entry's body top/bottom or "
+    "subtree-end, wrap in an org block (src with lang, quote, "
+    "example, verse, center, or a custom name) or a drawer, or file "
+    "it as a new child headline with optional todo keyword and tags. "
+    "timestamp prepends an inactive org timestamp.");
+  schema = cmacs_mcp_schema_from_string (
+    "{\"type\":\"object\",\"properties\":{"
+    "\"buffer\":{\"type\":\"string\",\"description\":\"Buffer name\"},"
+    "\"text\":{\"type\":\"string\",\"description\":\"Text to insert\"},"
+    "\"heading\":{\"type\":\"string\","
+      "\"description\":\"Target headline: exact title, or "
+      "slash-separated outline path like Projects/cmacs/Log\"},"
+    "\"position\":{\"type\":\"string\","
+      "\"enum\":[\"top\",\"bottom\",\"subtree-end\",\"point\"],"
+      "\"description\":\"Where in the entry (default bottom: end of "
+      "the entry's own body, before child headings)\"},"
+    "\"wrap\":{\"type\":\"string\","
+      "\"description\":\"Org block: src, quote, example, verse, "
+      "center, or any custom #+begin_ name\"},"
+    "\"lang\":{\"type\":\"string\","
+      "\"description\":\"Language for wrap=src\"},"
+    "\"drawer\":{\"type\":\"string\","
+      "\"description\":\"Wrap in a :NAME: drawer (e.g. LOGBOOK)\"},"
+    "\"child\":{\"type\":\"string\","
+      "\"description\":\"Create a child headline with this title; "
+      "the text becomes its body\"},"
+    "\"todo\":{\"type\":\"string\","
+      "\"description\":\"TODO keyword for the child headline\"},"
+    "\"tags\":{\"type\":\"string\","
+      "\"description\":\"Colon-separated tags for the child\"},"
+    "\"create\":{\"type\":\"boolean\","
+      "\"description\":\"Create missing heading path components\"},"
+    "\"timestamp\":{\"type\":\"boolean\","
+      "\"description\":\"Prepend an inactive org timestamp\"}"
+    "},\"required\":[\"buffer\",\"text\"]}");
+  mcp_tool_set_input_schema (tool, schema);
+  mcp_tool_set_destructive_hint (tool, FALSE);
+  mcp_server_add_tool (server, tool, handle_insert_org, NULL, NULL);
   g_object_unref (tool);
 
   /* edit_buffer */

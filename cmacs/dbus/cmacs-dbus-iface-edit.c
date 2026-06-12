@@ -67,6 +67,12 @@ static const gchar *iface_xml =
   "      <arg type='b' name='include_properties' direction='in'/>"
   "      <arg type='s' name='json' direction='out'/>"
   "    </method>"
+  "    <method name='InsertOrg'>"
+  "      <arg type='s' name='buffer' direction='in'/>"
+  "      <arg type='s' name='text' direction='in'/>"
+  "      <arg type='a{ss}' name='options' direction='in'/>"
+  "      <arg type='s' name='status' direction='out'/>"
+  "    </method>"
   "  </interface>"
   "</node>";
 
@@ -206,6 +212,73 @@ on_method_call (GDBusConnection *c, const gchar *s, const gchar *o,
       result = cmacs_dispatch_org_content (buf, match, max_depth,
                                            include_body, include_props,
                                            &err);
+      if (result == NULL)
+        {
+          cmacs_dbus_return_gerror (iv, err);
+          return;
+        }
+      g_dbus_method_invocation_return_value (
+        iv, g_variant_new ("(s)", result));
+      g_free (result);
+    }
+  else if (g_strcmp0 (m, "InsertOrg") == 0)
+    {
+      /* MCP parity: insert_org in cmacs-mcp-tools-edit.c (both call
+         cmacs_dispatch_org_insert).  OPTIONS is an a{ss} dict so the
+         surface can grow without signature breaks; unknown keys are
+         ignored.  Recognized: heading, position, wrap, lang, drawer,
+         child, todo, tags, create ("t"/"true"), timestamp. */
+      const gchar *buf, *text;
+      GVariantIter *iter;
+      const gchar *key, *value;
+      gchar *heading = NULL, *position = NULL, *wrap = NULL;
+      gchar *lang = NULL, *drawer = NULL, *child = NULL;
+      gchar *todo = NULL, *tags = NULL;
+      gboolean create = FALSE, timestamp = FALSE;
+      gchar *result;
+      GError *err = NULL;
+
+      g_variant_get (p, "(&s&sa{ss})", &buf, &text, &iter);
+      /* iter_loop borrows; copy --- the values must outlive it. */
+      while (g_variant_iter_loop (iter, "{&s&s}", &key, &value))
+        {
+          if (g_strcmp0 (key, "heading") == 0)
+            { g_free (heading); heading = g_strdup (value); }
+          else if (g_strcmp0 (key, "position") == 0)
+            { g_free (position); position = g_strdup (value); }
+          else if (g_strcmp0 (key, "wrap") == 0)
+            { g_free (wrap); wrap = g_strdup (value); }
+          else if (g_strcmp0 (key, "lang") == 0)
+            { g_free (lang); lang = g_strdup (value); }
+          else if (g_strcmp0 (key, "drawer") == 0)
+            { g_free (drawer); drawer = g_strdup (value); }
+          else if (g_strcmp0 (key, "child") == 0)
+            { g_free (child); child = g_strdup (value); }
+          else if (g_strcmp0 (key, "todo") == 0)
+            { g_free (todo); todo = g_strdup (value); }
+          else if (g_strcmp0 (key, "tags") == 0)
+            { g_free (tags); tags = g_strdup (value); }
+          else if (g_strcmp0 (key, "create") == 0)
+            create = g_strcmp0 (value, "t") == 0
+                  || g_strcmp0 (value, "true") == 0;
+          else if (g_strcmp0 (key, "timestamp") == 0)
+            timestamp = g_strcmp0 (value, "t") == 0
+                     || g_strcmp0 (value, "true") == 0;
+        }
+      g_variant_iter_free (iter);
+
+      result = cmacs_dispatch_org_insert (buf, text, heading, position,
+                                          wrap, lang, drawer, child,
+                                          todo, tags, create, timestamp,
+                                          &err);
+      g_free (heading);
+      g_free (position);
+      g_free (wrap);
+      g_free (lang);
+      g_free (drawer);
+      g_free (child);
+      g_free (todo);
+      g_free (tags);
       if (result == NULL)
         {
           cmacs_dbus_return_gerror (iv, err);

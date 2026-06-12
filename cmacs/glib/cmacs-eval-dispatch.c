@@ -386,6 +386,155 @@ cmacs_dispatch_org_content (const gchar *buffer, const gchar *match,
   return result;
 }
 
+/* The org-aware insertion behind Edit.InsertOrg and the MCP
+   insert_org tool.  Targeting uses org's own resolvers
+   (org-find-exact-headline-in-buffer for a bare title anywhere,
+   org-find-olp for slash paths); missing path components are created
+   bottom-up when CREATE.  The child-heading star count derives from
+   the live target level, which is why this runs in the editor rather
+   than in the client.  %s placeholders are filled with g_strescape'd
+   values; %% survives printf as a literal % for elisp format. */
+static const gchar *org_insert_template =
+  "(with-current-buffer (if (string= \"%s\" \"\")"
+  "                         (current-buffer) \"%s\")"
+  " (require 'org)"
+  " (unless (derived-mode-p 'org-mode)"
+  "   (error \"%%s is not an org-mode buffer\" (buffer-name)))"
+  " (save-excursion"
+  "  (let ((heading \"%s\")"
+  "        (do-create %s)"
+  "        (where \"%s\")"
+  "        (wrap \"%s\")"
+  "        (lang \"%s\")"
+  "        (drawer \"%s\")"
+  "        (child \"%s\")"
+  "        (todo \"%s\")"
+  "        (tags \"%s\")"
+  "        (stamp %s)"
+  "        (body (string-trim-right \"%s\" \"\\n+\"))"
+  "        (target-level 0))"
+  "   (if (string= heading \"\")"
+  "       (cond ((string= where \"top\") (goto-char (point-min)))"
+  "             ((string= where \"point\") nil)"
+  "             (t (goto-char (point-max))))"
+  "     (let* ((comps (split-string heading \"/\" t))"
+  "            (m (or (and (= (length comps) 1)"
+  "                        (org-find-exact-headline-in-buffer"
+  "                         (car comps) (current-buffer)))"
+  "                   (ignore-errors"
+  "                    (org-find-olp comps (current-buffer))))))"
+  "      (when (and (not m) (not do-create))"
+  "        (error \"heading not found: %%s\" heading))"
+  "      (unless m"
+  "       (let ((k (1- (length comps))) (pm nil))"
+  "        (while (and (> k 0)"
+  "                    (not (setq pm (ignore-errors"
+  "                                   (org-find-olp"
+  "                                    (seq-take comps k)"
+  "                                    (current-buffer))))))"
+  "         (setq k (1- k)))"
+  "        (if pm (progn (goto-char pm) (org-end-of-subtree t t))"
+  "          (goto-char (point-max)))"
+  "        (unless (bolp) (insert \"\\n\"))"
+  "        (let ((lvl (1+ k)))"
+  "         (dolist (c (seq-drop comps k))"
+  "          (insert (make-string lvl ?*) \" \" c \"\\n\")"
+  "          (setq lvl (1+ lvl))))"
+  "        (setq m (org-find-olp comps (current-buffer)))))"
+  "      (goto-char m)"
+  "      (setq target-level (org-current-level))"
+  "      (cond"
+  "       ((string= where \"top\") (org-end-of-meta-data t))"
+  "       ((string= where \"subtree-end\") (org-end-of-subtree t t))"
+  "       (t"
+  "        (let ((end (save-excursion (org-end-of-subtree t t)"
+  "                                   (point))))"
+  "         (org-end-of-meta-data t)"
+  "         (if (re-search-forward org-heading-regexp end t)"
+  "             (goto-char (match-beginning 0))"
+  "           (goto-char end)))))))"
+  "   (when stamp"
+  "    (setq body (concat (format-time-string"
+  "                        \"[%%Y-%%m-%%d %%a %%H:%%M]\")"
+  "                       \"\\n\" body)))"
+  "   (cond"
+  "    ((string= wrap \"\") nil)"
+  "    ((string= wrap \"src\")"
+  "     (setq body (concat \"#+begin_src\""
+  "                        (if (string= lang \"\") \"\""
+  "                          (concat \" \" lang))"
+  "                        \"\\n\" body \"\\n#+end_src\")))"
+  "    (t"
+  "     (setq body (concat \"#+begin_\" wrap \"\\n\" body"
+  "                        \"\\n#+end_\" wrap))))"
+  "   (unless (string= drawer \"\")"
+  "    (setq body (concat \":\" (upcase drawer) \":\\n\" body"
+  "                       \"\\n:END:\")))"
+  "   (unless (string= child \"\")"
+  "    (setq body (concat (make-string (1+ target-level) ?*) \" \""
+  "                       (if (string= todo \"\") \"\""
+  "                         (concat todo \" \"))"
+  "                       child"
+  "                       (if (string= tags \"\") \"\""
+  "                         (concat \" :\" tags \":\"))"
+  "                       \"\\n\" body)))"
+  "   (unless (bolp) (insert \"\\n\"))"
+  "   (insert body)"
+  "   (unless (bolp) (insert \"\\n\"))"
+  "   (format \"inserted %%d chars%%s\" (length body)"
+  "           (if (string= heading \"\") \"\""
+  "             (format \" under %%s\" heading))))))";
+
+gchar *
+cmacs_dispatch_org_insert (const gchar *buffer, const gchar *text,
+                           const gchar *heading, const gchar *position,
+                           const gchar *wrap, const gchar *lang,
+                           const gchar *drawer, const gchar *child,
+                           const gchar *todo, const gchar *tags,
+                           gboolean create, gboolean timestamp,
+                           GError **error)
+{
+  gchar *e_buffer, *e_heading, *e_position, *e_wrap, *e_lang;
+  gchar *e_drawer, *e_child, *e_todo, *e_tags, *e_text;
+  gchar *expr;
+  gchar *result;
+
+  e_buffer = g_strescape (buffer != NULL ? buffer : "", NULL);
+  e_heading = g_strescape (heading != NULL ? heading : "", NULL);
+  e_position = g_strescape (position != NULL ? position : "", NULL);
+  e_wrap = g_strescape (wrap != NULL ? wrap : "", NULL);
+  e_lang = g_strescape (lang != NULL ? lang : "", NULL);
+  e_drawer = g_strescape (drawer != NULL ? drawer : "", NULL);
+  e_child = g_strescape (child != NULL ? child : "", NULL);
+  e_todo = g_strescape (todo != NULL ? todo : "", NULL);
+  e_tags = g_strescape (tags != NULL ? tags : "", NULL);
+  e_text = g_strescape (text != NULL ? text : "", NULL);
+
+  expr = g_strdup_printf (org_insert_template,
+                          e_buffer, e_buffer,
+                          e_heading,
+                          create ? "t" : "nil",
+                          e_position,
+                          e_wrap, e_lang, e_drawer,
+                          e_child, e_todo, e_tags,
+                          timestamp ? "t" : "nil",
+                          e_text);
+  g_free (e_buffer);
+  g_free (e_heading);
+  g_free (e_position);
+  g_free (e_wrap);
+  g_free (e_lang);
+  g_free (e_drawer);
+  g_free (e_child);
+  g_free (e_todo);
+  g_free (e_tags);
+  g_free (e_text);
+
+  result = cmacs_dispatch_eval_string (expr, error);
+  g_free (expr);
+  return result;
+}
+
 /* Same waiting_for_input guard as dispatch_safe_eval -- see the
    comment there.  safe_calln's internal condition-case is still
    entered too late to catch an error signaled while

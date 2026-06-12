@@ -94,6 +94,34 @@ a missing subsystem maps to exit code 3 with a clear message:
 @code{speech} (whisper + piper), @code{lrg} (libregnum editor),
 @code{compositor} and @code{monitor} (gowl).
 
+@subsection Org buffers: text insert-org
+
+Org-aware insertion: target a headline (@option{-H} takes an exact
+title at any depth, or a slash outline path like
+@code{Projects/cmacs/Log}; @option{--create} makes missing
+components), choose the spot inside the entry
+(@option{-p top|bottom|subtree-end|point}; bottom --- the default ---
+is the end of the entry's own body, before child headings), wrap the
+text (@option{--quote}, @option{--src LANG}, @option{--example},
+@option{--verse}, @option{--center}, @option{--block NAME},
+@option{--drawer NAME}), or file it as a new child headline
+(@option{--child TITLE} with optional @option{--todo} and
+@option{--tags}).  @option{--timestamp} prepends an inactive org
+timestamp; @option{-e} expands escapes; stdin feeds the text when no
+argument is given.
+
+@example
+emacsctl text insert-org -b notes.org -H 'Projects/cmacs' \
+  --src elisp '(message "hi")'
+git log -1 | emacsctl text insert-org -b notes.org \
+  -H 'Log/2026' --create --child "$(date +%F)" --todo TODO
+@end example
+
+Wrapping composes inside-out: block, then drawer, then the child
+headline.  The underlying typed method is
+@code{Editor1.Edit.InsertOrg} (options travel as an extensible
+string dict), with MCP parity via the @code{insert_org} tool.
+
 @subsection Org buffers: get content-org
 
 @code{get content BUFFER} prints a buffer verbatim.  For org-mode

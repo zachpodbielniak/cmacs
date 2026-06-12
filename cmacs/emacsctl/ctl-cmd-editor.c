@@ -203,6 +203,191 @@ cmd_text_insert (CtlCommand *self, CtlInvocation *inv, GError **error)
   return text_insert_or_append (inv, "Insert", error);
 }
 
+/* ── text insert-org ────────────────────────────────────────────────
+ *
+ * Org-aware insertion: target a headline (by exact title or a slash
+ * outline path), pick the spot inside the entry, and optionally wrap
+ * the text in an org block / drawer or file it as a new child
+ * headline.  The org work happens in the editor via
+ * Edit.InsertOrg(buffer, text, a{ss} options):
+ *
+ *   emacsctl text insert-org -b notes.org -H 'Projects/cmacs' \
+ *     --src elisp '(message "hi")'
+ *   git log -1 | emacsctl text insert-org -b notes.org \
+ *     -H 'Log' --create --child "$(date +%F)" --timestamp --quote
+ */
+
+static gchar *org_ins_opt_buffer = NULL;
+static gchar *org_ins_opt_heading = NULL;
+static gchar *org_ins_opt_position = NULL;
+static gboolean org_ins_opt_create = FALSE;
+static gboolean org_ins_opt_quote = FALSE;
+static gboolean org_ins_opt_example = FALSE;
+static gboolean org_ins_opt_verse = FALSE;
+static gboolean org_ins_opt_center = FALSE;
+static gchar *org_ins_opt_src = NULL;
+static gchar *org_ins_opt_block = NULL;
+static gchar *org_ins_opt_drawer = NULL;
+static gchar *org_ins_opt_child = NULL;
+static gchar *org_ins_opt_todo = NULL;
+static gchar *org_ins_opt_tags = NULL;
+static gboolean org_ins_opt_timestamp = FALSE;
+static gboolean org_ins_opt_escapes = FALSE;
+
+static const GOptionEntry org_ins_entries[] = {
+  { "buffer", 'b', 0, G_OPTION_ARG_STRING, &org_ins_opt_buffer,
+    "Target org buffer (default: the editor's current buffer)",
+    "NAME" },
+  { "heading", 'H', 0, G_OPTION_ARG_STRING, &org_ins_opt_heading,
+    "Target headline: exact title, or a slash outline path like "
+    "'Projects/cmacs/Log'", "PATH" },
+  { "create", 'C', 0, G_OPTION_ARG_NONE, &org_ins_opt_create,
+    "Create missing heading path components", NULL },
+  { "position", 'p', 0, G_OPTION_ARG_STRING, &org_ins_opt_position,
+    "Where in the entry: top, bottom (default), subtree-end, "
+    "or point", "POS" },
+  { "quote", 'q', 0, G_OPTION_ARG_NONE, &org_ins_opt_quote,
+    "Wrap in #+begin_quote", NULL },
+  { "src", 's', 0, G_OPTION_ARG_STRING, &org_ins_opt_src,
+    "Wrap in #+begin_src LANG", "LANG" },
+  { "example", 0, 0, G_OPTION_ARG_NONE, &org_ins_opt_example,
+    "Wrap in #+begin_example", NULL },
+  { "verse", 0, 0, G_OPTION_ARG_NONE, &org_ins_opt_verse,
+    "Wrap in #+begin_verse", NULL },
+  { "center", 0, 0, G_OPTION_ARG_NONE, &org_ins_opt_center,
+    "Wrap in #+begin_center", NULL },
+  { "block", 0, 0, G_OPTION_ARG_STRING, &org_ins_opt_block,
+    "Wrap in a custom #+begin_NAME block", "NAME" },
+  { "drawer", 0, 0, G_OPTION_ARG_STRING, &org_ins_opt_drawer,
+    "Wrap in a :NAME: drawer (e.g. LOGBOOK)", "NAME" },
+  { "child", 'c', 0, G_OPTION_ARG_STRING, &org_ins_opt_child,
+    "File as a new child headline with this title; the text "
+    "becomes its body", "TITLE" },
+  { "todo", 0, 0, G_OPTION_ARG_STRING, &org_ins_opt_todo,
+    "TODO keyword for --child (e.g. TODO, DONE)", "KEYWORD" },
+  { "tags", 0, 0, G_OPTION_ARG_STRING, &org_ins_opt_tags,
+    "Colon-separated tags for --child (e.g. work:cli)", "TAGS" },
+  { "timestamp", 't', 0, G_OPTION_ARG_NONE, &org_ins_opt_timestamp,
+    "Prepend an inactive org timestamp", NULL },
+  { "escapes", 'e', 0, G_OPTION_ARG_NONE, &org_ins_opt_escapes,
+    "Interpret backslash escapes in TEXT like `echo -e'", NULL },
+  { NULL, 0, 0, 0, NULL, NULL, NULL }
+};
+
+static gint
+cmd_text_insert_org (CtlCommand *self, CtlInvocation *inv,
+                     GError **error)
+{
+  const gchar *arg = ctl_invocation_get_arg (inv, 0);
+  gchar *from_stdin = NULL;
+  gchar *expanded = NULL;
+  const gchar *wrap = NULL;
+  GVariantBuilder opts;
+  CtlTransport *transport;
+  GVariant *reply;
+  const gchar *status;
+  CtlResult *result;
+  gboolean ok;
+  gint n_wraps = 0;
+
+  (void) self;
+
+  /* Exactly one block wrapping may be chosen. */
+  if (org_ins_opt_quote)   { wrap = "quote";   n_wraps++; }
+  if (org_ins_opt_example) { wrap = "example"; n_wraps++; }
+  if (org_ins_opt_verse)   { wrap = "verse";   n_wraps++; }
+  if (org_ins_opt_center)  { wrap = "center";  n_wraps++; }
+  if (org_ins_opt_src != NULL)   { wrap = "src"; n_wraps++; }
+  if (org_ins_opt_block != NULL) { wrap = org_ins_opt_block; n_wraps++; }
+  if (n_wraps > 1)
+    {
+      g_set_error (error, CTL_ERROR, CTL_ERROR_USAGE,
+                   "choose at most one of --quote, --src, --example, "
+                   "--verse, --center, --block");
+      return CTL_EXIT_USAGE;
+    }
+  if ((org_ins_opt_todo != NULL || org_ins_opt_tags != NULL)
+      && org_ins_opt_child == NULL)
+    {
+      g_set_error (error, CTL_ERROR, CTL_ERROR_USAGE,
+                   "--todo/--tags only apply with --child TITLE");
+      return CTL_EXIT_USAGE;
+    }
+
+  if (arg == NULL)
+    {
+      from_stdin = text_read_stdin ();
+      if (*from_stdin == '\0')
+        {
+          g_free (from_stdin);
+          g_set_error (error, CTL_ERROR, CTL_ERROR_USAGE,
+                       "no text given and stdin was empty "
+                       "(see 'text insert-org --help')");
+          return CTL_EXIT_USAGE;
+        }
+      arg = from_stdin;
+    }
+  if (org_ins_opt_escapes)
+    {
+      expanded = text_expand_escapes (arg);
+      arg = expanded;
+    }
+
+  g_variant_builder_init (&opts, G_VARIANT_TYPE ("a{ss}"));
+  if (org_ins_opt_heading != NULL)
+    g_variant_builder_add (&opts, "{ss}", "heading",
+                           org_ins_opt_heading);
+  if (org_ins_opt_position != NULL)
+    g_variant_builder_add (&opts, "{ss}", "position",
+                           org_ins_opt_position);
+  if (wrap != NULL)
+    g_variant_builder_add (&opts, "{ss}", "wrap", wrap);
+  if (org_ins_opt_src != NULL)
+    g_variant_builder_add (&opts, "{ss}", "lang", org_ins_opt_src);
+  if (org_ins_opt_drawer != NULL)
+    g_variant_builder_add (&opts, "{ss}", "drawer",
+                           org_ins_opt_drawer);
+  if (org_ins_opt_child != NULL)
+    g_variant_builder_add (&opts, "{ss}", "child", org_ins_opt_child);
+  if (org_ins_opt_todo != NULL)
+    g_variant_builder_add (&opts, "{ss}", "todo", org_ins_opt_todo);
+  if (org_ins_opt_tags != NULL)
+    g_variant_builder_add (&opts, "{ss}", "tags", org_ins_opt_tags);
+  if (org_ins_opt_create)
+    g_variant_builder_add (&opts, "{ss}", "create", "t");
+  if (org_ins_opt_timestamp)
+    g_variant_builder_add (&opts, "{ss}", "timestamp", "t");
+
+  transport = ctl_invocation_get_transport (inv, error);
+  if (transport == NULL)
+    {
+      g_variant_builder_clear (&opts);
+      g_free (from_stdin);
+      g_free (expanded);
+      return CTL_EXIT_NO_INSTANCE;
+    }
+
+  reply = ctl_transport_call (
+    transport, CTL_IFACE_EDIT, "InsertOrg",
+    g_variant_new ("(ssa{ss})",
+                   org_ins_opt_buffer != NULL ? org_ins_opt_buffer
+                                              : "",
+                   arg,
+                   &opts),
+    ctl_invocation_get_timeout_ms (inv), error);
+  g_free (from_stdin);
+  g_free (expanded);
+  if (reply == NULL)
+    return ctl_exit_code_for_error (error != NULL ? *error : NULL);
+
+  g_variant_get (reply, "(&s)", &status);
+  result = ctl_result_new_scalar (status);
+  ok = ctl_invocation_emit (inv, result, error);
+  ctl_result_unref (result);
+  g_variant_unref (reply);
+  return ok ? CTL_EXIT_OK : CTL_EXIT_ERROR;
+}
+
 static gint
 cmd_text_append (CtlCommand *self, CtlInvocation *inv, GError **error)
 {
@@ -524,6 +709,12 @@ ctl_cmd_editor_register (CtlCommandRegistry *registry)
     ctl_simple_command_new_with_options (
       "text insert", "Insert text at point (stdin when no TEXT)",
       "[TEXT]", text_entries, cmd_text_insert));
+  ctl_command_registry_add (registry,
+    ctl_simple_command_new_with_options (
+      "text insert-org",
+      "Org-aware insert: target a headline, wrap in blocks/drawers, "
+      "or file as a child entry (stdin when no TEXT)",
+      "[TEXT]", org_ins_entries, cmd_text_insert_org));
   ctl_command_registry_add (registry,
     ctl_simple_command_new_with_options (
       "text append", "Append text to a buffer (stdin when no TEXT)",

@@ -331,6 +331,50 @@ D-Bus service can dispatch the inbound calls."
                                        (buffer-string)))))
         (ignore-errors (kill-buffer buf))))))
 
+(ert-deftest cmacs-emacsctl-text-insert-org ()
+  "text insert-org targets headlines, wraps blocks, files children."
+  (skip-unless (cmacs-emacsctl-tests--available-p))
+  (cmacs-emacsctl-tests--with-service
+    (let ((buf "*ctl-insert-org*"))
+      (unwind-protect
+          (progn
+            (with-current-buffer (get-buffer-create buf)
+              (erase-buffer)
+              (insert "* Top\nbody\n** Child\n* Other\n")
+              (org-mode))
+            ;; Body insert lands before the first child heading.
+            (should (= 0 (car (cmacs-emacsctl-tests--run
+                               "text" "insert-org" "-b" buf
+                               "-H" "Top" "added"))))
+            (should (string-match-p "body\nadded\n\\*\\* Child"
+                                    (with-current-buffer buf
+                                      (buffer-string))))
+            ;; src wrapping with a language.
+            (should (= 0 (car (cmacs-emacsctl-tests--run
+                               "text" "insert-org" "-b" buf
+                               "-H" "Other" "--src" "sh" "ls"))))
+            (should (string-match-p
+                     "#\\+begin_src sh\nls\n#\\+end_src"
+                     (with-current-buffer buf (buffer-string))))
+            ;; --create + --child + --todo under a new path.
+            (should (= 0 (car (cmacs-emacsctl-tests--run
+                               "text" "insert-org" "-b" buf
+                               "-H" "Log/2026" "--create"
+                               "--child" "Entry" "--todo" "TODO"
+                               "note"))))
+            (should (string-match-p
+                     "\\* Log\n\\*\\* 2026\n\\*\\*\\* TODO Entry\nnote"
+                     (with-current-buffer buf (buffer-string))))
+            ;; Missing heading without --create errors (exit 1).
+            (should (= 1 (car (cmacs-emacsctl-tests--run
+                               "text" "insert-org" "-b" buf
+                               "-H" "Nope" "x"))))
+            ;; Conflicting wrap flags are a usage error.
+            (should (= 2 (car (cmacs-emacsctl-tests--run
+                               "text" "insert-org" "-b" buf
+                               "--quote" "--example" "x")))))
+        (ignore-errors (kill-buffer buf))))))
+
 (ert-deftest cmacs-emacsctl-text-stdin ()
   "text insert reads from stdin when no TEXT argument is given."
   (skip-unless (cmacs-emacsctl-tests--available-p))

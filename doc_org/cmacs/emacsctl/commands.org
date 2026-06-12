@@ -106,6 +106,50 @@ missing subsystem maps to exit code 3 with a clear message.
 | =compositor=| =clients=, =focused=, =spawn=, =find=, =focus=, =close=, =geometry=, =layout=, =workspaces=, =workspace=, =screenshot=, =keybinds=, =mfact=, =nmaster=, =tags=, =lock=, =unlock=, =reload=, =config= |
 | =monitor=   | =list=, =info=, =modes=, =set-mode=, =position=, =set-position=, =enable=, =scale=, =transform= |
 
+* Org buffers: =text insert-org=
+
+Org-aware insertion: target a headline, choose the spot inside the
+entry, wrap the text, or file it as a new child entry.  The text
+comes from the argument or stdin; =-e= expands escapes like
+=echo -e=.
+
+#+begin_src sh
+  # Code block under a nested section (slash outline path):
+  emacsctl text insert-org -b notes.org -H 'Projects/cmacs' \
+    --src elisp '(message "hi")'
+
+  # Journal: create the path if missing, file a TODO child entry
+  # with tags and an inactive timestamp, body from a pipeline:
+  git log -1 --oneline | emacsctl text insert-org -b notes.org \
+    -H 'Log/2026' --create --child "$(date +%F)" \
+    --todo TODO --tags log:daily --timestamp
+
+  # Quote at the top of an entry's body:
+  emacsctl text insert-org -b notes.org -H Inbox -p top \
+    --quote 'wise words'
+#+end_src
+
+| Flag                  | Meaning                                       |
+|-----------------------+-----------------------------------------------|
+| =-H=, =--heading PATH= | exact title (any depth), or slash path like =Projects/cmacs/Log= |
+| =-C=, =--create=      | create missing path components                |
+| =-p=, =--position POS= | =top=, =bottom= (default: end of the entry's own body, before child headings), =subtree-end=, =point= |
+| =-q=, =--quote=       | wrap in =#+begin_quote=                       |
+| =-s=, =--src LANG=    | wrap in =#+begin_src LANG=                    |
+| =--example= / =--verse= / =--center= | the other standard blocks      |
+| =--block NAME=        | any custom =#+begin_NAME= block               |
+| =--drawer NAME=       | wrap in a =:NAME:= drawer (e.g. LOGBOOK)      |
+| =-c=, =--child TITLE= | new child headline; the text becomes its body |
+| =--todo KEYWORD=      | TODO keyword for the child                    |
+| =--tags TAGS=         | colon-separated tags for the child            |
+| =-t=, =--timestamp=   | prepend an inactive org timestamp             |
+| =-e=, =--escapes=     | expand backslash escapes                      |
+
+Wrapping composes inside-out: block, then drawer, then the child
+headline.  The underlying typed method is =Editor1.Edit.InsertOrg=
+(options travel as an extensible string dict), with MCP parity via
+the =insert_org= tool.
+
 * Org buffers: =get content-org=
 
 =get content BUFFER= prints a buffer verbatim.  For org-mode buffers,
