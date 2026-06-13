@@ -76,9 +76,26 @@
   "Number of perimeter (wall) loops."
   :type 'integer)
 
+(defcustom cmacs-cad-slicer-first-layer-height 0.2
+  "First-layer height in millimetres (thicker often improves bed adhesion)."
+  :type 'number)
+
 (defcustom cmacs-cad-slicer-supports nil
   "Whether to generate support material."
   :type 'boolean)
+
+(defcustom cmacs-cad-slicer-support-style 'grid
+  "Support material style.
+`organic' is PrusaSlicer's tree-style support (2.7+); `grid' and `snug'
+are the classic styles.  Only takes effect when supports are enabled."
+  :type '(choice (const :tag "Grid (classic)" grid)
+                 (const :tag "Snug" snug)
+                 (const :tag "Organic / tree (PrusaSlicer 2.7+)" organic)))
+
+(defcustom cmacs-cad-slicer-support-threshold 0
+  "Overhang angle (degrees from horizontal) above which supports are
+generated; 0 lets the slicer decide automatically."
+  :type 'integer)
 
 (defcustom cmacs-cad-slicer-brim-width 0
   "Brim width in millimetres (0 disables the brim)."
@@ -95,46 +112,83 @@ flatpak backends (which can only see the home filesystem)."
   "Flatpak application id for PrusaSlicer (fallback when no native binary)."
   :type 'string)
 
+(defcustom cmacs-cad-slicer-prusa-program nil
+  "Override for how PrusaSlicer is invoked.
+nil auto-detects (native binary, then the flatpak in the system and the
+per-user installations, first one found).  A string runs that program
+directly.  A list is a full base command, e.g.
+\(\"flatpak\" \"run\" \"--command=prusa-slicer\" \"com.prusa3d.PrusaSlicer\")."
+  :type '(choice (const :tag "Auto-detect" nil)
+                 (string :tag "Program / path")
+                 (repeat :tag "Command + base args" string)))
+
 ;;; PrusaSlicer backend
 
+(defun cmacs-cad-slicer--flatpak-has-p (id &optional user)
+  "Return non-nil if flatpak application ID is installed.
+With USER non-nil, probe the per-user installation (`flatpak --user')."
+  (and (executable-find "flatpak")
+       (ignore-errors
+         (with-temp-buffer
+           (eq 0 (apply #'call-process "flatpak" nil t nil
+                        (append (when user '("--user")) (list "info" id))))))))
+
 (defun cmacs-cad-slicer--prusa-resolve ()
-  "Resolve PrusaSlicer to (PROGRAM . BASE-ARGS): native binary or flatpak."
+  "Resolve PrusaSlicer to (PROGRAM . BASE-ARGS).
+Order: `cmacs-cad-slicer-prusa-program' override, then a native binary, then
+the flatpak in the system installation, then the per-user installation; the
+first found wins.  (`flatpak run' itself resolves either install space, but
+detection probes both.)"
   (cond
-   ((executable-find "prusa-slicer")
-    (cons "prusa-slicer" nil))
-   ((executable-find "PrusaSlicer")
-    (cons "PrusaSlicer" nil))
-   ((and (executable-find "flatpak")
-         (ignore-errors
-           (with-temp-buffer
-             (and (= 0 (call-process "flatpak" nil t nil "info"
-                                     cmacs-cad-slicer-prusa-flatpak-id))
-                  t))))
-    (cons "flatpak"
-          (list "run"
-                (concat "--command=prusa-slicer")
-                cmacs-cad-slicer-prusa-flatpak-id)))
+   ;; Explicit override.
+   ((stringp cmacs-cad-slicer-prusa-program)
+    (cons cmacs-cad-slicer-prusa-program nil))
+   ((consp cmacs-cad-slicer-prusa-program)
+    (cons (car cmacs-cad-slicer-prusa-program)
+          (cdr cmacs-cad-slicer-prusa-program)))
+   ;; Native binary.
+   ((executable-find "prusa-slicer") (cons "prusa-slicer" nil))
+   ((executable-find "PrusaSlicer")  (cons "PrusaSlicer" nil))
+   ;; Flatpak: system installation.
+   ((cmacs-cad-slicer--flatpak-has-p cmacs-cad-slicer-prusa-flatpak-id)
+    (cons "flatpak" (list "run" "--command=prusa-slicer"
+                          cmacs-cad-slicer-prusa-flatpak-id)))
+   ;; Flatpak: per-user installation.
+   ((cmacs-cad-slicer--flatpak-has-p cmacs-cad-slicer-prusa-flatpak-id t)
+    (cons "flatpak" (list "run" "--user" "--command=prusa-slicer"
+                          cmacs-cad-slicer-prusa-flatpak-id)))
    (t nil)))
 
 (cmacs-cad-slicer-register
  (cmacs-cad-slicer-backend-create
   :name 'prusa
   :resolve #'cmacs-cad-slicer--prusa-resolve
-  :param-map '((layer-height . "layer_height")
-               (infill       . "fill_density")
-               (perimeters   . "perimeters")
-               (supports     . "support_material")
-               (brim-width   . "brim_width"))))
+  :param-map '((layer-height       . "layer_height")
+               (first-layer-height . "first_layer_height")
+               (infill             . "fill_density")
+               (perimeters         . "perimeters")
+               (supports           . "support_material")
+               (support-style      . "support_material_style")
+               (support-threshold  . "support_material_threshold")
+               (brim-width         . "brim_width"))))
 
 ;;; ini merge
 
 (defun cmacs-cad-slicer--common-params ()
   "Return an alist of (common-key . VALUE) from the defcustoms."
-  (list (cons 'layer-height cmacs-cad-slicer-layer-height)
-        (cons 'infill (format "%d%%" cmacs-cad-slicer-infill))
-        (cons 'perimeters cmacs-cad-slicer-perimeters)
-        (cons 'supports (if cmacs-cad-slicer-supports 1 0))
-        (cons 'brim-width cmacs-cad-slicer-brim-width)))
+  (append
+   (list (cons 'layer-height cmacs-cad-slicer-layer-height)
+         (cons 'first-layer-height cmacs-cad-slicer-first-layer-height)
+         (cons 'infill (format "%d%%" cmacs-cad-slicer-infill))
+         (cons 'perimeters cmacs-cad-slicer-perimeters)
+         (cons 'supports (if cmacs-cad-slicer-supports 1 0))
+         (cons 'brim-width cmacs-cad-slicer-brim-width))
+   ;; Support style + overhang threshold only matter when supports are on;
+   ;; emit them anyway (harmless when support_material = 0) so toggling
+   ;; supports per-slice via EXTRA needs no extra plumbing.
+   (list (cons 'support-style
+               (symbol-name cmacs-cad-slicer-support-style))
+         (cons 'support-threshold cmacs-cad-slicer-support-threshold))))
 
 (defun cmacs-cad-slicer--write-overrides-ini (backend path &optional extra)
   "Write the common-param overrides for BACKEND to PATH.
@@ -290,6 +344,42 @@ G-code in the toolpath viewer when slicing finishes."
      (lambda (status out)
        (when (and view (eq status 'done) (file-exists-p out))
          (find-file out))))))
+
+;;; Interactive settings
+
+;;;###autoload
+(defun cmacs-cad-slicer-settings ()
+  "Interactively set the common slicer parameters used by `cmacs-cad-slice'.
+Prompts for layer height, first-layer height, infill, perimeters, supports
+(with style, including organic/tree), and brim, storing them in the slicer
+defcustoms.  Persist them with \\[customize-group] cmacs-cad if desired."
+  (interactive)
+  (setq cmacs-cad-slicer-layer-height
+        (read-number "Layer height (mm): " cmacs-cad-slicer-layer-height))
+  (setq cmacs-cad-slicer-first-layer-height
+        (read-number "First-layer height (mm): "
+                     cmacs-cad-slicer-first-layer-height))
+  (setq cmacs-cad-slicer-infill
+        (round (read-number "Infill (%): " cmacs-cad-slicer-infill)))
+  (setq cmacs-cad-slicer-perimeters
+        (round (read-number "Perimeters (walls): "
+                            cmacs-cad-slicer-perimeters)))
+  (setq cmacs-cad-slicer-supports (y-or-n-p "Generate supports? "))
+  (when cmacs-cad-slicer-supports
+    (setq cmacs-cad-slicer-support-style
+          (intern (completing-read
+                   "Support style: " '("grid" "snug" "organic") nil t nil nil
+                   (symbol-name cmacs-cad-slicer-support-style)))))
+  (setq cmacs-cad-slicer-brim-width
+        (read-number "Brim width (mm, 0 = none): "
+                     cmacs-cad-slicer-brim-width))
+  (message
+   "Slicer: %.2fmm layers (first %.2f) · %d%% infill · %d walls · supports %s%s"
+   cmacs-cad-slicer-layer-height cmacs-cad-slicer-first-layer-height
+   cmacs-cad-slicer-infill cmacs-cad-slicer-perimeters
+   (if cmacs-cad-slicer-supports "on" "off")
+   (if cmacs-cad-slicer-supports
+       (format " (%s)" cmacs-cad-slicer-support-style) "")))
 
 (provide 'cmacs-cad-slicer)
 ;;; cmacs-cad-slicer.el ends here
