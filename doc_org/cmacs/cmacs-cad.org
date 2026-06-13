@@ -177,12 +177,97 @@ the section's segment count and perimeter; the underlying
 
 Visiting an =.stl=, =.obj=, =.step=/=.stp=, =.iges=/=.igs= or =.3mf=
 file enters =cmacs-cad-model-mode=: it imports the geometry through
-cad-glib and renders it as a CAD_PART in the libregnum editor beside a
-small info panel (format, triangle count, watertightness, overall
-size).  Binary STL and B-rep STEP both render this way — the import goes
-through cad-glib's own reader + =grl_model_new_from_mesh=, never raylib's
-file loader.  This is the same path the editor's =Import STL/STEP=
-palette action and the G-code viewer use.
+cad-glib and renders it as a CAD_PART in the libregnum editor.  Binary
+STL and B-rep STEP both render this way — the import goes through
+cad-glib's own reader + =grl_model_new_from_mesh=, never raylib's file
+loader.  This is the same path the editor's =Import STL/STEP= palette
+action and the G-code viewer use.
+
+The window is a *print-prep workbench*: a narrow settings sidebar on the
+left (=cmacs-cad-model-panel-width=, default 42 columns) and the 3-D
+viewport filling the rest of the frame.  The camera frames the model
+once its geometry has baked, so a model authored far from the origin is
+still centred in view.
+
+** Orientation and the build plate
+
+STL and other mesh files are authored *Z-up* (the 3-D-printing
+convention) while the viewport is Y-up, so the model is turned a
+quarter-turn automatically to *stand upright*
+(=cmacs-cad-model-orient-z-up=, default on; set nil for models already
+authored Y-up).  A *build-plate plane* sized to the configured bed
+footprint sits under the model (=cmacs-cad-model-bed-x= / =-bed-y=,
+default 250×210 mm; =cmacs-cad-model-toggle-bed= hides/shows it).  The
+display turn is *cosmetic only* — it never reaches exported geometry
+(see [[*Slicing][Slicing]]).
+
+** The settings panel
+
+The left sidebar shows the model's facts (triangle count, watertightness
+and size, one per line) and the print settings as *clickable values*.
+Click a value — or move point onto it and press =RET= — and it prompts
+for (or toggles) the new value and applies it *immediately*:
+
+| Setting           | Controls                                               |
+|-------------------+--------------------------------------------------------|
+| Bed X / Bed Y     | the build-plate footprint (=cmacs-cad-model-bed-x/-y=) |
+| Build plate       | show / hide the plate                                  |
+| Layer / 1st layer | =cmacs-cad-slicer-layer-height= / =-first-layer-height= |
+| Infill / Walls    | =-infill= / =-perimeters=                              |
+| Supports / Style  | =-supports= / =-support-style= (grid / snug / organic) |
+| Brim              | =-brim-width=                                          |
+| Slicer            | =cmacs-cad-slicer-prusa-program= override (blank = auto) |
+
+Bed changes update the viewport at once.  Buttons at the bottom mirror
+the keys: =[ Export G-code ]=, =[ Add STL… ]=, =[ Reload ]=.  =C-c C-c=
+(=cmacs-cad-model-apply-settings=) re-syncs the build plate and repaints.
+(The panel is built from `button.el', so mouse and =RET= work reliably —
+it is not an editable widget form.)
+
+** Keys and the right-click menu
+
+| Key         | Action                                          |
+|-------------+-------------------------------------------------|
+| =G=         | export to G-code and open the toolpath viewer   |
+| =S=         | edit slicer settings in the minibuffer          |
+| =i=         | insert another model file                       |
+| =x= / =DEL= | delete the selected part                        |
+| =b= / =B=   | set bed size / toggle the build plate           |
+| =e=         | toggle shaded edges                             |
+| =g=         | reload the model from disk                      |
+| =q=         | quit the viewer                                 |
+
+=x=, =DEL= and =i= work from *either* pane (the viewport or the sidebar).
+Right-clicking the model gives the editor's own node actions (Duplicate,
+Rotate, Scale, Cut/Copy, *Delete*, …) plus a *print section*: an
+=Insert ▸= submenu, Export G-code, Slicer settings, a Supports submenu
+(toggle + style), Set bed size and Toggle bed.  Mouse orbit/pan/zoom work
+over the viewport as usual.  (The print actions are contributed through
+the editor's generic, buffer-local =cmacs-libregnum-editor-extra-menu-items=
+hook, so the editor core stays subsystem-agnostic; a menu action runs in
+the editor's buffer so commands like =Delete= work from the sidebar too.)
+
+** Adding and removing models
+
+The viewer holds *one or more* parts on the plate.  Add another model
+four ways — the =i= key, the =[ Add STL… ]= button, right-click
+=Insert ▸=, or *dragging a model file onto the viewport* — and it imports
+beside the others.  Opening another model file while a viewer is open
+(=find-file=) also adds it to that viewer rather than starting a second
+one, since the libregnum editor is a single shared instance.  Inserted
+parts are always placed *on* the build plate and offset to one side,
+*never under it*; once the plate is full they spill off the edge.
+Browsing a file picker only inserts on =RET= — a preview pass over
+candidates never adds them.  Delete the selected part with =x= / =DEL=
+(or right-click → Delete).
+
+*Export G-code* (=cmacs-cad-model-export-gcode=) slices the model with
+the current settings and opens the result in the [[*G-code viewer][toolpath
+viewer]].  It always uses the model's *original* orientation, not the
+display turn, so the print comes out exactly as the file was authored —
+an STL is sliced as a byte-identical copy (also placing it under =$HOME=
+for a flatpak slicer), and B-rep input is exported to STL through a plain
+=import= with no rotation.
 
 * G-code viewer
 
@@ -232,24 +317,37 @@ Elisp directly.
 
 =cmacs-cad-slice-part= exports the current part to STL and slices it to
 G-code with an external slicer; with a prefix arg it opens the result in
-the [[*G-code viewer][toolpath viewer]].  The default backend is
-PrusaSlicer (native =prusa-slicer= binary, else the
-=com.prusa3d.PrusaSlicer= flatpak).
+the [[*G-code viewer][toolpath viewer]].  (From the mesh viewer, =G= /
+=cmacs-cad-model-export-gcode= does the same for the viewed file.)
+=cmacs-cad-slicer-settings= edits the common parameters in the
+minibuffer; the mesh viewer's settings panel edits the same defcustoms.
+
+The default backend is PrusaSlicer, resolved in this order (first found
+wins): a native =prusa-slicer=/=PrusaSlicer= binary, then the
+=com.prusa3d.PrusaSlicer= flatpak in the *system* installation, then in
+the *per-user* (=flatpak --user=) installation.  Override the whole
+invocation with =cmacs-cad-slicer-prusa-program= — a program/path
+string, or a full =(PROGRAM ARG…)= command.
 
 Rather than a fragile flag soup, the slicer *merges an overrides ini* on
 top of your base profile — =prusa-slicer --load base.ini --load
 overrides.ini= applies loads in order, last wins — so only the common
 parameters you set are overridden:
 
-| defcustom                       | ini key            |
-|---------------------------------+--------------------|
-| =cmacs-cad-slicer-layer-height= | =layer_height=     |
-| =cmacs-cad-slicer-infill=       | =fill_density= (%) |
-| =cmacs-cad-slicer-perimeters=   | =perimeters=       |
-| =cmacs-cad-slicer-supports=     | =support_material= |
-| =cmacs-cad-slicer-brim-width=   | =brim_width=       |
+| defcustom                             | ini key                      |
+|---------------------------------------+------------------------------|
+| =cmacs-cad-slicer-layer-height=       | =layer_height=               |
+| =cmacs-cad-slicer-first-layer-height= | =first_layer_height=         |
+| =cmacs-cad-slicer-infill=             | =fill_density= (%)           |
+| =cmacs-cad-slicer-perimeters=         | =perimeters=                 |
+| =cmacs-cad-slicer-supports=           | =support_material=           |
+| =cmacs-cad-slicer-support-style=      | =support_material_style=     |
+| =cmacs-cad-slicer-support-threshold=  | =support_material_threshold= |
+| =cmacs-cad-slicer-brim-width=         | =brim_width=                 |
 
-Set =cmacs-cad-slicer-base-profile= to your exported PrusaSlicer config.
+=cmacs-cad-slicer-support-style= is =grid= or =snug= (the classic
+styles) or =organic= — PrusaSlicer's tree-style support (2.7+).  Set
+=cmacs-cad-slicer-base-profile= to your exported PrusaSlicer config.
 Slicing is async (a =*cmacs-cad slice*= job buffer shows the command and
 output); time + filament estimates are parsed from the produced G-code
 footer.  Staging lives under =cmacs-cad-slicer-staging-dir= (default

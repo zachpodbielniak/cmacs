@@ -6227,9 +6227,10 @@ which the headers emit without @code{static} into multiple objects.
 @section Known limitations (v1)
 
 @itemize @bullet
-@item Multi-window: the framebuffer is sized to
-@code{cmacs-libregnum-default-size}; independent window resize
-isn't honoured.
+@item Multi-window: each on-screen view now auto-resizes its framebuffer
+to its window (a debounced @code{window-size-change} hook), so a single
+view is no longer stretched on resize; the same buffer in two windows of
+@emph{different} sizes still shares one framebuffer.
 @item No text labels yet on the GObject / mindmap scenes.
 @item Click-to-jump is not yet wired; tracked as follow-up work.
 @end itemize
@@ -6596,7 +6597,10 @@ offers ±45° and ±90° about each axis (X / Y / Z) plus Reset rotation;
 chosen language, attach, and open it) and Existing script@dots{}.
 Right-clicking empty space pops an @emph{Add} menu (the palette's Primitives /
 Objects / Assets sections) that places the chosen item at the clicked ground
-point.
+point.  A subsystem can append its @emph{own} actions per-buffer through the
+buffer-local @code{cmacs-libregnum-editor-extra-menu-items} (appended after the
+built-ins), keeping the editor core subsystem-agnostic --- the CAD model viewer
+uses it for its print section (Export G-code, Slicer settings, @dots{}).
 
 @emph{Rename} showcases the new name in the outliner: each row reads
 @code{Type (Name)} once a node is renamed (e.g.@: @code{Cube (Player)}) and just
@@ -6656,6 +6660,16 @@ DEFUNs: @code{cmacs-libregnum-editor-node-parent},
 backed by @code{LrgEditorSelection} and
 @code{cmacs-libregnum-editor-select-add} /
 @code{-select-remove} / @code{-select-clear} / @code{-selected-ids}.
+@item @strong{Rotate in place} --- rotation about all three axes (the gizmo
+and the @emph{Rotate} submenu) pivots about the node's own bounding-box centre,
+and the selection box tracks the rotated extents, so a part turns in place
+instead of swinging about the world origin.  The model draw composes the full
+Euler XYZ orientation (quaternion @arrow{} axis-angle), not just yaw.
+@item @strong{Per-window framebuffer fit} --- a debounced
+@code{window-size-change} hook keeps each on-screen view's framebuffer sized to
+its window, so the 1:1 overlay blit never stretches content as windows resize;
+@code{cmacs_libregnum_render_ctx_resize} keeps the old framebuffer if a
+reallocation fails, so it never blanks the view.
 @end itemize
 
 @emph{Appearance (primitive/mesh)} --- a @strong{Material @U{25B8}} submenu
@@ -7355,11 +7369,27 @@ list of line segments) and @code{cmacs-cad-export}.
 @kbd{C-c C-m} (@code{cmacs-cad-measure}) reports the distance and
 per-axis delta between two points; @kbd{C-c C-s}
 (@code{cmacs-cad-section-at}) slices the part with an X/Y/Z plane and
-reports the section's segment count and perimeter.  Visiting an @file{.stl}, @file{.obj}, @file{.step}, @file{.iges} or
-@file{.3mf} file enters @code{cmacs-cad-model-mode}, which imports the
-geometry through cad-glib and renders it as a CAD_PART in the libregnum
-editor beside an info panel (format, triangles, watertightness, size) ---
-binary STL and B-rep STEP alike.  Opening a
+reports the section's segment count and perimeter.  Visiting an
+@file{.stl}, @file{.obj}, @file{.step}, @file{.iges} or @file{.3mf} file
+enters @code{cmacs-cad-model-mode}, a print-prep workbench: a narrow
+settings sidebar and a libregnum viewport.  The geometry imports through
+cad-glib (binary STL and B-rep STEP alike) and renders as a CAD_PART,
+turned Z-up to Y-up so it stands upright
+(@code{cmacs-cad-model-orient-z-up}) on a configurable build-plate plane
+(@code{cmacs-cad-model-bed-x}/@code{-bed-y}).  The sidebar lists the
+model's facts and the print settings as @emph{clickable values} (bed
+size, layer and first-layer height, infill, walls, supports with
+grid/snug/organic style, brim, slicer override) --- click one to change
+it and it applies at once.  @kbd{G} (@code{cmacs-cad-model-export-gcode})
+slices the model with those settings and opens the toolpath viewer,
+always in the file's @emph{original} orientation (the upright display
+turn never reaches the exported geometry).  The viewer holds one or more
+parts: @kbd{i}, the @samp{Add STL@dots{}} button, right-click
+@samp{Insert}, dragging a file onto the viewport, or just opening another
+model file all add it @emph{on} the plate and off to one side (never
+under), beside the existing parts; @kbd{x}/@key{DEL} delete the selected
+one (all work from either pane).  @kbd{b}/@kbd{B} set/toggle the bed.
+Opening a
 @file{.gcode} file enters @code{cmacs-cad-gcode-mode}: the raw text
 stays in the buffer and the toolpath renders as a 3-D extruded-bead mesh
 through the libregnum editor (via cad-glib's OBJ import + the CAD_PART
@@ -7389,12 +7419,17 @@ combined or measured.  The @code{import} form (and its crispy twin
 directory.
 
 @code{cmacs-cad-slice-part} exports the current part to STL and slices it
-to G-code with an external slicer (PrusaSlicer native binary or the
-@code{com.prusa3d.PrusaSlicer} flatpak), merging a small overrides ini
-(layer height, infill, perimeters, supports, brim) on top of your base
-profile so only the parameters you set change.  Slicing is async with a
-job buffer; estimates come from the G-code footer; staging stays under
-@file{$HOME} for the flatpak.  @code{cmacs-cad-printer-upload} sends the
+to G-code with an external slicer; @code{cmacs-cad-slicer-settings} edits
+the common parameters.  The default backend is PrusaSlicer, found in this
+order (first wins): a native @code{prusa-slicer} binary, then the
+@code{com.prusa3d.PrusaSlicer} flatpak in the system then the per-user
+(@code{flatpak --user}) installation --- overridable with
+@code{cmacs-cad-slicer-prusa-program}.  It merges a small overrides ini
+(layer and first-layer height, infill, perimeters, supports with a
+grid/snug/organic @code{support_material_style}, brim) on top of your
+base profile so only the parameters you set change.  Slicing is async
+with a job buffer; estimates come from the G-code footer; staging stays
+under @file{$HOME} for the flatpak.  @code{cmacs-cad-printer-upload} sends the
 result to a networked printer (OctoPrint, Moonraker, PrusaLink, or a
 local @code{gcode} directory sink) over @code{curl}; the API key comes
 from auth-source and is fed via stdin so it never appears in the argv.

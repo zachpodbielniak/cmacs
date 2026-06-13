@@ -363,10 +363,12 @@ initialization scan.
 
 * Known limitations (v1)
 
-- Multi-window: a libregnum buffer shown in two windows blits its
-  framebuffer into both, but the framebuffer is sized to a single
-  =cmacs-libregnum-default-size=.  Resizing windows independently
-  is not honoured in v1.
+- Multi-window: each on-screen view now auto-resizes its framebuffer to
+  its window's pixel size (a debounced =window-size-change= hook,
+  =cmacs-libregnum--fit-views=), so a single view is no longer stretched
+  when its window is resized.  The same buffer shown in *two* windows of
+  *different* sizes still shares one framebuffer, so only one of them is
+  pixel-exact.
 - No labels on the GObject / mindmap scenes yet — class and
   heading names live in the underlying nodes but are not blitted
   as text-billboards.  Tracked as a follow-up.
@@ -782,6 +784,17 @@ rotate/scale gizmo handles and play-in-editor remain planned (see below).
   the right-clicked node's label.  The same menu is available by right-clicking a
   row in the *outliner* panel, not only in the 3-D viewport.
 
+  A subsystem can append its *own* actions to the menu per-buffer via the
+  buffer-local =cmacs-libregnum-editor-extra-menu-items= (same plist shape,
+  appended after the built-ins), so the editor core stays
+  subsystem-agnostic — the CAD model viewer uses it to add its print
+  section (Insert, Export G-code, Slicer settings, Supports, Set bed size).
+  The chosen action runs with the editor as the current buffer, so an
+  action that reads =current-buffer= (e.g. the interactive =Delete= /
+  =x=) works even when the menu pops from a sibling panel such as that
+  sidebar (the popup defers from the command loop, whose current buffer is
+  otherwise whatever pane was selected).
+
   *Expanded common items (all kinds)* — the set of actions every node receives
   was enlarged:
 
@@ -946,6 +959,21 @@ rotate/scale gizmo handles and play-in-editor remain planned (see below).
   =grl_model_draw_wires_ex=).  *Toggle cast shadow* authors a ="cast_shadow"=
   param (metadata persisted in the =.rlevel=; actual shadow mapping remains
   deferred).
+- *Per-window framebuffer fit* — a debounced =window-size-change= hook
+  (=cmacs-libregnum--fit-views=) keeps each on-screen view's framebuffer
+  sized to its window, so the overlay's 1:1 blit never stretches content
+  (squares stay square) as windows resize.
+  =cmacs_libregnum_render_ctx_resize= allocates the new render target
+  before discarding the old one and commits only on success, so a
+  reallocation that fails (e.g. before the GL context is current) keeps
+  the valid framebuffer and a later resize retries — it never blanks the
+  view.
+- *Rotate in place* — node rotation about all three axes (the rotate
+  gizmo and the context-menu *Rotate* submenu) pivots about the node's own
+  bounding-box centre, and the selection box tracks the rotated extents,
+  so a part turns in place instead of swinging about the world origin.
+  The model draw composes the full Euler XYZ orientation (quaternion →
+  axis-angle), not just yaw.
 
 *** GObject Introspection (gjs + Python-GI bindings)
 
