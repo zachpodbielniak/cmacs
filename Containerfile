@@ -32,7 +32,7 @@ RUN if [ "${FEDORA_VERSION}" -ge 44 ] 2>/dev/null; then \
     fi \
     && dnf install -y \
         autoconf automake gcc gcc-c++ make pkgconf-pkg-config texinfo \
-        which \
+        which git \
         gnutls-devel ncurses-devel zlib-devel \
         gtk3-devel \
         webkit2gtk4.1-devel \
@@ -66,7 +66,10 @@ RUN if [ "${FEDORA_VERSION}" -ge 44 ] 2>/dev/null; then \
     && dnf clean all
 # pipewire-devel + pulseaudio-libs-devel: cmacs-audio capture source
 # (pipewiresrc preferred, pulsesrc fallback).  cmake: bundled
-# whisper.cpp build.  espeak-ng: phonemiser used by piper-tts.
+# whisper.cpp build.  git: cad-glib's Manifold kernel CMake clones its
+# pinned Clipper2 via FetchContent (git clone); without it the configure
+# dies with "could not find git for clone of clipper2-populate".
+# espeak-ng: phonemiser used by piper-tts.
 # python3-pip: installs the piper-tts CLI in the later RUN step.
 # elfutils-devel + libdebuginfod: cintrospect's libdw DWARF reader.
 # binutils-devel: provides dis-asm.h / libopcodes for cpatch's
@@ -127,6 +130,19 @@ RUN rm -f .git \
 # manually here with `make -C deps/whisper.cpp libwhisper.a' is both
 # redundant AND broken (recent whisper.cpp is CMake-only and no
 # longer ships a libwhisper.a Make target).
+
+# Pre-build cad-glib's vendored geometry kernels (Manifold + its
+# FetchContent'd Clipper2, SolveSpace's libslvs + mimalloc) serially,
+# BEFORE the big parallel `make' below.  Two reasons:
+#   * Manifold's CMake clones Clipper2 with git (FetchContent); building
+#     it here keeps that one-shot clone out of the parallel build.
+#   * Running these nested CMake configures one at a time avoids the
+#     compiler ABI-probe failures ("CMAKE_CXX_COMPILER not set, after
+#     EnableLanguage") they hit when racing the oversubscribed
+#     `make -j$(nproc)'.
+# The archives are then already present when cad-glib's sub-make runs as
+# a prerequisite of the cmacs link, so it just links them.
+RUN make -C deps/cad-glib deps
 
 # Build cmacs
 RUN ./autogen.sh \
