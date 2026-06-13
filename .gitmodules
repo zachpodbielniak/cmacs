@@ -31,3 +31,6 @@
 [submodule "deps/gsurf"]
 	path = deps/gsurf
 	url = git@git-ssh.podbielniak.com:zachpodbielniak/gsurf.git
+[submodule "deps/cad-glib"]
+	path = deps/cad-glib
+	url = git@git-ssh.podbielniak.com:zachpodbielniak/cad-glib.git
