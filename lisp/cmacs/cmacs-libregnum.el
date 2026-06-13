@@ -2888,10 +2888,16 @@ wait."
                          items buffer id title))
                (choice (x-popup-menu (list (list fx fy) frame) keymap)))
           ;; A keymap menu returns the event path of the chosen leaf; resolve it
-          ;; to its (curried) action closure and run it.
+          ;; to its (curried) action closure and run it WITH THE EDITOR BUFFER
+          ;; CURRENT.  This timer fires in whatever buffer was selected at the
+          ;; pop (often a sibling panel, e.g. the CAD model viewer's sidebar),
+          ;; so an action that reads `current-buffer' -- like the interactive
+          ;; `cmacs-libregnum-editor-delete-current' bound to "Delete"/"x" --
+          ;; would otherwise signal "Not in a cmacs-libregnum editor buffer".
           (when (and choice (listp choice))
             (let ((binding (lookup-key keymap (apply #'vector choice))))
-              (when (functionp binding) (funcall binding)))))))))
+              (when (functionp binding)
+                (with-current-buffer buffer (funcall binding))))))))))
 
 (defun cmacs-libregnum-editor--popup-add-menu (buffer fx fy ground frame)
   "Pop the empty-space \"Add\" menu at frame pixel (FX FY); place at GROUND.
