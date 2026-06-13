@@ -168,6 +168,7 @@ RUN ./autogen.sh \
         --with-cmacs-cintrospect \
         --with-cmacs-libregnum \
         --with-cmacs-gnuseye \
+        --with-cmacs-cad \
         --with-cmacs-gsurf \
         --with-cmacs-emacsctl \
         --enable-cmacs-cpatch \

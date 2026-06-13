@@ -238,6 +238,62 @@ handle_print (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
                       start ? "t" : "nil", confirm ? "t" : "nil"));
 }
 
+/* The "name" (assembly) argument, as an Elisp string literal. */
+static gchar *
+cad_name_arg (JsonObject *a)
+{
+  return cad_lisp_str (json_object_has_member (a, "name")
+    ? json_object_get_string_member (a, "name") : NULL);
+}
+
+static McpToolResult *
+handle_assembly_info (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
+{
+  g_autofree gchar *p = cad_path_arg (a);
+  g_autofree gchar *name = cad_name_arg (a);
+  (void) s; (void) n; (void) u;
+  return cad_eval_result
+    (g_strdup_printf ("(cmacs-cad-mcp-assembly-info %s %s)", p, name));
+}
+
+static McpToolResult *
+handle_assembly_bom (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
+{
+  g_autofree gchar *p = cad_path_arg (a);
+  g_autofree gchar *name = cad_name_arg (a);
+  (void) s; (void) n; (void) u;
+  return cad_eval_result
+    (g_strdup_printf ("(cmacs-cad-mcp-assembly-bom %s %s)", p, name));
+}
+
+static McpToolResult *
+handle_assembly_interference (McpServer *s, const gchar *n, JsonObject *a,
+                              gpointer u)
+{
+  g_autofree gchar *p = cad_path_arg (a);
+  g_autofree gchar *name = cad_name_arg (a);
+  (void) s; (void) n; (void) u;
+  return cad_eval_result
+    (g_strdup_printf ("(cmacs-cad-mcp-assembly-interference %s %s)", p,
+                      name));
+}
+
+static McpToolResult *
+handle_assembly_set_joint (McpServer *s, const gchar *n, JsonObject *a,
+                           gpointer u)
+{
+  g_autofree gchar *p = cad_path_arg (a);
+  g_autofree gchar *name = cad_name_arg (a);
+  gint64 jid = json_object_has_member (a, "joint")
+    ? json_object_get_int_member (a, "joint") : 0;
+  double value = json_object_has_member (a, "value")
+    ? json_object_get_double_member (a, "value") : 0.0;
+  (void) s; (void) n; (void) u;
+  return cad_eval_result
+    (g_strdup_printf ("(cmacs-cad-mcp-assembly-set-joint %s %s %" G_GINT64_FORMAT
+                      " %g)", p, name, jid, value));
+}
+
 static void
 cad_add (McpServer *server, const gchar *name, const gchar *desc,
          const gchar *schema_json, gboolean read_only,
@@ -328,6 +384,33 @@ cmacs_mcp_tools_cad_register (McpServer *server)
     "\"gcode\":{\"type\":\"string\"},\"start\":{\"type\":\"boolean\"},"
     "\"confirm\":{\"type\":\"boolean\"}},"
     "\"required\":[\"printer\",\"gcode\"]}", FALSE, handle_print);
+
+  cad_add (server, "cad_assembly_info",
+    "Assembly NAME's solved state, DOF, and per-instance transforms.",
+    "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},"
+    "\"name\":{\"type\":\"string\"}},\"required\":[\"path\",\"name\"]}",
+    TRUE, handle_assembly_info);
+
+  cad_add (server, "cad_assembly_bom",
+    "Assembly NAME's bill of materials (part, quantity, volume, mass).",
+    "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},"
+    "\"name\":{\"type\":\"string\"}},\"required\":[\"path\",\"name\"]}",
+    TRUE, handle_assembly_bom);
+
+  cad_add (server, "cad_assembly_interference",
+    "Interferences (overlapping instance pairs + volume) in assembly NAME.",
+    "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},"
+    "\"name\":{\"type\":\"string\"}},\"required\":[\"path\",\"name\"]}",
+    TRUE, handle_assembly_interference);
+
+  cad_add (server, "cad_assembly_set_joint",
+    "Drive JOINT (id) of assembly NAME to VALUE and re-solve (no source "
+    "re-eval); report the new instance transforms.",
+    "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},"
+    "\"name\":{\"type\":\"string\"},\"joint\":{\"type\":\"integer\"},"
+    "\"value\":{\"type\":\"number\"}},"
+    "\"required\":[\"path\",\"name\",\"joint\",\"value\"]}",
+    FALSE, handle_assembly_set_joint);
 }
 
 #endif /* HAVE_CMACS_MCP && HAVE_CMACS_CAD */

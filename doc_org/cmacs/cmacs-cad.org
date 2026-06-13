@@ -313,6 +313,77 @@ The =cmacs-cad-sketch-*= primitives (new/add-point/add-line/add-circle/
 add-arc/constrain/solve/dof/failed/point/profile) expose the solver to
 Elisp directly.
 
+* Sweep, loft, and holes
+
+Beyond extrude/revolve, the s-expression DSL gains two more profile
+operations and a face-aware hole:
+
+- =(sweep SKETCH (x y z) (x y z) ...)= sweeps a closed sketch profile
+  along a 3D polyline path (a straight vertical path is just an
+  extrusion).
+- =(loft (SK1 z1) (SK2 z2) ... :ruled #f)= runs a solid through section
+  sketches placed at their Z planes; =:ruled #t= for straight
+  transitions.
+- =(hole SOLID :face (top) :dia D :depth H [:u U :v V])= drills a
+  (optionally counterbored) hole into a face named by a *topological
+  selector*.  Because the selector re-resolves from geometry on every
+  recompute, the hole follows its face when a parameter changes — change
+  a plate's thickness and the hole stays on top.  Selectors:
+  =(top)= =(bottom)= =(left)= =(right)= =(front)= =(back)=,
+  =(cyl-largest)= =(cyl-smallest)=, =(face-near x y z)=,
+  =(face-normal nx ny nz)=, =(face-index i)=.
+
+* Assemblies
+
+A =(defassembly NAME …)= form places named part *instances* in space and
+relates them with *mates* and drivable *joints*; cad-glib's composition
+solver grounds the =:grounded= instances and places the rest.
+
+#+begin_src lisp
+(defpart post (cylinder :r 2 :h 20))
+(defpart arm  (cylinder :r 1 :h 6))
+(defassembly hinge
+  (instance "base" post :grounded #t)
+  (instance "lever" arm)
+  ;; a revolute joint about the post axis; drive :value to swing it
+  (joint revolute "base" (cyl-largest) "lever" (cyl-largest) :value 0))
+#+end_src
+
+Mate kinds: =coincident=, =concentric=, =distance=, =parallel=,
+=perpendicular=, =angle=, =tangent=, =rigid=.  Joint kinds: =fixed=,
+=revolute=, =slider=, =cylindrical=, =planar=, =ball=.  Each mate/joint
+side names a face/edge with the same topological selectors as =hole=.
+
+From a part buffer the =C-c C-a= family drives the assembly:
+
+| Key       | Command                            | Action                    |
+|-----------+------------------------------------+---------------------------|
+| =C-c C-a b= | =cmacs-cad-show-bom=             | bill of materials (table) |
+| =C-c C-a i= | =cmacs-cad-check-interference=   | overlapping-part report   |
+| =C-c C-a s= | =cmacs-cad-assembly-show-info=   | state, DOF, instances     |
+| =C-c C-a j= | =cmacs-cad-drive-joint=          | set a joint value, re-pose|
+| =C-c C-a J= | =cmacs-cad-assembly-animate-joint= | tween a joint over time |
+| =C-c C-a a= | =cmacs-cad-assembly-workbench=   | open the 3-D workbench    |
+
+The bill of materials rolls instances up by part name (quantity, volume,
+and mass when a material density is set).  Interference detection tests
+every instance pair for solid overlap; touching faces below the volume
+tolerance are not reported.  Driving a joint mutates the *live* assembly
+and re-solves *without* re-evaluating the source, so the mechanism does
+not reset — =cmacs-cad-assembly-animate-joint= uses that to sweep a
+joint from one value to another and re-pose the workbench each frame.
+
+The =cmacs-cad-assembly-*= primitives (names/info/bom/interference/
+joints/set-joint) expose the assembly to Elisp and the MCP tools
+(=cad_assembly_info=, =cad_assembly_bom=, =cad_assembly_interference=,
+=cad_assembly_set_joint=).  An Org Babel =cad= block with =:bom NAME=
+emits the bill of materials as a table.
+
+The solver is deterministic and never aborts: a missing grounded
+instance, an unresolved reference, or a closed kinematic loop are
+reported through the assembly state (=under-constrained= /
+=over-constrained=) or a clean error.
+
 * Slicing
 
 =cmacs-cad-slice-part= exports the current part to STL and slices it to
@@ -417,6 +488,10 @@ with its source location.  Around it:
 | =cad_slice=        | export + slice to G-code (waits)                 |
 | =cad_printers=     | list configured printers                         |
 | =cad_print=        | upload G-code; a print STARTS only with both =start= and =confirm= |
+| =cad_assembly_info= | assembly state, DOF, per-instance transforms     |
+| =cad_assembly_bom= | bill of materials (part, quantity, volume, mass)  |
+| =cad_assembly_interference= | overlapping instance pairs + volume      |
+| =cad_assembly_set_joint= | drive a joint + re-solve (no source re-eval) |
 
 A typical loop: =cad_set_source= → =cad_inspect= (or =cad_snapshot=) →
 repeat → =cad_slice= → =cad_print {start: false}= → a human confirms.
@@ -438,6 +513,7 @@ whose *body is the part source* execute through one core:
 - no output → mass properties as an Org table
 - =:file out.png= → snapshot the part, inline the image
 - =:export out.stl= → write the artifact (format from the extension)
+- =:bom NAME= → the assembly's bill of materials as an Org table
 - =:var k=v= → parameter overrides at evaluation
 - =:tangle out.cad= → standard ob tangling
 
@@ -459,6 +535,13 @@ whose *body is the part source* execute through one core:
 | =cmacs-cad-section=      | plane → list of (X1 Y1 Z1 X2 Y2 Z2) segments  |
 | =cmacs-cad-export=       | write stl/stl-ascii/obj/step/iges              |
 | =cmacs-cad-dsl-symbols=  | (NAME SIGNATURE DOC) vocabulary per language   |
+| =cmacs-cad-sketch-*=     | sketch solver (new/add-*/constrain/solve/dof/…) |
+| =cmacs-cad-assembly-names= | assembly names from the last eval            |
+| =cmacs-cad-assembly-info= | :state :dof :instances ((ID NAME [m0..m11]) …) |
+| =cmacs-cad-assembly-bom= | rolled-up (:part :quantity :volume :mass)      |
+| =cmacs-cad-assembly-interference= | overlapping pairs (:a :b :volume)     |
+| =cmacs-cad-assembly-joints= | (:id :kind :value :dof) per joint           |
+| =cmacs-cad-assembly-set-joint= | drive a joint + re-solve (no re-eval)     |
 
 Errors signal =cmacs-cad-error= with the evaluator's message
 (including the source location for span-capable languages).
@@ -473,13 +556,20 @@ update); measurement, section, mass-properties and the G-code toolpath
 viewer; fabrication (PrusaSlicer ini-merge slicing + OctoPrint/Moonraker/
 PrusaLink/gcode printer upload with confirm-gated start); the MCP
 vibe-CAD tools and =cad=/=ccad= org-babel blocks; the interactive
-constraint sketcher with source write-back; and project/git tooling
-(scaffolds, part browser, =cmacs-cad-diff=).
+constraint sketcher with source write-back; sweep / loft / hole profile
+ops; topological face/edge references (so a hole follows its face across
+recomputes); the assembly layer (=defassembly=, mates, drivable joints,
+the composition solver, BOM, interference, the =C-c C-a= commands and
+=cad_assembly_*= MCP tools); and project/git tooling (scaffolds, part
+browser, =cmacs-cad-diff=).
 
 Gated / trailing extension points (off by default, clean errors when
-absent): the libfive f-rep kernel (=CAD_FIVE=1=), 3MF I/O (lib3mf), and
-true per-face OCCT provenance.  Face-click→source-span highlighting in
-the 3D viewport rides the editor overlay work.
+absent): the libfive f-rep kernel (=CAD_FIVE=1=), 3MF I/O (lib3mf), a
+numeric solver for closed kinematic loops (composition handles the
+acyclic case; loops are placed via the spanning tree and reported
+over-constrained), and per-instance part rendering in the 3-D assembly
+workbench.  Face-click→source-span highlighting in the 3D viewport rides
+the editor overlay work.
 
 * Files
 
@@ -487,13 +577,14 @@ the 3D viewport rides the editor overlay work.
 |---------------------------------+-----------------------------------|
 | =deps/cad-glib/=                | the kernel library (own repo)     |
 | =deps/libregnum/src/cad/=       | CAD_PART manager/baker (CAD=1)    |
-| =cmacs/cad/=                    | DEFUNs + doc registry             |
+| =cmacs/cad/=                    | DEFUNs + doc registry (incl. =cmacs-cad-assembly.c=) |
 | =lisp/cmacs/cmacs-cad.el=       | .cad mode + shared eval loop      |
 | =lisp/cmacs/cmacs-cad-crispy.el= | .ccad mode                       |
 | =lisp/cmacs/cmacs-cad-editor.el= | workbench, palette, tree, params |
 | =lisp/cmacs/cmacs-cad-gcode.el=  | G-code 3-D toolpath viewer        |
 | =lisp/cmacs/cmacs-cad-model.el=  | STL/STEP/OBJ/3MF model viewer     |
 | =lisp/cmacs/cmacs-cad-sketch.el= | interactive constraint sketcher   |
+| =lisp/cmacs/cmacs-cad-assembly.el= | assembly UI (BOM, clash, joints) |
 | =lisp/cmacs/cmacs-cad-slicer.el= , =-printer.el= | slice + print     |
 | =lisp/cmacs/cmacs-cad-mcp.el= , =-org-block.el=  | MCP + org-babel    |
 | =lisp/cmacs/cmacs-cad-project.el= | scaffolds, browser, diff         |

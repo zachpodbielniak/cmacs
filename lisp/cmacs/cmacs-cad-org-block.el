@@ -26,6 +26,8 @@
 (declare-function cmacs-cad-inspect "cmacs-cad-defuns.c")
 (declare-function cmacs-cad-export "cmacs-cad-defuns.c")
 (declare-function cmacs-cad-mcp-snapshot "cmacs-cad-mcp")
+(declare-function cmacs-cad-assembly-names "cmacs-cad-assembly.c")
+(declare-function cmacs-cad-assembly-bom "cmacs-cad-assembly.c")
 
 (defvar org-babel-default-header-args:cad '((:results . "table"))
   "Default header arguments for `cad' (s-expression) source blocks.")
@@ -51,7 +53,8 @@
   (let* ((path (make-temp-file "cmacs-cad-ob" nil extension))
          (overrides (cmacs-cad-org-block--overrides params))
          (file (cdr (assq :file params)))
-         (export (cdr (assq :export params))))
+         (export (cdr (assq :export params)))
+         (bom (cdr (assq :bom params))))
     (unwind-protect
         (progn
           (with-temp-file path (insert body))
@@ -64,6 +67,19 @@
               (if (and (stringp out) (string-prefix-p "error:" out))
                   out
                 file)))
+           ;; :bom NAME -> the assembly's bill of materials as an Org table.
+           (bom
+            (require 'cmacs-cad-assembly nil t)
+            (let ((name (if (stringp bom) bom
+                          (car (cmacs-cad-assembly-names path)))))
+              (append
+               (list (list "part" "qty" "volume" "mass") 'hline)
+               (mapcar
+                (lambda (e)
+                  (list (plist-get e :part) (plist-get e :quantity)
+                        (format "%.4f" (plist-get e :volume))
+                        (format "%.4f" (plist-get e :mass))))
+                (cmacs-cad-assembly-bom path name)))))
            ;; :export -> write the artifact, return its path.
            (export
             (let ((fmt (intern (or (file-name-extension export) "stl"))))

@@ -19,6 +19,7 @@ syms_of_cmacs_cad (void)
 {
   syms_of_cmacs_cad_defuns ();
   syms_of_cmacs_cad_sketch ();
+  syms_of_cmacs_cad_assembly ();
 }
 
 void

@@ -420,6 +420,7 @@ cd cmacs
   --with-cmacs-cintrospect \
   --with-cmacs-libregnum \
   --with-cmacs-gnuseye \
+  --with-cmacs-cad \
   --with-cmacs-gsurf \
   --with-cmacs-emacsctl \
   --enable-cmacs-cpatch
@@ -580,6 +581,8 @@ Module flags:
 - =--enable-cmacs-cpatch= — Runtime C hot-patching.  Atomic =Lisp_Subr.function= swap (Phase 1) + trampoline detours (Phase 3).  *DANGEROUS* — wrong patch silently corrupts in-process state.  Off by default; requires =--with-cmacs-cintrospect=.  See [[file:doc_org/cmacs/cintrospect.org][the cintrospect manual]] for the full safety story.
 - =--with-cmacs-libregnum= — Embed libregnum (GObject/raylib game engine) as 3D scene buffers.  Each =cmacs-libregnum-mode= buffer owns a per-view hidden raylib FBO; the framebuffer is blitted across the whole window via =pgtk_handle_draw=.  Three scenes ship in v1: =M-x cmacs-libregnum-project-tree= (file cubes on a grid), =cmacs-libregnum-gobject-graph= (live GObject hierarchy), =cmacs-libregnum-mind-map= (radial org-heading tree).  Off by default; requires =--with-cmacs-glib= + =--with-pgtk=.  See [[file:doc_org/cmacs/cmacs-libregnum.org][the manual]].
 - =--with-cmacs-gnuseye= — GNU's Eye: a live planetary situational-awareness globe (=M-x cmacs-gnuseye=) rendered through libregnum.  ~25 data layers (aircraft, vessels, satellites, quakes, weather zones, conflict, cyber, news, …), a 2D flat-map mode, measurement/export/watchlists/replay, an LLM intelligence layer, and a true-geometry solar-system chart (Moon, planets, Voyager, asteroids via local ephemerides + JPL Horizons).  Part of the standard flag set (=just bootstrap= and the container build include it); requires =--with-cmacs-libregnum= + =--with-cmacs-glib=.  Uses libsoup-3.0 + json-glib (already required).  See [[file:doc_org/cmacs/cmacs-gnuseye.org][the manual]] and [[file:doc_org/cmacs/gnuseye/README.org][the full reference]].
+
+- =--with-cmacs-cad= — Parametric CAD subsystem (cad-glib kernels: Manifold mesh-CSG + OpenCASCADE B-rep + SolveSpace sketches).  =.cad= (s-expression) and =.ccad= (crispy) part sources evaluate to solids with feature trees; sweep/loft/hole ops; topological face/edge references (so a hole follows its face across recomputes); =defassembly= with mates, drivable joints, a composition solver, bill of materials and interference detection (=C-c C-a= commands).  Parts render through the libregnum CAD nodes.  Part of the standard flag set (=just bootstrap= and the container build include it); requires =--with-cmacs-libregnum= + =--with-cmacs-glib= and =opencascade-devel= + =eigen3-devel= (installed by =install-deps=).  cad-glib builds from =deps/cad-glib= and links statically.  See [[file:doc_org/cmacs/cmacs-cad.org][the manual]].
 
 Each module auto-detects bundled (=deps/=) or system libraries.  To
 force system-installed versions:

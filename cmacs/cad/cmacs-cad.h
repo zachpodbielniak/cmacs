@@ -24,6 +24,7 @@ extern void syms_of_cmacs_cad (void);
 extern void init_cmacs_cad (void);
 extern void syms_of_cmacs_cad_defuns (void);
 extern void syms_of_cmacs_cad_sketch (void);
+extern void syms_of_cmacs_cad_assembly (void);
 
 #endif /* HAVE_CMACS_CAD */
 #endif /* CMACS_CAD_H */

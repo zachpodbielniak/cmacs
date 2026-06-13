@@ -980,7 +980,7 @@ if test "$with_cmacs_cad" != "no"; then
   CMACS_CAD_LIBS="\$(abs_top_srcdir)/deps/cad-glib/build/release/libcad-glib-1.0.a     \$(shell sed -n 's/^Libs.private: //p' \$(abs_top_srcdir)/deps/cad-glib/cad-glib-1.0.pc 2>/dev/null)     -lstdc++ $CMACS_CAD_DEPS_LIBS"
   CMACS_CAD_LIBREGNUM_FLAGS="CAD=1 CAD_GLIB_DIR=\$(abs_top_srcdir)/deps/cad-glib"
   AC_DEFINE([HAVE_CMACS_CAD], 1, [CMacs parametric CAD subsystem])
-  CMACS_CAD_OBJ="cmacs-cad-init.o cmacs-cad-defuns.o cmacs-cad-doc.o cmacs-cad-sketch.o"
+  CMACS_CAD_OBJ="cmacs-cad-init.o cmacs-cad-defuns.o cmacs-cad-doc.o cmacs-cad-sketch.o cmacs-cad-assembly.o"
 fi
 if test "$with_cmacs_gsurf" != "no"; then
   if test "$with_cmacs_glib" = "no"; then

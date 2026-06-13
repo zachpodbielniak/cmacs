@@ -15,6 +15,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cl-lib)
 (require 'imenu)
 (require 'cmacs)
 (require 'cmacs-cad)
@@ -27,6 +28,14 @@
 (require 'cmacs-cad-sketch)
 (require 'cmacs-cad-project)
 (require 'cmacs-cad-model)
+(require 'cmacs-cad-assembly nil t)
+
+(declare-function cmacs-cad-assembly-names "cmacs-cad-assembly.c")
+(declare-function cmacs-cad-assembly-info "cmacs-cad-assembly.c")
+(declare-function cmacs-cad-assembly-bom "cmacs-cad-assembly.c")
+(declare-function cmacs-cad-assembly-interference "cmacs-cad-assembly.c")
+(declare-function cmacs-cad-assembly-joints "cmacs-cad-assembly.c")
+(declare-function cmacs-cad-assembly-set-joint "cmacs-cad-assembly.c")
 
 (defconst cmacs-cad-tests--bracket
   "(defparam thickness 4.0 :min 2 :max 10)
@@ -671,6 +680,88 @@ imports the mesh and inspects to the source dimensions."
     (let ((box (assoc "box" vocab)))
       (should box)
       (should (string-match "sx" (cadr box))))))
+
+;;; Tier 2: assemblies (headless)
+
+(defconst cmacs-cad-tests--assembly
+  (concat "(defpart post (cylinder :r 2 :h 20))\n"
+          "(defpart ring (cylinder :r 1 :h 4))\n"
+          "(defassembly widget\n"
+          "  (instance \"base\" post :grounded #t)\n"
+          "  (instance \"arm\" ring)\n"
+          "  (joint revolute \"base\" (cyl-largest)"
+          " \"arm\" (cyl-largest) :value 0))\n")
+  "A two-part hinge assembly fixture.")
+
+(defconst cmacs-cad-tests--clash
+  (concat "(defpart blk (box 10 10 10))\n"
+          "(defassembly stack\n"
+          "  (instance \"a\" blk :grounded #t)\n"
+          "  (instance \"b\" blk)\n"
+          "  (mate coincident \"a\" (top) \"b\" (bottom)))\n")
+  "Two stacked boxes (touching, not interfering).")
+
+(ert-deftest cmacs-cad-tests-assembly-names-and-info ()
+  (skip-unless (cmacs-cad-available-p))
+  (skip-unless (fboundp 'cmacs-cad-assembly-names))
+  (let ((path (cmacs-cad-tests--fixture cmacs-cad-tests--assembly)))
+    (unwind-protect
+        (progn
+          (cmacs-cad-eval path)
+          (should (equal (cmacs-cad-assembly-names path) '("widget")))
+          (let ((info (cmacs-cad-assembly-info path "widget")))
+            ;; a revolute joint leaves the assembly under-constrained
+            (should (eq (plist-get info :state) 'under-constrained))
+            (should (= (length (plist-get info :instances)) 2))))
+      (cmacs-cad-doc-close path)
+      (delete-file path))))
+
+(ert-deftest cmacs-cad-tests-assembly-bom ()
+  (skip-unless (cmacs-cad-available-p))
+  (skip-unless (fboundp 'cmacs-cad-assembly-bom))
+  (let ((path (cmacs-cad-tests--fixture cmacs-cad-tests--clash)))
+    (unwind-protect
+        (progn
+          (cmacs-cad-eval path)
+          (let* ((bom (cmacs-cad-assembly-bom path "stack"))
+                 (blk (car bom)))
+            (should (= (length bom) 1))
+            (should (equal (plist-get blk :part) "blk"))
+            (should (= (plist-get blk :quantity) 2))
+            (should (< 1990 (plist-get blk :volume) 2010))))
+      (cmacs-cad-doc-close path)
+      (delete-file path))))
+
+(ert-deftest cmacs-cad-tests-assembly-joint-drive ()
+  (skip-unless (cmacs-cad-available-p))
+  (skip-unless (fboundp 'cmacs-cad-assembly-set-joint))
+  (let ((path (cmacs-cad-tests--fixture cmacs-cad-tests--assembly)))
+    (unwind-protect
+        (progn
+          (cmacs-cad-eval path)
+          (let* ((joints (cmacs-cad-assembly-joints path "widget"))
+                 (jid (plist-get (car joints) :id))
+                 (insts (cmacs-cad-assembly-set-joint path "widget" jid 90.0))
+                 (arm (cl-find "arm" insts :key (lambda (i) (nth 1 i))
+                               :test #'string=))
+                 (m (nth 2 arm)))
+            (should (= (length joints) 1))
+            ;; 90 deg about Z: R[0][0] ~ 0
+            (should (< (abs (aref m 0)) 1e-5))))
+      (cmacs-cad-doc-close path)
+      (delete-file path))))
+
+(ert-deftest cmacs-cad-tests-assembly-interference-touching ()
+  (skip-unless (cmacs-cad-available-p))
+  (skip-unless (fboundp 'cmacs-cad-assembly-interference))
+  (let ((path (cmacs-cad-tests--fixture cmacs-cad-tests--clash)))
+    (unwind-protect
+        (progn
+          (cmacs-cad-eval path)
+          ;; faces touch but do not overlap -> no interference
+          (should (null (cmacs-cad-assembly-interference path "stack"))))
+      (cmacs-cad-doc-close path)
+      (delete-file path))))
 
 ;;; Tier 3: display-guarded workbench
 

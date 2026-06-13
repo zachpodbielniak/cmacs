@@ -334,6 +334,14 @@ languages; fall back to the first line otherwise."
     (define-key map (kbd "C-c C-k") #'cmacs-cad-sketch)
     (define-key map (kbd "C-c C-v") #'cmacs-cad-workbench)
     (define-key map (kbd "C-c C-d") #'cmacs-cad-toggle-edges)
+    ;; Assembly commands (C-c C-a family); autoloaded from
+    ;; cmacs-cad-assembly to avoid a load-time require cycle.
+    (define-key map (kbd "C-c C-a b") #'cmacs-cad-show-bom)
+    (define-key map (kbd "C-c C-a i") #'cmacs-cad-check-interference)
+    (define-key map (kbd "C-c C-a s") #'cmacs-cad-assembly-show-info)
+    (define-key map (kbd "C-c C-a j") #'cmacs-cad-drive-joint)
+    (define-key map (kbd "C-c C-a J") #'cmacs-cad-assembly-animate-joint)
+    (define-key map (kbd "C-c C-a a") #'cmacs-cad-assembly-workbench)
     map)
   "Keymap for `cmacs-cad-mode'.")
 

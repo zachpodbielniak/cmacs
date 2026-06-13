@@ -7465,6 +7465,31 @@ and projects; @code{cmacs-cad-part-browser} lists a project's parts with
 content-hashed thumbnails; and @code{cmacs-cad-diff} compares two git
 revisions of a part by parameter changes and feature-tree structure.
 
+@section Sweep, loft, holes, and assemblies
+
+Beyond extrude/revolve the DSL adds @code{(sweep SKETCH PATH@dots{})}
+(sweep a profile along a 3D polyline), @code{(loft (SK z) @dots{} :ruled #f)}
+(loft through section sketches), and @code{(hole SOLID :face (top) :dia D
+:depth H)}.  A hole's face is named by a @emph{topological selector}
+(@code{(top)}, @code{(cyl-largest)}, @code{(face-near x y z)}, @dots{})
+that re-resolves from geometry on each recompute, so the hole follows its
+face when a parameter changes.
+
+A @code{(defassembly NAME @dots{})} form places named part instances and
+relates them with mates (coincident/concentric/distance/rigid/@dots{})
+and drivable joints (revolute/slider/@dots{}); a deterministic
+composition solver grounds the @code{:grounded} instances and places the
+rest.  From a part buffer the @kbd{C-c C-a} family inspects and drives
+it: @kbd{C-c C-a b} bill of materials, @kbd{C-c C-a i} interference
+report, @kbd{C-c C-a s} state/DOF, @kbd{C-c C-a j} drive a joint, @kbd{C-c
+C-a J} animate a joint, @kbd{C-c C-a a} open the 3-D workbench.  Driving a
+joint re-solves the @emph{live} assembly without re-evaluating the
+source, so the mechanism does not reset.  The @code{cmacs-cad-assembly-*}
+primitives and the @code{cad_assembly_info} / @code{cad_assembly_bom} /
+@code{cad_assembly_interference} / @code{cad_assembly_set_joint} MCP tools
+expose the same surface; an Org Babel @code{cad} block with @code{:bom}
+emits the bill of materials as a table.
+
 See @file{doc_org/cmacs/cmacs-cad.org} for the living document.
 
 @c ===================================================================

@@ -201,5 +201,79 @@ Without both, only uploads (the default safe behaviour)."
                (format "uploaded to %s (print NOT started)" printer)))
     (error (format "error: %s" (error-message-string err)))))
 
+;;;; Assemblies
+
+(declare-function cmacs-cad-assembly-info "cmacs-cad-assembly.c")
+(declare-function cmacs-cad-assembly-bom "cmacs-cad-assembly.c")
+(declare-function cmacs-cad-assembly-interference "cmacs-cad-assembly.c")
+(declare-function cmacs-cad-assembly-set-joint "cmacs-cad-assembly.c")
+
+(defun cmacs-cad-mcp-assembly-info (path name)
+  "Return assembly NAME of PATH as a readable summary."
+  (require 'cmacs-cad-assembly nil t)
+  (condition-case err
+      (progn
+        (cmacs-cad-eval path)
+        (let ((info (cmacs-cad-assembly-info path name)))
+          (format "%s: %s, %d DOF, %d instances\n%s"
+                  name (plist-get info :state) (plist-get info :dof)
+                  (length (plist-get info :instances))
+                  (mapconcat
+                   (lambda (i)
+                     (let ((m (nth 2 i)))
+                       (format "  #%d %s @ (%.2f %.2f %.2f)"
+                               (nth 0 i) (nth 1 i)
+                               (aref m 9) (aref m 10) (aref m 11))))
+                   (plist-get info :instances) "\n"))))
+    (error (format "error: %s" (error-message-string err)))))
+
+(defun cmacs-cad-mcp-assembly-bom (path name)
+  "Return assembly NAME of PATH as a bill-of-materials table."
+  (require 'cmacs-cad-assembly nil t)
+  (condition-case err
+      (progn
+        (cmacs-cad-eval path)
+        (mapconcat
+         (lambda (e)
+           (format "%-20s x%-3d  vol=%.3f  mass=%.3f"
+                   (plist-get e :part) (plist-get e :quantity)
+                   (plist-get e :volume) (plist-get e :mass)))
+         (cmacs-cad-assembly-bom path name) "\n"))
+    (error (format "error: %s" (error-message-string err)))))
+
+(defun cmacs-cad-mcp-assembly-interference (path name)
+  "Return interferences in assembly NAME of PATH."
+  (require 'cmacs-cad-assembly nil t)
+  (condition-case err
+      (progn
+        (cmacs-cad-eval path)
+        (let ((hits (cmacs-cad-assembly-interference path name)))
+          (if (null hits)
+              "no interferences"
+            (mapconcat
+             (lambda (h)
+               (format "instance #%d <-> #%d : %.4f mm^3"
+                       (plist-get h :a) (plist-get h :b)
+                       (plist-get h :volume)))
+             hits "\n"))))
+    (error (format "error: %s" (error-message-string err)))))
+
+(defun cmacs-cad-mcp-assembly-set-joint (path name joint value)
+  "Drive JOINT of assembly NAME in PATH to VALUE; report new transforms."
+  (require 'cmacs-cad-assembly nil t)
+  (condition-case err
+      (progn
+        (cmacs-cad-eval path)
+        (let ((insts (cmacs-cad-assembly-set-joint path name joint value)))
+          (format "joint #%d -> %s\n%s" joint value
+                  (mapconcat
+                   (lambda (i)
+                     (let ((m (nth 2 i)))
+                       (format "  #%d %s @ (%.2f %.2f %.2f)"
+                               (nth 0 i) (nth 1 i)
+                               (aref m 9) (aref m 10) (aref m 11))))
+                   insts "\n"))))
+    (error (format "error: %s" (error-message-string err)))))
+
 (provide 'cmacs-cad-mcp)
 ;;; cmacs-cad-mcp.el ends here
