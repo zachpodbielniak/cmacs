@@ -452,12 +452,24 @@ cmacs_libregnum_render_ctx_free (CmacsLibregnumRenderCtx *r)
 void
 cmacs_libregnum_render_ctx_resize (CmacsLibregnumRenderCtx *r, int w, int h)
 {
+  RenderTexture2D nfbo;
   if (!r) return;
   if (w == r->width && h == r->height) return;
-  if (r->fbo_valid) { UnloadRenderTexture (r->fbo); r->fbo_valid = FALSE; }
-  r->fbo = LoadRenderTexture (w, h);
-  r->fbo_valid = (r->fbo.id != 0);
-  r->width = w; r->height = h;
+  /* Allocate the new target BEFORE discarding the old one.  If allocation
+   * fails -- e.g. this is reached from a Lisp timer before the view's GL
+   * context is current -- keep the current (valid) FBO and do NOT record the
+   * new size, so a later resize (the window-size idle hook, once the context
+   * is ready) retries.  The previous code unconditionally stored w/h even on
+   * failure, so the retry early-returned and the view stayed blank forever. */
+  nfbo = LoadRenderTexture (w, h);
+  if (nfbo.id == 0)
+    return;
+  if (r->fbo_valid)
+    UnloadRenderTexture (r->fbo);
+  r->fbo = nfbo;
+  r->fbo_valid = TRUE;
+  r->width = w;
+  r->height = h;
 }
 
 void *

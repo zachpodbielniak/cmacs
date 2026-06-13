@@ -2770,6 +2770,13 @@ per-node script list under \"Manage scripts\").
 Node-kind symbols: group primitive mesh sprite tilemap light camera audio
 prefab.  To add a menu item, add one plist here — no other code changes.")
 
+(defvar-local cmacs-libregnum-editor-extra-menu-items nil
+  "Buffer-local extra right-click menu items appended after the built-in ones.
+Subsystems that specialise the editor (e.g. the CAD model viewer adding
+print/slice actions) `setq-local' this to a list of item plists shaped like
+`cmacs-libregnum-editor-context-menu-items'.  Kept buffer-local so the core
+menu stays subsystem-agnostic.")
+
 (defun cmacs-libregnum-editor--filter-menu-items (ksym)
   "Return the menu items applicable to node-kind symbol KSYM.
 Keeps every (:sep) marker and every item whose :kinds is t or contains KSYM, in
@@ -2866,7 +2873,10 @@ wait."
         (cmacs-libregnum-editor--sync-panels buffer id)
         (let* ((kind   (cmacs-libregnum-editor-node-kind buffer id))
                (ksym   (cmacs-libregnum-editor--kind-symbol kind))
-               (items  (cmacs-libregnum-editor--filter-menu-items ksym))
+               (items  (append
+                        (cmacs-libregnum-editor--filter-menu-items ksym)
+                        (buffer-local-value
+                         'cmacs-libregnum-editor-extra-menu-items buffer)))
                (node-name (ignore-errors
                             (let* ((obj (cmacs-libregnum-editor-node-object
                                          buffer id))
@@ -3944,6 +3954,58 @@ Safe to call multiple times."
 ;; Also register now if pgtk-dnd is already loaded.
 (when (featurep 'pgtk-dnd)
   (cmacs-libregnum--dnd-register))
+
+;;;; Keep viewports undistorted: track each view window's aspect ratio ------
+
+;; The overlay blits a view's FBO across its window's pixel rectangle with a
+;; per-axis scale (pw/vw, ph/vh).  If the FBO's aspect differs from the
+;; window's, that scale is non-uniform and content is stretched -- a square
+;; renders as a rectangle when the window is resized.  The fix (same one
+;; gnuseye uses) is to keep every on-screen view's FBO sized to its window's
+;; exact pixel dimensions, so the blit is 1:1 and raylib derives the correct
+;; camera aspect from the FBO.  The C resize no-ops when the size is
+;; unchanged, so this is cheap.
+
+(defvar cmacs-libregnum--fit-timer nil
+  "Idle timer coalescing window-size changes for `cmacs-libregnum--fit-views'.")
+
+(defun cmacs-libregnum--fit-views ()
+  "Resize every on-screen libregnum view's FBO to its window's pixel size."
+  (setq cmacs-libregnum--fit-timer nil)
+  (when (fboundp 'cmacs-libregnum-attached-p)
+    (dolist (frame (frame-list))
+      (when (frame-live-p frame)
+        (dolist (win (window-list frame 'no-minibuffer))
+          (let ((buf (window-buffer win)))
+            (when (and (buffer-live-p buf)
+                       (ignore-errors (cmacs-libregnum-attached-p buf)))
+              (let ((w (window-pixel-width win))
+                    (h (window-pixel-height win)))
+                (when (and (> w 1) (> h 1))
+                  (ignore-errors (cmacs-libregnum-resize buf w h)))))))))))
+
+(defun cmacs-libregnum--on-size-change (&optional _frame)
+  "Coalesce window size changes, then refit all views (see `--fit-views')."
+  (unless cmacs-libregnum--fit-timer
+    (setq cmacs-libregnum--fit-timer
+          (run-with-idle-timer 0.06 nil #'cmacs-libregnum--fit-views))))
+
+(defun cmacs-libregnum-fit-window (&optional buffer)
+  "Fit BUFFER's (or the current buffer's) view FBO to its window now.
+Call after first displaying a view so its initial frame is not distorted
+before the first window-size change fires."
+  (let ((buf (or buffer (current-buffer))))
+    (when (and (buffer-live-p buf)
+               (fboundp 'cmacs-libregnum-attached-p)
+               (ignore-errors (cmacs-libregnum-attached-p buf)))
+      (let ((win (get-buffer-window buf t)))
+        (when (window-live-p win)
+          (let ((w (window-pixel-width win))
+                (h (window-pixel-height win)))
+            (when (and (> w 1) (> h 1))
+              (ignore-errors (cmacs-libregnum-resize buf w h)))))))))
+
+(add-hook 'window-size-change-functions #'cmacs-libregnum--on-size-change)
 
 (provide 'cmacs-libregnum)
 ;;; cmacs-libregnum.el ends here
