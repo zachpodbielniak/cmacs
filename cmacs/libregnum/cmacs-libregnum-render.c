@@ -22,6 +22,9 @@
  * the editor host path below can call them. */
 #ifndef LRG_BUILD_EDITOR
 #define LRG_BUILD_EDITOR 1
+#ifdef HAVE_CMACS_CAD
+# define LRG_ENABLE_CAD 1   /* CMACS: expose libregnum's CAD manager */
+#endif
 #endif
 
 #include <libregnum.h>
@@ -206,6 +209,11 @@ typedef struct
   float       x, y, z;
   float       rx, ry, rz;      /* euler radians */
   float       sx, sy, sz;
+  float       cx, cy, cz;      /* model-space pivot (the geometry's local AABB
+                                  centre); rotation spins about this so a part
+                                  modelled off its origin turns IN PLACE rather
+                                  than orbiting the origin.  0 for primitives
+                                  (already centred on their node). */
   guint8      cr, cg, cb;
   gint        node_id;          /* baked scene node id (for wireframe param) */
 } CmacsEditorModel;
@@ -346,6 +354,13 @@ struct CmacsLibregnumRenderCtx
   GrlShader        *lighting_shader;   /* owned; NULL until first enable */
   GrlMaterial      *lighting_material; /* owned; NULL until first enable */
   gboolean          shading;           /* TRUE = lit render mode */
+  /* A camera-anchored key+fill rig synthesised each frame when `headlight'
+   * is TRUE, so a model-only scene (CAD viewer, no LIGHT nodes) still
+   * shades by surface orientation instead of rendering flat / washed-out.
+   * `edges' overlays the model's wireframe in a dark tint (shaded-with-
+   * edges) for crisp geometry reading. */
+  gboolean          headlight;         /* TRUE = synthesise studio lights */
+  gboolean          edges;             /* TRUE = draw edge overlay */
 
   /* ── Feature: look-through camera ─────────────────────────────────── */
   /* When camera_lookthrough is TRUE, ctx_raylib_camera() builds the
@@ -1313,6 +1328,58 @@ static void     ctx_push_lights_to_shader  (CmacsLibregnumRenderCtx *r);
 static void     ctx_attach_shading_materials (CmacsLibregnumRenderCtx *r,
                                               gboolean on);
 #endif
+
+/* Compute the rotation to hand grl_model_draw_ex for an editor model.
+ *
+ * Two problems are solved together so they cannot disagree:
+ *  1. The draw call takes a SINGLE axis+angle, but a node carries Euler
+ *     XYZ.  The old code hard-coded the Y axis and passed only em->ry, so
+ *     X-/Z-axis rotations (the right-click "Rotate" menu, the rotate gizmo
+ *     about those axes) were stored on the node but never shown.
+ *  2. draw_ex rotates about the MODEL ORIGIN.  A CAD part is usually
+ *     modelled far from its origin, so rotating made it orbit that point
+ *     and swing out of its (axis-aligned) selection box instead of turning
+ *     in place.
+ *
+ * Both derive from ONE rotation matrix R built from the Euler angles: the
+ * draw axis+angle comes from R (via quaternion), and the position offset
+ * `OFF = C - R*C` re-pivots the rotation about the part's own (already
+ * scaled) centre C so it spins in place.  AXIS is transfer-full; *DEG is
+ * degrees; OFF[3] is added to the node location by the caller. */
+static GrlVector3 *
+cmacs_editor_rotation_for_draw (float rx, float ry, float rz,
+                                float cx, float cy, float cz,
+                                float *deg, float off[3])
+{
+  g_autoptr (GrlMatrix) rot = grl_matrix_new_rotate_xyz (rx, ry, rz);
+  GrlVector3 *axis = grl_vector3_new (0.0f, 1.0f, 0.0f);
+  float ang = 0.0f;
+  float rcx = cx, rcy = cy, rcz = cz;
+  if (rot)
+    {
+      g_autoptr (GrlQuaternion) q = grl_quaternion_new_from_matrix (rot);
+      /* R * C (column-major layout: row 0 = m0,m4,m8). */
+      rcx = rot->m0 * cx + rot->m4 * cy + rot->m8  * cz;
+      rcy = rot->m1 * cx + rot->m5 * cy + rot->m9  * cz;
+      rcz = rot->m2 * cx + rot->m6 * cy + rot->m10 * cz;
+      if (q)
+        grl_quaternion_to_axis_angle (q, axis, &ang);
+    }
+  /* An identity rotation yields a degenerate (0,0,0) axis; keep a valid
+   * axis so draw_ex's MatrixRotate does not produce NaNs. */
+  if (axis->x == 0.0f && axis->y == 0.0f && axis->z == 0.0f)
+    axis->y = 1.0f;
+  if (deg)
+    *deg = ang * 57.2957795f;
+  if (off)
+    {
+      off[0] = cx - rcx;
+      off[1] = cy - rcy;
+      off[2] = cz - rcz;
+    }
+  return axis;
+}
+
 gboolean
 cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
                                            unsigned char *dst,
@@ -1491,8 +1558,16 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
           {
             CmacsEditorModel *em =
               &g_array_index (r->editor_models, CmacsEditorModel, mi);
-            g_autoptr (GrlVector3) mpos  = grl_vector3_new (em->x, em->y, em->z);
-            g_autoptr (GrlVector3) maxis = grl_vector3_new (0.0f, 1.0f, 0.0f);
+            float mdeg = 0.0f, moff[3] = { 0.0f, 0.0f, 0.0f };
+            /* Rotate about the part's own (scaled) centre so it spins in
+             * place rather than orbiting the model origin. */
+            g_autoptr (GrlVector3) maxis =
+              cmacs_editor_rotation_for_draw (em->rx, em->ry, em->rz,
+                                              em->cx * em->sx, em->cy * em->sy,
+                                              em->cz * em->sz, &mdeg, moff);
+            g_autoptr (GrlVector3) mpos  = grl_vector3_new (em->x + moff[0],
+                                                            em->y + moff[1],
+                                                            em->z + moff[2]);
             g_autoptr (GrlVector3) mscl  = grl_vector3_new (em->sx, em->sy,
                                                             em->sz);
             g_autoptr (GrlColor)   mtint = grl_color_new (em->cr, em->cg,
@@ -1513,10 +1588,26 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
                   }
                 if (wireframe)
                   grl_model_draw_wires_ex (em->model, mpos, maxis,
-                                           em->ry * 57.2957795f, mscl, mtint);
+                                           mdeg, mscl, mtint);
                 else
-                  grl_model_draw_ex (em->model, mpos, maxis,
-                                     em->ry * 57.2957795f, mscl, mtint);
+                  {
+                    grl_model_draw_ex (em->model, mpos, maxis,
+                                       mdeg, mscl, mtint);
+                    /* Shaded-with-edges: overlay the wireframe in a dark
+                     * tint, scaled out by a hair so it sits just proud of
+                     * the surface (avoids z-fighting shimmer). */
+                    if (r->edges)
+                      {
+                        g_autoptr (GrlVector3) escl =
+                          grl_vector3_new (em->sx * 1.0025f,
+                                           em->sy * 1.0025f,
+                                           em->sz * 1.0025f);
+                        g_autoptr (GrlColor) ecol =
+                          grl_color_new (30, 34, 44, 255);
+                        grl_model_draw_wires_ex (em->model, mpos, maxis,
+                                                 mdeg, escl, ecol);
+                      }
+                  }
               }
             else if (em->texture && em->tiles)
               {
@@ -2128,10 +2219,17 @@ static const char *s_lighting_fs =
   "uniform Light lights[MAX_LIGHTS];\n"
   "uniform vec4 ambient;\n"
   "uniform vec3 viewPos;\n"
+  /* faceNormals=1: per-triangle (flat) normal from the world-position
+   * gradient, so prismatic faces shade uniformly regardless of the mesh's
+   * (possibly averaged) vertex normals -- the CAD look.  =0: interpolated
+   * vertex normals (smooth) for organic/game meshes. */
+  "uniform int faceNormals;\n"
   "void main() {\n"
   "    vec4 texelColor = texture(texture0, fragTexCoord);\n"
   "    vec3 base   = (texelColor*colDiffuse*fragColor).rgb;\n"
-  "    vec3 normal = normalize(fragNormal);\n"
+  "    vec3 normal = (faceNormals == 1)\n"
+  "        ? normalize(cross(dFdx(fragPosition), dFdy(fragPosition)))\n"
+  "        : normalize(fragNormal);\n"
   "    vec3 viewD  = normalize(viewPos - fragPosition);\n"
   "    vec3 light_accum = ambient.rgb;\n"
   "    vec3 specular    = vec3(0.0);\n"
@@ -2225,6 +2323,14 @@ ctx_push_lights_to_shader (CmacsLibregnumRenderCtx *r)
       SetShaderValue (*sh, loc, vp, SHADER_UNIFORM_VEC3);
     }
 
+  /* Flat (face) normals in the CAD headlight mode -- see the shader. */
+  loc = GetShaderLocation (*sh, "faceNormals");
+  if (loc >= 0)
+    {
+      int fn = r->headlight ? 1 : 0;
+      SetShaderValue (*sh, loc, &fn, SHADER_UNIFORM_INT);
+    }
+
   /* Zero all 4 light slots first so stale data does not persist. */
   for (i = 0; i < 4; i++)
     {
@@ -2289,6 +2395,76 @@ ctx_push_lights_to_shader (CmacsLibregnumRenderCtx *r)
           if (loc >= 0)
             SetShaderValue (*sh, loc, col, SHADER_UNIFORM_VEC4);
 
+          light_count++;
+        }
+    }
+
+  /* Headlight rig: synthesise a key + fill light from the camera frame so a
+   * model-only scene (no LIGHT nodes) is lit by surface orientation rather
+   * than rendering flat.  Point lights with no attenuation, anchored around
+   * the look-at target; intensities are kept under 1.0 so a mid-tone base
+   * stays inside [0,1] (no highlight clip -> no white wash-out). */
+  if (r->headlight)
+    {
+      float fwd[3] = { cam.target.x - cam.position.x,
+                       cam.target.y - cam.position.y,
+                       cam.target.z - cam.position.z };
+      float fl = sqrtf (fwd[0]*fwd[0] + fwd[1]*fwd[1] + fwd[2]*fwd[2]);
+      float dist = (fl > 1e-4f) ? fl : 1.0f;
+      float upv[3] = { cam.up.x, cam.up.y, cam.up.z };
+      float rgt[3], rup[3], rl;
+      int k;
+
+      if (fl > 1e-4f) { fwd[0]/=fl; fwd[1]/=fl; fwd[2]/=fl; }
+      rgt[0] = fwd[1]*upv[2] - fwd[2]*upv[1];
+      rgt[1] = fwd[2]*upv[0] - fwd[0]*upv[2];
+      rgt[2] = fwd[0]*upv[1] - fwd[1]*upv[0];
+      rl = sqrtf (rgt[0]*rgt[0] + rgt[1]*rgt[1] + rgt[2]*rgt[2]);
+      if (rl > 1e-4f) { rgt[0]/=rl; rgt[1]/=rl; rgt[2]/=rl; }
+      rup[0] = rgt[1]*fwd[2] - rgt[2]*fwd[1];
+      rup[1] = rgt[2]*fwd[0] - rgt[0]*fwd[2];
+      rup[2] = rgt[0]*fwd[1] - rgt[1]*fwd[0];
+
+      (void) dist;
+      for (k = 0; k < 2 && light_count < 4; k++)
+        {
+          /* DIRECTIONAL lights (constant L across the surface) so flat faces
+           * shade uniformly -- a point light here gives a distracting
+           * distance gradient across large faces.  k=0 key (upper-right,
+           * toward camera); k=1 fill (left, softer).  For directional, the
+           * shader uses L = normalize(position - target); we leave target at
+           * the origin and set position to the light DIRECTION. */
+          float ox    = (k == 0) ?  0.55f : -0.65f;
+          float oy    = (k == 0) ?  0.75f :  0.15f;
+          float oz    = (k == 0) ? -0.45f : -0.30f;
+          float inten = (k == 0) ?  0.80f :  0.38f;
+          float ld[3] = { rgt[0]*ox + rup[0]*oy + fwd[0]*oz,
+                          rgt[1]*ox + rup[1]*oy + fwd[1]*oz,
+                          rgt[2]*ox + rup[2]*oy + fwd[2]*oz };
+          float lt[3] = { 0.0f, 0.0f, 0.0f };
+          float lc[4] = { inten, inten, inten * 1.04f, 1.0f };
+          int en = 1, type = 0;   /* LIGHT_DIRECTIONAL */
+
+          g_snprintf (name_buf, sizeof (name_buf),
+                      "lights[%d].enabled", light_count);
+          loc = GetShaderLocation (*sh, name_buf);
+          if (loc >= 0) SetShaderValue (*sh, loc, &en, SHADER_UNIFORM_INT);
+          g_snprintf (name_buf, sizeof (name_buf),
+                      "lights[%d].type", light_count);
+          loc = GetShaderLocation (*sh, name_buf);
+          if (loc >= 0) SetShaderValue (*sh, loc, &type, SHADER_UNIFORM_INT);
+          g_snprintf (name_buf, sizeof (name_buf),
+                      "lights[%d].position", light_count);
+          loc = GetShaderLocation (*sh, name_buf);
+          if (loc >= 0) SetShaderValue (*sh, loc, ld, SHADER_UNIFORM_VEC3);
+          g_snprintf (name_buf, sizeof (name_buf),
+                      "lights[%d].target", light_count);
+          loc = GetShaderLocation (*sh, name_buf);
+          if (loc >= 0) SetShaderValue (*sh, loc, lt, SHADER_UNIFORM_VEC3);
+          g_snprintf (name_buf, sizeof (name_buf),
+                      "lights[%d].color", light_count);
+          loc = GetShaderLocation (*sh, name_buf);
+          if (loc >= 0) SetShaderValue (*sh, loc, lc, SHADER_UNIFORM_VEC4);
           light_count++;
         }
     }
@@ -2377,6 +2553,7 @@ cmacs_editor_bake_node (CmacsLibregnumRenderCtx *r, LrgNode *node,
     {
     case LRG_NODE_VISUAL_PRIMITIVE:       cr = 120; cg = 170; cb = 240; break;
     case LRG_NODE_VISUAL_MESH_ASSET:      cr = 160; cg = 220; cb = 160; break;
+    case LRG_NODE_VISUAL_CAD_PART:        cr = 150; cg = 180; cb = 255; break;
     case LRG_NODE_VISUAL_SPRITE:          cr = 240; cg = 210; cb = 120; break;
     case LRG_NODE_VISUAL_LIGHT:           cr = 250; cg = 240; cb = 140; break;
     case LRG_NODE_VISUAL_CAMERA:          cr = 200; cg = 160; cb = 240; break;
@@ -2480,6 +2657,7 @@ cmacs_editor_bake_node (CmacsLibregnumRenderCtx *r, LrgNode *node,
           em.x = x; em.y = y; em.z = z;
           em.rx = rrx; em.ry = rry; em.rz = rrz;
           em.sx = ssx; em.sy = ssy; em.sz = ssz;
+          em.cx = 0.0f; em.cy = 0.0f; em.cz = 0.0f;
           em.cr = 230; em.cg = 230; em.cb = 235;
           em.node_id = (gint) r->nodes->len; /* id add_node will assign */
           if (r->editor_models)
@@ -2491,6 +2669,113 @@ cmacs_editor_bake_node (CmacsLibregnumRenderCtx *r, LrgNode *node,
       else
         /* Missing/failed asset: a green placeholder cube. */
         shape = LRG_SHAPE (lrg_cube3d_new_at (x, y, z, 1.0f, 1.0f, 1.0f));
+    }
+  else if (kind == LRG_NODE_VISUAL_CAD_PART)
+    {
+#ifdef HAVE_CMACS_CAD
+      /* CMACS: parametric CAD part -- evaluate + tessellate through the
+       * libregnum CAD manager (cached by path + "cad:" param overrides)
+       * and draw every 16-bit-safe chunk as a model at this node's TRS. */
+      const char *asset = lrg_node_visual_get_asset (vis);
+      LrgCadBakeResult *bake = NULL;
+      if (asset && asset[0])
+        {
+          LrgCadManager *mgr = lrg_cad_manager_get_default ();
+          GHashTable *overrides = lrg_cad_manager_overrides_for_node (node);
+          gdouble defl = lrg_node_visual_get_param_double (vis,
+                                                           "cad:deflection",
+                                                           0.0);
+          GError *cad_error = NULL;
+          bake = lrg_cad_manager_bake (mgr, asset, overrides, defl, NULL,
+                                       &cad_error);
+          if (overrides)
+            g_hash_table_unref (overrides);
+          if (cad_error)
+            {
+              g_message ("cmacs-cad: bake of %s failed: %s", asset,
+                         cad_error->message);
+              g_clear_error (&cad_error);
+            }
+        }
+      if (bake)
+        {
+          GPtrArray *models = lrg_cad_bake_result_get_models (bake);
+          CadSolid  *solid  = lrg_cad_bake_result_get_solid (bake);
+          gdouble mn[3], mx[3];
+          guint ci;
+
+          cad_solid_get_bbox (solid, &mn[0], &mn[1], &mn[2],
+                              &mx[0], &mx[1], &mx[2]);
+          hw = (float) (mx[0] - mn[0]) * 0.5f;
+          hh = (float) (mx[1] - mn[1]) * 0.5f;
+          hd = (float) (mx[2] - mn[2]) * 0.5f;
+          if (hw < 0.05f) hw = 0.5f;
+          if (hh < 0.05f) hh = 0.5f;
+          if (hd < 0.05f) hd = 0.5f;
+
+          for (ci = 0; models && ci < models->len; ci++)
+            {
+              CmacsEditorModel em;
+              em.model = g_object_ref (g_ptr_array_index (models, ci));
+              em.texture = NULL;
+              em.flat = FALSE;
+              em.tiles = NULL;
+              em.tile_rgb = NULL; em.tile_models = NULL;
+              em.tile_textures = NULL;
+              em.x = x; em.y = y; em.z = z;
+              em.rx = rrx; em.ry = rry; em.rz = rrz;
+              em.sx = ssx; em.sy = ssy; em.sz = ssz;
+              /* Pivot = the solid's model-space AABB centre, so node
+               * rotation spins the part in place rather than orbiting the
+               * (often far-off) model origin. */
+              em.cx = (float) (mn[0] + mx[0]) * 0.5f;
+              em.cy = (float) (mn[1] + mx[1]) * 0.5f;
+              em.cz = (float) (mn[2] + mx[2]) * 0.5f;
+              /* Mid-tone steel: a near-white base clips to white once lit
+               * (the wash-out); this keeps shading inside [0,1]. */
+              em.cr = 150; em.cg = 165; em.cb = 200;
+              em.node_id = (gint) r->nodes->len; /* id add_node assigns */
+              if (r->editor_models)
+                g_array_append_val (r->editor_models, em);
+              else
+                g_object_unref (em.model);
+            }
+          hw *= fabsf (ssx); hh *= fabsf (ssy); hd *= fabsf (ssz);
+          /* Refit the axis-aligned selection / pick box to the ROTATED
+           * extents (|R| * half-extents), so it bounds the part after a
+           * turn instead of staying sized to the unrotated geometry.
+           * Identity rotation leaves it unchanged. */
+          {
+            g_autoptr (GrlMatrix) rb = grl_matrix_new_rotate_xyz (rrx, rry,
+                                                                  rrz);
+            if (rb)
+              {
+                float ehw = fabsf (rb->m0) * hw + fabsf (rb->m4) * hh
+                            + fabsf (rb->m8) * hd;
+                float ehh = fabsf (rb->m1) * hw + fabsf (rb->m5) * hh
+                            + fabsf (rb->m9) * hd;
+                float ehd = fabsf (rb->m2) * hw + fabsf (rb->m6) * hh
+                            + fabsf (rb->m10) * hd;
+                hw = ehw; hh = ehh; hd = ehd;
+              }
+          }
+          /* Parts are modeled in their own coordinates, usually NOT
+           * centered on the node origin: record the solid's AABB center
+           * as the node-entry center so the selection box, pick, focus
+           * and label track the geometry.  Rotation pivots about this
+           * centre (see cmacs_editor_rotation_for_draw), so the centre
+           * stays put and the box above bounds the turned part. */
+          x += (float) (mn[0] + mx[0]) * 0.5f * ssx;
+          y += (float) (mn[1] + mx[1]) * 0.5f * ssy;
+          z += (float) (mn[2] + mx[2]) * 0.5f * ssz;
+        }
+      else
+        /* No asset / failed bake: a blue placeholder cube. */
+        shape = LRG_SHAPE (lrg_cube3d_new_at (x, y, z, 1.0f, 1.0f, 1.0f));
+#else
+      /* CAD support compiled out: placeholder so levels stay loadable. */
+      shape = LRG_SHAPE (lrg_cube3d_new_at (x, y, z, 1.0f, 1.0f, 1.0f));
+#endif /* HAVE_CMACS_CAD */
     }
   else if (kind == LRG_NODE_VISUAL_SPRITE)
     {
@@ -2511,6 +2796,7 @@ cmacs_editor_bake_node (CmacsLibregnumRenderCtx *r, LrgNode *node,
           em.x = x; em.y = y; em.z = z;
           em.rx = rrx; em.ry = rry; em.rz = rrz;
           em.sx = ssx; em.sy = ssy; em.sz = ssz;
+          em.cx = 0.0f; em.cy = 0.0f; em.cz = 0.0f;
           em.cr = 255; em.cg = 255; em.cb = 255;
           em.node_id = (gint) r->nodes->len; /* id add_node will assign */
           if (r->editor_models)
@@ -2645,6 +2931,7 @@ cmacs_editor_bake_node (CmacsLibregnumRenderCtx *r, LrgNode *node,
           em.x = x; em.y = y; em.z = z;
           em.rx = rrx; em.ry = rry; em.rz = rrz;
           em.sx = ssx; em.sy = ssy; em.sz = ssz;
+          em.cx = 0.0f; em.cy = 0.0f; em.cz = 0.0f;
           em.cr = 255; em.cg = 255; em.cb = 255;
           em.node_id = (gint) r->nodes->len; /* id add_node will assign */
           if (r->editor_models)
@@ -4111,6 +4398,22 @@ cmacs_libregnum_render_ctx_editor_set_visual_param (CmacsLibregnumRenderCtx *r,
   cmacs_editor_rebuild (r);
 }
 
+/* Undoable visual-param set: routes through the editor's command stack so
+ * it participates in undo/redo.  MERGE folds a continuing slider drag onto
+ * the previous command.  Returns FALSE if there is no such node/editor. */
+gboolean
+cmacs_libregnum_render_ctx_editor_set_visual_param_undoable
+                                          (CmacsLibregnumRenderCtx *r,
+                                           gint id, const char *name,
+                                           double value, gboolean merge)
+{
+  LrgNode *n = cmacs_editor_node_for_id (r, id);
+  if (!n || !name || !r->editor) return FALSE;
+  lrg_editor_set_visual_param (r->editor, n, name, value, merge);
+  cmacs_editor_rebuild (r);
+  return TRUE;
+}
+
 /* Return node ID's visual asset path (sound file / mesh / sprite / tileset) as
  * a newly-allocated string, or NULL. */
 char *
@@ -4472,6 +4775,25 @@ cmacs_libregnum_render_ctx_editor_shading_p (CmacsLibregnumRenderCtx *r)
   return r->shading;
 }
 
+/* Synthesise a camera-anchored key+fill rig each frame (CAD model viewer
+ * lighting); requires shading to be on to have any effect. */
+void
+cmacs_libregnum_render_ctx_editor_set_headlight (CmacsLibregnumRenderCtx *r,
+                                                 gboolean on)
+{
+  if (!r) return;
+  r->headlight = on;
+}
+
+/* Overlay a dark wireframe on shaded models (shaded-with-edges). */
+void
+cmacs_libregnum_render_ctx_editor_set_edges (CmacsLibregnumRenderCtx *r,
+                                             gboolean on)
+{
+  if (!r) return;
+  r->edges = on;
+}
+
 /* ── Feature 2: look-through camera ─────────────────────────────────── */
 
 /* Drive the viewport camera from the CAMERA node at `id'.
@@ -4732,6 +5054,10 @@ void cmacs_libregnum_render_ctx_editor_set_shading (CmacsLibregnumRenderCtx *r,
          gboolean on) { (void) r; (void) on; }
 gboolean cmacs_libregnum_render_ctx_editor_shading_p (CmacsLibregnumRenderCtx *r)
 { (void) r; return FALSE; }
+void cmacs_libregnum_render_ctx_editor_set_headlight (CmacsLibregnumRenderCtx *r,
+         gboolean on) { (void) r; (void) on; }
+void cmacs_libregnum_render_ctx_editor_set_edges (CmacsLibregnumRenderCtx *r,
+         gboolean on) { (void) r; (void) on; }
 gboolean cmacs_libregnum_render_ctx_editor_look_through (CmacsLibregnumRenderCtx *r,
          gint id) { (void) r; (void) id; return FALSE; }
 void cmacs_libregnum_render_ctx_editor_look_through_off (CmacsLibregnumRenderCtx *r)
@@ -4741,7 +5067,39 @@ gint cmacs_libregnum_render_ctx_editor_look_through_p (CmacsLibregnumRenderCtx *
 double cmacs_libregnum_render_ctx_editor_get_visual_param (CmacsLibregnumRenderCtx *r,
          gint id, const char *name, double def)
 { (void) r; (void) id; (void) name; return def; }
+gboolean cmacs_libregnum_render_ctx_editor_set_visual_param_undoable
+         (CmacsLibregnumRenderCtx *r, gint id, const char *name,
+          double value, gboolean merge)
+{ (void) r; (void) id; (void) name; (void) value; (void) merge;
+  return FALSE; }
 
 #endif /* LRG_BUILD_EDITOR */
 
 #endif /* HAVE_CMACS_LIBREGNUM */
+
+
+/* ── CMACS CAD: public hooks for the Lisp layer ───────────────────────── */
+
+void
+cmacs_libregnum_render_ctx_editor_refresh (CmacsLibregnumRenderCtx *r)
+{
+  if (r && r->editor)
+    cmacs_editor_rebuild (r);
+}
+
+#ifdef HAVE_CMACS_CAD
+void
+cmacs_libregnum_render_cad_invalidate (const char *path)
+{
+  lrg_cad_manager_invalidate (lrg_cad_manager_get_default (), path);
+}
+
+gboolean
+cmacs_libregnum_render_cad_set_source (const char *path,
+                                       const char *source,
+                                       GError **error)
+{
+  return lrg_cad_manager_set_source (lrg_cad_manager_get_default (),
+                                     path, source, error);
+}
+#endif /* HAVE_CMACS_CAD */

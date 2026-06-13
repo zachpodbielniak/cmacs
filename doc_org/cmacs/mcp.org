@@ -198,6 +198,29 @@ Available when CMacs is built with =--with-cmacs-gowl=.
 | =gowl_workspace_switch=       | Switch to a workspace by id                            |
 | =gowl_screenshot=             | Capture the desktop or a client as a PNG image          |
 
+** cad --- Parametric CAD (optional)
+
+Available when CMacs is built with =--with-cmacs-cad=.  The "vibe CAD"
+surface: the inner loop is =cad_set_source= / =cad_patch_source= (edit →
+re-eval → report).
+
+| Tool               | Description                                          |
+|--------------------+------------------------------------------------------|
+| =cad_open=         | Language + capability flags of a part                |
+| =cad_get_source=   | Current part source text                             |
+| =cad_set_source=   | Replace source, write, re-eval, report               |
+| =cad_patch_source= | Single-occurrence OLD→NEW edit + re-eval             |
+| =cad_eval=         | Re-evaluate; report parts/error                      |
+| =cad_params=       | Parameters and ranges                                |
+| =cad_inspect=      | Mass properties (volume/area/COM/bbox/watertight)    |
+| =cad_feature_tree= | The CSG feature tree as indented text                |
+| =cad_section=      | Section by an X/Y/Z plane (segments + perimeter)     |
+| =cad_export=       | Export STL/OBJ/STEP/IGES                             |
+| =cad_snapshot=     | Render a workbench view as an inline PNG             |
+| =cad_slice=        | Export + slice to G-code (waits)                    |
+| =cad_printers=     | List configured printers                            |
+| =cad_print=        | Upload G-code; print STARTS only with start+confirm |
+
 * Resources
 
 MCP resources expose Emacs state as readable URIs.

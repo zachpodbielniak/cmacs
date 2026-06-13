@@ -27,11 +27,13 @@
 typedef struct
 {
   struct frame *frame;
+  CmacsLibregnumView *view;         /* the view that owns the active drag */
   double        last_x, last_y;
   double        press_x, press_y;   /* left-button-down position */
-  double        rpress_x, rpress_y; /* right-button-down position (menu vs pan) */
+  double        rpress_x, rpress_y; /* right-button-down position (menu vs orbit) */
   bool          dragging_left;
   bool          dragging_right;
+  bool          dragging_middle;    /* middle-drag pans (CAD nav profile) */
   bool          dragging_object;    /* editor: moving the picked node */
   bool          dragging_gizmo;     /* editor: dragging a transform handle */
 } DragState;
@@ -218,6 +220,9 @@ defer_context_menu (CmacsLibregnumView *v, gint id, double fx, double fy,
   g_main_context_invoke (cmacs_glib_get_context (), context_menu_idle, c);
 }
 
+static struct window *window_showing_view (Lisp_Object window,
+                                           CmacsLibregnumView *v);
+
 /* Convert a frame-pixel click (X,Y) to view-local pixels (origin
  * top-left) for the window showing view V, and report the view size.
  * Returns false if the click is outside the window or sizes are bad. */
@@ -226,9 +231,9 @@ frame_to_view_coords (struct frame *f, CmacsLibregnumView *v,
                       double x, double y,
                       double *vx, double *vy, int *vw, int *vh)
 {
-  Lisp_Object sw = f->selected_window;
-  if (!WINDOWP (sw)) return false;
-  struct window *win = XWINDOW (sw);
+  if (!f || !FRAME_LIVE_P (f)) return false;
+  struct window *win = window_showing_view (FRAME_ROOT_WINDOW (f), v);
+  if (!win) return false;
   int px = WINDOW_LEFT_PIXEL_EDGE (win);
   int py = WINDOW_TOP_PIXEL_EDGE  (win);
   int pw = WINDOW_PIXEL_WIDTH     (win);
@@ -343,34 +348,104 @@ handle_click (struct frame *f, CmacsLibregnumView *v, double x, double y)
   g_main_context_invoke (cmacs_glib_get_context (), click_action_idle, a);
 }
 
-static CmacsLibregnumView *
-selected_view_for_frame (struct frame *f)
+/* CRITICAL (applies to every helper below): these run inside a GTK
+ * signal callback.  We MUST NOT call any Lisp `F*' helper that can
+ * xsignal -- e.g. Fframe_selected_window's CHECK_LIVE_FRAME,
+ * Fwindow_buffer's CHECK_WINDOW.  A signal here longjmps through GLib's
+ * signal_emit_unlocked_R, leaving the emission stack corrupted.  Read
+ * straight off the C structs instead.  `f' can also be NULL when the
+ * GtkWidget that received the event is not a cmacs frame (tooltips,
+ * menus, popovers, a split's transient widget). */
+
+/* Recursively find the leaf window in a window tree whose pixel
+ * rectangle contains (X,Y).  Pure C-struct traversal (see warning
+ * above). */
+static struct window *
+leaf_window_at (Lisp_Object window, double x, double y)
 {
-  /* `f' can be NULL when the GtkWidget that received the event is
-   * not a cmacs frame (tooltips, menus, popovers, the widget that
-   * passes through during a window split before the new frame is
-   * mapped).
-   *
-   * CRITICAL: this runs inside a GTK signal callback.  We MUST NOT
-   * call any Lisp `F*' helper that can xsignal -- e.g.
-   * Fframe_selected_window's CHECK_LIVE_FRAME, Fwindow_buffer's
-   * CHECK_WINDOW.  A signal here longjmps through GLib's
-   * signal_emit_unlocked_R, leaving the emission stack
-   * corrupted.  Read straight off the C structs instead. */
+  while (WINDOWP (window))
+    {
+      struct window *w = XWINDOW (window);
+      if (BUFFERP (w->contents))
+        {
+          int l = WINDOW_LEFT_PIXEL_EDGE (w);
+          int t = WINDOW_TOP_PIXEL_EDGE  (w);
+          if (x >= l && x < l + WINDOW_PIXEL_WIDTH (w)
+              && y >= t && y < t + WINDOW_PIXEL_HEIGHT (w))
+            return w;
+        }
+      else if (WINDOWP (w->contents))
+        {
+          struct window *hit = leaf_window_at (w->contents, x, y);
+          if (hit) return hit;
+        }
+      window = w->next;
+    }
+  return NULL;
+}
+
+/* The libregnum view whose window currently sits under the pointer
+ * (X,Y in frame pixels), or NULL.  Unlike selected_view_for_frame this
+ * does NOT require the view's window to be the frame's *selected*
+ * window -- mouse orbit/pan/zoom then work over any visible viewport,
+ * so a viewer that left an info/source pane selected (e.g. the CAD
+ * model/G-code viewers, where Doom re-selects the file buffer after
+ * find-file) still rotates on right-drag.  A press that lands outside
+ * every viewport returns NULL and falls through to Emacs, so other
+ * panes are still selectable by clicking them. */
+static CmacsLibregnumView *
+pointer_view_for_frame (struct frame *f, double x, double y,
+                        struct window **win_out)
+{
   if (!f) return NULL;
   if (cmacs_libregnum_view_registry_empty_p ()) return NULL;
   if (!FRAME_LIVE_P (f)) return NULL;
-  Lisp_Object sw = f->selected_window;
-  if (!WINDOWP (sw)) return NULL;
-  Lisp_Object buf = XWINDOW (sw)->contents;
-  if (!BUFFERP (buf)) return NULL;
-  return cmacs_libregnum_view_for_buffer (buf);
+  struct window *w = leaf_window_at (FRAME_ROOT_WINDOW (f), x, y);
+  if (!w || !BUFFERP (w->contents)) return NULL;
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (w->contents);
+  if (v && win_out) *win_out = w;
+  return v;
+}
+
+/* The leaf window in WINDOW's tree displaying view V's buffer, or NULL.
+ * frame_to_view_coords uses this so coordinate mapping follows the
+ * view's actual window wherever it lives, not the selected window. */
+static struct window *
+window_showing_view (Lisp_Object window, CmacsLibregnumView *v)
+{
+  while (WINDOWP (window))
+    {
+      struct window *w = XWINDOW (window);
+      if (BUFFERP (w->contents))
+        {
+          if (cmacs_libregnum_view_for_buffer (w->contents) == v)
+            return w;
+        }
+      else if (WINDOWP (w->contents))
+        {
+          struct window *hit = window_showing_view (w->contents, v);
+          if (hit) return hit;
+        }
+      window = w->next;
+    }
+  return NULL;
 }
 
 gboolean
 cmacs_libregnum_handle_motion (struct frame *f, double x, double y)
 {
-  CmacsLibregnumView *v = selected_view_for_frame (f);
+  if (!f || !FRAME_LIVE_P (f)) return FALSE;
+  /* During an active drag the pointer may stray outside the viewport
+   * window -- GTK keeps delivering motion to the implicit grab -- so keep
+   * driving the view that owns the drag.  Otherwise route to whatever
+   * viewport sits under the pointer (not the selected window). */
+  bool drag_active = (drag_state.frame == f && drag_state.view
+                      && (drag_state.dragging_left || drag_state.dragging_right
+                          || drag_state.dragging_middle
+                          || drag_state.dragging_object
+                          || drag_state.dragging_gizmo));
+  CmacsLibregnumView *v = drag_active ? drag_state.view
+                                      : pointer_view_for_frame (f, x, y, NULL);
   if (!v) return FALSE;
 
   {
@@ -427,15 +502,20 @@ cmacs_libregnum_handle_motion (struct frame *f, double x, double y)
     }
 
   if (drag_state.frame == f
-      && (drag_state.dragging_left || drag_state.dragging_right))
+      && (drag_state.dragging_left || drag_state.dragging_right
+          || drag_state.dragging_middle))
     {
       double dx = x - drag_state.last_x;
       double dy = y - drag_state.last_y;
       CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
-      if (drag_state.dragging_left)
-        cmacs_libregnum_render_ctx_orbit_camera (ctx, dx, dy);
-      else /* right-drag pans the viewport so you can reach things */
+      /* CAD navigation profile (matches FreeCAD's "CAD" preset, and what a
+       * 3-D viewer user reaches for): left OR right drag orbits; middle drag
+       * pans; scroll zooms.  A right-click WITHOUT movement still pops the
+       * context menu (handled in the button-release branch). */
+      if (drag_state.dragging_middle)
         cmacs_libregnum_render_ctx_pan_camera (ctx, dx, dy);
+      else
+        cmacs_libregnum_render_ctx_orbit_camera (ctx, dx, dy);
       cmacs_libregnum_view_request_redraw (v);
     }
   else
@@ -460,14 +540,26 @@ cmacs_libregnum_handle_motion (struct frame *f, double x, double y)
   drag_state.frame  = f;
   drag_state.last_x = x;
   drag_state.last_y = y;
-  return drag_state.dragging_left || drag_state.dragging_right;
+  return drag_state.dragging_left || drag_state.dragging_right
+         || drag_state.dragging_middle;
 }
 
 gboolean
 cmacs_libregnum_handle_button (struct frame *f, int button, int press,
                                double x, double y)
 {
-  CmacsLibregnumView *v = selected_view_for_frame (f);
+  if (!f || !FRAME_LIVE_P (f)) return FALSE;
+  /* Route to the viewport under the pointer (press) or, for a button-up
+   * that ends a drag, the view that owns the drag (the pointer may have
+   * run past the window edge).  NOT the selected window -- so right-drag
+   * orbits even while an info/source pane is the selected window. */
+  bool ending_drag = (press == 0 && drag_state.frame == f && drag_state.view
+                      && (drag_state.dragging_left || drag_state.dragging_right
+                          || drag_state.dragging_middle
+                          || drag_state.dragging_object
+                          || drag_state.dragging_gizmo));
+  CmacsLibregnumView *v = ending_drag ? drag_state.view
+                                      : pointer_view_for_frame (f, x, y, NULL);
   if (!v) return FALSE;
 
   /* Editor (default): only act on a press that lands inside the viewport's own
@@ -488,6 +580,7 @@ cmacs_libregnum_handle_button (struct frame *f, int button, int press,
                              (cmacs_libregnum_view_get_render_ctx (v));
     gboolean in_view = frame_to_view_coords (f, v, x, y, &gx, &gy, &gw, &gh);
     gboolean drag_active = drag_state.dragging_left || drag_state.dragging_right
+                           || drag_state.dragging_middle
                            || drag_state.dragging_object
                            || drag_state.dragging_gizmo;
     if (!capture_all && !in_view && !(press == 0 && drag_active))
@@ -509,6 +602,7 @@ cmacs_libregnum_handle_button (struct frame *f, int button, int press,
   }
 
   drag_state.frame  = f;
+  drag_state.view   = v;
   drag_state.last_x = x;
   drag_state.last_y = y;
   if (button == 1)
@@ -636,6 +730,12 @@ cmacs_libregnum_handle_button (struct frame *f, int button, int press,
         }
       return true;
     }
+  if (button == 2)
+    {
+      /* Middle button: pan drag (CAD nav profile).  No click action. */
+      drag_state.dragging_middle = (press != 0);
+      return true;
+    }
   return false;
 }
 
@@ -643,8 +743,9 @@ gboolean
 cmacs_libregnum_handle_scroll (struct frame *f, double dx, double dy,
                                double x, double y)
 {
-  (void) dx; (void) x; (void) y;
-  CmacsLibregnumView *v = selected_view_for_frame (f);
+  (void) dx;
+  /* Zoom whatever viewport is under the pointer (not the selected window). */
+  CmacsLibregnumView *v = pointer_view_for_frame (f, x, y, NULL);
   if (!v) return FALSE;
   CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
   if (cmacs_libregnum_render_ctx_is_game (ctx))

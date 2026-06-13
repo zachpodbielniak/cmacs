@@ -59,6 +59,7 @@ interaction.
 * CMacs Libregnum::             Embedded libregnum 3D scene buffers.
 * CMacs Gnuseye::               GNU's Eye live planetary globe.
 * CMacs Gsurf::                 Embedded gsurf web browser buffers.
+* CMacs CAD::                   Parametric CAD parts (.cad/.ccad via cad-glib).
 * Build Configuration::         Configure flags and dependencies.
 * Upstream Changes::            Every edit cmacs makes to stock Emacs sources.
 @end menu
@@ -7305,6 +7306,131 @@ are unaffected.  cmacs deliberately does @emph{not} set the
 parser also scans every @code{JSC_*} var and rejects it with @samp{ERROR:
 invalid option: JSC_SIGNAL_FOR_GC=40}.  If you see that error, unset the
 variable in your environment.
+
+@c ===================================================================
+@node CMacs CAD
+@chapter CMacs CAD
+
+@code{cmacs-cad} (@option{--with-cmacs-cad}) turns cmacs into a
+parametric CAD environment.  A part is a text file in one of two
+languages, both evaluating through cad-glib (Manifold mesh CSG +
+OpenCASCADE B-rep + SolveSpace constraint sketches) into one document
+model: @file{.cad} is the s-expression DSL
+(@code{cmacs-cad-mode}); @file{.ccad} is crispy --- ordinary C with a
+@code{main()} calling the flat @code{cad_*} API
+(@code{cmacs-cad-crispy-mode}).
+
+@example
+(defparam thickness 4.0 :min 2 :max 10)
+(defpart bracket
+  (difference
+    (box 40 20 thickness)
+    (translate (10 10 -1) (cylinder :r 2.5 :h (+ thickness 2)))))
+@end example
+
+Geometry is exact B-rep by default (@code{:backend mesh} opts into
+Manifold), parameters re-bind without editing source, and every
+feature carries its source span, so viewers can map a clicked face
+back to the expression that made it.  Parts render in scenes as
+libregnum @code{CAD_PART} nodes.
+
+Both modes share one evaluation loop: @kbd{C-c C-c} (or saving, when
+@code{cmacs-cad-eval-on-save}) re-evaluates the buffer asynchronously
+and single-flight; failures land in Flymake at the reported source
+span.  @kbd{C-c C-p} echoes parameters, @kbd{C-c C-i} mass properties
+(volume, area, watertightness), @kbd{C-c C-e} exports
+STL/OBJ/STEP/IGES.  Completion and ElDoc come from the live modeling
+vocabulary (@code{cmacs-cad-dsl-symbols}).
+
+The Lisp surface (errors signal @code{cmacs-cad-error} with the
+evaluator's message and location): @code{cmacs-cad-doc-open},
+@code{cmacs-cad-set-source}, @code{cmacs-cad-eval},
+@code{cmacs-cad-eval-async}, @code{cmacs-cad-params},
+@code{cmacs-cad-part-names}, @code{cmacs-cad-feature-tree},
+@code{cmacs-cad-inspect} (volume, area, bbox, center of mass,
+watertightness, triangle count), @code{cmacs-cad-section} (plane to a
+list of line segments) and @code{cmacs-cad-export}.
+
+@kbd{C-c C-M-i} shows the full mass properties in a help buffer;
+@kbd{C-c C-m} (@code{cmacs-cad-measure}) reports the distance and
+per-axis delta between two points; @kbd{C-c C-s}
+(@code{cmacs-cad-section-at}) slices the part with an X/Y/Z plane and
+reports the section's segment count and perimeter.  Visiting an @file{.stl}, @file{.obj}, @file{.step}, @file{.iges} or
+@file{.3mf} file enters @code{cmacs-cad-model-mode}, which imports the
+geometry through cad-glib and renders it as a CAD_PART in the libregnum
+editor beside an info panel (format, triangles, watertightness, size) ---
+binary STL and B-rep STEP alike.  Opening a
+@file{.gcode} file enters @code{cmacs-cad-gcode-mode}: the raw text
+stays in the buffer and the toolpath renders as a 3-D extruded-bead mesh
+through the libregnum editor (via cad-glib's OBJ import + the CAD_PART
+bake path), with @kbd{]}/@kbd{[} to scrub the top visible layer and the
+slicer-footer time/filament estimates in the mode-line.
+
+Visiting a @file{.cad}/@file{.ccad} file automatically opens the
+workbench (set @code{cmacs-cad-auto-workbench} to nil for bare text):
+the libregnum-rendered 3-D view is the primary way to see a part, with
+the text buffer as its source.  @kbd{C-c C-v} (@code{cmacs-cad-workbench})
+opens or re-focuses it: the source buffer and a 3D viewport side by side, with a feature-tree panel (RET jumps to and
+pulses the source span that made the feature) and an interactive CAD
+Parameters section in the inspector --- each @code{defparam} gets a
+field plus @kbd{-}/@kbd{+} nudge buttons that set a @code{cad:} override
+on the node and re-bake live (parameters re-bind without editing
+source), undoable through the editor's own undo stack and clamped to the
+param's declared range.  Re-evaluating the source pushes the (possibly
+unsaved) buffer text into the viewport and re-bakes the geometry, so
+edits show immediately without saving; untouched params re-seed to the
+new source default while nudged params keep their value.  The editor's CAD palette section
+offers @emph{New Part}, @emph{Place Part} and @emph{Import STL/STEP} ---
+the last wraps an external @file{.stl}/@file{.obj}/@file{.step}/@file{.iges}
+file in a generated @code{(import "@dots{}")} part so imported geometry
+renders through the same @code{CAD_PART} path and can be drilled,
+combined or measured.  The @code{import} form (and its crispy twin
+@code{cad_import}) resolves relative paths against the part file's own
+directory.
+
+@code{cmacs-cad-slice-part} exports the current part to STL and slices it
+to G-code with an external slicer (PrusaSlicer native binary or the
+@code{com.prusa3d.PrusaSlicer} flatpak), merging a small overrides ini
+(layer height, infill, perimeters, supports, brim) on top of your base
+profile so only the parameters you set change.  Slicing is async with a
+job buffer; estimates come from the G-code footer; staging stays under
+@file{$HOME} for the flatpak.  @code{cmacs-cad-printer-upload} sends the
+result to a networked printer (OctoPrint, Moonraker, PrusaLink, or a
+local @code{gcode} directory sink) over @code{curl}; the API key comes
+from auth-source and is fed via stdin so it never appears in the argv.
+@code{cmacs-cad-printer-start} is the only path that begins a print and
+requires an explicit confirmation (interactive @code{yes-or-no-p} or a
+programmatic @code{:confirm t}).
+
+With @option{--with-cmacs-mcp}, a "vibe CAD" tool set lets an AI agent
+model conversationally: the inner loop is @code{cad_set_source} /
+@code{cad_patch_source} (edit, re-evaluate, report), surrounded by
+@code{cad_open}, @code{cad_inspect}, @code{cad_feature_tree},
+@code{cad_section}, @code{cad_export}, @code{cad_snapshot} (inline PNG),
+@code{cad_slice}, @code{cad_printers} and @code{cad_print} (which starts a
+print only when both @code{start} and @code{confirm} are set).  Org Babel
+@code{cad} (s-expression) and @code{ccad} (crispy) source blocks execute
+a part body: no output yields a mass-property table, @code{:file} inlines
+a snapshot, @code{:export} writes an artifact, and @code{:var} supplies
+parameter overrides.
+
+@kbd{C-c C-k} (@code{cmacs-cad-sketch}) opens an interactive 2D
+constraint sketcher rendered as an SVG canvas and driven by cad-glib's
+SolveSpace solver: place points (click or @kbd{p}), connect lines
+(@kbd{l}) and circles (@kbd{c}), select entities and apply constraints
+(@kbd{H}orizontal, @kbd{V}ertical, @kbd{P}arallel, perpe@kbd{N}dicular,
+@kbd{E}qual, @kbd{T}angent, @kbd{C}oincident, @kbd{M}idpoint, @kbd{F}ixed;
+@kbd{D}/@kbd{R}/@kbd{A} add a dimension).  The header-line shows the
+remaining degrees of freedom (green 0 / yellow >0 / red over-constrained);
+@kbd{C-c C-c} writes a @code{(defsketch @dots{})} form back into the part
+(or, from a @file{.ccad} buffer, to the kill-ring).
+
+@code{cmacs-cad-new-part} / @code{cmacs-cad-new-project} scaffold parts
+and projects; @code{cmacs-cad-part-browser} lists a project's parts with
+content-hashed thumbnails; and @code{cmacs-cad-diff} compares two git
+revisions of a part by parameter changes and feature-tree structure.
+
+See @file{doc_org/cmacs/cmacs-cad.org} for the living document.
 
 @c ===================================================================
 @node Build Configuration

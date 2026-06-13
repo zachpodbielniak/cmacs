@@ -318,6 +318,16 @@ extern void     cmacs_libregnum_render_ctx_editor_select_node
 extern void     cmacs_libregnum_render_ctx_editor_set_position
                               (CmacsLibregnumRenderCtx *r, gint node_id,
                                double x, double y, double z);
+extern void     cmacs_libregnum_render_ctx_editor_refresh
+                  (CmacsLibregnumRenderCtx *ctx);
+#ifdef HAVE_CMACS_CAD
+/* CMACS CAD: drop the CAD manager's caches for PATH (next rebuild
+ * re-evaluates the part). */
+extern void     cmacs_libregnum_render_cad_invalidate (const char *path);
+extern gboolean cmacs_libregnum_render_cad_set_source (const char *path,
+                                                       const char *source,
+                                                       GError **error);
+#endif
 extern void     cmacs_libregnum_render_ctx_editor_undo
                               (CmacsLibregnumRenderCtx *r);
 extern void     cmacs_libregnum_render_ctx_editor_redo
@@ -477,6 +487,12 @@ extern void     cmacs_libregnum_assetdb_free       (void *db);
 extern void     cmacs_libregnum_render_ctx_editor_set_visual_param
                               (CmacsLibregnumRenderCtx *r, gint node_id,
                                const char *name, double value);
+/* Same, but as an UNDOABLE editor command; MERGE coalesces a continuing
+ * slider drag onto the previous command (one undo step for the drag). */
+extern gboolean cmacs_libregnum_render_ctx_editor_set_visual_param_undoable
+                              (CmacsLibregnumRenderCtx *r, gint node_id,
+                               const char *name, double value,
+                               gboolean merge);
 /* Node's visual asset path (sound/mesh/sprite/tileset), newly-allocated. */
 extern char *   cmacs_libregnum_render_ctx_editor_node_asset
                               (CmacsLibregnumRenderCtx *r, gint node_id);
@@ -554,6 +570,12 @@ extern void     cmacs_libregnum_render_ctx_editor_set_shading
                               (CmacsLibregnumRenderCtx *r, gboolean on);
 extern gboolean cmacs_libregnum_render_ctx_editor_shading_p
                               (CmacsLibregnumRenderCtx *r);
+/* Camera-anchored key+fill rig (lights a model-only scene) + a dark edge
+ * overlay (shaded-with-edges).  Both need shading on to take effect. */
+extern void     cmacs_libregnum_render_ctx_editor_set_headlight
+                              (CmacsLibregnumRenderCtx *r, gboolean on);
+extern void     cmacs_libregnum_render_ctx_editor_set_edges
+                              (CmacsLibregnumRenderCtx *r, gboolean on);
 
 /* Feature 2: look-through camera.
  * look_through drives the viewport from CAMERA node ID (returns FALSE if not

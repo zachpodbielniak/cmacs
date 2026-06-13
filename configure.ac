@@ -662,6 +662,7 @@ OPTION_DEFAULT_OFF([cmacs-libreclaw], [CMacs libreclaw chat/Matrix client integr
 OPTION_DEFAULT_OFF([cmacs-ai], [CMacs ai-glib AI subsystem (multi-provider chat, tools, voice)])
 OPTION_DEFAULT_OFF([cmacs-libregnum], [CMacs libregnum 3D scene buffers (raylib + GObject scene graph)])
 OPTION_DEFAULT_OFF([cmacs-gnuseye], [CMacs gnuseye live planetary globe (GNU's Eye; requires libregnum)])
+OPTION_DEFAULT_OFF([cmacs-cad], [CMacs parametric CAD subsystem (cad-glib kernels; parts render as libregnum CAD nodes)])
 OPTION_DEFAULT_OFF([cmacs-org-ex], [CMacs org-ex interactive widgets])
 OPTION_DEFAULT_OFF([cmacs-mcp], [CMacs MCP server])
 OPTION_DEFAULT_OFF([cmacs-print], [Print to cmacs virtual printer + PDF intake])
@@ -959,6 +960,28 @@ if test "$with_cmacs_gnuseye" != "no"; then
     cmacs-gnuseye-geo.o cmacs-gnuseye-sgp4.o cmacs-gnuseye-http.o \
     cmacs-gnuseye-globe.o"
 fi
+if test "$with_cmacs_cad" != "no"; then
+  if test "$with_cmacs_libregnum" = "no"; then
+    AC_MSG_ERROR([--with-cmacs-cad requires --with-cmacs-libregnum (CAD parts render through the libregnum editor)])
+  fi
+  if test "$with_cmacs_glib" = "no"; then
+    AC_MSG_ERROR([--with-cmacs-cad requires --with-cmacs-glib (async evaluation runs on the cmacs GMainContext)])
+  fi
+  # cmacs-cad evaluates part source (.cad s-expressions / .ccad crispy)
+  # through cad-glib (Manifold mesh CSG + OpenCASCADE B-rep + SolveSpace
+  # sketches).  cad-glib is built ONCE from the top-level deps/cad-glib
+  # submodule and its static archive is linked ONCE here -- libregnum's
+  # CAD=1 objects reference its symbols but never embed it (the static
+  # lib dedup invariant).  The C++/OpenCASCADE/crispy link flags are
+  # taken from cad-glib's generated .pc Libs.private at make time so the
+  # OCCT probe lives in exactly one place (deps/cad-glib/config.mk).
+  PKG_CHECK_MODULES([CMACS_CAD_DEPS], [glib-2.0 gobject-2.0 gio-2.0])
+  CMACS_CAD_CFLAGS="-I\$(abs_top_srcdir)/deps/cad-glib/src     -I\$(abs_top_srcdir)/deps/cad-glib/build/release     $CMACS_CAD_DEPS_CFLAGS"
+  CMACS_CAD_LIBS="\$(abs_top_srcdir)/deps/cad-glib/build/release/libcad-glib-1.0.a     \$(shell sed -n 's/^Libs.private: //p' \$(abs_top_srcdir)/deps/cad-glib/cad-glib-1.0.pc 2>/dev/null)     -lstdc++ $CMACS_CAD_DEPS_LIBS"
+  CMACS_CAD_LIBREGNUM_FLAGS="CAD=1 CAD_GLIB_DIR=\$(abs_top_srcdir)/deps/cad-glib"
+  AC_DEFINE([HAVE_CMACS_CAD], 1, [CMacs parametric CAD subsystem])
+  CMACS_CAD_OBJ="cmacs-cad-init.o cmacs-cad-defuns.o cmacs-cad-doc.o cmacs-cad-sketch.o"
+fi
 if test "$with_cmacs_gsurf" != "no"; then
   if test "$with_cmacs_glib" = "no"; then
     AC_MSG_ERROR([--with-cmacs-gsurf requires --with-cmacs-glib])
@@ -1070,6 +1093,9 @@ if test "$with_cmacs_mcp" != "no"; then
   fi
   if test "$with_cmacs_gnuseye" != "no"; then
     CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-gnuseye.o"
+  fi
+  if test "$with_cmacs_cad" != "no"; then
+    CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-cad.o"
   fi
 fi
 # CMACS Print: pure-Elisp + shell-script subsystem (no C build artefacts).
@@ -1376,6 +1402,10 @@ AC_SUBST(CMACS_LIBREGNUM_LIBS)
 AC_SUBST(CMACS_GNUSEYE_OBJ)
 AC_SUBST(CMACS_GNUSEYE_CFLAGS)
 AC_SUBST(CMACS_GNUSEYE_LIBS)
+AC_SUBST(CMACS_CAD_OBJ)
+AC_SUBST(CMACS_CAD_CFLAGS)
+AC_SUBST(CMACS_CAD_LIBS)
+AC_SUBST(CMACS_CAD_LIBREGNUM_FLAGS)
 
 # CMacs API library: built as a shared library in cmacs/api/ and used
 # by both the bacon cmacsgi module and crispy scripts (in-process).

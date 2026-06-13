@@ -1,0 +1,402 @@
+#+TITLE: cmacs-cad — Parametric CAD
+#+STARTUP: overview
+
+* Overview
+
+=cmacs-cad= (=--with-cmacs-cad=) turns cmacs into a parametric CAD
+environment.  A part is a *text file* in one of two languages, both
+evaluating through [[https://git-ssh.podbielniak.com/zachpodbielniak/cad-glib][cad-glib]] (Manifold mesh CSG + OpenCASCADE B-rep +
+SolveSpace constraint sketches) into the same document model:
+
+- =.cad= — the s-expression DSL (=cmacs-cad-mode=)
+- =.ccad= — crispy, ordinary C with a =main()= calling the flat
+  =cad_*= API (=cmacs-cad-crispy-mode=)
+
+#+begin_src lisp
+;; bracket.cad
+(defparam thickness 4.0 :min 2 :max 10)
+(defparam hole-r    2.5)
+
+(defpart bracket
+  (difference
+    (box 40 20 thickness)
+    (translate (10 10 -1) (cylinder :r hole-r :h (+ thickness 2)))
+    (translate (30 10 -1) (cylinder :r hole-r :h (+ thickness 2)))))
+#+end_src
+
+#+begin_src c
+// bracket.ccad — the same part in crispy
+int main (void)
+{
+    double t = cad_param_double ("thickness", 4.0, 2, 10);
+    double r = cad_param_double ("hole-r", 2.5, 0, 0);
+    CadSolid *body = cad_box (40, 20, t);
+    body = cad_difference (body,
+        cad_translate (cad_cylinder (r, t + 2), 10, 10, -1));
+    body = cad_difference (body,
+        cad_translate (cad_cylinder (r, t + 2), 30, 10, -1));
+    cad_emit_named ("bracket", body);
+    return 0;
+}
+#+end_src
+
+Geometry is exact (B-rep by default; =:backend mesh= /
+=cad_use_mesh_backend()= opts into Manifold), parameters re-bind
+without editing source, every feature knows its *source span* (click
+a face in the workbench, land on the expression that made it), and
+parts render in scenes as libregnum =CAD_PART= nodes.
+
+* Architecture
+
+#+begin_example
+.cad / .ccad source
+      │ CadFrontend (per-language; sexp = sandboxed s7 with form
+      ▼  spans; crispy = compile-and-run C with run-time params)
+cad-glib CadDocument ── solids + feature trees + params + sketches
+      │                          │
+      │ cmacs/cad DEFUNs         │ libregnum LrgCadManager/Baker
+      ▼                          ▼
+.cad buffer eval loop      CAD_PART nodes in the libregnum editor
+(flymake, params, capf)    (palette/inspector/gizmos — Phase 7+)
+#+end_example
+
+Key invariants: cad-glib is built once at =deps/cad-glib= and its
+archive linked once into temacs (the static-lib dedup rule); C++
+exceptions never cross out of cad-glib's OpenCASCADE wrapper; the s7
+evaluator is sandboxed (no file/system access from part code, step +
+wall-clock budgets) because part source is AI-edited and
+auto-evaluated.
+
+* Editing parts
+
+Open any =.cad= or =.ccad= file.  Both modes share one eval loop:
+
+| Key       | Command                  | What it does                          |
+|-----------+--------------------------+---------------------------------------|
+| =C-c C-c= | =cmacs-cad-eval-buffer=  | evaluate the buffer text (async)      |
+| (save)    | —                        | same, when =cmacs-cad-eval-on-save=   |
+| =C-c C-p= | =cmacs-cad-show-params=  | echo the parameter values             |
+| =C-c C-i= | =cmacs-cad-show-inspect= | volume/area/triangles/watertight      |
+| =C-c C-M-i= | =cmacs-cad-show-mass-properties= | full props in a help buffer (+ COM, dims) |
+| =C-c C-m= | =cmacs-cad-measure=      | distance + per-axis Δ between two points |
+| =C-c C-s= | =cmacs-cad-section-at=   | section by an X/Y/Z plane (segments + perimeter) |
+| =C-c C-e= | =cmacs-cad-export-part=  | export STL/OBJ/STEP/IGES (format prompt) |
+
+Evaluation is single-flight and debounced
+(=cmacs-cad-eval-debounce=); failures land in *flymake* at the source
+span the evaluator reported (line-granular for crispy).  Completion
+and eldoc come from the live modeling vocabulary
+(=cmacs-cad-dsl-symbols=).
+
+* The part workbench
+
+Visiting a =.cad= / =.ccad= file *automatically opens the workbench* —
+the libregnum-rendered 3-D view is the primary way to see a part, with
+the text buffer as its source (set =cmacs-cad-auto-workbench= to nil for
+bare text + on-demand =C-c C-v=).  =C-c C-v= (=cmacs-cad-workbench=)
+opens (or re-focuses) it: the source buffer and a 3D viewport side by
+side, plus
+
+- a *feature tree* panel (=*cmacs-cad tree*=) — the live CSG hierarchy;
+  =RET= jumps to and pulses the source span that built that feature,
+  =g= refreshes;
+- an interactive *CAD Parameters* section in the editor inspector: each
+  =defparam= gets a field plus =-=/=+= nudge buttons.  Editing one sets
+  a =cad:<param>= *override* on the node and re-bakes live — parameters
+  re-bind *without editing source*.  Edits are undoable through the
+  editor's own undo stack (a slider drag coalesces to one step); values
+  are clamped to the param's declared range so an override never trips
+  the kernel's bounds check.  Params you have not touched re-seed to the
+  new source default when you re-evaluate, so editing a =defparam=
+  default still takes effect; params you have nudged keep their value.
+
+Re-evaluating the source (=C-c C-c=) pushes the buffer's *unsaved* text
+into the viewport's document and re-bakes, so edits appear immediately
+without saving (via the =cmacs-cad-after-eval-hook=). The camera frames
+the part's bounding box on open. A part is just a one-node
+=LrgLevel=, so the editor's gizmos, outliner, snapshot and undo all
+apply — CAD is a toolset inside the existing editor, not a parallel
+viewport.
+
+The editor's *CAD palette* section offers:
+
+| Item             | Action                                                   |
+|------------------+----------------------------------------------------------|
+| New Part…        | skeleton =.cad= file, placed as a node                   |
+| Place Part…      | an existing =.cad=/=.ccad= file as a =CAD_PART= node     |
+| Import STL/STEP… | wrap a mesh/B-rep file in a generated =(import "…")= part |
+
+Importing wraps the file rather than placing it raw, so STL *and* STEP
+both render through the same =CAD_PART= bake path and become editable
+parts (drill, combine, measure) immediately.
+
+* The =import= form
+
+Both languages can bring an existing mesh or B-rep file into a part:
+
+#+begin_src lisp
+;; reuse a fixed body, then drill it parametrically
+(defparam hole-r 2.5)
+(defpart drilled
+  (difference
+    (import "body.step")
+    (cylinder :r hole-r :h 50)))
+#+end_src
+
+#+begin_src c
+// the same in crispy
+int main (void)
+{
+    double r = cad_param_double ("hole-r", 2.5, 0, 0);
+    cad_emit_named ("drilled",
+        cad_difference (cad_import ("body.step"),
+                        cad_cylinder (r, 50)));
+    return 0;
+}
+#+end_src
+
+Accepts STL/OBJ (always) and STEP/IGES (with OpenCASCADE). Relative
+paths resolve against the part file's directory so referenced geometry
+travels with the part; only geometry is read — file content never
+reaches the sandboxed evaluator.
+
+* Inspecting, measuring, sectioning
+
+=C-c C-i= echoes the headline mass properties; =C-c C-M-i=
+(=cmacs-cad-show-mass-properties=) opens a help buffer with volume,
+surface area, triangle count, watertightness, center of mass, bounding
+box and overall dimensions.  =C-c C-m= (=cmacs-cad-measure=) reports the
+distance and per-axis delta between two entered points.  =C-c C-s=
+(=cmacs-cad-section-at=) slices the part with an X/Y/Z plane and reports
+the section's segment count and perimeter; the underlying
+=cmacs-cad-section= returns the raw segment list (each
+=(X1 Y1 Z1 X2 Y2 Z2)=) for programmatic use.  Section is backend-agnostic
+(it works on mesh and B-rep parts via tessellation).
+
+* Viewing mesh / B-rep files
+
+Visiting an =.stl=, =.obj=, =.step=/=.stp=, =.iges=/=.igs= or =.3mf=
+file enters =cmacs-cad-model-mode=: it imports the geometry through
+cad-glib and renders it as a CAD_PART in the libregnum editor beside a
+small info panel (format, triangle count, watertightness, overall
+size).  Binary STL and B-rep STEP both render this way — the import goes
+through cad-glib's own reader + =grl_model_new_from_mesh=, never raylib's
+file loader.  This is the same path the editor's =Import STL/STEP=
+palette action and the G-code viewer use.
+
+* G-code viewer
+
+Opening a =.gcode= (or =.gco=) file enters =cmacs-cad-gcode-mode=: the
+raw text stays in the buffer, and the toolpath is rendered as a *3-D
+extruded-bead mesh through the libregnum editor* in a side window (each
+printed move becomes a thin bead box; the mesh goes through cad-glib's
+OBJ import + the same CAD_PART bake path the workbench uses, so you get
+orbit/zoom/snapshot for free).  A pure-Elisp parser handles G0/G1 moves,
+=G90=/=G91= absolute/relative and layer grouping on Z rise; the
+mode-line shows layer count + the slicer-footer time/filament estimates.
+=]= / =[= scrub the top visible layer up/down (watch the print build),
+=G= shows all layers, =g= refreshes.  The slicer's post-slice "view
+gcode" action (see [[*Slicing][Slicing]]) opens the produced file here.
+
+* The constraint sketcher
+
+=C-c C-k= (=cmacs-cad-sketch=) opens an interactive 2D constraint
+sketcher in its own buffer, rendered as an SVG canvas and driven by
+cad-glib's SolveSpace solver:
+
+| Key   | Action                                                 |
+|-------+--------------------------------------------------------|
+| click / =p= | place a point (click empty canvas, or enter coords) |
+| =l=   | line between the two selected points                   |
+| =c=   | circle at the selected center point                    |
+| click a point | toggle its selection (=u= clears)              |
+| =H V= | horizontal / vertical                                  |
+| =P N= | parallel / perpendicular                               |
+| =E T= | equal / tangent                                        |
+| =C M F= | coincident / midpoint / fixed                        |
+| =D R A= | distance / diameter / angle (prompt for a value)     |
+| =s=   | solve                                                  |
+| =C-c C-c= | finish: write a =(defsketch …)= form back to the part |
+
+The header-line shows the remaining *degrees of freedom* — green at 0
+(fully constrained), yellow while under-constrained, red when the solver
+reports a conflicting (over-constrained) set.  On finish the sketch
+serialises to a =(defsketch NAME …)= form spliced into the part buffer;
+since only the s-expression DSL supports write-back, invoking the
+sketcher from a =.ccad= buffer sends the form to the kill-ring instead.
+The =cmacs-cad-sketch-*= primitives (new/add-point/add-line/add-circle/
+add-arc/constrain/solve/dof/failed/point/profile) expose the solver to
+Elisp directly.
+
+* Slicing
+
+=cmacs-cad-slice-part= exports the current part to STL and slices it to
+G-code with an external slicer; with a prefix arg it opens the result in
+the [[*G-code viewer][toolpath viewer]].  The default backend is
+PrusaSlicer (native =prusa-slicer= binary, else the
+=com.prusa3d.PrusaSlicer= flatpak).
+
+Rather than a fragile flag soup, the slicer *merges an overrides ini* on
+top of your base profile — =prusa-slicer --load base.ini --load
+overrides.ini= applies loads in order, last wins — so only the common
+parameters you set are overridden:
+
+| defcustom                       | ini key            |
+|---------------------------------+--------------------|
+| =cmacs-cad-slicer-layer-height= | =layer_height=     |
+| =cmacs-cad-slicer-infill=       | =fill_density= (%) |
+| =cmacs-cad-slicer-perimeters=   | =perimeters=       |
+| =cmacs-cad-slicer-supports=     | =support_material= |
+| =cmacs-cad-slicer-brim-width=   | =brim_width=       |
+
+Set =cmacs-cad-slicer-base-profile= to your exported PrusaSlicer config.
+Slicing is async (a =*cmacs-cad slice*= job buffer shows the command and
+output); time + filament estimates are parsed from the produced G-code
+footer.  Staging lives under =cmacs-cad-slicer-staging-dir= (default
+=~/.cache/cmacs/cad/slice/=) — it must be under =$HOME= for the flatpak
+backend, which the slicer enforces.  New backends register via
+=cmacs-cad-slicer-register= (a name, a resolver, and a common-param→ini
+map).
+
+* Printers
+
+=cmacs-cad-printer-upload= sends a sliced G-code file to a networked
+printer; =cmacs-cad-printer-start= is the *only* path that begins a print
+and refuses unless the user answers =yes-or-no-p= interactively or a
+programmatic caller passes =:confirm t= (so voice/MCP callers cannot
+start a print unattended).  Define printers in =cmacs-cad-printers=:
+
+#+begin_src emacs-lisp
+(setq cmacs-cad-printers
+      '((:name "ender"  :type moonraker :url "http://ender.local")
+        (:name "mk4"    :type prusalink :url "http://mk4.local" :storage usb)
+        (:name "octo"   :type octoprint :url "http://octo.local")
+        (:name "shelf"  :type gcode     :url "~/prints")))
+#+end_src
+
+Four backend types are supported: =octoprint= (POST
+=/api/files/local=), =moonraker= (POST =/server/files/upload=),
+=prusalink= (raw PUT with a =Print-After-Upload= header) and =gcode= (copy
+into a local directory).  All network transfers go through one transport,
+=curl= run with =make-process=; the *API key comes from auth-source only*
+(keyed by the URL host) and is fed to curl via stdin (=curl -K -=) so it
+never appears in the process argv.
+
+* Projects and git
+
+=cmacs-cad-new-part= and =cmacs-cad-new-project= scaffold a part skeleton
+or a whole project (part + =README.org= + =.gitignore=).
+=cmacs-cad-part-browser= lists the current =project.el= project's
+=.cad=/=.ccad= files with thumbnails (rendered offscreen and cached by
+content hash under =cmacs-cad-thumb-dir=).  =cmacs-cad-diff= compares two
+git revisions of the current part: it =git show=s each revision,
+evaluates both offscreen, and reports the *parameter* changes (added /
+removed / retuned) and whether the *feature-tree structure* changed — on
+a display it also shows side-by-side snapshots under identical framing.
+project.el is used directly; projectile, if loaded, is optional sugar.
+
+* Vibe CAD (MCP tools)
+
+With =--with-cmacs-mcp=, the CAD subsystem exposes a "vibe CAD" tool set
+so an AI agent can model conversationally.  The inner loop is one fused
+tool, =cad_set_source= (or the token-economical =cad_patch_source=):
+edit the part, re-evaluate, and report success + part names or the error
+with its source location.  Around it:
+
+| Tool               | Purpose                                          |
+|--------------------+--------------------------------------------------|
+| =cad_open=         | language + capability flags of a part            |
+| =cad_get_source=   | current source text                              |
+| =cad_set_source=   | replace source, write, re-eval, report           |
+| =cad_patch_source= | single-occurrence OLD→NEW edit + re-eval         |
+| =cad_eval=         | re-evaluate; report ok+parts/error               |
+| =cad_params=       | parameters and ranges                            |
+| =cad_inspect=      | mass properties (volume/area/COM/bbox/…)         |
+| =cad_feature_tree= | the CSG tree as indented text                    |
+| =cad_section=      | section by an X/Y/Z plane (segments + perimeter) |
+| =cad_export=       | write STL/OBJ/STEP/IGES                           |
+| =cad_snapshot=     | render a workbench view, return an inline PNG     |
+| =cad_slice=        | export + slice to G-code (waits)                 |
+| =cad_printers=     | list configured printers                         |
+| =cad_print=        | upload G-code; a print STARTS only with both =start= and =confirm= |
+
+A typical loop: =cad_set_source= → =cad_inspect= (or =cad_snapshot=) →
+repeat → =cad_slice= → =cad_print {start: false}= → a human confirms.
+The Elisp side lives in =cmacs-cad-mcp.el= (=cmacs-cad-mcp-*=), so the
+tools are thin C wrappers and the behaviour is testable.
+
+* Org Babel
+
+=#+begin_src cad= (s-expression) and =#+begin_src ccad= (crispy) blocks
+whose *body is the part source* execute through one core:
+
+#+begin_src org
+,#+begin_src cad :var s=20
+(defparam s 10 :min 1 :max 50)
+(defpart box (box s s s))
+,#+end_src
+#+end_src
+
+- no output → mass properties as an Org table
+- =:file out.png= → snapshot the part, inline the image
+- =:export out.stl= → write the artifact (format from the extension)
+- =:var k=v= → parameter overrides at evaluation
+- =:tangle out.cad= → standard ob tangling
+
+* Lisp primitives
+
+| DEFUN                    | Purpose                                        |
+|--------------------------+------------------------------------------------|
+| =cmacs-cad-supported-p=  | subsystem availability                         |
+| =cmacs-cad-version=      | cad-glib version                               |
+| =cmacs-cad-doc-open=     | open/cache a part; returns language+capabilities |
+| =cmacs-cad-doc-close=    | drop the cache entry                           |
+| =cmacs-cad-set-source=   | replace in-memory source (unsaved buffer text) |
+| =cmacs-cad-eval=         | synchronous evaluation (+ override alist)      |
+| =cmacs-cad-eval-async=   | async evaluation; callback gets (:ok t) / (:error MSG) |
+| =cmacs-cad-params=       | parameter metadata (:name :value :default :min :max :doc :line) |
+| =cmacs-cad-part-names=   | parts defined by the last eval                 |
+| =cmacs-cad-feature-tree= | nested plist with :id :kind :label :span :children |
+| =cmacs-cad-inspect=      | :volume :area :bbox :center-of-mass :watertight :triangles |
+| =cmacs-cad-section=      | plane → list of (X1 Y1 Z1 X2 Y2 Z2) segments  |
+| =cmacs-cad-export=       | write stl/stl-ascii/obj/step/iges              |
+| =cmacs-cad-dsl-symbols=  | (NAME SIGNATURE DOC) vocabulary per language   |
+
+Errors signal =cmacs-cad-error= with the evaluator's message
+(including the source location for span-capable languages).
+
+* Status
+
+Implemented end to end: the kernel library (both languages); libregnum
+CAD_PART baking + the standalone =lrg-cad-app= viewer; the cmacs core;
+the libregnum-editor CAD toolset (workbench, palette new/place/import,
+feature-tree panel, interactive + undoable params, live buffer→viewport
+update); measurement, section, mass-properties and the G-code toolpath
+viewer; fabrication (PrusaSlicer ini-merge slicing + OctoPrint/Moonraker/
+PrusaLink/gcode printer upload with confirm-gated start); the MCP
+vibe-CAD tools and =cad=/=ccad= org-babel blocks; the interactive
+constraint sketcher with source write-back; and project/git tooling
+(scaffolds, part browser, =cmacs-cad-diff=).
+
+Gated / trailing extension points (off by default, clean errors when
+absent): the libfive f-rep kernel (=CAD_FIVE=1=), 3MF I/O (lib3mf), and
+true per-face OCCT provenance.  Face-click→source-span highlighting in
+the 3D viewport rides the editor overlay work.
+
+* Files
+
+| Path                            | Role                              |
+|---------------------------------+-----------------------------------|
+| =deps/cad-glib/=                | the kernel library (own repo)     |
+| =deps/libregnum/src/cad/=       | CAD_PART manager/baker (CAD=1)    |
+| =cmacs/cad/=                    | DEFUNs + doc registry             |
+| =lisp/cmacs/cmacs-cad.el=       | .cad mode + shared eval loop      |
+| =lisp/cmacs/cmacs-cad-crispy.el= | .ccad mode                       |
+| =lisp/cmacs/cmacs-cad-editor.el= | workbench, palette, tree, params |
+| =lisp/cmacs/cmacs-cad-gcode.el=  | G-code 3-D toolpath viewer        |
+| =lisp/cmacs/cmacs-cad-model.el=  | STL/STEP/OBJ/3MF model viewer     |
+| =lisp/cmacs/cmacs-cad-sketch.el= | interactive constraint sketcher   |
+| =lisp/cmacs/cmacs-cad-slicer.el= , =-printer.el= | slice + print     |
+| =lisp/cmacs/cmacs-cad-mcp.el= , =-org-block.el=  | MCP + org-babel    |
+| =lisp/cmacs/cmacs-cad-project.el= | scaffolds, browser, diff         |
+| =test/cmacs/cmacs-cad-tests.el= | ERT suite (3 tiers)               |

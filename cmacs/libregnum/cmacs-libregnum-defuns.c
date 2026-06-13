@@ -582,6 +582,56 @@ DEFUN ("cmacs-libregnum-editor-redo", Fcmacs_libregnum_editor_redo,
   return Qt;
 }
 
+DEFUN ("cmacs-libregnum-editor-refresh", Fcmacs_libregnum_editor_refresh,
+       Scmacs_libregnum_editor_refresh, 1, 1, 0,
+       doc: /* Rebuild BUFFER's editor scene from its level.
+Re-bakes every node (CAD parts re-evaluate through the CAD manager's
+cache; call `cmacs-libregnum-cad-invalidate' first to force a fresh
+evaluation after a source change).  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  cmacs_libregnum_render_ctx_editor_refresh (ctx);
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+#ifdef HAVE_CMACS_CAD
+DEFUN ("cmacs-libregnum-cad-invalidate", Fcmacs_libregnum_cad_invalidate,
+       Scmacs_libregnum_cad_invalidate, 1, 1, 0,
+       doc: /* Drop the CAD manager's caches for the part source at PATH.
+The next editor rebuild re-evaluates the part (use after the .cad
+source changed).  */)
+  (Lisp_Object path)
+{
+  CHECK_STRING (path);
+  cmacs_libregnum_render_cad_invalidate (SSDATA (path));
+  return Qt;
+}
+DEFUN ("cmacs-libregnum-cad-set-source", Fcmacs_libregnum_cad_set_source,
+       Scmacs_libregnum_cad_set_source, 2, 2, 0,
+       doc: /* Push SOURCE as the in-memory text for the part at PATH.
+The viewport's next rebuild bakes SOURCE (typically the unsaved
+buffer) instead of the on-disk file.  */)
+  (Lisp_Object path, Lisp_Object source)
+{
+  GError *error = NULL;
+  CHECK_STRING (path);
+  CHECK_STRING (source);
+  if (!cmacs_libregnum_render_cad_set_source (SSDATA (path),
+                                              SSDATA (source), &error))
+    {
+      Lisp_Object msg = build_string (error ? error->message : "CAD error");
+      if (error) g_error_free (error);
+      xsignal1 (Qerror, msg);
+    }
+  return Qt;
+}
+#endif /* HAVE_CMACS_CAD */
+
 DEFUN ("cmacs-libregnum-editor-can-undo-p", Fcmacs_libregnum_editor_can_undo_p,
        Scmacs_libregnum_editor_can_undo_p, 1, 1, 0,
        doc: /* Return non-nil if BUFFER's editable level has an edit to undo.  */)
@@ -1374,6 +1424,29 @@ The viewport gizmos update to reflect it.  */)
   return Qt;
 }
 
+DEFUN ("cmacs-libregnum-editor-set-visual-param-undoable",
+       Fcmacs_libregnum_editor_set_visual_param_undoable,
+       Scmacs_libregnum_editor_set_visual_param_undoable, 4, 5, 0,
+       doc: /* Set numeric visual param NAME to VALUE on NODE-ID in BUFFER as
+an UNDOABLE editor command (so `cmacs-libregnum-editor-undo' reverts it).
+With non-nil MERGE, coalesce onto the previous command -- a continuing
+slider drag becomes a single undo step.  Returns t on success.  */)
+  (Lisp_Object buffer, Lisp_Object node_id, Lisp_Object name,
+   Lisp_Object value, Lisp_Object merge)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (node_id);
+  CHECK_STRING (name);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  gboolean ok = cmacs_libregnum_render_ctx_editor_set_visual_param_undoable
+    (ctx, (gint) XFIXNUM (node_id), SSDATA (name),
+     cmacs_libregnum__to_double (value), !NILP (merge));
+  cmacs_libregnum_view_request_redraw (v);
+  return ok ? Qt : Qnil;
+}
+
 DEFUN ("cmacs-libregnum-editor-node-asset",
        Fcmacs_libregnum_editor_node_asset,
        Scmacs_libregnum_editor_node_asset, 2, 2, 0,
@@ -1840,6 +1913,41 @@ DEFUN ("cmacs-libregnum-editor-shading-p",
   return cmacs_libregnum_render_ctx_editor_shading_p (ctx) ? Qt : Qnil;
 }
 
+DEFUN ("cmacs-libregnum-editor-set-headlight",
+       Fcmacs_libregnum_editor_set_headlight,
+       Scmacs_libregnum_editor_set_headlight, 2, 2, 0,
+       doc: /* Enable or disable the camera-anchored key+fill light rig in
+BUFFER's editor.  With ON non-nil, a model-only scene (no LIGHT nodes) is
+lit by surface orientation -- the fix for a flat, washed-out preview.
+Needs shading on (see `cmacs-libregnum-editor-set-shading') to take
+effect.  Returns t on success.  */)
+  (Lisp_Object buffer, Lisp_Object on)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  cmacs_libregnum_render_ctx_editor_set_headlight (ctx, !NILP (on));
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-editor-set-edges",
+       Fcmacs_libregnum_editor_set_edges,
+       Scmacs_libregnum_editor_set_edges, 2, 2, 0,
+       doc: /* Enable or disable the dark edge overlay (shaded-with-edges)
+on BUFFER's editor models.  Returns t on success.  */)
+  (Lisp_Object buffer, Lisp_Object on)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  cmacs_libregnum_render_ctx_editor_set_edges (ctx, !NILP (on));
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
 /* ── Feature 2: look-through camera ─────────────────────────────────── */
 
 DEFUN ("cmacs-libregnum-editor-look-through",
@@ -1966,6 +2074,11 @@ syms_of_cmacs_libregnum_defuns (void)
   defsubr (&Scmacs_libregnum_editor_set_position);
   defsubr (&Scmacs_libregnum_editor_undo);
   defsubr (&Scmacs_libregnum_editor_redo);
+  defsubr (&Scmacs_libregnum_editor_refresh);
+#ifdef HAVE_CMACS_CAD
+  defsubr (&Scmacs_libregnum_cad_invalidate);
+  defsubr (&Scmacs_libregnum_cad_set_source);
+#endif
   defsubr (&Scmacs_libregnum_editor_can_undo_p);
   defsubr (&Scmacs_libregnum_editor_node_guid);
   defsubr (&Scmacs_libregnum_editor_node_location);
@@ -2003,6 +2116,7 @@ syms_of_cmacs_libregnum_defuns (void)
   defsubr (&Scmacs_libregnum_editor_open_project);
   defsubr (&Scmacs_libregnum_assetdb_scan);
   defsubr (&Scmacs_libregnum_editor_set_visual_param);
+  defsubr (&Scmacs_libregnum_editor_set_visual_param_undoable);
   defsubr (&Scmacs_libregnum_editor_node_asset);
   defsubr (&Scmacs_libregnum_editor_node_kind);
   defsubr (&Scmacs_libregnum_editor_node_primitive);
@@ -2036,6 +2150,8 @@ syms_of_cmacs_libregnum_defuns (void)
   /* Render features: shading, look-through, visual param. */
   defsubr (&Scmacs_libregnum_editor_set_shading);
   defsubr (&Scmacs_libregnum_editor_shading_p);
+  defsubr (&Scmacs_libregnum_editor_set_headlight);
+  defsubr (&Scmacs_libregnum_editor_set_edges);
   defsubr (&Scmacs_libregnum_editor_look_through);
   defsubr (&Scmacs_libregnum_editor_look_through_off);
   defsubr (&Scmacs_libregnum_editor_look_through_p);

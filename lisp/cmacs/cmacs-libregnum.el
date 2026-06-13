@@ -465,7 +465,7 @@ state (camera, layout options, selection).
 With no ROOT, uses the current project root if `project-current'
 returns one, otherwise `default-directory'.  Each regular file becomes
 a coloured cube; height encodes file size, hue encodes extension.
-Drag with the left mouse button to orbit, scroll-wheel to zoom."
+Left- or right-drag to orbit, middle-drag to pan, scroll-wheel to zoom."
   (interactive)
   (unless (cmacs-libregnum-supported-p)
     (user-error "cmacs-libregnum not built; reconfigure with \
@@ -1765,7 +1765,13 @@ follow the mouse."
     (with-current-buffer buffer
       (setq cmacs-libregnum-editor--current
             (and (integerp id) (>= id 0) id)))
-    (cmacs-libregnum-editor--sync-panels buffer id)))
+    (cmacs-libregnum-editor--sync-panels buffer id)
+    (run-hook-with-args 'cmacs-libregnum-editor-select-functions
+                        buffer id)))
+
+(defvar cmacs-libregnum-editor-select-functions nil
+  "Functions run with (BUFFER ID) after a viewport selection change.
+Subsystem panels (e.g. the CAD feature tree) refresh from here.")
 
 ;;; ─── Right-click context menu ──────────────────────────────────────────
 ;;;
@@ -3129,7 +3135,14 @@ source editor buffer."
      ("Sprite..." sprite nil)))
   "Palette sections: (SECTION (LABEL TYPE VALUE-SYMBOL-OR-NIL)...).
 TYPE is `prim' (a primitive), `kind' (a visual-kind node), `mesh' or `sprite'
-\(prompt for a file).")
+\(prompt for a file), or `fn' (VALUE is a function called with the item
+label, in the editor buffer -- the extension type subsystems use).")
+
+(defvar cmacs-libregnum-editor-palette-extra-sections nil
+  "Extra palette sections contributed by other subsystems (e.g. CAD).
+Each element is either a section in `cmacs-libregnum-editor--palette'
+shape or a function returning a list of such sections.  Items may use
+the `fn' type so contributors need no palette internals.")
 
 (defvar cmacs-libregnum-palette-mode-map
   (let ((map (make-sparse-keymap)))
@@ -3295,7 +3308,8 @@ point; dropping elsewhere falls back to activating the item (add at origin)."
           ('prim   (cmacs-libregnum-editor--add value name))
           ('kind   (cmacs-libregnum-editor--add-visual value name))
           ('mesh   (call-interactively #'cmacs-libregnum-editor-add-mesh))
-          ('sprite (call-interactively #'cmacs-libregnum-editor-add-sprite))))
+          ('sprite (call-interactively #'cmacs-libregnum-editor-add-sprite))
+          ('fn     (funcall value name))))
       ;; Keep the outliner + inspector in sync if they are showing.
       (when (buffer-live-p (get-buffer "*cmacs-libregnum outliner*"))
         (with-current-buffer src (cmacs-libregnum-editor-outliner)))
@@ -3315,13 +3329,21 @@ point; dropping elsewhere falls back to activating the item (add at origin)."
         (erase-buffer)
         (insert (propertize "Palette  " 'face 'bold))
         (insert (propertize "j/k move · RET/click add\n\n" 'face 'shadow))
-        (dolist (section cmacs-libregnum-editor--palette)
+        (dolist (section (append cmacs-libregnum-editor--palette
+                                 (cl-loop for ext in cmacs-libregnum-editor-palette-extra-sections
+                                          append (if (functionp ext)
+                                                     (funcall ext)
+                                                   (list ext)))))
           (insert (propertize (format "%s\n" (car section)) 'face 'bold))
           (dolist (item (cdr section))
             (let* ((label (nth 0 item))
                    (ptype (nth 1 item))
                    (vsym  (nth 2 item))
-                   (value (and vsym (symbol-value vsym))))
+                   ;; `fn' items carry the function symbol itself; the
+                   ;; others store a value under a variable symbol.
+                   (value (and vsym (if (eq ptype 'fn)
+                                        vsym
+                                      (symbol-value vsym)))))
               (insert "  ")
               (insert-text-button
                label
@@ -3611,8 +3633,15 @@ shape, then edit it here." 'face 'shadow))
                        "Revert")
         (widget-insert (propertize "\n\nTab: next field · C-c C-c apply\n"
                                    'face 'shadow))
+        (run-hook-with-args 'cmacs-libregnum-inspector-extra-sections
+                            src id)
         (widget-setup)
         (goto-char (point-min))))))
+
+(defvar cmacs-libregnum-inspector-extra-sections nil
+  "Functions run with (SRC-BUFFER NODE-ID) while building the inspector.
+Called in the inspector buffer after the built-in sections; insert
+widgets to add subsystem panels (the CAD params section uses this).")
 
 (defun cmacs-libregnum-inspector--num (key)
   "Return the numeric value of inspector field KEY."

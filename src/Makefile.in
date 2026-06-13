@@ -382,6 +382,10 @@ CMACS_LIBREGNUM_LIBS = @CMACS_LIBREGNUM_LIBS@
 CMACS_GNUSEYE_OBJ = @CMACS_GNUSEYE_OBJ@
 CMACS_GNUSEYE_CFLAGS = @CMACS_GNUSEYE_CFLAGS@
 CMACS_GNUSEYE_LIBS = @CMACS_GNUSEYE_LIBS@
+CMACS_CAD_OBJ = @CMACS_CAD_OBJ@
+CMACS_CAD_CFLAGS = @CMACS_CAD_CFLAGS@
+CMACS_CAD_LIBS = @CMACS_CAD_LIBS@
+CMACS_CAD_LIBREGNUM_FLAGS = @CMACS_CAD_LIBREGNUM_FLAGS@
 CMACS_GSURF_OBJ = @CMACS_GSURF_OBJ@
 CMACS_GSURF_CFLAGS = @CMACS_GSURF_CFLAGS@
 CMACS_GSURF_LIBS = @CMACS_GSURF_LIBS@
@@ -429,6 +433,7 @@ CMACS_INTERNAL_CFLAGS = -I$(srcdir)/../cmacs/glib -I$(srcdir)/../cmacs/gobject \
                         -I$(srcdir)/../cmacs/ai \
                         -I$(srcdir)/../cmacs/libregnum \
                         -I$(srcdir)/../cmacs/gnuseye \
+                        -I$(srcdir)/../cmacs/cad \
                         -I$(srcdir)/../cmacs/gsurf \
                         -I$(srcdir)/../cmacs/api \
                         -DCMACS_SRCDIR=\"$(abspath $(srcdir))\"
@@ -447,6 +452,7 @@ CMACS_CFLAGS = $(CMACS_INTERNAL_CFLAGS) \
                $(CMACS_AI_CFLAGS) \
                $(CMACS_LIBREGNUM_CFLAGS) \
                $(CMACS_GNUSEYE_CFLAGS) \
+               $(CMACS_CAD_CFLAGS) \
                $(CMACS_GSURF_CFLAGS)
 
 ## emacs.res if HAVE_W32
@@ -591,7 +597,7 @@ base_obj = dispnew.o frame.o scroll.o xdisp.o menu.o $(XMENU_OBJ) window.o     \
 	$(MSDOS_OBJ) $(MSDOS_X_OBJ) $(NS_OBJ) $(CYGWIN_OBJ) $(FONT_OBJ)        \
 	$(W32_OBJ) $(WINDOW_SYSTEM_OBJ) $(XGSELOBJ)			       \
 	$(HAIKU_OBJ) $(PGTK_OBJ) $(ANDROID_OBJ) \
-	$(CMACS_GLIB_OBJ) $(CMACS_GI_OBJ) $(CMACS_CRISPY_OBJ) $(CMACS_BACON_OBJ) $(CMACS_GOWL_OBJ) $(CMACS_PODOMATION_OBJ) $(CMACS_LIBRECLAW_OBJ) $(CMACS_ORG_EX_OBJ) $(CMACS_MCP_OBJ) $(CMACS_CINTROSPECT_OBJ) $(CMACS_CPATCH_OBJ) $(CMACS_VIDEO_OBJ) $(CMACS_AUDIO_OBJ) $(CMACS_WHISPER_OBJ) $(CMACS_PIPER_OBJ) $(CMACS_AI_OBJ) $(CMACS_LIBREGNUM_OBJ) $(CMACS_GNUSEYE_OBJ) $(CMACS_GSURF_OBJ)
+	$(CMACS_GLIB_OBJ) $(CMACS_GI_OBJ) $(CMACS_CRISPY_OBJ) $(CMACS_BACON_OBJ) $(CMACS_GOWL_OBJ) $(CMACS_PODOMATION_OBJ) $(CMACS_LIBRECLAW_OBJ) $(CMACS_ORG_EX_OBJ) $(CMACS_MCP_OBJ) $(CMACS_CINTROSPECT_OBJ) $(CMACS_CPATCH_OBJ) $(CMACS_VIDEO_OBJ) $(CMACS_AUDIO_OBJ) $(CMACS_WHISPER_OBJ) $(CMACS_PIPER_OBJ) $(CMACS_AI_OBJ) $(CMACS_LIBREGNUM_OBJ) $(CMACS_GNUSEYE_OBJ) $(CMACS_CAD_OBJ) $(CMACS_GSURF_OBJ)
 doc_obj = $(base_obj) $(NS_OBJC_OBJ)
 obj = $(doc_obj) $(HAIKU_CXX_OBJ)
 
@@ -731,7 +737,7 @@ LIBES = $(LIBS) $(W32_LIBS) $(LIBS_GNUSTEP) $(PGTK_LIBS) $(LIBX_BASE) $(LIBIMAGE
    $(CMACS_CINTROSPECT_LIBS) $(CMACS_CPATCH_LIBS) \
    $(CMACS_VIDEO_LIBS) $(CMACS_AUDIO_LIBS) \
    $(CMACS_WHISPER_LIBS) $(CMACS_PIPER_LIBS) $(CMACS_AI_LIBS) $(CMACS_LIBREGNUM_LIBS) \
-   $(CMACS_GNUSEYE_LIBS) $(CMACS_GSURF_LIBS)
+   $(CMACS_GNUSEYE_LIBS) $(CMACS_CAD_LIBS) $(CMACS_GSURF_LIBS)
 
 ## FORCE it so that admin/unidata can decide whether this file is
 ## up-to-date.  Although since charprop depends on bootstrap-emacs,
@@ -836,8 +842,8 @@ CMACS_ALL_OBJ = $(CMACS_GLIB_OBJ) $(CMACS_GI_OBJ) \
                 $(CMACS_VIDEO_OBJ) $(CMACS_AUDIO_OBJ) \
                 $(CMACS_WHISPER_OBJ) $(CMACS_PIPER_OBJ) \
                 $(CMACS_AI_OBJ) $(CMACS_LIBREGNUM_OBJ) \
-                $(CMACS_GNUSEYE_OBJ) $(CMACS_GSURF_OBJ)
-CMACS_DIRS = glib gobject dbus gi crispy bacon gowl podomation libreclaw org-ex mcp cintrospect cpatch video audio whisper piper ai libregnum gnuseye gsurf
+                $(CMACS_GNUSEYE_OBJ) $(CMACS_CAD_OBJ) $(CMACS_GSURF_OBJ)
+CMACS_DIRS = glib gobject dbus gi crispy bacon gowl podomation libreclaw org-ex mcp cintrospect cpatch video audio whisper piper ai libregnum gnuseye cad gsurf
 cmacs-symlinks:
 	$(AM_V_at)for f in $(CMACS_ALL_OBJ:.o=.c); do \
 	  test -e "$(srcdir)/$$f" && continue; \
@@ -1022,6 +1028,21 @@ endif
 ##    BUILD_GIR=0 to the default `all' target skips just the gir
 ##    sub-target while keeping the full check-deps -> platform-check
 ##    -> deps -> generate -> _lib pipeline.
+## cad-glib: the canonical CAD kernel build (Manifold/OCCT/slvs +
+## frontends).  FORCE so source edits under deps/cad-glib are picked
+## up; the sub-make decides incrementality (ai-glib pattern).  The
+## vendored manifold/solvespace archives build automatically as
+## prerequisites inside cad-glib's own Makefile.
+CMACS_CAD_GLIB_STATIC_LIB = $(srcdir)/../deps/cad-glib/build/release/libcad-glib-1.0.a
+ifneq ($(CMACS_CAD_OBJ),)
+$(CMACS_CAD_GLIB_STATIC_LIB): FORCE
+	@gir=1; \
+	if ! command -v g-ir-scanner >/dev/null 2>&1; then gir=0; fi; \
+	$(MAKE) -C $(srcdir)/../deps/cad-glib GIR=$$gir all
+
+$(CMACS_CAD_OBJ): $(CMACS_CAD_GLIB_STATIC_LIB) $(CMACS_LIBREGNUM_STATIC_LIB)
+endif
+
 CMACS_LIBREGNUM_STATIC_LIB = $(srcdir)/../deps/libregnum/build/release/lib/liblibregnum.a
 ifneq ($(CMACS_LIBREGNUM_OBJ),)
 ##  - Scripting backends: Lua (luajit) and Python (python3-embed) auto-enable
@@ -1033,20 +1054,20 @@ ifneq ($(CMACS_LIBREGNUM_OBJ),)
 ##    g-ir-scanner tool is absent.  All of these are no-ops when the respective
 ##    -devel packages / gobject-introspection-1.0 are absent, so the build
 ##    still works without them (only crispy then).
-$(CMACS_LIBREGNUM_STATIC_LIB):
+$(CMACS_LIBREGNUM_STATIC_LIB): $(if $(CMACS_CAD_OBJ),$(CMACS_CAD_GLIB_STATIC_LIB))
 	@gir=0; \
 	if command -v g-ir-scanner >/dev/null 2>&1 \
 	   && pkg-config --exists gobject-introspection-1.0; then gir=1; fi; \
 	if pkg-config --exists girepository-2.0; then \
 	  $(MAKE) -C $(srcdir)/../deps/libregnum \
 	    WARN_CFLAGS="-Wall -Wextra -Wno-unused-but-set-variable" \
-	    BUILD_GIR=$$gir CRISPY=1 HAS_GI=1 \
+	    BUILD_GIR=$$gir CRISPY=1 HAS_GI=1 $(CMACS_CAD_LIBREGNUM_FLAGS) \
 	    GI_RUNTIME_CFLAGS="$$(pkg-config --cflags girepository-2.0)" \
 	    GI_RUNTIME_LIBS="$$(pkg-config --libs girepository-2.0)"; \
 	else \
 	  $(MAKE) -C $(srcdir)/../deps/libregnum \
 	    WARN_CFLAGS="-Wall -Wextra -Wno-unused-but-set-variable" \
-	    BUILD_GIR=0 CRISPY=1; \
+	    BUILD_GIR=0 CRISPY=1 $(CMACS_CAD_LIBREGNUM_FLAGS); \
 	fi
 $(CMACS_LIBREGNUM_OBJ): $(CMACS_LIBREGNUM_STATIC_LIB)
 endif
@@ -1272,6 +1293,7 @@ temacs$(EXEEXT): $(LIBXMENU) $(ALLOBJS) $(LIBEGNU_ARCHIVE) $(EMACSRES) \
   $(CMACS_BACON_STATIC_LIB) $(CMACS_CRISPY_STATIC_LIB) $(CMACS_GOWL_STATIC_LIB) \
   $(CMACS_PODOMATION_STATIC_LIB) $(CMACS_LIBRECLAW_STATIC_LIB) \
   $(CMACS_AI_GLIB_STATIC_LIB) \
+  $(if $(CMACS_CAD_OBJ),$(CMACS_CAD_GLIB_STATIC_LIB)) \
   $(CMACS_LIBREGNUM_STATIC_LIB) \
   $(CMACS_GSURF_STATIC_LIB) \
   $(CMACS_BACON_DEDUP_LIB) $(CMACS_GOWL_DEDUP_LIB) $(CMACS_LIBRECLAW_DEDUP_LIB) \

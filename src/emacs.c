@@ -2826,6 +2826,9 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #ifdef HAVE_CMACS_GNUSEYE
       syms_of_cmacs_gnuseye ();
 #endif
+#ifdef HAVE_CMACS_CAD
+      syms_of_cmacs_cad ();	/* CMACS: parametric CAD subsystem */
+#endif
 #ifdef HAVE_CMACS_GSURF
       syms_of_cmacs_gsurf ();
 #endif
@@ -2949,6 +2952,9 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #endif
 #ifdef HAVE_CMACS_GNUSEYE
   init_cmacs_gnuseye ();
+#endif
+#ifdef HAVE_CMACS_CAD
+  init_cmacs_cad ();	/* CMACS: parametric CAD subsystem */
 #endif
 #ifdef HAVE_CMACS_GSURF
   init_cmacs_gsurf ();
