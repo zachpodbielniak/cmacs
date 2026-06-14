@@ -2807,20 +2807,91 @@ their original order, so indices stay stable for dispatch."
 
 (defun cmacs-libregnum--lrg-frame-p (&optional frame)
   "Non-nil when FRAME (or the selected frame) uses the --lrg display backend.
-The libregnum/raylib backend (`output_lrg') has no native popup menus, so the
-context-menu code falls back to a keyboard `tmm' menu there."
+The libregnum/raylib backend (`output_lrg') has no native (GTK) popup menus,
+so the context menus use the in-engine `lrg-popup-menu' there instead."
   (eq (framep (or frame (selected-frame))) 'lrg))
+
+(declare-function lrg-popup-menu "cmacs-lrgterm.c" (items &optional x y))
+
+(defun cmacs-libregnum--menu-xy (position)
+  "Return (X . Y) frame pixels from an `x-popup-menu' POSITION, else (nil.nil).
+POSITION `t' (current mouse) and other forms yield (nil . nil) so
+`lrg-popup-menu' falls back to the pointer position."
+  (if (and (consp position) (consp (car position)))
+      (cons (car (car position)) (car (cdr (car position))))
+    (cons nil nil)))
+
+(defun cmacs-libregnum--alist-menu-to-lrg (menu)
+  "Flatten an alist-form `x-popup-menu' MENU for `lrg-popup-menu'.
+MENU is (TITLE (PANE-TITLE ITEM...) ...); ITEM is (LABEL . VALUE) or a string
+separator.  Returns (ITEMS . VALUES): ITEMS is the `lrg-popup-menu' item list
+(strings, (LABEL . nil) for a disabled section header, nil for separators);
+VALUES is a vector mapping each item index to its VALUE (nil for non-selectable
+rows)."
+  (let* ((panes (cdr menu))
+         (multi (seq-some (lambda (p) (and (consp p) (stringp (car p))
+                                           (> (length (car p)) 0)))
+                          panes))
+         (items nil) (values nil))
+    (dolist (pane panes)
+      (when (consp pane)
+        (let ((ptitle (car pane)) (entries (cdr pane)))
+          (when (and multi (stringp ptitle) (> (length ptitle) 0))
+            (push (cons ptitle nil) items) (push nil values))
+          (dolist (e entries)
+            (cond
+             ;; Emacs menu convention: a label of "--"... is a separator.
+             ((and (consp e) (stringp (car e))
+                   (not (string-prefix-p "--" (car e))))   ; (LABEL . VALUE)
+              (push (car e) items) (push (cdr e) values))
+             (t                                      ; "--"/string/nil separator
+              (push nil items) (push nil values)))))))
+    (cons (nreverse items) (vconcat (nreverse values)))))
+
+(defun cmacs-libregnum--keymap-menu-to-lrg (keymap)
+  "Flatten a menu KEYMAP for `lrg-popup-menu'.
+Returns (ITEMS . VALUES) like `cmacs-libregnum--alist-menu-to-lrg'; VALUES
+holds each item's leaf binding (the action closure).  A submenu (nested
+keymap) is inlined under a disabled header so v1 needs no nested popups."
+  (let ((items nil) (values nil))
+    (map-keymap
+     (lambda (_event def)
+       (let (label real)
+         (cond
+          ((and (consp def) (eq (car def) 'menu-item))
+           (setq label (nth 1 def) real (nth 2 def)))
+          ((and (consp def) (stringp (car def)))    ; (LABEL [HELP] . REAL)
+           (setq label (car def)
+                 real (if (and (consp (cdr def)) (stringp (cadr def)))
+                          (cddr def) (cdr def)))))
+         (cond
+          ((or (null label)                          ; separator / unknown
+               (and (stringp label) (string-prefix-p "--" label)))
+           (push nil items) (push nil values))
+          ((keymapp real)                            ; submenu -> inline
+           (push (cons (format "%s" label) nil) items) (push nil values)
+           (let ((sub (cmacs-libregnum--keymap-menu-to-lrg real)))
+             (dolist (it (car sub)) (push it items))
+             (dotimes (i (length (cdr sub)))
+               (push (aref (cdr sub) i) values))))
+          ((functionp real)
+           (push (format "%s" label) items) (push real values))
+          (t (push nil items) (push nil values)))))
+     keymap)
+    (cons (nreverse items) (vconcat (nreverse values)))))
 
 (defun cmacs-libregnum-popup-menu (position menu)
   "Show MENU like `x-popup-menu' at POSITION and return the chosen value.
-On graphical frames this pops a native menu; under the --lrg backend (no
-native popup menus) it falls back to a keyboard `tmm' menu.  MENU must be an
-alist-style menu (\"(TITLE (PANE (LABEL . VALUE)...)...)\"); for such menus the
-`tmm' fallback (called with no-execute) returns the same VALUE `x-popup-menu'
-would, so callers keep their existing result handling unchanged.  Keymap menus
-need event-path resolution and are handled at their call sites instead."
+On graphical frames this pops a native menu; under the --lrg backend it draws
+the in-engine `lrg-popup-menu' (a libregnum/raylib-rendered popup) instead.
+MENU must be an alist-style menu (\"(TITLE (PANE (LABEL . VALUE)...)...)\");
+both paths return the chosen VALUE, so callers keep their result handling
+unchanged.  Keymap menus are handled at their call sites."
   (if (cmacs-libregnum--lrg-frame-p)
-      (progn (require 'tmm) (tmm-prompt menu nil nil t))
+      (let* ((flat (cmacs-libregnum--alist-menu-to-lrg menu))
+             (xy   (cmacs-libregnum--menu-xy position))
+             (idx  (lrg-popup-menu (car flat) (car xy) (cdr xy))))
+        (and idx (aref (cdr flat) idx)))
     (x-popup-menu position menu)))
 
 (defun cmacs-libregnum-editor--menu-keymap (items buffer id &optional title)
@@ -2933,9 +3004,12 @@ wait."
                ;; returns the leaf binding directly.
                (binding
                 (if (cmacs-libregnum--lrg-frame-p frame)
-                    (let ((c (progn (require 'tmm)
-                                    (tmm-prompt keymap nil nil t))))
-                      (and (functionp c) c))
+                    ;; In-engine popup: flatten the keymap to items+bindings,
+                    ;; pop the libregnum menu, map the chosen index -> binding.
+                    (let* ((flat (cmacs-libregnum--keymap-menu-to-lrg keymap))
+                           (idx  (lrg-popup-menu (car flat) fx fy))
+                           (b    (and idx (aref (cdr flat) idx))))
+                      (and (functionp b) b))
                   (let ((choice (x-popup-menu (list (list fx fy) frame)
                                               keymap)))
                     (and choice (listp choice)

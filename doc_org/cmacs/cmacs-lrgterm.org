@@ -213,11 +213,16 @@ direction.  A wheel event that *isn't* over a view becomes a normal Emacs
 ~WHEEL_EVENT~, so buffers scroll with the wheel under ~--lrg~ as well.  (In-scene
 text labels are still a follow-up; everything else interacts now.)
 
-Because lrg has no native popup menus (~menu_show_hook~ returns nil), the
-libregnum/gnuseye right-click context menus fall back to a keyboard ~tmm~ menu:
-~cmacs-libregnum-popup-menu~ pops a native menu on graphical frames and calls
-~tmm-prompt~ (with NO-EXECUTE, so it returns the same value ~x-popup-menu~
-would) on an lrg frame.  And since those 3D buffers sit in Evil *emacs state*
+Because lrg has no native (GTK) popup menus (~menu_show_hook~ returns nil), the
+libregnum/gnuseye right-click context menus are drawn *in-engine*: the
+~lrg-popup-menu~ primitive renders a GTK-like popup with libregnum (a panel +
+hovered/disabled rows + separators, label text via the glyph atlas) and runs a
+modal loop (mouse hover + left-click to choose, right-click/ESC/click-outside
+to dismiss, up/down + RET to navigate), exactly like ~x-popup-menu~'s own modal
+loop.  ~cmacs-libregnum-popup-menu~ flattens an Emacs menu (alist *or* keymap
+form, submenus inlined under a header) into the flat item list it takes, then
+maps the chosen index back to the item's value; on graphical frames it still
+pops the native menu.  And since those 3D buffers sit in Evil *emacs state*
 for their single-key navigation, ~<escape>~ is bound to drop them to Evil
 *normal* state (gnuseye's ~<escape>~ first deselects a selected entity, then
 escapes); re-enter navigation with ~C-z~ (~evil-emacs-state~).
@@ -311,11 +316,11 @@ These are genuine, acceptable and documented; most match the phased plan:
 - *One OS window per terminal.*  raylib's process-global state makes true
   multi-window a graylib engine change.  v1 is one top-level frame plus
   Emacs's internal windows; a second top-level GUI frame is refused.
-- *Menus / dialogs*: GUI popup menus are not drawn — keyboard menu access is
-  via ~M-x tmm-menubar~ / =F10=; dialogs route to the minibuffer
-  (~use-dialog-box~ is ~nil~).  The libregnum/gnuseye right-click context menus
-  fall back to a keyboard ~tmm~ menu under ~--lrg~ (see /libregnum 3D buffers
-  under --lrg/).
+- *Menus / dialogs*: the Emacs *menu bar* is not drawn — keyboard menu access
+  is via ~M-x tmm-menubar~ / =F10=; dialogs route to the minibuffer
+  (~use-dialog-box~ is ~nil~).  The libregnum/gnuseye right-click *context*
+  menus, however, ARE drawn in-engine (~lrg-popup-menu~; see /libregnum 3D
+  buffers under --lrg/).
 - *Scroll bars*: not drawn (off by default).
 - *Tool bar, tooltips/child-frames*: not yet implemented.  (Inline images
   *are* drawn — see /Clipboard, fonts, faces/.)

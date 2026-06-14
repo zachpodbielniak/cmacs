@@ -1287,23 +1287,23 @@ Batch-safe: stubs out the C DEFUNs with Lisp flets."
   (cl-letf (((symbol-function 'framep) (lambda (&rest _) 'lrg)))
     (should (cmacs-libregnum--lrg-frame-p))))
 
-(ert-deftest cmacs-libregnum-tests-popup-menu-lrg-uses-tmm ()
-  "Under --lrg, `cmacs-libregnum-popup-menu' routes to a keyboard tmm menu.
-It must call `tmm-prompt' with NO-EXECUTE so the chosen VALUE is returned (as
-`x-popup-menu' would), not executed -- otherwise the context-menu callers,
-which funcall the returned closure, would double-run or break."
-  (require 'tmm)
-  (let* ((called nil)
-         (menu '("Title" ("" ("Item A" . a) ("Item B" . b)))))
+(ert-deftest cmacs-libregnum-tests-popup-menu-lrg-in-engine ()
+  "Under --lrg, `cmacs-libregnum-popup-menu' uses the in-engine `lrg-popup-menu'
+and maps the returned item index back to the chosen item's VALUE -- so the
+context-menu callers, which funcall the returned closure, keep working."
+  (skip-unless (fboundp 'lrg-popup-menu))
+  (let* ((menu '("Title" ("" ("Item A" . a) ("Item B" . b))))
+         (got nil))
     (cl-letf (((symbol-function 'framep) (lambda (&rest _) 'lrg))
-              ((symbol-function 'tmm-prompt)
-               (lambda (m &optional _in-popup _default no-execute &rest _)
-                 (setq called (list m no-execute))
-                 'chosen-value)))
-      (should (eq (cmacs-libregnum-popup-menu t menu) 'chosen-value))
-      ;; same menu handed to tmm, and NO-EXECUTE was requested
-      (should (equal (nth 0 called) menu))
-      (should (nth 1 called)))))
+              ((symbol-function 'lrg-popup-menu)
+               (lambda (items &optional _x _y) (setq got items) 1)))  ; pick idx 1
+      (should (eq (cmacs-libregnum-popup-menu t menu) 'b))
+      ;; The separators/headers were flattened to a plain label list.
+      (should (equal got '("Item A" "Item B"))))
+    ;; A dismissed menu (nil index) yields nil.
+    (cl-letf (((symbol-function 'framep) (lambda (&rest _) 'lrg))
+              ((symbol-function 'lrg-popup-menu) (lambda (&rest _) nil)))
+      (should (null (cmacs-libregnum-popup-menu t menu))))))
 
 (ert-deftest cmacs-libregnum-tests-popup-menu-native-off-lrg ()
   "Off an lrg frame, `cmacs-libregnum-popup-menu' uses the native popup."
@@ -1312,6 +1312,37 @@ which funcall the returned closure, would double-run or break."
               ((symbol-function 'x-popup-menu)
                (lambda (_pos _menu) 'native-value)))
       (should (eq (cmacs-libregnum-popup-menu t menu) 'native-value)))))
+
+(ert-deftest cmacs-libregnum-tests-alist-menu-flatten ()
+  "Alist menus flatten to (labels . value-vector); separators/headers preserved."
+  ;; Single empty-titled pane: items + separators, no headers.
+  (let ((r (cmacs-libregnum--alist-menu-to-lrg
+            '("T" ("" ("A" . fa) ("--") ("B" . fb))))))
+    (should (equal (car r) '("A" nil "B")))
+    (should (equal (cdr r) [fa nil fb])))
+  ;; Multiple titled panes get disabled section headers.
+  (let ((r (cmacs-libregnum--alist-menu-to-lrg
+            '("T" ("Sec1" ("A" . 0)) ("Sec2" ("B" . 1))))))
+    (should (equal (car r) '(("Sec1") "A" ("Sec2") "B")))
+    (should (equal (cdr r) [nil 0 nil 1]))))
+
+(ert-deftest cmacs-libregnum-tests-keymap-menu-flatten ()
+  "A menu keymap flattens to label items with their leaf bindings as values."
+  (let ((km (make-sparse-keymap)))
+    (define-key km [a] '(menu-item "Alpha" (lambda () 'A)))
+    (define-key km [b] '(menu-item "Beta"  (lambda () 'B)))
+    (let* ((r (cmacs-libregnum--keymap-menu-to-lrg km))
+           (items (car r))
+           (vals (append (cdr r) nil)))
+      (should (member "Alpha" items))
+      (should (member "Beta" items))
+      (should (= (length vals) 2))
+      (should (seq-every-p #'functionp vals)))))
+
+(ert-deftest cmacs-libregnum-tests-menu-xy ()
+  "POSITION parsing for the in-engine menu: explicit point vs mouse fallback."
+  (should (equal (cmacs-libregnum--menu-xy '((10 20) some-frame)) '(10 . 20)))
+  (should (equal (cmacs-libregnum--menu-xy t) (cons nil nil))))
 
 (ert-deftest cmacs-libregnum-tests-evil-normal-state-no-evil ()
   "`cmacs-libregnum-evil-normal-state' is a harmless no-op without Evil."

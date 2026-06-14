@@ -52,7 +52,12 @@ permitted by GNU C).  */
 typedef struct _LrgFrameSurface LrgFrameSurface;
 typedef struct _Lrg2DSurface    Lrg2DSurface;
 typedef struct _LrgGlyphAtlas   LrgGlyphAtlas;
+typedef struct _LrgGlyphKey     LrgGlyphKey;
+typedef struct _LrgGlyphMetrics LrgGlyphMetrics;
 typedef struct _GrlWindow       GrlWindow;
+/* Matches cairo's own typedef; identical so it coexists where cairo.h is also
+   included.  Only used through pointers here (lrg_font_bake).  */
+typedef struct _cairo_scaled_font cairo_scaled_font_t;
 
 /* Per-display state (one per opened display connection / OS window set).  */
 struct lrg_display_info
@@ -211,6 +216,11 @@ extern LrgGlyphAtlas *lrg_frame_glyph_atlas (struct frame *);
 extern int lrg_font_draw_glyph_string (struct glyph_string *s, int from,
                                        int to, int x, int y,
                                        bool with_background);
+/* Rasterise one glyph into the atlas (used by the in-engine popup menu to
+   render label text through the same path as buffer glyphs).  */
+extern LrgGlyphMetrics *lrg_font_bake (LrgGlyphAtlas *atlas,
+                                       cairo_scaled_font_t *scaled,
+                                       unsigned code, const LrgGlyphKey *key);
 
 /* lrg_requested_render_mode is declared in lisp.h (reachable from core).  */
 

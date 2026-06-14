@@ -24,6 +24,7 @@ textured-quad-in-FBO bug and the double-buffer staleness problem.  */
 
 #include <libregnum.h>
 #include <cairo.h>		/* image pixels live in img->cr_data (a cairo pattern) */
+#include <cairo-ft.h>		/* pulls FcPattern/FT so ftfont.h's font_info is usable */
 #include <math.h>
 #include <unistd.h>
 #include <errno.h>
@@ -40,6 +41,7 @@ textured-quad-in-FBO bug and the double-buffer staleness problem.  */
 #include "buffer.h"
 #include "dispextern.h"
 #include "font.h"
+#include "ftfont.h"		/* struct font_info + cr_scaled_font (menu text) */
 #include "fontset.h"
 #include "character.h"
 #include "coding.h"
@@ -655,6 +657,146 @@ lrg_paint_libregnum_views (struct frame *f)
 }
 #endif /* HAVE_CMACS_LIBREGNUM */
 
+/* ===================================================== in-engine popup menu ==
+   A GTK-like right-click context menu drawn by the lrg backend itself (no
+   minibuffer / tmm).  `cmacs-libregnum-popup-menu' (Elisp) flattens an Emacs
+   menu into a flat item list and calls `lrg-popup-menu', which runs a modal
+   loop -- poll input + present each frame, exactly like x-popup-menu's own
+   modal loop -- and returns the chosen item's index.  The menu itself is
+   composited onto the frame by lrg_present_frame (it draws `lrg_active_menu'
+   on top of the text + libregnum views), so it appears every present.
+   lrg_font_bake (declared in cmacs-lrgterm.h) renders label glyphs.  */
+
+typedef struct
+{
+  char  **labels;        /* n UTF-8 strings; entry NULL => a separator row    */
+  bool   *enabled;       /* n flags                                           */
+  int     n;
+  int     x, y, w, h;    /* frame-pixel rectangle                             */
+  int     item_h;        /* per-row height                                    */
+  int     pad_x, pad_y;  /* inner padding                                     */
+  int     hovered;       /* hovered selectable item, or -1                    */
+} LrgMenu;
+
+static LrgMenu *lrg_active_menu;
+
+/* Blend pixel A toward pixel B by T (0..1) at alpha ALPHA -- for the menu
+   panel/border/hover tints, derived from the frame fg/bg so the menu matches
+   any theme without needing a dedicated face.  */
+static GrlColor *
+lrg_menu_blend (unsigned long a, unsigned long b, double t, guint8 alpha)
+{
+  int ar = (a >> 16) & 0xff, ag = (a >> 8) & 0xff, ab = a & 0xff;
+  int br = (b >> 16) & 0xff, bg = (b >> 8) & 0xff, bb = b & 0xff;
+  return grl_color_new ((guint8) (ar + (br - ar) * t),
+                        (guint8) (ag + (bg - ag) * t),
+                        (guint8) (ab + (bb - ab) * t), alpha);
+}
+
+/* Pixel width of UTF-8 STR in F's default font.  The lrg default editing font
+   is monospace, so column-width * char-count is exact enough for menu sizing
+   (and avoids baking every glyph just to measure).  */
+static int
+lrg_menu_text_px (struct frame *f, const char *str)
+{
+  int n = 0;
+  const char *p = str;
+  while (p != NULL && *p)
+    {
+      n++;
+      p = g_utf8_next_char (p);
+    }
+  return n * FRAME_COLUMN_WIDTH (f);
+}
+
+/* Draw UTF-8 STR with its top-left at (X, Y_TOP) in F's default font, colour
+   FG, through the per-display glyph atlas (same path as buffer text).  */
+static void
+lrg_menu_draw_text (struct frame *f, int x, int y_top, const char *str,
+                    const GrlColor *fg)
+{
+  struct font *font = FRAME_FONT (f);
+  struct font_info *fi = (struct font_info *) font;
+  cairo_scaled_font_t *scaled = fi ? fi->cr_scaled_font : NULL;
+  LrgFrameSurface *surf = FRAME_LRG_SURFACE (f);
+  LrgGlyphAtlas *atlas;
+  int y_base = y_top + FONT_BASE (font);
+  const char *p = str;
+
+  if (font == NULL || scaled == NULL || surf == NULL || str == NULL)
+    return;
+  atlas = lrg_frame_glyph_atlas (f);
+
+  while (*p)
+    {
+      gunichar uc = g_utf8_get_char (p);
+      unsigned code = font->driver->encode_char (font, (int) uc);
+      LrgGlyphKey *key;
+      LrgGlyphMetrics *m;
+
+      p = g_utf8_next_char (p);
+      if (code == FONT_INVALID_CODE)
+        {
+          x += FRAME_COLUMN_WIDTH (f);
+          continue;
+        }
+      key = lrg_glyph_key_new ((guint64) (uintptr_t) font, code, 0);
+      m = lrg_glyph_atlas_lookup (atlas, key);
+      if (m == NULL)
+        m = lrg_font_bake (atlas, scaled, code, key);
+      if (m != NULL)
+        {
+          lrg_frame_surface_draw_glyph (surf, atlas, key,
+                                        (gfloat) x, (gfloat) y_base, fg);
+          x += lrg_glyph_metrics_get_advance (m);
+        }
+      else
+        x += FRAME_COLUMN_WIDTH (f);
+      lrg_glyph_key_free (key);
+    }
+}
+
+/* Composite the active MENU onto F's surface, after the text + libregnum
+   views.  Called from lrg_present_frame.  */
+static void
+lrg_menu_render (struct frame *f, LrgFrameSurface *surf, LrgMenu *menu)
+{
+  unsigned long fg_px = FRAME_LRG_FOREGROUND_COLOR (f);
+  unsigned long bg_px = FRAME_LRG_BACKGROUND_COLOR (f);
+  g_autoptr(GrlColor) panel  = lrg_menu_blend (bg_px, fg_px, 0.08, 250);
+  g_autoptr(GrlColor) border = lrg_menu_blend (bg_px, fg_px, 0.45, 255);
+  g_autoptr(GrlColor) hi     = lrg_menu_blend (bg_px, fg_px, 0.28, 255);
+  g_autoptr(GrlColor) sep    = lrg_menu_blend (bg_px, fg_px, 0.30, 255);
+  g_autoptr(GrlColor) fg     = lrg_color (fg_px);
+  g_autoptr(GrlColor) fgdim  = lrg_menu_blend (bg_px, fg_px, 0.45, 255);
+  g_autoptr(GrlColor) shadow = grl_color_new (0, 0, 0, 60);
+  int i;
+
+  lrg_frame_surface_fill_rect (surf, menu->x + 3, menu->y + 3,
+                               menu->w, menu->h, shadow);
+  lrg_frame_surface_fill_rect (surf, menu->x, menu->y, menu->w, menu->h, panel);
+  lrg_frame_surface_draw_rect_outline (surf, menu->x, menu->y,
+                                       menu->w, menu->h, 1.0f, border);
+
+  for (i = 0; i < menu->n; i++)
+    {
+      int ry = menu->y + menu->pad_y + i * menu->item_h;
+      if (menu->labels[i] == NULL)            /* separator */
+        {
+          int sy = ry + menu->item_h / 2;
+          lrg_frame_surface_draw_line (surf, menu->x + menu->pad_x, sy,
+                                       menu->x + menu->w - menu->pad_x, sy,
+                                       1.0f, sep);
+          continue;
+        }
+      if (i == menu->hovered)
+        lrg_frame_surface_fill_rect (surf, menu->x + 2, ry,
+                                     menu->w - 4, menu->item_h, hi);
+      lrg_menu_draw_text (f, menu->x + menu->pad_x, ry, menu->labels[i],
+                          menu->enabled[i] ? fg : fgdim);
+    }
+}
+
 /* Present the whole frame: clear + repaint every visible glyph from the
    current matrix (immune to the FBO bug -- default framebuffer only) + swap.
 
@@ -699,6 +841,10 @@ lrg_present_frame (struct frame *f)
        top of the text, into their windows' rects.  */
     lrg_paint_libregnum_views (f);
 #endif
+
+    /* The in-engine right-click menu, if one is up, draws on top of all. */
+    if (lrg_active_menu != NULL)
+      lrg_menu_render (f, surf, lrg_active_menu);
 
     lrg_frame_surface_end_frame (surf);
   }
@@ -1543,6 +1689,196 @@ check_lrg_display_info (Lisp_Object object)
   return lrg_display_list;
 }
 
+DEFUN ("lrg-popup-menu", Flrg_popup_menu, Slrg_popup_menu, 1, 3, 0,
+       doc: /* Show an in-engine popup menu of ITEMS; return the chosen index.
+ITEMS is a list; each element is a string (a selectable item), a cons
+(LABEL . ENABLEDP) where ENABLEDP nil greys the item out, or nil (a separator
+row).  Optional X and Y place the menu's top-left at that frame pixel; without
+them it opens at the current mouse position.  Runs a modal loop driven by the
+libregnum window (mouse hover + left-click to choose, right-click/ESC/click
+outside to dismiss, up/down to move, RET to choose); returns the 0-based index
+of the chosen selectable item, or nil if dismissed.  Only meaningful while an
+`lrg' frame is live -- returns nil otherwise.  */)
+  (Lisp_Object items, Lisp_Object x, Lisp_Object y)
+{
+  struct frame *f = lrg_any_frame ();
+  GrlWindow *win;
+  LrgMenu menu;
+  Lisp_Object tail;
+  int i, maxw = 0, result = -1, settle = 2;
+  bool done = false;
+
+  if (f == NULL || !FRAME_LRG_P (f) || FRAME_LRG_SURFACE (f) == NULL)
+    return Qnil;
+  win = lrg_window_of_frame (f);
+  if (win == NULL || !CONSP (items))
+    return Qnil;
+
+  memset (&menu, 0, sizeof menu);
+  for (tail = items; CONSP (tail); tail = XCDR (tail))
+    menu.n++;
+  if (menu.n == 0)
+    return Qnil;
+
+  menu.labels  = xnmalloc (menu.n, sizeof *menu.labels);
+  menu.enabled = xnmalloc (menu.n, sizeof *menu.enabled);
+  i = 0;
+  for (tail = items; CONSP (tail); tail = XCDR (tail), i++)
+    {
+      Lisp_Object it = XCAR (tail);
+      menu.labels[i] = NULL;
+      menu.enabled[i] = false;
+      if (STRINGP (it))
+        {
+          menu.labels[i] = xstrdup (SSDATA (ENCODE_UTF_8 (it)));
+          menu.enabled[i] = true;
+        }
+      else if (CONSP (it) && STRINGP (XCAR (it)))
+        {
+          menu.labels[i] = xstrdup (SSDATA (ENCODE_UTF_8 (XCAR (it))));
+          menu.enabled[i] = !NILP (XCDR (it));
+        }
+      if (menu.labels[i] != NULL)
+        {
+          int wpx = lrg_menu_text_px (f, menu.labels[i]);
+          if (wpx > maxw)
+            maxw = wpx;
+        }
+    }
+
+  menu.item_h = FRAME_LINE_HEIGHT (f);
+  menu.pad_x  = FRAME_COLUMN_WIDTH (f);
+  menu.pad_y  = menu.item_h / 4;
+  menu.w      = maxw + 2 * menu.pad_x;
+  menu.h      = menu.n * menu.item_h + 2 * menu.pad_y;
+
+  menu.x = FIXNUMP (x) ? (int) XFIXNUM (x) : grl_input_get_mouse_x ();
+  menu.y = FIXNUMP (y) ? (int) XFIXNUM (y) : grl_input_get_mouse_y ();
+  {
+    int fw = FRAME_PIXEL_WIDTH (f), fh = FRAME_PIXEL_HEIGHT (f);
+    if (menu.x + menu.w > fw) menu.x = fw - menu.w;
+    if (menu.y + menu.h > fh) menu.y = fh - menu.h;
+    if (menu.x < 0) menu.x = 0;
+    if (menu.y < 0) menu.y = 0;
+  }
+
+  menu.hovered = -1;
+  for (i = 0; i < menu.n; i++)
+    if (menu.labels[i] != NULL && menu.enabled[i])
+      {
+        menu.hovered = i;
+        break;
+      }
+
+  lrg_active_menu = &menu;
+  grl_window_poll_events (win);   /* drain the click that opened the menu */
+
+  /* Safety cap: ~12 ms/iteration, so ~8000 iterations is ~96 s.  Normal exit
+     is via a click / RET / ESC / right-click / click-outside / window-close;
+     the cap only guarantees the modal loop can never hard-hang Emacs.  */
+  {
+  int iters = 0;
+  while (!done)
+    {
+      int mx, my, k;
+
+      if (++iters > 8000 || !FRAME_LIVE_P (f))
+        done = true;
+
+      grl_window_poll_events (win);
+      mx = grl_input_get_mouse_x ();
+      my = grl_input_get_mouse_y ();
+
+      /* Hover (only over a selectable row).  */
+      if (mx >= menu.x && mx < menu.x + menu.w
+          && my >= menu.y + menu.pad_y
+          && my < menu.y + menu.pad_y + menu.n * menu.item_h)
+        {
+          int idx = (my - (menu.y + menu.pad_y)) / menu.item_h;
+          if (idx >= 0 && idx < menu.n
+              && menu.labels[idx] != NULL && menu.enabled[idx])
+            menu.hovered = idx;
+        }
+
+      /* Clicks (ignored for the first couple of frames so the press that
+         opened the menu cannot be mis-read as a selection).  */
+      if (settle > 0)
+        settle--;
+      else
+        {
+          if (grl_input_is_mouse_button_pressed (GRL_MOUSE_BUTTON_LEFT))
+            {
+              if (mx >= menu.x && mx < menu.x + menu.w
+                  && my >= menu.y && my < menu.y + menu.h)
+                {
+                  int idx = (my - (menu.y + menu.pad_y)) / menu.item_h;
+                  if (idx >= 0 && idx < menu.n
+                      && menu.labels[idx] != NULL && menu.enabled[idx])
+                    {
+                      result = idx;
+                      done = true;
+                    }
+                }
+              else
+                done = true;            /* click outside dismisses */
+            }
+          if (grl_input_is_mouse_button_pressed (GRL_MOUSE_BUTTON_RIGHT))
+            done = true;
+        }
+
+      /* Keyboard navigation.  */
+      while ((k = grl_input_get_key_pressed ()) != 0)
+        {
+          if (k == GRL_KEY_ESCAPE)
+            done = true;
+          else if (k == GRL_KEY_ENTER || k == GRL_KEY_KP_ENTER)
+            {
+              if (menu.hovered >= 0)
+                {
+                  result = menu.hovered;
+                  done = true;
+                }
+            }
+          else if (k == GRL_KEY_DOWN || k == GRL_KEY_UP)
+            {
+              int dir = (k == GRL_KEY_DOWN) ? 1 : -1;
+              int j = (menu.hovered < 0) ? (dir > 0 ? -1 : menu.n) : menu.hovered;
+              int guard = menu.n;
+              while (guard-- > 0)
+                {
+                  j += dir;
+                  if (j < 0) j = menu.n - 1;
+                  if (j >= menu.n) j = 0;
+                  if (menu.labels[j] != NULL && menu.enabled[j])
+                    {
+                      menu.hovered = j;
+                      break;
+                    }
+                }
+            }
+        }
+
+      if (grl_window_should_close (win))
+        done = true;
+
+      lrg_present_frame (f);          /* draws the frame + the menu overlay */
+      if (!done)
+        usleep (12000);               /* ~80 Hz; keep CPU idle while modal */
+    }
+  }
+
+  lrg_active_menu = NULL;
+  lrg_present_frame (f);              /* repaint without the menu */
+
+  for (i = 0; i < menu.n; i++)
+    if (menu.labels[i] != NULL)
+      xfree (menu.labels[i]);
+  xfree (menu.labels);
+  xfree (menu.enabled);
+
+  return result >= 0 ? make_fixnum (result) : Qnil;
+}
+
 DEFUN ("lrg-capture-screen", Flrg_capture_screen, Slrg_capture_screen, 1, 2, 0,
        doc: /* Capture FRAME's libregnum window to FILENAME (a PNG/BMP/etc.).
 The image format is chosen from FILENAME's extension.  FRAME defaults to the
@@ -1721,6 +2057,7 @@ syms_of_cmacs_lrgterm (void)
   DEFSYM (Qlrg, "lrg");
   Fprovide (Qlrg, Qnil);
   defsubr (&Slrg_capture_screen);
+  defsubr (&Slrg_popup_menu);
   defsubr (&Slrg_display_pixel_size);
   defsubr (&Slrg_set_clipboard);
   defsubr (&Slrg_get_clipboard);

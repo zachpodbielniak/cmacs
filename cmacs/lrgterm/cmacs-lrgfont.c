@@ -51,12 +51,13 @@ lrg_frame_glyph_atlas (struct frame *f)
 }
 
 /* Rasterise glyph CODE of SCALED into the atlas under KEY; return its
-   metrics (owned by the atlas) or NULL.  */
-static LrgGlyphMetrics *
-lrgfont_bake (LrgGlyphAtlas       *atlas,
-              cairo_scaled_font_t *scaled,
-              unsigned             code,
-              const LrgGlyphKey   *key)
+   metrics (owned by the atlas) or NULL.  Public so the in-engine popup menu
+   (cmacs-lrgterm.c) can render label text through the same atlas path.  */
+LrgGlyphMetrics *
+lrg_font_bake (LrgGlyphAtlas       *atlas,
+               cairo_scaled_font_t *scaled,
+               unsigned             code,
+               const LrgGlyphKey   *key)
 {
   cairo_glyph_t cg;
   cairo_text_extents_t ext;
@@ -168,7 +169,7 @@ lrg_font_draw_glyph_string (struct glyph_string *s, int from, int to, int x,
       LrgGlyphMetrics *m = lrg_glyph_atlas_lookup (atlas, key);
 
       if (m == NULL)
-        m = lrgfont_bake (atlas, scaled, code, key);
+        m = lrg_font_bake (atlas, scaled, code, key);
 
       if (m != NULL)
         {
