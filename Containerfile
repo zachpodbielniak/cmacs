@@ -187,6 +187,7 @@ RUN ./autogen.sh \
         --with-cmacs-cad \
         --with-cmacs-gsurf \
         --with-cmacs-emacsctl \
+        --with-cmacs-lrgterm \
         --enable-cmacs-cpatch \
     && make -j"$(nproc)" \
     && make install DESTDIR=/build/stage

@@ -77,6 +77,7 @@ configure_flags := """
     --with-cmacs-cad
     --with-cmacs-gsurf
     --with-cmacs-emacsctl
+    --with-cmacs-lrgterm
     --enable-cmacs-cpatch
 """
 

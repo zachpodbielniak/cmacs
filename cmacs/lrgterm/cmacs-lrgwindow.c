@@ -40,6 +40,17 @@ lrg_window_create (struct frame *f, int width, int height, const char *title)
      the lrg read_socket maps to a delete-frame event.  */
   grl_input_set_exit_key (GRL_KEY_NULL);
 
+  /* Make the OS window user-resizable -- raylib opens fixed-size windows by
+     default (no corner-drag, no maximize button).  GRL_FLAG_WINDOW_RESIZABLE
+     maps to GLFW_RESIZABLE; the resulting resize events are picked up in
+     lrg_read_socket (grl_window_is_resized) and re-fit the Emacs frame via
+     change_frame_size.  */
+  {
+    GrlWindow *win = lrg_2d_surface_get_window (surface);
+    if (win != NULL)
+      grl_window_set_state (win, GRL_FLAG_WINDOW_RESIZABLE);
+  }
+
   return lrg_2d_surface_get_window (surface);
 }
 

@@ -57,6 +57,20 @@ fonts with antialiasing and full font-lock colour, modelines, window splits
 and dividers, the region, scrolling, the cursor, the system clipboard, and
 text decorations (underline/box/strike/overline).
 
+** Desktop launchers
+
+=make install= (and the container build) install two extra application
+entries alongside the usual /Emacs/ and /Emacs (Client)/:
+
+- *Emacs Libregnum* — launches =emacs --lrg= (=etc/emacs-libregnum.desktop=).
+- *Emacs Libregnum (Client)* — =emacsclient --create-frame= with an
+  =--alternate-editor= that falls back to =emacs --lrg= when no server is
+  running (=etc/emacsclient-libregnum.desktop=).
+
+Both set =StartupWMClass=cmacs= (the WM class of the raylib window) so the
+desktop associates the window with the launcher icon.  The plain /Emacs/
+entries are unchanged and still start pgtk.
+
 * Architecture
 
 A strict four-layer stack.  The backend calls *only* graylib / libregnum
@@ -155,6 +169,12 @@ the Unicode char queue, control/meta combinations and non-character keys via
 a key-state scan, mouse buttons/motion, focus and resize.  Presentation
 (~grl_window_swap_buffers~) deliberately does *not* poll, so input is never
 double-consumed.
+
+The OS window is user-resizable: ~lrg_window_create~ sets
+~GRL_FLAG_WINDOW_RESIZABLE~ on the raylib window (which otherwise opens
+fixed-size — no corner-drag, no maximize button), and ~lrg_read_socket~
+re-fits the Emacs frame to the new pixel size on every
+~grl_window_is_resized~ via ~change_frame_size~.
 
 * Render modes (2D now, 3D/VR ready)
 

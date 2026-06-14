@@ -7517,7 +7517,19 @@ file descriptor.  @code{(window-system)} returns @code{lrg} on these frames.
 
 Enable at build time with @code{--with-cmacs-lrgterm} (requires
 @code{--with-cmacs-libregnum} and @code{--with-cmacs-glib}; it reuses
-libregnum's archive and @code{Lrg*} surface/atlas types).
+libregnum's archive and @code{Lrg*} surface/atlas types).  It is part of
+the standard flag set, so @command{just bootstrap} and the container build
+include it.
+
+@command{make install} (and the container build) install two extra
+application launchers next to the usual @emph{Emacs} / @emph{Emacs
+(Client)} ones: @emph{Emacs Libregnum}, which runs @code{emacs --lrg}
+(@file{etc/emacs-libregnum.desktop}), and @emph{Emacs Libregnum (Client)},
+an @command{emacsclient} launcher whose @option{--alternate-editor} falls
+back to @code{emacs --lrg} when no server is running
+(@file{etc/emacsclient-libregnum.desktop}).  Both set
+@code{StartupWMClass=cmacs}.  The plain @emph{Emacs} launchers are
+unchanged and still start pgtk.
 
 @section Architecture
 
@@ -7594,6 +7606,12 @@ GLFW requires main-thread event polling, so lrg uses no input thread.
 @code{add_keyboard_wait_descriptor}; @code{pselect} wakes and calls
 @code{lrg_read_socket}, which polls the window once (the single poll point)
 and translates the queued keyboard, mouse, focus and resize events.
+
+The OS window is user-resizable: @code{lrg_window_create} sets
+@code{GRL_FLAG_WINDOW_RESIZABLE} on the raylib window (raylib otherwise opens
+fixed-size windows, with no corner-drag and a disabled maximize button), and
+@code{lrg_read_socket} re-fits the Emacs frame to the new size on each
+@code{grl_window_is_resized} via @code{change_frame_size}.
 
 @section Render modes
 
@@ -7680,6 +7698,7 @@ fully-featured build matching Fedora defaults, use:
   --with-cmacs-libregnum \
   --with-cmacs-gsurf \
   --with-cmacs-emacsctl \
+  --with-cmacs-lrgterm \
   --enable-cmacs-cpatch
 @end example
 

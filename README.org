@@ -423,6 +423,7 @@ cd cmacs
   --with-cmacs-cad \
   --with-cmacs-gsurf \
   --with-cmacs-emacsctl \
+  --with-cmacs-lrgterm \
   --enable-cmacs-cpatch
 make -j$(nproc)
 sudo make install
@@ -536,6 +537,7 @@ Requires =autoconf= (>= 2.65) and =automake=.
   --with-cmacs-gnuseye \
   --with-cmacs-gsurf \
   --with-cmacs-emacsctl \
+  --with-cmacs-lrgterm \
   --enable-cmacs-cpatch
 #+end_src
 
@@ -583,6 +585,8 @@ Module flags:
 - =--with-cmacs-gnuseye= — GNU's Eye: a live planetary situational-awareness globe (=M-x cmacs-gnuseye=) rendered through libregnum.  ~25 data layers (aircraft, vessels, satellites, quakes, weather zones, conflict, cyber, news, …), a 2D flat-map mode, measurement/export/watchlists/replay, an LLM intelligence layer, and a true-geometry solar-system chart (Moon, planets, Voyager, asteroids via local ephemerides + JPL Horizons).  Part of the standard flag set (=just bootstrap= and the container build include it); requires =--with-cmacs-libregnum= + =--with-cmacs-glib=.  Uses libsoup-3.0 + json-glib (already required).  See [[file:doc_org/cmacs/cmacs-gnuseye.org][the manual]] and [[file:doc_org/cmacs/gnuseye/README.org][the full reference]].
 
 - =--with-cmacs-cad= — Parametric CAD subsystem (cad-glib kernels: Manifold mesh-CSG + OpenCASCADE B-rep + SolveSpace sketches).  =.cad= (s-expression) and =.ccad= (crispy) part sources evaluate to solids with feature trees; sweep/loft/hole ops; topological face/edge references (so a hole follows its face across recomputes); =defassembly= with mates, drivable joints, a composition solver, bill of materials and interference detection (=C-c C-a= commands).  Parts render through the libregnum CAD nodes.  Part of the standard flag set (=just bootstrap= and the container build include it); requires =--with-cmacs-libregnum= + =--with-cmacs-glib= and =opencascade-devel= + =eigen3-devel= (installed by =install-deps=).  cad-glib builds from =deps/cad-glib= and links statically.  See [[file:doc_org/cmacs/cmacs-cad.org][the manual]].
+
+- =--with-cmacs-lrgterm= — =output_lrg=: an independent libregnum/raylib *display backend* (a third peer to the tty and pgtk backends) that renders the entire Emacs UI — glyphs, cursor, fringes, region, modeline, text decorations and inline images — through libregnum/graylib, reusing Emacs's own FreeType/HarfBuzz shaping via a GPU glyph atlas.  Opt in at runtime with =emacs --lrg= (the installed desktop launchers /Emacs Libregnum/ and /Emacs Libregnum (Client)/ do this for you); plain =emacs= still starts pgtk.  =3d= / =3dvr= render modes are reserved.  Part of the standard flag set (=just bootstrap= and the container build include it); requires =--with-cmacs-libregnum= + =--with-cmacs-glib= (reuses libregnum's archive and its =Lrg*= surface/atlas types).  See [[file:doc_org/cmacs/cmacs-lrgterm.org][the manual]].
 
 Each module auto-detects bundled (=deps/=) or system libraries.  To
 force system-installed versions:

@@ -33,7 +33,7 @@ Current upstream touch-points (keep minimal): `process.c` pselect hooks (GLib lo
             --with-modules --with-native-compilation=aot \
             --with-tree-sitter --with-xwidgets \
             --with-cmacs-glib --with-cmacs-gi ... --with-cmacs-gnuseye \
-            --with-cmacs-gsurf --with-cmacs-emacsctl \
+            --with-cmacs-gsurf --with-cmacs-emacsctl --with-cmacs-lrgterm \
             --enable-cmacs-cpatch  # full flag set: README.org
 make -j$(nproc)           # builds deps + emacs
 just run                  # run it
