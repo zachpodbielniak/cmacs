@@ -45,6 +45,13 @@ textured-quad-in-FBO bug and the double-buffer staleness problem.  */
 #include "coding.h"
 #include "cmacs-lrgterm.h"
 
+#ifdef HAVE_CMACS_LIBREGNUM
+/* For compositing cmacs-libregnum 3D buffers (editor/gnuseye/CAD/STL) into
+   the lrg frame -- raylib-free C view APIs.  */
+#include "cmacs-libregnum.h"
+#include "cmacs-libregnum-render.h"
+#endif
+
 struct lrg_display_info *lrg_display_list;
 int lrg_requested_render_mode = -1;
 
@@ -586,6 +593,68 @@ lrg_update_end (struct frame *f)
   MOUSE_HL_INFO (f)->mouse_face_defer = false;
 }
 
+#ifdef HAVE_CMACS_LIBREGNUM
+/* Composite cmacs-libregnum 3D buffers into the lrg frame.  Mirrors the pgtk
+   overlay (cmacs_libregnum_overlay_paint) but draws the view's FBO colour
+   texture through the LrgFrameSurface instead of a cairo blit.  The view's
+   GLib idle renders the scene INTO its FBO (the GL context is current on the
+   main thread); here, during the present, we just blit it.  */
+static void
+lrg_paint_libregnum_window (struct frame *f, LrgFrameSurface *surf, Lisp_Object w)
+{
+  while (!NILP (w) && WINDOWP (w))
+    {
+      struct window *win = XWINDOW (w);
+      Lisp_Object contents = win->contents;
+
+      if (WINDOWP (contents))
+        lrg_paint_libregnum_window (f, surf, contents);
+      else if (BUFFERP (contents))
+        {
+          CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (contents);
+          CmacsLibregnumRenderCtx *ctx
+            = v ? cmacs_libregnum_view_get_render_ctx (v) : NULL;
+          GrlTexture *tex
+            = ctx ? cmacs_libregnum_render_ctx_get_fbo_texture (ctx) : NULL;
+          int vw = 0, vh = 0;
+
+          if (v != NULL)
+            cmacs_libregnum_view_get_size (v, &vw, &vh);
+          if (tex != NULL && vw > 0 && vh > 0)
+            {
+              int px = WINDOW_LEFT_PIXEL_EDGE (win);
+              int py = WINDOW_TOP_PIXEL_EDGE  (win);
+              int pw = WINDOW_PIXEL_WIDTH     (win);
+              int ph = WINDOW_PIXEL_HEIGHT    (win);
+              /* The FBO colour texture is bottom-up (GL origin lower-left);
+                 a negative source height flips it (raylib DrawTexturePro
+                 convention), matching the pgtk cairo Y-flip.  The dst rect
+                 scales the view to the window body.  */
+              g_autoptr (GrlRectangle) src
+                = grl_rectangle_new (0.0f, (gfloat) vh, (gfloat) vw,
+                                     -(gfloat) vh);
+              g_autoptr (GrlColor) white = grl_color_new (255, 255, 255, 255);
+
+              lrg_frame_surface_draw_texture_region
+                (surf, tex, src, (gfloat) px, (gfloat) py,
+                 (gfloat) pw, (gfloat) ph, white);
+              cmacs_libregnum_view_mark_painted (v);
+            }
+        }
+      w = win->next;
+    }
+}
+
+static void
+lrg_paint_libregnum_views (struct frame *f)
+{
+  LrgFrameSurface *surf = FRAME_LRG_SURFACE (f);
+
+  if (surf != NULL)
+    lrg_paint_libregnum_window (f, surf, f->root_window);
+}
+#endif /* HAVE_CMACS_LIBREGNUM */
+
 /* Present the whole frame: clear + repaint every visible glyph from the
    current matrix (immune to the FBO bug -- default framebuffer only) + swap.
 
@@ -624,6 +693,12 @@ lrg_present_frame (struct frame *f)
     lrg_drawing = true;
     expose_frame (f, 0, 0, FRAME_PIXEL_WIDTH (f), FRAME_PIXEL_HEIGHT (f));
     lrg_drawing = false;
+
+#ifdef HAVE_CMACS_LIBREGNUM
+    /* Composite any cmacs-libregnum 3D buffers (editor/gnuseye/CAD/STL) on
+       top of the text, into their windows' rects.  */
+    lrg_paint_libregnum_views (f);
+#endif
 
     lrg_frame_surface_end_frame (surf);
   }
@@ -734,6 +809,17 @@ lrg_any_frame (void)
         return f;
     }
   return NULL;
+}
+
+/* TRUE when an output_lrg frame is live -- i.e. the raylib window + GL
+   context already exist and belong to this backend.  The cmacs-libregnum
+   subsystem links this (weakly) to detect that it must REUSE this context
+   for its FBO rendering rather than opening a second raylib window (which
+   would deadlock -- raylib is one-window-per-process).  */
+bool
+cmacs_lrgterm_active_p (void)
+{
+  return lrg_any_frame () != NULL;
 }
 
 /* Current Emacs modifier bits from the physically held modifier keys.  */
@@ -1428,6 +1514,10 @@ tests and as the basis of the lrgterm_dump_screen MCP tool.  */)
         lrg_drawing = true;
         expose_frame (f, 0, 0, FRAME_PIXEL_WIDTH (f), FRAME_PIXEL_HEIGHT (f));
         lrg_drawing = false;
+
+#ifdef HAVE_CMACS_LIBREGNUM
+        lrg_paint_libregnum_views (f);
+#endif
 
         lrg_frame_surface_end_frame (surf);
       }

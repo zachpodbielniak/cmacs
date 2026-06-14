@@ -187,6 +187,11 @@ extern void lrg_free_frame_resources (struct frame *);
 extern struct lrg_display_info *check_lrg_display_info (Lisp_Object);
 extern double lrg_frame_scale_factor (struct frame *);
 
+/* TRUE when an output_lrg frame is live (cmacs-lrgterm.c).  cmacs-libregnum
+   links this weakly to reuse the lrg raylib/GL context instead of opening a
+   second window.  */
+extern bool cmacs_lrgterm_active_p (void);
+
 /* Surface/window lifecycle (cmacs-lrgwindow.c).  */
 extern GrlWindow *lrg_window_create (struct frame *, int, int, const char *);
 extern GrlWindow *lrg_window_of_frame (struct frame *);

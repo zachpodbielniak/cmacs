@@ -30,6 +30,14 @@
 #include <cairo.h>
 #include <glib.h>
 
+#ifdef HAVE_CMACS_LRGTERM
+/* Defined in cmacs/lrgterm/cmacs-lrgterm.c; weak so a build without the lrg
+   backend still links (then NULL -> we take the pgtk overlay path).  Under
+   `emacs --lrg' the lrg present blits each view's FBO, so the view renders
+   into its FBO and asks for a redisplay rather than compositing via cairo.  */
+extern bool cmacs_lrgterm_active_p (void) __attribute__ ((weak));
+#endif
+
 /* ── View struct ───────────────────────────────────────────────── */
 
 struct CmacsLibregnumView
@@ -180,6 +188,16 @@ static void
 notify_frame_ready (CmacsLibregnumView *v)
 {
   if (NILP (v->buffer) || !BUFFERP (v->buffer)) return;
+#ifdef HAVE_CMACS_LRGTERM
+  /* Under the lrg backend there is no GTK widget and no cairo overlay; the
+     lrg present blits the view's freshly-rendered FBO.  Schedule a redisplay
+     so that present runs.  */
+  if (cmacs_lrgterm_active_p != NULL && cmacs_lrgterm_active_p ())
+    {
+      cmacs_dispatch_safe_call1 (intern ("force-window-update"), v->buffer);
+      return;
+    }
+#endif
 #ifdef HAVE_PGTK
   Lisp_Object tail, frame;
   FOR_EACH_FRAME (tail, frame)
@@ -202,6 +220,22 @@ redraw_idle (gpointer user)
   if (!g_atomic_int_compare_and_exchange (&v->redraw_pending, 1, 0))
     return G_SOURCE_REMOVE;
   if (!v->render) return G_SOURCE_REMOVE;
+
+#ifdef HAVE_CMACS_LRGTERM
+  /* lrg backend: render the scene INTO the FBO (the raylib GL context is
+     current on the main thread) and ask for a redisplay; the lrg present
+     blits fbo.texture.  No cairo readback/swap.  */
+  if (cmacs_lrgterm_active_p != NULL && cmacs_lrgterm_active_p ())
+    {
+      if (cmacs_libregnum_render_ctx_render_into_fbo (v->render))
+        {
+          notify_frame_ready (v);
+          if (cmacs_libregnum_render_ctx_focus_active (v->render))
+            cmacs_libregnum_view_request_redraw (v);
+        }
+      return G_SOURCE_REMOVE;
+    }
+#endif
 
   /* Render into the back buffer WITHOUT holding frame_mtx: the paint
    * hook only ever touches `front', so the slow render+readback runs

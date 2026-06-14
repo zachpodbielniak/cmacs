@@ -116,5 +116,30 @@
           (should (> (file-attribute-size (file-attributes png)) 1000)))
       (ignore-errors (delete-file png)))))
 
+(ert-deftest cmacs-lrgterm-libregnum-renders-no-hang ()
+  "A cmacs-libregnum 3D buffer opens and composites under --lrg, no hang.
+Guards the regression where libregnum features (editor/gnuseye/CAD/STL)
+hung under --lrg by opening a second raylib window.  Now they BORROW the
+lrg window + GL context and blit their FBO into the buffer's window."
+  (skip-unless (cmacs-lrgterm-tests--live-p))
+  (skip-unless (and (fboundp 'cmacs-libregnum-gobject-graph)
+                    (fboundp 'cmacs-libregnum-supported-p)
+                    (ignore-errors (cmacs-libregnum-supported-p))))
+  ;; The bug was an indefinite hang; assert it returns promptly.
+  (with-timeout (10 (ert-fail "cmacs-libregnum-gobject-graph hung under --lrg"))
+    (cmacs-libregnum-gobject-graph))
+  (should (eq major-mode 'cmacs-libregnum-mode))
+  (redisplay t)
+  ;; The present composites the view's FBO into the window: the captured
+  ;; frame is non-trivial (3D scene + text), not a blank backdrop.
+  (let ((png (make-temp-file "lrg-libregnum-" nil ".png")))
+    (unwind-protect
+        (progn
+          (sit-for 0.3)
+          (redisplay t)
+          (lrg-capture-screen png)
+          (should (> (file-attribute-size (file-attributes png)) 4000)))
+      (ignore-errors (delete-file png)))))
+
 (provide 'cmacs-lrgterm-tests)
 ;;; cmacs-lrgterm-tests.el ends here

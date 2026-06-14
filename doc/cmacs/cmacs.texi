@@ -7419,6 +7419,16 @@ combined or measured.  The @code{import} form (and its crispy twin
 @code{cad_import}) resolves relative paths against the part file's own
 directory.
 
+Real-world STL/OBJ files are frequently not 2-manifold/watertight (open
+shells, T-junctions) yet are printable and viewable.  @code{import} tries a
+true manifold solid (full CSG), retries after a tolerance vertex-merge, and
+if the mesh is still non-manifold falls back to a @emph{display-only} mesh
+solid (reported @code{watertight: no}) so the geometry is shown as FreeCAD
+shows it, rather than failing with ``could not import''.  A display-only
+solid supports tessellation, bounding box, volume/area estimates and rigid
+transforms; CSG/boolean, hull and fillet/chamfer/shell/offset on it return
+@code{CAD_ERROR_NEEDS_BREP}.
+
 @code{cmacs-cad-slice-part} exports the current part to STL and slices it
 to G-code with an external slicer; @code{cmacs-cad-slicer-settings} edits
 the common parameters.  The default backend is PrusaSlicer, found in this
@@ -7615,13 +7625,41 @@ GLFW requires main-thread event polling, so lrg uses no input thread.
 @code{lrg_term_init} arms a @code{timerfd} (~60 Hz) registered with
 @code{add_keyboard_wait_descriptor}; @code{pselect} wakes and calls
 @code{lrg_read_socket}, which polls the window once (the single poll point)
-and translates the queued keyboard, mouse, focus and resize events.
+and translates the queued mouse, focus and resize events.
+
+Keyboard input drains raylib's key-press @emph{queue}
+(@code{grl_input_get_key_pressed}) in press order rather than scanning key
+state per frame: a mapped non-character key becomes a NON_ASCII keysym
+(ESC @result{} @code{escape}, arrows, Tab, @dots{}); a printable key held
+with Ctrl/Meta becomes a char-with-modifiers; a printable key with no
+modifier consumes the next Unicode char from the char queue (which encodes
+layout and shift), pulled at the key's position so it stays interleaved with
+function keys from the same poll.  This delivers every keystroke exactly
+once, in order, with no missed fast taps and no 60@tie{}Hz repeat storm,
+which is why Evil/Doom keybinds (ESC to normal mode, @kbd{hjkl}, chords)
+behave as they do under pgtk.
 
 The OS window is user-resizable: @code{lrg_window_create} sets
 @code{GRL_FLAG_WINDOW_RESIZABLE} on the raylib window (raylib otherwise opens
 fixed-size windows, with no corner-drag and a disabled maximize button), and
 @code{lrg_read_socket} re-fits the Emacs frame to the new size on each
 @code{grl_window_is_resized} via @code{change_frame_size}.
+
+@section Libregnum 3D buffers under --lrg
+
+The @emph{cmacs-libregnum} subsystem (the libregnum editor, @code{gnuseye},
+the CAD/STL model viewer) also renders through libregnum.  raylib allows one
+window per process, so under @option{--lrg} these features do not open a
+second window (that would deadlock); they BORROW the lrg backend's window and
+GL context.  @code{cmacs_libregnum_render_window_acquire} detects a live lrg
+frame (@code{cmacs_lrgterm_active_p}, linked weakly) and uses a windowless
+renderer; each view renders its scene into its own FBO (the lrg GL context is
+current on the main thread), and the lrg present
+(@code{lrg_paint_libregnum_views}) blits each view's FBO texture into its
+window rect via @code{lrg_frame_surface_draw_texture_region} --- the analogue
+of pgtk's cairo overlay.  So @kbd{M-x gnuseye}, @kbd{M-x
+cmacs-libregnum-editor} and opening an STL all render inside the lrg frame.
+In-scene labels and mouse picking into these views are a follow-up.
 
 @section Render modes
 

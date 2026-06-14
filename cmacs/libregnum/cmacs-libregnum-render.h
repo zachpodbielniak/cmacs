@@ -223,6 +223,18 @@ extern gboolean cmacs_libregnum_render_ctx_render_to_bgra
                               (CmacsLibregnumRenderCtx *r,
                                unsigned char *dst, int w, int h);
 
+/* Render the scene INTO the FBO without a CPU readback (the lrg backend
+ * blits the FBO texture directly).  Must be called with the GL context
+ * current -- e.g. from inside the lrg present. */
+extern gboolean cmacs_libregnum_render_ctx_render_into_fbo
+                              (CmacsLibregnumRenderCtx *r);
+
+/* Borrowed (non-owning) GrlTexture* for the FBO colour attachment, as an
+ * opaque gpointer so this header stays raylib/graylib-free.  Valid until the
+ * ctx is resized or freed.  NULL if the FBO is invalid. */
+extern gpointer cmacs_libregnum_render_ctx_get_fbo_texture
+                              (CmacsLibregnumRenderCtx *r);
+
 /* Render the current frame and write it to PATH as a PNG.  Synchronous
  * (renders + reads back immediately, independent of the animation clock),
  * so it works for headless/automated render verification.  Returns TRUE on

@@ -164,17 +164,44 @@ does *not* use a separate input thread.  Instead ~lrg_term_init~ arms a
 ~timerfd~ (~16 ms ≈ 60 Hz) registered with ~add_keyboard_wait_descriptor~, so
 Emacs's ~pselect~ wakes periodically and calls ~lrg_read_socket~, which polls
 the window *once* (~grl_window_poll_events~ — the single poll point) and
-translates the queued input into ~struct input_event~ s: printable text from
-the Unicode char queue, control/meta combinations and non-character keys via
-a key-state scan, mouse buttons/motion, focus and resize.  Presentation
-(~grl_window_swap_buffers~) deliberately does *not* poll, so input is never
-double-consumed.
+translates the queued input into ~struct input_event~ s, then mouse
+buttons/motion, focus and resize.  Presentation (~grl_window_swap_buffers~)
+deliberately does *not* poll, so input is never double-consumed.
+
+Keyboard translation drains raylib's key-press *queue*
+(~grl_input_get_key_pressed~) in press order rather than scanning key state
+per frame.  Each key becomes: a NON_ASCII keysym for mapped non-character
+keys (ESC → ~escape~, arrows, Tab, …); a char-with-modifiers for a printable
+key held with Ctrl/Meta; or, for a printable key with no modifier, the next
+Unicode char from the char queue (which encodes layout + shift), pulled at
+the key's position so it stays interleaved with function keys pressed in the
+same poll.  The queue guarantees every keystroke is delivered exactly once,
+in order — no missed fast taps and no 60 Hz auto-repeat storm — which a
+per-frame state scan could not, and which is why Evil/Doom keybinds (ESC to
+normal mode, ~hjkl~, chords) behave as they do under pgtk.
 
 The OS window is user-resizable: ~lrg_window_create~ sets
 ~GRL_FLAG_WINDOW_RESIZABLE~ on the raylib window (which otherwise opens
 fixed-size — no corner-drag, no maximize button), and ~lrg_read_socket~
 re-fits the Emacs frame to the new pixel size on every
 ~grl_window_is_resized~ via ~change_frame_size~.
+
+*** libregnum 3D buffers under --lrg
+
+The *cmacs-libregnum* subsystem (the libregnum editor, ~gnuseye~, the
+CAD/STL model viewer) renders its 3D scenes through libregnum too.  raylib
+allows only one window per process, so under ~--lrg~ these features do *not*
+open a second window (which would deadlock); instead they BORROW the lrg
+backend's window + GL context.  ~cmacs_libregnum_render_window_acquire~
+detects an active lrg frame (~cmacs_lrgterm_active_p~, linked weakly) and
+sets up a windowless renderer; each view renders its scene into its own FBO
+(the lrg GL context is current on the main thread), and the lrg present
+(~lrg_paint_libregnum_views~) blits each view's FBO colour texture into its
+buffer's window rect via ~lrg_frame_surface_draw_texture_region~ — the
+analogue of pgtk's cairo overlay (~cmacs_libregnum_overlay_paint~).  So
+~M-x gnuseye~, ~M-x cmacs-libregnum-editor~ and opening an STL all render
+inside the lrg frame.  (In-scene labels and mouse picking into these views
+are a follow-up; the scenes render and are keyboard-drivable now.)
 
 * Render modes (2D now, 3D/VR ready)
 

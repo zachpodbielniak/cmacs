@@ -50,17 +50,43 @@ static LrgGrlWindow *shared_window  = NULL;
 static LrgEngine    *shared_engine  = NULL;
 static guint         shared_refs    = 0;
 
+/* TRUE when we BORROW the cmacs lrgterm backend's raylib window + GL context
+   (under `emacs --lrg').  raylib is one-window-per-process, so opening our own
+   hidden window then would deadlock; instead we render into FBOs using the
+   already-current lrg context, with a windowless renderer.  */
+static gboolean      shared_external_context = FALSE;
+
+#ifdef HAVE_CMACS_LRGTERM
+/* Defined in cmacs/lrgterm/cmacs-lrgterm.c.  Weak so a libregnum-only (or
+   pgtk-only) build with no lrgterm objects still links -- the symbol is then
+   NULL and we take the normal hidden-window path.  */
+extern bool cmacs_lrgterm_active_p (void) __attribute__ ((weak));
+#endif
+
 gboolean
 cmacs_libregnum_render_window_acquire (gchar **error_msg)
 {
   shared_refs++;
+  if (shared_window != NULL || shared_external_context) return TRUE;
+
+#ifdef HAVE_CMACS_LRGTERM
+  /* Under `emacs --lrg' the lrgterm backend already owns the one raylib
+   * window + GL context.  Borrow it: do NOT open a second window (that would
+   * deadlock).  ctx_new then renders into FBOs with a windowless renderer
+   * using the lrg context, which stays current on the main thread. */
+  if (cmacs_lrgterm_active_p != NULL && cmacs_lrgterm_active_p ())
+    {
+      shared_external_context = TRUE;
+      return TRUE;
+    }
+#endif
+
   /* Create the hidden window + engine exactly once and keep them resident
    * for the process lifetime.  raylib cannot reliably re-create its GL
    * context / FBOs after a CloseWindow + later InitWindow cycle
    * (LoadRenderTexture then fails with "Framebuffer object can not be
    * created"), so once the context exists we reuse it -- views come and go
    * but the shared window does not (see ..._window_release). */
-  if (shared_window != NULL) return TRUE;
 
   SetTraceLogLevel (LOG_WARNING);
   SetConfigFlags (FLAG_WINDOW_HIDDEN);
@@ -245,6 +271,9 @@ struct CmacsLibregnumRenderCtx
   GPtrArray      *drawables;
   RenderTexture2D fbo;
   gboolean        fbo_valid;
+  GrlTexture     *fbo_grl_texture;  /* non-owning wrapper of fbo.texture for
+                                       the lrg overlay blit; lazily created,
+                                       dropped on resize/free */
   int             width, height;
 
   /* Scene node model (CmacsNode), parallel to the drawables. */
@@ -374,13 +403,19 @@ struct CmacsLibregnumRenderCtx
 CmacsLibregnumRenderCtx *
 cmacs_libregnum_render_ctx_new (int w, int h)
 {
-  if (!shared_window) return NULL;
+  if (!shared_window && !shared_external_context) return NULL;
   CmacsLibregnumRenderCtx *r = g_new0 (CmacsLibregnumRenderCtx, 1);
   r->width  = w;
   r->height = h;
   r->selected = -1;
   r->hovered = -1;
-  r->renderer  = lrg_renderer_new (LRG_WINDOW (shared_window));
+  /* With a borrowed lrg context there is no LrgWindow object; a windowless
+   * renderer is fine because render_to_bgra drives BeginTextureMode/Clear
+   * itself and lrg_renderer_begin_frame/end_frame/clear are no-ops when the
+   * window is NULL.  (lrg_renderer_new rejects NULL, so construct directly.) */
+  r->renderer  = shared_window
+      ? lrg_renderer_new (LRG_WINDOW (shared_window))
+      : (LrgRenderer *) g_object_new (LRG_TYPE_RENDERER, "window", NULL, NULL);
   r->drawables = g_ptr_array_new_with_free_func (g_object_unref);
   r->static_drawables = g_ptr_array_new_with_free_func (g_object_unref);
   r->body_models = g_ptr_array_new_with_free_func (body_model_free);
@@ -434,6 +469,8 @@ cmacs_libregnum_render_ctx_free (CmacsLibregnumRenderCtx *r)
   g_clear_object (&r->lighting_shader);
   g_clear_object (&r->lighting_material);
 #endif
+  /* Non-owning wrapper: drop it before the FBO it points at.  */
+  g_clear_object (&r->fbo_grl_texture);
   if (r->fbo_valid) UnloadRenderTexture (r->fbo);
   g_clear_object (&r->background_model);
   if (r->polygon_models) g_ptr_array_unref (r->polygon_models);
@@ -466,6 +503,9 @@ cmacs_libregnum_render_ctx_resize (CmacsLibregnumRenderCtx *r, int w, int h)
     return;
   if (r->fbo_valid)
     UnloadRenderTexture (r->fbo);
+  /* The cached wrapper points at the old fbo.texture; drop it so the lrg
+     overlay re-wraps the new render target on its next paint.  */
+  g_clear_object (&r->fbo_grl_texture);
   r->fbo = nfbo;
   r->fbo_valid = TRUE;
   r->width = w;
@@ -1397,7 +1437,10 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
                                            unsigned char *dst,
                                            int dst_w, int dst_h)
 {
-  if (!r || !r->fbo_valid || !dst) return FALSE;
+  /* DST may be NULL: callers that only want the scene rendered INTO the FBO
+     (the lrg overlay, which then draws fbo.texture directly) pass NULL to
+     skip the glReadPixels copy.  */
+  if (!r || !r->fbo_valid) return FALSE;
   if (dst_w != r->width || dst_h != r->height) return FALSE;
 
   /* Game-module mode: drive the loaded game's update + render into the FBO,
@@ -1414,8 +1457,9 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
       lrg_game_host_begin_frame (r->game_host);   /* BeginTextureMode(fbo) */
       ClearBackground ((Color){ 0, 0, 0, 255 });
       lrg_game_template_render (r->game);
-      glReadPixels (0, 0, r->width, r->height,
-                    GL_BGRA, GL_UNSIGNED_BYTE, dst);
+      if (dst)
+        glReadPixels (0, 0, r->width, r->height,
+                      GL_BGRA, GL_UNSIGNED_BYTE, dst);
       lrg_game_host_end_frame (r->game_host);     /* EndTextureMode */
       return TRUE;
     }
@@ -1856,12 +1900,42 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
      * little-endian, so the driver writes straight into DST with no
      * channel-swap loop and no per-frame allocation.  Row stride is
      * width*4, a multiple of the default GL_PACK_ALIGNMENT (4). */
-    glReadPixels (0, 0, r->width, r->height,
-                  GL_BGRA, GL_UNSIGNED_BYTE, dst);
+    if (dst)
+      glReadPixels (0, 0, r->width, r->height,
+                    GL_BGRA, GL_UNSIGNED_BYTE, dst);
   }
   EndTextureMode ();
 
   return TRUE;
+}
+
+/* Render the scene INTO the FBO without reading it back (the lrg overlay
+   then draws fbo.texture directly).  Called from inside the lrg present, so
+   it shares the GL context with lrg's 2D text drawing: flush lrg's pending
+   batch first, and after EndTextureMode turn depth-testing off so the lrg
+   2D texture blit that follows is not depth-culled.  */
+gboolean
+cmacs_libregnum_render_ctx_render_into_fbo (CmacsLibregnumRenderCtx *r)
+{
+  gboolean ok;
+
+  if (!r) return FALSE;
+  rlDrawRenderBatchActive ();
+  ok = cmacs_libregnum_render_ctx_render_to_bgra (r, NULL, r->width, r->height);
+  rlDisableDepthTest ();
+  return ok;
+}
+
+/* A non-owning GrlTexture wrapping the FBO's colour attachment, for the lrg
+   overlay to blit.  Cached on the ctx; invalidated on resize/free.  Returned
+   as gpointer so render.h stays raylib/graylib-free.  */
+gpointer
+cmacs_libregnum_render_ctx_get_fbo_texture (CmacsLibregnumRenderCtx *r)
+{
+  if (!r || !r->fbo_valid) return NULL;
+  if (r->fbo_grl_texture == NULL)
+    r->fbo_grl_texture = grl_texture_new_from_handle (&r->fbo.texture);
+  return r->fbo_grl_texture;
 }
 
 #include <math.h>

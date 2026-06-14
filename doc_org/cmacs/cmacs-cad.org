@@ -160,6 +160,18 @@ paths resolve against the part file's directory so referenced geometry
 travels with the part; only geometry is read — file content never
 reaches the sandboxed evaluator.
 
+*Non-manifold meshes.* Real-world STL/OBJ files are frequently *not*
+2-manifold/watertight (open shells, T-junctions, flipped normals) yet are
+perfectly printable and viewable.  ~import~ first tries to build a true
+manifold solid (full CSG), retries after a tolerance vertex-merge, and —
+if the mesh is still non-manifold — falls back to a *display-only* mesh
+solid so the geometry is still shown (as FreeCAD does), reported with
+~watertight: no~.  Such a solid supports tessellation, bounding box,
+volume/area *estimates* and rigid transforms; CSG/boolean, hull and
+fillet/chamfer/shell/offset on it fail cleanly (they require a manifold
+solid).  So a non-manifold model opens and renders instead of erroring
+with “could not import”.
+
 * Inspecting, measuring, sectioning
 
 =C-c C-i= echoes the headline mass properties; =C-c C-M-i=
