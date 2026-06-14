@@ -763,6 +763,38 @@ imports the mesh and inspects to the source dimensions."
       (cmacs-cad-doc-close path)
       (delete-file path))))
 
+(ert-deftest cmacs-cad-tests-non-manifold-stl-display ()
+  "A non-manifold STL imports as a display-only mesh (issue #2), not an error.
+Real-world STLs are frequently non-manifold (open shells, T-junctions) yet
+must remain viewable, as FreeCAD shows them.  Guards against regressing the
+\"Manifold kernel: mesh is not manifold\" import failure."
+  (skip-unless (cmacs-cad-available-p))
+  (let* ((stl (cmacs-cad-tests--fixture
+               (concat "solid open\n"
+                       "  facet normal 0 0 1\n"
+                       "    outer loop\n"
+                       "      vertex 0 0 0\n"
+                       "      vertex 1 0 0\n"
+                       "      vertex 0 1 0\n"
+                       "    endloop\n"
+                       "  endfacet\n"
+                       "endsolid open\n")
+               ".stl"))
+         (cad (cmacs-cad-tests--fixture
+               (format "(defpart imported (import %S))\n" stl)
+               ".cad")))
+    (unwind-protect
+        (progn
+          ;; Must NOT signal cmacs-cad-error (previously it did).
+          (cmacs-cad-eval cad)
+          (let ((info (cmacs-cad-inspect cad)))
+            (should (> (plist-get info :triangles) 0))
+            ;; A display-only imported mesh is explicitly not watertight.
+            (should (null (plist-get info :watertight)))))
+      (cmacs-cad-doc-close cad)
+      (delete-file cad)
+      (delete-file stl))))
+
 ;;; Tier 3: display-guarded workbench
 
 (defun cmacs-cad-tests--skip-unless-workbench ()
