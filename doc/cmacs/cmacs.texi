@@ -7540,6 +7540,18 @@ which runs @code{emacsclient --lrg}
 @code{StartupWMClass=cmacs}.  The plain @emph{Emacs} launchers are
 unchanged and still start pgtk.
 
+The client launcher mirrors @file{emacsclient.desktop} (an @code{sh -c}
+wrapper: with files it runs @code{emacsclient --lrg "$@@"}, with none
+@code{emacsclient --lrg --create-frame} so a bare icon click opens a frame
+instead of erroring with ``file name or argument required'').  It
+deliberately does @emph{not} pass an empty @option{--alternate-editor=} the
+way the pgtk client does: that makes @command{emacsclient} start a headless
+@code{emacs --daemon} (without @option{--lrg}), which can never host the
+single raylib window, so the @code{-lrg} request then hangs trying to place
+a frame on the launcher's non-existent tty.  It instead relies on
+@option{--lrg}'s built-in fallback to @code{emacs --lrg}, a real process
+that owns the window and starts a server for later reuse.
+
 @command{emacsclient} accepts @option{--lrg[=MODE]} (shown in both
 @code{emacsclient --help} and @code{emacs --help}).  Because the libregnum
 backend is one window per process, @option{--lrg} does not open a second

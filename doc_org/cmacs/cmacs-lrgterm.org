@@ -69,6 +69,17 @@ Both set =StartupWMClass=cmacs= (the WM class of the raylib window) so the
 desktop associates the window with the launcher icon.  The plain /Emacs/
 entries are unchanged and still start pgtk.
 
+The client launcher mirrors =emacsclient.desktop= (an =sh -c= wrapper: files
+→ =emacsclient --lrg "$@"=, none → =emacsclient --lrg --create-frame= so a
+plain icon click still opens a frame instead of erroring with "file name or
+argument required").  It deliberately does *not* pass an empty
+=--alternate-editor== the way the pgtk client does: that would make
+=emacsclient= start a headless =emacs --daemon= (no =--lrg=), which can never
+host the single raylib window, so the =-lrg= request would then hang trying
+to put a frame on the launcher's non-existent tty.  Instead it relies on
+=--lrg='s built-in fallback to =emacs --lrg= (a real process that owns the
+window and starts a server for later reuse).
+
 ** =emacsclient --lrg=
 
 =emacsclient= accepts =--lrg[=MODE]= (it appears in =emacsclient --help= and
