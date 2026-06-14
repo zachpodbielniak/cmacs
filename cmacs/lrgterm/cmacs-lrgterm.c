@@ -659,26 +659,49 @@ lrg_paint_libregnum_views (struct frame *f)
 
 /* ===================================================== in-engine popup menu ==
    A GTK-like right-click context menu drawn by the lrg backend itself (no
-   minibuffer / tmm).  `cmacs-libregnum-popup-menu' (Elisp) flattens an Emacs
-   menu into a flat item list and calls `lrg-popup-menu', which runs a modal
-   loop -- poll input + present each frame, exactly like x-popup-menu's own
-   modal loop -- and returns the chosen item's index.  The menu itself is
-   composited onto the frame by lrg_present_frame (it draws `lrg_active_menu'
-   on top of the text + libregnum views), so it appears every present.
-   lrg_font_bake (declared in cmacs-lrgterm.h) renders label glyphs.  */
+   minibuffer / tmm), WITH cascading fly-out submenus.  `cmacs-libregnum-popup
+   -menu' (Elisp) flattens an Emacs menu into a nested item tree and calls
+   `lrg-popup-menu', which runs a modal loop -- poll input + present each frame,
+   like x-popup-menu's own modal loop -- and returns the chosen leaf's index.
+   The open menu is a STACK of panels (the root plus each open submenu);
+   lrg_present_frame draws `lrg_active_menu' over the text + libregnum views.
+   lrg_font_bake (declared in cmacs-lrgterm.h) renders label glyphs.
+
+   Item-tree node (built from the Lisp list by lrg_menu_build_items):
+     nil               => separator row
+     (LABEL . INDEX)   => leaf; choosing it returns INDEX (a fixnum)
+     (LABEL)/(LABEL.nil)=> disabled leaf
+     (LABEL ITEM...)   => submenu whose children are ITEM...  */
+
+typedef struct LrgMenuItem
+{
+  char               *label;      /* NULL => separator row                   */
+  bool                enabled;
+  int                 index;      /* leaf: value to return; -1 otherwise     */
+  struct LrgMenuItem *children;   /* submenu items (owned); NULL for a leaf  */
+  int                 n_children;
+} LrgMenuItem;
 
 typedef struct
 {
-  char  **labels;        /* n UTF-8 strings; entry NULL => a separator row    */
-  bool   *enabled;       /* n flags                                           */
-  int     n;
-  int     x, y, w, h;    /* frame-pixel rectangle                             */
-  int     item_h;        /* per-row height                                    */
-  int     pad_x, pad_y;  /* inner padding                                     */
-  int     hovered;       /* hovered selectable item, or -1                    */
-} LrgMenu;
+  LrgMenuItem *items;    /* NOT owned: points into the tree                  */
+  int          n;
+  int          x, y, w, h;
+  int          hovered;  /* index into items, or -1                          */
+} LrgMenuPanel;
 
-static LrgMenu *lrg_active_menu;
+#define LRG_MENU_MAX_DEPTH 8
+
+typedef struct
+{
+  LrgMenuItem  *root;      /* owned item tree                                */
+  int           root_n;
+  LrgMenuPanel  panel[LRG_MENU_MAX_DEPTH];
+  int           depth;     /* open panels (>= 1; panel[0] is the root)       */
+  int           item_h, pad_x, pad_y, arrow_w;
+} LrgMenuState;
+
+static LrgMenuState *lrg_active_menu;
 
 /* Blend pixel A toward pixel B by T (0..1) at alpha ALPHA -- for the menu
    panel/border/hover tints, derived from the frame fg/bg so the menu matches
@@ -756,10 +779,133 @@ lrg_menu_draw_text (struct frame *f, int x, int y_top, const char *str,
     }
 }
 
-/* Composite the active MENU onto F's surface, after the text + libregnum
-   views.  Called from lrg_present_frame.  */
+/* Build an LrgMenuItem array from the Lisp item LIST (see the node grammar
+   above).  Returns the xmalloc'd array; *N_OUT gets the count.  Recurses for
+   submenus.  */
+static LrgMenuItem *
+lrg_menu_build_items (Lisp_Object list, int *n_out)
+{
+  int n = 0, i = 0;
+  Lisp_Object t;
+  LrgMenuItem *arr;
+
+  for (t = list; CONSP (t); t = XCDR (t))
+    n++;
+  *n_out = n;
+  if (n == 0)
+    return NULL;
+  arr = xnmalloc (n, sizeof *arr);
+  for (t = list; CONSP (t); t = XCDR (t), i++)
+    {
+      Lisp_Object it = XCAR (t);
+      arr[i].label = NULL;
+      arr[i].enabled = false;
+      arr[i].index = -1;
+      arr[i].children = NULL;
+      arr[i].n_children = 0;
+      if (CONSP (it) && STRINGP (XCAR (it)))
+        {
+          Lisp_Object d = XCDR (it);
+          arr[i].label = xstrdup (SSDATA (ENCODE_UTF_8 (XCAR (it))));
+          if (FIXNUMP (d))           /* leaf returning that index */
+            {
+              arr[i].enabled = true;
+              arr[i].index = (int) XFIXNUM (d);
+            }
+          else if (CONSP (d))        /* submenu */
+            {
+              arr[i].enabled = true;
+              arr[i].children = lrg_menu_build_items (d, &arr[i].n_children);
+            }
+          /* else (d is nil) => disabled leaf */
+        }
+      /* nil / anything else => separator (label stays NULL) */
+    }
+  return arr;
+}
+
 static void
-lrg_menu_render (struct frame *f, LrgFrameSurface *surf, LrgMenu *menu)
+lrg_menu_free_items (LrgMenuItem *arr, int n)
+{
+  int i;
+  if (arr == NULL)
+    return;
+  for (i = 0; i < n; i++)
+    {
+      xfree (arr[i].label);
+      lrg_menu_free_items (arr[i].children, arr[i].n_children);
+    }
+  xfree (arr);
+}
+
+/* A small right-pointing submenu arrow (a ">") centred in row [Y, Y+H).  */
+static void
+lrg_menu_draw_arrow (LrgFrameSurface *surf, int x, int y, int h,
+                     const GrlColor *c)
+{
+  int s = h / 5;
+  int cy = y + h / 2;
+  if (s < 3)
+    s = 3;
+  lrg_frame_surface_draw_line (surf, x, cy - s, x + s, cy, 1.5f, c);
+  lrg_frame_surface_draw_line (surf, x + s, cy, x, cy + s, 1.5f, c);
+}
+
+/* Lay PANEL out from its items + ST's metrics, top-left at (X, Y), clamped
+   into the frame.  Reserves arrow gutter when any item has a submenu.  */
+static void
+lrg_menu_panel_layout (struct frame *f, LrgMenuState *st, LrgMenuPanel *p,
+                       int x, int y)
+{
+  int fw = FRAME_PIXEL_WIDTH (f), fh = FRAME_PIXEL_HEIGHT (f);
+  int maxw = 0, i, has_sub = 0;
+
+  for (i = 0; i < p->n; i++)
+    {
+      int wpx;
+      if (p->items[i].label == NULL)
+        continue;
+      wpx = lrg_menu_text_px (f, p->items[i].label);
+      if (wpx > maxw)
+        maxw = wpx;
+      if (p->items[i].children != NULL)
+        has_sub = 1;
+    }
+  p->w = maxw + 2 * st->pad_x + (has_sub ? st->arrow_w : 0);
+  p->h = p->n * st->item_h + 2 * st->pad_y;
+  p->x = x;
+  p->y = y;
+  if (p->x + p->w > fw) p->x = fw - p->w;
+  if (p->y + p->h > fh) p->y = fh - p->h;
+  if (p->x < 0) p->x = 0;
+  if (p->y < 0) p->y = 0;
+}
+
+/* Open the submenu of item ROW in panel PARENT_DEPTH as the next panel,
+   flush to its right (flipping left if it would overflow), and set
+   ST->depth to include it.  */
+static void
+lrg_menu_open_child (struct frame *f, LrgMenuState *st, int parent_depth,
+                     int row)
+{
+  LrgMenuPanel *p = &st->panel[parent_depth];
+  LrgMenuPanel *c = &st->panel[parent_depth + 1];
+  int fw = FRAME_PIXEL_WIDTH (f);
+  int cy = p->y + st->pad_y + row * st->item_h;
+
+  c->items = p->items[row].children;
+  c->n = p->items[row].n_children;
+  c->hovered = -1;
+  lrg_menu_panel_layout (f, st, c, p->x + p->w, cy);
+  if (p->x + p->w + c->w > fw)            /* would overflow right -> flip */
+    lrg_menu_panel_layout (f, st, c, p->x - c->w, cy);
+  st->depth = parent_depth + 2;
+}
+
+/* Composite the whole open menu (every panel in the stack) onto F's surface,
+   after the text + libregnum views.  Called from lrg_present_frame.  */
+static void
+lrg_menu_render (struct frame *f, LrgFrameSurface *surf, LrgMenuState *st)
 {
   unsigned long fg_px = FRAME_LRG_FOREGROUND_COLOR (f);
   unsigned long bg_px = FRAME_LRG_BACKGROUND_COLOR (f);
@@ -770,30 +916,39 @@ lrg_menu_render (struct frame *f, LrgFrameSurface *surf, LrgMenu *menu)
   g_autoptr(GrlColor) fg     = lrg_color (fg_px);
   g_autoptr(GrlColor) fgdim  = lrg_menu_blend (bg_px, fg_px, 0.45, 255);
   g_autoptr(GrlColor) shadow = grl_color_new (0, 0, 0, 60);
-  int i;
+  int d, i;
 
-  lrg_frame_surface_fill_rect (surf, menu->x + 3, menu->y + 3,
-                               menu->w, menu->h, shadow);
-  lrg_frame_surface_fill_rect (surf, menu->x, menu->y, menu->w, menu->h, panel);
-  lrg_frame_surface_draw_rect_outline (surf, menu->x, menu->y,
-                                       menu->w, menu->h, 1.0f, border);
-
-  for (i = 0; i < menu->n; i++)
+  for (d = 0; d < st->depth; d++)
     {
-      int ry = menu->y + menu->pad_y + i * menu->item_h;
-      if (menu->labels[i] == NULL)            /* separator */
+      LrgMenuPanel *p = &st->panel[d];
+
+      lrg_frame_surface_fill_rect (surf, p->x + 3, p->y + 3, p->w, p->h,
+                                   shadow);
+      lrg_frame_surface_fill_rect (surf, p->x, p->y, p->w, p->h, panel);
+      lrg_frame_surface_draw_rect_outline (surf, p->x, p->y, p->w, p->h,
+                                           1.0f, border);
+      for (i = 0; i < p->n; i++)
         {
-          int sy = ry + menu->item_h / 2;
-          lrg_frame_surface_draw_line (surf, menu->x + menu->pad_x, sy,
-                                       menu->x + menu->w - menu->pad_x, sy,
-                                       1.0f, sep);
-          continue;
+          int ry = p->y + st->pad_y + i * st->item_h;
+          LrgMenuItem *it = &p->items[i];
+
+          if (it->label == NULL)                /* separator */
+            {
+              int sy = ry + st->item_h / 2;
+              lrg_frame_surface_draw_line (surf, p->x + st->pad_x, sy,
+                                           p->x + p->w - st->pad_x, sy,
+                                           1.0f, sep);
+              continue;
+            }
+          if (i == p->hovered)
+            lrg_frame_surface_fill_rect (surf, p->x + 2, ry, p->w - 4,
+                                         st->item_h, hi);
+          lrg_menu_draw_text (f, p->x + st->pad_x, ry, it->label,
+                              it->enabled ? fg : fgdim);
+          if (it->children != NULL)
+            lrg_menu_draw_arrow (surf, p->x + p->w - st->arrow_w + 2, ry,
+                                 st->item_h, it->enabled ? fg : fgdim);
         }
-      if (i == menu->hovered)
-        lrg_frame_surface_fill_rect (surf, menu->x + 2, ry,
-                                     menu->w - 4, menu->item_h, hi);
-      lrg_menu_draw_text (f, menu->x + menu->pad_x, ry, menu->labels[i],
-                          menu->enabled[i] ? fg : fgdim);
     }
 }
 
@@ -1691,21 +1846,22 @@ check_lrg_display_info (Lisp_Object object)
 
 DEFUN ("lrg-popup-menu", Flrg_popup_menu, Slrg_popup_menu, 1, 3, 0,
        doc: /* Show an in-engine popup menu of ITEMS; return the chosen index.
-ITEMS is a list; each element is a string (a selectable item), a cons
-(LABEL . ENABLEDP) where ENABLEDP nil greys the item out, or nil (a separator
-row).  Optional X and Y place the menu's top-left at that frame pixel; without
-them it opens at the current mouse position.  Runs a modal loop driven by the
-libregnum window (mouse hover + left-click to choose, right-click/ESC/click
-outside to dismiss, up/down to move, RET to choose); returns the 0-based index
-of the chosen selectable item, or nil if dismissed.  Only meaningful while an
-`lrg' frame is live -- returns nil otherwise.  */)
+ITEMS is a nested list; each element is nil (a separator row), a cons
+(LABEL . INDEX) where INDEX is a fixnum (a selectable leaf returning INDEX),
+\(LABEL) / (LABEL . nil) (a disabled leaf), or (LABEL ITEM...) where the cdr is
+a list (a submenu whose children are ITEM...).  Optional X and Y place the
+menu's top-left at that frame pixel; without them it opens at the current mouse
+position.  Runs a modal loop driven by the libregnum window with cascading
+fly-out submenus (mouse hover opens submenus; left-click chooses a leaf;
+right-click/ESC/click-outside dismiss; up/down move, right/RET open a submenu
+or choose, left closes a submenu); returns the chosen leaf's INDEX, or nil if
+dismissed.  Only meaningful while an `lrg' frame is live.  */)
   (Lisp_Object items, Lisp_Object x, Lisp_Object y)
 {
   struct frame *f = lrg_any_frame ();
   GrlWindow *win;
-  LrgMenu menu;
-  Lisp_Object tail;
-  int i, maxw = 0, result = -1, settle = 2;
+  LrgMenuState st;
+  int i, result = -1, settle = 2, ax, ay;
   bool done = false;
 
   if (f == NULL || !FRAME_LRG_P (f) || FRAME_LRG_SURFACE (f) == NULL)
@@ -1714,63 +1870,31 @@ of the chosen selectable item, or nil if dismissed.  Only meaningful while an
   if (win == NULL || !CONSP (items))
     return Qnil;
 
-  memset (&menu, 0, sizeof menu);
-  for (tail = items; CONSP (tail); tail = XCDR (tail))
-    menu.n++;
-  if (menu.n == 0)
+  memset (&st, 0, sizeof st);
+  st.root = lrg_menu_build_items (items, &st.root_n);
+  if (st.root == NULL)
     return Qnil;
+  st.item_h  = FRAME_LINE_HEIGHT (f);
+  st.pad_x   = FRAME_COLUMN_WIDTH (f);
+  st.pad_y   = st.item_h / 4;
+  st.arrow_w = st.item_h;
 
-  menu.labels  = xnmalloc (menu.n, sizeof *menu.labels);
-  menu.enabled = xnmalloc (menu.n, sizeof *menu.enabled);
-  i = 0;
-  for (tail = items; CONSP (tail); tail = XCDR (tail), i++)
-    {
-      Lisp_Object it = XCAR (tail);
-      menu.labels[i] = NULL;
-      menu.enabled[i] = false;
-      if (STRINGP (it))
-        {
-          menu.labels[i] = xstrdup (SSDATA (ENCODE_UTF_8 (it)));
-          menu.enabled[i] = true;
-        }
-      else if (CONSP (it) && STRINGP (XCAR (it)))
-        {
-          menu.labels[i] = xstrdup (SSDATA (ENCODE_UTF_8 (XCAR (it))));
-          menu.enabled[i] = !NILP (XCDR (it));
-        }
-      if (menu.labels[i] != NULL)
-        {
-          int wpx = lrg_menu_text_px (f, menu.labels[i]);
-          if (wpx > maxw)
-            maxw = wpx;
-        }
-    }
+  ax = FIXNUMP (x) ? (int) XFIXNUM (x) : grl_input_get_mouse_x ();
+  ay = FIXNUMP (y) ? (int) XFIXNUM (y) : grl_input_get_mouse_y ();
 
-  menu.item_h = FRAME_LINE_HEIGHT (f);
-  menu.pad_x  = FRAME_COLUMN_WIDTH (f);
-  menu.pad_y  = menu.item_h / 4;
-  menu.w      = maxw + 2 * menu.pad_x;
-  menu.h      = menu.n * menu.item_h + 2 * menu.pad_y;
-
-  menu.x = FIXNUMP (x) ? (int) XFIXNUM (x) : grl_input_get_mouse_x ();
-  menu.y = FIXNUMP (y) ? (int) XFIXNUM (y) : grl_input_get_mouse_y ();
-  {
-    int fw = FRAME_PIXEL_WIDTH (f), fh = FRAME_PIXEL_HEIGHT (f);
-    if (menu.x + menu.w > fw) menu.x = fw - menu.w;
-    if (menu.y + menu.h > fh) menu.y = fh - menu.h;
-    if (menu.x < 0) menu.x = 0;
-    if (menu.y < 0) menu.y = 0;
-  }
-
-  menu.hovered = -1;
-  for (i = 0; i < menu.n; i++)
-    if (menu.labels[i] != NULL && menu.enabled[i])
+  st.panel[0].items = st.root;
+  st.panel[0].n = st.root_n;
+  st.panel[0].hovered = -1;
+  lrg_menu_panel_layout (f, &st, &st.panel[0], ax, ay);
+  st.depth = 1;
+  for (i = 0; i < st.root_n; i++)   /* initial keyboard hover = 1st selectable */
+    if (st.root[i].label != NULL && st.root[i].enabled)
       {
-        menu.hovered = i;
+        st.panel[0].hovered = i;
         break;
       }
 
-  lrg_active_menu = &menu;
+  lrg_active_menu = &st;
   grl_window_poll_events (win);   /* drain the click that opened the menu */
 
   /* Safety cap: ~12 ms/iteration, so ~8000 iterations is ~96 s.  Normal exit
@@ -1780,7 +1904,7 @@ of the chosen selectable item, or nil if dismissed.  Only meaningful while an
   int iters = 0;
   while (!done)
     {
-      int mx, my, k;
+      int mx, my, k, a, d;
 
       if (++iters > 8000 || !FRAME_LIVE_P (f))
         done = true;
@@ -1789,16 +1913,37 @@ of the chosen selectable item, or nil if dismissed.  Only meaningful while an
       mx = grl_input_get_mouse_x ();
       my = grl_input_get_mouse_y ();
 
-      /* Hover (only over a selectable row).  */
-      if (mx >= menu.x && mx < menu.x + menu.w
-          && my >= menu.y + menu.pad_y
-          && my < menu.y + menu.pad_y + menu.n * menu.item_h)
+      /* Which open panel is the mouse over (deepest first -- children sit to
+         the right of their parent)?  */
+      a = -1;
+      for (d = st.depth - 1; d >= 0; d--)
         {
-          int idx = (my - (menu.y + menu.pad_y)) / menu.item_h;
-          if (idx >= 0 && idx < menu.n
-              && menu.labels[idx] != NULL && menu.enabled[idx])
-            menu.hovered = idx;
+          LrgMenuPanel *p = &st.panel[d];
+          if (mx >= p->x && mx < p->x + p->w && my >= p->y && my < p->y + p->h)
+            {
+              a = d;
+              break;
+            }
         }
+      if (a >= 0)
+        {
+          LrgMenuPanel *p = &st.panel[a];
+          int row = (my - (p->y + st.pad_y)) / st.item_h;
+          if (row >= 0 && row < p->n && p->items[row].label != NULL
+              && p->items[row].enabled)
+            p->hovered = row;
+          else
+            p->hovered = -1;
+          /* Close any panels deeper than this one; (re)open the hovered
+             submenu as the child panel.  When the mouse is in the child this
+             branch doesn't run for the parent, so the child stays open.  */
+          st.depth = a + 1;
+          if (p->hovered >= 0 && p->items[p->hovered].children != NULL
+              && st.depth < LRG_MENU_MAX_DEPTH)
+            lrg_menu_open_child (f, &st, a, p->hovered);
+        }
+      /* a < 0: mouse outside every panel -- leave the stack as is (so a
+         submenu stays open while the pointer crosses a gap).  */
 
       /* Clicks (ignored for the first couple of frames so the press that
          opened the menu cannot be mis-read as a selection).  */
@@ -1808,15 +1953,17 @@ of the chosen selectable item, or nil if dismissed.  Only meaningful while an
         {
           if (grl_input_is_mouse_button_pressed (GRL_MOUSE_BUTTON_LEFT))
             {
-              if (mx >= menu.x && mx < menu.x + menu.w
-                  && my >= menu.y && my < menu.y + menu.h)
+              if (a >= 0)
                 {
-                  int idx = (my - (menu.y + menu.pad_y)) / menu.item_h;
-                  if (idx >= 0 && idx < menu.n
-                      && menu.labels[idx] != NULL && menu.enabled[idx])
+                  LrgMenuPanel *p = &st.panel[a];
+                  if (p->hovered >= 0)
                     {
-                      result = idx;
-                      done = true;
+                      LrgMenuItem *it = &p->items[p->hovered];
+                      if (it->children == NULL && it->enabled && it->index >= 0)
+                        {
+                          result = it->index;
+                          done = true;
+                        }
                     }
                 }
               else
@@ -1826,33 +1973,59 @@ of the chosen selectable item, or nil if dismissed.  Only meaningful while an
             done = true;
         }
 
-      /* Keyboard navigation.  */
+      /* Keyboard navigation acts on the deepest open panel.  */
       while ((k = grl_input_get_key_pressed ()) != 0)
         {
+          LrgMenuPanel *p = &st.panel[st.depth - 1];
           if (k == GRL_KEY_ESCAPE)
-            done = true;
-          else if (k == GRL_KEY_ENTER || k == GRL_KEY_KP_ENTER)
             {
-              if (menu.hovered >= 0)
-                {
-                  result = menu.hovered;
-                  done = true;
-                }
+              if (st.depth > 1) st.depth--;
+              else done = true;
+            }
+          else if (k == GRL_KEY_LEFT)
+            {
+              if (st.depth > 1) st.depth--;
             }
           else if (k == GRL_KEY_DOWN || k == GRL_KEY_UP)
             {
               int dir = (k == GRL_KEY_DOWN) ? 1 : -1;
-              int j = (menu.hovered < 0) ? (dir > 0 ? -1 : menu.n) : menu.hovered;
-              int guard = menu.n;
+              int j = (p->hovered < 0) ? (dir > 0 ? -1 : p->n) : p->hovered;
+              int guard = p->n;
               while (guard-- > 0)
                 {
                   j += dir;
-                  if (j < 0) j = menu.n - 1;
-                  if (j >= menu.n) j = 0;
-                  if (menu.labels[j] != NULL && menu.enabled[j])
+                  if (j < 0) j = p->n - 1;
+                  if (j >= p->n) j = 0;
+                  if (p->items[j].label != NULL && p->items[j].enabled)
                     {
-                      menu.hovered = j;
+                      p->hovered = j;
                       break;
+                    }
+                }
+            }
+          else if (k == GRL_KEY_RIGHT || k == GRL_KEY_ENTER
+                   || k == GRL_KEY_KP_ENTER)
+            {
+              if (p->hovered >= 0)
+                {
+                  LrgMenuItem *it = &p->items[p->hovered];
+                  if (it->children != NULL
+                      && st.depth < LRG_MENU_MAX_DEPTH)
+                    {
+                      int q;
+                      lrg_menu_open_child (f, &st, st.depth - 1, p->hovered);
+                      for (q = 0; q < st.panel[st.depth - 1].n; q++)
+                        if (st.panel[st.depth - 1].items[q].label != NULL
+                            && st.panel[st.depth - 1].items[q].enabled)
+                          {
+                            st.panel[st.depth - 1].hovered = q;
+                            break;
+                          }
+                    }
+                  else if (k != GRL_KEY_RIGHT && it->enabled && it->index >= 0)
+                    {
+                      result = it->index;
+                      done = true;
                     }
                 }
             }
@@ -1870,11 +2043,7 @@ of the chosen selectable item, or nil if dismissed.  Only meaningful while an
   lrg_active_menu = NULL;
   lrg_present_frame (f);              /* repaint without the menu */
 
-  for (i = 0; i < menu.n; i++)
-    if (menu.labels[i] != NULL)
-      xfree (menu.labels[i]);
-  xfree (menu.labels);
-  xfree (menu.enabled);
+  lrg_menu_free_items (st.root, st.root_n);
 
   return result >= 0 ? make_fixnum (result) : Qnil;
 }

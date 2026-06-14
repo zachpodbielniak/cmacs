@@ -1298,8 +1298,8 @@ context-menu callers, which funcall the returned closure, keep working."
               ((symbol-function 'lrg-popup-menu)
                (lambda (items &optional _x _y) (setq got items) 1)))  ; pick idx 1
       (should (eq (cmacs-libregnum-popup-menu t menu) 'b))
-      ;; The separators/headers were flattened to a plain label list.
-      (should (equal got '("Item A" "Item B"))))
+      ;; Flattened to the nested tree: leaves as (LABEL . INDEX).
+      (should (equal got '(("Item A" . 0) ("Item B" . 1)))))
     ;; A dismissed menu (nil index) yields nil.
     (cl-letf (((symbol-function 'framep) (lambda (&rest _) 'lrg))
               ((symbol-function 'lrg-popup-menu) (lambda (&rest _) nil)))
@@ -1314,30 +1314,55 @@ context-menu callers, which funcall the returned closure, keep working."
       (should (eq (cmacs-libregnum-popup-menu t menu) 'native-value)))))
 
 (ert-deftest cmacs-libregnum-tests-alist-menu-flatten ()
-  "Alist menus flatten to (labels . value-vector); separators/headers preserved."
-  ;; Single empty-titled pane: items + separators, no headers.
+  "Alist menus flatten to a tree of (LABEL . INDEX) leaves + a value vector."
+  ;; Single empty-titled pane: leaves with indices, in-pane separators kept.
   (let ((r (cmacs-libregnum--alist-menu-to-lrg
             '("T" ("" ("A" . fa) ("--") ("B" . fb))))))
-    (should (equal (car r) '("A" nil "B")))
-    (should (equal (cdr r) [fa nil fb])))
-  ;; Multiple titled panes get disabled section headers.
+    (should (equal (car r) '(("A" . 0) nil ("B" . 1))))
+    (should (equal (cdr r) [fa fb])))
+  ;; Multiple panes are joined by a separator row (no header text).
   (let ((r (cmacs-libregnum--alist-menu-to-lrg
-            '("T" ("Sec1" ("A" . 0)) ("Sec2" ("B" . 1))))))
-    (should (equal (car r) '(("Sec1") "A" ("Sec2") "B")))
-    (should (equal (cdr r) [nil 0 nil 1]))))
+            '("T" ("Sec1" ("A" . 10)) ("Sec2" ("B" . 20))))))
+    (should (equal (car r) '(("A" . 0) nil ("B" . 1))))
+    (should (equal (cdr r) [10 20]))))
 
 (ert-deftest cmacs-libregnum-tests-keymap-menu-flatten ()
-  "A menu keymap flattens to label items with their leaf bindings as values."
+  "A menu keymap flattens to (LABEL . INDEX) leaf nodes with closure values."
   (let ((km (make-sparse-keymap)))
     (define-key km [a] '(menu-item "Alpha" (lambda () 'A)))
     (define-key km [b] '(menu-item "Beta"  (lambda () 'B)))
     (let* ((r (cmacs-libregnum--keymap-menu-to-lrg km))
-           (items (car r))
+           (tree (car r))
            (vals (append (cdr r) nil)))
-      (should (member "Alpha" items))
-      (should (member "Beta" items))
+      ;; Two leaf nodes (LABEL . integer-index).
+      (should (= 2 (seq-count (lambda (it) (and (consp it) (integerp (cdr it))))
+                              tree)))
       (should (= (length vals) 2))
       (should (seq-every-p #'functionp vals)))))
+
+(ert-deftest cmacs-libregnum-tests-keymap-submenu-flatten ()
+  "Submenus become real nested nodes (LABEL CHILD...), not inlined headers;
+leaf indices span parent + submenu and round-trip through the value vector."
+  (let ((km (make-sparse-keymap)) (sub (make-sparse-keymap)))
+    (define-key sub [x] '(menu-item "X" (lambda () 'X)))
+    (define-key sub [y] '(menu-item "Y" (lambda () 'Y)))
+    (define-key km [a] '(menu-item "Alpha" (lambda () 'A)))
+    (define-key km [s] (list 'menu-item "Sub" sub))
+    (let* ((r (cmacs-libregnum--keymap-menu-to-lrg km))
+           (tree (car r))
+           (vals (cdr r))
+           ;; submenu node = a cons whose cdr is a list (children), not an int.
+           (subnode (seq-find (lambda (it) (and (consp it) (consp (cdr it))))
+                              tree)))
+      (should (= (length vals) 3))                 ; Alpha + X + Y
+      (should (seq-every-p #'functionp (append vals nil)))
+      (should subnode)
+      (should (equal (car subnode) "Sub"))
+      (should (= 2 (length (cdr subnode))))         ; X, Y children
+      (should (seq-every-p (lambda (c) (and (consp c) (integerp (cdr c))))
+                           (cdr subnode)))
+      ;; Every leaf index across the whole tree is a valid VALS slot.
+      (should (functionp (aref vals (cdr (car (cdr subnode)))))))))
 
 (ert-deftest cmacs-libregnum-tests-menu-xy ()
   "POSITION parsing for the in-engine menu: explicit point vs mouse fallback."

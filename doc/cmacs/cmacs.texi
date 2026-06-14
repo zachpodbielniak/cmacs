@@ -7673,13 +7673,16 @@ labels are still a follow-up.
 
 Because lrg has no native (GTK) popup menus (@code{menu_show_hook} returns
 nil), the libregnum/gnuseye right-click context menus are drawn @emph{in
-engine}: the @code{lrg-popup-menu} primitive renders a GTK-like popup with
-libregnum (panel + hovered/disabled rows + separators, label text via the
-glyph atlas) and runs a modal loop (mouse hover + left-click, right-click/ESC/
-click-outside to dismiss, up/down + RET), like @code{x-popup-menu}'s own modal
-loop.  @code{cmacs-libregnum-popup-menu} flattens an Emacs menu (alist or
-keymap form, submenus inlined) into the flat item list it takes and maps the
-chosen index back to the value; graphical frames still pop the native menu.
+engine}, with cascading fly-out submenus: the @code{lrg-popup-menu} primitive
+renders a GTK-like popup with libregnum (panel + hovered/disabled rows +
+separators + a submenu arrow, label text via the glyph atlas) and runs a modal
+loop over a stack of open panels (hover opens a submenu to the right, flipping
+left at the edge; left-click chooses a leaf; right-click/ESC/click-outside
+dismiss; up/down move, right/RET open a submenu or choose, left closes one),
+like @code{x-popup-menu}'s own modal loop.  @code{cmacs-libregnum-popup-menu}
+flattens an Emacs menu (alist or keymap form, submenus kept as real nested
+nodes) into the item tree it takes and maps the chosen leaf index back to the
+value; graphical frames still pop the native menu.
 Those 3D buffers sit in Evil
 @emph{emacs state} for their single-key navigation, so @kbd{<escape>} is bound
 to drop them to Evil @emph{normal} state (gnuseye's @kbd{<escape>} first

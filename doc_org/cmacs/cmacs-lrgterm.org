@@ -214,15 +214,18 @@ direction.  A wheel event that *isn't* over a view becomes a normal Emacs
 text labels are still a follow-up; everything else interacts now.)
 
 Because lrg has no native (GTK) popup menus (~menu_show_hook~ returns nil), the
-libregnum/gnuseye right-click context menus are drawn *in-engine*: the
-~lrg-popup-menu~ primitive renders a GTK-like popup with libregnum (a panel +
-hovered/disabled rows + separators, label text via the glyph atlas) and runs a
-modal loop (mouse hover + left-click to choose, right-click/ESC/click-outside
-to dismiss, up/down + RET to navigate), exactly like ~x-popup-menu~'s own modal
-loop.  ~cmacs-libregnum-popup-menu~ flattens an Emacs menu (alist *or* keymap
-form, submenus inlined under a header) into the flat item list it takes, then
-maps the chosen index back to the item's value; on graphical frames it still
-pops the native menu.  And since those 3D buffers sit in Evil *emacs state*
+libregnum/gnuseye right-click context menus are drawn *in-engine*, with
+cascading fly-out submenus: the ~lrg-popup-menu~ primitive renders a GTK-like
+popup with libregnum (a panel + hovered/disabled rows + separators + a ~›~
+arrow on submenu rows, label text via the glyph atlas) and runs a modal loop
+over a *stack* of open panels (hover opens a submenu to the right — flipping
+left at the screen edge; left-click chooses a leaf; right-click/ESC/click-
+outside dismiss; up/down move, right/RET open a submenu or choose, left closes
+one), exactly like ~x-popup-menu~'s own modal loop.  ~cmacs-libregnum-popup-menu~
+flattens an Emacs menu (alist *or* keymap form, submenus kept as real nested
+nodes) into the item tree it takes, then maps the chosen leaf index back to its
+value; on graphical frames it still pops the native menu.  And since those 3D
+buffers sit in Evil *emacs state*
 for their single-key navigation, ~<escape>~ is bound to drop them to Evil
 *normal* state (gnuseye's ~<escape>~ first deselects a selected entity, then
 escapes); re-enter navigation with ~C-z~ (~evil-emacs-state~).
