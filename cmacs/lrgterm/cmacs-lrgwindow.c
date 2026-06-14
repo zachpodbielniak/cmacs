@@ -31,6 +31,15 @@ lrg_window_create (struct frame *f, int width, int height, const char *title)
 
   eassert (FRAME_LRG_P (f));
 
+  /* Create the window with a transparent framebuffer (a 32-bit ARGB X visual)
+     so the `alpha-background' frame parameter can let the desktop show through
+     the editor background.  This MUST precede the InitWindow() inside the
+     surface constructor -- raylib applies config flags only at window-creation
+     time.  It is harmless when transparency is unused: an opaque frame
+     (alpha-background = 1.0, the default) clears and fills at full alpha, so
+     every pixel ends up opaque.  */
+  grl_window_set_config_flags (GRL_FLAG_WINDOW_TRANSPARENT);
+
   /* Only LRG_RENDER_MODE_2D is implemented today; 3d/3dvr are reserved.  */
   surface = lrg_2d_surface_new (width, height, title);
   FRAME_LRG_OUTPUT (f)->surface = LRG_FRAME_SURFACE (surface);

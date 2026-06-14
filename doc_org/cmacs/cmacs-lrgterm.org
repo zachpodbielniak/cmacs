@@ -241,6 +241,16 @@ With ~--with-cmacs-mcp~, the backend registers MCP tools
 - *Fringes*: the standard 8 px graphical fringes are on; continuation /
   truncation / overlay-arrow bitmaps are drawn (not the no-fringe ~\~/~$~ text
   indicators).  The cursor blinks (~blink-cursor-mode~).
+- *Transparency* (~alpha-background~): the OS window is created with a
+  transparent (32-bit ARGB) framebuffer, and the ~alpha-background~ frame
+  parameter (Emacs 29's translucent-background feature) is honored — the frame
+  is cleared and every face background is filled at that alpha (using a
+  source/replace blend so non-default backgrounds composite over the desktop,
+  mirroring pgtk's ~CAIRO_OPERATOR_SOURCE~), while text and other foreground
+  stay opaque.  So ~(set-frame-parameter nil 'alpha-background 85)~ (or
+  ~(add-to-list 'default-frame-alist '(alpha-background . 85))~) lets the
+  wallpaper show through, exactly as under pgtk.  Requires a compositing
+  display server (any modern Wayland/X11 desktop).
 - *Inline images*: image glyphs (PNG, XPM, JPEG, …) are drawn.  In this
   Cairo build the loaded pixels live in the image's ~cr_data~ Cairo pattern;
   the backend converts that surface to a straight-RGBA ~GrlTexture~ (caching it

@@ -7570,6 +7570,16 @@ strike-through, box), the graphical fringes (continuation/truncation arrows)
 and the blinking cursor are all drawn.  Colour names resolve through pango's
 X11 @file{rgb.txt} table, so the full Emacs default-face palette renders.
 
+The OS window is created with a transparent (32-bit ARGB) framebuffer, so the
+@code{alpha-background} frame parameter (Emacs 29's translucent-background
+feature) is honored: the frame is cleared and every face background is filled
+at that alpha (with a source/replace blend so non-default backgrounds
+composite over the desktop, mirroring pgtk's @code{CAIRO_OPERATOR_SOURCE}),
+while text and other foreground stay opaque.  Thus
+@code{(set-frame-parameter nil 'alpha-background 85)} --- or
+@code{(add-to-list 'default-frame-alist '(alpha-background . 85))} --- lets the
+wallpaper show through, as under pgtk (needs a compositing display server).
+
 Inline image glyphs (PNG, XPM, JPEG, @dots{}) are also drawn.  In this Cairo
 build the loaded pixels live in the image's @code{cr_data} Cairo pattern; the
 backend converts that surface to a straight-RGBA @code{GrlTexture} (cached as

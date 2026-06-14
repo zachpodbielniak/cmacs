@@ -138,7 +138,7 @@ frame_parm_handler lrg_frame_parm_handlers[] =
     NULL,                       /* z_group */
     NULL,                       /* override_redirect */
     gui_set_no_special_glyphs,
-    NULL,                       /* alpha_background */
+    gui_set_alpha_background,
     gui_set_borders_respect_alpha_background,
     NULL,
   };

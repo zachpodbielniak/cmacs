@@ -69,6 +69,61 @@ lrg_color (unsigned long pixel)
                         pixel & 0xff, 255);
 }
 
+/* Like lrg_color, but with an explicit alpha (0-255).  */
+static GrlColor *
+lrg_color_a (unsigned long pixel, guint8 a)
+{
+  return grl_color_new ((pixel >> 16) & 0xff, (pixel >> 8) & 0xff,
+                        pixel & 0xff, a);
+}
+
+/* Alpha (0-255) for BACKGROUND fills on frame F.  255 (opaque) normally;
+   scaled by the frame's `alpha-background' (the Emacs 29 translucent-background
+   feature) when it is < 1.0.  Foreground -- text, cursor, borders, fringe
+   bitmaps -- always stays opaque, so only the background lets the desktop
+   through.  */
+static guint8
+lrg_bg_alpha (struct frame *f)
+{
+  double a = f->alpha_background;
+  if (a >= 1.0)
+    return 255;
+  if (a <= 0.0)
+    return 0;
+  return (guint8) (a * 255.0 + 0.5);
+}
+
+/* GL blend factors/equation for a "replace" (source) blend.  The lrg layer
+   does not pull in <GL/gl.h> or raylib's rlgl.h, so spell the stable GL enum
+   values inline: GL_ZERO, GL_ONE, GL_FUNC_ADD.  */
+enum { LRG_GL_ZERO = 0, LRG_GL_ONE = 1, LRG_GL_FUNC_ADD = 0x8006 };
+
+/* Fill a BACKGROUND rectangle on F honoring `alpha-background'.  On an opaque
+   frame this is a plain fill.  On a translucent frame it REPLACES the
+   destination pixels with (COLOR, alpha) -- mirroring pgtk's
+   CAIRO_OPERATOR_SOURCE -- so each face background composites directly over the
+   desktop rather than blending over the already-translucent frame background
+   (which would tint non-default backgrounds).  Foreground is drawn afterwards
+   with the normal alpha-over blend, so text stays crisp and opaque.  */
+static void
+lrg_fill_bg (struct frame *f, LrgFrameSurface *surf,
+             int x, int y, int width, int height, unsigned long color)
+{
+  guint8 a = lrg_bg_alpha (f);
+  g_autoptr (GrlColor) c = lrg_color_a (color, a);
+
+  if (a == 255)
+    {
+      lrg_frame_surface_fill_rect (surf, x, y, width, height, c);
+      return;
+    }
+
+  grl_rlgl_set_blend_factors (LRG_GL_ONE, LRG_GL_ZERO, LRG_GL_FUNC_ADD);
+  grl_rlgl_set_blend_mode (GRL_BLEND_CUSTOM);
+  lrg_frame_surface_fill_rect (surf, x, y, width, height, c);
+  grl_rlgl_set_blend_mode (GRL_BLEND_ALPHA);
+}
+
 /* ----------------------------------------------------- RIF: drawing ----- */
 
 static void
@@ -82,13 +137,11 @@ static void
 lrg_clear_frame_area (struct frame *f, int x, int y, int width, int height)
 {
   LrgFrameSurface *s = FRAME_LRG_SURFACE (f);
-  g_autoptr(GrlColor) bg = NULL;
 
   if (!lrg_drawing || s == NULL)
     return;
 
-  bg = lrg_color (FRAME_LRG_BACKGROUND_COLOR (f));
-  lrg_frame_surface_fill_rect (s, x, y, width, height, bg);
+  lrg_fill_bg (f, s, x, y, width, height, FRAME_LRG_BACKGROUND_COLOR (f));
 }
 
 static void
@@ -115,12 +168,10 @@ static void
 lrg_draw_glyph_string_bg (struct glyph_string *s)
 {
   LrgFrameSurface *surf = FRAME_LRG_SURFACE (s->f);
-  g_autoptr(GrlColor) bg = lrg_color (s->xgcv.background);
   int box = max (s->face->box_vertical_line_width, 0);
 
-  lrg_frame_surface_fill_rect (surf, s->x, s->y + box,
-                               s->background_width,
-                               s->height - 2 * box, bg);
+  lrg_fill_bg (s->f, surf, s->x, s->y + box, s->background_width,
+               s->height - 2 * box, s->xgcv.background);
 }
 
 /* Return (building + caching on first use) a GrlTexture for IMG.  In this
@@ -307,9 +358,18 @@ lrg_draw_glyph_string (struct glyph_string *s)
     case STRETCH_GLYPH:
       {
         LrgFrameSurface *surf = FRAME_LRG_SURFACE (s->f);
-        g_autoptr(GrlColor) bg = lrg_color (s->face->background);
-        lrg_frame_surface_fill_rect (surf, s->x, s->y,
-                                     s->background_width, s->height, bg);
+        /* A stretch glyph under the cursor is opaque (it IS the cursor);
+           otherwise it is a background and honors alpha-background, as in
+           pgtk_clear_glyph_string_rect.  */
+        if (s->hl == DRAW_CURSOR)
+          {
+            g_autoptr (GrlColor) bg = lrg_color (s->face->background);
+            lrg_frame_surface_fill_rect (surf, s->x, s->y,
+                                         s->background_width, s->height, bg);
+          }
+        else
+          lrg_fill_bg (s->f, surf, s->x, s->y,
+                       s->background_width, s->height, s->face->background);
       }
       break;
 
@@ -465,16 +525,15 @@ lrg_draw_fringe_bitmap (struct window *w, struct glyph_row *row,
   struct frame *f = XFRAME (w->frame);
   LrgFrameSurface *surf = FRAME_LRG_SURFACE (f);
   struct face *face;
-  g_autoptr(GrlColor) bg = NULL;
 
   if (!lrg_drawing || surf == NULL)
     return;
 
   /* Background.  */
   face = p->face;
-  bg = lrg_color (face ? face->background : FRAME_LRG_BACKGROUND_COLOR (f));
   if (p->bx >= 0 && !p->overlay_p)
-    lrg_frame_surface_fill_rect (surf, p->bx, p->by, p->nx, p->ny, bg);
+    lrg_fill_bg (f, surf, p->bx, p->by, p->nx, p->ny,
+                 face ? face->background : FRAME_LRG_BACKGROUND_COLOR (f));
 
   /* Foreground bitmap (continuation / truncation / overlay arrows, etc.):
      paint each set bit as a 1px rect in the fringe foreground (cursor colour
@@ -553,7 +612,11 @@ lrg_present_frame (struct frame *f)
 
   block_input ();
   {
-    g_autoptr(GrlColor) bg = lrg_color (FRAME_LRG_BACKGROUND_COLOR (f));
+    /* Clear to the frame background at alpha-background, so the uncovered
+       backdrop is translucent (lets the desktop through) when requested and
+       fully opaque otherwise.  */
+    g_autoptr(GrlColor) bg = lrg_color_a (FRAME_LRG_BACKGROUND_COLOR (f),
+                                          lrg_bg_alpha (f));
 
     lrg_frame_surface_begin_frame (surf);
     lrg_frame_surface_clear (surf, bg);
