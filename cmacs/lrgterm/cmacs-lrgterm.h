@@ -192,6 +192,12 @@ extern double lrg_frame_scale_factor (struct frame *);
    second window.  */
 extern bool cmacs_lrgterm_active_p (void);
 
+/* Present the active lrg frame immediately (re-expose + blit libregnum FBOs).
+   cmacs-libregnum links this weakly so a camera drag/zoom (which re-renders a
+   view's FBO without changing text, hence triggers no Emacs redisplay) is
+   shown at once rather than only on the next redisplay.  */
+extern void cmacs_lrgterm_present_now (void);
+
 /* Surface/window lifecycle (cmacs-lrgwindow.c).  */
 extern GrlWindow *lrg_window_create (struct frame *, int, int, const char *);
 extern GrlWindow *lrg_window_of_frame (struct frame *);

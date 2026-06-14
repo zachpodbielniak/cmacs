@@ -822,6 +822,21 @@ cmacs_lrgterm_active_p (void)
   return lrg_any_frame () != NULL;
 }
 
+/* Present the active lrg frame NOW (re-expose the glyph matrix + blit the
+   libregnum FBOs).  cmacs-libregnum links this weakly so a camera drag/zoom --
+   which re-renders a view's FBO but changes no text, hence triggers no Emacs
+   redisplay -- is shown immediately instead of only on the next redisplay
+   (e.g. after a click).  Safe from a GLib idle: the GL context is current on
+   the main thread, flips are not blocked while waiting for input, and
+   lrg_present_frame's own re-entrancy guard covers any overlap.  */
+void
+cmacs_lrgterm_present_now (void)
+{
+  struct frame *f = lrg_any_frame ();
+  if (f != NULL)
+    lrg_present_frame (f);
+}
+
 /* Current Emacs modifier bits from the physically held modifier keys.  */
 static int
 lrg_event_modifiers (void)

@@ -36,6 +36,11 @@
    `emacs --lrg' the lrg present blits each view's FBO, so the view renders
    into its FBO and asks for a redisplay rather than compositing via cairo.  */
 extern bool cmacs_lrgterm_active_p (void) __attribute__ ((weak));
+/* Present the active lrg frame at once (re-expose + blit FBOs).  Used so a
+   camera drag/zoom -- which re-renders the FBO without changing any text, so
+   Emacs schedules no redisplay -- appears immediately, not only on the next
+   click-driven redisplay.  */
+extern void cmacs_lrgterm_present_now (void) __attribute__ ((weak));
 #endif
 
 /* ── View struct ───────────────────────────────────────────────── */
@@ -190,11 +195,18 @@ notify_frame_ready (CmacsLibregnumView *v)
   if (NILP (v->buffer) || !BUFFERP (v->buffer)) return;
 #ifdef HAVE_CMACS_LRGTERM
   /* Under the lrg backend there is no GTK widget and no cairo overlay; the
-     lrg present blits the view's freshly-rendered FBO.  Schedule a redisplay
-     so that present runs.  */
+     lrg present blits the view's freshly-rendered FBO.  Present the frame
+     directly: a camera drag/zoom re-renders the FBO but changes no text, so
+     Emacs schedules no redisplay -- force-window-update would only mark the
+     window dirty and the new view would not appear until the next redisplay
+     (e.g. a click).  Presenting now (re-expose + blit FBO) shows it at once.
+     Fall back to force-window-update if the lrg present symbol is absent.  */
   if (cmacs_lrgterm_active_p != NULL && cmacs_lrgterm_active_p ())
     {
-      cmacs_dispatch_safe_call1 (intern ("force-window-update"), v->buffer);
+      if (cmacs_lrgterm_present_now != NULL)
+        cmacs_lrgterm_present_now ();
+      else
+        cmacs_dispatch_safe_call1 (intern ("force-window-update"), v->buffer);
       return;
     }
 #endif
