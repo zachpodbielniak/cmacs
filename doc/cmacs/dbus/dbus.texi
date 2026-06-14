@@ -25,6 +25,7 @@ must stay in sync (run @file{tools/sync-docs.sh}).
 * D-Bus Interfaces::
 * D-Bus Methods::
 * D-Bus Signals::
+* D-Bus Events::
 * D-Bus Elisp API::
 * D-Bus CLI Examples::
 * D-Bus Integration Recipes::
@@ -37,6 +38,7 @@ must stay in sync (run @file{tools/sync-docs.sh}).
 @include dbus/interfaces.texi
 @include dbus/methods.texi
 @include dbus/signals.texi
+@include dbus/events.texi
 @include dbus/elisp-api.texi
 @include dbus/cli-examples.texi
 @include dbus/integration-recipes.texi

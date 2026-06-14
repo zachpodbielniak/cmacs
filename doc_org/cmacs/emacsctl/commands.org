@@ -49,6 +49,9 @@ gets a did-you-mean suggestion.
 | =repl [--lang L]=         | interactive REPL ([[file:repl.org][repl.org]])  |
 | =logs [-f] [-n N]=        | tail =*Messages*=; =-f= follows live via the =MessageLogged= signal |
 | =watch stream=            | stream BufferAdded/Removed + FrameAdded/Removed events |
+| =events [watch]=          | stream the live editor-events firehose (=org.cmacs.Editor1.Events=) |
+| =events recent [N]=       | last N recorded events as JSON                  |
+| =events types=            | list the event taxonomy (=category/name=)       |
 | =version=                 | client (and, if reachable, server) version      |
 | =help [COMMAND]=          | command list / per-command usage                |
 | =config ...=              | contexts ([[file:config-contexts.org][config-contexts.org]]) |

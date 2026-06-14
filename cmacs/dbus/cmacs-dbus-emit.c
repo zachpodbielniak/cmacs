@@ -288,11 +288,58 @@ success, nil if the D-Bus service is not running.  */)
   return Qt;
 }
 
+DEFUN ("cmacs-dbus-emit-event", Fcmacs_dbus_emit_event,
+       Scmacs_dbus_emit_event, 2, 4, 0,
+       doc: /* Emit the generic cmacs Event firehose signal.
+CATEGORY and NAME are strings classifying the event (for example
+"file" and "saved").  Optional DETAIL is the primary subject (a
+filename or buffer name) carried as a plain string so subscribers can
+filter cheaply with a D-Bus arg-match rule.  Optional DATA is a plist
+of extra fields (:key value ...) marshalled into an a{sv} dictionary.
+
+The signal is org.cmacs.Editor1.Events.Event with signature
+(s s s a{sv} t): category, name, detail, data, and a server-stamped
+microsecond timestamp, emitted at /org/cmacs/Editor.
+
+Returns t on success, nil if the D-Bus service is not running.  This
+is the single firehose carrying every event; selective subscribers use
+the typed named signals emitted alongside it via
+`cmacs-dbus-emit-signal'.  */)
+  (Lisp_Object category, Lisp_Object name, Lisp_Object detail,
+   Lisp_Object data)
+{
+  GVariant *data_v;
+  GVariant *tup;
+  const gchar *det;
+
+  CHECK_STRING (category);
+  CHECK_STRING (name);
+  if (!NILP (detail))
+    CHECK_STRING (detail);
+
+  if (cmacs_dbus_get_connection () == NULL)
+    return Qnil;
+
+  det = NILP (detail) ? "" : SSDATA (detail);
+  /* plist_to_a_sv handles nil -> empty a{sv}. */
+  data_v = plist_to_a_sv (data);
+
+  /* @a{sv} consumes the floating data_v; t carries the timestamp. */
+  tup = g_variant_new ("(sss@a{sv}t)",
+                       SSDATA (category), SSDATA (name), det,
+                       data_v, (guint64) g_get_real_time ());
+
+  cmacs_dbus_emit_signal (CMACS_DBUS_ROOT_PATH, CMACS_DBUS_EVENTS_IFACE,
+                          "Event", tup);
+  return Qt;
+}
+
 void
 syms_of_cmacs_dbus_emit (void)
 {
   defsubr (&Scmacs_dbus_emit_signal);
   defsubr (&Scmacs_dbus_emit_properties_changed);
+  defsubr (&Scmacs_dbus_emit_event);
 }
 
 #endif /* HAVE_CMACS_GLIB */

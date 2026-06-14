@@ -68,13 +68,48 @@ Example:
  "org.cmacs.Editor1.Buffer.Resource"
  (list :modified t :point 1234) nil)
 @end example
+
+@item (cmacs-dbus-emit-event CATEGORY NAME &optional DETAIL DATA)
+Emit the events-endpoint firehose signal
+@code{org.cmacs.Editor1.Events.Event} at
+@code{/org/cmacs/Editor}.  @var{CATEGORY} and @var{NAME} are
+strings; @var{DETAIL} is the subject string; @var{DATA} is a plist
+marshalled into the @code{a@{sv@}} payload.  A microsecond timestamp
+is stamped server-side.  This is the only emitter that produces an
+@code{a@{sv@}} (the generic @code{cmacs-dbus-emit-signal} marshals a
+plist as @code{av}).  See @ref{D-Bus Events}.
+
+@example
+(cmacs-dbus-emit-event "file" "saved" (buffer-file-name)
+                       (list :buffer (buffer-name)))
+@end example
+@end table
+
+@subsection Events endpoint
+
+@table @code
+@item (cmacs-dbus-events-mode &optional ARG)
+Global minor mode that broadcasts editor events over D-Bus; on by
+default (auto-enabled from @code{emacs-startup-hook}).  See
+@ref{D-Bus Events}.
 @end table
 
 @subsection Customization
 
-Phase 1 has no defcustoms; the surface is on / off via
-@code{cmacs-dbus-start} / @code{cmacs-dbus-stop}.  Phases 4 and 5
-will add opt-in customizations.
+@table @code
+@item cmacs-dbus-events-categories
+List of enabled event families.  Default
+@code{(file buffer project window frame editor)}; @code{text},
+@code{gsurf}, @code{ai}, and @code{cintrospect} are opt-in.  Changing
+it while the mode is on re-installs the hooks.
+@item cmacs-dbus-events-ring-size
+Events retained for the @code{Recent} method (default 256).
+@item cmacs-dbus-events-buffer-filter
+Predicate deciding whether a buffer's events are interesting; the
+default skips internal @code{ *buffers*}.
+@item cmacs-dbus-events-debug
+When non-nil, log emit failures instead of swallowing them.
+@end table
 
 @subsection Patterns
 

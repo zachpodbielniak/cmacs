@@ -15,7 +15,8 @@ Future phases add child paths.
   ├─ org.freedesktop.DBus.Peer            (auto, bus daemon)
   ├─ org.freedesktop.DBus.Properties      (lazy; populated by Phase 2)
   ├─ org.freedesktop.DBus.ObjectManager   (registered, empty children)
-  └─ org.cmacs.Editor1                    (back-compat surface)
+  ├─ org.cmacs.Editor1                    (back-compat surface)
+  └─ org.cmacs.Editor1.Events             (shipped: events firehose + named signals)
 
 [Phase 2-5 will add:]
 /org/cmacs/Editor/Buffer/<id>             per-buffer object

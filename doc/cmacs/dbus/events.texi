@@ -1,0 +1,219 @@
+@node D-Bus Events
+@section Events Endpoint
+
+@cindex events, D-Bus
+@cindex org.cmacs.Editor1.Events
+
+The events endpoint is the one place external tools subscribe to in
+order to @emph{observe} a running cmacs: files opened / saved /
+closed, buffers created / killed / switched / modified, project
+switches, window and frame activity, the editor lifecycle,
+fine-grained text edits, and selected cmacs subsystems.
+
+@example
+Interface:    org.cmacs.Editor1.Events
+Object path:  /org/cmacs/Editor
+C source:     cmacs/dbus/cmacs-dbus-iface-events.c
+Lisp source:  lisp/cmacs/cmacs-dbus-events.el
+Enabled:      by default (core categories), when the service runs
+@end example
+
+Emission is driven from Emacs hooks in @file{cmacs-dbus-events.el};
+the C side owns the introspection contract and three query methods.
+Every emit is fire-and-forget and a @emph{no-op when the service is
+down}, so the hooks stay cheap and can never interrupt editing.
+
+@subsection Two ways to consume
+
+Every event is broadcast twice, so you can choose how to subscribe.
+
+@subsubheading The firehose: Event
+
+One signal carries @emph{every} event.  Subscribe to it and you see
+everything.
+
+@example
+Signal: Event
+Body:   s category, s name, s detail, a@{sv@} data, t timestamp_us
+@end example
+
+@itemize @bullet
+@item
+@code{category} --- the family: @code{file}, @code{buffer},
+@code{project}, @code{window}, @code{frame}, @code{editor},
+@code{text}, @code{gsurf}, @code{ai}, @code{cintrospect}.
+@item
+@code{name} --- the specific event: @code{opened}, @code{saved},
+@code{closed}, @code{created}, @code{killed}, @code{switched},
+@code{modified}, @code{unmodified}, @code{startup}, @code{focused}, ...
+@item
+@code{detail} --- the primary subject (a filename or buffer name) as a
+plain string, for cheap @code{arg0}/@code{arg2} match-rule filtering.
+@item
+@code{data} --- an extensible @code{a@{sv@}} dictionary of structured
+fields (@code{:file}, @code{:buffer}, @code{:point}, @code{:root}, ...).
+@emph{New keys may be added over time}; ignore unknown keys.
+@item
+@code{timestamp_us} --- microseconds since the epoch, stamped
+server-side.
+@end itemize
+
+The firehose is emitted by the @code{cmacs-dbus-emit-event} DEFUN,
+which is the only emitter that builds the @code{a@{sv@}} payload (the
+generic @code{cmacs-dbus-emit-signal} marshals a plist as @code{av},
+not @code{a@{sv@}}).
+
+@subsubheading Named typed signals
+
+Each event also fires a distinct named signal, so a subscriber can ask
+the bus to deliver only the kinds it cares about (match on
+@code{member}).  Named signals are emitted on the same path /
+interface as @code{Event}.
+
+@example
+file       FileOpened              s path
+file       FileSaved               s path
+file       FileClosed              s path
+buffer     BufferCreated           s name
+buffer     BufferKilled            s name
+buffer     BufferSwitched          s name, s previous
+buffer     BufferSaved             s name, s file
+buffer     BufferModified          s name
+buffer     BufferUnmodified        s name
+project    ProjectSwitched         s root, s previous
+window     WindowSelectionChanged  s buffer, s frame
+frame      FrameOpened             s frame
+frame      FrameClosed             s frame
+frame      FrameFocused            s frame
+frame      FrameUnfocused          s frame
+editor     EditorStartup           (none)
+editor     EditorShutdown          (none)
+text       TextChanged             s name, x beg, x end, x length
+gsurf      BrowserLoadChanged      s buffer, s state
+gsurf      BrowserUriChanged       s buffer, s uri
+gsurf      BrowserTitleChanged     s buffer, s title
+gsurf      BrowserCrashed          s buffer
+ai         AiMessage               s room, s sender, s text
+cintrospect PatchApplied           s function
+@end example
+
+Modified state is split into two string-only signals
+(@code{BufferModified} / @code{BufferUnmodified}) rather than one
+boolean signal: Emacs has no boolean false (@code{nil} marshals as
+@code{""}), so a @code{b} argument could never carry the unmodified
+case correctly.  The same reasoning applies to frame focus.
+
+@subsection Methods
+
+@example
+EventTypes ()       -> as   The taxonomy as category/name strings
+Categories ()       -> as   The currently-enabled categories
+Recent (i count)    -> s    JSON array of the last count events
+@end example
+
+@code{Recent} reads a Lisp ring buffer (size
+@code{cmacs-dbus-events-ring-size}, default 256), so a tool that
+connects @emph{after} something happened can still fetch the recent
+backlog --- mirroring @code{Log.RecentMessages}.
+
+@subsection Enabling and configuring
+
+The endpoint is controlled by the global minor mode
+@code{cmacs-dbus-events-mode}, which is @emph{on by default}
+(auto-enabled from @code{emacs-startup-hook}).  It is a no-op whenever
+the service is not running.
+
+Which families emit is controlled by
+@code{cmacs-dbus-events-categories}:
+
+@example
+;; Default --- core editor activity:
+(setq cmacs-dbus-events-categories
+      '(file buffer project window frame editor))
+
+;; Opt in to the high-volume text feed and subsystem bridges:
+(setq cmacs-dbus-events-categories
+      '(file buffer project window frame editor
+        text gsurf ai cintrospect))
+@end example
+
+Changing this while the mode is on re-installs the hooks immediately.
+The high-volume @code{text} category and the subsystem bridges
+(@code{gsurf}, @code{ai}, @code{cintrospect}) are off by default.
+
+@example
+cmacs-dbus-events-ring-size      256    Events kept for Recent
+cmacs-dbus-events-buffer-filter  (fn)   Predicate; skip dull buffers
+cmacs-dbus-events-debug          nil    Log emit failures
+@end example
+
+@subsubheading Robustness
+
+@itemize @bullet
+@item
+Every handler is error-guarded --- a misbehaving bridge cannot break
+editing; subsystem bridges are also @code{boundp}/feature guarded.
+@item
+High-frequency sources (@code{buffer-list-update-hook},
+@code{after-change-functions}) are debounced via idle timers and
+coalesced; the @code{text} category is off by default.
+@item
+Emission does no Lisp work and never writes @code{*Messages*}, so it
+cannot recurse or touch the GLib-loop @code{waiting_for_input} guard.
+@end itemize
+
+@subsection Related: per-manager signals
+
+The buffer create / kill handlers also fire the standard
+@code{BufferManager.BufferAdded} / @code{BufferRemoved} signals at the
+root path @code{/org/cmacs/Editor} (string payloads), which were
+previously declared but never emitted.  This lights up
+@code{cmacsctl watch stream}.  Frame add / close is exposed through the
+Events interface (@code{FrameOpened} / @code{FrameClosed}) rather than
+@code{FrameManager.Frame*} (whose @code{i} int32 signature the generic
+Lisp emitter cannot produce).
+
+@subsection Subscribing
+
+@subsubheading From the shell
+
+@example
+# The firehose, live:
+gdbus monitor --session --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor
+
+# The taxonomy and a recent backlog:
+gdbus call --session --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor \
+    --method org.cmacs.Editor1.Events.EventTypes
+gdbus call --session --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor \
+    --method org.cmacs.Editor1.Events.Recent 20
+@end example
+
+@subsubheading Via emacsctl
+
+@example
+cmacsctl events            # stream the firehose
+cmacsctl events recent 20  # last 20 events as JSON
+cmacsctl events types      # the category/name taxonomy
+@end example
+
+@subsubheading From Python (Gio low-level)
+
+@example
+from gi.repository import Gio, GLib
+
+def on_event(conn, sender, path, iface, signal, params):
+    category, name, detail, data, ts = params.unpack()
+    print(f"@{category@}/@{name@} @{detail@} @{dict(data)@}")
+
+bus = Gio.bus_get_sync(Gio.BusType.SESSION)
+bus.signal_subscribe(
+    "org.cmacs.Editor",                 # sender
+    "org.cmacs.Editor1.Events",         # interface
+    "Event",                            # the firehose
+    "/org/cmacs/Editor",         # path
+    None, Gio.DBusSignalFlags.NONE, on_event)
+GLib.MainLoop().run()
+@end example

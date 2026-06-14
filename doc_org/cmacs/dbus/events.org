@@ -1,0 +1,222 @@
+#+TITLE: Events Endpoint
+#+STARTUP: showall
+#+OPTIONS: toc:2 num:t
+
+The events endpoint is the one place external tools subscribe to in
+order to *observe* a running cmacs: files opened / saved / closed,
+buffers created / killed / switched / modified, project switches,
+window and frame activity, the editor lifecycle, fine-grained text
+edits, and selected cmacs subsystems.
+
+| Field        | Value                              |
+|--------------+------------------------------------|
+| Interface    | =org.cmacs.Editor1.Events=         |
+| Object path  | =/org/cmacs/Editor=         |
+| C source     | =cmacs/dbus/cmacs-dbus-iface-events.c= |
+| Lisp source  | =lisp/cmacs/cmacs-dbus-events.el=  |
+| Enabled      | by default (core categories), when the service is running |
+
+Emission is driven from Emacs hooks in =cmacs-dbus-events.el=; the C
+side owns the introspection contract and three query methods.  Every
+emit is fire-and-forget and a *no-op when the service is down*, so the
+hooks stay cheap and can never interrupt editing.
+
+* Two ways to consume
+
+Every event is broadcast twice, so you can choose how to subscribe.
+
+** The firehose: =Event=
+
+One signal carries *every* event.  Subscribe to it and you see
+everything.
+
+| Signal | =Event=                                   |
+| Body   | =s category, s name, s detail, a{sv} data, t timestamp_us= |
+
+- =category= — the family: =file=, =buffer=, =project=, =window=,
+  =frame=, =editor=, =text=, =gsurf=, =ai=, =cintrospect=.
+- =name= — the specific event within the family: =opened=, =saved=,
+  =closed=, =created=, =killed=, =switched=, =modified=, =unmodified=,
+  =startup=, =focused=, ...
+- =detail= — the primary subject (a filename or buffer name) as a
+  plain string, so subscribers can filter cheaply with a D-Bus
+  =arg0=/=arg2= match rule without unpacking the dict.
+- =data= — an extensible =a{sv}= dictionary of structured fields
+  (=:file=, =:buffer=, =:point=, =:root=, =:mode=, ...).  *New keys may
+  be added over time*; the dict is the forward-compatible extension
+  point, so consumers must ignore unknown keys.
+- =timestamp_us= — microseconds since the epoch, stamped server-side
+  (=g_get_real_time=).
+
+The firehose is emitted by the =cmacs-dbus-emit-event= DEFUN, which is
+the only emitter that builds the =a{sv}= payload (the generic
+=cmacs-dbus-emit-signal= marshals a plist as =av=, not =a{sv}=).
+
+** Named typed signals
+
+Each event also fires a distinct named signal, so a subscriber can ask
+the bus to deliver only the kinds it cares about (match on =member=).
+Named signals are emitted on the same path / interface as =Event=.
+
+| Category   | Signal                          | Body                          |
+|------------+---------------------------------+-------------------------------|
+| file       | =FileOpened=                    | =s path=                      |
+| file       | =FileSaved=                     | =s path=                      |
+| file       | =FileClosed=                    | =s path=                      |
+| buffer     | =BufferCreated=                 | =s name=                      |
+| buffer     | =BufferKilled=                  | =s name=                      |
+| buffer     | =BufferSwitched=                | =s name, s previous=          |
+| buffer     | =BufferSaved=                   | =s name, s file=              |
+| buffer     | =BufferModified=                | =s name=                      |
+| buffer     | =BufferUnmodified=              | =s name=                      |
+| project    | =ProjectSwitched=               | =s root, s previous=          |
+| window     | =WindowSelectionChanged=        | =s buffer, s frame=           |
+| frame      | =FrameOpened=                   | =s frame=                     |
+| frame      | =FrameClosed=                   | =s frame=                     |
+| frame      | =FrameFocused=                  | =s frame=                     |
+| frame      | =FrameUnfocused=                | =s frame=                     |
+| editor     | =EditorStartup=                 | (none)                        |
+| editor     | =EditorShutdown=                | (none)                        |
+| text       | =TextChanged=                   | =s name, x beg, x end, x length= |
+| gsurf      | =BrowserLoadChanged=            | =s buffer, s state=           |
+| gsurf      | =BrowserUriChanged=             | =s buffer, s uri=             |
+| gsurf      | =BrowserTitleChanged=           | =s buffer, s title=           |
+| gsurf      | =BrowserCrashed=                | =s buffer=                    |
+| ai         | =AiMessage=                     | =s room, s sender, s text=    |
+| cintrospect| =PatchApplied=                  | =s function=                  |
+
+Modified state is split into two string-only signals (=BufferModified=
+/ =BufferUnmodified=) rather than one boolean signal: Emacs has no
+boolean false (=nil= marshals as =""=), so a =b= argument could never
+carry the unmodified case correctly.  The same reasoning applies to
+frame focus (=FrameFocused= / =FrameUnfocused=).
+
+* Methods
+
+| Method                | Returns | Description                                  |
+|-----------------------+---------+----------------------------------------------|
+| =EventTypes ()=       | =as=    | The taxonomy as =category/name= strings      |
+| =Categories ()=       | =as=    | The currently-enabled categories             |
+| =Recent (i count)=    | =s=     | JSON array of the last =count= events        |
+
+=Recent= reads a Lisp ring buffer (size
+=cmacs-dbus-events-ring-size=, default 256), so a tool that connects
+*after* something happened can still fetch the recent backlog —
+mirroring =Log.RecentMessages=.  Each JSON object has =category=,
+=name=, =detail=, =data=, and =time= (a float, seconds).
+
+* Enabling and configuring
+
+The endpoint is controlled by the global minor mode
+=cmacs-dbus-events-mode=, which is *on by default* (auto-enabled from
+=emacs-startup-hook=).  It is a no-op whenever the D-Bus service is not
+running, so it costs nothing when nobody is listening.
+
+Which event families emit is controlled by
+=cmacs-dbus-events-categories=:
+
+#+begin_src emacs-lisp
+;; Default — core editor activity:
+(setq cmacs-dbus-events-categories
+      '(file buffer project window frame editor))
+
+;; Opt in to the high-volume text feed and subsystem bridges:
+(setq cmacs-dbus-events-categories
+      '(file buffer project window frame editor
+        text gsurf ai cintrospect))
+#+end_src
+
+Changing this variable while the mode is on re-installs the hooks
+immediately (its =:set= function does this).  The high-volume =text=
+category and the subsystem bridges (=gsurf=, =ai=, =cintrospect=) are
+*off by default*.
+
+Other customization:
+
+| Variable                          | Default | Meaning                                   |
+|-----------------------------------+---------+-------------------------------------------|
+| =cmacs-dbus-events-ring-size=     | =256=   | Events retained for the =Recent= method   |
+| =cmacs-dbus-events-buffer-filter= | (fn)    | Predicate; skip uninteresting buffers     |
+| =cmacs-dbus-events-debug=         | =nil=   | Log emit failures instead of swallowing   |
+
+The default buffer filter skips internal buffers whose name starts
+with a space (e.g. =" *Minibuf-0*"=); replace it to broaden or narrow
+which buffers produce events.
+
+** Robustness notes
+
+- Every handler is error-guarded — a misbehaving bridge cannot break
+  editing.  Subsystem bridges are additionally guarded by feature /
+  =boundp= checks, so an absent subsystem is simply skipped.
+- High-frequency sources (=buffer-list-update-hook=,
+  =after-change-functions=) are debounced through idle timers and
+  coalesced into one signal per quiescent burst; the =text= category is
+  off by default.
+- Emission performs no Lisp work and never writes =*Messages*=, so it
+  cannot recurse or interact with the GLib-loop =waiting_for_input=
+  guard.
+
+* Related: per-manager signals
+
+The buffer-creation / -kill handlers *also* fire the standard
+=BufferManager.BufferAdded= / =BufferRemoved= signals at the root path
+=/org/cmacs/Editor= (string payloads), which previously were declared
+but never emitted.  This is what lights up =cmacsctl watch stream=.
+Frame add/close is exposed through the Events interface
+(=FrameOpened= / =FrameClosed=) rather than =FrameManager.Frame*=
+(whose =i= int32 signature the generic Lisp emitter cannot produce).
+
+* Subscribing
+
+** From the shell
+
+#+begin_src shell
+# The firehose, live:
+gdbus monitor --session --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor
+
+# The taxonomy and a recent backlog:
+gdbus call --session --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor \
+    --method org.cmacs.Editor1.Events.EventTypes
+gdbus call --session --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor \
+    --method org.cmacs.Editor1.Events.Recent 20
+#+end_src
+
+** Via emacsctl
+
+#+begin_src shell
+cmacsctl events            # stream the firehose
+cmacsctl events recent 20  # last 20 events as JSON
+cmacsctl events types      # the category/name taxonomy
+#+end_src
+
+** From Python (Gio low-level)
+
+#+begin_src python
+from gi.repository import Gio, GLib
+
+def on_event(conn, sender, path, iface, signal, params):
+    category, name, detail, data, ts = params.unpack()
+    print(f"{category}/{name} {detail} {dict(data)}")
+
+bus = Gio.bus_get_sync(Gio.BusType.SESSION)
+bus.signal_subscribe(
+    "org.cmacs.Editor",                 # sender
+    "org.cmacs.Editor1.Events",         # interface
+    "Event",                            # the firehose
+    "/org/cmacs/Editor",         # path
+    None, Gio.DBusSignalFlags.NONE, on_event)
+GLib.MainLoop().run()
+#+end_src
+
+Want only saves?  Subscribe to the named signal instead, or add an
+=arg0= match on the firehose:
+
+#+begin_src python
+# Only file events, server-side filtered:
+bus.signal_subscribe(
+    "org.cmacs.Editor", "org.cmacs.Editor1.Events", "FileSaved",
+    "/org/cmacs/Editor", None, Gio.DBusSignalFlags.NONE, cb)
+#+end_src

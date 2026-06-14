@@ -158,6 +158,10 @@ void  cmacs_dbus_search_provider_unregister (GDBusConnection *, guint);
 guint cmacs_dbus_iface_watch_register   (GDBusConnection *, const gchar *, GError **);
 void  cmacs_dbus_iface_watch_unregister (GDBusConnection *, guint);
 
+/* Unified editor events surface (registered at the root path like the
+ * other ifaces).  See cmacs-dbus-iface-events.c. */
+CMACS_DBUS_IFACE_DECL (events)
+
 #ifdef HAVE_CMACS_GOWL
 /* Wayland compositor + display configuration ifaces (replaces the
  * Gowl* methods that previously sat on org.cmacs.Editor1). */

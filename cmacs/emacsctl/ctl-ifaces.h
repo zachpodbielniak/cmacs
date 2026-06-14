@@ -53,5 +53,6 @@
 #define CTL_IFACE_LRG        "org.cmacs.Editor1.Lrg"
 #define CTL_IFACE_INSTANCE   "org.cmacs.Editor1.Instance"
 #define CTL_IFACE_LOG        "org.cmacs.Editor1.Log"
+#define CTL_IFACE_EVENTS     "org.cmacs.Editor1.Events"
 
 #endif /* CTL_IFACES_H */

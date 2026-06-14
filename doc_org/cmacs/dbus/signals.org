@@ -90,6 +90,20 @@ If you need fine-grained type control, build the params manually with
 =g_variant_new= on the C side; the elisp DEFUN auto-marshals because
 the most common case is "broadcast a list of stringy fields".
 
+* Editor events (org.cmacs.Editor1.Events)
+
+The richest source of signals is the dedicated *events endpoint* at
+the root =/org/cmacs/Editor= — one place to subscribe for file, buffer,
+project, window, frame, editor-lifecycle, text, and subsystem activity.
+It ships a generic =Event(s s s a{sv} t)= firehose plus typed named
+signals (=FileOpened=, =BufferSwitched=, =ProjectSwitched=, ...), is on
+by default, and is documented in full in [[file:events.org][events.org]].
+
+Its buffer handlers also fire the standard
+=BufferManager.BufferAdded= / =BufferRemoved= signals at the root path,
+which earlier phases declared but never emitted — so subscribers (and
+=cmacsctl watch stream=) finally see buffer lifecycle.
+
 * Subscribing to signals
 
 ** From the shell

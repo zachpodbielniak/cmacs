@@ -56,6 +56,18 @@ GVariant types: nil → @code{""}, t → bool, fixnum → int64,
 float → double, string → string, symbol → string (name), list of
 strings → @code{as}, list of mixed → @code{av}.
 
+@subsection Editor events (org.cmacs.Editor1.Events)
+
+The richest source of signals is the dedicated events endpoint at
+the root @code{/org/cmacs/Editor} --- one place to subscribe for file,
+buffer, project, window, frame, editor-lifecycle, text, and subsystem
+activity.  It ships a generic @code{Event(s s s a@{sv@} t)} firehose
+plus typed named signals (@code{FileOpened}, @code{BufferSwitched},
+@code{ProjectSwitched}, ...), is on by default, and is documented in
+full in @ref{D-Bus Events}.  Its buffer handlers also fire the standard
+@code{BufferManager.BufferAdded} / @code{BufferRemoved} signals at the
+root path, which earlier phases declared but never emitted.
+
 @subsection Subscribing to signals
 
 @subsubheading From the shell

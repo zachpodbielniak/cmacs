@@ -85,6 +85,7 @@ static guint reg_application    = 0;
 static guint reg_actions        = 0;
 static guint reg_search_provider = 0;
 static guint reg_iface_watch    = 0;
+static guint reg_iface_events   = 0;
 #ifdef HAVE_CMACS_GOWL
 static guint reg_iface_compositor = 0;
 static guint reg_iface_monitor    = 0;
@@ -312,6 +313,12 @@ register_modules (GDBusConnection *conn, GError **error)
     conn, CMACS_DBUS_ROOT_PATH, error);
   if (reg_iface_watch == 0) return FALSE;
 
+  /* Unified events surface at the root path (like every other iface),
+     so emacsctl reaches its methods and subscribers see the firehose. */
+  reg_iface_events = cmacs_dbus_iface_events_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_events == 0) return FALSE;
+
 #ifdef HAVE_CMACS_GOWL
   reg_iface_compositor = cmacs_dbus_iface_compositor_register (
     conn, CMACS_DBUS_ROOT_PATH, error);
@@ -493,6 +500,9 @@ unregister_modules (GDBusConnection *conn)
     { cmacs_dbus_iface_compositor_unregister (conn, reg_iface_compositor);
       reg_iface_compositor = 0; }
 #endif
+  if (reg_iface_events)
+    { cmacs_dbus_iface_events_unregister (conn, reg_iface_events);
+      reg_iface_events = 0; }
   if (reg_iface_watch)
     { cmacs_dbus_iface_watch_unregister (conn, reg_iface_watch);
       reg_iface_watch = 0; }

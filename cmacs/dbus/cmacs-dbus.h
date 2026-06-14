@@ -44,6 +44,11 @@ G_BEGIN_DECLS
 /* Object path of the root cmacs editor object. */
 #define CMACS_DBUS_ROOT_PATH "/org/cmacs/Editor"
 
+/* Interface name of the events surface.  Registered at the root path
+ * like every other cmacs interface, so emacsctl (which calls methods at
+ * the root) and the firehose subscribers share one object. */
+#define CMACS_DBUS_EVENTS_IFACE "org.cmacs.Editor1.Events"
+
 /* Well-known bus name (dual-claimed at start, may not be acquired if
  * another cmacs instance already owns it). */
 #define CMACS_DBUS_WELL_KNOWN_NAME "org.cmacs.Editor"

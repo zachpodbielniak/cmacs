@@ -27,6 +27,8 @@ the two must stay in sync (=tools/sync-docs.sh=).
 |                                                   | =org.cmacs.Editor1= (incl. gowl)                      |
 | [[file:signals.org][signals.org]]                 | Signal-emit infrastructure, =PropertiesChanged=,     |
 |                                                   | =InterfacesAdded= / =Removed=, custom signals        |
+| [[file:events.org][events.org]]                   | The events endpoint: =org.cmacs.Editor1.Events=      |
+|                                                   | firehose + named signals, categories, emacsctl       |
 | [[file:elisp-api.org][elisp-api.org]]             | Every DEFUN cmacs's D-Bus subsystem provides         |
 | [[file:cli-examples.org][cli-examples.org]]       | =gdbus=, =busctl=, =dbus-send=, =qdbus=,             |
 |                                                   | Python (dasbus, pydbus), Node (dbus-next), Rust      |
@@ -61,3 +63,8 @@ the two must stay in sync (=tools/sync-docs.sh=).
 |     5 | Creative extensions: =Login1.Inhibit=, MPRIS-buffer-nav,         | planned     |
 |       | GlobalShortcuts portal, BufferWatch, podomation events,          |             |
 |       | GI-as-D-Bus bridge                                               |             |
+
+The unified events endpoint ([[file:events.org][events.org]],
+=org.cmacs.Editor1.Events=) has shipped: a generic =Event= firehose plus
+typed named signals for file / buffer / project / window / frame / editor
+activity, with opt-in text and subsystem feeds.

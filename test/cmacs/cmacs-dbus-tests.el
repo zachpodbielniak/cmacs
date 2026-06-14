@@ -242,6 +242,89 @@ service can dispatch the inbound call."
                   "echo dbus-eshell-ok")))
       (should (string-match-p "dbus-eshell-ok" out)))))
 
+;;; Events endpoint (org.cmacs.Editor1.Events)
+
+(ert-deftest cmacs-dbus-emit-event-returns-nil-when-stopped ()
+  "`cmacs-dbus-emit-event' is a no-op returning nil when stopped."
+  (skip-unless (fboundp 'cmacs-dbus-emit-event))
+  (cmacs-dbus-stop)
+  (should-not (cmacs-dbus-emit-event "file" "saved" "/tmp/x" '(:a 1))))
+
+(ert-deftest cmacs-dbus-emit-event-returns-t-when-running ()
+  "`cmacs-dbus-emit-event' returns t when the service is running."
+  (skip-unless (fboundp 'cmacs-dbus-emit-event))
+  (cmacs-dbus-tests--with-service
+    (should (eq t (cmacs-dbus-emit-event
+                   "file" "saved" "/tmp/x"
+                   '(:file "/tmp/x" :buffer "x"))))))
+
+(ert-deftest cmacs-dbus-events-introspect ()
+  "The Events interface, firehose, and named signals are introspectable."
+  (skip-unless (fboundp 'cmacs-dbus-start))
+  (skip-unless (executable-find "gdbus"))
+  (cmacs-dbus-tests--with-service
+    (let* ((dest (cmacs-dbus-per-pid-name))
+           (out  (cmacs-dbus-tests--gdbus
+                  "introspect" "--session" "--dest" dest
+                  "--object-path" "/org/cmacs/Editor")))
+      (dolist (s '("org.cmacs.Editor1.Events" "Event" "FileOpened"
+                   "BufferSwitched" "ProjectSwitched" "FrameOpened"
+                   "EventTypes" "Recent"))
+        (should (string-match-p (regexp-quote s) out))))))
+
+(ert-deftest cmacs-dbus-events-event-types-method ()
+  "Events.EventTypes returns the category/name taxonomy."
+  (skip-unless (fboundp 'cmacs-dbus-start))
+  (skip-unless (executable-find "gdbus"))
+  (cmacs-dbus-tests--with-service
+    (let* ((dest (cmacs-dbus-per-pid-name))
+           (out  (cmacs-dbus-tests--gdbus
+                  "call" "--session" "--dest" dest
+                  "--object-path" "/org/cmacs/Editor"
+                  "--method" "org.cmacs.Editor1.Events.EventTypes")))
+      (should (string-match-p "file/opened" out))
+      (should (string-match-p "buffer/switched" out)))))
+
+(ert-deftest cmacs-dbus-events-recent-method ()
+  "Events.Recent returns a JSON array reflecting recorded events."
+  (skip-unless (fboundp 'cmacs-dbus-start))
+  (skip-unless (executable-find "gdbus"))
+  (require 'cmacs-dbus-events)
+  (cmacs-dbus-tests--with-service
+    (cmacs-dbus-events--emit "file" "saved" "/tmp/marker-xyz"
+                             '(:file "/tmp/marker-xyz"))
+    (let* ((dest (cmacs-dbus-per-pid-name))
+           (out  (cmacs-dbus-tests--gdbus
+                  "call" "--session" "--dest" dest
+                  "--object-path" "/org/cmacs/Editor"
+                  "--method" "org.cmacs.Editor1.Events.Recent" "5")))
+      (should (string-match-p "\\[" out))
+      (should (string-match-p "marker-xyz" out)))))
+
+(ert-deftest cmacs-dbus-events-ring-records ()
+  "Emitting records into the ring; Recent JSON reflects it (in-process)."
+  (skip-unless (fboundp 'cmacs-dbus-start))
+  (require 'cmacs-dbus-events)
+  (cmacs-dbus-tests--with-service
+    (let ((cmacs-dbus-events--ring nil))
+      (cmacs-dbus-events--emit "file" "opened" "/tmp/abc" '(:file "/tmp/abc"))
+      (let ((json (cmacs-dbus-events--recent-json 10)))
+        (should (string-match-p "opened" json))
+        (should (string-match-p "abc" json))))))
+
+(ert-deftest cmacs-dbus-events-mode-toggles ()
+  "`cmacs-dbus-events-mode' installs and removes its hooks cleanly."
+  (skip-unless (fboundp 'cmacs-dbus-start))
+  (require 'cmacs-dbus-events)
+  (unwind-protect
+      (progn
+        (cmacs-dbus-events-mode 1)
+        (should cmacs-dbus-events-mode)
+        (should (member #'cmacs-dbus-events--on-find-file find-file-hook)))
+    (cmacs-dbus-events-mode -1))
+  (should-not cmacs-dbus-events-mode)
+  (should-not (member #'cmacs-dbus-events--on-find-file find-file-hook)))
+
 (provide 'cmacs-dbus-tests)
 
 ;;; cmacs-dbus-tests.el ends here

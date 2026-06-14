@@ -139,16 +139,43 @@ plist for CHANGED and put the name(s) in INVALIDATED:
  (list "Content"))
 #+end_src
 
+** =(cmacs-dbus-emit-event CATEGORY NAME &optional DETAIL DATA)= → t or nil
+
+Emit the events-endpoint firehose signal
+=org.cmacs.Editor1.Events.Event= at =/org/cmacs/Editor=.
+=CATEGORY= and =NAME= are strings; =DETAIL= is the subject string;
+=DATA= is a plist marshalled into the =a{sv}= payload.  A microsecond
+timestamp is stamped server-side.  This is the only emitter that
+produces an =a{sv}= (the generic =cmacs-dbus-emit-signal= marshals a
+plist as =av=).  See [[file:events.org][events.org]].
+
+#+begin_src emacs-lisp
+(cmacs-dbus-emit-event "file" "saved" (buffer-file-name)
+                       (list :buffer (buffer-name)))
+#+end_src
+
+* Events endpoint
+
+** =(cmacs-dbus-events-mode &optional ARG)=
+
+Global minor mode that broadcasts editor events over D-Bus.  *On by
+default* (auto-enabled from =emacs-startup-hook=); a no-op while the
+service is stopped.  Full reference: [[file:events.org][events.org]].
+
 * Customization variables
 
-| Variable                    | Default | Description                                          |
-|-----------------------------+---------+------------------------------------------------------|
-| (none, Phase 1)             |         | Phase 4 will add e.g. =cmacs-dbus-allow-app-actions= |
+| Variable                          | Default                                      | Description                              |
+|-----------------------------------+----------------------------------------------+------------------------------------------|
+| =cmacs-dbus-events-categories=    | =(file buffer project window frame editor)= | Enabled event families; =text=, =gsurf=, |
+|                                   |                                              | =ai=, =cintrospect= are opt-in           |
+| =cmacs-dbus-events-ring-size=     | =256=                                        | Events kept for the =Recent= method      |
+| =cmacs-dbus-events-buffer-filter= | (function)                                   | Predicate; skip internal buffers         |
+| =cmacs-dbus-events-debug=         | =nil=                                        | Log emit failures instead of swallowing  |
 
-Phase 1 has no defcustoms; the surface is on / off via
-=cmacs-dbus-start= / =cmacs-dbus-stop=.  Phases 4 and 5 introduce
-defcustoms for opt-in features (notifications mirroring,
-inhibit-on-modified, MPRIS mode, ...).
+Setting =cmacs-dbus-events-categories= while the mode is on re-installs
+the hooks immediately.  Phases 4 and 5 introduce further defcustoms for
+opt-in features (notifications mirroring, inhibit-on-modified, MPRIS
+mode, ...).
 
 * Patterns
 

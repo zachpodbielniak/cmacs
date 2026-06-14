@@ -132,6 +132,10 @@ Goal: things no other editor does.
   one Request handle per watch with =Changed= signals
 - =org.cmacs.Editor1.Podomation.Events= — every Pod event becomes
   a D-Bus signal so podomation is observable from outside cmacs
+- *Shipped:* =org.cmacs.Editor1.Events= — a unified events endpoint
+  generalizing this idea: a generic =Event= firehose plus typed named
+  signals for file / buffer / project / window / frame / editor activity
+  (opt-in text and subsystem feeds).  See [[file:events.org][events.org]].
 - =/org/cmacs/Editor/GI/<Namespace>= — exposes loaded GI namespaces
   as typed D-Bus methods.  Lazy: a namespace appears when
   =(gi-require "GLib")= runs.  Turns cmacs into a GI-RPC bridge

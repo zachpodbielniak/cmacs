@@ -527,6 +527,108 @@ cmd_watch_stream (CtlCommand *self, CtlInvocation *inv, GError **error)
   return CTL_EXIT_OK;
 }
 
+/* ── events [watch] / events recent [N] / events types ─────────────── */
+
+static gint
+cmd_events (CtlCommand *self, CtlInvocation *inv, GError **error)
+{
+  CtlTransport *transport;
+  CtlWatcher *watcher;
+
+  (void) self;
+
+  transport = ctl_invocation_get_transport (inv, error);
+  if (transport == NULL)
+    return CTL_EXIT_NO_INSTANCE;
+
+  /* The firehose carries every event; one subscription is enough. */
+  watcher = ctl_watcher_new (transport);
+  ctl_watcher_add_signal (watcher, CTL_IFACE_EVENTS, "Event");
+  g_signal_connect (watcher, "event",
+                    G_CALLBACK (logs_print_event), inv);
+  ctl_watcher_run (watcher);
+  g_object_unref (watcher);
+  return CTL_EXIT_OK;
+}
+
+static gint
+cmd_events_recent (CtlCommand *self, CtlInvocation *inv, GError **error)
+{
+  CtlTransport *transport;
+  GVariant *reply;
+  const gchar *arg;
+  gint count = 50;
+
+  (void) self;
+
+  arg = ctl_invocation_get_arg (inv, 0);
+  if (arg != NULL)
+    count = (gint) g_ascii_strtoll (arg, NULL, 10);
+  if (count <= 0)
+    count = 50;
+
+  transport = ctl_invocation_get_transport (inv, error);
+  if (transport == NULL)
+    return CTL_EXIT_NO_INSTANCE;
+
+  reply = ctl_transport_call (transport, CTL_IFACE_EVENTS, "Recent",
+                              g_variant_new ("(i)", count),
+                              ctl_invocation_get_timeout_ms (inv), error);
+  if (reply == NULL)
+    return ctl_exit_code_for_error (error != NULL ? *error : NULL);
+  {
+    const gchar *json;
+    CtlResult *result;
+    gboolean ok;
+    g_variant_get (reply, "(&s)", &json);
+    result = ctl_result_new_scalar (json);
+    ok = ctl_invocation_emit (inv, result, error);
+    ctl_result_unref (result);
+    g_variant_unref (reply);
+    return ok ? CTL_EXIT_OK : CTL_EXIT_ERROR;
+  }
+}
+
+static gint
+cmd_events_types (CtlCommand *self, CtlInvocation *inv, GError **error)
+{
+  CtlTransport *transport;
+  GVariant *reply;
+
+  (void) self;
+
+  transport = ctl_invocation_get_transport (inv, error);
+  if (transport == NULL)
+    return CTL_EXIT_NO_INSTANCE;
+
+  reply = ctl_transport_call (transport, CTL_IFACE_EVENTS, "EventTypes",
+                              NULL, ctl_invocation_get_timeout_ms (inv),
+                              error);
+  if (reply == NULL)
+    return ctl_exit_code_for_error (error != NULL ? *error : NULL);
+  {
+    GString *out = g_string_new (NULL);
+    GVariantIter *iter;
+    const gchar *s;
+    CtlResult *result;
+    gboolean ok;
+
+    g_variant_get (reply, "(as)", &iter);
+    while (g_variant_iter_loop (iter, "s", &s))
+      g_string_append_printf (out, "%s\n", s);
+    g_variant_iter_free (iter);
+    g_variant_unref (reply);
+
+    if (out->len > 0 && out->str[out->len - 1] == '\n')
+      g_string_truncate (out, out->len - 1);
+    result = ctl_result_new_scalar (out->str);
+    g_string_free (out, TRUE);
+    ok = ctl_invocation_emit (inv, result, error);
+    ctl_result_unref (result);
+    return ok ? CTL_EXIT_OK : CTL_EXIT_ERROR;
+  }
+}
+
 /* ── repl ──────────────────────────────────────────────────────────── */
 
 static gchar *repl_opt_lang = NULL;
@@ -711,6 +813,18 @@ ctl_cmd_core_register (CtlCommandRegistry *registry)
   ctl_command_registry_add (registry, ctl_simple_command_new (
     "watch stream", "Stream buffer/frame change events", "",
     cmd_watch_stream));
+  ctl_command_registry_add (registry, ctl_simple_command_new (
+    "events", "Stream live editor events (the firehose)", "",
+    cmd_events));
+  ctl_command_registry_add (registry, ctl_simple_command_new (
+    "events watch", "Stream live editor events (the firehose)", "",
+    cmd_events));
+  ctl_command_registry_add (registry, ctl_simple_command_new (
+    "events recent", "Print the last N recorded events as JSON", "[N]",
+    cmd_events_recent));
+  ctl_command_registry_add (registry, ctl_simple_command_new (
+    "events types", "List the event taxonomy (category/name)", "",
+    cmd_events_types));
 
   ctl_command_registry_add (registry, ctl_simple_command_new (
     "config init", "Write a commented starter config", "[PATH]",

@@ -64,6 +64,13 @@ tail @file{*Messages*}; @option{-f} follows live via the
 @code{MessageLogged} signal
 @item watch stream
 stream BufferAdded/Removed + FrameAdded/Removed events
+@item events [watch]
+stream the live editor-events firehose
+(@code{org.cmacs.Editor1.Events}); see @ref{D-Bus Events}
+@item events recent [N]
+last N recorded events as JSON
+@item events types
+list the event taxonomy (@code{category/name})
 @item config @dots{}
 contexts (@pxref{emacsctl Contexts})
 @item completion bash|zsh

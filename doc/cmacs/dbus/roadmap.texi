@@ -110,6 +110,12 @@ navigate buffers
 @code{org.cmacs.Editor1.Podomation.Events}: every Pod event becomes
 a D-Bus signal
 @item
+@strong{Shipped:} @code{org.cmacs.Editor1.Events} --- a unified events
+endpoint generalizing this idea: a generic @code{Event} firehose plus
+typed named signals for file / buffer / project / window / frame /
+editor activity (opt-in text and subsystem feeds).  See
+@ref{D-Bus Events}.
+@item
 @code{/org/cmacs/Editor/GI/<Namespace>}: exposes loaded GI
 namespaces as typed D-Bus methods.  Turns cmacs into a GI-RPC
 bridge reachable from any language.
