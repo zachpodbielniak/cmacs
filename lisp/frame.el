@@ -2164,6 +2164,10 @@ live frame and defaults to the selected one."
 (declare-function haiku-frame-geometry "haikufns.c" (&optional frame))
 (declare-function android-frame-geometry "androidfns.c" (&optional frame))
 (declare-function tty-frame-geometry "term.c" (&optional frame))
+;; CMACS: output_lrg geometry (lisp, in term/lrg-win.el) -- the pgtk path
+;; reads GTK widgets lrg has none of and the tty path aborts on non-tty frames.
+(declare-function cmacs-lrg-frame-geometry "term/lrg-win" (&optional frame))
+(declare-function cmacs-lrg-frame-edges "term/lrg-win" (&optional frame type))
 
 (defun frame-geometry (&optional frame)
   "Return geometric attributes of FRAME.
@@ -2219,6 +2223,8 @@ and width values are in pixels.
       (haiku-frame-geometry frame))
      ((eq frame-type 'android)
       (android-frame-geometry frame))
+     ((eq frame-type 'lrg)               ; CMACS: output_lrg
+      (cmacs-lrg-frame-geometry frame))
      (t
       (tty-frame-geometry frame)))))
 
@@ -2359,6 +2365,8 @@ FRAME."
       (haiku-frame-edges frame type))
      ((eq frame-type 'android)
       (android-frame-edges frame type))
+     ((eq frame-type 'lrg)               ; CMACS: output_lrg
+      (cmacs-lrg-frame-edges frame type))
      (t
       (tty-frame-edges frame type)))))
 
@@ -2542,6 +2550,8 @@ Return nil if DISPLAY contains no Emacs frame."
       (haiku-frame-list-z-order display))
      ((eq frame-type 'android)
       (android-frame-list-z-order display))
+     ((eq frame-type 'lrg)               ; CMACS: output_lrg -- no z-order (one
+      nil)                               ; OS window + in-frame child overlays)
      (t
       (tty-frame-list-z-order display)))))
 
@@ -2589,6 +2599,8 @@ Some window managers may refuse to restack windows."
           (pgtk-frame-restack frame1 frame2 above))
          ((eq frame-type 'android)
           (android-frame-restack frame1 frame2 above))
+         ((eq frame-type 'lrg)           ; CMACS: output_lrg -- no OS-window
+          nil)                           ; restacking (single window)
          (t
           (tty-frame-restack frame1 frame2 above))))
     (error "Cannot restack frames")))

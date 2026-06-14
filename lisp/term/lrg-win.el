@@ -127,6 +127,70 @@ DISPLAY is the name of the display Emacs should connect to."
   (and (eq selection 'CLIPBOARD)
        (let ((s (lrg-get-clipboard))) (and s (> (length s) 0) t))))
 
+;;; Frame geometry --------------------------------------------------
+;;
+;; `frame-geometry'/`frame-edges' (frame.el) dispatch per backend.  The
+;; pgtk implementations read GTK widgets an lrg frame doesn't have, and the
+;; tty fallback aborts on a non-tty frame (FRAME_TTY -> emacs_abort) -- which
+;; crashed cmacs when e.g. corfu asked an lrg child frame for its edges.  lrg
+;; frames carry real pixel geometry, so derive edges/geometry from the generic
+;; frame fields here and let frame.el route 'lrg through these.
+
+(defun cmacs-lrg--frame-left-top (frame)
+  "Return (LEFT . TOP), FRAME's pixel position, for geometry computations.
+Handles the integer and (+ N)/(- N) forms of the `left'/`top' frame
+parameters; a top-level lrg frame reports (0 . 0) (its OS-window position is
+not tracked, matching the tty geometry convention)."
+  (let ((left (frame-parameter frame 'left))
+        (top  (frame-parameter frame 'top)))
+    (cons
+     (cond ((integerp left) left)
+           ((and (consp left) (integerp (cadr left)))
+            (if (eq (car left) '-) (- (cadr left)) (cadr left)))
+           (t 0))
+     (cond ((integerp top) top)
+           ((and (consp top) (integerp (cadr top)))
+            (if (eq (car top) '-) (- (cadr top)) (cadr top)))
+           (t 0)))))
+
+(defun cmacs-lrg-frame-edges (&optional frame type)
+  "Return the edges of lrg FRAME as (LEFT TOP RIGHT BOTTOM).
+TYPE is `outer-edges', `native-edges' (the default) or `inner-edges', as for
+`frame-edges'.  Outer and native edges coincide (lrg draws no window-manager
+border); inner edges inset by the internal border width."
+  (let* ((frame (window-normalize-frame frame))
+         (lt   (cmacs-lrg--frame-left-top frame))
+         (left (car lt)) (top (cdr lt))
+         (w    (frame-pixel-width frame))
+         (h    (frame-pixel-height frame))
+         (ibw  (or (frame-parameter frame 'internal-border-width) 0)))
+    (if (eq type 'inner-edges)
+        (list (+ left ibw) (+ top ibw) (- (+ left w) ibw) (- (+ top h) ibw))
+      (list left top (+ left w) (+ top h)))))
+
+(defun cmacs-lrg-frame-geometry (&optional frame)
+  "Return geometric attributes of lrg FRAME (see `frame-geometry').
+Computed from the frame's generic pixel geometry; lrg has no external
+border, title bar, menu bar or tool bar."
+  (let* ((frame (window-normalize-frame frame))
+         (lt   (cmacs-lrg--frame-left-top frame))
+         (left (car lt)) (top (cdr lt))
+         (w    (frame-pixel-width frame))
+         (h    (frame-pixel-height frame))
+         (ibw  (or (frame-parameter frame 'internal-border-width) 0)))
+    (list (cons 'outer-position (cons left top))
+          (cons 'outer-size (cons w h))
+          (cons 'outer-border-width 0)
+          (cons 'external-border-size (cons 0 0))
+          (cons 'title-bar-size (cons 0 0))
+          (cons 'menu-bar-external nil)
+          (cons 'menu-bar-size (cons 0 0))
+          (cons 'tab-bar-size (cons 0 0))
+          (cons 'tool-bar-external nil)
+          (cons 'tool-bar-position 'top)
+          (cons 'tool-bar-size (cons 0 0))
+          (cons 'internal-border-width ibw))))
+
 (provide 'lrg-win)
 (provide 'term/lrg-win)
 

@@ -370,7 +370,12 @@ realise with colour (the single biggest behavioural touch-point):
   =display-color-cells=, =display-visual-class=, and the =display-pixel-width=
   / =display-pixel-height= lrg branches (which call the new
   =lrg-display-pixel-size= primitive; =display-monitor-attributes-list= then
-  works via its generic fallback).
+  works via its generic fallback).  Also =lrg= branches in =frame-geometry=,
+  =frame-edges=, =frame-list-z-order= and =frame-restack= (geometry/edges call
+  the =cmacs-lrg-frame-geometry=/=-edges= helpers in =term/lrg-win.el=;
+  z-order/restack are nil) --- the pgtk paths read GTK widgets lrg lacks and
+  the tty fallback's =FRAME_TTY= guard aborts on a non-tty frame, which crashed
+  cmacs when corfu asked an lrg child frame for its edges.
 - =lisp/faces.el= --- =lrg= added to the =(type graphic)= match in
   =face-spec-set-match-display=, and to =display-color-p= /
   =display-grayscale-p=.
