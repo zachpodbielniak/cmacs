@@ -1009,8 +1009,10 @@ lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
                                  mods & ~(ctrl_modifier | meta_modifier));
   }
 
-  /* Mouse motion -> update the mouse-face highlight (hover on buttons,
-     links, ...).  Only when the pointer actually moved.  */
+  /* Mouse motion.  First offer it to a libregnum view (camera orbit/pan
+     while a drag is active); only when not consumed do we update the
+     mouse-face highlight (hover on buttons, links, ...).  Mirrors pgtk's
+     motion_notify_event short-circuit.  Only when the pointer moved.  */
   {
     static int last_mx = -1, last_my = -1;
     int mx = grl_input_get_mouse_x ();
@@ -1019,9 +1021,14 @@ lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
       {
         last_mx = mx;
         last_my = my;
-        block_input ();
-        note_mouse_highlight (f, mx, my);
-        unblock_input ();
+#ifdef HAVE_CMACS_LIBREGNUM
+        if (!cmacs_libregnum_handle_motion (f, mx, my))
+#endif
+          {
+            block_input ();
+            note_mouse_highlight (f, mx, my);
+            unblock_input ();
+          }
       }
   }
 
@@ -1029,6 +1036,11 @@ lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
      click/drag).  raylib button order L,R,M -> Emacs 0,1,2.  */
   {
     static const int rl_to_emacs_button[3] = { 0, 2, 1 };
+#ifdef HAVE_CMACS_LIBREGNUM
+    /* raylib L,R,M -> X11/GDK 1,3,2, which cmacs_libregnum_handle_button
+       expects (it maps those internally).  */
+    static const int rl_to_x11_button[3] = { 1, 3, 2 };
+#endif
     int b;
     int mx = grl_input_get_mouse_x ();
     int my = grl_input_get_mouse_y ();
@@ -1036,15 +1048,63 @@ lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
       {
         bool pressed = grl_input_is_mouse_button_pressed ((GrlMouseButton) b);
         bool released = grl_input_is_mouse_button_released ((GrlMouseButton) b);
-        if (pressed || released)
+        if (!pressed && !released)
+          continue;
+#ifdef HAVE_CMACS_LIBREGNUM
+        /* Offer the transition to a libregnum view first (pick/orbit/pan/
+           right-click menu).  When it consumes the event (pointer over a
+           view), suppress the corresponding Emacs click so the 3D view isn't
+           also treated as a text click.  Press and release are distinct. */
+        {
+          int x11b = rl_to_x11_button[b];
+          if (pressed && cmacs_libregnum_handle_button (f, x11b, 1, mx, my))
+            pressed = false;
+          if (released && cmacs_libregnum_handle_button (f, x11b, 0, mx, my))
+            released = false;
+          if (!pressed && !released)
+            continue;
+        }
+#endif
+        {
+          struct input_event ie;
+          EVENT_INIT (ie);
+          ie.kind = MOUSE_CLICK_EVENT;
+          ie.code = rl_to_emacs_button[b];
+          ie.modifiers = mods | (pressed ? down_modifier : up_modifier);
+          XSETINT (ie.x, mx);
+          XSETINT (ie.y, my);
+          ie.timestamp = 0;
+          count += lrg_store (f, hold_quit, &ie);
+        }
+      }
+  }
+
+  /* Mouse wheel -> libregnum camera zoom when the pointer is over a view;
+     otherwise a normal Emacs WHEEL_EVENT so buffers scroll under --lrg
+     (the wheel was previously unhandled here entirely).  */
+  {
+    float wheel = grl_input_get_mouse_wheel_move ();
+    if (wheel != 0.0f && grl_window_is_focused (win))
+      {
+        int mx = grl_input_get_mouse_x ();
+        int my = grl_input_get_mouse_y ();
+        bool consumed = false;
+#ifdef HAVE_CMACS_LIBREGNUM
+        /* pgtk passes GDK smooth-scroll dy (wheel-up is negative); raylib's
+           wheel-up is positive, so negate to match the zoom direction. */
+        consumed = cmacs_libregnum_handle_scroll (f, 0.0, -(double) wheel,
+                                                  mx, my);
+#endif
+        if (!consumed)
           {
             struct input_event ie;
             EVENT_INIT (ie);
-            ie.kind = MOUSE_CLICK_EVENT;
-            ie.code = rl_to_emacs_button[b];
-            ie.modifiers = mods | (pressed ? down_modifier : up_modifier);
+            ie.kind = WHEEL_EVENT;
+            ie.modifiers = mods | (wheel > 0 ? up_modifier : down_modifier);
             XSETINT (ie.x, mx);
             XSETINT (ie.y, my);
+            XSETFRAME (ie.frame_or_window, f);
+            ie.arg = Qnil;
             ie.timestamp = 0;
             count += lrg_store (f, hold_quit, &ie);
           }

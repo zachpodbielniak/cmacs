@@ -1278,5 +1278,45 @@ Batch-safe: stubs out the C DEFUNs with Lisp flets."
                         (mapcar (lambda (l) (functionp (cdr l)))
                                 leaves))))))
 
+;;; ── Popup menu backend dispatch (native vs --lrg tmm fallback) ──────
+
+(ert-deftest cmacs-libregnum-tests-lrg-frame-p ()
+  "`cmacs-libregnum--lrg-frame-p' is nil off an lrg frame, t on one."
+  (should-not (cmacs-libregnum--lrg-frame-p))
+  ;; Simulate an lrg frame: framep returns the backend symbol.
+  (cl-letf (((symbol-function 'framep) (lambda (&rest _) 'lrg)))
+    (should (cmacs-libregnum--lrg-frame-p))))
+
+(ert-deftest cmacs-libregnum-tests-popup-menu-lrg-uses-tmm ()
+  "Under --lrg, `cmacs-libregnum-popup-menu' routes to a keyboard tmm menu.
+It must call `tmm-prompt' with NO-EXECUTE so the chosen VALUE is returned (as
+`x-popup-menu' would), not executed -- otherwise the context-menu callers,
+which funcall the returned closure, would double-run or break."
+  (require 'tmm)
+  (let* ((called nil)
+         (menu '("Title" ("" ("Item A" . a) ("Item B" . b)))))
+    (cl-letf (((symbol-function 'framep) (lambda (&rest _) 'lrg))
+              ((symbol-function 'tmm-prompt)
+               (lambda (m &optional _in-popup _default no-execute &rest _)
+                 (setq called (list m no-execute))
+                 'chosen-value)))
+      (should (eq (cmacs-libregnum-popup-menu t menu) 'chosen-value))
+      ;; same menu handed to tmm, and NO-EXECUTE was requested
+      (should (equal (nth 0 called) menu))
+      (should (nth 1 called)))))
+
+(ert-deftest cmacs-libregnum-tests-popup-menu-native-off-lrg ()
+  "Off an lrg frame, `cmacs-libregnum-popup-menu' uses the native popup."
+  (let ((menu '("Title" ("" ("Item A" . a)))))
+    (cl-letf (((symbol-function 'framep) (lambda (&rest _) 'pgtk))
+              ((symbol-function 'x-popup-menu)
+               (lambda (_pos _menu) 'native-value)))
+      (should (eq (cmacs-libregnum-popup-menu t menu) 'native-value)))))
+
+(ert-deftest cmacs-libregnum-tests-evil-normal-state-no-evil ()
+  "`cmacs-libregnum-evil-normal-state' is a harmless no-op without Evil."
+  (skip-unless (not (fboundp 'evil-normal-state)))
+  (should-not (cmacs-libregnum-evil-normal-state)))
+
 (provide 'cmacs-libregnum-tests)
 ;;; cmacs-libregnum-tests.el ends here

@@ -431,13 +431,30 @@ state (camera, layout options, selection).
 ;; These buffers are non-editable 3D viewports, so start them in Evil
 ;; *emacs state* and let the major-mode keymap own every key.  No-op
 ;; without Evil.
+(defun cmacs-libregnum-evil-normal-state ()
+  "Drop a libregnum viewport out of Evil emacs-state into normal state.
+These 3-D viewport buffers sit in Evil *emacs state* so their single-key
+camera/navigation bindings work directly (see comment above).  That means a
+bare <escape> would not return to normal state the way an Evil user expects,
+so this command -- bound to <escape> -- does it explicitly.  Re-enter
+navigation (emacs state) with \\[evil-emacs-state] (C-z).  A no-op without Evil."
+  (interactive)
+  (when (fboundp 'evil-normal-state)
+    (evil-normal-state)))
+
 (with-eval-after-load 'evil
   (when (fboundp 'evil-set-initial-state)
     (evil-set-initial-state 'cmacs-libregnum-mode 'emacs))
   ;; Keep Evil window management (C-w ...) usable even though scene buffers
   ;; sit in emacs state for their single-key navigation.
   (when (and (boundp 'evil-window-map) (keymapp evil-window-map))
-    (define-key cmacs-libregnum-mode-map (kbd "C-w") evil-window-map)))
+    (define-key cmacs-libregnum-mode-map (kbd "C-w") evil-window-map))
+  ;; <escape> (the GUI escape key, distinct from the ESC meta-prefix) leaves
+  ;; emacs state for normal state -- what an Evil user reaches for.  Inherited
+  ;; by `cmacs-libregnum-editor-mode' (and the CAD viewport) via the parent
+  ;; keymap.  Bound only under Evil so non-Evil setups are unaffected.
+  (define-key cmacs-libregnum-mode-map (kbd "<escape>")
+              #'cmacs-libregnum-evil-normal-state))
 
 ;;;; Entry points ----------------------------------------------------
 
@@ -2189,8 +2206,8 @@ under the original's parent is a future improvement.)"
            sections))
          (frame  (or (window-frame (get-buffer-window buffer t))
                      (selected-frame)))
-         (choice (x-popup-menu (list (list 0 0) frame)
-                               (cons "Add child" panes))))
+         (choice (cmacs-libregnum-popup-menu (list (list 0 0) frame)
+                                             (cons "Add child" panes))))
     (setq flat (nreverse flat))
     (when (integerp choice)
       (let* ((entry (nth choice flat))
@@ -2788,6 +2805,24 @@ their original order, so indices stay stable for dispatch."
            (or (eq k t) (memq ksym k)))))
    cmacs-libregnum-editor-context-menu-items))
 
+(defun cmacs-libregnum--lrg-frame-p (&optional frame)
+  "Non-nil when FRAME (or the selected frame) uses the --lrg display backend.
+The libregnum/raylib backend (`output_lrg') has no native popup menus, so the
+context-menu code falls back to a keyboard `tmm' menu there."
+  (eq (framep (or frame (selected-frame))) 'lrg))
+
+(defun cmacs-libregnum-popup-menu (position menu)
+  "Show MENU like `x-popup-menu' at POSITION and return the chosen value.
+On graphical frames this pops a native menu; under the --lrg backend (no
+native popup menus) it falls back to a keyboard `tmm' menu.  MENU must be an
+alist-style menu (\"(TITLE (PANE (LABEL . VALUE)...)...)\"); for such menus the
+`tmm' fallback (called with no-execute) returns the same VALUE `x-popup-menu'
+would, so callers keep their existing result handling unchanged.  Keymap menus
+need event-path resolution and are handled at their call sites instead."
+  (if (cmacs-libregnum--lrg-frame-p)
+      (progn (require 'tmm) (tmm-prompt menu nil nil t))
+    (x-popup-menu position menu)))
+
 (defun cmacs-libregnum-editor--menu-keymap (items buffer id &optional title)
   "Build a keymap menu from ITEMS for `x-popup-menu'.
 Each command item binds a unique key to an interactive closure that calls its
@@ -2886,18 +2921,28 @@ wait."
                          buffer id (or node-name "")))
                (keymap (cmacs-libregnum-editor--menu-keymap
                          items buffer id title))
-               (choice (x-popup-menu (list (list fx fy) frame) keymap)))
-          ;; A keymap menu returns the event path of the chosen leaf; resolve it
-          ;; to its (curried) action closure and run it WITH THE EDITOR BUFFER
-          ;; CURRENT.  This timer fires in whatever buffer was selected at the
-          ;; pop (often a sibling panel, e.g. the CAD model viewer's sidebar),
-          ;; so an action that reads `current-buffer' -- like the interactive
-          ;; `cmacs-libregnum-editor-delete-current' bound to "Delete"/"x" --
-          ;; would otherwise signal "Not in a cmacs-libregnum editor buffer".
-          (when (and choice (listp choice))
-            (let ((binding (lookup-key keymap (apply #'vector choice))))
-              (when (functionp binding)
-                (with-current-buffer buffer (funcall binding))))))))))
+               ;; Resolve the chosen leaf to its (curried) action closure, then
+               ;; run it WITH THE EDITOR BUFFER CURRENT.  This timer fires in
+               ;; whatever buffer was selected at the pop (often a sibling
+               ;; panel, e.g. the CAD model viewer's sidebar), so an action that
+               ;; reads `current-buffer' -- like the interactive
+               ;; `cmacs-libregnum-editor-delete-current' bound to "Delete"/"x"
+               ;; -- would otherwise signal "Not in a cmacs-libregnum editor
+               ;; buffer".  Native popups return the chosen leaf's event path
+               ;; (resolve via `lookup-key'); the --lrg tmm fallback (no-execute)
+               ;; returns the leaf binding directly.
+               (binding
+                (if (cmacs-libregnum--lrg-frame-p frame)
+                    (let ((c (progn (require 'tmm)
+                                    (tmm-prompt keymap nil nil t))))
+                      (and (functionp c) c))
+                  (let ((choice (x-popup-menu (list (list fx fy) frame)
+                                              keymap)))
+                    (and choice (listp choice)
+                         (let ((b (lookup-key keymap (apply #'vector choice))))
+                           (and (functionp b) b)))))))
+          (when binding
+            (with-current-buffer buffer (funcall binding))))))))
 
 (defun cmacs-libregnum-editor--popup-add-menu (buffer fx fy ground frame)
   "Pop the empty-space \"Add\" menu at frame pixel (FX FY); place at GROUND.
@@ -2919,8 +2964,8 @@ the origin when GROUND is unavailable)."
                         (prog1 (cons label i) (setq i (1+ i)))))
                     (cdr section))))
            sections))
-         (choice (x-popup-menu (list (list fx fy) frame)
-                               (cons "Add" panes))))
+         (choice (cmacs-libregnum-popup-menu (list (list fx fy) frame)
+                                             (cons "Add" panes))))
     (setq flat (nreverse flat))
     (when (integerp choice)
       (let* ((entry (nth choice flat))

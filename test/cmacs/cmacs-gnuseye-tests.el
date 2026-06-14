@@ -976,6 +976,24 @@ session that never loaded that file dropped every click as
   (should (fboundp 'cmacs-libregnum-editor--drop))
   (should (fboundp 'cmacs-libregnum-editor--context-menu)))
 
+(ert-deftest cmacs-gnuseye--escape-deselects-when-selected ()
+  "`cmacs-gnuseye-escape' stage 1: with a selection it deselects.
+The second stage (drop the globe out of Evil emacs state into normal state)
+only runs with nothing selected, so a selected entity is cleared first."
+  (cmacs-gnuseye-tests--skip)
+  (let ((cmacs-gnuseye-buffer nil)        ; no attached view -> deselect is cheap
+        (cmacs-gnuseye--selected-id "sat:25544"))
+    (cmacs-gnuseye-escape)
+    (should (null cmacs-gnuseye--selected-id))))
+
+(ert-deftest cmacs-gnuseye--escape-harmless-without-evil ()
+  "With no selection and no Evil, `cmacs-gnuseye-escape' is a harmless no-op."
+  (cmacs-gnuseye-tests--skip)
+  (skip-unless (not (fboundp 'evil-normal-state)))
+  (let ((cmacs-gnuseye-buffer nil)
+        (cmacs-gnuseye--selected-id nil))
+    (should-not (cmacs-gnuseye-escape))))
+
 (provide 'cmacs-gnuseye-tests)
 
 ;;; cmacs-gnuseye-tests.el ends here

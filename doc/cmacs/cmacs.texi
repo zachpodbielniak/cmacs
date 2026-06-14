@@ -7659,7 +7659,27 @@ current on the main thread), and the lrg present
 window rect via @code{lrg_frame_surface_draw_texture_region} --- the analogue
 of pgtk's cairo overlay.  So @kbd{M-x gnuseye}, @kbd{M-x
 cmacs-libregnum-editor} and opening an STL all render inside the lrg frame.
-In-scene labels and mouse picking into these views are a follow-up.
+
+Mouse navigation works too: @code{lrg_read_socket} routes pointer motion,
+button presses/releases and the wheel into the same input router pgtk uses
+(@code{cmacs_libregnum_handle_motion}/@code{_button}/@code{_scroll}), so
+left/right-drag orbits, middle-drag pans, the wheel zooms the viewport under
+the pointer, a click picks a node, and right-click pops the context menu.  lrg
+maps raylib L/R/M buttons (0/1/2) to the X11/GDK numbers the router expects
+(1/3/2) and negates the raylib wheel sign to match pgtk's zoom direction; a
+wheel event not over a view becomes a normal Emacs @code{WHEEL_EVENT} so
+buffers scroll with the wheel under @option{--lrg} as well.  In-scene text
+labels are still a follow-up.
+
+Because lrg has no native popup menus (@code{menu_show_hook} returns nil), the
+libregnum/gnuseye right-click context menus fall back to a keyboard @code{tmm}
+menu: @code{cmacs-libregnum-popup-menu} pops a native menu on graphical frames
+and calls @code{tmm-prompt} (with NO-EXECUTE, returning the same value
+@code{x-popup-menu} would) on an lrg frame.  Those 3D buffers sit in Evil
+@emph{emacs state} for their single-key navigation, so @kbd{<escape>} is bound
+to drop them to Evil @emph{normal} state (gnuseye's @kbd{<escape>} first
+deselects a selected entity); re-enter navigation with @kbd{C-z}
+(@code{evil-emacs-state}).
 
 @section Render modes
 
@@ -7692,7 +7712,9 @@ an image, so an agent can see what the backend renders).
 
 One OS window per terminal (a second top-level GUI frame is refused); GUI
 popup menus are not drawn (use @code{M-x tmm-menubar} / @key{F10}; dialogs go
-to the minibuffer); scroll bars, the tool bar and tooltips/child-frames are
+to the minibuffer; the libregnum/gnuseye right-click context menus fall back
+to a keyboard @code{tmm} menu); scroll bars, the tool bar and
+tooltips/child-frames are
 not yet implemented (inline images @emph{are} drawn); the mouse pointer does
 not change shape; IME is direct/Quail input only; @code{--lrg} and
 @code{--gowl} are mutually exclusive.

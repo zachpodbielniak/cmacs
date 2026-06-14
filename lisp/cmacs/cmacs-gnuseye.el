@@ -889,6 +889,20 @@ the globe does the same."
       (ignore-errors (cmacs-gnuseye-redraw buf))
       (cmacs-gnuseye--show-inspector nil))))
 
+(defun cmacs-gnuseye-escape ()
+  "Two-stage <escape> for the GNU's Eye globe.
+With an entity selected, deselect it and re-orbit Earth (the original
+behaviour).  With nothing selected, drop the globe buffer from Evil emacs
+state -- which it uses so single keys drive the camera -- into normal state,
+as an Evil user expects (re-enter with \\[evil-emacs-state], C-z).  Without
+Evil, or with a selection, it just deselects."
+  (interactive)
+  (if cmacs-gnuseye--selected-id
+      (cmacs-gnuseye-deselect)
+    (if (fboundp 'evil-normal-state)
+        (evil-normal-state)
+      (cmacs-gnuseye-deselect))))
+
 ;;;###autoload
 (defun cmacs-gnuseye-home ()
   "Go back to Earth: clear the selection and reset to the default Earth view.
@@ -1051,7 +1065,7 @@ loop inside the GLib dispatch would re-enter the event machinery)."
     (run-with-timer
      0 nil
      (lambda ()
-       (let ((choice (x-popup-menu
+       (let ((choice (cmacs-libregnum-popup-menu
                       t (list title
                               (cons "" (mapcar (lambda (it)
                                                  (if it (cons (car it) (cdr it))
@@ -1629,7 +1643,7 @@ it).  Layers needing an API key that is unset cannot be enabled."
     (define-key map (kbd "2") #'cmacs-gnuseye-view-2d)
     (define-key map (kbd "3") #'cmacs-gnuseye-view-3d)
     (define-key map (kbd "u") #'cmacs-gnuseye-deselect)
-    (define-key map (kbd "<escape>") #'cmacs-gnuseye-deselect)
+    (define-key map (kbd "<escape>") #'cmacs-gnuseye-escape)
     (define-key map (kbd "0") #'cmacs-gnuseye-home)
     (define-key map (kbd "<home>") #'cmacs-gnuseye-home)
     (define-key map (kbd "+") #'cmacs-gnuseye-zoom-in)

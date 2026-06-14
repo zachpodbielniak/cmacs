@@ -200,8 +200,27 @@ sets up a windowless renderer; each view renders its scene into its own FBO
 buffer's window rect via ~lrg_frame_surface_draw_texture_region~ — the
 analogue of pgtk's cairo overlay (~cmacs_libregnum_overlay_paint~).  So
 ~M-x gnuseye~, ~M-x cmacs-libregnum-editor~ and opening an STL all render
-inside the lrg frame.  (In-scene labels and mouse picking into these views
-are a follow-up; the scenes render and are keyboard-drivable now.)
+inside the lrg frame.
+
+Mouse navigation into these views works too: ~lrg_read_socket~ routes pointer
+motion, button presses/releases and the wheel into the same input router pgtk
+uses (~cmacs_libregnum_handle_motion~/~_button~/~_scroll~), so left/right-drag
+orbits, middle-drag pans, the wheel zoom-s the viewport under the pointer, a
+click picks a node, and right-click pops the context menu.  Because the
+libregnum router expects X11/GDK button numbers, lrg maps raylib L/R/M
+(0/1/2) → 1/3/2, and negates the raylib wheel sign to match pgtk's zoom
+direction.  A wheel event that *isn't* over a view becomes a normal Emacs
+~WHEEL_EVENT~, so buffers scroll with the wheel under ~--lrg~ as well.  (In-scene
+text labels are still a follow-up; everything else interacts now.)
+
+Because lrg has no native popup menus (~menu_show_hook~ returns nil), the
+libregnum/gnuseye right-click context menus fall back to a keyboard ~tmm~ menu:
+~cmacs-libregnum-popup-menu~ pops a native menu on graphical frames and calls
+~tmm-prompt~ (with NO-EXECUTE, so it returns the same value ~x-popup-menu~
+would) on an lrg frame.  And since those 3D buffers sit in Evil *emacs state*
+for their single-key navigation, ~<escape>~ is bound to drop them to Evil
+*normal* state (gnuseye's ~<escape>~ first deselects a selected entity, then
+escapes); re-enter navigation with ~C-z~ (~evil-emacs-state~).
 
 * Render modes (2D now, 3D/VR ready)
 
@@ -294,7 +313,9 @@ These are genuine, acceptable and documented; most match the phased plan:
   Emacs's internal windows; a second top-level GUI frame is refused.
 - *Menus / dialogs*: GUI popup menus are not drawn — keyboard menu access is
   via ~M-x tmm-menubar~ / =F10=; dialogs route to the minibuffer
-  (~use-dialog-box~ is ~nil~).
+  (~use-dialog-box~ is ~nil~).  The libregnum/gnuseye right-click context menus
+  fall back to a keyboard ~tmm~ menu under ~--lrg~ (see /libregnum 3D buffers
+  under --lrg/).
 - *Scroll bars*: not drawn (off by default).
 - *Tool bar, tooltips/child-frames*: not yet implemented.  (Inline images
   *are* drawn — see /Clipboard, fonts, faces/.)
