@@ -159,6 +159,15 @@ static pid_t emacs_pid;
    be used for the new frame.  */
 static char const *frame_parameters;
 
+#ifdef HAVE_CMACS_LRGTERM
+/* CMACS: --lrg[=MODE] targets the libregnum/raylib (output_lrg) backend --
+   reuse a running `emacs --lrg' frame (via the server's -lrg command), and
+   default the fallback editor to `emacs --lrg' so a missing server still
+   yields an lrg frame.  LRG_MODE is 2d (default) / 3d / 3dvr.  */
+static bool lrg_requested;
+static const char *lrg_mode;
+#endif
+
 static _Noreturn void print_help_and_exit (void);
 
 /* Long command-line options.  */
@@ -186,6 +195,9 @@ static struct option const longopts[] =
   { "parent-id", required_argument, NULL, 'p' },
   { "timeout",	required_argument, NULL, 'w' },
   { "tramp",	required_argument, NULL, 'T' },
+#ifdef HAVE_CMACS_LRGTERM
+  { "lrg",	optional_argument, NULL, 'L' },  /* CMACS: output_lrg backend */
+#endif
   { 0, 0, 0, 0 }
 };
 
@@ -587,6 +599,14 @@ decode_options (int argc, char **argv)
 	  create_frame = true;
 	  break;
 
+#ifdef HAVE_CMACS_LRGTERM
+	case 'L':			/* CMACS: --lrg[=MODE] */
+	  lrg_requested = true;
+	  if (optarg)
+	    lrg_mode = optarg;
+	  break;
+#endif
+
 	case 'H':
 	  print_help_and_exit ();
 	  break;
@@ -605,6 +625,22 @@ decode_options (int argc, char **argv)
 	  break;
 	}
     }
+
+#ifdef HAVE_CMACS_LRGTERM
+  /* CMACS: with --lrg and no explicit fallback editor, fall back to
+     `emacs --lrg' so that when no server is reachable we still get an lrg
+     frame (the libregnum backend is one window per process, so the client
+     reuses a running `emacs --lrg' and otherwise launches one).  */
+  if (lrg_requested && !alternate_editor)
+    {
+      static char lrg_alt[64];
+      if (lrg_mode && *lrg_mode)
+	snprintf (lrg_alt, sizeof lrg_alt, "emacs --lrg=%s", lrg_mode);
+      else
+	snprintf (lrg_alt, sizeof lrg_alt, "emacs --lrg");
+      alternate_editor = lrg_alt;
+    }
+#endif
 
   /* If the -c option is used (without -t) and no --display argument
      is provided, try $DISPLAY.
@@ -719,6 +755,11 @@ The following OPTIONS are accepted:\n\
 			Editor to fallback to if the server is not running\n"
 "			If EDITOR is the empty string, start Emacs in daemon\n\
 			mode and try connecting again\n"
+#ifdef HAVE_CMACS_LRGTERM
+"--lrg[=MODE]            Reuse a running 'emacs --lrg' (libregnum/raylib)\n\
+                        frame, or fall back to launching one; MODE is\n\
+                        2d (default), 3d, or 3dvr\n"
+#endif
 "-T PREFIX, --tramp=PREFIX\n\
                         PREFIX to prepend to filenames sent by emacsclient\n\
                         for locating files remotely via Tramp\n"
@@ -2127,6 +2168,16 @@ main (int argc, char **argv)
 
   if (create_frame && !tty)
     send_to_emacs (emacs_socket, "-window-system ");
+
+#ifdef HAVE_CMACS_LRGTERM
+  /* CMACS: ask the server to use its libregnum (output_lrg) frame.  */
+  if (lrg_requested)
+    {
+      send_to_emacs (emacs_socket, "-lrg ");
+      quote_argument (emacs_socket, lrg_mode && *lrg_mode ? lrg_mode : "2d");
+      send_to_emacs (emacs_socket, " ");
+    }
+#endif
 
   if (optind < argc)
     {

@@ -7535,11 +7535,20 @@ include it.
 application launchers next to the usual @emph{Emacs} / @emph{Emacs
 (Client)} ones: @emph{Emacs Libregnum}, which runs @code{emacs --lrg}
 (@file{etc/emacs-libregnum.desktop}), and @emph{Emacs Libregnum (Client)},
-an @command{emacsclient} launcher whose @option{--alternate-editor} falls
-back to @code{emacs --lrg} when no server is running
+which runs @code{emacsclient --lrg}
 (@file{etc/emacsclient-libregnum.desktop}).  Both set
 @code{StartupWMClass=cmacs}.  The plain @emph{Emacs} launchers are
 unchanged and still start pgtk.
+
+@command{emacsclient} accepts @option{--lrg[=MODE]} (shown in both
+@code{emacsclient --help} and @code{emacs --help}).  Because the libregnum
+backend is one window per process, @option{--lrg} does not open a second
+raylib window: it sends a @code{-lrg} request so the server reuses and
+raises its existing @code{output_lrg} frame (opening the files there), and
+it defaults @option{--alternate-editor} to @code{emacs --lrg} so a missing
+server still yields an lrg frame.  Thus @code{emacsclient --lrg file} opens
+@var{file} in a running libregnum Emacs, or launches one.  A daemon with no
+lrg frame does not create one on demand --- start it with @code{emacs --lrg}.
 
 @section Architecture
 

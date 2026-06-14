@@ -1255,6 +1255,7 @@ The following commands are accepted by the client:
 		frame-parameters  ;parameters for newly created frame
 		tty-name   ; nil, `window-system', or the tty name.
 		tty-type   ; string.
+		lrg-reuse-frame  ; CMACS: existing output_lrg frame to reuse (-lrg)
 		files
 		filepos
 		args-left)
@@ -1299,6 +1300,19 @@ The following commands are accepted by the client:
 		 (if (fboundp 'x-create-frame)
 		     (setq dontkill t
 			   tty-name 'window-system)))
+
+                ;; CMACS: -lrg MODE:  Use the libregnum (output_lrg) backend.
+                ;; lrg is one window per process, so reuse the existing lrg
+                ;; frame if there is one; if there is none the client falls
+                ;; back to launching `emacs --lrg' itself.
+                ("-lrg"
+                 (pop args-left)        ; MODE (informational for now)
+                 (setq dontkill t
+                       lrg-reuse-frame
+                       (catch 'found
+                         (dolist (fr (frame-list))
+                           (when (eq (framep fr) 'lrg)
+                             (throw 'found fr))))))
 
                 ;; -resume:  Resume a suspended tty frame.
                 ("-resume"
@@ -1415,6 +1429,12 @@ The following commands are accepted by the client:
 
 	    (setq frame
 		  (cond
+		   ;; CMACS: -lrg found a live output_lrg frame -- reuse it
+		   ;; (one window per process), raising it for the client.
+		   ((and lrg-reuse-frame (frame-live-p lrg-reuse-frame))
+		    (setq tty-name nil tty-type nil)
+		    (select-frame-set-input-focus lrg-reuse-frame)
+		    lrg-reuse-frame)
 		   ((and use-current-frame
 			 (or (eq use-current-frame 'always)
 			     ;; We can't use the Emacs daemon's

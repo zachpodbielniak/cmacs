@@ -308,6 +308,13 @@ Initialization options:\n\
 --debug-init                enable Emacs Lisp debugger for init file\n\
 --display, -d DISPLAY       use X server DISPLAY\n\
 ",
+/* CMACS: output_lrg (libregnum/raylib) display backend selector.  */
+#ifdef HAVE_CMACS_LRGTERM
+    "\
+--lrg[=MODE]                use the libregnum/raylib display backend\n\
+                              (MODE: 2d [default]; 3d, 3dvr reserved)\n\
+",
+#endif
 /* CMACS: batch-mode entry points (see cmacs_bacon_main /
    cmacs_crispy_main below).  */
 #ifdef HAVE_CMACS_BACON

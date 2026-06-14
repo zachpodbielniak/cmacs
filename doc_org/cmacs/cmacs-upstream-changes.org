@@ -379,6 +379,14 @@ realise with colour (the single biggest behavioural touch-point):
 - =lisp/faces.el= --- =lrg= added to the =(type graphic)= match in
   =face-spec-set-match-display=, and to =display-color-p= /
   =display-grayscale-p=.
+- =lisp/server.el= --- a =-lrg MODE= client command (guarded by no feature
+  test; harmless elsewhere): reuse and raise an existing =output_lrg= frame so
+  =emacsclient --lrg= opens there (one window per process).  Adds a
+  =lrg-reuse-frame= local + a first =cond= branch in the frame dispatch.
+- =lib-src/emacsclient.c= --- the =--lrg[=MODE]= option (guarded
+  =HAVE_CMACS_LRGTERM=): sends =-lrg MODE= to the server, defaults
+  =--alternate-editor= to =emacs --lrg= so a missing server still yields an lrg
+  frame, and a =--help= line.
 
 =lisp/term/lrg-win.el= is a *new* file (the =term/pgtk-win.el= analogue), not
 an edit.

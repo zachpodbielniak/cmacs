@@ -63,13 +63,28 @@ text decorations (underline/box/strike/overline).
 entries alongside the usual /Emacs/ and /Emacs (Client)/:
 
 - *Emacs Libregnum* — launches =emacs --lrg= (=etc/emacs-libregnum.desktop=).
-- *Emacs Libregnum (Client)* — =emacsclient --create-frame= with an
-  =--alternate-editor= that falls back to =emacs --lrg= when no server is
-  running (=etc/emacsclient-libregnum.desktop=).
+- *Emacs Libregnum (Client)* — =emacsclient --lrg= (=etc/emacsclient-libregnum.desktop=).
 
 Both set =StartupWMClass=cmacs= (the WM class of the raylib window) so the
 desktop associates the window with the launcher icon.  The plain /Emacs/
 entries are unchanged and still start pgtk.
+
+** =emacsclient --lrg=
+
+=emacsclient= accepts =--lrg[=MODE]= (it appears in =emacsclient --help= and
+=emacs --help=).  Because the libregnum backend is *one window per process*,
+=--lrg= does not create a second raylib window; instead it:
+
+1. *Reuses* a running =emacs --lrg='s frame — the client sends a =-lrg MODE=
+   request and the server (=server.el=) selects and raises its existing
+   =output_lrg= frame, opening the files there.
+2. *Falls back* to launching =emacs --lrg[=MODE]= when no server is reachable
+   — =--lrg= defaults the =--alternate-editor= to =emacs --lrg= for you (an
+   explicit =-a= still wins).
+
+So =emacsclient --lrg file= opens =file= in your running libregnum Emacs, or
+starts one if none is running.  (A daemon that has no lrg frame yet does not
+create one on demand — start the lrg Emacs with =emacs --lrg=.)
 
 * Architecture
 
