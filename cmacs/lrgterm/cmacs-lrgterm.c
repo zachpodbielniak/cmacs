@@ -708,6 +708,19 @@ static const struct lrg_keymap lrg_function_keys[] =
     { GRL_KEY_END,       0xff57 }, /* End       */
   };
 
+/* X keysym for the non-character GrlKey K (for NON_ASCII_KEYSTROKE_EVENT),
+   or 0 when K is not a mapped function key (e.g. a printable or modifier).  */
+static int
+lrg_keysym_for (GrlKey k)
+{
+  size_t i;
+
+  for (i = 0; i < countof (lrg_function_keys); i++)
+    if (lrg_function_keys[i].grl == (int) k)
+      return lrg_function_keys[i].keysym;
+  return 0;
+}
+
 /* Return the first live output_lrg frame, or NULL (v1 has at most one).  */
 static struct frame *
 lrg_any_frame (void)
@@ -785,7 +798,6 @@ lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
   int count = 0;
   int mods;
   int cp;
-  size_t i;
 
   /* Drain the wakeup timerfd so pselect does not spin on it.  */
   if (dpyinfo != NULL && dpyinfo->connection >= 0)
@@ -858,47 +870,58 @@ lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
 
   mods = lrg_event_modifiers ();
 
-  /* Printable text: only when no control/meta is held (GLFW suppresses the
-     char callback for those anyway).  The char queue already encodes shift
-     and the keyboard layout.  */
-  if (!lrg_ctrl_or_meta_down ())
-    while ((cp = grl_input_get_char_pressed ()) != 0)
-      count += lrg_store_char (f, hold_quit, cp,
-                               mods & ~(ctrl_modifier | meta_modifier));
+  /* Keyboard: drain the key-press QUEUE in press order (robust -- it never
+     misses or repeats a fast tap the way a per-frame state scan does, which
+     is what made ESC/hjkl flaky under Evil).  For each pressed key:
+       - a mapped non-character key (ESC, arrows, Tab, RET, ...) becomes a
+         NON_ASCII_KEYSTROKE_EVENT carrying its X keysym + modifiers;
+       - a printable key with Ctrl/Meta held becomes a char event with
+         modifiers (GLFW emits no char callback for those, so we synthesize
+         it from the US-ASCII keycode, lower-casing letters so C-A == C-a);
+       - a printable key with no Ctrl/Meta consumes the next Unicode char
+         from the char queue (which already encodes layout + shift) -- pulling
+         it HERE keeps it correctly interleaved with any function keys pressed
+         in the same poll (e.g. ESC then x stays ESC, x).  */
+  {
+    bool ctrlmeta = lrg_ctrl_or_meta_down ();
+    GrlKey k;
 
-  /* Non-character keys (always) -> X keysym NON_ASCII events.  */
-  for (i = 0; i < countof (lrg_function_keys); i++)
-    {
-      GrlKey k = (GrlKey) lrg_function_keys[i].grl;
-      if (grl_input_is_key_pressed (k) || grl_input_is_key_pressed_repeat (k))
-        {
-          struct input_event ie;
-          EVENT_INIT (ie);
-          ie.kind = NON_ASCII_KEYSTROKE_EVENT;
-          ie.code = lrg_function_keys[i].keysym;
-          ie.modifiers = mods;
-          count += lrg_store (f, hold_quit, &ie);
-        }
-    }
+    while ((k = grl_input_get_key_pressed ()) != GRL_KEY_NULL)
+      {
+        int keysym = lrg_keysym_for (k);
 
-  /* Control/Meta + printable keys (C-a, M-x, C-SPC, ...).  GLFW reports
-     these physical keys with US-ASCII codes; lower-case letters so C-A == C-a.  */
-  if (lrg_ctrl_or_meta_down ())
-    {
-      GrlKey k;
-      for (k = GRL_KEY_SPACE; k <= GRL_KEY_GRAVE; k++)
-        {
-          int code;
-          if (!(grl_input_is_key_pressed (k)
-                || grl_input_is_key_pressed_repeat (k)))
-            continue;
-          code = (int) k;
-          if (code >= GRL_KEY_A && code <= GRL_KEY_Z)
-            code += 32;                /* 'A'..'Z' -> 'a'..'z' */
-          lrg_store_char (f, hold_quit, code, mods);
-          count++;
-        }
-    }
+        if (keysym != 0)
+          {
+            struct input_event ie;
+            EVENT_INIT (ie);
+            ie.kind = NON_ASCII_KEYSTROKE_EVENT;
+            ie.code = keysym;
+            ie.modifiers = mods;
+            count += lrg_store (f, hold_quit, &ie);
+          }
+        else if (k >= GRL_KEY_SPACE && k <= GRL_KEY_GRAVE)
+          {
+            if (ctrlmeta)
+              {
+                int code = (int) k;
+                if (code >= GRL_KEY_A && code <= GRL_KEY_Z)
+                  code += 32;          /* 'A'..'Z' -> 'a'..'z' */
+                count += lrg_store_char (f, hold_quit, code, mods);
+              }
+            else if ((cp = grl_input_get_char_pressed ()) != 0)
+              count += lrg_store_char (f, hold_quit, cp,
+                                       mods & ~(ctrl_modifier | meta_modifier));
+          }
+        /* else: a modifier key, or an unmapped function/keypad key -> skip.  */
+      }
+
+    /* Emit any chars the key loop did not pair with a printable key -- IME
+       commits, pasted text, multi-char dead-key sequences -- in order.  */
+    if (!ctrlmeta)
+      while ((cp = grl_input_get_char_pressed ()) != 0)
+        count += lrg_store_char (f, hold_quit, cp,
+                                 mods & ~(ctrl_modifier | meta_modifier));
+  }
 
   /* Mouse motion -> update the mouse-face highlight (hover on buttons,
      links, ...).  Only when the pointer actually moved.  */
