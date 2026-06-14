@@ -838,6 +838,49 @@ lrg_menu_free_items (LrgMenuItem *arr, int n)
   xfree (arr);
 }
 
+/* Per-row height.  Separator rows are half height (just a divider line) so a
+   single separator wastes little space.  */
+static int
+lrg_menu_item_h (LrgMenuState *st, const LrgMenuItem *it)
+{
+  return it->label == NULL ? (st->item_h + 1) / 2 : st->item_h;
+}
+
+/* Y of row ROW relative to the panel top (sum of preceding row heights).  */
+static int
+lrg_menu_row_top (LrgMenuState *st, LrgMenuPanel *p, int row)
+{
+  int y = st->pad_y, i;
+  for (i = 0; i < row && i < p->n; i++)
+    y += lrg_menu_item_h (st, &p->items[i]);
+  return y;
+}
+
+/* Total panel height for its current items.  */
+static int
+lrg_menu_total_h (LrgMenuState *st, LrgMenuPanel *p)
+{
+  int y = 2 * st->pad_y, i;
+  for (i = 0; i < p->n; i++)
+    y += lrg_menu_item_h (st, &p->items[i]);
+  return y;
+}
+
+/* Row index at panel-local LOCAL_Y (= mouse_y - panel->y), or -1.  */
+static int
+lrg_menu_row_at (LrgMenuState *st, LrgMenuPanel *p, int local_y)
+{
+  int y = st->pad_y, i;
+  for (i = 0; i < p->n; i++)
+    {
+      int h = lrg_menu_item_h (st, &p->items[i]);
+      if (local_y >= y && local_y < y + h)
+        return i;
+      y += h;
+    }
+  return -1;
+}
+
 /* A small right-pointing submenu arrow (a ">") centred in row [Y, Y+H).  */
 static void
 lrg_menu_draw_arrow (LrgFrameSurface *surf, int x, int y, int h,
@@ -872,7 +915,7 @@ lrg_menu_panel_layout (struct frame *f, LrgMenuState *st, LrgMenuPanel *p,
         has_sub = 1;
     }
   p->w = maxw + 2 * st->pad_x + (has_sub ? st->arrow_w : 0);
-  p->h = p->n * st->item_h + 2 * st->pad_y;
+  p->h = lrg_menu_total_h (st, p);
   p->x = x;
   p->y = y;
   if (p->x + p->w > fw) p->x = fw - p->w;
@@ -891,7 +934,7 @@ lrg_menu_open_child (struct frame *f, LrgMenuState *st, int parent_depth,
   LrgMenuPanel *p = &st->panel[parent_depth];
   LrgMenuPanel *c = &st->panel[parent_depth + 1];
   int fw = FRAME_PIXEL_WIDTH (f);
-  int cy = p->y + st->pad_y + row * st->item_h;
+  int cy = p->y + lrg_menu_row_top (st, p, row);
 
   c->items = p->items[row].children;
   c->n = p->items[row].n_children;
@@ -929,12 +972,13 @@ lrg_menu_render (struct frame *f, LrgFrameSurface *surf, LrgMenuState *st)
                                            1.0f, border);
       for (i = 0; i < p->n; i++)
         {
-          int ry = p->y + st->pad_y + i * st->item_h;
           LrgMenuItem *it = &p->items[i];
+          int ry = p->y + lrg_menu_row_top (st, p, i);
+          int rh = lrg_menu_item_h (st, it);
 
           if (it->label == NULL)                /* separator */
             {
-              int sy = ry + st->item_h / 2;
+              int sy = ry + rh / 2;
               lrg_frame_surface_draw_line (surf, p->x + st->pad_x, sy,
                                            p->x + p->w - st->pad_x, sy,
                                            1.0f, sep);
@@ -942,12 +986,12 @@ lrg_menu_render (struct frame *f, LrgFrameSurface *surf, LrgMenuState *st)
             }
           if (i == p->hovered)
             lrg_frame_surface_fill_rect (surf, p->x + 2, ry, p->w - 4,
-                                         st->item_h, hi);
+                                         rh, hi);
           lrg_menu_draw_text (f, p->x + st->pad_x, ry, it->label,
                               it->enabled ? fg : fgdim);
           if (it->children != NULL)
             lrg_menu_draw_arrow (surf, p->x + p->w - st->arrow_w + 2, ry,
-                                 st->item_h, it->enabled ? fg : fgdim);
+                                 rh, it->enabled ? fg : fgdim);
         }
     }
 }
@@ -1928,9 +1972,8 @@ dismissed.  Only meaningful while an `lrg' frame is live.  */)
       if (a >= 0)
         {
           LrgMenuPanel *p = &st.panel[a];
-          int row = (my - (p->y + st.pad_y)) / st.item_h;
-          if (row >= 0 && row < p->n && p->items[row].label != NULL
-              && p->items[row].enabled)
+          int row = lrg_menu_row_at (&st, p, my - p->y);
+          if (row >= 0 && p->items[row].label != NULL && p->items[row].enabled)
             p->hovered = row;
           else
             p->hovered = -1;

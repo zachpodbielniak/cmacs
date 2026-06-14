@@ -1364,6 +1364,19 @@ leaf indices span parent + submenu and round-trip through the value vector."
       ;; Every leaf index across the whole tree is a valid VALS slot.
       (should (functionp (aref vals (cdr (car (cdr subnode)))))))))
 
+(ert-deftest cmacs-libregnum-tests-collapse-separators ()
+  "Runs of separators collapse to one; leading/trailing trimmed; recurses."
+  ;; consecutive + leading + trailing separators -> single internal one
+  (should (equal (cmacs-libregnum--collapse-separators
+                  '(nil ("A" . 0) nil nil ("B" . 1) nil))
+                 '(("A" . 0) nil ("B" . 1))))
+  ;; all-separator list collapses to empty
+  (should (equal (cmacs-libregnum--collapse-separators '(nil nil)) nil))
+  ;; recurse into a submenu node's children (cdr is a list)
+  (should (equal (cmacs-libregnum--collapse-separators
+                  '(("Sub" ("X" . 0) nil nil ("Y" . 1))))
+                 '(("Sub" ("X" . 0) nil ("Y" . 1))))))
+
 (ert-deftest cmacs-libregnum-tests-menu-xy ()
   "POSITION parsing for the in-engine menu: explicit point vs mouse fallback."
   (should (equal (cmacs-libregnum--menu-xy '((10 20) some-frame)) '(10 . 20)))

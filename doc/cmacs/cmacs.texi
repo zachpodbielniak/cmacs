@@ -7682,7 +7682,9 @@ dismiss; up/down move, right/RET open a submenu or choose, left closes one),
 like @code{x-popup-menu}'s own modal loop.  @code{cmacs-libregnum-popup-menu}
 flattens an Emacs menu (alist or keymap form, submenus kept as real nested
 nodes) into the item tree it takes and maps the chosen leaf index back to the
-value; graphical frames still pop the native menu.
+value; graphical frames still pop the native menu.  Runs of separators (common
+once kind-filtering drops the items between them) collapse to a single thin
+divider, and a separator row is half height, so the menu stays compact.
 Those 3D buffers sit in Evil
 @emph{emacs state} for their single-key navigation, so @kbd{<escape>} is bound
 to drop them to Evil @emph{normal} state (gnuseye's @kbd{<escape>} first

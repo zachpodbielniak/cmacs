@@ -224,7 +224,9 @@ outside dismiss; up/down move, right/RET open a submenu or choose, left closes
 one), exactly like ~x-popup-menu~'s own modal loop.  ~cmacs-libregnum-popup-menu~
 flattens an Emacs menu (alist *or* keymap form, submenus kept as real nested
 nodes) into the item tree it takes, then maps the chosen leaf index back to its
-value; on graphical frames it still pops the native menu.  And since those 3D
+value; on graphical frames it still pops the native menu.  Runs of separators
+(common once kind-filtering drops the items between them) collapse to a single
+thin divider, and a separator row is half height, so the menu stays compact.  And since those 3D
 buffers sit in Evil *emacs state*
 for their single-key navigation, ~<escape>~ is bound to drop them to Evil
 *normal* state (gnuseye's ~<escape>~ first deselects a selected entity, then

@@ -2827,6 +2827,26 @@ POSITION `t' (current mouse) and other forms yield (nil . nil) so
 ;; A parallel VALUES vector maps each leaf's INDEX to its Lisp value, so the
 ;; chosen index round-trips back to the value regardless of nesting.
 
+(defun cmacs-libregnum--collapse-separators (tree)
+  "Return TREE with runs of separators collapsed to one, and edges trimmed.
+Kind-filtering can leave several separators in a row (the items between them
+were dropped); a leading/trailing separator is pure wasted space.  Recurses
+into submenu children (nodes whose cdr is a list)."
+  (let ((out nil) (prev-sep t))          ; prev-sep t => drop leading separators
+    (dolist (node tree)
+      (if (null node)                     ; separator
+          (progn (unless prev-sep (push nil out))
+                 (setq prev-sep t))
+        (push (if (and (consp node) (consp (cdr node)))   ; submenu -> recurse
+                  (cons (car node)
+                        (cmacs-libregnum--collapse-separators (cdr node)))
+                node)
+              out)
+        (setq prev-sep nil)))
+    (when (and out (null (car out)))      ; drop a trailing separator
+      (pop out))
+    (nreverse out)))
+
 (defun cmacs-libregnum--alist-menu-to-lrg (menu)
   "Flatten an alist-form `x-popup-menu' MENU into (TREE . VALUES).
 MENU is (TITLE (PANE-TITLE ITEM...) ...); ITEM is (LABEL . VALUE) or a \"--\"
@@ -2846,7 +2866,8 @@ the `lrg-popup-menu' item tree; VALUES is a vector indexed by leaf INDEX."
             (push (cdr e) values)
             (setq idx (1+ idx)))
            (t (push nil items))))))          ; "--"/string/nil separator
-    (cons (nreverse items) (vconcat (nreverse values)))))
+    (cons (cmacs-libregnum--collapse-separators (nreverse items))
+          (vconcat (nreverse values)))))
 
 (defun cmacs-libregnum--keymap-walk (keymap start-idx)
   "Walk menu KEYMAP into (TREE NEXT-IDX . VALUES-REVERSED).
@@ -2885,7 +2906,8 @@ descending-index order.  Submenus recurse into real submenu nodes."
 Submenus (nested keymaps) become real submenu nodes; VALUES maps each leaf
 INDEX to its action closure."
   (let ((r (cmacs-libregnum--keymap-walk keymap 0)))
-    (cons (nth 0 r) (vconcat (nreverse (cddr r))))))
+    (cons (cmacs-libregnum--collapse-separators (nth 0 r))
+          (vconcat (nreverse (cddr r))))))
 
 (defun cmacs-libregnum-popup-menu (position menu)
   "Show MENU like `x-popup-menu' at POSITION and return the chosen value.
