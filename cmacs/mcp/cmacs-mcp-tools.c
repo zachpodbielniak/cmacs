@@ -101,6 +101,10 @@ cmacs_mcp_register_all_tools (McpServer *server)
 #ifdef HAVE_CMACS_CAD
   cmacs_mcp_tools_cad_register (server);
 #endif
+
+#ifdef HAVE_CMACS_LRGTERM
+  cmacs_mcp_tools_lrgterm_register (server);
+#endif
 }
 
 #endif /* HAVE_CMACS_MCP */

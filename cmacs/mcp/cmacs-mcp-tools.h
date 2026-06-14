@@ -65,6 +65,10 @@ void cmacs_mcp_tools_gnuseye_register (McpServer *server);
 void cmacs_mcp_tools_cad_register (McpServer *server);
 #endif
 
+#ifdef HAVE_CMACS_LRGTERM
+void cmacs_mcp_tools_lrgterm_register (McpServer *server);
+#endif
+
 /* Resource and prompt registration. */
 void cmacs_mcp_register_resources (McpServer *server);
 void cmacs_mcp_register_prompts   (McpServer *server);

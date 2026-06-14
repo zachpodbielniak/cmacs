@@ -661,6 +661,7 @@ OPTION_DEFAULT_OFF([cmacs-podomation], [CMacs podomation automation engine])
 OPTION_DEFAULT_OFF([cmacs-libreclaw], [CMacs libreclaw chat/Matrix client integration])
 OPTION_DEFAULT_OFF([cmacs-ai], [CMacs ai-glib AI subsystem (multi-provider chat, tools, voice)])
 OPTION_DEFAULT_OFF([cmacs-libregnum], [CMacs libregnum 3D scene buffers (raylib + GObject scene graph)])
+OPTION_DEFAULT_OFF([cmacs-lrgterm], [CMacs independent libregnum/raylib display backend (output_lrg; peer to pgtk)])
 OPTION_DEFAULT_OFF([cmacs-gnuseye], [CMacs gnuseye live planetary globe (GNU's Eye; requires libregnum)])
 OPTION_DEFAULT_OFF([cmacs-cad], [CMacs parametric CAD subsystem (cad-glib kernels; parts render as libregnum CAD nodes)])
 OPTION_DEFAULT_OFF([cmacs-org-ex], [CMacs org-ex interactive widgets])
@@ -938,6 +939,28 @@ if test "$with_cmacs_libregnum" != "no"; then
     cmacs-libregnum-scene-tree.o cmacs-libregnum-scene-gobject.o \
     cmacs-libregnum-scene-mindmap.o cmacs-libregnum-dnd.o"
 fi
+if test "$with_cmacs_lrgterm" != "no"; then
+  # output_lrg renders the whole Emacs UI through libregnum's Lrg* surface/atlas
+  # GObject types (deps/libregnum/src/term), so it reuses the libregnum archive
+  # and its whole-archive link line; no separate library of its own.
+  if test "$with_cmacs_libregnum" = "no"; then
+    AC_MSG_ERROR([--with-cmacs-lrgterm requires --with-cmacs-libregnum (reuses its archive + Lrg* surface/atlas types)])
+  fi
+  if test "$with_cmacs_glib" = "no"; then
+    AC_MSG_ERROR([--with-cmacs-lrgterm requires --with-cmacs-glib])
+  fi
+  # Same include set as libregnum, but a CONSUMER of <libregnum.h> -- do NOT
+  # define LIBREGNUM_COMPILATION.  raylib/graylib symbols come from the libregnum
+  # archive already on the link line via CMACS_LIBREGNUM_LIBS.
+  CMACS_LRGTERM_CFLAGS="-I\$(abs_top_srcdir)/deps/libregnum/src \
+    -I\$(abs_top_srcdir)/deps/libregnum/build/release \
+    -I\$(abs_top_srcdir)/deps/libregnum/deps/graylib/src \
+    -I\$(abs_top_srcdir)/deps/libregnum/deps/graylib/deps/raylib/src \
+    $CMACS_LIBREGNUM_DEPS_CFLAGS"
+  CMACS_LRGTERM_LIBS=""
+  AC_DEFINE([HAVE_CMACS_LRGTERM], 1, [CMacs independent libregnum/raylib display backend (output_lrg)])
+  CMACS_LRGTERM_OBJ="cmacs-lrgterm.o cmacs-lrgfns.o cmacs-lrgfont.o cmacs-lrgwindow.o"
+fi
 if test "$with_cmacs_gnuseye" != "no"; then
   if test "$with_cmacs_libregnum" = "no"; then
     AC_MSG_ERROR([--with-cmacs-gnuseye requires --with-cmacs-libregnum (the globe is rendered through libregnum)])
@@ -1096,6 +1119,9 @@ if test "$with_cmacs_mcp" != "no"; then
   fi
   if test "$with_cmacs_cad" != "no"; then
     CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-cad.o"
+  fi
+  if test "$with_cmacs_lrgterm" != "no"; then
+    CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-lrgterm.o"
   fi
 fi
 # CMACS Print: pure-Elisp + shell-script subsystem (no C build artefacts).
@@ -1399,6 +1425,9 @@ AC_SUBST(CMACS_AI_LIBS)
 AC_SUBST(CMACS_LIBREGNUM_OBJ)
 AC_SUBST(CMACS_LIBREGNUM_CFLAGS)
 AC_SUBST(CMACS_LIBREGNUM_LIBS)
+AC_SUBST(CMACS_LRGTERM_OBJ)
+AC_SUBST(CMACS_LRGTERM_CFLAGS)
+AC_SUBST(CMACS_LRGTERM_LIBS)
 AC_SUBST(CMACS_GNUSEYE_OBJ)
 AC_SUBST(CMACS_GNUSEYE_CFLAGS)
 AC_SUBST(CMACS_GNUSEYE_LIBS)

@@ -60,6 +60,7 @@ interaction.
 * CMacs Gnuseye::               GNU's Eye live planetary globe.
 * CMacs Gsurf::                 Embedded gsurf web browser buffers.
 * CMacs CAD::                   Parametric CAD parts (.cad/.ccad via cad-glib).
+* CMacs Lrgterm::               Independent libregnum/raylib display backend (--lrg).
 * Build Configuration::         Configure flags and dependencies.
 * Upstream Changes::            Every edit cmacs makes to stock Emacs sources.
 @end menu
@@ -7491,6 +7492,146 @@ expose the same surface; an Org Babel @code{cad} block with @code{:bom}
 emits the bill of materials as a table.
 
 See @file{doc_org/cmacs/cmacs-cad.org} for the living document.
+
+@c ===================================================================
+@node CMacs Lrgterm
+@chapter CMacs Lrgterm: Independent libregnum/raylib Display Backend
+
+@code{output_lrg} is a third Emacs display backend in cmacs, a peer to the
+terminal backend (@code{emacs -nw}) and the graphical @emph{pgtk} backend.
+Where pgtk renders through GTK and Cairo, @code{output_lrg} renders the
+@emph{entire} Emacs UI --- every glyph, cursor, fringe, region and modeline
+--- through the @emph{libregnum} engine and its GObject raylib wrapper
+@emph{graylib} (raylib 5.5 on GLFW/X11).
+
+It is opt-in: plain @code{emacs} still starts pgtk.  The backend is selected
+only by the @code{--lrg[=MODE]} command-line flag (or by setting
+@code{initial-window-system} to @code{lrg}).  raylib owns the OS window and
+input loop; Emacs's @code{pselect} loop is unchanged and is woken by a timer
+file descriptor.  @code{(window-system)} returns @code{lrg} on these frames.
+
+@example
+./src/emacs --lrg          # == --lrg=2d (the default render mode)
+./src/emacs --lrg=3d       # reserved -- errors politely (not yet implemented)
+@end example
+
+Enable at build time with @code{--with-cmacs-lrgterm} (requires
+@code{--with-cmacs-libregnum} and @code{--with-cmacs-glib}; it reuses
+libregnum's archive and @code{Lrg*} surface/atlas types).
+
+@section Architecture
+
+A strict four-layer stack; the backend calls only graylib / libregnum
+GObject APIs, never raylib directly.  Font @emph{rasterisation} stays
+Emacs-side (it needs Emacs font objects); only raw RGBA buffers cross into
+libregnum, which therefore stays Cairo/FreeType-free and headless-testable.
+
+@table @asis
+@item Layer 1 --- graylib
+@code{Grl*} raylib wrappers (@code{Graylib-1.typelib}): @code{GrlWindow},
+@code{GrlTexture}, drawing, clipboard, input, monitor queries.
+@item Layer 2 --- libregnum @code{src/term/}
+GObject-Introspectable @code{Lrg*} types (@code{Libregnum-1.typelib}):
+@code{LrgGlyphAtlas} (GPU glyph cache), the abstract @code{LrgFrameSurface}
+(draw/present/projection facade --- the seam that makes 3D/VR additive) and
+its concrete @code{Lrg2DSurface}, the @code{LrgTextRenderer} interface, the
+@code{LrgRenderMode} enum, and boxed @code{LrgGlyphKey}/@code{LrgGlyphMetrics}.
+@item Layer 3 --- @code{cmacs/lrgterm/}
+Plain Emacs C glue (cannot be GObject): the @code{struct terminal} hooks, the
+redisplay interface, the font-driver blit, and the event loop.
+@item Layer 4 --- Elisp + MCP + GI
+@code{lisp/term/lrg-win.el}, @code{cmacs/mcp/cmacs-mcp-tools-lrgterm.c}, and
+GObject-Introspection access to the Layer-2 types.
+@end table
+
+@section Text rendering
+
+lrg reuses Emacs's stock Cairo FreeType/HarfBuzz drivers (@code{ftcrfont} /
+@code{ftcrhbfont}) unchanged for font discovery, opening, metrics and
+shaping; only the final blit is redirected.  The redisplay interface calls
+@code{lrg_font_draw_glyph_string}, which rasterises each glyph via the font's
+@code{cr_scaled_font} into an alpha-coverage RGBA mask, uploads it to the
+per-display @code{LrgGlyphAtlas} on a cache miss, and paints it as a textured
+quad tinted by the face foreground.  Full font-lock colour, the region, the
+modeline (with its 3D box), text decorations (underline, overline,
+strike-through, box), the graphical fringes (continuation/truncation arrows)
+and the blinking cursor are all drawn.  Colour names resolve through pango's
+X11 @file{rgb.txt} table, so the full Emacs default-face palette renders.
+
+Inline image glyphs (PNG, XPM, JPEG, @dots{}) are also drawn.  In this Cairo
+build the loaded pixels live in the image's @code{cr_data} Cairo pattern; the
+backend converts that surface to a straight-RGBA @code{GrlTexture} (cached as
+Cairo user-data so it is freed with the image) and blits it with
+@code{lrg_frame_surface_draw_texture_region}, honouring @code{:scale} /
+@code{:width} and slices --- so the Doom dashboard banner and @file{README.org}
+image links display.
+
+@section Rendering and presentation model
+
+lrg presents through a double-buffered swap of the default framebuffer (the
+rlgl FBO bug rules out a retained off-screen surface).  Because each swap
+shows a different buffer, lrg cannot honour Emacs's @emph{incremental} RIF
+draws; those hooks are gated to no-ops and the @emph{whole} frame is repainted
+from the current glyph matrix on every present (@code{lrg_present_frame}:
+begin frame, clear, @code{expose_frame}, swap), which reuses Emacs's layout and
+is immune to the FBO bug.
+
+Timing is the subtle part: Emacs wraps every redisplay in
+@code{block_buffer_flips} @dots{} @code{unblock_buffer_flips} so a frame is
+never shown half-updated, which means @code{frame_up_to_date} and the RIF draw
+hooks all run while buffer flips are @emph{blocked}.  lrg's real present point
+is therefore the per-frame @code{terminal->buffer_flipping_unblocked_hook}
+(@code{lrg_buffer_flipping_unblocked}), called from @code{unblock_buffer_flips}
+once the redisplay completes (mirroring pgtk).  This one hook is what puts
+typed text, the blinking cursor and every other redisplay on screen.
+@code{lrg-capture-screen} / @code{lrgterm_dump_screen} present out-of-band and
+so always reflect current state.
+
+@section Event loop
+
+GLFW requires main-thread event polling, so lrg uses no input thread.
+@code{lrg_term_init} arms a @code{timerfd} (~60 Hz) registered with
+@code{add_keyboard_wait_descriptor}; @code{pselect} wakes and calls
+@code{lrg_read_socket}, which polls the window once (the single poll point)
+and translates the queued keyboard, mouse, focus and resize events.
+
+@section Render modes
+
+The abstract @code{LrgFrameSurface} + @code{LrgRenderMode} + @code{pick} seam
+makes 3D and VR additive rather than a rewrite: Layer 3 is mode-agnostic, the
+glyph atlas is projection-free, and input routes through @code{pick}.  The
+default mode is @code{2d}; @code{3d} and @code{3dvr} are reserved flag tokens
+that today error politely.
+
+@section Commands
+
+@table @code
+@item lrg-capture-screen FILE &optional FRAME
+Repaint the frame and write a PNG of exactly what the backend renders --- the
+reliable rendering oracle for tests and the basis of @code{lrgterm_dump_screen}.
+@item lrg-display-pixel-size
+@code{(WIDTH . HEIGHT)} of the current monitor.
+@item lrg-set-clipboard / lrg-get-clipboard
+System-clipboard text (UTF-8).
+@end table
+
+@section MCP tools
+
+With @code{--with-cmacs-mcp}, the backend registers @code{lrgterm_frame_info},
+@code{lrgterm_render_stats}, @code{lrgterm_force_redraw}, and
+@code{lrgterm_dump_screen} (captures the lrg frame to a PNG and returns it as
+an image, so an agent can see what the backend renders).
+
+@section Known v1 limitations
+
+One OS window per terminal (a second top-level GUI frame is refused); GUI
+popup menus are not drawn (use @code{M-x tmm-menubar} / @key{F10}; dialogs go
+to the minibuffer); scroll bars, the tool bar and tooltips/child-frames are
+not yet implemented (inline images @emph{are} drawn); the mouse pointer does
+not change shape; IME is direct/Quail input only; @code{--lrg} and
+@code{--gowl} are mutually exclusive.
+
+See @file{doc_org/cmacs/cmacs-lrgterm.org} for the living document.
 
 @c ===================================================================
 @node Build Configuration

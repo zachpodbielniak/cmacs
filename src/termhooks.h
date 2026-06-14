@@ -65,6 +65,7 @@ enum output_method
   output_pgtk,
   output_haiku,
   output_android,
+  output_lrg,			/* CMACS: libregnum/raylib display backend */
 };
 
 /* Input queue declarations and hooks.  */
@@ -539,6 +540,7 @@ struct terminal
     struct pgtk_display_info *pgtk;		/* pgtkterm.h */
     struct haiku_display_info *haiku;		/* haikuterm.h */
     struct android_display_info *android;	/* androidterm.h */
+    struct lrg_display_info *lrg;		/* CMACS: cmacs-lrgterm.h */
   } display_info;
 
 
@@ -948,8 +950,15 @@ extern struct terminal *terminal_list;
 #define TERMINAL_FONT_CACHE(t)						\
   (t->type == output_ns ? t->display_info.ns->name_list_element : Qnil)
 #elif defined (HAVE_PGTK)
+#ifdef HAVE_CMACS_LRGTERM
+/* CMACS: output_lrg coexists with pgtk; resolve its font cache too.  */
+#define TERMINAL_FONT_CACHE(t)						\
+  (t->type == output_pgtk ? t->display_info.pgtk->name_list_element	\
+   : t->type == output_lrg ? t->display_info.lrg->pgtk.name_list_element : Qnil)
+#else
 #define TERMINAL_FONT_CACHE(t)						\
   (t->type == output_pgtk ? t->display_info.pgtk->name_list_element : Qnil)
+#endif
 #elif defined (HAVE_HAIKU)
 #define TERMINAL_FONT_CACHE(t)						\
   (t->type == output_haiku ? t->display_info.haiku->name_list_element : Qnil)

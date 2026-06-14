@@ -116,7 +116,11 @@ decode_any_frame (register Lisp_Object frame)
 bool
 display_available (void)
 {
-  return x_display_list != NULL;
+  return x_display_list != NULL
+#ifdef HAVE_CMACS_LRGTERM
+    || lrg_display_list != NULL	/* CMACS: lrg displays count too */
+#endif
+    ;
 }
 #endif
 
@@ -314,6 +318,10 @@ See also `frame-live-p'.  */)
       return Qns;
     case output_pgtk:
       return Qpgtk;
+#ifdef HAVE_CMACS_LRGTERM
+    case output_lrg:		/* CMACS: libregnum/raylib backend */
+      return Qlrg;
+#endif
     case output_haiku:
       return Qhaiku;
     case output_android:
@@ -2978,7 +2986,11 @@ delete_frame (Lisp_Object frame, Lisp_Object force)
        don't delete the terminal for these builds either.  */
     if (terminal->reference_count == 0
 	&& (terminal->type == output_x_window
-	    || terminal->type == output_pgtk))
+	    || terminal->type == output_pgtk
+#ifdef HAVE_CMACS_LRGTERM
+	    || terminal->type == output_lrg	/* CMACS */
+#endif
+	    ))
       terminal->reference_count = 1;
 #endif /* USE_X_TOOLKIT || USE_GTK */
 
@@ -6333,6 +6345,13 @@ and the class is `Emacs.CLASS.SUBCLASS'.  */)
    Lisp_Object subclass)
 {
   check_window_system (NULL);
+
+#ifdef HAVE_CMACS_LRGTERM
+  /* An lrg-only session has no X resource database; check_x_display_info
+     (pgtk's) would error.  No resources -> nil.  */
+  if (x_display_list == NULL)
+    return Qnil;
+#endif
 
   return gui_display_get_resource (check_x_display_info (Qnil),
                                    attribute, class, component, subclass);

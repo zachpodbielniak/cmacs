@@ -659,6 +659,7 @@ struct frame
     struct pgtk_output *pgtk;		/* From pgtkterm.h. */
     struct haiku_output *haiku;		/* From haikuterm.h. */
     struct android_output *android;	/* From androidterm.h.  */
+    struct lrg_output *lrg;		/* CMACS: From cmacs-lrgterm.h.  */
   }
   output_data;
 
@@ -962,6 +963,12 @@ default_pixels_per_inch_y (void)
 #else
 #define FRAME_ANDROID_P(f) ((f)->output_method == output_android)
 #endif
+/* CMACS: libregnum/raylib backend predicate.  */
+#ifndef HAVE_CMACS_LRGTERM
+#define FRAME_LRG_P(f) false
+#else
+#define FRAME_LRG_P(f) ((f)->output_method == output_lrg)
+#endif
 
 /* FRAME_WINDOW_P tests whether the frame is a graphical window system
    frame.  */
@@ -985,6 +992,15 @@ default_pixels_per_inch_y (void)
 #endif
 #ifndef FRAME_WINDOW_P
 #define FRAME_WINDOW_P(f) ((void) (f), false)
+#endif
+
+/* CMACS: output_lrg is a graphical window-system frame that coexists with
+   pgtk in the same build, so FRAME_WINDOW_P must accept either.  Each
+   FRAME_*_P above is always defined (to a real test or to false), so this
+   disjunction is valid whether or not pgtk is configured.  */
+#ifdef HAVE_CMACS_LRGTERM
+#undef FRAME_WINDOW_P
+#define FRAME_WINDOW_P(f) (FRAME_PGTK_P (f) || FRAME_LRG_P (f))
 #endif
 
 /* Dots per inch of the screen the frame F is on.  */
@@ -1056,7 +1072,14 @@ default_pixels_per_inch_y (void)
 #if defined HAVE_NS
 # define FRAME_SCALE_FACTOR(f) (FRAME_NS_P (f) ? ns_frame_scale_factor (f) : 1)
 #elif defined HAVE_PGTK
-# define FRAME_SCALE_FACTOR(f) (FRAME_PGTK_P (f) ? pgtk_frame_scale_factor (f) : 1)
+# ifdef HAVE_CMACS_LRGTERM
+/* CMACS: lrg frames carry their own DPI scale.  */
+#  define FRAME_SCALE_FACTOR(f)						\
+  (FRAME_LRG_P (f) ? lrg_frame_scale_factor (f)				\
+   : FRAME_PGTK_P (f) ? pgtk_frame_scale_factor (f) : 1)
+# else
+#  define FRAME_SCALE_FACTOR(f) (FRAME_PGTK_P (f) ? pgtk_frame_scale_factor (f) : 1)
+# endif
 #else
 # define FRAME_SCALE_FACTOR(f) 1
 #endif

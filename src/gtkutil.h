@@ -27,6 +27,12 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 #include "../lwlib/lwlib-widget.h"
 #ifdef HAVE_PGTK
 #include "pgtkterm.h"
+#ifdef HAVE_CMACS_LRGTERM
+/* CMACS: pull in the output_lrg structs + the FRAME_FONT/FONTSET/
+   BASELINE_OFFSET/MOUSE_HL_INFO dispatch redefinitions, so shared redisplay
+   code resolves them correctly for lrg frames as well as pgtk.  */
+#include "cmacs-lrgterm.h"
+#endif
 #define EVENT GdkEvent
 #else
 #include "xterm.h"

@@ -1565,7 +1565,7 @@ If FRAME is nil, the current FRAME is used."
 	    match (cond ((eq req 'type)
 			 (or (memq (window-system frame) options)
 			     (and (memq 'graphic options)
-				  (memq (window-system frame) '(x w32 ns pgtk)))
+				  (memq (window-system frame) '(x w32 ns pgtk lrg)))
 			     ;; FIXME: This should be revisited to use
 			     ;; display-graphic-p, provided that the
 			     ;; color selection depends on the number
@@ -1968,9 +1968,14 @@ return value is nil."
 The optional argument DISPLAY specifies which display to ask about.
 DISPLAY should be either a frame or a display name (a string).
 If omitted or nil, that stands for the selected frame's display."
-  (if (display-graphic-p display)
-      (xw-display-color-p display)
-    (tty-display-color-p display)))
+  (cond
+   ;; lrg is a graphic display, but xw-display-color-p is pgtk/x-only and
+   ;; rejects lrg frames; lrg is always truecolor.
+   ((eq (framep-on-display display) 'lrg) t)
+   ((display-graphic-p display)
+    (xw-display-color-p display))
+   (t
+    (tty-display-color-p display))))
 
 (declare-function x-display-grayscale-p "xfns.c" (&optional terminal))
 
@@ -1978,9 +1983,12 @@ If omitted or nil, that stands for the selected frame's display."
   "Return non-nil if frames on DISPLAY can display shades of gray.
 DISPLAY should be either a frame or a display name (a string).
 If omitted or nil, that stands for the selected frame's display."
-  (if (display-graphic-p display)
-      (x-display-grayscale-p display)
-    (> (tty-color-gray-shades display) 2)))
+  (cond
+   ((eq (framep-on-display display) 'lrg) t)
+   ((display-graphic-p display)
+    (x-display-grayscale-p display))
+   (t
+    (> (tty-color-gray-shades display) 2))))
 
 (defun read-color (&optional prompt convert-to-RGB allow-empty-name msg
 			     foreground face)

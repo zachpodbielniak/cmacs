@@ -470,6 +470,10 @@ return values.  */)
       return Qns;
     case output_pgtk:
       return Qpgtk;
+#ifdef HAVE_CMACS_LRGTERM
+    case output_lrg:		/* CMACS: libregnum/raylib backend */
+      return Qlrg;
+#endif
     case output_haiku:
       return Qhaiku;
     case output_android:

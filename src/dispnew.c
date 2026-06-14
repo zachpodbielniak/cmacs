@@ -7298,6 +7298,17 @@ init_display_interactive (void)
     }
 #endif
 
+#ifdef HAVE_CMACS_LRGTERM
+  /* CMACS: --lrg[=MODE] selects the libregnum/raylib backend, ahead of the
+     default pgtk.  Only when explicitly requested (mode >= 0).  */
+  if (lrg_requested_render_mode >= 0
+      && !inhibit_window_system && !will_dump_p ())
+    {
+      Vinitial_window_system = Qlrg;
+      return;
+    }
+#endif
+
 #ifdef HAVE_PGTK
   if (!inhibit_window_system && !will_dump_p ())
     {

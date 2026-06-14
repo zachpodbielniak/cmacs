@@ -5907,6 +5907,9 @@ garbage_collect (void)
 #ifdef HAVE_PGTK
   mark_pgtkterm ();
 #endif
+#ifdef HAVE_CMACS_LRGTERM
+  mark_lrgterm ();		/* CMACS: mark lrg displays' font caches */
+#endif
 
 #ifdef USE_GTK
   xg_mark_data ();

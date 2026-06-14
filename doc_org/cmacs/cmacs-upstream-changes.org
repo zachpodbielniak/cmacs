@@ -306,6 +306,78 @@ first Android launch.  Everything else cmacs adds is a *new* file under
 .gitignore also gains entries for cmacs build artifacts (generated
 =doc_org/cmacs/deps/= tree, installed module =.so= files, etc.).
 
+* output_lrg display backend (=--with-cmacs-lrgterm=)
+
+The independent libregnum/raylib display backend (a peer to pgtk; see
+[[file:cmacs-lrgterm.org]]) keeps its feature code in new files under
+=cmacs/lrgterm/=, =cmacs/mcp/cmacs-mcp-tools-lrgterm.c= and
+=lisp/term/lrg-win.el=.  The upstream edits below are all small and guarded
+=#ifdef HAVE_CMACS_LRGTERM= (except enum/case entries, which follow upstream's
+unconditional style) and marked =/* CMACS: output_lrg ... */=.
+
+** C sources / headers
+
+- =src/termhooks.h= --- =output_lrg= in =enum output_method=; =struct
+  lrg_display_info *lrg= in =union display_info=; the =TERMINAL_FONT_CACHE=
+  arm resolves lrg via =display_info.lrg->pgtk.name_list_element=.
+- =src/frame.h= --- =struct lrg_output *lrg= in =union output_data=;
+  =FRAME_LRG_P=; *=FRAME_WINDOW_P= redefined to =(FRAME_PGTK_P || FRAME_LRG_P)=*
+  (critical: cmacs builds pgtk+lrg together, so it must be the disjunction);
+  =FRAME_SCALE_FACTOR= arm.
+- =src/dispextern.h= --- the =glyph_string= =xgcv= guard widened to include
+  =HAVE_CMACS_LRGTERM=.
+- =src/gtkutil.h= (the =TERM_HEADER=) --- includes =cmacs-lrgterm.h= after
+  =pgtkterm.h=, which =#undef=/redefines the shared redisplay macros
+  (=FRAME_FONT/FONTSET/BASELINE_OFFSET/DISPLAY_INFO=) to dispatch on
+  =FRAME_LRG_P=.  =struct lrg_display_info= embeds a real =struct
+  pgtk_display_info= as its first member so =FRAME_DISPLAY_INFO= reads are
+  layout-correct for lrg frames.
+- =src/frame.c= --- =Qlrg= window-system cases + =DEFSYM (Qlrg, "lrg")=;
+  terminal-refcount guard; =display_available()= also checks
+  =lrg_display_list=; =Fx_get_resource= returns nil when =x_display_list= is
+  NULL.
+- =src/terminal.c= --- =case output_lrg: return Qlrg= in the window-system
+  mapper.
+- =src/dispnew.c= --- =init_display= selects =Vinitial_window_system = Qlrg=
+  when =lrg_requested_render_mode >= 0=, before the pgtk block.
+- =src/emacs.c= --- the =--lrg[=MODE]= early flag scan (mutually exclusive
+  with =--gowl=), =standard_args= entry, usage line, and
+  =syms_of_cmacs_lrgterm()= / =init_cmacs_lrgterm()= calls.
+- =src/alloc.c= --- =mark_lrgterm ()= call in the GC mark phase (the lrg
+  display's font-cache cons lives in C heap).
+- =src/lisp.h= --- externs for =syms_of_cmacs_lrgterm= / =init_cmacs_lrgterm=
+  and =int lrg_requested_render_mode=.
+
+** Build system
+
+- =configure.ac= --- the =--with-cmacs-lrgterm= block (OPTION_DEFAULT_OFF;
+  requires =--with-cmacs-libregnum= + =--with-cmacs-glib=); =CMACS_LRGTERM_OBJ=
+  / CFLAGS / LIBS; and =cmacs-mcp-tools-lrgterm.o= appended to =CMACS_MCP_OBJ=
+  when both lrgterm and MCP are enabled.
+- =src/config.in= --- =#undef HAVE_CMACS_LRGTERM=.
+- =src/Makefile.in= --- the =CMACS_LRGTERM_*= wiring (=-Icmacs/lrgterm=,
+  vpath, three vars, ALLOBJS, link LIBS, =CMACS_ALL_OBJ= / =CMACS_DIRS +=
+  lrgterm=, and the =$(CMACS_LRGTERM_OBJ): $(CMACS_LIBREGNUM_STATIC_LIB)= dep).
+
+** Lisp
+
+These add =lrg= beside =pgtk= in the graphical-display predicates so faces
+realise with colour (the single biggest behavioural touch-point):
+
+- =lisp/loadup.el= --- load =term/lrg-win= when =(featurep 'lrg)=.
+- =lisp/frame.el= --- =lrg= added to =display-graphic-p=,
+  =display-selections-p=, =display-symbol-keys-p=, =display-planes=,
+  =display-color-cells=, =display-visual-class=, and the =display-pixel-width=
+  / =display-pixel-height= lrg branches (which call the new
+  =lrg-display-pixel-size= primitive; =display-monitor-attributes-list= then
+  works via its generic fallback).
+- =lisp/faces.el= --- =lrg= added to the =(type graphic)= match in
+  =face-spec-set-match-display=, and to =display-color-p= /
+  =display-grayscale-p=.
+
+=lisp/term/lrg-win.el= is a *new* file (the =term/pgtk-win.el= analogue), not
+an edit.
+
 * Re-applying after a merge
 
 1. Search the upstream files for =CMACS= comments; each marks a hunk above.

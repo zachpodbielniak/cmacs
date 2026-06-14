@@ -1470,7 +1470,7 @@ struct glyph_string
   Emacs_GC *gc;
   HDC hdc;
 #endif
-#if defined (HAVE_PGTK)
+#if defined (HAVE_PGTK) || defined (HAVE_CMACS_LRGTERM) /* CMACS: output_lrg */
   Emacs_GC xgcv;
 #endif
 

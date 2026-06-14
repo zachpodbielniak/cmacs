@@ -5555,6 +5555,13 @@ extern void init_cmacs_ai (void);
 extern void syms_of_cmacs_libregnum (void);
 extern void init_cmacs_libregnum (void);
 #endif
+#ifdef HAVE_CMACS_LRGTERM
+extern void syms_of_cmacs_lrgterm (void);
+extern void init_cmacs_lrgterm (void);
+/* Render mode requested by --lrg[=MODE]: -1 = not requested, 0 = 2d,
+   1 = 3d, 2 = 3dvr.  Defined in cmacs/lrgterm/cmacs-lrgterm.c.  */
+extern int lrg_requested_render_mode;
+#endif
 #ifdef HAVE_CMACS_GNUSEYE
 extern void syms_of_cmacs_gnuseye (void);
 extern void init_cmacs_gnuseye (void);

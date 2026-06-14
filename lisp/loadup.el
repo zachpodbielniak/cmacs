@@ -360,6 +360,11 @@
       (load "touch-screen")
       (load "term/common-win")
       (load "term/pgtk-win")))
+;; CMACS: libregnum/raylib display backend (output_lrg).
+(if (featurep 'lrg)
+    (progn
+      (load "term/common-win")
+      (load "term/lrg-win")))
 (if (fboundp 'x-create-frame)
     ;; Do it after loading term/foo-win.el since the value of the
     ;; mouse-wheel-*-event vars depends on those files being loaded or not.

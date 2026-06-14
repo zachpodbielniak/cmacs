@@ -2743,7 +2743,7 @@ frames and several different fonts at once.  This is true for displays
 that use a window system such as X, and false for text-only terminals.
 DISPLAY can be a display name, a frame, or nil (meaning the selected
 frame's display)."
-  (not (null (memq (framep-on-display display) '(x w32 ns pgtk haiku
+  (not (null (memq (framep-on-display display) '(x w32 ns pgtk lrg haiku
                                                    android)))))
 
 (defun display-images-p (&optional display)
@@ -2783,7 +2783,7 @@ frame's display)."
       ;; a Windows DOS Box.
       (with-no-warnings
        (not (null dos-windows-version))))
-     ((memq frame-type '(x w32 ns pgtk))
+     ((memq frame-type '(x w32 ns pgtk lrg))
       t)
      ((and tty-select-active-regions
            (terminal-parameter nil 'xterm--set-selection))
@@ -2796,7 +2796,7 @@ frame's display)."
 This means that, for example, DISPLAY can differentiate between
 the keybinding RET and [return]."
   (let ((frame-type (framep-on-display display)))
-    (or (memq frame-type '(x w32 ns pc pgtk haiku android))
+    (or (memq frame-type '(x w32 ns pc pgtk lrg haiku android))
         ;; MS-DOS and MS-Windows terminals have built-in support for
         ;; function (symbol) keys
         (memq system-type '(ms-dos windows-nt)))))
@@ -2816,6 +2816,7 @@ If DISPLAY is omitted or nil, it defaults to the selected frame's display."
 
 (declare-function x-display-pixel-height "xfns.c" (&optional terminal))
 (declare-function tty-display-pixel-height "term.c" (&optional terminal))
+(declare-function lrg-display-pixel-size "cmacs-lrgterm.c" ())
 
 (defun display-pixel-height (&optional display)
   "Return the height of DISPLAY's screen in pixels.
@@ -2832,6 +2833,8 @@ with DISPLAY.  To get information for each physical monitor, use
     (cond
      ((memq frame-type '(x w32 ns haiku pgtk android))
       (x-display-pixel-height display))
+     ((eq frame-type 'lrg)
+      (or (cdr (lrg-display-pixel-size)) 1080))
      (t
       (tty-display-pixel-height display)))))
 
@@ -2853,6 +2856,8 @@ with DISPLAY.  To get information for each physical monitor, use
     (cond
      ((memq frame-type '(x w32 ns haiku pgtk android))
       (x-display-pixel-width display))
+     ((eq frame-type 'lrg)
+      (or (car (lrg-display-pixel-size)) 1920))
      (t
       (tty-display-pixel-width display)))))
 
@@ -2956,6 +2961,8 @@ If DISPLAY is omitted or nil, it defaults to the selected frame's display."
     (cond
      ((memq frame-type '(x w32 ns haiku pgtk android))
       (x-display-planes display))
+     ((eq frame-type 'lrg)              ; lrg is a 24-bit truecolor GPU surface
+      24)
      ((eq frame-type 'pc)
       4)
      (t
@@ -2971,6 +2978,8 @@ If DISPLAY is omitted or nil, it defaults to the selected frame's display."
     (cond
      ((memq frame-type '(x w32 ns haiku pgtk android))
       (x-display-color-cells display))
+     ((eq frame-type 'lrg)              ; truecolor: 2^24 cells
+      16777216)
      ((eq frame-type 'pc)
       16)
      (t
@@ -2988,6 +2997,8 @@ If DISPLAY is omitted or nil, it defaults to the selected frame's display."
     (cond
      ((memq frame-type '(x w32 ns haiku pgtk android))
       (x-display-visual-class display))
+     ((eq frame-type 'lrg)
+      'true-color)
      ((and (memq frame-type '(pc t))
 	   (tty-display-color-p display))
       'static-color)

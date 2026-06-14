@@ -1429,6 +1429,30 @@ android_emacs_init (int argc, char **argv, char *dump_file)
   }
 #endif
 
+#ifdef HAVE_CMACS_LRGTERM
+  /* CMACS: --lrg[=MODE] selects the libregnum/raylib display backend
+     (output_lrg).  Record the requested render mode (2d default / 3d / 3dvr)
+     and normalise the arg to "--lrg" so the standard_args machinery consumes
+     it.  init_display then selects output_lrg.  */
+  {
+    int i;
+    for (i = 1; i < argc; i++)
+      if (strncmp (argv[i], "--lrg", 5) == 0
+          && (argv[i][5] == '\0' || argv[i][5] == '='))
+        {
+          const char *mode = argv[i][5] == '=' ? argv[i] + 6 : "2d";
+          if (strcmp (mode, "3d") == 0)
+            lrg_requested_render_mode = 1;
+          else if (strcmp (mode, "3dvr") == 0)
+            lrg_requested_render_mode = 2;
+          else
+            lrg_requested_render_mode = 0;
+          argv[i] = (char *) "--lrg";
+          break;
+        }
+  }
+#endif
+
   /* Check for --gowl before display initialization.
      Start the Wayland compositor early so that PGTK/GDK connects
      to gowl's display instead of any existing compositor.  This
@@ -1991,6 +2015,9 @@ android_emacs_init (int argc, char **argv, char *dump_file)
      The actual compositor startup was done earlier (before sort_args)
      because it must precede display initialization.  */
   argmatch (argv, argc, "-gowl", "--gowl", 5, NULL, &skip_args);
+#ifdef HAVE_CMACS_LRGTERM
+  argmatch (argv, argc, "-lrg", "--lrg", 4, NULL, &skip_args);
+#endif
 #endif
 
   /* Handle the --help option, which gives a usage message.  */
@@ -2823,6 +2850,9 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #ifdef HAVE_CMACS_LIBREGNUM
       syms_of_cmacs_libregnum ();
 #endif
+#ifdef HAVE_CMACS_LRGTERM
+      syms_of_cmacs_lrgterm ();
+#endif
 #ifdef HAVE_CMACS_GNUSEYE
       syms_of_cmacs_gnuseye ();
 #endif
@@ -2950,6 +2980,9 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #ifdef HAVE_CMACS_LIBREGNUM
   init_cmacs_libregnum ();
 #endif
+#ifdef HAVE_CMACS_LRGTERM
+  init_cmacs_lrgterm ();
+#endif
 #ifdef HAVE_CMACS_GNUSEYE
   init_cmacs_gnuseye ();
 #endif
@@ -3060,6 +3093,9 @@ static const struct standard_args standard_args[] =
   { "-fg-daemon", "--fg-daemon", 99, 0 },
 #ifdef HAVE_CMACS_GOWL
   { "-gowl", "--gowl", 98, 0 },
+#ifdef HAVE_CMACS_LRGTERM
+  { "-lrg", "--lrg", 98, 0 },
+#endif
 #endif
   { "-help", "--help", 90, 0 },
   { "-nl", "--no-loadup", 70, 0 },
