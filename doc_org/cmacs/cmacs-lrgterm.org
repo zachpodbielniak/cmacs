@@ -556,11 +556,15 @@ These are genuine, acceptable and documented; most match the phased plan:
   Emacs's internal windows; a second top-level *or child* frame is refused
   (~lrg-create-frame~ signals an error rather than open a stray second OS
   window).  This means *child-frame UIs* — ~posframe~, ~corfu~/~company~
-  popups, ~which-key-posframe~, GUI tooltips — cannot show and fall back to the
-  minibuffer.  Test 3D with ~emacs -Q~ (or a config whose completion stays in
-  the minibuffer, e.g. ~vertico~ without ~vertico-posframe~); rendering child
-  frames as in-window 3D panels is a roadmap item
-  ([[file:cmacs-lrgterm-3d-roadmap.org]]).
+  popups, ~which-key-posframe~, GUI tooltips — cannot show as a child frame.
+  *Corfu* is handled gracefully: ~lrg-win.el~ tells it (via the
+  ~corfu--popup-support-p~ generic, dispatched on ~window-system lrg~) that its
+  popup is unsupported, so it falls back to the standard ~completion-in-region~
+  UI (the ~*Completions*~ buffer in a normal in-frame split) instead of
+  erroring or spawning a stray ~EmacsCorfuGUI~ window.  Other child-frame UIs
+  that don't probe support are simply refused; prefer minibuffer equivalents
+  (e.g. ~vertico~ without ~vertico-posframe~).  Rendering child frames as
+  in-window 3D panels is a roadmap item ([[file:cmacs-lrgterm-3d-roadmap.org]]).
 - *Menus / dialogs*: the Emacs *menu bar* is not drawn — keyboard menu access
   is via ~M-x tmm-menubar~ / =F10=; dialogs route to the minibuffer
   (~use-dialog-box~ is ~nil~).  The libregnum/gnuseye right-click *context*

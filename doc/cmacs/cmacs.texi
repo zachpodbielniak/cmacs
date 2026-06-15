@@ -7892,8 +7892,12 @@ image), and the 3D tools @code{lrgterm_3d_state},
 One OS window per terminal: a second top-level @emph{or child} frame is
 refused (@code{lrg-create-frame} signals an error rather than open a stray
 second OS window), so child-frame UIs (@code{posframe}, @code{corfu}/
-@code{company} popups, @code{which-key-posframe}, GUI tooltips) cannot show and
-fall back to the minibuffer --- test 3D with @code{emacs -Q}.  The menu
+@code{company} popups, @code{which-key-posframe}, GUI tooltips) cannot show as a
+child frame.  @code{corfu} is handled gracefully (@code{lrg-win.el} reports its
+popup unsupported via the @code{corfu--popup-support-p} generic, so it falls
+back to the standard @code{completion-in-region} @code{*Completions*} UI instead
+of erroring or spawning a stray @code{EmacsCorfuGUI} window); other child-frame
+UIs are refused, so prefer minibuffer equivalents.  The menu
 @emph{bar} is not drawn (use @code{M-x tmm-menubar} / @key{F10};
 dialogs go to the minibuffer; the libregnum/gnuseye right-click @emph{context}
 menus, though, are drawn in-engine via @code{lrg-popup-menu}); scroll bars, the
