@@ -7757,8 +7757,9 @@ The interaction model is @emph{hybrid}: command-the-room by default, with manual
 override.  Focus a panel and the camera flies it front-and-centre while the
 others recede --- by @kbd{Ctrl+double-left-click}, @kbd{C-c 3 f}, or voice/AI via
 MCP.  Manually, @emph{middle-drag} orbits around the @emph{room} (the whole scene, not
-just a focused panel), @kbd{Ctrl+wheel} dollies in/out, and @kbd{Ctrl/Super +
-middle-drag} grabs and moves the panel under the pointer (which @emph{pins} it so
+just a focused panel), @kbd{Ctrl + left-drag} is a first-person @emph{look} (turn
+the camera in place about its own position), @kbd{Ctrl+wheel} dollies in/out, and
+@kbd{Ctrl/Super + middle-drag} grabs and moves the panel under the pointer (which @emph{pins} it so
 it keeps its place across re-layouts); @kbd{C-c 3 u}/@kbd{U} release panels.
 Plain left-click still edits; a bare middle-click is still @code{mouse-2} (yank);
 @kbd{Super+drag} is a trackpad alias for middle-drag.  When the pointer is over a

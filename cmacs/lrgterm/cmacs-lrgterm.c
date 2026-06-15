@@ -1349,7 +1349,8 @@ lrg_recompose_now (struct frame *f)
    round-trip), routed through the device-agnostic lrg_3d_surface_* intents. */
 #define LRG_DRAG_THRESHOLD     3       /* px before a middle press is a drag */
 #define LRG_DOUBLE_CLICK_SECS  0.45    /* Ctrl+left double-click window */
-#define LRG_ORBIT_DEG_PER_PX   0.4f    /* drag sensitivity */
+#define LRG_ORBIT_DEG_PER_PX   0.4f    /* middle-drag orbit sensitivity */
+#define LRG_LOOK_DEG_PER_PX    0.25f   /* Ctrl+left-drag first-person look */
 
 static struct
 {
@@ -1360,6 +1361,12 @@ static struct
   int    last_x, last_y;
   double last_left_t;     /* time of the last Ctrl+left press (double-click) */
   int    last_left_x, last_left_y;
+
+  /* Ctrl+left: drag = first-person camera look; click = focus a panel. */
+  bool   cl_down;
+  bool   cl_dragging;
+  int    cl_press_x, cl_press_y;
+  int    cl_last_x, cl_last_y;
 } lrg_sp;
 
 /* TRUE when frame pixel (FX,FY) lies in a window whose buffer hosts a libregnum
@@ -1751,34 +1758,77 @@ lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
           grl_input_is_mouse_button_released (GRL_MOUSE_BUTTON_MIDDLE);
         bool left_pressed =
           grl_input_is_mouse_button_pressed (GRL_MOUSE_BUTTON_LEFT);
+        bool left_released =
+          grl_input_is_mouse_button_released (GRL_MOUSE_BUTTON_LEFT);
         int fx, fy;
         /* Defer to a libregnum-view window under the pointer (gnuseye / editor):
            starting a gesture there must not steal its camera controls.  */
         bool over_view =
           lrg_pick_xy (f, mx, my, &fx, &fy) && lrg_over_libregnum_view (f, fx, fy);
 
-        /* Ctrl+left: single click peeks focus (DOF only), double click flies the
-           panel front-and-centre.  Consumed so it does not also place point.  */
+        /* Ctrl+left: a DRAG turns the camera in place (first-person "look" about
+           the eye -- the camera stays put and the view swings around it); a CLICK
+           (no drag) focuses the panel under it -- peek on a single click, fly
+           front-and-centre on a double click.  Always consumed, so Ctrl+left
+           never places point.  */
         if (left_pressed && ctrl && !over_view)
           {
-            double now = grl_window_get_time (win);
-            guint64 key = 0;
-            bool hit = lrg_3d_surface_pick_panel (s3, (gfloat) mx, (gfloat) my,
-                                                  NULL, NULL, &key);
-            bool dbl = (now - lrg_sp.last_left_t) < LRG_DOUBLE_CLICK_SECS
-                       && abs (mx - lrg_sp.last_left_x) < 6
-                       && abs (my - lrg_sp.last_left_y) < 6;
-            if (hit)
+            lrg_sp.cl_down = true;
+            lrg_sp.cl_dragging = false;
+            lrg_sp.cl_press_x = lrg_sp.cl_last_x = mx;
+            lrg_sp.cl_press_y = lrg_sp.cl_last_y = my;
+            sp_skip_left = true;
+          }
+        if (lrg_sp.cl_down && !left_released
+            && (mx != lrg_sp.cl_last_x || my != lrg_sp.cl_last_y))
+          {
+            if (!lrg_sp.cl_dragging
+                && (abs (mx - lrg_sp.cl_press_x) > LRG_DRAG_THRESHOLD
+                    || abs (my - lrg_sp.cl_press_y) > LRG_DRAG_THRESHOLD))
+              lrg_sp.cl_dragging = true;
+            if (lrg_sp.cl_dragging)
               {
-                if (dbl)
-                  lrg_3d_surface_focus_panel (s3, key);
-                else
-                  lrg_3d_surface_set_focus_window (s3, key);
+                LrgSpatialCamera *cam = lrg_3d_surface_get_camera (s3);
+                if (cam != NULL)
+                  /* Drag right -> look right, drag up -> look up (FPS feel). */
+                  lrg_spatial_camera_look_drag
+                    (cam,
+                     (gfloat) (mx - lrg_sp.cl_last_x) * LRG_LOOK_DEG_PER_PX,
+                     -(gfloat) (my - lrg_sp.cl_last_y) * LRG_LOOK_DEG_PER_PX);
                 lrg_recompose_now (f);
+                sp_skip_motion = true;
               }
-            lrg_sp.last_left_t = dbl ? 0.0 : now;
-            lrg_sp.last_left_x = mx;
-            lrg_sp.last_left_y = my;
+            lrg_sp.cl_last_x = mx;
+            lrg_sp.cl_last_y = my;
+            sp_skip_left = true;
+          }
+        if (left_released && lrg_sp.cl_down)
+          {
+            if (!lrg_sp.cl_dragging)
+              {
+                /* A click (not a drag): focus the panel under the pointer. */
+                double now = grl_window_get_time (win);
+                guint64 key = 0;
+                bool hit = lrg_3d_surface_pick_panel (s3, (gfloat) mx,
+                                                      (gfloat) my, NULL, NULL,
+                                                      &key);
+                bool dbl = (now - lrg_sp.last_left_t) < LRG_DOUBLE_CLICK_SECS
+                           && abs (mx - lrg_sp.last_left_x) < 6
+                           && abs (my - lrg_sp.last_left_y) < 6;
+                if (hit)
+                  {
+                    if (dbl)
+                      lrg_3d_surface_focus_panel (s3, key);
+                    else
+                      lrg_3d_surface_set_focus_window (s3, key);
+                    lrg_recompose_now (f);
+                  }
+                lrg_sp.last_left_t = dbl ? 0.0 : now;
+                lrg_sp.last_left_x = mx;
+                lrg_sp.last_left_y = my;
+              }
+            lrg_sp.cl_down = false;
+            lrg_sp.cl_dragging = false;
             sp_skip_left = true;
           }
 

@@ -357,6 +357,7 @@ Default *mouse* bindings (all rebindable — see /Device-agnostic intent layer/)
 | plain left-click / drag | place point / select region (normal Emacs) |
 | *Ctrl + left-click* | peek-focus the panel (depth-of-field only) |
 | *Ctrl + double-left-click* | focus the panel *front-and-centre* (fly the camera) |
+| *Ctrl + left-drag* | first-person *look*: turn the camera in place about its own position (the view swings around the eye) |
 | *middle-drag* | orbit the camera around the *room* (the whole scene), not just a focused panel |
 | *Ctrl/Super + middle-drag* | grab and move the panel under the pointer (it pins) |
 | middle-click (no drag) | normal Emacs ~mouse-2~ (yank) |
