@@ -17,9 +17,13 @@ is selected only by the ~--lrg[=MODE]~ command-line flag (or by setting
 #+begin_src sh
 ./src/emacs --lrg          # == --lrg=2d, the default render mode
 ./src/emacs --lrg=2d       # explicit
-./src/emacs --lrg=3d       # reserved -- errors politely (not yet implemented)
-./src/emacs --lrg=3dvr     # reserved -- errors politely (not yet implemented)
+./src/emacs --lrg=3d       # 3D: the frame as floating panel(s) in a scene
+./src/emacs --lrg=3d:per-window:workshop   # one panel per window, grid floor
+./src/emacs --lrg=3dvr     # reserved -- builds the 3D surface (mono) for now
 #+end_src
+
+See [[*3D mode]] for the full SPEC grammar, arrangements, environments and
+runtime controls.
 
 raylib owns the OS window and the input event loop; Emacs's own ~pselect~
 loop is unchanged and is woken by a timer file descriptor.  ~(window-system)~
@@ -35,9 +39,9 @@ surface/atlas types — and ~--with-cmacs-glib~; it does *not* require
 The motivation is the long-term "Stark mode" direction: an Emacs UI that can
 live in a real-time 3D/VR scene.  Rather than bolt 3D onto pgtk, ~output_lrg~
 is a clean, GPU-native backend whose architecture is *2D-first but
-3D/VR-ready* through a render-mode seam (see [[*Render modes (2D now, 3D/VR
-ready)]]).  Today it renders pixel-faithful flat 2D — feature-complete enough
-to use as an editor.
+3D/VR-ready* through a render-mode seam (see [[*Render modes (2D + 3D; VR
+reserved)]]).  It renders pixel-faithful flat 2D (~--lrg~) and a configurable
+real-time 3D workspace (~--lrg=3d~); VR is the reserved next step.
 
 * Quick start
 
@@ -132,7 +136,11 @@ drivable from Elisp via ~(gi-require "Libregnum")~ and from any GI language:
   Owns a ~GrlWindow~; presents to the *default framebuffer*.
 - ~LrgTextRenderer~ (interface) — the abstract glyph-drawing contract so
   alternative renderers (e.g. SDF for crisp 3D text) can swap in.
-- ~LrgRenderMode~ (enum): ~LRG_RENDER_MODE_2D~ (v1), ~_3D~, ~_3DVR~ (reserved).
+- ~LrgRenderMode~ (enum): ~LRG_RENDER_MODE_2D~, ~_3D~ (both implemented),
+  ~_3DVR~ (reserved — builds the 3D surface, mono).  3D adds
+  ~Lrg3DSurface~ + ~LrgScenePanel~, ~LrgSpatialCamera~, the
+  ~LrgSceneArrangement~ / ~LrgPanelEnvironment~ GInterfaces (+ built-in impls)
+  and ~LrgModeRegistry~ (string-id → GType, the extension seam for new modes).
 - Boxed: ~LrgGlyphKey~ ={font_id, glyph_code}=, ~LrgGlyphMetrics~ =(UV region,
   bearings, advance, is_color)=.  ~GrlColor~ is reused, not duplicated.
 
@@ -258,22 +266,134 @@ for their single-key navigation, ~<escape>~ is bound to drop them to Evil
 *normal* state (gnuseye's ~<escape>~ first deselects a selected entity, then
 escapes); re-enter navigation with ~C-z~ (~evil-emacs-state~).
 
-* Render modes (2D now, 3D/VR ready)
+* Render modes (2D + 3D; VR reserved)
 
-The abstract ~LrgFrameSurface~ + ~LrgRenderMode~ + ~pick~ seam means 3D and
-VR are *additive*, never a rewrite:
+The abstract ~LrgFrameSurface~ + ~LrgRenderMode~ + ~pick~ seam makes each mode
+additive: Layer 3 (the Emacs glue) only ever calls the base surface vtable, the
+glyph atlas / ~LrgTextRenderer~ are projection-free, and input routes through
+~pick~ (identity in 2D, a ray-cast in 3D/VR).
 
-- Layer 3 is mode-agnostic: the Emacs glue only ever calls the base surface
-  vtable, never a camera/projection/eye.
-- The glyph atlas and ~LrgTextRenderer~ are projection-free; the same atlas
-  and ~draw_glyph~ calls work whether the surface space is screen pixels (2D),
-  a window plane (3D) or a per-eye plane (VR).
-- Input routes through ~pick~: identity in 2D, a ray-cast against window
-  planes in 3D/VR.
+- ~2d~ (default) — ~Lrg2DSurface~: flat, pixel-exact.  Plain ~emacs --lrg~.
+- ~3d~ — ~Lrg3DSurface~: the Emacs frame is rasterised flat and captured to a
+  texture each redisplay, then drawn as one or more textured *panels* in a
+  real-time 3D scene viewed through a perspective camera.  (Internally the 3D
+  surface owns an ~Lrg2DSurface~ and delegates the flat rasterisation to it,
+  then composites the captured texture onto panels — no renderer duplication.)
+  The default camera is a gentle (~14°) elevated 3/4 view, so the panels show
+  real perspective and the environment floor recedes into the distance on launch
+  rather than looking head-on/flat; orbit/zoom it with =C-c 3= (arrows / =+= /
+  =-=, =0= to reset).
+- ~3dvr~ — reserved; today it builds the 3D surface (mono).  A future
+  ~LrgVRSurface~ renders the same scene per-eye.
 
-Default mode is ~2d~.  ~3d~ / ~3dvr~ are reserved flag tokens that today
-error politely; building ~Lrg3DSurface~ / ~LrgVRSurface~ later requires no
-Layer-3 changes.
+** 3D mode
+
+Launch with a colon-/comma-separated SPEC after the mode token
+(~MODE[:ARRANGEMENT][:ENVIRONMENT]~):
+
+#+begin_src sh
+emacs --lrg=3d                       # one floating panel, void backdrop
+emacs --lrg=3d:per-window            # one panel per Emacs window
+emacs --lrg=3d:per-window:workshop   # ... on a grid-floor workbench
+emacs --lrg=3d:cockpit               # enclosed grid "cockpit" room
+#+end_src
+
+Two orthogonal axes, each also switchable at runtime:
+
+*Arrangement* (panel layout):
+- ~single-panel~ — the whole frame on one panel.
+- ~per-window~ — each Emacs window on its own panel, mirroring the window tree
+  (the minibuffer becomes its own panel).
+- ~free~ — per-window panels with independent transforms (spatial WM; basic).
+
+*Environment* (ambient scene):
+- ~void~ — plain dark backdrop.
+- ~workshop~ — a grid floor beneath the panels.
+- ~cockpit~ — an enclosed grid room (floor + back + side walls).
+
+New arrangements / environments are added by implementing the
+~LrgSceneArrangement~ / ~LrgPanelEnvironment~ GInterfaces and registering an id
+with ~LrgModeRegistry~ — no surface or glue changes.
+
+*Depth-of-field*: the selected window's panel is focused (bright/forward) and the
+others recede/dim; with the global ~cmacs-lrg-3d-mode~ on, focus follows the
+selected window.
+
+*Runtime control* — ~cmacs-lrg-3d-mode~ (auto-enabled for lrg frames) binds the
+commands under the ~C-c 3~ prefix:
+
+| Command | Key | Description |
+|---------+-----+-------------|
+| ~cmacs-lrg-set-arrangement~ | =C-c 3 a= | switch arrangement (completing-read) |
+| ~cmacs-lrg-set-environment~ | =C-c 3 e= | switch environment |
+| ~cmacs-lrg-3d-describe~ | =C-c 3 ?= | echo mode / arrangement / environment |
+| ~cmacs-lrg-camera-reset~ | =C-c 3 0= | reset the camera |
+| ~cmacs-lrg-camera-zoom-in~ / ~-out~ | =C-c 3 += / =-= | dolly toward / away |
+| ~cmacs-lrg-camera-orbit-{left,right,up,down}~ | =C-c 3 <arrows>= | orbit |
+| ~cmacs-lrg-focus-window~ | =C-c 3 f= | bring the selected window's panel front-and-centre (fly the camera) |
+| ~cmacs-lrg-pin-window~ / ~cmacs-lrg-unpin-window~ | =C-c 3 p= / =u= | pin the selected panel in place / release it to auto-layout |
+| ~cmacs-lrg-unpin-all~ | =C-c 3 U= | release every panel to auto-layout |
+| ~cmacs-lrg-place-wall~ / ~cmacs-lrg-clear-wall~ | =C-c 3 w= / =W= | show a 3D-view buffer (gnuseye globe, gobject graph, …) on the cockpit back wall / clear it |
+
+~emacsclient --lrg=3d:per-window:workshop~ spawns a matching frame.
+
+** Spatial interaction
+
+The interaction model is *hybrid*: by default the room responds to your attention
+(/command-the-room/) and you can also take manual control when you want.
+
+- *Command* (default): focus a panel and the camera flies it front-and-centre
+  while the others recede/dim — by *Ctrl+double-left-click*, by =C-c 3 f=, or by
+  voice/AI via MCP.  Selecting a window moves the depth-of-field focus to it
+  (and, with ~cmacs-lrg-3d-focus-follow-flies-camera~ set, flies the camera too).
+- *Manual override*: orbit the view and drag panels into your own arrangement;
+  *pin* a panel (=C-c 3 p=) so it keeps its place across re-layouts, resizes and
+  arrangement switches; =C-c 3 u= / =U= release it / all back to auto-layout.
+
+Default *mouse* bindings (all rebindable — see /Device-agnostic intent layer/):
+
+| Gesture | Action |
+|---------+--------|
+| plain left-click / drag | place point / select region (normal Emacs) |
+| *Ctrl + left-click* | peek-focus the panel (depth-of-field only) |
+| *Ctrl + double-left-click* | focus the panel *front-and-centre* (fly the camera) |
+| *middle-drag* | orbit the camera around the *room* (the whole scene), not just a focused panel |
+| *Ctrl/Super + middle-drag* | grab and move the panel under the pointer (it pins) |
+| middle-click (no drag) | normal Emacs ~mouse-2~ (yank) |
+| *Ctrl + wheel* | dolly the camera in / out (zoom) |
+| *Super + drag* | trackpad alias for middle-drag (orbit / move) |
+| wheel | scroll the buffer |
+
+When the pointer is over a window hosting a *libregnum view* (gnuseye, the
+libregnum editor, a CAD/STL viewer), the 3D spatial gestures *defer to that app*
+— middle-drag, Ctrl+wheel and clicks go to the view's own camera/controls
+(routed at the picked frame pixel), so the workspace navigation never fights an
+embedded app's navigation.
+
+Mouse motion / plain clicks still ray-cast onto the panel under the pointer
+(~cmacs-lrg-3d-pick~ / ~cmacs-lrg-3d-pick-panel~ expose the mapping), so editing
+in 3D lands on the right buffer cell.
+
+*** Device-agnostic intent layer
+
+The spatial controls are *intents*, not raw buttons: every gesture maps to a C
+method that is also a DEFUN and an MCP tool, so the mouse is just the first input
+device.  The high-rate drag math runs in C (no Lisp round-trip), mirroring
+~cmacs-libregnum-input.c~.
+
+| Intent | DEFUN | MCP tool |
+|--------+-------+----------|
+| focus a panel front-and-centre | ~cmacs-lrg-3d-focus-panel~ | ~lrgterm_3d_focus_selected~ |
+| orbit / dolly the camera | ~cmacs-lrg-3d-orbit~ / ~-dolly~ / ~-camera~ | ~lrgterm_3d_camera_orbit~ |
+| move a panel by a world delta | ~cmacs-lrg-3d-move-panel~ | — |
+| pin / unpin a panel | ~cmacs-lrg-3d-pin-panel~ / ~-unpin-panel~ | ~lrgterm_3d_pin_selected~ / ~lrgterm_3d_unpin_all~ |
+| ray-cast a pixel to a panel | ~cmacs-lrg-3d-pick-panel~ | — |
+
+Because the binding layer is data-driven, future devices — a SpaceMouse/6DOF
+(gamepad-axis bindings), Wayland gestures, or VR controllers — bind to the *same*
+intents with no rendering or glue changes, and voice/AI ("Jarvis, bring the diff
+front and centre") drive them through MCP.  This is the path toward the
+/stark-mode/ workshop without re-architecting.
 
 * Commands and DEFUNs
 
@@ -307,6 +427,10 @@ With ~--with-cmacs-mcp~, the backend registers MCP tools
 | ~lrgterm_render_stats~  | frame count, visibility, focus, colour depth |
 | ~lrgterm_force_redraw~  | force a full redraw + present |
 | ~lrgterm_dump_screen~   | capture the lrg frame to a PNG and return it *as an image* — an agent can see exactly what the backend renders |
+| ~lrgterm_3d_state~      | report the 3D render mode, arrangement and environment |
+| ~lrgterm_3d_cycle_arrangement~ | cycle single-panel → per-window → free |
+| ~lrgterm_3d_cycle_environment~ | cycle void → workshop → cockpit |
+| ~lrgterm_3d_camera_orbit~ | orbit the 3D camera around the panels |
 
 * Clipboard, fonts, faces
 
@@ -346,7 +470,14 @@ These are genuine, acceptable and documented; most match the phased plan:
 
 - *One OS window per terminal.*  raylib's process-global state makes true
   multi-window a graylib engine change.  v1 is one top-level frame plus
-  Emacs's internal windows; a second top-level GUI frame is refused.
+  Emacs's internal windows; a second top-level *or child* frame is refused
+  (~lrg-create-frame~ signals an error rather than open a stray second OS
+  window).  This means *child-frame UIs* — ~posframe~, ~corfu~/~company~
+  popups, ~which-key-posframe~, GUI tooltips — cannot show and fall back to the
+  minibuffer.  Test 3D with ~emacs -Q~ (or a config whose completion stays in
+  the minibuffer, e.g. ~vertico~ without ~vertico-posframe~); rendering child
+  frames as in-window 3D panels is a roadmap item
+  ([[file:cmacs-lrgterm-3d-roadmap.org]]).
 - *Menus / dialogs*: the Emacs *menu bar* is not drawn — keyboard menu access
   is via ~M-x tmm-menubar~ / =F10=; dialogs route to the minibuffer
   (~use-dialog-box~ is ~nil~).  The libregnum/gnuseye right-click *context*
@@ -358,6 +489,18 @@ These are genuine, acceptable and documented; most match the phased plan:
 - *Mouse-pointer shapes*: the pointer does not change to an I-beam etc. yet.
 - *IME*: direct/Quail input only (real CJK *input* — not display — is a gap).
 - ~--lrg~ and ~--gowl~ are mutually exclusive at startup.
+- *3D mode resize*: panels re-fit on a window resize — the surface reconciles
+  its geometry to the live window each frame, re-runs the arrangement layout, and
+  eases the panels to the new size (driven by the 60 Hz recompose tick).  Sizing
+  is *always-fit*: the frame fills the camera view at a fixed world height with
+  the width following the frame aspect, so the whole frame stays visible and
+  consistently framed at every window size (text reflows with the frame, as in
+  any Emacs frame).
+- *3D mode v1*: camera / focus / resize animate smoothly and the mouse ray-casts
+  onto the panel under it, but an ARRANGEMENT switch snaps (no cross-fade), and the
+  heavier signature features — live dashboards as ~cockpit~ walls (the gnuseye
+  globe), the Rolodex buffer switcher and git-history-as-depth — are designed but
+  deferred.  See [[file:cmacs-lrgterm-3d-roadmap.org]].
 
 * Troubleshooting
 
@@ -376,6 +519,13 @@ These are genuine, acceptable and documented; most match the phased plan:
   blocked).  Verify that hook is wired in ~lrg_create_terminal~ (see §Rendering
   / presentation model).  Capturing with ~lrg-capture-screen~ will still look
   correct in this state because it presents out-of-band.
+- *A stray, blurry second desktop window appears (often on completion / a
+  prompt)*: your config opened a *child frame* (~posframe~, ~corfu~/~company~
+  popup, ~which-key-posframe~, a GUI tooltip).  lrg is one OS window per process
+  and now *refuses* the extra frame (it used to spawn a broken second window);
+  the package should fall back to the minibuffer.  Run ~emacs -Q --lrg=3d~ to
+  rule out config, or disable the posframe/child-frame UI.  See /Known v1
+  limitations/.
 - *Verifying rendering*: use ~(lrg-capture-screen "/tmp/x.png")~ — it reads
   the backend's own framebuffer in-process (no screen-capture portal needed).
 

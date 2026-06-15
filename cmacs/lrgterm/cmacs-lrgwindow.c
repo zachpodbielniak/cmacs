@@ -27,7 +27,8 @@ the terminal/redisplay code, which talks only to the abstract surface vtable
 GrlWindow *
 lrg_window_create (struct frame *f, int width, int height, const char *title)
 {
-  Lrg2DSurface *surface;
+  LrgFrameSurface *surface;
+  GrlWindow *win;
 
   eassert (FRAME_LRG_P (f));
 
@@ -40,9 +41,35 @@ lrg_window_create (struct frame *f, int width, int height, const char *title)
      every pixel ends up opaque.  */
   grl_window_set_config_flags (GRL_FLAG_WINDOW_TRANSPARENT);
 
-  /* Only LRG_RENDER_MODE_2D is implemented today; 3d/3dvr are reserved.  */
-  surface = lrg_2d_surface_new (width, height, title);
-  FRAME_LRG_OUTPUT (f)->surface = LRG_FRAME_SURFACE (surface);
+  /* render_mode: 0 = 2d, 1 = 3d, 2 = 3dvr.  Pick the matching surface subclass
+     (both own the single raylib window).  3dvr currently falls back to the 3D
+     surface (mono) until an LrgVRSurface exists -- a graceful degrade.  */
+  if (FRAME_LRG_OUTPUT (f)->render_mode != 0)
+    {
+      Lrg3DSurface *s3 = lrg_3d_surface_new (width, height, title);
+      surface = LRG_FRAME_SURFACE (s3);
+
+      /* Apply the launch SPEC tail (e.g. "per-window:workshop"): each
+         ':'/','-separated token is an arrangement or environment id; the mode
+         registry ignores any it does not recognise.  */
+      if (lrg_requested_3d_spec != NULL && *lrg_requested_3d_spec != '\0')
+        {
+          char *spec = xstrdup (lrg_requested_3d_spec);
+          char *save = NULL;
+          char *tok = strtok_r (spec, ":,", &save);
+
+          while (tok != NULL)
+            {
+              if (!lrg_3d_surface_set_arrangement_id (s3, tok))
+                lrg_3d_surface_set_environment_id (s3, tok);
+              tok = strtok_r (NULL, ":,", &save);
+            }
+          xfree (spec);
+        }
+    }
+  else
+    surface = LRG_FRAME_SURFACE (lrg_2d_surface_new (width, height, title));
+  FRAME_LRG_OUTPUT (f)->surface = surface;
 
   /* Disable raylib's default "Escape quits" -- Emacs owns the ESC key.
      The OS window close button still sets grl_window_should_close, which
@@ -54,13 +81,11 @@ lrg_window_create (struct frame *f, int width, int height, const char *title)
      maps to GLFW_RESIZABLE; the resulting resize events are picked up in
      lrg_read_socket (grl_window_is_resized) and re-fit the Emacs frame via
      change_frame_size.  */
-  {
-    GrlWindow *win = lrg_2d_surface_get_window (surface);
-    if (win != NULL)
-      grl_window_set_state (win, GRL_FLAG_WINDOW_RESIZABLE);
-  }
+  win = lrg_frame_surface_get_window (surface);
+  if (win != NULL)
+    grl_window_set_state (win, GRL_FLAG_WINDOW_RESIZABLE);
 
-  return lrg_2d_surface_get_window (surface);
+  return win;
 }
 
 /* Return the GrlWindow backing F, or NULL.  */
@@ -72,9 +97,9 @@ lrg_window_of_frame (struct frame *f)
   if (!FRAME_LRG_P (f))
     return NULL;
   s = FRAME_LRG_SURFACE (f);
-  if (s == NULL || !LRG_IS_2D_SURFACE (s))
+  if (s == NULL)
     return NULL;
-  return lrg_2d_surface_get_window (LRG_2D_SURFACE (s));
+  return lrg_frame_surface_get_window (s);
 }
 
 /* Begin a render frame on F's surface.  */

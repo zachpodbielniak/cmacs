@@ -196,6 +196,16 @@ The argument is an alist of frame parameters.  */)
   if (!dpyinfo->pgtk.terminal->name)
     error ("Terminal is not live, can't create new frames on it");
 
+  /* output_lrg is one OS window per process (raylib/GLFW open a single window):
+     a second top-level OR child frame would spawn a stray, broken second
+     desktop window.  Refuse it cleanly so child-frame UIs (posframe, corfu/
+     company popups, tooltips) fall back to the minibuffer rather than opening a
+     window.  Rendering child frames as in-window 3D panels is a roadmap item
+     (see doc_org/cmacs/cmacs-lrgterm-3d-roadmap.org).  */
+  if (cmacs_lrgterm_active_p ())
+    error ("output_lrg supports a single window; "
+           "cannot create additional (or child) frames");
+
   name = gui_display_get_arg (NULL, parms, Qname, "name", "Name",
                               RES_TYPE_STRING);
   if (!STRINGP (name) && !BASE_EQ (name, Qunbound) && !NILP (name))
@@ -227,13 +237,9 @@ The argument is an alist of frame parameters.  */)
   FRAME_LRG_OUTPUT (f)->fontset = -1;
   FRAME_LRG_OUTPUT (f)->render_mode =
     lrg_requested_render_mode < 0 ? 0 : lrg_requested_render_mode;
-  if (FRAME_LRG_OUTPUT (f)->render_mode != 0)
-    {
-      fprintf (stderr,
-               "cmacs: lrg render mode '%s' not yet implemented; using 2d\n",
-               FRAME_LRG_OUTPUT (f)->render_mode == 1 ? "3d" : "3dvr");
-      FRAME_LRG_OUTPUT (f)->render_mode = 0;
-    }
+  /* render_mode: 0 = 2d, 1 = 3d, 2 = 3dvr.  lrg_window_create instantiates the
+     matching LrgFrameSurface subclass; 3dvr currently uses the 3D surface
+     (mono) until an LrgVRSurface lands.  */
   FRAME_LRG_OUTPUT (f)->cursor_color = 0x000000;
   FRAME_FOREGROUND_PIXEL (f) = 0x000000;
   FRAME_BACKGROUND_PIXEL (f) = 0xFFFFFF;

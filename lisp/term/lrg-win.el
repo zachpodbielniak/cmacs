@@ -82,6 +82,14 @@ DISPLAY is the name of the display Emacs should connect to."
   (setq use-dialog-box nil
         use-file-dialog nil)
 
+  ;; Runtime 3D control: interactive commands, the `C-c 3' keymap, and
+  ;; depth-of-field focus that follows the selected window.  Required here (at
+  ;; runtime) rather than at top level, because lrg-win.el is dumped and a
+  ;; top-level `require' is rejected while dumping.  Harmless under 2d (the
+  ;; focus-follow hook no-ops off a 3D frame).
+  (when (require 'cmacs-lrg-3d nil t)
+    (cmacs-lrg-3d-mode 1))
+
   (setq lrg-initialized t))
 
 (cl-defmethod handle-args-function (args &context (window-system lrg))

@@ -1,0 +1,83 @@
+#+TITLE: output_lrg 3D mode — roadmap
+#+AUTHOR: cmacs
+
+This is the staged roadmap for the ~--lrg=3d~ spatial workspace (the ~Lrg3DSurface~
+render mode of [[file:cmacs-lrgterm.org][output_lrg]]).  It records what has shipped
+and what is intentionally deferred, so the deferred work is tracked rather than
+forgotten.  The architecture is *additive*: new arrangements / environments are new
+~LrgSceneArrangement~ / ~LrgPanelEnvironment~ implementations registered by id with
+~LrgModeRegistry~; VR is a new ~LrgFrameSurface~ subclass — none require changes to
+the Emacs glue.
+
+* Shipped
+
+- Engine substrate (libregnum ~src/term/~): ~Lrg3DSurface~ (owns an internal
+  ~Lrg2DSurface~ for flat rasterisation, captures it to a texture and composites
+  textured *panels*), ~LrgScenePanel~, ~LrgSpatialCamera~ (orbit / zoom / reset),
+  ~LrgPose~ (boxed), the ~LrgSceneArrangement~ / ~LrgPanelEnvironment~ GInterfaces,
+  ~LrgModeRegistry~, and the ~LrgArrangementKind~ / ~LrgEnvironmentKind~ enums.  All
+  GObject-introspectable; GTests in ~tests/test-term.c~.
+- Arrangements: ~single-panel~, ~per-window~ (mirrors the window tree), ~free~
+  (loose spread + manual placement).
+- Environments: ~void~, ~workshop~ (grid floor), ~cockpit~ (enclosed grid room).
+- Depth-of-field focus: the selected window's panel is bright and pops forward (Z),
+  the others recede/dim; follows the selected window via ~cmacs-lrg-3d-mode~.
+- Smooth transition animation: camera (orbit / zoom / reset) and focus / resize eases
+  play out at ~60 Hz via a recompose tick on the input timer (the first placement of a
+  panel snaps; later target changes animate).
+- Ray-cast picking: the pointer maps onto the panel under it (camera ray ∩ panel quad →
+  the window's frame pixel), so mouse motion / clicks / ~mouse-position~ land on the right
+  buffer cell in 3D.  Exposed as ~cmacs-lrg-3d-pick~.
+- Live dashboards as ~cockpit~ walls: a libregnum view (the gnuseye globe, a
+  gobject-graph, the editor, a CAD/STL viewer) renders on the cockpit back wall.
+  ~cmacs-lrg-3d-set-wall~ / the ~cmacs-lrg-place-wall~ command (=C-c 3 w=) feed the
+  view's FBO texture each present (reusing the in-window compositing path).
+- Launch grammar ~--lrg=MODE[:ARRANGEMENT][:ENVIRONMENT]~ and full runtime control
+  (commands + ~C-c 3~ keymap + the ~cmacs-lrg-3d-*~ C DEFUNs); MCP tools; docs;
+  ERT tests in ~test/cmacs/cmacs-lrg-3d-tests.el~.
+- *Spatial interaction (hybrid)*: a device-agnostic *intent* layer — the
+  manipulator state lives on ~Lrg3DSurface~ (pick-with-panel, focus-fly,
+  grab/drag/release, per-panel pin map that survives re-layout) + camera
+  ~frame_panel~ / ~orbit_drag~ / ~pan_drag~; each intent is a DEFUN
+  (~cmacs-lrg-3d-focus-panel~ / ~-orbit~ / ~-dolly~ / ~-move-panel~ / ~-pin-panel~ /
+  ~-unpin-panel~ / ~-pick-panel~) *and* an MCP tool.  Default mouse bindings
+  (rebindable, handled in C): Ctrl+double-left = focus front-and-centre,
+  middle-drag = orbit, Ctrl/Super+middle-drag = move-a-panel (pins it), bare
+  middle-click = ~mouse-2~, Super+drag = trackpad alias.  ~C-c 3 f/p/u/U~ for
+  focus/pin/unpin.  This is the foundation the SpaceMouse / gesture / VR / voice
+  paths bind onto without re-architecting.
+
+* Deferred — fast-follow
+
+- *Cockpit walls polish*: the back-wall texture is the view FBO drawn with a unit
+  plane, so a bottom-up FBO can appear Y-flipped (custom-UV mesh fixes it); add side /
+  floor / ceiling wall slots and a ~cmacs-lrg-3d-cockpit-walls~ defcustom that lazily
+  starts gnuseye on the back wall.  (The core feed + ~cmacs-lrg-place-wall~ ship.)
+- *Buffer Rolodex* (~carousel~ arrangement) and *git-history-as-depth* (~git-depth~
+  arrangement).  Both need an offscreen "render a buffer to a texture" primitive
+  (extend the ~lrg-capture-screen~ path); Rolodex fans buffer thumbnails on a ring,
+  git-depth stacks ~vc~ revisions in Z.  The arrangement enum values
+  (~LRG_ARRANGEMENT_KIND_CAROUSEL~ / ~_GIT_DEPTH~) and ids already exist.
+- emacsclient ~-lrg~ spec applied to a *reused* live frame; ~key=value~ spec tokens
+  (e.g. ~dof=off~); defcustoms for the default arrangement / environment.
+- *Device-agnostic binding backend*: drive the spatial intents from libregnum's
+  ~LrgInputMap~ / ~LrgInputAction~ / ~LrgInputBinding~ (YAML-serialisable) instead
+  of the hardcoded mouse table, so *SpaceMouse / 6DOF* (=libspnav= → gamepad-axis
+  bindings) and gamepads are drop-in.  The intent seam already exists.
+- *Cinematic "shots"*: save/restore/fly-between named spatial workspaces (camera
+  pose + arrangement + buffer set); AI-composable.  An arg-taking
+  ~lrgterm_3d_move_panel~ MCP tool for "Jarvis, move it left".
+
+* Deferred — later
+
+- *VR* (~3dvr~ → ~LrgVRSurface~): reuse the panel / camera / arrangement / environment
+  substrate; render the scene per-eye via the ~LrgVRService~ (OpenXR) interface.  The
+  content-capture (flat → texture) is shared; only the scene present becomes
+  per-eye-camera → swapchain submit.  Honor the design note that the
+  glReadPixels→Cairo blit path cannot present VR.
+- Real depth-of-field *blur* (a separable-gaussian ~LrgPostEffect~) instead of the
+  tint dim; SDF glyphs for crisper angled text; live ~2d~ ↔ ~3d~ surface swap without
+  restart; child-frames (posframe/corfu) as panels.
+- *VR controller* intents (bind the OpenXR controller poses/buttons to the same
+  spatial intents); *gesture* (Wayland pinch/swipe, hand-pose) and *voice* intent
+  wiring through the ai → MCP chain; drag-to-detach a window into its own free panel.

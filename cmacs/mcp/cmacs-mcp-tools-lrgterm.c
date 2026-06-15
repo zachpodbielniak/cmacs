@@ -104,6 +104,82 @@ handle_dump_screen (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
   return result;
 }
 
+static McpToolResult *
+handle_3d_state (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
+{
+  (void) s; (void) n; (void) a; (void) u;
+  return lt_eval_result (lt_with_frame (g_strdup
+    ("(format \"render-mode=%S arrangement=%S environment=%S\""
+     " (cmacs-lrg-render-mode f) (cmacs-lrg-3d-arrangement f)"
+     " (cmacs-lrg-3d-environment f))")));
+}
+
+static McpToolResult *
+handle_3d_cycle_arrangement (McpServer *s, const gchar *n, JsonObject *a,
+                             gpointer u)
+{
+  (void) s; (void) n; (void) a; (void) u;
+  return lt_eval_result (lt_with_frame (g_strdup
+    ("(let* ((all '(\"single-panel\" \"per-window\" \"free\"))"
+     " (cur (cmacs-lrg-3d-arrangement f))"
+     " (nxt (or (cadr (member cur all)) (car all))))"
+     " (if (cmacs-lrg-3d-set-arrangement nxt f)"
+     " (format \"arrangement -> %s\" nxt) \"not a 3D lrg frame\"))")));
+}
+
+static McpToolResult *
+handle_3d_cycle_environment (McpServer *s, const gchar *n, JsonObject *a,
+                             gpointer u)
+{
+  (void) s; (void) n; (void) a; (void) u;
+  return lt_eval_result (lt_with_frame (g_strdup
+    ("(let* ((all '(\"void\" \"workshop\" \"cockpit\"))"
+     " (cur (cmacs-lrg-3d-environment f))"
+     " (nxt (or (cadr (member cur all)) (car all))))"
+     " (if (cmacs-lrg-3d-set-environment nxt f)"
+     " (format \"environment -> %s\" nxt) \"not a 3D lrg frame\"))")));
+}
+
+static McpToolResult *
+handle_3d_camera_orbit (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
+{
+  (void) s; (void) n; (void) a; (void) u;
+  return lt_eval_result (lt_with_frame (g_strdup
+    ("(if (cmacs-lrg-3d-camera \"orbit-left\" 20 f)"
+     " \"orbited\" \"not a 3D lrg frame\")")));
+}
+
+static McpToolResult *
+handle_3d_focus_selected (McpServer *s, const gchar *n, JsonObject *a,
+                          gpointer u)
+{
+  (void) s; (void) n; (void) a; (void) u;
+  return lt_eval_result (lt_with_frame (g_strdup
+    ("(if (cmacs-lrg-3d-focus-panel (frame-selected-window f) f)"
+     " \"focused the selected window front-and-centre\""
+     " \"not a 3D lrg frame\")")));
+}
+
+static McpToolResult *
+handle_3d_pin_selected (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
+{
+  (void) s; (void) n; (void) a; (void) u;
+  return lt_eval_result (lt_with_frame (g_strdup
+    ("(if (cmacs-lrg-3d-pin-panel (frame-selected-window f) f)"
+     " \"pinned the selected window's panel in place\""
+     " \"not a 3D lrg frame\")")));
+}
+
+static McpToolResult *
+handle_3d_unpin_all (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
+{
+  (void) s; (void) n; (void) a; (void) u;
+  return lt_eval_result (lt_with_frame (g_strdup
+    ("(if (cmacs-lrg-3d-unpin-panel t f)"
+     " \"released all panels back to automatic layout\""
+     " \"not a 3D lrg frame\")")));
+}
+
 /* Register an MCP tool (mirrors the helper in the other tool files).  */
 static void
 lt_add (McpServer *server, const gchar *name, const gchar *desc,
@@ -134,6 +210,29 @@ cmacs_mcp_tools_lrgterm_register (McpServer *server)
     "Capture the lrg frame to a PNG and return it as an image, so you can see "
     "exactly what the libregnum/raylib backend is rendering.",
     TRUE, handle_dump_screen);
+  lt_add (server, "lrgterm_3d_state",
+    "Report the lrg 3D render mode, panel arrangement and ambient environment.",
+    TRUE, handle_3d_state);
+  lt_add (server, "lrgterm_3d_cycle_arrangement",
+    "Cycle the 3D panel arrangement (single-panel -> per-window -> free).",
+    FALSE, handle_3d_cycle_arrangement);
+  lt_add (server, "lrgterm_3d_cycle_environment",
+    "Cycle the 3D ambient environment (void -> workshop -> cockpit).",
+    FALSE, handle_3d_cycle_environment);
+  lt_add (server, "lrgterm_3d_camera_orbit",
+    "Orbit the 3D camera around the panels (use lrgterm_dump_screen to see it).",
+    FALSE, handle_3d_camera_orbit);
+  lt_add (server, "lrgterm_3d_focus_selected",
+    "Bring the selected window's 3D panel front-and-centre (fly the camera to "
+    "it and focus it; others recede). The 'command-the-room' gesture.",
+    FALSE, handle_3d_focus_selected);
+  lt_add (server, "lrgterm_3d_pin_selected",
+    "Pin the selected window's 3D panel in place so the arrangement no longer "
+    "moves it.",
+    FALSE, handle_3d_pin_selected);
+  lt_add (server, "lrgterm_3d_unpin_all",
+    "Release all manually-placed 3D panels back to automatic layout.",
+    FALSE, handle_3d_unpin_all);
 }
 
 #endif /* HAVE_CMACS_MCP && HAVE_CMACS_LRGTERM */

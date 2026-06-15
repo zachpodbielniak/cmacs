@@ -56,6 +56,11 @@ textured-quad-in-FBO bug and the double-buffer staleness problem.  */
 
 struct lrg_display_info *lrg_display_list;
 int lrg_requested_render_mode = -1;
+const char *lrg_requested_3d_spec = NULL;
+
+/* Buffer whose libregnum 3D view (e.g. the gnuseye globe) is shown on the
+   cockpit environment's back wall, or nil.  Set by `cmacs-lrg-3d-set-wall'.  */
+static Lisp_Object lrg_cockpit_wall_buffer;
 
 /* True only while lrg_present_frame is repainting the frame; the RIF draw
    hooks no-op otherwise (see the rendering-model note above).  */
@@ -655,6 +660,46 @@ lrg_paint_libregnum_views (struct frame *f)
   if (surf != NULL)
     lrg_paint_libregnum_window (f, surf, f->root_window);
 }
+
+/* Feed `lrg_cockpit_wall_buffer's libregnum view FBO texture to the cockpit
+   environment's back wall (the "ambient cockpit" dashboards / gnuseye globe).
+   No-op unless SURF is a 3D surface in the cockpit environment.  */
+static void
+lrg_feed_cockpit_wall (struct frame *f, LrgFrameSurface *surf)
+{
+  Lrg3DSurface *s3;
+  LrgPanelEnvironment *env;
+  CmacsLibregnumView *v;
+  CmacsLibregnumRenderCtx *ctx;
+  GrlTexture *tex;
+
+  (void) f;
+
+  if (surf == NULL || !LRG_IS_3D_SURFACE (surf))
+    return;
+  s3 = LRG_3D_SURFACE (surf);
+  env = lrg_3d_surface_get_environment (s3);
+  if (env == NULL || !LRG_IS_ENVIRONMENT_COCKPIT (env))
+    return;
+
+  if (!BUFFERP (lrg_cockpit_wall_buffer)
+      || !BUFFER_LIVE_P (XBUFFER (lrg_cockpit_wall_buffer)))
+    {
+      lrg_environment_cockpit_set_back_texture (LRG_ENVIRONMENT_COCKPIT (env),
+                                                NULL);
+      return;
+    }
+
+  v = cmacs_libregnum_view_for_buffer (lrg_cockpit_wall_buffer);
+  ctx = v != NULL ? cmacs_libregnum_view_get_render_ctx (v) : NULL;
+  tex = ctx != NULL ? cmacs_libregnum_render_ctx_get_fbo_texture (ctx) : NULL;
+  if (tex != NULL)
+    {
+      lrg_environment_cockpit_set_back_texture (LRG_ENVIRONMENT_COCKPIT (env),
+                                                tex);
+      cmacs_libregnum_view_mark_painted (v);
+    }
+}
 #endif /* HAVE_CMACS_LIBREGNUM */
 
 /* ===================================================== in-engine popup menu ==
@@ -1007,6 +1052,51 @@ lrg_menu_render (struct frame *f, LrgFrameSurface *surf, LrgMenuState *st)
    single-line self-insert / cursor-only paths that DON'T call
    frame_up_to_date -- hence it is driven from update_window_end (per window)
    and the standalone cursor hook as well as frame_up_to_date.  */
+
+/* Walk the window tree, giving each leaf window's pixel rect to the 3D surface
+   (keyed by the stable `struct window' address).  */
+static void
+lrg_sync_3d_window (Lrg3DSurface *s3, Lisp_Object w)
+{
+  while (!NILP (w) && WINDOWP (w))
+    {
+      struct window *win = XWINDOW (w);
+      Lisp_Object contents = win->contents;
+
+      if (WINDOWP (contents))
+        lrg_sync_3d_window (s3, contents);
+      else if (BUFFERP (contents))
+        lrg_3d_surface_sync_window (s3, (guintptr) win,
+                                    WINDOW_LEFT_PIXEL_EDGE (win),
+                                    WINDOW_TOP_PIXEL_EDGE (win),
+                                    WINDOW_PIXEL_WIDTH (win),
+                                    WINDOW_PIXEL_HEIGHT (win));
+      w = win->next;
+    }
+}
+
+/* Feed F's window tree to its 3D surface so the per-window / free arrangements
+   map each Emacs window to a panel.  No-op on a 2D surface or the single-panel
+   arrangement (which uses one whole-frame panel).  */
+static void
+lrg_sync_3d_panels (struct frame *f, LrgFrameSurface *surf)
+{
+  Lrg3DSurface *s3;
+  const char *arr;
+
+  if (surf == NULL || !LRG_IS_3D_SURFACE (surf))
+    return;
+  s3 = LRG_3D_SURFACE (surf);
+  arr = lrg_3d_surface_get_arrangement_id (s3);
+  if (arr == NULL
+      || (strcmp (arr, "per-window") != 0 && strcmp (arr, "free") != 0))
+    return;
+
+  lrg_3d_surface_begin_window_sync (s3);
+  lrg_sync_3d_window (s3, f->root_window);
+  lrg_3d_surface_end_window_sync (s3);
+}
+
 static void
 lrg_present_frame (struct frame *f)
 {
@@ -1031,6 +1121,17 @@ lrg_present_frame (struct frame *f)
     lrg_frame_surface_begin_frame (surf);
     lrg_frame_surface_clear (surf, bg);
 
+    /* Per-window arrangements map each Emacs window to its own panel; feed the
+       window tree to the surface before the content pass (no-op in 2D and in
+       the single-panel arrangement).  */
+    lrg_sync_3d_panels (f, surf);
+
+    /* In 3D the flat frame is rasterised to the default framebuffer between
+       begin_content/end_content, then captured onto the panel textures and the
+       3D scene is composited in end_frame.  Both hooks are no-ops on the 2D
+       surface, so the 2D present path below is unchanged.  */
+    lrg_frame_surface_begin_content (surf);
+
     lrg_drawing = true;
     expose_frame (f, 0, 0, FRAME_PIXEL_WIDTH (f), FRAME_PIXEL_HEIGHT (f));
     lrg_drawing = false;
@@ -1039,6 +1140,14 @@ lrg_present_frame (struct frame *f)
     /* Composite any cmacs-libregnum 3D buffers (editor/gnuseye/CAD/STL) on
        top of the text, into their windows' rects.  */
     lrg_paint_libregnum_views (f);
+#endif
+
+    /* Capture the flat frame onto the 3D panels (no-op in 2D).  */
+    lrg_frame_surface_end_content (surf);
+
+#ifdef HAVE_CMACS_LIBREGNUM
+    /* Refresh the cockpit back-wall texture (gnuseye globe / dashboard).  */
+    lrg_feed_cockpit_wall (f, surf);
 #endif
 
     /* The in-engine right-click menu, if one is up, draws on top of all. */
@@ -1182,6 +1291,94 @@ cmacs_lrgterm_present_now (void)
     lrg_present_frame (f);
 }
 
+/* Advance an in-progress 3D transition animation (camera / focus / resize ease)
+   and recompose the scene from the cached panel textures -- a present WITHOUT a
+   re-expose, so it is cheap and needs no Emacs redisplay.  Called ~60 Hz from
+   lrg_read_socket (the input timerfd).  No-op on 2D or a settled 3D scene.  */
+static void
+lrg_animate_tick (void)
+{
+  struct frame *f = lrg_any_frame ();
+  LrgFrameSurface *surf;
+  Lrg3DSurface *s3;
+
+  if (f == NULL || !FRAME_LRG_P (f))
+    return;
+  surf = FRAME_LRG_SURFACE (f);
+  if (surf == NULL || !LRG_IS_3D_SURFACE (surf))
+    return;
+  s3 = LRG_3D_SURFACE (surf);
+  if (lrg_drawing || !lrg_3d_surface_is_animating (s3))
+    return;
+
+  block_input ();
+  lrg_3d_surface_step (s3, 1.0f / 60.0f);
+  lrg_frame_surface_begin_frame (surf);
+  lrg_frame_surface_end_frame (surf);
+  unblock_input ();
+}
+
+/* Defined below (in the DEFUN section); used by the spatial mouse handler. */
+static Lrg3DSurface *lrg_3d_surface_of_frame (struct frame *f);
+
+/* Recompose the 3D scene NOW from the cached panel textures (begin_frame +
+   end_frame, no content re-expose) -- used after an immediate spatial change
+   (drag-orbit / panel move) that does not start an animation, so it shows up
+   without waiting for the next redisplay.  No-op on 2D or while drawing.  */
+static void
+lrg_recompose_now (struct frame *f)
+{
+  LrgFrameSurface *surf;
+
+  if (f == NULL || !FRAME_LRG_P (f))
+    return;
+  surf = FRAME_LRG_SURFACE (f);
+  if (surf == NULL || !LRG_IS_3D_SURFACE (surf) || lrg_drawing)
+    return;
+
+  block_input ();
+  lrg_frame_surface_begin_frame (surf);
+  lrg_frame_surface_end_frame (surf);
+  unblock_input ();
+}
+
+/* Default mouse spatial-navigation bindings (all rebindable in Elisp): middle-
+   drag orbits the scene; Ctrl/Super + middle-drag moves the panel under the
+   pointer; Ctrl + left-click peeks focus, Ctrl + double-left flies a panel
+   front-and-centre.  The high-rate drag is handled here in C (no Lisp
+   round-trip), routed through the device-agnostic lrg_3d_surface_* intents. */
+#define LRG_DRAG_THRESHOLD     3       /* px before a middle press is a drag */
+#define LRG_DOUBLE_CLICK_SECS  0.45    /* Ctrl+left double-click window */
+#define LRG_ORBIT_DEG_PER_PX   0.4f    /* drag sensitivity */
+
+static struct
+{
+  bool   middle_down;
+  bool   dragging;        /* moved past the threshold during this press */
+  bool   moving_panel;    /* this drag moves a panel (Ctrl/Super), else orbit */
+  int    press_x, press_y;
+  int    last_x, last_y;
+  double last_left_t;     /* time of the last Ctrl+left press (double-click) */
+  int    last_left_x, last_left_y;
+} lrg_sp;
+
+/* TRUE when frame pixel (FX,FY) lies in a window whose buffer hosts a libregnum
+   view (gnuseye / libregnum-editor / CAD / ...).  The 3D spatial gestures defer
+   to such a window so those apps keep their own camera controls -- the lrg scene
+   never steals middle-drag / Ctrl+wheel from them.  */
+static bool
+lrg_over_libregnum_view (struct frame *f, int fx, int fy)
+{
+#ifdef HAVE_CMACS_LIBREGNUM
+  Lisp_Object w = window_from_coordinates (f, fx, fy, NULL, false, false, false);
+  if (WINDOWP (w))
+    return cmacs_libregnum_view_for_buffer (XWINDOW (w)->contents) != NULL;
+#else
+  (void) f; (void) fx; (void) fy;
+#endif
+  return false;
+}
+
 /* Current Emacs modifier bits from the physically held modifier keys.  */
 static int
 lrg_event_modifiers (void)
@@ -1233,6 +1430,29 @@ lrg_store_char (struct frame *f, struct input_event *hold_quit, int cp,
   ie.modifiers = modifiers;
   ie.timestamp = 0;
   return lrg_store (f, hold_quit, &ie);
+}
+
+/* Map a raw device pixel to a frame pixel via the surface pick: a 3D ray-cast
+   onto the panel under the pointer, or identity on a 2D surface.  Returns FALSE
+   when a 3D ray misses every panel (pointer in empty space), so the caller can
+   skip the highlight / click there.  */
+static gboolean
+lrg_pick_xy (struct frame *f, int mx, int my, int *fx, int *fy)
+{
+  LrgFrameSurface *s = FRAME_LRG_P (f) ? FRAME_LRG_SURFACE (f) : NULL;
+  gfloat ox = 0.0f, oy = 0.0f;
+
+  if (s == NULL)
+    {
+      *fx = mx;
+      *fy = my;
+      return TRUE;
+    }
+  if (!lrg_frame_surface_pick (s, (gfloat) mx, (gfloat) my, &ox, &oy))
+    return FALSE;
+  *fx = (int) ox;
+  *fy = (int) oy;
+  return TRUE;
 }
 
 static int
@@ -1369,6 +1589,139 @@ lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
                                  mods & ~(ctrl_modifier | meta_modifier));
   }
 
+  /* 3D spatial navigation (precedes the generic mouse handling on a 3D lrg
+     frame): middle-drag orbits, Ctrl/Super+middle-drag moves the panel under
+     the pointer, Ctrl+left peeks/focuses a panel.  Whatever it uses is gated
+     out of the generic motion/click handlers via the sp_skip_* flags.  */
+  bool sp_skip_motion = false;
+  bool sp_skip_middle = false;
+  bool sp_skip_left = false;
+  {
+    Lrg3DSurface *s3 = lrg_3d_surface_of_frame (f);
+    if (s3 != NULL && grl_window_is_focused (win))
+      {
+        int mx = grl_input_get_mouse_x ();
+        int my = grl_input_get_mouse_y ();
+        bool ctrl = (mods & ctrl_modifier) != 0;
+        bool spatial_mod = (mods & (ctrl_modifier | super_modifier)) != 0;
+        bool mid_pressed =
+          grl_input_is_mouse_button_pressed (GRL_MOUSE_BUTTON_MIDDLE);
+        bool mid_released =
+          grl_input_is_mouse_button_released (GRL_MOUSE_BUTTON_MIDDLE);
+        bool left_pressed =
+          grl_input_is_mouse_button_pressed (GRL_MOUSE_BUTTON_LEFT);
+        int fx, fy;
+        /* Defer to a libregnum-view window under the pointer (gnuseye / editor):
+           starting a gesture there must not steal its camera controls.  */
+        bool over_view =
+          lrg_pick_xy (f, mx, my, &fx, &fy) && lrg_over_libregnum_view (f, fx, fy);
+
+        /* Ctrl+left: single click peeks focus (DOF only), double click flies the
+           panel front-and-centre.  Consumed so it does not also place point.  */
+        if (left_pressed && ctrl && !over_view)
+          {
+            double now = grl_window_get_time (win);
+            guint64 key = 0;
+            bool hit = lrg_3d_surface_pick_panel (s3, (gfloat) mx, (gfloat) my,
+                                                  NULL, NULL, &key);
+            bool dbl = (now - lrg_sp.last_left_t) < LRG_DOUBLE_CLICK_SECS
+                       && abs (mx - lrg_sp.last_left_x) < 6
+                       && abs (my - lrg_sp.last_left_y) < 6;
+            if (hit)
+              {
+                if (dbl)
+                  lrg_3d_surface_focus_panel (s3, key);
+                else
+                  lrg_3d_surface_set_focus_window (s3, key);
+                lrg_recompose_now (f);
+              }
+            lrg_sp.last_left_t = dbl ? 0.0 : now;
+            lrg_sp.last_left_x = mx;
+            lrg_sp.last_left_y = my;
+            sp_skip_left = true;
+          }
+
+        /* Middle press arms a drag; motion past the threshold starts orbit (or a
+           panel move with Ctrl/Super); release ends it, or emits a bare mouse-2
+           click when nothing was dragged (so middle-click yank still works).  */
+        if (mid_pressed && !over_view)
+          {
+            lrg_sp.middle_down = true;
+            lrg_sp.dragging = false;
+            lrg_sp.moving_panel = spatial_mod;
+            lrg_sp.press_x = lrg_sp.last_x = mx;
+            lrg_sp.press_y = lrg_sp.last_y = my;
+            sp_skip_middle = true;
+          }
+        if (lrg_sp.middle_down && !mid_released
+            && (mx != lrg_sp.last_x || my != lrg_sp.last_y))
+          {
+            if (!lrg_sp.dragging
+                && (abs (mx - lrg_sp.press_x) > LRG_DRAG_THRESHOLD
+                    || abs (my - lrg_sp.press_y) > LRG_DRAG_THRESHOLD))
+              {
+                lrg_sp.dragging = true;
+                if (lrg_sp.moving_panel)
+                  {
+                    guint64 key = 0;
+                    if (lrg_3d_surface_pick_panel (s3, (gfloat) lrg_sp.press_x,
+                                                   (gfloat) lrg_sp.press_y,
+                                                   NULL, NULL, &key))
+                      lrg_3d_surface_grab_panel (s3, key,
+                                                 (gfloat) lrg_sp.press_x,
+                                                 (gfloat) lrg_sp.press_y);
+                    else
+                      lrg_sp.moving_panel = false;  /* missed -> orbit instead */
+                  }
+              }
+            if (lrg_sp.dragging)
+              {
+                if (lrg_sp.moving_panel)
+                  lrg_3d_surface_drag_panel (s3, (gfloat) mx, (gfloat) my);
+                else
+                  /* Orbit the whole room (scene centroid), not the focused
+                     panel, so middle-drag is a "look around the workspace". */
+                  lrg_3d_surface_orbit_room
+                    (s3,
+                     -(gfloat) (mx - lrg_sp.last_x) * LRG_ORBIT_DEG_PER_PX,
+                     (gfloat) (my - lrg_sp.last_y) * LRG_ORBIT_DEG_PER_PX);
+                lrg_recompose_now (f);
+                sp_skip_motion = true;
+              }
+            lrg_sp.last_x = mx;
+            lrg_sp.last_y = my;
+            sp_skip_middle = true;
+          }
+        if (mid_released && lrg_sp.middle_down)
+          {
+            if (!lrg_sp.dragging)
+              {
+                int pfx, pfy;
+                if (lrg_pick_xy (f, mx, my, &pfx, &pfy))
+                  {
+                    struct input_event ie;
+                    EVENT_INIT (ie);
+                    ie.kind = MOUSE_CLICK_EVENT;
+                    ie.code = 1;   /* Emacs middle button (mouse-2) */
+                    XSETINT (ie.x, pfx);
+                    XSETINT (ie.y, pfy);
+                    ie.timestamp = 0;
+                    ie.modifiers = mods | down_modifier;
+                    count += lrg_store (f, hold_quit, &ie);
+                    ie.modifiers = mods | up_modifier;
+                    count += lrg_store (f, hold_quit, &ie);
+                  }
+              }
+            else if (lrg_sp.moving_panel)
+              lrg_3d_surface_release_panel (s3);
+            lrg_sp.middle_down = false;
+            lrg_sp.dragging = false;
+            lrg_sp.moving_panel = false;
+            sp_skip_middle = true;
+          }
+      }
+  }
+
   /* Mouse motion.  First offer it to a libregnum view (camera orbit/pan
      while a drag is active); only when not consumed do we update the
      mouse-face highlight (hover on buttons, links, ...).  Mirrors pgtk's
@@ -1377,17 +1730,27 @@ lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
     static int last_mx = -1, last_my = -1;
     int mx = grl_input_get_mouse_x ();
     int my = grl_input_get_mouse_y ();
-    if ((mx != last_mx || my != last_my) && grl_window_is_focused (win))
+    if (!sp_skip_motion && (mx != last_mx || my != last_my)
+        && grl_window_is_focused (win))
       {
+        int pfx, pfy;
+        /* Ray-cast to the frame pixel under the pointer (identity in 2D); a 3D
+           ray that misses every panel means empty space (nothing under it).
+           Libregnum views and the mouse-face highlight both want frame pixels,
+           so pick once and feed the picked coords -- in 3D the view lives on a
+           panel, not at the raw device pixel.  */
         last_mx = mx;
         last_my = my;
-#ifdef HAVE_CMACS_LIBREGNUM
-        if (!cmacs_libregnum_handle_motion (f, mx, my))
-#endif
+        if (lrg_pick_xy (f, mx, my, &pfx, &pfy))
           {
-            block_input ();
-            note_mouse_highlight (f, mx, my);
-            unblock_input ();
+#ifdef HAVE_CMACS_LIBREGNUM
+            if (!cmacs_libregnum_handle_motion (f, pfx, pfy))
+#endif
+              {
+                block_input ();
+                note_mouse_highlight (f, pfx, pfy);
+                unblock_input ();
+              }
           }
       }
   }
@@ -1404,22 +1767,32 @@ lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
     int b;
     int mx = grl_input_get_mouse_x ();
     int my = grl_input_get_mouse_y ();
+    int pfx, pfy;
+    /* Ray-cast once to the frame pixel under the pointer (identity in 2D); a 3D
+       miss = empty space, so no libregnum view and no text click there.  */
+    bool on_panel = lrg_pick_xy (f, mx, my, &pfx, &pfy);
     for (b = 0; b < 3; b++)
       {
         bool pressed = grl_input_is_mouse_button_pressed ((GrlMouseButton) b);
         bool released = grl_input_is_mouse_button_released ((GrlMouseButton) b);
         if (!pressed && !released)
           continue;
+        /* The 3D spatial handler already consumed middle (orbit / panel move)
+           and Ctrl+left (focus) on a 3D frame -- don't also treat them as text
+           clicks.  raylib button order is L=0, R=1, M=2.  */
+        if ((b == 2 && sp_skip_middle) || (b == 0 && sp_skip_left))
+          continue;
+        if (!on_panel)
+          continue;
 #ifdef HAVE_CMACS_LIBREGNUM
-        /* Offer the transition to a libregnum view first (pick/orbit/pan/
-           right-click menu).  When it consumes the event (pointer over a
-           view), suppress the corresponding Emacs click so the 3D view isn't
-           also treated as a text click.  Press and release are distinct. */
+        /* Offer the transition to a libregnum view first, at the PICKED frame
+           pixel (so it works when the view is on a 3D panel).  When it consumes
+           the event, suppress the matching Emacs click.  Press/release distinct. */
         {
           int x11b = rl_to_x11_button[b];
-          if (pressed && cmacs_libregnum_handle_button (f, x11b, 1, mx, my))
+          if (pressed && cmacs_libregnum_handle_button (f, x11b, 1, pfx, pfy))
             pressed = false;
-          if (released && cmacs_libregnum_handle_button (f, x11b, 0, mx, my))
+          if (released && cmacs_libregnum_handle_button (f, x11b, 0, pfx, pfy))
             released = false;
           if (!pressed && !released)
             continue;
@@ -1431,8 +1804,8 @@ lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
           ie.kind = MOUSE_CLICK_EVENT;
           ie.code = rl_to_emacs_button[b];
           ie.modifiers = mods | (pressed ? down_modifier : up_modifier);
-          XSETINT (ie.x, mx);
-          XSETINT (ie.y, my);
+          XSETINT (ie.x, pfx);
+          XSETINT (ie.y, pfy);
           ie.timestamp = 0;
           count += lrg_store (f, hold_quit, &ie);
         }
@@ -1448,12 +1821,30 @@ lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
       {
         int mx = grl_input_get_mouse_x ();
         int my = grl_input_get_mouse_y ();
+        int pfx, pfy;
+        bool on_panel = lrg_pick_xy (f, mx, my, &pfx, &pfy);
+        bool over_view = on_panel && lrg_over_libregnum_view (f, pfx, pfy);
+        Lrg3DSurface *s3 = lrg_3d_surface_of_frame (f);
         bool consumed = false;
+
+        /* Ctrl+wheel dollies the 3D scene camera (unless over a libregnum view,
+           which keeps its own wheel-zoom).  Eased via the recompose tick. */
+        if (s3 != NULL && (mods & ctrl_modifier) != 0 && !over_view)
+          {
+            LrgSpatialCamera *cam = lrg_3d_surface_get_camera (s3);
+            if (cam != NULL)
+              {
+                lrg_spatial_camera_zoom (cam, wheel > 0.0f ? 0.9f : 1.1111f);
+                consumed = true;
+              }
+          }
 #ifdef HAVE_CMACS_LIBREGNUM
         /* pgtk passes GDK smooth-scroll dy (wheel-up is negative); raylib's
-           wheel-up is positive, so negate to match the zoom direction. */
-        consumed = cmacs_libregnum_handle_scroll (f, 0.0, -(double) wheel,
-                                                  mx, my);
+           wheel-up is positive, so negate to match the zoom direction.  Picked
+           coords so a view on a 3D panel still zooms. */
+        if (!consumed && on_panel)
+          consumed = cmacs_libregnum_handle_scroll (f, 0.0, -(double) wheel,
+                                                    pfx, pfy);
 #endif
         if (!consumed)
           {
@@ -1461,8 +1852,8 @@ lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
             EVENT_INIT (ie);
             ie.kind = WHEEL_EVENT;
             ie.modifiers = mods | (wheel > 0 ? up_modifier : down_modifier);
-            XSETINT (ie.x, mx);
-            XSETINT (ie.y, my);
+            XSETINT (ie.x, on_panel ? pfx : mx);
+            XSETINT (ie.y, on_panel ? pfy : my);
             XSETFRAME (ie.frame_or_window, f);
             ie.arg = Qnil;
             ie.timestamp = 0;
@@ -1470,6 +1861,10 @@ lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
           }
       }
   }
+
+  /* Advance any in-progress 3D transition animation (camera / focus / resize)
+     and recompose, so eases play out smoothly between redisplays.  */
+  lrg_animate_tick ();
 
   return count;
 }
@@ -1488,9 +1883,18 @@ lrg_mouse_position (struct frame **fp, int insist, Lisp_Object *bar_window,
 
   if (f != NULL && lrg_window_of_frame (f) != NULL)
     {
+      int pfx, pfy;
+      /* Report the frame pixel under the pointer (ray-cast in 3D, identity in
+         2D); fall back to raw coords if a 3D ray misses every panel.  */
+      if (!lrg_pick_xy (f, grl_input_get_mouse_x (), grl_input_get_mouse_y (),
+                        &pfx, &pfy))
+        {
+          pfx = grl_input_get_mouse_x ();
+          pfy = grl_input_get_mouse_y ();
+        }
       *fp = f;
-      XSETINT (*x, grl_input_get_mouse_x ());
-      XSETINT (*y, grl_input_get_mouse_y ());
+      XSETINT (*x, pfx);
+      XSETINT (*y, pfy);
     }
   else
     {
@@ -2129,11 +2533,13 @@ tests and as the basis of the lrgterm_dump_screen MCP tool.  */)
        the second end_frame's swap, the back buffer holds the first frame's
        flushed pixels.  (A one-shot read before end_frame sees only the clear
        colour because the glyph quads are still in the unflushed batch.)  */
+    lrg_sync_3d_panels (f, surf);
     for (pass = 0; pass < 2; pass++)
       {
         lrg_frame_surface_begin_frame (surf);
         lrg_frame_surface_clear (surf, bg);
 
+        lrg_frame_surface_begin_content (surf);
         lrg_drawing = true;
         expose_frame (f, 0, 0, FRAME_PIXEL_WIDTH (f), FRAME_PIXEL_HEIGHT (f));
         lrg_drawing = false;
@@ -2142,6 +2548,7 @@ tests and as the basis of the lrgterm_dump_screen MCP tool.  */)
         lrg_paint_libregnum_views (f);
 #endif
 
+        lrg_frame_surface_end_content (surf);
         lrg_frame_surface_end_frame (surf);
       }
 
@@ -2219,6 +2626,374 @@ Used by the lrg gui-backend-get-selection method for CLIPBOARD.  */)
   return result;
 }
 
+/* ====================================================== 3D runtime control ==
+   DEFUNs that drive the Lrg3DSurface at runtime (arrangement / environment /
+   depth-of-field focus) + report the render mode.  Each no-ops gracefully when
+   FRAME is not an lrg frame backed by a 3D surface.  */
+
+/* Return F's 3D surface, or NULL if F is not a 3D-surface lrg frame.  */
+static Lrg3DSurface *
+lrg_3d_surface_of_frame (struct frame *f)
+{
+  LrgFrameSurface *s;
+
+  if (!FRAME_LRG_P (f))
+    return NULL;
+  s = FRAME_LRG_SURFACE (f);
+  return (s != NULL && LRG_IS_3D_SURFACE (s)) ? LRG_3D_SURFACE (s) : NULL;
+}
+
+DEFUN ("cmacs-lrg-3d-supported-p", Fcmacs_lrg_3d_supported_p,
+       Scmacs_lrg_3d_supported_p, 0, 1, 0,
+       doc: /* Return t if FRAME is an lrg frame rendered by the 3D surface.
+FRAME defaults to the selected frame.  */)
+  (Lisp_Object frame)
+{
+  return lrg_3d_surface_of_frame (decode_live_frame (frame)) != NULL ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-lrg-render-mode", Fcmacs_lrg_render_mode, Scmacs_lrg_render_mode,
+       0, 1, 0,
+       doc: /* Return FRAME's lrg render mode: "2d", "3d" or "3dvr", or nil if
+FRAME is not an lrg frame.  FRAME defaults to the selected frame.  */)
+  (Lisp_Object frame)
+{
+  struct frame *f = decode_live_frame (frame);
+
+  if (!FRAME_LRG_P (f))
+    return Qnil;
+  return build_string (lrg_render_mode_to_string
+                       ((LrgRenderMode) FRAME_LRG_OUTPUT (f)->render_mode));
+}
+
+DEFUN ("cmacs-lrg-3d-set-arrangement", Fcmacs_lrg_3d_set_arrangement,
+       Scmacs_lrg_3d_set_arrangement, 1, 2, 0,
+       doc: /* Set FRAME's 3D panel ARRANGEMENT (a string id such as
+"single-panel" or "per-window").  Returns t on success, nil if ARRANGEMENT is
+unknown or FRAME is not a 3D lrg frame.  FRAME defaults to the selected frame.  */)
+  (Lisp_Object arrangement, Lisp_Object frame)
+{
+  struct frame *f = decode_live_frame (frame);
+  Lrg3DSurface *s3 = lrg_3d_surface_of_frame (f);
+  gboolean ok;
+
+  CHECK_STRING (arrangement);
+  if (s3 == NULL)
+    return Qnil;
+  block_input ();
+  ok = lrg_3d_surface_set_arrangement_id (s3, SSDATA (arrangement));
+  unblock_input ();
+  if (ok)
+    SET_FRAME_GARBAGED (f);
+  return ok ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-lrg-3d-set-environment", Fcmacs_lrg_3d_set_environment,
+       Scmacs_lrg_3d_set_environment, 1, 2, 0,
+       doc: /* Set FRAME's 3D ENVIRONMENT (a string id such as "void",
+"workshop" or "cockpit").  Returns t on success, nil if ENVIRONMENT is unknown
+or FRAME is not a 3D lrg frame.  FRAME defaults to the selected frame.  */)
+  (Lisp_Object environment, Lisp_Object frame)
+{
+  struct frame *f = decode_live_frame (frame);
+  Lrg3DSurface *s3 = lrg_3d_surface_of_frame (f);
+  gboolean ok;
+
+  CHECK_STRING (environment);
+  if (s3 == NULL)
+    return Qnil;
+  block_input ();
+  ok = lrg_3d_surface_set_environment_id (s3, SSDATA (environment));
+  unblock_input ();
+  if (ok)
+    SET_FRAME_GARBAGED (f);
+  return ok ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-lrg-3d-arrangement", Fcmacs_lrg_3d_arrangement,
+       Scmacs_lrg_3d_arrangement, 0, 1, 0,
+       doc: /* Return FRAME's current 3D arrangement id (a string), or nil.
+FRAME defaults to the selected frame.  */)
+  (Lisp_Object frame)
+{
+  Lrg3DSurface *s3 = lrg_3d_surface_of_frame (decode_live_frame (frame));
+  const char *id = s3 != NULL ? lrg_3d_surface_get_arrangement_id (s3) : NULL;
+
+  return id != NULL ? build_string (id) : Qnil;
+}
+
+DEFUN ("cmacs-lrg-3d-environment", Fcmacs_lrg_3d_environment,
+       Scmacs_lrg_3d_environment, 0, 1, 0,
+       doc: /* Return FRAME's current 3D environment id (a string), or nil.
+FRAME defaults to the selected frame.  */)
+  (Lisp_Object frame)
+{
+  Lrg3DSurface *s3 = lrg_3d_surface_of_frame (decode_live_frame (frame));
+  const char *id = s3 != NULL ? lrg_3d_surface_get_environment_id (s3) : NULL;
+
+  return id != NULL ? build_string (id) : Qnil;
+}
+
+DEFUN ("cmacs-lrg-3d-focus-window", Fcmacs_lrg_3d_focus_window,
+       Scmacs_lrg_3d_focus_window, 0, 2, 0,
+       doc: /* Focus WINDOW's 3D panel (depth-of-field): it becomes crisp/forward
+and the others recede/dim.  WINDOW defaults to FRAME's selected window, FRAME to
+the selected frame.  Only meaningful in the per-window / free arrangements.  */)
+  (Lisp_Object window, Lisp_Object frame)
+{
+  struct frame *f = decode_live_frame (frame);
+  Lrg3DSurface *s3 = lrg_3d_surface_of_frame (f);
+
+  if (s3 == NULL)
+    return Qnil;
+  if (NILP (window))
+    window = FRAME_SELECTED_WINDOW (f);
+  CHECK_LIVE_WINDOW (window);
+  lrg_3d_surface_set_focus_window (s3, (guintptr) XWINDOW (window));
+  SET_FRAME_GARBAGED (f);
+  return Qt;
+}
+
+DEFUN ("cmacs-lrg-3d-camera", Fcmacs_lrg_3d_camera, Scmacs_lrg_3d_camera,
+       1, 3, 0,
+       doc: /* Move the 3D camera.  OP is a string: "reset", "zoom-in",
+"zoom-out", "orbit-left", "orbit-right", "orbit-up" or "orbit-down".  AMOUNT is
+an optional magnitude (degrees for orbit, distance factor for zoom).  FRAME
+defaults to the selected frame.  Returns t, or nil off a 3D lrg frame.  */)
+  (Lisp_Object op, Lisp_Object amount, Lisp_Object frame)
+{
+  struct frame *f = decode_live_frame (frame);
+  Lrg3DSurface *s3 = lrg_3d_surface_of_frame (f);
+  LrgSpatialCamera *cam;
+  double amt;
+  const char *o;
+
+  CHECK_STRING (op);
+  if (s3 == NULL)
+    return Qnil;
+  cam = lrg_3d_surface_get_camera (s3);
+  if (cam == NULL)
+    return Qnil;
+
+  amt = NILP (amount) ? 0.0 : XFLOATINT (amount);
+  o = SSDATA (op);
+  block_input ();
+  if (strcmp (o, "reset") == 0)
+    lrg_spatial_camera_reset (cam);
+  else if (strcmp (o, "zoom-in") == 0)
+    lrg_spatial_camera_zoom (cam, amt > 0.0 ? (gfloat) amt : 0.85f);
+  else if (strcmp (o, "zoom-out") == 0)
+    lrg_spatial_camera_zoom (cam, amt > 0.0 ? (gfloat) amt : 1.1765f);
+  else if (strcmp (o, "orbit-left") == 0)
+    lrg_spatial_camera_orbit (cam, amt != 0.0 ? (gfloat) amt : -12.0f, 0.0f);
+  else if (strcmp (o, "orbit-right") == 0)
+    lrg_spatial_camera_orbit (cam, amt != 0.0 ? (gfloat) amt : 12.0f, 0.0f);
+  else if (strcmp (o, "orbit-up") == 0)
+    lrg_spatial_camera_orbit (cam, 0.0f, amt != 0.0 ? (gfloat) amt : 12.0f);
+  else if (strcmp (o, "orbit-down") == 0)
+    lrg_spatial_camera_orbit (cam, 0.0f, amt != 0.0 ? (gfloat) amt : -12.0f);
+  unblock_input ();
+
+  SET_FRAME_GARBAGED (f);
+  return Qt;
+}
+
+DEFUN ("cmacs-lrg-3d-pick", Fcmacs_lrg_3d_pick, Scmacs_lrg_3d_pick, 2, 3, 0,
+       doc: /* Map device pixel (X, Y) to a frame pixel via the surface's pick.
+On a 3D lrg frame this ray-casts the pointer onto the panel under it and returns
+the =(FX . FY)= frame pixel, or nil if it misses every panel; on a 2D lrg frame
+it returns =(X . Y)= unchanged.  FRAME defaults to the selected frame.  */)
+  (Lisp_Object x, Lisp_Object y, Lisp_Object frame)
+{
+  struct frame *f = decode_live_frame (frame);
+  LrgFrameSurface *s;
+  gfloat ox = 0.0f, oy = 0.0f;
+
+  CHECK_FIXNUM (x);
+  CHECK_FIXNUM (y);
+  if (!FRAME_LRG_P (f))
+    return Qnil;
+  s = FRAME_LRG_SURFACE (f);
+  if (s == NULL)
+    return Qnil;
+  if (!lrg_frame_surface_pick (s, (gfloat) XFIXNUM (x), (gfloat) XFIXNUM (y),
+                               &ox, &oy))
+    return Qnil;
+  return Fcons (make_fixnum ((EMACS_INT) ox), make_fixnum ((EMACS_INT) oy));
+}
+
+DEFUN ("cmacs-lrg-3d-pick-panel", Fcmacs_lrg_3d_pick_panel,
+       Scmacs_lrg_3d_pick_panel, 2, 3, 0,
+       doc: /* Ray-cast device pixel (X, Y) and return =(FX FY KEY)= -- the frame
+pixel plus the integer KEY of the panel hit -- or nil if the ray misses every
+panel.  3D lrg frames only.  */)
+  (Lisp_Object x, Lisp_Object y, Lisp_Object frame)
+{
+  struct frame *f = decode_live_frame (frame);
+  Lrg3DSurface *s3 = lrg_3d_surface_of_frame (f);
+  gfloat ox = 0.0f, oy = 0.0f;
+  guint64 key = 0;
+
+  CHECK_FIXNUM (x);
+  CHECK_FIXNUM (y);
+  if (s3 == NULL)
+    return Qnil;
+  if (!lrg_3d_surface_pick_panel (s3, (gfloat) XFIXNUM (x), (gfloat) XFIXNUM (y),
+                                  &ox, &oy, &key))
+    return Qnil;
+  return list3 (make_fixnum ((EMACS_INT) ox), make_fixnum ((EMACS_INT) oy),
+                make_uint (key));
+}
+
+DEFUN ("cmacs-lrg-3d-focus-panel", Fcmacs_lrg_3d_focus_panel,
+       Scmacs_lrg_3d_focus_panel, 0, 2, 0,
+       doc: /* Bring WINDOW's 3D panel front-and-centre: set depth-of-field focus
+to it (others dim) and fly the camera to a head-on framing of it.  WINDOW defaults
+to FRAME's selected window, FRAME to the selected frame.  Returns t, or nil off a
+3D lrg frame.  */)
+  (Lisp_Object window, Lisp_Object frame)
+{
+  struct frame *f = decode_live_frame (frame);
+  Lrg3DSurface *s3 = lrg_3d_surface_of_frame (f);
+
+  if (s3 == NULL)
+    return Qnil;
+  if (NILP (window))
+    window = FRAME_SELECTED_WINDOW (f);
+  CHECK_LIVE_WINDOW (window);
+  lrg_3d_surface_focus_panel (s3, (guintptr) XWINDOW (window));
+  SET_FRAME_GARBAGED (f);
+  return Qt;
+}
+
+DEFUN ("cmacs-lrg-3d-orbit", Fcmacs_lrg_3d_orbit, Scmacs_lrg_3d_orbit, 0, 3, 0,
+       doc: /* Orbit the 3D camera by DYAW degrees (azimuth) and DPITCH degrees
+(elevation), eased.  Either defaults to 0.  FRAME defaults to the selected frame.
+Returns t, or nil off a 3D lrg frame.  */)
+  (Lisp_Object dyaw, Lisp_Object dpitch, Lisp_Object frame)
+{
+  struct frame *f = decode_live_frame (frame);
+  Lrg3DSurface *s3 = lrg_3d_surface_of_frame (f);
+  LrgSpatialCamera *cam;
+
+  if (s3 == NULL)
+    return Qnil;
+  cam = lrg_3d_surface_get_camera (s3);
+  if (cam == NULL)
+    return Qnil;
+  block_input ();
+  lrg_spatial_camera_orbit (cam,
+                            NILP (dyaw) ? 0.0f : (gfloat) XFLOATINT (dyaw),
+                            NILP (dpitch) ? 0.0f : (gfloat) XFLOATINT (dpitch));
+  unblock_input ();
+  SET_FRAME_GARBAGED (f);
+  return Qt;
+}
+
+DEFUN ("cmacs-lrg-3d-dolly", Fcmacs_lrg_3d_dolly, Scmacs_lrg_3d_dolly, 1, 2, 0,
+       doc: /* Dolly the 3D camera by FACTOR (eye-to-target distance multiplier;
+<1 moves toward the scene, >1 away).  FRAME defaults to the selected frame.
+Returns t, or nil off a 3D lrg frame.  */)
+  (Lisp_Object factor, Lisp_Object frame)
+{
+  struct frame *f = decode_live_frame (frame);
+  Lrg3DSurface *s3 = lrg_3d_surface_of_frame (f);
+  LrgSpatialCamera *cam;
+
+  if (s3 == NULL)
+    return Qnil;
+  cam = lrg_3d_surface_get_camera (s3);
+  if (cam == NULL)
+    return Qnil;
+  block_input ();
+  lrg_spatial_camera_zoom (cam, (gfloat) XFLOATINT (factor));
+  unblock_input ();
+  SET_FRAME_GARBAGED (f);
+  return Qt;
+}
+
+DEFUN ("cmacs-lrg-3d-move-panel", Fcmacs_lrg_3d_move_panel,
+       Scmacs_lrg_3d_move_panel, 3, 5, 0,
+       doc: /* Translate WINDOW's 3D panel by (DX, DY, DZ) world units and pin it
+there.  WINDOW defaults to FRAME's selected window, FRAME to the selected frame.
+Returns t, or nil off a 3D lrg frame.  */)
+  (Lisp_Object window, Lisp_Object dx, Lisp_Object dy, Lisp_Object dz,
+   Lisp_Object frame)
+{
+  struct frame *f = decode_live_frame (frame);
+  Lrg3DSurface *s3 = lrg_3d_surface_of_frame (f);
+
+  if (s3 == NULL)
+    return Qnil;
+  if (NILP (window))
+    window = FRAME_SELECTED_WINDOW (f);
+  CHECK_LIVE_WINDOW (window);
+  lrg_3d_surface_move_panel (s3, (guintptr) XWINDOW (window),
+                             (gfloat) XFLOATINT (dx),
+                             (gfloat) XFLOATINT (dy),
+                             NILP (dz) ? 0.0f : (gfloat) XFLOATINT (dz));
+  SET_FRAME_GARBAGED (f);
+  return Qt;
+}
+
+DEFUN ("cmacs-lrg-3d-pin-panel", Fcmacs_lrg_3d_pin_panel,
+       Scmacs_lrg_3d_pin_panel, 0, 2, 0,
+       doc: /* Pin WINDOW's 3D panel in place (the arrangement no longer moves it).
+WINDOW defaults to FRAME's selected window.  Returns t, or nil off a 3D lrg frame.  */)
+  (Lisp_Object window, Lisp_Object frame)
+{
+  struct frame *f = decode_live_frame (frame);
+  Lrg3DSurface *s3 = lrg_3d_surface_of_frame (f);
+
+  if (s3 == NULL)
+    return Qnil;
+  if (NILP (window))
+    window = FRAME_SELECTED_WINDOW (f);
+  CHECK_LIVE_WINDOW (window);
+  lrg_3d_surface_pin_panel (s3, (guintptr) XWINDOW (window));
+  SET_FRAME_GARBAGED (f);
+  return Qt;
+}
+
+DEFUN ("cmacs-lrg-3d-unpin-panel", Fcmacs_lrg_3d_unpin_panel,
+       Scmacs_lrg_3d_unpin_panel, 0, 2, 0,
+       doc: /* Release WINDOW's 3D panel back to automatic layout.  WINDOW defaults
+to FRAME's selected window; with WINDOW t, unpin every panel.  Returns t, or nil
+off a 3D lrg frame.  */)
+  (Lisp_Object window, Lisp_Object frame)
+{
+  struct frame *f = decode_live_frame (frame);
+  Lrg3DSurface *s3 = lrg_3d_surface_of_frame (f);
+
+  if (s3 == NULL)
+    return Qnil;
+  if (EQ (window, Qt))
+    lrg_3d_surface_unpin_all (s3);
+  else
+    {
+      if (NILP (window))
+        window = FRAME_SELECTED_WINDOW (f);
+      CHECK_LIVE_WINDOW (window);
+      lrg_3d_surface_unpin_panel (s3, (guintptr) XWINDOW (window));
+    }
+  SET_FRAME_GARBAGED (f);
+  return Qt;
+}
+
+DEFUN ("cmacs-lrg-3d-set-wall", Fcmacs_lrg_3d_set_wall, Scmacs_lrg_3d_set_wall,
+       0, 1, 0,
+       doc: /* Show BUFFER's libregnum 3D view on the cockpit back wall.
+BUFFER should have a live libregnum view (a gnuseye / gobject-graph / editor /
+CAD buffer); its rendered scene becomes the back wall under the `cockpit'
+environment.  With BUFFER nil, clear the wall.  Returns BUFFER.  */)
+  (Lisp_Object buffer)
+{
+  if (!NILP (buffer))
+    CHECK_BUFFER (buffer);
+  lrg_cockpit_wall_buffer = buffer;
+  return buffer;
+}
+
 /* Frame-parameter handler table, defined in cmacs-lrgfns.c.  Set in the
    static initializer below: it must be wired at link time, NOT at syms/dump
    time, because this struct is C static data that reverts to its initializer
@@ -2268,11 +3043,30 @@ syms_of_cmacs_lrgterm (void)
 {
   DEFSYM (Qlrg, "lrg");
   Fprovide (Qlrg, Qnil);
+  staticpro (&lrg_cockpit_wall_buffer);
+  lrg_cockpit_wall_buffer = Qnil;
   defsubr (&Slrg_capture_screen);
   defsubr (&Slrg_popup_menu);
   defsubr (&Slrg_display_pixel_size);
   defsubr (&Slrg_set_clipboard);
   defsubr (&Slrg_get_clipboard);
+  defsubr (&Scmacs_lrg_3d_supported_p);
+  defsubr (&Scmacs_lrg_render_mode);
+  defsubr (&Scmacs_lrg_3d_set_arrangement);
+  defsubr (&Scmacs_lrg_3d_set_environment);
+  defsubr (&Scmacs_lrg_3d_arrangement);
+  defsubr (&Scmacs_lrg_3d_environment);
+  defsubr (&Scmacs_lrg_3d_focus_window);
+  defsubr (&Scmacs_lrg_3d_camera);
+  defsubr (&Scmacs_lrg_3d_pick);
+  defsubr (&Scmacs_lrg_3d_pick_panel);
+  defsubr (&Scmacs_lrg_3d_focus_panel);
+  defsubr (&Scmacs_lrg_3d_orbit);
+  defsubr (&Scmacs_lrg_3d_dolly);
+  defsubr (&Scmacs_lrg_3d_move_panel);
+  defsubr (&Scmacs_lrg_3d_pin_panel);
+  defsubr (&Scmacs_lrg_3d_unpin_panel);
+  defsubr (&Scmacs_lrg_3d_set_wall);
   syms_of_cmacs_lrgfont ();
   syms_of_cmacs_lrgfns ();
 }

@@ -5561,6 +5561,10 @@ extern void init_cmacs_lrgterm (void);
 /* Render mode requested by --lrg[=MODE]: -1 = not requested, 0 = 2d,
    1 = 3d, 2 = 3dvr.  Defined in cmacs/lrgterm/cmacs-lrgterm.c.  */
 extern int lrg_requested_render_mode;
+/* The ':'/','-separated tail of --lrg=MODE:... (arrangement / environment ids
+   for the 3D surface), or NULL.  Points into argv; defined in
+   cmacs/lrgterm/cmacs-lrgterm.c.  */
+extern const char *lrg_requested_3d_spec;
 #endif
 #ifdef HAVE_CMACS_GNUSEYE
 extern void syms_of_cmacs_gnuseye (void);

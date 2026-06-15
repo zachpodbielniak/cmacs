@@ -311,8 +311,9 @@ Initialization options:\n\
 /* CMACS: output_lrg (libregnum/raylib) display backend selector.  */
 #ifdef HAVE_CMACS_LRGTERM
     "\
---lrg[=MODE]                use the libregnum/raylib display backend\n\
-                              (MODE: 2d [default]; 3d, 3dvr reserved)\n\
+--lrg[=SPEC]                use the libregnum/raylib display backend\n\
+                              (SPEC: MODE[:ARRANGEMENT][:ENVIRONMENT]; MODE is\n\
+                              2d [default], 3d, 3dvr; e.g. 3d:per-window:workshop)\n\
 ",
 #endif
 /* CMACS: batch-mode entry points (see cmacs_bacon_main /
@@ -1447,13 +1448,19 @@ android_emacs_init (int argc, char **argv, char *dump_file)
       if (strncmp (argv[i], "--lrg", 5) == 0
           && (argv[i][5] == '\0' || argv[i][5] == '='))
         {
+          /* SPEC = MODE[:ARRANGEMENT][:ENVIRONMENT]...  The head selects the
+             surface; the ':'/','-separated tail is recorded for the 3D surface
+             to apply (arrangement / environment ids).  */
           const char *mode = argv[i][5] == '=' ? argv[i] + 6 : "2d";
-          if (strcmp (mode, "3d") == 0)
-            lrg_requested_render_mode = 1;
-          else if (strcmp (mode, "3dvr") == 0)
+          const char *sep = strpbrk (mode, ":,");
+          ptrdiff_t headlen = sep ? sep - mode : (ptrdiff_t) strlen (mode);
+          if (headlen == 4 && strncmp (mode, "3dvr", 4) == 0)
             lrg_requested_render_mode = 2;
+          else if (headlen == 2 && strncmp (mode, "3d", 2) == 0)
+            lrg_requested_render_mode = 1;
           else
             lrg_requested_render_mode = 0;
+          lrg_requested_3d_spec = sep != NULL ? sep + 1 : NULL;
           argv[i] = (char *) "--lrg";
           break;
         }

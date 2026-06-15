@@ -340,13 +340,16 @@ unconditional style) and marked =/* CMACS: output_lrg ... */=.
   mapper.
 - =src/dispnew.c= --- =init_display= selects =Vinitial_window_system = Qlrg=
   when =lrg_requested_render_mode >= 0=, before the pgtk block.
-- =src/emacs.c= --- the =--lrg[=MODE]= early flag scan (mutually exclusive
+- =src/emacs.c= --- the =--lrg[=SPEC]= early flag scan (mutually exclusive
   with =--gowl=), =standard_args= entry, usage line, and
-  =syms_of_cmacs_lrgterm()= / =init_cmacs_lrgterm()= calls.
+  =syms_of_cmacs_lrgterm()= / =init_cmacs_lrgterm()= calls.  SPEC is
+  =MODE[:ARRANGEMENT][:ENVIRONMENT]=: the head sets =lrg_requested_render_mode=
+  (as before), and the =:=/=,=-separated tail is recorded in
+  =lrg_requested_3d_spec= for the 3D surface to apply.
 - =src/alloc.c= --- =mark_lrgterm ()= call in the GC mark phase (the lrg
   display's font-cache cons lives in C heap).
-- =src/lisp.h= --- externs for =syms_of_cmacs_lrgterm= / =init_cmacs_lrgterm=
-  and =int lrg_requested_render_mode=.
+- =src/lisp.h= --- externs for =syms_of_cmacs_lrgterm= / =init_cmacs_lrgterm=,
+  =int lrg_requested_render_mode= and =const char *lrg_requested_3d_spec=.
 
 ** Build system
 

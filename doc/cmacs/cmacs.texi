@@ -7715,10 +7715,65 @@ deselects a selected entity); re-enter navigation with @kbd{C-z}
 @section Render modes
 
 The abstract @code{LrgFrameSurface} + @code{LrgRenderMode} + @code{pick} seam
-makes 3D and VR additive rather than a rewrite: Layer 3 is mode-agnostic, the
-glyph atlas is projection-free, and input routes through @code{pick}.  The
-default mode is @code{2d}; @code{3d} and @code{3dvr} are reserved flag tokens
-that today error politely.
+makes each render mode additive: Layer 3 is mode-agnostic, the glyph atlas is
+projection-free, and input routes through @code{pick} (identity in 2D, a
+ray-cast in 3D).  @code{2d} (default, @code{Lrg2DSurface}) is flat and
+pixel-exact.  @code{3d} (@code{Lrg3DSurface}) captures the flat frame to a
+texture each redisplay and draws it as textured @emph{panels} in a perspective
+scene viewed from a gentle elevated 3/4 camera angle (so the panels show real
+perspective and the environment floor recedes on launch; orbit/zoom with
+@kbd{C-c 3}).  @code{3dvr} is reserved (today it builds the 3D surface, mono).
+
+@section 3D mode
+
+Launch with a SPEC after the mode token,
+@code{MODE[:ARRANGEMENT][:ENVIRONMENT]} (@samp{:} or @samp{,} separated), e.g.@:
+@code{emacs --lrg=3d:per-window:workshop}.  Two orthogonal, runtime-switchable
+axes:
+
+@table @asis
+@item Arrangement
+@code{single-panel} (whole frame on one panel), @code{per-window} (one panel per
+Emacs window), @code{free} (independent panel transforms; basic).
+@item Environment
+@code{void} (dark backdrop), @code{workshop} (grid floor), @code{cockpit}
+(enclosed grid room).
+@end table
+
+New arrangements/environments are added by implementing the
+@code{LrgSceneArrangement} / @code{LrgPanelEnvironment} GInterfaces and
+registering an id with @code{LrgModeRegistry} --- no surface changes.
+Depth-of-field focuses the selected window's panel and dims the rest.
+
+The global @code{cmacs-lrg-3d-mode} (auto-enabled for lrg frames) binds runtime
+control under @code{C-c 3}: @code{a}/@code{e} switch arrangement/environment,
+@code{?} describes, @code{0} resets the camera, @code{+}/@code{-} zoom, the arrow
+keys orbit, @code{f} brings the selected window front-and-centre, and
+@code{p}/@code{u}/@code{U} pin / unpin / unpin-all panels.
+
+@subsection Spatial interaction
+
+The interaction model is @emph{hybrid}: command-the-room by default, with manual
+override.  Focus a panel and the camera flies it front-and-centre while the
+others recede --- by @kbd{Ctrl+double-left-click}, @kbd{C-c 3 f}, or voice/AI via
+MCP.  Manually, @emph{middle-drag} orbits around the @emph{room} (the whole scene, not
+just a focused panel), @kbd{Ctrl+wheel} dollies in/out, and @kbd{Ctrl/Super +
+middle-drag} grabs and moves the panel under the pointer (which @emph{pins} it so
+it keeps its place across re-layouts); @kbd{C-c 3 u}/@kbd{U} release panels.
+Plain left-click still edits; a bare middle-click is still @code{mouse-2} (yank);
+@kbd{Super+drag} is a trackpad alias for middle-drag.  When the pointer is over a
+window hosting a @emph{libregnum view} (gnuseye, the editor, a CAD viewer), the
+spatial gestures defer to that app's own camera controls, so workspace navigation
+never fights an embedded app.
+
+These are @emph{intents}, not raw buttons: each gesture maps to a C method that
+is also a DEFUN (@code{cmacs-lrg-3d-focus-panel}, @code{-orbit},
+@code{-move-panel}, @code{-pin-panel}, @code{-pick-panel}) and an MCP tool
+(@code{lrgterm_3d_focus_selected}, @code{_pin_selected}, @code{_unpin_all}, @dots{}),
+with the high-rate drag math in C.  The mouse is just the first input device:
+future SpaceMouse/6DOF, gestures and VR controllers bind to the same intents, and
+voice/AI drive them through MCP --- the path toward @emph{stark-mode} without
+re-architecting.  All bindings are rebindable.
 
 @section Commands
 
@@ -7730,25 +7785,44 @@ reliable rendering oracle for tests and the basis of @code{lrgterm_dump_screen}.
 @code{(WIDTH . HEIGHT)} of the current monitor.
 @item lrg-set-clipboard / lrg-get-clipboard
 System-clipboard text (UTF-8).
+@item cmacs-lrg-render-mode &optional FRAME
+The frame's render mode (@code{"2d"}/@code{"3d"}/@code{"3dvr"}), or nil.
+@item cmacs-lrg-3d-set-arrangement / -set-environment ID &optional FRAME
+Switch the 3D arrangement / environment at runtime (the C primitives behind the
+@code{cmacs-lrg-set-arrangement} / @code{-set-environment} commands).
+@item cmacs-lrg-3d-camera OP &optional AMOUNT FRAME
+Move the 3D camera (@code{"reset"}, @code{"zoom-in"}, @code{"orbit-left"}, @dots{}).
 @end table
 
 @section MCP tools
 
 With @code{--with-cmacs-mcp}, the backend registers @code{lrgterm_frame_info},
-@code{lrgterm_render_stats}, @code{lrgterm_force_redraw}, and
-@code{lrgterm_dump_screen} (captures the lrg frame to a PNG and returns it as
-an image, so an agent can see what the backend renders).
+@code{lrgterm_render_stats}, @code{lrgterm_force_redraw},
+@code{lrgterm_dump_screen} (captures the lrg frame to a PNG and returns it as an
+image), and the 3D tools @code{lrgterm_3d_state},
+@code{lrgterm_3d_cycle_arrangement}, @code{lrgterm_3d_cycle_environment} and
+@code{lrgterm_3d_camera_orbit}.
 
 @section Known v1 limitations
 
-One OS window per terminal (a second top-level GUI frame is refused); GUI
-the menu @emph{bar} is not drawn (use @code{M-x tmm-menubar} / @key{F10};
+One OS window per terminal: a second top-level @emph{or child} frame is
+refused (@code{lrg-create-frame} signals an error rather than open a stray
+second OS window), so child-frame UIs (@code{posframe}, @code{corfu}/
+@code{company} popups, @code{which-key-posframe}, GUI tooltips) cannot show and
+fall back to the minibuffer --- test 3D with @code{emacs -Q}.  The menu
+@emph{bar} is not drawn (use @code{M-x tmm-menubar} / @key{F10};
 dialogs go to the minibuffer; the libregnum/gnuseye right-click @emph{context}
 menus, though, are drawn in-engine via @code{lrg-popup-menu}); scroll bars, the
 tool bar and tooltips/child-frames are
 not yet implemented (inline images @emph{are} drawn); the mouse pointer does
 not change shape; IME is direct/Quail input only; @code{--lrg} and
 @code{--gowl} are mutually exclusive.
+
+In 3D mode, panels re-fit on a window resize: the surface reconciles its
+geometry to the live window each frame, re-runs the arrangement layout, and eases
+the panels to the new size.  Sizing is always-fit (a fixed world height, width
+following the frame aspect), so the whole frame stays visible and consistently
+framed at every window size.
 
 See @file{doc_org/cmacs/cmacs-lrgterm.org} for the living document.
 
