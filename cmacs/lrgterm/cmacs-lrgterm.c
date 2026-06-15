@@ -66,6 +66,32 @@ static Lisp_Object lrg_cockpit_wall_buffer;
    hooks no-op otherwise (see the rendering-model note above).  */
 static bool lrg_drawing;
 
+/* When true, lrg_present_frame returns without drawing/swapping.  Set around an
+   off-screen workspace render (cmacs-lrg-3d-begin/end-offscreen): the embedder
+   installs a non-current workspace's window-config and (redisplay)s it to build
+   its glyph matrices; that redisplay's present must NOT reach the screen (it would
+   show -- and capture into the live panels -- the wrong workspace).  Only the
+   explicit cmacs-lrg-3d-render-into-panel render runs during the suppressed
+   window, and it bypasses this flag.  */
+static bool lrg_present_suppressed;
+
+/* Workspace panels (the 3D workspace ring) get keys distinct from any Emacs
+   window key, which is a `struct window *' cast to guint64 (a canonical
+   user-space pointer, so bit 63 is always clear).  We therefore set bit 63 and
+   pack a small workspace index in the low bits.  The Elisp <-> C boundary only
+   ever passes the small index (a Lisp fixnum); the full guint64 key never leaves
+   C, avoiding Lisp bignums for high-bit values.  */
+#define LRG_WS_PANEL_BIT     (((guint64) 1) << 63)
+#define LRG_WS_KEY(idx)      (LRG_WS_PANEL_BIT | (guint64) (idx))
+#define LRG_WS_IS_KEY(k)     (((k) & LRG_WS_PANEL_BIT) != 0)
+#define LRG_WS_KEY_INDEX(k)  ((int) ((k) & ~LRG_WS_PANEL_BIT))
+
+/* Workspace index a Ctrl+double-left-click selected (a workspace panel), or -1.
+   Set from lrg_read_socket; consumed by cmacs-lrg-3d-take-pending-workspace from
+   the workspace switcher's command-loop timer -- the switch (+workspace-switch)
+   thus runs in the command loop, never as Lisp called from the input path.  */
+static int lrg_pending_ws_select = -1;
+
 /* Per-image-surface cache key: the GrlTexture we build for an image is stashed
    as cairo user-data on its image surface, so it is unref'd automatically when
    the surface (img->cr_data) is destroyed (image cleared / reloaded) -- no
@@ -1110,6 +1136,12 @@ lrg_present_frame (struct frame *f)
   if (surf == NULL || lrg_drawing)
     return;
 
+  /* Off-screen workspace render in progress: swallow the present so the
+     redisplay that builds a non-current workspace's matrices stays off screen
+     and leaves the live panels untouched (see lrg_present_suppressed).  */
+  if (lrg_present_suppressed)
+    return;
+
   block_input ();
   {
     /* Clear to the frame background at alpha-background, so the uncovered
@@ -1817,7 +1849,11 @@ lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
                            && abs (my - lrg_sp.last_left_y) < 6;
                 if (hit)
                   {
-                    if (dbl)
+                    if (dbl && LRG_WS_IS_KEY (key))
+                      /* Double-click on a workspace panel: request a switch to it
+                         (consumed in the command loop -- never call Lisp here). */
+                      lrg_pending_ws_select = LRG_WS_KEY_INDEX (key);
+                    else if (dbl)
                       lrg_3d_surface_focus_panel (s3, key);
                     else
                       lrg_3d_surface_set_focus_window (s3, key);
@@ -3060,6 +3096,33 @@ to FRAME's selected window, FRAME to the selected frame.  Returns t, or nil off 
   return Qt;
 }
 
+DEFUN ("cmacs-lrg-3d-maximize-window", Fcmacs_lrg_3d_maximize_window,
+       Scmacs_lrg_3d_maximize_window, 0, 2, 0,
+       doc: /* Maximize WINDOW's 3D panel to a flat, 2D-like view: frame it head-on
+and level (0-degree tilt), filling the viewport edge-to-edge -- as the 2D backend
+/ PGTK would show it.  WINDOW defaults to FRAME's selected window (and falls back
+to the whole-frame panel in single-panel mode).  Reset the camera
+\(`cmacs-lrg-camera-reset' / =C-c 3 0=) to return to the 3D view.  Returns t, or
+nil off a 3D lrg frame.  */)
+  (Lisp_Object window, Lisp_Object frame)
+{
+  struct frame *f = decode_live_frame (frame);
+  Lrg3DSurface *s3 = lrg_3d_surface_of_frame (f);
+  gboolean ok;
+
+  if (s3 == NULL)
+    return Qnil;
+  if (NILP (window))
+    window = FRAME_SELECTED_WINDOW (f);
+  CHECK_LIVE_WINDOW (window);
+  block_input ();
+  ok = lrg_3d_surface_maximize_panel (s3, (guintptr) XWINDOW (window));
+  unblock_input ();
+  if (ok)
+    SET_FRAME_GARBAGED (f);
+  return ok ? Qt : Qnil;
+}
+
 DEFUN ("cmacs-lrg-3d-orbit", Fcmacs_lrg_3d_orbit, Scmacs_lrg_3d_orbit, 0, 3, 0,
        doc: /* Orbit the 3D camera by DYAW degrees (azimuth) and DPITCH degrees
 (elevation), eased.  Either defaults to 0.  FRAME defaults to the selected frame.
@@ -3211,6 +3274,236 @@ environment.  With BUFFER nil, clear the wall.  Returns BUFFER.  */)
   return buffer;
 }
 
+/* --- 3D workspace ring: off-screen render into a workspace panel ----------- */
+
+DEFUN ("cmacs-lrg-3d-begin-offscreen", Fcmacs_lrg_3d_begin_offscreen,
+       Scmacs_lrg_3d_begin_offscreen, 0, 1, 0,
+       doc: /* Begin an off-screen workspace render on FRAME: suppress on-screen
+presents until `cmacs-lrg-3d-end-offscreen'.  While suppressed, a (redisplay) of a
+non-current workspace's window-config builds its glyph matrices without reaching
+the screen or touching the live panels, so `cmacs-lrg-3d-render-into-panel' can
+capture it.  Always pair with `cmacs-lrg-3d-end-offscreen' (use `unwind-protect').
+FRAME defaults to the selected frame.  Returns t, or nil off a 3D lrg frame.  */)
+  (Lisp_Object frame)
+{
+  if (lrg_3d_surface_of_frame (decode_live_frame (frame)) == NULL)
+    return Qnil;
+  lrg_present_suppressed = true;
+  return Qt;
+}
+
+DEFUN ("cmacs-lrg-3d-end-offscreen", Fcmacs_lrg_3d_end_offscreen,
+       Scmacs_lrg_3d_end_offscreen, 0, 1, 0,
+       doc: /* End the off-screen render window begun by
+`cmacs-lrg-3d-begin-offscreen': resume on-screen presents.  FRAME is accepted for
+symmetry and ignored.  Returns t.  */)
+  (Lisp_Object frame)
+{
+  (void) frame;
+  lrg_present_suppressed = false;
+  return Qt;
+}
+
+DEFUN ("cmacs-lrg-3d-render-into-panel", Fcmacs_lrg_3d_render_into_panel,
+       Scmacs_lrg_3d_render_into_panel, 1, 2, 0,
+       doc: /* Render FRAME's current flat content into workspace panel INDEX.
+The caller installs a non-current workspace's window-config (and redisplays it,
+typically inside a `cmacs-lrg-3d-begin/end-offscreen' pair) so FRAME's current
+glyph matrices show that workspace; this captures them to the panel's own texture
+without disturbing the live window panels.  The visible scene is re-composited
+from the cached panels and is unchanged.  INDEX is a small workspace index.
+Returns t, or nil off a 3D lrg frame.  */)
+  (Lisp_Object index, Lisp_Object frame)
+{
+  struct frame *f = decode_live_frame (frame);
+  Lrg3DSurface *s3 = lrg_3d_surface_of_frame (f);
+  guint64 key;
+
+  CHECK_FIXNUM (index);
+  if (s3 == NULL)
+    return Qnil;
+  key = LRG_WS_KEY (XFIXNUM (index));
+
+  block_input ();
+  {
+    g_autoptr (GrlColor) bg = lrg_color (FRAME_LRG_BACKGROUND_COLOR (f));
+    g_autoptr (GrlImage) img = NULL;
+    LrgFrameSurface *surf = LRG_FRAME_SURFACE (s3);
+    int w = FRAME_PIXEL_WIDTH (f);
+    int h = FRAME_PIXEL_HEIGHT (f);
+
+    /* Render the current content to the back buffer and read it back -- but do
+       NOT sync the current window tree into the live panels (lrg_sync_3d_panels
+       is deliberately skipped) and do NOT composite the off-screen content to
+       the screen.  end_frame re-composites the live scene from the cached panel
+       textures (which still hold the live workspace) and swaps, so the user sees
+       no change; only this workspace's panel texture is refreshed.  */
+    lrg_frame_surface_begin_frame (surf);
+    lrg_frame_surface_clear (surf, bg);
+
+    lrg_drawing = true;
+    expose_frame (f, 0, 0, w, h);
+    lrg_drawing = false;
+
+    /* Flush the batched glyph quads so the readback sees them (mirrors the
+       scissor flush in lrg_3d_surface_end_content).  */
+    grl_draw_begin_scissor_mode (0, 0, w, h);
+    grl_draw_end_scissor_mode ();
+
+    img = grl_image_new_from_screen ();
+    if (img != NULL)
+      lrg_3d_surface_set_panel_image (s3, key, img);
+
+    lrg_frame_surface_end_frame (surf);
+  }
+  unblock_input ();
+
+  return Qt;
+}
+
+/* Shared body for the two workspace-panel placement DEFUNs (snap / eased).
+   EASED selects lrg_3d_surface_place_panel_eased over the snapping variant.  */
+static Lisp_Object
+lrg_place_workspace_panel (Lisp_Object index, Lisp_Object px, Lisp_Object py,
+                           Lisp_Object pz, Lisp_Object yaw, Lisp_Object w,
+                           Lisp_Object h, Lisp_Object frame, bool eased)
+{
+  struct frame *f = decode_live_frame (frame);
+  Lrg3DSurface *s3 = lrg_3d_surface_of_frame (f);
+  guint64 key;
+
+  CHECK_FIXNUM (index);
+  if (s3 == NULL)
+    return Qnil;
+  key = LRG_WS_KEY (XFIXNUM (index));
+  block_input ();
+  if (eased)
+    lrg_3d_surface_place_panel_eased (s3, key,
+                                      (gfloat) XFLOATINT (px),
+                                      (gfloat) XFLOATINT (py),
+                                      (gfloat) XFLOATINT (pz),
+                                      (gfloat) XFLOATINT (yaw),
+                                      (gfloat) XFLOATINT (w),
+                                      (gfloat) XFLOATINT (h));
+  else
+    lrg_3d_surface_place_panel (s3, key,
+                                (gfloat) XFLOATINT (px), (gfloat) XFLOATINT (py),
+                                (gfloat) XFLOATINT (pz), (gfloat) XFLOATINT (yaw),
+                                (gfloat) XFLOATINT (w), (gfloat) XFLOATINT (h));
+  unblock_input ();
+  SET_FRAME_GARBAGED (f);
+  return Qt;
+}
+
+DEFUN ("cmacs-lrg-3d-place-workspace-panel", Fcmacs_lrg_3d_place_workspace_panel,
+       Scmacs_lrg_3d_place_workspace_panel, 7, 8, 0,
+       doc: /* Place workspace panel INDEX at world (PX, PY, PZ), yaw YAW degrees,
+size W x H world units, pinned there (the arrangement never moves it).  Creates
+the panel if needed and snaps it into place.  Used to lay the workspace ring out
+on a curved arc.  FRAME defaults to the selected frame.  Returns t, or nil off a
+3D lrg frame.  */)
+  (Lisp_Object index, Lisp_Object px, Lisp_Object py, Lisp_Object pz,
+   Lisp_Object yaw, Lisp_Object w, Lisp_Object h, Lisp_Object frame)
+{
+  return lrg_place_workspace_panel (index, px, py, pz, yaw, w, h, frame, false);
+}
+
+DEFUN ("cmacs-lrg-3d-place-workspace-panel-eased",
+       Fcmacs_lrg_3d_place_workspace_panel_eased,
+       Scmacs_lrg_3d_place_workspace_panel_eased, 7, 8, 0,
+       doc: /* Like `cmacs-lrg-3d-place-workspace-panel' but EASE the panel to the
+new transform (a sliding carousel transition) instead of snapping.  */)
+  (Lisp_Object index, Lisp_Object px, Lisp_Object py, Lisp_Object pz,
+   Lisp_Object yaw, Lisp_Object w, Lisp_Object h, Lisp_Object frame)
+{
+  return lrg_place_workspace_panel (index, px, py, pz, yaw, w, h, frame, true);
+}
+
+DEFUN ("cmacs-lrg-3d-take-pending-workspace",
+       Fcmacs_lrg_3d_take_pending_workspace,
+       Scmacs_lrg_3d_take_pending_workspace, 0, 0, 0,
+       doc: /* Return and clear the workspace index a Ctrl+double-left-click chose.
+A click on a workspace panel records its index here; the workspace switcher polls
+this from its command-loop timer and switches to the workspace, so the switch runs
+safely in the command loop.  Returns the integer index, or nil if none pending.  */)
+  (void)
+{
+  int idx = lrg_pending_ws_select;
+
+  if (idx < 0)
+    return Qnil;
+  lrg_pending_ws_select = -1;
+  return make_fixnum (idx);
+}
+
+DEFUN ("cmacs-lrg-3d-rotate-workspace-panel",
+       Fcmacs_lrg_3d_rotate_workspace_panel,
+       Scmacs_lrg_3d_rotate_workspace_panel, 2, 3, 0,
+       doc: /* Rotate workspace panel INDEX by DYAW degrees about world Y and pin
+it there.  FRAME defaults to the selected frame.  Returns t, or nil if the panel
+does not exist / off a 3D lrg frame.  */)
+  (Lisp_Object index, Lisp_Object dyaw, Lisp_Object frame)
+{
+  struct frame *f = decode_live_frame (frame);
+  Lrg3DSurface *s3 = lrg_3d_surface_of_frame (f);
+  gboolean ok;
+
+  CHECK_FIXNUM (index);
+  if (s3 == NULL)
+    return Qnil;
+  block_input ();
+  ok = lrg_3d_surface_rotate_panel (s3, LRG_WS_KEY (XFIXNUM (index)),
+                                    (gfloat) XFLOATINT (dyaw));
+  unblock_input ();
+  if (ok)
+    SET_FRAME_GARBAGED (f);
+  return ok ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-lrg-3d-remove-workspace-panel",
+       Fcmacs_lrg_3d_remove_workspace_panel,
+       Scmacs_lrg_3d_remove_workspace_panel, 1, 2, 0,
+       doc: /* Remove workspace panel INDEX (e.g. when its workspace is killed)
+and forget its placement.  FRAME defaults to the selected frame.  Returns t, or
+nil off a 3D lrg frame.  */)
+  (Lisp_Object index, Lisp_Object frame)
+{
+  struct frame *f = decode_live_frame (frame);
+  Lrg3DSurface *s3 = lrg_3d_surface_of_frame (f);
+
+  CHECK_FIXNUM (index);
+  if (s3 == NULL)
+    return Qnil;
+  block_input ();
+  lrg_3d_surface_remove_panel (s3, LRG_WS_KEY (XFIXNUM (index)));
+  unblock_input ();
+  SET_FRAME_GARBAGED (f);
+  return Qt;
+}
+
+DEFUN ("cmacs-lrg-3d-workspace-panel-geometry",
+       Fcmacs_lrg_3d_workspace_panel_geometry,
+       Scmacs_lrg_3d_workspace_panel_geometry, 1, 2, 0,
+       doc: /* Return workspace panel INDEX's transform as the list
+=(PX PY PZ YAW W H)= (floats), or nil if the panel does not exist.  Used to
+persist a user-adjusted workspace placement.  FRAME defaults to the selected
+frame.  */)
+  (Lisp_Object index, Lisp_Object frame)
+{
+  struct frame *f = decode_live_frame (frame);
+  Lrg3DSurface *s3 = lrg_3d_surface_of_frame (f);
+  gfloat px, py, pz, yaw, w, h;
+
+  CHECK_FIXNUM (index);
+  if (s3 == NULL)
+    return Qnil;
+  if (!lrg_3d_surface_get_panel_geometry (s3, LRG_WS_KEY (XFIXNUM (index)),
+                                          &px, &py, &pz, &yaw, &w, &h))
+    return Qnil;
+  return CALLN (Flist, make_float (px), make_float (py), make_float (pz),
+                make_float (yaw), make_float (w), make_float (h));
+}
+
 /* Frame-parameter handler table, defined in cmacs-lrgfns.c.  Set in the
    static initializer below: it must be wired at link time, NOT at syms/dump
    time, because this struct is C static data that reverts to its initializer
@@ -3278,6 +3571,7 @@ syms_of_cmacs_lrgterm (void)
   defsubr (&Scmacs_lrg_3d_pick);
   defsubr (&Scmacs_lrg_3d_pick_panel);
   defsubr (&Scmacs_lrg_3d_focus_panel);
+  defsubr (&Scmacs_lrg_3d_maximize_window);
   defsubr (&Scmacs_lrg_3d_orbit);
   defsubr (&Scmacs_lrg_3d_dolly);
   defsubr (&Scmacs_lrg_3d_move_panel);
@@ -3285,6 +3579,15 @@ syms_of_cmacs_lrgterm (void)
   defsubr (&Scmacs_lrg_3d_unpin_panel);
   defsubr (&Scmacs_lrg_3d_load_gamepad_bindings);
   defsubr (&Scmacs_lrg_3d_set_wall);
+  defsubr (&Scmacs_lrg_3d_begin_offscreen);
+  defsubr (&Scmacs_lrg_3d_end_offscreen);
+  defsubr (&Scmacs_lrg_3d_render_into_panel);
+  defsubr (&Scmacs_lrg_3d_place_workspace_panel);
+  defsubr (&Scmacs_lrg_3d_place_workspace_panel_eased);
+  defsubr (&Scmacs_lrg_3d_rotate_workspace_panel);
+  defsubr (&Scmacs_lrg_3d_remove_workspace_panel);
+  defsubr (&Scmacs_lrg_3d_workspace_panel_geometry);
+  defsubr (&Scmacs_lrg_3d_take_pending_workspace);
   syms_of_cmacs_lrgfont ();
   syms_of_cmacs_lrgfns ();
 }

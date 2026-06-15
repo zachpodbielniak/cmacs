@@ -150,6 +150,20 @@ The keyboard/command equivalent of Ctrl+double-left-click on a panel."
     (user-error "Not a 3D lrg frame")))
 
 ;;;###autoload
+(defun cmacs-lrg-maximize-window ()
+  "Maximize the selected window's 3D panel to a flat, 2D-like view.
+Frames it head-on and level (0-degree tilt), filling the viewport edge-to-edge —
+the same view the 2D backend / PGTK would show, but inside the 3D scene.  Return
+to the 3D view with \\[cmacs-lrg-camera-reset]."
+  (interactive)
+  (if (and (fboundp 'cmacs-lrg-3d-maximize-window)
+           (cmacs-lrg-3d-maximize-window))
+      (message "lrg: 2D view -- %s maximized (%s to return to 3D)"
+               (buffer-name)
+               (substitute-command-keys "\\[cmacs-lrg-camera-reset]"))
+    (user-error "Not a 3D lrg frame")))
+
+;;;###autoload
 (defun cmacs-lrg-pin-window ()
   "Pin the selected window's 3D panel where it is (manual placement).
 A pinned panel keeps its place across re-layouts, resizes and arrangement
@@ -213,11 +227,19 @@ buffer); switches the environment to \"cockpit\" so the wall is visible."
     (define-key map (kbd "C-c 3 <up>")    #'cmacs-lrg-camera-orbit-up)
     (define-key map (kbd "C-c 3 <down>")  #'cmacs-lrg-camera-orbit-down)
     (define-key map (kbd "C-c 3 f") #'cmacs-lrg-focus-window)
+    (define-key map (kbd "C-c 3 2") #'cmacs-lrg-maximize-window)
     (define-key map (kbd "C-c 3 p") #'cmacs-lrg-pin-window)
     (define-key map (kbd "C-c 3 u") #'cmacs-lrg-unpin-window)
     (define-key map (kbd "C-c 3 U") #'cmacs-lrg-unpin-all)
     (define-key map (kbd "C-c 3 w") #'cmacs-lrg-place-wall)
     (define-key map (kbd "C-c 3 W") #'cmacs-lrg-clear-wall)
+    ;; Spatial workspaces (the 3D workspace carousel); commands live in
+    ;; cmacs-lrg-3d-workspaces.el (loaded below) and no-op without persp-mode.
+    (define-key map (kbd "C-c 3 m")   #'cmacs-lrg-3d-workspaces-mode)
+    (define-key map (kbd "C-c 3 SPC") #'cmacs-lrg-3d-workspaces-toggle)
+    (define-key map (kbd "C-c 3 o")   #'cmacs-lrg-3d-workspaces-overview)
+    (define-key map (kbd "C-c 3 r")   #'cmacs-lrg-3d-workspaces-rotate)
+    (define-key map (kbd "C-c 3 g")   #'cmacs-lrg-3d-workspaces-refresh)
     map)
   "Keymap for `cmacs-lrg-3d-mode'.")
 
@@ -237,5 +259,11 @@ follows the selected window."
                  #'cmacs-lrg-3d--track-selected-window)))
 
 (provide 'cmacs-lrg-3d)
+
+;; Spatial 3D workspace switcher (Doom / persp-mode workspaces as a live carousel
+;; in 3D).  Loaded after `provide' above so its own `(require 'cmacs-lrg-3d)' is
+;; already satisfied (no recursive require).  Soft dependency: no-ops without
+;; persp-mode or off a 3D lrg frame.
+(require 'cmacs-lrg-3d-workspaces nil t)
 
 ;;; cmacs-lrg-3d.el ends here

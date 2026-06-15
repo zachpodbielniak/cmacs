@@ -7756,7 +7756,12 @@ keys orbit, @code{f} brings the selected window front-and-centre, and
 The interaction model is @emph{hybrid}: command-the-room by default, with manual
 override.  Focus a panel and the camera flies it front-and-centre while the
 others recede --- by @kbd{Ctrl+double-left-click}, @kbd{C-c 3 f}, or voice/AI via
-MCP.  Manually, @emph{middle-drag} orbits around the @emph{room} (the whole scene, not
+MCP (the same double-click on a @emph{workspace} panel switches to that workspace).
+@kbd{C-c 3 2} (@code{cmacs-lrg-maximize-window}) goes further: it maximizes the
+selected window's panel head-on and level, filling the viewport edge-to-edge --- a
+flat, 2D-like view of the buffer inside the 3D scene (as the 2D backend / PGTK
+would show it); @kbd{C-c 3 0} returns to the 3D view.
+Manually, @emph{middle-drag} orbits around the @emph{room} (the whole scene, not
 just a focused panel), @kbd{Ctrl + left-drag} is a first-person @emph{look} (turn
 the camera in place about its own position), @kbd{Ctrl+wheel} dollies in/out, and
 @kbd{Ctrl/Super + middle-drag} grabs and moves the panel under the pointer (which @emph{pins} it so
@@ -7783,6 +7788,76 @@ intents; it is a no-op when no device is present.
 @code{cmacs-lrg-3d-load-gamepad-bindings} loads a YAML remap, so a SpaceMouse or
 other 6DOF device exposed as a joystick is rebound without code (a native
 SpaceMouse via @code{libspnav} remains future work).
+
+@subsection Spatial workspaces (the workspace carousel)
+
+With Doom / persp-mode workspaces, the @emph{workspace carousel} shows
+@emph{every workspace} as a live panel in 3D: the current workspace is the live
+centre (the real window panels), and each other workspace renders its @emph{real
+contents} into a panel arranged on a curved arc (``carousel'') that curves away
+from you.  You see all your workspaces at once, move/rotate them, and switch
+between them in 3D.
+
+It turns on @emph{automatically} on a 3D lrg frame once persp-mode is active (the
+@code{cmacs-lrg-3d-workspaces-auto} option; set it to nil, or toggle by hand with
+@code{cmacs-lrg-3d-workspaces-mode} / @kbd{C-c 3 m}).  The immediate neighbours
+sit in view at the default camera; pull back with @kbd{C-c 3 o} (overview), or
+orbit (middle-drag), to see the rest of the ring.
+
+The other workspaces are @emph{not snapshots} --- each keeps rendering its actual
+buffers off screen, so a compile running in another workspace updates on its panel
+while you work.  A non-current workspace's saved window layout is installed in the
+frame off screen, redisplayed so its buffers' current contents draw, captured to
+that workspace's own panel texture, and the live layout restored, all without
+disturbing what you see (@code{cmacs-lrg-3d-begin-offscreen} /
+@code{-render-into-panel} / @code{-end-offscreen}).
+
+A repeating timer keeps them live: each tick re-renders at most @emph{one}
+off-screen workspace whose content changed since it was last drawn (round-robin,
+with dirty-tracking via buffer modification ticks), so idle workspaces cost
+nothing and a changing one updates roughly every (interval times workspace-count)
+seconds; the current workspace is always full-rate.  This is the performance
+trade-off of live (not snapshot) workspaces; tune it below or set
+@code{cmacs-lrg-3d-workspaces-live} to nil to update only on switch / refresh.
+
+Layout follows @code{+workspace-list-names} order: a workspace's slot is its
+position @emph{relative to the current one}, so the current workspace is always
+centred and switching shifts the carousel.  Switching (via @kbd{SPC TAB @var{n}},
+@code{+workspace-switch}, or a click) eases the carousel smoothly to the new
+arrangement.  A workspace you move (Ctrl/Super + middle-drag its panel) or rotate
+keeps its place, remembered per workspace as an @code{lrg-3d-xform} persp
+parameter.
+
+@strong{Switch by clicking}: Ctrl+double-left-click a workspace panel to switch
+to it (the same chord focuses a window panel front-and-centre; on a workspace
+panel it switches).  The click is applied in the command loop, so the persp hooks
+and the eased transition fire exactly as for @kbd{SPC TAB @var{n}}.
+
+Commands (under the @kbd{C-c 3} prefix of @code{cmacs-lrg-3d-mode}):
+
+@table @code
+@item cmacs-lrg-3d-workspaces-mode @r{(@kbd{C-c 3 m})}
+Toggle the carousel (a global mode; no-op without persp-mode or off a 3D frame).
+@item cmacs-lrg-3d-workspaces-toggle @r{(@kbd{C-c 3 SPC})}
+Hide / show the ring (the live centre is unaffected).
+@item cmacs-lrg-3d-workspaces-overview @r{(@kbd{C-c 3 o})}
+Pull the camera back to see all workspaces at once.
+@item cmacs-lrg-3d-workspaces-rotate @r{(@kbd{C-c 3 r})}
+Rotate a chosen workspace panel (remembered).
+@item cmacs-lrg-3d-workspaces-refresh @r{(@kbd{C-c 3 g})}
+Relayout and re-render every workspace panel now.
+@end table
+
+Tuning (@code{customize-group cmacs-lrg-3d-workspaces}):
+@code{cmacs-lrg-3d-workspaces-auto} (auto-enable on a 3D frame, t),
+@code{-radius} (arc curve radius, 10.0),
+@code{-spacing} (degrees between slots, 28.0),
+@code{-height} (panel height; width tracks the frame aspect, 3.2),
+@code{-elevation} (vertical offset, 0.0),
+@code{-max} (max non-current workspaces shown per side, 8),
+@code{-frame-zoom} (optional camera pull-back on enable, 1.0 = none),
+@code{-live} (keep panels live via the round-robin updater, t), and
+@code{-update-interval} (seconds between updater ticks, 0.12).
 
 @section Commands
 

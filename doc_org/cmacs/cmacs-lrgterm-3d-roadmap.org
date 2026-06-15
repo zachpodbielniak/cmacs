@@ -54,6 +54,22 @@ the Emacs glue.
   device.  ~cmacs-lrg-3d-load-gamepad-bindings~ loads a YAML remap, so a 6DOF
   device exposed as a joystick rebinds without code.  GTests:
   input/{action,map}/get-axis.
+- *Spatial workspaces (the workspace carousel)*: Doom / persp-mode workspaces as
+  *live* 3D panels on a curved arc around the current (live-centre) workspace —
+  always rendering their real contents, not snapshots.  Built on a new *off-screen
+  render* primitive (~cmacs-lrg-3d-begin-offscreen~ / ~-render-into-panel~ /
+  ~-end-offscreen~ + ~lrg_present_suppressed~): a non-current workspace's
+  window-state is installed off screen, redisplayed and captured to its own static
+  panel texture (~lrg_scene_panel_set_image~ / ~lrg_3d_surface_set_panel_image~ —
+  static panels skip the live capture, the window sync and arrangement layout) with
+  the live scene re-composited from cached panels so nothing on screen flickers.  A
+  command-loop timer keeps panels live round-robin with buffer-modtick dirty-track;
+  switching (~SPC TAB <n>~, ~+workspace-switch~, or Ctrl+double-left-click a panel —
+  routed via ~cmacs-lrg-3d-take-pending-workspace~) eases the carousel
+  (~lrg_3d_surface_place_panel_eased~ / ~lrg_scene_panel_repin~); panels move/rotate
+  and persist per workspace (~lrg-3d-xform~).  Elisp:
+  ~lisp/cmacs/cmacs-lrg-3d-workspaces.el~; GTests term/{scene-panel-static,
+  3d-surface-workspace-panels}; ERT cmacs-lrg-3d-tests-workspaces-*.
 
 * Deferred — fast-follow
 
@@ -62,10 +78,11 @@ the Emacs glue.
   floor / ceiling wall slots and a ~cmacs-lrg-3d-cockpit-walls~ defcustom that lazily
   starts gnuseye on the back wall.  (The core feed + ~cmacs-lrg-place-wall~ ship.)
 - *Buffer Rolodex* (~carousel~ arrangement) and *git-history-as-depth* (~git-depth~
-  arrangement).  Both need an offscreen "render a buffer to a texture" primitive
-  (extend the ~lrg-capture-screen~ path); Rolodex fans buffer thumbnails on a ring,
-  git-depth stacks ~vc~ revisions in Z.  The arrangement enum values
-  (~LRG_ARRANGEMENT_KIND_CAROUSEL~ / ~_GIT_DEPTH~) and ids already exist.
+  arrangement).  The offscreen "render to a texture" primitive they needed now
+  exists (~cmacs-lrg-3d-render-into-panel~ + static panels, built for the workspace
+  carousel); Rolodex fans buffer panels on a ring, git-depth stacks ~vc~ revisions
+  in Z, reusing it.  The arrangement enum values (~LRG_ARRANGEMENT_KIND_CAROUSEL~ /
+  ~_GIT_DEPTH~) and ids already exist.
 - emacsclient ~-lrg~ spec applied to a *reused* live frame; ~key=value~ spec tokens
   (e.g. ~dof=off~); defcustoms for the default arrangement / environment.
 - *Cinematic "shots"*: save/restore/fly-between named spatial workspaces (camera
