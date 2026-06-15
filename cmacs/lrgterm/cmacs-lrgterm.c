@@ -1379,6 +1379,108 @@ lrg_over_libregnum_view (struct frame *f, int fx, int fy)
   return false;
 }
 
+/* --- Gamepad / 6DOF spatial control (the device-agnostic binding backend) ---
+   A libregnum LrgInputMap maps named actions to gamepad axes; each tick we read
+   the SIGNED axis values and drive the SAME orbit / pan / dolly intents the mouse
+   uses, so a gamepad (or a 6DOF SpaceMouse exposed as a joystick) "just works".
+   The map is data: cmacs-lrg-3d-load-gamepad-bindings loads a YAML remap.  No-op
+   without a gamepad, so it is safe and costs nothing when idle.  */
+#define LRG_PAD_DEADZONE   0.18f
+#define LRG_PAD_ORBIT_DPS  2.5f    /* degrees per tick at full stick deflection */
+#define LRG_PAD_PAN        0.06f
+#define LRG_PAD_DOLLY      0.03f
+#define LRG_PAD_ABS(v)     ((v) < 0.0f ? -(v) : (v))
+#define LRG_PAD_DZ(v)      (LRG_PAD_ABS (v) < LRG_PAD_DEADZONE ? 0.0f : (v))
+
+static LrgInputMap *lrg_gamepad_map;   /* lazily built default map, owned */
+
+/* Build (once) the default spatial input map: right stick = orbit, left stick =
+   pan, triggers = dolly.  Every binding is a gamepad-axis binding read as a
+   signed analog value via lrg_input_map_get_axis.  */
+static LrgInputMap *
+lrg_gamepad_ensure_map (void)
+{
+  static const struct { const char *name; int axis; } defs[] = {
+    { "orbit-yaw",   GRL_GAMEPAD_AXIS_RIGHT_X },
+    { "orbit-pitch", GRL_GAMEPAD_AXIS_RIGHT_Y },
+    { "pan-x",       GRL_GAMEPAD_AXIS_LEFT_X },
+    { "pan-y",       GRL_GAMEPAD_AXIS_LEFT_Y },
+    { "dolly-in",    GRL_GAMEPAD_AXIS_RIGHT_TRIGGER },
+    { "dolly-out",   GRL_GAMEPAD_AXIS_LEFT_TRIGGER },
+  };
+  gsize i;
+
+  if (lrg_gamepad_map != NULL)
+    return lrg_gamepad_map;
+
+  lrg_gamepad_map = lrg_input_map_new ();
+  for (i = 0; i < G_N_ELEMENTS (defs); i++)
+    {
+      LrgInputAction *a = lrg_input_action_new (defs[i].name);
+      g_autoptr (LrgInputBinding) b =
+        lrg_input_binding_new_gamepad_axis (0, (GrlGamepadAxis) defs[i].axis,
+                                            0.0f, TRUE);
+      lrg_input_action_add_binding (a, b);   /* copies b */
+      lrg_input_map_add_action (lrg_gamepad_map, a);   /* takes ownership */
+    }
+  return lrg_gamepad_map;
+}
+
+/* Drive the camera from a connected gamepad (called ~60 Hz from read_socket).
+   No-op on a 2D frame, while a mouse drag is active, or with no gamepad.  */
+static void
+lrg_gamepad_tick (struct frame *f)
+{
+  Lrg3DSurface *s3 = lrg_3d_surface_of_frame (f);
+  LrgInputManager *mgr;
+  LrgInputMap *map;
+  LrgSpatialCamera *cam;
+  gfloat yaw, pitch, panx, pany, din, dout, dz;
+  bool moved = false;
+
+  if (s3 == NULL || lrg_drawing || lrg_sp.middle_down)
+    return;
+  mgr = lrg_input_manager_get_default ();
+  if (mgr == NULL || !lrg_input_manager_is_gamepad_available (mgr, 0))
+    return;                                 /* no hardware -> no-op */
+  cam = lrg_3d_surface_get_camera (s3);
+  if (cam == NULL)
+    return;
+
+  lrg_input_manager_poll (mgr);             /* latches live state, no glfw poll */
+  map = lrg_gamepad_ensure_map ();
+
+  yaw   = LRG_PAD_DZ (lrg_input_map_get_axis (map, "orbit-yaw"));
+  pitch = LRG_PAD_DZ (lrg_input_map_get_axis (map, "orbit-pitch"));
+  panx  = LRG_PAD_DZ (lrg_input_map_get_axis (map, "pan-x"));
+  pany  = LRG_PAD_DZ (lrg_input_map_get_axis (map, "pan-y"));
+  /* Triggers rest negative; only count a real squeeze. */
+  din   = lrg_input_map_get_axis (map, "dolly-in");
+  dout  = lrg_input_map_get_axis (map, "dolly-out");
+  dz    = (din > LRG_PAD_DEADZONE ? din : 0.0f)
+          - (dout > LRG_PAD_DEADZONE ? dout : 0.0f);
+
+  if (yaw != 0.0f || pitch != 0.0f)
+    {
+      lrg_3d_surface_orbit_room (s3, -yaw * LRG_PAD_ORBIT_DPS,
+                                 -pitch * LRG_PAD_ORBIT_DPS);
+      moved = true;
+    }
+  if (panx != 0.0f || pany != 0.0f)
+    {
+      lrg_spatial_camera_pan_drag (cam, panx * LRG_PAD_PAN,
+                                   -pany * LRG_PAD_PAN);
+      moved = true;
+    }
+  if (dz != 0.0f)
+    {
+      lrg_spatial_camera_dolly_drag (cam, 1.0f - dz * LRG_PAD_DOLLY);
+      moved = true;
+    }
+  if (moved)
+    lrg_recompose_now (f);
+}
+
 /* Current Emacs modifier bits from the physically held modifier keys.  */
 static int
 lrg_event_modifiers (void)
@@ -1430,6 +1532,43 @@ lrg_store_char (struct frame *f, struct input_event *hold_quit, int cp,
   ie.modifiers = modifiers;
   ie.timestamp = 0;
   return lrg_store (f, hold_quit, &ie);
+}
+
+/* The last "special" key (a mapped non-character key, or a printable key with
+   Ctrl/Meta held) emitted from the press queue -- held down, it auto-repeats at
+   the OS rate (see the repeat scan in lrg_read_socket).  Plain printable keys
+   repeat via the char queue, so they are NOT tracked here.  */
+static GrlKey lrg_repeat_key = GRL_KEY_NULL;
+
+/* Emit the keystroke for a "special" key K (the keysym path, or a Ctrl/Meta +
+   printable synthesised char).  Returns the number of events stored (0 if K is a
+   plain printable key with no modifier, which is handled via the char queue).
+   Shared by the initial press and the auto-repeat.  */
+static int
+lrg_emit_special_key (struct frame *f, struct input_event *hold_quit,
+                      GrlKey k, int mods)
+{
+  int keysym = lrg_keysym_for (k);
+
+  if (keysym != 0)
+    {
+      struct input_event ie;
+      EVENT_INIT (ie);
+      ie.kind = NON_ASCII_KEYSTROKE_EVENT;
+      ie.code = keysym;
+      ie.modifiers = mods;
+      ie.timestamp = 0;
+      return lrg_store (f, hold_quit, &ie);
+    }
+  if (k >= GRL_KEY_SPACE && k <= GRL_KEY_GRAVE
+      && (mods & (ctrl_modifier | meta_modifier)) != 0)
+    {
+      int code = (int) k;
+      if (code >= GRL_KEY_A && code <= GRL_KEY_Z)
+        code += 32;            /* 'A'..'Z' -> 'a'..'z' so C-A == C-a */
+      return lrg_store_char (f, hold_quit, code, mods);
+    }
+  return 0;
 }
 
 /* Map a raw device pixel to a frame pixel via the surface pick: a 3D ray-cast
@@ -1555,38 +1694,40 @@ lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
     while ((k = grl_input_get_key_pressed ()) != GRL_KEY_NULL)
       {
         int keysym = lrg_keysym_for (k);
+        bool printable = k >= GRL_KEY_SPACE && k <= GRL_KEY_GRAVE;
 
-        if (keysym != 0)
+        if (keysym != 0 || (printable && ctrlmeta))
           {
-            struct input_event ie;
-            EVENT_INIT (ie);
-            ie.kind = NON_ASCII_KEYSTROKE_EVENT;
-            ie.code = keysym;
-            ie.modifiers = mods;
-            count += lrg_store (f, hold_quit, &ie);
+            /* keysym, or Ctrl/Meta + printable: emit it and arm auto-repeat so
+               holding the key (e.g. C-e / C-y) keeps firing. */
+            count += lrg_emit_special_key (f, hold_quit, k, mods);
+            lrg_repeat_key = k;
           }
-        else if (k >= GRL_KEY_SPACE && k <= GRL_KEY_GRAVE)
-          {
-            if (ctrlmeta)
-              {
-                int code = (int) k;
-                if (code >= GRL_KEY_A && code <= GRL_KEY_Z)
-                  code += 32;          /* 'A'..'Z' -> 'a'..'z' */
-                count += lrg_store_char (f, hold_quit, code, mods);
-              }
-            else if ((cp = grl_input_get_char_pressed ()) != 0)
-              count += lrg_store_char (f, hold_quit, cp,
-                                       mods & ~(ctrl_modifier | meta_modifier));
-          }
+        else if (printable && (cp = grl_input_get_char_pressed ()) != 0)
+          count += lrg_store_char (f, hold_quit, cp,
+                                   mods & ~(ctrl_modifier | meta_modifier));
         /* else: a modifier key, or an unmapped function/keypad key -> skip.  */
       }
 
     /* Emit any chars the key loop did not pair with a printable key -- IME
-       commits, pasted text, multi-char dead-key sequences -- in order.  */
+       commits, pasted text, multi-char dead-key sequences -- in order.  A held
+       plain printable key auto-repeats here, because GLFW's char callback fires
+       on key repeat.  */
     if (!ctrlmeta)
       while ((cp = grl_input_get_char_pressed ()) != 0)
         count += lrg_store_char (f, hold_quit, cp,
                                  mods & ~(ctrl_modifier | meta_modifier));
+
+    /* Auto-repeat the held special key (keysym / Ctrl|Meta+printable) at the OS
+       repeat rate -- those never reach the char queue, so without this they only
+       fire once per physical press (e.g. holding C-e would not scroll).  */
+    if (lrg_repeat_key != GRL_KEY_NULL)
+      {
+        if (!grl_input_is_key_down (lrg_repeat_key))
+          lrg_repeat_key = GRL_KEY_NULL;
+        else if (grl_input_is_key_pressed_repeat (lrg_repeat_key))
+          count += lrg_emit_special_key (f, hold_quit, lrg_repeat_key, mods);
+      }
   }
 
   /* 3D spatial navigation (precedes the generic mouse handling on a 3D lrg
@@ -1861,6 +2002,9 @@ lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
           }
       }
   }
+
+  /* Drive the camera from a connected gamepad / 6DOF device (no-op otherwise). */
+  lrg_gamepad_tick (f);
 
   /* Advance any in-progress 3D transition animation (camera / focus / resize)
      and recompose, so eases play out smoothly between redisplays.  */
@@ -2980,6 +3124,29 @@ off a 3D lrg frame.  */)
   return Qt;
 }
 
+DEFUN ("cmacs-lrg-3d-load-gamepad-bindings",
+       Fcmacs_lrg_3d_load_gamepad_bindings,
+       Scmacs_lrg_3d_load_gamepad_bindings, 1, 1, 0,
+       doc: /* Load a YAML gamepad / 6DOF binding map from FILE for the 3D camera.
+The map binds the actions =orbit-yaw=, =orbit-pitch=, =pan-x=, =pan-y=,
+=dolly-in= and =dolly-out= to device axes, replacing the built-in defaults
+(right stick orbits, left stick pans, triggers dolly).  This is how a SpaceMouse
+or another 6DOF/gamepad device is remapped without code changes.  Returns t on
+success, nil on failure.  */)
+  (Lisp_Object file)
+{
+  LrgInputMap *map;
+  Lisp_Object encoded;
+  g_autoptr (GError) err = NULL;
+  gboolean ok;
+
+  CHECK_STRING (file);
+  map = lrg_gamepad_ensure_map ();
+  encoded = ENCODE_FILE (file);
+  ok = lrg_input_map_load_from_file (map, SSDATA (encoded), &err);
+  return ok ? Qt : Qnil;
+}
+
 DEFUN ("cmacs-lrg-3d-set-wall", Fcmacs_lrg_3d_set_wall, Scmacs_lrg_3d_set_wall,
        0, 1, 0,
        doc: /* Show BUFFER's libregnum 3D view on the cockpit back wall.
@@ -3066,6 +3233,7 @@ syms_of_cmacs_lrgterm (void)
   defsubr (&Scmacs_lrg_3d_move_panel);
   defsubr (&Scmacs_lrg_3d_pin_panel);
   defsubr (&Scmacs_lrg_3d_unpin_panel);
+  defsubr (&Scmacs_lrg_3d_load_gamepad_bindings);
   defsubr (&Scmacs_lrg_3d_set_wall);
   syms_of_cmacs_lrgfont ();
   syms_of_cmacs_lrgfns ();

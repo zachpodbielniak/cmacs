@@ -7771,9 +7771,17 @@ is also a DEFUN (@code{cmacs-lrg-3d-focus-panel}, @code{-orbit},
 @code{-move-panel}, @code{-pin-panel}, @code{-pick-panel}) and an MCP tool
 (@code{lrgterm_3d_focus_selected}, @code{_pin_selected}, @code{_unpin_all}, @dots{}),
 with the high-rate drag math in C.  The mouse is just the first input device:
-future SpaceMouse/6DOF, gestures and VR controllers bind to the same intents, and
-voice/AI drive them through MCP --- the path toward @emph{stark-mode} without
-re-architecting.  All bindings are rebindable.
+gestures and VR controllers bind to the same intents, and voice/AI drive them
+through MCP --- the path toward @emph{stark-mode} without re-architecting.  All
+bindings are rebindable.
+
+A connected @emph{gamepad / 6DOF} device already drives the camera on this seam
+via a libregnum @code{LrgInputMap} (right stick orbits the room, left stick pans,
+triggers dolly), reading signed analog axes and calling the same orbit/pan/dolly
+intents; it is a no-op when no device is present.
+@code{cmacs-lrg-3d-load-gamepad-bindings} loads a YAML remap, so a SpaceMouse or
+other 6DOF device exposed as a joystick is rebound without code (a native
+SpaceMouse via @code{libspnav} remains future work).
 
 @section Commands
 

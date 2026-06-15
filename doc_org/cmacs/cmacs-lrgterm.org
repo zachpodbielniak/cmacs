@@ -395,6 +395,15 @@ intents with no rendering or glue changes, and voice/AI ("Jarvis, bring the diff
 front and centre") drive them through MCP.  This is the path toward the
 /stark-mode/ workshop without re-architecting.
 
+*Gamepad / 6DOF* (the first non-mouse device on this seam): a connected gamepad
+drives the camera through a libregnum ~LrgInputMap~ — right stick orbits the
+room, left stick pans, triggers dolly — reading each axis as a *signed* analog
+value (~lrg_input_map_get_axis~) and calling the same orbit/pan/dolly intents.
+It is polled ~60 Hz and is a no-op when no gamepad is present.  The map is data:
+~cmacs-lrg-3d-load-gamepad-bindings~ FILE loads a YAML remap, so a SpaceMouse or
+other 6DOF device exposed as a joystick is rebound without code (a native
+SpaceMouse via ~libspnav~ remains a roadmap item).
+
 * Commands and DEFUNs
 
 | Function                    | Description |

@@ -46,6 +46,14 @@ the Emacs glue.
   middle-click = ~mouse-2~, Super+drag = trackpad alias.  ~C-c 3 f/p/u/U~ for
   focus/pin/unpin.  This is the foundation the SpaceMouse / gesture / VR / voice
   paths bind onto without re-architecting.
+- *Device-agnostic binding backend (gamepad / 6DOF)*: a connected gamepad drives
+  the camera through a libregnum ~LrgInputMap~ (right stick orbits the room, left
+  stick pans, triggers dolly), reading *signed* analog axes via the new
+  ~lrg_input_action_get_axis~ / ~lrg_input_map_get_axis~ (added upstream) and
+  calling the same orbit/pan/dolly intents; polled ~60 Hz, no-op without a
+  device.  ~cmacs-lrg-3d-load-gamepad-bindings~ loads a YAML remap, so a 6DOF
+  device exposed as a joystick rebinds without code.  GTests:
+  input/{action,map}/get-axis.
 
 * Deferred — fast-follow
 
@@ -60,10 +68,6 @@ the Emacs glue.
   (~LRG_ARRANGEMENT_KIND_CAROUSEL~ / ~_GIT_DEPTH~) and ids already exist.
 - emacsclient ~-lrg~ spec applied to a *reused* live frame; ~key=value~ spec tokens
   (e.g. ~dof=off~); defcustoms for the default arrangement / environment.
-- *Device-agnostic binding backend*: drive the spatial intents from libregnum's
-  ~LrgInputMap~ / ~LrgInputAction~ / ~LrgInputBinding~ (YAML-serialisable) instead
-  of the hardcoded mouse table, so *SpaceMouse / 6DOF* (=libspnav= → gamepad-axis
-  bindings) and gamepads are drop-in.  The intent seam already exists.
 - *Cinematic "shots"*: save/restore/fly-between named spatial workspaces (camera
   pose + arrangement + buffer set); AI-composable.  An arg-taking
   ~lrgterm_3d_move_panel~ MCP tool for "Jarvis, move it left".
