@@ -10,6 +10,9 @@
 # and browses it from Emacs via M-x cmacs-manual / cmacs-manual-topic.
 # This script mirrors each dep's docs/ verbatim into
 #   doc_org/cmacs/deps/<dep>/
+# It scans direct deps (deps/<dep>/) and first-party nested deps one level
+# deeper (deps/<dep>/deps/<subdep>/, e.g. graylib + yaml-glib under
+# libregnum), keyed by basename so a top-level dep wins any name clash.
 # so the dependency documentation ships with — and is browsable inside —
 # cmacs.  The generated tree is a build artifact: it is NOT committed
 # (see .gitignore) and is regenerated on every build (see Makefile.in's
@@ -39,7 +42,8 @@ sync-deps-docs.sh — embed dependency docs into the cmacs manual
 
 Usage: tools/sync-deps-docs.sh [--quiet]
 
-Mirrors each deps/<dep>/docs/ tree into doc_org/cmacs/deps/<dep>/,
+Mirrors each deps/<dep>/docs/ tree (and first-party nested deps one level
+deeper, deps/<dep>/deps/<subdep>/docs/) into doc_org/cmacs/deps/<dep>/,
 copying .org and .md (and any other doc assets) verbatim, then writes a
 generated doc_org/cmacs/deps/index.org.  The result is a build artifact
 and is not committed.  No-op when there is no deps/ directory.
@@ -113,17 +117,35 @@ rm -rf "${out_dir}"
 mkdir -p "${out_dir}"
 
 embedded=()
-for dep_path in "${deps_dir}"/*/; do
-    [[ -d "${dep_path}" ]] || continue
+seen=" "   # space-padded set of basenames already embedded (dedup key)
+
+# embed_candidate DEP_PATH — mirror DEP_PATH/docs into the manual, keyed by
+# the dep's basename.  No-op when the path is not a directory, has no docs/,
+# or its basename was already embedded (so a higher-level dep wins).
+embed_candidate () {
+    local dep_path="${1%/}" dep docs
+    [[ -d "${dep_path}" ]] || return 0
     dep="$(basename "${dep_path}")"
-    docs="${dep_path}docs"
-    if [[ ! -d "${docs}" ]]; then
-        say "  skip ${dep} (no docs/)"
-        continue
-    fi
+    docs="${dep_path}/docs"
+    [[ -d "${docs}" ]] || return 0
+    case "${seen}" in *" ${dep} "*) return 0 ;; esac
     mirror_tree "${docs}" "${out_dir}/${dep}"
     embedded+=("${dep}")
+    seen="${seen}${dep} "
     say "  embed ${dep}"
+}
+
+# Level 1: direct cmacs dependencies, deps/<dep>/docs.
+for dep_path in "${deps_dir}"/*/; do
+    embed_candidate "${dep_path}"
+done
+
+# Level 2: first-party nested dependencies, deps/<dep>/deps/<subdep>/docs
+# (e.g. graylib and yaml-glib, vendored under libregnum).  Basenames already
+# embedded at level 1 win the dedup; third-party libraries (raylib, raygui,
+# ...) live a further level down and ship no docs/, so they never match here.
+for sub_path in "${deps_dir}"/*/deps/*/; do
+    embed_candidate "${sub_path}"
 done
 
 # Generate the top-level index linking into each embedded dep.
