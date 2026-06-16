@@ -183,6 +183,8 @@ The argument is an alist of frame parameters.  */)
   struct lrg_display_info *dpyinfo = NULL;
   struct kboard *kb;
   int width, height;
+  Lisp_Object parent_frame;
+  bool is_child;
 
   parms = Fcopy_alist (parms);
 
@@ -196,15 +198,21 @@ The argument is an alist of frame parameters.  */)
   if (!dpyinfo->pgtk.terminal->name)
     error ("Terminal is not live, can't create new frames on it");
 
+  /* A CHILD frame (parent-frame set to a live lrg frame) does NOT get its own OS
+     window: it is composited as an in-window overlay into its parent's single
+     raylib window (see lrg_composite_child_frames).  This is how child-frame UIs
+     -- corfu/company popups, posframe, tooltips -- work under lrg.  */
+  parent_frame = Fcdr (Fassq (Qparent_frame, parms));
+  is_child = (FRAMEP (parent_frame)
+              && FRAME_LIVE_P (XFRAME (parent_frame))
+              && FRAME_LRG_P (XFRAME (parent_frame)));
+
   /* output_lrg is one OS window per process (raylib/GLFW open a single window):
-     a second top-level OR child frame would spawn a stray, broken second
-     desktop window.  Refuse it cleanly so child-frame UIs (posframe, corfu/
-     company popups, tooltips) fall back to the minibuffer rather than opening a
-     window.  Rendering child frames as in-window 3D panels is a roadmap item
-     (see doc_org/cmacs/cmacs-lrgterm-3d-roadmap.org).  */
-  if (cmacs_lrgterm_active_p ())
-    error ("output_lrg supports a single window; "
-           "cannot create additional (or child) frames");
+     a second TOP-LEVEL frame would spawn a stray, broken second desktop window,
+     so refuse it.  Child frames are allowed (composited, no OS window).  */
+  if (cmacs_lrgterm_active_p () && !is_child)
+    error ("output_lrg supports a single top-level window; "
+           "cannot create additional top-level frames");
 
   name = gui_display_get_arg (NULL, parms, Qname, "name", "Name",
                               RES_TYPE_STRING);
@@ -328,11 +336,25 @@ The argument is an alist of frame parameters.  */)
   if (height < 100)
     height = 36 * FRAME_LINE_HEIGHT (f);
 
-  /* Create the libregnum surface + its OS window.  */
-  block_input ();
-  lrg_window_create (f, width, height,
-                     STRINGP (name) ? SSDATA (name) : "cmacs");
-  unblock_input ();
+  if (is_child)
+    {
+      /* No OS window: a child frame is composited into the parent's window as
+         an overlay.  Mirror the parent's render mode; surface stays NULL (the
+         "no window" marker the present path keys on).  */
+      fset_parent_frame (f, parent_frame);
+      store_frame_param (f, Qparent_frame, parent_frame);
+      FRAME_LRG_OUTPUT (f)->render_mode =
+        FRAME_LRG_OUTPUT (XFRAME (parent_frame))->render_mode;
+      FRAME_LRG_OUTPUT (f)->surface = NULL;
+    }
+  else
+    {
+      /* Create the libregnum surface + its OS window.  */
+      block_input ();
+      lrg_window_create (f, width, height,
+                         STRINGP (name) ? SSDATA (name) : "cmacs");
+      unblock_input ();
+    }
 
   gui_default_parameter (f, parms, Qno_special_glyphs, Qnil,
                          NULL, NULL, RES_TYPE_BOOLEAN);
@@ -347,7 +369,12 @@ The argument is an alist of frame parameters.  */)
   gui_default_parameter (f, parms, Qauto_lower, Qnil, NULL, NULL,
                          RES_TYPE_BOOLEAN);
 
-  SET_FRAME_VISIBLE (f, true);
+  /* A child frame respects its `visibility' param (corfu creates it hidden,
+     then shows it after sizing/positioning); a top-level frame is shown now.  */
+  if (is_child)
+    SET_FRAME_VISIBLE (f, !NILP (Fcdr (Fassq (Qvisibility, parms))));
+  else
+    SET_FRAME_VISIBLE (f, true);
 
   /* Make the frame visible + queue the first paint.  */
   store_frame_param (f, Qname, name);

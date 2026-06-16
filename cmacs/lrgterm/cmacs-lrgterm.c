@@ -1123,6 +1123,57 @@ lrg_sync_3d_panels (struct frame *f, LrgFrameSurface *surf)
   lrg_3d_surface_end_window_sync (s3);
 }
 
+/* Composite each visible child frame of PARENT as an in-window overlay.  A child
+   frame has no surface of its own; we point its RIF draws at PARENT's surface
+   through a draw offset = the child's (left, top), paint a solid background + a
+   1px border (so the popup is opaque/framed), then expose_frame() it -- exactly
+   how the parent draws itself, shifted into place and clipped to its rect.
+   Called inside the parent's present BEFORE end_content, so in 3D the overlay is
+   captured onto the panel and in 2D it lands straight on the framebuffer.  This
+   is what makes child-frame UIs (corfu/company popups, posframe, tooltips) show
+   under the single-window lrg backend.  */
+static void
+lrg_composite_child_frames (struct frame *parent, LrgFrameSurface *surf)
+{
+  Lisp_Object tail, frame;
+
+  FOR_EACH_FRAME (tail, frame)
+    {
+      struct frame *c = XFRAME (frame);
+      g_autoptr (GrlColor) cbg = NULL;
+      g_autoptr (GrlColor) cborder = NULL;
+      int x, y, cw, ch;
+
+      if (!FRAME_LIVE_P (c) || !FRAME_LRG_P (c)
+          || FRAME_PARENT_FRAME (c) != parent || !FRAME_VISIBLE_P (c))
+        continue;
+
+      x = c->left_pos;
+      y = c->top_pos;
+      cw = FRAME_PIXEL_WIDTH (c);
+      ch = FRAME_PIXEL_HEIGHT (c);
+      if (cw <= 0 || ch <= 0)
+        continue;
+
+      cbg = lrg_color (FRAME_LRG_BACKGROUND_COLOR (c));
+      cborder = lrg_color (FRAME_LRG_FOREGROUND_COLOR (c));
+
+      lrg_frame_surface_fill_rect (surf, x, y, cw, ch, cbg);
+      lrg_frame_surface_draw_rect_outline (surf, x, y, cw, ch, 1.0f, cborder);
+
+      /* Draw the child's content at (x,y), clipped to its rect, via the offset. */
+      lrg_frame_surface_push_clip (surf, x, y, cw, ch);
+      lrg_frame_surface_set_draw_offset (surf, x, y);
+      FRAME_LRG_OUTPUT (c)->surface = surf;   /* temporary: for the RIF hooks */
+      lrg_drawing = true;
+      expose_frame (c, 0, 0, cw, ch);
+      lrg_drawing = false;
+      FRAME_LRG_OUTPUT (c)->surface = NULL;
+      lrg_frame_surface_set_draw_offset (surf, 0, 0);
+      lrg_frame_surface_pop_clip (surf);
+    }
+}
+
 static void
 lrg_present_frame (struct frame *f)
 {
@@ -1131,9 +1182,21 @@ lrg_present_frame (struct frame *f)
   if (!FRAME_LRG_P (f))
     return;
   surf = FRAME_LRG_SURFACE (f);
+
+  /* A child frame has no surface of its own: re-present its parent, which
+     composites the child as an in-window overlay.  */
+  if (surf == NULL)
+    {
+      struct frame *p = FRAME_PARENT_FRAME (f);
+      if (p != NULL && FRAME_LIVE_P (p) && FRAME_LRG_P (p)
+          && FRAME_LRG_SURFACE (p) != NULL)
+        lrg_present_frame (p);
+      return;
+    }
+
   /* Re-entrancy guard only: callers (frame_up_to_date /
      buffer_flipping_unblocked) ensure flips are not blocked.  */
-  if (surf == NULL || lrg_drawing)
+  if (lrg_drawing)
     return;
 
   /* Off-screen workspace render in progress: swallow the present so the
@@ -1173,6 +1236,10 @@ lrg_present_frame (struct frame *f)
        top of the text, into their windows' rects.  */
     lrg_paint_libregnum_views (f);
 #endif
+
+    /* Composite child frames (corfu/posframe/tooltip popups) as overlays.
+       Before end_content so 3D captures them onto the panel; 2D no-op there.  */
+    lrg_composite_child_frames (f, surf);
 
     /* Capture the flat frame onto the 3D panels (no-op in 2D).  */
     lrg_frame_surface_end_content (surf);
@@ -2356,6 +2423,19 @@ lrg_set_window_size (struct frame *f, bool change_gravity, int width, int height
   block_input ();
   if (win != NULL)
     grl_window_set_size (win, width, height);
+  else if (FRAME_PARENT_FRAME (f) != NULL)
+    {
+      /* Child frame: there is no OS window whose resize callback would confirm
+         the new size, so adjust_frame_size just called this (no-op) hook and
+         returned WITHOUT applying it (frame.c, the can_set_window_size branch).
+         Apply it directly: clear can_set_window_size so the nested
+         change_frame_size takes adjust_frame_size's apply path instead of
+         re-deferring to this hook (which would also leave it unapplied).  */
+      bool saved = f->can_set_window_size;
+      f->can_set_window_size = false;
+      change_frame_size (f, width, height, false, false, true);
+      f->can_set_window_size = saved;
+    }
   SET_FRAME_GARBAGED (f);
   unblock_input ();
 }
@@ -2419,10 +2499,42 @@ lrg_implicitly_set_name_hook (struct frame *f, Lisp_Object arg,
   lrg_implicitly_set_name (f, arg, oldval);
 }
 
+/* Re-present a child frame's parent so its in-window overlay re-composites
+   (a child has no surface of its own).  No-op for a top-level frame.  */
+static void
+lrg_present_parent (struct frame *f)
+{
+  struct frame *p = FRAME_PARENT_FRAME (f);
+
+  if (p != NULL && FRAME_LIVE_P (p) && FRAME_LRG_P (p)
+      && FRAME_LRG_SURFACE (p) != NULL)
+    lrg_present_frame (p);
+}
+
 static void
 lrg_make_frame_visible_invisible (struct frame *f, bool visible)
 {
   SET_FRAME_VISIBLE (f, visible);
+  /* Showing/hiding a child frame changes what the parent composites. */
+  if (FRAME_PARENT_FRAME (f) != NULL)
+    lrg_present_parent (f);
+}
+
+/* set_frame_offset_hook: position a frame.  lrg has no window manager, so a
+   top-level frame's screen position is meaningless; a *child* frame stores its
+   parent-relative pixel offset (where its overlay is composited) and triggers a
+   re-composite.  */
+static void
+lrg_set_frame_offset (struct frame *f, int xoff, int yoff, int change_gravity)
+{
+  (void) change_gravity;
+  f->left_pos = xoff;
+  f->top_pos = yoff;
+  if (FRAME_PARENT_FRAME (f) != NULL)
+    {
+      SET_FRAME_GARBAGED (f);
+      lrg_present_parent (f);
+    }
 }
 
 static void
@@ -2568,6 +2680,7 @@ lrg_create_terminal (struct lrg_display_info *dpyinfo)
   terminal->mouse_position_hook = lrg_mouse_position;
   terminal->frame_rehighlight_hook = lrg_frame_rehighlight_hook;
   terminal->frame_visible_invisible_hook = lrg_make_frame_visible_invisible;
+  terminal->set_frame_offset_hook = lrg_set_frame_offset;
   terminal->set_vertical_scroll_bar_hook = lrg_set_vertical_scroll_bar;
   terminal->set_horizontal_scroll_bar_hook = lrg_set_horizontal_scroll_bar;
   terminal->condemn_scroll_bars_hook = lrg_condemn_scroll_bars;
@@ -2910,6 +3023,9 @@ tests and as the basis of the lrgterm_dump_screen MCP tool.  */)
 #ifdef HAVE_CMACS_LIBREGNUM
         lrg_paint_libregnum_views (f);
 #endif
+
+        /* Composite child-frame overlays so the capture matches the screen. */
+        lrg_composite_child_frames (f, surf);
 
         lrg_frame_surface_end_content (surf);
         lrg_frame_surface_end_frame (surf);

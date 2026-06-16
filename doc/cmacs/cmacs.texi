@@ -7889,22 +7889,22 @@ image), and the 3D tools @code{lrgterm_3d_state},
 
 @section Known v1 limitations
 
-One OS window per terminal: a second top-level @emph{or child} frame is
-refused (@code{lrg-create-frame} signals an error rather than open a stray
-second OS window), so child-frame UIs (@code{posframe}, @code{corfu}/
-@code{company} popups, @code{which-key-posframe}, GUI tooltips) cannot show as a
-child frame.  @code{corfu} is handled gracefully (@code{lrg-win.el} reports its
-popup unsupported via the @code{corfu--popup-support-p} generic, so it falls
-back to the standard @code{completion-in-region} @code{*Completions*} UI instead
-of erroring or spawning a stray @code{EmacsCorfuGUI} window); other child-frame
-UIs are refused, so prefer minibuffer equivalents.  The menu
-@emph{bar} is not drawn (use @code{M-x tmm-menubar} / @key{F10};
-dialogs go to the minibuffer; the libregnum/gnuseye right-click @emph{context}
-menus, though, are drawn in-engine via @code{lrg-popup-menu}); scroll bars, the
-tool bar and tooltips/child-frames are
-not yet implemented (inline images @emph{are} drawn); the mouse pointer does
-not change shape; IME is direct/Quail input only; @code{--lrg} and
-@code{--gowl} are mutually exclusive.
+One OS window per terminal: a second @emph{top-level} frame is refused
+(@code{lrg-create-frame} signals an error rather than open a stray second OS
+window).  @emph{Child} frames (@code{parent-frame} set) -- corfu/company popups,
+@code{posframe}, tooltips -- DO work: they are created without their own OS
+window and composited as overlays inside the parent's single window (the present
+pass draws each visible child at its @code{(left, top)} via a per-surface draw
+offset and @code{expose_frame}; see @code{lrg_composite_child_frames}).  So
+corfu's popup shows at point (in 2D, and in 3D captured onto the panel); the
+child takes no keyboard input (corfu redirects focus to the parent, so that is
+fine), but mouse-clicking a candidate is not yet routed to the child (keyboard
+selection works).  The menu @emph{bar} is not drawn (use @code{M-x tmm-menubar}
+/ @key{F10}; dialogs go to the minibuffer; the libregnum/gnuseye right-click
+@emph{context} menus, though, are drawn in-engine via @code{lrg-popup-menu});
+scroll bars and the tool bar are not drawn (inline images @emph{are} drawn); the
+mouse pointer does not change shape; IME is direct/Quail input only; @code{--lrg}
+and @code{--gowl} are mutually exclusive.
 
 In 3D mode, panels re-fit on a window resize: the surface reconciles its
 geometry to the live window each frame, re-runs the arrangement layout, and eases

@@ -70,6 +70,18 @@ the Emacs glue.
   and persist per workspace (~lrg-3d-xform~).  Elisp:
   ~lisp/cmacs/cmacs-lrg-3d-workspaces.el~; GTests term/{scene-panel-static,
   3d-surface-workspace-panels}; ERT cmacs-lrg-3d-tests-workspaces-*.
+- *Child frames as in-window overlays*: corfu/company popups, posframe and
+  tooltips now work under the single-window backend.  A child frame
+  (~parent-frame~ set) is created WITHOUT its own OS window
+  (~lrg-create-frame~ relaxed to refuse only second *top-level* frames) and the
+  parent's present pass composites each visible child at its =(left, top)= via a
+  per-surface draw offset (~lrg_frame_surface_set_draw_offset~) +
+  ~expose_frame~ (~lrg_composite_child_frames~) -- before ~end_content~, so 3D
+  captures it onto the panel.  New hooks: ~set_frame_offset_hook~; ~set-frame-
+  size~ on a child applies directly (no window callback to confirm it).  corfu's
+  ~corfu--popup-support-p~ override is gone; its popup shows at point.  Mouse-
+  clicking a candidate isn't routed to the child yet (keyboard works).  GTest
+  term/surface-draw-offset.
 
 * Deferred — fast-follow
 
@@ -98,7 +110,7 @@ the Emacs glue.
   glReadPixels→Cairo blit path cannot present VR.
 - Real depth-of-field *blur* (a separable-gaussian ~LrgPostEffect~) instead of the
   tint dim; SDF glyphs for crisper angled text; live ~2d~ ↔ ~3d~ surface swap without
-  restart; child-frames (posframe/corfu) as panels.
+  restart.
 - *VR controller* intents (bind the OpenXR controller poses/buttons to the same
   spatial intents); *gesture* (Wayland pinch/swipe, hand-pose) and *voice* intent
   wiring through the ai → MCP chain; drag-to-detach a window into its own free panel.

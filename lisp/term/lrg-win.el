@@ -199,21 +199,15 @@ border, title bar, menu bar or tool bar."
           (cons 'tool-bar-size (cons 0 0))
           (cons 'internal-border-width ibw))))
 
-;;; Child-frame completion UIs -------------------------------------
+;;; Child-frame UIs -------------------------------------------------
 ;;
-;; output_lrg is one OS window per process, so child frames are refused by
-;; lrg-create-frame (rendering them as in-window panels is a roadmap item).
-;; Corfu uses a child frame for its popup on graphical displays; under lrg that
-;; make-frame is rejected, which -- before this -- closed the live frame and
-;; spawned a stray, broken "EmacsCorfuGUI" window (or, with the guard alone,
-;; errored on every keystroke).  Corfu's popup hooks are `cl-defgeneric's that
-;; dispatch on the window-system, so tell it the popup is unsupported on lrg: it
-;; then falls back to the standard `completion-in-region' UI (the *Completions*
-;; buffer in a normal in-frame split), which works fine here.  corfu-popupinfo's
-;; doc child frame only appears alongside the corfu popup, so it is handled too.
-(with-eval-after-load 'corfu
-  (cl-defmethod corfu--popup-support-p (&context (window-system lrg))
-    nil))
+;; output_lrg is one OS window per process, but child frames (corfu/company
+;; popups, posframe, tooltips) are supported: lrg-create-frame makes a child
+;; frame WITHOUT its own OS window, and the parent's present pass composites it
+;; as an in-window overlay at its (left, top) -- see lrg_composite_child_frames
+;; in cmacs-lrgterm.c.  So corfu uses its normal child-frame popup here; no
+;; override is needed (an earlier corfu--popup-support-p -> nil workaround that
+;; forced the *Completions* fallback has been removed).
 
 (provide 'lrg-win)
 (provide 'term/lrg-win)

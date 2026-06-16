@@ -551,28 +551,28 @@ With ~--with-cmacs-mcp~, the backend registers MCP tools
 
 These are genuine, acceptable and documented; most match the phased plan:
 
-- *One OS window per terminal.*  raylib's process-global state makes true
-  multi-window a graylib engine change.  v1 is one top-level frame plus
-  Emacs's internal windows; a second top-level *or child* frame is refused
-  (~lrg-create-frame~ signals an error rather than open a stray second OS
-  window).  This means *child-frame UIs* — ~posframe~, ~corfu~/~company~
-  popups, ~which-key-posframe~, GUI tooltips — cannot show as a child frame.
-  *Corfu* is handled gracefully: ~lrg-win.el~ tells it (via the
-  ~corfu--popup-support-p~ generic, dispatched on ~window-system lrg~) that its
-  popup is unsupported, so it falls back to the standard ~completion-in-region~
-  UI (the ~*Completions*~ buffer in a normal in-frame split) instead of
-  erroring or spawning a stray ~EmacsCorfuGUI~ window.  Other child-frame UIs
-  that don't probe support are simply refused; prefer minibuffer equivalents
-  (e.g. ~vertico~ without ~vertico-posframe~).  Rendering child frames as
-  in-window 3D panels is a roadmap item ([[file:cmacs-lrgterm-3d-roadmap.org]]).
+- *One OS window per terminal, but child frames work as in-window overlays.*
+  raylib's process-global state makes true multi-window a graylib engine change,
+  so a second *top-level* frame is still refused (~lrg-create-frame~ signals an
+  error rather than open a stray second OS window).  A *child frame*, however
+  (~parent-frame~ set) — corfu/company popups, ~posframe~, tooltips — is created
+  WITHOUT its own OS window and *composited as an overlay inside the parent's
+  single window*: the parent's present pass draws each visible child at its
+  =(left, top)= via a per-surface draw offset and ~expose_frame~
+  (~lrg_composite_child_frames~).  So corfu's popup shows at point (in 2D and, in
+  3D, captured onto the panel).  Limits: the child takes no keyboard input
+  (corfu redirects focus to the parent, so this is fine); *mouse-clicking* a
+  popup candidate is not yet routed to the child (keyboard selection works) —
+  a follow-up.
 - *Menus / dialogs*: the Emacs *menu bar* is not drawn — keyboard menu access
   is via ~M-x tmm-menubar~ / =F10=; dialogs route to the minibuffer
   (~use-dialog-box~ is ~nil~).  The libregnum/gnuseye right-click *context*
   menus, however, ARE drawn in-engine (~lrg-popup-menu~; see /libregnum 3D
   buffers under --lrg/).
 - *Scroll bars*: not drawn (off by default).
-- *Tool bar, tooltips/child-frames*: not yet implemented.  (Inline images
-  *are* drawn — see /Clipboard, fonts, faces/.)
+- *Tool bar*: not drawn.  (Child frames / popups *are* composited as in-window
+  overlays — see the one-OS-window item above; inline images *are* drawn — see
+  /Clipboard, fonts, faces/.)
 - *Mouse-pointer shapes*: the pointer does not change to an I-beam etc. yet.
 - *IME*: direct/Quail input only (real CJK *input* — not display — is a gap).
 - ~--lrg~ and ~--gowl~ are mutually exclusive at startup.
