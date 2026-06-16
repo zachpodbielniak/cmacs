@@ -82,8 +82,18 @@ lrg_window_create (struct frame *f, int width, int height, const char *title)
      lrg_read_socket (grl_window_is_resized) and re-fit the Emacs frame via
      change_frame_size.  */
   win = lrg_frame_surface_get_window (surface);
-  if (win != NULL)
-    grl_window_set_state (win, GRL_FLAG_WINDOW_RESIZABLE);
+  if (win == NULL)
+    {
+      /* The raylib window / GL context could not be created (e.g. no usable
+         display -- graylib's grl_window_new now returns NULL instead of a
+         half-built window).  Drop the windowless surface so the frame is not
+         left with one that later rendering would crash on, and report failure
+         to the caller (Flrg_create_frame).  */
+      FRAME_LRG_OUTPUT (f)->surface = NULL;
+      g_object_unref (surface);
+      return NULL;
+    }
+  grl_window_set_state (win, GRL_FLAG_WINDOW_RESIZABLE);
 
   return win;
 }

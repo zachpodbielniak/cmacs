@@ -92,11 +92,17 @@ cmacs_libregnum_render_window_acquire (gchar **error_msg)
   SetConfigFlags (FLAG_WINDOW_HIDDEN);
 
   shared_window = lrg_grl_window_new (1, 1, "cmacs-libregnum-hidden");
-  if (!shared_window)
+  /* IsWindowReady() is false when GLFW could not bring up a GL context (e.g. no
+     X DISPLAY -- graylib now pre-flights glfwInit and skips InitWindow instead
+     of crashing).  Bail cleanly here rather than proceeding into engine/GL setup
+     with no context. */
+  if (!shared_window || !IsWindowReady ())
     {
       if (error_msg)
-        *error_msg = g_strdup ("cmacs-libregnum: failed to open "
-                               "hidden raylib window (no GL context?)");
+        *error_msg = g_strdup ("cmacs-libregnum: no GL display available -- "
+                               "libregnum views need an X DISPLAY (run under "
+                               "`emacs --lrg' or a graphical X/XWayland session)");
+      g_clear_object (&shared_window);
       shared_refs = 0;
       return FALSE;
     }

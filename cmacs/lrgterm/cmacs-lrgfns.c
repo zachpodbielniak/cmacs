@@ -350,10 +350,16 @@ The argument is an alist of frame parameters.  */)
   else
     {
       /* Create the libregnum surface + its OS window.  */
+      bool win_ok;
       block_input ();
-      lrg_window_create (f, width, height,
-                         STRINGP (name) ? SSDATA (name) : "cmacs");
+      win_ok = lrg_window_create (f, width, height,
+                                  STRINGP (name) ? SSDATA (name) : "cmacs")
+               != NULL;
       unblock_input ();
+      if (!win_ok)
+        error ("output_lrg: could not open the libregnum window -- no usable "
+               "display (X11 needs DISPLAY; XWayland or `emacs --lrg' from a "
+               "graphical session)");
     }
 
   gui_default_parameter (f, parms, Qno_special_glyphs, Qnil,
