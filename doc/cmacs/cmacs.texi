@@ -7923,6 +7923,23 @@ the panels to the new size.  Sizing is always-fit (a fixed world height, width
 following the frame aspect), so the whole frame stays visible and consistently
 framed at every window size.
 
+@strong{Related pgtk-on-Wayland caveat (a reason some prefer @code{--lrg}).}  An
+ordinary PGTK frame on @emph{native Wayland} can freeze right after a child-frame
+popup (an LSP / @code{corfu} / @code{company} autocomplete, a tooltip): GNOME
+then offers ``Force quit or Wait'' and a @code{--fg-daemon} eventually exits.
+This is a GTK limitation -- Emacs built with PGTK cannot survive a Wayland
+display-connection disconnect (it prints this warning at startup) -- and
+child-frame popups are the usual trigger (a Wayland popup-protocol hiccup wedges
+or drops the compositor connection).  It is @emph{not} a cmacs/lrg bug: the
+process sits at about 0% CPU in the plain idle command loop (a thread
+dump shows @code{command_loop_1 -> read_char -> pselect}, an empty Lisp
+backtrace, and no coredump -- a lost display, not a deadlock).  Work around it by
+running the daemon under XWayland (@code{Environment=GDK_BACKEND=x11} in
+@file{emacs.service}, or @code{GDK_BACKEND=x11 emacs}), or by using the lrg
+backend, whose child frames are in-window overlays so there is no Wayland popup
+protocol to break.  See the Troubleshooting section of
+@file{doc_org/cmacs/cmacs-lrgterm.org} for the full writeup.
+
 See @file{doc_org/cmacs/cmacs-lrgterm.org} for the living document.
 
 @c ===================================================================

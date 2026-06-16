@@ -621,12 +621,34 @@ These are genuine, acceptable and documented; most match the phased plan:
   / presentation model).  Capturing with ~lrg-capture-screen~ will still look
   correct in this state because it presents out-of-band.
 - *A stray, blurry second desktop window appears (often on completion / a
-  prompt)*: your config opened a *child frame* (~posframe~, ~corfu~/~company~
-  popup, ~which-key-posframe~, a GUI tooltip).  lrg is one OS window per process
-  and now *refuses* the extra frame (it used to spawn a broken second window);
-  the package should fall back to the minibuffer.  Run ~emacs -Q --lrg=3d~ to
-  rule out config, or disable the posframe/child-frame UI.  See /Known v1
-  limitations/.
+  prompt)*: historically lrg spawned a broken second OS window for a *child
+  frame* (~posframe~, ~corfu~/~company~ popup, ~which-key-posframe~, a GUI
+  tooltip).  lrg now composites child frames as *in-window overlays* (see
+  /Child-frame UIs/), so this should no longer happen; if a stray window still
+  appears it is a second *top-level* frame, which lrg refuses (one OS window per
+  process).  Run ~emacs -Q --lrg=3d~ to rule out config.
+- *A PGTK frame freezes right after a popup (LSP/~corfu~/~company~ autocomplete,
+  a tooltip); GNOME says "Force quit or Wait"; a ~--fg-daemon~ then dies*: this
+  is a *pgtk-on-Wayland* limitation, *not* an lrg bug — it hits ordinary
+  ~emacs~/~emacsclient~ pgtk frames, and the lrg backend is one of the fixes
+  (below).  Emacs built with PGTK *cannot survive a Wayland display-connection
+  disconnect* (a GTK 3 limitation; the daemon prints exactly this warning at
+  startup), and *child-frame popups* (~corfu~/~company~, ~posframe~,
+  ~which-key-posframe~, GUI tooltips) are the usual trigger: a Wayland
+  popup-protocol hiccup wedges or drops the compositor connection, the frame
+  freezes, and the PGTK process can no longer recover (a ~--fg-daemon~ then
+  exits, often via ~kill-emacs-hook~, with no crash or coredump).
+  *Confirm it is this and not a wedge in cmacs*: the process sits at ≈0% CPU in
+  the plain idle command loop — a thread dump shows ~command_loop_1 →
+  read_key_sequence → read_char → wait_reading_process_output → pselect~ with an
+  *empty Lisp backtrace* (no ~lrg_*~ / ~cmacs_glib_*~ / LSP-process frames), and
+  there is no SIGSEGV/SIGABRT/coredump — it is a lost display, not a deadlock.
+  *Fixes*: (1) run the daemon under *XWayland* — add
+  ~Environment=GDK_BACKEND=x11~ to ~emacs.service~ (or launch
+  ~GDK_BACKEND=x11 emacs~); pgtk-on-X11 child frames are robust and survive
+  display hiccups; (2) or use the *lrg backend* (~emacs --lrg~ /
+  ~emacsclient --lrg~), where child frames are in-window overlays so there is no
+  Wayland popup protocol to break and lrg owns its own window.
 - *Verifying rendering*: use ~(lrg-capture-screen "/tmp/x.png")~ — it reads
   the backend's own framebuffer in-process (no screen-capture portal needed).
 
