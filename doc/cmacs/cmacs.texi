@@ -7512,7 +7512,7 @@ terminal backend (@code{emacs -nw}) and the graphical @emph{pgtk} backend.
 Where pgtk renders through GTK and Cairo, @code{output_lrg} renders the
 @emph{entire} Emacs UI --- every glyph, cursor, fringe, region and modeline
 --- through the @emph{libregnum} engine and its GObject raylib wrapper
-@emph{graylib} (raylib 5.5 on GLFW/X11).
+@emph{graylib} (raylib 6.0 on GLFW/X11).
 
 It is opt-in: plain @code{emacs} still starts pgtk.  The backend is selected
 only by the @code{--lrg[=MODE]} command-line flag (or by setting

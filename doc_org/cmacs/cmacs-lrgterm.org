@@ -8,7 +8,7 @@
 terminal backend (~emacs -nw~) and the graphical *pgtk* backend.  Where pgtk
 renders through GTK + Cairo, ~output_lrg~ renders the *entire* Emacs UI —
 every glyph, cursor, fringe, region and modeline — through the *libregnum*
-engine and its GObject raylib wrapper *graylib* (raylib 5.5 on GLFW/X11).
+engine and its GObject raylib wrapper *graylib* (raylib 6.0 on GLFW/X11).
 
 It is *opt-in*: plain ~emacs~ / ~./src/emacs~ still starts pgtk.  The backend
 is selected only by the ~--lrg[=MODE]~ command-line flag (or by setting
