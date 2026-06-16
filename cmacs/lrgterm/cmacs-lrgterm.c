@@ -3145,6 +3145,32 @@ FRAME is not an lrg frame.  FRAME defaults to the selected frame.  */)
                        ((LrgRenderMode) FRAME_LRG_OUTPUT (f)->render_mode));
 }
 
+DEFUN ("cmacs-lrg-set-render-mode", Fcmacs_lrg_set_render_mode,
+       Scmacs_lrg_set_render_mode, 1, 1, 0,
+       doc: /* Set the render MODE for the NEXT output_lrg frame created here.
+MODE is "2d" (default), "3d" or "3dvr"; an optional ":ARRANGEMENT:ENVIRONMENT"
+tail is ignored here (set those with the `cmacs-lrg-3d-*' commands).  This is
+the runtime equivalent of the `--lrg=MODE' startup flag; `cmacs-lrg-attach'
+uses it so a running Emacs (e.g. a daemon) can open a 3D lrg window on
+demand.  Returns MODE.  */)
+  (Lisp_Object mode)
+{
+  const char *m, *sep;
+  ptrdiff_t headlen;
+
+  CHECK_STRING (mode);
+  m = SSDATA (mode);
+  sep = strpbrk (m, ":,");
+  headlen = sep ? sep - m : (ptrdiff_t) strlen (m);
+  if (headlen == 4 && strncmp (m, "3dvr", 4) == 0)
+    lrg_requested_render_mode = 2;
+  else if (headlen == 2 && strncmp (m, "3d", 2) == 0)
+    lrg_requested_render_mode = 1;
+  else
+    lrg_requested_render_mode = 0;
+  return mode;
+}
+
 DEFUN ("cmacs-lrg-3d-set-arrangement", Fcmacs_lrg_3d_set_arrangement,
        Scmacs_lrg_3d_set_arrangement, 1, 2, 0,
        doc: /* Set FRAME's 3D panel ARRANGEMENT (a string id such as
@@ -3811,6 +3837,7 @@ syms_of_cmacs_lrgterm (void)
   defsubr (&Slrg_get_clipboard);
   defsubr (&Scmacs_lrg_3d_supported_p);
   defsubr (&Scmacs_lrg_render_mode);
+  defsubr (&Scmacs_lrg_set_render_mode);
   defsubr (&Scmacs_lrg_3d_set_arrangement);
   defsubr (&Scmacs_lrg_3d_set_environment);
   defsubr (&Scmacs_lrg_3d_arrangement);

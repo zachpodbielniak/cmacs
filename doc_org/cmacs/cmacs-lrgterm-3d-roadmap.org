@@ -82,6 +82,16 @@ the Emacs glue.
   ~corfu--popup-support-p~ override is gone; its popup shows at point.  Mouse-
   clicking a candidate isn't routed to the child yet (keyboard works).  GTest
   term/surface-draw-offset.
+- *Attach lrg to a running process / daemon*: ~cmacs-lrg-attach~ opens the raylib
+  window in the current Emacs on demand (raising the existing lrg frame if any),
+  so a daemon started inside a graphical session can host the single lrg window.
+  =emacsclient --lrg= now *creates* an lrg frame in the connected server when it
+  has none to reuse (server.el ~-lrg~ -> ~cmacs-lrg-attach~), instead of falling
+  back to a pgtk frame.  ~cmacs-lrg-set-render-mode~ is the runtime equivalent of
+  =--lrg=MODE=.  Required an upstream =callproc.c= fix: =make_environment_block='s
+  pgtk DISPLAY-scrub tested =FRAME_WINDOW_P= (true for lrg too) and crashed
+  =G_OBJECT_TYPE_NAME (FRAME_X_DISPLAY (lrg-frame))=; now =FRAME_PGTK_P= + an lrg
+  guard.
 
 * Deferred — fast-follow
 
@@ -95,8 +105,10 @@ the Emacs glue.
   carousel); Rolodex fans buffer panels on a ring, git-depth stacks ~vc~ revisions
   in Z, reusing it.  The arrangement enum values (~LRG_ARRANGEMENT_KIND_CAROUSEL~ /
   ~_GIT_DEPTH~) and ids already exist.
-- emacsclient ~-lrg~ spec applied to a *reused* live frame; ~key=value~ spec tokens
-  (e.g. ~dof=off~); defcustoms for the default arrangement / environment.
+- emacsclient ~-lrg~ MODE *spec tail* (arrangement / environment) applied when
+  reusing or attaching a frame; ~key=value~ spec tokens (e.g. ~dof=off~);
+  defcustoms for the default arrangement / environment.  (Reuse + on-demand
+  attach themselves now ship -- see Shipped.)
 - *Cinematic "shots"*: save/restore/fly-between named spatial workspaces (camera
   pose + arrangement + buffer set); AI-composable.  An arg-taking
   ~lrgterm_3d_move_panel~ MCP tool for "Jarvis, move it left".

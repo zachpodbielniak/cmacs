@@ -7545,22 +7545,33 @@ wrapper: with files it runs @code{emacsclient --lrg "$@@"}, with none
 @code{emacsclient --lrg --create-frame} so a bare icon click opens a frame
 instead of erroring with ``file name or argument required'').  It
 deliberately does @emph{not} pass an empty @option{--alternate-editor=} the
-way the pgtk client does: that makes @command{emacsclient} start a headless
-@code{emacs --daemon} (without @option{--lrg}), which can never host the
-single raylib window, so the @code{-lrg} request then hangs trying to place
-a frame on the launcher's non-existent tty.  It instead relies on
-@option{--lrg}'s built-in fallback to @code{emacs --lrg}, a real process
-that owns the window and starts a server for later reuse.
+way the pgtk client does: that would make @command{emacsclient} auto-start a
+generic @code{emacs --daemon} (without @option{--lrg}).  A daemon @emph{can}
+host the lrg window on demand now (the @code{-lrg} request calls
+@code{cmacs-lrg-attach}; see below), but only when it was started inside a
+graphical session---so the launcher relies instead on @option{--lrg}'s
+built-in fallback to @code{emacs --lrg}, a dedicated process that owns the
+window from startup and serves later clients.
 
 @command{emacsclient} accepts @option{--lrg[=MODE]} (shown in both
 @code{emacsclient --help} and @code{emacs --help}).  Because the libregnum
-backend is one window per process, @option{--lrg} does not open a second
-raylib window: it sends a @code{-lrg} request so the server reuses and
-raises its existing @code{output_lrg} frame (opening the files there), and
-it defaults @option{--alternate-editor} to @code{emacs --lrg} so a missing
-server still yields an lrg frame.  Thus @code{emacsclient --lrg file} opens
-@var{file} in a running libregnum Emacs, or launches one.  A daemon with no
-lrg frame does not create one on demand --- start it with @code{emacs --lrg}.
+backend is one window per process, @option{--lrg} never opens a @emph{second}
+raylib window.  It sends a @code{-lrg} request and the server either reuses
+and raises its existing @code{output_lrg} frame, or---if it has none
+yet---@emph{creates one on demand} in the server process via
+@code{cmacs-lrg-attach} (instead of falling through to a pgtk frame).  That is
+how lrg attaches to a daemon: the daemon must run inside a graphical session
+(@env{DISPLAY}/@env{WAYLAND_DISPLAY} set in its own environment), since GLFW
+cannot create a window otherwise; @code{cmacs-lrg-attach} errors cleanly on a
+headless daemon.  When no server is reachable, @option{--lrg} defaults
+@option{--alternate-editor} to @code{emacs --lrg}.  Thus
+@code{emacsclient --lrg file} opens @var{file} in a running libregnum Emacs,
+spins up the lrg window inside a running daemon, or launches a fresh one.
+
+@code{M-x cmacs-lrg-attach} (@code{cmacs-lrg-attach &optional @var{mode}})
+opens the lrg window in the @emph{current} process on demand, raising the
+existing lrg frame if there is one.  @var{mode} is @code{"2d"} (default),
+@code{"3d"} or @code{"3dvr"}.
 
 @section Architecture
 

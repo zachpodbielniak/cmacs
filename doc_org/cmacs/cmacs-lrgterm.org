@@ -78,28 +78,42 @@ The client launcher mirrors =emacsclient.desktop= (an =sh -c= wrapper: files
 plain icon click still opens a frame instead of erroring with "file name or
 argument required").  It deliberately does *not* pass an empty
 =--alternate-editor== the way the pgtk client does: that would make
-=emacsclient= start a headless =emacs --daemon= (no =--lrg=), which can never
-host the single raylib window, so the =-lrg= request would then hang trying
-to put a frame on the launcher's non-existent tty.  Instead it relies on
-=--lrg='s built-in fallback to =emacs --lrg= (a real process that owns the
-window and starts a server for later reuse).
+=emacsclient= auto-start a generic =emacs --daemon= (no =--lrg=).  A daemon
+*can* host the lrg window on demand now (the =-lrg= request calls
+=cmacs-lrg-attach=; see below), but only if it was started inside a graphical
+session -- so the launcher relies instead on =--lrg='s built-in fallback to
+=emacs --lrg= (a dedicated process that owns the window from startup and
+serves later clients).
 
 ** =emacsclient --lrg=
 
 =emacsclient= accepts =--lrg[=MODE]= (it appears in =emacsclient --help= and
 =emacs --help=).  Because the libregnum backend is *one window per process*,
-=--lrg= does not create a second raylib window; instead it:
+=--lrg= never opens a *second* raylib window; instead it:
 
 1. *Reuses* a running =emacs --lrg='s frame — the client sends a =-lrg MODE=
    request and the server (=server.el=) selects and raises its existing
    =output_lrg= frame, opening the files there.
-2. *Falls back* to launching =emacs --lrg[=MODE]= when no server is reachable
+2. *Creates one on demand* in the connected server when it has no lrg frame yet
+   — the =-lrg= handler calls =cmacs-lrg-attach=, which opens the raylib window
+   *in the server process* and makes an lrg frame, instead of falling through to
+   a pgtk frame.  This is how you "attach" lrg to a daemon: the daemon must run
+   inside a graphical session (=DISPLAY=/=WAYLAND_DISPLAY= set in *its* env, so
+   GLFW can create the window); a headless =emacs.service= cannot, and
+   =cmacs-lrg-attach= errors cleanly there.
+3. *Falls back* to launching =emacs --lrg[=MODE]= when no server is reachable
    — =--lrg= defaults the =--alternate-editor= to =emacs --lrg= for you (an
    explicit =-a= still wins).
 
-So =emacsclient --lrg file= opens =file= in your running libregnum Emacs, or
-starts one if none is running.  (A daemon that has no lrg frame yet does not
-create one on demand — start the lrg Emacs with =emacs --lrg=.)
+So =emacsclient --lrg file= opens =file= in your running libregnum Emacs,
+spins up the lrg window inside your daemon if one is running there, or starts a
+fresh =emacs --lrg= if no server is reachable.
+
+=M-x cmacs-lrg-attach= (=cmacs-lrg-attach &optional MODE=) is the underlying
+command: it opens the lrg window in the *current* process on demand (raising the
+existing lrg frame if there already is one).  MODE is "2d" (default), "3d" or
+"3dvr"; it runs =cmacs-lrg-set-render-mode= before creating the frame (the
+runtime equivalent of =--lrg=MODE=).
 
 * Architecture
 

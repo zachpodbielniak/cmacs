@@ -1256,6 +1256,7 @@ The following commands are accepted by the client:
 		tty-name   ; nil, `window-system', or the tty name.
 		tty-type   ; string.
 		lrg-reuse-frame  ; CMACS: existing output_lrg frame to reuse (-lrg)
+		lrg-mode  ; CMACS: requested output_lrg render mode, nil if no -lrg
 		files
 		filepos
 		args-left)
@@ -1302,12 +1303,13 @@ The following commands are accepted by the client:
 			   tty-name 'window-system)))
 
                 ;; CMACS: -lrg MODE:  Use the libregnum (output_lrg) backend.
-                ;; lrg is one window per process, so reuse the existing lrg
-                ;; frame if there is one; if there is none the client falls
-                ;; back to launching `emacs --lrg' itself.
+                ;; lrg is one window per process: reuse the existing lrg frame
+                ;; if there is one; otherwise create one on demand in THIS
+                ;; process (see the frame `cond' below -- e.g. a daemon in a
+                ;; graphical session), instead of falling through to pgtk.
                 ("-lrg"
-                 (pop args-left)        ; MODE (informational for now)
                  (setq dontkill t
+                       lrg-mode (or (pop args-left) "2d")
                        lrg-reuse-frame
                        (catch 'found
                          (dolist (fr (frame-list))
@@ -1435,6 +1437,14 @@ The following commands are accepted by the client:
 		    (setq tty-name nil tty-type nil)
 		    (select-frame-set-input-focus lrg-reuse-frame)
 		    lrg-reuse-frame)
+		   ;; CMACS: -lrg with no lrg frame to reuse -- create the raylib
+		   ;; window in this process on demand (e.g. a daemon started in a
+		   ;; graphical session) rather than falling through to a pgtk
+		   ;; frame.  cmacs-lrg-attach errors cleanly if there is no
+		   ;; display, which server propagates to the client.
+		   ((and lrg-mode (fboundp 'cmacs-lrg-attach))
+		    (setq tty-name nil tty-type nil)
+		    (cmacs-lrg-attach lrg-mode))
 		   ((and use-current-frame
 			 (or (eq use-current-frame 'always)
 			     ;; We can't use the Emacs daemon's

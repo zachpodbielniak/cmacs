@@ -48,6 +48,40 @@ Only \"2d\" is implemented; \"3d\" and \"3dvr\" are reserved.  The
   :group 'cmacs-lrg
   :version "31.1")
 
+(defun cmacs-lrg--ensure-window-system (&optional display xrm must-succeed)
+  "Open the lrg connection and run the one-time window-system setup, if needed.
+Idempotent: a no-op once `lrg-initialized' is set.  DISPLAY, XRM and
+MUST-SUCCEED are forwarded to `lrg-open-connection'.  Shared by the startup
+path (`window-system-initialization') and the on-demand path
+(`cmacs-lrg-attach')."
+  (unless lrg-initialized
+    ;; Fontsets: lrg reuses Emacs's FreeType/Cairo font machinery.  Guard the
+    ;; default-fontset creation -- another backend (pgtk in a daemon) may have
+    ;; created it already, in which case it would error.
+    (condition-case nil (create-default-fontset) (error nil))
+    (condition-case err
+        (create-fontset-from-fontset-spec standard-fontset-spec t)
+      (error (display-warning
+              'initialization
+              (format "Creation of the standard fontset failed: %s" err)
+              :error)))
+
+    (lrg-open-connection (or display "lrg") xrm must-succeed)
+
+    ;; No GUI menus/dialogs yet (Phase 7 interim): route dialogs to the
+    ;; minibuffer and use `tmm-menubar' / F10 for keyboard menu access.
+    (setq use-dialog-box nil
+          use-file-dialog nil)
+
+    ;; Runtime 3D control: interactive commands, the `C-c 3' keymap, and
+    ;; depth-of-field focus that follows the selected window.  Required at
+    ;; runtime (not top level) because lrg-win.el is dumped and a top-level
+    ;; `require' is rejected while dumping.  Harmless under 2d.
+    (when (require 'cmacs-lrg-3d nil t)
+      (cmacs-lrg-3d-mode 1))
+
+    (setq lrg-initialized t)))
+
 (cl-defmethod window-system-initialization (&context (window-system lrg)
                                             &optional display)
   "Initialize the lrg window system.
@@ -63,34 +97,47 @@ DISPLAY is the name of the display Emacs should connect to."
         (while (setq i (string-match "[.*]" x-resource-name))
           (aset x-resource-name i ?-)))))
 
-  ;; Fontsets: lrg reuses Emacs's FreeType/Cairo font machinery.
-  (create-default-fontset)
-  (condition-case err
-      (create-fontset-from-fontset-spec standard-fontset-spec t)
-    (error (display-warning
-            'initialization
-            (format "Creation of the standard fontset failed: %s" err)
-            :error)))
+  (cmacs-lrg--ensure-window-system
+   display
+   (and (boundp 'x-command-line-resources) x-command-line-resources)
+   (= (length (frame-list)) 0)))
 
-  (lrg-open-connection (or display "lrg")
-                       (and (boundp 'x-command-line-resources)
-                            x-command-line-resources)
-                       (= (length (frame-list)) 0))
+(declare-function cmacs-lrg-set-render-mode "cmacs-lrgterm.c" (mode))
 
-  ;; No GUI menus/dialogs yet (Phase 7 interim): route dialogs to the
-  ;; minibuffer and use `tmm-menubar' / F10 for keyboard menu access.
-  (setq use-dialog-box nil
-        use-file-dialog nil)
+;;;###autoload
+(defun cmacs-lrg-attach (&optional mode)
+  "Open the libregnum (output_lrg) window in THIS Emacs and select an lrg frame.
+Lets a running Emacs -- including a daemon started inside a graphical
+session -- host the single raylib window on demand, instead of only at
+startup via `emacs --lrg'.  Optional MODE is the render mode: \"2d\"
+(default), \"3d\" or \"3dvr\".
 
-  ;; Runtime 3D control: interactive commands, the `C-c 3' keymap, and
-  ;; depth-of-field focus that follows the selected window.  Required here (at
-  ;; runtime) rather than at top level, because lrg-win.el is dumped and a
-  ;; top-level `require' is rejected while dumping.  Harmless under 2d (the
-  ;; focus-follow hook no-ops off a 3D frame).
-  (when (require 'cmacs-lrg-3d nil t)
-    (cmacs-lrg-3d-mode 1))
-
-  (setq lrg-initialized t))
+output_lrg is one OS window per process, so calling this when an lrg frame
+already exists simply raises that frame.  Signals an error when there is no
+graphical display (e.g. a headless daemon), because GLFW cannot create a
+window then -- start the Emacs that should own the lrg window inside a
+graphical session."
+  (interactive)
+  (let ((existing nil))
+    (dolist (fr (frame-list))
+      (when (eq (framep fr) 'lrg) (setq existing fr)))
+    (cond
+     (existing
+      (select-frame-set-input-focus existing)
+      existing)
+     ((not (or (getenv "WAYLAND_DISPLAY") (getenv "DISPLAY")))
+      (error "cmacs-lrg-attach: no graphical display (DISPLAY/WAYLAND_DISPLAY) \
+to host the lrg window"))
+     (t
+      ;; Set the render mode before creating the frame (the C side reads it at
+      ;; frame creation).  `make-frame' opens the lrg connection on demand the
+      ;; first time, via `window-system-initialization' -- so do NOT initialise
+      ;; here (that would trip its `(not lrg-initialized)' assertion).
+      (when (and mode (fboundp 'cmacs-lrg-set-render-mode))
+        (cmacs-lrg-set-render-mode mode))
+      (let ((frame (make-frame '((window-system . lrg) (display . "lrg")))))
+        (select-frame-set-input-focus frame)
+        frame)))))
 
 (cl-defmethod handle-args-function (args &context (window-system lrg))
   (x-handle-args args))
