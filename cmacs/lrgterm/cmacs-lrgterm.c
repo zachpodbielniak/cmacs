@@ -1573,6 +1573,43 @@ lrg_store_char (struct frame *f, struct input_event *hold_quit, int cp,
   return lrg_store (f, hold_quit, &ie);
 }
 
+/* Pull the next *text* character from the Unicode char queue, skipping control
+   characters (< 0x20 and DEL 0x7f).  Tab, Return, Escape and Backspace are
+   FUNCTION keys handled via the key-press queue (as X keysyms); GLFW may ALSO
+   deliver them as their control char (e.g. Tab -> 0x09) in the char queue.  If
+   such a char were consumed as text it would double-emit the key AND shift the
+   per-printable-key char pairing by one -- so the key typed right after a Tab
+   would eat the Tab's stray char and lose its own (e.g. `SPC TAB 1' arriving as
+   `SPC 1', intermittently, depending on whether GLFW emitted the Tab char this
+   poll).  Real Ctrl-char input (C-i, C-m, ...) comes via the key+modifier path,
+   not the text queue, so dropping these here loses nothing.  */
+static int
+lrg_next_text_char (void)
+{
+  int cp;
+
+  while ((cp = grl_input_get_char_pressed ()) != 0)
+    if (cp >= 0x20 && cp != 0x7f)
+      return cp;
+  return 0;
+}
+
+/* Optional keystroke tracing: set CMACS_LRG_KEYLOG=1 in the environment to have
+   lrg_read_socket print every key/char it pulls from the GLFW queues and emits
+   into Emacs (to stderr, prefixed "[lrgkey]").  Off by default, ~zero cost when
+   off.  Use it to localise a dropped/mis-ordered key: if the trace shows the key
+   leaving read_socket, the loss is above this layer (a binding / translation);
+   if it never appears, the loss is in the windowing/input layer.  */
+static int lrg_keylog = -1;            /* -1 = unread, 0 = off, 1 = on */
+
+static bool
+lrg_keylog_on (void)
+{
+  if (lrg_keylog < 0)
+    lrg_keylog = (getenv ("CMACS_LRG_KEYLOG") != NULL) ? 1 : 0;
+  return lrg_keylog == 1;
+}
+
 /* The last "special" key (a mapped non-character key, or a printable key with
    Ctrl/Meta held) emitted from the press queue -- held down, it auto-repeats at
    the OS rate (see the repeat scan in lrg_read_socket).  Plain printable keys
@@ -1633,6 +1670,133 @@ lrg_pick_xy (struct frame *f, int mx, int my, int *fx, int *fy)
   return TRUE;
 }
 
+/* Pending keys dequeued from the GLFW key-press queue but not yet emitted because
+   their text character had not arrived in the SAME poll.  On XWayland / Wayland,
+   GLFW can deliver a key event and its character event in SEPARATE poll cycles
+   (the char lags the key by one or more 16 ms polls), so a printable key and its
+   Unicode char are not guaranteed to be visible together.  If we emitted a
+   printable key only once its char was ready but emitted keysym keys (Tab, RET,
+   arrows) immediately, a Tab pressed right after Space would jump AHEAD of the
+   not-yet-charred Space -- reordering `SPC TAB n' into `<tab> SPC n', which Emacs
+   sees as `SPC n' (a real bug observed under XWayland; invisible on a native X
+   server, where key+char arrive in one poll).  So pending keys are held here, IN
+   ORDER, and retried on later polls: a keysym key never overtakes an earlier
+   printable key that is still waiting for its character.  */
+#define LRG_KEYQ_MAX 256
+#define LRG_KEYQ_MAX_WAIT 8     /* polls to wait for a char before synthesising */
+static GrlKey lrg_keyq[LRG_KEYQ_MAX];
+static int lrg_keyq_mods[LRG_KEYQ_MAX];   /* modifiers snapshot at dequeue time */
+static int lrg_keyq_len;
+static int lrg_keyq_wait;        /* polls the head printable key has waited */
+
+/* Drain the GLFW key/char queues into Emacs, preserving press order even when a
+   printable key's character lags into a later poll (see lrg_keyq above).  MODS is
+   the current modifier state.  Returns the number of input events stored.  */
+static int
+lrg_drain_keys (struct frame *f, struct input_event *hold_quit, int mods)
+{
+  int count = 0;
+  int i;
+  GrlKey k;
+  int cp;
+
+  /* Append newly pressed keys (with a modifier snapshot) to the pending queue. */
+  while ((k = grl_input_get_key_pressed ()) != GRL_KEY_NULL)
+    if (lrg_keyq_len < LRG_KEYQ_MAX)
+      {
+        lrg_keyq[lrg_keyq_len] = k;
+        lrg_keyq_mods[lrg_keyq_len] = mods;
+        lrg_keyq_len++;
+      }
+
+  /* Emit pending keys from the front, stopping at the first plain printable key
+     whose character has not arrived yet (it will pair on a later poll).  */
+  for (i = 0; i < lrg_keyq_len; )
+    {
+      int km = lrg_keyq_mods[i];
+      bool kcm = (km & (ctrl_modifier | meta_modifier)) != 0;
+      int keysym;
+      bool printable;
+
+      k = lrg_keyq[i];
+      keysym = lrg_keysym_for (k);
+      printable = k >= GRL_KEY_SPACE && k <= GRL_KEY_GRAVE;
+
+      if (keysym != 0 || (printable && kcm))
+        {
+          /* Keysym, or Ctrl/Meta + printable: needs no char from the queue. */
+          if (lrg_keylog_on ())
+            fprintf (stderr,
+                     "[lrgkey] key=%d keysym=0x%x mods=0x%x -> special\n",
+                     (int) k, (unsigned) keysym, (unsigned) km);
+          count += lrg_emit_special_key (f, hold_quit, k, km);
+          lrg_repeat_key = k;
+          lrg_keyq_wait = 0;
+          i++;
+        }
+      else if (printable)
+        {
+          cp = lrg_next_text_char ();
+          if (cp == 0)
+            {
+              /* Char not here yet: wait for a later poll.  But never stall
+                 forever on a key that yields no char -- after a bound, fall back
+                 to the US-ASCII keycode (lower-cased for letters).  */
+              if (lrg_keyq_wait < LRG_KEYQ_MAX_WAIT)
+                {
+                  lrg_keyq_wait++;
+                  break;
+                }
+              cp = (int) k;
+              if (cp >= GRL_KEY_A && cp <= GRL_KEY_Z)
+                cp += 32;
+            }
+          if (lrg_keylog_on ())
+            fprintf (stderr, "[lrgkey] key=%d -> char %d (%c)\n",
+                     (int) k, cp, (cp >= 32 && cp < 127) ? cp : '?');
+          count += lrg_store_char (f, hold_quit, cp,
+                                   km & ~(ctrl_modifier | meta_modifier));
+          lrg_keyq_wait = 0;
+          i++;
+        }
+      else
+        {
+          /* A modifier or unmapped/keypad key: drop it. */
+          if (lrg_keylog_on ())
+            fprintf (stderr, "[lrgkey] key=%d -> skipped (modifier/unmapped)\n",
+                     (int) k);
+          i++;
+        }
+    }
+
+  /* Remove the emitted prefix [0, i) from the pending queue. */
+  if (i > 0)
+    {
+      memmove (lrg_keyq, lrg_keyq + i,
+               (lrg_keyq_len - i) * sizeof lrg_keyq[0]);
+      memmove (lrg_keyq_mods, lrg_keyq_mods + i,
+               (lrg_keyq_len - i) * sizeof lrg_keyq_mods[0]);
+      lrg_keyq_len -= i;
+    }
+
+  /* Once no printable key is waiting, drain remaining characters in order -- IME
+     commits, pasted text, and held-key auto-repeat (GLFW's char callback fires on
+     repeat).  When a key IS waiting the text queue is empty (that is why we
+     stopped), so skipping it then loses nothing.  Suppressed while Ctrl/Meta is
+     held so stray chars are not inserted as literal text.  */
+  if (lrg_keyq_len == 0 && !lrg_ctrl_or_meta_down ())
+    while ((cp = lrg_next_text_char ()) != 0)
+      {
+        if (lrg_keylog_on ())
+          fprintf (stderr, "[lrgkey] trailing char %d (%c)\n",
+                   cp, (cp >= 32 && cp < 127) ? cp : '?');
+        count += lrg_store_char (f, hold_quit, cp,
+                                 mods & ~(ctrl_modifier | meta_modifier));
+      }
+
+  return count;
+}
+
 static int
 lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
 {
@@ -1641,7 +1805,6 @@ lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
   GrlWindow *win;
   int count = 0;
   int mods;
-  int cp;
 
   /* Drain the wakeup timerfd so pselect does not spin on it.  */
   if (dpyinfo != NULL && dpyinfo->connection >= 0)
@@ -1715,59 +1878,29 @@ lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
   mods = lrg_event_modifiers ();
 
   /* Keyboard: drain the key-press QUEUE in press order (robust -- it never
-     misses or repeats a fast tap the way a per-frame state scan does, which
-     is what made ESC/hjkl flaky under Evil).  For each pressed key:
-       - a mapped non-character key (ESC, arrows, Tab, RET, ...) becomes a
+     misses or repeats a fast tap the way a per-frame state scan does, which is
+     what made ESC/hjkl flaky under Evil).  lrg_drain_keys handles the mapping:
+       - a mapped non-character key (ESC, arrows, Tab, RET, ...) -> a
          NON_ASCII_KEYSTROKE_EVENT carrying its X keysym + modifiers;
-       - a printable key with Ctrl/Meta held becomes a char event with
-         modifiers (GLFW emits no char callback for those, so we synthesize
-         it from the US-ASCII keycode, lower-casing letters so C-A == C-a);
-       - a printable key with no Ctrl/Meta consumes the next Unicode char
-         from the char queue (which already encodes layout + shift) -- pulling
-         it HERE keeps it correctly interleaved with any function keys pressed
-         in the same poll (e.g. ESC then x stays ESC, x).  */
-  {
-    bool ctrlmeta = lrg_ctrl_or_meta_down ();
-    GrlKey k;
+       - a printable key with Ctrl/Meta held -> a char event with modifiers
+         (GLFW emits no char callback for those, so synthesise from the US-ASCII
+         keycode, lower-casing letters so C-A == C-a);
+       - a printable key with no Ctrl/Meta consumes the next Unicode char from
+         the char queue (which already encodes layout + shift).
+     Keys whose char has not arrived yet are held in order across polls so a
+     later keysym key never overtakes them (see lrg_drain_keys / lrg_keyq).  */
+  count += lrg_drain_keys (f, hold_quit, mods);
 
-    while ((k = grl_input_get_key_pressed ()) != GRL_KEY_NULL)
-      {
-        int keysym = lrg_keysym_for (k);
-        bool printable = k >= GRL_KEY_SPACE && k <= GRL_KEY_GRAVE;
-
-        if (keysym != 0 || (printable && ctrlmeta))
-          {
-            /* keysym, or Ctrl/Meta + printable: emit it and arm auto-repeat so
-               holding the key (e.g. C-e / C-y) keeps firing. */
-            count += lrg_emit_special_key (f, hold_quit, k, mods);
-            lrg_repeat_key = k;
-          }
-        else if (printable && (cp = grl_input_get_char_pressed ()) != 0)
-          count += lrg_store_char (f, hold_quit, cp,
-                                   mods & ~(ctrl_modifier | meta_modifier));
-        /* else: a modifier key, or an unmapped function/keypad key -> skip.  */
-      }
-
-    /* Emit any chars the key loop did not pair with a printable key -- IME
-       commits, pasted text, multi-char dead-key sequences -- in order.  A held
-       plain printable key auto-repeats here, because GLFW's char callback fires
-       on key repeat.  */
-    if (!ctrlmeta)
-      while ((cp = grl_input_get_char_pressed ()) != 0)
-        count += lrg_store_char (f, hold_quit, cp,
-                                 mods & ~(ctrl_modifier | meta_modifier));
-
-    /* Auto-repeat the held special key (keysym / Ctrl|Meta+printable) at the OS
-       repeat rate -- those never reach the char queue, so without this they only
-       fire once per physical press (e.g. holding C-e would not scroll).  */
-    if (lrg_repeat_key != GRL_KEY_NULL)
-      {
-        if (!grl_input_is_key_down (lrg_repeat_key))
-          lrg_repeat_key = GRL_KEY_NULL;
-        else if (grl_input_is_key_pressed_repeat (lrg_repeat_key))
-          count += lrg_emit_special_key (f, hold_quit, lrg_repeat_key, mods);
-      }
-  }
+  /* Auto-repeat the held special key (keysym / Ctrl|Meta+printable) at the OS
+     repeat rate -- those never reach the char queue, so without this they only
+     fire once per physical press (e.g. holding C-e would not scroll).  */
+  if (lrg_repeat_key != GRL_KEY_NULL)
+    {
+      if (!grl_input_is_key_down (lrg_repeat_key))
+        lrg_repeat_key = GRL_KEY_NULL;
+      else if (grl_input_is_key_pressed_repeat (lrg_repeat_key))
+        count += lrg_emit_special_key (f, hold_quit, lrg_repeat_key, mods);
+    }
 
   /* 3D spatial navigation (precedes the generic mouse handling on a 3D lrg
      frame): middle-drag orbits, Ctrl/Super+middle-drag moves the panel under
