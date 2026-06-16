@@ -1884,11 +1884,20 @@ make_environment_block (Lisp_Object current_dir)
 	   when it's running under X Windows.  DISPLAY shouldn't be
 	   set to a Wayland display either, since that's an X specific
 	   variable.  */
-	if (FRAME_WINDOW_P (SELECTED_FRAME ())
+	/* CMACS: FRAME_PGTK_P, not FRAME_WINDOW_P -- an output_lrg frame is also
+	   a window frame (FRAME_WINDOW_P), but has no GdkDisplay, so calling
+	   FRAME_X_DISPLAY / G_OBJECT_TYPE_NAME on it here segfaults.  */
+	if (FRAME_PGTK_P (SELECTED_FRAME ())
 	    && strcmp (G_OBJECT_TYPE_NAME (FRAME_X_DISPLAY (SELECTED_FRAME ())),
 		       "GdkX11Display"))
 	  tmp = Qnil;
 #endif /* HAVE_PGTK */
+
+	/* CMACS: an output_lrg frame's `display' parameter ("lrg") is not a
+	   real X DISPLAY -- drop it so the subprocess inherits the real one
+	   (from Vinitial_environment, below).  */
+	if (FRAME_LRG_P (SELECTED_FRAME ()))
+	  tmp = Qnil;
 
 	if (!STRINGP (tmp) && CONSP (Vinitial_environment))
 	  /* If still not found, Look for DISPLAY in Vinitial_environment.  */
