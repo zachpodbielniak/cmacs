@@ -71,7 +71,7 @@ C source `cmacs/<name>/`, Elisp `lisp/cmacs/`, tests `test/cmacs/`, docs
 | **ai** | `cmacs/ai/` | Coding-agent surface over `ai-glib`: 8 providers, streaming chat org buffers, region cmds, FIM completion, voice loop, MCP tool bridge (`deps/ai-glib`, shared with libreclaw) |
 | **org-ex** | `cmacs/org-ex/` | Interactive widget embedding for Org (liborgex-1.0.a); includes cmacs-ink |
 | **mcp** | `cmacs/mcp/` | MCP server over Unix socket — AI-native runtime introspection & control |
-| **gsurf** | `cmacs/gsurf/` | Embedded web browser (gsurf, a GObject `surf` port) as live WebKitGTK buffers; caret mode + gsurf-lite (eww-style). Off by default |
+| **gsurf** | `cmacs/gsurf/` | Embedded web browser (gsurf, a GObject `surf` port) as live WebKitGTK buffers; caret mode + gsurf-lite (eww-style). Two render backends, runtime-selected by frame type: GTK3/WebKitGTK widget embed (pgtk), and a GTK-free libregnum backend for `emacs --lrg` (offscreen WebKit → GrlTexture composited by lrgterm; `--with-cmacs-gsurf-lrg`). Off by default |
 | **print** | `cmacs/print/` | "Print to cmacs" CUPS virtual printer → annotatable org docs |
 | **video** | `cmacs/video/` | GStreamer video overlay (playbin3 → BGRA appsink → Cairo blit). Compositor-agnostic |
 | **audio** | `cmacs/audio/` | GStreamer audio capture/playback; `#+BEGIN_AUDIO` waveform |

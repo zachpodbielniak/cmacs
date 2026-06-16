@@ -280,6 +280,20 @@ for their single-key navigation, ~<escape>~ is bound to drop them to Evil
 *normal* state (gnuseye's ~<escape>~ first deselects a selected entity, then
 escapes); re-enter navigation with ~C-z~ (~evil-emacs-state~).
 
+*** gsurf web buffers under --lrg
+
+The *cmacs-gsurf* web browser composites the same way when built with
+=--with-cmacs-gsurf-lrg=.  A gsurf buffer's page is rendered to a libregnum
+=GrlTexture= by gsurf's libregnum backend (offscreen WebKitGTK → texture) and
+=lrg_paint_libregnum_window= blits it into the buffer's window rect alongside
+the libregnum 3D buffers (gsurf's readback is top-down, so unlike the FBO
+views it is *not* Y-flipped).  =lrg_read_socket= offers pointer motion /
+buttons / wheel to =cmacs_gsurf_lrg_handle_*= right after the libregnum
+handlers, and — while a page holds focus
+(=cmacs_gsurf_lrg_page_focused_p=) — routes the keyboard to it via
+=lrg_route_keys_to_gsurf= instead of =lrg_drain_keys= (Escape releases focus
+back to Emacs).  See *CMacs Gsurf* → *Render backends* for the full model.
+
 * Render modes (2D + 3D; VR reserved)
 
 The abstract ~LrgFrameSurface~ + ~LrgRenderMode~ + ~pick~ seam makes each mode

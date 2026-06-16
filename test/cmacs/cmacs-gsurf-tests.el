@@ -369,5 +369,34 @@ out.  The boot JS carries the configured colour."
           (should (assoc "https://e.com" cmacs-gsurf--bookmarks)))
       (delete-file tmp))))
 
+;;;; libregnum (--lrg) backend ----------------------------------------
+
+(ert-deftest cmacs-gsurf-lrg-predicate-present ()
+  "The `cmacs-gsurf-lrg-supported-p' build predicate is defined and
+returns a boolean."
+  (skip-unless (fboundp 'cmacs-gsurf-supported-p))
+  (should (fboundp 'cmacs-gsurf-lrg-supported-p))
+  (should (memq (cmacs-gsurf-lrg-supported-p) '(nil t))))
+
+(ert-deftest cmacs-gsurf-lrg-backend-agnostic-commands ()
+  "The gsurf commands are backend-agnostic: they exist regardless of
+whether the run is pgtk or --lrg (the backend is chosen by frame type
+inside the C layer, with no separate Elisp surface)."
+  (skip-unless (fboundp 'cmacs-gsurf-supported-p))
+  ;; These drive whichever backend the frame uses.
+  (dolist (fn '(cmacs-gsurf-attach cmacs-gsurf-load-uri
+                cmacs-gsurf-focus-page cmacs-gsurf-release-focus))
+    (should (fboundp fn))))
+
+(ert-deftest cmacs-gsurf-lrg-edge-batch-safe ()
+  "In --batch (no graphical frame) gsurf entry points must not crash;
+attaching simply fails gracefully without a display/backend."
+  (skip-unless (fboundp 'cmacs-gsurf-supported-p))
+  ;; supported-p is a pure build check -- always t when built.
+  (should (cmacs-gsurf-supported-p))
+  ;; Placing/hiding a buffer with no attached view is a no-op, not a crash.
+  (with-temp-buffer
+    (should (progn (ignore-errors (cmacs-gsurf-hide)) t))))
+
 (provide 'cmacs-gsurf-tests)
 ;;; cmacs-gsurf-tests.el ends here

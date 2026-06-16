@@ -676,6 +676,8 @@ OPTION_DEFAULT_OFF([cmacs-piper],
   [CMacs offline text-to-speech via Piper])
 OPTION_DEFAULT_OFF([cmacs-gsurf],
   [CMacs gsurf embedded web browser (WebKitGTK buffers, modules, MCP)])
+OPTION_DEFAULT_OFF([cmacs-gsurf-lrg],
+  [gsurf libregnum backend for emacs --lrg (offscreen WebKit -> GrlTexture; requires --with-cmacs-libregnum)])
 
 # Accept --with-gsurf as a convenience alias for --with-cmacs-gsurf.
 AC_ARG_WITH([gsurf],
@@ -1049,11 +1051,33 @@ if test "$with_cmacs_gsurf" != "no"; then
     cmacs-gsurf-view.o cmacs-gsurf-modules.o \
     cmacs-gsurf-downloads.o cmacs-gsurf-permissions.o \
     cmacs-gsurf-snapshot.o cmacs-gsurf-print.o"
+
+  # libregnum backend for emacs --lrg: when --with-cmacs-libregnum is on,
+  # build gsurf's LRG backend (LRG_BACKEND=1 in src/Makefile.in) and the
+  # cmacs glue (cmacs-gsurf-lrg.o).  Under --lrg the page is rendered to a
+  # GrlTexture (gsurf's offscreen WebKitGTK engine -- it reuses the
+  # webkit2gtk-4.1 already required above, so no second WebKit is linked)
+  # and composited by lrgterm; graylib/raylib symbols resolve from the
+  # canonical liblibregnum.a (CMACS_LIBREGNUM_LIBS).  The glue is GTK- and
+  # libregnum-free (returns the texture as void*), so it needs no extra
+  # includes beyond the gsurf headers already in CMACS_GSURF_CFLAGS.
+  CMACS_GSURF_LRG=no
+  if test "$with_cmacs_gsurf_lrg" != "no"; then
+    if test "$with_cmacs_libregnum" = "no"; then
+      AC_MSG_ERROR([--with-cmacs-gsurf-lrg requires --with-cmacs-libregnum])
+    fi
+    CMACS_GSURF_LRG=yes
+    dnl The object + -DHAVE_CMACS_GSURF_LRG are added in src/Makefile.in,
+    dnl gated on CMACS_GSURF_LRG=yes (kept there so they apply uniformly and
+    dnl reach exactly the gsurf + lrgterm TUs via their per-target CFLAGS,
+    dnl avoiding a config.h-wide rebuild).
+  fi
 fi
 AC_SUBST(CMACS_GSURF_OBJ)
 AC_SUBST(CMACS_GSURF_CFLAGS)
 AC_SUBST(CMACS_GSURF_LIBS)
 AC_SUBST(CMACS_GSURF_BUNDLED)
+AC_SUBST(CMACS_GSURF_LRG)
 
 dnl emacsctl: a STANDALONE client binary (links no Emacs objects).
 dnl Built by cmacs/emacsctl/Makefile, hooked from src/Makefile.in; the

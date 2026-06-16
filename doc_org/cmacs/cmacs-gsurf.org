@@ -28,11 +28,16 @@ You can drive gsurf from:
 ** Build flag
 
 : --with-cmacs-gsurf      (alias: --with-gsurf)
+: --with-cmacs-gsurf-lrg  (libregnum backend for emacs --lrg)
 
 Requires =--with-cmacs-glib= and =--with-pgtk= (the live widget embed
 parents into the pgtk frame's =GtkFixed=).  =--with-cmacs-mcp= adds the
 =gsurf_*= MCP tools; =--with-cmacs-gi= makes the bundled =Gsurf-0.1=
 typelib resolvable for cmacsgi.
+
+=--with-cmacs-gsurf-lrg= additionally builds the GTK-free *libregnum
+backend* so gsurf works under =emacs --lrg= (where there is no GTK widget
+tree); it requires =--with-cmacs-libregnum=.  See *Render backends* below.
 
 ** System packages
 
@@ -76,6 +81,45 @@ the Emacs abnormal hooks:
 - =cmacs-gsurf-title-changed-functions= (BUFFER TITLE)
 - =cmacs-gsurf-load-changed-functions=  (BUFFER EVENT) — =started= /
   =committed= / =finished=.
+
+* Render backends (pgtk vs =--lrg=)
+
+gsurf has two render backends in one =libgsurf=, chosen *at runtime by the
+Emacs frame type* — there is no separate Elisp surface, every
+=cmacs-gsurf-*= command drives whichever backend the frame uses:
+
+- *GTK3 / WebKitGTK (pgtk).* The default.  The live =WebKitWebView=
+  =GtkWidget= is parented into =FRAME_GTK_WIDGET (f)= (the *Live embed*
+  above).  Used on ordinary =emacs= (pgtk) frames.
+
+- *libregnum / WebKit (=emacs --lrg=).*  Built with
+  =--with-cmacs-gsurf-lrg=.  Under the lrgterm display backend there is no
+  GTK widget tree, so the page is rendered to a libregnum =GrlTexture= and
+  composited into the buffer's window rectangle by lrgterm
+  (=lrg_paint_libregnum_window=), exactly like a cmacs-libregnum 3D buffer.
+  Raylib input that lrgterm receives is routed back into the page
+  (=cmacs/gsurf/cmacs-gsurf-lrg.c=): pointer over the window body, and —
+  while the page holds focus — the keyboard (Escape always returns control
+  to Emacs).  =cmacs-gsurf-focus-page= / a click focuses the page;
+  =cmacs-gsurf-release-focus=, Escape, or switching windows release it.
+
+  The web engine for this path is selected at build time: today it is
+  *offscreen WebKitGTK* (it reuses the very =webkit2gtk-4.1= the pgtk embed
+  already links — two WebKit libraries cannot coexist in one process), with
+  WPE WebKit reserved as a future fully-GTK-free engine.  Because the engine
+  feeds graylib/raylib through the canonical =liblibregnum.a=, =libgsurf.a=
+  does not embed graylib (it is link-only), so no extra dedup is needed
+  beyond the existing crispy/yaml-glib stripping.
+
+  Render mode mirrors cmacs's own =LrgRenderMode=: only *2D* (a flat
+  textured quad) is implemented; in =emacs --lrg=3d= the same flat texture
+  is captured onto the 3D panel automatically (no gsurf-side 3D).  A
+  =cmacs-gsurf-lrg-supported-p= predicate reports whether this backend was
+  built in.
+
+There is also a *standalone* =gsurf --lrg[=2d]= (the =deps/gsurf= binary):
+a full browser in its own raylib window with an address/progress/hover
+chrome, sharing all of the above backend code.
 
 * Buffer & mode
 

@@ -25,11 +25,17 @@
 #ifdef HAVE_CMACS_GSURF
 
 #include "lisp.h"
+#include "frame.h"
 #include "cmacs-gsurf.h"
 #include "cmacs-gsurf-internal.h"
 
 #include <stdbool.h>
 #include <gsurf/gsurf.h>
+
+#ifdef HAVE_CMACS_GSURF_LRG
+#include <gsurf/backend/lrg/gsurf-lrg-view.h>  /* for the backend factory enum */
+#include <gsurf/core/gsurf-backend.h>
+#endif
 
 #ifdef HAVE_CMACS_GI
 #include <girepository.h>
@@ -108,8 +114,22 @@ cmacs_gsurf_runtime_ensure (void)
 
   cmacs_gsurf_config_ensure ();
 
-  /* backend_init wraps gtk_init (idempotent -- Emacs pgtk has already
-     initialised GTK).  Needs a display. */
+#ifdef HAVE_CMACS_GSURF_LRG
+  /* Pick the backend by the Emacs display: under `emacs --lrg' there is no
+     GTK widget tree to embed into, so use the gsurf libregnum backend (the
+     page is rendered to a GrlTexture that lrgterm composites).  pgtk frames
+     keep the GTK backend.  Done before backend_init so the right backend is
+     initialised. */
+  {
+    struct frame *sf = SELECTED_FRAME ();
+    if (sf != NULL && FRAME_LIVE_P (sf) && FRAME_LRG_P (sf)
+        && gsurf_backend_is_available (GSURF_BACKEND_LRG))
+      gsurf_backend_set_default_type (GSURF_BACKEND_LRG);
+  }
+#endif
+
+  /* backend_init initialises the selected backend (gtk_init for GTK, the
+     EGL/offscreen bootstrap for LRG; idempotent).  Needs a display. */
   GError *err = NULL;
   if (!gsurf_backend_init (NULL, NULL, &err))
     {

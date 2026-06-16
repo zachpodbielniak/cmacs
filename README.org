@@ -422,6 +422,7 @@ cd cmacs
   --with-cmacs-gnuseye \
   --with-cmacs-cad \
   --with-cmacs-gsurf \
+  --with-cmacs-gsurf-lrg \
   --with-cmacs-emacsctl \
   --with-cmacs-lrgterm \
   --enable-cmacs-cpatch
@@ -536,6 +537,7 @@ Requires =autoconf= (>= 2.65) and =automake=.
   --with-cmacs-libregnum \
   --with-cmacs-gnuseye \
   --with-cmacs-gsurf \
+  --with-cmacs-gsurf-lrg \
   --with-cmacs-emacsctl \
   --with-cmacs-lrgterm \
   --enable-cmacs-cpatch
@@ -573,6 +575,7 @@ Module flags:
 - =--with-cmacs-org-ex= — Org-Ex interactive widget embedding
 - =--with-cmacs-mcp= — MCP server for AI-native runtime control
 - =--with-cmacs-gsurf= — Embed gsurf (a GLib/GObject port of suckless =surf=) as live WebKitGTK browser buffers.  =M-x cmacs-gsurf= opens a =cmacs-gsurf-mode= buffer whose window body is a real web view (xwidget-style embed into the pgtk frame).  Drive it from Elisp, cmacsgi (=(gi-require "Gsurf" "0.1")=), MCP (=gsurf_*=), and cmacs-ai; gsurf modules (search engines, ad-block, vim modal navigation, …) load from a cmacs gsurf-modules dir.  Statically links =libgsurf.a=; reuses the =--with-xwidgets= WebKitGTK/GTK3 stack (no new packages).  Off by default; requires =--with-cmacs-glib= + =--with-pgtk=.  Alias: =--with-gsurf=.  See [[file:doc_org/cmacs/cmacs-gsurf.org][the manual]].
+- =--with-cmacs-gsurf-lrg= — Add gsurf's GTK-free *libregnum backend* so the browser also works under =emacs --lrg= (where there is no GTK widget tree): the page is rendered to a libregnum =GrlTexture= and composited into the buffer's window rect by the lrgterm display backend, with raylib input routed back into the page.  One =libgsurf= holds both backends, picked at runtime by frame type (pgtk → GTK widget; =--lrg= → libregnum), so every =cmacs-gsurf-*= command works in both.  Today's engine is offscreen WebKitGTK (reuses the same =webkit2gtk-4.1=, no new packages); 2D only.  Part of the standard flag set (=just bootstrap= and the container build include it); requires =--with-cmacs-gsurf= + =--with-cmacs-libregnum= (and =--with-cmacs-lrgterm= to use it).  The standalone =deps/gsurf= binary gains =gsurf --lrg= too.
 - =--with-cmacs-emacsctl= — Build =emacsctl= / =cmacsctl=, the standalone kubectl-style CLI for a running cmacs: =emacsctl instances=, =eval --lang elisp|crispy|bacon|eshell=, =get buffers -o json|yaml=, =logs -f=, an interactive REPL, kubeconfig-style contexts, shell completions, and =--host user@machine= ssh tunnelling.  Links no Emacs objects; yaml-glib is statically vendored (like the bacon/podomation archives in =src/emacs=), so the only system deps are GLib, json-glib and libyaml.  Binary lands at =src/emacsctl=.  See [[file:doc_org/cmacs/emacsctl/index.org][the manual]].
 - =--with-cmacs-print= — Print to cmacs virtual printer + PDF intake
 - =--with-cmacs-video= — GStreamer video overlay: =#+BEGIN_VIDEO= blocks + =cmacs-video-mode=.  Supports file/HTTP/RTSP/RTSPS via =playbin3=.  Requires GStreamer 1.20+ + plugins-{base,good,bad,ugly} + libav and =--with-pgtk= for display (decode side works without).  Runs under any Wayland or X11 compositor; does *not* require =--with-cmacs-gowl=.

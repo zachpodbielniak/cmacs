@@ -76,6 +76,7 @@ configure_flags := """
     --with-cmacs-gnuseye
     --with-cmacs-cad
     --with-cmacs-gsurf
+    --with-cmacs-gsurf-lrg
     --with-cmacs-emacsctl
     --with-cmacs-lrgterm
     --enable-cmacs-cpatch

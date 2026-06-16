@@ -7020,6 +7020,42 @@ The title hook renames the buffer to @samp{*gsurf: TITLE*} (unless
 @code{window.open}, middle-click) open in a new gsurf buffer displayed
 per @code{cmacs-gsurf-popup-display-function}.
 
+@section Render backends (pgtk vs --lrg)
+
+gsurf has two render backends in one @file{libgsurf}, selected @emph{at
+runtime by the Emacs frame type}; every @code{cmacs-gsurf-*} command drives
+whichever backend the frame uses (there is no separate Elisp surface).
+
+@table @asis
+@item GTK3 / WebKitGTK (pgtk)
+The default.  The live @code{WebKitWebView} widget is parented into the pgtk
+frame's @code{GtkFixed} and clipped to the window body.
+
+@item libregnum / WebKit (@command{emacs --lrg})
+Built with @option{--with-cmacs-gsurf-lrg} (requires
+@option{--with-cmacs-libregnum}).  Under the lrgterm display backend there
+is no GTK widget tree, so the page is rendered to a libregnum
+@code{GrlTexture} and composited into the buffer's window rectangle by
+lrgterm (@code{lrg_paint_libregnum_window}), like a cmacs-libregnum 3D
+buffer.  Raylib input is routed back into the page
+(@file{cmacs/gsurf/cmacs-gsurf-lrg.c}): pointer over the window body, and,
+while the page holds focus, the keyboard --- Escape always returns control
+to Emacs.  @code{cmacs-gsurf-focus-page} or a click focuses the page;
+@code{cmacs-gsurf-release-focus}, Escape, or switching windows release it.
+@end table
+
+The web engine for the @option{--lrg} path is selected at build time: today
+it is offscreen WebKitGTK (reusing the same @code{webkit2gtk-4.1} the pgtk
+embed links --- two WebKit libraries cannot coexist in one process), with
+WPE WebKit reserved as a future fully-GTK-free engine.  Only @strong{2D}
+render mode is implemented (a flat textured quad); under @command{emacs
+--lrg=3d} the same flat texture is captured onto the 3D panel automatically.
+@code{cmacs-gsurf-lrg-supported-p} reports whether this backend was built.
+
+A standalone @command{gsurf --lrg[=2d]} (the @file{deps/gsurf} binary) is a
+full browser in its own raylib window with an address/progress/hover chrome,
+sharing the same backend code.
+
 @section Downloads
 
 Downloads auto-save into @code{cmacs-gsurf-download-directory} (default
@@ -7702,6 +7738,17 @@ maps raylib L/R/M buttons (0/1/2) to the X11/GDK numbers the router expects
 wheel event not over a view becomes a normal Emacs @code{WHEEL_EVENT} so
 buffers scroll with the wheel under @option{--lrg} as well.  In-scene text
 labels are still a follow-up.
+
+The @emph{cmacs-gsurf} web browser composites the same way when built with
+@option{--with-cmacs-gsurf-lrg}: a page is rendered to a @code{GrlTexture} by
+gsurf's libregnum backend (offscreen WebKitGTK) and
+@code{lrg_paint_libregnum_window} blits it into the buffer's window rect
+alongside the 3D buffers (gsurf's readback is top-down, so it is not
+Y-flipped).  @code{lrg_read_socket} offers pointer events to
+@code{cmacs_gsurf_lrg_handle_*} after the libregnum handlers, and while a page
+holds focus routes the keyboard to it (@code{lrg_route_keys_to_gsurf}) instead
+of @code{lrg_drain_keys}; Escape releases focus.  See @ref{CMacs Gsurf} for the
+full model.
 
 Because lrg has no native (GTK) popup menus (@code{menu_show_hook} returns
 nil), the libregnum/gnuseye right-click context menus are drawn @emph{in

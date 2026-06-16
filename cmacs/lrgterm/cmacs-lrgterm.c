@@ -52,6 +52,9 @@ textured-quad-in-FBO bug and the double-buffer staleness problem.  */
    the lrg frame -- raylib-free C view APIs.  */
 #include "cmacs-libregnum.h"
 #include "cmacs-libregnum-render.h"
+#ifdef HAVE_CMACS_GSURF_LRG
+#include "cmacs-gsurf.h"   /* compositing + input for gsurf-lrg web buffers */
+#endif
 #endif
 
 struct lrg_display_info *lrg_display_list;
@@ -673,6 +676,31 @@ lrg_paint_libregnum_window (struct frame *f, LrgFrameSurface *surf, Lisp_Object 
                  (gfloat) pw, (gfloat) ph, white);
               cmacs_libregnum_view_mark_painted (v);
             }
+#ifdef HAVE_CMACS_GSURF_LRG
+          /* Not a libregnum 3D buffer -- try a gsurf-lrg web page.  Its
+             readback is top-down (cairo origin top-left), so no Y-flip. */
+          if (tex == NULL)
+            {
+              int px = WINDOW_LEFT_PIXEL_EDGE (win);
+              int py = WINDOW_TOP_PIXEL_EDGE  (win);
+              int pw = WINDOW_PIXEL_WIDTH      (win);
+              int ph = WINDOW_PIXEL_HEIGHT     (win);
+              int gw = 0, gh = 0;
+              GrlTexture *gtex
+                = cmacs_gsurf_lrg_texture_for_window (contents, pw, ph,
+                                                      &gw, &gh);
+              if (gtex != NULL && gw > 0 && gh > 0)
+                {
+                  g_autoptr (GrlRectangle) gsrc
+                    = grl_rectangle_new (0.0f, 0.0f, (gfloat) gw, (gfloat) gh);
+                  g_autoptr (GrlColor) gwhite
+                    = grl_color_new (255, 255, 255, 255);
+                  lrg_frame_surface_draw_texture_region
+                    (surf, gtex, gsrc, (gfloat) px, (gfloat) py,
+                     (gfloat) pw, (gfloat) ph, gwhite);
+                }
+            }
+#endif
         }
       w = win->next;
     }
@@ -1869,6 +1897,48 @@ lrg_drain_keys (struct frame *f, struct input_event *hold_quit, int mods)
   return count;
 }
 
+#ifdef HAVE_CMACS_GSURF_LRG
+/* When a gsurf-lrg web page holds focus, route raylib keys to it instead of
+   to Emacs.  Escape always returns control to Emacs (releases page focus).
+   Reuses the same key/char primitives as lrg_drain_keys so the queues are
+   fully consumed this poll (lrg_drain_keys is skipped while focused).  */
+static void
+lrg_route_keys_to_gsurf (struct frame *f, int mods)
+{
+  GrlKey k;
+  int cp;
+  bool kcm = (mods & (ctrl_modifier | meta_modifier)) != 0;
+
+  while ((k = grl_input_get_key_pressed ()) != GRL_KEY_NULL)
+    {
+      int keysym;
+      bool printable;
+
+      if (k == GRL_KEY_ESCAPE)
+        {
+          cmacs_gsurf_release_focus ();   /* hand keys back to Emacs */
+          continue;
+        }
+      keysym = lrg_keysym_for (k);
+      printable = (k >= GRL_KEY_SPACE && k <= GRL_KEY_GRAVE);
+      if (keysym != 0)
+        cmacs_gsurf_lrg_handle_key (f, keysym, 0, mods);
+      else if (printable && kcm)
+        {
+          /* Ctrl/Meta + printable: send the (lower-cased) letter keysym so
+             the page sees e.g. C-a / C-c. */
+          int sym = (k >= GRL_KEY_A && k <= GRL_KEY_Z) ? (int) k + 32 : (int) k;
+          cmacs_gsurf_lrg_handle_key (f, sym, 0, mods);
+        }
+      /* plain printable keys are delivered as text below */
+    }
+
+  if (!kcm)
+    while ((cp = lrg_next_text_char ()) != 0)
+      cmacs_gsurf_lrg_handle_key (f, 0, cp, mods);
+}
+#endif
+
 static int
 lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
 {
@@ -1961,7 +2031,13 @@ lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
          the char queue (which already encodes layout + shift).
      Keys whose char has not arrived yet are held in order across polls so a
      later keysym key never overtakes them (see lrg_drain_keys / lrg_keyq).  */
-  count += lrg_drain_keys (f, hold_quit, mods);
+#ifdef HAVE_CMACS_GSURF_LRG
+  /* A focused gsurf-lrg page eats keys (except Escape, which releases it). */
+  if (cmacs_gsurf_lrg_page_focused_p (f))
+    lrg_route_keys_to_gsurf (f, mods);
+  else
+#endif
+    count += lrg_drain_keys (f, hold_quit, mods);
 
   /* Auto-repeat the held special key (keysym / Ctrl|Meta+printable) at the OS
      repeat rate -- those never reach the char queue, so without this they only
@@ -2178,6 +2254,9 @@ lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
 #ifdef HAVE_CMACS_LIBREGNUM
             if (!cmacs_libregnum_handle_motion (f, pfx, pfy))
 #endif
+#ifdef HAVE_CMACS_GSURF_LRG
+            if (!cmacs_gsurf_lrg_handle_motion (f, pfx, pfy))
+#endif
               {
                 block_input ();
                 note_mouse_highlight (f, pfx, pfy);
@@ -2191,9 +2270,9 @@ lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
      click/drag).  raylib button order L,R,M -> Emacs 0,1,2.  */
   {
     static const int rl_to_emacs_button[3] = { 0, 2, 1 };
-#ifdef HAVE_CMACS_LIBREGNUM
-    /* raylib L,R,M -> X11/GDK 1,3,2, which cmacs_libregnum_handle_button
-       expects (it maps those internally).  */
+#if defined(HAVE_CMACS_LIBREGNUM) || defined(HAVE_CMACS_GSURF_LRG)
+    /* raylib L,R,M -> X11/GDK 1,3,2, which cmacs_libregnum_handle_button and
+       cmacs_gsurf_lrg_handle_button expect (GSURF_BUTTON_* use the same 1/3/2). */
     static const int rl_to_x11_button[3] = { 1, 3, 2 };
 #endif
     int b;
@@ -2225,6 +2304,18 @@ lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
           if (pressed && cmacs_libregnum_handle_button (f, x11b, 1, pfx, pfy))
             pressed = false;
           if (released && cmacs_libregnum_handle_button (f, x11b, 0, pfx, pfy))
+            released = false;
+          if (!pressed && !released)
+            continue;
+        }
+#endif
+#ifdef HAVE_CMACS_GSURF_LRG
+        /* Then offer it to a gsurf-lrg web page (a click also focuses it). */
+        {
+          int gb = rl_to_x11_button[b];
+          if (pressed && cmacs_gsurf_lrg_handle_button (f, gb, 1, pfx, pfy))
+            pressed = false;
+          if (released && cmacs_gsurf_lrg_handle_button (f, gb, 0, pfx, pfy))
             released = false;
           if (!pressed && !released)
             continue;
@@ -2276,6 +2367,11 @@ lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
            coords so a view on a 3D panel still zooms. */
         if (!consumed && on_panel)
           consumed = cmacs_libregnum_handle_scroll (f, 0.0, -(double) wheel,
+                                                    pfx, pfy);
+#endif
+#ifdef HAVE_CMACS_GSURF_LRG
+        if (!consumed && on_panel)
+          consumed = cmacs_gsurf_lrg_handle_scroll (f, 0.0, -(double) wheel,
                                                     pfx, pfy);
 #endif
         if (!consumed)

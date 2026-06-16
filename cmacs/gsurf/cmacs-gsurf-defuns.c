@@ -61,6 +61,21 @@ Note that an attached browser additionally needs a windowing backend
   return Qt;
 }
 
+DEFUN ("cmacs-gsurf-lrg-supported-p", Fcmacs_gsurf_lrg_supported_p,
+       Scmacs_gsurf_lrg_supported_p, 0, 0, 0,
+       doc: /* Return t when the gsurf libregnum backend is built in.
+This is the GTK-free backend used under `emacs --lrg': the page is
+rendered to a libregnum texture composited by the lrg display backend.
+When nil, gsurf works only on GTK (pgtk) frames.  */)
+  (void)
+{
+#ifdef HAVE_CMACS_GSURF_LRG
+  return Qt;
+#else
+  return Qnil;
+#endif
+}
+
 DEFUN ("cmacs-gsurf-attach", Fcmacs_gsurf_attach,
        Scmacs_gsurf_attach, 1, 2, 0,
        doc: /* Attach a live gsurf web view to BUFFER.
@@ -564,6 +579,7 @@ syms_of_cmacs_gsurf_defuns (void)
   staticpro (cmacs_gsurf__buffers_root ());
 
   defsubr (&Scmacs_gsurf_supported_p);
+  defsubr (&Scmacs_gsurf_lrg_supported_p);
   defsubr (&Scmacs_gsurf_attach);
   defsubr (&Scmacs_gsurf_offscreen_p);
   defsubr (&Scmacs_gsurf_detach);

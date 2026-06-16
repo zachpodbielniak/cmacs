@@ -158,6 +158,44 @@ extern void   cmacs_gsurf_view_find_next   (CmacsGsurfView *v, bool forward);
 /* Free a string returned by the get_* wrappers above. */
 extern void   cmacs_gsurf_string_free      (char *s);
 
+/* ── libregnum (--lrg) backend (cmacs-gsurf-lrg.c) ──────────────────── */
+#ifdef HAVE_CMACS_GSURF_LRG
+
+struct frame;
+
+/* Composite hook (called by lrgterm during present): lay BUFFER's gsurf-lrg
+   page out at the window-body size (W x H), capture it, and return its
+   libregnum texture (a GrlTexture* returned as void* so this header stays
+   libregnum-free).  *OUT_TW / *OUT_TH receive the texture's pixel size.
+   Returns NULL if BUFFER has no gsurf-lrg view / no frame yet. */
+extern void *cmacs_gsurf_lrg_texture_for_window (Lisp_Object buffer,
+                                                 int w, int h,
+                                                 int *out_tw, int *out_th);
+
+/* Input routing (called by lrgterm's read_socket).  Coordinates are frame
+   pixels.  Each returns true if the event was over a gsurf-lrg page and was
+   forwarded (so lrgterm should not also treat it as an Emacs event). */
+extern bool cmacs_gsurf_lrg_handle_motion (struct frame *f, double x, double y);
+extern bool cmacs_gsurf_lrg_handle_button (struct frame *f, int button,
+                                           int press, double x, double y);
+extern bool cmacs_gsurf_lrg_handle_scroll (struct frame *f, double dx,
+                                           double dy, double x, double y);
+/* True if (X,Y) in frame F is over a gsurf-lrg page (so spatial gestures
+   defer to it). */
+extern bool cmacs_gsurf_lrg_over_view (struct frame *f, double x, double y);
+
+/* Keyboard: forward KEYSYM (an X/GDK keysym) / UNICHAR (a codepoint, or 0)
+   with MODS (a GsurfKeyMod mask) to the focused gsurf-lrg page.  Returns
+   true if a page was focused and consumed the key. */
+extern bool cmacs_gsurf_lrg_handle_key (struct frame *f, int keysym,
+                                        int unichar, int mods);
+/* True if a gsurf-lrg page in frame F currently holds keyboard focus (so
+   lrgterm routes keys to it instead of Emacs).  Escape is always handled by
+   lrgterm to release focus. */
+extern bool cmacs_gsurf_lrg_page_focused_p (struct frame *f);
+
+#endif /* HAVE_CMACS_GSURF_LRG */
+
 /* ── Module manager (cmacs-gsurf-modules.c) ─────────────────────────── */
 
 /* Create the process GsurfConfig (built-in defaults only -- never reads

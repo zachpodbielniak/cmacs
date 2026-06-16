@@ -31,6 +31,12 @@
 #include <gtk/gtk.h>
 #include <gdk/gdkkeysyms.h>
 
+#ifdef HAVE_CMACS_GSURF_LRG
+/* The libregnum backend's view (no GTK widget; rendered to a GrlTexture and
+   composited by lrgterm).  Only the LRG-specific helpers below touch it. */
+#include <gsurf/backend/lrg/gsurf-lrg-view.h>
+#endif
+
 #ifdef HAVE_PGTK
 #include "pgtkterm.h"
 #endif
@@ -59,6 +65,14 @@ struct CmacsGsurfView
    * outer widget, which lies when a descendant holds focus) makes the
    * Elisp focus logic reliable. */
   gboolean     focused;
+
+  /* libregnum (--lrg) backend: there is no GtkWidget; the page is rendered
+   * to a GrlTexture and composited by lrgterm into the buffer's window rect.
+   * `is_lrg' selects that path in place/hide/focus/etc.; lrg_w/lrg_h are the
+   * last window-body size the page was laid out at. */
+  gboolean     is_lrg;
+  int          lrg_w;
+  int          lrg_h;
 };
 
 /* ── Registries ─────────────────────────────────────────────────────── */
@@ -415,7 +429,16 @@ cmacs_gsurf_view_new (Lisp_Object buffer)
     gsurf_view_apply_settings (gv, cfg->settings);
 
   GtkWidget *w = (GtkWidget *) gsurf_view_get_native_widget (gv);
-  if (w == NULL)
+
+#ifdef HAVE_CMACS_GSURF_LRG
+  gboolean is_lrg = GSURF_IS_LRG_VIEW (gv);
+#else
+  gboolean is_lrg = FALSE;
+#endif
+
+  /* GTK backends embed a real native widget; the LRG backend has none
+   * (it composites a GrlTexture).  Only the GTK path requires a widget. */
+  if (w == NULL && !is_lrg)
     {
       g_object_unref (gv);
       return NULL;
@@ -424,7 +447,8 @@ cmacs_gsurf_view_new (Lisp_Object buffer)
   CmacsGsurfView *v = g_new0 (CmacsGsurfView, 1);
   v->buffer  = buffer;
   v->view    = gv;
-  v->widget  = g_object_ref_sink (w);
+  v->widget  = (w != NULL) ? g_object_ref_sink (w) : NULL;
+  v->is_lrg  = is_lrg;
   v->view_id = cmacs_gsurf__next_id++;
 
   g_signal_connect (gv, "uri-changed",   G_CALLBACK (on_uri_changed),   v);
@@ -445,30 +469,37 @@ cmacs_gsurf_view_new (Lisp_Object buffer)
   g_signal_connect (gv, "create-view",
                     G_CALLBACK (on_create_view), v);
 
-  /* Intercept Escape on the web widget so the user can always hand
-   * control back to Emacs/evil.  Connected non-after so it runs before
-   * WebKit's own key handling. */
-  gtk_widget_add_events (v->widget, GDK_KEY_PRESS_MASK);
-  g_signal_connect (v->widget, "key-press-event",
-                    G_CALLBACK (on_view_key_press), v);
+  /* GTK-backend-only widget wiring.  The LRG backend has no GtkWidget:
+   * input is injected by lrgterm into the page (cmacs-gsurf-lrg.c), focus is
+   * an explicit gsurf_lrg_view_set_focus(), and permissions flow through the
+   * gsurf module manager inside the LRG view. */
+  if (v->widget != NULL)
+    {
+      /* Intercept Escape on the web widget so the user can always hand
+       * control back to Emacs/evil.  Connected non-after so it runs before
+       * WebKit's own key handling. */
+      gtk_widget_add_events (v->widget, GDK_KEY_PRESS_MASK);
+      g_signal_connect (v->widget, "key-press-event",
+                        G_CALLBACK (on_view_key_press), v);
 
-  /* Permission requests (geolocation, notifications, camera/mic, ...).
-   * Connected on the native WebKitWebView (== v->widget in WK2GTK 4.1)
-   * with data V; cmacs_gsurf_view_destroy disconnects by data on v->widget
-   * before unreffing it, so no callback fires on a freed view. */
-  cmacs_gsurf_permissions_attach (v->widget, v);
+      /* Permission requests (geolocation, notifications, camera/mic, ...).
+       * Connected on the native WebKitWebView (== v->widget in WK2GTK 4.1)
+       * with data V; cmacs_gsurf_view_destroy disconnects by data on
+       * v->widget before unreffing it, so no callback fires on a freed view. */
+      cmacs_gsurf_permissions_attach (v->widget, v);
 
-  /* Create the web widget NON-focusable: by default keyboard focus stays
-   * with the Emacs frame, so SPC (the evil/Doom leader), C-w, M-x, etc.
-   * all work in a gsurf buffer.  A page that autofocuses an element
-   * cannot grab keys because gtk_widget_grab_focus is a no-op on a
-   * non-focusable widget.  We flip this TRUE only on explicit
-   * focus_page/follow; pointer events (clicks, scroll wheel, link nav)
-   * are delivered regardless of focusability, so mouse browsing still
-   * works fully.  Press `i'/RET to type into the page.  Recurse into the
-   * subtree: a WebKitWebView's key-consuming widget is a descendant
-   * (WebKitWebViewBase), so the outer widget alone is not enough. */
-  set_webview_focusable (v, FALSE);
+      /* Create the web widget NON-focusable: by default keyboard focus stays
+       * with the Emacs frame, so SPC (the evil/Doom leader), C-w, M-x, etc.
+       * all work in a gsurf buffer.  A page that autofocuses an element
+       * cannot grab keys because gtk_widget_grab_focus is a no-op on a
+       * non-focusable widget.  We flip this TRUE only on explicit
+       * focus_page/follow; pointer events (clicks, scroll wheel, link nav)
+       * are delivered regardless of focusability, so mouse browsing still
+       * works fully.  Press `i'/RET to type into the page.  Recurse into the
+       * subtree: a WebKitWebView's key-consuming widget is a descendant
+       * (WebKitWebViewBase), so the outer widget alone is not enough. */
+      set_webview_focusable (v, FALSE);
+    }
 
   g_hash_table_insert (cmacs_gsurf__views,
                        GUINT_TO_POINTER (v->view_id), v);
@@ -501,7 +532,19 @@ cmacs_gsurf_view_new (Lisp_Object buffer)
 void
 cmacs_gsurf_view_make_offscreen (CmacsGsurfView *v)
 {
-  if (v == NULL || v->widget == NULL || v->offscreen)
+  if (v == NULL || v->offscreen)
+    return;
+#ifdef HAVE_CMACS_GSURF_LRG
+  if (v->is_lrg)
+    {
+      /* The LRG engine already renders into an offscreen surface and runs
+       * JS without being composited; mark offscreen so place/hide are
+       * no-ops and lrgterm never draws this view's texture. */
+      v->offscreen = TRUE;
+      return;
+    }
+#endif
+  if (v->widget == NULL)
     return;
 #ifdef HAVE_PGTK
   struct frame *f = SELECTED_FRAME ();
@@ -607,16 +650,75 @@ cmacs_gsurf_view_native_widget (CmacsGsurfView *v)
   return v ? (void *) v->widget : NULL;
 }
 
+#ifdef HAVE_CMACS_GSURF_LRG
+/* ── LRG-backend accessors (used by cmacs-gsurf-lrg.c) ───────────────── */
+
+gboolean
+cmacs_gsurf_view_is_lrg (CmacsGsurfView *v)
+{
+  return v != NULL && v->is_lrg;
+}
+
+GsurfView *
+cmacs_gsurf_view_gsurf (CmacsGsurfView *v)
+{
+  return v ? v->view : NULL;
+}
+
+gboolean
+cmacs_gsurf_view_focused_p (CmacsGsurfView *v)
+{
+  return v != NULL && v->focused;
+}
+
+/* The LRG view that currently holds page focus (keys go to it), or NULL. */
+CmacsGsurfView *
+cmacs_gsurf_lrg_focused_view (void)
+{
+  if (cmacs_gsurf__views)
+    {
+      GHashTableIter it;
+      gpointer val;
+      g_hash_table_iter_init (&it, cmacs_gsurf__views);
+      while (g_hash_table_iter_next (&it, NULL, &val))
+        {
+          CmacsGsurfView *v = val;
+          if (v && v->is_lrg && v->focused)
+            return v;
+        }
+    }
+  return NULL;
+}
+#endif /* HAVE_CMACS_GSURF_LRG */
+
 /* ── Placement (the live embed) ─────────────────────────────────────── */
 
 void
 cmacs_gsurf_view_place (CmacsGsurfView *v, Lisp_Object frame,
                         int x, int y, int w, int h)
 {
-  if (!v || !v->widget) return;
+  if (!v) return;
   /* Headless (gsurf-lite) views are never shown on a frame -- placing one
      would yank the live page on top of the text buffer. */
   if (v->offscreen) return;
+#ifdef HAVE_CMACS_GSURF_LRG
+  if (v->is_lrg)
+    {
+      /* No native reparenting: record the window-body size and lay the page
+       * out at it.  lrgterm composites the page's GrlTexture into this rect
+       * during its present (cmacs-gsurf-lrg.c).  FRAME / X / Y are implicit
+       * in the per-present window walk, so they are unused here. */
+      (void) frame; (void) x; (void) y;
+      v->lrg_w = MAX (1, w);
+      v->lrg_h = MAX (1, h);
+      v->shown = TRUE;
+      if (v->view != NULL)
+        gsurf_lrg_view_resize (GSURF_LRG_VIEW (v->view),
+                               v->lrg_w, v->lrg_h, 1.0);
+      return;
+    }
+#endif
+  if (!v->widget) return;
 #ifdef HAVE_PGTK
   struct frame *f = XFRAME (frame);
   if (!FRAME_LIVE_P (f) || !FRAME_PGTK_P (f))
@@ -661,10 +763,47 @@ cmacs_gsurf_view_place (CmacsGsurfView *v, Lisp_Object frame,
 
 /* ── Focus control (called from the defun layer) ────────────────────── */
 
+#ifdef HAVE_CMACS_GSURF_LRG
+/* Give exclusive page focus to the LRG view V: drop focus on every other
+   LRG view (only one page receives keys at a time), then focus V's page so
+   WebKit shows the caret and routes keys to the DOM. */
+static void
+lrg_focus_exclusive (CmacsGsurfView *v)
+{
+  if (cmacs_gsurf__views)
+    {
+      GHashTableIter it;
+      gpointer val;
+      g_hash_table_iter_init (&it, cmacs_gsurf__views);
+      while (g_hash_table_iter_next (&it, NULL, &val))
+        {
+          CmacsGsurfView *o = val;
+          if (o && o != v && o->is_lrg && o->focused)
+            {
+              if (o->view != NULL)
+                gsurf_lrg_view_set_focus (GSURF_LRG_VIEW (o->view), FALSE);
+              o->focused = FALSE;
+            }
+        }
+    }
+  v->focused = TRUE;
+  if (v->view != NULL)
+    gsurf_lrg_view_set_focus (GSURF_LRG_VIEW (v->view), TRUE);
+}
+#endif
+
 void
 cmacs_gsurf_view_focus_page (CmacsGsurfView *v)
 {
-  if (!v || !v->widget) return;
+  if (!v) return;
+#ifdef HAVE_CMACS_GSURF_LRG
+  if (v->is_lrg)
+    {
+      lrg_focus_exclusive (v);
+      return;
+    }
+#endif
+  if (!v->widget) return;
 #ifdef HAVE_PGTK
   block_input ();
   /* Flip the whole subtree focusable, then grab -- this is the one place
@@ -685,14 +824,22 @@ cmacs_gsurf_view_focus_page (CmacsGsurfView *v)
 void
 cmacs_gsurf_view_follow (CmacsGsurfView *v)
 {
-  if (!v || !v->view || !v->widget) return;
-#ifdef HAVE_PGTK
-  block_input ();
-  set_webview_focusable (v, TRUE);
-  gtk_widget_grab_focus (v->widget);
-  v->focused = TRUE;
-  unblock_input ();
+  if (!v || !v->view) return;
+#ifdef HAVE_CMACS_GSURF_LRG
+  if (v->is_lrg)
+    lrg_focus_exclusive (v);
+  else
 #endif
+    {
+      if (!v->widget) return;
+#ifdef HAVE_PGTK
+      block_input ();
+      set_webview_focusable (v, TRUE);
+      gtk_widget_grab_focus (v->widget);
+      v->focused = TRUE;
+      unblock_input ();
+#endif
+    }
   gsurf_module_manager_dispatch_key_event (
     gsurf_module_manager_get_default (), v->view,
     GDK_KEY_f, 0, GSURF_MOD_NONE, GSURF_MODE_NORMAL);
@@ -717,6 +864,27 @@ cmacs_gsurf_view_page_focused_p (CmacsGsurfView *v)
 void
 cmacs_gsurf_release_focus (void)
 {
+#ifdef HAVE_CMACS_GSURF_LRG
+  /* Drop page focus on every LRG view so subsequent keys go to Emacs.  No
+   * GTK focus to restore -- lrgterm routes keys to Emacs by default once no
+   * page is focused. */
+  if (cmacs_gsurf__views)
+    {
+      GHashTableIter it;
+      gpointer val;
+      g_hash_table_iter_init (&it, cmacs_gsurf__views);
+      while (g_hash_table_iter_next (&it, NULL, &val))
+        {
+          CmacsGsurfView *v = val;
+          if (v && v->is_lrg)
+            {
+              if (v->focused && v->view != NULL)
+                gsurf_lrg_view_set_focus (GSURF_LRG_VIEW (v->view), FALSE);
+              v->focused = FALSE;
+            }
+        }
+    }
+#endif
 #ifdef HAVE_PGTK
   block_input ();
   if (cmacs_gsurf__views)
@@ -729,7 +897,7 @@ cmacs_gsurf_release_focus (void)
           CmacsGsurfView *v = val;
           if (v && v->widget)
             set_webview_focusable (v, FALSE);
-          if (v)
+          if (v && !v->is_lrg)
             v->focused = FALSE;
         }
     }
@@ -747,10 +915,23 @@ cmacs_gsurf_release_focus (void)
 void
 cmacs_gsurf_view_hide (CmacsGsurfView *v)
 {
-  if (!v || !v->widget) return;
-  /* Headless (gsurf-lite) views stay realized in their GtkOffscreenWindow
-     so WebKit keeps running; never hide them. */
+  if (!v) return;
+  /* Headless (gsurf-lite) views stay realized so WebKit keeps running;
+     never hide them. */
   if (v->offscreen) return;
+#ifdef HAVE_CMACS_GSURF_LRG
+  if (v->is_lrg)
+    {
+      /* Nothing to unmap; lrgterm simply stops compositing a buffer whose
+       * window is gone.  Drop focus so keys return to Emacs. */
+      v->shown = FALSE;
+      if (v->focused && v->view != NULL)
+        gsurf_lrg_view_set_focus (GSURF_LRG_VIEW (v->view), FALSE);
+      v->focused = FALSE;
+      return;
+    }
+#endif
+  if (!v->widget) return;
   block_input ();
   gtk_widget_hide (v->widget);
   v->shown = FALSE;

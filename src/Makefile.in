@@ -393,6 +393,15 @@ CMACS_GSURF_OBJ = @CMACS_GSURF_OBJ@
 CMACS_GSURF_CFLAGS = @CMACS_GSURF_CFLAGS@
 CMACS_GSURF_LIBS = @CMACS_GSURF_LIBS@
 CMACS_GSURF_BUNDLED = @CMACS_GSURF_BUNDLED@
+CMACS_GSURF_LRG = @CMACS_GSURF_LRG@
+## gsurf libregnum backend (emacs --lrg): compile the cmacs glue object and
+## define HAVE_CMACS_GSURF_LRG for the gsurf + lrgterm TUs (the only ones that
+## reference it -- via their per-target CFLAGS, so no config.h-wide rebuild).
+ifeq ($(CMACS_GSURF_LRG),yes)
+CMACS_GSURF_OBJ += cmacs-gsurf-lrg.o
+CMACS_GSURF_CFLAGS += -DHAVE_CMACS_GSURF_LRG=1
+CMACS_LRGTERM_CFLAGS += -DHAVE_CMACS_GSURF_LRG=1
+endif
 CMACS_ORG_EX_OBJ = @CMACS_ORG_EX_OBJ@
 CMACS_ORG_EX_CFLAGS = @CMACS_ORG_EX_CFLAGS@
 CMACS_ORG_EX_LIBS = @CMACS_ORG_EX_LIBS@
@@ -1101,8 +1110,17 @@ endif
 ## gsurf objects depend on the archive.
 CMACS_GSURF_STATIC_LIB = $(srcdir)/../deps/gsurf/build/release/libgsurf.a
 ifneq ($(CMACS_GSURF_OBJ),)
+## When the LRG backend is on, gsurf compiles src/backend/lrg/** and its own
+## libgsurf.so links graylib/raylib -- so the libregnum build (which produces
+## those archives) must run first.  The canonical liblibregnum.a provides the
+## graylib/raylib symbols at the temacs link; libgsurf.a does NOT embed them
+## (they are link-only in gsurf), so no graylib dedup is needed here.
+ifeq ($(CMACS_GSURF_LRG),yes)
+$(CMACS_GSURF_STATIC_LIB): $(CMACS_LIBREGNUM_STATIC_LIB)
+endif
 $(CMACS_GSURF_STATIC_LIB):
-	$(MAKE) -C $(srcdir)/../deps/gsurf STATIC=1 BUILD_GIR=1 GTK_BACKEND=gtk3
+	$(MAKE) -C $(srcdir)/../deps/gsurf STATIC=1 BUILD_GIR=1 GTK_BACKEND=gtk3 \
+	  $(if $(filter yes,$(CMACS_GSURF_LRG)),LRG_BACKEND=1)
 $(CMACS_GSURF_OBJ): $(CMACS_GSURF_STATIC_LIB)
 
 ## Build the cmacs-specific gsurf modules (.so loaded at runtime by the
