@@ -1349,7 +1349,12 @@ lrg_keysym_for (GrlKey k)
   return 0;
 }
 
-/* Return the first live output_lrg frame, or NULL (v1 has at most one).  */
+/* Return the live output_lrg frame that OWNS the raylib window, or NULL.
+   Must skip child frames (corfu/posframe popups): they are output_lrg too but
+   have no surface of their own (FRAME_LRG_SURFACE == NULL) -- they are composited
+   into the parent's window.  A child frame is often FIRST in Vframe_list (created
+   most recently), so returning it here would make lrg_read_socket pick a NULL
+   window and bail -- freezing all keyboard input the moment a popup appears.  */
 static struct frame *
 lrg_any_frame (void)
 {
@@ -1358,7 +1363,7 @@ lrg_any_frame (void)
   FOR_EACH_FRAME (tail, frame)
     {
       struct frame *f = XFRAME (frame);
-      if (FRAME_LIVE_P (f) && FRAME_LRG_P (f))
+      if (FRAME_LIVE_P (f) && FRAME_LRG_P (f) && FRAME_LRG_SURFACE (f) != NULL)
         return f;
     }
   return NULL;
