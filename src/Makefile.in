@@ -1118,9 +1118,14 @@ ifneq ($(CMACS_GSURF_OBJ),)
 ifeq ($(CMACS_GSURF_LRG),yes)
 $(CMACS_GSURF_STATIC_LIB): $(CMACS_LIBREGNUM_STATIC_LIB)
 endif
+## Pin gsurf's LRG backend to cmacs's canonical libregnum (LIBREGNUM_DIR
+## override) rather than gsurf's own bundled deps/libregnum, so only ONE
+## libregnum/graylib/raylib is linked into temacs (the static-lib dedup
+## invariant).  gsurf builds standalone against its own copy by default.
 $(CMACS_GSURF_STATIC_LIB):
 	$(MAKE) -C $(srcdir)/../deps/gsurf STATIC=1 BUILD_GIR=1 GTK_BACKEND=gtk3 \
-	  $(if $(filter yes,$(CMACS_GSURF_LRG)),LRG_BACKEND=1)
+	  $(if $(filter yes,$(CMACS_GSURF_LRG)),LRG_BACKEND=1 \
+	    LIBREGNUM_DIR=$(abspath $(srcdir)/../deps/libregnum))
 $(CMACS_GSURF_OBJ): $(CMACS_GSURF_STATIC_LIB)
 
 ## Build the cmacs-specific gsurf modules (.so loaded at runtime by the
