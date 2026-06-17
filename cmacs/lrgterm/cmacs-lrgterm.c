@@ -363,6 +363,112 @@ lrg_draw_glyph_string_decorations (struct glyph_string *s)
     }
 }
 
+/* Draw a glyphless glyph string.  The display engine NEVER populates s->char2b
+   for glyphless glyph strings, so they must not be routed through the normal
+   char-blit path (lrg_font_draw_glyph_string with the row's char2b) -- doing so
+   dereferenced a NULL s->char2b and crashed (SIGSEGV on e.g. U+200B ZERO WIDTH
+   SPACE, a THIN_SPACE glyphless glyph).  Mirrors
+   pgtk_draw_glyphless_glyph_string_foreground: GLYPHLESS_DISPLAY_THIN_SPACE
+   draws nothing; ACRONYM and HEX_CODE render a small upper/lower string through
+   a *local* char2b; every non-thin-space method also gets a hollow box of the
+   proper size.  */
+static void
+lrg_draw_glyphless_glyph_string (struct glyph_string *s)
+{
+  LrgFrameSurface *surf = FRAME_LRG_SURFACE (s->f);
+  struct glyph *glyph = s->first_glyph;
+  unsigned char2b[8];
+  int x, i, j;
+
+  if (surf == NULL || s->face == NULL)
+    return;
+
+  /* If the first glyph has a left box line, start to the right of it.  */
+  if (s->face->box != FACE_NO_BOX && s->first_glyph->left_box_line_p)
+    x = s->x + max (s->face->box_vertical_line_width, 0);
+  else
+    x = s->x;
+
+  /* Borrow s->char2b for the duration (lrg_font_draw_glyph_string reads it);
+     restore it to NULL before returning, exactly as pgtk does.  */
+  s->char2b = char2b;
+
+  for (i = 0; i < s->nchars; i++, glyph++)
+    {
+      char buf[8];
+      char *str = NULL;
+      int len = glyph->u.glyphless.len;
+
+      if (glyph->u.glyphless.method == GLYPHLESS_DISPLAY_ACRONYM)
+        {
+          if (len > 0
+              && CHAR_TABLE_P (Vglyphless_char_display)
+              && (CHAR_TABLE_EXTRA_SLOTS (XCHAR_TABLE (Vglyphless_char_display))
+                  >= 1))
+            {
+              Lisp_Object acronym
+                = (!glyph->u.glyphless.for_no_font
+                   ? CHAR_TABLE_REF (Vglyphless_char_display,
+                                     glyph->u.glyphless.ch)
+                   : XCHAR_TABLE (Vglyphless_char_display)->extras[0]);
+              if (CONSP (acronym))
+                acronym = XCAR (acronym);
+              if (STRINGP (acronym))
+                str = SSDATA (acronym);
+            }
+        }
+      else if (glyph->u.glyphless.method == GLYPHLESS_DISPLAY_HEX_CODE)
+        {
+          unsigned int ch = glyph->u.glyphless.ch;
+          eassume (ch <= MAX_CHAR);
+          snprintf (buf, sizeof buf, "%0*X", ch < 0x10000 ? 4 : 6, ch);
+          str = buf;
+        }
+
+      if (str != NULL && s->font != NULL && len > 0)
+        {
+          int n = len > 8 ? 8 : len;
+          int upper_len = (n + 1) / 2;
+          /* All chars in STR are ASCII (Emacs guarantees this).  */
+          for (j = 0; j < n; j++)
+            char2b[j]
+              = s->font->driver->encode_char (s->font, str[j]) & 0xFFFF;
+          lrg_font_draw_glyph_string (s, 0, upper_len,
+                                      x + glyph->slice.glyphless.upper_xoff,
+                                      s->ybase
+                                        + glyph->slice.glyphless.upper_yoff,
+                                      false);
+          lrg_font_draw_glyph_string (s, upper_len, n,
+                                      x + glyph->slice.glyphless.lower_xoff,
+                                      s->ybase
+                                        + glyph->slice.glyphless.lower_yoff,
+                                      false);
+        }
+
+      if (glyph->u.glyphless.method != GLYPHLESS_DISPLAY_THIN_SPACE)
+        {
+          g_autoptr (GrlColor) col = lrg_color (s->face->foreground);
+          int bx = x;
+          int by = s->ybase - glyph->ascent;
+          int bw = glyph->pixel_width - 1;
+          int bh = glyph->ascent + glyph->descent - 1;
+          if (bw > 0 && bh > 0)
+            {
+              /* Hollow box: top, bottom, left, right edges (1px each).  */
+              lrg_frame_surface_fill_rect (surf, bx, by, bw, 1, col);
+              lrg_frame_surface_fill_rect (surf, bx, by + bh - 1, bw, 1, col);
+              lrg_frame_surface_fill_rect (surf, bx, by, 1, bh, col);
+              lrg_frame_surface_fill_rect (surf, bx + bw - 1, by, 1, bh, col);
+            }
+        }
+
+      x += glyph->pixel_width;
+    }
+
+  /* s->char2b pointed at our stack buffer; do not leave it dangling.  */
+  s->char2b = NULL;
+}
+
 static void
 lrg_draw_glyph_string (struct glyph_string *s)
 {
@@ -382,7 +488,6 @@ lrg_draw_glyph_string (struct glyph_string *s)
     {
     case CHAR_GLYPH:
     case COMPOSITE_GLYPH:
-    case GLYPHLESS_GLYPH:
       if (s->for_overlaps
           || (s->background_width > 0 && !s->background_filled_p))
         {
@@ -395,6 +500,20 @@ lrg_draw_glyph_string (struct glyph_string *s)
          onto a Cairo context lrg frames do not have.  */
       if (s->font != NULL)
         lrg_font_draw_glyph_string (s, 0, s->nchars, s->x, s->ybase, false);
+      lrg_draw_glyph_string_decorations (s);
+      break;
+
+    case GLYPHLESS_GLYPH:
+      /* Glyphless glyph strings have NO s->char2b (the display engine never
+         allocates it), so they must NOT go through the char-blit path above.
+         lrg_draw_glyphless_glyph_string handles them like pgtk does.  */
+      if (s->for_overlaps
+          || (s->background_width > 0 && !s->background_filled_p))
+        {
+          lrg_draw_glyph_string_bg (s);
+          s->background_filled_p = true;
+        }
+      lrg_draw_glyphless_glyph_string (s);
       lrg_draw_glyph_string_decorations (s);
       break;
 

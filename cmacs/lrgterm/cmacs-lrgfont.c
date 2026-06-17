@@ -146,7 +146,10 @@ lrg_font_draw_glyph_string (struct glyph_string *s, int from, int to, int x,
   g_autoptr(GrlColor) fgc = NULL;
   int i;
 
-  if (surface == NULL || scaled == NULL)
+  /* s->char2b is NULL for glyphless glyph strings: the display engine never
+     allocates it for them.  Those must be drawn by lrg_draw_glyphless_glyph_string,
+     never routed here -- but guard anyway so a stray caller can't NULL-deref.  */
+  if (surface == NULL || scaled == NULL || s->char2b == NULL)
     return 0;
 
   atlas = lrg_frame_glyph_atlas (f);
