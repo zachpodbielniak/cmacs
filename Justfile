@@ -124,9 +124,14 @@ configure *EXTRA:
     echo "==> ./configure $flags $@"
     ./configure $flags "$@"
 
+# clean-stale-lisp runs before build so a re-bootstrap on a mutable host
+# always recompiles bundled Lisp under the current Emacs version, clearing
+# stale version-baked .elc (e.g. the Tramp version-mismatch warning after
+# an upstream version bump).  On a fresh clone there is nothing to delete,
+# so it is a no-op there.
 # Initial setup from a fresh clone: autogen + configure + build.
 [group('build')]
-bootstrap: autogen configure build
+bootstrap: autogen configure clean-stale-lisp build
 
 # Build cmacs (auto-detects parallelism).
 [group('build')]
@@ -226,6 +231,23 @@ clean-eln-all:
     -rm -rf native-lisp
     -rm -rf ~/.config/emacs/.local/cache/eln 2>/dev/null
     -rm -rf ~/.config/emacs/eln-cache 2>/dev/null
+
+# After an upstream merge bumps the version (e.g. 31 -> 32), make's
+# mtime check misses version-baked .elc (no .el mtime changes), leaving a
+# stale tramp-compat.elc that warns "Tramp has been compiled with Emacs
+# X, this is Emacs Y" -- and other bundled Lisp is silently stale too.
+# Order matters: drop native-lisp AND both dumps together so temacs
+# regenerates a matching emacs.pdmp; deleting .eln piecemeal against a
+# live dump poisons src/emacs (see the cmacs-full-lisp-recompile notes).
+# Leaves ~/.config/emacs caches alone (your personal config, not the
+# build tree).  Runs automatically as part of `just bootstrap'.
+# Purge stale version-baked .elc/.eln + pdmp dumps for a clean recompile.
+[group('clean')]
+clean-stale-lisp:
+    @echo "==> Purging stale .elc/.eln + pdmp dumps for a clean recompile"
+    -rm -rf native-lisp
+    -rm -f src/emacs.pdmp src/bootstrap-emacs.pdmp
+    -find lisp -name '*.elc' -delete 2>/dev/null
 
 # Submodule clean.
 [group('clean')]
