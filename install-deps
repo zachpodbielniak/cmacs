@@ -203,7 +203,8 @@ set_packages_debian () {
 	PKGS_VIDEO=(libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
 	            gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
 	            gstreamer1.0-plugins-ugly gstreamer1.0-libav)
-	PKGS_AUDIO=(libpipewire-0.3-dev libpulse-dev cmake g++ pipx espeak-ng)
+	PKGS_AUDIO=(libpipewire-0.3-dev libpulse-dev cmake g++
+	            python3-venv pipx espeak-ng)
 	PKGS_LIBREGNUM=(libgl1-mesa-dev libx11-dev libxrandr-dev
 	                libxcursor-dev libxinerama-dev libxi-dev)
 	# cmacs-cad: OCCT splits into per-module -dev packages on Debian.
@@ -315,6 +316,37 @@ all_packages () {
 
 # ── Install system packages ──────────────────────────────────────────
 
+# apt aborts the whole transaction if *any* named package is unknown in
+# the configured repos --- e.g. a package gated behind the 'universe'
+# component that is not enabled, or one that has not landed in this
+# Ubuntu/Debian release yet.  That single failure would otherwise leave
+# nothing installed (including the packages apt *can* provide, like
+# libcmark-dev).  Partition the list into available vs. unavailable so
+# the available ones still install, and tell the user what to do about
+# the rest.  apt-cache reads the local package index (offline, fast).
+install_debian_packages () {
+	local avail=() missing=() p
+	for p in "$@"; do
+		if apt-cache show "${p}" >/dev/null 2>&1; then
+			avail+=("${p}")
+		else
+			missing+=("${p}")
+		fi
+	done
+	if [[ ${#avail[@]} -gt 0 ]]; then
+		sudo apt-get install -y "${avail[@]}"
+	fi
+	if [[ ${#missing[@]} -gt 0 ]]; then
+		echo ""
+		echo "WARNING: these packages are not in your apt repositories and were skipped:"
+		echo "         ${missing[*]}"
+		echo "         If one lives in 'universe', enable it and re-run:"
+		echo "             sudo add-apt-repository universe && sudo apt-get update"
+		echo "         Otherwise build it from source --- see doc_org/cmacs/build.org"
+		echo "         \"Building on Ubuntu 24.04 / older hosts\"."
+	fi
+}
+
 install_system_deps () {
 	local platform
 	platform="$(detect_platform)"
@@ -345,8 +377,13 @@ install_system_deps () {
 		fi
 	fi
 
-	# shellcheck disable=SC2086
-	${PKG_CMD} ${pkgs}
+	if [[ "${platform}" == "debian" ]]; then
+		# shellcheck disable=SC2086
+		install_debian_packages ${pkgs}
+	else
+		# shellcheck disable=SC2086
+		${PKG_CMD} ${pkgs}
+	fi
 
 	if [[ ${#PKGS_GOWL[@]} -eq 0 ]]; then
 		echo ""
@@ -406,38 +443,56 @@ build_from_source () {
 	# GCC 16 feature-detection workaround.  Letting cmacs's build
 	# drive it keeps the flags in exactly one place.
 
-	# piper: OHF-Voice piper1-GPL is a Python package; the `piper`
-	# console-script is installed by pip.  Skipped if the user already
-	# has piper.
+	# piper: OHF-Voice piper1-GPL is a Python package; the `piper'
+	# console-script provides offline TTS (C-c v s).  It is OPTIONAL ---
+	# a failure here must never abort install-deps, so every step below
+	# is guarded and the block always falls through.
 	#
-	# We prefer `pip install --user` over `pipx` because piper-tts's
-	# scikit-build-core wheel races pipx's metadata-readback step when
-	# pipx uses uv as its backend (auto-detected on systems where uv
-	# is on PATH).  This shows up as
-	#   "Pipx Internal Error: cannot find package 'piper-tts' metadata."
-	# even though the actual wheel install succeeded.  `pip --user`
-	# sidesteps the whole pipx/uv layer.
+	# We install into a DEDICATED VENV rather than `pip install --user'
+	# or pipx because:
+	#   - Debian/Ubuntu 24.04 and recent Fedora ship a PEP 668
+	#     EXTERNALLY-MANAGED marker; `pip install [--user]' against the
+	#     distro interpreter then errors with "externally-managed-
+	#     environment".  A venv is not externally managed, so pip works.
+	#   - pipx races piper-tts's scikit-build-core wheel when its backend
+	#     is uv ("Pipx Internal Error: cannot find package 'piper-tts'
+	#     metadata."), even though the wheel actually installed.
+	# The venv lives under ~/.local/share/cmacs and its `piper' script is
+	# symlinked onto PATH (~/.local/bin) so it is callable like a system
+	# install.  Override the venv location with PIPER_VENV=.
 	#
-	# Use /usr/bin/python3 explicitly when present so we hit the
-	# distro-managed interpreter rather than a brew/conda Python that
-	# may have been rebuilt out from under a cached venv path.
+	# Prefer /usr/bin/python3 so we hit the distro interpreter, not a
+	# brew/conda Python that may have moved out from under a cached venv.
 	if ! command -v piper >/dev/null 2>&1; then
-		echo "    Installing piper-tts (Python package)..."
 		_pyexe=""
 		for cand in /usr/bin/python3 python3 python; do
 			if command -v "$cand" >/dev/null 2>&1; then
 				_pyexe="$cand"; break
 			fi
 		done
-		if [[ -n "$_pyexe" ]] && "$_pyexe" -m pip --version >/dev/null 2>&1; then
-			"$_pyexe" -m pip install --user piper-tts
-		elif command -v pipx >/dev/null 2>&1; then
-			# Last resort.  May fail on the uv-backend metadata race;
-			# see comment above.
-			pipx install --python "${_pyexe:-python3}" piper-tts
+		_piper_venv="${PIPER_VENV:-${HOME}/.local/share/cmacs/piper-venv}"
+		_piper_bindir="${HOME}/.local/bin"
+		if [[ -z "$_pyexe" ]]; then
+			echo "    WARNING: no python3 found; skipping piper-tts (optional TTS)."
+		elif "$_pyexe" -m venv "$_piper_venv"; then
+			echo "    Installing piper-tts into ${_piper_venv}..."
+			"$_piper_venv/bin/pip" install --upgrade pip >/dev/null 2>&1 || true
+			if "$_piper_venv/bin/pip" install piper-tts; then
+				mkdir -p "$_piper_bindir"
+				ln -sf "$_piper_venv/bin/piper" "$_piper_bindir/piper"
+				echo "    piper installed (linked at ${_piper_bindir}/piper)."
+				case ":$PATH:" in
+					*":${_piper_bindir}:"*) ;;
+					*) echo "    NOTE: add ${_piper_bindir} to PATH to run \`piper'." ;;
+				esac
+			else
+				echo "    WARNING: piper-tts install failed (optional --- TTS only); continuing."
+			fi
 		else
-			echo "    WARNING: no pip/pipx found; install piper-tts manually:"
-			echo "             python3 -m pip install --user piper-tts"
+			echo "    WARNING: could not create a venv (install python3-venv?);"
+			echo "             skipping piper-tts (optional TTS).  Manual install:"
+			echo "                 ${_pyexe} -m venv ${_piper_venv}"
+			echo "                 ${_piper_venv}/bin/pip install piper-tts"
 		fi
 	fi
 
