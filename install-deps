@@ -194,9 +194,15 @@ set_packages_debian () {
 	PKGS_TS=(libtree-sitter-dev)
 	PKGS_INTROSPECT=(libdw-dev libelf-dev libdebuginfod-dev
 	                 binutils-dev)
-	PKGS_GLIB=(libglib2.0-dev libgirepository1.0-dev libjson-glib-dev
-	           libsoup-3.0-dev libdex-dev libetpan-dev libpq-dev
-	           libssh2-1-dev libvirt-dev libyaml-dev
+	# libgirepository-2.0-dev: GLib's integrated GIRepository 2.0
+	# (girepository-2.0.pc, <girepository/girepository.h>), used by the
+	# bacon gobject_inspector module and libregnum's GI scripting backend.
+	# Distinct from libgirepository1.0-dev (the legacy 1.0 API).  On Fedora
+	# this header ships inside glib2-devel, so it only needs naming here.
+	# In Ubuntu it lives in the 'universe' component.
+	PKGS_GLIB=(libglib2.0-dev libgirepository1.0-dev libgirepository-2.0-dev
+	           libjson-glib-dev libsoup-3.0-dev libdex-dev libetpan-dev
+	           libpq-dev libssh2-1-dev libvirt-dev libyaml-dev
 	           libsqlite3-dev libcmark-dev)
 	PKGS_GOWL=(libwlroots-dev libwayland-dev wayland-protocols
 	           libinput-dev libxkbcommon-dev libpango1.0-dev libcairo2-dev)
