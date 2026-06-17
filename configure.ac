@@ -874,8 +874,15 @@ if test "$with_cmacs_libregnum" != "no"; then
   # submodule.  System-package mode not supported -- libregnum
   # vendors graylib/raylib internally, so the static archive is
   # the simplest consumption path.
+  # libdex-1: liblibregnum.a's async helpers (lrg-data-loader,
+  # lrg-asset-manager, lrg-save-manager, lrg-net-*) call dex_* directly,
+  # so the whole-archived liblibregnum.a needs -ldex-1 right after it on
+  # the link line.  Listing libdex-1 here routes -ldex-1 into
+  # CMACS_LIBREGNUM_DEPS_LIBS, appended immediately below the archive --
+  # required under ld's --as-needed default (Debian/Ubuntu), where a
+  # -ldex-1 that appears before the archive is dropped as "unneeded".
   PKG_CHECK_MODULES([CMACS_LIBREGNUM_DEPS],
-    [glib-2.0 gobject-2.0 gio-2.0 cairo])
+    [glib-2.0 gobject-2.0 gio-2.0 cairo libdex-1])
   CMACS_LIBREGNUM_CFLAGS="-I\$(abs_top_srcdir)/deps/libregnum/src \
     -I\$(abs_top_srcdir)/deps/libregnum/build/release \
     -I\$(abs_top_srcdir)/deps/libregnum/deps/graylib/src \
