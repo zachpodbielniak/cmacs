@@ -494,6 +494,14 @@ lrg_draw_window_cursor (struct window *w, struct glyph_row *glyph_row,
   if (!lrg_drawing || surf == NULL || !on_p)
     return;
 
+#ifdef HAVE_CMACS_GSURF_LRG
+  /* A gsurf web page fills the window body, so the Emacs cursor over it is just
+     noise (and would otherwise show despite cursor-type nil, since evil's state
+     cursor overrides it).  Suppress it unless cmacs-gsurf-lrg-hide-cursor.  */
+  if (cmacs_gsurf_lrg_hide_cursor_p (w->contents))
+    return;
+#endif
+
   fx = WINDOW_TEXT_TO_FRAME_PIXEL_X (w, x);
   fy = WINDOW_TO_FRAME_PIXEL_Y (w, y);
   h = glyph_row->height;
@@ -1916,7 +1924,11 @@ lrg_route_keys_to_gsurf (struct frame *f, int mods)
 
       if (k == GRL_KEY_ESCAPE)
         {
-          cmacs_gsurf_release_focus ();   /* hand keys back to Emacs */
+          /* Let the modal module clean up first (clear a link-hint overlay,
+             leave INSERT/FOLLOW mode), then unconditionally hand keys back to
+             Emacs -- Escape is always "return to the editor".  */
+          cmacs_gsurf_lrg_handle_key (f, 0xFF1B /* XK_Escape */, 0, mods);
+          cmacs_gsurf_release_focus ();
           continue;
         }
       keysym = lrg_keysym_for (k);

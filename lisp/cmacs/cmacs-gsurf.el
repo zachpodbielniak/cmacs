@@ -609,7 +609,20 @@ Escape returns control to Emacs.
     (user-error "cmacs-gsurf not built; reconfigure with --with-cmacs-gsurf"))
   (buffer-disable-undo)
   (setq-local truncate-lines t)
-  (setq-local cursor-type nil)
+  ;; The window body shows the live page, so the Emacs text cursor over it is
+  ;; just noise.  `cursor-type' nil alone is not enough: evil's per-state cursor
+  ;; overrides it (a hot-pink box flashed over the page), so also nil every evil
+  ;; state cursor buffer-locally.  Honour `cmacs-gsurf-lrg-hide-cursor' (the C
+  ;; toggle, default t; absent in a non-lrg build, where we still hide it).
+  (when (or (not (boundp 'cmacs-gsurf-lrg-hide-cursor))
+            (symbol-value 'cmacs-gsurf-lrg-hide-cursor))
+    (setq-local cursor-type nil)
+    (dolist (sym '(evil-normal-state-cursor evil-insert-state-cursor
+                   evil-visual-state-cursor evil-motion-state-cursor
+                   evil-emacs-state-cursor evil-operator-state-cursor
+                   evil-replace-state-cursor))
+      (when (boundp sym) (set (make-local-variable sym) nil)))
+    (when (fboundp 'evil-refresh-cursor) (evil-refresh-cursor)))
   (setq-local mode-line-format
               '("%e" mode-line-front-space
                 mode-line-buffer-identification
@@ -981,7 +994,16 @@ With a prefix argument, pipe the page HTML instead of the rendered text."
       "-"  #'cmacs-gsurf-zoom-out
       "0"  #'cmacs-gsurf-zoom-reset
       "/"  #'cmacs-gsurf-find-in-page
-      "q"  #'quit-window)))
+      "q"  #'quit-window))
+  ;; The aux map above is still shadowed by evil's OWN global bindings for some
+  ;; keys (notably C-e/C-y = `evil-scroll-line-down'/`-up' in Doom), so the
+  ;; line-scroll keys silently stop working.  Mark cmacs-gsurf-mode-map as an
+  ;; evil *overriding* map: its bindings (incl. the C-e/C-y/C-d/C-u/C-f/C-b set
+  ;; in the keymap above) then reliably win over evil's state maps at
+  ;; mode-entry, with no dependence on caret-mode or keymap-refresh timing.
+  (when (fboundp 'evil-make-overriding-map)
+    (evil-make-overriding-map cmacs-gsurf-mode-map 'normal)
+    (evil-make-overriding-map cmacs-gsurf-mode-map 'motion)))
 
 ;;;; Interactive commands ---------------------------------------------
 
@@ -1216,8 +1238,12 @@ MESSAGE is the raw JSON string {\"channel\":...,\"payload\":...} posted by
 ;; `GsurfInputHandler' module -- those only fire when the page holds GTK
 ;; keyboard focus, which the focus model forbids.
 
-(defcustom cmacs-gsurf-caret-mode-default t
-  "When non-nil, enable `cmacs-gsurf-caret-mode' in new gsurf buffers."
+(defcustom cmacs-gsurf-caret-mode-default nil
+  "When non-nil, enable `cmacs-gsurf-caret-mode' in new gsurf buffers.
+Off by default: the caret draws a hot-pink in-page overlay (see
+`cmacs-gsurf-caret-color') that many find distracting.  Enable it per
+buffer with \\[cmacs-gsurf-caret-mode], or set this to t to get it
+automatically in every gsurf buffer."
   :type 'boolean
   :group 'cmacs-gsurf)
 

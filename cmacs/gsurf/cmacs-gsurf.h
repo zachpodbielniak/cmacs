@@ -194,6 +194,11 @@ extern bool cmacs_gsurf_lrg_handle_key (struct frame *f, int keysym,
    lrgterm to release focus. */
 extern bool cmacs_gsurf_lrg_page_focused_p (struct frame *f);
 
+/* True if BUFFER shows a gsurf-lrg page and the Emacs text cursor should be
+   suppressed over it (honours `cmacs-gsurf-lrg-hide-cursor').  lrgterm's
+   window-cursor draw consults this so the page body carries no Emacs cursor. */
+extern bool cmacs_gsurf_lrg_hide_cursor_p (Lisp_Object buffer);
+
 #endif /* HAVE_CMACS_GSURF_LRG */
 
 /* ── Module manager (cmacs-gsurf-modules.c) ─────────────────────────── */

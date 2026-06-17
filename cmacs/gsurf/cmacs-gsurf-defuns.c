@@ -618,6 +618,17 @@ syms_of_cmacs_gsurf_defuns (void)
   defsubr (&Scmacs_gsurf_load_config_file);
   defsubr (&Scmacs_gsurf_load_config_c_file);
   defsubr (&Scmacs_gsurf_reconfigure_modules);
+
+#ifdef HAVE_CMACS_GSURF_LRG
+  DEFVAR_BOOL ("cmacs-gsurf-lrg-hide-cursor", cmacs_gsurf_lrg_hide_cursor,
+               doc: /* Non-nil to hide the Emacs text cursor over a gsurf web
+page under `emacs --lrg'.
+The window body shows the live page, so the Emacs cursor is just visual
+noise there; it would otherwise still appear despite `cmacs-gsurf-mode'
+setting `cursor-type' to nil, because evil's per-state cursor overrides that.
+Set to nil to keep the normal Emacs cursor over gsurf-lrg buffers.  */);
+  cmacs_gsurf_lrg_hide_cursor = true;
+#endif
 }
 
 #endif /* HAVE_CMACS_GSURF */
