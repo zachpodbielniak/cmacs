@@ -8421,6 +8421,7 @@ fully-featured build matching Fedora defaults, use:
   --with-cmacs-piper \
   --with-cmacs-cintrospect \
   --with-cmacs-libregnum \
+  --with-cmacs-screensaver \
   --with-cmacs-gsurf \
   --with-cmacs-emacsctl \
   --with-cmacs-lrgterm \

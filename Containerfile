@@ -185,6 +185,7 @@ RUN ./autogen.sh \
         --with-cmacs-libregnum \
         --with-cmacs-gnuseye \
         --with-cmacs-cad \
+        --with-cmacs-screensaver \
         --with-cmacs-gsurf \
         --with-cmacs-gsurf-lrg \
         --with-cmacs-emacsctl \
