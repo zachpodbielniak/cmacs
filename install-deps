@@ -120,8 +120,13 @@ set_packages_fedora () {
 			wlroots_pkg="wlroots0.19-devel"
 		fi
 	fi
+	# libxcb-devel + xcb-util-wm-devel provide the xcb/xcb-icccm
+	# pkg-configs gowl's XWayland support needs at build time (else it
+	# silently compiles out); xorg-x11-server-Xwayland is the rootless
+	# X server gowl launches so X11 apps (e.g. raylib/GLFW) get a DISPLAY.
 	PKGS_GOWL=("${wlroots_pkg}" wayland-devel wayland-protocols-devel
-	           libinput-devel libxkbcommon-devel pango-devel cairo-devel)
+	           libinput-devel libxkbcommon-devel pango-devel cairo-devel
+	           libxcb-devel xcb-util-wm-devel xorg-x11-server-Xwayland)
 	# cmacs-video: GStreamer + plugins-{base,good,bad,ugly} + libav.
 	# plugins-bad provides rtspsrc (RTSP + RTSPS); libav gives software
 	# H.264/H.265 fallback when hardware decode is unavailable.
@@ -204,8 +209,11 @@ set_packages_debian () {
 	           libjson-glib-dev libsoup-3.0-dev libdex-dev libetpan-dev
 	           libpq-dev libssh2-1-dev libvirt-dev libyaml-dev
 	           libsqlite3-dev libcmark-dev)
+	# libxcb1-dev + libxcb-icccm4-dev: XWayland build deps (xcb/xcb-icccm);
+	# xwayland: the rootless X server gowl spawns for X11 clients.
 	PKGS_GOWL=(libwlroots-dev libwayland-dev wayland-protocols
-	           libinput-dev libxkbcommon-dev libpango1.0-dev libcairo2-dev)
+	           libinput-dev libxkbcommon-dev libpango1.0-dev libcairo2-dev
+	           libxcb1-dev libxcb-icccm4-dev xwayland)
 	PKGS_VIDEO=(libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
 	            gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
 	            gstreamer1.0-plugins-ugly gstreamer1.0-libav)
@@ -239,7 +247,10 @@ set_packages_arch () {
 	PKGS_GLIB=(glib2 gobject-introspection json-glib libsoup3 libdex
 	           libetpan postgresql-libs libssh2 libvirt libyaml
 	           sqlite cmark)
-	PKGS_GOWL=(wlroots wayland wayland-protocols libinput libxkbcommon pango cairo)
+	# libxcb + xcb-util-wm: XWayland build deps (xcb/xcb-icccm);
+	# xorg-xwayland: the rootless X server gowl spawns for X11 clients.
+	PKGS_GOWL=(wlroots wayland wayland-protocols libinput libxkbcommon pango cairo
+	           libxcb xcb-util-wm xorg-xwayland)
 	PKGS_VIDEO=(gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad
 	            gst-plugins-ugly gst-libav)
 	PKGS_AUDIO=(pipewire libpulse cmake python-pipx espeak-ng)
