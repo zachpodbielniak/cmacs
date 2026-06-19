@@ -691,7 +691,10 @@ transparency persists across frames.
 Compositor-level status bar showing, left to right: a dwm-style *tag
 indicator*, the focused window title, and system widgets (cpu, memory,
 clock, …).  Semi-transparent background so the wallpaper shows through.
-Tiling layout automatically accounts for bar height.
+Tiling layout automatically accounts for bar height.  The bar follows
+the output size: resizing the monitor (or the host window of a nested
+=--gowl= session) rebuilds the bar at the new width so the right-aligned
+widgets stay flush with the right edge.
 
 Under =cmacs-gowl-mode= the bar is enabled automatically when
 =cmacs-gowl-bar-show-tags= is non-nil (the default); set it to nil to
