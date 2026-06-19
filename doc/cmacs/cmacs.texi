@@ -2021,6 +2021,19 @@ bacon> cmacsgi monitor transform WL-1 1   @r{;; rotate 90@textdegree{}}
 bacon> cmacsgi monitor transform WL-1 0   @r{;; back to normal}
 @end example
 
+@subsubsection Compositor: lock + screensaver wallpaper
+
+The @code{gowl} command group covers session lock/unlock and the animated
+libregnum screensaver wallpaper.  (Lock/unlock are exposed over cmacsgi,
+D-Bus, and @command{emacsctl}, but deliberately @emph{not} over MCP.)
+
+@example
+bacon> cmacsgi gowl lock
+bacon> cmacsgi gowl screensaver blackhole-cool
+bacon> cmacsgi gowl screensaver-stop
+bacon> cmacsgi gowl screensaver-configs
+@end example
+
 @subsubsection Persisting Transform (and Other Monitor Settings) via YAML
 
 For a machine where a display always wants the same orientation,

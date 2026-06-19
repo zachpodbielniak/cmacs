@@ -57,6 +57,52 @@ cmd_eval(CmacsApiTransport *transport, gint argc, gchar **argv)
     return rc;
 }
 
+/* gowl SUBCMD --- compositor session control + animated screensaver
+   wallpaper.  Evaluates the corresponding Elisp in the running cmacs.
+   NB: lock/unlock live here (and in D-Bus / emacsctl) but deliberately NOT
+   in the MCP surface. */
+static gint
+cmd_gowl(CmacsApiTransport *transport, gint argc, gchar **argv)
+{
+    const gchar *sub = (argc >= 3) ? argv[2] : "";
+    g_autofree gchar *expr = NULL;
+
+    if (g_strcmp0(sub, "lock") == 0)
+        expr = g_strdup("(gowl-lock)");
+    else if (g_strcmp0(sub, "unlock") == 0)
+        expr = g_strdup("(gowl-unlock)");
+    else if (g_strcmp0(sub, "screensaver") == 0)
+    {
+        if (argc >= 4)
+            expr = g_strdup_printf(
+                "(progn (require 'cmacs-screensaver)"
+                " (cmacs-screensaver-set-wallpaper '%s))", argv[3]);
+        else
+            expr = g_strdup(
+                "(progn (require 'cmacs-screensaver)"
+                " (cmacs-screensaver-set-wallpaper"
+                " (or cmacs-screensaver-wallpaper-config"
+                " cmacs-screensaver-default-config)))");
+    }
+    else if (g_strcmp0(sub, "screensaver-stop") == 0)
+        expr = g_strdup("(progn (require 'cmacs-screensaver)"
+                        " (cmacs-screensaver-stop-wallpaper))");
+    else if (g_strcmp0(sub, "screensaver-configs") == 0)
+        expr = g_strdup("(progn (require 'cmacs-screensaver)"
+                        " (mapconcat (lambda (e) (symbol-name (car e)))"
+                        " cmacs-screensaver-configs \"\\n\"))");
+    else
+    {
+        fprintf(stderr,
+                "cmacsgi gowl: unknown subcommand '%s'\n"
+                "  usage: gowl {lock | unlock | screensaver [CONFIG] |"
+                " screensaver-stop | screensaver-configs}\n", sub);
+        return 1;
+    }
+
+    return cmacs_api_eval_print(transport, expr);
+}
+
 static gint
 cmd_find_file(CmacsApiTransport *transport, gint argc, gchar **argv)
 {
@@ -367,6 +413,11 @@ static const CmacsApiSubcmd subcmds[] = {
     /* ── monitor management ────────────────────────────────────────── */
     { "monitor",      cmd_monitor,
       "monitor SUBCMD [ARGS...]",       "monitor management (list, modes, scale, ...)" },
+
+    /* ── gowl compositor: session lock + screensaver wallpaper ─────── */
+    { "gowl",         cmd_gowl,
+      "gowl {lock|unlock|screensaver [CONFIG]|screensaver-stop|screensaver-configs}",
+      "compositor session lock/unlock + animated screensaver wallpaper" },
 
     /* ── ripgrep ────────────────────────────────────────────────────── */
     { "rg",           cmd_rg,

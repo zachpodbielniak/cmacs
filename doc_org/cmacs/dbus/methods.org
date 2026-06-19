@@ -161,6 +161,9 @@ with proper a{sv} return types.  Until then, parse the JSON.
 | =GowlSetNmaster=             | =(i) -> (s)=                              | Master-window count                        |
 | =GowlViewTags=               | =(u) -> (s)=                              | Visible tag-mask                           |
 | =GowlLock= / =GowlUnlock=    | =-> (s)=                                  | Toggle session lock                        |
+| =SetScreensaverWallpaper=    | =(s) -> (s)=                              | Animated screensaver wallpaper (config name) |
+| =StopScreensaverWallpaper=   | =-> (s)=                                  | Stop the animated wallpaper                |
+| =ListScreensaverConfigs=     | =-> (s)=                                  | List screensaver config names              |
 | =GowlReloadConfig=           | =-> (s)=                                  | Reload =gowl.yaml=                         |
 | =GowlConfigGet=              | =(s) -> (s)=                              | Read a top-level config property           |
 | =GowlFindClient=             | =(ss) -> (s)=                             | pattern, by ("title"/"app-id")             |

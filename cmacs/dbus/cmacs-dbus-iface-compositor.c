@@ -59,6 +59,13 @@ static const gchar *iface_xml =
   "    <arg type='s' name='result' direction='out'/></method>"
   "  <method name='Unlock'>"
   "    <arg type='s' name='result' direction='out'/></method>"
+  "  <method name='SetScreensaverWallpaper'>"
+  "    <arg type='s' name='config' direction='in'/>"
+  "    <arg type='s' name='result' direction='out'/></method>"
+  "  <method name='StopScreensaverWallpaper'>"
+  "    <arg type='s' name='result' direction='out'/></method>"
+  "  <method name='ListScreensaverConfigs'>"
+  "    <arg type='s' name='result' direction='out'/></method>"
   "  <method name='ReloadConfig'>"
   "    <arg type='s' name='result' direction='out'/></method>"
   "  <method name='ConfigGet'>"
@@ -187,6 +194,16 @@ on_method (GDBusConnection *c, const gchar *s, const gchar *o,
     RETURN_STR (cmacs_dispatch_gowl_lock (&err));
   else if (g_strcmp0 (m, "Unlock") == 0)
     RETURN_STR (cmacs_dispatch_gowl_unlock (&err));
+  else if (g_strcmp0 (m, "SetScreensaverWallpaper") == 0)
+    {
+      const gchar *config;
+      g_variant_get (p, "(&s)", &config);
+      RETURN_STR (cmacs_dispatch_screensaver_set_wallpaper (config, &err));
+    }
+  else if (g_strcmp0 (m, "StopScreensaverWallpaper") == 0)
+    RETURN_STR (cmacs_dispatch_screensaver_stop_wallpaper (&err));
+  else if (g_strcmp0 (m, "ListScreensaverConfigs") == 0)
+    RETURN_STR (cmacs_dispatch_screensaver_list_configs (&err));
   else if (g_strcmp0 (m, "ReloadConfig") == 0)
     RETURN_STR (cmacs_dispatch_gowl_reload_config (&err));
   else if (g_strcmp0 (m, "ConfigGet") == 0)

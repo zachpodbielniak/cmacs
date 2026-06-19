@@ -182,6 +182,13 @@ gchar *cmacs_dispatch_gowl_lock (GError **error);
 gchar *cmacs_dispatch_gowl_unlock (GError **error);
 gchar *cmacs_dispatch_gowl_reload_config (GError **error);
 
+/* Animated libregnum screensaver wallpaper.  CONFIG is a config name from
+ * `cmacs-screensaver-configs' (NULL/"" = the configured/default one). */
+gchar *cmacs_dispatch_screensaver_set_wallpaper (const gchar *config,
+                                                 GError **error);
+gchar *cmacs_dispatch_screensaver_stop_wallpaper (GError **error);
+gchar *cmacs_dispatch_screensaver_list_configs (GError **error);
+
 /* Get config property by name. */
 gchar *cmacs_dispatch_gowl_config_get (const gchar *property,
                                         GError **error);

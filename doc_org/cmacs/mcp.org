@@ -188,8 +188,9 @@ Available when CMacs is built with =--with-cmacs-gowl=.
 | =gowl_list_keybinds=          | List compositor keybindings                            |
 | =gowl_find_client=            | Find a client by title or app-id                       |
 | =gowl_reload_config=          | Reload the compositor configuration                    |
-| =gowl_lock=                   | Lock the session                                       |
-| =gowl_unlock=                 | Unlock the session                                     |
+| =screensaver_set_wallpaper=   | Set the animated screensaver wallpaper (config name)   |
+| =screensaver_stop_wallpaper=  | Stop the animated wallpaper (restore the static one)   |
+| =screensaver_list_configs=    | List the available screensaver config names            |
 | =gowl_focus_client=           | Focus the client matching a pattern                    |
 | =gowl_close_client=           | Close the client matching a pattern                    |
 | =gowl_set_client_geometry=    | Move and resize a client in one call                   |
@@ -197,6 +198,10 @@ Available when CMacs is built with =--with-cmacs-gowl=.
 | =gowl_workspace_list=         | List workspaces                                        |
 | =gowl_workspace_switch=       | Switch to a workspace by id                            |
 | =gowl_screenshot=             | Capture the desktop or a client as a PNG image          |
+
+Note: session *lock* / *unlock* are deliberately **not** exposed as MCP tools
+(an agent should not be able to lock you out or unlock your screen).  They
+remain available over D-Bus, =emacsctl=, and =cmacsgi=.
 
 ** cad --- Parametric CAD (optional)
 

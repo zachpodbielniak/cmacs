@@ -142,22 +142,41 @@ handle_gowl_reload_config (McpServer *s, const gchar *n,
   return gowl_result (cmacs_dispatch_gowl_reload_config (&error), error);
 }
 
+/* NOTE: gowl_lock / gowl_unlock are intentionally NOT exposed as MCP tools --
+ * an AI agent should not be able to lock or unlock the session screen.  They
+ * remain available over D-Bus, emacsctl, and cmacsgi. */
+
 static McpToolResult *
-handle_gowl_lock (McpServer *s, const gchar *n,
-                   JsonObject *a, gpointer u)
+handle_screensaver_set_wallpaper (McpServer *s, const gchar *n,
+                                  JsonObject *a, gpointer u)
 {
   g_autoptr (GError) error = NULL;
-  (void) s; (void) n; (void) a; (void) u;
-  return gowl_result (cmacs_dispatch_gowl_lock (&error), error);
+  const gchar *config = NULL;
+  (void) s; (void) n; (void) u;
+  if (a != NULL && json_object_has_member (a, "config"))
+    config = json_object_get_string_member (a, "config");
+  return gowl_result (
+    cmacs_dispatch_screensaver_set_wallpaper (config, &error), error);
 }
 
 static McpToolResult *
-handle_gowl_unlock (McpServer *s, const gchar *n,
-                     JsonObject *a, gpointer u)
+handle_screensaver_stop_wallpaper (McpServer *s, const gchar *n,
+                                   JsonObject *a, gpointer u)
 {
   g_autoptr (GError) error = NULL;
   (void) s; (void) n; (void) a; (void) u;
-  return gowl_result (cmacs_dispatch_gowl_unlock (&error), error);
+  return gowl_result (
+    cmacs_dispatch_screensaver_stop_wallpaper (&error), error);
+}
+
+static McpToolResult *
+handle_screensaver_list_configs (McpServer *s, const gchar *n,
+                                 JsonObject *a, gpointer u)
+{
+  g_autoptr (GError) error = NULL;
+  (void) s; (void) n; (void) a; (void) u;
+  return gowl_result (
+    cmacs_dispatch_screensaver_list_configs (&error), error);
 }
 
 static McpToolResult *
@@ -437,14 +456,33 @@ cmacs_mcp_tools_gowl_register (McpServer *server)
   mcp_server_add_tool (server, tool, handle_gowl_reload_config, NULL, NULL);
   g_object_unref (tool);
 
-  tool = mcp_tool_new ("gowl_lock",
-    "Lock the compositor screen.");
-  mcp_server_add_tool (server, tool, handle_gowl_lock, NULL, NULL);
+  /* gowl_lock / gowl_unlock are deliberately omitted -- locking the screen
+   * is not an action an AI agent should take (available via D-Bus / emacsctl
+   * / cmacsgi instead). */
+
+  tool = mcp_tool_new ("screensaver_set_wallpaper",
+    "Set the animated libregnum screensaver wallpaper to a named config "
+    "from cmacs-screensaver-configs (omit `config' for the default).");
+  schema = cmacs_mcp_schema_from_string (
+    "{\"type\":\"object\",\"properties\":{"
+    "\"config\":{\"type\":\"string\",\"description\":"
+    "\"Config name from cmacs-screensaver-configs (e.g. blackhole-cool)\"}"
+    "}}");
+  mcp_tool_set_input_schema (tool, schema);
+  mcp_server_add_tool (server, tool, handle_screensaver_set_wallpaper,
+                       NULL, NULL);
   g_object_unref (tool);
 
-  tool = mcp_tool_new ("gowl_unlock",
-    "Unlock the compositor screen.");
-  mcp_server_add_tool (server, tool, handle_gowl_unlock, NULL, NULL);
+  tool = mcp_tool_new ("screensaver_stop_wallpaper",
+    "Stop the animated screensaver wallpaper, restoring the static one.");
+  mcp_server_add_tool (server, tool, handle_screensaver_stop_wallpaper,
+                       NULL, NULL);
+  g_object_unref (tool);
+
+  tool = mcp_tool_new ("screensaver_list_configs",
+    "List the available screensaver config names (one per line).");
+  mcp_server_add_tool (server, tool, handle_screensaver_list_configs,
+                       NULL, NULL);
   g_object_unref (tool);
 
   tool = mcp_tool_new ("gowl_set_monitor_transform",

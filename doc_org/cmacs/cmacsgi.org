@@ -930,6 +930,31 @@ Disable a monitor.
 cmacsgi monitor disable NAME
 #+end_example
 
+Group: =gowl=
+
+Compositor session control and the animated screensaver wallpaper (=--gowl=
+mode).  Unlike the MCP surface, =cmacsgi= *does* expose lock/unlock.
+
+** gowl lock / gowl unlock
+
+Lock or unlock the session screen (PAM-backed; see the Gowl chapter).
+
+#+begin_example
+bacon> cmacsgi gowl lock
+bacon> cmacsgi gowl unlock
+#+end_example
+
+** gowl screensaver [CONFIG]
+
+Set the animated libregnum screensaver as the wallpaper, using a named config
+from =cmacs-screensaver-configs= (omit CONFIG for the configured default).
+
+#+begin_example
+bacon> cmacsgi gowl screensaver blackhole-cool
+bacon> cmacsgi gowl screensaver-stop          # restore the static wallpaper
+bacon> cmacsgi gowl screensaver-configs       # list config names
+#+end_example
+
 * GObject Introspection Commands
 
 Call GI functions directly from the shell.

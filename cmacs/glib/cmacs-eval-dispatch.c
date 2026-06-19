@@ -1274,6 +1274,69 @@ cmacs_dispatch_gowl_set_monitor_transform (const gchar *name, gint xform,
   return g_strdup ("t");
 }
 
+/* ---- screensaver (animated libregnum wallpaper) ----------------------- */
+
+/* TRUE iff NAME is a safe screensaver config symbol (kebab-case), so it can be
+ * interpolated into an elisp form without injection risk. */
+static gboolean
+screensaver_config_name_ok (const gchar *name)
+{
+  gsize i;
+
+  if (name == NULL || name[0] == '\0')
+    return FALSE;
+  for (i = 0; name[i] != '\0'; i++)
+    if (!g_ascii_isalnum (name[i]) && name[i] != '-' && name[i] != '_')
+      return FALSE;
+  return TRUE;
+}
+
+gchar *
+cmacs_dispatch_screensaver_set_wallpaper (const gchar *config, GError **error)
+{
+  g_autofree gchar *expr = NULL;
+
+  GOWL_DISPATCH_CHECK ();
+
+  if (config != NULL && config[0] != '\0')
+    {
+      if (!screensaver_config_name_ok (config))
+        {
+          g_set_error (error, CMACS_DISPATCH_ERROR_DOMAIN, 1,
+                       "invalid screensaver config name: %s", config);
+          return NULL;
+        }
+      expr = g_strdup_printf (
+        "(progn (require 'cmacs-screensaver) "
+        "(cmacs-screensaver-set-wallpaper '%s) \"t\")", config);
+    }
+  else
+    expr = g_strdup (
+      "(progn (require 'cmacs-screensaver) "
+      "(cmacs-screensaver-set-wallpaper "
+      "(or cmacs-screensaver-wallpaper-config "
+      "cmacs-screensaver-default-config)) \"t\")");
+  return cmacs_dispatch_eval_string (expr, error);
+}
+
+gchar *
+cmacs_dispatch_screensaver_stop_wallpaper (GError **error)
+{
+  GOWL_DISPATCH_CHECK ();
+  return cmacs_dispatch_eval_string (
+    "(progn (require 'cmacs-screensaver) "
+    "(cmacs-screensaver-stop-wallpaper) \"t\")", error);
+}
+
+gchar *
+cmacs_dispatch_screensaver_list_configs (GError **error)
+{
+  return cmacs_dispatch_eval_string (
+    "(progn (require 'cmacs-screensaver) "
+    "(mapconcat (lambda (e) (symbol-name (car e))) "
+    "cmacs-screensaver-configs \"\\n\"))", error);
+}
+
 #endif /* HAVE_CMACS_GOWL */
 
 #endif /* HAVE_CMACS_GLIB */
