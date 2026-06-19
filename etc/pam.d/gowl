@@ -1,0 +1,18 @@
+#%PAM-1.0
+# PAM configuration for the cmacs "gowl" Wayland screen locker.
+#
+# The gowl `screenlock' module calls pam_authenticate() and
+# pam_acct_mgmt() with the service name "gowl" to verify the user's
+# password before unlocking the session.  Without this file PAM falls
+# back to "other" (usually deny-all), so unlocking would never succeed
+# and you could lock yourself out.
+#
+# This delegates to the system auth stack (Fedora / RHEL / Arch).  On
+# Debian / Ubuntu replace the two includes with:
+#     auth     include common-auth
+#     account  include common-account
+#
+# Installed to /etc/pam.d/gowl by `make install' (or, on its own,
+# `sudo make install-cmacs-pam').
+auth     include system-auth
+account  include system-auth

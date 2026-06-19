@@ -4204,20 +4204,156 @@ DEFUN ("gowl-list-dropdowns", Fgowl_list_dropdowns, Sgowl_list_dropdowns,
  * SESSION MANAGEMENT
  * ══════════════════════════════════════════════════════════════════════ */
 
+/* Resolve a PAM service that actually exists in /etc/pam.d so the
+   screenlock can authenticate the unlock.  Prefer the cmacs-installed
+   "gowl" profile, then the common system stacks.  Returns a static
+   string, or NULL when none is present -- in which case we must refuse
+   to lock rather than trap the user on an unopenable screen. */
+static const char *
+cmacs_gowl_resolve_pam_service (void)
+{
+  static const char *const candidates[] =
+    { "gowl", "system-auth", "login", NULL };
+  int i;
+
+  for (i = 0; candidates[i] != NULL; i++)
+    {
+      g_autofree gchar *path =
+        g_strconcat ("/etc/pam.d/", candidates[i], NULL);
+      if (g_file_test (path, G_FILE_TEST_EXISTS))
+        return candidates[i];
+    }
+  return NULL;
+}
+
+/* Ensure the `screenlock' lock-handler module is loaded and active.
+   Returns the module, or signals `gowl-error' -- so callers never
+   engage a lock with no handler to draw the prompt / take the password.
+   Startup is dispatched only on the first load. */
+static GowlModule *
+cmacs_gowl_ensure_screenlock (GowlModuleManager *mgr)
+{
+  GowlModule *mod;
+
+  mod = gowl_module_manager_find_module (mgr, "screenlock");
+  if (mod != NULL)
+    {
+      if (!gowl_module_get_is_active (mod))
+        gowl_module_activate (mod);
+      return mod;
+    }
+
+  {
+    g_autofree gchar *so_path = cmacs_gowl_find_module ("screenlock");
+    g_autoptr (GError) err = NULL;
+
+    if (so_path == NULL)
+      xsignal1 (Qgowl_error,
+                build_string ("Cannot lock: screenlock module not found"));
+    if (!gowl_module_manager_load_module (mgr, so_path, &err))
+      xsignal1 (Qgowl_error, build_string (err->message));
+  }
+
+  mod = gowl_module_manager_find_module (mgr, "screenlock");
+  if (mod == NULL || !GOWL_IS_LOCK_HANDLER (mod))
+    xsignal1 (Qgowl_error,
+              build_string ("Cannot lock: no lock handler available"));
+
+  gowl_module_activate (mod);
+  if (GOWL_IS_STARTUP_HANDLER (mod))
+    gowl_startup_handler_on_startup (GOWL_STARTUP_HANDLER (mod),
+                                     cmacs_gowl_compositor);
+  return mod;
+}
+
 DEFUN ("gowl-lock", Fgowl_lock, Sgowl_lock, 0, 0, 0,
-       doc: /* Lock the session. */)
+       doc: /* Lock the session, showing the screenlock password prompt.
+
+Loads and activates the `screenlock' module if needed, points it at a
+working PAM service, then engages the lock through the lock handler so a
+password prompt is drawn.  Unlock with your account password (or
+`M-x gowl-unlock' as an administrative override).
+
+Rather than leaving you on a blank, unopenable screen, this signals
+`gowl-error' when no lock handler can be activated or no PAM service is
+found in /etc/pam.d.  In the latter case install the profile with
+`sudo make install-cmacs-pam' (or `sudo make install').  */)
   (void)
 {
+  GowlModuleManager *mgr;
+  const char *pam_service;
+  GHashTable *inner, *outer;
+
   GOWL_CHECK_RUNNING ();
-  gowl_compositor_set_locked (cmacs_gowl_compositor, TRUE);
+
+  if (gowl_compositor_is_locked (cmacs_gowl_compositor))
+    return Qt;
+
+  mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
+  if (mgr == NULL)
+    error ("No module manager");
+
+  /* A working PAM service is required, or the lock could never open. */
+  pam_service = cmacs_gowl_resolve_pam_service ();
+  if (pam_service == NULL)
+    xsignal1 (Qgowl_error,
+              build_string ("Refusing to lock: no PAM service in /etc/pam.d"
+                            " (install one: `sudo make install-cmacs-pam')"));
+
+  cmacs_gowl_ensure_screenlock (mgr);
+
+  /* Point the screenlock at the resolved service, then engage the lock
+     via the handler (draws the password UI; key input is routed to it
+     by the compositor's locked-key path). */
+  inner = g_hash_table_new (g_str_hash, g_str_equal);
+  g_hash_table_insert (inner, (gpointer) "pam-service",
+                       (gpointer) pam_service);
+  outer = g_hash_table_new (g_str_hash, g_str_equal);
+  g_hash_table_insert (outer, (gpointer) "screenlock", inner);
+
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  gowl_module_manager_configure_all (mgr, outer);
+  gowl_module_manager_dispatch_lock (mgr, (gpointer) cmacs_gowl_compositor);
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+
+  g_hash_table_unref (outer);
+  g_hash_table_unref (inner);
+
+  /* Never report success on a half-locked state. */
+  if (!gowl_compositor_is_locked (cmacs_gowl_compositor))
+    xsignal1 (Qgowl_error,
+              build_string ("Lock handler failed to engage the session"));
+
   return Qt;
 }
 
 DEFUN ("gowl-unlock", Fgowl_unlock, Sgowl_unlock, 0, 0, 0,
-       doc: /* Unlock the session. */)
+       doc: /* Unlock the session (administrative override; no password).
+
+Tears down the screenlock surfaces via the lock handler when one is
+active, then clears the compositor lock state.  Useful as an escape
+hatch while testing.  */)
   (void)
 {
+  GowlModuleManager *mgr;
+  GowlModule *mod;
+
   GOWL_CHECK_RUNNING ();
+
+  mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
+  mod = (mgr != NULL)
+        ? gowl_module_manager_find_module (mgr, "screenlock") : NULL;
+
+  if (mod != NULL && GOWL_IS_LOCK_HANDLER (mod)
+      && gowl_module_get_is_active (mod))
+    {
+      pthread_mutex_lock (&cmacs_gowl_mutex);
+      gowl_module_manager_dispatch_unlock (mgr,
+                                           (gpointer) cmacs_gowl_compositor);
+      pthread_mutex_unlock (&cmacs_gowl_mutex);
+    }
+
+  /* Belt and suspenders: ensure the compositor lock state is cleared. */
   gowl_compositor_set_locked (cmacs_gowl_compositor, FALSE);
   return Qt;
 }

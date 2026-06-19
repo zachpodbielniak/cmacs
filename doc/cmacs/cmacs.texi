@@ -3042,17 +3042,35 @@ Return the current gap values as an alist.
 @cindex screen lock
 
 The screenlock module provides full-screen session locking with PAM
-authentication.  @code{gowl-lock} and @code{gowl-locked-p} are
-available as C primitives; use @code{gowl-configure-screenlock} to
-set colors, font, PAM service, and auto-lock timeout.
+authentication.  @code{M-x gowl-lock} is the simplest entry point: it
+loads and activates the screenlock module on demand, points it at a
+working PAM service, and engages the lock so the password prompt is
+drawn.  Use @code{gowl-configure-screenlock} to set colors, font, PAM
+service, and auto-lock timeout; @code{gowl-locked-p} queries state and
+@code{gowl-unlock} force-unlocks (administrative override, no password).
 
 @example
+(gowl-lock)     ; load screenlock if needed, then lock
+;; or, to customise first:
 (gowl-enable-module "screenlock")
 (gowl-configure-screenlock
   '(("pam-service" . "gowl")
     ("auto-lock-timeout" . "300")
     ("bg-color" . "#1e1e2e")))
 @end example
+
+@strong{PAM is required to unlock.}  @code{gowl-lock} refuses to engage
+(signalling @code{gowl-error}) unless a usable service exists under
+@file{/etc/pam.d} --- it never drops you onto a blank, unopenable
+screen.  It looks for @file{/etc/pam.d/gowl} first, then falls back to
+@code{system-auth} and @code{login}.  Install the bundled profile with
+@samp{sudo make install-cmacs-pam} (it also runs as part of
+@samp{sudo make install}).
+
+@strong{Embedded caveat:} the lock owns gowl's Wayland seat, so in a
+@emph{nested} @option{--gowl} test session the host Emacs frame is not a
+gowl client.  Test the locker in a real gowl session (or the standalone
+@command{gowl} binary) for the full effect.
 
 @subsection Scratchpad
 @cindex scratchpad

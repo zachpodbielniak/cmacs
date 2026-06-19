@@ -189,6 +189,9 @@ src/gl-stamp
 # Object files and debugging.
 *.a
 *.d
+# CMACS: the *.d rule above also matches the etc/pam.d/ directory; keep the
+# bundled gowl screen-locker PAM profile tracked.
+!etc/pam.d/
 *.dSYM/
 *.dll
 *.core

@@ -1522,6 +1522,40 @@ install-cmacs-dbus-service:
 uninstall-cmacs-dbus-service:
 	rm -f "$(DESTDIR)$(dbusservicedir)/org.cmacs.Editor.service"
 
+## CMacs gowl screen-locker PAM profile.  The gowl `screenlock' module
+## authenticates unlocks against PAM service "gowl"; with no
+## /etc/pam.d/gowl, PAM falls back to "other" (deny) and you could lock
+## yourself out.  PAM only reads /etc/pam.d, so this installs to an
+## absolute path (honouring DESTDIR for packaging).  Wired into
+## `make install' below via a prerequisite-only rule; the recipe
+## self-guards: it skips when /etc/pam.d is not writable (a non-root
+## prefix install) and never clobbers an existing profile.
+
+cmacs_pamdir = /etc/pam.d
+
+.PHONY: install-cmacs-pam uninstall-cmacs-pam
+
+install-cmacs-pam:
+	@src=${srcdir}/etc/pam.d/gowl; dst="$(DESTDIR)$(cmacs_pamdir)/gowl"; \
+	if [ ! -f "$$src" ]; then :; \
+	elif [ -e "$$dst" ]; then \
+	  echo "cmacs: PAM profile $$dst already present, leaving it"; \
+	elif [ -n "$(DESTDIR)" ] || [ "`id -u`" = 0 ] || [ -w "$(cmacs_pamdir)" ]; then \
+	  $(MKDIR_P) "$(DESTDIR)$(cmacs_pamdir)" && \
+	  $(INSTALL_DATA) "$$src" "$$dst" && \
+	  echo "cmacs: installed gowl PAM profile -> $$dst"; \
+	else \
+	  echo "cmacs: skipped $$dst (need root); run: sudo make install-cmacs-pam"; \
+	fi
+
+uninstall-cmacs-pam:
+	rm -f "$(DESTDIR)$(cmacs_pamdir)/gowl"
+
+## CMACS: install the gowl PAM profile as part of `make install'.  A
+## prerequisite-only rule (no recipe) so it extends the dependency list
+## without editing upstream Emacs's `install:' rule.
+install: install-cmacs-pam
+
 ## System-wide install — stages a CUPS backend in /usr/lib/cups/backend/.
 ## Prompts sudo internally.  On immutable systems (OSTree / Silverblue /
 ## NixOS), the script detects the read-only /usr and redirects to the

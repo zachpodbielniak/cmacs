@@ -802,7 +802,19 @@ Configurable inner and outer gaps between tiled windows.
 
 ** Screenlock
 
-Full-screen session locking with PAM authentication.
+Full-screen session locking with PAM authentication.  Each monitor
+gets a lock surface on the =BLOCK= scene layer; the password is verified
+against PAM before the session unlocks.
+
+=M-x gowl-lock= is the simplest entry point — it *loads and activates
+the screenlock module on demand*, points it at a working PAM service,
+and engages the lock so the password prompt is drawn:
+
+#+begin_src emacs-lisp
+(gowl-lock)     ;; load screenlock if needed, then lock
+#+end_src
+
+To customise first (optional), enable + configure it explicitly:
 
 #+begin_src emacs-lisp
 (gowl-enable-module "screenlock")
@@ -812,6 +824,24 @@ Full-screen session locking with PAM authentication.
     ("bg-color" . "#1e1e2e")))
 (gowl-lock)
 #+end_src
+
+*PAM is required to unlock.*  =gowl-lock= refuses to engage (signalling
+=gowl-error=) unless a usable service exists under =/etc/pam.d= — it
+never drops you onto a blank, unopenable screen.  It looks for
+=/etc/pam.d/gowl= first, then falls back to =system-auth= and =login=.
+Install the bundled profile system-wide with:
+
+#+begin_example
+sudo make install-cmacs-pam      # or it runs as part of `sudo make install'
+#+end_example
+
+=M-x gowl-unlock= force-unlocks (administrative override, no password) —
+useful as an escape hatch while testing.
+
+*Embedded caveat:* the lock owns gowl's Wayland seat, so it locks the
+compositor and its clients.  In a *nested* =--gowl= test session the
+host Emacs frame is not a gowl client, so test the locker in a real
+gowl session (or the standalone =gowl= binary) for the full effect.
 
 ** Scratchpad
 
