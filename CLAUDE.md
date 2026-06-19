@@ -40,9 +40,13 @@ just run                  # run it
 ```
 
 cmacs features are all `--with-cmacs-*` / `--enable-cmacs-*`, auto-detect system
-packages, and fall back to bundled `deps/` submodules. `just run` is preferred over
-`src/emacs`: it exports `CMACS_MODULE_DIR` (bacon `cmacsgi`) and `CMACS_GSURF_MODULE_DIR`
-(gsurf modules). Bare `src/emacs` is fine for plain editing.
+packages, and fall back to bundled `deps/` submodules. `just run` (and `just gowl`)
+are preferred over `src/emacs`: they export `CMACS_MODULE_DIR` (bacon `cmacsgi`),
+`CMACS_GSURF_MODULE_DIR` (gsurf modules) and `CMACS_GOWL_MODULE_DIR`
+(`deps/gowl/build/release/modules`) so local testing always loads the freshly-built
+modules instead of any system-installed copy. Bare `src/emacs` is fine for plain
+editing (it still finds in-tree gowl modules via the relative dev-build path, but
+the env var is the explicit override — see `cmacs_gowl_find_module`).
 
 **Rebuild rules**
 - After C source in `cmacs/`: `make -j$(nproc)`.

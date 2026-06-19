@@ -544,6 +544,22 @@ shared-object plugins.  When running with =--gowl=, call
 pre-starts the compositor early, but =gowl-start= is still needed to
 load bundled modules and initialize the Elisp integration.
 
+** Where modules are loaded from
+
+A module =.so= is resolved by =cmacs_gowl_find_module= in this order:
+
+1. =$CMACS_GOWL_MODULE_DIR/<name>.so= — an explicit override directory;
+2. the in-tree dev build,
+   =<exe-dir>/../deps/gowl/build/release/modules/<name>.so=;
+3. the installed location, =PATH_EXEC/gowl-modules/<name>.so=.
+
+=just run= and =just gowl= set =CMACS_GOWL_MODULE_DIR= to
+=deps/gowl/build/release/modules= so local testing always loads the
+freshly-built modules, never a system-installed copy.  Running
+=src/emacs --gowl= directly still finds the in-tree modules via step 2,
+but set =CMACS_GOWL_MODULE_DIR= yourself to be explicit (e.g. to test a
+debug build under =build/debug/modules=).
+
 #+begin_src emacs-lisp
 (when (and (fboundp 'gowl-running-p) (gowl-running-p))
   (gowl-start)

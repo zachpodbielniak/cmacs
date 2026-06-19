@@ -23,6 +23,18 @@ jobs        := `nproc`
 # option parser rejects it with "ERROR: invalid option").
 gowl_dir    := "deps/gowl"
 
+# Local-build launch environment shared by every "run cmacs" recipe.
+# Points cmacs at the freshly-built bacon/gsurf/gowl modules (and the
+# libregnum/graylib typelibs) so local testing never loads a
+# system-installed copy.  CMACS_GOWL_MODULE_DIR wins over both the
+# in-tree default and any installed gowl modules (see
+# cmacs_gowl_find_module in cmacs/gowl/cmacs-gowl.c).
+local_env := \
+    "CMACS_MODULE_DIR=" + justfile_directory() + "/cmacs/bacon/modules " + \
+    "CMACS_GSURF_MODULE_DIR=" + justfile_directory() + "/cmacs/gsurf/modules " + \
+    "CMACS_GOWL_MODULE_DIR=" + justfile_directory() + "/deps/gowl/build/release/modules " + \
+    "GI_TYPELIB_PATH=" + justfile_directory() + "/deps/libregnum/build/release/gir:" + justfile_directory() + "/deps/libregnum/deps/graylib/build/gir${GI_TYPELIB_PATH:+:$GI_TYPELIB_PATH}"
+
 # Android build settings.  Override per-invocation:
 #   just android_image_tag=foo:dev android-build
 android_image_tag  := "cmacs-android:latest"
@@ -274,10 +286,7 @@ clean-all: clean clean-eln-all clean-gowl
 # dlopening a second copy (which would re-register the GTypes and crash).
 [group('run')]
 run *ARGS:
-    CMACS_MODULE_DIR={{ justfile_directory() }}/cmacs/bacon/modules \
-    CMACS_GSURF_MODULE_DIR={{ justfile_directory() }}/cmacs/gsurf/modules \
-    GI_TYPELIB_PATH="{{ justfile_directory() }}/deps/libregnum/build/release/gir:{{ justfile_directory() }}/deps/libregnum/deps/graylib/build/gir${GI_TYPELIB_PATH:+:$GI_TYPELIB_PATH}" \
-        {{ emacs }} {{ ARGS }}
+    {{ local_env }} {{ emacs }} {{ ARGS }}
 
 # Control a running cmacs from the CLI (kubectl-style).
 [group('run')]
@@ -285,21 +294,23 @@ run *ARGS:
 ctl *ARGS:
     @./src/emacsctl "$@"
 
-# Run cmacs as a Wayland compositor (`--gowl`).
+# Run cmacs as a Wayland compositor (`--gowl`).  Same local-build env as
+# `run`, so the in-tree gowl modules (bar, wallpaper, …) are used, never
+# a system-installed copy.
 [group('run')]
 gowl *ARGS:
-    {{ emacs }} --gowl {{ ARGS }}
+    {{ local_env }} {{ emacs }} --gowl {{ ARGS }}
 
 # Run cmacs --gowl under valgrind (slow, but catches use-after-free).
 [group('run')]
 gowl-valgrind *ARGS:
-    valgrind --suppressions=etc/emacs.supp --leak-check=no \
+    {{ local_env }} valgrind --suppressions=etc/emacs.supp --leak-check=no \
         {{ emacs }} --gowl {{ ARGS }}
 
 # Run cmacs --gowl under gdb (drops to (gdb) prompt; type `r` to start).
 [group('run')]
 gowl-gdb *ARGS:
-    gdb --args {{ emacs }} --gowl {{ ARGS }}
+    {{ local_env }} gdb --args {{ emacs }} --gowl {{ ARGS }}
 
 # Quick batch eval, e.g. `just batch '(princ (emacs-version))'`.
 [group('run')]

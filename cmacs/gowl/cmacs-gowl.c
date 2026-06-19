@@ -1143,16 +1143,32 @@ cmacs_gowl_key_intercept (GowlCompositor *comp,
 
 /* ── Module discovery ──────────────────────────────────────────────── */
 
-/* Search for a gowl module .so by name.  Tries the in-tree dev build
-   path first, then the installed libexec location (PATH_EXEC from
-   epaths.h, i.e. archlibdir).  Returns a newly allocated path or NULL
-   if not found. */
+/* Search for a gowl module .so by name.  Resolution order:
+     0. $CMACS_GOWL_MODULE_DIR/<name>.so  (explicit override, e.g. set
+        by `just run`/`just gowl` so local testing always uses the
+        freshly-built modules instead of any system-installed copy);
+     1. the in-tree dev build (<exe-dir>/../deps/gowl/build/release/...);
+     2. the installed libexec location (PATH_EXEC from epaths.h).
+   Returns a newly allocated path or NULL if not found. */
 static gchar *
 cmacs_gowl_find_module (const gchar *name)
 {
   g_autofree gchar *so_name = g_strdup_printf ("%s.so", name);
   g_autofree gchar *exe_path = NULL;
   g_autofree gchar *dev_path = NULL;
+  const gchar *env_dir;
+
+  /* 0. Explicit override: a single directory of module .so files.
+     Wins over both the in-tree and installed locations so a local
+     build is never shadowed by a system-installed gowl. */
+  env_dir = g_getenv ("CMACS_GOWL_MODULE_DIR");
+  if (env_dir != NULL && env_dir[0] != '\0')
+    {
+      g_autofree gchar *env_path =
+        g_build_filename (env_dir, so_name, NULL);
+      if (g_file_test (env_path, G_FILE_TEST_EXISTS))
+        return g_steal_pointer (&env_path);
+    }
 
   /* 1. In-tree: <exe-dir>/../deps/gowl/build/release/modules/<name>.so */
   exe_path = g_file_read_link ("/proc/self/exe", NULL);

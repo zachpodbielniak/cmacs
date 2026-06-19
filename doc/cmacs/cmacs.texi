@@ -2575,6 +2575,14 @@ pre-starts the compositor early (before Elisp loads), but
 @code{gowl-start} is still needed to load bundled modules and
 initialize the Elisp integration layer.
 
+A module @file{.so} is resolved (by @code{cmacs_gowl_find_module}) from
+@env{$CMACS_GOWL_MODULE_DIR} first, then the in-tree dev build
+(@file{<exe-dir>/../deps/gowl/build/release/modules}), then the
+installed @file{PATH_EXEC/gowl-modules}.  @command{just run} and
+@command{just gowl} set @env{CMACS_GOWL_MODULE_DIR} to the in-tree
+@file{deps/gowl/build/release/modules} so local testing always loads
+the freshly-built modules rather than a system-installed copy.
+
 @example
 (when (and (fboundp 'gowl-running-p) (gowl-running-p))
   (gowl-start)
