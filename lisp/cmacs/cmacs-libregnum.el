@@ -578,7 +578,7 @@ prefix (e.g. \"Gtk\", \"Lrg\") to scope the graph."
 ;; owns the keymap (the game's hidden window never sees real key events).
 
 (declare-function cmacs-libregnum-load-game "cmacs-libregnum-defuns.c"
-                  (buffer so-path))
+                  (buffer so-path &optional argv))
 (declare-function cmacs-libregnum-unload-game "cmacs-libregnum-defuns.c"
                   (buffer))
 (declare-function cmacs-libregnum-game-loaded-p "cmacs-libregnum-defuns.c"
@@ -740,10 +740,13 @@ management (C-w v, C-w s, C-w h/j/k/l, ...) still works while playing.
     (cmacs-libregnum-game--release-all)))
 
 ;;;###autoload
-(defun cmacs-libregnum-play (module)
+(defun cmacs-libregnum-play (module &optional argv)
   "Open a buffer hosting the libregnum game MODULE (a built game `.so').
 The buffer renders the game and forwards keyboard and mouse input to it.
-MODULE is a shared object built with `LRG_DEFINE_GAME_MODULE'."
+MODULE is a shared object built with `LRG_DEFINE_GAME_MODULE'.
+
+Optional ARGV is a list of strings passed verbatim to the module as a
+CLI-style argument vector (e.g. '(\"--profile\" \"warm\"))."
   (interactive
    (list (read-file-name
           "Game module (.so): " nil nil t nil
@@ -761,7 +764,7 @@ MODULE is a shared object built with `LRG_DEFINE_GAME_MODULE'."
         (insert "# cmacs-libregnum game view\n"))
       ;; Major mode attaches the view + sets up the per-redisplay blit.
       (cmacs-libregnum-mode)
-      (cmacs-libregnum-load-game (current-buffer) abs)
+      (cmacs-libregnum-load-game (current-buffer) abs argv)
       ;; Minor mode (after load) forwards keyboard input to the game.
       (cmacs-libregnum-game-mode 1))
     (switch-to-buffer buf)

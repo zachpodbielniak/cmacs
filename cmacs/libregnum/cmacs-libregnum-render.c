@@ -516,6 +516,14 @@ cmacs_libregnum_render_ctx_resize (CmacsLibregnumRenderCtx *r, int w, int h)
   r->fbo_valid = TRUE;
   r->width = w;
   r->height = h;
+
+  /* A hosted game has no window of its own, so lrg_game_template_get_window_size
+   * returns the template's cached size (defaulting to 1280x720) -- it does not
+   * track our FBO.  Push the new size in so the game (e.g. a screensaver's
+   * u_resolution + fullscreen quad) re-renders at the right resolution on
+   * resize; this also fires its `window-size-changed' signal. */
+  if (r->game_mode && r->game != NULL)
+    lrg_game_template_set_window_size (r->game, w, h);
 }
 
 void *
@@ -1242,7 +1250,9 @@ cmacs_fbo_game_host_new (CmacsLibregnumRenderCtx *ctx)
 
 gboolean
 cmacs_libregnum_render_ctx_load_game (CmacsLibregnumRenderCtx *r,
-                                      const char *so_path, char **error_msg)
+                                      const char *so_path,
+                                      const char *const *argv,
+                                      char **error_msg)
 {
   GError           *error = NULL;
   LrgLoadedGame    *loaded;
@@ -1262,6 +1272,19 @@ cmacs_libregnum_render_ctx_load_game (CmacsLibregnumRenderCtx *r,
     }
 
   game = lrg_loaded_game_get_game (loaded);
+
+  /* Apply the per-instance CLI-style args (LrgConfigurable) BEFORE startup,
+   * matching lrgldr/lrg_game_run_standalone ordering: the game stashes them in
+   * apply_args and consumes them during startup (post_startup). A bad arg is a
+   * warning, not a hard failure (same as the reference launcher). */
+  if (argv != NULL)
+    {
+      g_autoptr (GError) args_err = NULL;
+      if (!lrg_game_template_apply_args (game, argv, &args_err))
+        g_warning ("cmacs-libregnum: game args rejected: %s",
+                   args_err != NULL ? args_err->message : "unknown");
+    }
+
   host = cmacs_fbo_game_host_new (r);
 
   /* Create the injected input source before startup so the host can expose
@@ -1287,6 +1310,11 @@ cmacs_libregnum_render_ctx_load_game (CmacsLibregnumRenderCtx *r,
   r->game        = game;          /* borrowed from loaded_game */
   r->game_host   = LRG_GAME_HOST (host);
   r->game_mode   = TRUE;
+
+  /* The hosted game has no window, so tell it the FBO size up front (its
+   * cached default is 1280x720); otherwise it renders at that size regardless
+   * of the actual view/monitor.  Resizes are handled in ..._ctx_resize. */
+  lrg_game_template_set_window_size (game, r->width, r->height);
   return TRUE;
 }
 

@@ -1387,5 +1387,21 @@ leaf indices span parent + submenu and round-trip through the value vector."
   (skip-unless (not (fboundp 'evil-normal-state)))
   (should-not (cmacs-libregnum-evil-normal-state)))
 
+(ert-deftest cmacs-libregnum-tests-load-game-accepts-argv ()
+  "`cmacs-libregnum-load-game' takes the optional ARGV vector (the
+per-instance LrgConfigurable config path added for screensavers).
+Headless-safe arity check -- no GL needed."
+  (skip-unless (fboundp 'cmacs-libregnum-load-game))
+  (let ((ar (func-arity 'cmacs-libregnum-load-game)))
+    (should (= (car ar) 2))            ; BUFFER + SO-PATH required
+    (should (= (cdr ar) 3))))          ; optional ARGV
+
+(ert-deftest cmacs-libregnum-tests-play-accepts-argv ()
+  "`cmacs-libregnum-play' forwards an optional ARGV list to the module."
+  (skip-unless (fboundp 'cmacs-libregnum-play))
+  (let ((ar (func-arity 'cmacs-libregnum-play)))
+    (should (= (car ar) 1))            ; MODULE required
+    (should (>= (cdr ar) 2))))         ; optional ARGV
+
 (provide 'cmacs-libregnum-tests)
 ;;; cmacs-libregnum-tests.el ends here

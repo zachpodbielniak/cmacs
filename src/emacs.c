@@ -2870,6 +2870,9 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #ifdef HAVE_CMACS_GNUSEYE
       syms_of_cmacs_gnuseye ();
 #endif
+#ifdef HAVE_CMACS_SCREENSAVER
+      syms_of_cmacs_screensaver ();	/* CMACS: libregnum screensavers */
+#endif
 #ifdef HAVE_CMACS_CAD
       syms_of_cmacs_cad ();	/* CMACS: parametric CAD subsystem */
 #endif
@@ -2999,6 +3002,9 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #endif
 #ifdef HAVE_CMACS_GNUSEYE
   init_cmacs_gnuseye ();
+#endif
+#ifdef HAVE_CMACS_SCREENSAVER
+  init_cmacs_screensaver ();	/* CMACS: libregnum screensavers */
 #endif
 #ifdef HAVE_CMACS_CAD
   init_cmacs_cad ();	/* CMACS: parametric CAD subsystem */

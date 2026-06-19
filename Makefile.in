@@ -684,6 +684,16 @@ ifeq (${ns_self_contained},no)
 			fi; \
 		done; \
 	fi
+	@if test -d $(srcdir)/deps/screensavers/build/release; then \
+		umask 022; ${MKDIR_P} "$(DESTDIR)${libdir}/cmacs/screensaver-modules"; \
+		for f in $(srcdir)/deps/screensavers/build/release/*.so; do \
+			if test -f "$$f"; then \
+				${INSTALL_PROGRAM} "$$f" \
+					"$(DESTDIR)${libdir}/cmacs/screensaver-modules/$$(basename $$f)"; \
+			fi; \
+		done; \
+		echo "Installed screensaver modules in ${libdir}/cmacs/screensaver-modules"; \
+	fi
 	@baconmoddir="${exec_prefix}/$$(if [ -d /usr/lib64 ]; then echo lib64; else echo lib; fi)/bacon/modules"; \
 	if test -d $(srcdir)/deps/bacon/build/release/modules; then \
 		umask 022; ${MKDIR_P} "$(DESTDIR)$$baconmoddir"; \

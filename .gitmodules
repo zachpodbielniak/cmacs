@@ -34,3 +34,6 @@
 [submodule "deps/cad-glib"]
 	path = deps/cad-glib
 	url = git@git-ssh.podbielniak.com:zachpodbielniak/cad-glib.git
+[submodule "deps/screensavers"]
+	path = deps/screensavers
+	url = git@git-ssh.podbielniak.com:zachpodbielniak/screensavers.git

@@ -5572,6 +5572,10 @@ extern void init_cmacs_gnuseye (void);
 extern void syms_of_cmacs_cad (void);
 extern void init_cmacs_cad (void);
 #endif
+#ifdef HAVE_CMACS_SCREENSAVER
+extern void syms_of_cmacs_screensaver (void);
+extern void init_cmacs_screensaver (void);
+#endif
 #ifdef HAVE_CMACS_GSURF
 extern void syms_of_cmacs_gsurf (void);
 extern void init_cmacs_gsurf (void);

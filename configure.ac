@@ -664,6 +664,7 @@ OPTION_DEFAULT_OFF([cmacs-libregnum], [CMacs libregnum 3D scene buffers (raylib 
 OPTION_DEFAULT_OFF([cmacs-lrgterm], [CMacs independent libregnum/raylib display backend (output_lrg; peer to pgtk)])
 OPTION_DEFAULT_OFF([cmacs-gnuseye], [CMacs gnuseye live planetary globe (GNU's Eye; requires libregnum)])
 OPTION_DEFAULT_OFF([cmacs-cad], [CMacs parametric CAD subsystem (cad-glib kernels; parts render as libregnum CAD nodes)])
+OPTION_DEFAULT_OFF([cmacs-screensaver], [CMacs libregnum screensavers as animated wallpaper / lock screen / buffer (requires libregnum; wallpaper+lock need gowl)])
 OPTION_DEFAULT_OFF([cmacs-org-ex], [CMacs org-ex interactive widgets])
 OPTION_DEFAULT_OFF([cmacs-mcp], [CMacs MCP server])
 OPTION_DEFAULT_OFF([cmacs-print], [Print to cmacs virtual printer + PDF intake])
@@ -1013,6 +1014,29 @@ if test "$with_cmacs_cad" != "no"; then
   CMACS_CAD_LIBREGNUM_FLAGS="CAD=1 CAD_GLIB_DIR=\$(abs_top_srcdir)/deps/cad-glib"
   AC_DEFINE([HAVE_CMACS_CAD], 1, [CMacs parametric CAD subsystem])
   CMACS_CAD_OBJ="cmacs-cad-init.o cmacs-cad-defuns.o cmacs-cad-doc.o cmacs-cad-sketch.o cmacs-cad-assembly.o"
+fi
+if test "$with_cmacs_screensaver" != "no"; then
+  if test "$with_cmacs_libregnum" = "no"; then
+    AC_MSG_ERROR([--with-cmacs-screensaver requires --with-cmacs-libregnum (screensavers render through libregnum)])
+  fi
+  if test "$with_cmacs_glib" = "no"; then
+    AC_MSG_ERROR([--with-cmacs-screensaver requires --with-cmacs-glib (the frame pump runs on the cmacs GMainContext)])
+  fi
+  # cmacs-screensaver renders deps/screensavers libregnum game modules
+  # off-screen (via the opaque cmacs-libregnum render API -- no libregnum
+  # headers needed here) and routes the frames to gowl's wallpaper / lock
+  # sinks.  Buffer playback is pure Elisp (cmacs-libregnum-play).  When gowl
+  # is enabled it also needs the gowl compositor headers for the push API;
+  # without gowl only buffer mode is available.
+  PKG_CHECK_MODULES([CMACS_SCREENSAVER_DEPS], [glib-2.0 gobject-2.0 gio-2.0])
+  CMACS_SCREENSAVER_CFLAGS="$CMACS_SCREENSAVER_DEPS_CFLAGS \
+    -DCMACS_SCREENSAVER_MODULEDIR=\\\"$libdir/cmacs/screensaver-modules\\\""
+  if test "$with_cmacs_gowl" != "no"; then
+    CMACS_SCREENSAVER_CFLAGS="$CMACS_SCREENSAVER_CFLAGS $CMACS_GOWL_CFLAGS"
+  fi
+  CMACS_SCREENSAVER_LIBS="$CMACS_SCREENSAVER_DEPS_LIBS"
+  AC_DEFINE([HAVE_CMACS_SCREENSAVER], 1, [CMacs libregnum screensavers (wallpaper/lock/buffer)])
+  CMACS_SCREENSAVER_OBJ="cmacs-screensaver-init.o cmacs-screensaver.o cmacs-screensaver-defuns.o"
 fi
 if test "$with_cmacs_gsurf" != "no"; then
   if test "$with_cmacs_glib" = "no"; then
@@ -1466,6 +1490,9 @@ AC_SUBST(CMACS_CAD_OBJ)
 AC_SUBST(CMACS_CAD_CFLAGS)
 AC_SUBST(CMACS_CAD_LIBS)
 AC_SUBST(CMACS_CAD_LIBREGNUM_FLAGS)
+AC_SUBST(CMACS_SCREENSAVER_OBJ)
+AC_SUBST(CMACS_SCREENSAVER_CFLAGS)
+AC_SUBST(CMACS_SCREENSAVER_LIBS)
 
 # CMacs API library: built as a shared library in cmacs/api/ and used
 # by both the bacon cmacsgi module and crispy scripts (in-process).

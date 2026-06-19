@@ -335,14 +335,46 @@ POSITION and TARGET are lists (X Y Z).  FOV is degrees.  */)
   return Qt;
 }
 
+/* Build a NULL-terminated, main()-style argv from a Lisp list of strings.
+ * Element 0 is a synthetic program name (PROGNAME) so the vector mirrors a
+ * real argv; the list elements (each a string) follow.  Returns a g_strv the
+ * caller must g_strfreev, or NULL when LIST is nil/empty.  Signals a Lisp
+ * error if any element is not a string. */
+static char **
+cmacs_libregnum__argv_from_list (Lisp_Object list, const char *progname)
+{
+  GPtrArray *a;
+  Lisp_Object tail;
+
+  if (NILP (list))
+    return NULL;
+  CHECK_LIST (list);
+
+  a = g_ptr_array_new ();
+  g_ptr_array_add (a, g_strdup (progname));
+  for (tail = list; CONSP (tail); tail = XCDR (tail))
+    {
+      Lisp_Object elt = XCAR (tail);
+      CHECK_STRING (elt);
+      g_ptr_array_add (a, g_strdup (SSDATA (ENCODE_UTF_8 (elt))));
+    }
+  g_ptr_array_add (a, NULL);
+  return (char **) g_ptr_array_free (a, FALSE);
+}
+
 DEFUN ("cmacs-libregnum-load-game", Fcmacs_libregnum_load_game,
-       Scmacs_libregnum_load_game, 2, 2, 0,
+       Scmacs_libregnum_load_game, 2, 3, 0,
        doc: /* Load libregnum game module SO-PATH into BUFFER's view.
 SO-PATH is the absolute path of a game `.so' built with
 LRG_DEFINE_GAME_MODULE.  The game is then driven and rendered into the
-view each frame, and the view is switched to animated mode.  Signals
+view each frame, and the view is switched to animated mode.
+
+Optional ARGV is a list of strings passed verbatim to the module as a
+CLI-style argument vector (applied via the libregnum LrgConfigurable
+interface before startup), e.g. '("--profile" "warm").  A rejected
+argument warns but does not abort the load.  Signals
 `cmacs-libregnum-error' on failure.  */)
-  (Lisp_Object buffer, Lisp_Object so_path)
+  (Lisp_Object buffer, Lisp_Object so_path, Lisp_Object argv)
 {
   CHECK_BUFFER (buffer);
   CHECK_STRING (so_path);
@@ -350,8 +382,13 @@ view each frame, and the view is switched to animated mode.  Signals
   if (!v) error ("cmacs-libregnum: no view attached to buffer");
   Lisp_Object encoded = ENCODE_FILE (so_path);
   CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  char **cargv = cmacs_libregnum__argv_from_list (argv, "cmacs-libregnum");
   char *err = NULL;
-  if (!cmacs_libregnum_render_ctx_load_game (ctx, SSDATA (encoded), &err))
+  bool ok = cmacs_libregnum_render_ctx_load_game (ctx, SSDATA (encoded),
+                                                  (const char *const *) cargv,
+                                                  &err);
+  g_strfreev (cargv);
+  if (!ok)
     {
       Lisp_Object msg = build_string (err ? err : "load-game failed");
       g_free (err);

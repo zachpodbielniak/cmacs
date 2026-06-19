@@ -240,6 +240,23 @@ bacon> cmacsgi monitor set-mode DP-1 2560x1440@144000
 The refresh rate is in millihertz (60000 = 60 Hz).  Use 0 to match any
 refresh rate, or omit the =@RATE= suffix.
 
+*** Default size for nested sessions
+
+A nested output (running =cmacs --gowl= inside another Wayland/X11
+compositor, e.g. for testing under GNOME) has no advertised modes, so it
+comes up at gowl's built-in default of 1280×720.  Override that *startup*
+size with the =GOWL_OUTPUT_SIZE= environment variable (=WIDTHxHEIGHT=):
+
+#+begin_example
+GOWL_OUTPUT_SIZE=1920x1080 ./src/emacs --gowl
+GOWL_OUTPUT_SIZE=2560x1440 just gowl
+#+end_example
+
+It applies only to outputs without a native mode list (nested/headless);
+real monitors keep their native mode.  You can still resize the nested
+window afterwards, or change modes at runtime with
+=cmacs-gowl-set-resolution=.
+
 ** Scaling
 
 Scale controls the output DPI.  A scale of 2.0 doubles the pixel
@@ -856,6 +873,14 @@ sudo make install-cmacs-pam      # or it runs as part of `sudo make install'
 
 =M-x gowl-unlock= force-unlocks (administrative override, no password) —
 useful as an escape hatch while testing.
+
+*Animated lock background.*  When the screensaver subsystem is built
+(=--with-cmacs-screensaver=) and =cmacs-screensaver-lock-config= names a
+config, =gowl-lock= shows that libregnum screensaver as the lock
+background, with the password box and typing indicator composited on top
+while the animation keeps running.  Leaving the variable =nil= keeps the
+ordinary static lock.  The animation stops automatically when the session
+unlocks.  See =doc_org/cmacs/cmacs-screensaver.org=.
 
 *Embedded caveat:* the lock owns gowl's Wayland seat, so it locks the
 compositor and its clients.  In a *nested* =--gowl= test session the

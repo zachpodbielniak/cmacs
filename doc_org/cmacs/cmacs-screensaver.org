@@ -1,0 +1,110 @@
+#+TITLE: Screensavers — libregnum wallpaper, lock screen & buffer playback
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:2 num:t
+
+* Overview
+
+The =cmacs-screensaver= subsystem renders the GPU screensavers from the
+=deps/screensavers= dependency (=blackhole=, =singularity=, =helios= — built on
+the libregnum engine and shipped as loadable game modules) and shows them in
+three places:
+
+1. *Animated wallpaper* — drawn behind your windows under =cmacs --gowl=.
+2. *Animated lock-screen background* — behind the password box when you
+   =gowl-lock=, with the typing indicator composited on top.
+3. *In a buffer* — a normal Emacs buffer that plays the screensaver.
+
+Each screensaver is a libregnum *game module* (a =.so= built with
+=LRG_DEFINE_GAME_MODULE=).  cmacs renders it off-screen to a frame buffer and
+either blits it into an Emacs buffer (buffer mode) or hands the raw pixels to
+the gowl compositor (wallpaper / lock mode).
+
+Enable with =--with-cmacs-screensaver= (requires =--with-cmacs-libregnum=;
+wallpaper and lock additionally need =--with-cmacs-gowl=).  Off by default.
+
+** Architecture: gowl receives raw pixels, never libregnum
+
+Rendering (libregnum / raylib / GL) lives entirely on the cmacs side.  For the
+wallpaper and lock sinks, cmacs renders each screensaver to an off-screen FBO,
+reads it back as top-down =BGRA=, and pushes those raw pixels to gowl through
+its frame-sink API (=gowl_compositor_push_{wallpaper,lock}_frame=).  Gowl copies
+the pixels into a per-monitor scene buffer and displays them — it has *no*
+dependency on libregnum, graylib, raylib, or GL (a build guard,
+=deps/gowl/tests/test-no-libregnum.sh=, enforces this).  The =BGRA= bytes match
+gowl's =ARGB8888= buffer format exactly, so no conversion is needed.
+
+* Configuration
+
+Screensavers are chosen from a table of *named configurations*.  Each names a
+module and a list of raw command-line argument strings passed verbatim to that
+module — the same flags its standalone binary accepts — so any current or
+future module option works with no Elisp changes, and you can keep several
+variants of the same module and pick between them.
+
+#+BEGIN_SRC emacs-lisp
+(setq cmacs-screensaver-configs
+      '((default          . (:module blackhole   :args nil))
+        (blackhole-warm   . (:module blackhole   :args ("--profile" "warm")))
+        (blackhole-cool   . (:module blackhole   :args ("--profile" "cool")))
+        (blackhole-infall . (:module blackhole   :args ("--profile" "cool" "--infall" "8")))
+        (helios-trinary   . (:module helios       :args ("--stars" "3" "--profile" "golden")))))
+#+END_SRC
+
+- =:module= is a key of =cmacs-screensaver-modules-alist= (which maps a symbol
+  to a =.so= base name), or an absolute path to a =.so=.
+- =:args= is a list of strings forming the module's argument vector.
+
+Other options:
+
+| Variable                                | Default     | Meaning                                                       |
+|-----------------------------------------+-------------+--------------------------------------------------------------|
+| =cmacs-screensaver-default-config=      | ='default=  | Config the picker pre-selects.                               |
+| =cmacs-screensaver-fps=                 | =30=        | Frame-pump rate for wallpaper / lock.                        |
+| =cmacs-screensaver-pause-when-covered=  | =t=         | Stop rendering a monitor fully hidden by a fullscreen window.|
+| =cmacs-screensaver-wallpaper-config=    | =nil=       | Config used by the wallpaper command (nil = default).        |
+| =cmacs-screensaver-lock-config=         | =nil=       | When set, =gowl-lock= shows it as an animated background.     |
+
+* Commands
+
+| Command                            | What it does                                              |
+|------------------------------------+-----------------------------------------------------------|
+| =cmacs-screensaver-play=           | Pick a config and play it in a buffer.                    |
+| =cmacs-screensaver-set-wallpaper=  | Pick a config and set it as the animated gowl wallpaper.  |
+| =cmacs-screensaver-stop-wallpaper= | Stop the animated wallpaper, restoring the static one.    |
+
+All three prompt with completion over your config names
+(=cmacs-screensaver-read-config=).
+
+** Lock screen
+
+Set =cmacs-screensaver-lock-config= to a config name and ordinary =gowl-lock=
+shows that screensaver as the lock background.  The password box, the dots that
+track what you type, and the status text are drawn *on top* of the animation
+(the background keeps moving while you type), and a wrong password still shows
+its feedback.  Leave the variable =nil= to keep the plain static lock screen
+unchanged.  The animation stops automatically the moment the session unlocks
+(whether through PAM success or =gowl-unlock=).
+
+* Module discovery, build & install
+
+The screensaver =.so= modules are searched for in:
+
+1. =$CMACS_SCREENSAVER_MODULE_DIR= (a dev override), then
+2. the install directory =$(libdir)/cmacs/screensaver-modules=.
+
+=just run= and =just gowl= export =CMACS_SCREENSAVER_MODULE_DIR= pointing at
+=deps/screensavers/build/release= so testing always uses freshly-built local
+modules instead of any installed copy.
+
+The modules are built as part of a =--with-cmacs-screensaver= build (=make=
+runs =make -C deps/screensavers deps && modules=) and installed to
+=$(libdir)/cmacs/screensaver-modules= by =make install=.  A config whose
+=:module= is an absolute path bypasses discovery entirely, so you can point at
+your own modules (e.g. a custom =blackhole= variant) anywhere on disk.
+
+* See also
+
+- =doc_org/cmacs/cmacs-libregnum.org= — the libregnum buffer/game host and the
+  =ARGV= argument to =cmacs-libregnum-play= / =cmacs-libregnum-load-game=.
+- =doc_org/cmacs/gowl.org= — the compositor and =gowl-lock=.
+- =deps/gowl/docs/architecture.org= *Raw Frame Sink* — the gowl side.

@@ -60,6 +60,7 @@ interaction.
 * CMacs Gnuseye::               GNU's Eye live planetary globe.
 * CMacs Gsurf::                 Embedded gsurf web browser buffers.
 * CMacs CAD::                   Parametric CAD parts (.cad/.ccad via cad-glib).
+* CMacs Screensaver::           libregnum screensavers as wallpaper/lock/buffer.
 * CMacs Lrgterm::               Independent libregnum/raylib display backend (--lrg).
 * Build Configuration::         Configure flags and dependencies.
 * Upstream Changes::            Every edit cmacs makes to stock Emacs sources.
@@ -3088,6 +3089,12 @@ screen.  It looks for @file{/etc/pam.d/gowl} first, then falls back to
 @code{system-auth} and @code{login}.  Install the bundled profile with
 @samp{sudo make install-cmacs-pam} (it also runs as part of
 @samp{sudo make install}).
+
+When the screensaver subsystem is built (@option{--with-cmacs-screensaver})
+and @code{cmacs-screensaver-lock-config} names a config, @code{gowl-lock}
+shows that libregnum screensaver as an animated lock background with the
+password box and typing indicator on top; leaving it @code{nil} keeps the
+static lock.  See @ref{CMacs Screensaver}.
 
 @strong{Embedded caveat:} the lock owns gowl's Wayland seat, so in a
 @emph{nested} @option{--gowl} test session the host Emacs frame is not a
@@ -6391,7 +6398,13 @@ module (@file{.so}); cmacs loads it, drives it each frame, and
 forwards input to it, so the game runs inside an Emacs buffer.
 
 @code{M-x cmacs-libregnum-play} prompts for a game module and opens a
-buffer that renders and plays it.
+buffer that renders and plays it.  Both @code{cmacs-libregnum-play} and
+@code{cmacs-libregnum-load-game} take an optional @var{ARGV} --- a list of
+strings passed verbatim to the module as a @code{main()}-style argument
+vector, applied through libregnum's @code{LrgConfigurable} interface
+(@code{lrg_game_template_apply_args}) before startup.  A rejected argument
+warns but does not abort the load.  The screensaver subsystem uses this to
+drive configured variants of one module (@pxref{CMacs Screensaver}).
 
 @subsection How it works
 
@@ -7823,6 +7836,82 @@ expose the same surface; an Org Babel @code{cad} block with @code{:bom}
 emits the bill of materials as a table.
 
 See @file{doc_org/cmacs/cmacs-cad.org} for the living document.
+
+@c ===================================================================
+@node CMacs Screensaver
+@chapter CMacs Screensaver: libregnum Wallpaper, Lock Screen & Buffer
+
+The @code{cmacs-screensaver} subsystem renders the GPU screensavers from the
+@file{deps/screensavers} dependency (@code{blackhole}, @code{singularity},
+@code{helios} --- libregnum game modules) and shows them as an animated
+@strong{gowl wallpaper}, an animated @strong{lock-screen background}, or
+@strong{in a buffer}.  Enable with @option{--with-cmacs-screensaver} (needs
+@option{--with-cmacs-libregnum}; wallpaper and lock also need
+@option{--with-cmacs-gowl}).  Off by default.
+
+@section Architecture: gowl receives raw pixels, never libregnum
+
+All rendering (libregnum/raylib/GL) stays on the cmacs side.  For wallpaper and
+lock, cmacs renders each screensaver to an off-screen buffer, reads it back as
+top-down @code{BGRA}, and pushes the raw pixels to gowl via its frame-sink API
+(@code{gowl_compositor_push_@{wallpaper,lock@}_frame}).  Gowl copies and
+displays them and has @emph{no} dependency on libregnum/graylib/raylib/GL (a
+build guard enforces it).  The @code{BGRA} bytes match gowl's
+@code{ARGB8888} buffer format, so no conversion is needed.
+
+@section Named configurations
+
+Screensavers are chosen from @code{cmacs-screensaver-configs}, an alist of
+@code{(NAME . (:module M :args ARGS))}.  @code{:module} is a key of
+@code{cmacs-screensaver-modules-alist} (symbol @result{} @file{.so} base name)
+or an absolute path; @code{:args} is a list of raw CLI argument strings passed
+verbatim to the module (the same flags its standalone binary takes).  Keep as
+many variants of a module as you like and pick between them.
+
+@example
+(setq cmacs-screensaver-configs
+      '((default        . (:module blackhole :args nil))
+        (blackhole-cool . (:module blackhole :args ("--profile" "cool")))
+        (helios-trinary . (:module helios    :args ("--stars" "3")))))
+@end example
+
+Use the module's own CLI flags (see the standalone saver's @code{--help});
+a module that gets an unknown flag or a missing value (e.g. @code{--infall}
+takes an integer) warns and falls back to its defaults.
+
+Knobs: @code{cmacs-screensaver-default-config}, @code{cmacs-screensaver-fps}
+(default 30), @code{cmacs-screensaver-pause-when-covered} (default @code{t};
+skips a monitor hidden by a fullscreen window), and
+@code{cmacs-screensaver-lock-config} (below).
+
+@section Commands
+
+@table @code
+@item M-x cmacs-screensaver-play
+Pick a config and play it in a buffer.
+@item M-x cmacs-screensaver-set-wallpaper
+Pick a config and set it as the animated gowl wallpaper.
+@item M-x cmacs-screensaver-stop-wallpaper
+Stop the animated wallpaper, restoring the static one.
+@end table
+
+@section Lock screen
+
+Set @code{cmacs-screensaver-lock-config} to a config name and ordinary
+@code{gowl-lock} shows that screensaver as the lock background, with the
+password box and the typing indicator composited on top while the animation
+keeps running.  Leave it @code{nil} for the unchanged static lock.  The
+animation stops automatically when the session unlocks.
+
+@section Module discovery and install
+
+Modules are searched for in @env{CMACS_SCREENSAVER_MODULE_DIR} (a dev override
+that @command{just run}/@command{just gowl} set to
+@file{deps/screensavers/build/release}) and then in
+@file{$(libdir)/cmacs/screensaver-modules} (where @code{make install} places
+them).  An absolute @code{:module} path bypasses discovery.
+
+See @file{doc_org/cmacs/cmacs-screensaver.org} for the living document.
 
 @c ===================================================================
 @node CMacs Lrgterm

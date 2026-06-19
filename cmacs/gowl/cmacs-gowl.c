@@ -52,6 +52,12 @@
    NOT static — cmacs-eval-dispatch.c accesses this for gowl dispatch. */
 GowlCompositor *cmacs_gowl_compositor = NULL;
 
+GowlCompositor *
+cmacs_gowl_get_compositor (void)
+{
+  return cmacs_gowl_compositor;
+}
+
 /* Shared-object globals that user-written C configs declare as
    `extern GowlCompositor *gowl_compositor;` / `extern GowlConfig
    *gowl_config;`.  Standalone gowl defines them in its main.c; when
@@ -106,6 +112,23 @@ static inline void
 cmacs_gowl_ensure_mutex (void)
 {
   pthread_once (&cmacs_gowl_mutex_once, cmacs_gowl_mutex_init);
+}
+
+/* Public wrappers around the compositor dispatch mutex so other cmacs
+   subsystems (e.g. cmacs-screensaver pushing raw frames into the scene
+   graph) can serialise against the gowl dispatch thread, which mutates and
+   renders the scene under this same (recursive) lock. */
+void
+cmacs_gowl_lock (void)
+{
+  cmacs_gowl_ensure_mutex ();
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+}
+
+void
+cmacs_gowl_unlock (void)
+{
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
 }
 
 /* Clipboard sync: signal handler ID (0 = not watching) */

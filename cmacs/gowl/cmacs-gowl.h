@@ -19,6 +19,18 @@
 /* Start the compositor dispatch thread. */
 extern void cmacs_gowl_start_thread (void);
 
+/* The running --gowl compositor, or NULL when gowl is not active.  Other
+ * cmacs subsystems (e.g. cmacs-screensaver) use this to push raw frames into
+ * the wallpaper / lock-screen sinks. */
+extern GowlCompositor *cmacs_gowl_get_compositor (void);
+
+/* Lock/unlock the compositor dispatch mutex.  Scene-graph mutations from a
+ * thread other than the gowl dispatch thread (e.g. the screensaver frame
+ * pump on the Emacs main thread) MUST be wrapped in these to avoid racing
+ * the compositor's render/dispatch.  The lock is recursive. */
+extern void cmacs_gowl_lock (void);
+extern void cmacs_gowl_unlock (void);
+
 /* Inhibit parent compositor keyboard shortcuts (nested mode). */
 extern void cmacs_gowl_inhibit_parent_shortcuts (GowlCompositor *comp);
 

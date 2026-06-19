@@ -242,6 +242,20 @@ that renders and plays it:
   (cmacs-libregnum-play "/path/to/libmygame.so")
 #+end_example
 
+Both =cmacs-libregnum-play= and the lower-level =cmacs-libregnum-load-game=
+take an optional =ARGV= --- a list of strings passed verbatim to the module
+as a =main()=-style argument vector.  It is applied through libregnum's
+=LrgConfigurable= interface (=lrg_game_template_apply_args=) *before*
+startup, so the module configures itself from the same flags its standalone
+binary accepts; a rejected argument warns but does not abort the load:
+
+#+begin_example
+  (cmacs-libregnum-play "/path/to/blackhole.so" '("--profile" "warm"))
+#+end_example
+
+This is what the screensaver subsystem uses to drive several configured
+variants of one module (see =doc_org/cmacs/cmacs-screensaver.org=).
+
 ** How it works
 
 The game is driven through libregnum's host abstraction =LrgGameHost=.

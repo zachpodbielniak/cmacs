@@ -248,9 +248,16 @@ extern gboolean cmacs_libregnum_render_ctx_snapshot_png
  * view and drive it each frame (instead of a static scene). The game
  * renders into the view's FBO via an LrgGameHost backed by this ctx;
  * it has no window of its own and never grabs the real cursor. */
+/* ARGV, when non-NULL, is a NULL-terminated main()-style argument vector
+ * (argv[0] is a synthetic program name); it is applied to the loaded game via
+ * the libregnum LrgConfigurable interface before startup, so a per-instance
+ * config can be passed (e.g. a screensaver module's CLI flags). A parse error
+ * warns but does not abort the load. Pass NULL for no arguments. */
 extern gboolean cmacs_libregnum_render_ctx_load_game
                               (CmacsLibregnumRenderCtx *r,
-                               const char *so_path, char **error_msg);
+                               const char *so_path,
+                               const char *const *argv,
+                               char **error_msg);
 extern void cmacs_libregnum_render_ctx_unload_game
                               (CmacsLibregnumRenderCtx *r);
 extern gboolean cmacs_libregnum_render_ctx_is_game
