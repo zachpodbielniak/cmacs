@@ -44,7 +44,7 @@ The base name is resolved against `cmacs-screensaver-module-path'."
 (defcustom cmacs-screensaver-configs
   '((default          . (:module blackhole   :args nil))
     (blackhole-warm   . (:module blackhole   :args ("--profile" "warm")))
-    (blackhole-cool   . (:module blackhole   :args ("--profile" "cool")))
+    (blackhole-cool   . (:module blackhole   :args ("--profile" "cool" "--orbit-radius" "60" "--infall" "2")))
     (blackhole-infall . (:module blackhole   :args ("--profile" "cool" "--infall" "8")))
     (helios-trinary   . (:module helios       :args ("--stars" "3" "--profile" "golden"))))
   "Named screensaver configurations.

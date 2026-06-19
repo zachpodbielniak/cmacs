@@ -54,7 +54,7 @@ empty NAMES (each a base name) as `.so' files."
     (should (equal (cdr (cmacs-screensaver--resolve-config 'blackhole-warm))
                    '("--profile" "warm")))
     (should (equal (cdr (cmacs-screensaver--resolve-config 'blackhole-cool))
-                   '("--profile" "cool")))
+                   '("--profile" "cool" "--orbit-radius" "60" "--infall" "2")))
     (should (equal (cdr (cmacs-screensaver--resolve-config 'blackhole-infall))
                    '("--profile" "cool" "--infall" "8")))))
 

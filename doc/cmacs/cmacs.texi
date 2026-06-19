@@ -7871,7 +7871,7 @@ many variants of a module as you like and pick between them.
 @example
 (setq cmacs-screensaver-configs
       '((default        . (:module blackhole :args nil))
-        (blackhole-cool . (:module blackhole :args ("--profile" "cool")))
+        (blackhole-cool . (:module blackhole :args ("--profile" "cool" "--orbit-radius" "60" "--infall" "2")))
         (helios-trinary . (:module helios    :args ("--stars" "3")))))
 @end example
 
