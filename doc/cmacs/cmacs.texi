@@ -1745,6 +1745,28 @@ src/emacs --gowl
 Inside Emacs, the compositor is controlled via @code{cmacs-gowl-mode},
 which is auto-enabled by @option{--gowl}.
 
+@subsection Running X11 Applications (XWayland)
+@cindex XWayland
+@cindex X11 applications
+
+gowl runs its own rootless XWayland server, so unmodified X11
+applications --- including non-Wayland toolkits and raylib/GLFW apps
+such as @samp{gst --lrg=2d} --- run inside the session.  On startup the
+compositor sets @env{DISPLAY} to gowl's own X server (e.g.@: @samp{:1}),
+distinct from any parent session's.
+
+@code{gowl-spawn} (and the launch commands built on it) point spawned
+X11 clients at gowl's XWayland by setting @env{DISPLAY} to
+@code{gowl_compositor_get_xwayland_display}, and set Wayland toolkit
+hints so GTK/Qt/SDL/Electron prefer Wayland.  X11 windows are managed
+like native ones (tiled, tagged, focusable); override-redirect surfaces
+(menus, tooltips) float.
+
+This needs the @command{Xwayland} binary (Fedora:
+@code{xorg-x11-server-Xwayland}) and a gowl built with
+@code{BUILD_XWAYLAND=1} (the default); otherwise @env{DISPLAY} is left
+unset and only Wayland-native clients run.
+
 @section Window Management
 
 @table @code

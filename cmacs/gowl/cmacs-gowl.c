@@ -2442,7 +2442,18 @@ Returns the child process PID as an integer. */)
     envp = g_environ_setenv (envp, "QT_QPA_PLATFORM", "wayland", TRUE);
     envp = g_environ_setenv (envp, "SDL_VIDEODRIVER", "wayland", TRUE);
     envp = g_environ_setenv (envp, "GDK_BACKEND", "wayland", TRUE);
-    envp = g_environ_unsetenv (envp, "DISPLAY");
+    /* Point X11 clients at gowl's own XWayland so they get a usable
+       DISPLAY inside the session (e.g. raylib/GLFW apps).  Falls back to
+       unsetting DISPLAY when gowl has no XWayland, so toolkits prefer
+       Wayland and never connect to an inherited parent X server. */
+    {
+      const gchar *xdisplay =
+        gowl_compositor_get_xwayland_display (cmacs_gowl_compositor);
+      if (xdisplay != NULL && xdisplay[0] != '\0')
+        envp = g_environ_setenv (envp, "DISPLAY", xdisplay, TRUE);
+      else
+        envp = g_environ_unsetenv (envp, "DISPLAY");
+    }
   }
 
   if (!g_spawn_async (NULL, argv, envp,
