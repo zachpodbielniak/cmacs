@@ -2045,6 +2045,42 @@ bacon> cmacsgi monitor enable DP-2
 @noindent
 Or interactively: @kbd{M-x cmacs-gowl-toggle-monitor}.
 
+@subsection Closed Laptop Lid / Off Displays
+
+gowl automatically powers off the laptop's built-in panel (an
+@code{eDP}/@code{LVDS}/@code{DSI} connector) while the lid is shut
+@emph{and} at least one external display is connected.  The selected
+monitor and any windows on the internal panel migrate to the external
+output, and the internal panel is removed from the layout so the cursor
+and newly launched windows never land on the dark screen.  This is what
+you want when docking a closed laptop to a single external monitor:
+gowl renders only on the attached display.
+
+The behaviour is live and ordering-independent:
+
+@itemize
+@item
+Booting @code{cmacs --gowl} with the lid already shut leaves the
+internal panel off from the first frame (the initial state is read from
+@file{/proc/acpi/button/lid}).
+@item
+Closing or opening the lid while running toggles the panel via the
+libinput lid switch.
+@item
+Single-display safety: if the lid is shut and there is @emph{no}
+external display, the internal panel stays on---gowl never blanks the
+only screen.  Unplugging the external while the lid is shut brings the
+internal panel back automatically.
+@end itemize
+
+This is controlled by the @code{manage-lid} compositor setting
+(default on).  Turn it off at runtime to keep driving a closed-lid
+panel:
+
+@lisp
+(gobject-set (gowl-config-object) "manage-lid" nil)
+@end lisp
+
 @subsection Interactive Commands
 
 @table @code
@@ -2623,6 +2659,36 @@ focus dimming.  Unfocused windows fade to a configurable opacity.
 (gowl-alpha-info)
   @result{} ((focused-alpha . 0.9) (unfocused-alpha . 0.9))
 @end example
+
+@subsubheading Wallpaper
+
+Set the desktop wallpaper with @code{gowl-set-wallpaper}:
+
+@lisp
+(gowl-set-wallpaper "~/Pictures/wallpaper.png")        ;; mode = "fill"
+(gowl-set-wallpaper "~/Pictures/wallpaper.png" "fit")  ;; explicit mode
+@end lisp
+
+The optional second argument is the scaling mode:
+
+@table @code
+@item fill
+(default) GNOME-style zoom: scale to cover the monitor, aspect ratio
+preserved, centre-cropped---never stretched or tiled.
+@item fit
+Scale the whole image to fit inside the monitor (letterbox).
+@item center
+Place the image 1:1 at the centre.
+@item stretch
+Distort the image to the exact monitor size.
+@item tile
+Repeat the image at native size.
+@end table
+
+@noindent
+Each monitor is scaled independently, so a single large image (e.g.@: a
+multi-monitor panorama) is zoomed to fit @emph{each} display rather
+than tiled into a grid on the larger ones.
 
 @subsubheading Seeing the Wallpaper Through Emacs
 

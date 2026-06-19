@@ -307,6 +307,36 @@ bacon> cmacsgi monitor enable DP-2
 
 Or interactively: =M-x cmacs-gowl-toggle-monitor=.
 
+** Closed Laptop Lid / Off Displays
+
+gowl automatically powers off the laptop's built-in panel (an
+=eDP=/=LVDS=/=DSI= connector) while the lid is shut *and* at least one
+external display is connected.  The selected monitor and any windows on
+the internal panel migrate to the external output, and the internal
+panel is removed from the layout so the cursor and newly launched
+windows never land on the dark screen.  This is what you want when
+docking a closed laptop to a single external monitor: gowl renders only
+on the attached display.
+
+The behaviour is fully live and ordering-independent:
+
+- Booting =cmacs --gowl= with the lid already shut leaves the internal
+  panel off from the first frame (the initial state is read from
+  =/proc/acpi/button/lid=).
+- Closing or opening the lid while running toggles the panel via the
+  libinput lid switch.
+- Single-display safety: if the lid is shut and there is *no* external
+  display, the internal panel stays on — gowl never blanks the only
+  screen.  Unplugging the external while the lid is shut brings the
+  internal panel back automatically.
+
+This is controlled by the =manage-lid= compositor setting (default on).
+Turn it off at runtime to keep driving a closed-lid panel:
+
+#+begin_src emacs-lisp
+(gobject-set (gowl-config-object) "manage-lid" nil)
+#+end_src
+
 ** How It Works
 
 When a mode, scale, or transform change is committed via
@@ -600,6 +630,31 @@ Per-client window opacity with automatic focus dimming.
 | =gowl-set-focused-alpha=         | Set focused window opacity               |
 | =gowl-set-unfocused-alpha=       | Set unfocused window opacity             |
 | =gowl-alpha-info=                | Query current alpha config               |
+
+** Wallpaper
+
+Set the desktop wallpaper with =gowl-set-wallpaper=:
+
+#+begin_src emacs-lisp
+(gowl-set-wallpaper "~/Pictures/wallpaper.png")        ;; mode = "fill"
+(gowl-set-wallpaper "~/Pictures/wallpaper.png" "fit")  ;; explicit mode
+(gowl-wallpaper-info)
+  ;; => ((path . "~/Pictures/wallpaper.png") (mode . "fill"))
+#+end_src
+
+The optional second argument is the scaling mode:
+
+| Mode      | Behaviour                                                       |
+|-----------+-----------------------------------------------------------------|
+| =fill=    | (default) GNOME-style zoom: scale to cover the monitor, aspect preserved, centre-cropped — never stretched or tiled |
+| =fit=     | Scale the whole image to fit inside the monitor (letterbox)     |
+| =center=  | Place the image 1:1 at the centre                               |
+| =stretch= | Distort the image to the exact monitor size                    |
+| =tile=    | Repeat the image at native size                                |
+
+Each monitor is scaled independently, so a single large (e.g.
+multi-monitor panorama) image is zoomed to fit *each* display rather
+than tiled into a grid on the larger ones.
 
 *** Seeing the Wallpaper Through Emacs
 
