@@ -38,8 +38,28 @@ lrg_window_create (struct frame *f, int width, int height, const char *title)
      surface constructor -- raylib applies config flags only at window-creation
      time.  It is harmless when transparency is unused: an opaque frame
      (alpha-background = 1.0, the default) clears and fills at full alpha, so
-     every pixel ends up opaque.  */
-  grl_window_set_config_flags (GRL_FLAG_WINDOW_TRANSPARENT);
+     every pixel ends up opaque.
+
+     ALWAYS_RUN is critical, not cosmetic: lrg_read_socket (the Emacs
+     read_socket_hook) calls grl_window_poll_events == raylib PollInputEvents,
+     which on the GLFW backend calls the BLOCKING glfwWaitEvents() whenever the
+     window is minimized and ALWAYS_RUN is unset (rcore_desktop_glfw.c).  In a
+     daemon that parks the whole single-threaded Emacs in glfwWaitEvents() until
+     an X11 event hits the minimized lrg window -- so a backgrounded --lrg frame
+     hangs `emacsclient' (and all other clients).  ALWAYS_RUN keeps
+     PollInputEvents on the non-blocking glfwPollEvents() path, so the
+     read_socket_hook never blocks regardless of window state.
+
+     INVARIANT: lrg_read_socket polls via grl_window_poll_events (raylib
+     PollInputEvents) and runs on Emacs's single command-loop thread, so
+     that poll MUST stay non-blocking.  PollInputEvents only blocks in
+     glfwWaitEvents() when (eventWaiting) || (minimized && !always_run);
+     ALWAYS_RUN clears the second term -- and lrgterm must therefore also
+     never enable raylib event-waiting (grl_application_enable_event_waiting
+     / EnableEventWaiting), which would re-block the daemon even with
+     ALWAYS_RUN set.  */
+  grl_window_set_config_flags (GRL_FLAG_WINDOW_TRANSPARENT
+                               | GRL_FLAG_WINDOW_ALWAYS_RUN);
 
   /* render_mode: 0 = 2d, 1 = 3d, 2 = 3dvr.  Pick the matching surface subclass
      (both own the single raylib window).  3dvr currently falls back to the 3D
