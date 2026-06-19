@@ -35,7 +35,14 @@ M-x cmacs-gowl-mode           ;; toggle (usually auto-enabled by --gowl)
 | =cmacs-gowl-close-window=     | Select and close a client window          |
 | =cmacs-gowl-list-windows=     | Show all managed windows in a buffer      |
 | =cmacs-gowl-view-tag=         | Switch to a tag (workspace) 1--9          |
+| =cmacs-gowl-switch-tag=       | Pick a tag (shows what's open) and switch  |
+| =cmacs-gowl-switch-to-app=    | Pick any open window and jump to it        |
 | =cmacs-gowl-send-to-tag=      | Move focused client to a tag 1--9         |
+| =cmacs-gowl-toggle-tag=       | Toggle a tag's visibility 1--9            |
+| =cmacs-gowl-assign-monitor-tags= | Monitor 1→tag 1, 2→tag 2, … (re-apply) |
+| =cmacs-gowl-launch-in-tag=    | Pick an app (completion) → launch on a tag |
+| =cmacs-gowl-bemenu-in-tag=    | Pick an app (bemenu) → launch on a tag    |
+| =cmacs-gowl-spawn-in-tag=     | Spawn a command on a specific tag         |
 | =cmacs-gowl-set-layout=       | Set layout (tile, monocle, float)         |
 | =cmacs-gowl-list-monitors=    | Show monitor info table                   |
 | =cmacs-gowl-monitor-info=     | Show detailed info for one monitor        |
@@ -43,6 +50,123 @@ M-x cmacs-gowl-mode           ;; toggle (usually auto-enabled by --gowl)
 | =cmacs-gowl-set-scale=        | Set monitor scale factor                  |
 | =cmacs-gowl-set-transform=    | Set monitor rotation/flip                 |
 | =cmacs-gowl-toggle-monitor=   | Enable or disable a monitor               |
+
+* Tags and Workspaces
+
+gowl uses the dwm/dwl *tag* model: there are nine tags (1--9), each a
+bit in a per-monitor bitmask.  Viewing a tag shows the clients tagged
+with it and hides the rest; a client can carry one or several tags.
+Tags behave like workspaces.  Emacs's own frame is an ordinary tiled
+client and lives on tag 1 — so switching to an empty tag hides Emacs
+(classic dwm behaviour), and =Super+1= brings it back.
+
+This complements [[*Client Embedding][embedding]]: =gowl-embed= runs an
+app /inside/ an Emacs window (always visible on tag 1), whereas the
+launch-into-tag commands run an app as an independent client in another
+workspace.
+
+** Switching from M-x
+
+You don't need the keyboard shortcuts — everything is available as a
+command:
+
+- =M-x cmacs-gowl-view-tag= — switch the focused monitor to a tag by
+  number.  This performs a full view: it shows/hides clients, re-tiles,
+  and moves focus (just like =Super+N=).
+- =M-x cmacs-gowl-switch-tag= — a friendlier picker that lists the nine
+  tags each annotated with what's open on them (e.g. =Tag 2 — Firefox,
+  gimp= or =Tag 3 — (empty)=); pick one to switch to it.
+- =M-x cmacs-gowl-switch-to-app= — a *window picker*: lists every open
+  window across all tags and monitors (title, app-id, and its tag).
+  Selecting one reveals that window's tag on its monitor and focuses
+  it — the way to reach an app that is open in another tag/monitor
+  without hunting for it.  Embedded clients are excluded (use =C-x b=).
+
+** Multi-monitor
+
+Tags are *per-monitor*: every output has its own independent tag set,
+so each tag can live on its own monitor.  On mode start (when
+=cmacs-gowl-monitor-tags-on-launch= is non-nil, the default) each
+monitor is given its own initial tag — the main (first) monitor views
+tag 1, the second views tag 2, and so on, up to nine monitors.  Re-run
+=M-x cmacs-gowl-assign-monitor-tags= after hotplugging a monitor.
+
+The tag-action keybinds act on the *focused* monitor: focus a monitor
+with =Super+,= / =Super+.=, then =Super+N= switches that monitor's
+tags, =Super+Shift+,= / =.= moves the focused client to the previous /
+next monitor.  Each monitor's bar shows its own tag state.
+
+Launching into a tag follows the tag to its monitor:
+=cmacs-gowl-spawn-in-tag= (and the launch commands below) find the
+monitor currently showing the target tag and place the new client
+there, so launching on tag 2 lands on the monitor whose workspace is
+tag 2 — never hidden on the wrong output.
+
+** Restored keybindings
+
+Under =emacs --gowl= the compositor starts with an *empty* keybind
+table, so =cmacs-gowl-mode= installs the standard dwm-style set on
+enable (controlled by =cmacs-gowl-default-keybindings=, default on).
+The compositor evaluates these before forwarding keys to the focused
+surface, so they work globally even while Emacs or an embedded client
+holds focus.
+
+| Keybinding              | Action                                  |
+|-------------------------+-----------------------------------------|
+| =Super+Return=          | Launch terminal (=cmacs-gowl-terminal-command=) |
+| =Super+p=               | Launch menu (=cmacs-gowl-menu-command=, bemenu) |
+| =Super+Shift+c=         | Kill focused client                     |
+| =Super+j= / =Super+k=   | Focus next / previous in stack          |
+| =Super+h= / =Super+l=   | Shrink / grow the master area           |
+| =Super+i= / =Super+d=   | Increment / decrement master count      |
+| =Super+Shift+Return=    | Zoom (promote to master)                |
+| =Super+t= / =f= / =m=   | Tile / float / monocle layout           |
+| =Super+space=           | Toggle floating                         |
+| =Super+Shift+space=     | Toggle fullscreen                       |
+| =Super+1=..=9=          | View tag N                              |
+| =Super+Shift+1=..=9=    | Move focused client to tag N            |
+| =Super+Ctrl+1=..=9=     | Toggle visibility of tag N              |
+| =Super+Shift+Ctrl+1=..=9= | Toggle tag N on the focused client    |
+| =Super+0=               | View all tags                           |
+| =Super+Shift+0=         | Tag focused client to all tags          |
+| =Super+,= / =Super+.=   | Focus previous / next monitor           |
+| =Super+Shift+,= / =.=   | Move client to previous / next monitor  |
+| =Super+Shift+q=         | Quit the compositor                     |
+| =Super+Shift+r=         | Reload config                           |
+
+#+begin_quote
+*Caution:* under =--gowl= the compositor /is/ the Emacs session, so
+=Super+Shift+q= quits Emacs.  Set =cmacs-gowl-default-keybindings= to
+nil and install your own binds with =gowl-add-keybind= to customise.
+#+end_quote
+
+Note on tag arguments: the compositor interprets a tag-action keybind
+argument as a raw tag /bitmask/ (=atoi(arg) & TAGMASK=), not a 1-based
+tag number, and an argument of ="0"= is a no-op.  =cmacs-gowl-mode=
+therefore binds tag N to the bitmask ~(ash 1 (1- N))~ and "all" to
+~(1<<9)-1~ = 511.  (gowl's shipped =default-config.c= passes plain
+="1".."9"/"0"=, which is only correct for tags 1 and 2; the cmacs
+installer passes real bitmasks.)
+
+** Launching applications into a tag
+
+These commands run an app as a separate client placed directly on a
+target tag, without it first flashing onto the current tag:
+
+#+begin_src emacs-lisp
+(cmacs-gowl-launch-in-tag 3)   ;; completion over .desktop apps
+(cmacs-gowl-bemenu-in-tag 3)   ;; bemenu (dmenu mode) picker
+(cmacs-gowl-spawn-in-tag "firefox" 2)
+#+end_src
+
+The placement is flash-free and race-free: =cmacs-gowl-spawn-in-tag=
+registers the spawned PID with the compositor via =gowl-pretag-pid=, so
+the client adopts the tag's bitmask the instant it maps.
+=cmacs-gowl-bemenu-in-tag= runs bemenu in /dmenu mode/ (reading the app
+list on stdin) so cmacs owns the spawn — and thus the PID — and shows
+the bemenu UI inside gowl by pointing =WAYLAND_DISPLAY= at the
+compositor socket.  =Super+p= keeps the classic standalone behaviour
+(=bemenu-run= launches the app itself, on the current tag).
 
 * Monitor Management
 
@@ -493,9 +617,14 @@ transparency persists across frames.
 
 ** Status Bar
 
-Compositor-level status bar showing focused window title and system
-info (battery, clock).  Semi-transparent background so the wallpaper
-shows through.  Tiling layout automatically accounts for bar height.
+Compositor-level status bar showing, left to right: a dwm-style *tag
+indicator*, the focused window title, and system widgets (cpu, memory,
+clock, …).  Semi-transparent background so the wallpaper shows through.
+Tiling layout automatically accounts for bar height.
+
+Under =cmacs-gowl-mode= the bar is enabled automatically when
+=cmacs-gowl-bar-show-tags= is non-nil (the default); set it to nil to
+start without a bar (you can still =gowl-bar-enable= later).
 
 #+begin_src emacs-lisp
 (gowl-bar-enable)
@@ -505,6 +634,38 @@ shows through.  Tiling layout automatically accounts for bar height.
     ("fg-color" . "#cdd6f4")
     ("font" . "Hack Nerd Font Mono")
     ("font-size" . "13")))
+#+end_src
+
+*** Tag Indicator
+
+The left edge renders one numbered box per tag (1--9), coloured by
+state:
+
+| State    | Meaning                                  |
+|----------+------------------------------------------|
+| selected | viewed on this monitor (filled)          |
+| urgent   | has a client demanding attention (filled) |
+| occupied | has clients but not selected             |
+| empty    | no clients                               |
+
+The indicator updates live as tags and windows change.  *The tag boxes
+are clickable*: left-click a box to view that tag on that monitor,
+right-click to toggle the tag's visibility — the same effect as
+=Super+N= / =Super+Ctrl+N=, but per the monitor whose bar you click
+(so it works naturally across monitors).
+
+Toggle it and recolour it with the =show-tags= key and the tag colour
+keys:
+
+#+begin_src emacs-lisp
+(gowl-bar-configure
+  '(("show-tags" . "true")
+    ("tag-active-bg" . "#89b4fa")
+    ("tag-active-fg" . "#1e1e2e")
+    ("tag-occupied-fg" . "#cdd6f4")
+    ("tag-urgent-bg" . "#f38ba8")
+    ("tag-urgent-fg" . "#1e1e2e")
+    ("tag-empty-fg" . "#6c7086")))
 #+end_src
 
 | Function                          | Description                              |
@@ -833,7 +994,22 @@ escape hatch that survives Emacs pathologies.
 (setq cmacs-gowl-layouts '("tile" "monocle" "float"))
 (setq cmacs-gowl-default-layout "tile")
 (setq cmacs-gowl-autostart '("waybar"))
+
+;; Tags / keybindings / bar (see "Tags and Workspaces").
+(setq cmacs-gowl-default-keybindings t)  ;; install dwm-style binds
+(setq cmacs-gowl-menu-command "bemenu-run")  ;; Super+p launcher
+(setq cmacs-gowl-terminal-command nil)   ;; nil → dropdown terminal
+(setq cmacs-gowl-bar-show-tags t)        ;; enable bar + tag indicator
+(setq cmacs-gowl-monitor-tags-on-launch t) ;; monitor i → tag i+1
 #+end_src
+
+| Option                          | Default        | Effect                                |
+|---------------------------------+----------------+---------------------------------------|
+| =cmacs-gowl-default-keybindings= | =t=           | Install the dwm-style keybind set     |
+| =cmacs-gowl-menu-command=        | ="bemenu-run"= | =Super+p= launcher / dmenu binary base |
+| =cmacs-gowl-terminal-command=    | =nil=          | =Super+Return= terminal (nil → dropdown terminal) |
+| =cmacs-gowl-bar-show-tags=       | =t=            | Auto-enable the bar with its tag indicator |
+| =cmacs-gowl-monitor-tags-on-launch= | =t=        | Assign monitor /i/ → tag /i/+1 at launch |
 
 * Files
 

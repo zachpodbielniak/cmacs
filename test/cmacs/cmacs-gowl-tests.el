@@ -478,6 +478,9 @@
 (ert-deftest cmacs-gowl-test-add-dropdown-type-check ()
   "`gowl-add-dropdown' requires NAME and SPAWN-CMD strings."
   (skip-unless (cmacs-feature-p 'gowl))
+  ;; The DEFUN runs GOWL_CHECK_RUNNING before CHECK_STRING, so the
+  ;; type check is only reachable with a live compositor.
+  (skip-unless (gowl-running-p))
   (should-error (gowl-add-dropdown 42 "foo" nil 1.0 0.4 0 0 'top)
                 :type 'wrong-type-argument))
 
@@ -490,6 +493,8 @@
 (ert-deftest cmacs-gowl-test-dropdown-toggle-type-check ()
   "`gowl-dropdown-toggle' requires a string argument."
   (skip-unless (cmacs-feature-p 'gowl))
+  ;; GOWL_CHECK_RUNNING precedes the type check; needs a compositor.
+  (skip-unless (gowl-running-p))
   (should-error (gowl-dropdown-toggle 42) :type 'wrong-type-argument))
 
 ;;; Customization integration tests
@@ -506,6 +511,155 @@ or nil (which falls back to `cmacs-gowl-default-dropdown-terminal')."
   (require 'cmacs-gowl)
   (dolist (d cmacs-gowl-dropdowns)
     (should (plist-get d :name))))
+
+;;; Tag keybindings and launch-into-tag tests
+
+(ert-deftest cmacs-gowl-test-default-keybinds-tag-bitmasks ()
+  "The keybind installer passes tag-action args as raw bitmasks.
+The compositor interprets a tag-action arg as `atoi(arg) & TAGMASK',
+so tag N must be (ash 1 (1- N)) and \"view all\" must be (1<<9)-1,
+not the plain tag number / \"0\" that gowl's default-config.c uses."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (require 'cmacs-gowl)
+  (require 'cl-lib)
+  (let ((captured nil)
+        (cmacs-gowl--keybinds-installed nil))
+    (cl-letf (((symbol-function 'gowl-add-keybind)
+               (lambda (key action &optional arg)
+                 (push (list key action arg) captured))))
+      (cmacs-gowl--install-default-keybinds))
+    ;; tag 1 -> bit 0 = "1", tag 3 -> bit 2 = "4", tag 9 -> bit 8 = "256".
+    (should (member '("Super+1" tag-view "1") captured))
+    (should (member '("Super+3" tag-view "4") captured))
+    (should (member '("Super+9" tag-view "256") captured))
+    ;; Shift moves the focused client to that tag.
+    (should (member '("Super+Shift+3" tag-set "4") captured))
+    ;; Ctrl toggles the tag's visibility; Shift+Ctrl toggles on client.
+    (should (member '("Super+Ctrl+3" tag-toggle-view "4") captured))
+    (should (member '("Super+Shift+Ctrl+3" tag-toggle "4") captured))
+    ;; "All tags" is the full mask (1<<9)-1 = 511, never "0" (a no-op).
+    (should (member '("Super+0" tag-view "511") captured))
+    (should (member '("Super+Shift+0" tag-set "511") captured))
+    (should-not (member '("Super+0" tag-view "0") captured))
+    ;; Launcher + terminal binds are present.
+    (should (cl-find-if (lambda (e) (and (equal (car e) "Super+p")
+                                         (eq (nth 1 e) 'spawn)))
+                        captured))
+    (should (cl-find-if (lambda (e) (and (equal (car e) "Super+Return")
+                                         (eq (nth 1 e) 'spawn)))
+                        captured))))
+
+(ert-deftest cmacs-gowl-test-bemenu-binary-strips-run ()
+  "`cmacs-gowl--bemenu-binary' derives the dmenu-mode binary name."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (require 'cmacs-gowl)
+  (let ((cmacs-gowl-menu-command "bemenu-run"))
+    (should (equal (cmacs-gowl--bemenu-binary) "bemenu")))
+  (let ((cmacs-gowl-menu-command "bemenu"))
+    (should (equal (cmacs-gowl--bemenu-binary) "bemenu")))
+  (let ((cmacs-gowl-menu-command "rofi -show drun"))
+    (should (equal (cmacs-gowl--bemenu-binary) "rofi"))))
+
+(ert-deftest cmacs-gowl-test-launch-commands-defined ()
+  "Tag-launch commands and the pretag primitive are available."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (require 'cmacs-gowl)
+  (should (commandp 'cmacs-gowl-spawn-in-tag))
+  (should (commandp 'cmacs-gowl-launch-in-tag))
+  (should (commandp 'cmacs-gowl-bemenu-in-tag))
+  (should (commandp 'cmacs-gowl-toggle-tag))
+  (should (commandp 'cmacs-gowl-assign-monitor-tags))
+  (should (fboundp 'gowl-pretag-pid))
+  ;; gowl-pretag-pid takes (PID TAGMASK &optional MONITOR).
+  (should (equal (func-arity 'gowl-pretag-pid) '(2 . 3))))
+
+(ert-deftest cmacs-gowl-test-assign-monitor-tags ()
+  "`cmacs-gowl-assign-monitor-tags' views tag i+1 on monitor i."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (require 'cmacs-gowl)
+  (require 'cl-lib)
+  (let ((calls nil))
+    (cl-letf (((symbol-function 'gowl-running-p) (lambda () t))
+              ((symbol-function 'gowl-list-monitors)
+               (lambda () '(:m0 :m1 :m2)))
+              ((symbol-function 'gowl-view-tags)
+               (lambda (mask mon) (push (cons mon mask) calls)))
+              ((symbol-function 'cmacs-gowl--bar-redraw) #'ignore))
+      (cmacs-gowl-assign-monitor-tags))
+    ;; monitor 0 → tag 1 (bit 0 = 1), 1 → tag 2 (2), 2 → tag 3 (4).
+    (should (equal (assoc :m0 calls) '(:m0 . 1)))
+    (should (equal (assoc :m1 calls) '(:m1 . 2)))
+    (should (equal (assoc :m2 calls) '(:m2 . 4)))))
+
+(ert-deftest cmacs-gowl-test-monitor-index-showing-tag ()
+  "`cmacs-gowl--monitor-index-showing-tag' finds the monitor viewing a tag."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (require 'cmacs-gowl)
+  (require 'cl-lib)
+  ;; Three monitors viewing tags 1, 2, 4 (bits 0, 1, 2).
+  (cl-letf (((symbol-function 'gowl-list-monitors)
+             (lambda () '(:m0 :m1 :m2)))
+            ((symbol-function 'gowl-monitor-info)
+             (lambda (m)
+               (list (cons 'tags (pcase m (:m0 1) (:m1 2) (:m2 4)))))))
+    (should (equal (cmacs-gowl--monitor-index-showing-tag 1) 0))
+    (should (equal (cmacs-gowl--monitor-index-showing-tag 2) 1))
+    (should (equal (cmacs-gowl--monitor-index-showing-tag 4) 2))
+    ;; A tag shown on no monitor (fewer monitors than tags) → nil.
+    (should (null (cmacs-gowl--monitor-index-showing-tag 8)))))
+
+(ert-deftest cmacs-gowl-test-picker-commands-defined ()
+  "The M-x tag/window pickers are interactive commands."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (require 'cmacs-gowl)
+  (should (commandp 'cmacs-gowl-switch-tag))
+  (should (commandp 'cmacs-gowl-switch-to-app))
+  (should (commandp 'cmacs-gowl-view-tag))
+  (should (fboundp 'cmacs-gowl--refresh-view)))
+
+(ert-deftest cmacs-gowl-test-tag-mask-label ()
+  "`cmacs-gowl--tag-mask-label' renders tag bitmasks compactly."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (require 'cmacs-gowl)
+  (should (equal (cmacs-gowl--tag-mask-label 1) "1"))
+  (should (equal (cmacs-gowl--tag-mask-label 4) "3"))
+  (should (equal (cmacs-gowl--tag-mask-label 6) "2,3"))
+  (should (equal (cmacs-gowl--tag-mask-label 256) "9"))
+  (should (equal (cmacs-gowl--tag-mask-label 0) "—")))
+
+(ert-deftest cmacs-gowl-test-client-label ()
+  "`cmacs-gowl--client-label' formats title, app-id and tag."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (require 'cmacs-gowl)
+  (should (string-match-p
+           "Firefox.*\\[firefox\\].*tag 2"
+           (cmacs-gowl--client-label
+            '((title . "Firefox") (app-id . "firefox") (tags . 2)))))
+  ;; Untitled + no app-id still yields a usable label.
+  (should (string-match-p
+           "(untitled).*tag 1"
+           (cmacs-gowl--client-label
+            '((title . "") (app-id . "") (tags . 1))))))
+
+(ert-deftest cmacs-gowl-test-spawn-in-tag-requires-running ()
+  "`cmacs-gowl-spawn-in-tag' errors when the compositor is not running."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (require 'cmacs-gowl)
+  (skip-unless (not (gowl-running-p)))
+  (should-error (cmacs-gowl-spawn-in-tag "true" 2)))
+
+(ert-deftest cmacs-gowl-test-pretag-pid-requires-running ()
+  "`gowl-pretag-pid' errors when the compositor is not running."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (skip-unless (not (gowl-running-p)))
+  (should-error (gowl-pretag-pid 12345 2)))
+
+(ert-deftest cmacs-gowl-test-pretag-pid-type-checks ()
+  "`gowl-pretag-pid' type-checks its PID and TAGMASK arguments."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (skip-unless (gowl-running-p))
+  (should-error (gowl-pretag-pid "notapid" 2) :type 'wrong-type-argument)
+  (should-error (gowl-pretag-pid 123 "notamask") :type 'wrong-type-argument))
 
 (provide 'cmacs-gowl-tests)
 ;;; cmacs-gowl-tests.el ends here

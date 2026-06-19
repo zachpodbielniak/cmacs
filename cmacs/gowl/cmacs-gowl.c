@@ -1953,19 +1953,22 @@ DEFUN ("gowl-focused-client", Fgowl_focused_client, Sgowl_focused_client,
 
 DEFUN ("gowl-focus-client", Fgowl_focus_client, Sgowl_focus_client,
        1, 1, 0,
-       doc: /* Focus CLIENT window. */)
+       doc: /* Focus CLIENT, revealing its tag (workspace) on its monitor.
+Switches CLIENT's monitor to show CLIENT's tags, gives it keyboard
+focus, and re-tiles — so this works even when CLIENT lives on a tag
+or monitor that is not currently viewed.  Embedded clients (which
+live inside Emacs windows) only have their tag revealed; keyboard
+focus stays with Emacs. */)
   (Lisp_Object client)
 {
   GowlClient *c;
-  GowlMonitor *mon;
 
   GOWL_CHECK_RUNNING ();
   c = gowl_resolve_client (client);
 
-  /* Move the client's tags into view on its monitor, then focus. */
-  mon = gowl_client_get_monitor (c);
-  if (mon != NULL)
-    gowl_monitor_set_tags (GOWL_MONITOR (mon), gowl_client_get_tags (c));
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  gowl_compositor_show_client (cmacs_gowl_compositor, c);
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
 
   return Qt;
 }
@@ -2518,6 +2521,37 @@ on first match.  Used by `gowl-embed' to prevent a visual flash. */)
   CHECK_FIXNUM (pid);
   gowl_compositor_prefloat_pid (cmacs_gowl_compositor,
                                 (pid_t) XFIXNUM (pid));
+  return Qnil;
+}
+
+DEFUN ("gowl-pretag-pid", Fgowl_pretag_pid, Sgowl_pretag_pid,
+       2, 3, 0,
+       doc: /* Register PID so its client maps onto TAGMASK.
+When the next client owned by PID first appears, the compositor
+places it on the TAGMASK tag set instead of the currently-viewed
+tags — so the client never flashes on the active tag.  TAGMASK is an
+integer bitmask (bit 0 = tag 1).  Optional MONITOR is a 0-based
+monitor index to place the client on (so a tag lands on the monitor
+showing it); nil or negative leaves it on the focused monitor.  The
+registration is consumed on first match.  Used by
+`cmacs-gowl-spawn-in-tag' to launch an application directly into a
+tag (workspace) on its monitor. */)
+  (Lisp_Object pid, Lisp_Object tagmask, Lisp_Object monitor)
+{
+  gint mon_idx = -1;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_FIXNUM (pid);
+  CHECK_FIXNAT (tagmask);
+  if (!NILP (monitor))
+    {
+      CHECK_FIXNUM (monitor);
+      mon_idx = (gint) XFIXNUM (monitor);
+    }
+  gowl_compositor_pretag_pid (cmacs_gowl_compositor,
+                              (pid_t) XFIXNUM (pid),
+                              (guint32) XFIXNAT (tagmask),
+                              mon_idx);
   return Qnil;
 }
 
@@ -3368,7 +3402,9 @@ Returns t on success, nil on failure.  MONITOR defaults to focused. */)
 
 DEFUN ("gowl-view-tags", Fgowl_view_tags, Sgowl_view_tags, 1, 2, 0,
        doc: /* Switch tag view to TAGMASK on MONITOR.
-TAGMASK is an integer bitmask.  MONITOR defaults to focused. */)
+TAGMASK is an integer bitmask.  MONITOR defaults to focused.
+Performs a full dwm view(): shows/hides clients, selects the
+monitor, focuses its top client, and re-tiles. */)
   (Lisp_Object tagmask, Lisp_Object monitor)
 {
   GowlMonitor *mon;
@@ -3378,7 +3414,12 @@ TAGMASK is an integer bitmask.  MONITOR defaults to focused. */)
 
   mon = gowl_resolve_monitor (monitor);
   if (mon != NULL)
-    gowl_monitor_set_tags (mon, (guint32)XFIXNAT (tagmask));
+    {
+      pthread_mutex_lock (&cmacs_gowl_mutex);
+      gowl_compositor_view_tags (cmacs_gowl_compositor, mon,
+                                 (guint32)XFIXNAT (tagmask));
+      pthread_mutex_unlock (&cmacs_gowl_mutex);
+    }
 
   return Qnil;
 }
@@ -4995,7 +5036,10 @@ Deactivates the bar module and reclaims the tiling space. */)
 DEFUN ("gowl-bar-configure", Fgowl_bar_configure,
        Sgowl_bar_configure, 1, 1, 0,
        doc: /* Configure the status bar with ALIST.
-Keys: "height", "bg-color", "fg-color", "font", "font-size".
+Keys: "height", "bg-color", "fg-color", "font", "font-size",
+"show-tags" (true/false), and the tag-indicator colours
+"tag-active-bg", "tag-active-fg", "tag-occupied-fg",
+"tag-urgent-bg", "tag-urgent-fg", "tag-empty-fg".
 Re-arranges monitors if height changed. */)
   (Lisp_Object alist)
 {
@@ -6742,6 +6786,7 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_set_client_visible);
   defsubr (&Sgowl_arrange);
   defsubr (&Sgowl_prefloat_pid);
+  defsubr (&Sgowl_pretag_pid);
   defsubr (&Sgowl_reparent_client);
   defsubr (&Sgowl_set_client_embedded);
   defsubr (&Sgowl_client_border_width);

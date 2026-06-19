@@ -143,6 +143,84 @@ foot, alacritty, wezterm, kitty, etc. if you prefer one of those."
   :type 'string
   :group 'cmacs-gowl)
 
+(defcustom cmacs-gowl-terminal-command nil
+  "Terminal command bound to Super+Return by the default keybindings.
+When nil, falls back to `cmacs-gowl-default-dropdown-terminal'."
+  :type '(choice (const :tag "Use dropdown terminal" nil)
+                 (string :tag "Command"))
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-menu-command "bemenu-run"
+  "Application launcher bound to Super+p by the default keybindings.
+This is the standalone gowl default.  The binary named here (with
+any \"-run\" suffix stripped) is also used in dmenu mode by
+`cmacs-gowl-bemenu-in-tag'."
+  :type 'string
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-default-keybindings t
+  "When non-nil, install the standard dwm-style compositor keybindings
+on `cmacs-gowl-mode' enable.
+
+Under `emacs --gowl' the compositor starts with an empty keybind
+table, so none of the familiar Super+N tag bindings work until they
+are installed.  This option restores the full default set that
+standalone gowl ships with (see
+`cmacs-gowl--install-default-keybinds'):
+
+  Super+Return        launch terminal (`cmacs-gowl-terminal-command')
+  Super+p             launch menu (`cmacs-gowl-menu-command')
+  Super+Shift+c       kill focused client
+  Super+j / Super+k   focus next / previous in stack
+  Super+h / Super+l   shrink / grow master area
+  Super+i / Super+d   increment / decrement master count
+  Super+Shift+Return  zoom (promote to master)
+  Super+t / f / m     tile / float / monocle layout
+  Super+space         toggle floating
+  Super+Shift+space   toggle fullscreen
+  Super+0             view all tags
+  Super+Shift+0       tag focused client to all tags
+  Super+1..9          view tag N
+  Super+Shift+1..9    move focused client to tag N
+  Super+Ctrl+1..9     toggle visibility of tag N
+  Super+Shift+Ctrl+N  toggle tag N on focused client
+  Super+, / Super+.   focus previous / next monitor
+  Super+Shift+, / .   move focused client to previous / next monitor
+  Super+Shift+q       quit the compositor
+  Super+Shift+r       reload config
+
+Note: under `--gowl' the compositor IS the Emacs session, so
+Super+Shift+q quits Emacs.  To customise, set this to nil and add
+your own binds with `gowl-add-keybind', or edit
+`cmacs-gowl--install-default-keybinds'."
+  :type 'boolean
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-bar-show-tags t
+  "When non-nil, enable the in-process status bar on mode start.
+The bar renders a dwm-style tag indicator on its left edge
+(occupied / selected / urgent tags) plus the focused-window title
+and the default data widgets.  Set to nil to leave the bar
+disabled — you can still turn it on later with `gowl-bar-enable'.
+The tag row itself can be toggled at runtime with the bar's
+\"show-tags\" configuration key via `gowl-bar-configure'."
+  :type 'boolean
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-monitor-tags-on-launch t
+  "When non-nil, give each monitor its own initial tag on mode start.
+Tags are per-monitor (dwm model): the main (first) monitor views
+tag 1, the second monitor views tag 2, and so on, up to nine
+monitors.  Each monitor then switches its own tags independently
+(focus a monitor with Super+,/.\\ then press Super+N).  Re-apply at
+any time with `cmacs-gowl-assign-monitor-tags'.
+
+Launching into a tag (see `cmacs-gowl-spawn-in-tag') also targets
+the monitor currently showing that tag, so e.g. launching on tag 2
+lands on the monitor whose workspace is tag 2."
+  :type 'boolean
+  :group 'cmacs-gowl)
+
 (defcustom cmacs-gowl-dropdowns
   '((:name "term"
      :spawn-cmd nil
@@ -289,6 +367,72 @@ terminal choice with a single setting."
           (error
            (message "cmacs-gowl: dropdown %S failed: %s" dd err)))))))
 
+(defvar cmacs-gowl--keybinds-installed nil
+  "Non-nil once `cmacs-gowl--install-default-keybinds' has run.
+Reset by `cmacs-gowl--stop' so re-enabling the mode re-installs.")
+
+(defun cmacs-gowl--install-default-keybinds ()
+  "Install the standard dwm-style gowl keybindings into the live config.
+Idempotent within a mode session.  See `cmacs-gowl-default-keybindings'
+for the full binding table.
+
+Each bind is added via `gowl-add-keybind'.  The compositor evaluates
+its config keybind table before forwarding keys to the focused
+surface, so these work globally even while Emacs or an embedded
+client holds keyboard focus.  Tag action args are 1-based tag
+numbers as strings (\"0\" means all tags), matching the C defaults."
+  (unless cmacs-gowl--keybinds-installed
+    (let ((term (or cmacs-gowl-terminal-command
+                    cmacs-gowl-default-dropdown-terminal
+                    "gst"))
+          (menu (or cmacs-gowl-menu-command "bemenu-run")))
+      (cl-flet ((bind (key action &optional arg)
+                  (ignore-errors (gowl-add-keybind key action arg))))
+        ;; Spawns.
+        (bind "Super+Return" 'spawn term)
+        (bind "Super+p" 'spawn menu)
+        ;; Client management.
+        (bind "Super+Shift+c" 'kill-client)
+        (bind "Super+j" 'focus-stack "+1")
+        (bind "Super+k" 'focus-stack "-1")
+        (bind "Super+h" 'set-mfact "-0.05")
+        (bind "Super+l" 'set-mfact "+0.05")
+        (bind "Super+i" 'inc-nmaster "+1")
+        (bind "Super+d" 'inc-nmaster "-1")
+        (bind "Super+Shift+Return" 'zoom)
+        ;; Layouts.
+        (bind "Super+t" 'set-layout "tile")
+        (bind "Super+f" 'set-layout "float")
+        (bind "Super+m" 'set-layout "monocle")
+        (bind "Super+space" 'toggle-float)
+        (bind "Super+Shift+space" 'toggle-fullscreen)
+        ;; Tags.  The compositor interprets every tag-action arg as a
+        ;; raw tag *bitmask* (atoi(arg) & TAGMASK), not a 1-based tag
+        ;; number — and arg "0" is a no-op.  So tag N uses the string
+        ;; for (ash 1 (1- N)) and "view/tag all" uses the all-tags
+        ;; mask (1<<9)-1.  (gowl's shipped default-config.c passes
+        ;; plain "1".."9"/"0" here, which is only correct for tags 1
+        ;; and 2 and a no-op for "all"; we pass real bitmasks.)
+        (let ((all (number-to-string (1- (ash 1 9)))))
+          (bind "Super+0" 'tag-view all)
+          (bind "Super+Shift+0" 'tag-set all))
+        (dotimes (i 9)
+          (let ((key  (number-to-string (1+ i)))
+                (mask (number-to-string (ash 1 i))))
+            (bind (concat "Super+" key) 'tag-view mask)
+            (bind (concat "Super+Shift+" key) 'tag-set mask)
+            (bind (concat "Super+Ctrl+" key) 'tag-toggle-view mask)
+            (bind (concat "Super+Shift+Ctrl+" key) 'tag-toggle mask)))
+        ;; Multi-monitor.
+        (bind "Super+comma" 'focus-monitor "-1")
+        (bind "Super+period" 'focus-monitor "+1")
+        (bind "Super+Shift+comma" 'move-to-monitor "-1")
+        (bind "Super+Shift+period" 'move-to-monitor "+1")
+        ;; Session.
+        (bind "Super+Shift+q" 'quit)
+        (bind "Super+Shift+r" 'reload-config)))
+    (setq cmacs-gowl--keybinds-installed t)))
+
 (defun cmacs-gowl--start ()
   "Start the Gowl compositor and apply configuration.
 When launched with --gowl, the compositor is already running and
@@ -301,6 +445,31 @@ thread is running and applies configuration."
   ;; Apply default layout.
   (when cmacs-gowl-default-layout
     (gowl-set-layout cmacs-gowl-default-layout))
+  ;; Restore the standard dwm-style keybindings.  The --gowl launch
+  ;; path starts with an empty keybind table, so without this Super+N
+  ;; tag switching, Super+p menu, etc. are all inert.
+  (when cmacs-gowl-default-keybindings
+    (cmacs-gowl--install-default-keybinds))
+  ;; Enable the in-process status bar with its dwm-style tag
+  ;; indicator.  Opt-out via `cmacs-gowl-bar-show-tags'.
+  (when (and cmacs-gowl-bar-show-tags
+             (fboundp 'gowl-bar-enable))
+    (ignore-errors
+      (gowl-bar-enable)
+      (when (fboundp 'gowl-bar-configure)
+        (gowl-bar-configure '(("show-tags" . "true"))))
+      (when (fboundp 'cmacs-gowl-bar-sync-enable)
+        (cmacs-gowl-bar-sync-enable))))
+  ;; Give each monitor its own initial tag (main → 1, second → 2, …).
+  ;; Outputs may settle slightly after the compositor starts, so try
+  ;; immediately and once more shortly after.
+  (when cmacs-gowl-monitor-tags-on-launch
+    (ignore-errors (cmacs-gowl-assign-monitor-tags))
+    (run-with-timer
+     0.6 nil
+     (lambda ()
+       (when (and cmacs-gowl-monitor-tags-on-launch (gowl-running-p))
+         (ignore-errors (cmacs-gowl-assign-monitor-tags))))))
   ;; Push float rules and dropdowns from defcustoms into the
   ;; running gowl config.  Dropdowns must be pushed before the
   ;; dropdown module reads them at its own startup; in the
@@ -370,6 +539,7 @@ thread is running and applies configuration."
     (gowl-uninstall-workspace-provider))
   (when (gowl-running-p)
     (gowl-stop))
+  (setq cmacs-gowl--keybinds-installed nil)
   (setq cmacs-gowl--active nil))
 
 ;;; Global minor mode
@@ -462,23 +632,295 @@ When disabled, stops the compositor."
     (user-error "Gowl compositor is not running"))
   (gowl-spawn command))
 
+(defun cmacs-gowl--bar-redraw ()
+  "Force the gowl bar to repaint, if the bar module is loaded.
+Used after Elisp-driven tag changes so the tag indicator updates
+immediately rather than waiting for the next bar tick."
+  (when (fboundp 'gowl-bar-redraw)
+    (ignore-errors (gowl-bar-redraw))))
+
+(defun cmacs-gowl--refresh-view ()
+  "Re-apply the focused monitor's current tag view.
+After a low-level change to a client's tags (e.g. moving it to
+another tag), re-viewing the monitor's active tags makes
+`gowl-view-tags' run the full dwm view() — hiding the moved client,
+re-tiling, and refocusing the top remaining client."
+  (let ((active (cdr (assq 'active (ignore-errors (gowl-tag-info))))))
+    (when (and (integerp active) (> active 0))
+      (gowl-view-tags active))))
+
 (defun cmacs-gowl-view-tag (tag)
   "Switch to TAG (1-9)."
   (interactive "nTag (1-9): ")
   (unless (gowl-running-p)
     (user-error "Gowl compositor is not running"))
   (when (and (>= tag 1) (<= tag 9))
-    (gowl-view-tags (ash 1 (1- tag)))))
+    (gowl-view-tags (ash 1 (1- tag)))
+    (cmacs-gowl--bar-redraw)))
 
 (defun cmacs-gowl-send-to-tag (tag)
   "Send the focused client to TAG (1-9)."
   (interactive "nSend to tag (1-9): ")
   (unless (gowl-running-p)
     (user-error "Gowl compositor is not running"))
-  (let ((clients (gowl-list-clients)))
-    ;; Find focused client (first in list by convention).
-    (when (and clients (>= tag 1) (<= tag 9))
-      (gowl-set-tags (car clients) (ash 1 (1- tag))))))
+  (when (and (>= tag 1) (<= tag 9))
+    (let ((client (and (fboundp 'gowl-focused-client)
+                       (gowl-focused-client))))
+      ;; Fall back to the first managed client if no explicit focus.
+      (unless client
+        (setq client (car (gowl-list-clients))))
+      (when client
+        (gowl-set-tags client (ash 1 (1- tag)))
+        ;; Re-tile + refocus so the moved client leaves the view.
+        (cmacs-gowl--refresh-view)
+        (cmacs-gowl--bar-redraw)))))
+
+(defun cmacs-gowl-toggle-tag (tag)
+  "Toggle visibility of TAG (1-9) on the focused monitor."
+  (interactive "nToggle tag (1-9): ")
+  (unless (gowl-running-p)
+    (user-error "Gowl compositor is not running"))
+  (when (and (>= tag 1) (<= tag 9)
+             (fboundp 'gowl-toggle-tag-view))
+    (gowl-toggle-tag-view (1- tag))
+    ;; Re-tile + refocus for the newly toggled tag set.
+    (cmacs-gowl--refresh-view)
+    (cmacs-gowl--bar-redraw)))
+
+;;; Tag and window pickers (M-x)
+
+(defun cmacs-gowl--tag-mask-label (mask)
+  "Return a compact label like \"3\" or \"1,2\" for tag bitmask MASK."
+  (let (tags)
+    (dotimes (i 9)
+      (when (/= 0 (logand mask (ash 1 i)))
+        (push (number-to-string (1+ i)) tags)))
+    (if tags (mapconcat #'identity (nreverse tags) ",") "—")))
+
+(defun cmacs-gowl--client-label (info)
+  "Build a completion label for client INFO alist."
+  (let ((title (cdr (assq 'title info)))
+        (app   (cdr (assq 'app-id info)))
+        (tags  (or (cdr (assq 'tags info)) 0)))
+    (format "%s%s  — tag %s"
+            (if (and title (not (string-empty-p title))) title "(untitled)")
+            (if (and app (not (string-empty-p app)))
+                (format "  [%s]" app) "")
+            (cmacs-gowl--tag-mask-label tags))))
+
+;;;###autoload
+(defun cmacs-gowl-switch-tag ()
+  "Pick a tag from a list annotated with what's open, and switch to it.
+Switches the focused monitor's view (tags are per-monitor).  A
+friendlier `M-x' alternative to `cmacs-gowl-view-tag' / Super+N."
+  (interactive)
+  (unless (gowl-running-p)
+    (user-error "Gowl compositor is not running"))
+  (let* ((infos (mapcar #'gowl-client-info (gowl-list-clients)))
+         (candidates
+          (mapcar
+           (lambda (n)
+             (let* ((bit (ash 1 (1- n)))
+                    (apps (delq nil
+                                (mapcar
+                                 (lambda (info)
+                                   (when (/= 0 (logand
+                                                (or (cdr (assq 'tags info)) 0)
+                                                bit))
+                                     (let ((a (cdr (assq 'app-id info)))
+                                           (ti (cdr (assq 'title info))))
+                                       (if (and a (not (string-empty-p a)))
+                                           a ti))))
+                                 infos)))
+                    (label (if apps
+                               (format "Tag %d — %s" n
+                                       (mapconcat #'identity apps ", "))
+                             (format "Tag %d — (empty)" n))))
+               (cons label n)))
+           (number-sequence 1 9)))
+         (choice (completing-read "Switch to tag: " candidates nil t))
+         (n (cdr (assoc choice candidates))))
+    (when n
+      (cmacs-gowl-view-tag n))))
+
+;;;###autoload
+(defun cmacs-gowl-switch-to-app ()
+  "Pick an open window from all tags/monitors and jump to it.
+Presents every managed window (title, app-id and its tag); selecting
+one reveals that tag on the window's monitor and focuses it — so you
+can reach an app open in another tag or on another monitor without
+hunting for it.  Embedded clients (apps inside Emacs windows) are
+excluded; reach those with \\[switch-to-buffer]."
+  (interactive)
+  (unless (gowl-running-p)
+    (user-error "Gowl compositor is not running"))
+  (let ((candidates
+         (delq nil
+               (mapcar
+                (lambda (c)
+                  (let ((info (gowl-client-info c)))
+                    (unless (cdr (assq 'embedded info))
+                      (cons (cmacs-gowl--client-label info) c))))
+                (gowl-list-clients)))))
+    (if (null candidates)
+        (message "No windows open")
+      (let* ((choice (completing-read "Switch to window: " candidates nil t))
+             (client (cdr (assoc choice candidates))))
+        (when client
+          (gowl-focus-client client)
+          (cmacs-gowl--bar-redraw))))))
+
+;;; Multi-monitor tag assignment
+
+;;;###autoload
+(defun cmacs-gowl-assign-monitor-tags ()
+  "Give each monitor its own initial tag: monitor 1 → tag 1, 2 → tag 2…
+Tags are per-monitor, so the main (first) monitor views tag 1, the
+second views tag 2, and so on, up to nine monitors.  Each monitor
+then switches its own tags independently.  Called on mode start when
+`cmacs-gowl-monitor-tags-on-launch' is non-nil; also runnable by hand
+after hotplugging a monitor."
+  (interactive)
+  (unless (gowl-running-p)
+    (user-error "Gowl compositor is not running"))
+  (let ((i 0))
+    (dolist (mon (gowl-list-monitors))
+      (when (< i 9)
+        (gowl-view-tags (ash 1 i) mon))
+      (setq i (1+ i))))
+  ;; `gowl-view-tags' focus-follows per monitor, which would leave
+  ;; keyboard focus on the last monitor's top client (or nowhere if
+  ;; it is empty).  Return focus to Emacs.
+  (when (fboundp 'gowl-emacs-client)
+    (let ((ec (ignore-errors (gowl-emacs-client))))
+      (when ec (ignore-errors (gowl-focus-client ec)))))
+  (cmacs-gowl--bar-redraw))
+
+(defun cmacs-gowl--monitor-index-showing-tag (mask)
+  "Return the 0-based index of the monitor currently viewing MASK, or nil.
+Lets a launched client land on the monitor whose workspace is that
+tag.  nil when no monitor shows the tag (e.g. fewer monitors than
+tags) — the client then maps on the focused monitor."
+  (let ((monitors (gowl-list-monitors))
+        (idx 0)
+        (found nil))
+    (while (and monitors (not found))
+      (let ((tags (cdr (assq 'tags (ignore-errors
+                                     (gowl-monitor-info (car monitors)))))))
+        (when (and (integerp tags) (/= 0 (logand tags mask)))
+          (setq found idx)))
+      (setq monitors (cdr monitors))
+      (setq idx (1+ idx)))
+    found))
+
+;;; Launching applications into a specific tag (workspace)
+
+(defun cmacs-gowl--retag-pid-when-mapped (pid mask &optional monitor attempts)
+  "Poll for the gowl client with PID, place it on MONITOR and tags MASK.
+MONITOR is a 0-based index or nil (keep current monitor).  Fallback
+used only when the compositor lacks `gowl-pretag-pid'.  Retries every
+0.1s up to ATTEMPTS times (default 30 ≈ 3s)."
+  (let ((attempts (or attempts 30)))
+    (run-with-timer
+     0.1 nil
+     (lambda ()
+       (when (gowl-running-p)
+         (let ((client (seq-find (lambda (c) (= (gowl-client-pid c) pid))
+                                 (gowl-list-clients))))
+           (cond
+            (client
+             (when monitor
+               (let ((mon (nth monitor (gowl-list-monitors))))
+                 (when (and mon (fboundp 'gowl-move-client-to-monitor))
+                   (ignore-errors (gowl-move-client-to-monitor client mon)))))
+             (gowl-set-tags client mask)
+             (cmacs-gowl--bar-redraw))
+            ((> attempts 0)
+             (cmacs-gowl--retag-pid-when-mapped
+              pid mask monitor (1- attempts))))))))))
+
+;;;###autoload
+(defun cmacs-gowl-spawn-in-tag (command tag)
+  "Spawn COMMAND as a Wayland client placed on TAG (1-9).
+Registers the spawned PID with the compositor so the new client
+adopts TAG's bitmask — and the monitor currently showing that tag —
+the instant it maps, so it never flashes on the current tag/monitor.
+Returns the spawned PID.
+
+Unlike `gowl-embed', the app runs as an independent tiled/floating
+client in its own workspace rather than inside an Emacs window."
+  (interactive
+   (list (read-string "Spawn command: ")
+         (read-number "Tag (1-9): ")))
+  (unless (gowl-running-p)
+    (user-error "Gowl compositor is not running"))
+  (unless (and (integerp tag) (>= tag 1) (<= tag 9))
+    (user-error "Tag must be between 1 and 9"))
+  (let* ((mask (ash 1 (1- tag)))
+         (mon (cmacs-gowl--monitor-index-showing-tag mask))
+         (pid (gowl-spawn command)))
+    (if (fboundp 'gowl-pretag-pid)
+        (ignore-errors (gowl-pretag-pid pid mask mon))
+      (cmacs-gowl--retag-pid-when-mapped pid mask mon))
+    (message "Launching %s on tag %d%s…" command tag
+             (if mon (format " (monitor %d)" (1+ mon)) ""))
+    pid))
+
+;;;###autoload
+(defun cmacs-gowl-launch-in-tag (tag)
+  "Pick a GUI application and launch it on TAG (1-9).
+Uses Emacs completion over installed .desktop applications, then
+hands off to `cmacs-gowl-spawn-in-tag'."
+  (interactive "nLaunch on tag (1-9): ")
+  (unless (gowl-running-p)
+    (user-error "Gowl compositor is not running"))
+  (let* ((apps (gowl-embed--list-apps))
+         (name (completing-read (format "Launch on tag %d: " tag)
+                                (mapcar #'car apps) nil t))
+         (exec (cdr (assoc name apps))))
+    (unless exec (user-error "App not found: %s" name))
+    (cmacs-gowl-spawn-in-tag exec tag)))
+
+(defun cmacs-gowl--bemenu-binary ()
+  "Return the bemenu binary used for dmenu-mode selection.
+Derived from `cmacs-gowl-menu-command' by taking its first word and
+stripping a trailing -run (so \"bemenu-run\" → \"bemenu\")."
+  (let ((base (car (split-string (or cmacs-gowl-menu-command "bemenu")))))
+    (replace-regexp-in-string "-run\\'" "" base)))
+
+;;;###autoload
+(defun cmacs-gowl-bemenu-in-tag (tag)
+  "Pick a GUI application via bemenu and launch it on TAG (1-9).
+Runs bemenu in dmenu mode (reading the app list on stdin) so cmacs
+owns the spawn — and thus the PID — and can place the client on
+TAG via `cmacs-gowl-spawn-in-tag'.  The bemenu UI itself is shown
+inside gowl by pointing WAYLAND_DISPLAY at the compositor socket.
+Falls back to `cmacs-gowl-launch-in-tag' when bemenu is missing."
+  (interactive "nLaunch on tag (1-9): ")
+  (unless (gowl-running-p)
+    (user-error "Gowl compositor is not running"))
+  (let ((bemenu (cmacs-gowl--bemenu-binary)))
+    (if (not (executable-find bemenu))
+        (cmacs-gowl-launch-in-tag tag)
+      (let* ((apps (gowl-embed--list-apps))
+             (socket (and (fboundp 'gowl-socket-name) (gowl-socket-name)))
+             (process-environment
+              (if socket
+                  (cons (concat "WAYLAND_DISPLAY=" socket)
+                        (copy-sequence process-environment))
+                process-environment))
+             (name (with-temp-buffer
+                     (insert (mapconcat #'car apps "\n"))
+                     (when (zerop (call-process-region
+                                   (point-min) (point-max)
+                                   bemenu t t nil
+                                   "-p" (format "tag %d" tag)))
+                       (string-trim (buffer-string)))))
+             (exec (and name (not (string-empty-p name))
+                        (cdr (assoc name apps)))))
+        (if exec
+            (cmacs-gowl-spawn-in-tag exec tag)
+          (message "No application selected"))))))
 
 (defun cmacs-gowl-set-layout (layout)
   "Set the current monitor LAYOUT."

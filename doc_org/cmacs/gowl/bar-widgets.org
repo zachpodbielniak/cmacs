@@ -19,6 +19,40 @@ Each widget supports a per-type color via =TYPE-color= config keys.
 Some widgets accept parameters via colon syntax: =disk:/home=,
 =net:wlp2s0=, =cmd:~/script.sh=, =weather:London=.
 
+* Tag Indicator
+
+Independent of the right-side widget list, the bar draws a dwm-style
+*tag indicator* at its left edge: one numbered box per tag (1--9).
+It reads the monitor's selected tag set and scans the compositor's
+clients for occupied / urgent tags, repainting live as tags and
+windows change.  See also the [[file:../gowl.org][gowl manual]] "Tags
+and Workspaces" chapter.
+
+The tag boxes are *clickable*: left-click views that tag on the
+monitor whose bar you clicked, right-click toggles the tag's
+visibility.  (Handled compositor-side in =on_cursor_button= via the
+=GowlBarProvider= =tag_at= hit-test, so it works without any Elisp.)
+
+| Box state | Colour keys                       |
+|-----------+-----------------------------------|
+| selected  | =tag-active-bg= / =tag-active-fg= |
+| urgent    | =tag-urgent-bg= / =tag-urgent-fg= |
+| occupied  | (bar bg) / =tag-occupied-fg=      |
+| empty     | (bar bg) / =tag-empty-fg=         |
+
+Toggle the whole row with the =show-tags= key (default on):
+
+#+begin_src emacs-lisp
+(gowl-bar-configure
+  '(("show-tags" . "true")
+    ("tag-active-bg" . "#89b4fa")
+    ("tag-active-fg" . "#1e1e2e")
+    ("tag-occupied-fg" . "#cdd6f4")
+    ("tag-urgent-bg" . "#f38ba8")
+    ("tag-urgent-fg" . "#1e1e2e")
+    ("tag-empty-fg" . "#6c7086")))
+#+end_src
+
 * Widget Reference
 
 | Widget    | Syntax               | Display                  | Source              | Cache  |
@@ -257,6 +291,13 @@ other keys act per-slot.
 |--------------------+-----------------+-------------------------------------|
 | =position=         | =top=           | Target slot: =top= or =bottom=      |
 | =widgets=          | cpu mem disk bat clock | Space-separated widget list   |
+| =show-tags=        | =true=          | Draw the left-edge tag indicator    |
+| =tag-active-bg=    | =#89b4fa=       | Selected-tag fill                   |
+| =tag-active-fg=    | =#1e1e2e=       | Selected-tag number                 |
+| =tag-occupied-fg=  | =#cdd6f4=       | Occupied (non-selected) number      |
+| =tag-urgent-bg=    | =#f38ba8=       | Urgent-tag fill                     |
+| =tag-urgent-fg=    | =#1e1e2e=       | Urgent-tag number                   |
+| =tag-empty-fg=     | =#6c7086=       | Empty-tag number                    |
 | =height=           | 28              | Bar height in pixels                |
 | =bg-color=         | =#1e1e2e= (80%) | Background color (hex + alpha)      |
 | =fg-color=         | =#cdd6f4=       | Default text color                  |
