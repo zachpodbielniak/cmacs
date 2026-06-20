@@ -180,6 +180,55 @@ handle_screensaver_list_configs (McpServer *s, const gchar *n,
 }
 
 static McpToolResult *
+handle_screensaver_status (McpServer *s, const gchar *n,
+                           JsonObject *a, gpointer u)
+{
+  g_autoptr (GError) error = NULL;
+  (void) s; (void) n; (void) a; (void) u;
+  return gowl_result (cmacs_dispatch_screensaver_status (&error), error);
+}
+
+static McpToolResult *
+handle_screensaver_restart (McpServer *s, const gchar *n,
+                            JsonObject *a, gpointer u)
+{
+  g_autoptr (GError) error = NULL;
+  (void) s; (void) n; (void) a; (void) u;
+  return gowl_result (cmacs_dispatch_screensaver_restart (&error), error);
+}
+
+static McpToolResult *
+handle_screensaver_pause (McpServer *s, const gchar *n,
+                          JsonObject *a, gpointer u)
+{
+  g_autoptr (GError) error = NULL;
+  (void) s; (void) n; (void) a; (void) u;
+  return gowl_result (cmacs_dispatch_screensaver_pause (&error), error);
+}
+
+static McpToolResult *
+handle_screensaver_resume (McpServer *s, const gchar *n,
+                           JsonObject *a, gpointer u)
+{
+  g_autoptr (GError) error = NULL;
+  (void) s; (void) n; (void) a; (void) u;
+  return gowl_result (cmacs_dispatch_screensaver_resume (&error), error);
+}
+
+static McpToolResult *
+handle_screensaver_set_fps (McpServer *s, const gchar *n,
+                            JsonObject *a, gpointer u)
+{
+  g_autoptr (GError) error = NULL;
+  gint64 fps;
+  (void) s; (void) n; (void) u;
+  fps = a && json_object_has_member (a, "fps")
+        ? json_object_get_int_member (a, "fps") : 0;
+  return gowl_result (cmacs_dispatch_screensaver_set_fps ((gint) fps, &error),
+                      error);
+}
+
+static McpToolResult *
 handle_gowl_set_monitor_transform (McpServer *s, const gchar *n,
                                     JsonObject *a, gpointer u)
 {
@@ -483,6 +532,42 @@ cmacs_mcp_tools_gowl_register (McpServer *server)
     "List the available screensaver config names (one per line).");
   mcp_server_add_tool (server, tool, handle_screensaver_list_configs,
                        NULL, NULL);
+  g_object_unref (tool);
+
+  tool = mcp_tool_new ("screensaver_status",
+    "Get the out-of-process screensaver renderer status as a plist "
+    "(:running :pid :fps :paused :gave-up :targets :wallpaper :lock "
+    ":last-error).");
+  mcp_tool_set_read_only_hint (tool, TRUE);
+  mcp_server_add_tool (server, tool, handle_screensaver_status, NULL, NULL);
+  g_object_unref (tool);
+
+  tool = mcp_tool_new ("screensaver_restart",
+    "Kill and respawn the screensaver render child, re-applying the active "
+    "wallpaper/lock sessions (recovery).");
+  mcp_server_add_tool (server, tool, handle_screensaver_restart, NULL, NULL);
+  g_object_unref (tool);
+
+  tool = mcp_tool_new ("screensaver_pause",
+    "Pause the animated wallpaper/lock rendering (the render child stops "
+    "drawing; the GPU goes idle).");
+  mcp_server_add_tool (server, tool, handle_screensaver_pause, NULL, NULL);
+  g_object_unref (tool);
+
+  tool = mcp_tool_new ("screensaver_resume",
+    "Resume the animated wallpaper/lock rendering after a pause.");
+  mcp_server_add_tool (server, tool, handle_screensaver_resume, NULL, NULL);
+  g_object_unref (tool);
+
+  tool = mcp_tool_new ("screensaver_set_fps",
+    "Set the animated wallpaper/lock target frame rate (1-240).");
+  schema = cmacs_mcp_schema_from_string (
+    "{\"type\":\"object\",\"properties\":{"
+    "\"fps\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":240,"
+            "\"description\":\"Target frames per second\"}"
+    "},\"required\":[\"fps\"]}");
+  mcp_tool_set_input_schema (tool, schema);
+  mcp_server_add_tool (server, tool, handle_screensaver_set_fps, NULL, NULL);
   g_object_unref (tool);
 
   tool = mcp_tool_new ("gowl_set_monitor_transform",

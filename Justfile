@@ -34,6 +34,7 @@ local_env := \
     "CMACS_GSURF_MODULE_DIR=" + justfile_directory() + "/cmacs/gsurf/modules " + \
     "CMACS_GOWL_MODULE_DIR=" + justfile_directory() + "/deps/gowl/build/release/modules " + \
     "CMACS_SCREENSAVER_MODULE_DIR=" + justfile_directory() + "/deps/screensavers/build/release " + \
+    "CMACS_SCREENSAVER_RENDER_BIN=" + justfile_directory() + "/src/cmacs-screensaver-render " + \
     "GI_TYPELIB_PATH=" + justfile_directory() + "/deps/libregnum/build/release/gir:" + justfile_directory() + "/deps/libregnum/deps/graylib/build/gir${GI_TYPELIB_PATH:+:$GI_TYPELIB_PATH}"
 
 # Android build settings.  Override per-invocation:

@@ -129,5 +129,47 @@ empty NAMES (each a base name) as `.so' files."
 subsystem is built with gowl, nil fallback otherwise)."
   (should (memq (cmacs-screensaver-supported-p) '(nil t))))
 
+;;;; Out-of-process renderer control surface -----------------------------------
+
+(ert-deftest cmacs-screensaver--start-timeout-defcustom ()
+  "The start-timeout knob exists and is a positive integer."
+  (should (integerp cmacs-screensaver-start-timeout))
+  (should (> cmacs-screensaver-start-timeout 0)))
+
+(ert-deftest cmacs-screensaver--commands-bound ()
+  "The new control commands are all defined."
+  (dolist (cmd '(cmacs-screensaver-status
+                 cmacs-screensaver-restart
+                 cmacs-screensaver-pause
+                 cmacs-screensaver-resume
+                 cmacs-screensaver-set-fps
+                 cmacs-screensaver-last-error))
+    (should (fboundp cmd))))
+
+(ert-deftest cmacs-screensaver--status-plist-when-idle ()
+  "`cmacs-screensaver-status' returns a plist (not an error) when idle.
+With the C subsystem built it reports :running nil; without it, nil."
+  (let ((st (cmacs-screensaver-status)))
+    (when st
+      (should (plistp st))
+      (should (memq :running st))
+      (should (null (plist-get st :running))))))
+
+(ert-deftest cmacs-screensaver--set-fps-rejects-nonpositive ()
+  "`cmacs-screensaver-set-fps' rejects non-positive values at the Elisp edge,
+before reaching the C primitive."
+  (let ((cmacs-screensaver-fps 30))
+    (cl-letf (((symbol-function 'cmacs-screensaver--set-fps) #'ignore))
+      (should-error (cmacs-screensaver-set-fps 0) :type 'user-error)
+      (should-error (cmacs-screensaver-set-fps -5) :type 'user-error)
+      ;; valid value is clamped to <= 240 and stored
+      (cmacs-screensaver-set-fps 300)
+      (should (= cmacs-screensaver-fps 240)))))
+
+(ert-deftest cmacs-screensaver--restart-gated ()
+  "`cmacs-screensaver-restart' errors cleanly in a build without the subsystem."
+  (cl-letf (((symbol-function 'cmacs-screensaver-supported-p) (lambda () nil)))
+    (should-error (cmacs-screensaver-restart) :type 'user-error)))
+
 (provide 'cmacs-screensaver-tests)
 ;;; cmacs-screensaver-tests.el ends here

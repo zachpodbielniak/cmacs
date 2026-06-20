@@ -15,23 +15,86 @@ three places:
 3. *In a buffer* — a normal Emacs buffer that plays the screensaver.
 
 Each screensaver is a libregnum *game module* (a =.so= built with
-=LRG_DEFINE_GAME_MODULE=).  cmacs renders it off-screen to a frame buffer and
-either blits it into an Emacs buffer (buffer mode) or hands the raw pixels to
-the gowl compositor (wallpaper / lock mode).
+=LRG_DEFINE_GAME_MODULE=).  For the wallpaper and lock sinks it is rendered in a
+*separate process* (see below) and the raw pixels are streamed back to Emacs,
+which hands them to gowl; buffer mode renders in-process and blits into an Emacs
+buffer.
 
 Enable with =--with-cmacs-screensaver= (requires =--with-cmacs-libregnum=;
 wallpaper and lock additionally need =--with-cmacs-gowl=).  Off by default.
 
-** Architecture: gowl receives raw pixels, never libregnum
+** Architecture: an out-of-process renderer
 
-Rendering (libregnum / raylib / GL) lives entirely on the cmacs side.  For the
-wallpaper and lock sinks, cmacs renders each screensaver to an off-screen FBO,
-reads it back as top-down =BGRA=, and pushes those raw pixels to gowl through
-its frame-sink API (=gowl_compositor_push_{wallpaper,lock}_frame=).  Gowl copies
-the pixels into a per-monitor scene buffer and displays them — it has *no*
-dependency on libregnum, graylib, raylib, or GL (a build guard,
-=deps/gowl/tests/test-no-libregnum.sh=, enforces this).  The =BGRA= bytes match
-gowl's =ARGB8888= buffer format exactly, so no conversion is needed.
+The wallpaper and lock sinks render in a dedicated child process,
+=cmacs-screensaver-render=, *not* on Emacs's main thread.  This is the key
+design decision and it solves three problems the in-process renderer had:
+
+- *No editor lag.*  Each frame's =glReadPixels= GPU→CPU readback is a blocking
+  call; on Emacs's main thread it stalled redisplay and input.  It now runs in
+  the child; Emacs only memcpy-free *pushes* the newest frame to gowl.
+- *No compositor hang.*  Emacs only ever holds gowl's dispatch lock for the
+  brief frame push, never across a render, so tag/workspace switches never stall.
+- *No GL context conflict.*  raylib uses one GL context per process (GLX under
+  XWayland); in-process it collided with gowl's EGL context
+  (=EGL_BAD_ACCESS= spam every frame).  A separate process has its own context,
+  so the conflict disappears.
+
+A *process*, not a thread, is required because raylib's single GL context is
+shared in-process by the wallpaper, gnuseye and buffer playback — a wallpaper
+thread owning it would break the others.  Only a separate process gets its own
+context.
+
+*** How the pieces fit
+
+#+BEGIN_EXAMPLE
+  Emacs                                   cmacs-screensaver-render (child)
+  ┌──────────────────────────┐  control  ┌───────────────────────────────┐
+  │ cmacs-screensaver.c      │  socket   │ one GL context, one FBO per     │
+  │  • monitor sync (gowl)   │◄────────► │ (sink,monitor) target           │
+  │  • child supervisor      │  JSON     │ render_to_bgra → flip → publish │
+  │  • pump: shm → gowl push │◄─ memfd ──│ into a shared-memory frame ring │
+  └──────────────────────────┘  frames   └───────────────────────────────┘
+         │ raw ARGB8888 (gowl copies)
+         ▼
+       gowl  (never links libregnum)
+#+END_EXAMPLE
+
+- *Control channel* — a =SOCK_SEQPACKET= socketpair carrying one JSON message
+  per datagram (the same idiom as the bacon IPC; see
+  =cmacs/screensaver/cmacs-screensaver-proto.h=).  Emacs sends =set-target= /
+  =remove-target= / =set-fps= / =pause=; the child replies =load-result=,
+  =heartbeat=, and (once per target) a =frame-buffer= announce.
+- *Frame channel* — per target the child creates a sealed =memfd= holding a
+  small header plus a triple-buffered ARGB8888 frame ring, and passes the fd to
+  Emacs via =SCM_RIGHTS=.  A lock-free seqlock (single writer, single reader)
+  lets Emacs always read the newest *complete* frame without locking or tearing;
+  old frames are intentionally dropped.  No per-frame socket traffic.
+- *gowl receives raw pixels, never libregnum.*  Emacs pushes the shared-memory
+  slot straight to =gowl_compositor_push_{wallpaper,lock}_frame=, which copies it
+  into a per-monitor scene buffer.  gowl has *no* dependency on libregnum,
+  graylib, raylib, or GL.  The =BGRA= bytes match gowl's =ARGB8888= byte order
+  exactly.  Two =nm=-based build guards enforce this: the Emacs-side screensaver
+  objects reference zero =lrg_*=/=grl_*= symbols (rendering really moved out),
+  the child binary is a standalone libregnum host that links *no* Emacs symbols,
+  and gowl stays libregnum-free
+  (=cmacs/screensaver/render/tests/guard-symbols.sh=).
+
+*** Supervision
+
+Emacs spawns the child lazily on the first =set-wallpaper= / lock, watches it
+with =g_child_watch_add=, and:
+
+- *restarts on crash* with exponential backoff, *giving up* after repeated
+  failures in a short window (it then clears the frames to reveal the static
+  wallpaper and records =cmacs-screensaver-last-error=);
+- *detects a wedged child* via a heartbeat watchdog and kills + restarts it;
+- *prevents orphans* — the child sets =PR_SET_PDEATHSIG= so it dies with Emacs,
+  and also exits on control-socket EOF.
+
+A hung or crashed child can therefore never hang or corrupt Emacs: every
+main-thread interaction is non-blocking, except a bounded, timeout-guarded wait
+at start (=cmacs-screensaver-start-timeout=) so a bad module's load error is
+reported synchronously to =M-x cmacs-screensaver-set-wallpaper=.
 
 * Configuration
 
@@ -63,6 +126,7 @@ Other options:
 | =cmacs-screensaver-pause-when-covered=  | =t=         | Stop rendering a monitor fully hidden by a fullscreen window.|
 | =cmacs-screensaver-wallpaper-config=    | =nil=       | Config used by the wallpaper command (nil = default).        |
 | =cmacs-screensaver-lock-config=         | =nil=       | When set, =gowl-lock= shows it as an animated background.     |
+| =cmacs-screensaver-start-timeout=       | =3=         | Seconds the start command waits for the child's load result. |
 
 * Commands
 
@@ -71,9 +135,20 @@ Other options:
 | =cmacs-screensaver-play=           | Pick a config and play it in a buffer.                    |
 | =cmacs-screensaver-set-wallpaper=  | Pick a config and set it as the animated gowl wallpaper.  |
 | =cmacs-screensaver-stop-wallpaper= | Stop the animated wallpaper, restoring the static one.    |
+| =cmacs-screensaver-status=         | Echo / return the render child's status plist.            |
+| =cmacs-screensaver-restart=        | Kill and respawn the render child (recovery).             |
+| =cmacs-screensaver-pause=          | Pause rendering (the child stops drawing; the GPU idles). |
+| =cmacs-screensaver-resume=         | Resume rendering after a pause.                           |
+| =cmacs-screensaver-set-fps=        | Change the target frame rate (1–240) live.                |
 
-All three prompt with completion over your config names
-(=cmacs-screensaver-read-config=).
+The first three prompt with completion over your config names
+(=cmacs-screensaver-read-config=).  The control commands
+(=status=, =restart=, =pause=, =resume=, =set-fps=) are exposed on every cmacs
+surface — Elisp, =cmacsgi gowl screensaver-*=, =emacsctl compositor
+screensaver-*=, the D-Bus =org.cmacs.Editor1.Compositor= interface, and MCP
+(=screensaver_status= / =_restart= / =_pause= / =_resume= / =_set_fps=).
+=cmacs-screensaver-status= returns a plist with keys =:running :pid :fps
+:paused :gave-up :targets :wallpaper :lock :last-error=.
 
 ** Lock screen
 
@@ -101,6 +176,21 @@ runs =make -C deps/screensavers deps && modules=) and installed to
 =$(libdir)/cmacs/screensaver-modules= by =make install=.  A config whose
 =:module= is an absolute path bypasses discovery entirely, so you can point at
 your own modules (e.g. a custom =blackhole= variant) anywhere on disk.
+
+** The render binary
+
+When gowl is enabled, the build also produces the =cmacs-screensaver-render=
+helper (a standalone GLib/GObject binary that links the libregnum archive but no
+Emacs objects — like =emacsctl=).  Emacs finds it via:
+
+1. =$CMACS_SCREENSAVER_RENDER_BIN= (a dev override), then
+2. the install path =$(libexecdir)/cmacs/cmacs-screensaver-render=.
+
+=just run= / =just gowl= export =CMACS_SCREENSAVER_RENDER_BIN= pointing at the
+freshly-built =src/cmacs-screensaver-render=; =make install= installs it to
+=$(libexecdir)/cmacs=.  It requires =memfd_create= (Linux ≥ 3.17), checked at
+configure time.  Its protocol/seqlock has its own unit tests and symbol guards
+under =cmacs/screensaver/render/tests/= (=make check= there runs both).
 
 * See also
 

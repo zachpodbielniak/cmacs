@@ -1337,6 +1337,59 @@ cmacs_dispatch_screensaver_list_configs (GError **error)
     "cmacs-screensaver-configs \"\\n\"))", error);
 }
 
+gchar *
+cmacs_dispatch_screensaver_status (GError **error)
+{
+  return cmacs_dispatch_eval_string (
+    "(progn (require 'cmacs-screensaver) "
+    "(prin1-to-string (cmacs-screensaver-status)))", error);
+}
+
+gchar *
+cmacs_dispatch_screensaver_restart (GError **error)
+{
+  GOWL_DISPATCH_CHECK ();
+  return cmacs_dispatch_eval_string (
+    "(progn (require 'cmacs-screensaver) "
+    "(cmacs-screensaver-restart) \"t\")", error);
+}
+
+gchar *
+cmacs_dispatch_screensaver_pause (GError **error)
+{
+  GOWL_DISPATCH_CHECK ();
+  return cmacs_dispatch_eval_string (
+    "(progn (require 'cmacs-screensaver) "
+    "(cmacs-screensaver-pause) \"t\")", error);
+}
+
+gchar *
+cmacs_dispatch_screensaver_resume (GError **error)
+{
+  GOWL_DISPATCH_CHECK ();
+  return cmacs_dispatch_eval_string (
+    "(progn (require 'cmacs-screensaver) "
+    "(cmacs-screensaver-resume) \"t\")", error);
+}
+
+gchar *
+cmacs_dispatch_screensaver_set_fps (gint fps, GError **error)
+{
+  g_autofree gchar *expr = NULL;
+
+  GOWL_DISPATCH_CHECK ();
+  if (fps < 1 || fps > 240)
+    {
+      g_set_error (error, CMACS_DISPATCH_ERROR_DOMAIN, 1,
+                   "screensaver fps must be 1..240 (got %d)", fps);
+      return NULL;
+    }
+  expr = g_strdup_printf (
+    "(progn (require 'cmacs-screensaver) "
+    "(cmacs-screensaver-set-fps %d) \"t\")", fps);
+  return cmacs_dispatch_eval_string (expr, error);
+}
+
 #endif /* HAVE_CMACS_GOWL */
 
 #endif /* HAVE_CMACS_GLIB */

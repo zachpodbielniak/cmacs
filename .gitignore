@@ -273,9 +273,11 @@ src/emacs
 src/emacs-[0-9]*
 src/emacsctl
 src/cmacsctl
+src/cmacs-screensaver-render
 cmacs/emacsctl/emacsctl
 cmacs/emacsctl/cmacsctl
 cmacs/emacsctl/tests/test-ctl
+cmacs/screensaver/render/tests/test-proto
 src/sfnt
 src/Emacs
 src/temacs

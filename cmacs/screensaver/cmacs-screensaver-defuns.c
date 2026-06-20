@@ -151,6 +151,78 @@ it as the fallback after $CMACS_SCREENSAVER_MODULE_DIR.  */)
 #endif
 }
 
+DEFUN ("cmacs-screensaver--status", Fcmacs_screensaver__status,
+       Scmacs_screensaver__status, 0, 0, 0,
+       doc: /* Return a plist describing the out-of-process renderer's state.
+Keys: :running :pid :fps :paused :gave-up :targets :wallpaper :lock
+:last-error.  */)
+  (void)
+{
+  CmacsScreensaverStatus st;
+  Lisp_Object args[18];
+  int i = 0;
+
+  cmacs_screensaver_get_status (&st);
+  args[i++] = intern (":running");    args[i++] = st.running ? Qt : Qnil;
+  args[i++] = intern (":pid");        args[i++] = make_fixnum (st.pid);
+  args[i++] = intern (":fps");        args[i++] = make_fixnum (st.fps);
+  args[i++] = intern (":paused");     args[i++] = st.paused ? Qt : Qnil;
+  args[i++] = intern (":gave-up");    args[i++] = st.gave_up ? Qt : Qnil;
+  args[i++] = intern (":targets");    args[i++] = make_fixnum (st.n_targets);
+  args[i++] = intern (":wallpaper");  args[i++] = st.wallpaper_active ? Qt : Qnil;
+  args[i++] = intern (":lock");       args[i++] = st.lock_active ? Qt : Qnil;
+  args[i++] = intern (":last-error");
+  args[i++] = st.last_error ? build_string (st.last_error) : Qnil;
+  return Flist (i, args);
+}
+
+DEFUN ("cmacs-screensaver--restart", Fcmacs_screensaver__restart,
+       Scmacs_screensaver__restart, 0, 0, 0,
+       doc: /* Kill and respawn the render child, re-applying active sessions.  */)
+  (void)
+{
+  cmacs_screensaver_restart ();
+  return Qt;
+}
+
+DEFUN ("cmacs-screensaver--pause", Fcmacs_screensaver__pause,
+       Scmacs_screensaver__pause, 0, 0, 0,
+       doc: /* Pause rendering (the child stops drawing; the GPU goes idle).  */)
+  (void)
+{
+  cmacs_screensaver_set_paused (1);
+  return Qt;
+}
+
+DEFUN ("cmacs-screensaver--resume", Fcmacs_screensaver__resume,
+       Scmacs_screensaver__resume, 0, 0, 0,
+       doc: /* Resume rendering after `cmacs-screensaver--pause'.  */)
+  (void)
+{
+  cmacs_screensaver_set_paused (0);
+  return Qt;
+}
+
+DEFUN ("cmacs-screensaver--set-fps", Fcmacs_screensaver__set_fps,
+       Scmacs_screensaver__set_fps, 1, 1, 0,
+       doc: /* Set the target frame rate FPS (1..240) for the child and pump.  */)
+  (Lisp_Object fps)
+{
+  CHECK_FIXNUM (fps);
+  cmacs_screensaver_set_fps ((int) XFIXNUM (fps));
+  return Qt;
+}
+
+DEFUN ("cmacs-screensaver--set-start-timeout", Fcmacs_screensaver__set_start_timeout,
+       Scmacs_screensaver__set_start_timeout, 1, 1, 0,
+       doc: /* Set the synchronous start-error wait to MS milliseconds.  */)
+  (Lisp_Object ms)
+{
+  CHECK_FIXNUM (ms);
+  cmacs_screensaver_set_start_timeout_ms ((int) XFIXNUM (ms));
+  return Qt;
+}
+
 void
 syms_of_cmacs_screensaver_defuns (void)
 {
@@ -161,6 +233,12 @@ syms_of_cmacs_screensaver_defuns (void)
   defsubr (&Scmacs_screensaver__stop_lock_bg);
   defsubr (&Scmacs_screensaver__wallpaper_active_p);
   defsubr (&Scmacs_screensaver__installed_module_dir);
+  defsubr (&Scmacs_screensaver__status);
+  defsubr (&Scmacs_screensaver__restart);
+  defsubr (&Scmacs_screensaver__pause);
+  defsubr (&Scmacs_screensaver__resume);
+  defsubr (&Scmacs_screensaver__set_fps);
+  defsubr (&Scmacs_screensaver__set_start_timeout);
 }
 
 #endif /* HAVE_CMACS_SCREENSAVER */

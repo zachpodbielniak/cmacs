@@ -1746,6 +1746,71 @@ src/emacs --gowl
 Inside Emacs, the compositor is controlled via @code{cmacs-gowl-mode},
 which is auto-enabled by @option{--gowl}.
 
+@subsection Running as a GDM Login Session (in-repo debug build)
+@cindex GDM session
+@cindex debug session
+@cindex clamshell testing
+
+To test compositor changes in a @emph{real seat session} (not nested)
+without rebuilding an OS image---useful on an immutable/bootc host---add a
+custom Wayland session that launches the freshly-built in-repo binary, then
+pick @samp{CMacs (Debug)} from GDM's gear menu on the login screen.
+
+First, a standup script that exports the same module/typelib environment as
+@code{just gowl} and @emph{forces the seat backend}.  On an ostree/bootc
+host put it in @file{/usr/local/bin} (which is @file{/var/usrlocal/bin}:
+writable, on @env{PATH}, and persistent across reboots and image upgrades);
+@code{chmod 0755} it and @code{restorecon -F} on SELinux:
+
+@verbatim
+# /usr/local/bin/cmacs-debug
+#!/bin/bash
+REPO=/path/to/cmacs          # <-- this checkout
+# A real seat session has no parent compositor, but the systemd --user
+# env can leak a stale WAYLAND_DISPLAY/DISPLAY (+ a leftover wayland-0
+# socket).  cmacs treats a non-empty WAYLAND_DISPLAY as "nested" and forces
+# WLR_BACKENDS=wayland, which then fails to connect.  Force the seat
+# backend: cmacs only does setenv(WLR_BACKENDS,...,0) (no-overwrite), so
+# this wins, and wlroots autocreate honours WLR_BACKENDS over the
+# WAYLAND_DISPLAY/GDK heuristics.
+unset WAYLAND_DISPLAY WAYLAND_SOCKET DISPLAY
+export WLR_BACKENDS=libinput,drm
+cd "$REPO" || exit 1
+export CMACS_MODULE_DIR="$REPO/cmacs/bacon/modules"
+export CMACS_GSURF_MODULE_DIR="$REPO/cmacs/gsurf/modules"
+export CMACS_GOWL_MODULE_DIR="$REPO/deps/gowl/build/release/modules"
+export CMACS_SCREENSAVER_MODULE_DIR="$REPO/deps/screensavers/build/release"
+export CMACS_SCREENSAVER_RENDER_BIN="$REPO/src/cmacs-screensaver-render"
+export GI_TYPELIB_PATH="$REPO/deps/libregnum/build/release/gir:$REPO/deps/libregnum/deps/graylib/build/gir${GI_TYPELIB_PATH:+:$GI_TYPELIB_PATH}"
+exec "$REPO/src/emacs" --gowl "$@"
+@end verbatim
+
+Then a Wayland session entry.  GDM hands the @code{Exec} value to
+@command{gdm-wayland-session}, which accepts @emph{one} positional
+argument, so @code{Exec} must be a @emph{single bare token} --- no
+@samp{bash -lc "..."} (the quotes are split and the session dies with
+@samp{gdm-wayland-session takes one argument} before cmacs launches).  Use
+@file{/usr/local/share/wayland-sessions} (also persistent);
+@file{/usr/share/wayland-sessions} works too but is wiped on the next
+reboot if it was only made writable via @code{bootc usr-overlay}:
+
+@verbatim
+# /usr/local/share/wayland-sessions/cmacs-debug.desktop
+[Desktop Entry]
+Name=CMacs (Debug)
+Comment=CMacs in-repo dev build (cmacs --gowl)
+Exec=/usr/local/bin/cmacs-debug
+Type=Application
+DesktopNames=CMacs-Debug
+@end verbatim
+
+Log out, pick @samp{CMacs (Debug)}, then rebuild (@code{rm -f src/temacs &&
+make}) and log back in to test changes --- no OS image rebuild.  For
+@emph{nested} testing inside an existing session use @code{just gowl}
+instead (it keeps @env{WAYLAND_DISPLAY} so wlroots uses the nested
+backend).  Diagnose failures from @code{journalctl -b | grep -iE
+'gdm-wayland-session|cmacs|gowl|wlr|backend'}.
+
 @subsection Running X11 Applications (XWayland)
 @cindex XWayland
 @cindex X11 applications
@@ -2107,6 +2172,16 @@ Single-display safety: if the lid is shut and there is @emph{no}
 external display, the internal panel stays on---gowl never blanks the
 only screen.  Unplugging the external while the lid is shut brings the
 internal panel back automatically.
+@item
+Idempotent (clamshell boot): if the DRM driver already powered the panel
+down (the enable commit for a shut lid fails, so it comes up
+@code{enabled=nil} but still mapped), gowl still removes it from the
+output layout, so a ``half-disabled'' panel never lingers there stealing
+the cursor and newly launched windows.  gowl does @emph{not} destroy the
+disabled output's @code{wlr_scene_output}: a disabled output stops
+emitting frame events, so its scene output never commits again.  (An
+earlier version destroyed it and hit a use-after-free in the render
+thread.)
 @end itemize
 
 This is controlled by the @code{manage-lid} compositor setting
@@ -2153,6 +2228,40 @@ On the Wayland backend (nested compositors),
 output commit.  As a safety net, each setter also queries the layout
 box and calls @code{arrange()} directly, ensuring correct behavior
 even if the asynchronous path is delayed.
+
+@section Touchpad and Pointer Input
+@cindex touchpad
+@cindex tap to click
+@cindex natural scrolling
+@cindex gestures
+
+gowl applies GNOME-like defaults to libinput @emph{touchpads} as they
+connect (@code{create_pointer} in @file{gowl-compositor.c}):
+
+@itemize
+@item
+@emph{Tap-to-click} and @emph{tap-and-drag} enabled.
+@item
+@emph{Natural (reverse) scrolling} --- two fingers up scrolls the content
+up, matching GNOME.  Applied only to touchpads, so a plain mouse keeps its
+normal wheel direction.
+@item
+@emph{Two-finger scroll} and @emph{disable-while-typing}.
+@end itemize
+
+A device is treated as a touchpad when libinput reports a non-zero tap
+finger count (mice report zero).
+
+@emph{Gestures.}  Swipe, pinch, and hold events are relayed to the focused
+client through the pointer-gestures protocol
+(@code{zwp_pointer_gestures_v1}), so applications get three-finger swipe,
+pinch-to-zoom, etc.  Two-finger scrolling is ordinary pointer-axis
+scrolling and works everywhere.
+
+These are compiled-in defaults (no per-device config knob yet).  Because
+the static @file{libgowl.a} now calls @code{libinput_device_config_*}
+directly, cmacs links @code{libinput} (the @code{CMACS_GOWL_DEPS}
+pkg-config list in @file{configure.ac}).
 
 @section Client Embedding
 
@@ -7862,15 +7971,40 @@ The @code{cmacs-screensaver} subsystem renders the GPU screensavers from the
 @option{--with-cmacs-libregnum}; wallpaper and lock also need
 @option{--with-cmacs-gowl}).  Off by default.
 
-@section Architecture: gowl receives raw pixels, never libregnum
+@section Architecture: an out-of-process renderer
 
-All rendering (libregnum/raylib/GL) stays on the cmacs side.  For wallpaper and
-lock, cmacs renders each screensaver to an off-screen buffer, reads it back as
-top-down @code{BGRA}, and pushes the raw pixels to gowl via its frame-sink API
-(@code{gowl_compositor_push_@{wallpaper,lock@}_frame}).  Gowl copies and
-displays them and has @emph{no} dependency on libregnum/graylib/raylib/GL (a
-build guard enforces it).  The @code{BGRA} bytes match gowl's
-@code{ARGB8888} buffer format, so no conversion is needed.
+The wallpaper and lock sinks render in a dedicated child process,
+@command{cmacs-screensaver-render}, @emph{not} on Emacs's main thread (buffer
+mode still renders in-process).  This avoids editor lag (the per-frame
+@code{glReadPixels} GPU readback no longer blocks redisplay), avoids hanging the
+gowl dispatch thread (Emacs holds gowl's lock only for the brief frame push,
+never across a render), and removes the in-process raylib(GLX)/gowl(EGL)
+context conflict that caused constant @code{EGL_BAD_ACCESS} errors.  A
+@emph{process}, not a thread, is required: raylib has one GL context per process
+shared by the wallpaper, gnuseye and buffer playback, so only a separate process
+gets its own context.
+
+The child renders each @code{(sink,monitor)} target to an FBO, reads it back as
+top-down @code{BGRA}, and publishes it into a per-target shared-memory frame
+ring (a sealed @code{memfd} passed to Emacs over @code{SCM_RIGHTS}, with a
+triple-buffered lock-free seqlock so Emacs always reads the newest complete
+frame without tearing).  The control channel is a @code{SOCK_SEQPACKET}
+socketpair carrying one JSON message per datagram
+(@file{cmacs/screensaver/cmacs-screensaver-proto.h}).  Emacs pushes the
+shared-memory slot straight to gowl
+(@code{gowl_compositor_push_@{wallpaper,lock@}_frame}); gowl copies it and has
+@emph{no} dependency on libregnum/graylib/raylib/GL.  Two @code{nm} build guards
+enforce that the Emacs-side screensaver objects link zero @code{lrg_*}/@code{grl_*}
+symbols, the child is a standalone libregnum host with no Emacs symbols, and gowl
+stays libregnum-free (@file{cmacs/screensaver/render/tests/guard-symbols.sh}).
+
+Emacs supervises the child: lazy spawn, crash-restart with backoff (giving up
+after a crash loop and revealing the static wallpaper), a heartbeat watchdog
+that restarts a wedged child, and @code{PR_SET_PDEATHSIG} so the child dies with
+Emacs.  A hung child can never hang Emacs --- every main-thread interaction is
+non-blocking, except a bounded wait at start
+(@code{cmacs-screensaver-start-timeout}) so a bad module's error is reported
+synchronously.
 
 @section Named configurations
 
@@ -7906,7 +8040,22 @@ Pick a config and play it in a buffer.
 Pick a config and set it as the animated gowl wallpaper.
 @item M-x cmacs-screensaver-stop-wallpaper
 Stop the animated wallpaper, restoring the static one.
+@item M-x cmacs-screensaver-status
+Echo / return the render child's status plist (@code{:running :pid :fps
+:paused :gave-up :targets :wallpaper :lock :last-error}).
+@item M-x cmacs-screensaver-restart
+Kill and respawn the render child (recovery).
+@item M-x cmacs-screensaver-pause / -resume
+Pause/resume rendering (the child stops drawing; the GPU idles).
+@item M-x cmacs-screensaver-set-fps
+Change the target frame rate (1--240) live.
 @end table
+
+The control commands (@code{status}, @code{restart}, @code{pause},
+@code{resume}, @code{set-fps}) are exposed on every cmacs surface: Elisp,
+@code{cmacsgi gowl screensaver-*}, @code{emacsctl compositor screensaver-*}, the
+D-Bus @code{org.cmacs.Editor1.Compositor} interface, and MCP
+(@code{screensaver_status}/@code{_restart}/@code{_pause}/@code{_resume}/@code{_set_fps}).
 
 @section Lock screen
 
@@ -7923,6 +8072,16 @@ that @command{just run}/@command{just gowl} set to
 @file{deps/screensavers/build/release}) and then in
 @file{$(libdir)/cmacs/screensaver-modules} (where @code{make install} places
 them).  An absolute @code{:module} path bypasses discovery.
+
+When gowl is enabled the build also produces the
+@command{cmacs-screensaver-render} helper (a standalone GLib/GObject binary that
+links libregnum but no Emacs objects).  Emacs finds it via
+@env{CMACS_SCREENSAVER_RENDER_BIN} (a dev override @command{just run}/@command{just
+gowl} set to @file{src/cmacs-screensaver-render}) then
+@file{$(libexecdir)/cmacs/cmacs-screensaver-render} (where @code{make install}
+puts it).  It requires @code{memfd_create} (Linux >= 3.17, checked at configure
+time) and has its own unit tests + symbol guards under
+@file{cmacs/screensaver/render/tests/}.
 
 See @file{doc_org/cmacs/cmacs-screensaver.org} for the living document.
 

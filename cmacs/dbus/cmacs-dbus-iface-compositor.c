@@ -66,6 +66,17 @@ static const gchar *iface_xml =
   "    <arg type='s' name='result' direction='out'/></method>"
   "  <method name='ListScreensaverConfigs'>"
   "    <arg type='s' name='result' direction='out'/></method>"
+  "  <method name='ScreensaverStatus'>"
+  "    <arg type='s' name='result' direction='out'/></method>"
+  "  <method name='ScreensaverRestart'>"
+  "    <arg type='s' name='result' direction='out'/></method>"
+  "  <method name='ScreensaverPause'>"
+  "    <arg type='s' name='result' direction='out'/></method>"
+  "  <method name='ScreensaverResume'>"
+  "    <arg type='s' name='result' direction='out'/></method>"
+  "  <method name='ScreensaverSetFps'>"
+  "    <arg type='i' name='fps' direction='in'/>"
+  "    <arg type='s' name='result' direction='out'/></method>"
   "  <method name='ReloadConfig'>"
   "    <arg type='s' name='result' direction='out'/></method>"
   "  <method name='ConfigGet'>"
@@ -204,6 +215,20 @@ on_method (GDBusConnection *c, const gchar *s, const gchar *o,
     RETURN_STR (cmacs_dispatch_screensaver_stop_wallpaper (&err));
   else if (g_strcmp0 (m, "ListScreensaverConfigs") == 0)
     RETURN_STR (cmacs_dispatch_screensaver_list_configs (&err));
+  else if (g_strcmp0 (m, "ScreensaverStatus") == 0)
+    RETURN_STR (cmacs_dispatch_screensaver_status (&err));
+  else if (g_strcmp0 (m, "ScreensaverRestart") == 0)
+    RETURN_STR (cmacs_dispatch_screensaver_restart (&err));
+  else if (g_strcmp0 (m, "ScreensaverPause") == 0)
+    RETURN_STR (cmacs_dispatch_screensaver_pause (&err));
+  else if (g_strcmp0 (m, "ScreensaverResume") == 0)
+    RETURN_STR (cmacs_dispatch_screensaver_resume (&err));
+  else if (g_strcmp0 (m, "ScreensaverSetFps") == 0)
+    {
+      gint fps;
+      g_variant_get (p, "(i)", &fps);
+      RETURN_STR (cmacs_dispatch_screensaver_set_fps (fps, &err));
+    }
   else if (g_strcmp0 (m, "ReloadConfig") == 0)
     RETURN_STR (cmacs_dispatch_gowl_reload_config (&err));
   else if (g_strcmp0 (m, "ConfigGet") == 0)

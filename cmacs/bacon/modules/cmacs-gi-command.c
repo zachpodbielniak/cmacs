@@ -91,12 +91,30 @@ cmd_gowl(CmacsApiTransport *transport, gint argc, gchar **argv)
         expr = g_strdup("(progn (require 'cmacs-screensaver)"
                         " (mapconcat (lambda (e) (symbol-name (car e)))"
                         " cmacs-screensaver-configs \"\\n\"))");
+    else if (g_strcmp0(sub, "screensaver-status") == 0)
+        expr = g_strdup("(progn (require 'cmacs-screensaver)"
+                        " (prin1-to-string (cmacs-screensaver-status)))");
+    else if (g_strcmp0(sub, "screensaver-restart") == 0)
+        expr = g_strdup("(progn (require 'cmacs-screensaver)"
+                        " (cmacs-screensaver-restart))");
+    else if (g_strcmp0(sub, "screensaver-pause") == 0)
+        expr = g_strdup("(progn (require 'cmacs-screensaver)"
+                        " (cmacs-screensaver-pause))");
+    else if (g_strcmp0(sub, "screensaver-resume") == 0)
+        expr = g_strdup("(progn (require 'cmacs-screensaver)"
+                        " (cmacs-screensaver-resume))");
+    else if (g_strcmp0(sub, "screensaver-fps") == 0 && argc >= 4)
+        expr = g_strdup_printf("(progn (require 'cmacs-screensaver)"
+                               " (cmacs-screensaver-set-fps %s))", argv[3]);
     else
     {
         fprintf(stderr,
                 "cmacsgi gowl: unknown subcommand '%s'\n"
                 "  usage: gowl {lock | unlock | screensaver [CONFIG] |"
-                " screensaver-stop | screensaver-configs}\n", sub);
+                " screensaver-stop | screensaver-configs |"
+                " screensaver-status | screensaver-restart |"
+                " screensaver-pause | screensaver-resume |"
+                " screensaver-fps N}\n", sub);
         return 1;
     }
 
@@ -416,7 +434,9 @@ static const CmacsApiSubcmd subcmds[] = {
 
     /* ── gowl compositor: session lock + screensaver wallpaper ─────── */
     { "gowl",         cmd_gowl,
-      "gowl {lock|unlock|screensaver [CONFIG]|screensaver-stop|screensaver-configs}",
+      "gowl {lock|unlock|screensaver [CONFIG]|screensaver-stop"
+      "|screensaver-configs|screensaver-status|screensaver-restart"
+      "|screensaver-pause|screensaver-resume|screensaver-fps N}",
       "compositor session lock/unlock + animated screensaver wallpaper" },
 
     /* ── ripgrep ────────────────────────────────────────────────────── */

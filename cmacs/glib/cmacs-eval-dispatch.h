@@ -188,6 +188,11 @@ gchar *cmacs_dispatch_screensaver_set_wallpaper (const gchar *config,
                                                  GError **error);
 gchar *cmacs_dispatch_screensaver_stop_wallpaper (GError **error);
 gchar *cmacs_dispatch_screensaver_list_configs (GError **error);
+gchar *cmacs_dispatch_screensaver_status (GError **error);
+gchar *cmacs_dispatch_screensaver_restart (GError **error);
+gchar *cmacs_dispatch_screensaver_pause (GError **error);
+gchar *cmacs_dispatch_screensaver_resume (GError **error);
+gchar *cmacs_dispatch_screensaver_set_fps (gint fps, GError **error);
 
 /* Get config property by name. */
 gchar *cmacs_dispatch_gowl_config_get (const gchar *property,

@@ -45,4 +45,32 @@ extern void cmacs_screensaver_stop (int sink);
 /* TRUE if SINK currently has an active session. */
 extern int cmacs_screensaver_active (int sink);
 
+/* Pause/resume rendering in the child (covered + paused targets burn no GPU). */
+extern void cmacs_screensaver_set_paused (int paused);
+
+/* Change the target frame rate (1..240) for both the child and the pump. */
+extern void cmacs_screensaver_set_fps (int fps);
+
+/* Kill and respawn the render child, re-applying the active sessions. */
+extern void cmacs_screensaver_restart (void);
+
+/* Bound for the synchronous wait that surfaces a module's load error on start. */
+extern void cmacs_screensaver_set_start_timeout_ms (int ms);
+
+/* A snapshot of the subsystem state for the `status' command. */
+typedef struct
+{
+  int          running;          /* render child process alive */
+  long         pid;              /* child pid, or 0 */
+  int          fps;
+  int          paused;
+  int          gave_up;          /* crash-loop give-up latched */
+  int          n_targets;        /* mapped (announced) frame buffers */
+  int          wallpaper_active;
+  int          lock_active;
+  const char  *last_error;       /* borrowed; valid until the next call */
+} CmacsScreensaverStatus;
+
+extern void cmacs_screensaver_get_status (CmacsScreensaverStatus *out);
+
 #endif /* CMACS_SCREENSAVER_H */

@@ -694,6 +694,12 @@ ifeq (${ns_self_contained},no)
 		done; \
 		echo "Installed screensaver modules in ${libdir}/cmacs/screensaver-modules"; \
 	fi
+	@if test -f src/cmacs-screensaver-render${EXEEXT}; then \
+		umask 022; ${MKDIR_P} "$(DESTDIR)${libexecdir}/cmacs"; \
+		${INSTALL_PROGRAM} $(INSTALL_STRIP) src/cmacs-screensaver-render${EXEEXT} \
+			"$(DESTDIR)${libexecdir}/cmacs/cmacs-screensaver-render${EXEEXT}"; \
+		echo "Installed cmacs-screensaver-render in ${libexecdir}/cmacs"; \
+	fi
 	@baconmoddir="${exec_prefix}/$$(if [ -d /usr/lib64 ]; then echo lib64; else echo lib; fi)/bacon/modules"; \
 	if test -d $(srcdir)/deps/bacon/build/release/modules; then \
 		umask 022; ${MKDIR_P} "$(DESTDIR)$$baconmoddir"; \

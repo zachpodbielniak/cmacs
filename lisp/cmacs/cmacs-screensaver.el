@@ -92,6 +92,17 @@ keeps the ordinary static lock screen."
   :type '(choice (const :tag "Static lock" nil) symbol)
   :group 'cmacs-screensaver)
 
+(defcustom cmacs-screensaver-start-timeout 3
+  "Seconds `cmacs-screensaver-set-wallpaper' waits for the render child to
+report whether the module loaded, so a bad module errors synchronously.
+On timeout the wallpaper still starts asynchronously."
+  :type 'integer
+  :group 'cmacs-screensaver
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (fboundp 'cmacs-screensaver--set-start-timeout)
+           (cmacs-screensaver--set-start-timeout (* 1000 (max 1 val))))))
+
 ;; ---------------------------------------------------------------------------
 ;; C primitives
 ;; ---------------------------------------------------------------------------
@@ -109,6 +120,13 @@ keeps the ordinary static lock screen."
                   "cmacs-screensaver-defuns.c" (so-path &optional argv fps))
 (declare-function cmacs-screensaver--stop-lock-bg
                   "cmacs-screensaver-defuns.c" ())
+(declare-function cmacs-screensaver--status "cmacs-screensaver-defuns.c" ())
+(declare-function cmacs-screensaver--restart "cmacs-screensaver-defuns.c" ())
+(declare-function cmacs-screensaver--pause "cmacs-screensaver-defuns.c" ())
+(declare-function cmacs-screensaver--resume "cmacs-screensaver-defuns.c" ())
+(declare-function cmacs-screensaver--set-fps "cmacs-screensaver-defuns.c" (fps))
+(declare-function cmacs-screensaver--set-start-timeout
+                  "cmacs-screensaver-defuns.c" (ms))
 (declare-function cmacs-libregnum-play "cmacs-libregnum" (module &optional argv))
 
 (unless (fboundp 'cmacs-screensaver-supported-p)
@@ -202,6 +220,72 @@ base name, or an absolute path.  Signal a `user-error' if not found."
   (when (fboundp 'cmacs-screensaver--stop-wallpaper)
     (cmacs-screensaver--stop-wallpaper))
   (message "Animated wallpaper stopped"))
+
+;; ---------------------------------------------------------------------------
+;; Out-of-process renderer control
+;; ---------------------------------------------------------------------------
+
+;;;###autoload
+(defun cmacs-screensaver-status ()
+  "Return (and, interactively, echo) the render child's status plist.
+Keys: :running :pid :fps :paused :gave-up :targets :wallpaper :lock
+:last-error."
+  (interactive)
+  (let ((st (and (fboundp 'cmacs-screensaver--status)
+                 (cmacs-screensaver--status))))
+    (when (called-interactively-p 'interactive)
+      (if (null st)
+          (message "Screensaver renderer: unsupported in this build")
+        (message "Screensaver renderer: %s%s pid=%s fps=%s targets=%s%s"
+                 (if (plist-get st :running) "running" "stopped")
+                 (cond ((plist-get st :paused) " (paused)")
+                       ((plist-get st :gave-up) " (gave up)")
+                       (t ""))
+                 (plist-get st :pid) (plist-get st :fps)
+                 (plist-get st :targets)
+                 (if (plist-get st :last-error)
+                     (format " err=%s" (plist-get st :last-error)) ""))))
+    st))
+
+(defun cmacs-screensaver-last-error ()
+  "Return the render child's last error string, or nil."
+  (plist-get (cmacs-screensaver-status) :last-error))
+
+;;;###autoload
+(defun cmacs-screensaver-restart ()
+  "Kill and respawn the render child, re-applying the active sessions."
+  (interactive)
+  (unless (cmacs-screensaver-supported-p)
+    (user-error "Screensaver renderer not available in this build"))
+  (cmacs-screensaver--restart)
+  (message "Screensaver renderer restarted"))
+
+;;;###autoload
+(defun cmacs-screensaver-pause ()
+  "Pause the animated wallpaper/lock rendering (the child stops drawing)."
+  (interactive)
+  (when (fboundp 'cmacs-screensaver--pause)
+    (cmacs-screensaver--pause))
+  (message "Screensaver rendering paused"))
+
+;;;###autoload
+(defun cmacs-screensaver-resume ()
+  "Resume the animated wallpaper/lock rendering after a pause."
+  (interactive)
+  (when (fboundp 'cmacs-screensaver--resume)
+    (cmacs-screensaver--resume))
+  (message "Screensaver rendering resumed"))
+
+;;;###autoload
+(defun cmacs-screensaver-set-fps (fps)
+  "Set the animated wallpaper/lock target frame rate to FPS (1..240)."
+  (interactive (list (read-number "Screensaver FPS: " cmacs-screensaver-fps)))
+  (unless (and (integerp fps) (> fps 0))
+    (user-error "FPS must be a positive integer"))
+  (setq cmacs-screensaver-fps (min 240 fps))
+  (when (fboundp 'cmacs-screensaver--set-fps)
+    (cmacs-screensaver--set-fps cmacs-screensaver-fps))
+  (message "Screensaver FPS: %d" cmacs-screensaver-fps))
 
 ;; ---------------------------------------------------------------------------
 ;; gowl-lock integration

@@ -747,6 +747,7 @@ if test "$with_cmacs_gowl" != "no"; then
     # Build libgowl from deps/gowl/ (default)
     PKG_CHECK_MODULES([CMACS_GOWL_DEPS],
       [wlroots-0.19 wayland-server wayland-client wayland-protocols pixman-1 xkbcommon \
+       libinput \
        glib-2.0 gobject-2.0 gio-2.0 pango pangocairo json-glib-1.0 yaml-0.1 \
        egl gl])
     CMACS_GOWL_CFLAGS="-I\$(srcdir)/../deps/gowl/src \
@@ -1023,20 +1024,32 @@ if test "$with_cmacs_screensaver" != "no"; then
     AC_MSG_ERROR([--with-cmacs-screensaver requires --with-cmacs-glib (the frame pump runs on the cmacs GMainContext)])
   fi
   # cmacs-screensaver renders deps/screensavers libregnum game modules
-  # off-screen (via the opaque cmacs-libregnum render API -- no libregnum
-  # headers needed here) and routes the frames to gowl's wallpaper / lock
-  # sinks.  Buffer playback is pure Elisp (cmacs-libregnum-play).  When gowl
-  # is enabled it also needs the gowl compositor headers for the push API;
-  # without gowl only buffer mode is available.
-  PKG_CHECK_MODULES([CMACS_SCREENSAVER_DEPS], [glib-2.0 gobject-2.0 gio-2.0])
+  # off-screen in a SEPARATE child process (cmacs-screensaver-render) and the
+  # Emacs side relays the frames (over a memfd shared-memory ring) to gowl's
+  # wallpaper / lock sinks.  Buffer playback is pure Elisp (cmacs-libregnum-play).
+  # The Emacs side links the shared protocol (cmacs-screensaver-proto.o), which
+  # uses json-glib for the control vocabulary and gio-unix for SCM_RIGHTS fd
+  # passing.  When gowl is enabled it also needs the gowl compositor headers for
+  # the push API; without gowl only buffer mode is available.
+  PKG_CHECK_MODULES([CMACS_SCREENSAVER_DEPS],
+    [glib-2.0 gobject-2.0 gio-2.0 gio-unix-2.0 json-glib-1.0])
   CMACS_SCREENSAVER_CFLAGS="$CMACS_SCREENSAVER_DEPS_CFLAGS \
-    -DCMACS_SCREENSAVER_MODULEDIR=\\\"$libdir/cmacs/screensaver-modules\\\""
+    -DCMACS_SCREENSAVER_MODULEDIR=\\\"$libdir/cmacs/screensaver-modules\\\" \
+    -DCMACS_SCREENSAVER_RENDER_INSTALLED=\\\"$libexecdir/cmacs/cmacs-screensaver-render\\\""
   if test "$with_cmacs_gowl" != "no"; then
     CMACS_SCREENSAVER_CFLAGS="$CMACS_SCREENSAVER_CFLAGS $CMACS_GOWL_CFLAGS"
   fi
   CMACS_SCREENSAVER_LIBS="$CMACS_SCREENSAVER_DEPS_LIBS"
   AC_DEFINE([HAVE_CMACS_SCREENSAVER], 1, [CMacs libregnum screensavers (wallpaper/lock/buffer)])
-  CMACS_SCREENSAVER_OBJ="cmacs-screensaver-init.o cmacs-screensaver.o cmacs-screensaver-defuns.o"
+  CMACS_SCREENSAVER_OBJ="cmacs-screensaver-init.o cmacs-screensaver.o \
+    cmacs-screensaver-defuns.o cmacs-screensaver-proto.o"
+  # The out-of-process renderer is only useful with gowl (its frames feed the
+  # wallpaper/lock sinks); it needs memfd shared memory (Linux >= 3.17).
+  if test "$with_cmacs_gowl" != "no"; then
+    AC_CHECK_FUNCS([memfd_create], [],
+      [AC_MSG_ERROR([--with-cmacs-screensaver (with gowl) needs memfd_create (Linux >= 3.17)])])
+    CMACS_SCREENSAVER_RENDER_BIN="cmacs-screensaver-render"
+  fi
 fi
 if test "$with_cmacs_gsurf" != "no"; then
   if test "$with_cmacs_glib" = "no"; then
@@ -1493,6 +1506,7 @@ AC_SUBST(CMACS_CAD_LIBREGNUM_FLAGS)
 AC_SUBST(CMACS_SCREENSAVER_OBJ)
 AC_SUBST(CMACS_SCREENSAVER_CFLAGS)
 AC_SUBST(CMACS_SCREENSAVER_LIBS)
+AC_SUBST(CMACS_SCREENSAVER_RENDER_BIN)
 
 # CMacs API library: built as a shared library in cmacs/api/ and used
 # by both the bacon cmacsgi module and crispy scripts (in-process).

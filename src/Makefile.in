@@ -1220,6 +1220,23 @@ emacsctl$(EXEEXT): FORCE
 	$(MAKE) -C $(srcdir)/../cmacs/emacsctl OUTDIR=$(abspath .) all
 endif
 
+## CMACS: Build the out-of-process screensaver renderer
+## (cmacs-screensaver-render).  A standalone GLib/GObject binary that hosts the
+## libregnum screensaver modules in its OWN GL context and streams frames to
+## Emacs over shared memory; links the libregnum archive (+ CAD, like Emacs, so
+## any loaded module resolves) but NO Emacs objects.  Mirrors the emacsctl
+## nested-build pattern; built only when configured (gowl present).  Depends on
+## the libregnum archive so its generated version headers exist.
+CMACS_SCREENSAVER_RENDER_BIN = @CMACS_SCREENSAVER_RENDER_BIN@
+ifneq ($(CMACS_SCREENSAVER_RENDER_BIN),)
+all: cmacs-screensaver-render$(EXEEXT)
+cmacs-screensaver-render$(EXEEXT): $(CMACS_LIBREGNUM_STATIC_LIB) FORCE
+	$(MAKE) -C $(srcdir)/../cmacs/screensaver/render OUTDIR=$(abspath .) \
+	    CMACS_LIBREGNUM_CFLAGS='$(CMACS_LIBREGNUM_CFLAGS)' \
+	    CMACS_LIBREGNUM_LIBS='$(CMACS_LIBREGNUM_LIBS)' \
+	    CMACS_CAD_LIBS='$(CMACS_CAD_LIBS)' all
+endif
+
 ## Build libmcp-glib-1.0.a (MCP server library)
 ifneq ($(CMACS_MCP_OBJ),)
 ifeq ($(CMACS_MCP_BUNDLED),yes)
@@ -1462,6 +1479,8 @@ versionclean:
 clean: mostlyclean versionclean
 	rm -f $(DEPDIR)/*
 	rm -f emacsctl$(EXEEXT) cmacsctl$(EXEEXT)
+	rm -f cmacs-screensaver-render$(EXEEXT)
+	-$(MAKE) -C $(srcdir)/../cmacs/screensaver/render clean OUTDIR=$(abspath .) 2>/dev/null
 
 ## bootstrap-clean is used to clean up just before a bootstrap.
 ## It should remove all files generated during a compilation/bootstrap,
