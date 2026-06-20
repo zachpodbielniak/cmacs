@@ -34,7 +34,8 @@ Current upstream touch-points (keep minimal): `process.c` pselect hooks (GLib lo
             --with-tree-sitter --with-xwidgets \
             --with-cmacs-glib --with-cmacs-gi ... --with-cmacs-gnuseye \
             --with-cmacs-screensaver --with-cmacs-gsurf --with-cmacs-emacsctl \
-            --with-cmacs-lrgterm --enable-cmacs-cpatch  # full set: README.org
+            --with-cmacs-lrgterm --enable-cmacs-cpatch \
+            --enable-cmacs-deps-debug  # in-house deps -O0 -g3 DWARF (gdb + cintrospect); full set: README.org
 make -j$(nproc)           # builds deps + emacs
 just run                  # run it
 ```

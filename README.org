@@ -426,7 +426,8 @@ cd cmacs
   --with-cmacs-gsurf-lrg \
   --with-cmacs-emacsctl \
   --with-cmacs-lrgterm \
-  --enable-cmacs-cpatch
+  --enable-cmacs-cpatch \
+  --enable-cmacs-deps-debug   # in-house deps -O0 -g3 (DWARF): gdb + runtime cintrospection
 make -j$(nproc)
 sudo make install
 #+end_src
@@ -542,7 +543,8 @@ Requires =autoconf= (>= 2.65) and =automake=.
   --with-cmacs-gsurf-lrg \
   --with-cmacs-emacsctl \
   --with-cmacs-lrgterm \
-  --enable-cmacs-cpatch
+  --enable-cmacs-cpatch \
+  --enable-cmacs-deps-debug   # in-house deps -O0 -g3 (DWARF): gdb + runtime cintrospection
 #+end_src
 
 Emacs flags:
@@ -586,7 +588,7 @@ Module flags:
 - =--with-cmacs-piper= — Offline text-to-speech via the Piper subprocess.  =M-x cmacs-piper-speak-region= (bound to =C-c v s=) speaks the active region; =M-x cmacs-piper-stop= (=C-c v S=) interrupts.  PGTK right-click context menu shows a contextual "Speak selection" / "Stop speaking" entry (auto-enables =context-menu-mode= unless =cmacs-piper-auto-enable-context-menu= is nil).  Voices live in =~/.local/share/cmacs/piper-voices/=.  Requires =--with-cmacs-audio= for playback.
 - =--with-cmacs-cintrospect= — Runtime C self-introspection: libdw DWARF reader + libgccjit JIT.  Inspect any symbol/type/source-location at runtime, compile new C from Lisp.  Default-on; needs =elfutils-devel= (Fedora) / =libdw-dev libelf-dev= (Debian).
 - =--enable-cmacs-cpatch= — Runtime C hot-patching.  Atomic =Lisp_Subr.function= swap (Phase 1) + trampoline detours (Phase 3).  *DANGEROUS* — wrong patch silently corrupts in-process state.  Off by default; requires =--with-cmacs-cintrospect=.  See [[file:doc_org/cmacs/cintrospect.org][the cintrospect manual]] for the full safety story.
-- =--enable-cmacs-deps-debug= — Build and link the *in-house dependencies* (crispy, bacon, gowl, podomation, libreclaw, ai-glib, cad-glib, gsurf, libregnum, screensavers, mcp-glib, graylib) with their =DEBUG=1= target (=-O0 -g3=, full DWARF) instead of the default release =-O2=, so =gdb= and cmacs cintrospect can read dep structs at runtime (e.g. =struct _GowlMonitor= otherwise decodes as an incomplete type).  Each dep's *release* build is left untouched; this only changes which artifacts cmacs builds (=build/debug/= vs =build/release/=) and links.  Third-party raylib stays =-O2= (render hot path); ASan is *not* enabled (gated separately on =ASAN=1=).  Off by default; enabled in the =just bootstrap= dev flag set (the in-house deps build noticeably slower at =-O0=, so it is *not* in the container/release image).  After toggling, =rm -f src/temacs= (and =rm -rf= any non-split dep =build/= for mcp-glib/graylib) to force a clean rebuild.
+- =--enable-cmacs-deps-debug= — Build and link the *in-house dependencies* (crispy, bacon, gowl, podomation, libreclaw, ai-glib, cad-glib, gsurf, libregnum, screensavers, mcp-glib, graylib) with their =DEBUG=1= target (=-O0 -g3=, full DWARF) instead of the default release =-O2=, so =gdb= and cmacs cintrospect can read dep structs at runtime (e.g. =struct _GowlMonitor= otherwise decodes as an incomplete type).  Each dep's *release* build is left untouched; this only changes which artifacts cmacs builds (=build/debug/= vs =build/release/=) and links.  Third-party raylib stays =-O2= (render hot path); ASan is *not* enabled (gated separately on =ASAN=1=).  *This is part of our default flag set* — =just bootstrap=, =./build-container=/=Containerfile=, and the recommended =./configure= line above all enable it, since the runtime C self-introspection is a core cmacs feature.  Omit the single flag for a faster release-deps build.  After toggling, =rm -f src/temacs= (and =rm -rf= any non-split dep =build/= for mcp-glib/graylib) to force a clean rebuild.
 - =--with-cmacs-libregnum= — Embed libregnum (GObject/raylib game engine) as 3D scene buffers.  Each =cmacs-libregnum-mode= buffer owns a per-view hidden raylib FBO; the framebuffer is blitted across the whole window via =pgtk_handle_draw=.  Three scenes ship in v1: =M-x cmacs-libregnum-project-tree= (file cubes on a grid), =cmacs-libregnum-gobject-graph= (live GObject hierarchy), =cmacs-libregnum-mind-map= (radial org-heading tree).  Off by default; requires =--with-cmacs-glib= + =--with-pgtk=.  See [[file:doc_org/cmacs/cmacs-libregnum.org][the manual]].
 - =--with-cmacs-gnuseye= — GNU's Eye: a live planetary situational-awareness globe (=M-x cmacs-gnuseye=) rendered through libregnum.  ~25 data layers (aircraft, vessels, satellites, quakes, weather zones, conflict, cyber, news, …), a 2D flat-map mode, measurement/export/watchlists/replay, an LLM intelligence layer, and a true-geometry solar-system chart (Moon, planets, Voyager, asteroids via local ephemerides + JPL Horizons).  Part of the standard flag set (=just bootstrap= and the container build include it); requires =--with-cmacs-libregnum= + =--with-cmacs-glib=.  Uses libsoup-3.0 + json-glib (already required).  See [[file:doc_org/cmacs/cmacs-gnuseye.org][the manual]] and [[file:doc_org/cmacs/gnuseye/README.org][the full reference]].
 

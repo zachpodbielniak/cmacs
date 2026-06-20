@@ -38,6 +38,7 @@ All CMacs features are auto-detected.  You can force them on or off:
 | =--with-cmacs-lrgterm=        | output_lrg libregnum/raylib display backend (=emacs --lrg=) |
 | =--with-cmacs-screensaver=    | libregnum screensavers as wallpaper / lock / buffer |
 | =--enable-cmacs-cpatch=       | Runtime C hot-patching (DANGEROUS)      |
+| =--enable-cmacs-deps-debug=   | In-house deps -O0 -g3 DWARF (gdb + cintrospect); default |
 
 Example with explicit flags:
 
@@ -75,7 +76,8 @@ Example with explicit flags:
   --with-cmacs-screensaver \
   --with-cmacs-emacsctl \
   --with-cmacs-lrgterm \
-  --enable-cmacs-cpatch
+  --enable-cmacs-cpatch \
+  --enable-cmacs-deps-debug   # in-house deps -O0 -g3 (DWARF): gdb + runtime cintrospection
 #+end_example
 
 To install somewhere other than =/usr/local=, pass =--prefix= at

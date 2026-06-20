@@ -144,7 +144,10 @@ RUN rm -f .git \
 # a prerequisite of the cmacs link, so it just links them.
 RUN make -C deps/cad-glib deps
 
-# Build cmacs
+# Build cmacs.  --enable-cmacs-deps-debug builds the in-house deps at
+# -O0 -g3 (DWARF) so gdb and runtime C self-introspection (cintrospect) can
+# read their structs; this is our default.  Drop that one flag for a faster
+# release-deps image.
 RUN ./autogen.sh \
     && ./configure \
         --prefix=/usr \
@@ -191,6 +194,7 @@ RUN ./autogen.sh \
         --with-cmacs-emacsctl \
         --with-cmacs-lrgterm \
         --enable-cmacs-cpatch \
+        --enable-cmacs-deps-debug \
     && make -j"$(nproc)" \
     && make install DESTDIR=/build/stage
 

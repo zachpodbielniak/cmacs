@@ -57,6 +57,9 @@ container_runtime  := env_var_or_default('CMACS_CONTAINER_RUNTIME', "podman")
 # Mirrors the recommended dev build: pgtk + native comp + every cmacs
 # subsystem.  Override an individual flag by editing here, or pass
 # extras via `just configure-extra <flags>`.
+# --enable-cmacs-deps-debug is on by default: it builds the in-house deps at
+# -O0 -g3 (DWARF) so gdb and runtime C self-introspection (cintrospect) can
+# read their structs.  Remove that line for a faster release-deps build.
 configure_flags := """
     --with-pgtk
     --with-cairo

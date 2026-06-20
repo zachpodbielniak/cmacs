@@ -8584,7 +8584,8 @@ fully-featured build matching Fedora defaults, use:
   --with-cmacs-gsurf \
   --with-cmacs-emacsctl \
   --with-cmacs-lrgterm \
-  --enable-cmacs-cpatch
+  --enable-cmacs-cpatch \
+  --enable-cmacs-deps-debug   # in-house deps -O0 -g3 (DWARF): gdb + runtime cintrospection
 @end example
 
 @noindent
