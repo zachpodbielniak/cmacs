@@ -44,6 +44,8 @@ makefile
 !test/lisp/progmodes/flymake-resources/Makefile
 !tools/cmacs-mcp/Makefile
 !cmacs/gsurf/modules/Makefile
+!cmacs/screensaver/render/Makefile
+!cmacs/screensaver/render/tests/Makefile
 !test/manual/etags/Makefile
 !test/manual/etags/make-src/Makefile
 !test/manual/indent/Makefile
