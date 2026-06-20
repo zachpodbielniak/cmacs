@@ -146,7 +146,10 @@
 (ert-deftest cmacs-ai-chat-stream-callback-shape ()
   "Synthesised stream payloads render correctly into the buffer."
   (skip-unless (fboundp 'cmacs-ai-chat-open))
-  (let ((buf (cmacs-ai-chat-open 'claude)))
+  ;; The harness pins HOME=/nonexistent, so the default `cmacs-ai-chat-dir'
+  ;; is unwritable and the buffer's auto-save errors.  Redirect to a temp dir.
+  (let* ((cmacs-ai-chat-dir (make-temp-file "cmacs-ai-test-" t))
+         (buf (cmacs-ai-chat-open 'claude)))
     (unwind-protect
         (progn
           (cmacs-ai-chat--stream-callback buf '(:start))
@@ -163,7 +166,8 @@
               ;; (e.g. "claude/claude-sonnet-4-20250514").
               (should (string-match-p "claude/" body))
               (should (string-match-p "hello world" body)))))
-      (kill-buffer buf))))
+      (kill-buffer buf)
+      (ignore-errors (delete-directory cmacs-ai-chat-dir t)))))
 
 ;;;; Label resolution (no network) ---------------------------------
 

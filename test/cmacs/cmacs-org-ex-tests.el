@@ -15,8 +15,7 @@
 ;;; Code:
 
 (require 'ert)
-
-(declare-function cmacs-feature-p "cmacs-glib-tests")
+(require 'cmacs)               ; defines `cmacs-feature-p' (not preloaded)
 
 ;;; Feature detection
 

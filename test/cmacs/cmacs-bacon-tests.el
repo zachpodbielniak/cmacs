@@ -220,20 +220,21 @@
     (bacon-stop)))
 
 ;; Edge cases
+;; `bacon-eval' returns (RC . OUTPUT); the exit code is the car.
 (ert-deftest cmacs-bacon-eval-empty-string ()
-  "Evaluating empty string should return 0."
+  "Evaluating empty string should return exit code 0."
   (skip-unless (fboundp 'bacon-eval))
-  (should (= 0 (bacon-eval ""))))
+  (should (= 0 (car (bacon-eval "")))))
 
 (ert-deftest cmacs-bacon-eval-pipe ()
   "Pipe commands should execute."
   (skip-unless (fboundp 'bacon-eval))
-  (should (integerp (bacon-eval "echo hello | cat"))))
+  (should (integerp (car (bacon-eval "echo hello | cat")))))
 
 (ert-deftest cmacs-bacon-eval-semicolons ()
   "Multiple commands separated by semicolons should work."
   (skip-unless (fboundp 'bacon-eval))
-  (should (integerp (bacon-eval "true; true; true"))))
+  (should (integerp (car (bacon-eval "true; true; true")))))
 
 (ert-deftest cmacs-bacon-alias-overwrite ()
   "Setting an alias twice should overwrite the first."

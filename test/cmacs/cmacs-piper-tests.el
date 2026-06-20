@@ -10,6 +10,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cl-lib)               ; cl-some, cl-letf
 (require 'cmacs)
 (when (cmacs-feature-p 'piper)
   (require 'cmacs-piper)
@@ -24,8 +25,14 @@
   "End-to-end: piper TTS -> PCM bytes -> playback handle opens."
   (skip-unless (cmacs-feature-p 'piper))
   (skip-unless (file-exists-p (cmacs-piper-voice-path)))
-  (let* ((pcm (cmacs-piper--synth-sync-1
-               (cmacs-piper-voice-path) "Hello, cmacs.")))
+  ;; End-to-end synth needs a functional piper runtime (onnxruntime shader
+  ;; cache, espeak-ng data, a writable HOME).  Skip when it can't initialise
+  ;; -- e.g. the test harness pins HOME=/nonexistent -- rather than failing.
+  (let ((pcm (condition-case nil
+                 (cmacs-piper--synth-sync-1
+                  (cmacs-piper-voice-path) "Hello, cmacs.")
+               (cmacs-piper-error 'unavailable))))
+    (skip-unless (not (eq pcm 'unavailable)))
     (should (stringp pcm))
     (should (> (length pcm) 0))))
 
@@ -38,7 +45,10 @@
     (goto-char (point-max))
     (activate-mark)
     (let ((menu (make-sparse-keymap)))
-      (cmacs-piper-context-menu-entry menu nil)
+      ;; Entries are only built on a graphic display; force it so the
+      ;; menu-construction logic runs under batch ERT (no display).
+      (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t)))
+        (cmacs-piper-context-menu-entry menu nil))
       ;; Check the menu has a binding labelled "Speak …"
       (should (cl-some
                (lambda (binding)

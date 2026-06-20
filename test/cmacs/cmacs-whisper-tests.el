@@ -14,6 +14,12 @@
 (when (cmacs-feature-p 'whisper)
   (require 'cmacs-whisper))
 
+;; Capture this file's directory at LOAD time: `load-file-name' is nil while
+;; ERT runs the test, so computing it then yields (file-name-directory nil).
+(defconst cmacs-whisper-tests--dir
+  (file-name-directory (or load-file-name buffer-file-name default-directory))
+  "Directory of this test file, for locating fixtures.")
+
 (ert-deftest cmacs-whisper--supported ()
   (skip-unless (fboundp 'cmacs-whisper-supported-p))
   (should (cmacs-whisper-supported-p)))
@@ -27,8 +33,7 @@
   (skip-unless (cmacs-feature-p 'whisper))
   (let ((model (cmacs-whisper-model-path))
         (wav   (expand-file-name "fixtures/whisper-jfk-5s.wav"
-                                 (file-name-directory
-                                  (or load-file-name buffer-file-name)))))
+                                 cmacs-whisper-tests--dir)))
     (skip-unless (and (file-exists-p model) (file-exists-p wav)))
     (let* ((res (cmacs-whisper-transcribe-file model wav "en"))
            (text (cdr (assq :text res))))
