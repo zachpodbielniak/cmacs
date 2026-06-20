@@ -1102,16 +1102,21 @@ $(CMACS_GNUSEYE_OBJ): $(CMACS_LIBREGNUM_STATIC_LIB)
 endif
 
 ## CMACS: build the deps/screensavers libregnum game-module .so files
-## (blackhole/singularity/helios).  These are loaded at runtime via dlopen and
-## are NOT linked into temacs (the screensaver subsystem only resolves them by
-## path), but we build them so a --with-cmacs-screensaver tree is runnable and
-## installable.  `make deps' (engine first) avoids a -j race where the shared
-## screensaver objects out-race graylib's generated grl-version.h.
+## (blackhole/singularity/helios), loaded at runtime via dlopen (NOT linked
+## into temacs -- the screensaver subsystem resolves them by path).  The
+## modules resolve lrg_*/grl_* from the host at load time, so we pin the build
+## at cmacs's CANONICAL deps/libregnum via the LIBREGNUM_DIR override (which
+## also redirects GRAYLIB_DIR/YAMLGLIB_DIR) instead of building deps/
+## screensavers' own bundled copy: one libregnum, guaranteed-matching ABI, and
+## no second engine build.  The dependency on the canonical archive guarantees
+## libregnum's generated version headers (lrg-/grl-version.h) -- which the
+## modules compile against -- already exist, also avoiding the -j race that
+## made the old `make deps' step necessary.
 ifneq ($(CMACS_SCREENSAVER_OBJ),)
 SCREENSAVER_MODULES_SO = $(srcdir)/../deps/screensavers/build/release/blackhole.so
-$(SCREENSAVER_MODULES_SO):
-	$(MAKE) -C $(srcdir)/../deps/screensavers deps
-	$(MAKE) -C $(srcdir)/../deps/screensavers modules
+$(SCREENSAVER_MODULES_SO): $(CMACS_LIBREGNUM_STATIC_LIB)
+	$(MAKE) -C $(srcdir)/../deps/screensavers modules \
+	    LIBREGNUM_DIR=$(abspath $(srcdir)/../deps/libregnum)
 $(CMACS_SCREENSAVER_OBJ): | $(SCREENSAVER_MODULES_SO)
 endif
 
