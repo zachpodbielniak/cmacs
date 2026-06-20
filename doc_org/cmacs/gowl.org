@@ -26,6 +26,68 @@ Inside Emacs, the compositor is controlled via =cmacs-gowl-mode=:
 M-x cmacs-gowl-mode           ;; toggle (usually auto-enabled by --gowl)
 #+end_example
 
+** Running as a GDM login session (in-repo debug build)
+
+To test compositor changes in a *real seat session* (not nested) without
+rebuilding an OS image — handy on an immutable/bootc host — add a custom
+Wayland session that launches the freshly-built in-repo binary, then pick
+*CMacs (Debug)* from GDM's gear menu on the login screen.
+
+1. A standup script that exports the same module/typelib environment as
+   =just gowl= and *forces the seat backend*.  On an ostree/bootc host put
+   it in =/usr/local/bin= (=→ /var/usrlocal/bin=, which is writable and
+   *persists* across reboots and image upgrades, and is on =PATH=):
+
+   #+begin_src bash
+   # /usr/local/bin/cmacs-debug   (chmod 0755; restorecon -F on SELinux)
+   #!/bin/bash
+   REPO=/var/home/zach/source/projects/cmacs   # <-- this checkout
+   # A real seat session has no parent compositor, but the systemd --user
+   # env can leak a stale WAYLAND_DISPLAY/DISPLAY (+ a leftover wayland-0
+   # socket).  cmacs treats a non-empty WAYLAND_DISPLAY as "nested" and
+   # forces WLR_BACKENDS=wayland, which then fails to connect.  Force the
+   # seat backend: cmacs only does setenv(WLR_BACKENDS,...,0) (no-overwrite),
+   # so our value wins and wlroots autocreate honours WLR_BACKENDS over the
+   # WAYLAND_DISPLAY/GDK heuristics.
+   unset WAYLAND_DISPLAY WAYLAND_SOCKET DISPLAY
+   export WLR_BACKENDS=libinput,drm
+   cd "$REPO" || exit 1
+   export CMACS_MODULE_DIR="$REPO/cmacs/bacon/modules"
+   export CMACS_GSURF_MODULE_DIR="$REPO/cmacs/gsurf/modules"
+   export CMACS_GOWL_MODULE_DIR="$REPO/deps/gowl/build/release/modules"
+   export CMACS_SCREENSAVER_MODULE_DIR="$REPO/deps/screensavers/build/release"
+   export CMACS_SCREENSAVER_RENDER_BIN="$REPO/src/cmacs-screensaver-render"
+   export GI_TYPELIB_PATH="$REPO/deps/libregnum/build/release/gir:$REPO/deps/libregnum/deps/graylib/build/gir${GI_TYPELIB_PATH:+:$GI_TYPELIB_PATH}"
+   exec "$REPO/src/emacs" --gowl "$@"
+   #+end_src
+
+2. A Wayland session entry.  GDM hands the =Exec= value to
+   =gdm-wayland-session=, which accepts *one* positional argument — so
+   =Exec= must be a *single bare token* (no =bash -lc "..."=; the quotes
+   are split and the session dies with "gdm-wayland-session takes one
+   argument" before cmacs ever launches).  Use
+   =/usr/local/share/wayland-sessions= (also =→ /var/usrlocal=, persistent);
+   =/usr/share/wayland-sessions= also works but is wiped on the next reboot
+   if it was only made writable via =bootc usr-overlay=.
+
+   #+begin_src conf
+   # /usr/local/share/wayland-sessions/cmacs-debug.desktop
+   [Desktop Entry]
+   Name=CMacs (Debug)
+   Comment=CMacs in-repo dev build (cmacs --gowl)
+   Exec=/usr/local/bin/cmacs-debug
+   Type=Application
+   DesktopNames=CMacs-Debug
+   #+end_src
+
+3. Log out → pick *CMacs (Debug)*.  Rebuild (=rm -f src/temacs && make=)
+   and log back in to test new changes — no OS image rebuild needed.  For
+   *nested* testing inside an existing session use =just gowl= instead
+   (it keeps =WAYLAND_DISPLAY= so wlroots uses the nested backend).
+
+Each of these bounced us back to GDM at least once; diagnose from the
+journal: =journalctl -b | grep -iE 'gdm-wayland-session|cmacs|gowl|wlr|backend'=.
+
 ** Running X11 applications (XWayland)
 
 gowl runs its own rootless *XWayland* server, so unmodified X11
@@ -365,6 +427,16 @@ The behaviour is fully live and ordering-independent:
   display, the internal panel stays on — gowl never blanks the only
   screen.  Unplugging the external while the lid is shut brings the
   internal panel back automatically.
+- Idempotent (clamshell boot): if the DRM driver already powered the
+  panel down (the enable commit for a shut lid fails, so it comes up
+  =enabled=nil= but still mapped), gowl still removes it from the output
+  layout, so a "half-disabled" panel never lingers there stealing the
+  cursor and newly launched windows.  (gowl does *not* destroy the
+  disabled output's =wlr_scene_output=; a disabled output stops emitting
+  frame events, so its scene output simply never commits again.  An
+  earlier version destroyed it and hit a use-after-free in the render
+  thread — see =doc_org/cmacs/cmacs-upstream-changes.org= / the
+  gowl-lid-wallpaper notes.)
 
 This is controlled by the =manage-lid= compositor setting (default on).
 Turn it off at runtime to keep driving a closed-lid panel:
@@ -392,6 +464,30 @@ typically fires synchronously during the output commit.  As a safety
 net, each setter also queries the layout box and calls =arrange()=
 directly, ensuring correct behavior even if the asynchronous path is
 delayed.
+
+* Touchpad and Pointer Input
+
+gowl applies GNOME-like defaults to libinput *touchpads* as they connect
+(=create_pointer= in =gowl-compositor.c=):
+
+- *Tap-to-click* and *tap-and-drag* enabled.
+- *Natural (reverse) scrolling* — two fingers up scrolls the content up,
+  matching GNOME.  Applied only to touchpads, so a plain mouse keeps its
+  normal wheel direction.
+- *Two-finger scroll* and *disable-while-typing*.
+
+A device is treated as a touchpad when libinput reports a non-zero tap
+finger count (mice report zero).
+
+*Gestures.*  Swipe, pinch, and hold events are relayed to the focused
+client through the pointer-gestures protocol (=zwp_pointer_gestures_v1=),
+so applications get three-finger swipe, pinch-to-zoom, etc.  Two-finger
+scrolling is ordinary pointer-axis scrolling and works everywhere.
+
+These are compiled-in defaults (no per-device config knob yet).  Because
+the static =libgowl.a= now calls =libinput_device_config_*= directly,
+cmacs links =libinput= — see the =CMACS_GOWL_DEPS= pkg-config list in
+=configure.ac=.
 
 * Client Embedding
 

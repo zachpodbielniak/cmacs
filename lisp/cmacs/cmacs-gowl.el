@@ -774,20 +774,27 @@ excluded; reach those with \\[switch-to-buffer]."
 
 ;;;###autoload
 (defun cmacs-gowl-assign-monitor-tags ()
-  "Give each monitor its own initial tag: monitor 1 → tag 1, 2 → tag 2…
-Tags are per-monitor, so the main (first) monitor views tag 1, the
-second views tag 2, and so on, up to nine monitors.  Each monitor
-then switches its own tags independently.  Called on mode start when
+  "Give each ENABLED monitor its own initial tag: 1st → tag 1, 2nd → tag 2…
+Tags are per-monitor, so the main monitor views tag 1, the second views
+tag 2, and so on, up to nine monitors.  Each monitor then switches its
+own tags independently.  Called on mode start when
 `cmacs-gowl-monitor-tags-on-launch' is non-nil; also runnable by hand
-after hotplugging a monitor."
+after hotplugging a monitor.
+
+Powered-off monitors (e.g. a lid-shut internal panel in clamshell mode)
+are SKIPPED: they must not consume a tag slot.  Otherwise a disabled
+internal panel at list index 0 would take tag 1 (where the Emacs frame
+lives) and push the only visible external monitor onto tag 2, hiding all
+its windows — and `gowl-view-tags' on the disabled panel would also make
+it the selected monitor, stranding focus / the bar on the dark screen."
   (interactive)
   (unless (gowl-running-p)
     (user-error "Gowl compositor is not running"))
   (let ((i 0))
     (dolist (mon (gowl-list-monitors))
-      (when (< i 9)
-        (gowl-view-tags (ash 1 i) mon))
-      (setq i (1+ i))))
+      (when (and (ignore-errors (gowl-monitor-enabled-p mon)) (< i 9))
+        (gowl-view-tags (ash 1 i) mon)
+        (setq i (1+ i)))))
   ;; `gowl-view-tags' focus-follows per monitor, which would leave
   ;; keyboard focus on the last monitor's top client (or nowhere if
   ;; it is empty).  Return focus to Emacs.
