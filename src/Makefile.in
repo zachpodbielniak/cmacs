@@ -412,6 +412,12 @@ CMACS_MCP_OBJ = @CMACS_MCP_OBJ@
 CMACS_MCP_CFLAGS = @CMACS_MCP_CFLAGS@
 CMACS_MCP_LIBS = @CMACS_MCP_LIBS@
 CMACS_MCP_BUNDLED = @CMACS_MCP_BUNDLED@
+## CMACS: in-house dep build type (release|debug) + extra make flags.
+## With --enable-cmacs-deps-debug these become "debug" / "DEBUG=1" so cmacs
+## builds and links the deps' build/debug (-O0 -g3) artifacts; otherwise
+## "release" / empty (unchanged behavior).  See configure.ac.
+CMACS_DEP_BUILDTYPE = @CMACS_DEP_BUILDTYPE@
+CMACS_DEP_MAKEFLAGS = @CMACS_DEP_MAKEFLAGS@
 CMACS_CINTROSPECT_OBJ = @CMACS_CINTROSPECT_OBJ@
 CMACS_CINTROSPECT_CFLAGS = @CMACS_CINTROSPECT_CFLAGS@
 CMACS_CINTROSPECT_LIBS = @CMACS_CINTROSPECT_LIBS@
@@ -897,26 +903,26 @@ endif
 
 ## Build bundled static libraries if needed
 ifeq ($(CMACS_BACON_BUNDLED),yes)
-CMACS_BACON_STATIC_LIB = $(srcdir)/../deps/bacon/build/release/libbacon-1.0.a
+CMACS_BACON_STATIC_LIB = $(srcdir)/../deps/bacon/build/$(CMACS_DEP_BUILDTYPE)/libbacon-1.0.a
 $(CMACS_BACON_STATIC_LIB):
-	$(MAKE) -C $(srcdir)/../deps/bacon lib-static
+	$(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/bacon lib-static
 
 ## Build bacon module .so files (loaded at runtime, not linked into temacs).
 .PHONY: cmacs-bacon-dep-modules
 cmacs-bacon-dep-modules: $(CMACS_BACON_STATIC_LIB)
-	$(MAKE) -C $(srcdir)/../deps/bacon modules
+	$(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/bacon modules
 endif
 
 ifeq ($(CMACS_CRISPY_BUNDLED),yes)
-CMACS_CRISPY_STATIC_LIB = $(srcdir)/../deps/crispy/build/release/libcrispy.a
+CMACS_CRISPY_STATIC_LIB = $(srcdir)/../deps/crispy/build/$(CMACS_DEP_BUILDTYPE)/libcrispy.a
 $(CMACS_CRISPY_STATIC_LIB):
-	$(MAKE) -C $(srcdir)/../deps/crispy lib
+	$(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/crispy lib
 endif
 
 ifeq ($(CMACS_GOWL_BUNDLED),yes)
-CMACS_GOWL_STATIC_LIB = $(srcdir)/../deps/gowl/build/release/libgowl.a
+CMACS_GOWL_STATIC_LIB = $(srcdir)/../deps/gowl/build/$(CMACS_DEP_BUILDTYPE)/libgowl.a
 $(CMACS_GOWL_STATIC_LIB):
-	$(MAKE) -C $(srcdir)/../deps/gowl lib
+	$(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/gowl lib
 
 ## Objects that include gowl.h (directly or via cmacs-eval-dispatch.h)
 ## need gowl-version.h, which is generated during the gowl lib build.
@@ -924,13 +930,13 @@ $(CMACS_GOWL_OBJ) $(CMACS_GLIB_OBJ) $(CMACS_BACON_OBJ): $(CMACS_GOWL_STATIC_LIB)
 
 ## Build gowl wallpaper module .so (loaded at runtime, not linked into temacs).
 ## gowl's own `make` builds this as part of its modules target.
-GOWL_WALLPAPER_SO = $(srcdir)/../deps/gowl/build/release/modules/wallpaper.so
+GOWL_WALLPAPER_SO = $(srcdir)/../deps/gowl/build/$(CMACS_DEP_BUILDTYPE)/modules/wallpaper.so
 $(GOWL_WALLPAPER_SO): $(CMACS_GOWL_STATIC_LIB)
-	$(MAKE) -C $(srcdir)/../deps/gowl modules
+	$(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/gowl modules
 endif
 
 ifeq ($(CMACS_PODOMATION_BUNDLED),yes)
-CMACS_PODOMATION_STATIC_LIB = $(srcdir)/../deps/podomation/build/release/libpodomation-1.0.a
+CMACS_PODOMATION_STATIC_LIB = $(srcdir)/../deps/podomation/build/$(CMACS_DEP_BUILDTYPE)/libpodomation-1.0.a
 
 ## Redirect podomation's ai-glib build at the canonical top-level
 ## deps/ai-glib so the AI module .so files share a single ai-glib
@@ -948,7 +954,7 @@ CMACS_PODOMATION_AI_GLIB_OVERRIDES =
 endif
 
 $(CMACS_PODOMATION_STATIC_LIB):
-	$(MAKE) -C $(srcdir)/../deps/podomation \
+	$(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/podomation \
 	  $(CMACS_PODOMATION_AI_GLIB_OVERRIDES) \
 	  lib-static
 
@@ -958,7 +964,7 @@ $(CMACS_PODOMATION_OBJ): $(CMACS_PODOMATION_STATIC_LIB)
 ## Build podomation module .so files (separate target, not required for temacs)
 .PHONY: cmacs-podomation-modules
 cmacs-podomation-modules: $(CMACS_PODOMATION_STATIC_LIB)
-	$(MAKE) -C $(srcdir)/../deps/podomation \
+	$(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/podomation \
 	  $(CMACS_PODOMATION_AI_GLIB_OVERRIDES) \
 	  modules
 endif
@@ -998,10 +1004,10 @@ endif
 ## FORCE so edits under deps/ai-glib/src are picked up: the sub-make
 ## decides incrementality and only touches the archive when objects
 ## actually changed (same pattern as the org-ex hook below).
-CMACS_AI_GLIB_STATIC_LIB = $(srcdir)/../deps/ai-glib/build/release/libai-glib-1.0.a
+CMACS_AI_GLIB_STATIC_LIB = $(srcdir)/../deps/ai-glib/build/$(CMACS_DEP_BUILDTYPE)/libai-glib-1.0.a
 ifneq ($(CMACS_AI_OBJ)$(CMACS_LIBRECLAW_OBJ),)
 $(CMACS_AI_GLIB_STATIC_LIB): FORCE
-	$(MAKE) -C $(srcdir)/../deps/ai-glib GIR=1 all
+	$(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/ai-glib GIR=1 all
 endif
 
 ifeq ($(CMACS_LIBRECLAW_BUNDLED),yes)
@@ -1013,9 +1019,9 @@ ifeq ($(CMACS_LIBRECLAW_BUNDLED),yes)
 ## runtime via GI_TYPELIB_PATH.  AI_GLIB_DIR is overridden so
 ## libreclaw's nested deps/ai-glib sub-make becomes a no-op and the
 ## canonical cmacs build is consumed instead.
-CMACS_LIBRECLAW_STATIC_LIB = $(srcdir)/../deps/libreclaw/build/release/liblc-1.0.a
+CMACS_LIBRECLAW_STATIC_LIB = $(srcdir)/../deps/libreclaw/build/$(CMACS_DEP_BUILDTYPE)/liblc-1.0.a
 $(CMACS_LIBRECLAW_STATIC_LIB): $(CMACS_AI_GLIB_STATIC_LIB)
-	$(MAKE) -C $(srcdir)/../deps/libreclaw \
+	$(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/libreclaw \
 	  AI_GLIB_DIR=$(abs_top_srcdir)/deps/ai-glib \
 	  static gir
 
@@ -1054,17 +1060,17 @@ endif
 ## up; the sub-make decides incrementality (ai-glib pattern).  The
 ## vendored manifold/solvespace archives build automatically as
 ## prerequisites inside cad-glib's own Makefile.
-CMACS_CAD_GLIB_STATIC_LIB = $(srcdir)/../deps/cad-glib/build/release/libcad-glib-1.0.a
+CMACS_CAD_GLIB_STATIC_LIB = $(srcdir)/../deps/cad-glib/build/$(CMACS_DEP_BUILDTYPE)/libcad-glib-1.0.a
 ifneq ($(CMACS_CAD_OBJ),)
 $(CMACS_CAD_GLIB_STATIC_LIB): FORCE
 	@gir=1; \
 	if ! command -v g-ir-scanner >/dev/null 2>&1; then gir=0; fi; \
-	$(MAKE) -C $(srcdir)/../deps/cad-glib GIR=$$gir all
+	$(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/cad-glib GIR=$$gir all
 
 $(CMACS_CAD_OBJ): $(CMACS_CAD_GLIB_STATIC_LIB) $(CMACS_LIBREGNUM_STATIC_LIB)
 endif
 
-CMACS_LIBREGNUM_STATIC_LIB = $(srcdir)/../deps/libregnum/build/release/lib/liblibregnum.a
+CMACS_LIBREGNUM_STATIC_LIB = $(srcdir)/../deps/libregnum/build/$(CMACS_DEP_BUILDTYPE)/lib/liblibregnum.a
 ifneq ($(CMACS_LIBREGNUM_OBJ),)
 ##  - Scripting backends: Lua (luajit) and Python (python3-embed) auto-enable
 ##    from libregnum's own pkg-config probes when their -devel packages are
@@ -1080,13 +1086,13 @@ $(CMACS_LIBREGNUM_STATIC_LIB): $(if $(CMACS_CAD_OBJ),$(CMACS_CAD_GLIB_STATIC_LIB
 	if command -v g-ir-scanner >/dev/null 2>&1 \
 	   && pkg-config --exists gobject-introspection-1.0; then gir=1; fi; \
 	if pkg-config --exists girepository-2.0; then \
-	  $(MAKE) -C $(srcdir)/../deps/libregnum \
+	  $(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/libregnum \
 	    WARN_CFLAGS="-Wall -Wextra -Wno-unused-but-set-variable" \
 	    BUILD_GIR=$$gir CRISPY=1 HAS_GI=1 $(CMACS_CAD_LIBREGNUM_FLAGS) \
 	    GI_RUNTIME_CFLAGS="$$(pkg-config --cflags girepository-2.0)" \
 	    GI_RUNTIME_LIBS="$$(pkg-config --libs girepository-2.0)"; \
 	else \
-	  $(MAKE) -C $(srcdir)/../deps/libregnum \
+	  $(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/libregnum \
 	    WARN_CFLAGS="-Wall -Wextra -Wno-unused-but-set-variable" \
 	    BUILD_GIR=0 CRISPY=1 $(CMACS_CAD_LIBREGNUM_FLAGS); \
 	fi
@@ -1113,9 +1119,9 @@ endif
 ## modules compile against -- already exist, also avoiding the -j race that
 ## made the old `make deps' step necessary.
 ifneq ($(CMACS_SCREENSAVER_OBJ),)
-SCREENSAVER_MODULES_SO = $(srcdir)/../deps/screensavers/build/release/blackhole.so
+SCREENSAVER_MODULES_SO = $(srcdir)/../deps/screensavers/build/$(CMACS_DEP_BUILDTYPE)/blackhole.so
 $(SCREENSAVER_MODULES_SO): $(CMACS_LIBREGNUM_STATIC_LIB)
-	$(MAKE) -C $(srcdir)/../deps/screensavers modules \
+	$(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/screensavers modules \
 	    LIBREGNUM_DIR=$(abspath $(srcdir)/../deps/libregnum)
 $(CMACS_SCREENSAVER_OBJ): | $(SCREENSAVER_MODULES_SO)
 endif
@@ -1130,10 +1136,10 @@ endif
 ## gsurf: built STATIC=1 (libgsurf.a whole-archived into temacs),
 ## BUILD_GIR=1 (Gsurf-0.1.typelib for cmacsgi), GTK_BACKEND=gtk3
 ## (matches pgtk + xwidgets' webkit2gtk-4.1).  The default `all' target
-## also builds the stock modules into deps/gsurf/build/release/modules
+## also builds the stock modules into deps/gsurf/build/$(CMACS_DEP_BUILDTYPE)/modules
 ## and generates gsurf-version.h (which gsurf.h needs), so make the
 ## gsurf objects depend on the archive.
-CMACS_GSURF_STATIC_LIB = $(srcdir)/../deps/gsurf/build/release/libgsurf.a
+CMACS_GSURF_STATIC_LIB = $(srcdir)/../deps/gsurf/build/$(CMACS_DEP_BUILDTYPE)/libgsurf.a
 ifneq ($(CMACS_GSURF_OBJ),)
 ## When the LRG backend is on, gsurf compiles src/backend/lrg/** and its own
 ## libgsurf.so links graylib/raylib -- so the libregnum build (which produces
@@ -1148,7 +1154,7 @@ endif
 ## libregnum/graylib/raylib is linked into temacs (the static-lib dedup
 ## invariant).  gsurf builds standalone against its own copy by default.
 $(CMACS_GSURF_STATIC_LIB):
-	$(MAKE) -C $(srcdir)/../deps/gsurf STATIC=1 BUILD_GIR=1 GTK_BACKEND=gtk3 \
+	$(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/gsurf STATIC=1 BUILD_GIR=1 GTK_BACKEND=gtk3 \
 	  $(if $(filter yes,$(CMACS_GSURF_LRG)),LRG_BACKEND=1 \
 	    LIBREGNUM_DIR=$(abspath $(srcdir)/../deps/libregnum))
 $(CMACS_GSURF_OBJ): $(CMACS_GSURF_STATIC_LIB)
@@ -1242,7 +1248,7 @@ ifneq ($(CMACS_MCP_OBJ),)
 ifeq ($(CMACS_MCP_BUNDLED),yes)
 CMACS_MCP_STATIC_LIB = $(srcdir)/../deps/mcp-glib/build/libmcp-glib-1.0.a
 $(CMACS_MCP_STATIC_LIB):
-	$(MAKE) -C $(srcdir)/../deps/mcp-glib
+	$(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/mcp-glib
 
 $(CMACS_MCP_OBJ): $(CMACS_MCP_STATIC_LIB)
 endif
@@ -1287,7 +1293,7 @@ ifeq ($(CMACS_PODOMATION_BUNDLED),yes)
 ## is built as a temacs dependency before this expansion is used
 ## thanks to the dedup-lib rule's prerequisite ordering below.
 _dup_podomation_objs := $(shell ar t \
-  $(srcdir)/../deps/podomation/build/release/libpodomation-1.0.a 2>/dev/null)
+  $(srcdir)/../deps/podomation/build/$(CMACS_DEP_BUILDTYPE)/libpodomation-1.0.a 2>/dev/null)
 endif
 endif
 

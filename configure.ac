@@ -688,6 +688,26 @@ AC_ARG_WITH([gsurf],
 OPTION_DEFAULT_OFF([cmacs-emacsctl],
   [emacsctl/cmacsctl kubectl-style command-line control client])
 
+# CMACS: build the in-house deps with DEBUG=1 (-O0 -g3 DWARF) and link those
+# build/debug artifacts instead of build/release, so gdb and cmacs cintrospect
+# can read dep structs at runtime.  Each dep's *release* build stays
+# un-instrumented; this only changes which artifacts cmacs builds and links.
+# Off by default; enabled in the dev/bootstrap flag set.
+AC_ARG_ENABLE([cmacs-deps-debug],
+  [AS_HELP_STRING([--enable-cmacs-deps-debug],
+     [build/link the in-house deps with DEBUG=1 (-O0 -g3) for runtime introspection (default: no)])],
+  [], [enable_cmacs_deps_debug=no])
+if test "$enable_cmacs_deps_debug" = "yes"; then
+  cmacs_dep_buildtype=debug
+  CMACS_DEP_MAKEFLAGS="DEBUG=1"
+else
+  cmacs_dep_buildtype=release
+  CMACS_DEP_MAKEFLAGS=""
+fi
+CMACS_DEP_BUILDTYPE=$cmacs_dep_buildtype
+AC_SUBST([CMACS_DEP_BUILDTYPE])
+AC_SUBST([CMACS_DEP_MAKEFLAGS])
+
 # CMACS: pkg-config checks when enabled
 if test "$with_cmacs_glib" != "no"; then
   PKG_CHECK_MODULES([CMACS_GLIB], [glib-2.0 gobject-2.0 gio-2.0 gmodule-2.0])
@@ -709,7 +729,7 @@ if test "$with_cmacs_crispy" != "no"; then
       [glib-2.0 gobject-2.0 gio-2.0])
     CMACS_CRISPY_CFLAGS="-I\$(srcdir)/../deps/crispy/src \
       $CMACS_CRISPY_DEPS_CFLAGS"
-    CMACS_CRISPY_LIBS="-Wl,--whole-archive \$(srcdir)/../deps/crispy/build/release/libcrispy.a \
+    CMACS_CRISPY_LIBS="-Wl,--whole-archive \$(srcdir)/../deps/crispy/build/$cmacs_dep_buildtype/libcrispy.a \
       -Wl,--no-whole-archive $CMACS_CRISPY_DEPS_LIBS"
     CMACS_CRISPY_BUNDLED=yes
   fi
@@ -728,11 +748,11 @@ if test "$with_cmacs_bacon" != "no"; then
       -I\$(srcdir)/../deps/bacon/deps/crispy/src \
       -I\$(srcdir)/../deps/bacon/deps/yaml-glib/src \
       -DBACON_COMPILATION \
-      -DBACON_DEV_MODULE_DIR=\\\"\$(abs_top_srcdir)/deps/bacon/build/release/modules\\\" \
+      -DBACON_DEV_MODULE_DIR=\\\"\$(abs_top_srcdir)/deps/bacon/build/$cmacs_dep_buildtype/modules\\\" \
       -DBACON_MODULEDIR=\\\"$libdir/bacon/modules\\\" \
       -DCMACS_BACON_MODULE_DIR=\\\"\$(abs_top_srcdir)/cmacs/bacon/modules\\\" \
       $CMACS_BACON_DEPS_CFLAGS"
-    CMACS_BACON_LIBS="-Wl,--whole-archive \$(srcdir)/../deps/bacon/build/release/libbacon-1.0.a \
+    CMACS_BACON_LIBS="-Wl,--whole-archive \$(srcdir)/../deps/bacon/build/$cmacs_dep_buildtype/libbacon-1.0.a \
       -Wl,--no-whole-archive $CMACS_BACON_DEPS_LIBS"
     CMACS_BACON_BUNDLED=yes
   fi
@@ -756,7 +776,7 @@ if test "$with_cmacs_gowl" != "no"; then
       -I\$(srcdir)/../deps/gowl/src/module \
       -DWLR_USE_UNSTABLE \
       $CMACS_GOWL_DEPS_CFLAGS"
-    CMACS_GOWL_LIBS="-Wl,--whole-archive \$(srcdir)/../deps/gowl/build/release/libgowl.a \
+    CMACS_GOWL_LIBS="-Wl,--whole-archive \$(srcdir)/../deps/gowl/build/$cmacs_dep_buildtype/libgowl.a \
       -Wl,--no-whole-archive $CMACS_GOWL_DEPS_LIBS"
     CMACS_GOWL_BUNDLED=yes
     # Check for libdecor (optional, for nested Wayland window decorations)
@@ -778,14 +798,14 @@ if test "$with_cmacs_podomation" != "no"; then
       [glib-2.0 gobject-2.0 gio-2.0 gio-unix-2.0 gmodule-2.0
        libsoup-3.0 json-glib-1.0 libetpan yaml-0.1])
     CMACS_PODOMATION_CFLAGS="-I\$(srcdir)/../deps/podomation/src \
-      -I\$(srcdir)/../deps/podomation/build/release \
+      -I\$(srcdir)/../deps/podomation/build/$cmacs_dep_buildtype \
       -I\$(srcdir)/../deps/podomation/deps/crispy/src \
       -I\$(srcdir)/../deps/podomation/deps/yaml-glib/src \
       -DPOD_COMPILATION \
-      -DCMACS_PODOMATION_MODULE_DIR=\\\"\$(abs_top_srcdir)/deps/podomation/build/release/modules\\\" \
+      -DCMACS_PODOMATION_MODULE_DIR=\\\"\$(abs_top_srcdir)/deps/podomation/build/$cmacs_dep_buildtype/modules\\\" \
       -DPODOMATION_MODULEDIR=\\\"$libdir/podomation/modules\\\" \
       $CMACS_PODOMATION_DEPS_CFLAGS"
-    CMACS_PODOMATION_LIBS="-Wl,--whole-archive \$(srcdir)/../deps/podomation/build/release/libpodomation-1.0.a \
+    CMACS_PODOMATION_LIBS="-Wl,--whole-archive \$(srcdir)/../deps/podomation/build/$cmacs_dep_buildtype/libpodomation-1.0.a \
       -Wl,--no-whole-archive $CMACS_PODOMATION_DEPS_LIBS"
     CMACS_PODOMATION_BUNDLED=yes
   fi
@@ -807,21 +827,21 @@ if test "$with_cmacs_libreclaw" != "no"; then
        libsoup-3.0 json-glib-1.0 libcmark sqlite3 libetpan libpq
        yaml-0.1 libdex-1])
     CMACS_LIBRECLAW_CFLAGS="-I\$(srcdir)/../deps/libreclaw/src \
-      -I\$(srcdir)/../deps/libreclaw/build/release \
+      -I\$(srcdir)/../deps/libreclaw/build/$cmacs_dep_buildtype \
       -I\$(abs_top_srcdir)/deps/ai-glib/src \
-      -I\$(abs_top_srcdir)/deps/ai-glib/build/release \
+      -I\$(abs_top_srcdir)/deps/ai-glib/build/$cmacs_dep_buildtype \
       -I\$(srcdir)/../deps/libreclaw/deps/yaml-glib/src \
       -I\$(srcdir)/../deps/libreclaw/deps/podomation/src \
       -I\$(srcdir)/../deps/libreclaw/deps/podomation/src/module \
       -I\$(srcdir)/../deps/libreclaw/deps/podomation/src/interfaces \
       -I\$(srcdir)/../deps/libreclaw/deps/podomation/src/core \
-      -I\$(srcdir)/../deps/libreclaw/deps/podomation/build/release \
+      -I\$(srcdir)/../deps/libreclaw/deps/podomation/build/$cmacs_dep_buildtype \
       -DLC_COMPILATION \
-      -DCMACS_LIBRECLAW_GIR_DIR=\\\"\$(abs_top_srcdir)/deps/libreclaw/build/release\\\" \
+      -DCMACS_LIBRECLAW_GIR_DIR=\\\"\$(abs_top_srcdir)/deps/libreclaw/build/$cmacs_dep_buildtype\\\" \
       $CMACS_LIBRECLAW_DEPS_CFLAGS"
-    CMACS_LIBRECLAW_LIBS="-Wl,--whole-archive \$(srcdir)/../deps/libreclaw/build/release/liblc-1.0.a \
+    CMACS_LIBRECLAW_LIBS="-Wl,--whole-archive \$(srcdir)/../deps/libreclaw/build/$cmacs_dep_buildtype/liblc-1.0.a \
       -Wl,--no-whole-archive \
-      \$(abs_top_srcdir)/deps/ai-glib/build/release/libai-glib-1.0.a \
+      \$(abs_top_srcdir)/deps/ai-glib/build/$cmacs_dep_buildtype/libai-glib-1.0.a \
       $CMACS_LIBRECLAW_DEPS_LIBS"
     CMACS_LIBRECLAW_BUNDLED=yes
   fi
@@ -844,15 +864,15 @@ if test "$with_cmacs_ai" != "no"; then
   PKG_CHECK_MODULES([CMACS_AI_DEPS],
     [glib-2.0 gobject-2.0 gio-2.0 libsoup-3.0 json-glib-1.0 >= 1.6])
   CMACS_AI_CFLAGS="-I\$(abs_top_srcdir)/deps/ai-glib/src \
-    -I\$(abs_top_srcdir)/deps/ai-glib/build/release \
-    -DCMACS_AI_GIR_DIR=\\\"\$(abs_top_srcdir)/deps/ai-glib/build/release\\\" \
+    -I\$(abs_top_srcdir)/deps/ai-glib/build/$cmacs_dep_buildtype \
+    -DCMACS_AI_GIR_DIR=\\\"\$(abs_top_srcdir)/deps/ai-glib/build/$cmacs_dep_buildtype\\\" \
     $CMACS_AI_DEPS_CFLAGS"
   # libai-glib-1.0.a contains only ai_* objects (vendored yaml-glib is
   # linked into the .so, not embedded in the .a) so no dedup is needed.
   # When --with-cmacs-libreclaw is also enabled, the same archive is
   # already on CMACS_LIBRECLAW_LIBS — having it appear twice is safe
   # because the second occurrence resolves zero new undefined symbols.
-  CMACS_AI_LIBS="\$(abs_top_srcdir)/deps/ai-glib/build/release/libai-glib-1.0.a \
+  CMACS_AI_LIBS="\$(abs_top_srcdir)/deps/ai-glib/build/$cmacs_dep_buildtype/libai-glib-1.0.a \
     $CMACS_AI_DEPS_LIBS"
   AC_DEFINE([HAVE_CMACS_AI], 1, [CMacs ai-glib AI subsystem])
   CMACS_AI_OBJ="cmacs-ai-init.o cmacs-ai-defuns.o cmacs-ai-config.o \
@@ -886,7 +906,7 @@ if test "$with_cmacs_libregnum" != "no"; then
   PKG_CHECK_MODULES([CMACS_LIBREGNUM_DEPS],
     [glib-2.0 gobject-2.0 gio-2.0 cairo libdex-1])
   CMACS_LIBREGNUM_CFLAGS="-I\$(abs_top_srcdir)/deps/libregnum/src \
-    -I\$(abs_top_srcdir)/deps/libregnum/build/release \
+    -I\$(abs_top_srcdir)/deps/libregnum/build/$cmacs_dep_buildtype \
     -I\$(abs_top_srcdir)/deps/libregnum/deps/graylib/src \
     -I\$(abs_top_srcdir)/deps/libregnum/deps/graylib/deps/raylib/src \
     -I\$(abs_top_srcdir)/deps/libregnum/deps/yaml-glib/src \
@@ -926,7 +946,7 @@ if test "$with_cmacs_libregnum" != "no"; then
   # by a loaded module at runtime.
   CMACS_LIBREGNUM_LIBS="-Wl,--allow-multiple-definition \
     -Wl,--whole-archive \
-    \$(abs_top_srcdir)/deps/libregnum/build/release/lib/liblibregnum.a \
+    \$(abs_top_srcdir)/deps/libregnum/build/$cmacs_dep_buildtype/lib/liblibregnum.a \
     -Wl,--no-whole-archive \
     -lGL -lm -lpthread -ldl -lrt -lX11 \
     $CMACS_LIBREGNUM_DEPS_LIBS"
@@ -964,7 +984,7 @@ if test "$with_cmacs_lrgterm" != "no"; then
   # define LIBREGNUM_COMPILATION.  raylib/graylib symbols come from the libregnum
   # archive already on the link line via CMACS_LIBREGNUM_LIBS.
   CMACS_LRGTERM_CFLAGS="-I\$(abs_top_srcdir)/deps/libregnum/src \
-    -I\$(abs_top_srcdir)/deps/libregnum/build/release \
+    -I\$(abs_top_srcdir)/deps/libregnum/build/$cmacs_dep_buildtype \
     -I\$(abs_top_srcdir)/deps/libregnum/deps/graylib/src \
     -I\$(abs_top_srcdir)/deps/libregnum/deps/graylib/deps/raylib/src \
     $CMACS_LIBREGNUM_DEPS_CFLAGS"
@@ -1010,8 +1030,8 @@ if test "$with_cmacs_cad" != "no"; then
   # taken from cad-glib's generated .pc Libs.private at make time so the
   # OCCT probe lives in exactly one place (deps/cad-glib/config.mk).
   PKG_CHECK_MODULES([CMACS_CAD_DEPS], [glib-2.0 gobject-2.0 gio-2.0])
-  CMACS_CAD_CFLAGS="-I\$(abs_top_srcdir)/deps/cad-glib/src     -I\$(abs_top_srcdir)/deps/cad-glib/build/release     $CMACS_CAD_DEPS_CFLAGS"
-  CMACS_CAD_LIBS="\$(abs_top_srcdir)/deps/cad-glib/build/release/libcad-glib-1.0.a     \$(shell sed -n 's/^Libs.private: //p' \$(abs_top_srcdir)/deps/cad-glib/cad-glib-1.0.pc 2>/dev/null)     -lstdc++ $CMACS_CAD_DEPS_LIBS"
+  CMACS_CAD_CFLAGS="-I\$(abs_top_srcdir)/deps/cad-glib/src     -I\$(abs_top_srcdir)/deps/cad-glib/build/$cmacs_dep_buildtype     $CMACS_CAD_DEPS_CFLAGS"
+  CMACS_CAD_LIBS="\$(abs_top_srcdir)/deps/cad-glib/build/$cmacs_dep_buildtype/libcad-glib-1.0.a     \$(shell sed -n 's/^Libs.private: //p' \$(abs_top_srcdir)/deps/cad-glib/cad-glib-1.0.pc 2>/dev/null)     -lstdc++ $CMACS_CAD_DEPS_LIBS"
   CMACS_CAD_LIBREGNUM_FLAGS="CAD=1 CAD_GLIB_DIR=\$(abs_top_srcdir)/deps/cad-glib"
   AC_DEFINE([HAVE_CMACS_CAD], 1, [CMacs parametric CAD subsystem])
   CMACS_CAD_OBJ="cmacs-cad-init.o cmacs-cad-defuns.o cmacs-cad-doc.o cmacs-cad-sketch.o cmacs-cad-assembly.o"
@@ -1074,8 +1094,8 @@ if test "$with_cmacs_gsurf" != "no"; then
   # src/gsurf.h, but the include is angle-bracketed <gsurf/gsurf.h>.
   CMACS_GSURF_CFLAGS="-I\$(abs_top_srcdir)/deps/gsurf/build/include \
     -I\$(abs_top_srcdir)/deps/gsurf/src \
-    -DCMACS_GSURF_GIR_DIR=\\\"\$(abs_top_srcdir)/deps/gsurf/build/release\\\" \
-    -DCMACS_GSURF_DEV_MODULE_DIR=\\\"\$(abs_top_srcdir)/deps/gsurf/build/release/modules\\\" \
+    -DCMACS_GSURF_GIR_DIR=\\\"\$(abs_top_srcdir)/deps/gsurf/build/$cmacs_dep_buildtype\\\" \
+    -DCMACS_GSURF_DEV_MODULE_DIR=\\\"\$(abs_top_srcdir)/deps/gsurf/build/$cmacs_dep_buildtype/modules\\\" \
     -DCMACS_GSURF_MODULE_DIR=\\\"\$(abs_top_srcdir)/cmacs/gsurf/modules\\\" \
     -DGSURF_MODULEDIR=\\\"$libdir/cmacs/gsurf/modules\\\" \
     $CMACS_GSURF_DEPS_CFLAGS"
@@ -1087,7 +1107,7 @@ if test "$with_cmacs_gsurf" != "no"; then
   # (dynamic-module support) so loaded gsurf module .so files resolve
   # gsurf_*/yaml_* against the executable -- one library instance.
   CMACS_GSURF_LIBS="-Wl,--whole-archive \
-    \$(abs_top_srcdir)/deps/gsurf/build/release/libgsurf.a \
+    \$(abs_top_srcdir)/deps/gsurf/build/$cmacs_dep_buildtype/libgsurf.a \
     -Wl,--no-whole-archive $CMACS_GSURF_DEPS_LIBS"
   CMACS_GSURF_BUNDLED=yes
   AC_DEFINE([HAVE_CMACS_GSURF], 1, [CMacs gsurf embedded web browser])

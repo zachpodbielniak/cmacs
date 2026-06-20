@@ -23,6 +23,12 @@ jobs        := `nproc`
 # option parser rejects it with "ERROR: invalid option").
 gowl_dir    := "deps/gowl"
 
+# In-house dep build type that the dev build produces.  The bootstrap flag set
+# enables --enable-cmacs-deps-debug, so the dev artifacts land under
+# build/debug; override with `just dep_buildtype=release ...` for a plain
+# (release-deps) build.  graylib always builds to build/ (not split).
+dep_buildtype := "debug"
+
 # Local-build launch environment shared by every "run cmacs" recipe.
 # Points cmacs at the freshly-built bacon/gsurf/gowl modules (and the
 # libregnum/graylib typelibs) so local testing never loads a
@@ -32,10 +38,10 @@ gowl_dir    := "deps/gowl"
 local_env := \
     "CMACS_MODULE_DIR=" + justfile_directory() + "/cmacs/bacon/modules " + \
     "CMACS_GSURF_MODULE_DIR=" + justfile_directory() + "/cmacs/gsurf/modules " + \
-    "CMACS_GOWL_MODULE_DIR=" + justfile_directory() + "/deps/gowl/build/release/modules " + \
-    "CMACS_SCREENSAVER_MODULE_DIR=" + justfile_directory() + "/deps/screensavers/build/release " + \
+    "CMACS_GOWL_MODULE_DIR=" + justfile_directory() + "/deps/gowl/build/" + dep_buildtype + "/modules " + \
+    "CMACS_SCREENSAVER_MODULE_DIR=" + justfile_directory() + "/deps/screensavers/build/" + dep_buildtype + " " + \
     "CMACS_SCREENSAVER_RENDER_BIN=" + justfile_directory() + "/src/cmacs-screensaver-render " + \
-    "GI_TYPELIB_PATH=" + justfile_directory() + "/deps/libregnum/build/release/gir:" + justfile_directory() + "/deps/libregnum/deps/graylib/build/gir${GI_TYPELIB_PATH:+:$GI_TYPELIB_PATH}"
+    "GI_TYPELIB_PATH=" + justfile_directory() + "/deps/libregnum/build/" + dep_buildtype + "/gir:" + justfile_directory() + "/deps/libregnum/deps/graylib/build/gir${GI_TYPELIB_PATH:+:$GI_TYPELIB_PATH}"
 
 # Android build settings.  Override per-invocation:
 #   just android_image_tag=foo:dev android-build
@@ -95,6 +101,7 @@ configure_flags := """
     --with-cmacs-emacsctl
     --with-cmacs-lrgterm
     --enable-cmacs-cpatch
+    --enable-cmacs-deps-debug
 """
 
 # ──────────────────────────────────────────────────────────────────────

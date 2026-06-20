@@ -193,6 +193,10 @@ bitmapdir=@bitmapdir@
 srcdir=@srcdir@
 abs_srcdir=@abs_srcdir@
 
+# CMACS: in-house dep build type (release|debug); "debug" with
+# --enable-cmacs-deps-debug.  Used to locate dep modules under build/<type>/.
+CMACS_DEP_BUILDTYPE = @CMACS_DEP_BUILDTYPE@
+
 # Where the manpage source files are kept.
 mansrcdir=$(srcdir)/doc/man
 
@@ -675,18 +679,18 @@ ifeq (${ns_self_contained},no)
 	    $(LN_S_FILEONLY) "$$ctl_name" "$$cctl_name"; \
 	  echo "Installed $$ctl_name (+ $$cctl_name symlink) in ${bindir}"; \
 	fi
-	@if test -d $(srcdir)/deps/gowl/build/release/modules; then \
+	@if test -d $(srcdir)/deps/gowl/build/$(CMACS_DEP_BUILDTYPE)/modules; then \
 		umask 022; ${MKDIR_P} "$(DESTDIR)${archlibdir}/gowl-modules"; \
-		for f in $(srcdir)/deps/gowl/build/release/modules/*.so; do \
+		for f in $(srcdir)/deps/gowl/build/$(CMACS_DEP_BUILDTYPE)/modules/*.so; do \
 			if test -f "$$f"; then \
 				${INSTALL_PROGRAM} "$$f" \
 					"$(DESTDIR)${archlibdir}/gowl-modules/$$(basename $$f)"; \
 			fi; \
 		done; \
 	fi
-	@if test -d $(srcdir)/deps/screensavers/build/release; then \
+	@if test -d $(srcdir)/deps/screensavers/build/$(CMACS_DEP_BUILDTYPE); then \
 		umask 022; ${MKDIR_P} "$(DESTDIR)${libdir}/cmacs/screensaver-modules"; \
-		for f in $(srcdir)/deps/screensavers/build/release/*.so; do \
+		for f in $(srcdir)/deps/screensavers/build/$(CMACS_DEP_BUILDTYPE)/*.so; do \
 			if test -f "$$f"; then \
 				${INSTALL_PROGRAM} "$$f" \
 					"$(DESTDIR)${libdir}/cmacs/screensaver-modules/$$(basename $$f)"; \
@@ -701,9 +705,9 @@ ifeq (${ns_self_contained},no)
 		echo "Installed cmacs-screensaver-render in ${libexecdir}/cmacs"; \
 	fi
 	@baconmoddir="${exec_prefix}/$$(if [ -d /usr/lib64 ]; then echo lib64; else echo lib; fi)/bacon/modules"; \
-	if test -d $(srcdir)/deps/bacon/build/release/modules; then \
+	if test -d $(srcdir)/deps/bacon/build/$(CMACS_DEP_BUILDTYPE)/modules; then \
 		umask 022; ${MKDIR_P} "$(DESTDIR)$$baconmoddir"; \
-		for f in $(srcdir)/deps/bacon/build/release/modules/*.so; do \
+		for f in $(srcdir)/deps/bacon/build/$(CMACS_DEP_BUILDTYPE)/modules/*.so; do \
 			if test -f "$$f"; then \
 				${INSTALL_PROGRAM} "$$f" \
 					"$(DESTDIR)$$baconmoddir/$$(basename $$f)"; \
@@ -720,9 +724,9 @@ ifeq (${ns_self_contained},no)
 		done; \
 	fi
 	@podmoddir="${exec_prefix}/$$(if [ -d /usr/lib64 ]; then echo lib64; else echo lib; fi)/podomation/modules"; \
-	if test -d $(srcdir)/deps/podomation/build/release/modules; then \
+	if test -d $(srcdir)/deps/podomation/build/$(CMACS_DEP_BUILDTYPE)/modules; then \
 		umask 022; ${MKDIR_P} "$(DESTDIR)$$podmoddir"; \
-		for f in $(srcdir)/deps/podomation/build/release/modules/*.so; do \
+		for f in $(srcdir)/deps/podomation/build/$(CMACS_DEP_BUILDTYPE)/modules/*.so; do \
 			if test -f "$$f"; then \
 				${INSTALL_PROGRAM} "$$f" \
 					"$(DESTDIR)$$podmoddir/$$(basename $$f)"; \
