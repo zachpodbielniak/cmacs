@@ -123,6 +123,47 @@ podomation:
   enabled: true
 @end example
 
+@subsection Ollama as the Claude Code transport
+
+The @code{claude-code} and @code{claude-code-tmux} (a.k.a.
+@code{claude-tmux}) provider kinds understand a special model form: when
+@code{model:} begins with @code{ollama/}, the provider does @emph{not}
+spawn @code{claude} directly --- it routes the turn through Ollama as the
+transport:
+
+@example
+providers:
+  - name: glm
+    kind: claude-code              # or claude-code-tmux
+    model: "ollama/glm-5.2:cloud"  # => ollama launch claude --model glm-5.2:cloud -- ...
+@end example
+
+So @code{model: ollama/glm-5.2:cloud} makes libreclaw run
+
+@example
+ollama launch claude --model glm-5.2:cloud -- <the usual claude args>
+@end example
+
+@noindent
+Requirements and behaviour:
+
+@itemize
+@item Both @code{ollama} and @code{claude} must be installed and on
+@code{$PATH} (@code{ollama launch claude} execs the real @code{claude}
+binary; override the launcher path with the @code{OLLAMA_PATH} environment
+variable).
+@item claude's own @code{--model} flag is omitted --- the model is carried
+by @code{ollama launch --model}.
+@item A @code{model:} @emph{without} the @code{ollama/} prefix is unchanged:
+plain @code{claude} is spawned as before.
+@end itemize
+
+This is implemented entirely in the underlying @code{ai-glib} CLI providers,
+so it applies to any libreclaw provider of kind @code{claude-code} /
+@code{claude-code-tmux} with no further configuration.  To preview the exact
+command outside libreclaw, use ai-glib's @code{ai} CLI:
+@code{ai -p claude-code -m ollama/glm-5.2:cloud --dry-run "hi"}.
+
 @subsection auth-source for secrets
 
 LibreClaw's YAML supports @code{$@{auth-source:host:user@}}

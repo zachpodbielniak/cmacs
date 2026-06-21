@@ -115,6 +115,42 @@ podomation:
   enabled: true
 #+end_src
 
+* Ollama as the Claude Code transport
+
+The =claude-code= and =claude-code-tmux= (a.k.a. =claude-tmux=) provider
+kinds understand a special model form: when =model:= begins with =ollama/=,
+the provider does *not* spawn =claude= directly --- it routes the turn
+through Ollama as the transport:
+
+#+begin_src yaml
+providers:
+  - name: glm
+    kind: claude-code              # or claude-code-tmux
+    model: "ollama/glm-5.2:cloud"  # => ollama launch claude --model glm-5.2:cloud -- ...
+#+end_src
+
+So =model: ollama/glm-5.2:cloud= makes libreclaw run
+
+#+begin_example
+ollama launch claude --model glm-5.2:cloud -- <the usual claude args>
+#+end_example
+
+Requirements and behaviour:
+
+- Both =ollama= and =claude= must be installed and on =$PATH= (=ollama
+  launch claude= execs the real =claude= binary; override the launcher path
+  with the =OLLAMA_PATH= environment variable).
+- claude's own =--model= flag is omitted --- the model is carried by =ollama
+  launch --model=.
+- A =model:= *without* the =ollama/= prefix is unchanged: plain =claude= is
+  spawned as before.
+
+This is implemented entirely in the underlying =ai-glib= CLI providers, so it
+applies to any libreclaw provider of kind =claude-code= / =claude-code-tmux=
+with no further configuration.  To preview the exact command outside
+libreclaw, use ai-glib's =ai= CLI: =ai -p claude-code -m ollama/glm-5.2:cloud
+--dry-run "hi"=.
+
 * auth-source for secrets
 
 LibreClaw's YAML supports =${auth-source:host:user}= indirection in
