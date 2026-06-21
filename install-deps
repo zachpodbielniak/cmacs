@@ -127,7 +127,8 @@ set_packages_fedora () {
 	PKGS_GOWL=("${wlroots_pkg}" wayland-devel wayland-protocols-devel
 	           libinput-devel libxkbcommon-devel pango-devel cairo-devel
 	           libxcb-devel xcb-util-wm-devel xorg-x11-server-Xwayland
-	           xdg-desktop-portal-wlr)  # wlroots ScreenCast/Screenshot portal backend (runtime)
+	           xdg-desktop-portal-wlr  # wlroots ScreenCast/Screenshot portal backend (runtime)
+	           slurp)                  # output/region chooser for the portal-wlr ScreenCast picker
 	# cmacs-video: GStreamer + plugins-{base,good,bad,ugly} + libav.
 	# plugins-bad provides rtspsrc (RTSP + RTSPS); libav gives software
 	# H.264/H.265 fallback when hardware decode is unavailable.
@@ -215,7 +216,8 @@ set_packages_debian () {
 	PKGS_GOWL=(libwlroots-dev libwayland-dev wayland-protocols
 	           libinput-dev libxkbcommon-dev libpango1.0-dev libcairo2-dev
 	           libxcb1-dev libxcb-icccm4-dev xwayland
-	           xdg-desktop-portal-wlr)  # wlroots ScreenCast/Screenshot portal backend (runtime)
+	           xdg-desktop-portal-wlr  # wlroots ScreenCast/Screenshot portal backend (runtime)
+	           slurp)                  # output/region chooser for the portal-wlr ScreenCast picker
 	PKGS_VIDEO=(libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
 	            gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
 	            gstreamer1.0-plugins-ugly gstreamer1.0-libav)
@@ -253,7 +255,8 @@ set_packages_arch () {
 	# xorg-xwayland: the rootless X server gowl spawns for X11 clients.
 	PKGS_GOWL=(wlroots wayland wayland-protocols libinput libxkbcommon pango cairo
 	           libxcb xcb-util-wm xorg-xwayland
-	           xdg-desktop-portal-wlr)  # wlroots ScreenCast/Screenshot portal backend (runtime)
+	           xdg-desktop-portal-wlr  # wlroots ScreenCast/Screenshot portal backend (runtime)
+	           slurp)                  # output/region chooser for the portal-wlr ScreenCast picker
 	PKGS_VIDEO=(gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad
 	            gst-plugins-ugly gst-libav)
 	PKGS_AUDIO=(pipewire libpulse cmake python-pipx espeak-ng)
