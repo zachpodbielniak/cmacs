@@ -90,6 +90,17 @@ Wayland session that launches the freshly-built in-repo binary, then pick
    and the share picker silently does nothing.  The leading =CMacs-Debug=
    keeps the session's own identity for anything that keys on it.
 
+   *Monitor vs window capture.*  Sharing a whole monitor works whenever
+   gowl is built against wlroots 0.19 or 0.20.  Sharing a *single window*
+   (Zoom's "use system window capture", OBS window sources) additionally
+   needs gowl built against *wlroots 0.20+* --- it requires the
+   =ext-image-copy-capture= + =ext-foreign-toplevel= protocols that 0.19
+   lacks.  gowl auto-builds against the newest wlroots present; on a host
+   with only 0.19 (e.g. Fedora 42/43) window capture is unavailable and
+   the app's window list comes up empty (share a monitor instead).  The
+   capability is reported by =gowl_capture_provider_get_capabilities= and
+   surfaced to portals via the wlroots protocol globals.
+
 3. Log out → pick *CMacs (Debug)*.  Rebuild (=rm -f src/temacs && make=)
    and log back in to test new changes — no OS image rebuild needed.  For
    *nested* testing inside an existing session use =just gowl= instead

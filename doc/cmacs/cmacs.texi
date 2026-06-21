@@ -1814,6 +1814,16 @@ gowl because it requires Mutter.  Without @code{:wlroots} the portal
 frontend finds no @code{ScreenCast} backend and the share picker
 silently does nothing.
 
+@emph{Monitor vs window capture.}  Sharing a whole monitor works whenever
+gowl is built against wlroots 0.19 or 0.20.  Sharing a @emph{single
+window} (Zoom's ``use system window capture'', OBS window sources)
+additionally needs gowl built against @emph{wlroots 0.20+} --- it
+requires the @code{ext-image-copy-capture} + @code{ext-foreign-toplevel}
+protocols that 0.19 lacks.  gowl auto-builds against the newest wlroots
+present; on a host with only 0.19 (e.g.@: Fedora 42/43) window capture is
+unavailable and the app's window list comes up empty (share a monitor
+instead).
+
 Log out, pick @samp{CMacs (Debug)}, then rebuild (@code{rm -f src/temacs &&
 make}) and log back in to test changes --- no OS image rebuild.  For
 @emph{nested} testing inside an existing session use @code{just gowl}
@@ -8814,10 +8824,17 @@ C source files live under @file{cmacs/} and are symlinked into
 
 @section Building on Ubuntu 24.04 / older hosts
 
+gowl builds against wlroots 0.19 @emph{or} 0.20 (newest present wins;
+pin with @code{make WLROOTS=0.19}).  wlroots 0.20 is recommended --- it
+unlocks per-window screencast capture (sharing a specific window); 0.19
+gives monitor-only capture.  See @file{deps/gowl/docs/building.org}
+(``wlroots version'') for the trade-off and a build-wlroots-0.20-from-source
+recipe.
+
 Ubuntu 24.04 LTS (noble) --- and other distributions that have not
-yet caught up with the wlroots 0.19 release cadence --- ship
-versions of several gowl dependencies that are too old to satisfy
-@code{pkg-config --exists wlroots-0.19}.  Noble specifically ships
+yet caught up --- ship versions of several gowl dependencies that are
+too old to satisfy @code{pkg-config --exists wlroots-0.19} (let alone
+0.20).  Noble specifically ships
 wlroots 0.17, wayland 1.22, wayland-protocols 1.34, and pixman
 0.42, while gowl requires wlroots @geq{}0.19, wayland
 @geq{}1.23.1, wayland-protocols @geq{}1.38, and pixman
