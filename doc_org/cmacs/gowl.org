@@ -196,7 +196,8 @@ holds focus.
 | Keybinding              | Action                                  |
 |-------------------------+-----------------------------------------|
 | =Super+Return=          | Launch terminal (=cmacs-gowl-terminal-command=) |
-| =Super+p=               | Launch menu (=cmacs-gowl-menu-command=, bemenu) |
+| =Super+p=               | Launch menu (=cmacs-gowl-menu-command=, wofi) |
+| =Super+Shift+p=         | Run dialog (=cmacs-gowl-run-command=, wofi)  |
 | =Super+Shift+c=         | Kill focused client                     |
 | =Super+j= / =Super+k=   | Focus next / previous in stack          |
 | =Super+h= / =Super+l=   | Shrink / grow the master area           |
@@ -246,11 +247,15 @@ target tag, without it first flashing onto the current tag:
 The placement is flash-free and race-free: =cmacs-gowl-spawn-in-tag=
 registers the spawned PID with the compositor via =gowl-pretag-pid=, so
 the client adopts the tag's bitmask the instant it maps.
-=cmacs-gowl-bemenu-in-tag= runs bemenu in /dmenu mode/ (reading the app
+=cmacs-gowl-bemenu-in-tag= runs a dmenu-mode picker (reading the app
 list on stdin) so cmacs owns the spawn — and thus the PID — and shows
-the bemenu UI inside gowl by pointing =WAYLAND_DISPLAY= at the
-compositor socket.  =Super+p= keeps the classic standalone behaviour
-(=bemenu-run= launches the app itself, on the current tag).
+the picker UI inside gowl by pointing =WAYLAND_DISPLAY= at the
+compositor socket.  The picker binary is =cmacs-gowl-dmenu-command=
+(default =bemenu=), deliberately separate from the =Super+p= launcher
+(=cmacs-gowl-menu-command=, default =wofi --show drun=): the picker
+needs a dmenu-mode binary (stdin → stdout), not a drun/run launcher.
+=Super+p= keeps the classic standalone behaviour (the launcher runs
+the chosen app itself, on the current tag).
 
 * Monitor Management
 
@@ -1251,7 +1256,8 @@ escape hatch that survives Emacs pathologies.
 
 ;; Tags / keybindings / bar (see "Tags and Workspaces").
 (setq cmacs-gowl-default-keybindings t)  ;; install dwm-style binds
-(setq cmacs-gowl-menu-command "bemenu-run")  ;; Super+p launcher
+(setq cmacs-gowl-menu-command "wofi --show drun")  ;; Super+p launcher
+(setq cmacs-gowl-run-command "wofi --show run")    ;; Super+Shift+p run dialog
 (setq cmacs-gowl-terminal-command nil)   ;; nil → dropdown terminal
 (setq cmacs-gowl-bar-show-tags t)        ;; enable bar + tag indicator
 (setq cmacs-gowl-monitor-tags-on-launch t) ;; monitor i → tag i+1
@@ -1260,7 +1266,9 @@ escape hatch that survives Emacs pathologies.
 | Option                          | Default        | Effect                                |
 |---------------------------------+----------------+---------------------------------------|
 | =cmacs-gowl-default-keybindings= | =t=           | Install the dwm-style keybind set     |
-| =cmacs-gowl-menu-command=        | ="bemenu-run"= | =Super+p= launcher / dmenu binary base |
+| =cmacs-gowl-menu-command=        | ="wofi --show drun"= | =Super+p= launcher (drun) |
+| =cmacs-gowl-run-command=        | ="wofi --show run"= | =Super+Shift+p= run dialog |
+| =cmacs-gowl-dmenu-command=      | ="bemenu"=          | dmenu-mode binary for =cmacs-gowl-bemenu-in-tag= |
 | =cmacs-gowl-terminal-command=    | =nil=          | =Super+Return= terminal (nil → dropdown terminal) |
 | =cmacs-gowl-bar-show-tags=       | =t=            | Auto-enable the bar with its tag indicator |
 | =cmacs-gowl-monitor-tags-on-launch= | =t=        | Assign monitor /i/ → tag /i/+1 at launch |

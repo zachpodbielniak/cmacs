@@ -1939,7 +1939,9 @@ client holds focus.
 @item Super+Return
 Launch terminal (@code{cmacs-gowl-terminal-command}).
 @item Super+p
-Launch menu (@code{cmacs-gowl-menu-command}, bemenu).
+Launch menu (@code{cmacs-gowl-menu-command}, wofi).
+@item Super+Shift+p
+Run dialog (@code{cmacs-gowl-run-command}, wofi).
 @item Super+Shift+c
 Kill the focused client.
 @item Super+j / Super+k
@@ -1984,11 +1986,16 @@ passes plain @code{"1".."9"/"0"}, which is only correct for tags 1 and
 @code{cmacs-gowl-spawn-in-tag} registers the spawned PID with the
 compositor via @code{gowl-pretag-pid}, so the client adopts the tag's
 bitmask the instant it maps --- flash-free and race-free.
-@code{cmacs-gowl-bemenu-in-tag} runs bemenu in dmenu mode (reading the
+@code{cmacs-gowl-bemenu-in-tag} runs a dmenu-mode picker (reading the
 app list on stdin) so cmacs owns the spawn and thus the PID, and shows
-the bemenu UI inside gowl by pointing @env{WAYLAND_DISPLAY} at the
-compositor socket.  @kbd{Super+p} keeps the classic behaviour
-(@code{bemenu-run} launches the app itself, on the current tag).
+the picker UI inside gowl by pointing @env{WAYLAND_DISPLAY} at the
+compositor socket.  The picker binary is
+@code{cmacs-gowl-dmenu-command} (default @code{"bemenu"}), deliberately
+separate from the @kbd{Super+p} launcher (@code{cmacs-gowl-menu-command},
+default @code{"wofi --show drun"}): the picker needs a dmenu-mode binary
+(stdin to stdout), not a drun/run launcher.  @kbd{Super+p} keeps the
+classic behaviour (the launcher runs the chosen app itself, on the
+current tag).
 
 @section Monitor Management
 
@@ -3428,8 +3435,16 @@ List of commands to spawn when the mode is enabled.
 When non-@code{nil} (default), install the dwm-style keybinding set on
 mode enable.  @xref{Tags and Workspaces}.
 @item cmacs-gowl-menu-command
-Launcher bound to @kbd{Super+p} and used as the dmenu-mode binary base
-for @code{cmacs-gowl-bemenu-in-tag} (default @code{"bemenu-run"}).
+Launcher bound to @kbd{Super+p} --- a plain drun launcher (default
+@code{"wofi --show drun"}).  Not the dmenu picker base; see
+@code{cmacs-gowl-dmenu-command}.
+@item cmacs-gowl-run-command
+Run dialog bound to @kbd{Super+Shift+p} (default @code{"wofi --show run"}).
+@item cmacs-gowl-dmenu-command
+Dmenu-mode binary used by @code{cmacs-gowl-bemenu-in-tag} (the in-tag
+app picker), default @code{"bemenu"}.  Separate from the @kbd{Super+p}
+launcher: the picker needs a dmenu-mode binary (stdin to stdout), not a
+drun/run launcher.
 @item cmacs-gowl-terminal-command
 Terminal bound to @kbd{Super+Return}; @code{nil} (default) falls back
 to @code{cmacs-gowl-default-dropdown-terminal}.

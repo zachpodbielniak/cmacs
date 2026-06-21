@@ -150,11 +150,28 @@ When nil, falls back to `cmacs-gowl-default-dropdown-terminal'."
                  (string :tag "Command"))
   :group 'cmacs-gowl)
 
-(defcustom cmacs-gowl-menu-command "bemenu-run"
+(defcustom cmacs-gowl-menu-command "wofi --show drun"
   "Application launcher bound to Super+p by the default keybindings.
-This is the standalone gowl default.  The binary named here (with
-any \"-run\" suffix stripped) is also used in dmenu mode by
-`cmacs-gowl-bemenu-in-tag'."
+This is the standalone gowl default.  It is a plain drun/run launcher,
+not a dmenu-mode picker -- `cmacs-gowl-bemenu-in-tag' uses the separate
+`cmacs-gowl-dmenu-command' (a dmenu-mode binary) instead."
+  :type 'string
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-run-command "wofi --show run"
+  "Run-dialog command bound to Super+Shift+p by the default keybindings.
+A plain executable launcher (the \"run\" counterpart to
+`cmacs-gowl-menu-command' \"drun\")."
+  :type 'string
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-dmenu-command "bemenu"
+  "Dmenu-mode binary used by `cmacs-gowl-bemenu-in-tag' (the in-tag app
+picker).  This is deliberately separate from `cmacs-gowl-menu-command':
+the picker needs a dmenu-mode binary (one that reads the app list on
+stdin and prints the selection on stdout), not a drun/run launcher.
+Defaults to `bemenu'; `wofi' would need `--dmenu' and a different
+invocation, so leave this as `bemenu' unless you adapt the picker."
   :type 'string
   :group 'cmacs-gowl)
 
@@ -170,6 +187,7 @@ standalone gowl ships with (see
 
   Super+Return        launch terminal (`cmacs-gowl-terminal-command')
   Super+p             launch menu (`cmacs-gowl-menu-command')
+  Super+Shift+p       run dialog (`cmacs-gowl-run-command')
   Super+Shift+c       kill focused client
   Super+j / Super+k   focus next / previous in stack
   Super+h / Super+l   shrink / grow master area
@@ -385,12 +403,14 @@ numbers as strings (\"0\" means all tags), matching the C defaults."
     (let ((term (or cmacs-gowl-terminal-command
                     cmacs-gowl-default-dropdown-terminal
                     "gst"))
-          (menu (or cmacs-gowl-menu-command "bemenu-run")))
+          (menu (or cmacs-gowl-menu-command "wofi --show drun"))
+          (run  (or cmacs-gowl-run-command "wofi --show run")))
       (cl-flet ((bind (key action &optional arg)
                   (ignore-errors (gowl-add-keybind key action arg))))
         ;; Spawns.
         (bind "Super+Return" 'spawn term)
         (bind "Super+p" 'spawn menu)
+        (bind "Super+Shift+p" 'spawn run)
         ;; Client management.
         (bind "Super+Shift+c" 'kill-client)
         (bind "Super+j" 'focus-stack "+1")
@@ -891,10 +911,12 @@ hands off to `cmacs-gowl-spawn-in-tag'."
     (cmacs-gowl-spawn-in-tag exec tag)))
 
 (defun cmacs-gowl--bemenu-binary ()
-  "Return the bemenu binary used for dmenu-mode selection.
-Derived from `cmacs-gowl-menu-command' by taking its first word and
-stripping a trailing -run (so \"bemenu-run\" → \"bemenu\")."
-  (let ((base (car (split-string (or cmacs-gowl-menu-command "bemenu")))))
+  "Return the dmenu-mode binary used for in-tag app selection.
+Taken from `cmacs-gowl-dmenu-command' (first word, with any trailing
+-run stripped).  Decoupled from `cmacs-gowl-menu-command' so the
+Super+p launcher can be a drun/run tool (e.g. wofi) without breaking
+the dmenu-mode picker."
+  (let ((base (car (split-string (or cmacs-gowl-dmenu-command "bemenu")))))
     (replace-regexp-in-string "-run\\'" "" base)))
 
 ;;;###autoload
