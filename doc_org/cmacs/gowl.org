@@ -77,8 +77,18 @@ Wayland session that launches the freshly-built in-repo binary, then pick
    Comment=CMacs in-repo dev build (cmacs --gowl)
    Exec=/usr/local/bin/cmacs-debug
    Type=Application
-   DesktopNames=CMacs-Debug
+   DesktopNames=CMacs-Debug:wlroots
    #+end_src
+
+   =DesktopNames= ends in =:wlroots= so =XDG_CURRENT_DESKTOP= becomes
+   =CMacs-Debug:wlroots=.  The =wlroots= element matters: it is what the
+   =xdg-desktop-portal-wlr= backend matches on (its =UseIn= line lists
+   =wlroots;sway;Wayfire;river;phosh;Hyprland=), so screen-sharing apps
+   (Zoom, OBS, browsers) get the wlroots =ScreenCast= portal instead of
+   the GNOME backend, which fails under gowl because it requires Mutter.
+   Without =:wlroots= the portal frontend finds no =ScreenCast= backend
+   and the share picker silently does nothing.  The leading =CMacs-Debug=
+   keeps the session's own identity for anything that keys on it.
 
 3. Log out → pick *CMacs (Debug)*.  Rebuild (=rm -f src/temacs && make=)
    and log back in to test new changes — no OS image rebuild needed.  For
@@ -100,8 +110,19 @@ from any parent session's X server.
 clients at gowl's XWayland by setting =DISPLAY= to
 =gowl_compositor_get_xwayland_display=; Wayland-native toolkit hints are
 also set so GTK/Qt/SDL/Electron prefer Wayland.  X11 windows are managed
-like native ones (tiled, tagged, focusable); pop-ups and tooltips
-(override-redirect surfaces) float.
+like native ones (tiled, tagged, focusable).
+
+X11 /override-redirect/ surfaces — popup menus, combo dropdowns,
+tooltips, and app confirmation dialogs (e.g. Zoom's "End meeting /
+Leave") — are handled on a dedicated /unmanaged/ path: they float at
+their own position with no border, take keyboard focus if they request
+it, and hold an exclusive grab so the compositor will not steal focus
+back or deactivate their parent window while they are up.  Without this a
+menu would lose its grab the instant focus moved and dismiss itself after
+a fraction of a second.  Set =GOWL_DEBUG_XWAYLAND=1= in the session
+environment to log each X11 surface as it maps (override-redirect vs
+managed, with class/title) — useful when diagnosing a misbehaving X11
+dialog.
 
 This requires the =Xwayland= binary (Fedora: =xorg-x11-server-Xwayland=)
 and a gowl built with =BUILD_XWAYLAND=1= (the default).  If neither is

@@ -1801,8 +1801,18 @@ Name=CMacs (Debug)
 Comment=CMacs in-repo dev build (cmacs --gowl)
 Exec=/usr/local/bin/cmacs-debug
 Type=Application
-DesktopNames=CMacs-Debug
+DesktopNames=CMacs-Debug:wlroots
 @end verbatim
+
+@code{DesktopNames} ends in @code{:wlroots} so @env{XDG_CURRENT_DESKTOP}
+becomes @code{CMacs-Debug:wlroots}.  The @code{wlroots} element is what
+the @command{xdg-desktop-portal-wlr} backend matches on (its
+@code{UseIn} lists @code{wlroots;sway;Wayfire;river;phosh;Hyprland}), so
+screen-sharing apps (Zoom, OBS, browsers) reach the wlroots
+@code{ScreenCast} portal instead of the GNOME backend, which fails under
+gowl because it requires Mutter.  Without @code{:wlroots} the portal
+frontend finds no @code{ScreenCast} backend and the share picker
+silently does nothing.
 
 Log out, pick @samp{CMacs (Debug)}, then rebuild (@code{rm -f src/temacs &&
 make}) and log back in to test changes --- no OS image rebuild.  For
@@ -1825,8 +1835,18 @@ distinct from any parent session's.
 X11 clients at gowl's XWayland by setting @env{DISPLAY} to
 @code{gowl_compositor_get_xwayland_display}, and set Wayland toolkit
 hints so GTK/Qt/SDL/Electron prefer Wayland.  X11 windows are managed
-like native ones (tiled, tagged, focusable); override-redirect surfaces
-(menus, tooltips) float.
+like native ones (tiled, tagged, focusable).
+
+X11 @emph{override-redirect} surfaces --- popup menus, combo dropdowns,
+tooltips, and app confirmation dialogs (e.g.@: Zoom's ``End meeting /
+Leave'') --- take a dedicated @emph{unmanaged} path: they float at their
+own position with no border, take keyboard focus if they request it, and
+hold an exclusive grab so the compositor will not steal focus back or
+deactivate their parent window while they are up.  Without this a menu
+would lose its grab the instant focus moved and dismiss itself after a
+fraction of a second.  Set @env{GOWL_DEBUG_XWAYLAND=1} in the session
+environment to log each X11 surface as it maps (override-redirect vs
+managed, with class and title).
 
 This needs the @command{Xwayland} binary (Fedora:
 @code{xorg-x11-server-Xwayland}) and a gowl built with
