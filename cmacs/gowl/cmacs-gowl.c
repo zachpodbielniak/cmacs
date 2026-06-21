@@ -3830,6 +3830,50 @@ Each alist has keys: key, action, arg. */)
   return Fnreverse (result);
 }
 
+DEFUN ("gowl-remove-keybind", Fgowl_remove_keybind, Sgowl_remove_keybind,
+       1, 1, 0,
+       doc: /* Remove every keybind whose key combo is KEY.
+KEY is a string like \"Super+p\" (parsed with gowl_keybind_parse).
+Action and arg are not matched, so all binds for that combo are
+removed -- use this before `gowl-add-keybind' to make a freshly
+installed bind authoritative, since gowl dispatches the first
+matching entry and an older duplicate would otherwise shadow it.
+Returns the number of keybinds removed (an integer). */)
+  (Lisp_Object key)
+{
+  GowlConfig *config;
+  guint modifiers, keysym;
+  guint removed;
+
+  CHECK_STRING (key);
+  GOWL_CHECK_RUNNING ();
+
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    error ("No gowl config loaded");
+
+  if (!gowl_keybind_parse (SSDATA (key), &modifiers, &keysym))
+    error ("Invalid key string: %s", SSDATA (key));
+
+  removed = gowl_config_remove_keybind (config, modifiers, keysym);
+  return make_fixnum ((gint)removed);
+}
+
+DEFUN ("gowl-clear-keybinds", Fgowl_clear_keybinds, Sgowl_clear_keybinds,
+       0, 0, 0,
+       doc: /* Remove every keybind from the gowl config. */)
+  (void)
+{
+  GowlConfig *config;
+
+  GOWL_CHECK_RUNNING ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    return Qnil;
+  gowl_config_clear_keybinds (config);
+  return Qt;
+}
+
 
 /* ══════════════════════════════════════════════════════════════════════
  * WINDOW RULES
@@ -7071,6 +7115,8 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   /* Keybinds */
   defsubr (&Sgowl_add_keybind);
   defsubr (&Sgowl_list_keybinds);
+  defsubr (&Sgowl_remove_keybind);
+  defsubr (&Sgowl_clear_keybinds);
 
   /* Window rules */
   defsubr (&Sgowl_add_rule);

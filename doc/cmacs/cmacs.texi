@@ -2448,6 +2448,23 @@ Recalculate tiling layout.
 @end table
 
 @noindent
+Keybinds:
+
+@table @code
+@item gowl-add-keybind KEY ACTION &optional ARG
+Add a keybind. KEY is a string like @code{"Super+Return"}.
+@item gowl-list-keybinds
+List installed keybinds as alists (key, action, arg).
+@item gowl-remove-keybind KEY
+Remove every keybind whose combo is KEY. Use before
+@code{gowl-add-keybind} to make a freshly installed bind authoritative
+(gowl dispatches the first matching entry, so an older duplicate would
+otherwise shadow it). Returns the number removed.
+@item gowl-clear-keybinds
+Remove every keybind from the config.
+@end table
+
+@noindent
 Embedding primitives:
 
 @table @code

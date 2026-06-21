@@ -398,7 +398,15 @@ Each bind is added via `gowl-add-keybind'.  The compositor evaluates
 its config keybind table before forwarding keys to the focused
 surface, so these work globally even while Emacs or an embedded
 client holds keyboard focus.  Tag action args are 1-based tag
-numbers as strings (\"0\" means all tags), matching the C defaults."
+numbers as strings (\"0\" means all tags), matching the C defaults.
+
+Each bind first removes any existing bind for the same key combo via
+`gowl-remove-keybind' before adding the new one.  gowl dispatches the
+first matching entry, so without this an older bind for the same key
+(a stale duplicate left by a previous load of this function, e.g. an
+outdated `cmacs-gowl.elc' that used a different launcher) would shadow
+the freshly installed one.  Removing first makes each default bind
+authoritative and keeps re-runs idempotent."
   (unless cmacs-gowl--keybinds-installed
     (let ((term (or cmacs-gowl-terminal-command
                     cmacs-gowl-default-dropdown-terminal
@@ -406,6 +414,11 @@ numbers as strings (\"0\" means all tags), matching the C defaults."
           (menu (or cmacs-gowl-menu-command "wofi --show drun"))
           (run  (or cmacs-gowl-run-command "wofi --show run")))
       (cl-flet ((bind (key action &optional arg)
+                  ;; Remove any stale bind for this key combo first so
+                  ;; the new entry below is the one gowl dispatches.
+                  ;; `ignore-errors' tolerates older builds that lack
+                  ;; `gowl-remove-keybind' (void-function).
+                  (ignore-errors (gowl-remove-keybind key))
                   (ignore-errors (gowl-add-keybind key action arg))))
         ;; Spawns.
         (bind "Super+Return" 'spawn term)

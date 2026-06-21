@@ -612,6 +612,15 @@ Core compositor control:
 | =gowl-set-monitor-transform= | Set transform (rotation/flip 0--7)            |
 | =gowl-arrange=             | Recalculate tiling layout                       |
 
+Keybinds:
+
+| Primitive                      | Description                                    |
+|--------------------------------+------------------------------------------------|
+| =gowl-add-keybind=           | Add a keybind (key string, action, arg)        |
+| =gowl-list-keybinds=         | List installed keybinds as alists              |
+| =gowl-remove-keybind=        | Remove all keybinds for a key combo            |
+| =gowl-clear-keybinds=        | Remove every keybind                           |
+
 Embedding primitives:
 
 | Primitive                      | Description                                    |
