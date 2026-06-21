@@ -688,6 +688,19 @@ ifeq (${ns_self_contained},no)
 			fi; \
 		done; \
 	fi
+	## gowl-session.target: a systemd *user* unit that gowl starts from
+	## gowl_compositor_start() to pull graphical-session.target (which
+	## has RefuseManualStart=yes) into the session, so flatpak/portal
+	## theming works under cmacs --gowl.  Users can also self-activate it:
+	## `systemctl --user start gowl-session.target`.  Lands under
+	## $(systemduserunitdir) (=/usr/lib/systemd/user with --prefix=/usr).
+	@if test -f $(srcdir)/deps/gowl/data/gowl-session.target \
+		&& test -n "$(systemduserunitdir)"; then \
+		umask 022; $(MKDIR_P) "$(DESTDIR)$(systemduserunitdir)"; \
+		$(INSTALL_DATA) "$(srcdir)/deps/gowl/data/gowl-session.target" \
+			"$(DESTDIR)$(systemduserunitdir)/gowl-session.target"; \
+		echo "Installed gowl-session.target in $(systemduserunitdir)"; \
+	fi
 	@if test -d $(srcdir)/deps/screensavers/build/$(CMACS_DEP_BUILDTYPE); then \
 		umask 022; ${MKDIR_P} "$(DESTDIR)${libdir}/cmacs/screensaver-modules"; \
 		for f in $(srcdir)/deps/screensavers/build/$(CMACS_DEP_BUILDTYPE)/*.so; do \
