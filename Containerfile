@@ -1,3 +1,7 @@
+# FEDORA_VERSION controls which wlroots gowl builds against: Fedora 44+
+# ships wlroots 0.20 (per-window screencast capture), 42/43 ship 0.19
+# (monitor-only).  Bump to 44+ (`--build-arg FEDORA_VERSION=44`) for an
+# image whose gowl can window-capture.
 ARG FEDORA_VERSION=43
 FROM registry.fedoraproject.org/fedora:${FEDORA_VERSION} AS builder
 ARG FEDORA_VERSION
@@ -23,14 +27,11 @@ ARG PIPER_VOICE_DIR=en/en_US/amy/low
 ARG PIPER_VOICE_BASE_URL=https://huggingface.co/rhasspy/piper-voices/resolve/main
 
 # System build dependencies
-# Fedora 44+ ships wlroots-0.20 as wlroots-devel; gowl needs
-# wlroots-0.19, available as the wlroots0.19-devel compat package.
-RUN if [ "${FEDORA_VERSION}" -ge 44 ] 2>/dev/null; then \
-        WLROOTS_PKG=wlroots0.19-devel; \
-    else \
-        WLROOTS_PKG=wlroots-devel; \
-    fi \
-    && dnf install -y \
+# wlroots: gowl builds against 0.19 or 0.20 (newest present wins; 0.20
+# adds per-window screencast capture).  wlroots-devel is the right
+# package on every Fedora release -- it is 0.20 on 44+ and 0.19 on
+# 42/43 -- so no version branch is needed.
+RUN dnf install -y \
         autoconf automake gcc gcc-c++ make pkgconf-pkg-config texinfo \
         which git \
         gnutls-devel ncurses-devel zlib-devel \
@@ -43,7 +44,7 @@ RUN if [ "${FEDORA_VERSION}" -ge 44 ] 2>/dev/null; then \
         jansson-devel \
         libtree-sitter-devel \
         glib2-devel gobject-introspection-devel \
-        "${WLROOTS_PKG}" wayland-devel wayland-protocols-devel \
+        wlroots-devel wayland-devel wayland-protocols-devel \
         libinput-devel libxkbcommon-devel pango-devel cairo-devel \
         libdecor-devel libdrm-devel pixman-devel \
         libxcb-devel xcb-util-wm-devel \

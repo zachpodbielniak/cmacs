@@ -108,18 +108,16 @@ set_packages_fedora () {
 	           libsoup3-devel libdex-devel libetpan-devel libpq-devel
 	           libssh2-devel libvirt-devel libyaml-devel
 	           sqlite-devel cmark-devel)
-	# Fedora 44+ ships wlroots-0.20 as wlroots-devel; gowl needs
-	# wlroots-0.19, available as the wlroots0.19-devel compat package.
+	# wlroots: gowl builds against 0.19 OR 0.20 (newest present wins;
+	# see deps/gowl/config.mk).  Prefer 0.20 -- it unlocks per-window
+	# screencast capture (the "share a specific window" portal option);
+	# 0.19 is monitor-only.  Fedora 44+ ships 0.20 as wlroots-devel.
+	# Fedora 42/43 ship 0.19 only, as wlroots-devel there (the bare
+	# package IS 0.19 on those releases), so wlroots-devel is correct
+	# everywhere -- it resolves to whatever that release's latest
+	# wlroots is.  (The wlroots0.19-devel compat package is only needed
+	# to FORCE 0.19 on a 44+ host, which we no longer do by default.)
 	local wlroots_pkg="wlroots-devel"
-	if [[ -f /etc/os-release ]]; then
-		# shellcheck source=/dev/null
-		. /etc/os-release
-		if [[ "${ID}" == "fedora" ]] \
-		   && [[ "${VERSION_ID}" =~ ^[0-9]+$ ]] \
-		   && (( VERSION_ID >= 44 )); then
-			wlroots_pkg="wlroots0.19-devel"
-		fi
-	fi
 	# libxcb-devel + xcb-util-wm-devel provide the xcb/xcb-icccm
 	# pkg-configs gowl's XWayland support needs at build time (else it
 	# silently compiles out); xorg-x11-server-Xwayland is the rootless
@@ -232,10 +230,12 @@ set_packages_debian () {
 	PKG_CMD="sudo apt-get install -y"
 	# NOTE: Ubuntu 24.04 (noble) ships wlroots 0.17, wayland 1.22,
 	# wayland-protocols 1.34, and pixman 0.42 --- all too old for
-	# gowl, which needs wlroots-0.19.  See doc_org/cmacs/build.org
-	# section "Building on Ubuntu 24.04 / older hosts" for a
-	# source-build recipe.  libdex-dev is also absent before 24.10;
-	# build libdex from source on noble.
+	# gowl, which needs wlroots 0.19 or 0.20 (0.20 for per-window
+	# screencast capture).  Build wlroots (and the rest of the stack)
+	# from source -- see doc_org/cmacs/build.org "Building on Ubuntu
+	# 24.04 / older hosts" and deps/gowl/docs/building.org "wlroots
+	# version".  libdex-dev is also absent before 24.10; build libdex
+	# from source on noble.
 }
 
 set_packages_arch () {
