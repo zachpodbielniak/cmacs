@@ -404,6 +404,8 @@ numbers as strings (\"0\" means all tags), matching the C defaults."
         (bind "Super+t" 'set-layout "tile")
         (bind "Super+f" 'set-layout "float")
         (bind "Super+m" 'set-layout "monocle")
+        (bind "Super+v" 'set-split "vsplit")
+        (bind "Super+Shift+v" 'set-split "normal")
         (bind "Super+space" 'toggle-float)
         (bind "Super+Shift+space" 'toggle-fullscreen)
         ;; Tags.  The compositor interprets every tag-action arg as a
@@ -936,6 +938,18 @@ Falls back to `cmacs-gowl-launch-in-tag' when bemenu is missing."
   (unless (gowl-running-p)
     (user-error "Gowl compositor is not running"))
   (gowl-set-layout layout))
+
+(defun cmacs-gowl-toggle-vsplit ()
+  "Toggle the vsplit tile orientation on the focused monitor.
+With vsplit on, the master row is on top and the stack row on the
+bottom (the existing window stays on top, new windows underneath);
+with it off, the normal left/right split is restored."
+  (interactive)
+  (unless (gowl-running-p)
+    (user-error "Gowl compositor is not running"))
+  (gowl-set-vsplit (not (gowl-get-vsplit)))
+  (message "gowl vsplit: %s"
+           (if (gowl-get-vsplit) "on (master on top)" "off (master left)")))
 
 (defun cmacs-gowl-list-monitors ()
   "Display information about connected monitors."

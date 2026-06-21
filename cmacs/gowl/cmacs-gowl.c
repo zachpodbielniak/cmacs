@@ -3605,6 +3605,41 @@ DEFUN ("gowl-get-nmaster", Fgowl_get_nmaster, Sgowl_get_nmaster,
   return make_fixnum (gowl_monitor_get_nmaster (mon));
 }
 
+DEFUN ("gowl-set-vsplit", Fgowl_set_vsplit, Sgowl_set_vsplit, 1, 2, 0,
+       doc: /* Enable vsplit on MONITOR when VSPLIT is non-nil.
+Vsplit puts the master row on top and the stack row on the bottom
+(the existing window stays on top, new windows underneath).  nil
+restores the normal left/right split.  Re-arranges immediately. */)
+  (Lisp_Object vsplit, Lisp_Object monitor)
+{
+  GowlMonitor *mon;
+
+  GOWL_CHECK_RUNNING ();
+  mon = gowl_resolve_monitor (monitor);
+  if (mon != NULL)
+    {
+      pthread_mutex_lock (&cmacs_gowl_mutex);
+      gowl_monitor_set_vsplit (mon, !NILP (vsplit));
+      gowl_compositor_arrange (cmacs_gowl_compositor, mon);
+      pthread_mutex_unlock (&cmacs_gowl_mutex);
+    }
+  return Qnil;
+}
+
+DEFUN ("gowl-get-vsplit", Fgowl_get_vsplit, Sgowl_get_vsplit, 0, 1, 0,
+       doc: /* Return non-nil if MONITOR uses the vsplit tile orientation. */)
+  (Lisp_Object monitor)
+{
+  GowlMonitor *mon;
+
+  GOWL_CHECK_RUNNING ();
+  mon = gowl_resolve_monitor (monitor);
+  if (mon == NULL)
+    return Qnil;
+
+  return gowl_monitor_get_vsplit (mon) ? Qt : Qnil;
+}
+
 DEFUN ("gowl-get-layout", Fgowl_get_layout, Sgowl_get_layout, 0, 1, 0,
        doc: /* Return the current layout symbol string for MONITOR. */)
   (Lisp_Object monitor)
@@ -3733,6 +3768,8 @@ Uses gowl_keybind_parse to resolve the key string. */)
         action_val = (gint)GOWL_ACTION_SET_LAYOUT;
       else if (g_strcmp0 (name, "cycle-layout") == 0)
         action_val = (gint)GOWL_ACTION_CYCLE_LAYOUT;
+      else if (g_strcmp0 (name, "set-split") == 0)
+        action_val = (gint)GOWL_ACTION_SET_SPLIT;
       else if (g_strcmp0 (name, "zoom") == 0)
         action_val = (gint)GOWL_ACTION_ZOOM;
       else if (g_strcmp0 (name, "quit") == 0)
@@ -7026,6 +7063,8 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_get_mfact);
   defsubr (&Sgowl_set_nmaster);
   defsubr (&Sgowl_get_nmaster);
+  defsubr (&Sgowl_set_vsplit);
+  defsubr (&Sgowl_get_vsplit);
   defsubr (&Sgowl_get_layout);
   defsubr (&Sgowl_set_layout);
 

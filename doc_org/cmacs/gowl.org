@@ -10,7 +10,7 @@ editor renders as a Wayland client inside its own compositor, and other
 Wayland apps (terminals, browsers, viewers) tile alongside or embed
 directly inside Emacs windows.
 
-The integration provides 47+ C primitives (DEFUNs) for full compositor
+The integration provides 49+ C primitives (DEFUNs) for full compositor
 control from Elisp: spawning clients, managing tags, switching layouts,
 querying monitors, and embedding client windows inside Emacs buffers.
 
@@ -125,6 +125,7 @@ present, =DISPLAY= is left unset and only Wayland-native clients run.
 | =cmacs-gowl-bemenu-in-tag=    | Pick an app (bemenu) → launch on a tag    |
 | =cmacs-gowl-spawn-in-tag=     | Spawn a command on a specific tag         |
 | =cmacs-gowl-set-layout=       | Set layout (tile, monocle, float)         |
+| =cmacs-gowl-toggle-vsplit=    | Toggle vsplit tile orientation            |
 | =cmacs-gowl-list-monitors=    | Show monitor info table                   |
 | =cmacs-gowl-monitor-info=     | Show detailed info for one monitor        |
 | =cmacs-gowl-set-resolution=   | Interactively set monitor resolution      |
@@ -202,6 +203,8 @@ holds focus.
 | =Super+i= / =Super+d=   | Increment / decrement master count      |
 | =Super+Shift+Return=    | Zoom (promote to master)                |
 | =Super+t= / =f= / =m=   | Tile / float / monocle layout           |
+| =Super+v=               | Vsplit on (master on top, stack below)  |
+| =Super+Shift+v=         | Vsplit off (normal left/right split)    |
 | =Super+space=           | Toggle floating                         |
 | =Super+Shift+space=     | Toggle fullscreen                       |
 | =Super+1=..=9=          | View tag N                              |
@@ -584,6 +587,13 @@ Core compositor control:
 | =gowl-set-tags=            | Set tag bitmask on client                       |
 | =gowl-view-tags=           | Switch tag view                                 |
 | =gowl-set-layout=          | Set layout on current monitor                   |
+| =gowl-get-layout=          | Get current layout on a monitor                 |
+| =gowl-set-mfact=           | Set master-area ratio (0.05--0.95)              |
+| =gowl-get-mfact=           | Get master-area ratio                           |
+| =gowl-set-nmaster=         | Set master window count                         |
+| =gowl-get-nmaster=         | Get master window count                         |
+| =gowl-set-vsplit=          | Enable vsplit tile orientation (master on top)  |
+| =gowl-get-vsplit=          | Get vsplit tile orientation                     |
 | =gowl-list-monitors=       | List connected monitors                         |
 | =gowl-find-monitor=        | Find monitor by name, return object or nil      |
 | =gowl-monitor-modes=       | List advertised modes for a monitor             |
@@ -1259,7 +1269,7 @@ escape hatch that survives Emacs pathologies.
 
 | File                              | Description                              |
 |-----------------------------------+------------------------------------------|
-| =cmacs/gowl/cmacs-gowl.c=       | C primitives (47+ DEFUNs)               |
+| =cmacs/gowl/cmacs-gowl.c=       | C primitives (49+ DEFUNs)               |
 | =cmacs/gowl/cmacs-gowl.h=       | C header                                |
 | =lisp/cmacs/cmacs-gowl.el=       | Elisp layer: mode, commands, embedding  |
 | =test/cmacs/cmacs-gowl-tests.el= | ERT tests                               |

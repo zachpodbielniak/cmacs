@@ -108,7 +108,7 @@ stdout/stderr output.
 
 @item Gowl Wayland Compositor
 Embeds a wlroots-based Wayland compositor into Emacs.  With
-@option{--gowl}, Emacs becomes a tiling window manager with 47+ DEFUNs
+@option{--gowl}, Emacs becomes a tiling window manager with 49+ DEFUNs
 for spawning clients, managing tags, switching layouts, and embedding
 Wayland clients directly inside Emacs buffer windows.
 
@@ -147,7 +147,7 @@ cmacs/
   crispy/         Crispy C scripting
   bacon/          Bacon shell: C primitives, IPC, cmacs_bacon_main()
     modules/      cmacsgi builtin (transport abstraction + 60+ commands)
-  gowl/           Wayland compositor (wlroots, 47+ DEFUNs, embedding)
+  gowl/           Wayland compositor (wlroots, 49+ DEFUNs, embedding)
   org-ex/         Org-Ex interactive widgets (liborgex-1.0.so + DEFUN bridge)
   cintrospect/    Runtime C self-introspection (libdw DWARF + libgccjit JIT)
   cpatch/         Runtime C hot-patching (DEFUN pointer swap + detours)
@@ -1733,7 +1733,7 @@ the editor renders as a Wayland client inside its own compositor, and
 other Wayland applications tile alongside or embed directly inside
 Emacs windows.
 
-The integration provides 47+ C primitives (DEFUNs) for full compositor
+The integration provides 49+ C primitives (DEFUNs) for full compositor
 control from Elisp.
 
 @section Starting the Compositor
@@ -1866,6 +1866,11 @@ Like the above, but pick via bemenu (dmenu mode).
 Spawn @var{COMMAND} as a client placed directly on @var{TAG}.
 @item cmacs-gowl-set-layout LAYOUT
 Set the tiling layout (tile, monocle, float).
+@item cmacs-gowl-toggle-vsplit
+Toggle the vsplit tile orientation on the focused monitor.  With vsplit
+on, the master row is on top and the stack row on the bottom (the
+existing window stays on top, new windows underneath); with it off, the
+normal left/right split is restored.
 @end table
 
 @section Tags and Workspaces
@@ -1947,6 +1952,10 @@ Increment / decrement the master count.
 Zoom (promote to master).
 @item Super+t / f / m
 Tile / float / monocle layout.
+@item Super+v
+Vsplit on: master row on top, stack row on the bottom.
+@item Super+Shift+v
+Vsplit off: restore the normal left/right split.
 @item Super+space
 Toggle floating; @kbd{Super+Shift+space} toggles fullscreen.
 @item Super+1..9
@@ -2389,6 +2398,22 @@ Set tag bitmask on client.
 Switch tag view.
 @item gowl-set-layout NAME
 Set layout on current monitor.
+@item gowl-get-layout &optional MONITOR
+Get the current layout on a monitor.
+@item gowl-set-mfact FACTOR &optional MONITOR
+Set the master-area ratio (0.05--0.95).  In vsplit mode this sizes the
+master area height instead of its width.
+@item gowl-get-mfact &optional MONITOR
+Get the master-area ratio.
+@item gowl-set-nmaster N &optional MONITOR
+Set the master window count.
+@item gowl-get-nmaster &optional MONITOR
+Get the master window count.
+@item gowl-set-vsplit VSPLIT &optional MONITOR
+Enable the vsplit tile orientation (non-nil): master row on top, stack
+row on the bottom.  nil restores the normal left/right split.
+@item gowl-get-vsplit &optional MONITOR
+Return non-nil if the monitor uses the vsplit tile orientation.
 @item gowl-list-monitors
 List connected monitors.
 @item gowl-find-monitor NAME
@@ -4205,6 +4230,8 @@ available when built with @option{--with-cmacs-gowl}.
   @tab @code{(n)} @tab Set master window count
 @item @code{set_layout}
   @tab @code{(name)} @tab Set tiling layout
+@item @code{set_split}
+  @tab @code{("vsplit"|"normal")} @tab Set tile split orientation
 @item @code{add_keybind}
   @tab @code{(key, action [, arg])} @tab Add a keybinding
 @item @code{list_keybinds}
