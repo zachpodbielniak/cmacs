@@ -40,6 +40,26 @@ make -j$(nproc)           # builds deps + emacs
 just run                  # run it
 ```
 
+**Talking to a running instance (`emacsctl`).** `src/emacsctl` (alias `cmacsctl`) is a
+standalone D-Bus CLI to a live cmacs — use it to introspect/drive a running
+`emacs --gowl` session (e.g. the GDM "CMacs (Debug)" seat session) without the MCP
+server. `./src/emacsctl eval '(EXPR)'` is the universal gateway (returns the printed
+value); also `instances`, `logs`/`events` (firehose), `repl`, and groups like
+`get clients`, `var`, `buffer`, `c` (C introspection). For gowl, eval specific
+`gowl-*` DEFUNs: `'(gowl-focused-client)'`, `'(gowl-list-monitors)'`,
+`'(gowl-list-keybinds)'`.
+
+**DANGER — a `--gowl` instance IS the user's desktop session.** `emacsctl eval`
+runs **synchronously in the compositor's main thread**. Any eval that blocks (a full
+`mapatoms` symbol-table scan, a long loop, `(gowl-list-modules)`) or errors can hang
+or crash the compositor — which kills the entire Wayland session and every app in it
+(this has happened). Rules when a `--gowl` session is live: (1) only tiny, O(1),
+read-only evals — never `mapatoms`/unbounded loops/anything touching all
+buffers/symbols; (2) never eval anything that can signal an error mid-compositor;
+(3) prefer **static source analysis** over live probing; (4) if you genuinely need
+runtime state, hand the user a one-liner to run themselves and paste back, rather
+than firing it at their desktop. When unsure, don't eval — read the code.
+
 cmacs features are all `--with-cmacs-*` / `--enable-cmacs-*`, auto-detect system
 packages, and fall back to bundled `deps/` submodules. `just run` (and `just gowl`)
 are preferred over `src/emacs`: they export `CMACS_MODULE_DIR` (bacon `cmacsgi`),
