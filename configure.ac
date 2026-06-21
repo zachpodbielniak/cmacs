@@ -760,13 +760,33 @@ if test "$with_cmacs_bacon" != "no"; then
   CMACS_BACON_OBJ="cmacs-bacon.o cmacs-bacon-ipc.o"
 fi
 if test "$with_cmacs_gowl" != "no"; then
+  # gowl builds against wlroots 0.19 or 0.20 (selectable; newest present
+  # wins by default -- see deps/gowl/config.mk).  cmacs must link the
+  # SAME wlroots the static libgowl.a was built against, so detect it the
+  # same way here.  Override with WLROOTS=0.19 on ./configure's environment
+  # to match a `make WLROOTS=0.19` gowl build (e.g. Fedora 42/43).
+  dnl PKG_CONFIG is already set: an earlier PKG_CHECK_MODULES (crispy/bacon)
+  dnl pulled in PKG_PROG_PKG_CONFIG.  Fall back to the literal just in case.
+  cmacs_pkgconfig="$PKG_CONFIG"
+  test -z "$cmacs_pkgconfig" && cmacs_pkgconfig="pkg-config"
+  if test -z "$WLROOTS"; then
+    if $cmacs_pkgconfig --exists wlroots-0.20; then
+      WLROOTS=0.20
+    elif $cmacs_pkgconfig --exists wlroots-0.19; then
+      WLROOTS=0.19
+    else
+      AC_MSG_ERROR([no supported wlroots found (need wlroots-0.20 or wlroots-0.19)])
+    fi
+  fi
+  cmacs_wlroots_pc="wlroots-$WLROOTS"
+  AC_MSG_NOTICE([cmacs-gowl: using $cmacs_wlroots_pc])
   if test "$with_cmacs_gowl" = "system"; then
     # Use system-installed gowl (for distro packaging)
-    PKG_CHECK_MODULES([CMACS_GOWL], [gowl wlroots-0.19 wayland-server wayland-client])
+    PKG_CHECK_MODULES([CMACS_GOWL], [gowl $cmacs_wlroots_pc wayland-server wayland-client])
   else
     # Build libgowl from deps/gowl/ (default)
     PKG_CHECK_MODULES([CMACS_GOWL_DEPS],
-      [wlroots-0.19 wayland-server wayland-client wayland-protocols pixman-1 xkbcommon \
+      [$cmacs_wlroots_pc wayland-server wayland-client wayland-protocols pixman-1 xkbcommon \
        libinput \
        glib-2.0 gobject-2.0 gio-2.0 pango pangocairo json-glib-1.0 yaml-0.1 \
        egl gl])
