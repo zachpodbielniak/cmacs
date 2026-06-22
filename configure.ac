@@ -780,9 +780,28 @@ if test "$with_cmacs_gowl" != "no"; then
   fi
   cmacs_wlroots_pc="wlroots-$WLROOTS"
   AC_MSG_NOTICE([cmacs-gowl: using $cmacs_wlroots_pc])
+  # GOWL_MODULEDIR: where gowl installs its modules (MODULEDIR =
+  # LIBDIR/gowl/modules).  gowl's config.mk auto-detects the lib suffix
+  # (lib64 on 64-bit Fedora/RHEL/SUSE, lib elsewhere), so mirror that
+  # here -- autoconf's $libdir defaults to ${exec_prefix}/lib and would
+  # otherwise miss /usr/lib64/gowl/modules on Fedora.  $prefix is the
+  # literal sentinel NONE until AC_OUTPUT canonicalizes it, so resolve
+  # the effective prefix first.  The system branch below overrides this
+  # from gowl.pc's `moduledir' when the .pc is present, which is the
+  # most authoritative source.
+  cmacs_eff_prefix=$prefix
+  if test "$cmacs_eff_prefix" = NONE; then cmacs_eff_prefix=$ac_default_prefix; fi
+  test -z "$cmacs_eff_prefix" && cmacs_eff_prefix=/usr/local
+  cmacs_lib64=`test -d /usr/lib64 && echo lib64 || echo lib`
+  cmacs_gowl_moduledir="$cmacs_eff_prefix/$cmacs_lib64/gowl/modules"
   if test "$with_cmacs_gowl" = "system"; then
     # Use system-installed gowl (for distro packaging)
     PKG_CHECK_MODULES([CMACS_GOWL], [gowl $cmacs_wlroots_pc wayland-server wayland-client])
+    # Prefer gowl.pc's `moduledir' (authoritative); fall back to the
+    # lib64-aware default computed above.
+    cmacs_gowl_moduledir_pc=`$PKG_CONFIG --variable=moduledir gowl 2>/dev/null`
+    test -n "$cmacs_gowl_moduledir_pc" && cmacs_gowl_moduledir="$cmacs_gowl_moduledir_pc"
+    CMACS_GOWL_CFLAGS="$CMACS_GOWL_CFLAGS -DGOWL_MODULEDIR=\\\"$cmacs_gowl_moduledir\\\""
   else
     # Build libgowl from deps/gowl/ (default)
     PKG_CHECK_MODULES([CMACS_GOWL_DEPS],
@@ -795,6 +814,7 @@ if test "$with_cmacs_gowl" != "no"; then
       -I\$(srcdir)/../deps/gowl/src/config \
       -I\$(srcdir)/../deps/gowl/src/module \
       -DWLR_USE_UNSTABLE \
+      -DGOWL_MODULEDIR=\\\"$cmacs_gowl_moduledir\\\" \
       $CMACS_GOWL_DEPS_CFLAGS"
     CMACS_GOWL_LIBS="-Wl,--whole-archive \$(srcdir)/../deps/gowl/build/$cmacs_dep_buildtype/libgowl.a \
       -Wl,--no-whole-archive $CMACS_GOWL_DEPS_LIBS"

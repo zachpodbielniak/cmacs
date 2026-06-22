@@ -1171,7 +1171,9 @@ cmacs_gowl_key_intercept (GowlCompositor *comp,
         by `just run`/`just gowl` so local testing always uses the
         freshly-built modules instead of any system-installed copy);
      1. the in-tree dev build (<exe-dir>/../deps/gowl/build/release/...);
-     2. the installed libexec location (PATH_EXEC from epaths.h).
+     2. the system install dir GOWL_MODULEDIR (where gowl's own
+        `make install' lands modules, e.g. /usr/lib64/gowl/modules);
+     3. the installed libexec location (PATH_EXEC from epaths.h).
    Returns a newly allocated path or NULL if not found. */
 static gchar *
 cmacs_gowl_find_module (const gchar *name)
@@ -1205,7 +1207,23 @@ cmacs_gowl_find_module (const gchar *name)
         return g_steal_pointer (&dev_path);
     }
 
-  /* 2. Installed: PATH_EXEC/gowl-modules/<name>.so
+  /* 2. System install dir: the compile-time GOWL_MODULEDIR, which is
+     where gowl's own `make install' lands modules (MODULEDIR =
+     LIBDIR/gowl/modules, e.g. /usr/lib64/gowl/modules).  This is what
+     makes an installed cmacs find its modules without the env
+     override -- gowl installs there, and the installed cmacs is
+     compiled with this path baked in (see configure.ac, mirroring the
+     podomation PODOMATION_MODULEDIR pattern). */
+#ifdef GOWL_MODULEDIR
+  {
+    g_autofree gchar *sys_path =
+      g_build_filename (GOWL_MODULEDIR, so_name, NULL);
+    if (g_file_test (sys_path, G_FILE_TEST_EXISTS))
+      return g_steal_pointer (&sys_path);
+  }
+#endif
+
+  /* 3. Installed: PATH_EXEC/gowl-modules/<name>.so
      PATH_EXEC is archlibdir (e.g. /usr/libexec/emacs/31.0.50/x86_64-...) */
   {
     g_autofree gchar *inst_path =
