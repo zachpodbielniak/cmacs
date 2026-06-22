@@ -63,10 +63,18 @@ fi
 # backend (its .portal carries UseIn=gowl) and so the gowl-portals.conf
 # routing applies -- this is what lets deskflow's KVM input capture work
 # under cmacs --gowl.  `CMacs' is kept first for any CMacs-specific lookups.
+# The launcher does NOT `exec' emacs: when the compositor exits -- cleanly
+# OR by crash (SIGSEGV) -- the surviving shell must stop the session target
+# the compositor pulled in (gowl-session.target -> graphical-session.target).
+# Otherwise the persistent user@ manager keeps graphical-session.target
+# active, and the NEXT login (even GNOME) aborts in
+# gnome-session-init-worker with "A graphical session is already running!",
+# wedging all logins until a reboot.  `systemctl ... stop' is best-effort
+# (|| true) so a wedged manager can't block logout.
 DESKTOP_ENTRY="[Desktop Entry]
 Name=CMacs
 Comment=CMacs — Emacs as a Wayland Compositor
-Exec=/bin/bash -lc 'exec ${EMACS_BIN} --gowl'
+Exec=/bin/bash -lc '${EMACS_BIN} --gowl; systemctl --user stop gowl-session.target graphical-session.target 2>/dev/null || true'
 Type=Application
 DesktopNames=CMacs:gowl"
 
