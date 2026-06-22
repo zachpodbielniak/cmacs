@@ -139,6 +139,52 @@ This requires the =Xwayland= binary (Fedora: =xorg-x11-server-Xwayland=)
 and a gowl built with =BUILD_XWAYLAND=1= (the default).  If neither is
 present, =DISPLAY= is left unset and only Wayland-native clients run.
 
+* Input Capture / KVM (deskflow)
+
+Software-KVM tools such as [[https://deskflow.org][deskflow]] (and
+input-leap / Synergy) share one keyboard and mouse across several machines
+by moving the pointer off a screen edge.  On Wayland this needs the
+freedesktop *InputCapture* portal (to capture local input when sharing
+*out*) and the *RemoteDesktop* portal (to inject input when sharing *in*).
+Only GNOME's Mutter-backed portal implements InputCapture for the wlroots
+world, which is why deskflow works under GNOME but logs =CreateSession
+failed= under a plain wlroots compositor.
+
+gowl implements both portals itself, so deskflow works under =cmacs --gowl=
+just as it does under GNOME — for both the server (capture) and client
+(inject) roles.  The implementation is a gowl subsystem; see the *Input
+Capture & Injection* chapter in gowl's own =docs/input-capture.org= for the
+architecture.  In short: gowl core carries a D-Bus-free capture state
+machine driven over a private Wayland protocol, and a standalone
+=xdg-desktop-portal-gowl= binary (built when =libeis= is present) owns the
+=org.freedesktop.impl.portal.desktop.gowl= D-Bus name and runs the EIS
+server deskflow connects to.
+
+*Enabling it.*  =make install= installs the portal binary, its =.portal=
+registration, a =portals.conf= that routes InputCapture/RemoteDesktop to
+gowl (ScreenCast still goes to =xdg-desktop-portal-wlr=), and a D-Bus
+=.service=.  The =cmacs --gowl= session's =XDG_CURRENT_DESKTOP= must contain
+=gowl=; =install-wm= sets =DesktopNames=CMacs:gowl= for this reason.  The
+portal binary is launched at session start (and is D-Bus-activatable as a
+fallback).  Install =libeis-devel= (Fedora) before building.
+
+*Using it.*  Configure deskflow as usual (server on the machine whose
+keyboard/mouse you share, clients on the others).  Under =cmacs --gowl= the
+server's "ei screen for wayland" path now succeeds: move the pointer across
+the configured screen edge and input is captured and forwarded to the
+remote.
+
+*Security.*  Input capture sees every keystroke and injection can drive any
+app; access is gated by the =xdg-desktop-portal= permission model.  The
+private Wayland protocol trusts only its single client (the portal binary,
+which the compositor launches) and is not a public interface.
+
+*Troubleshooting.*  If deskflow still logs =CreateSession failed=, the
+backend is not being routed: confirm =gowl= is in =XDG_CURRENT_DESKTOP=,
+the =gowl.portal= file is installed, and =libeis= was present at build time.
+Run =xdg-desktop-portal= with =G_MESSAGES_DEBUG=all= to see which backend it
+selects.
+
 * Window Management Commands
 
 | Command                        | Description                              |

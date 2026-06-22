@@ -58,12 +58,17 @@ if [ "$DRY_RUN" -eq 0 ] && [ ! -x "$EMACS_BIN" ]; then
     echo "Warning: $EMACS_BIN does not exist yet (build with 'make' first)." >&2
 fi
 
+# DesktopNames sets XDG_CURRENT_DESKTOP for the session.  Include `gowl'
+# so xdg-desktop-portal matches the gowl InputCapture/RemoteDesktop portal
+# backend (its .portal carries UseIn=gowl) and so the gowl-portals.conf
+# routing applies -- this is what lets deskflow's KVM input capture work
+# under cmacs --gowl.  `CMacs' is kept first for any CMacs-specific lookups.
 DESKTOP_ENTRY="[Desktop Entry]
 Name=CMacs
 Comment=CMacs — Emacs as a Wayland Compositor
 Exec=/bin/bash -lc 'exec ${EMACS_BIN} --gowl'
 Type=Application
-DesktopNames=CMacs"
+DesktopNames=CMacs:gowl"
 
 if [ "$DRY_RUN" -eq 1 ]; then
     echo "Would write to: $SESSION_FILE"

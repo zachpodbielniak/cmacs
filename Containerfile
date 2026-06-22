@@ -47,6 +47,7 @@ RUN dnf install -y \
         wlroots-devel wayland-devel wayland-protocols-devel \
         libinput-devel libxkbcommon-devel pango-devel cairo-devel \
         libdecor-devel libdrm-devel pixman-devel \
+        libeis-devel \
         libxcb-devel xcb-util-wm-devel \
         libyaml-devel json-glib-devel libdex-devel \
         gdk-pixbuf2-devel \

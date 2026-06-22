@@ -125,6 +125,7 @@ set_packages_fedora () {
 	PKGS_GOWL=("${wlroots_pkg}" wayland-devel wayland-protocols-devel
 	           libinput-devel libxkbcommon-devel pango-devel cairo-devel
 	           libxcb-devel xcb-util-wm-devel xorg-x11-server-Xwayland
+	           libeis-devel            # EIS server for the InputCapture/RemoteDesktop portal (deskflow KVM)
 	           xdg-desktop-portal-wlr  # wlroots ScreenCast/Screenshot portal backend (runtime)
 	           slurp)                  # output/region chooser for the portal-wlr ScreenCast picker
 	# cmacs-video: GStreamer + plugins-{base,good,bad,ugly} + libav.

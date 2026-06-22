@@ -1863,6 +1863,42 @@ This needs the @command{Xwayland} binary (Fedora:
 @code{BUILD_XWAYLAND=1} (the default); otherwise @env{DISPLAY} is left
 unset and only Wayland-native clients run.
 
+@subsection Input Capture / KVM (deskflow)
+@cindex deskflow
+@cindex InputCapture
+@cindex RemoteDesktop
+@cindex KVM
+
+Software-KVM tools such as deskflow (and input-leap / Synergy) share one
+keyboard and mouse across machines by moving the pointer off a screen edge.
+On Wayland this needs the freedesktop @emph{InputCapture} portal (to
+capture local input when sharing out) and the @emph{RemoteDesktop} portal
+(to inject input when sharing in).  Only GNOME's Mutter-backed portal
+implements InputCapture for the wlroots world, which is why deskflow works
+under GNOME but logs @samp{CreateSession failed} under a plain wlroots
+compositor.
+
+gowl implements both portals itself, so deskflow works under
+@command{cmacs --gowl} for both the server (capture) and client (inject)
+roles.  gowl core carries a D-Bus-free capture state machine driven over a
+private Wayland protocol, and a standalone @command{xdg-desktop-portal-gowl}
+binary (built when @code{libeis} is present) owns the
+@code{org.freedesktop.impl.portal.desktop.gowl} D-Bus name and runs the EIS
+server deskflow connects to.  The full architecture is documented in gowl's
+@file{docs/input-capture.org}.
+
+To enable it: install @code{libeis-devel}, then @code{make install} installs
+the portal binary, its @file{.portal} registration, a @file{portals.conf}
+routing InputCapture/RemoteDesktop to gowl (ScreenCast still goes to
+@command{xdg-desktop-portal-wlr}), and a D-Bus @file{.service}.  The session's
+@env{XDG_CURRENT_DESKTOP} must contain @code{gowl}; @command{install-wm} sets
+@code{DesktopNames=CMacs:gowl} accordingly.
+
+Input capture sees every keystroke and injection can drive any application;
+access is gated by the @command{xdg-desktop-portal} permission model.  The
+private Wayland protocol trusts only its single client (the portal binary,
+which the compositor launches) and is not a public interface.
+
 @section Window Management
 
 @table @code
