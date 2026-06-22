@@ -53,6 +53,7 @@ RUN dnf install -y \
         libsoup3-devel readline-devel \
         libetpan-devel sqlite-devel libpq-devel \
         cmark-devel \
+        opencascade-devel \
         libssh2-devel libvirt-devel pam-devel \
         elfutils-devel elfutils-debuginfod-client-devel binutils-devel \
         gstreamer1-devel gstreamer1-plugins-base-devel \
@@ -72,6 +73,11 @@ RUN dnf install -y \
 # dies with "could not find git for clone of clipper2-populate".
 # espeak-ng: phonemiser used by piper-tts.
 # python3-pip: installs the piper-tts CLI in the later RUN step.
+# opencascade-devel: the OpenCASCADE B-rep kernel for --with-cmacs-cad.
+# Fedora ships no opencascade.pc, so cad-glib probes it by header+library
+# (deps/cad-glib/config.mk); without this package the image builds CAD
+# mesh-only (Manifold CSG, no B-rep) and a stale host .pc leaking -lTKernel
+# breaks the libregnum link.
 # elfutils-devel + libdebuginfod: cintrospect's libdw DWARF reader.
 # binutils-devel: provides dis-asm.h / libopcodes for cpatch's
 # (currently optional) prologue probe.  cmacs builds without it via

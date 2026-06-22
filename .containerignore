@@ -15,6 +15,15 @@ native-lisp
 **/*.o
 **/*.a
 **/*.so
+# Generated pkg-config files (deps/{cad-glib,ai-glib,libreclaw}/*.pc) are
+# build artifacts, never tracked in git.  If a host-generated one leaks
+# into the context it shadows the in-container probe -- notably
+# cad-glib-1.0.pc, whose Libs.private libregnum reads via sed: a stale
+# host pc carrying -lTKernel (built where opencascade was present) makes
+# the container link OCCT toolkits that aren't installed there.  Excluding
+# them forces cad-glib's `all` (which has the .pc as a prerequisite) to
+# regenerate them from the container's own probe.
+**/*.pc
 src/*.pdmp
 src/emacs
 src/temacs
