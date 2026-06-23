@@ -1747,9 +1747,21 @@ lrg_gamepad_tick (struct frame *f)
     lrg_recompose_now (f);
 }
 
-/* Current Emacs modifier bits from the physically held modifier keys.  */
+/* Modifiers latched "down" across a focus change and therefore ignored
+   until physically released.  A compositor global shortcut (e.g. GNOME's
+   Super+Shift+S screenshot) grabs the chord and the lrg window loses focus
+   for the duration; the modifier's key-release is delivered to the grab,
+   not to us, so raylib's cached key state stays down.  Without this, every
+   subsequent key (and mouse click) would carry a phantom s-/C-/M- prefix
+   ("s-j is undefined") until the modifier happened to be pressed again.
+   Set from the focus-transition block in lrg_read_socket.  */
+static int lrg_stale_mods;
+
+/* Raw Emacs modifier bits from raylib's cached key state.  May report a
+   modifier still down whose release was missed during a focus grab -- see
+   lrg_stale_mods, which filters those out in lrg_event_modifiers.  */
 static int
-lrg_event_modifiers (void)
+lrg_raw_modifiers (void)
 {
   int m = 0;
   if (grl_input_is_key_down (GRL_KEY_LEFT_CONTROL)
@@ -1764,15 +1776,25 @@ lrg_event_modifiers (void)
   return m;
 }
 
+/* Current Emacs modifier bits, with focus-latched (stale) modifiers
+   filtered out.  A stale modifier self-clears once raylib reports it
+   released (it drops out of the raw mask), so a fresh press counts again.  */
+static int
+lrg_event_modifiers (void)
+{
+  int raw = lrg_raw_modifiers ();
+  lrg_stale_mods &= raw;          /* a released modifier is no longer stale */
+  return raw & ~lrg_stale_mods;
+}
+
 /* True if a control or meta modifier is currently held (suppresses the
-   character-queue path so e.g. C-a is read as a key, not a literal char).  */
+   character-queue path so e.g. C-a is read as a key, not a literal char).
+   Honours lrg_stale_mods so a focus-latched Ctrl/Meta does not wrongly
+   swallow plain typing.  */
 static bool
 lrg_ctrl_or_meta_down (void)
 {
-  return grl_input_is_key_down (GRL_KEY_LEFT_CONTROL)
-         || grl_input_is_key_down (GRL_KEY_RIGHT_CONTROL)
-         || grl_input_is_key_down (GRL_KEY_LEFT_ALT)
-         || grl_input_is_key_down (GRL_KEY_RIGHT_ALT);
+  return (lrg_event_modifiers () & (ctrl_modifier | meta_modifier)) != 0;
 }
 
 /* Store a translated key/mouse event; returns 1 (events stored counter).  */
@@ -2145,6 +2167,14 @@ lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
             ie.kind = FOCUS_OUT_EVENT;
           }
         count += lrg_store (f, hold_quit, &ie);
+
+        /* A focus change can straddle a compositor global-shortcut grab
+           (e.g. GNOME Super+Shift+S) that swallows a modifier's key
+           release, latching it down in raylib's cached state.  Mark every
+           currently-held modifier stale so it is ignored until physically
+           released -- otherwise every following key gets a phantom
+           s-/C-/M- prefix.  Stale bits self-clear on release.  */
+        lrg_stale_mods |= lrg_raw_modifiers ();
       }
   }
 
