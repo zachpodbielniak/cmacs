@@ -183,7 +183,15 @@ which the compositor launches) and is not a public interface.
 backend is not being routed: confirm =gowl= is in =XDG_CURRENT_DESKTOP=,
 the =gowl.portal= file is installed, and =libeis= was present at build time.
 Run =xdg-desktop-portal= with =G_MESSAGES_DEBUG=all= to see which backend it
-selects.
+selects.  If instead the pointer reaches the edge but never crosses (deskflow
+loops activating and releasing the capture), check the deskflow side: its own
+screen layout must have a neighbour on that edge.  Running =deskflow-core
+server= standalone does *not* translate the deskflow GUI's screen grid into
+links, so either launch deskflow via its GUI or set =[server]
+externalConfig=true= in its config; deskflow's debug log (=[log] level=7=)
+shows "no neighbor on <side>" when the link is missing.  (The deeper gowl-side
+cause of that loop — a missing EIS device region — is fixed; see the
+*Troubleshooting* section of gowl's =docs/input-capture.org=.)
 
 * Window Management Commands
 

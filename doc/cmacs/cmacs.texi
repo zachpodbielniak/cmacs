@@ -1899,6 +1899,21 @@ access is gated by the @command{xdg-desktop-portal} permission model.  The
 private Wayland protocol trusts only its single client (the portal binary,
 which the compositor launches) and is not a public interface.
 
+Troubleshooting: if deskflow still logs @samp{CreateSession failed}, the
+backend is not routed---confirm @code{gowl} is in @env{XDG_CURRENT_DESKTOP},
+the @file{gowl.portal} file is installed, and @code{libeis} was present at
+build time (run @command{xdg-desktop-portal} with @env{G_MESSAGES_DEBUG=all}
+to see the selected backend).  If instead the pointer reaches the edge but
+never crosses (deskflow loops activating and releasing the capture), check the
+deskflow side: its screen layout must have a neighbour on that edge.  Running
+@command{deskflow-core server} standalone does @emph{not} translate the
+deskflow GUI's screen grid into links, so launch deskflow via its GUI or set
+@code{externalConfig=true} in its config; deskflow's debug log
+(@code{[log] level=7}) shows @samp{no neighbor on @var{side}} when the link is
+missing.  The deeper gowl-side cause of that loop---a missing EIS device
+region---is fixed; see the Troubleshooting section of gowl's
+@file{docs/input-capture.org}.
+
 @section Window Management
 
 @table @code
