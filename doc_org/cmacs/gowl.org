@@ -191,7 +191,13 @@ links, so either launch deskflow via its GUI or set =[server]
 externalConfig=true= in its config; deskflow's debug log (=[log] level=7=)
 shows "no neighbor on <side>" when the link is missing.  (The deeper gowl-side
 cause of that loop — a missing EIS device region — is fixed; see the
-*Troubleshooting* section of gowl's =docs/input-capture.org=.)
+*Troubleshooting* section of gowl's =docs/input-capture.org=.)  If the cursor
+crosses fine but typing on the remote spams =failed to open x11 default
+display=, deskflow (a Flatpak) is denied X11: it still uses an X11 display to
+translate keycodes even on Wayland, and its default =fallback-x11= permission
+withholds X11 while Wayland is present.  gowl runs XWayland (=DISPLAY=:0=), so
+just grant access: =flatpak override --user --socket=x11 org.deskflow.deskflow=,
+then restart deskflow.  This is a deskflow/Flatpak limitation, not a gowl bug.
 
 * Window Management Commands
 
