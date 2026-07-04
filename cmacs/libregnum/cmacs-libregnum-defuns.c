@@ -145,6 +145,216 @@ DEFUN ("cmacs-libregnum-animated-p", Fcmacs_libregnum_animated_p,
   return (v && cmacs_libregnum_view_get_animated (v)) ? Qt : Qnil;
 }
 
+/* ── 2D image-display mode DEFUNs (imgedit / vidstudio live viewport) ────
+ * Each resolves BUFFER -> view -> render ctx and drives the image_* API; a
+ * redraw is requested after any state change.  These never touch the GPU
+ * (the ctx setters defer the upload to frame top). */
+
+/* Resolve BUFFER to its render ctx, or NULL.  */
+static CmacsLibregnumRenderCtx *
+cmacs_libregnum_image_ctx (Lisp_Object buffer)
+{
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  return v ? cmacs_libregnum_view_get_render_ctx (v) : NULL;
+}
+
+DEFUN ("cmacs-libregnum-image-enter", Fcmacs_libregnum_image_enter,
+       Scmacs_libregnum_image_enter, 1, 2, 0,
+       doc: /* Put BUFFER's view into 2D image-display mode (ON nil exits).  */)
+  (Lisp_Object buffer, Lisp_Object on)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_image_ctx (buffer);
+  if (ctx) cmacs_libregnum_render_ctx_image_enter (ctx, NILP (on) ? FALSE : TRUE);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (v) cmacs_libregnum_view_request_redraw (v);
+  return ctx ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-libregnum-image-p", Fcmacs_libregnum_image_p,
+       Scmacs_libregnum_image_p, 1, 1, 0,
+       doc: /* Return t if BUFFER's view is in 2D image-display mode.  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_image_ctx (buffer);
+  return (ctx && cmacs_libregnum_render_ctx_is_image (ctx)) ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-libregnum-image-upload-rgba", Fcmacs_libregnum_image_upload_rgba,
+       Scmacs_libregnum_image_upload_rgba, 4, 4, 0,
+       doc: /* Upload a raw RGBA8 image (W x H, unibyte RGBA string) to BUFFER.  */)
+  (Lisp_Object buffer, Lisp_Object w, Lisp_Object h, Lisp_Object rgba)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNAT (w); CHECK_FIXNAT (h); CHECK_STRING (rgba);
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_image_ctx (buffer);
+  if (ctx)
+    cmacs_libregnum_render_ctx_image_upload_rgba
+      (ctx, XFIXNUM (w), XFIXNUM (h),
+       (const guint8 *) SDATA (rgba), SBYTES (rgba));
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (v) cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-image-refresh", Fcmacs_libregnum_image_refresh,
+       Scmacs_libregnum_image_refresh, 1, 5, 0,
+       doc: /* Re-upload BUFFER's bound image (optional dirty rect X Y W H).  */)
+  (Lisp_Object buffer, Lisp_Object x, Lisp_Object y, Lisp_Object w,
+   Lisp_Object h)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_image_ctx (buffer);
+  if (ctx)
+    {
+      if (NILP (x))
+        cmacs_libregnum_render_ctx_image_refresh (ctx);
+      else
+        cmacs_libregnum_render_ctx_image_refresh_rect
+          (ctx, XFIXNUM (x), XFIXNUM (y), XFIXNUM (w), XFIXNUM (h));
+    }
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (v) cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-image-set-view", Fcmacs_libregnum_image_set_view,
+       Scmacs_libregnum_image_set_view, 4, 4, 0,
+       doc: /* Set BUFFER image view SCALE and pan PAN-X PAN-Y (FBO px).  */)
+  (Lisp_Object buffer, Lisp_Object scale, Lisp_Object px, Lisp_Object py)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_image_ctx (buffer);
+  if (ctx)
+    cmacs_libregnum_render_ctx_image_set_view
+      (ctx, XFLOATINT (scale), XFLOATINT (px), XFLOATINT (py));
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (v) cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-image-view", Fcmacs_libregnum_image_view,
+       Scmacs_libregnum_image_view, 1, 1, 0,
+       doc: /* Return BUFFER image view as (SCALE PAN-X PAN-Y), or nil.  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_image_ctx (buffer);
+  double s = 0, px = 0, py = 0;
+  if (!ctx) return Qnil;
+  cmacs_libregnum_render_ctx_image_get_view (ctx, &s, &px, &py);
+  return list3 (make_float (s), make_float (px), make_float (py));
+}
+
+DEFUN ("cmacs-libregnum-image-zoom-at", Fcmacs_libregnum_image_zoom_at,
+       Scmacs_libregnum_image_zoom_at, 4, 4, 0,
+       doc: /* Zoom BUFFER image by FACTOR about view pixel (VX VY).  */)
+  (Lisp_Object buffer, Lisp_Object vx, Lisp_Object vy, Lisp_Object factor)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_image_ctx (buffer);
+  if (ctx)
+    cmacs_libregnum_render_ctx_image_zoom_at
+      (ctx, XFLOATINT (vx), XFLOATINT (vy), XFLOATINT (factor));
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (v) cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-image-fit", Fcmacs_libregnum_image_fit,
+       Scmacs_libregnum_image_fit, 1, 1, 0,
+       doc: /* Fit BUFFER's image to its view size, centred.  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  CmacsLibregnumRenderCtx *ctx = v ? cmacs_libregnum_view_get_render_ctx (v)
+                                   : NULL;
+  if (ctx && v)
+    {
+      int vw = 0, vh = 0;
+      cmacs_libregnum_view_get_size (v, &vw, &vh);
+      cmacs_libregnum_render_ctx_image_fit (ctx, vw, vh);
+      cmacs_libregnum_view_request_redraw (v);
+    }
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-image-view-to-doc", Fcmacs_libregnum_image_view_to_doc,
+       Scmacs_libregnum_image_view_to_doc, 3, 3, 0,
+       doc: /* Map BUFFER view pixel (VX VY) to a doc pixel (DX . DY), or nil
+if outside the document.  */)
+  (Lisp_Object buffer, Lisp_Object vx, Lisp_Object vy)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_image_ctx (buffer);
+  int dx = 0, dy = 0;
+  if (!ctx) return Qnil;
+  return cmacs_libregnum_render_ctx_image_view_to_doc
+           (ctx, XFLOATINT (vx), XFLOATINT (vy), &dx, &dy)
+         ? Fcons (make_fixnum (dx), make_fixnum (dy)) : Qnil;
+}
+
+DEFUN ("cmacs-libregnum-image-set-checker", Fcmacs_libregnum_image_set_checker,
+       Scmacs_libregnum_image_set_checker, 2, 2, 0,
+       doc: /* Show/hide BUFFER image transparency checkerboard.  */)
+  (Lisp_Object buffer, Lisp_Object on)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_image_ctx (buffer);
+  if (ctx) cmacs_libregnum_render_ctx_image_set_checker (ctx, !NILP (on));
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (v) cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-image-set-grid", Fcmacs_libregnum_image_set_grid,
+       Scmacs_libregnum_image_set_grid, 2, 2, 0,
+       doc: /* Show/hide BUFFER image pixel grid (visible at high zoom).  */)
+  (Lisp_Object buffer, Lisp_Object on)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_image_ctx (buffer);
+  if (ctx) cmacs_libregnum_render_ctx_image_set_grid (ctx, !NILP (on));
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (v) cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-image-set-cursor", Fcmacs_libregnum_image_set_cursor,
+       Scmacs_libregnum_image_set_cursor, 4, 4, 0,
+       doc: /* Set BUFFER brush-cursor overlay at doc (DX DY), RADIUS px
+(DX < 0 hides it).  */)
+  (Lisp_Object buffer, Lisp_Object dx, Lisp_Object dy, Lisp_Object radius)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_image_ctx (buffer);
+  if (ctx)
+    cmacs_libregnum_render_ctx_image_set_cursor
+      (ctx, XFLOATINT (dx), XFLOATINT (dy), XFLOATINT (radius));
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (v) cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-image-set-marquee", Fcmacs_libregnum_image_set_marquee,
+       Scmacs_libregnum_image_set_marquee, 2, 6, 0,
+       doc: /* Set BUFFER selection marquee ON at doc rect (X Y W H).  */)
+  (Lisp_Object buffer, Lisp_Object on, Lisp_Object x, Lisp_Object y,
+   Lisp_Object w, Lisp_Object h)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_image_ctx (buffer);
+  if (ctx)
+    cmacs_libregnum_render_ctx_image_set_marquee
+      (ctx, !NILP (on), NILP (x) ? 0 : XFIXNUM (x), NILP (y) ? 0 : XFIXNUM (y),
+       NILP (w) ? 0 : XFIXNUM (w), NILP (h) ? 0 : XFIXNUM (h));
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (v) cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
 DEFUN ("cmacs-libregnum-build-tree", Fcmacs_libregnum_build_tree,
        Scmacs_libregnum_build_tree, 2, 2, 0,
        doc: /* Build the project-tree scene for BUFFER under ROOT.
@@ -2087,6 +2297,19 @@ syms_of_cmacs_libregnum_defuns (void)
   defsubr (&Scmacs_libregnum_resize);
   defsubr (&Scmacs_libregnum_view_size);
   defsubr (&Scmacs_libregnum_redraw);
+  defsubr (&Scmacs_libregnum_image_enter);
+  defsubr (&Scmacs_libregnum_image_p);
+  defsubr (&Scmacs_libregnum_image_upload_rgba);
+  defsubr (&Scmacs_libregnum_image_refresh);
+  defsubr (&Scmacs_libregnum_image_set_view);
+  defsubr (&Scmacs_libregnum_image_view);
+  defsubr (&Scmacs_libregnum_image_zoom_at);
+  defsubr (&Scmacs_libregnum_image_fit);
+  defsubr (&Scmacs_libregnum_image_view_to_doc);
+  defsubr (&Scmacs_libregnum_image_set_checker);
+  defsubr (&Scmacs_libregnum_image_set_grid);
+  defsubr (&Scmacs_libregnum_image_set_cursor);
+  defsubr (&Scmacs_libregnum_image_set_marquee);
   defsubr (&Scmacs_libregnum_set_animated);
   defsubr (&Scmacs_libregnum_animated_p);
   defsubr (&Scmacs_libregnum_tree_nodes);
