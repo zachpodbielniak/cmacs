@@ -168,6 +168,40 @@ drivable from Elisp via ~(gi-require "Libregnum")~ and from any GI language:
 | ~cmacs-lrgfont.c~   | the glyph blit — rasterise through the font's ~cr_scaled_font~ → alpha-mask RGBA → ~LrgGlyphAtlas~ → tinted textured quad |
 | ~cmacs-lrgwindow.c~ | the ~LrgFrameSurface~ / ~GrlWindow~ lifecycle for a frame |
 
+*** Input parity with pgtk
+
+The event loop (~lrg_read_socket~) translates raylib/GLFW input into the
+same Emacs events pgtk produces:
+
+- *Modifiers are event-carried and authoritative.*  graylib chains onto
+  GLFW's key/button/focus callbacks and records the modifier bitmask GLFW
+  computes from the window system's own tracking (xkb state on Wayland) —
+  the same source GTK reads.  Polled key state latches: when a compositor
+  global shortcut (GNOME's ~Super+Shift+S~ screenshot) swallows a
+  modifier's key-release, raylib's cache reports Super held forever and
+  every following key gets a phantom ~s-~ prefix.  The event-carried mask
+  self-corrects on the very next key or button event, focus change or not.
+  A polled fallback (with focus-stale filtering, driven by graylib's
+  focus-generation counter so a loss+regain between two polls still
+  counts) covers the pre-first-event window and non-GLFW platforms.
+- *Shift parity*: special keys carry ~S-~ (~S-<tab>~, ~S-<f5>~,
+  ~C-S-a~) exactly like pgtk; plain characters never do (case is already
+  encoded in the char).
+- *Real timestamps* (monotonic ms) on every event — double/triple-click
+  counting works; with the old constant-0 stamps every same-spot click
+  looked "within ~double-click-time~".
+- *Full button set*: side/extra mouse buttons map to ~mouse-8~/~mouse-9~,
+  and horizontal wheel/trackpad tilt emits ~HORIZ_WHEEL_EVENT~ with
+  pgtk's direction convention (vertical already matched).
+- *Mouse motion during ~track-mouse~* (drag tools) — see the
+  ~mouse_moved~ / ~lrg_mouse_position~ contract note in the source.
+
+~M-x cmacs-lrgterm-input-state~ echoes the live tracker (event mods,
+serial, focus generation, effective Emacs mods, clock) for diagnosis;
+~cmacs-lrgterm--mods-from-event-bits~ exposes the pure translation for
+tests (~test/cmacs/cmacs-lrgterm-tests.el~, graylib's
+~tests/test-input-event-mods.c~).
+
 *** Text rendering (the font bridge)
 
 lrg reuses Emacs's stock Cairo FreeType/HarfBuzz font drivers (~ftcrfont~ /

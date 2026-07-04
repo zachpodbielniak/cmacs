@@ -1748,18 +1748,39 @@ lrg_gamepad_tick (struct frame *f)
 }
 
 /* Modifiers latched "down" across a focus change and therefore ignored
-   until physically released.  A compositor global shortcut (e.g. GNOME's
-   Super+Shift+S screenshot) grabs the chord and the lrg window loses focus
-   for the duration; the modifier's key-release is delivered to the grab,
-   not to us, so raylib's cached key state stays down.  Without this, every
-   subsequent key (and mouse click) would carry a phantom s-/C-/M- prefix
-   ("s-j is undefined") until the modifier happened to be pressed again.
-   Set from the focus-transition block in lrg_read_socket.  */
+   until physically released -- the FALLBACK path only (see below).  */
 static int lrg_stale_mods;
+
+/* Event timestamp in milliseconds (monotonic).  pgtk passes GDK event
+   times; Emacs uses them for double/triple-click counting, so a constant
+   0 makes every same-spot click "within double-click-time" no matter how
+   far apart the clicks really were.  */
+static Time
+lrg_now_ms (void)
+{
+  return (Time) (g_get_monotonic_time () / 1000);
+}
+
+/* Translate GLFW event-modifier bits (GrlEventMods) to Emacs bits.
+   Non-static so the introspection DEFUN and tests can exercise it.  */
+int
+cmacs_lrg_mods_from_event_bits (unsigned int bits)
+{
+  int m = 0;
+  if (bits & GRL_EVENT_MOD_SHIFT)
+    m |= shift_modifier;
+  if (bits & GRL_EVENT_MOD_CONTROL)
+    m |= ctrl_modifier;
+  if (bits & GRL_EVENT_MOD_ALT)
+    m |= meta_modifier;
+  if (bits & GRL_EVENT_MOD_SUPER)
+    m |= super_modifier;
+  return m;
+}
 
 /* Raw Emacs modifier bits from raylib's cached key state.  May report a
    modifier still down whose release was missed during a focus grab -- see
-   lrg_stale_mods, which filters those out in lrg_event_modifiers.  */
+   lrg_stale_mods, which filters those out of the fallback path.  */
 static int
 lrg_raw_modifiers (void)
 {
@@ -1773,18 +1794,37 @@ lrg_raw_modifiers (void)
   if (grl_input_is_key_down (GRL_KEY_LEFT_SUPER)
       || grl_input_is_key_down (GRL_KEY_RIGHT_SUPER))
     m |= super_modifier;
+  if (grl_input_is_key_down (GRL_KEY_LEFT_SHIFT)
+      || grl_input_is_key_down (GRL_KEY_RIGHT_SHIFT))
+    m |= shift_modifier;
   return m;
 }
 
-/* Current Emacs modifier bits, with focus-latched (stale) modifiers
-   filtered out.  A stale modifier self-clears once raylib reports it
-   released (it drops out of the raw mask), so a fresh press counts again.  */
+/* Current Emacs modifier bits.
+
+   Primary source: EVENT-CARRIED modifiers (grl_input_get_event_mods) --
+   the bitmask GLFW passes with every key/button callback, computed from
+   the window system's own modifier tracking (xkb state on Wayland).
+   This is what GTK/pgtk reads, and it is authoritative: when a
+   compositor global shortcut (e.g. GNOME's Super+Shift+S screenshot)
+   swallows a modifier's key-release, raylib's POLLED key cache latches
+   that modifier "down" forever, but the next event's carried mask
+   reflects the real state and self-corrects -- with or without a focus
+   change, which the old focus-transition heuristic required.
+
+   Fallback (no GLFW event recorded yet, or a non-GLFW platform): the
+   polled cache, filtered through lrg_stale_mods (marked on focus
+   changes; a stale bit self-clears when raylib reports the key up).  */
 static int
 lrg_event_modifiers (void)
 {
-  int raw = lrg_raw_modifiers ();
-  lrg_stale_mods &= raw;          /* a released modifier is no longer stale */
-  return raw & ~lrg_stale_mods;
+  if (grl_input_get_event_mods_serial () > 0)
+    return cmacs_lrg_mods_from_event_bits (grl_input_get_event_mods ());
+  {
+    int raw = lrg_raw_modifiers ();
+    lrg_stale_mods &= raw;        /* a released modifier is no longer stale */
+    return raw & ~lrg_stale_mods;
+  }
 }
 
 /* True if a control or meta modifier is currently held (suppresses the
@@ -1818,7 +1858,7 @@ lrg_store_char (struct frame *f, struct input_event *hold_quit, int cp,
                       : MULTIBYTE_CHAR_KEYSTROKE_EVENT);
   ie.code = cp;
   ie.modifiers = modifiers;
-  ie.timestamp = 0;
+  ie.timestamp = lrg_now_ms ();
   return lrg_store (f, hold_quit, &ie);
 }
 
@@ -1882,7 +1922,7 @@ lrg_emit_special_key (struct frame *f, struct input_event *hold_quit,
       ie.kind = NON_ASCII_KEYSTROKE_EVENT;
       ie.code = keysym;
       ie.modifiers = mods;
-      ie.timestamp = 0;
+      ie.timestamp = lrg_now_ms ();
       return lrg_store (f, hold_quit, &ie);
     }
   if (k >= GRL_KEY_SPACE && k <= GRL_KEY_GRAVE
@@ -2004,7 +2044,8 @@ lrg_drain_keys (struct frame *f, struct input_event *hold_quit, int mods)
             fprintf (stderr, "[lrgkey] key=%d -> char %d (%c)\n",
                      (int) k, cp, (cp >= 32 && cp < 127) ? cp : '?');
           count += lrg_store_char (f, hold_quit, cp,
-                                   km & ~(ctrl_modifier | meta_modifier));
+                                   km & ~(ctrl_modifier | meta_modifier
+                                          | shift_modifier));
           lrg_keyq_wait = 0;
           i++;
         }
@@ -2040,7 +2081,8 @@ lrg_drain_keys (struct frame *f, struct input_event *hold_quit, int mods)
           fprintf (stderr, "[lrgkey] trailing char %d (%c)\n",
                    cp, (cp >= 32 && cp < 127) ? cp : '?');
         count += lrg_store_char (f, hold_quit, cp,
-                                 mods & ~(ctrl_modifier | meta_modifier));
+                                 mods & ~(ctrl_modifier | meta_modifier
+                                          | shift_modifier));
       }
 
   return count;
@@ -2147,9 +2189,16 @@ lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
         }
     }
 
+  /* Arm event-carried modifier tracking (idempotent; re-arms after any
+     backend callback re-install).  See lrg_event_modifiers.  */
+  grl_input_event_mods_init ();
+
   /* Focus changes (cursor solid vs hollow).  */
   {
+    static guint last_focus_gen;
     bool focused = grl_window_is_focused (win);
+    guint gen = grl_input_get_focus_generation ();
+
     if (focused != (dpyinfo->pgtk.x_focus_frame != NULL))
       {
         struct input_event ie;
@@ -2166,14 +2215,21 @@ lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
             dpyinfo->pgtk.highlight_frame = NULL;
             ie.kind = FOCUS_OUT_EVENT;
           }
+        ie.timestamp = lrg_now_ms ();
         count += lrg_store (f, hold_quit, &ie);
+      }
 
-        /* A focus change can straddle a compositor global-shortcut grab
-           (e.g. GNOME Super+Shift+S) that swallows a modifier's key
-           release, latching it down in raylib's cached state.  Mark every
-           currently-held modifier stale so it is ignored until physically
-           released -- otherwise every following key gets a phantom
-           s-/C-/M- prefix.  Stale bits self-clear on release.  */
+    /* Any focus change -- INCLUDING a loss + regain that both happened
+       between two polls (only visible as a generation bump, the level
+       compare above sees nothing) -- can straddle a compositor
+       global-shortcut grab (e.g. GNOME Super+Shift+S) that swallows a
+       modifier's key release, latching it down in raylib's cached state.
+       Mark every currently-held modifier stale for the FALLBACK modifier
+       path; the primary event-carried path self-corrects regardless.
+       Stale bits self-clear on release.  */
+    if (gen != last_focus_gen)
+      {
+        last_focus_gen = gen;
         lrg_stale_mods |= lrg_raw_modifiers ();
       }
   }
@@ -2436,11 +2492,11 @@ lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
   /* Mouse buttons: press/release -> MOUSE_CLICK_EVENT (Emacs forms the
      click/drag).  raylib button order L,R,M -> Emacs 0,1,2.  */
   {
-    static const int rl_to_emacs_button[3] = { 0, 2, 1 };
+    static const int rl_to_emacs_button[5] = { 0, 2, 1, 7, 8 };
 #if defined(HAVE_CMACS_LIBREGNUM) || defined(HAVE_CMACS_GSURF_LRG)
     /* raylib L,R,M -> X11/GDK 1,3,2, which cmacs_libregnum_handle_button and
        cmacs_gsurf_lrg_handle_button expect (GSURF_BUTTON_* use the same 1/3/2). */
-    static const int rl_to_x11_button[3] = { 1, 3, 2 };
+    static const int rl_to_x11_button[5] = { 1, 3, 2, 8, 9 };
 #endif
     int b;
     int mx = grl_input_get_mouse_x ();
@@ -2449,7 +2505,9 @@ lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
     /* Ray-cast once to the frame pixel under the pointer (identity in 2D); a 3D
        miss = empty space, so no libregnum view and no text click there.  */
     bool on_panel = lrg_pick_xy (f, mx, my, &pfx, &pfy);
-    for (b = 0; b < 3; b++)
+    /* raylib buttons: 0 left, 1 right, 2 middle, 3 side (back),
+       4 extra (forward) -> Emacs mouse-1/3/2/8/9 like pgtk.  */
+    for (b = 0; b < 5; b++)
       {
         bool pressed = grl_input_is_mouse_button_pressed ((GrlMouseButton) b);
         bool released = grl_input_is_mouse_button_released ((GrlMouseButton) b);
@@ -2496,7 +2554,7 @@ lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
           ie.modifiers = mods | (pressed ? down_modifier : up_modifier);
           XSETINT (ie.x, pfx);
           XSETINT (ie.y, pfy);
-          ie.timestamp = 0;
+          ie.timestamp = lrg_now_ms ();
           count += lrg_store (f, hold_quit, &ie);
         }
       }
@@ -2506,8 +2564,18 @@ lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
      otherwise a normal Emacs WHEEL_EVENT so buffers scroll under --lrg
      (the wheel was previously unhandled here entirely).  */
   {
-    float wheel = grl_input_get_mouse_wheel_move ();
-    if (wheel != 0.0f && grl_window_is_focused (win))
+    float wheel = 0.0f;
+    float hwheel = 0.0f;
+    {
+      GrlVector2 *wv = grl_input_get_mouse_wheel_move_v ();
+      if (wv != NULL)
+        {
+          hwheel = wv->x;
+          wheel = wv->y;
+          grl_vector2_free (wv);
+        }
+    }
+    if ((wheel != 0.0f || hwheel != 0.0f) && grl_window_is_focused (win))
       {
         int mx = grl_input_get_mouse_x ();
         int my = grl_input_get_mouse_y ();
@@ -2519,7 +2587,8 @@ lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
 
         /* Ctrl+wheel dollies the 3D scene camera (unless over a libregnum view,
            which keeps its own wheel-zoom).  Eased via the recompose tick. */
-        if (s3 != NULL && (mods & ctrl_modifier) != 0 && !over_view)
+        if (s3 != NULL && (mods & ctrl_modifier) != 0 && !over_view
+            && wheel != 0.0f)
           {
             LrgSpatialCamera *cam = lrg_3d_surface_get_camera (s3);
             if (cam != NULL)
@@ -2533,15 +2602,17 @@ lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
            wheel-up is positive, so negate to match the zoom direction.  Picked
            coords so a view on a 3D panel still zooms. */
         if (!consumed && on_panel)
-          consumed = cmacs_libregnum_handle_scroll (f, 0.0, -(double) wheel,
+          consumed = cmacs_libregnum_handle_scroll (f, -(double) hwheel,
+                                                    -(double) wheel,
                                                     pfx, pfy);
 #endif
 #ifdef HAVE_CMACS_GSURF_LRG
         if (!consumed && on_panel)
-          consumed = cmacs_gsurf_lrg_handle_scroll (f, 0.0, -(double) wheel,
+          consumed = cmacs_gsurf_lrg_handle_scroll (f, -(double) hwheel,
+                                                    -(double) wheel,
                                                     pfx, pfy);
 #endif
-        if (!consumed)
+        if (!consumed && wheel != 0.0f)
           {
             struct input_event ie;
             EVENT_INIT (ie);
@@ -2551,7 +2622,23 @@ lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
             XSETINT (ie.y, on_panel ? pfy : my);
             XSETFRAME (ie.frame_or_window, f);
             ie.arg = Qnil;
-            ie.timestamp = 0;
+            ie.timestamp = lrg_now_ms ();
+            count += lrg_store (f, hold_quit, &ie);
+          }
+        /* Horizontal wheel / trackpad tilt -> HORIZ_WHEEL_EVENT like
+           pgtk (GDK positive-x is up_modifier; GLFW's sign is inverted
+           vs GDK, mirroring the vertical axis above).  */
+        if (!consumed && hwheel != 0.0f)
+          {
+            struct input_event ie;
+            EVENT_INIT (ie);
+            ie.kind = HORIZ_WHEEL_EVENT;
+            ie.modifiers = mods | (hwheel > 0 ? down_modifier : up_modifier);
+            XSETINT (ie.x, on_panel ? pfx : mx);
+            XSETINT (ie.y, on_panel ? pfy : my);
+            XSETFRAME (ie.frame_or_window, f);
+            ie.arg = Qnil;
+            ie.timestamp = lrg_now_ms ();
             count += lrg_store (f, hold_quit, &ie);
           }
       }
@@ -2577,7 +2664,7 @@ lrg_mouse_position (struct frame **fp, int insist, Lisp_Object *bar_window,
   (void) insist;
   *bar_window = Qnil;
   *part = scroll_bar_above_handle;
-  *timestamp = 0;
+  *timestamp = lrg_now_ms ();
 
   if (f != NULL && lrg_window_of_frame (f) != NULL)
     {
@@ -3353,6 +3440,42 @@ Returns TEXT.  Used by the lrg gui-backend-set-selection method for CLIPBOARD.  
   return text;
 }
 
+DEFUN ("cmacs-lrgterm-input-state", Fcmacs_lrgterm_input_state,
+       Scmacs_lrgterm_input_state, 0, 0, 0,
+       doc: /* Diagnostics for the lrg input layer, as a plist.
+:event-mods   -- GrlEventMods bits of the most recent GLFW input event
+:serial       -- how many events have recorded their modifiers (0 = none
+                 yet; the modifier code then falls back to polled state)
+:focus-gen    -- window focus-change counter (bumps on gain AND loss)
+:emacs-mods   -- the Emacs modifier bits currently in effect
+:timestamp-ms -- the monotonic clock stamped onto input events
+Works headless (all zeros before any window/input exists).  */)
+  (void)
+{
+  return listn (10, QCevent_mods,
+               make_fixnum ((EMACS_INT) grl_input_get_event_mods ()),
+               QCserial,
+               make_fixnum ((EMACS_INT) grl_input_get_event_mods_serial ()),
+               QCfocus_gen,
+               make_fixnum ((EMACS_INT) grl_input_get_focus_generation ()),
+               QCemacs_mods,
+               make_fixnum ((EMACS_INT) lrg_event_modifiers ()),
+               QCtimestamp_ms,
+               make_fixnum ((EMACS_INT) lrg_now_ms ()));
+}
+
+DEFUN ("cmacs-lrgterm--mods-from-event-bits", Fcmacs_lrgterm_mods_from_event_bits,
+       Scmacs_lrgterm_mods_from_event_bits, 1, 1, 0,
+       doc: /* Translate GLFW event-modifier BITS to Emacs modifier bits.
+Bit 1 shift, 2 control, 4 alt, 8 super (GrlEventMods) -> the corresponding
+shift-/ctrl-/meta-/super-modifier Emacs bits.  Pure; exposed for tests.  */)
+  (Lisp_Object bits)
+{
+  CHECK_FIXNUM (bits);
+  return make_fixnum (cmacs_lrg_mods_from_event_bits
+                        ((unsigned int) XFIXNUM (bits)));
+}
+
 DEFUN ("lrg-get-clipboard", Flrg_get_clipboard, Slrg_get_clipboard, 0, 0, 0,
        doc: /* Return the lrg window's system clipboard text as a string, or nil.
 Used by the lrg gui-backend-get-selection method for CLIPBOARD.  */)
@@ -4106,6 +4229,13 @@ syms_of_cmacs_lrgterm (void)
   defsubr (&Slrg_display_pixel_size);
   defsubr (&Slrg_set_clipboard);
   defsubr (&Slrg_get_clipboard);
+  defsubr (&Scmacs_lrgterm_input_state);
+  defsubr (&Scmacs_lrgterm_mods_from_event_bits);
+  DEFSYM (QCevent_mods, ":event-mods");
+  DEFSYM (QCserial, ":serial");
+  DEFSYM (QCfocus_gen, ":focus-gen");
+  DEFSYM (QCemacs_mods, ":emacs-mods");
+  DEFSYM (QCtimestamp_ms, ":timestamp-ms");
   defsubr (&Scmacs_lrg_3d_supported_p);
   defsubr (&Scmacs_lrg_render_mode);
   defsubr (&Scmacs_lrg_set_render_mode);

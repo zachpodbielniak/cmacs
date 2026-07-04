@@ -141,5 +141,57 @@ lrg window + GL context and blit their FBO into the buffer's window."
           (should (> (file-attribute-size (file-attributes png)) 4000)))
       (ignore-errors (delete-file png)))))
 
+;;;; Input layer (event-carried modifiers, timestamps) ------------------
+
+(ert-deftest cmacs-lrgterm-input-mods-translation ()
+  "GLFW event-modifier bits translate to the canonical Emacs bits.
+Shift is derived via C-a vs C-S-a (shift stays a BIT on control chars;
+on plain letters `event-convert-list' folds it into the case instead)."
+  (skip-unless (cmacs-lrgterm-tests--built-p))
+  (skip-unless (fboundp 'cmacs-lrgterm--mods-from-event-bits))
+  (let* ((shift (- (event-convert-list '(shift control ?a))
+                   (event-convert-list '(control ?a))))
+         (ctrl  (- (event-convert-list '(control ?\s)) ?\s))
+         (meta  (- (event-convert-list '(meta ?a)) ?a))
+         (super (- (event-convert-list '(super ?a)) ?a)))
+    ;; Single bits: 1 shift, 2 control, 4 alt(->meta), 8 super.
+    (should (= (cmacs-lrgterm--mods-from-event-bits 1) shift))
+    (should (= (cmacs-lrgterm--mods-from-event-bits 2) ctrl))
+    (should (= (cmacs-lrgterm--mods-from-event-bits 4) meta))
+    (should (= (cmacs-lrgterm--mods-from-event-bits 8) super))
+    ;; Combinations compose by OR; unknown high bits are ignored.
+    (should (= (cmacs-lrgterm--mods-from-event-bits 15)
+               (logior shift ctrl meta super)))
+    (should (= (cmacs-lrgterm--mods-from-event-bits (logior 8 2))
+               (logior super ctrl)))
+    (should (= (cmacs-lrgterm--mods-from-event-bits #x30) 0))
+    (should (= (cmacs-lrgterm--mods-from-event-bits 0) 0))))
+
+(ert-deftest cmacs-lrgterm-input-state-shape ()
+  "The input diagnostics plist has the documented keys, all fixnums.
+Headless (no lrg window): event mods/serial/focus-gen are 0, so the
+modifier code is on its polled-state fallback."
+  (skip-unless (cmacs-lrgterm-tests--built-p))
+  (skip-unless (fboundp 'cmacs-lrgterm-input-state))
+  (let ((st (cmacs-lrgterm-input-state)))
+    (dolist (key '(:event-mods :serial :focus-gen :emacs-mods :timestamp-ms))
+      (should (integerp (plist-get st key)))
+      (should (>= (plist-get st key) 0)))
+    (unless (cmacs-lrgterm-tests--live-p)
+      (should (zerop (plist-get st :serial)))
+      (should (zerop (plist-get st :event-mods))))))
+
+(ert-deftest cmacs-lrgterm-input-timestamp-monotonic ()
+  "Event timestamps come from a monotonic ms clock (never the constant 0
+that broke double-click counting: every same-spot click looked to be
+within double-click-time regardless of the real interval)."
+  (skip-unless (cmacs-lrgterm-tests--built-p))
+  (skip-unless (fboundp 'cmacs-lrgterm-input-state))
+  (let ((t1 (plist-get (cmacs-lrgterm-input-state) :timestamp-ms)))
+    (should (> t1 0))
+    (sleep-for 0.02)
+    (let ((t2 (plist-get (cmacs-lrgterm-input-state) :timestamp-ms)))
+      (should (> t2 t1)))))
+
 (provide 'cmacs-lrgterm-tests)
 ;;; cmacs-lrgterm-tests.el ends here

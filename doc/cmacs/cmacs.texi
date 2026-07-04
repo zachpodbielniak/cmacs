@@ -8303,6 +8303,24 @@ opens the lrg window in the @emph{current} process on demand, raising the
 existing lrg frame if there is one.  @var{mode} is @code{"2d"} (default),
 @code{"3d"} or @code{"3dvr"}.
 
+@section Input parity with pgtk
+
+The event loop translates raylib/GLFW input into the same events pgtk
+produces.  Modifiers are @emph{event-carried and authoritative}: graylib
+chains onto GLFW's key/button/focus callbacks and records the modifier
+mask GLFW computes from the window system's own tracking (xkb state on
+Wayland) --- the source GTK reads --- so a modifier release swallowed by a
+compositor global shortcut (GNOME's @kbd{Super+Shift+S} screenshot) can
+no longer latch a phantom @kbd{s-} prefix; the next input event
+self-corrects, focus change or not (a polled fallback with
+focus-generation staleness covers the pre-first-event window).  Special
+keys carry @kbd{S-} like pgtk (@kbd{S-<tab>}, @kbd{C-S-a}); events carry
+real monotonic timestamps (double/triple-click counting works);
+side/extra mouse buttons map to @kbd{mouse-8}/@kbd{mouse-9}; horizontal
+wheel emits @code{HORIZ_WHEEL_EVENT} with pgtk's direction convention.
+@code{M-x cmacs-lrgterm-input-state} echoes the live tracker for
+diagnosis.
+
 @section Architecture
 
 A strict four-layer stack; the backend calls only graylib / libregnum
