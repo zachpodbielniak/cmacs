@@ -78,6 +78,57 @@ the env var is the explicit override — see `cmacs_gowl_find_module`).
   `rm -f src/temacs && make -j$(nproc)`.
 - After Elisp in `lisp/cmacs/`: clean compiled caches — see *Stale Elisp cache* below.
 
+## Parallel work: git worktrees + incremental build
+
+To work on a big change while another agent/human keeps the main checkout, use a
+**git worktree** and copy the build artifacts in so the first build is **incremental
+(seconds–minutes), not a full ~20-minute rebuild**. A full build recompiles all deps
+(libregnum/graylib/raylib/…), native-compiles every `.eln`, and re-dumps — copying the
+existing objects/archives/`.eln`/pdump avoids all of it.
+
+The build is **in-tree** (`srcdir = .`) and the gcc `-MMD` `.d` files use **relative**
+dependency paths (portable across worktrees); only the Makefiles carry `abs_srcdir`/
+`abs_builddir`, which a re-`configure` fixes. Recipe (main tree clean + committed first):
+
+```bash
+# 1. worktree on a new branch off the current commit (sibling dir)
+git worktree add ../cmacs-wt -b my-feature
+
+cd ../cmacs-wt
+# 2. submodules must be initialised to commit into deps/* (libregnum, graylib, …)
+git submodule update --init --recursive
+
+# 3. overlay the main tree's files+artifacts, preserving mtimes, keeping git metadata.
+#    (rsync of tracked sources restores their original — older — mtimes so the copied
+#    objects stay newer; --exclude='.git' preserves the worktree's + submodules' git
+#    linkage.  On btrfs, the big dep build/ dirs can be `cp --reflink=auto` for speed.)
+rsync -aH --exclude='.git' /var/home/zach/source/projects/cmacs/ ./
+
+# 4. regenerate Makefiles/config.status for THIS worktree's abs paths (no object rebuild)
+./configure $(cd /var/home/zach/source/projects/cmacs && ./config.status --config | tr '\n' ' ')
+
+# 5. make every build output the newest thing in the tree, so the config.h/Makefile
+#    regen in step 4 doesn't trigger a mass rebuild; only files you edit recompile.
+find . \( -name '*.o' -o -name '*.a' -o -name '*.eln' -o -name '*.elc' \
+         -o -name '*.pdmp' \) -print0 | xargs -0 -r touch
+touch src/emacs src/temacs 2>/dev/null
+
+# 6. incremental build + smoke test — a second `make` should be a near no-op
+make -j"$(nproc)"
+src/emacs --version
+```
+
+**Two gotchas** (both handled above): (a) **mtime ordering** — a fresh `worktree add`/
+`submodule update` stamps sources at "now," making copied objects look stale → full
+rebuild; the source-mtime overlay (step 3) + touch-artifacts-newest (step 5) fix it,
+verified by a no-op `make`. (b) **absolute paths** — `config.status`/Makefiles embed the
+origin tree's `abs_srcdir`; step 4's re-`configure` re-points them (the relative `.d`
+files need no fixing).
+
+Cleanup when done: `git worktree remove ../cmacs-wt` (and delete the branch). The worktree
+shares the superproject `.git` object store, so its commits/branches are visible from the
+main tree — merge the feature branch there when finished.
+
 ## Subsystems
 
 C source `cmacs/<name>/`, Elisp `lisp/cmacs/`, tests `test/cmacs/`, docs
