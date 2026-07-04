@@ -87,7 +87,7 @@ Read on demand by `cmacs-gnuseye-secret'.  Keep it out of version control."
     cmacs-gnuseye-watch cmacs-gnuseye-news cmacs-gnuseye-country
     cmacs-gnuseye-search cmacs-gnuseye-stats cmacs-gnuseye-geofence
     cmacs-gnuseye-bookmarks cmacs-gnuseye-replay cmacs-gnuseye-intel
-    cmacs-gnuseye-track cmacs-gnuseye-markets)
+    cmacs-gnuseye-track cmacs-gnuseye-markets cmacs-gnuseye-overlay)
   "Interaction/intelligence feature files loaded when the globe opens.
 Distinct from `cmacs-gnuseye-layer-files' (data layers).  Each is required
 softly, so a file that does not exist yet is simply skipped."

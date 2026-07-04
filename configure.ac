@@ -1091,7 +1091,8 @@ if test "$with_cmacs_gnuseye" != "no"; then
   AC_DEFINE([HAVE_CMACS_GNUSEYE], 1, [CMacs gnuseye live planetary globe])
   CMACS_GNUSEYE_OBJ="cmacs-gnuseye-init.o cmacs-gnuseye-defuns.o \
     cmacs-gnuseye-geo.o cmacs-gnuseye-sgp4.o cmacs-gnuseye-http.o \
-    cmacs-gnuseye-globe.o"
+    cmacs-gnuseye-globe.o cmacs-gnuseye-overlay.o \
+    cmacs-gnuseye-overlay-render.o"
 fi
 if test "$with_cmacs_cad" != "no"; then
   if test "$with_cmacs_libregnum" = "no"; then

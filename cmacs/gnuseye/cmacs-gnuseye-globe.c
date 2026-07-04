@@ -29,6 +29,8 @@
 #include <math.h>
 #include <string.h>
 
+#include "cmacs-gnuseye-render-internal.h"
+
 #define GLOBE_TEX_W 2048
 #define GLOBE_TEX_H 1024
 
@@ -37,8 +39,10 @@
  * stay readable) and a cool tint.  Needs no per-frame uniforms beyond the
  * matrices raylib sets automatically -- sunDir is a constant -- so it is
  * built entirely here at globe-build time.  Uniform/attribute names match
- * raylib's auto-detected defaults (mvp/matModel/matNormal/texture0/...). */
-static const char *s_globe_vs =
+ * raylib's auto-detected defaults (mvp/matModel/matNormal/texture0/...).
+ * The vertex shader is exported (render-internal.h) -- the weather-overlay
+ * shells reuse it with their own alpha-preserving fragment shader. */
+const char *cmacs_gnuseye_globe_vs_src =
   "#version 330\n"
   "in vec3 vertexPosition;\n"
   "in vec2 vertexTexCoord;\n"
@@ -155,21 +159,29 @@ globe_state (CmacsLibregnumRenderCtx *r)
 #define GLOBE_WARP_W 640
 #define GLOBE_WARP_H 1280
 
-static GrlImage *
-warp_equirect_to_mesh (GrlImage *src)
+GrlImage *
+cmacs_gnuseye_warp_equirect_to_mesh (GrlImage *src, int out_w, int out_h)
 {
+  if (!src || out_w <= 0 || out_h <= 0) return NULL;
   int sw = grl_image_get_width (src), sh = grl_image_get_height (src);
   if (sw <= 0 || sh <= 0) return NULL;
-  g_autoptr (GrlColor) bg = grl_color_new (8, 22, 50, 255);
-  GrlImage *out = grl_image_new_color (GLOBE_WARP_W, GLOBE_WARP_H, bg);
-  if (!out) return NULL;
-  for (int oy = 0; oy < GLOBE_WARP_H; oy++)
+  /* Raw-pointer resample: grl_image_get_pixels converts SRC to RGBA8 in
+   * place and hands back the tight buffer.  The per-texel math is exactly
+   * the historical GObject-call version's (nearest neighbour, identical
+   * clamping), so the output bytes are unchanged -- only ~100x faster,
+   * which the animated weather overlays need. */
+  gsize ssz = 0;
+  guint8 *spx = grl_image_get_pixels (src, &ssz);
+  if (!spx || ssz < (gsize) sw * (gsize) sh * 4) return NULL;
+  guint8 *out = g_malloc ((gsize) out_w * (gsize) out_h * 4);
+  for (int oy = 0; oy < out_h; oy++)
     {
-      double theta = ((double) oy + 0.5) / GLOBE_WARP_H * (2.0 * M_PI);
+      double theta = ((double) oy + 0.5) / out_h * (2.0 * M_PI);
       double st = sin (theta), ct = cos (theta);
-      for (int ox = 0; ox < GLOBE_WARP_W; ox++)
+      guint8 *orow = out + (gsize) oy * out_w * 4;
+      for (int ox = 0; ox < out_w; ox++)
         {
-          double phi = ((double) ox + 0.5) / GLOBE_WARP_W * M_PI;
+          double phi = ((double) ox + 0.5) / out_w * M_PI;
           double sp = sin (phi), cp = cos (phi);
           double px = ct * sp, py = st * sp, pz = cp;   /* mesh unit pos */
           /* Our marker frame winds longitude toward -Z (east right on a
@@ -185,20 +197,74 @@ warp_equirect_to_mesh (GrlImage *src)
           int sx = (int) (u * sw), sy = (int) (v * sh);
           if (sx < 0) sx = 0; else if (sx >= sw) sx = sw - 1;
           if (sy < 0) sy = 0; else if (sy >= sh) sy = sh - 1;
-          g_autoptr (GrlColor) col = grl_image_get_pixel (src, sx, sy);
-          if (col) grl_image_draw_pixel (out, ox, oy, col);
+          memcpy (orow + (gsize) ox * 4,
+                  spx + ((gsize) sy * sw + sx) * 4, 4);
         }
     }
-  return out;
+  GrlImage *img = grl_image_new_from_pixels
+    (out_w, out_h, GRL_PIXELFORMAT_UNCOMPRESSED_R8G8B8A8, out);
+  g_free (out);
+  return img;
+}
+
+static GrlImage *
+warp_equirect_to_mesh (GrlImage *src)
+{
+  return cmacs_gnuseye_warp_equirect_to_mesh (src, GLOBE_WARP_W, GLOBE_WARP_H);
+}
+
+/* Decode ANY gdk-pixbuf-readable image file (JPEG world imagery, PNG,
+ * GIF, ...) into an RGBA8 GrlImage -- the bundled raylib has no JPEG
+ * support, and the weather overlays feed on JPEG map tiles. */
+GrlImage *
+cmacs_gnuseye_image_load_any (const char *path)
+{
+  if (!path || !*path) return NULL;
+  g_autoptr (GError) err = NULL;
+  GdkPixbuf *pb = gdk_pixbuf_new_from_file (path, &err);
+  if (!pb)
+    {
+      g_warning ("gnuseye: cannot decode %s: %s", path,
+                 err ? err->message : "?");
+      return NULL;
+    }
+  if (!gdk_pixbuf_get_has_alpha (pb))
+    {
+      GdkPixbuf *a = gdk_pixbuf_add_alpha (pb, FALSE, 0, 0, 0);
+      g_object_unref (pb);
+      if (!a) return NULL;
+      pb = a;
+    }
+  int w = gdk_pixbuf_get_width (pb), h = gdk_pixbuf_get_height (pb);
+  int rs = gdk_pixbuf_get_rowstride (pb);
+  const guint8 *px = gdk_pixbuf_read_pixels (pb);
+  GrlImage *img = NULL;
+  if (w > 0 && h > 0 && px)
+    {
+      /* Repack the pixbuf's padded rows into the tight RGBA8 buffer
+       * grl_image_new_from_pixels expects. */
+      guint8 *tight = g_malloc ((gsize) w * (gsize) h * 4);
+      for (int y = 0; y < h; y++)
+        memcpy (tight + (gsize) y * w * 4, px + (gsize) y * rs,
+                (gsize) w * 4);
+      img = grl_image_new_from_pixels
+        (w, h, GRL_PIXELFORMAT_UNCOMPRESSED_R8G8B8A8, tight);
+      g_free (tight);
+    }
+  g_object_unref (pb);
+  return img;
 }
 
 /* Load an equirectangular Earth image from PATH and warp it for the mesh.
- * Returns NULL on failure (caller falls back to the procedural globe). */
+ * raylib decodes PNG/BMP/GIF; anything else (notably JPEG satellite
+ * imagery) falls back to the gdk-pixbuf decoder.  Returns NULL on failure
+ * (caller falls back to the procedural globe). */
 static GrlImage *
 load_earth_texture (const char *path)
 {
   if (!path || !*path) return NULL;
   g_autoptr (GrlImage) src = grl_image_new_from_file (path);
+  if (!src) src = cmacs_gnuseye_image_load_any (path);
   if (!src) return NULL;
   return warp_equirect_to_mesh (src);
 }
@@ -317,7 +383,8 @@ build_globe (CmacsLibregnumRenderCtx *r, const char *base_texture_path,
         {
           GrlMaterial *mat = grl_material_new_default ();
           grl_material_set_texture (mat, GRL_MATERIAL_MAP_ALBEDO, g->tex);
-          g->shader = grl_shader_new_from_memory (s_globe_vs, s_globe_fs, NULL);
+          g->shader = grl_shader_new_from_memory (cmacs_gnuseye_globe_vs_src,
+                                                  s_globe_fs, NULL);
           if (g->shader)
             {
               grl_material_set_shader (mat, g->shader);
@@ -332,6 +399,11 @@ build_globe (CmacsLibregnumRenderCtx *r, const char *base_texture_path,
 
   g_object_set_data_full (G_OBJECT (model), "gnuseye-globe", g,
                           gnuseye_globe_free);
+  /* Weather-overlay shells ride the OLD background model (their channel
+   * state is its qdata) -- drop their render-slot models first so nothing
+   * keeps drawing textures whose channels die with the model swap below.
+   * The Elisp raster layers re-create their channels on the next tick. */
+  cmacs_libregnum_render_ctx_clear_overlay_models (r);
   cmacs_libregnum_render_ctx_set_background_model (r, model);
   cmacs_libregnum_render_ctx_set_background_spin (r, 0.0);
   /* The sphere occludes far-side labels/flags; the flat map does not. */
@@ -409,9 +481,31 @@ cmacs_gnuseye_globe_set_base_texture (CmacsLibregnumRenderCtx *r,
   g->tex = grl_texture_new_from_image (img);
   if (g->tex)
     grl_model_set_texture (m, 0, GRL_MATERIAL_MAP_ALBEDO, g->tex);
+  /* Weather overlays composite over a pristine copy of the albedo; give
+   * them the new base so radar/clouds re-drape over today's imagery. */
+  cmacs_gnuseye_overlay_base_changed (r);
   return TRUE;
 }
 
+/* Borrowed access to the CPU master + GPU albedo for the weather
+ * overlays (render-internal.h). */
+gboolean
+cmacs_gnuseye_globe_master (CmacsLibregnumRenderCtx *r,
+                            GrlImage **img, GrlTexture **tex)
+{
+  GnuseyeGlobe *g = globe_state (r);
+  if (!g || !g->img || !g->tex) return FALSE;
+  if (img) *img = g->img;
+  if (tex) *tex = g->tex;
+  return TRUE;
+}
+
+/* DEPRECATED: superseded by the weather-overlay channels
+ * (cmacs-gnuseye-overlay-render.c).  This blit maps lat/lon with a plain
+ * equirect formula that ignores the mesh-UV warp the base texture went
+ * through, so anything pushed here MISREGISTERS against the markers, and
+ * it destructively overwrites the albedo.  Kept only until the last
+ * caller is confirmed gone; do not wire a DEFUN to it. */
 gboolean
 cmacs_gnuseye_globe_update_region (CmacsLibregnumRenderCtx *r,
                                    const unsigned char *rgba, int w, int h,
@@ -454,11 +548,19 @@ cmacs_gnuseye_globe_get_spin (CmacsLibregnumRenderCtx *r)
 /* ── Day/night terminator (dynamic sun direction) ───────────────────── */
 
 void
+cmacs_gnuseye_get_sun_dir (float out[3])
+{
+  out[0] = s_sun_dir[0]; out[1] = s_sun_dir[1]; out[2] = s_sun_dir[2];
+}
+
+void
 cmacs_gnuseye_set_sun_direction (CmacsLibregnumRenderCtx *r,
                                  double x, double y, double z)
 {
   s_sun_dir[0] = (float) x; s_sun_dir[1] = (float) y;
   s_sun_dir[2] = (float) z;
+  /* The weather-overlay shells carry the same terminator. */
+  cmacs_gnuseye_overlay_update_sun (r, (float) x, (float) y, (float) z);
   GnuseyeGlobe *g = globe_state (r);
   if (!g || !g->shader || g->sun_loc < 0) return;
   /* Runs on the main thread, where the shared raylib GL context is current
@@ -722,6 +824,48 @@ cmacs_gnuseye_add_marker (CmacsLibregnumRenderCtx *r, int kind,
     case CMACS_GNUSEYE_MARKER_CAMERA:
       add_box (r, P, right, up, fwd, rx,ry,rz, 0,0,0,        0.4*s,0.3*s,0.5*s, cr,cg,cb,ca);
       add_box (r, P, right, up, fwd, rx,ry,rz, 0,0,0.35*s,   0.18*s,0.18*s,0.2*s, 30,30,40,ca);
+      break;
+    case CMACS_GNUSEYE_MARKER_STORM:
+      /* Tropical cyclone: white eye + translucent flattened disc + three
+       * tapered spiral arms of box segments.  Spiral chirality follows the
+       * hemisphere (counterclockwise seen from above in the north,
+       * clockwise in the south -- real cyclonic rotation). */
+      {
+        double hemi = (lat >= 0.0) ? 1.0 : -1.0;
+        add_sphere (r, P, 0.20*s, 255, 255, 255, ca);
+        add_box (r, P, right, up, fwd, rx, ry, rz,
+                 0, 0.02*s, 0, 1.55*s, 0.045*s, 1.55*s,
+                 cr, cg, cb, (guint8) (ca * 0.35));
+        for (int arm = 0; arm < 3; arm++)
+          for (int seg = 0; seg < 4; seg++)
+            {
+              double t = seg / 3.0;
+              double psi = hemi * (0.55 + 2.05 * t)
+                           + arm * (2.0 * M_PI / 3.0);
+              double rad = s * (0.32 + 0.60 * t);
+              double cpsi = cos (psi), spsi = sin (psi);
+              /* Rotate the tangent basis about `up' so the segment lies
+               * along the local spiral tangent. */
+              double a = psi + hemi * 1.05;
+              double casn = cos (a), sasn = sin (a);
+              double right2[3], fwd2[3];
+              for (int i = 0; i < 3; i++)
+                {
+                  right2[i] = casn * right[i] + sasn * fwd[i];
+                  fwd2[i]   = -sasn * right[i] + casn * fwd[i];
+                }
+              float rx2, ry2, rz2;
+              frame_euler (up, fwd2, right2, &rx2, &ry2, &rz2);
+              double off[3];
+              for (int i = 0; i < 3; i++)
+                off[i] = P[i] + rad * (cpsi * right[i] + spsi * fwd[i])
+                         + 0.05*s * up[i];
+              double len = s * (0.34 - 0.06 * seg);
+              double wid = s * (0.13 - 0.015 * seg);
+              add_box (r, off, right2, up, fwd2, rx2, ry2, rz2,
+                       0, 0, 0, wid, 0.05*s, len, cr, cg, cb, ca);
+            }
+      }
       break;
     case CMACS_GNUSEYE_MARKER_CITY:
     default:
@@ -1059,7 +1203,7 @@ cmacs_gnuseye_set_body (CmacsLibregnumRenderCtx *r, const char *key,
   {
     gboolean is_sun = strstr (key, "sun") != NULL;
     GrlShader *sh = grl_shader_new_from_memory
-      (s_globe_vs, is_sun ? s_body_fs_unlit : s_globe_fs, NULL);
+      (cmacs_gnuseye_globe_vs_src, is_sun ? s_body_fs_unlit : s_globe_fs, NULL);
     if (sh)
       {
         grl_material_set_shader (mat, sh);

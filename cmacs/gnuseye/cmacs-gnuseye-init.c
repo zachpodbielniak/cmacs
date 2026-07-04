@@ -20,6 +20,7 @@ syms_of_cmacs_gnuseye (void)
   syms_of_cmacs_gnuseye_geo ();
   syms_of_cmacs_gnuseye_sgp4 ();
   syms_of_cmacs_gnuseye_http ();
+  syms_of_cmacs_gnuseye_overlay ();
 }
 
 void

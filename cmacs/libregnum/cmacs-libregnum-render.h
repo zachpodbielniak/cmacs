@@ -91,6 +91,31 @@ extern void  cmacs_libregnum_render_ctx_body_model_add
 extern void  cmacs_libregnum_render_ctx_clear_body_models
                               (CmacsLibregnumRenderCtx *r);
 
+/* ── Translucent overlay shells ───────────────────────────────────
+ * Keyed alpha-blended models draped concentrically over the background
+ * globe (gnuseye weather: radar, clouds).  Drawn after the background +
+ * body models and BEFORE the polygon models, sorted ascending by
+ * SORT_KEY (shell radius) so higher shells composite over lower, with
+ * depth WRITES disabled -- later passes (alert zones, coastlines,
+ * markers, labels) depth-test against the base globe only and always
+ * read on top.  They rotate with the background spin so a draped
+ * texture stays glued to the globe's geography.  `set' takes ownership
+ * of MODEL (a GrlModel*, void* to keep this header raylib-free); NULL
+ * removes KEY.  `get' returns the model borrowed. */
+extern void  cmacs_libregnum_render_ctx_overlay_model_set
+                              (CmacsLibregnumRenderCtx *r, const gchar *key,
+                               gpointer model, double sort_key);
+extern gpointer cmacs_libregnum_render_ctx_overlay_model_get
+                              (CmacsLibregnumRenderCtx *r, const gchar *key);
+extern void  cmacs_libregnum_render_ctx_overlay_set_alpha
+                              (CmacsLibregnumRenderCtx *r, const gchar *key,
+                               double alpha);
+extern void  cmacs_libregnum_render_ctx_overlay_set_enabled
+                              (CmacsLibregnumRenderCtx *r, const gchar *key,
+                               gboolean enabled);
+extern void  cmacs_libregnum_render_ctx_clear_overlay_models
+                              (CmacsLibregnumRenderCtx *r);
+
 /* Persistent static drawables (e.g. a coastline overlay): drawn every frame
  * after the background model, NOT cleared by clear_drawables.  add transfers
  * ownership of DRAWABLE (an LrgDrawable*, void* to keep the header clean). */

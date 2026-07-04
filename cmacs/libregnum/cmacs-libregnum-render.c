@@ -268,6 +268,25 @@ body_model_free (gpointer p)
   g_free (b);
 }
 
+/* A translucent overlay shell (gnuseye weather: radar/cloud drapes). */
+typedef struct
+{
+  gchar    *key;
+  GrlModel *model;      /* owned */
+  gfloat    alpha;      /* 0..1, applied via the draw tint */
+  gboolean  enabled;
+  gfloat    sort_key;   /* shell radius scale; ascending draw order */
+} CmacsOverlayModel;
+
+static void
+overlay_model_free (gpointer p)
+{
+  CmacsOverlayModel *o = p;
+  g_free (o->key);
+  g_clear_object (&o->model);
+  g_free (o);
+}
+
 struct CmacsLibregnumRenderCtx
 {
   LrgRenderer    *renderer;
@@ -333,6 +352,12 @@ struct CmacsLibregnumRenderCtx
    * gnuseye celestial bodies: textured planet spheres).  Keyed BodyModel
    * entries, drawn right after the background model.  Owned. */
   GPtrArray        *body_models;
+
+  /* Translucent overlay shells (gnuseye weather: radar/cloud drapes).
+   * Keyed CmacsOverlayModel entries drawn after the body models, BEFORE
+   * the polygon models, alpha-blended with depth writes DISABLED (see the
+   * draw block).  Lazily created; owned. */
+  GPtrArray        *overlay_models;
 
   /* Filled translucent polygon models (GrlModel*) draped on the globe:
    * `polygon_models' is per-tick (alert zones), `static_polygon_models' is
@@ -483,6 +508,7 @@ cmacs_libregnum_render_ctx_free (CmacsLibregnumRenderCtx *r)
   if (r->static_polygon_models) g_ptr_array_unref (r->static_polygon_models);
   if (r->static_drawables) g_ptr_array_unref (r->static_drawables);
   if (r->body_models) g_ptr_array_unref (r->body_models);
+  if (r->overlay_models) g_ptr_array_unref (r->overlay_models);
   if (r->map_labels) g_array_free (r->map_labels, TRUE);
   if (r->billboards) g_array_free (r->billboards, TRUE);
   g_clear_object (&r->camera);
@@ -634,6 +660,103 @@ cmacs_libregnum_render_ctx_clear_body_models (CmacsLibregnumRenderCtx *r)
 {
   if (r && r->body_models)
     g_ptr_array_set_size (r->body_models, 0);
+}
+
+/* ── Translucent overlay shells (gnuseye weather drapes) ────────────── */
+
+static CmacsOverlayModel *
+ctx_find_overlay (CmacsLibregnumRenderCtx *r, const gchar *key)
+{
+  if (!r || !r->overlay_models || !key) return NULL;
+  for (guint i = 0; i < r->overlay_models->len; i++)
+    {
+      CmacsOverlayModel *o = g_ptr_array_index (r->overlay_models, i);
+      if (g_strcmp0 (o->key, key) == 0) return o;
+    }
+  return NULL;
+}
+
+void
+cmacs_libregnum_render_ctx_overlay_model_set (CmacsLibregnumRenderCtx *r,
+                                              const gchar *key,
+                                              gpointer model, double sort_key)
+{
+  if (!r || !key) return;
+  CmacsOverlayModel *o = ctx_find_overlay (r, key);
+  if (!model)
+    {
+      if (o) g_ptr_array_remove (r->overlay_models, o);
+      return;
+    }
+  if (o)
+    {
+      g_clear_object (&o->model);
+      o->model = model;
+      o->sort_key = (gfloat) sort_key;
+    }
+  else
+    {
+      if (!r->overlay_models)
+        r->overlay_models =
+          g_ptr_array_new_with_free_func (overlay_model_free);
+      o = g_new0 (CmacsOverlayModel, 1);
+      o->key = g_strdup (key);
+      o->model = model;
+      o->alpha = 1.0f;
+      o->enabled = TRUE;
+      o->sort_key = (gfloat) sort_key;
+      g_ptr_array_add (r->overlay_models, o);
+    }
+  /* Keep ascending by sort_key: higher shells draw later and composite
+   * over the lower ones. */
+  if (r->overlay_models->len > 1)
+    {
+      GPtrArray *a = r->overlay_models;
+      for (guint i = 1; i < a->len; i++)
+        for (guint j = i; j > 0; j--)
+          {
+            CmacsOverlayModel *p = g_ptr_array_index (a, j - 1);
+            CmacsOverlayModel *q = g_ptr_array_index (a, j);
+            if (p->sort_key <= q->sort_key) break;
+            a->pdata[j - 1] = q;
+            a->pdata[j] = p;
+          }
+    }
+}
+
+gpointer
+cmacs_libregnum_render_ctx_overlay_model_get (CmacsLibregnumRenderCtx *r,
+                                              const gchar *key)
+{
+  CmacsOverlayModel *o = ctx_find_overlay (r, key);
+  return o ? o->model : NULL;
+}
+
+void
+cmacs_libregnum_render_ctx_overlay_set_alpha (CmacsLibregnumRenderCtx *r,
+                                              const gchar *key, double alpha)
+{
+  CmacsOverlayModel *o = ctx_find_overlay (r, key);
+  if (!o) return;
+  if (alpha < 0.0) alpha = 0.0;
+  if (alpha > 1.0) alpha = 1.0;
+  o->alpha = (gfloat) alpha;
+}
+
+void
+cmacs_libregnum_render_ctx_overlay_set_enabled (CmacsLibregnumRenderCtx *r,
+                                                const gchar *key,
+                                                gboolean enabled)
+{
+  CmacsOverlayModel *o = ctx_find_overlay (r, key);
+  if (o) o->enabled = enabled;
+}
+
+void
+cmacs_libregnum_render_ctx_clear_overlay_models (CmacsLibregnumRenderCtx *r)
+{
+  if (r && r->overlay_models)
+    g_ptr_array_set_size (r->overlay_models, 0);
 }
 
 /* TRUE if world point (X,Y,Z) is visible from the camera, i.e. the globe
@@ -1556,6 +1679,41 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
                                    (gfloat) b->z);
                 grl_model_draw_ex (b->model, bp, naxis, 0.0f, nscl, nwhite);
               }
+          }
+        /* Translucent overlay shells (gnuseye weather: radar/cloud drapes):
+         * alpha-blended, depth-TESTED against the opaque globe/bodies (the
+         * far limb culls them) but NOT depth-written, so every later pass
+         * (polygon fills, coastlines, markers, billboards) depth-tests
+         * against the base globe only and always reads on top.  Painter's
+         * order, not geometry, provides the layering -- any future slot
+         * inserted between here and the markers inherits that contract.
+         * Backface culling stays on (near hemisphere only), and the shells
+         * follow background_spin_deg so a draped texture stays glued to
+         * the globe's geography. */
+        if (r->overlay_models && r->overlay_models->len)
+          {
+            g_autoptr (GrlVector3) opos  = grl_vector3_new (0.0f, 0.0f, 0.0f);
+            g_autoptr (GrlVector3) oaxis = grl_vector3_new (0.0f, 1.0f, 0.0f);
+            g_autoptr (GrlVector3) oscl  = grl_vector3_new (1.0f, 1.0f, 1.0f);
+            g_autoptr (GrlColor)   owhite = grl_color_new (255, 255, 255,
+                                                           255);
+            BeginBlendMode (BLEND_ALPHA);
+            rlDisableDepthMask ();
+            for (guint i = 0; i < r->overlay_models->len; i++)
+              {
+                CmacsOverlayModel *o =
+                  g_ptr_array_index (r->overlay_models, i);
+                if (!o->model || !o->enabled || o->alpha <= 0.0f) continue;
+                /* Always a WHITE OPAQUE tint: the per-channel opacity is
+                 * applied by the shell's own shader (an "overlayAlpha"
+                 * uniform the gnuseye overlay code sets), NOT by the draw
+                 * tint -- a sub-opaque colDiffuse showed sampling
+                 * artifacts in the par_shapes pole zones. */
+                grl_model_draw_ex (o->model, opos, oaxis,
+                                   r->background_spin_deg, oscl, owhite);
+              }
+            rlEnableDepthMask ();
+            EndBlendMode ();
           }
         /* Filled translucent polygon fills (alert zones, choropleth, aurora):
          * drawn after the globe but before coastlines/markers so those

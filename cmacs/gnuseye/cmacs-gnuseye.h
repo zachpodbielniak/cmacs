@@ -30,10 +30,11 @@
  * alongside the other cmacs subsystem entry points.  Each gnuseye
  * translation unit that registers DEFUNs exposes its own syms_of_ hook,
  * aggregated by syms_of_cmacs_gnuseye in cmacs-gnuseye-init.c. */
-extern void syms_of_cmacs_gnuseye_defuns (void);
-extern void syms_of_cmacs_gnuseye_geo    (void);
-extern void syms_of_cmacs_gnuseye_sgp4   (void);
-extern void syms_of_cmacs_gnuseye_http   (void);
+extern void syms_of_cmacs_gnuseye_defuns  (void);
+extern void syms_of_cmacs_gnuseye_geo     (void);
+extern void syms_of_cmacs_gnuseye_sgp4    (void);
+extern void syms_of_cmacs_gnuseye_http    (void);
+extern void syms_of_cmacs_gnuseye_overlay (void);
 
 /* The error symbol `cmacs-gnuseye-error' is DEFSYM'd in
  * cmacs-gnuseye-defuns.c; DEFSYM auto-generates Qcmacs_gnuseye_error into
