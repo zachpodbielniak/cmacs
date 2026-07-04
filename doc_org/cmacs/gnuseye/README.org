@@ -14,10 +14,13 @@ mirrored Info chapter); this directory drills into the full detail:
 - [[file:reference.org][reference.org]] — the API surface: the entity-plist schema, the
   ~cmacs-gnuseye-define-layer~ keys, every C primitive / DEFUN with its
   signature, the render-context additions, the MCP tools, all keybindings
-  (vanilla + Doom/Evil), and the API-key resolution rules.
+  (vanilla + Doom/Evil), and the API-key resolution rules (environment →
+  ~~/.authinfo~ / ~~/.authinfo.gpg~ via auth-source → the keys file, with
+  per-service ~machine~ examples for every keyed feed).
 - [[file:extending.org][extending.org]] — how to add your own data layer in ~10 lines of Elisp,
   with worked recipes for points, filled regions, rings/footprints,
-  great-circle routes, dead-reckoned moving layers, and keyed feeds.
+  great-circle routes, dead-reckoned moving layers, keyed feeds, and
+  draped raster overlays.
 
 The *v2 feature modules* (the 2D flat map, measurement, heatmap/opacity,
 export, watchlists, live news, the disk history store + backtesting, the
@@ -33,9 +36,11 @@ blocks) are documented in [[file:reference.org][reference.org]] under *v2 featur
 A Google-Earth / Palantir-style 3D globe embedded in an Emacs buffer,
 rendered through the *libregnum* engine, that overlays everything trackable
 on and above the Earth — satellites, aircraft, vessels, earthquakes, fires,
-launches, natural events, weather alert zones, aurora, geolocated news, and
-more — as clickable, heading-oriented markers, filled regions, rings, and
-arcs on a sun-lit, politically-mapped sphere.
+launches, natural events, weather alert zones, aurora, geolocated news,
+live meteorology (tropical cyclones with tracks and cones, animated
+precipitation radar, cloud imagery, wind flow, METARs), and more — as
+clickable, heading-oriented markers, filled regions, rings, arcs, and
+draped rasters on a sun-lit, politically-mapped sphere.
 
 Its organising principle is *extensibility*: every data source is a *layer
 defined in Elisp* via ~cmacs-gnuseye-define-layer~, over a small, stable C

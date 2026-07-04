@@ -140,15 +140,86 @@ probability-coloured dots; no key.
 @code{cmacs-gnuseye-gdelt-query}, sized by mention volume; clustered; no key.
 @end itemize
 
-Everything is off by default.  API keys resolve via
-@code{cmacs-gnuseye-secret}: environment variable, then
-@file{$XDG_CONFIG_HOME/cmacs/gnuseye/keys.el}, then a default.  A layer
-declaring @code{:needs-key} stays off, showing ``needs NAME'', until set.
+Everything is off by default.
 
 Wave-2 and keyed layers add ~20 layers across 10 categories: submarine
 cables and ports (infra), Safecast radiation and OpenAQ (health), the ISS and
 webcams (media), ACLED and a configurable siren feed (conflict), military
 bases & spaceports, and a derived @code{hotspots} correlation layer.
+
+@section Meteorology
+
+@code{cmacs-gnuseye-meteo.el} (v4) turns the globe into a live weather
+picture, all keyless by default; @code{W} runs the full showcase and
+flies to the strongest active storm:
+
+@itemize @bullet
+@item @code{cyclones} --- tropical cyclones in every basin (NHC + JTWC
+via the Esri Living Atlas GeoJSON): a bespoke spinning-cyclone glyph per
+storm coloured by the Saffir-Simpson ramp, the observed track as its
+trail, dead-reckoned drift between advisories, labelled forecast
+positions, the forecast track, the draped error cone, nested 34/50/64 kt
+wind-radii fills, and coastal watch/warning segments.  Storms are
+ordinary entities, so watch thresholds (@code{maxwind-kt}), geofences,
+replay, and export all apply.
+@item @code{radar} --- the RainViewer world composite draped on the
+sphere; @code{R} animates the recent frames + nowcast as a loop (frames
+are composed once and cached, so stepping is one texture upload).
+@code{cmacs-gnuseye-radar-provider} @code{owm} switches to the keyed
+OpenWeatherMap tiles.
+@item @code{clouds} --- one NASA GIBS WMS world image per refresh,
+draped translucently via luminance-to-opacity.  @code{E}
+(@code{cmacs-gnuseye-earth-today}) instead re-skins the whole globe with
+yesterday's true-colour imagery, live.
+@item @code{wind-particles} --- speed-coloured streaks advected through
+an Open-Meteo grid on the smooth tick;
+@code{cmacs-gnuseye-wind-cycle-level} hops surface / 850 / 500 / 250 hPa
+(jet streams).  A @code{:transient} layer: the churning ids stay out of
+the entity list, search, export, replay, and history.
+@item @code{metar} --- worldwide surface observations that follow the
+camera (view-scoped bbox), coloured by flight category, decoded in the
+inspector.
+@item @strong{Point forecast} --- @code{P} then click anywhere: a 7-day
+Open-Meteo panel (current conditions, 48-hour sparklines, WMO glyphs);
+also the inspector action @code{p} on any entity.
+@end itemize
+
+The raster drapes are composed on the CPU (tile decode,
+mercator-to-equirect reprojection, luminance-to-alpha) and warped through
+the @emph{same} mesh-UV transform as the base texture, then composited
+into the globe's albedo --- so they register exactly with the markers,
+rotate with the globe, and take the day/night terminator for free, while
+markers, cones, coastlines, and labels always draw on top.
+
+@section API keys
+
+@code{cmacs-gnuseye-secret} resolves a key name in order: environment
+variable; auth-source (@file{~/.authinfo}, @file{~/.authinfo.gpg}, or any
+backend in @code{auth-sources}); @file{$XDG_CONFIG_HOME/cmacs/gnuseye/keys.el}
+(an alist, keep out of version control); then a default.  The auth-source
+stage first tries the real service hostname from
+@code{cmacs-gnuseye-secret-hosts} --- one @code{machine} line can feed a
+login+password pair --- then a literal @code{machine NAME} entry:
+
+@example
+machine opensky-network.org login U password P   # OPENSKY_USER + _PASS
+machine firms.modaps.eosdis.nasa.gov password K  # FIRMS_MAP_KEY
+machine api.openaq.org password K                # OPENAQ_API_KEY
+machine api.acleddata.com login MAIL password K  # ACLED_EMAIL + ACLED_KEY
+machine api.windy.com password K                 # WINDY_WEBCAMS_KEY
+machine api.stlouisfed.org password K            # FRED_API_KEY
+machine api.openweathermap.org password K        # OPENWEATHERMAP_API_KEY
+machine FIRMS_MAP_KEY password K                 # generic form also works
+@end example
+
+Lookups memoise hits @emph{and} misses, so an encrypted authinfo prompts
+for its passphrase at most once per name per session;
+@code{cmacs-gnuseye-secret-forget} clears the caches after editing keys.
+The toggle pane paints key status without auth-source I/O
+(@code{cmacs-gnuseye-secret-cached}), so a key that lives only in an
+encrypted authinfo may read ``needs NAME'' until the layer is first
+toggled.  A layer declaring @code{:needs-key} stays off until its key
+resolves.  Every meteorology layer's default source needs no key.
 
 @section Interaction and intelligence
 

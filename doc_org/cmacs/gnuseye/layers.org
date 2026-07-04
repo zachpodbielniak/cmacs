@@ -99,6 +99,92 @@ Refresh 6 h.
   ~cmacs-gnuseye-fires-source~ (default VIIRS_SNPP_NRT).  Geometry: flame
   sized by fire radiative power.
 
+* Meteorology — ~cmacs-gnuseye-meteo.el~
+
+Live weather, all keyless by default.  The raster layers (radar, clouds,
+Earth-today) drape through the C overlay channels
+(~cmacs-gnuseye-overlay.c~) — frames are warped through the globe's own
+mesh-UV transform and composited into the albedo, so they register
+exactly with the markers and inherit the day/night terminator.  ~W~ runs
+the full showcase.
+
+** cyclones
+- Source: Esri Living Atlas *Active_Hurricanes_v1* GeoJSON — the NHC +
+  JTWC feeds, ALL basins, no key (~cmacs-gnuseye-cyclones-url-format~;
+  sublayers 0/1/2/4/5/7/8/9).  Fallback ~cmacs-gnuseye-cyclones-source~
+  = ~nhc~ uses NOAA ~CurrentStorms.json~ (Atl/E-Pac centres only).
+  Refresh 900 s.
+- Geometry per storm: a *cyclone-glyph centre* coloured by the
+  Saffir-Simpson ramp (TD→Cat 5) with the observed track as its trail
+  and dead-reckoned drift between advisories; labelled *forecast
+  positions* (+12h/+24h/… with category); the *forecast track*
+  polyline; the *error cone* as a draped fill
+  (~cmacs-gnuseye-cyclones-cone~); nested *34/50/64 kt wind-radii*
+  fills (~cmacs-gnuseye-cyclones-wind-radii~); and coastal
+  *watch/warning segments* coloured by TCWW code
+  (~cmacs-gnuseye-cyclones-watches~).
+- Integrates everywhere: watch thresholds on ~maxwind-kt~, geofences on
+  kind ~cyclone~, replay, export, search; the inspector shows the full
+  advisory record and ~p~ opens the point forecast.
+
+** radar
+- Source: RainViewer global composite radar tiles, no key
+  (~cmacs-gnuseye-radar-index-url~; ~13 past frames at 10-min steps +
+  nowcast when published — empty feeds keep the last drape).  Index
+  refresh 300 s; world drape at mercator zoom
+  ~cmacs-gnuseye-radar-zoom~ (2 = 16 tiles).
+- ~R~ / ~cmacs-gnuseye-radar-animate~ loops the frames on the smooth
+  tick (~cmacs-gnuseye-radar-frame-interval~); frames compose in the
+  background and step from the C frame cache, so animation is a cheap
+  re-upload.  Opacity ~cmacs-gnuseye-radar-alpha~.
+- Optional keyed provider: ~cmacs-gnuseye-radar-provider~ = ~owm~ drapes
+  the OpenWeatherMap ~precipitation_new~ tiles (needs
+  ~OPENWEATHERMAP_API_KEY~; current conditions only).
+
+** clouds
+- Source: NASA GIBS WMS — ONE world image per refresh, EPSG:4326, no
+  key, no tile stitching (~cmacs-gnuseye-gibs-url-format~; the empty
+  ~STYLES=~ parameter is mandatory).  Layer
+  ~cmacs-gnuseye-clouds-layer~ (default VIIRS true colour), dated
+  yesterday UTC for guaranteed coverage.  Refresh 3 h.
+- Rendering: luminance→opacity (~cmacs-gnuseye-clouds-luma~) so bright
+  cloud decks drape translucently (~cmacs-gnuseye-clouds-alpha~) over
+  the geography; deserts/snow can ghost faintly — tune the luma cons or
+  point the layer at an IR product.
+- ~E~ / ~cmacs-gnuseye-earth-today~ re-skins the whole globe with
+  yesterday's true-colour imagery (live swap; weather drapes re-apply
+  on top).
+
+** wind-particles
+- Source: Open-Meteo multi-location grid, no key
+  (~cmacs-gnuseye-wind-url~; ~cmacs-gnuseye-wind-grid-step~ deg over
+  ~cmacs-gnuseye-wind-lat-range~ ≈ 240 points, chunked requests, ~8
+  refreshes/day of the 10k/day free quota).  Disk-cached grid; refresh
+  3 h.
+- ~cmacs-gnuseye-wind-level~: ~surface~ (10 m) or 850/500/250 hPa
+  (~cmacs-gnuseye-wind-cycle-level~; 250 shows the jet streams).
+- Geometry: ~cmacs-gnuseye-wind-particles~ (400) streak entities
+  advected through the bilinearly-interpolated field each smooth tick,
+  speed-coloured, TTL respawn.  A *:transient* layer: the churning ids
+  stay out of the entity list, search, export, replay, and history.
+
+** metar
+- Source: aviationweather.gov METAR JSON, no key
+  (~cmacs-gnuseye-metar-url~).  View-scoped bbox fetch that follows the
+  camera (re-fetch when the centre moves
+  ~cmacs-gnuseye-metar-refresh-move-deg~); refresh 600 s; cap
+  ~cmacs-gnuseye-metar-max~, clustered when zoomed out.
+- Geometry: station pins coloured by flight category (VFR green, MVFR
+  blue, IFR red, LIFR magenta); the inspector shows the decoded
+  observation and the raw METAR.
+
+** point forecast (command, not a layer)
+- ~P~ / ~cmacs-gnuseye-forecast-here~ arms a one-shot click: the next
+  globe click opens the Open-Meteo 7-day panel (current conditions,
+  48-h temp/precip/wind sparklines, daily table with WMO weather
+  glyphs).  ~cmacs-gnuseye-forecast-at~ ~(LAT LON)~ is the programmatic
+  entry; inspector action ~p~ runs it for any entity.
+
 * Natural events
 
 ** natural-events — ~cmacs-gnuseye-natural.el~

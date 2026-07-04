@@ -82,7 +82,10 @@ Report ~:speed~ (m/s) and ~:heading~ (deg CW from north), and use the shared
 * Recipe: a keyed feed (graceful-off)
 
 Declare ~:needs-key~; the layer shows "needs NAME" and cannot be enabled
-until the key resolves (env var or the keys file):
+until the key resolves — from the environment, from
+~~/.authinfo~ / ~~/.authinfo.gpg~ (either ~machine api.example.com
+password K~ mapped via ~cmacs-gnuseye-secret-hosts~, or a literal
+~machine MY_API_KEY password K~ line), or from the keys file:
 
 #+begin_src elisp
 (cmacs-gnuseye-define-layer my-feed
@@ -95,6 +98,53 @@ until the key resolves (env var or the keys file):
        (format "https://example.com/data?key=%s" key)
        (lambda (data) (funcall cb (my-parse data)))))))
 #+end_src
+
+* Recipe: a draped raster overlay
+
+Raster products (radar mosaics, cloud imagery, SST, …) don't fit the
+entity model — they drape through the *overlay channels*: create a
+channel, compose frames from cached image files, and step between
+cached frames for animation.  ~cmacs-gnuseye-overlay.el~ supplies the
+downloads and tile math; frames are warped into the globe texture's own
+layout, so they register exactly with the markers:
+
+#+begin_src elisp
+(cmacs-gnuseye-define-layer sst
+  :title "Sea-surface temperature" :group 'meteo :interval 10800
+  :fetch
+  (lambda (cb)
+    (let ((buf cmacs-gnuseye-buffer))
+      (when (and buf (cmacs-gnuseye-overlay-supported-p))
+        (cmacs-gnuseye-overlay-ensure buf 'sst 1.5)   ; z-order
+        (cmacs-gnuseye-overlay-fetch-file
+         MY-WORLD-PNG-URL
+         (cmacs-gnuseye-overlay-cache-file "sst" "today.png")
+         (lambda (ok)
+           (when ok
+             (cmacs-gnuseye-overlay-compose-frame
+              buf 'sst "today"
+              (list (list (cmacs-gnuseye-overlay-cache-file "sst"
+                                                            "today.png")
+                          0 0))
+              '(:canvas-width 2048 :canvas-height 1024 :show t))))))
+      (funcall cb nil)))                      ; raster layers own no entities
+  :teardown
+  (lambda ()
+    (when (and cmacs-gnuseye-buffer
+               (fboundp 'cmacs-gnuseye-overlay-clear))
+      (ignore-errors
+        (cmacs-gnuseye-overlay-clear cmacs-gnuseye-buffer 'sst)))))
+#+end_src
+
+Web-mercator tile sources add ~:projection mercator~ (and use
+~cmacs-gnuseye-overlay-ensure-tile-frame~ for the download+compose
+round); opaque grayscale imagery becomes a translucent drape with
+~:luma-alpha (LO . GAIN)~.  See the radar/clouds layers in
+~cmacs-gnuseye-meteo.el~ for full-fat examples (animation, providers).
+
+For a particle/eye-candy layer whose entity ids churn every few seconds
+(the wind streaks), add ~:transient t~ so the churn stays out of the
+entity list, search, export, replay, and history.
 
 * Tips
 

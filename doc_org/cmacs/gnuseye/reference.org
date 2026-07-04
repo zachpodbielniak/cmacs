@@ -29,10 +29,12 @@ are required.
 
 Built-in: ~satellite aircraft ship quake fire launch storm camera city
 generic~.  Extended (Phase 2+): ~event volcano alert cyber outage cable port
-health radiation airq displaced base spaceport hotspot~.  Each kind has a
-default colour + scale in ~cmacs-gnuseye-kind-styles~ and a C marker code in
-~cmacs-gnuseye--kind-codes~ (extended kinds reuse the nearest of the 10 C
-meshes until they get bespoke icons).
+health radiation airq displaced base spaceport hotspot~.  Meteorology:
+~cyclone~ (the bespoke spinning-storm C glyph: eye + disc + three spiral
+arms, hemisphere-correct chirality — ~storm~ shares it), ~metar~, ~windp~.
+Each kind has a default colour + scale in ~cmacs-gnuseye-kind-styles~ and a
+C marker code in ~cmacs-gnuseye--kind-codes~ (extended kinds reuse the
+nearest of the 10 C meshes until they get bespoke icons).
 
 * Defining a layer
 
@@ -41,22 +43,36 @@ meshes until they get bespoke icons).
 | Key          | Meaning |
 |--------------+---------|
 | ~:title~     | human title (toggle pane + list). |
-| ~:group~     | category symbol (astronomical/air/marine/weather/natural/space-weather/conflict/infra/health/media/markets). |
+| ~:group~     | category symbol (astronomical/air/marine/weather/meteo/natural/space-weather/conflict/infra/health/media/markets). |
 | ~:kind~      | default marker kind for the layer. |
 | ~:fetch~     | ~(lambda (CALLBACK) …)~ that calls ~(CALLBACK ENTITIES)~ async. |
 | ~:interval~  | refresh seconds (nil = fetch once). |
 | ~:default-on~ | non-nil to *allow* auto-enable (the dashboard still starts off). |
 | ~:detail~    | ~(lambda (ENTITY) …)~ inspector override. |
-| ~:needs-key~ | env-var name the layer needs; shown "needs KEY" until set. |
+| ~:needs-key~ | API-key name the layer needs; shown "needs KEY" until it resolves (see *API keys*). |
 | ~:advance~   | ~(lambda (ENTITIES DT NOW) …)~ smooth-motion hook; use ~cmacs-gnuseye-dead-reckon-layer~ for generic moving layers. |
 | ~:cluster~   | non-nil to collapse dense markers into count badges when zoomed out. |
 | ~:opacity~   | marker/polygon alpha multiplier in [0,1] (default 1.0). |
+| ~:transient~ | non-nil for high-churn synthetic layers (wind particles): entities render but stay out of the id-index (entity list, search, export) and replay/history capture. |
+| ~:teardown~  | ~(lambda ())~ run after disable+clear — drop overlay channels, remove tick hooks. |
 
 * Elisp helpers
 
 - Fetch: ~cmacs-gnuseye-fetch-json~ ~(URL CALLBACK &optional HEADERS ARRAY-TYPE)~,
   ~cmacs-gnuseye-fetch-text~ ~(URL CALLBACK &optional HEADERS)~.
-- Secrets: ~cmacs-gnuseye-secret~ ~(NAME &optional DEFAULT)~.
+- Secrets: ~cmacs-gnuseye-secret~ ~(NAME &optional DEFAULT)~ (env →
+  auth-source → keys file; see *API keys*), ~cmacs-gnuseye-secret-cached~
+  (no-I/O variant for passive UI), ~cmacs-gnuseye-secret-forget~.
+- Raster overlays (~cmacs-gnuseye-overlay.el~): binary downloads
+  ~cmacs-gnuseye-overlay-fetch-file~ / ~-fetch-queue~, slippy-tile math
+  ~-tile-xy~ ~(LAT LON Z)~ / ~-world-tiles~ ~(Z)~, the frame driver
+  ~-ensure-tile-frame~ ~(BUFFER CHANNEL TAG SPEC CALLBACK)~, cache
+  ~-cache-file~ / ~-prune~, and ~cmacs-gnuseye-owm-tile-url~ (keyed
+  OpenWeatherMap styles).  ~cmacs-gnuseye-overlay-supported-p~ gates the
+  C half.
+- Weather: ~cmacs-gnuseye-meteo-wind-at~ ~(LAT LON)~ → interpolated
+  ~(U . V)~ m/s from the wind grid; ~cmacs-gnuseye-forecast-at~
+  ~(LAT LON &optional LABEL)~ opens the Open-Meteo panel.
 - Motion: ~cmacs-gnuseye-dead-reckon~ ~(LAT LON SPEED-MS HEADING-DEG DT)~ →
   ~(LAT2 . LON2)~; ~cmacs-gnuseye-dead-reckon-layer~ (a ready ~:advance~).
 - Geometry: ~cmacs-gnuseye-destination~ ~(LAT LON BRG-DEG DIST-M)~ →
@@ -79,6 +95,17 @@ meshes until they get bespoke icons).
 - Polygons: ~cmacs-gnuseye-add-polygon~ ~(BUFFER LATS LONS &optional COLOR
   PERSISTENT)~, ~-clear-polygons~ ~(BUFFER &optional PERSISTENT)~.
 - Day/night: ~cmacs-gnuseye-set-sun-time~ ~(BUFFER &optional TIME)~.
+- Weather overlays (raster drapes composited into the globe albedo, so
+  they inherit day/night + spin + marker overdraw):
+  ~cmacs-gnuseye-overlay-ensure~ ~(BUFFER NAME &optional Z-ORDER _ _
+  CACHE-BYTES)~, ~-overlay-p~, ~-overlay-compose-frame~ ~(BUFFER NAME TAG
+  TILES &optional OPTS)~ (TILES = list of ~(FILE DST-X DST-Y [DST-W
+  DST-H])~; OPTS plist ~:canvas-width :canvas-height :projection
+  mercator|equirect :luma-alpha (LO . GAIN) :tint :show~),
+  ~-overlay-show-frame~ (cheap animation step; nil when the tag is not
+  cached), ~-overlay-frames~, ~-overlay-set-alpha~, ~-overlay-set-enabled~,
+  ~-overlay-clear~; ~cmacs-gnuseye-set-base-texture~ ~(BUFFER PATH)~
+  re-skins the globe live (PNG or JPEG — "Earth today").
 - Projection (v2): ~cmacs-gnuseye-set-projection~ ~(BUFFER FLAT)~ (3D globe ↔
   2D flat map), ~-flat-p~ ~(BUFFER)~, and ~cmacs-gnuseye-screen-to-globe~
   ~(BUFFER VX VY)~ → ~(LAT LON)~ (camera-ray globe pick, for measurement).
@@ -165,6 +192,10 @@ click select):
 | ~M~ | measure (two-click distance + bearing) |
 | ~H~ | density heatmap of a layer |
 | ~N~ | live news panel |
+| ~W~ | weather showcase (cyclones + radar + clouds + wind + alerts) |
+| ~R~ | toggle the animated radar loop |
+| ~P~ | forecast here (next globe click opens its 7-day panel) |
+| ~E~ | Earth today (re-skin with yesterday's real imagery) |
 | ~?~ | legend |
 | ~q~ | quit |
 
@@ -252,16 +283,52 @@ any feature-registered actions (see ~cmacs-gnuseye-register-inspector-action~).
 With ~--with-cmacs-mcp~: ~gnuseye_open~, ~gnuseye_list_layers~,
 ~gnuseye_toggle_layer~, ~gnuseye_fly_to~, ~gnuseye_refresh~,
 ~gnuseye_query_entities~ (kind/bbox → JSON), ~gnuseye_brief~,
-~gnuseye_add_geofence~, ~gnuseye_cii~.  The MCP ~eval~ tool reaches every
-gnuseye DEFUN directly.
+~gnuseye_add_geofence~, ~gnuseye_cii~, ~gnuseye_weather_showcase~ (the
+full weather picture + fly to the strongest storm), and
+~gnuseye_forecast~ (lat/lon → the 7-day panel).  The MCP ~eval~ tool
+reaches every gnuseye DEFUN directly.
 
 * API keys
 
-~cmacs-gnuseye-secret~ resolves a name in order: environment variable →
-~$XDG_CONFIG_HOME/cmacs/gnuseye/keys.el~ (an alist; keep out of version
-control) → default.  Names in use: ~OPENSKY_USER~, ~OPENSKY_PASS~,
-~FIRMS_MAP_KEY~.  A layer declaring ~:needs-key~ stays off, showing "needs
-NAME", until the key is present.
+~cmacs-gnuseye-secret~ resolves a name in order:
+
+1. *environment variable* of the same name,
+2. *auth-source* — ~~/.authinfo~, ~~/.authinfo.gpg~ (or any backend in
+   ~auth-sources~),
+3. ~$XDG_CONFIG_HOME/cmacs/gnuseye/keys.el~ (an alist; keep out of
+   version control),
+4. the caller's default.
+
+The auth-source lookup first tries the *real service hostname* from
+~cmacs-gnuseye-secret-hosts~ — one machine line can feed a user+password
+pair — then a literal ~machine NAME~ entry, so any key name works without
+touching the table.  The complete keyed-service set:
+
+#+begin_example
+machine opensky-network.org login MYUSER password MYPASS   # OPENSKY_USER + OPENSKY_PASS
+machine firms.modaps.eosdis.nasa.gov password MAPKEY       # FIRMS_MAP_KEY (wildfires)
+machine api.openaq.org password KEY                        # OPENAQ_API_KEY (air quality)
+machine api.acleddata.com login me@example.org password K  # ACLED_EMAIL + ACLED_KEY
+machine api.windy.com password KEY                         # WINDY_WEBCAMS_KEY (webcams)
+machine api.stlouisfed.org password KEY                    # FRED_API_KEY (macro panel)
+machine api.openweathermap.org password KEY                # OPENWEATHERMAP_API_KEY (optional weather tiles)
+# generic fallback -- any key name works as the machine:
+machine FIRMS_MAP_KEY password MAPKEY
+#+end_example
+
+Every weather layer's *default* source is keyless (Esri/NHC cyclones,
+RainViewer radar, NASA GIBS imagery, Open-Meteo wind/forecasts,
+aviationweather METARs); ~OPENWEATHERMAP_API_KEY~ only unlocks the
+optional OWM tile styles.
+
+Lookups memoise per session — hits *and* misses — so an encrypted
+~authinfo.gpg~ prompts for its passphrase at most once per name; run
+~cmacs-gnuseye-secret-forget~ after editing keys to re-resolve.  The
+toggle pane paints layer status with the no-I/O
+~cmacs-gnuseye-secret-cached~, so a key that lives *only* in an encrypted
+authinfo may read "needs NAME" until you actually toggle the layer
+(enabling does the full, possibly-prompting resolution).  A layer
+declaring ~:needs-key~ stays off until its key resolves.
 
 * User config directory
 

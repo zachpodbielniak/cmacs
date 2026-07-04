@@ -384,6 +384,11 @@ Helpers:
 | ~quakes~         | weather       | USGS earthquakes (GeoJSON)    | no  | point    |
 | ~launches~       | weather       | Launch Library 2              | no  | point    |
 | ~fires~          | weather       | NASA FIRMS                    | yes | point    |
+| ~cyclones~       | meteo         | NHC/JTWC (Esri Living Atlas)  | no  | glyph+track+cone+radii |
+| ~radar~          | meteo         | RainViewer composite          | no  | animated raster drape |
+| ~clouds~         | meteo         | NASA GIBS imagery             | no  | raster drape |
+| ~wind-particles~ | meteo         | Open-Meteo grid               | no  | streaks (transient) |
+| ~metar~          | meteo         | aviationweather.gov           | no  | point (clustered) |
 | ~natural-events~ | natural       | NASA EONET v3                 | no  | point    |
 | ~nws-alerts~     | natural       | US NWS active alerts          | no  | filled zone |
 | ~aurora~         | space-weather | NOAA SWPC OVATION             | no  | point band |
@@ -439,20 +444,82 @@ for ~cmacs-gnuseye-gdelt-query~, points sized by mention volume.
 - *Weather/geo-events* ship earthquakes (on), rocket launches, and NASA
   FIRMS fires (needs ~FIRMS_MAP_KEY~).
 
+* Meteorology (v4)
+
+~cmacs-gnuseye-meteo.el~ turns the globe into a live weather picture —
+all keyless by default, one key (~W~) for the full showcase:
+
+- *Tropical cyclones* — every basin (NHC + JTWC via the Esri Living
+  Atlas GeoJSON): a bespoke spinning-cyclone glyph per storm coloured by
+  the Saffir-Simpson ramp, its observed track as a trail, dead-reckoned
+  drift between advisories, labelled forecast positions, the forecast
+  track, the draped error cone, nested 34/50/64 kt wind-radii fills, and
+  coastal watch/warning segments.  Watch thresholds (~maxwind-kt~),
+  geofences, replay, and export all apply since storms are ordinary
+  entities.
+- *Precipitation radar* — the RainViewer world composite draped onto the
+  sphere; ~R~ animates the ~13 recent frames (plus nowcast) as a loop.
+  Frames are composed once (tiles → mercator→equirect reprojection →
+  the globe's mesh-UV warp) and cached, so stepping is one cheap texture
+  upload.  The optional OpenWeatherMap provider adds keyed tile styles.
+- *Cloud imagery* — one NASA GIBS WMS world image per refresh, draped
+  translucently with luminance→opacity; ~E~ (*Earth today*) instead
+  re-skins the entire globe with yesterday's true-colour imagery, live.
+- *Wind flow* — hundreds of speed-coloured streaks advected through an
+  Open-Meteo grid on the smooth tick; ~cmacs-gnuseye-wind-cycle-level~
+  hops surface → 850 → 500 → 250 hPa (jet streams).  A *transient*
+  layer: the churning particle ids stay out of the index, search,
+  export, replay, and history.
+- *METARs* — worldwide surface observations that follow the camera
+  (view-scoped bbox), coloured by flight category, with the decoded
+  observation + raw METAR in the inspector.
+- *Point forecast* — ~P~ then click anywhere: a 7-day Open-Meteo panel
+  with current conditions, 48-h sparklines, and WMO weather glyphs;
+  also inspector action ~p~ on any entity.
+
+The raster drapes composite into the globe's own albedo (through the
+same mesh-UV warp as the base texture), so they register exactly with
+the markers, rotate with the globe, and get the day/night terminator
+for free; markers, cones, coastlines, and labels always draw on top.
+US alert-zone polygons (~nws-alerts~, in the natural group) complete
+the severe-weather picture.
+
 * API keys
 
-Resolved by ~cmacs-gnuseye-secret~ in order: environment variable →
-~$XDG_CONFIG_HOME/cmacs/gnuseye/keys.el~ (an alist, keep out of version
-control) → default.  Relevant names: ~OPENSKY_USER~, ~OPENSKY_PASS~,
-~FIRMS_MAP_KEY~.  A layer that declares ~:needs-key~ is shown as disabled
-until the key is present.
+Resolved by ~cmacs-gnuseye-secret~ in order: *environment variable* →
+*auth-source* (~~/.authinfo~, ~~/.authinfo.gpg~, or any backend in
+~auth-sources~) → ~$XDG_CONFIG_HOME/cmacs/gnuseye/keys.el~ (an alist,
+keep out of version control) → default.  The auth-source stage first
+looks up the real service hostname from ~cmacs-gnuseye-secret-hosts~
+(one ~machine~ line can feed a login+password pair), then a literal
+~machine NAME~ entry:
+
+#+begin_example
+machine opensky-network.org login U password P    # OPENSKY_USER + OPENSKY_PASS
+machine firms.modaps.eosdis.nasa.gov password K   # FIRMS_MAP_KEY
+machine api.openaq.org password K                 # OPENAQ_API_KEY
+machine api.acleddata.com login EMAIL password K  # ACLED_EMAIL + ACLED_KEY
+machine api.windy.com password K                  # WINDY_WEBCAMS_KEY
+machine api.stlouisfed.org password K             # FRED_API_KEY
+machine api.openweathermap.org password K         # OPENWEATHERMAP_API_KEY (optional)
+machine FIRMS_MAP_KEY password K                  # generic form also works
+#+end_example
+
+Lookups memoise (hits and misses) so an encrypted authinfo prompts at
+most once per name per session; ~cmacs-gnuseye-secret-forget~ clears the
+caches after editing keys.  The toggle pane paints key status without
+any auth-source I/O, so an encrypted-only key may read "needs NAME"
+until the layer is first toggled.  A layer that declares ~:needs-key~
+is shown as disabled until the key resolves.  Every meteorology layer's
+default source needs *no key at all*.
 
 * MCP tools
 
 When ~--with-cmacs-mcp~ is also enabled, agents get typed tools:
 ~gnuseye_open~, ~gnuseye_list_layers~, ~gnuseye_toggle_layer~,
-~gnuseye_fly_to~, ~gnuseye_refresh~.  (The MCP ~eval~ tool already reaches
-every gnuseye DEFUN; these are convenience wrappers.)
+~gnuseye_fly_to~, ~gnuseye_refresh~, ~gnuseye_weather_showcase~, and
+~gnuseye_forecast~.  (The MCP ~eval~ tool already reaches every gnuseye
+DEFUN; these are convenience wrappers.)
 
 * libregnum additions
 
@@ -515,11 +582,21 @@ satellite footprints, export, watchlists, live news, cyber/UCDP/disasters
 layers, more panels, a disk history store with long replay + backtesting, and
 the LLM analytics engines.
 
-Planned follow-ons: Cloudflare outages + PortWatch + NGA nav-warnings (keyed
-or country-only geocode), climate anomalies / ocean ice, GPSJAM, military-
-flight derivation, track-history fade trails, weighted/animated flow arcs,
-share/permalink, an embeddings-backed headline-novelty store, an ear-clip
-triangulator for strongly-concave country fills, and full SGP4/SDP4.
+v4 added (see *Meteorology*): the draped raster overlay channels (compose /
+warp / composite into the albedo, with a per-channel frame cache for
+animation), tropical cyclones with full advisory anatomy, animated
+RainViewer radar, GIBS cloud imagery + the live *Earth today* re-skin,
+wind-flow particles (~:transient~ layers), view-following METARs, the
+click-anywhere forecast panel, the ~W~ weather showcase, and auth-source
+(~authinfo~/~authinfo.gpg~) resolution for every API key.
+
+Planned follow-ons: view-following regional radar windows (higher mercator
+zooms over the current view), MeteoAlarm European alert zones, Cloudflare
+outages + PortWatch + NGA nav-warnings (keyed or country-only geocode),
+climate anomalies / ocean ice, GPSJAM, military-flight derivation,
+track-history fade trails, weighted/animated flow arcs, share/permalink, an
+embeddings-backed headline-novelty store, an ear-clip triangulator for
+strongly-concave country fills, and full SGP4/SDP4.
 
 * Files
 
@@ -530,8 +607,12 @@ triangulator for strongly-concave country fills, and full SGP4/SDP4.
 | ~cmacs/gnuseye/cmacs-gnuseye-sgp4.c~   | TLE parse + propagation           |
 | ~cmacs/gnuseye/cmacs-gnuseye-http.c~   | async HTTP                        |
 | ~cmacs/gnuseye/cmacs-gnuseye-defuns.c~ | Elisp ↔ globe boundary            |
+| ~cmacs/gnuseye/cmacs-gnuseye-overlay-render.c~ | weather drapes: compose/warp/composite (render half) |
+| ~cmacs/gnuseye/cmacs-gnuseye-overlay.c~ | weather-overlay DEFUNs (lisp half) |
 | ~lisp/cmacs/cmacs-gnuseye.el~          | layer model, mode, UI, viz, motion |
 | ~lisp/cmacs/cmacs-gnuseye-{astro,air,marine,weather}.el~ | core layers |
+| ~lisp/cmacs/cmacs-gnuseye-meteo.el~    | meteorology: cyclones/radar/clouds/wind/METAR/forecast |
+| ~lisp/cmacs/cmacs-gnuseye-overlay.el~  | raster/tile engine (downloads, slippy math, frame driver) |
 | ~lisp/cmacs/cmacs-gnuseye-{natural,space,conflict}.el~ | wave-1 layers |
 | ~cmacs/gnuseye/cmacs-gnuseye-geomath.h~ | shared geodesy (subsolar, destination) |
 | ~cmacs/libregnum/cmacs-libregnum-render.{c,h}~ | polygon-model lists + draw |
