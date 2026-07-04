@@ -139,6 +139,7 @@ to e.g. only planes, or planes and boats.")
   '(satellite aircraft ship quake fire launch storm camera city
     event volcano alert cyber outage cable port health radiation airq
     displaced base spaceport hotspot
+    cyclone metar windp
     sun moon planet asteroid probe)
   "Selectable marker kinds for filtering.")
 
@@ -152,6 +153,9 @@ to e.g. only planes, or planes and boats.")
     (event . 7) (volcano . 5) (alert . 7) (cyber . 0) (outage . 0)
     (cable . 0) (port . 9) (health . 0) (radiation . 0) (airq . 0)
     (displaced . 9) (base . 9) (spaceport . 6) (hotspot . 4)
+    ;; Meteorology: cyclone gets the bespoke storm glyph (C mesh 7);
+    ;; METAR stations are generic pins, wind particles tiny spheres.
+    (cyclone . 7) (metar . 0) (windp . 4)
     ;; Cluster count badges render as small spheres (the quake mesh).
     (cluster . 4)
     ;; Celestial bodies: spheres for worlds, the satellite mesh for probes.
@@ -185,6 +189,11 @@ to e.g. only planes, or planes and boats.")
     (spaceport :color "#ff7be5" :scale 1.0)
     (hotspot   :color "#ff2a2a" :scale 1.7)
     (cluster   :color "#9ab8d8" :scale 0.6)
+    ;; Meteorology (cmacs-gnuseye-meteo.el); cyclone colour is overridden
+    ;; per storm by the Saffir-Simpson ramp, this is the fallback.
+    (cyclone   :color "#7cd6ff" :scale 1.2)
+    (metar     :color "#9ab8d8" :scale 0.5)
+    (windp     :color "#8fd0ff" :scale 0.25)
     ;; Celestial fallbacks; real per-body sqrt-law values come from
     ;; cmacs-gnuseye-celestial--bodies (radius = 6.371*sqrt(R/R_earth)).
     (sun       :color "#ffd96a" :scale 673.0)
@@ -336,11 +345,43 @@ HEADERS is an alist of (NAME . VALUE).  ARRAY-TYPE is passed to
 
 ;;;; Secrets -----------------------------------------------------------------
 
+(defcustom cmacs-gnuseye-secret-use-auth-source t
+  "Non-nil to resolve API keys via auth-source (~/.authinfo, ~/.authinfo.gpg).
+auth-source sits between environment variables and `cmacs-gnuseye-keys-file'
+in `cmacs-gnuseye-secret's resolution order."
+  :type 'boolean
+  :group 'cmacs-gnuseye)
+
+(defcustom cmacs-gnuseye-secret-hosts
+  '(("OPENSKY_USER"           :host "opensky-network.org"          :field user)
+    ("OPENSKY_PASS"           :host "opensky-network.org"          :field secret)
+    ("FIRMS_MAP_KEY"          :host "firms.modaps.eosdis.nasa.gov" :field secret)
+    ("OPENAQ_API_KEY"         :host "api.openaq.org"               :field secret)
+    ("ACLED_EMAIL"            :host "api.acleddata.com"            :field user)
+    ("ACLED_KEY"              :host "api.acleddata.com"            :field secret)
+    ("WINDY_WEBCAMS_KEY"      :host "api.windy.com"                :field secret)
+    ("FRED_API_KEY"           :host "api.stlouisfed.org"           :field secret)
+    ("OPENWEATHERMAP_API_KEY" :host "api.openweathermap.org"       :field secret))
+  "API-key NAME -> auth-source lookup spec (:host HOST :field secret|user).
+Maps each key name onto the real service hostname in ~/.authinfo(.gpg), so a
+single \"machine opensky-network.org login U password P\" line feeds both
+OPENSKY_USER (:field user) and OPENSKY_PASS (:field secret); ACLED works the
+same way with login = account email.  A name not listed here (or missing at
+its mapped host) also tries a literal \"machine NAME\" entry, so any key can
+be stored without editing this table."
+  :type '(alist :key-type string :value-type plist)
+  :group 'cmacs-gnuseye)
+
 (defvar cmacs-gnuseye--keys nil)
 (defvar cmacs-gnuseye--keys-loaded nil)
 
-(defun cmacs-gnuseye-secret (name &optional default)
-  "Resolve an API key NAME: env var, then `cmacs-gnuseye-keys-file', then DEFAULT."
+(defvar cmacs-gnuseye--secret-memo (make-hash-table :test 'equal)
+  "Session memo of auth-source lookups: NAME -> secret string, or `miss'.
+Misses memoize too, so an encrypted ~/.authinfo.gpg decrypts at most once
+per name per session (no repeated pinentry prompts on pane repaints).")
+
+(defun cmacs-gnuseye--keys ()
+  "The `cmacs-gnuseye-keys-file' alist, loaded lazily once."
   (unless cmacs-gnuseye--keys-loaded
     (setq cmacs-gnuseye--keys-loaded t)
     (when (file-readable-p cmacs-gnuseye-keys-file)
@@ -348,7 +389,80 @@ HEADERS is an alist of (NAME . VALUE).  ARRAY-TYPE is passed to
         (with-temp-buffer
           (insert-file-contents cmacs-gnuseye-keys-file)
           (setq cmacs-gnuseye--keys (read (current-buffer)))))))
-  (or (getenv name) (cdr (assoc name cmacs-gnuseye--keys)) default))
+  cmacs-gnuseye--keys)
+
+(defun cmacs-gnuseye--auth-source-field (entry field)
+  "Extract FIELD (`secret' or `user') from auth-source ENTRY plist.
+auth-source may wrap the secret in a closure; unwrap it."
+  (when entry
+    (let ((v (plist-get entry (if (eq field 'user) :user :secret))))
+      (if (functionp v) (funcall v) v))))
+
+(defun cmacs-gnuseye--secret-auth-source (name)
+  "Resolve NAME via auth-source, memoized (hits AND misses).
+Tries the `cmacs-gnuseye-secret-hosts' mapping first, then a literal
+\"machine NAME\" entry.  Errors (unreadable authinfo, failed decrypt)
+memoize as a miss so they cannot re-prompt every lookup.  Returns the
+secret string or nil."
+  (let ((memo (gethash name cmacs-gnuseye--secret-memo)))
+    (cond
+     ((stringp memo) memo)
+     ((eq memo 'miss) nil)
+     (t
+      (require 'auth-source)
+      (let* ((spec (cdr (assoc name cmacs-gnuseye-secret-hosts)))
+             (found
+              (condition-case nil
+                  (or (and spec
+                           (cmacs-gnuseye--auth-source-field
+                            (car (auth-source-search
+                                  :host (plist-get spec :host) :max 1))
+                            (or (plist-get spec :field) 'secret)))
+                      (cmacs-gnuseye--auth-source-field
+                       (car (auth-source-search
+                             :host name :max 1 :require '(:secret)))
+                       'secret))
+                (error nil))))
+        (puthash name (if (stringp found) found 'miss)
+                 cmacs-gnuseye--secret-memo)
+        (and (stringp found) found))))))
+
+(defun cmacs-gnuseye-secret (name &optional default)
+  "Resolve an API key NAME.
+Order: environment variable, auth-source (~/.authinfo / ~/.authinfo.gpg,
+see `cmacs-gnuseye-secret-hosts'), `cmacs-gnuseye-keys-file', DEFAULT.
+auth-source lookups memoize for the session (`cmacs-gnuseye-secret-forget'
+clears them); the first lookup against an encrypted authinfo may prompt
+for the gpg passphrase."
+  (or (getenv name)
+      (and cmacs-gnuseye-secret-use-auth-source
+           (cmacs-gnuseye--secret-auth-source name))
+      (cdr (assoc name (cmacs-gnuseye--keys)))
+      default))
+
+(defun cmacs-gnuseye-secret-cached (name &optional default)
+  "Like `cmacs-gnuseye-secret' but never performs auth-source I/O.
+Consults the environment, already-memoized auth-source hits, and the keys
+file only -- safe for passive UI repaints (cannot trigger pinentry).  A key
+that lives only in an encrypted authinfo reads as absent here until the
+first real `cmacs-gnuseye-secret' resolution (e.g. enabling its layer)."
+  (or (getenv name)
+      (let ((memo (gethash name cmacs-gnuseye--secret-memo)))
+        (and (stringp memo) memo))
+      (cdr (assoc name (cmacs-gnuseye--keys)))
+      default))
+
+;;;###autoload
+(defun cmacs-gnuseye-secret-forget ()
+  "Drop every cached API-key lookup (memo, keys file, auth-source cache).
+Run after editing ~/.authinfo(.gpg), `cmacs-gnuseye-keys-file', or the
+environment so the next lookup re-resolves."
+  (interactive)
+  (clrhash cmacs-gnuseye--secret-memo)
+  (setq cmacs-gnuseye--keys nil cmacs-gnuseye--keys-loaded nil)
+  (when (fboundp 'auth-source-forget-all-cached)
+    (auth-source-forget-all-cached))
+  (message "GNU's Eye: secret caches cleared"))
 
 ;;;; Geometry helpers: dead reckoning, rings, routes -------------------------
 
@@ -409,7 +523,14 @@ usable as an entity :polygon (filled) or fed to a polyline.  N defaults to 48."
   ;; layers like aircraft/vessels): nearby markers collapse to one count badge.
   cluster
   ;; Marker/polygon alpha multiplier in [0,1] (nil = 1.0); per-layer opacity.
-  opacity)
+  opacity
+  ;; Non-nil for high-churn synthetic layers (wind particles): entities are
+  ;; rendered but excluded from the id-index (entity list, search, export)
+  ;; and from replay/history capture -- their ids churn too fast to index.
+  transient
+  ;; Optional (lambda ()) run after the layer is disabled and cleared, for
+  ;; state outside the entity model (overlay channels, tick hooks).
+  teardown)
 
 (defvar cmacs-gnuseye--layers (make-hash-table :test 'eq)
   "Registry of defined layers: NAME symbol -> `cmacs-gnuseye-layer'.")
@@ -431,7 +552,12 @@ PROPS is a plist with:
               layers can use `cmacs-gnuseye-dead-reckon-layer'.
   :cluster    non-nil to collapse dense markers into count badges when zoomed
               out (good for aircraft/vessels)
-  :opacity    marker/polygon alpha multiplier in [0,1] (default 1.0)"
+  :opacity    marker/polygon alpha multiplier in [0,1] (default 1.0)
+  :transient  non-nil for high-churn synthetic layers (wind particles):
+              entities render on the globe but stay out of the id-index
+              (entity list, search, export) and replay/history capture
+  :teardown   (lambda ()) run after the layer is disabled and cleared --
+              drop overlay channels, remove tick hooks (optional)"
   (declare (indent 1))
   `(progn
      (puthash ',name
@@ -447,7 +573,9 @@ PROPS is a plist with:
                :needs-key ,(plist-get props :needs-key)
                :advance ,(plist-get props :advance)
                :cluster ,(plist-get props :cluster)
-               :opacity ,(plist-get props :opacity))
+               :opacity ,(plist-get props :opacity)
+               :transient ,(plist-get props :transient)
+               :teardown ,(plist-get props :teardown))
               cmacs-gnuseye--layers)
      ',name))
 
@@ -465,16 +593,24 @@ PROPS is a plist with:
 Features (search index, stats pane, replay capture) subscribe here so they
 refresh off the single debounced reindex rather than every fetch chunk.")
 
+(defun cmacs-gnuseye--layer-transient-p (name)
+  "Non-nil when layer NAME is registered as :transient."
+  (let ((layer (gethash name cmacs-gnuseye--layers)))
+    (and layer (cmacs-gnuseye-layer-transient layer))))
+
 (defun cmacs-gnuseye--reindex ()
-  "Rebuild the id -> entity index from `cmacs-gnuseye--layer-entities'."
+  "Rebuild the id -> entity index from `cmacs-gnuseye--layer-entities'.
+Transient layers are skipped: their entities draw on the globe but stay out
+of the index and everything built on it (entity list, search, export)."
   (clrhash cmacs-gnuseye--id-index)
   (maphash
    (lambda (lname ents)
-     (dolist (e ents)
-       (let ((id (format "%s" (or (plist-get e :id) ""))))
-         (unless (string-empty-p id)
-           (puthash id (append (list :layer lname) e)
-                    cmacs-gnuseye--id-index)))))
+     (unless (cmacs-gnuseye--layer-transient-p lname)
+       (dolist (e ents)
+         (let ((id (format "%s" (or (plist-get e :id) ""))))
+           (unless (string-empty-p id)
+             (puthash id (append (list :layer lname) e)
+                      cmacs-gnuseye--id-index))))))
    cmacs-gnuseye--layer-entities)
   (run-hook-with-args 'cmacs-gnuseye--reindex-functions))
 
@@ -819,6 +955,10 @@ the layer had in flight can re-draw it after it is switched off."
     (when (and (eq (cmacs-gnuseye-layer-group layer) 'celestial)
                (fboundp 'cmacs-gnuseye-clear-bodies))
       (ignore-errors (cmacs-gnuseye-clear-bodies cmacs-gnuseye-buffer))))
+  ;; State outside the entity model (overlay channels, tick hooks) is the
+  ;; layer's own to drop.
+  (let ((td (cmacs-gnuseye-layer-teardown layer)))
+    (when (functionp td) (ignore-errors (funcall td))))
   (cmacs-gnuseye--list-refresh-soon))
 
 (defun cmacs-gnuseye--load-layers ()
@@ -1424,8 +1564,8 @@ Pick one or more of e.g. aircraft, ship, satellite, quake."
 (defconst cmacs-gnuseye--types-name "*GNU's Eye Types*")
 
 (defcustom cmacs-gnuseye-group-order
-  '(celestial astronomical air marine weather natural space-weather conflict
-    infra health media markets)
+  '(celestial astronomical air marine weather meteo natural space-weather
+    conflict infra health media markets)
   "Order the entity-type categories appear in the toggle pane.
 Groups not listed here are appended alphabetically after these."
   :type '(repeat symbol)
@@ -1435,6 +1575,7 @@ Groups not listed here are appended alphabetically after these."
   '((celestial . "Solar system") (astronomical . "Astronomical")
     (air . "Air traffic")
     (marine . "Marine") (weather . "Weather & events")
+    (meteo . "Meteorology")
     (natural . "Natural events") (space-weather . "Space weather")
     (conflict . "Conflict & geopolitics") (infra . "Infrastructure")
     (health . "Health & society") (media . "Media & cameras")
@@ -1465,7 +1606,9 @@ a short list of categories the user expands to reveal and enable layers.")
   "Short status string for LAYER in the toggle pane."
   (let* ((on (cmacs-gnuseye-layer-enabled layer))
          (needs (cmacs-gnuseye-layer-needs-key layer))
-         (missing (and needs (not (cmacs-gnuseye-secret needs)))))
+         ;; -cached: pane repaints are passive and must never trigger a gpg
+         ;; pinentry; the enable path does the full (prompting) resolution.
+         (missing (and needs (not (cmacs-gnuseye-secret-cached needs)))))
     (cond
      (missing (format "needs %s" needs))
      ((and on (cmacs-gnuseye-layer-last-error layer))

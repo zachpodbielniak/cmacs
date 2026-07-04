@@ -53,7 +53,8 @@
       (let ((file (cmacs-gnuseye-history-file)) (lines nil))
         (maphash
          (lambda (name ents)
-           (when ents
+           ;; Transient layers (wind particles) are synthetic -- not history.
+           (when (and ents (not (cmacs-gnuseye--layer-transient-p name)))
              (push (prin1-to-string
                     (list now name
                           (vconcat (mapcar #'cmacs-gnuseye-history--compact

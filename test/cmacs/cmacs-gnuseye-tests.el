@@ -994,6 +994,180 @@ only runs with nothing selected, so a selected entity is cleared first."
         (cmacs-gnuseye--selected-id nil))
     (should-not (cmacs-gnuseye-escape))))
 
+;;;; Secrets: auth-source resolution ------------------------------------------
+
+(defmacro cmacs-gnuseye-tests--with-secrets (auth-fn keys &rest body)
+  "Run BODY with isolated secret state.
+AUTH-FN replaces `auth-source-search'; KEYS is the keys-file alist."
+  (declare (indent 2))
+  `(let ((cmacs-gnuseye--secret-memo (make-hash-table :test 'equal))
+         (cmacs-gnuseye--keys ,keys)
+         (cmacs-gnuseye--keys-loaded t)
+         (cmacs-gnuseye-secret-use-auth-source t))
+     (require 'auth-source)
+     (cl-letf (((symbol-function 'auth-source-search) ,auth-fn))
+       ,@body)))
+
+(ert-deftest cmacs-gnuseye--secret-env-wins ()
+  "An environment variable outranks auth-source and the keys file."
+  (cmacs-gnuseye-tests--skip)
+  (let ((process-environment (cons "CMACS_GNUSEYE_TEST_KEY=fromenv"
+                                   process-environment)))
+    (cmacs-gnuseye-tests--with-secrets
+        (lambda (&rest _) (error "auth-source must not be consulted"))
+        '(("CMACS_GNUSEYE_TEST_KEY" . "fromkeys"))
+      (should (equal (cmacs-gnuseye-secret "CMACS_GNUSEYE_TEST_KEY")
+                     "fromenv")))))
+
+(ert-deftest cmacs-gnuseye--secret-auth-source-mapped ()
+  "One authinfo machine line feeds both the login and password key names."
+  (cmacs-gnuseye-tests--skip)
+  (cmacs-gnuseye-tests--with-secrets
+      (lambda (&rest args)
+        (when (equal (plist-get args :host) "opensky-network.org")
+          (list (list :host "opensky-network.org"
+                      :user "skyuser"
+                      ;; auth-source wraps secrets in closures.
+                      :secret (lambda () "skypass")))))
+      nil
+    (should (equal (cmacs-gnuseye-secret "OPENSKY_USER") "skyuser"))
+    (should (equal (cmacs-gnuseye-secret "OPENSKY_PASS") "skypass"))))
+
+(ert-deftest cmacs-gnuseye--secret-generic-host-fallback ()
+  "A literal \"machine NAME\" entry works without the host-mapping table."
+  (cmacs-gnuseye-tests--skip)
+  (cmacs-gnuseye-tests--with-secrets
+      (lambda (&rest args)
+        (when (equal (plist-get args :host) "FIRMS_MAP_KEY")
+          (list (list :host "FIRMS_MAP_KEY" :secret "generic-key"))))
+      nil
+    (should (equal (cmacs-gnuseye-secret "FIRMS_MAP_KEY") "generic-key"))))
+
+(ert-deftest cmacs-gnuseye--secret-keys-file-after-auth-miss ()
+  "An auth-source miss falls through to the keys file (and the memoized
+miss must not shadow it)."
+  (cmacs-gnuseye-tests--skip)
+  (cmacs-gnuseye-tests--with-secrets
+      (lambda (&rest _) nil)
+      '(("ACLED_KEY" . "fromkeys"))
+    (should (equal (cmacs-gnuseye-secret "ACLED_KEY") "fromkeys"))
+    ;; Second lookup: the miss is memoized, keys.el still answers.
+    (should (equal (cmacs-gnuseye-secret "ACLED_KEY") "fromkeys"))))
+
+(ert-deftest cmacs-gnuseye--secret-miss-memoized ()
+  "auth-source is consulted once per name per session, even on a miss
+(an encrypted authinfo must not re-prompt on every lookup)."
+  (cmacs-gnuseye-tests--skip)
+  (let ((calls 0))
+    (cmacs-gnuseye-tests--with-secrets
+        (lambda (&rest _) (setq calls (1+ calls)) nil)
+        nil
+      (cmacs-gnuseye-secret "CMACS_GNUSEYE_UNSET_1")
+      (let ((after-first calls))
+        (cmacs-gnuseye-secret "CMACS_GNUSEYE_UNSET_1")
+        (should (= calls after-first))))))
+
+(ert-deftest cmacs-gnuseye--secret-forget-reresolves ()
+  "`cmacs-gnuseye-secret-forget' drops the memo so lookups re-run."
+  (cmacs-gnuseye-tests--skip)
+  (let ((calls 0))
+    (cmacs-gnuseye-tests--with-secrets
+        (lambda (&rest _) (setq calls (1+ calls)) nil)
+        nil
+      (cmacs-gnuseye-secret "CMACS_GNUSEYE_UNSET_2")
+      (let ((after-first calls))
+        (clrhash cmacs-gnuseye--secret-memo)   ; the forget command's core
+        (cmacs-gnuseye-secret "CMACS_GNUSEYE_UNSET_2")
+        (should (> calls after-first))))))
+
+(ert-deftest cmacs-gnuseye--secret-cached-no-io ()
+  "`cmacs-gnuseye-secret-cached' never performs auth-source I/O, but does
+return an already-memoized hit."
+  (cmacs-gnuseye-tests--skip)
+  (cmacs-gnuseye-tests--with-secrets
+      (lambda (&rest _) (error "pane repaint must not hit auth-source"))
+      nil
+    (should-not (cmacs-gnuseye-secret-cached "CMACS_GNUSEYE_UNSET_3")))
+  (cmacs-gnuseye-tests--with-secrets
+      (lambda (&rest args)
+        (when (equal (plist-get args :host) "api.openaq.org")
+          (list (list :secret "aq-key"))))
+      nil
+    (should (equal (cmacs-gnuseye-secret "OPENAQ_API_KEY") "aq-key"))
+    (cl-letf (((symbol-function 'auth-source-search)
+               (lambda (&rest _) (error "must come from the memo"))))
+      (should (equal (cmacs-gnuseye-secret-cached "OPENAQ_API_KEY")
+                     "aq-key")))))
+
+;;;; Transient + teardown layer props -----------------------------------------
+
+(ert-deftest cmacs-gnuseye--define-layer-transient-teardown ()
+  "The layer macro plumbs :transient and :teardown; disabling runs teardown."
+  (cmacs-gnuseye-tests--skip)
+  (let ((torn nil))
+    (cmacs-gnuseye-define-layer cmacs-gnuseye--ttest
+      :title "TT" :group 'test :kind 'generic
+      :fetch (lambda (cb) (funcall cb nil))
+      :transient t
+      :teardown (lambda () (setq torn t)))
+    (unwind-protect
+        (let ((l (gethash 'cmacs-gnuseye--ttest cmacs-gnuseye--layers))
+              (cmacs-gnuseye--reindex-functions nil)
+              (cmacs-gnuseye-buffer nil))
+          (should (cmacs-gnuseye-layer-transient l))
+          (should (functionp (cmacs-gnuseye-layer-teardown l)))
+          (cmacs-gnuseye--disable-layer l)
+          (should torn))
+      (remhash 'cmacs-gnuseye--ttest cmacs-gnuseye--layers))))
+
+(ert-deftest cmacs-gnuseye--transient-excluded ()
+  "Transient-layer entities render-side only: absent from the id-index and
+from replay snapshots."
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-replay)
+  (cmacs-gnuseye-define-layer cmacs-gnuseye--wind-test
+    :title "WindT" :group 'test :kind 'windp :transient t
+    :fetch (lambda (cb) (funcall cb nil)))
+  (cmacs-gnuseye-define-layer cmacs-gnuseye--solid-test
+    :title "SolidT" :group 'test :kind 'generic
+    :fetch (lambda (cb) (funcall cb nil)))
+  (unwind-protect
+      (let ((cmacs-gnuseye--layer-entities (make-hash-table :test 'eq))
+            (cmacs-gnuseye--id-index (make-hash-table :test 'equal))
+            (cmacs-gnuseye--reindex-functions nil))
+        (puthash 'cmacs-gnuseye--wind-test
+                 (list (list :id "wp:1" :lat 0 :lon 0 :kind 'windp))
+                 cmacs-gnuseye--layer-entities)
+        (puthash 'cmacs-gnuseye--solid-test
+                 (list (list :id "solid:1" :lat 1 :lon 1 :kind 'generic))
+                 cmacs-gnuseye--layer-entities)
+        (cmacs-gnuseye--reindex)
+        (should-not (gethash "wp:1" cmacs-gnuseye--id-index))
+        (should (gethash "solid:1" cmacs-gnuseye--id-index))
+        ;; Replay snapshot skips the transient layer too.
+        (let ((cmacs-gnuseye-replay--ring nil)
+              (cmacs-gnuseye-replay--last 0)
+              (cmacs-gnuseye-replay--active nil))
+          (cmacs-gnuseye-replay--capture)
+          (let ((snap (cdar cmacs-gnuseye-replay--ring)))
+            (should (hash-table-p snap))
+            (should-not (gethash 'cmacs-gnuseye--wind-test snap))
+            (should (gethash 'cmacs-gnuseye--solid-test snap)))))
+    (remhash 'cmacs-gnuseye--wind-test cmacs-gnuseye--layers)
+    (remhash 'cmacs-gnuseye--solid-test cmacs-gnuseye--layers)))
+
+(ert-deftest cmacs-gnuseye--meteo-group-and-kinds ()
+  "The meteo toggle-pane group and the meteorology marker kinds exist."
+  (cmacs-gnuseye-tests--skip)
+  (should (memq 'meteo cmacs-gnuseye-group-order))
+  (should (equal (alist-get 'meteo cmacs-gnuseye-group-titles) "Meteorology"))
+  (should (= (alist-get 'cyclone cmacs-gnuseye--kind-codes) 7))
+  (should (= (alist-get 'metar cmacs-gnuseye--kind-codes) 0))
+  (should (= (alist-get 'windp cmacs-gnuseye--kind-codes) 4))
+  (dolist (k '(cyclone metar windp))
+    (should (memq k cmacs-gnuseye--known-kinds))
+    (should (plist-get (alist-get k cmacs-gnuseye-kind-styles) :color))))
+
 (provide 'cmacs-gnuseye-tests)
 
 ;;; cmacs-gnuseye-tests.el ends here

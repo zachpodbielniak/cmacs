@@ -45,7 +45,8 @@
       (let ((snap (make-hash-table :test 'eq)) (any nil))
         (maphash
          (lambda (name ents)
-           (when ents
+           ;; Transient layers (wind particles) churn ids too fast to replay.
+           (when (and ents (not (cmacs-gnuseye--layer-transient-p name)))
              (setq any t)
              (puthash name
                       (mapcar (lambda (e)
