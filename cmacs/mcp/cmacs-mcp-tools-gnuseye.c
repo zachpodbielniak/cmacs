@@ -187,6 +187,31 @@ handle_cii (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
      "  (json-encode (seq-take (sort r (lambda (x y) (> (cdr x) (cdr y)))) 15))))"));
 }
 
+static McpToolResult *
+handle_weather_showcase (McpServer *s, const gchar *n, JsonObject *a,
+                         gpointer u)
+{
+  (void) s; (void) n; (void) a; (void) u;
+  return ge_eval_result (g_strdup
+    ("(progn (require 'cmacs-gnuseye) (require 'cmacs-gnuseye-meteo)"
+     " (cmacs-gnuseye-weather-showcase) \"weather showcase running\")"));
+}
+
+static McpToolResult *
+handle_forecast (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
+{
+  double lat = json_object_has_member (a, "lat")
+    ? json_object_get_double_member (a, "lat") : 0.0;
+  double lon = json_object_has_member (a, "lon")
+    ? json_object_get_double_member (a, "lon") : 0.0;
+  (void) s; (void) n; (void) u;
+  return ge_eval_result (g_strdup_printf
+    ("(progn (require 'cmacs-gnuseye) (require 'cmacs-gnuseye-meteo)"
+     " (cmacs-gnuseye-forecast-at %g %g)"
+     " (format \"forecast panel opening for %g,%g\"))",
+     lat, lon, lat, lon));
+}
+
 static void
 ge_add (McpServer *server, const gchar *name, const gchar *desc,
         const gchar *schema_json, gboolean read_only,
@@ -256,6 +281,19 @@ cmacs_mcp_tools_gnuseye_register (McpServer *server)
     "Compute the country-instability index from active signals; returns the "
     "ranked ISO-A3 -> score JSON.",
     NULL, TRUE, handle_cii);
+
+  ge_add (server, "gnuseye_weather_showcase",
+    "Light the full weather picture: tropical cyclones (tracks/cones), "
+    "animated precipitation radar, cloud imagery, wind particles, METARs, "
+    "and US alert zones; flies to the strongest active storm.",
+    NULL, FALSE, handle_weather_showcase);
+
+  ge_add (server, "gnuseye_forecast",
+    "Open the 7-day point-forecast panel (Open-Meteo) for LAT, LON.",
+    "{\"type\":\"object\",\"properties\":{"
+    "\"lat\":{\"type\":\"number\"},\"lon\":{\"type\":\"number\"}},"
+    "\"required\":[\"lat\",\"lon\"]}",
+    FALSE, handle_forecast);
 }
 
 #endif /* HAVE_CMACS_MCP && HAVE_CMACS_GNUSEYE */

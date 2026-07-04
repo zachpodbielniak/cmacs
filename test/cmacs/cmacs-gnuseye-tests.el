@@ -1168,6 +1168,358 @@ from replay snapshots."
     (should (memq k cmacs-gnuseye--known-kinds))
     (should (plist-get (alist-get k cmacs-gnuseye-kind-styles) :color))))
 
+;;;; Meteorology: cyclones ----------------------------------------------------
+
+(defmacro cmacs-gnuseye-tests--with-meteo (&rest body)
+  "Run BODY with cmacs-gnuseye-meteo loaded."
+  `(progn (require 'cmacs-gnuseye-meteo) ,@body))
+
+(defun cmacs-gnuseye-tests--cyc-fixture ()
+  "Esri sublayer-id -> features hash for one storm (ERIN, Cat 3)."
+  (let ((h (make-hash-table :test 'eq)))
+    (puthash 0 '(((properties . ((STORMNAME . "ERIN") (BASIN . "AL")
+                                 (STORMTYPE . "HU") (SSNUM . 3) (TAU . 0)
+                                 (MAXWIND . 100) (GUST . 120) (MSLP . 958)
+                                 (TCDIR . 315) (TCSPD . 12)
+                                 (FLDATELBL . "2026-07-04 00:00")))
+                  (geometry . ((type . "Point")
+                               (coordinates . (-75.0 25.0)))))
+                 ((properties . ((STORMNAME . "ERIN") (TAU . 24)
+                                 (STORMTYPE . "HU") (SSNUM . 2)
+                                 (MAXWIND . 90)))
+                  (geometry . ((type . "Point")
+                               (coordinates . (-77.5 27.5))))))
+             h)
+    (puthash 1 '(((properties . ((STORMNAME . "ERIN")))
+                  (geometry . ((type . "Point")
+                               (coordinates . (-73.0 23.0)))))
+                 ((properties . ((STORMNAME . "ERIN")))
+                  (geometry . ((type . "Point")
+                               (coordinates . (-74.0 24.0))))))
+             h)
+    (puthash 2 '(((properties . ((STORMNAME . "ERIN")))
+                  (geometry . ((type . "LineString")
+                               (coordinates . ((-75.0 25.0) (-77.5 27.5)
+                                               (-80.0 30.0)))))))
+             h)
+    (puthash 4 '(((properties . ((STORMNAME . "ERIN")))
+                  (geometry . ((type . "Polygon")
+                               (coordinates . (((-75.0 25.0) (-76.0 26.0)
+                                                (-78.0 28.0) (-77.0 25.5)
+                                                (-75.0 25.0))))))))
+             h)
+    (puthash 5 '(((properties . ((STORMNAME . "ERIN") (TCWW . "HWR")))
+                  (geometry . ((type . "MultiLineString")
+                               (coordinates . (((-80.0 26.0) (-80.5 27.0)
+                                                (-81.0 28.0))))))))
+             h)
+    h))
+
+(ert-deftest cmacs-gnuseye--cyclones-assemble ()
+  "One storm assembles into centre + forecast point + track + cone + ww."
+  (cmacs-gnuseye-tests--skip)
+  (cmacs-gnuseye-tests--with-meteo
+   (let* ((ents (cmacs-gnuseye-cyclones--assemble
+                 (cmacs-gnuseye-tests--cyc-fixture)))
+          (center (seq-find (lambda (e)
+                              (alist-get 'center (plist-get e :data)))
+                            ents)))
+     (should center)
+     (should (equal (plist-get center :id) "cyc:ERIN"))
+     (should (eq (plist-get center :kind) 'cyclone))
+     (should (= (plist-get center :lat) 25.0))
+     (should (= (plist-get center :lon) -75.0))
+     ;; Cat 3 colour from the Saffir-Simpson ramp.
+     (should (equal (plist-get center :color)
+                    (aref cmacs-gnuseye-cyclones--ss-colors 4)))
+     ;; Observed positions ride as the trail, oldest first.
+     (should (equal (plist-get center :trail) '((23.0 -73.0) (24.0 -74.0))))
+     (should (equal (alist-get 'movement (plist-get center :data))
+                    "NW at 12 kt"))
+     ;; Parts: +24h point, forecast track, cone polygon, warning line.
+     (should (seq-find (lambda (e) (equal (plist-get e :id) "cyc:ERIN:f24"))
+                       ents))
+     (should (seq-find (lambda (e)
+                         (and (equal (alist-get 'part (plist-get e :data))
+                                     'ftrack)
+                              (> (length (plist-get e :trail)) 1)))
+                       ents))
+     (should (seq-find (lambda (e)
+                         (and (eq (alist-get 'part (plist-get e :data))
+                                  'cone)
+                              (> (length (plist-get e :polygon)) 2)))
+                       ents))
+     (should (seq-find (lambda (e)
+                         (eq (alist-get 'part (plist-get e :data)) 'ww))
+                       ents)))))
+
+(ert-deftest cmacs-gnuseye--cyclones-zero-storms ()
+  "Empty feeds assemble to nil without erroring."
+  (cmacs-gnuseye-tests--skip)
+  (cmacs-gnuseye-tests--with-meteo
+   (should (null (cmacs-gnuseye-cyclones--assemble
+                  (make-hash-table :test 'eq))))
+   (let ((h (make-hash-table :test 'eq)))
+     (puthash 0 nil h)
+     (puthash 4 nil h)
+     (should (null (cmacs-gnuseye-cyclones--assemble h))))))
+
+(ert-deftest cmacs-gnuseye--cyclones-category ()
+  (cmacs-gnuseye-tests--skip)
+  (cmacs-gnuseye-tests--with-meteo
+   (should (equal (car (cmacs-gnuseye-cyclones--category 5 "HU")) "Cat 5"))
+   (should (equal (car (cmacs-gnuseye-cyclones--category nil "TS")) "TS"))
+   (should (equal (car (cmacs-gnuseye-cyclones--category 0 "TD")) "TD"))
+   (should (equal (car (cmacs-gnuseye-cyclones--category "2" "HU")) "Cat 2"))))
+
+(ert-deftest cmacs-gnuseye--cyclones-strongest ()
+  (cmacs-gnuseye-tests--skip)
+  (cmacs-gnuseye-tests--with-meteo
+   (let ((cmacs-gnuseye--layer-entities (make-hash-table :test 'eq)))
+     (puthash 'cyclones
+              '((:id "cyc:A" :data ((center . t) (maxwind-kt . 65)))
+                (:id "cyc:A:cone" :data ((part . cone)))
+                (:id "cyc:B" :data ((center . t) (maxwind-kt . 120))))
+              cmacs-gnuseye--layer-entities)
+     (should (equal (plist-get (cmacs-gnuseye-cyclones--strongest) :id)
+                    "cyc:B")))))
+
+(ert-deftest cmacs-gnuseye--cyclones-nhc-parse ()
+  "NHC CurrentStorms fallback: centres only; empty feed tolerated."
+  (cmacs-gnuseye-tests--skip)
+  (cmacs-gnuseye-tests--with-meteo
+   (should (null (cmacs-gnuseye-cyclones--nhc-parse '((activeStorms)))))
+   (let ((ents (cmacs-gnuseye-cyclones--nhc-parse
+                '((activeStorms
+                   . (((name . "HONE") (classification . "HU")
+                       (intensity . 80) (pressure . 970)
+                       (latitudeNumeric . 15.5)
+                       (longitudeNumeric . -145.2)
+                       (movementDir . 270) (movementSpeed . 10))))))))
+     (should (= (length ents) 1))
+     (should (equal (plist-get (car ents) :id) "cyc:HONE"))
+     (should (= (plist-get (car ents) :lat) 15.5)))))
+
+;;;; Meteorology: radar + overlay math ----------------------------------------
+
+(ert-deftest cmacs-gnuseye--radar-index-parse ()
+  "RainViewer index digests into sorted frames; empty feeds keep state."
+  (cmacs-gnuseye-tests--skip)
+  (cmacs-gnuseye-tests--with-meteo
+   (let ((cmacs-gnuseye-meteo--radar-frames nil)
+         (cmacs-gnuseye-meteo--radar-host nil))
+     (cmacs-gnuseye-meteo--radar-index
+      '((host . "https://tc.example")
+        (radar . ((past . (((time . 200) (path . "/v2/radar/b"))
+                           ((time . 100) (path . "/v2/radar/a"))))
+                  (nowcast . (((time . 300) (path . "/v2/radar/c"))))))))
+     (should (equal cmacs-gnuseye-meteo--radar-host "https://tc.example"))
+     (should (equal (mapcar (lambda (f) (plist-get f :time))
+                            cmacs-gnuseye-meteo--radar-frames)
+                    '(100 200 300)))
+     (should (plist-get (nth 2 cmacs-gnuseye-meteo--radar-frames) :nowcast))
+     ;; An empty refresh must NOT blank the existing frames.
+     (cmacs-gnuseye-meteo--radar-index
+      '((host . "https://tc.example") (radar . ((past) (nowcast)))))
+     (should (= (length cmacs-gnuseye-meteo--radar-frames) 3)))))
+
+(ert-deftest cmacs-gnuseye--radar-tile-url ()
+  (cmacs-gnuseye-tests--skip)
+  (cmacs-gnuseye-tests--with-meteo
+   (let ((cmacs-gnuseye-meteo--radar-host "https://tc.example")
+         (cmacs-gnuseye-radar-color 2)
+         (cmacs-gnuseye-radar-options "1_1"))
+     (should (equal (cmacs-gnuseye-meteo--radar-tile-url "/v2/radar/abc" 1 2 3)
+                    "https://tc.example/v2/radar/abc/256/3/1/2/2/1_1.png")))))
+
+(ert-deftest cmacs-gnuseye--overlay-tile-xy ()
+  "Slippy-tile math: known anchors and the mercator clamp."
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-overlay)
+  (should (equal (cmacs-gnuseye-overlay-tile-xy 0 0 0) '(0 . 0)))
+  (should (equal (cmacs-gnuseye-overlay-tile-xy 0 0 1) '(1 . 1)))
+  (should (equal (cmacs-gnuseye-overlay-tile-xy 40.7 -74.0 4) '(4 . 6)))
+  ;; Poles clamp inside the mercator limit instead of overflowing.
+  (should (equal (cmacs-gnuseye-overlay-tile-xy 90 179.9 2) '(3 . 0)))
+  (should (equal (cmacs-gnuseye-overlay-tile-xy -90 -180 2) '(0 . 3))))
+
+(ert-deftest cmacs-gnuseye--overlay-world-tiles ()
+  (cmacs-gnuseye-tests--skip)
+  (require 'cmacs-gnuseye-overlay)
+  (should (= (length (cmacs-gnuseye-overlay-world-tiles 2)) 16))
+  (should (equal (car (cmacs-gnuseye-overlay-world-tiles 1)) '(0 0 1))))
+
+(ert-deftest cmacs-gnuseye--gibs-url ()
+  "GIBS GetMap URL carries the mandatory STYLES= and yesterday's date."
+  (cmacs-gnuseye-tests--skip)
+  (cmacs-gnuseye-tests--with-meteo
+   (let ((url (format cmacs-gnuseye-gibs-url-format "LAYER_X" 1024 512
+                      (cmacs-gnuseye-meteo--gibs-date))))
+     (should (string-match-p "STYLES=&" url))
+     (should (string-match-p "LAYERS=LAYER_X" url))
+     (should (string-match-p "WIDTH=1024&HEIGHT=512" url))
+     (should (string-match-p "TIME=[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}"
+                             url)))))
+
+;;;; Meteorology: wind --------------------------------------------------------
+
+(ert-deftest cmacs-gnuseye--wind-uv ()
+  "Meteorological direction (FROM) converts to a motion vector."
+  (cmacs-gnuseye-tests--skip)
+  (cmacs-gnuseye-tests--with-meteo
+   ;; Wind FROM the west (270 deg) moves air EAST: u > 0, v ~ 0.
+   (let ((uv (cmacs-gnuseye-meteo--wind-uv 10.0 270.0)))
+     (should (> (car uv) 9.9))
+     (should (< (abs (cdr uv)) 0.1)))
+   ;; Wind FROM the north moves air south: v < 0.
+   (let ((uv (cmacs-gnuseye-meteo--wind-uv 5.0 0.0)))
+     (should (< (cdr uv) -4.9)))
+   (should (equal (cmacs-gnuseye-meteo--wind-uv nil nil) '(0.0 . 0.0)))))
+
+(defun cmacs-gnuseye-tests--wind-uniform (u v)
+  "Install a uniform wind field of (U . V) over the test grid."
+  (let* ((rows 10) (cols 24)
+         (field (make-vector rows nil)))
+    (dotimes (r rows)
+      (let ((row (make-vector cols (cons u v))))
+        (aset field r row)))
+    (setq cmacs-gnuseye-meteo--wind-field field
+          cmacs-gnuseye-meteo--wind-meta
+          (list :lat0 -60 :lon0 -180 :step 15 :rows rows :cols cols
+                :ts (float-time) :level 'surface))))
+
+(ert-deftest cmacs-gnuseye--wind-bilinear ()
+  "Uniform field interpolates to itself anywhere, including the wrap."
+  (cmacs-gnuseye-tests--skip)
+  (cmacs-gnuseye-tests--with-meteo
+   (let ((cmacs-gnuseye-meteo--wind-field nil)
+         (cmacs-gnuseye-meteo--wind-meta nil))
+     (cmacs-gnuseye-tests--wind-uniform 7.0 -3.0)
+     (dolist (pt '((0 0) (17.3 12.9) (-42 179.5) (60 -179.5)))
+       (let ((uv (cmacs-gnuseye-meteo-wind-at (nth 0 pt) (nth 1 pt))))
+         (should (< (abs (- (car uv) 7.0)) 1e-6))
+         (should (< (abs (- (cdr uv) -3.0)) 1e-6)))))))
+
+(ert-deftest cmacs-gnuseye--wind-advance ()
+  "A westerly field advects particles east; trails grow; respawn keeps ids."
+  (cmacs-gnuseye-tests--skip)
+  (cmacs-gnuseye-tests--with-meteo
+   (let ((cmacs-gnuseye-meteo--wind-field nil)
+         (cmacs-gnuseye-meteo--wind-meta nil)
+         (cmacs-gnuseye-wind-exaggeration 1000.0))
+     (cmacs-gnuseye-tests--wind-uniform 10.0 0.0)
+     (let ((ents (list (list :id "wp:0" :kind 'windp :lat 10.0 :lon 20.0
+                             :scale 0.25 :label-mode 0 :ttl 30.0))))
+       (cmacs-gnuseye-meteo--wind-advance ents 1.0 0.0)
+       (let ((e (car ents)))
+         (should (> (plist-get e :lon) 20.0))
+         (should (= (length (plist-get e :trail)) 1))
+         (should (equal (car (plist-get e :trail)) '(10.0 20.0)))
+         ;; Expire it: the respawn keeps the slot id.
+         (plist-put e :ttl 0.0)
+         (cmacs-gnuseye-meteo--wind-advance ents 1.0 0.0)
+         (should (equal (plist-get e :id) "wp:0"))
+         (should (null (plist-get e :trail))))))))
+
+(ert-deftest cmacs-gnuseye--wind-parse-surface ()
+  (cmacs-gnuseye-tests--skip)
+  (cmacs-gnuseye-tests--with-meteo
+   (let ((cmacs-gnuseye-wind-level 'surface))
+     (let ((uv (cmacs-gnuseye-meteo--wind-parse-one
+                '((latitude . 52.5)
+                  (current . ((wind_speed_10m . 4.0)
+                              (wind_direction_10m . 270)))))))
+       (should (> (car uv) 3.9))))))
+
+;;;; Meteorology: METAR + forecast --------------------------------------------
+
+(ert-deftest cmacs-gnuseye--metar-parse ()
+  "METAR JSON parses with nullable fields and flight-category colours."
+  (cmacs-gnuseye-tests--skip)
+  (cmacs-gnuseye-tests--with-meteo
+   (let ((ents (cmacs-gnuseye-meteo--metar-parse
+                '(((icaoId . "KJFK") (lat . 40.64) (lon . -73.78)
+                   (temp . 24.0) (dewp . 18.0) (wdir . 260) (wspd . 11)
+                   (altim . 1016.3) (fltCat . "VFR")
+                   (name . "New York/JFK")
+                   (rawOb . "METAR KJFK ...")
+                   (clouds . (((cover . "SCT") (base . 1000)))))
+                  ((icaoId . "XXXX") (lat . "bogus") (lon . 0))
+                  ((icaoId . "KLAX") (lat . 33.94) (lon . -118.39)
+                   (fltCat . "LIFR"))))))
+     (should (= (length ents) 2))
+     (let ((jfk (car ents)))
+       (should (equal (plist-get jfk :id) "metar:KJFK"))
+       (should (equal (plist-get jfk :color) "#3adf6a"))
+       (should (equal (alist-get 'clouds (plist-get jfk :data)) "SCT@1000")))
+     (should (equal (plist-get (cadr ents) :color) "#ff2ad0")))))
+
+(ert-deftest cmacs-gnuseye--wmo-and-compass ()
+  (cmacs-gnuseye-tests--skip)
+  (cmacs-gnuseye-tests--with-meteo
+   (should (equal (cmacs-gnuseye-meteo--wmo 95) "thunderstorm"))
+   (should (equal (cmacs-gnuseye-meteo--wmo nil) "?"))
+   (should (equal (cmacs-gnuseye-meteo--compass 0) "N"))
+   (should (equal (cmacs-gnuseye-meteo--compass 315) "NW"))
+   (should (equal (cmacs-gnuseye-meteo--compass nil) "?"))))
+
+(ert-deftest cmacs-gnuseye--forecast-render-smoke ()
+  "The forecast panel renders a fixture without display machinery."
+  (cmacs-gnuseye-tests--skip)
+  (cmacs-gnuseye-tests--with-meteo
+   (cl-letf (((symbol-function 'display-buffer-in-side-window)
+              (lambda (buf _alist) buf)))
+     (cmacs-gnuseye-meteo--forecast-render
+      40.0 -74.0 "Test point"
+      '((timezone . "America/New_York")
+        (current . ((temperature_2m . 24.2) (apparent_temperature . 25.0)
+                    (relative_humidity_2m . 60) (precipitation . 0.0)
+                    (weather_code . 2) (wind_speed_10m . 3.4)
+                    (wind_direction_10m . 200) (pressure_msl . 1015.2)))
+        (hourly . ((time . ("t1" "t2")) (temperature_2m . (24 25))
+                   (precipitation_probability . (10 20))
+                   (wind_speed_10m . (3 4))))
+        (daily . ((time . ("2026-07-04" "2026-07-05"))
+                  (weather_code . (2 61))
+                  (temperature_2m_max . (28 27))
+                  (temperature_2m_min . (20 19))
+                  (precipitation_sum . (0.0 4.2))))))
+     (with-current-buffer "*GNU's Eye Forecast*"
+       (let ((text (buffer-string)))
+         (should (string-match-p "Test point" text))
+         (should (string-match-p "partly cloudy" text))
+         (should (string-match-p "2026-07-05" text))
+         (should (string-match-p "light rain" text)))
+       (kill-buffer)))))
+
+;;;; Meteorology: registration + keys -----------------------------------------
+
+(ert-deftest cmacs-gnuseye--meteo-layers-registered ()
+  "All five meteorology layers register under the meteo group."
+  (cmacs-gnuseye-tests--skip)
+  (cmacs-gnuseye-tests--with-meteo
+   (dolist (name '(cyclones radar clouds wind-particles metar))
+     (let ((l (gethash name cmacs-gnuseye--layers)))
+       (should l)
+       (should (eq (cmacs-gnuseye-layer-group l) 'meteo))))
+   (should (cmacs-gnuseye-layer-transient
+            (gethash 'wind-particles cmacs-gnuseye--layers)))
+   (should (functionp (cmacs-gnuseye-layer-teardown
+                       (gethash 'radar cmacs-gnuseye--layers))))
+   (should (memq 'cmacs-gnuseye-meteo cmacs-gnuseye-layer-files))))
+
+(ert-deftest cmacs-gnuseye--meteo-keybindings ()
+  (cmacs-gnuseye-tests--skip)
+  (cmacs-gnuseye-tests--with-meteo
+   (should (eq (lookup-key cmacs-gnuseye-mode-map (kbd "R"))
+               #'cmacs-gnuseye-radar-animate))
+   (should (eq (lookup-key cmacs-gnuseye-mode-map (kbd "W"))
+               #'cmacs-gnuseye-weather-showcase))
+   (should (eq (lookup-key cmacs-gnuseye-mode-map (kbd "P"))
+               #'cmacs-gnuseye-forecast-here))
+   (should (eq (lookup-key cmacs-gnuseye-mode-map (kbd "E"))
+               #'cmacs-gnuseye-earth-today))))
+
 (provide 'cmacs-gnuseye-tests)
 
 ;;; cmacs-gnuseye-tests.el ends here

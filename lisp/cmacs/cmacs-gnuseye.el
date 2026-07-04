@@ -65,7 +65,7 @@ Smaller zooms in closer."
 
 (defcustom cmacs-gnuseye-layer-files
   '(cmacs-gnuseye-astro cmacs-gnuseye-air
-    cmacs-gnuseye-marine cmacs-gnuseye-weather
+    cmacs-gnuseye-marine cmacs-gnuseye-weather cmacs-gnuseye-meteo
     cmacs-gnuseye-natural cmacs-gnuseye-space cmacs-gnuseye-conflict
     cmacs-gnuseye-infra cmacs-gnuseye-health cmacs-gnuseye-media
     cmacs-gnuseye-keyed cmacs-gnuseye-celestial)
