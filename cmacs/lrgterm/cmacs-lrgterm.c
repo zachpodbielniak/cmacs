@@ -3468,6 +3468,33 @@ Works headless (all zeros before any window/input exists).  */)
                make_fixnum ((EMACS_INT) lrg_now_ms ()));
 }
 
+DEFUN ("cmacs-lrgterm--inject-mouse", Fcmacs_lrgterm_inject_mouse,
+       Scmacs_lrgterm_inject_mouse, 2, 4, 0,
+       doc: /* TESTING: synthesise mouse input at the GLFW layer.
+With just X and Y, injects pointer MOTION to that window pixel.  With
+BUTTON (0 left, 1 right, 2 middle) also given, injects a press when
+PRESSED is non-nil, else a release.  The event runs the backend's real
+callbacks, so polled state, edges and event-carried modifiers behave
+exactly as for physical input; the next `lrg_read_socket' translates it
+into ordinary Emacs events.  Returns t when delivered.  */)
+  (Lisp_Object x, Lisp_Object y, Lisp_Object button, Lisp_Object pressed)
+{
+  gboolean ok;
+
+  CHECK_NUMBER (x);
+  CHECK_NUMBER (y);
+  if (NILP (button))
+    ok = grl_input_inject_mouse_motion (XFLOATINT (x), XFLOATINT (y));
+  else
+    {
+      CHECK_FIXNUM (button);
+      ok = grl_input_inject_mouse_motion (XFLOATINT (x), XFLOATINT (y))
+        && grl_input_inject_mouse_button ((gint) XFIXNUM (button),
+                                          !NILP (pressed), 0);
+    }
+  return ok ? Qt : Qnil;
+}
+
 DEFUN ("cmacs-lrgterm--mods-from-event-bits", Fcmacs_lrgterm_mods_from_event_bits,
        Scmacs_lrgterm_mods_from_event_bits, 1, 1, 0,
        doc: /* Translate GLFW event-modifier BITS to Emacs modifier bits.
@@ -4235,6 +4262,7 @@ syms_of_cmacs_lrgterm (void)
   defsubr (&Slrg_get_clipboard);
   defsubr (&Scmacs_lrgterm_input_state);
   defsubr (&Scmacs_lrgterm_mods_from_event_bits);
+  defsubr (&Scmacs_lrgterm_inject_mouse);
   DEFSYM (QCarmed, ":armed");
   DEFSYM (QCevent_mods, ":event-mods");
   DEFSYM (QCserial, ":serial");

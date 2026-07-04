@@ -384,14 +384,21 @@ state in scope."
     win))
 
 (defun cmacs-imgedit--event-end-xy (event win)
-  "Document coords of mouse EVENT when it landed in WIN, else nil.
-Used for the button-release that ends a drag: its position is the exact
-endpoint, and on display backends that deliver no motion events during
-`track-mouse' (the --lrg backend before its mouse_moved fix) it is the
-ONLY report of where the drag went."
-  (and (consp event)
-       (ignore-errors (eq (posn-window (event-start event)) win))
-       (ignore-errors (cmacs-imgedit--event-doc-xy event))))
+  "Document coords where mouse EVENT ENDED, when that is in WIN, else nil.
+Used for the button-release that ends a drag.  CRITICAL: a cross-canvas
+drag arrives as `drag-mouse-1' carrying TWO posns — `event-start' is the
+PRESS point and `event-end' the release — so this must read `event-end'
+(which equals `event-start' for plain clicks).  Reading the start posn
+here silently rewound every drag to its press point.  Because Emacs
+synthesizes the drag event from the two positions, this also reports the
+true endpoint on backends that deliver no motion during `track-mouse'."
+  (let ((posn (and (consp event) (ignore-errors (event-end event)))))
+    (and posn
+         (ignore-errors (eq (posn-window posn) win))
+         ;; Re-wrap so --event-doc-xy (which reads `event-start') sees
+         ;; the END posn.
+         (ignore-errors
+           (cmacs-imgedit--event-doc-xy (list 'mouse-1 posn))))))
 
 (defun cmacs-imgedit--stroke-feedback (xy)
   "Echo what the last edit at XY produced, for instant triage."

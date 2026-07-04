@@ -274,11 +274,25 @@ itself instead of drawing a dot at the press position."
                                   (cons 64 64) (cons 512 512)))    ; -> (8,8)
                  (up-posn (list win 1 (cons 448 448) 0 nil 1 (cons 1 1) nil
                                 (cons 448 448) (cons 512 512)))    ; -> (56,56)
-                 (unread-command-events (list (list 'mouse-1 up-posn 1))))
+                 ;; A cross-canvas drag terminates as `drag-mouse-1' with
+                 ;; TWO posns: event-start = the PRESS, event-end = the
+                 ;; release.  The loop must take the endpoint from
+                 ;; event-end -- reading event-start rewound every drag
+                 ;; to its press point (the --lrg "only a dot" bug).
+                 (unread-command-events
+                  (list (list 'drag-mouse-1 down-posn up-posn))))
             (cmacs-imgedit-mouse-1 (list 'down-mouse-1 down-posn)))
           ;; The line must reach the release point, not stop at the press.
           (should (equal (cmacs-imgedit-pixel-at h 56 56) '(255 0 0 255)))
-          (should (equal (cmacs-imgedit-pixel-at h 32 32) '(255 0 0 255))))
+          (should (equal (cmacs-imgedit-pixel-at h 32 32) '(255 0 0 255)))
+          ;; A plain click (no drag detected): event-end = event-start.
+          (with-current-buffer canvas
+            (setq cmacs-imgedit--color (list 0 255 0 255)))
+          (let* ((down2 (list win 1 (cons 64 448) 0 nil 1 (cons 1 1) nil
+                              (cons 64 448) (cons 512 512)))       ; -> (8,56)
+                 (unread-command-events (list (list 'mouse-1 down2 1))))
+            (cmacs-imgedit-mouse-1 (list 'down-mouse-1 down2)))
+          (should (equal (cmacs-imgedit-pixel-at h 8 56) '(0 255 0 255))))
       (with-current-buffer canvas (setq cmacs-imgedit--handle nil))
       (kill-buffer canvas)
       (ignore-errors (cmacs-imgedit-free h)))))
