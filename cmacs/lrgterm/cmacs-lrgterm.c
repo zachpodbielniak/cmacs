@@ -3443,6 +3443,8 @@ Returns TEXT.  Used by the lrg gui-backend-set-selection method for CLIPBOARD.  
 DEFUN ("cmacs-lrgterm-input-state", Fcmacs_lrgterm_input_state,
        Scmacs_lrgterm_input_state, 0, 0, 0,
        doc: /* Diagnostics for the lrg input layer, as a plist.
+:armed        -- t once the GLFW callback chain is live (event-carried
+                 modifiers are being recorded); nil = polled fallback
 :event-mods   -- GrlEventMods bits of the most recent GLFW input event
 :serial       -- how many events have recorded their modifiers (0 = none
                  yet; the modifier code then falls back to polled state)
@@ -3452,7 +3454,9 @@ DEFUN ("cmacs-lrgterm-input-state", Fcmacs_lrgterm_input_state,
 Works headless (all zeros before any window/input exists).  */)
   (void)
 {
-  return listn (10, QCevent_mods,
+  return listn (12, QCarmed,
+               grl_input_event_mods_armed () ? Qt : Qnil,
+               QCevent_mods,
                make_fixnum ((EMACS_INT) grl_input_get_event_mods ()),
                QCserial,
                make_fixnum ((EMACS_INT) grl_input_get_event_mods_serial ()),
@@ -4231,6 +4235,7 @@ syms_of_cmacs_lrgterm (void)
   defsubr (&Slrg_get_clipboard);
   defsubr (&Scmacs_lrgterm_input_state);
   defsubr (&Scmacs_lrgterm_mods_from_event_bits);
+  DEFSYM (QCarmed, ":armed");
   DEFSYM (QCevent_mods, ":event-mods");
   DEFSYM (QCserial, ":serial");
   DEFSYM (QCfocus_gen, ":focus-gen");
