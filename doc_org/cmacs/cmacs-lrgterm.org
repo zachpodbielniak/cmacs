@@ -196,11 +196,18 @@ same Emacs events pgtk produces:
 - *Mouse motion during ~track-mouse~* (drag tools) — see the
   ~mouse_moved~ / ~lrg_mouse_position~ contract note in the source.
 
-~M-x cmacs-lrgterm-input-state~ echoes the live tracker (event mods,
-serial, focus generation, effective Emacs mods, clock) for diagnosis;
+~M-x cmacs-lrgterm-input-state~ echoes the live tracker for diagnosis —
+check ~:armed~ first: ~t~ means the GLFW callback chain is live and
+modifiers are event-carried; ~nil~ means the polled fallback is in
+effect (headless, non-GLFW platform, or a window not yet up).  ~:serial~
+should climb as you type; ~:event-mods~/~:emacs-mods~ show the raw and
+translated masks, ~:focus-gen~ the focus-change counter.
 ~cmacs-lrgterm--mods-from-event-bits~ exposes the pure translation for
 tests (~test/cmacs/cmacs-lrgterm-tests.el~, graylib's
-~tests/test-input-event-mods.c~).
+~tests/test-input-event-mods.c~).  (Getting the GLFWwindow for the chain
+uses ~glfwGetCurrentContext()~ — raylib's ~GetWindowHandle()~ returns the
+NATIVE X11/Wayland handle, not the GLFWwindow, a trap that once left this
+whole mechanism silently inert.)
 
 *** Text rendering (the font bridge)
 

@@ -8319,7 +8319,9 @@ real monotonic timestamps (double/triple-click counting works);
 side/extra mouse buttons map to @kbd{mouse-8}/@kbd{mouse-9}; horizontal
 wheel emits @code{HORIZ_WHEEL_EVENT} with pgtk's direction convention.
 @code{M-x cmacs-lrgterm-input-state} echoes the live tracker for
-diagnosis.
+diagnosis; check @code{:armed} first --- @code{t} means modifiers are
+event-carried, @code{nil} means the polled fallback is in effect ---
+and @code{:serial} should climb as you type.
 
 @section Architecture
 
