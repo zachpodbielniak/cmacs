@@ -250,5 +250,38 @@ to the editor's handler."
       (kill-buffer buf)
       (ignore-errors (cmacs-imgedit-free h)))))
 
+(ert-deftest cmacs-imgedit-drag-without-motion-events ()
+  "A drag must commit at the RELEASE position even with no motion events.
+Display backends may deliver zero mouse-movement events during
+`track-mouse' (the --lrg backend did, before its mouse_moved fix); the
+shape loops must then take the endpoint from the button-release event
+itself instead of drawing a dot at the press position."
+  (cmacs-imgedit-tests--skip-unless)
+  (require 'cmacs-imgedit)
+  (let* ((h (cmacs-imgedit-new 64 64))
+         (canvas (generate-new-buffer "*imgedit-test-drag*"))
+         (win (frame-root-window)))
+    (unwind-protect
+        (progn
+          (with-current-buffer canvas
+            (cmacs-imgedit-mode)
+            (setq cmacs-imgedit--handle h
+                  cmacs-imgedit--tool 'line
+                  cmacs-imgedit--color (list 255 0 0 255)))
+          (set-window-buffer win canvas)
+          (select-window win)
+          (let* ((down-posn (list win 1 (cons 64 64) 0 nil 1 (cons 1 1) nil
+                                  (cons 64 64) (cons 512 512)))    ; -> (8,8)
+                 (up-posn (list win 1 (cons 448 448) 0 nil 1 (cons 1 1) nil
+                                (cons 448 448) (cons 512 512)))    ; -> (56,56)
+                 (unread-command-events (list (list 'mouse-1 up-posn 1))))
+            (cmacs-imgedit-mouse-1 (list 'down-mouse-1 down-posn)))
+          ;; The line must reach the release point, not stop at the press.
+          (should (equal (cmacs-imgedit-pixel-at h 56 56) '(255 0 0 255)))
+          (should (equal (cmacs-imgedit-pixel-at h 32 32) '(255 0 0 255))))
+      (with-current-buffer canvas (setq cmacs-imgedit--handle nil))
+      (kill-buffer canvas)
+      (ignore-errors (cmacs-imgedit-free h)))))
+
 (provide 'cmacs-imgedit-tests)
 ;;; cmacs-imgedit-tests.el ends here

@@ -2410,6 +2410,12 @@ lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
            panel, not at the raw device pixel.  */
         last_mx = mx;
         last_my = my;
+        /* Let `track-mouse' consumers see this motion: keyboard.c only
+           synthesizes mouse-movement events for frames whose mouse_moved
+           flag is set (the coordinates then come from lrg_mouse_position,
+           which clears it).  Without this, drag tools (e.g. the imgedit
+           brush/shape drags) never receive motion under --lrg.  */
+        f->mouse_moved = true;
         if (lrg_pick_xy (f, mx, my, &pfx, &pfy))
           {
 #ifdef HAVE_CMACS_LIBREGNUM
@@ -2587,6 +2593,9 @@ lrg_mouse_position (struct frame **fp, int insist, Lisp_Object *bar_window,
       *fp = f;
       XSETINT (*x, pfx);
       XSETINT (*y, pfy);
+      /* Position consumed: clear the motion flag until the next move, per
+         the mouse_position_hook contract (see pgtkterm).  */
+      f->mouse_moved = false;
     }
   else
     {

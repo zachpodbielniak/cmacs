@@ -383,6 +383,16 @@ state in scope."
       (set-buffer (window-buffer win)))
     win))
 
+(defun cmacs-imgedit--event-end-xy (event win)
+  "Document coords of mouse EVENT when it landed in WIN, else nil.
+Used for the button-release that ends a drag: its position is the exact
+endpoint, and on display backends that deliver no motion events during
+`track-mouse' (the --lrg backend before its mouse_moved fix) it is the
+ONLY report of where the drag went."
+  (and (consp event)
+       (ignore-errors (eq (posn-window (event-start event)) win))
+       (ignore-errors (cmacs-imgedit--event-doc-xy event))))
+
 (defun cmacs-imgedit--stroke-feedback (xy)
   "Echo what the last edit at XY produced, for instant triage."
   (let ((px (cmacs-imgedit-pixel-at cmacs-imgedit--handle (car xy) (cdr xy))))
@@ -429,28 +439,32 @@ release; bucket/eyedropper act on the click."
              (cmacs-imgedit--stroke-feedback start))))
         ('brush
          (cmacs-imgedit-push-undo cmacs-imgedit--handle)
-         (let ((prev start) (n 0))
+         (let ((prev start) (n 0) (done nil))
            (cmacs-imgedit--brush-dab prev)
            (cmacs-imgedit--render t)        ; live feedback (skip panels)
            (track-mouse
-             (while (let ((e (read-event)))
-                      (and (mouse-movement-p e)
-                           ;; Only track motion over the canvas window; the
-                           ;; coord fallback would misread panel-relative
-                           ;; positions if the pointer strays.
-                           (let ((cur (and (eq (posn-window (event-start e))
-                                               win)
-                                           (cmacs-imgedit--event-doc-xy e))))
-                             (when (and prev cur (not (equal prev cur)))
-                               (cmacs-imgedit-draw-line
-                                cmacs-imgedit--handle (car prev) (cdr prev)
-                                (car cur) (cdr cur) cmacs-imgedit--brush-size)
-                               (setq prev cur)
-                               ;; Throttle the live redraw (full-image PNG
-                               ;; re-encode is costly for large canvases).
-                               (when (zerop (mod (cl-incf n) 3))
-                                 (cmacs-imgedit--render t)))
-                             t)))))
+             (while (not done)
+               (let ((e (read-event)) cur)
+                 (if (mouse-movement-p e)
+                     ;; Only track motion over the canvas window; the coord
+                     ;; fallback would misread panel-relative positions if
+                     ;; the pointer strays.
+                     (setq cur (and (eq (posn-window (event-start e)) win)
+                                    (cmacs-imgedit--event-doc-xy e)))
+                   ;; Button release ends the stroke; its own position is
+                   ;; the last segment (and the only one on backends that
+                   ;; deliver no motion during track-mouse).
+                   (setq done t
+                         cur (cmacs-imgedit--event-end-xy e win)))
+                 (when (and prev cur (not (equal prev cur)))
+                   (cmacs-imgedit-draw-line
+                    cmacs-imgedit--handle (car prev) (cdr prev)
+                    (car cur) (cdr cur) cmacs-imgedit--brush-size)
+                   (setq prev cur)
+                   ;; Throttle the live redraw (full-image PNG re-encode
+                   ;; is costly for large canvases).
+                   (when (and (not done) (zerop (mod (cl-incf n) 3)))
+                     (cmacs-imgedit--render t))))))
            (cmacs-imgedit--render)
            (cmacs-imgedit--stroke-feedback prev)))
         ((or 'line 'arrow 'rectangle 'circle 'ellipse)
@@ -464,7 +478,12 @@ release; bucket/eyedropper act on the click."
                                         (cmacs-imgedit--event-doc-xy e))))
                           (when cur (setq end cur)))
                         t)
-                       (t nil)))))   ; stop on button-up
+                       ;; Button-up stops the drag; its position is the
+                       ;; exact endpoint (and the only one on backends
+                       ;; with no motion events during track-mouse).
+                       (t (let ((cur (cmacs-imgedit--event-end-xy e win)))
+                            (when cur (setq end cur)))
+                          nil)))))
            (cmacs-imgedit-push-undo cmacs-imgedit--handle)
            (pcase cmacs-imgedit--tool
              ('line

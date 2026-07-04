@@ -329,13 +329,28 @@ cmacs_imgedit_doc_draw_line (CmacsImgeditDoc *d, int x1, int y1, int x2, int y2,
 {
   GrlImage *img = editable_image (d);
   g_autoptr (LrgImageCanvas) c = NULL;
+  int t;
 
   if (img == NULL)
     return;
+  t = MAX (1, thickness);
   c = lrg_image_canvas_new_for_image (img);
   lrg_image_canvas_set_blend_mode (c, d->draw_blend);
-  lrg_image_canvas_draw_line (c, x1, y1, x2, y2, MAX (1, thickness),
-                              &d->draw_color);
+  lrg_image_canvas_draw_line (c, x1, y1, x2, y2, t, &d->draw_color);
+  /* raylib's thick-line rasterizer can leave the very endpoints
+     unpainted; cap both ends so a stroke reaches exactly where the
+     user pressed and released (pixel-art fidelity, smooth brush
+     segment joins).  */
+  if (t <= 1)
+    {
+      lrg_image_canvas_fill_rect (c, x1, y1, 1, 1, &d->draw_color);
+      lrg_image_canvas_fill_rect (c, x2, y2, 1, 1, &d->draw_color);
+    }
+  else
+    {
+      lrg_image_canvas_fill_circle (c, x1, y1, t / 2, &d->draw_color);
+      lrg_image_canvas_fill_circle (c, x2, y2, t / 2, &d->draw_color);
+    }
   lrg_image_document_mark_dirty (d->doc);
 }
 
