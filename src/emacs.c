@@ -2864,6 +2864,12 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #ifdef HAVE_CMACS_LIBREGNUM
       syms_of_cmacs_libregnum ();
 #endif
+#ifdef HAVE_CMACS_IMGEDIT
+      syms_of_cmacs_imgedit ();
+#endif
+#ifdef HAVE_CMACS_VIDSTUDIO
+      syms_of_cmacs_vidstudio ();
+#endif
 #ifdef HAVE_CMACS_LRGTERM
       syms_of_cmacs_lrgterm ();
 #endif
@@ -2996,6 +3002,12 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #endif
 #ifdef HAVE_CMACS_LIBREGNUM
   init_cmacs_libregnum ();
+#endif
+#ifdef HAVE_CMACS_IMGEDIT
+  init_cmacs_imgedit ();
+#endif
+#ifdef HAVE_CMACS_VIDSTUDIO
+  init_cmacs_vidstudio ();
 #endif
 #ifdef HAVE_CMACS_LRGTERM
   init_cmacs_lrgterm ();

@@ -1,0 +1,187 @@
+#+TITLE: cmacs Video Editor (vidstudio)
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:2 num:t
+
+* Overview
+
+~cmacs-vidstudio~ is a video editor embedded in cmacs, built on libregnum's
+*Reel* composition system.  A project is an =LrgReel=; each *track* is an
+=LrgReelTransitionSeries= of clip segments joined by transitions, with per-clip
+effects.  Frames are composited on the CPU by =LrgReelRenderer= (headless) and
+exported through the ffmpeg-backed reel exporters (the reel video source /
+exporter shell out to the =ffmpeg= binary — no libav linkage required for the
+editor itself).
+
+Distinct from ~cmacs/video/~: that is GStreamer playback overlay; vidstudio is
+a Reel-based *editor* (timeline, transitions, effects, export).
+
+Two facets, like the image editor:
+
+- *Model layer* — handle-based ~cmacs-vidstudio-*~ primitives (tracks, clips,
+  transitions, effects, split/trim/move/ripple, render, export).  CPU /
+  headless / scriptable / MCP-driveable.
+- *UI layer* — ~cmacs-vidstudio-mode~ shows the composited preview frame as a
+  native Emacs image with a textual timeline, a playhead + transport, and
+  editing commands.
+
+The in-engine libregnum timeline strip + thumbnails and the GTK / =--lrg=
+right-click menus are a planned follow-on layer.  Smooth real-time scrubbing of
+source clips is served by the libregnum =LrgVideoPlayer= FFmpeg backend
+(=FFMPEG=1=), documented in the libregnum video module.
+
+Off by default; build with =--with-cmacs-vidstudio= (requires
+=--with-cmacs-libregnum= and =--with-cmacs-glib=; the =ffmpeg= binary is needed
+at runtime for video clips + export).
+
+* Getting started
+
+#+begin_src
+M-x cmacs-vidstudio          ; new project (prompts W x H x fps)
+#+end_src
+
+Then build the timeline with the keys below; the buffer previews the frame at
+the playhead.
+
+** Default keybindings (~cmacs-vidstudio-mode~)
+
+| Key       | Command                              | Action                       |
+|-----------+--------------------------------------+------------------------------|
+| ~i~       | ~cmacs-vidstudio-import~             | Import an image/video clip   |
+| ~C~       | ~cmacs-vidstudio-add-color~          | Add a solid colour clip      |
+| ~T~       | ~cmacs-vidstudio-add-title~          | Add a text/title clip        |
+| ~n~       | ~cmacs-vidstudio-add-track-cmd~      | Add a track                  |
+| ~a~       | ~cmacs-vidstudio-set-active-track~   | Select the active track      |
+| ~t~       | ~cmacs-vidstudio-add-transition-cmd~ | Add a transition to a clip   |
+| ~e~       | ~cmacs-vidstudio-add-effect-cmd~     | Add an effect to a clip      |
+| ~s~       | ~cmacs-vidstudio-split-at-playhead~  | Split a clip at the playhead |
+| ~g~       | ~cmacs-vidstudio-set-playhead-cmd~   | Jump the playhead            |
+| ~p~ / ~SPC~ | ~cmacs-vidstudio-play~             | Play / pause (~p~ under Doom — SPC is the leader there) |
+| ~←~ / ~→~ | ~cmacs-vidstudio-step-back/forward~  | Step one frame               |
+| ~E~       | ~cmacs-vidstudio-export-video-cmd~   | Export MP4 (H.264)           |
+| ~G~       | ~cmacs-vidstudio-export-gif-cmd~     | Export animated GIF          |
+
+~mouse-3~ pops the editor context menu.  Like imgedit, the rendered buffer
+carries a =keymap= text property and the mode map is registered with
+~evil-make-overriding-map~, so the menu and the keys above work unmodified
+under Doom/Evil and =context-menu-mode=.  (Exception: Doom's leader owns
+~SPC~ through a =general.el= override map that outranks even overriding mode
+maps — use ~p~ for play/pause there.)
+
+** Responsiveness (async decode + adaptive playback)
+
+- *Import never blocks.*  A video clip is only /probed/ at import
+  (ffprobe); the whole-clip ffmpeg decode runs on a *worker thread*
+  (~lrg_reel_video_source_set_async_decode~).  Until it lands, the preview
+  composites a dark placeholder for that clip; the editor polls
+  ~cmacs-vidstudio-clip-ready-p~ (~0.25s) and re-renders + messages
+  "clip #N decoded" when real frames arrive.  Export always waits for real
+  frames (never placeholders).
+- *Playback never freezes Emacs.*  ~cmacs-vidstudio-play~ advances the
+  playhead from the wall clock — slow frames are skipped, not stretched —
+  and no frame is rendered while user input is pending, so the editor
+  stays interactive during playback.  Preview redraws are capped at
+  ~cmacs-vidstudio-preview-fps~ (default 12) and each render is followed
+  by an explicit ~redisplay~ (a repeating timer whose callback outlasts
+  its period otherwise starves Emacs's redisplay — the buffer updates but
+  the screen never repaints).  Pressing play at the end of the timeline
+  rewinds and replays.  Clips still decoding show a =decoding…= marker in
+  the timeline (their preview is a dark placeholder until ready).
+- *The preview frame is uncompressed.*  Playback renders through
+  ~cmacs-vidstudio-render-ppm~: the frame is composited, downscaled to
+  the preview width *in C*, and emitted as binary PPM — no zlib on either
+  side (PNG cost ~70ms/frame at 720p vs ~15ms for PPM in a debug build),
+  which is what makes the 12fps preview cadence sustainable.  Previous
+  preview images are ~image-flush~-ed each redraw so the image cache
+  stays flat during playback.  Expect preview rates, not full 60fps
+  compositing: this is a CPU compositor (and cmacs dev builds compile
+  deps at -O0); the in-engine libregnum viewport is the planned
+  true-realtime path.
+
+* Model API (the ~cmacs-vidstudio-*~ primitives)
+
+Projects are referenced by integer *handle*; clips by a stable integer *id*.
+Durations and the playhead are in *frames*.
+
+** Lifecycle
+- ~(cmacs-vidstudio-supported-p)~ → t when built in.
+- ~(cmacs-vidstudio-new WIDTH HEIGHT FPS)~ → handle (starts with one track).
+- ~(cmacs-vidstudio-free HANDLE)~.
+- ~(cmacs-vidstudio-width/height/fps/total-frames HANDLE)~.
+
+** Tracks
+- ~(cmacs-vidstudio-add-track HANDLE)~ → index, ~(cmacs-vidstudio-n-tracks HANDLE)~.
+- ~(cmacs-vidstudio-track-clip-count HANDLE TRACK)~,
+  ~(cmacs-vidstudio-track-total-frames HANDLE TRACK)~.
+
+** Clips (each returns a clip id)
+- ~(cmacs-vidstudio-add-solid-clip HANDLE TRACK DURATION R G B A)~.
+- ~(cmacs-vidstudio-add-image-clip HANDLE TRACK PATH DURATION)~.
+- ~(cmacs-vidstudio-add-video-clip HANDLE TRACK PATH DURATION)~.
+- ~(cmacs-vidstudio-add-text-clip HANDLE TRACK TEXT DURATION R G B A)~.
+
+** Transitions / effects
+- ~(cmacs-vidstudio-set-transition HANDLE CLIP-ID TYPE OVERLAP EASING)~ —
+  TYPE: -1 none, 0 fade, 1 dissolve, 2 wipe, 3 slide, 4 zoom, 5 iris, 6 flip,
+  7 push, 8 clock-wipe.  OVERLAP in frames.
+- ~(cmacs-vidstudio-add-effect HANDLE CLIP-ID TYPE)~ — 0 blur, 1 bloom,
+  2 color-grade, 3 vignette, 4 grain.  ~(cmacs-vidstudio-clear-effects ...)~.
+
+** Editing
+- ~(cmacs-vidstudio-set-clip-duration HANDLE CLIP-ID FRAMES)~.
+- ~(cmacs-vidstudio-split-clip HANDLE CLIP-ID AT-FRAME)~ → new tail id.
+- ~(cmacs-vidstudio-move-clip HANDLE CLIP-ID NEW-TRACK NEW-INDEX)~.
+- ~(cmacs-vidstudio-remove-clip HANDLE CLIP-ID &optional RIPPLE)~.
+- Queries: ~clip-at~, ~clip-duration~, ~clip-start-frame~.
+
+** Preview / export
+- ~(cmacs-vidstudio-render-png HANDLE FRAME)~ → unibyte PNG string.
+- ~(cmacs-vidstudio-render-ppm HANDLE FRAME &optional MAX-WIDTH)~ → unibyte
+  binary-PPM (P6) string, downscaled to MAX-WIDTH.  Uncompressed → ~5x
+  faster than PNG end-to-end; the playback preview uses this.
+- ~(cmacs-vidstudio-clip-ready-p HANDLE CLIP-ID)~ → t once a video clip's
+  background decode finished (non-video clips: always t).
+- ~(cmacs-vidstudio-frame-pixel HANDLE FRAME X Y)~ → ~(R G B A)~ (tests).
+- ~(cmacs-vidstudio-export-video HANDLE PATH &optional CODEC)~ — 0 h264, 1 vp9,
+  2 h265, 3 prores.
+- ~(cmacs-vidstudio-export-gif HANDLE PATH)~.
+
+* MCP tools
+
+With =--with-cmacs-mcp=, the server exposes typed tools over the model API:
+=vidstudio_new=, =vidstudio_info= (read-only; shows the per-track clip
+layout incl. a =decoding= marker), =vidstudio_add_track=,
+=vidstudio_add_clip= (video/image/solid/text), =vidstudio_set_transition=,
+=vidstudio_add_effect=, =vidstudio_split=, =vidstudio_render_frame=
+(writes a PNG an agent can view), =vidstudio_export= (mp4/gif).  All
+headless — an agent can cut a video end-to-end.
+
+* Example (scripted)
+
+#+begin_src elisp
+(let ((p (cmacs-vidstudio-new 640 360 30.0)))
+  (let ((a (cmacs-vidstudio-add-solid-clip p 0 60 200 30 30 255))
+        (b (cmacs-vidstudio-add-solid-clip p 0 60 30 30 200 255)))
+    (cmacs-vidstudio-set-transition p b 1 15 0)   ; 0.5s dissolve A->B
+    (cmacs-vidstudio-add-effect p a 3))           ; vignette on A
+  (cmacs-vidstudio-add-track p)
+  (cmacs-vidstudio-add-text-clip p 1 "Hello" 30 255 255 255 255)
+  (cmacs-vidstudio-export-gif p "/tmp/demo.gif")
+  (cmacs-vidstudio-free p))
+#+end_src
+
+* Implementation
+
+| Piece | File |
+|-------+------|
+| Project / timeline model (tracks → LrgReelTransitionSeries) | =cmacs/vidstudio/cmacs-vidstudio-proj.{c,h}= (the only TU including =<libregnum.h>=) |
+| DEFUNs + handle registry | =cmacs/vidstudio/cmacs-vidstudio-defuns.c= |
+| Init / sym registration | =cmacs/vidstudio/cmacs-vidstudio-init.c= |
+| Major mode + commands | =lisp/cmacs/cmacs-vidstudio.el= |
+| Tests (headless; export gated on ffmpeg) | =test/cmacs/cmacs-vidstudio-tests.el= |
+| Reel composition + ffmpeg export | =deps/libregnum/src/reel/= |
+| Real-time decode backend (smooth scrub) | =deps/libregnum/src/video/lrg-video-player.c= (=FFMPEG=1=) |
+
+On every edit the project rebuilds its =LrgReel= from the per-track segment
+lists (each track → one =LrgReelTransitionSeries=), so insert / split / move /
+ripple are simple descriptor operations and the series recomputes frame layout.
+#+end_src

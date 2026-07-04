@@ -94,7 +94,8 @@ set_packages_fedora () {
 	PKGS_GUI=(gtk3-devel webkit2gtk4.1-devel)
 	PKGS_NCOMP=(libgccjit-devel)
 	PKGS_IMAGE=(libXpm-devel libjpeg-turbo-devel giflib-devel libtiff-devel
-	            librsvg2-devel libwebp-devel ImageMagick-devel)
+	            librsvg2-devel libwebp-devel ImageMagick-devel
+	            wl-clipboard)  # imgedit clipboard fallback (--lrg/tty sessions)
 	PKGS_TEXT=(libotf-devel m17n-lib-devel)
 	PKGS_JSON=(jansson-devel)
 	PKGS_TS=(libtree-sitter-devel)
@@ -155,6 +156,19 @@ set_packages_fedora () {
 	# Amcrest, Hikvision, Axis, etc.) where Main or High profile is
 	# the default.  Public test streams encoded with the Baseline
 	# profile will play without this swap.
+	#
+	# SEPARATE from GStreamer: the libregnum video EDITOR backend
+	# (LrgVideoPlayer, built with FFMPEG=1 and used by --with-cmacs-vidstudio)
+	# links the FFmpeg/libav development libraries directly.  Install with:
+	#
+	#   sudo dnf install ffmpeg-devel        # full ffmpeg (RPM Fusion)
+	#   # or, for Fedora's stock *-free build:
+	#   sudo dnf install libavformat-free-devel libavcodec-free-devel \
+	#                    libavutil-free-devel libswscale-free-devel
+	#
+	# (Debian/Ubuntu: libavformat-dev libavcodec-dev libavutil-dev
+	#  libswscale-dev; Arch/macOS-brew/FreeBSD: ffmpeg.)  Without them
+	# libregnum still builds (FFMPEG=0); the player falls back to a stub.
 	PKGS_VIDEO=(gstreamer1-devel gstreamer1-plugins-base-devel
 	            gstreamer1-plugins-good gstreamer1-plugins-bad-free-devel
 	            gstreamer1-plugins-bad-free-extras gstreamer1-plugins-ugly-free
@@ -194,7 +208,8 @@ set_packages_debian () {
 	PKGS_GUI=(libgtk-3-dev libwebkit2gtk-4.1-dev)
 	PKGS_NCOMP=(libgccjit-13-dev)
 	PKGS_IMAGE=(libxpm-dev libjpeg-dev libgif-dev libtiff-dev
-	            librsvg2-dev libwebp-dev libmagickwand-dev)
+	            librsvg2-dev libwebp-dev libmagickwand-dev
+	            wl-clipboard)  # imgedit clipboard fallback (--lrg/tty sessions)
 	PKGS_TEXT=(libotf-dev libm17n-dev)
 	PKGS_JSON=(libjansson-dev)
 	PKGS_TS=(libtree-sitter-dev)
@@ -244,7 +259,7 @@ set_packages_arch () {
 	PKGS_CORE=(gnutls ncurses zlib)
 	PKGS_GUI=(gtk3 webkit2gtk-4.1)
 	PKGS_NCOMP=(libgccjit)
-	PKGS_IMAGE=(libxpm libjpeg-turbo giflib libtiff librsvg libwebp imagemagick)
+	PKGS_IMAGE=(libxpm libjpeg-turbo giflib libtiff librsvg libwebp imagemagick wl-clipboard)
 	PKGS_TEXT=(libotf m17n-lib)
 	PKGS_JSON=(jansson)
 	PKGS_TS=(tree-sitter)
@@ -300,7 +315,7 @@ set_packages_freebsd () {
 	PKGS_CORE=(gnutls ncurses)
 	PKGS_GUI=(gtk3)
 	PKGS_NCOMP=()  # libgccjit not readily available; native-comp optional
-	PKGS_IMAGE=(libXpm jpeg-turbo giflib tiff librsvg2 webp ImageMagick7-nox11)
+	PKGS_IMAGE=(libXpm jpeg-turbo giflib tiff librsvg2 webp ImageMagick7-nox11 wl-clipboard)
 	PKGS_TEXT=(libotf m17n-lib)
 	PKGS_JSON=(jansson)
 	PKGS_TS=(tree-sitter)

@@ -1,0 +1,233 @@
+#+TITLE: cmacs Image / Sprite Editor (imgedit)
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:2 num:t
+
+* Overview
+
+~cmacs-imgedit~ is a 2D raster image and sprite editor embedded in cmacs.  It
+is built on libregnum's =LrgImageDocument= / =LrgImageLayer= (a CPU layer
+compositor) plus =LrgImageCanvas= drawing, exposed to Lisp as the
+~cmacs-imgedit-*~ primitives and driven by the ~cmacs-imgedit-mode~ major mode.
+
+Two facets:
+
+- *Model layer* — a handle-based document API (create / import / layers /
+  draw / undo / export).  Pure CPU, headless, and fully scriptable, so it is
+  usable from Elisp, ERT, and the MCP server with no display.
+- *UI layer* — ~cmacs-imgedit-mode~ displays the composited document as a
+  native Emacs image (works under pgtk and the terminal) and supports both
+  command-driven editing and direct mouse painting.
+
+A smooth in-engine libregnum viewport (GPU brush + the GTK / =--lrg=
+right-click menus, mirroring ~cmacs-libregnum-editor~) is a planned follow-on
+layer; the model and the native-image UI work today without it.
+
+It is off by default; build with =--with-cmacs-imgedit= (requires
+=--with-cmacs-libregnum= and =--with-cmacs-glib=).
+
+* Getting started
+
+#+begin_src
+M-x cmacs-imgedit                 ; new image (prompts W x H)
+C-u M-x cmacs-imgedit             ; open an existing image file
+M-x cmacs-imgedit-open-file       ; open a file directly
+M-x cmacs-imgedit-from-clipboard  ; open the clipboard image (gowl / wl-paste)
+M-x cmacs-imgedit-from-screenshot ; screenshot a monitor and open it (gowl)
+#+end_src
+
+Opened images auto-fit their zoom (small sprites get a high pixel-art zoom;
+large screenshots open at 1x).  Transparent areas render on
+~cmacs-imgedit-canvas-background~ (light grey by default) so dark strokes stay
+visible on dark themes.
+
+Opening the editor lays out three windows, like the 3D ~cmacs-libregnum-editor~:
+
+- the *canvas* (centre) — the live composited image, scaled by an integer zoom
+  (default ~cmacs-imgedit-default-zoom~, good for pixel art);
+- a *tools palette* (left side window) — clickable tool buttons (the active one
+  marked ~●~), a colour swatch + "Pick colour…", brush size, a fill-mode
+  toggle, and quick Edit actions;
+- a *layers panel* (right side window) — the layer stack (top first), each
+  clickable to select, with a ~[v]~ visibility toggle, and Add/Remove/Opacity
+  buttons.
+
+A header line shows the size, *active tool*, colour, brush size and zoom.
+
+** Editing model
+
+Pick a *tool* (click it in the palette, or press its key), then *use the mouse
+on the canvas*:
+
+- *Brush* — left-drag paints a freehand stroke.
+- *Line / Arrow / Rectangle / Circle / Ellipse* — left-press at the start,
+  drag, release to draw (rectangle/circle/ellipse honour the palette's fill
+  toggle; the arrow's filled head lands where you release).
+- *Text* — click, type the string in the minibuffer (size:
+  ~cmacs-imgedit-text-size~, key ~T~ / palette button).
+- *Bucket* — click to flood-fill from that pixel.
+- *Pick* (eyedropper) — click to set the foreground colour from that pixel.
+
+** Annotation workflow (screenshots)
+
+#+begin_src
+M-x cmacs-imgedit-from-clipboard   ; grab the screenshot you just copied
+;; mark it up: > arrow, r/E boxes and ellipses, t labels, b freehand
+y                                  ; put the annotated PNG on the clipboard
+;; paste into the chat / mail / issue
+#+end_src
+
+** Clipboard backends (compositor-portable)
+
+Copy (~y~/~w~) and paste (~C-y~, ~-from-clipboard~) try, in order:
+
+1. *gowl native* (~gowl-clipboard-set/get-image~) when those DEFUNs exist;
+2. *Emacs's own GTK clipboard* (~cmacs-imgedit-clipboard-set-png~ /
+   ~-get-png~ / ~-available-p~) — the editor acts as a normal GTK client,
+   so this works identically under gowl, GNOME/Mutter, KDE, any other
+   Wayland compositor, and X11, with no external tools;
+3. *wl-clipboard* (~wl-copy~/~wl-paste --type image/png~) — the fallback
+   for GTK-less sessions (=emacs --lrg=, tty), needs a compositor
+   data-control protocol.  Installed by =install-deps=.
+
+The copy echo names the backend used (=(GTK)=, =(wl-copy)=, =(gowl)=).
+
+~mouse-3~ anywhere pops the full context menu (a native GTK menu under pgtk,
+the in-engine libregnum menu under ~--lrg~).
+
+** Default keybindings (~cmacs-imgedit-mode~)
+
+| Key       | Action                                              |
+|-----------+-----------------------------------------------------|
+| ~mouse-1~ | Use the active tool on the canvas                   |
+| ~mouse-3~ | Context menu                                        |
+| ~b l > r c E t k e~ | Select tool: brush / line / arrow / rect / circle / ellipse / text / bucket / pick |
+| ~x~       | Toggle filled vs outline for rect/circle/ellipse    |
+| ~C~ / ~A~ / ~z~ / ~T~ | Foreground colour / alpha / brush size / text size |
+| ~f~       | Fill the active layer with the foreground colour    |
+| ~p~ / ~G~ | Pencil at coords / flood-fill at coords (keyboard)  |
+| ~L~ / ~K~ / ~a~ / ~v~ / ~o~ / ~?~ | Layer: add / remove / select / toggle / opacity / list |
+| ~u~ / ~U~ | Undo / redo                                         |
+| ~s~       | Save (PNG/JPG/BMP by extension)                     |
+| ~y~ (or ~w~) | *Copy the image to the clipboard* (evil-yank semantics — the annotation hand-off) |
+| ~C-y~ / ~P~ | Paste clipboard image as a layer / paste screenshot |
+| ~+~ / ~-~ | Zoom                                                |
+| ~D~       | Diagnose (echoes binding / layer / C-probe status)  |
+
+Every stroke echoes what it painted and on which layer
+(=imgedit: brush painted (255 0 0 255) at (12 . 34) (layer 0/1)=), so a
+"nothing drew" situation is immediately attributable: handler not firing
+(no echo), invisible ink (echoed colour ≈ what is under it), or a hidden /
+wrong layer (layer info).  ~D~ (~cmacs-imgedit-diagnose~) prints a one-line
+health check of the whole input path.
+
+** Doom / Evil / context-menu-mode
+
+The canvas carries its own =keymap= text property, which outranks Evil state
+maps (Evil binds ~down-mouse-1~ to ~evil-mouse-drag-region~ in Motion/Normal
+state) and =context-menu-mode= (which claims ~down-mouse-3~), so mouse
+painting and the imgedit right-click menu work unmodified under Doom.  The
+mode map is also registered with ~evil-make-overriding-map~ so the tool keys
+above beat Evil's motions in editor buffers.
+
+* Model API (the ~cmacs-imgedit-*~ primitives)
+
+Documents are referenced by an integer *handle*.  Layers are indexed
+bottom-to-top from 0.  Colours are RGBA bytes (0..255).
+
+** Lifecycle / file
+- ~(cmacs-imgedit-supported-p)~ → t when built in.
+- ~(cmacs-imgedit-new WIDTH HEIGHT)~ → handle (one transparent layer).
+- ~(cmacs-imgedit-open PATH)~ → handle (document sized to the image).
+- ~(cmacs-imgedit-free HANDLE)~ — release the document.
+- ~(cmacs-imgedit-width/height HANDLE)~.
+- ~(cmacs-imgedit-save HANDLE PATH)~ — flatten + write (format by extension).
+- ~(cmacs-imgedit-export-png-bytes HANDLE)~ → unibyte PNG string (clipboard / display).
+
+** Layers
+- ~(cmacs-imgedit-n-layers HANDLE)~, ~(cmacs-imgedit-active-layer HANDLE)~,
+  ~(cmacs-imgedit-set-active-layer HANDLE INDEX)~.
+- ~(cmacs-imgedit-add-layer HANDLE &optional NAME)~ → index.
+- ~(cmacs-imgedit-add-layer-from-file HANDLE PATH &optional NAME)~ → index.
+- ~(cmacs-imgedit-add-layer-rgba HANDLE W H RGBA-STRING &optional NAME)~ → index
+  (paste / screenshot import; RGBA-STRING is a unibyte W*H*4 buffer).
+- ~(cmacs-imgedit-remove-layer HANDLE INDEX)~ (keeps ≥ 1 layer),
+  ~(cmacs-imgedit-move-layer HANDLE FROM TO)~,
+  ~(cmacs-imgedit-duplicate-layer HANDLE INDEX)~ → index.
+- Per layer: ~layer-name~/~set-layer-name~, ~layer-opacity~/~set-layer-opacity~,
+  ~layer-blend~/~set-layer-blend~ (0 replace, 1 over, 2 add, 3 multiply,
+  4 subtract), ~layer-visible-p~/~set-layer-visible~, ~set-layer-offset~.
+
+** Drawing (on the active layer)
+- ~(cmacs-imgedit-set-color HANDLE R G B A)~ — the colour used by the shape tools.
+- ~(cmacs-imgedit-fill HANDLE R G B A)~, ~(cmacs-imgedit-set-pixel HANDLE X Y R G B A)~.
+- ~(cmacs-imgedit-draw-line HANDLE X1 Y1 X2 Y2 THICKNESS)~.
+- ~(cmacs-imgedit-draw-arrow HANDLE X1 Y1 X2 Y2 &optional THICKNESS)~ —
+  shaft + filled triangular head at X2,Y2 (head size scales with thickness).
+- ~(cmacs-imgedit-draw-rect HANDLE X Y W H FILLED THICKNESS)~.
+- ~(cmacs-imgedit-draw-circle HANDLE CX CY RADIUS FILLED THICKNESS)~.
+- ~(cmacs-imgedit-draw-ellipse HANDLE CX CY RX RY &optional FILLED THICKNESS)~.
+- ~(cmacs-imgedit-draw-text HANDLE X Y TEXT &optional SIZE)~ — engine
+  TrueType font, or the embedded bitmap font when headless.
+- ~(cmacs-imgedit-flood-fill HANDLE X Y R G B A TOLERANCE)~.
+- ~(cmacs-imgedit-set-draw-blend HANDLE MODE)~ — blend mode for the shape tools.
+- ~(cmacs-imgedit-pixel-at HANDLE X Y)~ → ~(R G B A)~ from the flattened image.
+
+** Undo
+- ~(cmacs-imgedit-push-undo HANDLE)~ before an edit, then
+  ~(cmacs-imgedit-undo HANDLE)~ / ~(cmacs-imgedit-redo HANDLE)~,
+  ~(cmacs-imgedit-can-undo-p HANDLE)~ / ~(cmacs-imgedit-can-redo-p HANDLE)~.
+  Undo snapshots the active layer's pixels (capped ring).
+
+* Example (scripted)
+
+#+begin_src elisp
+(let ((h (cmacs-imgedit-new 64 64)))
+  (cmacs-imgedit-fill h 30 30 40 255)          ; background
+  (cmacs-imgedit-add-layer h "shapes")
+  (cmacs-imgedit-set-color h 255 200 0 255)
+  (cmacs-imgedit-draw-circle h 32 32 20 t 1)   ; filled disc
+  (cmacs-imgedit-save h "/tmp/sprite.png")
+  (cmacs-imgedit-free h))
+#+end_src
+
+* MCP tools
+
+With =--with-cmacs-mcp=, the server exposes typed tools over the model API
+(the =eval= tool reaches everything else): =imgedit_new=, =imgedit_open=,
+=imgedit_save=, =imgedit_info= (read-only), =imgedit_set_color=,
+=imgedit_draw_shape= (line/arrow/rect/circle/ellipse), =imgedit_draw_text=,
+=imgedit_add_layer=, =imgedit_undo=.  All headless — an agent can annotate
+a screenshot or compose a sprite with no display.
+
+* 3D editor round-trip
+
+In the 3D ~cmacs-libregnum-editor~, right-click a *sprite* or *tilemap*
+node → *Edit sprite image…* opens its asset here; saving (~s~) reloads the
+node's texture in the 3D scene via ~cmacs-imgedit-after-save-functions~.
+
+* Sprite / pixel-art notes
+
+- New documents default to a high integer zoom so individual pixels are
+  visible; ~+~ / ~-~ adjust it.
+- ~cmacs-imgedit-add-layer-rgba~ accepts a raw RGBA buffer, the basis for
+  pasting screenshots / clipboard images (see the clipboard work) and for
+  importing frames.
+- A sprite produced here is just a PNG; the 3D ~cmacs-libregnum-editor~ can
+  reference it as a sprite / tilemap asset.
+
+* Implementation
+
+| Piece | File |
+|-------+------|
+| Layer / document engine | =deps/libregnum/src/imageedit/lrg-image-layer.{c,h}=, =lrg-image-document.{c,h}= |
+| Raw-pixel image helpers | =deps/libregnum/deps/graylib/src/graphics/grl-image.c= (=grl_image_new_from_pixels=, =grl_image_get_pixels=) |
+| Plain-C bridge (no raylib =Color= in the DEFUN TU) | =cmacs/imgedit/cmacs-imgedit-doc.{c,h}= |
+| DEFUNs + handle registry | =cmacs/imgedit/cmacs-imgedit-defuns.c= |
+| Init / sym registration | =cmacs/imgedit/cmacs-imgedit-init.c= |
+| Major mode + commands | =lisp/cmacs/cmacs-imgedit.el= |
+| Tests (headless) | =test/cmacs/cmacs-imgedit-tests.el=, =deps/libregnum/tests/test-image-document.c= |
+
+The DEFUN translation unit includes =lisp.h= only; the bridge
+(=cmacs-imgedit-doc.c=) is the single imgedit TU that includes =<libregnum.h>=,
+mirroring the =cmacs-libregnum-render.h= split so raylib's =Color= typedef never
+collides with cmacs internals.

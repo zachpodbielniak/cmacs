@@ -1,0 +1,793 @@
+/* cmacs-vidstudio-proj.c --- libregnum Reel-based video project bridge.
+ *
+ * Copyright (C) 2026 Zach Podbielniak
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ *
+ * The only vidstudio TU that includes <libregnum.h>.  Models an editable
+ * timeline (tracks of clip segments + transitions) and rebuilds it into an
+ * LrgReel (one LrgReelTransitionSeries per track) for rendering / export. */
+
+#include <config.h>
+
+#ifdef HAVE_CMACS_VIDSTUDIO
+
+#include "cmacs-vidstudio-proj.h"
+#include <libregnum.h>
+#include <string.h>
+
+typedef struct
+{
+  guint               id;
+  LrgReelClip        *clip;     /* owned */
+  LrgReelTransition  *trans;    /* owned, or NULL (leading transition) */
+  int                 duration; /* frames */
+  int                 trans_overlap;
+} VidSeg;
+
+typedef struct
+{
+  GArray *segs;                 /* of VidSeg (clear-func unrefs clip+trans) */
+} VidTrack;
+
+struct CmacsVidProject
+{
+  int        width;
+  int        height;
+  double     fps;
+  GPtrArray *tracks;            /* of VidTrack* */
+  guint      next_id;
+  LrgReel   *reel;              /* rebuilt lazily from the tracks */
+  gboolean   dirty;
+};
+
+static void
+vidseg_clear (gpointer p)
+{
+  VidSeg *s = p;
+  g_clear_object (&s->clip);
+  g_clear_object (&s->trans);
+}
+
+static VidTrack *
+track_new (void)
+{
+  VidTrack *t = g_new0 (VidTrack, 1);
+  t->segs = g_array_new (FALSE, FALSE, sizeof (VidSeg));
+  g_array_set_clear_func (t->segs, vidseg_clear);
+  return t;
+}
+
+static void
+track_free (gpointer p)
+{
+  VidTrack *t = p;
+  g_array_unref (t->segs);
+  g_free (t);
+}
+
+CmacsVidProject *
+cmacs_vidstudio_proj_new (int w, int h, double fps)
+{
+  CmacsVidProject *p;
+
+  if (w <= 0 || h <= 0 || fps <= 0.0)
+    return NULL;
+  p = g_new0 (CmacsVidProject, 1);
+  p->width = w;
+  p->height = h;
+  p->fps = fps;
+  p->tracks = g_ptr_array_new_with_free_func (track_free);
+  p->next_id = 0;
+  p->reel = NULL;
+  p->dirty = TRUE;
+  /* Start with one track. */
+  g_ptr_array_add (p->tracks, track_new ());
+  return p;
+}
+
+void
+cmacs_vidstudio_proj_free (CmacsVidProject *p)
+{
+  if (p == NULL)
+    return;
+  g_clear_pointer (&p->tracks, g_ptr_array_unref);
+  g_clear_object (&p->reel);
+  g_free (p);
+}
+
+int cmacs_vidstudio_proj_width  (CmacsVidProject *p) { return p ? p->width : 0; }
+int cmacs_vidstudio_proj_height (CmacsVidProject *p) { return p ? p->height : 0; }
+double cmacs_vidstudio_proj_fps (CmacsVidProject *p) { return p ? p->fps : 0.0; }
+
+static VidTrack *
+track_at (CmacsVidProject *p, guint i)
+{
+  if (p == NULL || i >= p->tracks->len)
+    return NULL;
+  return g_ptr_array_index (p->tracks, i);
+}
+
+/* Total length of a track in frames (durations minus transition overlaps). */
+static int
+track_total (VidTrack *t)
+{
+  int total = 0;
+  guint i;
+
+  for (i = 0; i < t->segs->len; i++)
+    {
+      VidSeg *s = &g_array_index (t->segs, VidSeg, i);
+      total += s->duration;
+      if (i > 0 && s->trans != NULL)
+        total -= s->trans_overlap;
+    }
+  return total < 0 ? 0 : total;
+}
+
+int
+cmacs_vidstudio_proj_total_frames (CmacsVidProject *p)
+{
+  int max = 0;
+  guint i;
+
+  if (p == NULL)
+    return 0;
+  for (i = 0; i < p->tracks->len; i++)
+    {
+      int tt = track_total (g_ptr_array_index (p->tracks, i));
+      if (tt > max)
+        max = tt;
+    }
+  return max;
+}
+
+guint
+cmacs_vidstudio_proj_add_track (CmacsVidProject *p)
+{
+  g_return_val_if_fail (p != NULL, 0);
+  g_ptr_array_add (p->tracks, track_new ());
+  p->dirty = TRUE;
+  return p->tracks->len - 1;
+}
+
+guint
+cmacs_vidstudio_proj_n_tracks (CmacsVidProject *p)
+{
+  return p ? p->tracks->len : 0;
+}
+
+guint
+cmacs_vidstudio_proj_track_clip_count (CmacsVidProject *p, guint track)
+{
+  VidTrack *t = track_at (p, track);
+  return t ? t->segs->len : 0;
+}
+
+gint
+cmacs_vidstudio_proj_track_total_frames (CmacsVidProject *p, guint track)
+{
+  VidTrack *t = track_at (p, track);
+  return t ? track_total (t) : 0;
+}
+
+/* Append CLIP (transfer full) to TRACK with DURATION frames; returns id. */
+static gint
+append_clip (CmacsVidProject *p, guint track, LrgReelClip *clip, int duration)
+{
+  VidTrack *t = track_at (p, track);
+  VidSeg seg;
+
+  if (t == NULL || clip == NULL)
+    {
+      g_clear_object (&clip);
+      return -1;
+    }
+  if (duration <= 0)
+    duration = (int) (p->fps * 3.0 + 0.5);  /* default 3s */
+  lrg_reel_clip_set_duration_in_frames (clip, duration);
+
+  seg.id = p->next_id++;
+  seg.clip = clip;  /* takes the ref */
+  seg.trans = NULL;
+  seg.duration = duration;
+  seg.trans_overlap = 0;
+  g_array_append_val (t->segs, seg);
+  p->dirty = TRUE;
+  return (gint) seg.id;
+}
+
+gint
+cmacs_vidstudio_proj_add_solid_clip (CmacsVidProject *p, guint track,
+                                     int duration, guint8 r, guint8 g,
+                                     guint8 b, guint8 a)
+{
+  GrlColor col;
+  col.r = r; col.g = g; col.b = b; col.a = a;
+  return append_clip (p, track,
+                      LRG_REEL_CLIP (lrg_reel_solid_clip_new (&col)), duration);
+}
+
+gint
+cmacs_vidstudio_proj_add_image_clip (CmacsVidProject *p, guint track,
+                                     const char *path, int duration,
+                                     char **error_msg)
+{
+  LrgReelImageClip *clip;
+  g_autoptr (GError) err = NULL;
+
+  clip = lrg_reel_image_clip_new_from_file (path, &err);
+  if (clip == NULL)
+    {
+      if (error_msg)
+        *error_msg = g_strdup (err ? err->message : "could not load image");
+      return -1;
+    }
+  return append_clip (p, track, LRG_REEL_CLIP (clip), duration);
+}
+
+gint
+cmacs_vidstudio_proj_add_video_clip (CmacsVidProject *p, guint track,
+                                     const char *path, int duration,
+                                     char **error_msg)
+{
+  LrgReelVideoClip *clip;
+  g_autoptr (GError) err = NULL;
+
+  clip = lrg_reel_video_clip_new_from_file (path, &err);
+  if (clip == NULL)
+    {
+      if (error_msg)
+        *error_msg = g_strdup (err ? err->message : "could not load video");
+      return -1;
+    }
+  /* Decode on a worker thread: preview shows a placeholder until ready
+     (poll cmacs_vidstudio_proj_clip_ready), so adding a clip never blocks
+     the editor.  Export forces real frames via wait_video_clips.  The
+     frame-count call kicks the worker NOW (it otherwise starts on first
+     frame access), so readiness polling never waits on a render. */
+  lrg_reel_video_source_set_async_decode
+    (lrg_reel_video_clip_get_source (clip), TRUE);
+  lrg_reel_video_source_get_frame_count
+    (lrg_reel_video_clip_get_source (clip));
+  return append_clip (p, track, LRG_REEL_CLIP (clip), duration);
+}
+
+gint
+cmacs_vidstudio_proj_add_text_clip (CmacsVidProject *p, guint track,
+                                    const char *text, int duration,
+                                    guint8 r, guint8 g, guint8 b, guint8 a)
+{
+  LrgReelTextClip *clip;
+  GrlColor col;
+
+  clip = lrg_reel_text_clip_new (text != NULL ? text : "");
+  if (clip == NULL)
+    return -1;
+  col.r = r; col.g = g; col.b = b; col.a = a;
+  lrg_reel_text_clip_set_color (clip, &col);
+  return append_clip (p, track, LRG_REEL_CLIP (clip), duration);
+}
+
+/* Locate the segment with ID; returns its track + index, or FALSE. */
+static gboolean
+find_seg (CmacsVidProject *p, gint id, VidTrack **out_track, guint *out_index)
+{
+  guint ti, si;
+
+  if (p == NULL || id < 0)
+    return FALSE;
+  for (ti = 0; ti < p->tracks->len; ti++)
+    {
+      VidTrack *t = g_ptr_array_index (p->tracks, ti);
+      for (si = 0; si < t->segs->len; si++)
+        if (g_array_index (t->segs, VidSeg, si).id == (guint) id)
+          {
+            if (out_track) *out_track = t;
+            if (out_index) *out_index = si;
+            return TRUE;
+          }
+    }
+  return FALSE;
+}
+
+static LrgReelTransition *
+make_transition (int type, int easing)
+{
+  GType gt;
+  LrgReelTransition *tr;
+
+  switch (type)
+    {
+    case CMACS_VID_TRANS_FADE:       gt = LRG_TYPE_REEL_FADE_TRANSITION; break;
+    case CMACS_VID_TRANS_DISSOLVE:   gt = LRG_TYPE_REEL_DISSOLVE_TRANSITION; break;
+    case CMACS_VID_TRANS_WIPE:       gt = LRG_TYPE_REEL_WIPE_TRANSITION; break;
+    case CMACS_VID_TRANS_SLIDE:      gt = LRG_TYPE_REEL_SLIDE_TRANSITION; break;
+    case CMACS_VID_TRANS_ZOOM:       gt = LRG_TYPE_REEL_ZOOM_TRANSITION; break;
+    case CMACS_VID_TRANS_IRIS:       gt = LRG_TYPE_REEL_IRIS_TRANSITION; break;
+    case CMACS_VID_TRANS_FLIP:       gt = LRG_TYPE_REEL_FLIP_TRANSITION; break;
+    case CMACS_VID_TRANS_PUSH:       gt = LRG_TYPE_REEL_PUSH_TRANSITION; break;
+    case CMACS_VID_TRANS_CLOCK_WIPE: gt = LRG_TYPE_REEL_CLOCK_WIPE_TRANSITION; break;
+    default: return NULL;
+    }
+  tr = g_object_new (gt, NULL);
+  if (tr != NULL)
+    lrg_reel_transition_set_easing (tr, (LrgEasingType) easing);
+  return tr;
+}
+
+gboolean
+cmacs_vidstudio_proj_set_transition (CmacsVidProject *p, gint clip_id,
+                                     int type, int overlap_frames, int easing)
+{
+  VidTrack *t = NULL;
+  guint si = 0;
+  VidSeg *s;
+
+  if (!find_seg (p, clip_id, &t, &si))
+    return FALSE;
+  s = &g_array_index (t->segs, VidSeg, si);
+  g_clear_object (&s->trans);
+  if (type >= 0)
+    {
+      s->trans = make_transition (type, easing);
+      s->trans_overlap = overlap_frames < 0 ? 0 : overlap_frames;
+    }
+  else
+    {
+      s->trans_overlap = 0;
+    }
+  p->dirty = TRUE;
+  return TRUE;
+}
+
+gboolean
+cmacs_vidstudio_proj_add_effect (CmacsVidProject *p, gint clip_id, int type)
+{
+  VidTrack *t = NULL;
+  guint si = 0;
+  VidSeg *s;
+  GType gt;
+  LrgReelEffect *fx;
+
+  if (!find_seg (p, clip_id, &t, &si))
+    return FALSE;
+  switch (type)
+    {
+    case CMACS_VID_FX_BLUR:        gt = LRG_TYPE_REEL_BLUR_EFFECT; break;
+    case CMACS_VID_FX_BLOOM:       gt = LRG_TYPE_REEL_BLOOM_EFFECT; break;
+    case CMACS_VID_FX_COLOR_GRADE: gt = LRG_TYPE_REEL_COLOR_GRADE_EFFECT; break;
+    case CMACS_VID_FX_VIGNETTE:    gt = LRG_TYPE_REEL_VIGNETTE_EFFECT; break;
+    case CMACS_VID_FX_GRAIN:       gt = LRG_TYPE_REEL_GRAIN_EFFECT; break;
+    default: return FALSE;
+    }
+  s = &g_array_index (t->segs, VidSeg, si);
+  fx = g_object_new (gt, NULL);
+  if (fx == NULL)
+    return FALSE;
+  /* The clip takes ownership of the effect. */
+  lrg_reel_clip_add_effect (s->clip, fx);
+  p->dirty = TRUE;
+  return TRUE;
+}
+
+gboolean
+cmacs_vidstudio_proj_clear_effects (CmacsVidProject *p, gint clip_id)
+{
+  VidTrack *t = NULL;
+  guint si = 0;
+
+  if (!find_seg (p, clip_id, &t, &si))
+    return FALSE;
+  lrg_reel_clip_clear_effects (g_array_index (t->segs, VidSeg, si).clip);
+  p->dirty = TRUE;
+  return TRUE;
+}
+
+gboolean
+cmacs_vidstudio_proj_set_clip_duration (CmacsVidProject *p, gint clip_id,
+                                        int frames)
+{
+  VidTrack *t = NULL;
+  guint si = 0;
+  VidSeg *s;
+
+  if (frames <= 0 || !find_seg (p, clip_id, &t, &si))
+    return FALSE;
+  s = &g_array_index (t->segs, VidSeg, si);
+  s->duration = frames;
+  lrg_reel_clip_set_duration_in_frames (s->clip, frames);
+  p->dirty = TRUE;
+  return TRUE;
+}
+
+gint
+cmacs_vidstudio_proj_split_clip (CmacsVidProject *p, gint clip_id, int at_frame)
+{
+  VidTrack *t = NULL;
+  guint si = 0;
+  VidSeg *s;
+  VidSeg tail;
+
+  if (!find_seg (p, clip_id, &t, &si))
+    return -1;
+  s = &g_array_index (t->segs, VidSeg, si);
+  if (at_frame <= 0 || at_frame >= s->duration)
+    return -1;
+
+  /* Tail shares the same source clip (a fresh ref); v1 does not re-trim the
+     source, so the tail replays from the clip's own start. */
+  tail.id = p->next_id++;
+  tail.clip = g_object_ref (s->clip);
+  tail.trans = NULL;
+  tail.duration = s->duration - at_frame;
+  tail.trans_overlap = 0;
+
+  s->duration = at_frame;
+  lrg_reel_clip_set_duration_in_frames (s->clip, at_frame);
+
+  g_array_insert_val (t->segs, si + 1, tail);
+  p->dirty = TRUE;
+  return (gint) tail.id;  /* NB: pointer s may be invalid after insert */
+}
+
+gboolean
+cmacs_vidstudio_proj_move_clip (CmacsVidProject *p, gint clip_id,
+                                guint new_track, guint new_index)
+{
+  VidTrack *t = NULL, *dst;
+  guint si = 0;
+  VidSeg copy;
+
+  if (!find_seg (p, clip_id, &t, &si))
+    return FALSE;
+  dst = track_at (p, new_track);
+  if (dst == NULL)
+    return FALSE;
+
+  /* Move the segment to DST.  Take an extra ref on the owned objects BEFORE
+     the remove (whose clear-func unrefs once), so `copy' keeps exactly one
+     ref to hand to the destination slot. */
+  copy = g_array_index (t->segs, VidSeg, si);
+  g_object_ref (copy.clip);
+  if (copy.trans)
+    g_object_ref (copy.trans);
+  g_array_remove_index (t->segs, si);
+
+  if (new_index > dst->segs->len)
+    new_index = dst->segs->len;
+  g_array_insert_val (dst->segs, new_index, copy);
+  p->dirty = TRUE;
+  return TRUE;
+}
+
+gboolean
+cmacs_vidstudio_proj_remove_clip (CmacsVidProject *p, gint clip_id,
+                                  gboolean ripple)
+{
+  VidTrack *t = NULL;
+  guint si = 0;
+  VidSeg *s;
+
+  if (!find_seg (p, clip_id, &t, &si))
+    return FALSE;
+  if (!ripple)
+    {
+      /* Replace with a transparent gap of equal duration. */
+      GrlColor clear = { 0, 0, 0, 0 };
+      s = &g_array_index (t->segs, VidSeg, si);
+      g_clear_object (&s->trans);
+      g_clear_object (&s->clip);
+      s->clip = LRG_REEL_CLIP (lrg_reel_solid_clip_new (&clear));
+      lrg_reel_clip_set_duration_in_frames (s->clip, s->duration);
+      s->trans_overlap = 0;
+    }
+  else
+    {
+      g_array_remove_index (t->segs, si);
+    }
+  p->dirty = TRUE;
+  return TRUE;
+}
+
+gint
+cmacs_vidstudio_proj_clip_at (CmacsVidProject *p, guint track, guint index)
+{
+  VidTrack *t = track_at (p, track);
+  if (t == NULL || index >= t->segs->len)
+    return -1;
+  return (gint) g_array_index (t->segs, VidSeg, index).id;
+}
+
+gint
+cmacs_vidstudio_proj_clip_duration (CmacsVidProject *p, gint clip_id)
+{
+  VidTrack *t = NULL;
+  guint si = 0;
+  if (!find_seg (p, clip_id, &t, &si))
+    return -1;
+  return g_array_index (t->segs, VidSeg, si).duration;
+}
+
+gint
+cmacs_vidstudio_proj_clip_start_frame (CmacsVidProject *p, gint clip_id)
+{
+  VidTrack *t = NULL;
+  guint si = 0, i;
+  int start = 0;
+
+  if (!find_seg (p, clip_id, &t, &si))
+    return -1;
+  for (i = 0; i < si; i++)
+    {
+      VidSeg *s = &g_array_index (t->segs, VidSeg, i);
+      VidSeg *next = &g_array_index (t->segs, VidSeg, i + 1);
+      start += s->duration;
+      if (next->trans != NULL)
+        start -= next->trans_overlap;
+    }
+  return start;
+}
+
+/* Rebuild p->reel from the track/segment model. */
+static void
+proj_rebuild (CmacsVidProject *p)
+{
+  int total;
+  guint ti;
+
+  if (!p->dirty && p->reel != NULL)
+    return;
+
+  total = cmacs_vidstudio_proj_total_frames (p);
+  if (total < 1)
+    total = 1;
+
+  g_clear_object (&p->reel);
+  p->reel = lrg_reel_new ("vidstudio", p->width, p->height, p->fps, total);
+
+  for (ti = 0; ti < p->tracks->len; ti++)
+    {
+      VidTrack *t = g_ptr_array_index (p->tracks, ti);
+      LrgReelTransitionSeries *series;
+      guint i;
+
+      if (t->segs->len == 0)
+        continue;
+      series = lrg_reel_transition_series_new ();
+      for (i = 0; i < t->segs->len; i++)
+        {
+          VidSeg *s = &g_array_index (t->segs, VidSeg, i);
+          if (i > 0 && s->trans != NULL)
+            lrg_reel_transition_series_add_transition (series, s->trans,
+                                                       s->trans_overlap);
+          lrg_reel_transition_series_add (series, s->clip, s->duration);
+        }
+      lrg_reel_add_clip (p->reel, LRG_REEL_CLIP (series));
+      g_object_unref (series);  /* the reel holds its own ref */
+    }
+  p->dirty = FALSE;
+}
+
+guint8 *
+cmacs_vidstudio_proj_render_png (CmacsVidProject *p, int frame, gsize *out_n)
+{
+  LrgReelRenderer *r;
+  GrlImage *img;
+  guint8 *bytes = NULL;
+
+  if (out_n)
+    *out_n = 0;
+  if (p == NULL)
+    return NULL;
+  proj_rebuild (p);
+  r = lrg_reel_renderer_new (p->reel);
+  img = lrg_reel_renderer_get_canvas_image (r, frame);
+  if (img != NULL)
+    bytes = grl_image_export_to_memory (img, ".png", out_n);
+  g_object_unref (r);
+  return bytes;
+}
+
+guint8 *
+cmacs_vidstudio_proj_render_ppm (CmacsVidProject *p, int frame, int max_w,
+                                 gsize *out_n)
+{
+  LrgReelRenderer *r;
+  GrlImage *img;
+  GrlImage *scaled = NULL;
+  const guint8 *px;
+  guint8 *out = NULL;
+  gsize npx = 0;
+  int w, h, hdr;
+  gsize i, n;
+  char header[64];
+
+  if (out_n)
+    *out_n = 0;
+  if (p == NULL)
+    return NULL;
+  proj_rebuild (p);
+  r = lrg_reel_renderer_new (p->reel);
+  img = lrg_reel_renderer_get_canvas_image (r, frame);
+  if (img == NULL)
+    {
+      g_object_unref (r);
+      return NULL;
+    }
+  w = p->width;
+  h = p->height;
+  if (max_w > 0 && w > max_w)
+    {
+      /* Downscale before encoding: preview cost scales with pixels. */
+      int sh = MAX (1, (int) ((double) h * max_w / w + 0.5));
+
+      scaled = grl_image_resized (img, max_w, sh);
+      if (scaled != NULL)
+        {
+          img = scaled;
+          w = max_w;
+          h = sh;
+        }
+    }
+  px = grl_image_get_pixels (img, &npx);
+  if (px != NULL && npx >= (gsize) w * h * 4)
+    {
+      /* Binary PPM (P6): trivial header + packed RGB.  No compression, so
+         encoding is a straight copy and Emacs's native pbm loader decodes
+         it far faster than PNG — the point of this preview-only path. */
+      guint8 *dst;
+
+      hdr = g_snprintf (header, sizeof header, "P6\n%d %d\n255\n", w, h);
+      n = (gsize) hdr + (gsize) w * h * 3;
+      out = g_malloc (n);
+      memcpy (out, header, (gsize) hdr);
+      dst = out + hdr;
+      for (i = 0; i < (gsize) w * h; i++)
+        {
+          dst[0] = px[i * 4 + 0];
+          dst[1] = px[i * 4 + 1];
+          dst[2] = px[i * 4 + 2];
+          dst += 3;
+        }
+      if (out_n)
+        *out_n = n;
+    }
+  g_clear_object (&scaled);
+  g_object_unref (r);
+  return out;
+}
+
+gboolean
+cmacs_vidstudio_proj_frame_pixel (CmacsVidProject *p, int frame, int x, int y,
+                                  guint8 *r, guint8 *g, guint8 *b, guint8 *a)
+{
+  LrgReelRenderer *rr;
+  GrlImage *img;
+  const guint8 *px;
+  gsize n = 0;
+  gsize idx;
+  gboolean ok = FALSE;
+
+  if (p == NULL || x < 0 || y < 0 || x >= p->width || y >= p->height)
+    return FALSE;
+  proj_rebuild (p);
+  rr = lrg_reel_renderer_new (p->reel);
+  img = lrg_reel_renderer_get_canvas_image (rr, frame);
+  if (img != NULL)
+    {
+      px = grl_image_get_pixels (img, &n);
+      idx = ((gsize) y * p->width + x) * 4;
+      if (px != NULL && idx + 3 < n)
+        {
+          if (r) *r = px[idx + 0];
+          if (g) *g = px[idx + 1];
+          if (b) *b = px[idx + 2];
+          if (a) *a = px[idx + 3];
+          ok = TRUE;
+        }
+    }
+  g_object_unref (rr);
+  return ok;
+}
+
+gboolean
+cmacs_vidstudio_proj_clip_ready (CmacsVidProject *p, gint clip_id)
+{
+  VidTrack *t;
+  guint si;
+  LrgReelClip *clip;
+
+  if (p == NULL || !find_seg (p, clip_id, &t, &si))
+    return TRUE;                /* unknown id: nothing to wait for */
+  clip = g_array_index (t->segs, VidSeg, si).clip;
+  if (LRG_IS_REEL_VIDEO_CLIP (clip))
+    return lrg_reel_video_source_is_decoded
+      (lrg_reel_video_clip_get_source (LRG_REEL_VIDEO_CLIP (clip)));
+  return TRUE;
+}
+
+/* Block until every video clip has real frames (export correctness: the
+   async preview path substitutes placeholders while decoding). */
+static void
+proj_wait_video_clips (CmacsVidProject *p)
+{
+  guint ti;
+  guint si;
+
+  for (ti = 0; ti < p->tracks->len; ti++)
+    {
+      VidTrack *t = g_ptr_array_index (p->tracks, ti);
+
+      for (si = 0; si < t->segs->len; si++)
+        {
+          LrgReelClip *clip = g_array_index (t->segs, VidSeg, si).clip;
+
+          if (LRG_IS_REEL_VIDEO_CLIP (clip))
+            lrg_reel_video_source_wait_decoded
+              (lrg_reel_video_clip_get_source (LRG_REEL_VIDEO_CLIP (clip)),
+               NULL);
+        }
+    }
+}
+
+gboolean
+cmacs_vidstudio_proj_export_video (CmacsVidProject *p, const char *path,
+                                   int codec, char **error_msg)
+{
+  LrgReelRenderer *r;
+  LrgReelVideoExporter *ex;
+  LrgReelVideoCodec c;
+  g_autoptr (GError) err = NULL;
+  gboolean ok;
+
+  if (p == NULL || path == NULL)
+    return FALSE;
+  switch (codec)
+    {
+    case 1:  c = LRG_REEL_VIDEO_CODEC_VP9; break;
+    case 2:  c = LRG_REEL_VIDEO_CODEC_H265; break;
+    case 3:  c = LRG_REEL_VIDEO_CODEC_PRORES; break;
+    default: c = LRG_REEL_VIDEO_CODEC_H264; break;
+    }
+  proj_wait_video_clips (p);
+  proj_rebuild (p);
+  r = lrg_reel_renderer_new (p->reel);
+  ex = lrg_reel_video_exporter_new (path, c);
+  ok = lrg_reel_renderer_render_to_exporter (r, LRG_REEL_EXPORTER (ex), &err);
+  if (!ok && error_msg)
+    *error_msg = g_strdup (err ? err->message : "export failed");
+  g_object_unref (ex);
+  g_object_unref (r);
+  return ok;
+}
+
+gboolean
+cmacs_vidstudio_proj_export_gif (CmacsVidProject *p, const char *path,
+                                 char **error_msg)
+{
+  LrgReelRenderer *r;
+  LrgReelGifExporter *ex;
+  g_autoptr (GError) err = NULL;
+  gboolean ok;
+
+  if (p == NULL || path == NULL)
+    return FALSE;
+  ex = lrg_reel_gif_exporter_new (path, &err);
+  if (ex == NULL)
+    {
+      if (error_msg)
+        *error_msg = g_strdup (err ? err->message : "could not open GIF");
+      return FALSE;
+    }
+  proj_wait_video_clips (p);
+  proj_rebuild (p);
+  r = lrg_reel_renderer_new (p->reel);
+  ok = lrg_reel_renderer_render_to_exporter (r, LRG_REEL_EXPORTER (ex), &err);
+  if (!ok && error_msg)
+    *error_msg = g_strdup (err ? err->message : "export failed");
+  g_object_unref (ex);
+  g_object_unref (r);
+  return ok;
+}
+
+#endif /* HAVE_CMACS_VIDSTUDIO */

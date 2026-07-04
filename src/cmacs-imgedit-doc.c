@@ -1,0 +1,1 @@
+./../cmacs/imgedit/cmacs-imgedit-doc.c

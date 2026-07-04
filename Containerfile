@@ -65,6 +65,7 @@ RUN dnf install -y \
         cmake espeak-ng python3-pip \
         mesa-libGL-devel libX11-devel libXrandr-devel libXcursor-devel \
         libXinerama-devel libXi-devel \
+        ffmpeg-free wl-clipboard \
         curl \
     && dnf clean all
 # pipewire-devel + pulseaudio-libs-devel: cmacs-audio capture source
@@ -83,6 +84,11 @@ RUN dnf install -y \
 # binutils-devel: provides dis-asm.h / libopcodes for cpatch's
 # (currently optional) prologue probe.  cmacs builds without it via
 # a built-in fallback.
+# ffmpeg-free: the ffmpeg/ffprobe binaries the vidstudio Reel video
+# source/exporter shell out to (video clips + mp4/gif export); the free
+# build decodes/encodes the open codecs, swap in RPM Fusion ffmpeg for
+# H.264 Main/High.  wl-clipboard: imgedit's clipboard fallback for
+# GTK-less sessions (emacs --lrg / tty).
 # mesa-libGL-devel + libX11-devel + the four X11 input libs:
 # raylib (via deps/libregnum/deps/graylib) needs these even when we
 # run with FLAG_WINDOW_HIDDEN because raylib's InitWindow still
@@ -201,6 +207,8 @@ RUN ./autogen.sh \
         --with-cmacs-gsurf-lrg \
         --with-cmacs-emacsctl \
         --with-cmacs-lrgterm \
+        --with-cmacs-imgedit \
+        --with-cmacs-vidstudio \
         --enable-cmacs-cpatch \
         --enable-cmacs-deps-debug \
     && make -j"$(nproc)" \

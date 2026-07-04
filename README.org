@@ -426,6 +426,8 @@ cd cmacs
   --with-cmacs-gsurf-lrg \
   --with-cmacs-emacsctl \
   --with-cmacs-lrgterm \
+  --with-cmacs-imgedit \
+  --with-cmacs-vidstudio \
   --enable-cmacs-cpatch \
   --enable-cmacs-deps-debug   # in-house deps -O0 -g3 (DWARF): gdb + runtime cintrospection
 make -j$(nproc)
@@ -543,6 +545,8 @@ Requires =autoconf= (>= 2.65) and =automake=.
   --with-cmacs-gsurf-lrg \
   --with-cmacs-emacsctl \
   --with-cmacs-lrgterm \
+  --with-cmacs-imgedit \
+  --with-cmacs-vidstudio \
   --enable-cmacs-cpatch \
   --enable-cmacs-deps-debug   # in-house deps -O0 -g3 (DWARF): gdb + runtime cintrospection
 #+end_src
@@ -597,6 +601,10 @@ Module flags:
 - =--with-cmacs-lrgterm= — =output_lrg=: an independent libregnum/raylib *display backend* (a third peer to the tty and pgtk backends) that renders the entire Emacs UI — glyphs, cursor, fringes, region, modeline, text decorations and inline images — through libregnum/graylib, reusing Emacs's own FreeType/HarfBuzz shaping via a GPU glyph atlas.  Opt in at runtime with =emacs --lrg= (the installed desktop launchers /Emacs Libregnum/ and /Emacs Libregnum (Client)/ do this for you); plain =emacs= still starts pgtk.  =3d= / =3dvr= render modes are reserved.  Part of the standard flag set (=just bootstrap= and the container build include it); requires =--with-cmacs-libregnum= + =--with-cmacs-glib= (reuses libregnum's archive and its =Lrg*= surface/atlas types).  See [[file:doc_org/cmacs/cmacs-lrgterm.org][the manual]].
 
 - =--with-cmacs-screensaver= — Renders the =deps/screensavers= libregnum game modules (blackhole, singularity, helios) as an animated *gowl wallpaper*, an animated *lock-screen background* (=gowl-lock= integration), or *in-buffer* playback (=M-x cmacs-screensaver-play=).  cmacs renders each module off-screen to BGRA and pushes raw frames to gowl's frame-sink API, so *gowl links no libregnum* (guard-tested).  Named configs with raw CLI args + a completing-read picker (=cmacs-screensaver-set-wallpaper=).  Part of the standard flag set (=just bootstrap= and the container build include it); requires =--with-cmacs-libregnum= (wallpaper + lock additionally need =--with-cmacs-gowl=).  Modules build from =deps/screensavers= and install to =$(libdir)/cmacs/screensaver-modules=.  See [[file:doc_org/cmacs/cmacs-screensaver.org][the manual]].
+
+- =--with-cmacs-imgedit= — 2D raster image / sprite editor on libregnum's =LrgImageDocument= layer compositor (opacity, blend modes, offset, undo).  =M-x cmacs-imgedit= opens a canvas + tools/layers side panels; mouse tools include brush, line, *arrow*, rect, circle, ellipse and *text* — the screenshot-annotation loop is =M-x cmacs-imgedit-from-clipboard=, mark it up, =y= to put the annotated PNG back on the clipboard.  Clipboard backends: Emacs's own GTK clipboard (works under gowl, GNOME/Mutter, KDE and X11 alike) with =wl-clipboard= as the GTK-less fallback.  The handle-based =cmacs-imgedit-*= model API is headless and MCP-driveable (=imgedit_*= tools).  Part of the standard flag set; requires =--with-cmacs-libregnum= + =--with-cmacs-glib=.  See [[file:doc_org/cmacs/cmacs-imgedit.org][the manual]].
+
+- =--with-cmacs-vidstudio= — Video editor on libregnum's *Reel* composition system: multi-track timeline (each track an =LrgReelTransitionSeries=), 9 transition types, 5 effects, split/trim/move/ripple, text/solid/image/video clips, CPU preview and ffmpeg-backed mp4/gif export.  =M-x cmacs-vidstudio=; video clips decode on a worker thread (import never blocks) and playback paces itself from the wall clock so the editor never freezes.  Headless + MCP-driveable (=vidstudio_*= tools).  Part of the standard flag set; requires =--with-cmacs-libregnum= + =--with-cmacs-glib= (the =ffmpeg= binary at runtime for video clips/export).  See [[file:doc_org/cmacs/cmacs-vidstudio.org][the manual]].
 
 Each module auto-detects bundled (=deps/=) or system libraries.  To
 force system-installed versions:

@@ -103,6 +103,8 @@ configure_flags := """
     --with-cmacs-gsurf-lrg
     --with-cmacs-emacsctl
     --with-cmacs-lrgterm
+    --with-cmacs-imgedit
+    --with-cmacs-vidstudio
     --enable-cmacs-cpatch
     --enable-cmacs-deps-debug
 """

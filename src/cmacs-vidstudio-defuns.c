@@ -1,0 +1,1 @@
+./../cmacs/vidstudio/cmacs-vidstudio-defuns.c

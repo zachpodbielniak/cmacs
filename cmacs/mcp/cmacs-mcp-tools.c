@@ -105,6 +105,14 @@ cmacs_mcp_register_all_tools (McpServer *server)
 #ifdef HAVE_CMACS_LRGTERM
   cmacs_mcp_tools_lrgterm_register (server);
 #endif
+
+#ifdef HAVE_CMACS_IMGEDIT
+  cmacs_mcp_tools_imgedit_register (server);
+#endif
+
+#ifdef HAVE_CMACS_VIDSTUDIO
+  cmacs_mcp_tools_vidstudio_register (server);
+#endif
 }
 
 #endif /* HAVE_CMACS_MCP */

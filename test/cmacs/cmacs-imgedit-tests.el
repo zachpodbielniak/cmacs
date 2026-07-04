@@ -1,0 +1,254 @@
+;;; cmacs-imgedit-tests.el --- Tests for the 2D image editor -*- lexical-binding: t; -*-
+
+;; Copyright (C) 2026 Zach Podbielniak
+;; SPDX-License-Identifier: AGPL-3.0-or-later
+
+;;; Commentary:
+
+;; ERT tests for the cmacs-imgedit-* C primitives (the image / sprite editor
+;; model layer).  These exercise the LrgImageDocument-backed DEFUNs and run
+;; headlessly -- no display required.  Skipped unless cmacs was built with
+;; --with-cmacs-imgedit.
+
+;;; Code:
+
+(require 'ert)
+
+(defmacro cmacs-imgedit-tests--skip-unless ()
+  "Skip the test unless the image editor is available."
+  '(skip-unless (and (fboundp 'cmacs-imgedit-supported-p)
+                     (cmacs-imgedit-supported-p))))
+
+(defmacro cmacs-imgedit-tests--with-doc (var w h &rest body)
+  "Bind VAR to a fresh WxH image handle, run BODY, then free it."
+  (declare (indent 3))
+  `(let ((,var (cmacs-imgedit-new ,w ,h)))
+     (unwind-protect (progn ,@body)
+       (cmacs-imgedit-free ,var))))
+
+(ert-deftest cmacs-imgedit-new-dimensions ()
+  (cmacs-imgedit-tests--skip-unless)
+  (cmacs-imgedit-tests--with-doc h 64 48
+    (should (= (cmacs-imgedit-width h) 64))
+    (should (= (cmacs-imgedit-height h) 48))
+    (should (= (cmacs-imgedit-n-layers h) 1))
+    (should (= (cmacs-imgedit-active-layer h) 0))))
+
+(ert-deftest cmacs-imgedit-layers ()
+  (cmacs-imgedit-tests--skip-unless)
+  (cmacs-imgedit-tests--with-doc h 8 8
+    (should (= (cmacs-imgedit-add-layer h "Top") 1))
+    (should (= (cmacs-imgedit-n-layers h) 2))
+    (should (string= (cmacs-imgedit-layer-name h 1) "Top"))
+    (should (cmacs-imgedit-move-layer h 1 0))
+    (should (string= (cmacs-imgedit-layer-name h 0) "Top"))
+    (should (= (cmacs-imgedit-duplicate-layer h 0) 1))
+    (should (= (cmacs-imgedit-n-layers h) 3))
+    (should (cmacs-imgedit-remove-layer h 0))
+    (should (cmacs-imgedit-remove-layer h 0))
+    ;; The last layer cannot be removed.
+    (should-not (cmacs-imgedit-remove-layer h 0))))
+
+(ert-deftest cmacs-imgedit-fill-and-pixel ()
+  (cmacs-imgedit-tests--skip-unless)
+  (cmacs-imgedit-tests--with-doc h 4 4
+    (cmacs-imgedit-fill h 255 0 0 255)
+    (should (equal (cmacs-imgedit-pixel-at h 0 0) '(255 0 0 255)))
+    (should (equal (cmacs-imgedit-pixel-at h 3 3) '(255 0 0 255)))
+    ;; Out of bounds -> nil.
+    (should-not (cmacs-imgedit-pixel-at h 4 0))))
+
+(ert-deftest cmacs-imgedit-draw-rect ()
+  (cmacs-imgedit-tests--skip-unless)
+  (cmacs-imgedit-tests--with-doc h 8 8
+    ;; Filled blue rectangle covering the whole canvas.
+    (cmacs-imgedit-set-color h 0 0 255 255)
+    (cmacs-imgedit-draw-rect h 0 0 8 8 t 1)
+    (should (equal (cmacs-imgedit-pixel-at h 4 4) '(0 0 255 255)))))
+
+(ert-deftest cmacs-imgedit-flood-fill ()
+  (cmacs-imgedit-tests--skip-unless)
+  (cmacs-imgedit-tests--with-doc h 4 4
+    (cmacs-imgedit-fill h 255 255 255 255)
+    (cmacs-imgedit-flood-fill h 0 0 0 255 0 255 0)
+    (should (equal (cmacs-imgedit-pixel-at h 2 2) '(0 255 0 255)))))
+
+(ert-deftest cmacs-imgedit-layer-blend-over ()
+  (cmacs-imgedit-tests--skip-unless)
+  (cmacs-imgedit-tests--with-doc h 4 4
+    (cmacs-imgedit-fill h 255 0 0 255)        ; layer 0 red
+    (cmacs-imgedit-add-layer h "Top")
+    (cmacs-imgedit-fill h 0 0 255 255)        ; layer 1 blue, OVER
+    (should (equal (cmacs-imgedit-pixel-at h 0 0) '(0 0 255 255)))
+    ;; Hide the top layer -> red shows through.
+    (cmacs-imgedit-set-layer-visible h 1 nil)
+    (should (equal (cmacs-imgedit-pixel-at h 0 0) '(255 0 0 255)))))
+
+(ert-deftest cmacs-imgedit-undo-redo ()
+  (cmacs-imgedit-tests--skip-unless)
+  (cmacs-imgedit-tests--with-doc h 4 4
+    (cmacs-imgedit-fill h 255 0 0 255)
+    (should-not (cmacs-imgedit-can-undo-p h))
+    (cmacs-imgedit-push-undo h)
+    (cmacs-imgedit-fill h 0 0 255 255)
+    (should (equal (cmacs-imgedit-pixel-at h 0 0) '(0 0 255 255)))
+    (should (cmacs-imgedit-can-undo-p h))
+    (should (cmacs-imgedit-undo h))
+    (should (equal (cmacs-imgedit-pixel-at h 0 0) '(255 0 0 255)))
+    (should (cmacs-imgedit-can-redo-p h))
+    (should (cmacs-imgedit-redo h))
+    (should (equal (cmacs-imgedit-pixel-at h 0 0) '(0 0 255 255)))))
+
+(ert-deftest cmacs-imgedit-add-layer-rgba ()
+  (cmacs-imgedit-tests--skip-unless)
+  (cmacs-imgedit-tests--with-doc h 2 2
+    ;; A 2x2 all-green RGBA buffer.
+    (let ((rgba (apply #'unibyte-string
+                       (apply #'append (make-list 4 '(0 255 0 255))))))
+      (let ((idx (cmacs-imgedit-add-layer-rgba h 2 2 rgba "Pasted")))
+        (should (>= idx 1))
+        (should (equal (cmacs-imgedit-pixel-at h 0 0) '(0 255 0 255)))))))
+
+(ert-deftest cmacs-imgedit-export-png-bytes ()
+  (cmacs-imgedit-tests--skip-unless)
+  (cmacs-imgedit-tests--with-doc h 4 4
+    (cmacs-imgedit-fill h 10 20 30 255)
+    (let ((png (cmacs-imgedit-export-png-bytes h)))
+      (should (stringp png))
+      (should (> (length png) 8))
+      ;; PNG magic: 0x89 'P' 'N' 'G'.
+      (should (= (aref png 0) #x89))
+      (should (= (aref png 1) ?P)))))
+
+(ert-deftest cmacs-imgedit-save-and-reopen ()
+  (cmacs-imgedit-tests--skip-unless)
+  (let ((path (make-temp-file "cmacs-imgedit-" nil ".png")))
+    (unwind-protect
+        (progn
+          (cmacs-imgedit-tests--with-doc h 4 4
+            (cmacs-imgedit-fill h 0 255 0 255)
+            (should (cmacs-imgedit-save h path)))
+          (should (file-exists-p path))
+          (let ((h3 (cmacs-imgedit-open path)))
+            (unwind-protect
+                (progn
+                  (should (= (cmacs-imgedit-width h3) 4))
+                  (let ((px (cmacs-imgedit-pixel-at h3 0 0)))
+                    (should (> (nth 1 px) 250))
+                    (should (< (nth 0 px) 5))))
+              (cmacs-imgedit-free h3))))
+      (delete-file path))))
+
+(ert-deftest cmacs-imgedit-gtk-clipboard-headless ()
+  "The GTK clipboard degrades cleanly with no display: available-p nil,
+get returns nil, set signals (never crashes)."
+  (cmacs-imgedit-tests--skip-unless)
+  (skip-unless (fboundp 'cmacs-imgedit-clipboard-available-p))
+  (skip-unless (not (cmacs-imgedit-clipboard-available-p))) ; headless only
+  (should-not (cmacs-imgedit-clipboard-get-png))
+  (should-error (cmacs-imgedit-clipboard-set-png "not-a-png")))
+
+(ert-deftest cmacs-imgedit-annotation-shapes ()
+  "Arrow (both directions), ellipse (outline + filled), text."
+  (cmacs-imgedit-tests--skip-unless)
+  (skip-unless (fboundp 'cmacs-imgedit-draw-arrow))
+  (cmacs-imgedit-tests--with-doc h 64 64
+    ;; Arrow left->right: shaft and head pixels painted.
+    (cmacs-imgedit-set-color h 255 0 0 255)
+    (cmacs-imgedit-draw-arrow h 10 32 50 32 2)
+    (should (equal (cmacs-imgedit-pixel-at h 25 32) '(255 0 0 255)))
+    (should (equal (cmacs-imgedit-pixel-at h 48 32) '(255 0 0 255)))
+    ;; Opposite direction: triangle winding must still fill the head.
+    (cmacs-imgedit-set-color h 0 255 0 255)
+    (cmacs-imgedit-draw-arrow h 50 10 10 10 2)
+    (should (equal (cmacs-imgedit-pixel-at h 12 10) '(0 255 0 255)))
+    ;; Ellipse outline: edge painted, centre untouched.
+    (cmacs-imgedit-set-color h 0 0 255 255)
+    (cmacs-imgedit-draw-ellipse h 32 48 20 8 nil 2)
+    (should (equal (cmacs-imgedit-pixel-at h 12 48) '(0 0 255 255)))
+    (should (equal (cmacs-imgedit-pixel-at h 32 48) '(0 0 0 0)))
+    ;; Filled ellipse covers the centre.
+    (cmacs-imgedit-draw-ellipse h 32 48 6 3 t 1)
+    (should (equal (cmacs-imgedit-pixel-at h 32 48) '(0 0 255 255)))
+    ;; Text: the embedded bitmap font sets pixels in the glyph box.
+    (cmacs-imgedit-set-color h 255 255 0 255)
+    (cmacs-imgedit-draw-text h 2 20 "Hi" 12)
+    (should (cl-loop for x from 2 to 21 thereis
+                     (cl-loop for y from 20 to 33 thereis
+                              (equal (cmacs-imgedit-pixel-at h x y)
+                                     '(255 255 0 255)))))))
+
+(ert-deftest cmacs-imgedit-mouse-click-from-other-buffer ()
+  "A canvas click must draw even when another window/buffer is selected.
+Mouse commands run with the SELECTED window's buffer current (e.g. a side
+panel after clicking a tool button); the handler must switch to the clicked
+window's buffer or it silently no-ops on the panel's nil handle."
+  (cmacs-imgedit-tests--skip-unless)
+  (require 'cmacs-imgedit)
+  (let* ((h (cmacs-imgedit-new 64 64))
+         (canvas (generate-new-buffer "*imgedit-test-canvas*"))
+         (panel (generate-new-buffer "*imgedit-test-panel*"))
+         (cwin (frame-root-window))
+         pwin)
+    (unwind-protect
+        (progn
+          (setq pwin (split-window cwin))
+          (with-current-buffer canvas
+            (cmacs-imgedit-mode)
+            (setq cmacs-imgedit--handle h
+                  cmacs-imgedit--tool 'fill
+                  cmacs-imgedit--color (list 255 0 0 255)))
+          (set-window-buffer cwin canvas)
+          (set-window-buffer pwin panel)
+          (select-window pwin)          ; the state after a panel-button click
+          (let* ((posn (list cwin 1 (cons 256 256) 0 nil 1 (cons 1 1) nil
+                             (cons 256 256) (cons 512 512)))
+                 (ev (list 'down-mouse-1 posn)))
+            (cmacs-imgedit-mouse-1 ev))
+          (should (equal (cmacs-imgedit-pixel-at h 32 32) '(255 0 0 255))))
+      (when (window-live-p pwin) (delete-window pwin))
+      ;; Detach the handle so killing the canvas buffer's cleanup hook does
+      ;; not free it twice; free it ourselves below.
+      (with-current-buffer canvas (setq cmacs-imgedit--handle nil))
+      (kill-buffer canvas)
+      (kill-buffer panel)
+      (ignore-errors (cmacs-imgedit-free h)))))
+
+(ert-deftest cmacs-imgedit-canvas-keymap-beats-emulation-maps ()
+  "The canvas text-property keymap must win over emulation maps.
+Evil (Doom) binds down-mouse-1 in its state maps, which outrank the
+major-mode map — only a position `keymap' property outranks those.
+Simulate that shadowing generically and assert the canvas still resolves
+to the editor's handler."
+  (cmacs-imgedit-tests--skip-unless)
+  (require 'cmacs-imgedit)
+  (let* ((h (cmacs-imgedit-new 16 16))
+         (buf (generate-new-buffer "*imgedit-test-keymap*"))
+         (shadow-map (make-sparse-keymap))
+         ;; Key `t' = unconditionally active, like an enabled Evil state map.
+         (emulation-mode-map-alists
+          (cons (list (cons t shadow-map)) emulation-mode-map-alists)))
+    (define-key shadow-map [down-mouse-1] #'ignore)
+    (define-key shadow-map [down-mouse-3] #'ignore)
+    (unwind-protect
+        (progn
+          ;; Without the canvas text property the emulation map shadows the
+          ;; mode map — the exact pre-fix failure under Evil.
+          (with-temp-buffer
+            (cmacs-imgedit-mode)
+            (should (eq (key-binding [down-mouse-1]) #'ignore)))
+          ;; On the rendered canvas the position keymap outranks it.
+          (with-current-buffer buf
+            (cmacs-imgedit-mode)
+            (setq cmacs-imgedit--handle h)
+            (cmacs-imgedit--render)
+            (should (eq (key-binding [down-mouse-1] nil nil (point-min))
+                        'cmacs-imgedit-mouse-1))
+            (should (eq (key-binding [down-mouse-3] nil nil (point-min))
+                        'cmacs-imgedit-context-menu))))
+      (with-current-buffer buf (setq cmacs-imgedit--handle nil))
+      (kill-buffer buf)
+      (ignore-errors (cmacs-imgedit-free h)))))
+
+(provide 'cmacs-imgedit-tests)
+;;; cmacs-imgedit-tests.el ends here

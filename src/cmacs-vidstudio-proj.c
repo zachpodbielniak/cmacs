@@ -1,0 +1,1 @@
+./../cmacs/vidstudio/cmacs-vidstudio-proj.c

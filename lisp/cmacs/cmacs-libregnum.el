@@ -2254,6 +2254,30 @@ under the original's parent is a future improvement.)"
           (message "Asset replaced: %s" file))
       (user-error "set-node-asset not yet available"))))
 
+(defun cmacs-libregnum-editor--ctx-edit-sprite (buffer id)
+  "Open node ID's image asset in the 2D image editor (cmacs-imgedit).
+Saving in the image editor reloads the node's texture in BUFFER via
+`cmacs-imgedit-after-save-functions', closing the 2D->3D sprite loop."
+  (unless (fboundp 'cmacs-imgedit-open-file)
+    (user-error "cmacs was not built with --with-cmacs-imgedit"))
+  (let ((asset (cmacs-libregnum-editor-node-asset buffer id)))
+    (unless (and asset (not (string-empty-p asset))
+                 (file-exists-p (expand-file-name asset)))
+      (user-error "No image asset file for this node"))
+    (setq asset (expand-file-name asset))
+    (let ((edit-buf (cmacs-imgedit-open-file asset)))
+      (with-current-buffer edit-buf
+        (add-hook 'cmacs-imgedit-after-save-functions
+                  (lambda (path)
+                    (when (and (string= path asset)
+                               (buffer-live-p buffer)
+                               (fboundp 'cmacs-libregnum-editor-set-node-asset))
+                      (cmacs-libregnum-editor-set-node-asset buffer id path)
+                      (message "Sprite reloaded in the 3D editor")))
+                  nil t))
+      (message "Editing %s — save (s) to refresh the 3D node"
+               (file-name-nondirectory asset)))))
+
 (defun cmacs-libregnum-editor--ctx-manage-scripts-items-fn (buffer id)
   "Return a dynamic script-management item list for node ID in BUFFER.
 Called at pop time so script list is always current."
@@ -2678,6 +2702,15 @@ all rotations apply to every node).")
      :action cmacs-libregnum-editor--ctx-replace-asset
      :enable ,(lambda (_b _i)
                 (fboundp 'cmacs-libregnum-editor-set-node-asset)))
+    (:label "Edit sprite image…"
+     :kinds (sprite tilemap)
+     :action cmacs-libregnum-editor--ctx-edit-sprite
+     :enable ,(lambda (b i)
+                (and (fboundp 'cmacs-imgedit-open-file)
+                     (let ((a (ignore-errors
+                                (cmacs-libregnum-editor-node-asset b i))))
+                       (and a (not (string-empty-p a))
+                            (file-exists-p (expand-file-name a)))))))
     (:sep)
     (:label "Set light range/color…"
      :kinds (light)

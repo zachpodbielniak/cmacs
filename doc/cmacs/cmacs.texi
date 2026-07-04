@@ -62,6 +62,8 @@ interaction.
 * CMacs CAD::                   Parametric CAD parts (.cad/.ccad via cad-glib).
 * CMacs Screensaver::           libregnum screensavers as wallpaper/lock/buffer.
 * CMacs Lrgterm::               Independent libregnum/raylib display backend (--lrg).
+* CMacs Imgedit::               2D image / sprite editor (layers, tools, clipboard).
+* CMacs Vidstudio::             Reel-based video editor (timeline, transitions, export).
 * Build Configuration::         Configure flags and dependencies.
 * Upstream Changes::            Every edit cmacs makes to stock Emacs sources.
 @end menu
@@ -8680,6 +8682,161 @@ protocol to break.  See the Troubleshooting section of
 @file{doc_org/cmacs/cmacs-lrgterm.org} for the full writeup.
 
 See @file{doc_org/cmacs/cmacs-lrgterm.org} for the living document.
+
+@c ===================================================================
+@node CMacs Imgedit
+@chapter CMacs Imgedit: 2D Image / Sprite Editor
+
+@code{cmacs-imgedit} is a layered 2D raster image and sprite editor built on
+libregnum's @code{LrgImageDocument} / @code{LrgImageLayer} (a CPU layer
+compositor: opacity, blend modes REPLACE/OVER/ADD/MULTIPLY/SUBTRACT, per-layer
+offset, undo).  Enable with @option{--with-cmacs-imgedit} (requires
+@option{--with-cmacs-libregnum}).  Off by default.
+
+It has two facets: a handle-based model API (the @code{cmacs-imgedit-*}
+primitives, scriptable and MCP/headless-driveable) and @code{cmacs-imgedit-mode},
+which shows the composited document as a native Emacs image and supports mouse
+painting plus command-driven tools.  See
+@file{doc_org/cmacs/cmacs-imgedit.org} for the full reference.
+
+@section Commands
+
+@table @kbd
+@item M-x cmacs-imgedit
+New image (prompts width x height); with a prefix arg, open a file.
+@item M-x cmacs-imgedit-open-file
+Open an existing image (PNG/JPG/BMP/@dots{}).
+@item M-x cmacs-imgedit-from-clipboard
+Open the image on the system clipboard (gowl image clipboard or
+@code{wl-paste}) in a new editor buffer.
+@item M-x cmacs-imgedit-from-screenshot
+Capture a gowl screenshot into a new editor buffer.
+@end table
+
+In @code{cmacs-imgedit-mode}: @kbd{mouse-1} paints; @kbd{mouse-3} pops the
+context menu (a native GTK menu under pgtk, the in-engine libregnum menu under
+@option{--lrg}).  Tools: @kbd{b} brush, @kbd{l} line, @kbd{>} arrow (filled
+head at the release point), @kbd{r} rectangle, @kbd{c} circle, @kbd{E}
+ellipse, @kbd{t} text (@kbd{T} sets the text size), @kbd{k} bucket, @kbd{e}
+eyedropper; also @kbd{f} fill layer, @kbd{p} pencil, @kbd{G} flood fill,
+@kbd{C} colour.  Layers: @kbd{L} add, @kbd{K} remove, @kbd{a} select, @kbd{v}
+visibility, @kbd{o} opacity.  @kbd{u}/@kbd{U} undo/redo, @kbd{s} save,
+@kbd{y} (or @kbd{w}) @emph{copies the flattened image to the clipboard}
+(evil-yank semantics), @kbd{C-y} pastes a clipboard image as a layer,
+@kbd{P} pastes a screenshot, @kbd{+}/@kbd{-} zoom, @kbd{D} diagnose.
+
+The annotation round-trip: @kbd{M-x cmacs-imgedit-from-clipboard} on a copied
+screenshot, mark it up with arrows/shapes/text, then @kbd{y} and paste the
+annotated PNG anywhere.  The drawing DEFUNs gained
+@code{cmacs-imgedit-draw-arrow}, @code{-draw-ellipse} and @code{-draw-text}
+(TrueType, or the engine's embedded bitmap font when headless).
+
+Clipboard backends, tried in order: gowl's native image clipboard (when its
+DEFUNs exist); Emacs's own in-process GTK clipboard
+(@code{cmacs-imgedit-clipboard-set-png} / @code{-get-png} /
+@code{-available-p}) --- a normal GTK client clipboard, so it behaves
+identically under gowl, GNOME/Mutter, KDE or X11 with no external tools;
+and @command{wl-copy}/@command{wl-paste} as the fallback for GTK-less
+sessions (@option{--lrg}, tty).  @file{install-deps} installs
+@code{wl-clipboard}.
+
+Opened images auto-fit their zoom (sprites high, screenshots 1x); transparent
+areas render on @code{cmacs-imgedit-canvas-background} so dark strokes stay
+visible on dark themes.  Every stroke echoes what it painted and on which
+layer.  The canvas carries its own @code{keymap} text property, which outranks
+Evil state maps and @code{context-menu-mode}, and the mode map is registered
+with @code{evil-make-overriding-map} --- mouse painting, the right-click menu
+and the tool keys all work unmodified under Doom/Evil.
+
+@section Model API
+
+Documents are referenced by an integer handle; layers are indexed bottom-up.
+Key primitives: @code{cmacs-imgedit-new}, @code{-open}, @code{-save},
+@code{-export-png-bytes}; layers @code{-add-layer},
+@code{-add-layer-from-file}, @code{-add-layer-rgba}, @code{-remove-layer},
+@code{-move-layer}, @code{-duplicate-layer}, and the per-layer
+opacity/blend/visibility setters; drawing @code{-set-color}, @code{-fill},
+@code{-set-pixel}, @code{-draw-line}, @code{-draw-rect}, @code{-draw-circle},
+@code{-flood-fill}, @code{-pixel-at}; undo @code{-push-undo}, @code{-undo},
+@code{-redo}.  Clipboard / screenshot use @code{wl-copy}/@code{wl-paste} and
+@code{gowl-screenshot-monitor}.
+
+A sprite saved here is a normal PNG that the 3D @code{cmacs-libregnum-editor}
+can reference as a sprite or tilemap asset; right-clicking such a node there
+offers @emph{Edit sprite image@dots{}}, which opens the asset here and
+reloads the node's texture on save
+(@code{cmacs-imgedit-after-save-functions}).  With
+@option{--with-cmacs-mcp}, typed @code{imgedit_*} MCP tools (new / open /
+save / info / set_color / draw_shape / draw_text / add_layer / undo) let an
+agent do all of this headlessly.
+
+@c ===================================================================
+@node CMacs Vidstudio
+@chapter CMacs Vidstudio: Reel-based Video Editor
+
+@code{cmacs-vidstudio} is a video editor built on libregnum's @emph{Reel}
+composition system.  A project is an @code{LrgReel}; each @emph{track} is an
+@code{LrgReelTransitionSeries} of clip segments joined by transitions, with
+per-clip effects.  Frames are composited on the CPU and exported through the
+ffmpeg-backed reel exporters (which invoke the @command{ffmpeg} binary; no
+libav linkage is needed for the editor itself).  Enable with
+@option{--with-cmacs-vidstudio} (requires @option{--with-cmacs-libregnum}).
+Off by default.
+
+This is distinct from @ref{CMacs Video}, which is GStreamer @emph{playback};
+vidstudio is a Reel-based @emph{editor}.  Smooth real-time scrubbing of source
+clips is served by the libregnum @code{LrgVideoPlayer} FFmpeg decode backend
+(built with @code{FFMPEG=1}).  See @file{doc_org/cmacs/cmacs-vidstudio.org} for
+the full reference.
+
+@section Commands
+
+@kbd{M-x cmacs-vidstudio} creates a project (prompts width x height x fps).  In
+@code{cmacs-vidstudio-mode} the buffer previews the frame at the playhead;
+@kbd{mouse-3} pops the context menu (GTK under pgtk, in-engine under
+@option{--lrg}).  Keys: @kbd{i} import clip, @kbd{C} solid colour, @kbd{T}
+title, @kbd{n} add track, @kbd{a} active track, @kbd{t} transition, @kbd{e}
+effect, @kbd{s} split at playhead, @kbd{g} go to frame, @kbd{p} (or
+@kbd{SPC}) play/pause, @kbd{@key{left}}/@kbd{@key{right}} step, @kbd{E}
+export MP4, @kbd{G} export GIF.
+Like imgedit, the rendered buffer carries a @code{keymap} text property and
+the mode map is registered with @code{evil-make-overriding-map}, so the menu
+and keys work unmodified under Doom/Evil and @code{context-menu-mode} ---
+except @kbd{SPC}, which Doom's leader owns; use @kbd{p} there.
+
+Video imports never block: the clip is probed at import and the whole-clip
+ffmpeg decode runs on a worker thread
+(@code{lrg_reel_video_source_set_async_decode}); the preview shows a dark
+placeholder until @code{cmacs-vidstudio-clip-ready-p} reports readiness
+(the editor polls and re-renders automatically), and export always waits
+for real frames.  Playback advances the playhead from the wall clock,
+skipping slow frames and yielding to pending input, so it never freezes
+the editor; preview redraws are capped at
+@code{cmacs-vidstudio-preview-fps} and each is followed by an explicit
+@code{redisplay} so the screen actually repaints between timer runs.
+Play at the end of the timeline rewinds; clips still decoding show a
+@samp{decoding@dots{}} marker in the timeline.  Playback frames render
+through @code{cmacs-vidstudio-render-ppm} --- composited, downscaled to
+preview width in C, and emitted as uncompressed binary PPM (roughly 5x
+faster end-to-end than the per-frame PNG round-trip), with the previous
+frame's image flushed from the cache on each redraw.
+
+@section Model API
+
+Projects are referenced by an integer handle; clips by a stable id.  Key
+primitives: @code{cmacs-vidstudio-new}, @code{-add-track}, the clip inserters
+@code{-add-solid-clip} / @code{-add-image-clip} / @code{-add-video-clip} /
+@code{-add-text-clip}, @code{-set-transition} (fade/dissolve/wipe/slide/zoom/
+iris/flip/push/clock-wipe), @code{-add-effect}
+(blur/bloom/color-grade/vignette/grain), the editing ops
+@code{-set-clip-duration} / @code{-split-clip} / @code{-move-clip} /
+@code{-remove-clip}, the queries @code{-clip-at} / @code{-clip-duration} /
+@code{-clip-start-frame} / @code{-total-frames}, and rendering / export
+@code{-render-png}, @code{-render-ppm}, @code{-frame-pixel},
+@code{-export-video}, @code{-export-gif}.  With @option{--with-cmacs-mcp},
+typed @code{vidstudio_*} MCP tools (new / info / add_track / add_clip /
+set_transition / add_effect / split / render_frame / export) let an agent
+cut a video headlessly.
 
 @c ===================================================================
 @node Build Configuration

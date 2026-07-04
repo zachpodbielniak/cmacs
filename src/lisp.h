@@ -5555,6 +5555,14 @@ extern void init_cmacs_ai (void);
 extern void syms_of_cmacs_libregnum (void);
 extern void init_cmacs_libregnum (void);
 #endif
+#ifdef HAVE_CMACS_IMGEDIT
+extern void syms_of_cmacs_imgedit (void);
+extern void init_cmacs_imgedit (void);
+#endif
+#ifdef HAVE_CMACS_VIDSTUDIO
+extern void syms_of_cmacs_vidstudio (void);
+extern void init_cmacs_vidstudio (void);
+#endif
 #ifdef HAVE_CMACS_LRGTERM
 extern void syms_of_cmacs_lrgterm (void);
 extern void init_cmacs_lrgterm (void);

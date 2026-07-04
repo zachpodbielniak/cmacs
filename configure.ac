@@ -662,6 +662,8 @@ OPTION_DEFAULT_OFF([cmacs-libreclaw], [CMacs libreclaw chat/Matrix client integr
 OPTION_DEFAULT_OFF([cmacs-ai], [CMacs ai-glib AI subsystem (multi-provider chat, tools, voice)])
 OPTION_DEFAULT_OFF([cmacs-libregnum], [CMacs libregnum 3D scene buffers (raylib + GObject scene graph)])
 OPTION_DEFAULT_OFF([cmacs-lrgterm], [CMacs independent libregnum/raylib display backend (output_lrg; peer to pgtk)])
+OPTION_DEFAULT_OFF([cmacs-imgedit], [CMacs 2D image / sprite editor (layers, blend modes, undo; libregnum LrgImageDocument)])
+OPTION_DEFAULT_OFF([cmacs-vidstudio], [CMacs video editor (libregnum Reel timeline, transitions, effects, ffmpeg export)])
 OPTION_DEFAULT_OFF([cmacs-gnuseye], [CMacs gnuseye live planetary globe (GNU's Eye; requires libregnum)])
 OPTION_DEFAULT_OFF([cmacs-cad], [CMacs parametric CAD subsystem (cad-glib kernels; parts render as libregnum CAD nodes)])
 OPTION_DEFAULT_OFF([cmacs-screensaver], [CMacs libregnum screensavers as animated wallpaper / lock screen / buffer (requires libregnum; wallpaper+lock need gowl)])
@@ -1032,6 +1034,43 @@ if test "$with_cmacs_lrgterm" != "no"; then
   AC_DEFINE([HAVE_CMACS_LRGTERM], 1, [CMacs independent libregnum/raylib display backend (output_lrg)])
   CMACS_LRGTERM_OBJ="cmacs-lrgterm.o cmacs-lrgfns.o cmacs-lrgfont.o cmacs-lrgwindow.o"
 fi
+if test "$with_cmacs_imgedit" != "no"; then
+  # The 2D image / sprite editor is built on libregnum's LrgImageDocument /
+  # LrgImageLayer (CPU layer compositing) -- it reuses the libregnum archive
+  # and include set.  cmacs-imgedit-doc.c is a CONSUMER of <libregnum.h>
+  # (compiled with the libregnum include paths already folded into CMACS_CFLAGS
+  # via CMACS_LIBREGNUM_CFLAGS); cmacs-imgedit-defuns.c includes lisp.h only.
+  if test "$with_cmacs_libregnum" = "no"; then
+    AC_MSG_ERROR([--with-cmacs-imgedit requires --with-cmacs-libregnum (LrgImageDocument lives in the libregnum archive)])
+  fi
+  if test "$with_cmacs_glib" = "no"; then
+    AC_MSG_ERROR([--with-cmacs-imgedit requires --with-cmacs-glib])
+  fi
+  CMACS_IMGEDIT_CFLAGS=""
+  CMACS_IMGEDIT_LIBS=""
+  AC_DEFINE([HAVE_CMACS_IMGEDIT], 1, [CMacs 2D image / sprite editor])
+  dnl cmacs-imgedit-clip.o: in-process GTK image clipboard (pgtk builds;
+  dnl stubs elsewhere) -- compositor-portable copy/paste for annotations.
+  CMACS_IMGEDIT_OBJ="cmacs-imgedit-init.o cmacs-imgedit-defuns.o cmacs-imgedit-doc.o cmacs-imgedit-clip.o"
+fi
+if test "$with_cmacs_vidstudio" != "no"; then
+  # The video editor is built on libregnum's Reel composition system
+  # (LrgReel + LrgReelTransitionSeries + the ffmpeg-backed video source /
+  # exporter, which shell out to the `ffmpeg' binary -- no libav linkage
+  # needed here).  cmacs-vidstudio-proj.c is a CONSUMER of <libregnum.h>
+  # (the libregnum include paths are already in CMACS_CFLAGS); the DEFUN TU
+  # includes lisp.h only.
+  if test "$with_cmacs_libregnum" = "no"; then
+    AC_MSG_ERROR([--with-cmacs-vidstudio requires --with-cmacs-libregnum (the Reel system lives in the libregnum archive)])
+  fi
+  if test "$with_cmacs_glib" = "no"; then
+    AC_MSG_ERROR([--with-cmacs-vidstudio requires --with-cmacs-glib])
+  fi
+  CMACS_VIDSTUDIO_CFLAGS=""
+  CMACS_VIDSTUDIO_LIBS=""
+  AC_DEFINE([HAVE_CMACS_VIDSTUDIO], 1, [CMacs video editor])
+  CMACS_VIDSTUDIO_OBJ="cmacs-vidstudio-init.o cmacs-vidstudio-defuns.o cmacs-vidstudio-proj.o"
+fi
 if test "$with_cmacs_gnuseye" != "no"; then
   if test "$with_cmacs_libregnum" = "no"; then
     AC_MSG_ERROR([--with-cmacs-gnuseye requires --with-cmacs-libregnum (the globe is rendered through libregnum)])
@@ -1250,6 +1289,12 @@ if test "$with_cmacs_mcp" != "no"; then
   fi
   if test "$with_cmacs_lrgterm" != "no"; then
     CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-lrgterm.o"
+  fi
+  if test "$with_cmacs_imgedit" != "no"; then
+    CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-imgedit.o"
+  fi
+  if test "$with_cmacs_vidstudio" != "no"; then
+    CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-vidstudio.o"
   fi
 fi
 # CMACS Print: pure-Elisp + shell-script subsystem (no C build artefacts).
@@ -1556,6 +1601,12 @@ AC_SUBST(CMACS_LIBREGNUM_LIBS)
 AC_SUBST(CMACS_LRGTERM_OBJ)
 AC_SUBST(CMACS_LRGTERM_CFLAGS)
 AC_SUBST(CMACS_LRGTERM_LIBS)
+AC_SUBST(CMACS_IMGEDIT_OBJ)
+AC_SUBST(CMACS_IMGEDIT_CFLAGS)
+AC_SUBST(CMACS_IMGEDIT_LIBS)
+AC_SUBST(CMACS_VIDSTUDIO_OBJ)
+AC_SUBST(CMACS_VIDSTUDIO_CFLAGS)
+AC_SUBST(CMACS_VIDSTUDIO_LIBS)
 AC_SUBST(CMACS_GNUSEYE_OBJ)
 AC_SUBST(CMACS_GNUSEYE_CFLAGS)
 AC_SUBST(CMACS_GNUSEYE_LIBS)

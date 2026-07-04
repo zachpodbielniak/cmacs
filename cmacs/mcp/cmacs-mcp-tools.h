@@ -69,6 +69,14 @@ void cmacs_mcp_tools_cad_register (McpServer *server);
 void cmacs_mcp_tools_lrgterm_register (McpServer *server);
 #endif
 
+#ifdef HAVE_CMACS_IMGEDIT
+void cmacs_mcp_tools_imgedit_register (McpServer *server);
+#endif
+
+#ifdef HAVE_CMACS_VIDSTUDIO
+void cmacs_mcp_tools_vidstudio_register (McpServer *server);
+#endif
+
 /* Resource and prompt registration. */
 void cmacs_mcp_register_resources (McpServer *server);
 void cmacs_mcp_register_prompts   (McpServer *server);
