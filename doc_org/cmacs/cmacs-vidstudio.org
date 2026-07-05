@@ -191,8 +191,10 @@ opacity, blend, keyframes) and file-based audio segs.
   right-click *Project* submenu).  ~.vstudio~ files auto-open in the editor
   (=auto-mode-alist=); a named project is autosaved to ~FILE~~ on buffer kill.
 - Serialize -> load -> serialize is bit-identical (covered by ERT).
-- v1 gaps: per-effect parameters and full transform are not yet serialized
-  (opacity + blend are); clip-extracted audio is re-extracted, not stored.
+- Serialized: clips + transitions + opacity/blend + per-clip transform +
+  effect chains (type + numeric params, introspected via GObject) + keyframes
+  + file audio.  v1 gap: clip-extracted audio is re-extracted on load, not
+  stored inline.
 
 ** Near-real-time playback
 

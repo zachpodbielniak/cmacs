@@ -318,6 +318,8 @@ flips once the decode lands and real frames replace the placeholder."
       (cmacs-vidstudio-set-blend-mode p id 2)
       (cmacs-vidstudio-set-transition p id 0 12 0)
       (cmacs-vidstudio-set-transform p id 5 7 2.0 2.0 0.5)
+      (cmacs-vidstudio-add-effect p id 0)
+      (cmacs-vidstudio-set-effect-param p id 0 (cons "radius" 6.0))
       (cmacs-vidstudio-add-keyframe p id 3 0 1.0)
       (cmacs-vidstudio-add-keyframe p id 3 30 2.0))
     (cmacs-vidstudio-add-text-clip p 0 "Hi" 30 255 255 255 255)

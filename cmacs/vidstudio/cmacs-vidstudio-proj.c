@@ -1207,10 +1207,68 @@ cmacs_vidstudio_proj_keyframe_count (CmacsVidProject *p, gint clip_id)
   }
 }
 
+/* Map an effect object back to a CMACS_VID_FX_* code, or -1. */
+static int
+effect_type_code (LrgReelEffect *fx)
+{
+  GType t = G_OBJECT_TYPE (fx);
+  if (t == LRG_TYPE_REEL_BLUR_EFFECT)        return CMACS_VID_FX_BLUR;
+  if (t == LRG_TYPE_REEL_BLOOM_EFFECT)       return CMACS_VID_FX_BLOOM;
+  if (t == LRG_TYPE_REEL_COLOR_GRADE_EFFECT) return CMACS_VID_FX_COLOR_GRADE;
+  if (t == LRG_TYPE_REEL_VIGNETTE_EFFECT)    return CMACS_VID_FX_VIGNETTE;
+  if (t == LRG_TYPE_REEL_GRAIN_EFFECT)       return CMACS_VID_FX_GRAIN;
+  return -1;
+}
+
+/* Append " (effects (CODE (prop val)...) ...)" for a clip's effect chain. */
+static void
+serialize_effects (GString *o, LrgReelClip *clip)
+{
+  guint ne = lrg_reel_clip_get_n_effects (clip), ei, pi, np;
+  gboolean opened = FALSE;
+
+  for (ei = 0; ei < ne; ei++)
+    {
+      LrgReelEffect *fx = lrg_reel_clip_get_effect (clip, ei);
+      int code = fx ? effect_type_code (fx) : -1;
+      GParamSpec **specs;
+      if (code < 0)
+        continue;
+      if (!opened) { g_string_append (o, " (effects"); opened = TRUE; }
+      g_string_append_printf (o, " (%d", code);
+      specs = g_object_class_list_properties (G_OBJECT_GET_CLASS (fx), &np);
+      for (pi = 0; pi < np; pi++)
+        {
+          GParamSpec *ps = specs[pi];
+          GType vt = G_PARAM_SPEC_VALUE_TYPE (ps);
+          if (!(ps->flags & G_PARAM_READABLE) || !(ps->flags & G_PARAM_WRITABLE))
+            continue;
+          if (vt == G_TYPE_INT || vt == G_TYPE_UINT || vt == G_TYPE_FLOAT
+              || vt == G_TYPE_DOUBLE)
+            {
+              GValue gv = G_VALUE_INIT, dv = G_VALUE_INIT;
+              g_value_init (&gv, vt);
+              g_value_init (&dv, G_TYPE_DOUBLE);
+              g_object_get_property (G_OBJECT (fx),
+                                     g_param_spec_get_name (ps), &gv);
+              if (g_value_transform (&gv, &dv))
+                g_string_append_printf (o, " (%s %g)",
+                                        g_param_spec_get_name (ps),
+                                        g_value_get_double (&dv));
+              g_value_unset (&gv);
+              g_value_unset (&dv);
+            }
+        }
+      g_free (specs);
+      g_string_append_c (o, ')');
+    }
+  if (opened)
+    g_string_append_c (o, ')');
+}
+
 /* ── Serialization (a versioned, Lisp-readable S-expression) ─────────────
    The Elisp side replays this by calling the add-* DEFUNs, so only the
-   creation descriptors + post-creation setters need to be emitted.  Effects
-   and full transform are a documented v1 gap (opacity + blend are emitted). */
+   creation descriptors + post-creation setters need to be emitted. */
 char *
 cmacs_vidstudio_proj_serialize (CmacsVidProject *p)
 {
@@ -1262,6 +1320,7 @@ cmacs_vidstudio_proj_serialize (CmacsVidProject *p)
               g_string_append_printf (o, " (transform %g %g %g %g %g)",
                                       tx, ty, tsx, tsy, trot);
           }
+          serialize_effects (o, s->clip);
           if (s->keys != NULL && s->keys->len > 0)
             {
               g_string_append (o, " (keyframes");
