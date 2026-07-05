@@ -582,17 +582,38 @@ immediately and the preview pops in when the decode finishes."
     (cmacs-vidstudio--render)
     (message "Added title clip #%d" id)))
 
-(defun cmacs-vidstudio-add-transition-cmd (clip-id type overlap)
-  "Set CLIP-ID's leading TYPE transition with OVERLAP seconds."
+(defconst cmacs-vidstudio-easing-alist
+  '(("linear" . 0) ("ease-in-quad" . 1) ("ease-out-quad" . 2)
+    ("ease-in-out-cubic" . 9) ("ease-out-back" . 20) ("ease-out-bounce" . 30))
+  "A useful subset of LrgEasingType names -> codes.")
+
+(defun cmacs-vidstudio-add-transition-cmd (clip-id type overlap easing)
+  "Set CLIP-ID's leading TYPE transition, OVERLAP seconds, EASING curve."
   (interactive
-   (list (read-number "Clip id: ")
+   (list (cmacs-vidstudio--read-clip)
          (cdr (assoc (completing-read "Transition: "
                                       cmacs-vidstudio-transition-alist nil t)
                      cmacs-vidstudio-transition-alist))
-         (read-number "Overlap (seconds): " 1.0)))
+         (read-number "Overlap (seconds): " 1.0)
+         (cdr (assoc (completing-read "Easing: "
+                                      cmacs-vidstudio-easing-alist nil t "linear")
+                     cmacs-vidstudio-easing-alist))))
   (cmacs-vidstudio-set-transition cmacs-vidstudio--handle clip-id type
-                                  (cmacs-vidstudio--secs-to-frames overlap) 0)
+                                  (cmacs-vidstudio--secs-to-frames overlap)
+                                  (or easing 0))
   (cmacs-vidstudio--render))
+
+(defun cmacs-vidstudio-add-gradient (a b seconds)
+  "Append a gradient clip from colour A to B of SECONDS to the active track."
+  (interactive (list (read-color "From: ") (read-color "To: ")
+                     (read-number "Seconds: " 2.0)))
+  (let ((ca (color-values a)) (cb (color-values b)))
+    (cmacs-vidstudio-add-gradient-clip
+     cmacs-vidstudio--handle cmacs-vidstudio--active-track
+     (cmacs-vidstudio--secs-to-frames seconds)
+     (list (/ (nth 0 ca) 256) (/ (nth 1 ca) 256) (/ (nth 2 ca) 256) 255)
+     (list (/ (nth 0 cb) 256) (/ (nth 1 cb) 256) (/ (nth 2 cb) 256) 255))
+    (cmacs-vidstudio--render)))
 
 (defun cmacs-vidstudio-add-effect-cmd (clip-id type)
   "Append effect TYPE to CLIP-ID."
@@ -734,6 +755,7 @@ silently updates.  Starting play at the end of the timeline rewinds."
              ("Import clip…" . cmacs-vidstudio-import)
              ("Solid colour…" . cmacs-vidstudio-add-color)
              ("Title…" . cmacs-vidstudio-add-title)
+             ("Gradient…" . cmacs-vidstudio-add-gradient)
              ("New track" . cmacs-vidstudio-add-track-cmd))
             ("Clip"
              ("Transition…" . cmacs-vidstudio-add-transition-cmd)

@@ -328,5 +328,13 @@ flips once the decode lands and real frames replace the placeholder."
           (should (string= s1 s2))
         (cmacs-vidstudio-free p2)))))
 
+(ert-deftest cmacs-vidstudio-tests-gradient-clip ()
+  "A linear gradient clip ramps dark->light top to bottom."
+  (cmacs-vidstudio-tests--skip-unless)
+  (cmacs-vidstudio-tests--with-proj p 32 32 30.0
+    (cmacs-vidstudio-add-gradient-clip p 0 30 '(0 0 0 255) '(255 255 255 255))
+    (should (< (nth 0 (cmacs-vidstudio-frame-pixel p 0 16 2))
+               (nth 0 (cmacs-vidstudio-frame-pixel p 0 16 29))))))
+
 (provide 'cmacs-vidstudio-tests)
 ;;; cmacs-vidstudio-tests.el ends here

@@ -209,6 +209,25 @@ DEFUN ("cmacs-vidstudio-add-solid-clip", Fcmacs_vidstudio_add_solid_clip,
                           vs_clamp8 (b), vs_clamp8 (a)));
 }
 
+DEFUN ("cmacs-vidstudio-add-gradient-clip",
+       Fcmacs_vidstudio_add_gradient_clip,
+       Scmacs_vidstudio_add_gradient_clip, 5, 6, 0,
+       doc: /* Append a gradient clip on TRACK from colour A to B (lists of
+R G B A); optional RADIAL non-nil draws a radial gradient.  DURATION frames.  */)
+  (Lisp_Object handle, Lisp_Object track, Lisp_Object duration,
+   Lisp_Object a, Lisp_Object b, Lisp_Object radial)
+{
+  CHECK_FIXNUM (track);
+  return make_fixnum (cmacs_vidstudio_proj_add_gradient_clip
+    (vs_lookup (handle), (guint) XFIXNUM (track), vs_int (duration, 0),
+     !NILP (radial),
+     vs_clamp8 (Fnth (make_fixnum (0), a)), vs_clamp8 (Fnth (make_fixnum (1), a)),
+     vs_clamp8 (Fnth (make_fixnum (2), a)), vs_clamp8 (Fnth (make_fixnum (3), a)),
+     vs_clamp8 (Fnth (make_fixnum (0), b)), vs_clamp8 (Fnth (make_fixnum (1), b)),
+     vs_clamp8 (Fnth (make_fixnum (2), b)),
+     vs_clamp8 (Fnth (make_fixnum (3), b))));
+}
+
 DEFUN ("cmacs-vidstudio-add-image-clip", Fcmacs_vidstudio_add_image_clip,
        Scmacs_vidstudio_add_image_clip, 4, 4, 0,
        doc: /* Append image PATH of DURATION frames to TRACK; return clip id.  */)
@@ -911,6 +930,7 @@ syms_of_cmacs_vidstudio_defuns (void)
   defsubr (&Scmacs_vidstudio_track_clip_count);
   defsubr (&Scmacs_vidstudio_track_total_frames);
   defsubr (&Scmacs_vidstudio_add_solid_clip);
+  defsubr (&Scmacs_vidstudio_add_gradient_clip);
   defsubr (&Scmacs_vidstudio_add_image_clip);
   defsubr (&Scmacs_vidstudio_add_video_clip);
   defsubr (&Scmacs_vidstudio_add_text_clip);

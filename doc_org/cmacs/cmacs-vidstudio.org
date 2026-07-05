@@ -138,6 +138,11 @@ Durations and the playhead are in *frames*.
   survives later duration edits).  ~M-x cmacs-vidstudio-import~ prompts for the
   optional In/Out points (blank In = start, blank Out = whole video).
 - ~(cmacs-vidstudio-add-text-clip HANDLE TRACK TEXT DURATION R G B A)~.
+- ~(cmacs-vidstudio-add-gradient-clip HANDLE TRACK DURATION A B &optional RADIAL)~
+  — a gradient clip from colour A to B (each ~(R G B A)~), linear (vertical) or
+  radial.  Right-click → *Add → Gradient…*.  Transitions now prompt for an
+  *easing* curve (a subset of the 31 LrgEasingType curves) in
+  ~cmacs-vidstudio-add-transition-cmd~.
 
 ** Transitions / effects
 - ~(cmacs-vidstudio-set-transition HANDLE CLIP-ID TYPE OVERLAP EASING)~ —

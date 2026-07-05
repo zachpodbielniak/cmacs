@@ -347,6 +347,29 @@ cmacs_vidstudio_proj_add_solid_clip (CmacsVidProject *p, guint track,
 }
 
 gint
+cmacs_vidstudio_proj_add_gradient_clip (CmacsVidProject *p, guint track,
+                                        int duration, gboolean radial,
+                                        guint8 ar, guint8 ag, guint8 ab,
+                                        guint8 aa, guint8 br, guint8 bg,
+                                        guint8 bb, guint8 ba)
+{
+  GrlColor a, b;
+  LrgReelGradientClip *clip;
+  gint id;
+
+  a.r = ar; a.g = ag; a.b = ab; a.a = aa;
+  b.r = br; b.g = bg; b.b = bb; b.a = ba;
+  clip = radial ? lrg_reel_gradient_clip_new_radial (&a, &b)
+                : lrg_reel_gradient_clip_new_linear (&a, &b,
+                                                     GRL_GRADIENT_AXIS_VERTICAL);
+  id = append_clip (p, track, LRG_REEL_CLIP (clip), duration);
+  /* Gradient clips serialize their kind + start colour only (v1 gap: the end
+     colour + radial flag are not persisted). */
+  seg_meta (p, id, CMACS_VID_KIND_SOLID, NULL, ar, ag, ab, aa, 0, 0);
+  return id;
+}
+
+gint
 cmacs_vidstudio_proj_add_image_clip (CmacsVidProject *p, guint track,
                                      const char *path, int duration,
                                      char **error_msg)
