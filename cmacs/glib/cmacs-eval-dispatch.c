@@ -56,6 +56,34 @@ cmacs_dispatch_safe_callN (Lisp_Object fn, ptrdiff_t nargs,
     xfree (full);
 }
 
+/* Like cmacs_dispatch_safe_callN, but returns the Lisp result of the
+ * call (Qnil if fn is nil, or if the call signalled -- safe_funcall
+ * catches the error via its internal condition-case).  Must run on the
+ * Emacs main thread. */
+Lisp_Object
+cmacs_dispatch_safe_callN_value (Lisp_Object fn, ptrdiff_t nargs,
+                                 Lisp_Object *args)
+{
+  if (NILP (fn))
+    return Qnil;
+  enum { STK_MAX = 8 };
+  Lisp_Object stkbuf[STK_MAX + 1];
+  Lisp_Object *full =
+    nargs + 1 <= STK_MAX + 1 ? stkbuf : xmalloc ((nargs + 1) * sizeof (Lisp_Object));
+  full[0] = fn;
+  if (nargs > 0)
+    memcpy (full + 1, args, nargs * sizeof (Lisp_Object));
+  bool was_waiting = waiting_for_input;
+  if (was_waiting)
+    clear_waiting_for_input ();
+  Lisp_Object result = safe_funcall (nargs + 1, full);
+  if (was_waiting)
+    set_waiting_for_input (input_available_clear_time);
+  if (full != stkbuf)
+    xfree (full);
+  return result;
+}
+
 void
 cmacs_dispatch_safe_call1 (Lisp_Object fn, Lisp_Object a1)
 {

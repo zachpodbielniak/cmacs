@@ -48,7 +48,7 @@ vpath %.c := $(srcdir)
 vpath %.h := $(srcdir)
 endif
 
-vpath %.c $(srcdir)/../cmacs/glib $(srcdir)/../cmacs/gobject \
+vpath %.c $(srcdir)/../cmacs/core $(srcdir)/../cmacs/glib $(srcdir)/../cmacs/gobject \
           $(srcdir)/../cmacs/dbus \
           $(srcdir)/../cmacs/gi $(srcdir)/../cmacs/crispy \
           $(srcdir)/../cmacs/bacon $(srcdir)/../cmacs/gowl \
@@ -58,7 +58,7 @@ vpath %.c $(srcdir)/../cmacs/glib $(srcdir)/../cmacs/gobject \
           $(srcdir)/../cmacs/cintrospect \
           $(srcdir)/../cmacs/cpatch \
           $(srcdir)/../cmacs/compat
-vpath %.h $(srcdir)/../cmacs/glib $(srcdir)/../cmacs/gobject \
+vpath %.h $(srcdir)/../cmacs/core $(srcdir)/../cmacs/glib $(srcdir)/../cmacs/gobject \
           $(srcdir)/../cmacs/dbus \
           $(srcdir)/../cmacs/gi $(srcdir)/../cmacs/crispy \
           $(srcdir)/../cmacs/bacon $(srcdir)/../cmacs/gowl \
@@ -347,6 +347,9 @@ PGTK_OBJ=@PGTK_OBJ@
 PGTK_LIBS=@PGTK_LIBS@
 
 # CMACS
+# Always linked, regardless of which cmacs features are enabled: the
+# IS-CMACS-* feature-flag registry (cmacs/core/cmacs-features.c).
+CMACS_CORE_OBJ = cmacs-features.o
 CMACS_GLIB_OBJ = @CMACS_GLIB_OBJ@
 CMACS_GLIB_CFLAGS = @CMACS_GLIB_CFLAGS@
 CMACS_GLIB_LIBS = @CMACS_GLIB_LIBS@
@@ -443,7 +446,8 @@ CMACS_PIPER_OBJ = @CMACS_PIPER_OBJ@
 CMACS_PIPER_CFLAGS = @CMACS_PIPER_CFLAGS@
 CMACS_PIPER_LIBS = @CMACS_PIPER_LIBS@
 CMACS_API_DIR = @CMACS_API_DIR@
-CMACS_INTERNAL_CFLAGS = -I$(srcdir)/../cmacs/glib -I$(srcdir)/../cmacs/gobject \
+CMACS_INTERNAL_CFLAGS = -I$(srcdir)/../cmacs/core \
+                        -I$(srcdir)/../cmacs/glib -I$(srcdir)/../cmacs/gobject \
                         -I$(srcdir)/../cmacs/dbus \
                         -I$(srcdir)/../cmacs/gi -I$(srcdir)/../cmacs/crispy \
                         -I$(srcdir)/../cmacs/bacon -I$(srcdir)/../cmacs/gowl \
@@ -632,7 +636,7 @@ base_obj = dispnew.o frame.o scroll.o xdisp.o menu.o $(XMENU_OBJ) window.o     \
 	$(MSDOS_OBJ) $(MSDOS_X_OBJ) $(NS_OBJ) $(CYGWIN_OBJ) $(FONT_OBJ)        \
 	$(W32_OBJ) $(WINDOW_SYSTEM_OBJ) $(XGSELOBJ)			       \
 	$(HAIKU_OBJ) $(PGTK_OBJ) $(ANDROID_OBJ) \
-	$(CMACS_GLIB_OBJ) $(CMACS_GI_OBJ) $(CMACS_CRISPY_OBJ) $(CMACS_BACON_OBJ) $(CMACS_GOWL_OBJ) $(CMACS_PODOMATION_OBJ) $(CMACS_LIBRECLAW_OBJ) $(CMACS_ORG_EX_OBJ) $(CMACS_MCP_OBJ) $(CMACS_CINTROSPECT_OBJ) $(CMACS_CPATCH_OBJ) $(CMACS_VIDEO_OBJ) $(CMACS_AUDIO_OBJ) $(CMACS_WHISPER_OBJ) $(CMACS_PIPER_OBJ) $(CMACS_AI_OBJ) $(CMACS_LIBREGNUM_OBJ) $(CMACS_GNUSEYE_OBJ) $(CMACS_CAD_OBJ) $(CMACS_SCREENSAVER_OBJ) $(CMACS_GSURF_OBJ) $(CMACS_LRGTERM_OBJ) $(CMACS_IMGEDIT_OBJ) $(CMACS_VIDSTUDIO_OBJ)
+	$(CMACS_CORE_OBJ) $(CMACS_GLIB_OBJ) $(CMACS_GI_OBJ) $(CMACS_CRISPY_OBJ) $(CMACS_BACON_OBJ) $(CMACS_GOWL_OBJ) $(CMACS_PODOMATION_OBJ) $(CMACS_LIBRECLAW_OBJ) $(CMACS_ORG_EX_OBJ) $(CMACS_MCP_OBJ) $(CMACS_CINTROSPECT_OBJ) $(CMACS_CPATCH_OBJ) $(CMACS_VIDEO_OBJ) $(CMACS_AUDIO_OBJ) $(CMACS_WHISPER_OBJ) $(CMACS_PIPER_OBJ) $(CMACS_AI_OBJ) $(CMACS_LIBREGNUM_OBJ) $(CMACS_GNUSEYE_OBJ) $(CMACS_CAD_OBJ) $(CMACS_SCREENSAVER_OBJ) $(CMACS_GSURF_OBJ) $(CMACS_LRGTERM_OBJ) $(CMACS_IMGEDIT_OBJ) $(CMACS_VIDSTUDIO_OBJ)
 doc_obj = $(base_obj) $(NS_OBJC_OBJ)
 obj = $(doc_obj) $(HAIKU_CXX_OBJ)
 
@@ -869,7 +873,7 @@ GLOBAL_SOURCES = $(base_obj:.o=.c) $(NS_OBJC_OBJ:.o=.m)
 
 ## CMACS: make-docfile needs .c files visible from srcdir.
 ## Create symlinks so scanning finds the DEFUN docstrings.
-CMACS_ALL_OBJ = $(CMACS_GLIB_OBJ) $(CMACS_GI_OBJ) \
+CMACS_ALL_OBJ = $(CMACS_CORE_OBJ) $(CMACS_GLIB_OBJ) $(CMACS_GI_OBJ) \
                 $(CMACS_CRISPY_OBJ) $(CMACS_BACON_OBJ) $(CMACS_GOWL_OBJ) \
                 $(CMACS_PODOMATION_OBJ) $(CMACS_LIBRECLAW_OBJ) \
                 $(CMACS_ORG_EX_OBJ) $(CMACS_MCP_OBJ) \
@@ -881,7 +885,7 @@ CMACS_ALL_OBJ = $(CMACS_GLIB_OBJ) $(CMACS_GI_OBJ) \
                 $(CMACS_SCREENSAVER_OBJ) $(CMACS_GSURF_OBJ) \
                 $(CMACS_LRGTERM_OBJ) $(CMACS_IMGEDIT_OBJ) \
                 $(CMACS_VIDSTUDIO_OBJ)
-CMACS_DIRS = glib gobject dbus gi crispy bacon gowl podomation libreclaw org-ex mcp cintrospect cpatch video audio whisper piper ai libregnum gnuseye cad screensaver gsurf lrgterm imgedit vidstudio
+CMACS_DIRS = core glib gobject dbus gi crispy bacon gowl podomation libreclaw org-ex mcp cintrospect cpatch video audio whisper piper ai libregnum gnuseye cad screensaver gsurf lrgterm imgedit vidstudio
 cmacs-symlinks:
 	$(AM_V_at)for f in $(CMACS_ALL_OBJ:.o=.c); do \
 	  test -e "$(srcdir)/$$f" && continue; \

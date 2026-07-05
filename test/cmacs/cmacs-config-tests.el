@@ -110,5 +110,54 @@
           (cmacs-config-load-bacon-init))
       (delete-directory dir t))))
 
+;;; IS-CMACS-* feature flags
+
+(require 'cmacs)
+
+(defconst cmacs-config-tests--all-features
+  '(glib gi crispy bacon gowl podomation libreclaw ai libregnum lrgterm
+    imgedit vidstudio gnuseye cad screensaver org-ex mcp print video
+    audio whisper piper gsurf gsurf-lrg emacsctl cintrospect cpatch)
+  "Every --with-cmacs-NAME option that should have an IS-CMACS-NAME flag.")
+
+(ert-deftest cmacs-features-flags-always-bound ()
+  "Every IS-CMACS-NAME flag (and its lower-case alias) is bound to a
+boolean, whether or not the feature was compiled in.  A config must be
+able to reference them without a void-variable error."
+  (skip-unless (fboundp 'cmacs-compiled-features))
+  (dolist (feat cmacs-config-tests--all-features)
+    (let ((up (intern (concat "IS-CMACS-" (upcase (symbol-name feat)))))
+          (lc (intern (concat "is-cmacs-" (symbol-name feat)))))
+      (should (boundp up))
+      (should (boundp lc))
+      (should (memq (symbol-value up) '(nil t)))
+      ;; The lower-case alias tracks the primary flag.
+      (should (eq (symbol-value up) (symbol-value lc))))))
+
+(ert-deftest cmacs-features-flags-match-compiled-list ()
+  "IS-CMACS-NAME is non-nil exactly for the features in
+`cmacs-compiled-features'."
+  (skip-unless (fboundp 'cmacs-compiled-features))
+  (let ((compiled (cmacs-compiled-features)))
+    (dolist (feat cmacs-config-tests--all-features)
+      (let ((flag (intern (concat "IS-CMACS-" (upcase (symbol-name feat))))))
+        (should (eq (and (symbol-value flag) t)
+                    (and (memq feat compiled) t)))))))
+
+(ert-deftest cmacs-features-ai-flag-tracks-defun ()
+  "IS-CMACS-AI agrees with whether the AI C DEFUNs are present."
+  (skip-unless (fboundp 'cmacs-compiled-features))
+  (should (eq (and IS-CMACS-AI t)
+              (and (fboundp 'cmacs-ai-prompt-sync) t))))
+
+(ert-deftest cmacs-features-feature-p-agrees ()
+  "`cmacs-feature-p' agrees with the IS-CMACS-NAME flag for
+non-runtime-gated features."
+  (skip-unless (fboundp 'cmacs-compiled-features))
+  (dolist (feat '(glib gi crispy bacon gowl ai mcp org-ex gsurf))
+    (let ((flag (intern (concat "IS-CMACS-" (upcase (symbol-name feat))))))
+      (should (eq (and (cmacs-feature-p feat) t)
+                  (and (symbol-value flag) t))))))
+
 (provide 'cmacs-config-tests)
 ;;; cmacs-config-tests.el ends here

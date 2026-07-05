@@ -20,6 +20,7 @@
 #include "cmacs-dbus.h"
 #include "cmacs-dbus-internal.h"
 #include "cmacs-eval-dispatch.h"
+#include "cmacs-features.h"
 
 #ifdef HAVE_CMACS_MCP
 #include "cmacs-mcp.h"
@@ -43,71 +44,9 @@ static const gchar *iface_xml =
 
 static GDBusNodeInfo *iface_info = NULL;
 
-/* Compiled-in cmacs subsystems, lower-case to match the
- * --with-cmacs-* configure flag names. */
-static const gchar *cmacs_features[] = {
-#ifdef HAVE_CMACS_GLIB
-  "glib",
-#endif
-#ifdef HAVE_CMACS_GI
-  "gi",
-#endif
-#ifdef HAVE_CMACS_CRISPY
-  "crispy",
-#endif
-#ifdef HAVE_CMACS_BACON
-  "bacon",
-#endif
-#ifdef HAVE_CMACS_GOWL
-  "gowl",
-#endif
-#ifdef HAVE_CMACS_PODOMATION
-  "podomation",
-#endif
-#ifdef HAVE_CMACS_LIBRECLAW
-  "libreclaw",
-#endif
-#ifdef HAVE_CMACS_AI
-  "ai",
-#endif
-#ifdef HAVE_CMACS_ORG_EX
-  "org-ex",
-#endif
-#ifdef HAVE_CMACS_MCP
-  "mcp",
-#endif
-#ifdef HAVE_CMACS_GSURF
-  "gsurf",
-#endif
-#ifdef HAVE_CMACS_PRINT
-  "print",
-#endif
-#ifdef HAVE_CMACS_VIDEO
-  "video",
-#endif
-#ifdef HAVE_CMACS_AUDIO
-  "audio",
-#endif
-#ifdef HAVE_CMACS_WHISPER
-  "whisper",
-#endif
-#ifdef HAVE_CMACS_PIPER
-  "piper",
-#endif
-#ifdef HAVE_CMACS_CINTROSPECT
-  "cintrospect",
-#endif
-#ifdef HAVE_CMACS_CPATCH
-  "cpatch",
-#endif
-#ifdef HAVE_CMACS_LIBREGNUM
-  "libregnum",
-#endif
-#ifdef HAVE_CMACS_GNUSEYE
-  "gnuseye",
-#endif
-  NULL
-};
+/* The compiled-in cmacs subsystem list is the shared, always-linked
+ * `cmacs_feature_names' from cmacs/core/cmacs-features.h (single source
+ * of truth, also backing the IS-CMACS-* Lisp variables). */
 
 /* Append S to OUT as a JSON string literal. */
 static void
@@ -168,11 +107,11 @@ on_method_call (GDBusConnection *c, const gchar *s, const gchar *o,
       json_append_string (out, cmacs_dbus_get_dominant_name ());
 
       g_string_append (out, ",\"features\":[");
-      for (k = 0; cmacs_features[k] != NULL; k++)
+      for (k = 0; cmacs_feature_names[k] != NULL; k++)
         {
           if (k > 0)
             g_string_append_c (out, ',');
-          json_append_string (out, cmacs_features[k]);
+          json_append_string (out, cmacs_feature_names[k]);
         }
       g_string_append_c (out, ']');
 
@@ -212,8 +151,8 @@ on_method_call (GDBusConnection *c, const gchar *s, const gchar *o,
       GVariantBuilder b;
       gint k;
       g_variant_builder_init (&b, G_VARIANT_TYPE ("as"));
-      for (k = 0; cmacs_features[k] != NULL; k++)
-        g_variant_builder_add (&b, "s", cmacs_features[k]);
+      for (k = 0; cmacs_feature_names[k] != NULL; k++)
+        g_variant_builder_add (&b, "s", cmacs_feature_names[k]);
       g_dbus_method_invocation_return_value (
         iv, g_variant_new ("(as)", &b));
     }

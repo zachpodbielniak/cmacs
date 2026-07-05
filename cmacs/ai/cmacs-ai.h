@@ -56,5 +56,11 @@ extern void   cmacs_ai_typelib_autoload      (void);
 extern AiToolExecutor *cmacs_ai_tools_new_default (void);
 extern AiToolExecutor *cmacs_ai_tools_lookup      (guint handle);
 
+/* The Emacs main GThread, captured in init_cmacs_ai (defined in
+ * cmacs-ai-tools.c).  A tool callback fired on this thread may safely
+ * call back into Lisp and return the result to the model; a callback on
+ * a worker thread (the async tool loop) must not. */
+extern GThread *cmacs_ai__main_gthread;
+
 #endif /* HAVE_CMACS_AI */
 #endif /* CMACS_AI_H */

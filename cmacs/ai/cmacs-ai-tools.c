@@ -40,6 +40,10 @@
 static Lisp_Object Vcmacs_ai__tool_callbacks;
 static guint       cmacs_ai__next_exec_id = 1;
 
+/* The Emacs main GThread, set by init_cmacs_ai (declared in cmacs-ai.h).
+ * Gates whether a tool callback may return a Lisp value to the model. */
+GThread *cmacs_ai__main_gthread = NULL;
+
 static void
 cmacs_ai_tools__cb_init (void)
 {
@@ -134,16 +138,30 @@ cmacs_ai_tool__elisp_dispatch (AiToolUse    *tool_use,
   args[0] = build_string (ctx->tool_name);
   args[1] = build_string (input_str);
   args[2] = build_string (ai_tool_use_get_id (tool_use) ?: "");
-  cmacs_dispatch_safe_callN (cb, 3, args);
+  /* On the Emacs main thread (the synchronous `cmacs-ai-call' path) it
+   * is safe to call back into Lisp and hand the tool's real return value
+   * to the model.  On a worker thread (`cmacs-ai-tools-run-async')
+   * calling Lisp is unsafe, so fall back to the fire-and-forget
+   * placeholder -- a proper async fix would marshal the callback onto
+   * the main thread. */
+  if (cmacs_ai__main_gthread != NULL
+      && g_thread_self () == cmacs_ai__main_gthread)
+    {
+      Lisp_Object rv = cmacs_dispatch_safe_callN_value (cb, 3, args);
+      if (STRINGP (rv))
+        return g_strdup (SSDATA (rv));
+      if (NILP (rv))
+        {
+          g_set_error (error, AI_ERROR, AI_ERROR_INVALID_REQUEST,
+                       "cmacs-ai: tool '%s' returned nil", ctx->tool_name);
+          return NULL;
+        }
+      /* Non-string, non-nil: hand the model its printed representation. */
+      Lisp_Object printed = Fprin1_to_string (rv, Qnil, Qnil);
+      return g_strdup (SSDATA (printed));
+    }
 
-  /* The safe-call helpers don't return values today; we can't easily
-   * retrieve the result without a synchronous Felisp eval.  Plug a
-   * common shape: have the Elisp side write its result string to a
-   * symbol-property we then read back.  For first-cut, just return a
-   * generic "(tool dispatched)" string so the loop continues; the
-   * Elisp callback is expected to do something side-effectful (apply
-   * a region edit, open a buffer, ...) rather than return a value
-   * the model will see verbatim. */
+  cmacs_dispatch_safe_callN (cb, 3, args);
   return g_strdup ("(cmacs-ai tool dispatched)");
 }
 

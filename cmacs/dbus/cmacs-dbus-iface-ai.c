@@ -40,6 +40,14 @@ static const gchar *iface_xml =
   "      <arg type='s' name='model' direction='in'/>"
   "      <arg type='s' name='response' direction='out'/>"
   "    </method>"
+  "    <method name='Call'>"
+  "      <arg type='s' name='prompt' direction='in'/>"
+  "      <arg type='s' name='provider' direction='in'/>"
+  "      <arg type='s' name='system' direction='in'/>"
+  "      <arg type='s' name='model' direction='in'/>"
+  "      <arg type='b' name='tools' direction='in'/>"
+  "      <arg type='s' name='response' direction='out'/>"
+  "    </method>"
   "    <method name='OpenChat'>"
   "      <arg type='s' name='provider' direction='in'/>"
   "      <arg type='s' name='prompt' direction='in'/>"
@@ -159,6 +167,72 @@ on_method_call (GDBusConnection *c, const gchar *s, const gchar *o,
         "(condition-case e (cmacs-ai-prompt-sync \"%s\" %s %s %s)"
         " (error (format \"error: %%S\" e)))",
         prompt_q, provider_form, system_form, model_form);
+      g_free (prompt_q);
+      g_free (provider_form);
+      g_free (system_form);
+      g_free (model_form);
+
+      result = cmacs_dispatch_eval_string (expr, &err);
+      g_free (expr);
+      if (result == NULL)
+        {
+          cmacs_dbus_return_gerror (iv, err);
+          return;
+        }
+      g_dbus_method_invocation_return_value (
+        iv, g_variant_new ("(s)", result));
+      g_free (result);
+    }
+  else if (g_strcmp0 (m, "Call") == 0)
+    {
+      /* Like Prompt, but when TOOLS is true the model is given the
+       * built-in agent tools (bash/read/write/edit/glob/grep/ls/
+       * web_fetch) and runs a synchronous multi-turn loop.  DANGER: that
+       * loop blocks the target's main thread -- under `emacs --gowl' the
+       * compositor thread -- so callers should keep it bounded. */
+      const gchar *prompt, *provider, *system, *model;
+      gboolean tools;
+      gchar *prompt_q, *system_form, *provider_form, *model_form;
+      gchar *expr;
+      gchar *result;
+      GError *err = NULL;
+
+      g_variant_get (p, "(&s&s&s&sb)", &prompt, &provider, &system,
+                     &model, &tools);
+      if (*provider != '\0' && !valid_provider_name (provider))
+        {
+          g_dbus_method_invocation_return_dbus_error (
+            iv, "org.cmacs.Editor1.Error", "invalid provider name");
+          return;
+        }
+      prompt_q = cmacs_dbus_lisp_escape (prompt);
+      provider_form = (*provider != '\0')
+        ? g_strdup_printf (":provider (quote %s)", provider)
+        : g_strdup ("");
+      if (*system != '\0')
+        {
+          gchar *esc = cmacs_dbus_lisp_escape (system);
+          system_form = g_strdup_printf (":system \"%s\"", esc);
+          g_free (esc);
+        }
+      else
+        system_form = g_strdup ("");
+      if (*model != '\0')
+        {
+          gchar *esc = cmacs_dbus_lisp_escape (model);
+          model_form = g_strdup_printf (":model \"%s\"", esc);
+          g_free (esc);
+        }
+      else
+        model_form = g_strdup ("");
+
+      expr = g_strdup_printf (
+        "(condition-case e"
+        " (progn (require 'cmacs-ai-call)"
+        "  (cmacs-ai-call \"%s\" %s %s %s %s))"
+        " (error (format \"error: %%S\" e)))",
+        prompt_q, provider_form, system_form, model_form,
+        tools ? ":builtin-tools t" : "");
       g_free (prompt_q);
       g_free (provider_form);
       g_free (system_form);

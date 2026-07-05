@@ -90,6 +90,42 @@ make -j$(nproc)
 make install                       # no sudo needed for ~/.local
 #+end_example
 
+** Runtime feature flags: =IS-CMACS-*=
+
+For every =--with-cmacs-<name>= / =--enable-cmacs-<name>= option, cmacs
+exposes an always-bound Lisp variable =IS-CMACS-<NAME>= (plus a
+lower-case alias =is-cmacs-<name>=) that is =t= when the subsystem was
+compiled into this build and =nil= otherwise.  A config can branch on
+features without a =void-variable= error:
+
+#+begin_src emacs-lisp
+(when IS-CMACS-AI
+  (global-set-key (kbd "C-c a a") #'cmacs-ai-call))
+
+(when is-cmacs-gowl                 ; the lower-case alias works too
+  (cmacs-gowl-mode 1))
+#+end_src
+
+The flags reflect *compile-time* configuration only.  The full set of
+compiled-in subsystems is =(cmacs-compiled-features)= (a list of
+symbols matching the =--with-cmacs-<name>= options);
+=(cmacs-feature-p 'video)= additionally applies a runtime availability
+check for a few media subsystems (GStreamer element present, GL
+available, ...).
+
+The variables are defined even in an upstream-shaped build with every
+cmacs feature off (they all read =nil= there), so a config is portable
+across builds.  Names cover every option: =IS-CMACS-GLIB=,
+=IS-CMACS-GI=, =IS-CMACS-CRISPY=, =IS-CMACS-BACON=, =IS-CMACS-GOWL=,
+=IS-CMACS-PODOMATION=, =IS-CMACS-LIBRECLAW=, =IS-CMACS-AI=,
+=IS-CMACS-LIBREGNUM=, =IS-CMACS-LRGTERM=, =IS-CMACS-IMGEDIT=,
+=IS-CMACS-VIDSTUDIO=, =IS-CMACS-GNUSEYE=, =IS-CMACS-CAD=,
+=IS-CMACS-SCREENSAVER=, =IS-CMACS-GSURF=, =IS-CMACS-GSURF-LRG=,
+=IS-CMACS-EMACSCTL=, =IS-CMACS-ORG-EX=, =IS-CMACS-MCP=,
+=IS-CMACS-PRINT=, =IS-CMACS-VIDEO=, =IS-CMACS-AUDIO=,
+=IS-CMACS-WHISPER=, =IS-CMACS-PIPER=, =IS-CMACS-CINTROSPECT=,
+=IS-CMACS-CPATCH=.
+
 * Dependencies
 
 ** Always Required

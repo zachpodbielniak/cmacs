@@ -95,6 +95,57 @@ handle_ai_prompt (McpServer *server, const gchar *name,
 }
 
 static McpToolResult *
+handle_ai_call (McpServer *server, const gchar *name,
+                JsonObject *arguments, gpointer user_data)
+{
+  (void) server; (void) name; (void) user_data;
+  const gchar *prompt = json_object_has_member (arguments, "prompt")
+    ? json_object_get_string_member (arguments, "prompt") : NULL;
+  const gchar *provider = json_object_has_member (arguments, "provider")
+    ? json_object_get_string_member (arguments, "provider") : NULL;
+  const gchar *system   = json_object_has_member (arguments, "system")
+    ? json_object_get_string_member (arguments, "system") : NULL;
+  const gchar *model    = json_object_has_member (arguments, "model")
+    ? json_object_get_string_member (arguments, "model") : NULL;
+  gboolean tools = json_object_has_member (arguments, "tools")
+    ? json_object_get_boolean_member (arguments, "tools") : FALSE;
+
+  if (prompt == NULL || *prompt == '\0')
+    {
+      McpToolResult *r = mcp_tool_result_new (TRUE);
+      mcp_tool_result_add_text (r, "ai_call: missing 'prompt'");
+      return r;
+    }
+
+  g_autofree gchar *prompt_esc = escape_for_lisp (prompt);
+  g_autofree gchar *provider_arg = provider && *provider
+    ? g_strdup_printf (":provider (quote %s)", provider)
+    : g_strdup ("");
+  g_autofree gchar *system_esc = escape_for_lisp (system ? system : "");
+  g_autofree gchar *system_arg = system && *system
+    ? g_strdup_printf (":system \"%s\"", system_esc)
+    : g_strdup ("");
+  g_autofree gchar *model_esc = escape_for_lisp (model ? model : "");
+  g_autofree gchar *model_arg = model && *model
+    ? g_strdup_printf (":model \"%s\"", model_esc)
+    : g_strdup ("");
+
+  g_autoptr (GError) err = NULL;
+  g_autofree gchar *expr = g_strdup_printf (
+    "(condition-case e"
+    " (progn (require 'cmacs-ai-call)"
+    "  (cmacs-ai-call \"%s\" %s %s %s %s))"
+    " (error (format \"error: %%S\" e)))",
+    prompt_esc, provider_arg, system_arg, model_arg,
+    tools ? ":builtin-tools t" : "");
+  g_autofree gchar *res = cmacs_dispatch_eval_string (expr, &err);
+  McpToolResult *r = mcp_tool_result_new (res == NULL);
+  mcp_tool_result_add_text (r,
+    res ? res : (err ? err->message : "ai_call failed"));
+  return r;
+}
+
+static McpToolResult *
 handle_ai_list_providers (McpServer *server, const gchar *name,
                           JsonObject *arguments, gpointer user_data)
 {
@@ -202,6 +253,26 @@ cmacs_mcp_tools_ai_register (McpServer *server)
     "},\"required\":[\"prompt\"]}");
   mcp_tool_set_input_schema (tool, schema);
   mcp_server_add_tool (server, tool, handle_ai_prompt, NULL, NULL);
+  g_object_unref (tool);
+
+  tool = mcp_tool_new ("ai_call",
+    "Send PROMPT to an AI provider and return the final answer "
+    "(synchronous).  Like ai_prompt, but with 'tools':true the model is "
+    "given the built-in agent tools (bash/read/write/edit/glob/grep/ls/"
+    "web_fetch) and runs a multi-turn tool loop.  WARNING: a tool loop "
+    "blocks the cmacs main thread for its whole duration.  Optional "
+    "'provider' / 'system' / 'model' behave as for ai_prompt.");
+  schema = cmacs_mcp_schema_from_string (
+    "{\"type\":\"object\",\"properties\":{"
+    "\"prompt\":{\"type\":\"string\",\"description\":\"User prompt\"},"
+    "\"provider\":{\"type\":\"string\",\"description\":\"Provider name\"},"
+    "\"system\":{\"type\":\"string\",\"description\":\"System prompt\"},"
+    "\"model\":{\"type\":\"string\",\"description\":\"Model name\"},"
+    "\"tools\":{\"type\":\"boolean\","
+    "\"description\":\"Give the model the built-in agent tools\"}"
+    "},\"required\":[\"prompt\"]}");
+  mcp_tool_set_input_schema (tool, schema);
+  mcp_server_add_tool (server, tool, handle_ai_call, NULL, NULL);
   g_object_unref (tool);
 
   tool = mcp_tool_new ("ai_list_providers",

@@ -41,6 +41,12 @@ extern void cmacs_dispatch_safe_call3 (Lisp_Object fn,
                                        Lisp_Object a1, Lisp_Object a2,
                                        Lisp_Object a3);
 
+/* Like cmacs_dispatch_safe_callN but returns the call's Lisp result
+ * (Qnil on nil fn or on a signalled error).  Main thread only. */
+extern Lisp_Object cmacs_dispatch_safe_callN_value (Lisp_Object fn,
+                                                    ptrdiff_t nargs,
+                                                    Lisp_Object *args);
+
 /* ── One-shot callback registry (cookie-keyed, GC-rooted) ─────────────
  *
  * Async jobs (cmacs-piper subprocess, cmacs-whisper worker, etc.) need

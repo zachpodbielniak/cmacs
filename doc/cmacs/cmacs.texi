@@ -9040,6 +9040,31 @@ make
 This produces @file{cmacs_gi.so} for use with an external
 @command{bacon} binary.
 
+@section Runtime Feature Flags
+
+For every @option{--with-cmacs-@var{name}} /
+@option{--enable-cmacs-@var{name}} option, cmacs exposes an
+always-bound Lisp variable @code{IS-CMACS-@var{NAME}} (plus a
+lower-case alias @code{is-cmacs-@var{name}}) that is @code{t} when the
+subsystem was compiled into this build and @code{nil} otherwise.  A
+config can branch on features without a @code{void-variable} error:
+
+@example
+(when IS-CMACS-AI
+  (global-set-key (kbd "C-c a a") #'cmacs-ai-call))
+
+(when is-cmacs-gowl                 ; the lower-case alias works too
+  (cmacs-gowl-mode 1))
+@end example
+
+The flags reflect compile-time configuration only.  The full set of
+compiled-in subsystems is @code{(cmacs-compiled-features)} (a list of
+symbols); @code{(cmacs-feature-p 'video)} additionally applies a
+runtime availability check for a few media subsystems.  The variables
+are defined even in an upstream-shaped build with every cmacs feature
+off (they all read @code{nil} there), so a config is portable across
+builds.
+
 @section Compile Flags
 
 The Emacs build system picks up CMacs objects via @code{configure.ac}:

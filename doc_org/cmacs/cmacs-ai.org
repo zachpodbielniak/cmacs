@@ -83,6 +83,83 @@ libreclaw's cmacs channel).
 | =cmacs-ai-test-region=         | Synthesize a unit test in a scratch buffer   |
 | =cmacs-ai-suggest-commit-message= | Draft a commit message from the staged diff |
 
+* Generic calls
+
+For scripting and user configs, =cmacs-ai-call= makes a one-shot AI
+call from Elisp and returns the answer as a string -- with or without
+tools.  It is the layer a config reaches for; gate on =IS-CMACS-AI= if
+your config must also run on a build without =--with-cmacs-ai=.
+
+#+begin_src emacs-lisp
+;; Plain call, returns a string.
+(cmacs-ai-call "Summarise this in one line: ...")
+(cmacs-ai-call "why is the sky blue?" :provider 'ollama :model "llama3.2")
+
+;; Agentic call: give the model the built-in tools (bash/read/write/
+;; edit/glob/grep/ls/web_fetch); the final answer is returned.
+(cmacs-ai-call "What files are in my home directory?" :builtin-tools t)
+#+end_src
+
+=cmacs-ai-call= takes a plist: =:provider= (symbol), =:system=,
+=:model=, =:max-tokens=, =:tools= (a list of tool specs),
+=:builtin-tools=, =:mcp-bridge= (expose the cmacs MCP surface; needs
+=--with-cmacs-mcp=), and =:search-provider=.  Any tool option builds a
+throwaway executor, uses it, and frees it under =unwind-protect=.  It
+signals =cmacs-ai-error= on failure.
+
+*Custom tools.*  =cmacs-ai-define-tool= builds a tool spec whose Elisp
+callback's *return value* is handed back to the model -- so the model
+can act on it:
+
+#+begin_src emacs-lisp
+(cmacs-ai-call
+ "How many lines are in ~/.bashrc?"
+ :tools (list (cmacs-ai-define-tool
+               "count_lines" "Count the lines in a file"
+               '(("path" "string" "Absolute file path" t))
+               (lambda (_name input _id)
+                 (let ((path (alist-get 'path (json-parse-string
+                                               input :object-type 'alist))))
+                   (number-to-string
+                    (with-temp-buffer
+                      (insert-file-contents (expand-file-name path))
+                      (count-lines (point-min) (point-max)))))))))
+#+end_src
+
+The callback is called as =(funcall CALLBACK NAME INPUT-JSON ID)= and
+must return a string (nil signals a tool error to the model).  The
+executor runs synchronously on the main thread, so callbacks may safely
+touch buffers and Emacs state.
+
+Under the hood, =cmacs-ai-call= wraps the C primitive =cmacs-ai--call=
+(positional: =PROMPT &optional PROVIDER SYSTEM MODEL EXECUTOR
+MAX-TOKENS=); the no-tools path is equivalent to =cmacs-ai-prompt-sync=.
+
+** From C, cmacsgi, D-Bus, emacsctl, and MCP
+
+Because the calls are DEFUNs, C code and any client of the eval bridge
+can drive them.  =cmacsgi eval '(cmacs-ai-call "...")'= works with no
+extra plumbing.  Typed convenience verbs exist too:
+
+- *emacsctl*: =emacsctl ai prompt= (no tools) and =emacsctl ai call=
+  (add =-t/--tools= for the built-in agent tools).  Both take
+  =-p/--provider=, =-m/--model=, =-s/--system=, =-f/--file=, positional
+  prompt, or stdin.
+- *D-Bus*: =org.cmacs.Editor1.Ai.Prompt (ssss)= and
+  =org.cmacs.Editor1.Ai.Call (ssssb)= (the trailing boolean enables the
+  built-in tools).
+- *MCP*: the =ai_prompt= and =ai_call= tools (=ai_call= takes a
+  =tools= boolean).
+
+External callers cannot register Elisp tools, so their tool-enabled
+call uses the server-side built-in executor.
+
+*DANGER (=--gowl=).*  A tool-enabled call runs a synchronous multi-turn
+loop (capped at ~20 turns) on the target's main thread.  Under =emacs
+--gowl= that thread is the Wayland compositor -- a long loop freezes the
+desktop.  Keep external tool loops short, and prefer =ai prompt= (no
+tools) when driving a live =--gowl= session.
+
 * Inline ghost-text completion
 
 =cmacs-ai-completion-mode= is a buffer-local minor mode that

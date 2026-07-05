@@ -24,6 +24,7 @@ when both are enabled (libreclaw's sub-make is redirected via
 * CMacs AI Providers::
 * CMacs AI Chat Buffers::
 * CMacs AI Region Commands::
+* CMacs AI Generic Calls::
 * CMacs AI Inline Completion::
 * CMacs AI Voice Loop::
 * CMacs AI Coding Agent::
@@ -152,6 +153,56 @@ Synthesize a unit test in a scratch buffer.
 
 A right-click context menu entry is installed via
 @code{cmacs-ai-context-menu-install}.
+
+@node CMacs AI Generic Calls
+@section Generic Calls
+
+For scripting and user configs, @code{cmacs-ai-call} makes a one-shot
+AI call from Elisp and returns the answer as a string -- with or
+without tools.  Gate on @code{IS-CMACS-AI} if the config must also run
+on a build without @option{--with-cmacs-ai}.
+
+@example
+;; Plain call, returns a string.
+(cmacs-ai-call "Summarise this in one line: ...")
+;; Agentic call with the built-in tools; the final answer is returned.
+(cmacs-ai-call "What files are in my home directory?" :builtin-tools t)
+@end example
+
+@code{cmacs-ai-call} takes a plist: @code{:provider} (symbol),
+@code{:system}, @code{:model}, @code{:max-tokens}, @code{:tools} (tool
+specs), @code{:builtin-tools}, @code{:mcp-bridge} (needs
+@option{--with-cmacs-mcp}), and @code{:search-provider}.  Any tool
+option builds a throwaway executor, uses it, and frees it.  It signals
+@code{cmacs-ai-error} on failure.
+
+@code{cmacs-ai-define-tool} builds a tool spec whose Elisp callback's
+@emph{return value} is handed back to the model.  The callback is
+@code{(funcall CALLBACK NAME INPUT-JSON ID)} and must return a string
+(nil signals a tool error).  The executor runs synchronously on the
+main thread, so callbacks may safely touch Emacs state.  Under the hood
+@code{cmacs-ai-call} wraps the C primitive @code{cmacs-ai--call}; the
+no-tools path equals @code{cmacs-ai-prompt-sync}.
+
+@subsection From C, cmacsgi, D-Bus, emacsctl, and MCP
+
+The calls are DEFUNs, so C and any eval-bridge client can drive them
+(@code{cmacsgi eval '(cmacs-ai-call "...")'} works unchanged).  Typed
+verbs also exist: @code{emacsctl ai prompt} and @code{emacsctl ai call}
+(with @option{-t/--tools} for the built-in agent tools); the D-Bus
+methods @code{org.cmacs.Editor1.Ai.Prompt (ssss)} and
+@code{org.cmacs.Editor1.Ai.Call (ssssb)}; and the MCP tools
+@code{ai_prompt} and @code{ai_call}.  External callers cannot register
+Elisp tools, so their tool-enabled call uses the server-side built-in
+executor.
+
+@quotation Warning
+A tool-enabled call runs a synchronous multi-turn loop (capped at ~20
+turns) on the target's main thread.  Under @command{emacs --gowl} that
+thread is the Wayland compositor -- a long loop freezes the desktop.
+Keep external tool loops short, and prefer @code{ai prompt} (no tools)
+when driving a live @option{--gowl} session.
+@end quotation
 
 @node CMacs AI Inline Completion
 @section Inline Ghost-Text Completion

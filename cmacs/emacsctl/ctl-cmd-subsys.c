@@ -213,6 +213,7 @@ static gchar  *ai_opt_provider = NULL;
 static gchar  *ai_opt_model = NULL;
 static gchar  *ai_opt_system = NULL;
 static gchar **ai_opt_files = NULL;
+static gboolean ai_opt_tools = FALSE;
 
 #define AI_PROVIDER_ENTRY \
   { "provider", 'p', 0, G_OPTION_ARG_STRING, &ai_opt_provider, \
@@ -231,6 +232,19 @@ static const GOptionEntry ai_prompt_entries[] = {
     "System prompt", "TEXT" },
   { "file", 'f', 0, G_OPTION_ARG_FILENAME_ARRAY, &ai_opt_files,
     "Append FILE's contents to the prompt (repeatable)", "FILE" },
+  { NULL, 0, 0, 0, NULL, NULL, NULL }
+};
+
+static const GOptionEntry ai_call_entries[] = {
+  AI_PROVIDER_ENTRY,
+  AI_MODEL_ENTRY,
+  { "system", 's', 0, G_OPTION_ARG_STRING, &ai_opt_system,
+    "System prompt", "TEXT" },
+  { "file", 'f', 0, G_OPTION_ARG_FILENAME_ARRAY, &ai_opt_files,
+    "Append FILE's contents to the prompt (repeatable)", "FILE" },
+  { "tools", 't', 0, G_OPTION_ARG_NONE, &ai_opt_tools,
+    "Give the model the built-in agent tools (bash/read/write/edit/... "
+    "-- runs a multi-turn loop; blocks the target's main thread)", NULL },
   { NULL, 0, 0, 0, NULL, NULL, NULL }
 };
 
@@ -296,6 +310,79 @@ ai_call (CtlInvocation *inv, const gchar *method, GVariant *params,
   g_variant_get (reply, "(s)", &out);
   g_variant_unref (reply);
   return out;
+}
+
+static gint
+cmd_ai_call (CtlCommand *self, CtlInvocation *inv, GError **error)
+{
+  const gchar *provider =
+    ai_opt_provider != NULL ? ai_opt_provider : "";
+  const gchar *system =
+    ai_opt_system != NULL ? ai_opt_system : "";
+  const gchar *model =
+    ai_opt_model != NULL ? ai_opt_model : "";
+  gchar *prompt;
+  GString *text;
+  gchar *response;
+  CtlResult *result;
+  gboolean ok;
+  gint k;
+
+  (void) self;
+
+  /* Prompt text: positionals, else stdin (same rules as `ai prompt'). */
+  prompt = ai_join_args (inv);
+  if (prompt == NULL && ai_opt_files == NULL)
+    {
+      prompt = ai_read_stdin ();
+      if (*prompt == '\0')
+        {
+          g_free (prompt);
+          prompt = NULL;
+        }
+    }
+  if (prompt == NULL && ai_opt_files == NULL)
+    {
+      g_set_error (error, CTL_ERROR, CTL_ERROR_USAGE,
+                   "no prompt given and stdin was empty "
+                   "(see 'ai call --help')");
+      return CTL_EXIT_USAGE;
+    }
+
+  text = g_string_new (prompt != NULL ? prompt : "");
+  g_free (prompt);
+
+  for (k = 0; ai_opt_files != NULL && ai_opt_files[k] != NULL; k++)
+    {
+      gchar *contents = NULL;
+      gsize len = 0;
+
+      if (!g_file_get_contents (ai_opt_files[k], &contents, &len, error))
+        {
+          g_string_free (text, TRUE);
+          return CTL_EXIT_ERROR;
+        }
+      if (text->len > 0)
+        g_string_append (text, "\n\n");
+      g_string_append_printf (text, "--- FILE: %s ---\n",
+                              ai_opt_files[k]);
+      g_string_append_len (text, contents, (gssize) len);
+      g_free (contents);
+    }
+
+  response = ai_call (inv, "Call",
+                      g_variant_new ("(ssssb)", text->str, provider,
+                                     system, model, ai_opt_tools),
+                      error);
+  g_string_free (text, TRUE);
+  if (response == NULL)
+    return ctl_exit_code_for_error (error != NULL ? *error : NULL);
+
+  result = ctl_result_new_scalar (response);
+  ok = ctl_invocation_emit (inv, result, error);
+  ctl_result_unref (result);
+  g_free (response);
+  return ok ? CTL_EXIT_OK : CTL_EXIT_ERROR;
 }
 
 static gint
@@ -512,6 +599,10 @@ ctl_cmd_subsys_register (CtlCommandRegistry *registry)
     ctl_simple_command_new_with_options (
       "ai prompt", "One-shot AI prompt (blocking)",
       "[PROMPT...]", ai_prompt_entries, cmd_ai_prompt));
+  ctl_command_registry_add (registry,
+    ctl_simple_command_new_with_options (
+      "ai call", "One-shot AI call, optionally with agent tools (-t)",
+      "[PROMPT...]", ai_call_entries, cmd_ai_call));
   ctl_command_registry_add (registry,
     ctl_simple_command_new_with_options (
       "ai models", "List the models each AI provider offers",

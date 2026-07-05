@@ -33,38 +33,42 @@
 
 (defun cmacs-feature-p (feature)
   "Return non-nil if CMacs was built with FEATURE support.
-FEATURE is a symbol: `glib', `gi', `crispy', `bacon', `gowl',
-`org-ex', `video', `audio', `whisper', or `piper'."
-  (pcase feature
-    ('glib   (fboundp 'gobject-p))
-    ('gi     (fboundp 'gi-require))
-    ('crispy (fboundp 'crispy-eval))
-    ('bacon  (fboundp 'bacon-start))
-    ('gowl   (fboundp 'gowl-start))
-    ('org-ex (fboundp 'org-ex-document-create))
-    ('video  (and (fboundp 'cmacs-video-supported-p)
-                  (cmacs-video-supported-p)))
-    ('audio  (and (fboundp 'cmacs-audio-supported-p)
-                  (cmacs-audio-supported-p)))
-    ('whisper (fboundp 'cmacs-whisper-supported-p))
-    ('piper  (and (fboundp 'cmacs-piper-supported-p)
-                  (cmacs-piper-supported-p)))
-    ('libregnum (and (fboundp 'cmacs-libregnum-supported-p)
-                     (cmacs-libregnum-supported-p)))
-    ('gnuseye (and (fboundp 'cmacs-gnuseye-supported-p)
-                   (cmacs-gnuseye-supported-p)))
-    ('cad    (and (fboundp 'cmacs-cad-supported-p)
-                  (cmacs-cad-supported-p)))
-    (_ (error "Unknown CMacs feature: %S" feature))))
+FEATURE is a symbol naming a --with-cmacs-FEATURE subsystem, e.g.
+`glib', `ai', `gowl', `gsurf', `org-ex', `video'.
+
+Backed by the always-present compile-time `IS-CMACS-<NAME>' variables
+\(see `cmacs-compiled-features').  For a few media subsystems that can be
+compiled in yet unavailable at runtime (missing GStreamer element, no
+GL, ...), a runtime availability check further refines the result.
+Returns nil for an unknown or not-compiled-in FEATURE."
+  (let ((flag (intern-soft (concat "IS-CMACS-"
+                                    (upcase (symbol-name feature))))))
+    (and flag (boundp flag) (symbol-value flag)
+         (pcase feature
+           ('video     (cmacs-video-supported-p))
+           ('audio     (cmacs-audio-supported-p))
+           ('piper     (cmacs-piper-supported-p))
+           ('libregnum (cmacs-libregnum-supported-p))
+           ('gnuseye   (cmacs-gnuseye-supported-p))
+           ('cad       (cmacs-cad-supported-p))
+           (_ t)))))
 
 (defun cmacs-features ()
-  "Return a list of available CMacs features."
-  (let (features)
-    (dolist (feat '(glib gi crispy bacon gowl org-ex video audio whisper piper
-                    libregnum gnuseye cad))
+  "Return the list of available CMacs feature symbols.
+Derived from the compile-time set (`cmacs-compiled-features') filtered
+through `cmacs-feature-p', so a subsystem that is compiled in but
+unavailable at runtime is excluded."
+  (let (out)
+    (dolist (feat (if (fboundp 'cmacs-compiled-features)
+                      (cmacs-compiled-features)
+                    ;; Fallback if the C feature registry is absent.
+                    '(glib gi crispy bacon gowl podomation libreclaw ai
+                      libregnum lrgterm imgedit vidstudio gnuseye cad
+                      screensaver org-ex mcp print video audio whisper
+                      piper gsurf gsurf-lrg emacsctl cintrospect cpatch)))
       (when (cmacs-feature-p feat)
-        (push feat features)))
-    (nreverse features)))
+        (push feat out)))
+    (nreverse out)))
 
 ;;; Platform detection
 
@@ -204,6 +208,11 @@ embedded dependency docs both appear."
 
 (autoload 'cmacs-config-load-all "cmacs-config"
   "Load bacon and C config files after elisp init.")
+
+(autoload 'cmacs-ai-call "cmacs-ai-call"
+  "Prompt the AI and return the answer string; supports tools.")
+(autoload 'cmacs-ai-define-tool "cmacs-ai-call"
+  "Define a tool spec for `cmacs-ai-call'.")
 
 ;;; Auto-enable gowl mode when started with --gowl
 (when (bound-and-true-p gowl-early-started)

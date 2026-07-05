@@ -5488,6 +5488,8 @@ extern void syms_of_textconv (void);
 #endif
 
 /* CMACS */
+/* Always linked (cmacs/core/cmacs-features.c): IS-CMACS-* feature flags. */
+extern void syms_of_cmacs_features (void);
 #ifdef HAVE_CMACS_GLIB
 extern void syms_of_cmacs_glib (void);
 extern void syms_of_cmacs_gobject (void);

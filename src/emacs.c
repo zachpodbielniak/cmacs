@@ -2811,6 +2811,7 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
       syms_of_json ();
 
   /* CMACS */
+      syms_of_cmacs_features ();	/* CMACS: always-linked IS-CMACS-* flags */
 #ifdef HAVE_CMACS_GLIB
       syms_of_cmacs_glib ();
       syms_of_cmacs_gobject ();

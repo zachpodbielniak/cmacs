@@ -537,5 +537,73 @@ across two `** assistant' headings, and a stray `error' heading.")
     (should (stringp r))
     (should (string-match-p "OK" r))))
 
+;;;; Generic call (cmacs-ai-call) ----------------------------------
+
+(when (fboundp 'cmacs-ai-supported-p)
+  (require 'cmacs-ai-call))
+
+(ert-deftest cmacs-ai-call-defuns-exist ()
+  "The generic-call primitive and its Elisp wrapper are present."
+  (skip-unless (fboundp 'cmacs-ai-supported-p))
+  (should (fboundp 'cmacs-ai--call))          ; C primitive
+  (should (fboundp 'cmacs-ai-call))           ; Elisp wrapper (autoloaded)
+  (should (fboundp 'cmacs-ai-define-tool))
+  ;; The C primitive is a subr; the wrapper resolves to the Elisp
+  ;; function once loaded (they must be different objects).
+  (should (subrp (symbol-function 'cmacs-ai--call)))
+  (should-not (eq (symbol-function 'cmacs-ai-call)
+                  (symbol-function 'cmacs-ai--call))))
+
+(ert-deftest cmacs-ai-define-tool-spec ()
+  "`cmacs-ai-define-tool' builds a (NAME DESC PARAMS CALLBACK) spec."
+  (skip-unless (fboundp 'cmacs-ai-define-tool))
+  (let* ((cb (lambda (_n _i _id) "ok"))
+         (spec (cmacs-ai-define-tool
+                "t" "desc" '(("p" "string" "d" t)) cb)))
+    (should (equal (nth 0 spec) "t"))
+    (should (equal (nth 1 spec) "desc"))
+    (should (equal (nth 2 spec) '(("p" "string" "d" t))))
+    (should (eq (nth 3 spec) cb))))
+
+(ert-deftest cmacs-ai-call-bad-executor ()
+  "The primitive rejects a bogus executor handle before any network I/O."
+  (skip-unless (fboundp 'cmacs-ai--call))
+  (should-error (cmacs-ai--call "hi" nil nil nil 999999)))
+
+(ert-deftest cmacs-ai-tools-executor-lifecycle ()
+  "Create, register a custom tool on, and free an executor (no network)."
+  (skip-unless (fboundp 'cmacs-ai-tools-new))
+  (let ((exec (cmacs-ai-tools-new)))
+    (should (integerp exec))
+    (should (eq t (cmacs-ai-tools-register
+                   exec "noop" "does nothing"
+                   (cons '(("x" "string" "an arg" t))
+                         (lambda (_n _i _id) "done")))))
+    (should (eq t (cmacs-ai-tools-free exec)))))
+
+(ert-deftest cmacs-ai-call-tool-round-trip-claude ()
+  "End-to-end: a custom Elisp tool's return value reaches the model.
+The tool returns a token that appears nowhere in the prompt, so the
+model can only echo it if the tool result was fed back (verifies the
+tool-return-value bridge).  Gated on a Claude API key."
+  (skip-unless (fboundp 'cmacs-ai-call))
+  (skip-unless (cmacs-ai-tests--have-claude-key))
+  (let* ((fired nil)
+         (tool (cmacs-ai-define-tool
+                "get_secret_code"
+                "Returns the secret access code for a given user."
+                '(("user" "string" "The user name" t))
+                (lambda (_name _input _id)
+                  (setq fired t)
+                  "the secret access code is ZORP-8842")))
+         (ans (cmacs-ai-call
+               (concat "Call get_secret_code for user alice, then reply "
+                       "with the exact secret access code you received.")
+               :provider 'claude
+               :tools (list tool))))
+    (should fired)
+    (should (stringp ans))
+    (should (string-match-p "ZORP-8842" ans))))
+
 (provide 'cmacs-ai-tests)
 ;;; cmacs-ai-tests.el ends here

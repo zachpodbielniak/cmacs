@@ -430,6 +430,96 @@ history.  */)
   return build_string (out);
 }
 
+DEFUN ("cmacs-ai--call", Fcmacs_ai_call,
+       Scmacs_ai_call, 1, 6, 0,
+       doc: /* Send PROMPT to an AI provider and return the final answer.
+This is the low-level primitive; user configs normally use the
+`cmacs-ai-call' Elisp wrapper (plist API + executor lifecycle) instead.
+Like `cmacs-ai-prompt-sync', but when EXECUTOR (a tool-executor handle
+from `cmacs-ai-tools-new') is supplied the model may call that
+executor's tools in a synchronous multi-turn loop (capped at ~20
+turns), and the final assistant text is returned as a string.  Custom
+Elisp tools registered with `cmacs-ai-tools-register' have their return
+value handed back to the model.
+
+Optional PROVIDER (symbol: claude / openai / ...) overrides the default
+provider; SYSTEM is a system-prompt string; MODEL overrides the
+provider's default model; EXECUTOR is a tool-executor handle (nil = no
+tools, identical to `cmacs-ai-prompt-sync'); MAX-TOKENS caps each turn's
+response.  Signals `cmacs-ai-error' on failure.
+
+Runs synchronously and blocks Emacs for the duration of the loop -- keep
+tool loops short, especially under `emacs --gowl' where the main thread
+is the Wayland compositor.  */)
+  (Lisp_Object prompt, Lisp_Object provider, Lisp_Object system,
+   Lisp_Object model, Lisp_Object executor, Lisp_Object max_tokens)
+{
+  CHECK_STRING (prompt);
+
+  /* No executor: stateless single-shot, identical to prompt-sync. */
+  if (NILP (executor))
+    return Fcmacs_ai_prompt_sync (prompt, provider, system, model);
+
+  CHECK_FIXNAT (executor);
+  AiToolExecutor *exec = cmacs_ai_tools_lookup (XFIXNUM (executor));
+  if (exec == NULL)
+    error ("cmacs-ai: bad executor handle");
+
+  gint maxtok = 0;
+  if (!NILP (max_tokens))
+    {
+      CHECK_FIXNAT (max_tokens);
+      maxtok = (gint) XFIXNUM (max_tokens);
+    }
+
+  const gchar *sys = NULL;
+  if (!NILP (system))
+    {
+      CHECK_STRING (system);
+      sys = SSDATA (system);
+    }
+
+  /* Resolve the provider BEFORE pushing the private context: this can
+   * longjmp on an unknown symbol, which must not leave the thread-default
+   * stack unbalanced. */
+  AiSimple *ai = cmacs_ai__simple_for (provider, model);
+  AiProvider *prov = ai_simple_get_provider (ai);
+
+  AiMessage *umsg = ai_message_new_user (SSDATA (prompt));
+  GList *messages = g_list_append (NULL, umsg);
+
+  /* Drive the blocking, multi-turn tool loop on a PRIVATE thread-default
+   * context so its GMainLoop (and the provider's async I/O, which binds
+   * to the thread-default) cannot re-enter Emacs's own GLib dispatch.
+   * Tool callbacks still fire on this (main) thread, so custom Elisp
+   * tools run and return their values safely.  */
+  GMainContext *ctx = g_main_context_new ();
+  g_main_context_push_thread_default (ctx);
+
+  GError *err = NULL;
+  gchar *out = ai_tool_executor_run (exec, prov, messages, sys, maxtok,
+                                     NULL, &err);
+
+  g_main_context_pop_thread_default (ctx);
+  g_main_context_unref (ctx);
+  g_list_free (messages);
+  g_object_unref (umsg);
+
+  if (out == NULL)
+    {
+      /* xsignal longjmps past manual cleanup -- release ai + err first. */
+      Lisp_Object msg =
+        build_string (err ? err->message : "cmacs-ai-call failed");
+      g_clear_error (&err);
+      g_object_unref (ai);
+      xsignal1 (intern ("cmacs-ai-error"), msg);
+    }
+  g_object_unref (ai);
+  Lisp_Object result = build_string (out);
+  g_free (out);
+  return result;
+}
+
 /* ── Model listing (sync wrapper over the async provider API) ───── */
 
 struct cmacs_ai__models_state
@@ -535,6 +625,7 @@ syms_of_cmacs_ai_stream_defuns (void)
   defsubr (&Scmacs_ai_chat_continue_stream);
   defsubr (&Scmacs_ai_chat_cancel);
   defsubr (&Scmacs_ai_prompt_sync);
+  defsubr (&Scmacs_ai_call);
   defsubr (&Scmacs_ai_list_models);
 }
 

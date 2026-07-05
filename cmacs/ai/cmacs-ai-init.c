@@ -39,6 +39,9 @@ init_cmacs_ai (void)
 {
   if (init_done) return;
   init_done = true;
+  /* Runs on the Emacs main thread; record it so the tool-callback
+   * bridge knows when it is safe to return a Lisp value to the model. */
+  cmacs_ai__main_gthread = g_thread_self ();
   cmacs_ai_client_registry_init ();
   cmacs_ai_session_registry_init ();
   cmacs_ai_typelib_autoload ();
