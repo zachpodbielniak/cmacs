@@ -314,6 +314,47 @@ placeholder meanwhile), so import returns instantly."
   (cmacs-vidstudio-set-export-quality cmacs-vidstudio--handle crf nil)
   (message "Export CRF set to %d" crf))
 
+;; ── Audio commands ─────────────────────────────────────────────────────
+
+(defun cmacs-vidstudio-add-audio (file start volume)
+  "Add audio FILE at START seconds with VOLUME onto the audio lane."
+  (interactive (list (read-file-name "Audio file: ")
+                     (read-number "Start (seconds): " 0.0)
+                     (read-number "Volume (0..1): " 1.0)))
+  (let ((id (cmacs-vidstudio-add-audio-file
+             cmacs-vidstudio--handle (expand-file-name file)
+             (cmacs-vidstudio--secs-to-frames start) volume 0.0 0.0)))
+    (message "Added audio #%d" id)
+    (cmacs-vidstudio--render)))
+
+(defun cmacs-vidstudio-extract-audio (clip)
+  "Extract CLIP's audio onto the audio lane."
+  (interactive (list (cmacs-vidstudio--read-clip)))
+  (condition-case e
+      (let ((id (cmacs-vidstudio-add-audio-from-clip
+                 cmacs-vidstudio--handle clip 0 1.0)))
+        (message "Extracted audio #%d from clip %d" id clip))
+    (error (message "%s" (error-message-string e))))
+  (cmacs-vidstudio--render))
+
+(defun cmacs-vidstudio-set-audio-gain (id volume)
+  "Set audio clip ID's VOLUME."
+  (interactive (list (read-number "Audio clip id: " 0)
+                     (read-number "Volume (0..1): " 1.0)))
+  (cmacs-vidstudio-set-audio-volume cmacs-vidstudio--handle id volume)
+  (cmacs-vidstudio--render))
+
+(defun cmacs-vidstudio-export-audio-cmd (path format)
+  "Export the mixed audio to PATH in FORMAT (wav/mp3/aac/flac)."
+  (interactive
+   (list (read-file-name "Export audio to: " nil "audio.wav")
+         (completing-read "Format: " '("wav" "mp3" "aac" "flac") nil t "wav")))
+  (let ((fmt (or (cdr (assoc format '(("wav" . 0) ("mp3" . 1)
+                                      ("aac" . 2) ("flac" . 3)))) 0)))
+    (cmacs-vidstudio-export-audio cmacs-vidstudio--handle
+                                  (expand-file-name path) fmt)
+    (message "Wrote %s" path)))
+
 (defun cmacs-vidstudio-import (file &optional in-str out-str seconds)
   "Import FILE (image or video) onto the active track.
 For a video, IN-STR/OUT-STR are the source in/out points in seconds (blank
@@ -529,6 +570,11 @@ silently updates.  Starting play at the end of the timeline rewinds."
              ("Step forward" . cmacs-vidstudio-step-forward)
              ("Step back" . cmacs-vidstudio-step-back)
              ("Go to frame…" . cmacs-vidstudio-set-playhead-cmd))
+            ("Audio"
+             ("Add audio file…" . cmacs-vidstudio-add-audio)
+             ("Extract from clip…" . cmacs-vidstudio-extract-audio)
+             ("Set volume…" . cmacs-vidstudio-set-audio-gain)
+             ("Export audio…" . cmacs-vidstudio-export-audio-cmd))
             ("Export"
              ("Video (MP4)…" . cmacs-vidstudio-export-video-cmd)
              ("Animated GIF…" . cmacs-vidstudio-export-gif-cmd)
@@ -578,6 +624,8 @@ in-engine libregnum menu under --lrg)."
     (define-key map (kbd "SPC") #'cmacs-vidstudio-play)
     (define-key map (kbd "<right>") #'cmacs-vidstudio-step-forward)
     (define-key map (kbd "<left>") #'cmacs-vidstudio-step-back)
+    (define-key map (kbd "A") #'cmacs-vidstudio-add-audio)
+    (define-key map (kbd "V") #'cmacs-vidstudio-set-audio-gain)
     (define-key map (kbd "E") #'cmacs-vidstudio-export-video-cmd)
     (define-key map (kbd "G") #'cmacs-vidstudio-export-gif-cmd)
     (define-key map (kbd "<mouse-3>") #'cmacs-vidstudio-context-menu))

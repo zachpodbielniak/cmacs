@@ -188,5 +188,30 @@ extern gboolean cmacs_vidstudio_proj_export_still (CmacsVidProject *p,
                                                    int frame, const char *path,
                                                    char **error_msg);
 
+/* ── Audio lane ─────────────────────────────────────────────────────────── */
+extern gint cmacs_vidstudio_proj_add_audio_file (CmacsVidProject *p,
+                                                 const char *path,
+                                                 int from_frame, double volume,
+                                                 double trim_start,
+                                                 double trim_end,
+                                                 char **error_msg);
+/* Extract CLIP_ID's audio (video clip) and add it to the lane. */
+extern gint cmacs_vidstudio_proj_add_audio_from_clip (CmacsVidProject *p,
+                                                      gint clip_id,
+                                                      int from_frame,
+                                                      double volume,
+                                                      char **error_msg);
+extern gboolean cmacs_vidstudio_proj_set_audio_volume (CmacsVidProject *p,
+                                                       gint id, double v);
+extern gboolean cmacs_vidstudio_proj_set_audio_fade (CmacsVidProject *p,
+                                                     gint id, double fade_in,
+                                                     double fade_out);
+extern gboolean cmacs_vidstudio_proj_remove_audio (CmacsVidProject *p, gint id);
+extern guint cmacs_vidstudio_proj_audio_count (CmacsVidProject *p);
+/* FORMAT: 0 WAV, 1 MP3, 2 AAC, 3 FLAC. */
+extern gboolean cmacs_vidstudio_proj_export_audio (CmacsVidProject *p,
+                                                   const char *path, int format,
+                                                   char **error_msg);
+
 #endif /* HAVE_CMACS_VIDSTUDIO */
 #endif /* CMACS_VIDSTUDIO_PROJ_H */

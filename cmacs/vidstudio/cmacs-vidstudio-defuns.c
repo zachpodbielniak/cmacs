@@ -464,6 +464,108 @@ DEFUN ("cmacs-vidstudio-set-export-quality",
   return Qnil;
 }
 
+DEFUN ("cmacs-vidstudio-add-audio-file", Fcmacs_vidstudio_add_audio_file,
+       Scmacs_vidstudio_add_audio_file, 2, 6, 0,
+       doc: /* Add audio PATH at FROM-FRAME with VOLUME, TRIM-START/END secs.  */)
+  (Lisp_Object handle, Lisp_Object path, Lisp_Object from_frame,
+   Lisp_Object volume, Lisp_Object trim_start, Lisp_Object trim_end)
+{
+  char *err = NULL;
+  gint id;
+  CHECK_STRING (path);
+  id = cmacs_vidstudio_proj_add_audio_file (vs_lookup (handle), SSDATA (path),
+                                            vs_int (from_frame, 0),
+                                            vs_dbl (volume, 1.0),
+                                            vs_dbl (trim_start, 0.0),
+                                            vs_dbl (trim_end, 0.0), &err);
+  if (id < 0)
+    { Lisp_Object m = build_string (err ? err : "add audio failed");
+      g_free (err); xsignal1 (Qcmacs_vidstudio_error, m); }
+  return make_fixnum (id);
+}
+
+DEFUN ("cmacs-vidstudio-add-audio-from-clip",
+       Fcmacs_vidstudio_add_audio_from_clip,
+       Scmacs_vidstudio_add_audio_from_clip, 2, 4, 0,
+       doc: /* Extract CLIP-ID's audio and add it at FROM-FRAME with VOLUME.  */)
+  (Lisp_Object handle, Lisp_Object clip_id, Lisp_Object from_frame,
+   Lisp_Object volume)
+{
+  char *err = NULL;
+  gint id;
+  CHECK_FIXNUM (clip_id);
+  id = cmacs_vidstudio_proj_add_audio_from_clip (vs_lookup (handle),
+                                                 (gint) XFIXNUM (clip_id),
+                                                 vs_int (from_frame, 0),
+                                                 vs_dbl (volume, 1.0), &err);
+  if (id < 0)
+    { Lisp_Object m = build_string (err ? err : "extract audio failed");
+      g_free (err); xsignal1 (Qcmacs_vidstudio_error, m); }
+  return make_fixnum (id);
+}
+
+DEFUN ("cmacs-vidstudio-set-audio-volume", Fcmacs_vidstudio_set_audio_volume,
+       Scmacs_vidstudio_set_audio_volume, 3, 3, 0,
+       doc: /* Set audio clip ID's VOLUME (linear scalar).  */)
+  (Lisp_Object handle, Lisp_Object id, Lisp_Object volume)
+{
+  CHECK_FIXNUM (id);
+  return cmacs_vidstudio_proj_set_audio_volume (vs_lookup (handle),
+                                                (gint) XFIXNUM (id),
+                                                vs_dbl (volume, 1.0))
+             ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-vidstudio-set-audio-fade", Fcmacs_vidstudio_set_audio_fade,
+       Scmacs_vidstudio_set_audio_fade, 3, 3, 0,
+       doc: /* Set audio clip ID's FADE-IN and FADE-OUT (seconds).  */)
+  (Lisp_Object handle, Lisp_Object fade_in, Lisp_Object fade_out)
+{
+  /* Args: (handle id (fade-in . fade-out))? keep 3 positional: id fade-in
+     packs fade-out via a cons.  Simpler: (handle id fade-in) + separate.  Here
+     ID is the 2nd arg; FADE-IN carries a cons (IN . OUT). */
+  Lisp_Object id = fade_in, pair = fade_out;
+  CHECK_FIXNUM (id);
+  CHECK_CONS (pair);
+  return cmacs_vidstudio_proj_set_audio_fade (vs_lookup (handle),
+                                              (gint) XFIXNUM (id),
+                                              vs_dbl (XCAR (pair), 0.0),
+                                              vs_dbl (XCDR (pair), 0.0))
+             ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-vidstudio-remove-audio", Fcmacs_vidstudio_remove_audio,
+       Scmacs_vidstudio_remove_audio, 2, 2, 0,
+       doc: /* Remove audio clip ID.  */)
+  (Lisp_Object handle, Lisp_Object id)
+{
+  CHECK_FIXNUM (id);
+  return cmacs_vidstudio_proj_remove_audio (vs_lookup (handle),
+                                            (gint) XFIXNUM (id)) ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-vidstudio-audio-count", Fcmacs_vidstudio_audio_count,
+       Scmacs_vidstudio_audio_count, 1, 1, 0,
+       doc: /* Number of audio clips on the lane.  */)
+  (Lisp_Object handle)
+{
+  return make_fixnum (cmacs_vidstudio_proj_audio_count (vs_lookup (handle)));
+}
+
+DEFUN ("cmacs-vidstudio-export-audio", Fcmacs_vidstudio_export_audio,
+       Scmacs_vidstudio_export_audio, 2, 3, 0,
+       doc: /* Export the mixed audio to PATH; FORMAT 0 WAV,1 MP3,2 AAC,3 FLAC.  */)
+  (Lisp_Object handle, Lisp_Object path, Lisp_Object format)
+{
+  char *err = NULL;
+  CHECK_STRING (path);
+  if (!cmacs_vidstudio_proj_export_audio (vs_lookup (handle), SSDATA (path),
+                                          vs_int (format, 0), &err))
+    { Lisp_Object m = build_string (err ? err : "audio export failed");
+      g_free (err); xsignal1 (Qcmacs_vidstudio_error, m); }
+  return Qt;
+}
+
 DEFUN ("cmacs-vidstudio-export-still", Fcmacs_vidstudio_export_still,
        Scmacs_vidstudio_export_still, 3, 3, 0,
        doc: /* Render FRAME straight to PATH (PNG/JPG by extension).  */)
@@ -782,6 +884,13 @@ syms_of_cmacs_vidstudio_defuns (void)
   defsubr (&Scmacs_vidstudio_set_video_loop);
   defsubr (&Scmacs_vidstudio_set_export_quality);
   defsubr (&Scmacs_vidstudio_export_still);
+  defsubr (&Scmacs_vidstudio_add_audio_file);
+  defsubr (&Scmacs_vidstudio_add_audio_from_clip);
+  defsubr (&Scmacs_vidstudio_set_audio_volume);
+  defsubr (&Scmacs_vidstudio_set_audio_fade);
+  defsubr (&Scmacs_vidstudio_remove_audio);
+  defsubr (&Scmacs_vidstudio_audio_count);
+  defsubr (&Scmacs_vidstudio_export_audio);
   defsubr (&Scmacs_vidstudio_export_video);
   defsubr (&Scmacs_vidstudio_export_gif);
 }

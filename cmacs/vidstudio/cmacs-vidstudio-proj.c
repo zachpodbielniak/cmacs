@@ -29,6 +29,19 @@ typedef struct
   GArray *segs;                 /* of VidSeg (clear-func unrefs clip+trans) */
 } VidTrack;
 
+/* An audio clip on the (single, flat) audio lane.  One LrgReelAudioTrack mixes
+   all of them (overlapping clips accumulate), so a flat lane suffices for v1. */
+typedef struct
+{
+  guint        id;
+  char        *source_path;     /* file path, or NULL when from a video clip */
+  LrgWaveData *wave;            /* owned; set for clip-extracted audio */
+  int          from_frame;
+  double       volume;
+  double       trim_start, trim_end;
+  double       fade_in, fade_out;   /* seconds; 0 = none */
+} VidAudioSeg;
+
 struct CmacsVidProject
 {
   int        width;
@@ -40,6 +53,11 @@ struct CmacsVidProject
   gboolean   dirty;
   int        export_crf;        /* video CRF quality; <0 = exporter default */
   int        export_bitrate;    /* video bitrate kbps; <=0 = unset */
+  GArray      *audio;           /* of VidAudioSeg */
+  LrgWaveData *mixed;           /* cached mix, or NULL (invalidated on edit) */
+  gboolean     audio_dirty;
+  guint        audio_sample_rate;
+  guint        audio_channels;
 };
 
 /* Forward decls (definitions appear later in the file). */
@@ -51,6 +69,14 @@ vidseg_clear (gpointer p)
   VidSeg *s = p;
   g_clear_object (&s->clip);
   g_clear_object (&s->trans);
+}
+
+static void
+vidaudio_clear (gpointer p)
+{
+  VidAudioSeg *a = p;
+  g_clear_pointer (&a->source_path, g_free);
+  g_clear_object (&a->wave);
 }
 
 static VidTrack *
@@ -87,6 +113,12 @@ cmacs_vidstudio_proj_new (int w, int h, double fps)
   p->export_bitrate = 0;
   p->reel = NULL;
   p->dirty = TRUE;
+  p->audio = g_array_new (FALSE, FALSE, sizeof (VidAudioSeg));
+  g_array_set_clear_func (p->audio, vidaudio_clear);
+  p->mixed = NULL;
+  p->audio_dirty = TRUE;
+  p->audio_sample_rate = 44100;
+  p->audio_channels = 2;
   /* Start with one track. */
   g_ptr_array_add (p->tracks, track_new ());
   return p;
@@ -98,6 +130,8 @@ cmacs_vidstudio_proj_free (CmacsVidProject *p)
   if (p == NULL)
     return;
   g_clear_pointer (&p->tracks, g_ptr_array_unref);
+  g_clear_pointer (&p->audio, g_array_unref);
+  g_clear_object (&p->mixed);
   g_clear_object (&p->reel);
   g_free (p);
 }
@@ -565,6 +599,221 @@ cmacs_vidstudio_proj_set_export_quality (CmacsVidProject *p, int crf,
   p->export_bitrate = bitrate_kbps;
 }
 
+/* ══════════════════════════════════════════════════════════════════════
+ * Audio lane (mirrors the video-track descriptor/rebuild pattern)
+ * ══════════════════════════════════════════════════════════════════════ */
+
+/* Locate an audio seg by id. */
+static VidAudioSeg *
+find_audio (CmacsVidProject *p, gint id)
+{
+  guint i;
+  if (p == NULL || p->audio == NULL)
+    return NULL;
+  for (i = 0; i < p->audio->len; i++)
+    {
+      VidAudioSeg *a = &g_array_index (p->audio, VidAudioSeg, i);
+      if (a->id == (guint) id)
+        return a;
+    }
+  return NULL;
+}
+
+/* Linear fade-in / fade-out applied by pre-scaling the sample buffer of a
+   COPY (the engine's audio track has no fade envelope of its own). */
+static LrgWaveData *
+audio_with_fades (LrgWaveData *wave, double fade_in, double fade_out)
+{
+  LrgWaveData *w;
+  gsize n = 0, i;
+  gfloat *s;
+  guint sr, ch;
+
+  if (fade_in <= 0.0 && fade_out <= 0.0)
+    return g_object_ref (wave);
+  w = lrg_wave_data_copy (wave);
+  sr = lrg_wave_data_get_sample_rate (w);
+  ch = lrg_wave_data_get_channels (w);
+  s = lrg_wave_data_get_samples (w, &n);
+  if (s == NULL || n == 0 || sr == 0 || ch == 0)
+    return w;
+  {
+    gsize fin = (gsize) (fade_in * sr) * ch;
+    gsize fout = (gsize) (fade_out * sr) * ch;
+    for (i = 0; i < fin && i < n; i++)
+      s[i] *= (gfloat) ((double) (i / ch) / (double) (fin / ch ? fin / ch : 1));
+    for (i = 0; i < fout && i < n; i++)
+      {
+        gsize idx = n - 1 - i;
+        s[idx] *= (gfloat) ((double) (i / ch)
+                            / (double) (fout / ch ? fout / ch : 1));
+      }
+  }
+  lrg_wave_data_set_samples (w, s, n);
+  return w;
+}
+
+/* (Re)build the mixed wave from the audio segs; cached until an edit. */
+static LrgWaveData *
+proj_mix_audio (CmacsVidProject *p)
+{
+  LrgReelAudioTrack *at;
+  guint i;
+  int total;
+  g_autoptr (GError) err = NULL;
+
+  if (p == NULL || p->audio == NULL || p->audio->len == 0)
+    return NULL;
+  if (!p->audio_dirty && p->mixed != NULL)
+    return p->mixed;
+
+  at = lrg_reel_audio_track_new (p->fps);
+  for (i = 0; i < p->audio->len; i++)
+    {
+      VidAudioSeg *a = &g_array_index (p->audio, VidAudioSeg, i);
+      if (a->wave != NULL)
+        {
+          LrgWaveData *w = audio_with_fades (a->wave, a->fade_in, a->fade_out);
+          lrg_reel_audio_track_add (at, w, a->from_frame, a->volume,
+                                    a->trim_start, a->trim_end);
+          g_object_unref (w);
+        }
+      else if (a->source_path != NULL)
+        {
+          /* Fades on file segs would require loading here; add_from_file keeps
+             the load inside the engine, so a fade is applied only to
+             clip-extracted waves in v1 (documented). */
+          lrg_reel_audio_track_add_from_file (at, a->source_path, a->from_frame,
+                                              a->volume, a->trim_start,
+                                              a->trim_end, NULL);
+        }
+    }
+  total = cmacs_vidstudio_proj_total_frames (p);
+  if (total < 1) total = 1;
+  g_clear_object (&p->mixed);
+  p->mixed = lrg_reel_audio_track_mix (at, p->audio_sample_rate,
+                                       p->audio_channels, total, &err);
+  p->audio_dirty = FALSE;
+  g_object_unref (at);
+  return p->mixed;
+}
+
+gint
+cmacs_vidstudio_proj_add_audio_file (CmacsVidProject *p, const char *path,
+                                     int from_frame, double volume,
+                                     double trim_start, double trim_end,
+                                     char **error_msg)
+{
+  VidAudioSeg a;
+  if (p == NULL || path == NULL)
+    { if (error_msg) *error_msg = g_strdup ("no project/path"); return -1; }
+  memset (&a, 0, sizeof a);
+  a.id = p->next_id++;
+  a.source_path = g_strdup (path);
+  a.wave = NULL;
+  a.from_frame = from_frame;
+  a.volume = (volume >= 0.0) ? volume : 1.0;
+  a.trim_start = trim_start;
+  a.trim_end = trim_end;
+  g_array_append_val (p->audio, a);
+  p->audio_dirty = TRUE;
+  return (gint) a.id;
+}
+
+gint
+cmacs_vidstudio_proj_add_audio_from_clip (CmacsVidProject *p, gint clip_id,
+                                          int from_frame, double volume,
+                                          char **error_msg)
+{
+  LrgReelClip *c = seg_clip (p, clip_id);
+  LrgReelVideoSource *src;
+  LrgWaveData *wave;
+  VidAudioSeg a;
+  g_autoptr (GError) err = NULL;
+
+  if (c == NULL || !LRG_IS_REEL_VIDEO_CLIP (c))
+    { if (error_msg) *error_msg = g_strdup ("clip is not a video clip");
+      return -1; }
+  src = lrg_reel_video_clip_get_source (LRG_REEL_VIDEO_CLIP (c));
+  if (!lrg_reel_video_source_get_has_audio (src))
+    { if (error_msg) *error_msg = g_strdup ("clip has no audio"); return -1; }
+  wave = lrg_reel_video_source_extract_audio (src, &err);
+  if (wave == NULL)
+    { if (error_msg)
+        *error_msg = g_strdup (err ? err->message : "extract failed");
+      return -1; }
+  memset (&a, 0, sizeof a);
+  a.id = p->next_id++;
+  a.source_path = NULL;
+  a.wave = wave;                 /* transfer full */
+  a.from_frame = from_frame;
+  a.volume = (volume >= 0.0) ? volume : 1.0;
+  g_array_append_val (p->audio, a);
+  p->audio_dirty = TRUE;
+  return (gint) a.id;
+}
+
+gboolean
+cmacs_vidstudio_proj_set_audio_volume (CmacsVidProject *p, gint id, double v)
+{
+  VidAudioSeg *a = find_audio (p, id);
+  if (a == NULL) return FALSE;
+  a->volume = v;
+  p->audio_dirty = TRUE;
+  return TRUE;
+}
+
+gboolean
+cmacs_vidstudio_proj_set_audio_fade (CmacsVidProject *p, gint id,
+                                     double fade_in, double fade_out)
+{
+  VidAudioSeg *a = find_audio (p, id);
+  if (a == NULL) return FALSE;
+  a->fade_in = fade_in < 0.0 ? 0.0 : fade_in;
+  a->fade_out = fade_out < 0.0 ? 0.0 : fade_out;
+  p->audio_dirty = TRUE;
+  return TRUE;
+}
+
+gboolean
+cmacs_vidstudio_proj_remove_audio (CmacsVidProject *p, gint id)
+{
+  guint i;
+  if (p == NULL || p->audio == NULL) return FALSE;
+  for (i = 0; i < p->audio->len; i++)
+    if (g_array_index (p->audio, VidAudioSeg, i).id == (guint) id)
+      { g_array_remove_index (p->audio, i); p->audio_dirty = TRUE;
+        return TRUE; }
+  return FALSE;
+}
+
+guint
+cmacs_vidstudio_proj_audio_count (CmacsVidProject *p)
+{
+  return (p && p->audio) ? p->audio->len : 0;
+}
+
+gboolean
+cmacs_vidstudio_proj_export_audio (CmacsVidProject *p, const char *path,
+                                   int format, char **error_msg)
+{
+  LrgReelAudioExporter *ax;
+  LrgWaveData *w;
+  g_autoptr (GError) err = NULL;
+  gboolean ok;
+
+  if (p == NULL || path == NULL) return FALSE;
+  w = proj_mix_audio (p);
+  if (w == NULL)
+    { if (error_msg) *error_msg = g_strdup ("no audio to export"); return FALSE; }
+  ax = lrg_reel_audio_exporter_new (path, (LrgReelAudioFormat) format);
+  ok = lrg_reel_audio_exporter_export (ax, w, &err);
+  if (!ok && error_msg)
+    *error_msg = g_strdup (err ? err->message : "audio export failed");
+  g_object_unref (ax);
+  return ok;
+}
+
 gboolean
 cmacs_vidstudio_proj_set_clip_duration (CmacsVidProject *p, gint clip_id,
                                         int frames)
@@ -959,6 +1208,13 @@ cmacs_vidstudio_proj_export_video (CmacsVidProject *p, const char *path,
     lrg_reel_video_exporter_set_crf (ex, p->export_crf);
   if (p->export_bitrate > 0)
     lrg_reel_video_exporter_set_bitrate (ex, p->export_bitrate);
+  /* Mux the mixed audio lane into the video, if any. */
+  if (p->audio != NULL && p->audio->len > 0)
+    {
+      LrgWaveData *w = proj_mix_audio (p);
+      if (w != NULL)
+        lrg_reel_video_exporter_set_audio (ex, w);
+    }
   ok = lrg_reel_renderer_render_to_exporter (r, LRG_REEL_EXPORTER (ex), &err);
   if (!ok && error_msg)
     *error_msg = g_strdup (err ? err->message : "export failed");

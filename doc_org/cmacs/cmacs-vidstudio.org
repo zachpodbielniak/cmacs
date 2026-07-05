@@ -151,6 +151,24 @@ Durations and the playhead are in *frames*.
   Right-click → *Clip → Effect parameter…* picks a common one interactively.
   (Needed a small ~lrg_reel_clip_get_effect~ accessor added to libregnum.)
 
+** Audio
+
+A flat *audio lane* mixes into the video export and can be exported on its own
+(one =LrgReelAudioTrack= mixes overlapping clips, so a single lane suffices).
+
+- ~(cmacs-vidstudio-add-audio-file HANDLE PATH FROM-FRAME VOLUME TRIM-START TRIM-END)~
+  — add a wav/ogg/mp3/flac file (key ~A~ prompts for file/start/volume).
+- ~(cmacs-vidstudio-add-audio-from-clip HANDLE CLIP-ID FROM-FRAME VOLUME)~ —
+  extract a video clip's own audio (via ffmpeg) onto the lane (right-click →
+  *Audio → Extract from clip…*).
+- ~(cmacs-vidstudio-set-audio-volume HANDLE ID V)~ (key ~V~),
+  ~(cmacs-vidstudio-set-audio-fade HANDLE ID (IN . OUT))~ (linear fades in
+  seconds — applied by pre-scaling samples for clip-extracted audio),
+  ~(cmacs-vidstudio-remove-audio HANDLE ID)~, ~(cmacs-vidstudio-audio-count HANDLE)~.
+- Export: the mixed lane is *muxed into the video export* automatically; or
+  ~(cmacs-vidstudio-export-audio HANDLE PATH FORMAT)~ writes it standalone —
+  FORMAT 0 WAV, 1 MP3, 2 AAC, 3 FLAC (right-click → *Audio → Export audio…*).
+
 ** Per-clip transform & compositing
 - ~(cmacs-vidstudio-set-opacity HANDLE CLIP-ID O)~ (0..1),
   ~(cmacs-vidstudio-set-transform HANDLE CLIP-ID X Y SX SY)~,

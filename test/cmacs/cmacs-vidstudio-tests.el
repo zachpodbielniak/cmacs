@@ -255,5 +255,34 @@ flips once the decode lands and real frames replace the placeholder."
             (should (> (file-attribute-size (file-attributes png)) 0)))
         (delete-file png)))))
 
+;; ── Audio lane ─────────────────────────────────────────────────────────
+
+(ert-deftest cmacs-vidstudio-tests-audio ()
+  "Add an audio file, tweak it, mix + export a WAV, then remove it."
+  (cmacs-vidstudio-tests--skip-unless)
+  (skip-unless (executable-find "ffmpeg"))
+  (let ((tone (make-temp-file "cmvs-tone" nil ".wav")))
+    (unless (zerop (call-process "ffmpeg" nil nil nil "-y" "-f" "lavfi" "-i"
+                                 "sine=frequency=440:duration=1" "-ar" "44100"
+                                 tone))
+      (delete-file tone) (ert-skip "ffmpeg tone gen failed"))
+    (unwind-protect
+        (cmacs-vidstudio-tests--with-proj p 32 24 30.0
+          (cmacs-vidstudio-add-solid-clip p 0 30 20 20 20 255)
+          (let ((aid (cmacs-vidstudio-add-audio-file p tone 0 0.8 0.0 0.0)))
+            (should (>= aid 0))
+            (should (= (cmacs-vidstudio-audio-count p) 1))
+            (should (cmacs-vidstudio-set-audio-volume p aid 0.5))
+            (should (cmacs-vidstudio-set-audio-fade p aid (cons 0.2 0.2)))
+            (let ((wav (make-temp-file "cmvs-mix" nil ".wav")))
+              (unwind-protect
+                  (progn
+                    (cmacs-vidstudio-export-audio p wav 0)
+                    (should (> (file-attribute-size (file-attributes wav)) 0)))
+                (delete-file wav)))
+            (should (cmacs-vidstudio-remove-audio p aid))
+            (should (= (cmacs-vidstudio-audio-count p) 0))))
+      (delete-file tone))))
+
 (provide 'cmacs-vidstudio-tests)
 ;;; cmacs-vidstudio-tests.el ends here
