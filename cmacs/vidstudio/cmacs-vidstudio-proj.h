@@ -146,5 +146,9 @@ extern gboolean cmacs_vidstudio_proj_export_gif (CmacsVidProject *p,
                                                  const char *path,
                                                  char **error_msg);
 
+/* Live viewport: render FRAME and return an owned GrlImage* (transfer full)
+   as void* (raylib-free DEFUN layer).  Caller passes it to the render ctx. */
+extern void *cmacs_vidstudio_proj_canvas_image (CmacsVidProject *p, int frame);
+
 #endif /* HAVE_CMACS_VIDSTUDIO */
 #endif /* CMACS_VIDSTUDIO_PROJ_H */

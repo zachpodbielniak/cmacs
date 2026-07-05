@@ -12,7 +12,13 @@
 #ifdef HAVE_CMACS_VIDSTUDIO
 
 #include "lisp.h"
+#include "buffer.h"             /* CHECK_BUFFER for viewport-render */
 #include "cmacs-vidstudio-proj.h"
+#ifdef HAVE_CMACS_LIBREGNUM
+/* Firewall-safe (raylib-free, opaque-ctx) headers for the live viewport. */
+#include "cmacs-libregnum.h"
+#include "cmacs-libregnum-render.h"
+#endif
 
 /* Qcmacs_vidstudio_error is DEFSYM'd below; make-docfile generates its global
    slot, so it must NOT be a file-local variable. */
@@ -431,6 +437,37 @@ DEFUN ("cmacs-vidstudio-render-png", Fcmacs_vidstudio_render_png,
   return res;
 }
 
+DEFUN ("cmacs-vidstudio-viewport-render", Fcmacs_vidstudio_viewport_render,
+       Scmacs_vidstudio_viewport_render, 3, 3, 0,
+       doc: /* Render HANDLE's FRAME into BUFFER's live libregnum viewport.
+Returns t on success, nil if the viewport is unavailable.  */)
+  (Lisp_Object handle, Lisp_Object buffer, Lisp_Object frame)
+{
+#ifdef HAVE_CMACS_LIBREGNUM
+  CmacsLibregnumView *v;
+  CmacsLibregnumRenderCtx *ctx;
+  void *img;
+
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (frame);
+  v = cmacs_libregnum_view_for_buffer (buffer);
+  ctx = v ? cmacs_libregnum_view_get_render_ctx (v) : NULL;
+  if (!ctx)
+    return Qnil;
+  img = cmacs_vidstudio_proj_canvas_image (vs_lookup (handle),
+                                           (int) XFIXNUM (frame));
+  if (img)
+    {
+      cmacs_libregnum_render_ctx_image_set_grl_image (ctx, img); /* transfer */
+      cmacs_libregnum_view_request_redraw (v);
+      return Qt;
+    }
+#else
+  (void) handle; (void) buffer; (void) frame;
+#endif
+  return Qnil;
+}
+
 DEFUN ("cmacs-vidstudio-render-ppm", Fcmacs_vidstudio_render_ppm,
        Scmacs_vidstudio_render_ppm, 2, 3, 0,
        doc: /* Render FRAME as a binary PPM (P6) unibyte string.
@@ -552,6 +589,7 @@ syms_of_cmacs_vidstudio_defuns (void)
   defsubr (&Scmacs_vidstudio_clip_start_frame);
   defsubr (&Scmacs_vidstudio_render_png);
   defsubr (&Scmacs_vidstudio_render_ppm);
+  defsubr (&Scmacs_vidstudio_viewport_render);
   defsubr (&Scmacs_vidstudio_frame_pixel);
   defsubr (&Scmacs_vidstudio_export_video);
   defsubr (&Scmacs_vidstudio_export_gif);

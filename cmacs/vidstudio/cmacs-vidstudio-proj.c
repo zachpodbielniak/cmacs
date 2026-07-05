@@ -588,6 +588,26 @@ cmacs_vidstudio_proj_render_png (CmacsVidProject *p, int frame, gsize *out_n)
   return bytes;
 }
 
+/* Render FRAME and return an OWNED GrlImage copy (transfer full) for the live
+ * viewport (get_canvas_image is transfer-none / reused, so copy it).  Returned
+ * as void* to keep the DEFUN layer raylib-free. */
+void *
+cmacs_vidstudio_proj_canvas_image (CmacsVidProject *p, int frame)
+{
+  LrgReelRenderer *r;
+  GrlImage *img, *copy = NULL;
+
+  if (p == NULL)
+    return NULL;
+  proj_rebuild (p);
+  r = lrg_reel_renderer_new (p->reel);
+  img = lrg_reel_renderer_get_canvas_image (r, frame);
+  if (img != NULL)
+    copy = grl_image_copy (img);
+  g_object_unref (r);
+  return copy;
+}
+
 guint8 *
 cmacs_vidstudio_proj_render_ppm (CmacsVidProject *p, int frame, int max_w,
                                  gsize *out_n)

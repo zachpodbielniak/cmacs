@@ -43,6 +43,10 @@ slow renders skip frames instead of stalling Emacs."
   :type 'integer)
 
 (defvar-local cmacs-vidstudio--handle nil)
+(defvar-local cmacs-vidstudio--live nil
+  "Non-nil when the preview renders through a live libregnum GL viewport
+instead of a native Emacs image.  Set when a display + libregnum are
+available; nil falls back to the PPM/PNG insert-image preview.")
 (defvar-local cmacs-vidstudio--playhead 0)
 (defvar-local cmacs-vidstudio--active-track 0)
 (defvar-local cmacs-vidstudio--play-timer nil)
@@ -103,13 +107,27 @@ A position `keymap' property outranks Evil state maps and
 (defun cmacs-vidstudio--render ()
   "Redraw the preview + timeline."
   (when cmacs-vidstudio--handle
-    (let ((inhibit-read-only t)
-          (total (cmacs-vidstudio-total-frames cmacs-vidstudio--handle)))
+    (let ((total (cmacs-vidstudio-total-frames cmacs-vidstudio--handle)))
       (when (and (> total 0) (>= cmacs-vidstudio--playhead total))
         (setq cmacs-vidstudio--playhead (1- total)))
       (when (< cmacs-vidstudio--playhead 0)
         (setq cmacs-vidstudio--playhead 0))
-      (erase-buffer)
+      (if cmacs-vidstudio--live
+          ;; Live GL viewport: render the playhead frame into the FBO (no
+          ;; PPM-through-Emacs).  The in-viewport timeline strip is a later
+          ;; phase; the header line shows frame/total meanwhile.
+          (if (> total 0)
+              (ignore-errors
+                (cmacs-vidstudio-viewport-render
+                 cmacs-vidstudio--handle (current-buffer)
+                 cmacs-vidstudio--playhead))
+            (ignore-errors (cmacs-libregnum-redraw (current-buffer))))
+        (cmacs-vidstudio--render-native total)))))
+
+(defun cmacs-vidstudio--render-native (total)
+  "Native insert-image preview + textual timeline (TOTAL frames)."
+  (let ((inhibit-read-only t))
+    (erase-buffer)
       (if (and (> total 0) (image-type-available-p 'pbm))
           (condition-case err
               ;; Preview via uncompressed PPM rendered AT preview size in C
@@ -143,7 +161,7 @@ A position `keymap' property outranks Evil state maps and
       ;; Evil states and context-menu-mode (Doom), which otherwise shadow
       ;; the mode map's context menu.
       (add-text-properties (point-min) (point-max)
-                           (list 'keymap cmacs-vidstudio--canvas-map)))))
+                           (list 'keymap cmacs-vidstudio--canvas-map))))
 
 ;; --------------------------------------------------------------------------
 ;; Building the timeline
@@ -371,22 +389,9 @@ silently updates.  Starting play at the end of the timeline rewinds."
 ;; Right-click context menu (GTK under pgtk, in-engine under --lrg)
 ;; --------------------------------------------------------------------------
 
-(defun cmacs-vidstudio-context-menu (event)
-  "Pop the video-editor context menu for mouse EVENT.
-Routes through `cmacs-libregnum-popup-menu' (native GTK under pgtk, in-engine
-libregnum menu under --lrg)."
-  (interactive "e")
-  ;; A mouse command runs with the SELECTED window's buffer current, which
-  ;; may not be the clicked editor buffer — select the event's window so the
-  ;; menu commands see this buffer's project handle.
-  (let ((win (posn-window (event-start event))))
-    (when (and (windowp win) (window-live-p win))
-      (select-window win)
-      (set-buffer (window-buffer win))))
-  (unless cmacs-vidstudio--handle
-    (user-error "vidstudio: this click did not land on an editor buffer"))
-  (let* ((menu
-          '("Video editor"
+(defun cmacs-vidstudio--menu ()
+  "Return the video-editor context-menu alist (shared native + viewport)."
+  '("Video editor"
             ("Add"
              ("Import clip…" . cmacs-vidstudio-import)
              ("Solid colour…" . cmacs-vidstudio-add-color)
@@ -405,7 +410,22 @@ libregnum menu under --lrg)."
             ("Export"
              ("Video (MP4)…" . cmacs-vidstudio-export-video-cmd)
              ("Animated GIF…" . cmacs-vidstudio-export-gif-cmd))))
-         (choice (cmacs-libregnum-popup-menu event menu)))
+
+(defun cmacs-vidstudio-context-menu (event)
+  "Pop the video-editor context menu for mouse EVENT (native path).
+Routes through `cmacs-libregnum-popup-menu' (native GTK under pgtk,
+in-engine libregnum menu under --lrg)."
+  (interactive "e")
+  ;; A mouse command runs with the SELECTED window's buffer current, which
+  ;; may not be the clicked editor buffer — select the event's window so the
+  ;; menu commands see this buffer's project handle.
+  (let ((win (posn-window (event-start event))))
+    (when (and (windowp win) (window-live-p win))
+      (select-window win)
+      (set-buffer (window-buffer win))))
+  (unless cmacs-vidstudio--handle
+    (user-error "vidstudio: this click did not land on an editor buffer"))
+  (let ((choice (cmacs-libregnum-popup-menu event (cmacs-vidstudio--menu))))
     (when (commandp choice)
       (call-interactively choice))))
 
@@ -438,12 +458,54 @@ libregnum menu under --lrg)."
     (define-key map (kbd "G") #'cmacs-vidstudio-export-gif-cmd)
     (define-key map (kbd "<mouse-3>") #'cmacs-vidstudio-context-menu))
 
+(defun cmacs-vidstudio--viewport-available-p ()
+  "Non-nil when a live libregnum GL viewport can be used for the preview."
+  (and (fboundp 'cmacs-vidstudio-viewport-render)
+       (fboundp 'cmacs-libregnum-supported-p)
+       (cmacs-libregnum-supported-p)
+       (or (display-graphic-p) (eq (framep-on-display) 'lrg))))
+
+(defun cmacs-vidstudio--vp-context-menu (buffer _dx _dy fx fy)
+  "Pop the video-editor context menu for a viewport right-click at (FX FY)."
+  (run-at-time
+   0 nil
+   (lambda ()
+     (when (buffer-live-p buffer)
+       (with-current-buffer buffer
+         (let ((choice (cmacs-libregnum-popup-menu
+                        (list (list fx fy) (selected-window))
+                        (cmacs-vidstudio--menu))))
+           (when (commandp choice) (call-interactively choice))))))))
+
+(defun cmacs-vidstudio--maybe-attach-viewport (buffer)
+  "Attach a live libregnum viewport to BUFFER, if available.
+Sets `cmacs-vidstudio--live'; leaves it nil (native path) on failure."
+  (when (cmacs-vidstudio--viewport-available-p)
+    (condition-case _err
+        (let ((win (get-buffer-window buffer)))
+          (cmacs-libregnum-attach
+           buffer
+           (max 64 (if win (window-pixel-width win) 640))
+           (max 64 (if win (window-pixel-height win) 480)))
+          (cmacs-libregnum-image-enter buffer t)
+          (cmacs-libregnum-image-set-checker buffer nil)
+          (with-current-buffer buffer
+            (setq cmacs-libregnum-image-context-menu-function
+                  #'cmacs-vidstudio--vp-context-menu
+                  cmacs-vidstudio--live t)))
+      (error (setq cmacs-vidstudio--live nil)))))
+
 (defun cmacs-vidstudio--cleanup ()
   "Stop playback and free the project when the buffer dies."
   (when cmacs-vidstudio--play-timer
     (cancel-timer cmacs-vidstudio--play-timer))
   (when cmacs-vidstudio--decode-timer
     (cancel-timer cmacs-vidstudio--decode-timer))
+  ;; Detach the viewport before freeing the project (avoid a dangling ctx).
+  (when (and cmacs-vidstudio--live
+             (fboundp 'cmacs-libregnum-attached-p)
+             (cmacs-libregnum-attached-p (current-buffer)))
+    (ignore-errors (cmacs-libregnum-detach (current-buffer))))
   (when (and cmacs-vidstudio--handle (fboundp 'cmacs-vidstudio-free))
     (ignore-errors (cmacs-vidstudio-free cmacs-vidstudio--handle))
     (setq cmacs-vidstudio--handle nil)))
@@ -480,6 +542,9 @@ libregnum menu under --lrg)."
                             cmacs-vidstudio--active-track)))
       (cmacs-vidstudio--render))
     (switch-to-buffer buffer)
+    ;; Try the live GL viewport (native PPM preview is the fallback).
+    (cmacs-vidstudio--maybe-attach-viewport buffer)
+    (with-current-buffer buffer (cmacs-vidstudio--render))
     buffer))
 
 ;; Under Evil (Doom) the state maps shadow the mode map's transport/editing
