@@ -566,6 +566,20 @@ DEFUN ("cmacs-vidstudio-export-audio", Fcmacs_vidstudio_export_audio,
   return Qt;
 }
 
+DEFUN ("cmacs-vidstudio-serialize", Fcmacs_vidstudio_serialize,
+       Scmacs_vidstudio_serialize, 1, 1, 0,
+       doc: /* Return HANDLE's project as a Lisp-readable S-expression string.  */)
+  (Lisp_Object handle)
+{
+  char *s = cmacs_vidstudio_proj_serialize (vs_lookup (handle));
+  Lisp_Object res;
+  if (s == NULL)
+    return Qnil;
+  res = build_string (s);
+  g_free (s);
+  return res;
+}
+
 DEFUN ("cmacs-vidstudio-add-keyframe", Fcmacs_vidstudio_add_keyframe,
        Scmacs_vidstudio_add_keyframe, 5, 8, 0,
        doc: /* Add a keyframe on CLIP-ID: PARAM at FRAME = VALUE.
@@ -926,6 +940,7 @@ syms_of_cmacs_vidstudio_defuns (void)
   defsubr (&Scmacs_vidstudio_set_video_loop);
   defsubr (&Scmacs_vidstudio_set_export_quality);
   defsubr (&Scmacs_vidstudio_export_still);
+  defsubr (&Scmacs_vidstudio_serialize);
   defsubr (&Scmacs_vidstudio_add_keyframe);
   defsubr (&Scmacs_vidstudio_clear_keyframes);
   defsubr (&Scmacs_vidstudio_keyframe_count);

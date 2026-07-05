@@ -228,5 +228,9 @@ extern gboolean cmacs_vidstudio_proj_clear_keyframes (CmacsVidProject *p,
 extern gint cmacs_vidstudio_proj_keyframe_count (CmacsVidProject *p,
                                                  gint clip_id);
 
+/* Serialize the project to a versioned, Lisp-readable S-expression
+   (g_malloc'd; caller g_free's).  Load is an Elisp replay of the add-* DEFUNs. */
+extern char *cmacs_vidstudio_proj_serialize (CmacsVidProject *p);
+
 #endif /* HAVE_CMACS_VIDSTUDIO */
 #endif /* CMACS_VIDSTUDIO_PROJ_H */

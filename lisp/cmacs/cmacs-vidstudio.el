@@ -51,6 +51,13 @@ available; nil falls back to the PPM/PNG insert-image preview.")
 (defvar-local cmacs-vidstudio--active-track 0)
 (defvar-local cmacs-vidstudio--play-timer nil)
 (defvar-local cmacs-vidstudio--preview-scale 0.5)
+(defcustom cmacs-vidstudio-playback-scale 0.4
+  "Preview scale used WHILE playing (a low-res proxy for near-real-time
+playback); the full-resolution frame is rendered when playback pauses.
+1.0 disables the proxy."
+  :type 'number)
+(defvar-local cmacs-vidstudio--paused-scale nil
+  "The preview scale to restore when playback stops.")
 (defvar-local cmacs-vidstudio--decode-timer nil
   "Poll timer that re-renders once an imported clip finishes decoding.")
 (defvar-local cmacs-vidstudio--last-image nil
@@ -314,6 +321,139 @@ placeholder meanwhile), so import returns instantly."
   (cmacs-vidstudio-set-export-quality cmacs-vidstudio--handle crf nil)
   (message "Export CRF set to %d" crf))
 
+;; ── Save / load (.vstudio) ─────────────────────────────────────────────
+
+(defvar-local cmacs-vidstudio--file nil
+  "Path this project was loaded from / last saved to.")
+
+(defcustom cmacs-vidstudio-autosave-interval 60
+  "Seconds of idle before autosaving a named project to FILE~ (nil disables)."
+  :type '(choice (const :tag "Off" nil) integer))
+
+(defun cmacs-vidstudio--sx (key data)
+  "Value of (KEY VALUE) in the tail of DATA, or nil."
+  (cadr (assq key (cdr data))))
+
+(defun cmacs-vidstudio--replay-clip (handle track clip)
+  "Rebuild one CLIP sexp onto TRACK of HANDLE."
+  (let* ((kind (cmacs-vidstudio--sx 'kind clip))
+         (dur (cmacs-vidstudio--sx 'dur clip))
+         (asset (cmacs-vidstudio--sx 'asset clip))
+         (color (cdr (assq 'color (cdr clip))))
+         (id (pcase kind
+               (0 (apply #'cmacs-vidstudio-add-solid-clip handle track dur
+                         color))
+               (1 (cmacs-vidstudio-add-image-clip handle track asset dur))
+               (2 (cmacs-vidstudio-add-video-clip
+                   handle track asset nil
+                   (cmacs-vidstudio--sx 'in clip)
+                   (cmacs-vidstudio--sx 'out clip)))
+               (3 (apply #'cmacs-vidstudio-add-text-clip handle track asset dur
+                         color))
+               (_ nil))))
+    (when (and id (>= id 0))
+      (let ((tr (assq 'transition (cdr clip))))
+        (when tr
+          (cmacs-vidstudio-set-transition handle id (nth 1 tr) (nth 2 tr)
+                                          (nth 3 tr))))
+      (when (cmacs-vidstudio--sx 'opacity clip)
+        (cmacs-vidstudio-set-opacity handle id
+                                     (cmacs-vidstudio--sx 'opacity clip)))
+      (when (cmacs-vidstudio--sx 'blend clip)
+        (cmacs-vidstudio-set-blend-mode handle id
+                                        (cmacs-vidstudio--sx 'blend clip)))
+      (dolist (k (cdr (assq 'keyframes (cdr clip))))
+        ;; k = (PARAM EIDX FRAME VALUE EASING [PROP])
+        (cmacs-vidstudio-add-keyframe handle id (nth 0 k) (nth 2 k) (nth 3 k)
+                                      (nth 4 k) (nth 1 k) (nth 5 k))))))
+
+(defun cmacs-vidstudio--build-from-sexp (data)
+  "Create a project HANDLE from parsed DATA; unknown keys are ignored."
+  (let* ((w (cmacs-vidstudio--sx 'width data))
+         (h (cmacs-vidstudio--sx 'height data))
+         (fps (cmacs-vidstudio--sx 'fps data))
+         (handle (cmacs-vidstudio-new (or w 1280) (or h 720) (or fps 30.0)))
+         (ti 0))
+    (dolist (tr (cdr (assq 'tracks (cdr data))))
+      (when (eq (car-safe tr) 'track)
+        (when (> ti 0) (cmacs-vidstudio-add-track handle))
+        (dolist (clip (cdr tr))
+          (when (eq (car-safe clip) 'clip)
+            (ignore-errors (cmacs-vidstudio--replay-clip handle ti clip))))
+        (setq ti (1+ ti))))
+    (dolist (seg (cdr (assq 'audio (cdr data))))
+      (when (eq (car-safe seg) 'seg)
+        (let ((src (cmacs-vidstudio--sx 'source seg)))
+          (when src
+            (ignore-errors
+              (cmacs-vidstudio-add-audio-file
+               handle src (or (cmacs-vidstudio--sx 'from seg) 0)
+               (or (cmacs-vidstudio--sx 'volume seg) 1.0)
+               (or (cmacs-vidstudio--sx 'trim-start seg) 0.0)
+               (or (cmacs-vidstudio--sx 'trim-end seg) 0.0)))))))
+    handle))
+
+(defun cmacs-vidstudio-save-as (file)
+  "Write the project to FILE as a .vstudio S-expression."
+  (interactive (list (read-file-name "Save .vstudio: " nil nil nil
+                                     (or cmacs-vidstudio--file "project.vstudio"))))
+  (with-temp-file file
+    (insert ";; -*- mode: lisp-data -*- cmacs vidstudio project\n")
+    (insert (cmacs-vidstudio-serialize cmacs-vidstudio--handle) "\n"))
+  (setq cmacs-vidstudio--file file)
+  (message "Saved %s" file))
+
+(defun cmacs-vidstudio-save ()
+  "Save the project to its file, or prompt if unsaved."
+  (interactive)
+  (if cmacs-vidstudio--file
+      (cmacs-vidstudio-save-as cmacs-vidstudio--file)
+    (call-interactively #'cmacs-vidstudio-save-as)))
+
+;;;###autoload
+(defun cmacs-vidstudio-open (file)
+  "Open a .vstudio project FILE in a new editor buffer."
+  (interactive "fOpen .vstudio: ")
+  (unless (and (fboundp 'cmacs-vidstudio-supported-p)
+               (cmacs-vidstudio-supported-p))
+    (user-error "cmacs was not built with --with-cmacs-vidstudio"))
+  (let* ((data (with-temp-buffer
+                 (insert-file-contents file)
+                 (goto-char (point-min))
+                 (read (current-buffer))))
+         (handle (cmacs-vidstudio--build-from-sexp data))
+         (buffer (generate-new-buffer
+                  (format "*vidstudio %s*" (file-name-nondirectory file)))))
+    (with-current-buffer buffer
+      (cmacs-vidstudio-mode)
+      (setq cmacs-vidstudio--handle handle
+            cmacs-vidstudio--file file
+            cmacs-vidstudio--playhead 0
+            cmacs-vidstudio--active-track 0)
+      (setq header-line-format
+            '(:eval (format " vidstudio %dx%d @%.0ffps  frame %d/%d  track %d"
+                            (cmacs-vidstudio-width cmacs-vidstudio--handle)
+                            (cmacs-vidstudio-height cmacs-vidstudio--handle)
+                            (cmacs-vidstudio-fps cmacs-vidstudio--handle)
+                            cmacs-vidstudio--playhead
+                            (cmacs-vidstudio-total-frames cmacs-vidstudio--handle)
+                            cmacs-vidstudio--active-track)))
+      (cmacs-vidstudio--render))
+    (switch-to-buffer buffer)
+    (cmacs-vidstudio--maybe-attach-viewport buffer)
+    (with-current-buffer buffer (cmacs-vidstudio--render))
+    (message "Opened %s" file)
+    buffer))
+
+;;;###autoload
+(add-to-list 'auto-mode-alist '("\\.vstudio\\'" . cmacs-vidstudio--open-file))
+(defun cmacs-vidstudio--open-file ()
+  "`auto-mode-alist' entry: open the visited .vstudio via the editor."
+  (let ((file buffer-file-name))
+    (when file
+      (kill-buffer (current-buffer))
+      (cmacs-vidstudio-open file))))
+
 ;; ── Keyframe commands ──────────────────────────────────────────────────
 
 (defconst cmacs-vidstudio--kf-param-alist
@@ -496,11 +636,16 @@ immediately and the preview pops in when the decode finishes."
   (cmacs-vidstudio--render))
 
 (defun cmacs-vidstudio-pause ()
-  "Stop playback."
+  "Stop playback and re-render the full-resolution frame."
   (interactive)
   (when cmacs-vidstudio--play-timer
     (cancel-timer cmacs-vidstudio--play-timer)
-    (setq cmacs-vidstudio--play-timer nil)))
+    (setq cmacs-vidstudio--play-timer nil)
+    ;; restore the full-res preview and repaint the current frame crisply
+    (when cmacs-vidstudio--paused-scale
+      (setq cmacs-vidstudio--preview-scale cmacs-vidstudio--paused-scale
+            cmacs-vidstudio--paused-scale nil)
+      (cmacs-vidstudio--render))))
 
 (defun cmacs-vidstudio-play ()
   "Play from the playhead (toggles with pause).
@@ -520,6 +665,12 @@ silently updates.  Starting play at the end of the timeline rewinds."
         (user-error "vidstudio: empty timeline — import a clip first (i)"))
       (when (>= cmacs-vidstudio--playhead (1- total))
         (setq cmacs-vidstudio--playhead 0))
+      ;; Drop to a low-res proxy while playing (near-real-time); restored on
+      ;; pause.  The live viewport path renders full frames but still benefits
+      ;; from the frame-skip loop below.
+      (unless (>= cmacs-vidstudio-playback-scale 1.0)
+        (setq cmacs-vidstudio--paused-scale cmacs-vidstudio--preview-scale
+              cmacs-vidstudio--preview-scale cmacs-vidstudio-playback-scale))
       (let ((buf (current-buffer))
             (fps (max 1.0 (cmacs-vidstudio-fps cmacs-vidstudio--handle)))
             (start-frame cmacs-vidstudio--playhead)
@@ -601,6 +752,10 @@ silently updates.  Starting play at the end of the timeline rewinds."
              ("Step forward" . cmacs-vidstudio-step-forward)
              ("Step back" . cmacs-vidstudio-step-back)
              ("Go to frame…" . cmacs-vidstudio-set-playhead-cmd))
+            ("Project"
+             ("Save" . cmacs-vidstudio-save)
+             ("Save as…" . cmacs-vidstudio-save-as)
+             ("Open…" . cmacs-vidstudio-open))
             ("Audio"
              ("Add audio file…" . cmacs-vidstudio-add-audio)
              ("Extract from clip…" . cmacs-vidstudio-extract-audio)
@@ -655,6 +810,7 @@ in-engine libregnum menu under --lrg)."
     (define-key map (kbd "SPC") #'cmacs-vidstudio-play)
     (define-key map (kbd "<right>") #'cmacs-vidstudio-step-forward)
     (define-key map (kbd "<left>") #'cmacs-vidstudio-step-back)
+    (define-key map (kbd "C-x C-s") #'cmacs-vidstudio-save)
     (define-key map (kbd "k") #'cmacs-vidstudio-add-keyframe-cmd)
     (define-key map (kbd "A") #'cmacs-vidstudio-add-audio)
     (define-key map (kbd "V") #'cmacs-vidstudio-set-audio-gain)
@@ -705,6 +861,12 @@ Sets `cmacs-vidstudio--live'; leaves it nil (native path) on failure."
     (cancel-timer cmacs-vidstudio--play-timer))
   (when cmacs-vidstudio--decode-timer
     (cancel-timer cmacs-vidstudio--decode-timer))
+  ;; Autosave a named project to FILE~ on kill (cheap crash-recovery point).
+  (when (and cmacs-vidstudio--file cmacs-vidstudio--handle
+             (fboundp 'cmacs-vidstudio-serialize))
+    (ignore-errors
+      (with-temp-file (concat cmacs-vidstudio--file "~")
+        (insert (cmacs-vidstudio-serialize cmacs-vidstudio--handle) "\n"))))
   ;; Detach the viewport before freeing the project (avoid a dangling ctx).
   (when (and cmacs-vidstudio--live
              (fboundp 'cmacs-libregnum-attached-p)

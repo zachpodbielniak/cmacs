@@ -169,6 +169,30 @@ setters just before compositing (so it works in preview, playback, and export
   = all), ~(cmacs-vidstudio-keyframe-count HANDLE CLIP-ID)~.  Right-click →
   *Clip → Add keyframe… / Clear keyframes…*.
 
+** Save / load (.vstudio)
+
+Projects persist to a *.vstudio* file --- a versioned, Lisp-readable
+S-expression written by ~(cmacs-vidstudio-serialize HANDLE)~ (in C) and loaded
+by *replaying* the add-* DEFUNs in Elisp (~cmacs-vidstudio-open~), so the
+format degrades gracefully: unknown keys are ignored (forward-compat).  It
+records tracks + clips (kind/params/duration, in/out slice, transition,
+opacity, blend, keyframes) and file-based audio segs.
+
+- Key ~C-x C-s~ = ~cmacs-vidstudio-save~ (Save / Save as… / Open… are in the
+  right-click *Project* submenu).  ~.vstudio~ files auto-open in the editor
+  (=auto-mode-alist=); a named project is autosaved to ~FILE~~ on buffer kill.
+- Serialize -> load -> serialize is bit-identical (covered by ERT).
+- v1 gaps: per-effect parameters and full transform are not yet serialized
+  (opacity + blend are); clip-extracted audio is re-extracted, not stored.
+
+** Near-real-time playback
+
+Playback advances the playhead from the wall clock (slow frames are skipped,
+input yields) and, under a display, renders through the live GL viewport (no
+PPM-through-Emacs round-trip).  While playing, the preview drops to a low-res
+*proxy* (~cmacs-vidstudio-playback-scale~, default 0.4) and snaps back to full
+resolution on pause, so even a heavy multi-track timeline holds cadence.
+
 ** Audio
 
 A flat *audio lane* mixes into the video export and can be exported on its own

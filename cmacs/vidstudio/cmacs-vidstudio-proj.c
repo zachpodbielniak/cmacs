@@ -37,6 +37,11 @@ typedef struct
   int    easing;                /* LrgEasingType */
 } VidKey;
 
+/* Clip kind, recorded for save/load (the LrgReelClip alone can't reproduce
+   its creation params portably). */
+enum { CMACS_VID_KIND_SOLID = 0, CMACS_VID_KIND_IMAGE, CMACS_VID_KIND_VIDEO,
+       CMACS_VID_KIND_TEXT };
+
 typedef struct
 {
   guint               id;
@@ -44,9 +49,16 @@ typedef struct
   LrgReelTransition  *trans;    /* owned, or NULL (leading transition) */
   int                 duration; /* frames */
   int                 trans_overlap;
+  int                 trans_type;   /* recorded transition kind, or -1 */
+  int                 trans_easing;
   GArray             *keys;     /* of VidKey, or NULL until first keyframe */
   GPtrArray          *curves;   /* of VidCurve*, rebuilt when keys_dirty */
   gboolean            keys_dirty;
+  /* Creation descriptor (for serialization). */
+  int                 kind;
+  char               *asset;    /* image/video path or text string */
+  guint8              col[4];   /* solid / text colour */
+  double              in_sec, out_sec;   /* video slice */
 } VidSeg;
 
 /* One animatable channel = a keyframe curve for a (param, effect, prop). */
@@ -96,6 +108,11 @@ struct CmacsVidProject
 
 /* Forward decls (definitions appear later in the file). */
 static void proj_rebuild (CmacsVidProject *p);
+static gboolean find_seg (CmacsVidProject *p, gint id, VidTrack **out_track,
+                          guint *out_index);
+static void seg_meta (CmacsVidProject *p, gint id, int kind, const char *asset,
+                      guint8 r, guint8 g, guint8 b, guint8 a,
+                      double in, double out);
 static void proj_apply_animation (CmacsVidProject *p, int global_frame);
 static gboolean proj_has_keyframes (CmacsVidProject *p);
 static gboolean proj_render_to_exporter (CmacsVidProject *p,
@@ -126,6 +143,7 @@ vidseg_clear (gpointer p)
   g_clear_object (&s->trans);
   g_clear_pointer (&s->keys, g_array_unref);
   g_clear_pointer (&s->curves, g_ptr_array_unref);
+  g_clear_pointer (&s->asset, g_free);
 }
 
 static void
@@ -284,17 +302,34 @@ append_clip (CmacsVidProject *p, guint track, LrgReelClip *clip, int duration)
     duration = (int) (p->fps * 3.0 + 0.5);  /* default 3s */
   lrg_reel_clip_set_duration_in_frames (clip, duration);
 
+  memset (&seg, 0, sizeof seg);
   seg.id = p->next_id++;
   seg.clip = clip;  /* takes the ref */
   seg.trans = NULL;
   seg.duration = duration;
   seg.trans_overlap = 0;
-  seg.keys = NULL;
-  seg.curves = NULL;
-  seg.keys_dirty = FALSE;
+  seg.trans_type = -1;
   g_array_append_val (t->segs, seg);
   p->dirty = TRUE;
   return (gint) seg.id;
+}
+
+/* Record the creation descriptor on a seg (for save/load). */
+static void
+seg_meta (CmacsVidProject *p, gint id, int kind, const char *asset,
+          guint8 r, guint8 g, guint8 b, guint8 a, double in, double out)
+{
+  VidTrack *t = NULL;
+  guint si = 0;
+  VidSeg *s;
+  if (id < 0 || !find_seg (p, id, &t, &si))
+    return;
+  s = &g_array_index (t->segs, VidSeg, si);
+  s->kind = kind;
+  g_clear_pointer (&s->asset, g_free);
+  s->asset = asset ? g_strdup (asset) : NULL;
+  s->col[0] = r; s->col[1] = g; s->col[2] = b; s->col[3] = a;
+  s->in_sec = in; s->out_sec = out;
 }
 
 gint
@@ -303,9 +338,12 @@ cmacs_vidstudio_proj_add_solid_clip (CmacsVidProject *p, guint track,
                                      guint8 b, guint8 a)
 {
   GrlColor col;
+  gint id;
   col.r = r; col.g = g; col.b = b; col.a = a;
-  return append_clip (p, track,
-                      LRG_REEL_CLIP (lrg_reel_solid_clip_new (&col)), duration);
+  id = append_clip (p, track,
+                    LRG_REEL_CLIP (lrg_reel_solid_clip_new (&col)), duration);
+  seg_meta (p, id, CMACS_VID_KIND_SOLID, NULL, r, g, b, a, 0, 0);
+  return id;
 }
 
 gint
@@ -323,7 +361,11 @@ cmacs_vidstudio_proj_add_image_clip (CmacsVidProject *p, guint track,
         *error_msg = g_strdup (err ? err->message : "could not load image");
       return -1;
     }
-  return append_clip (p, track, LRG_REEL_CLIP (clip), duration);
+  {
+    gint id = append_clip (p, track, LRG_REEL_CLIP (clip), duration);
+    seg_meta (p, id, CMACS_VID_KIND_IMAGE, path, 0, 0, 0, 0, 0, 0);
+    return id;
+  }
 }
 
 gint
@@ -373,7 +415,11 @@ cmacs_vidstudio_proj_add_video_clip (CmacsVidProject *p, guint track,
      frame access), so readiness polling never waits on a render. */
   lrg_reel_video_source_set_async_decode (src, TRUE);
   lrg_reel_video_source_get_frame_count (src);
-  return append_clip (p, track, LRG_REEL_CLIP (clip), frames);
+  {
+    gint id = append_clip (p, track, LRG_REEL_CLIP (clip), frames);
+    seg_meta (p, id, CMACS_VID_KIND_VIDEO, path, 0, 0, 0, 0, in, out);
+    return id;
+  }
 }
 
 gint
@@ -389,7 +435,11 @@ cmacs_vidstudio_proj_add_text_clip (CmacsVidProject *p, guint track,
     return -1;
   col.r = r; col.g = g; col.b = b; col.a = a;
   lrg_reel_text_clip_set_color (clip, &col);
-  return append_clip (p, track, LRG_REEL_CLIP (clip), duration);
+  {
+    gint id = append_clip (p, track, LRG_REEL_CLIP (clip), duration);
+    seg_meta (p, id, CMACS_VID_KIND_TEXT, text, r, g, b, a, 0, 0);
+    return id;
+  }
 }
 
 /* Locate the segment with ID; returns its track + index, or FALSE. */
@@ -451,6 +501,8 @@ cmacs_vidstudio_proj_set_transition (CmacsVidProject *p, gint clip_id,
     return FALSE;
   s = &g_array_index (t->segs, VidSeg, si);
   g_clear_object (&s->trans);
+  s->trans_type = type;
+  s->trans_easing = easing;
   if (type >= 0)
     {
       s->trans = make_transition (type, easing);
@@ -1086,6 +1138,94 @@ cmacs_vidstudio_proj_keyframe_count (CmacsVidProject *p, gint clip_id)
   }
 }
 
+/* ── Serialization (a versioned, Lisp-readable S-expression) ─────────────
+   The Elisp side replays this by calling the add-* DEFUNs, so only the
+   creation descriptors + post-creation setters need to be emitted.  Effects
+   and full transform are a documented v1 gap (opacity + blend are emitted). */
+char *
+cmacs_vidstudio_proj_serialize (CmacsVidProject *p)
+{
+  GString *o;
+  guint ti, si, ki;
+
+  if (p == NULL)
+    return NULL;
+  o = g_string_new (NULL);
+  g_string_append (o, "(vstudio (version 1)");
+  g_string_append_printf (o, " (width %d) (height %d) (fps %g)",
+                          p->width, p->height, p->fps);
+  g_string_append (o, "\n (tracks");
+  for (ti = 0; ti < p->tracks->len; ti++)
+    {
+      VidTrack *t = g_ptr_array_index (p->tracks, ti);
+      g_string_append (o, "\n  (track");
+      for (si = 0; si < t->segs->len; si++)
+        {
+          VidSeg *s = &g_array_index (t->segs, VidSeg, si);
+          g_string_append_printf (o, "\n   (clip (kind %d) (id %u) (dur %d)",
+                                  s->kind, s->id, s->duration);
+          if (s->asset != NULL)
+            {
+              char *esc = g_strescape (s->asset, NULL);
+              g_string_append_printf (o, " (asset \"%s\")", esc);
+              g_free (esc);
+            }
+          g_string_append_printf (o, " (color %u %u %u %u)",
+                                  s->col[0], s->col[1], s->col[2], s->col[3]);
+          if (s->kind == CMACS_VID_KIND_VIDEO)
+            g_string_append_printf (o, " (in %g) (out %g)",
+                                    s->in_sec, s->out_sec);
+          if (s->trans_type >= 0)
+            g_string_append_printf (o,
+                " (transition %d %d %d)", s->trans_type, s->trans_overlap,
+                s->trans_easing);
+          g_string_append_printf (o, " (opacity %g) (blend %d)",
+                                  lrg_reel_clip_get_opacity (s->clip),
+                                  (int) lrg_reel_clip_get_blend_mode (s->clip));
+          if (s->keys != NULL && s->keys->len > 0)
+            {
+              g_string_append (o, " (keyframes");
+              for (ki = 0; ki < s->keys->len; ki++)
+                {
+                  VidKey *k = &g_array_index (s->keys, VidKey, ki);
+                  g_string_append_printf (o, " (%d %d %g %g %d", k->param,
+                                          k->effect_index, k->frame, k->value,
+                                          k->easing);
+                  if (k->prop != NULL)
+                    {
+                      char *e = g_strescape (k->prop, NULL);
+                      g_string_append_printf (o, " \"%s\"", e);
+                      g_free (e);
+                    }
+                  g_string_append_c (o, ')');
+                }
+              g_string_append_c (o, ')');
+            }
+          g_string_append_c (o, ')');    /* clip */
+        }
+      g_string_append_c (o, ')');        /* track */
+    }
+  g_string_append (o, ")");              /* tracks */
+  g_string_append (o, "\n (audio");
+  for (si = 0; si < p->audio->len; si++)
+    {
+      VidAudioSeg *a = &g_array_index (p->audio, VidAudioSeg, si);
+      if (a->source_path == NULL)
+        continue;   /* clip-extracted audio: re-extract on load (v1 gap) */
+      {
+        char *e = g_strescape (a->source_path, NULL);
+        g_string_append_printf (o,
+            "\n  (seg (source \"%s\") (from %d) (volume %g)"
+            " (trim-start %g) (trim-end %g) (fade-in %g) (fade-out %g))",
+            e, a->from_frame, a->volume, a->trim_start, a->trim_end,
+            a->fade_in, a->fade_out);
+        g_free (e);
+      }
+    }
+  g_string_append (o, "))");             /* audio + vstudio */
+  return g_string_free (o, FALSE);
+}
+
 /* Feed the renderer through EX.  When keyframes exist the animator must run
    per frame, so cmacs drives the begin/add_frame/finish loop; otherwise the
    engine's own loop is used (keeping motion-blur / parallel rendering). */
@@ -1146,14 +1286,18 @@ cmacs_vidstudio_proj_split_clip (CmacsVidProject *p, gint clip_id, int at_frame)
 
   /* Tail shares the same source clip (a fresh ref); v1 does not re-trim the
      source, so the tail replays from the clip's own start. */
+  memset (&tail, 0, sizeof tail);
   tail.id = p->next_id++;
   tail.clip = g_object_ref (s->clip);
   tail.trans = NULL;
   tail.duration = s->duration - at_frame;
   tail.trans_overlap = 0;
-  tail.keys = NULL;
-  tail.curves = NULL;
-  tail.keys_dirty = FALSE;
+  tail.trans_type = -1;
+  tail.kind = s->kind;
+  tail.asset = s->asset ? g_strdup (s->asset) : NULL;
+  memcpy (tail.col, s->col, sizeof tail.col);
+  tail.in_sec = s->in_sec;
+  tail.out_sec = s->out_sec;
 
   s->duration = at_frame;
   lrg_reel_clip_set_duration_in_frames (s->clip, at_frame);

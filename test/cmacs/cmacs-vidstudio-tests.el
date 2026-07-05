@@ -306,5 +306,27 @@ flips once the decode lands and real frames replace the placeholder."
       (should (= (cmacs-vidstudio-keyframe-count p id) 0))
       (should (> (nth 3 (cmacs-vidstudio-frame-pixel p 0 8 8)) 240)))))
 
+;; ── Save / load (.vstudio) round-trip ──────────────────────────────────
+
+(ert-deftest cmacs-vidstudio-tests-serialize-roundtrip ()
+  "serialize -> build-from-sexp -> serialize is bit-identical."
+  (cmacs-vidstudio-tests--skip-unless)
+  (require 'cmacs-vidstudio)
+  (cmacs-vidstudio-tests--with-proj p 320 240 30.0
+    (let ((id (cmacs-vidstudio-add-solid-clip p 0 60 200 40 40 255)))
+      (cmacs-vidstudio-set-opacity p id 0.7)
+      (cmacs-vidstudio-set-blend-mode p id 2)
+      (cmacs-vidstudio-set-transition p id 0 12 0)
+      (cmacs-vidstudio-add-keyframe p id 3 0 1.0)
+      (cmacs-vidstudio-add-keyframe p id 3 30 2.0))
+    (cmacs-vidstudio-add-text-clip p 0 "Hi" 30 255 255 255 255)
+    (let* ((s1 (cmacs-vidstudio-serialize p))
+           (data (car (read-from-string s1)))
+           (p2 (cmacs-vidstudio--build-from-sexp data))
+           (s2 (cmacs-vidstudio-serialize p2)))
+      (unwind-protect
+          (should (string= s1 s2))
+        (cmacs-vidstudio-free p2)))))
+
 (provide 'cmacs-vidstudio-tests)
 ;;; cmacs-vidstudio-tests.el ends here
