@@ -426,5 +426,20 @@ itself instead of drawing a dot at the press position."
       (cmacs-imgedit-free h)
       (delete-file gif))))
 
+(ert-deftest cmacs-imgedit-tests-extended-blends ()
+  "Screen lightens and multiply darkens two equal-grey layers."
+  (skip-unless (fboundp 'cmacs-imgedit-set-layer-blend))
+  (let ((h (cmacs-imgedit-new 4 4)))
+    (unwind-protect
+        (progn
+          (cmacs-imgedit-fill h 100 100 100 255)
+          (cmacs-imgedit-add-layer h "top")
+          (cmacs-imgedit-fill h 100 100 100 255)
+          (cmacs-imgedit-set-layer-blend h 1 5) ; screen
+          (should (> (nth 0 (cmacs-imgedit-pixel-at h 2 2)) 100))
+          (cmacs-imgedit-set-layer-blend h 1 3) ; multiply
+          (should (< (nth 0 (cmacs-imgedit-pixel-at h 2 2)) 100)))
+      (cmacs-imgedit-free h))))
+
 (provide 'cmacs-imgedit-tests)
 ;;; cmacs-imgedit-tests.el ends here

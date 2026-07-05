@@ -1372,8 +1372,11 @@ GTK clipboard (any compositor / X11), then `wl-paste'."
     (cmacs-imgedit--render)))
 
 (defconst cmacs-imgedit--blend-modes
-  '(("Replace" . 0) ("Over" . 1) ("Add" . 2) ("Multiply" . 3) ("Subtract" . 4))
-  "Blend-mode names to `GrlImageBlendMode' ints.")
+  '(("Replace" . 0) ("Normal" . 1) ("Add" . 2) ("Multiply" . 3)
+    ("Subtract" . 4) ("Screen" . 5) ("Overlay" . 6) ("Soft light" . 7)
+    ("Color dodge" . 8) ("Color burn" . 9))
+  "Layer blend-mode names to codes (0-4 GrlImageBlendMode; 5-9 extended
+Photoshop modes implemented in the document compositor).")
 
 (defun cmacs-imgedit-set-layer-blend-mode (mode)
   "Set the active layer's blend MODE (completing-read)."

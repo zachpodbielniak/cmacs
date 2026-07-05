@@ -117,7 +117,8 @@ flips apply to the whole document.
   ~cmacs-imgedit-export-gif~, DELAY centiseconds/frame) --- a quick way to turn
   a layered sprite into a looping animation.
 - *Layer* (right-click → Layer): Duplicate, Rename, Move up/down, Blend mode
-  (Replace/Over/Add/Multiply/Subtract), Toggle lock.  A *locked* layer refuses
+  (Replace/Normal/Add/Multiply/Subtract + the extended Photoshop modes
+  Screen/Overlay/Soft-light/Color-dodge/Color-burn), Toggle lock.  A *locked* layer refuses
   edits until unlocked (~cmacs-imgedit-set-layer-locked~ /
   ~cmacs-imgedit-layer-locked-p~); the model reorder/rename/duplicate/blend
   DEFUNs (~cmacs-imgedit-move-layer~, ~-set-layer-name~, ~-duplicate-layer~,
