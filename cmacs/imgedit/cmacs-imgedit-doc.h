@@ -130,6 +130,19 @@ extern void cmacs_imgedit_doc_gradient (CmacsImgeditDoc *d, gboolean radial,
                                         guint8 ar, guint8 ag, guint8 ab,
                                         guint8 aa, guint8 br, guint8 bg,
                                         guint8 bb, guint8 ba);
+/* Selection (mask-based) + selection-constrained ops. */
+extern void cmacs_imgedit_doc_select_none (CmacsImgeditDoc *d);
+extern void cmacs_imgedit_doc_select_all (CmacsImgeditDoc *d);
+extern void cmacs_imgedit_doc_select_rect (CmacsImgeditDoc *d, int x, int y,
+                                           int w, int h);
+extern void cmacs_imgedit_doc_select_wand (CmacsImgeditDoc *d, int x, int y,
+                                           int tolerance);
+extern void cmacs_imgedit_doc_select_invert (CmacsImgeditDoc *d);
+extern gboolean cmacs_imgedit_doc_selection_bbox (CmacsImgeditDoc *d, int *x,
+                                                  int *y, int *w, int *h);
+extern void cmacs_imgedit_doc_selection_fill (CmacsImgeditDoc *d, guint8 r,
+                                              guint8 g, guint8 b, guint8 a);
+extern void cmacs_imgedit_doc_selection_crop (CmacsImgeditDoc *d);
 /* Export the layer stack as an animated GIF (each layer = one frame). */
 extern gboolean cmacs_imgedit_doc_export_gif (CmacsImgeditDoc *d,
                                               const char *path, int delay_cs,

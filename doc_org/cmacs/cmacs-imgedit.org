@@ -112,6 +112,13 @@ flips apply to the whole document.
   points as ~(X . Y)~ conses) and SVG import (~cmacs-imgedit-import-svg-file~ /
   model ~cmacs-imgedit-import-svg~ renders an SVG file onto the active layer at
   a given DPI).
+- *Select* (right-click → Select): a mask-based selection --- rectangular
+  (~cmacs-imgedit-select-rect~), *magic wand* (~cmacs-imgedit-select-wand~ /
+  the ~Wand~ tool, flood-select within a tolerance), select-all / deselect /
+  invert.  Selection-constrained ops: *Fill selection*, *Delete selection*
+  (clear to transparent), and *Crop to selection*
+  (~cmacs-imgedit-selection-fill/crop~).  The selection bbox shows as a
+  viewport marquee.
 - *Animation*: right-click → Edit → *Export GIF (layers)…* renders each layer
   as one frame of an animated GIF (~cmacs-imgedit-export-gif-file~ / model
   ~cmacs-imgedit-export-gif~, DELAY centiseconds/frame) --- a quick way to turn

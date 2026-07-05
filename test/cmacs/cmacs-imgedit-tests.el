@@ -441,5 +441,25 @@ itself instead of drawing a dot at the press position."
           (should (< (nth 0 (cmacs-imgedit-pixel-at h 2 2)) 100)))
       (cmacs-imgedit-free h))))
 
+(ert-deftest cmacs-imgedit-tests-selection ()
+  "Magic-wand select, constrained fill, and crop-to-selection."
+  (skip-unless (fboundp 'cmacs-imgedit-select-wand))
+  (let ((h (cmacs-imgedit-new 8 8)))
+    (unwind-protect
+        (progn
+          (cmacs-imgedit-fill h 255 0 0 255)             ; all red
+          (cmacs-imgedit-set-color h 0 0 255 255)
+          (cmacs-imgedit-draw-rect h 4 0 4 8 t 1)        ; right half blue
+          (cmacs-imgedit-select-wand h 0 0 10)           ; select red half
+          (should (equal (cmacs-imgedit-selection-bbox h) '(0 0 4 8)))
+          (cmacs-imgedit-selection-fill h 0 255 0 255)   ; fill selection green
+          (should (equal (cmacs-imgedit-pixel-at h 1 4) '(0 255 0 255)))
+          (should (equal (cmacs-imgedit-pixel-at h 6 4) '(0 0 255 255)))
+          (cmacs-imgedit-select-rect h 2 2 3 3)
+          (cmacs-imgedit-selection-crop h)
+          (should (= (cmacs-imgedit-width h) 3))
+          (should (= (cmacs-imgedit-height h) 3)))
+      (cmacs-imgedit-free h))))
+
 (provide 'cmacs-imgedit-tests)
 ;;; cmacs-imgedit-tests.el ends here

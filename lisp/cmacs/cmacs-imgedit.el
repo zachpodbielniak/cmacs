@@ -89,7 +89,7 @@ libregnum backend are available; nil falls back to the insert-image path.")
     (ellipse    . "Ellipse")
     (text       . "Text")
     (fill       . "Bucket")
-    (eyedropper . "Pick"))
+    (eyedropper . "Pick") (wand . "Wand"))
   "Tools and their display labels.")
 
 (defcustom cmacs-imgedit-text-size 16
@@ -467,6 +467,9 @@ headless / no-GL, where the native insert-image path is used instead."
     (when cmacs-imgedit--handle
       (cmacs-imgedit--apply-color)
       (pcase cmacs-imgedit--tool
+        ('wand
+         (cmacs-imgedit-select-wand cmacs-imgedit--handle dx dy 24)
+         (cmacs-imgedit--update-marquee) (cmacs-imgedit--vp-refresh))
         ('fill
          (cmacs-imgedit-push-undo cmacs-imgedit--handle)
          (apply #'cmacs-imgedit-flood-fill cmacs-imgedit--handle dx dy
@@ -1388,6 +1391,59 @@ Photoshop modes implemented in the document compositor).")
                                  mode)
   (cmacs-imgedit--render))
 
+(defun cmacs-imgedit--update-marquee ()
+  "Show the selection bbox as a viewport marquee (live mode)."
+  (when cmacs-imgedit--live
+    (let ((bb (cmacs-imgedit-selection-bbox cmacs-imgedit--handle)))
+      (ignore-errors
+        (if bb
+            (apply #'cmacs-libregnum-image-set-marquee (current-buffer) t bb)
+          (cmacs-libregnum-image-set-marquee (current-buffer) nil))))))
+
+(defun cmacs-imgedit-select-all-cmd ()
+  "Select the whole canvas."
+  (interactive)
+  (cmacs-imgedit-select-all cmacs-imgedit--handle)
+  (cmacs-imgedit--update-marquee) (cmacs-imgedit--render))
+
+(defun cmacs-imgedit-deselect ()
+  "Clear the selection."
+  (interactive)
+  (cmacs-imgedit-select-none cmacs-imgedit--handle)
+  (cmacs-imgedit--update-marquee) (cmacs-imgedit--render))
+
+(defun cmacs-imgedit-invert-selection ()
+  "Invert the selection."
+  (interactive)
+  (cmacs-imgedit-select-invert cmacs-imgedit--handle)
+  (cmacs-imgedit--update-marquee) (cmacs-imgedit--render))
+
+(defun cmacs-imgedit-fill-selection ()
+  "Fill the selection (or whole layer) with the foreground colour."
+  (interactive)
+  (cmacs-imgedit--with-edit
+   (apply #'cmacs-imgedit-selection-fill cmacs-imgedit--handle
+          cmacs-imgedit--color)))
+
+(defun cmacs-imgedit-delete-selection ()
+  "Clear the selected pixels (make them transparent)."
+  (interactive)
+  (cmacs-imgedit--with-edit
+   (cmacs-imgedit-selection-fill cmacs-imgedit--handle 0 0 0 0)))
+
+(defun cmacs-imgedit-crop-to-selection ()
+  "Crop the document to the selection bounding box."
+  (interactive)
+  (cmacs-imgedit--with-edit
+   (cmacs-imgedit-selection-crop cmacs-imgedit--handle))
+  (cmacs-imgedit--update-marquee) (cmacs-imgedit--maybe-refit))
+
+(defun cmacs-imgedit-magic-wand-select (x y)
+  "Magic-wand select the region at doc pixel (X Y)."
+  (interactive (list (read-number "X: ") (read-number "Y: ")))
+  (cmacs-imgedit-select-wand cmacs-imgedit--handle x y 24)
+  (cmacs-imgedit--update-marquee) (cmacs-imgedit--render))
+
 (defun cmacs-imgedit--menu ()
   "Return the image-editor context-menu alist (shared by native + viewport)."
   '("Image editor"
@@ -1445,6 +1501,14 @@ Photoshop modes implemented in the document compositor).")
              ("Gradient fill…" . cmacs-imgedit-gradient-fill)
              ("Bézier curve…" . cmacs-imgedit-draw-bezier-cmd)
              ("Import SVG…" . cmacs-imgedit-import-svg-file))
+            ("Select"
+             ("Magic wand…" . cmacs-imgedit-magic-wand-select)
+             ("Select all" . cmacs-imgedit-select-all-cmd)
+             ("Deselect" . cmacs-imgedit-deselect)
+             ("Invert" . cmacs-imgedit-invert-selection)
+             ("Fill selection" . cmacs-imgedit-fill-selection)
+             ("Delete selection" . cmacs-imgedit-delete-selection)
+             ("Crop to selection" . cmacs-imgedit-crop-to-selection))
             ("Clipboard"
              ("Copy image" . cmacs-imgedit-copy-to-clipboard)
              ("Paste image" . cmacs-imgedit-paste-from-clipboard)

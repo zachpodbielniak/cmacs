@@ -20,6 +20,8 @@ struct CmacsImgeditDoc
   LrgImageDocument *doc;
   GrlImageBlendMode draw_blend;  /* blend mode for canvas drawing tools */
   GrlColor          draw_color;  /* current colour for the shape tools */
+  guint8           *sel;         /* w*h selection mask (255=in), or NULL */
+  int               sel_w, sel_h;
 };
 
 CmacsImgeditDoc *
@@ -66,6 +68,7 @@ cmacs_imgedit_doc_free (CmacsImgeditDoc *d)
   if (d == NULL)
     return;
   g_clear_object (&d->doc);
+  g_clear_pointer (&d->sel, g_free);
   g_free (d);
 }
 
@@ -625,6 +628,157 @@ void
 cmacs_imgedit_doc_rotate (CmacsImgeditDoc *d, gboolean clockwise)
 {
   if (d) lrg_image_document_rotate (d->doc, clockwise);
+}
+
+/* ── Selection (rectangular, magic-wand) + selection-constrained ops ─────
+ * The selection is a doc-sized mask (255 = selected).  Fill/clear/crop honour
+ * it; the viewport shows its bounding box as a marquee. */
+
+static void
+sel_ensure (CmacsImgeditDoc *d)
+{
+  int w = lrg_image_document_get_width (d->doc);
+  int h = lrg_image_document_get_height (d->doc);
+  if (d->sel != NULL && (d->sel_w != w || d->sel_h != h))
+    g_clear_pointer (&d->sel, g_free);
+  if (d->sel == NULL)
+    { d->sel = g_malloc0 ((gsize) w * h); d->sel_w = w; d->sel_h = h; }
+}
+
+void
+cmacs_imgedit_doc_select_none (CmacsImgeditDoc *d)
+{ if (d) g_clear_pointer (&d->sel, g_free); }
+
+void
+cmacs_imgedit_doc_select_all (CmacsImgeditDoc *d)
+{
+  if (!d) return;
+  sel_ensure (d);
+  memset (d->sel, 255, (gsize) d->sel_w * d->sel_h);
+}
+
+void
+cmacs_imgedit_doc_select_rect (CmacsImgeditDoc *d, int x, int y, int w, int h)
+{
+  int yy, xx;
+  if (!d) return;
+  sel_ensure (d);
+  memset (d->sel, 0, (gsize) d->sel_w * d->sel_h);
+  for (yy = MAX (0, y); yy < MIN (d->sel_h, y + h); yy++)
+    for (xx = MAX (0, x); xx < MIN (d->sel_w, x + w); xx++)
+      d->sel[(gsize) yy * d->sel_w + xx] = 255;
+}
+
+void
+cmacs_imgedit_doc_select_invert (CmacsImgeditDoc *d)
+{
+  gsize i, n;
+  if (!d) return;
+  sel_ensure (d);
+  n = (gsize) d->sel_w * d->sel_h;
+  for (i = 0; i < n; i++)
+    d->sel[i] = 255 - d->sel[i];
+}
+
+/* Magic-wand: flood-select from (X,Y) on the flattened image within TOLERANCE. */
+void
+cmacs_imgedit_doc_select_wand (CmacsImgeditDoc *d, int x, int y, int tolerance)
+{
+  GrlImage *flat;
+  const guint8 *px;
+  gsize n = 0;
+  int w, h;
+  guint8 tr, tg, tb, ta;
+  int *stack, sp = 0;
+
+  if (!d) return;
+  sel_ensure (d);
+  memset (d->sel, 0, (gsize) d->sel_w * d->sel_h);
+  flat = lrg_image_document_flatten (d->doc);
+  if (flat == NULL) return;
+  px = grl_image_get_pixels (flat, &n);
+  w = grl_image_get_width (flat);
+  h = grl_image_get_height (flat);
+  if (px == NULL || x < 0 || y < 0 || x >= w || y >= h)
+    return;
+  { gsize s0 = ((gsize) y * w + x) * 4;
+    tr = px[s0]; tg = px[s0 + 1]; tb = px[s0 + 2]; ta = px[s0 + 3]; }
+  stack = g_new (int, (gsize) w * h);
+  stack[sp++] = y * w + x;
+  while (sp > 0)
+    {
+      int idx = stack[--sp], cx = idx % w, cy = idx / w;
+      gsize pi = (gsize) idx * 4;
+      int dr, dg, db, da;
+      if (d->sel[idx]) continue;
+      dr = ABS ((int) px[pi] - tr); dg = ABS ((int) px[pi + 1] - tg);
+      db = ABS ((int) px[pi + 2] - tb); da = ABS ((int) px[pi + 3] - ta);
+      if (dr > tolerance || dg > tolerance || db > tolerance || da > tolerance)
+        continue;
+      d->sel[idx] = 255;
+      if (cx > 0)     stack[sp++] = idx - 1;
+      if (cx < w - 1) stack[sp++] = idx + 1;
+      if (cy > 0)     stack[sp++] = idx - w;
+      if (cy < h - 1) stack[sp++] = idx + w;
+    }
+  g_free (stack);
+}
+
+gboolean
+cmacs_imgedit_doc_selection_bbox (CmacsImgeditDoc *d, int *x, int *y,
+                                  int *w, int *h)
+{
+  int minx, miny, maxx, maxy, xx, yy;
+  gboolean any = FALSE;
+  if (!d || !d->sel) return FALSE;
+  minx = d->sel_w; miny = d->sel_h; maxx = -1; maxy = -1;
+  for (yy = 0; yy < d->sel_h; yy++)
+    for (xx = 0; xx < d->sel_w; xx++)
+      if (d->sel[(gsize) yy * d->sel_w + xx])
+        { any = TRUE;
+          minx = MIN (minx, xx); miny = MIN (miny, yy);
+          maxx = MAX (maxx, xx); maxy = MAX (maxy, yy); }
+  if (!any) return FALSE;
+  if (x) *x = minx; if (y) *y = miny;
+  if (w) *w = maxx - minx + 1; if (h) *h = maxy - miny + 1;
+  return TRUE;
+}
+
+/* Fill (or, with a==0 r==g==b==0, clear) the active layer inside the
+   selection.  With no selection, affects the whole layer. */
+void
+cmacs_imgedit_doc_selection_fill (CmacsImgeditDoc *d,
+                                  guint8 r, guint8 g, guint8 b, guint8 a)
+{
+  GrlImage *img = editable_image (d);
+  guint8 *p;
+  gsize np = 0, i;
+  int w, h, x, y;
+  if (img == NULL) return;
+  p = grl_image_get_pixels (img, &np);
+  w = grl_image_get_width (img);
+  h = grl_image_get_height (img);
+  if (p == NULL) return;
+  for (y = 0; y < h; y++)
+    for (x = 0; x < w; x++)
+      {
+        if (d->sel != NULL && x < d->sel_w && y < d->sel_h
+            && d->sel[(gsize) y * d->sel_w + x] == 0)
+          continue;
+        i = ((gsize) y * w + x) * 4;
+        p[i] = r; p[i + 1] = g; p[i + 2] = b; p[i + 3] = a;
+      }
+  lrg_image_document_mark_dirty (d->doc);
+}
+
+void
+cmacs_imgedit_doc_selection_crop (CmacsImgeditDoc *d)
+{
+  int x, y, w, h;
+  if (!d) return;
+  if (cmacs_imgedit_doc_selection_bbox (d, &x, &y, &w, &h))
+    { cmacs_imgedit_doc_crop (d, x, y, w, h);
+      cmacs_imgedit_doc_select_none (d); }
 }
 
 /* Export the layer stack as an animated GIF: each layer is one frame, shown

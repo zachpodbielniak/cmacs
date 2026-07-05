@@ -813,6 +813,71 @@ DEFUN ("cmacs-imgedit-noise", Fcmacs_imgedit_noise, Scmacs_imgedit_noise,
   return Qnil;
 }
 
+DEFUN ("cmacs-imgedit-select-rect", Fcmacs_imgedit_select_rect,
+       Scmacs_imgedit_select_rect, 5, 5, 0,
+       doc: /* Select the rectangle X Y WIDTH HEIGHT.  */)
+  (Lisp_Object handle, Lisp_Object x, Lisp_Object y, Lisp_Object w,
+   Lisp_Object h)
+{
+  cmacs_imgedit_doc_select_rect (ie_lookup (handle), ie_int (x, 0),
+                                 ie_int (y, 0), ie_int (w, 0), ie_int (h, 0));
+  return Qnil;
+}
+
+DEFUN ("cmacs-imgedit-select-wand", Fcmacs_imgedit_select_wand,
+       Scmacs_imgedit_select_wand, 3, 4, 0,
+       doc: /* Magic-wand select from X,Y within TOLERANCE (default 24).  */)
+  (Lisp_Object handle, Lisp_Object x, Lisp_Object y, Lisp_Object tolerance)
+{
+  cmacs_imgedit_doc_select_wand (ie_lookup (handle), ie_int (x, 0),
+                                 ie_int (y, 0), ie_int (tolerance, 24));
+  return Qnil;
+}
+
+DEFUN ("cmacs-imgedit-select-none", Fcmacs_imgedit_select_none,
+       Scmacs_imgedit_select_none, 1, 1, 0, doc: /* Clear the selection.  */)
+  (Lisp_Object handle)
+{ cmacs_imgedit_doc_select_none (ie_lookup (handle)); return Qnil; }
+
+DEFUN ("cmacs-imgedit-select-all", Fcmacs_imgedit_select_all,
+       Scmacs_imgedit_select_all, 1, 1, 0, doc: /* Select the whole canvas.  */)
+  (Lisp_Object handle)
+{ cmacs_imgedit_doc_select_all (ie_lookup (handle)); return Qnil; }
+
+DEFUN ("cmacs-imgedit-select-invert", Fcmacs_imgedit_select_invert,
+       Scmacs_imgedit_select_invert, 1, 1, 0, doc: /* Invert the selection.  */)
+  (Lisp_Object handle)
+{ cmacs_imgedit_doc_select_invert (ie_lookup (handle)); return Qnil; }
+
+DEFUN ("cmacs-imgedit-selection-bbox", Fcmacs_imgedit_selection_bbox,
+       Scmacs_imgedit_selection_bbox, 1, 1, 0,
+       doc: /* Return the selection bounding box (X Y W H), or nil.  */)
+  (Lisp_Object handle)
+{
+  int x = 0, y = 0, w = 0, h = 0;
+  if (!cmacs_imgedit_doc_selection_bbox (ie_lookup (handle), &x, &y, &w, &h))
+    return Qnil;
+  return list4 (make_fixnum (x), make_fixnum (y), make_fixnum (w),
+                make_fixnum (h));
+}
+
+DEFUN ("cmacs-imgedit-selection-fill", Fcmacs_imgedit_selection_fill,
+       Scmacs_imgedit_selection_fill, 5, 5, 0,
+       doc: /* Fill the selection (or whole layer) with R G B A.  */)
+  (Lisp_Object handle, Lisp_Object r, Lisp_Object g, Lisp_Object b,
+   Lisp_Object a)
+{
+  cmacs_imgedit_doc_selection_fill (ie_lookup (handle), ie_clamp8 (r),
+                                    ie_clamp8 (g), ie_clamp8 (b), ie_clamp8 (a));
+  return Qnil;
+}
+
+DEFUN ("cmacs-imgedit-selection-crop", Fcmacs_imgedit_selection_crop,
+       Scmacs_imgedit_selection_crop, 1, 1, 0,
+       doc: /* Crop the document to the selection bounding box.  */)
+  (Lisp_Object handle)
+{ cmacs_imgedit_doc_selection_crop (ie_lookup (handle)); return Qnil; }
+
 DEFUN ("cmacs-imgedit-export-gif", Fcmacs_imgedit_export_gif,
        Scmacs_imgedit_export_gif, 2, 3, 0,
        doc: /* Export HANDLE's layers as an animated GIF to PATH.
@@ -1032,6 +1097,14 @@ syms_of_cmacs_imgedit_defuns (void)
   defsubr (&Scmacs_imgedit_blur);
   defsubr (&Scmacs_imgedit_bloom);
   defsubr (&Scmacs_imgedit_noise);
+  defsubr (&Scmacs_imgedit_select_rect);
+  defsubr (&Scmacs_imgedit_select_wand);
+  defsubr (&Scmacs_imgedit_select_none);
+  defsubr (&Scmacs_imgedit_select_all);
+  defsubr (&Scmacs_imgedit_select_invert);
+  defsubr (&Scmacs_imgedit_selection_bbox);
+  defsubr (&Scmacs_imgedit_selection_fill);
+  defsubr (&Scmacs_imgedit_selection_crop);
   defsubr (&Scmacs_imgedit_export_gif);
   defsubr (&Scmacs_imgedit_bezier);
   defsubr (&Scmacs_imgedit_import_svg);
