@@ -398,5 +398,25 @@ flips once the decode lands and real frames replace the placeholder."
                 (cmacs-vidstudio-free h2)))))
       (delete-file mp4))))
 
+(ert-deftest cmacs-vidstudio-tests-frame-cache ()
+  "The playback frame cache returns rendered PPM and reuses it on a hit."
+  (cmacs-vidstudio-tests--skip-unless)
+  (skip-unless (fboundp 'cmacs-vidstudio-render-ppm))
+  (with-temp-buffer
+    (setq cmacs-vidstudio--handle (cmacs-vidstudio-new 64 48 30.0)
+          cmacs-vidstudio--preview-scale 0.5)
+    (unwind-protect
+        (progn
+          (cmacs-vidstudio-add-solid-clip cmacs-vidstudio--handle 0 30
+                                          200 50 50 255)
+          (let ((fresh (cmacs-vidstudio--cache-ppm 5)))
+            (should (> (length fresh) 0))
+            (setq cmacs-vidstudio--frame-cache (make-hash-table :test 'eq))
+            (let ((miss (cmacs-vidstudio--cache-ppm 5))    ; render + cache
+                  (hit (cmacs-vidstudio--cache-ppm 5)))    ; same object
+              (should (eq miss hit))
+              (should (equal miss fresh)))))
+      (cmacs-vidstudio-free cmacs-vidstudio--handle))))
+
 (provide 'cmacs-vidstudio-tests)
 ;;; cmacs-vidstudio-tests.el ends here

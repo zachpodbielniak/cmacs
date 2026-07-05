@@ -60,6 +60,17 @@ available; nil falls back to the PPM/PNG insert-image preview.")
 playback); the full-resolution frame is rendered when playback pauses.
 1.0 disables the proxy."
   :type 'number)
+(defcustom cmacs-vidstudio-prefetch-frames 16
+  "How many frames ahead of the playhead to pre-render during playback.
+A background idle timer renders these into a frame cache so the play
+timer displays a ready frame instead of rendering synchronously."
+  :type 'integer)
+(defvar-local cmacs-vidstudio--frame-cache nil
+  "Hash of FRAME -> pre-rendered PPM string during playback, or nil.
+Live only between play and pause (playback is read-only), so it never
+goes stale against an edit.")
+(defvar-local cmacs-vidstudio--prefetch-timer nil
+  "Idle timer that fills `cmacs-vidstudio--frame-cache' ahead of the playhead.")
 (defvar-local cmacs-vidstudio--paused-scale nil
   "The preview scale to restore when playback stops.")
 (defvar-local cmacs-vidstudio--decode-timer nil
@@ -170,6 +181,56 @@ A position `keymap' property outranks Evil state maps and
             (ignore-errors (cmacs-libregnum-redraw (current-buffer))))
         (cmacs-vidstudio--render-native total)))))
 
+(defun cmacs-vidstudio--preview-width ()
+  "Preview render width in pixels at the current preview scale."
+  (max 64 (floor (* (cmacs-vidstudio-width cmacs-vidstudio--handle)
+                    cmacs-vidstudio--preview-scale))))
+
+(defun cmacs-vidstudio--cache-ppm (frame)
+  "PPM bytes for FRAME: from the playback cache if present, else render (and
+cache when a playback cache is active)."
+  (or (and cmacs-vidstudio--frame-cache
+           (gethash frame cmacs-vidstudio--frame-cache))
+      (let ((ppm (cmacs-vidstudio-render-ppm
+                  cmacs-vidstudio--handle frame (cmacs-vidstudio--preview-width))))
+        (when cmacs-vidstudio--frame-cache
+          (puthash frame ppm cmacs-vidstudio--frame-cache))
+        ppm)))
+
+(defun cmacs-vidstudio--prefetch-tick ()
+  "Pre-render a few upcoming uncached frames; evict frames behind the playhead."
+  (when (and cmacs-vidstudio--frame-cache cmacs-vidstudio--play-timer
+             (fboundp 'cmacs-vidstudio-render-ppm)
+             (not (input-pending-p)))
+    (let ((total (cmacs-vidstudio-total-frames cmacs-vidstudio--handle))
+          (done 0))
+      (cl-loop for f from cmacs-vidstudio--playhead
+               below (min total (+ cmacs-vidstudio--playhead
+                                   cmacs-vidstudio-prefetch-frames))
+               while (and (< done 3) (not (input-pending-p)))
+               unless (gethash f cmacs-vidstudio--frame-cache)
+               do (cmacs-vidstudio--cache-ppm f) (setq done (1+ done)))
+      ;; Bound memory: drop frames well behind the playhead.
+      (maphash (lambda (k _v)
+                 (when (< k (- cmacs-vidstudio--playhead 2))
+                   (remhash k cmacs-vidstudio--frame-cache)))
+               cmacs-vidstudio--frame-cache))))
+
+(defun cmacs-vidstudio--cache-start ()
+  "Begin a fresh playback frame cache + background prefetch."
+  (setq cmacs-vidstudio--frame-cache (make-hash-table :test 'eq))
+  (when (timerp cmacs-vidstudio--prefetch-timer)
+    (cancel-timer cmacs-vidstudio--prefetch-timer))
+  (setq cmacs-vidstudio--prefetch-timer
+        (run-with-idle-timer 0.02 t #'cmacs-vidstudio--prefetch-tick)))
+
+(defun cmacs-vidstudio--cache-stop ()
+  "Tear down the playback frame cache + prefetch."
+  (when (timerp cmacs-vidstudio--prefetch-timer)
+    (cancel-timer cmacs-vidstudio--prefetch-timer))
+  (setq cmacs-vidstudio--prefetch-timer nil
+        cmacs-vidstudio--frame-cache nil))
+
 (defun cmacs-vidstudio--render-native (total)
   "Native insert-image preview + textual timeline (TOTAL frames)."
   (let ((inhibit-read-only t))
@@ -182,11 +243,9 @@ A position `keymap' property outranks Evil state maps and
               (let ((image
                      (if (fboundp 'cmacs-vidstudio-render-ppm)
                          (create-image
-                          (cmacs-vidstudio-render-ppm
-                           cmacs-vidstudio--handle cmacs-vidstudio--playhead
-                           (max 64 (floor (* (cmacs-vidstudio-width
-                                              cmacs-vidstudio--handle)
-                                             cmacs-vidstudio--preview-scale))))
+                          ;; Through the playback frame cache: a hit is
+                          ;; instant, a miss renders (and caches, if playing).
+                          (cmacs-vidstudio--cache-ppm cmacs-vidstudio--playhead)
                           'pbm t :scale 1 :ascent 'center)
                        (create-image     ; old binary: PNG fallback
                         (cmacs-vidstudio-render-png cmacs-vidstudio--handle
@@ -718,11 +777,12 @@ immediately and the preview pops in when the decode finishes."
   (when cmacs-vidstudio--play-timer
     (cancel-timer cmacs-vidstudio--play-timer)
     (setq cmacs-vidstudio--play-timer nil)
+    (cmacs-vidstudio--cache-stop)         ; drop the playback frame cache
     ;; restore the full-res preview and repaint the current frame crisply
     (when cmacs-vidstudio--paused-scale
       (setq cmacs-vidstudio--preview-scale cmacs-vidstudio--paused-scale
-            cmacs-vidstudio--paused-scale nil)
-      (cmacs-vidstudio--render))))
+            cmacs-vidstudio--paused-scale nil))
+    (cmacs-vidstudio--render)))
 
 (defun cmacs-vidstudio-play ()
   "Play from the playhead (toggles with pause).
@@ -748,6 +808,9 @@ silently updates.  Starting play at the end of the timeline rewinds."
       (unless (>= cmacs-vidstudio-playback-scale 1.0)
         (setq cmacs-vidstudio--paused-scale cmacs-vidstudio--preview-scale
               cmacs-vidstudio--preview-scale cmacs-vidstudio-playback-scale))
+      ;; Background frame cache: prefetch upcoming frames so the play tick
+      ;; displays a ready frame instead of rendering synchronously.
+      (cmacs-vidstudio--cache-start)
       (let ((buf (current-buffer))
             (fps (max 1.0 (cmacs-vidstudio-fps cmacs-vidstudio--handle)))
             (start-frame cmacs-vidstudio--playhead)
@@ -1037,6 +1100,7 @@ Sets `cmacs-vidstudio--live'; leaves it nil (native path) on failure."
 
 (defun cmacs-vidstudio--cleanup ()
   "Stop playback and free the project when the buffer dies."
+  (cmacs-vidstudio--cache-stop)
   (when cmacs-vidstudio--play-timer
     (cancel-timer cmacs-vidstudio--play-timer))
   (when cmacs-vidstudio--decode-timer
