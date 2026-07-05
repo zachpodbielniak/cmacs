@@ -740,10 +740,11 @@ cmacs_imgedit_doc_palette (CmacsImgeditDoc *d, int max_colors, guint8 *out_rgb)
   return nc;
 }
 
-/* Export the flattened doc as a PNG quantized to a MAX_COLORS median-cut
-   palette (Floyd–Steinberg dithered).  We map to the palette ourselves and
-   write a normal PNG rather than routing through graylib's indexed-PNG rpng
-   path (which is unreliable); the result is a colour-reduced sprite image. */
+/* Export the flattened doc quantized to a MAX_COLORS median-cut palette
+   (Floyd–Steinberg dithered).  We map to the palette ourselves and write a
+   normal (24-bit) PNG: graylib's true PNG-8 writer (rpng_save_image_indexed)
+   is broken beyond a NULL-deref, so a colour-reduced RGBA PNG is the robust
+   result -- same palette, standard container. */
 gboolean
 cmacs_imgedit_doc_export_indexed_png (CmacsImgeditDoc *d, const char *path,
                                      int max_colors, char **error_msg)
