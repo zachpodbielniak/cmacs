@@ -19,6 +19,7 @@
 
 (require 'cl-lib)
 (require 'cmacs-libregnum)  ; for cmacs-libregnum-popup-menu (GTK vs --lrg routing)
+(require 'transient)        ; `?' -> keybinding cheat-sheet menu
 
 (defgroup cmacs-vidstudio nil
   "Reel-based video editor."
@@ -1015,6 +1016,34 @@ in-engine libregnum menu under --lrg)."
 ;; Mode
 ;; --------------------------------------------------------------------------
 
+(transient-define-prefix cmacs-vidstudio-help ()
+  "Keybinding cheat-sheet for `cmacs-vidstudio-mode'.
+Press a key to run its command, or q / C-g to dismiss."
+  [:description "cmacs-vidstudio — video editor  (right-click for the full menu)"
+   ["Add"
+    ("i" "Import clip…" cmacs-vidstudio-import)
+    ("C" "Colour clip…" cmacs-vidstudio-add-color)
+    ("T" "Title…" cmacs-vidstudio-add-title)
+    ("n" "New track" cmacs-vidstudio-add-track-cmd)]
+   ["Timeline"
+    ("a" "Active track…" cmacs-vidstudio-set-active-track)
+    ("t" "Transition…" cmacs-vidstudio-add-transition-cmd)
+    ("e" "Effect…" cmacs-vidstudio-add-effect-cmd)
+    ("s" "Split at playhead" cmacs-vidstudio-split-at-playhead)
+    ("g" "Go to frame…" cmacs-vidstudio-set-playhead-cmd)
+    ("k" "Keyframe…" cmacs-vidstudio-add-keyframe-cmd)]
+   ["Audio"
+    ("A" "Add audio…" cmacs-vidstudio-add-audio)
+    ("V" "Audio gain…" cmacs-vidstudio-set-audio-gain)]]
+  [["Transport"
+    ("p" "Play / pause  (or SPC)" cmacs-vidstudio-play)
+    ("<right>" "Step forward" cmacs-vidstudio-step-forward)
+    ("<left>" "Step back" cmacs-vidstudio-step-back)]
+   ["Project"
+    ("w" "Save  (C-x C-s)" cmacs-vidstudio-save)
+    ("E" "Export video…" cmacs-vidstudio-export-video-cmd)
+    ("G" "Export GIF…" cmacs-vidstudio-export-gif-cmd)]])
+
 (defvar cmacs-vidstudio-mode-map (make-sparse-keymap)
   "Keymap for `cmacs-vidstudio-mode'.")
 
@@ -1042,6 +1071,7 @@ in-engine libregnum menu under --lrg)."
     (define-key map (kbd "V") #'cmacs-vidstudio-set-audio-gain)
     (define-key map (kbd "E") #'cmacs-vidstudio-export-video-cmd)
     (define-key map (kbd "G") #'cmacs-vidstudio-export-gif-cmd)
+    (define-key map (kbd "?") #'cmacs-vidstudio-help)
     (define-key map (kbd "<mouse-3>") #'cmacs-vidstudio-context-menu))
 
 (defun cmacs-vidstudio--viewport-available-p ()

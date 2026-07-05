@@ -304,3 +304,5 @@ The DEFUN translation unit includes =lisp.h= only; the bridge
 (=cmacs-imgedit-doc.c=) is the single imgedit TU that includes =<libregnum.h>=,
 mirroring the =cmacs-libregnum-render.h= split so raylib's =Color= typedef never
 collides with cmacs internals.
+
+- Press ~?~ in cmacs-imgedit-mode to pop a *transient keybinding menu* (a magit-style cheat-sheet grouped by category); press any listed key to run its command, or ~q~ / ~C-g~ to dismiss.  (the old ~?~ = list-layers moved to ~i~)

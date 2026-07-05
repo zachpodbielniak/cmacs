@@ -309,3 +309,5 @@ On every edit the project rebuilds its =LrgReel= from the per-track segment
 lists (each track → one =LrgReelTransitionSeries=), so insert / split / move /
 ripple are simple descriptor operations and the series recomputes frame layout.
 #+end_src
+
+- Press ~?~ in cmacs-vidstudio-mode to pop a *transient keybinding menu* (a magit-style cheat-sheet grouped by category); press any listed key to run its command, or ~q~ / ~C-g~ to dismiss.

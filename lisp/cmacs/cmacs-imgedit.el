@@ -20,6 +20,7 @@
 
 (require 'cl-lib)
 (require 'cmacs-libregnum)  ; for cmacs-libregnum-popup-menu (GTK vs --lrg routing)
+(require 'transient)        ; `?' -> keybinding cheat-sheet menu
 
 (defgroup cmacs-imgedit nil
   "2D image / sprite editor."
@@ -1622,6 +1623,47 @@ pgtk and the in-engine libregnum menu under the --lrg backend."
 ;; Mode
 ;; --------------------------------------------------------------------------
 
+(transient-define-prefix cmacs-imgedit-help ()
+  "Keybinding cheat-sheet for `cmacs-imgedit-mode'.
+Press a key to run its command, or q / C-g to dismiss."
+  [:description "cmacs-imgedit — image / sprite editor  (right-click for Adjust/Filter/Select/Sprite…)"
+   ["Tools"
+    ("b" "Brush" cmacs-imgedit-use-brush)
+    ("p" "Pencil" cmacs-imgedit-pencil)
+    ("l" "Line" cmacs-imgedit-use-line)
+    (">" "Arrow" cmacs-imgedit-use-arrow)
+    ("r" "Rectangle" cmacs-imgedit-use-rectangle)
+    ("c" "Circle" cmacs-imgedit-use-circle)
+    ("E" "Ellipse" cmacs-imgedit-use-ellipse)
+    ("t" "Text" cmacs-imgedit-use-text)
+    ("k" "Bucket" cmacs-imgedit-use-bucket)
+    ("e" "Eyedropper" cmacs-imgedit-use-eyedropper)
+    ("G" "Flood fill…" cmacs-imgedit-flood-fill-at)]
+   ["Brush / colour"
+    ("C" "Foreground colour…" cmacs-imgedit-set-foreground-color)
+    ("A" "Alpha…" cmacs-imgedit-set-alpha)
+    ("z" "Brush size…" cmacs-imgedit-set-brush-size)
+    ("T" "Text size…" cmacs-imgedit-set-text-size)
+    ("x" "Toggle shape fill" cmacs-imgedit-toggle-shape-fill)
+    ("f" "Fill layer" cmacs-imgedit-fill-layer)]]
+  [["Layers"
+    ("L" "Add layer…" cmacs-imgedit-add-layer-cmd)
+    ("K" "Remove layer" cmacs-imgedit-remove-active-layer)
+    ("a" "Select layer…" cmacs-imgedit-set-active-layer-cmd)
+    ("v" "Toggle visibility" cmacs-imgedit-toggle-layer-visible)
+    ("o" "Opacity…" cmacs-imgedit-set-layer-opacity-cmd)
+    ("i" "List layers" cmacs-imgedit-list-layers)]
+   ["Edit"
+    ("u" "Undo" cmacs-imgedit-undo-cmd)
+    ("U" "Redo" cmacs-imgedit-redo-cmd)
+    ("s" "Save…" cmacs-imgedit-save-cmd)
+    ("y" "Copy" cmacs-imgedit-copy-to-clipboard)
+    ("C-y" "Paste" cmacs-imgedit-paste-from-clipboard)
+    ("P" "Paste screenshot" cmacs-imgedit-paste-screenshot)]
+   ["View"
+    ("+" "Zoom in" cmacs-imgedit-zoom-in)
+    ("-" "Zoom out" cmacs-imgedit-zoom-out)]])
+
 (defvar cmacs-imgedit-mode-map (make-sparse-keymap)
   "Keymap for `cmacs-imgedit-mode'.")
 
@@ -1653,7 +1695,8 @@ pgtk and the in-engine libregnum menu under the --lrg backend."
     (define-key map (kbd "a") #'cmacs-imgedit-set-active-layer-cmd)
     (define-key map (kbd "v") #'cmacs-imgedit-toggle-layer-visible)
     (define-key map (kbd "o") #'cmacs-imgedit-set-layer-opacity-cmd)
-    (define-key map (kbd "?") #'cmacs-imgedit-list-layers)
+    (define-key map (kbd "i") #'cmacs-imgedit-list-layers)
+    (define-key map (kbd "?") #'cmacs-imgedit-help)
     (define-key map (kbd "u") #'cmacs-imgedit-undo-cmd)
     (define-key map (kbd "U") #'cmacs-imgedit-redo-cmd)
     (define-key map (kbd "C-/") #'cmacs-imgedit-undo-cmd)
