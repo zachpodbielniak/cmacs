@@ -228,6 +228,36 @@ vs_add (McpServer *server, const gchar *name, const gchar *desc,
   g_object_unref (tool);
 }
 
+static McpToolResult *
+handle_add_keyframe (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
+{
+  gint64 h = vs_int (a, "handle", 0), cid = vs_int (a, "clip_id", 0);
+  gint64 param = vs_int (a, "param", 0), easing = vs_int (a, "easing", 0);
+  gdouble frame = json_object_has_member (a, "frame")
+    ? json_object_get_double_member (a, "frame") : 0.0;
+  gdouble value = json_object_has_member (a, "value")
+    ? json_object_get_double_member (a, "value") : 0.0;
+  (void) s; (void) n; (void) u;
+  return vs_eval_result (g_strdup_printf
+    ("(cmacs-vidstudio-add-keyframe %" G_GINT64_FORMAT " %" G_GINT64_FORMAT
+     " %" G_GINT64_FORMAT " %g %g %" G_GINT64_FORMAT ")",
+     h, cid, param, frame, value, easing));
+}
+
+static McpToolResult *
+handle_add_audio (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
+{
+  gint64 h = vs_int (a, "handle", 0), from = vs_int (a, "from_frame", 0);
+  const gchar *path = json_object_get_string_member (a, "path");
+  gdouble vol = json_object_has_member (a, "volume")
+    ? json_object_get_double_member (a, "volume") : 1.0;
+  (void) s; (void) n; (void) u;
+  return vs_eval_result (g_strdup_printf
+    ("(cmacs-vidstudio-add-audio-file %" G_GINT64_FORMAT " %s %"
+     G_GINT64_FORMAT " %g)", h,
+     path ? g_strdup_printf ("\"%s\"", path) : "\"\"", from, vol));
+}
+
 void
 cmacs_mcp_tools_vidstudio_register (McpServer *server)
 {
@@ -276,6 +306,24 @@ cmacs_mcp_tools_vidstudio_register (McpServer *server)
     "\"handle\":{\"type\":\"integer\"},\"clip\":{\"type\":\"integer\"},"
     "\"type\":{\"type\":\"integer\"}},"
     "\"required\":[\"handle\",\"clip\",\"type\"]}", FALSE, handle_effect);
+
+  vs_add (server, "vidstudio_add_keyframe",
+    "Add a keyframe on CLIP_ID: PARAM (0 opacity,1 x,2 y,3 scale,4 rotation) "
+    "at FRAME (clip-relative) = VALUE, optional EASING.",
+    "{\"type\":\"object\",\"properties\":{"
+    "\"handle\":{\"type\":\"integer\"},\"clip_id\":{\"type\":\"integer\"},"
+    "\"param\":{\"type\":\"integer\"},\"frame\":{\"type\":\"number\"},"
+    "\"value\":{\"type\":\"number\"},\"easing\":{\"type\":\"integer\"}},"
+    "\"required\":[\"handle\",\"clip_id\",\"param\",\"frame\",\"value\"]}",
+    FALSE, handle_add_keyframe);
+
+  vs_add (server, "vidstudio_add_audio",
+    "Add an audio file to the lane at FROM_FRAME with VOLUME.",
+    "{\"type\":\"object\",\"properties\":{"
+    "\"handle\":{\"type\":\"integer\"},\"path\":{\"type\":\"string\"},"
+    "\"from_frame\":{\"type\":\"integer\"},\"volume\":{\"type\":\"number\"}},"
+    "\"required\":[\"handle\",\"path\"]}",
+    FALSE, handle_add_audio);
 
   vs_add (server, "vidstudio_split",
     "Split CLIP at AT_FRAME (relative to the clip start).",

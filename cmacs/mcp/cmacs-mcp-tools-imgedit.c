@@ -224,6 +224,98 @@ ie_add (McpServer *server, const gchar *name, const gchar *desc,
   g_object_unref (tool);
 }
 
+static McpToolResult *
+handle_adjust (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
+{
+  gint64 h = ie_int (a, "handle", 0);
+  const gchar *kind = json_object_get_string_member (a, "kind");
+  gdouble amt = json_object_has_member (a, "amount")
+    ? json_object_get_double_member (a, "amount") : 0.0;
+  gchar *op = NULL;
+  (void) s; (void) n; (void) u;
+  if (g_strcmp0 (kind, "brightness") == 0)
+    op = g_strdup_printf ("(cmacs-imgedit-brightness %" G_GINT64_FORMAT
+                          " %d)", h, (int) amt);
+  else if (g_strcmp0 (kind, "contrast") == 0)
+    op = g_strdup_printf ("(cmacs-imgedit-contrast %" G_GINT64_FORMAT
+                          " %g)", h, amt);
+  else if (g_strcmp0 (kind, "saturation") == 0)
+    op = g_strdup_printf ("(cmacs-imgedit-saturation %" G_GINT64_FORMAT
+                          " %g)", h, amt);
+  else if (g_strcmp0 (kind, "threshold") == 0)
+    op = g_strdup_printf ("(cmacs-imgedit-threshold %" G_GINT64_FORMAT
+                          " %d)", h, (int) amt);
+  else if (g_strcmp0 (kind, "posterize") == 0)
+    op = g_strdup_printf ("(cmacs-imgedit-posterize %" G_GINT64_FORMAT
+                          " %d)", h, (int) amt);
+  else if (g_strcmp0 (kind, "invert") == 0)
+    op = g_strdup_printf ("(cmacs-imgedit-invert %" G_GINT64_FORMAT ")", h);
+  else if (g_strcmp0 (kind, "grayscale") == 0)
+    op = g_strdup_printf ("(cmacs-imgedit-grayscale %" G_GINT64_FORMAT ")", h);
+  else
+    { McpToolResult *r = mcp_tool_result_new (TRUE);
+      mcp_tool_result_add_text (r, "kind must be brightness|contrast|"
+        "saturation|threshold|posterize|invert|grayscale"); return r; }
+  return ie_eval_result (g_strdup_printf
+    ("(progn (cmacs-imgedit-push-undo %" G_GINT64_FORMAT ") %s \"ok\")",
+     h, op));
+}
+
+static McpToolResult *
+handle_filter (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
+{
+  gint64 h = ie_int (a, "handle", 0);
+  const gchar *kind = json_object_get_string_member (a, "kind");
+  gint64 radius = ie_int (a, "radius", 2);
+  gchar *op = NULL;
+  (void) s; (void) n; (void) u;
+  if (g_strcmp0 (kind, "blur") == 0)
+    op = g_strdup_printf ("(cmacs-imgedit-blur %" G_GINT64_FORMAT
+                          " %" G_GINT64_FORMAT ")", h, radius);
+  else if (g_strcmp0 (kind, "pixelate") == 0)
+    op = g_strdup_printf ("(cmacs-imgedit-pixelate %" G_GINT64_FORMAT
+                          " %" G_GINT64_FORMAT ")", h, radius);
+  else if (g_strcmp0 (kind, "sharpen") == 0)
+    op = g_strdup_printf ("(cmacs-imgedit-sharpen %" G_GINT64_FORMAT ")", h);
+  else if (g_strcmp0 (kind, "edge") == 0)
+    op = g_strdup_printf ("(cmacs-imgedit-edge-detect %" G_GINT64_FORMAT ")", h);
+  else if (g_strcmp0 (kind, "emboss") == 0)
+    op = g_strdup_printf ("(cmacs-imgedit-emboss %" G_GINT64_FORMAT ")", h);
+  else if (g_strcmp0 (kind, "bloom") == 0)
+    op = g_strdup_printf ("(cmacs-imgedit-bloom %" G_GINT64_FORMAT ")", h);
+  else
+    { McpToolResult *r = mcp_tool_result_new (TRUE);
+      mcp_tool_result_add_text (r, "kind must be blur|pixelate|sharpen|"
+        "edge|emboss|bloom"); return r; }
+  return ie_eval_result (g_strdup_printf
+    ("(progn (cmacs-imgedit-push-undo %" G_GINT64_FORMAT ") %s \"ok\")",
+     h, op));
+}
+
+static McpToolResult *
+handle_transform (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
+{
+  gint64 h = ie_int (a, "handle", 0);
+  const gchar *kind = json_object_get_string_member (a, "kind");
+  gchar *op = NULL;
+  (void) s; (void) n; (void) u;
+  if (g_strcmp0 (kind, "flip-h") == 0)
+    op = g_strdup_printf ("(cmacs-imgedit-flip %" G_GINT64_FORMAT " t)", h);
+  else if (g_strcmp0 (kind, "flip-v") == 0)
+    op = g_strdup_printf ("(cmacs-imgedit-flip %" G_GINT64_FORMAT " nil)", h);
+  else if (g_strcmp0 (kind, "rotate-cw") == 0)
+    op = g_strdup_printf ("(cmacs-imgedit-rotate %" G_GINT64_FORMAT " t)", h);
+  else if (g_strcmp0 (kind, "rotate-ccw") == 0)
+    op = g_strdup_printf ("(cmacs-imgedit-rotate %" G_GINT64_FORMAT " nil)", h);
+  else
+    { McpToolResult *r = mcp_tool_result_new (TRUE);
+      mcp_tool_result_add_text (r, "kind must be flip-h|flip-v|rotate-cw|"
+        "rotate-ccw"); return r; }
+  return ie_eval_result (g_strdup_printf
+    ("(progn (cmacs-imgedit-push-undo %" G_GINT64_FORMAT ") %s \"ok\")",
+     h, op));
+}
+
 void
 cmacs_mcp_tools_imgedit_register (McpServer *server)
 {
@@ -268,6 +360,30 @@ cmacs_mcp_tools_imgedit_register (McpServer *server)
     "\"filled\":{\"type\":\"boolean\"},\"thickness\":{\"type\":\"integer\"}},"
     "\"required\":[\"handle\",\"shape\",\"x1\",\"y1\"]}",
     FALSE, handle_draw_shape);
+
+  ie_add (server, "imgedit_adjust",
+    "Adjust the active layer.  KIND: brightness|contrast|saturation|threshold|"
+    "posterize (with AMOUNT) or invert|grayscale.",
+    "{\"type\":\"object\",\"properties\":{"
+    "\"handle\":{\"type\":\"integer\"},\"kind\":{\"type\":\"string\"},"
+    "\"amount\":{\"type\":\"number\"}},\"required\":[\"handle\",\"kind\"]}",
+    FALSE, handle_adjust);
+
+  ie_add (server, "imgedit_filter",
+    "Filter the active layer.  KIND: blur|pixelate (RADIUS) or sharpen|edge|"
+    "emboss|bloom.",
+    "{\"type\":\"object\",\"properties\":{"
+    "\"handle\":{\"type\":\"integer\"},\"kind\":{\"type\":\"string\"},"
+    "\"radius\":{\"type\":\"integer\"}},\"required\":[\"handle\",\"kind\"]}",
+    FALSE, handle_filter);
+
+  ie_add (server, "imgedit_transform",
+    "Transform the whole document.  KIND: flip-h|flip-v|rotate-cw|rotate-ccw.",
+    "{\"type\":\"object\",\"properties\":{"
+    "\"handle\":{\"type\":\"integer\"},\"kind\":{\"type\":\"string\"}},"
+    "\"required\":[\"handle\",\"kind\"]}",
+    FALSE, handle_transform);
+
 
   ie_add (server, "imgedit_draw_text",
     "Draw TEXT at X,Y in the current colour (SIZE px; one undo step).",
