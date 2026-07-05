@@ -1236,7 +1236,14 @@ GTK clipboard (any compositor / X11), then `wl-paste'."
   (interactive (list (read-number "Saturation (0..2): " 1.5)))
   (cmacs-imgedit--with-edit (cmacs-imgedit-saturation cmacs-imgedit--handle factor)))
 
-;; ── Vector: SVG import + Bézier curve ──────────────────────────────────
+(defun cmacs-imgedit-export-gif-file (file delay)
+  "Export the layer stack as an animated GIF to FILE (DELAY centiseconds/frame)."
+  (interactive (list (read-file-name "Export GIF: " nil "anim.gif")
+                     (read-number "Delay (centiseconds/frame): " 10)))
+  (cmacs-imgedit-export-gif cmacs-imgedit--handle (expand-file-name file) delay)
+  (message "Wrote %s" file))
+
+;; ── Vector: SVG import + Bézier curve ──
 
 (defun cmacs-imgedit-import-svg-file (file dpi)
   "Render an SVG FILE onto the active layer at DPI."
@@ -1444,6 +1451,7 @@ GTK clipboard (any compositor / X11), then `wl-paste'."
              ("Redo" . cmacs-imgedit-redo-cmd)
              ("Zoom in" . cmacs-imgedit-zoom-in)
              ("Zoom out" . cmacs-imgedit-zoom-out)
+             ("Export GIF (layers)…" . cmacs-imgedit-export-gif-file)
              ("Save…" . cmacs-imgedit-save-cmd))))
 
 (defun cmacs-imgedit-context-menu (event)

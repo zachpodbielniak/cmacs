@@ -410,5 +410,21 @@ itself instead of drawing a dot at the press position."
       (cmacs-imgedit-free h)
       (delete-file svg))))
 
+(ert-deftest cmacs-imgedit-tests-gif-export ()
+  "Export layers as an animated GIF; visibility is restored afterward."
+  (skip-unless (fboundp 'cmacs-imgedit-export-gif))
+  (let ((gif (make-temp-file "cmie" nil ".gif"))
+        (h (cmacs-imgedit-new 16 16)))
+    (unwind-protect
+        (progn
+          (cmacs-imgedit-fill h 255 0 0 255)
+          (cmacs-imgedit-add-layer h "f2") (cmacs-imgedit-fill h 0 255 0 255)
+          (cmacs-imgedit-export-gif h gif 20)
+          (should (> (file-attribute-size (file-attributes gif)) 0))
+          ;; both layers visible again (top green shows)
+          (should (equal (cmacs-imgedit-pixel-at h 8 8) '(0 255 0 255))))
+      (cmacs-imgedit-free h)
+      (delete-file gif))))
+
 (provide 'cmacs-imgedit-tests)
 ;;; cmacs-imgedit-tests.el ends here

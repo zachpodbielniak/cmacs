@@ -627,6 +627,63 @@ cmacs_imgedit_doc_rotate (CmacsImgeditDoc *d, gboolean clockwise)
   if (d) lrg_image_document_rotate (d->doc, clockwise);
 }
 
+/* Export the layer stack as an animated GIF: each layer is one frame, shown
+   in isolation (bottom to top), at DELAY_CS centiseconds per frame. */
+gboolean
+cmacs_imgedit_doc_export_gif (CmacsImgeditDoc *d, const char *path,
+                             int delay_cs, char **error_msg)
+{
+  int w, h;
+  guint n, i, frame;
+  gboolean *vis;
+  gboolean ok = TRUE;
+  GrlGifWriter *gw;
+  g_autoptr (GError) err = NULL;
+
+  if (d == NULL || path == NULL)
+    return FALSE;
+  w = lrg_image_document_get_width (d->doc);
+  h = lrg_image_document_get_height (d->doc);
+  n = lrg_image_document_get_n_layers (d->doc);
+  if (n == 0)
+    { if (error_msg) *error_msg = g_strdup ("no layers"); return FALSE; }
+  gw = grl_gif_writer_new (path, w, h, 0 /* loop forever */, &err);
+  if (gw == NULL)
+    { if (error_msg)
+        *error_msg = g_strdup (err ? err->message : "GIF open failed");
+      return FALSE; }
+  /* Save current visibility, then render each layer in isolation. */
+  vis = g_new (gboolean, n);
+  for (i = 0; i < n; i++)
+    vis[i] = lrg_image_layer_get_visible (lrg_image_document_get_layer (d->doc,
+                                                                        i));
+  for (frame = 0; frame < n && ok; frame++)
+    {
+      GrlImage *flat;
+      for (i = 0; i < n; i++)
+        lrg_image_layer_set_visible (lrg_image_document_get_layer (d->doc, i),
+                                     i == frame);
+      lrg_image_document_mark_dirty (d->doc);
+      flat = lrg_image_document_flatten (d->doc);   /* transfer none */
+      if (flat == NULL
+          || !grl_gif_writer_add_frame (gw, flat, delay_cs > 0 ? delay_cs : 10,
+                                        &err))
+        ok = FALSE;
+    }
+  /* Restore visibility. */
+  for (i = 0; i < n; i++)
+    lrg_image_layer_set_visible (lrg_image_document_get_layer (d->doc, i),
+                                 vis[i]);
+  lrg_image_document_mark_dirty (d->doc);
+  g_free (vis);
+  if (!grl_gif_writer_close (gw, &err))
+    ok = FALSE;
+  g_object_unref (gw);
+  if (!ok && error_msg)
+    *error_msg = g_strdup (err ? err->message : "GIF write failed");
+  return ok;
+}
+
 /* ── Vector paths: cubic Bézier + SVG import (active layer) ─────────────── */
 void
 cmacs_imgedit_doc_bezier (CmacsImgeditDoc *d, int x0, int y0, int x1, int y1,

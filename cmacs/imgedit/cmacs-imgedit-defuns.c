@@ -813,6 +813,24 @@ DEFUN ("cmacs-imgedit-noise", Fcmacs_imgedit_noise, Scmacs_imgedit_noise,
   return Qnil;
 }
 
+DEFUN ("cmacs-imgedit-export-gif", Fcmacs_imgedit_export_gif,
+       Scmacs_imgedit_export_gif, 2, 3, 0,
+       doc: /* Export HANDLE's layers as an animated GIF to PATH.
+Each layer is one frame at DELAY-CS centiseconds (default 10).  */)
+  (Lisp_Object handle, Lisp_Object path, Lisp_Object delay_cs)
+{
+  char *err = NULL;
+  CHECK_STRING (path);
+  if (!cmacs_imgedit_doc_export_gif (ie_lookup (handle), SSDATA (path),
+                                     ie_int (delay_cs, 10), &err))
+    {
+      Lisp_Object m = build_string (err ? err : "GIF export failed");
+      g_free (err);
+      xsignal1 (Qcmacs_imgedit_error, m);
+    }
+  return Qt;
+}
+
 DEFUN ("cmacs-imgedit-bezier", Fcmacs_imgedit_bezier, Scmacs_imgedit_bezier,
        5, 6, 0,
        doc: /* Draw a cubic Bézier through control points P0 P1 P2 P3.
@@ -1014,6 +1032,7 @@ syms_of_cmacs_imgedit_defuns (void)
   defsubr (&Scmacs_imgedit_blur);
   defsubr (&Scmacs_imgedit_bloom);
   defsubr (&Scmacs_imgedit_noise);
+  defsubr (&Scmacs_imgedit_export_gif);
   defsubr (&Scmacs_imgedit_bezier);
   defsubr (&Scmacs_imgedit_import_svg);
   defsubr (&Scmacs_imgedit_threshold);
