@@ -363,5 +363,17 @@ flips once the decode lands and real frames replace the placeholder."
             (should (= (cmacs-vidstudio-total-frames p) 90))))
       (delete-file mp4))))
 
+(ert-deftest cmacs-vidstudio-tests-rich-text-clip ()
+  "An animated rich-text clip adds to the timeline and renders a frame."
+  (cmacs-vidstudio-tests--skip-unless)
+  (cmacs-vidstudio-tests--with-proj p 128 48 30.0
+    (let ((id (cmacs-vidstudio-add-rich-text
+               p 0 "[wave]Hi[/wave] [rainbow]there[/rainbow]" 30 24)))
+      (should (>= id 0))
+      (should (= (cmacs-vidstudio-track-clip-count p 0) 1))
+      (should (= (cmacs-vidstudio-total-frames p) 30))
+      ;; renders without erroring (glyphs need GL; pixel may be blank headless)
+      (should (cmacs-vidstudio-frame-pixel p 0 5 24)))))
+
 (provide 'cmacs-vidstudio-tests)
 ;;; cmacs-vidstudio-tests.el ends here

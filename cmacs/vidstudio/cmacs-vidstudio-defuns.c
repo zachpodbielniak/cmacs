@@ -209,6 +209,26 @@ DEFUN ("cmacs-vidstudio-add-solid-clip", Fcmacs_vidstudio_add_solid_clip,
                           vs_clamp8 (b), vs_clamp8 (a)));
 }
 
+DEFUN ("cmacs-vidstudio-add-rich-text", Fcmacs_vidstudio_add_rich_text,
+       Scmacs_vidstudio_add_rich_text, 4, 6, 0,
+       doc: /* Append an animated rich-text clip from BBCODE markup on TRACK for
+DURATION frames.  Markup supports [b]/[i]/[color=..]/[size=..] and the animated
+[wave]/[rainbow]/[typewriter]/[shake] effects.  Optional FONT-SIZE and
+COLOR = (R G B A).  */)
+  (Lisp_Object handle, Lisp_Object track, Lisp_Object bbcode,
+   Lisp_Object duration, Lisp_Object font_size, Lisp_Object color)
+{
+  CHECK_FIXNUM (track);
+  CHECK_STRING (bbcode);
+  return make_fixnum (cmacs_vidstudio_proj_add_rich_text_clip
+    (vs_lookup (handle), (guint) XFIXNUM (track), SSDATA (bbcode),
+     vs_int (duration, 0), vs_int (font_size, 0),
+     CONSP (color) ? vs_clamp8 (Fnth (make_fixnum (0), color)) : 255,
+     CONSP (color) ? vs_clamp8 (Fnth (make_fixnum (1), color)) : 255,
+     CONSP (color) ? vs_clamp8 (Fnth (make_fixnum (2), color)) : 255,
+     CONSP (color) ? vs_clamp8 (Fnth (make_fixnum (3), color)) : 255));
+}
+
 DEFUN ("cmacs-vidstudio-add-loop-clip", Fcmacs_vidstudio_add_loop_clip,
        Scmacs_vidstudio_add_loop_clip, 4, 5, 0,
        doc: /* Loop video PATH on TRACK over DURATION frames, repeating every
@@ -1026,6 +1046,7 @@ syms_of_cmacs_vidstudio_defuns (void)
   defsubr (&Scmacs_vidstudio_track_clip_count);
   defsubr (&Scmacs_vidstudio_track_total_frames);
   defsubr (&Scmacs_vidstudio_add_solid_clip);
+  defsubr (&Scmacs_vidstudio_add_rich_text);
   defsubr (&Scmacs_vidstudio_add_loop_clip);
   defsubr (&Scmacs_vidstudio_add_freeze_clip);
   defsubr (&Scmacs_vidstudio_add_shape_rect);

@@ -415,6 +415,59 @@ cmacs_vidstudio_proj_add_caption (CmacsVidProject *p, guint track, int duration,
   return append_clip (p, track, LRG_REEL_CLIP (c), duration);
 }
 
+/* Animated rich-text clip: a functional LrgReelClip whose per-frame render
+   callback advances the BBCode text's effects ([wave]/[rainbow]/[typewriter]/
+   [shake]) to the clip-relative time and draws it onto the canvas. */
+typedef struct
+{
+  LrgRichText *text;
+  gfloat       x, y;
+} CmacsVidAnimText;
+
+static void
+animtext_render (LrgReelClip *clip, LrgReelContext *ctx,
+                 LrgImageCanvas *canvas, gpointer user_data)
+{
+  CmacsVidAnimText *a = user_data;
+  gint frame = lrg_reel_context_get_frame (ctx);
+  gdouble fps = lrg_reel_context_get_fps (ctx);
+  (void) clip; (void) canvas;
+  /* Reset + update to the absolute clip time so seeking is deterministic. */
+  lrg_rich_text_reset_effects (a->text);
+  lrg_rich_text_update (a->text, fps > 0.0 ? (gfloat) (frame / fps) : 0.0f);
+  lrg_rich_text_draw (a->text, a->x, a->y);
+}
+
+static void
+animtext_free (gpointer user_data)
+{
+  CmacsVidAnimText *a = user_data;
+  g_clear_object (&a->text);
+  g_free (a);
+}
+
+gint
+cmacs_vidstudio_proj_add_rich_text_clip (CmacsVidProject *p, guint track,
+                                         const char *markup, int duration,
+                                         int font_size, guint8 r, guint8 g,
+                                         guint8 b, guint8 a)
+{
+  CmacsVidAnimText *at = g_new0 (CmacsVidAnimText, 1);
+  LrgReelClip *clip;
+  gint id;
+
+  at->text = lrg_rich_text_new_from_markup (markup ? markup : "");
+  if (font_size > 0)
+    lrg_rich_text_set_font_size (at->text, (gfloat) font_size);
+  lrg_rich_text_set_default_color (at->text, r, g, b, a);
+  at->x = 20.0f;
+  at->y = (gfloat) (p->height / 2);
+  clip = lrg_reel_clip_new_with_func (animtext_render, at, animtext_free);
+  id = append_clip (p, track, clip, duration);
+  seg_meta (p, id, CMACS_VID_KIND_TEXT, markup, r, g, b, a, 0, 0);
+  return id;
+}
+
 /* Wrap a video source in a loop or freeze sequence (a nested clip).  MODE 0 =
    loop (repeat every LOOP_FRAMES over DURATION); MODE 1 = freeze (hold the
    frame at PARAM seconds).  DURATION is the on-timeline length in frames. */

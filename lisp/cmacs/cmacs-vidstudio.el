@@ -836,6 +836,19 @@ silently updates.  Starting play at the end of the timeline rewinds."
                                    freeze-at)
   (cmacs-vidstudio--render))
 
+(defun cmacs-vidstudio-add-animated-text (markup seconds font-size)
+  "Add an animated rich-text clip from BBCODE MARKUP.
+Markup supports [b]/[i]/[color=..]/[size=..] plus the animated effects
+[wave]/[rainbow]/[typewriter speed=N]/[shake]."
+  (interactive (list (read-string "BBCode markup: " "[wave]Hello[/wave]")
+                     (read-number "Seconds: " 3.0)
+                     (read-number "Font size: " 32)))
+  (cmacs-vidstudio-add-rich-text cmacs-vidstudio--handle
+                                 cmacs-vidstudio--active-track markup
+                                 (cmacs-vidstudio--secs-to-frames seconds)
+                                 font-size)
+  (cmacs-vidstudio--render))
+
 (defun cmacs-vidstudio--menu ()
   "Return the video-editor context-menu alist (shared native + viewport)."
   '("Video editor"
@@ -843,6 +856,7 @@ silently updates.  Starting play at the end of the timeline rewinds."
              ("Import clip…" . cmacs-vidstudio-import)
              ("Solid colour…" . cmacs-vidstudio-add-color)
              ("Title…" . cmacs-vidstudio-add-title)
+             ("Animated text…" . cmacs-vidstudio-add-animated-text)
              ("Gradient…" . cmacs-vidstudio-add-gradient)
              ("Rectangle…" . cmacs-vidstudio-add-rectangle)
              ("Captions (SRT)…" . cmacs-vidstudio-add-captions)

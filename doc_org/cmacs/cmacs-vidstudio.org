@@ -138,6 +138,11 @@ Durations and the playhead are in *frames*.
   survives later duration edits).  ~M-x cmacs-vidstudio-import~ prompts for the
   optional In/Out points (blank In = start, blank Out = whole video).
 - ~(cmacs-vidstudio-add-text-clip HANDLE TRACK TEXT DURATION R G B A)~.
+- ~(cmacs-vidstudio-add-rich-text HANDLE TRACK BBCODE DURATION &optional
+  FONT-SIZE COLOR)~ --- an animated rich-text clip (a functional
+  LrgReelClip).  BBCode markup: static ~[b]~/~[i]~/~[color=..]~/~[size=..]~ and
+  the per-frame animated ~[wave]~/~[rainbow]~/~[typewriter speed=N]~/~[shake]~.
+  Right-click → *Add → Animated text…*.
 - ~(cmacs-vidstudio-add-loop-clip HANDLE TRACK PATH DURATION LOOP-SECS)~ and
   ~-add-freeze-clip~ wrap a video source in a loop / freeze *sequence* (a
   nested clip): loop repeats the source every LOOP-SECS over DURATION; freeze
