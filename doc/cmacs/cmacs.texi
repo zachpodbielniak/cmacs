@@ -9306,6 +9306,9 @@ are unaffected.
 dump time (one @code{#ifdef HAVE_CMACS_*} per subsystem: glib, gobject,
 dbus, gi, crispy, bacon, gowl, podomation, libreclaw, org-ex, mcp,
 cintrospect, cpatch, video, audio, whisper, piper, ai, libregnum, gsurf).
+The block opens with one @emph{unconditional} @code{syms_of_cmacs_features ()}
+call (the always-linked @code{IS-CMACS-*} feature-flag registry in
+@file{cmacs/core/cmacs-features.c}).
 @item
 @strong{@code{init_cmacs_*} late-init block} (marked
 @code{/* CMACS: late init ... */}): run each subsystem's runtime init after
@@ -9428,7 +9431,9 @@ focused gowl view's Wayland client.
 
 A single @code{/* CMACS */} block of @code{extern void init_cmacs_*} /
 @code{syms_of_cmacs_*} declarations, one @code{#ifdef HAVE_CMACS_*} per
-subsystem, so @file{emacs.c} can call them.
+subsystem, so @file{emacs.c} can call them.  The block opens with the
+@emph{unconditional} @code{extern void syms_of_cmacs_features (void);}
+(the always-linked IS-CMACS-* registry, outside any @code{#ifdef}).
 
 @node Upstream Build System
 @section Build system
@@ -9483,6 +9488,15 @@ config.
 @code{vpath %.c} / @code{vpath %.h} entries for each
 @file{cmacs/<subsystem>/} dir; the @code{CMACS_*_OBJ}/@code{_CFLAGS}/
 @code{_LIBS}/@code{_BUNDLED} variable block.
+@item
+@strong{Always-linked core}: @code{CMACS_CORE_OBJ = cmacs-features.o} is a
+plain (non-@code{@@...@@}) assignment appended to @code{base_obj} +
+@code{CMACS_ALL_OBJ}, with @code{core} in @code{CMACS_DIRS} and the
+vpath/@code{CMACS_INTERNAL_CFLAGS} lists.  It links
+@file{cmacs/core/cmacs-features.c} in @emph{every} configuration so the
+@code{IS-CMACS-<NAME>} flags are always bound; being in @code{base_obj}
+also puts it in @code{doc_obj} so @code{make-docfile -g} generates the
+@code{DEFVAR_BOOL} globals.
 @item
 Subsystem static libraries (e.g.@: @file{libgsurf.a},
 @file{liborgex-1.0.a}) are whole-archived into temacs.

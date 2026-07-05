@@ -82,7 +82,11 @@ Several small hunks, all in =main()= / its init path:
   time (one =#ifdef HAVE_CMACS_*= guard per subsystem: glib, gobject,
   dbus, gi, crispy, bacon, gowl, podomation, libreclaw, org-ex, mcp,
   cintrospect, cpatch, video, audio, whisper, piper, ai, libregnum,
-  gnuseye, gsurf).
+  gnuseye, gsurf).  The block opens with one *unconditional* call,
+  =syms_of_cmacs_features ()= (marked =/* CMACS: always-linked
+  IS-CMACS-* flags */=), because =cmacs/core/cmacs-features.c= is linked
+  in every configuration (it defines the =IS-CMACS-<NAME>= feature-flag
+  variables, all reading nil when their feature is off).
 - *=init_cmacs_*= late-init block* (marked =/* CMACS: late init ... */=):
   run each subsystem's runtime initialisation after terminal setup
   (=init_cmacs_glib=, =init_cmacs_dbus=, =init_cmacs_gowl=,
@@ -195,7 +199,9 @@ embeds Wayland clients as a kind of xwidget:
 
 A single =/* CMACS */= block of =extern void init_cmacs_*= /
 =syms_of_cmacs_*= declarations, one =#ifdef HAVE_CMACS_*= per subsystem,
-so =emacs.c= can call them.
+so =emacs.c= can call them.  The block opens with the *unconditional*
+=extern void syms_of_cmacs_features (void);= (the always-linked
+IS-CMACS-* registry, outside any =#ifdef=).
 
 * Build system
 
@@ -242,6 +248,13 @@ embedded Doom config.
 
 - =vpath %.c= / =vpath %.h= entries for each =cmacs/<subsystem>/= source
   dir; =CMACS_*_OBJ= / =_CFLAGS= / =_LIBS= / =_BUNDLED= variable block.
+- *Always-linked core*: =CMACS_CORE_OBJ = cmacs-features.o= is a plain
+  (non-=@...@=) assignment appended to =base_obj= + =CMACS_ALL_OBJ=, with
+  =core= in =CMACS_DIRS= and the vpath/=CMACS_INTERNAL_CFLAGS= lists.  It
+  links =cmacs/core/cmacs-features.c= in *every* configuration (even
+  upstream-off) so the =IS-CMACS-<NAME>= flags are always bound; being
+  in =base_obj= also puts it in =doc_obj= so =make-docfile -g= generates
+  the =DEFVAR_BOOL= globals.
 - Subsystem static libraries (e.g. =libgsurf.a=, =liborgex-1.0.a=) are
   whole-archived into temacs.
 - *Static-library dedup* (the critical invariant): crispy and yaml-glib

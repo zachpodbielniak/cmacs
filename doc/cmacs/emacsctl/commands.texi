@@ -101,7 +101,7 @@ a missing subsystem maps to exit code 3 with a clear message:
 @code{speech} (whisper + piper), @code{lrg} (libregnum editor),
 @code{compositor} and @code{monitor} (gowl).
 
-@subsection AI: ai prompt / ai models / ai chat
+@subsection AI: ai prompt / ai call / ai models / ai chat
 
 The ai verbs take provider, model, and system prompt as flags
 (@option{-p/--provider}, @option{-m/--model}, @option{-s/--system})
@@ -123,6 +123,25 @@ emacsctl ai models -p ollama -o json
 emacsctl ai chat -p claude -m claude-opus-4-8 'hello'
 @end example
 
+@code{ai call} is like @code{ai prompt} (same @option{-p/-m/-s/-f}
+flags, positionals, stdin) but adds @option{-t/--tools}: with it, the
+model is given the built-in agent tools (bash/read/write/edit/glob/
+grep/ls/web_fetch) and runs a synchronous multi-turn loop, returning
+the final answer.
+
+@example
+emacsctl ai call 'summarise this in one line: ...'   # no tools
+emacsctl ai call -t 'how many .c files are under src/, and why?'
+@end example
+
+@quotation Warning
+A tool-enabled call runs the loop on the target's main thread; under
+@command{emacs --gowl} that is the Wayland compositor, so a long loop
+freezes the desktop.  Keep @option{-t} loops short, and prefer
+@code{ai prompt} (no tools) when driving a live @option{--gowl}
+session.
+@end quotation
+
 @code{ai models} renders a provider/model table; @option{-o json} /
 @option{-o yaml} emit the provider-to-models map as structured data.
 Without @option{-p} every provider is queried (API providers over
@@ -133,8 +152,9 @@ a while; @option{-p} keeps it fast.  The model names that
 accepts.
 
 The underlying typed methods are @code{Editor1.Ai} @code{Prompt} /
-@code{ListModels} / @code{OpenChat}, with MCP parity via
-@code{ai_prompt} / @code{ai_list_models} / @code{ai_open_chat}.
+@code{Call} / @code{ListModels} / @code{OpenChat}, with MCP parity via
+@code{ai_prompt} / @code{ai_call} / @code{ai_list_models} /
+@code{ai_open_chat}.
 
 @subsection Org buffers: text insert-org
 

@@ -109,7 +109,7 @@ missing subsystem maps to exit code 3 with a clear message.
 | =compositor=| =clients=, =focused=, =spawn=, =find=, =focus=, =close=, =geometry=, =layout=, =workspaces=, =workspace=, =screenshot=, =keybinds=, =mfact=, =nmaster=, =tags=, =lock=, =unlock=, =reload=, =config= |
 | =monitor=   | =list=, =info=, =modes=, =set-mode=, =position=, =set-position=, =enable=, =scale=, =transform= |
 
-* AI: =ai prompt= / =ai models= / =ai chat=
+* AI: =ai prompt= / =ai call= / =ai models= / =ai chat=
 
 The ai verbs take provider, model, and system prompt as flags
 (=-p/--provider=, =-m/--model=, =-s/--system=) instead of positional
@@ -130,6 +130,21 @@ slots.  =ai prompt= composes its text from positionals, stdin, and
   emacsctl ai chat -p claude -m claude-opus-4-8 'hello'
 #+end_src
 
+=ai call= is like =ai prompt= (same =-p/-m/-s/-f= flags, positionals,
+stdin) but adds =-t/--tools=: with it, the model is given the built-in
+agent tools (bash/read/write/edit/glob/grep/ls/web_fetch) and runs a
+synchronous multi-turn loop, returning the final answer.
+
+#+begin_src sh
+  emacsctl ai call 'summarise this in one line: ...'   # no tools
+  emacsctl ai call -t 'how many .c files are under src/, and why?'
+#+end_src
+
+*DANGER:* a tool-enabled call runs the loop on the target's main
+thread; under =emacs --gowl= that is the Wayland compositor, so a long
+loop freezes the desktop.  Keep =-t= loops short, and prefer =ai
+prompt= (no tools) when driving a live =--gowl= session.
+
 =ai models= renders a provider/model table; =-o json= / =-o yaml=
 emit the provider→models map as structured data.  Without =-p= every
 provider is queried (API providers over the network, CLI providers
@@ -138,9 +153,9 @@ never fails outright --- but it can take a while; =-p= keeps it
 fast.  The model names that =ai models= prints are exactly what
 =-m/--model= accepts.
 
-The underlying typed methods are =Editor1.Ai= =Prompt= /
+The underlying typed methods are =Editor1.Ai= =Prompt= / =Call= /
 =ListModels= / =OpenChat=, with MCP parity via =ai_prompt= /
-=ai_list_models= / =ai_open_chat=.
+=ai_call= / =ai_list_models= / =ai_open_chat=.
 
 * Org buffers: =text insert-org=
 

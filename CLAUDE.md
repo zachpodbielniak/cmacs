@@ -17,11 +17,21 @@ cmacs tracks upstream GNU Emacs and merges it in every few weeks. Keep merges pa
   it's trivial to re-apply across a merge.
 - Every new subsystem must be `--with-cmacs-*` / `--enable-cmacs-*` gated and
   self-contained, so an upstream-style build with cmacs off still works.
+- **Every new `--with-cmacs-<name>` / `--enable-cmacs-<name>` option MUST also add an
+  `IS-CMACS-<NAME>` flag** in `cmacs/core/cmacs-features.c` — a literal `DEFVAR_BOOL`
+  (make-docfile parses it textually, so no macro wrapper), the lower-case
+  `is-cmacs-<name>` alias, and a `cmacs_feature_names[]` entry, all under the same
+  `#ifdef HAVE_CMACS_<NAME>`. That file is the single source of truth for "what's
+  compiled in" (see *Feature flags* below). Keep it in sync when adding/removing/renaming
+  a configure option — the D-Bus instance list and `cmacs.el` derive from it.
 
 Current upstream touch-points (keep minimal): `process.c` pselect hooks (GLib loop),
 `src/pgtkterm.c` paint hooks (video / libregnum / ink overlays), `src/emacs.c` early
-`main()` hooks (`--bacon` / `--gowl` entry, JSC GC-signal redirect), `src/Makefile.in`
-(linking). Each hunk is marked `/* CMACS: ... */`; the full catalogue with rationale is
+`main()` hooks (`--bacon` / `--gowl` entry, JSC GC-signal redirect) plus the guarded
+`syms_of_/init_cmacs_*` block (which now also makes one unconditional
+`syms_of_cmacs_features ()` call), `src/lisp.h` (cmacs `syms_of_*` prototypes),
+`src/Makefile.in` (linking; `CMACS_CORE_OBJ` always links `cmacs-features.o`). Each hunk
+is marked `/* CMACS: ... */`; the full catalogue with rationale is
 `doc_org/cmacs/cmacs-upstream-changes.org` (and the *Upstream Changes* chapter in the manual).
 
 ## Build
@@ -145,7 +155,7 @@ C source `cmacs/<name>/`, Elisp `lisp/cmacs/`, tests `test/cmacs/`, docs
 | **gowl** | `cmacs/gowl/` | wlroots-based Wayland compositor — full WM control via DEFUNs |
 | **podomation** | `cmacs/podomation/` | Event-driven automation engine — DSL + REPL |
 | **libreclaw** | `cmacs/libreclaw/` | Chat gateway: **embedded** (in-proc LcApp, shared PodEngine) + **remote** (dial-out bridge that tunnels cmacs's MCP server to a remote agent) |
-| **ai** | `cmacs/ai/` | Coding-agent surface over `ai-glib`: 8 providers, streaming chat org buffers, region cmds, FIM completion, voice loop, MCP tool bridge (`deps/ai-glib`, shared with libreclaw) |
+| **ai** | `cmacs/ai/` | Coding-agent surface over `ai-glib`: 8 providers, streaming chat org buffers, region cmds, FIM completion, voice loop, MCP tool bridge, generic tools-capable one-shot calls (`cmacs-ai-call` / C `cmacs-ai--call`, also on D-Bus `Ai.Call` / `emacsctl ai call` / MCP `ai_call`) (`deps/ai-glib`, shared with libreclaw) |
 | **org-ex** | `cmacs/org-ex/` | Interactive widget embedding for Org (liborgex-1.0.a); includes cmacs-ink |
 | **mcp** | `cmacs/mcp/` | MCP server over Unix socket — AI-native runtime introspection & control |
 | **gsurf** | `cmacs/gsurf/` | Embedded web browser (gsurf, a GObject `surf` port) as live WebKitGTK buffers; caret mode + gsurf-lite (eww-style). Two render backends, runtime-selected by frame type: GTK3/WebKitGTK widget embed (pgtk), and a GTK-free libregnum backend for `emacs --lrg` (offscreen WebKit → GrlTexture composited by lrgterm; `--with-cmacs-gsurf-lrg`). Off by default |
@@ -167,6 +177,20 @@ C source `cmacs/<name>/`, Elisp `lisp/cmacs/`, tests `test/cmacs/`, docs
 The large subsystems have non-obvious internals (gsurf's focus-handoff model, libregnum's
 real-time render pipeline, the ai/MCP tool bridge). Read `doc_org/cmacs/*.org` and the
 relevant memory file (e.g. `gsurf-embedding.md`) before touching them.
+
+## Feature flags (`IS-CMACS-*`)
+
+`cmacs/core/cmacs-features.c` is **always linked** (even in an upstream-shaped build with
+every cmacs feature off) and is the single source of truth for which subsystems were
+compiled in. For each `--with-cmacs-<name>` / `--enable-cmacs-<name>` option it defines an
+always-bound Lisp variable `IS-CMACS-<NAME>` (= `t` when compiled in, else `nil`) plus a
+lower-case `is-cmacs-<name>` alias, so a user config can branch on a feature without a
+`void-variable` error, e.g. `(when IS-CMACS-AI (global-set-key (kbd "C-c a a") #'cmacs-ai-call))`.
+It also exposes `(cmacs-compiled-features)` (the list of enabled feature symbols); `cmacs.el`'s
+`cmacs-feature-p` / `cmacs-features` and the `org.cmacs.Editor1.Instance` D-Bus feature list
+both derive from the same `#ifdef HAVE_CMACS_<NAME>` table. **Adding/renaming a configure
+option means editing this one file** (see the discipline rule above). make-docfile parses
+`DEFVAR_BOOL` textually, so each flag must stay a literal source line — no macro or loop.
 
 ## Critical invariants (breaking these causes non-deterministic crashes)
 

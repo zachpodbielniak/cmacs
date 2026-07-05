@@ -322,11 +322,12 @@ runs, the typelib is reachable from:
 
 * MCP tools
 
-Built with =--with-cmacs-mcp=, four tools are exposed:
+Built with =--with-cmacs-mcp=, five tools are exposed:
 
 | Tool                | Args                                       |
 |---------------------+--------------------------------------------|
 | =ai_prompt=         | =prompt= req, =provider=, =system=, =model= |
+| =ai_call=           | as =ai_prompt= + =tools= (bool; built-in agent tools) |
 | =ai_list_providers= | (none)                                     |
 | =ai_list_models=    | =provider= (opt; default: all providers)   |
 | =ai_open_chat=      | =prompt=, =provider=, =model= (all opt)    |
