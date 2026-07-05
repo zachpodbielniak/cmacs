@@ -118,12 +118,32 @@ extern void cmacs_imgedit_doc_color_replace (CmacsImgeditDoc *d, guint8 fr,
                                              guint8 fg, guint8 fb, guint8 fa,
                                              guint8 tr, guint8 tg, guint8 tb,
                                              guint8 ta);
+/* Whole-document geometric transforms. */
+extern void cmacs_imgedit_doc_resize (CmacsImgeditDoc *d, int w, int h,
+                                      gboolean nearest);
+extern void cmacs_imgedit_doc_crop (CmacsImgeditDoc *d, int x, int y,
+                                    int w, int h);
+extern void cmacs_imgedit_doc_rotate (CmacsImgeditDoc *d, gboolean clockwise);
+/* Active-layer gradient fill (linear axis, or radial from centre). */
+extern void cmacs_imgedit_doc_gradient (CmacsImgeditDoc *d, gboolean radial,
+                                        gboolean vertical,
+                                        guint8 ar, guint8 ag, guint8 ab,
+                                        guint8 aa, guint8 br, guint8 bg,
+                                        guint8 bb, guint8 ba);
 /* Active-layer filters. */
 extern void cmacs_imgedit_doc_blur (CmacsImgeditDoc *d, int radius);
 extern void cmacs_imgedit_doc_bloom (CmacsImgeditDoc *d, int threshold,
                                      int blur_radius, double intensity);
 extern void cmacs_imgedit_doc_noise (CmacsImgeditDoc *d, double amplitude,
                                      double frequency, guint32 seed);
+/* Pixel-buffer filters (active layer). */
+extern void cmacs_imgedit_doc_threshold (CmacsImgeditDoc *d, int level);
+extern void cmacs_imgedit_doc_posterize (CmacsImgeditDoc *d, int levels);
+extern void cmacs_imgedit_doc_pixelate (CmacsImgeditDoc *d, int size);
+extern void cmacs_imgedit_doc_sharpen (CmacsImgeditDoc *d);
+extern void cmacs_imgedit_doc_edge_detect (CmacsImgeditDoc *d);
+extern void cmacs_imgedit_doc_emboss (CmacsImgeditDoc *d);
+extern void cmacs_imgedit_doc_saturation (CmacsImgeditDoc *d, double factor);
 
 extern void cmacs_imgedit_doc_flood_fill (CmacsImgeditDoc *d, int x, int y,
                                           guint8 r, guint8 g, guint8 b,

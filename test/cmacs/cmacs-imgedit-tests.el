@@ -350,5 +350,47 @@ itself instead of drawing a dot at the press position."
           (should (equal (cmacs-imgedit-pixel-at h 2 2) '(1 2 3 255))))
       (cmacs-imgedit-free h))))
 
+;; ── Transforms + pixel-buffer filters ──────────────────────────────────
+
+(ert-deftest cmacs-imgedit-tests-transforms ()
+  "Resize / crop / rotate change the document dimensions correctly."
+  (skip-unless (fboundp 'cmacs-imgedit-resize))
+  (let ((h (cmacs-imgedit-new 8 4)))
+    (unwind-protect
+        (progn
+          (cmacs-imgedit-resize h 16 8)
+          (should (= (cmacs-imgedit-width h) 16))
+          (should (= (cmacs-imgedit-height h) 8))
+          (cmacs-imgedit-crop h 2 1 10 6)
+          (should (= (cmacs-imgedit-width h) 10))
+          (should (= (cmacs-imgedit-height h) 6))
+          (cmacs-imgedit-rotate h t)          ; 10x6 -> 6x10
+          (should (= (cmacs-imgedit-width h) 6))
+          (should (= (cmacs-imgedit-height h) 10)))
+      (cmacs-imgedit-free h))))
+
+(ert-deftest cmacs-imgedit-tests-pixel-filters ()
+  "Threshold, posterize, and pixelate remap the active layer."
+  (skip-unless (fboundp 'cmacs-imgedit-threshold))
+  (let ((h (cmacs-imgedit-new 8 8)))
+    (unwind-protect
+        (progn
+          (cmacs-imgedit-fill h 200 200 200 255)
+          (cmacs-imgedit-threshold h 128)
+          (should (equal (cmacs-imgedit-pixel-at h 4 4) '(255 255 255 255)))
+          (cmacs-imgedit-fill h 10 10 10 255)
+          (cmacs-imgedit-threshold h 128)
+          (should (equal (cmacs-imgedit-pixel-at h 4 4) '(0 0 0 255)))
+          ;; posterize to 2 levels snaps a mid value to an endpoint
+          (cmacs-imgedit-fill h 200 40 130 255)
+          (cmacs-imgedit-posterize h 2)
+          (let ((p (cmacs-imgedit-pixel-at h 4 4)))
+            (dolist (c (list (nth 0 p) (nth 1 p) (nth 2 p)))
+              (should (memq c '(0 255)))))
+          ;; pixelate a checker -> a uniform block average (no crash, alpha kept)
+          (cmacs-imgedit-pixelate h 8)
+          (should (= (nth 3 (cmacs-imgedit-pixel-at h 4 4)) 255)))
+      (cmacs-imgedit-free h))))
+
 (provide 'cmacs-imgedit-tests)
 ;;; cmacs-imgedit-tests.el ends here

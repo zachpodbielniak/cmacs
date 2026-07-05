@@ -1201,6 +1201,95 @@ GTK clipboard (any compositor / X11), then `wl-paste'."
   (cmacs-imgedit--with-edit
    (cmacs-imgedit-noise cmacs-imgedit--handle amplitude 1.0 1)))
 
+(defun cmacs-imgedit-threshold-layer (level)
+  "Threshold the active layer to black/white at LEVEL."
+  (interactive (list (read-number "Threshold (0..255): " 128)))
+  (cmacs-imgedit--with-edit (cmacs-imgedit-threshold cmacs-imgedit--handle level)))
+
+(defun cmacs-imgedit-posterize-layer (levels)
+  "Reduce the active layer to LEVELS colours per channel."
+  (interactive (list (read-number "Levels per channel: " 4)))
+  (cmacs-imgedit--with-edit (cmacs-imgedit-posterize cmacs-imgedit--handle levels)))
+
+(defun cmacs-imgedit-pixelate-layer (size)
+  "Pixelate the active layer into SIZE-pixel blocks."
+  (interactive (list (read-number "Block size: " 8)))
+  (cmacs-imgedit--with-edit (cmacs-imgedit-pixelate cmacs-imgedit--handle size)))
+
+(defun cmacs-imgedit-sharpen-layer ()
+  "Sharpen the active layer."
+  (interactive)
+  (cmacs-imgedit--with-edit (cmacs-imgedit-sharpen cmacs-imgedit--handle)))
+
+(defun cmacs-imgedit-edge-detect-layer ()
+  "Edge-detect the active layer."
+  (interactive)
+  (cmacs-imgedit--with-edit (cmacs-imgedit-edge-detect cmacs-imgedit--handle)))
+
+(defun cmacs-imgedit-emboss-layer ()
+  "Emboss the active layer."
+  (interactive)
+  (cmacs-imgedit--with-edit (cmacs-imgedit-emboss cmacs-imgedit--handle)))
+
+(defun cmacs-imgedit-adjust-saturation (factor)
+  "Scale active-layer saturation by FACTOR."
+  (interactive (list (read-number "Saturation (0..2): " 1.5)))
+  (cmacs-imgedit--with-edit (cmacs-imgedit-saturation cmacs-imgedit--handle factor)))
+
+;; ── Geometric transforms + gradient ────────────────────────────────────
+
+(defun cmacs-imgedit-resize-image (width height)
+  "Resize the whole document to WIDTH x HEIGHT."
+  (interactive (list (read-number "New width: " (cmacs-imgedit-width
+                                                 cmacs-imgedit--handle))
+                     (read-number "New height: " (cmacs-imgedit-height
+                                                  cmacs-imgedit--handle))))
+  (cmacs-imgedit--with-edit
+   (cmacs-imgedit-resize cmacs-imgedit--handle width height
+                         (<= (cmacs-imgedit-width cmacs-imgedit--handle) 128)))
+  (cmacs-imgedit--maybe-refit))
+
+(defun cmacs-imgedit-crop-image (x y width height)
+  "Crop the whole document to rectangle X Y WIDTH HEIGHT."
+  (interactive
+   (list (read-number "Crop x: " 0) (read-number "Crop y: " 0)
+         (read-number "Crop width: " (cmacs-imgedit-width cmacs-imgedit--handle))
+         (read-number "Crop height: " (cmacs-imgedit-height
+                                       cmacs-imgedit--handle))))
+  (cmacs-imgedit--with-edit
+   (cmacs-imgedit-crop cmacs-imgedit--handle x y width height))
+  (cmacs-imgedit--maybe-refit))
+
+(defun cmacs-imgedit-rotate-cw ()
+  "Rotate the whole document 90 degrees clockwise."
+  (interactive)
+  (cmacs-imgedit--with-edit (cmacs-imgedit-rotate cmacs-imgedit--handle t))
+  (cmacs-imgedit--maybe-refit))
+
+(defun cmacs-imgedit-rotate-ccw ()
+  "Rotate the whole document 90 degrees counter-clockwise."
+  (interactive)
+  (cmacs-imgedit--with-edit (cmacs-imgedit-rotate cmacs-imgedit--handle nil))
+  (cmacs-imgedit--maybe-refit))
+
+(defun cmacs-imgedit--maybe-refit ()
+  "Re-fit the viewport after a document-size change (live mode)."
+  (when cmacs-imgedit--live
+    (ignore-errors (cmacs-libregnum-image-fit (current-buffer)))))
+
+(defun cmacs-imgedit-gradient-fill (a b radial)
+  "Fill the active layer with a gradient from colour A to B (RADIAL if set)."
+  (interactive
+   (list (read-color "From colour: ") (read-color "To colour: ")
+         (y-or-n-p "Radial? ")))
+  (let ((ca (color-values a)) (cb (color-values b)))
+    (cmacs-imgedit--with-edit
+     (cmacs-imgedit-gradient
+      cmacs-imgedit--handle
+      (list (/ (nth 0 ca) 256) (/ (nth 1 ca) 256) (/ (nth 2 ca) 256) 255)
+      (list (/ (nth 0 cb) 256) (/ (nth 1 cb) 256) (/ (nth 2 cb) 256) 255)
+      radial))))
+
 ;; ── Layer operations (expose the existing model DEFUNs) ─────────────────
 
 (defun cmacs-imgedit--active ()
@@ -1301,16 +1390,28 @@ GTK clipboard (any compositor / X11), then `wl-paste'."
             ("Adjust"
              ("Brightness…" . cmacs-imgedit-adjust-brightness)
              ("Contrast…" . cmacs-imgedit-adjust-contrast)
+             ("Saturation…" . cmacs-imgedit-adjust-saturation)
              ("Invert" . cmacs-imgedit-invert-colors)
              ("Grayscale" . cmacs-imgedit-desaturate)
+             ("Threshold…" . cmacs-imgedit-threshold-layer)
+             ("Posterize…" . cmacs-imgedit-posterize-layer)
              ("Tint…" . cmacs-imgedit-tint-layer))
             ("Filter"
              ("Blur…" . cmacs-imgedit-blur-layer)
              ("Bloom" . cmacs-imgedit-bloom-layer)
+             ("Sharpen" . cmacs-imgedit-sharpen-layer)
+             ("Edge detect" . cmacs-imgedit-edge-detect-layer)
+             ("Emboss" . cmacs-imgedit-emboss-layer)
+             ("Pixelate…" . cmacs-imgedit-pixelate-layer)
              ("Noise…" . cmacs-imgedit-noise-layer))
             ("Transform"
              ("Flip horizontal" . cmacs-imgedit-flip-horizontal)
-             ("Flip vertical" . cmacs-imgedit-flip-vertical))
+             ("Flip vertical" . cmacs-imgedit-flip-vertical)
+             ("Rotate CW" . cmacs-imgedit-rotate-cw)
+             ("Rotate CCW" . cmacs-imgedit-rotate-ccw)
+             ("Resize…" . cmacs-imgedit-resize-image)
+             ("Crop…" . cmacs-imgedit-crop-image)
+             ("Gradient fill…" . cmacs-imgedit-gradient-fill))
             ("Clipboard"
              ("Copy image" . cmacs-imgedit-copy-to-clipboard)
              ("Paste image" . cmacs-imgedit-paste-from-clipboard)

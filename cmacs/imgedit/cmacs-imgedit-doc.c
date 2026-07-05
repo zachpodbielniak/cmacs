@@ -608,6 +608,55 @@ cmacs_imgedit_doc_color_replace (CmacsImgeditDoc *d,
   lrg_image_document_mark_dirty (d->doc);
 }
 
+/* ── Whole-document geometric transforms (delegate to the document) ─────── */
+void
+cmacs_imgedit_doc_resize (CmacsImgeditDoc *d, int w, int h, gboolean nearest)
+{
+  if (d) lrg_image_document_resize (d->doc, w, h, nearest);
+}
+
+void
+cmacs_imgedit_doc_crop (CmacsImgeditDoc *d, int x, int y, int w, int h)
+{
+  if (d) lrg_image_document_crop (d->doc, x, y, w, h);
+}
+
+void
+cmacs_imgedit_doc_rotate (CmacsImgeditDoc *d, gboolean clockwise)
+{
+  if (d) lrg_image_document_rotate (d->doc, clockwise);
+}
+
+/* ── Active-layer gradient fill ────────────────────────────────────────── */
+void
+cmacs_imgedit_doc_gradient (CmacsImgeditDoc *d, gboolean radial,
+                            gboolean vertical,
+                            guint8 ar, guint8 ag, guint8 ab, guint8 aa,
+                            guint8 br, guint8 bg, guint8 bb, guint8 ba)
+{
+  GrlImage *img = editable_image (d);
+  GrlColor ca, cb;
+  int w, h;
+
+  if (img == NULL) return;
+  w = grl_image_get_width (img);
+  h = grl_image_get_height (img);
+  ca.r = ar; ca.g = ag; ca.b = ab; ca.a = aa;
+  cb.r = br; cb.g = bg; cb.b = bb; cb.a = ba;
+  if (radial)
+    grl_image_draw_gradient_radial (img, w / 2, h / 2, (w < h ? w : h) / 2,
+                                    &ca, &cb);
+  else
+    {
+      g_autoptr (GrlRectangle) rect =
+        grl_rectangle_new (0.0f, 0.0f, (gfloat) w, (gfloat) h);
+      grl_image_draw_gradient_rect (img, rect, &ca, &cb,
+                                    vertical ? GRL_GRADIENT_AXIS_VERTICAL
+                                             : GRL_GRADIENT_AXIS_HORIZONTAL);
+    }
+  lrg_image_document_mark_dirty (d->doc);
+}
+
 /* ── Active-layer filters ──────────────────────────────────────────────── */
 void
 cmacs_imgedit_doc_blur (CmacsImgeditDoc *d, int radius)
@@ -637,6 +686,144 @@ cmacs_imgedit_doc_noise (CmacsImgeditDoc *d, double amplitude,
   if (img == NULL) return;
   grl_image_apply_noise (img, GRL_NOISE_BLEND_OVERLAY, (gfloat) amplitude,
                          (gfloat) frequency, seed);
+  lrg_image_document_mark_dirty (d->doc);
+}
+
+/* ── Pixel-buffer filters (operate on the active layer's live RGBA8 buffer) ─
+ * grl_image_get_pixels returns the tightly-packed, mutable buffer, so these
+ * run directly on it with no extra copy (except the convolutions, which read
+ * a snapshot).  Alpha is preserved throughout. */
+
+/* Active-layer RGBA8 buffer + dimensions, or NULL. */
+static guint8 *
+ie_layer_buf (CmacsImgeditDoc *d, int *w, int *h, gsize *n)
+{
+  GrlImage *img = editable_image (d);
+  if (img == NULL)
+    return NULL;
+  *w = grl_image_get_width (img);
+  *h = grl_image_get_height (img);
+  return grl_image_get_pixels (img, n);
+}
+
+void
+cmacs_imgedit_doc_threshold (CmacsImgeditDoc *d, int level)
+{
+  int w, h; gsize n, i; guint8 *p = ie_layer_buf (d, &w, &h, &n);
+  if (p == NULL) return;
+  for (i = 0; i + 3 < n; i += 4)
+    {
+      int luma = (p[i] * 299 + p[i + 1] * 587 + p[i + 2] * 114) / 1000;
+      guint8 v = (luma >= level) ? 255 : 0;
+      p[i] = p[i + 1] = p[i + 2] = v;      /* alpha p[i+3] kept */
+    }
+  lrg_image_document_mark_dirty (d->doc);
+}
+
+void
+cmacs_imgedit_doc_posterize (CmacsImgeditDoc *d, int levels)
+{
+  int w, h, c; gsize n, i; guint8 *p = ie_layer_buf (d, &w, &h, &n);
+  if (p == NULL) return;
+  if (levels < 2) levels = 2;
+  for (i = 0; i + 3 < n; i += 4)
+    for (c = 0; c < 3; c++)
+      {
+        int q = (p[i + c] * (levels - 1) + 127) / 255;   /* nearest bucket */
+        p[i + c] = (guint8) (q * 255 / (levels - 1));
+      }
+  lrg_image_document_mark_dirty (d->doc);
+}
+
+void
+cmacs_imgedit_doc_pixelate (CmacsImgeditDoc *d, int size)
+{
+  int w, h, bx, by, xx, yy; gsize n; guint8 *p = ie_layer_buf (d, &w, &h, &n);
+  if (p == NULL || size < 2) return;
+  for (by = 0; by < h; by += size)
+    for (bx = 0; bx < w; bx += size)
+      {
+        long sr = 0, sg = 0, sb = 0, sa = 0, cnt = 0;
+        int ex = (bx + size < w) ? bx + size : w;
+        int ey = (by + size < h) ? by + size : h;
+        for (yy = by; yy < ey; yy++)
+          for (xx = bx; xx < ex; xx++)
+            { gsize i = ((gsize) yy * w + xx) * 4;
+              sr += p[i]; sg += p[i+1]; sb += p[i+2]; sa += p[i+3]; cnt++; }
+        if (cnt == 0) continue;
+        for (yy = by; yy < ey; yy++)
+          for (xx = bx; xx < ex; xx++)
+            { gsize i = ((gsize) yy * w + xx) * 4;
+              p[i] = sr/cnt; p[i+1] = sg/cnt; p[i+2] = sb/cnt; p[i+3] = sa/cnt; }
+      }
+  lrg_image_document_mark_dirty (d->doc);
+}
+
+/* 3x3 convolution reading a snapshot; alpha preserved.  DIV/BIAS post-scale. */
+static void
+ie_convolve3 (CmacsImgeditDoc *d, const int k[9], int divisor, int bias)
+{
+  int w, h, x, y, dx, dy; gsize n; guint8 *p = ie_layer_buf (d, &w, &h, &n);
+  guint8 *src;
+  if (p == NULL) return;
+  if (divisor == 0) divisor = 1;
+  src = g_memdup2 (p, n);
+  for (y = 0; y < h; y++)
+    for (x = 0; x < w; x++)
+      {
+        int cr = 0, cg = 0, cb = 0, ki = 0;
+        for (dy = -1; dy <= 1; dy++)
+          for (dx = -1; dx <= 1; dx++, ki++)
+            {
+              int sx = CLAMP (x + dx, 0, w - 1);
+              int sy = CLAMP (y + dy, 0, h - 1);
+              gsize si = ((gsize) sy * w + sx) * 4;
+              cr += src[si] * k[ki];
+              cg += src[si + 1] * k[ki];
+              cb += src[si + 2] * k[ki];
+            }
+        gsize i = ((gsize) y * w + x) * 4;
+        p[i]     = CLAMP (cr / divisor + bias, 0, 255);
+        p[i + 1] = CLAMP (cg / divisor + bias, 0, 255);
+        p[i + 2] = CLAMP (cb / divisor + bias, 0, 255);
+      }
+  g_free (src);
+  lrg_image_document_mark_dirty (d->doc);
+}
+
+void
+cmacs_imgedit_doc_sharpen (CmacsImgeditDoc *d)
+{
+  static const int k[9] = { 0, -1, 0, -1, 5, -1, 0, -1, 0 };
+  ie_convolve3 (d, k, 1, 0);
+}
+
+void
+cmacs_imgedit_doc_edge_detect (CmacsImgeditDoc *d)
+{
+  static const int k[9] = { -1, -1, -1, -1, 8, -1, -1, -1, -1 };
+  ie_convolve3 (d, k, 1, 0);
+}
+
+void
+cmacs_imgedit_doc_emboss (CmacsImgeditDoc *d)
+{
+  static const int k[9] = { -2, -1, 0, -1, 1, 1, 0, 1, 2 };
+  ie_convolve3 (d, k, 1, 128);
+}
+
+void
+cmacs_imgedit_doc_saturation (CmacsImgeditDoc *d, double factor)
+{
+  int w, h; gsize n, i; guint8 *p = ie_layer_buf (d, &w, &h, &n);
+  if (p == NULL) return;
+  for (i = 0; i + 3 < n; i += 4)
+    {
+      double luma = 0.299 * p[i] + 0.587 * p[i + 1] + 0.114 * p[i + 2];
+      p[i]     = CLAMP ((int) (luma + (p[i]     - luma) * factor), 0, 255);
+      p[i + 1] = CLAMP ((int) (luma + (p[i + 1] - luma) * factor), 0, 255);
+      p[i + 2] = CLAMP ((int) (luma + (p[i + 2] - luma) * factor), 0, 255);
+    }
   lrg_image_document_mark_dirty (d->doc);
 }
 

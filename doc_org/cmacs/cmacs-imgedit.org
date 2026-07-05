@@ -96,10 +96,17 @@ flips apply to the whole document.
   ~-adjust-contrast~, ~-invert-colors~, ~-desaturate~, ~-tint-layer~.  The
   model DEFUNs are ~cmacs-imgedit-brightness/contrast/invert/grayscale/tint~
   and ~cmacs-imgedit-color-replace~ (exact-colour swap; FROM/TO are ~(R G B A)~).
-- *Filter*: Blur (box), Bloom (glow), Noise — ~cmacs-imgedit-blur-layer~,
-  ~-bloom-layer~, ~-noise-layer~ (model: ~cmacs-imgedit-blur/bloom/noise~).
-- *Transform*: Flip horizontal / vertical — ~cmacs-imgedit-flip-horizontal~ /
-  ~-flip-vertical~ (model: ~(cmacs-imgedit-flip HANDLE HORIZONTAL)~).
+  Saturation, Threshold (B/W) and Posterize (reduce colours) are here too
+  (~cmacs-imgedit-saturation/threshold/posterize~).
+- *Filter*: Blur (box), Bloom (glow), Sharpen, Edge detect, Emboss, Pixelate,
+  Noise — ~cmacs-imgedit-blur/bloom/sharpen/edge-detect/emboss/pixelate/noise~.
+  The convolution + pixel filters run directly on the active layer's RGBA8
+  buffer (no engine round-trip).
+- *Transform* (whole document): Flip horizontal / vertical, Rotate CW / CCW,
+  Resize, Crop, and a Gradient fill (linear or radial, active layer).  Model
+  DEFUNs ~cmacs-imgedit-flip/rotate/resize/crop/gradient~ delegate the
+  dimension-changing ops to new libregnum ~lrg_image_document_resize/crop/
+  rotate~ helpers (all layers + canvas).
 - *Layer* (right-click → Layer): Duplicate, Rename, Move up/down, Blend mode
   (Replace/Over/Add/Multiply/Subtract), Toggle lock.  A *locked* layer refuses
   edits until unlocked (~cmacs-imgedit-set-layer-locked~ /
