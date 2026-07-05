@@ -36,6 +36,7 @@ dep_buildtype := "debug"
 # in-tree default and any installed gowl modules (see
 # cmacs_gowl_find_module in cmacs/gowl/cmacs-gowl.c).
 local_env := \
+    "CMACS_LISP_DIR=" + justfile_directory() + "/lisp/cmacs " + \
     "CMACS_MODULE_DIR=" + justfile_directory() + "/cmacs/bacon/modules " + \
     "CMACS_GSURF_MODULE_DIR=" + justfile_directory() + "/cmacs/gsurf/modules " + \
     "CMACS_GOWL_MODULE_DIR=" + justfile_directory() + "/deps/gowl/build/" + dep_buildtype + "/modules " + \
