@@ -630,6 +630,169 @@ cmacs_imgedit_doc_rotate (CmacsImgeditDoc *d, gboolean clockwise)
   if (d) lrg_image_document_rotate (d->doc, clockwise);
 }
 
+/* ── Sprite mode: slice-to-grid, onion-skin, palette, indexed PNG ────────
+ * slice_grid rebuilds the document IN PLACE (never replaces d->doc, so the
+ * viewport's borrowed pointer stays valid): COLSxROWS cells of the flattened
+ * image become the layer stack (frame 1 bottom .. frame N top). */
+gboolean
+cmacs_imgedit_doc_slice_grid (CmacsImgeditDoc *d, int cols, int rows)
+{
+  GrlImage *flat;
+  GrlImage **cells;
+  int w, h, cw, ch, total, i, r, c;
+
+  if (!d || cols < 1 || rows < 1)
+    return FALSE;
+  flat = grl_image_copy (lrg_image_document_flatten (d->doc));
+  if (flat == NULL)
+    return FALSE;
+  w = grl_image_get_width (flat);
+  h = grl_image_get_height (flat);
+  cw = w / cols; ch = h / rows;
+  if (cw < 1 || ch < 1)
+    { g_object_unref (flat); return FALSE; }
+  total = cols * rows;
+  cells = g_new0 (GrlImage *, total);
+  for (r = 0; r < rows; r++)
+    for (c = 0; c < cols; c++)
+      {
+        g_autoptr (GrlRectangle) rect =
+          grl_rectangle_new ((gfloat) (c * cw), (gfloat) (r * ch),
+                             (gfloat) cw, (gfloat) ch);
+        cells[r * cols + c] = grl_image_from_region (flat, rect);
+      }
+  g_object_unref (flat);
+  /* Reduce to one layer, crop the doc to cell size, then repopulate. */
+  while (lrg_image_document_get_n_layers (d->doc) > 1)
+    lrg_image_document_remove_layer (d->doc,
+      lrg_image_document_get_n_layers (d->doc) - 1);
+  cmacs_imgedit_doc_crop (d, 0, 0, cw, ch);
+  if (cells[0])
+    lrg_image_layer_set_image (lrg_image_document_get_layer (d->doc, 0),
+                               cells[0]);
+  for (i = 1; i < total; i++)
+    {
+      char name[32];
+      g_snprintf (name, sizeof name, "frame %d", i + 1);
+      if (cells[i])
+        lrg_image_document_add_layer_for_image (d->doc, cells[i], name);
+    }
+  for (i = 0; i < total; i++)
+    if (cells[i]) g_object_unref (cells[i]);
+  g_free (cells);
+  cmacs_imgedit_doc_select_none (d);
+  lrg_image_document_set_active_index (d->doc, 0);
+  lrg_image_document_mark_dirty (d->doc);
+  return TRUE;
+}
+
+/* Onion-skin display: show the active layer solid + the adjacent frames
+   ghosted (non-destructive; ON = FALSE restores full visibility/opacity). */
+void
+cmacs_imgedit_doc_onion_skin (CmacsImgeditDoc *d, gboolean on,
+                             double prev_op, double next_op)
+{
+  guint n, i, active;
+  if (!d) return;
+  n = lrg_image_document_get_n_layers (d->doc);
+  active = lrg_image_document_get_active_index (d->doc);
+  for (i = 0; i < n; i++)
+    {
+      LrgImageLayer *l = lrg_image_document_get_layer (d->doc, i);
+      if (!on)
+        { lrg_image_layer_set_visible (l, TRUE);
+          lrg_image_layer_set_opacity (l, 1.0f); }
+      else
+        {
+          gboolean is_prev = (active > 0 && i == active - 1);
+          gboolean is_next = (i == active + 1);
+          lrg_image_layer_set_visible (l, i == active || is_prev || is_next);
+          lrg_image_layer_set_opacity (l, (i == active) ? 1.0f
+                                       : is_prev ? (gfloat) prev_op
+                                       : (gfloat) next_op);
+        }
+    }
+  lrg_image_document_mark_dirty (d->doc);
+}
+
+/* Extract a MAX_COLORS palette (median-cut) of the flattened doc into OUT_RGB
+   (3 bytes/entry); returns the number of colours. */
+int
+cmacs_imgedit_doc_palette (CmacsImgeditDoc *d, int max_colors, guint8 *out_rgb)
+{
+  GrlImage *flat;
+  const guint8 *px;
+  gsize n = 0;
+  int w, h, nc;
+  guint8 pal[768];
+  if (!d || !out_rgb) return 0;
+  flat = lrg_image_document_flatten (d->doc);
+  if (flat == NULL) return 0;
+  px = grl_image_get_pixels (flat, &n);
+  w = grl_image_get_width (flat);
+  h = grl_image_get_height (flat);
+  if (px == NULL) return 0;
+  if (max_colors < 2) max_colors = 2;
+  if (max_colors > 256) max_colors = 256;
+  nc = grl_gif_median_cut (px, w * h, max_colors, pal);
+  if (nc > 0)
+    memcpy (out_rgb, pal, (gsize) nc * 3);
+  return nc;
+}
+
+/* Export the flattened doc as a PNG quantized to a MAX_COLORS median-cut
+   palette (Floyd–Steinberg dithered).  We map to the palette ourselves and
+   write a normal PNG rather than routing through graylib's indexed-PNG rpng
+   path (which is unreliable); the result is a colour-reduced sprite image. */
+gboolean
+cmacs_imgedit_doc_export_indexed_png (CmacsImgeditDoc *d, const char *path,
+                                     int max_colors, char **error_msg)
+{
+  GrlImage *flat, *out;
+  GrlColor transparent = { 0, 0, 0, 0 };
+  guint8 pal[768];
+  const guint8 *px;
+  guint8 *op, *indices;
+  gsize n = 0, on = 0, i;
+  int w, h, nc;
+  gboolean ok;
+
+  if (!d || !path) return FALSE;
+  flat = lrg_image_document_flatten (d->doc);
+  if (flat == NULL) return FALSE;
+  px = grl_image_get_pixels (flat, &n);
+  w = grl_image_get_width (flat);
+  h = grl_image_get_height (flat);
+  if (px == NULL) return FALSE;
+  if (max_colors < 2) max_colors = 2;
+  if (max_colors > 256) max_colors = 256;
+  nc = grl_gif_median_cut (px, w * h, max_colors, pal);
+  if (nc <= 0)
+    { if (error_msg) *error_msg = g_strdup ("quantization failed");
+      return FALSE; }
+  /* Map every pixel to its nearest palette entry (dithered). */
+  indices = g_new0 (guint8, (gsize) w * h);
+  grl_gif_map_indices (px, w, h, pal, nc, GRL_GIF_DITHER_FLOYD_STEINBERG,
+                       -1, 0, indices);
+  out = grl_image_new_color (w, h, &transparent);
+  op = grl_image_get_pixels (out, &on);
+  if (op != NULL)
+    for (i = 0; i < (gsize) w * h; i++)
+      {
+        guint8 idx = indices[i];
+        op[i*4]   = pal[idx*3];
+        op[i*4+1] = pal[idx*3+1];
+        op[i*4+2] = pal[idx*3+2];
+        op[i*4+3] = px[i*4+3];        /* keep original alpha */
+      }
+  g_free (indices);
+  ok = grl_image_export (out, path);
+  g_object_unref (out);
+  if (!ok && error_msg)
+    *error_msg = g_strdup ("indexed PNG export failed");
+  return ok;
+}
+
 /* Compute a 256-bin histogram of the flattened document.  CHANNEL: 0 luma,
    1 red, 2 green, 3 blue.  BINS must hold 256 ints. */
 void

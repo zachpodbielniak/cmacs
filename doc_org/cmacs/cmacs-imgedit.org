@@ -121,6 +121,13 @@ flips apply to the whole document.
   (clear to transparent), and *Crop to selection*
   (~cmacs-imgedit-selection-fill/crop~).  The selection bbox shows as a
   viewport marquee.
+- *Sprite mode* (right-click → Sprite): *Slice into frames…*
+  (~cmacs-imgedit-slice-grid~ turns a sprite sheet into COLSxROWS frame
+  layers, rebuilt in place), *Toggle onion-skin* (~cmacs-imgedit-onion-skin~:
+  active frame solid, neighbours ghosted), *Palette…* (~cmacs-imgedit-palette~
+  median-cut swatches; click to pick), *Export GIF (frames)…*, and *Export
+  indexed PNG…* (~cmacs-imgedit-export-indexed-png~: Floyd–Steinberg-dithered
+  colour reduction).
 - *Animation*: right-click → Edit → *Export GIF (layers)…* renders each layer
   as one frame of an animated GIF (~cmacs-imgedit-export-gif-file~ / model
   ~cmacs-imgedit-export-gif~, DELAY centiseconds/frame) --- a quick way to turn

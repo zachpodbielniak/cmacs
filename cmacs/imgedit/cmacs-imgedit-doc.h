@@ -130,6 +130,20 @@ extern void cmacs_imgedit_doc_gradient (CmacsImgeditDoc *d, gboolean radial,
                                         guint8 ar, guint8 ag, guint8 ab,
                                         guint8 aa, guint8 br, guint8 bg,
                                         guint8 bb, guint8 ba);
+/* Sprite mode: slice the flattened doc into COLSxROWS frame layers. */
+extern gboolean cmacs_imgedit_doc_slice_grid (CmacsImgeditDoc *d, int cols,
+                                              int rows);
+/* Onion-skin display (active solid + adjacent frames ghosted). */
+extern void cmacs_imgedit_doc_onion_skin (CmacsImgeditDoc *d, gboolean on,
+                                          double prev_op, double next_op);
+/* Median-cut palette into OUT_RGB (3 bytes/entry); returns colour count. */
+extern int cmacs_imgedit_doc_palette (CmacsImgeditDoc *d, int max_colors,
+                                      guint8 *out_rgb);
+/* Export the flattened doc as an indexed PNG quantized to MAX_COLORS. */
+extern gboolean cmacs_imgedit_doc_export_indexed_png (CmacsImgeditDoc *d,
+                                                      const char *path,
+                                                      int max_colors,
+                                                      char **error_msg);
 /* 256-bin histogram of the flattened doc (CHANNEL: 0 luma,1 r,2 g,3 b). */
 extern void cmacs_imgedit_doc_histogram (CmacsImgeditDoc *d, int channel,
                                          int *bins);

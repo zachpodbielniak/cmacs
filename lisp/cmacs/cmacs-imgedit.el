@@ -1470,6 +1470,60 @@ Photoshop modes implemented in the document compositor).")
         (display-buffer (current-buffer))))))
 
 
+(defun cmacs-imgedit-slice-to-frames (cols rows)
+  "Slice the image into COLS x ROWS frame layers (sprite mode)."
+  (interactive (list (read-number "Columns: " 4) (read-number "Rows: " 4)))
+  (cmacs-imgedit--with-edit
+   (cmacs-imgedit-slice-grid cmacs-imgedit--handle cols rows))
+  (cmacs-imgedit--maybe-refit)
+  (message "Sliced into %d frames" (* cols rows)))
+
+(defvar-local cmacs-imgedit--onion nil "Onion-skin display state.")
+(defun cmacs-imgedit-toggle-onion-skin ()
+  "Toggle onion-skin (active frame solid, neighbours ghosted)."
+  (interactive)
+  (setq cmacs-imgedit--onion (not cmacs-imgedit--onion))
+  (cmacs-imgedit-onion-skin cmacs-imgedit--handle cmacs-imgedit--onion 0.3 0.3)
+  (cmacs-imgedit--render)
+  (message "Onion-skin %s" (if cmacs-imgedit--onion "on" "off")))
+
+(defun cmacs-imgedit-export-indexed (file colors)
+  "Export a colour-reduced (COLORS) PNG to FILE."
+  (interactive (list (read-file-name "Export indexed PNG: " nil "indexed.png")
+                     (read-number "Max colours: " 16)))
+  (cmacs-imgedit-export-indexed-png cmacs-imgedit--handle
+                                    (expand-file-name file) colors)
+  (message "Wrote %s (<=%d colours)" file colors))
+
+(defun cmacs-imgedit-show-palette (colors)
+  "Show the image's dominant COLORS palette; click a swatch to pick it."
+  (interactive (list (read-number "Palette size: " 16)))
+  (let ((pal (cmacs-imgedit-palette cmacs-imgedit--handle colors))
+        (src (current-buffer)))
+    (with-current-buffer (get-buffer-create "*imgedit palette*")
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (dolist (c pal)
+          (let ((sw (propertize "   "
+                     'face (list :background
+                                 (format "#%02x%02x%02x"
+                                         (nth 0 c) (nth 1 c) (nth 2 c)))
+                     'mouse-face 'highlight
+                     'help-echo (format "RGB %d %d %d" (nth 0 c) (nth 1 c) (nth 2 c))
+                     'keymap (let ((m (make-sparse-keymap)) (col c) (b src))
+                               (define-key m [mouse-1]
+                                 (lambda () (interactive)
+                                   (with-current-buffer b
+                                     (apply #'cmacs-imgedit-set-color
+                                            cmacs-imgedit--handle
+                                            (append col '(255))))
+                                   (message "Picked RGB %S" col)))
+                               m))))
+            (insert sw (format " %3d %3d %3d\n" (nth 0 c) (nth 1 c) (nth 2 c)))))
+        (special-mode))
+      (display-buffer (current-buffer)))))
+
+
 (defun cmacs-imgedit--menu ()
   "Return the image-editor context-menu alist (shared by native + viewport)."
   '("Image editor"
@@ -1536,6 +1590,12 @@ Photoshop modes implemented in the document compositor).")
              ("Fill selection" . cmacs-imgedit-fill-selection)
              ("Delete selection" . cmacs-imgedit-delete-selection)
              ("Crop to selection" . cmacs-imgedit-crop-to-selection))
+            ("Sprite"
+             ("Slice into frames…" . cmacs-imgedit-slice-to-frames)
+             ("Toggle onion-skin" . cmacs-imgedit-toggle-onion-skin)
+             ("Palette…" . cmacs-imgedit-show-palette)
+             ("Export GIF (frames)…" . cmacs-imgedit-export-gif-file)
+             ("Export indexed PNG…" . cmacs-imgedit-export-indexed))
             ("Clipboard"
              ("Copy image" . cmacs-imgedit-copy-to-clipboard)
              ("Paste image" . cmacs-imgedit-paste-from-clipboard)

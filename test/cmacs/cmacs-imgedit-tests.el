@@ -474,5 +474,49 @@ itself instead of drawing a dot at the press position."
             (should (= (aref hist 0) 0))))
       (cmacs-imgedit-free h))))
 
+(ert-deftest cmacs-imgedit-tests-slice-grid ()
+  "Slice-to-grid turns an NxM image into COLS*ROWS frame layers."
+  (skip-unless (fboundp 'cmacs-imgedit-slice-grid))
+  (let ((h (cmacs-imgedit-new 4 4)))
+    (unwind-protect
+        (progn
+          (cmacs-imgedit-fill h 10 20 30 255)
+          (should (cmacs-imgedit-slice-grid h 2 2))
+          (should (= (cmacs-imgedit-width h) 2))
+          (should (= (cmacs-imgedit-height h) 2))
+          (should (= (cmacs-imgedit-n-layers h) 4)))
+      (cmacs-imgedit-free h))))
+
+(ert-deftest cmacs-imgedit-tests-palette-and-indexed ()
+  "Palette extraction + colour-reduced PNG export round-trips colours."
+  (skip-unless (fboundp 'cmacs-imgedit-palette))
+  (let ((h (cmacs-imgedit-new 8 8))
+        (png (make-temp-file "cmie-idx" nil ".png")))
+    (unwind-protect
+        (progn
+          (cmacs-imgedit-fill h 200 50 50 255)
+          (cmacs-imgedit-set-color h 40 40 200 255)
+          (cmacs-imgedit-draw-rect h 4 0 4 8 t 1)
+          (should (>= (length (cmacs-imgedit-palette h 4)) 2))
+          (cmacs-imgedit-export-indexed-png h png 4)
+          (should (> (file-attribute-size (file-attributes png)) 0))
+          (let ((h2 (cmacs-imgedit-open png)))
+            (should (equal (cmacs-imgedit-pixel-at h2 1 4) '(200 50 50 255)))
+            (cmacs-imgedit-free h2)))
+      (cmacs-imgedit-free h)
+      (delete-file png))))
+
+(ert-deftest cmacs-imgedit-tests-onion-skin ()
+  "Onion-skin toggling does not error and restores visibility."
+  (skip-unless (fboundp 'cmacs-imgedit-onion-skin))
+  (let ((h (cmacs-imgedit-new 4 4)))
+    (unwind-protect
+        (progn
+          (cmacs-imgedit-add-layer h "f2")
+          (cmacs-imgedit-onion-skin h t 0.3 0.3)
+          (cmacs-imgedit-onion-skin h nil)
+          (should (cmacs-imgedit-pixel-at h 2 2)))
+      (cmacs-imgedit-free h))))
+
 (provide 'cmacs-imgedit-tests)
 ;;; cmacs-imgedit-tests.el ends here

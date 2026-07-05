@@ -813,6 +813,62 @@ DEFUN ("cmacs-imgedit-noise", Fcmacs_imgedit_noise, Scmacs_imgedit_noise,
   return Qnil;
 }
 
+DEFUN ("cmacs-imgedit-slice-grid", Fcmacs_imgedit_slice_grid,
+       Scmacs_imgedit_slice_grid, 3, 3, 0,
+       doc: /* Slice the image into COLS x ROWS frame layers (sprite mode).  */)
+  (Lisp_Object handle, Lisp_Object cols, Lisp_Object rows)
+{
+  return cmacs_imgedit_doc_slice_grid (ie_lookup (handle), ie_int (cols, 1),
+                                       ie_int (rows, 1)) ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-imgedit-onion-skin", Fcmacs_imgedit_onion_skin,
+       Scmacs_imgedit_onion_skin, 2, 4, 0,
+       doc: /* Onion-skin: ON shows the active layer solid + neighbours ghosted
+at PREV-OP / NEXT-OP opacity (default 0.3).  */)
+  (Lisp_Object handle, Lisp_Object on, Lisp_Object prev_op, Lisp_Object next_op)
+{
+  cmacs_imgedit_doc_onion_skin (ie_lookup (handle), !NILP (on),
+                                NUMBERP (prev_op) ? XFLOATINT (prev_op) : 0.3,
+                                NUMBERP (next_op) ? XFLOATINT (next_op) : 0.3);
+  return Qnil;
+}
+
+DEFUN ("cmacs-imgedit-palette", Fcmacs_imgedit_palette,
+       Scmacs_imgedit_palette, 1, 2, 0,
+       doc: /* Return a list of (R G B) colours (median-cut, MAX-COLORS,
+default 16) representing the image.  */)
+  (Lisp_Object handle, Lisp_Object max_colors)
+{
+  guint8 rgb[768];
+  int n, i;
+  Lisp_Object out = Qnil;
+  n = cmacs_imgedit_doc_palette (ie_lookup (handle), ie_int (max_colors, 16),
+                                 rgb);
+  for (i = n - 1; i >= 0; i--)
+    out = Fcons (list3 (make_fixnum (rgb[i*3]), make_fixnum (rgb[i*3+1]),
+                        make_fixnum (rgb[i*3+2])), out);
+  return out;
+}
+
+DEFUN ("cmacs-imgedit-export-indexed-png", Fcmacs_imgedit_export_indexed_png,
+       Scmacs_imgedit_export_indexed_png, 2, 3, 0,
+       doc: /* Export HANDLE as an indexed PNG to PATH (MAX-COLORS, default
+256).  */)
+  (Lisp_Object handle, Lisp_Object path, Lisp_Object max_colors)
+{
+  char *err = NULL;
+  CHECK_STRING (path);
+  if (!cmacs_imgedit_doc_export_indexed_png (ie_lookup (handle), SSDATA (path),
+                                             ie_int (max_colors, 256), &err))
+    {
+      Lisp_Object m = build_string (err ? err : "indexed PNG export failed");
+      g_free (err);
+      xsignal1 (Qcmacs_imgedit_error, m);
+    }
+  return Qt;
+}
+
 DEFUN ("cmacs-imgedit-histogram", Fcmacs_imgedit_histogram,
        Scmacs_imgedit_histogram, 1, 2, 0,
        doc: /* Return a 256-element histogram vector for CHANNEL
@@ -1113,6 +1169,10 @@ syms_of_cmacs_imgedit_defuns (void)
   defsubr (&Scmacs_imgedit_blur);
   defsubr (&Scmacs_imgedit_bloom);
   defsubr (&Scmacs_imgedit_noise);
+  defsubr (&Scmacs_imgedit_slice_grid);
+  defsubr (&Scmacs_imgedit_onion_skin);
+  defsubr (&Scmacs_imgedit_palette);
+  defsubr (&Scmacs_imgedit_export_indexed_png);
   defsubr (&Scmacs_imgedit_histogram);
   defsubr (&Scmacs_imgedit_select_rect);
   defsubr (&Scmacs_imgedit_select_wand);
