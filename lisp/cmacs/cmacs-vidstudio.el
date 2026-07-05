@@ -752,6 +752,28 @@ silently updates.  Starting play at the end of the timeline rewinds."
 ;; Right-click context menu (GTK under pgtk, in-engine under --lrg)
 ;; --------------------------------------------------------------------------
 
+(defun cmacs-vidstudio-add-rectangle (x y w h color seconds)
+  "Add a filled rectangle shape clip."
+  (interactive (list (read-number "X: " 0) (read-number "Y: " 0)
+                     (read-number "W: " 200) (read-number "H: " 100)
+                     (read-color "Fill: ") (read-number "Seconds: " 2.0)))
+  (let ((c (color-values color)))
+    (cmacs-vidstudio-add-shape-rect
+     cmacs-vidstudio--handle cmacs-vidstudio--active-track
+     (cmacs-vidstudio--secs-to-frames seconds) x y w h
+     (list (/ (nth 0 c) 256) (/ (nth 1 c) 256) (/ (nth 2 c) 256) 255))
+    (cmacs-vidstudio--render)))
+
+(defun cmacs-vidstudio-add-captions (srt seconds)
+  "Add captions from an SRT file."
+  (interactive (list (read-file-name "SRT file: " nil nil t)
+                     (read-number "Seconds: " 5.0)))
+  (cmacs-vidstudio-add-caption cmacs-vidstudio--handle
+                               cmacs-vidstudio--active-track
+                               (cmacs-vidstudio--secs-to-frames seconds)
+                               (expand-file-name srt))
+  (cmacs-vidstudio--render))
+
 (defun cmacs-vidstudio--menu ()
   "Return the video-editor context-menu alist (shared native + viewport)."
   '("Video editor"
@@ -760,6 +782,8 @@ silently updates.  Starting play at the end of the timeline rewinds."
              ("Solid colour…" . cmacs-vidstudio-add-color)
              ("Title…" . cmacs-vidstudio-add-title)
              ("Gradient…" . cmacs-vidstudio-add-gradient)
+             ("Rectangle…" . cmacs-vidstudio-add-rectangle)
+             ("Captions (SRT)…" . cmacs-vidstudio-add-captions)
              ("New track" . cmacs-vidstudio-add-track-cmd))
             ("Clip"
              ("Transition…" . cmacs-vidstudio-add-transition-cmd)

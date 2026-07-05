@@ -209,6 +209,64 @@ DEFUN ("cmacs-vidstudio-add-solid-clip", Fcmacs_vidstudio_add_solid_clip,
                           vs_clamp8 (b), vs_clamp8 (a)));
 }
 
+DEFUN ("cmacs-vidstudio-add-shape-rect", Fcmacs_vidstudio_add_shape_rect,
+       Scmacs_vidstudio_add_shape_rect, 8, 8, 0,
+       doc: /* Append a filled rect shape (X Y W H, FILL = (R G B A)) on TRACK.  */)
+  (Lisp_Object handle, Lisp_Object track, Lisp_Object duration, Lisp_Object x,
+   Lisp_Object y, Lisp_Object w, Lisp_Object h, Lisp_Object fill)
+{
+  CHECK_FIXNUM (track);
+  return make_fixnum (cmacs_vidstudio_proj_add_shape_rect
+    (vs_lookup (handle), (guint) XFIXNUM (track), vs_int (duration, 0),
+     vs_int (x, 0), vs_int (y, 0), vs_int (w, 0), vs_int (h, 0),
+     vs_clamp8 (Fnth (make_fixnum (0), fill)),
+     vs_clamp8 (Fnth (make_fixnum (1), fill)),
+     vs_clamp8 (Fnth (make_fixnum (2), fill)),
+     vs_clamp8 (Fnth (make_fixnum (3), fill))));
+}
+
+DEFUN ("cmacs-vidstudio-add-shape-circle", Fcmacs_vidstudio_add_shape_circle,
+       Scmacs_vidstudio_add_shape_circle, 7, 7, 0,
+       doc: /* Append a filled circle (CX CY RADIUS, FILL = (R G B A)) on TRACK.  */)
+  (Lisp_Object handle, Lisp_Object track, Lisp_Object duration, Lisp_Object cx,
+   Lisp_Object cy, Lisp_Object radius, Lisp_Object fill)
+{
+  CHECK_FIXNUM (track);
+  return make_fixnum (cmacs_vidstudio_proj_add_shape_circle
+    (vs_lookup (handle), (guint) XFIXNUM (track), vs_int (duration, 0),
+     vs_int (cx, 0), vs_int (cy, 0), vs_int (radius, 0),
+     vs_clamp8 (Fnth (make_fixnum (0), fill)),
+     vs_clamp8 (Fnth (make_fixnum (1), fill)),
+     vs_clamp8 (Fnth (make_fixnum (2), fill)),
+     vs_clamp8 (Fnth (make_fixnum (3), fill))));
+}
+
+DEFUN ("cmacs-vidstudio-add-caption", Fcmacs_vidstudio_add_caption,
+       Scmacs_vidstudio_add_caption, 3, 5, 0,
+       doc: /* Append captions from an SRT PATH (DURATION frames); optional
+FONT-SIZE and COLOR = (R G B A).  */)
+  (Lisp_Object handle, Lisp_Object track, Lisp_Object srt, Lisp_Object duration,
+   Lisp_Object font_and_color)
+{
+  char *err = NULL;
+  gint id;
+  Lisp_Object col = CONSP (font_and_color) ? XCDR (font_and_color) : Qnil;
+  int fs = CONSP (font_and_color) ? vs_int (XCAR (font_and_color), 0) : 0;
+  CHECK_FIXNUM (track);
+  CHECK_STRING (srt);
+  id = cmacs_vidstudio_proj_add_caption
+    (vs_lookup (handle), (guint) XFIXNUM (track), vs_int (duration, 0),
+     SSDATA (srt), fs,
+     vs_clamp8 (Fnth (make_fixnum (0), col)),
+     vs_clamp8 (Fnth (make_fixnum (1), col)),
+     vs_clamp8 (Fnth (make_fixnum (2), col)),
+     CONSP (col) ? vs_clamp8 (Fnth (make_fixnum (3), col)) : 255, &err);
+  if (id < 0)
+    { Lisp_Object m = build_string (err ? err : "caption load failed");
+      g_free (err); xsignal1 (Qcmacs_vidstudio_error, m); }
+  return make_fixnum (id);
+}
+
 DEFUN ("cmacs-vidstudio-add-gradient-clip",
        Fcmacs_vidstudio_add_gradient_clip,
        Scmacs_vidstudio_add_gradient_clip, 5, 6, 0,
@@ -928,6 +986,9 @@ syms_of_cmacs_vidstudio_defuns (void)
   defsubr (&Scmacs_vidstudio_track_clip_count);
   defsubr (&Scmacs_vidstudio_track_total_frames);
   defsubr (&Scmacs_vidstudio_add_solid_clip);
+  defsubr (&Scmacs_vidstudio_add_shape_rect);
+  defsubr (&Scmacs_vidstudio_add_shape_circle);
+  defsubr (&Scmacs_vidstudio_add_caption);
   defsubr (&Scmacs_vidstudio_add_gradient_clip);
   defsubr (&Scmacs_vidstudio_add_image_clip);
   defsubr (&Scmacs_vidstudio_add_video_clip);

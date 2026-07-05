@@ -337,5 +337,13 @@ flips once the decode lands and real frames replace the placeholder."
     (should (< (nth 0 (cmacs-vidstudio-frame-pixel p 0 16 2))
                (nth 0 (cmacs-vidstudio-frame-pixel p 0 16 29))))))
 
+(ert-deftest cmacs-vidstudio-tests-shape-clip ()
+  "A filled rect shape clip paints inside and is transparent outside."
+  (cmacs-vidstudio-tests--skip-unless)
+  (cmacs-vidstudio-tests--with-proj p 32 32 30.0
+    (cmacs-vidstudio-add-shape-rect p 0 10 8 8 16 16 '(0 255 0 255))
+    (should (equal (cmacs-vidstudio-frame-pixel p 0 16 16) '(0 255 0 255)))
+    (should (= (nth 3 (cmacs-vidstudio-frame-pixel p 0 2 2)) 0))))
+
 (provide 'cmacs-vidstudio-tests)
 ;;; cmacs-vidstudio-tests.el ends here

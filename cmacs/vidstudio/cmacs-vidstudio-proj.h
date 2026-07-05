@@ -76,6 +76,21 @@ extern gint cmacs_vidstudio_proj_add_gradient_clip (CmacsVidProject *p,
                                                    guint8 ab, guint8 aa,
                                                    guint8 br, guint8 bg,
                                                    guint8 bb, guint8 ba);
+extern gint cmacs_vidstudio_proj_add_shape_rect (CmacsVidProject *p,
+                                                guint track, int duration,
+                                                int x, int y, int w, int h,
+                                                guint8 r, guint8 g, guint8 b,
+                                                guint8 a);
+extern gint cmacs_vidstudio_proj_add_shape_circle (CmacsVidProject *p,
+                                                   guint track, int duration,
+                                                   int cx, int cy, int radius,
+                                                   guint8 r, guint8 g, guint8 b,
+                                                   guint8 a);
+extern gint cmacs_vidstudio_proj_add_caption (CmacsVidProject *p, guint track,
+                                              int duration, const char *srt_path,
+                                              int font_size, guint8 r, guint8 g,
+                                              guint8 b, guint8 a,
+                                              char **error_msg);
 extern gint cmacs_vidstudio_proj_add_image_clip (CmacsVidProject *p,
                                                  guint track, const char *path,
                                                  int duration,

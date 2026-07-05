@@ -370,6 +370,52 @@ cmacs_vidstudio_proj_add_gradient_clip (CmacsVidProject *p, guint track,
 }
 
 gint
+cmacs_vidstudio_proj_add_shape_rect (CmacsVidProject *p, guint track,
+                                     int duration, int x, int y, int w, int h,
+                                     guint8 r, guint8 g, guint8 b, guint8 a)
+{
+  LrgReelShapeClip *c = lrg_reel_shape_clip_new_rect (x, y, w, h);
+  GrlColor col;
+  col.r = r; col.g = g; col.b = b; col.a = a;
+  lrg_reel_shape_clip_set_fill_color (c, &col);
+  return append_clip (p, track, LRG_REEL_CLIP (c), duration);
+}
+
+gint
+cmacs_vidstudio_proj_add_shape_circle (CmacsVidProject *p, guint track,
+                                       int duration, int cx, int cy, int radius,
+                                       guint8 r, guint8 g, guint8 b, guint8 a)
+{
+  LrgReelShapeClip *c = lrg_reel_shape_clip_new_circle (cx, cy, radius);
+  GrlColor col;
+  col.r = r; col.g = g; col.b = b; col.a = a;
+  lrg_reel_shape_clip_set_fill_color (c, &col);
+  return append_clip (p, track, LRG_REEL_CLIP (c), duration);
+}
+
+gint
+cmacs_vidstudio_proj_add_caption (CmacsVidProject *p, guint track, int duration,
+                                  const char *srt_path, int font_size,
+                                  guint8 r, guint8 g, guint8 b, guint8 a,
+                                  char **error_msg)
+{
+  LrgReelCaptionClip *c;
+  GrlColor col;
+  g_autoptr (GError) err = NULL;
+
+  c = lrg_reel_caption_clip_new_from_srt (srt_path, &err);
+  if (c == NULL)
+    { if (error_msg)
+        *error_msg = g_strdup (err ? err->message : "could not load captions");
+      return -1; }
+  if (font_size > 0)
+    lrg_reel_caption_clip_set_font_size (c, font_size);
+  col.r = r; col.g = g; col.b = b; col.a = a;
+  lrg_reel_caption_clip_set_color (c, &col);
+  return append_clip (p, track, LRG_REEL_CLIP (c), duration);
+}
+
+gint
 cmacs_vidstudio_proj_add_image_clip (CmacsVidProject *p, guint track,
                                      const char *path, int duration,
                                      char **error_msg)
