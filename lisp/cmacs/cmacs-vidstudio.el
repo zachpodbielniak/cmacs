@@ -1069,10 +1069,14 @@ Sets `cmacs-vidstudio--live'; leaves it nil (native path) on failure."
   (when (cmacs-vidstudio--viewport-available-p)
     (condition-case _err
         (let ((win (get-buffer-window buffer)))
+          ;; Size the FBO to the window BODY (text area), not the full window:
+          ;; the paint + click-mapping use window-body dimensions, so an FBO
+          ;; sized to window-pixel-height is taller than its paint region and
+          ;; the bottom timeline strip spills onto the modeline.
           (cmacs-libregnum-attach
            buffer
-           (max 64 (if win (window-pixel-width win) 640))
-           (max 64 (if win (window-pixel-height win) 480)))
+           (max 64 (if win (window-body-width win t) 640))
+           (max 64 (if win (window-body-height win t) 480)))
           (cmacs-libregnum-image-enter buffer t)
           (cmacs-libregnum-image-set-checker buffer nil)
           (with-current-buffer buffer

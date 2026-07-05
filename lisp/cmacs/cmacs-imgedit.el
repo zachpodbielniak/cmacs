@@ -1742,10 +1742,13 @@ Sets `cmacs-imgedit--live' on success; leaves it nil (native path) otherwise."
   (when (cmacs-imgedit--viewport-available-p)
     (condition-case _err
         (let ((win (get-buffer-window buffer)))
+          ;; Size the FBO to the window BODY (text area), not the full window,
+          ;; so the FBO matches the paint + click-mapping region (which use
+          ;; window-body dimensions) and nothing spills onto the modeline.
           (cmacs-libregnum-attach
            buffer
-           (max 64 (if win (window-pixel-width win) 640))
-           (max 64 (if win (window-pixel-height win) 480)))
+           (max 64 (if win (window-body-width win t) 640))
+           (max 64 (if win (window-body-height win t) 480)))
           (when (cmacs-imgedit-viewport-bind handle buffer)
             (cmacs-libregnum-image-enter buffer t)
             (cmacs-libregnum-image-set-checker buffer t)
