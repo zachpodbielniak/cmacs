@@ -375,5 +375,28 @@ flips once the decode lands and real frames replace the placeholder."
       ;; renders without erroring (glyphs need GL; pixel may be blank headless)
       (should (cmacs-vidstudio-frame-pixel p 0 5 24)))))
 
+(ert-deftest cmacs-vidstudio-tests-extracted-audio-serialize ()
+  "Clip-extracted audio serializes (via the video path) and round-trips."
+  (cmacs-vidstudio-tests--skip-unless)
+  (skip-unless (executable-find "ffmpeg"))
+  (let ((mp4 (make-temp-file "cmvs-av" nil ".mp4")))
+    (unwind-protect
+        (progn
+          (call-process "ffmpeg" nil nil nil "-y" "-v" "error"
+                        "-f" "lavfi" "-i" "testsrc=duration=2:size=64x48:rate=30"
+                        "-f" "lavfi" "-i" "sine=frequency=440:duration=2"
+                        "-shortest" mp4)
+          (cmacs-vidstudio-tests--with-proj p 64 48 30.0
+            (let ((vid (cmacs-vidstudio-add-video-clip p 0 mp4 -1.0)))
+              (cmacs-vidstudio-add-audio-from-clip p vid 0 1.0))
+            (let* ((s1 (cmacs-vidstudio-serialize p)))
+              (should (string-match-p "extract" s1))
+              (let* ((h2 (cmacs-vidstudio--build-from-sexp
+                          (car (read-from-string s1))))
+                     (s2 (cmacs-vidstudio-serialize h2)))
+                (should (string= s1 s2))
+                (cmacs-vidstudio-free h2)))))
+      (delete-file mp4))))
+
 (provide 'cmacs-vidstudio-tests)
 ;;; cmacs-vidstudio-tests.el ends here

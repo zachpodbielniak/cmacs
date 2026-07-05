@@ -619,6 +619,25 @@ DEFUN ("cmacs-vidstudio-add-audio-file", Fcmacs_vidstudio_add_audio_file,
   return make_fixnum (id);
 }
 
+DEFUN ("cmacs-vidstudio-add-audio-extract-file",
+       Fcmacs_vidstudio_add_audio_extract_file,
+       Scmacs_vidstudio_add_audio_extract_file, 2, 4, 0,
+       doc: /* Extract audio from video PATH and add it to the lane at
+FROM-FRAME (default 0) with VOLUME (default 1.0).  */)
+  (Lisp_Object handle, Lisp_Object path, Lisp_Object from_frame,
+   Lisp_Object volume)
+{
+  char *err = NULL;
+  gint id;
+  CHECK_STRING (path);
+  id = cmacs_vidstudio_proj_add_audio_extract_file (vs_lookup (handle),
+    SSDATA (path), vs_int (from_frame, 0), vs_dbl (volume, 1.0), &err);
+  if (id < 0)
+    { Lisp_Object m = build_string (err ? err : "audio extract failed");
+      g_free (err); xsignal1 (Qcmacs_vidstudio_error, m); }
+  return make_fixnum (id);
+}
+
 DEFUN ("cmacs-vidstudio-add-audio-from-clip",
        Fcmacs_vidstudio_add_audio_from_clip,
        Scmacs_vidstudio_add_audio_from_clip, 2, 4, 0,
@@ -1087,6 +1106,7 @@ syms_of_cmacs_vidstudio_defuns (void)
   defsubr (&Scmacs_vidstudio_clear_keyframes);
   defsubr (&Scmacs_vidstudio_keyframe_count);
   defsubr (&Scmacs_vidstudio_add_audio_file);
+  defsubr (&Scmacs_vidstudio_add_audio_extract_file);
   defsubr (&Scmacs_vidstudio_add_audio_from_clip);
   defsubr (&Scmacs_vidstudio_set_audio_volume);
   defsubr (&Scmacs_vidstudio_set_audio_fade);

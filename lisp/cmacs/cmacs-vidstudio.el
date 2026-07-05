@@ -428,11 +428,16 @@ placeholder meanwhile), so import returns instantly."
         (let ((src (cmacs-vidstudio--sx 'source seg)))
           (when src
             (ignore-errors
-              (cmacs-vidstudio-add-audio-file
-               handle src (or (cmacs-vidstudio--sx 'from seg) 0)
-               (or (cmacs-vidstudio--sx 'volume seg) 1.0)
-               (or (cmacs-vidstudio--sx 'trim-start seg) 0.0)
-               (or (cmacs-vidstudio--sx 'trim-end seg) 0.0)))))))
+              (if (cmacs-vidstudio--sx 'extract seg)
+                  ;; audio was extracted from a video: re-extract on load
+                  (cmacs-vidstudio-add-audio-extract-file
+                   handle src (or (cmacs-vidstudio--sx 'from seg) 0)
+                   (or (cmacs-vidstudio--sx 'volume seg) 1.0))
+                (cmacs-vidstudio-add-audio-file
+                 handle src (or (cmacs-vidstudio--sx 'from seg) 0)
+                 (or (cmacs-vidstudio--sx 'volume seg) 1.0)
+                 (or (cmacs-vidstudio--sx 'trim-start seg) 0.0)
+                 (or (cmacs-vidstudio--sx 'trim-end seg) 0.0))))))))
     handle))
 
 (defun cmacs-vidstudio-save-as (file)

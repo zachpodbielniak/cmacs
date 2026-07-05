@@ -238,6 +238,11 @@ extern gint cmacs_vidstudio_proj_add_audio_from_clip (CmacsVidProject *p,
                                                       int from_frame,
                                                       double volume,
                                                       char **error_msg);
+extern gint cmacs_vidstudio_proj_add_audio_extract_file (CmacsVidProject *p,
+                                                        const char *video_path,
+                                                        int from_frame,
+                                                        double volume,
+                                                        char **error_msg);
 extern gboolean cmacs_vidstudio_proj_set_audio_volume (CmacsVidProject *p,
                                                        gint id, double v);
 extern gboolean cmacs_vidstudio_proj_set_audio_fade (CmacsVidProject *p,

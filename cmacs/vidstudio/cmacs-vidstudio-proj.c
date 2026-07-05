@@ -80,7 +80,9 @@ typedef struct
 typedef struct
 {
   guint        id;
-  char        *source_path;     /* file path, or NULL when from a video clip */
+  char        *source_path;     /* audio file, or the source VIDEO path when
+                                   EXTRACT is set (audio pulled from a video) */
+  gboolean     extract;         /* TRUE: source_path is a video, extract audio */
   LrgWaveData *wave;            /* owned; set for clip-extracted audio */
   int          from_frame;
   double       volume;
@@ -1030,8 +1032,61 @@ cmacs_vidstudio_proj_add_audio_from_clip (CmacsVidProject *p, gint clip_id,
       return -1; }
   memset (&a, 0, sizeof a);
   a.id = p->next_id++;
-  a.source_path = NULL;
+  /* Record the source video path so the extracted audio serialises: on load
+     we re-extract from the same file (no clip-id remapping needed). */
+  {
+    VidTrack *vt; guint vsi;
+    a.source_path = NULL;
+    if (find_seg (p, clip_id, &vt, &vsi))
+      {
+        VidSeg *vs = &g_array_index (vt->segs, VidSeg, vsi);
+        if (vs->asset)
+          { a.source_path = g_strdup (vs->asset); a.extract = TRUE; }
+      }
+  }
   a.wave = wave;                 /* transfer full */
+  a.from_frame = from_frame;
+  a.volume = (volume >= 0.0) ? volume : 1.0;
+  g_array_append_val (p->audio, a);
+  p->audio_dirty = TRUE;
+  return (gint) a.id;
+}
+
+/* Extract audio directly from a video FILE (used on load to reproduce
+   clip-extracted audio without needing the original clip). */
+gint
+cmacs_vidstudio_proj_add_audio_extract_file (CmacsVidProject *p,
+                                             const char *video_path,
+                                             int from_frame, double volume,
+                                             char **error_msg)
+{
+  LrgReelVideoClip *clip;
+  LrgReelVideoSource *src;
+  LrgWaveData *wave;
+  VidAudioSeg a;
+  g_autoptr (GError) err = NULL;
+
+  clip = lrg_reel_video_clip_new_from_file (video_path, &err);
+  if (clip == NULL)
+    { if (error_msg)
+        *error_msg = g_strdup (err ? err->message : "could not load video");
+      return -1; }
+  src = lrg_reel_video_clip_get_source (clip);
+  if (!lrg_reel_video_source_get_has_audio (src))
+    { g_object_unref (clip);
+      if (error_msg) *error_msg = g_strdup ("video has no audio");
+      return -1; }
+  wave = lrg_reel_video_source_extract_audio (src, &err);
+  g_object_unref (clip);
+  if (wave == NULL)
+    { if (error_msg)
+        *error_msg = g_strdup (err ? err->message : "extract failed");
+      return -1; }
+  memset (&a, 0, sizeof a);
+  a.id = p->next_id++;
+  a.source_path = g_strdup (video_path);
+  a.extract = TRUE;
+  a.wave = wave;
   a.from_frame = from_frame;
   a.volume = (volume >= 0.0) ? volume : 1.0;
   g_array_append_val (p->audio, a);
@@ -1455,14 +1510,14 @@ cmacs_vidstudio_proj_serialize (CmacsVidProject *p)
     {
       VidAudioSeg *a = &g_array_index (p->audio, VidAudioSeg, si);
       if (a->source_path == NULL)
-        continue;   /* clip-extracted audio: re-extract on load (v1 gap) */
+        continue;   /* an in-memory wave with no reproducible source */
       {
         char *e = g_strescape (a->source_path, NULL);
         g_string_append_printf (o,
-            "\n  (seg (source \"%s\") (from %d) (volume %g)"
+            "\n  (seg (source \"%s\")%s (from %d) (volume %g)"
             " (trim-start %g) (trim-end %g) (fade-in %g) (fade-out %g))",
-            e, a->from_frame, a->volume, a->trim_start, a->trim_end,
-            a->fade_in, a->fade_out);
+            e, a->extract ? " (extract t)" : "", a->from_frame, a->volume,
+            a->trim_start, a->trim_end, a->fade_in, a->fade_out);
         g_free (e);
       }
     }

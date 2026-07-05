@@ -203,8 +203,9 @@ opacity, blend, keyframes) and file-based audio segs.
 - Serialize -> load -> serialize is bit-identical (covered by ERT).
 - Serialized: clips + transitions + opacity/blend + per-clip transform +
   effect chains (type + numeric params, introspected via GObject) + keyframes
-  + file audio.  v1 gap: clip-extracted audio is re-extracted on load, not
-  stored inline.
+  + file audio + clip-extracted audio (stored as the source video path and
+  re-extracted on load via ~cmacs-vidstudio-add-audio-extract-file~).  The
+  save/load model is now gap-free for reproducible sources.
 
 ** Near-real-time playback
 
