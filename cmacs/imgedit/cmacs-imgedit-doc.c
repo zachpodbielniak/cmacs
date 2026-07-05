@@ -627,6 +627,55 @@ cmacs_imgedit_doc_rotate (CmacsImgeditDoc *d, gboolean clockwise)
   if (d) lrg_image_document_rotate (d->doc, clockwise);
 }
 
+/* ── Vector paths: cubic Bézier + SVG import (active layer) ─────────────── */
+void
+cmacs_imgedit_doc_bezier (CmacsImgeditDoc *d, int x0, int y0, int x1, int y1,
+                          int x2, int y2, int x3, int y3, int thickness)
+{
+  GrlImage *img = editable_image (d);
+  g_autoptr (GrlVector2) p0 = NULL, p1 = NULL, p2 = NULL, p3 = NULL;
+
+  if (img == NULL)
+    return;
+  p0 = grl_vector2_new ((gfloat) x0, (gfloat) y0);
+  p1 = grl_vector2_new ((gfloat) x1, (gfloat) y1);
+  p2 = grl_vector2_new ((gfloat) x2, (gfloat) y2);
+  p3 = grl_vector2_new ((gfloat) x3, (gfloat) y3);
+  grl_image_set_blend_mode (img, d->draw_blend);
+  grl_image_draw_bezier (img, p0, p1, p2, p3, MAX (1, thickness),
+                         &d->draw_color);
+  grl_image_set_blend_mode (img, GRL_IMAGE_BLEND_REPLACE);
+  lrg_image_document_mark_dirty (d->doc);
+}
+
+/* Render an SVG file onto the active layer at DPI (0 -> 96). */
+gboolean
+cmacs_imgedit_doc_import_svg (CmacsImgeditDoc *d, const char *path,
+                             double dpi, char **error_msg)
+{
+  GrlImage *img = editable_image (d);
+  GrlVectorShape **shapes;
+  guint n = 0, i;
+  g_autoptr (GError) err = NULL;
+
+  if (img == NULL)
+    { if (error_msg) *error_msg = g_strdup ("no editable layer"); return FALSE; }
+  shapes = grl_svg_load_from_file (path, (gfloat) (dpi > 0 ? dpi : 96.0),
+                                   &n, &err);
+  if (shapes == NULL)
+    { if (error_msg)
+        *error_msg = g_strdup (err ? err->message : "SVG parse failed");
+      return FALSE; }
+  grl_image_set_blend_mode (img, GRL_IMAGE_BLEND_OVER);
+  grl_image_draw_svg_shapes (img, shapes, n);
+  grl_image_set_blend_mode (img, GRL_IMAGE_BLEND_REPLACE);
+  for (i = 0; i < n; i++)
+    grl_vector_shape_free (shapes[i]);
+  g_free (shapes);
+  lrg_image_document_mark_dirty (d->doc);
+  return TRUE;
+}
+
 /* ── Active-layer gradient fill ────────────────────────────────────────── */
 void
 cmacs_imgedit_doc_gradient (CmacsImgeditDoc *d, gboolean radial,

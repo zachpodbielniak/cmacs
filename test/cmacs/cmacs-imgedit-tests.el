@@ -392,5 +392,23 @@ itself instead of drawing a dot at the press position."
           (should (= (nth 3 (cmacs-imgedit-pixel-at h 4 4)) 255)))
       (cmacs-imgedit-free h))))
 
+(ert-deftest cmacs-imgedit-tests-svg-import ()
+  "Importing an SVG rect fills the active layer with its colour."
+  (skip-unless (fboundp 'cmacs-imgedit-import-svg))
+  (let ((svg (make-temp-file "cmie" nil ".svg"))
+        (h (cmacs-imgedit-new 32 32)))
+    (unwind-protect
+        (progn
+          (with-temp-file svg
+            (insert "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"32\""
+                    " height=\"32\"><rect x=\"4\" y=\"4\" width=\"24\""
+                    " height=\"24\" fill=\"rgb(0,200,0)\"/></svg>"))
+          (cmacs-imgedit-import-svg h svg 96)
+          (let ((p (cmacs-imgedit-pixel-at h 16 16)))
+            (should (> (nth 1 p) 150))    ; green channel high
+            (should (< (nth 0 p) 60))))   ; red low
+      (cmacs-imgedit-free h)
+      (delete-file svg))))
+
 (provide 'cmacs-imgedit-tests)
 ;;; cmacs-imgedit-tests.el ends here

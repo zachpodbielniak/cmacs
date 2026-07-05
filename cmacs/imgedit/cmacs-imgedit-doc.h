@@ -130,6 +130,13 @@ extern void cmacs_imgedit_doc_gradient (CmacsImgeditDoc *d, gboolean radial,
                                         guint8 ar, guint8 ag, guint8 ab,
                                         guint8 aa, guint8 br, guint8 bg,
                                         guint8 bb, guint8 ba);
+/* Vector paths (active layer). */
+extern void cmacs_imgedit_doc_bezier (CmacsImgeditDoc *d, int x0, int y0,
+                                      int x1, int y1, int x2, int y2,
+                                      int x3, int y3, int thickness);
+extern gboolean cmacs_imgedit_doc_import_svg (CmacsImgeditDoc *d,
+                                              const char *path, double dpi,
+                                              char **error_msg);
 /* Active-layer filters. */
 extern void cmacs_imgedit_doc_blur (CmacsImgeditDoc *d, int radius);
 extern void cmacs_imgedit_doc_bloom (CmacsImgeditDoc *d, int threshold,

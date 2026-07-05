@@ -1236,6 +1236,27 @@ GTK clipboard (any compositor / X11), then `wl-paste'."
   (interactive (list (read-number "Saturation (0..2): " 1.5)))
   (cmacs-imgedit--with-edit (cmacs-imgedit-saturation cmacs-imgedit--handle factor)))
 
+;; ── Vector: SVG import + Bézier curve ──────────────────────────────────
+
+(defun cmacs-imgedit-import-svg-file (file dpi)
+  "Render an SVG FILE onto the active layer at DPI."
+  (interactive (list (read-file-name "Import SVG: " nil nil t)
+                     (read-number "DPI: " 96)))
+  (cmacs-imgedit--with-edit
+   (cmacs-imgedit-import-svg cmacs-imgedit--handle (expand-file-name file) dpi)))
+
+(defun cmacs-imgedit-draw-bezier-cmd (x0 y0 x1 y1 x2 y2 x3 y3)
+  "Draw a cubic Bézier through (X0 Y0) (X1 Y1) (X2 Y2) (X3 Y3)."
+  (interactive
+   (list (read-number "Start x: ") (read-number "Start y: ")
+         (read-number "Ctrl1 x: ") (read-number "Ctrl1 y: ")
+         (read-number "Ctrl2 x: ") (read-number "Ctrl2 y: ")
+         (read-number "End x: ") (read-number "End y: ")))
+  (cmacs-imgedit--apply-color)
+  (cmacs-imgedit--with-edit
+   (cmacs-imgedit-bezier cmacs-imgedit--handle (cons x0 y0) (cons x1 y1)
+                         (cons x2 y2) (cons x3 y3) cmacs-imgedit--brush-size)))
+
 ;; ── Geometric transforms + gradient ────────────────────────────────────
 
 (defun cmacs-imgedit-resize-image (width height)
@@ -1411,7 +1432,9 @@ GTK clipboard (any compositor / X11), then `wl-paste'."
              ("Rotate CCW" . cmacs-imgedit-rotate-ccw)
              ("Resize…" . cmacs-imgedit-resize-image)
              ("Crop…" . cmacs-imgedit-crop-image)
-             ("Gradient fill…" . cmacs-imgedit-gradient-fill))
+             ("Gradient fill…" . cmacs-imgedit-gradient-fill)
+             ("Bézier curve…" . cmacs-imgedit-draw-bezier-cmd)
+             ("Import SVG…" . cmacs-imgedit-import-svg-file))
             ("Clipboard"
              ("Copy image" . cmacs-imgedit-copy-to-clipboard)
              ("Paste image" . cmacs-imgedit-paste-from-clipboard)

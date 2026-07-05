@@ -813,6 +813,40 @@ DEFUN ("cmacs-imgedit-noise", Fcmacs_imgedit_noise, Scmacs_imgedit_noise,
   return Qnil;
 }
 
+DEFUN ("cmacs-imgedit-bezier", Fcmacs_imgedit_bezier, Scmacs_imgedit_bezier,
+       5, 6, 0,
+       doc: /* Draw a cubic Bézier through control points P0 P1 P2 P3.
+Each Pn is an (X . Y) cons; optional THICKNESS (default 1).  */)
+  (Lisp_Object handle, Lisp_Object p0, Lisp_Object p1, Lisp_Object p2,
+   Lisp_Object p3, Lisp_Object thickness)
+{
+  CHECK_CONS (p0); CHECK_CONS (p1); CHECK_CONS (p2); CHECK_CONS (p3);
+  cmacs_imgedit_doc_bezier
+    (ie_lookup (handle),
+     ie_int (XCAR (p0), 0), ie_int (XCDR (p0), 0),
+     ie_int (XCAR (p1), 0), ie_int (XCDR (p1), 0),
+     ie_int (XCAR (p2), 0), ie_int (XCDR (p2), 0),
+     ie_int (XCAR (p3), 0), ie_int (XCDR (p3), 0), ie_int (thickness, 1));
+  return Qnil;
+}
+
+DEFUN ("cmacs-imgedit-import-svg", Fcmacs_imgedit_import_svg,
+       Scmacs_imgedit_import_svg, 2, 3, 0,
+       doc: /* Render SVG file PATH onto the active layer at DPI (default 96).  */)
+  (Lisp_Object handle, Lisp_Object path, Lisp_Object dpi)
+{
+  char *err = NULL;
+  CHECK_STRING (path);
+  if (!cmacs_imgedit_doc_import_svg (ie_lookup (handle), SSDATA (path),
+                                     ie_dbl (dpi, 96.0), &err))
+    {
+      Lisp_Object m = build_string (err ? err : "SVG import failed");
+      g_free (err);
+      xsignal1 (Qcmacs_imgedit_error, m);
+    }
+  return Qt;
+}
+
 DEFUN ("cmacs-imgedit-threshold", Fcmacs_imgedit_threshold,
        Scmacs_imgedit_threshold, 1, 2, 0,
        doc: /* Threshold the active layer to black/white at LEVEL (0..255).  */)
@@ -980,6 +1014,8 @@ syms_of_cmacs_imgedit_defuns (void)
   defsubr (&Scmacs_imgedit_blur);
   defsubr (&Scmacs_imgedit_bloom);
   defsubr (&Scmacs_imgedit_noise);
+  defsubr (&Scmacs_imgedit_bezier);
+  defsubr (&Scmacs_imgedit_import_svg);
   defsubr (&Scmacs_imgedit_threshold);
   defsubr (&Scmacs_imgedit_posterize);
   defsubr (&Scmacs_imgedit_pixelate);

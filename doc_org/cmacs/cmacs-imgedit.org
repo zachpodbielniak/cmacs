@@ -107,6 +107,11 @@ flips apply to the whole document.
   DEFUNs ~cmacs-imgedit-flip/rotate/resize/crop/gradient~ delegate the
   dimension-changing ops to new libregnum ~lrg_image_document_resize/crop/
   rotate~ helpers (all layers + canvas).
+- *Vector* (right-click → Transform): Bézier curve
+  (~cmacs-imgedit-draw-bezier-cmd~ / model ~cmacs-imgedit-bezier~, control
+  points as ~(X . Y)~ conses) and SVG import (~cmacs-imgedit-import-svg-file~ /
+  model ~cmacs-imgedit-import-svg~ renders an SVG file onto the active layer at
+  a given DPI).
 - *Layer* (right-click → Layer): Duplicate, Rename, Move up/down, Blend mode
   (Replace/Over/Add/Multiply/Subtract), Toggle lock.  A *locked* layer refuses
   edits until unlocked (~cmacs-imgedit-set-layer-locked~ /
