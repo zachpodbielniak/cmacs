@@ -360,20 +360,18 @@ DEFUN ("cmacs-vidstudio-set-opacity", Fcmacs_vidstudio_set_opacity,
 }
 
 DEFUN ("cmacs-vidstudio-set-transform", Fcmacs_vidstudio_set_transform,
-       Scmacs_vidstudio_set_transform, 6, 6, 0,
-       doc: /* Set CLIP-ID transform: position X Y, scale SX SY, rotation ROT
-(radians).  */)
+       Scmacs_vidstudio_set_transform, 6, 7, 0,
+       doc: /* Set CLIP-ID transform: position X Y, scale SX SY, optional
+rotation ROT (radians, default 0).  */)
   (Lisp_Object handle, Lisp_Object clip_id, Lisp_Object x, Lisp_Object y,
-   Lisp_Object sx, Lisp_Object sy)
+   Lisp_Object sx, Lisp_Object sy, Lisp_Object rot)
 {
   CHECK_FIXNUM (clip_id);
-  /* ROT folded into SY's cdr? no -- keep 6 args: x y sx sy, rot via set-anchor?
-     Simpler: accept rotation through a separate DEFUN.  Here rot defaults 0. */
   return cmacs_vidstudio_proj_set_transform (vs_lookup (handle),
                                              (gint) XFIXNUM (clip_id),
                                              vs_dbl (x, 0.0), vs_dbl (y, 0.0),
                                              vs_dbl (sx, 1.0), vs_dbl (sy, 1.0),
-                                             0.0) ? Qt : Qnil;
+                                             vs_dbl (rot, 0.0)) ? Qt : Qnil;
 }
 
 DEFUN ("cmacs-vidstudio-set-rotation", Fcmacs_vidstudio_set_rotation,

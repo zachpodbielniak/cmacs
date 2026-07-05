@@ -1205,6 +1205,17 @@ cmacs_vidstudio_proj_serialize (CmacsVidProject *p)
           g_string_append_printf (o, " (opacity %g) (blend %d)",
                                   lrg_reel_clip_get_opacity (s->clip),
                                   (int) lrg_reel_clip_get_blend_mode (s->clip));
+          {
+            double tx = lrg_reel_clip_get_x (s->clip);
+            double ty = lrg_reel_clip_get_y (s->clip);
+            double tsx = lrg_reel_clip_get_scale_x (s->clip);
+            double tsy = lrg_reel_clip_get_scale_y (s->clip);
+            double trot = lrg_reel_clip_get_rotation (s->clip);
+            if (tx != 0.0 || ty != 0.0 || tsx != 1.0 || tsy != 1.0
+                || trot != 0.0)
+              g_string_append_printf (o, " (transform %g %g %g %g %g)",
+                                      tx, ty, tsx, tsy, trot);
+          }
           if (s->keys != NULL && s->keys->len > 0)
             {
               g_string_append (o, " (keyframes");

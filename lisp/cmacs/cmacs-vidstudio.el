@@ -362,6 +362,10 @@ placeholder meanwhile), so import returns instantly."
       (when (cmacs-vidstudio--sx 'blend clip)
         (cmacs-vidstudio-set-blend-mode handle id
                                         (cmacs-vidstudio--sx 'blend clip)))
+      (let ((tf (assq 'transform (cdr clip))))
+        (when tf   ; (transform X Y SX SY ROT)
+          (cmacs-vidstudio-set-transform handle id (nth 1 tf) (nth 2 tf)
+                                         (nth 3 tf) (nth 4 tf) (nth 5 tf))))
       (dolist (k (cdr (assq 'keyframes (cdr clip))))
         ;; k = (PARAM EIDX FRAME VALUE EASING [PROP])
         (cmacs-vidstudio-add-keyframe handle id (nth 0 k) (nth 2 k) (nth 3 k)
