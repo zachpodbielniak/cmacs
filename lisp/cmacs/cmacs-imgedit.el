@@ -65,6 +65,14 @@ stale loaded copy of this file is recognisable at a glance.")
   "Active tool: one of brush line rectangle circle fill eyedropper.")
 (defvar-local cmacs-imgedit--shape-fill nil
   "When non-nil, the rectangle/circle tools fill instead of stroke.")
+(defvar-local cmacs-imgedit--live nil
+  "Non-nil when this buffer displays through a live libregnum GL viewport
+instead of a native Emacs image.  Set at setup when a display + the
+libregnum backend are available; nil falls back to the insert-image path.")
+(defvar-local cmacs-imgedit--vp-prev nil
+  "Previous document pixel of an in-progress viewport brush stroke.")
+(defvar-local cmacs-imgedit--vp-start nil
+  "Start document pixel of an in-progress viewport shape drag.")
 (defvar-local cmacs-imgedit--canvas-buffer nil
   "In a panel buffer, the editor canvas buffer it controls.")
 (defvar-local cmacs-imgedit--tools-panel nil
@@ -122,26 +130,31 @@ clicks reach the editor no matter what the surrounding config binds.")
 With NO-PANELS non-nil, skip refreshing the side panels (used for fast
 per-motion redraws while painting)."
   (when cmacs-imgedit--handle
-    (let ((inhibit-read-only t)
-          (png (cmacs-imgedit-export-png-bytes cmacs-imgedit--handle)))
-      (erase-buffer)
-      (if (cmacs-imgedit--checkerboard-p)
-          (insert-image (apply #'create-image png 'png t
-                               :scale cmacs-imgedit--zoom
-                               :ascent 'center
-                               (and cmacs-imgedit-canvas-background
-                                    (list :background
-                                          cmacs-imgedit-canvas-background))))
-        (insert (format "[%dx%d image; install PNG support to view]"
-                        (cmacs-imgedit-width cmacs-imgedit--handle)
-                        (cmacs-imgedit-height cmacs-imgedit--handle))))
-      (insert "\n")
-      ;; Claim the mouse over the whole canvas (replaces image.el's
-      ;; `image-map' prop): a position keymap outranks Evil states and
-      ;; context-menu-mode, which otherwise steal the clicks (Doom).
-      (add-text-properties (point-min) (point-max)
-                           (list 'keymap cmacs-imgedit--canvas-map))
-      (goto-char (point-min)))
+    (if cmacs-imgedit--live
+        ;; Live GL viewport: the document is bound zero-copy, so a refresh
+        ;; re-flattens + re-uploads it and redraws the FBO -- no PNG encode,
+        ;; no insert-image (the viewport blits over the whole window).
+        (ignore-errors (cmacs-libregnum-image-refresh (current-buffer)))
+      (let ((inhibit-read-only t)
+            (png (cmacs-imgedit-export-png-bytes cmacs-imgedit--handle)))
+        (erase-buffer)
+        (if (cmacs-imgedit--checkerboard-p)
+            (insert-image (apply #'create-image png 'png t
+                                 :scale cmacs-imgedit--zoom
+                                 :ascent 'center
+                                 (and cmacs-imgedit-canvas-background
+                                      (list :background
+                                            cmacs-imgedit-canvas-background))))
+          (insert (format "[%dx%d image; install PNG support to view]"
+                          (cmacs-imgedit-width cmacs-imgedit--handle)
+                          (cmacs-imgedit-height cmacs-imgedit--handle))))
+        (insert "\n")
+        ;; Claim the mouse over the whole canvas (replaces image.el's
+        ;; `image-map' prop): a position keymap outranks Evil states and
+        ;; context-menu-mode, which otherwise steal the clicks (Doom).
+        (add-text-properties (point-min) (point-max)
+                             (list 'keymap cmacs-imgedit--canvas-map))
+        (goto-char (point-min))))
     (when (and (not no-panels) (fboundp 'cmacs-imgedit--refresh-panels))
       (cmacs-imgedit--refresh-panels))))
 
@@ -364,6 +377,139 @@ Falls back to window-relative coordinates if the object geometry is missing."
                                  (max 1 (/ cmacs-imgedit--brush-size 2)) t 1)
     (apply #'cmacs-imgedit-set-pixel cmacs-imgedit--handle
            (car xy) (cdr xy) cmacs-imgedit--color)))
+
+;; ── Live GL viewport: availability, hooks, tool dispatch ────────────────
+
+(defun cmacs-imgedit--viewport-available-p ()
+  "Non-nil when a live libregnum GL viewport can be used here.
+Requires a graphical display and the libregnum backend; nil on tty /
+headless / no-GL, where the native insert-image path is used instead."
+  (and (fboundp 'cmacs-libregnum-supported-p)
+       (cmacs-libregnum-supported-p)
+       (fboundp 'cmacs-imgedit-viewport-bind)
+       (or (display-graphic-p) (eq (framep-on-display) 'lrg))))
+
+(defun cmacs-imgedit--vp-refresh ()
+  "Re-upload the document to the viewport (cheap; no PNG round-trip)."
+  (when cmacs-imgedit--live
+    (ignore-errors (cmacs-libregnum-image-refresh (current-buffer)))))
+
+(defun cmacs-imgedit--vp-commit-shape (tool start end)
+  "Commit shape TOOL from doc point START to END (one undo step)."
+  (cmacs-imgedit--apply-color)
+  (cmacs-imgedit-push-undo cmacs-imgedit--handle)
+  (let ((sx (car start)) (sy (cdr start)) (ex (car end)) (ey (cdr end)))
+    (pcase tool
+      ('line (cmacs-imgedit-draw-line cmacs-imgedit--handle sx sy ex ey
+                                      cmacs-imgedit--brush-size))
+      ('arrow (cmacs-imgedit-draw-arrow cmacs-imgedit--handle sx sy ex ey
+                                        cmacs-imgedit--brush-size))
+      ('rectangle (cmacs-imgedit-draw-rect cmacs-imgedit--handle
+                    (min sx ex) (min sy ey)
+                    (max 1 (abs (- ex sx))) (max 1 (abs (- ey sy)))
+                    cmacs-imgedit--shape-fill cmacs-imgedit--brush-size))
+      ('circle (let ((dx (- ex sx)) (dy (- ey sy)))
+                 (cmacs-imgedit-draw-circle cmacs-imgedit--handle sx sy
+                   (max 1 (round (sqrt (+ (* dx dx) (* dy dy)))))
+                   cmacs-imgedit--shape-fill cmacs-imgedit--brush-size)))
+      ('ellipse (cmacs-imgedit-draw-ellipse cmacs-imgedit--handle sx sy
+                  (max 1 (abs (- ex sx))) (max 1 (abs (- ey sy)))
+                  cmacs-imgedit--shape-fill cmacs-imgedit--brush-size)))))
+
+(defun cmacs-imgedit--vp-press (buffer dx dy _button _mods)
+  "Viewport left-press at doc (DX DY): brush dabs, shapes record the start."
+  (with-current-buffer buffer
+    (when cmacs-imgedit--handle
+      (cmacs-imgedit--apply-color)
+      (pcase cmacs-imgedit--tool
+        ('brush
+         (cmacs-imgedit-push-undo cmacs-imgedit--handle)
+         (cmacs-imgedit--brush-dab (cons dx dy))
+         (setq cmacs-imgedit--vp-prev (cons dx dy))
+         (cmacs-imgedit--vp-refresh))
+        ((or 'line 'arrow 'rectangle 'circle 'ellipse)
+         (setq cmacs-imgedit--vp-start (cons dx dy)))
+        (_ nil)))))          ; fill / eyedropper / text act on click
+
+(defun cmacs-imgedit--vp-drag (buffer dx dy _button _mods)
+  "Viewport left-drag to doc (DX DY): brush paints a segment."
+  (with-current-buffer buffer
+    (when (and cmacs-imgedit--handle (eq cmacs-imgedit--tool 'brush)
+               cmacs-imgedit--vp-prev)
+      (cmacs-imgedit-draw-line cmacs-imgedit--handle
+                               (car cmacs-imgedit--vp-prev)
+                               (cdr cmacs-imgedit--vp-prev) dx dy
+                               cmacs-imgedit--brush-size)
+      (setq cmacs-imgedit--vp-prev (cons dx dy))
+      (cmacs-imgedit--vp-refresh))
+    ;; brush-cursor overlay follows the pointer, zero Elisp-render latency
+    (ignore-errors
+      (cmacs-libregnum-image-set-cursor
+       buffer dx dy (max 0.5 (/ cmacs-imgedit--brush-size 2.0))))))
+
+(defun cmacs-imgedit--vp-release (buffer dx dy _button _mods)
+  "Viewport left-release at doc (DX DY): commit a shape / finish a stroke."
+  (with-current-buffer buffer
+    (when cmacs-imgedit--handle
+      (pcase cmacs-imgedit--tool
+        ('brush (setq cmacs-imgedit--vp-prev nil) (cmacs-imgedit--vp-refresh))
+        ((and (or 'line 'arrow 'rectangle 'circle 'ellipse) tool)
+         (when cmacs-imgedit--vp-start
+           (cmacs-imgedit--vp-commit-shape tool cmacs-imgedit--vp-start
+                                           (cons dx dy))
+           (setq cmacs-imgedit--vp-start nil)
+           (cmacs-imgedit--vp-refresh)))
+        (_ nil)))))
+
+(defun cmacs-imgedit--vp-click (buffer dx dy _button _mods)
+  "Viewport click at doc (DX DY): fill / eyedropper / text act here."
+  (with-current-buffer buffer
+    (when cmacs-imgedit--handle
+      (cmacs-imgedit--apply-color)
+      (pcase cmacs-imgedit--tool
+        ('fill
+         (cmacs-imgedit-push-undo cmacs-imgedit--handle)
+         (apply #'cmacs-imgedit-flood-fill cmacs-imgedit--handle dx dy
+                (append cmacs-imgedit--color '(0)))
+         (cmacs-imgedit--vp-refresh))
+        ('eyedropper
+         (let ((px (cmacs-imgedit-pixel-at cmacs-imgedit--handle dx dy)))
+           (when px
+             (setq cmacs-imgedit--color px)
+             (cmacs-imgedit--apply-color)
+             (cmacs-imgedit--refresh-panels))))
+        ('text
+         (let ((str (read-string "Text: ")))
+           (unless (string-empty-p str)
+             (cmacs-imgedit-push-undo cmacs-imgedit--handle)
+             (cmacs-imgedit-draw-text cmacs-imgedit--handle dx dy str
+                                      cmacs-imgedit-text-size)
+             (cmacs-imgedit--vp-refresh))))
+        (_ (cmacs-imgedit--vp-refresh))))))
+
+(defun cmacs-imgedit--vp-context-menu (buffer _dx _dy fx fy)
+  "Pop the imgedit context menu for a viewport right-click at frame (FX FY).
+Runs deferred inside the pselect wait, so schedule the pop onto the command
+loop with a 0-delay timer (the 3D editor does the same)."
+  (run-at-time
+   0 nil
+   (lambda ()
+     (when (buffer-live-p buffer)
+       (with-current-buffer buffer
+         (let ((choice (cmacs-libregnum-popup-menu
+                        (list (list fx fy) (selected-window))
+                        (cmacs-imgedit--menu))))
+           (when (commandp choice) (call-interactively choice))))))))
+
+(defun cmacs-imgedit--install-image-hooks (buffer)
+  "Install the viewport input hook functions in BUFFER."
+  (with-current-buffer buffer
+    (setq cmacs-libregnum-image-press-function #'cmacs-imgedit--vp-press
+          cmacs-libregnum-image-drag-function #'cmacs-imgedit--vp-drag
+          cmacs-libregnum-image-release-function #'cmacs-imgedit--vp-release
+          cmacs-libregnum-image-click-function #'cmacs-imgedit--vp-click
+          cmacs-libregnum-image-context-menu-function
+          #'cmacs-imgedit--vp-context-menu)))
 
 (defun cmacs-imgedit--select-event-window (event)
   "Select the window EVENT happened in and return it.
@@ -989,14 +1135,9 @@ GTK clipboard (any compositor / X11), then `wl-paste'."
 ;; Right-click context menu (GTK under pgtk, in-engine under --lrg)
 ;; --------------------------------------------------------------------------
 
-(defun cmacs-imgedit-context-menu (event)
-  "Pop the image-editor context menu for mouse EVENT.
-Routes through `cmacs-libregnum-popup-menu' so it is a native GTK menu under
-pgtk and the in-engine libregnum menu under the --lrg backend."
-  (interactive "e")
-  (cmacs-imgedit--select-event-window event)  ; commands need the canvas buffer
-  (let* ((menu
-          '("Image editor"
+(defun cmacs-imgedit--menu ()
+  "Return the image-editor context-menu alist (shared by native + viewport)."
+  '("Image editor"
             ("Tools"
              ("Fill layer" . cmacs-imgedit-fill-layer)
              ("Flood fill…" . cmacs-imgedit-flood-fill-at)
@@ -1028,7 +1169,14 @@ pgtk and the in-engine libregnum menu under the --lrg backend."
              ("Zoom in" . cmacs-imgedit-zoom-in)
              ("Zoom out" . cmacs-imgedit-zoom-out)
              ("Save…" . cmacs-imgedit-save-cmd))))
-         (choice (cmacs-libregnum-popup-menu event menu)))
+
+(defun cmacs-imgedit-context-menu (event)
+  "Pop the image-editor context menu for mouse EVENT (native path).
+Routes through `cmacs-libregnum-popup-menu' so it is a native GTK menu under
+pgtk and the in-engine libregnum menu under the --lrg backend."
+  (interactive "e")
+  (cmacs-imgedit--select-event-window event)  ; commands need the canvas buffer
+  (let ((choice (cmacs-libregnum-popup-menu event (cmacs-imgedit--menu))))
     (when (commandp choice)
       (call-interactively choice))))
 
@@ -1091,6 +1239,13 @@ pgtk and the in-engine libregnum menu under the --lrg backend."
     (kill-buffer cmacs-imgedit--tools-panel))
   (when (buffer-live-p cmacs-imgedit--layers-panel)
     (kill-buffer cmacs-imgedit--layers-panel))
+  ;; Detach the viewport BEFORE freeing the document: the render ctx holds a
+  ;; borrowed pointer to the document, so tearing the view down first avoids a
+  ;; use-after-free on the next frame.
+  (when (and cmacs-imgedit--live
+             (fboundp 'cmacs-libregnum-attached-p)
+             (cmacs-libregnum-attached-p (current-buffer)))
+    (ignore-errors (cmacs-libregnum-detach (current-buffer))))
   (when (and cmacs-imgedit--handle (fboundp 'cmacs-imgedit-free))
     (ignore-errors (cmacs-imgedit-free cmacs-imgedit--handle))
     (setq cmacs-imgedit--handle nil)))
@@ -1137,8 +1292,39 @@ sprite zoom, so scale down as the image grows."
   ;; Open the tools + layers side panels (like the 3D editor's panels).
   (with-current-buffer buffer
     (cmacs-imgedit--open-panels)
+    ;; Try the live GL viewport (gnuseye/CAD hosting pattern); on any failure
+    ;; or no display, fall back to the native insert-image path.
+    (cmacs-imgedit--maybe-attach-viewport buffer handle)
     (cmacs-imgedit--render))
   buffer)
+
+(defun cmacs-imgedit--maybe-attach-viewport (buffer handle)
+  "Attach a live libregnum viewport to BUFFER for HANDLE, if available.
+Sets `cmacs-imgedit--live' on success; leaves it nil (native path) otherwise."
+  (when (cmacs-imgedit--viewport-available-p)
+    (condition-case _err
+        (let ((win (get-buffer-window buffer)))
+          (cmacs-libregnum-attach
+           buffer
+           (max 64 (if win (window-pixel-width win) 640))
+           (max 64 (if win (window-pixel-height win) 480)))
+          (when (cmacs-imgedit-viewport-bind handle buffer)
+            (cmacs-libregnum-image-enter buffer t)
+            (cmacs-libregnum-image-set-checker buffer t)
+            (cmacs-libregnum-image-set-grid buffer t)
+            (cmacs-imgedit--install-image-hooks buffer)
+            (cmacs-libregnum-image-fit buffer)
+            (setq cmacs-imgedit--live t)
+            ;; refit when the window is resized (the shared size-change hook
+            ;; drives cmacs-libregnum-resize; refit keeps the image centred).
+            (add-hook 'window-size-change-functions
+                      #'cmacs-imgedit--on-size-change nil t)))
+      (error (setq cmacs-imgedit--live nil)))))
+
+(defun cmacs-imgedit--on-size-change (&rest _)
+  "Refit the image to the (resized) viewport window."
+  (when (and cmacs-imgedit--live (get-buffer-window (current-buffer)))
+    (ignore-errors (cmacs-libregnum-image-fit (current-buffer)))))
 
 ;;;###autoload
 (defun cmacs-imgedit-new-image (width height)

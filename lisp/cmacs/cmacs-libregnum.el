@@ -376,6 +376,67 @@ timer (the editor does the same)."
                    (derived-mode-p 'cmacs-gnuseye-mode))
           (cmacs-gnuseye--context-menu buffer id path vx vy))))))
 
+;; ── 2D image-mode input dispatchers ────────────────────────────────────
+;; The C input layer defers image-viewport mouse events here (document pixel
+;; coords).  Each dispatcher forwards to a buffer-local hook function the
+;; hosting editor (imgedit / vidstudio) installs, keeping this file
+;; content-agnostic.  All run on the cmacs GMainContext.
+
+(defvar-local cmacs-libregnum-image-press-function nil
+  "Function called on image-viewport left press: (BUFFER DX DY BUTTON MODS).")
+(defvar-local cmacs-libregnum-image-drag-function nil
+  "Function called on image-viewport left drag: (BUFFER DX DY BUTTON MODS).")
+(defvar-local cmacs-libregnum-image-release-function nil
+  "Function called on image-viewport left release (after motion).")
+(defvar-local cmacs-libregnum-image-click-function nil
+  "Function called on image-viewport click (press+release, no motion).")
+(defvar-local cmacs-libregnum-image-context-menu-function nil
+  "Function called on image-viewport right release: (BUFFER DX DY FX FY).")
+
+(defun cmacs-libregnum--image-dispatch (buffer hookvar dx dy button mods)
+  "Call BUFFER's HOOKVAR with (BUFFER DX DY BUTTON MODS) if bound."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (let ((fn (symbol-value hookvar)))
+        (when (functionp fn)
+          (funcall fn buffer dx dy button mods))))))
+
+(defun cmacs-libregnum--image-press (buffer info)
+  "Dispatch an image-viewport left press.  INFO is (DX DY BUTTON MODS)."
+  (cmacs-libregnum--image-dispatch buffer 'cmacs-libregnum-image-press-function
+                                   (nth 0 info) (nth 1 info) (nth 2 info)
+                                   (nth 3 info)))
+
+(defun cmacs-libregnum--image-drag (buffer info)
+  "Dispatch an image-viewport left drag.  INFO is (DX DY BUTTON MODS)."
+  (cmacs-libregnum--image-dispatch buffer 'cmacs-libregnum-image-drag-function
+                                   (nth 0 info) (nth 1 info) (nth 2 info)
+                                   (nth 3 info)))
+
+(defun cmacs-libregnum--image-release (buffer info)
+  "Dispatch an image-viewport left release.  INFO is (DX DY BUTTON MODS)."
+  (cmacs-libregnum--image-dispatch buffer
+                                   'cmacs-libregnum-image-release-function
+                                   (nth 0 info) (nth 1 info) (nth 2 info)
+                                   (nth 3 info)))
+
+(defun cmacs-libregnum--image-click (buffer info)
+  "Dispatch an image-viewport click.  INFO is (DX DY BUTTON MODS)."
+  (cmacs-libregnum--image-dispatch buffer 'cmacs-libregnum-image-click-function
+                                   (nth 0 info) (nth 1 info) (nth 2 info)
+                                   (nth 3 info)))
+
+(defun cmacs-libregnum--image-context-menu (buffer info)
+  "Dispatch an image-viewport right-click.  INFO is (DX DY FX FY).
+Runs inside the pselect wait, so the handler must NOT pop a menu here --
+re-schedule onto the command loop with a 0-delay timer."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (let ((fn cmacs-libregnum-image-context-menu-function))
+        (when (functionp fn)
+          (funcall fn buffer (nth 0 info) (nth 1 info)
+                   (nth 2 info) (nth 3 info)))))))
+
 (defun cmacs-libregnum-up ()
   "Re-root the tree at the parent of the current root directory."
   (interactive)

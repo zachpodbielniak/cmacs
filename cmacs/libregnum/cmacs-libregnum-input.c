@@ -120,6 +120,91 @@ defer_node_menu (CmacsLibregnumView *v, CmacsLibregnumRenderCtx *ctx,
   g_main_context_invoke (cmacs_glib_get_context (), node_menu_idle, a);
 }
 
+/* ── 2D image-mode input → deferred Elisp callbacks ──────────────────────
+ * When a view is in image-display mode, mouse events map to DOCUMENT pixels
+ * (via image_view_to_doc) and are dispatched to per-event Elisp routers that
+ * forward to buffer-local hook functions the editor (imgedit/vidstudio) sets.
+ * Same defer-onto-GMainContext discipline as the node callbacks above (never
+ * run Lisp / pop a menu inside the GTK handler). */
+
+/* Whether the current left-drag has moved off the press pixel (click vs drag). */
+static gboolean image_left_moved;
+
+typedef struct
+{
+  Lisp_Object buffer;
+  const char *event;      /* interned dispatcher name (static string) */
+  int         dx, dy;     /* document pixel */
+  int         button;     /* X button (1/2/3) */
+  int         mods;       /* 1=shift 2=ctrl 4=meta */
+  int         fx, fy;     /* frame pixel (context menu only) */
+} ImageAction;
+
+/* Current keyboard modifiers from the GTK event (bit 1 shift, 2 ctrl, 4 meta). */
+static int
+image_current_mods (void)
+{
+  int m = 0;
+  GdkEvent *ev = gtk_get_current_event ();
+  if (ev)
+    {
+      GdkModifierType state = 0;
+      gdk_event_get_state (ev, &state);
+      if (state & GDK_SHIFT_MASK)   m |= 1;
+      if (state & GDK_CONTROL_MASK) m |= 2;
+      if (state & GDK_MOD1_MASK)    m |= 4;
+      gdk_event_free (ev);
+    }
+  return m;
+}
+
+static gboolean
+image_action_idle (gpointer user)
+{
+  ImageAction *a = user;
+  cmacs_dispatch_safe_call2 (intern (a->event), a->buffer,
+                             list4 (make_fixnum (a->dx), make_fixnum (a->dy),
+                                    make_fixnum (a->button),
+                                    make_fixnum (a->mods)));
+  g_free (a);
+  return G_SOURCE_REMOVE;
+}
+
+static gboolean
+image_menu_idle (gpointer user)
+{
+  ImageAction *a = user;
+  /* (BUFFER (DX DY FX FY)) -- FX/FY are frame pixels for x-popup-menu.  The
+   * Elisp router must re-schedule the actual pop onto the command loop. */
+  cmacs_dispatch_safe_call2 (intern ("cmacs-libregnum--image-context-menu"),
+                             a->buffer,
+                             list4 (make_fixnum (a->dx), make_fixnum (a->dy),
+                                    make_fixnum (a->fx), make_fixnum (a->fy)));
+  g_free (a);
+  return G_SOURCE_REMOVE;
+}
+
+static void
+defer_image (CmacsLibregnumView *v, const char *event,
+             int dx, int dy, int button, int mods)
+{
+  ImageAction *a = g_new0 (ImageAction, 1);
+  a->buffer = cmacs_libregnum_view_get_buffer (v);
+  a->event = event;
+  a->dx = dx; a->dy = dy;
+  a->button = button; a->mods = mods;
+  g_main_context_invoke (cmacs_glib_get_context (), image_action_idle, a);
+}
+
+static void
+defer_image_menu (CmacsLibregnumView *v, int dx, int dy, int fx, int fy)
+{
+  ImageAction *a = g_new0 (ImageAction, 1);
+  a->buffer = cmacs_libregnum_view_get_buffer (v);
+  a->dx = dx; a->dy = dy; a->fx = fx; a->fy = fy;
+  g_main_context_invoke (cmacs_glib_get_context (), image_menu_idle, a);
+}
+
 /* Deferred editor selection sync: tell Elisp which node the viewport just
  * selected, so `cmacs-libregnum-editor--current' and the outliner follow a
  * mouse pick / drag.  Like ClickAction, the Lisp eval must run on the cmacs
@@ -468,6 +553,40 @@ cmacs_libregnum_handle_motion (struct frame *f, double x, double y)
       }
   }
 
+  /* Image mode: middle-drag pans; left-drag paints (deferred --image-drag
+   * with document coords).  Motion outside the view is still honoured during a
+   * drag (the pointer may run past the edge). */
+  {
+    CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+    if (cmacs_libregnum_render_ctx_is_image (ctx))
+      {
+        double vx, vy;
+        int vw, vh, dx = 0, dy = 0;
+        gboolean in = frame_to_view_coords (f, v, x, y, &vx, &vy, &vw, &vh);
+        if (drag_state.dragging_middle && drag_state.view == v)
+          {
+            double s, px, py;
+            cmacs_libregnum_render_ctx_image_get_view (ctx, &s, &px, &py);
+            cmacs_libregnum_render_ctx_image_set_view
+              (ctx, s, px + (x - drag_state.last_x),
+               py + (y - drag_state.last_y));
+            drag_state.last_x = x; drag_state.last_y = y;
+            cmacs_libregnum_view_request_redraw (v);
+            return true;
+          }
+        if (drag_state.dragging_left && drag_state.view == v)
+          {
+            cmacs_libregnum_render_ctx_image_view_to_doc (ctx, vx, vy, &dx, &dy);
+            image_left_moved = TRUE;
+            defer_image (v, "cmacs-libregnum--image-drag", dx, dy, 1,
+                         image_current_mods ());
+            cmacs_libregnum_view_request_redraw (v);
+            return true;
+          }
+        return in ? true : FALSE;   /* consume hover over the view */
+      }
+  }
+
   /* Editor: dragging a gizmo handle does an axis-constrained transform. */
   if (drag_state.frame == f && drag_state.dragging_gizmo)
     {
@@ -597,6 +716,59 @@ cmacs_libregnum_handle_button (struct frame *f, int button, int press,
         int grl_btn = (button == 1) ? 0 : (button == 3) ? 1 : 2;
         cmacs_libregnum_render_ctx_game_mouse_button (ctx, grl_btn, press != 0);
         cmacs_libregnum_view_request_redraw (v);
+        return true;
+      }
+  }
+
+  /* Image mode: left = paint (press/drag/release or click), middle = pan,
+   * right-release = context menu.  All in DOCUMENT pixels; the Elisp editor's
+   * hook functions implement the active tool. */
+  {
+    CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+    if (cmacs_libregnum_render_ctx_is_image (ctx))
+      {
+        double vx, vy;
+        int vw, vh, dx = 0, dy = 0, mods = image_current_mods ();
+        gboolean in = frame_to_view_coords (f, v, x, y, &vx, &vy, &vw, &vh);
+        if (in)
+          cmacs_libregnum_render_ctx_image_view_to_doc (ctx, vx, vy, &dx, &dy);
+        if (button == 1)
+          {
+            if (press)
+              {
+                drag_state.frame = f; drag_state.view = v;
+                drag_state.dragging_left = true;
+                drag_state.press_x = x; drag_state.press_y = y;
+                drag_state.last_x = x; drag_state.last_y = y;
+                image_left_moved = FALSE;
+                defer_image (v, "cmacs-libregnum--image-press", dx, dy, 1, mods);
+              }
+            else
+              {
+                drag_state.dragging_left = false;
+                /* A press+release with no motion is a click (fill/eyedropper/
+                 * text); with motion it is a completed stroke/shape. */
+                defer_image (v, image_left_moved
+                                  ? "cmacs-libregnum--image-release"
+                                  : "cmacs-libregnum--image-click",
+                             dx, dy, 1, mods);
+              }
+            cmacs_libregnum_view_request_redraw (v);
+            return true;
+          }
+        if (button == 2)          /* middle drag pans */
+          {
+            drag_state.frame = f; drag_state.view = v;
+            drag_state.dragging_middle = (press != 0);
+            drag_state.last_x = x; drag_state.last_y = y;
+            return true;
+          }
+        if (button == 3)          /* right release -> context menu */
+          {
+            if (!press)
+              defer_image_menu (v, dx, dy, (int) x, (int) y);
+            return true;
+          }
         return true;
       }
   }
@@ -750,6 +922,17 @@ cmacs_libregnum_handle_scroll (struct frame *f, double dx, double dy,
   CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
   if (cmacs_libregnum_render_ctx_is_game (ctx))
     return true;   /* a hosted game manages its own zoom; ignore scroll */
+  if (cmacs_libregnum_render_ctx_is_image (ctx))
+    {
+      /* Zoom the image about the cursor (keeps the doc point under it fixed). */
+      double vx, vy;
+      int vw, vh;
+      if (frame_to_view_coords (f, v, x, y, &vx, &vy, &vw, &vh))
+        cmacs_libregnum_render_ctx_image_zoom_at (ctx, vx, vy,
+                                                  dy > 0 ? 1.1 : 0.9);
+      cmacs_libregnum_view_request_redraw (v);
+      return true;
+    }
   cmacs_libregnum_render_ctx_zoom_camera (ctx, dy);
   cmacs_libregnum_view_request_redraw (v);
   return true;

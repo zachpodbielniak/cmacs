@@ -15,8 +15,14 @@
 
 #include "lisp.h"
 #include "coding.h"             /* ENCODE_UTF_8 for the text tool */
+#include "buffer.h"             /* CHECK_BUFFER for viewport-bind */
 #include "cmacs-imgedit-doc.h"
 #include "cmacs-imgedit-clip.h"
+#ifdef HAVE_CMACS_LIBREGNUM
+/* Firewall-safe (raylib-free, opaque-ctx) headers for the live viewport. */
+#include "cmacs-libregnum.h"
+#include "cmacs-libregnum-render.h"
+#endif
 
 /* Qcmacs_imgedit_error is DEFSYM'd in syms_of_* below; make-docfile generates
    its global slot, so it must NOT be declared as a file-local variable. */
@@ -534,6 +540,34 @@ engine's TrueType font, or its embedded bitmap font when headless.  */)
   return Qnil;
 }
 
+DEFUN ("cmacs-imgedit-viewport-bind", Fcmacs_imgedit_viewport_bind,
+       Scmacs_imgedit_viewport_bind, 2, 2, 0,
+       doc: /* Bind image HANDLE's document into BUFFER's libregnum view for
+zero-copy live display (the render side re-flattens it each refresh).  Returns
+t on success, nil if the viewport is unavailable.  */)
+  (Lisp_Object handle, Lisp_Object buffer)
+{
+#ifdef HAVE_CMACS_LIBREGNUM
+  CmacsImgeditDoc *d = ie_lookup (handle);
+  void *doc = d ? cmacs_imgedit_doc_document (d) : NULL;
+  CmacsLibregnumView *v;
+  CmacsLibregnumRenderCtx *ctx;
+
+  CHECK_BUFFER (buffer);
+  v = cmacs_libregnum_view_for_buffer (buffer);
+  ctx = v ? cmacs_libregnum_view_get_render_ctx (v) : NULL;
+  if (ctx && doc)
+    {
+      cmacs_libregnum_render_ctx_image_set_document (ctx, doc);
+      cmacs_libregnum_view_request_redraw (v);
+      return Qt;
+    }
+#else
+  (void) handle; (void) buffer;
+#endif
+  return Qnil;
+}
+
 DEFUN ("cmacs-imgedit-clipboard-available-p",
        Fcmacs_imgedit_clipboard_available_p,
        Scmacs_imgedit_clipboard_available_p, 0, 0, 0,
@@ -697,6 +731,7 @@ syms_of_cmacs_imgedit_defuns (void)
   defsubr (&Scmacs_imgedit_draw_ellipse);
   defsubr (&Scmacs_imgedit_draw_text);
   defsubr (&Scmacs_imgedit_flood_fill);
+  defsubr (&Scmacs_imgedit_viewport_bind);
   defsubr (&Scmacs_imgedit_clipboard_available_p);
   defsubr (&Scmacs_imgedit_clipboard_set_png);
   defsubr (&Scmacs_imgedit_clipboard_get_png);
