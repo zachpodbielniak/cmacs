@@ -8841,6 +8841,14 @@ the mode map is registered with @code{evil-make-overriding-map}, so the menu
 and keys work unmodified under Doom/Evil and @code{context-menu-mode} ---
 except @kbd{SPC}, which Doom's leader owns; use @kbd{p} there.
 
+@kbd{i} imports the @emph{whole video} by default; it prompts for optional
+In/Out points (source seconds, blank In = start, blank Out = whole video) to
+import only a @emph{slice}.  The slice is recorded as engine state --- a real
+@code{trim_end} out-point was added to libregnum's @code{LrgReelVideoClip}
+alongside @code{trim_start}, so the source read is clamped at Out and the slice
+survives later duration edits.  The on-timeline duration is derived from
+@code{(Out - In) * fps}.
+
 Video imports never block: the clip is probed at import and the whole-clip
 ffmpeg decode runs on a worker thread
 (@code{lrg_reel_video_source_set_async_decode}); the preview shows a dark

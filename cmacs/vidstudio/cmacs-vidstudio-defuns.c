@@ -76,6 +76,13 @@ vs_int (Lisp_Object v, int dflt)
   return INTEGERP (v) ? (int) XFIXNUM (v) : dflt;
 }
 
+/* NUMBERP -> double; nil/other -> DFLT (used for optional seconds args). */
+static double
+vs_dbl (Lisp_Object v, double dflt)
+{
+  return NUMBERP (v) ? XFLOATINT (v) : dflt;
+}
+
 DEFUN ("cmacs-vidstudio-supported-p", Fcmacs_vidstudio_supported_p,
        Scmacs_vidstudio_supported_p, 0, 0, 0,
        doc: /* Return non-nil if cmacs was built with --with-cmacs-vidstudio.  */)
@@ -227,20 +234,39 @@ DEFUN ("cmacs-vidstudio-add-image-clip", Fcmacs_vidstudio_add_image_clip,
 }
 
 DEFUN ("cmacs-vidstudio-add-video-clip", Fcmacs_vidstudio_add_video_clip,
-       Scmacs_vidstudio_add_video_clip, 4, 4, 0,
-       doc: /* Append video PATH of DURATION frames to TRACK; return clip id.  */)
+       Scmacs_vidstudio_add_video_clip, 4, 6, 0,
+       doc: /* Append video PATH to TRACK; return clip id.
+Optional IN-SEC and OUT-SEC are the source in/out points in seconds.  Omit
+(or nil) IN-SEC for the start; omit OUT-SEC (or pass nil / a value past the
+source end) to import the whole video.  The on-timeline duration is derived
+from the resulting slice.  */)
   (Lisp_Object handle, Lisp_Object track, Lisp_Object path,
-   Lisp_Object duration)
+   Lisp_Object duration, Lisp_Object in_sec, Lisp_Object out_sec)
 {
   char *err = NULL;
   gint id;
+  double in, out;
 
   CHECK_FIXNUM (track);
   CHECK_STRING (path);
+  /* Back-compat: the 4th arg historically was a DURATION in frames.  If IN/OUT
+     are omitted but a positive DURATION is given, treat it as a from-start
+     slice of that many frames; otherwise IN-SEC/OUT-SEC drive the slice
+     (nil -> -1 sentinel = start / whole video). */
+  in = NILP (in_sec) ? -1.0 : vs_dbl (in_sec, -1.0);
+  if (!NILP (out_sec))
+    out = vs_dbl (out_sec, -1.0);
+  else if (NILP (in_sec) && INTEGERP (duration) && XFIXNUM (duration) > 0)
+    {
+      double fps = cmacs_vidstudio_proj_fps (vs_lookup (handle));
+      in = (in < 0.0) ? 0.0 : in;
+      out = in + (fps > 0.0 ? XFIXNUM (duration) / fps : 0.0);
+    }
+  else
+    out = -1.0;
   id = cmacs_vidstudio_proj_add_video_clip (vs_lookup (handle),
                                             (guint) XFIXNUM (track),
-                                            SSDATA (path),
-                                            vs_int (duration, 0), &err);
+                                            SSDATA (path), in, out, &err);
   if (id < 0)
     {
       Lisp_Object msg = build_string (err ? err : "could not add video");

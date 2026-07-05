@@ -128,7 +128,15 @@ Durations and the playhead are in *frames*.
 ** Clips (each returns a clip id)
 - ~(cmacs-vidstudio-add-solid-clip HANDLE TRACK DURATION R G B A)~.
 - ~(cmacs-vidstudio-add-image-clip HANDLE TRACK PATH DURATION)~.
-- ~(cmacs-vidstudio-add-video-clip HANDLE TRACK PATH DURATION)~.
+- ~(cmacs-vidstudio-add-video-clip HANDLE TRACK PATH &optional DURATION IN-SEC OUT-SEC)~
+  — imports the *whole video* by default; pass IN-SEC / OUT-SEC (source
+  seconds) to import only a *slice*.  A negative/omitted IN-SEC means the
+  start; an omitted OUT-SEC (or one past the source end) means the end.  The
+  on-timeline duration is derived from the slice, and the in/out points are
+  recorded as engine state (a real ~trim_end~ was added to libregnum's
+  ~LrgReelVideoClip~, so the source read is clamped at OUT and the slice
+  survives later duration edits).  ~M-x cmacs-vidstudio-import~ prompts for the
+  optional In/Out points (blank In = start, blank Out = whole video).
 - ~(cmacs-vidstudio-add-text-clip HANDLE TRACK TEXT DURATION R G B A)~.
 
 ** Transitions / effects

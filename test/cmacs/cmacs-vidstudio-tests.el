@@ -187,5 +187,39 @@ flips once the decode lands and real frames replace the placeholder."
                                  '(24 24 24 255))))))
       (delete-file clip))))
 
+;; ── Import: whole-video + in/out slicing ───────────────────────────────
+
+(defun cmacs-vidstudio-tests--make-video (path secs fps)
+  "Write a SECS-second test video at PATH (FPS), or return nil if no ffmpeg."
+  (and (executable-find "ffmpeg")
+       (zerop (call-process
+               "ffmpeg" nil nil nil "-y" "-f" "lavfi" "-i"
+               (format "testsrc=duration=%s:size=160x120:rate=%s" secs fps)
+               "-pix_fmt" "yuv420p" path))
+       path))
+
+(ert-deftest cmacs-vidstudio-tests-import-whole-and-slice ()
+  "Blank in/out imports the whole video; in/out slices it; frames match."
+  (cmacs-vidstudio-tests--skip-unless)
+  (let ((v (make-temp-file "cmvs-import" nil ".mp4")))
+    (unless (cmacs-vidstudio-tests--make-video v 4 30)
+      (delete-file v) (ert-skip "ffmpeg not available"))
+    (unwind-protect
+        (cmacs-vidstudio-tests--with-proj p 160 120 30.0
+          ;; whole video: 4 s * 30 fps = 120 frames
+          (let ((id (cmacs-vidstudio-add-video-clip p 0 v nil nil nil)))
+            (should (= (cmacs-vidstudio-clip-duration p id) 120)))
+          ;; slice 1..2.5 s -> 1.5 s -> 45 frames
+          (let ((id (cmacs-vidstudio-add-video-clip p 0 v nil 1.0 2.5)))
+            (should (= (cmacs-vidstudio-clip-duration p id) 45)))
+          ;; out before in is a fat-finger: keep IN, run to source end (never
+          ;; zero/negative frames) -- here 3..4 s = 30 frames.
+          (let ((id (cmacs-vidstudio-add-video-clip p 0 v nil 3.0 1.0)))
+            (should (= (cmacs-vidstudio-clip-duration p id) 30)))
+          ;; back-compat: a positive DURATION with no in/out = that many frames
+          (let ((id (cmacs-vidstudio-add-video-clip p 0 v 60)))
+            (should (= (cmacs-vidstudio-clip-duration p id) 60))))
+      (delete-file v))))
+
 (provide 'cmacs-vidstudio-tests)
 ;;; cmacs-vidstudio-tests.el ends here

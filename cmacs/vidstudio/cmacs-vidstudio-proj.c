@@ -227,10 +227,13 @@ cmacs_vidstudio_proj_add_image_clip (CmacsVidProject *p, guint track,
 
 gint
 cmacs_vidstudio_proj_add_video_clip (CmacsVidProject *p, guint track,
-                                     const char *path, int duration,
-                                     char **error_msg)
+                                     const char *path, double in_sec,
+                                     double out_sec, char **error_msg)
 {
   LrgReelVideoClip *clip;
+  LrgReelVideoSource *src;
+  double src_dur, in, out;
+  int frames;
   g_autoptr (GError) err = NULL;
 
   clip = lrg_reel_video_clip_new_from_file (path, &err);
@@ -240,16 +243,36 @@ cmacs_vidstudio_proj_add_video_clip (CmacsVidProject *p, guint track,
         *error_msg = g_strdup (err ? err->message : "could not load video");
       return -1;
     }
+  src = lrg_reel_video_clip_get_source (clip);
+
+  /* Resolve whole-video / in-out slice.  get_duration is ffprobe-derived at
+     construction (seconds, decode-free).  Blank/negative IN -> 0 (start);
+     blank/<=0 or out-of-range OUT -> source end.  This is the ONLY place the
+     source is reachable, so "whole video" becomes a concrete positive frame
+     count HERE -- bypassing the Lisp --secs-to-frames (max 1 ...) clamp and
+     append_clip's (duration <= 0 -> 3s) reinterpretation.  trim_start/_end
+     record the slice as engine state (survives later duration edits and
+     serialises for save/load). */
+  src_dur = lrg_reel_video_source_get_duration (src);
+  in  = (in_sec < 0.0) ? 0.0 : in_sec;
+  out = (out_sec <= 0.0 || (src_dur > 0.0 && out_sec > src_dur))
+          ? src_dur : out_sec;
+  if (src_dur > 0.0 && out <= in)
+    out = src_dur;
+  lrg_reel_video_clip_set_trim_start (clip, in);
+  lrg_reel_video_clip_set_trim_end (clip, out);
+  frames = (int) ((out - in) * p->fps + 0.5);   /* playback rate 1.0 for v1 */
+  if (frames < 1)
+    frames = 1;
+
   /* Decode on a worker thread: preview shows a placeholder until ready
      (poll cmacs_vidstudio_proj_clip_ready), so adding a clip never blocks
      the editor.  Export forces real frames via wait_video_clips.  The
      frame-count call kicks the worker NOW (it otherwise starts on first
      frame access), so readiness polling never waits on a render. */
-  lrg_reel_video_source_set_async_decode
-    (lrg_reel_video_clip_get_source (clip), TRUE);
-  lrg_reel_video_source_get_frame_count
-    (lrg_reel_video_clip_get_source (clip));
-  return append_clip (p, track, LRG_REEL_CLIP (clip), duration);
+  lrg_reel_video_source_set_async_decode (src, TRUE);
+  lrg_reel_video_source_get_frame_count (src);
+  return append_clip (p, track, LRG_REEL_CLIP (clip), frames);
 }
 
 gint

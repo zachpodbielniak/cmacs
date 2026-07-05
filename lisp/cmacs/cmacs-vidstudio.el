@@ -212,26 +212,46 @@ placeholder meanwhile), so import returns instantly."
                      (setq cmacs-vidstudio--decode-timer nil)
                      (message "vidstudio: clip #%d decode timed out" id)))))))))))
 
-(defun cmacs-vidstudio-import (file seconds)
-  "Import FILE (image or video) for SECONDS onto the active track.
-Video clips decode in the background; the timeline is usable immediately
-and the preview pops in when the decode finishes."
-  (interactive (list (read-file-name "Import clip: ")
-                     (read-number "Duration (seconds): " 3.0)))
-  (let* ((frames (cmacs-vidstudio--secs-to-frames seconds))
-         (ext (downcase (or (file-name-extension file) "")))
+(defun cmacs-vidstudio--maybe-secs (str)
+  "Parse STR as seconds, or nil when blank."
+  (and (stringp str) (not (string-empty-p (string-trim str)))
+       (string-to-number str)))
+
+(defun cmacs-vidstudio-import (file &optional in-str out-str seconds)
+  "Import FILE (image or video) onto the active track.
+For a video, IN-STR/OUT-STR are the source in/out points in seconds (blank
+IN = start, blank OUT = the whole video); for an image, SECONDS is its
+duration.  Video clips decode in the background; the timeline is usable
+immediately and the preview pops in when the decode finishes."
+  (interactive
+   (let* ((f (read-file-name "Import clip: "))
+          (ext (downcase (or (file-name-extension f) "")))
+          (imagep (member ext '("png" "jpg" "jpeg" "bmp" "gif" "tga"))))
+     (if imagep
+         (list f nil nil (read-number "Duration (seconds): " 3.0))
+       (list f
+             (read-string "In point seconds (blank = start): ")
+             (read-string "Out point seconds (blank = whole video): ")
+             nil))))
+  (let* ((ext (downcase (or (file-name-extension file) "")))
          (imagep (member ext '("png" "jpg" "jpeg" "bmp" "gif" "tga")))
+         (in (cmacs-vidstudio--maybe-secs in-str))
+         (out (cmacs-vidstudio--maybe-secs out-str))
          (id (if imagep
-                 (cmacs-vidstudio-add-image-clip cmacs-vidstudio--handle
-                                                 cmacs-vidstudio--active-track
-                                                 (expand-file-name file) frames)
-               (cmacs-vidstudio-add-video-clip cmacs-vidstudio--handle
-                                               cmacs-vidstudio--active-track
-                                               (expand-file-name file) frames))))
+                 (cmacs-vidstudio-add-image-clip
+                  cmacs-vidstudio--handle cmacs-vidstudio--active-track
+                  (expand-file-name file)
+                  (cmacs-vidstudio--secs-to-frames (or seconds 3.0)))
+               (cmacs-vidstudio-add-video-clip
+                cmacs-vidstudio--handle cmacs-vidstudio--active-track
+                (expand-file-name file) nil in out))))
     (cmacs-vidstudio--render)
     (if imagep
         (message "Imported clip #%d" id)
-      (message "Imported clip #%d (decoding in background…)" id)
+      (message "Imported clip #%d (%s; decoding in background…)" id
+               (if (or in out)
+                   (format "slice %s..%s" (or in "start") (or out "end"))
+                 "whole video"))
       (cmacs-vidstudio--watch-decode id))))
 
 (defun cmacs-vidstudio-add-color (color seconds)

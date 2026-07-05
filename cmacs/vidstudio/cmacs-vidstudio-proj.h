@@ -73,9 +73,12 @@ extern gint cmacs_vidstudio_proj_add_image_clip (CmacsVidProject *p,
                                                  guint track, const char *path,
                                                  int duration,
                                                  char **error_msg);
+/* Add a video clip.  IN_SEC/OUT_SEC are the source in/out points in seconds:
+   IN_SEC < 0 means start (0); OUT_SEC <= 0 (or past the source) means the whole
+   video to its end.  The on-timeline duration is derived from the slice. */
 extern gint cmacs_vidstudio_proj_add_video_clip (CmacsVidProject *p,
                                                  guint track, const char *path,
-                                                 int duration,
+                                                 double in_sec, double out_sec,
                                                  char **error_msg);
 extern gint cmacs_vidstudio_proj_add_text_clip (CmacsVidProject *p,
                                                 guint track, const char *text,
