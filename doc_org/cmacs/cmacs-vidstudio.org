@@ -138,6 +138,11 @@ Durations and the playhead are in *frames*.
   survives later duration edits).  ~M-x cmacs-vidstudio-import~ prompts for the
   optional In/Out points (blank In = start, blank Out = whole video).
 - ~(cmacs-vidstudio-add-text-clip HANDLE TRACK TEXT DURATION R G B A)~.
+- ~(cmacs-vidstudio-add-loop-clip HANDLE TRACK PATH DURATION LOOP-SECS)~ and
+  ~-add-freeze-clip~ wrap a video source in a loop / freeze *sequence* (a
+  nested clip): loop repeats the source every LOOP-SECS over DURATION; freeze
+  holds the frame at a chosen second.  Right-click → *Add → Loop video… /
+  Freeze frame…*.
 - ~(cmacs-vidstudio-add-shape-rect HANDLE TRACK DURATION X Y W H FILL)~ and
   ~-add-shape-circle~ (filled shape clips); ~(cmacs-vidstudio-add-caption HANDLE
   TRACK DURATION SRT-PATH ...)~ imports an SRT subtitle track as a caption clip.

@@ -91,6 +91,15 @@ extern gint cmacs_vidstudio_proj_add_caption (CmacsVidProject *p, guint track,
                                               int font_size, guint8 r, guint8 g,
                                               guint8 b, guint8 a,
                                               char **error_msg);
+extern gint cmacs_vidstudio_proj_add_loop_clip (CmacsVidProject *p,
+                                               guint track, const char *path,
+                                               int duration, double loop_secs,
+                                               char **error_msg);
+extern gint cmacs_vidstudio_proj_add_freeze_clip (CmacsVidProject *p,
+                                                  guint track, const char *path,
+                                                  int duration,
+                                                  double freeze_secs,
+                                                  char **error_msg);
 extern gint cmacs_vidstudio_proj_add_image_clip (CmacsVidProject *p,
                                                  guint track, const char *path,
                                                  int duration,

@@ -347,5 +347,21 @@ flips once the decode lands and real frames replace the placeholder."
     (should (equal (cmacs-vidstudio-frame-pixel p 0 16 16) '(0 255 0 255)))
     (should (= (nth 3 (cmacs-vidstudio-frame-pixel p 0 2 2)) 0))))
 
+(ert-deftest cmacs-vidstudio-tests-sequence-clips ()
+  "Loop + freeze sequence clips wrap a video source and add to the timeline."
+  (cmacs-vidstudio-tests--skip-unless)
+  (skip-unless (executable-find "ffmpeg"))
+  (let ((mp4 (make-temp-file "cmvs-seq" nil ".mp4")))
+    (unwind-protect
+        (progn
+          (call-process "ffmpeg" nil nil nil "-y" "-v" "error" "-f" "lavfi"
+                        "-i" "testsrc=duration=2:size=64x48:rate=30" mp4)
+          (cmacs-vidstudio-tests--with-proj p 64 48 30.0
+            (cmacs-vidstudio-add-loop-clip p 0 mp4 60 0.5)
+            (cmacs-vidstudio-add-freeze-clip p 0 mp4 30 1.0)
+            (should (= (cmacs-vidstudio-track-clip-count p 0) 2))
+            (should (= (cmacs-vidstudio-total-frames p) 90))))
+      (delete-file mp4))))
+
 (provide 'cmacs-vidstudio-tests)
 ;;; cmacs-vidstudio-tests.el ends here

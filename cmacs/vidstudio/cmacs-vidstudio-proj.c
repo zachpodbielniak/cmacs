@@ -415,6 +415,58 @@ cmacs_vidstudio_proj_add_caption (CmacsVidProject *p, guint track, int duration,
   return append_clip (p, track, LRG_REEL_CLIP (c), duration);
 }
 
+/* Wrap a video source in a loop or freeze sequence (a nested clip).  MODE 0 =
+   loop (repeat every LOOP_FRAMES over DURATION); MODE 1 = freeze (hold the
+   frame at PARAM seconds).  DURATION is the on-timeline length in frames. */
+static gint
+proj_add_sequence_video (CmacsVidProject *p, guint track, const char *path,
+                         int duration, int mode, double param,
+                         char **error_msg)
+{
+  LrgReelVideoClip *vclip;
+  LrgReelVideoSource *src;
+  LrgReelSequence *seq;
+  g_autoptr (GError) err = NULL;
+  gint id;
+
+  vclip = lrg_reel_video_clip_new_from_file (path, &err);
+  if (vclip == NULL)
+    { if (error_msg)
+        *error_msg = g_strdup (err ? err->message : "could not load video");
+      return -1; }
+  src = lrg_reel_video_clip_get_source (vclip);
+  lrg_reel_video_source_set_async_decode (src, TRUE);
+  lrg_reel_video_source_get_frame_count (src);
+  if (mode == 1)
+    seq = lrg_reel_sequence_new_freeze ((gint) (param * p->fps + 0.5));
+  else
+    seq = lrg_reel_sequence_new_loop (param > 0.0 ? (gint) (param * p->fps + 0.5)
+                                                  : duration, 0);
+  lrg_reel_sequence_add_child (seq, LRG_REEL_CLIP (vclip));
+  g_object_unref (vclip);                 /* the sequence holds a ref now */
+  id = append_clip (p, track, LRG_REEL_CLIP (seq), duration);
+  seg_meta (p, id, CMACS_VID_KIND_VIDEO, path, 0, 0, 0, 0, 0, 0);
+  return id;
+}
+
+gint
+cmacs_vidstudio_proj_add_loop_clip (CmacsVidProject *p, guint track,
+                                    const char *path, int duration,
+                                    double loop_secs, char **error_msg)
+{
+  return proj_add_sequence_video (p, track, path, duration, 0, loop_secs,
+                                  error_msg);
+}
+
+gint
+cmacs_vidstudio_proj_add_freeze_clip (CmacsVidProject *p, guint track,
+                                      const char *path, int duration,
+                                      double freeze_secs, char **error_msg)
+{
+  return proj_add_sequence_video (p, track, path, duration, 1, freeze_secs,
+                                  error_msg);
+}
+
 gint
 cmacs_vidstudio_proj_add_image_clip (CmacsVidProject *p, guint track,
                                      const char *path, int duration,

@@ -812,6 +812,30 @@ silently updates.  Starting play at the end of the timeline rewinds."
                                (expand-file-name srt))
   (cmacs-vidstudio--render))
 
+(defun cmacs-vidstudio-add-loop (path seconds loop-secs)
+  "Loop video PATH for SECONDS, repeating every LOOP-SECS (0 = whole)."
+  (interactive (list (read-file-name "Video: " nil nil t)
+                     (read-number "Duration (seconds): " 4.0)
+                     (read-number "Loop period (seconds, 0=whole): " 0.0)))
+  (cmacs-vidstudio-add-loop-clip cmacs-vidstudio--handle
+                                 cmacs-vidstudio--active-track
+                                 (expand-file-name path)
+                                 (cmacs-vidstudio--secs-to-frames seconds)
+                                 loop-secs)
+  (cmacs-vidstudio--render))
+
+(defun cmacs-vidstudio-add-freeze (path seconds freeze-at)
+  "Freeze video PATH at FREEZE-AT seconds, held for SECONDS."
+  (interactive (list (read-file-name "Video: " nil nil t)
+                     (read-number "Duration (seconds): " 2.0)
+                     (read-number "Freeze at (seconds): " 0.0)))
+  (cmacs-vidstudio-add-freeze-clip cmacs-vidstudio--handle
+                                   cmacs-vidstudio--active-track
+                                   (expand-file-name path)
+                                   (cmacs-vidstudio--secs-to-frames seconds)
+                                   freeze-at)
+  (cmacs-vidstudio--render))
+
 (defun cmacs-vidstudio--menu ()
   "Return the video-editor context-menu alist (shared native + viewport)."
   '("Video editor"
@@ -822,6 +846,8 @@ silently updates.  Starting play at the end of the timeline rewinds."
              ("Gradient…" . cmacs-vidstudio-add-gradient)
              ("Rectangle…" . cmacs-vidstudio-add-rectangle)
              ("Captions (SRT)…" . cmacs-vidstudio-add-captions)
+             ("Loop video…" . cmacs-vidstudio-add-loop)
+             ("Freeze frame…" . cmacs-vidstudio-add-freeze)
              ("New track" . cmacs-vidstudio-add-track-cmd))
             ("Clip"
              ("Transition…" . cmacs-vidstudio-add-transition-cmd)

@@ -209,6 +209,46 @@ DEFUN ("cmacs-vidstudio-add-solid-clip", Fcmacs_vidstudio_add_solid_clip,
                           vs_clamp8 (b), vs_clamp8 (a)));
 }
 
+DEFUN ("cmacs-vidstudio-add-loop-clip", Fcmacs_vidstudio_add_loop_clip,
+       Scmacs_vidstudio_add_loop_clip, 4, 5, 0,
+       doc: /* Loop video PATH on TRACK over DURATION frames, repeating every
+LOOP-SECS seconds (nil = the whole duration).  */)
+  (Lisp_Object handle, Lisp_Object track, Lisp_Object path, Lisp_Object duration,
+   Lisp_Object loop_secs)
+{
+  char *err = NULL;
+  gint id;
+  CHECK_FIXNUM (track);
+  CHECK_STRING (path);
+  id = cmacs_vidstudio_proj_add_loop_clip (vs_lookup (handle),
+    (guint) XFIXNUM (track), SSDATA (path), vs_int (duration, 0),
+    vs_dbl (loop_secs, 0.0), &err);
+  if (id < 0)
+    { Lisp_Object m = build_string (err ? err : "loop clip failed");
+      g_free (err); xsignal1 (Qcmacs_vidstudio_error, m); }
+  return make_fixnum (id);
+}
+
+DEFUN ("cmacs-vidstudio-add-freeze-clip", Fcmacs_vidstudio_add_freeze_clip,
+       Scmacs_vidstudio_add_freeze_clip, 4, 5, 0,
+       doc: /* Freeze-frame video PATH on TRACK for DURATION frames, holding the
+frame at FREEZE-SECS seconds (default 0).  */)
+  (Lisp_Object handle, Lisp_Object track, Lisp_Object path, Lisp_Object duration,
+   Lisp_Object freeze_secs)
+{
+  char *err = NULL;
+  gint id;
+  CHECK_FIXNUM (track);
+  CHECK_STRING (path);
+  id = cmacs_vidstudio_proj_add_freeze_clip (vs_lookup (handle),
+    (guint) XFIXNUM (track), SSDATA (path), vs_int (duration, 0),
+    vs_dbl (freeze_secs, 0.0), &err);
+  if (id < 0)
+    { Lisp_Object m = build_string (err ? err : "freeze clip failed");
+      g_free (err); xsignal1 (Qcmacs_vidstudio_error, m); }
+  return make_fixnum (id);
+}
+
 DEFUN ("cmacs-vidstudio-add-shape-rect", Fcmacs_vidstudio_add_shape_rect,
        Scmacs_vidstudio_add_shape_rect, 8, 8, 0,
        doc: /* Append a filled rect shape (X Y W H, FILL = (R G B A)) on TRACK.  */)
@@ -986,6 +1026,8 @@ syms_of_cmacs_vidstudio_defuns (void)
   defsubr (&Scmacs_vidstudio_track_clip_count);
   defsubr (&Scmacs_vidstudio_track_total_frames);
   defsubr (&Scmacs_vidstudio_add_solid_clip);
+  defsubr (&Scmacs_vidstudio_add_loop_clip);
+  defsubr (&Scmacs_vidstudio_add_freeze_clip);
   defsubr (&Scmacs_vidstudio_add_shape_rect);
   defsubr (&Scmacs_vidstudio_add_shape_circle);
   defsubr (&Scmacs_vidstudio_add_caption);
