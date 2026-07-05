@@ -1403,5 +1403,79 @@ Headless-safe arity check -- no GL needed."
     (should (= (car ar) 1))            ; MODULE required
     (should (>= (cdr ar) 2))))         ; optional ARGV
 
+;; ── 2D image-display mode (live viewport) ──────────────────────────────
+;; The image-mode DEFUNs are pure state until a frame renders, but view-to-doc
+;; / fit depend on a bound doc size that only a GL upload establishes, so the
+;; live cases need a reachable GL context.  A GL context is available even in
+;; -batch when a compositor is present (Emacs reports display-graphic-p nil in
+;; batch, so guard on the display env vars instead), and truly headless CI
+;; skips via a failed attach.
+
+(defun cmacs-libregnum-tests--attach-or-skip (buf w h)
+  "Attach a W×H view to BUF, or `ert-skip' if no GL context is reachable."
+  (unless (and (fboundp 'cmacs-libregnum-supported-p)
+               (cmacs-libregnum-supported-p)
+               (or (display-graphic-p)
+                   (getenv "WAYLAND_DISPLAY") (getenv "DISPLAY")))
+    (ert-skip "no GL context reachable"))
+  (condition-case _e
+      (progn (cmacs-libregnum-attach buf w h)
+             (unless (cmacs-libregnum-attached-p buf)
+               (ert-skip "attach did not produce a view")))
+    (error (ert-skip "attach failed (no GL)"))))
+
+(ert-deftest cmacs-libregnum-tests-image-defuns-exist ()
+  "The image-mode DEFUN surface is present when built."
+  (skip-unless (fboundp 'cmacs-libregnum-supported-p))
+  (dolist (fn '(cmacs-libregnum-image-enter cmacs-libregnum-image-p
+                cmacs-libregnum-image-upload-rgba cmacs-libregnum-image-fit
+                cmacs-libregnum-image-view cmacs-libregnum-image-zoom-at
+                cmacs-libregnum-image-view-to-doc
+                cmacs-libregnum-image-set-checker
+                cmacs-libregnum-image-set-marquee))
+    (should (fboundp fn))))
+
+(ert-deftest cmacs-libregnum-tests-image-fit-and-map ()
+  "Enter image mode, upload a solid image, and check fit + view->doc."
+  (let ((buf (generate-new-buffer " *lrg-img-test*")))
+    (unwind-protect
+        (progn
+          (cmacs-libregnum-tests--attach-or-skip buf 320 240)
+          (cmacs-libregnum-image-enter buf t)
+          (should (cmacs-libregnum-image-p buf))
+          ;; 40x30 solid; fit into 320x240 -> scale 8, pan 0,0
+          (let ((px (make-string (* 40 30 4) 0)))
+            (dotimes (i (* 40 30)) (aset px (+ (* i 4) 3) 255))
+            (cmacs-libregnum-image-upload-rgba buf 40 30 px))
+          (cmacs-libregnum-image-fit buf)
+          (let ((v (cmacs-libregnum-image-view buf)))
+            (should (< (abs (- (nth 0 v) 8.0)) 0.001))) ; scale
+          ;; centre view pixel maps to the doc centre
+          (should (equal (cmacs-libregnum-image-view-to-doc buf 160 120)
+                         '(20 . 15)))
+          ;; with a non-filling view (scale 4, pan 80,60) a corner maps outside
+          (cmacs-libregnum-image-set-view buf 4.0 80.0 60.0)
+          (should (equal (cmacs-libregnum-image-view-to-doc buf 160 120)
+                         '(20 . 15)))
+          (should (null (cmacs-libregnum-image-view-to-doc buf 0 0))))
+      (kill-buffer buf))))
+
+(ert-deftest cmacs-libregnum-tests-image-zoom-keeps-point ()
+  "Zoom about a cursor keeps the doc point under it fixed."
+  (let ((buf (generate-new-buffer " *lrg-img-zoom*")))
+    (unwind-protect
+        (progn
+          (cmacs-libregnum-tests--attach-or-skip buf 200 200)
+          (cmacs-libregnum-image-enter buf t)
+          (let ((px (make-string (* 20 20 4) 0)))
+            (dotimes (i (* 20 20)) (aset px (+ (* i 4) 3) 255))
+            (cmacs-libregnum-image-upload-rgba buf 20 20 px))
+          (cmacs-libregnum-image-set-view buf 4.0 0.0 0.0)
+          (let ((before (cmacs-libregnum-image-view-to-doc buf 100 100)))
+            (cmacs-libregnum-image-zoom-at buf 100 100 2.0)
+            (should (equal before
+                           (cmacs-libregnum-image-view-to-doc buf 100 100)))))
+      (kill-buffer buf))))
+
 (provide 'cmacs-libregnum-tests)
 ;;; cmacs-libregnum-tests.el ends here

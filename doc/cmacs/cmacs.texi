@@ -8715,9 +8715,19 @@ offset, undo).  Enable with @option{--with-cmacs-imgedit} (requires
 
 It has two facets: a handle-based model API (the @code{cmacs-imgedit-*}
 primitives, scriptable and MCP/headless-driveable) and @code{cmacs-imgedit-mode},
-which shows the composited document as a native Emacs image and supports mouse
-painting plus command-driven tools.  See
-@file{doc_org/cmacs/cmacs-imgedit.org} for the full reference.
+which shows the composited document and supports mouse painting plus
+command-driven tools.  See @file{doc_org/cmacs/cmacs-imgedit.org} for the full
+reference.
+
+When a display is available @code{cmacs-imgedit-mode} renders through a live
+in-engine libregnum/raylib viewport (the gnuseye/cmacs-cad hosting model),
+under both the pgtk and @code{emacs --lrg} backends: the document is bound
+zero-copy so a brush dab re-uploads only the affected region and redraws the
+FBO (far lower latency than the native image path).  Middle-drag pans, the
+wheel zooms about the cursor, and a transparency checkerboard + pixel grid are
+drawn in-engine.  On a tty / headless / no-GL frame it falls back automatically
+to the native @code{insert-image} preview (buffer-local
+@code{cmacs-imgedit--live} nil).
 
 @section Commands
 
@@ -8808,6 +8818,13 @@ vidstudio is a Reel-based @emph{editor}.  Smooth real-time scrubbing of source
 clips is served by the libregnum @code{LrgVideoPlayer} FFmpeg decode backend
 (built with @code{FFMPEG=1}).  See @file{doc_org/cmacs/cmacs-vidstudio.org} for
 the full reference.
+
+When a display is available the preview renders through a live in-engine
+libregnum viewport (the gnuseye/cmacs-cad hosting model, pgtk and
+@code{emacs --lrg}): the composited playhead frame is uploaded straight into
+the FBO, avoiding the per-frame PPM-through-Emacs round-trip.  On a tty /
+headless frame it falls back automatically to the PPM/PNG @code{insert-image}
+preview (buffer-local @code{cmacs-vidstudio--live} nil).
 
 @section Commands
 

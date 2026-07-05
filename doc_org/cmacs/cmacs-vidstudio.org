@@ -42,6 +42,18 @@ M-x cmacs-vidstudio          ; new project (prompts W x H x fps)
 Then build the timeline with the keys below; the buffer previews the frame at
 the playhead.
 
+** Live GL viewport
+
+When a display is available, the preview renders through a *live in-engine
+libregnum viewport* (the gnuseye/cmacs-cad hosting model) instead of a native
+Emacs image: the composited playhead frame is uploaded straight into the FBO,
+so scrubbing and playback avoid the per-frame PPM-through-Emacs round-trip.  It
+works under both *pgtk* and ~emacs --lrg~.  Right-click still pops the video
+context menu; on a tty / headless frame the editor *falls back automatically*
+to the PPM/PNG ~insert-image~ preview (buffer-local ~cmacs-vidstudio--live~ is
+then nil).  The in-viewport graphical timeline strip is a later addition; the
+textual timeline is shown in the native path meanwhile.
+
 ** Default keybindings (~cmacs-vidstudio-mode~)
 
 | Key       | Command                              | Action                       |

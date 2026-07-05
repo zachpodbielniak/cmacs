@@ -67,6 +67,24 @@ on the canvas*:
 - *Bucket* — click to flood-fill from that pixel.
 - *Pick* (eyedropper) — click to set the foreground colour from that pixel.
 
+** Live GL viewport
+
+When a display is available, imgedit renders through a *live in-engine
+libregnum/raylib viewport* (the same hosting model gnuseye and cmacs-cad use),
+instead of a native Emacs image.  The document is bound *zero-copy* into the
+render context: a brush dab re-flattens + re-uploads only the affected region
+and redraws the FBO, so painting is far lower latency than the old
+flatten→PNG-encode→Emacs-decode→redisplay path.  It works under both the *pgtk*
+(cairo BGRA blit) and ~emacs --lrg~ (FBO) backends, with a transparency
+checkerboard and a pixel grid (at high zoom) drawn in-engine.
+
+- *Pan* — middle-drag; *Zoom* — mouse wheel (about the cursor).
+- Mouse painting, right-click menu, and every tool behave exactly as below;
+  only the rendering path differs.
+- On a tty / headless / no-GL frame imgedit *falls back automatically* to the
+  native ~insert-image~ preview (buffer-local ~cmacs-imgedit--live~ is then
+  nil), so the editor works everywhere.
+
 ** Annotation workflow (screenshots)
 
 #+begin_src
