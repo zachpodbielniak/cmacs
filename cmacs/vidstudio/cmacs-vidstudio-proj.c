@@ -15,6 +15,28 @@
 #include <libregnum.h>
 #include <string.h>
 
+/* Animatable parameter codes (cmacs_vidstudio_proj_add_keyframe `param'). */
+enum
+{
+  CMACS_VID_KF_OPACITY = 0,
+  CMACS_VID_KF_X,
+  CMACS_VID_KF_Y,
+  CMACS_VID_KF_SCALE,
+  CMACS_VID_KF_ROTATION,
+  CMACS_VID_KF_EFFECT_PARAM      /* uses effect_index + prop */
+};
+
+/* One keyframe.  FRAME is clip-relative (survives clip moves/splits). */
+typedef struct
+{
+  int    param;
+  int    effect_index;
+  char  *prop;                  /* effect-param only, else NULL */
+  double frame;
+  double value;
+  int    easing;                /* LrgEasingType */
+} VidKey;
+
 typedef struct
 {
   guint               id;
@@ -22,7 +44,19 @@ typedef struct
   LrgReelTransition  *trans;    /* owned, or NULL (leading transition) */
   int                 duration; /* frames */
   int                 trans_overlap;
+  GArray             *keys;     /* of VidKey, or NULL until first keyframe */
+  GPtrArray          *curves;   /* of VidCurve*, rebuilt when keys_dirty */
+  gboolean            keys_dirty;
 } VidSeg;
+
+/* One animatable channel = a keyframe curve for a (param, effect, prop). */
+typedef struct
+{
+  int    param;
+  int    effect_index;
+  char  *prop;
+  LrgKeyframeCurve *curve;      /* owned */
+} VidCurve;
 
 typedef struct
 {
@@ -62,6 +96,27 @@ struct CmacsVidProject
 
 /* Forward decls (definitions appear later in the file). */
 static void proj_rebuild (CmacsVidProject *p);
+static void proj_apply_animation (CmacsVidProject *p, int global_frame);
+static gboolean proj_has_keyframes (CmacsVidProject *p);
+static gboolean proj_render_to_exporter (CmacsVidProject *p,
+                                         LrgReelRenderer *r,
+                                         LrgReelExporter *ex, GError **error);
+
+static void
+vidkey_clear (gpointer p)
+{
+  VidKey *k = p;
+  g_clear_pointer (&k->prop, g_free);
+}
+
+static void
+vidcurve_free (gpointer p)
+{
+  VidCurve *c = p;
+  g_clear_pointer (&c->prop, g_free);
+  g_clear_object (&c->curve);
+  g_free (c);
+}
 
 static void
 vidseg_clear (gpointer p)
@@ -69,6 +124,8 @@ vidseg_clear (gpointer p)
   VidSeg *s = p;
   g_clear_object (&s->clip);
   g_clear_object (&s->trans);
+  g_clear_pointer (&s->keys, g_array_unref);
+  g_clear_pointer (&s->curves, g_ptr_array_unref);
 }
 
 static void
@@ -232,6 +289,9 @@ append_clip (CmacsVidProject *p, guint track, LrgReelClip *clip, int duration)
   seg.trans = NULL;
   seg.duration = duration;
   seg.trans_overlap = 0;
+  seg.keys = NULL;
+  seg.curves = NULL;
+  seg.keys_dirty = FALSE;
   g_array_append_val (t->segs, seg);
   p->dirty = TRUE;
   return (gint) seg.id;
@@ -814,6 +874,245 @@ cmacs_vidstudio_proj_export_audio (CmacsVidProject *p, const char *path,
   return ok;
 }
 
+/* ══════════════════════════════════════════════════════════════════════
+ * Keyframing (per-clip, per-parameter; evaluated per rendered frame)
+ *
+ * The engine has no retained keyframe-track binding, so cmacs holds the
+ * keyframes (clip-relative frame + value + easing) and a per-frame ANIMATOR
+ * samples cached LrgKeyframeCurves and pushes values through the clip setters
+ * (opacity / transform) or g_object_set (effect params) BEFORE the reel is
+ * composited.  Curves are rebuilt only when a keyframe is added/cleared.
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static gint
+vidkey_cmp (gconstpointer a, gconstpointer b)
+{
+  double fa = ((const VidKey *) a)->frame, fb = ((const VidKey *) b)->frame;
+  return (fa < fb) ? -1 : (fa > fb) ? 1 : 0;
+}
+
+/* Rebuild SEG's per-channel curves from its keys (only when dirty). */
+static void
+proj_seg_rebuild_curves (VidSeg *s)
+{
+  guint i, j;
+
+  if (!s->keys_dirty)
+    return;
+  if (s->curves != NULL)
+    g_ptr_array_set_size (s->curves, 0);
+  else
+    s->curves = g_ptr_array_new_with_free_func (vidcurve_free);
+  if (s->keys != NULL)
+    {
+      g_array_sort (s->keys, vidkey_cmp);
+      for (i = 0; i < s->keys->len; i++)
+        {
+          VidKey *k = &g_array_index (s->keys, VidKey, i);
+          VidCurve *vc = NULL;
+          for (j = 0; j < s->curves->len; j++)
+            {
+              VidCurve *c = g_ptr_array_index (s->curves, j);
+              if (c->param == k->param && c->effect_index == k->effect_index
+                  && g_strcmp0 (c->prop, k->prop) == 0)
+                { vc = c; break; }
+            }
+          if (vc == NULL)
+            {
+              vc = g_new0 (VidCurve, 1);
+              vc->param = k->param;
+              vc->effect_index = k->effect_index;
+              vc->prop = k->prop ? g_strdup (k->prop) : NULL;
+              vc->curve = lrg_keyframe_curve_new ();
+              g_ptr_array_add (s->curves, vc);
+            }
+          lrg_keyframe_curve_add_key (vc->curve, (gfloat) k->frame,
+                                      (gfloat) k->value,
+                                      (LrgEasingType) k->easing);
+        }
+    }
+  s->keys_dirty = FALSE;
+}
+
+static void
+proj_apply_effect_param (LrgReelClip *clip, int effect_index, const char *prop,
+                         double value)
+{
+  LrgReelEffect *fx = lrg_reel_clip_get_effect (clip, (guint) effect_index);
+  GParamSpec *ps;
+  GValue gv = G_VALUE_INIT, dv = G_VALUE_INIT;
+
+  if (fx == NULL || prop == NULL)
+    return;
+  ps = g_object_class_find_property (G_OBJECT_GET_CLASS (fx), prop);
+  if (ps == NULL)
+    return;
+  g_value_init (&gv, G_PARAM_SPEC_VALUE_TYPE (ps));
+  g_value_init (&dv, G_TYPE_DOUBLE);
+  g_value_set_double (&dv, value);
+  if (g_value_transform (&dv, &gv))
+    g_object_set_property (G_OBJECT (fx), prop, &gv);
+  g_value_unset (&gv);
+  g_value_unset (&dv);
+}
+
+static void
+proj_apply_animation (CmacsVidProject *p, int global_frame)
+{
+  guint ti, si, ci;
+
+  for (ti = 0; ti < p->tracks->len; ti++)
+    {
+      VidTrack *t = g_ptr_array_index (p->tracks, ti);
+      for (si = 0; si < t->segs->len; si++)
+        {
+          VidSeg *s = &g_array_index (t->segs, VidSeg, si);
+          double x = 0, y = 0, scale = 1, rot = 0;
+          gboolean has_tf = FALSE;
+          int seg_start, local;
+
+          if (s->keys == NULL || s->keys->len == 0)
+            continue;
+          seg_start = cmacs_vidstudio_proj_clip_start_frame (p, (gint) s->id);
+          local = global_frame - seg_start;
+          if (local < 0 || local >= s->duration)
+            continue;              /* clip not on screen this frame */
+          proj_seg_rebuild_curves (s);
+          for (ci = 0; ci < s->curves->len; ci++)
+            {
+              VidCurve *c = g_ptr_array_index (s->curves, ci);
+              double v = lrg_keyframe_curve_sample (c->curve, (gfloat) local);
+              switch (c->param)
+                {
+                case CMACS_VID_KF_OPACITY:
+                  lrg_reel_clip_set_opacity (s->clip, v); break;
+                case CMACS_VID_KF_X:        x = v; has_tf = TRUE; break;
+                case CMACS_VID_KF_Y:        y = v; has_tf = TRUE; break;
+                case CMACS_VID_KF_SCALE:    scale = v; has_tf = TRUE; break;
+                case CMACS_VID_KF_ROTATION: rot = v; has_tf = TRUE; break;
+                case CMACS_VID_KF_EFFECT_PARAM:
+                  proj_apply_effect_param (s->clip, c->effect_index, c->prop, v);
+                  break;
+                default: break;
+                }
+            }
+          if (has_tf)
+            lrg_reel_clip_set_transform (s->clip, x, y, scale, scale, rot);
+        }
+    }
+}
+
+static gboolean
+proj_has_keyframes (CmacsVidProject *p)
+{
+  guint ti, si;
+  for (ti = 0; ti < p->tracks->len; ti++)
+    {
+      VidTrack *t = g_ptr_array_index (p->tracks, ti);
+      for (si = 0; si < t->segs->len; si++)
+        {
+          VidSeg *s = &g_array_index (t->segs, VidSeg, si);
+          if (s->keys != NULL && s->keys->len > 0)
+            return TRUE;
+        }
+    }
+  return FALSE;
+}
+
+gboolean
+cmacs_vidstudio_proj_add_keyframe (CmacsVidProject *p, gint clip_id, int param,
+                                   int effect_index, const char *prop,
+                                   double frame, double value, int easing)
+{
+  VidTrack *t = NULL;
+  guint si = 0;
+  VidSeg *s;
+  VidKey k;
+
+  if (!find_seg (p, clip_id, &t, &si))
+    return FALSE;
+  s = &g_array_index (t->segs, VidSeg, si);
+  if (s->keys == NULL)
+    {
+      s->keys = g_array_new (FALSE, FALSE, sizeof (VidKey));
+      g_array_set_clear_func (s->keys, vidkey_clear);
+    }
+  k.param = param;
+  k.effect_index = effect_index;
+  k.prop = (prop != NULL) ? g_strdup (prop) : NULL;
+  k.frame = frame;
+  k.value = value;
+  k.easing = easing;
+  g_array_append_val (s->keys, k);
+  s->keys_dirty = TRUE;
+  /* Do NOT set p->dirty: keyframes do not change the timeline structure; they
+     are applied per rendered frame by proj_apply_animation. */
+  return TRUE;
+}
+
+gboolean
+cmacs_vidstudio_proj_clear_keyframes (CmacsVidProject *p, gint clip_id,
+                                      int param)
+{
+  VidTrack *t = NULL;
+  guint si = 0, i;
+  VidSeg *s;
+
+  if (!find_seg (p, clip_id, &t, &si))
+    return FALSE;
+  s = &g_array_index (t->segs, VidSeg, si);
+  if (s->keys == NULL)
+    return TRUE;
+  if (param < 0)
+    g_array_set_size (s->keys, 0);
+  else
+    for (i = s->keys->len; i > 0; i--)
+      if (g_array_index (s->keys, VidKey, i - 1).param == param)
+        g_array_remove_index (s->keys, i - 1);
+  s->keys_dirty = TRUE;
+  return TRUE;
+}
+
+gint
+cmacs_vidstudio_proj_keyframe_count (CmacsVidProject *p, gint clip_id)
+{
+  VidTrack *t = NULL;
+  guint si = 0;
+  if (!find_seg (p, clip_id, &t, &si))
+    return -1;
+  {
+    VidSeg *s = &g_array_index (t->segs, VidSeg, si);
+    return s->keys ? (gint) s->keys->len : 0;
+  }
+}
+
+/* Feed the renderer through EX.  When keyframes exist the animator must run
+   per frame, so cmacs drives the begin/add_frame/finish loop; otherwise the
+   engine's own loop is used (keeping motion-blur / parallel rendering). */
+static gboolean
+proj_render_to_exporter (CmacsVidProject *p, LrgReelRenderer *r,
+                         LrgReelExporter *ex, GError **error)
+{
+  int total, f;
+
+  if (!proj_has_keyframes (p))
+    return lrg_reel_renderer_render_to_exporter (r, ex, error);
+
+  total = cmacs_vidstudio_proj_total_frames (p);
+  if (total < 1) total = 1;
+  if (!lrg_reel_exporter_begin (ex, p->width, p->height, p->fps, error))
+    return FALSE;
+  for (f = 0; f < total; f++)
+    {
+      GrlImage *img;
+      proj_apply_animation (p, f);
+      img = lrg_reel_renderer_get_canvas_image (r, f);   /* transfer none */
+      if (img == NULL || !lrg_reel_exporter_add_frame (ex, img, error))
+        return FALSE;
+    }
+  return lrg_reel_exporter_finish (ex, error);
+}
+
 gboolean
 cmacs_vidstudio_proj_set_clip_duration (CmacsVidProject *p, gint clip_id,
                                         int frames)
@@ -852,6 +1151,9 @@ cmacs_vidstudio_proj_split_clip (CmacsVidProject *p, gint clip_id, int at_frame)
   tail.trans = NULL;
   tail.duration = s->duration - at_frame;
   tail.trans_overlap = 0;
+  tail.keys = NULL;
+  tail.curves = NULL;
+  tail.keys_dirty = FALSE;
 
   s->duration = at_frame;
   lrg_reel_clip_set_duration_in_frames (s->clip, at_frame);
@@ -1012,6 +1314,7 @@ cmacs_vidstudio_proj_render_png (CmacsVidProject *p, int frame, gsize *out_n)
     return NULL;
   proj_rebuild (p);
   r = lrg_reel_renderer_new (p->reel);
+  proj_apply_animation (p, frame);
   img = lrg_reel_renderer_get_canvas_image (r, frame);
   if (img != NULL)
     bytes = grl_image_export_to_memory (img, ".png", out_n);
@@ -1032,6 +1335,7 @@ cmacs_vidstudio_proj_canvas_image (CmacsVidProject *p, int frame)
     return NULL;
   proj_rebuild (p);
   r = lrg_reel_renderer_new (p->reel);
+  proj_apply_animation (p, frame);
   img = lrg_reel_renderer_get_canvas_image (r, frame);
   if (img != NULL)
     copy = grl_image_copy (img);
@@ -1059,6 +1363,7 @@ cmacs_vidstudio_proj_render_ppm (CmacsVidProject *p, int frame, int max_w,
     return NULL;
   proj_rebuild (p);
   r = lrg_reel_renderer_new (p->reel);
+  proj_apply_animation (p, frame);
   img = lrg_reel_renderer_get_canvas_image (r, frame);
   if (img == NULL)
     {
@@ -1123,6 +1428,7 @@ cmacs_vidstudio_proj_frame_pixel (CmacsVidProject *p, int frame, int x, int y,
     return FALSE;
   proj_rebuild (p);
   rr = lrg_reel_renderer_new (p->reel);
+  proj_apply_animation (p, frame);
   img = lrg_reel_renderer_get_canvas_image (rr, frame);
   if (img != NULL)
     {
@@ -1215,7 +1521,7 @@ cmacs_vidstudio_proj_export_video (CmacsVidProject *p, const char *path,
       if (w != NULL)
         lrg_reel_video_exporter_set_audio (ex, w);
     }
-  ok = lrg_reel_renderer_render_to_exporter (r, LRG_REEL_EXPORTER (ex), &err);
+  ok = proj_render_to_exporter (p, r, LRG_REEL_EXPORTER (ex), &err);
   if (!ok && error_msg)
     *error_msg = g_strdup (err ? err->message : "export failed");
   g_object_unref (ex);
@@ -1244,7 +1550,7 @@ cmacs_vidstudio_proj_export_gif (CmacsVidProject *p, const char *path,
   proj_wait_video_clips (p);
   proj_rebuild (p);
   r = lrg_reel_renderer_new (p->reel);
-  ok = lrg_reel_renderer_render_to_exporter (r, LRG_REEL_EXPORTER (ex), &err);
+  ok = proj_render_to_exporter (p, r, LRG_REEL_EXPORTER (ex), &err);
   if (!ok && error_msg)
     *error_msg = g_strdup (err ? err->message : "export failed");
   g_object_unref (ex);

@@ -213,5 +213,20 @@ extern gboolean cmacs_vidstudio_proj_export_audio (CmacsVidProject *p,
                                                    const char *path, int format,
                                                    char **error_msg);
 
+/* ── Keyframing ─────────────────────────────────────────────────────────
+   PARAM: 0 opacity, 1 x, 2 y, 3 scale, 4 rotation, 5 effect-param (uses
+   EFFECT_INDEX + PROP).  FRAME is clip-relative.  EASING is an LrgEasingType. */
+extern gboolean cmacs_vidstudio_proj_add_keyframe (CmacsVidProject *p,
+                                                   gint clip_id, int param,
+                                                   int effect_index,
+                                                   const char *prop,
+                                                   double frame, double value,
+                                                   int easing);
+/* PARAM < 0 clears all keyframes on the clip. */
+extern gboolean cmacs_vidstudio_proj_clear_keyframes (CmacsVidProject *p,
+                                                      gint clip_id, int param);
+extern gint cmacs_vidstudio_proj_keyframe_count (CmacsVidProject *p,
+                                                 gint clip_id);
+
 #endif /* HAVE_CMACS_VIDSTUDIO */
 #endif /* CMACS_VIDSTUDIO_PROJ_H */

@@ -284,5 +284,27 @@ flips once the decode lands and real frames replace the placeholder."
             (should (= (cmacs-vidstudio-audio-count p) 0))))
       (delete-file tone))))
 
+;; ── Keyframing ─────────────────────────────────────────────────────────
+
+(ert-deftest cmacs-vidstudio-tests-keyframes ()
+  "An opacity keyframe ramp animates the composited alpha per frame."
+  (cmacs-vidstudio-tests--skip-unless)
+  (cmacs-vidstudio-tests--with-proj p 16 16 30.0
+    (let ((id (cmacs-vidstudio-add-solid-clip p 0 30 255 0 0 255)))
+      ;; opacity 0 -> 1 across frames 0..29
+      (cmacs-vidstudio-add-keyframe p id 0 0 0.0)
+      (cmacs-vidstudio-add-keyframe p id 0 29 1.0)
+      (should (= (cmacs-vidstudio-keyframe-count p id) 2))
+      (let ((a0 (nth 3 (cmacs-vidstudio-frame-pixel p 0 8 8)))
+            (a15 (nth 3 (cmacs-vidstudio-frame-pixel p 15 8 8)))
+            (a29 (nth 3 (cmacs-vidstudio-frame-pixel p 29 8 8))))
+        (should (< a0 20))          ; ~transparent at the start
+        (should (and (> a15 90) (< a15 170)))  ; ~half-way
+        (should (> a29 240)))       ; ~opaque at the end
+      ;; clearing restores the static default (opaque)
+      (cmacs-vidstudio-clear-keyframes p id)
+      (should (= (cmacs-vidstudio-keyframe-count p id) 0))
+      (should (> (nth 3 (cmacs-vidstudio-frame-pixel p 0 8 8)) 240)))))
+
 (provide 'cmacs-vidstudio-tests)
 ;;; cmacs-vidstudio-tests.el ends here

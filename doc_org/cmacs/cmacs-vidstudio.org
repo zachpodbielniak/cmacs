@@ -151,6 +151,24 @@ Durations and the playhead are in *frames*.
   Right-click → *Clip → Effect parameter…* picks a common one interactively.
   (Needed a small ~lrg_reel_clip_get_effect~ accessor added to libregnum.)
 
+** Keyframing
+
+Any of a clip's parameters can be *animated* over time.  Keyframes hold a
+clip-relative FRAME, a VALUE, and an easing curve; a per-frame *animator*
+samples cached =LrgKeyframeCurve=s and pushes the values through the clip
+setters just before compositing (so it works in preview, playback, and export
+--- the export loop is driven frame-by-frame when a project has keyframes).
+
+- ~(cmacs-vidstudio-add-keyframe HANDLE CLIP-ID PARAM FRAME VALUE &optional EASING EFFECT-INDEX PROP)~
+  — PARAM 0 opacity, 1 x, 2 y, 3 scale, 4 rotation, 5 effect-param (with
+  EFFECT-INDEX + PROP); EASING is an =LrgEasingType= (0 linear .. 30, 31
+  curves).  Key ~k~ adds a keyframe for the clip under the playhead at the
+  current playhead (relative to the clip start) --- a *Ken Burns* move is just
+  x/y/scale keyframes.
+- ~(cmacs-vidstudio-clear-keyframes HANDLE CLIP-ID &optional PARAM)~ (PARAM nil
+  = all), ~(cmacs-vidstudio-keyframe-count HANDLE CLIP-ID)~.  Right-click →
+  *Clip → Add keyframe… / Clear keyframes…*.
+
 ** Audio
 
 A flat *audio lane* mixes into the video export and can be exported on its own

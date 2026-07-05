@@ -566,6 +566,48 @@ DEFUN ("cmacs-vidstudio-export-audio", Fcmacs_vidstudio_export_audio,
   return Qt;
 }
 
+DEFUN ("cmacs-vidstudio-add-keyframe", Fcmacs_vidstudio_add_keyframe,
+       Scmacs_vidstudio_add_keyframe, 5, 8, 0,
+       doc: /* Add a keyframe on CLIP-ID: PARAM at FRAME = VALUE.
+PARAM: 0 opacity, 1 x, 2 y, 3 scale, 4 rotation, 5 effect-param.  Optional
+EASING (LrgEasingType int, default 0 linear), EFFECT-INDEX and PROP (for
+PARAM 5).  */)
+  (Lisp_Object handle, Lisp_Object clip_id, Lisp_Object param,
+   Lisp_Object frame, Lisp_Object value, Lisp_Object easing,
+   Lisp_Object effect_index, Lisp_Object prop)
+{
+  CHECK_FIXNUM (clip_id);
+  return cmacs_vidstudio_proj_add_keyframe
+           (vs_lookup (handle), (gint) XFIXNUM (clip_id), vs_int (param, 0),
+            vs_int (effect_index, 0), STRINGP (prop) ? SSDATA (prop) : NULL,
+            vs_dbl (frame, 0.0), vs_dbl (value, 0.0), vs_int (easing, 0))
+             ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-vidstudio-clear-keyframes", Fcmacs_vidstudio_clear_keyframes,
+       Scmacs_vidstudio_clear_keyframes, 2, 3, 0,
+       doc: /* Clear keyframes on CLIP-ID; optional PARAM limits to one
+parameter (omit / nil = all).  */)
+  (Lisp_Object handle, Lisp_Object clip_id, Lisp_Object param)
+{
+  CHECK_FIXNUM (clip_id);
+  return cmacs_vidstudio_proj_clear_keyframes (vs_lookup (handle),
+                                               (gint) XFIXNUM (clip_id),
+                                               NILP (param) ? -1
+                                               : vs_int (param, -1))
+             ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-vidstudio-keyframe-count", Fcmacs_vidstudio_keyframe_count,
+       Scmacs_vidstudio_keyframe_count, 2, 2, 0,
+       doc: /* Number of keyframes on CLIP-ID, or -1 if unknown.  */)
+  (Lisp_Object handle, Lisp_Object clip_id)
+{
+  CHECK_FIXNUM (clip_id);
+  return make_fixnum (cmacs_vidstudio_proj_keyframe_count
+                        (vs_lookup (handle), (gint) XFIXNUM (clip_id)));
+}
+
 DEFUN ("cmacs-vidstudio-export-still", Fcmacs_vidstudio_export_still,
        Scmacs_vidstudio_export_still, 3, 3, 0,
        doc: /* Render FRAME straight to PATH (PNG/JPG by extension).  */)
@@ -884,6 +926,9 @@ syms_of_cmacs_vidstudio_defuns (void)
   defsubr (&Scmacs_vidstudio_set_video_loop);
   defsubr (&Scmacs_vidstudio_set_export_quality);
   defsubr (&Scmacs_vidstudio_export_still);
+  defsubr (&Scmacs_vidstudio_add_keyframe);
+  defsubr (&Scmacs_vidstudio_clear_keyframes);
+  defsubr (&Scmacs_vidstudio_keyframe_count);
   defsubr (&Scmacs_vidstudio_add_audio_file);
   defsubr (&Scmacs_vidstudio_add_audio_from_clip);
   defsubr (&Scmacs_vidstudio_set_audio_volume);

@@ -314,6 +314,35 @@ placeholder meanwhile), so import returns instantly."
   (cmacs-vidstudio-set-export-quality cmacs-vidstudio--handle crf nil)
   (message "Export CRF set to %d" crf))
 
+;; ── Keyframe commands ──────────────────────────────────────────────────
+
+(defconst cmacs-vidstudio--kf-param-alist
+  '(("opacity" . 0) ("x" . 1) ("y" . 2) ("scale" . 3) ("rotation" . 4))
+  "Animatable parameter names -> codes.")
+
+(defun cmacs-vidstudio-add-keyframe-cmd (clip param value)
+  "Add a keyframe for PARAM = VALUE on CLIP at the playhead.
+The keyframe frame is the playhead minus the clip's start."
+  (interactive
+   (let* ((c (cmacs-vidstudio--read-clip))
+          (pk (completing-read "Parameter: " cmacs-vidstudio--kf-param-alist
+                               nil t "opacity")))
+     (list c (cdr (assoc pk cmacs-vidstudio--kf-param-alist))
+           (read-number (format "%s value: " pk) 1.0))))
+  (let* ((start (cmacs-vidstudio-clip-start-frame cmacs-vidstudio--handle clip))
+         (local (max 0 (- cmacs-vidstudio--playhead start))))
+    (cmacs-vidstudio-add-keyframe cmacs-vidstudio--handle clip param local value)
+    (message "Keyframe: clip %d param %d @local %d = %s"
+             clip param local value)
+    (cmacs-vidstudio--render)))
+
+(defun cmacs-vidstudio-clear-keyframes-cmd (clip)
+  "Clear all keyframes on CLIP."
+  (interactive (list (cmacs-vidstudio--read-clip)))
+  (cmacs-vidstudio-clear-keyframes cmacs-vidstudio--handle clip)
+  (message "Cleared keyframes on clip %d" clip)
+  (cmacs-vidstudio--render))
+
 ;; ── Audio commands ─────────────────────────────────────────────────────
 
 (defun cmacs-vidstudio-add-audio (file start volume)
@@ -563,6 +592,8 @@ silently updates.  Starting play at the end of the timeline rewinds."
              ("Blend mode…" . cmacs-vidstudio-set-clip-blend)
              ("Transform (pos/scale)…" . cmacs-vidstudio-set-clip-transform)
              ("Playback speed…" . cmacs-vidstudio-set-clip-speed)
+             ("Add keyframe…" . cmacs-vidstudio-add-keyframe-cmd)
+             ("Clear keyframes…" . cmacs-vidstudio-clear-keyframes-cmd)
              ("Split at playhead…" . cmacs-vidstudio-split-at-playhead)
              ("Active track…" . cmacs-vidstudio-set-active-track))
             ("Transport"
@@ -624,6 +655,7 @@ in-engine libregnum menu under --lrg)."
     (define-key map (kbd "SPC") #'cmacs-vidstudio-play)
     (define-key map (kbd "<right>") #'cmacs-vidstudio-step-forward)
     (define-key map (kbd "<left>") #'cmacs-vidstudio-step-back)
+    (define-key map (kbd "k") #'cmacs-vidstudio-add-keyframe-cmd)
     (define-key map (kbd "A") #'cmacs-vidstudio-add-audio)
     (define-key map (kbd "V") #'cmacs-vidstudio-set-audio-gain)
     (define-key map (kbd "E") #'cmacs-vidstudio-export-video-cmd)
