@@ -130,6 +130,10 @@ defer_node_menu (CmacsLibregnumView *v, CmacsLibregnumRenderCtx *ctx,
 /* Whether the current left-drag has moved off the press pixel (click vs drag). */
 static gboolean image_left_moved;
 
+/* TRUE while a left-drag started inside the timeline strip (scrub/trim), so
+   motion + release route to the timeline hooks instead of the paint tools. */
+static gboolean image_timeline_active;
+
 typedef struct
 {
   Lisp_Object buffer;
@@ -193,6 +197,19 @@ defer_image (CmacsLibregnumView *v, const char *event,
   a->event = event;
   a->dx = dx; a->dy = dy;
   a->button = button; a->mods = mods;
+  g_main_context_invoke (cmacs_glib_get_context (), image_action_idle, a);
+}
+
+/* Timeline strip event: (FRAME CLIP-ID NEAR-EDGE 0) via image_action_idle,
+   reusing the dx/dy/button fields.  NEAR-EDGE non-zero => drag trims. */
+static void
+defer_image_timeline (CmacsLibregnumView *v, const char *event,
+                      int frame, int clip_id, gboolean near_edge)
+{
+  ImageAction *a = g_new0 (ImageAction, 1);
+  a->buffer = cmacs_libregnum_view_get_buffer (v);
+  a->event = event;
+  a->dx = frame; a->dy = clip_id; a->button = near_edge ? 1 : 0; a->mods = 0;
   g_main_context_invoke (cmacs_glib_get_context (), image_action_idle, a);
 }
 
@@ -574,6 +591,19 @@ cmacs_libregnum_handle_motion (struct frame *f, double x, double y)
             cmacs_libregnum_view_request_redraw (v);
             return true;
           }
+        if (drag_state.dragging_left && drag_state.view == v
+            && image_timeline_active)
+          {
+            /* Scrub/trim: report the frame + clip under the cursor. */
+            int tf = 0, tcid = -1;
+            gboolean tedge = FALSE;
+            cmacs_libregnum_render_ctx_image_timeline_hit
+              (ctx, vx, vy, vw, vh, &tf, &tcid, &tedge);
+            defer_image_timeline (v, "cmacs-libregnum--image-timeline-drag",
+                                  tf, tcid, tedge);
+            cmacs_libregnum_view_request_redraw (v);
+            return true;
+          }
         if (drag_state.dragging_left && drag_state.view == v)
           {
             cmacs_libregnum_render_ctx_image_view_to_doc (ctx, vx, vy, &dx, &dy);
@@ -734,14 +764,44 @@ cmacs_libregnum_handle_button (struct frame *f, int button, int press,
           cmacs_libregnum_render_ctx_image_view_to_doc (ctx, vx, vy, &dx, &dy);
         if (button == 1)
           {
+            int tf = 0, tcid = -1;
+            gboolean tedge = FALSE;
             if (press)
               {
+                /* A press inside the timeline strip starts a scrub/select/trim
+                 * instead of a paint stroke. */
+                if (in && cmacs_libregnum_render_ctx_image_timeline_hit
+                            (ctx, vx, vy, vw, vh, &tf, &tcid, &tedge))
+                  {
+                    image_timeline_active = TRUE;
+                    drag_state.frame = f; drag_state.view = v;
+                    drag_state.dragging_left = true;
+                    drag_state.press_x = x; drag_state.press_y = y;
+                    drag_state.last_x = x; drag_state.last_y = y;
+                    defer_image_timeline
+                      (v, "cmacs-libregnum--image-timeline-press",
+                       tf, tcid, tedge);
+                    cmacs_libregnum_view_request_redraw (v);
+                    return true;
+                  }
+                image_timeline_active = FALSE;
                 drag_state.frame = f; drag_state.view = v;
                 drag_state.dragging_left = true;
                 drag_state.press_x = x; drag_state.press_y = y;
                 drag_state.last_x = x; drag_state.last_y = y;
                 image_left_moved = FALSE;
                 defer_image (v, "cmacs-libregnum--image-press", dx, dy, 1, mods);
+              }
+            else if (image_timeline_active)
+              {
+                cmacs_libregnum_render_ctx_image_timeline_hit
+                  (ctx, vx, vy, vw, vh, &tf, &tcid, &tedge);
+                image_timeline_active = FALSE;
+                drag_state.dragging_left = false;
+                defer_image_timeline
+                  (v, "cmacs-libregnum--image-timeline-release", tf, tcid, tedge);
+                cmacs_libregnum_view_request_redraw (v);
+                return true;
               }
             else
               {

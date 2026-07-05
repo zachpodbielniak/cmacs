@@ -392,6 +392,12 @@ timer (the editor does the same)."
   "Function called on image-viewport click (press+release, no motion).")
 (defvar-local cmacs-libregnum-image-context-menu-function nil
   "Function called on image-viewport right release: (BUFFER DX DY FX FY).")
+(defvar-local cmacs-libregnum-image-timeline-press-function nil
+  "Timeline-strip press hook: (BUFFER FRAME CLIP-ID NEAR-EDGE).")
+(defvar-local cmacs-libregnum-image-timeline-drag-function nil
+  "Timeline-strip drag hook: (BUFFER FRAME CLIP-ID NEAR-EDGE).")
+(defvar-local cmacs-libregnum-image-timeline-release-function nil
+  "Timeline-strip release hook: (BUFFER FRAME CLIP-ID NEAR-EDGE).")
 
 (defun cmacs-libregnum--image-dispatch (buffer hookvar dx dy button mods)
   "Call BUFFER's HOOKVAR with (BUFFER DX DY BUTTON MODS) if bound."
@@ -425,6 +431,29 @@ timer (the editor does the same)."
   (cmacs-libregnum--image-dispatch buffer 'cmacs-libregnum-image-click-function
                                    (nth 0 info) (nth 1 info) (nth 2 info)
                                    (nth 3 info)))
+
+(defun cmacs-libregnum--image-timeline-dispatch (buffer hookvar info)
+  "Call BUFFER's timeline HOOKVAR with (BUFFER FRAME CLIP-ID NEAR-EDGE)."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (let ((fn (symbol-value hookvar)))
+        (when (functionp fn)
+          (funcall fn buffer (nth 0 info) (nth 1 info) (nth 2 info)))))))
+
+(defun cmacs-libregnum--image-timeline-press (buffer info)
+  "Dispatch a timeline-strip press.  INFO is (FRAME CLIP-ID NEAR-EDGE 0)."
+  (cmacs-libregnum--image-timeline-dispatch
+   buffer 'cmacs-libregnum-image-timeline-press-function info))
+
+(defun cmacs-libregnum--image-timeline-drag (buffer info)
+  "Dispatch a timeline-strip drag.  INFO is (FRAME CLIP-ID NEAR-EDGE 0)."
+  (cmacs-libregnum--image-timeline-dispatch
+   buffer 'cmacs-libregnum-image-timeline-drag-function info))
+
+(defun cmacs-libregnum--image-timeline-release (buffer info)
+  "Dispatch a timeline-strip release.  INFO is (FRAME CLIP-ID NEAR-EDGE 0)."
+  (cmacs-libregnum--image-timeline-dispatch
+   buffer 'cmacs-libregnum-image-timeline-release-function info))
 
 (defun cmacs-libregnum--image-context-menu (buffer info)
   "Dispatch an image-viewport right-click.  INFO is (DX DY FX FY).

@@ -688,9 +688,13 @@ extern void     cmacs_libregnum_render_ctx_image_set_cursor
 extern void     cmacs_libregnum_render_ctx_image_timeline_clear
                               (CmacsLibregnumRenderCtx *r);
 extern void     cmacs_libregnum_render_ctx_image_timeline_add_clip
-                              (CmacsLibregnumRenderCtx *r, int track,
+                              (CmacsLibregnumRenderCtx *r, int id, int track,
                                int start, int dur, guint8 cr, guint8 cg,
                                guint8 cb);
+extern gboolean cmacs_libregnum_render_ctx_image_timeline_hit
+                              (CmacsLibregnumRenderCtx *r, double vx, double vy,
+                               int vw, int vh, int *frame, int *clip_id,
+                               gboolean *near_edge);
 extern void     cmacs_libregnum_render_ctx_image_timeline_set
                               (CmacsLibregnumRenderCtx *r, int playhead,
                                int total, int ntracks);

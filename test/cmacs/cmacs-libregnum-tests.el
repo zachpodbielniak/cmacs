@@ -1477,5 +1477,31 @@ Headless-safe arity check -- no GL needed."
                            (cmacs-libregnum-image-view-to-doc buf 100 100)))))
       (kill-buffer buf))))
 
+(ert-deftest cmacs-libregnum-tests-timeline-hit ()
+  "Timeline-strip hit-test maps view points to frame + clip + trim edge."
+  (skip-unless (fboundp 'cmacs-libregnum-image-timeline-hit))
+  (let ((buf (get-buffer-create "*lrg-tl-hit*")))
+    (unwind-protect
+        (condition-case _e
+            (progn
+              (cmacs-libregnum-attach buf 120 60)
+              (cmacs-libregnum-image-enter buf t)
+              (let ((px (make-string (* 4 4 4) 0)))
+                (dotimes (i (* 4 4)) (aset px (+ (* i 4) 3) 255))
+                (cmacs-libregnum-image-upload-rgba buf 4 4 px))
+              (cmacs-libregnum-image-timeline
+               buf 0 100 (list (list 7 0 0 50 80 140 220)
+                               (list 9 0 50 50 220 120 80)))
+              (let ((l (cmacs-libregnum-image-timeline-hit buf 30 55 120 60))
+                    (r (cmacs-libregnum-image-timeline-hit buf 90 55 120 60))
+                    (e (cmacs-libregnum-image-timeline-hit buf 59 55 120 60))
+                    (a (cmacs-libregnum-image-timeline-hit buf 30 20 120 60)))
+                (should (= (nth 1 l) 7))
+                (should (= (nth 1 r) 9))
+                (should (nth 2 e))       ; near the trim edge
+                (should (null a))))      ; above the strip
+          (error (ert-skip "no GL context")))
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+
 (provide 'cmacs-libregnum-tests)
 ;;; cmacs-libregnum-tests.el ends here

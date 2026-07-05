@@ -49,6 +49,10 @@ instead of a native Emacs image.  Set when a display + libregnum are
 available; nil falls back to the PPM/PNG insert-image preview.")
 (defvar-local cmacs-vidstudio--playhead 0)
 (defvar-local cmacs-vidstudio--active-track 0)
+(defvar-local cmacs-vidstudio--selected-clip nil
+  "Clip id selected on the viewport timeline strip, or nil.")
+(defvar-local cmacs-vidstudio--tl-trim nil
+  "Clip id currently being trimmed by a timeline edge-drag, or nil.")
 (defvar-local cmacs-vidstudio--play-timer nil)
 (defvar-local cmacs-vidstudio--preview-scale 0.5)
 (defcustom cmacs-vidstudio-playback-scale 0.4
@@ -116,7 +120,7 @@ A position `keymap' property outranks Evil state maps and
   "Cycling clip-block colours for the in-viewport timeline strip.")
 
 (defun cmacs-vidstudio--timeline-clips ()
-  "Build the (TRACK START DUR R G B) list for the viewport timeline strip."
+  "Build the (ID TRACK START DUR R G B) list for the viewport timeline strip."
   (let ((clips '()) (ntr (cmacs-vidstudio-n-tracks cmacs-vidstudio--handle)))
     (dotimes (tr ntr)
       (dotimes (ci (cmacs-vidstudio-track-clip-count cmacs-vidstudio--handle tr))
@@ -124,9 +128,14 @@ A position `keymap' property outranks Evil state maps and
                (start (cmacs-vidstudio-clip-start-frame
                        cmacs-vidstudio--handle id))
                (dur (cmacs-vidstudio-clip-duration cmacs-vidstudio--handle id))
+               (sel (if (eq id cmacs-vidstudio--selected-clip) 60 0))
                (col (nth (mod id (length cmacs-vidstudio--track-colors))
                          cmacs-vidstudio--track-colors)))
-          (push (list tr start dur (nth 0 col) (nth 1 col) (nth 2 col))
+          ;; Brighten the selected clip's block so the selection is visible.
+          (push (list id tr start dur
+                      (min 255 (+ (nth 0 col) sel))
+                      (min 255 (+ (nth 1 col) sel))
+                      (min 255 (+ (nth 2 col) sel)))
                 clips))))
     (nreverse clips)))
 
@@ -985,8 +994,46 @@ Sets `cmacs-vidstudio--live'; leaves it nil (native path) on failure."
           (with-current-buffer buffer
             (setq cmacs-libregnum-image-context-menu-function
                   #'cmacs-vidstudio--vp-context-menu
+                  cmacs-libregnum-image-timeline-press-function
+                  #'cmacs-vidstudio--tl-press
+                  cmacs-libregnum-image-timeline-drag-function
+                  #'cmacs-vidstudio--tl-drag
+                  cmacs-libregnum-image-timeline-release-function
+                  #'cmacs-vidstudio--tl-release
                   cmacs-vidstudio--live t)))
       (error (setq cmacs-vidstudio--live nil)))))
+
+;; -- Interactive timeline strip: click to scrub + select, drag a clip's right
+;;    edge to trim its duration (state vars declared near the top). --
+(defun cmacs-vidstudio--tl-press (buffer frame clip-id near-edge)
+  "Timeline press: select CLIP-ID, scrub to FRAME, arm trim when NEAR-EDGE."
+  (with-current-buffer buffer
+    (setq cmacs-vidstudio--selected-clip (and (>= clip-id 0) clip-id)
+          cmacs-vidstudio--tl-trim (and (>= clip-id 0) (not (zerop near-edge))
+                                        clip-id)
+          cmacs-vidstudio--playhead frame)
+    (cmacs-vidstudio--render)))
+
+(defun cmacs-vidstudio--tl-drag (buffer frame _clip-id _near-edge)
+  "Timeline drag: trim the armed clip to FRAME, else scrub the playhead."
+  (with-current-buffer buffer
+    (if cmacs-vidstudio--tl-trim
+        (let* ((id cmacs-vidstudio--tl-trim)
+               (start (cmacs-vidstudio-clip-start-frame
+                       cmacs-vidstudio--handle id))
+               (dur (max 1 (- frame start))))
+          (ignore-errors
+            (cmacs-vidstudio-set-clip-duration cmacs-vidstudio--handle id dur)))
+      (setq cmacs-vidstudio--playhead frame))
+    (cmacs-vidstudio--render)))
+
+(defun cmacs-vidstudio--tl-release (buffer _frame _clip-id _near-edge)
+  "Timeline release: end any trim gesture."
+  (with-current-buffer buffer
+    (when cmacs-vidstudio--tl-trim
+      (setq cmacs-vidstudio--tl-trim nil)
+      (message "Trimmed clip #%s" cmacs-vidstudio--selected-clip))
+    (cmacs-vidstudio--render)))
 
 (defun cmacs-vidstudio--cleanup ()
   "Stop playback and free the project when the buffer dies."

@@ -290,6 +290,7 @@ overlay_model_free (gpointer p)
 /* One clip block on the in-viewport timeline strip. */
 typedef struct
 {
+  int    id;                    /* clip id (for hit-test → editor ops) */
   int    track, start, dur;
   guint8 r, g, b;
 } CmacsTimelineClip;
@@ -763,7 +764,7 @@ cmacs_libregnum_render_ctx_image_timeline_clear (CmacsLibregnumRenderCtx *r)
 
 void
 cmacs_libregnum_render_ctx_image_timeline_add_clip (CmacsLibregnumRenderCtx *r,
-                                                    int track, int start,
+                                                    int id, int track, int start,
                                                     int dur, guint8 cr,
                                                     guint8 cg, guint8 cb)
 {
@@ -771,9 +772,56 @@ cmacs_libregnum_render_ctx_image_timeline_add_clip (CmacsLibregnumRenderCtx *r,
   if (!r) return;
   if (r->image_clips == NULL)
     r->image_clips = g_array_new (FALSE, FALSE, sizeof (CmacsTimelineClip));
-  c.track = track; c.start = start; c.dur = dur;
+  c.id = id; c.track = track; c.start = start; c.dur = dur;
   c.r = cr; c.g = cg; c.b = cb;
   g_array_append_val (r->image_clips, c);
+}
+
+/* Hit-test a view-space point against the timeline strip.  Returns TRUE when
+   (VX,VY) is inside the strip (VW×VH view size).  Sets *FRAME to the frame
+   under the cursor, *CLIP_ID to the clip there (-1 if none), and *NEAR_EDGE
+   TRUE when close to that clip's right (trim) edge. */
+gboolean
+cmacs_libregnum_render_ctx_image_timeline_hit (CmacsLibregnumRenderCtx *r,
+                                               double vx, double vy,
+                                               int vw, int vh, int *frame,
+                                               int *clip_id, gboolean *near_edge)
+{
+  int strip_h, y0, ntr, rowh, f, row;
+  guint i;
+  if (frame) *frame = 0;
+  if (clip_id) *clip_id = -1;
+  if (near_edge) *near_edge = FALSE;
+  if (!r || r->image_clips == NULL || r->image_total_frames <= 0 || vw <= 0)
+    return FALSE;
+  strip_h = MAX (24, vh / 6);
+  y0 = vh - strip_h;
+  if (vy < y0)
+    return FALSE;                        /* above the strip */
+  f = (int) (vx * r->image_total_frames / vw);
+  f = CLAMP (f, 0, r->image_total_frames - 1);
+  if (frame) *frame = f;
+  ntr = MAX (1, r->image_ntracks);
+  rowh = strip_h / ntr;
+  row = rowh > 0 ? (int) ((vy - y0) / rowh) : 0;
+  for (i = 0; i < r->image_clips->len; i++)
+    {
+      CmacsTimelineClip *cl =
+        &g_array_index (r->image_clips, CmacsTimelineClip, i);
+      if (cl->track != row)
+        continue;
+      if (f >= cl->start && f < cl->start + cl->dur)
+        {
+          if (clip_id) *clip_id = cl->id;
+          if (near_edge)
+            {
+              int edge_px = (cl->start + cl->dur) * vw / r->image_total_frames;
+              *near_edge = (ABS (edge_px - (int) vx) <= 8);
+            }
+          break;
+        }
+    }
+  return TRUE;                            /* inside the strip region */
 }
 
 void

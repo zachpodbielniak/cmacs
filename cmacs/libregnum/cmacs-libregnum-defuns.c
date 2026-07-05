@@ -355,6 +355,28 @@ DEFUN ("cmacs-libregnum-image-set-marquee", Fcmacs_libregnum_image_set_marquee,
   return Qt;
 }
 
+DEFUN ("cmacs-libregnum-image-timeline-hit",
+       Fcmacs_libregnum_image_timeline_hit,
+       Scmacs_libregnum_image_timeline_hit, 5, 5, 0,
+       doc: /* Hit-test BUFFER's timeline strip at view point VX VY in a VW x VH
+view.  Returns (FRAME CLIP-ID NEAR-EDGE) when inside the strip, else nil.  */)
+  (Lisp_Object buffer, Lisp_Object vx, Lisp_Object vy, Lisp_Object vw,
+   Lisp_Object vh)
+{
+  CmacsLibregnumRenderCtx *ctx;
+  int frame = 0, cid = -1;
+  gboolean edge = FALSE;
+  CHECK_BUFFER (buffer);
+  ctx = cmacs_libregnum_image_ctx (buffer);
+  if (ctx == NULL
+      || !cmacs_libregnum_render_ctx_image_timeline_hit
+            (ctx, XFLOATINT (vx), XFLOATINT (vy),
+             (int) XFIXNUM (vw), (int) XFIXNUM (vh), &frame, &cid, &edge))
+    return Qnil;
+  return list3 (make_fixnum (frame), make_fixnum (cid),
+                edge ? Qt : Qnil);
+}
+
 DEFUN ("cmacs-libregnum-image-timeline", Fcmacs_libregnum_image_timeline,
        Scmacs_libregnum_image_timeline, 4, 4, 0,
        doc: /* Set BUFFER's viewport timeline strip.
@@ -373,16 +395,18 @@ The number of tracks is inferred from the clips.  */)
       for (l = clips; CONSP (l); l = XCDR (l))
         {
           Lisp_Object c = XCAR (l);
-          int tr = NILP (Fnth (make_fixnum (0), c)) ? 0
-                   : XFIXNUM (Fnth (make_fixnum (0), c));
+          int cid = NILP (Fnth (make_fixnum (0), c)) ? -1
+                    : XFIXNUM (Fnth (make_fixnum (0), c));
+          int ctrk = NILP (Fnth (make_fixnum (1), c)) ? 0
+                     : XFIXNUM (Fnth (make_fixnum (1), c));
           cmacs_libregnum_render_ctx_image_timeline_add_clip
-            (ctx, tr,
-             XFIXNUM (Fnth (make_fixnum (1), c)),
+            (ctx, cid, ctrk,
              XFIXNUM (Fnth (make_fixnum (2), c)),
-             (unsigned char) XFIXNUM (Fnth (make_fixnum (3), c)),
+             XFIXNUM (Fnth (make_fixnum (3), c)),
              (unsigned char) XFIXNUM (Fnth (make_fixnum (4), c)),
-             (unsigned char) XFIXNUM (Fnth (make_fixnum (5), c)));
-          if (tr + 1 > ntr) ntr = tr + 1;
+             (unsigned char) XFIXNUM (Fnth (make_fixnum (5), c)),
+             (unsigned char) XFIXNUM (Fnth (make_fixnum (6), c)));
+          if (ctrk + 1 > ntr) ntr = ctrk + 1;
         }
       cmacs_libregnum_render_ctx_image_timeline_set
         (ctx, NILP (playhead) ? 0 : XFIXNUM (playhead),
@@ -2349,6 +2373,7 @@ syms_of_cmacs_libregnum_defuns (void)
   defsubr (&Scmacs_libregnum_image_set_cursor);
   defsubr (&Scmacs_libregnum_image_set_marquee);
   defsubr (&Scmacs_libregnum_image_timeline);
+  defsubr (&Scmacs_libregnum_image_timeline_hit);
   defsubr (&Scmacs_libregnum_set_animated);
   defsubr (&Scmacs_libregnum_animated_p);
   defsubr (&Scmacs_libregnum_tree_nodes);
