@@ -290,12 +290,23 @@ cache when a playback cache is active)."
   (setq cmacs-vidstudio--active-track track)
   (cmacs-vidstudio--render))
 
+(defun cmacs-vidstudio--resolve-duration (id)
+  "Resolve clip ID's whole-video length from its decoded frame count.
+A no-op unless the import could not determine the duration (no ffprobe)."
+  (when (fboundp 'cmacs-vidstudio-refresh-video-duration)
+    (ignore-errors
+      (cmacs-vidstudio-refresh-video-duration cmacs-vidstudio--handle id))))
+
 (defun cmacs-vidstudio--watch-decode (id)
-  "Poll clip ID until its background decode finishes, then re-render.
-Video clips decode on a worker thread (the preview composites a dark
-placeholder meanwhile), so import returns instantly."
-  (when (and (fboundp 'cmacs-vidstudio-clip-ready-p)
-             (not (cmacs-vidstudio-clip-ready-p cmacs-vidstudio--handle id)))
+  "Poll clip ID until its background decode finishes, then resolve its
+whole-video length and re-render.  Video clips decode on a worker thread
+(the preview composites a dark placeholder meanwhile), so import returns
+instantly; the on-timeline length snaps to the real value once decoded
+(needed when ffprobe could not probe the duration at import)."
+  (if (and (fboundp 'cmacs-vidstudio-clip-ready-p)
+           (cmacs-vidstudio-clip-ready-p cmacs-vidstudio--handle id))
+      (progn (cmacs-vidstudio--resolve-duration id)
+             (cmacs-vidstudio--render))
     (let ((buf (current-buffer))
           (deadline (+ (float-time) 120.0)))
       (when cmacs-vidstudio--decode-timer
@@ -310,8 +321,11 @@ placeholder meanwhile), so import returns instantly."
                     ((cmacs-vidstudio-clip-ready-p cmacs-vidstudio--handle id)
                      (cancel-timer cmacs-vidstudio--decode-timer)
                      (setq cmacs-vidstudio--decode-timer nil)
+                     (cmacs-vidstudio--resolve-duration id)
                      (cmacs-vidstudio--render)
-                     (message "vidstudio: clip #%d decoded" id))
+                     (message "vidstudio: clip #%d decoded (%d frames)" id
+                              (cmacs-vidstudio-clip-duration
+                               cmacs-vidstudio--handle id)))
                     ((> (float-time) deadline)
                      (cancel-timer cmacs-vidstudio--decode-timer)
                      (setq cmacs-vidstudio--decode-timer nil)

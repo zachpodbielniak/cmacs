@@ -137,6 +137,13 @@ extern gboolean cmacs_vidstudio_proj_clear_effects (CmacsVidProject *p,
                                                     gint clip_id);
 
 /* Editing. */
+/* Resolve a whole-video clip's on-timeline length from its real (decoded)
+   frame count -- fixes imports where ffprobe could not determine the duration
+   (whole-video collapsed to a 1-frame placeholder).  Returns TRUE if changed. */
+extern gboolean cmacs_vidstudio_proj_refresh_video_duration (CmacsVidProject *p,
+                                                             gint clip_id);
+extern gboolean cmacs_vidstudio_proj_refresh_all_video_durations
+                                                       (CmacsVidProject *p);
 extern gboolean cmacs_vidstudio_proj_set_clip_duration (CmacsVidProject *p,
                                                         gint clip_id,
                                                         int frames);

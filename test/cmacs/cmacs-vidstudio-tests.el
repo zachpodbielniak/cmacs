@@ -432,5 +432,27 @@ flips once the decode lands and real frames replace the placeholder."
               (should (equal miss fresh)))))
       (cmacs-vidstudio-free cmacs-vidstudio--handle))))
 
+(ert-deftest cmacs-vidstudio-tests-whole-video-duration ()
+  "Whole-video import (nil/nil or -1) gets the full length; refresh is a
+safe no-op on an already-resolved clip and refresh-all never errors."
+  (cmacs-vidstudio-tests--skip-unless)
+  (skip-unless (and (executable-find "ffmpeg") (executable-find "ffprobe")))
+  (let ((mp4 (make-temp-file "cmvs-wv" nil ".mp4")))
+    (unwind-protect
+        (progn
+          (call-process "ffmpeg" nil nil nil "-y" "-v" "error" "-f" "lavfi"
+                        "-i" "testsrc=duration=2:size=64x48:rate=30" mp4)
+          (cmacs-vidstudio-tests--with-proj p 64 48 30.0
+            (let ((a (cmacs-vidstudio-add-video-clip p 0 mp4 nil nil nil))
+                  (b (cmacs-vidstudio-add-video-clip p 0 mp4 -1)))
+              ;; both whole-video forms -> ~2s @ 30 = ~60 frames
+              (should (>= (cmacs-vidstudio-clip-duration p a) 55))
+              (should (>= (cmacs-vidstudio-clip-duration p b) 55))
+              ;; refresh is a no-op on an already-resolved clip
+              (should-not (cmacs-vidstudio-refresh-video-duration p a))
+              ;; refresh-all never errors
+              (cmacs-vidstudio-refresh-video-duration p nil))))
+      (delete-file mp4))))
+
 (provide 'cmacs-vidstudio-tests)
 ;;; cmacs-vidstudio-tests.el ends here

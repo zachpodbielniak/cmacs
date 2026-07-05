@@ -1617,6 +1617,72 @@ cmacs_vidstudio_proj_set_clip_duration (CmacsVidProject *p, gint clip_id,
   return TRUE;
 }
 
+/* Resolve a whole-video clip's on-timeline length from its real decoded frame
+   count.  Import derives the length from ffprobe (get_duration); when ffprobe
+   is unavailable or cannot probe the container, that is 0 and the clip lands
+   as a 1-frame placeholder.  Once the source has decoded (get_frame_count is
+   then exact) this recomputes the length.  Only clips whose trim_end was left
+   at/behind the in-point (i.e. "whole video / to end", length unknown) are
+   touched; explicitly sliced clips keep their slice.  Returns TRUE if the
+   duration changed. */
+gboolean
+cmacs_vidstudio_proj_refresh_video_duration (CmacsVidProject *p, gint clip_id)
+{
+  VidTrack *t = NULL;
+  guint si = 0;
+  VidSeg *s;
+  LrgReelVideoClip *vc;
+  LrgReelVideoSource *src;
+  gdouble in, cur_end, sfps, dur_total;
+  gint fc, frames;
+
+  if (!find_seg (p, clip_id, &t, &si))
+    return FALSE;
+  s = &g_array_index (t->segs, VidSeg, si);
+  if (!LRG_IS_REEL_VIDEO_CLIP (s->clip))
+    return FALSE;
+  vc = LRG_REEL_VIDEO_CLIP (s->clip);
+  src = lrg_reel_video_clip_get_source (vc);
+  in = lrg_reel_video_clip_get_trim_start (vc);
+  cur_end = lrg_reel_video_clip_get_trim_end (vc);
+  if (cur_end > in + 1e-6)
+    return FALSE;                      /* explicitly sliced -> leave it */
+  fc = lrg_reel_video_source_get_frame_count (src);
+  if (fc < 2)
+    return FALSE;                      /* not decoded yet (async estimate) */
+  sfps = lrg_reel_video_source_get_fps (src);
+  dur_total = (sfps > 0.0) ? (gdouble) fc / sfps : (gdouble) fc / p->fps;
+  if (dur_total <= in)
+    return FALSE;
+  lrg_reel_video_clip_set_trim_end (vc, dur_total);
+  frames = (int) ((dur_total - in) * p->fps + 0.5);
+  if (frames < 1)
+    frames = 1;
+  if (frames == s->duration)
+    return FALSE;
+  return cmacs_vidstudio_proj_set_clip_duration (p, clip_id, frames);
+}
+
+/* Refresh every video clip's whole-video duration; returns TRUE if any changed. */
+gboolean
+cmacs_vidstudio_proj_refresh_all_video_durations (CmacsVidProject *p)
+{
+  guint ti, si;
+  gboolean any = FALSE;
+
+  for (ti = 0; ti < p->tracks->len; ti++)
+    {
+      VidTrack *t = g_ptr_array_index (p->tracks, ti);
+      for (si = 0; si < t->segs->len; si++)
+        {
+          VidSeg *s = &g_array_index (t->segs, VidSeg, si);
+          if (cmacs_vidstudio_proj_refresh_video_duration (p, (gint) s->id))
+            any = TRUE;
+        }
+    }
+  return any;
+}
+
 gint
 cmacs_vidstudio_proj_split_clip (CmacsVidProject *p, gint clip_id, int at_frame)
 {
@@ -1976,6 +2042,10 @@ proj_wait_video_clips (CmacsVidProject *p)
                NULL);
         }
     }
+  /* Sources are decoded now, so any whole-video clip whose length ffprobe
+     could not determine at import can be resolved from the real frame count
+     -- export/scripted callers get the full timeline without a UI poll. */
+  cmacs_vidstudio_proj_refresh_all_video_durations (p);
 }
 
 gboolean

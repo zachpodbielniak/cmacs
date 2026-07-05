@@ -795,6 +795,26 @@ DEFUN ("cmacs-vidstudio-export-still", Fcmacs_vidstudio_export_still,
   return Qt;
 }
 
+DEFUN ("cmacs-vidstudio-refresh-video-duration",
+       Fcmacs_vidstudio_refresh_video_duration,
+       Scmacs_vidstudio_refresh_video_duration, 1, 2, 0,
+       doc: /* Resolve whole-video clip lengths from the decoded frame count.
+With CLIP-ID, refresh just that clip; without, refresh all.  Returns non-nil
+if any duration changed.  Call once a clip has finished decoding (needed when
+ffprobe could not determine the duration at import).  */)
+  (Lisp_Object handle, Lisp_Object clip_id)
+{
+  gboolean changed;
+  if (NILP (clip_id))
+    changed = cmacs_vidstudio_proj_refresh_all_video_durations
+                (vs_lookup (handle));
+  else
+    { CHECK_FIXNUM (clip_id);
+      changed = cmacs_vidstudio_proj_refresh_video_duration
+                  (vs_lookup (handle), (gint) XFIXNUM (clip_id)); }
+  return changed ? Qt : Qnil;
+}
+
 DEFUN ("cmacs-vidstudio-set-clip-duration", Fcmacs_vidstudio_set_clip_duration,
        Scmacs_vidstudio_set_clip_duration, 3, 3, 0,
        doc: /* Set CLIP-ID's duration to FRAMES.  */)
@@ -1078,6 +1098,7 @@ syms_of_cmacs_vidstudio_defuns (void)
   defsubr (&Scmacs_vidstudio_set_transition);
   defsubr (&Scmacs_vidstudio_add_effect);
   defsubr (&Scmacs_vidstudio_clear_effects);
+  defsubr (&Scmacs_vidstudio_refresh_video_duration);
   defsubr (&Scmacs_vidstudio_set_clip_duration);
   defsubr (&Scmacs_vidstudio_split_clip);
   defsubr (&Scmacs_vidstudio_move_clip);
