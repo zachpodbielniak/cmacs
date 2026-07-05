@@ -461,5 +461,18 @@ itself instead of drawing a dot at the press position."
           (should (= (cmacs-imgedit-height h) 3)))
       (cmacs-imgedit-free h))))
 
+(ert-deftest cmacs-imgedit-tests-histogram ()
+  "A histogram counts every pixel into the right luma bin."
+  (skip-unless (fboundp 'cmacs-imgedit-histogram))
+  (let ((h (cmacs-imgedit-new 10 10)))
+    (unwind-protect
+        (progn
+          (cmacs-imgedit-fill h 128 128 128 255)
+          (let ((hist (cmacs-imgedit-histogram h 0)))
+            (should (= (length hist) 256))
+            (should (= (aref hist 128) 100))
+            (should (= (aref hist 0) 0))))
+      (cmacs-imgedit-free h))))
+
 (provide 'cmacs-imgedit-tests)
 ;;; cmacs-imgedit-tests.el ends here

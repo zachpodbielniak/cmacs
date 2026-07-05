@@ -130,6 +130,9 @@ extern void cmacs_imgedit_doc_gradient (CmacsImgeditDoc *d, gboolean radial,
                                         guint8 ar, guint8 ag, guint8 ab,
                                         guint8 aa, guint8 br, guint8 bg,
                                         guint8 bb, guint8 ba);
+/* 256-bin histogram of the flattened doc (CHANNEL: 0 luma,1 r,2 g,3 b). */
+extern void cmacs_imgedit_doc_histogram (CmacsImgeditDoc *d, int channel,
+                                         int *bins);
 /* Selection (mask-based) + selection-constrained ops. */
 extern void cmacs_imgedit_doc_select_none (CmacsImgeditDoc *d);
 extern void cmacs_imgedit_doc_select_all (CmacsImgeditDoc *d);

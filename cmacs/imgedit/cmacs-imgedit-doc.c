@@ -630,6 +630,32 @@ cmacs_imgedit_doc_rotate (CmacsImgeditDoc *d, gboolean clockwise)
   if (d) lrg_image_document_rotate (d->doc, clockwise);
 }
 
+/* Compute a 256-bin histogram of the flattened document.  CHANNEL: 0 luma,
+   1 red, 2 green, 3 blue.  BINS must hold 256 ints. */
+void
+cmacs_imgedit_doc_histogram (CmacsImgeditDoc *d, int channel, int *bins)
+{
+  GrlImage *flat;
+  const guint8 *px;
+  gsize n = 0, i;
+  if (!d || !bins) return;
+  memset (bins, 0, 256 * sizeof (int));
+  flat = lrg_image_document_flatten (d->doc);
+  if (flat == NULL) return;
+  px = grl_image_get_pixels (flat, &n);
+  if (px == NULL) return;
+  for (i = 0; i + 3 < n; i += 4)
+    {
+      int v;
+      if (channel == 1) v = px[i];
+      else if (channel == 2) v = px[i + 1];
+      else if (channel == 3) v = px[i + 2];
+      else v = (px[i] * 299 + px[i + 1] * 587 + px[i + 2] * 114) / 1000;
+      if (v < 0) v = 0; if (v > 255) v = 255;
+      bins[v]++;
+    }
+}
+
 /* ── Selection (rectangular, magic-wand) + selection-constrained ops ─────
  * The selection is a doc-sized mask (255 = selected).  Fill/clear/crop honour
  * it; the viewport shows its bounding box as a marquee. */

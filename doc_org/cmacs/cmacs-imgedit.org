@@ -97,7 +97,9 @@ flips apply to the whole document.
   model DEFUNs are ~cmacs-imgedit-brightness/contrast/invert/grayscale/tint~
   and ~cmacs-imgedit-color-replace~ (exact-colour swap; FROM/TO are ~(R G B A)~).
   Saturation, Threshold (B/W) and Posterize (reduce colours) are here too
-  (~cmacs-imgedit-saturation/threshold/posterize~).
+  (~cmacs-imgedit-saturation/threshold/posterize~).  A *Histogram*
+  scope (~cmacs-imgedit-histogram~ returns 256 luma/R/G/B bins;
+  ~cmacs-imgedit-show-histogram~ renders it in a side buffer).
 - *Filter*: Blur (box), Bloom (glow), Sharpen, Edge detect, Emboss, Pixelate,
   Noise — ~cmacs-imgedit-blur/bloom/sharpen/edge-detect/emboss/pixelate/noise~.
   The convolution + pixel filters run directly on the active layer's RGBA8

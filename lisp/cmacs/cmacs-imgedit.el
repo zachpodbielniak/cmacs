@@ -1444,6 +1444,32 @@ Photoshop modes implemented in the document compositor).")
   (cmacs-imgedit-select-wand cmacs-imgedit--handle x y 24)
   (cmacs-imgedit--update-marquee) (cmacs-imgedit--render))
 
+(defun cmacs-imgedit-show-histogram (channel)
+  "Show a histogram of the image (CHANNEL: luma/red/green/blue)."
+  (interactive
+   (list (cdr (assoc (completing-read "Channel: "
+                                      '("luma" "red" "green" "blue") nil t "luma")
+                     '(("luma" . 0) ("red" . 1) ("green" . 2) ("blue" . 3))))))
+  (let* ((bins (cmacs-imgedit-histogram cmacs-imgedit--handle channel))
+         (maxv (max 1 (apply #'max (append bins nil))))
+         (w 256) (hh 100)
+         (hg (cmacs-imgedit-new w hh)))
+    (cmacs-imgedit-fill hg 20 20 24 255)
+    (cmacs-imgedit-set-color hg 200 200 210 255)
+    (dotimes (x w)
+      (let ((bh (round (* hh (/ (float (aref bins x)) maxv)))))
+        (when (> bh 0)
+          (cmacs-imgedit-draw-rect hg x (- hh bh) 1 bh t 1))))
+    (let ((png (cmacs-imgedit-export-png-bytes hg)))
+      (cmacs-imgedit-free hg)
+      (with-current-buffer (get-buffer-create "*imgedit histogram*")
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (insert-image (create-image png 'png t :scale 2))
+          (special-mode))
+        (display-buffer (current-buffer))))))
+
+
 (defun cmacs-imgedit--menu ()
   "Return the image-editor context-menu alist (shared by native + viewport)."
   '("Image editor"
@@ -1482,7 +1508,8 @@ Photoshop modes implemented in the document compositor).")
              ("Grayscale" . cmacs-imgedit-desaturate)
              ("Threshold…" . cmacs-imgedit-threshold-layer)
              ("Posterize…" . cmacs-imgedit-posterize-layer)
-             ("Tint…" . cmacs-imgedit-tint-layer))
+             ("Tint…" . cmacs-imgedit-tint-layer)
+             ("Histogram…" . cmacs-imgedit-show-histogram))
             ("Filter"
              ("Blur…" . cmacs-imgedit-blur-layer)
              ("Bloom" . cmacs-imgedit-bloom-layer)

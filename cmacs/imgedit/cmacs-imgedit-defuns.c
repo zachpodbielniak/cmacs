@@ -813,6 +813,22 @@ DEFUN ("cmacs-imgedit-noise", Fcmacs_imgedit_noise, Scmacs_imgedit_noise,
   return Qnil;
 }
 
+DEFUN ("cmacs-imgedit-histogram", Fcmacs_imgedit_histogram,
+       Scmacs_imgedit_histogram, 1, 2, 0,
+       doc: /* Return a 256-element histogram vector for CHANNEL
+(0 luma, 1 red, 2 green, 3 blue; default luma).  */)
+  (Lisp_Object handle, Lisp_Object channel)
+{
+  int bins[256];
+  Lisp_Object v;
+  int i;
+  cmacs_imgedit_doc_histogram (ie_lookup (handle), ie_int (channel, 0), bins);
+  v = make_vector (256, make_fixnum (0));
+  for (i = 0; i < 256; i++)
+    ASET (v, i, make_fixnum (bins[i]));
+  return v;
+}
+
 DEFUN ("cmacs-imgedit-select-rect", Fcmacs_imgedit_select_rect,
        Scmacs_imgedit_select_rect, 5, 5, 0,
        doc: /* Select the rectangle X Y WIDTH HEIGHT.  */)
@@ -1097,6 +1113,7 @@ syms_of_cmacs_imgedit_defuns (void)
   defsubr (&Scmacs_imgedit_blur);
   defsubr (&Scmacs_imgedit_bloom);
   defsubr (&Scmacs_imgedit_noise);
+  defsubr (&Scmacs_imgedit_histogram);
   defsubr (&Scmacs_imgedit_select_rect);
   defsubr (&Scmacs_imgedit_select_wand);
   defsubr (&Scmacs_imgedit_select_none);
