@@ -243,6 +243,21 @@ cmacs_imgedit_doc_set_layer_visible (CmacsImgeditDoc *d, guint idx, gboolean v)
     }
 }
 
+gboolean
+cmacs_imgedit_doc_layer_locked (CmacsImgeditDoc *d, guint idx)
+{
+  LrgImageLayer *l = layer_at (d, idx);
+  return l && lrg_image_layer_get_locked (l);
+}
+
+void
+cmacs_imgedit_doc_set_layer_locked (CmacsImgeditDoc *d, guint idx, gboolean v)
+{
+  LrgImageLayer *l = layer_at (d, idx);
+  if (l)
+    lrg_image_layer_set_locked (l, v);
+}
+
 void
 cmacs_imgedit_doc_layer_offset (CmacsImgeditDoc *d, guint idx, int *x, int *y)
 {
@@ -501,6 +516,127 @@ cmacs_imgedit_doc_flood_fill (CmacsImgeditDoc *d, int x, int y,
     return;
   col.r = r; col.g = g; col.b = b; col.a = a;
   grl_image_flood_fill (img, x, y, &col, tolerance);
+  lrg_image_document_mark_dirty (d->doc);
+}
+
+/* ── Whole-document transforms (all layers) ────────────────────────────
+ * Flip is a document-level, dimension-preserving transform, so it applies to
+ * every layer (including locked ones); adjustments/filters below apply only to
+ * the active layer, matching how raster editors scope "apply filter". */
+void
+cmacs_imgedit_doc_flip (CmacsImgeditDoc *d, gboolean horizontal)
+{
+  guint i, n;
+
+  if (d == NULL)
+    return;
+  n = lrg_image_document_get_n_layers (d->doc);
+  for (i = 0; i < n; i++)
+    {
+      LrgImageLayer *l = lrg_image_document_get_layer (d->doc, i);
+      GrlImage *img = l ? lrg_image_layer_get_image (l) : NULL;
+      if (img == NULL)
+        continue;
+      if (horizontal)
+        grl_image_flip_horizontal (img);
+      else
+        grl_image_flip_vertical (img);
+    }
+  lrg_image_document_mark_dirty (d->doc);
+}
+
+/* ── Active-layer colour adjustments ───────────────────────────────────── */
+void
+cmacs_imgedit_doc_brightness (CmacsImgeditDoc *d, int amount)
+{
+  GrlImage *img = editable_image (d);
+  if (img == NULL) return;
+  grl_image_color_brightness (img, amount);      /* -255..255 */
+  lrg_image_document_mark_dirty (d->doc);
+}
+
+void
+cmacs_imgedit_doc_contrast (CmacsImgeditDoc *d, double amount)
+{
+  GrlImage *img = editable_image (d);
+  if (img == NULL) return;
+  grl_image_color_contrast (img, (gfloat) amount); /* -100..100 */
+  lrg_image_document_mark_dirty (d->doc);
+}
+
+void
+cmacs_imgedit_doc_invert (CmacsImgeditDoc *d)
+{
+  GrlImage *img = editable_image (d);
+  if (img == NULL) return;
+  grl_image_color_invert (img);
+  lrg_image_document_mark_dirty (d->doc);
+}
+
+void
+cmacs_imgedit_doc_grayscale (CmacsImgeditDoc *d)
+{
+  GrlImage *img = editable_image (d);
+  if (img == NULL) return;
+  grl_image_color_grayscale (img);
+  lrg_image_document_mark_dirty (d->doc);
+}
+
+void
+cmacs_imgedit_doc_tint (CmacsImgeditDoc *d,
+                        guint8 r, guint8 g, guint8 b, guint8 a)
+{
+  GrlImage *img = editable_image (d);
+  GrlColor col;
+  if (img == NULL) return;
+  col.r = r; col.g = g; col.b = b; col.a = a;
+  grl_image_color_tint (img, &col);              /* multiply by tint */
+  lrg_image_document_mark_dirty (d->doc);
+}
+
+void
+cmacs_imgedit_doc_color_replace (CmacsImgeditDoc *d,
+                                 guint8 fr, guint8 fg, guint8 fb, guint8 fa,
+                                 guint8 tr, guint8 tg, guint8 tb, guint8 ta)
+{
+  GrlImage *img = editable_image (d);
+  GrlColor from, to;
+  if (img == NULL) return;
+  from.r = fr; from.g = fg; from.b = fb; from.a = fa;
+  to.r = tr; to.g = tg; to.b = tb; to.a = ta;
+  grl_image_color_replace (img, &from, &to);     /* exact-match swap */
+  lrg_image_document_mark_dirty (d->doc);
+}
+
+/* ── Active-layer filters ──────────────────────────────────────────────── */
+void
+cmacs_imgedit_doc_blur (CmacsImgeditDoc *d, int radius)
+{
+  GrlImage *img = editable_image (d);
+  if (img == NULL || radius <= 0) return;
+  grl_image_blur_box (img, radius);
+  lrg_image_document_mark_dirty (d->doc);
+}
+
+void
+cmacs_imgedit_doc_bloom (CmacsImgeditDoc *d, int threshold, int blur_radius,
+                         double intensity)
+{
+  GrlImage *img = editable_image (d);
+  if (img == NULL) return;
+  grl_image_apply_bloom (img, (guint8) threshold, blur_radius,
+                         (gfloat) intensity);
+  lrg_image_document_mark_dirty (d->doc);
+}
+
+void
+cmacs_imgedit_doc_noise (CmacsImgeditDoc *d, double amplitude,
+                         double frequency, guint32 seed)
+{
+  GrlImage *img = editable_image (d);
+  if (img == NULL) return;
+  grl_image_apply_noise (img, GRL_NOISE_BLEND_OVERLAY, (gfloat) amplitude,
+                         (gfloat) frequency, seed);
   lrg_image_document_mark_dirty (d->doc);
 }
 

@@ -79,6 +79,12 @@ ie_int (Lisp_Object v, int dflt)
   return INTEGERP (v) ? (int) XFIXNUM (v) : dflt;
 }
 
+static double
+ie_dbl (Lisp_Object v, double dflt)
+{
+  return NUMBERP (v) ? XFLOATINT (v) : dflt;
+}
+
 static const char *
 ie_opt_str (Lisp_Object v)
 {
@@ -400,6 +406,26 @@ DEFUN ("cmacs-imgedit-set-layer-visible", Fcmacs_imgedit_set_layer_visible,
   return Qnil;
 }
 
+DEFUN ("cmacs-imgedit-layer-locked-p", Fcmacs_imgedit_layer_locked_p,
+       Scmacs_imgedit_layer_locked_p, 2, 2, 0,
+       doc: /* Return t if layer INDEX of HANDLE is locked.  */)
+  (Lisp_Object handle, Lisp_Object index)
+{
+  return cmacs_imgedit_doc_layer_locked (ie_lookup (handle), ie_int (index, 0))
+         ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-imgedit-set-layer-locked", Fcmacs_imgedit_set_layer_locked,
+       Scmacs_imgedit_set_layer_locked, 3, 3, 0,
+       doc: /* Lock (LOCKED non-nil) or unlock layer INDEX of HANDLE.
+A locked layer refuses edits until unlocked.  */)
+  (Lisp_Object handle, Lisp_Object index, Lisp_Object locked)
+{
+  cmacs_imgedit_doc_set_layer_locked (ie_lookup (handle), ie_int (index, 0),
+                                      !NILP (locked));
+  return Qnil;
+}
+
 DEFUN ("cmacs-imgedit-set-layer-offset", Fcmacs_imgedit_set_layer_offset,
        Scmacs_imgedit_set_layer_offset, 4, 4, 0,
        doc: /* Set the X,Y offset of layer INDEX within the document.  */)
@@ -634,6 +660,110 @@ DEFUN ("cmacs-imgedit-flood-fill", Fcmacs_imgedit_flood_fill,
   return Qnil;
 }
 
+DEFUN ("cmacs-imgedit-flip", Fcmacs_imgedit_flip, Scmacs_imgedit_flip, 1, 2, 0,
+       doc: /* Flip HANDLE's whole document; HORIZONTAL non-nil = left-right.  */)
+  (Lisp_Object handle, Lisp_Object horizontal)
+{
+  cmacs_imgedit_doc_flip (ie_lookup (handle), !NILP (horizontal));
+  return Qnil;
+}
+
+DEFUN ("cmacs-imgedit-brightness", Fcmacs_imgedit_brightness,
+       Scmacs_imgedit_brightness, 2, 2, 0,
+       doc: /* Adjust active-layer brightness by AMOUNT (-255..255).  */)
+  (Lisp_Object handle, Lisp_Object amount)
+{
+  cmacs_imgedit_doc_brightness (ie_lookup (handle), ie_int (amount, 0));
+  return Qnil;
+}
+
+DEFUN ("cmacs-imgedit-contrast", Fcmacs_imgedit_contrast,
+       Scmacs_imgedit_contrast, 2, 2, 0,
+       doc: /* Adjust active-layer contrast by AMOUNT (-100..100).  */)
+  (Lisp_Object handle, Lisp_Object amount)
+{
+  cmacs_imgedit_doc_contrast (ie_lookup (handle), ie_dbl (amount, 0.0));
+  return Qnil;
+}
+
+DEFUN ("cmacs-imgedit-invert", Fcmacs_imgedit_invert,
+       Scmacs_imgedit_invert, 1, 1, 0,
+       doc: /* Invert the active layer's RGB.  */)
+  (Lisp_Object handle)
+{
+  cmacs_imgedit_doc_invert (ie_lookup (handle));
+  return Qnil;
+}
+
+DEFUN ("cmacs-imgedit-grayscale", Fcmacs_imgedit_grayscale,
+       Scmacs_imgedit_grayscale, 1, 1, 0,
+       doc: /* Desaturate the active layer to grayscale.  */)
+  (Lisp_Object handle)
+{
+  cmacs_imgedit_doc_grayscale (ie_lookup (handle));
+  return Qnil;
+}
+
+DEFUN ("cmacs-imgedit-tint", Fcmacs_imgedit_tint, Scmacs_imgedit_tint, 5, 5, 0,
+       doc: /* Multiply the active layer by tint colour R G B A.  */)
+  (Lisp_Object handle, Lisp_Object r, Lisp_Object g, Lisp_Object b,
+   Lisp_Object a)
+{
+  cmacs_imgedit_doc_tint (ie_lookup (handle), ie_clamp8 (r), ie_clamp8 (g),
+                          ie_clamp8 (b), ie_clamp8 (a));
+  return Qnil;
+}
+
+DEFUN ("cmacs-imgedit-color-replace", Fcmacs_imgedit_color_replace,
+       Scmacs_imgedit_color_replace, 3, 3, 0,
+       doc: /* Replace exact colour FROM with TO on the active layer.
+FROM and TO are (R G B A) lists of bytes 0..255.  */)
+  (Lisp_Object handle, Lisp_Object from, Lisp_Object to)
+{
+  cmacs_imgedit_doc_color_replace
+    (ie_lookup (handle),
+     ie_clamp8 (Fnth (make_fixnum (0), from)),
+     ie_clamp8 (Fnth (make_fixnum (1), from)),
+     ie_clamp8 (Fnth (make_fixnum (2), from)),
+     ie_clamp8 (Fnth (make_fixnum (3), from)),
+     ie_clamp8 (Fnth (make_fixnum (0), to)),
+     ie_clamp8 (Fnth (make_fixnum (1), to)),
+     ie_clamp8 (Fnth (make_fixnum (2), to)),
+     ie_clamp8 (Fnth (make_fixnum (3), to)));
+  return Qnil;
+}
+
+DEFUN ("cmacs-imgedit-blur", Fcmacs_imgedit_blur, Scmacs_imgedit_blur, 2, 2, 0,
+       doc: /* Box-blur the active layer by RADIUS pixels.  */)
+  (Lisp_Object handle, Lisp_Object radius)
+{
+  cmacs_imgedit_doc_blur (ie_lookup (handle), ie_int (radius, 1));
+  return Qnil;
+}
+
+DEFUN ("cmacs-imgedit-bloom", Fcmacs_imgedit_bloom, Scmacs_imgedit_bloom,
+       1, 4, 0,
+       doc: /* Apply bloom to the active layer (THRESHOLD RADIUS INTENSITY).  */)
+  (Lisp_Object handle, Lisp_Object threshold, Lisp_Object radius,
+   Lisp_Object intensity)
+{
+  cmacs_imgedit_doc_bloom (ie_lookup (handle), ie_int (threshold, 180),
+                           ie_int (radius, 4), ie_dbl (intensity, 0.8));
+  return Qnil;
+}
+
+DEFUN ("cmacs-imgedit-noise", Fcmacs_imgedit_noise, Scmacs_imgedit_noise,
+       1, 4, 0,
+       doc: /* Overlay noise on the active layer (AMPLITUDE FREQUENCY SEED).  */)
+  (Lisp_Object handle, Lisp_Object amplitude, Lisp_Object frequency,
+   Lisp_Object seed)
+{
+  cmacs_imgedit_doc_noise (ie_lookup (handle), ie_dbl (amplitude, 0.2),
+                           ie_dbl (frequency, 1.0),
+                           (guint32) ie_int (seed, 1));
+  return Qnil;
+}
+
 DEFUN ("cmacs-imgedit-pixel-at", Fcmacs_imgedit_pixel_at,
        Scmacs_imgedit_pixel_at, 3, 3, 0,
        doc: /* Return the flattened pixel at X,Y as (R G B A), or nil.  */)
@@ -719,6 +849,8 @@ syms_of_cmacs_imgedit_defuns (void)
   defsubr (&Scmacs_imgedit_set_layer_blend);
   defsubr (&Scmacs_imgedit_layer_visible_p);
   defsubr (&Scmacs_imgedit_set_layer_visible);
+  defsubr (&Scmacs_imgedit_layer_locked_p);
+  defsubr (&Scmacs_imgedit_set_layer_locked);
   defsubr (&Scmacs_imgedit_set_layer_offset);
   defsubr (&Scmacs_imgedit_set_draw_blend);
   defsubr (&Scmacs_imgedit_set_color);
@@ -731,6 +863,16 @@ syms_of_cmacs_imgedit_defuns (void)
   defsubr (&Scmacs_imgedit_draw_ellipse);
   defsubr (&Scmacs_imgedit_draw_text);
   defsubr (&Scmacs_imgedit_flood_fill);
+  defsubr (&Scmacs_imgedit_flip);
+  defsubr (&Scmacs_imgedit_brightness);
+  defsubr (&Scmacs_imgedit_contrast);
+  defsubr (&Scmacs_imgedit_invert);
+  defsubr (&Scmacs_imgedit_grayscale);
+  defsubr (&Scmacs_imgedit_tint);
+  defsubr (&Scmacs_imgedit_color_replace);
+  defsubr (&Scmacs_imgedit_blur);
+  defsubr (&Scmacs_imgedit_bloom);
+  defsubr (&Scmacs_imgedit_noise);
   defsubr (&Scmacs_imgedit_viewport_bind);
   defsubr (&Scmacs_imgedit_clipboard_available_p);
   defsubr (&Scmacs_imgedit_clipboard_set_png);

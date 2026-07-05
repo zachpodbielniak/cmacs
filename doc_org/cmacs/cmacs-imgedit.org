@@ -85,6 +85,28 @@ checkerboard and a pixel grid (at high zoom) drawn in-engine.
   native ~insert-image~ preview (buffer-local ~cmacs-imgedit--live~ is then
   nil), so the editor works everywhere.
 
+** Adjustments, filters, transforms & layer operations
+
+Right-click → *Adjust* / *Filter* / *Transform*, or run the commands directly.
+Adjustments and filters apply to the *active layer* (one undo step each);
+flips apply to the whole document.
+
+- *Adjust*: Brightness (−255..255), Contrast (−100..100), Invert, Grayscale,
+  Tint (multiply by a colour) — ~cmacs-imgedit-adjust-brightness~,
+  ~-adjust-contrast~, ~-invert-colors~, ~-desaturate~, ~-tint-layer~.  The
+  model DEFUNs are ~cmacs-imgedit-brightness/contrast/invert/grayscale/tint~
+  and ~cmacs-imgedit-color-replace~ (exact-colour swap; FROM/TO are ~(R G B A)~).
+- *Filter*: Blur (box), Bloom (glow), Noise — ~cmacs-imgedit-blur-layer~,
+  ~-bloom-layer~, ~-noise-layer~ (model: ~cmacs-imgedit-blur/bloom/noise~).
+- *Transform*: Flip horizontal / vertical — ~cmacs-imgedit-flip-horizontal~ /
+  ~-flip-vertical~ (model: ~(cmacs-imgedit-flip HANDLE HORIZONTAL)~).
+- *Layer* (right-click → Layer): Duplicate, Rename, Move up/down, Blend mode
+  (Replace/Over/Add/Multiply/Subtract), Toggle lock.  A *locked* layer refuses
+  edits until unlocked (~cmacs-imgedit-set-layer-locked~ /
+  ~cmacs-imgedit-layer-locked-p~); the model reorder/rename/duplicate/blend
+  DEFUNs (~cmacs-imgedit-move-layer~, ~-set-layer-name~, ~-duplicate-layer~,
+  ~-set-layer-blend~) are now surfaced in the menu.
+
 ** Annotation workflow (screenshots)
 
 #+begin_src

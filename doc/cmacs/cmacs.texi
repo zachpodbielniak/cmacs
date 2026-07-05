@@ -8729,6 +8729,14 @@ drawn in-engine.  On a tty / headless / no-GL frame it falls back automatically
 to the native @code{insert-image} preview (buffer-local
 @code{cmacs-imgedit--live} nil).
 
+The right-click menu exposes @emph{Adjust} (brightness, contrast, invert,
+grayscale, tint, exact colour-replace), @emph{Filter} (box blur, bloom,
+noise), and @emph{Transform} (flip horizontal/vertical) --- adjustments and
+filters act on the active layer, flips on the whole document.  The @emph{Layer}
+submenu surfaces the model reorder/rename/duplicate/blend-mode DEFUNs and a
+lock toggle (a locked layer refuses edits).  See
+@file{doc_org/cmacs/cmacs-imgedit.org} for the command + DEFUN names.
+
 @section Commands
 
 @table @kbd

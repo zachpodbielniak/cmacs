@@ -1135,6 +1135,139 @@ GTK clipboard (any compositor / X11), then `wl-paste'."
 ;; Right-click context menu (GTK under pgtk, in-engine under --lrg)
 ;; --------------------------------------------------------------------------
 
+;; ── Adjustments / filters / flip (active layer, one undo step) ──────────
+
+(defmacro cmacs-imgedit--with-edit (&rest body)
+  "Push an undo snapshot, run BODY, then re-render."
+  `(when cmacs-imgedit--handle
+     (cmacs-imgedit-push-undo cmacs-imgedit--handle)
+     ,@body
+     (cmacs-imgedit--render)))
+
+(defun cmacs-imgedit-flip-horizontal ()
+  "Flip the whole image left-to-right."
+  (interactive)
+  (cmacs-imgedit--with-edit (cmacs-imgedit-flip cmacs-imgedit--handle t)))
+
+(defun cmacs-imgedit-flip-vertical ()
+  "Flip the whole image top-to-bottom."
+  (interactive)
+  (cmacs-imgedit--with-edit (cmacs-imgedit-flip cmacs-imgedit--handle nil)))
+
+(defun cmacs-imgedit-adjust-brightness (amount)
+  "Adjust active-layer brightness by AMOUNT (-255..255)."
+  (interactive (list (read-number "Brightness (-255..255): " 20)))
+  (cmacs-imgedit--with-edit
+   (cmacs-imgedit-brightness cmacs-imgedit--handle amount)))
+
+(defun cmacs-imgedit-adjust-contrast (amount)
+  "Adjust active-layer contrast by AMOUNT (-100..100)."
+  (interactive (list (read-number "Contrast (-100..100): " 20)))
+  (cmacs-imgedit--with-edit
+   (cmacs-imgedit-contrast cmacs-imgedit--handle amount)))
+
+(defun cmacs-imgedit-invert-colors ()
+  "Invert the active layer's colours."
+  (interactive)
+  (cmacs-imgedit--with-edit (cmacs-imgedit-invert cmacs-imgedit--handle)))
+
+(defun cmacs-imgedit-desaturate ()
+  "Desaturate the active layer to grayscale."
+  (interactive)
+  (cmacs-imgedit--with-edit (cmacs-imgedit-grayscale cmacs-imgedit--handle)))
+
+(defun cmacs-imgedit-tint-layer (color)
+  "Multiply the active layer by tint COLOR."
+  (interactive (list (read-color "Tint colour: ")))
+  (let ((rgb (color-values color)))
+    (cmacs-imgedit--with-edit
+     (cmacs-imgedit-tint cmacs-imgedit--handle
+                         (/ (nth 0 rgb) 256) (/ (nth 1 rgb) 256)
+                         (/ (nth 2 rgb) 256) 255))))
+
+(defun cmacs-imgedit-blur-layer (radius)
+  "Box-blur the active layer by RADIUS pixels."
+  (interactive (list (read-number "Blur radius: " 2)))
+  (cmacs-imgedit--with-edit (cmacs-imgedit-blur cmacs-imgedit--handle radius)))
+
+(defun cmacs-imgedit-bloom-layer ()
+  "Apply a bloom glow to the active layer."
+  (interactive)
+  (cmacs-imgedit--with-edit (cmacs-imgedit-bloom cmacs-imgedit--handle)))
+
+(defun cmacs-imgedit-noise-layer (amplitude)
+  "Overlay noise of AMPLITUDE on the active layer."
+  (interactive (list (read-number "Noise amplitude (0..1): " 0.2)))
+  (cmacs-imgedit--with-edit
+   (cmacs-imgedit-noise cmacs-imgedit--handle amplitude 1.0 1)))
+
+;; ── Layer operations (expose the existing model DEFUNs) ─────────────────
+
+(defun cmacs-imgedit--active ()
+  "Index of the active layer."
+  (cmacs-imgedit-active-layer cmacs-imgedit--handle))
+
+(defun cmacs-imgedit-move-layer-up ()
+  "Move the active layer up one (towards the top of the stack)."
+  (interactive)
+  (let* ((i (cmacs-imgedit--active))
+         (n (cmacs-imgedit-n-layers cmacs-imgedit--handle)))
+    (when (< (1+ i) n)
+      (cmacs-imgedit-move-layer cmacs-imgedit--handle i (1+ i))
+      (cmacs-imgedit-set-active-layer cmacs-imgedit--handle (1+ i))
+      (cmacs-imgedit--render))))
+
+(defun cmacs-imgedit-move-layer-down ()
+  "Move the active layer down one (towards the bottom)."
+  (interactive)
+  (let ((i (cmacs-imgedit--active)))
+    (when (> i 0)
+      (cmacs-imgedit-move-layer cmacs-imgedit--handle i (1- i))
+      (cmacs-imgedit-set-active-layer cmacs-imgedit--handle (1- i))
+      (cmacs-imgedit--render))))
+
+(defun cmacs-imgedit-rename-layer (name)
+  "Rename the active layer to NAME."
+  (interactive (list (read-string "Layer name: ")))
+  (cmacs-imgedit-set-layer-name cmacs-imgedit--handle (cmacs-imgedit--active)
+                                name)
+  (cmacs-imgedit--render))
+
+(defun cmacs-imgedit-duplicate-active-layer ()
+  "Duplicate the active layer and select the copy."
+  (interactive)
+  (let ((idx (cmacs-imgedit-duplicate-layer cmacs-imgedit--handle
+                                            (cmacs-imgedit--active))))
+    (when (>= idx 0)
+      (cmacs-imgedit-set-active-layer cmacs-imgedit--handle idx))
+    (cmacs-imgedit--render)))
+
+(defun cmacs-imgedit-toggle-layer-lock ()
+  "Toggle the lock on the active layer."
+  (interactive)
+  (let ((i (cmacs-imgedit--active)))
+    (cmacs-imgedit-set-layer-locked
+     cmacs-imgedit--handle i
+     (not (cmacs-imgedit-layer-locked-p cmacs-imgedit--handle i)))
+    (message "Layer %d %s" i
+             (if (cmacs-imgedit-layer-locked-p cmacs-imgedit--handle i)
+                 "locked" "unlocked"))
+    (cmacs-imgedit--render)))
+
+(defconst cmacs-imgedit--blend-modes
+  '(("Replace" . 0) ("Over" . 1) ("Add" . 2) ("Multiply" . 3) ("Subtract" . 4))
+  "Blend-mode names to `GrlImageBlendMode' ints.")
+
+(defun cmacs-imgedit-set-layer-blend-mode (mode)
+  "Set the active layer's blend MODE (completing-read)."
+  (interactive
+   (list (cdr (assoc (completing-read "Blend mode: "
+                                      cmacs-imgedit--blend-modes nil t)
+                     cmacs-imgedit--blend-modes))))
+  (cmacs-imgedit-set-layer-blend cmacs-imgedit--handle (cmacs-imgedit--active)
+                                 mode)
+  (cmacs-imgedit--render))
+
 (defun cmacs-imgedit--menu ()
   "Return the image-editor context-menu alist (shared by native + viewport)."
   '("Image editor"
@@ -1155,10 +1288,29 @@ GTK clipboard (any compositor / X11), then `wl-paste'."
             ("Layer"
              ("Add layer…" . cmacs-imgedit-add-layer-cmd)
              ("Remove active layer" . cmacs-imgedit-remove-active-layer)
+             ("Duplicate layer" . cmacs-imgedit-duplicate-active-layer)
+             ("Rename layer…" . cmacs-imgedit-rename-layer)
+             ("Move layer up" . cmacs-imgedit-move-layer-up)
+             ("Move layer down" . cmacs-imgedit-move-layer-down)
+             ("Blend mode…" . cmacs-imgedit-set-layer-blend-mode)
+             ("Toggle lock" . cmacs-imgedit-toggle-layer-lock)
              ("Select layer…" . cmacs-imgedit-set-active-layer-cmd)
              ("Toggle visibility" . cmacs-imgedit-toggle-layer-visible)
              ("Opacity…" . cmacs-imgedit-set-layer-opacity-cmd)
              ("List layers" . cmacs-imgedit-list-layers))
+            ("Adjust"
+             ("Brightness…" . cmacs-imgedit-adjust-brightness)
+             ("Contrast…" . cmacs-imgedit-adjust-contrast)
+             ("Invert" . cmacs-imgedit-invert-colors)
+             ("Grayscale" . cmacs-imgedit-desaturate)
+             ("Tint…" . cmacs-imgedit-tint-layer))
+            ("Filter"
+             ("Blur…" . cmacs-imgedit-blur-layer)
+             ("Bloom" . cmacs-imgedit-bloom-layer)
+             ("Noise…" . cmacs-imgedit-noise-layer))
+            ("Transform"
+             ("Flip horizontal" . cmacs-imgedit-flip-horizontal)
+             ("Flip vertical" . cmacs-imgedit-flip-vertical))
             ("Clipboard"
              ("Copy image" . cmacs-imgedit-copy-to-clipboard)
              ("Paste image" . cmacs-imgedit-paste-from-clipboard)

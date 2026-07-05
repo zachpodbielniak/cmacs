@@ -297,5 +297,58 @@ itself instead of drawing a dot at the press position."
       (kill-buffer canvas)
       (ignore-errors (cmacs-imgedit-free h)))))
 
+;; ── Adjustments / filters / flip / lock (headless model ops) ────────────
+
+(ert-deftest cmacs-imgedit-tests-adjustments ()
+  "Invert, brightness, grayscale, and color-replace transform pixels."
+  (skip-unless (fboundp 'cmacs-imgedit-new))
+  (let ((h (cmacs-imgedit-new 8 8)))
+    (unwind-protect
+        (progn
+          (cmacs-imgedit-fill h 200 100 50 255)
+          (cmacs-imgedit-invert h)
+          (should (equal (cmacs-imgedit-pixel-at h 4 4) '(55 155 205 255)))
+          (cmacs-imgedit-fill h 100 100 100 255)
+          (cmacs-imgedit-brightness h 50)
+          (should (equal (cmacs-imgedit-pixel-at h 4 4) '(150 150 150 255)))
+          (cmacs-imgedit-fill h 90 30 210 255)
+          (cmacs-imgedit-grayscale h)
+          (let ((p (cmacs-imgedit-pixel-at h 4 4)))    ; R==G==B after gray
+            (should (= (nth 0 p) (nth 1 p)))
+            (should (= (nth 1 p) (nth 2 p))))
+          (cmacs-imgedit-fill h 10 20 30 255)
+          (cmacs-imgedit-color-replace h '(10 20 30 255) '(90 80 70 255))
+          (should (equal (cmacs-imgedit-pixel-at h 4 4) '(90 80 70 255))))
+      (cmacs-imgedit-free h))))
+
+(ert-deftest cmacs-imgedit-tests-flip ()
+  "A whole-document horizontal flip mirrors pixels left-to-right."
+  (skip-unless (fboundp 'cmacs-imgedit-new))
+  (let ((h (cmacs-imgedit-new 4 1)))
+    (unwind-protect
+        (progn
+          (cmacs-imgedit-set-pixel h 0 0 255 0 0 255)   ; red at x=0
+          (cmacs-imgedit-set-pixel h 3 0 0 255 0 255)   ; green at x=3
+          (cmacs-imgedit-flip h t)
+          (should (equal (cmacs-imgedit-pixel-at h 3 0) '(255 0 0 255)))
+          (should (equal (cmacs-imgedit-pixel-at h 0 0) '(0 255 0 255))))
+      (cmacs-imgedit-free h))))
+
+(ert-deftest cmacs-imgedit-tests-layer-lock ()
+  "A locked layer refuses edits until unlocked."
+  (skip-unless (fboundp 'cmacs-imgedit-set-layer-locked))
+  (let ((h (cmacs-imgedit-new 4 4)))
+    (unwind-protect
+        (progn
+          (cmacs-imgedit-fill h 90 80 70 255)
+          (cmacs-imgedit-set-layer-locked h 0 t)
+          (should (cmacs-imgedit-layer-locked-p h 0))
+          (cmacs-imgedit-fill h 1 2 3 255)              ; ignored while locked
+          (should (equal (cmacs-imgedit-pixel-at h 2 2) '(90 80 70 255)))
+          (cmacs-imgedit-set-layer-locked h 0 nil)
+          (cmacs-imgedit-fill h 1 2 3 255)
+          (should (equal (cmacs-imgedit-pixel-at h 2 2) '(1 2 3 255))))
+      (cmacs-imgedit-free h))))
+
 (provide 'cmacs-imgedit-tests)
 ;;; cmacs-imgedit-tests.el ends here

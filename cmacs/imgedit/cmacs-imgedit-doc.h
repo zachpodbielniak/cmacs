@@ -64,6 +64,9 @@ extern gint   cmacs_imgedit_doc_layer_blend (CmacsImgeditDoc *d, guint idx);
 extern void   cmacs_imgedit_doc_set_layer_blend (CmacsImgeditDoc *d, guint idx,
                                                  gint mode);
 extern gboolean cmacs_imgedit_doc_layer_visible (CmacsImgeditDoc *d, guint idx);
+extern gboolean cmacs_imgedit_doc_layer_locked (CmacsImgeditDoc *d, guint idx);
+extern void cmacs_imgedit_doc_set_layer_locked (CmacsImgeditDoc *d, guint idx,
+                                                gboolean v);
 extern void   cmacs_imgedit_doc_set_layer_visible (CmacsImgeditDoc *d,
                                                    guint idx, gboolean v);
 extern void   cmacs_imgedit_doc_layer_offset (CmacsImgeditDoc *d, guint idx,
@@ -102,6 +105,26 @@ extern void cmacs_imgedit_doc_draw_ellipse (CmacsImgeditDoc *d,
                                             gboolean filled, int thickness);
 extern void cmacs_imgedit_doc_draw_text (CmacsImgeditDoc *d, int x, int y,
                                          const char *text, int size);
+/* Whole-document flip (all layers, dimension-preserving). */
+extern void cmacs_imgedit_doc_flip (CmacsImgeditDoc *d, gboolean horizontal);
+/* Active-layer colour adjustments. */
+extern void cmacs_imgedit_doc_brightness (CmacsImgeditDoc *d, int amount);
+extern void cmacs_imgedit_doc_contrast (CmacsImgeditDoc *d, double amount);
+extern void cmacs_imgedit_doc_invert (CmacsImgeditDoc *d);
+extern void cmacs_imgedit_doc_grayscale (CmacsImgeditDoc *d);
+extern void cmacs_imgedit_doc_tint (CmacsImgeditDoc *d, guint8 r, guint8 g,
+                                    guint8 b, guint8 a);
+extern void cmacs_imgedit_doc_color_replace (CmacsImgeditDoc *d, guint8 fr,
+                                             guint8 fg, guint8 fb, guint8 fa,
+                                             guint8 tr, guint8 tg, guint8 tb,
+                                             guint8 ta);
+/* Active-layer filters. */
+extern void cmacs_imgedit_doc_blur (CmacsImgeditDoc *d, int radius);
+extern void cmacs_imgedit_doc_bloom (CmacsImgeditDoc *d, int threshold,
+                                     int blur_radius, double intensity);
+extern void cmacs_imgedit_doc_noise (CmacsImgeditDoc *d, double amplitude,
+                                     double frequency, guint32 seed);
+
 extern void cmacs_imgedit_doc_flood_fill (CmacsImgeditDoc *d, int x, int y,
                                           guint8 r, guint8 g, guint8 b,
                                           guint8 a, int tolerance);
