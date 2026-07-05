@@ -287,6 +287,13 @@ overlay_model_free (gpointer p)
   g_free (o);
 }
 
+/* One clip block on the in-viewport timeline strip. */
+typedef struct
+{
+  int    track, start, dur;
+  guint8 r, g, b;
+} CmacsTimelineClip;
+
 struct CmacsLibregnumRenderCtx
 {
   LrgRenderer    *renderer;
@@ -327,6 +334,10 @@ struct CmacsLibregnumRenderCtx
   double        image_cursor_x, image_cursor_y, image_cursor_r; /* <0 hides */
   gboolean      image_marquee_on;
   int           image_mx, image_my, image_mw, image_mh;
+  /* Optional timeline strip (vidstudio): clip blocks + playhead drawn along
+   * the bottom of the FBO.  image_clips holds CmacsTimelineClip records. */
+  GArray       *image_clips;
+  int           image_playhead, image_total_frames, image_ntracks;
 
   /* Scene node model (CmacsNode), parallel to the drawables. */
   GArray         *nodes;
@@ -531,6 +542,7 @@ cmacs_libregnum_render_ctx_free (CmacsLibregnumRenderCtx *r)
   g_clear_object (&r->image_tex);
   g_clear_object (&r->image_pending);
   g_clear_pointer (&r->image_rgba, g_free);
+  if (r->image_clips) g_array_unref (r->image_clips);
   /* Non-owning wrapper: drop it before the FBO it points at.  */
   g_clear_object (&r->fbo_grl_texture);
   if (r->fbo_valid) UnloadRenderTexture (r->fbo);
@@ -709,6 +721,70 @@ ctx_image_draw_overlay (CmacsLibregnumRenderCtx *r)
                              (int) (py + r->image_cursor_y * s),
                              (gfloat) MAX (1.0, r->image_cursor_r * s), c);
     }
+
+  /* Timeline strip along the bottom (vidstudio): one row per track, clip
+   * blocks scaled to the FBO width, plus a playhead line. */
+  if (r->image_clips != NULL && r->image_total_frames > 0)
+    {
+      int strip_h = MAX (24, r->height / 6);
+      int y0 = r->height - strip_h;
+      int ntr = MAX (1, r->image_ntracks);
+      int rowh = strip_h / ntr;
+      guint i;
+      g_autoptr (GrlColor) bg = grl_color_new (20, 20, 24, 220);
+      g_autoptr (GrlColor) ph = grl_color_new (255, 90, 90, 255);
+      grl_draw_rectangle (0, y0, r->width, strip_h, bg);
+      for (i = 0; i < r->image_clips->len; i++)
+        {
+          CmacsTimelineClip *cl =
+            &g_array_index (r->image_clips, CmacsTimelineClip, i);
+          g_autoptr (GrlColor) col = grl_color_new (cl->r, cl->g, cl->b, 235);
+          g_autoptr (GrlColor) edge = grl_color_new (0, 0, 0, 255);
+          int bx = cl->start * r->width / r->image_total_frames;
+          int bw = MAX (2, cl->dur * r->width / r->image_total_frames);
+          int by = y0 + cl->track * rowh;
+          grl_draw_rectangle (bx, by + 1, bw, rowh - 2, col);
+          grl_draw_rectangle_lines (bx, by + 1, bw, rowh - 2, edge);
+        }
+      {
+        int phx = r->image_playhead * r->width / r->image_total_frames;
+        grl_draw_rectangle (phx, y0, 2, strip_h, ph);
+      }
+    }
+}
+
+void
+cmacs_libregnum_render_ctx_image_timeline_clear (CmacsLibregnumRenderCtx *r)
+{
+  if (!r) return;
+  if (r->image_clips)
+    g_array_set_size (r->image_clips, 0);
+}
+
+void
+cmacs_libregnum_render_ctx_image_timeline_add_clip (CmacsLibregnumRenderCtx *r,
+                                                    int track, int start,
+                                                    int dur, guint8 cr,
+                                                    guint8 cg, guint8 cb)
+{
+  CmacsTimelineClip c;
+  if (!r) return;
+  if (r->image_clips == NULL)
+    r->image_clips = g_array_new (FALSE, FALSE, sizeof (CmacsTimelineClip));
+  c.track = track; c.start = start; c.dur = dur;
+  c.r = cr; c.g = cg; c.b = cb;
+  g_array_append_val (r->image_clips, c);
+}
+
+void
+cmacs_libregnum_render_ctx_image_timeline_set (CmacsLibregnumRenderCtx *r,
+                                               int playhead, int total,
+                                               int ntracks)
+{
+  if (!r) return;
+  r->image_playhead = playhead;
+  r->image_total_frames = total;
+  r->image_ntracks = ntracks;
 }
 
 /* Full image-mode frame; called from the render_to_bgra branch. */

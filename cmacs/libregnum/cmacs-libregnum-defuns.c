@@ -355,6 +355,44 @@ DEFUN ("cmacs-libregnum-image-set-marquee", Fcmacs_libregnum_image_set_marquee,
   return Qt;
 }
 
+DEFUN ("cmacs-libregnum-image-timeline", Fcmacs_libregnum_image_timeline,
+       Scmacs_libregnum_image_timeline, 4, 4, 0,
+       doc: /* Set BUFFER's viewport timeline strip.
+PLAYHEAD frame, TOTAL frames, and CLIPS = a list of (TRACK START DUR R G B).
+The number of tracks is inferred from the clips.  */)
+  (Lisp_Object buffer, Lisp_Object playhead, Lisp_Object total,
+   Lisp_Object clips)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_image_ctx (buffer);
+  if (ctx)
+    {
+      int ntr = 1;
+      Lisp_Object l;
+      cmacs_libregnum_render_ctx_image_timeline_clear (ctx);
+      for (l = clips; CONSP (l); l = XCDR (l))
+        {
+          Lisp_Object c = XCAR (l);
+          int tr = NILP (Fnth (make_fixnum (0), c)) ? 0
+                   : XFIXNUM (Fnth (make_fixnum (0), c));
+          cmacs_libregnum_render_ctx_image_timeline_add_clip
+            (ctx, tr,
+             XFIXNUM (Fnth (make_fixnum (1), c)),
+             XFIXNUM (Fnth (make_fixnum (2), c)),
+             (unsigned char) XFIXNUM (Fnth (make_fixnum (3), c)),
+             (unsigned char) XFIXNUM (Fnth (make_fixnum (4), c)),
+             (unsigned char) XFIXNUM (Fnth (make_fixnum (5), c)));
+          if (tr + 1 > ntr) ntr = tr + 1;
+        }
+      cmacs_libregnum_render_ctx_image_timeline_set
+        (ctx, NILP (playhead) ? 0 : XFIXNUM (playhead),
+         NILP (total) ? 0 : XFIXNUM (total), ntr);
+    }
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (v) cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
 DEFUN ("cmacs-libregnum-build-tree", Fcmacs_libregnum_build_tree,
        Scmacs_libregnum_build_tree, 2, 2, 0,
        doc: /* Build the project-tree scene for BUFFER under ROOT.
@@ -2310,6 +2348,7 @@ syms_of_cmacs_libregnum_defuns (void)
   defsubr (&Scmacs_libregnum_image_set_grid);
   defsubr (&Scmacs_libregnum_image_set_cursor);
   defsubr (&Scmacs_libregnum_image_set_marquee);
+  defsubr (&Scmacs_libregnum_image_timeline);
   defsubr (&Scmacs_libregnum_set_animated);
   defsubr (&Scmacs_libregnum_animated_p);
   defsubr (&Scmacs_libregnum_tree_nodes);

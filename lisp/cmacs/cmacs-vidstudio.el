@@ -111,6 +111,34 @@ A position `keymap' property outranks Evil state maps and
   (define-key map [down-mouse-3] #'cmacs-vidstudio-context-menu)
   (define-key map [mouse-3] #'ignore))
 
+(defconst cmacs-vidstudio--track-colors
+  '((80 140 220) (220 120 80) (120 200 120) (200 180 90) (180 120 200))
+  "Cycling clip-block colours for the in-viewport timeline strip.")
+
+(defun cmacs-vidstudio--timeline-clips ()
+  "Build the (TRACK START DUR R G B) list for the viewport timeline strip."
+  (let ((clips '()) (ntr (cmacs-vidstudio-n-tracks cmacs-vidstudio--handle)))
+    (dotimes (tr ntr)
+      (dotimes (ci (cmacs-vidstudio-track-clip-count cmacs-vidstudio--handle tr))
+        (let* ((id (cmacs-vidstudio-clip-at cmacs-vidstudio--handle tr ci))
+               (start (cmacs-vidstudio-clip-start-frame
+                       cmacs-vidstudio--handle id))
+               (dur (cmacs-vidstudio-clip-duration cmacs-vidstudio--handle id))
+               (col (nth (mod id (length cmacs-vidstudio--track-colors))
+                         cmacs-vidstudio--track-colors)))
+          (push (list tr start dur (nth 0 col) (nth 1 col) (nth 2 col))
+                clips))))
+    (nreverse clips)))
+
+(defun cmacs-vidstudio--update-timeline ()
+  "Push the timeline strip data to the live viewport."
+  (when (and cmacs-vidstudio--live (fboundp 'cmacs-libregnum-image-timeline))
+    (ignore-errors
+      (cmacs-libregnum-image-timeline
+       (current-buffer) cmacs-vidstudio--playhead
+       (cmacs-vidstudio-total-frames cmacs-vidstudio--handle)
+       (cmacs-vidstudio--timeline-clips)))))
+
 (defun cmacs-vidstudio--render ()
   "Redraw the preview + timeline."
   (when cmacs-vidstudio--handle
@@ -124,10 +152,12 @@ A position `keymap' property outranks Evil state maps and
           ;; PPM-through-Emacs).  The in-viewport timeline strip is a later
           ;; phase; the header line shows frame/total meanwhile.
           (if (> total 0)
-              (ignore-errors
-                (cmacs-vidstudio-viewport-render
-                 cmacs-vidstudio--handle (current-buffer)
-                 cmacs-vidstudio--playhead))
+              (progn
+                (ignore-errors
+                  (cmacs-vidstudio-viewport-render
+                   cmacs-vidstudio--handle (current-buffer)
+                   cmacs-vidstudio--playhead))
+                (cmacs-vidstudio--update-timeline))
             (ignore-errors (cmacs-libregnum-redraw (current-buffer))))
         (cmacs-vidstudio--render-native total)))))
 
