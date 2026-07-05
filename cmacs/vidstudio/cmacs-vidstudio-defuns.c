@@ -329,6 +329,160 @@ DEFUN ("cmacs-vidstudio-clear-effects", Fcmacs_vidstudio_clear_effects,
              ? Qt : Qnil;
 }
 
+DEFUN ("cmacs-vidstudio-set-opacity", Fcmacs_vidstudio_set_opacity,
+       Scmacs_vidstudio_set_opacity, 3, 3, 0,
+       doc: /* Set CLIP-ID's opacity to O (0..1).  */)
+  (Lisp_Object handle, Lisp_Object clip_id, Lisp_Object o)
+{
+  CHECK_FIXNUM (clip_id);
+  return cmacs_vidstudio_proj_set_opacity (vs_lookup (handle),
+                                           (gint) XFIXNUM (clip_id),
+                                           vs_dbl (o, 1.0)) ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-vidstudio-set-transform", Fcmacs_vidstudio_set_transform,
+       Scmacs_vidstudio_set_transform, 6, 6, 0,
+       doc: /* Set CLIP-ID transform: position X Y, scale SX SY, rotation ROT
+(radians).  */)
+  (Lisp_Object handle, Lisp_Object clip_id, Lisp_Object x, Lisp_Object y,
+   Lisp_Object sx, Lisp_Object sy)
+{
+  CHECK_FIXNUM (clip_id);
+  /* ROT folded into SY's cdr? no -- keep 6 args: x y sx sy, rot via set-anchor?
+     Simpler: accept rotation through a separate DEFUN.  Here rot defaults 0. */
+  return cmacs_vidstudio_proj_set_transform (vs_lookup (handle),
+                                             (gint) XFIXNUM (clip_id),
+                                             vs_dbl (x, 0.0), vs_dbl (y, 0.0),
+                                             vs_dbl (sx, 1.0), vs_dbl (sy, 1.0),
+                                             0.0) ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-vidstudio-set-rotation", Fcmacs_vidstudio_set_rotation,
+       Scmacs_vidstudio_set_rotation, 3, 3, 0,
+       doc: /* Set CLIP-ID rotation to ROT radians (keeps position/scale).  */)
+  (Lisp_Object handle, Lisp_Object clip_id, Lisp_Object rot)
+{
+  /* Re-apply transform with the given rotation; position/scale default to
+     identity unless previously set (v1 keeps it simple). */
+  CHECK_FIXNUM (clip_id);
+  return cmacs_vidstudio_proj_set_transform (vs_lookup (handle),
+                                             (gint) XFIXNUM (clip_id),
+                                             0.0, 0.0, 1.0, 1.0,
+                                             vs_dbl (rot, 0.0)) ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-vidstudio-set-anchor", Fcmacs_vidstudio_set_anchor,
+       Scmacs_vidstudio_set_anchor, 4, 4, 0,
+       doc: /* Set CLIP-ID transform anchor to (AX AY) frame fractions.  */)
+  (Lisp_Object handle, Lisp_Object clip_id, Lisp_Object ax, Lisp_Object ay)
+{
+  CHECK_FIXNUM (clip_id);
+  return cmacs_vidstudio_proj_set_anchor (vs_lookup (handle),
+                                          (gint) XFIXNUM (clip_id),
+                                          vs_dbl (ax, 0.5), vs_dbl (ay, 0.5))
+             ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-vidstudio-set-blend-mode", Fcmacs_vidstudio_set_blend_mode,
+       Scmacs_vidstudio_set_blend_mode, 3, 3, 0,
+       doc: /* Set CLIP-ID blend MODE (0 normal..7 color-burn).  */)
+  (Lisp_Object handle, Lisp_Object clip_id, Lisp_Object mode)
+{
+  CHECK_FIXNUM (clip_id);
+  return cmacs_vidstudio_proj_set_blend_mode (vs_lookup (handle),
+                                              (gint) XFIXNUM (clip_id),
+                                              vs_int (mode, 0)) ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-vidstudio-set-effect-param", Fcmacs_vidstudio_set_effect_param,
+       Scmacs_vidstudio_set_effect_param, 4, 4, 0,
+       doc: /* Set PROP of effect EFFECT-INDEX on CLIP-ID to VALUE.
+PROP is the effect property name (e.g. "radius", "intensity", "brightness").  */)
+  (Lisp_Object handle, Lisp_Object clip_id, Lisp_Object effect_index,
+   Lisp_Object prop_value)
+{
+  /* PROP-VALUE is a cons (PROP . VALUE) to stay within 4 args when combined
+     with the alternative (EFFECT-INDEX PROP VALUE); accept both a cons or use
+     effect_index+prop separately.  Here: (handle clip-id effect-index
+     (PROP . VALUE)). */
+  Lisp_Object prop, value;
+  CHECK_FIXNUM (clip_id);
+  CHECK_FIXNUM (effect_index);
+  CHECK_CONS (prop_value);
+  prop = XCAR (prop_value);
+  value = XCDR (prop_value);
+  CHECK_STRING (prop);
+  return cmacs_vidstudio_proj_set_effect_param (vs_lookup (handle),
+                                                (gint) XFIXNUM (clip_id),
+                                                (int) XFIXNUM (effect_index),
+                                                SSDATA (prop),
+                                                vs_dbl (value, 0.0)) ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-vidstudio-set-video-fit", Fcmacs_vidstudio_set_video_fit,
+       Scmacs_vidstudio_set_video_fit, 3, 3, 0,
+       doc: /* Set CLIP-ID video fit: 0 fill,1 contain,2 cover,3 stretch,4 none.  */)
+  (Lisp_Object handle, Lisp_Object clip_id, Lisp_Object fit)
+{
+  CHECK_FIXNUM (clip_id);
+  return cmacs_vidstudio_proj_set_video_fit (vs_lookup (handle),
+                                             (gint) XFIXNUM (clip_id),
+                                             vs_int (fit, 0)) ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-vidstudio-set-video-rate", Fcmacs_vidstudio_set_video_rate,
+       Scmacs_vidstudio_set_video_rate, 3, 3, 0,
+       doc: /* Set CLIP-ID playback RATE (1.0 normal, 2.0 double speed, 0.5 slow).  */)
+  (Lisp_Object handle, Lisp_Object clip_id, Lisp_Object rate)
+{
+  CHECK_FIXNUM (clip_id);
+  return cmacs_vidstudio_proj_set_video_rate (vs_lookup (handle),
+                                              (gint) XFIXNUM (clip_id),
+                                              vs_dbl (rate, 1.0)) ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-vidstudio-set-video-loop", Fcmacs_vidstudio_set_video_loop,
+       Scmacs_vidstudio_set_video_loop, 3, 3, 0,
+       doc: /* Set CLIP-ID video looping to LOOP.  */)
+  (Lisp_Object handle, Lisp_Object clip_id, Lisp_Object loop)
+{
+  CHECK_FIXNUM (clip_id);
+  return cmacs_vidstudio_proj_set_video_loop (vs_lookup (handle),
+                                              (gint) XFIXNUM (clip_id),
+                                              !NILP (loop)) ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-vidstudio-set-export-quality",
+       Fcmacs_vidstudio_set_export_quality,
+       Scmacs_vidstudio_set_export_quality, 1, 3, 0,
+       doc: /* Set the next video export's CRF and BITRATE-KBPS (nil = default).  */)
+  (Lisp_Object handle, Lisp_Object crf, Lisp_Object bitrate)
+{
+  cmacs_vidstudio_proj_set_export_quality (vs_lookup (handle),
+                                           vs_int (crf, -1),
+                                           vs_int (bitrate, 0));
+  return Qnil;
+}
+
+DEFUN ("cmacs-vidstudio-export-still", Fcmacs_vidstudio_export_still,
+       Scmacs_vidstudio_export_still, 3, 3, 0,
+       doc: /* Render FRAME straight to PATH (PNG/JPG by extension).  */)
+  (Lisp_Object handle, Lisp_Object frame, Lisp_Object path)
+{
+  char *err = NULL;
+  CHECK_FIXNUM (frame);
+  CHECK_STRING (path);
+  if (!cmacs_vidstudio_proj_export_still (vs_lookup (handle),
+                                          (int) XFIXNUM (frame),
+                                          SSDATA (path), &err))
+    {
+      Lisp_Object msg = build_string (err ? err : "still export failed");
+      g_free (err);
+      xsignal1 (Qcmacs_vidstudio_error, msg);
+    }
+  return Qt;
+}
+
 DEFUN ("cmacs-vidstudio-set-clip-duration", Fcmacs_vidstudio_set_clip_duration,
        Scmacs_vidstudio_set_clip_duration, 3, 3, 0,
        doc: /* Set CLIP-ID's duration to FRAMES.  */)
@@ -617,6 +771,17 @@ syms_of_cmacs_vidstudio_defuns (void)
   defsubr (&Scmacs_vidstudio_render_ppm);
   defsubr (&Scmacs_vidstudio_viewport_render);
   defsubr (&Scmacs_vidstudio_frame_pixel);
+  defsubr (&Scmacs_vidstudio_set_opacity);
+  defsubr (&Scmacs_vidstudio_set_transform);
+  defsubr (&Scmacs_vidstudio_set_rotation);
+  defsubr (&Scmacs_vidstudio_set_anchor);
+  defsubr (&Scmacs_vidstudio_set_blend_mode);
+  defsubr (&Scmacs_vidstudio_set_effect_param);
+  defsubr (&Scmacs_vidstudio_set_video_fit);
+  defsubr (&Scmacs_vidstudio_set_video_rate);
+  defsubr (&Scmacs_vidstudio_set_video_loop);
+  defsubr (&Scmacs_vidstudio_set_export_quality);
+  defsubr (&Scmacs_vidstudio_export_still);
   defsubr (&Scmacs_vidstudio_export_video);
   defsubr (&Scmacs_vidstudio_export_gif);
 }

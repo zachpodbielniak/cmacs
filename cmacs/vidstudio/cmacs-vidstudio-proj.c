@@ -38,7 +38,12 @@ struct CmacsVidProject
   guint      next_id;
   LrgReel   *reel;              /* rebuilt lazily from the tracks */
   gboolean   dirty;
+  int        export_crf;        /* video CRF quality; <0 = exporter default */
+  int        export_bitrate;    /* video bitrate kbps; <=0 = unset */
 };
+
+/* Forward decls (definitions appear later in the file). */
+static void proj_rebuild (CmacsVidProject *p);
 
 static void
 vidseg_clear (gpointer p)
@@ -78,6 +83,8 @@ cmacs_vidstudio_proj_new (int w, int h, double fps)
   p->fps = fps;
   p->tracks = g_ptr_array_new_with_free_func (track_free);
   p->next_id = 0;
+  p->export_crf = -1;
+  p->export_bitrate = 0;
   p->reel = NULL;
   p->dirty = TRUE;
   /* Start with one track. */
@@ -404,6 +411,158 @@ cmacs_vidstudio_proj_clear_effects (CmacsVidProject *p, gint clip_id)
   lrg_reel_clip_clear_effects (g_array_index (t->segs, VidSeg, si).clip);
   p->dirty = TRUE;
   return TRUE;
+}
+
+/* ── Per-clip transform / opacity / blend / effect params ──────────────── */
+
+/* The LrgReelClip for CLIP_ID, or NULL. */
+static LrgReelClip *
+seg_clip (CmacsVidProject *p, gint clip_id)
+{
+  VidTrack *t = NULL;
+  guint si = 0;
+  if (!find_seg (p, clip_id, &t, &si))
+    return NULL;
+  return g_array_index (t->segs, VidSeg, si).clip;
+}
+
+gboolean
+cmacs_vidstudio_proj_set_opacity (CmacsVidProject *p, gint clip_id, double o)
+{
+  LrgReelClip *c = seg_clip (p, clip_id);
+  if (c == NULL) return FALSE;
+  lrg_reel_clip_set_opacity (c, o);
+  p->dirty = TRUE;
+  return TRUE;
+}
+
+gboolean
+cmacs_vidstudio_proj_set_transform (CmacsVidProject *p, gint clip_id,
+                                    double x, double y, double sx, double sy,
+                                    double rot)
+{
+  LrgReelClip *c = seg_clip (p, clip_id);
+  if (c == NULL) return FALSE;
+  lrg_reel_clip_set_transform (c, x, y, sx, sy, rot);
+  p->dirty = TRUE;
+  return TRUE;
+}
+
+gboolean
+cmacs_vidstudio_proj_set_anchor (CmacsVidProject *p, gint clip_id,
+                                 double ax, double ay)
+{
+  LrgReelClip *c = seg_clip (p, clip_id);
+  if (c == NULL) return FALSE;
+  lrg_reel_clip_set_anchor (c, ax, ay);
+  p->dirty = TRUE;
+  return TRUE;
+}
+
+gboolean
+cmacs_vidstudio_proj_set_blend_mode (CmacsVidProject *p, gint clip_id,
+                                     int mode)
+{
+  LrgReelClip *c = seg_clip (p, clip_id);
+  if (c == NULL) return FALSE;
+  lrg_reel_clip_set_blend_mode (c, (LrgReelBlendMode) mode);
+  p->dirty = TRUE;
+  return TRUE;
+}
+
+/* Set a numeric property PROP of effect EFFECT_INDEX on CLIP_ID to VALUE.
+   The value is transformed into the property's actual type (int/float/double),
+   so callers pass a double regardless of the pspec type. */
+gboolean
+cmacs_vidstudio_proj_set_effect_param (CmacsVidProject *p, gint clip_id,
+                                       int effect_index, const char *prop,
+                                       double value)
+{
+  LrgReelClip *c = seg_clip (p, clip_id);
+  LrgReelEffect *fx;
+  GParamSpec *pspec;
+  GValue val = G_VALUE_INIT, dval = G_VALUE_INIT;
+
+  if (c == NULL || prop == NULL)
+    return FALSE;
+  fx = lrg_reel_clip_get_effect (c, (guint) effect_index);
+  if (fx == NULL)
+    return FALSE;
+  pspec = g_object_class_find_property (G_OBJECT_GET_CLASS (fx), prop);
+  if (pspec == NULL)
+    return FALSE;
+  g_value_init (&val, G_PARAM_SPEC_VALUE_TYPE (pspec));
+  g_value_init (&dval, G_TYPE_DOUBLE);
+  g_value_set_double (&dval, value);
+  if (g_value_transform (&dval, &val))
+    g_object_set_property (G_OBJECT (fx), prop, &val);
+  g_value_unset (&val);
+  g_value_unset (&dval);
+  p->dirty = TRUE;
+  return TRUE;
+}
+
+/* ── Video-clip controls: fit, playback rate, loop ─────────────────────── */
+
+gboolean
+cmacs_vidstudio_proj_set_video_fit (CmacsVidProject *p, gint clip_id, int fit)
+{
+  LrgReelClip *c = seg_clip (p, clip_id);
+  if (c == NULL || !LRG_IS_REEL_VIDEO_CLIP (c)) return FALSE;
+  lrg_reel_video_clip_set_fit (LRG_REEL_VIDEO_CLIP (c), (LrgReelFit) fit);
+  p->dirty = TRUE;
+  return TRUE;
+}
+
+gboolean
+cmacs_vidstudio_proj_set_video_rate (CmacsVidProject *p, gint clip_id,
+                                     double rate)
+{
+  LrgReelClip *c = seg_clip (p, clip_id);
+  if (c == NULL || !LRG_IS_REEL_VIDEO_CLIP (c)) return FALSE;
+  lrg_reel_video_clip_set_playback_rate (LRG_REEL_VIDEO_CLIP (c), rate);
+  p->dirty = TRUE;
+  return TRUE;
+}
+
+gboolean
+cmacs_vidstudio_proj_set_video_loop (CmacsVidProject *p, gint clip_id,
+                                     gboolean loop)
+{
+  LrgReelClip *c = seg_clip (p, clip_id);
+  if (c == NULL || !LRG_IS_REEL_VIDEO_CLIP (c)) return FALSE;
+  lrg_reel_video_clip_set_loop (LRG_REEL_VIDEO_CLIP (c), loop);
+  p->dirty = TRUE;
+  return TRUE;
+}
+
+/* Render a single FRAME straight to PATH (PNG/JPG by extension). */
+gboolean
+cmacs_vidstudio_proj_export_still (CmacsVidProject *p, int frame,
+                                   const char *path, char **error_msg)
+{
+  LrgReelRenderer *r;
+  g_autoptr (GError) err = NULL;
+  gboolean ok;
+
+  if (p == NULL || path == NULL)
+    return FALSE;
+  proj_rebuild (p);
+  r = lrg_reel_renderer_new (p->reel);
+  ok = lrg_reel_renderer_render_still (r, frame, path, &err);
+  g_object_unref (r);
+  if (!ok && error_msg)
+    *error_msg = g_strdup (err ? err->message : "still export failed");
+  return ok;
+}
+
+void
+cmacs_vidstudio_proj_set_export_quality (CmacsVidProject *p, int crf,
+                                         int bitrate_kbps)
+{
+  if (p == NULL) return;
+  p->export_crf = crf;           /* <0 keeps the exporter default */
+  p->export_bitrate = bitrate_kbps;
 }
 
 gboolean
@@ -796,6 +955,10 @@ cmacs_vidstudio_proj_export_video (CmacsVidProject *p, const char *path,
   proj_rebuild (p);
   r = lrg_reel_renderer_new (p->reel);
   ex = lrg_reel_video_exporter_new (path, c);
+  if (p->export_crf >= 0)
+    lrg_reel_video_exporter_set_crf (ex, p->export_crf);
+  if (p->export_bitrate > 0)
+    lrg_reel_video_exporter_set_bitrate (ex, p->export_bitrate);
   ok = lrg_reel_renderer_render_to_exporter (r, LRG_REEL_EXPORTER (ex), &err);
   if (!ok && error_msg)
     *error_msg = g_strdup (err ? err->message : "export failed");

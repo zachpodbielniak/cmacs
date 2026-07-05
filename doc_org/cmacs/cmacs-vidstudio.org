@@ -145,6 +145,23 @@ Durations and the playhead are in *frames*.
   7 push, 8 clock-wipe.  OVERLAP in frames.
 - ~(cmacs-vidstudio-add-effect HANDLE CLIP-ID TYPE)~ — 0 blur, 1 bloom,
   2 color-grade, 3 vignette, 4 grain.  ~(cmacs-vidstudio-clear-effects ...)~.
+- ~(cmacs-vidstudio-set-effect-param HANDLE CLIP-ID EFFECT-INDEX (PROP . VALUE))~
+  sets a numeric effect property (e.g. blur ~radius~, color-grade
+  ~brightness~/~contrast~/~saturation~, vignette ~intensity~, grain ~amount~).
+  Right-click → *Clip → Effect parameter…* picks a common one interactively.
+  (Needed a small ~lrg_reel_clip_get_effect~ accessor added to libregnum.)
+
+** Per-clip transform & compositing
+- ~(cmacs-vidstudio-set-opacity HANDLE CLIP-ID O)~ (0..1),
+  ~(cmacs-vidstudio-set-transform HANDLE CLIP-ID X Y SX SY)~,
+  ~(cmacs-vidstudio-set-rotation ... ROT)~ (radians),
+  ~(cmacs-vidstudio-set-anchor ... AX AY)~,
+  ~(cmacs-vidstudio-set-blend-mode HANDLE CLIP-ID MODE)~ — 0 normal, 1 multiply,
+  2 screen, 3 overlay, 4 soft-light, 5 add, 6 color-dodge, 7 color-burn
+  (tracks composite in z-order; higher tracks over lower).
+- Video-clip controls: ~(cmacs-vidstudio-set-video-rate HANDLE CLIP-ID RATE)~
+  (speed; 2.0 fast, 0.5 slow-mo), ~-set-video-fit~ (0 fill, 1 contain, 2 cover,
+  3 stretch, 4 none), ~-set-video-loop~.  These return nil on non-video clips.
 
 ** Editing
 - ~(cmacs-vidstudio-set-clip-duration HANDLE CLIP-ID FRAMES)~.
@@ -154,6 +171,10 @@ Durations and the playhead are in *frames*.
 - Queries: ~clip-at~, ~clip-duration~, ~clip-start-frame~.
 
 ** Preview / export
+- ~(cmacs-vidstudio-export-still HANDLE FRAME PATH)~ writes one frame to a PNG/
+  JPG; ~(cmacs-vidstudio-set-export-quality HANDLE CRF BITRATE-KBPS)~ tunes the
+  next video export (lower CRF = better quality).  Right-click → *Export* has
+  Still frame + Quality entries.
 - ~(cmacs-vidstudio-render-png HANDLE FRAME)~ → unibyte PNG string.
 - ~(cmacs-vidstudio-render-ppm HANDLE FRAME &optional MAX-WIDTH)~ → unibyte
   binary-PPM (P6) string, downscaled to MAX-WIDTH.  Uncompressed → ~5x

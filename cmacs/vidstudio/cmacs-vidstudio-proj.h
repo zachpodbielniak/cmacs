@@ -153,5 +153,40 @@ extern gboolean cmacs_vidstudio_proj_export_gif (CmacsVidProject *p,
    as void* (raylib-free DEFUN layer).  Caller passes it to the render ctx. */
 extern void *cmacs_vidstudio_proj_canvas_image (CmacsVidProject *p, int frame);
 
+/* Per-clip transform / opacity / blend / effect params. */
+extern gboolean cmacs_vidstudio_proj_set_opacity (CmacsVidProject *p,
+                                                  gint clip_id, double o);
+extern gboolean cmacs_vidstudio_proj_set_transform (CmacsVidProject *p,
+                                                    gint clip_id, double x,
+                                                    double y, double sx,
+                                                    double sy, double rot);
+extern gboolean cmacs_vidstudio_proj_set_anchor (CmacsVidProject *p,
+                                                 gint clip_id, double ax,
+                                                 double ay);
+/* Blend mode == LrgReelBlendMode: 0 normal,1 multiply,2 screen,3 overlay,
+   4 soft-light,5 add,6 color-dodge,7 color-burn. */
+extern gboolean cmacs_vidstudio_proj_set_blend_mode (CmacsVidProject *p,
+                                                     gint clip_id, int mode);
+extern gboolean cmacs_vidstudio_proj_set_effect_param (CmacsVidProject *p,
+                                                       gint clip_id,
+                                                       int effect_index,
+                                                       const char *prop,
+                                                       double value);
+/* Video-clip controls (no-op / FALSE on non-video clips). */
+extern gboolean cmacs_vidstudio_proj_set_video_fit (CmacsVidProject *p,
+                                                    gint clip_id, int fit);
+extern gboolean cmacs_vidstudio_proj_set_video_rate (CmacsVidProject *p,
+                                                     gint clip_id, double rate);
+extern gboolean cmacs_vidstudio_proj_set_video_loop (CmacsVidProject *p,
+                                                     gint clip_id,
+                                                     gboolean loop);
+/* Export quality (applied to the next video export). */
+extern void cmacs_vidstudio_proj_set_export_quality (CmacsVidProject *p,
+                                                     int crf, int bitrate_kbps);
+/* Render one FRAME straight to PATH (PNG/JPG by extension). */
+extern gboolean cmacs_vidstudio_proj_export_still (CmacsVidProject *p,
+                                                   int frame, const char *path,
+                                                   char **error_msg);
+
 #endif /* HAVE_CMACS_VIDSTUDIO */
 #endif /* CMACS_VIDSTUDIO_PROJ_H */

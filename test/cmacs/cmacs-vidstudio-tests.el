@@ -221,5 +221,39 @@ flips once the decode lands and real frames replace the placeholder."
             (should (= (cmacs-vidstudio-clip-duration p id) 60))))
       (delete-file v))))
 
+;; ── Per-clip transform / effect / export setters ───────────────────────
+
+(ert-deftest cmacs-vidstudio-tests-clip-setters ()
+  "Opacity, transform, blend, effect-param, and video-only guards."
+  (cmacs-vidstudio-tests--skip-unless)
+  (cmacs-vidstudio-tests--with-proj p 64 48 30.0
+    (let ((id (cmacs-vidstudio-add-solid-clip p 0 30 200 40 40 255)))
+      (should (cmacs-vidstudio-set-opacity p id 0.5))
+      (should (cmacs-vidstudio-set-transform p id 5 5 2.0 2.0))
+      (should (cmacs-vidstudio-set-rotation p id 0.5))
+      (should (cmacs-vidstudio-set-anchor p id 0.0 0.0))
+      (should (cmacs-vidstudio-set-blend-mode p id 5))
+      ;; video-only setters return nil on a solid clip
+      (should (null (cmacs-vidstudio-set-video-rate p id 2.0)))
+      (should (null (cmacs-vidstudio-set-video-fit p id 2)))
+      ;; effect param after adding an effect
+      (cmacs-vidstudio-add-effect p id 0)         ; blur, index 0
+      (should (cmacs-vidstudio-set-effect-param p id 0 (cons "radius" 8.0)))
+      ;; bad effect index -> nil
+      (should (null (cmacs-vidstudio-set-effect-param p id 9
+                                                      (cons "radius" 1.0)))))))
+
+(ert-deftest cmacs-vidstudio-tests-export-still ()
+  "A still export writes a decodable image file."
+  (cmacs-vidstudio-tests--skip-unless)
+  (cmacs-vidstudio-tests--with-proj p 32 24 30.0
+    (cmacs-vidstudio-add-solid-clip p 0 10 10 200 50 255)
+    (let ((png (make-temp-file "cmvs-still" nil ".png")))
+      (unwind-protect
+          (progn
+            (cmacs-vidstudio-export-still p 0 png)
+            (should (> (file-attribute-size (file-attributes png)) 0)))
+        (delete-file png)))))
+
 (provide 'cmacs-vidstudio-tests)
 ;;; cmacs-vidstudio-tests.el ends here

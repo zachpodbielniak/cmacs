@@ -217,6 +217,103 @@ placeholder meanwhile), so import returns instantly."
   (and (stringp str) (not (string-empty-p (string-trim str)))
        (string-to-number str)))
 
+;; ── Per-clip transform / effect / export commands ──────────────────────
+
+(defun cmacs-vidstudio--clip-at-playhead ()
+  "Clip id at the playhead on the active track, or nil."
+  (let ((n (cmacs-vidstudio-track-clip-count cmacs-vidstudio--handle
+                                             cmacs-vidstudio--active-track)))
+    (catch 'hit
+      (dotimes (i n)
+        (let* ((id (cmacs-vidstudio-clip-at cmacs-vidstudio--handle
+                                            cmacs-vidstudio--active-track i))
+               (s (cmacs-vidstudio-clip-start-frame cmacs-vidstudio--handle id))
+               (d (cmacs-vidstudio-clip-duration cmacs-vidstudio--handle id)))
+          (when (and (>= cmacs-vidstudio--playhead s)
+                     (< cmacs-vidstudio--playhead (+ s d)))
+            (throw 'hit id))))
+      nil)))
+
+(defun cmacs-vidstudio--read-clip ()
+  "Read a clip id, defaulting to the clip under the playhead."
+  (let ((def (cmacs-vidstudio--clip-at-playhead)))
+    (read-number "Clip id: " (or def 0))))
+
+(defun cmacs-vidstudio-set-clip-opacity (clip o)
+  "Set CLIP's opacity to O (0..1)."
+  (interactive (list (cmacs-vidstudio--read-clip)
+                     (read-number "Opacity (0..1): " 1.0)))
+  (cmacs-vidstudio-set-opacity cmacs-vidstudio--handle clip o)
+  (cmacs-vidstudio--render))
+
+(defconst cmacs-vidstudio--blend-alist
+  '(("normal" . 0) ("multiply" . 1) ("screen" . 2) ("overlay" . 3)
+    ("soft-light" . 4) ("add" . 5) ("color-dodge" . 6) ("color-burn" . 7)))
+
+(defun cmacs-vidstudio-set-clip-blend (clip mode)
+  "Set CLIP's blend MODE (completing-read)."
+  (interactive
+   (list (cmacs-vidstudio--read-clip)
+         (cdr (assoc (completing-read "Blend: " cmacs-vidstudio--blend-alist
+                                      nil t)
+                     cmacs-vidstudio--blend-alist))))
+  (cmacs-vidstudio-set-blend-mode cmacs-vidstudio--handle clip mode)
+  (cmacs-vidstudio--render))
+
+(defun cmacs-vidstudio-set-clip-transform (clip x y scale)
+  "Position CLIP at (X Y) with uniform SCALE."
+  (interactive (list (cmacs-vidstudio--read-clip)
+                     (read-number "X offset: " 0)
+                     (read-number "Y offset: " 0)
+                     (read-number "Scale: " 1.0)))
+  (cmacs-vidstudio-set-transform cmacs-vidstudio--handle clip x y scale scale)
+  (cmacs-vidstudio--render))
+
+(defun cmacs-vidstudio-set-clip-speed (clip rate)
+  "Set video CLIP's playback RATE (2.0 = double speed, 0.5 = slow-mo)."
+  (interactive (list (cmacs-vidstudio--read-clip)
+                     (read-number "Playback rate: " 1.0)))
+  (unless (cmacs-vidstudio-set-video-rate cmacs-vidstudio--handle clip rate)
+    (message "Clip %d is not a video clip" clip))
+  (cmacs-vidstudio--render))
+
+(defconst cmacs-vidstudio--effect-param-alist
+  '(("blur radius" 0 . "radius")
+    ("grade brightness" 2 . "brightness")
+    ("grade contrast" 2 . "contrast")
+    ("grade saturation" 2 . "saturation")
+    ("vignette intensity" 3 . "intensity")
+    ("grain amount" 4 . "amount"))
+  "Human name -> (EFFECT-INDEX . PROP) for common effect parameters.")
+
+(defun cmacs-vidstudio-set-effect-parameter (clip name value)
+  "Set effect parameter NAME on CLIP to VALUE."
+  (interactive
+   (let* ((k (completing-read "Effect param: "
+                              cmacs-vidstudio--effect-param-alist nil t))
+          (e (cdr (assoc k cmacs-vidstudio--effect-param-alist))))
+     (list (cmacs-vidstudio--read-clip) k
+           (read-number (format "%s value: " k) 1.0))))
+  (let ((e (cdr (assoc name cmacs-vidstudio--effect-param-alist))))
+    (when e
+      (cmacs-vidstudio-set-effect-param cmacs-vidstudio--handle clip (car e)
+                                        (cons (cdr e) value))
+      (cmacs-vidstudio--render))))
+
+(defun cmacs-vidstudio-export-still-cmd (path)
+  "Export the playhead frame to PATH (PNG/JPG)."
+  (interactive (list (read-file-name "Export still to: " nil "still.png")))
+  (cmacs-vidstudio-export-still cmacs-vidstudio--handle
+                                cmacs-vidstudio--playhead
+                                (expand-file-name path))
+  (message "Wrote %s" path))
+
+(defun cmacs-vidstudio-set-export-quality-cmd (crf)
+  "Set the next export's CRF quality (lower = better, 18-28 typical)."
+  (interactive (list (read-number "CRF (18 best..28): " 23)))
+  (cmacs-vidstudio-set-export-quality cmacs-vidstudio--handle crf nil)
+  (message "Export CRF set to %d" crf))
+
 (defun cmacs-vidstudio-import (file &optional in-str out-str seconds)
   "Import FILE (image or video) onto the active track.
 For a video, IN-STR/OUT-STR are the source in/out points in seconds (blank
@@ -420,6 +517,11 @@ silently updates.  Starting play at the end of the timeline rewinds."
             ("Clip"
              ("Transition…" . cmacs-vidstudio-add-transition-cmd)
              ("Effect…" . cmacs-vidstudio-add-effect-cmd)
+             ("Effect parameter…" . cmacs-vidstudio-set-effect-parameter)
+             ("Opacity…" . cmacs-vidstudio-set-clip-opacity)
+             ("Blend mode…" . cmacs-vidstudio-set-clip-blend)
+             ("Transform (pos/scale)…" . cmacs-vidstudio-set-clip-transform)
+             ("Playback speed…" . cmacs-vidstudio-set-clip-speed)
              ("Split at playhead…" . cmacs-vidstudio-split-at-playhead)
              ("Active track…" . cmacs-vidstudio-set-active-track))
             ("Transport"
@@ -429,7 +531,9 @@ silently updates.  Starting play at the end of the timeline rewinds."
              ("Go to frame…" . cmacs-vidstudio-set-playhead-cmd))
             ("Export"
              ("Video (MP4)…" . cmacs-vidstudio-export-video-cmd)
-             ("Animated GIF…" . cmacs-vidstudio-export-gif-cmd))))
+             ("Animated GIF…" . cmacs-vidstudio-export-gif-cmd)
+             ("Still frame…" . cmacs-vidstudio-export-still-cmd)
+             ("Quality (CRF)…" . cmacs-vidstudio-set-export-quality-cmd))))
 
 (defun cmacs-vidstudio-context-menu (event)
   "Pop the video-editor context menu for mouse EVENT (native path).
