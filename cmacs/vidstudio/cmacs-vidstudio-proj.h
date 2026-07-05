@@ -93,8 +93,9 @@ extern gint cmacs_vidstudio_proj_add_caption (CmacsVidProject *p, guint track,
                                               char **error_msg);
 extern gint cmacs_vidstudio_proj_add_rich_text_clip (CmacsVidProject *p,
                                                     guint track,
-                                                    const char *markup,
+                                                    const char *text,
                                                     int duration, int font_size,
+                                                    int effect_type,
                                                     guint8 r, guint8 g, guint8 b,
                                                     guint8 a);
 extern gint cmacs_vidstudio_proj_add_loop_clip (CmacsVidProject *p,

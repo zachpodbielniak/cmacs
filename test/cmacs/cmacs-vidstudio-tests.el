@@ -364,17 +364,31 @@ flips once the decode lands and real frames replace the placeholder."
       (delete-file mp4))))
 
 (ert-deftest cmacs-vidstudio-tests-rich-text-clip ()
-  "An animated rich-text clip adds to the timeline and renders a frame."
+  "An animated text clip rasterises glyphs; effects animate per character."
   (cmacs-vidstudio-tests--skip-unless)
-  (cmacs-vidstudio-tests--with-proj p 128 48 30.0
-    (let ((id (cmacs-vidstudio-add-rich-text
-               p 0 "[wave]Hi[/wave] [rainbow]there[/rainbow]" 30 24)))
-      (should (>= id 0))
-      (should (= (cmacs-vidstudio-track-clip-count p 0) 1))
-      (should (= (cmacs-vidstudio-total-frames p) 30))
-      ;; renders without erroring (glyphs need GL; pixel may be blank headless)
-      (should (cmacs-vidstudio-frame-pixel p 0 5 24)))))
-
+  (cl-flet ((glyphs (h fr w ht)
+              (let ((n 0) (colored 0))
+                (dotimes (y ht)
+                  (dotimes (x w)
+                    (let ((px (cmacs-vidstudio-frame-pixel h fr x y)))
+                      (when (and px (> (nth 3 px) 0))
+                        (setq n (1+ n))
+                        (when (> (abs (- (nth 0 px) (nth 2 px))) 40)
+                          (setq colored (1+ colored)))))))
+                (cons n colored))))
+    ;; rainbow: glyphs render AND get per-character colours
+    (cmacs-vidstudio-tests--with-proj p 200 60 30.0
+      (cmacs-vidstudio-add-rich-text p 0 "HELLO WORLD" 30 28 3
+                                     '(255 255 255 255))
+      (let ((g (glyphs p 5 200 60)))
+        (should (> (car g) 0))
+        (should (> (cdr g) 0))))       ; rainbow colours present
+    ;; typewriter reveals more glyphs at a later frame than at frame 0
+    (cmacs-vidstudio-tests--with-proj p 200 60 30.0
+      (cmacs-vidstudio-add-rich-text p 0 "HELLO WORLD" 60 28 4
+                                     '(255 255 255 255))
+      (should (< (car (glyphs p 0 200 60))
+                 (car (glyphs p 40 200 60)))))))
 (ert-deftest cmacs-vidstudio-tests-extracted-audio-serialize ()
   "Clip-extracted audio serializes (via the video path) and round-trips."
   (cmacs-vidstudio-tests--skip-unless)

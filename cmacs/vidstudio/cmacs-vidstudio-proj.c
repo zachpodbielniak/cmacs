@@ -417,13 +417,20 @@ cmacs_vidstudio_proj_add_caption (CmacsVidProject *p, guint track, int duration,
   return append_clip (p, track, LRG_REEL_CLIP (c), duration);
 }
 
-/* Animated rich-text clip: a functional LrgReelClip whose per-frame render
-   callback advances the BBCode text's effects ([wave]/[rainbow]/[typewriter]/
-   [shake]) to the clip-relative time and draws it onto the canvas. */
+/* Animated text clip: a functional LrgReelClip whose per-frame render callback
+   rasterises TEXT character-by-character onto the CPU canvas image (so it
+   renders identically in preview, export and the live viewport), applying an
+   LrgTextEffect (typewriter reveal / wave / rainbow / shake / fade / pulse)
+   per character.  Drawing via the built-in bitmap font needs no GL context and
+   no font object -- unlike lrg_rich_text_draw, which is immediate-mode GL and
+   is lost in the CPU reel pipeline. */
 typedef struct
 {
-  LrgRichText *text;
-  gfloat       x, y;
+  char          *text;          /* owned plain UTF-8 string */
+  LrgTextEffect *effect;        /* owned, or NULL for no animation */
+  int            font_size;
+  GrlColor       color;
+  gfloat         x, y;
 } CmacsVidAnimText;
 
 static void
@@ -431,42 +438,83 @@ animtext_render (LrgReelClip *clip, LrgReelContext *ctx,
                  LrgImageCanvas *canvas, gpointer user_data)
 {
   CmacsVidAnimText *a = user_data;
+  GrlImage *img = canvas ? lrg_image_canvas_get_image (canvas) : NULL;
   gint frame = lrg_reel_context_get_frame (ctx);
   gdouble fps = lrg_reel_context_get_fps (ctx);
-  (void) clip; (void) canvas;
-  /* Reset + update to the absolute clip time so seeking is deterministic. */
-  lrg_rich_text_reset_effects (a->text);
-  lrg_rich_text_update (a->text, fps > 0.0 ? (gfloat) (frame / fps) : 0.0f);
-  lrg_rich_text_draw (a->text, a->x, a->y);
+  const char *p;
+  guint idx = 0;
+  gfloat penx;
+  (void) clip;
+
+  if (img == NULL || a->text == NULL)
+    return;
+  penx = a->x;
+  /* Reset + advance to the absolute clip time so seeking is deterministic. */
+  if (a->effect != NULL)
+    {
+      lrg_text_effect_reset (a->effect);
+      lrg_text_effect_update (a->effect,
+                              fps > 0.0 ? (gfloat) (frame / fps) : 0.0f);
+    }
+  for (p = a->text; *p != '\0'; p = g_utf8_next_char (p), idx++)
+    {
+      gunichar uc = g_utf8_get_char (p);
+      char ch[8];
+      gint clen = g_unichar_to_utf8 (uc, ch);
+      gfloat ox = 0.0f, oy = 0.0f;
+      guint8 r = a->color.r, g = a->color.g, b = a->color.b, al = a->color.a;
+      g_autoptr (GrlVector2) m = NULL;
+      ch[clen] = '\0';
+      m = grl_image_measure_text_bitmap (ch, a->font_size);
+      if (a->effect != NULL)
+        lrg_text_effect_apply (a->effect, idx, &ox, &oy, &r, &g, &b, &al);
+      if (al > 0)                       /* typewriter hides chars via alpha 0 */
+        {
+          GrlColor col;
+          col.r = r; col.g = g; col.b = b; col.a = al;
+          grl_image_draw_text_bitmap (img, ch, (gint) (penx + ox),
+                                      (gint) (a->y + oy), a->font_size, &col);
+        }
+      penx += (m != NULL) ? grl_vector2_get_x (m) : (gfloat) a->font_size;
+    }
 }
 
 static void
 animtext_free (gpointer user_data)
 {
   CmacsVidAnimText *a = user_data;
-  g_clear_object (&a->text);
+  g_free (a->text);
+  g_clear_object (&a->effect);
   g_free (a);
 }
 
+/* EFFECT_TYPE is an LrgTextEffectType (0 none, 1 shake, 2 wave, 3 rainbow,
+   4 typewriter, 5 fade-in, 6 pulse). */
 gint
 cmacs_vidstudio_proj_add_rich_text_clip (CmacsVidProject *p, guint track,
-                                         const char *markup, int duration,
-                                         int font_size, guint8 r, guint8 g,
-                                         guint8 b, guint8 a)
+                                         const char *text, int duration,
+                                         int font_size, int effect_type,
+                                         guint8 r, guint8 g, guint8 b, guint8 a)
 {
   CmacsVidAnimText *at = g_new0 (CmacsVidAnimText, 1);
   LrgReelClip *clip;
   gint id;
+  long nchars;
 
-  at->text = lrg_rich_text_new_from_markup (markup ? markup : "");
-  if (font_size > 0)
-    lrg_rich_text_set_font_size (at->text, (gfloat) font_size);
-  lrg_rich_text_set_default_color (at->text, r, g, b, a);
+  at->text = g_strdup (text ? text : "");
+  at->font_size = font_size > 0 ? font_size : 32;
+  at->color.r = r; at->color.g = g; at->color.b = b; at->color.a = a;
   at->x = 20.0f;
-  at->y = (gfloat) (p->height / 2);
+  at->y = (gfloat) (p->height / 2 - at->font_size / 2);
+  if (effect_type > 0)
+    {
+      at->effect = lrg_text_effect_new ((LrgTextEffectType) effect_type);
+      nchars = g_utf8_strlen (at->text, -1);
+      lrg_text_effect_set_char_count (at->effect, (guint) MAX (1, nchars));
+    }
   clip = lrg_reel_clip_new_with_func (animtext_render, at, animtext_free);
   id = append_clip (p, track, clip, duration);
-  seg_meta (p, id, CMACS_VID_KIND_TEXT, markup, r, g, b, a, 0, 0);
+  seg_meta (p, id, CMACS_VID_KIND_TEXT, text, r, g, b, a, 0, 0);
   return id;
 }
 

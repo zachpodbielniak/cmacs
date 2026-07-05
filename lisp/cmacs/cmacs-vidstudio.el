@@ -913,17 +913,24 @@ silently updates.  Starting play at the end of the timeline rewinds."
                                    freeze-at)
   (cmacs-vidstudio--render))
 
-(defun cmacs-vidstudio-add-animated-text (markup seconds font-size)
-  "Add an animated rich-text clip from BBCODE MARKUP.
-Markup supports [b]/[i]/[color=..]/[size=..] plus the animated effects
-[wave]/[rainbow]/[typewriter speed=N]/[shake]."
-  (interactive (list (read-string "BBCode markup: " "[wave]Hello[/wave]")
-                     (read-number "Seconds: " 3.0)
-                     (read-number "Font size: " 32)))
+(defconst cmacs-vidstudio-text-effect-alist
+  '(("none" . 0) ("shake" . 1) ("wave" . 2) ("rainbow" . 3)
+    ("typewriter" . 4) ("fade-in" . 5) ("pulse" . 6))
+  "Per-character text-effect names -> LrgTextEffectType codes.")
+
+(defun cmacs-vidstudio-add-animated-text (text seconds font-size effect)
+  "Add an animated text clip: TEXT with a per-character EFFECT."
+  (interactive
+   (list (read-string "Text: " "Hello")
+         (read-number "Seconds: " 3.0)
+         (read-number "Font size: " 32)
+         (cdr (assoc (completing-read "Effect: "
+                                      cmacs-vidstudio-text-effect-alist nil t "wave")
+                     cmacs-vidstudio-text-effect-alist))))
   (cmacs-vidstudio-add-rich-text cmacs-vidstudio--handle
-                                 cmacs-vidstudio--active-track markup
+                                 cmacs-vidstudio--active-track text
                                  (cmacs-vidstudio--secs-to-frames seconds)
-                                 font-size)
+                                 font-size (or effect 0))
   (cmacs-vidstudio--render))
 
 (defun cmacs-vidstudio--menu ()

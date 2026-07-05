@@ -210,25 +210,25 @@ DEFUN ("cmacs-vidstudio-add-solid-clip", Fcmacs_vidstudio_add_solid_clip,
 }
 
 DEFUN ("cmacs-vidstudio-add-rich-text", Fcmacs_vidstudio_add_rich_text,
-       Scmacs_vidstudio_add_rich_text, 4, 6, 0,
-       doc: /* Append an animated rich-text clip from BBCODE markup on TRACK for
-DURATION frames.  Markup supports [b]/[i]/[color=..]/[size=..] and the animated
-[wave]/[rainbow]/[typewriter]/[shake] effects.  Optional FONT-SIZE and
-COLOR = (R G B A).  */)
-  (Lisp_Object handle, Lisp_Object track, Lisp_Object bbcode,
-   Lisp_Object duration, Lisp_Object font_size, Lisp_Object color)
+       Scmacs_vidstudio_add_rich_text, 4, 7, 0,
+       doc: /* Append an animated text clip TEXT on TRACK for DURATION frames.
+Optional FONT-SIZE, EFFECT (0 none, 1 shake, 2 wave, 3 rainbow, 4 typewriter,
+5 fade-in, 6 pulse), and COLOR = (R G B A).  The effect animates per
+character.  */)
+  (Lisp_Object handle, Lisp_Object track, Lisp_Object text,
+   Lisp_Object duration, Lisp_Object font_size, Lisp_Object effect,
+   Lisp_Object color)
 {
   CHECK_FIXNUM (track);
-  CHECK_STRING (bbcode);
+  CHECK_STRING (text);
   return make_fixnum (cmacs_vidstudio_proj_add_rich_text_clip
-    (vs_lookup (handle), (guint) XFIXNUM (track), SSDATA (bbcode),
-     vs_int (duration, 0), vs_int (font_size, 0),
+    (vs_lookup (handle), (guint) XFIXNUM (track), SSDATA (text),
+     vs_int (duration, 0), vs_int (font_size, 0), vs_int (effect, 0),
      CONSP (color) ? vs_clamp8 (Fnth (make_fixnum (0), color)) : 255,
      CONSP (color) ? vs_clamp8 (Fnth (make_fixnum (1), color)) : 255,
      CONSP (color) ? vs_clamp8 (Fnth (make_fixnum (2), color)) : 255,
      CONSP (color) ? vs_clamp8 (Fnth (make_fixnum (3), color)) : 255));
 }
-
 DEFUN ("cmacs-vidstudio-add-loop-clip", Fcmacs_vidstudio_add_loop_clip,
        Scmacs_vidstudio_add_loop_clip, 4, 5, 0,
        doc: /* Loop video PATH on TRACK over DURATION frames, repeating every
