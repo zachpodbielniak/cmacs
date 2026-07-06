@@ -691,6 +691,8 @@ extern void     cmacs_libregnum_render_ctx_image_timeline_add_clip
                               (CmacsLibregnumRenderCtx *r, int id, int track,
                                int start, int dur, guint8 cr, guint8 cg,
                                guint8 cb);
+extern void     cmacs_libregnum_render_ctx_image_set_label_font
+                              (CmacsLibregnumRenderCtx *r, const char *path);
 extern gboolean cmacs_libregnum_render_ctx_image_timeline_hit
                               (CmacsLibregnumRenderCtx *r, double vx, double vy,
                                int vw, int vh, int *frame, int *clip_id,

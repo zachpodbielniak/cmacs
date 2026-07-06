@@ -118,6 +118,83 @@ Every playback frame is a distinct image, so without an explicit
               lines)))
     (string-join (nreverse lines) "\n")))
 
+;; --------------------------------------------------------------------------
+;; Clip-list side window (like imgedit's layers panel)
+;; --------------------------------------------------------------------------
+(defvar-local cmacs-vidstudio--clips-panel nil
+  "The clip-list side-window buffer for this project, or nil.")
+
+(defun cmacs-vidstudio--build-clips-panel (project-buf)
+  "Fill the current buffer with PROJECT-BUF's clip list (one line per clip).
+Each clip is a button that selects it (highlighting it on the timeline)."
+  (let ((inhibit-read-only t) handle sel active)
+    (when (buffer-live-p project-buf)
+      (with-current-buffer project-buf
+        (setq handle cmacs-vidstudio--handle
+              sel    cmacs-vidstudio--selected-clip
+              active cmacs-vidstudio--active-track)))
+    (erase-buffer)
+    (when handle
+      (insert (propertize " Clips\n" 'face 'bold))
+      (dotimes (tr (cmacs-vidstudio-n-tracks handle))
+        (insert (propertize (format " Track %d%s\n" tr
+                                    (if (= tr active) "  (active)" ""))
+                            'face 'font-lock-keyword-face))
+        (let ((nclips (cmacs-vidstudio-track-clip-count handle tr)))
+          (if (zerop nclips)
+              (insert "   (empty)\n")
+            (dotimes (ci nclips)
+              (let* ((id (cmacs-vidstudio-clip-at handle tr ci))
+                     (start (cmacs-vidstudio-clip-start-frame handle id))
+                     (dur (cmacs-vidstudio-clip-duration handle id))
+                     (decoding (and (fboundp 'cmacs-vidstudio-clip-ready-p)
+                                    (not (cmacs-vidstudio-clip-ready-p
+                                          handle id)))))
+                (insert " ")
+                (insert-text-button
+                 (format "#%-3d %5d-%-5d %4dfr%s"
+                         id start (+ start dur) dur
+                         (if decoding " ..." ""))
+                 'face (cond ((eql id sel) 'highlight)
+                             (decoding 'shadow)
+                             (t 'default))
+                 'follow-link t
+                 'help-echo "Select this clip"
+                 'action (let ((cid id) (pb project-buf))
+                           (lambda (_)
+                             (when (buffer-live-p pb)
+                               (with-current-buffer pb
+                                 (setq cmacs-vidstudio--selected-clip cid)
+                                 (cmacs-vidstudio--render))))))
+                (insert "\n"))))))
+      (goto-char (point-min)))))
+
+(defun cmacs-vidstudio--refresh-clips-panel ()
+  "Rebuild the clips side panel from the current project, if it is shown."
+  (when (and cmacs-vidstudio--clips-panel
+             (buffer-live-p cmacs-vidstudio--clips-panel)
+             (get-buffer-window cmacs-vidstudio--clips-panel))
+    (let ((pb (current-buffer)))
+      (with-current-buffer cmacs-vidstudio--clips-panel
+        (cmacs-vidstudio--build-clips-panel pb)))))
+
+(defun cmacs-vidstudio-toggle-clips-panel ()
+  "Toggle a right side window listing the project's clips and their IDs."
+  (interactive)
+  (if (and cmacs-vidstudio--clips-panel
+           (get-buffer-window cmacs-vidstudio--clips-panel))
+      (delete-window (get-buffer-window cmacs-vidstudio--clips-panel))
+    (let* ((pb (current-buffer))
+           (buf (get-buffer-create
+                 (format "*vidstudio-clips[%s]*" (buffer-name pb)))))
+      (setq cmacs-vidstudio--clips-panel buf)
+      (with-current-buffer buf
+        (unless (derived-mode-p 'special-mode) (special-mode))
+        (setq-local cursor-type nil))
+      (cmacs-vidstudio--refresh-clips-panel)
+      (display-buffer-in-side-window
+       buf '((side . right) (window-width . 30) (slot . 0))))))
+
 (defvar cmacs-vidstudio--canvas-map (make-sparse-keymap)
   "Keymap applied as a text property over the rendered preview/timeline.
 A position `keymap' property outranks Evil state maps and
@@ -180,7 +257,10 @@ A position `keymap' property outranks Evil state maps and
                    cmacs-vidstudio--playhead))
                 (cmacs-vidstudio--update-timeline))
             (ignore-errors (cmacs-libregnum-redraw (current-buffer))))
-        (cmacs-vidstudio--render-native total)))))
+        (cmacs-vidstudio--render-native total)))
+    ;; keep the clips side panel in sync (skip mid-playback churn)
+    (unless cmacs-vidstudio--play-timer
+      (cmacs-vidstudio--refresh-clips-panel))))
 
 (defun cmacs-vidstudio--preview-width ()
   "Preview render width in pixels at the current preview scale."
@@ -1042,7 +1122,9 @@ Press a key to run its command, or q / C-g to dismiss."
    ["Project"
     ("w" "Save  (C-x C-s)" cmacs-vidstudio-save)
     ("E" "Export video…" cmacs-vidstudio-export-video-cmd)
-    ("G" "Export GIF…" cmacs-vidstudio-export-gif-cmd)]])
+    ("G" "Export GIF…" cmacs-vidstudio-export-gif-cmd)]
+   ["View"
+    ("L" "Clip list panel" cmacs-vidstudio-toggle-clips-panel)]])
 
 (defvar cmacs-vidstudio-mode-map (make-sparse-keymap)
   "Keymap for `cmacs-vidstudio-mode'.")
@@ -1071,6 +1153,7 @@ Press a key to run its command, or q / C-g to dismiss."
     (define-key map (kbd "V") #'cmacs-vidstudio-set-audio-gain)
     (define-key map (kbd "E") #'cmacs-vidstudio-export-video-cmd)
     (define-key map (kbd "G") #'cmacs-vidstudio-export-gif-cmd)
+    (define-key map (kbd "L") #'cmacs-vidstudio-toggle-clips-panel)
     (define-key map (kbd "?") #'cmacs-vidstudio-help)
     (define-key map (kbd "<mouse-3>") #'cmacs-vidstudio-context-menu))
 
@@ -1093,6 +1176,22 @@ Press a key to run its command, or q / C-g to dismiss."
                         (cmacs-vidstudio--menu))))
            (when (commandp choice) (call-interactively choice))))))))
 
+(defun cmacs-vidstudio--label-font-file ()
+  "Resolve the Emacs default face's font family to a TTF/OTF file path.
+Used so the timeline clip-id labels are drawn in the same font as the
+editor.  Returns nil when it cannot be resolved (falls back to the
+built-in font)."
+  (ignore-errors
+    (let ((family (face-attribute 'default :family nil t)))
+      (when (and (stringp family)
+                 (not (string-empty-p family))
+                 (executable-find "fc-match"))
+        (let ((f (string-trim
+                  (shell-command-to-string
+                   (format "fc-match -f '%%{file}' %s"
+                           (shell-quote-argument family))))))
+          (and (stringp f) (> (length f) 0) (file-readable-p f) f))))))
+
 (defun cmacs-vidstudio--maybe-attach-viewport (buffer)
   "Attach a live libregnum viewport to BUFFER, if available.
 Sets `cmacs-vidstudio--live'; leaves it nil (native path) on failure."
@@ -1109,6 +1208,13 @@ Sets `cmacs-vidstudio--live'; leaves it nil (native path) on failure."
            (max 64 (if win (window-body-height win t) 480)))
           (cmacs-libregnum-image-enter buffer t)
           (cmacs-libregnum-image-set-checker buffer nil)
+          ;; Draw the timeline clip-id labels in the Emacs UI font (so the
+          ;; strip ids match the editor), not raylib's default bitmap font.
+          (when (fboundp 'cmacs-libregnum-image-set-label-font)
+            (let ((ff (cmacs-vidstudio--label-font-file)))
+              (when ff
+                (ignore-errors
+                  (cmacs-libregnum-image-set-label-font buffer ff)))))
           (with-current-buffer buffer
             (setq cmacs-libregnum-image-context-menu-function
                   #'cmacs-vidstudio--vp-context-menu

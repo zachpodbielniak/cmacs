@@ -355,6 +355,22 @@ DEFUN ("cmacs-libregnum-image-set-marquee", Fcmacs_libregnum_image_set_marquee,
   return Qt;
 }
 
+DEFUN ("cmacs-libregnum-image-set-label-font",
+       Fcmacs_libregnum_image_set_label_font,
+       Scmacs_libregnum_image_set_label_font, 2, 2, 0,
+       doc: /* Set BUFFER's timeline-strip clip-id label font to the TTF/OTF at
+PATH (nil/"" restores the built-in default).  */)
+  (Lisp_Object buffer, Lisp_Object path)
+{
+  CmacsLibregnumRenderCtx *ctx;
+  CHECK_BUFFER (buffer);
+  ctx = cmacs_libregnum_image_ctx (buffer);
+  if (ctx)
+    cmacs_libregnum_render_ctx_image_set_label_font
+      (ctx, STRINGP (path) ? SSDATA (path) : NULL);
+  return Qnil;
+}
+
 DEFUN ("cmacs-libregnum-image-timeline-hit",
        Fcmacs_libregnum_image_timeline_hit,
        Scmacs_libregnum_image_timeline_hit, 5, 5, 0,
@@ -2373,6 +2389,7 @@ syms_of_cmacs_libregnum_defuns (void)
   defsubr (&Scmacs_libregnum_image_set_cursor);
   defsubr (&Scmacs_libregnum_image_set_marquee);
   defsubr (&Scmacs_libregnum_image_timeline);
+  defsubr (&Scmacs_libregnum_image_set_label_font);
   defsubr (&Scmacs_libregnum_image_timeline_hit);
   defsubr (&Scmacs_libregnum_set_animated);
   defsubr (&Scmacs_libregnum_animated_p);

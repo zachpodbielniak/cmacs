@@ -316,3 +316,11 @@ ripple are simple descriptor operations and the series recomputes frame layout.
   so you can read the clip id a command asks for right off the block you
   click.  Blocks are colour-coded per clip, one row per track, with the
   playhead line.
+
+- A *clip-list side window* (~cmacs-vidstudio-toggle-clips-panel~, key ~L~,
+  transient *View*) lists every clip per track -- ~#id start-end Nfr~ -- each a
+  button that selects the clip (highlighting it on the strip), mirroring
+  imgedit's layers panel.
+- The strip clip-id labels are drawn in the *Emacs UI font*
+  (~fc-match~ of the default face -> ~grl_draw_text_ex~; falls back to the
+  built-in font), so they match the editor and stay readable.

@@ -339,6 +339,7 @@ struct CmacsLibregnumRenderCtx
    * the bottom of the FBO.  image_clips holds CmacsTimelineClip records. */
   GArray       *image_clips;
   int           image_playhead, image_total_frames, image_ntracks;
+  GrlFont      *image_label_font;  /* owned; clip-id labels, or NULL=default */
 
   /* Scene node model (CmacsNode), parallel to the drawables. */
   GArray         *nodes;
@@ -544,6 +545,7 @@ cmacs_libregnum_render_ctx_free (CmacsLibregnumRenderCtx *r)
   g_clear_object (&r->image_pending);
   g_clear_pointer (&r->image_rgba, g_free);
   if (r->image_clips) g_array_unref (r->image_clips);
+  g_clear_object (&r->image_label_font);
   /* Non-owning wrapper: drop it before the FBO it points at.  */
   g_clear_object (&r->fbo_grl_texture);
   if (r->fbo_valid) UnloadRenderTexture (r->fbo);
@@ -747,18 +749,42 @@ ctx_image_draw_overlay (CmacsLibregnumRenderCtx *r)
           grl_draw_rectangle (bx, by + 1, bw, rowh - 2, col);
           grl_draw_rectangle_lines (bx, by + 1, bw, rowh - 2, edge);
           /* Clip id label on the block (drop-shadow for contrast), drawn
-             only when it fits inside the block width. */
+             only when it fits inside the block width.  Uses the configured
+             label font (the Emacs UI font) when set, else the default. */
           {
             char idbuf[16];
-            int fs = MAX (8, MIN (14, rowh - 8));
+            int fs = MAX (11, MIN (20, rowh - 6));
+            int tw, tx, ty;
             g_snprintf (idbuf, sizeof idbuf, "#%d", cl->id);
-            if (bw > grl_measure_text (idbuf, fs) + 6)
+            if (r->image_label_font != NULL)
+              {
+                g_autoptr (GrlVector2) m =
+                  grl_font_measure_text (r->image_label_font, idbuf,
+                                         (gfloat) fs, 1.0f);
+                tw = m ? (int) grl_vector2_get_x (m) : fs * 2;
+              }
+            else
+              tw = grl_measure_text (idbuf, fs);
+            tx = bx + 4;
+            ty = by + (rowh - fs) / 2;
+            if (bw > tw + 6)
               {
                 g_autoptr (GrlColor) sh = grl_color_new (0, 0, 0, 210);
                 g_autoptr (GrlColor) fg = grl_color_new (255, 255, 255, 255);
-                int tx = bx + 4, ty = by + (rowh - fs) / 2;
-                grl_draw_text (idbuf, tx + 1, ty + 1, fs, sh);
-                grl_draw_text (idbuf, tx, ty, fs, fg);
+                if (r->image_label_font != NULL)
+                  {
+                    g_autoptr (GrlVector2) ps = grl_vector2_new (tx + 1, ty + 1);
+                    g_autoptr (GrlVector2) pf = grl_vector2_new (tx, ty);
+                    grl_draw_text_ex (r->image_label_font, idbuf, ps,
+                                      (gfloat) fs, 1.0f, sh);
+                    grl_draw_text_ex (r->image_label_font, idbuf, pf,
+                                      (gfloat) fs, 1.0f, fg);
+                  }
+                else
+                  {
+                    grl_draw_text (idbuf, tx + 1, ty + 1, fs, sh);
+                    grl_draw_text (idbuf, tx, ty, fs, fg);
+                  }
               }
           }
         }
@@ -848,6 +874,28 @@ cmacs_libregnum_render_ctx_image_timeline_set (CmacsLibregnumRenderCtx *r,
   r->image_playhead = playhead;
   r->image_total_frames = total;
   r->image_ntracks = ntracks;
+}
+
+/* Set the font used for the timeline-strip clip-id labels (e.g. the Emacs UI
+   font, so the ids match the editor).  PATH is a TTF/OTF file; NULL/empty or
+   an unloadable file falls back to the built-in default font. */
+void
+cmacs_libregnum_render_ctx_image_set_label_font (CmacsLibregnumRenderCtx *r,
+                                                 const char *path)
+{
+  if (!r) return;
+  g_clear_object (&r->image_label_font);
+  if (path != NULL && path[0] != '\0')
+    {
+      GrlFont *f = grl_font_new_from_file (path);
+      if (f != NULL && grl_font_is_valid (f))
+        {
+          grl_font_set_filter (f, GRL_TEXTURE_FILTER_BILINEAR);
+          r->image_label_font = f;
+        }
+      else
+        g_clear_object (&f);
+    }
 }
 
 /* Full image-mode frame; called from the render_to_bgra branch. */
