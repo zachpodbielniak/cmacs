@@ -221,6 +221,45 @@ flips once the decode lands and real frames replace the placeholder."
             (should (= (cmacs-vidstudio-clip-duration p id) 60))))
       (delete-file v))))
 
+(defun cmacs-vidstudio-tests--solid-png (path r g b)
+  "Write a 100x100 solid RGB PNG to PATH (via imgedit); return PATH."
+  (let ((h (cmacs-imgedit-new 100 100)))
+    (cmacs-imgedit-fill h r g b 255)
+    (cmacs-imgedit-save h path)
+    (cmacs-imgedit-free h)
+    path))
+
+(ert-deftest cmacs-vidstudio-picture-in-picture ()
+  "A clip with a destination box renders as an overlay window (video-in-
+video), compositing over the tracks beneath it, and the box survives a
+serialize/reload round-trip."
+  (skip-unless (fboundp 'cmacs-imgedit-new))
+  (let* ((red (cmacs-vidstudio-tests--solid-png
+               (make-temp-file "vs-red" nil ".png") 200 0 0))
+         (green (cmacs-vidstudio-tests--solid-png
+                 (make-temp-file "vs-green" nil ".png") 0 200 0))
+         (h (cmacs-vidstudio-new 100 100 30.0)))
+    (unwind-protect
+        (progn
+          (cmacs-vidstudio-add-image-clip h 0 red 30)             ; red base
+          (let ((ov (cmacs-vidstudio-add-image-clip
+                     h (cmacs-vidstudio-add-track h) green 30)))  ; green overlay
+            (should (cmacs-vidstudio-set-clip-box h ov 60 60 30 30))
+            ;; base shows outside the box; overlay shows inside it
+            (should (equal (cmacs-vidstudio-frame-pixel h 0 10 10)
+                           '(200 0 0 255)))
+            (should (equal (cmacs-vidstudio-frame-pixel h 0 75 75)
+                           '(0 200 0 255)))
+            ;; box round-trips through serialization
+            (should (string-match-p "(box 60 60 30 30)"
+                                    (cmacs-vidstudio-serialize h)))
+            ;; clearing the box (w/h 0) restores the full frame
+            (should (cmacs-vidstudio-set-clip-box h ov 0 0 0 0))
+            (should (equal (cmacs-vidstudio-frame-pixel h 0 10 10)
+                           '(0 200 0 255)))))
+      (cmacs-vidstudio-free h)
+      (ignore-errors (delete-file red) (delete-file green)))))
+
 ;; ── Per-clip transform / effect / export setters ───────────────────────
 
 (ert-deftest cmacs-vidstudio-tests-clip-setters ()

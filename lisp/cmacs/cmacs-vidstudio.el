@@ -595,6 +595,10 @@ clip the user right-clicked on the timeline strip.")
         (when tf   ; (transform X Y SX SY ROT)
           (cmacs-vidstudio-set-transform handle id (nth 1 tf) (nth 2 tf)
                                          (nth 3 tf) (nth 4 tf) (nth 5 tf))))
+      (let ((bx (assq 'box (cdr clip))))
+        (when (and bx (fboundp 'cmacs-vidstudio-set-clip-box))  ; (box X Y W H)
+          (cmacs-vidstudio-set-clip-box handle id (nth 1 bx) (nth 2 bx)
+                                        (nth 3 bx) (nth 4 bx))))
       (let ((eidx 0))
         (dolist (fx (cdr (assq 'effects (cdr clip))))
           ;; fx = (TYPE (PROP VAL) (PROP VAL)...)
@@ -855,12 +859,79 @@ immediately and the preview pops in when the decode finishes."
                                       cmacs-vidstudio-transition-alist nil t)
                      cmacs-vidstudio-transition-alist))
          (read-number "Overlap (seconds): " 1.0)
-         (cdr (assoc (completing-read "Easing: "
-                                      cmacs-vidstudio-easing-alist nil t "linear")
+         (cdr (assoc (completing-read "Easing: " cmacs-vidstudio-easing-alist
+                                      nil t nil nil "linear")
                      cmacs-vidstudio-easing-alist))))
   (cmacs-vidstudio-set-transition cmacs-vidstudio--handle clip-id type
                                   (cmacs-vidstudio--secs-to-frames overlap)
                                   (or easing 0))
+  (cmacs-vidstudio--render))
+
+;; --------------------------------------------------------------------------
+;; Picture-in-picture / video overlays (video-in-video)
+;; --------------------------------------------------------------------------
+
+(defconst cmacs-vidstudio-overlay-position-alist
+  '(("bottom-right" . br) ("bottom-left" . bl) ("top-right" . tr)
+    ("top-left" . tl) ("center" . center))
+  "Picture-in-picture overlay position presets.")
+
+(defun cmacs-vidstudio--overlay-box (position scale)
+  "Return (X Y W H) for a PiP POSITION preset at SCALE (0..1) of the frame."
+  (let* ((pw (cmacs-vidstudio-width cmacs-vidstudio--handle))
+         (ph (cmacs-vidstudio-height cmacs-vidstudio--handle))
+         (w (max 2 (round (* pw scale))))
+         (h (max 2 (round (* ph scale))))
+         (m (round (* pw 0.03)))
+         (x (pcase position
+              ((or 'tr 'br) (- pw w m))
+              ('center (/ (- pw w) 2))
+              (_ m)))
+         (y (pcase position
+              ((or 'bl 'br) (- ph h m))
+              ('center (/ (- ph h) 2))
+              (_ m))))
+    (list (max 0 x) (max 0 y) w h)))
+
+(defun cmacs-vidstudio-add-video-overlay (path position scale)
+  "Import video PATH as a picture-in-picture overlay on a NEW track.
+POSITION is a corner/center preset; SCALE is the overlay size as a fraction of
+the frame (e.g. 0.3 = 30%).  Think webcam over gameplay: the overlay clip
+composites over the video on the tracks below it."
+  (interactive
+   (list (read-file-name "Overlay video: " nil nil t)
+         (cdr (assoc (completing-read "Position: "
+                                      cmacs-vidstudio-overlay-position-alist
+                                      nil t nil nil "bottom-right")
+                     cmacs-vidstudio-overlay-position-alist))
+         (read-number "Size (fraction of frame, 0..1): " 0.3)))
+  (let* ((track (cmacs-vidstudio-add-track cmacs-vidstudio--handle))
+         (id (cmacs-vidstudio-add-video-clip cmacs-vidstudio--handle track
+                                             (expand-file-name path) nil))
+         (box (cmacs-vidstudio--overlay-box position scale)))
+    (apply #'cmacs-vidstudio-set-clip-box cmacs-vidstudio--handle id box)
+    (setq cmacs-vidstudio--selected-clip id)
+    (cmacs-vidstudio--render)
+    (message "Added PiP overlay clip #%d on track %d (%s, %d%%)"
+             id track position (round (* scale 100)))))
+
+(defun cmacs-vidstudio-set-clip-box-cmd (clip position scale)
+  "Make CLIP a picture-in-picture overlay at POSITION preset + SCALE, or clear
+it (choose a scale of 0)."
+  (interactive
+   (list (cmacs-vidstudio--read-clip)
+         (cdr (assoc (completing-read "Position: "
+                                      cmacs-vidstudio-overlay-position-alist
+                                      nil t nil nil "bottom-right")
+                     cmacs-vidstudio-overlay-position-alist))
+         (read-number "Size (fraction 0..1, 0 = full frame): " 0.3)))
+  (if (<= scale 0.0)
+      (progn (cmacs-vidstudio-set-clip-box cmacs-vidstudio--handle clip 0 0 0 0)
+             (message "Cleared PiP box on clip #%s (full frame)" clip))
+    (apply #'cmacs-vidstudio-set-clip-box cmacs-vidstudio--handle clip
+           (cmacs-vidstudio--overlay-box position scale))
+    (message "Clip #%s is now a PiP overlay (%s, %d%%)" clip position
+             (round (* scale 100))))
   (cmacs-vidstudio--render))
 
 (defun cmacs-vidstudio-add-gradient (a b seconds)
@@ -1186,6 +1257,7 @@ default `veryfast' is much quicker than ffmpeg's slow `medium' default."
              ("Captions (SRT)…" . cmacs-vidstudio-add-captions)
              ("Loop video…" . cmacs-vidstudio-add-loop)
              ("Freeze frame…" . cmacs-vidstudio-add-freeze)
+             ("Video overlay / PiP…" . cmacs-vidstudio-add-video-overlay)
              ("New track" . cmacs-vidstudio-add-track-cmd))
             ("Clip"
              ("Transition…" . cmacs-vidstudio-add-transition-cmd)
@@ -1194,6 +1266,7 @@ default `veryfast' is much quicker than ffmpeg's slow `medium' default."
              ("Opacity…" . cmacs-vidstudio-set-clip-opacity)
              ("Blend mode…" . cmacs-vidstudio-set-clip-blend)
              ("Transform (pos/scale)…" . cmacs-vidstudio-set-clip-transform)
+             ("Make PiP overlay…" . cmacs-vidstudio-set-clip-box-cmd)
              ("Playback speed…" . cmacs-vidstudio-set-clip-speed)
              ("Add keyframe…" . cmacs-vidstudio-add-keyframe-cmd)
              ("Clear keyframes…" . cmacs-vidstudio-clear-keyframes-cmd)
@@ -1247,6 +1320,7 @@ Press a key to run its command, or q / C-g to dismiss."
   [:description "cmacs-vidstudio — video editor  (right-click for the full menu)"
    ["Add"
     ("i" "Import clip…" cmacs-vidstudio-import)
+    ("o" "Video overlay / PiP…" cmacs-vidstudio-add-video-overlay)
     ("C" "Colour clip…" cmacs-vidstudio-add-color)
     ("T" "Title…" cmacs-vidstudio-add-title)
     ("n" "New track" cmacs-vidstudio-add-track-cmd)]
@@ -1277,6 +1351,7 @@ Press a key to run its command, or q / C-g to dismiss."
 ;; Bind on every load (reload-safe; the defvar above is a no-op once bound).
 (let ((map cmacs-vidstudio-mode-map))
     (define-key map (kbd "i") #'cmacs-vidstudio-import)
+    (define-key map (kbd "o") #'cmacs-vidstudio-add-video-overlay)
     (define-key map (kbd "C") #'cmacs-vidstudio-add-color)
     (define-key map (kbd "T") #'cmacs-vidstudio-add-title)
     (define-key map (kbd "n") #'cmacs-vidstudio-add-track-cmd)

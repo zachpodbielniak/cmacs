@@ -205,6 +205,9 @@ extern gboolean cmacs_vidstudio_proj_set_transform (CmacsVidProject *p,
                                                     gint clip_id, double x,
                                                     double y, double sx,
                                                     double sy, double rot);
+extern gboolean cmacs_vidstudio_proj_set_clip_box (CmacsVidProject *p,
+                                                   gint clip_id, int x, int y,
+                                                   int w, int h);
 extern gboolean cmacs_vidstudio_proj_set_anchor (CmacsVidProject *p,
                                                  gint clip_id, double ax,
                                                  double ay);

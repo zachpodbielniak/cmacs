@@ -822,6 +822,26 @@ cmacs_vidstudio_proj_set_transform (CmacsVidProject *p, gint clip_id,
   return TRUE;
 }
 
+/* Draw CLIP-ID into an explicit sub-rectangle (picture-in-picture overlay)
+   instead of the full frame.  Works for video + image clips; w/h <= 0 clears
+   it (video) / is passed through (image).  The clip still composites over the
+   tracks below, so an overlay on a higher track appears as a small window. */
+gboolean
+cmacs_vidstudio_proj_set_clip_box (CmacsVidProject *p, gint clip_id,
+                                   int x, int y, int w, int h)
+{
+  LrgReelClip *c = seg_clip (p, clip_id);
+  if (c == NULL) return FALSE;
+  if (LRG_IS_REEL_VIDEO_CLIP (c))
+    lrg_reel_video_clip_set_box (LRG_REEL_VIDEO_CLIP (c), x, y, w, h);
+  else if (LRG_IS_REEL_IMAGE_CLIP (c))
+    lrg_reel_image_clip_set_box (LRG_REEL_IMAGE_CLIP (c), x, y, w, h);
+  else
+    return FALSE;
+  p->dirty = TRUE;
+  return TRUE;
+}
+
 gboolean
 cmacs_vidstudio_proj_set_anchor (CmacsVidProject *p, gint clip_id,
                                  double ax, double ay)
@@ -1564,6 +1584,18 @@ cmacs_vidstudio_proj_serialize (CmacsVidProject *p)
                                   lrg_reel_clip_get_opacity (s->clip),
                                   (int) lrg_reel_clip_get_blend_mode (s->clip));
           {
+          {
+            gint bx, by, bw, bh;
+            gboolean has_box = FALSE;
+            if (LRG_IS_REEL_VIDEO_CLIP (s->clip))
+              has_box = lrg_reel_video_clip_get_box
+                          (LRG_REEL_VIDEO_CLIP (s->clip), &bx, &by, &bw, &bh);
+            else if (LRG_IS_REEL_IMAGE_CLIP (s->clip))
+              has_box = lrg_reel_image_clip_get_box
+                          (LRG_REEL_IMAGE_CLIP (s->clip), &bx, &by, &bw, &bh);
+            if (has_box)
+              g_string_append_printf (o, " (box %d %d %d %d)", bx, by, bw, bh);
+          }
             double tx = lrg_reel_clip_get_x (s->clip);
             double ty = lrg_reel_clip_get_y (s->clip);
             double tsx = lrg_reel_clip_get_scale_x (s->clip);

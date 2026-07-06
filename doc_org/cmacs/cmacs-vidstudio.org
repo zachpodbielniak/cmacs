@@ -342,3 +342,14 @@ ripple are simple descriptor operations and the series recomputes frame layout.
   the video) and in the clip-list side window (an Audio section).
 - During a background export the *ffmpeg progress line* (frame / time /
   speed) is echoed to *Messages* every 30 seconds so you can monitor it.
+
+- *Video-in-video (picture-in-picture)*: ~o~ / "Video overlay / PiP" imports a
+  video onto a NEW track and draws it into a small window (a corner/centre
+  position preset + a size fraction) -- e.g. a webcam over gameplay.  The
+  overlay composites over the tracks beneath it.  "Make PiP overlay" does the
+  same to an existing clip; a size of 0 restores the full frame.  Works for
+  video and image clips (cmacs-vidstudio-set-clip-box); the box is saved in
+  the .vstudio project.
+- *Transition easing*: the "Easing" prompt now offers all 31 curves.  (It
+  previously passed the default as completing-read's INITIAL-INPUT, which
+  filtered the candidate list down to just "linear".)

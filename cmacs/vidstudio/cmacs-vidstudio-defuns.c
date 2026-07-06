@@ -492,6 +492,22 @@ rotation ROT (radians, default 0).  */)
                                              vs_dbl (rot, 0.0)) ? Qt : Qnil;
 }
 
+DEFUN ("cmacs-vidstudio-set-clip-box", Fcmacs_vidstudio_set_clip_box,
+       Scmacs_vidstudio_set_clip_box, 6, 6, 0,
+       doc: /* Draw CLIP-ID into the sub-rectangle X Y W H (picture-in-picture
+overlay) instead of the full frame.  W/H <= 0 clears it.  The clip composites
+over the tracks below, so an overlay on a higher track is a small window.  */)
+  (Lisp_Object handle, Lisp_Object clip_id, Lisp_Object x, Lisp_Object y,
+   Lisp_Object w, Lisp_Object h)
+{
+  CHECK_FIXNUM (clip_id);
+  return cmacs_vidstudio_proj_set_clip_box (vs_lookup (handle),
+                                            (gint) XFIXNUM (clip_id),
+                                            vs_int (x, 0), vs_int (y, 0),
+                                            vs_int (w, 0), vs_int (h, 0))
+         ? Qt : Qnil;
+}
+
 DEFUN ("cmacs-vidstudio-set-rotation", Fcmacs_vidstudio_set_rotation,
        Scmacs_vidstudio_set_rotation, 3, 3, 0,
        doc: /* Set CLIP-ID rotation to ROT radians (keeps position/scale).  */)
@@ -1142,6 +1158,7 @@ syms_of_cmacs_vidstudio_defuns (void)
   defsubr (&Scmacs_vidstudio_frame_pixel);
   defsubr (&Scmacs_vidstudio_set_opacity);
   defsubr (&Scmacs_vidstudio_set_transform);
+  defsubr (&Scmacs_vidstudio_set_clip_box);
   defsubr (&Scmacs_vidstudio_set_rotation);
   defsubr (&Scmacs_vidstudio_set_anchor);
   defsubr (&Scmacs_vidstudio_set_blend_mode);
