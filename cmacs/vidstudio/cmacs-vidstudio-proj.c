@@ -2141,6 +2141,7 @@ cmacs_vidstudio_proj_export_video (CmacsVidProject *p, const char *path,
   ex = lrg_reel_video_exporter_new (path, c);
   if (p->export_preset != NULL)
     lrg_reel_video_exporter_set_preset (ex, p->export_preset);
+  lrg_reel_video_exporter_set_show_progress (ex, TRUE);  /* stderr stats */
   if (p->export_crf >= 0)
     lrg_reel_video_exporter_set_crf (ex, p->export_crf);
   if (p->export_bitrate > 0)

@@ -340,3 +340,5 @@ ripple are simple descriptor operations and the series recomputes frame layout.
   wrong codes).
 - The *audio lane* shows in the timeline strip (a teal row in parallel with
   the video) and in the clip-list side window (an Audio section).
+- During a background export the *ffmpeg progress line* (frame / time /
+  speed) is echoed to *Messages* every 30 seconds so you can monitor it.

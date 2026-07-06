@@ -1002,8 +1002,8 @@ silently updates.  Starting play at the end of the timeline rewinds."
 EXPORT-FORM is a Lisp-form string run in the subprocess with `h' bound to the
 reloaded project handle and `out' to PATH.  WHAT names the format for
 messages.  The heavy render + ffmpeg run out-of-process via a `make-process'
-sentinel, so the editor stays fully responsive (a synchronous export blocks
-Emacs's main thread long enough that the compositor reports it as hung)."
+sentinel (so the editor stays responsive), and the ffmpeg progress line is
+echoed to the *Messages* buffer every 30 seconds while it runs."
   (unless (fboundp 'cmacs-vidstudio-serialize)
     (user-error "This build cannot serialize projects for background export"))
   (when (process-live-p cmacs-vidstudio--export-process)
@@ -1014,21 +1014,36 @@ Emacs's main thread long enough that the compositor reports it as hung)."
          (lispdir (file-name-directory (locate-library "cmacs-vidstudio")))
          (bin (expand-file-name invocation-name invocation-directory))
          (buf (generate-new-buffer " *vidstudio-export-log*"))
-         (pbuf (current-buffer)))
+         (pbuf (current-buffer))
+         (name (file-name-nondirectory path))
+         (progress nil)     ; latest ffmpeg stats line (shared by filter+timer)
+         (ptimer nil)
+         (proc nil))
     (with-temp-file tmp (insert sexp))
-    (setq cmacs-vidstudio--export-process
+    (setq proc
           (make-process
            :name "vidstudio-export" :buffer buf :noquery t
            :command
            (list bin "-Q" "-batch" "-L" lispdir "-l" "cmacs-vidstudio" "--eval"
                  (format "(let* ((data (with-temp-buffer (insert-file-contents %S) (read (current-buffer)))) (h (cmacs-vidstudio--build-from-sexp data)) (out %S)) %s)"
                          tmp path export-form))
+           :filter
+           (lambda (p chunk)
+             ;; keep the full log for debugging
+             (when (buffer-live-p (process-buffer p))
+               (with-current-buffer (process-buffer p)
+                 (goto-char (point-max)) (insert chunk)))
+             ;; ffmpeg -stats lines arrive \r-separated: keep the last one
+             (dolist (ln (split-string chunk "[\r\n]+" t))
+               (when (string-match-p "frame=.*time=" ln)
+                 (setq progress (string-trim ln)))))
            :sentinel
-           (lambda (proc _event)
-             (when (memq (process-status proc) '(exit signal))
+           (lambda (p _event)
+             (when (memq (process-status p) '(exit signal))
+               (when (timerp ptimer) (cancel-timer ptimer))
                (ignore-errors (delete-file tmp))
-               (let ((ok (and (eq (process-status proc) 'exit)
-                              (zerop (process-exit-status proc))
+               (let ((ok (and (eq (process-status p) 'exit)
+                              (zerop (process-exit-status p))
                               (file-exists-p path))))
                  (when (buffer-live-p pbuf)
                    (with-current-buffer pbuf
@@ -1039,8 +1054,18 @@ Emacs's main thread long enough that the compositor reports it as hung)."
                             (kill-buffer buf))
                    (message "vidstudio: %s export FAILED (see %s)"
                             what (buffer-name buf))))))))
-    (message "vidstudio: exporting %s to %s in the background (editor stays usable)"
-             what (file-name-nondirectory path))))
+    (setq cmacs-vidstudio--export-process proc)
+    ;; Echo ffmpeg progress to *Messages* every 30s while the export runs.
+    (setq ptimer
+          (run-at-time
+           30 30
+           (lambda ()
+             (if (process-live-p proc)
+                 (when progress
+                   (message "vidstudio export %s: %s" name progress))
+               (when (timerp ptimer) (cancel-timer ptimer))))))
+    (message "vidstudio: exporting %s to %s in the background (progress every 30s)"
+             what name)))
 
 (defconst cmacs-vidstudio-codec-alist
   '(("H.264  (libx264, .mp4)" . 0)
