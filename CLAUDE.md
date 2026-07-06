@@ -24,6 +24,18 @@ cmacs tracks upstream GNU Emacs and merges it in every few weeks. Keep merges pa
   `#ifdef HAVE_CMACS_<NAME>`. That file is the single source of truth for "what's
   compiled in" (see *Feature flags* below). Keep it in sync when adding/removing/renaming
   a configure option — the D-Bus instance list and `cmacs.el` derive from it.
+- **Every new `--with-cmacs-<name>` / `--enable-cmacs-<name>` option MUST be added to the
+  DEFAULT build**, not merely defined in `configure.ac`. cmacs ships with the full feature
+  set on by default, so a new flag has to be inserted everywhere the default flag set is
+  enumerated — otherwise the feature silently never builds in CI, containers, or a normal
+  `just` build. The canonical locations (add the flag next to the other `--with-cmacs-*`
+  entries in each): `Containerfile` (the `./configure` line), `Justfile`
+  (`configure_flags :=` — the single source of truth for every `just` recipe incl.
+  `just bootstrap`), `README.org` (both `./configure` blocks **and** the per-flag bullet
+  list), this `CLAUDE.md` (the *Build* `./configure` block **and** the *Subsystems* table),
+  `doc/cmacs/cmacs.texi` (the configure `@example`), and `doc_org/cmacs/build.org` (the
+  configure example **and** the *Configure Flags* table). Grep for the previous flag you
+  added (e.g. `--with-cmacs-vidstudio`) to find every spot.
 
 Current upstream touch-points (keep minimal): `process.c` pselect hooks (GLib loop),
 `src/pgtkterm.c` paint hooks (video / libregnum / ink overlays), `src/emacs.c` early
