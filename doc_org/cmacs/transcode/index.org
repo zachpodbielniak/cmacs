@@ -64,12 +64,13 @@ drains.
 
 ** Keybindings
 
-| Key   | Command                            | Action                                          |
-|-------+------------------------------------+-------------------------------------------------|
-| =a=   | =cmacs-transcode-add=              | Add a media file or dir (prefix: recurse)       |
-| =A=   | =cmacs-transcode-add-directory=    | Add a directory recursively                     |
-| =d=   | =cmacs-transcode-remove=           | Remove the job on the current line              |
-| =k=   | =cmacs-transcode-kill=             | Kill the running job on the line (no retry)     |
+| Key      | Command                            | Action                                          |
+|----------+------------------------------------+-------------------------------------------------|
+| =h j k l= | (motion)                          | Move left/down/up/right (Doom/Evil-friendly)    |
+| =a=      | =cmacs-transcode-add=              | Add a media file or dir (prefix: recurse)       |
+| =A=      | =cmacs-transcode-add-directory=    | Add a directory recursively                     |
+| =d=      | =cmacs-transcode-remove=           | Remove the job on the current line              |
+| =K=      | =cmacs-transcode-kill=             | Kill the running job on the line (no retry)     |
 | =RET= | =cmacs-transcode-start=            | Start transcoding the queue                     |
 | =p=   | =cmacs-transcode-toggle-parallel=  | Toggle sequential ⇄ the configured job count    |
 | =P=   | =cmacs-transcode-set-parallel=     | Set the number of concurrent jobs               |
@@ -81,9 +82,9 @@ drains.
 | =m=   | =cmacs-transcode-toggle-missing=   | Only encode files lacking an output             |
 | =x=   | =cmacs-transcode-toggle-existing=  | Only re-encode files that already have output   |
 | =M=   | =cmacs-transcode-set-kind=         | Switch the session between video and audio      |
-| =l=   | =cmacs-transcode-show-log=         | Show =*cmacs-transcode-log*= (full ffmpeg out)  |
-| =g=   | =cmacs-transcode-refresh=          | Redraw the buffer                               |
-| =?=   | =cmacs-transcode-help=             | Echo the key hints                              |
+| =L=      | =cmacs-transcode-show-log=         | Show =*cmacs-transcode-log*= (full ffmpeg out)  |
+| =g=      | =cmacs-transcode-refresh=          | Redraw the buffer                               |
+| =?=      | =cmacs-transcode-help=             | Echo the key hints                              |
 
 Each session holds a job list plus an options plist *seeded from the
 =defcustom= values* (see [[file:reference.org][reference]]) when the session is created; the

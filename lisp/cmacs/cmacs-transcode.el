@@ -1043,9 +1043,9 @@ with RECURSIVE, preserving the relative subdir)."
     (propertize line 'cmacs-transcode-job job)))
 
 (defconst cmacs-transcode--hint-lines
-  '(" a:add  A:add-dir  d:del  k:kill  RET:start"
+  '(" hjkl:move  a:add  A:add-dir  d:del  K:kill  RET:start"
     " p:parallel P:jobs  c:codec q:crf/bitrate f:format H:hwaccel  o:out"
-    " m:missing x:existing  M:kind  l:log  g:refresh  ?:help")
+    " m:missing x:existing  M:kind  L:log  g:refresh  ?:help")
   "Key hint lines shown at the bottom of the queue buffer.")
 
 (defun cmacs-transcode--render (buffer)
@@ -1076,10 +1076,17 @@ with RECURSIVE, preserving the relative subdir)."
 
 ;; Bind on every load (reload-safe; the defvar above is a no-op once bound).
 (let ((map cmacs-transcode-mode-map))
+  ;; hjkl + arrow navigation.  The mode map is made an Evil overriding map
+  ;; below, so under Doom/Evil the motion keys must be bound here explicitly
+  ;; (and the action commands avoid h/j/k/l -- kill is `K', log is `L').
+  (define-key map (kbd "j") #'next-line)
+  (define-key map (kbd "k") #'previous-line)
+  (define-key map (kbd "h") #'backward-char)
+  (define-key map (kbd "l") #'forward-char)
   (define-key map (kbd "a") #'cmacs-transcode-add)
   (define-key map (kbd "A") #'cmacs-transcode-add-directory)
   (define-key map (kbd "d") #'cmacs-transcode-remove)
-  (define-key map (kbd "k") #'cmacs-transcode-kill)
+  (define-key map (kbd "K") #'cmacs-transcode-kill)
   (define-key map (kbd "RET") #'cmacs-transcode-start)
   (define-key map (kbd "p") #'cmacs-transcode-toggle-parallel)
   (define-key map (kbd "P") #'cmacs-transcode-set-parallel)
@@ -1091,7 +1098,7 @@ with RECURSIVE, preserving the relative subdir)."
   (define-key map (kbd "m") #'cmacs-transcode-toggle-missing)
   (define-key map (kbd "x") #'cmacs-transcode-toggle-existing)
   (define-key map (kbd "M") #'cmacs-transcode-set-kind)
-  (define-key map (kbd "l") #'cmacs-transcode-show-log)
+  (define-key map (kbd "L") #'cmacs-transcode-show-log)
   (define-key map (kbd "g") #'cmacs-transcode-refresh)
   (define-key map (kbd "?") #'cmacs-transcode-help))
 

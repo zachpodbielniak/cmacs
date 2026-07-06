@@ -72,13 +72,17 @@ while jobs run; it also redraws on every state change and self-cancels when
 the pool drains.
 
 @table @kbd
+@item h j k l
+Move left/down/up/right.  The mode map is an Evil overriding map, so these
+motion keys work under Doom/Evil as well as in vanilla Emacs (the action
+commands avoid @kbd{h}/@kbd{j}/@kbd{k}/@kbd{l}).
 @item a
 Add a media file or directory (prefix arg: recurse directories).
 @item A
 Add a directory recursively.
 @item d
 Remove the job on the current line.
-@item k
+@item K
 Kill the running job on the current line (no retry).
 @item @key{RET}
 Start transcoding the queued jobs.
@@ -104,7 +108,7 @@ Toggle the process-existing filter (only re-encode files that already have
 an output).
 @item M
 Switch the session between video and audio.
-@item l
+@item L
 Show the @code{*cmacs-transcode-log*} buffer (full ffmpeg output).
 @item g
 Redraw the buffer.
