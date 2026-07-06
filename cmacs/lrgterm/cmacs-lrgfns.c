@@ -370,6 +370,25 @@ The argument is an alist of frame parameters.  */)
   adjust_frame_size (f, FRAME_TEXT_WIDTH (f), FRAME_TEXT_HEIGHT (f),
                      0, true, Qx_create_frame_1);
 
+  /* Default the menu-/tab-/tool-bar line counts to 0 -- as a NUMBER, not the
+     unset (nil) they would otherwise keep.  Generic window/frame code does
+     arithmetic on these (e.g. window.el's `window-deletable-p' evaluates
+     `(> (frame-parameter f 'tab-bar-lines) 0)'); with the parameter nil that
+     signals `(wrong-type-argument number-or-marker-p nil)', which aborts
+     `window--delete' and makes `quit-window'/`quit-windows-on' silently fail
+     to close a window.  That broke auto-close of every bottom popup (which-key,
+     transient, *Completions*, *Help*) under `emacs --lrg'.  lrg has no external
+     menu/tool bars and the tab bar is off by default, so 0 both fixes the bug
+     and matches what `cmacs-lrg-frame-geometry' already reports (all bar sizes
+     0).  pgtk sets these from Vmenu_bar_mode/Vtab_bar_mode/Vtool_bar_mode in
+     pgtk_create_frame; lrg forces 0 because it draws none of these bars.  */
+  gui_default_parameter (f, parms, Qmenu_bar_lines, make_fixnum (0),
+                         NULL, NULL, RES_TYPE_NUMBER);
+  gui_default_parameter (f, parms, Qtab_bar_lines, make_fixnum (0),
+                         NULL, NULL, RES_TYPE_NUMBER);
+  gui_default_parameter (f, parms, Qtool_bar_lines, make_fixnum (0),
+                         NULL, NULL, RES_TYPE_NUMBER);
+
   gui_default_parameter (f, parms, Qauto_raise, Qnil, NULL, NULL,
                          RES_TYPE_BOOLEAN);
   gui_default_parameter (f, parms, Qauto_lower, Qnil, NULL, NULL,

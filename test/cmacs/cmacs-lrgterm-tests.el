@@ -141,6 +141,36 @@ lrg window + GL context and blit their FBO into the buffer's window."
           (should (> (file-attribute-size (file-attributes png)) 4000)))
       (ignore-errors (delete-file png)))))
 
+;;;; Window teardown (bottom-popup auto-close) --------------------------
+
+(ert-deftest cmacs-lrgterm-bar-lines-are-numbers ()
+  "lrg frames default menu/tab/tool-bar-lines to 0 (a number), never nil.
+Regression: a nil `tab-bar-lines' made `window-deletable-p' signal
+`(wrong-type-argument number-or-marker-p nil)' at its `(> tab-bar-lines 0)'
+check, which aborted `window--delete' so `quit-window'/`quit-windows-on'
+could not close a window -- so every bottom popup (which-key, transient,
+*Completions*, *Help*) stayed open under --lrg."
+  (skip-unless (cmacs-lrgterm-tests--live-p))
+  (dolist (p '(menu-bar-lines tab-bar-lines tool-bar-lines))
+    (should (integerp (frame-parameter nil p)))))
+
+(ert-deftest cmacs-lrgterm-side-window-quits ()
+  "A bottom side-window popup tears down via `quit-window' on an lrg frame.
+This is the shared auto-close path for which-key (`quit-windows-on'),
+transient, *Help* and *Completions*; the popup window must be deleted, not
+merely have its buffer buried."
+  (skip-unless (cmacs-lrgterm-tests--live-p))
+  (let ((buf (get-buffer-create "*cmacs-lrgterm-popup-test*")))
+    (unwind-protect
+        (let ((win (display-buffer-in-side-window
+                    buf '((side . bottom) (slot . 0)))))
+          (should (window-live-p win))
+          ;; window-deletable-p must not signal (the nil tab-bar-lines bug).
+          (should (window-deletable-p win))
+          (with-selected-window win (quit-window))
+          (should-not (window-live-p win)))
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+
 ;;;; Input layer (event-carried modifiers, timestamps) ------------------
 
 (ert-deftest cmacs-lrgterm-input-mods-translation ()

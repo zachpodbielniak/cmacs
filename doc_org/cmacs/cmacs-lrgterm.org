@@ -209,6 +209,23 @@ uses ~glfwGetCurrentContext()~ — raylib's ~GetWindowHandle()~ returns the
 NATIVE X11/Wayland handle, not the GLFWwindow, a trap that once left this
 whole mechanism silently inert.)
 
+*** Frame-parameter parity with pgtk
+
+~lrg-create-frame~ defaults ~menu-bar-lines~, ~tab-bar-lines~ and
+~tool-bar-lines~ to *0* (a number, like every other GUI backend), not the
+unset ~nil~.  This is load-bearing: generic window code does arithmetic on
+them — e.g. ~window-deletable-p~ evaluates ~(> (frame-parameter f
+'tab-bar-lines) 0)~ — and a ~nil~ there signals ~(wrong-type-argument
+number-or-marker-p nil)~, which aborts ~window--delete~ so that
+~quit-window~ / ~quit-windows-on~ silently fail to close a window.  The
+visible symptom was that every bottom popup (which-key, transient,
+~*Completions*~, ~*Help*~) stayed open under ~--lrg~ and had to be closed by
+hand, while pgtk (which sets the same defaults) worked.  lrg draws none of
+these bars, so it forces ~0~ rather than following
+~Vmenu-bar-mode~/~Vtab-bar-mode~/~Vtool-bar-mode~ the way pgtk does — which
+is also consistent with ~cmacs-lrg-frame-geometry~ reporting all three bar
+sizes as 0.
+
 *** Text rendering (the font bridge)
 
 lrg reuses Emacs's stock Cairo FreeType/HarfBuzz font drivers (~ftcrfont~ /

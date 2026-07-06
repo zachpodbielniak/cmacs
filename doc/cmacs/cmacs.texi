@@ -8348,6 +8348,23 @@ redisplay interface, the font-driver blit, and the event loop.
 GObject-Introspection access to the Layer-2 types.
 @end table
 
+@section Frame-parameter parity with pgtk
+
+@code{lrg-create-frame} defaults @code{menu-bar-lines}, @code{tab-bar-lines}
+and @code{tool-bar-lines} to @emph{0} (a number, like every other GUI
+backend), not the unset @code{nil}.  This is load-bearing: generic window
+code does arithmetic on them---e.g.@: @code{window-deletable-p} evaluates
+@code{(> (frame-parameter f 'tab-bar-lines) 0)}---and a @code{nil} there
+signals @code{(wrong-type-argument number-or-marker-p nil)}, which aborts
+@code{window--delete} so that @code{quit-window} / @code{quit-windows-on}
+silently fail to close a window.  The visible symptom was that every bottom
+popup (which-key, transient, @code{*Completions*}, @code{*Help*}) stayed open
+under @code{--lrg} and had to be closed by hand, while pgtk (which sets the
+same defaults) worked.  lrg draws none of these bars, so it forces @code{0}
+rather than following @code{menu-bar-mode}/@code{tab-bar-mode}/@code{tool-bar-mode}
+the way pgtk does, consistent with @code{cmacs-lrg-frame-geometry} reporting
+all three bar sizes as 0.
+
 @section Text rendering
 
 lrg reuses Emacs's stock Cairo FreeType/HarfBuzz drivers (@code{ftcrfont} /
