@@ -178,22 +178,26 @@ Each clip is a button that selects it (highlighting it on the timeline)."
       (with-current-buffer cmacs-vidstudio--clips-panel
         (cmacs-vidstudio--build-clips-panel pb)))))
 
+(defun cmacs-vidstudio--open-clips-panel ()
+  "Create + show the clips side window for the current project buffer."
+  (let* ((pb (current-buffer))
+         (buf (get-buffer-create
+               (format "*vidstudio-clips[%s]*" (buffer-name pb)))))
+    (setq cmacs-vidstudio--clips-panel buf)
+    (with-current-buffer buf
+      (unless (derived-mode-p 'special-mode) (special-mode))
+      (setq-local cursor-type nil)
+      (cmacs-vidstudio--build-clips-panel pb))
+    (display-buffer-in-side-window
+     buf '((side . right) (window-width . 30) (slot . 0)))))
+
 (defun cmacs-vidstudio-toggle-clips-panel ()
   "Toggle a right side window listing the project's clips and their IDs."
   (interactive)
   (if (and cmacs-vidstudio--clips-panel
            (get-buffer-window cmacs-vidstudio--clips-panel))
       (delete-window (get-buffer-window cmacs-vidstudio--clips-panel))
-    (let* ((pb (current-buffer))
-           (buf (get-buffer-create
-                 (format "*vidstudio-clips[%s]*" (buffer-name pb)))))
-      (setq cmacs-vidstudio--clips-panel buf)
-      (with-current-buffer buf
-        (unless (derived-mode-p 'special-mode) (special-mode))
-        (setq-local cursor-type nil))
-      (cmacs-vidstudio--refresh-clips-panel)
-      (display-buffer-in-side-window
-       buf '((side . right) (window-width . 30) (slot . 0))))))
+    (cmacs-vidstudio--open-clips-panel)))
 
 (defvar cmacs-vidstudio--canvas-map (make-sparse-keymap)
   "Keymap applied as a text property over the rendered preview/timeline.
@@ -650,6 +654,9 @@ instantly; the on-timeline length snaps to the real value once decoded
                             cmacs-vidstudio--active-track)))
       (cmacs-vidstudio--render))
     (switch-to-buffer buffer)
+    ;; Auto-open the clip-list side window (like imgedit's panels) BEFORE the
+    ;; viewport attaches, so the FBO sizes to the reduced main window.
+    (with-current-buffer buffer (cmacs-vidstudio--open-clips-panel))
     (cmacs-vidstudio--maybe-attach-viewport buffer)
     (with-current-buffer buffer (cmacs-vidstudio--render))
     (message "Opened %s" file)
@@ -1313,6 +1320,9 @@ Sets `cmacs-vidstudio--live'; leaves it nil (native path) on failure."
                             cmacs-vidstudio--active-track)))
       (cmacs-vidstudio--render))
     (switch-to-buffer buffer)
+    ;; Auto-open the clip-list side window (like imgedit's panels) BEFORE the
+    ;; viewport attaches, so the FBO sizes to the reduced main window.
+    (with-current-buffer buffer (cmacs-vidstudio--open-clips-panel))
     ;; Try the live GL viewport (native PPM preview is the fallback).
     (cmacs-vidstudio--maybe-attach-viewport buffer)
     (with-current-buffer buffer (cmacs-vidstudio--render))
