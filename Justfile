@@ -106,6 +106,7 @@ configure_flags := """
     --with-cmacs-lrgterm
     --with-cmacs-imgedit
     --with-cmacs-vidstudio
+    --with-cmacs-transcode
     --enable-cmacs-cpatch
     --enable-cmacs-deps-debug
 """

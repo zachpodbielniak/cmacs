@@ -64,6 +64,9 @@ const char *const cmacs_feature_names[] = {
 #ifdef HAVE_CMACS_VIDSTUDIO
   "vidstudio",
 #endif
+#ifdef HAVE_CMACS_TRANSCODE
+  "transcode",
+#endif
 #ifdef HAVE_CMACS_GNUSEYE
   "gnuseye",
 #endif
@@ -212,6 +215,12 @@ syms_of_cmacs_features (void)
   is_cmacs_vidstudio = true;
 #endif
 
+  DEFVAR_BOOL ("IS-CMACS-TRANSCODE", is_cmacs_transcode,
+    doc: /* Non-nil if this build was configured --with-cmacs-transcode.  */);
+#ifdef HAVE_CMACS_TRANSCODE
+  is_cmacs_transcode = true;
+#endif
+
   DEFVAR_BOOL ("IS-CMACS-GNUSEYE", is_cmacs_gnuseye,
     doc: /* Non-nil if this build was configured --with-cmacs-gnuseye.  */);
 #ifdef HAVE_CMACS_GNUSEYE
@@ -320,6 +329,7 @@ syms_of_cmacs_features (void)
   cmacs_features__alias ("is-cmacs-lrgterm",     "IS-CMACS-LRGTERM");
   cmacs_features__alias ("is-cmacs-imgedit",     "IS-CMACS-IMGEDIT");
   cmacs_features__alias ("is-cmacs-vidstudio",   "IS-CMACS-VIDSTUDIO");
+  cmacs_features__alias ("is-cmacs-transcode",   "IS-CMACS-TRANSCODE");
   cmacs_features__alias ("is-cmacs-gnuseye",     "IS-CMACS-GNUSEYE");
   cmacs_features__alias ("is-cmacs-cad",         "IS-CMACS-CAD");
   cmacs_features__alias ("is-cmacs-screensaver", "IS-CMACS-SCREENSAVER");

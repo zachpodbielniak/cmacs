@@ -57,7 +57,8 @@ is marked `/* CMACS: ... */`; the full catalogue with rationale is
             --with-cmacs-glib --with-cmacs-gi ... --with-cmacs-gnuseye \
             --with-cmacs-screensaver --with-cmacs-gsurf --with-cmacs-emacsctl \
             --with-cmacs-lrgterm --with-cmacs-imgedit \
-            --with-cmacs-vidstudio --enable-cmacs-cpatch \
+            --with-cmacs-vidstudio --with-cmacs-transcode \
+            --enable-cmacs-cpatch \
             --enable-cmacs-deps-debug  # in-house deps -O0 -g3 DWARF (gdb + cintrospect); full set: README.org
 make -j$(nproc)           # builds deps + emacs
 just run                  # run it
@@ -185,6 +186,7 @@ C source `cmacs/<name>/`, Elisp `lisp/cmacs/`, tests `test/cmacs/`, docs
 | **screensaver** | `cmacs/screensaver/` | Renders `deps/screensavers` libregnum game-modules (blackhole/singularity/helios) as animated **gowl wallpaper**, **lock-screen background** (`gowl-lock` integration), or **in-buffer** playback. Wallpaper/lock render **out-of-process** (`cmacs-screensaver-render`, its own GL context — no main-thread lag, no EGL/GLX conflict; a *process* not a thread because raylib's GL context is shared): control over a SEQPACKET-JSON socketpair, frames over a sealed-memfd seqlock ring (`SCM_RIGHTS`), supervised (crash-restart/backoff/watchdog/PDEATHSIG). Emacs pushes raw ARGB8888 frames into gowl's frame-sink — **gowl never links libregnum** (guard-tested; child links no Emacs objects). Named configs + picker + status/restart/pause/resume/set-fps on all surfaces; off by default |
 | **imgedit** | `cmacs/imgedit/` | 2D image / sprite editor on libregnum's `LrgImageDocument`/`LrgImageLayer` (CPU layer compositor: opacity, blend modes, offset, undo). DEFUN model layer (`cmacs-imgedit-*`, handle-based, MCP/headless-driveable) + `cmacs-imgedit-mode` (native-image display + mouse painting; in-engine GL viewport is a planned follow-on). Off by default (`--with-cmacs-imgedit`; needs libregnum) |
 | **vidstudio** | `cmacs/vidstudio/` | Video editor on libregnum's Reel system (each track = an `LrgReelTransitionSeries` of clip segments). DEFUN model layer (`cmacs-vidstudio-*`: tracks/clips/transitions/effects/split/trim/move/ripple, CPU render, ffmpeg export) + `cmacs-vidstudio-mode` (native-image preview + playhead/transport; in-engine timeline strip is a planned follow-on). ffmpeg-binary backed; the `LrgVideoPlayer` libav backend (`FFMPEG=1`) gives smooth scrub. Off by default (`--with-cmacs-vidstudio`; needs libregnum) |
+| **transcode** | `lisp/cmacs/` | Native batch video/audio transcoder mirroring the `compress_video`/`compress_audio` scripts. Pure-Elisp (no C): spawns ffmpeg in a podman/docker `linuxserver/ffmpeg` container (guaranteed codec set) or a host ffmpeg, managing an Emacs bounded parallel pool itself (no GNU parallel). Interactive queue buffer (`cmacs-transcode-mode`: add files, tune codec/CRF/format/hwaccel/parallel, process-missing/existing) with a live status timer; all knobs are `defcustom`s. Full fidelity incl. VAAPI/Vulkan hwaccel + colour-metadata preservation. Off by default (`--with-cmacs-transcode`) |
 
 The large subsystems have non-obvious internals (gsurf's focus-handoff model, libregnum's
 real-time render pipeline, the ai/MCP tool bridge). Read `doc_org/cmacs/*.org` and the

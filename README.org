@@ -428,6 +428,7 @@ cd cmacs
   --with-cmacs-lrgterm \
   --with-cmacs-imgedit \
   --with-cmacs-vidstudio \
+  --with-cmacs-transcode \
   --enable-cmacs-cpatch \
   --enable-cmacs-deps-debug   # in-house deps -O0 -g3 (DWARF): gdb + runtime cintrospection
 make -j$(nproc)
@@ -547,6 +548,7 @@ Requires =autoconf= (>= 2.65) and =automake=.
   --with-cmacs-lrgterm \
   --with-cmacs-imgedit \
   --with-cmacs-vidstudio \
+  --with-cmacs-transcode \
   --enable-cmacs-cpatch \
   --enable-cmacs-deps-debug   # in-house deps -O0 -g3 (DWARF): gdb + runtime cintrospection
 #+end_src
@@ -605,6 +607,23 @@ Module flags:
 - =--with-cmacs-imgedit= — 2D raster image / sprite editor on libregnum's =LrgImageDocument= layer compositor (opacity, blend modes, offset, undo).  =M-x cmacs-imgedit= opens a canvas + tools/layers side panels; mouse tools include brush, line, *arrow*, rect, circle, ellipse and *text* — the screenshot-annotation loop is =M-x cmacs-imgedit-from-clipboard=, mark it up, =y= to put the annotated PNG back on the clipboard.  Clipboard backends: Emacs's own GTK clipboard (works under gowl, GNOME/Mutter, KDE and X11 alike) with =wl-clipboard= as the GTK-less fallback.  The handle-based =cmacs-imgedit-*= model API is headless and MCP-driveable (=imgedit_*= tools).  Part of the standard flag set; requires =--with-cmacs-libregnum= + =--with-cmacs-glib=.  See [[file:doc_org/cmacs/cmacs-imgedit.org][the manual]].
 
 - =--with-cmacs-vidstudio= — Video editor on libregnum's *Reel* composition system: multi-track timeline (each track an =LrgReelTransitionSeries=), 9 transition types, 5 effects, split/trim/move/ripple, text/solid/image/video clips, CPU preview and ffmpeg-backed mp4/gif export.  =M-x cmacs-vidstudio=; video clips decode on a worker thread (import never blocks) and playback paces itself from the wall clock so the editor never freezes.  Headless + MCP-driveable (=vidstudio_*= tools).  Part of the standard flag set; requires =--with-cmacs-libregnum= + =--with-cmacs-glib= (the =ffmpeg= binary at runtime for video clips/export).  See [[file:doc_org/cmacs/cmacs-vidstudio.org][the manual]].
+
+- =--with-cmacs-transcode= — Native batch video/audio *transcoder*, a
+  reimplementation of the author's =compress_video= / =compress_audio= shell
+  scripts.  Emacs itself spawns and supervises the ffmpeg processes as a bounded
+  parallel pool (no GNU parallel), preferring a podman/docker
+  =linuxserver/ffmpeg= container (guaranteed full codec set) and falling back to
+  a host =ffmpeg= binary.  =M-x cmacs-transcode= (or =-video= / =-audio=, e.g. on
+  dired-marked files) opens an interactive queue buffer that is both control
+  panel and live status view: add files/dirs, tune codec, CRF/QP, format,
+  hwaccel and parallelism, toggle process-missing/existing, then =RET= to run;
+  progress refreshes on a timer.  Full fidelity to the scripts — all codecs,
+  quality presets, subtitle copy, ffprobe colour-metadata preservation and the
+  VAAPI/Vulkan hardware-acceleration paths — and *every knob is a =defcustom=* so
+  you can set your own defaults (the shipped defaults match =--no-hwaccel --crf
+  26=, h265/vorbis/mkv for video and mp3/320k for audio).  Pure Elisp (no C);
+  part of the standard flag set; needs podman/docker or a host =ffmpeg= at
+  runtime.  See [[file:doc_org/cmacs/transcode/index.org][the manual]].
 
 Each module auto-detects bundled (=deps/=) or system libraries.  To
 force system-installed versions:

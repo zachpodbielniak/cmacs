@@ -37,6 +37,7 @@ All CMacs features are auto-detected.  You can force them on or off:
 | =--with-cmacs-emacsctl=       | emacsctl/cmacsctl CLI (standalone binary)|
 | =--with-cmacs-lrgterm=        | output_lrg libregnum/raylib display backend (=emacs --lrg=) |
 | =--with-cmacs-screensaver=    | libregnum screensavers as wallpaper / lock / buffer |
+| =--with-cmacs-transcode=      | Native ffmpeg video/audio transcoder (container/host; parallel pool) |
 | =--enable-cmacs-cpatch=       | Runtime C hot-patching (DANGEROUS)      |
 | =--enable-cmacs-deps-debug=   | In-house deps -O0 -g3 DWARF (gdb + cintrospect); default |
 
@@ -76,6 +77,7 @@ Example with explicit flags:
   --with-cmacs-screensaver \
   --with-cmacs-emacsctl \
   --with-cmacs-lrgterm \
+  --with-cmacs-transcode \
   --enable-cmacs-cpatch \
   --enable-cmacs-deps-debug   # in-house deps -O0 -g3 (DWARF): gdb + runtime cintrospection
 #+end_example

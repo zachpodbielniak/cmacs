@@ -664,6 +664,7 @@ OPTION_DEFAULT_OFF([cmacs-libregnum], [CMacs libregnum 3D scene buffers (raylib 
 OPTION_DEFAULT_OFF([cmacs-lrgterm], [CMacs independent libregnum/raylib display backend (output_lrg; peer to pgtk)])
 OPTION_DEFAULT_OFF([cmacs-imgedit], [CMacs 2D image / sprite editor (layers, blend modes, undo; libregnum LrgImageDocument)])
 OPTION_DEFAULT_OFF([cmacs-vidstudio], [CMacs video editor (libregnum Reel timeline, transitions, effects, ffmpeg export)])
+OPTION_DEFAULT_OFF([cmacs-transcode], [CMacs native ffmpeg video/audio transcoder (podman/docker container or host; Emacs-managed parallel pool)])
 OPTION_DEFAULT_OFF([cmacs-gnuseye], [CMacs gnuseye live planetary globe (GNU's Eye; requires libregnum)])
 OPTION_DEFAULT_OFF([cmacs-cad], [CMacs parametric CAD subsystem (cad-glib kernels; parts render as libregnum CAD nodes)])
 OPTION_DEFAULT_OFF([cmacs-screensaver], [CMacs libregnum screensavers as animated wallpaper / lock screen / buffer (requires libregnum; wallpaper+lock need gowl)])
@@ -1325,6 +1326,29 @@ AC_SUBST(HAVE_CMACS_PRINT)
 AC_SUBST(CMACS_PRINT_PDFTOCAIRO)
 AC_SUBST(CMACS_PRINT_PDFINFO)
 AC_SUBST(CMACS_PRINT_GDBUS)
+
+# CMACS Transcode: pure-Elisp subsystem (no C build artefacts).  ffmpeg runs
+# in a podman/docker linuxserver/ffmpeg container when available (guaranteed
+# full codec set), else via a host ffmpeg binary; the backend is resolved at
+# runtime from Elisp, so probes here are informational only and never fatal.
+HAVE_CMACS_TRANSCODE=no
+CMACS_TRANSCODE_PODMAN=
+CMACS_TRANSCODE_DOCKER=
+CMACS_TRANSCODE_FFMPEG=
+if test "$with_cmacs_transcode" != "no"; then
+  AC_PATH_PROG([CMACS_TRANSCODE_PODMAN], [podman])
+  AC_PATH_PROG([CMACS_TRANSCODE_DOCKER], [docker])
+  AC_PATH_PROG([CMACS_TRANSCODE_FFMPEG], [ffmpeg])
+  HAVE_CMACS_TRANSCODE=yes
+  AC_DEFINE([HAVE_CMACS_TRANSCODE], 1, [CMacs native ffmpeg transcoder subsystem])
+  if test -z "$CMACS_TRANSCODE_PODMAN" && test -z "$CMACS_TRANSCODE_DOCKER" \
+     && test -z "$CMACS_TRANSCODE_FFMPEG"; then
+    AC_MSG_WARN([cmacs-transcode enabled but no podman, docker, or ffmpeg found.
+  Install podman (recommended, for the linuxserver/ffmpeg container) or a host
+  ffmpeg; cmacs-transcode.el will still load but cannot run until one exists.])
+  fi
+fi
+AC_SUBST(HAVE_CMACS_TRANSCODE)
 
 # CMACS Video: GStreamer-backed video overlay for inline #+BEGIN_VIDEO
 # blocks and standalone cmacs-video-mode buffers.  Compositor-agnostic:
