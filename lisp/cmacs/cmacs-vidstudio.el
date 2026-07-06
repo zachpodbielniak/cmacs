@@ -118,6 +118,49 @@ Every playback frame is a distinct image, so without an explicit
               lines)))
     (string-join (nreverse lines) "\n")))
 
+(defun cmacs-vidstudio--clip-list-string ()
+  "Compact per-track clip list with IDs, for the header line.
+Each clip shows #id[start+dur]; the active track is marked *, the
+selected clip is highlighted, a still-decoding clip shows … + shadow."
+  (when cmacs-vidstudio--handle
+    (let ((ntr (cmacs-vidstudio-n-tracks cmacs-vidstudio--handle))
+          (parts '()))
+      (dotimes (tr ntr)
+        (let ((nclips (cmacs-vidstudio-track-clip-count
+                       cmacs-vidstudio--handle tr))
+              (cells '()))
+          (dotimes (ci nclips)
+            (let* ((id (cmacs-vidstudio-clip-at cmacs-vidstudio--handle tr ci))
+                   (start (cmacs-vidstudio-clip-start-frame
+                           cmacs-vidstudio--handle id))
+                   (dur (cmacs-vidstudio-clip-duration cmacs-vidstudio--handle id))
+                   (decoding (and (fboundp 'cmacs-vidstudio-clip-ready-p)
+                                  (not (cmacs-vidstudio-clip-ready-p
+                                        cmacs-vidstudio--handle id)))))
+              (push (propertize
+                     (format "#%d[%d+%d%s]" id start dur (if decoding "…" ""))
+                     'face (cond ((eql id cmacs-vidstudio--selected-clip)
+                                  'highlight)
+                                 (decoding 'shadow)
+                                 (t 'default)))
+                    cells)))
+          (when (> nclips 0)
+            (push (concat (if (= tr cmacs-vidstudio--active-track) "*" "")
+                          (format "T%d " tr)
+                          (string-join (nreverse cells) " "))
+                  parts))))
+      (if parts (string-join (nreverse parts) "  ") "(no clips)"))))
+
+(defun cmacs-vidstudio--header-string ()
+  "Header-line: playhead, active track, and the clip list with IDs."
+  (when cmacs-vidstudio--handle
+    (concat
+     (format " f%d/%d  t%d   "
+             cmacs-vidstudio--playhead
+             (cmacs-vidstudio-total-frames cmacs-vidstudio--handle)
+             cmacs-vidstudio--active-track)
+     (cmacs-vidstudio--clip-list-string))))
+
 (defvar cmacs-vidstudio--canvas-map (make-sparse-keymap)
   "Keymap applied as a text property over the rendered preview/timeline.
 A position `keymap' property outranks Evil state maps and
@@ -560,14 +603,7 @@ instantly; the on-timeline length snaps to the real value once decoded
             cmacs-vidstudio--file file
             cmacs-vidstudio--playhead 0
             cmacs-vidstudio--active-track 0)
-      (setq header-line-format
-            '(:eval (format " vidstudio %dx%d @%.0ffps  frame %d/%d  track %d"
-                            (cmacs-vidstudio-width cmacs-vidstudio--handle)
-                            (cmacs-vidstudio-height cmacs-vidstudio--handle)
-                            (cmacs-vidstudio-fps cmacs-vidstudio--handle)
-                            cmacs-vidstudio--playhead
-                            (cmacs-vidstudio-total-frames cmacs-vidstudio--handle)
-                            cmacs-vidstudio--active-track)))
+      (setq header-line-format '(:eval (cmacs-vidstudio--header-string)))
       (cmacs-vidstudio--render))
     (switch-to-buffer buffer)
     (cmacs-vidstudio--maybe-attach-viewport buffer)
@@ -1197,14 +1233,7 @@ Sets `cmacs-vidstudio--live'; leaves it nil (native path) on failure."
       (setq cmacs-vidstudio--handle handle
             cmacs-vidstudio--playhead 0
             cmacs-vidstudio--active-track 0)
-      (setq header-line-format
-            '(:eval (format " vidstudio %dx%d @%.0ffps  frame %d/%d  track %d"
-                            (cmacs-vidstudio-width cmacs-vidstudio--handle)
-                            (cmacs-vidstudio-height cmacs-vidstudio--handle)
-                            (cmacs-vidstudio-fps cmacs-vidstudio--handle)
-                            cmacs-vidstudio--playhead
-                            (cmacs-vidstudio-total-frames cmacs-vidstudio--handle)
-                            cmacs-vidstudio--active-track)))
+      (setq header-line-format '(:eval (cmacs-vidstudio--header-string)))
       (cmacs-vidstudio--render))
     (switch-to-buffer buffer)
     ;; Try the live GL viewport (native PPM preview is the fallback).
