@@ -55,6 +55,10 @@ available; nil falls back to the PPM/PNG insert-image preview.")
 (defvar-local cmacs-vidstudio--tl-trim nil
   "Clip id currently being trimmed by a timeline edge-drag, or nil.")
 (defvar-local cmacs-vidstudio--play-timer nil)
+(defvar-local cmacs-vidstudio--audio-proc nil
+  "External audio-playback process during preview, or nil.")
+(defvar-local cmacs-vidstudio--audio-wav nil
+  "Temp WAV of the mixed project audio for preview playback.")
 (defvar-local cmacs-vidstudio--preview-scale 0.5)
 (defcustom cmacs-vidstudio-playback-scale 0.4
   "Preview scale used WHILE playing (a low-res proxy for near-real-time
@@ -333,6 +337,52 @@ cache when a playback cache is active)."
     (cancel-timer cmacs-vidstudio--prefetch-timer))
   (setq cmacs-vidstudio--prefetch-timer
         (run-with-idle-timer 0.02 t #'cmacs-vidstudio--prefetch-tick)))
+
+(defun cmacs-vidstudio--audio-player-command (wav offset)
+  "Command list to play WAV from OFFSET seconds with no window, or nil if no
+suitable player is on PATH."
+  (let ((off (format "%.3f" (max 0.0 offset))))
+    (cond
+     ((executable-find "ffplay")
+      (list (executable-find "ffplay") "-nodisp" "-autoexit"
+            "-loglevel" "quiet" "-ss" off wav))
+     ((executable-find "mpv")
+      (list (executable-find "mpv") "--no-video" "--really-quiet"
+            (concat "--start=" off) wav))
+     ;; paplay/aplay cannot seek -- only usable from the very start.
+     ((and (< offset 0.05) (executable-find "paplay"))
+      (list (executable-find "paplay") wav))
+     ((and (< offset 0.05) (executable-find "aplay"))
+      (list (executable-find "aplay") "-q" wav))
+     (t nil))))
+
+(defun cmacs-vidstudio--audio-stop ()
+  "Stop any preview audio playback."
+  (when (process-live-p cmacs-vidstudio--audio-proc)
+    (delete-process cmacs-vidstudio--audio-proc))
+  (setq cmacs-vidstudio--audio-proc nil))
+
+(defun cmacs-vidstudio--audio-start (offset)
+  "Mix the project audio and start playing it from OFFSET seconds, synced to
+the wall-clock playhead.  No-op when the project has no audio."
+  (cmacs-vidstudio--audio-stop)
+  (when (and (fboundp 'cmacs-vidstudio-audio-count)
+             (> (cmacs-vidstudio-audio-count cmacs-vidstudio--handle) 0))
+    (condition-case err
+        (let ((wav (or cmacs-vidstudio--audio-wav
+                       (setq cmacs-vidstudio--audio-wav
+                             (make-temp-file "cmvs-preview" nil ".wav")))))
+          ;; WAV (format 0) is a direct sample write -- no ffmpeg, fast.
+          (cmacs-vidstudio-export-audio cmacs-vidstudio--handle wav 0)
+          (let ((cmd (cmacs-vidstudio--audio-player-command wav offset)))
+            (if cmd
+                (setq cmacs-vidstudio--audio-proc
+                      (make-process :name "vidstudio-audio" :command cmd
+                                    :noquery t :buffer nil
+                                    :sentinel #'ignore))
+              (message "vidstudio: no audio player found (install ffplay or mpv) -- preview is silent"))))
+      (error (message "vidstudio: audio preview unavailable: %s"
+                      (error-message-string err))))))
 
 (defun cmacs-vidstudio--cache-stop ()
   "Tear down the playback frame cache + prefetch."
@@ -1046,6 +1096,7 @@ source slice; to change which part of the source plays use \[cmacs-vidstudio-set
   (when cmacs-vidstudio--play-timer
     (cancel-timer cmacs-vidstudio--play-timer)
     (setq cmacs-vidstudio--play-timer nil)
+    (cmacs-vidstudio--audio-stop)         ; stop preview audio
     (cmacs-vidstudio--cache-stop)         ; drop the playback frame cache
     ;; restore the full-res preview and repaint the current frame crisply
     (when cmacs-vidstudio--paused-scale
@@ -1085,6 +1136,7 @@ silently updates.  Starting play at the end of the timeline rewinds."
             (start-frame cmacs-vidstudio--playhead)
             (t0 (float-time))
             (tick (/ 1.0 (max 1 cmacs-vidstudio-preview-fps))))
+        (cmacs-vidstudio--audio-start (/ start-frame fps))
         (setq cmacs-vidstudio--play-timer
               (run-at-time
                tick tick
@@ -1560,6 +1612,10 @@ length.  Numeric in/out editing is on \[cmacs-vidstudio-set-clip-trim-cmd]."
 (defun cmacs-vidstudio--cleanup ()
   "Stop playback and free the project when the buffer dies."
   (cmacs-vidstudio--cache-stop)
+  (cmacs-vidstudio--audio-stop)
+  (when (and cmacs-vidstudio--audio-wav
+             (file-exists-p cmacs-vidstudio--audio-wav))
+    (ignore-errors (delete-file cmacs-vidstudio--audio-wav)))
   (when cmacs-vidstudio--play-timer
     (cancel-timer cmacs-vidstudio--play-timer))
   (when cmacs-vidstudio--decode-timer
