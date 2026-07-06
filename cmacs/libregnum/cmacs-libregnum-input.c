@@ -178,12 +178,14 @@ static gboolean
 image_menu_idle (gpointer user)
 {
   ImageAction *a = user;
-  /* (BUFFER (DX DY FX FY)) -- FX/FY are frame pixels for x-popup-menu.  The
+  /* (BUFFER (DX DY FX FY CLIP-ID)) -- FX/FY are frame pixels for x-popup-menu;
+   * CLIP-ID (a->button) is the timeline clip under the cursor, or -1.  The
    * Elisp router must re-schedule the actual pop onto the command loop. */
   cmacs_dispatch_safe_call2 (intern ("cmacs-libregnum--image-context-menu"),
                              a->buffer,
-                             list4 (make_fixnum (a->dx), make_fixnum (a->dy),
-                                    make_fixnum (a->fx), make_fixnum (a->fy)));
+                             list5 (make_fixnum (a->dx), make_fixnum (a->dy),
+                                    make_fixnum (a->fx), make_fixnum (a->fy),
+                                    make_fixnum (a->button)));
   g_free (a);
   return G_SOURCE_REMOVE;
 }
@@ -214,11 +216,13 @@ defer_image_timeline (CmacsLibregnumView *v, const char *event,
 }
 
 static void
-defer_image_menu (CmacsLibregnumView *v, int dx, int dy, int fx, int fy)
+defer_image_menu (CmacsLibregnumView *v, int dx, int dy, int fx, int fy,
+                  int clip_id)
 {
   ImageAction *a = g_new0 (ImageAction, 1);
   a->buffer = cmacs_libregnum_view_get_buffer (v);
   a->dx = dx; a->dy = dy; a->fx = fx; a->fy = fy;
+  a->button = clip_id;          /* clip under the cursor, or -1 */
   g_main_context_invoke (cmacs_glib_get_context (), image_menu_idle, a);
 }
 
@@ -336,10 +340,13 @@ frame_to_view_coords (struct frame *f, CmacsLibregnumView *v,
   if (!f || !FRAME_LIVE_P (f)) return false;
   struct window *win = window_showing_view (FRAME_ROOT_WINDOW (f), v);
   if (!win) return false;
-  int px = WINDOW_LEFT_PIXEL_EDGE (win);
-  int py = WINDOW_TOP_PIXEL_EDGE  (win);
-  int pw = WINDOW_PIXEL_WIDTH     (win);
-  int ph = WINDOW_PIXEL_HEIGHT    (win);
+  /* Map against the window BODY (text area), matching the paint rect
+     (window_box TEXT_AREA in the lrg/pgtk compositors) and the FBO size
+     (window-body).  Using the full WINDOW_PIXEL_* rect here -- which includes
+     the mode line -- both stretched the mapping and let clicks on the modeline
+     fall through to the view instead of Emacs. */
+  int px, py, pw, ph;
+  window_box (win, TEXT_AREA, &px, &py, &pw, &ph);
   int w = 0, h = 0;
   cmacs_libregnum_view_get_size (v, &w, &h);
   if (pw <= 0 || ph <= 0 || w <= 0 || h <= 0) return false;
@@ -826,7 +833,16 @@ cmacs_libregnum_handle_button (struct frame *f, int button, int press,
         if (button == 3)          /* right release -> context menu */
           {
             if (!press)
-              defer_image_menu (v, dx, dy, (int) x, (int) y);
+              {
+                /* Report the timeline clip under the cursor (if any) so the
+                 * menu commands act on it without prompting. */
+                int tf = 0, tcid = -1;
+                gboolean tedge = FALSE;
+                if (in)
+                  cmacs_libregnum_render_ctx_image_timeline_hit
+                    (ctx, vx, vy, vw, vh, &tf, &tcid, &tedge);
+                defer_image_menu (v, dx, dy, (int) x, (int) y, tcid);
+              }
             return true;
           }
         return true;

@@ -329,3 +329,14 @@ ripple are simple descriptor operations and the series recomputes frame layout.
   ~emacs -batch~ subprocess (a `make-process' sentinel reports completion),
   so the editor stays responsive -- a synchronous export blocked Emacs's main
   thread long enough that the compositor flagged it as hung.
+
+- *Export* prompts for a *codec* (H.264 / H.265 / AV1 / VP9 / ProRes) and an
+  encoder *preset* (default ~veryfast~); non-video projects render across all
+  cores (~render_parallel~) -- video stays sequential (its source frame-cache
+  is not thread-safe).
+- Right-clicking a clip on the timeline strip acts on *that* clip: the menu
+  commands use the clicked clip's id (no "Clip id:" prompt).
+- All 31 easing curves are available for transitions (the previous subset had
+  wrong codes).
+- The *audio lane* shows in the timeline strip (a teal row in parallel with
+  the video) and in the clip-list side window (an Audio section).

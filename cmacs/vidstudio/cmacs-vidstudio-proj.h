@@ -258,6 +258,12 @@ extern gboolean cmacs_vidstudio_proj_set_audio_fade (CmacsVidProject *p,
                                                      double fade_out);
 extern gboolean cmacs_vidstudio_proj_remove_audio (CmacsVidProject *p, gint id);
 extern guint cmacs_vidstudio_proj_audio_count (CmacsVidProject *p);
+extern gboolean cmacs_vidstudio_proj_audio_at (CmacsVidProject *p, guint index,
+                                               guint *out_id, int *out_from,
+                                               int *out_frames,
+                                               gboolean *out_extract);
+extern void cmacs_vidstudio_proj_set_export_preset (CmacsVidProject *p,
+                                                    const char *preset);
 /* FORMAT: 0 WAV, 1 MP3, 2 AAC, 3 FLAC. */
 extern gboolean cmacs_vidstudio_proj_export_audio (CmacsVidProject *p,
                                                    const char *path, int format,

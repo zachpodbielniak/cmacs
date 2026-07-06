@@ -599,6 +599,35 @@ DEFUN ("cmacs-vidstudio-set-export-quality",
   return Qnil;
 }
 
+DEFUN ("cmacs-vidstudio-audio-at", Fcmacs_vidstudio_audio_at,
+       Scmacs_vidstudio_audio_at, 2, 2, 0,
+       doc: /* Return (ID FROM-FRAME FRAMES EXTRACT-P) for audio clip INDEX,
+or nil.  */)
+  (Lisp_Object handle, Lisp_Object index)
+{
+  guint id = 0;
+  int from = 0, frames = 0;
+  gboolean extract = FALSE;
+  CHECK_FIXNUM (index);
+  if (!cmacs_vidstudio_proj_audio_at (vs_lookup (handle),
+                                      (guint) XFIXNUM (index),
+                                      &id, &from, &frames, &extract))
+    return Qnil;
+  return list4 (make_fixnum (id), make_fixnum (from), make_fixnum (frames),
+                extract ? Qt : Qnil);
+}
+
+DEFUN ("cmacs-vidstudio-set-export-preset", Fcmacs_vidstudio_set_export_preset,
+       Scmacs_vidstudio_set_export_preset, 2, 2, 0,
+       doc: /* Set the video-export encoder PRESET word (x264/x265
+"ultrafast".."veryslow"); nil restores the default ("veryfast").  */)
+  (Lisp_Object handle, Lisp_Object preset)
+{
+  cmacs_vidstudio_proj_set_export_preset
+    (vs_lookup (handle), STRINGP (preset) ? SSDATA (preset) : NULL);
+  return Qnil;
+}
+
 DEFUN ("cmacs-vidstudio-add-audio-file", Fcmacs_vidstudio_add_audio_file,
        Scmacs_vidstudio_add_audio_file, 2, 6, 0,
        doc: /* Add audio PATH at FROM-FRAME with VOLUME, TRIM-START/END secs.  */)
@@ -1126,6 +1155,8 @@ syms_of_cmacs_vidstudio_defuns (void)
   defsubr (&Scmacs_vidstudio_add_keyframe);
   defsubr (&Scmacs_vidstudio_clear_keyframes);
   defsubr (&Scmacs_vidstudio_keyframe_count);
+  defsubr (&Scmacs_vidstudio_audio_at);
+  defsubr (&Scmacs_vidstudio_set_export_preset);
   defsubr (&Scmacs_vidstudio_add_audio_file);
   defsubr (&Scmacs_vidstudio_add_audio_extract_file);
   defsubr (&Scmacs_vidstudio_add_audio_from_clip);

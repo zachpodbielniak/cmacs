@@ -167,6 +167,18 @@ Each clip is a button that selects it (highlighting it on the timeline)."
                                  (setq cmacs-vidstudio--selected-clip cid)
                                  (cmacs-vidstudio--render))))))
                 (insert "\n"))))))
+      ;; Audio lane
+      (when (and (fboundp 'cmacs-vidstudio-audio-count)
+                 (> (cmacs-vidstudio-audio-count handle) 0))
+        (insert (propertize " Audio\n" 'face 'font-lock-keyword-face))
+        (dotimes (ai (cmacs-vidstudio-audio-count handle))
+          (let ((info (cmacs-vidstudio-audio-at handle ai)))
+            (when info
+              (insert
+               (format "  #%-3d %5d-%-5d %4dfr%s\n"
+                       (nth 0 info) (nth 1 info)
+                       (+ (nth 1 info) (nth 2 info)) (nth 2 info)
+                       (if (nth 3 info) " (from video)" "")))))))
       (goto-char (point-min)))))
 
 (defun cmacs-vidstudio--refresh-clips-panel ()
@@ -230,6 +242,19 @@ A position `keymap' property outranks Evil state maps and
                       (min 255 (+ (nth 1 col) sel))
                       (min 255 (+ (nth 2 col) sel)))
                 clips))))
+    ;; Audio lane: one extra row (track = ntr) so audio shows in parallel
+    ;; with the video, teal-coloured.
+    (when (fboundp 'cmacs-vidstudio-audio-count)
+      (dotimes (ai (cmacs-vidstudio-audio-count cmacs-vidstudio--handle))
+        (let ((info (cmacs-vidstudio-audio-at cmacs-vidstudio--handle ai)))
+          (when info
+            (let ((id (nth 0 info)) (from (nth 1 info)) (frames (nth 2 info))
+                  (sel (if (eql (nth 0 info) cmacs-vidstudio--selected-clip)
+                           60 0)))
+              (push (list id ntr from (max 2 frames)
+                          (min 255 (+ 70 sel)) (min 255 (+ 190 sel))
+                          (min 255 (+ 160 sel)))
+                    clips))))))
     (nreverse clips)))
 
 (defun cmacs-vidstudio--update-timeline ()
@@ -438,10 +463,17 @@ instantly; the on-timeline length snaps to the real value once decoded
             (throw 'hit id))))
       nil)))
 
+(defvar cmacs-vidstudio--context-clip nil
+  "When non-nil, the clip id a right-clicked menu command acts on WITHOUT
+prompting.  Dynamically bound for the duration of a context-menu pop from the
+clip the user right-clicked on the timeline strip.")
+
 (defun cmacs-vidstudio--read-clip ()
-  "Read a clip id, defaulting to the clip under the playhead."
-  (let ((def (cmacs-vidstudio--clip-at-playhead)))
-    (read-number "Clip id: " (or def 0))))
+  "Clip id: the right-clicked clip when a menu supplies one, else prompt
+\(defaulting to the clip under the playhead)."
+  (or cmacs-vidstudio--context-clip
+      (let ((def (cmacs-vidstudio--clip-at-playhead)))
+        (read-number "Clip id: " (or def 0)))))
 
 (defun cmacs-vidstudio-set-clip-opacity (clip o)
   "Set CLIP's opacity to O (0..1)."
@@ -800,9 +832,20 @@ immediately and the preview pops in when the decode finishes."
     (message "Added title clip #%d" id)))
 
 (defconst cmacs-vidstudio-easing-alist
-  '(("linear" . 0) ("ease-in-quad" . 1) ("ease-out-quad" . 2)
-    ("ease-in-out-cubic" . 9) ("ease-out-back" . 20) ("ease-out-bounce" . 30))
-  "A useful subset of LrgEasingType names -> codes.")
+  '(("linear" . 0)
+    ("ease-in-quad" . 1)  ("ease-out-quad" . 2)  ("ease-in-out-quad" . 3)
+    ("ease-in-cubic" . 4) ("ease-out-cubic" . 5) ("ease-in-out-cubic" . 6)
+    ("ease-in-quart" . 7) ("ease-out-quart" . 8) ("ease-in-out-quart" . 9)
+    ("ease-in-quint" . 10) ("ease-out-quint" . 11) ("ease-in-out-quint" . 12)
+    ("ease-in-sine" . 13) ("ease-out-sine" . 14) ("ease-in-out-sine" . 15)
+    ("ease-in-expo" . 16) ("ease-out-expo" . 17) ("ease-in-out-expo" . 18)
+    ("ease-in-circ" . 19) ("ease-out-circ" . 20) ("ease-in-out-circ" . 21)
+    ("ease-in-back" . 22) ("ease-out-back" . 23) ("ease-in-out-back" . 24)
+    ("ease-in-elastic" . 25) ("ease-out-elastic" . 26)
+    ("ease-in-out-elastic" . 27)
+    ("ease-in-bounce" . 28) ("ease-out-bounce" . 29)
+    ("ease-in-out-bounce" . 30))
+  "All 31 LrgEasingType curve names -> codes (matches lrg-enums.h order).")
 
 (defun cmacs-vidstudio-add-transition-cmd (clip-id type overlap easing)
   "Set CLIP-ID's leading TYPE transition, OVERLAP seconds, EASING curve."
@@ -999,11 +1042,35 @@ Emacs's main thread long enough that the compositor reports it as hung)."
     (message "vidstudio: exporting %s to %s in the background (editor stays usable)"
              what (file-name-nondirectory path))))
 
-(defun cmacs-vidstudio-export-video-cmd (path)
-  "Export the project to PATH (H.264 mp4) in the background."
-  (interactive "FExport video to: ")
+(defconst cmacs-vidstudio-codec-alist
+  '(("H.264  (libx264, .mp4)" . 0)
+    ("H.265  (libx265, .mp4)" . 2)
+    ("AV1    (libsvtav1, .mp4)" . 4)
+    ("VP9    (libvpx-vp9, .webm)" . 1)
+    ("ProRes (prores_ks, .mov)" . 3))
+  "Export codec names -> codec codes (see cmacs-vidstudio-export-video).")
+
+(defconst cmacs-vidstudio-preset-list
+  '("ultrafast" "superfast" "veryfast" "faster" "fast" "medium" "slow"
+    "slower" "veryslow")
+  "x264/x265 encoder presets, fastest -> slowest.")
+
+(defun cmacs-vidstudio-export-video-cmd (path codec preset)
+  "Export the project to PATH in the background using CODEC + PRESET.
+CODEC picks the encoder; PRESET (x264/x265) trades speed for size --
+"veryfast" is a good default ("medium" is the ffmpeg default and slower)."
+  (interactive
+   (list (read-file-name "Export video to: ")
+         (cdr (assoc (completing-read "Codec: " cmacs-vidstudio-codec-alist
+                                      nil t nil nil "H.264  (libx264, .mp4)")
+                     cmacs-vidstudio-codec-alist))
+         (completing-read "Preset (speed/size): " cmacs-vidstudio-preset-list
+                          nil t nil nil "veryfast")))
   (cmacs-vidstudio--export-async
-   path "(cmacs-vidstudio-export-video h out 0)" "video"))
+   path
+   (format "(progn (cmacs-vidstudio-set-export-preset h %S) (cmacs-vidstudio-export-video h out %d))"
+           (or preset "veryfast") (or codec 0))
+   "video"))
 
 (defun cmacs-vidstudio-export-gif-cmd (path)
   "Export the project to PATH as an animated GIF in the background."
@@ -1217,17 +1284,25 @@ Press a key to run its command, or q / C-g to dismiss."
        (cmacs-libregnum-supported-p)
        (or (display-graphic-p) (eq (framep-on-display) 'lrg))))
 
-(defun cmacs-vidstudio--vp-context-menu (buffer _dx _dy fx fy)
-  "Pop the video-editor context menu for a viewport right-click at (FX FY)."
-  (run-at-time
-   0 nil
-   (lambda ()
-     (when (buffer-live-p buffer)
-       (with-current-buffer buffer
-         (let ((choice (cmacs-libregnum-popup-menu
-                        (list (list fx fy) (selected-window))
-                        (cmacs-vidstudio--menu))))
-           (when (commandp choice) (call-interactively choice))))))))
+(defun cmacs-vidstudio--vp-context-menu (buffer _dx _dy fx fy &optional clip-id)
+  "Pop the video-editor context menu for a viewport right-click at (FX FY).
+CLIP-ID is the timeline clip under the cursor (-1/nil = none); when set, menu
+commands act on it without prompting for a clip id."
+  (let ((cid (and (integerp clip-id) (>= clip-id 0) clip-id)))
+    (when cid
+      (with-current-buffer buffer
+        (setq cmacs-vidstudio--selected-clip cid)
+        (cmacs-vidstudio--render)))
+    (run-at-time
+     0 nil
+     (lambda ()
+       (when (buffer-live-p buffer)
+         (with-current-buffer buffer
+           (let ((cmacs-vidstudio--context-clip cid)
+                 (choice (cmacs-libregnum-popup-menu
+                          (list (list fx fy) (selected-window))
+                          (cmacs-vidstudio--menu))))
+             (when (commandp choice) (call-interactively choice)))))))))
 
 (defun cmacs-vidstudio--label-font-file ()
   "Resolve the Emacs default face's font family to a TTF/OTF file path.

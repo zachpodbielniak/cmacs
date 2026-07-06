@@ -456,7 +456,8 @@ timer (the editor does the same)."
    buffer 'cmacs-libregnum-image-timeline-release-function info))
 
 (defun cmacs-libregnum--image-context-menu (buffer info)
-  "Dispatch an image-viewport right-click.  INFO is (DX DY FX FY).
+  "Dispatch an image-viewport right-click.  INFO is (DX DY FX FY CLIP-ID),
+where CLIP-ID is the timeline clip under the cursor (-1 = none).
 Runs inside the pselect wait, so the handler must NOT pop a menu here --
 re-schedule onto the command loop with a 0-delay timer."
   (when (buffer-live-p buffer)
@@ -464,7 +465,7 @@ re-schedule onto the command loop with a 0-delay timer."
       (let ((fn cmacs-libregnum-image-context-menu-function))
         (when (functionp fn)
           (funcall fn buffer (nth 0 info) (nth 1 info)
-                   (nth 2 info) (nth 3 info)))))))
+                   (nth 2 info) (nth 3 info) (nth 4 info)))))))
 
 (defun cmacs-libregnum-up ()
   "Re-root the tree at the parent of the current root directory."
@@ -4250,7 +4251,12 @@ Safe to call multiple times."
   "Idle timer coalescing window-size changes for `cmacs-libregnum--fit-views'.")
 
 (defun cmacs-libregnum--fit-views ()
-  "Resize every on-screen libregnum view's FBO to its window's pixel size."
+  "Resize every on-screen libregnum view's FBO to its window's BODY size.
+The FBO is sized to the text area (`window-body-*'), NOT the full window
+pixel size: the compositors paint the FBO into `window_box' TEXT_AREA and the
+click mapping (`frame_to_view_coords') uses the same body rect, so sizing the
+FBO to the pixel height -- which includes the mode line -- stretched the view
+over the Doom modeline."
   (setq cmacs-libregnum--fit-timer nil)
   (when (fboundp 'cmacs-libregnum-attached-p)
     (dolist (frame (frame-list))
@@ -4259,8 +4265,8 @@ Safe to call multiple times."
           (let ((buf (window-buffer win)))
             (when (and (buffer-live-p buf)
                        (ignore-errors (cmacs-libregnum-attached-p buf)))
-              (let ((w (window-pixel-width win))
-                    (h (window-pixel-height win)))
+              (let ((w (window-body-width win t))
+                    (h (window-body-height win t)))
                 (when (and (> w 1) (> h 1))
                   (ignore-errors (cmacs-libregnum-resize buf w h)))))))))))
 
@@ -4280,8 +4286,9 @@ before the first window-size change fires."
                (ignore-errors (cmacs-libregnum-attached-p buf)))
       (let ((win (get-buffer-window buf t)))
         (when (window-live-p win)
-          (let ((w (window-pixel-width win))
-                (h (window-pixel-height win)))
+          ;; Body size (text area), not window-pixel -- see `--fit-views'.
+          (let ((w (window-body-width win t))
+                (h (window-body-height win t)))
             (when (and (> w 1) (> h 1))
               (ignore-errors (cmacs-libregnum-resize buf w h)))))))))
 

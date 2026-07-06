@@ -88,6 +88,7 @@ typedef struct
   double       volume;
   double       trim_start, trim_end;
   double       fade_in, fade_out;   /* seconds; 0 = none */
+  double       duration_secs;       /* natural length (for the timeline) */
 } VidAudioSeg;
 
 struct CmacsVidProject
@@ -101,6 +102,7 @@ struct CmacsVidProject
   gboolean   dirty;
   int        export_crf;        /* video CRF quality; <0 = exporter default */
   int        export_bitrate;    /* video bitrate kbps; <=0 = unset */
+  char      *export_preset;     /* x264/x265 preset word; NULL = default */
   GArray      *audio;           /* of VidAudioSeg */
   LrgWaveData *mixed;           /* cached mix, or NULL (invalidated on edit) */
   gboolean     audio_dirty;
@@ -117,6 +119,7 @@ static void seg_meta (CmacsVidProject *p, gint id, int kind, const char *asset,
                       double in, double out);
 static void proj_apply_animation (CmacsVidProject *p, int global_frame);
 static gboolean proj_has_keyframes (CmacsVidProject *p);
+static gboolean proj_has_video (CmacsVidProject *p);
 static gboolean proj_render_to_exporter (CmacsVidProject *p,
                                          LrgReelRenderer *r,
                                          LrgReelExporter *ex, GError **error);
@@ -204,6 +207,7 @@ cmacs_vidstudio_proj_new (int w, int h, double fps)
 void
 cmacs_vidstudio_proj_free (CmacsVidProject *p)
 {
+  g_free (p->export_preset);
   if (p == NULL)
     return;
   g_clear_pointer (&p->tracks, g_ptr_array_unref);
@@ -1051,6 +1055,12 @@ cmacs_vidstudio_proj_add_audio_file (CmacsVidProject *p, const char *path,
   a.volume = (volume >= 0.0) ? volume : 1.0;
   a.trim_start = trim_start;
   a.trim_end = trim_end;
+  {
+    LrgWaveData *w = lrg_wave_data_new_from_file (path, NULL);
+    if (w != NULL)
+      { a.duration_secs = lrg_wave_data_get_duration (w);
+        g_object_unref (w); }
+  }
   g_array_append_val (p->audio, a);
   p->audio_dirty = TRUE;
   return (gint) a.id;
@@ -1095,6 +1105,7 @@ cmacs_vidstudio_proj_add_audio_from_clip (CmacsVidProject *p, gint clip_id,
   a.wave = wave;                 /* transfer full */
   a.from_frame = from_frame;
   a.volume = (volume >= 0.0) ? volume : 1.0;
+  a.duration_secs = (wave != NULL) ? lrg_wave_data_get_duration (wave) : 0.0;
   g_array_append_val (p->audio, a);
   p->audio_dirty = TRUE;
   return (gint) a.id;
@@ -1137,6 +1148,7 @@ cmacs_vidstudio_proj_add_audio_extract_file (CmacsVidProject *p,
   a.wave = wave;
   a.from_frame = from_frame;
   a.volume = (volume >= 0.0) ? volume : 1.0;
+  a.duration_secs = (wave != NULL) ? lrg_wave_data_get_duration (wave) : 0.0;
   g_array_append_val (p->audio, a);
   p->audio_dirty = TRUE;
   return (gint) a.id;
@@ -1180,6 +1192,40 @@ guint
 cmacs_vidstudio_proj_audio_count (CmacsVidProject *p)
 {
   return (p && p->audio) ? p->audio->len : 0;
+}
+
+/* Details of the INDEXth audio clip on the lane (for the timeline/list).
+   OUT_FRAMES is the on-timeline length in frames (trim-aware). */
+gboolean
+cmacs_vidstudio_proj_audio_at (CmacsVidProject *p, guint index, guint *out_id,
+                               int *out_from, int *out_frames,
+                               gboolean *out_extract)
+{
+  VidAudioSeg *a;
+  double secs;
+
+  if (p == NULL || p->audio == NULL || index >= p->audio->len)
+    return FALSE;
+  a = &g_array_index (p->audio, VidAudioSeg, index);
+  if (out_id) *out_id = a->id;
+  if (out_from) *out_from = a->from_frame;
+  if (out_extract) *out_extract = a->extract;
+  secs = a->duration_secs;
+  if (a->trim_end > a->trim_start && a->trim_end > 0.0)
+    secs = a->trim_end - a->trim_start;
+  else if (a->trim_start > 0.0)
+    secs = MAX (0.0, secs - a->trim_start);
+  if (out_frames)
+    *out_frames = (int) (secs * p->fps + 0.5);
+  return TRUE;
+}
+
+void
+cmacs_vidstudio_proj_set_export_preset (CmacsVidProject *p, const char *preset)
+{
+  if (p == NULL) return;
+  g_free (p->export_preset);
+  p->export_preset = (preset && preset[0]) ? g_strdup (preset) : NULL;
 }
 
 gboolean
@@ -1577,13 +1623,34 @@ cmacs_vidstudio_proj_serialize (CmacsVidProject *p)
    per frame, so cmacs drives the begin/add_frame/finish loop; otherwise the
    engine's own loop is used (keeping motion-blur / parallel rendering). */
 static gboolean
+proj_has_video (CmacsVidProject *p)
+{
+  guint ti, si;
+  for (ti = 0; ti < p->tracks->len; ti++)
+    {
+      VidTrack *t = g_ptr_array_index (p->tracks, ti);
+      for (si = 0; si < t->segs->len; si++)
+        if (LRG_IS_REEL_VIDEO_CLIP (g_array_index (t->segs, VidSeg, si).clip))
+          return TRUE;
+    }
+  return FALSE;
+}
+
+static gboolean
 proj_render_to_exporter (CmacsVidProject *p, LrgReelRenderer *r,
                          LrgReelExporter *ex, GError **error)
 {
   int total, f;
 
+  /* Parallelise the render across all cores when it is safe -- i.e. no
+     keyframe animation (frames are independent) AND no video clips (their
+     source frame-cache is not thread-safe; see render_parallel's contract). */
   if (!proj_has_keyframes (p))
-    return lrg_reel_renderer_render_to_exporter (r, ex, error);
+    {
+      if (proj_has_video (p))
+        return lrg_reel_renderer_render_to_exporter (r, ex, error);
+      return lrg_reel_renderer_render_parallel (r, 0, ex, error);
+    }
 
   total = cmacs_vidstudio_proj_total_frames (p);
   if (total < 1) total = 1;
@@ -2065,12 +2132,15 @@ cmacs_vidstudio_proj_export_video (CmacsVidProject *p, const char *path,
     case 1:  c = LRG_REEL_VIDEO_CODEC_VP9; break;
     case 2:  c = LRG_REEL_VIDEO_CODEC_H265; break;
     case 3:  c = LRG_REEL_VIDEO_CODEC_PRORES; break;
+    case 4:  c = LRG_REEL_VIDEO_CODEC_AV1; break;
     default: c = LRG_REEL_VIDEO_CODEC_H264; break;
     }
   proj_wait_video_clips (p);
   proj_rebuild (p);
   r = lrg_reel_renderer_new (p->reel);
   ex = lrg_reel_video_exporter_new (path, c);
+  if (p->export_preset != NULL)
+    lrg_reel_video_exporter_set_preset (ex, p->export_preset);
   if (p->export_crf >= 0)
     lrg_reel_video_exporter_set_crf (ex, p->export_crf);
   if (p->export_bitrate > 0)
