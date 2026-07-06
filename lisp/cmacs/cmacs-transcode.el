@@ -289,9 +289,18 @@ when a device is present; `force' errors if no device is available."
   (status 'queued)      ; queued running done failed skipped
   (progress "")         ; latest ffmpeg stats line
   process               ; the running process, or nil
+  container             ; container name (for podman/docker force-kill), or nil
   (tries 0)             ; attempts so far
   cancelled             ; non-nil when the user killed it (no retry)
   note)                 ; extra note for the status line
+
+(defvar cmacs-transcode--name-counter 0
+  "Monotonic counter for unique per-run container names.")
+
+(defun cmacs-transcode--gen-container-name ()
+  "Return a fresh, unique container name for a transcode job."
+  (format "cmacs-transcode-%d-%d"
+          (emacs-pid) (cl-incf cmacs-transcode--name-counter)))
 
 (defvar-local cmacs-transcode--kind 'video
   "Media kind of this session: `video' or `audio'.")
@@ -383,11 +392,14 @@ dirs to mount) and :same (input and output share a directory)."
     ("amd" (list "RADV_PERFTEST=video_decode"))
     (_ nil)))
 
-(defun cmacs-transcode--command (kind tool io hw ffmpeg-args)
+(defun cmacs-transcode--command (kind tool io hw ffmpeg-args &optional name)
   "Assemble the full process command list.
 KIND is `host', `podman', or `docker'.  TOOL is `ffmpeg' or `ffprobe'.
 IO is a plist from `cmacs-transcode--io'.  HW is (TYPE . VENDOR) or nil.
-FFMPEG-ARGS already reference the paths in IO."
+FFMPEG-ARGS already reference the paths in IO.  For a container backend,
+NAME (when non-nil) is passed as \"--name\" so the container can later be
+force-removed --- SIGKILL to the client alone does not reach ffmpeg
+inside the container."
   (let ((prog (if (eq tool 'ffprobe) "ffprobe" "ffmpeg")))
     (if (eq kind 'host)
         (cons (or (executable-find prog) prog) ffmpeg-args)
@@ -397,7 +409,9 @@ FFMPEG-ARGS already reference the paths in IO."
              (out-dir (and (plist-get io :out-dir)
                            (directory-file-name (plist-get io :out-dir)))))
         (append
-         (list runner "run" "--rm" "--security-opt" "label=disable")
+         (list runner "run" "--rm")
+         (when name (list "--name" name))
+         (list "--security-opt" "label=disable")
          (when (eq tool 'ffprobe) (list "--entrypoint" "ffprobe"))
          (cmacs-transcode--hw-run-args hw)
          (if same
@@ -914,14 +928,17 @@ with RECURSIVE, preserving the relative subdir)."
            (fargs (if (eq media 'video)
                       (cmacs-transcode--video-args opts io meta)
                     (cmacs-transcode--audio-args opts io)))
-           (cmd (cmacs-transcode--command kind 'ffmpeg io hw fargs))
+           (cname (and (memq kind '(podman docker))
+                       (cmacs-transcode--gen-container-name)))
+           (cmd (cmacs-transcode--command kind 'ffmpeg io hw fargs cname))
            (process-environment
             (if (and (eq kind 'host) (eq (car-safe hw) 'vulkan))
                 (append (cmacs-transcode--hw-host-env (cdr hw)) process-environment)
               process-environment)))
       (make-directory (file-name-directory out) t)
       (setf (cmacs-transcode-job-status job) 'running
-            (cmacs-transcode-job-progress job) "starting")
+            (cmacs-transcode-job-progress job) "starting"
+            (cmacs-transcode-job-container job) cname)
       (cmacs-transcode--log "start %s -> %s"
                             (file-name-nondirectory in)
                             (file-name-nondirectory out))
@@ -978,6 +995,23 @@ with RECURSIVE, preserving the relative subdir)."
       (dotimes (_ (min n (length queued)))
         (cmacs-transcode--launch-next buffer))
       (cmacs-transcode--render buffer))))
+
+(defun cmacs-transcode--force-kill-job (job)
+  "Forcibly stop JOB's ffmpeg, including a container backend's container.
+SIGKILL to a podman/docker client does not reach ffmpeg running inside the
+container (conmon keeps it alive), so the container is force-removed by name
+with `<runtime> rm -f'; the client process is also SIGKILLed."
+  (let ((proc (cmacs-transcode-job-process job))
+        (cname (cmacs-transcode-job-container job)))
+    (when (and cname (memq cmacs-transcode--backend '(podman docker)))
+      ;; Destination 0 = run asynchronously, discarding output, so a slow
+      ;; `rm -f' never blocks the UI.
+      (ignore-errors
+        (call-process (symbol-name cmacs-transcode--backend) nil 0 nil
+                      "rm" "-f" cname)))
+    (when (process-live-p proc)
+      (ignore-errors (signal-process proc 9)) ; SIGKILL the client too
+      (ignore-errors (delete-process proc)))))
 
 ;;; ---------------------------------------------------------------------
 ;;; Rendering
@@ -1103,13 +1137,15 @@ with RECURSIVE, preserving the relative subdir)."
   (define-key map (kbd "?") #'cmacs-transcode-help))
 
 (defun cmacs-transcode--cleanup ()
-  "Kill-buffer hook: cancel the timer and stop running processes."
+  "Kill-buffer hook: cancel the timer and force-stop running jobs.
+Container jobs are removed by name so closing the buffer never orphans
+ffmpeg inside a container."
   (when (timerp cmacs-transcode--timer) (cancel-timer cmacs-transcode--timer))
   (dolist (j cmacs-transcode--jobs)
-    (let ((p (cmacs-transcode-job-process j)))
-      (when (process-live-p p)
-        (setf (cmacs-transcode-job-cancelled j) t)
-        (delete-process p)))))
+    (when (or (eq (cmacs-transcode-job-status j) 'running)
+              (process-live-p (cmacs-transcode-job-process j)))
+      (setf (cmacs-transcode-job-cancelled j) t)
+      (cmacs-transcode--force-kill-job j))))
 
 (define-derived-mode cmacs-transcode-mode special-mode "Transcode"
   "Major mode for the cmacs media transcoder queue.
@@ -1218,14 +1254,20 @@ With prefix argument RECURSIVE, search directories recursively."
         (cmacs-transcode--render (current-buffer))))))
 
 (defun cmacs-transcode-kill ()
-  "Kill the running job on the current line (no retry)."
+  "Kill the running job on the current line (SIGKILL, no retry).
+For a container backend this force-removes the container, so ffmpeg
+running inside it is actually stopped."
   (interactive)
   (cmacs-transcode--ensure-mode)
   (let ((job (cmacs-transcode--job-at-point)))
-    (if (and job (process-live-p (cmacs-transcode-job-process job)))
+    (if (and job (or (eq (cmacs-transcode-job-status job) 'running)
+                     (process-live-p (cmacs-transcode-job-process job))))
         (progn (setf (cmacs-transcode-job-cancelled job) t
                      (cmacs-transcode-job-note job) "killed")
-               (delete-process (cmacs-transcode-job-process job)))
+               (cmacs-transcode--force-kill-job job)
+               (cmacs-transcode--log
+                "killed %s"
+                (file-name-nondirectory (cmacs-transcode-job-input job))))
       (user-error "No running job on this line"))))
 
 (defun cmacs-transcode-start ()

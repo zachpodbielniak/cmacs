@@ -234,6 +234,22 @@
     (should (equal (last cmd 3) '("-i" "/input/a.mp4" "/output/a.mkv")))
     (should-not (member "--entrypoint" cmd))))
 
+(ert-deftest cmacs-transcode-test-command-name ()
+  "A container name is threaded through as --name for later force-removal."
+  (cmacs-transcode-tests--skip-unless-loaded)
+  (let* ((io (cmacs-transcode--io 'podman "/media/a.mp4" "/media/a.mkv"))
+         (cmd (cmacs-transcode--command
+               'podman 'ffmpeg io nil '("-i" "x") "cmacs-transcode-1-2")))
+    (should (member "--name" cmd))
+    (should (member "cmacs-transcode-1-2" cmd))
+    ;; --name comes right after `run --rm'.
+    (should (equal (seq-take cmd 5)
+                   '("podman" "run" "--rm" "--name" "cmacs-transcode-1-2"))))
+  ;; No name => no --name flag (backwards compatible).
+  (let* ((io (cmacs-transcode--io 'podman "/media/a.mp4" "/media/a.mkv"))
+         (cmd (cmacs-transcode--command 'podman 'ffmpeg io nil '("-i" "x"))))
+    (should-not (member "--name" cmd))))
+
 (ert-deftest cmacs-transcode-test-command-ffprobe ()
   "ffprobe under a container sets --entrypoint ffprobe."
   (cmacs-transcode-tests--skip-unless-loaded)
