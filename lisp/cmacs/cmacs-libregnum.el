@@ -376,6 +376,97 @@ timer (the editor does the same)."
                    (derived-mode-p 'cmacs-gnuseye-mode))
           (cmacs-gnuseye--context-menu buffer id path vx vy))))))
 
+;; ── 2D image-mode input dispatchers ────────────────────────────────────
+;; The C input layer defers image-viewport mouse events here (document pixel
+;; coords).  Each dispatcher forwards to a buffer-local hook function the
+;; hosting editor (imgedit / vidstudio) installs, keeping this file
+;; content-agnostic.  All run on the cmacs GMainContext.
+
+(defvar-local cmacs-libregnum-image-press-function nil
+  "Function called on image-viewport left press: (BUFFER DX DY BUTTON MODS).")
+(defvar-local cmacs-libregnum-image-drag-function nil
+  "Function called on image-viewport left drag: (BUFFER DX DY BUTTON MODS).")
+(defvar-local cmacs-libregnum-image-release-function nil
+  "Function called on image-viewport left release (after motion).")
+(defvar-local cmacs-libregnum-image-click-function nil
+  "Function called on image-viewport click (press+release, no motion).")
+(defvar-local cmacs-libregnum-image-context-menu-function nil
+  "Function called on image-viewport right release: (BUFFER DX DY FX FY).")
+(defvar-local cmacs-libregnum-image-timeline-press-function nil
+  "Timeline-strip press hook: (BUFFER FRAME CLIP-ID NEAR-EDGE).")
+(defvar-local cmacs-libregnum-image-timeline-drag-function nil
+  "Timeline-strip drag hook: (BUFFER FRAME CLIP-ID NEAR-EDGE).")
+(defvar-local cmacs-libregnum-image-timeline-release-function nil
+  "Timeline-strip release hook: (BUFFER FRAME CLIP-ID NEAR-EDGE).")
+
+(defun cmacs-libregnum--image-dispatch (buffer hookvar dx dy button mods)
+  "Call BUFFER's HOOKVAR with (BUFFER DX DY BUTTON MODS) if bound."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (let ((fn (symbol-value hookvar)))
+        (when (functionp fn)
+          (funcall fn buffer dx dy button mods))))))
+
+(defun cmacs-libregnum--image-press (buffer info)
+  "Dispatch an image-viewport left press.  INFO is (DX DY BUTTON MODS)."
+  (cmacs-libregnum--image-dispatch buffer 'cmacs-libregnum-image-press-function
+                                   (nth 0 info) (nth 1 info) (nth 2 info)
+                                   (nth 3 info)))
+
+(defun cmacs-libregnum--image-drag (buffer info)
+  "Dispatch an image-viewport left drag.  INFO is (DX DY BUTTON MODS)."
+  (cmacs-libregnum--image-dispatch buffer 'cmacs-libregnum-image-drag-function
+                                   (nth 0 info) (nth 1 info) (nth 2 info)
+                                   (nth 3 info)))
+
+(defun cmacs-libregnum--image-release (buffer info)
+  "Dispatch an image-viewport left release.  INFO is (DX DY BUTTON MODS)."
+  (cmacs-libregnum--image-dispatch buffer
+                                   'cmacs-libregnum-image-release-function
+                                   (nth 0 info) (nth 1 info) (nth 2 info)
+                                   (nth 3 info)))
+
+(defun cmacs-libregnum--image-click (buffer info)
+  "Dispatch an image-viewport click.  INFO is (DX DY BUTTON MODS)."
+  (cmacs-libregnum--image-dispatch buffer 'cmacs-libregnum-image-click-function
+                                   (nth 0 info) (nth 1 info) (nth 2 info)
+                                   (nth 3 info)))
+
+(defun cmacs-libregnum--image-timeline-dispatch (buffer hookvar info)
+  "Call BUFFER's timeline HOOKVAR with (BUFFER FRAME CLIP-ID NEAR-EDGE)."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (let ((fn (symbol-value hookvar)))
+        (when (functionp fn)
+          (funcall fn buffer (nth 0 info) (nth 1 info) (nth 2 info)))))))
+
+(defun cmacs-libregnum--image-timeline-press (buffer info)
+  "Dispatch a timeline-strip press.  INFO is (FRAME CLIP-ID NEAR-EDGE 0)."
+  (cmacs-libregnum--image-timeline-dispatch
+   buffer 'cmacs-libregnum-image-timeline-press-function info))
+
+(defun cmacs-libregnum--image-timeline-drag (buffer info)
+  "Dispatch a timeline-strip drag.  INFO is (FRAME CLIP-ID NEAR-EDGE 0)."
+  (cmacs-libregnum--image-timeline-dispatch
+   buffer 'cmacs-libregnum-image-timeline-drag-function info))
+
+(defun cmacs-libregnum--image-timeline-release (buffer info)
+  "Dispatch a timeline-strip release.  INFO is (FRAME CLIP-ID NEAR-EDGE 0)."
+  (cmacs-libregnum--image-timeline-dispatch
+   buffer 'cmacs-libregnum-image-timeline-release-function info))
+
+(defun cmacs-libregnum--image-context-menu (buffer info)
+  "Dispatch an image-viewport right-click.  INFO is (DX DY FX FY CLIP-ID),
+where CLIP-ID is the timeline clip under the cursor (-1 = none).
+Runs inside the pselect wait, so the handler must NOT pop a menu here --
+re-schedule onto the command loop with a 0-delay timer."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (let ((fn cmacs-libregnum-image-context-menu-function))
+        (when (functionp fn)
+          (funcall fn buffer (nth 0 info) (nth 1 info)
+                   (nth 2 info) (nth 3 info) (nth 4 info)))))))
+
 (defun cmacs-libregnum-up ()
   "Re-root the tree at the parent of the current root directory."
   (interactive)
@@ -4160,7 +4251,12 @@ Safe to call multiple times."
   "Idle timer coalescing window-size changes for `cmacs-libregnum--fit-views'.")
 
 (defun cmacs-libregnum--fit-views ()
-  "Resize every on-screen libregnum view's FBO to its window's pixel size."
+  "Resize every on-screen libregnum view's FBO to its window's BODY size.
+The FBO is sized to the text area (`window-body-*'), NOT the full window
+pixel size: the compositors paint the FBO into `window_box' TEXT_AREA and the
+click mapping (`frame_to_view_coords') uses the same body rect, so sizing the
+FBO to the pixel height -- which includes the mode line -- stretched the view
+over the Doom modeline."
   (setq cmacs-libregnum--fit-timer nil)
   (when (fboundp 'cmacs-libregnum-attached-p)
     (dolist (frame (frame-list))
@@ -4169,8 +4265,8 @@ Safe to call multiple times."
           (let ((buf (window-buffer win)))
             (when (and (buffer-live-p buf)
                        (ignore-errors (cmacs-libregnum-attached-p buf)))
-              (let ((w (window-pixel-width win))
-                    (h (window-pixel-height win)))
+              (let ((w (window-body-width win t))
+                    (h (window-body-height win t)))
                 (when (and (> w 1) (> h 1))
                   (ignore-errors (cmacs-libregnum-resize buf w h)))))))))))
 
@@ -4190,8 +4286,9 @@ before the first window-size change fires."
                (ignore-errors (cmacs-libregnum-attached-p buf)))
       (let ((win (get-buffer-window buf t)))
         (when (window-live-p win)
-          (let ((w (window-pixel-width win))
-                (h (window-pixel-height win)))
+          ;; Body size (text area), not window-pixel -- see `--fit-views'.
+          (let ((w (window-body-width win t))
+                (h (window-body-height win t)))
             (when (and (> w 1) (> h 1))
               (ignore-errors (cmacs-libregnum-resize buf w h)))))))))
 

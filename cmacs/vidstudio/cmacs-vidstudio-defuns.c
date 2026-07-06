@@ -12,7 +12,13 @@
 #ifdef HAVE_CMACS_VIDSTUDIO
 
 #include "lisp.h"
+#include "buffer.h"             /* CHECK_BUFFER for viewport-render */
 #include "cmacs-vidstudio-proj.h"
+#ifdef HAVE_CMACS_LIBREGNUM
+/* Firewall-safe (raylib-free, opaque-ctx) headers for the live viewport. */
+#include "cmacs-libregnum.h"
+#include "cmacs-libregnum-render.h"
+#endif
 
 /* Qcmacs_vidstudio_error is DEFSYM'd below; make-docfile generates its global
    slot, so it must NOT be a file-local variable. */
@@ -68,6 +74,13 @@ static int
 vs_int (Lisp_Object v, int dflt)
 {
   return INTEGERP (v) ? (int) XFIXNUM (v) : dflt;
+}
+
+/* NUMBERP -> double; nil/other -> DFLT (used for optional seconds args). */
+static double
+vs_dbl (Lisp_Object v, double dflt)
+{
+  return NUMBERP (v) ? XFLOATINT (v) : dflt;
 }
 
 DEFUN ("cmacs-vidstudio-supported-p", Fcmacs_vidstudio_supported_p,
@@ -196,6 +209,143 @@ DEFUN ("cmacs-vidstudio-add-solid-clip", Fcmacs_vidstudio_add_solid_clip,
                           vs_clamp8 (b), vs_clamp8 (a)));
 }
 
+DEFUN ("cmacs-vidstudio-add-rich-text", Fcmacs_vidstudio_add_rich_text,
+       Scmacs_vidstudio_add_rich_text, 4, 7, 0,
+       doc: /* Append an animated text clip TEXT on TRACK for DURATION frames.
+Optional FONT-SIZE, EFFECT (0 none, 1 shake, 2 wave, 3 rainbow, 4 typewriter,
+5 fade-in, 6 pulse), and COLOR = (R G B A).  The effect animates per
+character.  */)
+  (Lisp_Object handle, Lisp_Object track, Lisp_Object text,
+   Lisp_Object duration, Lisp_Object font_size, Lisp_Object effect,
+   Lisp_Object color)
+{
+  CHECK_FIXNUM (track);
+  CHECK_STRING (text);
+  return make_fixnum (cmacs_vidstudio_proj_add_rich_text_clip
+    (vs_lookup (handle), (guint) XFIXNUM (track), SSDATA (text),
+     vs_int (duration, 0), vs_int (font_size, 0), vs_int (effect, 0),
+     CONSP (color) ? vs_clamp8 (Fnth (make_fixnum (0), color)) : 255,
+     CONSP (color) ? vs_clamp8 (Fnth (make_fixnum (1), color)) : 255,
+     CONSP (color) ? vs_clamp8 (Fnth (make_fixnum (2), color)) : 255,
+     CONSP (color) ? vs_clamp8 (Fnth (make_fixnum (3), color)) : 255));
+}
+DEFUN ("cmacs-vidstudio-add-loop-clip", Fcmacs_vidstudio_add_loop_clip,
+       Scmacs_vidstudio_add_loop_clip, 4, 5, 0,
+       doc: /* Loop video PATH on TRACK over DURATION frames, repeating every
+LOOP-SECS seconds (nil = the whole duration).  */)
+  (Lisp_Object handle, Lisp_Object track, Lisp_Object path, Lisp_Object duration,
+   Lisp_Object loop_secs)
+{
+  char *err = NULL;
+  gint id;
+  CHECK_FIXNUM (track);
+  CHECK_STRING (path);
+  id = cmacs_vidstudio_proj_add_loop_clip (vs_lookup (handle),
+    (guint) XFIXNUM (track), SSDATA (path), vs_int (duration, 0),
+    vs_dbl (loop_secs, 0.0), &err);
+  if (id < 0)
+    { Lisp_Object m = build_string (err ? err : "loop clip failed");
+      g_free (err); xsignal1 (Qcmacs_vidstudio_error, m); }
+  return make_fixnum (id);
+}
+
+DEFUN ("cmacs-vidstudio-add-freeze-clip", Fcmacs_vidstudio_add_freeze_clip,
+       Scmacs_vidstudio_add_freeze_clip, 4, 5, 0,
+       doc: /* Freeze-frame video PATH on TRACK for DURATION frames, holding the
+frame at FREEZE-SECS seconds (default 0).  */)
+  (Lisp_Object handle, Lisp_Object track, Lisp_Object path, Lisp_Object duration,
+   Lisp_Object freeze_secs)
+{
+  char *err = NULL;
+  gint id;
+  CHECK_FIXNUM (track);
+  CHECK_STRING (path);
+  id = cmacs_vidstudio_proj_add_freeze_clip (vs_lookup (handle),
+    (guint) XFIXNUM (track), SSDATA (path), vs_int (duration, 0),
+    vs_dbl (freeze_secs, 0.0), &err);
+  if (id < 0)
+    { Lisp_Object m = build_string (err ? err : "freeze clip failed");
+      g_free (err); xsignal1 (Qcmacs_vidstudio_error, m); }
+  return make_fixnum (id);
+}
+
+DEFUN ("cmacs-vidstudio-add-shape-rect", Fcmacs_vidstudio_add_shape_rect,
+       Scmacs_vidstudio_add_shape_rect, 8, 8, 0,
+       doc: /* Append a filled rect shape (X Y W H, FILL = (R G B A)) on TRACK.  */)
+  (Lisp_Object handle, Lisp_Object track, Lisp_Object duration, Lisp_Object x,
+   Lisp_Object y, Lisp_Object w, Lisp_Object h, Lisp_Object fill)
+{
+  CHECK_FIXNUM (track);
+  return make_fixnum (cmacs_vidstudio_proj_add_shape_rect
+    (vs_lookup (handle), (guint) XFIXNUM (track), vs_int (duration, 0),
+     vs_int (x, 0), vs_int (y, 0), vs_int (w, 0), vs_int (h, 0),
+     vs_clamp8 (Fnth (make_fixnum (0), fill)),
+     vs_clamp8 (Fnth (make_fixnum (1), fill)),
+     vs_clamp8 (Fnth (make_fixnum (2), fill)),
+     vs_clamp8 (Fnth (make_fixnum (3), fill))));
+}
+
+DEFUN ("cmacs-vidstudio-add-shape-circle", Fcmacs_vidstudio_add_shape_circle,
+       Scmacs_vidstudio_add_shape_circle, 7, 7, 0,
+       doc: /* Append a filled circle (CX CY RADIUS, FILL = (R G B A)) on TRACK.  */)
+  (Lisp_Object handle, Lisp_Object track, Lisp_Object duration, Lisp_Object cx,
+   Lisp_Object cy, Lisp_Object radius, Lisp_Object fill)
+{
+  CHECK_FIXNUM (track);
+  return make_fixnum (cmacs_vidstudio_proj_add_shape_circle
+    (vs_lookup (handle), (guint) XFIXNUM (track), vs_int (duration, 0),
+     vs_int (cx, 0), vs_int (cy, 0), vs_int (radius, 0),
+     vs_clamp8 (Fnth (make_fixnum (0), fill)),
+     vs_clamp8 (Fnth (make_fixnum (1), fill)),
+     vs_clamp8 (Fnth (make_fixnum (2), fill)),
+     vs_clamp8 (Fnth (make_fixnum (3), fill))));
+}
+
+DEFUN ("cmacs-vidstudio-add-caption", Fcmacs_vidstudio_add_caption,
+       Scmacs_vidstudio_add_caption, 3, 5, 0,
+       doc: /* Append captions from an SRT PATH (DURATION frames); optional
+FONT-SIZE and COLOR = (R G B A).  */)
+  (Lisp_Object handle, Lisp_Object track, Lisp_Object srt, Lisp_Object duration,
+   Lisp_Object font_and_color)
+{
+  char *err = NULL;
+  gint id;
+  Lisp_Object col = CONSP (font_and_color) ? XCDR (font_and_color) : Qnil;
+  int fs = CONSP (font_and_color) ? vs_int (XCAR (font_and_color), 0) : 0;
+  CHECK_FIXNUM (track);
+  CHECK_STRING (srt);
+  id = cmacs_vidstudio_proj_add_caption
+    (vs_lookup (handle), (guint) XFIXNUM (track), vs_int (duration, 0),
+     SSDATA (srt), fs,
+     vs_clamp8 (Fnth (make_fixnum (0), col)),
+     vs_clamp8 (Fnth (make_fixnum (1), col)),
+     vs_clamp8 (Fnth (make_fixnum (2), col)),
+     CONSP (col) ? vs_clamp8 (Fnth (make_fixnum (3), col)) : 255, &err);
+  if (id < 0)
+    { Lisp_Object m = build_string (err ? err : "caption load failed");
+      g_free (err); xsignal1 (Qcmacs_vidstudio_error, m); }
+  return make_fixnum (id);
+}
+
+DEFUN ("cmacs-vidstudio-add-gradient-clip",
+       Fcmacs_vidstudio_add_gradient_clip,
+       Scmacs_vidstudio_add_gradient_clip, 5, 6, 0,
+       doc: /* Append a gradient clip on TRACK from colour A to B (lists of
+R G B A); optional RADIAL non-nil draws a radial gradient.  DURATION frames.  */)
+  (Lisp_Object handle, Lisp_Object track, Lisp_Object duration,
+   Lisp_Object a, Lisp_Object b, Lisp_Object radial)
+{
+  CHECK_FIXNUM (track);
+  return make_fixnum (cmacs_vidstudio_proj_add_gradient_clip
+    (vs_lookup (handle), (guint) XFIXNUM (track), vs_int (duration, 0),
+     !NILP (radial),
+     vs_clamp8 (Fnth (make_fixnum (0), a)), vs_clamp8 (Fnth (make_fixnum (1), a)),
+     vs_clamp8 (Fnth (make_fixnum (2), a)), vs_clamp8 (Fnth (make_fixnum (3), a)),
+     vs_clamp8 (Fnth (make_fixnum (0), b)), vs_clamp8 (Fnth (make_fixnum (1), b)),
+     vs_clamp8 (Fnth (make_fixnum (2), b)),
+     vs_clamp8 (Fnth (make_fixnum (3), b))));
+}
+
 DEFUN ("cmacs-vidstudio-add-image-clip", Fcmacs_vidstudio_add_image_clip,
        Scmacs_vidstudio_add_image_clip, 4, 4, 0,
        doc: /* Append image PATH of DURATION frames to TRACK; return clip id.  */)
@@ -221,20 +371,39 @@ DEFUN ("cmacs-vidstudio-add-image-clip", Fcmacs_vidstudio_add_image_clip,
 }
 
 DEFUN ("cmacs-vidstudio-add-video-clip", Fcmacs_vidstudio_add_video_clip,
-       Scmacs_vidstudio_add_video_clip, 4, 4, 0,
-       doc: /* Append video PATH of DURATION frames to TRACK; return clip id.  */)
+       Scmacs_vidstudio_add_video_clip, 4, 6, 0,
+       doc: /* Append video PATH to TRACK; return clip id.
+Optional IN-SEC and OUT-SEC are the source in/out points in seconds.  Omit
+(or nil) IN-SEC for the start; omit OUT-SEC (or pass nil / a value past the
+source end) to import the whole video.  The on-timeline duration is derived
+from the resulting slice.  */)
   (Lisp_Object handle, Lisp_Object track, Lisp_Object path,
-   Lisp_Object duration)
+   Lisp_Object duration, Lisp_Object in_sec, Lisp_Object out_sec)
 {
   char *err = NULL;
   gint id;
+  double in, out;
 
   CHECK_FIXNUM (track);
   CHECK_STRING (path);
+  /* Back-compat: the 4th arg historically was a DURATION in frames.  If IN/OUT
+     are omitted but a positive DURATION is given, treat it as a from-start
+     slice of that many frames; otherwise IN-SEC/OUT-SEC drive the slice
+     (nil -> -1 sentinel = start / whole video). */
+  in = NILP (in_sec) ? -1.0 : vs_dbl (in_sec, -1.0);
+  if (!NILP (out_sec))
+    out = vs_dbl (out_sec, -1.0);
+  else if (NILP (in_sec) && INTEGERP (duration) && XFIXNUM (duration) > 0)
+    {
+      double fps = cmacs_vidstudio_proj_fps (vs_lookup (handle));
+      in = (in < 0.0) ? 0.0 : in;
+      out = in + (fps > 0.0 ? XFIXNUM (duration) / fps : 0.0);
+    }
+  else
+    out = -1.0;
   id = cmacs_vidstudio_proj_add_video_clip (vs_lookup (handle),
                                             (guint) XFIXNUM (track),
-                                            SSDATA (path),
-                                            vs_int (duration, 0), &err);
+                                            SSDATA (path), in, out, &err);
   if (id < 0)
     {
       Lisp_Object msg = build_string (err ? err : "could not add video");
@@ -295,6 +464,432 @@ DEFUN ("cmacs-vidstudio-clear-effects", Fcmacs_vidstudio_clear_effects,
   return cmacs_vidstudio_proj_clear_effects (vs_lookup (handle),
                                              (gint) XFIXNUM (clip_id))
              ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-vidstudio-set-opacity", Fcmacs_vidstudio_set_opacity,
+       Scmacs_vidstudio_set_opacity, 3, 3, 0,
+       doc: /* Set CLIP-ID's opacity to O (0..1).  */)
+  (Lisp_Object handle, Lisp_Object clip_id, Lisp_Object o)
+{
+  CHECK_FIXNUM (clip_id);
+  return cmacs_vidstudio_proj_set_opacity (vs_lookup (handle),
+                                           (gint) XFIXNUM (clip_id),
+                                           vs_dbl (o, 1.0)) ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-vidstudio-set-transform", Fcmacs_vidstudio_set_transform,
+       Scmacs_vidstudio_set_transform, 6, 7, 0,
+       doc: /* Set CLIP-ID transform: position X Y, scale SX SY, optional
+rotation ROT (radians, default 0).  */)
+  (Lisp_Object handle, Lisp_Object clip_id, Lisp_Object x, Lisp_Object y,
+   Lisp_Object sx, Lisp_Object sy, Lisp_Object rot)
+{
+  CHECK_FIXNUM (clip_id);
+  return cmacs_vidstudio_proj_set_transform (vs_lookup (handle),
+                                             (gint) XFIXNUM (clip_id),
+                                             vs_dbl (x, 0.0), vs_dbl (y, 0.0),
+                                             vs_dbl (sx, 1.0), vs_dbl (sy, 1.0),
+                                             vs_dbl (rot, 0.0)) ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-vidstudio-set-clip-box", Fcmacs_vidstudio_set_clip_box,
+       Scmacs_vidstudio_set_clip_box, 6, 6, 0,
+       doc: /* Draw CLIP-ID into the sub-rectangle X Y W H (picture-in-picture
+overlay) instead of the full frame.  W/H <= 0 clears it.  The clip composites
+over the tracks below, so an overlay on a higher track is a small window.  */)
+  (Lisp_Object handle, Lisp_Object clip_id, Lisp_Object x, Lisp_Object y,
+   Lisp_Object w, Lisp_Object h)
+{
+  CHECK_FIXNUM (clip_id);
+  return cmacs_vidstudio_proj_set_clip_box (vs_lookup (handle),
+                                            (gint) XFIXNUM (clip_id),
+                                            vs_int (x, 0), vs_int (y, 0),
+                                            vs_int (w, 0), vs_int (h, 0))
+         ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-vidstudio-set-rotation", Fcmacs_vidstudio_set_rotation,
+       Scmacs_vidstudio_set_rotation, 3, 3, 0,
+       doc: /* Set CLIP-ID rotation to ROT radians (keeps position/scale).  */)
+  (Lisp_Object handle, Lisp_Object clip_id, Lisp_Object rot)
+{
+  /* Re-apply transform with the given rotation; position/scale default to
+     identity unless previously set (v1 keeps it simple). */
+  CHECK_FIXNUM (clip_id);
+  return cmacs_vidstudio_proj_set_transform (vs_lookup (handle),
+                                             (gint) XFIXNUM (clip_id),
+                                             0.0, 0.0, 1.0, 1.0,
+                                             vs_dbl (rot, 0.0)) ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-vidstudio-set-anchor", Fcmacs_vidstudio_set_anchor,
+       Scmacs_vidstudio_set_anchor, 4, 4, 0,
+       doc: /* Set CLIP-ID transform anchor to (AX AY) frame fractions.  */)
+  (Lisp_Object handle, Lisp_Object clip_id, Lisp_Object ax, Lisp_Object ay)
+{
+  CHECK_FIXNUM (clip_id);
+  return cmacs_vidstudio_proj_set_anchor (vs_lookup (handle),
+                                          (gint) XFIXNUM (clip_id),
+                                          vs_dbl (ax, 0.5), vs_dbl (ay, 0.5))
+             ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-vidstudio-set-blend-mode", Fcmacs_vidstudio_set_blend_mode,
+       Scmacs_vidstudio_set_blend_mode, 3, 3, 0,
+       doc: /* Set CLIP-ID blend MODE (0 normal..7 color-burn).  */)
+  (Lisp_Object handle, Lisp_Object clip_id, Lisp_Object mode)
+{
+  CHECK_FIXNUM (clip_id);
+  return cmacs_vidstudio_proj_set_blend_mode (vs_lookup (handle),
+                                              (gint) XFIXNUM (clip_id),
+                                              vs_int (mode, 0)) ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-vidstudio-set-effect-param", Fcmacs_vidstudio_set_effect_param,
+       Scmacs_vidstudio_set_effect_param, 4, 4, 0,
+       doc: /* Set PROP of effect EFFECT-INDEX on CLIP-ID to VALUE.
+PROP is the effect property name (e.g. "radius", "intensity", "brightness").  */)
+  (Lisp_Object handle, Lisp_Object clip_id, Lisp_Object effect_index,
+   Lisp_Object prop_value)
+{
+  /* PROP-VALUE is a cons (PROP . VALUE) to stay within 4 args when combined
+     with the alternative (EFFECT-INDEX PROP VALUE); accept both a cons or use
+     effect_index+prop separately.  Here: (handle clip-id effect-index
+     (PROP . VALUE)). */
+  Lisp_Object prop, value;
+  CHECK_FIXNUM (clip_id);
+  CHECK_FIXNUM (effect_index);
+  CHECK_CONS (prop_value);
+  prop = XCAR (prop_value);
+  value = XCDR (prop_value);
+  CHECK_STRING (prop);
+  return cmacs_vidstudio_proj_set_effect_param (vs_lookup (handle),
+                                                (gint) XFIXNUM (clip_id),
+                                                (int) XFIXNUM (effect_index),
+                                                SSDATA (prop),
+                                                vs_dbl (value, 0.0)) ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-vidstudio-set-video-fit", Fcmacs_vidstudio_set_video_fit,
+       Scmacs_vidstudio_set_video_fit, 3, 3, 0,
+       doc: /* Set CLIP-ID video fit: 0 fill,1 contain,2 cover,3 stretch,4 none.  */)
+  (Lisp_Object handle, Lisp_Object clip_id, Lisp_Object fit)
+{
+  CHECK_FIXNUM (clip_id);
+  return cmacs_vidstudio_proj_set_video_fit (vs_lookup (handle),
+                                             (gint) XFIXNUM (clip_id),
+                                             vs_int (fit, 0)) ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-vidstudio-set-video-rate", Fcmacs_vidstudio_set_video_rate,
+       Scmacs_vidstudio_set_video_rate, 3, 3, 0,
+       doc: /* Set CLIP-ID playback RATE (1.0 normal, 2.0 double speed, 0.5 slow).  */)
+  (Lisp_Object handle, Lisp_Object clip_id, Lisp_Object rate)
+{
+  CHECK_FIXNUM (clip_id);
+  return cmacs_vidstudio_proj_set_video_rate (vs_lookup (handle),
+                                              (gint) XFIXNUM (clip_id),
+                                              vs_dbl (rate, 1.0)) ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-vidstudio-set-video-loop", Fcmacs_vidstudio_set_video_loop,
+       Scmacs_vidstudio_set_video_loop, 3, 3, 0,
+       doc: /* Set CLIP-ID video looping to LOOP.  */)
+  (Lisp_Object handle, Lisp_Object clip_id, Lisp_Object loop)
+{
+  CHECK_FIXNUM (clip_id);
+  return cmacs_vidstudio_proj_set_video_loop (vs_lookup (handle),
+                                              (gint) XFIXNUM (clip_id),
+                                              !NILP (loop)) ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-vidstudio-set-export-quality",
+       Fcmacs_vidstudio_set_export_quality,
+       Scmacs_vidstudio_set_export_quality, 1, 3, 0,
+       doc: /* Set the next video export's CRF and BITRATE-KBPS (nil = default).  */)
+  (Lisp_Object handle, Lisp_Object crf, Lisp_Object bitrate)
+{
+  cmacs_vidstudio_proj_set_export_quality (vs_lookup (handle),
+                                           vs_int (crf, -1),
+                                           vs_int (bitrate, 0));
+  return Qnil;
+}
+
+DEFUN ("cmacs-vidstudio-audio-at", Fcmacs_vidstudio_audio_at,
+       Scmacs_vidstudio_audio_at, 2, 2, 0,
+       doc: /* Return (ID FROM-FRAME FRAMES EXTRACT-P) for audio clip INDEX,
+or nil.  */)
+  (Lisp_Object handle, Lisp_Object index)
+{
+  guint id = 0;
+  int from = 0, frames = 0;
+  gboolean extract = FALSE;
+  CHECK_FIXNUM (index);
+  if (!cmacs_vidstudio_proj_audio_at (vs_lookup (handle),
+                                      (guint) XFIXNUM (index),
+                                      &id, &from, &frames, &extract))
+    return Qnil;
+  return list4 (make_fixnum (id), make_fixnum (from), make_fixnum (frames),
+                extract ? Qt : Qnil);
+}
+
+DEFUN ("cmacs-vidstudio-set-export-preset", Fcmacs_vidstudio_set_export_preset,
+       Scmacs_vidstudio_set_export_preset, 2, 2, 0,
+       doc: /* Set the video-export encoder PRESET word (x264/x265
+"ultrafast".."veryslow"); nil restores the default ("veryfast").  */)
+  (Lisp_Object handle, Lisp_Object preset)
+{
+  cmacs_vidstudio_proj_set_export_preset
+    (vs_lookup (handle), STRINGP (preset) ? SSDATA (preset) : NULL);
+  return Qnil;
+}
+
+DEFUN ("cmacs-vidstudio-add-audio-file", Fcmacs_vidstudio_add_audio_file,
+       Scmacs_vidstudio_add_audio_file, 2, 6, 0,
+       doc: /* Add audio PATH at FROM-FRAME with VOLUME, TRIM-START/END secs.  */)
+  (Lisp_Object handle, Lisp_Object path, Lisp_Object from_frame,
+   Lisp_Object volume, Lisp_Object trim_start, Lisp_Object trim_end)
+{
+  char *err = NULL;
+  gint id;
+  CHECK_STRING (path);
+  id = cmacs_vidstudio_proj_add_audio_file (vs_lookup (handle), SSDATA (path),
+                                            vs_int (from_frame, 0),
+                                            vs_dbl (volume, 1.0),
+                                            vs_dbl (trim_start, 0.0),
+                                            vs_dbl (trim_end, 0.0), &err);
+  if (id < 0)
+    { Lisp_Object m = build_string (err ? err : "add audio failed");
+      g_free (err); xsignal1 (Qcmacs_vidstudio_error, m); }
+  return make_fixnum (id);
+}
+
+DEFUN ("cmacs-vidstudio-add-audio-extract-file",
+       Fcmacs_vidstudio_add_audio_extract_file,
+       Scmacs_vidstudio_add_audio_extract_file, 2, 4, 0,
+       doc: /* Extract audio from video PATH and add it to the lane at
+FROM-FRAME (default 0) with VOLUME (default 1.0).  */)
+  (Lisp_Object handle, Lisp_Object path, Lisp_Object from_frame,
+   Lisp_Object volume)
+{
+  char *err = NULL;
+  gint id;
+  CHECK_STRING (path);
+  id = cmacs_vidstudio_proj_add_audio_extract_file (vs_lookup (handle),
+    SSDATA (path), vs_int (from_frame, 0), vs_dbl (volume, 1.0), &err);
+  if (id < 0)
+    { Lisp_Object m = build_string (err ? err : "audio extract failed");
+      g_free (err); xsignal1 (Qcmacs_vidstudio_error, m); }
+  return make_fixnum (id);
+}
+
+DEFUN ("cmacs-vidstudio-add-audio-from-clip",
+       Fcmacs_vidstudio_add_audio_from_clip,
+       Scmacs_vidstudio_add_audio_from_clip, 2, 4, 0,
+       doc: /* Extract CLIP-ID's audio and add it at FROM-FRAME with VOLUME.  */)
+  (Lisp_Object handle, Lisp_Object clip_id, Lisp_Object from_frame,
+   Lisp_Object volume)
+{
+  char *err = NULL;
+  gint id;
+  CHECK_FIXNUM (clip_id);
+  id = cmacs_vidstudio_proj_add_audio_from_clip (vs_lookup (handle),
+                                                 (gint) XFIXNUM (clip_id),
+                                                 vs_int (from_frame, 0),
+                                                 vs_dbl (volume, 1.0), &err);
+  if (id < 0)
+    { Lisp_Object m = build_string (err ? err : "extract audio failed");
+      g_free (err); xsignal1 (Qcmacs_vidstudio_error, m); }
+  return make_fixnum (id);
+}
+
+DEFUN ("cmacs-vidstudio-set-audio-volume", Fcmacs_vidstudio_set_audio_volume,
+       Scmacs_vidstudio_set_audio_volume, 3, 3, 0,
+       doc: /* Set audio clip ID's VOLUME (linear scalar).  */)
+  (Lisp_Object handle, Lisp_Object id, Lisp_Object volume)
+{
+  CHECK_FIXNUM (id);
+  return cmacs_vidstudio_proj_set_audio_volume (vs_lookup (handle),
+                                                (gint) XFIXNUM (id),
+                                                vs_dbl (volume, 1.0))
+             ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-vidstudio-set-audio-fade", Fcmacs_vidstudio_set_audio_fade,
+       Scmacs_vidstudio_set_audio_fade, 3, 3, 0,
+       doc: /* Set audio clip ID's FADE-IN and FADE-OUT (seconds).  */)
+  (Lisp_Object handle, Lisp_Object fade_in, Lisp_Object fade_out)
+{
+  /* Args: (handle id (fade-in . fade-out))? keep 3 positional: id fade-in
+     packs fade-out via a cons.  Simpler: (handle id fade-in) + separate.  Here
+     ID is the 2nd arg; FADE-IN carries a cons (IN . OUT). */
+  Lisp_Object id = fade_in, pair = fade_out;
+  CHECK_FIXNUM (id);
+  CHECK_CONS (pair);
+  return cmacs_vidstudio_proj_set_audio_fade (vs_lookup (handle),
+                                              (gint) XFIXNUM (id),
+                                              vs_dbl (XCAR (pair), 0.0),
+                                              vs_dbl (XCDR (pair), 0.0))
+             ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-vidstudio-remove-audio", Fcmacs_vidstudio_remove_audio,
+       Scmacs_vidstudio_remove_audio, 2, 2, 0,
+       doc: /* Remove audio clip ID.  */)
+  (Lisp_Object handle, Lisp_Object id)
+{
+  CHECK_FIXNUM (id);
+  return cmacs_vidstudio_proj_remove_audio (vs_lookup (handle),
+                                            (gint) XFIXNUM (id)) ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-vidstudio-audio-count", Fcmacs_vidstudio_audio_count,
+       Scmacs_vidstudio_audio_count, 1, 1, 0,
+       doc: /* Number of audio clips on the lane.  */)
+  (Lisp_Object handle)
+{
+  return make_fixnum (cmacs_vidstudio_proj_audio_count (vs_lookup (handle)));
+}
+
+DEFUN ("cmacs-vidstudio-export-audio", Fcmacs_vidstudio_export_audio,
+       Scmacs_vidstudio_export_audio, 2, 3, 0,
+       doc: /* Export the mixed audio to PATH; FORMAT 0 WAV,1 MP3,2 AAC,3 FLAC.  */)
+  (Lisp_Object handle, Lisp_Object path, Lisp_Object format)
+{
+  char *err = NULL;
+  CHECK_STRING (path);
+  if (!cmacs_vidstudio_proj_export_audio (vs_lookup (handle), SSDATA (path),
+                                          vs_int (format, 0), &err))
+    { Lisp_Object m = build_string (err ? err : "audio export failed");
+      g_free (err); xsignal1 (Qcmacs_vidstudio_error, m); }
+  return Qt;
+}
+
+DEFUN ("cmacs-vidstudio-serialize", Fcmacs_vidstudio_serialize,
+       Scmacs_vidstudio_serialize, 1, 1, 0,
+       doc: /* Return HANDLE's project as a Lisp-readable S-expression string.  */)
+  (Lisp_Object handle)
+{
+  char *s = cmacs_vidstudio_proj_serialize (vs_lookup (handle));
+  Lisp_Object res;
+  if (s == NULL)
+    return Qnil;
+  res = build_string (s);
+  g_free (s);
+  return res;
+}
+
+DEFUN ("cmacs-vidstudio-add-keyframe", Fcmacs_vidstudio_add_keyframe,
+       Scmacs_vidstudio_add_keyframe, 5, 8, 0,
+       doc: /* Add a keyframe on CLIP-ID: PARAM at FRAME = VALUE.
+PARAM: 0 opacity, 1 x, 2 y, 3 scale, 4 rotation, 5 effect-param.  Optional
+EASING (LrgEasingType int, default 0 linear), EFFECT-INDEX and PROP (for
+PARAM 5).  */)
+  (Lisp_Object handle, Lisp_Object clip_id, Lisp_Object param,
+   Lisp_Object frame, Lisp_Object value, Lisp_Object easing,
+   Lisp_Object effect_index, Lisp_Object prop)
+{
+  CHECK_FIXNUM (clip_id);
+  return cmacs_vidstudio_proj_add_keyframe
+           (vs_lookup (handle), (gint) XFIXNUM (clip_id), vs_int (param, 0),
+            vs_int (effect_index, 0), STRINGP (prop) ? SSDATA (prop) : NULL,
+            vs_dbl (frame, 0.0), vs_dbl (value, 0.0), vs_int (easing, 0))
+             ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-vidstudio-clear-keyframes", Fcmacs_vidstudio_clear_keyframes,
+       Scmacs_vidstudio_clear_keyframes, 2, 3, 0,
+       doc: /* Clear keyframes on CLIP-ID; optional PARAM limits to one
+parameter (omit / nil = all).  */)
+  (Lisp_Object handle, Lisp_Object clip_id, Lisp_Object param)
+{
+  CHECK_FIXNUM (clip_id);
+  return cmacs_vidstudio_proj_clear_keyframes (vs_lookup (handle),
+                                               (gint) XFIXNUM (clip_id),
+                                               NILP (param) ? -1
+                                               : vs_int (param, -1))
+             ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-vidstudio-keyframe-count", Fcmacs_vidstudio_keyframe_count,
+       Scmacs_vidstudio_keyframe_count, 2, 2, 0,
+       doc: /* Number of keyframes on CLIP-ID, or -1 if unknown.  */)
+  (Lisp_Object handle, Lisp_Object clip_id)
+{
+  CHECK_FIXNUM (clip_id);
+  return make_fixnum (cmacs_vidstudio_proj_keyframe_count
+                        (vs_lookup (handle), (gint) XFIXNUM (clip_id)));
+}
+
+DEFUN ("cmacs-vidstudio-export-still", Fcmacs_vidstudio_export_still,
+       Scmacs_vidstudio_export_still, 3, 3, 0,
+       doc: /* Render FRAME straight to PATH (PNG/JPG by extension).  */)
+  (Lisp_Object handle, Lisp_Object frame, Lisp_Object path)
+{
+  char *err = NULL;
+  CHECK_FIXNUM (frame);
+  CHECK_STRING (path);
+  if (!cmacs_vidstudio_proj_export_still (vs_lookup (handle),
+                                          (int) XFIXNUM (frame),
+                                          SSDATA (path), &err))
+    {
+      Lisp_Object msg = build_string (err ? err : "still export failed");
+      g_free (err);
+      xsignal1 (Qcmacs_vidstudio_error, msg);
+    }
+  return Qt;
+}
+
+DEFUN ("cmacs-vidstudio-refresh-video-duration",
+       Fcmacs_vidstudio_refresh_video_duration,
+       Scmacs_vidstudio_refresh_video_duration, 1, 2, 0,
+       doc: /* Resolve whole-video clip lengths from the decoded frame count.
+With CLIP-ID, refresh just that clip; without, refresh all.  Returns non-nil
+if any duration changed.  Call once a clip has finished decoding (needed when
+ffprobe could not determine the duration at import).  */)
+  (Lisp_Object handle, Lisp_Object clip_id)
+{
+  gboolean changed;
+  if (NILP (clip_id))
+    changed = cmacs_vidstudio_proj_refresh_all_video_durations
+                (vs_lookup (handle));
+  else
+    { CHECK_FIXNUM (clip_id);
+      changed = cmacs_vidstudio_proj_refresh_video_duration
+                  (vs_lookup (handle), (gint) XFIXNUM (clip_id)); }
+  return changed ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-vidstudio-set-clip-trim", Fcmacs_vidstudio_set_clip_trim,
+       Scmacs_vidstudio_set_clip_trim, 4, 4, 0,
+       doc: /* Set video CLIP-ID's source in/out slice to IN-SEC..OUT-SEC
+seconds (the portion of the original that plays), recomputing the on-timeline
+length.  IN-SEC < 0 means the source start; OUT-SEC <= 0 or past the end means
+the source end.  Only video clips have a source slice.  */)
+  (Lisp_Object handle, Lisp_Object clip_id, Lisp_Object in_sec,
+   Lisp_Object out_sec)
+{
+  CHECK_FIXNUM (clip_id);
+  return cmacs_vidstudio_proj_set_clip_trim (vs_lookup (handle),
+                                             (gint) XFIXNUM (clip_id),
+                                             vs_dbl (in_sec, -1.0),
+                                             vs_dbl (out_sec, -1.0))
+         ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-vidstudio-clip-slice", Fcmacs_vidstudio_clip_slice,
+       Scmacs_vidstudio_clip_slice, 2, 2, 0,
+       doc: /* Return (IN-SEC OUT-SEC SOURCE-DURATION) for video CLIP-ID, or
+nil for a non-video clip.  */)
+  (Lisp_Object handle, Lisp_Object clip_id)
+{
+  double in = 0.0, out = 0.0, dur = 0.0;
+  CHECK_FIXNUM (clip_id);
+  if (!cmacs_vidstudio_proj_clip_slice (vs_lookup (handle),
+                                        (gint) XFIXNUM (clip_id),
+                                        &in, &out, &dur))
+    return Qnil;
+  return list3 (make_float (in), make_float (out), make_float (dur));
 }
 
 DEFUN ("cmacs-vidstudio-set-clip-duration", Fcmacs_vidstudio_set_clip_duration,
@@ -431,6 +1026,37 @@ DEFUN ("cmacs-vidstudio-render-png", Fcmacs_vidstudio_render_png,
   return res;
 }
 
+DEFUN ("cmacs-vidstudio-viewport-render", Fcmacs_vidstudio_viewport_render,
+       Scmacs_vidstudio_viewport_render, 3, 3, 0,
+       doc: /* Render HANDLE's FRAME into BUFFER's live libregnum viewport.
+Returns t on success, nil if the viewport is unavailable.  */)
+  (Lisp_Object handle, Lisp_Object buffer, Lisp_Object frame)
+{
+#ifdef HAVE_CMACS_LIBREGNUM
+  CmacsLibregnumView *v;
+  CmacsLibregnumRenderCtx *ctx;
+  void *img;
+
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (frame);
+  v = cmacs_libregnum_view_for_buffer (buffer);
+  ctx = v ? cmacs_libregnum_view_get_render_ctx (v) : NULL;
+  if (!ctx)
+    return Qnil;
+  img = cmacs_vidstudio_proj_canvas_image (vs_lookup (handle),
+                                           (int) XFIXNUM (frame));
+  if (img)
+    {
+      cmacs_libregnum_render_ctx_image_set_grl_image (ctx, img); /* transfer */
+      cmacs_libregnum_view_request_redraw (v);
+      return Qt;
+    }
+#else
+  (void) handle; (void) buffer; (void) frame;
+#endif
+  return Qnil;
+}
+
 DEFUN ("cmacs-vidstudio-render-ppm", Fcmacs_vidstudio_render_ppm,
        Scmacs_vidstudio_render_ppm, 2, 3, 0,
        doc: /* Render FRAME as a binary PPM (P6) unibyte string.
@@ -536,12 +1162,22 @@ syms_of_cmacs_vidstudio_defuns (void)
   defsubr (&Scmacs_vidstudio_track_clip_count);
   defsubr (&Scmacs_vidstudio_track_total_frames);
   defsubr (&Scmacs_vidstudio_add_solid_clip);
+  defsubr (&Scmacs_vidstudio_add_rich_text);
+  defsubr (&Scmacs_vidstudio_add_loop_clip);
+  defsubr (&Scmacs_vidstudio_add_freeze_clip);
+  defsubr (&Scmacs_vidstudio_add_shape_rect);
+  defsubr (&Scmacs_vidstudio_add_shape_circle);
+  defsubr (&Scmacs_vidstudio_add_caption);
+  defsubr (&Scmacs_vidstudio_add_gradient_clip);
   defsubr (&Scmacs_vidstudio_add_image_clip);
   defsubr (&Scmacs_vidstudio_add_video_clip);
   defsubr (&Scmacs_vidstudio_add_text_clip);
   defsubr (&Scmacs_vidstudio_set_transition);
   defsubr (&Scmacs_vidstudio_add_effect);
   defsubr (&Scmacs_vidstudio_clear_effects);
+  defsubr (&Scmacs_vidstudio_refresh_video_duration);
+  defsubr (&Scmacs_vidstudio_set_clip_trim);
+  defsubr (&Scmacs_vidstudio_clip_slice);
   defsubr (&Scmacs_vidstudio_set_clip_duration);
   defsubr (&Scmacs_vidstudio_split_clip);
   defsubr (&Scmacs_vidstudio_move_clip);
@@ -552,7 +1188,34 @@ syms_of_cmacs_vidstudio_defuns (void)
   defsubr (&Scmacs_vidstudio_clip_start_frame);
   defsubr (&Scmacs_vidstudio_render_png);
   defsubr (&Scmacs_vidstudio_render_ppm);
+  defsubr (&Scmacs_vidstudio_viewport_render);
   defsubr (&Scmacs_vidstudio_frame_pixel);
+  defsubr (&Scmacs_vidstudio_set_opacity);
+  defsubr (&Scmacs_vidstudio_set_transform);
+  defsubr (&Scmacs_vidstudio_set_clip_box);
+  defsubr (&Scmacs_vidstudio_set_rotation);
+  defsubr (&Scmacs_vidstudio_set_anchor);
+  defsubr (&Scmacs_vidstudio_set_blend_mode);
+  defsubr (&Scmacs_vidstudio_set_effect_param);
+  defsubr (&Scmacs_vidstudio_set_video_fit);
+  defsubr (&Scmacs_vidstudio_set_video_rate);
+  defsubr (&Scmacs_vidstudio_set_video_loop);
+  defsubr (&Scmacs_vidstudio_set_export_quality);
+  defsubr (&Scmacs_vidstudio_export_still);
+  defsubr (&Scmacs_vidstudio_serialize);
+  defsubr (&Scmacs_vidstudio_add_keyframe);
+  defsubr (&Scmacs_vidstudio_clear_keyframes);
+  defsubr (&Scmacs_vidstudio_keyframe_count);
+  defsubr (&Scmacs_vidstudio_audio_at);
+  defsubr (&Scmacs_vidstudio_set_export_preset);
+  defsubr (&Scmacs_vidstudio_add_audio_file);
+  defsubr (&Scmacs_vidstudio_add_audio_extract_file);
+  defsubr (&Scmacs_vidstudio_add_audio_from_clip);
+  defsubr (&Scmacs_vidstudio_set_audio_volume);
+  defsubr (&Scmacs_vidstudio_set_audio_fade);
+  defsubr (&Scmacs_vidstudio_remove_audio);
+  defsubr (&Scmacs_vidstudio_audio_count);
+  defsubr (&Scmacs_vidstudio_export_audio);
   defsubr (&Scmacs_vidstudio_export_video);
   defsubr (&Scmacs_vidstudio_export_gif);
 }

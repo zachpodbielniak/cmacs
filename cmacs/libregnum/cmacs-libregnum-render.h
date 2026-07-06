@@ -638,5 +638,71 @@ extern double   cmacs_libregnum_render_ctx_editor_get_visual_param
                               (CmacsLibregnumRenderCtx *r, gint id,
                                const char *name, double def);
 
+/* ── 2D image-display mode (imgedit / vidstudio live viewport) ──────────
+ * A content-agnostic live viewport: displays a composited RGBA image as a
+ * pan/zoomed textured quad over a checkerboard, with a 2D overlay.  Setters
+ * only stash state + a pending-upload flag (safe from any DEFUN); the GPU
+ * upload/draw happens at frame top inside render_to_bgra. */
+extern void     cmacs_libregnum_render_ctx_image_enter
+                              (CmacsLibregnumRenderCtx *r, gboolean on);
+extern gboolean cmacs_libregnum_render_ctx_is_image
+                              (CmacsLibregnumRenderCtx *r);
+/* Bind an LrgImageDocument* (borrowed, re-flattened each refresh — imgedit
+ * zero-copy path); or upload an owned GrlImage* (transfer full — vidstudio
+ * per-frame); or copy a raw RGBA8 buffer (paste/screenshot). */
+extern void     cmacs_libregnum_render_ctx_image_set_document
+                              (CmacsLibregnumRenderCtx *r, void *lrg_doc);
+extern void     cmacs_libregnum_render_ctx_image_set_grl_image
+                              (CmacsLibregnumRenderCtx *r, void *grl_image);
+extern void     cmacs_libregnum_render_ctx_image_upload_rgba
+                              (CmacsLibregnumRenderCtx *r, int w, int h,
+                               const guint8 *rgba, gsize n);
+extern void     cmacs_libregnum_render_ctx_image_refresh
+                              (CmacsLibregnumRenderCtx *r);
+extern void     cmacs_libregnum_render_ctx_image_refresh_rect
+                              (CmacsLibregnumRenderCtx *r,
+                               int x, int y, int w, int h);
+/* Pan/zoom + coordinate mapping. */
+extern void     cmacs_libregnum_render_ctx_image_set_view
+                              (CmacsLibregnumRenderCtx *r, double scale,
+                               double pan_x, double pan_y);
+extern void     cmacs_libregnum_render_ctx_image_get_view
+                              (CmacsLibregnumRenderCtx *r, double *scale,
+                               double *pan_x, double *pan_y);
+extern void     cmacs_libregnum_render_ctx_image_zoom_at
+                              (CmacsLibregnumRenderCtx *r, double vx,
+                               double vy, double factor);
+extern void     cmacs_libregnum_render_ctx_image_fit
+                              (CmacsLibregnumRenderCtx *r, int vw, int vh);
+extern gboolean cmacs_libregnum_render_ctx_image_view_to_doc
+                              (CmacsLibregnumRenderCtx *r, double vx,
+                               double vy, int *dx, int *dy);
+/* Overlay params (doc coords). */
+extern void     cmacs_libregnum_render_ctx_image_set_checker
+                              (CmacsLibregnumRenderCtx *r, gboolean on);
+extern void     cmacs_libregnum_render_ctx_image_set_grid
+                              (CmacsLibregnumRenderCtx *r, gboolean on);
+extern void     cmacs_libregnum_render_ctx_image_set_cursor
+                              (CmacsLibregnumRenderCtx *r, double dx,
+                               double dy, double radius);
+extern void     cmacs_libregnum_render_ctx_image_timeline_clear
+                              (CmacsLibregnumRenderCtx *r);
+extern void     cmacs_libregnum_render_ctx_image_timeline_add_clip
+                              (CmacsLibregnumRenderCtx *r, int id, int track,
+                               int start, int dur, guint8 cr, guint8 cg,
+                               guint8 cb);
+extern void     cmacs_libregnum_render_ctx_image_set_label_font
+                              (CmacsLibregnumRenderCtx *r, const char *path);
+extern gboolean cmacs_libregnum_render_ctx_image_timeline_hit
+                              (CmacsLibregnumRenderCtx *r, double vx, double vy,
+                               int vw, int vh, int *frame, int *clip_id,
+                               int *edge);
+extern void     cmacs_libregnum_render_ctx_image_timeline_set
+                              (CmacsLibregnumRenderCtx *r, int playhead,
+                               int total, int ntracks);
+extern void     cmacs_libregnum_render_ctx_image_set_marquee
+                              (CmacsLibregnumRenderCtx *r, gboolean on,
+                               int x, int y, int w, int h);
+
 #endif /* HAVE_CMACS_LIBREGNUM */
 #endif /* CMACS_LIBREGNUM_RENDER_H */

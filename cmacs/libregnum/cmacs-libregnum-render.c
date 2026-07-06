@@ -287,6 +287,14 @@ overlay_model_free (gpointer p)
   g_free (o);
 }
 
+/* One clip block on the in-viewport timeline strip. */
+typedef struct
+{
+  int    id;                    /* clip id (for hit-test → editor ops) */
+  int    track, start, dur;
+  guint8 r, g, b;
+} CmacsTimelineClip;
+
 struct CmacsLibregnumRenderCtx
 {
   LrgRenderer    *renderer;
@@ -300,6 +308,38 @@ struct CmacsLibregnumRenderCtx
                                        the lrg overlay blit; lazily created,
                                        dropped on resize/free */
   int             width, height;
+
+  /* ── 2D image-display mode (imgedit / vidstudio live viewport) ────────
+   * When image_mode is TRUE, render_to_bgra draws a checkerboard + a
+   * pan/zoomed textured quad of the composited image + a 2D overlay,
+   * instead of the 3D scene (mirrors the game_mode early-return branch).
+   * All GPU work happens at frame top inside BeginTextureMode where the
+   * shared GL context is current; DEFUNs only stash a source + request a
+   * redraw (the deferred-upload discipline the gnuseye weather overlay uses). */
+  gboolean      image_mode;
+  GrlTexture   *image_tex;          /* owned; doc-sized RGBA8, POINT filter */
+  int           image_doc_w, image_doc_h;   /* logical doc size (set at bind) */
+  int           image_tex_w, image_tex_h;   /* actual texture size (at upload) */
+  /* Pending upload, consumed at frame top.  At most one source is set:
+   * image_doc (borrowed LrgImageDocument*, re-flattened) OR image_pending
+   * (owned GrlImage ref) OR image_rgba (owned raw RGBA8 copy). */
+  gboolean      image_upload_pending;
+  void         *image_doc;          /* borrowed LrgImageDocument*, or NULL */
+  GrlImage     *image_pending;      /* owned ref, or NULL */
+  guint8       *image_rgba;         /* owned copy, or NULL */
+  int           image_rgba_w, image_rgba_h;
+  /* Pan/zoom: doc pixel (dx,dy) -> FBO pixel (pan_x + dx*scale, ...). */
+  double        image_scale, image_pan_x, image_pan_y;
+  /* Overlay params (doc coords unless noted). */
+  gboolean      image_checker, image_grid;
+  double        image_cursor_x, image_cursor_y, image_cursor_r; /* <0 hides */
+  gboolean      image_marquee_on;
+  int           image_mx, image_my, image_mw, image_mh;
+  /* Optional timeline strip (vidstudio): clip blocks + playhead drawn along
+   * the bottom of the FBO.  image_clips holds CmacsTimelineClip records. */
+  GArray       *image_clips;
+  int           image_playhead, image_total_frames, image_ntracks;
+  GrlFont      *image_label_font;  /* owned; clip-id labels, or NULL=default */
 
   /* Scene node model (CmacsNode), parallel to the drawables. */
   GArray         *nodes;
@@ -500,6 +540,12 @@ cmacs_libregnum_render_ctx_free (CmacsLibregnumRenderCtx *r)
   g_clear_object (&r->lighting_shader);
   g_clear_object (&r->lighting_material);
 #endif
+  /* Image-mode resources (owned; image_doc is borrowed, do not free). */
+  g_clear_object (&r->image_tex);
+  g_clear_object (&r->image_pending);
+  g_clear_pointer (&r->image_rgba, g_free);
+  if (r->image_clips) g_array_unref (r->image_clips);
+  g_clear_object (&r->image_label_font);
   /* Non-owning wrapper: drop it before the FBO it points at.  */
   g_clear_object (&r->fbo_grl_texture);
   if (r->fbo_valid) UnloadRenderTexture (r->fbo);
@@ -550,6 +596,534 @@ cmacs_libregnum_render_ctx_resize (CmacsLibregnumRenderCtx *r, int w, int h)
    * resize; this also fires its `window-size-changed' signal. */
   if (r->game_mode && r->game != NULL)
     lrg_game_template_set_window_size (r->game, w, h);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ * 2D image-display mode
+ *
+ * A content-agnostic live viewport for the imgedit / vidstudio editors:
+ * displays a composited RGBA image as a pan/zoomed textured quad over a
+ * transparency checkerboard, with a 2D overlay (pixel grid, selection
+ * marquee, brush cursor).  Mirrors the game_mode early-return branch in
+ * render_to_bgra.  GPU work (texture upload + draw) runs ONLY at frame top
+ * inside BeginTextureMode where the shared GL context is current; the
+ * image_* setters below merely stash a source + flip image_upload_pending,
+ * so they are safe to call from any Lisp DEFUN (deferred-upload discipline).
+ * ══════════════════════════════════════════════════════════════════════ */
+
+/* Consume a pending upload into image_tex (frame-top, GL context current).
+ * Unifies the three sources (bound document / owned GrlImage / raw RGBA) by
+ * resolving each to a GrlImage, then create-or-update the texture. */
+static void
+ctx_image_apply_upload (CmacsLibregnumRenderCtx *r)
+{
+  GrlImage *img = NULL;      /* borrowed for image_doc; owned otherwise */
+  gboolean  own = FALSE;
+
+  if (!r->image_upload_pending)
+    return;
+  r->image_upload_pending = FALSE;
+
+  if (r->image_doc)
+    img = lrg_image_document_flatten ((LrgImageDocument *) r->image_doc);
+  else if (r->image_pending)
+    img = r->image_pending;                 /* owned; cleared below */
+  else if (r->image_rgba)
+    {
+      img = grl_image_new_from_pixels (r->image_rgba_w, r->image_rgba_h,
+                                       GRL_PIXELFORMAT_UNCOMPRESSED_R8G8B8A8,
+                                       r->image_rgba);
+      own = TRUE;
+    }
+
+  if (img)
+    {
+      int w = grl_image_get_width (img);
+      int h = grl_image_get_height (img);
+
+      /* Create-vs-update decision keys on the TEXTURE's actual size, not the
+       * logical doc size (which the bind setters preset before this runs so
+       * fit/view_to_doc work before the first frame). */
+      if (!r->image_tex || w != r->image_tex_w || h != r->image_tex_h)
+        {
+          g_clear_object (&r->image_tex);
+          r->image_tex = grl_texture_new_from_image (img);
+          if (r->image_tex)
+            grl_texture_set_filter (r->image_tex, GRL_TEXTURE_FILTER_POINT);
+          r->image_tex_w = w;
+          r->image_tex_h = h;
+        }
+      else
+        {
+          grl_texture_update (r->image_tex, img);
+        }
+      r->image_doc_w = w;
+      r->image_doc_h = h;
+    }
+
+  /* Ownership: image_doc's flatten is transfer-none (leave it); image_pending
+   * and the raw-built image are owned (release). */
+  if (own && img)
+    g_object_unref (img);
+  else if (r->image_pending)
+    g_clear_object (&r->image_pending);
+  g_clear_pointer (&r->image_rgba, g_free);
+}
+
+/* Transparency checkerboard under the doc's on-screen rect (8px screen tiles). */
+static void
+ctx_image_draw_checker (CmacsLibregnumRenderCtx *r)
+{
+  int x0, y0, w, h, xx, yy, t = 8;
+  g_autoptr (GrlColor) c1 = grl_color_new (120, 120, 128, 255);
+  g_autoptr (GrlColor) c2 = grl_color_new (90, 90, 98, 255);
+
+  if (r->image_doc_w <= 0 || r->image_doc_h <= 0)
+    return;
+  x0 = (int) r->image_pan_x;
+  y0 = (int) r->image_pan_y;
+  w  = (int) (r->image_doc_w * r->image_scale);
+  h  = (int) (r->image_doc_h * r->image_scale);
+  for (yy = 0; yy < h; yy += t)
+    for (xx = 0; xx < w; xx += t)
+      {
+        GrlColor *c = (((xx / t) + (yy / t)) & 1) ? c1 : c2;
+        grl_draw_rectangle (x0 + xx, y0 + yy, MIN (t, w - xx), MIN (t, h - yy),
+                            c);
+      }
+}
+
+/* 2D overlay: pixel grid (high zoom), selection marquee, brush cursor. */
+static void
+ctx_image_draw_overlay (CmacsLibregnumRenderCtx *r)
+{
+  double px = r->image_pan_x, py = r->image_pan_y, s = r->image_scale;
+
+  if (r->image_grid && s >= 4.0 && r->image_doc_w > 0)
+    {
+      g_autoptr (GrlColor) g = grl_color_new (255, 255, 255, 40);
+      int i, y1 = (int) py, y2 = (int) (py + r->image_doc_h * s);
+      int x1 = (int) px, x2 = (int) (px + r->image_doc_w * s);
+      for (i = 0; i <= r->image_doc_w; i++)
+        { int sx = (int) (px + i * s); grl_draw_line (sx, y1, sx, y2, g); }
+      for (i = 0; i <= r->image_doc_h; i++)
+        { int sy = (int) (py + i * s); grl_draw_line (x1, sy, x2, sy, g); }
+    }
+  if (r->image_marquee_on)
+    {
+      g_autoptr (GrlColor) m = grl_color_new (255, 255, 255, 220);
+      grl_draw_rectangle_lines ((int) (px + r->image_mx * s),
+                                (int) (py + r->image_my * s),
+                                (int) (r->image_mw * s),
+                                (int) (r->image_mh * s), m);
+    }
+  if (r->image_cursor_x >= 0)
+    {
+      g_autoptr (GrlColor) c = grl_color_new (255, 255, 255, 180);
+      grl_draw_circle_lines ((int) (px + r->image_cursor_x * s),
+                             (int) (py + r->image_cursor_y * s),
+                             (gfloat) MAX (1.0, r->image_cursor_r * s), c);
+    }
+
+  /* Timeline strip along the bottom (vidstudio): one row per track, clip
+   * blocks scaled to the FBO width, plus a playhead line. */
+  if (r->image_clips != NULL && r->image_total_frames > 0)
+    {
+      int strip_h = MAX (24, r->height / 6);
+      int y0 = r->height - strip_h;
+      int ntr = MAX (1, r->image_ntracks);
+      int rowh = strip_h / ntr;
+      guint i;
+      g_autoptr (GrlColor) bg = grl_color_new (20, 20, 24, 220);
+      g_autoptr (GrlColor) ph = grl_color_new (255, 90, 90, 255);
+      grl_draw_rectangle (0, y0, r->width, strip_h, bg);
+      for (i = 0; i < r->image_clips->len; i++)
+        {
+          CmacsTimelineClip *cl =
+            &g_array_index (r->image_clips, CmacsTimelineClip, i);
+          g_autoptr (GrlColor) col = grl_color_new (cl->r, cl->g, cl->b, 235);
+          g_autoptr (GrlColor) edge = grl_color_new (0, 0, 0, 255);
+          int bx = cl->start * r->width / r->image_total_frames;
+          int bw = MAX (2, cl->dur * r->width / r->image_total_frames);
+          int by = y0 + cl->track * rowh;
+          grl_draw_rectangle (bx, by + 1, bw, rowh - 2, col);
+          grl_draw_rectangle_lines (bx, by + 1, bw, rowh - 2, edge);
+          /* Clip id label on the block (drop-shadow for contrast), drawn
+             only when it fits inside the block width.  Uses the configured
+             label font (the Emacs UI font) when set, else the default. */
+          {
+            char idbuf[16];
+            int fs = MAX (11, MIN (20, rowh - 6));
+            int tw, tx, ty;
+            g_snprintf (idbuf, sizeof idbuf, "#%d", cl->id);
+            if (r->image_label_font != NULL)
+              {
+                g_autoptr (GrlVector2) m =
+                  grl_font_measure_text (r->image_label_font, idbuf,
+                                         (gfloat) fs, 1.0f);
+                tw = m ? (int) grl_vector2_get_x (m) : fs * 2;
+              }
+            else
+              tw = grl_measure_text (idbuf, fs);
+            tx = bx + 4;
+            ty = by + (rowh - fs) / 2;
+            if (bw > tw + 6)
+              {
+                g_autoptr (GrlColor) sh = grl_color_new (0, 0, 0, 210);
+                g_autoptr (GrlColor) fg = grl_color_new (255, 255, 255, 255);
+                if (r->image_label_font != NULL)
+                  {
+                    g_autoptr (GrlVector2) ps = grl_vector2_new (tx + 1, ty + 1);
+                    g_autoptr (GrlVector2) pf = grl_vector2_new (tx, ty);
+                    grl_draw_text_ex (r->image_label_font, idbuf, ps,
+                                      (gfloat) fs, 1.0f, sh);
+                    grl_draw_text_ex (r->image_label_font, idbuf, pf,
+                                      (gfloat) fs, 1.0f, fg);
+                  }
+                else
+                  {
+                    grl_draw_text (idbuf, tx + 1, ty + 1, fs, sh);
+                    grl_draw_text (idbuf, tx, ty, fs, fg);
+                  }
+              }
+          }
+        }
+      {
+        int phx = r->image_playhead * r->width / r->image_total_frames;
+        grl_draw_rectangle (phx, y0, 2, strip_h, ph);
+      }
+    }
+}
+
+void
+cmacs_libregnum_render_ctx_image_timeline_clear (CmacsLibregnumRenderCtx *r)
+{
+  if (!r) return;
+  if (r->image_clips)
+    g_array_set_size (r->image_clips, 0);
+}
+
+void
+cmacs_libregnum_render_ctx_image_timeline_add_clip (CmacsLibregnumRenderCtx *r,
+                                                    int id, int track, int start,
+                                                    int dur, guint8 cr,
+                                                    guint8 cg, guint8 cb)
+{
+  CmacsTimelineClip c;
+  if (!r) return;
+  if (r->image_clips == NULL)
+    r->image_clips = g_array_new (FALSE, FALSE, sizeof (CmacsTimelineClip));
+  c.id = id; c.track = track; c.start = start; c.dur = dur;
+  c.r = cr; c.g = cg; c.b = cb;
+  g_array_append_val (r->image_clips, c);
+}
+
+/* Hit-test a view-space point against the timeline strip.  Returns TRUE when
+   (VX,VY) is inside the strip (VW×VH view size).  Sets *FRAME to the frame
+   under the cursor, *CLIP_ID to the clip there (-1 if none), and *EDGE to
+   which edge of that clip the cursor is near: 0 = body, 1 = right (out/trim
+   end), 2 = left (in/trim start). */
+gboolean
+cmacs_libregnum_render_ctx_image_timeline_hit (CmacsLibregnumRenderCtx *r,
+                                               double vx, double vy,
+                                               int vw, int vh, int *frame,
+                                               int *clip_id, int *edge)
+{
+  int strip_h, y0, ntr, rowh, f, row;
+  guint i;
+  if (frame) *frame = 0;
+  if (clip_id) *clip_id = -1;
+  if (edge) *edge = 0;
+  if (!r || r->image_clips == NULL || r->image_total_frames <= 0 || vw <= 0)
+    return FALSE;
+  strip_h = MAX (24, vh / 6);
+  y0 = vh - strip_h;
+  if (vy < y0)
+    return FALSE;                        /* above the strip */
+  f = (int) (vx * r->image_total_frames / vw);
+  f = CLAMP (f, 0, r->image_total_frames - 1);
+  if (frame) *frame = f;
+  ntr = MAX (1, r->image_ntracks);
+  rowh = strip_h / ntr;
+  row = rowh > 0 ? (int) ((vy - y0) / rowh) : 0;
+  for (i = 0; i < r->image_clips->len; i++)
+    {
+      CmacsTimelineClip *cl =
+        &g_array_index (r->image_clips, CmacsTimelineClip, i);
+      if (cl->track != row)
+        continue;
+      if (f >= cl->start && f < cl->start + cl->dur)
+        {
+          if (clip_id) *clip_id = cl->id;
+          if (edge)
+            {
+              int right_px =
+                (cl->start + cl->dur) * vw / r->image_total_frames;
+              int left_px = cl->start * vw / r->image_total_frames;
+              if (ABS (right_px - (int) vx) <= 8)
+                *edge = 1;               /* right: out-point / trim end */
+              else if (ABS (left_px - (int) vx) <= 8)
+                *edge = 2;               /* left: in-point / trim start */
+            }
+          break;
+        }
+    }
+  return TRUE;                            /* inside the strip region */
+}
+
+void
+cmacs_libregnum_render_ctx_image_timeline_set (CmacsLibregnumRenderCtx *r,
+                                               int playhead, int total,
+                                               int ntracks)
+{
+  if (!r) return;
+  r->image_playhead = playhead;
+  r->image_total_frames = total;
+  r->image_ntracks = ntracks;
+}
+
+/* Set the font used for the timeline-strip clip-id labels (e.g. the Emacs UI
+   font, so the ids match the editor).  PATH is a TTF/OTF file; NULL/empty or
+   an unloadable file falls back to the built-in default font. */
+void
+cmacs_libregnum_render_ctx_image_set_label_font (CmacsLibregnumRenderCtx *r,
+                                                 const char *path)
+{
+  if (!r) return;
+  g_clear_object (&r->image_label_font);
+  if (path != NULL && path[0] != '\0')
+    {
+      GrlFont *f = grl_font_new_from_file (path);
+      if (f != NULL && grl_font_is_valid (f))
+        {
+          grl_font_set_filter (f, GRL_TEXTURE_FILTER_BILINEAR);
+          r->image_label_font = f;
+        }
+      else
+        g_clear_object (&f);
+    }
+}
+
+/* Full image-mode frame; called from the render_to_bgra branch. */
+static gboolean
+ctx_render_image (CmacsLibregnumRenderCtx *r, unsigned char *dst)
+{
+  ctx_image_apply_upload (r);
+  BeginTextureMode (r->fbo);
+  ClearBackground ((Color){ 40, 40, 46, 255 });
+  if (r->image_checker)
+    ctx_image_draw_checker (r);
+  if (r->image_tex && r->image_doc_w > 0)
+    {
+      g_autoptr (GrlRectangle) src =
+        grl_rectangle_new (0, 0, r->image_doc_w, r->image_doc_h);
+      g_autoptr (GrlRectangle) dstr =
+        grl_rectangle_new ((gfloat) r->image_pan_x, (gfloat) r->image_pan_y,
+                           (gfloat) (r->image_doc_w * r->image_scale),
+                           (gfloat) (r->image_doc_h * r->image_scale));
+      g_autoptr (GrlVector2) org = grl_vector2_new (0.0f, 0.0f);
+      g_autoptr (GrlColor) white = grl_color_new (255, 255, 255, 255);
+      grl_draw_texture_pro (r->image_tex, src, dstr, org, 0.0f, white);
+    }
+  ctx_image_draw_overlay (r);
+  /* Flush the rlgl 2D batch to the FBO BEFORE reading it back: DrawRectangle/
+   * DrawTexturePro queue into the render batch and are only submitted to GL on
+   * a batch flush (normally EndTextureMode).  Without this the glReadPixels
+   * below would capture the just-cleared FBO -- an all-background frame. */
+  rlDrawRenderBatchActive ();
+  if (dst)
+    glReadPixels (0, 0, r->width, r->height, GL_BGRA, GL_UNSIGNED_BYTE, dst);
+  EndTextureMode ();
+  return TRUE;
+}
+
+void
+cmacs_libregnum_render_ctx_image_enter (CmacsLibregnumRenderCtx *r,
+                                        gboolean on)
+{
+  if (!r) return;
+  r->image_mode = on;
+  if (on && r->image_scale <= 0.0)
+    {
+      r->image_scale = 1.0;
+      r->image_pan_x = r->image_pan_y = 0.0;
+      r->image_checker = TRUE;
+      r->image_cursor_x = r->image_cursor_y = -1.0;
+      r->image_cursor_r = 0.0;
+    }
+}
+
+gboolean
+cmacs_libregnum_render_ctx_is_image (CmacsLibregnumRenderCtx *r)
+{ return r && r->image_mode; }
+
+void
+cmacs_libregnum_render_ctx_image_set_document (CmacsLibregnumRenderCtx *r,
+                                               void *lrg_doc)
+{
+  if (!r) return;
+  r->image_doc = lrg_doc;                 /* borrowed */
+  if (lrg_doc)
+    {
+      r->image_doc_w = lrg_image_document_get_width ((LrgImageDocument *) lrg_doc);
+      r->image_doc_h = lrg_image_document_get_height ((LrgImageDocument *) lrg_doc);
+    }
+  g_clear_object (&r->image_pending);
+  g_clear_pointer (&r->image_rgba, g_free);
+  r->image_upload_pending = TRUE;
+}
+
+void
+cmacs_libregnum_render_ctx_image_set_grl_image (CmacsLibregnumRenderCtx *r,
+                                                void *grl_image)
+{
+  if (!r) return;
+  r->image_doc = NULL;
+  g_clear_object (&r->image_pending);
+  r->image_pending = grl_image;           /* transfer full */
+  if (grl_image)
+    {
+      r->image_doc_w = grl_image_get_width ((GrlImage *) grl_image);
+      r->image_doc_h = grl_image_get_height ((GrlImage *) grl_image);
+    }
+  g_clear_pointer (&r->image_rgba, g_free);
+  r->image_upload_pending = TRUE;
+}
+
+void
+cmacs_libregnum_render_ctx_image_upload_rgba (CmacsLibregnumRenderCtx *r,
+                                              int w, int h,
+                                              const guint8 *rgba, gsize n)
+{
+  if (!r || w <= 0 || h <= 0 || !rgba || n < (gsize) w * h * 4)
+    return;
+  r->image_doc = NULL;
+  g_clear_object (&r->image_pending);
+  g_clear_pointer (&r->image_rgba, g_free);
+  r->image_rgba = g_memdup2 (rgba, (gsize) w * h * 4);
+  r->image_rgba_w = w;
+  r->image_rgba_h = h;
+  r->image_doc_w = w;
+  r->image_doc_h = h;
+  r->image_upload_pending = TRUE;
+}
+
+void
+cmacs_libregnum_render_ctx_image_refresh (CmacsLibregnumRenderCtx *r)
+{ if (r) r->image_upload_pending = TRUE; }
+
+void
+cmacs_libregnum_render_ctx_image_refresh_rect (CmacsLibregnumRenderCtx *r,
+                                               int x, int y, int w, int h)
+{
+  /* v1: a rect refresh is a full re-upload (still cheap for a bound document,
+   * which re-flattens anyway).  A true dirty-rect grl_texture_update_rec path
+   * is a later optimisation for very large canvases. */
+  (void) x; (void) y; (void) w; (void) h;
+  if (r) r->image_upload_pending = TRUE;
+}
+
+void
+cmacs_libregnum_render_ctx_image_set_view (CmacsLibregnumRenderCtx *r,
+                                           double scale, double pan_x,
+                                           double pan_y)
+{
+  if (!r) return;
+  r->image_scale = (scale > 0.01) ? scale : 0.01;
+  r->image_pan_x = pan_x;
+  r->image_pan_y = pan_y;
+}
+
+void
+cmacs_libregnum_render_ctx_image_get_view (CmacsLibregnumRenderCtx *r,
+                                           double *scale, double *pan_x,
+                                           double *pan_y)
+{
+  if (!r) return;
+  if (scale) *scale = r->image_scale;
+  if (pan_x) *pan_x = r->image_pan_x;
+  if (pan_y) *pan_y = r->image_pan_y;
+}
+
+/* Zoom about a view pixel, keeping the doc point under it fixed. */
+void
+cmacs_libregnum_render_ctx_image_zoom_at (CmacsLibregnumRenderCtx *r,
+                                          double vx, double vy, double factor)
+{
+  double s0, s1;
+  if (!r || factor <= 0.0) return;
+  s0 = r->image_scale;
+  s1 = s0 * factor;
+  if (s1 < 0.02) s1 = 0.02;
+  if (s1 > 64.0) s1 = 64.0;
+  /* doc point under the cursor before = (vx - pan)/s0; keep it under vx. */
+  r->image_pan_x = vx - (vx - r->image_pan_x) * (s1 / s0);
+  r->image_pan_y = vy - (vy - r->image_pan_y) * (s1 / s0);
+  r->image_scale = s1;
+}
+
+/* Fit the whole doc into a VW×VH viewport, centred. */
+void
+cmacs_libregnum_render_ctx_image_fit (CmacsLibregnumRenderCtx *r,
+                                      int vw, int vh)
+{
+  double sx, sy, s;
+  if (!r || r->image_doc_w <= 0 || r->image_doc_h <= 0 || vw <= 0 || vh <= 0)
+    return;
+  sx = (double) vw / r->image_doc_w;
+  sy = (double) vh / r->image_doc_h;
+  s = (sx < sy) ? sx : sy;
+  if (s < 0.02) s = 0.02;
+  r->image_scale = s;
+  r->image_pan_x = (vw - r->image_doc_w * s) * 0.5;
+  r->image_pan_y = (vh - r->image_doc_h * s) * 0.5;
+}
+
+/* View (FBO-local) pixel → document pixel, honouring pan/zoom.  Returns FALSE
+ * when the point is outside the document. */
+gboolean
+cmacs_libregnum_render_ctx_image_view_to_doc (CmacsLibregnumRenderCtx *r,
+                                              double vx, double vy,
+                                              int *dx, int *dy)
+{
+  int x, y;
+  if (!r || r->image_scale <= 0.0) return FALSE;
+  x = (int) floor ((vx - r->image_pan_x) / r->image_scale);
+  y = (int) floor ((vy - r->image_pan_y) / r->image_scale);
+  if (dx) *dx = x;
+  if (dy) *dy = y;
+  return (x >= 0 && x < r->image_doc_w && y >= 0 && y < r->image_doc_h);
+}
+
+void
+cmacs_libregnum_render_ctx_image_set_checker (CmacsLibregnumRenderCtx *r,
+                                              gboolean on)
+{ if (r) r->image_checker = on; }
+
+void
+cmacs_libregnum_render_ctx_image_set_grid (CmacsLibregnumRenderCtx *r,
+                                           gboolean on)
+{ if (r) r->image_grid = on; }
+
+void
+cmacs_libregnum_render_ctx_image_set_cursor (CmacsLibregnumRenderCtx *r,
+                                             double dx, double dy,
+                                             double radius)
+{
+  if (!r) return;
+  r->image_cursor_x = dx;
+  r->image_cursor_y = dy;
+  r->image_cursor_r = radius;
+}
+
+void
+cmacs_libregnum_render_ctx_image_set_marquee (CmacsLibregnumRenderCtx *r,
+                                              gboolean on, int x, int y,
+                                              int w, int h)
+{
+  if (!r) return;
+  r->image_marquee_on = on;
+  r->image_mx = x; r->image_my = y; r->image_mw = w; r->image_mh = h;
 }
 
 void *
@@ -1620,6 +2194,11 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
       lrg_game_host_end_frame (r->game_host);     /* EndTextureMode */
       return TRUE;
     }
+
+  /* 2D image-display mode: draw the composited image (checkerboard + quad +
+   * overlay) instead of the 3D scene.  Same FBO/readback bracket as above. */
+  if (r->image_mode)
+    return ctx_render_image (r, dst);
 
   /* Advance the camera focus tween (if any) before drawing this
    * frame; the view re-requests a redraw while focus_active is true. */

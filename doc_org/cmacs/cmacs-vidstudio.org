@@ -42,6 +42,18 @@ M-x cmacs-vidstudio          ; new project (prompts W x H x fps)
 Then build the timeline with the keys below; the buffer previews the frame at
 the playhead.
 
+** Live GL viewport
+
+When a display is available, the preview renders through a *live in-engine
+libregnum viewport* (the gnuseye/cmacs-cad hosting model) instead of a native
+Emacs image: the composited playhead frame is uploaded straight into the FBO,
+so scrubbing and playback avoid the per-frame PPM-through-Emacs round-trip.  It
+works under both *pgtk* and ~emacs --lrg~.  Right-click still pops the video
+context menu; on a tty / headless frame the editor *falls back automatically*
+to the PPM/PNG ~insert-image~ preview (buffer-local ~cmacs-vidstudio--live~ is
+then nil).  The in-viewport graphical timeline strip is a later addition; the
+textual timeline is shown in the native path meanwhile.
+
 ** Default keybindings (~cmacs-vidstudio-mode~)
 
 | Key       | Command                              | Action                       |
@@ -116,8 +128,36 @@ Durations and the playhead are in *frames*.
 ** Clips (each returns a clip id)
 - ~(cmacs-vidstudio-add-solid-clip HANDLE TRACK DURATION R G B A)~.
 - ~(cmacs-vidstudio-add-image-clip HANDLE TRACK PATH DURATION)~.
-- ~(cmacs-vidstudio-add-video-clip HANDLE TRACK PATH DURATION)~.
+- ~(cmacs-vidstudio-add-video-clip HANDLE TRACK PATH &optional DURATION IN-SEC OUT-SEC)~
+  — imports the *whole video* by default; pass IN-SEC / OUT-SEC (source
+  seconds) to import only a *slice*.  A negative/omitted IN-SEC means the
+  start; an omitted OUT-SEC (or one past the source end) means the end.  The
+  on-timeline duration is derived from the slice, and the in/out points are
+  recorded as engine state (a real ~trim_end~ was added to libregnum's
+  ~LrgReelVideoClip~, so the source read is clamped at OUT and the slice
+  survives later duration edits).  ~M-x cmacs-vidstudio-import~ prompts for the
+  optional In/Out points (blank In = start, blank Out = whole video).
 - ~(cmacs-vidstudio-add-text-clip HANDLE TRACK TEXT DURATION R G B A)~.
+- ~(cmacs-vidstudio-add-rich-text HANDLE TRACK TEXT DURATION &optional
+  FONT-SIZE EFFECT COLOR)~ --- an animated text clip (a functional
+  LrgReelClip).  EFFECT (0 none, 1 shake, 2 wave, 3 rainbow, 4 typewriter,
+  5 fade-in, 6 pulse) animates *per character*; the text is rasterised onto
+  the CPU canvas image (so it renders identically in preview, export and the
+  live viewport).  Right-click -> *Add -> Animated text...*.
+- ~(cmacs-vidstudio-add-loop-clip HANDLE TRACK PATH DURATION LOOP-SECS)~ and
+  ~-add-freeze-clip~ wrap a video source in a loop / freeze *sequence* (a
+  nested clip): loop repeats the source every LOOP-SECS over DURATION; freeze
+  holds the frame at a chosen second.  Right-click → *Add → Loop video… /
+  Freeze frame…*.
+- ~(cmacs-vidstudio-add-shape-rect HANDLE TRACK DURATION X Y W H FILL)~ and
+  ~-add-shape-circle~ (filled shape clips); ~(cmacs-vidstudio-add-caption HANDLE
+  TRACK DURATION SRT-PATH ...)~ imports an SRT subtitle track as a caption clip.
+  Right-click → *Add → Rectangle… / Captions (SRT)…*.
+- ~(cmacs-vidstudio-add-gradient-clip HANDLE TRACK DURATION A B &optional RADIAL)~
+  — a gradient clip from colour A to B (each ~(R G B A)~), linear (vertical) or
+  radial.  Right-click → *Add → Gradient…*.  Transitions now prompt for an
+  *easing* curve (a subset of the 31 LrgEasingType curves) in
+  ~cmacs-vidstudio-add-transition-cmd~.
 
 ** Transitions / effects
 - ~(cmacs-vidstudio-set-transition HANDLE CLIP-ID TYPE OVERLAP EASING)~ —
@@ -125,6 +165,86 @@ Durations and the playhead are in *frames*.
   7 push, 8 clock-wipe.  OVERLAP in frames.
 - ~(cmacs-vidstudio-add-effect HANDLE CLIP-ID TYPE)~ — 0 blur, 1 bloom,
   2 color-grade, 3 vignette, 4 grain.  ~(cmacs-vidstudio-clear-effects ...)~.
+- ~(cmacs-vidstudio-set-effect-param HANDLE CLIP-ID EFFECT-INDEX (PROP . VALUE))~
+  sets a numeric effect property (e.g. blur ~radius~, color-grade
+  ~brightness~/~contrast~/~saturation~, vignette ~intensity~, grain ~amount~).
+  Right-click → *Clip → Effect parameter…* picks a common one interactively.
+  (Needed a small ~lrg_reel_clip_get_effect~ accessor added to libregnum.)
+
+** Keyframing
+
+Any of a clip's parameters can be *animated* over time.  Keyframes hold a
+clip-relative FRAME, a VALUE, and an easing curve; a per-frame *animator*
+samples cached =LrgKeyframeCurve=s and pushes the values through the clip
+setters just before compositing (so it works in preview, playback, and export
+--- the export loop is driven frame-by-frame when a project has keyframes).
+
+- ~(cmacs-vidstudio-add-keyframe HANDLE CLIP-ID PARAM FRAME VALUE &optional EASING EFFECT-INDEX PROP)~
+  — PARAM 0 opacity, 1 x, 2 y, 3 scale, 4 rotation, 5 effect-param (with
+  EFFECT-INDEX + PROP); EASING is an =LrgEasingType= (0 linear .. 30, 31
+  curves).  Key ~k~ adds a keyframe for the clip under the playhead at the
+  current playhead (relative to the clip start) --- a *Ken Burns* move is just
+  x/y/scale keyframes.
+- ~(cmacs-vidstudio-clear-keyframes HANDLE CLIP-ID &optional PARAM)~ (PARAM nil
+  = all), ~(cmacs-vidstudio-keyframe-count HANDLE CLIP-ID)~.  Right-click →
+  *Clip → Add keyframe… / Clear keyframes…*.
+
+** Save / load (.vstudio)
+
+Projects persist to a *.vstudio* file --- a versioned, Lisp-readable
+S-expression written by ~(cmacs-vidstudio-serialize HANDLE)~ (in C) and loaded
+by *replaying* the add-* DEFUNs in Elisp (~cmacs-vidstudio-open~), so the
+format degrades gracefully: unknown keys are ignored (forward-compat).  It
+records tracks + clips (kind/params/duration, in/out slice, transition,
+opacity, blend, keyframes) and file-based audio segs.
+
+- Key ~C-x C-s~ = ~cmacs-vidstudio-save~ (Save / Save as… / Open… are in the
+  right-click *Project* submenu).  ~.vstudio~ files auto-open in the editor
+  (=auto-mode-alist=); a named project is autosaved to ~FILE~~ on buffer kill.
+- Serialize -> load -> serialize is bit-identical (covered by ERT).
+- Serialized: clips + transitions + opacity/blend + per-clip transform +
+  effect chains (type + numeric params, introspected via GObject) + keyframes
+  + file audio + clip-extracted audio (stored as the source video path and
+  re-extracted on load via ~cmacs-vidstudio-add-audio-extract-file~).  The
+  save/load model is now gap-free for reproducible sources.
+
+** Near-real-time playback
+
+Playback advances the playhead from the wall clock (slow frames are skipped,
+input yields) and, under a display, renders through the live GL viewport (no
+PPM-through-Emacs round-trip).  While playing, the preview drops to a low-res
+*proxy* (~cmacs-vidstudio-playback-scale~, default 0.4) and snaps back to full
+resolution on pause, so even a heavy multi-track timeline holds cadence.
+
+** Audio
+
+A flat *audio lane* mixes into the video export and can be exported on its own
+(one =LrgReelAudioTrack= mixes overlapping clips, so a single lane suffices).
+
+- ~(cmacs-vidstudio-add-audio-file HANDLE PATH FROM-FRAME VOLUME TRIM-START TRIM-END)~
+  — add a wav/ogg/mp3/flac file (key ~A~ prompts for file/start/volume).
+- ~(cmacs-vidstudio-add-audio-from-clip HANDLE CLIP-ID FROM-FRAME VOLUME)~ —
+  extract a video clip's own audio (via ffmpeg) onto the lane (right-click →
+  *Audio → Extract from clip…*).
+- ~(cmacs-vidstudio-set-audio-volume HANDLE ID V)~ (key ~V~),
+  ~(cmacs-vidstudio-set-audio-fade HANDLE ID (IN . OUT))~ (linear fades in
+  seconds — applied by pre-scaling samples for clip-extracted audio),
+  ~(cmacs-vidstudio-remove-audio HANDLE ID)~, ~(cmacs-vidstudio-audio-count HANDLE)~.
+- Export: the mixed lane is *muxed into the video export* automatically; or
+  ~(cmacs-vidstudio-export-audio HANDLE PATH FORMAT)~ writes it standalone —
+  FORMAT 0 WAV, 1 MP3, 2 AAC, 3 FLAC (right-click → *Audio → Export audio…*).
+
+** Per-clip transform & compositing
+- ~(cmacs-vidstudio-set-opacity HANDLE CLIP-ID O)~ (0..1),
+  ~(cmacs-vidstudio-set-transform HANDLE CLIP-ID X Y SX SY)~,
+  ~(cmacs-vidstudio-set-rotation ... ROT)~ (radians),
+  ~(cmacs-vidstudio-set-anchor ... AX AY)~,
+  ~(cmacs-vidstudio-set-blend-mode HANDLE CLIP-ID MODE)~ — 0 normal, 1 multiply,
+  2 screen, 3 overlay, 4 soft-light, 5 add, 6 color-dodge, 7 color-burn
+  (tracks composite in z-order; higher tracks over lower).
+- Video-clip controls: ~(cmacs-vidstudio-set-video-rate HANDLE CLIP-ID RATE)~
+  (speed; 2.0 fast, 0.5 slow-mo), ~-set-video-fit~ (0 fill, 1 contain, 2 cover,
+  3 stretch, 4 none), ~-set-video-loop~.  These return nil on non-video clips.
 
 ** Editing
 - ~(cmacs-vidstudio-set-clip-duration HANDLE CLIP-ID FRAMES)~.
@@ -134,6 +254,10 @@ Durations and the playhead are in *frames*.
 - Queries: ~clip-at~, ~clip-duration~, ~clip-start-frame~.
 
 ** Preview / export
+- ~(cmacs-vidstudio-export-still HANDLE FRAME PATH)~ writes one frame to a PNG/
+  JPG; ~(cmacs-vidstudio-set-export-quality HANDLE CRF BITRATE-KBPS)~ tunes the
+  next video export (lower CRF = better quality).  Right-click → *Export* has
+  Still frame + Quality entries.
 - ~(cmacs-vidstudio-render-png HANDLE FRAME)~ → unibyte PNG string.
 - ~(cmacs-vidstudio-render-ppm HANDLE FRAME &optional MAX-WIDTH)~ → unibyte
   binary-PPM (P6) string, downscaled to MAX-WIDTH.  Uncompressed → ~5x
@@ -185,3 +309,63 @@ On every edit the project rebuilds its =LrgReel= from the per-track segment
 lists (each track → one =LrgReelTransitionSeries=), so insert / split / move /
 ripple are simple descriptor operations and the series recomputes frame layout.
 #+end_src
+
+- Press ~?~ in cmacs-vidstudio-mode to pop a *transient keybinding menu* (a magit-style cheat-sheet grouped by category); press any listed key to run its command, or ~q~ / ~C-g~ to dismiss.
+- The in-viewport *timeline strip* labels each clip block with its *id*
+  (~#N~, white with a drop-shadow, drawn via ~grl_draw_text~ when it fits),
+  so you can read the clip id a command asks for right off the block you
+  click.  Blocks are colour-coded per clip, one row per track, with the
+  playhead line.
+
+- A *clip-list side window* (~cmacs-vidstudio-toggle-clips-panel~, key ~L~,
+  transient *View*) lists every clip per track -- ~#id start-end Nfr~ -- each a
+  button that selects the clip (highlighting it on the strip), mirroring
+  imgedit's layers panel.
+- The strip clip-id labels are drawn in the *Emacs UI font*
+  (~fc-match~ of the default face -> ~grl_draw_text_ex~; falls back to the
+  built-in font), so they match the editor and stay readable.
+- *Export is asynchronous*: ~E~ (video) and ~G~ (GIF) serialise the
+  project and run the render + ffmpeg out-of-process in a background
+  ~emacs -batch~ subprocess (a `make-process' sentinel reports completion),
+  so the editor stays responsive -- a synchronous export blocked Emacs's main
+  thread long enough that the compositor flagged it as hung.
+
+- *Export* prompts for a *codec* (H.264 / H.265 / AV1 / VP9 / ProRes) and an
+  encoder *preset* (default ~veryfast~); non-video projects render across all
+  cores (~render_parallel~) -- video stays sequential (its source frame-cache
+  is not thread-safe).
+- Right-clicking a clip on the timeline strip acts on *that* clip: the menu
+  commands use the clicked clip's id (no "Clip id:" prompt).
+- All 31 easing curves are available for transitions (the previous subset had
+  wrong codes).
+- The *audio lane* shows in the timeline strip (a teal row in parallel with
+  the video) and in the clip-list side window (an Audio section).
+- During a background export the *ffmpeg progress line* (frame / time /
+  speed) is echoed to *Messages* every 30 seconds so you can monitor it.
+
+- *Video-in-video (picture-in-picture)*: ~o~ / "Video overlay / PiP" imports a
+  video onto a NEW track and draws it into a small window (a corner/centre
+  position preset + a size fraction) -- e.g. a webcam over gameplay.  The
+  overlay composites over the tracks beneath it.  "Make PiP overlay" does the
+  same to an existing clip; a size of 0 restores the full frame.  Works for
+  video and image clips (cmacs-vidstudio-set-clip-box); the box is saved in
+  the .vstudio project.
+- *Transition easing*: the "Easing" prompt now offers all 31 curves.  (It
+  previously passed the default as completing-read's INITIAL-INPUT, which
+  filtered the candidate list down to just "linear".)
+
+- *Editing a clip's length after import*:
+  - *Trim in/out (source slice)* -- ~r~ / "Trim in/out (source slice)"
+    (cmacs-vidstudio-set-clip-trim) sets which part of the ORIGINAL video plays
+    (in/out seconds); the on-timeline length follows.  The prompt shows the
+    current slice and the source's full duration.
+  - *Set on-timeline duration* -- ~d~ / "Set on-timeline duration"
+    (cmacs-vidstudio-set-clip-duration) sets how long the clip occupies the
+    timeline; for a video, extending past its slice holds the last frame.
+  - *Drag the right edge* of a clip on the timeline strip to trim it: for a
+    video this moves the source out-point (showing more/less of the original,
+    capped at the source end); for other clips it changes the on-timeline
+    length.  (The transition-series timeline anchors each clip's start, so the
+    left edge is not drag-trimmed -- use "Trim in/out" for the in-point.)
+  Both the slice and a divergent on-timeline duration are saved in the
+  .vstudio project.

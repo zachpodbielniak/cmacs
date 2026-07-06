@@ -69,13 +69,54 @@ extern gint cmacs_vidstudio_proj_add_solid_clip (CmacsVidProject *p,
                                                  guint track, int duration,
                                                  guint8 r, guint8 g, guint8 b,
                                                  guint8 a);
+extern gint cmacs_vidstudio_proj_add_gradient_clip (CmacsVidProject *p,
+                                                   guint track, int duration,
+                                                   gboolean radial,
+                                                   guint8 ar, guint8 ag,
+                                                   guint8 ab, guint8 aa,
+                                                   guint8 br, guint8 bg,
+                                                   guint8 bb, guint8 ba);
+extern gint cmacs_vidstudio_proj_add_shape_rect (CmacsVidProject *p,
+                                                guint track, int duration,
+                                                int x, int y, int w, int h,
+                                                guint8 r, guint8 g, guint8 b,
+                                                guint8 a);
+extern gint cmacs_vidstudio_proj_add_shape_circle (CmacsVidProject *p,
+                                                   guint track, int duration,
+                                                   int cx, int cy, int radius,
+                                                   guint8 r, guint8 g, guint8 b,
+                                                   guint8 a);
+extern gint cmacs_vidstudio_proj_add_caption (CmacsVidProject *p, guint track,
+                                              int duration, const char *srt_path,
+                                              int font_size, guint8 r, guint8 g,
+                                              guint8 b, guint8 a,
+                                              char **error_msg);
+extern gint cmacs_vidstudio_proj_add_rich_text_clip (CmacsVidProject *p,
+                                                    guint track,
+                                                    const char *text,
+                                                    int duration, int font_size,
+                                                    int effect_type,
+                                                    guint8 r, guint8 g, guint8 b,
+                                                    guint8 a);
+extern gint cmacs_vidstudio_proj_add_loop_clip (CmacsVidProject *p,
+                                               guint track, const char *path,
+                                               int duration, double loop_secs,
+                                               char **error_msg);
+extern gint cmacs_vidstudio_proj_add_freeze_clip (CmacsVidProject *p,
+                                                  guint track, const char *path,
+                                                  int duration,
+                                                  double freeze_secs,
+                                                  char **error_msg);
 extern gint cmacs_vidstudio_proj_add_image_clip (CmacsVidProject *p,
                                                  guint track, const char *path,
                                                  int duration,
                                                  char **error_msg);
+/* Add a video clip.  IN_SEC/OUT_SEC are the source in/out points in seconds:
+   IN_SEC < 0 means start (0); OUT_SEC <= 0 (or past the source) means the whole
+   video to its end.  The on-timeline duration is derived from the slice. */
 extern gint cmacs_vidstudio_proj_add_video_clip (CmacsVidProject *p,
                                                  guint track, const char *path,
-                                                 int duration,
+                                                 double in_sec, double out_sec,
                                                  char **error_msg);
 extern gint cmacs_vidstudio_proj_add_text_clip (CmacsVidProject *p,
                                                 guint track, const char *text,
@@ -96,6 +137,13 @@ extern gboolean cmacs_vidstudio_proj_clear_effects (CmacsVidProject *p,
                                                     gint clip_id);
 
 /* Editing. */
+/* Resolve a whole-video clip's on-timeline length from its real (decoded)
+   frame count -- fixes imports where ffprobe could not determine the duration
+   (whole-video collapsed to a 1-frame placeholder).  Returns TRUE if changed. */
+extern gboolean cmacs_vidstudio_proj_refresh_video_duration (CmacsVidProject *p,
+                                                             gint clip_id);
+extern gboolean cmacs_vidstudio_proj_refresh_all_video_durations
+                                                       (CmacsVidProject *p);
 extern gboolean cmacs_vidstudio_proj_set_clip_duration (CmacsVidProject *p,
                                                         gint clip_id,
                                                         int frames);
@@ -145,6 +193,110 @@ extern gboolean cmacs_vidstudio_proj_export_video (CmacsVidProject *p,
 extern gboolean cmacs_vidstudio_proj_export_gif (CmacsVidProject *p,
                                                  const char *path,
                                                  char **error_msg);
+
+/* Live viewport: render FRAME and return an owned GrlImage* (transfer full)
+   as void* (raylib-free DEFUN layer).  Caller passes it to the render ctx. */
+extern void *cmacs_vidstudio_proj_canvas_image (CmacsVidProject *p, int frame);
+
+/* Per-clip transform / opacity / blend / effect params. */
+extern gboolean cmacs_vidstudio_proj_set_opacity (CmacsVidProject *p,
+                                                  gint clip_id, double o);
+extern gboolean cmacs_vidstudio_proj_set_transform (CmacsVidProject *p,
+                                                    gint clip_id, double x,
+                                                    double y, double sx,
+                                                    double sy, double rot);
+extern gboolean cmacs_vidstudio_proj_set_clip_box (CmacsVidProject *p,
+                                                   gint clip_id, int x, int y,
+                                                   int w, int h);
+extern gboolean cmacs_vidstudio_proj_set_clip_trim (CmacsVidProject *p,
+                                                    gint clip_id, double in_sec,
+                                                    double out_sec);
+extern gboolean cmacs_vidstudio_proj_clip_slice (CmacsVidProject *p,
+                                                 gint clip_id, double *in_sec,
+                                                 double *out_sec,
+                                                 double *src_dur);
+extern gboolean cmacs_vidstudio_proj_set_anchor (CmacsVidProject *p,
+                                                 gint clip_id, double ax,
+                                                 double ay);
+/* Blend mode == LrgReelBlendMode: 0 normal,1 multiply,2 screen,3 overlay,
+   4 soft-light,5 add,6 color-dodge,7 color-burn. */
+extern gboolean cmacs_vidstudio_proj_set_blend_mode (CmacsVidProject *p,
+                                                     gint clip_id, int mode);
+extern gboolean cmacs_vidstudio_proj_set_effect_param (CmacsVidProject *p,
+                                                       gint clip_id,
+                                                       int effect_index,
+                                                       const char *prop,
+                                                       double value);
+/* Video-clip controls (no-op / FALSE on non-video clips). */
+extern gboolean cmacs_vidstudio_proj_set_video_fit (CmacsVidProject *p,
+                                                    gint clip_id, int fit);
+extern gboolean cmacs_vidstudio_proj_set_video_rate (CmacsVidProject *p,
+                                                     gint clip_id, double rate);
+extern gboolean cmacs_vidstudio_proj_set_video_loop (CmacsVidProject *p,
+                                                     gint clip_id,
+                                                     gboolean loop);
+/* Export quality (applied to the next video export). */
+extern void cmacs_vidstudio_proj_set_export_quality (CmacsVidProject *p,
+                                                     int crf, int bitrate_kbps);
+/* Render one FRAME straight to PATH (PNG/JPG by extension). */
+extern gboolean cmacs_vidstudio_proj_export_still (CmacsVidProject *p,
+                                                   int frame, const char *path,
+                                                   char **error_msg);
+
+/* ── Audio lane ─────────────────────────────────────────────────────────── */
+extern gint cmacs_vidstudio_proj_add_audio_file (CmacsVidProject *p,
+                                                 const char *path,
+                                                 int from_frame, double volume,
+                                                 double trim_start,
+                                                 double trim_end,
+                                                 char **error_msg);
+/* Extract CLIP_ID's audio (video clip) and add it to the lane. */
+extern gint cmacs_vidstudio_proj_add_audio_from_clip (CmacsVidProject *p,
+                                                      gint clip_id,
+                                                      int from_frame,
+                                                      double volume,
+                                                      char **error_msg);
+extern gint cmacs_vidstudio_proj_add_audio_extract_file (CmacsVidProject *p,
+                                                        const char *video_path,
+                                                        int from_frame,
+                                                        double volume,
+                                                        char **error_msg);
+extern gboolean cmacs_vidstudio_proj_set_audio_volume (CmacsVidProject *p,
+                                                       gint id, double v);
+extern gboolean cmacs_vidstudio_proj_set_audio_fade (CmacsVidProject *p,
+                                                     gint id, double fade_in,
+                                                     double fade_out);
+extern gboolean cmacs_vidstudio_proj_remove_audio (CmacsVidProject *p, gint id);
+extern guint cmacs_vidstudio_proj_audio_count (CmacsVidProject *p);
+extern gboolean cmacs_vidstudio_proj_audio_at (CmacsVidProject *p, guint index,
+                                               guint *out_id, int *out_from,
+                                               int *out_frames,
+                                               gboolean *out_extract);
+extern void cmacs_vidstudio_proj_set_export_preset (CmacsVidProject *p,
+                                                    const char *preset);
+/* FORMAT: 0 WAV, 1 MP3, 2 AAC, 3 FLAC. */
+extern gboolean cmacs_vidstudio_proj_export_audio (CmacsVidProject *p,
+                                                   const char *path, int format,
+                                                   char **error_msg);
+
+/* ── Keyframing ─────────────────────────────────────────────────────────
+   PARAM: 0 opacity, 1 x, 2 y, 3 scale, 4 rotation, 5 effect-param (uses
+   EFFECT_INDEX + PROP).  FRAME is clip-relative.  EASING is an LrgEasingType. */
+extern gboolean cmacs_vidstudio_proj_add_keyframe (CmacsVidProject *p,
+                                                   gint clip_id, int param,
+                                                   int effect_index,
+                                                   const char *prop,
+                                                   double frame, double value,
+                                                   int easing);
+/* PARAM < 0 clears all keyframes on the clip. */
+extern gboolean cmacs_vidstudio_proj_clear_keyframes (CmacsVidProject *p,
+                                                      gint clip_id, int param);
+extern gint cmacs_vidstudio_proj_keyframe_count (CmacsVidProject *p,
+                                                 gint clip_id);
+
+/* Serialize the project to a versioned, Lisp-readable S-expression
+   (g_malloc'd; caller g_free's).  Load is an Elisp replay of the add-* DEFUNs. */
+extern char *cmacs_vidstudio_proj_serialize (CmacsVidProject *p);
 
 #endif /* HAVE_CMACS_VIDSTUDIO */
 #endif /* CMACS_VIDSTUDIO_PROJ_H */

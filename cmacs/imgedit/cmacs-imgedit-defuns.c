@@ -15,8 +15,14 @@
 
 #include "lisp.h"
 #include "coding.h"             /* ENCODE_UTF_8 for the text tool */
+#include "buffer.h"             /* CHECK_BUFFER for viewport-bind */
 #include "cmacs-imgedit-doc.h"
 #include "cmacs-imgedit-clip.h"
+#ifdef HAVE_CMACS_LIBREGNUM
+/* Firewall-safe (raylib-free, opaque-ctx) headers for the live viewport. */
+#include "cmacs-libregnum.h"
+#include "cmacs-libregnum-render.h"
+#endif
 
 /* Qcmacs_imgedit_error is DEFSYM'd in syms_of_* below; make-docfile generates
    its global slot, so it must NOT be declared as a file-local variable. */
@@ -71,6 +77,12 @@ static int
 ie_int (Lisp_Object v, int dflt)
 {
   return INTEGERP (v) ? (int) XFIXNUM (v) : dflt;
+}
+
+static double
+ie_dbl (Lisp_Object v, double dflt)
+{
+  return NUMBERP (v) ? XFLOATINT (v) : dflt;
 }
 
 static const char *
@@ -394,6 +406,26 @@ DEFUN ("cmacs-imgedit-set-layer-visible", Fcmacs_imgedit_set_layer_visible,
   return Qnil;
 }
 
+DEFUN ("cmacs-imgedit-layer-locked-p", Fcmacs_imgedit_layer_locked_p,
+       Scmacs_imgedit_layer_locked_p, 2, 2, 0,
+       doc: /* Return t if layer INDEX of HANDLE is locked.  */)
+  (Lisp_Object handle, Lisp_Object index)
+{
+  return cmacs_imgedit_doc_layer_locked (ie_lookup (handle), ie_int (index, 0))
+         ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-imgedit-set-layer-locked", Fcmacs_imgedit_set_layer_locked,
+       Scmacs_imgedit_set_layer_locked, 3, 3, 0,
+       doc: /* Lock (LOCKED non-nil) or unlock layer INDEX of HANDLE.
+A locked layer refuses edits until unlocked.  */)
+  (Lisp_Object handle, Lisp_Object index, Lisp_Object locked)
+{
+  cmacs_imgedit_doc_set_layer_locked (ie_lookup (handle), ie_int (index, 0),
+                                      !NILP (locked));
+  return Qnil;
+}
+
 DEFUN ("cmacs-imgedit-set-layer-offset", Fcmacs_imgedit_set_layer_offset,
        Scmacs_imgedit_set_layer_offset, 4, 4, 0,
        doc: /* Set the X,Y offset of layer INDEX within the document.  */)
@@ -534,6 +566,34 @@ engine's TrueType font, or its embedded bitmap font when headless.  */)
   return Qnil;
 }
 
+DEFUN ("cmacs-imgedit-viewport-bind", Fcmacs_imgedit_viewport_bind,
+       Scmacs_imgedit_viewport_bind, 2, 2, 0,
+       doc: /* Bind image HANDLE's document into BUFFER's libregnum view for
+zero-copy live display (the render side re-flattens it each refresh).  Returns
+t on success, nil if the viewport is unavailable.  */)
+  (Lisp_Object handle, Lisp_Object buffer)
+{
+#ifdef HAVE_CMACS_LIBREGNUM
+  CmacsImgeditDoc *d = ie_lookup (handle);
+  void *doc = d ? cmacs_imgedit_doc_document (d) : NULL;
+  CmacsLibregnumView *v;
+  CmacsLibregnumRenderCtx *ctx;
+
+  CHECK_BUFFER (buffer);
+  v = cmacs_libregnum_view_for_buffer (buffer);
+  ctx = v ? cmacs_libregnum_view_get_render_ctx (v) : NULL;
+  if (ctx && doc)
+    {
+      cmacs_libregnum_render_ctx_image_set_document (ctx, doc);
+      cmacs_libregnum_view_request_redraw (v);
+      return Qt;
+    }
+#else
+  (void) handle; (void) buffer;
+#endif
+  return Qnil;
+}
+
 DEFUN ("cmacs-imgedit-clipboard-available-p",
        Fcmacs_imgedit_clipboard_available_p,
        Scmacs_imgedit_clipboard_available_p, 0, 0, 0,
@@ -597,6 +657,402 @@ DEFUN ("cmacs-imgedit-flood-fill", Fcmacs_imgedit_flood_fill,
                                 ie_int (y, 0), ie_clamp8 (r), ie_clamp8 (g),
                                 ie_clamp8 (b), ie_clamp8 (a),
                                 ie_int (tolerance, 0));
+  return Qnil;
+}
+
+DEFUN ("cmacs-imgedit-flip", Fcmacs_imgedit_flip, Scmacs_imgedit_flip, 1, 2, 0,
+       doc: /* Flip HANDLE's whole document; HORIZONTAL non-nil = left-right.  */)
+  (Lisp_Object handle, Lisp_Object horizontal)
+{
+  cmacs_imgedit_doc_flip (ie_lookup (handle), !NILP (horizontal));
+  return Qnil;
+}
+
+DEFUN ("cmacs-imgedit-resize", Fcmacs_imgedit_resize, Scmacs_imgedit_resize,
+       3, 4, 0,
+       doc: /* Resize the whole document to WIDTH x HEIGHT.
+NEAREST non-nil uses nearest-neighbour (crisp for pixel art).  */)
+  (Lisp_Object handle, Lisp_Object width, Lisp_Object height,
+   Lisp_Object nearest)
+{
+  CHECK_FIXNAT (width); CHECK_FIXNAT (height);
+  cmacs_imgedit_doc_resize (ie_lookup (handle), XFIXNUM (width),
+                            XFIXNUM (height), !NILP (nearest));
+  return Qnil;
+}
+
+DEFUN ("cmacs-imgedit-crop", Fcmacs_imgedit_crop, Scmacs_imgedit_crop, 5, 5, 0,
+       doc: /* Crop the whole document to the rectangle X Y WIDTH HEIGHT.  */)
+  (Lisp_Object handle, Lisp_Object x, Lisp_Object y, Lisp_Object width,
+   Lisp_Object height)
+{
+  cmacs_imgedit_doc_crop (ie_lookup (handle), ie_int (x, 0), ie_int (y, 0),
+                          ie_int (width, 1), ie_int (height, 1));
+  return Qnil;
+}
+
+DEFUN ("cmacs-imgedit-rotate", Fcmacs_imgedit_rotate, Scmacs_imgedit_rotate,
+       1, 2, 0,
+       doc: /* Rotate the whole document 90 degrees; CLOCKWISE non-nil = CW.  */)
+  (Lisp_Object handle, Lisp_Object clockwise)
+{
+  cmacs_imgedit_doc_rotate (ie_lookup (handle), !NILP (clockwise));
+  return Qnil;
+}
+
+DEFUN ("cmacs-imgedit-gradient", Fcmacs_imgedit_gradient,
+       Scmacs_imgedit_gradient, 3, 4, 0,
+       doc: /* Fill the active layer with a gradient from colour A to B.
+A and B are (R G B A) lists.  RADIAL non-nil draws a radial gradient from the
+centre; otherwise a linear gradient (VERTICAL non-nil = top-to-bottom).  */)
+  (Lisp_Object handle, Lisp_Object a, Lisp_Object b, Lisp_Object radial)
+{
+  gboolean vertical = FALSE;   /* linear axis; radial ignores it */
+  cmacs_imgedit_doc_gradient
+    (ie_lookup (handle), !NILP (radial), vertical,
+     ie_clamp8 (Fnth (make_fixnum (0), a)), ie_clamp8 (Fnth (make_fixnum (1), a)),
+     ie_clamp8 (Fnth (make_fixnum (2), a)), ie_clamp8 (Fnth (make_fixnum (3), a)),
+     ie_clamp8 (Fnth (make_fixnum (0), b)), ie_clamp8 (Fnth (make_fixnum (1), b)),
+     ie_clamp8 (Fnth (make_fixnum (2), b)), ie_clamp8 (Fnth (make_fixnum (3), b)));
+  return Qnil;
+}
+
+DEFUN ("cmacs-imgedit-brightness", Fcmacs_imgedit_brightness,
+       Scmacs_imgedit_brightness, 2, 2, 0,
+       doc: /* Adjust active-layer brightness by AMOUNT (-255..255).  */)
+  (Lisp_Object handle, Lisp_Object amount)
+{
+  cmacs_imgedit_doc_brightness (ie_lookup (handle), ie_int (amount, 0));
+  return Qnil;
+}
+
+DEFUN ("cmacs-imgedit-contrast", Fcmacs_imgedit_contrast,
+       Scmacs_imgedit_contrast, 2, 2, 0,
+       doc: /* Adjust active-layer contrast by AMOUNT (-100..100).  */)
+  (Lisp_Object handle, Lisp_Object amount)
+{
+  cmacs_imgedit_doc_contrast (ie_lookup (handle), ie_dbl (amount, 0.0));
+  return Qnil;
+}
+
+DEFUN ("cmacs-imgedit-invert", Fcmacs_imgedit_invert,
+       Scmacs_imgedit_invert, 1, 1, 0,
+       doc: /* Invert the active layer's RGB.  */)
+  (Lisp_Object handle)
+{
+  cmacs_imgedit_doc_invert (ie_lookup (handle));
+  return Qnil;
+}
+
+DEFUN ("cmacs-imgedit-grayscale", Fcmacs_imgedit_grayscale,
+       Scmacs_imgedit_grayscale, 1, 1, 0,
+       doc: /* Desaturate the active layer to grayscale.  */)
+  (Lisp_Object handle)
+{
+  cmacs_imgedit_doc_grayscale (ie_lookup (handle));
+  return Qnil;
+}
+
+DEFUN ("cmacs-imgedit-tint", Fcmacs_imgedit_tint, Scmacs_imgedit_tint, 5, 5, 0,
+       doc: /* Multiply the active layer by tint colour R G B A.  */)
+  (Lisp_Object handle, Lisp_Object r, Lisp_Object g, Lisp_Object b,
+   Lisp_Object a)
+{
+  cmacs_imgedit_doc_tint (ie_lookup (handle), ie_clamp8 (r), ie_clamp8 (g),
+                          ie_clamp8 (b), ie_clamp8 (a));
+  return Qnil;
+}
+
+DEFUN ("cmacs-imgedit-color-replace", Fcmacs_imgedit_color_replace,
+       Scmacs_imgedit_color_replace, 3, 3, 0,
+       doc: /* Replace exact colour FROM with TO on the active layer.
+FROM and TO are (R G B A) lists of bytes 0..255.  */)
+  (Lisp_Object handle, Lisp_Object from, Lisp_Object to)
+{
+  cmacs_imgedit_doc_color_replace
+    (ie_lookup (handle),
+     ie_clamp8 (Fnth (make_fixnum (0), from)),
+     ie_clamp8 (Fnth (make_fixnum (1), from)),
+     ie_clamp8 (Fnth (make_fixnum (2), from)),
+     ie_clamp8 (Fnth (make_fixnum (3), from)),
+     ie_clamp8 (Fnth (make_fixnum (0), to)),
+     ie_clamp8 (Fnth (make_fixnum (1), to)),
+     ie_clamp8 (Fnth (make_fixnum (2), to)),
+     ie_clamp8 (Fnth (make_fixnum (3), to)));
+  return Qnil;
+}
+
+DEFUN ("cmacs-imgedit-blur", Fcmacs_imgedit_blur, Scmacs_imgedit_blur, 2, 2, 0,
+       doc: /* Box-blur the active layer by RADIUS pixels.  */)
+  (Lisp_Object handle, Lisp_Object radius)
+{
+  cmacs_imgedit_doc_blur (ie_lookup (handle), ie_int (radius, 1));
+  return Qnil;
+}
+
+DEFUN ("cmacs-imgedit-bloom", Fcmacs_imgedit_bloom, Scmacs_imgedit_bloom,
+       1, 4, 0,
+       doc: /* Apply bloom to the active layer (THRESHOLD RADIUS INTENSITY).  */)
+  (Lisp_Object handle, Lisp_Object threshold, Lisp_Object radius,
+   Lisp_Object intensity)
+{
+  cmacs_imgedit_doc_bloom (ie_lookup (handle), ie_int (threshold, 180),
+                           ie_int (radius, 4), ie_dbl (intensity, 0.8));
+  return Qnil;
+}
+
+DEFUN ("cmacs-imgedit-noise", Fcmacs_imgedit_noise, Scmacs_imgedit_noise,
+       1, 4, 0,
+       doc: /* Overlay noise on the active layer (AMPLITUDE FREQUENCY SEED).  */)
+  (Lisp_Object handle, Lisp_Object amplitude, Lisp_Object frequency,
+   Lisp_Object seed)
+{
+  cmacs_imgedit_doc_noise (ie_lookup (handle), ie_dbl (amplitude, 0.2),
+                           ie_dbl (frequency, 1.0),
+                           (guint32) ie_int (seed, 1));
+  return Qnil;
+}
+
+DEFUN ("cmacs-imgedit-slice-grid", Fcmacs_imgedit_slice_grid,
+       Scmacs_imgedit_slice_grid, 3, 3, 0,
+       doc: /* Slice the image into COLS x ROWS frame layers (sprite mode).  */)
+  (Lisp_Object handle, Lisp_Object cols, Lisp_Object rows)
+{
+  return cmacs_imgedit_doc_slice_grid (ie_lookup (handle), ie_int (cols, 1),
+                                       ie_int (rows, 1)) ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-imgedit-onion-skin", Fcmacs_imgedit_onion_skin,
+       Scmacs_imgedit_onion_skin, 2, 4, 0,
+       doc: /* Onion-skin: ON shows the active layer solid + neighbours ghosted
+at PREV-OP / NEXT-OP opacity (default 0.3).  */)
+  (Lisp_Object handle, Lisp_Object on, Lisp_Object prev_op, Lisp_Object next_op)
+{
+  cmacs_imgedit_doc_onion_skin (ie_lookup (handle), !NILP (on),
+                                NUMBERP (prev_op) ? XFLOATINT (prev_op) : 0.3,
+                                NUMBERP (next_op) ? XFLOATINT (next_op) : 0.3);
+  return Qnil;
+}
+
+DEFUN ("cmacs-imgedit-palette", Fcmacs_imgedit_palette,
+       Scmacs_imgedit_palette, 1, 2, 0,
+       doc: /* Return a list of (R G B) colours (median-cut, MAX-COLORS,
+default 16) representing the image.  */)
+  (Lisp_Object handle, Lisp_Object max_colors)
+{
+  guint8 rgb[768];
+  int n, i;
+  Lisp_Object out = Qnil;
+  n = cmacs_imgedit_doc_palette (ie_lookup (handle), ie_int (max_colors, 16),
+                                 rgb);
+  for (i = n - 1; i >= 0; i--)
+    out = Fcons (list3 (make_fixnum (rgb[i*3]), make_fixnum (rgb[i*3+1]),
+                        make_fixnum (rgb[i*3+2])), out);
+  return out;
+}
+
+DEFUN ("cmacs-imgedit-export-indexed-png", Fcmacs_imgedit_export_indexed_png,
+       Scmacs_imgedit_export_indexed_png, 2, 3, 0,
+       doc: /* Export HANDLE as an indexed PNG to PATH (MAX-COLORS, default
+256).  */)
+  (Lisp_Object handle, Lisp_Object path, Lisp_Object max_colors)
+{
+  char *err = NULL;
+  CHECK_STRING (path);
+  if (!cmacs_imgedit_doc_export_indexed_png (ie_lookup (handle), SSDATA (path),
+                                             ie_int (max_colors, 256), &err))
+    {
+      Lisp_Object m = build_string (err ? err : "indexed PNG export failed");
+      g_free (err);
+      xsignal1 (Qcmacs_imgedit_error, m);
+    }
+  return Qt;
+}
+
+DEFUN ("cmacs-imgedit-histogram", Fcmacs_imgedit_histogram,
+       Scmacs_imgedit_histogram, 1, 2, 0,
+       doc: /* Return a 256-element histogram vector for CHANNEL
+(0 luma, 1 red, 2 green, 3 blue; default luma).  */)
+  (Lisp_Object handle, Lisp_Object channel)
+{
+  int bins[256];
+  Lisp_Object v;
+  int i;
+  cmacs_imgedit_doc_histogram (ie_lookup (handle), ie_int (channel, 0), bins);
+  v = make_vector (256, make_fixnum (0));
+  for (i = 0; i < 256; i++)
+    ASET (v, i, make_fixnum (bins[i]));
+  return v;
+}
+
+DEFUN ("cmacs-imgedit-select-rect", Fcmacs_imgedit_select_rect,
+       Scmacs_imgedit_select_rect, 5, 5, 0,
+       doc: /* Select the rectangle X Y WIDTH HEIGHT.  */)
+  (Lisp_Object handle, Lisp_Object x, Lisp_Object y, Lisp_Object w,
+   Lisp_Object h)
+{
+  cmacs_imgedit_doc_select_rect (ie_lookup (handle), ie_int (x, 0),
+                                 ie_int (y, 0), ie_int (w, 0), ie_int (h, 0));
+  return Qnil;
+}
+
+DEFUN ("cmacs-imgedit-select-wand", Fcmacs_imgedit_select_wand,
+       Scmacs_imgedit_select_wand, 3, 4, 0,
+       doc: /* Magic-wand select from X,Y within TOLERANCE (default 24).  */)
+  (Lisp_Object handle, Lisp_Object x, Lisp_Object y, Lisp_Object tolerance)
+{
+  cmacs_imgedit_doc_select_wand (ie_lookup (handle), ie_int (x, 0),
+                                 ie_int (y, 0), ie_int (tolerance, 24));
+  return Qnil;
+}
+
+DEFUN ("cmacs-imgedit-select-none", Fcmacs_imgedit_select_none,
+       Scmacs_imgedit_select_none, 1, 1, 0, doc: /* Clear the selection.  */)
+  (Lisp_Object handle)
+{ cmacs_imgedit_doc_select_none (ie_lookup (handle)); return Qnil; }
+
+DEFUN ("cmacs-imgedit-select-all", Fcmacs_imgedit_select_all,
+       Scmacs_imgedit_select_all, 1, 1, 0, doc: /* Select the whole canvas.  */)
+  (Lisp_Object handle)
+{ cmacs_imgedit_doc_select_all (ie_lookup (handle)); return Qnil; }
+
+DEFUN ("cmacs-imgedit-select-invert", Fcmacs_imgedit_select_invert,
+       Scmacs_imgedit_select_invert, 1, 1, 0, doc: /* Invert the selection.  */)
+  (Lisp_Object handle)
+{ cmacs_imgedit_doc_select_invert (ie_lookup (handle)); return Qnil; }
+
+DEFUN ("cmacs-imgedit-selection-bbox", Fcmacs_imgedit_selection_bbox,
+       Scmacs_imgedit_selection_bbox, 1, 1, 0,
+       doc: /* Return the selection bounding box (X Y W H), or nil.  */)
+  (Lisp_Object handle)
+{
+  int x = 0, y = 0, w = 0, h = 0;
+  if (!cmacs_imgedit_doc_selection_bbox (ie_lookup (handle), &x, &y, &w, &h))
+    return Qnil;
+  return list4 (make_fixnum (x), make_fixnum (y), make_fixnum (w),
+                make_fixnum (h));
+}
+
+DEFUN ("cmacs-imgedit-selection-fill", Fcmacs_imgedit_selection_fill,
+       Scmacs_imgedit_selection_fill, 5, 5, 0,
+       doc: /* Fill the selection (or whole layer) with R G B A.  */)
+  (Lisp_Object handle, Lisp_Object r, Lisp_Object g, Lisp_Object b,
+   Lisp_Object a)
+{
+  cmacs_imgedit_doc_selection_fill (ie_lookup (handle), ie_clamp8 (r),
+                                    ie_clamp8 (g), ie_clamp8 (b), ie_clamp8 (a));
+  return Qnil;
+}
+
+DEFUN ("cmacs-imgedit-selection-crop", Fcmacs_imgedit_selection_crop,
+       Scmacs_imgedit_selection_crop, 1, 1, 0,
+       doc: /* Crop the document to the selection bounding box.  */)
+  (Lisp_Object handle)
+{ cmacs_imgedit_doc_selection_crop (ie_lookup (handle)); return Qnil; }
+
+DEFUN ("cmacs-imgedit-export-gif", Fcmacs_imgedit_export_gif,
+       Scmacs_imgedit_export_gif, 2, 3, 0,
+       doc: /* Export HANDLE's layers as an animated GIF to PATH.
+Each layer is one frame at DELAY-CS centiseconds (default 10).  */)
+  (Lisp_Object handle, Lisp_Object path, Lisp_Object delay_cs)
+{
+  char *err = NULL;
+  CHECK_STRING (path);
+  if (!cmacs_imgedit_doc_export_gif (ie_lookup (handle), SSDATA (path),
+                                     ie_int (delay_cs, 10), &err))
+    {
+      Lisp_Object m = build_string (err ? err : "GIF export failed");
+      g_free (err);
+      xsignal1 (Qcmacs_imgedit_error, m);
+    }
+  return Qt;
+}
+
+DEFUN ("cmacs-imgedit-bezier", Fcmacs_imgedit_bezier, Scmacs_imgedit_bezier,
+       5, 6, 0,
+       doc: /* Draw a cubic Bézier through control points P0 P1 P2 P3.
+Each Pn is an (X . Y) cons; optional THICKNESS (default 1).  */)
+  (Lisp_Object handle, Lisp_Object p0, Lisp_Object p1, Lisp_Object p2,
+   Lisp_Object p3, Lisp_Object thickness)
+{
+  CHECK_CONS (p0); CHECK_CONS (p1); CHECK_CONS (p2); CHECK_CONS (p3);
+  cmacs_imgedit_doc_bezier
+    (ie_lookup (handle),
+     ie_int (XCAR (p0), 0), ie_int (XCDR (p0), 0),
+     ie_int (XCAR (p1), 0), ie_int (XCDR (p1), 0),
+     ie_int (XCAR (p2), 0), ie_int (XCDR (p2), 0),
+     ie_int (XCAR (p3), 0), ie_int (XCDR (p3), 0), ie_int (thickness, 1));
+  return Qnil;
+}
+
+DEFUN ("cmacs-imgedit-import-svg", Fcmacs_imgedit_import_svg,
+       Scmacs_imgedit_import_svg, 2, 3, 0,
+       doc: /* Render SVG file PATH onto the active layer at DPI (default 96).  */)
+  (Lisp_Object handle, Lisp_Object path, Lisp_Object dpi)
+{
+  char *err = NULL;
+  CHECK_STRING (path);
+  if (!cmacs_imgedit_doc_import_svg (ie_lookup (handle), SSDATA (path),
+                                     ie_dbl (dpi, 96.0), &err))
+    {
+      Lisp_Object m = build_string (err ? err : "SVG import failed");
+      g_free (err);
+      xsignal1 (Qcmacs_imgedit_error, m);
+    }
+  return Qt;
+}
+
+DEFUN ("cmacs-imgedit-threshold", Fcmacs_imgedit_threshold,
+       Scmacs_imgedit_threshold, 1, 2, 0,
+       doc: /* Threshold the active layer to black/white at LEVEL (0..255).  */)
+  (Lisp_Object handle, Lisp_Object level)
+{
+  cmacs_imgedit_doc_threshold (ie_lookup (handle), ie_int (level, 128));
+  return Qnil;
+}
+
+DEFUN ("cmacs-imgedit-posterize", Fcmacs_imgedit_posterize,
+       Scmacs_imgedit_posterize, 1, 2, 0,
+       doc: /* Reduce the active layer to LEVELS colours per channel.  */)
+  (Lisp_Object handle, Lisp_Object levels)
+{
+  cmacs_imgedit_doc_posterize (ie_lookup (handle), ie_int (levels, 4));
+  return Qnil;
+}
+
+DEFUN ("cmacs-imgedit-pixelate", Fcmacs_imgedit_pixelate,
+       Scmacs_imgedit_pixelate, 1, 2, 0,
+       doc: /* Pixelate the active layer into SIZE-pixel blocks.  */)
+  (Lisp_Object handle, Lisp_Object size)
+{
+  cmacs_imgedit_doc_pixelate (ie_lookup (handle), ie_int (size, 8));
+  return Qnil;
+}
+
+DEFUN ("cmacs-imgedit-sharpen", Fcmacs_imgedit_sharpen,
+       Scmacs_imgedit_sharpen, 1, 1, 0,
+       doc: /* Sharpen the active layer (3x3 unsharp kernel).  */)
+  (Lisp_Object handle)
+{ cmacs_imgedit_doc_sharpen (ie_lookup (handle)); return Qnil; }
+
+DEFUN ("cmacs-imgedit-edge-detect", Fcmacs_imgedit_edge_detect,
+       Scmacs_imgedit_edge_detect, 1, 1, 0,
+       doc: /* Edge-detect the active layer (3x3 Laplacian).  */)
+  (Lisp_Object handle)
+{ cmacs_imgedit_doc_edge_detect (ie_lookup (handle)); return Qnil; }
+
+DEFUN ("cmacs-imgedit-emboss", Fcmacs_imgedit_emboss,
+       Scmacs_imgedit_emboss, 1, 1, 0,
+       doc: /* Emboss the active layer (3x3 emboss kernel).  */)
+  (Lisp_Object handle)
+{ cmacs_imgedit_doc_emboss (ie_lookup (handle)); return Qnil; }
+
+DEFUN ("cmacs-imgedit-saturation", Fcmacs_imgedit_saturation,
+       Scmacs_imgedit_saturation, 2, 2, 0,
+       doc: /* Scale active-layer saturation by FACTOR (0 gray, 1 same, >1 vivid).  */)
+  (Lisp_Object handle, Lisp_Object factor)
+{
+  cmacs_imgedit_doc_saturation (ie_lookup (handle), ie_dbl (factor, 1.0));
   return Qnil;
 }
 
@@ -685,6 +1141,8 @@ syms_of_cmacs_imgedit_defuns (void)
   defsubr (&Scmacs_imgedit_set_layer_blend);
   defsubr (&Scmacs_imgedit_layer_visible_p);
   defsubr (&Scmacs_imgedit_set_layer_visible);
+  defsubr (&Scmacs_imgedit_layer_locked_p);
+  defsubr (&Scmacs_imgedit_set_layer_locked);
   defsubr (&Scmacs_imgedit_set_layer_offset);
   defsubr (&Scmacs_imgedit_set_draw_blend);
   defsubr (&Scmacs_imgedit_set_color);
@@ -697,6 +1155,44 @@ syms_of_cmacs_imgedit_defuns (void)
   defsubr (&Scmacs_imgedit_draw_ellipse);
   defsubr (&Scmacs_imgedit_draw_text);
   defsubr (&Scmacs_imgedit_flood_fill);
+  defsubr (&Scmacs_imgedit_flip);
+  defsubr (&Scmacs_imgedit_resize);
+  defsubr (&Scmacs_imgedit_crop);
+  defsubr (&Scmacs_imgedit_rotate);
+  defsubr (&Scmacs_imgedit_gradient);
+  defsubr (&Scmacs_imgedit_brightness);
+  defsubr (&Scmacs_imgedit_contrast);
+  defsubr (&Scmacs_imgedit_invert);
+  defsubr (&Scmacs_imgedit_grayscale);
+  defsubr (&Scmacs_imgedit_tint);
+  defsubr (&Scmacs_imgedit_color_replace);
+  defsubr (&Scmacs_imgedit_blur);
+  defsubr (&Scmacs_imgedit_bloom);
+  defsubr (&Scmacs_imgedit_noise);
+  defsubr (&Scmacs_imgedit_slice_grid);
+  defsubr (&Scmacs_imgedit_onion_skin);
+  defsubr (&Scmacs_imgedit_palette);
+  defsubr (&Scmacs_imgedit_export_indexed_png);
+  defsubr (&Scmacs_imgedit_histogram);
+  defsubr (&Scmacs_imgedit_select_rect);
+  defsubr (&Scmacs_imgedit_select_wand);
+  defsubr (&Scmacs_imgedit_select_none);
+  defsubr (&Scmacs_imgedit_select_all);
+  defsubr (&Scmacs_imgedit_select_invert);
+  defsubr (&Scmacs_imgedit_selection_bbox);
+  defsubr (&Scmacs_imgedit_selection_fill);
+  defsubr (&Scmacs_imgedit_selection_crop);
+  defsubr (&Scmacs_imgedit_export_gif);
+  defsubr (&Scmacs_imgedit_bezier);
+  defsubr (&Scmacs_imgedit_import_svg);
+  defsubr (&Scmacs_imgedit_threshold);
+  defsubr (&Scmacs_imgedit_posterize);
+  defsubr (&Scmacs_imgedit_pixelate);
+  defsubr (&Scmacs_imgedit_sharpen);
+  defsubr (&Scmacs_imgedit_edge_detect);
+  defsubr (&Scmacs_imgedit_emboss);
+  defsubr (&Scmacs_imgedit_saturation);
+  defsubr (&Scmacs_imgedit_viewport_bind);
   defsubr (&Scmacs_imgedit_clipboard_available_p);
   defsubr (&Scmacs_imgedit_clipboard_set_png);
   defsubr (&Scmacs_imgedit_clipboard_get_png);

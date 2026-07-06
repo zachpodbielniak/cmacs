@@ -64,6 +64,9 @@ extern gint   cmacs_imgedit_doc_layer_blend (CmacsImgeditDoc *d, guint idx);
 extern void   cmacs_imgedit_doc_set_layer_blend (CmacsImgeditDoc *d, guint idx,
                                                  gint mode);
 extern gboolean cmacs_imgedit_doc_layer_visible (CmacsImgeditDoc *d, guint idx);
+extern gboolean cmacs_imgedit_doc_layer_locked (CmacsImgeditDoc *d, guint idx);
+extern void cmacs_imgedit_doc_set_layer_locked (CmacsImgeditDoc *d, guint idx,
+                                                gboolean v);
 extern void   cmacs_imgedit_doc_set_layer_visible (CmacsImgeditDoc *d,
                                                    guint idx, gboolean v);
 extern void   cmacs_imgedit_doc_layer_offset (CmacsImgeditDoc *d, guint idx,
@@ -102,6 +105,87 @@ extern void cmacs_imgedit_doc_draw_ellipse (CmacsImgeditDoc *d,
                                             gboolean filled, int thickness);
 extern void cmacs_imgedit_doc_draw_text (CmacsImgeditDoc *d, int x, int y,
                                          const char *text, int size);
+/* Whole-document flip (all layers, dimension-preserving). */
+extern void cmacs_imgedit_doc_flip (CmacsImgeditDoc *d, gboolean horizontal);
+/* Active-layer colour adjustments. */
+extern void cmacs_imgedit_doc_brightness (CmacsImgeditDoc *d, int amount);
+extern void cmacs_imgedit_doc_contrast (CmacsImgeditDoc *d, double amount);
+extern void cmacs_imgedit_doc_invert (CmacsImgeditDoc *d);
+extern void cmacs_imgedit_doc_grayscale (CmacsImgeditDoc *d);
+extern void cmacs_imgedit_doc_tint (CmacsImgeditDoc *d, guint8 r, guint8 g,
+                                    guint8 b, guint8 a);
+extern void cmacs_imgedit_doc_color_replace (CmacsImgeditDoc *d, guint8 fr,
+                                             guint8 fg, guint8 fb, guint8 fa,
+                                             guint8 tr, guint8 tg, guint8 tb,
+                                             guint8 ta);
+/* Whole-document geometric transforms. */
+extern void cmacs_imgedit_doc_resize (CmacsImgeditDoc *d, int w, int h,
+                                      gboolean nearest);
+extern void cmacs_imgedit_doc_crop (CmacsImgeditDoc *d, int x, int y,
+                                    int w, int h);
+extern void cmacs_imgedit_doc_rotate (CmacsImgeditDoc *d, gboolean clockwise);
+/* Active-layer gradient fill (linear axis, or radial from centre). */
+extern void cmacs_imgedit_doc_gradient (CmacsImgeditDoc *d, gboolean radial,
+                                        gboolean vertical,
+                                        guint8 ar, guint8 ag, guint8 ab,
+                                        guint8 aa, guint8 br, guint8 bg,
+                                        guint8 bb, guint8 ba);
+/* Sprite mode: slice the flattened doc into COLSxROWS frame layers. */
+extern gboolean cmacs_imgedit_doc_slice_grid (CmacsImgeditDoc *d, int cols,
+                                              int rows);
+/* Onion-skin display (active solid + adjacent frames ghosted). */
+extern void cmacs_imgedit_doc_onion_skin (CmacsImgeditDoc *d, gboolean on,
+                                          double prev_op, double next_op);
+/* Median-cut palette into OUT_RGB (3 bytes/entry); returns colour count. */
+extern int cmacs_imgedit_doc_palette (CmacsImgeditDoc *d, int max_colors,
+                                      guint8 *out_rgb);
+/* Export the flattened doc as an indexed PNG quantized to MAX_COLORS. */
+extern gboolean cmacs_imgedit_doc_export_indexed_png (CmacsImgeditDoc *d,
+                                                      const char *path,
+                                                      int max_colors,
+                                                      char **error_msg);
+/* 256-bin histogram of the flattened doc (CHANNEL: 0 luma,1 r,2 g,3 b). */
+extern void cmacs_imgedit_doc_histogram (CmacsImgeditDoc *d, int channel,
+                                         int *bins);
+/* Selection (mask-based) + selection-constrained ops. */
+extern void cmacs_imgedit_doc_select_none (CmacsImgeditDoc *d);
+extern void cmacs_imgedit_doc_select_all (CmacsImgeditDoc *d);
+extern void cmacs_imgedit_doc_select_rect (CmacsImgeditDoc *d, int x, int y,
+                                           int w, int h);
+extern void cmacs_imgedit_doc_select_wand (CmacsImgeditDoc *d, int x, int y,
+                                           int tolerance);
+extern void cmacs_imgedit_doc_select_invert (CmacsImgeditDoc *d);
+extern gboolean cmacs_imgedit_doc_selection_bbox (CmacsImgeditDoc *d, int *x,
+                                                  int *y, int *w, int *h);
+extern void cmacs_imgedit_doc_selection_fill (CmacsImgeditDoc *d, guint8 r,
+                                              guint8 g, guint8 b, guint8 a);
+extern void cmacs_imgedit_doc_selection_crop (CmacsImgeditDoc *d);
+/* Export the layer stack as an animated GIF (each layer = one frame). */
+extern gboolean cmacs_imgedit_doc_export_gif (CmacsImgeditDoc *d,
+                                              const char *path, int delay_cs,
+                                              char **error_msg);
+/* Vector paths (active layer). */
+extern void cmacs_imgedit_doc_bezier (CmacsImgeditDoc *d, int x0, int y0,
+                                      int x1, int y1, int x2, int y2,
+                                      int x3, int y3, int thickness);
+extern gboolean cmacs_imgedit_doc_import_svg (CmacsImgeditDoc *d,
+                                              const char *path, double dpi,
+                                              char **error_msg);
+/* Active-layer filters. */
+extern void cmacs_imgedit_doc_blur (CmacsImgeditDoc *d, int radius);
+extern void cmacs_imgedit_doc_bloom (CmacsImgeditDoc *d, int threshold,
+                                     int blur_radius, double intensity);
+extern void cmacs_imgedit_doc_noise (CmacsImgeditDoc *d, double amplitude,
+                                     double frequency, guint32 seed);
+/* Pixel-buffer filters (active layer). */
+extern void cmacs_imgedit_doc_threshold (CmacsImgeditDoc *d, int level);
+extern void cmacs_imgedit_doc_posterize (CmacsImgeditDoc *d, int levels);
+extern void cmacs_imgedit_doc_pixelate (CmacsImgeditDoc *d, int size);
+extern void cmacs_imgedit_doc_sharpen (CmacsImgeditDoc *d);
+extern void cmacs_imgedit_doc_edge_detect (CmacsImgeditDoc *d);
+extern void cmacs_imgedit_doc_emboss (CmacsImgeditDoc *d);
+extern void cmacs_imgedit_doc_saturation (CmacsImgeditDoc *d, double factor);
+
 extern void cmacs_imgedit_doc_flood_fill (CmacsImgeditDoc *d, int x, int y,
                                           guint8 r, guint8 g, guint8 b,
                                           guint8 a, int tolerance);

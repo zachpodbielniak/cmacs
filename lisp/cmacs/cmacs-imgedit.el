@@ -20,6 +20,7 @@
 
 (require 'cl-lib)
 (require 'cmacs-libregnum)  ; for cmacs-libregnum-popup-menu (GTK vs --lrg routing)
+(require 'transient)        ; `?' -> keybinding cheat-sheet menu
 
 (defgroup cmacs-imgedit nil
   "2D image / sprite editor."
@@ -65,6 +66,14 @@ stale loaded copy of this file is recognisable at a glance.")
   "Active tool: one of brush line rectangle circle fill eyedropper.")
 (defvar-local cmacs-imgedit--shape-fill nil
   "When non-nil, the rectangle/circle tools fill instead of stroke.")
+(defvar-local cmacs-imgedit--live nil
+  "Non-nil when this buffer displays through a live libregnum GL viewport
+instead of a native Emacs image.  Set at setup when a display + the
+libregnum backend are available; nil falls back to the insert-image path.")
+(defvar-local cmacs-imgedit--vp-prev nil
+  "Previous document pixel of an in-progress viewport brush stroke.")
+(defvar-local cmacs-imgedit--vp-start nil
+  "Start document pixel of an in-progress viewport shape drag.")
 (defvar-local cmacs-imgedit--canvas-buffer nil
   "In a panel buffer, the editor canvas buffer it controls.")
 (defvar-local cmacs-imgedit--tools-panel nil
@@ -81,7 +90,7 @@ stale loaded copy of this file is recognisable at a glance.")
     (ellipse    . "Ellipse")
     (text       . "Text")
     (fill       . "Bucket")
-    (eyedropper . "Pick"))
+    (eyedropper . "Pick") (wand . "Wand"))
   "Tools and their display labels.")
 
 (defcustom cmacs-imgedit-text-size 16
@@ -122,26 +131,31 @@ clicks reach the editor no matter what the surrounding config binds.")
 With NO-PANELS non-nil, skip refreshing the side panels (used for fast
 per-motion redraws while painting)."
   (when cmacs-imgedit--handle
-    (let ((inhibit-read-only t)
-          (png (cmacs-imgedit-export-png-bytes cmacs-imgedit--handle)))
-      (erase-buffer)
-      (if (cmacs-imgedit--checkerboard-p)
-          (insert-image (apply #'create-image png 'png t
-                               :scale cmacs-imgedit--zoom
-                               :ascent 'center
-                               (and cmacs-imgedit-canvas-background
-                                    (list :background
-                                          cmacs-imgedit-canvas-background))))
-        (insert (format "[%dx%d image; install PNG support to view]"
-                        (cmacs-imgedit-width cmacs-imgedit--handle)
-                        (cmacs-imgedit-height cmacs-imgedit--handle))))
-      (insert "\n")
-      ;; Claim the mouse over the whole canvas (replaces image.el's
-      ;; `image-map' prop): a position keymap outranks Evil states and
-      ;; context-menu-mode, which otherwise steal the clicks (Doom).
-      (add-text-properties (point-min) (point-max)
-                           (list 'keymap cmacs-imgedit--canvas-map))
-      (goto-char (point-min)))
+    (if cmacs-imgedit--live
+        ;; Live GL viewport: the document is bound zero-copy, so a refresh
+        ;; re-flattens + re-uploads it and redraws the FBO -- no PNG encode,
+        ;; no insert-image (the viewport blits over the whole window).
+        (ignore-errors (cmacs-libregnum-image-refresh (current-buffer)))
+      (let ((inhibit-read-only t)
+            (png (cmacs-imgedit-export-png-bytes cmacs-imgedit--handle)))
+        (erase-buffer)
+        (if (cmacs-imgedit--checkerboard-p)
+            (insert-image (apply #'create-image png 'png t
+                                 :scale cmacs-imgedit--zoom
+                                 :ascent 'center
+                                 (and cmacs-imgedit-canvas-background
+                                      (list :background
+                                            cmacs-imgedit-canvas-background))))
+          (insert (format "[%dx%d image; install PNG support to view]"
+                          (cmacs-imgedit-width cmacs-imgedit--handle)
+                          (cmacs-imgedit-height cmacs-imgedit--handle))))
+        (insert "\n")
+        ;; Claim the mouse over the whole canvas (replaces image.el's
+        ;; `image-map' prop): a position keymap outranks Evil states and
+        ;; context-menu-mode, which otherwise steal the clicks (Doom).
+        (add-text-properties (point-min) (point-max)
+                             (list 'keymap cmacs-imgedit--canvas-map))
+        (goto-char (point-min))))
     (when (and (not no-panels) (fboundp 'cmacs-imgedit--refresh-panels))
       (cmacs-imgedit--refresh-panels))))
 
@@ -364,6 +378,142 @@ Falls back to window-relative coordinates if the object geometry is missing."
                                  (max 1 (/ cmacs-imgedit--brush-size 2)) t 1)
     (apply #'cmacs-imgedit-set-pixel cmacs-imgedit--handle
            (car xy) (cdr xy) cmacs-imgedit--color)))
+
+;; ── Live GL viewport: availability, hooks, tool dispatch ────────────────
+
+(defun cmacs-imgedit--viewport-available-p ()
+  "Non-nil when a live libregnum GL viewport can be used here.
+Requires a graphical display and the libregnum backend; nil on tty /
+headless / no-GL, where the native insert-image path is used instead."
+  (and (fboundp 'cmacs-libregnum-supported-p)
+       (cmacs-libregnum-supported-p)
+       (fboundp 'cmacs-imgedit-viewport-bind)
+       (or (display-graphic-p) (eq (framep-on-display) 'lrg))))
+
+(defun cmacs-imgedit--vp-refresh ()
+  "Re-upload the document to the viewport (cheap; no PNG round-trip)."
+  (when cmacs-imgedit--live
+    (ignore-errors (cmacs-libregnum-image-refresh (current-buffer)))))
+
+(defun cmacs-imgedit--vp-commit-shape (tool start end)
+  "Commit shape TOOL from doc point START to END (one undo step)."
+  (cmacs-imgedit--apply-color)
+  (cmacs-imgedit-push-undo cmacs-imgedit--handle)
+  (let ((sx (car start)) (sy (cdr start)) (ex (car end)) (ey (cdr end)))
+    (pcase tool
+      ('line (cmacs-imgedit-draw-line cmacs-imgedit--handle sx sy ex ey
+                                      cmacs-imgedit--brush-size))
+      ('arrow (cmacs-imgedit-draw-arrow cmacs-imgedit--handle sx sy ex ey
+                                        cmacs-imgedit--brush-size))
+      ('rectangle (cmacs-imgedit-draw-rect cmacs-imgedit--handle
+                    (min sx ex) (min sy ey)
+                    (max 1 (abs (- ex sx))) (max 1 (abs (- ey sy)))
+                    cmacs-imgedit--shape-fill cmacs-imgedit--brush-size))
+      ('circle (let ((dx (- ex sx)) (dy (- ey sy)))
+                 (cmacs-imgedit-draw-circle cmacs-imgedit--handle sx sy
+                   (max 1 (round (sqrt (+ (* dx dx) (* dy dy)))))
+                   cmacs-imgedit--shape-fill cmacs-imgedit--brush-size)))
+      ('ellipse (cmacs-imgedit-draw-ellipse cmacs-imgedit--handle sx sy
+                  (max 1 (abs (- ex sx))) (max 1 (abs (- ey sy)))
+                  cmacs-imgedit--shape-fill cmacs-imgedit--brush-size)))))
+
+(defun cmacs-imgedit--vp-press (buffer dx dy _button _mods)
+  "Viewport left-press at doc (DX DY): brush dabs, shapes record the start."
+  (with-current-buffer buffer
+    (when cmacs-imgedit--handle
+      (cmacs-imgedit--apply-color)
+      (pcase cmacs-imgedit--tool
+        ('brush
+         (cmacs-imgedit-push-undo cmacs-imgedit--handle)
+         (cmacs-imgedit--brush-dab (cons dx dy))
+         (setq cmacs-imgedit--vp-prev (cons dx dy))
+         (cmacs-imgedit--vp-refresh))
+        ((or 'line 'arrow 'rectangle 'circle 'ellipse)
+         (setq cmacs-imgedit--vp-start (cons dx dy)))
+        (_ nil)))))          ; fill / eyedropper / text act on click
+
+(defun cmacs-imgedit--vp-drag (buffer dx dy _button _mods)
+  "Viewport left-drag to doc (DX DY): brush paints a segment."
+  (with-current-buffer buffer
+    (when (and cmacs-imgedit--handle (eq cmacs-imgedit--tool 'brush)
+               cmacs-imgedit--vp-prev)
+      (cmacs-imgedit-draw-line cmacs-imgedit--handle
+                               (car cmacs-imgedit--vp-prev)
+                               (cdr cmacs-imgedit--vp-prev) dx dy
+                               cmacs-imgedit--brush-size)
+      (setq cmacs-imgedit--vp-prev (cons dx dy))
+      (cmacs-imgedit--vp-refresh))
+    ;; brush-cursor overlay follows the pointer, zero Elisp-render latency
+    (ignore-errors
+      (cmacs-libregnum-image-set-cursor
+       buffer dx dy (max 0.5 (/ cmacs-imgedit--brush-size 2.0))))))
+
+(defun cmacs-imgedit--vp-release (buffer dx dy _button _mods)
+  "Viewport left-release at doc (DX DY): commit a shape / finish a stroke."
+  (with-current-buffer buffer
+    (when cmacs-imgedit--handle
+      (pcase cmacs-imgedit--tool
+        ('brush (setq cmacs-imgedit--vp-prev nil) (cmacs-imgedit--vp-refresh))
+        ((and (or 'line 'arrow 'rectangle 'circle 'ellipse) tool)
+         (when cmacs-imgedit--vp-start
+           (cmacs-imgedit--vp-commit-shape tool cmacs-imgedit--vp-start
+                                           (cons dx dy))
+           (setq cmacs-imgedit--vp-start nil)
+           (cmacs-imgedit--vp-refresh)))
+        (_ nil)))))
+
+(defun cmacs-imgedit--vp-click (buffer dx dy _button _mods)
+  "Viewport click at doc (DX DY): fill / eyedropper / text act here."
+  (with-current-buffer buffer
+    (when cmacs-imgedit--handle
+      (cmacs-imgedit--apply-color)
+      (pcase cmacs-imgedit--tool
+        ('wand
+         (cmacs-imgedit-select-wand cmacs-imgedit--handle dx dy 24)
+         (cmacs-imgedit--update-marquee) (cmacs-imgedit--vp-refresh))
+        ('fill
+         (cmacs-imgedit-push-undo cmacs-imgedit--handle)
+         (apply #'cmacs-imgedit-flood-fill cmacs-imgedit--handle dx dy
+                (append cmacs-imgedit--color '(0)))
+         (cmacs-imgedit--vp-refresh))
+        ('eyedropper
+         (let ((px (cmacs-imgedit-pixel-at cmacs-imgedit--handle dx dy)))
+           (when px
+             (setq cmacs-imgedit--color px)
+             (cmacs-imgedit--apply-color)
+             (cmacs-imgedit--refresh-panels))))
+        ('text
+         (let ((str (read-string "Text: ")))
+           (unless (string-empty-p str)
+             (cmacs-imgedit-push-undo cmacs-imgedit--handle)
+             (cmacs-imgedit-draw-text cmacs-imgedit--handle dx dy str
+                                      cmacs-imgedit-text-size)
+             (cmacs-imgedit--vp-refresh))))
+        (_ (cmacs-imgedit--vp-refresh))))))
+
+(defun cmacs-imgedit--vp-context-menu (buffer _dx _dy fx fy)
+  "Pop the imgedit context menu for a viewport right-click at frame (FX FY).
+Runs deferred inside the pselect wait, so schedule the pop onto the command
+loop with a 0-delay timer (the 3D editor does the same)."
+  (run-at-time
+   0 nil
+   (lambda ()
+     (when (buffer-live-p buffer)
+       (with-current-buffer buffer
+         (let ((choice (cmacs-libregnum-popup-menu
+                        (list (list fx fy) (selected-window))
+                        (cmacs-imgedit--menu))))
+           (when (commandp choice) (call-interactively choice))))))))
+
+(defun cmacs-imgedit--install-image-hooks (buffer)
+  "Install the viewport input hook functions in BUFFER."
+  (with-current-buffer buffer
+    (setq cmacs-libregnum-image-press-function #'cmacs-imgedit--vp-press
+          cmacs-libregnum-image-drag-function #'cmacs-imgedit--vp-drag
+          cmacs-libregnum-image-release-function #'cmacs-imgedit--vp-release
+          cmacs-libregnum-image-click-function #'cmacs-imgedit--vp-click
+          cmacs-libregnum-image-context-menu-function
+          #'cmacs-imgedit--vp-context-menu)))
 
 (defun cmacs-imgedit--select-event-window (event)
   "Select the window EVENT happened in and return it.
@@ -989,14 +1139,395 @@ GTK clipboard (any compositor / X11), then `wl-paste'."
 ;; Right-click context menu (GTK under pgtk, in-engine under --lrg)
 ;; --------------------------------------------------------------------------
 
-(defun cmacs-imgedit-context-menu (event)
-  "Pop the image-editor context menu for mouse EVENT.
-Routes through `cmacs-libregnum-popup-menu' so it is a native GTK menu under
-pgtk and the in-engine libregnum menu under the --lrg backend."
-  (interactive "e")
-  (cmacs-imgedit--select-event-window event)  ; commands need the canvas buffer
-  (let* ((menu
-          '("Image editor"
+;; ── Adjustments / filters / flip (active layer, one undo step) ──────────
+
+(defmacro cmacs-imgedit--with-edit (&rest body)
+  "Push an undo snapshot, run BODY, then re-render."
+  `(when cmacs-imgedit--handle
+     (cmacs-imgedit-push-undo cmacs-imgedit--handle)
+     ,@body
+     (cmacs-imgedit--render)))
+
+(defun cmacs-imgedit-flip-horizontal ()
+  "Flip the whole image left-to-right."
+  (interactive)
+  (cmacs-imgedit--with-edit (cmacs-imgedit-flip cmacs-imgedit--handle t)))
+
+(defun cmacs-imgedit-flip-vertical ()
+  "Flip the whole image top-to-bottom."
+  (interactive)
+  (cmacs-imgedit--with-edit (cmacs-imgedit-flip cmacs-imgedit--handle nil)))
+
+(defun cmacs-imgedit-adjust-brightness (amount)
+  "Adjust active-layer brightness by AMOUNT (-255..255)."
+  (interactive (list (read-number "Brightness (-255..255): " 20)))
+  (cmacs-imgedit--with-edit
+   (cmacs-imgedit-brightness cmacs-imgedit--handle amount)))
+
+(defun cmacs-imgedit-adjust-contrast (amount)
+  "Adjust active-layer contrast by AMOUNT (-100..100)."
+  (interactive (list (read-number "Contrast (-100..100): " 20)))
+  (cmacs-imgedit--with-edit
+   (cmacs-imgedit-contrast cmacs-imgedit--handle amount)))
+
+(defun cmacs-imgedit-invert-colors ()
+  "Invert the active layer's colours."
+  (interactive)
+  (cmacs-imgedit--with-edit (cmacs-imgedit-invert cmacs-imgedit--handle)))
+
+(defun cmacs-imgedit-desaturate ()
+  "Desaturate the active layer to grayscale."
+  (interactive)
+  (cmacs-imgedit--with-edit (cmacs-imgedit-grayscale cmacs-imgedit--handle)))
+
+(defun cmacs-imgedit-tint-layer (color)
+  "Multiply the active layer by tint COLOR."
+  (interactive (list (read-color "Tint colour: ")))
+  (let ((rgb (color-values color)))
+    (cmacs-imgedit--with-edit
+     (cmacs-imgedit-tint cmacs-imgedit--handle
+                         (/ (nth 0 rgb) 256) (/ (nth 1 rgb) 256)
+                         (/ (nth 2 rgb) 256) 255))))
+
+(defun cmacs-imgedit-blur-layer (radius)
+  "Box-blur the active layer by RADIUS pixels."
+  (interactive (list (read-number "Blur radius: " 2)))
+  (cmacs-imgedit--with-edit (cmacs-imgedit-blur cmacs-imgedit--handle radius)))
+
+(defun cmacs-imgedit-bloom-layer ()
+  "Apply a bloom glow to the active layer."
+  (interactive)
+  (cmacs-imgedit--with-edit (cmacs-imgedit-bloom cmacs-imgedit--handle)))
+
+(defun cmacs-imgedit-noise-layer (amplitude)
+  "Overlay noise of AMPLITUDE on the active layer."
+  (interactive (list (read-number "Noise amplitude (0..1): " 0.2)))
+  (cmacs-imgedit--with-edit
+   (cmacs-imgedit-noise cmacs-imgedit--handle amplitude 1.0 1)))
+
+(defun cmacs-imgedit-threshold-layer (level)
+  "Threshold the active layer to black/white at LEVEL."
+  (interactive (list (read-number "Threshold (0..255): " 128)))
+  (cmacs-imgedit--with-edit (cmacs-imgedit-threshold cmacs-imgedit--handle level)))
+
+(defun cmacs-imgedit-posterize-layer (levels)
+  "Reduce the active layer to LEVELS colours per channel."
+  (interactive (list (read-number "Levels per channel: " 4)))
+  (cmacs-imgedit--with-edit (cmacs-imgedit-posterize cmacs-imgedit--handle levels)))
+
+(defun cmacs-imgedit-pixelate-layer (size)
+  "Pixelate the active layer into SIZE-pixel blocks."
+  (interactive (list (read-number "Block size: " 8)))
+  (cmacs-imgedit--with-edit (cmacs-imgedit-pixelate cmacs-imgedit--handle size)))
+
+(defun cmacs-imgedit-sharpen-layer ()
+  "Sharpen the active layer."
+  (interactive)
+  (cmacs-imgedit--with-edit (cmacs-imgedit-sharpen cmacs-imgedit--handle)))
+
+(defun cmacs-imgedit-edge-detect-layer ()
+  "Edge-detect the active layer."
+  (interactive)
+  (cmacs-imgedit--with-edit (cmacs-imgedit-edge-detect cmacs-imgedit--handle)))
+
+(defun cmacs-imgedit-emboss-layer ()
+  "Emboss the active layer."
+  (interactive)
+  (cmacs-imgedit--with-edit (cmacs-imgedit-emboss cmacs-imgedit--handle)))
+
+(defun cmacs-imgedit-adjust-saturation (factor)
+  "Scale active-layer saturation by FACTOR."
+  (interactive (list (read-number "Saturation (0..2): " 1.5)))
+  (cmacs-imgedit--with-edit (cmacs-imgedit-saturation cmacs-imgedit--handle factor)))
+
+(defun cmacs-imgedit-export-gif-file (file delay)
+  "Export the layer stack as an animated GIF to FILE (DELAY centiseconds/frame)."
+  (interactive (list (read-file-name "Export GIF: " nil "anim.gif")
+                     (read-number "Delay (centiseconds/frame): " 10)))
+  (cmacs-imgedit-export-gif cmacs-imgedit--handle (expand-file-name file) delay)
+  (message "Wrote %s" file))
+
+;; ── Vector: SVG import + Bézier curve ──
+
+(defun cmacs-imgedit-import-svg-file (file dpi)
+  "Render an SVG FILE onto the active layer at DPI."
+  (interactive (list (read-file-name "Import SVG: " nil nil t)
+                     (read-number "DPI: " 96)))
+  (cmacs-imgedit--with-edit
+   (cmacs-imgedit-import-svg cmacs-imgedit--handle (expand-file-name file) dpi)))
+
+(defun cmacs-imgedit-draw-bezier-cmd (x0 y0 x1 y1 x2 y2 x3 y3)
+  "Draw a cubic Bézier through (X0 Y0) (X1 Y1) (X2 Y2) (X3 Y3)."
+  (interactive
+   (list (read-number "Start x: ") (read-number "Start y: ")
+         (read-number "Ctrl1 x: ") (read-number "Ctrl1 y: ")
+         (read-number "Ctrl2 x: ") (read-number "Ctrl2 y: ")
+         (read-number "End x: ") (read-number "End y: ")))
+  (cmacs-imgedit--apply-color)
+  (cmacs-imgedit--with-edit
+   (cmacs-imgedit-bezier cmacs-imgedit--handle (cons x0 y0) (cons x1 y1)
+                         (cons x2 y2) (cons x3 y3) cmacs-imgedit--brush-size)))
+
+;; ── Geometric transforms + gradient ────────────────────────────────────
+
+(defun cmacs-imgedit-resize-image (width height)
+  "Resize the whole document to WIDTH x HEIGHT."
+  (interactive (list (read-number "New width: " (cmacs-imgedit-width
+                                                 cmacs-imgedit--handle))
+                     (read-number "New height: " (cmacs-imgedit-height
+                                                  cmacs-imgedit--handle))))
+  (cmacs-imgedit--with-edit
+   (cmacs-imgedit-resize cmacs-imgedit--handle width height
+                         (<= (cmacs-imgedit-width cmacs-imgedit--handle) 128)))
+  (cmacs-imgedit--maybe-refit))
+
+(defun cmacs-imgedit-crop-image (x y width height)
+  "Crop the whole document to rectangle X Y WIDTH HEIGHT."
+  (interactive
+   (list (read-number "Crop x: " 0) (read-number "Crop y: " 0)
+         (read-number "Crop width: " (cmacs-imgedit-width cmacs-imgedit--handle))
+         (read-number "Crop height: " (cmacs-imgedit-height
+                                       cmacs-imgedit--handle))))
+  (cmacs-imgedit--with-edit
+   (cmacs-imgedit-crop cmacs-imgedit--handle x y width height))
+  (cmacs-imgedit--maybe-refit))
+
+(defun cmacs-imgedit-rotate-cw ()
+  "Rotate the whole document 90 degrees clockwise."
+  (interactive)
+  (cmacs-imgedit--with-edit (cmacs-imgedit-rotate cmacs-imgedit--handle t))
+  (cmacs-imgedit--maybe-refit))
+
+(defun cmacs-imgedit-rotate-ccw ()
+  "Rotate the whole document 90 degrees counter-clockwise."
+  (interactive)
+  (cmacs-imgedit--with-edit (cmacs-imgedit-rotate cmacs-imgedit--handle nil))
+  (cmacs-imgedit--maybe-refit))
+
+(defun cmacs-imgedit--maybe-refit ()
+  "Re-fit the viewport after a document-size change (live mode)."
+  (when cmacs-imgedit--live
+    (ignore-errors (cmacs-libregnum-image-fit (current-buffer)))))
+
+(defun cmacs-imgedit-gradient-fill (a b radial)
+  "Fill the active layer with a gradient from colour A to B (RADIAL if set)."
+  (interactive
+   (list (read-color "From colour: ") (read-color "To colour: ")
+         (y-or-n-p "Radial? ")))
+  (let ((ca (color-values a)) (cb (color-values b)))
+    (cmacs-imgedit--with-edit
+     (cmacs-imgedit-gradient
+      cmacs-imgedit--handle
+      (list (/ (nth 0 ca) 256) (/ (nth 1 ca) 256) (/ (nth 2 ca) 256) 255)
+      (list (/ (nth 0 cb) 256) (/ (nth 1 cb) 256) (/ (nth 2 cb) 256) 255)
+      radial))))
+
+;; ── Layer operations (expose the existing model DEFUNs) ─────────────────
+
+(defun cmacs-imgedit--active ()
+  "Index of the active layer."
+  (cmacs-imgedit-active-layer cmacs-imgedit--handle))
+
+(defun cmacs-imgedit-move-layer-up ()
+  "Move the active layer up one (towards the top of the stack)."
+  (interactive)
+  (let* ((i (cmacs-imgedit--active))
+         (n (cmacs-imgedit-n-layers cmacs-imgedit--handle)))
+    (when (< (1+ i) n)
+      (cmacs-imgedit-move-layer cmacs-imgedit--handle i (1+ i))
+      (cmacs-imgedit-set-active-layer cmacs-imgedit--handle (1+ i))
+      (cmacs-imgedit--render))))
+
+(defun cmacs-imgedit-move-layer-down ()
+  "Move the active layer down one (towards the bottom)."
+  (interactive)
+  (let ((i (cmacs-imgedit--active)))
+    (when (> i 0)
+      (cmacs-imgedit-move-layer cmacs-imgedit--handle i (1- i))
+      (cmacs-imgedit-set-active-layer cmacs-imgedit--handle (1- i))
+      (cmacs-imgedit--render))))
+
+(defun cmacs-imgedit-rename-layer (name)
+  "Rename the active layer to NAME."
+  (interactive (list (read-string "Layer name: ")))
+  (cmacs-imgedit-set-layer-name cmacs-imgedit--handle (cmacs-imgedit--active)
+                                name)
+  (cmacs-imgedit--render))
+
+(defun cmacs-imgedit-duplicate-active-layer ()
+  "Duplicate the active layer and select the copy."
+  (interactive)
+  (let ((idx (cmacs-imgedit-duplicate-layer cmacs-imgedit--handle
+                                            (cmacs-imgedit--active))))
+    (when (>= idx 0)
+      (cmacs-imgedit-set-active-layer cmacs-imgedit--handle idx))
+    (cmacs-imgedit--render)))
+
+(defun cmacs-imgedit-toggle-layer-lock ()
+  "Toggle the lock on the active layer."
+  (interactive)
+  (let ((i (cmacs-imgedit--active)))
+    (cmacs-imgedit-set-layer-locked
+     cmacs-imgedit--handle i
+     (not (cmacs-imgedit-layer-locked-p cmacs-imgedit--handle i)))
+    (message "Layer %d %s" i
+             (if (cmacs-imgedit-layer-locked-p cmacs-imgedit--handle i)
+                 "locked" "unlocked"))
+    (cmacs-imgedit--render)))
+
+(defconst cmacs-imgedit--blend-modes
+  '(("Replace" . 0) ("Normal" . 1) ("Add" . 2) ("Multiply" . 3)
+    ("Subtract" . 4) ("Screen" . 5) ("Overlay" . 6) ("Soft light" . 7)
+    ("Color dodge" . 8) ("Color burn" . 9))
+  "Layer blend-mode names to codes (0-4 GrlImageBlendMode; 5-9 extended
+Photoshop modes implemented in the document compositor).")
+
+(defun cmacs-imgedit-set-layer-blend-mode (mode)
+  "Set the active layer's blend MODE (completing-read)."
+  (interactive
+   (list (cdr (assoc (completing-read "Blend mode: "
+                                      cmacs-imgedit--blend-modes nil t)
+                     cmacs-imgedit--blend-modes))))
+  (cmacs-imgedit-set-layer-blend cmacs-imgedit--handle (cmacs-imgedit--active)
+                                 mode)
+  (cmacs-imgedit--render))
+
+(defun cmacs-imgedit--update-marquee ()
+  "Show the selection bbox as a viewport marquee (live mode)."
+  (when cmacs-imgedit--live
+    (let ((bb (cmacs-imgedit-selection-bbox cmacs-imgedit--handle)))
+      (ignore-errors
+        (if bb
+            (apply #'cmacs-libregnum-image-set-marquee (current-buffer) t bb)
+          (cmacs-libregnum-image-set-marquee (current-buffer) nil))))))
+
+(defun cmacs-imgedit-select-all-cmd ()
+  "Select the whole canvas."
+  (interactive)
+  (cmacs-imgedit-select-all cmacs-imgedit--handle)
+  (cmacs-imgedit--update-marquee) (cmacs-imgedit--render))
+
+(defun cmacs-imgedit-deselect ()
+  "Clear the selection."
+  (interactive)
+  (cmacs-imgedit-select-none cmacs-imgedit--handle)
+  (cmacs-imgedit--update-marquee) (cmacs-imgedit--render))
+
+(defun cmacs-imgedit-invert-selection ()
+  "Invert the selection."
+  (interactive)
+  (cmacs-imgedit-select-invert cmacs-imgedit--handle)
+  (cmacs-imgedit--update-marquee) (cmacs-imgedit--render))
+
+(defun cmacs-imgedit-fill-selection ()
+  "Fill the selection (or whole layer) with the foreground colour."
+  (interactive)
+  (cmacs-imgedit--with-edit
+   (apply #'cmacs-imgedit-selection-fill cmacs-imgedit--handle
+          cmacs-imgedit--color)))
+
+(defun cmacs-imgedit-delete-selection ()
+  "Clear the selected pixels (make them transparent)."
+  (interactive)
+  (cmacs-imgedit--with-edit
+   (cmacs-imgedit-selection-fill cmacs-imgedit--handle 0 0 0 0)))
+
+(defun cmacs-imgedit-crop-to-selection ()
+  "Crop the document to the selection bounding box."
+  (interactive)
+  (cmacs-imgedit--with-edit
+   (cmacs-imgedit-selection-crop cmacs-imgedit--handle))
+  (cmacs-imgedit--update-marquee) (cmacs-imgedit--maybe-refit))
+
+(defun cmacs-imgedit-magic-wand-select (x y)
+  "Magic-wand select the region at doc pixel (X Y)."
+  (interactive (list (read-number "X: ") (read-number "Y: ")))
+  (cmacs-imgedit-select-wand cmacs-imgedit--handle x y 24)
+  (cmacs-imgedit--update-marquee) (cmacs-imgedit--render))
+
+(defun cmacs-imgedit-show-histogram (channel)
+  "Show a histogram of the image (CHANNEL: luma/red/green/blue)."
+  (interactive
+   (list (cdr (assoc (completing-read "Channel: "
+                                      '("luma" "red" "green" "blue") nil t "luma")
+                     '(("luma" . 0) ("red" . 1) ("green" . 2) ("blue" . 3))))))
+  (let* ((bins (cmacs-imgedit-histogram cmacs-imgedit--handle channel))
+         (maxv (max 1 (apply #'max (append bins nil))))
+         (w 256) (hh 100)
+         (hg (cmacs-imgedit-new w hh)))
+    (cmacs-imgedit-fill hg 20 20 24 255)
+    (cmacs-imgedit-set-color hg 200 200 210 255)
+    (dotimes (x w)
+      (let ((bh (round (* hh (/ (float (aref bins x)) maxv)))))
+        (when (> bh 0)
+          (cmacs-imgedit-draw-rect hg x (- hh bh) 1 bh t 1))))
+    (let ((png (cmacs-imgedit-export-png-bytes hg)))
+      (cmacs-imgedit-free hg)
+      (with-current-buffer (get-buffer-create "*imgedit histogram*")
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (insert-image (create-image png 'png t :scale 2))
+          (special-mode))
+        (display-buffer (current-buffer))))))
+
+
+(defun cmacs-imgedit-slice-to-frames (cols rows)
+  "Slice the image into COLS x ROWS frame layers (sprite mode)."
+  (interactive (list (read-number "Columns: " 4) (read-number "Rows: " 4)))
+  (cmacs-imgedit--with-edit
+   (cmacs-imgedit-slice-grid cmacs-imgedit--handle cols rows))
+  (cmacs-imgedit--maybe-refit)
+  (message "Sliced into %d frames" (* cols rows)))
+
+(defvar-local cmacs-imgedit--onion nil "Onion-skin display state.")
+(defun cmacs-imgedit-toggle-onion-skin ()
+  "Toggle onion-skin (active frame solid, neighbours ghosted)."
+  (interactive)
+  (setq cmacs-imgedit--onion (not cmacs-imgedit--onion))
+  (cmacs-imgedit-onion-skin cmacs-imgedit--handle cmacs-imgedit--onion 0.3 0.3)
+  (cmacs-imgedit--render)
+  (message "Onion-skin %s" (if cmacs-imgedit--onion "on" "off")))
+
+(defun cmacs-imgedit-export-indexed (file colors)
+  "Export a colour-reduced (COLORS) PNG to FILE."
+  (interactive (list (read-file-name "Export indexed PNG: " nil "indexed.png")
+                     (read-number "Max colours: " 16)))
+  (cmacs-imgedit-export-indexed-png cmacs-imgedit--handle
+                                    (expand-file-name file) colors)
+  (message "Wrote %s (<=%d colours)" file colors))
+
+(defun cmacs-imgedit-show-palette (colors)
+  "Show the image's dominant COLORS palette; click a swatch to pick it."
+  (interactive (list (read-number "Palette size: " 16)))
+  (let ((pal (cmacs-imgedit-palette cmacs-imgedit--handle colors))
+        (src (current-buffer)))
+    (with-current-buffer (get-buffer-create "*imgedit palette*")
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (dolist (c pal)
+          (let ((sw (propertize "   "
+                     'face (list :background
+                                 (format "#%02x%02x%02x"
+                                         (nth 0 c) (nth 1 c) (nth 2 c)))
+                     'mouse-face 'highlight
+                     'help-echo (format "RGB %d %d %d" (nth 0 c) (nth 1 c) (nth 2 c))
+                     'keymap (let ((m (make-sparse-keymap)) (col c) (b src))
+                               (define-key m [mouse-1]
+                                 (lambda () (interactive)
+                                   (with-current-buffer b
+                                     (apply #'cmacs-imgedit-set-color
+                                            cmacs-imgedit--handle
+                                            (append col '(255))))
+                                   (message "Picked RGB %S" col)))
+                               m))))
+            (insert sw (format " %3d %3d %3d\n" (nth 0 c) (nth 1 c) (nth 2 c)))))
+        (special-mode))
+      (display-buffer (current-buffer)))))
+
+
+(defun cmacs-imgedit--menu ()
+  "Return the image-editor context-menu alist (shared by native + viewport)."
+  '("Image editor"
             ("Tools"
              ("Fill layer" . cmacs-imgedit-fill-layer)
              ("Flood fill…" . cmacs-imgedit-flood-fill-at)
@@ -1014,10 +1545,58 @@ pgtk and the in-engine libregnum menu under the --lrg backend."
             ("Layer"
              ("Add layer…" . cmacs-imgedit-add-layer-cmd)
              ("Remove active layer" . cmacs-imgedit-remove-active-layer)
+             ("Duplicate layer" . cmacs-imgedit-duplicate-active-layer)
+             ("Rename layer…" . cmacs-imgedit-rename-layer)
+             ("Move layer up" . cmacs-imgedit-move-layer-up)
+             ("Move layer down" . cmacs-imgedit-move-layer-down)
+             ("Blend mode…" . cmacs-imgedit-set-layer-blend-mode)
+             ("Toggle lock" . cmacs-imgedit-toggle-layer-lock)
              ("Select layer…" . cmacs-imgedit-set-active-layer-cmd)
              ("Toggle visibility" . cmacs-imgedit-toggle-layer-visible)
              ("Opacity…" . cmacs-imgedit-set-layer-opacity-cmd)
              ("List layers" . cmacs-imgedit-list-layers))
+            ("Adjust"
+             ("Brightness…" . cmacs-imgedit-adjust-brightness)
+             ("Contrast…" . cmacs-imgedit-adjust-contrast)
+             ("Saturation…" . cmacs-imgedit-adjust-saturation)
+             ("Invert" . cmacs-imgedit-invert-colors)
+             ("Grayscale" . cmacs-imgedit-desaturate)
+             ("Threshold…" . cmacs-imgedit-threshold-layer)
+             ("Posterize…" . cmacs-imgedit-posterize-layer)
+             ("Tint…" . cmacs-imgedit-tint-layer)
+             ("Histogram…" . cmacs-imgedit-show-histogram))
+            ("Filter"
+             ("Blur…" . cmacs-imgedit-blur-layer)
+             ("Bloom" . cmacs-imgedit-bloom-layer)
+             ("Sharpen" . cmacs-imgedit-sharpen-layer)
+             ("Edge detect" . cmacs-imgedit-edge-detect-layer)
+             ("Emboss" . cmacs-imgedit-emboss-layer)
+             ("Pixelate…" . cmacs-imgedit-pixelate-layer)
+             ("Noise…" . cmacs-imgedit-noise-layer))
+            ("Transform"
+             ("Flip horizontal" . cmacs-imgedit-flip-horizontal)
+             ("Flip vertical" . cmacs-imgedit-flip-vertical)
+             ("Rotate CW" . cmacs-imgedit-rotate-cw)
+             ("Rotate CCW" . cmacs-imgedit-rotate-ccw)
+             ("Resize…" . cmacs-imgedit-resize-image)
+             ("Crop…" . cmacs-imgedit-crop-image)
+             ("Gradient fill…" . cmacs-imgedit-gradient-fill)
+             ("Bézier curve…" . cmacs-imgedit-draw-bezier-cmd)
+             ("Import SVG…" . cmacs-imgedit-import-svg-file))
+            ("Select"
+             ("Magic wand…" . cmacs-imgedit-magic-wand-select)
+             ("Select all" . cmacs-imgedit-select-all-cmd)
+             ("Deselect" . cmacs-imgedit-deselect)
+             ("Invert" . cmacs-imgedit-invert-selection)
+             ("Fill selection" . cmacs-imgedit-fill-selection)
+             ("Delete selection" . cmacs-imgedit-delete-selection)
+             ("Crop to selection" . cmacs-imgedit-crop-to-selection))
+            ("Sprite"
+             ("Slice into frames…" . cmacs-imgedit-slice-to-frames)
+             ("Toggle onion-skin" . cmacs-imgedit-toggle-onion-skin)
+             ("Palette…" . cmacs-imgedit-show-palette)
+             ("Export GIF (frames)…" . cmacs-imgedit-export-gif-file)
+             ("Export indexed PNG…" . cmacs-imgedit-export-indexed))
             ("Clipboard"
              ("Copy image" . cmacs-imgedit-copy-to-clipboard)
              ("Paste image" . cmacs-imgedit-paste-from-clipboard)
@@ -1027,14 +1606,63 @@ pgtk and the in-engine libregnum menu under the --lrg backend."
              ("Redo" . cmacs-imgedit-redo-cmd)
              ("Zoom in" . cmacs-imgedit-zoom-in)
              ("Zoom out" . cmacs-imgedit-zoom-out)
+             ("Export GIF (layers)…" . cmacs-imgedit-export-gif-file)
              ("Save…" . cmacs-imgedit-save-cmd))))
-         (choice (cmacs-libregnum-popup-menu event menu)))
+
+(defun cmacs-imgedit-context-menu (event)
+  "Pop the image-editor context menu for mouse EVENT (native path).
+Routes through `cmacs-libregnum-popup-menu' so it is a native GTK menu under
+pgtk and the in-engine libregnum menu under the --lrg backend."
+  (interactive "e")
+  (cmacs-imgedit--select-event-window event)  ; commands need the canvas buffer
+  (let ((choice (cmacs-libregnum-popup-menu event (cmacs-imgedit--menu))))
     (when (commandp choice)
       (call-interactively choice))))
 
 ;; --------------------------------------------------------------------------
 ;; Mode
 ;; --------------------------------------------------------------------------
+
+(transient-define-prefix cmacs-imgedit-help ()
+  "Keybinding cheat-sheet for `cmacs-imgedit-mode'.
+Press a key to run its command, or q / C-g to dismiss."
+  [:description "cmacs-imgedit — image / sprite editor  (right-click for Adjust/Filter/Select/Sprite…)"
+   ["Tools"
+    ("b" "Brush" cmacs-imgedit-use-brush)
+    ("p" "Pencil" cmacs-imgedit-pencil)
+    ("l" "Line" cmacs-imgedit-use-line)
+    (">" "Arrow" cmacs-imgedit-use-arrow)
+    ("r" "Rectangle" cmacs-imgedit-use-rectangle)
+    ("c" "Circle" cmacs-imgedit-use-circle)
+    ("E" "Ellipse" cmacs-imgedit-use-ellipse)
+    ("t" "Text" cmacs-imgedit-use-text)
+    ("k" "Bucket" cmacs-imgedit-use-bucket)
+    ("e" "Eyedropper" cmacs-imgedit-use-eyedropper)
+    ("G" "Flood fill…" cmacs-imgedit-flood-fill-at)]
+   ["Brush / colour"
+    ("C" "Foreground colour…" cmacs-imgedit-set-foreground-color)
+    ("A" "Alpha…" cmacs-imgedit-set-alpha)
+    ("z" "Brush size…" cmacs-imgedit-set-brush-size)
+    ("T" "Text size…" cmacs-imgedit-set-text-size)
+    ("x" "Toggle shape fill" cmacs-imgedit-toggle-shape-fill)
+    ("f" "Fill layer" cmacs-imgedit-fill-layer)]]
+  [["Layers"
+    ("L" "Add layer…" cmacs-imgedit-add-layer-cmd)
+    ("K" "Remove layer" cmacs-imgedit-remove-active-layer)
+    ("a" "Select layer…" cmacs-imgedit-set-active-layer-cmd)
+    ("v" "Toggle visibility" cmacs-imgedit-toggle-layer-visible)
+    ("o" "Opacity…" cmacs-imgedit-set-layer-opacity-cmd)
+    ("i" "List layers" cmacs-imgedit-list-layers)]
+   ["Edit"
+    ("u" "Undo" cmacs-imgedit-undo-cmd)
+    ("U" "Redo" cmacs-imgedit-redo-cmd)
+    ("s" "Save…" cmacs-imgedit-save-cmd)
+    ("y" "Copy" cmacs-imgedit-copy-to-clipboard)
+    ("C-y" "Paste" cmacs-imgedit-paste-from-clipboard)
+    ("P" "Paste screenshot" cmacs-imgedit-paste-screenshot)]
+   ["View"
+    ("+" "Zoom in" cmacs-imgedit-zoom-in)
+    ("-" "Zoom out" cmacs-imgedit-zoom-out)]])
 
 (defvar cmacs-imgedit-mode-map (make-sparse-keymap)
   "Keymap for `cmacs-imgedit-mode'.")
@@ -1067,7 +1695,8 @@ pgtk and the in-engine libregnum menu under the --lrg backend."
     (define-key map (kbd "a") #'cmacs-imgedit-set-active-layer-cmd)
     (define-key map (kbd "v") #'cmacs-imgedit-toggle-layer-visible)
     (define-key map (kbd "o") #'cmacs-imgedit-set-layer-opacity-cmd)
-    (define-key map (kbd "?") #'cmacs-imgedit-list-layers)
+    (define-key map (kbd "i") #'cmacs-imgedit-list-layers)
+    (define-key map (kbd "?") #'cmacs-imgedit-help)
     (define-key map (kbd "u") #'cmacs-imgedit-undo-cmd)
     (define-key map (kbd "U") #'cmacs-imgedit-redo-cmd)
     (define-key map (kbd "C-/") #'cmacs-imgedit-undo-cmd)
@@ -1091,6 +1720,13 @@ pgtk and the in-engine libregnum menu under the --lrg backend."
     (kill-buffer cmacs-imgedit--tools-panel))
   (when (buffer-live-p cmacs-imgedit--layers-panel)
     (kill-buffer cmacs-imgedit--layers-panel))
+  ;; Detach the viewport BEFORE freeing the document: the render ctx holds a
+  ;; borrowed pointer to the document, so tearing the view down first avoids a
+  ;; use-after-free on the next frame.
+  (when (and cmacs-imgedit--live
+             (fboundp 'cmacs-libregnum-attached-p)
+             (cmacs-libregnum-attached-p (current-buffer)))
+    (ignore-errors (cmacs-libregnum-detach (current-buffer))))
   (when (and cmacs-imgedit--handle (fboundp 'cmacs-imgedit-free))
     (ignore-errors (cmacs-imgedit-free cmacs-imgedit--handle))
     (setq cmacs-imgedit--handle nil)))
@@ -1137,8 +1773,42 @@ sprite zoom, so scale down as the image grows."
   ;; Open the tools + layers side panels (like the 3D editor's panels).
   (with-current-buffer buffer
     (cmacs-imgedit--open-panels)
+    ;; Try the live GL viewport (gnuseye/CAD hosting pattern); on any failure
+    ;; or no display, fall back to the native insert-image path.
+    (cmacs-imgedit--maybe-attach-viewport buffer handle)
     (cmacs-imgedit--render))
   buffer)
+
+(defun cmacs-imgedit--maybe-attach-viewport (buffer handle)
+  "Attach a live libregnum viewport to BUFFER for HANDLE, if available.
+Sets `cmacs-imgedit--live' on success; leaves it nil (native path) otherwise."
+  (when (cmacs-imgedit--viewport-available-p)
+    (condition-case _err
+        (let ((win (get-buffer-window buffer)))
+          ;; Size the FBO to the window BODY (text area), not the full window,
+          ;; so the FBO matches the paint + click-mapping region (which use
+          ;; window-body dimensions) and nothing spills onto the modeline.
+          (cmacs-libregnum-attach
+           buffer
+           (max 64 (if win (window-body-width win t) 640))
+           (max 64 (if win (window-body-height win t) 480)))
+          (when (cmacs-imgedit-viewport-bind handle buffer)
+            (cmacs-libregnum-image-enter buffer t)
+            (cmacs-libregnum-image-set-checker buffer t)
+            (cmacs-libregnum-image-set-grid buffer t)
+            (cmacs-imgedit--install-image-hooks buffer)
+            (cmacs-libregnum-image-fit buffer)
+            (setq cmacs-imgedit--live t)
+            ;; refit when the window is resized (the shared size-change hook
+            ;; drives cmacs-libregnum-resize; refit keeps the image centred).
+            (add-hook 'window-size-change-functions
+                      #'cmacs-imgedit--on-size-change nil t)))
+      (error (setq cmacs-imgedit--live nil)))))
+
+(defun cmacs-imgedit--on-size-change (&rest _)
+  "Refit the image to the (resized) viewport window."
+  (when (and cmacs-imgedit--live (get-buffer-window (current-buffer)))
+    (ignore-errors (cmacs-libregnum-image-fit (current-buffer)))))
 
 ;;;###autoload
 (defun cmacs-imgedit-new-image (width height)

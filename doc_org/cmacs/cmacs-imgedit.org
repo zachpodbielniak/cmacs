@@ -67,6 +67,79 @@ on the canvas*:
 - *Bucket* — click to flood-fill from that pixel.
 - *Pick* (eyedropper) — click to set the foreground colour from that pixel.
 
+** Live GL viewport
+
+When a display is available, imgedit renders through a *live in-engine
+libregnum/raylib viewport* (the same hosting model gnuseye and cmacs-cad use),
+instead of a native Emacs image.  The document is bound *zero-copy* into the
+render context: a brush dab re-flattens + re-uploads only the affected region
+and redraws the FBO, so painting is far lower latency than the old
+flatten→PNG-encode→Emacs-decode→redisplay path.  It works under both the *pgtk*
+(cairo BGRA blit) and ~emacs --lrg~ (FBO) backends, with a transparency
+checkerboard and a pixel grid (at high zoom) drawn in-engine.
+
+- *Pan* — middle-drag; *Zoom* — mouse wheel (about the cursor).
+- Mouse painting, right-click menu, and every tool behave exactly as below;
+  only the rendering path differs.
+- On a tty / headless / no-GL frame imgedit *falls back automatically* to the
+  native ~insert-image~ preview (buffer-local ~cmacs-imgedit--live~ is then
+  nil), so the editor works everywhere.
+
+** Adjustments, filters, transforms & layer operations
+
+Right-click → *Adjust* / *Filter* / *Transform*, or run the commands directly.
+Adjustments and filters apply to the *active layer* (one undo step each);
+flips apply to the whole document.
+
+- *Adjust*: Brightness (−255..255), Contrast (−100..100), Invert, Grayscale,
+  Tint (multiply by a colour) — ~cmacs-imgedit-adjust-brightness~,
+  ~-adjust-contrast~, ~-invert-colors~, ~-desaturate~, ~-tint-layer~.  The
+  model DEFUNs are ~cmacs-imgedit-brightness/contrast/invert/grayscale/tint~
+  and ~cmacs-imgedit-color-replace~ (exact-colour swap; FROM/TO are ~(R G B A)~).
+  Saturation, Threshold (B/W) and Posterize (reduce colours) are here too
+  (~cmacs-imgedit-saturation/threshold/posterize~).  A *Histogram*
+  scope (~cmacs-imgedit-histogram~ returns 256 luma/R/G/B bins;
+  ~cmacs-imgedit-show-histogram~ renders it in a side buffer).
+- *Filter*: Blur (box), Bloom (glow), Sharpen, Edge detect, Emboss, Pixelate,
+  Noise — ~cmacs-imgedit-blur/bloom/sharpen/edge-detect/emboss/pixelate/noise~.
+  The convolution + pixel filters run directly on the active layer's RGBA8
+  buffer (no engine round-trip).
+- *Transform* (whole document): Flip horizontal / vertical, Rotate CW / CCW,
+  Resize, Crop, and a Gradient fill (linear or radial, active layer).  Model
+  DEFUNs ~cmacs-imgedit-flip/rotate/resize/crop/gradient~ delegate the
+  dimension-changing ops to new libregnum ~lrg_image_document_resize/crop/
+  rotate~ helpers (all layers + canvas).
+- *Vector* (right-click → Transform): Bézier curve
+  (~cmacs-imgedit-draw-bezier-cmd~ / model ~cmacs-imgedit-bezier~, control
+  points as ~(X . Y)~ conses) and SVG import (~cmacs-imgedit-import-svg-file~ /
+  model ~cmacs-imgedit-import-svg~ renders an SVG file onto the active layer at
+  a given DPI).
+- *Select* (right-click → Select): a mask-based selection --- rectangular
+  (~cmacs-imgedit-select-rect~), *magic wand* (~cmacs-imgedit-select-wand~ /
+  the ~Wand~ tool, flood-select within a tolerance), select-all / deselect /
+  invert.  Selection-constrained ops: *Fill selection*, *Delete selection*
+  (clear to transparent), and *Crop to selection*
+  (~cmacs-imgedit-selection-fill/crop~).  The selection bbox shows as a
+  viewport marquee.
+- *Sprite mode* (right-click → Sprite): *Slice into frames…*
+  (~cmacs-imgedit-slice-grid~ turns a sprite sheet into COLSxROWS frame
+  layers, rebuilt in place), *Toggle onion-skin* (~cmacs-imgedit-onion-skin~:
+  active frame solid, neighbours ghosted), *Palette…* (~cmacs-imgedit-palette~
+  median-cut swatches; click to pick), *Export GIF (frames)…*, and *Export
+  indexed PNG…* (~cmacs-imgedit-export-indexed-png~: Floyd–Steinberg-dithered
+  colour reduction).
+- *Animation*: right-click → Edit → *Export GIF (layers)…* renders each layer
+  as one frame of an animated GIF (~cmacs-imgedit-export-gif-file~ / model
+  ~cmacs-imgedit-export-gif~, DELAY centiseconds/frame) --- a quick way to turn
+  a layered sprite into a looping animation.
+- *Layer* (right-click → Layer): Duplicate, Rename, Move up/down, Blend mode
+  (Replace/Normal/Add/Multiply/Subtract + the extended Photoshop modes
+  Screen/Overlay/Soft-light/Color-dodge/Color-burn), Toggle lock.  A *locked* layer refuses
+  edits until unlocked (~cmacs-imgedit-set-layer-locked~ /
+  ~cmacs-imgedit-layer-locked-p~); the model reorder/rename/duplicate/blend
+  DEFUNs (~cmacs-imgedit-move-layer~, ~-set-layer-name~, ~-duplicate-layer~,
+  ~-set-layer-blend~) are now surfaced in the menu.
+
 ** Annotation workflow (screenshots)
 
 #+begin_src
@@ -231,3 +304,5 @@ The DEFUN translation unit includes =lisp.h= only; the bridge
 (=cmacs-imgedit-doc.c=) is the single imgedit TU that includes =<libregnum.h>=,
 mirroring the =cmacs-libregnum-render.h= split so raylib's =Color= typedef never
 collides with cmacs internals.
+
+- Press ~?~ in cmacs-imgedit-mode to pop a *transient keybinding menu* (a magit-style cheat-sheet grouped by category); press any listed key to run its command, or ~q~ / ~C-g~ to dismiss.  (the old ~?~ = list-layers moved to ~i~)

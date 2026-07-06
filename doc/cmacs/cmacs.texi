@@ -8732,9 +8732,27 @@ offset, undo).  Enable with @option{--with-cmacs-imgedit} (requires
 
 It has two facets: a handle-based model API (the @code{cmacs-imgedit-*}
 primitives, scriptable and MCP/headless-driveable) and @code{cmacs-imgedit-mode},
-which shows the composited document as a native Emacs image and supports mouse
-painting plus command-driven tools.  See
-@file{doc_org/cmacs/cmacs-imgedit.org} for the full reference.
+which shows the composited document and supports mouse painting plus
+command-driven tools.  See @file{doc_org/cmacs/cmacs-imgedit.org} for the full
+reference.
+
+When a display is available @code{cmacs-imgedit-mode} renders through a live
+in-engine libregnum/raylib viewport (the gnuseye/cmacs-cad hosting model),
+under both the pgtk and @code{emacs --lrg} backends: the document is bound
+zero-copy so a brush dab re-uploads only the affected region and redraws the
+FBO (far lower latency than the native image path).  Middle-drag pans, the
+wheel zooms about the cursor, and a transparency checkerboard + pixel grid are
+drawn in-engine.  On a tty / headless / no-GL frame it falls back automatically
+to the native @code{insert-image} preview (buffer-local
+@code{cmacs-imgedit--live} nil).
+
+The right-click menu exposes @emph{Adjust} (brightness, contrast, invert,
+grayscale, tint, exact colour-replace), @emph{Filter} (box blur, bloom,
+noise), and @emph{Transform} (flip horizontal/vertical) --- adjustments and
+filters act on the active layer, flips on the whole document.  The @emph{Layer}
+submenu surfaces the model reorder/rename/duplicate/blend-mode DEFUNs and a
+lock toggle (a locked layer refuses edits).  See
+@file{doc_org/cmacs/cmacs-imgedit.org} for the command + DEFUN names.
 
 @section Commands
 
@@ -8804,8 +8822,41 @@ offers @emph{Edit sprite image@dots{}}, which opens the asset here and
 reloads the node's texture on save
 (@code{cmacs-imgedit-after-save-functions}).  With
 @option{--with-cmacs-mcp}, typed @code{imgedit_*} MCP tools (new / open /
-save / info / set_color / draw_shape / draw_text / add_layer / undo) let an
-agent do all of this headlessly.
+save / info / set_color / draw_shape / draw_text / add_layer / undo, plus
+@code{imgedit_adjust} / @code{imgedit_filter} / @code{imgedit_transform}) let
+an agent do all of this headlessly.
+
+@section Adjustments, filters, selection, and sprite mode
+
+Beyond the basic tools, the editor exposes the full graylib/libregnum image
+surface (right-click menus @emph{Adjust}, @emph{Filter}, @emph{Transform},
+@emph{Vector}, @emph{Select}, @emph{Sprite}, @emph{Layer}):
+
+@itemize @bullet
+@item @strong{Adjust}: brightness, contrast, saturation, invert, grayscale,
+tint, colour-replace, threshold, posterize, and a @emph{Histogram} scope
+(@code{cmacs-imgedit-histogram} returns 256 luma/R/G/B bins;
+@code{cmacs-imgedit-show-histogram} renders it).
+@item @strong{Filter}: box/gaussian blur, sharpen, edge-detect, emboss,
+pixelate, bloom, noise (3x3 convolution helpers in the render half).
+@item @strong{Transform}: crop, resize, rotate (cw/ccw), flip horizontal /
+vertical.
+@item @strong{Vector}: cubic Bezier (@code{cmacs-imgedit-bezier}) and SVG
+import (@code{cmacs-imgedit-import-svg}) onto the active layer.
+@item @strong{Layer blends}: ten modes --- Replace, Normal, Add, Multiply,
+Subtract, and the extended Photoshop modes Screen, Overlay, Soft-light,
+Color-dodge, Color-burn (implemented in the document compositor).
+@item @strong{Select}: rectangular and magic-wand (flood-select within a
+tolerance) mask-based selection, select-all/deselect/invert, and
+selection-constrained fill / delete / crop-to-selection; the bbox shows as a
+viewport marquee.
+@item @strong{Sprite mode}: @emph{Slice into frames} (@code{cmacs-imgedit-
+slice-grid} rebuilds the document into COLSxROWS frame layers in place),
+@emph{onion-skin} (active frame solid, neighbours ghosted), a median-cut
+@emph{palette} panel with clickable swatches, animated @strong{GIF export}
+(each layer a frame), and colour-reduced @strong{indexed PNG export}
+(Floyd--Steinberg dithered).
+@end itemize
 
 @c ===================================================================
 @node CMacs Vidstudio
@@ -8826,6 +8877,13 @@ clips is served by the libregnum @code{LrgVideoPlayer} FFmpeg decode backend
 (built with @code{FFMPEG=1}).  See @file{doc_org/cmacs/cmacs-vidstudio.org} for
 the full reference.
 
+When a display is available the preview renders through a live in-engine
+libregnum viewport (the gnuseye/cmacs-cad hosting model, pgtk and
+@code{emacs --lrg}): the composited playhead frame is uploaded straight into
+the FBO, avoiding the per-frame PPM-through-Emacs round-trip.  On a tty /
+headless frame it falls back automatically to the PPM/PNG @code{insert-image}
+preview (buffer-local @code{cmacs-vidstudio--live} nil).
+
 @section Commands
 
 @kbd{M-x cmacs-vidstudio} creates a project (prompts width x height x fps).  In
@@ -8840,6 +8898,14 @@ Like imgedit, the rendered buffer carries a @code{keymap} text property and
 the mode map is registered with @code{evil-make-overriding-map}, so the menu
 and keys work unmodified under Doom/Evil and @code{context-menu-mode} ---
 except @kbd{SPC}, which Doom's leader owns; use @kbd{p} there.
+
+@kbd{i} imports the @emph{whole video} by default; it prompts for optional
+In/Out points (source seconds, blank In = start, blank Out = whole video) to
+import only a @emph{slice}.  The slice is recorded as engine state --- a real
+@code{trim_end} out-point was added to libregnum's @code{LrgReelVideoClip}
+alongside @code{trim_start}, so the source read is clamped at Out and the slice
+survives later duration edits.  The on-timeline duration is derived from
+@code{(Out - In) * fps}.
 
 Video imports never block: the clip is probed at import and the whole-clip
 ffmpeg decode runs on a worker thread
@@ -8872,8 +8938,45 @@ iris/flip/push/clock-wipe), @code{-add-effect}
 @code{-render-png}, @code{-render-ppm}, @code{-frame-pixel},
 @code{-export-video}, @code{-export-gif}.  With @option{--with-cmacs-mcp},
 typed @code{vidstudio_*} MCP tools (new / info / add_track / add_clip /
-set_transition / add_effect / split / render_frame / export) let an agent
+set_transition / add_effect / split / render_frame / export, plus
+@code{vidstudio_add_keyframe} / @code{vidstudio_add_audio}) let an agent
 cut a video headlessly.
+
+@section Clip types, animation, audio, and save/load
+
+The editor exposes the full Reel surface (right-click @emph{Add},
+@emph{Clip}, @emph{Audio}, @emph{Project}, @emph{Export} menus):
+
+@itemize @bullet
+@item @strong{Import}: @code{cmacs-vidstudio-add-video-clip} takes optional
+in/out points --- a blank or @minus{}1 duration imports the whole video, and
+@code{IN}/@code{OUT} seconds slice a section on import (@code{trim_start} /
+@code{trim_end} engine state that survives edits and serialises).
+@item @strong{Clip types}: solid, image, video, title, @strong{gradient}
+(linear/radial), @strong{shape} (rect/circle), @strong{caption} (SRT import),
+@strong{loop} and @strong{freeze-frame} sequence clips (nested clips wrapping
+a video source), and an @strong{animated rich-text} clip (BBCode markup with
+per-character @code{[wave]} / @code{[rainbow]} / @code{[typewriter]} /
+@code{[shake]} effects, rendered by a functional @code{LrgReelClip}).
+@item @strong{Per-clip}: opacity, transform (position / scale / rotation),
+anchor, blend mode, effect chain with introspected parameters, and a
+transition @emph{easing} curve.
+@item @strong{Keyframing}: @code{cmacs-vidstudio-add-keyframe} animates
+opacity / position / scale / rotation / effect params over clip-relative
+frames (Ken Burns = animate position + scale); a per-frame animator drives
+both preview and export.
+@item @strong{Audio}: add file audio, extract audio from a video clip, mix
+overlapping clips, per-clip volume / trim / fades, and mux into the exported
+video or export a standalone track.
+@item @strong{Save/load}: a @file{.vstudio} S-expression
+(@code{auto-mode-alist}) that round-trips clips, transitions + easing,
+opacity/blend, transform, effect chains, keyframes, and both file and
+clip-extracted audio (the latter re-extracted from the source video path via
+@code{cmacs-vidstudio-add-audio-extract-file}).
+@item @strong{Viewport}: a graphical @strong{timeline strip} (coloured clip
+blocks positioned by frame, plus a playhead) is drawn in the live GL
+viewport; a low-resolution proxy keeps playback near real-time.
+@end itemize
 
 @c ===================================================================
 @node Build Configuration
