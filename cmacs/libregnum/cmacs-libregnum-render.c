@@ -820,19 +820,20 @@ cmacs_libregnum_render_ctx_image_timeline_add_clip (CmacsLibregnumRenderCtx *r,
 
 /* Hit-test a view-space point against the timeline strip.  Returns TRUE when
    (VX,VY) is inside the strip (VW×VH view size).  Sets *FRAME to the frame
-   under the cursor, *CLIP_ID to the clip there (-1 if none), and *NEAR_EDGE
-   TRUE when close to that clip's right (trim) edge. */
+   under the cursor, *CLIP_ID to the clip there (-1 if none), and *EDGE to
+   which edge of that clip the cursor is near: 0 = body, 1 = right (out/trim
+   end), 2 = left (in/trim start). */
 gboolean
 cmacs_libregnum_render_ctx_image_timeline_hit (CmacsLibregnumRenderCtx *r,
                                                double vx, double vy,
                                                int vw, int vh, int *frame,
-                                               int *clip_id, gboolean *near_edge)
+                                               int *clip_id, int *edge)
 {
   int strip_h, y0, ntr, rowh, f, row;
   guint i;
   if (frame) *frame = 0;
   if (clip_id) *clip_id = -1;
-  if (near_edge) *near_edge = FALSE;
+  if (edge) *edge = 0;
   if (!r || r->image_clips == NULL || r->image_total_frames <= 0 || vw <= 0)
     return FALSE;
   strip_h = MAX (24, vh / 6);
@@ -854,10 +855,15 @@ cmacs_libregnum_render_ctx_image_timeline_hit (CmacsLibregnumRenderCtx *r,
       if (f >= cl->start && f < cl->start + cl->dur)
         {
           if (clip_id) *clip_id = cl->id;
-          if (near_edge)
+          if (edge)
             {
-              int edge_px = (cl->start + cl->dur) * vw / r->image_total_frames;
-              *near_edge = (ABS (edge_px - (int) vx) <= 8);
+              int right_px =
+                (cl->start + cl->dur) * vw / r->image_total_frames;
+              int left_px = cl->start * vw / r->image_total_frames;
+              if (ABS (right_px - (int) vx) <= 8)
+                *edge = 1;               /* right: out-point / trim end */
+              else if (ABS (left_px - (int) vx) <= 8)
+                *edge = 2;               /* left: in-point / trim start */
             }
           break;
         }

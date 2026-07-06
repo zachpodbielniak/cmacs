@@ -696,7 +696,7 @@ extern void     cmacs_libregnum_render_ctx_image_set_label_font
 extern gboolean cmacs_libregnum_render_ctx_image_timeline_hit
                               (CmacsLibregnumRenderCtx *r, double vx, double vy,
                                int vw, int vh, int *frame, int *clip_id,
-                               gboolean *near_edge);
+                               int *edge);
 extern void     cmacs_libregnum_render_ctx_image_timeline_set
                               (CmacsLibregnumRenderCtx *r, int playhead,
                                int total, int ntracks);

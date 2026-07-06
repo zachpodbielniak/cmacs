@@ -581,6 +581,12 @@ clip the user right-clicked on the timeline strip.")
                          color))
                (_ nil))))
     (when (and id (>= id 0))
+      ;; Re-apply a video clip's on-timeline duration when it diverges from the
+      ;; in/out slice (e.g. extended into a freeze-hold); add-video-clip derived
+      ;; it from the slice alone.
+      (when (and (= kind 2) dur (> dur 0)
+                 (/= dur (cmacs-vidstudio-clip-duration handle id)))
+        (cmacs-vidstudio-set-clip-duration handle id dur))
       (let ((tr (assq 'transition (cdr clip))))
         (when tr
           (cmacs-vidstudio-set-transition handle id (nth 1 tr) (nth 2 tr)
@@ -934,6 +940,53 @@ it (choose a scale of 0)."
              (round (* scale 100))))
   (cmacs-vidstudio--render))
 
+;; --------------------------------------------------------------------------
+;; Post-import length / offset editing (in/out slice + on-timeline duration)
+;; --------------------------------------------------------------------------
+
+(defun cmacs-vidstudio--frames-to-secs (frames)
+  "Convert FRAMES to seconds at the project frame rate."
+  (/ frames (max 1.0 (cmacs-vidstudio-fps cmacs-vidstudio--handle))))
+
+(defun cmacs-vidstudio-set-clip-trim-cmd (clip in-sec out-sec)
+  "Set video CLIP's source IN-SEC..OUT-SEC slice -- which part of the original
+video plays -- recomputing its on-timeline length.  Defaults show the current
+slice; OUT-SEC of 0 means the source end."
+  (interactive
+   (let* ((clip (cmacs-vidstudio--read-clip))
+          (sl (cmacs-vidstudio-clip-slice cmacs-vidstudio--handle clip)))
+     (unless sl
+       (user-error "Clip #%s is not a video clip (no source slice)" clip))
+     (list clip
+           (read-number
+            (format "In point (sec; source is %.2fs): " (nth 2 sl))
+            (nth 0 sl))
+           (read-number "Out point (sec; 0 = source end): " (nth 1 sl)))))
+  (if (cmacs-vidstudio-set-clip-trim cmacs-vidstudio--handle clip in-sec out-sec)
+      (let ((sl (cmacs-vidstudio-clip-slice cmacs-vidstudio--handle clip)))
+        (cmacs-vidstudio--render)
+        (message "Clip #%s slice -> %.2f..%.2fs (%.2fs on timeline)"
+                 clip (nth 0 sl) (nth 1 sl)
+                 (cmacs-vidstudio--frames-to-secs
+                  (cmacs-vidstudio-clip-duration cmacs-vidstudio--handle clip))))
+    (user-error "Clip #%s has no source slice to trim" clip)))
+
+(defun cmacs-vidstudio-set-clip-duration-cmd (clip seconds)
+  "Set CLIP's on-timeline length to SECONDS (how long it occupies the
+timeline).  For a video this holds the last frame when extended past its
+source slice; to change which part of the source plays use \[cmacs-vidstudio-set-clip-trim-cmd]."
+  (interactive
+   (let ((clip (cmacs-vidstudio--read-clip)))
+     (list clip
+           (read-number "On-timeline duration (seconds): "
+                        (cmacs-vidstudio--frames-to-secs
+                         (cmacs-vidstudio-clip-duration
+                          cmacs-vidstudio--handle clip))))))
+  (cmacs-vidstudio-set-clip-duration cmacs-vidstudio--handle clip
+                                     (cmacs-vidstudio--secs-to-frames seconds))
+  (cmacs-vidstudio--render)
+  (message "Clip #%s on-timeline duration -> %.2fs" clip seconds))
+
 (defun cmacs-vidstudio-add-gradient (a b seconds)
   "Append a gradient clip from colour A to B of SECONDS to the active track."
   (interactive (list (read-color "From: ") (read-color "To: ")
@@ -1270,6 +1323,8 @@ default `veryfast' is much quicker than ffmpeg's slow `medium' default."
              ("Playback speed…" . cmacs-vidstudio-set-clip-speed)
              ("Add keyframe…" . cmacs-vidstudio-add-keyframe-cmd)
              ("Clear keyframes…" . cmacs-vidstudio-clear-keyframes-cmd)
+             ("Trim in/out (source slice)…" . cmacs-vidstudio-set-clip-trim-cmd)
+             ("Set on-timeline duration…" . cmacs-vidstudio-set-clip-duration-cmd)
              ("Split at playhead…" . cmacs-vidstudio-split-at-playhead)
              ("Active track…" . cmacs-vidstudio-set-active-track))
             ("Transport"
@@ -1324,13 +1379,16 @@ Press a key to run its command, or q / C-g to dismiss."
     ("C" "Colour clip…" cmacs-vidstudio-add-color)
     ("T" "Title…" cmacs-vidstudio-add-title)
     ("n" "New track" cmacs-vidstudio-add-track-cmd)]
-   ["Timeline"
-    ("a" "Active track…" cmacs-vidstudio-set-active-track)
+   ["Clip / length"
+    ("r" "Trim in/out (source)…" cmacs-vidstudio-set-clip-trim-cmd)
+    ("d" "Set on-timeline duration…" cmacs-vidstudio-set-clip-duration-cmd)
     ("t" "Transition…" cmacs-vidstudio-add-transition-cmd)
     ("e" "Effect…" cmacs-vidstudio-add-effect-cmd)
     ("s" "Split at playhead" cmacs-vidstudio-split-at-playhead)
-    ("g" "Go to frame…" cmacs-vidstudio-set-playhead-cmd)
     ("k" "Keyframe…" cmacs-vidstudio-add-keyframe-cmd)]
+   ["Timeline"
+    ("a" "Active track…" cmacs-vidstudio-set-active-track)
+    ("g" "Go to frame…" cmacs-vidstudio-set-playhead-cmd)]
    ["Audio"
     ("A" "Add audio…" cmacs-vidstudio-add-audio)
     ("V" "Audio gain…" cmacs-vidstudio-set-audio-gain)]]
@@ -1457,25 +1515,37 @@ Sets `cmacs-vidstudio--live'; leaves it nil (native path) on failure."
 
 ;; -- Interactive timeline strip: click to scrub + select, drag a clip's right
 ;;    edge to trim its duration (state vars declared near the top). --
-(defun cmacs-vidstudio--tl-press (buffer frame clip-id near-edge)
-  "Timeline press: select CLIP-ID, scrub to FRAME, arm trim when NEAR-EDGE."
+(defun cmacs-vidstudio--tl-press (buffer frame clip-id edge)
+  "Timeline press: select CLIP-ID, scrub to FRAME, arm a right-edge trim when
+EDGE is 1 (the cursor is on the clip's right/out edge)."
   (with-current-buffer buffer
     (setq cmacs-vidstudio--selected-clip (and (>= clip-id 0) clip-id)
-          cmacs-vidstudio--tl-trim (and (>= clip-id 0) (not (zerop near-edge))
-                                        clip-id)
+          cmacs-vidstudio--tl-trim (and (>= clip-id 0) (= edge 1) clip-id)
           cmacs-vidstudio--playhead frame)
     (cmacs-vidstudio--render)))
 
-(defun cmacs-vidstudio--tl-drag (buffer frame _clip-id _near-edge)
-  "Timeline drag: trim the armed clip to FRAME, else scrub the playhead."
+(defun cmacs-vidstudio--tl-drag (buffer frame _clip-id _edge)
+  "Timeline drag: trim the armed clip's right edge to FRAME, else scrub.
+For a video clip this moves the source out-point (showing more/less of the
+original, capped at the source end); for other clips it sets the on-timeline
+length.  Numeric in/out editing is on \[cmacs-vidstudio-set-clip-trim-cmd]."
   (with-current-buffer buffer
     (if cmacs-vidstudio--tl-trim
         (let* ((id cmacs-vidstudio--tl-trim)
                (start (cmacs-vidstudio-clip-start-frame
                        cmacs-vidstudio--handle id))
-               (dur (max 1 (- frame start))))
+               (newdur (max 1 (- frame start)))
+               (sl (cmacs-vidstudio-clip-slice cmacs-vidstudio--handle id)))
           (ignore-errors
-            (cmacs-vidstudio-set-clip-duration cmacs-vidstudio--handle id dur)))
+            (if sl
+                ;; video: set the out-point so the clip shows NEWDUR frames
+                (cmacs-vidstudio-set-clip-trim
+                 cmacs-vidstudio--handle id (nth 0 sl)
+                 (+ (nth 0 sl)
+                    (/ newdur (float (cmacs-vidstudio-fps
+                                      cmacs-vidstudio--handle)))))
+              (cmacs-vidstudio-set-clip-duration
+               cmacs-vidstudio--handle id newdur))))
       (setq cmacs-vidstudio--playhead frame))
     (cmacs-vidstudio--render)))
 

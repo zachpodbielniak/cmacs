@@ -229,6 +229,46 @@ flips once the decode lands and real frames replace the placeholder."
     (cmacs-imgedit-free h)
     path))
 
+(ert-deftest cmacs-vidstudio-trim-in-out ()
+  "Re-slicing a video clip's in/out points recomputes its on-timeline length;
+the on-timeline duration is independent of the slice; both round-trip through
+serialization."
+  (skip-unless (executable-find "ffmpeg"))
+  (let ((vid (make-temp-file "vs-clip" nil ".mp4")))
+    (unwind-protect
+        (progn
+          (call-process "ffmpeg" nil nil nil "-y" "-v" "error" "-f" "lavfi"
+                        "-i" "color=c=red:s=64x48:d=2:r=30"
+                        "-pix_fmt" "yuv420p" vid)
+          (let ((h (cmacs-vidstudio-new 64 48 30.0)))
+            (unwind-protect
+                (let ((id (cmacs-vidstudio-add-video-clip h 0 vid nil)))
+                  (should (equal (cmacs-vidstudio-clip-slice h id)
+                                 '(0.0 2.0 2.0)))
+                  (should (= (cmacs-vidstudio-clip-duration h id) 60))
+                  ;; re-slice to a 1s window -> duration follows
+                  (should (cmacs-vidstudio-set-clip-trim h id 0.5 1.5))
+                  (should (equal (cmacs-vidstudio-clip-slice h id)
+                                 '(0.5 1.5 2.0)))
+                  (should (= (cmacs-vidstudio-clip-duration h id) 30))
+                  ;; on-timeline duration is independent (freeze-hold)
+                  (should (cmacs-vidstudio-set-clip-duration h id 90))
+                  (should (= (cmacs-vidstudio-clip-duration h id) 90))
+                  (should (equal (cmacs-vidstudio-clip-slice h id)
+                                 '(0.5 1.5 2.0)))
+                  ;; both round-trip through serialize/reload
+                  (let ((h2 (cmacs-vidstudio--build-from-sexp
+                             (car (read-from-string
+                                   (cmacs-vidstudio-serialize h))))))
+                    (unwind-protect
+                        (progn
+                          (should (equal (cmacs-vidstudio-clip-slice h2 id)
+                                         '(0.5 1.5 2.0)))
+                          (should (= (cmacs-vidstudio-clip-duration h2 id) 90)))
+                      (cmacs-vidstudio-free h2))))
+              (cmacs-vidstudio-free h))))
+      (ignore-errors (delete-file vid)))))
+
 (ert-deftest cmacs-vidstudio-picture-in-picture ()
   "A clip with a destination box renders as an overlay window (video-in-
 video), compositing over the tracks beneath it, and the box survives a

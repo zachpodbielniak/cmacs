@@ -208,6 +208,13 @@ extern gboolean cmacs_vidstudio_proj_set_transform (CmacsVidProject *p,
 extern gboolean cmacs_vidstudio_proj_set_clip_box (CmacsVidProject *p,
                                                    gint clip_id, int x, int y,
                                                    int w, int h);
+extern gboolean cmacs_vidstudio_proj_set_clip_trim (CmacsVidProject *p,
+                                                    gint clip_id, double in_sec,
+                                                    double out_sec);
+extern gboolean cmacs_vidstudio_proj_clip_slice (CmacsVidProject *p,
+                                                 gint clip_id, double *in_sec,
+                                                 double *out_sec,
+                                                 double *src_dur);
 extern gboolean cmacs_vidstudio_proj_set_anchor (CmacsVidProject *p,
                                                  gint clip_id, double ax,
                                                  double ay);

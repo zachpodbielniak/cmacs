@@ -1716,6 +1716,73 @@ cmacs_vidstudio_proj_set_clip_duration (CmacsVidProject *p, gint clip_id,
   return TRUE;
 }
 
+/* Change the source in/out slice of a VIDEO clip after import (the "original
+   included time lengths/offsets"): resolve in/out against the source duration
+   exactly like import, update the engine trim + the descriptor, and recompute
+   the on-timeline length from the slice.  Non-video clips have no source
+   slice, so this is a no-op returning FALSE. */
+gboolean
+cmacs_vidstudio_proj_set_clip_trim (CmacsVidProject *p, gint clip_id,
+                                    double in_sec, double out_sec)
+{
+  VidTrack *t = NULL;
+  guint si = 0;
+  VidSeg *s;
+  LrgReelVideoClip *vc;
+  LrgReelVideoSource *src;
+  double src_dur, in, out;
+  int frames;
+
+  if (p == NULL || !find_seg (p, clip_id, &t, &si))
+    return FALSE;
+  s = &g_array_index (t->segs, VidSeg, si);
+  if (!LRG_IS_REEL_VIDEO_CLIP (s->clip))
+    return FALSE;
+  vc = LRG_REEL_VIDEO_CLIP (s->clip);
+  src = lrg_reel_video_clip_get_source (vc);
+  src_dur = lrg_reel_video_source_get_duration (src);
+  in  = (in_sec < 0.0) ? 0.0 : in_sec;
+  out = (out_sec <= 0.0 || (src_dur > 0.0 && out_sec > src_dur))
+          ? src_dur : out_sec;
+  if (src_dur > 0.0 && out <= in)
+    out = src_dur;
+  lrg_reel_video_clip_set_trim_start (vc, in);
+  lrg_reel_video_clip_set_trim_end (vc, out);
+  s->in_sec = in;
+  s->out_sec = out;
+  frames = (int) ((out - in) * p->fps + 0.5);
+  if (frames < 1)
+    frames = 1;
+  s->duration = frames;
+  lrg_reel_clip_set_duration_in_frames (s->clip, frames);
+  p->dirty = TRUE;
+  return TRUE;
+}
+
+/* Read a VIDEO clip's current slice: in/out points (seconds) + the source's
+   full duration (for prompting sensible defaults/bounds). */
+gboolean
+cmacs_vidstudio_proj_clip_slice (CmacsVidProject *p, gint clip_id,
+                                 double *in_sec, double *out_sec,
+                                 double *src_dur)
+{
+  VidTrack *t = NULL;
+  guint si = 0;
+  VidSeg *s;
+
+  if (p == NULL || !find_seg (p, clip_id, &t, &si))
+    return FALSE;
+  s = &g_array_index (t->segs, VidSeg, si);
+  if (!LRG_IS_REEL_VIDEO_CLIP (s->clip))
+    return FALSE;
+  if (in_sec) *in_sec = s->in_sec;
+  if (out_sec) *out_sec = s->out_sec;
+  if (src_dur)
+    *src_dur = lrg_reel_video_source_get_duration
+                 (lrg_reel_video_clip_get_source (LRG_REEL_VIDEO_CLIP (s->clip)));
+  return TRUE;
+}
+
 /* Resolve a whole-video clip's on-timeline length from its real decoded frame
    count.  Import derives the length from ffprobe (get_duration); when ffprobe
    is unavailable or cannot probe the container, that is 0 and the clip lands

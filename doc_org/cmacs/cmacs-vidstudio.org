@@ -353,3 +353,19 @@ ripple are simple descriptor operations and the series recomputes frame layout.
 - *Transition easing*: the "Easing" prompt now offers all 31 curves.  (It
   previously passed the default as completing-read's INITIAL-INPUT, which
   filtered the candidate list down to just "linear".)
+
+- *Editing a clip's length after import*:
+  - *Trim in/out (source slice)* -- ~r~ / "Trim in/out (source slice)"
+    (cmacs-vidstudio-set-clip-trim) sets which part of the ORIGINAL video plays
+    (in/out seconds); the on-timeline length follows.  The prompt shows the
+    current slice and the source's full duration.
+  - *Set on-timeline duration* -- ~d~ / "Set on-timeline duration"
+    (cmacs-vidstudio-set-clip-duration) sets how long the clip occupies the
+    timeline; for a video, extending past its slice holds the last frame.
+  - *Drag the right edge* of a clip on the timeline strip to trim it: for a
+    video this moves the source out-point (showing more/less of the original,
+    capped at the source end); for other clips it changes the on-timeline
+    length.  (The transition-series timeline anchors each clip's start, so the
+    left edge is not drag-trimmed -- use "Trim in/out" for the in-point.)
+  Both the slice and a divergent on-timeline duration are saved in the
+  .vstudio project.

@@ -202,16 +202,16 @@ defer_image (CmacsLibregnumView *v, const char *event,
   g_main_context_invoke (cmacs_glib_get_context (), image_action_idle, a);
 }
 
-/* Timeline strip event: (FRAME CLIP-ID NEAR-EDGE 0) via image_action_idle,
-   reusing the dx/dy/button fields.  NEAR-EDGE non-zero => drag trims. */
+/* Timeline strip event: (FRAME CLIP-ID EDGE 0) via image_action_idle,
+   reusing the dx/dy/button fields.  EDGE: 0 body, 1 right, 2 left. */
 static void
 defer_image_timeline (CmacsLibregnumView *v, const char *event,
-                      int frame, int clip_id, gboolean near_edge)
+                      int frame, int clip_id, int edge)
 {
   ImageAction *a = g_new0 (ImageAction, 1);
   a->buffer = cmacs_libregnum_view_get_buffer (v);
   a->event = event;
-  a->dx = frame; a->dy = clip_id; a->button = near_edge ? 1 : 0; a->mods = 0;
+  a->dx = frame; a->dy = clip_id; a->button = edge; a->mods = 0;
   g_main_context_invoke (cmacs_glib_get_context (), image_action_idle, a);
 }
 
@@ -603,7 +603,7 @@ cmacs_libregnum_handle_motion (struct frame *f, double x, double y)
           {
             /* Scrub/trim: report the frame + clip under the cursor. */
             int tf = 0, tcid = -1;
-            gboolean tedge = FALSE;
+            int tedge = 0;
             cmacs_libregnum_render_ctx_image_timeline_hit
               (ctx, vx, vy, vw, vh, &tf, &tcid, &tedge);
             defer_image_timeline (v, "cmacs-libregnum--image-timeline-drag",
@@ -772,7 +772,7 @@ cmacs_libregnum_handle_button (struct frame *f, int button, int press,
         if (button == 1)
           {
             int tf = 0, tcid = -1;
-            gboolean tedge = FALSE;
+            int tedge = 0;
             if (press)
               {
                 /* A press inside the timeline strip starts a scrub/select/trim
@@ -837,7 +837,7 @@ cmacs_libregnum_handle_button (struct frame *f, int button, int press,
                 /* Report the timeline clip under the cursor (if any) so the
                  * menu commands act on it without prompting. */
                 int tf = 0, tcid = -1;
-                gboolean tedge = FALSE;
+                int tedge = 0;
                 if (in)
                   cmacs_libregnum_render_ctx_image_timeline_hit
                     (ctx, vx, vy, vw, vh, &tf, &tcid, &tedge);

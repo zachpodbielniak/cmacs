@@ -860,6 +860,38 @@ ffprobe could not determine the duration at import).  */)
   return changed ? Qt : Qnil;
 }
 
+DEFUN ("cmacs-vidstudio-set-clip-trim", Fcmacs_vidstudio_set_clip_trim,
+       Scmacs_vidstudio_set_clip_trim, 4, 4, 0,
+       doc: /* Set video CLIP-ID's source in/out slice to IN-SEC..OUT-SEC
+seconds (the portion of the original that plays), recomputing the on-timeline
+length.  IN-SEC < 0 means the source start; OUT-SEC <= 0 or past the end means
+the source end.  Only video clips have a source slice.  */)
+  (Lisp_Object handle, Lisp_Object clip_id, Lisp_Object in_sec,
+   Lisp_Object out_sec)
+{
+  CHECK_FIXNUM (clip_id);
+  return cmacs_vidstudio_proj_set_clip_trim (vs_lookup (handle),
+                                             (gint) XFIXNUM (clip_id),
+                                             vs_dbl (in_sec, -1.0),
+                                             vs_dbl (out_sec, -1.0))
+         ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-vidstudio-clip-slice", Fcmacs_vidstudio_clip_slice,
+       Scmacs_vidstudio_clip_slice, 2, 2, 0,
+       doc: /* Return (IN-SEC OUT-SEC SOURCE-DURATION) for video CLIP-ID, or
+nil for a non-video clip.  */)
+  (Lisp_Object handle, Lisp_Object clip_id)
+{
+  double in = 0.0, out = 0.0, dur = 0.0;
+  CHECK_FIXNUM (clip_id);
+  if (!cmacs_vidstudio_proj_clip_slice (vs_lookup (handle),
+                                        (gint) XFIXNUM (clip_id),
+                                        &in, &out, &dur))
+    return Qnil;
+  return list3 (make_float (in), make_float (out), make_float (dur));
+}
+
 DEFUN ("cmacs-vidstudio-set-clip-duration", Fcmacs_vidstudio_set_clip_duration,
        Scmacs_vidstudio_set_clip_duration, 3, 3, 0,
        doc: /* Set CLIP-ID's duration to FRAMES.  */)
@@ -1144,6 +1176,8 @@ syms_of_cmacs_vidstudio_defuns (void)
   defsubr (&Scmacs_vidstudio_add_effect);
   defsubr (&Scmacs_vidstudio_clear_effects);
   defsubr (&Scmacs_vidstudio_refresh_video_duration);
+  defsubr (&Scmacs_vidstudio_set_clip_trim);
+  defsubr (&Scmacs_vidstudio_clip_slice);
   defsubr (&Scmacs_vidstudio_set_clip_duration);
   defsubr (&Scmacs_vidstudio_split_clip);
   defsubr (&Scmacs_vidstudio_move_clip);
