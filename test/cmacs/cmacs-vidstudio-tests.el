@@ -13,6 +13,12 @@
 ;;; Code:
 
 (require 'ert)
+;; Some tests use the Elisp layer's helpers (cmacs-vidstudio--build-from-sexp,
+;; --cache-ppm) rather than only the C DEFUNs (which live in the dump).  Load
+;; it so `make check-cmacs' -- which does not -l the subsystem -- has them.
+;; Soft (nil t) so a vidstudio-less build still loads this file (its tests then
+;; skip via cmacs-vidstudio-tests--skip-unless).
+(require 'cmacs-vidstudio nil t)
 
 (defmacro cmacs-vidstudio-tests--skip-unless ()
   '(skip-unless (and (fboundp 'cmacs-vidstudio-supported-p)
