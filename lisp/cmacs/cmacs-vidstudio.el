@@ -1057,8 +1057,8 @@ Emacs's main thread long enough that the compositor reports it as hung)."
 
 (defun cmacs-vidstudio-export-video-cmd (path codec preset)
   "Export the project to PATH in the background using CODEC + PRESET.
-CODEC picks the encoder; PRESET (x264/x265) trades speed for size --
-"veryfast" is a good default ("medium" is the ffmpeg default and slower)."
+CODEC picks the encoder; PRESET (x264/x265) trades speed for size -- the
+default `veryfast' is much quicker than ffmpeg's slow `medium' default."
   (interactive
    (list (read-file-name "Export video to: ")
          (cdr (assoc (completing-read "Codec: " cmacs-vidstudio-codec-alist
