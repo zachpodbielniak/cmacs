@@ -376,3 +376,6 @@ ripple are simple descriptor operations and the series recomputes frame layout.
   via ~ffplay~ (or ~mpv~; ~paplay~/~aplay~ only from the very start, since they
   cannot seek); with none of those installed the preview is silent (a one-time
   message says so).  Pausing / reaching the end stops the audio.
+- *Seeking while playing* (go-to-frame ~g~, step, or scrubbing the timeline
+  strip) re-anchors the video and restarts the preview audio at the new
+  position; a drag-scrub restarts audio once on release, not per motion.

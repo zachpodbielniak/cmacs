@@ -59,6 +59,10 @@ available; nil falls back to the PPM/PNG insert-image preview.")
   "External audio-playback process during preview, or nil.")
 (defvar-local cmacs-vidstudio--audio-wav nil
   "Temp WAV of the mixed project audio for preview playback.")
+(defvar-local cmacs-vidstudio--play-start-frame 0
+  "Wall-clock play anchor: the frame play (re)started from.")
+(defvar-local cmacs-vidstudio--play-t0 0.0
+  "Wall-clock play anchor: `float-time' when play (re)started.")
 (defvar-local cmacs-vidstudio--preview-scale 0.5)
 (defcustom cmacs-vidstudio-playback-scale 0.4
   "Preview scale used WHILE playing (a low-res proxy for near-real-time
@@ -383,6 +387,22 @@ the wall-clock playhead.  No-op when the project has no audio."
               (message "vidstudio: no audio player found (install ffplay or mpv) -- preview is silent"))))
       (error (message "vidstudio: audio preview unavailable: %s"
                       (error-message-string err))))))
+
+(defun cmacs-vidstudio--seek (frame &optional quiet-audio)
+  "Move the playhead to FRAME (clamped >= 0).  When playing, re-anchor the
+wall-clock reference so the video follows, and -- unless QUIET-AUDIO --
+restart preview audio at the new position so seeking stays in sync.  Pass
+QUIET-AUDIO for per-motion drag scrubs (restarting ffplay every motion would
+churn processes); do a final non-quiet seek on release.  Then re-render."
+  (setq cmacs-vidstudio--playhead (max 0 frame))
+  (when cmacs-vidstudio--play-timer
+    (setq cmacs-vidstudio--play-start-frame cmacs-vidstudio--playhead
+          cmacs-vidstudio--play-t0 (float-time))
+    (unless quiet-audio
+      (cmacs-vidstudio--audio-start
+       (/ cmacs-vidstudio--playhead
+          (max 1.0 (cmacs-vidstudio-fps cmacs-vidstudio--handle))))))
+  (cmacs-vidstudio--render))
 
 (defun cmacs-vidstudio--cache-stop ()
   "Tear down the playback frame cache + prefetch."
@@ -1075,20 +1095,17 @@ source slice; to change which part of the source plays use \[cmacs-vidstudio-set
 (defun cmacs-vidstudio-set-playhead-cmd (frame)
   "Set the playhead to FRAME."
   (interactive (list (read-number "Frame: " cmacs-vidstudio--playhead)))
-  (setq cmacs-vidstudio--playhead frame)
-  (cmacs-vidstudio--render))
+  (cmacs-vidstudio--seek frame))
 
 (defun cmacs-vidstudio-step-forward ()
   "Advance the playhead by one frame."
   (interactive)
-  (cl-incf cmacs-vidstudio--playhead)
-  (cmacs-vidstudio--render))
+  (cmacs-vidstudio--seek (1+ cmacs-vidstudio--playhead)))
 
 (defun cmacs-vidstudio-step-back ()
   "Move the playhead back one frame."
   (interactive)
-  (setq cmacs-vidstudio--playhead (max 0 (1- cmacs-vidstudio--playhead)))
-  (cmacs-vidstudio--render))
+  (cmacs-vidstudio--seek (1- cmacs-vidstudio--playhead)))
 
 (defun cmacs-vidstudio-pause ()
   "Stop playback and re-render the full-resolution frame."
@@ -1133,10 +1150,11 @@ silently updates.  Starting play at the end of the timeline rewinds."
       (cmacs-vidstudio--cache-start)
       (let ((buf (current-buffer))
             (fps (max 1.0 (cmacs-vidstudio-fps cmacs-vidstudio--handle)))
-            (start-frame cmacs-vidstudio--playhead)
-            (t0 (float-time))
             (tick (/ 1.0 (max 1 cmacs-vidstudio-preview-fps))))
-        (cmacs-vidstudio--audio-start (/ start-frame fps))
+        (setq cmacs-vidstudio--play-start-frame cmacs-vidstudio--playhead
+              cmacs-vidstudio--play-t0 (float-time))
+        (cmacs-vidstudio--audio-start
+         (/ cmacs-vidstudio--play-start-frame fps))
         (setq cmacs-vidstudio--play-timer
               (run-at-time
                tick tick
@@ -1146,8 +1164,10 @@ silently updates.  Starting play at the end of the timeline rewinds."
                    (with-current-buffer buf
                      (let* ((now-total (cmacs-vidstudio-total-frames
                                         cmacs-vidstudio--handle))
-                            (target (+ start-frame
-                                       (floor (* (- (float-time) t0) fps)))))
+                            (target (+ cmacs-vidstudio--play-start-frame
+                                       (floor (* (- (float-time)
+                                                    cmacs-vidstudio--play-t0)
+                                                 fps)))))
                        (cond
                         ((>= target now-total)
                          (setq cmacs-vidstudio--playhead (max 0 (1- now-total)))
@@ -1572,9 +1592,8 @@ Sets `cmacs-vidstudio--live'; leaves it nil (native path) on failure."
 EDGE is 1 (the cursor is on the clip's right/out edge)."
   (with-current-buffer buffer
     (setq cmacs-vidstudio--selected-clip (and (>= clip-id 0) clip-id)
-          cmacs-vidstudio--tl-trim (and (>= clip-id 0) (= edge 1) clip-id)
-          cmacs-vidstudio--playhead frame)
-    (cmacs-vidstudio--render)))
+          cmacs-vidstudio--tl-trim (and (>= clip-id 0) (= edge 1) clip-id))
+    (cmacs-vidstudio--seek frame t)))
 
 (defun cmacs-vidstudio--tl-drag (buffer frame _clip-id _edge)
   "Timeline drag: trim the armed clip's right edge to FRAME, else scrub.
@@ -1597,17 +1616,25 @@ length.  Numeric in/out editing is on \[cmacs-vidstudio-set-clip-trim-cmd]."
                     (/ newdur (float (cmacs-vidstudio-fps
                                       cmacs-vidstudio--handle)))))
               (cmacs-vidstudio-set-clip-duration
-               cmacs-vidstudio--handle id newdur))))
-      (setq cmacs-vidstudio--playhead frame))
-    (cmacs-vidstudio--render)))
+               cmacs-vidstudio--handle id newdur)))
+          (cmacs-vidstudio--render))
+      ;; scrub: --seek re-anchors the video; audio restarts on release (not
+      ;; every motion) so the player process is not churned.
+      (cmacs-vidstudio--seek frame t))))
 
-(defun cmacs-vidstudio--tl-release (buffer _frame _clip-id _near-edge)
-  "Timeline release: end any trim gesture."
+(defun cmacs-vidstudio--tl-release (buffer _frame _clip-id _edge)
+  "Timeline release: end a trim gesture, or re-sync preview audio to the final
+playhead after a scrub."
   (with-current-buffer buffer
-    (when cmacs-vidstudio--tl-trim
-      (setq cmacs-vidstudio--tl-trim nil)
-      (message "Trimmed clip #%s" cmacs-vidstudio--selected-clip))
-    (cmacs-vidstudio--render)))
+    (if cmacs-vidstudio--tl-trim
+        (progn
+          (setq cmacs-vidstudio--tl-trim nil)
+          (message "Trimmed clip #%s" cmacs-vidstudio--selected-clip)
+          (cmacs-vidstudio--render))
+      ;; a scrub just ended -- restart audio at where it landed
+      (if cmacs-vidstudio--play-timer
+          (cmacs-vidstudio--seek cmacs-vidstudio--playhead)
+        (cmacs-vidstudio--render)))))
 
 (defun cmacs-vidstudio--cleanup ()
   "Stop playback and free the project when the buffer dies."
