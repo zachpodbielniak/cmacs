@@ -951,19 +951,65 @@ silently updates.  Starting play at the end of the timeline rewinds."
 ;; Export
 ;; --------------------------------------------------------------------------
 
+(defvar-local cmacs-vidstudio--export-process nil
+  "The running background export process for this project, or nil.")
+
+(defun cmacs-vidstudio--export-async (path export-form what)
+  "Export the current project to PATH in a background Emacs subprocess.
+EXPORT-FORM is a Lisp-form string run in the subprocess with `h' bound to the
+reloaded project handle and `out' to PATH.  WHAT names the format for
+messages.  The heavy render + ffmpeg run out-of-process via a `make-process'
+sentinel, so the editor stays fully responsive (a synchronous export blocks
+Emacs's main thread long enough that the compositor reports it as hung)."
+  (unless (fboundp 'cmacs-vidstudio-serialize)
+    (user-error "This build cannot serialize projects for background export"))
+  (when (process-live-p cmacs-vidstudio--export-process)
+    (user-error "An export is already running for this project"))
+  (let* ((path (expand-file-name path))
+         (sexp (cmacs-vidstudio-serialize cmacs-vidstudio--handle))
+         (tmp (make-temp-file "cmvs-export" nil ".vstudio"))
+         (lispdir (file-name-directory (locate-library "cmacs-vidstudio")))
+         (bin (expand-file-name invocation-name invocation-directory))
+         (buf (generate-new-buffer " *vidstudio-export-log*"))
+         (pbuf (current-buffer)))
+    (with-temp-file tmp (insert sexp))
+    (setq cmacs-vidstudio--export-process
+          (make-process
+           :name "vidstudio-export" :buffer buf :noquery t
+           :command
+           (list bin "-Q" "-batch" "-L" lispdir "-l" "cmacs-vidstudio" "--eval"
+                 (format "(let* ((data (with-temp-buffer (insert-file-contents %S) (read (current-buffer)))) (h (cmacs-vidstudio--build-from-sexp data)) (out %S)) %s)"
+                         tmp path export-form))
+           :sentinel
+           (lambda (proc _event)
+             (when (memq (process-status proc) '(exit signal))
+               (ignore-errors (delete-file tmp))
+               (let ((ok (and (eq (process-status proc) 'exit)
+                              (zerop (process-exit-status proc))
+                              (file-exists-p path))))
+                 (when (buffer-live-p pbuf)
+                   (with-current-buffer pbuf
+                     (setq cmacs-vidstudio--export-process nil)))
+                 (if ok
+                     (progn (message "vidstudio: exported %s -> %s" what
+                                     (abbreviate-file-name path))
+                            (kill-buffer buf))
+                   (message "vidstudio: %s export FAILED (see %s)"
+                            what (buffer-name buf))))))))
+    (message "vidstudio: exporting %s to %s in the background (editor stays usable)"
+             what (file-name-nondirectory path))))
+
 (defun cmacs-vidstudio-export-video-cmd (path)
-  "Export the project to PATH (H.264 mp4)."
+  "Export the project to PATH (H.264 mp4) in the background."
   (interactive "FExport video to: ")
-  (message "Exporting...")
-  (cmacs-vidstudio-export-video cmacs-vidstudio--handle (expand-file-name path) 0)
-  (message "Wrote %s" path))
+  (cmacs-vidstudio--export-async
+   path "(cmacs-vidstudio-export-video h out 0)" "video"))
 
 (defun cmacs-vidstudio-export-gif-cmd (path)
-  "Export the project to PATH as an animated GIF."
+  "Export the project to PATH as an animated GIF in the background."
   (interactive "FExport GIF to: ")
-  (message "Exporting...")
-  (cmacs-vidstudio-export-gif cmacs-vidstudio--handle (expand-file-name path))
-  (message "Wrote %s" path))
+  (cmacs-vidstudio--export-async
+   path "(cmacs-vidstudio-export-gif h out)" "GIF"))
 
 ;; --------------------------------------------------------------------------
 ;; Right-click context menu (GTK under pgtk, in-engine under --lrg)

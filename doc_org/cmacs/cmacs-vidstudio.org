@@ -324,3 +324,8 @@ ripple are simple descriptor operations and the series recomputes frame layout.
 - The strip clip-id labels are drawn in the *Emacs UI font*
   (~fc-match~ of the default face -> ~grl_draw_text_ex~; falls back to the
   built-in font), so they match the editor and stay readable.
+- *Export is asynchronous*: ~E~ (video) and ~G~ (GIF) serialise the
+  project and run the render + ffmpeg out-of-process in a background
+  ~emacs -batch~ subprocess (a `make-process' sentinel reports completion),
+  so the editor stays responsive -- a synchronous export blocked Emacs's main
+  thread long enough that the compositor flagged it as hung.
