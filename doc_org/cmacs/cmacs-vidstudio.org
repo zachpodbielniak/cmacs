@@ -311,8 +311,8 @@ ripple are simple descriptor operations and the series recomputes frame layout.
 #+end_src
 
 - Press ~?~ in cmacs-vidstudio-mode to pop a *transient keybinding menu* (a magit-style cheat-sheet grouped by category); press any listed key to run its command, or ~q~ / ~C-g~ to dismiss.
-- The *header line* shows a compact per-track *clip list with IDs*
-  (~#id[start+dur]~), the active track (marked ~*~) and the selected clip
-  (highlighted) -- so you can read the clip id a command asks for.  In the
-  live viewport the header line is the textual list (the graphical strip
-  along the bottom is the clickable timeline).
+- The in-viewport *timeline strip* labels each clip block with its *id*
+  (~#N~, white with a drop-shadow, drawn via ~grl_draw_text~ when it fits),
+  so you can read the clip id a command asks for right off the block you
+  click.  Blocks are colour-coded per clip, one row per track, with the
+  playhead line.

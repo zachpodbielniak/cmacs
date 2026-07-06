@@ -746,6 +746,21 @@ ctx_image_draw_overlay (CmacsLibregnumRenderCtx *r)
           int by = y0 + cl->track * rowh;
           grl_draw_rectangle (bx, by + 1, bw, rowh - 2, col);
           grl_draw_rectangle_lines (bx, by + 1, bw, rowh - 2, edge);
+          /* Clip id label on the block (drop-shadow for contrast), drawn
+             only when it fits inside the block width. */
+          {
+            char idbuf[16];
+            int fs = MAX (8, MIN (14, rowh - 8));
+            g_snprintf (idbuf, sizeof idbuf, "#%d", cl->id);
+            if (bw > grl_measure_text (idbuf, fs) + 6)
+              {
+                g_autoptr (GrlColor) sh = grl_color_new (0, 0, 0, 210);
+                g_autoptr (GrlColor) fg = grl_color_new (255, 255, 255, 255);
+                int tx = bx + 4, ty = by + (rowh - fs) / 2;
+                grl_draw_text (idbuf, tx + 1, ty + 1, fs, sh);
+                grl_draw_text (idbuf, tx, ty, fs, fg);
+              }
+          }
         }
       {
         int phx = r->image_playhead * r->width / r->image_total_frames;
