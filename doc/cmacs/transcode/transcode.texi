@@ -1,0 +1,298 @@
+@c transcode.texi --- master file for the CMacs Transcode docs
+@c Copyright (C) 2026 Zach Podbielniak
+@c SPDX-License-Identifier: AGPL-3.0-or-later
+
+@node CMacs Transcode
+@chapter CMacs Transcode: Native ffmpeg Batch Transcoder
+
+@cindex transcode
+@cindex ffmpeg
+@cindex compress_video
+@cindex compress_audio
+@cindex podman
+@cindex linuxserver/ffmpeg
+
+@code{cmacs-transcode} is a native reimplementation of the author's
+@command{compress_video} and @command{compress_audio} shell scripts: it
+batch-transcodes video and audio with ffmpeg, driven entirely from inside
+Emacs.  Emacs itself spawns and supervises the ffmpeg processes as a bounded
+parallel pool (no GNU parallel), and streams live per-job status into a
+dedicated queue buffer that redraws on a timer.
+
+By default it runs ffmpeg inside a podman or docker
+@code{linuxserver/ffmpeg} container --- which is guaranteed to carry a full
+codec set that a stock host ffmpeg may lack --- and transparently falls back
+to a host @command{ffmpeg} binary when no container runtime is present.
+
+It is a pure-Elisp subsystem (no C).  Enable it with
+@option{--with-cmacs-transcode} (part of the standard flag set); at runtime
+it needs podman, docker, or a host @command{ffmpeg}.  The build flag is
+exposed as @code{IS-CMACS-TRANSCODE} and @code{(cmacs-feature-p 'transcode)}.
+
+@menu
+* Transcode Quick Start::       Transcoding files in three keystrokes.
+* Transcode Queue Buffer::      The control-panel-plus-status buffer.
+* Transcode Backends::          Container vs.@: host, and how it is chosen.
+* Transcode Options::           Every tunable @code{defcustom}.
+* Transcode ffmpeg Mapping::    What arguments each option produces.
+* Transcode Examples::          Common recipes.
+@end menu
+
+@node Transcode Quick Start
+@section Quick Start
+
+@table @kbd
+@item M-x cmacs-transcode-video
+Open a video session.  In Dired this queues the marked files; elsewhere it
+prompts for a file or directory.
+@item M-x cmacs-transcode-audio
+The same for an audio session.
+@item M-x cmacs-transcode
+Open the queue buffer without adding anything (add files with @kbd{a}).
+@end table
+
+In the resulting @code{*cmacs-transcode*} buffer, press @kbd{a} to add more
+files, tune options with the single-key commands, then @kbd{RET} to start.
+Outputs are written to @file{output/} under the current project root by
+default.  With the shipped defaults, a video job reproduces the author's usual
+@command{compress_video --no-hwaccel --crf 26} invocation (H.265 video, Vorbis
+audio, Matroska container); an audio job produces a 320@dmn{kbps} MP3.
+
+@node Transcode Queue Buffer
+@section The Queue Buffer
+
+The @code{*cmacs-transcode*} buffer (major mode @code{cmacs-transcode-mode},
+derived from @code{special-mode}) is both the control panel and the live
+status view.  Its header shows the resolved backend and the current options;
+each queued file is one line showing a status glyph (@code{…} queued,
+@code{▶} running, @code{✔} done, @code{✗} failed, @code{–} skipped), the file
+name, and --- while running --- the latest ffmpeg progress line.  A timer
+(@code{cmacs-transcode-poll-interval}, default 2@dmn{s}) redraws the buffer
+while jobs run; it also redraws on every state change and self-cancels when
+the pool drains.
+
+@table @kbd
+@item a
+Add a media file or directory (prefix arg: recurse directories).
+@item A
+Add a directory recursively.
+@item d
+Remove the job on the current line.
+@item k
+Kill the running job on the current line (no retry).
+@item @key{RET}
+Start transcoding the queued jobs.
+@item p
+Toggle parallelism between sequential and the configured job count.
+@item P
+Set the number of concurrent jobs.
+@item c
+Set the video codec (or, in an audio session, the audio format/codec).
+@item q
+Set the CRF (video) or the custom bitrate (audio).
+@item f
+Set the container/format.
+@item H
+Cycle the video hwaccel state: off @arrow{} auto @arrow{} force @arrow{}
+vulkan @arrow{} off.
+@item o
+Set the output directory.
+@item m
+Toggle the process-missing filter (only encode files lacking an output).
+@item x
+Toggle the process-existing filter (only re-encode files that already have
+an output).
+@item M
+Switch the session between video and audio.
+@item l
+Show the @code{*cmacs-transcode-log*} buffer (full ffmpeg output).
+@item g
+Redraw the buffer.
+@item ?
+Echo the key hints.
+@end table
+
+Each session holds a job list plus an options plist that is @emph{seeded} from
+the @code{defcustom} values (@pxref{Transcode Options}) when the session is
+created; the single-key commands override those per session without mutating
+the customs.  Under Evil/Doom the mode map is made an overriding map so the
+single-key bindings win in every state.
+
+@node Transcode Backends
+@section Backends: Container or Host
+
+The backend is resolved at runtime by @code{cmacs-transcode--resolve}, honoured
+in this order:
+
+@enumerate
+@item
+the @env{CMACS_TRANSCODE_CONTAINER_RUNTIME} environment variable, if set;
+@item
+the @code{cmacs-transcode-backend} option (@code{auto}, @code{podman},
+@code{docker}, or @code{host});
+@item
+availability: @code{auto} tries podman, then docker, then a host
+@command{ffmpeg}; an explicit choice falls back to whatever is available.
+@end enumerate
+
+For a container backend the input directory is bind-mounted at @file{/input}
+and the output directory at @file{/output} (or a single @file{/config} mount
+when the two coincide); ffmpeg receives the in-container paths.  ffprobe (used
+for colour-metadata and width probing) runs in the same image via
+@code{--entrypoint ffprobe}.  When hardware acceleration is active the DRI
+device is passed through (@code{--device}), with the Vulkan vendor environment
+variable set as needed.  A host backend runs the binaries directly on the real
+paths.  @code{(cmacs-transcode-supported-p)} is non-@code{nil} when any backend
+resolves.
+
+@node Transcode Options
+@section Options
+
+Every knob is a @code{defcustom} in the @code{cmacs-transcode} group, so you can
+set your own defaults in your init file, e.g.:
+
+@example
+(setq cmacs-transcode-crf 26
+      cmacs-transcode-hwaccel 'off
+      cmacs-transcode-parallel-jobs 4)
+@end example
+
+@subsection General and backend
+
+@vtable @code
+@item cmacs-transcode-backend
+Preferred backend: @code{auto} (default), @code{podman}, @code{docker}, or
+@code{host}.
+@item cmacs-transcode-container-image
+Container image (default @code{docker.io/linuxserver/ffmpeg:latest}).
+@item cmacs-transcode-output-dir
+Output directory, or @code{nil} for @file{output/} under the project root.
+@item cmacs-transcode-parallel-jobs
+Concurrent ffmpeg processes (default @code{1}, i.e.@: sequential).
+@item cmacs-transcode-poll-interval
+Seconds between live redraws (default @code{2}; @code{nil} disables).
+@item cmacs-transcode-overwrite
+Pass @option{-y} to overwrite outputs (default @code{t}).
+@item cmacs-transcode-max-retries
+Attempts per video job before it fails (default @code{3}; audio is tried once).
+@item cmacs-transcode-process-filter
+@code{nil}, @code{missing}, or @code{existing}.
+@item cmacs-transcode-hwaccel-device
+VAAPI render node (default @file{/dev/dri/renderD128}).
+@end vtable
+
+@subsection Video
+
+@vtable @code
+@item cmacs-transcode-video-codec
+Default codec key (default @code{"h265"}); see
+@code{cmacs-transcode-video-codec-map}.
+@item cmacs-transcode-video-audio-codec
+Audio codec for video output (default @code{"vorbis"}).
+@item cmacs-transcode-video-format
+Container format (default @code{"mkv"}).
+@item cmacs-transcode-quality
+Named preset used when @code{cmacs-transcode-crf} is @code{nil} (default
+@code{"medium"}).
+@item cmacs-transcode-crf
+CRF for software/VAAPI encoding (default @code{26}); overrides the preset.
+@item cmacs-transcode-qp
+Optional QP for GPU encoding.
+@item cmacs-transcode-hwaccel
+@code{off} (default), @code{auto}, or @code{force}.
+@item cmacs-transcode-prefer-vulkan
+Prefer the Vulkan path over VAAPI.
+@item cmacs-transcode-prefer-software
+Force software even when a device exists.
+@item cmacs-transcode-auto-quality
+Pick CRF/QP from the input width.
+@item cmacs-transcode-resolution
+Output scaling, e.g.@: @code{"1280x720"}.
+@item cmacs-transcode-bitrate
+Target bitrate, overriding CRF/QP.
+@item cmacs-transcode-preset
+ffmpeg encoder preset (ultrafast @dots{} veryslow).
+@item cmacs-transcode-subtitles
+Copy subtitle streams into mkv/mp4 (default @code{t}).
+@item cmacs-transcode-preserve-color-metadata
+Probe and re-emit colour metadata to avoid tint shifts (default @code{t}).
+@item cmacs-transcode-color-primaries
+@itemx cmacs-transcode-color-trc
+@itemx cmacs-transcode-colorspace
+@itemx cmacs-transcode-color-range
+Explicit colour overrides (each @code{nil} = auto-detect).  Setting any one
+disables ffprobe detection.
+@end vtable
+
+@subsection Audio
+
+@vtable @code
+@item cmacs-transcode-audio-format
+Output format (default @code{"mp3"}).
+@item cmacs-transcode-audio-quality
+Named quality preset (default @code{"high"}).
+@item cmacs-transcode-audio-bitrate
+Custom bitrate, e.g.@: @code{"320k"}, overriding the preset.
+@item cmacs-transcode-audio-recursive
+Search added directories recursively.
+@item cmacs-transcode-audio-input-format
+Input extension filter for directory adds, e.g.@: @code{"flac"}.
+@end vtable
+
+@subsection Tunable tables
+
+The codec maps, quality/CRF presets, Vulkan bitrate presets, MP3/Vorbis preset
+maps, and the recognised input-extension lists are all @code{defcustom}s too
+(@code{cmacs-transcode-video-codec-map}, @code{cmacs-transcode-crf-presets},
+@code{cmacs-transcode-mp3-presets}, @code{cmacs-transcode-video-extensions},
+@dots{}), so you can add codecs or retune presets without touching the code.
+
+@node Transcode ffmpeg Mapping
+@section What Options Produce
+
+The argument builders are pure functions that mirror the scripts'
+@code{build_ffmpeg_args}.  With the shipped video defaults, an input
+@file{a.mp4} to @file{output/a.mkv} yields:
+
+@example
+ffmpeg -y -i a.mp4 -c:v libx265 -crf 26 \
+       -c:a libvorbis -q:a 4 \
+       -map 0:v -map 0:a? -map 0:s? -c:s copy \
+       output/a.mkv
+@end example
+
+With @code{cmacs-transcode-preserve-color-metadata} on, ffprobe-detected
+primaries/transfer/matrix/range are re-emitted (and, for software H.265, also
+folded into @option{-x265-params}).  A VAAPI job substitutes
+@option{-vaapi_device}, @code{hevc_vaapi}/@code{h264_vaapi}, and a
+@code{format=nv12|vaapi,hwupload} filter; a Vulkan job uses
+@code{hevc_vulkan}/@code{h264_vulkan} with a bitrate from the quality preset.
+An audio job to MP3 produces:
+
+@example
+ffmpeg -y -i a.wav -c:a libmp3lame -b:a 320k \
+       -vn -map 0:a -map_metadata 0 output/a.mp3
+@end example
+
+@node Transcode Examples
+@section Examples
+
+@table @asis
+@item Compress every mp4/mkv in a directory
+Open Dired, mark the files, @kbd{M-x cmacs-transcode-video}, @kbd{RET}.  This is
+the native equivalent of @command{compress_video --no-hwaccel --crf 26
+./*.@{mp4,mkv@}}.
+@item Two at a time
+In the buffer press @kbd{P} @kbd{2} (or @kbd{p} to toggle to the configured
+count), then @kbd{RET}.
+@item Only fill in what is missing
+Press @kbd{m} to enable the process-missing filter; already-transcoded outputs
+are marked skipped.
+@item Whole music library to OGG
+@kbd{M-x cmacs-transcode-audio} on the library directory (with
+@code{cmacs-transcode-audio-recursive} on), press @kbd{f} and choose
+@code{ogg}, then @kbd{RET}; the directory tree is preserved under
+@file{output/}.
+@item Hardware-accelerated H.265
+Press @kbd{H} to cycle to @code{auto} (VAAPI) or @code{vulkan}, then @kbd{RET}.
+@end table

@@ -64,6 +64,7 @@ interaction.
 * CMacs Lrgterm::               Independent libregnum/raylib display backend (--lrg).
 * CMacs Imgedit::               2D image / sprite editor (layers, tools, clipboard).
 * CMacs Vidstudio::             Reel-based video editor (timeline, transitions, export).
+* CMacs Transcode::             Native ffmpeg batch video/audio transcoder.
 * Build Configuration::         Configure flags and dependencies.
 * Upstream Changes::            Every edit cmacs makes to stock Emacs sources.
 @end menu
@@ -8979,6 +8980,9 @@ viewport; a low-resolution proxy keeps playback near real-time.
 @end itemize
 
 @c ===================================================================
+@include transcode/transcode.texi
+
+@c ===================================================================
 @node Build Configuration
 @chapter Build Configuration
 
@@ -9027,6 +9031,7 @@ fully-featured build matching Fedora defaults, use:
   --with-cmacs-gsurf \
   --with-cmacs-emacsctl \
   --with-cmacs-lrgterm \
+  --with-cmacs-transcode \
   --enable-cmacs-cpatch \
   --enable-cmacs-deps-debug   # in-house deps -O0 -g3 (DWARF): gdb + runtime cintrospection
 @end example

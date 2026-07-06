@@ -1,0 +1,136 @@
+#+TITLE: CMacs Transcode — Option & ffmpeg-mapping Reference
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:2 num:nil
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+Reference for every =cmacs-transcode= =defcustom= and the ffmpeg arguments each
+option produces.  See [[file:index.org][the guide]] for the workflow.
+
+Set defaults in your init file, for example:
+
+#+begin_src emacs-lisp
+(setq cmacs-transcode-crf 26
+      cmacs-transcode-hwaccel 'off
+      cmacs-transcode-parallel-jobs 4)
+#+end_src
+
+The interactive queue buffer seeds each session from these values and lets you
+override any of them per session (buffer edits never mutate the customs).
+
+* General & backend options
+
+| Option                             | Default                               | Meaning                                             |
+|------------------------------------+---------------------------------------+-----------------------------------------------------|
+| =cmacs-transcode-backend=          | =auto=                                | =auto= (podman→docker→host), =podman=, =docker=, =host= |
+| =cmacs-transcode-container-image=  | =docker.io/linuxserver/ffmpeg:latest= | Image for the container backend                     |
+| =cmacs-transcode-output-dir=       | =nil=                                 | =nil= ⇒ =output/= under the project root            |
+| =cmacs-transcode-parallel-jobs=    | =1=                                   | Concurrent ffmpeg processes (1 = sequential)        |
+| =cmacs-transcode-poll-interval=    | =2=                                   | Seconds between live redraws (=nil= disables)       |
+| =cmacs-transcode-overwrite=        | =t=                                   | Pass =-y= to overwrite outputs                      |
+| =cmacs-transcode-max-retries=      | =3=                                   | Attempts per video job (audio is tried once)        |
+| =cmacs-transcode-process-filter=   | =nil=                                 | =nil=, =missing=, or =existing=                     |
+| =cmacs-transcode-hwaccel-device=   | =/dev/dri/renderD128=                 | VAAPI render node                                   |
+
+Environment override: =CMACS_TRANSCODE_CONTAINER_RUNTIME= (e.g. =podman= /
+=docker= / =host=) wins over =cmacs-transcode-backend=.
+
+* Video options
+
+| Option                                  | Default    | Meaning                                       |
+|-----------------------------------------+------------+-----------------------------------------------|
+| =cmacs-transcode-video-codec=           | ="h265"=   | Codec key (see codec map below)               |
+| =cmacs-transcode-video-audio-codec=     | ="vorbis"= | Audio codec for video output                  |
+| =cmacs-transcode-video-format=          | ="mkv"=    | Container format (mkv/mp4/webm)               |
+| =cmacs-transcode-quality=               | ="medium"= | Named preset used when =crf= is =nil=         |
+| =cmacs-transcode-crf=                   | =26=       | CRF (software/VAAPI); overrides the preset    |
+| =cmacs-transcode-qp=                    | =nil=      | QP for GPU encoding                           |
+| =cmacs-transcode-hwaccel=               | =off=      | =off=, =auto=, or =force=                     |
+| =cmacs-transcode-prefer-vulkan=         | =nil=      | Prefer Vulkan over VAAPI                       |
+| =cmacs-transcode-prefer-software=       | =nil=      | Force software even with a device             |
+| =cmacs-transcode-auto-quality=          | =nil=      | Pick CRF/QP from the input width              |
+| =cmacs-transcode-resolution=            | =nil=      | Output scaling, e.g. ="1280x720"=             |
+| =cmacs-transcode-bitrate=               | =nil=      | Target bitrate, overriding CRF/QP             |
+| =cmacs-transcode-preset=                | =nil=      | ffmpeg encoder preset                         |
+| =cmacs-transcode-subtitles=             | =t=        | Copy subtitle streams into mkv/mp4            |
+| =cmacs-transcode-preserve-color-metadata= | =t=      | Probe + re-emit colour metadata               |
+| =cmacs-transcode-color-primaries=       | =nil=      | Colour override (=nil= = auto-detect)         |
+| =cmacs-transcode-color-trc=             | =nil=      | Colour override                               |
+| =cmacs-transcode-colorspace=            | =nil=      | Colour override                               |
+| =cmacs-transcode-color-range=           | =nil=      | Colour override (="tv"= / ="pc"=)             |
+
+Setting *any* colour override disables ffprobe detection (the overrides are
+used verbatim, matching the shell script).
+
+* Audio options
+
+| Option                              | Default  | Meaning                                  |
+|-------------------------------------+----------+------------------------------------------|
+| =cmacs-transcode-audio-format=      | ="mp3"=  | Output format (mp3/ogg/opus/aac/flac)    |
+| =cmacs-transcode-audio-quality=     | ="high"= | Named preset (low/medium/high/veryhigh)  |
+| =cmacs-transcode-audio-bitrate=     | =nil=    | Custom bitrate, e.g. ="320k"=            |
+| =cmacs-transcode-audio-recursive=   | =nil=    | Recurse added directories                |
+| =cmacs-transcode-audio-input-format= | =nil=   | Input extension filter, e.g. ="flac"=    |
+
+* Tunable tables
+
+These are =defcustom=s too, so you can add codecs or retune presets:
+
+- =cmacs-transcode-video-codec-map= — =h264→libx264=, =h265→libx265=,
+  =vp9→libvpx-vp9=, =av1→libaom-av1=.
+- =cmacs-transcode-video-audio-codec-map= — =vorbis→libvorbis=, =opus→libopus=,
+  =aac→aac=, =mp3→libmp3lame=, =copy→copy=.
+- =cmacs-transcode-audio-codec-map= — =mp3→libmp3lame=, =vorbis/ogg→libvorbis=,
+  =opus→libopus=, =aac→aac=, =flac→flac=, =copy→copy=.
+- =cmacs-transcode-crf-presets= — =low 28=, =medium 24=, =high 18=, =veryhigh 15=.
+- =cmacs-transcode-vulkan-bitrate-presets= — =low 2M=, =medium 5M=, =high 10M=,
+  =veryhigh 20M=.
+- =cmacs-transcode-mp3-presets= — =low 128=, =medium 192=, =high 320=,
+  =veryhigh 320= (kbps).
+- =cmacs-transcode-vorbis-presets= — =low 3=, =medium 5=, =high 7=, =veryhigh 10=.
+- =cmacs-transcode-video-extensions= / =cmacs-transcode-audio-extensions= — the
+  recognised input file extensions.
+
+* ffmpeg argument mapping
+
+The argument builders are pure functions mirroring the scripts'
+=build_ffmpeg_args=.
+
+** Video (software, shipped defaults)
+
+: ffmpeg -y -i a.mp4 -c:v libx265 -crf 26 \
+:        -c:a libvorbis -q:a 4 \
+:        -map 0:v -map 0:a? -map 0:s? -c:s copy \
+:        output/a.mkv
+
+With colour preservation on, ffprobe-detected =-color_primaries= /
+=-color_trc= / =-colorspace= / =-color_range= are added (missing HD fields are
+inferred as =bt709=, range defaults to =tv=), and for software H.265 the same
+values are folded into =-x265-params colorprim=…:transfer=…:colormatrix=…= to
+prevent green/magenta tint shifts.
+
+** Video (VAAPI)
+
+: ffmpeg -y -vaapi_device /dev/dri/renderD128 -i a.mp4 \
+:        -c:v hevc_vaapi -vf format=nv12|vaapi,hwupload -crf 26 \
+:        -c:a aac -map 0:v -map 0:a? output/a.mp4
+
+A QP value emits =-qp= instead of =-crf=.  Vulkan uses
+=hevc_vulkan= / =h264_vulkan= with a bitrate from the quality preset, plus the
+=-init_hw_device vulkan= / =format=nv12,hwupload= chain.  The DRI device is
+passed into the container and, for Vulkan, the vendor variable
+(=ANV_VIDEO_DECODE= for Intel, =RADV_PERFTEST=video_decode= for AMD) is set.
+
+** Audio (MP3, shipped defaults)
+
+: ffmpeg -y -i a.wav -c:a libmp3lame -b:a 320k \
+:        -vn -map 0:a -map_metadata 0 output/a.mp3
+
+OGG/Vorbis uses the =-q:a= quality scale; opus/aac use a default bitrate;
+=copy= streams-copies the audio.
+
+* Elisp entry points
+
+- =cmacs-transcode=, =cmacs-transcode-video=, =cmacs-transcode-audio= —
+  autoloaded commands.
+- =cmacs-transcode-supported-p= — non-nil when a backend (podman/docker/ffmpeg)
+  is available.

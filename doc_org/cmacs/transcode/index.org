@@ -1,0 +1,132 @@
+#+TITLE: CMacs Transcode — Native ffmpeg Batch Transcoder
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:2 num:nil
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+=cmacs-transcode= is a native reimplementation of the author's
+=compress_video= and =compress_audio= shell scripts: it batch-transcodes
+video and audio with ffmpeg, driven entirely from inside Emacs.  Emacs itself
+spawns and supervises the ffmpeg processes as a bounded parallel pool (no GNU
+parallel), and streams live per-job status into a dedicated queue buffer that
+redraws on a timer.
+
+By default it runs ffmpeg inside a podman or docker =linuxserver/ffmpeg=
+container — guaranteed to carry a full codec set that a stock host ffmpeg may
+lack — and transparently falls back to a host =ffmpeg= binary when no container
+runtime is present.
+
+It is a *pure-Elisp subsystem* (no C).  Enable it with =--with-cmacs-transcode=
+(part of the standard flag set); at runtime it needs podman, docker, or a host
+=ffmpeg=.  The build flag is exposed as =IS-CMACS-TRANSCODE= and
+=(cmacs-feature-p 'transcode)=.
+
+See also [[file:reference.org][the option + ffmpeg-mapping reference]].
+
+* Quick start
+
+- =M-x cmacs-transcode-video= — open a video session.  In Dired this queues the
+  marked files; elsewhere it prompts for a file or directory.
+- =M-x cmacs-transcode-audio= — the same for an audio session.
+- =M-x cmacs-transcode= — open the queue buffer without adding anything (add
+  files with =a=).
+
+In the resulting =*cmacs-transcode*= buffer, press =a= to add more files, tune
+options with the single-key commands, then =RET= to start.  Outputs go to
+=output/= under the current project root by default.  With the shipped
+defaults, a video job reproduces the author's usual =compress_video
+--no-hwaccel --crf 26= invocation (H.265 video, Vorbis audio, Matroska
+container); an audio job produces a 320 kbps MP3.
+
+: # native equivalent of:  compress_video --no-hwaccel --crf 26 ./*.{mp4,mkv}
+: #   dired: mark the files, M-x cmacs-transcode-video, RET
+
+* The queue buffer
+
+The =*cmacs-transcode*= buffer (major mode =cmacs-transcode-mode=, derived from
+=special-mode=) is both the control panel and the live status view.  Its header
+shows the resolved backend and current options; each queued file is one line
+with a status glyph (=…= queued, =▶= running, =✔= done, =✗= failed, =–=
+skipped), the file name, and — while running — the latest ffmpeg progress line.
+A timer (=cmacs-transcode-poll-interval=, default 2 s) redraws the buffer while
+jobs run; it also redraws on every state change and self-cancels when the pool
+drains.
+
+#+begin_example
+ cmacs-transcode — VIDEO
+ backend:podman  parallel:OFF  crf:26  codec:h265  fmt:mkv  hwaccel:off
+ output:~/proj/output/
+────────────────────────────────────────────────────────────────
+ [1/4] ✔  intro.mp4                                  done
+ [2/4] ▶  clip.mkv                                   frame=1200 time=00:00:40
+ [3/4] …  b-roll.mp4                                 queued
+ [4/4] …  outro.mkv                                  queued
+#+end_example
+
+** Keybindings
+
+| Key   | Command                            | Action                                          |
+|-------+------------------------------------+-------------------------------------------------|
+| =a=   | =cmacs-transcode-add=              | Add a media file or dir (prefix: recurse)       |
+| =A=   | =cmacs-transcode-add-directory=    | Add a directory recursively                     |
+| =d=   | =cmacs-transcode-remove=           | Remove the job on the current line              |
+| =k=   | =cmacs-transcode-kill=             | Kill the running job on the line (no retry)     |
+| =RET= | =cmacs-transcode-start=            | Start transcoding the queue                     |
+| =p=   | =cmacs-transcode-toggle-parallel=  | Toggle sequential ⇄ the configured job count    |
+| =P=   | =cmacs-transcode-set-parallel=     | Set the number of concurrent jobs               |
+| =c=   | =cmacs-transcode-set-codec=        | Set video codec (audio: format/codec)           |
+| =q=   | =cmacs-transcode-set-quality=      | Set CRF (video) or custom bitrate (audio)       |
+| =f=   | =cmacs-transcode-set-format=       | Set the container/format                        |
+| =H=   | =cmacs-transcode-cycle-hwaccel=    | Cycle off → auto → force → vulkan → off         |
+| =o=   | =cmacs-transcode-set-output-dir=   | Set the output directory                        |
+| =m=   | =cmacs-transcode-toggle-missing=   | Only encode files lacking an output             |
+| =x=   | =cmacs-transcode-toggle-existing=  | Only re-encode files that already have output   |
+| =M=   | =cmacs-transcode-set-kind=         | Switch the session between video and audio      |
+| =l=   | =cmacs-transcode-show-log=         | Show =*cmacs-transcode-log*= (full ffmpeg out)  |
+| =g=   | =cmacs-transcode-refresh=          | Redraw the buffer                               |
+| =?=   | =cmacs-transcode-help=             | Echo the key hints                              |
+
+Each session holds a job list plus an options plist *seeded from the
+=defcustom= values* (see [[file:reference.org][reference]]) when the session is created; the
+single-key commands override those per session without mutating the customs.
+Under Evil/Doom the mode map is an overriding map, so the single-key bindings
+win in every state.
+
+* Backends: container or host
+
+The backend is resolved at runtime by =cmacs-transcode--resolve=, in this
+order:
+
+1. the =CMACS_TRANSCODE_CONTAINER_RUNTIME= environment variable, if set;
+2. the =cmacs-transcode-backend= option (=auto=, =podman=, =docker=, =host=);
+3. availability: =auto= tries podman, then docker, then a host =ffmpeg=; an
+   explicit choice falls back to whatever is available.
+
+For a container backend the input directory is bind-mounted at =/input= and the
+output directory at =/output= (or a single =/config= mount when the two
+coincide); ffmpeg receives the in-container paths.  ffprobe (used for
+colour-metadata and width probing) runs in the same image via =--entrypoint
+ffprobe=.  When hardware acceleration is active the DRI device is passed
+through (=--device=), with the Vulkan vendor environment variable set as
+needed.  A host backend runs the binaries directly on the real paths.
+=(cmacs-transcode-supported-p)= is non-nil when any backend resolves.
+
+* Excluded from the scripts
+
+Two features of the shell scripts are intentionally *not* ported: the media
+database integration (=--movie= / =--tv-series= / =--video= / =--tags=) and the
+Redis-backed job queue (=--enqueue= / =--worker= / =--queue=).  Emacs manages
+the process pool in-process instead.
+
+* Examples
+
+- *Compress every mp4/mkv in a directory* — Dired, mark the files, =M-x
+  cmacs-transcode-video=, =RET=.
+- *Two at a time* — in the buffer press =P= =2= (or =p= to toggle to the
+  configured count), then =RET=.
+- *Only fill in what is missing* — press =m= to enable the process-missing
+  filter; already-transcoded outputs are marked skipped.
+- *Whole music library to OGG* — =M-x cmacs-transcode-audio= on the library dir
+  (with =cmacs-transcode-audio-recursive= on), press =f= and choose =ogg=, then
+  =RET=; the tree is preserved under =output/=.
+- *Hardware-accelerated H.265* — press =H= to cycle to =auto= (VAAPI) or
+  =vulkan=, then =RET=.
