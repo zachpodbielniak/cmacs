@@ -1,0 +1,91 @@
+#+TITLE: CMacs Lrgscript — Reference
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:2 num:t
+
+* DEFUNs
+
+** Backend
+
+- =(cmacs-lrgscript-available-p)= → =t= if the elisp backend is registered with
+  libregnum's scripting manager.
+- =(cmacs-lrgscript-eval CODE)= — evaluate =CODE= (an elisp source string, which
+  may hold several top-level forms; it is wrapped in a =progn=) through the real
+  =LrgScripting= elisp context.  Returns =t=; signals =cmacs-lrgscript-error= on
+  failure.  For a value, define a function and call it.  Best for ASCII/UTF-8
+  source; load non-trivial scripts from a file.
+- =(cmacs-lrgscript-call NAME &rest ARGS)= — call elisp function =NAME= (string
+  or symbol) with =ARGS= through the backend's =call_function= vtable, so the
+  GValue marshalling is exercised.  Returns the marshalled result.
+- =(cmacs-lrgscript-get NAME)= / =(cmacs-lrgscript-set NAME VALUE)= — get/set an
+  elisp global through the backend's =get_global= / =set_global=.
+
+** Node scripting (elisp helpers, =cmacs-lrgscript.el=)
+
+- =cmacs-lrgscript-language= — the =LrgScriptLanguage= integer for elisp (=5=).
+- =(cmacs-lrgscript-attach BUFFER NODE-ID PATH)= — attach the =.el= at =PATH= to
+  =NODE-ID= in libregnum editor =BUFFER=.
+- =(cmacs-lrgscript-define-node-script &rest BODY)= — macro: define the
+  =lrg-script-start/update/detach= hooks from a =:start/:update/:detach= plist.
+
+** Game authoring
+
+- =(cmacs-lrgscript-run-game BUFFER HOOKS &optional TITLE WIDTH HEIGHT)= — C
+  DEFUN: host a whole game in =BUFFER=, driven by the =HOOKS= plist.  Returns an
+  integer game id.  See [[file:games.org][the game guide]] for the hook contract.
+- =(cmacs-lrgscript-stop-game BUFFER)= — stop the game and destroy its view.
+- =(cmacs-lrgscript-play &key ...)= — ergonomic keyword wrapper over
+  =run-game= that wraps each hook for error logging.
+
+** Drawing helpers (call only inside a =:draw= hook)
+
+Thin wrappers over the graylib GI namespace (=--with-cmacs-gi=); colours are
+=(R G B A)=, each 0–255:
+
+- =(cmacs-lrgscript-clear RGBA)=
+- =(cmacs-lrgscript-draw-rect X Y W H RGBA)=
+- =(cmacs-lrgscript-draw-circle X Y RADIUS RGBA)=
+- =(cmacs-lrgscript-draw-text TEXT X Y SIZE RGBA)=
+
+The entire engine is reachable this way; anything not wrapped is one
+=(cmacs-gi-call "Graylib" ...)= or =(cmacs-gi-call "Libregnum" ...)= away.
+
+* Hook-name translation
+
+libregnum's =LrgScriptComponent= calls hooks by their canonical *underscore*
+names (=lrg_script_start=, =lrg_script_update=, =lrg_script_detach=).  The
+backend's =call_function= looks up the exact name and, if it is not =fboundp=,
+retries the *hyphenated* form (=lrg-script-update=).  So define your hooks with
+normal elisp names.
+
+* GValue ↔ Lisp marshalling
+
+The backend marshals values across the =GValue= boundary that libregnum's
+scripting API uses:
+
+| Emacs Lisp        | GValue                    | notes                        |
+|-------------------+---------------------------+------------------------------|
+| =nil= / =t=       | =G_TYPE_BOOLEAN=          |                              |
+| fixnum / bignum   | =G_TYPE_INT64=            | clamped to 64-bit            |
+| float             | =G_TYPE_DOUBLE=           |                              |
+| string            | =G_TYPE_STRING=           |                              |
+| symbol            | =G_TYPE_STRING= (name)    |                              |
+| other (list, …)   | =G_TYPE_STRING= (=prin1=) | printed form (lossy)         |
+
+Incoming GValues map back: integer types → integer, float/double → float,
+boolean → =t=/=nil=, string → string, enum/flags → integer.  Scalars round-trip
+exactly; compound values cross as their printed representation.
+
+* Error handling
+
+All entry points that evaluate Lisp catch signals and, on the DEFUN surface,
+re-signal =cmacs-lrgscript-error= with the message.  On the *hook* surface
+(node scripts, game loop) the signal is caught and the loop continues — a buggy
+script never aborts Emacs or, under =--gowl=, the compositor.
+
+* Testing
+
+=test/cmacs/cmacs-lrgscript-tests.el= covers the backend headlessly (no GL
+needed): the feature flag, backend registration, the load/call/globals
+round-trip, hook-name translation, error isolation, and a *complete game's pure
+simulation* (the Breakout physics from =cmacs-lrgscript-examples.el= ticked and
+asserted).  Run with =make -C test check-cmacs=.

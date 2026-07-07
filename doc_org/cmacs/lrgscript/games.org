@@ -1,0 +1,135 @@
+#+TITLE: Writing a Complete Libregnum Game in Emacs Lisp
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:2 num:t
+
+* The promise
+
+With =--with-cmacs-lrgscript= you can author and run a *complete libregnum game
+from your personal Emacs Lisp config*.  Define the scene, the game loop, input,
+and per-frame logic in =.el=, and launch it in a live cmacs libregnum buffer.
+The engine, the loop, input routing, and the render target are all provided;
+you write only the game.
+
+The shipped example — a full Breakout — is =M-x cmacs-lrgscript-breakout=
+(from =cmacs-lrgscript-examples.el=), a few hundred lines of Emacs Lisp.
+
+* How it works
+
+=cmacs-lrgscript-run-game= (and the ergonomic =cmacs-lrgscript-play= wrapper)
+hosts an =LrgGameTemplate= subclass (=CmacsLrgScriptGame=) in a
+=cmacs-libregnum-mode= buffer, reusing cmacs's existing FBO game host — the same
+machinery that runs compiled =.so= game modules, so keyboard/mouse input is
+already routed to your game.  The template's loop vfuncs dispatch to your elisp
+hooks each frame, under the signal-safe dispatch guard.
+
+You get the full engine two ways, both already shipped:
+
+1. *GObject Introspection* (=--with-cmacs-gi=) — the *entire* graylib/libregnum
+   API (ECS, input, audio, cameras, tilemaps, particles, physics, UI, assets) is
+   callable from elisp via =cmacs-gi-call=.  No bespoke bindings needed.
+2. Thin drawing wrappers (=cmacs-lrgscript-draw-*=) for the common immediate-mode
+   primitives, built on (1).
+
+* The loop hooks
+
+Pass a plist of callbacks (all optional):
+
+| key             | signature        | when                                   |
+|-----------------+------------------+----------------------------------------|
+| =:startup=      | =(lambda ())=    | once, after the engine is up           |
+| =:update=       | =(lambda (dt))=  | every frame (variable timestep)        |
+| =:fixed-update= | =(lambda (dt))=  | 0–N times/frame (fixed timestep)       |
+| =:draw=         | =(lambda ())=    | immediate-mode draw, after the scene   |
+| =:shutdown=     | =(lambda ())=    | once, on teardown                      |
+| =:focus-gained= | =(lambda ())=    | buffer/window gained focus             |
+| =:focus-lost=   | =(lambda ())=    | buffer/window lost focus               |
+
+Put *simulation* in =:fixed-update= (deterministic, framerate-independent),
+*input* in =:update=, and *rendering* in =:draw=.
+
+* Recommended shape: keep the simulation pure
+
+The single most important design rule: *make your game logic a pure function of
+state → state*, and let the hooks wire it to input and rendering.  This keeps
+the game deterministic, testable *headlessly* (no GL needed), and trivial to
+reason about.
+
+#+begin_src emacs-lisp
+;; PURE: given a state and a timestep, return the next state.  No engine calls.
+(defun my/game-step (state dt) ...)
+
+;; HOOKS: thin adapters around the pure core.
+(defvar my/state nil)
+(defun my/fixed-update (dt) (setq my/state (my/game-step my/state dt)))
+(defun my/draw ()  ; render the current state
+  (cmacs-lrgscript-clear '(16 16 24))
+  ...)
+#+end_src
+
+The Breakout example follows exactly this shape:
+=cmacs-lrgscript-breakout--step= is pure (ball motion, wall/paddle/brick
+collision, scoring, win/lose) and is unit-tested in
+=test/cmacs/cmacs-lrgscript-tests.el= by ticking it and asserting the world
+evolves — proving a whole game is authored in elisp *without* a display.
+
+* A minimal complete game
+
+#+begin_src emacs-lisp
+(require 'cmacs-lrgscript)
+
+(defvar my/x 40.0)
+
+(defun my/update (dt)
+  ;; move a box with the arrow keys (raylib key codes: LEFT 263, RIGHT 262)
+  (when (ignore-errors (cmacs-gi-call "Graylib" "is_key_down" 262))
+    (setq my/x (+ my/x (* 200 dt))))
+  (when (ignore-errors (cmacs-gi-call "Graylib" "is_key_down" 263))
+    (setq my/x (- my/x (* 200 dt)))))
+
+(defun my/draw ()
+  (cmacs-lrgscript-clear '(10 10 16))
+  (cmacs-lrgscript-draw-rect my/x 200 40 40 '(120 200 255))
+  (cmacs-lrgscript-draw-text "arrow keys" 12 12 20 '(200 200 220)))
+
+(cmacs-lrgscript-play
+ :title "hello game" :width 480 :height 320
+ :update #'my/update
+ :draw   #'my/draw)
+#+end_src
+
+Evaluate that in a graphical cmacs and a game buffer opens.
+
+* Retained-mode (scene) authoring
+
+For anything with many objects, prefer *retained-mode*: build the scene once (an
+=LrgWorld= of =LrgGameObject=\ s with transform/sprite/collider components) in
+=:startup= via GI, then in =:fixed-update= mutate a handful of component
+properties (positions, rotations) while libregnum renders the scene in C.  This
+is far cheaper per frame than issuing hundreds of immediate-mode draw calls from
+elisp, and scales to real games.  Immediate-mode =:draw= is then reserved for
+the HUD/overlay.
+
+* Performance & robustness
+
+- *60 fps* is viable via the retained-mode model; the immediate-mode helpers are
+  fine for a HUD or a simple game.  Keep per-frame allocation light.
+- *Error isolation*: every hook is dispatched through the =waiting_for_input=
+  guard *and* (via =cmacs-lrgscript-play=) wrapped in a logging
+  =condition-case=.  A signalling hook is caught and logged to =*Messages*=; the
+  loop keeps running.  A buggy game never aborts Emacs or the compositor.
+- *Input* is routed through cmacs's software input source (keyboard/mouse/
+  gamepad), not raylib polling — the render is offscreen.
+- *State* lives in ordinary elisp variables, naturally persistent across frames.
+
+* Distribution
+
+A game authored here runs *inside cmacs* and is shipped as an ordinary Emacs Lisp
+package that other cmacs users =load=.  (Running it in a standalone, Emacs-less
+libregnum host is out of scope by construction — that would require an elisp
+runtime in the host, the very dependency this subsystem keeps out of libregnum.)
+
+* Verifying the example
+
+=M-x cmacs-lrgscript-breakout= in a graphical cmacs, then play with the arrow
+keys (or A/D).  Headlessly, the simulation is exercised by
+=make -C test check-cmacs= (the =cmacs-lrgscript-test-breakout-*= tests).

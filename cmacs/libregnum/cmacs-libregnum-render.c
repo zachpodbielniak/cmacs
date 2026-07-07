@@ -359,7 +359,9 @@ struct CmacsLibregnumRenderCtx
    * the editor) the view only handles events inside its own window, so clicks
    * in other Emacs panes select them normally. */
   gboolean          mouse_capture_all;
-  LrgGameTemplate  *game;          /* borrowed from loaded_game */
+  LrgGameTemplate  *game;          /* borrowed from loaded_game, unless game_owned */
+  gboolean          game_owned;    /* TRUE when `game' is owned directly (no .so;
+                                      e.g. the cmacs-lrgscript elisp game) */
   LrgGameHost      *game_host;     /* owned (CmacsFboGameHost) */
   LrgInputSoftware *game_input;    /* owned; registered with input manager */
 
@@ -2030,7 +2032,11 @@ cmacs_libregnum_render_ctx_unload_game (CmacsLibregnumRenderCtx *r)
       g_clear_object (&r->game_input);
     }
 
-  r->game = NULL;                 /* owned by loaded_game */
+  if (r->game_owned)
+    g_clear_object (&r->game);     /* directly owned (no loaded_game) */
+  else
+    r->game = NULL;                /* owned by loaded_game */
+  r->game_owned = FALSE;
   g_clear_object (&r->game_host);
 
   if (r->loaded_game)
@@ -2040,6 +2046,53 @@ cmacs_libregnum_render_ctx_unload_game (CmacsLibregnumRenderCtx *r)
     }
 
   r->game_mode = FALSE;
+}
+
+/* Host an already-constructed LrgGameTemplate (transfer full) in this render
+ * ctx -- the elisp-game path, which builds its own template instead of loading
+ * a `.so'.  Mirrors cmacs_libregnum_render_ctx_load_game's host/input/startup
+ * setup, but owns `game' directly (game_owned) since there is no loaded_game. */
+gboolean
+cmacs_libregnum_render_ctx_host_game (CmacsLibregnumRenderCtx *r,
+                                      void *game_template,
+                                      char **error_msg)
+{
+  GError           *error = NULL;
+  LrgGameTemplate  *game = game_template;
+  CmacsFboGameHost *host;
+
+  if (!r || !game)
+    {
+      g_clear_object (&game);
+      return FALSE;
+    }
+  if (r->game_mode) cmacs_libregnum_render_ctx_unload_game (r);
+
+  host = cmacs_fbo_game_host_new (r);
+
+  r->game_input = lrg_input_software_new ();
+  lrg_input_manager_add_source (lrg_input_manager_get_default (),
+                                LRG_INPUT (r->game_input));
+
+  if (!lrg_game_template_startup (game, LRG_GAME_HOST (host), &error))
+    {
+      if (error_msg)
+        *error_msg = g_strdup (error ? error->message : "startup failed");
+      g_clear_error (&error);
+      lrg_input_manager_remove_source (lrg_input_manager_get_default (),
+                                       LRG_INPUT (r->game_input));
+      g_clear_object (&r->game_input);
+      g_object_unref (host);
+      g_object_unref (game);
+      return FALSE;
+    }
+
+  r->game       = game;           /* owned directly */
+  r->game_owned = TRUE;
+  r->game_host  = LRG_GAME_HOST (host);
+  r->game_mode  = TRUE;
+  lrg_game_template_set_window_size (game, r->width, r->height);
+  return TRUE;
 }
 
 gboolean

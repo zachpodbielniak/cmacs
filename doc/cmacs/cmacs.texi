@@ -58,6 +58,7 @@ interaction.
 * CMacs AI::                    ai-glib multi-provider coding agent.
 * CMacs Libregnum::             Embedded libregnum 3D scene buffers.
 * CMacs Gnuseye::               GNU's Eye live planetary globe.
+* CMacs Lrgscript::             Emacs Lisp scripting + game authoring for libregnum.
 * CMacs Gsurf::                 Embedded gsurf web browser buffers.
 * CMacs CAD::                   Parametric CAD parts (.cad/.ccad via cad-glib).
 * CMacs Screensaver::           libregnum screensavers as wallpaper/lock/buffer.
@@ -6980,7 +6981,9 @@ Serializable component description: a registry type name plus a
 @item LrgScriptBinding
 A @{language, script_path_or_guid, enabled@} record.  @code{language} is a
 @code{LrgScriptLanguage} enum value (@code{NONE}, @code{LUA}, @code{PYTHON},
-@code{GJS}, @code{CRISPY}).
+@code{GJS}, @code{CRISPY}, @code{ELISP}).  The @code{ELISP} backend is not part
+of libregnum; it is supplied at runtime by the cmacs
+@option{--with-cmacs-lrgscript} subsystem (@pxref{CMacs Lrgscript}).
 @item LrgPrefab
 A @file{.rprefab} file is a saved one-node subtree with an exported-property
 manifest; @code{lrg_prefab_save}, @code{load}, and @code{instantiate} manage
@@ -7134,7 +7137,10 @@ picking/projection honour the projection.
 (@file{deps/libregnum} built @code{CRISPY=1}; cmacs already links
 @code{libcrispy}), so a crispy script attached to a node compiles + runs when
 the level plays.  @code{lrg_level_instantiate} materialises each node's
-@code{LrgScriptBinding} as an @code{LrgScriptComponent}.
+@code{LrgScriptBinding} as an @code{LrgScriptComponent}.  With
+@option{--with-cmacs-lrgscript} the Emacs Lisp backend (language @code{ELISP},
+integer 5) is also available, and a whole game can be authored in elisp
+(@pxref{CMacs Lrgscript}).
 @item @strong{Play rendering} --- @code{play-tick} reflects the running world's
 object positions back onto the baked scene, so script motion shows live.
 @item @strong{Drop-at-point} --- arm a palette/asset item (@kbd{D}) then click a
@@ -7440,6 +7446,9 @@ mode does not composite in the editor FBO batch, so sprites/tiles use textured
 
 @c ===================================================================
 @include gnuseye/gnuseye.texi
+
+@c ===================================================================
+@include lrgscript/lrgscript.texi
 
 @c ===================================================================
 @node CMacs Gsurf
@@ -9027,6 +9036,7 @@ fully-featured build matching Fedora defaults, use:
   --with-cmacs-piper \
   --with-cmacs-cintrospect \
   --with-cmacs-libregnum \
+  --with-cmacs-lrgscript \
   --with-cmacs-screensaver \
   --with-cmacs-gsurf \
   --with-cmacs-emacsctl \

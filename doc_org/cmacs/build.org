@@ -36,6 +36,7 @@ All CMacs features are auto-detected.  You can force them on or off:
 | =--with-cmacs-cintrospect=    | Runtime C self-introspection (libdw+JIT)|
 | =--with-cmacs-emacsctl=       | emacsctl/cmacsctl CLI (standalone binary)|
 | =--with-cmacs-lrgterm=        | output_lrg libregnum/raylib display backend (=emacs --lrg=) |
+| =--with-cmacs-lrgscript=      | Emacs Lisp scripting + full game authoring for libregnum (requires libregnum + glib) |
 | =--with-cmacs-screensaver=    | libregnum screensavers as wallpaper / lock / buffer |
 | =--with-cmacs-transcode=      | Native ffmpeg video/audio transcoder (container/host; parallel pool) |
 | =--enable-cmacs-cpatch=       | Runtime C hot-patching (DANGEROUS)      |
@@ -74,6 +75,7 @@ Example with explicit flags:
   --with-cmacs-video \
   --with-cmacs-cintrospect \
   --with-cmacs-libregnum \
+  --with-cmacs-lrgscript \
   --with-cmacs-screensaver \
   --with-cmacs-emacsctl \
   --with-cmacs-lrgterm \

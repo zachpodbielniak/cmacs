@@ -1,0 +1,179 @@
+@c lrgscript.texi --- master file for cmacs Emacs Lisp libregnum scripting
+@c Copyright (C) 2026 Zach Podbielniak
+@c SPDX-License-Identifier: AGPL-3.0-or-later
+@c
+@c Mirrors doc_org/cmacs/lrgscript/index.org, reference.org, games.org.
+
+@node CMacs Lrgscript
+@chapter CMacs Lrgscript: Emacs Lisp Scripting for Libregnum
+
+@cindex lrgscript
+@cindex libregnum scripting
+@cindex Emacs Lisp game
+
+@option{--with-cmacs-lrgscript} makes @emph{Emacs Lisp a first-class libregnum
+scripting language} --- but only inside cmacs.  libregnum (the vendored
+raylib/GObject game engine) ships no elisp interpreter and never should.  This
+subsystem plugs the live Emacs Lisp VM into libregnum's existing, pluggable
+scripting architecture, so you can script a libregnum @emph{scene node} in
+@file{.el} (@code{lrg-script-start}/@code{update}/@code{detach}), and author a
+@emph{complete libregnum game} from your Emacs config.  It is part of the
+standard cmacs flag set and requires @option{--with-cmacs-libregnum} and
+@option{--with-cmacs-glib}.
+
+@menu
+* Lrgscript Architecture::   One process, the generic hook, the elisp backend.
+* Lrgscript Node Scripting:: Attaching @file{.el} behaviours to scene nodes.
+* Lrgscript Games::          Authoring a complete game in Emacs Lisp.
+* Lrgscript Reference::      DEFUNs, marshalling, error handling.
+@end menu
+
+@node Lrgscript Architecture
+@section Architecture: one process, zero IPC
+
+When cmacs hosts libregnum it is @emph{one process}:
+@file{deps/libregnum/liblibregnum.a} is whole-archive-linked into the
+@command{emacs} binary, so every libregnum symbol is exported and any C in the
+binary can call both @code{lrg_*} and Emacs's @code{Feval} / @code{safe_funcall}
+directly.  The elisp scripting backend therefore needs no IPC and no second
+interpreter.
+
+libregnum's @code{LrgScriptingManager} gained one generic, elisp-agnostic API,
+@code{lrg_scripting_manager_register_backend()}, that lets an @emph{embedder}
+register a scripting backend at runtime in addition to the compiled-in set (Lua,
+Python, GJS, Crispy), plus a bare @code{LRG_SCRIPT_LANGUAGE_ELISP} enum
+@emph{label} --- a name only; libregnum ships no interpreter for it.  cmacs
+supplies the factory at startup (@code{init_cmacs_lrgscript}).  After that,
+@code{(cmacs-libregnum-scripting-languages)} reports @code{("Emacs Lisp" . 5)}
+and @code{LrgScriptComponent} / @code{LrgScriptBinding} transparently support
+language elisp.
+
+The backend, @code{CmacsLrgScriptingElisp}, is an @code{LrgScripting} subclass
+whose vtable routes into Emacs Lisp: @code{load_string}/@code{load_file} read +
+eval; @code{call_function} funcalls by name with GValue marshalling;
+@code{get_global}/@code{set_global} read/write elisp variables;
+@code{register_function} exposes a host C callback to scripts.  Every path that
+enters Lisp goes through @code{cmacs-eval-dispatch}'s @code{waiting_for_input}
+guard, because script hooks fire from GLib callbacks (the animation timer /
+render loop) where a signalled elisp error would otherwise abort the process.
+
+Like every libregnum-touching cmacs subsystem, the code is firewalled so a
+translation unit includes @emph{either} @file{<libregnum.h>} @emph{or}
+@file{lisp.h}/pgtk headers, never both (raylib's @code{Color} clashes with
+pgtk's); the two halves talk through @code{GValue} + plain C.
+
+@node Lrgscript Node Scripting
+@section Node scripting
+
+A node script defines up to three hooks; libregnum's @code{LrgScriptComponent}
+calls them over the node's lifetime:
+
+@lisp
+(defun lrg-script-start ()        ; once, on attach
+  ...)
+(defun lrg-script-update (delta)  ; every frame, DELTA seconds
+  ...)
+(defun lrg-script-detach ()       ; once, on detach
+  ...)
+@end lisp
+
+libregnum looks the hooks up by the canonical underscore names
+(@code{lrg_script_start} @dots{}); the backend @emph{also} accepts the idiomatic
+hyphenated names, so you write elisp naturally.  Attach a script with
+@code{(cmacs-lrgscript-attach BUFFER NODE-ID "/path/behaviour.el")}, or
+@code{cmacs-libregnum-editor-attach-script} with @code{cmacs-lrgscript-language}
+(the integer @code{5}).
+
+@strong{Caveat (one obarray):} unlike Lua's per-state sandbox, every elisp
+script context shares Emacs's single global obarray.  Two scripts that both
+define @code{lrg-script-update} clash --- dispatch from one set of hooks or use
+unique prefixes.  A whole game is best authored through the game layer.
+
+@node Lrgscript Games
+@section Writing a complete game in Emacs Lisp
+
+@code{cmacs-lrgscript-run-game} (and the @code{cmacs-lrgscript-play} keyword
+wrapper) hosts an @code{LrgGameTemplate} subclass in a
+@code{cmacs-libregnum-mode} buffer, reusing cmacs's existing FBO game host (the
+same machinery that runs compiled @file{.so} game modules, so input is already
+routed).  The template's loop vfuncs dispatch to a plist of your elisp hooks:
+@code{:startup}, @code{:update} (variable timestep), @code{:fixed-update} (fixed
+timestep, for simulation), @code{:draw} (immediate-mode, after the scene),
+@code{:shutdown}, @code{:focus-gained}/@code{:focus-lost}.
+
+The whole engine is reachable from elisp two ways, both already shipped: the
+GObject-Introspection bridge (@option{--with-cmacs-gi}) can call @emph{any}
+graylib/libregnum function via @code{cmacs-gi-call}, and thin
+@code{cmacs-lrgscript-draw-*} wrappers cover the common immediate-mode
+primitives.
+
+@strong{Recommended shape:} make your game logic a @emph{pure} function
+@code{state -> state}, and let the hooks wire it to input and rendering.  This
+keeps the game deterministic and testable @emph{headlessly}.  The shipped
+Breakout (@code{M-x cmacs-lrgscript-breakout}, in
+@file{cmacs-lrgscript-examples.el}) is a complete game in a few hundred lines of
+elisp; its @code{cmacs-lrgscript-breakout--step} is pure and unit-tested by
+ticking it and asserting the world evolves --- proving a whole game is authored
+in elisp without a display.
+
+A minimal complete game:
+
+@lisp
+(require 'cmacs-lrgscript)
+(defvar my/x 40.0)
+(defun my/update (dt)
+  (when (ignore-errors (cmacs-gi-call "Graylib" "is_key_down" 262))
+    (setq my/x (+ my/x (* 200 dt)))))
+(defun my/draw ()
+  (cmacs-lrgscript-clear '(10 10 16))
+  (cmacs-lrgscript-draw-rect my/x 200 40 40 '(120 200 255)))
+(cmacs-lrgscript-play :title "hello game" :width 480 :height 320
+                      :update #'my/update :draw #'my/draw)
+@end lisp
+
+For many objects, prefer @emph{retained-mode}: build the scene once in
+@code{:startup} via GI (an @code{LrgWorld} of entities + components), then mutate
+component properties in @code{:fixed-update} while libregnum renders in C ---
+far cheaper than issuing many immediate-mode draws from elisp.
+
+Every hook is dispatched through the signal guard and (via
+@code{cmacs-lrgscript-play}) a logging @code{condition-case}, so a signalling
+hook is caught and logged; the loop keeps running and never aborts Emacs or the
+compositor.  A game runs @emph{inside} cmacs and ships as an ordinary Emacs Lisp
+package; a standalone Emacs-less host is out of scope (it would need an elisp
+runtime, the dependency this subsystem keeps out of libregnum).
+
+@node Lrgscript Reference
+@section Reference
+
+@deffn Command cmacs-lrgscript-available-p
+Return @code{t} if the elisp backend is registered with libregnum's manager.
+@end deffn
+
+@deffn Command cmacs-lrgscript-eval code
+Evaluate @var{code} (an elisp source string, wrapped in a @code{progn}) through
+the real @code{LrgScripting} elisp context.  Returns @code{t}; signals
+@code{cmacs-lrgscript-error} on failure.
+@end deffn
+
+@deffn Command cmacs-lrgscript-call name &rest args
+Call elisp function @var{name} (string or symbol) with @var{args} through the
+backend's @code{call_function} vtable, marshalling arguments and the return
+value across the @code{GValue} boundary.
+@end deffn
+
+@deffn Command cmacs-lrgscript-get name
+@deffnx Command cmacs-lrgscript-set name value
+Get/set an elisp global through the backend's @code{get_global} /
+@code{set_global}.
+@end deffn
+
+@deffn Command cmacs-lrgscript-run-game buffer hooks &optional title width height
+Host a whole game in @var{buffer}, driven by the @var{hooks} plist.  Returns an
+integer game id.  @code{cmacs-lrgscript-stop-game} stops it.
+@end deffn
+
+Scalars (integers, floats, strings, booleans) round-trip across the
+@code{GValue} boundary; compound values (lists, vectors) cross as their
+@code{prin1} text.  @code{test/cmacs/cmacs-lrgscript-tests.el} covers the backend
+headlessly, including a complete game's pure simulation.

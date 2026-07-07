@@ -666,6 +666,7 @@ OPTION_DEFAULT_OFF([cmacs-imgedit], [CMacs 2D image / sprite editor (layers, ble
 OPTION_DEFAULT_OFF([cmacs-vidstudio], [CMacs video editor (libregnum Reel timeline, transitions, effects, ffmpeg export)])
 OPTION_DEFAULT_OFF([cmacs-transcode], [CMacs native ffmpeg video/audio transcoder (podman/docker container or host; Emacs-managed parallel pool)])
 OPTION_DEFAULT_OFF([cmacs-gnuseye], [CMacs gnuseye live planetary globe (GNU's Eye; requires libregnum)])
+OPTION_DEFAULT_OFF([cmacs-lrgscript], [CMacs Emacs Lisp scripting backend + game authoring for libregnum (requires libregnum + glib)])
 OPTION_DEFAULT_OFF([cmacs-cad], [CMacs parametric CAD subsystem (cad-glib kernels; parts render as libregnum CAD nodes)])
 OPTION_DEFAULT_OFF([cmacs-screensaver], [CMacs libregnum screensavers as animated wallpaper / lock screen / buffer (requires libregnum; wallpaper+lock need gowl)])
 OPTION_DEFAULT_OFF([cmacs-org-ex], [CMacs org-ex interactive widgets])
@@ -1094,6 +1095,24 @@ if test "$with_cmacs_gnuseye" != "no"; then
     cmacs-gnuseye-geo.o cmacs-gnuseye-sgp4.o cmacs-gnuseye-http.o \
     cmacs-gnuseye-globe.o cmacs-gnuseye-overlay.o \
     cmacs-gnuseye-overlay-render.o"
+fi
+if test "$with_cmacs_lrgscript" != "no"; then
+  if test "$with_cmacs_libregnum" = "no"; then
+    AC_MSG_ERROR([--with-cmacs-lrgscript requires --with-cmacs-libregnum (the elisp backend plugs into libregnum's scripting manager)])
+  fi
+  if test "$with_cmacs_glib" = "no"; then
+    AC_MSG_ERROR([--with-cmacs-lrgscript requires --with-cmacs-glib (Lisp is entered through the cmacs-eval-dispatch waiting_for_input guard)])
+  fi
+  # The Emacs Lisp scripting backend for libregnum.  Its object half
+  # (cmacs-lrgscript-elisp.c) includes libregnum.h, so it reuses the
+  # libregnum/graylib include paths already folded into CMACS_CFLAGS; the
+  # bridge/DEFUN halves only need glib (also already global).  No extra deps.
+  AC_DEFINE([HAVE_CMACS_LRGSCRIPT], 1, [CMacs Emacs Lisp scripting backend for libregnum])
+  CMACS_LRGSCRIPT_CFLAGS=""
+  CMACS_LRGSCRIPT_LIBS=""
+  CMACS_LRGSCRIPT_OBJ="cmacs-lrgscript-init.o cmacs-lrgscript-defuns.o \
+    cmacs-lrgscript-bridge.o cmacs-lrgscript-elisp.o \
+    cmacs-lrgscript-game.o cmacs-lrgscript-game-defuns.o"
 fi
 if test "$with_cmacs_cad" != "no"; then
   if test "$with_cmacs_libregnum" = "no"; then
@@ -1635,6 +1654,9 @@ AC_SUBST(CMACS_VIDSTUDIO_LIBS)
 AC_SUBST(CMACS_GNUSEYE_OBJ)
 AC_SUBST(CMACS_GNUSEYE_CFLAGS)
 AC_SUBST(CMACS_GNUSEYE_LIBS)
+AC_SUBST(CMACS_LRGSCRIPT_OBJ)
+AC_SUBST(CMACS_LRGSCRIPT_CFLAGS)
+AC_SUBST(CMACS_LRGSCRIPT_LIBS)
 AC_SUBST(CMACS_CAD_OBJ)
 AC_SUBST(CMACS_CAD_CFLAGS)
 AC_SUBST(CMACS_CAD_LIBS)

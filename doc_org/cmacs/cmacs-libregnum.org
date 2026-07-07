@@ -543,7 +543,11 @@ a queryable list suitable for an asset browser.
 - =LrgScriptBinding= (=src/editor/lrg-script-binding.h=) — a
   ={language, script_path_or_guid, enabled}= record.  The =language= field
   is a =LrgScriptLanguage= enum value (=NONE=, =LUA=, =PYTHON=, =GJS=,
-  =CRISPY=).
+  =CRISPY=, =ELISP=).  The =ELISP= backend is *not* part of libregnum; it is
+  supplied at runtime by the cmacs =--with-cmacs-lrgscript= subsystem (see
+  [[file:lrgscript/index.org][CMacs Lrgscript]]), which registers an Emacs Lisp
+  backend with libregnum's scripting manager.  So an =.el= behaviour can be
+  attached to a node just like a Lua/crispy script.
 - =LrgPrefab= (=src/editor/lrg-prefab.h=) — a =.rprefab= file is a saved
   one-node subtree with an exported-property manifest; =lrg_prefab_save=,
   =load=, and =instantiate= manage the round-trip.  =PREFAB_INSTANCE= nodes
@@ -689,7 +693,7 @@ rotate/scale gizmo handles and play-in-editor remain planned (see below).
     (=cmacs-libregnum-editor-asset-extensions=); click a file to place it as a
     mesh (models) or sprite (images) node.
   - =cmacs-libregnum-editor-add-script= (key =L=) — attach a script
-    (Lua/Python/Gjs/crispy) to the selection; =cmacs-libregnum-editor-play-toggle=
+    (Lua/Python/Gjs/crispy/elisp) to the selection; =cmacs-libregnum-editor-play-toggle=
     (=<f5>=) runs / stops play-in-editor (ticks the instantiated world ~30 Hz).
   - =cmacs-libregnum-editor-inspector= + =cmacs-libregnum-inspector-mode= (key
     =i=) — a right-column =widget.el= property form for the selected node
@@ -729,7 +733,11 @@ rotate/scale gizmo handles and play-in-editor remain planned (see below).
   (=deps/libregnum= built =CRISPY=1=; cmacs already links =libcrispy=), so a
   crispy script attached to a node compiles + runs when the level plays.
   =lrg_level_instantiate= now materialises each node's =LrgScriptBinding= as an
-  =LrgScriptComponent=.
+  =LrgScriptComponent=.  With =--with-cmacs-lrgscript= the *Emacs Lisp* backend
+  is also available (language =ELISP=, integer 5): an =.el= behaviour's
+  =lrg-script-start/update/detach= hooks run when the level plays, and a whole
+  game can be authored in elisp — see [[file:lrgscript/index.org][CMacs Lrgscript]] and
+  [[file:lrgscript/games.org][Writing a complete game in Emacs Lisp]].
 - *Play rendering of the running world* — =cmacs-libregnum-editor-play-tick=
   ticks the instantiated =LrgWorld= and reflects its object positions back onto
   the baked scene, so script-driven motion shows in the viewport.

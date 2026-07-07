@@ -1,0 +1,140 @@
+#+TITLE: CMacs Lrgscript — Emacs Lisp Scripting for Libregnum
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:2 num:t
+
+* Overview
+
+=--with-cmacs-lrgscript= makes *Emacs Lisp a first-class libregnum scripting
+language* — but only inside cmacs.  libregnum (the vendored raylib/GObject game
+engine) ships no elisp interpreter and never should.  This subsystem plugs the
+live Emacs Lisp VM into libregnum's existing, pluggable scripting architecture,
+so you can:
+
+- script a libregnum *scene node* in =.el= (=lrg-script-start/update/detach=), and
+- author a *complete libregnum game* from your Emacs config (see
+  [[file:games.org][Writing a complete game in Emacs Lisp]]).
+
+The elisp runtime lives entirely in cmacs; libregnum gains only a tiny, generic,
+interpreter-free extension point.
+
+* Why this works: one process, zero IPC
+
+When cmacs hosts libregnum, it is *one process*.  =deps/libregnum/liblibregnum.a=
+is whole-archive-linked into the =emacs= binary, so every libregnum symbol is
+exported and any C in the binary can call both =lrg_*= and Emacs's =Feval= /
+=safe_funcall= directly.  The elisp scripting backend therefore needs no IPC,
+no socket, and no second interpreter — it calls straight into the VM.
+
+#+begin_example
+emacs binary (one process)
+ ├─ Emacs Lisp VM         Feval / safe_funcall / intern
+ ├─ --with-cmacs-gi       GI bridge → ANY libregnum GIR fn callable from elisp
+ ├─ libregnum.a           whole-archive linked; LrgScripting / manager / ScriptComponent
+ │    + generic dynamic-backend registration hook  (no elisp code)
+ └─ cmacs/lrgscript/      LrgScripting subclass (CmacsLrgScriptingElisp)
+                          registers "elisp" (LRG_SCRIPT_LANGUAGE_ELISP) at startup
+                          hooks → cmacs_dispatch_safe_callN_value → Feval
+#+end_example
+
+* Architecture
+
+** The generic libregnum hook (no elisp in libregnum)
+
+libregnum's =LrgScriptingManager= gained one generic, elisp-agnostic API,
+=lrg_scripting_manager_register_backend()=, that lets an *embedder* register a
+scripting backend at runtime in addition to the compiled-in set (Lua, Python,
+GJS, Crispy).  It also gained a bare =LRG_SCRIPT_LANGUAGE_ELISP= enum *label* —
+a name only; libregnum ships no interpreter for it.  cmacs supplies the factory.
+
+At startup =init_cmacs_lrgscript()= calls =cmacs_lrgscript_register_backend()=,
+after which:
+
+- =(cmacs-libregnum-scripting-languages)= reports =("Emacs Lisp" . 5)= alongside
+  the compiled-in backends;
+- =LrgScriptComponent= and =LrgScriptBinding= transparently support language
+  elisp, so the editor "attach a script" flow works with =.el= files.
+
+** The elisp backend (CmacsLrgScriptingElisp)
+
+An =LrgScripting= subclass whose vtable routes into Emacs Lisp:
+
+| vtable slot         | elisp behaviour                                            |
+|---------------------+-----------------------------------------------------------|
+| =load_string=       | read + eval the source (wrapped in a =progn=)             |
+| =load_file=         | =load= the =.el= file (coding-correct)                    |
+| =call_function=     | =funcall= by name, marshalling args/return               |
+| =register_function= | expose a host C callback to scripts under a name          |
+| =get_global= / =set_global= | read/write an elisp variable as a =GValue=        |
+| =reset=             | drop host-function bindings                                |
+
+Every path that enters Lisp goes through =cmacs-eval-dispatch='s
+=waiting_for_input= guard (see the *GLib event loop* invariant in the top-level
+=CLAUDE.md=): script hooks fire from GLib callbacks (the libregnum animation
+timer / render loop), where a signalled elisp error would otherwise abort the
+process.  The guard + an internal =condition-case= keep a signalling script from
+crashing the compositor.
+
+** Firewall (raylib =Color= vs pgtk =Color=)
+
+Like every libregnum-touching cmacs subsystem, the code is split so a
+translation unit includes *either* =<libregnum.h>* *or* =lisp.h= / pgtk headers,
+never both:
+
+- =cmacs-lrgscript-elisp.c= / =-game.c= — the =<libregnum.h>= side (the
+  =LrgScripting= / =LrgGameTemplate= subclasses); never =lisp.h=.
+- =cmacs-lrgscript-bridge.c= / =-defuns.c= / =-game-defuns.c= — the =lisp.h=
+  side (marshalling, DEFUNs); never =<libregnum.h>=.
+- The two halves talk through =GValue= + plain C only.
+
+* Node scripting
+
+A node script defines up to three hooks; libregnum's =LrgScriptComponent= calls
+them over the node's lifetime:
+
+#+begin_src emacs-lisp
+(defun lrg-script-start ()        ; once, on attach
+  (message "node attached"))
+
+(defun lrg-script-update (delta)  ; every frame, DELTA seconds
+  ;; ... mutate the node, read state, etc.
+  )
+
+(defun lrg-script-detach ()       ; once, on detach
+  (message "node detached"))
+#+end_src
+
+libregnum looks the hooks up by the canonical underscore names
+(=lrg_script_start= …); the backend *also* accepts the idiomatic hyphenated
+names above, so you write elisp naturally.
+
+Attach a script to an editor node with:
+
+#+begin_src emacs-lisp
+(cmacs-lrgscript-attach BUFFER NODE-ID "/path/to/behaviour.el")
+;; or, directly, the language integer (5 = elisp):
+(cmacs-libregnum-editor-attach-script BUFFER NODE-ID cmacs-lrgscript-language
+                                      "/path/to/behaviour.el")
+#+end_src
+
+* Caveat: one global obarray
+
+Unlike Lua's per-=lua_State= sandbox, *every* elisp script context shares Emacs's
+single global obarray.  Two scripts that both define =lrg-script-update= clash —
+the last loaded wins.  For more than one scripted node, dispatch from a single
+set of hooks (keyed on the node) or give each script a unique symbol prefix and
+a thin =lrg-script-update= shim.  A whole game is best authored through the game
+layer, which owns its loop hooks — see [[file:games.org][the game guide]].
+
+* Building
+
+=--with-cmacs-lrgscript= is in the default flag set (=just bootstrap= and the
+container build include it).  It requires =--with-cmacs-libregnum= and
+=--with-cmacs-glib=.  The feature is queryable at runtime:
+
+#+begin_src emacs-lisp
+IS-CMACS-LRGSCRIPT                 ; => t when compiled in
+(cmacs-lrgscript-available-p)      ; => t when registered with the manager
+#+end_src
+
+See also [[file:reference.org][the DEFUN reference]] and [[file:games.org][Writing a complete game in Emacs
+Lisp]].

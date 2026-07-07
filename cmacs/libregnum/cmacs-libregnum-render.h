@@ -285,6 +285,13 @@ extern gboolean cmacs_libregnum_render_ctx_load_game
                                char **error_msg);
 extern void cmacs_libregnum_render_ctx_unload_game
                               (CmacsLibregnumRenderCtx *r);
+/* Host an already-constructed LrgGameTemplate* (transfer full) -- the
+ * cmacs-lrgscript elisp-game path.  GAME_TEMPLATE is a void* (LrgGameTemplate*)
+ * so lisp-side callers need not see <libregnum.h>. */
+extern gboolean cmacs_libregnum_render_ctx_host_game
+                              (CmacsLibregnumRenderCtx *r,
+                               void *game_template,
+                               char **error_msg);
 extern gboolean cmacs_libregnum_render_ctx_is_game
                               (CmacsLibregnumRenderCtx *r);
 /* Full-focus mouse capture: TRUE = view grabs all frame clicks while focused

@@ -1,0 +1,1 @@
+./../cmacs/lrgscript/cmacs-lrgscript-init.c
