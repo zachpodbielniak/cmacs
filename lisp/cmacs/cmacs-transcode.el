@@ -1078,8 +1078,8 @@ with `<runtime> rm -f'; the client process is also SIGKILLed."
 
 (defconst cmacs-transcode--hint-lines
   '(" hjkl:move  a:add  A:add-dir  d:del  K:kill  RET:start"
-    " p:parallel P:jobs  c:codec q:crf/bitrate f:format H:hwaccel  o:out"
-    " m:missing x:existing  M:kind  L:log  g:refresh  ?:help")
+    " p:parallel P:jobs  c:codec Q:crf/bitrate f:format H:hwaccel  o:out"
+    " m:missing x:existing  M:kind  L:log  g:refresh  q:quit  ?:help")
   "Key hint lines shown at the bottom of the queue buffer.")
 
 (defun cmacs-transcode--render (buffer)
@@ -1125,7 +1125,7 @@ with `<runtime> rm -f'; the client process is also SIGKILLed."
   (define-key map (kbd "p") #'cmacs-transcode-toggle-parallel)
   (define-key map (kbd "P") #'cmacs-transcode-set-parallel)
   (define-key map (kbd "c") #'cmacs-transcode-set-codec)
-  (define-key map (kbd "q") #'cmacs-transcode-set-quality)
+  (define-key map (kbd "Q") #'cmacs-transcode-set-quality)
   (define-key map (kbd "f") #'cmacs-transcode-set-format)
   (define-key map (kbd "H") #'cmacs-transcode-cycle-hwaccel)
   (define-key map (kbd "o") #'cmacs-transcode-set-output-dir)
@@ -1134,6 +1134,7 @@ with `<runtime> rm -f'; the client process is also SIGKILLed."
   (define-key map (kbd "M") #'cmacs-transcode-set-kind)
   (define-key map (kbd "L") #'cmacs-transcode-show-log)
   (define-key map (kbd "g") #'cmacs-transcode-refresh)
+  (define-key map (kbd "q") #'quit-window)
   (define-key map (kbd "?") #'cmacs-transcode-help))
 
 (defun cmacs-transcode--cleanup ()
@@ -1176,7 +1177,8 @@ ffmpeg inside a container."
         (and p (not (string-empty-p p)) (list p))))))
 
 (defun cmacs-transcode--open (kind files)
-  "Open (or reuse) the queue buffer for KIND, adding FILES, and pop to it."
+  "Open (or reuse) the queue buffer for KIND, adding FILES, and switch to it.
+Displays the queue in the current window rather than a new split."
   (let ((dir default-directory)
         (buf (get-buffer-create "*cmacs-transcode*")))
     (with-current-buffer buf
@@ -1192,7 +1194,7 @@ ffmpeg inside a container."
                     f (plist-get cmacs-transcode--options :recursive)))
           (cmacs-transcode--enqueue-file (car e) (cdr e))))
       (cmacs-transcode--render buf))
-    (pop-to-buffer buf)))
+    (switch-to-buffer buf)))
 
 ;;;###autoload
 (defun cmacs-transcode ()

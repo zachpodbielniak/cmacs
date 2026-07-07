@@ -75,7 +75,7 @@ drains.
 | =p=   | =cmacs-transcode-toggle-parallel=  | Toggle sequential ⇄ the configured job count    |
 | =P=   | =cmacs-transcode-set-parallel=     | Set the number of concurrent jobs               |
 | =c=   | =cmacs-transcode-set-codec=        | Set video codec (audio: format/codec)           |
-| =q=   | =cmacs-transcode-set-quality=      | Set CRF (video) or custom bitrate (audio)       |
+| =Q=   | =cmacs-transcode-set-quality=      | Set CRF (video) or custom bitrate (audio)       |
 | =f=   | =cmacs-transcode-set-format=       | Set the container/format                        |
 | =H=   | =cmacs-transcode-cycle-hwaccel=    | Cycle off → auto → force → vulkan → off         |
 | =o=   | =cmacs-transcode-set-output-dir=   | Set the output directory                        |
@@ -84,6 +84,7 @@ drains.
 | =M=   | =cmacs-transcode-set-kind=         | Switch the session between video and audio      |
 | =L=      | =cmacs-transcode-show-log=         | Show =*cmacs-transcode-log*= (full ffmpeg out)  |
 | =g=      | =cmacs-transcode-refresh=          | Redraw the buffer                               |
+| =q=      | =quit-window=                      | Quit the queue buffer                           |
 | =?=      | =cmacs-transcode-help=             | Echo the key hints                              |
 
 Each session holds a job list plus an options plist *seeded from the

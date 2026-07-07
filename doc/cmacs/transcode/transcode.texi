@@ -92,7 +92,7 @@ Toggle parallelism between sequential and the configured job count.
 Set the number of concurrent jobs.
 @item c
 Set the video codec (or, in an audio session, the audio format/codec).
-@item q
+@item Q
 Set the CRF (video) or the custom bitrate (audio).
 @item f
 Set the container/format.
@@ -112,6 +112,8 @@ Switch the session between video and audio.
 Show the @code{*cmacs-transcode-log*} buffer (full ffmpeg output).
 @item g
 Redraw the buffer.
+@item q
+Quit the queue buffer (@code{quit-window}).
 @item ?
 Echo the key hints.
 @end table
