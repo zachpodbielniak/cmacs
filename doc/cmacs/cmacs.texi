@@ -66,6 +66,7 @@ interaction.
 * CMacs Imgedit::               2D image / sprite editor (layers, tools, clipboard).
 * CMacs Vidstudio::             Reel-based video editor (timeline, transitions, export).
 * CMacs Transcode::             Native ffmpeg batch video/audio transcoder.
+* CMacs Transcribe::            Batch speech-to-text (whisper STT + AI summaries).
 * Build Configuration::         Configure flags and dependencies.
 * Upstream Changes::            Every edit cmacs makes to stock Emacs sources.
 @end menu
@@ -5931,6 +5932,14 @@ M-x cmacs-whisper-download-model RET ggml-base.en.bin RET
 ;;                   ...)))
 @end example
 
+All four transcribe DEFUNs
+(@code{cmacs-whisper-transcribe-file}, @code{-pcm}, @code{-async},
+@code{-pcm-async}) accept an optional trailing @var{LANGUAGE} and
+@var{THREADS}.  @var{THREADS} caps the CPU cores whisper.cpp uses for the
+inference; nil or a non-positive value means ``all cores'' (the historical
+default).  @code{cmacs-transcribe} passes @code{4} by default
+(@pxref{CMacs Transcribe}).
+
 @section Live Dictation (cmacs-whisper-dictate)
 
 @kbd{M-x cmacs-whisper-dictate} (bound to @kbd{C-c v d}) toggles a
@@ -8992,6 +9001,9 @@ viewport; a low-resolution proxy keeps playback near real-time.
 @include transcode/transcode.texi
 
 @c ===================================================================
+@include transcribe/transcribe.texi
+
+@c ===================================================================
 @node Build Configuration
 @chapter Build Configuration
 
@@ -9042,6 +9054,7 @@ fully-featured build matching Fedora defaults, use:
   --with-cmacs-emacsctl \
   --with-cmacs-lrgterm \
   --with-cmacs-transcode \
+  --with-cmacs-transcribe \
   --enable-cmacs-cpatch \
   --enable-cmacs-deps-debug   # in-house deps -O0 -g3 (DWARF): gdb + runtime cintrospection
 @end example

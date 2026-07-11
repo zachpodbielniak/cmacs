@@ -67,6 +67,9 @@ const char *const cmacs_feature_names[] = {
 #ifdef HAVE_CMACS_TRANSCODE
   "transcode",
 #endif
+#ifdef HAVE_CMACS_TRANSCRIBE
+  "transcribe",
+#endif
 #ifdef HAVE_CMACS_GNUSEYE
   "gnuseye",
 #endif
@@ -224,6 +227,12 @@ syms_of_cmacs_features (void)
   is_cmacs_transcode = true;
 #endif
 
+  DEFVAR_BOOL ("IS-CMACS-TRANSCRIBE", is_cmacs_transcribe,
+    doc: /* Non-nil if this build was configured --with-cmacs-transcribe.  */);
+#ifdef HAVE_CMACS_TRANSCRIBE
+  is_cmacs_transcribe = true;
+#endif
+
   DEFVAR_BOOL ("IS-CMACS-GNUSEYE", is_cmacs_gnuseye,
     doc: /* Non-nil if this build was configured --with-cmacs-gnuseye.  */);
 #ifdef HAVE_CMACS_GNUSEYE
@@ -339,6 +348,7 @@ syms_of_cmacs_features (void)
   cmacs_features__alias ("is-cmacs-imgedit",     "IS-CMACS-IMGEDIT");
   cmacs_features__alias ("is-cmacs-vidstudio",   "IS-CMACS-VIDSTUDIO");
   cmacs_features__alias ("is-cmacs-transcode",   "IS-CMACS-TRANSCODE");
+  cmacs_features__alias ("is-cmacs-transcribe",  "IS-CMACS-TRANSCRIBE");
   cmacs_features__alias ("is-cmacs-gnuseye",     "IS-CMACS-GNUSEYE");
   cmacs_features__alias ("is-cmacs-lrgscript",   "IS-CMACS-LRGSCRIPT");
   cmacs_features__alias ("is-cmacs-cad",         "IS-CMACS-CAD");

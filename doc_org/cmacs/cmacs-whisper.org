@@ -94,7 +94,7 @@ Recommended starter set:
 ** Async job lifecycle
 
 1. Lisp calls ~cmacs-whisper-transcribe-async~ with model path,
-   language, WAV/PCM, and callback.
+   language, WAV/PCM, callback, and an optional thread count.
 2. C side packages a ~CmacsWhisperJob~ + spawns a ~GThread~.
 3. Worker calls ~whisper_full~ (synchronous, off the main thread).
 4. Worker calls ~g_main_context_invoke~ to hand the result back.
@@ -127,7 +127,23 @@ M-x cmacs-whisper-download-model RET ggml-base.en.bin RET
 (cmacs-whisper-transcribe-async
   (cmacs-whisper-model-path) "/tmp/note.wav"
   (lambda (r) (message "got: %s" (cdr (assq :text r)))))
+
+;; Optional trailing LANGUAGE and THREADS args (all four transcribe
+;; DEFUNs accept them).  THREADS caps the CPU cores whisper.cpp uses
+;; for the inference; nil or a non-positive value means "all cores"
+;; (the historical default).  cmacs-transcribe passes 4 here by default.
+(cmacs-whisper-transcribe-async
+  (cmacs-whisper-model-path) "/tmp/note.wav"
+  (lambda (r) (message "got: %s" (cdr (assq :text r))))
+  "en" 4)
 #+end_src
+
+The full arities are:
+
+- ~(cmacs-whisper-transcribe-file MODEL WAV &optional LANGUAGE THREADS)~
+- ~(cmacs-whisper-transcribe-pcm MODEL PCM &optional LANGUAGE THREADS)~
+- ~(cmacs-whisper-transcribe-async MODEL WAV CALLBACK &optional LANGUAGE THREADS)~
+- ~(cmacs-whisper-transcribe-pcm-async MODEL PCM CALLBACK &optional LANGUAGE THREADS)~
 
 * Live dictation (cmacs-whisper-dictate)
 

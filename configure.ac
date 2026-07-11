@@ -665,6 +665,7 @@ OPTION_DEFAULT_OFF([cmacs-lrgterm], [CMacs independent libregnum/raylib display 
 OPTION_DEFAULT_OFF([cmacs-imgedit], [CMacs 2D image / sprite editor (layers, blend modes, undo; libregnum LrgImageDocument)])
 OPTION_DEFAULT_OFF([cmacs-vidstudio], [CMacs video editor (libregnum Reel timeline, transitions, effects, ffmpeg export)])
 OPTION_DEFAULT_OFF([cmacs-transcode], [CMacs native ffmpeg video/audio transcoder (podman/docker container or host; Emacs-managed parallel pool)])
+OPTION_DEFAULT_OFF([cmacs-transcribe], [CMacs batch speech-to-text (whisper.cpp STT + transcode pre-pass, AI summaries, hooks; Emacs-managed parallel pool)])
 OPTION_DEFAULT_OFF([cmacs-gnuseye], [CMacs gnuseye live planetary globe (GNU's Eye; requires libregnum)])
 OPTION_DEFAULT_OFF([cmacs-lrgscript], [CMacs Emacs Lisp scripting backend + game authoring for libregnum (requires libregnum + glib)])
 OPTION_DEFAULT_OFF([cmacs-cad], [CMacs parametric CAD subsystem (cad-glib kernels; parts render as libregnum CAD nodes)])
@@ -1368,6 +1369,23 @@ if test "$with_cmacs_transcode" != "no"; then
   fi
 fi
 AC_SUBST(HAVE_CMACS_TRANSCODE)
+
+# CMACS Transcribe: pure-Elisp subsystem (no C build artefacts).  Layers batch
+# speech-to-text on cmacs-whisper (STT) and cmacs-transcode (the ffmpeg pre-pass
+# that converts any input to the 16 kHz mono WAV the embedded whisper reader
+# needs), with optional cmacs-ai summaries.  All backends are resolved at
+# runtime from Elisp, so probes here are informational only and never fatal.
+HAVE_CMACS_TRANSCRIBE=no
+if test "$with_cmacs_transcribe" != "no"; then
+  HAVE_CMACS_TRANSCRIBE=yes
+  AC_DEFINE([HAVE_CMACS_TRANSCRIBE], 1, [CMacs batch speech-to-text subsystem])
+  if test "$with_cmacs_whisper" = "no"; then
+    AC_MSG_WARN([cmacs-transcribe enabled without cmacs-whisper.  Transcription
+  needs the whisper.cpp STT engine; add --with-cmacs-whisper (which also needs
+  --with-cmacs-audio) or cmacs-transcribe will load but cannot transcribe.])
+  fi
+fi
+AC_SUBST(HAVE_CMACS_TRANSCRIBE)
 
 # CMACS Video: GStreamer-backed video overlay for inline #+BEGIN_VIDEO
 # blocks and standalone cmacs-video-mode buffers.  Compositor-agnostic:

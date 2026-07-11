@@ -1,0 +1,289 @@
+@c transcribe.texi --- master file for the CMacs Transcribe docs
+@c Copyright (C) 2026 Zach Podbielniak
+@c SPDX-License-Identifier: AGPL-3.0-or-later
+
+@node CMacs Transcribe
+@chapter CMacs Transcribe: Batch Speech-to-Text
+
+@cindex transcribe
+@cindex speech-to-text
+@cindex whisper
+@cindex transcription
+@cindex subtitles
+
+@code{cmacs-transcribe} is a native batch @dfn{speech-to-text} subsystem and a
+sibling of @code{cmacs-transcode} (@pxref{CMacs Transcode}), whose queue UI and
+bounded parallel pool it mirrors.  For each queued audio or video file it runs a
+three-stage pipeline entirely from inside Emacs, streaming live per-job status
+into a dedicated queue buffer that redraws on a timer:
+
+@enumerate
+@item
+@strong{converting} --- ffmpeg (via @code{cmacs-transcode}'s backend: a
+podman/docker @code{linuxserver/ffmpeg} container, else a host @command{ffmpeg})
+transcodes the input to a @emph{transient 16 kHz mono S16LE WAV}.  This is
+mandatory: the embedded whisper reader accepts only that exact PCM WAV --- it
+cannot decode mp3/ogg/m4a/mp4 itself the way the standalone @command{whisper-cli}
+can.  The temporary WAV is deleted after transcription.
+@item
+@strong{transcribing} --- @code{cmacs-whisper} (whisper.cpp) turns the WAV into
+text plus timestamped segments; the transcript is shown in the buffer and saved
+to @file{<input>.txt}.
+@item
+@strong{summarizing} (optional) --- when @code{cmacs-ai} is built and enabled, an
+asynchronous AI call summarizes the transcript into an Org document whose
+@emph{final section is the full transcript}.
+@end enumerate
+
+It is a @emph{pure-Elisp subsystem} (no C of its own).  Enable it with
+@option{--with-cmacs-transcribe} (part of the standard flag set); at runtime it
+needs @option{--with-cmacs-whisper} plus podman/docker or a host
+@command{ffmpeg} (and @option{--with-cmacs-ai} for summaries).  The build flag is
+exposed as @code{IS-CMACS-TRANSCRIBE} and @code{(cmacs-feature-p 'transcribe)}.
+
+@menu
+* Transcribe Quick Start::      Open the queue and run it.
+* Transcribe Queue Buffer::     The control panel and status view.
+* Transcribe Pipeline::         Convert, transcribe, summarize.
+* Transcribe Outputs::          Files written and naming.
+* Transcribe Summaries::        AI content-type templates.
+* Transcribe Hooks::            Integrate with a database or notes.
+* Transcribe Options::          Every defcustom knob.
+* Transcribe Examples::         Common tasks.
+@end menu
+
+@node Transcribe Quick Start
+@section Quick Start
+
+@table @kbd
+@item M-x cmacs-transcribe
+In Dired this queues the marked files; elsewhere it prompts for a file or
+directory (empty to add later).  Then press @key{RET}.
+@end table
+
+In the resulting @code{*cmacs-transcribe*} buffer, add more files with @kbd{a},
+tune options with the single-key commands, then @key{RET} to start.  With the
+shipped defaults each file yields a sidecar @file{<input>.txt} (so
+@file{talk.mp4} @result{} @file{talk.mp4.txt}).  Whisper needs a model file; if
+none is present @key{RET} offers to download one
+(@code{cmacs-whisper-download-model}).
+
+@node Transcribe Queue Buffer
+@section The Queue Buffer
+
+The @code{*cmacs-transcribe*} buffer (major mode @code{cmacs-transcribe-mode},
+derived from @code{special-mode}) is both control panel and live status view.
+Its header shows the resolved backend and current options; each queued file is
+one line with a stage glyph (@code{@dots{}} queued, @code{⇄} converting,
+@code{✎} transcribing, @code{✦} summarizing, @code{✔} done, @code{✗} failed,
+@code{–} skipped), the file name, and --- while active --- the latest progress
+detail.  A timer (@code{cmacs-transcribe-poll-interval}, default 2 s) redraws
+while jobs run, and the buffer also redraws on every state change.
+
+@subsection Jobs versus threads
+
+Two knobs control concurrency and they are independent:
+
+@table @kbd
+@item P / p
+Set @emph{jobs} (@code{cmacs-transcribe-parallel-jobs}): how many files are in
+the pipeline at once.
+@item w
+Set @emph{threads} (@code{cmacs-transcribe-threads}, default 4): how many CPU
+cores whisper.cpp uses for a @emph{single} transcription.
+@end table
+
+whisper.cpp already uses several threads per inference and serialises
+transcriptions that share a model, so raising @emph{jobs} mainly parallelises the
+ffmpeg conversion stage and pipelines conversion against transcription.  The sane
+default is 1 job x 4 threads.
+
+@subsection Keybindings
+
+@multitable @columnfractions .12 .40 .48
+@headitem Key @tab Command @tab Action
+@item @kbd{h j k l} @tab (motion) @tab Move (Doom/Evil-friendly)
+@item @kbd{a} @tab @code{cmacs-transcribe-add} @tab Add a file/dir (prefix: recurse)
+@item @kbd{A} @tab @code{cmacs-transcribe-add-directory} @tab Add a directory recursively
+@item @kbd{d} @tab @code{cmacs-transcribe-remove} @tab Remove the job on the line
+@item @kbd{K} @tab @code{cmacs-transcribe-kill} @tab Kill the active job (no retry)
+@item @key{RET} @tab @code{cmacs-transcribe-start} @tab Start transcribing
+@item @kbd{v} @tab @code{cmacs-transcribe-visit} @tab Open the transcript .txt of the done line
+@item @kbd{V} @tab @code{cmacs-transcribe-visit-summary} @tab Open the summary .org of the line
+@item @kbd{r} @tab @code{cmacs-transcribe-summarize-at-point} @tab Retroactively summarise the done line
+@item @kbd{p} @tab @code{cmacs-transcribe-toggle-parallel} @tab Toggle sequential / configured jobs
+@item @kbd{P} @tab @code{cmacs-transcribe-set-parallel} @tab Set concurrent jobs
+@item @kbd{w} @tab @code{cmacs-transcribe-set-threads} @tab Set whisper cores (0 = all)
+@item @kbd{c} @tab @code{cmacs-transcribe-set-model} @tab Choose the whisper model
+@item @kbd{n} @tab @code{cmacs-transcribe-set-language} @tab Set the language code
+@item @kbd{s} @tab @code{cmacs-transcribe-toggle-summarize} @tab Toggle AI summaries
+@item @kbd{S} @tab @code{cmacs-transcribe-set-summary-type} @tab Choose the summary template
+@item @kbd{f} @tab @code{cmacs-transcribe-cycle-formats} @tab Cycle srt/vtt/timestamped outputs
+@item @kbd{o} @tab @code{cmacs-transcribe-set-output-dir} @tab Set output dir (empty = sidecar)
+@item @kbd{O} @tab @code{cmacs-transcribe-set-summary-dir} @tab Set summary Org dir (notes repo)
+@item @kbd{T} @tab @code{cmacs-transcribe-set-tags} @tab Set session tags (hook plist)
+@item @kbd{y} @tab @code{cmacs-transcribe-set-type} @tab Set session category (hook plist)
+@item @kbd{m} @tab @code{cmacs-transcribe-toggle-missing} @tab Only files lacking a transcript
+@item @kbd{x} @tab @code{cmacs-transcribe-toggle-existing} @tab Only files that have one
+@item @kbd{L} @tab @code{cmacs-transcribe-show-log} @tab Show @code{*cmacs-transcribe-log*}
+@item @kbd{g} @tab @code{cmacs-transcribe-refresh} @tab Redraw the buffer
+@item @kbd{q} @tab @code{quit-window} @tab Quit
+@item @kbd{?} @tab @code{cmacs-transcribe-help} @tab Echo the key hints
+@end multitable
+
+@node Transcribe Pipeline
+@section The Pipeline
+
+Emacs supervises the pipeline as a bounded parallel pool: @code{cmacs-transcribe-start}
+seeds a queue and primes @code{min(jobs, N)} pipelines; each job holds one pool
+slot from conversion through transcription (and any summary) until it reaches a
+terminal state, at which point the next queued job starts.  The conversion stage
+uses @code{make-process} with a process sentinel; the transcription stage uses
+@code{cmacs-whisper-transcribe-async}'s completion callback (whisper runs off the
+main thread); the summary stage uses @code{cmacs-ai-chat-stream}'s asynchronous
+callback.  Nothing blocks Emacs, so the tool is safe to run even when Emacs is
+your Wayland compositor under @code{emacs --gowl}.
+
+Killing a job (@kbd{K}) force-removes a running conversion container (as
+@code{cmacs-transcode} does), cancels an in-flight summary stream, and lets an
+in-progress whisper inference finish but discards its result.
+
+@node Transcribe Outputs
+@section Outputs and Naming
+
+@table @file
+@item <input>.txt
+The plain transcript (always).  With @code{cmacs-transcribe-naming} = @code{append}
+(default), @file{talk.mp4} @result{} @file{talk.mp4.txt}; with @code{base} it is
+@file{talk.txt}.
+@item <input>.org
+The summary document (when summaries are on): sections @code{* Summary},
+@code{* Metadata}, and @code{* Transcript} (the full transcript, last).
+@item <input>.srt / .vtt / .ts.txt
+Optional subtitle / timestamped transcripts built from whisper's segment
+timings.  Enable with @kbd{f} or the @code{cmacs-transcribe-emit-*} customs.
+Subtitles default to @emph{base} naming (@file{talk.srt}) so video players
+auto-load them.
+@end table
+
+By default every output is a sidecar next to its input.  Set
+@code{cmacs-transcribe-output-dir} (@kbd{o}) to collect transcripts elsewhere,
+and @code{cmacs-transcribe-summary-dir} (@kbd{O}) to file summary documents into a
+notes / PARA repository independently.
+
+Once a file is done its queue line becomes a button: press @kbd{v} (or click it
+with @kbd{mouse-2}) to open the @file{.txt} transcript, and @kbd{V} to open the
+@file{.org} summary if one exists.  If you ran the queue with summaries off, put
+point on a finished line and press @kbd{r}
+(@code{cmacs-transcribe-summarize-at-point}) to summarise just that file after the
+fact --- it streams a summary and writes the @file{.org} without re-transcribing.
+
+@node Transcribe Summaries
+@section Summaries
+
+When @option{--with-cmacs-ai} is built and a provider is configured, press
+@kbd{s} to enable summaries and @kbd{S} to pick a @emph{content-type template}
+(@code{cmacs-transcribe-summary-templates}: @code{general}, @code{meeting},
+@code{lecture}, @code{interview}, @code{research}, @code{podcast}, @dots{}).
+Add your own by extending the alist.  Summaries stream asynchronously, so they
+never block Emacs; if a summary fails the job still completes with its
+@file{.txt}.
+
+@node Transcribe Hooks
+@section Hooks: Integrate With Anything
+
+Two abnormal hooks route every result wherever a user config likes:
+
+@vtable @code
+@item cmacs-transcribe-after-transcription-functions
+Run after @file{<input>.txt} is written, before summarising.
+@item cmacs-transcribe-after-summary-functions
+Run after the summary @file{.org} is written (adds @code{:summary} and
+@code{:org-file}).
+@end vtable
+
+Each is called with a single INFO plist: @code{:input-file}, @code{:kind},
+@code{:text-file}, @code{:org-file}, @code{:srt-file}, @code{:vtt-file},
+@code{:ts-file}, @code{:text}, @code{:segments}, @code{:summary},
+@code{:summary-type}, @code{:duration-seconds}, @code{:file-hash} (SHA-256),
+@code{:model}, @code{:language}, @code{:threads}, @code{:type}, @code{:tags},
+@code{:source}, and @code{:transcribed-at} (ISO-8601).  This is a superset of
+what a transcription database typically stores, so a hook can insert a row with
+no cmacs-side coupling.  See the org guide's reference for a copy-paste
+PostgreSQL example.
+
+@node Transcribe Options
+@section Options
+
+All options live in the @code{cmacs-transcribe} customize group.  The ffmpeg
+@emph{backend} is not re-declared here: the conversion pre-pass reuses
+@code{cmacs-transcode}'s backend settings (@code{cmacs-transcode-backend},
+@code{cmacs-transcode-container-image}, and the
+@env{CMACS_TRANSCODE_CONTAINER_RUNTIME} environment variable).
+
+@vtable @code
+@item cmacs-transcribe-parallel-jobs
+Files in the pipeline at once.  Default @code{1}.
+@item cmacs-transcribe-threads
+CPU cores per whisper transcription (nil = all cores).  Default @code{4}.
+@item cmacs-transcribe-poll-interval
+Seconds between live redraws (nil/0 disables the timer).  Default @code{2}.
+@item cmacs-transcribe-max-retries
+Attempts for the ffmpeg conversion stage.  Default @code{2}.
+@item cmacs-transcribe-process-filter
+@code{missing} / @code{existing} / nil, keyed on the @file{.txt} file.
+@item cmacs-transcribe-model
+Whisper model basename (nil = @code{cmacs-whisper-default-model}).
+@item cmacs-transcribe-language
+2-letter code (nil = @code{cmacs-whisper-language}).
+@item cmacs-transcribe-output-dir
+Transcript output directory (nil = sidecar).
+@item cmacs-transcribe-summary-dir
+Summary Org directory (nil = follow @code{cmacs-transcribe-output-dir}).
+@item cmacs-transcribe-naming
+@code{append} (@file{talk.mp4.txt}) or @code{base} (@file{talk.txt}).
+@item cmacs-transcribe-subtitle-naming
+Naming for @file{.srt}/@file{.vtt}.  Default @code{base}.
+@item cmacs-transcribe-emit-srt
+@itemx cmacs-transcribe-emit-vtt
+@itemx cmacs-transcribe-emit-timestamped-txt
+Enable the extra subtitle / timestamped outputs.
+@item cmacs-transcribe-summarize
+Summarise each transcript into an Org file.  Default nil.
+@item cmacs-transcribe-summary-type
+Active summary template key.  Default @code{general}.
+@item cmacs-transcribe-summary-templates
+Alist of TYPE @result{} system prompt.
+@item cmacs-transcribe-summary-provider
+@itemx cmacs-transcribe-summary-model
+Provider / model for summaries (nil = cmacs-ai defaults).
+@item cmacs-transcribe-source
+@itemx cmacs-transcribe-type
+@itemx cmacs-transcribe-tags
+Metadata copied into the hook INFO plist.
+@item cmacs-transcribe-compute-file-hash
+@itemx cmacs-transcribe-sha256-program
+Whether and how to compute the per-input SHA-256 for @code{:file-hash}.
+@item cmacs-transcribe-ffmpeg-extra-args
+Extra ffmpeg args inserted into the audio-extraction command.
+@end vtable
+
+@node Transcribe Examples
+@section Examples
+
+@itemize @bullet
+@item
+@strong{Transcribe a folder of recordings} --- Dired, mark them, @kbd{M-x
+cmacs-transcribe}, @key{RET}.
+@item
+@strong{Meeting notes with action items} --- press @kbd{s}, then @kbd{S}
+@result{} @code{meeting}, then @key{RET}; read @file{<file>.org}.
+@item
+@strong{Subtitles for a video} --- press @kbd{f} until @samp{extra:srt}, then
+@key{RET}; @file{talk.srt} lands next to @file{talk.mp4}.
+@item
+@strong{Summaries into your notes} --- press @kbd{O} and choose your PARA inbox.
+@item
+@strong{Programmatically} ---
+@code{(cmacs-transcribe-file "~/rec/standup.m4a" :summarize t :summary-type 'meeting)}.
+@end itemize

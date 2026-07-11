@@ -430,6 +430,7 @@ cd cmacs
   --with-cmacs-imgedit \
   --with-cmacs-vidstudio \
   --with-cmacs-transcode \
+  --with-cmacs-transcribe \
   --enable-cmacs-cpatch \
   --enable-cmacs-deps-debug   # in-house deps -O0 -g3 (DWARF): gdb + runtime cintrospection
 make -j$(nproc)
@@ -551,6 +552,7 @@ Requires =autoconf= (>= 2.65) and =automake=.
   --with-cmacs-imgedit \
   --with-cmacs-vidstudio \
   --with-cmacs-transcode \
+  --with-cmacs-transcribe \
   --enable-cmacs-cpatch \
   --enable-cmacs-deps-debug   # in-house deps -O0 -g3 (DWARF): gdb + runtime cintrospection
 #+end_src
@@ -627,6 +629,27 @@ Module flags:
   26=, h265/vorbis/mkv for video and mp3/320k for audio).  Pure Elisp (no C);
   part of the standard flag set; needs podman/docker or a host =ffmpeg= at
   runtime.  See [[file:doc_org/cmacs/transcode/index.org][the manual]].
+
+- =--with-cmacs-transcribe= — Native batch *speech-to-text*, a sibling of
+  transcode.  For each queued audio/video file it converts to a transient
+  16 kHz-mono WAV via transcode's ffmpeg backend (the embedded whisper reader
+  only accepts that PCM WAV — it can't decode mp3/ogg/mp4 itself), runs
+  =cmacs-whisper= STT, saves =<input>.txt= (and optionally =.srt= / =.vtt= /
+  timestamped transcripts from whisper's segment timings), and — when
+  =cmacs-ai= is built and enabled — asynchronously summarizes the transcript
+  into a =.org= document whose final section is the full transcript.  =M-x
+  cmacs-transcribe= (also on dired-marked files) opens the same style of queue
+  buffer as transcode (add files/dirs, set model/language/parallelism, tune the
+  per-transcription CPU-core count, toggle summaries + content-type template,
+  choose output/notes directories, process-missing/existing), redrawing on a
+  timer.  Two abnormal hooks
+  (=cmacs-transcribe-after-transcription-functions= and
+  =-after-summary-functions=) fire a rich INFO plist (paths, text, timestamped
+  segments, sha256, duration, model, tags…) so a user config can push each
+  result anywhere — e.g. a full-text database.  Pure Elisp (no C of its own);
+  part of the standard flag set; needs =--with-cmacs-whisper= plus podman/docker
+  or a host =ffmpeg= at runtime (and =--with-cmacs-ai= for summaries).  See
+  [[file:doc_org/cmacs/transcribe/index.org][the manual]].
 
 Each module auto-detects bundled (=deps/=) or system libraries.  To
 force system-installed versions:

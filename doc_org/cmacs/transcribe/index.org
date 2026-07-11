@@ -1,0 +1,190 @@
+#+TITLE: CMacs Transcribe — Batch Speech-to-Text
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:2 num:nil
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+=cmacs-transcribe= is a native batch *speech-to-text* subsystem and a sibling of
+[[file:../transcode/index.org][=cmacs-transcode=], whose queue UI and bounded parallel pool it mirrors.  For
+each queued audio or video file it runs a three-stage pipeline entirely from
+inside Emacs, and streams live per-job status into a dedicated queue buffer that
+redraws on a timer.
+
+1. *converting* — ffmpeg (via =cmacs-transcode='s backend: a podman/docker
+   =linuxserver/ffmpeg= container, else a host =ffmpeg=) transcodes the input to
+   a *transient 16 kHz mono S16LE WAV*.  This step is mandatory: the embedded
+   whisper reader accepts only that exact PCM WAV — it cannot decode
+   mp3/ogg/m4a/mp4 itself the way the standalone =whisper-cli= can.  The temp WAV
+   is deleted after transcription.
+2. *transcribing* — =cmacs-whisper= (whisper.cpp) turns the WAV into text plus
+   timestamped segments.  The transcript is shown in the queue buffer and saved
+   to =<input>.txt=.
+3. *summarizing* (optional) — when =cmacs-ai= is built and enabled, an
+   asynchronous AI call summarizes the transcript into an Org document whose
+   *final section is the full transcript*.
+
+It is a *pure-Elisp subsystem* (no C of its own).  Enable it with
+=--with-cmacs-transcribe= (part of the standard flag set); at runtime it needs
+=--with-cmacs-whisper= plus podman/docker or a host =ffmpeg= (and
+=--with-cmacs-ai= for summaries).  The build flag is exposed as
+=IS-CMACS-TRANSCRIBE= and =(cmacs-feature-p 'transcribe)=.
+
+See also [[file:reference.org][the option, output, and hook reference]].
+
+* Quick start
+
+- =M-x cmacs-transcribe= — in Dired this queues the marked files; elsewhere it
+  prompts for a file or directory (empty to add later).  Then press =RET=.
+- In the resulting =*cmacs-transcribe*= buffer, add more files with =a=, tune
+  options with the single-key commands, then =RET= to start.
+
+With the shipped defaults, each file yields a sidecar =<input>.txt= next to it
+(so =talk.mp4= → =talk.mp4.txt=).  Turn on summaries with =s= and a summary Org
+document =talk.mp4.org= is written as well.  Whisper needs a model file; if none
+is present =RET= offers to download one (=M-x cmacs-whisper-download-model=).
+
+* The queue buffer
+
+The =*cmacs-transcribe*= buffer (major mode =cmacs-transcribe-mode=, derived
+from =special-mode=) is both the control panel and the live status view.  Its
+header shows the resolved backend and current options; each queued file is one
+line with a stage glyph (=…= queued, =⇄= converting, =✎= transcribing, =✦=
+summarizing, =✔= done, =✗= failed, =–= skipped), the file name, and — while
+active — the latest progress detail.  A timer
+(=cmacs-transcribe-poll-interval=, default 2 s) redraws the buffer while jobs
+run; it also redraws on every state change and self-cancels when the pool
+drains.
+
+#+begin_example
+ cmacs-transcribe — speech-to-text
+ backend:podman  jobs:OFF  threads:4  model:ggml-base.en.bin  lang:en
+ summary:on(meeting)  extra:srt  out:sidecar
+────────────────────────────────────────────────────────────────
+ [1/4] ✔  standup.m4a                                 done
+ [2/4] ✎  interview.mp4                               transcribing…
+ [3/4] …  lecture.mkv                                 queued
+ [4/4] …  memo.ogg                                    queued
+#+end_example
+
+** Jobs vs. threads
+
+Two different knobs control concurrency:
+
+- =P= / =p= set *jobs* (=cmacs-transcribe-parallel-jobs=): how many files are in
+  the pipeline at once.
+- =w= sets *threads* (=cmacs-transcribe-threads=, default 4): how many CPU cores
+  whisper.cpp uses for a *single* transcription.
+
+Because whisper.cpp already uses several threads per inference and serialises
+transcriptions that share a model, raising *jobs* mainly parallelises the ffmpeg
+conversion stage and pipelines conversion against transcription — it does not
+run multiple whisper inferences truly in parallel on one model.  The sane
+default is 1 job × 4 threads.
+
+** Keybindings
+
+| Key       | Command                               | Action                                       |
+|-----------+---------------------------------------+----------------------------------------------|
+| =h j k l= | (motion)                              | Move left/down/up/right (Doom/Evil-friendly) |
+| =a=       | =cmacs-transcribe-add=                | Add a media file or dir (prefix: recurse)    |
+| =A=       | =cmacs-transcribe-add-directory=      | Add a directory recursively                  |
+| =d=       | =cmacs-transcribe-remove=             | Remove the job on the current line           |
+| =K=       | =cmacs-transcribe-kill=               | Kill the active job on the line (no retry)   |
+| =RET=     | =cmacs-transcribe-start=              | Start transcribing the queue                 |
+| =v=       | =cmacs-transcribe-visit=              | Open the transcript =.txt= of the done line  |
+| =V=       | =cmacs-transcribe-visit-summary=      | Open the summary =.org= of the line, if any  |
+| =r=       | =cmacs-transcribe-summarize-at-point= | Retroactively summarise the done line        |
+| =p=       | =cmacs-transcribe-toggle-parallel=    | Toggle sequential ⇄ the configured job count |
+| =P=       | =cmacs-transcribe-set-parallel=       | Set the number of concurrent jobs            |
+| =w=       | =cmacs-transcribe-set-threads=        | Set whisper CPU cores (0 = all)              |
+| =c=       | =cmacs-transcribe-set-model=          | Choose the whisper model                     |
+| =n=       | =cmacs-transcribe-set-language=       | Set the language code (empty = default)      |
+| =s=       | =cmacs-transcribe-toggle-summarize=   | Toggle AI summarisation                      |
+| =S=       | =cmacs-transcribe-set-summary-type=   | Choose the summary content-type template     |
+| =f=       | =cmacs-transcribe-cycle-formats=      | Cycle extra outputs none/srt/+vtt/+ts/all    |
+| =o=       | =cmacs-transcribe-set-output-dir=     | Set the transcript output dir (empty=sidecar)|
+| =O=       | =cmacs-transcribe-set-summary-dir=    | Set the summary Org dir (e.g. a notes repo)  |
+| =T=       | =cmacs-transcribe-set-tags=           | Set session tags (for the hook INFO plist)   |
+| =y=       | =cmacs-transcribe-set-type=           | Set session category (for the hook plist)    |
+| =m=       | =cmacs-transcribe-toggle-missing=     | Only transcribe files lacking a transcript   |
+| =x=       | =cmacs-transcribe-toggle-existing=    | Only re-transcribe files that have one       |
+| =L=       | =cmacs-transcribe-show-log=           | Show =*cmacs-transcribe-log*=                |
+| =g=       | =cmacs-transcribe-refresh=            | Redraw the buffer                            |
+| =q=       | =quit-window=                         | Quit the queue buffer                        |
+| =?=       | =cmacs-transcribe-help=               | Echo the key hints                           |
+
+Each session holds a job list plus an options plist *seeded from the
+=defcustom= values* (see [[file:reference.org][reference]]) when the session is created; the
+single-key commands override those per session without mutating the customs.
+Under Evil/Doom the mode map is an overriding map, so the single-key bindings
+win in every state.
+
+** Opening results and summarising after the fact
+
+Once a file shows =✔ done= its line becomes a *button*: press =v= (or click it
+with =mouse-2=, or =mouse-1= when =mouse-1-click-follows-link= is on) to open its
+=<input>.txt= transcript in another window.  If a summary was produced, =V= opens
+the =.org=.
+
+If you ran the queue with summaries off and then decide you want one, put point
+on the finished line and press =r= (=cmacs-transcribe-summarize-at-point=): it
+streams a summary for just that file (using the current summary type, key =S=)
+and writes the =.org= — no need to re-transcribe.
+
+* Outputs and file naming
+
+- =<input>.txt= — the plain transcript (always).  With
+  =cmacs-transcribe-naming= = =append= (the default), =talk.mp4= →
+  =talk.mp4.txt=; with =base= it is =talk.txt=.
+- =<input>.org= — the summary document (when summaries are on).  Its sections
+  are =* Summary= (the AI output), =* Metadata=, and =* Transcript= (the full
+  transcript, last).
+- =.srt=, =.vtt=, =.ts.txt= — optional subtitle / timestamped transcripts built
+  from whisper's segment timings (enable with =f= or the =cmacs-transcribe-emit-*=
+  customs).  Subtitles default to *base* naming (=talk.srt=) so video players
+  auto-load them.
+
+By default every output is a *sidecar* next to its input.  Set
+=cmacs-transcribe-output-dir= (key =o=) to collect transcripts elsewhere, and
+=cmacs-transcribe-summary-dir= (key =O=) to file summary Org documents into a
+notes / PARA repository independently.
+
+* Summaries
+
+When =--with-cmacs-ai= is built and a provider is configured, press =s= to
+enable summaries and =S= to pick a *content-type template*
+(=cmacs-transcribe-summary-templates=: =general=, =meeting=, =lecture=,
+=interview=, =research=, =podcast=, …).  Summarisation runs *asynchronously*
+via =cmacs-ai-chat-stream=, so it never blocks Emacs (safe even when Emacs is
+your Wayland compositor under =emacs --gowl=).  The transcript is the primary
+deliverable: if a summary fails, the job still completes with its =.txt=.
+
+* Hooks: integrate with anything
+
+Two abnormal hooks let a user config route every result wherever it likes:
+
+- =cmacs-transcribe-after-transcription-functions= — after =<input>.txt= is
+  written, before summarising.
+- =cmacs-transcribe-after-summary-functions= — after the summary =.org= is
+  written (adds =:summary= and =:org-file=).
+
+Each is called with a single INFO plist carrying the input path, output paths,
+full text, timestamped =:segments=, an integer =:duration-seconds=, a
+=:file-hash= (SHA-256), the model, language, thread count, session =:type= /
+=:tags= / =:source=, and an ISO-8601 =:transcribed-at=.  That is a superset of
+what a transcription database typically stores, so a hook can insert a row with
+no cmacs-side coupling.  See [[file:reference.org][the reference]] for the full key list and a
+copy-paste database example.
+
+* Examples
+
+- *Transcribe a folder of recordings* — Dired, mark them, =M-x cmacs-transcribe=,
+  =RET=.  Each gets a sidecar =.txt=.
+- *Meeting notes with action items* — press =s= to enable summaries, =S= →
+  =meeting=, then =RET=; read =<file>.org= (TL;DR, decisions, action items) with
+  the full transcript at the end.
+- *Subtitles for a video* — press =f= until =extra:srt= (or more), then =RET=;
+  =talk.srt= lands next to =talk.mp4=.
+- *File summaries into your notes* — press =O= and choose your PARA inbox; the
+  =.org= summaries are written there while transcripts stay as sidecars.
+- *Only fill in what is missing* — press =m=; files that already have a
+  transcript are marked skipped.

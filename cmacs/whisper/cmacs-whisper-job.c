@@ -43,6 +43,7 @@ typedef struct {
   char        *language;       /* may be NULL = auto */
   float       *samples;        /* converted to f32 in [-1, +1] */
   size_t       n_samples;
+  int          n_threads;      /* whisper inference threads; <=0 = all cores */
   /* Output (set on completion). */
   GString     *full_text;
   GArray      *segments;       /* of struct CmacsSeg */
@@ -168,7 +169,8 @@ cmacs_whisper__run (CmacsWhisperJob *j)
   wp.print_timestamps  = false;
   wp.translate         = false;
   wp.language          = j->language ? j->language : "en";
-  wp.n_threads         = (int) g_get_num_processors ();
+  wp.n_threads         = j->n_threads > 0
+                         ? j->n_threads : (int) g_get_num_processors ();
 
   int rc = whisper_full (ctx, wp, j->samples, (int) j->n_samples);
   if (rc != 0)
@@ -268,11 +270,13 @@ cmacs_whisper__worker (gpointer user)
 void cmacs_whisper_transcribe_pcm_async (const char *model_path,
                                          const char *language,
                                          const int16_t *pcm, size_t n_samples,
+                                         int n_threads,
                                          Lisp_Object callback);
 void
 cmacs_whisper_transcribe_pcm_async (const char *model_path,
                                     const char *language,
                                     const int16_t *pcm, size_t n_samples,
+                                    int n_threads,
                                     Lisp_Object callback)
 {
   CmacsWhisperJob *j = g_new0 (CmacsWhisperJob, 1);
@@ -280,6 +284,7 @@ cmacs_whisper_transcribe_pcm_async (const char *model_path,
   j->language   = language ? g_strdup (language) : NULL;
   j->samples    = s16_to_f32 (pcm, n_samples);
   j->n_samples  = n_samples;
+  j->n_threads  = n_threads;
   j->cb_cookie  = cmacs_dispatch_callback_register (callback);
   /* Spawn a worker.  GThread is sufficient here; libdex's thread-pool
    * scheduler offers no extra benefit for a single long-running job. */
@@ -292,11 +297,13 @@ cmacs_whisper_transcribe_pcm_async (const char *model_path,
 void cmacs_whisper_transcribe_file_async (const char *model_path,
                                           const char *language,
                                           const char *wav_path,
+                                          int n_threads,
                                           Lisp_Object callback);
 void
 cmacs_whisper_transcribe_file_async (const char *model_path,
                                      const char *language,
                                      const char *wav_path,
+                                     int n_threads,
                                      Lisp_Object callback)
 {
   GError *err = NULL;
@@ -312,7 +319,8 @@ cmacs_whisper_transcribe_file_async (const char *model_path,
       cmacs_dispatch_safe_call1 (callback, res);
       return;
     }
-  cmacs_whisper_transcribe_pcm_async (model_path, language, pcm, n, callback);
+  cmacs_whisper_transcribe_pcm_async (model_path, language, pcm, n,
+                                      n_threads, callback);
   g_free (pcm);
 }
 
@@ -321,17 +329,20 @@ cmacs_whisper_transcribe_file_async (const char *model_path,
 Lisp_Object cmacs_whisper_transcribe_pcm_sync (const char *model_path,
                                                const char *language,
                                                const int16_t *pcm,
-                                               size_t n_samples);
+                                               size_t n_samples,
+                                               int n_threads);
 Lisp_Object
 cmacs_whisper_transcribe_pcm_sync (const char *model_path,
                                    const char *language,
-                                   const int16_t *pcm, size_t n_samples)
+                                   const int16_t *pcm, size_t n_samples,
+                                   int n_threads)
 {
   CmacsWhisperJob j = {0};
   j.model_path = g_strdup (model_path);
   j.language   = language ? g_strdup (language) : NULL;
   j.samples    = s16_to_f32 (pcm, n_samples);
   j.n_samples  = n_samples;
+  j.n_threads  = n_threads;
   j.cb_cookie  = 0;  /* sync path -- no callback to invoke */
   cmacs_whisper__run (&j);
   Lisp_Object out = cmacs_whisper__result_to_lisp (&j);
@@ -355,18 +366,20 @@ cmacs_whisper_transcribe_pcm_sync (const char *model_path,
 Lisp_Object cmacs_whisper_transcribe_file_sync (const char *model_path,
                                                 const char *language,
                                                 const char *wav_path,
+                                                int n_threads,
                                                 GError **err);
 Lisp_Object
 cmacs_whisper_transcribe_file_sync (const char *model_path,
                                     const char *language,
                                     const char *wav_path,
+                                    int n_threads,
                                     GError **err)
 {
   size_t n = 0;
   int16_t *pcm = read_wav_s16_mono (wav_path, &n, err);
   if (!pcm) return Qnil;
   Lisp_Object out = cmacs_whisper_transcribe_pcm_sync (model_path, language,
-                                                       pcm, n);
+                                                       pcm, n, n_threads);
   g_free (pcm);
   return out;
 }

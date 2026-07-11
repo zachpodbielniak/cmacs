@@ -1,0 +1,188 @@
+#+TITLE: CMacs Transcribe — Option, Output & Hook Reference
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:2 num:nil
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+This is the reference companion to [[file:index.org][the CMacs Transcribe guide]].  Every knob is a
+=defcustom= in the =cmacs-transcribe= group (=M-x customize-group RET
+cmacs-transcribe=); the queue buffer seeds each session from these and overrides
+them per session without mutating the customs.
+
+* General options
+
+| Option                              | Default | Meaning                                                    |
+|-------------------------------------+---------+------------------------------------------------------------|
+| =cmacs-transcribe-parallel-jobs=    | =1=     | Files in the pipeline at once (pool width).                |
+| =cmacs-transcribe-threads=          | =4=     | CPU cores per single whisper transcription (nil = all).    |
+| =cmacs-transcribe-poll-interval=    | =2=     | Seconds between live redraws (nil/0 disables the timer).   |
+| =cmacs-transcribe-max-retries=      | =2=     | Attempts for the ffmpeg conversion stage before failing.   |
+| =cmacs-transcribe-process-filter=   | =nil=   | =missing= / =existing= / nil, keyed on the =.txt= file.    |
+| =cmacs-transcribe-model=            | =nil=   | Whisper model basename (nil = =cmacs-whisper-default-model=). |
+| =cmacs-transcribe-language=         | =nil=   | 2-letter code (nil = =cmacs-whisper-language=).            |
+| =cmacs-transcribe-ffmpeg-extra-args= | =nil=  | Extra ffmpeg args for the extraction command.              |
+| =cmacs-transcribe-sha256-program=   | =sha256sum= | Streaming SHA-256 program for =:file-hash=.            |
+| =cmacs-transcribe-compute-file-hash= | =t=    | Compute a per-input SHA-256 for the hook plist.            |
+
+The ffmpeg *backend* (podman / docker / host, the container image, hwaccel
+device) is not re-declared here: the conversion pre-pass reuses =cmacs-transcode='s
+backend resolution (=cmacs-transcode-backend=,
+=cmacs-transcode-container-image=, the =CMACS_TRANSCODE_CONTAINER_RUNTIME=
+environment variable).  =(cmacs-transcribe-supported-p)= is non-nil when whisper
+is built and a backend resolves.
+
+* Output & naming options
+
+| Option                                | Default  | Meaning                                              |
+|---------------------------------------+----------+------------------------------------------------------|
+| =cmacs-transcribe-output-dir=         | =nil=    | Transcript/extra output dir (nil = sidecar).         |
+| =cmacs-transcribe-summary-dir=        | =nil=    | Summary Org dir (nil = follow output-dir).           |
+| =cmacs-transcribe-naming=             | =append= | =append= (=talk.mp4.txt=) or =base= (=talk.txt=).    |
+| =cmacs-transcribe-subtitle-naming=    | =base=   | Naming for =.srt= / =.vtt= (=base= auto-loads).      |
+| =cmacs-transcribe-emit-srt=           | =nil=    | Also write a SubRip =.srt= file.                     |
+| =cmacs-transcribe-emit-vtt=           | =nil=    | Also write a WebVTT =.vtt= file.                     |
+| =cmacs-transcribe-emit-timestamped-txt= | =nil=  | Also write a =[HH:MM:SS] text= =.ts.txt= file.      |
+
+* Summarisation options (cmacs-ai)
+
+| Option                                | Default    | Meaning                                        |
+|---------------------------------------+------------+------------------------------------------------|
+| =cmacs-transcribe-summarize=          | =nil=      | Summarise each transcript into an Org file.    |
+| =cmacs-transcribe-summary-type=       | =general=  | Active template key.                           |
+| =cmacs-transcribe-summary-templates=  | (alist)    | TYPE → system prompt (Org-output instructions). |
+| =cmacs-transcribe-summary-provider=   | =nil=      | Provider symbol (nil = cmacs-ai default).      |
+| =cmacs-transcribe-summary-model=      | =nil=      | Model name (nil = provider default).           |
+
+Shipped templates: =general=, =meeting=, =lecture=, =interview=, =research=,
+=podcast=.  Add your own by extending the alist:
+
+#+begin_src emacs-lisp
+(add-to-list 'cmacs-transcribe-summary-templates
+             '(standup . "You summarise daily-standup transcripts.  Reply in Org:
+a one-line *TL;DR*, then \"** Yesterday\", \"** Today\", \"** Blockers\"."))
+#+end_src
+
+Summaries stream asynchronously (=cmacs-ai-chat-stream=), so they never block
+Emacs — safe even under =emacs --gowl=.
+
+* Metadata options (flow into the hook INFO plist)
+
+| Option                              | Default            | Meaning                                 |
+|-------------------------------------+--------------------+-----------------------------------------|
+| =cmacs-transcribe-source=           | ="cmacs-transcribe"| =:source= value (cf. a DB source column). |
+| =cmacs-transcribe-type=             | =nil=              | =:type= category string.                |
+| =cmacs-transcribe-tags=             | =nil=              | =:tags= list of strings.                |
+| =cmacs-transcribe-media-extensions= | (list)             | Extensions recognised as transcribable. |
+| =cmacs-transcribe-video-extensions= | (list)             | Subset labelled =video= (for =:kind=).  |
+
+* The output Org document
+
+When summaries are on, =<input>.org= is assembled as:
+
+#+begin_example
+#+TITLE: talk.mp4 — Transcript & Summary
+#+DATE: 2026-07-09T14:03:11-0400
+
+* Summary
+<AI summary, in Org markup>
+
+* Metadata
+- Source file: /path/talk.mp4
+- Duration: 372 s
+- Model: ggml-base.en.bin
+- Language: en
+- Tags: work, planning
+
+* Transcript
+<the entire transcript, last section>
+#+end_example
+
+* Hooks
+
+Both hooks are ordinary abnormal hooks (=defvar= + =run-hook-with-args=) and
+support buffer-local additions.
+
+- =cmacs-transcribe-after-transcription-functions= — after =<input>.txt= is
+  written, before summarising.
+- =cmacs-transcribe-after-summary-functions= — after =<input>.org= is written
+  (=:summary= and =:org-file= are then populated).
+
+Each function receives a single INFO plist:
+
+| Key                 | Value                                                        |
+|---------------------+--------------------------------------------------------------|
+| =:input-file=       | Absolute path of the source media.                           |
+| =:kind=             | =audio= or =video=.                                          |
+| =:text-file=        | Path of the written =.txt= transcript.                       |
+| =:org-file=         | Path of the summary =.org= (nil before summarising).         |
+| =:srt-file=         | Path of the =.srt=, or nil.                                  |
+| =:vtt-file=         | Path of the =.vtt=, or nil.                                  |
+| =:ts-file=          | Path of the =.ts.txt=, or nil.                               |
+| =:text=             | The full transcript string.                                  |
+| =:segments=         | List of =((:start . MS) (:end . MS) (:text . STR))= alists.  |
+| =:summary=          | Summary text (nil until summarised).                         |
+| =:summary-type=     | The template symbol used.                                    |
+| =:duration-seconds= | Integer duration derived from the segments.                  |
+| =:file-hash=        | SHA-256 hex of the input, or nil.                            |
+| =:model=            | Whisper model basename.                                      |
+| =:language=         | Language code used.                                          |
+| =:threads=          | Whisper thread count used (nil = all cores).                 |
+| =:type=             | Session category, or nil.                                    |
+| =:tags=             | Session tag list.                                            |
+| =:source=           | =cmacs-transcribe-source=.                                   |
+| =:transcribed-at=   | ISO-8601 timestamp string.                                   |
+
+** Example: insert into a transcription database
+
+This mirrors the author's =transcriptions= PostgreSQL schema (=transcriptions=
+with a =metadata= JSONB column).  A hook can shell out to =psql= (or use any
+Elisp DB binding):
+
+#+begin_src emacs-lisp
+(defun my/transcribe->db (info)
+  "Insert an INFO transcription into the `transcriptions' database."
+  (let* ((meta (json-encode
+                `(("type" . ,(or (plist-get info :type) :null))
+                  ("tags" . ,(or (plist-get info :tags) []))
+                  ("source" . ,(plist-get info :source)))))
+         (sql (format "INSERT INTO transcriptions
+  (filename, file_path, file_hash, duration_seconds, model_used, language, metadata)
+VALUES (%s, %s, %s, %d, %s, %s, %s::jsonb)
+ON CONFLICT (file_hash) DO NOTHING;"
+                      (sql-quote-literal (file-name-nondirectory
+                                          (plist-get info :input-file)))
+                      (sql-quote-literal (plist-get info :input-file))
+                      (sql-quote-literal (or (plist-get info :file-hash) ""))
+                      (or (plist-get info :duration-seconds) 0)
+                      (sql-quote-literal (plist-get info :model))
+                      (sql-quote-literal (plist-get info :language))
+                      (sql-quote-literal meta))))
+    (call-process "psql" nil 0 nil "transcriptions" "-c" sql)))
+
+(add-hook 'cmacs-transcribe-after-transcription-functions #'my/transcribe->db)
+#+end_src
+
+The =:segments= list carries the timestamped chunks if you also want to store a
+timestamped/chunked transcript (as the reference schema's =transcription_chunks=
+table does).
+
+* Programmatic entry
+
+=(cmacs-transcribe-file INPUT &rest OPTS)= queues INPUT, merges the OPTS plist
+into the session options, and starts immediately — useful from scripts, MCP, or
+=emacsctl eval=:
+
+#+begin_src emacs-lisp
+(cmacs-transcribe-file "~/recordings/standup.m4a"
+                       :summarize t :summary-type 'meeting
+                       :summary-dir "~/notes/meetings/")
+#+end_src
+
+* Requirements & feature flag
+
+=cmacs-transcribe= is pure Elisp; the build flag =--with-cmacs-transcribe=
+(default in the standard set) only governs feature *reporting* —
+=IS-CMACS-TRANSCRIBE= and =(cmacs-feature-p 'transcribe)=.  Functionally it needs
+=--with-cmacs-whisper= (STT) and a =cmacs-transcode= backend (podman/docker or a
+host =ffmpeg=); summaries additionally need =--with-cmacs-ai= with a configured
+provider.  Missing pieces degrade gracefully: without whisper =RET= errors
+cleanly; without cmacs-ai the summary stage is skipped with a log note.
