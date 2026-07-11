@@ -269,5 +269,44 @@
       (delete-file txt)
       (ignore-errors (delete-directory dir t)))))
 
+;;; ---------------------------------------------------------------------
+;;; Remote execution helpers
+;;; ---------------------------------------------------------------------
+
+(ert-deftest cmacs-transcribe-test-parse-whisper-json ()
+  "`--parse-whisper-json' turns whisper-cli JSON into the result alist."
+  (cmacs-transcribe-tests--skip-unless-loaded)
+  (let* ((json (concat "{\"transcription\":["
+                       "{\"offsets\":{\"from\":0,\"to\":1200},\"text\":\"hello\"},"
+                       "{\"offsets\":{\"from\":1200,\"to\":2400},\"text\":\" world\"}]}"))
+         (r (cmacs-transcribe--parse-whisper-json json))
+         (segs (cdr (assq :segments r))))
+    (should (equal (cdr (assq :text r)) "hello world"))
+    (should (= (length segs) 2))
+    (should (= (cmacs-transcribe--seg (car segs) :start) 0))
+    (should (= (cmacs-transcribe--seg (car segs) :end) 1200))
+    (should (equal (cmacs-transcribe--seg (nth 1 segs) :text) " world"))
+    ;; The segments feed the existing formatters unchanged.
+    (should (= (cmacs-transcribe--duration segs) 3))))
+
+(ert-deftest cmacs-transcribe-test-remote-model ()
+  "`--remote-model' joins the remote model dir and basename."
+  (cmacs-transcribe-tests--skip-unless-loaded)
+  (let ((cmacs-transcribe-model "ggml-base.en.bin")
+        (cmacs-transcribe-remote-model-dir nil))
+    (should (equal (cmacs-transcribe--remote-model) "ggml-base.en.bin")))
+  (let ((cmacs-transcribe-model "ggml-base.en.bin")
+        (cmacs-transcribe-remote-model-dir "/opt/models"))
+    (should (equal (cmacs-transcribe--remote-model) "/opt/models/ggml-base.en.bin"))))
+
+(ert-deftest cmacs-transcribe-test-session-execution ()
+  "The session execution mode comes from the options plist, else the custom."
+  (cmacs-transcribe-tests--skip-unless-loaded)
+  (cmacs-transcribe-tests--with-options '(:execution remote)
+    (should (eq (cmacs-transcribe--session-execution) 'remote)))
+  (cmacs-transcribe-tests--with-options '()
+    (let ((cmacs-transcribe-execution 'local))
+      (should (eq (cmacs-transcribe--session-execution) 'local)))))
+
 (provide 'cmacs-transcribe-tests)
 ;;; cmacs-transcribe-tests.el ends here

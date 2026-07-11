@@ -30,6 +30,24 @@ backend resolution (=cmacs-transcode-backend=,
 environment variable).  =(cmacs-transcribe-supported-p)= is non-nil when whisper
 is built and a backend resolves.
 
+* Remote / TRAMP execution options
+
+See [[file:index.org][the guide's Remote section]] for the full picture.  All have sane global
+defaults and are connection-local-overridable per host.
+
+| Option                                   | Default        | Meaning                                                  |
+|------------------------------------------+----------------+----------------------------------------------------------|
+| =cmacs-transcribe-execution=             | =auto=         | =auto= / =local= / =remote= (key =E=).                   |
+| =cmacs-transcribe-remote-stt=            | =auto=         | Remote STT: =auto= / =whisper-cli= / =local-copyback=.   |
+| =cmacs-transcribe-remote-whisper-cli=    | ="whisper-cli"= | Remote whisper-cli name/path (PATH-resolved).           |
+| =cmacs-transcribe-remote-model-dir=      | =nil=          | Remote whisper models dir (for =whisper-cli= STT).       |
+| =cmacs-transcribe-remote-whisper-env=    | =nil=          | Extra env, e.g. =("LD_LIBRARY_PATH=…")=.                 |
+
+Remote =whisper-cli= is invoked as =whisper-cli -m MODEL -f WAV -l LANG -oj -of
+BASE -t THREADS= on the remote host; cmacs reads the =-oj= JSON back and derives
+the transcript, segments, and duration.  When the remote tools are missing from
+=tramp-remote-path=, add =(add-to-list 'tramp-remote-path 'tramp-own-remote-path)=.
+
 * Output & naming options
 
 | Option                                | Default  | Meaning                                              |

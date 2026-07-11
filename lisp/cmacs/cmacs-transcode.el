@@ -30,6 +30,7 @@
 
 (require 'cl-lib)
 (require 'subr-x)
+(require 'files-x)                      ;`with-connection-local-variables'
 
 (declare-function project-current "project" (&optional maybe-prompt directory))
 (declare-function project-root "project" (project))
@@ -55,6 +56,22 @@ CMACS_TRANSCODE_CONTAINER_RUNTIME environment variable overrides this."
                  (const :tag "podman" podman)
                  (const :tag "docker" docker)
                  (const :tag "host ffmpeg binary" host))
+  :safe #'symbolp)
+
+(defcustom cmacs-transcode-execution 'auto
+  "Where ffmpeg runs for a job, relative to the input file.
+`auto' (the default) runs on the input's own host: a remote (TRAMP/SSH)
+input transcodes on that remote host's hardware, a local input runs
+locally.  `remote' forces the input's remote host (an error for a local
+input).  `local' forces the local machine, copying a remote input down to
+a temporary file first (a potentially large transfer).
+
+This is connection-local-overridable, so a profile can force e.g. `local'
+for one slow host while `auto' stays the global default.  The queue
+buffer's `E' key cycles it per session."
+  :type '(choice (const :tag "Auto (follow the file's host)" auto)
+                 (const :tag "Force local" local)
+                 (const :tag "Force remote" remote))
   :safe #'symbolp)
 
 (defcustom cmacs-transcode-container-image "docker.io/linuxserver/ffmpeg:latest"
@@ -283,13 +300,16 @@ when a device is present; `force' errors if no device is available."
 (cl-defstruct (cmacs-transcode-job
                (:constructor cmacs-transcode-job-create)
                (:copier nil))
-  input                 ; absolute input path
-  output                ; absolute output path
+  input                 ; absolute input path (may be a TRAMP path)
+  output                ; absolute output path (final destination)
   subdir                ; relative output subdir (recursive audio), or nil/""
   (status 'queued)      ; queued running done failed skipped
   (progress "")         ; latest ffmpeg stats line
   process               ; the running process, or nil
   container             ; container name (for podman/docker force-kill), or nil
+  exec-dir              ; dir to bind as `default-directory' (remote), or nil
+  staged-input          ; local temp copy of a remote input (local mode), or nil
+  staged-output         ; local temp for the output before copy-up, or nil
   (tries 0)             ; attempts so far
   cancelled             ; non-nil when the user killed it (no retry)
   note)                 ; extra note for the status line
@@ -325,10 +345,38 @@ when a device is present; `force' errors if no device is available."
     (and v (not (string-empty-p v)) (intern v))))
 
 (defun cmacs-transcode--available-backends ()
-  "Return the available backends in preference order (podman docker host)."
-  (delq nil (list (and (executable-find "podman") 'podman)
-                  (and (executable-find "docker") 'docker)
-                  (and (executable-find "ffmpeg") 'host))))
+  "Return the available backends in preference order (podman docker host).
+Probes the host of `default-directory' -- so binding `default-directory'
+to a remote (TRAMP) directory resolves the remote host's backends."
+  (let ((remote (and (file-remote-p default-directory) t)))
+    (delq nil (list (and (executable-find "podman" remote) 'podman)
+                    (and (executable-find "docker" remote) 'docker)
+                    (and (executable-find "ffmpeg" remote) 'host)))))
+
+(defun cmacs-transcode--exec-dir (input &optional mode)
+  "Return the directory whose host should run the tools for INPUT, or nil.
+nil means the local machine.  A non-nil value is a (possibly remote)
+directory to bind as `default-directory' around the process calls, chosen
+from MODE (default `cmacs-transcode-execution') and whether INPUT is remote."
+  (let ((mode (or mode cmacs-transcode-execution))
+        (remote (file-remote-p input)))
+    (pcase mode
+      ('local nil)
+      ('remote (if remote
+                   (file-name-directory (expand-file-name input))
+                 (user-error
+                  "cmacs-transcode: execution is `remote' but %s is local"
+                  (abbreviate-file-name input))))
+      (_ (and remote (file-name-directory (expand-file-name input)))))))
+
+(defun cmacs-transcode--stage-in-p (input &optional mode)
+  "Non-nil when INPUT must be copied to the local machine before running.
+True only under `local' MODE for a remote input."
+  (and (eq (or mode cmacs-transcode-execution) 'local) (file-remote-p input)))
+
+(defun cmacs-transcode--session-execution ()
+  "Return this session's execution mode (`auto'/`local'/`remote')."
+  (or (plist-get cmacs-transcode--options :execution) cmacs-transcode-execution))
 
 (defun cmacs-transcode--resolve (&optional noerror)
   "Return the backend to use: `podman', `docker', or `host'.
@@ -357,20 +405,36 @@ NOERROR return nil instead of signalling when nothing is available."
 (defun cmacs-transcode--io (kind in-file &optional out-file)
   "Return an IO plist mapping IN-FILE/OUT-FILE for backend KIND.
 Keys: :in :out (paths to embed in ffmpeg args), :in-dir :out-dir (host
-dirs to mount) and :same (input and output share a directory)."
+dirs to mount) and :same (input and output share a directory).
+
+Every path that ends up in the ffmpeg command line or a container `-v'
+mount is the LOCAL name on the execution host (`file-local-name' strips
+any TRAMP `/ssh:host:' prefix); for a local path this is a no-op, so local
+behaviour is unchanged."
   (let* ((in-file (expand-file-name in-file))
          (in-dir (file-name-directory in-file))
          (out-file (and out-file (expand-file-name out-file)))
          (out-dir (and out-file (file-name-directory out-file)))
-         (same (and out-dir (string= (file-truename in-dir)
-                                     (file-truename out-dir)))))
+         (in-local (file-local-name in-file))
+         (out-local (and out-file (file-local-name out-file)))
+         (in-dir-local (file-local-name in-dir))
+         (out-dir-local (and out-dir (file-local-name out-dir)))
+         ;; For a remote path compare local names by string (no SSH round-trip
+         ;; and safe when the host is unreachable); locally use file-truename
+         ;; so symlinked same-dirs still collapse to one /config mount.
+         (same (and out-dir
+                    (if (file-remote-p in-file)
+                        (string= (directory-file-name in-dir-local)
+                                 (directory-file-name out-dir-local))
+                      (string= (file-truename in-dir) (file-truename out-dir))))))
     (if (eq kind 'host)
-        (list :in in-file :out out-file :in-dir in-dir :out-dir out-dir :same same)
+        (list :in in-local :out out-local
+              :in-dir in-dir-local :out-dir out-dir-local :same same)
       (let ((inm (if same "/config" "/input"))
             (outm (if same "/config" "/output")))
-        (list :in (concat inm "/" (file-name-nondirectory in-file))
-              :out (and out-file (concat outm "/" (file-name-nondirectory out-file)))
-              :in-dir in-dir :out-dir out-dir :same same)))))
+        (list :in (concat inm "/" (file-name-nondirectory in-local))
+              :out (and out-local (concat outm "/" (file-name-nondirectory out-local)))
+              :in-dir in-dir-local :out-dir out-dir-local :same same)))))
 
 (defun cmacs-transcode--hw-run-args (hw)
   "Container run args for hwaccel device passthrough.  HW is (TYPE . VENDOR)."
@@ -402,7 +466,12 @@ force-removed --- SIGKILL to the client alone does not reach ffmpeg
 inside the container."
   (let ((prog (if (eq tool 'ffprobe) "ffprobe" "ffmpeg")))
     (if (eq kind 'host)
-        (cons (or (executable-find prog) prog) ffmpeg-args)
+        ;; Resolve on the execution host (remote when `default-directory' is
+        ;; a TRAMP dir); fall back to the bare name, which process-file /
+        ;; make-process :file-handler resolve via the remote PATH.
+        (cons (or (executable-find prog (and (file-remote-p default-directory) t))
+                  prog)
+              ffmpeg-args)
       (let* ((runner (symbol-name kind))
              (same (plist-get io :same))
              (in-dir (directory-file-name (plist-get io :in-dir)))
@@ -432,8 +501,10 @@ inside the container."
                kind 'ffprobe io nil
                (append probe-args (list (plist-get io :in))))))
     (with-temp-buffer
+      ;; `process-file' runs on the host of `default-directory' (remote when
+      ;; the caller bound it to a TRAMP dir), unlike `call-process'.
       (when (ignore-errors
-              (eq 0 (apply #'call-process (car cmd) nil t nil (cdr cmd))))
+              (eq 0 (apply #'process-file (car cmd) nil t nil (cdr cmd))))
         (buffer-string)))))
 
 (defun cmacs-transcode--probe-width (kind in-file)
@@ -661,7 +732,10 @@ OPTS is the session options plist and IO a `cmacs-transcode--io' plist."
    (list :parallel cmacs-transcode-parallel-jobs
          :process-filter cmacs-transcode-process-filter
          :overwrite cmacs-transcode-overwrite
-         :output-dir cmacs-transcode-output-dir)
+         :output-dir cmacs-transcode-output-dir
+         ;; Read under connection-local so a remote buffer picks up that host's
+         ;; default execution mode; the `E' key overrides it per session.
+         :execution (with-connection-local-variables cmacs-transcode-execution))
    (if (eq kind 'video)
        (list :video-codec cmacs-transcode-video-codec
              :audio-codec cmacs-transcode-video-audio-codec
@@ -691,7 +765,7 @@ OPTS is the session options plist and IO a `cmacs-transcode--io' plist."
 (defun cmacs-transcode--reseed (kind)
   "Reseed `cmacs-transcode--options' for KIND, keeping shared session keys."
   (let ((carry '()))
-    (dolist (k '(:parallel :process-filter :overwrite :output-dir))
+    (dolist (k '(:parallel :process-filter :overwrite :output-dir :execution))
       (setq carry (plist-put carry k (plist-get cmacs-transcode--options k))))
     (setq cmacs-transcode--options
           (append carry (cmacs-transcode--default-options kind)))))
@@ -871,21 +945,39 @@ with RECURSIVE, preserving the relative subdir)."
     (when (memq (process-status p) '(exit signal))
       (when (buffer-live-p buffer)
         (with-current-buffer buffer
-          (let ((ok (and (eq (process-status p) 'exit)
-                         (zerop (process-exit-status p))
-                         (file-exists-p (cmacs-transcode-job-output job)))))
+          (let* ((staged-out (cmacs-transcode-job-staged-output job))
+                 (out (cmacs-transcode-job-output job))
+                 (ok (and (eq (process-status p) 'exit)
+                          (zerop (process-exit-status p))
+                          (file-exists-p (or staged-out out)))))
             (cond
              ((cmacs-transcode-job-cancelled job)
+              (cmacs-transcode--cleanup-staged job)
               (setf (cmacs-transcode-job-status job) 'failed
                     (cmacs-transcode-job-progress job) "killed")
               (cmacs-transcode--advance buffer))
              (ok
-              (setf (cmacs-transcode-job-status job) 'done
-                    (cmacs-transcode-job-progress job) "done")
-              (cmacs-transcode--log
-               "done %s"
-               (file-name-nondirectory (cmacs-transcode-job-output job)))
-              (cmacs-transcode--advance buffer))
+              (condition-case err
+                  (progn
+                    ;; Under `local' staging, publish the local output to its
+                    ;; final (possibly remote) destination.
+                    (when staged-out
+                      (make-directory (file-name-directory out) t)
+                      (copy-file staged-out out t))
+                    (cmacs-transcode--cleanup-staged job)
+                    (setf (cmacs-transcode-job-status job) 'done
+                          (cmacs-transcode-job-progress job) "done")
+                    (cmacs-transcode--log "done %s" (file-name-nondirectory out))
+                    (cmacs-transcode--advance buffer))
+                (error
+                 (cmacs-transcode--cleanup-staged job)
+                 (setf (cmacs-transcode-job-status job) 'failed
+                       (cmacs-transcode-job-progress job) "copy-up failed"
+                       (cmacs-transcode-job-note job) (error-message-string err))
+                 (cmacs-transcode--log "FAILED copy-up %s: %s"
+                                       (file-name-nondirectory out)
+                                       (error-message-string err))
+                 (cmacs-transcode--advance buffer))))
              ((< (cl-incf (cmacs-transcode-job-tries job))
                  (cmacs-transcode--max-tries))
               (cmacs-transcode--log
@@ -894,6 +986,7 @@ with RECURSIVE, preserving the relative subdir)."
                (cmacs-transcode-job-tries job))
               (cmacs-transcode--spawn buffer job))
              (t
+              (cmacs-transcode--cleanup-staged job)
               (setf (cmacs-transcode-job-status job) 'failed
                     (cmacs-transcode-job-progress job) "failed")
               (cmacs-transcode--log
@@ -905,53 +998,85 @@ with RECURSIVE, preserving the relative subdir)."
             (cmacs-transcode--render buffer)))))))
 
 (defun cmacs-transcode--spawn (buffer job)
-  "Launch (or relaunch) the ffmpeg process for JOB in BUFFER's session."
+  "Launch (or relaunch) the ffmpeg process for JOB in BUFFER's session.
+Runs on JOB's execution host: locally, or -- when the input is remote and
+execution is `auto'/`remote' -- on that remote host over TRAMP
+(`make-process :file-handler t', bound `default-directory').  Under `local'
+execution a remote input is staged to a local temp first and the output
+copied back on success.  Remote settings honour connection-local profiles."
   (with-current-buffer buffer
-    (let* ((kind cmacs-transcode--backend)
-           (opts cmacs-transcode--options)
-           (media cmacs-transcode--kind)
-           (in (cmacs-transcode-job-input job))
-           (out (cmacs-transcode-job-output job))
-           (io (cmacs-transcode--io kind in out))
-           (hw (and (eq media 'video)
-                    (if (member (plist-get opts :video-codec) '("h264" "h265"))
-                        (cmacs-transcode--hw-type opts)
-                      (cons 'none nil))))
-           (meta (list :hw hw
-                       :width (when (and (eq media 'video)
-                                         (plist-get opts :auto-quality))
-                                (cmacs-transcode--probe-width kind in))
-                       :color (when (and (eq media 'video)
-                                         (plist-get opts :preserve-color)
-                                         (not (cmacs-transcode--color-overridden-p opts)))
-                                (cmacs-transcode--probe-color kind in))))
-           (fargs (if (eq media 'video)
-                      (cmacs-transcode--video-args opts io meta)
-                    (cmacs-transcode--audio-args opts io)))
-           (cname (and (memq kind '(podman docker))
-                       (cmacs-transcode--gen-container-name)))
-           (cmd (cmacs-transcode--command kind 'ffmpeg io hw fargs cname))
-           (process-environment
-            (if (and (eq kind 'host) (eq (car-safe hw) 'vulkan))
-                (append (cmacs-transcode--hw-host-env (cdr hw)) process-environment)
-              process-environment)))
-      (make-directory (file-name-directory out) t)
-      (setf (cmacs-transcode-job-status job) 'running
-            (cmacs-transcode-job-progress job) "starting"
-            (cmacs-transcode-job-container job) cname)
-      (cmacs-transcode--log "start %s -> %s"
-                            (file-name-nondirectory in)
-                            (file-name-nondirectory out))
-      (cmacs-transcode--log "  $ %s" (mapconcat #'identity cmd " "))
-      (setf (cmacs-transcode-job-process job)
-            (make-process
-             :name (concat "cmacs-transcode:" (file-name-nondirectory in))
-             :buffer (cmacs-transcode--log-buffer)
-             :noquery t
-             :command cmd
-             :filter (cmacs-transcode--make-filter job)
-             :sentinel (cmacs-transcode--make-sentinel buffer job)))
-      (cmacs-transcode--render buffer))))
+    (let* ((real-in (cmacs-transcode-job-input job))
+           (real-out (cmacs-transcode-job-output job))
+           (mode (cmacs-transcode--session-execution))
+           (exec-dir (cmacs-transcode--exec-dir real-in mode))
+           (stage (and (eq mode 'local) (file-remote-p real-in))))
+      (setf (cmacs-transcode-job-exec-dir job) exec-dir)
+      ;; local execution on a remote input: bring the input down and write the
+      ;; output to a local temp, copied up on success.
+      (when (and stage (not (cmacs-transcode-job-staged-input job)))
+        (let ((tin (make-temp-file "cmacs-transcode-in-" nil
+                                   (concat "." (or (file-name-extension real-in) "dat"))))
+              (tout (make-temp-file "cmacs-transcode-out-" nil
+                                    (concat "." (file-name-extension real-out)))))
+          (cmacs-transcode--log "stage %s -> local" (file-name-nondirectory real-in))
+          (copy-file real-in tin t)
+          (delete-file tout)          ;keep only the name; ffmpeg -y writes it
+          (setf (cmacs-transcode-job-staged-input job) tin
+                (cmacs-transcode-job-staged-output job) tout)))
+      (let* ((in (or (cmacs-transcode-job-staged-input job) real-in))
+             (out (or (cmacs-transcode-job-staged-output job) real-out))
+             (default-directory (or exec-dir default-directory)))
+        (with-connection-local-variables
+         (let* ((kind cmacs-transcode--backend)
+                (opts cmacs-transcode--options)
+                (media cmacs-transcode--kind)
+                (remote (and exec-dir t))
+                (io (cmacs-transcode--io kind in out))
+                ;; Remote GPU auto-detection reads LOCAL device nodes, so a
+                ;; remote job is software-only for v1 (explicit remote hwaccel
+                ;; passthrough is a follow-on).
+                (hw (if remote (cons 'none nil)
+                      (and (eq media 'video)
+                           (if (member (plist-get opts :video-codec) '("h264" "h265"))
+                               (cmacs-transcode--hw-type opts)
+                             (cons 'none nil)))))
+                (meta (list :hw hw
+                            :width (when (and (eq media 'video)
+                                              (plist-get opts :auto-quality))
+                                     (cmacs-transcode--probe-width kind in))
+                            :color (when (and (eq media 'video)
+                                              (plist-get opts :preserve-color)
+                                              (not (cmacs-transcode--color-overridden-p opts)))
+                                     (cmacs-transcode--probe-color kind in))))
+                (fargs (if (eq media 'video)
+                           (cmacs-transcode--video-args opts io meta)
+                         (cmacs-transcode--audio-args opts io)))
+                (cname (and (memq kind '(podman docker))
+                            (cmacs-transcode--gen-container-name)))
+                (cmd (cmacs-transcode--command kind 'ffmpeg io hw fargs cname))
+                (process-environment
+                 (if (and (eq kind 'host) (eq (car-safe hw) 'vulkan))
+                     (append (cmacs-transcode--hw-host-env (cdr hw)) process-environment)
+                   process-environment)))
+           (make-directory (file-name-directory out) t)
+           (setf (cmacs-transcode-job-status job) 'running
+                 (cmacs-transcode-job-progress job) "starting"
+                 (cmacs-transcode-job-container job) cname)
+           (cmacs-transcode--log "start %s -> %s%s"
+                                 (file-name-nondirectory real-in)
+                                 (file-name-nondirectory real-out)
+                                 (if remote (format " (on %s)" (file-remote-p exec-dir)) ""))
+           (cmacs-transcode--log "  $ %s" (mapconcat #'identity cmd " "))
+           (setf (cmacs-transcode-job-process job)
+                 (make-process
+                  :name (concat "cmacs-transcode:" (file-name-nondirectory real-in))
+                  :buffer (cmacs-transcode--log-buffer)
+                  :noquery t
+                  :file-handler t
+                  :command cmd
+                  :filter (cmacs-transcode--make-filter job)
+                  :sentinel (cmacs-transcode--make-sentinel buffer job)))
+           (cmacs-transcode--render buffer)))))))
 
 (defun cmacs-transcode--launch-next (buffer)
   "Pop and launch the next queued job in BUFFER, if any."
@@ -996,22 +1121,33 @@ with RECURSIVE, preserving the relative subdir)."
         (cmacs-transcode--launch-next buffer))
       (cmacs-transcode--render buffer))))
 
+(defun cmacs-transcode--cleanup-staged (job)
+  "Delete JOB's local staging temp files (`local'-execution mode), if any."
+  (dolist (f (list (cmacs-transcode-job-staged-input job)
+                   (cmacs-transcode-job-staged-output job)))
+    (when (and f (file-exists-p f)) (ignore-errors (delete-file f))))
+  (setf (cmacs-transcode-job-staged-input job) nil
+        (cmacs-transcode-job-staged-output job) nil))
+
 (defun cmacs-transcode--force-kill-job (job)
   "Forcibly stop JOB's ffmpeg, including a container backend's container.
 SIGKILL to a podman/docker client does not reach ffmpeg running inside the
 container (conmon keeps it alive), so the container is force-removed by name
-with `<runtime> rm -f'; the client process is also SIGKILLed."
+with `<runtime> rm -f'; the client process is also SIGKILLed.  The `rm -f'
+runs on the job's execution host (remote via TRAMP when the job is remote)."
   (let ((proc (cmacs-transcode-job-process job))
-        (cname (cmacs-transcode-job-container job)))
+        (cname (cmacs-transcode-job-container job))
+        (default-directory (or (cmacs-transcode-job-exec-dir job) default-directory)))
     (when (and cname (memq cmacs-transcode--backend '(podman docker)))
-      ;; Destination 0 = run asynchronously, discarding output, so a slow
-      ;; `rm -f' never blocks the UI.
+      ;; `process-file' runs on the execution host; destination 0 = async /
+      ;; discard output, so a slow `rm -f' never blocks the UI.
       (ignore-errors
-        (call-process (symbol-name cmacs-transcode--backend) nil 0 nil
+        (process-file (symbol-name cmacs-transcode--backend) nil 0 nil
                       "rm" "-f" cname)))
     (when (process-live-p proc)
       (ignore-errors (signal-process proc 9)) ; SIGKILL the client too
-      (ignore-errors (delete-process proc)))))
+      (ignore-errors (delete-process proc)))
+    (cmacs-transcode--cleanup-staged job)))
 
 ;;; ---------------------------------------------------------------------
 ;;; Rendering
@@ -1039,7 +1175,13 @@ with `<runtime> rm -f'; the client process is also SIGKILLed."
   (let* ((o cmacs-transcode--options)
          (kind cmacs-transcode--kind)
          (par (or (plist-get o :parallel) 1))
-         (backend (or cmacs-transcode--backend (cmacs-transcode--resolve t) 'none)))
+         (backend (or cmacs-transcode--backend (cmacs-transcode--resolve t) 'none))
+         (exec (cmacs-transcode--session-execution))
+         (host (file-remote-p default-directory 'host))
+         (exec-label (pcase exec
+                       ('local "local")
+                       ('remote (concat "remote" (if host (concat "@" host) "")))
+                       (_ (if host (concat "auto@" host) "auto")))))
     (list
      (format " cmacs-transcode — %s" (upcase (symbol-name kind)))
      (if (eq kind 'video)
@@ -1054,12 +1196,13 @@ with `<runtime> rm -f'; the client process is also SIGKILLed."
                (plist-get o :audio-format)
                (or (plist-get o :audio-bitrate) (plist-get o :audio-quality))
                (if (plist-get o :recursive) "  recursive" "")))
-     (format " output:%s%s"
+     (format " output:%s%s  exec:%s"
              (abbreviate-file-name (cmacs-transcode--resolve-output-dir))
              (pcase (plist-get o :process-filter)
                ('missing "  [only-missing]")
                ('existing "  [only-existing]")
-               (_ ""))))))
+               (_ ""))
+             exec-label))))
 
 (defun cmacs-transcode--job-line (i n job)
   "Return a propertized status line for JOB (index I of N)."
@@ -1079,7 +1222,7 @@ with `<runtime> rm -f'; the client process is also SIGKILLed."
 (defconst cmacs-transcode--hint-lines
   '(" hjkl:move  a:add  A:add-dir  d:del  K:kill  RET:start"
     " p:parallel P:jobs  c:codec Q:crf/bitrate f:format H:hwaccel  o:out"
-    " m:missing x:existing  M:kind  L:log  g:refresh  q:quit  ?:help")
+    " m:missing x:existing  M:kind  E:exec(local/remote)  L:log  g:refresh  q:quit  ?:help")
   "Key hint lines shown at the bottom of the queue buffer.")
 
 (defun cmacs-transcode--render (buffer)
@@ -1132,6 +1275,7 @@ with `<runtime> rm -f'; the client process is also SIGKILLed."
   (define-key map (kbd "m") #'cmacs-transcode-toggle-missing)
   (define-key map (kbd "x") #'cmacs-transcode-toggle-existing)
   (define-key map (kbd "M") #'cmacs-transcode-set-kind)
+  (define-key map (kbd "E") #'cmacs-transcode-cycle-execution)
   (define-key map (kbd "L") #'cmacs-transcode-show-log)
   (define-key map (kbd "g") #'cmacs-transcode-refresh)
   (define-key map (kbd "q") #'quit-window)
@@ -1276,15 +1420,23 @@ running inside it is actually stopped."
   "Begin transcoding the queued jobs."
   (interactive)
   (cmacs-transcode--ensure-mode)
-  (unless (cl-some (lambda (j) (eq (cmacs-transcode-job-status j) 'queued))
-                   cmacs-transcode--jobs)
-    (user-error "No queued jobs to transcode"))
-  (setq cmacs-transcode--backend (cmacs-transcode--resolve))
-  (cmacs-transcode--log "run: backend=%s parallel=%d kind=%s"
-                        cmacs-transcode--backend
-                        (max 1 (or (plist-get cmacs-transcode--options :parallel) 1))
-                        cmacs-transcode--kind)
-  (cmacs-transcode--run (current-buffer)))
+  (let ((queued (cl-find-if (lambda (j) (eq (cmacs-transcode-job-status j) 'queued))
+                            cmacs-transcode--jobs)))
+    (unless queued (user-error "No queued jobs to transcode"))
+    ;; Resolve the backend on the execution host (remote when the input is
+    ;; remote and execution is auto/remote); `--exec-dir' also validates
+    ;; execution=remote against a local input.
+    (let* ((mode (cmacs-transcode--session-execution))
+           (exec-dir (cmacs-transcode--exec-dir (cmacs-transcode-job-input queued) mode))
+           (default-directory (or exec-dir default-directory)))
+      (setq cmacs-transcode--backend
+            (with-connection-local-variables (cmacs-transcode--resolve)))
+      (cmacs-transcode--log "run: backend=%s parallel=%d kind=%s exec=%s%s"
+                            cmacs-transcode--backend
+                            (max 1 (or (plist-get cmacs-transcode--options :parallel) 1))
+                            cmacs-transcode--kind mode
+                            (if exec-dir (format " (%s)" (file-remote-p exec-dir)) ""))
+      (cmacs-transcode--run (current-buffer)))))
 
 (defun cmacs-transcode-toggle-parallel ()
   "Toggle parallelism between sequential and the configured job count."
@@ -1382,6 +1534,19 @@ running inside it is actually stopped."
   (setq cmacs-transcode--options (plist-put cmacs-transcode--options :output-dir dir))
   (cmacs-transcode--recompute-outputs)
   (cmacs-transcode--render (current-buffer)))
+
+(defun cmacs-transcode-cycle-execution ()
+  "Cycle where ffmpeg runs: auto -> local -> remote -> auto.
+`auto' follows the input's host (remote files transcode on the remote
+host); `local' forces the local machine (copying a remote input down);
+`remote' forces the input's remote host."
+  (interactive)
+  (cmacs-transcode--ensure-mode)
+  (let ((next (pcase (cmacs-transcode--session-execution)
+                ('auto 'local) ('local 'remote) (_ 'auto))))
+    (setq cmacs-transcode--options (plist-put cmacs-transcode--options :execution next))
+    (cmacs-transcode--render (current-buffer))
+    (message "cmacs-transcode: execution = %s" next)))
 
 (defun cmacs-transcode-toggle-missing ()
   "Toggle the process-missing filter (only encode files without an output)."

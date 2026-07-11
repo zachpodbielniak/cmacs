@@ -125,6 +125,7 @@ default is 1 job x 4 threads.
 @item @kbd{y} @tab @code{cmacs-transcribe-set-type} @tab Set session category (hook plist)
 @item @kbd{m} @tab @code{cmacs-transcribe-toggle-missing} @tab Only files lacking a transcript
 @item @kbd{x} @tab @code{cmacs-transcribe-toggle-existing} @tab Only files that have one
+@item @kbd{E} @tab @code{cmacs-transcribe-cycle-execution} @tab Cycle execution: auto/local/remote
 @item @kbd{L} @tab @code{cmacs-transcribe-show-log} @tab Show @code{*cmacs-transcribe-log*}
 @item @kbd{g} @tab @code{cmacs-transcribe-refresh} @tab Redraw the buffer
 @item @kbd{q} @tab @code{quit-window} @tab Quit
@@ -143,6 +144,30 @@ uses @code{make-process} with a process sentinel; the transcription stage uses
 main thread); the summary stage uses @code{cmacs-ai-chat-stream}'s asynchronous
 callback.  Nothing blocks Emacs, so the tool is safe to run even when Emacs is
 your Wayland compositor under @code{emacs --gowl}.
+
+@subsection Remote execution (TRAMP / SSH)
+
+When the input is opened over TRAMP (@file{/ssh:host:/path/}), cmacs-transcribe
+runs the work on that @emph{remote host's hardware}.
+@code{cmacs-transcribe-execution} (header @code{exec:}, key @kbd{E}) selects
+@code{auto} (default; follow the input's host), @code{remote}, or @code{local}
+(force local, copying a remote input down first).  The ffmpeg conversion always
+runs on the execution host over TRAMP.
+
+Because cmacs's whisper engine reads a @emph{local} file,
+@code{cmacs-transcribe-remote-stt} chooses the remote speech-to-text engine:
+@code{whisper-cli} (a standalone whisper-cli on the remote host --- true remote
+STT; its @code{-oj} JSON is read back for the transcript, segments, and duration),
+@code{local-copyback} (copy the small WAV back, transcribe locally), or
+@code{auto} (whisper-cli when it and a model resolve remotely, else copyback).
+Summaries always run locally via @code{cmacs-ai}.
+
+Requirements: the remote host needs podman/docker or a host @command{ffmpeg}, and
+--- for @code{whisper-cli} STT --- the @code{whisper-cli} binary plus a model
+(@code{cmacs-transcribe-remote-model-dir}).  If the remote tools are not found,
+add @code{(add-to-list 'tramp-remote-path 'tramp-own-remote-path)}.  All remote
+settings have sane global defaults and are connection-local-overridable per host
+(@code{connection-local-set-profile-variables}), so no per-host setup is required.
 
 Killing a job (@kbd{K}) force-removes a running conversion container (as
 @code{cmacs-transcode} does), cancels an in-flight summary stream, and lets an

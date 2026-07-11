@@ -107,6 +107,7 @@ default is 1 job × 4 threads.
 | =y=       | =cmacs-transcribe-set-type=           | Set session category (for the hook plist)    |
 | =m=       | =cmacs-transcribe-toggle-missing=     | Only transcribe files lacking a transcript   |
 | =x=       | =cmacs-transcribe-toggle-existing=    | Only re-transcribe files that have one       |
+| =E=       | =cmacs-transcribe-cycle-execution=    | Cycle execution: auto → local → remote       |
 | =L=       | =cmacs-transcribe-show-log=           | Show =*cmacs-transcribe-log*=                |
 | =g=       | =cmacs-transcribe-refresh=            | Redraw the buffer                            |
 | =q=       | =quit-window=                         | Quit the queue buffer                        |
@@ -157,6 +158,65 @@ enable summaries and =S= to pick a *content-type template*
 via =cmacs-ai-chat-stream=, so it never blocks Emacs (safe even when Emacs is
 your Wayland compositor under =emacs --gowl=).  The transcript is the primary
 deliverable: if a summary fails, the job still completes with its =.txt=.
+
+* Remote execution (TRAMP / SSH)
+
+When you open a file over TRAMP — e.g. a Dired/project buffer on
+=/ssh:host:/path/= — cmacs-transcribe can run the work on that *remote host's
+hardware*.  =cmacs-transcribe-execution= (header =exec:=, key =E=) selects:
+
+- =auto= (default) — a remote input converts *and* transcribes on its host; a
+  local input runs locally.
+- =remote= — force the input's remote host.
+- =local= — force the local machine (a remote input is copied down first).
+
+The ffmpeg conversion always runs on the execution host (via TRAMP), producing
+the 16 kHz WAV there.  Because cmacs's whisper engine is compiled into Emacs and
+reads a *local* file, remote speech-to-text is governed by
+=cmacs-transcribe-remote-stt=:
+
+- =whisper-cli= — run a standalone =whisper-cli= you have on the remote host
+  (true remote STT; it emits the transcript, which cmacs reads back and turns
+  into the =.txt=/=.srt=/… and the hook plist).
+- =local-copyback= — copy just the small WAV back and transcribe with the local
+  embedded engine (only ffmpeg is offloaded).
+- =auto= (default) — use =whisper-cli= when it and a model resolve on the remote,
+  else fall back to =local-copyback=.
+
+Summaries always run locally via =cmacs-ai=.
+
+*Requirements & gotchas:*
+
+1. The remote host needs podman/docker or a host =ffmpeg=; for =whisper-cli= STT
+   it also needs the =whisper-cli= binary and a model.
+2. *Remote PATH.* TRAMP resolves remote programs via =tramp-remote-path=, which
+   often omits Homebrew/Linuxbrew and =/usr/sbin=.  If the remote tools aren't
+   found, add your login PATH:
+   #+begin_src emacs-lisp
+   (with-eval-after-load 'tramp
+     (add-to-list 'tramp-remote-path 'tramp-own-remote-path))
+   #+end_src
+
+** Per-host settings (connection-local)
+
+All remote settings have sane global defaults used on every host, so remote mode
+works with zero per-host setup.  To differ on one host, add a connection-local
+profile — cmacs-transcribe reads these under =with-connection-local-variables=
+bound to the execution host, and falls back to the global default when no profile
+applies:
+
+#+begin_src emacs-lisp
+;; Global defaults for all hosts:
+(setq cmacs-transcribe-remote-stt 'auto)         ; whisper-cli if available
+
+;; Override just the "gpu-box" host to use its own whisper-cli build + model:
+(connection-local-set-profile-variables
+ 'cmacs-transcribe-gpu-box
+ '((cmacs-transcribe-remote-whisper-cli . "/opt/whisper/build/bin/whisper-cli")
+   (cmacs-transcribe-remote-model-dir   . "/opt/whisper/models")
+   (cmacs-transcribe-remote-whisper-env . ("LD_LIBRARY_PATH=/opt/whisper/build/src"))))
+(connection-local-set-profiles '(:machine "gpu-box") 'cmacs-transcribe-gpu-box)
+#+end_src
 
 * Hooks: integrate with anything
 

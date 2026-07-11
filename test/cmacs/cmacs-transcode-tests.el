@@ -357,5 +357,44 @@
           (should (eq (cmacs-transcode--filter-status missing) 'skipped)))
       (ignore-errors (delete-file existing)))))
 
+;;; ---------------------------------------------------------------------
+;;; TRAMP / remote execution helpers
+;;; ---------------------------------------------------------------------
+
+(ert-deftest cmacs-transcode-test-io-strips-tramp ()
+  "`--io' strips the TRAMP prefix from command + container-mount paths."
+  (cmacs-transcode-tests--skip-unless-loaded)
+  (let ((h (cmacs-transcode--io 'host "/ssh:box:/a/in.mp4" "/ssh:box:/a/out.mkv")))
+    (should (equal (plist-get h :in) "/a/in.mp4"))
+    (should (equal (plist-get h :out) "/a/out.mkv"))
+    (should (equal (plist-get h :in-dir) "/a/"))
+    (should (plist-get h :same)))
+  (let ((c (cmacs-transcode--io 'podman "/ssh:box:/a/in.mp4" "/ssh:box:/b/out.mkv")))
+    (should (equal (plist-get c :in) "/input/in.mp4"))
+    (should (equal (plist-get c :out) "/output/out.mkv"))
+    (should (equal (plist-get c :in-dir) "/a/"))
+    (should (equal (plist-get c :out-dir) "/b/"))
+    (should-not (plist-get c :same))))
+
+(ert-deftest cmacs-transcode-test-exec-dir ()
+  "`--exec-dir' resolves the execution host from MODE x input remoteness."
+  (cmacs-transcode-tests--skip-unless-loaded)
+  (should (null (cmacs-transcode--exec-dir "/home/u/a.mp4" 'auto)))
+  (should (null (cmacs-transcode--exec-dir "/home/u/a.mp4" 'local)))
+  (should (null (cmacs-transcode--exec-dir "/ssh:box:/a/f.mp4" 'local)))
+  (should-error (cmacs-transcode--exec-dir "/home/u/a.mp4" 'remote) :type 'user-error)
+  (dolist (mode '(auto remote))
+    (let ((d (cmacs-transcode--exec-dir "/ssh:box:/a/f.mp4" mode)))
+      (should (equal (file-remote-p d 'method) "ssh"))
+      (should (equal (file-remote-p d 'host) "box"))
+      (should (equal (file-remote-p d 'localname) "/a/")))))
+
+(ert-deftest cmacs-transcode-test-stage-in-p ()
+  "`--stage-in-p' is true only for a remote input under `local' execution."
+  (cmacs-transcode-tests--skip-unless-loaded)
+  (should (cmacs-transcode--stage-in-p "/ssh:box:/a/f.mp4" 'local))
+  (should-not (cmacs-transcode--stage-in-p "/ssh:box:/a/f.mp4" 'auto))
+  (should-not (cmacs-transcode--stage-in-p "/home/u/f.mp4" 'local)))
+
 (provide 'cmacs-transcode-tests)
 ;;; cmacs-transcode-tests.el ends here

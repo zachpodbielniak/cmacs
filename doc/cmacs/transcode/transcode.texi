@@ -108,6 +108,9 @@ Toggle the process-existing filter (only re-encode files that already have
 an output).
 @item M
 Switch the session between video and audio.
+@item E
+Cycle where ffmpeg runs: @code{auto} → @code{local} → @code{remote}
+(@pxref{Transcode Backends}).
 @item L
 Show the @code{*cmacs-transcode-log*} buffer (full ffmpeg output).
 @item g
@@ -150,6 +153,27 @@ device is passed through (@code{--device}), with the Vulkan vendor environment
 variable set as needed.  A host backend runs the binaries directly on the real
 paths.  @code{(cmacs-transcode-supported-p)} is non-@code{nil} when any backend
 resolves.
+
+@subsection Remote execution (TRAMP / SSH)
+
+When the input is opened over TRAMP (@file{/ssh:host:/path/}), cmacs-transcode can
+run ffmpeg on that @emph{remote host's hardware} rather than streaming the media
+locally.  @code{cmacs-transcode-execution} (header @code{exec:}, key @kbd{E})
+selects: @code{auto} (default; follow the input's host), @code{remote} (force the
+input's remote host), or @code{local} (force local, copying a remote input down
+first).  Work runs through TRAMP-aware primitives (@code{process-file},
+@code{make-process :file-handler}), so the container/binary, temp files, and
+output all live on the execution host, which needs podman/docker or a host
+@command{ffmpeg}.
+
+Two caveats: (1) TRAMP resolves remote programs via @code{tramp-remote-path},
+which often omits Homebrew and @file{/usr/sbin} --- add
+@code{(add-to-list 'tramp-remote-path 'tramp-own-remote-path)} if the remote
+ffmpeg/podman is not found; (2) GPU/hwaccel auto-detection reads local device
+nodes, so a remote job encodes in software in this version.  Per-host overrides of
+the backend/image/device use connection-local variables
+(@code{connection-local-set-profile-variables}); the global @code{defcustom}
+defaults apply everywhere else, so no per-host setup is required.
 
 @node Transcode Options
 @section Options

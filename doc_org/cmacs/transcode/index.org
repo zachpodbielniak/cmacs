@@ -82,6 +82,7 @@ drains.
 | =m=   | =cmacs-transcode-toggle-missing=   | Only encode files lacking an output             |
 | =x=   | =cmacs-transcode-toggle-existing=  | Only re-encode files that already have output   |
 | =M=   | =cmacs-transcode-set-kind=         | Switch the session between video and audio      |
+| =E=   | =cmacs-transcode-cycle-execution=  | Cycle execution: auto → local → remote          |
 | =L=      | =cmacs-transcode-show-log=         | Show =*cmacs-transcode-log*= (full ffmpeg out)  |
 | =g=      | =cmacs-transcode-refresh=          | Redraw the buffer                               |
 | =q=      | =quit-window=                      | Quit the queue buffer                           |
@@ -111,6 +112,54 @@ ffprobe=.  When hardware acceleration is active the DRI device is passed
 through (=--device=), with the Vulkan vendor environment variable set as
 needed.  A host backend runs the binaries directly on the real paths.
 =(cmacs-transcode-supported-p)= is non-nil when any backend resolves.
+
+* Remote execution (TRAMP / SSH)
+
+When you open a file over TRAMP — e.g. a Dired or project buffer on
+=/ssh:host:/path/= — cmacs-transcode can run ffmpeg on that *remote host's
+hardware* instead of streaming the media to your local machine.  It is controlled
+by =cmacs-transcode-execution= (header field =exec:=, cycled with =E=):
+
+- =auto= (default) — follow the input's host: a remote input transcodes on its
+  remote host, a local input runs locally.
+- =remote= — force the input's remote host (an error for a local input).
+- =local= — force the local machine; a *remote* input is first copied down to a
+  temporary file (a potentially large transfer), transcoded locally, and the
+  output copied back to its destination.
+
+Everything runs through Emacs's TRAMP-aware primitives (=process-file=,
+=make-process :file-handler=), so the ffmpeg container/binary, the temp files,
+and the output all live on the execution host.  Requirements on the *remote*
+host: podman/docker (for the =linuxserver/ffmpeg= container) or a host =ffmpeg=.
+
+*Two things to know:*
+
+1. *Remote PATH.* TRAMP resolves remote programs via =tramp-remote-path=, which
+   by default is a conservative list that often omits Homebrew/Linuxbrew and
+   =/usr/sbin=.  If cmacs-transcode can't find ffmpeg/podman on the remote, add
+   your login PATH:
+   #+begin_src emacs-lisp
+   (with-eval-after-load 'tramp
+     (add-to-list 'tramp-remote-path 'tramp-own-remote-path))
+   #+end_src
+2. *Hardware acceleration is local-only detection.* Auto GPU/VAAPI/Vulkan
+   detection probes local device nodes, so a remote job encodes in *software* in
+   this version (remote GPU passthrough is a planned follow-on).
+
+** Per-host settings (connection-local)
+
+The backend, container image, and hwaccel device use their global =defcustom=
+defaults on every host — no per-host setup needed.  To differ on one host, add a
+connection-local profile; cmacs-transcode reads these settings under
+=with-connection-local-variables= bound to the execution host:
+
+#+begin_src emacs-lisp
+;; Global defaults still apply everywhere; override just gpu-box:
+(connection-local-set-profile-variables
+ 'cmacs-gpu-box
+ '((cmacs-transcode-backend . docker)))
+(connection-local-set-profiles '(:machine "gpu-box") 'cmacs-gpu-box)
+#+end_src
 
 * Excluded from the scripts
 

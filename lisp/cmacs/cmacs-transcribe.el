@@ -38,6 +38,7 @@
 
 (require 'cl-lib)
 (require 'subr-x)
+(require 'files-x)                      ;`with-connection-local-variables'
 (require 'cmacs-transcode)              ;reuse backend / io / command helpers
 (require 'cmacs-whisper nil t)          ;model-path helpers + STT DEFUNs (soft)
 
@@ -46,6 +47,7 @@
 (declare-function cmacs-transcode--io "cmacs-transcode" (kind in-file &optional out-file))
 (declare-function cmacs-transcode--command "cmacs-transcode" (kind tool io hw ffmpeg-args &optional name))
 (declare-function cmacs-transcode--ffprobe "cmacs-transcode" (kind in-file &rest probe-args))
+(declare-function cmacs-transcode--exec-dir "cmacs-transcode" (input &optional mode))
 ;; whisper STT (present only in a --with-cmacs-whisper build).
 (declare-function cmacs-whisper-transcribe-async "cmacs-whisper-defuns.c"
                   (model-path wav-path callback &optional language threads))
@@ -111,6 +113,57 @@ nil processes everything."
                  (const :tag "Only missing transcripts" missing)
                  (const :tag "Only existing transcripts" existing))
   :safe #'symbolp)
+
+(defcustom cmacs-transcribe-execution 'auto
+  "Where transcription runs, relative to the input file.
+`auto' (default) runs on the input's own host: a remote (TRAMP/SSH) input
+converts and transcribes on that remote host's hardware, a local input
+runs locally.  `remote' forces the input's remote host (error for a local
+input).  `local' forces the local machine (copying a remote input down).
+
+Since cmacs's embedded whisper engine cannot read a remote file, remote
+STT uses `cmacs-transcribe-remote-stt'.  Connection-local-overridable; the
+queue buffer's `E' key cycles it per session."
+  :type '(choice (const :tag "Auto (follow the file's host)" auto)
+                 (const :tag "Force local" local)
+                 (const :tag "Force remote" remote))
+  :safe #'symbolp)
+
+(defcustom cmacs-transcribe-remote-stt 'auto
+  "How speech-to-text runs when a job executes on a remote host.
+cmacs's whisper engine is compiled into Emacs and reads a local file, so
+it cannot transcribe a remote WAV directly.  Options:
+  `whisper-cli'     run a standalone whisper-cli on the remote host (true
+                    remote STT; needs the binary + model there).
+  `local-copyback'  copy the small 16 kHz WAV back and transcribe with the
+                    local embedded engine (only ffmpeg is offloaded).
+  `auto' (default)  use `whisper-cli' when it and a model resolve on the
+                    remote host, else fall back to `local-copyback'.
+Connection-local-overridable per host."
+  :type '(choice (const :tag "Auto (whisper-cli if available, else copyback)" auto)
+                 (const :tag "Remote whisper-cli" whisper-cli)
+                 (const :tag "Copy WAV back, local STT" local-copyback))
+  :safe #'symbolp)
+
+(defcustom cmacs-transcribe-remote-whisper-cli "whisper-cli"
+  "Name or path of the standalone whisper-cli on a remote host.
+Resolved on the remote via PATH when a bare name.  Connection-local-
+overridable so each host can point at its own build."
+  :type 'string)
+
+(defcustom cmacs-transcribe-remote-model-dir nil
+  "Directory holding whisper models on a remote host, or nil.
+When nil, `whisper-cli' STT is only auto-selected if a model can otherwise
+be found; set this (per host via connection-local) to the models dir so
+the model basename (`cmacs-transcribe-model') resolves remotely."
+  :type '(choice (const :tag "Unset" nil) string))
+
+(defcustom cmacs-transcribe-remote-whisper-env nil
+  "Extra environment for the remote whisper-cli, as a list of \"VAR=value\".
+Prefixed to the command via `env'.  A dynamically-linked whisper-cli often
+needs e.g. (\"LD_LIBRARY_PATH=/path/to/whisper.cpp/build/src\").
+Connection-local-overridable per host."
+  :type '(repeat string))
 
 (defcustom cmacs-transcribe-model nil
   "Whisper model basename, or nil for `cmacs-whisper-default-model'.
@@ -300,9 +353,11 @@ with `:summary' (the summary text), `:summary-type', and `:org-file'.")
 (cl-defstruct (cmacs-transcribe-job
                (:constructor cmacs-transcribe-job-create)
                (:copier nil))
-  input                 ; absolute input path
+  input                 ; absolute input path (may be a TRAMP path)
   kind                  ; `audio' or `video'
-  wav                   ; transient 16 kHz mono WAV path, or nil
+  exec-dir              ; dir to bind as `default-directory' (remote), or nil
+  staged-input          ; local temp copy of a remote input (local mode), or nil
+  wav                   ; transient 16 kHz mono WAV path (on the exec host)
   txt                   ; transcript output path
   org                   ; summary Org output path
   srt                   ; .srt output path (when enabled), or nil
@@ -380,6 +435,48 @@ even when no AI command has run yet this session."
   "Resolve the whisper thread count (nil = all cores)."
   (plist-get cmacs-transcribe--options :threads))
 
+(defun cmacs-transcribe--session-execution ()
+  "Return this session's execution mode (`auto'/`local'/`remote')."
+  (or (plist-get cmacs-transcribe--options :execution) cmacs-transcribe-execution))
+
+(defun cmacs-transcribe--exec-dir (input &optional mode)
+  "Return the directory whose host runs the tools for INPUT, or nil for local.
+Delegates to `cmacs-transcode--exec-dir' with this session's MODE."
+  (cmacs-transcode--exec-dir input (or mode (cmacs-transcribe--session-execution))))
+
+(defun cmacs-transcribe--remote-model ()
+  "Return the whisper model path on the remote host (a local name there).
+Uses `cmacs-transcribe-remote-model-dir' + the model basename, or just the
+basename when the dir is unset."
+  (let ((basename (or cmacs-transcribe-model
+                      (and (boundp 'cmacs-whisper-default-model)
+                           cmacs-whisper-default-model)
+                      "ggml-base.en.bin"))
+        (dir cmacs-transcribe-remote-model-dir))
+    (if (and dir (not (string-empty-p dir)))
+        (concat (file-name-as-directory dir) basename)
+      basename)))
+
+(defun cmacs-transcribe--remote-model-exists-p ()
+  "Non-nil if the remote model resolves on the host of `default-directory'.
+Only checkable when `cmacs-transcribe-remote-model-dir' gives an absolute
+path; call with `default-directory' bound to the remote execution dir."
+  (let ((dir cmacs-transcribe-remote-model-dir))
+    (and dir (not (string-empty-p dir))
+         (file-exists-p (concat (or (file-remote-p default-directory) "")
+                                (cmacs-transcribe--remote-model))))))
+
+(defun cmacs-transcribe--remote-stt-mode ()
+  "Resolve the effective remote STT mode: `whisper-cli' or `local-copyback'.
+Call with `default-directory' bound to the remote host (and inside
+`with-connection-local-variables')."
+  (pcase cmacs-transcribe-remote-stt
+    ('whisper-cli 'whisper-cli)
+    ('local-copyback 'local-copyback)
+    (_ (if (and (executable-find cmacs-transcribe-remote-whisper-cli t)
+                (cmacs-transcribe--remote-model-exists-p))
+           'whisper-cli 'local-copyback))))
+
 ;;; ---------------------------------------------------------------------
 ;;; Options seeding + kind detection + output paths
 ;;; ---------------------------------------------------------------------
@@ -389,6 +486,9 @@ even when no AI command has run yet this session."
   (list :parallel cmacs-transcribe-parallel-jobs
         :threads cmacs-transcribe-threads
         :process-filter cmacs-transcribe-process-filter
+        ;; Read under connection-local so a remote buffer picks up that host's
+        ;; default execution mode; `E' overrides it per session.
+        :execution (with-connection-local-variables cmacs-transcribe-execution)
         :model cmacs-transcribe-model
         :language cmacs-transcribe-language
         :output-dir cmacs-transcribe-output-dir
@@ -569,16 +669,21 @@ with RECURSIVE)."
 
 (defun cmacs-transcribe--file-sha256 (file)
   "Return the hex SHA-256 of FILE, or nil.
-Prefers a streaming external program (`cmacs-transcribe-sha256-program');
-falls back to an in-Emacs digest for files under 256 MiB."
+Runs the streaming program (`cmacs-transcribe-sha256-program') on FILE's
+own host -- so a remote input is hashed remotely (`process-file'), not
+streamed over TRAMP.  Falls back to an in-Emacs digest for local files
+under 256 MiB."
   (when cmacs-transcribe-compute-file-hash
-    (let ((prog (executable-find cmacs-transcribe-sha256-program)))
+    (let* ((remote (file-remote-p file))
+           (default-directory (if remote (file-name-directory file) default-directory))
+           (prog (executable-find cmacs-transcribe-sha256-program (and remote t))))
       (cond
        (prog (with-temp-buffer
                (when (ignore-errors
-                       (zerop (call-process prog nil t nil (expand-file-name file))))
+                       (zerop (process-file prog nil t nil (file-local-name file))))
                  (car (split-string (buffer-string))))))
-       ((< (or (file-attribute-size (file-attributes file)) 0) (* 256 1024 1024))
+       ((and (not remote)
+             (< (or (file-attribute-size (file-attributes file)) 0) (* 256 1024 1024)))
         (ignore-errors
           (with-temp-buffer
             (set-buffer-multibyte nil)
@@ -643,66 +748,91 @@ falls back to an in-Emacs digest for files under 256 MiB."
   "Forcibly stop JOB's conversion process (and its container, if any).
 Mirrors `cmacs-transcode--force-kill-job': SIGKILL to a podman/docker
 client does not reach ffmpeg inside the container, so it is force-removed
-by name with `<runtime> rm -f'."
+by name with `<runtime> rm -f' -- run on the job's execution host (remote
+via TRAMP when the job is remote)."
   (let ((proc (cmacs-transcribe-job-process job))
-        (cname (cmacs-transcribe-job-container job)))
+        (cname (cmacs-transcribe-job-container job))
+        (default-directory (or (cmacs-transcribe-job-exec-dir job) default-directory)))
     (when (and cname (memq cmacs-transcribe--backend '(podman docker)))
       (ignore-errors
-        (call-process (symbol-name cmacs-transcribe--backend) nil 0 nil
+        (process-file (symbol-name cmacs-transcribe--backend) nil 0 nil
                       "rm" "-f" cname)))
     (when (process-live-p proc)
       (ignore-errors (signal-process proc 9))
       (ignore-errors (delete-process proc)))))
 
 (defun cmacs-transcribe--cleanup-wav (job)
-  "Delete JOB's transient WAV and its dedicated temp directory, if any."
-  (let ((wav (cmacs-transcribe-job-wav job)))
+  "Delete JOB's transient WAV, its per-job temp dir, and any staged input.
+The temp dir may be on a remote host (created via `make-nearby-temp-file');
+`delete-directory' on its TRAMP path removes it there."
+  (let ((wav (cmacs-transcribe-job-wav job))
+        (staged (cmacs-transcribe-job-staged-input job)))
     (when wav
       (let ((dir (directory-file-name (file-name-directory wav))))
         (ignore-errors
           (if (string-prefix-p "cmacs-transcribe-" (file-name-nondirectory dir))
               (delete-directory dir t)   ;the whole per-job temp dir
             (when (file-exists-p wav) (delete-file wav))))))
-    (setf (cmacs-transcribe-job-wav job) nil)))
+    (when (and staged (file-exists-p staged)) (ignore-errors (delete-file staged)))
+    (setf (cmacs-transcribe-job-wav job) nil
+          (cmacs-transcribe-job-staged-input job) nil)))
 
 ;;; ---------------------------------------------------------------------
 ;;; Pipeline: convert -> transcribe -> (summarize) -> done
 ;;; ---------------------------------------------------------------------
 
 (defun cmacs-transcribe--start-job (buffer job)
-  "Begin (or retry) the conversion stage for JOB in BUFFER's session."
+  "Begin (or retry) the conversion stage for JOB in BUFFER's session.
+Runs ffmpeg on the job's execution host: locally, or -- for a remote input
+under `auto'/`remote' -- on that host over TRAMP (the WAV is created there
+with `make-nearby-temp-file').  Under `local' execution a remote input is
+staged down first.  Remote settings honour connection-local profiles."
   (with-current-buffer buffer
-    (let* ((kind cmacs-transcribe--backend)
-           (in (cmacs-transcribe-job-input job))
-           ;; The temp WAV lives in a dedicated per-job temp *directory*, not
-           ;; directly in `temporary-file-directory'.  A container backend
-           ;; bind-mounts the WAV's directory as /output with a `:z' SELinux
-           ;; relabel, and podman refuses to relabel a shared dir like /tmp
-           ;; wholesale ("SELinux relabeling of /tmp is not allowed").  A
-           ;; private subdirectory relabels fine.
-           (wav (or (cmacs-transcribe-job-wav job)
-                    (expand-file-name
-                     "audio.wav" (make-temp-file "cmacs-transcribe-" t))))
-           (io (cmacs-transcode--io kind in wav))
-           (cname (and (memq kind '(podman docker))
-                       (cmacs-transcribe--gen-container-name)))
-           (cmd (cmacs-transcode--command
-                 kind 'ffmpeg io nil (cmacs-transcribe--convert-args io) cname)))
-      (setf (cmacs-transcribe-job-wav job) wav
-            (cmacs-transcribe-job-stage job) 'converting
-            (cmacs-transcribe-job-progress job) "converting…"
-            (cmacs-transcribe-job-container job) cname)
-      (cmacs-transcribe--log "convert %s -> wav" (file-name-nondirectory in))
-      (cmacs-transcribe--log "  $ %s" (mapconcat #'identity cmd " "))
-      (setf (cmacs-transcribe-job-process job)
-            (make-process
-             :name (concat "cmacs-transcribe:" (file-name-nondirectory in))
-             :buffer (cmacs-transcribe--log-buffer)
-             :noquery t
-             :command cmd
-             :filter (cmacs-transcribe--make-convert-filter job)
-             :sentinel (cmacs-transcribe--make-convert-sentinel buffer job)))
-      (cmacs-transcribe--render buffer))))
+    (let* ((real-in (cmacs-transcribe-job-input job))
+           (mode (cmacs-transcribe--session-execution))
+           (exec-dir (cmacs-transcribe--exec-dir real-in mode))
+           (stage (and (eq mode 'local) (file-remote-p real-in))))
+      (setf (cmacs-transcribe-job-exec-dir job) exec-dir)
+      (when (and stage (not (cmacs-transcribe-job-staged-input job)))
+        (let ((tin (make-temp-file "cmacs-transcribe-in-" nil
+                                   (concat "." (or (file-name-extension real-in) "dat")))))
+          (cmacs-transcribe--log "stage %s -> local" (file-name-nondirectory real-in))
+          (copy-file real-in tin t)
+          (setf (cmacs-transcribe-job-staged-input job) tin)))
+      (let* ((in (or (cmacs-transcribe-job-staged-input job) real-in))
+             (default-directory (or exec-dir default-directory)))
+        (with-connection-local-variables
+         (let* ((kind cmacs-transcribe--backend)
+                ;; The temp WAV lives in a dedicated per-job temp *directory*
+                ;; on the execution host (`make-nearby-temp-file' honours a
+                ;; remote `default-directory').  A private subdir also keeps
+                ;; the podman `:z' /tmp-relabel fix working on the remote.
+                (wav (or (cmacs-transcribe-job-wav job)
+                         (expand-file-name
+                          "audio.wav" (make-nearby-temp-file "cmacs-transcribe-" t))))
+                (io (cmacs-transcode--io kind in wav))
+                (cname (and (memq kind '(podman docker))
+                            (cmacs-transcribe--gen-container-name)))
+                (cmd (cmacs-transcode--command
+                      kind 'ffmpeg io nil (cmacs-transcribe--convert-args io) cname)))
+           (setf (cmacs-transcribe-job-wav job) wav
+                 (cmacs-transcribe-job-stage job) 'converting
+                 (cmacs-transcribe-job-progress job) "converting…"
+                 (cmacs-transcribe-job-container job) cname)
+           (cmacs-transcribe--log "convert %s -> wav%s"
+                                  (file-name-nondirectory real-in)
+                                  (if exec-dir (format " (on %s)" (file-remote-p exec-dir)) ""))
+           (cmacs-transcribe--log "  $ %s" (mapconcat #'identity cmd " "))
+           (setf (cmacs-transcribe-job-process job)
+                 (make-process
+                  :name (concat "cmacs-transcribe:" (file-name-nondirectory real-in))
+                  :buffer (cmacs-transcribe--log-buffer)
+                  :noquery t
+                  :file-handler t
+                  :command cmd
+                  :filter (cmacs-transcribe--make-convert-filter job)
+                  :sentinel (cmacs-transcribe--make-convert-sentinel buffer job)))
+           (cmacs-transcribe--render buffer)))))))
 
 (defun cmacs-transcribe--make-convert-filter (job)
   "Return a process filter logging output and tracking JOB progress."
@@ -756,7 +886,10 @@ by name with `<runtime> rm -f'."
             (cmacs-transcribe--render buffer)))))))
 
 (defun cmacs-transcribe--on-converted (buffer job)
-  "Kick off the whisper transcription stage for JOB in BUFFER."
+  "Kick off the transcription stage for JOB in BUFFER.
+A locally-produced WAV uses the embedded whisper engine; a remotely-
+produced WAV uses `cmacs-transcribe-remote-stt' (remote whisper-cli or a
+copy-back to the local engine)."
   (with-current-buffer buffer
     (setf (cmacs-transcribe-job-stage job) 'transcribing
           (cmacs-transcribe-job-process job) nil
@@ -764,16 +897,108 @@ by name with `<runtime> rm -f'."
           (cmacs-transcribe-job-progress job) "transcribing…")
     (cmacs-transcribe--log "transcribe %s"
                            (file-name-nondirectory (cmacs-transcribe-job-input job)))
-    (let ((model (cmacs-transcribe--model))
-          (lang (cmacs-transcribe--language))
-          (threads (cmacs-transcribe--threads))
+    (let ((exec-dir (cmacs-transcribe-job-exec-dir job))
           (wav (cmacs-transcribe-job-wav job)))
-      (cmacs-whisper-transcribe-async
-       model wav
-       (lambda (result)
-         (cmacs-transcribe--on-transcribed buffer job result))
-       lang threads))
+      (if (null exec-dir)
+          (cmacs-transcribe--transcribe-embedded buffer job wav)
+        (cmacs-transcribe--transcribe-remote buffer job wav exec-dir)))
     (cmacs-transcribe--render buffer)))
+
+(defun cmacs-transcribe--transcribe-embedded (buffer job wav)
+  "Transcribe the local WAV with the embedded whisper engine."
+  (cmacs-whisper-transcribe-async
+   (cmacs-transcribe--model) wav
+   (lambda (result) (cmacs-transcribe--on-transcribed buffer job result))
+   (cmacs-transcribe--language) (cmacs-transcribe--threads)))
+
+(defun cmacs-transcribe--transcribe-remote (buffer job wav exec-dir)
+  "Transcribe the remote WAV on EXEC-DIR's host, mode from `remote-stt'."
+  (let ((default-directory exec-dir))
+    (with-connection-local-variables
+     (let ((rmode (cmacs-transcribe--remote-stt-mode)))
+       (cmacs-transcribe--log "  remote STT: %s" rmode)
+       (pcase rmode
+         ('whisper-cli (cmacs-transcribe--transcribe-whisper-cli buffer job wav))
+         (_ (cmacs-transcribe--transcribe-copyback buffer job wav)))))))
+
+(defun cmacs-transcribe--parse-whisper-json (json-string)
+  "Parse whisper-cli -oj JSON-STRING into the whisper result alist.
+Returns ((:text . STR) (:segments . ((:start MS :end MS :text STR)...)))."
+  (let* ((data (json-parse-string json-string :object-type 'alist :array-type 'list))
+         (segs (alist-get 'transcription data))
+         (text "") (out nil))
+    (dolist (s segs)
+      (let* ((off (alist-get 'offsets s))
+             (from (alist-get 'from off))
+             (to (alist-get 'to off))
+             (txt (or (alist-get 'text s) "")))
+        (setq text (concat text txt))
+        (push (list (cons :start from) (cons :end to) (cons :text txt)) out)))
+    (list (cons :text (string-trim text))
+          (cons :segments (nreverse out)))))
+
+(defun cmacs-transcribe--transcribe-whisper-cli (buffer job wav)
+  "Run a remote whisper-cli on WAV (call with `default-directory' = remote).
+Emits JSON, reads it back, and hands the parsed result to
+`cmacs-transcribe--on-transcribed' (which writes .txt/.srt/... itself)."
+  (let* ((cli cmacs-transcribe-remote-whisper-cli)
+         (model (cmacs-transcribe--remote-model))
+         (lang (cmacs-transcribe--language))
+         (threads (cmacs-transcribe--threads))
+         (env cmacs-transcribe-remote-whisper-env)
+         (base (file-name-sans-extension wav))     ;TRAMP path, no extension
+         (jsonf (concat base ".json"))
+         (cmd (append (when env (cons "env" env))
+                      (list cli "-m" model "-f" (file-local-name wav)
+                            "-l" (or lang "en") "-oj"
+                            "-of" (file-local-name base))
+                      (when threads (list "-t" (number-to-string threads))))))
+    (cmacs-transcribe--log "  $ %s" (mapconcat #'identity cmd " "))
+    (setf (cmacs-transcribe-job-process job)
+          (make-process
+           :name (concat "cmacs-transcribe-stt:"
+                         (file-name-nondirectory (cmacs-transcribe-job-input job)))
+           :buffer (cmacs-transcribe--log-buffer)
+           :noquery t
+           :file-handler t
+           :command cmd
+           :sentinel
+           (lambda (p _e)
+             (when (and (memq (process-status p) '(exit signal))
+                        (buffer-live-p buffer))
+               (with-current-buffer buffer
+                 (setf (cmacs-transcribe-job-process job) nil)
+                 (let ((result
+                        (if (and (eq (process-status p) 'exit)
+                                 (zerop (process-exit-status p))
+                                 (file-exists-p jsonf))
+                            (condition-case err
+                                (cmacs-transcribe--parse-whisper-json
+                                 (with-temp-buffer (insert-file-contents jsonf)
+                                                   (buffer-string)))
+                              (error (list (cons :error (error-message-string err)))))
+                          (list (cons :error
+                                      (format "whisper-cli failed (exit %s)"
+                                              (if (eq (process-status p) 'exit)
+                                                  (process-exit-status p) "signal")))))))
+                   (cmacs-transcribe--on-transcribed buffer job result)))))))))
+
+(defun cmacs-transcribe--transcribe-copyback (buffer job wav)
+  "Copy the remote WAV down and transcribe with the local embedded engine."
+  (let ((local-wav (make-temp-file "cmacs-transcribe-cb-" nil ".wav")))
+    (condition-case err
+        (progn
+          (copy-file wav local-wav t)
+          (cmacs-whisper-transcribe-async
+           (cmacs-transcribe--model) local-wav
+           (lambda (result)
+             (ignore-errors (delete-file local-wav))
+             (cmacs-transcribe--on-transcribed buffer job result))
+           (cmacs-transcribe--language) (cmacs-transcribe--threads)))
+      (error
+       (ignore-errors (delete-file local-wav))
+       (cmacs-transcribe--on-transcribed
+        buffer job (list (cons :error (error-message-string err))))))))
 
 (defun cmacs-transcribe--info-plist (job)
   "Build the hook INFO plist for JOB from its current state."
@@ -1061,7 +1286,13 @@ STANDALONE is forwarded to `cmacs-transcribe--finish-summary'."
   (let* ((o cmacs-transcribe--options)
          (par (or (plist-get o :parallel) 1))
          (threads (plist-get o :threads))
-         (backend (or cmacs-transcribe--backend (cmacs-transcode--resolve t) 'none)))
+         (backend (or cmacs-transcribe--backend (cmacs-transcode--resolve t) 'none))
+         (exec (cmacs-transcribe--session-execution))
+         (host (file-remote-p default-directory 'host))
+         (exec-label (pcase exec
+                       ('local "local")
+                       ('remote (concat "remote" (if host (concat "@" host) "")))
+                       (_ (if host (concat "auto@" host) "auto")))))
     (list
      " cmacs-transcribe — speech-to-text"
      (format " backend:%s  jobs:%s  threads:%s  model:%s  lang:%s"
@@ -1069,7 +1300,7 @@ STANDALONE is forwarded to `cmacs-transcribe--finish-summary'."
              (if threads threads "all")
              (file-name-nondirectory (cmacs-transcribe--model))
              (cmacs-transcribe--language))
-     (format " summary:%s  extra:%s  out:%s%s"
+     (format " summary:%s  extra:%s  out:%s%s  exec:%s"
              (if (plist-get o :summarize)
                  (format "on(%s)" (plist-get o :summary-type)) "off")
              (cmacs-transcribe--extra-formats-label o)
@@ -1078,7 +1309,8 @@ STANDALONE is forwarded to `cmacs-transcribe--finish-summary'."
              (pcase (plist-get o :process-filter)
                ('missing "  [only-missing]")
                ('existing "  [only-existing]")
-               (_ ""))))))
+               (_ ""))
+             exec-label))))
 
 (defvar cmacs-transcribe--line-map
   (let ((m (make-sparse-keymap)))
@@ -1090,9 +1322,9 @@ STANDALONE is forwarded to `cmacs-transcribe--finish-summary'."
 (defun cmacs-transcribe--job-line (i n job)
   "Return a propertized status line for JOB (index I of N)."
   (let* ((st (cmacs-transcribe-job-stage job))
-         (done-txt (and (eq st 'done)
-                        (cmacs-transcribe-job-txt job)
-                        (file-exists-p (cmacs-transcribe-job-txt job))))
+         ;; `done' implies the transcript was written; don't re-stat it every
+         ;; redraw (a remote round-trip over TRAMP for remote outputs).
+         (done-txt (and (eq st 'done) (cmacs-transcribe-job-txt job)))
          (line (format " [%d/%d] %s  %-42s  %s"
                        i n (cmacs-transcribe--stage-icon st)
                        (cmacs-transcribe--truncate
@@ -1119,7 +1351,7 @@ STANDALONE is forwarded to `cmacs-transcribe--finish-summary'."
     " v:open-txt  V:open-org  r:summarise-line  (done lines: click / mouse-2)"
     " p:parallel P:jobs  w:threads  c:model  n:lang  o:out  O:summary-dir"
     " s:summary S:type  f:formats  T:tags  y:type  m:missing x:existing"
-    " L:log  g:refresh  q:quit  ?:help")
+    " E:exec(local/remote)  L:log  g:refresh  q:quit  ?:help")
   "Key hint lines shown at the bottom of the queue buffer.")
 
 (defun cmacs-transcribe--render (buffer)
@@ -1175,6 +1407,7 @@ STANDALONE is forwarded to `cmacs-transcribe--finish-summary'."
   (define-key map (kbd "O") #'cmacs-transcribe-set-summary-dir)
   (define-key map (kbd "T") #'cmacs-transcribe-set-tags)
   (define-key map (kbd "y") #'cmacs-transcribe-set-type)
+  (define-key map (kbd "E") #'cmacs-transcribe-cycle-execution)
   (define-key map (kbd "m") #'cmacs-transcribe-toggle-missing)
   (define-key map (kbd "x") #'cmacs-transcribe-toggle-existing)
   (define-key map (kbd "L") #'cmacs-transcribe-show-log)
@@ -1319,27 +1552,42 @@ lets an in-progress transcription finish but discards its result."
       (user-error "No running job on this line"))))
 
 (defun cmacs-transcribe-start ()
-  "Begin transcribing the queued jobs (with a preflight check)."
+  "Begin transcribing the queued jobs (with a preflight check).
+Local (and remote copy-back) STT needs the embedded whisper engine and a
+local model; a remote job's ffmpeg backend is resolved on its host."
   (interactive)
   (cmacs-transcribe--ensure-mode)
-  (unless (cmacs-transcribe--whisper-available-p)
-    (user-error "cmacs-whisper is not built; reconfigure with --with-cmacs-whisper"))
-  (unless (cl-some (lambda (j) (eq (cmacs-transcribe-job-stage j) 'queued))
-                   cmacs-transcribe--jobs)
-    (user-error "No queued jobs to transcribe"))
-  (let ((model (cmacs-transcribe--model)))
-    (unless (file-exists-p model)
-      (if (and (fboundp 'cmacs-whisper-download-model)
-               (y-or-n-p (format "Whisper model %s not found; download it now? "
-                                 (file-name-nondirectory model))))
-          (cmacs-whisper-download-model (file-name-nondirectory model))
-        (user-error "Whisper model not found: %s" model))))
-  (setq cmacs-transcribe--backend (cmacs-transcode--resolve))
-  (cmacs-transcribe--log "run: backend=%s parallel=%d threads=%s"
-                         cmacs-transcribe--backend
-                         (max 1 (or (plist-get cmacs-transcribe--options :parallel) 1))
-                         (or (cmacs-transcribe--threads) "all"))
-  (cmacs-transcribe--run (current-buffer)))
+  (let ((queued (cl-find-if (lambda (j) (eq (cmacs-transcribe-job-stage j) 'queued))
+                            cmacs-transcribe--jobs)))
+    (unless queued (user-error "No queued jobs to transcribe"))
+    (let* ((mode (cmacs-transcribe--session-execution))
+           (exec-dir (cmacs-transcribe--exec-dir (cmacs-transcribe-job-input queued) mode))
+           (default-directory (or exec-dir default-directory)))
+      ;; Local execution runs the embedded engine on a local model.
+      (when (null exec-dir)
+        (unless (cmacs-transcribe--whisper-available-p)
+          (user-error "cmacs-whisper is not built; reconfigure with --with-cmacs-whisper"))
+        (let ((model (cmacs-transcribe--model)))
+          (unless (file-exists-p model)
+            (if (and (fboundp 'cmacs-whisper-download-model)
+                     (y-or-n-p (format "Whisper model %s not found; download it now? "
+                                       (file-name-nondirectory model))))
+                (cmacs-whisper-download-model (file-name-nondirectory model))
+              (user-error "Whisper model not found: %s" model)))))
+      ;; Remote copy-back STT still needs the local engine; warn (don't block,
+      ;; since auto may pick the remote whisper-cli instead).
+      (when (and exec-dir (not (eq cmacs-transcribe-remote-stt 'whisper-cli))
+                 (not (cmacs-transcribe--whisper-available-p)))
+        (cmacs-transcribe--log
+         "warning: no local whisper engine; remote copy-back STT will fail (set cmacs-transcribe-remote-stt to whisper-cli)"))
+      (setq cmacs-transcribe--backend
+            (with-connection-local-variables (cmacs-transcode--resolve)))
+      (cmacs-transcribe--log "run: backend=%s parallel=%d threads=%s exec=%s%s"
+                             cmacs-transcribe--backend
+                             (max 1 (or (plist-get cmacs-transcribe--options :parallel) 1))
+                             (or (cmacs-transcribe--threads) "all") mode
+                             (if exec-dir (format " (%s)" (file-remote-p exec-dir)) ""))
+      (cmacs-transcribe--run (current-buffer)))))
 
 (defun cmacs-transcribe-visit ()
   "Open the transcript (.txt) of the finished job on the current line."
@@ -1568,6 +1816,20 @@ via `cmacs-ai' and writes the summary Org next to (or under
                        nil 'existing)))
   (cmacs-transcribe--recompute-outputs)
   (cmacs-transcribe--render (current-buffer)))
+
+(defun cmacs-transcribe-cycle-execution ()
+  "Cycle where transcription runs: auto -> local -> remote -> auto.
+`auto' follows the input's host (remote files transcribe on the remote
+host); `local' forces the local machine (copying a remote input down);
+`remote' forces the input's remote host (using `cmacs-transcribe-remote-stt'
+for the whisper stage)."
+  (interactive)
+  (cmacs-transcribe--ensure-mode)
+  (let ((next (pcase (cmacs-transcribe--session-execution)
+                ('auto 'local) ('local 'remote) (_ 'auto))))
+    (setq cmacs-transcribe--options (plist-put cmacs-transcribe--options :execution next))
+    (cmacs-transcribe--render (current-buffer))
+    (message "cmacs-transcribe: execution = %s" next)))
 
 (defun cmacs-transcribe-show-log ()
   "Display the transcribe log buffer."

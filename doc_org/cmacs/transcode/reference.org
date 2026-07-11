@@ -30,6 +30,7 @@ override any of them per session (buffer edits never mutate the customs).
 | =cmacs-transcode-max-retries=      | =3=                                   | Attempts per video job (audio is tried once)        |
 | =cmacs-transcode-process-filter=   | =nil=                                 | =nil=, =missing=, or =existing=                     |
 | =cmacs-transcode-hwaccel-device=   | =/dev/dri/renderD128=                 | VAAPI render node                                   |
+| =cmacs-transcode-execution=        | =auto=                                | =auto= / =local= / =remote= (see the guide's Remote section) |
 
 Environment override: =CMACS_TRANSCODE_CONTAINER_RUNTIME= (e.g. =podman= /
 =docker= / =host=) wins over =cmacs-transcode-backend=.
