@@ -15,8 +15,10 @@ converts it to an alpha-coverage mask, uploads it to the per-display
 LrgGlyphAtlas, and paints it as a tinted textured quad via the frame's
 LrgFrameSurface.  (Proven end to end by the Phase-0 spike.)
 
-Colour-emoji glyphs are drawn as alpha masks for now (they appear in the
-foreground colour); full colour-glyph support is a later refinement.  */
+Glyphs from colour fonts (CBDT/COLR tables -- e.g. Noto Color Emoji) are
+detected per glyph and uploaded as straight (un-premultiplied) RGBA instead
+of a coverage mask; the atlas metrics carry is_color, which makes the engine
+draw them untinted so the emoji's own colours survive.  */
 
 #include <config.h>
 
@@ -67,6 +69,8 @@ lrg_font_bake (LrgGlyphAtlas       *atlas,
   unsigned char *data;
   guint8 *rgba;
   int stride, row, col;
+  FT_Face ft_face;
+  gboolean face_has_color, is_color;
   LrgGlyphMetrics *m;
 
   cg.index = code;
@@ -100,21 +104,61 @@ lrg_font_bake (LrgGlyphAtlas       *atlas,
   data = cairo_image_surface_get_data (surf);
   stride = cairo_image_surface_get_stride (surf);
 
-  /* Convert cairo premultiplied BGRA -> white + alpha-coverage RGBA so the
-     draw-time tint becomes the face foreground colour.  */
+  /* Colour-capable face (CBDT/COLR tables, e.g. Noto Color Emoji)?  Only
+     such a face can have painted anything but the white source above, so
+     this gates the per-pixel scan and protects ordinary fonts from
+     misdetection (component-alpha antialiasing also yields unequal
+     channels).  No other cairo call may touch SCALED while locked.  */
+  ft_face = cairo_ft_scaled_font_lock_face (scaled);
+  face_has_color = ft_face != NULL && FT_HAS_COLOR (ft_face);
+  cairo_ft_scaled_font_unlock_face (scaled);
+
+  /* The glyph was painted with an opaque white source, so a monochrome
+     glyph's premultiplied BGRA pixels are exactly (a,a,a,a); any channel
+     differing from alpha means cairo produced a real colour paint.  Checked
+     per glyph because colour fonts may contain colourless glyphs, which
+     must stay on the tintable-mask path.  */
+  is_color = FALSE;
+  if (face_has_color)
+    for (row = 0; row < h && !is_color; row++)
+      for (col = 0; col < w; col++)
+        {
+          const guint8 *p = &data[row * stride + col * 4];
+          if (p[0] != p[3] || p[1] != p[3] || p[2] != p[3])
+            {
+              is_color = TRUE;
+              break;
+            }
+        }
+
+  /* Colour glyph: un-premultiply cairo's BGRA into the straight RGBA that
+     the engine's GRL_BLEND_ALPHA draw expects (swapping B<->R for the
+     atlas's R8G8B8A8 layout); it is drawn untinted.  Otherwise: white +
+     alpha-coverage RGBA so the draw-time tint becomes the face foreground
+     colour.  */
   rgba = g_malloc0 ((gsize) w * h * 4);
   for (row = 0; row < h; row++)
     for (col = 0; col < w; col++)
       {
-        guint8 a = data[row * stride + col * 4 + 3];
+        const guint8 *p = &data[row * stride + col * 4];
+        guint8 a = p[3];
         guint8 *o = &rgba[(row * w + col) * 4];
-        o[0] = 255;
-        o[1] = 255;
-        o[2] = 255;
+        if (is_color)
+          {
+            o[0] = a ? (guint8) ((p[2] * 255 + a / 2) / a) : 0;
+            o[1] = a ? (guint8) ((p[1] * 255 + a / 2) / a) : 0;
+            o[2] = a ? (guint8) ((p[0] * 255 + a / 2) / a) : 0;
+          }
+        else
+          {
+            o[0] = 255;
+            o[1] = 255;
+            o[2] = 255;
+          }
         o[3] = a;
       }
 
-  m = lrg_glyph_atlas_upload (atlas, key, rgba, w, h, bx, by, adv, FALSE);
+  m = lrg_glyph_atlas_upload (atlas, key, rgba, w, h, bx, by, adv, is_color);
 
   g_free (rgba);
   cairo_destroy (cr);

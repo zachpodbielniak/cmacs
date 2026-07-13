@@ -165,7 +165,7 @@ drivable from Elisp via ~(gi-require "Libregnum")~ and from any GI language:
 | ~cmacs-lrgterm.h~   | ~struct lrg_display_info~ / ~lrg_output~, ~FRAME_*~ accessors + the pgtk↔lrg dispatch macros |
 | ~cmacs-lrgterm.c~   | ~lrg_create_terminal~ (the ~struct terminal~ hooks), the ~redisplay_interface~, the event loop (~lrg_read_socket~), colour hooks, the capture DEFUN |
 | ~cmacs-lrgfns.c~    | ~lrg-create-frame~ / ~lrg-open-connection~, frame-parameter handlers |
-| ~cmacs-lrgfont.c~   | the glyph blit — rasterise through the font's ~cr_scaled_font~ → alpha-mask RGBA → ~LrgGlyphAtlas~ → tinted textured quad |
+| ~cmacs-lrgfont.c~   | the glyph blit — rasterise through the font's ~cr_scaled_font~ → alpha-mask RGBA (or straight-RGBA colour for colour-font glyphs) → ~LrgGlyphAtlas~ → textured quad, tinted by the face foreground (colour glyphs drawn untinted) |
 | ~cmacs-lrgwindow.c~ | the ~LrgFrameSurface~ / ~GrlWindow~ lifecycle for a frame |
 
 *** Input parity with pgtk
@@ -234,9 +234,15 @@ font matching, fontsets and bidi behave exactly as under pgtk.  Only the
 final pixel blit is redirected: the RIF's ~draw_glyph_string~ calls
 ~lrg_font_draw_glyph_string~ directly (NOT ~font->driver->draw~, which is the
 Cairo painter), which rasterises each glyph via the font's ~cr_scaled_font~
-into a small ARGB surface, converts it to an alpha-coverage RGBA mask
-=(255,255,255,coverage)=, uploads it to the per-display ~LrgGlyphAtlas~ on a
-cache miss, and paints it as a textured quad tinted by the face foreground.
+into a small ARGB surface, uploads it to the per-display ~LrgGlyphAtlas~ on a
+cache miss, and paints it as a textured quad.  The upload has two paths:
+ordinary glyphs become an alpha-coverage RGBA mask =(255,255,255,coverage)=
+whose quad is tinted by the face foreground, while glyphs from *colour fonts*
+(CBDT/COLR tables — e.g. Noto Color Emoji) are detected per glyph
+(~FT_HAS_COLOR~ on the face gates a per-pixel scan of cairo's output) and
+uploaded as straight un-premultiplied RGBA with the ~is_color~ atlas metric
+set, which makes the engine draw them *untinted* so colour emoji keep their
+own colours.
 
 *** Rendering / presentation model (full repaint, present on unblock)
 

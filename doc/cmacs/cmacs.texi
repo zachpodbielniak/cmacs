@@ -8390,9 +8390,13 @@ lrg reuses Emacs's stock Cairo FreeType/HarfBuzz drivers (@code{ftcrfont} /
 @code{ftcrhbfont}) unchanged for font discovery, opening, metrics and
 shaping; only the final blit is redirected.  The redisplay interface calls
 @code{lrg_font_draw_glyph_string}, which rasterises each glyph via the font's
-@code{cr_scaled_font} into an alpha-coverage RGBA mask, uploads it to the
-per-display @code{LrgGlyphAtlas} on a cache miss, and paints it as a textured
-quad tinted by the face foreground.  Full font-lock colour, the region, the
+@code{cr_scaled_font}, uploads it to the per-display @code{LrgGlyphAtlas} on
+a cache miss, and paints it as a textured quad.  Ordinary glyphs are stored
+as an alpha-coverage RGBA mask and tinted by the face foreground; glyphs
+from colour fonts (CBDT/COLR tables --- e.g. Noto Color Emoji) are detected
+per glyph and stored as straight un-premultiplied RGBA, drawn untinted, so
+colour emoji render in full colour under @code{--lrg} just as under pgtk.
+Full font-lock colour, the region, the
 modeline (with its 3D box), text decorations (underline, overline,
 strike-through, box), the graphical fringes (continuation/truncation arrows)
 and the blinking cursor are all drawn.  Colour names resolve through pango's
