@@ -1101,7 +1101,11 @@ ifneq ($(CMACS_LIBREGNUM_OBJ),)
 ##    g-ir-scanner tool is absent.  All of these are no-ops when the respective
 ##    -devel packages / gobject-introspection-1.0 are absent, so the build
 ##    still works without them (only crispy then).
-$(CMACS_LIBREGNUM_STATIC_LIB): $(if $(CMACS_CAD_OBJ),$(CMACS_CAD_GLIB_STATIC_LIB))
+##  - FORCE so source edits under deps/libregnum (and its bundled graylib)
+##    are picked up; the sub-make decides incrementality (ai-glib pattern).
+##    Without it the rule never re-ran once liblibregnum.a existed, leaving
+##    stale archives that fail the temacs link with undefined references.
+$(CMACS_LIBREGNUM_STATIC_LIB): FORCE $(if $(CMACS_CAD_OBJ),$(CMACS_CAD_GLIB_STATIC_LIB))
 	@gir=0; \
 	if command -v g-ir-scanner >/dev/null 2>&1 \
 	   && pkg-config --exists gobject-introspection-1.0; then gir=1; fi; \
