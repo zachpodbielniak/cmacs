@@ -61,6 +61,9 @@ const char *const cmacs_feature_names[] = {
 #ifdef HAVE_CMACS_IMGEDIT
   "imgedit",
 #endif
+#ifdef HAVE_CMACS_CALCULATOR
+  "calculator",
+#endif
 #ifdef HAVE_CMACS_VIDSTUDIO
   "vidstudio",
 #endif
@@ -215,6 +218,12 @@ syms_of_cmacs_features (void)
   is_cmacs_imgedit = true;
 #endif
 
+  DEFVAR_BOOL ("IS-CMACS-CALCULATOR", is_cmacs_calculator,
+    doc: /* Non-nil if this build was configured --with-cmacs-calculator.  */);
+#ifdef HAVE_CMACS_CALCULATOR
+  is_cmacs_calculator = true;
+#endif
+
   DEFVAR_BOOL ("IS-CMACS-VIDSTUDIO", is_cmacs_vidstudio,
     doc: /* Non-nil if this build was configured --with-cmacs-vidstudio.  */);
 #ifdef HAVE_CMACS_VIDSTUDIO
@@ -346,6 +355,7 @@ syms_of_cmacs_features (void)
   cmacs_features__alias ("is-cmacs-libregnum",   "IS-CMACS-LIBREGNUM");
   cmacs_features__alias ("is-cmacs-lrgterm",     "IS-CMACS-LRGTERM");
   cmacs_features__alias ("is-cmacs-imgedit",     "IS-CMACS-IMGEDIT");
+  cmacs_features__alias ("is-cmacs-calculator",  "IS-CMACS-CALCULATOR");
   cmacs_features__alias ("is-cmacs-vidstudio",   "IS-CMACS-VIDSTUDIO");
   cmacs_features__alias ("is-cmacs-transcode",   "IS-CMACS-TRANSCODE");
   cmacs_features__alias ("is-cmacs-transcribe",  "IS-CMACS-TRANSCRIBE");

@@ -5561,6 +5561,10 @@ extern void init_cmacs_libregnum (void);
 extern void syms_of_cmacs_imgedit (void);
 extern void init_cmacs_imgedit (void);
 #endif
+#ifdef HAVE_CMACS_CALCULATOR
+extern void syms_of_cmacs_calculator (void);
+extern void init_cmacs_calculator (void);
+#endif
 #ifdef HAVE_CMACS_VIDSTUDIO
 extern void syms_of_cmacs_vidstudio (void);
 extern void init_cmacs_vidstudio (void);

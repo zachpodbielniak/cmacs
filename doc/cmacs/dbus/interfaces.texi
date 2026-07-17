@@ -136,7 +136,9 @@ surface.  One interface per subsystem, registered at
 @code{.Edit}; @code{.Input}; @code{.Debug}; @code{.Ai};
 @code{.Gsurf}; @code{.GnusEye}; @code{.Podomation}; @code{.Video},
 @code{.Audio}, @code{.Speech} (@file{cmacs-dbus-iface-media.c});
-@code{.Lrg}; @code{.Instance} (identity: pid, version, features[]);
+@code{.Lrg}; @code{.Calc}
+(@file{cmacs-dbus-iface-calculator.c}, the @code{calc_*} tools);
+@code{.Instance} (identity: pid, version, features[]);
 and @code{.Log} (@code{RecentMessages} plus the live
 @code{MessageLogged} signal).
 

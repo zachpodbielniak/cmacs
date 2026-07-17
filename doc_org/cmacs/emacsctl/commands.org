@@ -106,6 +106,7 @@ missing subsystem maps to exit code 3 with a clear message.
 | =audio=     | =record=                                                    |
 | =speech=    | =transcribe=, =models=, =say=, =voices=                     |
 | =lrg=       | =open=, =play=, =stop=, =save=, =tree=, =select=, =move=, =delete=, =add-primitive=, =add-visual= |
+| =calc=      | =eval=, =symbolic=, =units=, =list=, =describe= (also =eval -l calc= / =repl -l calc=) |
 | =compositor=| =clients=, =focused=, =spawn=, =find=, =focus=, =close=, =geometry=, =layout=, =workspaces=, =workspace=, =screenshot=, =keybinds=, =mfact=, =nmaster=, =tags=, =lock=, =unlock=, =reload=, =config= |
 | =monitor=   | =list=, =info=, =modes=, =set-mode=, =position=, =set-position=, =enable=, =scale=, =transform= |
 

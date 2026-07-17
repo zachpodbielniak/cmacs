@@ -1,0 +1,358 @@
+#+TITLE: CMacs Calculator — Option, API & Tool Reference
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:2 num:nil
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+This is the reference companion to [[file:index.org][the CMacs Calculator guide]], which explains the
+corrected semantics you should read first.  Every knob here is a =defcustom= in
+the =cmacs-calculator= group (=M-x customize-group RET cmacs-calculator=).
+
+* Engine options
+
+| Option                                          | Default | Meaning                                                            |
+|-------------------------------------------------+---------+--------------------------------------------------------------------|
+| =cmacs-calculator-precision=                    | =12=    | Significant digits Calc computes with.  Arbitrary-precision: raising this costs time, not accuracy.  Matches Calc's own default and Org's. |
+| =cmacs-calculator-angle-mode=                   | ='rad=  | =rad= / =deg= / =hms=.  Calc itself defaults to =deg=, which surprises anyone doing physics or calculus. |
+| =cmacs-calculator-infinite-mode=                | =t=     | =1/0= ⇒ =uinf=, =0/0= ⇒ =nan=, =ln(0)= ⇒ =-inf=.  Nil signals instead. |
+| =cmacs-calculator-multiplication-has-precedence= | =nil=  | =t= restores stock Calc's reading, where =2/3*4= means =2/(3*4)= = =0.1667=. |
+| =cmacs-calculator-strict=                       | =t=     | Reject input Calc would silently accept (unbalanced delimiters, unknown functions, unbound variables), and reject unevaluated *results*. |
+
+Modes pinned regardless of customization (=cmacs-calculator--fixed-modes=):
+=calc-symbolic-mode= nil, =calc-prefer-frac= nil, =calc-number-radix= 10,
+=calc-group-digits= nil, =calc-point-char= ".", and =calc-language= nil.
+
+=calc-language= must stay =nil=: the =c= language would fix the division
+precedence but redefines =^= as bitwise XOR, so =2^10= would stop meaning 1024.
+
+* Sheet options
+
+| Option                              | Default     | Meaning                                            |
+|-------------------------------------+-------------+----------------------------------------------------|
+| =cmacs-calculator-sheet-eval-idle=  | =t=         | Re-evaluate on idle (safe: results are idempotent). |
+| =cmacs-calculator-sheet-eval-debounce= | =0.6=    | Idle seconds before re-evaluating.                 |
+| =cmacs-calculator-sheet-eval-on-save= | =t=       | Evaluate the buffer when saving.                   |
+| =cmacs-calculator-sheet-plot-range= | =(-10 . 10)= | Default x range for =C-c C-p=.                    |
+
+* Chart options
+
+| Option                             | Default | Meaning                                                     |
+|------------------------------------+---------+-------------------------------------------------------------|
+| =cmacs-calculator-chart-backend=   | ='auto= | =auto= / =svg= / =unicode= / =libregnum=.                   |
+| =cmacs-calculator-chart-width=     | =480=   | Chart width in pixels.                                      |
+| =cmacs-calculator-chart-height=    | =300=   | Chart height in pixels.                                     |
+| =cmacs-calculator-chart-palette=   | (list)  | Series colours, cycled by index.                            |
+| =cmacs-calculator-chart-samples=   | =200=   | Points sampled when plotting a function.                    |
+
+=auto= picks SVG when the frame is graphical and libsvg is present, else the
+unicode approximation.  =svg= signals if unavailable.  =libregnum= requires
+=--with-cmacs-libregnum= and a display, and opens a buffer rather than returning
+an insertable string.
+
+* Other options
+
+| Option                              | Default    | Meaning                                                  |
+|-------------------------------------+------------+----------------------------------------------------------|
+| =cmacs-calculator-families=         | (list)     | Family features the landing page loads before rendering.  Note it lists =cmacs-calculator-tax-data=, not =cmacs-calculator-tax=: loading the data file pulls in the math *and* registers the jurisdiction tables, without which the tax calculators have no rates. |
+| =cmacs-calculator-inline-kill-result= | =t=      | =C-c == also pushes the result onto the kill ring.       |
+| =cmacs-calculator-repl-prompt=      | ="calc> "= | REPL prompt string.                                      |
+
+* Evaluation API
+
+| Function                                          | Returns                                                     |
+|---------------------------------------------------+-------------------------------------------------------------|
+| =(cmacs-calculator-eval EXPR &optional MODES)=    | Result *string*, numerically evaluated with corrected semantics.  Signals on bad input. |
+| =(cmacs-calculator-eval-symbolic EXPR &optional MODES)= | Result string, free variables permitted, not forced to a number. |
+| =(cmacs-calculator-eval-number EXPR &optional MODES)=   | Emacs *float*, or nil if the result is not a plain real number (infinite, complex, symbolic). |
+| =(cmacs-calculator-eval-symbolic-number EXPR &optional MODES)= | Float or nil, permitting free variables — for callers that substitute variables themselves, notably plotting. |
+| =(cmacs-calculator-to-base-units EXPR &optional MODES)= | Result string in base SI units.                        |
+| =(cmacs-calculator-convert-units EXPR UNITS &optional MODES)= | Result string converted to =UNITS=.              |
+| =(cmacs-calculator-supported-p)=                  | Non-nil when the engine is usable (i.e. Calc loaded).       |
+
+=MODES= is a flat list of Calc =VARIABLE VALUE= overrides, spliced into
+=calc-eval='s list form.  *This is the only mechanism Calc honours* — it rebinds
+the mode variables internally and so ignores any surrounding =let=.  Be aware
+that Calc's list form sets those variables *globally and permanently* for the
+session; that is stock Calc behaviour, not a cmacs choice.
+
+The =-number= variants always return a *float*, never an integer: callers do
+float-only arithmetic on the result (=isnan= among others), and ="-1"= coming
+back as an integer would break them.  The number regexp is deliberately strict —
+Calc also prints =uinf=, =nan=, =(0, 2)= for a complex value and =sin(x)= for an
+unevaluated form, none of which are numbers, and a loose pattern would silently
+turn them into 0.
+
+** Errors
+
+All are subtypes of =cmacs-calculator-error=, so one handler catches everything:
+
+| Signal                                  | Raised when                                            |
+|-----------------------------------------+--------------------------------------------------------|
+| =cmacs-calculator-error=                | Base; also a result that did not evaluate (domain rejection), and Calc's own =(POSITION MESSAGE)= failures normalised into a real signal. |
+| =cmacs-calculator-syntax-error=         | Empty expression, unbalanced delimiters, unparsable input. |
+| =cmacs-calculator-unknown-function=     | A =calcFunc-= call Calc does not define, e.g. =foo(1)=. |
+| =cmacs-calculator-unbound-variable=     | A free variable in numeric (non-symbolic) evaluation.   |
+
+=cmacs-calculator-error-message= (in =cmacs-calculator-inline.el=) is the one
+place that turns such a signal into a sentence fit for the echo area; the sheet,
+menu and REPL reuse it rather than each dumping a raw signal.
+
+* Registry API
+
+| Function                                    | Returns                                                  |
+|---------------------------------------------+----------------------------------------------------------|
+| =(cmacs-calculator-register NAME PLIST)=    | Record calculator metadata.                              |
+| =(cmacs-calculator-get NAME)=               | Metadata plist for =NAME=, or nil.                       |
+| =(cmacs-calculator-list &optional CATEGORY)= | Metadata plists, optionally filtered, sorted by name.   |
+| =(cmacs-calculator-categories)=             | Categories that have registered calculators.             |
+
+** Defining a calculator
+
+=cmacs-calculator-defcalc= defines the function with Calc's =defmath= (so it is
+a first-class algebraic function, usable in a sheet, the REPL, inline, and
+composed inside a larger formula) and registers its metadata:
+
+#+begin_src emacs-lisp
+(cmacs-calculator-defcalc simpleint (principal rate years)
+  :category financial
+  :title "Simple interest"
+  :doc "Interest earned at RATE per year on PRINCIPAL for YEARS, with no
+compounding."
+  :args ((principal "Principal amount")
+         (rate "Annual interest rate as a fraction, e.g. 0.05")
+         (years "Number of years"))
+  :returns "Interest earned (not including the principal)"
+  :examples (("simpleint(1000, 0.05, 3)" . "150"))
+  (* principal rate years))
+#+end_src
+
+| Key         | Meaning                                                  |
+|-------------+----------------------------------------------------------|
+| =:category= | Symbol grouping the calculator (=financial=, =physics=, …) |
+| =:title=    | One-line human-readable name                             |
+| =:doc=      | Longer description                                       |
+| =:args=     | =(SYMBOL DESCRIPTION . PLIST)= per argument              |
+| =:returns=  | Description of the result                                |
+| =:examples= | =(EXPRESSION . EXPECTED-RESULT)= strings                 |
+
+*Never write a bare Emacs float literal in a =defmath= body.*  =defmath= passes
+Emacs floats through unconverted, and =math-mul= on one yields a value that is
+not a Calc number, which breaks the next operation — the function then fails to
+fold and comes back unevaluated.  Use a Calc fraction (=(/ 4 5)=) instead of
+=0.8=.  Relatedly, constants meant as ordinary Lisp variables are spelled with a
+hyphen: =defmath= turns a bare symbol such as =G= into the Calc variable
+=var-G=, but leaves any symbol *containing a hyphen* alone.
+
+* Commands and keybindings
+
+** Global
+
+| Key   | Command                        | Action                                        |
+|-------+--------------------------------+-----------------------------------------------|
+| =C-c == | =cmacs-calculator-eval-dwim= | Evaluate the expression at point/region, any mode |
+| —     | =cmacs-calculator=             | Open the landing page                         |
+| —     | =cmacs-calculator-scratch-sheet= | A =.calc= sheet for whatever is at hand     |
+| —     | =cmacs-calculator-cas-sheet=   | A sheet in symbolic (CAS) mode                |
+| —     | =cmacs-calculator-repl-buffer= | A REPL inside a running Emacs                 |
+
+** Sheet mode (=cmacs-calculator-sheet-mode=, =.calc=)
+
+| Key       | Command                                  | Action                        |
+|-----------+------------------------------------------+-------------------------------|
+| =C-c C-c= | =cmacs-calculator-sheet-eval-buffer=     | Evaluate the whole buffer     |
+| =C-c C-e= | =cmacs-calculator-sheet-eval-line=       | Evaluate the current line     |
+| =C-c C-k= | =cmacs-calculator-sheet-clear=           | Strip every result annotation |
+| =C-c C-p= | =cmacs-calculator-sheet-plot=            | Plot the expression on the line |
+| =C-c C-s= | =cmacs-calculator-sheet-toggle-symbolic= | Toggle symbolic (CAS) mode    |
+
+Sheet syntax: =NAME := EXPR= binds a sheet-local variable; =#= starts a comment;
+results are appended as =⇒ VALUE= and are idempotent; a failing line annotates
+=⇒ error: MESSAGE= and evaluation continues.
+
+** Landing page (=cmacs-calculator-menu-mode=)
+
+| Key       | Command                          | Action                          |
+|-----------+----------------------------------+---------------------------------|
+| =RET=     | =cmacs-calculator-menu-open=     | Open a sheet with a runnable call |
+| =n= / =j= | =cmacs-calculator-menu-next=     | Next entry                      |
+| =p= / =k= | =cmacs-calculator-menu-previous= | Previous entry                  |
+| =/= / =s= | =cmacs-calculator-menu-filter=   | Filter the listing              |
+| =g=       | =cmacs-calculator-menu-refresh=  | Redraw                          |
+| =q=       | =quit-window=                    | Quit                            |
+
+** REPL
+
+=emacs --calc= (batch loop) and =cmacs-calculator-repl-buffer= (in a running
+Emacs) share one core.  Commands:
+
+| Command  | Action                                      |
+|----------+---------------------------------------------|
+| =:prec N= | Set precision for the session              |
+| =:deg=   | Angle mode: degrees                         |
+| =:rad=   | Angle mode: radians                         |
+| =:help=  | Show help                                   |
+| =:quit=  | Exit (also =:exit=, =:q=)                   |
+
+Mode commands set the engine's customization variables *buffer-locally*, so a
+REPL buffer cannot silently reconfigure your other calculator surfaces; in batch
+there is only ever one buffer, so the effect is session-wide.
+
+In batch, =princ= and the prompt go to *stdout* while =message= goes to
+*stderr*.  That split is load-bearing: Calc chatters ("Building units table…")
+through =message= during evaluation, and it lands on stderr where a caller
+piping stdout never sees it.
+
+* Chart API
+
+| Function                                                  | Returns                                            |
+|-----------------------------------------------------------+----------------------------------------------------|
+| =(cmacs-calculator-chart TYPE SERIES-LIST &rest OPTS)=    | Insertable string (SVG image or unicode text).     |
+| =(cmacs-calculator-chart-open TYPE SERIES-LIST &rest OPTS)= | Opens a libregnum GPU chart *buffer*.            |
+| =(cmacs-calculator-chart-sample EXPR VAR FROM TO &optional SAMPLES MODES)= | Series points sampled from a function. |
+| =(cmacs-calculator-chart-redraw)=                         | Redraw the chart in the current buffer.            |
+
+=OPTS= accepts =:backend=, =:width=, =:height=, =:title= among others.  A series
+is =(:name STRING :points ((X . Y) ...) :color "#rrggbb")=.
+
+** C DEFUNs (libregnum tier)
+
+Available when =HAVE_CMACS_CALCULATOR_CHART= (i.e. =--with-cmacs-calculator= and
+=--with-cmacs-libregnum=).  Guarded stubs exist otherwise, so calling code need
+not =#ifdef=:
+
+| DEFUN                                                  | Purpose                          |
+|--------------------------------------------------------+----------------------------------|
+| =(cmacs-calculator-chart-supported-p)=                 | Is the GPU tier usable?          |
+| =(cmacs-calculator-chart-types)=                       | The supported type symbols       |
+| =(cmacs-calculator-chart-attach BUFFER WIDTH HEIGHT)=  | Attach a chart to a buffer       |
+| =(cmacs-calculator-chart-detach BUFFER)=               | Detach it                        |
+| =(cmacs-calculator-chart-set-type BUFFER TYPE)=        | Set the chart type               |
+| =(cmacs-calculator-chart-set-title BUFFER TITLE)=      | Set the title                    |
+| =(cmacs-calculator-chart-set-background BUFFER COLOR)= | Set the background               |
+| =(cmacs-calculator-chart-add-series BUFFER NAME COLOR POINTS)= | Add a series             |
+| =(cmacs-calculator-chart-clear-series BUFFER)=         | Clear all series                 |
+| =(cmacs-calculator-chart-refresh BUFFER)=              | Rebuild and redraw               |
+| =(cmacs-calculator-chart-snapshot BUFFER FILE)=        | Write the chart to an image file |
+| =(cmacs-calculator-c-supported-p)=                     | Is the C half compiled in?       |
+
+Types: =line=, =bar=, =area=, =scatter=, =pie=, =candlestick=, =histogram=,
+=radar=, =gauge=, =heatmap=.  2D only — libregnum's 3D chart types are
+unimplemented (see its =ROADMAP.md=).
+
+*Architecture note.*  =cmacs-calculator-chart.c= is the *only* calculator
+translation unit that includes =<libregnum.h>=, and it must never include
+=lisp.h=: raylib's =Color= struct collides with the =Color= typedef cmacs pulls
+in through =pgtkgui.h=, so a TU sees one world or the other.  Everything else in
+=cmacs/calculator/= talks to it through the plain-C =cmacs-calculator-chart.h=.
+It *builds* the chart; *drawing* happens in the libregnum renderer's chart
+branch, because charts are =LrgWidget=\s drawn with immediate-mode =grl_draw_*=
+calls that are only legal inside the render bracket — which is also what makes a
+chart render identically under pgtk and =emacs --lrg=.
+
+* Tax API
+
+Load =cmacs-calculator-tax-data= (not =cmacs-calculator-tax=) — it pulls in the
+math *and* registers the tables.
+
+| Function                                                       | Returns                                       |
+|----------------------------------------------------------------+-----------------------------------------------|
+| =(cmacs-calculator-tax-federal INCOME STATUS &optional YEAR)=  | Plist: taxable income, tax, marginal/effective rate, =:verified=, =:source= |
+| =(cmacs-calculator-tax-state INCOME STATUS STATE &optional YEAR)= | Same shape, plus =:local-tax=, =:federal-deduction-allowed= |
+| =(cmacs-calculator-tax-fica WAGES STATUS &optional YEAR)=      | Social Security, Medicare, Additional Medicare, total, wage cap |
+| =(cmacs-calculator-tax-self-employment NET-EARNINGS STATUS &optional YEAR)= | SE-tax equivalents        |
+| =(cmacs-calculator-tax-capital-gains GAIN INCOME STATUS ...)=  | Gains stacked on ordinary income              |
+| =(cmacs-calculator-tax-bracket-liability TAXABLE-INCOME BRACKETS)= | The marginal walk (the core)              |
+| =(cmacs-calculator-tax-marginal-rate TAXABLE-INCOME BRACKETS)= | Rate on the last dollar                       |
+| =(cmacs-calculator-tax-effective-rate TAX INCOME)=             | Average rate paid                             |
+| =(cmacs-calculator-tax-register TABLE)=                        | Register a jurisdiction/year table            |
+| =(cmacs-calculator-tax-get JURISDICTION &optional YEAR)=       | A table, or nil.  With =YEAR=, that exact year — deliberately *not* the nearest |
+| =(cmacs-calculator-tax-list &optional JURISDICTION)=           | Tables, newest year first                     |
+| =(cmacs-calculator-tax-jurisdictions)=                         | Registered jurisdiction symbols (52)          |
+| =(cmacs-calculator-tax-vintage JURISDICTION &optional YEAR)=   | =:age=, =:stale=, =:verified=, =:source=, =:note= |
+| =(cmacs-calculator-tax-validate &optional JURISDICTION)=       | Problems found, nil when all well-formed      |
+| =(cmacs-calculator-tax-normalize-status STATUS)=               | Canonical filing-status symbol                |
+
+** Filing statuses
+
+Canonical: =single=, =married-joint=, =married-separate=, =head-of-household=.
+Accepted aliases: =mfj=, =married-filing-jointly=, =joint=, =mfs=,
+=married-filing-separately=, =separate=, =hoh=, =household=, =unmarried=, and
+=surviving-spouse= (which maps to =married-joint= because the Internal Revenue
+Code puts surviving spouses on the joint-return rate schedule, §1(j)(2)(A)).
+Anything else signals rather than silently falling back to a status you did not
+ask for.
+
+** Table schema
+
+A bracket list is =((THRESHOLD . MARGINAL-RATE) ...)= ascending, first threshold
+at 0, each rate applying to income *above* its threshold up to the next; the top
+band is unbounded.  Per-status keys suffix a base key with the status, e.g.
+=:brackets-married-joint=.
+
+Required: =:jurisdiction=, =:year=, =:structure= (=none= / =flat= /
+=bracketed=).  Provenance: =:source=, =:retrieved=, =:verified=, =:note=
+(*required* when =:verified= is nil — =cmacs-calculator-tax-validate= enforces
+the pairing).  Data: =:brackets=, =:brackets-STATUS=, =:rate=,
+=:standard-deduction[-STATUS]=, =:personal-exemption[-STATUS]=,
+=:capital-gains-brackets-STATUS=, =:fica-rate=, =:fica-wage-cap=,
+=:medicare-rate=, =:medicare-addl-rate=, =:medicare-addl-threshold-STATUS=,
+=:se-rate=, =:se-medicare-rate=, =:se-net-earnings-factor=,
+=:federal-deduction-allowed=, =:local-tax=.
+
+** Tax algebraic calculators
+
+Registered in the =tax= category and usable from any expression:
+
+| Calculator                        | Meaning                                        |
+|-----------------------------------+------------------------------------------------|
+| =effrate(tax, income)=            | Effective rate as a fraction                   |
+| =aftertax(income, tax)=           | Income remaining once tax is paid              |
+| =flattax(income, rate, deduction)= | Flat rate on income above a deduction, floored at 0 |
+| =ficatax(wages, rate, cap)=       | Capped payroll tax                             |
+| =grossup(net, rate)=              | Gross needed to net a given amount             |
+
+* MCP tools
+
+Registered when both =--with-cmacs-mcp= and =--with-cmacs-calculator= are built.
+All are read-only.
+
+| Tool                 | Required     | Optional     |
+|----------------------+--------------+--------------|
+| =calc_eval=          | =expression= | —            |
+| =calc_eval_symbolic= | =expression= | —            |
+| =calc_convert_units= | =expression= | =units= (omit to reduce to base SI) |
+| =calc_list=          | —            | =category=   |
+| =calc_describe=      | =name=       | —            |
+
+* Build
+
+=--with-cmacs-calculator= (default off).  Defines =HAVE_CMACS_CALCULATOR= and
+builds =cmacs-calculator-init.o=, =cmacs-calculator-defuns.o= and
+=cmacs-calculator-cli.o=.  With =--with-cmacs-libregnum= it additionally defines
+=HAVE_CMACS_CALCULATOR_CHART= and builds =cmacs-calculator-chart.o=; without it,
+configure notes that GPU charts are disabled and the SVG tier still stands.
+With =--with-cmacs-mcp= it adds =cmacs-mcp-tools-calculator.o=.
+
+Exposed as =IS-CMACS-CALCULATOR= / =is-cmacs-calculator= and
+=(cmacs-feature-p 'calculator)=.
+
+The =--calc= option needs *no* =standard_args[]= entry and no change to
+=lisp/startup.el= (which errors on options it does not recognise), because it is
+rewritten out of argv before Emacs parses it — =--batch= and =--eval= already
+exist and already work.  =emacs -- --calc= still passes =--calc= through as an
+ordinary argument.
+
+* Testing
+
+#+begin_src sh
+make -C test check-cmacs        # test/cmacs/cmacs-calculator-tests.el
+                                # test/cmacs/cmacs-calculator-tax-tests.el
+#+end_src
+
+The engine is headless-testable: SVG/unicode charting, every calculator family,
+and the tax walk all run under =emacs -Q --batch= with no display.
+
+*If a change seems not to take*, you have almost certainly hit the stale-Elisp
+cache: Emacs prefers =.elc= / =.eln= over =.el=.  Either clean them, or force
+source with =--eval '(setq load-prefer-newer t)'= — a stale
+=cmacs-calculator-tax-data.elc= will happily register a *subset* of the
+jurisdictions and everything will look like it merely works.

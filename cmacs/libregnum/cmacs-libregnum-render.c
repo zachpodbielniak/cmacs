@@ -341,6 +341,20 @@ struct CmacsLibregnumRenderCtx
   int           image_playhead, image_total_frames, image_ntracks;
   GrlFont      *image_label_font;  /* owned; clip-id labels, or NULL=default */
 
+  /* ── 2D chart mode (cmacs-calculator) ────────────────────────────────
+   * When chart_mode is TRUE, render_to_bgra draws an LrgChart widget
+   * instead of the 3D scene -- the same shape as image_mode above.  The
+   * chart is an LrgWidget drawn with immediate-mode grl_draw_* calls, so
+   * it must be drawn inside the BeginTextureMode bracket at frame top and
+   * the rlgl batch flushed before any readback; see ctx_render_chart.
+   * The widget itself is built and populated by cmacs/calculator/, which
+   * owns the LrgChart subclass choice and the data series; this ctx only
+   * sizes and draws it. */
+  gboolean      chart_mode;
+  void         *chart;             /* owned LrgChart* ref, or NULL */
+  gboolean      chart_bg_set;      /* FALSE -> use the default clear colour */
+  guint8        chart_bg_r, chart_bg_g, chart_bg_b, chart_bg_a;
+
   /* Scene node model (CmacsNode), parallel to the drawables. */
   GArray         *nodes;
   gint            selected;       /* selected node id, -1 if none */
@@ -548,6 +562,8 @@ cmacs_libregnum_render_ctx_free (CmacsLibregnumRenderCtx *r)
   g_clear_pointer (&r->image_rgba, g_free);
   if (r->image_clips) g_array_unref (r->image_clips);
   g_clear_object (&r->image_label_font);
+  /* Chart-mode resources (owned). */
+  g_clear_object ((GObject **) &r->chart);
   /* Non-owning wrapper: drop it before the FBO it points at.  */
   g_clear_object (&r->fbo_grl_texture);
   if (r->fbo_valid) UnloadRenderTexture (r->fbo);
@@ -937,6 +953,99 @@ ctx_render_image (CmacsLibregnumRenderCtx *r, unsigned char *dst)
     glReadPixels (0, 0, r->width, r->height, GL_BGRA, GL_UNSIGNED_BYTE, dst);
   EndTextureMode ();
   return TRUE;
+}
+
+/* Full chart-mode frame; called from the render_to_bgra branch.
+ *
+ * Mirrors ctx_render_image: all GPU work stays inside the
+ * BeginTextureMode/EndTextureMode bracket, the rlgl batch is flushed before
+ * the readback, and DST may be NULL.
+ *
+ * The DST==NULL case is the `emacs --lrg' path: render_into_fbo asks for the
+ * frame to land in the FBO only, and the lrg present blits fbo.texture
+ * directly.  Under pgtk, DST is the BGRA buffer the cairo overlay blits.
+ * Both backends therefore go through this one function -- keep it that way,
+ * and keep the batch flush unconditional: with DST==NULL the missing flush
+ * would be invisible (EndTextureMode submits the batch later), so a chart
+ * that renders fine under --lrg would come back blank under pgtk. */
+static gboolean
+ctx_render_chart (CmacsLibregnumRenderCtx *r, unsigned char *dst)
+{
+  BeginTextureMode (r->fbo);
+  if (r->chart_bg_set)
+    ClearBackground ((Color){ r->chart_bg_r, r->chart_bg_g,
+                              r->chart_bg_b, r->chart_bg_a });
+  else
+    ClearBackground ((Color){ 24, 24, 28, 255 });
+
+  if (r->chart != NULL)
+    {
+      /* Size the widget to the FBO every frame: the view is resized by the
+       * window, not by the chart, so the widget must follow it. */
+      lrg_widget_set_position (LRG_WIDGET (r->chart), 0.0f, 0.0f);
+      lrg_widget_set_size (LRG_WIDGET (r->chart),
+                           (gfloat) r->width, (gfloat) r->height);
+      lrg_widget_draw (LRG_WIDGET (r->chart));
+    }
+
+  /* Charts draw through the immediate-mode grl_draw_* batch; submit it to
+   * GL before reading the FBO back (see the comment above). */
+  rlDrawRenderBatchActive ();
+  if (dst)
+    glReadPixels (0, 0, r->width, r->height, GL_BGRA, GL_UNSIGNED_BYTE, dst);
+  EndTextureMode ();
+  return TRUE;
+}
+
+void
+cmacs_libregnum_render_ctx_chart_enter (CmacsLibregnumRenderCtx *r,
+                                        gboolean on)
+{
+  if (!r) return;
+  r->chart_mode = on;
+  if (!on)
+    {
+      g_clear_object ((GObject **) &r->chart);
+      r->chart_bg_set = FALSE;
+    }
+}
+
+gboolean
+cmacs_libregnum_render_ctx_is_chart (CmacsLibregnumRenderCtx *r)
+{
+  return r != NULL && r->chart_mode;
+}
+
+void
+cmacs_libregnum_render_ctx_chart_set_widget (CmacsLibregnumRenderCtx *r,
+                                             void *lrg_chart)
+{
+  if (!r) return;
+  /* Ref the new widget before unreffing the old one: they may be the same
+   * object, and dropping the last ref first would free it. */
+  if (lrg_chart)
+    g_object_ref (G_OBJECT (lrg_chart));
+  g_clear_object ((GObject **) &r->chart);
+  r->chart = lrg_chart;
+}
+
+void *
+cmacs_libregnum_render_ctx_chart_get_widget (CmacsLibregnumRenderCtx *r)
+{
+  return r ? r->chart : NULL;
+}
+
+void
+cmacs_libregnum_render_ctx_chart_set_background (CmacsLibregnumRenderCtx *r,
+                                                 guint8 cr, guint8 cg,
+                                                 guint8 cb, guint8 ca)
+{
+  if (!r) return;
+  r->chart_bg_set = TRUE;
+  r->chart_bg_r = cr;
+  r->chart_bg_g = cg;
+  r->chart_bg_b = cb;
+  r->chart_bg_a = ca;
 }
 
 void
@@ -2252,6 +2361,11 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
    * overlay) instead of the 3D scene.  Same FBO/readback bracket as above. */
   if (r->image_mode)
     return ctx_render_image (r, dst);
+
+  /* 2D chart mode (cmacs-calculator): draw an LrgChart widget instead of the
+   * 3D scene.  Same FBO/readback bracket as above. */
+  if (r->chart_mode)
+    return ctx_render_chart (r, dst);
 
   /* Advance the camera focus tween (if any) before drawing this
    * frame; the view re-requests a redraw while focus_active is true. */

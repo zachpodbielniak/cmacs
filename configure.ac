@@ -666,6 +666,7 @@ OPTION_DEFAULT_OFF([cmacs-imgedit], [CMacs 2D image / sprite editor (layers, ble
 OPTION_DEFAULT_OFF([cmacs-vidstudio], [CMacs video editor (libregnum Reel timeline, transitions, effects, ffmpeg export)])
 OPTION_DEFAULT_OFF([cmacs-transcode], [CMacs native ffmpeg video/audio transcoder (podman/docker container or host; Emacs-managed parallel pool)])
 OPTION_DEFAULT_OFF([cmacs-transcribe], [CMacs batch speech-to-text (whisper.cpp STT + transcode pre-pass, AI summaries, hooks; Emacs-managed parallel pool)])
+OPTION_DEFAULT_OFF([cmacs-calculator], [CMacs calculator (desktop/financial/physics/relativity/CAS over GNU Calc; SVG + libregnum charts; emacs --calc REPL)])
 OPTION_DEFAULT_OFF([cmacs-gnuseye], [CMacs gnuseye live planetary globe (GNU's Eye; requires libregnum)])
 OPTION_DEFAULT_OFF([cmacs-lrgscript], [CMacs Emacs Lisp scripting backend + game authoring for libregnum (requires libregnum + glib)])
 OPTION_DEFAULT_OFF([cmacs-cad], [CMacs parametric CAD subsystem (cad-glib kernels; parts render as libregnum CAD nodes)])
@@ -1056,6 +1057,37 @@ if test "$with_cmacs_imgedit" != "no"; then
   dnl stubs elsewhere) -- compositor-portable copy/paste for annotations.
   CMACS_IMGEDIT_OBJ="cmacs-imgedit-init.o cmacs-imgedit-defuns.o cmacs-imgedit-doc.o cmacs-imgedit-clip.o"
 fi
+if test "$with_cmacs_calculator" != "no"; then
+  # The calculator engine is Elisp over GNU Calc (which ships with Emacs), so
+  # the C half is small and has NO hard dependency on libregnum: without it the
+  # whole calculator still works, charting just falls back to the always-present
+  # SVG tier.  Charting through libregnum's LrgChart module is therefore gated
+  # separately on HAVE_CMACS_CALCULATOR_CHART.
+  #
+  # cmacs-calculator-chart.c is a CONSUMER of <libregnum.h> (compiled with the
+  # libregnum include paths already folded into CMACS_CFLAGS via
+  # CMACS_LIBREGNUM_CFLAGS); cmacs-calculator-defuns.c includes lisp.h only.
+  CMACS_CALCULATOR_CFLAGS=""
+  CMACS_CALCULATOR_LIBS=""
+  AC_DEFINE([HAVE_CMACS_CALCULATOR], 1, [CMacs calculator subsystem])
+  dnl cmacs-calculator-cli.o: the `emacs --calc' argv rewrite (see src/emacs.c).
+  CMACS_CALCULATOR_OBJ="cmacs-calculator-init.o cmacs-calculator-defuns.o cmacs-calculator-cli.o"
+  if test "$with_cmacs_libregnum" != "no"; then
+    AC_DEFINE([HAVE_CMACS_CALCULATOR_CHART], 1,
+              [CMacs calculator GPU charting through libregnum])
+    CMACS_CALCULATOR_OBJ="$CMACS_CALCULATOR_OBJ cmacs-calculator-chart.o"
+  else
+    AC_MSG_NOTICE([cmacs-calculator: no libregnum, GPU charts disabled (SVG chart tier still available)])
+  fi
+  dnl org.cmacs.Editor1.Calc: the D-Bus twin of the calc_* MCP tools.  It
+  dnl lives with the other iface modules in CMACS_GLIB_OBJ (it needs the
+  dnl dbus/eval-dispatch plumbing, not the calculator's own objects), so it
+  dnl only builds when BOTH the calculator and cmacs-glib are enabled ---
+  dnl matching the file's HAVE_CMACS_GLIB && HAVE_CMACS_CALCULATOR guard.
+  if test "$with_cmacs_glib" != "no"; then
+    CMACS_GLIB_OBJ="$CMACS_GLIB_OBJ cmacs-dbus-iface-calculator.o"
+  fi
+fi
 if test "$with_cmacs_vidstudio" != "no"; then
   # The video editor is built on libregnum's Reel composition system
   # (LrgReel + LrgReelTransitionSeries + the ffmpeg-backed video source /
@@ -1317,6 +1349,9 @@ if test "$with_cmacs_mcp" != "no"; then
   fi
   if test "$with_cmacs_vidstudio" != "no"; then
     CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-vidstudio.o"
+  fi
+  if test "$with_cmacs_calculator" != "no"; then
+    CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-calculator.o"
   fi
 fi
 # CMACS Print: pure-Elisp + shell-script subsystem (no C build artefacts).
@@ -1666,6 +1701,9 @@ AC_SUBST(CMACS_LRGTERM_LIBS)
 AC_SUBST(CMACS_IMGEDIT_OBJ)
 AC_SUBST(CMACS_IMGEDIT_CFLAGS)
 AC_SUBST(CMACS_IMGEDIT_LIBS)
+AC_SUBST(CMACS_CALCULATOR_OBJ)
+AC_SUBST(CMACS_CALCULATOR_CFLAGS)
+AC_SUBST(CMACS_CALCULATOR_LIBS)
 AC_SUBST(CMACS_VIDSTUDIO_OBJ)
 AC_SUBST(CMACS_VIDSTUDIO_CFLAGS)
 AC_SUBST(CMACS_VIDSTUDIO_LIBS)

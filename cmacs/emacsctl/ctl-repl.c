@@ -286,6 +286,16 @@ static const CtlReplSpec eshell_spec = {
   "eshell", "eshell> ", CTL_IFACE_ESHELL, "Eval",
   CTL_REPL_COMPLETE_LINE, CTL_REPL_REPLY_STRING
 };
+/* COMPLETE_LINE, not COMPLETE_PARENS: calculator input is infix, not
+ * s-expressions, so one line is always one complete expression --- there
+ * is no multi-line form to continue.  Parens here are grouping/call
+ * syntax, and an unbalanced one ("sqrt(5") is an error the engine should
+ * report, not a request for a continuation line; COMPLETE_PARENS would
+ * silently swallow the line and leave the REPL hanging on more input. */
+static const CtlReplSpec calc_spec = {
+  "calc", "calc> ", CTL_IFACE_CALC, "Eval",
+  CTL_REPL_COMPLETE_LINE, CTL_REPL_REPLY_STRING
+};
 
 static CtlReplRuntime *
 make_runtime (const CtlReplSpec *spec)
@@ -300,6 +310,7 @@ static CtlReplRuntime *make_elisp  (void) { return make_runtime (&elisp_spec); }
 static CtlReplRuntime *make_crispy (void) { return make_runtime (&crispy_spec); }
 static CtlReplRuntime *make_bacon  (void) { return make_runtime (&bacon_spec); }
 static CtlReplRuntime *make_eshell (void) { return make_runtime (&eshell_spec); }
+static CtlReplRuntime *make_calc   (void) { return make_runtime (&calc_spec); }
 
 void
 ctl_repl_register_builtin_runtimes (void)
@@ -308,6 +319,7 @@ ctl_repl_register_builtin_runtimes (void)
   ctl_repl_runtime_register ("crispy", make_crispy);
   ctl_repl_runtime_register ("bacon", make_bacon);
   ctl_repl_runtime_register ("eshell", make_eshell);
+  ctl_repl_runtime_register ("calc", make_calc);
 }
 
 /* ── Line reading (readline when available + tty, fgets fallback) ──── */

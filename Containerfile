@@ -212,6 +212,7 @@ RUN ./autogen.sh \
         --with-cmacs-vidstudio \
         --with-cmacs-transcode \
         --with-cmacs-transcribe \
+        --with-cmacs-calculator \
         --enable-cmacs-cpatch \
         --enable-cmacs-deps-debug \
     && make -j"$(nproc)" \

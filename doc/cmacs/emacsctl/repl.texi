@@ -9,6 +9,7 @@ emacsctl repl                  # elisp (default)
 emacsctl repl --lang crispy    # inline C, compiled in the editor
 emacsctl repl --lang bacon     # the editor's bacon shell
 emacsctl repl --lang eshell    # the editor's eshell
+emacsctl repl --lang calc      # the cmacs calculator
 @end example
 
 Every expression is evaluated @emph{inside the target cmacs} --- the
@@ -33,10 +34,18 @@ REPL sees the live editor state, and works identically over
 @tab @code{Editor1.Eshell.Eval}
 @tab one line
 @tab command output
+@item @code{calc}
+@tab @code{Editor1.Calc.Eval}
+@tab one line
+@tab computed result
 @end multitable
 
 Unbalanced input continues on a @code{...} prompt, so multi-line
-defuns and C blocks paste naturally.
+defuns and C blocks paste naturally.  @code{calc} is deliberately
+one-line: its input is infix, not s-expressions, so parens are
+grouping/call syntax rather than a multi-line form --- an unbalanced
+@code{sqrt(5} is an error the engine reports, not a request for a
+continuation line.
 
 When built against GNU readline (auto-detected) you get full
 readline editing, with per-language history at

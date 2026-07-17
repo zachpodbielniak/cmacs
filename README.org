@@ -431,6 +431,7 @@ cd cmacs
   --with-cmacs-vidstudio \
   --with-cmacs-transcode \
   --with-cmacs-transcribe \
+  --with-cmacs-calculator \
   --enable-cmacs-cpatch \
   --enable-cmacs-deps-debug   # in-house deps -O0 -g3 (DWARF): gdb + runtime cintrospection
 make -j$(nproc)
@@ -553,6 +554,7 @@ Requires =autoconf= (>= 2.65) and =automake=.
   --with-cmacs-vidstudio \
   --with-cmacs-transcode \
   --with-cmacs-transcribe \
+  --with-cmacs-calculator \
   --enable-cmacs-cpatch \
   --enable-cmacs-deps-debug   # in-house deps -O0 -g3 (DWARF): gdb + runtime cintrospection
 #+end_src
@@ -612,6 +614,7 @@ Module flags:
 - =--with-cmacs-imgedit= — 2D raster image / sprite editor on libregnum's =LrgImageDocument= layer compositor (opacity, blend modes, offset, undo).  =M-x cmacs-imgedit= opens a canvas + tools/layers side panels; mouse tools include brush, line, *arrow*, rect, circle, ellipse and *text* — the screenshot-annotation loop is =M-x cmacs-imgedit-from-clipboard=, mark it up, =y= to put the annotated PNG back on the clipboard.  Clipboard backends: Emacs's own GTK clipboard (works under gowl, GNOME/Mutter, KDE and X11 alike) with =wl-clipboard= as the GTK-less fallback.  The handle-based =cmacs-imgedit-*= model API is headless and MCP-driveable (=imgedit_*= tools).  Part of the standard flag set; requires =--with-cmacs-libregnum= + =--with-cmacs-glib=.  See [[file:doc_org/cmacs/cmacs-imgedit.org][the manual]].
 
 - =--with-cmacs-vidstudio= — Video editor on libregnum's *Reel* composition system: multi-track timeline (each track an =LrgReelTransitionSeries=), 9 transition types, 5 effects, split/trim/move/ripple, text/solid/image/video clips, CPU preview and ffmpeg-backed mp4/gif export.  =M-x cmacs-vidstudio=; video clips decode on a worker thread (import never blocks) and playback paces itself from the wall clock so the editor never freezes.  Headless + MCP-driveable (=vidstudio_*= tools).  Part of the standard flag set; requires =--with-cmacs-libregnum= + =--with-cmacs-glib= (the =ffmpeg= binary at runtime for video clips/export).  See [[file:doc_org/cmacs/cmacs-vidstudio.org][the manual]].
+- =--with-cmacs-calculator= — Calculator: desktop arithmetic, financial (loans/amortization/bonds/options/tax), physics, relativity, and a CAS — built on *GNU Calc*, which already ships with Emacs, wrapped to correct its defaults (stock Calc reads =2/3*4= as 2/(3*4), defaults to degrees, and answers bad input by echoing it back unevaluated).  Every calculator is a first-class algebraic function, so =bscall(100,100,0.05,0.2,1) - bsput(...)= composes.  Surfaces: =.calc= sheet buffers (=C-c C-c=), =M-x cmacs-calculator= landing page, =C-c ==​ inline evaluation in *any* major mode, =emacs --calc [EXPR]= CLI REPL, and MCP tools.  Charts render inline as SVG (works headless/TTY) or, with =--with-cmacs-libregnum=, on the GPU via libregnum's chart module (identical under pgtk and =emacs --lrg=).  Part of the standard flag set; libregnum is *optional* — without it the SVG chart tier still works.  See [[file:doc_org/cmacs/calculator/index.org][the manual]].
 
 - =--with-cmacs-transcode= — Native batch video/audio *transcoder*, a
   reimplementation of the author's =compress_video= / =compress_audio= shell

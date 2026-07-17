@@ -110,6 +110,10 @@ cmacs_mcp_register_all_tools (McpServer *server)
   cmacs_mcp_tools_imgedit_register (server);
 #endif
 
+#ifdef HAVE_CMACS_CALCULATOR
+  cmacs_mcp_tools_calculator_register (server);
+#endif
+
 #ifdef HAVE_CMACS_VIDSTUDIO
   cmacs_mcp_tools_vidstudio_register (server);
 #endif

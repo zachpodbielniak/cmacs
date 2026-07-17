@@ -160,6 +160,7 @@ on the matching =HAVE_CMACS_*= build flag:
 | =org.cmacs.Editor1.Audio=      | =cmacs-dbus-iface-media.c=      | =record_audio=              |
 | =org.cmacs.Editor1.Speech=     | =cmacs-dbus-iface-media.c=      | =transcribe=, =synthesize_speech= |
 | =org.cmacs.Editor1.Lrg=        | =cmacs-dbus-iface-lrg.c=        | =lrg_editor_*=              |
+| =org.cmacs.Editor1.Calc=       | =cmacs-dbus-iface-calculator.c= | =calc_*=                    |
 | =org.cmacs.Editor1.Instance=   | =cmacs-dbus-iface-instance.c=   | (identity: pid, features[]) |
 | =org.cmacs.Editor1.Log=        | =cmacs-dbus-iface-log.c=        | =recent_messages= + live =MessageLogged= signal |
 

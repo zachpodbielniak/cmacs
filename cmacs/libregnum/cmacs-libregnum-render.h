@@ -711,5 +711,30 @@ extern void     cmacs_libregnum_render_ctx_image_set_marquee
                               (CmacsLibregnumRenderCtx *r, gboolean on,
                                int x, int y, int w, int h);
 
+/* ── 2D chart mode (cmacs-calculator) ──────────────────────────────────
+ * Draws an LrgChart widget into the FBO instead of the 3D scene, mirroring
+ * the image mode above.  The widget is built and populated by
+ * cmacs/calculator/ (the only place that knows LrgChart); this ctx sizes it
+ * to the view and draws it at frame top, inside the render bracket where the
+ * GL context is current.  Setting the widget from a DEFUN is safe -- it only
+ * stashes a ref.
+ *
+ * Works unchanged under pgtk and under `emacs --lrg': both backends funnel
+ * through render_to_bgra, which passes DST==NULL for the lrg FBO-only path. */
+extern void     cmacs_libregnum_render_ctx_chart_enter
+                              (CmacsLibregnumRenderCtx *r, gboolean on);
+extern gboolean cmacs_libregnum_render_ctx_is_chart
+                              (CmacsLibregnumRenderCtx *r);
+/* Set the chart widget (an LrgChart*, as an opaque pointer so this header
+ * stays raylib/graylib-free).  Takes a ref; pass NULL to drop. */
+extern void     cmacs_libregnum_render_ctx_chart_set_widget
+                              (CmacsLibregnumRenderCtx *r, void *lrg_chart);
+/* Borrowed LrgChart*, or NULL. */
+extern void    *cmacs_libregnum_render_ctx_chart_get_widget
+                              (CmacsLibregnumRenderCtx *r);
+extern void     cmacs_libregnum_render_ctx_chart_set_background
+                              (CmacsLibregnumRenderCtx *r, guint8 cr,
+                               guint8 cg, guint8 cb, guint8 ca);
+
 #endif /* HAVE_CMACS_LIBREGNUM */
 #endif /* CMACS_LIBREGNUM_RENDER_H */

@@ -159,6 +159,10 @@ extern char etext;
 #ifdef HAVE_CMACS_BACON
 #include "cmacs-bacon.h"
 #endif
+/* CMACS: --calc argv rewrite (cmacs_calculator_rewrite_args).  */
+#ifdef HAVE_CMACS_CALCULATOR
+#include "cmacs-calculator-cli.h"
+#endif
 
 /* CMACS: --crispy batch-mode entry (cmacs_crispy_main).  */
 #ifdef HAVE_CMACS_CRISPY
@@ -321,6 +325,11 @@ Initialization options:\n\
 #ifdef HAVE_CMACS_BACON
     "\
 --bacon [-c CMD | SCRIPT]   run the embedded bacon shell, no editor\n\
+",
+#endif
+#ifdef HAVE_CMACS_CALCULATOR
+    "\
+--calc [EXPR]               run the calculator REPL, or evaluate EXPR\n\
 ",
 #endif
 #ifdef HAVE_CMACS_CRISPY
@@ -1403,6 +1412,16 @@ android_emacs_init (int argc, char **argv, char *dump_file)
     if (cmacs_jsc_configure_gc_signal != NULL)
       cmacs_jsc_configure_gc_signal (40);
   }
+#endif
+
+  /* CMACS: rewrite `--calc [EXPR]' into the equivalent `--batch --eval FORM'
+     before sort_args sees argv, so the calculator REPL runs through Emacs's
+     normal option handling.  Unlike --bacon/--crispy below, --calc cannot
+     bypass Emacs init: the calculator engine is GNU Calc, i.e. Elisp, so the
+     Lisp VM must be up.  Rewriting also means --calc needs no standard_args[]
+     entry and no lisp/startup.el change.  See cmacs-calculator-cli.c.  */
+#ifdef HAVE_CMACS_CALCULATOR
+  argv = cmacs_calculator_rewrite_args (&argc, argv);
 #endif
 
   /* Check for --bacon before ANY Emacs initialization.
@@ -2868,6 +2887,9 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #ifdef HAVE_CMACS_IMGEDIT
       syms_of_cmacs_imgedit ();
 #endif
+#ifdef HAVE_CMACS_CALCULATOR
+      syms_of_cmacs_calculator ();
+#endif
 #ifdef HAVE_CMACS_VIDSTUDIO
       syms_of_cmacs_vidstudio ();
 #endif
@@ -3009,6 +3031,9 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #endif
 #ifdef HAVE_CMACS_IMGEDIT
   init_cmacs_imgedit ();
+#endif
+#ifdef HAVE_CMACS_CALCULATOR
+  init_cmacs_calculator ();
 #endif
 #ifdef HAVE_CMACS_VIDSTUDIO
   init_cmacs_vidstudio ();

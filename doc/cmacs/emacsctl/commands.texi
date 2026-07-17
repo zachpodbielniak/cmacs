@@ -99,7 +99,9 @@ a missing subsystem maps to exit code 3 with a clear message:
 @code{crispy}, @code{bacon}, @code{eshell}, @code{ai}, @code{gsurf},
 @code{gnuseye}, @code{pod} (podomation), @code{video}, @code{audio},
 @code{speech} (whisper + piper), @code{lrg} (libregnum editor),
-@code{compositor} and @code{monitor} (gowl).
+@code{calc} (@code{eval}, @code{symbolic}, @code{units},
+@code{list}, @code{describe}), @code{compositor} and @code{monitor}
+(gowl).
 
 @subsection AI: ai prompt / ai call / ai models / ai chat
 

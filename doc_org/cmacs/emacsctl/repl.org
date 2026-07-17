@@ -9,6 +9,7 @@
   emacsctl repl --lang crispy    # inline C, compiled in the editor
   emacsctl repl --lang bacon     # the editor's bacon shell
   emacsctl repl --lang eshell    # the editor's eshell
+  emacsctl repl --lang calc      # the cmacs calculator
 #+end_src
 
 Every expression is evaluated *inside the target cmacs* — the REPL
@@ -32,9 +33,13 @@ sees the live editor state, and works identically over =--host=
 | =crispy= | =Editor1.Crispy.EvalString=         | balanced braces       | captured stdout   |
 | =bacon=  | =Editor1.Bacon.Eval=                | one line              | output, =[exit N]= on failure |
 | =eshell= | =Editor1.Eshell.Eval=               | one line              | command output    |
+| =calc=   | =Editor1.Calc.Eval=                 | one line              | computed result   |
 
 Unbalanced input continues on a =...= prompt, so multi-line defuns
-and C blocks paste naturally.
+and C blocks paste naturally.  =calc= is deliberately one-line: its
+input is infix, not s-expressions, so parens are grouping/call syntax
+rather than a multi-line form — an unbalanced =sqrt(5= is an error the
+engine reports, not a request for a continuation line.
 
 * Line editing and history
 
@@ -57,6 +62,7 @@ to plain line reading, which makes the REPL pipeable:
   emacsctl eval --lang crispy 'g_print("%d", 6 * 7);'
   emacsctl eval --lang bacon  'git -C ~/src/cmacs status -sb'
   emacsctl eval --lang eshell 'echo $user-login-name'
+  emacsctl eval --lang calc   'sqrt(5/3*3^4)'
 #+end_src
 
 * Adding a language

@@ -5,7 +5,7 @@
 
 /* ctl-cmd-subsys.c --- cmacs subsystem command groups (the Phase 6
  * MCP-parity interfaces): crispy, bacon, eshell, ai, gsurf, gnuseye,
- * podomation, video, audio, speech, libregnum.
+ * podomation, video, audio, speech, libregnum, calc.
  *
  * If the target cmacs was built without a subsystem its interface is
  * absent and the call maps to exit code 3 with a clear message ---
@@ -187,6 +187,20 @@ static const CtlMethodSpec subsys_specs[] = {
   { "lrg add-visual", "Add a visual node",
     CTL_IFACE_LRG, "AddVisual", "x:kind s?:asset s?:name",
     CTL_REPLY_STRING },
+
+  /* calc --- `emacsctl eval -l calc EXPR' and `emacsctl repl -l calc'
+   * cover plain evaluation too (both ride the same Calc.Eval method). */
+  { "calc eval", "Evaluate an expression numerically",
+    CTL_IFACE_CALC, "Eval", "s:expression", CTL_REPLY_STRING },
+  { "calc symbolic", "Evaluate symbolically (deriv/integ/solve/taylor)",
+    CTL_IFACE_CALC, "EvalSymbolic", "s:expression", CTL_REPLY_STRING },
+  { "calc units", "Convert to UNITS, or reduce to base SI when omitted",
+    CTL_IFACE_CALC, "ConvertUnits", "s:expression s?:units",
+    CTL_REPLY_STRING },
+  { "calc list", "List registered calculators (optionally by category)",
+    CTL_IFACE_CALC, "ListCalculators", "s?:category", CTL_REPLY_STRING },
+  { "calc describe", "Describe one calculator by name",
+    CTL_IFACE_CALC, "Describe", "s:name", CTL_REPLY_STRING },
 
   /* instance/log surface */
   { "logs show", "Recent *Messages* lines",

@@ -51,6 +51,12 @@ Returns nil for an unknown or not-compiled-in FEATURE."
            ('libregnum (cmacs-libregnum-supported-p))
            ('gnuseye   (cmacs-gnuseye-supported-p))
            ('cad       (cmacs-cad-supported-p))
+           ;; No `calculator' branch: its engine is Elisp over GNU Calc, so
+           ;; compiled-in means available -- and unlike the C-backed
+           ;; subsystems above, `cmacs-calculator-supported-p' is an ordinary
+           ;; function, so calling it here would signal `void-function' unless
+           ;; cmacs-calculator.el happened to be loaded already.  The other
+           ;; pure-Elisp subsystems (transcode, transcribe) are the same.
            (_ t)))))
 
 (defun cmacs-features ()
@@ -65,7 +71,8 @@ unavailable at runtime is excluded."
                     '(glib gi crispy bacon gowl podomation libreclaw ai
                       libregnum lrgterm imgedit vidstudio gnuseye cad
                       screensaver org-ex mcp print video audio whisper
-                      piper gsurf gsurf-lrg emacsctl cintrospect cpatch)))
+                      piper gsurf gsurf-lrg emacsctl cintrospect cpatch
+                      calculator)))
       (when (cmacs-feature-p feat)
         (push feat out)))
     (nreverse out)))

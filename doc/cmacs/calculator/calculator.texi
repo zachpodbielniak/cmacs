@@ -1,0 +1,855 @@
+@c calculator.texi --- master file for the CMacs Calculator docs
+@c Copyright (C) 2026 Zach Podbielniak
+@c SPDX-License-Identifier: AGPL-3.0-or-later
+
+@node CMacs Calculator
+@chapter CMacs Calculator: Desktop, Financial, Physics & CAS
+
+@cindex calculator
+@cindex calc
+@cindex financial
+@cindex physics
+@cindex relativity
+@cindex tax
+@cindex computer algebra
+
+@code{cmacs-calculator} is a @emph{calculator you can actually use}: a desktop
+calculator with correct precedence, 121 named calculators across finance,
+physics, relativity and tax, a full computer-algebra system, unit conversion
+with CODATA constants, and charts.  It is reachable from a sheet buffer, from
+any major mode inline, from a terminal REPL (@code{emacs --calc}), and from an
+AI agent over MCP.
+
+The engine is @strong{GNU Calc} (@file{lisp/calc/}), which Emacs already ships:
+an arbitrary-precision CAS with symbolic algebra, a units table with CODATA
+physical constants, matrices and complex numbers.  cmacs wraps it
+@emph{additively} and never modifies @file{lisp/calc/} --- cmacs tracks upstream
+Emacs, so upstream files stay untouched.
+
+It is a @emph{mostly-Elisp subsystem}; its small C half provides the
+@code{emacs --calc} entry point, the libregnum GPU chart bridge, and the MCP
+tools.  Enable it with @option{--with-cmacs-calculator}; the flag is exposed as
+@code{IS-CMACS-CALCULATOR} and @code{(cmacs-feature-p 'calculator)}.  libregnum
+is @emph{optional} --- the SVG chart tier stands alone.
+
+@menu
+* Calculator Quick Start::      Three ways in.
+* Calculator Semantics::        The five GNU Calc traps, corrected.
+* Calculator Surfaces::         Sheet, landing page, inline, CLI, MCP.
+* Calculator Families::         Financial, physics, relativity, units, CAS.
+* Calculator Charting::         The SVG and libregnum tiers.
+* Calculator Tax::              Data-driven tax, and its limits.
+* Calculator Options::          Every defcustom knob and the API.
+* Calculator Limitations::      Honest caveats.
+* Calculator Build::            Configure flags.
+@end menu
+
+@node Calculator Quick Start
+@section Quick Start
+
+@table @kbd
+@item M-x cmacs-calculator
+The landing page: every calculator this build has, grouped by category.
+@key{RET} opens a sheet pre-filled with a runnable call.
+@item C-c =
+Evaluate the expression at point, @emph{in any major mode}.
+@end table
+
+@noindent
+From a shell:
+
+@example
+$ ./src/emacs --calc "sqrt(5/3*3^4)"
+11.6189500386
+@end example
+
+@node Calculator Semantics
+@section The Corrected Semantics (Read This First)
+
+@cindex calculator traps
+@cindex calc precedence
+
+Calc's defaults are tuned for its interactive RPN Calculator, not for a desktop
+calculator.  Piping a string straight to @code{calc-eval} @strong{gives wrong
+answers}.  This is the single most important thing to understand about this
+subsystem: it exists because of five specific traps, each corrected in the
+engine.  Every number below was produced by running both engines.
+
+@subsection Trap 1: Multiplication Binds Tighter Than Division
+
+In stock Calc @samp{*} has precedence over @samp{/}, so @samp{2/3*4} means
+@samp{2/(3*4)}.  This is the trap most likely to silently cost you a real
+answer:
+
+@multitable @columnfractions .30 .35 .35
+@headitem Expression @tab Stock GNU Calc @tab cmacs-calculator
+@item @samp{2/3*4}
+@tab @samp{0.166666666667} @tab @samp{2.66666666667}
+@item @samp{sqrt(5/3*3^4)}
+@tab @samp{0.143443827637} @tab @samp{11.6189500386}
+@end multitable
+
+Every pocket calculator, spreadsheet and programming language reads
+@samp{(2/3)*4 = 2.667}.  cmacs pins @code{calc-multiplication-has-precedence} to
+@code{nil} so @samp{/} and @samp{*} associate left to right.
+
+The fix cannot come from Calc's @samp{c} language mode, which would also correct
+the precedence but redefines @samp{^} as bitwise XOR --- @samp{2^10} would stop
+meaning 1024.  @code{calc-language} is therefore pinned to @code{nil}.
+
+@subsection Trap 2: Angles Default to Degrees
+
+Stock Calc evaluates @samp{sin(90)} to @samp{1}.  cmacs defaults
+@code{calc-angle-mode} to @code{rad}, which is what physics and calculus assume
+--- in degree mode, d/dx sin(x) quietly picks up a pi/180 factor.
+
+@multitable @columnfractions .30 .35 .35
+@headitem Expression @tab Stock GNU Calc @tab cmacs-calculator
+@item @samp{sin(90)}   @tab @samp{1}             @tab @samp{0.8939966636}
+@item @samp{sin(pi/2)} @tab @samp{sin(pi / 2)}   @tab @samp{1.}
+@end multitable
+
+Switch with @code{cmacs-calculator-angle-mode} (@code{rad} / @code{deg} /
+@code{hms}), or per session in the REPL with @samp{:deg} and @samp{:rad}.
+
+@subsection Trap 3: Modes Must Be Passed, Not @code{let}-Bound
+
+@code{calc-eval} @strong{re-binds the mode variables itself}, so an enclosing
+@code{let} over @code{calc-angle-mode} is silently ignored.  The only mechanism
+Calc honours is @code{calc-eval}'s documented list form:
+
+@lisp
+(calc-eval (list EXPR 'calc-angle-mode 'rad 'calc-internal-prec 12 ...))
+@end lisp
+
+@noindent
+which is what @code{cmacs-calculator--modes} builds.  (Org does the same thing
+with @code{org-calc-default-modes}.)  If you extend the subsystem, pass modes
+through the @var{MODES} argument of @code{cmacs-calculator-eval} --- never wrap
+a @code{let} around it and expect it to take.
+
+@strong{Consequence worth knowing:} that list form sets the mode variables
+@emph{globally and permanently} --- stock Calc behaviour, not a cmacs choice.
+Once a calculator expression has been evaluated in a session, a subsequent plain
+@kbd{M-x calc} or bare @code{calc-eval} in that session inherits the corrected
+modes.  For most people that is an improvement; it is documented so it is never
+a surprise.
+
+@subsection Trap 4: Symbolic Constants Do Not Fold
+
+Stock Calc leaves @samp{sin(pi/2)} as @samp{sin(pi / 2)} and @samp{e^(i*pi)} as
+@samp{e^(i pi)} --- mathematically honest, useless on a calculator.  cmacs wraps
+every numeric evaluation in Calc's @code{evalv()}, which forces evaluation:
+
+@multitable @columnfractions .30 .35 .35
+@headitem Expression @tab Stock GNU Calc @tab cmacs-calculator
+@item @samp{e^(i*pi)} @tab @samp{e^(i pi)} @tab @samp{-1.}
+@end multitable
+
+@code{evalv} is safe for symbolic work too: @samp{evalv(deriv(x^3,x))} is still
+@samp{3 x^2}.
+
+@subsection Trap 5: Bad Input Comes Back Unevaluated
+
+This is the footgun.  Calc reports bad input by @emph{returning it} --- you
+cannot tell a rejected call from a result:
+
+@multitable @columnfractions .20 .28 .52
+@headitem Expression @tab Stock GNU Calc @tab cmacs-calculator
+@item @samp{1/0}    @tab @samp{1/0}    @tab @samp{uinf}
+@item @samp{0/0}    @tab @samp{0/0}    @tab @samp{nan}
+@item @samp{ln(0)}  @tab @samp{ln(0)}  @tab @samp{-inf}
+@item @samp{foo(1)} @tab @samp{foo(1)} @tab signals @i{Unknown function: foo}
+@item @samp{((1+2)} @tab @samp{3} (!)  @tab signals @i{unbalanced parentheses}
+@end multitable
+
+Note @samp{((1+2)} especially: Calc's parser stops at the first complete
+expression and @emph{silently ignores the rest}, so a typo produces a plausible
+answer.  cmacs corrects this three ways:
+
+@itemize @bullet
+@item
+@code{calc-infinite-mode} turns division by zero into @samp{uinf} / @samp{nan} /
+@samp{-inf} (set @code{cmacs-calculator-infinite-mode} to @code{nil} to signal).
+@item
+Validation rejects unbalanced delimiters, unknown functions and unbound
+variables @emph{before} evaluation.
+@item
+The @emph{result} is checked too.  A domain rejection also comes back
+unevaluated (@samp{lorentz(1.5)} @result{} @samp{"lorentz(1.5)"}, exactly as
+stock Calc's own @samp{pmt(0,5,100)} does), which input validation cannot catch
+--- the function is perfectly well-formed.  So numeric evaluation inspects the
+output as well and signals rather than handing you a string that looks like a
+result.
+@end itemize
+
+Set @code{cmacs-calculator-strict} to @code{nil} to restore Calc's
+permissiveness.  Finally, @code{calc-eval} @emph{signals nothing on error
+either}: it returns a @code{(POSITION MESSAGE)} list, easily mistaken for a
+result.  @code{cmacs-calculator-eval} normalises that into a real
+@code{cmacs-calculator-error} signal.
+
+@node Calculator Surfaces
+@section Usage Surfaces
+
+@subsection The Sheet Buffer (@file{.calc})
+
+The primary surface: a plain-text buffer of expressions, one per line, that
+annotates itself with results.  Nothing here is a widget --- the file is text,
+so it diffs, greps and travels over email.
+
+@example
+# a mortgage
+price := 400000  @result{} 400000
+loanpmt(price * 0.8, 0.065, 30)  @result{} 2022.61767478
+@end example
+
+@table @kbd
+@item C-c C-c
+Evaluate the whole buffer.
+@item C-c C-e
+Evaluate the current line.
+@item C-c C-k
+Strip every result annotation.
+@item C-c C-p
+Plot the expression on the line.
+@item C-c C-s
+Toggle symbolic (CAS) mode.
+@end table
+
+Results are @strong{idempotent}: each evaluation removes the previous annotation
+before adding one, so evaluating ten times leaves one result per line --- which
+is what makes eval-on-idle safe to run continuously.  A failing line annotates as
+@samp{@result{} error: MESSAGE} and evaluation @emph{carries on}: one bad line
+must not cost you the other forty.
+
+@samp{NAME := EXPR} stores a value later lines can use.  Bindings are
+@emph{sheet-local} (established with @code{cl-progv} around each evaluation), so
+one sheet's variables never leak into another sheet or into the REPL.  Files
+ending @file{.calc} open in @code{cmacs-calculator-sheet-mode} automatically.
+
+@subsection The Landing Page
+
+@kbd{M-x cmacs-calculator} renders @file{*cmacs-calculator*}: every registered
+calculator grouped by category, with @key{RET} opening a sheet pre-filled with a
+runnable call.  @kbd{/} or @kbd{s} filters, @kbd{n}/@kbd{p} (or @kbd{j}/@kbd{k})
+move, @kbd{g} refreshes.
+
+The listing is @emph{generated from the registry at render time} --- a family
+added tomorrow appears with no edit, and an entry for something that no longer
+exists is not expressible.  The header reports the @emph{active} chart tier
+resolved through the chart module's own @code{auto} logic, so on a TTY it says
+unicode rather than claiming SVG.
+
+@subsection Inline Evaluation, in Any Major Mode
+
+@kbd{C-c =} (@code{cmacs-calculator-eval-dwim}) evaluates the expression at
+point wherever you are --- an Org note, a C comment, an email.  With an active
+region, the region is the expression.
+
+Otherwise the expression is the maximal run of calculator characters around
+point.  Whitespace is deliberately not in that set, so ``the answer is sqrt(4)
+here'' evaluates @samp{sqrt(4)} and not the sentence; but a run @emph{is}
+extended across a gap when an operator sits on one side of it, so @samp{2 + 3}
+still works.  Trailing sentence punctuation is trimmed only when it stops the
+expression from parsing, so the decimal point in @samp{3.14} survives.
+
+@subsection The @code{emacs --calc} CLI REPL
+
+@example
+emacs --calc            # interactive REPL (also reads piped stdin)
+emacs --calc EXPR       # evaluate EXPR, print the result, exit
+@end example
+
+@noindent
+A real session (piped stdin, verbatim):
+
+@example
+$ printf '2+2\nsqrt(2)\n:deg\nsin(90)\n:rad\nfoo(1)\n1/0\n' | emacs --calc
+calc> 4
+calc> 1.41421356237
+calc> angle mode: degrees
+calc> 1
+calc> angle mode: radians
+calc> error: Unknown function: foo
+calc> uinf
+@end example
+
+Commands: @samp{:prec N}, @samp{:deg}, @samp{:rad}, @samp{:help}, @samp{:quit}
+(@samp{:exit}, @samp{:q}).  A bad line never kills the loop --- every line is
+evaluated inside a @code{condition-case} catching @code{error} wholesale,
+because Calc reaches into a lot of code and a malformed expression can surface
+as an arithmetic error from deep inside it.  Modes set in the REPL are
+@emph{buffer-local}, so a REPL buffer inside a running Emacs cannot silently
+reconfigure your other calculator surfaces.
+
+@option{--calc} is implemented by @emph{rewriting argv} before Emacs parses it
+(into @option{--batch} @option{--eval}), rather than by the @option{--bacon} /
+@option{--crispy} pattern of taking over @code{main()}: those engines are C,
+while Calc is Elisp, so the Lisp VM must be up before a single expression can be
+evaluated.
+
+@subsection MCP Tools
+
+Registered when both @option{--with-cmacs-mcp} and
+@option{--with-cmacs-calculator} are built.  All five are read-only.
+
+@multitable @columnfractions .28 .72
+@headitem Tool @tab Purpose
+@item @code{calc_eval}
+@tab Evaluate numerically, desktop semantics, arbitrary precision.
+@item @code{calc_eval_symbolic}
+@tab The CAS path: @code{deriv}, @code{integ}, @code{solve}, @code{taylor}.
+@item @code{calc_convert_units}
+@tab Convert to @code{units}, or reduce to base SI when omitted.
+@item @code{calc_list}
+@tab List registered calculators, optionally by @code{category}.
+@item @code{calc_describe}
+@tab Describe one calculator: title, args, returns, docs.
+@end multitable
+
+Every registered calculator is callable as a function from @code{calc_eval}, and
+@code{calc_list} / @code{calc_describe} let an agent discover them without the
+manual.
+
+@node Calculator Families
+@section Calculator Families
+
+There are @strong{121 registered calculators}: 34 financial, 69 physics, 13
+relativity and 5 tax.  Every one is defined with
+@code{cmacs-calculator-defcalc}, which uses Calc's @code{defmath} --- so each is
+a @emph{first-class algebraic function} that composes inside any larger
+expression, anywhere an expression is legal:
+
+@example
+simpleint(1000,0.05,3) + 100                 @result{} 250.
+bscall(100,100,0.05,0.2,1) - bsput(100,100,0.05,0.2,1)
+                                             @result{} 4.8770575498
+escapevel(5.972e24, 6.371e6) / 1000          @result{} 11.1859778919
+@end example
+
+One registry backs the landing page, completion, ElDoc, this documentation and
+the MCP tool schema, so none of them can drift from the functions actually
+defined.
+
+@subsection Financial
+
+Calc already ships the time-value-of-money core in @file{calc-fin.el}
+(@code{pv}, @code{fv}, @code{pmt}, @code{nper}, @code{rate}, @code{npv},
+@code{irr}, @code{sln}, @code{syd}, @code{ddb}), and those are re-used as-is
+rather than reimplemented.  This family adds what Calc lacks: amortization
+schedules, bond pricing and risk measures, option pricing and greeks, and the
+everyday ratios.
+
+@example
+simpleint(1000, 0.05, 3)                     @result{} 150.
+compoundamt(1000, 0.05, 12, 10)              @result{} 1647.00949834
+apr2apy(0.05, 12)                            @result{} 0.05116189792
+cagr(1000, 2000, 10)                         @result{} 0.07177346254
+loanpmt(300000, 0.065, 30)                   @result{} 1896.2040701
+loantotal(300000, 0.065, 30)                 @result{} 682633.465236
+bscall(100, 100, 0.05, 0.2, 1)               @result{} 10.4505835721
+bsput(100, 100, 0.05, 0.2, 1)                @result{} 5.5735260223
+@end example
+
+Schedules and iterative solvers (amortization, yield-to-maturity, implied
+volatility) return Lisp data or use Newton iteration, so they are plain
+functions rather than algebraic ones.
+
+@subsubsection Sign Conventions (Important)
+
+@cindex sign convention
+@cindex cash flow
+
+Calc's @code{pv} / @code{fv} / @code{pmt} follow the @strong{signed cash-flow
+convention}: money paid out is negative, money received is positive.  This
+differs from the Excel / HP-12C reading some users expect:
+
+@example
+pv(0.05, 30, -1000)                          @result{} -15372.4510269
+fv(0.05, 30, -1000)                          @result{} -66438.847503
+pmt(0.05, 30, 100000)                        @result{} 6505.14350803
+@end example
+
+The cmacs wrappers (@code{loanpmt}, @code{loantotal}, @code{loanint}, @dots{})
+instead return @emph{positive magnitudes}, which is what a loan calculator
+should print.  The raw Calc functions remain available for anyone who wants the
+signed convention --- both are correct, they just answer different questions.
+
+@subsection Physics and Relativity
+
+Two categories: @code{physics} (kinematics, dynamics, energy, momentum,
+rotation, gravitation, oscillation, thermodynamics, electromagnetism, optics,
+quantum) and @code{relativity} (special and general).
+
+@strong{Units are SI, always.}  Every argument and every result is in base SI ---
+metres, kilograms, seconds, kelvin, coulombs, joules --- and every angle is in
+radians.  There is @emph{no unit tracking here}: these are numeric formulas, and
+feeding one a value in grams or degrees silently gives an answer in the wrong
+scale.  For dimensional work use the units functions below, which do track
+units.
+
+@example
+escapevel(5.972e24, 6.371e6)                 @result{} 11185.9778919
+lorentz(0.9)                                 @result{} 2.29415733871
+veladd(0.5, 0.5)                             @result{} 0.8
+massenergy(1)                                @result{} 89875517873681764
+relke(1, 0.9)                                @result{} 1.16313061027e17
+@end example
+
+@strong{Relativity takes beta, not speed.}  The gamma-style functions take speed
+as a @emph{fraction of the speed of light}: @samp{0.9} means 0.9c, not 0.9 m/s.
+Results that are speeds (@code{veladd}) are likewise fractions of c; results
+that are momenta or energies (@code{relmomentum}, @code{relke}) come back in SI.
+Each docstring says which.
+
+Symbolic algebra over these functions still composes --- a genuinely free
+variable passes through unchecked:
+
+@lisp
+(cmacs-calculator-eval-symbolic "lorentz(b)")   @result{} "1 / sqrt(1 - b^2)"
+@end lisp
+
+@subsection Units and CODATA Constants
+
+Calc exposes only @code{usimplify} as an algebraic function; converting to base
+SI or to a named unit exists solely as interactive stack commands.  cmacs wraps
+the underlying machinery so both are callable from Lisp:
+
+@lisp
+(cmacs-calculator-to-base-units "2 G * 1.989e30 kg / c^2")  ; @result{} "2954.12655505 m"
+(cmacs-calculator-convert-units "100 km/hr" "m/s")          ; @result{} "27.7777777778"
+(cmacs-calculator-convert-units "1 mi" "km")                ; @result{} "1.609344"
+@end lisp
+
+The first is the Schwarzschild radius of the Sun, in metres, from CODATA
+@code{G} and @code{c}.
+
+Note that Calc's @code{c}, @code{G} and @code{h} are entries in its @emph{units}
+table, not numbers: @code{c} is the unit ``299792458 m/s'', not the integer.
+They stay symbolic under ordinary evaluation and only resolve once something
+converts units --- which is why the physics family carries its own private
+constants rather than using them, and why unit expressions must go through these
+two functions.
+
+@subsection Computer Algebra (CAS)
+
+@code{cmacs-calculator-eval-symbolic} permits free variables and does not force
+a number, so algebra survives.  In a sheet, @kbd{C-c C-s} toggles symbolic mode.
+
+@example
+deriv(x^3 + sin(x), x)                       @result{} 3 x^2 + cos(x)
+integ(x^2, x)                                @result{} x^3 / 3
+solve(x^2 - 4 = 0, x)                        @result{} x = 2
+taylor(sin(x), x, 5)                         @result{} x - x^3 / 6 + x^5 / 120
+@end example
+
+@node Calculator Charting
+@section Charting
+
+@cindex chart
+@cindex plot
+
+Two tiers, chosen by @code{cmacs-calculator-chart-backend}.  The default
+@code{auto} degrades SVG @result{} unicode as capabilities disappear, so a chart
+request @emph{never hard-fails} just because a build lacks GL.
+
+Both tiers consume the same input --- a list of series plists mirroring
+libregnum's @code{LrgChartDataSeries} / @code{LrgChartDataPoint}:
+
+@lisp
+(:name "Principal" :points ((0 . 1000) (1 . 950) ...) :color "#3b6fb0")
+@end lisp
+
+@subsection Tier 1: SVG (Default)
+
+Renders inline next to the formula that produced it, needs no GL and no
+libregnum, and is testable without a display.  Amortization curves, option
+payoff diagrams and function plots land here unless something better is asked
+for.  Where SVG is unavailable --- a TTY, batch --- @code{auto} falls back to a
+@strong{unicode approximation}, which is why plotting works over SSH and in
+tests.  Real output from @code{emacs -Q --batch}:
+
+@example
+sin          ▄▄▅▅▅▆▆▆▇▇▇▇▇▇▇█▇▇▇▇▇▇▇▆▆▆▅▅▅▄▄▃▃▃▂▂▂▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▂▂▂▃▃▃▄▄  [-0.9996 .. 0.9996]
+@end example
+
+Sample a function into series points with @code{cmacs-calculator-chart-sample}:
+
+@lisp
+(cmacs-calculator-chart-sample "sin(x)" "x" 0 6.283 5)
+;; @result{} ((0.0 . 0.0) (1.57075 . 0.999999998927) (3.1415 . 9.26535896674e-05)
+;;    (4.71225 . -0.999999990342) (6.283 . -0.000185307178539))
+@end lisp
+
+@subsection Tier 2: libregnum (GPU), Opt-In
+
+libregnum ships a full 2D chart module rendered on the GPU into an Emacs buffer,
+with axes, legends, tooltips, animation and hit-testing.  It needs
+@option{--with-cmacs-libregnum} @emph{and a display}, and it is @emph{not a
+drop-in} for the inline tiers: @code{cmacs-calculator-chart-open} opens a buffer
+rather than returning an insertable string.
+
+Types, from @code{(cmacs-calculator-chart-types)}:
+
+@example
+line  bar  area  scatter  pie  candlestick  histogram  radar  gauge  heatmap
+@end example
+
+@noindent
+so candlestick, heatmap, radar and gauge are Tier 2 only.
+
+@strong{Tier 2 renders identically under pgtk and @code{emacs --lrg}.}  That
+falls out of the design rather than being maintained twice: charts are
+@code{LrgWidget}s drawn with immediate-mode @code{grl_draw_*} calls, which are
+only legal inside the render bracket, so the draw lives in the libregnum
+renderer's chart branch and both display backends reach it by the same path.
+
+@strong{2D only.}  libregnum's 3D chart types (@code{LineChart3D},
+@code{PieChart3D}, @code{SurfaceChart3D}, @code{ScatterChart3D}) are
+@emph{unimplemented} --- its own @file{ROADMAP.md} lists them as missing, while
+the 2D chart system exists and is tested.  There is therefore no 3D charting
+here, and nothing in cmacs can add it until libregnum does.
+
+@node Calculator Tax
+@section Tax: Scope and Caveats
+
+@quotation Important
+@strong{This is informational only and is not tax advice.}  It is a calculator,
+not a tax preparer.  Do not file, withhold, or make a financial decision on
+these figures.  Verify every number against primary sources or a qualified
+professional before relying on it.
+@end quotation
+
+@subsection Data-Driven and Versioned
+
+Not one line of arithmetic knows a tax rate.  Every bracket, cap and deduction
+lives in @file{cmacs-calculator-tax-data.el} as a versioned plist; the math in
+@file{cmacs-calculator-tax.el} is year- and jurisdiction-agnostic.  A new tax
+year is a @emph{data edit and never a code change}, and the same bracket walk
+that handles the US federal ladder handles a state one --- or a German one, if
+someone registered it.  52 jurisdictions are registered: US federal plus all
+fifty states and the District of Columbia.
+
+@lisp
+(cmacs-calculator-tax-federal 100000 'single)
+;; @result{} (:jurisdiction us-federal :year 2026 :status single :gross-income 100000
+;;    :standard-deduction 16100 :taxable-income 83900 :tax 13170.0
+;;    :marginal-rate 0.22 :effective-rate 0.1317 :verified t
+;;    :source "IRS Rev. Proc. 2025-32, ...")
+
+(cmacs-calculator-tax-fica 100000 'single)
+;; @result{} (... :social-security 6200.0 :medicare 1450.0 :additional-medicare 0.0
+;;    :total 7650.0 :effective-rate 0.0765 :wage-cap 184500 :verified t ...)
+
+(cmacs-calculator-tax-state 100000 'single 'us-ca)
+;; @result{} (:jurisdiction us-ca :year 2025 :taxable-income 94294 :tax 5207.98
+;;    :marginal-rate 0.093 ... :verified t :source "California FTB, ...")
+@end lisp
+
+Every result carries its own @code{:verified} flag and @code{:source} --- the
+answer tells you where it came from.
+
+@subsection Brackets Are Marginal
+
+@code{cmacs-calculator-tax-bracket-liability} is the core, and the one place a
+bug would be both easy and expensive.  A 22% bracket starting at $50,400 does
+@emph{not} mean someone earning $50,401 owes 22% of $50,401 --- it means 22% of
+the @emph{one dollar} above $50,400, on top of the tax on the first $50,400.
+Getting this wrong is the classic tax-calculator bug (``a raise pushed me into a
+higher bracket and I take home less''), and it is wrong by thousands of dollars.
+
+The walk sums each band separately, and is checked against the IRS's own
+published cumulative figures --- computed by the IRS, not by this code.  The
+2026 single ladder reproduces Rev. Proc. 2025-32's ``The Tax Is'' column
+exactly:
+
+@multitable @columnfractions .5 .5
+@headitem Taxable income @tab Liability
+@item @samp{12400}  @tab @samp{1240.0}
+@item @samp{50400}  @tab @samp{5800.0}
+@item @samp{105700} @tab @samp{17966.0}
+@item @samp{201775} @tab @samp{41024.0}
+@item @samp{256225} @tab @samp{58448.0}
+@item @samp{640600} @tab @samp{192979.25}
+@end multitable
+
+Long-term capital gains stack @emph{on top of} ordinary income, which is exactly
+a bracket walk run twice --- @code{tax(ordinary + gain) - tax(ordinary)} over the
+capital-gain ladder --- so the 0/15/20 thresholds stay ordinary data.
+
+@subsection Trust, but Report
+
+Wrong tax data is worse than no tax data, because it looks like an answer.
+Every table carries @code{:year}, @code{:source}, @code{:retrieved} and
+@code{:verified}:
+
+@itemize @bullet
+@item
+@code{:verified t} is a promise about @emph{provenance} --- these figures came
+from that named document, for that year.  It is @emph{not} a promise that the
+computed figure is anyone's true liability.
+@item
+Tables that could not be fully confirmed are registered @code{:verified nil}
+with a @code{:note} saying precisely what is missing --- an honest gap rather
+than a plausible invention.  @strong{12 of the registered tables are currently
+unverified.}
+@item
+@code{:year} is the year the figures actually apply to.  A state that has
+published only 2025 figures is recorded as @code{:year 2025}, never relabelled
+to look current --- note the California example above is a 2025 table.
+@item
+Nothing is inferred: a bracket that could not be read from a source is not
+guessed from last year, a neighbouring state, or an aggregator's summary.
+@end itemize
+
+@code{(cmacs-calculator-tax-vintage 'us-federal)} dates a table (@code{:age},
+@code{:stale}, @code{:verified}, @code{:source}, @code{:note}), and
+@code{(cmacs-calculator-tax-validate)} checks every table's shape --- ascending
+brackets, rates in [0,1], required keys, and the @code{:verified nil} @result{}
+@code{:note} pairing.  It returns @code{nil} when everything is well-formed.
+
+@strong{Check the tables against primary sources before relying on them.}
+Vintage and validation tell you how old a table is and whether it is
+well-formed; neither can tell you the law did not change.
+
+@subsection Deliberately NOT Modeled
+
+This is the honest boundary of the tax family.  It does @emph{not} model:
+
+@itemize @bullet
+@item
+@strong{Municipal and local income taxes} (only flagged via @code{:local-tax}).
+@item
+@strong{Reciprocity agreements} between states.
+@item
+@strong{Credits} beyond the standard deduction --- EITC, CTC, and the rest.
+@item
+Itemized deductions, the AMT, QBI, phase-outs, and the 3.8% net investment
+income tax.
+@end itemize
+
+Results are estimates of the @emph{modeled components only}, and the paycheck
+breakdown is @emph{not} a substitute for a W-4 withholding calculation.
+
+@node Calculator Options
+@section Options and API
+
+@subsection Engine Options
+
+@multitable @columnfractions .45 .12 .43
+@headitem Option @tab Default @tab Meaning
+@item @code{cmacs-calculator-precision}
+@tab @code{12} @tab Significant digits Calc computes with; raising costs time,
+not accuracy.
+@item @code{cmacs-calculator-angle-mode}
+@tab @code{rad} @tab @code{rad} / @code{deg} / @code{hms}.
+@item @code{cmacs-calculator-infinite-mode}
+@tab @code{t} @tab @samp{1/0} @result{} @samp{uinf}; nil signals instead.
+@item @code{cmacs-calculator-multiplication-has-precedence}
+@tab @code{nil} @tab @code{t} restores stock Calc's @samp{2/3*4} = @samp{0.1667}.
+@item @code{cmacs-calculator-strict}
+@tab @code{t} @tab Reject input Calc would silently accept, and unevaluated
+results.
+@end multitable
+
+Modes pinned regardless of customization: @code{calc-symbolic-mode} nil,
+@code{calc-prefer-frac} nil, @code{calc-number-radix} 10,
+@code{calc-group-digits} nil, @code{calc-point-char} ``.'', and
+@code{calc-language} nil.
+
+@subsection Sheet and Chart Options
+
+@multitable @columnfractions .45 .12 .43
+@headitem Option @tab Default @tab Meaning
+@item @code{cmacs-calculator-sheet-eval-idle}
+@tab @code{t} @tab Re-evaluate on idle (safe: results are idempotent).
+@item @code{cmacs-calculator-sheet-eval-debounce}
+@tab @code{0.6} @tab Idle seconds before re-evaluating.
+@item @code{cmacs-calculator-sheet-eval-on-save}
+@tab @code{t} @tab Evaluate the buffer when saving.
+@item @code{cmacs-calculator-sheet-plot-range}
+@tab @code{(-10 . 10)} @tab Default x range for @kbd{C-c C-p}.
+@item @code{cmacs-calculator-chart-backend}
+@tab @code{auto} @tab @code{auto} / @code{svg} / @code{unicode} / @code{libregnum}.
+@item @code{cmacs-calculator-chart-width}
+@tab @code{480} @tab Chart width in pixels.
+@item @code{cmacs-calculator-chart-height}
+@tab @code{300} @tab Chart height in pixels.
+@item @code{cmacs-calculator-chart-samples}
+@tab @code{200} @tab Points sampled when plotting a function.
+@item @code{cmacs-calculator-inline-kill-result}
+@tab @code{t} @tab @kbd{C-c =} also pushes the result onto the kill ring.
+@item @code{cmacs-calculator-repl-prompt}
+@tab @code{"calc> "} @tab REPL prompt string.
+@end multitable
+
+@code{cmacs-calculator-families} lists the family features the landing page
+loads.  Note it names @code{cmacs-calculator-tax-data}, not
+@code{cmacs-calculator-tax}: loading the data file pulls in the math @emph{and}
+registers the jurisdiction tables, without which the tax calculators have no
+rates to work from.
+
+@subsection Evaluation API
+
+@table @code
+@item (cmacs-calculator-eval EXPR &optional MODES)
+Result @emph{string}, numerically evaluated with corrected semantics.  Signals
+on bad input.
+@item (cmacs-calculator-eval-symbolic EXPR &optional MODES)
+Result string, free variables permitted, not forced to a number.
+@item (cmacs-calculator-eval-number EXPR &optional MODES)
+Emacs @emph{float}, or nil if the result is not a plain real number (infinite,
+complex, symbolic).
+@item (cmacs-calculator-eval-symbolic-number EXPR &optional MODES)
+Float or nil, permitting free variables --- for callers that substitute
+variables themselves, notably plotting.
+@item (cmacs-calculator-to-base-units EXPR &optional MODES)
+Result string in base SI units.
+@item (cmacs-calculator-convert-units EXPR UNITS &optional MODES)
+Result string converted to @var{UNITS}.
+@item (cmacs-calculator-supported-p)
+Non-nil when the engine is usable.
+@end table
+
+@var{MODES} is a flat list of Calc @var{VARIABLE VALUE} overrides spliced into
+@code{calc-eval}'s list form --- the only mechanism Calc honours
+(@pxref{Calculator Semantics}).
+
+Errors are all subtypes of @code{cmacs-calculator-error}, so one handler catches
+everything: @code{cmacs-calculator-syntax-error},
+@code{cmacs-calculator-unknown-function},
+@code{cmacs-calculator-unbound-variable}.
+
+@subsection Defining a Calculator
+
+@code{cmacs-calculator-defcalc} defines the function with Calc's @code{defmath}
+(so it is a first-class algebraic function) and registers its metadata:
+
+@lisp
+(cmacs-calculator-defcalc simpleint (principal rate years)
+  :category financial
+  :title "Simple interest"
+  :doc "Interest earned at RATE per year on PRINCIPAL for YEARS."
+  :args ((principal "Principal amount")
+         (rate "Annual interest rate as a fraction, e.g. 0.05")
+         (years "Number of years"))
+  :returns "Interest earned (not including the principal)"
+  :examples (("simpleint(1000, 0.05, 3)" . "150"))
+  (* principal rate years))
+@end lisp
+
+@strong{Never write a bare Emacs float literal in a @code{defmath} body.}
+@code{defmath} passes Emacs floats through unconverted, and @code{math-mul} on
+one yields a value that is not a Calc number, which breaks the next operation
+--- the function then fails to fold and comes back unevaluated.  Use a Calc
+fraction (@code{(/ 4 5)}) instead of @code{0.8}.  Relatedly, constants meant as
+ordinary Lisp variables are spelled with a hyphen: @code{defmath} turns a bare
+symbol such as @code{G} into the Calc variable @code{var-G}, but leaves any
+symbol @emph{containing a hyphen} alone.
+
+@subsection Tax API
+
+Load @code{cmacs-calculator-tax-data} (not @code{cmacs-calculator-tax}) --- it
+pulls in the math @emph{and} registers the tables.
+
+@table @code
+@item (cmacs-calculator-tax-federal INCOME STATUS &optional YEAR)
+@itemx (cmacs-calculator-tax-state INCOME STATUS STATE &optional YEAR)
+@itemx (cmacs-calculator-tax-fica WAGES STATUS &optional YEAR)
+@itemx (cmacs-calculator-tax-self-employment NET-EARNINGS STATUS &optional YEAR)
+@itemx (cmacs-calculator-tax-capital-gains GAIN INCOME STATUS ...)
+Result plists carrying their own @code{:verified} and @code{:source}.
+@item (cmacs-calculator-tax-bracket-liability TAXABLE-INCOME BRACKETS)
+The marginal walk (the core).
+@item (cmacs-calculator-tax-get JURISDICTION &optional YEAR)
+A table, or nil.  With @var{YEAR}, that exact year --- deliberately @emph{not}
+the nearest, since quietly answering with the wrong year's rates is the failure
+mode the design exists to prevent.
+@item (cmacs-calculator-tax-jurisdictions)
+The 52 registered jurisdiction symbols.
+@item (cmacs-calculator-tax-vintage JURISDICTION &optional YEAR)
+@itemx (cmacs-calculator-tax-validate &optional JURISDICTION)
+How old a table is; whether every table is well-formed (nil = all good).
+@end table
+
+Canonical filing statuses are @code{single}, @code{married-joint},
+@code{married-separate} and @code{head-of-household}; common aliases
+(@code{mfj}, @code{hoh}, @code{surviving-spouse}, @dots{}) are accepted, and
+anything else signals rather than falling back to a status you did not ask for.
+
+A bracket list is @code{((THRESHOLD . MARGINAL-RATE) ...)} ascending, first
+threshold at 0, each rate applying to income @emph{above} its threshold up to
+the next; the top band is unbounded.
+
+@node Calculator Limitations
+@section Limitations and Honest Caveats
+
+@itemize @bullet
+@item
+@strong{Domain rejections come back as a signal, not a number.}  Formulas with
+bounded domains --- beta at or beyond 1, a radius inside the event horizon, a
+refraction that is really total internal reflection --- call
+@code{math-reject-arg}, the same idiom Calc's own @code{math-check-financial}
+uses.  So @samp{lorentz(1.5)} signals rather than returning the complex number
+@samp{(0., -0.894427191)}, which looks like a result and is not one.  An
+argument is checked whenever it folds to a number, so @samp{lorentz(3/2)} and
+@samp{lorentz(pi/2)} are caught too.
+@item
+@strong{The pendulum is small-angle.}  @code{pendulum} uses the small-angle
+approximation; it is increasingly wrong as amplitude grows.
+@item
+@strong{Projectile motion is drag-free.}  Vacuum formulas --- no air resistance,
+so real-world ranges are shorter.
+@item
+@strong{Gravity is standard, not local.}  Formulas use standard g
+(9.80665 m/s@sup{2}), not your latitude's or altitude's actual value.
+@item
+@strong{Bohr energies are in joules}, not electronvolts --- the SI-always rule
+applies even where a field conventionally uses eV.
+@item
+@strong{No unit tracking in the numeric families.}  Feeding grams or degrees
+into an SI formula gives a wrong-scale answer silently.  Use the units functions
+for dimensional work.
+@item
+@strong{Precision is a knob, not a guarantee of accuracy.}
+@code{cmacs-calculator-precision} sets how many significant digits Calc computes
+with.  It does not make an approximate formula exact.
+@end itemize
+
+@node Calculator Build
+@section Build
+
+@example
+./configure ... --with-cmacs-calculator
+@end example
+
+The engine is Elisp over GNU Calc, which ships with Emacs, so the calculator has
+@emph{no external dependencies}.  libregnum is @emph{optional}: with
+@option{--with-cmacs-libregnum} the GPU chart tier is compiled in
+(@code{HAVE_CMACS_CALCULATOR_CHART}); without it, configure notes that GPU
+charts are disabled and @emph{the whole calculator still works} --- charting
+falls back to the always-present SVG tier.  The MCP tools are registered when
+@option{--with-cmacs-mcp} is also built.
+
+@option{--calc} needs @emph{no} @code{standard_args[]} entry and no change to
+@file{lisp/startup.el} (which errors on options it does not recognise), because
+it is rewritten out of argv before Emacs parses it --- @option{--batch} and
+@option{--eval} already exist and already work.  @samp{emacs -- --calc} still
+passes @option{--calc} through as an ordinary argument.
+
+Verify a build:
+
+@example
+$ ./src/emacs --calc "2/3*4"
+2.66666666667
+$ ./src/emacs -Q --batch --eval '(princ IS-CMACS-CALCULATOR)'
+t
+@end example
+
+@noindent
+If a change seems not to take, you have almost certainly hit the stale-Elisp
+cache: Emacs prefers @file{.elc} / @file{.eln} over @file{.el}.  Either clean
+them, or force source with @code{--eval '(setq load-prefer-newer t)'} --- a
+stale @file{cmacs-calculator-tax-data.elc} will happily register a @emph{subset}
+of the jurisdictions and everything will look like it merely works.

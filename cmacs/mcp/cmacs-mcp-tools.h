@@ -73,6 +73,10 @@ void cmacs_mcp_tools_lrgterm_register (McpServer *server);
 void cmacs_mcp_tools_imgedit_register (McpServer *server);
 #endif
 
+#ifdef HAVE_CMACS_CALCULATOR
+void cmacs_mcp_tools_calculator_register (McpServer *server);
+#endif
+
 #ifdef HAVE_CMACS_VIDSTUDIO
 void cmacs_mcp_tools_vidstudio_register (McpServer *server);
 #endif

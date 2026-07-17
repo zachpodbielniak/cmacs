@@ -145,6 +145,9 @@ CMACS_DBUS_IFACE_DECL (speech)
 #ifdef HAVE_CMACS_LIBREGNUM
 CMACS_DBUS_IFACE_DECL (lrg)
 #endif
+#ifdef HAVE_CMACS_CALCULATOR
+CMACS_DBUS_IFACE_DECL (calculator)
+#endif
 
 /* Phase 4 desktop integration. */
 guint cmacs_dbus_application_register   (GDBusConnection *, const gchar *, GError **);

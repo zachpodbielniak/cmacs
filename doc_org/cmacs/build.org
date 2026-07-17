@@ -40,6 +40,7 @@ All CMacs features are auto-detected.  You can force them on or off:
 | =--with-cmacs-screensaver=    | libregnum screensavers as wallpaper / lock / buffer |
 | =--with-cmacs-transcode=      | Native ffmpeg video/audio transcoder (container/host; parallel pool) |
 | =--with-cmacs-transcribe=     | Batch speech-to-text (whisper STT + transcode pre-pass, AI summaries, hooks) |
+| =--with-cmacs-calculator=     | Calculator over GNU Calc: desktop/financial/physics/relativity/CAS, SVG + libregnum charts, =emacs --calc= REPL (libregnum optional) |
 | =--enable-cmacs-cpatch=       | Runtime C hot-patching (DANGEROUS)      |
 | =--enable-cmacs-deps-debug=   | In-house deps -O0 -g3 DWARF (gdb + cintrospect); default |
 
@@ -82,6 +83,7 @@ Example with explicit flags:
   --with-cmacs-lrgterm \
   --with-cmacs-transcode \
   --with-cmacs-transcribe \
+  --with-cmacs-calculator \
   --enable-cmacs-cpatch \
   --enable-cmacs-deps-debug   # in-house deps -O0 -g3 (DWARF): gdb + runtime cintrospection
 #+end_example
