@@ -366,13 +366,22 @@ the mortgage calculator even though its name is `mortgagepmt'."
   "Return the action of the entry at point, or nil."
   (get-text-property (point) 'cmacs-calculator-menu-action))
 
+(defun cmacs-calculator-menu--invoke (action)
+  "Invoke ACTION, whether a command symbol or a plain closure.
+Surface entries store an interactive command symbol; registry
+entries store a bare closure with no `interactive' form.  Dispatch
+on `commandp' so both work."
+  (if (commandp action)
+      (call-interactively action)
+    (funcall action)))
+
 (defun cmacs-calculator-menu-open ()
   "Open the calculator or surface on this line."
   (interactive)
   (let ((action (cmacs-calculator-menu--action-at-point)))
     (unless action
       (user-error "No calculator on this line"))
-    (call-interactively action)))
+    (cmacs-calculator-menu--invoke action)))
 
 (defun cmacs-calculator-menu-next ()
   "Move to the next selectable line."

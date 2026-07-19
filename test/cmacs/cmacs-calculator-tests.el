@@ -25,6 +25,7 @@
 (require 'cmacs-calculator-physics nil t)
 (require 'cmacs-calculator-tax-data nil t)
 (require 'cmacs-calculator-chart nil t)
+(require 'cmacs-calculator-menu nil t)
 
 (defmacro cmacs-calculator-tests--skip-unless-loaded ()
   "Skip the test unless `cmacs-calculator' loaded."
@@ -736,6 +737,41 @@ both generated from these -- from drifting away from the code."
   (should (cmacs-calculator-tests--close
            (cmacs-calculator-tests--num "roi(fvlump(1000,0.05,10), 1000)")
            0.62889462678 1e-8)))
+
+
+;;; Menu dispatch
+;;
+;; The landing page stores two kinds of action in a text property: surface
+;; entries store an interactive command symbol, registry entries store a bare
+;; closure with no `interactive' form.  `call-interactively' rejects the
+;; latter (Wrong type argument: commandp), so the dispatch must guard on
+;; `commandp'.  A silent revert here breaks every registry calculator (CAGR,
+;; etc.) while the surfaces keep working.
+
+(ert-deftest cmacs-calculator-tests-menu-invoke-closure ()
+  "A registry-style closure action must be invoked, not rejected as non-command."
+  (skip-unless (fboundp 'cmacs-calculator-menu--invoke))
+  (let* ((called nil)
+         (action (lambda () (setq called t))))
+    (should-not (commandp action))
+    (cmacs-calculator-menu--invoke action)
+    (should called)))
+
+(defvar cmacs-calculator-tests--menu-cmd-called nil
+  "Set by `cmacs-calculator-tests--menu-cmd' when invoked.")
+
+(defun cmacs-calculator-tests--menu-cmd ()
+  "A trivial interactive command standing in for a surface action."
+  (interactive)
+  (setq cmacs-calculator-tests--menu-cmd-called t))
+
+(ert-deftest cmacs-calculator-tests-menu-invoke-command ()
+  "A surface-style interactive command symbol must still dispatch."
+  (skip-unless (fboundp 'cmacs-calculator-menu--invoke))
+  (setq cmacs-calculator-tests--menu-cmd-called nil)
+  (should (commandp 'cmacs-calculator-tests--menu-cmd))
+  (cmacs-calculator-menu--invoke 'cmacs-calculator-tests--menu-cmd)
+  (should cmacs-calculator-tests--menu-cmd-called))
 
 (provide 'cmacs-calculator-tests)
 ;;; cmacs-calculator-tests.el ends here
