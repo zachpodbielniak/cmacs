@@ -5,7 +5,9 @@
 
 This is the reference companion to [[file:index.org][the CMacs Calculator guide]], which explains the
 corrected semantics you should read first.  Every knob here is a =defcustom= in
-the =cmacs-calculator= group (=M-x customize-group RET cmacs-calculator=).
+the =cmacs-calculator= group (=M-x customize-group RET cmacs-calculator=).  For a
+per-function reference — every calculator with its arguments and worked
+examples — see [[file:catalog.org][the function catalog]].
 
 * Engine options
 

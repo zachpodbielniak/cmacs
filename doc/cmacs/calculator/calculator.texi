@@ -37,6 +37,7 @@ is @emph{optional} --- the SVG chart tier stands alone.
 * Calculator Semantics::        The five GNU Calc traps, corrected.
 * Calculator Surfaces::         Sheet, landing page, inline, CLI, MCP.
 * Calculator Families::         Financial, physics, relativity, units, CAS.
+* Calculator Catalog::          Every calculator, with its args and examples.
 * Calculator Charting::         The SVG and libregnum tiers.
 * Calculator Tax::              Data-driven tax, and its limits.
 * Calculator Options::          Every defcustom knob and the API.
@@ -330,7 +331,8 @@ escapevel(5.972e24, 6.371e6) / 1000          @result{} 11.1859778919
 
 One registry backs the landing page, completion, ElDoc, this documentation and
 the MCP tool schema, so none of them can drift from the functions actually
-defined.
+defined.  @ref{Calculator Catalog} documents every one of the 121 calculators
+--- what it does, the arguments it takes, and a worked example or two.
 
 @subsection Financial
 
@@ -443,6 +445,2321 @@ integ(x^2, x)                                @result{} x^3 / 3
 solve(x^2 - 4 = 0, x)                        @result{} x = 2
 taylor(sin(x), x, 5)                         @result{} x - x^3 / 6 + x^5 / 120
 @end example
+
+@node Calculator Catalog
+@section Function Catalog
+
+@cindex catalog
+@cindex calculator functions
+
+This is the complete reference to every named calculator, generated from the
+registry that also backs the landing page, completion and the MCP tools, so it
+cannot drift from the functions actually defined.  See @ref{Calculator
+Semantics} for the corrected evaluation rules and @ref{Calculator Options} for
+the surrounding machinery.
+
+Every calculator is a first-class GNU Calc algebraic function (defined with
+@code{cmacs-calculator-defcalc}), so it composes inside any larger expression
+and works from a sheet, the REPL, inline @kbd{C-c =}, and @code{emacs --calc}.
+Each example below is @emph{real output} from the engine.  Physics and
+relativity arguments and results are in base SI units (metres, kilograms,
+seconds, kelvin, coulombs, joules), and every angle is in radians; relativity
+takes speed as @code{beta}, a fraction of the speed of light.
+
+@subsection Financial
+
+@table @code
+
+@item accruedint(face, rate, days-since, days-period, freq)
+Coupon interest accrued since the last payment, on a simple
+day-count basis.
+
+@table @code
+@item face
+Face value
+@item rate
+Annual coupon rate as a fraction
+@item days-since
+Days since the last coupon
+@item days-period
+Days in the full coupon period
+@item freq
+Coupon payments per year
+@end table
+
+Returns: Accrued interest
+
+@example
+accruedint(1000, 0.05, 90, 182, 2)  =>  12.3626373626
+@end example
+
+@item apr2apy(apr, periods)
+Convert nominal annual rate APR, compounded PERIODS times per year,
+into the effective annual yield.
+
+@table @code
+@item apr
+Nominal annual rate as a fraction
+@item periods
+Compounding periods per year
+@end table
+
+Returns: Effective annual rate as a fraction
+
+@example
+apr2apy(0.05, 12)  =>  0.05116189792
+@end example
+
+@item apy2apr(apy, periods)
+Convert effective annual yield APY into the nominal annual rate
+compounded PERIODS times per year.
+
+@table @code
+@item apy
+Effective annual rate as a fraction
+@item periods
+Compounding periods per year
+@end table
+
+Returns: Nominal annual rate as a fraction
+
+@example
+apy2apr(0.0511618978817, 12)  =>  0.05000000004
+@end example
+
+@item bondcurrentyield(face, rate, price)
+Annual coupon income divided by the market PRICE.
+
+@table @code
+@item face
+Face value
+@item rate
+Annual coupon rate as a fraction
+@item price
+Market price
+@end table
+
+Returns: Current yield as a fraction
+
+@example
+bondcurrentyield(1000, 0.05, 925.61)  =>  0.0540184310887
+@end example
+
+@item bondprice(face, rate, ytm, years, freq)
+Present value of a coupon bond.  When YTM equals RATE the price is
+FACE, which is the standard check that the formula is right.
+
+@table @code
+@item face
+Face (par) value
+@item rate
+Annual coupon rate as a fraction
+@item ytm
+Yield to maturity as a fraction
+@item years
+Years to maturity
+@item freq
+Coupon payments per year, e.g. 2 for semiannual
+@end table
+
+Returns: Bond price
+
+@example
+bondprice(1000, 0.05, 0.05, 10, 2)  =>  999.999999999
+bondprice(1000, 0.05, 0.06, 10, 2)  =>  925.612625699
+@end example
+
+@item breakeven(fixed, price, varcost)
+Units that must be sold to cover FIXED costs, given the per-unit
+PRICE and VARCOST.
+
+@table @code
+@item fixed
+Total fixed costs
+@item price
+Selling price per unit
+@item varcost
+Variable cost per unit
+@end table
+
+Returns: Units to break even
+
+@example
+breakeven(10000, 25, 15)  =>  1000
+@end example
+
+@item bscall(spot, strike, rate, sigma, term)
+Value of a European call option under Black-Scholes.
+
+@table @code
+@item spot
+Current price of the underlying
+@item strike
+Strike price
+@item rate
+Risk-free rate as a fraction, annualized
+@item sigma
+Volatility as a fraction, annualized
+@item term
+Time to expiry in years
+@end table
+
+Returns: Call price
+
+@example
+bscall(100, 100, 0.05, 0.2, 1)  =>  10.4505835721
+@end example
+
+@item bscalldelta(spot, strike, rate, sigma, term)
+Sensitivity of a call price to the underlying price.
+
+@table @code
+@item spot
+Underlying price
+@item strike
+Strike
+@item rate
+Risk-free rate
+@item sigma
+Volatility
+@item term
+Years to expiry
+@end table
+
+Returns: Delta, between 0 and 1
+
+@example
+bscalldelta(100, 100, 0.05, 0.2, 1)  =>  0.636830651175
+@end example
+
+@item bscallrho(spot, strike, rate, sigma, term)
+Sensitivity of a call price to the risk-free rate.
+
+@table @code
+@item spot
+Underlying price
+@item strike
+Strike
+@item rate
+Risk-free rate
+@item sigma
+Volatility
+@item term
+Years to expiry
+@end table
+
+Returns: Rho
+
+@example
+bscallrho(100, 100, 0.05, 0.2, 1)  =>  53.2324815454
+@end example
+
+@item bscalltheta(spot, strike, rate, sigma, term)
+Time decay of a call price, per year.
+
+@table @code
+@item spot
+Underlying price
+@item strike
+Strike
+@item rate
+Risk-free rate
+@item sigma
+Volatility
+@item term
+Years to expiry
+@end table
+
+Returns: Theta per year (negative for a long call)
+
+@example
+bscalltheta(100, 100, 0.05, 0.2, 1)  =>  -6.41402754644
+@end example
+
+@item bsd1(spot, strike, rate, sigma, term)
+The d1 term of the Black-Scholes formula.
+
+@table @code
+@item spot
+Current price of the underlying
+@item strike
+Strike price
+@item rate
+Risk-free rate as a fraction, annualized
+@item sigma
+Volatility as a fraction, annualized
+@item term
+Time to expiry in years
+@end table
+
+Returns: d1
+
+@example
+bsd1(100, 100, 0.05, 0.2, 1)  =>  0.35
+@end example
+
+@item bsd2(spot, strike, rate, sigma, term)
+The d2 term of the Black-Scholes formula, equal to d1 - sigma*sqrt(T).
+
+@table @code
+@item spot
+Current price of the underlying
+@item strike
+Strike price
+@item rate
+Risk-free rate as a fraction
+@item sigma
+Volatility as a fraction
+@item term
+Time to expiry in years
+@end table
+
+Returns: d2
+
+@example
+bsd2(100, 100, 0.05, 0.2, 1)  =>  0.15
+@end example
+
+@item bsgamma(spot, strike, rate, sigma, term)
+Rate of change of delta with the underlying price.  Identical for
+calls and puts.
+
+@table @code
+@item spot
+Underlying price
+@item strike
+Strike
+@item rate
+Risk-free rate
+@item sigma
+Volatility
+@item term
+Years to expiry
+@end table
+
+Returns: Gamma
+
+@example
+bsgamma(100, 100, 0.05, 0.2, 1)  =>  0.0187620173459
+@end example
+
+@item bsput(spot, strike, rate, sigma, term)
+Value of a European put option under Black-Scholes.  Satisfies
+put-call parity with @code{bscall}.
+
+@table @code
+@item spot
+Current price of the underlying
+@item strike
+Strike price
+@item rate
+Risk-free rate as a fraction
+@item sigma
+Volatility as a fraction
+@item term
+Time to expiry in years
+@end table
+
+Returns: Put price
+
+@example
+bsput(100, 100, 0.05, 0.2, 1)  =>  5.5735260223
+@end example
+
+@item bsputdelta(spot, strike, rate, sigma, term)
+Sensitivity of a put price to the underlying price.
+
+@table @code
+@item spot
+Underlying price
+@item strike
+Strike
+@item rate
+Risk-free rate
+@item sigma
+Volatility
+@item term
+Years to expiry
+@end table
+
+Returns: Delta, between -1 and 0
+
+@example
+bsputdelta(100, 100, 0.05, 0.2, 1)  =>  -0.363169348825
+@end example
+
+@item bsputrho(spot, strike, rate, sigma, term)
+Sensitivity of a put price to the risk-free rate.
+
+@table @code
+@item spot
+Underlying price
+@item strike
+Strike
+@item rate
+Risk-free rate
+@item sigma
+Volatility
+@item term
+Years to expiry
+@end table
+
+Returns: Rho
+
+@example
+bsputrho(100, 100, 0.05, 0.2, 1)  =>  -41.8904609047
+@end example
+
+@item bsputtheta(spot, strike, rate, sigma, term)
+Time decay of a put price, per year.
+
+@table @code
+@item spot
+Underlying price
+@item strike
+Strike
+@item rate
+Risk-free rate
+@item sigma
+Volatility
+@item term
+Years to expiry
+@end table
+
+Returns: Theta per year
+
+@example
+bsputtheta(100, 100, 0.05, 0.2, 1)  =>  -1.65788042393
+@end example
+
+@item bsvega(spot, strike, rate, sigma, term)
+Sensitivity of the option price to volatility, per unit of sigma.
+Identical for calls and puts.
+
+@table @code
+@item spot
+Underlying price
+@item strike
+Strike
+@item rate
+Risk-free rate
+@item sigma
+Volatility
+@item term
+Years to expiry
+@end table
+
+Returns: Vega
+
+@example
+bsvega(100, 100, 0.05, 0.2, 1)  =>  37.5240346917
+@end example
+
+@item cagr(begin, end, years)
+The constant annual rate that grows BEGIN into END over YEARS.
+
+@table @code
+@item begin
+Starting value
+@item end
+Ending value
+@item years
+Number of years
+@end table
+
+Returns: Annual growth rate as a fraction
+
+@example
+cagr(1000, 2000, 10)  =>  0.07177346254
+@end example
+
+@item compoundamt(principal, rate, periods, years)
+Value of PRINCIPAL after YEARS at annual RATE compounded PERIODS
+times per year.
+
+@table @code
+@item principal
+Principal amount
+@item rate
+Annual nominal rate as a fraction
+@item periods
+Compounding periods per year, e.g. 12 for monthly
+@item years
+Number of years
+@end table
+
+Returns: Final amount, including principal
+
+@example
+compoundamt(1000, 0.05, 12, 10)  =>  1647.00949834
+@end example
+
+@item compoundint(principal, rate, periods, years)
+Interest earned on PRINCIPAL after YEARS at annual RATE compounded
+PERIODS times per year.
+
+@table @code
+@item principal
+Principal amount
+@item rate
+Annual nominal rate as a fraction
+@item periods
+Compounding periods per year
+@item years
+Number of years
+@end table
+
+Returns: Interest earned, excluding the principal
+
+@example
+compoundint(1000, 0.05, 12, 10)  =>  647.00949834
+@end example
+
+@item doubletime(rate)
+Years for a balance to double at annual RATE, compounded annually.
+
+@table @code
+@item rate
+Annual rate as a fraction
+@end table
+
+Returns: Years to double
+
+@example
+doubletime(0.08)  =>  9.006468342
+@end example
+
+@item fvlump(amount, rate, years)
+Value of AMOUNT after YEARS of growth at RATE.
+
+@table @code
+@item amount
+Present amount
+@item rate
+Annual rate as a fraction
+@item years
+Number of years
+@end table
+
+Returns: Future value
+
+@example
+fvlump(1000, 0.05, 10)  =>  1628.89462678
+@end example
+
+@item loanbalance(principal, annrate, years, paid)
+Outstanding principal after PAID monthly payments have been made.
+
+@table @code
+@item principal
+Original loan amount
+@item annrate
+Nominal annual rate as a fraction
+@item years
+Original term in years
+@item paid
+Number of payments already made
+@end table
+
+Returns: Remaining principal balance
+
+@example
+loanbalance(300000, 0.065, 30, 60)  =>  280832.932338
+@end example
+
+@item loanint(principal, annrate, years)
+Total interest paid over the life of the loan.
+
+@table @code
+@item principal
+Loan amount
+@item annrate
+Nominal annual rate as a fraction
+@item years
+Loan term in years
+@end table
+
+Returns: Total interest paid
+
+@example
+loanint(300000, 0.065, 30)  =>  382633.465236
+@end example
+
+@item loanpmt(principal, annrate, years)
+Level monthly payment amortizing PRINCIPAL over YEARS at nominal
+annual rate ANNRATE.  Returned as a positive amount; contrast Calc's
+@code{pmt}, which follows the signed cash-flow convention.
+
+@table @code
+@item principal
+Loan amount
+@item annrate
+Nominal annual interest rate as a fraction
+@item years
+Loan term in years
+@end table
+
+Returns: Monthly payment, positive
+
+@example
+loanpmt(300000, 0.065, 30)  =>  1896.2040701
+@end example
+
+@item loantotal(principal, annrate, years)
+Total of all payments over the life of the loan.
+
+@table @code
+@item principal
+Loan amount
+@item annrate
+Nominal annual rate as a fraction
+@item years
+Loan term in years
+@end table
+
+Returns: Total amount paid
+
+@example
+loantotal(300000, 0.065, 30)  =>  682633.465236
+@end example
+
+@item mortgagepmt(price, down, annrate, years, taxrate, insurance, pmi)
+Monthly housing payment including principal, interest, property
+tax, insurance and PMI (PITI).  PMI is charged while the loan-to-value
+ratio exceeds 80%, which is the usual lender rule.
+
+@table @code
+@item price
+Purchase price
+@item down
+Down payment
+@item annrate
+Nominal annual mortgage rate as a fraction
+@item years
+Loan term in years
+@item taxrate
+Annual property tax rate as a fraction of price
+@item insurance
+Annual homeowners insurance premium
+@item pmi
+Annual PMI rate as a fraction of the loan amount
+@end table
+
+Returns: Total monthly payment
+
+@example
+mortgagepmt(400000, 80000, 0.065, 30, 0.011, 1800, 0.005)  =>  2539.28434144
+@end example
+
+@item normcdf(x)
+Probability that a standard normal variate is at most X.  A thin
+name for Calc's `ltpn(x, 0, 1)'.
+
+@table @code
+@item x
+Value
+@end table
+
+Returns: Cumulative probability
+
+@example
+normcdf(1.96)  =>  0.97500210485
+@end example
+
+@item normpdf(x)
+Probability density of the standard normal distribution at X.
+
+@table @code
+@item x
+Value
+@end table
+
+Returns: Density
+
+@example
+normpdf(0)  =>  0.398942280401
+@end example
+
+@item pvlump(amount, rate, years)
+Value today of AMOUNT received in YEARS at discount RATE.
+
+@table @code
+@item amount
+Future amount
+@item rate
+Annual discount rate as a fraction
+@item years
+Years until received
+@end table
+
+Returns: Present value
+
+@example
+pvlump(1000, 0.05, 10)  =>  613.91325354
+@end example
+
+@item roi(gain, cost)
+Net return as a fraction of COST.  GAIN is the final value.
+
+@table @code
+@item gain
+Final value
+@item cost
+Initial cost
+@end table
+
+Returns: Return as a fraction, e.g. 0.5 for +50%
+
+@example
+roi(1500, 1000)  =>  0.5
+@end example
+
+@item rule72(rate)
+Approximate years to double at annual RATE.  A rule of thumb; use
+@code{doubletime} for the exact figure.
+
+@table @code
+@item rate
+Annual rate as a fraction
+@end table
+
+Returns: Approximate years to double
+
+@example
+rule72(0.08)  =>  9.
+@end example
+
+@item simpleint(principal, rate, years)
+Interest earned at RATE per year on PRINCIPAL for YEARS, with no
+compounding.
+
+@table @code
+@item principal
+Principal amount
+@item rate
+Annual interest rate as a fraction, e.g. 0.05
+@item years
+Number of years
+@end table
+
+Returns: Interest earned (not including the principal)
+
+@example
+simpleint(1000, 0.05, 3)  =>  150.
+@end example
+
+@end table
+
+@subsection Physics
+
+@table @code
+
+@item angvel(freq)
+Angular velocity of rotation at FREQ revolutions per second,
+omega = 2 pi f.
+
+@table @code
+@item freq
+Rotation frequency, Hz
+@end table
+
+Returns: Angular velocity, rad/s
+
+@example
+angvel(2)  =>  12.5663706144
+@end example
+
+@item bohrenergy(level)
+Energy of the LEVEL-th state of hydrogen, E1 / n^2, where E1 is
+-2.1798723611030e-18 J (-13.6056931230 eV).  Negative because the electron
+is bound; divide by 1.602176634e-19 for electronvolts.  The energy of a
+photon emitted in a transition is the difference of two of these.
+
+@table @code
+@item level
+Principal quantum number n, a positive integer
+@end table
+
+Returns: Energy, J (negative)
+
+@example
+bohrenergy(1)  =>  -2.1798723611e-18
+bohrenergy(2)  =>  -5.44968090275e-19
+@end example
+
+@item bohrradius(level)
+Radius of the LEVEL-th orbit of hydrogen in the Bohr model,
+n^2 a0.  LEVEL is the principal quantum number, 1 for the ground state.
+
+@table @code
+@item level
+Principal quantum number n, a positive integer
+@end table
+
+Returns: Orbit radius, m
+
+@example
+bohrradius(1)  =>  5.29177210544e-11
+bohrradius(2)  =>  2.11670884218e-10
+@end example
+
+@item capacitance(charge, volts)
+Capacitance holding CHARGE at VOLTS, C = Q / V.
+
+@table @code
+@item charge
+Stored charge, C
+@item volts
+Voltage across the plates, V
+@end table
+
+Returns: Capacitance, F
+
+@example
+capacitance(1e-6, 5)  =>  2e-7
+@end example
+
+@item capenergy(cap, volts)
+Energy stored at VOLTS across capacitance CAP, C V^2 / 2.
+
+@table @code
+@item cap
+Capacitance, F
+@item volts
+Voltage, V
+@end table
+
+Returns: Stored energy, J
+
+@example
+capenergy(1e-6, 12)  =>  7.2e-5
+@end example
+
+@item carnot(tcold, thot)
+Maximum efficiency of any heat engine working between reservoirs at
+THOT and TCOLD, 1 - Tc/Th.  Temperatures are absolute -- using Celsius here
+is the classic error.  No real engine beats this.
+
+@table @code
+@item tcold
+Cold reservoir temperature, K
+@item thot
+Hot reservoir temperature, K
+@end table
+
+Returns: Efficiency as a fraction, between 0 and 1
+
+@example
+carnot(300, 500)  =>  0.4
+@end example
+
+@item centripaccel(vel, radius)
+Acceleration toward the centre for uniform circular motion at speed
+VEL on a circle of RADIUS.
+
+@table @code
+@item vel
+Tangential speed, m/s
+@item radius
+Radius of the circle, m
+@end table
+
+Returns: Centripetal acceleration, m/s^2
+
+@example
+centripaccel(10, 4)  =>  25
+@end example
+
+@item centripforce(mass, vel, radius)
+Net inward force needed to keep MASS moving at VEL on a circle of
+RADIUS.
+
+@table @code
+@item mass
+Mass, kg
+@item vel
+Tangential speed, m/s
+@item radius
+Radius of the circle, m
+@end table
+
+Returns: Centripetal force, N
+
+@example
+centripforce(2, 10, 4)  =>  50
+@end example
+
+@item coulomb(q1, q2, dist)
+Electrostatic force between point charges Q1 and Q2 separated by
+DIST.  Positive means repulsion, negative attraction, so the sign of the
+charges matters.
+
+@table @code
+@item q1
+First charge, C
+@item q2
+Second charge, C
+@item dist
+Separation, m
+@end table
+
+Returns: Force, N (positive = repulsive)
+
+@example
+coulomb(1e-6, 1e-6, 0.1)  =>  0.89875517862
+@end example
+
+@item criticalangle(n1, n2)
+Angle of incidence beyond which light travelling from index N1 into
+index N2 is totally internally reflected, arcsin(n2/n1).  Exists only when
+N1 exceeds N2; the call is rejected otherwise, since a ray leaving a rarer
+medium never runs out of refraction angles.
+
+@table @code
+@item n1
+Refractive index of the dense incident medium
+@item n2
+Refractive index of the rarer medium
+@end table
+
+Returns: Critical angle from the normal, radians
+
+@example
+criticalangle(1.33, 1)  =>  0.850908514478
+@end example
+
+@item debroglie(mass, vel)
+Matter wavelength of a particle, lambda = h / (m v).  Non-relativistic;
+above roughly 0.1c the momentum needs @code{relmomentum} instead.  The wavelength
+of anything macroscopic is far too small to observe, which is why the
+quantum world looks classical.
+
+@table @code
+@item mass
+Mass, kg
+@item vel
+Speed, m/s
+@end table
+
+Returns: Wavelength, m
+
+@example
+debroglie(9.1093837139e-31, 1e6)  =>  7.27389509335e-10
+@end example
+
+@item dopplersound(freq, vsound, vobs, vsrc)
+Frequency heard by a moving observer from a moving source,
+f (v + vo) / (v - vs).
+
+Signs follow the standard convention: VOBS is positive when the observer
+moves *toward* the source, VSRC is positive when the source moves *toward*
+the observer, so approaching raises the pitch either way.  These are speeds
+through the medium, which is why the two enter asymmetrically -- unlike the
+relativistic case, see @code{reldoppler}.
+
+@table @code
+@item freq
+Emitted frequency, Hz
+@item vsound
+Speed of sound in the medium, m/s, about 343 in air
+@item vobs
+Observer speed toward the source, m/s
+@item vsrc
+Source speed toward the observer, m/s
+@end table
+
+Returns: Observed frequency, Hz
+
+@example
+dopplersound(440, 343, 0, 30)  =>  482.172523962
+@end example
+
+@item efield(charge, dist)
+Field strength at DIST from a point CHARGE, k q / r^2.
+
+@table @code
+@item charge
+Source charge, C
+@item dist
+Distance from the charge, m
+@end table
+
+Returns: Electric field, V/m
+
+@example
+efield(1e-6, 0.1)  =>  898755.17862
+@end example
+
+@item elasticv1(m1, v1, m2, v2)
+Velocity of the first body after a one-dimensional elastic
+collision, conserving both momentum and kinetic energy.  Velocities are
+signed: negative means motion in the opposite direction.  Equal masses swap
+velocities, which is the standard check.
+
+@table @code
+@item m1
+Mass of the first body, kg
+@item v1
+Initial velocity of the first body, m/s
+@item m2
+Mass of the second body, kg
+@item v2
+Initial velocity of the second body, m/s
+@end table
+
+Returns: Final velocity of the first body, m/s
+
+@example
+elasticv1(2, 5, 3, -2)  =>  -3.4
+@end example
+
+@item elasticv2(m1, v1, m2, v2)
+Velocity of the second body after a one-dimensional elastic
+collision.  Arguments are as in @code{elasticv1}.
+
+@table @code
+@item m1
+Mass of the first body, kg
+@item v1
+Initial velocity of the first body, m/s
+@item m2
+Mass of the second body, kg
+@item v2
+Initial velocity of the second body, m/s
+@end table
+
+Returns: Final velocity of the second body, m/s
+
+@example
+elasticv2(2, 5, 3, -2)  =>  3.6
+@end example
+
+@item epotential(charge, dist)
+Potential at DIST from a point CHARGE, k q / r, taking the potential
+to be zero infinitely far away.
+
+@table @code
+@item charge
+Source charge, C
+@item dist
+Distance from the charge, m
+@end table
+
+Returns: Electric potential, V
+
+@example
+epotential(1e-6, 0.1)  =>  89875.517862
+@end example
+
+@item epower(volts, current)
+Power dissipated, P = V I.  Combine with @code{ohmv} or @code{ohmi} for the
+other two forms: epower(ohmv(i, r), i) is I^2 R.
+
+@table @code
+@item volts
+Voltage, V
+@item current
+Current, A
+@end table
+
+Returns: Power, W
+
+@example
+epower(110, 0.5)  =>  55.
+@end example
+
+@item escapevel(mass, radius)
+Speed needed to escape a body of MASS from RADIUS with no further
+propulsion, sqrt(2 G M / r).  Exactly sqrt(2) times @code{orbitalvel}.
+
+@table @code
+@item mass
+Mass of the body, kg
+@item radius
+Distance from the centre, m
+@end table
+
+Returns: Escape speed, m/s
+
+@example
+escapevel(5.972e24, 6.371e6)  =>  11185.9778919
+@end example
+
+@item force(mass, accel)
+Newton's second law, F = m a.
+
+@table @code
+@item mass
+Mass, kg
+@item accel
+Acceleration, m/s^2
+@end table
+
+Returns: Force, N
+
+@example
+force(10, 2)  =>  20
+@end example
+
+@item friction(mu, normal)
+Friction force from coefficient MU and NORMAL force.  MU is the
+static coefficient for the maximum force before sliding starts, or the
+kinetic coefficient for the force while sliding.
+
+@table @code
+@item mu
+Coefficient of friction, dimensionless
+@item normal
+Normal force, N
+@end table
+
+Returns: Friction force, N
+
+@example
+friction(0.3, 686.4655)  =>  205.93965
+@end example
+
+@item gravforce(m1, m2, dist)
+Attractive force between point masses M1 and M2 separated by DIST.
+
+@table @code
+@item m1
+First mass, kg
+@item m2
+Second mass, kg
+@item dist
+Separation of the centres, m
+@end table
+
+Returns: Force, N
+
+@example
+gravforce(5.972e24, 70, 6.371e6)  =>  687.398139836
+@end example
+
+@item heat(mass, spheat, dtemp)
+Heat needed to change the temperature of MASS by DTEMP, Q = m c dT.
+SPHEAT is about 4186 for water and 897 for aluminium.  This covers heating
+only: a phase change absorbs heat at constant temperature and is not
+modelled here.
+
+@table @code
+@item mass
+Mass, kg
+@item spheat
+Specific heat capacity, J kg^-1 K^-1
+@item dtemp
+Temperature change, K
+@end table
+
+Returns: Heat, J
+
+@example
+heat(2, 4186, 30)  =>  251160
+@end example
+
+@item heisenberg(dx)
+Smallest momentum uncertainty compatible with a position uncertainty
+of DX, from dx dp >= hbar/2 taken at equality.
+
+@table @code
+@item dx
+Position uncertainty, m
+@end table
+
+Returns: Minimum momentum uncertainty, kg m/s
+
+@example
+heisenberg(1e-10)  =>  5.27285908825e-25
+@end example
+
+@item idealgasp(moles, temp, volume)
+Pressure of an ideal gas, from PV = nRT solved for P.
+
+@table @code
+@item moles
+Amount of substance, mol
+@item temp
+Absolute temperature, K
+@item volume
+Volume, m^3
+@end table
+
+Returns: Pressure, Pa
+
+@example
+idealgasp(1, 273.15, 0.0224140)  =>  101324.862325
+@end example
+
+@item idealgasv(moles, temp, pressure)
+Volume of an ideal gas, from PV = nRT solved for V.  One mole at
+standard temperature and pressure occupies about 0.0224 m^3.
+
+@table @code
+@item moles
+Amount of substance, mol
+@item temp
+Absolute temperature, K
+@item pressure
+Pressure, Pa
+@end table
+
+Returns: Volume, m^3
+
+@example
+idealgasv(1, 273.15, 101325)  =>  0.022413969545
+@end example
+
+@item impulse(fmag, secs)
+Impulse delivered by a constant force FMAG acting for SECS, equal to
+the change in momentum it produces.
+
+@table @code
+@item fmag
+Force, N
+@item secs
+Duration, s
+@end table
+
+Returns: Impulse, N s (= kg m/s)
+
+@example
+impulse(50, 0.2)  =>  10.
+@end example
+
+@item inelasticv(m1, v1, m2, v2)
+Velocity of the combined body after a one-dimensional perfectly
+inelastic collision, in which the two bodies stick together.  Momentum is
+conserved; kinetic energy is not.
+
+@table @code
+@item m1
+Mass of the first body, kg
+@item v1
+Initial velocity of the first body, m/s
+@item m2
+Mass of the second body, kg
+@item v2
+Initial velocity of the second body, m/s
+@end table
+
+Returns: Common final velocity, m/s
+
+@example
+inelasticv(2, 5, 3, -2)  =>  0.8
+@end example
+
+@item inertiadisk(mass, radius)
+Moment of inertia of a uniform solid disk or cylinder about its
+symmetry axis, m r^2 / 2.
+
+@table @code
+@item mass
+Mass, kg
+@item radius
+Radius, m
+@end table
+
+Returns: Moment of inertia, kg m^2
+
+@example
+inertiadisk(2, 0.5)  =>  0.25
+@end example
+
+@item inertiahoop(mass, radius)
+Moment of inertia of a hoop or thin-walled cylinder about its
+symmetry axis, m r^2.  All the mass sits at the radius, so this is the
+largest inertia any shape of this radius can have.
+
+@table @code
+@item mass
+Mass, kg
+@item radius
+Radius, m
+@end table
+
+Returns: Moment of inertia, kg m^2
+
+@example
+inertiahoop(2, 0.5)  =>  0.5
+@end example
+
+@item inertiarod(mass, len)
+Moment of inertia of a uniform thin rod of length LEN about an axis
+through its centre, perpendicular to the rod: m L^2 / 12.
+
+@table @code
+@item mass
+Mass, kg
+@item len
+Length, m
+@end table
+
+Returns: Moment of inertia, kg m^2
+
+@example
+inertiarod(2, 1)  =>  0.166666666667
+@end example
+
+@item inertiarodend(mass, len)
+Moment of inertia of a uniform thin rod of length LEN about an axis
+through one end, perpendicular to the rod: m L^2 / 3.  Four times
+@code{inertiarod}, as the parallel-axis theorem requires.
+
+@table @code
+@item mass
+Mass, kg
+@item len
+Length, m
+@end table
+
+Returns: Moment of inertia, kg m^2
+
+@example
+inertiarodend(2, 1)  =>  0.666666666667
+@end example
+
+@item inertiashell(mass, radius)
+Moment of inertia of a thin spherical shell about a diameter,
+2 m r^2 / 3.
+
+@table @code
+@item mass
+Mass, kg
+@item radius
+Radius, m
+@end table
+
+Returns: Moment of inertia, kg m^2
+
+@example
+inertiashell(2, 0.5)  =>  0.333333333333
+@end example
+
+@item inertiasphere(mass, radius)
+Moment of inertia of a uniform solid sphere about a diameter,
+2 m r^2 / 5.
+
+@table @code
+@item mass
+Mass, kg
+@item radius
+Radius, m
+@end table
+
+Returns: Moment of inertia, kg m^2
+
+@example
+inertiasphere(2, 0.5)  =>  0.2
+@end example
+
+@item kepler3(semimajor, period)
+Mass of the central body implied by an orbit of semi-major axis
+SEMIMAJOR and PERIOD: 4 pi^2 a^3 / (G T^2).  Kepler's third law solved the
+other way round from @code{orbitperiod} -- this is how the mass of a star or
+planet is measured from watching something orbit it.
+
+@table @code
+@item semimajor
+Semi-major axis, m
+@item period
+Orbital period, s
+@end table
+
+Returns: Mass of the central body, kg
+
+@example
+kepler3(1.496e11, 31557600)  =>  1.98856989105e30
+@end example
+
+@item kinetic(mass, vel)
+Classical kinetic energy, m v^2 / 2.  Accurate below roughly 0.1c;
+above that use @code{relke}.
+
+@table @code
+@item mass
+Mass, kg
+@item vel
+Speed, m/s
+@end table
+
+Returns: Kinetic energy, J
+
+@example
+kinetic(2, 10)  =>  100
+@end example
+
+@item kinpos(x0, v0, accel, secs)
+Position after SECS of constant ACCEL, starting from X0 at velocity
+V0.  The second kinematic equation, x = x0 + v0 t + a t^2 / 2.
+
+@table @code
+@item x0
+Initial position, m
+@item v0
+Initial velocity, m/s
+@item accel
+Constant acceleration, m/s^2
+@item secs
+Elapsed time, s
+@end table
+
+Returns: Position, m
+
+@example
+kinpos(0, 0, 9.80665, 3)  =>  44.129925
+@end example
+
+@item kinvel(v0, accel, secs)
+Velocity after SECS of constant ACCEL starting from V0.  The first
+kinematic equation, v = v0 + a t.
+
+@table @code
+@item v0
+Initial velocity, m/s
+@item accel
+Constant acceleration, m/s^2
+@item secs
+Elapsed time, s
+@end table
+
+Returns: Velocity, m/s
+
+@example
+kinvel(0, 9.80665, 3)  =>  29.41995
+@end example
+
+@item kinvelpos(v0, accel, dist)
+Speed reached after travelling DIST under constant ACCEL from V0.
+The timeless kinematic equation v^2 = v0^2 + 2 a dx, solved for v -- use it
+when the elapsed time is unknown.  Returns the positive root.
+
+@table @code
+@item v0
+Initial velocity, m/s
+@item accel
+Constant acceleration, m/s^2
+@item dist
+Displacement, m
+@end table
+
+Returns: Speed, m/s
+
+@example
+kinvelpos(0, 9.80665, 10)  =>  14.0047491945
+@end example
+
+@item lensdi(focal, dobj)
+Image distance for an object at DOBJ from a thin lens of focal
+length FOCAL: from 1/f = 1/do + 1/di, so di = f do / (do - f).
+
+Sign convention: FOCAL is positive for a converging lens and negative for a
+diverging one; a positive result is a real image on the far side, a negative
+one a virtual image on the object's side.  An object at the focal point
+gives @code{uinf} -- the rays leave parallel and no image forms.
+
+@table @code
+@item focal
+Focal length, m
+@item dobj
+Object distance from the lens, m
+@end table
+
+Returns: Image distance, m
+
+@example
+lensdi(0.1, 0.3)  =>  0.15
+@end example
+
+@item lensmag(dobj, dimg)
+Magnification of a thin lens, -di/do.  Negative means the image is
+inverted; a magnitude below 1 means it is smaller than the object.  Pair
+with @code{lensdi}: lensmag(0.3, lensdi(0.1, 0.3)).
+
+@table @code
+@item dobj
+Object distance, m
+@item dimg
+Image distance, m
+@end table
+
+Returns: Magnification (negative = inverted)
+
+@example
+lensmag(0.3, 0.15)  =>  -0.5
+@end example
+
+@item magforce(charge, vel, bfield, angle)
+Lorentz magnetic force, q v B sin(theta), where ANGLE is between the
+velocity and the field.  Zero when the charge moves along the field, maximal
+across it.  This force is always perpendicular to the motion, so it does no
+work and only bends the path.
+
+@table @code
+@item charge
+Charge, C
+@item vel
+Speed, m/s
+@item bfield
+Magnetic flux density, T
+@item angle
+Angle between velocity and field, radians
+@end table
+
+Returns: Force, N
+
+@example
+magforce(1.602176634e-19, 1e6, 0.5, pi/2)  =>  8.01088317e-14
+@end example
+
+@item momentum(mass, vel)
+Classical momentum, p = m v.  Above roughly 0.1c use @code{relmomentum}.
+
+@table @code
+@item mass
+Mass, kg
+@item vel
+Velocity, m/s
+@end table
+
+Returns: Momentum, kg m/s
+
+@example
+momentum(2, 10)  =>  20
+@end example
+
+@item ohmi(volts, resist)
+Current through a resistor, I = V / R.
+
+@table @code
+@item volts
+Voltage, V
+@item resist
+Resistance, ohm
+@end table
+
+Returns: Current, A
+
+@example
+ohmi(110, 220)  =>  0.5
+@end example
+
+@item ohmr(volts, current)
+Resistance implied by VOLTS and CURRENT, R = V / I.
+
+@table @code
+@item volts
+Voltage, V
+@item current
+Current, A
+@end table
+
+Returns: Resistance, ohm
+
+@example
+ohmr(110, 0.5)  =>  220.
+@end example
+
+@item ohmv(current, resist)
+Voltage across a resistor, V = I R.
+
+@table @code
+@item current
+Current, A
+@item resist
+Resistance, ohm
+@end table
+
+Returns: Voltage, V
+
+@example
+ohmv(0.5, 220)  =>  110.
+@end example
+
+@item orbitalvel(mass, radius)
+Speed needed for a circular orbit of RADIUS about a body of MASS,
+sqrt(G M / r).  RADIUS is measured from the centre, not the surface.
+
+@table @code
+@item mass
+Mass of the central body, kg
+@item radius
+Orbital radius from the centre, m
+@end table
+
+Returns: Orbital speed, m/s
+
+@example
+orbitalvel(5.972e24, 6.771e6)  =>  7672.49041328
+@end example
+
+@item orbitperiod(mass, semimajor)
+Time for one orbit of semi-major axis SEMIMAJOR about a body of
+MASS, 2 pi sqrt(a^3 / (G M)).  Kepler's third law solved for the period;
+note it does not depend on the orbiting body's own mass.
+
+@table @code
+@item mass
+Mass of the central body, kg
+@item semimajor
+Semi-major axis, m
+@end table
+
+Returns: Orbital period, s
+
+@example
+orbitperiod(1.989e30, 1.496e11)  =>  31554187.7477
+@end example
+
+@item pendulum(len)
+Period of a simple pendulum of length LEN at Earth's surface,
+2 pi sqrt(L/g).  The small-angle approximation: it does not depend on the
+bob's mass, and holds to about 1% below roughly 20 degrees of swing.
+
+@table @code
+@item len
+Pendulum length, m
+@end table
+
+Returns: Period, s
+
+@example
+pendulum(1)  =>  2.00640929259
+@end example
+
+@item photoelectric(freq, workfn)
+Maximum kinetic energy of an electron ejected by light of frequency
+FREQ from a surface of work function WORKFN: h f - phi.
+
+A negative result means FREQ is below the threshold and no electron is
+emitted at all -- the magnitude is how far short the photon falls.  Einstein's
+point was that this depends on frequency, not intensity: brighter light below
+the threshold still ejects nothing.  See @code{photothreshold}.  Work functions are
+usually quoted in eV; multiply by 1.602176634e-19 for WORKFN.
+
+@table @code
+@item freq
+Frequency of the incident light, Hz
+@item workfn
+Work function of the surface, J
+@end table
+
+Returns: Maximum electron kinetic energy, J (negative = below threshold)
+
+@example
+photoelectric(1e15, 7.22e-19)  =>  -5.9392985e-20
+photoelectric(1.2e15, 7.22e-19)  =>  7.3128418e-20
+@end example
+
+@item photonenergy(freq)
+Energy of a photon of frequency FREQ, E = h f.
+
+@table @code
+@item freq
+Frequency, Hz
+@end table
+
+Returns: Photon energy, J
+
+@example
+photonenergy(6e14)  =>  3.97564209e-19
+@end example
+
+@item photonenergywl(wavelen)
+Energy of a photon of wavelength WAVELEN, E = h c / lambda.  Visible
+light runs from about 400 nm (violet) to 700 nm (red); divide the result by
+1.602176634e-19 for electronvolts.
+
+@table @code
+@item wavelen
+Wavelength, m
+@end table
+
+Returns: Photon energy, J
+
+@example
+photonenergywl(500e-9)  =>  3.9728917143e-19
+@end example
+
+@item photothreshold(workfn)
+Lowest frequency that ejects an electron from a surface of work
+function WORKFN, phi / h.  Below this @code{photoelectric} goes negative.
+
+@table @code
+@item workfn
+Work function of the surface, J
+@end table
+
+Returns: Threshold frequency, Hz
+
+@example
+photothreshold(7.22e-19)  =>  1.0896353097e15
+@end example
+
+@item potential(mass, height)
+Potential energy of MASS raised to HEIGHT near Earth's surface,
+m g h.  Valid while HEIGHT is small against Earth's radius.
+
+@table @code
+@item mass
+Mass, kg
+@item height
+Height above the reference level, m
+@end table
+
+Returns: Potential energy, J
+
+@example
+potential(2, 10)  =>  196.133
+@end example
+
+@item power(energy, secs)
+Average rate of energy transfer, ENERGY over SECS.
+
+@table @code
+@item energy
+Energy transferred, J
+@item secs
+Elapsed time, s
+@end table
+
+Returns: Power, W
+
+@example
+power(1000, 4)  =>  250
+@end example
+
+@item projheight(v0, angle)
+Greatest height above the launch point reached by a projectile
+launched at speed V0 and ANGLE above the horizontal.
+
+@table @code
+@item v0
+Launch speed, m/s
+@item angle
+Launch angle above horizontal, radians
+@end table
+
+Returns: Maximum height, m
+
+@example
+projheight(20, pi/4)  =>  10.1971621298
+@end example
+
+@item projrange(v0, angle)
+Horizontal distance travelled by a projectile launched at speed V0
+and ANGLE above the horizontal, landing at its launch height.  Maximal at
+ANGLE = pi/4.
+
+@table @code
+@item v0
+Launch speed, m/s
+@item angle
+Launch angle above horizontal, radians
+@end table
+
+Returns: Range, m
+
+@example
+projrange(20, pi/4)  =>  40.7886485191
+@end example
+
+@item projtime(v0, angle)
+Time a projectile launched at speed V0 and ANGLE above the horizontal
+spends in the air before returning to its launch height.
+
+@table @code
+@item v0
+Launch speed, m/s
+@item angle
+Launch angle above horizontal, radians
+@end table
+
+Returns: Time of flight, s
+
+@example
+projtime(20, pi/4)  =>  2.88419299633
+@end example
+
+@item respar(r1, r2)
+Resistance of R1 and R2 in parallel, R1 R2 / (R1 + R2).  Always
+smaller than either.  Nest for more than two:
+respar(respar(100, 220), 330).
+
+@table @code
+@item r1
+First resistance, ohm
+@item r2
+Second resistance, ohm
+@end table
+
+Returns: Total resistance, ohm
+
+@example
+respar(100, 220)  =>  68.75
+@end example
+
+@item resseries(r1, r2)
+Resistance of R1 and R2 in series, R1 + R2.  Nest for more than
+two: resseries(resseries(100, 220), 330).
+
+@table @code
+@item r1
+First resistance, ohm
+@item r2
+Second resistance, ohm
+@end table
+
+Returns: Total resistance, ohm
+
+@example
+resseries(100, 220)  =>  320
+@end example
+
+@item rotke(inertia, omega)
+Kinetic energy of a body with moment of INERTIA spinning at angular
+velocity OMEGA, I w^2 / 2.  The rotational counterpart of @code{kinetic}.
+
+@table @code
+@item inertia
+Moment of inertia, kg m^2
+@item omega
+Angular velocity, rad/s
+@end table
+
+Returns: Rotational kinetic energy, J
+
+@example
+rotke(0.25, 12.5663706144)  =>  19.7392088023
+@end example
+
+@item snell(n1, angle, n2)
+Angle of the refracted ray crossing from a medium of index N1 into
+one of index N2, arcsin(n1 sin(theta1) / n2).  Angles are from the normal,
+in radians.
+
+Rejected when the ray would be totally internally reflected -- going from
+dense to rare beyond the critical angle, where no refracted ray exists.  See
+@code{criticalangle}.
+
+@table @code
+@item n1
+Refractive index of the incident medium, e.g. 1 for vacuum
+@item angle
+Angle of incidence from the normal, radians
+@item n2
+Refractive index of the transmitting medium, e.g. 1.5 for glass
+@end table
+
+Returns: Angle of refraction from the normal, radians
+
+@example
+snell(1, pi/6, 1.5)  =>  0.339836909454
+@end example
+
+@item springpe(springk, disp)
+Energy stored in a spring of stiffness SPRINGK displaced by DISP
+from equilibrium, k x^2 / 2.
+
+@table @code
+@item springk
+Spring constant, N/m
+@item disp
+Displacement from equilibrium, m
+@end table
+
+Returns: Stored energy, J
+
+@example
+springpe(200, 0.1)  =>  1.
+@end example
+
+@item springperiod(mass, springk)
+Period of a mass on a spring of stiffness SPRINGK,
+2 pi sqrt(m/k).  Unlike @code{pendulum}, this is independent of gravity.
+
+@table @code
+@item mass
+Mass, kg
+@item springk
+Spring constant, N/m
+@end table
+
+Returns: Period, s
+
+@example
+springperiod(0.5, 200)  =>  0.314159265359
+@end example
+
+@item thermexp(len, alpha, dtemp)
+Change in length of an object of length LEN heated by DTEMP,
+dL = L alpha dT.  ALPHA is about 1.2e-5 for steel and 2.3e-5 for aluminium.
+Returns the change, not the new length.
+
+@table @code
+@item len
+Original length, m
+@item alpha
+Coefficient of linear expansion, 1/K
+@item dtemp
+Temperature change, K
+@end table
+
+Returns: Change in length, m
+
+@example
+thermexp(10, 1.2e-5, 50)  =>  6e-3
+@end example
+
+@item torque(fmag, radius, angle)
+Torque from a force of magnitude FMAG applied at RADIUS from the
+axis, where ANGLE is between the lever arm and the force.  Maximal at
+ANGLE = pi/2, zero for a force pointing along the arm.
+
+@table @code
+@item fmag
+Force magnitude, N
+@item radius
+Distance from the axis, m
+@item angle
+Angle between lever arm and force, radians
+@end table
+
+Returns: Torque, N m
+
+@example
+torque(50, 0.3, pi/2)  =>  15.
+@end example
+
+@item visviva(mass, radius, semimajor)
+Orbital speed at RADIUS on any conic orbit of semi-major axis
+SEMIMAJOR about a body of MASS: sqrt(G M (2/r - 1/a)).  Reduces to
+@code{orbitalvel} when RADIUS equals SEMIMAJOR (a circle), and to @code{escapevel} as
+SEMIMAJOR tends to infinity (a parabola).
+
+@table @code
+@item mass
+Mass of the central body, kg
+@item radius
+Current distance from the centre, m
+@item semimajor
+Semi-major axis of the orbit, m
+@end table
+
+Returns: Orbital speed, m/s
+
+@example
+visviva(1.989e30, 1.471e11, 1.496e11)  =>  30290.9383647
+@end example
+
+@item wavespeed(freq, wavelen)
+Propagation speed of a wave, v = f lambda.
+
+@table @code
+@item freq
+Frequency, Hz
+@item wavelen
+Wavelength, m
+@end table
+
+Returns: Wave speed, m/s
+
+@example
+wavespeed(440, 0.78)  =>  343.2
+@end example
+
+@item weight(mass)
+Gravitational force on MASS at Earth's surface, using standard
+gravity.  For another body use @code{gravforce}.
+
+@table @code
+@item mass
+Mass, kg
+@end table
+
+Returns: Weight, N
+
+@example
+weight(70)  =>  686.4655
+@end example
+
+@item work(fmag, dist, angle)
+Work done by a constant force of magnitude FMAG over DIST, where
+ANGLE is between the force and the displacement.  Zero at ANGLE = pi/2, and
+negative beyond it.
+
+@table @code
+@item fmag
+Force magnitude, N
+@item dist
+Displacement, m
+@item angle
+Angle between force and displacement, radians
+@end table
+
+Returns: Work, J
+
+@example
+work(20, 5, 0)  =>  100
+@end example
+
+@end table
+
+@subsection Relativity
+
+@table @code
+
+@item gravredshift(mass, radius)
+Redshift z of light escaping to infinity from RADIUS above a body of
+MASS, 1/sqrt(1 - rs/r) - 1.  The reciprocal of @code{gravtimedilation}, minus one:
+light climbing out of a gravity well loses energy and reddens.  Diverges at
+the horizon, where light cannot escape at all.
+
+Rejected for RADIUS at or inside the horizon.
+
+@table @code
+@item mass
+Mass of the gravitating body, kg
+@item radius
+Emission radius from the centre, m; must exceed the horizon
+@end table
+
+Returns: Redshift z, dimensionless
+
+@example
+gravredshift(5.972e24, 6.371e6)  =>  6.96107819392e-10
+@end example
+
+@item gravtimedilation(mass, radius)
+Rate of a clock at RADIUS from a body of MASS, relative to one
+infinitely far away: sqrt(1 - rs/r), where rs is the Schwarzschild radius.
+Always below 1 -- clocks deeper in a gravity well run slow -- and it falls to
+zero at the horizon.  The effect is tiny for ordinary bodies: about
+0.9999999993 at Earth's surface, which GPS still has to correct for.
+
+Rejected for RADIUS at or inside the horizon.  See @code{schwarzschild}.
+
+@table @code
+@item mass
+Mass of the gravitating body, kg
+@item radius
+Distance from its centre, m; must exceed the horizon
+@end table
+
+Returns: Clock rate as a fraction of the far-away rate, below 1
+
+@example
+gravtimedilation(5.972e24, 6.371e6)  =>  0.999999999304
+@end example
+
+@item lengthcontraction(properlen, beta)
+Length an observer measures for an object of rest length PROPERLEN
+moving at BETA, L0 / gamma.  Contraction is along the direction of motion
+only, and the result is always the smaller.
+
+@table @code
+@item properlen
+Rest length of the object, m
+@item beta
+Speed as a fraction of c, |beta| < 1
+@end table
+
+Returns: Contracted length, m
+
+@example
+lengthcontraction(1, 0.9)  =>  0.435889894353
+@end example
+
+@item lorentz(beta)
+The Lorentz factor gamma = 1 / sqrt(1 - beta^2), where BETA is speed
+as a fraction of the speed of light: pass 0.9 for 0.9c.  Gamma is 1 at rest,
+about 1.005 at 0.1c, and diverges as BETA approaches 1 -- which is why no
+mass reaches c.
+
+Rejected for |BETA| at or above 1; undefended the formula would return a
+complex number.
+
+@table @code
+@item beta
+Speed as a fraction of c, |beta| < 1
+@end table
+
+Returns: Lorentz factor gamma, always at least 1
+
+@example
+lorentz(0.9)  =>  2.29415733871
+lorentz(0.99)  =>  7.08881205007
+@end example
+
+@item massenergy(mass)
+Rest energy of MASS, E = m c^2.  One kilogram is about 9e16 J, some
+21 megatons of TNT.
+
+@table @code
+@item mass
+Rest mass, kg
+@end table
+
+Returns: Rest energy, J
+
+@example
+massenergy(1)  =>  89875517873681764
+@end example
+
+@item reldoppler(freq, beta)
+Frequency observed from a source receding or approaching at BETA,
+f sqrt((1 + beta) / (1 - beta)).  BETA is positive when the source
+*approaches* (blueshift) and negative when it recedes (redshift).
+
+Unlike @code{dopplersound}, only the relative speed enters -- there is no medium
+to move through, so there is no separate source and observer term.
+
+@table @code
+@item freq
+Emitted frequency, Hz
+@item beta
+Approach speed as a fraction of c, |beta| < 1;
+negative when receding
+@end table
+
+Returns: Observed frequency, Hz
+
+@example
+reldoppler(440, 0.5)  =>  762.102355331
+reldoppler(440, -0.5)  =>  254.034118443
+@end example
+
+@item relke(mass, beta)
+Kinetic energy of MASS moving at BETA, (gamma - 1) m c^2.  MASS is
+the rest mass in kg; the result is in joules.  Reduces to @code{kinetic} at low
+speed and diverges as BETA approaches 1.
+
+@table @code
+@item mass
+Rest mass, kg
+@item beta
+Speed as a fraction of c, |beta| < 1
+@end table
+
+Returns: Kinetic energy, J
+
+@example
+relke(1, 0.9)  =>  1.16313061027e17
+relke(1, 1e-6)  =>  44937.7589369
+@end example
+
+@item relmomentum(mass, beta)
+Momentum of MASS moving at BETA, gamma m v.  MASS is the rest mass
+in kg and BETA a fraction of c, but the result is in SI units, kg m/s.
+Exceeds the classical @code{momentum} by the factor gamma.
+
+@table @code
+@item mass
+Rest mass, kg
+@item beta
+Speed as a fraction of c, |beta| < 1
+@end table
+
+Returns: Momentum, kg m/s
+
+@example
+relmomentum(1, 0.9)  =>  618993960.85
+@end example
+
+@item reltotale(mass, beta)
+Total energy of MASS moving at BETA, gamma m c^2 -- rest energy plus
+kinetic energy, so reltotale(m, b) equals massenergy(m) + relke(m, b).
+
+@table @code
+@item mass
+Rest mass, kg
+@item beta
+Speed as a fraction of c, |beta| < 1
+@end table
+
+Returns: Total energy, J
+
+@example
+reltotale(1, 0.9)  =>  2.061885789e17
+@end example
+
+@item schwarzschild(mass)
+Radius at which MASS becomes a black hole, 2 G M / c^2 -- the event
+horizon of a non-rotating body.  About 2954 m for the Sun and 8.9 mm for the
+Earth.
+
+@table @code
+@item mass
+Mass, kg
+@end table
+
+Returns: Schwarzschild radius, m
+
+@example
+schwarzschild(1.989e30)  =>  2954.12655505
+schwarzschild(5.972e24)  =>  8.86980582543e-3
+@end example
+
+@item timedilation(propertime, beta)
+Time elapsed in the observer's frame while PROPERTIME passes on a
+clock moving at BETA, gamma t0.  The moving clock runs slow, so the result
+is always the larger.
+
+@table @code
+@item propertime
+Time on the moving clock, s
+@item beta
+Speed as a fraction of c, |beta| < 1
+@end table
+
+Returns: Time in the observer's frame, s
+
+@example
+timedilation(1, 0.9)  =>  2.29415733871
+@end example
+
+@item twinage(earthtime, beta)
+How much less the travelling twin ages than the stay-at-home twin
+over EARTHTIME at speed BETA: t (1 - 1/gamma).  The traveller's own elapsed
+time is EARTHTIME/gamma, so this is the difference between them.
+
+There is no real paradox: the situation is not symmetric, because only the
+traveller turns around and so changes inertial frame.  This assumes the
+turnaround is brief against the trip.
+
+@table @code
+@item earthtime
+Time elapsed for the stay-at-home twin, any time unit
+@item beta
+Travel speed as a fraction of c, |beta| < 1
+@end table
+
+Returns: Age difference, in the same unit as EARTHTIME
+
+@example
+twinage(10, 0.9)  =>  5.64110105648
+twinage(10, 1e-6)  =>  5e-12
+@end example
+
+@item veladd(beta1, beta2)
+Composition of two collinear velocities, (b1 + b2) / (1 + b1 b2),
+with both given and returned as fractions of c.  The result never reaches 1
+however close the inputs get -- veladd(0.9, 0.9) is 0.994, not 1.8 -- and
+veladd(1, x) would be exactly 1, which is light speed being the same in
+every frame.
+
+@table @code
+@item beta1
+First speed as a fraction of c, |beta| < 1
+@item beta2
+Second speed as a fraction of c, |beta| < 1
+@end table
+
+Returns: Combined speed as a fraction of c
+
+@example
+veladd(0.9, 0.9)  =>  0.994475138122
+veladd(0.5, 0.5)  =>  0.8
+@end example
+
+@end table
+
+@subsection Tax
+
+@table @code
+
+@item aftertax(income, tax)
+Income remaining once TAX is paid.
+
+@table @code
+@item income
+Gross income
+@item tax
+Tax owed
+@end table
+
+Returns: After-tax income
+
+@example
+aftertax(100000, 17000)  =>  83000
+@end example
+
+@item effrate(tax, income)
+TAX as a fraction of INCOME -- the average rate actually paid,
+as opposed to the marginal rate on the last dollar.
+
+@table @code
+@item tax
+Tax owed
+@item income
+Income the tax was computed on
+@end table
+
+Returns: Effective rate as a fraction, e.g. 0.17 for 17%
+
+@example
+effrate(17000, 100000)  =>  0.17
+@end example
+
+@item ficatax(wages, rate, cap)
+Tax at RATE on WAGES up to CAP, and nothing above it.  The shape
+of the Social Security tax: once wages pass the cap the levy stops, so
+this flattens out rather than growing.
+
+@table @code
+@item wages
+Wages subject to the tax
+@item rate
+Rate as a fraction, e.g. 0.062
+@item cap
+Wage cap above which no further tax is due
+@end table
+
+Returns: Tax owed
+
+@example
+ficatax(200000, 0.062, 184500)  =>  11439.
+@end example
+
+@item flattax(income, rate, deduction)
+Tax at a single RATE on INCOME above DEDUCTION.  The structure
+used by the flat-rate states; the deduction floor means a low income
+owes zero rather than a negative tax.
+
+@table @code
+@item income
+Gross income
+@item rate
+Flat rate as a fraction, e.g. 0.0425
+@item deduction
+Amount exempt from tax
+@end table
+
+Returns: Tax owed
+
+@example
+flattax(100000, 0.0425, 15000)  =>  3612.5
+@end example
+
+@item grossup(net, rate)
+Gross amount needed to leave NET after tax at RATE.  Note this is
+the inverse of a FLAT rate: grossing up through a progressive ladder
+needs @code{cmacs-calculator-tax-federal}, since the rate itself moves.
+
+@table @code
+@item net
+Desired after-tax amount
+@item rate
+Tax rate as a fraction
+@end table
+
+Returns: Required gross amount
+
+@example
+grossup(1000, 0.22)  =>  1282.05128205
+@end example
+
+@end table
 
 @node Calculator Charting
 @section Charting

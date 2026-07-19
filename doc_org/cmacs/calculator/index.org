@@ -21,7 +21,9 @@ entry point, the libregnum GPU chart bridge, and the MCP tools.  Enable it with
 =(cmacs-feature-p 'calculator)=.  libregnum is *optional* — the SVG chart tier
 stands alone.
 
-See also [[file:reference.org][the option, API and tool reference]].
+See also [[file:catalog.org][the complete function catalog]] (every calculator, with
+its arguments and worked examples) and [[file:reference.org][the option, API and tool
+reference]].
 
 * Quick start
 
@@ -263,7 +265,8 @@ escapevel(5.972e24, 6.371e6) / 1000          ⇒ 11.1859778919
 
 One registry backs the landing page, completion, ElDoc, this documentation and
 the MCP tool schema, so none of them can drift from the functions actually
-defined.
+defined.  [[file:catalog.org][The function catalog]] documents every one of the 121
+calculators — what it does, the arguments it takes, and a worked example or two.
 
 ** Financial
 
