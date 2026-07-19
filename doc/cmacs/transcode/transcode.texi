@@ -32,6 +32,7 @@ exposed as @code{IS-CMACS-TRANSCODE} and @code{(cmacs-feature-p 'transcode)}.
 @menu
 * Transcode Quick Start::       Transcoding files in three keystrokes.
 * Transcode Queue Buffer::      The control-panel-plus-status buffer.
+* Transcode Recursive::         Recurse into directories, mirroring their tree.
 * Transcode Backends::          Container vs.@: host, and how it is chosen.
 * Transcode Options::           Every tunable @code{defcustom}.
 * Transcode ffmpeg Mapping::    What arguments each option produces.
@@ -77,9 +78,10 @@ Move left/down/up/right.  The mode map is an Evil overriding map, so these
 motion keys work under Doom/Evil as well as in vanilla Emacs (the action
 commands avoid @kbd{h}/@kbd{j}/@kbd{k}/@kbd{l}).
 @item a
-Add a media file or directory (prefix arg: recurse directories).
+Add a media file or directory (prefix arg: recurse directories).  Directories
+match only the current session kind's extensions (@pxref{Transcode Recursive}).
 @item A
-Add a directory recursively.
+Add a directory recursively (current session kind only).
 @item d
 Remove the job on the current line.
 @item K
@@ -106,6 +108,10 @@ Toggle the process-missing filter (only encode files lacking an output).
 @item x
 Toggle the process-existing filter (only re-encode files that already have
 an output).
+@item R
+Toggle recursive directory-mirroring: adding a directory recurses into it and
+mirrors its subdirectory tree under the output directory (@pxref{Transcode
+Recursive}).  Applies to directories added after toggling.
 @item M
 Switch the session between video and audio.
 @item E
@@ -126,6 +132,45 @@ the @code{defcustom} values (@pxref{Transcode Options}) when the session is
 created; the single-key commands override those per session without mutating
 the customs.  Under Evil/Doom the mode map is made an overriding map so the
 single-key bindings win in every state.
+
+@node Transcode Recursive
+@section Recursive Directory-Mirroring
+
+By default, adding a directory queues only the media files @emph{directly}
+inside it.  Turn on recursive mode (@code{cmacs-transcode-recursive}, or the
+@kbd{R} key; a prefix arg to @kbd{a}, or the @kbd{A} key, also recurse) and
+adding a directory walks it recursively, @emph{mirroring each input's relative
+subdirectory tree under the output directory}.  The @file{output/} tree then
+holds only the newly transcoded files, in the same folder layout as the source
+--- ideal for a show whose seasons live in separate folders, or a band whose
+albums do:
+
+@example
+ input                          output/ (audio session, format = mp3)
+ album_01/01-song.flac      ->  album_01/01-song.mp3
+ album_02/01-song.flac      ->  album_02/01-song.mp3
+@end example
+
+Add the @emph{parent} directory (the one containing @file{album_01/},
+@file{album_02/}, @dots{}) with recursion on to reproduce this.  The relative
+subdirectory is taken with respect to the directory you add, so adding a single
+album folder yields a flat @file{output/}.  Nested output directories are
+created automatically, and for a container backend each job bind-mounts its own
+(nested) output directory, so the mirroring works identically on host and
+container backends.  Recursion is applied at @emph{add} time, so toggling
+@kbd{R} affects directories added afterwards.
+
+@subsection Match the session kind
+
+Adding a directory (@kbd{a} or @kbd{A}) only queues files whose extension
+matches the @emph{current session kind} --- video extensions in a video
+session, audio extensions in an audio session.  A music library of @file{.flac}
+therefore appears empty in a @emph{video} session: switch to audio first with
+@kbd{M} (or open the queue with @kbd{M-x cmacs-transcode-audio}).  When an add
+matches nothing, the echo area explains why --- e.g.@: @samp{no video files
+added from @dots{} --- but 42 audio file(s) are here; press M to switch to
+audio}, or @samp{@dots{} N are in subdirs; press R (or A) to recurse} when
+recursion was off --- instead of a silent @samp{added 0}.
 
 @node Transcode Backends
 @section Backends: Container or Host
@@ -260,21 +305,29 @@ disables ffprobe detection.
 @item cmacs-transcode-audio-format
 Output format (default @code{"mp3"}).
 @item cmacs-transcode-audio-quality
-Named quality preset (default @code{"high"}).
+Named quality preset (default @code{"veryhigh"}).  The default @code{veryhigh}
+is the maximum quality each lossy format supports: MP3 320@dmn{kbps},
+Vorbis/OGG @option{-q:a 10} (~500@dmn{kbps}), Opus 256@dmn{kbps}, AAC
+320@dmn{kbps}.
 @item cmacs-transcode-audio-bitrate
 Custom bitrate, e.g.@: @code{"320k"}, overriding the preset.
-@item cmacs-transcode-audio-recursive
-Search added directories recursively.
 @item cmacs-transcode-audio-input-format
 Input extension filter for directory adds, e.g.@: @code{"flac"}.
 @end vtable
 
+@code{cmacs-transcode-recursive} (default @code{nil}) enables recursive
+directory-mirroring for both video and audio sessions (@pxref{Transcode
+Recursive}).  The old audio-only @code{cmacs-transcode-audio-recursive} is
+obsolete but still honoured for audio when set.
+
 @subsection Tunable tables
 
-The codec maps, quality/CRF presets, Vulkan bitrate presets, MP3/Vorbis preset
-maps, and the recognised input-extension lists are all @code{defcustom}s too
-(@code{cmacs-transcode-video-codec-map}, @code{cmacs-transcode-crf-presets},
-@code{cmacs-transcode-mp3-presets}, @code{cmacs-transcode-video-extensions},
+The codec maps, quality/CRF presets, Vulkan bitrate presets, the per-format
+audio bitrate/quality maps (@code{cmacs-transcode-mp3-presets},
+@code{cmacs-transcode-vorbis-presets}, @code{cmacs-transcode-opus-presets},
+@code{cmacs-transcode-aac-presets}), and the recognised input-extension lists
+are all @code{defcustom}s too (@code{cmacs-transcode-video-codec-map},
+@code{cmacs-transcode-crf-presets}, @code{cmacs-transcode-video-extensions},
 @dots{}), so you can add codecs or retune presets without touching the code.
 
 @node Transcode ffmpeg Mapping
@@ -304,6 +357,12 @@ ffmpeg -y -i a.wav -c:a libmp3lame -b:a 320k \
        -vn -map 0:a -map_metadata 0 output/a.mp3
 @end example
 
+OGG/Vorbis uses the @option{-q:a} quality scale (@code{veryhigh} @result{}
+@option{-q:a 10}); Opus and AAC use a @option{-b:a} bitrate from their preset
+tables (@code{veryhigh} @result{} @code{256k} / @code{320k}); @code{copy}
+stream-copies the audio.  With the shipped @code{veryhigh} default, every lossy
+format is encoded at the maximum quality it supports.
+
 @node Transcode Examples
 @section Examples
 
@@ -319,10 +378,10 @@ count), then @kbd{RET}.
 Press @kbd{m} to enable the process-missing filter; already-transcoded outputs
 are marked skipped.
 @item Whole music library to OGG
-@kbd{M-x cmacs-transcode-audio} on the library directory (with
-@code{cmacs-transcode-audio-recursive} on), press @kbd{f} and choose
-@code{ogg}, then @kbd{RET}; the directory tree is preserved under
-@file{output/}.
+@kbd{M-x cmacs-transcode-audio} on the library directory, press @kbd{R} to
+enable recursion, @kbd{f} and choose @code{ogg}, then @kbd{RET}; the album
+folder tree is mirrored under @file{output/} and each OGG is encoded at Vorbis
+@option{-q:a 10} (the format's maximum, the shipped default).
 @item Hardware-accelerated H.265
 Press @kbd{H} to cycle to @code{auto} (VAAPI) or @code{vulkan}, then @kbd{RET}.
 @end table

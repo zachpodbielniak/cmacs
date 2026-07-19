@@ -225,17 +225,32 @@ when a device is present; `force' errors if no device is available."
   "Default audio output format (key in `cmacs-transcode-audio-codec-map')."
   :type 'string :safe #'stringp)
 
-(defcustom cmacs-transcode-audio-quality "high"
-  "Default named audio quality preset (low/medium/high/veryhigh)."
+(defcustom cmacs-transcode-audio-quality "veryhigh"
+  "Default named audio quality preset (low/medium/high/veryhigh).
+The default `veryhigh' is the maximum quality each lossy format supports:
+MP3 320 kbps, Vorbis/OGG -q:a 10 (~500 kbps), Opus 256 kbps, AAC 320 kbps."
   :type 'string :safe #'stringp)
 
 (defcustom cmacs-transcode-audio-bitrate nil
   "Optional custom audio bitrate, e.g. \"320k\", overriding the preset."
   :type '(choice (const :tag "Use preset" nil) string))
 
-(defcustom cmacs-transcode-audio-recursive nil
-  "If non-nil, added directories are searched recursively for audio."
+(defcustom cmacs-transcode-recursive nil
+  "If non-nil, adding a directory searches it recursively for media.
+Each output mirrors the input's relative subdirectory tree under the
+session output directory, so e.g. transcoding a parent of per-album (or
+per-season) folders yields output/album_01/..., output/album_02/..., etc.
+Applies to both video and audio sessions.  Off by default; toggle it per
+session with `R' in the queue buffer."
   :type 'boolean :safe #'booleanp)
+
+(defcustom cmacs-transcode-audio-recursive nil
+  "If non-nil, added directories are searched recursively for audio.
+Obsolete: use the kind-agnostic `cmacs-transcode-recursive' instead.  Still
+honoured for audio sessions when set, for backward compatibility."
+  :type 'boolean :safe #'booleanp)
+(make-obsolete-variable 'cmacs-transcode-audio-recursive
+                        'cmacs-transcode-recursive "cmacs")
 
 (defcustom cmacs-transcode-audio-input-format nil
   "Optional input extension filter for audio directory adds (e.g. \"flac\")."
@@ -281,6 +296,16 @@ when a device is present; `force' errors if no device is available."
 (defcustom cmacs-transcode-vorbis-presets
   '(("low" . 3) ("medium" . 5) ("high" . 7) ("veryhigh" . 10))
   "Named quality preset -> Vorbis quality scale (0-10)."
+  :type '(alist :key-type string :value-type integer))
+
+(defcustom cmacs-transcode-opus-presets
+  '(("low" . 96) ("medium" . 160) ("high" . 224) ("veryhigh" . 256))
+  "Named quality preset -> Opus target bitrate in kbps."
+  :type '(alist :key-type string :value-type integer))
+
+(defcustom cmacs-transcode-aac-presets
+  '(("low" . 128) ("medium" . 192) ("high" . 256) ("veryhigh" . 320))
+  "Named quality preset -> AAC target bitrate in kbps."
   :type '(alist :key-type string :value-type integer))
 
 (defcustom cmacs-transcode-video-extensions
@@ -716,8 +741,12 @@ OPTS is the session options plist and IO a `cmacs-transcode--io' plist."
        ((member fmt '("vorbis" "ogg"))
         (add "-q:a" (number-to-string
                      (or (cdr (assoc quality cmacs-transcode-vorbis-presets)) 7))))
-       ((equal fmt "opus") (add "-b:a" "128k"))
-       ((equal fmt "aac") (add "-b:a" "192k")))
+       ((equal fmt "opus")
+        (add "-b:a" (format "%sk"
+                            (or (cdr (assoc quality cmacs-transcode-opus-presets)) 256))))
+       ((equal fmt "aac")
+        (add "-b:a" (format "%sk"
+                            (or (cdr (assoc quality cmacs-transcode-aac-presets)) 320)))))
       (add "-vn" "-map" "0:a" "-map_metadata" "0")
       (add out))
     args))
@@ -733,6 +762,13 @@ OPTS is the session options plist and IO a `cmacs-transcode--io' plist."
          :process-filter cmacs-transcode-process-filter
          :overwrite cmacs-transcode-overwrite
          :output-dir cmacs-transcode-output-dir
+         ;; Recurse+mirror when enabled (either the kind-agnostic option or,
+         ;; for audio, the obsolete audio-only one for backward compatibility).
+         :recursive (or cmacs-transcode-recursive
+                        (and (eq kind 'audio)
+                             (with-suppressed-warnings
+                                 ((obsolete cmacs-transcode-audio-recursive))
+                               cmacs-transcode-audio-recursive)))
          ;; Read under connection-local so a remote buffer picks up that host's
          ;; default execution mode; the `E' key overrides it per session.
          :execution (with-connection-local-variables cmacs-transcode-execution))
@@ -759,13 +795,13 @@ OPTS is the session options plist and IO a `cmacs-transcode--io' plist."
      (list :audio-format cmacs-transcode-audio-format
            :audio-quality cmacs-transcode-audio-quality
            :audio-bitrate cmacs-transcode-audio-bitrate
-           :recursive cmacs-transcode-audio-recursive
            :input-format cmacs-transcode-audio-input-format))))
 
 (defun cmacs-transcode--reseed (kind)
   "Reseed `cmacs-transcode--options' for KIND, keeping shared session keys."
   (let ((carry '()))
-    (dolist (k '(:parallel :process-filter :overwrite :output-dir :execution))
+    (dolist (k '(:parallel :process-filter :overwrite :output-dir :execution
+                 :recursive))
       (setq carry (plist-put carry k (plist-get cmacs-transcode--options k))))
     (setq cmacs-transcode--options
           (append carry (cmacs-transcode--default-options kind)))))
@@ -1185,12 +1221,13 @@ runs on the job's execution host (remote via TRAMP when the job is remote)."
     (list
      (format " cmacs-transcode — %s" (upcase (symbol-name kind)))
      (if (eq kind 'video)
-         (format " backend:%s  parallel:%s  crf:%s  codec:%s  fmt:%s  hwaccel:%s"
+         (format " backend:%s  parallel:%s  crf:%s  codec:%s  fmt:%s  hwaccel:%s%s"
                  backend (if (> par 1) par "OFF")
                  (or (plist-get o :crf)
                      (format "preset:%s" (plist-get o :quality)))
                  (plist-get o :video-codec) (plist-get o :format)
-                 (cmacs-transcode--hwaccel-label o))
+                 (cmacs-transcode--hwaccel-label o)
+                 (if (plist-get o :recursive) "  recursive" ""))
        (format " backend:%s  parallel:%s  fmt:%s  quality:%s%s"
                backend (if (> par 1) par "OFF")
                (plist-get o :audio-format)
@@ -1222,7 +1259,7 @@ runs on the job's execution host (remote via TRAMP when the job is remote)."
 (defconst cmacs-transcode--hint-lines
   '(" hjkl:move  a:add  A:add-dir  d:del  K:kill  RET:start"
     " p:parallel P:jobs  c:codec Q:crf/bitrate f:format H:hwaccel  o:out"
-    " m:missing x:existing  M:kind  E:exec(local/remote)  L:log  g:refresh  q:quit  ?:help")
+    " m:missing x:existing  R:recursive  M:kind  E:exec(local/remote)  L:log  g:refresh  q:quit  ?:help")
   "Key hint lines shown at the bottom of the queue buffer.")
 
 (defun cmacs-transcode--render (buffer)
@@ -1274,6 +1311,7 @@ runs on the job's execution host (remote via TRAMP when the job is remote)."
   (define-key map (kbd "o") #'cmacs-transcode-set-output-dir)
   (define-key map (kbd "m") #'cmacs-transcode-toggle-missing)
   (define-key map (kbd "x") #'cmacs-transcode-toggle-existing)
+  (define-key map (kbd "R") #'cmacs-transcode-toggle-recursive)
   (define-key map (kbd "M") #'cmacs-transcode-set-kind)
   (define-key map (kbd "E") #'cmacs-transcode-cycle-execution)
   (define-key map (kbd "L") #'cmacs-transcode-show-log)
@@ -1364,9 +1402,33 @@ Interactively, uses the marked files in dired or prompts for a file/dir."
 ;;; Queue-buffer commands
 ;;; ---------------------------------------------------------------------
 
+(defun cmacs-transcode--empty-add-hint (path rec entries)
+  "Return a diagnostic string for why adding directory PATH queued nothing.
+REC is whether the add recursed; ENTRIES is what the current kind matched.
+Diagnoses the two common causes: recursion off with nested files, and the
+wrong session kind (e.g. a directory of .flac in a video session)."
+  (let* ((kind cmacs-transcode--kind)
+         (other (if (eq kind 'video) 'audio 'video))
+         ;; Would recursion under the CURRENT kind have found anything?
+         (rec-n (if rec (length entries)
+                  (ignore-errors (length (cmacs-transcode--expand-input path t)))))
+         ;; Are there files of the OTHER kind here (searched recursively)?
+         (other-n (let ((cmacs-transcode--kind other))
+                    (ignore-errors (length (cmacs-transcode--expand-input path t))))))
+    (concat
+     (format "no %s files added from %s" kind
+             (abbreviate-file-name (directory-file-name path)))
+     (cond ((and (not rec) rec-n (> rec-n 0))
+            (format " — %d are in subdirs; press R (or A) to recurse" rec-n))
+           ((and other-n (> other-n 0))
+            (format " — but %d %s file(s) are here; press M to switch to %s"
+                    other-n other other))
+           (t "")))))
+
 (defun cmacs-transcode-add (path &optional recursive)
   "Add media file or directory PATH to the queue.
-With prefix argument RECURSIVE, search directories recursively."
+Directories recurse when RECURSIVE (the prefix argument) is non-nil or the
+session recursive setting is on (toggle it with `R')."
   (interactive (list (read-file-name "Add media file or directory: " nil nil t)
                      current-prefix-arg))
   (cmacs-transcode--ensure-mode)
@@ -1375,11 +1437,23 @@ With prefix argument RECURSIVE, search directories recursively."
          (before (length cmacs-transcode--jobs)))
     (dolist (e entries) (cmacs-transcode--enqueue-file (car e) (cdr e)))
     (cmacs-transcode--render (current-buffer))
-    (message "cmacs-transcode: added %d file(s)"
-             (- (length cmacs-transcode--jobs) before))))
+    (let ((added (- (length cmacs-transcode--jobs) before)))
+      (cond
+       ((> added 0)
+        (message "cmacs-transcode: added %d %s file(s)%s"
+                 added cmacs-transcode--kind (if rec " (recursive)" "")))
+       ;; A directory that matched nothing: explain why (wrong kind / no recurse).
+       ((and (file-directory-p path) (null entries))
+        (message "cmacs-transcode: %s"
+                 (cmacs-transcode--empty-add-hint path rec entries)))
+       (t (message "cmacs-transcode: added 0 (%d already queued)"
+                   (length entries)))))))
 
 (defun cmacs-transcode-add-directory (dir)
-  "Add all media files under directory DIR (recursively) to the queue."
+  "Add all media files under directory DIR (recursively) to the queue.
+Recurses regardless of the session recursive setting.  Matches only the
+current session kind's extensions, so switch to audio with `M' (or open with
+`\\[cmacs-transcode-audio]') before adding a music-library directory."
   (interactive (list (read-directory-name "Add directory (recursive): ")))
   (cmacs-transcode-add dir t))
 
@@ -1569,6 +1643,21 @@ host); `local' forces the local machine (copying a remote input down);
                        nil 'existing)))
   (cmacs-transcode--recompute-outputs)
   (cmacs-transcode--render (current-buffer)))
+
+(defun cmacs-transcode-toggle-recursive ()
+  "Toggle recursive directory-mirroring for directories added from here on.
+When on, adding a directory searches it recursively and mirrors its
+subdirectory tree under the output directory.  Recursion happens at add
+time, so this only affects directories added after toggling."
+  (interactive)
+  (cmacs-transcode--ensure-mode)
+  (let ((on (not (plist-get cmacs-transcode--options :recursive))))
+    (setq cmacs-transcode--options
+          (plist-put cmacs-transcode--options :recursive on))
+    (cmacs-transcode--render (current-buffer))
+    (message "cmacs-transcode: recursive adds %s%s"
+             (if on "ON" "OFF")
+             (if on " (mirrors subdir tree; affects subsequent adds)" ""))))
 
 (defun cmacs-transcode-set-kind ()
   "Switch the session between video and audio media kinds."

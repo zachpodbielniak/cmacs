@@ -35,7 +35,9 @@ options with the single-key commands, then =RET= to start.  Outputs go to
 =output/= under the current project root by default.  With the shipped
 defaults, a video job reproduces the author's usual =compress_video
 --no-hwaccel --crf 26= invocation (H.265 video, Vorbis audio, Matroska
-container); an audio job produces a 320 kbps MP3.
+container); an audio job produces a 320 kbps MP3.  Lossy audio output defaults
+to the *maximum quality* each format supports (MP3 320 kbps, Vorbis/OGG =-q:a
+10=, Opus 256 kbps, AAC 320 kbps).
 
 : # native equivalent of:  compress_video --no-hwaccel --crf 26 ./*.{mp4,mkv}
 : #   dired: mark the files, M-x cmacs-transcode-video, RET
@@ -68,7 +70,7 @@ drains.
 |----------+------------------------------------+-------------------------------------------------|
 | =h j k l= | (motion)                          | Move left/down/up/right (Doom/Evil-friendly)    |
 | =a=      | =cmacs-transcode-add=              | Add a media file or dir (prefix: recurse)       |
-| =A=      | =cmacs-transcode-add-directory=    | Add a directory recursively                     |
+| =A=      | =cmacs-transcode-add-directory=    | Add a directory recursively (current kind only) |
 | =d=      | =cmacs-transcode-remove=           | Remove the job on the current line              |
 | =K=      | =cmacs-transcode-kill=             | Kill the running job on the line (no retry)     |
 | =RET= | =cmacs-transcode-start=            | Start transcoding the queue                     |
@@ -81,6 +83,7 @@ drains.
 | =o=   | =cmacs-transcode-set-output-dir=   | Set the output directory                        |
 | =m=   | =cmacs-transcode-toggle-missing=   | Only encode files lacking an output             |
 | =x=   | =cmacs-transcode-toggle-existing=  | Only re-encode files that already have output   |
+| =R=   | =cmacs-transcode-toggle-recursive= | Recurse added dirs, mirroring their subdir tree |
 | =M=   | =cmacs-transcode-set-kind=         | Switch the session between video and audio      |
 | =E=   | =cmacs-transcode-cycle-execution=  | Cycle execution: auto → local → remote          |
 | =L=      | =cmacs-transcode-show-log=         | Show =*cmacs-transcode-log*= (full ffmpeg out)  |
@@ -93,6 +96,39 @@ Each session holds a job list plus an options plist *seeded from the
 single-key commands override those per session without mutating the customs.
 Under Evil/Doom the mode map is an overriding map, so the single-key bindings
 win in every state.
+
+* Recursive directory-mirroring
+
+By default, adding a directory queues only the media files *directly* inside it.
+Turn on *recursive* mode (=defcustom cmacs-transcode-recursive=, or =R= in the
+queue buffer; a prefix arg to =a=, or the =A= key, also recurse) and adding a
+directory walks it recursively, *mirroring each input's relative subdirectory
+tree under the output directory*.  The =output/= tree therefore holds only the
+newly transcoded files, in the same folder layout as the source — ideal for a
+show whose seasons live in separate folders, or a band whose albums do:
+
+#+begin_example
+ input                          output/ (audio session, format = mp3)
+ ├── album_01/01-song.flac  →   ├── album_01/01-song.mp3
+ └── album_02/01-song.flac  →   └── album_02/01-song.mp3
+#+end_example
+
+Add the *parent* directory (the one containing =album_01/=, =album_02/=, …) with
+recursive on to reproduce this.  The relative subdir is taken with respect to
+the directory you add, so adding a single album folder yields a flat =output/=.
+Nested output directories are created automatically, and for a container backend
+each job bind-mounts its own (nested) output directory, so the mirroring works
+identically on host and container backends.  Recursion is applied at *add* time,
+so toggling =R= affects directories added afterwards.
+
+*Match the session kind.* Adding a directory (=a=, or =A=) only queues files
+whose extension matches the *current session kind* — video extensions in a video
+session, audio extensions in an audio session.  A music library of =.flac= will
+therefore appear empty in a *video* session: switch to audio first with =M= (or
+open the queue with =M-x cmacs-transcode-audio=).  When an add matches nothing,
+the echo area says why — e.g. /"no video files added from … — but 42 audio
+file(s) are here; press M to switch to audio"/, or /"… N are in subdirs; press R
+(or A) to recurse"/ when recursion was off — rather than a silent "added 0".
 
 * Backends: container or host
 
@@ -176,8 +212,9 @@ the process pool in-process instead.
   configured count), then =RET=.
 - *Only fill in what is missing* — press =m= to enable the process-missing
   filter; already-transcoded outputs are marked skipped.
-- *Whole music library to OGG* — =M-x cmacs-transcode-audio= on the library dir
-  (with =cmacs-transcode-audio-recursive= on), press =f= and choose =ogg=, then
-  =RET=; the tree is preserved under =output/=.
+- *Whole music library to OGG* — =M-x cmacs-transcode-audio= on the library dir,
+  press =R= to enable recursion, =f= and choose =ogg=, then =RET=; the album
+  folder tree is mirrored under =output/= and each OGG is encoded at Vorbis
+  =-q:a 10= (the format's maximum, the shipped default).
 - *Hardware-accelerated H.265* — press =H= to cycle to =auto= (VAAPI) or
   =vulkan=, then =RET=.

@@ -192,6 +192,31 @@
            (args (cmacs-transcode--audio-args opts io)))
       (should (member (cadr case) args)))))
 
+(ert-deftest cmacs-transcode-test-audio-default-quality-veryhigh ()
+  "The shipped default audio quality is `veryhigh' (max per format)."
+  (cmacs-transcode-tests--skip-unless-loaded)
+  (should (equal cmacs-transcode-audio-quality "veryhigh"))
+  (should (equal (plist-get (cmacs-transcode--default-options 'audio)
+                            :audio-quality)
+                 "veryhigh")))
+
+(ert-deftest cmacs-transcode-test-audio-veryhigh-max-bitrate ()
+  "At `veryhigh', every lossy format encodes at its maximum quality."
+  (cmacs-transcode-tests--skip-unless-loaded)
+  (let ((io '(:in "/in/a.flac" :out "/out/a.x" :same nil)))
+    ;; MP3 -> 320k, OGG/Vorbis -> -q:a 10, Opus -> 256k, AAC -> 320k.
+    (dolist (case '(("mp3"    "-b:a" "320k")
+                    ("vorbis" "-q:a" "10")
+                    ("ogg"    "-q:a" "10")
+                    ("opus"   "-b:a" "256k")
+                    ("aac"    "-b:a" "320k")))
+      (let* ((opts (list :audio-format (nth 0 case)
+                         :audio-quality "veryhigh" :overwrite t))
+             (args (cmacs-transcode--audio-args opts io))
+             (tail (member (nth 1 case) args)))
+        (should tail)
+        (should (equal (cadr tail) (nth 2 case)))))))
+
 ;;; ---------------------------------------------------------------------
 ;;; Path mapping + command assembly
 ;;; ---------------------------------------------------------------------
@@ -334,6 +359,83 @@
     (setq-local cmacs-transcode--options '(:audio-format "vorbis" :output-dir "/tmp/tc-out"))
     (should (equal (cmacs-transcode--output-for "/in/song.wav")
                    "/tmp/tc-out/song.ogg"))))
+
+(ert-deftest cmacs-transcode-test-recursive-seed ()
+  "`cmacs-transcode-recursive' seeds :recursive for both kinds; the obsolete
+audio-only var still enables audio for backward compatibility."
+  (cmacs-transcode-tests--skip-unless-loaded)
+  (let ((cmacs-transcode-recursive t))
+    (should (plist-get (cmacs-transcode--default-options 'video) :recursive))
+    (should (plist-get (cmacs-transcode--default-options 'audio) :recursive)))
+  (let ((cmacs-transcode-recursive nil)
+        (cmacs-transcode-audio-recursive t))
+    (should-not (plist-get (cmacs-transcode--default-options 'video) :recursive))
+    (should (plist-get (cmacs-transcode--default-options 'audio) :recursive))))
+
+(ert-deftest cmacs-transcode-test-expand-recursive-mirror ()
+  "Recursive expansion preserves each file's subdir, and `--output-for'
+mirrors it under the output directory (the album/season use case)."
+  (cmacs-transcode-tests--skip-unless-loaded)
+  (let* ((root (make-temp-file "cmacs-tc-rec" t))
+         (a1 (expand-file-name "album_01" root))
+         (a2 (expand-file-name "album_02" root)))
+    (unwind-protect
+        (progn
+          (make-directory a1)
+          (make-directory a2)
+          (with-temp-file (expand-file-name "01-song.flac" a1) (insert "x"))
+          (with-temp-file (expand-file-name "01-song.flac" a2) (insert "x"))
+          (with-temp-buffer
+            (setq-local cmacs-transcode--kind 'audio)
+            (setq-local cmacs-transcode--options
+                        '(:audio-format "mp3" :output-dir "/tmp/tc-out"))
+            (let* ((entries (cmacs-transcode--expand-input root t))
+                   (subs (sort (mapcar #'cdr entries) #'string<)))
+              (should (= (length entries) 2))
+              (should (equal subs '("album_01" "album_02")))
+              (dolist (e entries)
+                (should (equal (cmacs-transcode--output-for (car e) (cdr e))
+                               (expand-file-name (concat (cdr e) "/01-song.mp3")
+                                                 "/tmp/tc-out/"))))
+              ;; Non-recursive add of the same root yields nothing (no direct files).
+              (should-not (cmacs-transcode--expand-input root nil)))))
+      (delete-directory root t))))
+
+(ert-deftest cmacs-transcode-test-empty-add-hint ()
+  "Adding a directory that matches nothing diagnoses kind/recursion."
+  (cmacs-transcode-tests--skip-unless-loaded)
+  (let* ((root (make-temp-file "cmacs-tc-hint" t))
+         (disc (expand-file-name "Album/Disc1" root)))
+    (unwind-protect
+        (progn
+          (make-directory disc t)
+          (with-temp-file (expand-file-name "01-song.flac" disc) (insert "x"))
+          ;; Video session, recursive add: nothing matches, but audio files exist.
+          (with-temp-buffer
+            (setq-local cmacs-transcode--kind 'video)
+            (setq-local cmacs-transcode--options '(:audio-format "mp3"))
+            (let ((hint (cmacs-transcode--empty-add-hint root t nil)))
+              (should (string-match-p "no video files" hint))
+              (should (string-match-p "switch to audio" hint))))
+          ;; Audio session, non-recursive add: files are nested, so hint recursion.
+          (with-temp-buffer
+            (setq-local cmacs-transcode--kind 'audio)
+            (setq-local cmacs-transcode--options '(:audio-format "mp3"))
+            (let ((hint (cmacs-transcode--empty-add-hint root nil nil)))
+              (should (string-match-p "no audio files" hint))
+              (should (string-match-p "recurse" hint)))))
+      (delete-directory root t))))
+
+(ert-deftest cmacs-transcode-test-toggle-recursive ()
+  "`cmacs-transcode-toggle-recursive' flips the session :recursive option."
+  (cmacs-transcode-tests--skip-unless-loaded)
+  (with-temp-buffer
+    (cmacs-transcode-mode)
+    (should-not (plist-get cmacs-transcode--options :recursive))
+    (cmacs-transcode-toggle-recursive)
+    (should (plist-get cmacs-transcode--options :recursive))
+    (cmacs-transcode-toggle-recursive)
+    (should-not (plist-get cmacs-transcode--options :recursive))))
 
 (ert-deftest cmacs-transcode-test-filter-status ()
   "process-missing/existing filters classify jobs by output existence."

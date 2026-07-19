@@ -64,13 +64,17 @@ used verbatim, matching the shell script).
 
 * Audio options
 
-| Option                              | Default  | Meaning                                  |
-|-------------------------------------+----------+------------------------------------------|
-| =cmacs-transcode-audio-format=      | ="mp3"=  | Output format (mp3/ogg/opus/aac/flac)    |
-| =cmacs-transcode-audio-quality=     | ="high"= | Named preset (low/medium/high/veryhigh)  |
-| =cmacs-transcode-audio-bitrate=     | =nil=    | Custom bitrate, e.g. ="320k"=            |
-| =cmacs-transcode-audio-recursive=   | =nil=    | Recurse added directories                |
-| =cmacs-transcode-audio-input-format= | =nil=   | Input extension filter, e.g. ="flac"=    |
+| Option                              | Default      | Meaning                                     |
+|-------------------------------------+--------------+---------------------------------------------|
+| =cmacs-transcode-audio-format=      | ="mp3"=      | Output format (mp3/ogg/opus/aac/flac)       |
+| =cmacs-transcode-audio-quality=     | ="veryhigh"= | Named preset; =veryhigh= = each format's max |
+| =cmacs-transcode-audio-bitrate=     | =nil=        | Custom bitrate, e.g. ="320k"=, overriding the preset |
+| =cmacs-transcode-audio-input-format= | =nil=       | Input extension filter, e.g. ="flac"=       |
+
+The kind-agnostic =cmacs-transcode-recursive= (default =nil=) controls recursive
+directory-mirroring for both video and audio sessions (see the guide).  The
+old audio-only =cmacs-transcode-audio-recursive= is obsolete but still honoured
+for audio when set.
 
 * Tunable tables
 
@@ -87,7 +91,12 @@ These are =defcustom=s too, so you can add codecs or retune presets:
   =veryhigh 20M=.
 - =cmacs-transcode-mp3-presets= — =low 128=, =medium 192=, =high 320=,
   =veryhigh 320= (kbps).
-- =cmacs-transcode-vorbis-presets= — =low 3=, =medium 5=, =high 7=, =veryhigh 10=.
+- =cmacs-transcode-vorbis-presets= — =low 3=, =medium 5=, =high 7=, =veryhigh 10=
+  (=-q:a= scale; =veryhigh= ≈ 500 kbps, the maximum).
+- =cmacs-transcode-opus-presets= — =low 96=, =medium 160=, =high 224=,
+  =veryhigh 256= (kbps).
+- =cmacs-transcode-aac-presets= — =low 128=, =medium 192=, =high 256=,
+  =veryhigh 320= (kbps).
 - =cmacs-transcode-video-extensions= / =cmacs-transcode-audio-extensions= — the
   recognised input file extensions.
 
@@ -126,8 +135,10 @@ passed into the container and, for Vulkan, the vendor variable
 : ffmpeg -y -i a.wav -c:a libmp3lame -b:a 320k \
 :        -vn -map 0:a -map_metadata 0 output/a.mp3
 
-OGG/Vorbis uses the =-q:a= quality scale; opus/aac use a default bitrate;
-=copy= streams-copies the audio.
+OGG/Vorbis uses the =-q:a= quality scale (=veryhigh= ⇒ =-q:a 10=); opus and aac
+use a =-b:a= bitrate from their preset tables (=veryhigh= ⇒ =256k= / =320k=);
+=copy= streams-copies the audio.  With the shipped =veryhigh= default, every
+lossy format is encoded at the maximum quality it supports.
 
 * Elisp entry points
 
