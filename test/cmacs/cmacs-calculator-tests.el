@@ -26,6 +26,7 @@
 (require 'cmacs-calculator-tax-data nil t)
 (require 'cmacs-calculator-chart nil t)
 (require 'cmacs-calculator-menu nil t)
+(require 'cmacs-calculator-sheet nil t)
 
 (defmacro cmacs-calculator-tests--skip-unless-loaded ()
   "Skip the test unless `cmacs-calculator' loaded."
@@ -772,6 +773,100 @@ both generated from these -- from drifting away from the code."
   (should (commandp 'cmacs-calculator-tests--menu-cmd))
   (cmacs-calculator-menu--invoke 'cmacs-calculator-tests--menu-cmd)
   (should cmacs-calculator-tests--menu-cmd-called))
+
+
+;;; Built-in catalog coverage
+;;
+;; The built-ins catalog (doc_org/cmacs/calculator/builtins.org and its texi
+;; twin, generated from admin/cmacs-calc-builtins-catalog.el) and the sheet
+;; completion vocabulary both enumerate every calcFunc-* GNU Calc defines.
+;; Calc changes when upstream Emacs is merged, so these tests pin the two
+;; enumerations together: when a merge adds or removes a built-in, the
+;; set-equality test fails and names the drift -- regenerate with
+;; cmacs-calc-builtins-completion-list / cmacs-calc-builtins-generate.
+
+(defun cmacs-calculator-tests--calc-builtin-names ()
+  "Every function name defined by GNU Calc itself, as a sorted list.
+Filters by `symbol-file' so the cmacs calculator families (defined in
+cmacs-calculator-*.el) never leak in, no matter what has been loaded."
+  (require 'calc-ext)
+  (calc-load-everything)
+  (let (names)
+    (mapatoms
+     (lambda (s)
+       (let ((n (symbol-name s)))
+         (when (and (fboundp s) (string-prefix-p "calcFunc-" n)
+                    (let ((file (symbol-file s 'defun)))
+                      (and file
+                           (string-prefix-p "calc"
+                                            (file-name-base file)))))
+           (push (substring n 9) names)))))
+    (sort names #'string<)))
+
+(ert-deftest cmacs-calculator-tests-builtins-documented ()
+  "Every Calc built-in is in the sheet vocabulary, and nothing more.
+A failure here means an upstream merge changed Calc's function set:
+regenerate `cmacs-calculator-sheet--calc-functions' and the built-ins
+catalog from admin/cmacs-calc-builtins-catalog.el."
+  (skip-unless (featurep 'cmacs-calculator-sheet))
+  (let ((live (cmacs-calculator-tests--calc-builtin-names))
+        (documented (sort (copy-sequence
+                           cmacs-calculator-sheet--calc-functions)
+                          #'string<)))
+    (should (equal (cl-set-difference live documented :test #'equal) nil))
+    (should (equal (cl-set-difference documented live :test #'equal) nil))))
+
+(ert-deftest cmacs-calculator-tests-builtins-vocabulary-shape ()
+  "The sheet vocabulary is sorted and duplicate-free."
+  (skip-unless (featurep 'cmacs-calculator-sheet))
+  (let ((names cmacs-calculator-sheet--calc-functions))
+    (should (equal names (sort (copy-sequence names) #'string<)))
+    (should (equal (length names) (length (delete-dups
+                                           (copy-sequence names)))))))
+
+(ert-deftest cmacs-calculator-tests-builtins-examples-spot ()
+  "A dozen catalog examples spanning the built-in eval classes.
+Each triple is (EXPR PATH EXPECTED); num compares as float, sym as the
+exact result string.  These are frozen copies of catalog examples, so a
+Calc behavior change surfaces here even without regenerating the docs."
+  (cmacs-calculator-tests--skip-unless-loaded)
+  (dolist (case '(("sqrt(2)"                        num 1.41421356237)
+                  ("sin(pi/2)"                      num 1.0)
+                  ("fact(10)"                       num 3628800)
+                  ("gcd(462, 1071)"                 num 21)
+                  ("i^2"                            num -1)
+                  ("1/inf"                          num 0)
+                  ("utpn(2, 2, 1)"                  num 0.5)
+                  ("pmt(0.005, 360, 300000)"        num 1798.65157546)
+                  ("det([[1, 2], [3, 4]])"          num -2)
+                  ("unixtime(date(2026, 1, 1), 0)"  num 1767225600)
+                  ("deriv(x^3 + sin(x), x)"         sym "3 x^2 + cos(x)")
+                  ("integ(x^2, x)"                  sym "x^3 / 3")
+                  ("solve(x^2 - 4 = 0, x)"          sym "x = 2")
+                  ("map(sqrt, [1, 4, 9])"           sym "[1, 2, 3]")
+                  ("rewrite(a + a + b, [x + x := 2 x])" sym "2 a + b")))
+    (pcase-let ((`(,expr ,path ,want) case))
+      (if (eq path 'sym)
+          (should (equal (cmacs-calculator-eval-symbolic expr) want))
+        (should (cmacs-calculator-tests--close
+                 (string-to-number (cmacs-calculator-eval expr))
+                 (float want)))))))
+
+(ert-deftest cmacs-calculator-tests-builtins-rewrite-rule-syntax ()
+  "Rewrite-rule pattern syntax passes validation on both paths.
+`:=' and `::' parse to calcFunc-assign / calcFunc-condition -- pattern
+heads, not functions -- and pattern variables inside a rule are binders.
+Regression test for the validator exemption; a plain unknown function
+or unbound variable must still be rejected."
+  (cmacs-calculator-tests--skip-unless-loaded)
+  (should (equal (cmacs-calculator-eval "rewrite(2 + 3, [])") "5"))
+  (should (equal (cmacs-calculator-eval-symbolic
+                  "rewrite(a + a + b, [x + x := 2 x])")
+                 "2 a + b"))
+  (should-error (cmacs-calculator-eval "nosuchfn(3)")
+                :type 'cmacs-calculator-unknown-function)
+  (should-error (cmacs-calculator-eval "q + 1")
+                :type 'cmacs-calculator-unbound-variable))
 
 (provide 'cmacs-calculator-tests)
 ;;; cmacs-calculator-tests.el ends here
