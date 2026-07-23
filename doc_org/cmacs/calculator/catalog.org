@@ -5,7 +5,8 @@
 
 This is the complete reference to every named calculator, generated from
 the registry that also backs the landing page, completion and the MCP
-tools — so it cannot drift from the functions actually defined.  Read
+tools — so it cannot drift from the functions actually defined.  For the
+GNU Calc built-ins these compose with, see [[file:builtins.org][the built-ins catalog]].  Read
 [[file:index.org][the guide]] first for the corrected semantics, and see
 [[file:reference.org][the option & API reference]] for the surrounding machinery.
 

@@ -22,8 +22,10 @@ entry point, the libregnum GPU chart bridge, and the MCP tools.  Enable it with
 stands alone.
 
 See also [[file:catalog.org][the complete function catalog]] (every calculator, with
-its arguments and worked examples) and [[file:reference.org][the option, API and tool
-reference]].
+its arguments and worked examples), [[file:builtins.org][the GNU Calc built-ins catalog]]
+(all 415 functions Calc itself provides, same treatment),
+[[file:constants.org][the constants reference]] (=pi=, =e=, =i= and the CODATA
+physical constants), and [[file:reference.org][the option, API and tool reference]].
 
 * Quick start
 
@@ -267,6 +269,8 @@ One registry backs the landing page, completion, ElDoc, this documentation and
 the MCP tool schema, so none of them can drift from the functions actually
 defined.  [[file:catalog.org][The function catalog]] documents every one of the 121
 calculators — what it does, the arguments it takes, and a worked example or two.
+The 415 GNU Calc built-ins they compose with have [[file:builtins.org][a catalog of their own]],
+and the constants both draw on are in [[file:constants.org][the constants reference]].
 
 ** Financial
 

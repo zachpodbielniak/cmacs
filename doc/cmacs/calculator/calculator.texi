@@ -15,8 +15,9 @@
 
 @code{cmacs-calculator} is a @emph{calculator you can actually use}: a desktop
 calculator with correct precedence, 121 named calculators across finance,
-physics, relativity and tax, a full computer-algebra system, unit conversion
-with CODATA constants, and charts.  It is reachable from a sheet buffer, from
+physics, relativity and tax, every GNU Calc built-in function
+(@pxref{Calculator Builtins}), a full computer-algebra system, unit conversion
+with CODATA constants (@pxref{Calculator Constants}), and charts.  It is reachable from a sheet buffer, from
 any major mode inline, from a terminal REPL (@code{emacs --calc}), and from an
 AI agent over MCP.
 
@@ -38,6 +39,8 @@ is @emph{optional} --- the SVG chart tier stands alone.
 * Calculator Surfaces::         Sheet, landing page, inline, CLI, MCP.
 * Calculator Families::         Financial, physics, relativity, units, CAS.
 * Calculator Catalog::          Every calculator, with its args and examples.
+* Calculator Builtins::         Every GNU Calc built-in the wrapper exposes.
+* Calculator Constants::        pi, e, i and the CODATA physical constants.
 * Calculator Charting::         The SVG and libregnum tiers.
 * Calculator Tax::              Data-driven tax, and its limits.
 * Calculator Options::          Every defcustom knob and the API.
@@ -332,7 +335,10 @@ escapevel(5.972e24, 6.371e6) / 1000          @result{} 11.1859778919
 One registry backs the landing page, completion, ElDoc, this documentation and
 the MCP tool schema, so none of them can drift from the functions actually
 defined.  @ref{Calculator Catalog} documents every one of the 121 calculators
---- what it does, the arguments it takes, and a worked example or two.
+--- what it does, the arguments it takes, and a worked example or two.  The
+415 GNU Calc built-ins they compose with have a catalog of their own
+(@pxref{Calculator Builtins}), and the constants both draw on are in
+@ref{Calculator Constants}.
 
 @subsection Financial
 
@@ -454,7 +460,8 @@ taylor(sin(x), x, 5)                         @result{} x - x^3 / 6 + x^5 / 120
 
 This is the complete reference to every named calculator, generated from the
 registry that also backs the landing page, completion and the MCP tools, so it
-cannot drift from the functions actually defined.  See @ref{Calculator
+cannot drift from the functions actually defined.  For the GNU Calc built-ins
+these compose with, see @ref{Calculator Builtins}.  See @ref{Calculator
 Semantics} for the corrected evaluation rules and @ref{Calculator Options} for
 the surrounding machinery.
 
@@ -2760,6 +2767,10 @@ grossup(1000, 0.22)  =>  1282.05128205
 @end example
 
 @end table
+
+@include calculator/builtins.texi
+
+@include calculator/constants.texi
 
 @node Calculator Charting
 @section Charting

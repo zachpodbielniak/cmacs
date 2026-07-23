@@ -7,7 +7,9 @@ This is the reference companion to [[file:index.org][the CMacs Calculator guide]
 corrected semantics you should read first.  Every knob here is a =defcustom= in
 the =cmacs-calculator= group (=M-x customize-group RET cmacs-calculator=).  For a
 per-function reference — every calculator with its arguments and worked
-examples — see [[file:catalog.org][the function catalog]].
+examples — see [[file:catalog.org][the function catalog]]; the GNU Calc built-ins have
+[[file:builtins.org][their own catalog]] and the constants
+[[file:constants.org][their own reference]].
 
 * Engine options
 

@@ -1,0 +1,150 @@
+#+TITLE: CMacs Calculator — Constants
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:2 num:nil
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+Two kinds of constants are available in calculator expressions.  The
+eight *symbolic constants* below are bare names the validator accepts
+without declaration; they stay exact symbols until numeric evaluation
+folds them (the engine wraps every numeric evaluation in =evalv()=, so
+a plain =pi= already prints as a float).  The *physical constants* are
+entries in GNU Calc's units table: they are units, not numbers, and
+keep their dimensions through arithmetic.  Every example is real
+output from the engine.
+
+* Symbolic constants (8)
+
+** =pi=
+The circle constant, the ratio of a circle's circumference to its
+diameter.  Kept exact in symbolic results; folded to a 12-digit float
+by numeric evaluation.  The engine's corrected default is radians, so
+=pi= is the natural argument for trigonometry.
+
+Value :: 3.14159265359
+
+: pi  ⇒  3.14159265359
+: sin(pi/2)  ⇒  1.
+
+** =e=
+Euler's number, the base of the natural logarithm.  Note the collision
+with the units table: a bare =e= in an expression is always Euler's
+number, while the /elementary charge/ is the unit =ech=.
+
+Value :: 2.71828182846
+
+: e  ⇒  2.71828182846
+: ln(e^2)  ⇒  2
+: e^(i*pi)  ⇒  -1.
+
+** =i=
+The imaginary unit, sqrt(-1).  Complex results print in Calc's
+rectangular notation =(re, im)=; =re=, =im=, =conj=, =arg=, =polar=
+and =rect= take them apart and convert them.
+
+Value :: (0, 1)
+
+: i^2  ⇒  -1
+: (2 + 3 i) * (2 - 3 i)  ⇒  13
+
+** =phi=
+The golden ratio, (1 + sqrt(5))/2, satisfying phi^2 = phi + 1.
+
+Value :: 1.61803398875
+
+: phi  ⇒  1.61803398875
+: phi^2 - phi  ⇒  1.
+
+** =gamma=
+The Euler--Mascheroni constant, the limit of the difference between
+the harmonic series and the natural logarithm.
+
+Value :: 0.577215664902
+
+: gamma  ⇒  0.577215664902
+: exp(gamma)  ⇒  1.78107241799
+
+** =inf=
+Positive infinity.  Arithmetic propagates it the way limits do:
+finite values are absorbed, and indeterminate combinations collapse
+to =nan=.  Negate it for negative infinity.
+
+Value :: inf
+
+: 1/inf  ⇒  0
+: inf + inf  ⇒  inf
+: inf - inf  ⇒  nan
+
+** =uinf=
+Unsigned (directionless) infinity: infinite magnitude with unknown
+sign or direction, as in a pole of a function.  =abs= of any infinity
+is a plain =inf=.
+
+Value :: uinf
+
+: uinf + 5  ⇒  uinf
+: abs(uinf)  ⇒  inf
+
+** =nan=
+Not-a-number, the result of an indeterminate operation.  It absorbs
+every operation it touches, including comparisons like =max=.
+
+Value :: nan
+
+: nan + 1  ⇒  nan
+: max(nan, 5)  ⇒  nan
+
+* Physical constants (CODATA)
+
+GNU Calc's units table carries the CODATA physical constants, and the
+calculator resolves any unit name in an expression, so =c=, =G=, =h=
+and friends are all available -- as /units with dimensions/, never as
+bare numbers (see the units section of [[file:index.org][the guide]]).  =2 c= stays =2 c=
+until you convert it; conversion is what produces digits:
+
+- =cmacs-calculator-convert-units= :: convert an expression to named
+  units -- =("1 c" "m/s")= ⇒ =299792458=
+- =cmacs-calculator-to-base-units= :: reduce to base SI --
+  ="1 c"= ⇒ =299792458 m / s=
+
+Interactively the same pair is =M-x cmacs-calculator-convert= (empty
+target units mean base SI), and MCP exposes it as
+=calc_convert_units=.
+
+Two naming traps.  First, =e= in an expression is Euler's number, not
+the elementary charge -- use =ech=.  Second, =h= is the /Planck
+constant/, not the hour (that is =hr=): =km/h= silently means
+kilometres per Planck constant.
+
+| Unit    | Value                          | Constant                        |
+|---------+--------------------------------+---------------------------------|
+| =c=     | 299792458 m/s                  | Speed of light                  |
+| =h=     | 6.62607015e-34 J s             | Planck constant                 |
+| =hbar=  | h / (2 pi)                     | Reduced Planck constant         |
+| =ech=   | 1.602176634e-19 C              | Elementary charge               |
+| =k=     | 1.380649e-23 J/K               | Boltzmann constant              |
+| =Nav=   | 6.02214076e23 / mol            | Avogadro constant               |
+| =eps0=  | ech^2 / (2 alpha h c)          | Permittivity of vacuum          |
+| =mu0=   | 1 / (eps0 c^2)                 | Permeability of vacuum          |
+| =sigma= | 2 pi^5 k^4 / (15 h^3 c^2)      | Stefan--Boltzmann constant      |
+| =alpha= | 7.2973525643e-3                | Fine structure constant         |
+| =Ryd=   | 10973731.568157 /m             | Rydberg constant                |
+| =me=    | 9.1093837139e-31 kg            | Electron rest mass              |
+| =mp=    | 1.67262192595e-27 kg           | Proton rest mass                |
+| =mn=    | 1.67492750056e-27 kg           | Neutron rest mass               |
+| =mmu=   | 1.883531627e-28 kg             | Muon rest mass                  |
+| =muB=   | 9.2740100657e-24 J/T           | Bohr magneton                   |
+| =muN=   | 5.0507837393e-27 J/T           | Nuclear magneton                |
+| =mue=   | -9.2847646917e-24 J/T          | Electron magnetic moment        |
+| =mup=   | 1.41060679545e-26 J/T          | Proton magnetic moment          |
+| =G=     | 6.67430e-11 m^3/(kg s^2)       | Gravitational constant          |
+| =ga=    | 9.80665 m/s^2                  | Standard gravity                |
+| =R0=    | Nav k                          | Molar gas constant              |
+| =V0=    | R0 273.15 K / 10^5 Pa          | Standard molar volume           |
+| =u=     | 1.66053906892e-27 kg           | Unified atomic mass unit        |
+| =atm=   | 101325 Pa                      | Standard atmosphere             |
+
+Derived entries (=hbar=, =eps0=, =mu0=, =sigma=, =R0=, =V0=) are
+stored as formulas over the exact defining constants and expand on
+conversion.  The physics calculator family deliberately does /not/
+read this table -- it carries its own private numeric constants so
+=lorentz(0.5)= works without the units machinery; see [[file:index.org][the guide]].
