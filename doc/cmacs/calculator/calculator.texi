@@ -232,6 +232,12 @@ must not cost you the other forty.
 one sheet's variables never leak into another sheet or into the REPL.  Files
 ending @file{.calc} open in @code{cmacs-calculator-sheet-mode} automatically.
 
+With @option{--with-cmacs-lsp} compiled in, sheets also get LSP support:
+the in-binary gnucalc server (@code{emacs --cmacs-lsp gnucalc}) serves
+completion, hover docs and signature help for every built-in, cmacs
+calculator, constant and unit --- eglot auto-starts in cmacs, and
+external editors can point at the same command.  @xref{CMacs LSP}.
+
 @subsection The Landing Page
 
 @kbd{M-x cmacs-calculator} renders @file{*cmacs-calculator*}: every registered

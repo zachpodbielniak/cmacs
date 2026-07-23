@@ -51,6 +51,18 @@ Several small hunks, all in =main()= / its init path:
 - *=usage_message= entries* (gated, =/* CMACS: ... */=-marked): one
   line each for =--bacon= and =--crispy= so =emacs --help= documents
   the batch entry points.
+- *=--cmacs-lsp= entry* (=HAVE_CMACS_LSP=): identical shape to the
+  =--bacon= scan, directly below the =--crispy= one (also matches the
+  =--cmacs-lsp=LANG= form).  Calls =cmacs_lsp_main= to run the
+  compiled-in LSP language server for LANG over stdio without any
+  Emacs initialization; never returns.  Comes with its own
+  =usage_message= entry, plus one more hunk in the =--help= handler: a
+  =cmacs_lsp_print_help (stdout)= call between the =usage_message=
+  loop and =exit (0)=, appending the registry-driven list of
+  compiled-in language servers (the string content lives in
+  =cmacs/lsp/cmacs-lsp-cli.c=, keeping the upstream diff to three
+  lines).  The include hunk is =cmacs-lsp-cli.h=, next to the other
+  guarded cmacs includes.
 - *=--gowl= early start* (=HAVE_CMACS_GOWL=): create + configure the
   =GowlCompositor= (incl. the =evaluate-gowl-config-with-cmacs= /
   =evaluate-c-config-with-cmacs= gates) and start it before display init,

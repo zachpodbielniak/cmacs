@@ -1,0 +1,102 @@
+@c lsp.texi --- master file for the CMacs LSP docs
+@c Copyright (C) 2026 Zach Podbielniak
+@c SPDX-License-Identifier: AGPL-3.0-or-later
+
+@node CMacs LSP
+@chapter CMacs LSP: In-Binary Language Servers
+
+@cindex lsp
+@cindex language server
+@cindex eglot
+@cindex gnucalc
+
+@code{--with-cmacs-lsp} compiles LSP language servers @emph{into the
+emacs binary itself}.  @code{emacs --cmacs-lsp LANG} speaks
+Content-Length-framed JSON-RPC over stdio, with no editor and @emph{no
+Lisp VM} --- the same never-return early-@code{main()} model as
+@option{--bacon} / @option{--crispy}: the argv scan dispatches into pure
+C/GLib server code before any Emacs initialization, so startup is
+instant and nothing display- or Lisp-related can interfere with the
+protocol stream (stdout belongs to LSP alone; logs go to stderr).
+
+Clients spawn the server as a subprocess call back to the same binary
+they run in (the @file{/proc/self/exe} model); inside cmacs that is
+@code{(expand-file-name invocation-name invocation-directory)}, so
+client and server can never disagree about which language data was
+compiled in.  External editors point their LSP client at the same
+command, e.g.@: @code{emacs --cmacs-lsp gnucalc} as the @code{cmd} of an
+nvim lspconfig server.
+
+@code{emacs --cmacs-lsp} with no (or an unknown) language lists the
+compiled-in servers on stderr and exits 1; @code{emacs --help} appends
+the same table, auto-populated from the registry.
+
+@section Architecture
+
+The framework lives in @file{cmacs/lsp/}: @file{cmacs-lsp-cli.c} (the
+argv entry @code{cmacs_lsp_main}, never returns, plus the @option{--help}
+section printer), @file{cmacs-lsp-registry.c} (the language table ---
+one @code{#ifdef}-guarded entry per server), @file{cmacs-lsp-io.c}
+(framing + JSON senders, a port of bacon's language-server transport),
+@file{cmacs-lsp-server.c} (the generic blocking dispatch loop:
+lifecycle, @code{-32002} before @code{initialized}, full-sync document
+store), and @file{cmacs-lsp-document.c} (documents, line access, and
+UTF-16-to-byte column conversion).  Language
+behavior sits behind a @code{CmacsLspServerOps} vtable, so every server
+shares one protocol implementation.
+
+Adding a server is one backend file implementing the vtable, one
+guarded registry entry, one configure conditional, and the git-tracked
+@file{src/} symlink; @option{--help}, the bare-invocation listing and
+the eglot client pick it up automatically.  See
+@file{doc_org/cmacs/lsp.org} for the step-by-step recipe.
+
+@section The gnucalc server
+
+Serves @file{.calc} calculator sheets
+(@pxref{CMacs Calculator}).  The line model mirrors the sheet: one
+expression per line, @code{#} comments, @code{NAME := EXPR} sheet-local
+bindings, and the sheet's @code{=>} result annotations are stripped
+before analysis (and reported as comment tokens).
+
+It provides completion (all 415 Calc built-ins, every registered cmacs
+calculator, the symbolic constants, 165 Calc units, and the sheet's
+@code{:=} variables --- each with signature detail and markdown docs),
+hover (catalog documentation with per-argument docs and verified
+examples), signature help with active-parameter tracking, definition
+and document symbols for @code{:=} bindings, semantic tokens, and
+lexical diagnostics: unbalanced delimiters (error) and unknown call
+heads (warning, code @code{unknown-function}; single-letter heads are
+exempt, since CAS usage writes @code{deriv(f(x), x)}).  The
+authoritative validator remains the Elisp walker inside cmacs --- it
+needs the Lisp VM this process never starts.
+
+@section Inside cmacs: eglot
+
+With the feature compiled in, opening a @file{.calc} file auto-starts
+eglot against @code{<this-binary> --cmacs-lsp gnucalc}; disable with
+@code{(setq cmacs-lsp-auto-start nil)}.  While eglot manages a sheet,
+the native flymake backend stays authoritative
+(@code{eglot-stay-out-of}), the native capf yields to the server's
+richer vocabulary, and eldoc composes both sources.  The generic client
+half is @file{lisp/cmacs/cmacs-lsp.el}
+(@code{cmacs-lsp-register-eglot}, @code{cmacs-lsp-ensure}).
+
+@section The generated data table
+
+@file{cmacs/lsp/cmacs-lsp-gnucalc-data.h} is @emph{generated} by
+@file{admin/cmacs-calc-builtins-catalog.el} from the built-ins catalog,
+the live calculator registry, the constants whitelist and Calc's units
+table.  Regenerate after any catalog/registry/Calc change:
+
+@example
+src/emacs -Q -batch -L lisp/cmacs -L admin \
+  -l cmacs-calc-builtins-catalog -f cmacs-calc-builtins-generate-lsp-data
+@end example
+
+The ERT test @code{cmacs-lsp-tests-gnucalc-data-in-sync} byte-compares a
+fresh regeneration against the committed header, so drift fails
+@code{make -C test check-cmacs}.  The end-to-end suite
+(@file{test/cmacs/cmacs-lsp-tests.el}) spawns the running binary as a
+real server and drives framed JSON-RPC through the full feature set,
+headlessly.

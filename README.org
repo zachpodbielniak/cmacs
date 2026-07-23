@@ -432,6 +432,7 @@ cd cmacs
   --with-cmacs-transcode \
   --with-cmacs-transcribe \
   --with-cmacs-calculator \
+  --with-cmacs-lsp \
   --enable-cmacs-cpatch \
   --enable-cmacs-deps-debug   # in-house deps -O0 -g3 (DWARF): gdb + runtime cintrospection
 make -j$(nproc)
@@ -555,6 +556,7 @@ Requires =autoconf= (>= 2.65) and =automake=.
   --with-cmacs-transcode \
   --with-cmacs-transcribe \
   --with-cmacs-calculator \
+  --with-cmacs-lsp \
   --enable-cmacs-cpatch \
   --enable-cmacs-deps-debug   # in-house deps -O0 -g3 (DWARF): gdb + runtime cintrospection
 #+end_src
@@ -615,6 +617,7 @@ Module flags:
 
 - =--with-cmacs-vidstudio= — Video editor on libregnum's *Reel* composition system: multi-track timeline (each track an =LrgReelTransitionSeries=), 9 transition types, 5 effects, split/trim/move/ripple, text/solid/image/video clips, CPU preview and ffmpeg-backed mp4/gif export.  =M-x cmacs-vidstudio=; video clips decode on a worker thread (import never blocks) and playback paces itself from the wall clock so the editor never freezes.  Headless + MCP-driveable (=vidstudio_*= tools).  Part of the standard flag set; requires =--with-cmacs-libregnum= + =--with-cmacs-glib= (the =ffmpeg= binary at runtime for video clips/export).  See [[file:doc_org/cmacs/cmacs-vidstudio.org][the manual]].
 - =--with-cmacs-calculator= — Calculator: desktop arithmetic, financial (loans/amortization/bonds/options/tax), physics, relativity, and a CAS — built on *GNU Calc*, which already ships with Emacs, wrapped to correct its defaults (stock Calc reads =2/3*4= as 2/(3*4), defaults to degrees, and answers bad input by echoing it back unevaluated).  Every calculator is a first-class algebraic function, so =bscall(100,100,0.05,0.2,1) - bsput(...)= composes — as do all 415 GNU Calc built-ins (=deriv=, =integ=, =solve=, …), each documented in [[file:doc_org/cmacs/calculator/builtins.org][the built-ins catalog]].  Surfaces: =.calc= sheet buffers (=C-c C-c=), =M-x cmacs-calculator= landing page, =C-c ==​ inline evaluation in *any* major mode, =emacs --calc [EXPR]= CLI REPL, and MCP tools.  Charts render inline as SVG (works headless/TTY) or, with =--with-cmacs-libregnum=, on the GPU via libregnum's chart module (identical under pgtk and =emacs --lrg=).  Part of the standard flag set; libregnum is *optional* — without it the SVG chart tier still works.  See [[file:doc_org/cmacs/calculator/index.org][the manual]].
+- =--with-cmacs-lsp= — In-binary *LSP language servers*: =emacs --cmacs-lsp LANG= runs a pure C/GLib JSON-RPC-over-stdio server compiled into the emacs binary itself (the =--bacon= never-return model — no editor, no Lisp VM), and clients spawn it as a subprocess call back to the same binary, so client and server always agree on what was compiled in.  =emacs --help= auto-lists the compiled-in servers.  First server: *gnucalc* for =.calc= calculator sheets (requires =--with-cmacs-calculator=) — completion/hover/signature-help over all 415 GNU Calc built-ins, every cmacs calculator, constants and units from a table generated out of [[file:doc_org/cmacs/calculator/builtins.org][the built-ins catalog]], plus lexical diagnostics, =:== symbols/definitions and semantic tokens.  Inside cmacs, =.calc= buffers auto-start eglot against it; external editors (nvim, …) point at the same command.  Part of the standard flag set.  See [[file:doc_org/cmacs/lsp.org][the LSP manual]].
 
 - =--with-cmacs-transcode= — Native batch video/audio *transcoder*, a
   reimplementation of the author's =compress_video= / =compress_audio= shell

@@ -1,0 +1,140 @@
+#+TITLE: CMacs LSP — In-Binary Language Servers
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:2 num:nil
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+* What it is
+
+=--with-cmacs-lsp= compiles LSP language servers *into the emacs binary
+itself*.  =emacs --cmacs-lsp LANG= speaks Content-Length-framed JSON-RPC
+over stdio, with no editor and *no Lisp VM* — the same never-return
+early-=main()= model as =--bacon= / =--crispy=: the argv scan dispatches
+into pure C/GLib server code before any Emacs initialization, so startup
+is instant and nothing display- or Lisp-related can interfere with the
+protocol stream (stdout belongs to LSP alone; logs go to stderr).
+
+Clients spawn the server as a subprocess call back to the same binary
+they run in (the =/proc/self/exe= model).  Inside cmacs that is
+
+#+begin_src elisp
+(expand-file-name invocation-name invocation-directory)   ; this emacs
+#+end_src
+
+so the client and server can never disagree about which language data
+was compiled in.  External editors point their LSP client at the same
+command:
+
+#+begin_example
+emacs --cmacs-lsp gnucalc         # e.g. in nvim's lspconfig `cmd`
+#+end_example
+
+=emacs --cmacs-lsp= with no (or an unknown) language lists the
+compiled-in servers on stderr and exits 1; =emacs --help= appends the
+same table (auto-populated from the registry, so it is always accurate
+for the build at hand).
+
+* Architecture (cmacs/lsp/)
+
+| File                   | Role                                                              |
+|------------------------+-------------------------------------------------------------------|
+| =cmacs-lsp-cli.c=      | =--cmacs-lsp= argv entry (=cmacs_lsp_main=, never returns) + the =--help= section printer |
+| =cmacs-lsp-registry.c= | The language table: name, description, glob, =run= hook, one =#ifdef=-guarded entry per server |
+| =cmacs-lsp-io.c=       | Content-Length framing + JsonBuilder response/error/notification senders (port of bacon's =bacon-lsp-io.c=) |
+| =cmacs-lsp-server.c=   | Generic blocking read/dispatch loop: lifecycle, -32002 before =initialized=, full-sync document store, vtable dispatch |
+| =cmacs-lsp-document.c= | URI→document store, line access, UTF-16↔byte column conversion (LSP columns are UTF-16 code units) |
+| =cmacs-lsp-gnucalc.c=  | The gnucalc backend (below)                                       |
+| =cmacs-lsp-gnucalc-data.h= | *GENERATED* language data — do not edit (see below)          |
+
+Language behavior lives behind a =CmacsLspServerOps= vtable
+(completion / hover / signature_help / definition / document_symbol /
+semantic_tokens / diagnose + a capabilities hook); the core owns the
+transport, lifecycle and document sync, so every server shares one
+protocol implementation.
+
+** Adding a language server
+
+1. Write =cmacs/lsp/cmacs-lsp-<lang>.c= implementing a
+   =CmacsLspServerOps= and a =cmacs_lsp_<lang>_run (argc, argv)= that
+   instantiates =cmacs_lsp_server_new= / =_run=.
+2. Add the =#ifdef HAVE_CMACS_LSP_<LANG>=-guarded entry to the table in
+   =cmacs-lsp-registry.c= (name, one-line description, file glob, run).
+3. In =configure.ac='s cmacs-lsp stanza, define =HAVE_CMACS_LSP_<LANG>=
+   and append the object when the owning subsystem is enabled.
+4. Add the git-tracked =src/cmacs-lsp-<lang>.c= symlink (the
+   =cmacs-symlinks= convention).
+5. Register the mode on the Elisp side:
+   =(cmacs-lsp-register-eglot 'your-mode "<lang>")= + =cmacs-lsp-ensure=
+   in the mode hook (see =lisp/cmacs/cmacs-lsp.el=).
+
+=--help=, the bare-invocation listing, and the eglot client all pick the
+new server up from the registry automatically.
+
+* The gnucalc server
+
+Serves =.calc= calculator sheets (=cmacs-calculator-sheet-mode=).  The
+line model mirrors the sheet exactly: one expression per line, =#=
+comments, ~NAME := EXPR~ sheet-local bindings, and the ~⇒ RESULT~
+annotations the sheet appends are stripped before analysis (and
+reported as comment tokens, so they dim under semantic highlighting).
+
+| Feature          | What you get                                                      |
+|------------------+-------------------------------------------------------------------|
+| completion       | All 415 Calc built-ins, every registered cmacs calculator (=bscall=, =lorentz=, …), the 8 symbolic constants, 165 Calc units, and the sheet's ~:=~ variables — each with signature detail + markdown docs |
+| hover            | Catalog documentation (description, returns, per-argument docs, verified examples) for any name; ~:=~ variables show their defining line |
+| signatureHelp    | Argument names + per-argument docs with active-parameter tracking (triggers =(= and =,=; vector brackets do not confuse the comma count) |
+| definition       | An identifier jumps to its ~NAME :=~ line                         |
+| documentSymbol   | The sheet's ~:=~ bindings (imenu/outline)                         |
+| semanticTokens   | function / variable / constant / number / operator / comment      |
+| diagnostics      | Unbalanced delimiters (error); unknown call heads (warning, code =unknown-function=) |
+
+Diagnostics are deliberately *lexical only*.  The authoritative
+validator is the Elisp walker inside cmacs (it evaluates through Calc
+and catches unbound variables and domain errors), which needs the Lisp
+VM this process never starts.  Unknown call heads are therefore
+warnings, and single-letter heads are exempt: CAS usage legitimately
+writes =deriv(f(x), x)=.
+
+** Inside cmacs: eglot
+
+With =--with-cmacs-lsp= compiled in, opening a =.calc= file auto-starts
+eglot against =<this-binary> --cmacs-lsp gnucalc= (disable with
+=(setq cmacs-lsp-auto-start nil)=).  Division of labor while eglot
+manages a sheet:
+
+- *flymake stays native* (=eglot-stay-out-of=): the Elisp validator is
+  strictly deeper than the server's lexical pass.
+- *capf switches to eglot*: the server vocabulary is a superset of the
+  native capf's (all built-ins carry docs there), so the native capf is
+  removed while managed to avoid duplicate candidates.
+- *eldoc composes*: native eval-aware eldoc + eglot's hover both run.
+
+** The generated data table
+
+=cmacs/lsp/cmacs-lsp-gnucalc-data.h= is emitted by
+=admin/cmacs-calc-builtins-catalog.el= from the same sources the Elisp
+side uses: the 415-entry built-ins catalog, the live
+=cmacs-calculator-registry= (families loaded), the
+=cmacs-calculator--constants= whitelist, and Calc's
+=math-standard-units= (identifier-shaped names only — the six
+non-ASCII unit names all have ASCII aliases).  Regenerate after any
+catalog/registry/Calc change, together with the other generated
+artifacts:
+
+#+begin_example
+src/emacs -Q -batch -L lisp/cmacs -L admin \
+  -l cmacs-calc-builtins-catalog -f cmacs-calc-builtins-generate-lsp-data
+#+end_example
+
+The ERT test =cmacs-lsp-tests-gnucalc-data-in-sync= regenerates the
+table in memory and byte-compares it against the committed header, so
+drift fails the suite (=make -C test check-cmacs=).
+
+* Testing
+
+=test/cmacs/cmacs-lsp-tests.el= spawns the running binary as a real
+server and drives framed JSON-RPC through the full feature set
+(initialize / diagnostics / completion / hover / signatureHelp /
+definition / symbols / semantic tokens / shutdown), plus the CLI
+surface (bare and unknown =--cmacs-lsp=, =--help= auto-population) and
+the data drift guard.  Everything is headless and skips itself when the
+feature is not compiled in.

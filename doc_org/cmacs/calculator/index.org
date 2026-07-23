@@ -177,6 +177,13 @@ loanpmt(price * 0.8, 0.065, 30)  ⇒ 2022.61767478
 
 Files ending =.calc= open in =cmacs-calculator-sheet-mode= automatically.
 
+With =--with-cmacs-lsp= compiled in, sheets also get *LSP support*: the
+in-binary gnucalc server (=emacs --cmacs-lsp gnucalc=) serves
+completion, hover docs and signature help for every built-in, cmacs
+calculator, constant and unit — eglot auto-starts in cmacs, and
+external editors can point at the same command.  See
+[[file:../lsp.org][the LSP manual]].
+
 ** The landing page
 
 =M-x cmacs-calculator= renders =*cmacs-calculator*=: every registered calculator

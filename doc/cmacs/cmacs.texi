@@ -68,6 +68,7 @@ interaction.
 * CMacs Transcode::             Native ffmpeg batch video/audio transcoder.
 * CMacs Transcribe::            Batch speech-to-text (whisper STT + AI summaries).
 * CMacs Calculator::            Desktop/financial/physics/tax calculator + CAS over GNU Calc.
+* CMacs LSP::                   In-binary LSP language servers (emacs --cmacs-lsp).
 * Build Configuration::         Configure flags and dependencies.
 * Upstream Changes::            Every edit cmacs makes to stock Emacs sources.
 @end menu
@@ -9012,6 +9013,9 @@ viewport; a low-resolution proxy keeps playback near real-time.
 @include calculator/calculator.texi
 
 @c ===================================================================
+@include lsp/lsp.texi
+
+@c ===================================================================
 @node Build Configuration
 @chapter Build Configuration
 
@@ -9064,6 +9068,7 @@ fully-featured build matching Fedora defaults, use:
   --with-cmacs-transcode \
   --with-cmacs-transcribe \
   --with-cmacs-calculator \
+  --with-cmacs-lsp \
   --enable-cmacs-cpatch \
   --enable-cmacs-deps-debug   # in-house deps -O0 -g3 (DWARF): gdb + runtime cintrospection
 @end example
@@ -9427,6 +9432,19 @@ terminal REPL without any Emacs initialization; never returns.
 @strong{@code{usage_message} entries} (gated, @code{/* CMACS: ... */}
 marked): one line each for @option{--bacon} and @option{--crispy} so
 @command{emacs --help} documents the batch entry points.
+@item
+@strong{@option{--cmacs-lsp} entry} (@code{HAVE_CMACS_LSP}): identical
+shape to the @option{--bacon} scan, directly below the @option{--crispy}
+one (also matches the @option{--cmacs-lsp=LANG} form).  Calls
+@code{cmacs_lsp_main} to run the compiled-in LSP language server for
+LANG over stdio without any Emacs initialization; never returns.  Comes
+with its own @code{usage_message} entry, plus one more hunk in the
+@option{--help} handler: a @code{cmacs_lsp_print_help (stdout)} call
+between the @code{usage_message} loop and @code{exit (0)}, appending the
+registry-driven list of compiled-in language servers (the string content
+lives in @file{cmacs/lsp/cmacs-lsp-cli.c}, keeping the upstream diff to
+three lines).  The include hunk is @file{cmacs-lsp-cli.h}, next to the
+other guarded cmacs includes.
 @item
 @strong{@option{--gowl} early start} (@code{HAVE_CMACS_GOWL}): create and
 configure the @code{GowlCompositor} (including the
