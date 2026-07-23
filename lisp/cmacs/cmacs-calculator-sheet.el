@@ -666,5 +666,39 @@ line in place with its result, replacing any previous one.
 ;;;###autoload
 (add-to-list 'auto-mode-alist '("\\.calc\\'" . cmacs-calculator-sheet-mode))
 
+;;; LSP
+
+;; Attach the in-binary gnucalc server (`emacs --cmacs-lsp gnucalc',
+;; --with-cmacs-lsp) to sheets.  Division of labor while eglot manages
+;; the buffer: the native flymake backend stays authoritative -- the
+;; Elisp validator evaluates through Calc and sees semantics the
+;; server's lexical pass cannot -- so eglot is kept out of flymake; the
+;; native capf is dropped, because the server's vocabulary is a strict
+;; superset (all 415 built-ins carry docs there) and two capfs would
+;; duplicate every candidate; native eldoc stays, eldoc composes.
+
+(defun cmacs-calculator-sheet--lsp-setup ()
+  "Start the gnucalc LSP for this sheet, keeping native flymake."
+  (setq-local eglot-stay-out-of '(flymake))
+  (cmacs-lsp-ensure))
+
+(defun cmacs-calculator-sheet--lsp-managed ()
+  "Swap the native capf out while eglot manages a sheet buffer."
+  (when (derived-mode-p 'cmacs-calculator-sheet-mode)
+    (if (bound-and-true-p eglot--managed-mode)
+        (remove-hook 'completion-at-point-functions
+                     #'cmacs-calculator-sheet--capf t)
+      (add-hook 'completion-at-point-functions
+                #'cmacs-calculator-sheet--capf nil t))))
+
+(when (and (boundp 'is-cmacs-lsp) is-cmacs-lsp
+           (boundp 'is-cmacs-calculator) is-cmacs-calculator)
+  (require 'cmacs-lsp)
+  (cmacs-lsp-register-eglot 'cmacs-calculator-sheet-mode "gnucalc")
+  (add-hook 'cmacs-calculator-sheet-mode-hook
+            #'cmacs-calculator-sheet--lsp-setup)
+  (add-hook 'eglot-managed-mode-hook
+            #'cmacs-calculator-sheet--lsp-managed))
+
 (provide 'cmacs-calculator-sheet)
 ;;; cmacs-calculator-sheet.el ends here
