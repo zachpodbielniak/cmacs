@@ -112,6 +112,14 @@ manages a sheet:
   so the signature after =loanpmt(= is never swallowed by eglot's hover
   returning nothing at that position under the default first-doc-wins
   strategy.
+- *docs render at point, not the echo area*: cmacs-lsp buffers show
+  eldoc output — above all the signature with its active argument
+  highlighted, the moment you type =(= — in a small *child frame at the
+  cursor*, placed above the line so the completion popup (below) never
+  covers it.  Knobs: =cmacs-lsp-doc-frame= (nil restores normal eldoc
+  display), =cmacs-lsp-doc-idle-delay= (default 0.1 s, buffer-local),
+  =cmacs-lsp-doc-frame-max-lines= / =-max-columns=.  Falls back to the
+  echo area on a tty or wherever child frames are unavailable.
 
 ** The generated data table
 

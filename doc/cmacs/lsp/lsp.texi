@@ -84,8 +84,18 @@ the native flymake backend stays authoritative
 server's richer vocabulary and per-argument signature help; and the
 buffer uses the @code{eldoc-documentation-compose-eagerly} strategy so
 the signature after @code{loanpmt(} is never swallowed by a hover that
-has nothing to say at that position.  The generic client
-half is @file{lisp/cmacs/cmacs-lsp.el}
+has nothing to say at that position.
+
+Docs render @emph{at point}, not in the echo area: cmacs-lsp buffers
+show eldoc output --- above all the signature with its active argument
+highlighted, the moment you type @code{(} --- in a small child frame at
+the cursor, placed above the line so the completion popup (below) never
+covers it.  @code{cmacs-lsp-doc-frame} (nil) restores normal eldoc
+display; @code{cmacs-lsp-doc-idle-delay} (default 0.1 s),
+@code{cmacs-lsp-doc-frame-max-lines} and
+@code{cmacs-lsp-doc-frame-max-columns} tune it.  On a tty, or wherever
+child frames are unavailable, it falls back to the echo area.  The
+generic client half is @file{lisp/cmacs/cmacs-lsp.el}
 (@code{cmacs-lsp-register-eglot}, @code{cmacs-lsp-ensure}).
 
 @section The generated data table
