@@ -23,6 +23,8 @@
 ;;     -l cmacs-calc-builtins-catalog -f cmacs-calc-builtins-generate
 ;;   src/emacs -Q -batch -L lisp/cmacs -L admin \
 ;;     -l cmacs-calc-builtins-catalog -f cmacs-calc-builtins-completion-list
+;;   src/emacs -Q -batch -L lisp/cmacs -L admin \
+;;     -l cmacs-calc-builtins-catalog -f cmacs-calc-builtins-generate-lsp-data
 ;;
 ;; `verify' checks the data (schema, coverage against the live Calc symbol
 ;; table, every example evaluates and matches its recorded output) and
@@ -34,6 +36,11 @@
 ;; upstream Emacs merge changes Calc's function set -- the ERT test
 ;; cmacs-calculator-tests-builtins-documented in
 ;; test/cmacs/cmacs-calculator-tests.el fails when the two drift.
+;; `generate-lsp-data' writes cmacs/lsp/cmacs-lsp-gnucalc-data.h, the C
+;; data table behind `emacs --cmacs-lsp gnucalc' (built-ins + registered
+;; cmacs calculators + constants + Calc units); regenerate it alongside
+;; the other two whenever the catalog or the registry changes -- the ERT
+;; test cmacs-lsp-tests-gnucalc-data-in-sync fails when it drifts.
 ;;
 ;; Entry schema (a plist per function):
 ;;   :name     function name as typed in expressions, e.g. "deriv"
@@ -5426,6 +5433,281 @@ cmacs-calc-builtins-completion-list); regenerate there after an
 upstream merge changes Calc.  The registry covers what cmacs adds;
 this covers what Calc already had, so completion and font-lock do
 not pretend `sqrt' is unknown.\")\n")))
+
+;;; LSP data table (emacs --cmacs-lsp gnucalc)
+
+(defconst cmacs-calc-builtins--lsp-constants
+  '(("e"     . "Euler's number, the base of natural logarithms, 2.71828182846.")
+    ("gamma" . "The Euler-Mascheroni constant, 0.577215664902.")
+    ("i"     . "The imaginary unit: i^2 = -1.")
+    ("inf"   . "Positive infinity.")
+    ("nan"   . "Indeterminate result (not a number).")
+    ("phi"   . "The golden ratio, (1 + sqrt(5))/2, 1.61803398875.")
+    ("pi"    . "The ratio of a circle's circumference to its diameter, 3.14159265359.")
+    ("uinf"  . "Infinity of unknown direction."))
+  "Docs for the symbolic constants, sorted by name.
+The generator errors if the key set drifts from
+`cmacs-calculator--constants' (the validator's whitelist).")
+
+(defun cmacs-calc-builtins--md-markup (s)
+  "Render docstring-style `quoting' in S as markdown `code`."
+  (replace-regexp-in-string "`\\([^']+\\)'" "`\\1`" s t))
+
+(defun cmacs-calc-builtins--c-string (s indent)
+  "Render S as adjacent C string literals, each line at column INDENT.
+Escapes backslash, quote, newline and tab; splits long strings across
+adjacent literals (concatenated by the compiler) so the generated file
+stays diffable."
+  (let ((pad (make-string indent ?\s))
+        (lines nil)
+        (cur ""))
+    (dolist (ch (string-to-list s))
+      (let ((tok (pcase ch
+                   (?\\ "\\\\")
+                   (?\" "\\\"")
+                   (?\n "\\n")
+                   (?\t "\\t")
+                   (_ (char-to-string ch)))))
+        (when (> (+ (length cur) (length tok)) 68)
+          (push cur lines)
+          (setq cur ""))
+        (setq cur (concat cur tok))))
+    (push cur lines)
+    (mapconcat (lambda (l) (concat pad "\"" l "\""))
+               (nreverse lines) "\n")))
+
+(defun cmacs-calc-builtins--lsp-examples (pairs)
+  "Markdown example block for PAIRS, a list of (EXPR . RESULT-or-nil)."
+  (when pairs
+    (concat "\n\n```\n"
+            (mapconcat (lambda (p)
+                         (if (cdr p)
+                             (format "%s  ⇒  %s" (car p) (cdr p))
+                           (car p)))
+                       pairs "\n")
+            "\n```")))
+
+(defun cmacs-calc-builtins--lsp-sig-info (args)
+  "Parse a display signature ARGS: return (N-ARGS N-REQUIRED REST-P).
+A trailing `?' marks an optional argument, `...' a &rest tail."
+  (let* ((inner (string-trim (string-trim args "(" ")")))
+         (parts (and (not (string-empty-p inner))
+                     (mapcar #'string-trim (split-string inner "," t))))
+         (n (length parts))
+         (required 0)
+         (seen-opt nil))
+    (dolist (p parts)
+      (if (string-suffix-p "?" (string-remove-suffix "..." p))
+          (setq seen-opt t)
+        (unless seen-opt
+          (setq required (1+ required)))))
+    (list n required
+          (and parts (string-suffix-p "..." (car (last parts))) t))))
+
+(defun cmacs-calc-builtins--lsp-model ()
+  "Unified entry plists for the gnucalc LSP data table, in emitted order.
+Each entry: (:name :kind :category :args :detail :arg-docs
+:n-required :rest), where :kind is the C enum suffix string, :args and
+:arg-docs may be nil, and :arg-docs is a list of (NAME . DOC).
+Returns (ENTRIES . SKIPPED-UNIT-NAMES)."
+  (let ((entries nil)
+        (skipped nil))
+    ;; Built-ins, from the catalog.
+    (dolist (e (sort (copy-sequence cmacs-calc-builtins--entries)
+                     (lambda (a b) (string< (plist-get a :name)
+                                            (plist-get b :name)))))
+      (let* ((cat (cadr (assq (plist-get e :category)
+                              cmacs-calc-builtins--categories)))
+             (detail
+              (concat
+               (cmacs-calc-builtins--md-markup (plist-get e :desc))
+               "\n\n**Returns:** "
+               (cmacs-calc-builtins--md-markup (plist-get e :returns))
+               (when (plist-get e :note)
+                 (concat "\n\n**Note:** "
+                         (cmacs-calc-builtins--md-markup
+                          (plist-get e :note))))
+               (cmacs-calc-builtins--lsp-examples
+                (cl-mapcar #'cons (plist-get e :examples)
+                           (plist-get e :expect))))))
+        (push (append (list :name (plist-get e :name)
+                            :kind "BUILTIN"
+                            :category cat
+                            :args (plist-get e :args)
+                            :detail detail
+                            :arg-docs (plist-get e :arg-docs))
+                      (let ((sig (cmacs-calc-builtins--lsp-sig-info
+                                  (plist-get e :args))))
+                        (list :n-required (nth 1 sig) :rest (nth 2 sig))))
+              entries)))
+    ;; Registered cmacs calculators.  `cmacs-calculator-list' loads the
+    ;; families and sorts by name.
+    (dolist (c (cmacs-calculator-list))
+      (let* ((arg-docs (mapcar (lambda (a)
+                                 (cons (symbol-name (car a)) (cadr a)))
+                               (plist-get c :args)))
+             (args (concat "(" (mapconcat #'car arg-docs ", ") ")"))
+             (detail
+              (concat
+               "**" (plist-get c :title) "**\n\n"
+               (cmacs-calc-builtins--md-markup (or (plist-get c :doc) ""))
+               "\n\n**Returns:** "
+               (cmacs-calc-builtins--md-markup
+                (or (plist-get c :returns) ""))
+               (cmacs-calc-builtins--lsp-examples (plist-get c :examples)))))
+        (push (list :name (symbol-name (plist-get c :name))
+                    :kind "DEFCALC"
+                    :category (symbol-name (plist-get c :category))
+                    :args args
+                    :detail detail
+                    :arg-docs arg-docs
+                    :n-required (length arg-docs)
+                    :rest nil)
+              entries)))
+    ;; Symbolic constants.
+    (let ((want (sort (mapcar #'symbol-name cmacs-calculator--constants)
+                      #'string<))
+          (have (mapcar #'car cmacs-calc-builtins--lsp-constants)))
+      (unless (equal want have)
+        (error "LSP constants drift: registry %S vs docs %S" want have)))
+    (dolist (c cmacs-calc-builtins--lsp-constants)
+      (push (list :name (car c) :kind "CONSTANT" :category "Constants"
+                  :args nil :detail (cdr c) :arg-docs nil
+                  :n-required 0 :rest nil)
+            entries))
+    ;; Calc units.  Only identifier-shaped names -- the non-ASCII ones
+    ;; (α, Ω, μ0, ...) all have ASCII aliases that are kept.
+    (require 'calc-units)
+    (dolist (u (sort (copy-sequence math-standard-units)
+                     (lambda (a b) (string< (symbol-name (car a))
+                                            (symbol-name (car b))))))
+      (let ((name (symbol-name (nth 0 u)))
+            (def (nth 1 u))
+            (desc (nth 2 u)))
+        (if (not (string-match-p "\\`[A-Za-z_][A-Za-z0-9_]*\\'" name))
+            (push name skipped)
+          (push (list :name name :kind "UNIT" :category "Units"
+                      :args nil
+                      :detail
+                      (concat (string-remove-prefix "*" (or desc name))
+                              (when def
+                                (format "\n\nDefinition: `%s`" def))
+                              "\n\nCalc unit; SI prefix letters generally"
+                              " apply (k, M, m, u, ...).")
+                      :arg-docs nil :n-required 0 :rest nil)
+                entries))))
+    (cons (nreverse entries) (nreverse skipped))))
+
+(defun cmacs-calc-builtins--lsp-data-string ()
+  "The complete generated cmacs-lsp-gnucalc-data.h as a string."
+  (let* ((model (cmacs-calc-builtins--lsp-model))
+         (entries (car model))
+         (out nil)
+         (idx 0))
+    (push "\
+/* cmacs-lsp-gnucalc-data.h --- GENERATED gnucalc language-server data
+
+Copyright (C) 2026 Zach Podbielniak
+
+SPDX-License-Identifier: AGPL-3.0-or-later
+
+This file is part of CMacs.
+
+Generated by admin/cmacs-calc-builtins-catalog.el
+(cmacs-calc-builtins-generate-lsp-data); do not edit by hand.
+Regenerate from the repo root:
+
+  src/emacs -Q -batch -L lisp/cmacs -L admin \\
+    -l cmacs-calc-builtins-catalog -f cmacs-calc-builtins-generate-lsp-data
+
+Included by exactly one TU: cmacs/lsp/cmacs-lsp-gnucalc.c.  */
+
+#ifndef CMACS_LSP_GNUCALC_DATA_H
+#define CMACS_LSP_GNUCALC_DATA_H
+
+#include <stddef.h>
+
+typedef enum
+{
+  CMACS_LSP_GNUCALC_BUILTIN,
+  CMACS_LSP_GNUCALC_DEFCALC,
+  CMACS_LSP_GNUCALC_CONSTANT,
+  CMACS_LSP_GNUCALC_UNIT
+} CmacsLspGnucalcKind;
+
+typedef struct
+{
+  const char *name;
+  const char *doc;
+} CmacsLspGnucalcArg;
+
+typedef struct
+{
+  const char *name;
+  CmacsLspGnucalcKind kind;
+  const char *category;         /* display string */
+  const char *args;             /* \"(a, b?)\", NULL for constants/units */
+  const char *detail;           /* pre-rendered markdown body */
+  const CmacsLspGnucalcArg *arg_docs;   /* NULL when no documented args */
+  unsigned int n_args;
+  unsigned char n_required;     /* args before the first optional */
+  unsigned char rest;           /* signature ends with \"...\" */
+} CmacsLspGnucalcEntry;
+" out)
+    ;; Per-entry argument arrays.
+    (dolist (e entries)
+      (when (plist-get e :arg-docs)
+        (push (format "\nstatic const CmacsLspGnucalcArg %s[] =\n{\n%s\n};\n"
+                      (format "cmacs_lsp_gnucalc_args_%d" idx)
+                      (mapconcat
+                       (lambda (ad)
+                         (format "  { %s,\n%s },"
+                                 (concat "\"" (car ad) "\"")
+                                 (cmacs-calc-builtins--c-string (cdr ad) 4)))
+                       (plist-get e :arg-docs) "\n"))
+              out))
+      (setq idx (1+ idx)))
+    ;; The entry table.
+    (push "\nstatic const CmacsLspGnucalcEntry cmacs_lsp_gnucalc_entries[] =\n{\n"
+          out)
+    (setq idx 0)
+    (dolist (e entries)
+      (push (format "  { \"%s\", CMACS_LSP_GNUCALC_%s,\n%s,\n%s,\n%s,\n    %s, %d, %d, %d },\n"
+                    (plist-get e :name)
+                    (plist-get e :kind)
+                    (cmacs-calc-builtins--c-string (plist-get e :category) 4)
+                    (if (plist-get e :args)
+                        (cmacs-calc-builtins--c-string (plist-get e :args) 4)
+                      "    NULL")
+                    (cmacs-calc-builtins--c-string (plist-get e :detail) 4)
+                    (if (plist-get e :arg-docs)
+                        (format "cmacs_lsp_gnucalc_args_%d" idx)
+                      "NULL")
+                    (length (plist-get e :arg-docs))
+                    (plist-get e :n-required)
+                    (if (plist-get e :rest) 1 0))
+            out)
+      (setq idx (1+ idx)))
+    (push "};\n
+static const size_t cmacs_lsp_gnucalc_n_entries =
+  sizeof cmacs_lsp_gnucalc_entries / sizeof cmacs_lsp_gnucalc_entries[0];
+
+#endif /* CMACS_LSP_GNUCALC_DATA_H */\n" out)
+    (apply #'concat (nreverse out))))
+
+(defun cmacs-calc-builtins-generate-lsp-data ()
+  "Write cmacs/lsp/cmacs-lsp-gnucalc-data.h from the catalog + registry."
+  (let ((file (expand-file-name "cmacs/lsp/cmacs-lsp-gnucalc-data.h"
+                                cmacs-calc-builtins--root))
+        (model (cmacs-calc-builtins--lsp-model)))
+    (with-temp-file file
+      (insert (cmacs-calc-builtins--lsp-data-string)))
+    (message
+     "cmacs-calc-builtins-generate-lsp-data: wrote %s (%d entries%s)"
+     file (length (car model))
+     (if (cdr model)
+         (format "; skipped non-identifier units %S" (cdr model))
+       ""))))
 
 (provide 'cmacs-calc-builtins-catalog)
 
