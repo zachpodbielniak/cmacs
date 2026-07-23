@@ -241,29 +241,45 @@ Rejects calls to functions Calc does not define -- Calc would leave
 `foo(1)' symbolic and the caller could not tell it apart from a real
 result.  Unless ALLOW-VARS is non-nil (symbolic/CAS evaluation, where
 free variables are the whole point), unbound variables are rejected too.
-Does nothing when `cmacs-calculator-strict' is nil."
+Rewrite-rule subtrees (`LHS := RHS', `PAT :: COND') are exempt from the
+variable check on both paths: pattern variables are binders, not
+references.  Does nothing when `cmacs-calculator-strict' is nil."
   (when cmacs-calculator-strict
-    (cmacs-calculator--walk
-     form
-     (lambda (f)
-       (cond
-        ((and (consp f) (symbolp (car f))
-              (string-prefix-p "calcFunc-" (symbol-name (car f)))
-              (not (fboundp (car f)))
-              ;; Before calling it unknown, load the families -- a bare
-              ;; instance may hold only the engine, and every calculator
-              ;; (bscall, lorentz, ...) arrives with them.  This runs at most
-              ;; once per session and only on the path that was about to
-              ;; error, so plain arithmetic never pays for it.
-              (progn (cmacs-calculator-load-families)
-                     (not (fboundp (car f)))))
-         (signal 'cmacs-calculator-unknown-function
-                 (list (substring (symbol-name (car f)) 9))))
-        ((and (not allow-vars)
-              (eq (car-safe f) 'var)
-              (not (cmacs-calculator--known-var-p (nth 1 f))))
-         (signal 'cmacs-calculator-unbound-variable
-                 (list (symbol-name (nth 1 f))))))))))
+    (cmacs-calculator--validate-1 form allow-vars nil)))
+
+(defun cmacs-calculator--validate-1 (form allow-vars in-rule)
+  "Recursive worker for `cmacs-calculator--validate' on FORM.
+ALLOW-VARS is as there.  IN-RULE is non-nil inside a rewrite-rule
+subtree, whose head is `calcFunc-assign' (`:=') or `calcFunc-condition'
+(`::').  Those heads are pattern syntax consumed by rewrite/match --
+never fboundp functions -- so they are exempt from the
+unknown-function check, and the variables under them are patterns
+rather than references."
+  (cond
+   ((and (consp form) (symbolp (car form))
+         (string-prefix-p "calcFunc-" (symbol-name (car form)))
+         (not (memq (car form) '(calcFunc-assign calcFunc-condition)))
+         (not (fboundp (car form)))
+         ;; Before calling it unknown, load the families -- a bare
+         ;; instance may hold only the engine, and every calculator
+         ;; (bscall, lorentz, ...) arrives with them.  This runs at most
+         ;; once per session and only on the path that was about to
+         ;; error, so plain arithmetic never pays for it.
+         (progn (cmacs-calculator-load-families)
+                (not (fboundp (car form)))))
+    (signal 'cmacs-calculator-unknown-function
+            (list (substring (symbol-name (car form)) 9))))
+   ((and (not allow-vars) (not in-rule)
+         (eq (car-safe form) 'var)
+         (not (cmacs-calculator--known-var-p (nth 1 form))))
+    (signal 'cmacs-calculator-unbound-variable
+            (list (symbol-name (nth 1 form))))))
+  (when (consp form)
+    (let ((in-rule (or in-rule
+                       (memq (car form)
+                             '(calcFunc-assign calcFunc-condition)))))
+      (dolist (sub (cdr form))
+        (cmacs-calculator--validate-1 sub allow-vars in-rule)))))
 
 (defun cmacs-calculator--parse (expr)
   "Parse EXPR, a string, into a Calc internal form.
