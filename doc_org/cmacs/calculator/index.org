@@ -171,6 +171,12 @@ loanpmt(price * 0.8, 0.065, 30)  ⇒ 2022.61767478
   is what makes eval-on-idle safe to run continuously.
 - A failing line annotates as =⇒ error: MESSAGE= and evaluation *carries on*:
   one bad line must not cost you the other forty.
+- The idle evaluator *never touches the line point is on*: a half-typed
+  =lo= would otherwise annotate =⇒ error: Unbound variable: lo= under
+  the cursor — fighting your typing and killing the completion popup.
+  The line keeps its previous assignment binding for the lines below it
+  and evaluates the moment point leaves it; mid-typing feedback is
+  flymake's job.  Explicit =C-c C-c= always evaluates every line.
 - =NAME := EXPR= stores a value later lines can use.  Bindings are
   *sheet-local* (established with =cl-progv= around each evaluation), so one
   sheet's variables never leak into another sheet or into the REPL.

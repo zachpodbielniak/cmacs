@@ -27,6 +27,15 @@
 ;; A failing line annotates as "⇒ error: MESSAGE" and evaluation carries on:
 ;; one bad line in the middle of a sheet must not cost you the other forty.
 ;;
+;; The idle evaluator never touches the line point is on: rewriting the
+;; half-typed line under the cursor would fight the user and kill any
+;; completion popup mid-word ("lo" would annotate "⇒ error: Unbound
+;; variable: lo" while you were still choosing between loanpmt and log).
+;; The skipped line keeps its previous assignment binding for the lines
+;; below it and is evaluated as soon as point leaves it; mid-typing error
+;; feedback is flymake's job (it underlines without editing the buffer).
+;; Explicit \\[cmacs-calculator-sheet-eval-buffer] always does every line.
+;;
 ;; Variables are sheet-local
 ;; -------------------------
 ;; "NAME := EXPR" stores a value later lines can use.  Calc looks variables up
@@ -73,10 +82,12 @@
 (defcustom cmacs-calculator-sheet-eval-idle t
   "When non-nil, a sheet re-evaluates itself after you stop typing.
 Evaluation is debounced by `cmacs-calculator-sheet-eval-debounce' and
-never overlaps itself.  Because results are idempotent this only ever
-rewrites the annotations, but a half-typed expression does annotate as
-an error until it is finished; set this to nil to evaluate only on
-demand."
+never overlaps itself.  The line point is on is left completely alone
+-- no result, no error annotation -- so a half-typed expression is
+never rewritten under the cursor (which would also kill any completion
+popup); it is evaluated as soon as point leaves it.  Explicit
+\\[cmacs-calculator-sheet-eval-buffer] always evaluates every line.
+Set this to nil to evaluate only on demand."
   :type 'boolean
   :group 'cmacs-calculator-sheet)
 
@@ -282,6 +293,19 @@ See the Commentary; toggled by \\[cmacs-calculator-sheet-toggle-symbolic].")
 (defvar-local cmacs-calculator-sheet--tick nil
   "Value of `buffer-chars-modified-tick' after the last evaluation.
 Lets the idle timer skip a buffer nothing has changed in.")
+(defvar-local cmacs-calculator-sheet--deferred-line nil
+  "Marker at the start of a line an idle pass skipped, or nil.
+Idle evaluation never touches the line point is on (rewriting it
+mid-typing would fight the user and kill completion popups); this
+remembers it so `cmacs-calculator-sheet--eval-deferred' can evaluate
+it the moment point moves off the line.")
+
+(defconst cmacs-calculator-sheet--assign-name-re
+  "\\`[ \t]*\\([A-Za-z_][A-Za-z0-9_]*\\)[ \t]*:="
+  "Regexp matching just the NAME of an assignment line.
+Looser than `cmacs-calculator-sheet--assign-re': it matches even while
+the right-hand side is still being typed, so a skipped assignment can
+keep its previous binding.")
 
 (defun cmacs-calculator-sheet--eval-string (expr)
   "Evaluate EXPR with this sheet's variables bound; return a string.
@@ -353,12 +377,37 @@ to rebuild them."
     (_ (setq cmacs-calculator-sheet--tick (buffer-chars-modified-tick))
        (message "Evaluated"))))
 
-(defun cmacs-calculator-sheet-eval-buffer ()
+(defun cmacs-calculator-sheet--carry-forward-binding (prev-vars)
+  "Keep the current line's previous binding from PREV-VARS, if any.
+For a skipped assignment line (matched loosely, so a half-typed
+right-hand side still counts), copy NAME's value from PREV-VARS -- the
+last completed pass -- into the live variable set, so later lines that
+use NAME keep their results instead of flapping to errors while the
+assignment is being edited."
+  (let ((raw (buffer-substring-no-properties (line-beginning-position)
+                                             (line-end-position))))
+    (when (string-match cmacs-calculator-sheet--assign-name-re raw)
+      (let* ((name (match-string 1 raw))
+             (prev (assoc name prev-vars)))
+        (when prev
+          (setf (alist-get name cmacs-calculator-sheet--vars
+                           nil nil #'equal)
+                (cdr prev)))))))
+
+(defun cmacs-calculator-sheet-eval-buffer (&optional skip-pos)
   "Evaluate every expression line in the sheet, top to bottom.
 
 Assignments are rebuilt from scratch, so the sheet is a function of its
 text alone.  A line that fails annotates its error and evaluation
-continues with the next one."
+continues with the next one.
+
+Non-nil SKIP-POS (used by the idle evaluator) leaves the line
+containing that position untouched -- no evaluation, no annotation --
+so the line being typed is never rewritten under the cursor.  A
+skipped assignment keeps its previous binding for the benefit of later
+lines, and the line is remembered in
+`cmacs-calculator-sheet--deferred-line' to be evaluated when point
+leaves it."
   (interactive)
   (cmacs-calculator-sheet--ensure-mode)
   (if cmacs-calculator-sheet--evaluating
@@ -366,17 +415,31 @@ continues with the next one."
       ;; will pick up the current text anyway.
       nil
     (let ((cmacs-calculator-sheet--evaluating t)
+          (prev-vars cmacs-calculator-sheet--vars)
+          ;; A marker, not a position: annotating an earlier line shifts
+          ;; every later bol, so an integer would miss the skip line.
+          (skip-marker (and skip-pos
+                            (save-excursion (goto-char skip-pos)
+                                            (copy-marker
+                                             (line-beginning-position)))))
           (evaluated 0)
           (failed 0))
       (setq cmacs-calculator-sheet--vars nil)
+      (setq cmacs-calculator-sheet--deferred-line nil)
       (save-excursion
         (goto-char (point-min))
         (while (not (eobp))
-          (pcase (cmacs-calculator-sheet--eval-line-at-point)
-            ('ok (setq evaluated (1+ evaluated)))
-            ('error (setq evaluated (1+ evaluated)
-                          failed (1+ failed)))
-            (_ nil))
+          (if (and skip-marker
+                   (= (line-beginning-position)
+                      (marker-position skip-marker)))
+              (progn
+                (cmacs-calculator-sheet--carry-forward-binding prev-vars)
+                (setq cmacs-calculator-sheet--deferred-line skip-marker))
+            (pcase (cmacs-calculator-sheet--eval-line-at-point)
+              ('ok (setq evaluated (1+ evaluated)))
+              ('error (setq evaluated (1+ evaluated)
+                            failed (1+ failed)))
+              (_ nil)))
           (forward-line 1)))
       (setq cmacs-calculator-sheet--tick (buffer-chars-modified-tick))
       (when (called-interactively-p 'interactive)
@@ -426,7 +489,11 @@ continues with the next one."
          #'cmacs-calculator-sheet--idle-eval (current-buffer))))
 
 (defun cmacs-calculator-sheet--idle-eval (buffer)
-  "Re-evaluate BUFFER if it still needs it."
+  "Re-evaluate BUFFER if it still needs it.
+When the user is in BUFFER, the line point is on is skipped -- never
+rewrite the line being typed (it would also kill any completion
+popup); `cmacs-calculator-sheet--eval-deferred' picks it up when
+point leaves."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (setq cmacs-calculator-sheet--eval-timer nil)
@@ -435,7 +502,9 @@ continues with the next one."
       (unless (or cmacs-calculator-sheet--evaluating
                   (eql cmacs-calculator-sheet--tick
                        (buffer-chars-modified-tick)))
-        (cmacs-calculator-sheet-eval-buffer)))))
+        (cmacs-calculator-sheet-eval-buffer
+         (when (eq buffer (window-buffer (selected-window)))
+           (point)))))))
 
 (defun cmacs-calculator-sheet--after-change (&rest _)
   "Schedule an idle re-evaluation after an edit."
@@ -447,6 +516,21 @@ continues with the next one."
   "Evaluate the sheet on save, if configured."
   (when cmacs-calculator-sheet-eval-on-save
     (cmacs-calculator-sheet--schedule-eval)))
+
+(defun cmacs-calculator-sheet--eval-deferred ()
+  "Evaluate the idle-skipped line once point has left it.
+Runs from `post-command-hook'; a no-op unless an idle pass deferred
+the line point was on and point is now somewhere else."
+  (let ((m cmacs-calculator-sheet--deferred-line))
+    (when (and (markerp m)
+               (or (not (marker-position m))
+                   (/= (line-beginning-position) (marker-position m))))
+      (setq cmacs-calculator-sheet--deferred-line nil)
+      ;; The skipping pass already recorded the tick, so force the next
+      ;; pass through the no-change guard.
+      (setq cmacs-calculator-sheet--tick nil)
+      (when cmacs-calculator-sheet-eval-idle
+        (cmacs-calculator-sheet--schedule-eval)))))
 
 (defun cmacs-calculator-sheet--cleanup ()
   "Cancel this sheet's pending timer."
@@ -658,6 +742,8 @@ line in place with its result, replacing any previous one.
             #'cmacs-calculator-sheet--flymake-backend nil t)
   (add-hook 'after-change-functions
             #'cmacs-calculator-sheet--after-change nil t)
+  (add-hook 'post-command-hook
+            #'cmacs-calculator-sheet--eval-deferred nil t)
   (add-hook 'after-save-hook #'cmacs-calculator-sheet--after-save nil t)
   (add-hook 'kill-buffer-hook #'cmacs-calculator-sheet--cleanup nil t)
   (unless noninteractive

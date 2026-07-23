@@ -227,6 +227,14 @@ is what makes eval-on-idle safe to run continuously.  A failing line annotates a
 @samp{@result{} error: MESSAGE} and evaluation @emph{carries on}: one bad line
 must not cost you the other forty.
 
+The idle evaluator @emph{never touches the line point is on}: a
+half-typed @code{lo} would otherwise annotate
+@samp{@result{} error: Unbound variable: lo} under the cursor ---
+fighting your typing and killing the completion popup.  The line keeps
+its previous assignment binding for the lines below it and evaluates
+the moment point leaves it; mid-typing feedback is flymake's job.
+Explicit @kbd{C-c C-c} always evaluates every line.
+
 @samp{NAME := EXPR} stores a value later lines can use.  Bindings are
 @emph{sheet-local} (established with @code{cl-progv} around each evaluation), so
 one sheet's variables never leak into another sheet or into the REPL.  Files

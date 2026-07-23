@@ -868,5 +868,92 @@ or unbound variable must still be rejected."
   (should-error (cmacs-calculator-eval "q + 1")
                 :type 'cmacs-calculator-unbound-variable))
 
+;;; Sheet idle evaluation: never rewrite the line being typed
+
+(defmacro cmacs-calculator-tests--with-sheet (text &rest body)
+  "Run BODY in a temp `cmacs-calculator-sheet-mode' buffer holding TEXT.
+Idle evaluation is disabled so only explicit calls evaluate."
+  (declare (indent 1))
+  `(with-temp-buffer
+     (let ((cmacs-calculator-sheet-eval-idle nil))
+       (insert ,text)
+       (cmacs-calculator-sheet-mode)
+       (goto-char (point-min))
+       ,@body)))
+
+(ert-deftest cmacs-calculator-tests-sheet-skip-point-line ()
+  "An idle-style pass leaves the skipped line untouched.
+A half-typed \"lo\" must not annotate \"error: Unbound variable\" --
+that rewrite is what used to kill completion popups mid-word."
+  (skip-unless (featurep 'cmacs-calculator-sheet))
+  (cmacs-calculator-tests--with-sheet "1 + 1\nlo\n2 + 2\n"
+    (forward-line 1)                    ; point on the half-typed "lo"
+    (goto-char (line-end-position))
+    (cmacs-calculator-sheet-eval-buffer (point))
+    (should (equal (buffer-substring-no-properties
+                    (line-beginning-position) (line-end-position))
+                   "lo"))
+    ;; The other lines still evaluated.
+    (should (string-match-p "1 \\+ 1  ⇒ 2" (buffer-string)))
+    (should (string-match-p "2 \\+ 2  ⇒ 4" (buffer-string)))
+    ;; The skip was recorded for the point-leave follow-up.
+    (should (markerp cmacs-calculator-sheet--deferred-line))))
+
+(ert-deftest cmacs-calculator-tests-sheet-skip-carries-binding ()
+  "A skipped assignment keeps its previous value for later lines.
+Editing \"rate := ...\" must not flap every dependent line to an
+unbound-variable error mid-edit."
+  (skip-unless (featurep 'cmacs-calculator-sheet))
+  (cmacs-calculator-tests--with-sheet "rate := 0.25\n4 * rate\n"
+    ;; First a full pass records rate = 0.25.
+    (cmacs-calculator-sheet-eval-buffer)
+    (should (string-match-p "4 \\* rate  ⇒ 1\\b" (buffer-string)))
+    ;; Now the user is mid-edit on the assignment: RHS half-deleted.
+    (goto-char (point-min))
+    (search-forward ":= 0.25")
+    (replace-match ":= 0.")
+    (goto-char (point-min))
+    (goto-char (line-end-position))
+    (cmacs-calculator-sheet-eval-buffer (point))
+    ;; The dependent line still shows the old value, not an error.
+    (should (string-match-p "4 \\* rate  ⇒ 1\\b" (buffer-string)))
+    (should-not (string-match-p "error:" (buffer-string)))))
+
+(ert-deftest cmacs-calculator-tests-sheet-deferred-eval-on-leave ()
+  "Leaving the skipped line schedules its evaluation.
+The follow-up must also clear the tick guard, or the scheduled pass
+would no-op because the skipping pass already recorded the tick."
+  (skip-unless (featurep 'cmacs-calculator-sheet))
+  (cmacs-calculator-tests--with-sheet "1 + 1\n2 + 2\n"
+    (goto-char (line-end-position))
+    (cmacs-calculator-sheet-eval-buffer (point))
+    (should (markerp cmacs-calculator-sheet--deferred-line))
+    ;; Still on the line: the hook must not fire.
+    (cmacs-calculator-sheet--eval-deferred)
+    (should (markerp cmacs-calculator-sheet--deferred-line))
+    ;; Point leaves the line: deferred state clears, tick guard opens,
+    ;; and (with idle eval enabled) a pass is scheduled.
+    (forward-line 1)
+    (let ((cmacs-calculator-sheet-eval-idle t))
+      (cmacs-calculator-sheet--eval-deferred))
+    (should-not cmacs-calculator-sheet--deferred-line)
+    (should-not cmacs-calculator-sheet--tick)
+    (should (timerp cmacs-calculator-sheet--eval-timer))
+    (cancel-timer cmacs-calculator-sheet--eval-timer)
+    ;; The pass it scheduled annotates the previously skipped line.
+    (cmacs-calculator-sheet-eval-buffer)
+    (should (string-match-p "1 \\+ 1  ⇒ 2" (buffer-string)))))
+
+(ert-deftest cmacs-calculator-tests-sheet-explicit-eval-does-every-line ()
+  "Interactive whole-buffer evaluation never skips.
+Only the idle path passes SKIP-POS; C-c C-c annotates the point line
+too (including its error, when it has one)."
+  (skip-unless (featurep 'cmacs-calculator-sheet))
+  (cmacs-calculator-tests--with-sheet "lo\n"
+    (goto-char (line-end-position))
+    (cmacs-calculator-sheet-eval-buffer)
+    (should (string-match-p "lo  ⇒ error:" (buffer-string)))
+    (should-not cmacs-calculator-sheet--deferred-line)))
+
 (provide 'cmacs-calculator-tests)
 ;;; cmacs-calculator-tests.el ends here
