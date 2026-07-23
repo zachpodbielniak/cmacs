@@ -79,7 +79,7 @@ reported as comment tokens, so they dim under semantic highlighting).
 
 | Feature          | What you get                                                      |
 |------------------+-------------------------------------------------------------------|
-| completion       | All 415 Calc built-ins, every registered cmacs calculator (=bscall=, =lorentz=, …), the 8 symbolic constants, 165 Calc units, and the sheet's ~:=~ variables — each with signature detail + markdown docs |
+| completion       | All 415 Calc built-ins, every registered cmacs calculator (=bscall=, =lorentz=, …), the 8 symbolic constants, 165 Calc units, and the sheet's ~:=~ variables — each with signature detail + markdown docs.  Trigger characters =(= and =,= pop the list at argument positions (right after =loanpmt(= or between an electric-pair =loanpmt()=) without a typed prefix |
 | hover            | Catalog documentation (description, returns, per-argument docs, verified examples) for any name; ~:=~ variables show their defining line |
 | signatureHelp    | Argument names + per-argument docs with active-parameter tracking (triggers =(= and =,=; vector brackets do not confuse the comma count) |
 | definition       | An identifier jumps to its ~NAME :=~ line                         |
@@ -103,10 +103,15 @@ manages a sheet:
 
 - *flymake stays native* (=eglot-stay-out-of=): the Elisp validator is
   strictly deeper than the server's lexical pass.
-- *capf switches to eglot*: the server vocabulary is a superset of the
-  native capf's (all built-ins carry docs there), so the native capf is
-  removed while managed to avoid duplicate candidates.
-- *eldoc composes*: native eval-aware eldoc + eglot's hover both run.
+- *capf and eldoc switch to eglot*: the server vocabulary is a superset
+  of the native capf's (all built-ins carry docs there), and its
+  signature help carries the active argument + per-argument docs the
+  registry-only native eldoc lacks; both natives are removed while
+  managed to avoid duplicates and shadowing.
+- *eldoc strategy* is =eldoc-documentation-compose-eagerly= in sheets,
+  so the signature after =loanpmt(= is never swallowed by eglot's hover
+  returning nothing at that position under the default first-doc-wins
+  strategy.
 
 ** The generated data table
 

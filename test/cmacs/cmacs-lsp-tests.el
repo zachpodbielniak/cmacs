@@ -148,6 +148,14 @@ Sends initialize/initialized first and always kills the process."
                  (caps (alist-get 'capabilities result)))
             (should (eql (alist-get 'textDocumentSync caps) 1))
             (should (alist-get 'completionProvider caps))
+            ;; Argument-position completion: clients auto-pop the list
+            ;; right after "(" and "," without a typed prefix.
+            (should (member "(" (alist-get 'triggerCharacters
+                                          (alist-get 'completionProvider
+                                                     caps))))
+            (should (member "," (alist-get 'triggerCharacters
+                                          (alist-get 'completionProvider
+                                                     caps))))
             (should (alist-get 'hoverProvider caps))
             (should (alist-get 'definitionProvider caps))
             (should (alist-get 'documentSymbolProvider caps))
@@ -248,6 +256,50 @@ sheet variables."
       (should (string-prefix-p "pmt(" (alist-get 'label sig)))
       (should (eql (alist-get 'activeParameter result) 1))
       (should (consp (alist-get 'parameters sig))))))
+
+(ert-deftest cmacs-lsp-tests-signature-help-at-open-paren ()
+  "Signature help fires immediately after `(' -- typed alone or as an
+electric pair -- with the first argument active."
+  (skip-unless (cmacs-lsp-tests--available-p))
+  (cmacs-lsp-tests--with-server proc
+    (cmacs-lsp-tests--open proc "loanpmt(\nloanpmt()\n")
+    ;; "loanpmt(" -- cursor right after the open paren.
+    (cmacs-lsp-tests--send
+     proc '(:jsonrpc "2.0" :id 10 :method "textDocument/signatureHelp"
+            :params (:textDocument (:uri "file:///t.calc")
+                     :position (:line 0 :character 8))))
+    (let* ((result (alist-get 'result (cmacs-lsp-tests--response proc 10)))
+           (sig (car (alist-get 'signatures result))))
+      (should (equal (alist-get 'label sig)
+                     "loanpmt(principal, annrate, years)"))
+      (should (eql (alist-get 'activeParameter result) 0)))
+    ;; "loanpmt()" -- electric pair, cursor between the parens.
+    (cmacs-lsp-tests--send
+     proc '(:jsonrpc "2.0" :id 11 :method "textDocument/signatureHelp"
+            :params (:textDocument (:uri "file:///t.calc")
+                     :position (:line 1 :character 8))))
+    (let* ((result (alist-get 'result (cmacs-lsp-tests--response proc 11)))
+           (sig (car (alist-get 'signatures result))))
+      (should (equal (alist-get 'label sig)
+                     "loanpmt(principal, annrate, years)"))
+      (should (eql (alist-get 'activeParameter result) 0)))))
+
+(ert-deftest cmacs-lsp-tests-completion-at-open-paren ()
+  "Empty-prefix completion at an argument position serves candidates.
+This is what the `(' trigger character pops in the client."
+  (skip-unless (cmacs-lsp-tests--available-p))
+  (cmacs-lsp-tests--with-server proc
+    (cmacs-lsp-tests--open proc "rate := 0.05\nloanpmt(\n")
+    (cmacs-lsp-tests--send
+     proc '(:jsonrpc "2.0" :id 12 :method "textDocument/completion"
+            :params (:textDocument (:uri "file:///t.calc")
+                     :position (:line 1 :character 8))))
+    (let ((labels (mapcar (lambda (item) (alist-get 'label item))
+                          (alist-get 'result
+                                     (cmacs-lsp-tests--response proc 12)))))
+      (should (member "rate" labels))
+      (should (member "pi" labels))
+      (should (member "sqrt" labels)))))
 
 (ert-deftest cmacs-lsp-tests-definition-and-symbols ()
   "`:=' bindings resolve as definitions and list as symbols."

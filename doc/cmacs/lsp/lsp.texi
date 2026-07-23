@@ -61,8 +61,11 @@ before analysis (and reported as comment tokens).
 
 It provides completion (all 415 Calc built-ins, every registered cmacs
 calculator, the symbolic constants, 165 Calc units, and the sheet's
-@code{:=} variables --- each with signature detail and markdown docs),
-hover (catalog documentation with per-argument docs and verified
+@code{:=} variables --- each with signature detail and markdown docs;
+trigger characters @code{(} and @code{,} pop the list at argument
+positions, right after @code{loanpmt(} or between an electric-pair
+@code{loanpmt()}, without a typed prefix), hover (catalog documentation
+with per-argument docs and verified
 examples), signature help with active-parameter tracking, definition
 and document symbols for @code{:=} bindings, semantic tokens, and
 lexical diagnostics: unbalanced delimiters (error) and unknown call
@@ -77,8 +80,11 @@ With the feature compiled in, opening a @file{.calc} file auto-starts
 eglot against @code{<this-binary> --cmacs-lsp gnucalc}; disable with
 @code{(setq cmacs-lsp-auto-start nil)}.  While eglot manages a sheet,
 the native flymake backend stays authoritative
-(@code{eglot-stay-out-of}), the native capf yields to the server's
-richer vocabulary, and eldoc composes both sources.  The generic client
+(@code{eglot-stay-out-of}); the native capf and eldoc yield to the
+server's richer vocabulary and per-argument signature help; and the
+buffer uses the @code{eldoc-documentation-compose-eagerly} strategy so
+the signature after @code{loanpmt(} is never swallowed by a hover that
+has nothing to say at that position.  The generic client
 half is @file{lisp/cmacs/cmacs-lsp.el}
 (@code{cmacs-lsp-register-eglot}, @code{cmacs-lsp-ensure}).
 

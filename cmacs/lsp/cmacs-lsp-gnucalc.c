@@ -1158,16 +1158,20 @@ gnucalc_diagnose (CmacsLspServer *server, CmacsLspDocument *doc)
 
 static const CmacsLspServerOps gnucalc_ops =
 {
-  "cmacs-lsp-gnucalc",          /* server_name */
-  "0.1.0",                      /* server_version */
-  gnucalc_init_capabilities,
-  gnucalc_completion,
-  gnucalc_hover,
-  gnucalc_signature_help,
-  gnucalc_definition,
-  gnucalc_document_symbol,
-  gnucalc_semantic_tokens,
-  gnucalc_diagnose
+  .server_name = "cmacs-lsp-gnucalc",
+  .server_version = "0.1.0",
+  .init_capabilities = gnucalc_init_capabilities,
+  .completion = gnucalc_completion,
+  .hover = gnucalc_hover,
+  .signature_help = gnucalc_signature_help,
+  .definition = gnucalc_definition,
+  .document_symbol = gnucalc_document_symbol,
+  .semantic_tokens = gnucalc_semantic_tokens,
+  .diagnose = gnucalc_diagnose,
+  /* Pop the completion list at argument positions -- right after
+     "loanpmt(" or between an electric-pair "loanpmt()" -- without
+     waiting for a typed prefix.  */
+  .completion_triggers = "(,"
 };
 
 int

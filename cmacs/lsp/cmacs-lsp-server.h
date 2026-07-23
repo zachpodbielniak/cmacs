@@ -51,6 +51,12 @@ typedef struct CmacsLspServerOps
   /* Analyze DOC and publish textDocument/publishDiagnostics.  Called
      after didOpen and after every didChange.  */
   void (*diagnose) (CmacsLspServer *server, CmacsLspDocument *doc);
+
+  /* Completion trigger characters, one per byte (e.g. "(,"), or NULL.
+     Advertised in completionProvider.triggerCharacters so clients pop
+     the completion list at argument positions without a typed prefix
+     (corfu via eglot's company-prefix-length, nvim natively).  */
+  const char *completion_triggers;
 } CmacsLspServerOps;
 
 extern CmacsLspServer *cmacs_lsp_server_new (const CmacsLspServerOps *ops);

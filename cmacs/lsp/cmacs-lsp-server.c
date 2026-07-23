@@ -123,6 +123,20 @@ handle_initialize (CmacsLspServer *server, gint64 id)
       json_builder_begin_object (b);
       json_builder_set_member_name (b, "resolveProvider");
       json_builder_add_boolean_value (b, FALSE);
+      if (ops->completion_triggers != NULL)
+        {
+          const char *c;
+
+          json_builder_set_member_name (b, "triggerCharacters");
+          json_builder_begin_array (b);
+          for (c = ops->completion_triggers; *c != '\0'; c++)
+            {
+              gchar trigger[2] = { *c, '\0' };
+
+              json_builder_add_string_value (b, trigger);
+            }
+          json_builder_end_array (b);
+        }
       json_builder_end_object (b);
     }
 

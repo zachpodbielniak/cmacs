@@ -759,23 +759,34 @@ line in place with its result, replacing any previous one.
 ;; the buffer: the native flymake backend stays authoritative -- the
 ;; Elisp validator evaluates through Calc and sees semantics the
 ;; server's lexical pass cannot -- so eglot is kept out of flymake; the
-;; native capf is dropped, because the server's vocabulary is a strict
-;; superset (all 415 built-ins carry docs there) and two capfs would
-;; duplicate every candidate; native eldoc stays, eldoc composes.
+;; native capf and eldoc are dropped, because the server's vocabulary
+;; is a strict superset (all 415 built-ins carry docs and per-argument
+;; signature help there; the registry-only native eldoc would shadow
+;; or duplicate it).  Eldoc uses the compose-eagerly strategy so the
+;; signature after "loanpmt(" is never swallowed by eglot's hover
+;; returning nothing at that position under the default
+;; first-doc-wins strategy.
 
 (defun cmacs-calculator-sheet--lsp-setup ()
   "Start the gnucalc LSP for this sheet, keeping native flymake."
   (setq-local eglot-stay-out-of '(flymake))
+  (setq-local eldoc-documentation-strategy
+              #'eldoc-documentation-compose-eagerly)
   (cmacs-lsp-ensure))
 
 (defun cmacs-calculator-sheet--lsp-managed ()
-  "Swap the native capf out while eglot manages a sheet buffer."
+  "Swap the native capf and eldoc out while eglot manages a sheet."
   (when (derived-mode-p 'cmacs-calculator-sheet-mode)
     (if (bound-and-true-p eglot--managed-mode)
-        (remove-hook 'completion-at-point-functions
-                     #'cmacs-calculator-sheet--capf t)
+        (progn
+          (remove-hook 'completion-at-point-functions
+                       #'cmacs-calculator-sheet--capf t)
+          (remove-hook 'eldoc-documentation-functions
+                       #'cmacs-calculator-sheet--eldoc t))
       (add-hook 'completion-at-point-functions
-                #'cmacs-calculator-sheet--capf nil t))))
+                #'cmacs-calculator-sheet--capf nil t)
+      (add-hook 'eldoc-documentation-functions
+                #'cmacs-calculator-sheet--eldoc nil t))))
 
 (when (and (boundp 'is-cmacs-lsp) is-cmacs-lsp
            (boundp 'is-cmacs-calculator) is-cmacs-calculator)
