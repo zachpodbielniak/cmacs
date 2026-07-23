@@ -110,6 +110,7 @@ configure_flags := """
     --with-cmacs-transcode
     --with-cmacs-transcribe
     --with-cmacs-calculator
+    --with-cmacs-lsp
     --enable-cmacs-cpatch
     --enable-cmacs-deps-debug
 """

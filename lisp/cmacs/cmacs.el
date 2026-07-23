@@ -72,7 +72,7 @@ unavailable at runtime is excluded."
                       libregnum lrgterm imgedit vidstudio gnuseye cad
                       screensaver org-ex mcp print video audio whisper
                       piper gsurf gsurf-lrg emacsctl cintrospect cpatch
-                      calculator)))
+                      calculator lsp transcode transcribe lrgscript)))
       (when (cmacs-feature-p feat)
         (push feat out)))
     (nreverse out)))

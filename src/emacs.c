@@ -169,6 +169,11 @@ extern char etext;
 #include "cmacs-crispy.h"
 #endif
 
+/* CMACS: --cmacs-lsp in-binary language servers (cmacs_lsp_main).  */
+#ifdef HAVE_CMACS_LSP
+#include "cmacs-lsp-cli.h"
+#endif
+
 #ifdef HAVE_CMACS_GOWL
 #include <gowl.h>
 #include <wayland-server-core.h>
@@ -330,6 +335,13 @@ Initialization options:\n\
 #ifdef HAVE_CMACS_CALCULATOR
     "\
 --calc [EXPR]               run the calculator REPL, or evaluate EXPR\n\
+",
+#endif
+#ifdef HAVE_CMACS_LSP
+    "\
+--cmacs-lsp LANG            run the built-in LSP language server for\n\
+                              LANG over stdio, no editor; with no LANG,\n\
+                              list the compiled-in language servers\n\
 ",
 #endif
 #ifdef HAVE_CMACS_CRISPY
@@ -1456,6 +1468,24 @@ android_emacs_init (int argc, char **argv, char *dump_file)
   }
 #endif
 
+  /* CMACS: --cmacs-lsp LANG runs the compiled-in LSP language server
+     for LANG and never returns.  Mirrors the --bacon hook above: the
+     servers are pure C/GLib, so no Emacs/Lisp initialization may run
+     first.  See doc_org/cmacs/cmacs-upstream-changes.org.  */
+#ifdef HAVE_CMACS_LSP
+  {
+    int i;
+    for (i = 1; i < argc; i++)
+      {
+        if (strcmp (argv[i], "--cmacs-lsp") == 0
+            || strncmp (argv[i], "--cmacs-lsp=", 12) == 0)
+          cmacs_lsp_main (argc, argv, i);
+        if (strcmp (argv[i], "--") == 0)
+          break;
+      }
+  }
+#endif
+
 #ifdef HAVE_CMACS_LRGTERM
   /* CMACS: --lrg[=MODE] selects the libregnum/raylib display backend
      (output_lrg).  Record the requested render mode (2d default / 3d / 3dvr)
@@ -2061,6 +2091,10 @@ android_emacs_init (int argc, char **argv, char *dump_file)
       printf ("Usage: %s [OPTION-OR-FILENAME]...\n", argv[0]);
       for (i = 0; i < countof (usage_message); i++)
 	fputs (usage_message[i], stdout);
+      /* CMACS: list the compiled-in --cmacs-lsp language servers.  */
+#ifdef HAVE_CMACS_LSP
+      cmacs_lsp_print_help (stdout);
+#endif
       exit (0);
     }
 

@@ -117,7 +117,8 @@
 (defconst cmacs-config-tests--all-features
   '(glib gi crispy bacon gowl podomation libreclaw ai libregnum lrgterm
     imgedit vidstudio gnuseye cad screensaver org-ex mcp print video
-    audio whisper piper gsurf gsurf-lrg emacsctl cintrospect cpatch)
+    audio whisper piper gsurf gsurf-lrg emacsctl cintrospect cpatch
+    calculator lsp transcode transcribe lrgscript)
   "Every --with-cmacs-NAME option that should have an IS-CMACS-NAME flag.")
 
 (ert-deftest cmacs-features-flags-always-bound ()

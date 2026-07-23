@@ -667,6 +667,7 @@ OPTION_DEFAULT_OFF([cmacs-vidstudio], [CMacs video editor (libregnum Reel timeli
 OPTION_DEFAULT_OFF([cmacs-transcode], [CMacs native ffmpeg video/audio transcoder (podman/docker container or host; Emacs-managed parallel pool)])
 OPTION_DEFAULT_OFF([cmacs-transcribe], [CMacs batch speech-to-text (whisper.cpp STT + transcode pre-pass, AI summaries, hooks; Emacs-managed parallel pool)])
 OPTION_DEFAULT_OFF([cmacs-calculator], [CMacs calculator (desktop/financial/physics/relativity/CAS over GNU Calc; SVG + libregnum charts; emacs --calc REPL)])
+OPTION_DEFAULT_OFF([cmacs-lsp], [CMacs in-binary LSP framework (emacs --cmacs-lsp LANG; gnucalc server for .calc sheets when the calculator is also enabled)])
 OPTION_DEFAULT_OFF([cmacs-gnuseye], [CMacs gnuseye live planetary globe (GNU's Eye; requires libregnum)])
 OPTION_DEFAULT_OFF([cmacs-lrgscript], [CMacs Emacs Lisp scripting backend + game authoring for libregnum (requires libregnum + glib)])
 OPTION_DEFAULT_OFF([cmacs-cad], [CMacs parametric CAD subsystem (cad-glib kernels; parts render as libregnum CAD nodes)])
@@ -1086,6 +1087,27 @@ if test "$with_cmacs_calculator" != "no"; then
   dnl matching the file's HAVE_CMACS_GLIB && HAVE_CMACS_CALCULATOR guard.
   if test "$with_cmacs_glib" != "no"; then
     CMACS_GLIB_OBJ="$CMACS_GLIB_OBJ cmacs-dbus-iface-calculator.o"
+  fi
+fi
+if test "$with_cmacs_lsp" != "no"; then
+  # In-binary LSP language servers: `emacs --cmacs-lsp LANG' enters a pure
+  # C/GLib JSON-RPC-over-stdio server before ANY Emacs initialization (the
+  # --bacon never-return model) -- the Lisp VM never starts on that path.
+  # json-glib is checked independently of cmacs-glib so --with-cmacs-lsp
+  # stands alone.
+  PKG_CHECK_MODULES([CMACS_LSP], [glib-2.0 gobject-2.0 json-glib-1.0])
+  AC_DEFINE([HAVE_CMACS_LSP], 1, [CMacs in-binary LSP framework])
+  CMACS_LSP_OBJ="cmacs-lsp-cli.o cmacs-lsp-io.o cmacs-lsp-server.o \
+ cmacs-lsp-document.o cmacs-lsp-registry.o"
+  dnl gnucalc backend: serves the calculator's language surface from a
+  dnl GENERATED data table (admin/cmacs-calc-builtins-catalog.el), so it
+  dnl needs no calculator C objects -- just the feature to exist.
+  if test "$with_cmacs_calculator" != "no"; then
+    AC_DEFINE([HAVE_CMACS_LSP_GNUCALC], 1,
+              [gnucalc language server backend for --cmacs-lsp])
+    CMACS_LSP_OBJ="$CMACS_LSP_OBJ cmacs-lsp-gnucalc.o"
+  else
+    AC_MSG_NOTICE([cmacs-lsp: calculator disabled, gnucalc server not built])
   fi
 fi
 if test "$with_cmacs_vidstudio" != "no"; then
@@ -1704,6 +1726,9 @@ AC_SUBST(CMACS_IMGEDIT_LIBS)
 AC_SUBST(CMACS_CALCULATOR_OBJ)
 AC_SUBST(CMACS_CALCULATOR_CFLAGS)
 AC_SUBST(CMACS_CALCULATOR_LIBS)
+AC_SUBST(CMACS_LSP_OBJ)
+AC_SUBST(CMACS_LSP_CFLAGS)
+AC_SUBST(CMACS_LSP_LIBS)
 AC_SUBST(CMACS_VIDSTUDIO_OBJ)
 AC_SUBST(CMACS_VIDSTUDIO_CFLAGS)
 AC_SUBST(CMACS_VIDSTUDIO_LIBS)

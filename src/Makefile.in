@@ -391,6 +391,9 @@ CMACS_IMGEDIT_LIBS = @CMACS_IMGEDIT_LIBS@
 CMACS_CALCULATOR_OBJ = @CMACS_CALCULATOR_OBJ@
 CMACS_CALCULATOR_CFLAGS = @CMACS_CALCULATOR_CFLAGS@
 CMACS_CALCULATOR_LIBS = @CMACS_CALCULATOR_LIBS@
+CMACS_LSP_OBJ = @CMACS_LSP_OBJ@
+CMACS_LSP_CFLAGS = @CMACS_LSP_CFLAGS@
+CMACS_LSP_LIBS = @CMACS_LSP_LIBS@
 CMACS_VIDSTUDIO_OBJ = @CMACS_VIDSTUDIO_OBJ@
 CMACS_VIDSTUDIO_CFLAGS = @CMACS_VIDSTUDIO_CFLAGS@
 CMACS_VIDSTUDIO_LIBS = @CMACS_VIDSTUDIO_LIBS@
@@ -478,6 +481,7 @@ CMACS_INTERNAL_CFLAGS = -I$(srcdir)/../cmacs/core \
                         -I$(srcdir)/../cmacs/imgedit \
                         -I$(srcdir)/../cmacs/vidstudio \
                         -I$(srcdir)/../cmacs/calculator \
+                        -I$(srcdir)/../cmacs/lsp \
                         -I$(srcdir)/../cmacs/api \
                         -DCMACS_SRCDIR=\"$(abspath $(srcdir))\"
 CMACS_CFLAGS = $(CMACS_INTERNAL_CFLAGS) \
@@ -501,7 +505,8 @@ CMACS_CFLAGS = $(CMACS_INTERNAL_CFLAGS) \
                $(CMACS_GSURF_CFLAGS) \
                $(CMACS_LRGTERM_CFLAGS) \
                $(CMACS_IMGEDIT_CFLAGS) \
-               $(CMACS_VIDSTUDIO_CFLAGS)
+               $(CMACS_VIDSTUDIO_CFLAGS) \
+               $(CMACS_LSP_CFLAGS)
 
 ## emacs.res if HAVE_W32
 EMACSRES = @EMACSRES@
@@ -645,7 +650,7 @@ base_obj = dispnew.o frame.o scroll.o xdisp.o menu.o $(XMENU_OBJ) window.o     \
 	$(MSDOS_OBJ) $(MSDOS_X_OBJ) $(NS_OBJ) $(CYGWIN_OBJ) $(FONT_OBJ)        \
 	$(W32_OBJ) $(WINDOW_SYSTEM_OBJ) $(XGSELOBJ)			       \
 	$(HAIKU_OBJ) $(PGTK_OBJ) $(ANDROID_OBJ) \
-	$(CMACS_CORE_OBJ) $(CMACS_GLIB_OBJ) $(CMACS_GI_OBJ) $(CMACS_CRISPY_OBJ) $(CMACS_BACON_OBJ) $(CMACS_GOWL_OBJ) $(CMACS_PODOMATION_OBJ) $(CMACS_LIBRECLAW_OBJ) $(CMACS_ORG_EX_OBJ) $(CMACS_MCP_OBJ) $(CMACS_CINTROSPECT_OBJ) $(CMACS_CPATCH_OBJ) $(CMACS_VIDEO_OBJ) $(CMACS_AUDIO_OBJ) $(CMACS_WHISPER_OBJ) $(CMACS_PIPER_OBJ) $(CMACS_AI_OBJ) $(CMACS_LIBREGNUM_OBJ) $(CMACS_GNUSEYE_OBJ) $(CMACS_LRGSCRIPT_OBJ) $(CMACS_CAD_OBJ) $(CMACS_SCREENSAVER_OBJ) $(CMACS_GSURF_OBJ) $(CMACS_LRGTERM_OBJ) $(CMACS_IMGEDIT_OBJ) $(CMACS_VIDSTUDIO_OBJ) $(CMACS_CALCULATOR_OBJ)
+	$(CMACS_CORE_OBJ) $(CMACS_GLIB_OBJ) $(CMACS_GI_OBJ) $(CMACS_CRISPY_OBJ) $(CMACS_BACON_OBJ) $(CMACS_GOWL_OBJ) $(CMACS_PODOMATION_OBJ) $(CMACS_LIBRECLAW_OBJ) $(CMACS_ORG_EX_OBJ) $(CMACS_MCP_OBJ) $(CMACS_CINTROSPECT_OBJ) $(CMACS_CPATCH_OBJ) $(CMACS_VIDEO_OBJ) $(CMACS_AUDIO_OBJ) $(CMACS_WHISPER_OBJ) $(CMACS_PIPER_OBJ) $(CMACS_AI_OBJ) $(CMACS_LIBREGNUM_OBJ) $(CMACS_GNUSEYE_OBJ) $(CMACS_LRGSCRIPT_OBJ) $(CMACS_CAD_OBJ) $(CMACS_SCREENSAVER_OBJ) $(CMACS_GSURF_OBJ) $(CMACS_LRGTERM_OBJ) $(CMACS_IMGEDIT_OBJ) $(CMACS_VIDSTUDIO_OBJ) $(CMACS_CALCULATOR_OBJ) $(CMACS_LSP_OBJ)
 doc_obj = $(base_obj) $(NS_OBJC_OBJ)
 obj = $(doc_obj) $(HAIKU_CXX_OBJ)
 
@@ -785,7 +790,7 @@ LIBES = $(LIBS) $(W32_LIBS) $(LIBS_GNUSTEP) $(PGTK_LIBS) $(LIBX_BASE) $(LIBIMAGE
    $(CMACS_CINTROSPECT_LIBS) $(CMACS_CPATCH_LIBS) \
    $(CMACS_VIDEO_LIBS) $(CMACS_AUDIO_LIBS) \
    $(CMACS_WHISPER_LIBS) $(CMACS_PIPER_LIBS) $(CMACS_AI_LIBS) $(CMACS_LIBREGNUM_LIBS) \
-   $(CMACS_GNUSEYE_LIBS) $(CMACS_LRGSCRIPT_LIBS) $(CMACS_CAD_LIBS) $(CMACS_SCREENSAVER_LIBS) $(CMACS_GSURF_LIBS) $(CMACS_LRGTERM_LIBS) $(CMACS_IMGEDIT_LIBS) $(CMACS_VIDSTUDIO_LIBS)
+   $(CMACS_GNUSEYE_LIBS) $(CMACS_LRGSCRIPT_LIBS) $(CMACS_CAD_LIBS) $(CMACS_SCREENSAVER_LIBS) $(CMACS_GSURF_LIBS) $(CMACS_LRGTERM_LIBS) $(CMACS_IMGEDIT_LIBS) $(CMACS_VIDSTUDIO_LIBS) $(CMACS_LSP_LIBS)
 
 ## FORCE it so that admin/unidata can decide whether this file is
 ## up-to-date.  Although since charprop depends on bootstrap-emacs,
@@ -893,8 +898,9 @@ CMACS_ALL_OBJ = $(CMACS_CORE_OBJ) $(CMACS_GLIB_OBJ) $(CMACS_GI_OBJ) \
                 $(CMACS_GNUSEYE_OBJ) $(CMACS_LRGSCRIPT_OBJ) $(CMACS_CAD_OBJ) \
                 $(CMACS_SCREENSAVER_OBJ) $(CMACS_GSURF_OBJ) \
                 $(CMACS_LRGTERM_OBJ) $(CMACS_IMGEDIT_OBJ) \
-                $(CMACS_VIDSTUDIO_OBJ) $(CMACS_CALCULATOR_OBJ)
-CMACS_DIRS = core glib gobject dbus gi crispy bacon gowl podomation libreclaw org-ex mcp cintrospect cpatch video audio whisper piper ai libregnum gnuseye lrgscript cad screensaver gsurf lrgterm imgedit vidstudio calculator
+                $(CMACS_VIDSTUDIO_OBJ) $(CMACS_CALCULATOR_OBJ) \
+                $(CMACS_LSP_OBJ)
+CMACS_DIRS = core glib gobject dbus gi crispy bacon gowl podomation libreclaw org-ex mcp cintrospect cpatch video audio whisper piper ai libregnum gnuseye lrgscript cad screensaver gsurf lrgterm imgedit vidstudio calculator lsp
 cmacs-symlinks:
 	$(AM_V_at)for f in $(CMACS_ALL_OBJ:.o=.c); do \
 	  test -e "$(srcdir)/$$f" && continue; \
