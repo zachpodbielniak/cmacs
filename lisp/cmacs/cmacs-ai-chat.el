@@ -248,7 +248,7 @@ label reflects what's actually answering (including model defaults).
 The provider half is downcased (`ollama' rather than `Ollama') to
 match the symbols used in the Elisp API.  The model half is left
 untouched -- ai-glib's strings tend to be the provider's own
-canonical model id (e.g. `claude-sonnet-4-5', `gpt-oss:20b').
+canonical model id (e.g. `claude-sonnet-5', `gpt-oss:20b').
 Falls back to the buffer-local provider symbol when no client is
 available."
   (let* ((client (car-safe cmacs-ai-chat-session-pair))

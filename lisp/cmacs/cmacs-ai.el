@@ -89,8 +89,8 @@ string (e.g. your name) to override."
 (defcustom cmacs-ai-assistant-label-format "%s/%s"
   "Format string for assistant message headings.
 Receives two arguments via `format': the ai-glib provider name
-(e.g. \"Claude\") and the effective model (e.g. \"claude-sonnet-4-6\").
-The default produces e.g. \"Claude/claude-sonnet-4-6\".  When the
+(e.g. \"Claude\") and the effective model (e.g. \"claude-sonnet-5\").
+The default produces e.g. \"Claude/claude-sonnet-5\".  When the
 model can't be determined (no client, provider has no default),
 only the provider name is shown -- the format string is bypassed."
   :type 'string

@@ -128,7 +128,7 @@ slots.  =ai prompt= composes its text from positionals, stdin, and
   emacsctl ai models -p claude            # one provider
   emacsctl ai models -p ollama -o json    # {"ollama": ["llama3.2", ...]}
 
-  emacsctl ai chat -p claude -m claude-opus-4-8 'hello'
+  emacsctl ai chat -p claude -m claude-opus-5 'hello'
 #+end_src
 
 =ai call= is like =ai prompt= (same =-p/-m/-s/-f= flags, positionals,

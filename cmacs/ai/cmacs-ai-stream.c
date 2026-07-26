@@ -409,7 +409,7 @@ Returns the response text (string), or signals `cmacs-ai-error' on
 failure.  Optional PROVIDER (symbol: claude / openai / ...) overrides
 the default; optional SYSTEM is a string system prompt; optional
 MODEL is a model name string overriding the provider's default
-\(e.g. "claude-opus-4-8", "fable").  This is a stateless single-shot
+\(e.g. "claude-opus-5", "fable").  This is a stateless single-shot
 wrapper (`ai_simple_prompt') -- it does not maintain conversation
 history.  */)
   (Lisp_Object prompt, Lisp_Object provider, Lisp_Object system,

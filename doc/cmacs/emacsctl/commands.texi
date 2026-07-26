@@ -122,7 +122,7 @@ emacsctl ai models                      # provider/model table, all
 emacsctl ai models -p claude            # one provider
 emacsctl ai models -p ollama -o json
 
-emacsctl ai chat -p claude -m claude-opus-4-8 'hello'
+emacsctl ai chat -p claude -m claude-opus-5 'hello'
 @end example
 
 @code{ai call} is like @code{ai prompt} (same @option{-p/-m/-s/-f}
