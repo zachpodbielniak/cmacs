@@ -307,8 +307,27 @@ handle_save_buffer (McpServer   *server,
       return result;
     }
 
+  /* `save-buffer' is a prime source of prompts an MCP client can never
+     answer: most often `select-safe-coding-system' asking which coding
+     system to use for text the file's own coding system can't encode.
+     cmacs_dispatch_eval binds `inhibit-interaction', so that surfaces
+     as an `inhibited-interaction' error instead of wedging the request
+     in a recursive edit -- name the offending character so the caller
+     can act on it rather than just seeing "interaction inhibited". */
   expr = g_strdup_printf (
-    "(with-current-buffer \"%s\" (save-buffer) t)", buffer_name);
+    "(with-current-buffer \"%s\""
+    " (condition-case nil (progn (save-buffer) t)"
+    "  (inhibited-interaction"
+    "   (let* ((cs buffer-file-coding-system)"
+    "          (pos (and cs (ignore-errors"
+    "                        (unencodable-char-position"
+    "                         (point-min) (point-max) cs)))))"
+    "    (error \"save-buffer needs an interactive answer%%s\""
+    "           (if pos"
+    "               (format \": char at %%d cannot be encoded in %%s\""
+    "                       pos cs)"
+    "             \" (a prompt no MCP client can answer)\"))))))",
+    buffer_name);
   result_str = cmacs_dispatch_eval (expr, &error);
   result = mcp_tool_result_new (result_str == NULL);
   mcp_tool_result_add_text (result,

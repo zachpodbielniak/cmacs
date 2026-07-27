@@ -4839,6 +4839,32 @@ The server is started automatically by @code{cmacs-mcp-mode} or
 manually via @code{cmacs-mcp-start}.  The socket path defaults to
 @file{$XDG_RUNTIME_DIR/cmacs-mcp/@var{PID}.sock}.
 
+@subsection No prompting from a tool call
+
+There is no user at the other end of an MCP request, so
+@code{cmacs_dispatch_eval} binds @code{inhibit-interaction} to @code{t}
+around every form it evaluates.  A tool whose Lisp reaches a minibuffer
+prompt --- @code{save-buffer} asking which coding system to use,
+@code{kill-buffer} asking about unsaved changes, an @code{interactive}
+spec with a prompt --- gets an @code{inhibited-interaction} error back
+as an ordinary tool error.
+
+Without that binding Emacs enters a recursive edit @emph{inside the
+GLib dispatch} and waits for real keyboard input: the tool call never
+returns, the agent blocks until its own timeout, and the editor is left
+nested in a recursive edit under @code{xg_select}.
+
+The one exception is @code{send_keys}, which exists to simulate a user:
+it re-enables interaction (@code{(let ((inhibit-interaction nil)) @dots{})})
+so a macro like @kbd{C-x C-f foo @key{RET}} can drive the minibuffer, and
+wraps the macro in a @code{with-timeout} so a sequence that runs dry
+mid-prompt fails after a few seconds instead of hanging.
+
+@noindent
+The same binding covers the other consumers of
+@code{cmacs_dispatch_eval}: the D-Bus @code{Eval} method,
+@command{emacsctl}, and the bacon/crispy IPC handlers.
+
 @section Tools
 
 MCP tools are grouped by category.  Each tool name is prefixed with its

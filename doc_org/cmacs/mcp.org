@@ -44,6 +44,26 @@ Inside Emacs, the =McpUnixSocketServer= is attached to the CMacs
 =cmacs_dispatch_eval= mechanism to safely evaluate Lisp, respecting
 the =waiting_for_input= guard.
 
+** No prompting from a tool call
+
+There is no user at the other end of an MCP request, so
+=cmacs_dispatch_eval= binds =inhibit-interaction= to =t= around every
+form it evaluates.  A tool whose Lisp reaches a minibuffer prompt ---
+=save-buffer= asking which coding system to use, =kill-buffer= asking
+about unsaved changes, an =interactive= spec with a prompt --- gets an
+=inhibited-interaction= error back as an ordinary tool error.
+
+Without that binding Emacs enters a *recursive edit inside the GLib
+dispatch* and waits for real keyboard input: the tool call never
+returns, the agent blocks until its own timeout, and the editor is left
+nested in a recursive edit under =xg_select=.
+
+The one exception is =send_keys=, which exists to simulate a user: it
+re-enables interaction (=(let ((inhibit-interaction nil)) ...)=) so a
+macro like =C-x C-f foo RET= can drive the minibuffer, and wraps the
+macro in a =with-timeout= so a sequence that runs dry mid-prompt fails
+after a few seconds instead of hanging.
+
 Multiple concurrent client sessions are supported.
 
 * Tools

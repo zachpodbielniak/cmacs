@@ -141,7 +141,7 @@ service can dispatch the inbound call."
   (skip-unless (cmacs-feature-p 'glib))
   (skip-unless (executable-find "gdbus"))
   (cmacs-dbus-tests--with-service
-    (let* ((dest (cmacs-dbus-name))
+    (let* ((dest (cmacs-dbus-per-pid-name))
            (out  (cmacs-dbus-tests--gdbus
                   "introspect" "--session"
                   "--dest" dest
@@ -155,7 +155,7 @@ service can dispatch the inbound call."
   (skip-unless (cmacs-feature-p 'glib))
   (skip-unless (executable-find "gdbus"))
   (cmacs-dbus-tests--with-service
-    (let* ((dest (cmacs-dbus-name))
+    (let* ((dest (cmacs-dbus-per-pid-name))
            (out  (cmacs-dbus-tests--gdbus
                   "call" "--session"
                   "--dest" dest
@@ -164,12 +164,30 @@ service can dispatch the inbound call."
                   "(+ 40 2)")))
       (should (string-match-p "42" out)))))
 
+(ert-deftest cmacs-dbus-eval-refuses-to-prompt ()
+  "An RPC eval that would prompt errors instead of wedging the loop.
+`cmacs_dispatch_eval' binds `inhibit-interaction', so a form that
+reaches the minibuffer signals `inhibited-interaction' instead of
+entering a recursive edit inside the GLib dispatch -- which used to
+hang the request (and the editor) until a human answered the prompt."
+  (skip-unless (fboundp 'cmacs-dbus-start))
+  (skip-unless (executable-find "gdbus"))
+  (cmacs-dbus-tests--with-service
+    (let* ((dest (cmacs-dbus-per-pid-name))
+           (out  (cmacs-dbus-tests--gdbus
+                  "call" "--session"
+                  "--dest" dest
+                  "--object-path" "/org/cmacs/Editor"
+                  "--method" "org.cmacs.Editor1.Eval"
+                  "(read-string \"never answered: \")")))
+      (should (string-match-p "inhibited" (downcase out))))))
+
 (ert-deftest cmacs-dbus-object-manager-empty-on-phase-1 ()
   "Phase 1 has no managed children; GetManagedObjects returns ()."
   (skip-unless (cmacs-feature-p 'glib))
   (skip-unless (executable-find "gdbus"))
   (cmacs-dbus-tests--with-service
-    (let* ((dest (cmacs-dbus-name))
+    (let* ((dest (cmacs-dbus-per-pid-name))
            (out  (cmacs-dbus-tests--gdbus
                   "call" "--session"
                   "--dest" dest

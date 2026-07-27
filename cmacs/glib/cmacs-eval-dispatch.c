@@ -197,16 +197,35 @@ dispatch_eval_error (Lisp_Object err)
  *
  * Temporarily clearing waiting_for_input mirrors the guard in
  * cmacs_glib_dispatch (cmacs-glib-loop.c) and keeps signals inside
- * the condition-case where they belong. */
+ * the condition-case where they belong.
+ *
+ * The wrapper also binds `inhibit-interaction' to t.  Every caller of
+ * this path (MCP tools, D-Bus Eval, bacon/crispy IPC, emacsctl) is an
+ * RPC gateway with no user on the other end: if the form reaches a
+ * minibuffer prompt -- `save-buffer' asking for a coding system,
+ * `kill-buffer' asking about unsaved changes, an `interactive' spec
+ * with a prompt -- Emacs enters a recursive edit *inside the GLib
+ * dispatch* and reads real keyboard input.  The request never returns,
+ * the client blocks forever, and the editor is left nested in a
+ * recursive edit under xg_select.  With the binding in place such a
+ * prompt signals `inhibited-interaction' instead, which the
+ * condition-case below turns into an ordinary error reply.
+ *
+ * Callers that genuinely supply their own input (the MCP send_keys
+ * tool, which drives a keyboard macro) opt back in by binding
+ * `inhibit-interaction' to nil inside the form they submit. */
 static Lisp_Object
 dispatch_safe_eval (Lisp_Object form)
 {
   Lisp_Object result;
+  specpdl_ref count = SPECPDL_INDEX ();
   bool was_waiting = waiting_for_input;
   if (was_waiting)
     clear_waiting_for_input ();
+  specbind (intern ("inhibit-interaction"), Qt);
   result = internal_condition_case_1 (dispatch_eval_body, form,
                                       Qt, dispatch_eval_error);
+  unbind_to (count, Qnil);
   if (was_waiting)
     set_waiting_for_input (input_available_clear_time);
   return result;
