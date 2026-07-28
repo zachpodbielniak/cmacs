@@ -197,6 +197,51 @@ gdbus call --session --dest org.cmacs.Editor \
     eDP-1 false
 #+end_src
 
+* AI methods (when =--with-cmacs-ai=)
+
+On =org.cmacs.Editor1.Ai=, mirroring the MCP tool surface in
+=cmacs/mcp/cmacs-mcp-tools-ai.c= -- the two are kept in sync
+deliberately, so a method here has a tool there and vice versa.
+
+Every one of these blocks the target's main thread for the whole call.
+That is seconds for a prompt, and tens of seconds for a tool loop or an
+image.
+
+| Method          | Signature        | Description                                   |
+|-----------------+------------------+-----------------------------------------------|
+| =ListProviders= | =-> (s)=         | Provider symbols                              |
+| =ListModels=    | =(s) -> (s)=     | provider (empty = all) → JSON                 |
+| =Prompt=        | =(ssss) -> (s)=  | prompt, provider, system, model               |
+| =Call=          | =(ssssb) -> (s)= | as =Prompt= + tools (multi-turn agent loop)   |
+| =OpenChat=      | =(sss) -> (s)=   | provider, prompt, model → buffer name         |
+| =GenerateImage= | =(ssssss) -> (s)= | prompt, provider, model, aspect, references, buffer |
+
+An empty string means "unset" for every optional argument.
+
+=GenerateImage= inserts the result into a buffer of the target instance:
+attached to the current Org node where that is possible, otherwise saved
+under =cmacs-ai-image-dir=.  =references= is a comma-separated list of
+input images, each =PATH= or =PATH::ROLE=; the role tells the model what
+that reference is for.  It is one flat string rather than an array
+because the MCP bridge's schema translator cannot carry a nested list,
+and the two surfaces share a wire format.
+
+** Examples
+
+Always target a specific instance.  A bare bus name reaches whichever
+cmacs answers first, which on a desktop is the user's live session:
+
+#+BEGIN_SRC sh
+gdbus call --session \
+  --dest org.cmacs.Editor1.p$(pgrep -n emacs) \
+  --object-path /org/cmacs/Editor1 \
+  --method org.cmacs.Editor1.Ai.GenerateImage \
+  'a brass telescope' 'gemini' '' '16:9' '' ''
+#+END_SRC
+
+In practice =emacsctl ai generate-image= is the better front end; see
+[[file:../emacsctl/commands.org][emacsctl commands]].
+
 * Error handling
 
 Every method that takes elisp returns errors as

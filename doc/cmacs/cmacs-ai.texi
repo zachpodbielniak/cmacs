@@ -345,9 +345,277 @@ clears the previews.
 @node CMacs AI Image Generation
 @section Image Generation
 
-@code{cmacs-ai-image-generate-async} drives OpenAI / Gemini / Grok
-image-generator interfaces and fires a callback with a plist of
-@code{(:url U :base64 B :mime M :revised R)} entries.
+Generate an image and put it where you are working.  In an Org buffer the
+image is attached to the current node, linked, and previewed inline; the
+same machinery is reachable from an @code{ai-image} babel block, from the
+chat buffer, and over MCP / D-Bus / @command{emacsctl}.
+
+@menu
+* Image Quick Start::
+* Image Providers and Capabilities::
+* Image Storage::
+* Image Commands::
+* Image Parameters::
+* Image Reference Conditioning::
+* Image Babel Blocks::
+* Image Chat Integration::
+* Image Remote Surfaces::
+* Image Troubleshooting::
+* Image Low-Level API::
+@end menu
+
+@node Image Quick Start
+@subsection Quick Start
+
+With point in an Org buffer, under a heading:
+
+@example
+M-x cmacs-ai-image RET a brass telescope on a wooden desk RET
+@end example
+
+A moment later the buffer contains a @code{#+CAPTION:} recording the
+prompt and an @code{[[attachment:...]]} link, rendered inline.  An
+@code{:ID:} property appears on the heading: that is how Org locates the
+attachment directory.
+
+The bytes live in the node's @code{org-attach} directory, so the figure
+travels with the node, is found by export, and survives the file being
+moved.
+
+Generation is asynchronous --- Emacs stays responsive for the tens of
+seconds these take.
+
+@node Image Providers and Capabilities
+@subsection Providers, Models and Capabilities
+
+Only three providers generate images.  Claude and Ollama expose no image
+API at all, and asking them says so rather than failing obscurely.
+
+@multitable @columnfractions .18 .46 .36
+@headitem Provider @tab Models @tab Reference images
+@item Gemini
+@tab Nano Banana, Nano Banana 2, Nano Banana Pro, Imagen 4 / 3
+@tab up to 14 (Pro); none (Imagen)
+@item OpenAI
+@tab GPT Image 2 / 1.5 / 1, DALL-E 3 / 2
+@tab up to 16 (GPT Image); 1 + mask (DALL-E 2)
+@item Grok
+@tab Grok Imagine, Grok Imagine Quality, Grok 2 Image
+@tab 1 (Imagine); none (Grok 2)
+@end multitable
+
+Models differ in far more than that.  @kbd{M-x
+cmacs-ai-image-list-models} opens a buffer listing each model's limits,
+geometry vocabulary and capabilities; @code{cmacs-ai-image-models}
+returns the same thing as data.
+
+Options a model cannot honour are dropped rather than sent and rejected.
+Two things are never dropped silently, because doing so would change the
+result invisibly: reference images beyond a model's limit, and an
+unsupported operation.
+
+@node Image Storage
+@subsection Where Images Are Stored
+
+In Org, @code{org-attach} takes ownership.  If the node has no @code{ID}
+or @code{DIR} property yet, one is created.
+
+Everywhere else --- a non-Org buffer, a read-only one, or a position
+before the first heading, where there is no node to attach to --- the
+image goes to @code{cmacs-ai-image-dir} (default
+@file{$XDG_DATA_HOME/cmacs-ai/images/}) and a bare path is inserted
+instead of a link.  A message says which happened.
+
+@code{cmacs-ai-image-attach-method} controls whether the file is moved
+(default) or copied.  Generated images start in a temporary file, so
+moving is both correct and cheaper.
+
+@node Image Commands
+@subsection Commands
+
+@table @code
+@item cmacs-ai-image
+Generate from a prompt, or the active region.  With a prefix argument,
+ask for provider, model and options --- but only the options the chosen
+model honours, so there is no way to interactively request something
+that would be silently dropped.
+@item cmacs-ai-image-edit
+Generate conditioned on reference images.
+@item cmacs-ai-image-regenerate
+Re-run the image at point from its @code{#+CAPTION}.
+@item cmacs-ai-image-variations
+Several images for one prompt.
+@item cmacs-ai-image-save-as
+Copy the image at point elsewhere.
+@item cmacs-ai-image-list-models
+Show what each model supports.
+@end table
+
+Suggested bindings:
+
+@example
+(global-set-key (kbd "C-c a i i") #'cmacs-ai-image)
+(global-set-key (kbd "C-c a i e") #'cmacs-ai-image-edit)
+(global-set-key (kbd "C-c a i r") #'cmacs-ai-image-regenerate)
+(global-set-key (kbd "C-c a i m") #'cmacs-ai-image-list-models)
+@end example
+
+@node Image Parameters
+@subsection Parameters
+
+@code{cmacs-ai-image-generate-async} takes an options plist covering the
+whole request surface.  Omitting a key leaves the provider on its own
+default rather than on ours.
+
+@multitable @columnfractions .22 .78
+@headitem Group @tab Keys
+@item Prompt @tab @code{:prompt} @code{:negative} @code{:system}
+@item Operation @tab @code{:operation} (generate / edit / variation / upscale)
+@item Geometry @tab @code{:size} @code{:custom-size} @code{:aspect} @code{:resolution}
+@item Appearance @tab @code{:quality} @code{:style} @code{:style-preset} @code{:background}
+@item Output @tab @code{:format} @code{:compression} @code{:response-format}
+@item Sampling @tab @code{:seed} @code{:guidance} @code{:steps} @code{:strength} @code{:temperature} @code{:top-p} @code{:top-k}
+@item Policy @tab @code{:moderation} @code{:person-generation} @code{:watermark} @code{:enhance-prompt} @code{:language}
+@item Editing @tab @code{:references} @code{:mask} @code{:fidelity} @code{:partial-images}
+@item Escape @tab @code{:extra}
+@end multitable
+
+Geometry is expressed two incompatible ways: the Gemini family thinks in
+aspect ratios plus a resolution tier, OpenAI in pixel dimensions.  Both
+are carried, and each provider uses whichever applies.
+
+@code{:extra} is a plist spliced verbatim into the request body, for
+parameters newer than this binding.  Nothing in it is validated.
+
+@node Image Reference Conditioning
+@subsection Reference Images and Editing
+
+Several input images, each doing a different job:
+
+@example
+(cmacs-ai-image-edit
+ "combine these into a concert poster"
+ '(("palette.png" . "style")
+   ("macaw.jpg"   . "subject")
+   ("venue.jpg"   . "background")))
+@end example
+
+Interactively, references come from the image at point, from the marked
+files in Dired, or are read one at a time; a prefix argument also asks
+for a role for each.
+
+Order is preserved and significant.  Roles matter because no wire format
+has a field for them --- ai-glib folds the labels into the prompt text,
+which is the only channel the model reads.  Unlabelled references are
+passed through in order.
+
+For a masked edit, the transparent areas of the mask are the ones
+regenerated.
+
+@node Image Babel Blocks
+@subsection The ai-image Babel Block
+
+Lets a figure live in the document that describes it:
+
+@example
+#+BEGIN_SRC ai-image :provider gemini :aspect 16:9 :resolution 2k
+A hyacinth macaw perched on a brass telescope, cinematic lighting
+#+END_SRC
+@end example
+
+@kbd{C-c C-c} generates and puts the link in @code{#+RESULTS:}, so
+re-evaluating regenerates the figure in place.  Register the language
+first with @code{(cmacs-ai-image-block-register)}.
+
+Header args mirror the parameter list, plus @code{:file} to write
+somewhere explicit instead of attaching, and @code{:ref} (repeatable,
+@code{PATH} or @code{PATH::ROLE}).
+
+This path is @emph{synchronous} --- org-babel has no async protocol ---
+so it blocks for as long as generation takes.
+@code{cmacs-ai-image-timeout} (default 180 s) bounds the wait.
+
+@node Image Chat Integration
+@subsection Chat Integration
+
+@code{/image PROMPT} in the compose region generates one directly, with
+no model turn involved.
+
+The @code{generate_image} tool lets the model decide to draw something
+mid-conversation.  It is on by default; set
+@code{cmacs-ai-chat-enable-image-tool} to @code{nil} to withhold it.
+
+The tool is deliberately @emph{not} named @code{ai_generate_image}.  The
+MCP bridge hides every tool matching @code{^ai_} from in-process chat
+buffers to stop the model calling itself recursively, and an in-process
+chat buffer is exactly where this one has to be visible.
+
+@node Image Remote Surfaces
+@subsection MCP, D-Bus and emacsctl
+
+@example
+emacsctl ai generate-image -p gemini -a 16:9 "a brass telescope"
+
+emacsctl ai generate-image \
+  -m gemini-3-pro-image-preview \
+  -r logo.png::style -r subject.jpg::subject \
+  -b notes.org "combine these into a poster"
+@end example
+
+The MCP tool is @code{generate_image}; the D-Bus method is
+@code{GenerateImage} on @code{org.cmacs.Editor1.Ai}.  All three block the
+cmacs main thread for the duration.
+
+References travel as a single comma-separated @code{PATH} or
+@code{PATH::ROLE} string on all three surfaces, because the MCP bridge's
+schema translator cannot carry a nested list.
+
+@node Image Troubleshooting
+@subsection Troubleshooting
+
+@table @asis
+@item ``provider does not support image generation''
+You asked Claude or Ollama.  Use gemini, openai or grok.
+@item ``Authentication failed''
+The provider's key is missing from the environment:
+@env{GEMINI_API_KEY}, @env{OPENAI_API_KEY}, @env{XAI_API_KEY}.
+@item The model answered with text
+Surfaces as an invalid-response error rather than an empty success.
+Usually the prompt was declined; rephrasing helps.
+@item A content-policy refusal
+Arrives as an invalid-request error with the provider's own explanation
+quoted, which is the useful part.
+@item ``attaching failed; using @dots{}''
+There was no Org node to attach to.  The image was saved to
+@code{cmacs-ai-image-dir} instead; nothing was lost.
+@item An option seemed to be ignored
+It probably was, because the model does not support it.
+@code{cmacs-ai-image-list-models} says which does what.
+@end table
+
+@node Image Low-Level API
+@subsection Low-Level API
+
+@table @code
+@item cmacs-ai-image-generate-async
+Generate; returns a job handle.
+@item cmacs-ai-image-generate-sync
+Blocking variant, for org-babel.
+@item cmacs-ai-image-cancel
+Abandon a job by handle.
+@item cmacs-ai-image-models
+Per-model capabilities and limits.
+@end table
+
+The async callback receives
+
+@example
+(:images ((:data BYTES :mime M :url U :base64 B :revised R) ...))
+@end example
+
+or @code{(:error MSG)}.  @code{BYTES} is a unibyte string, already
+materialised whether the provider returned inline data or a URL --- so a
+caller can write it straight to a file without knowing which.
 
 @node CMacs AI Org Blocks
 @section Org Babel Integration
@@ -386,7 +654,7 @@ libraries; no per-class binding code is needed.
 @node CMacs AI MCP Tools
 @section MCP Tools
 
-Built with @option{--with-cmacs-mcp}, five tools are exposed on the
+Built with @option{--with-cmacs-mcp}, six tools are exposed on the
 cmacs MCP socket:
 
 @table @code
@@ -410,6 +678,14 @@ report inline instead of failing the call.
 Open a chat buffer (optionally seeded with a first prompt; optional
 @code{model} overrides the provider's default).  Returns the buffer
 name.
+@item generate_image
+Generate an image and insert it into a cmacs buffer.  Args:
+@code{prompt} (required), @code{references} (comma-separated
+@code{PATH} or @code{PATH::ROLE}), @code{provider}, @code{model},
+@code{aspect}, @code{size}, @code{quality}, @code{buffer}.  Blocks the
+cmacs main thread for the tens of seconds generation takes.  Named
+without the @code{ai_} prefix on purpose --- see @ref{Image Chat
+Integration}.
 @end table
 
 External agents (e.g. an outer Claude Code instance) can drive the
@@ -528,6 +804,44 @@ Default max output tokens.  Default @code{4096}.
 Built-in tools advertised to the model.
 @item cmacs-ai-tool-confirm
 @code{nil} (never prompt) / @code{'destructive} / function.
+@item cmacs-ai-image-provider
+Provider used for image generation.  Default @code{gemini}.
+@item cmacs-ai-image-model
+Image model, or @code{nil} for the provider default.
+@item cmacs-ai-image-aspect
+Default aspect ratio, e.g. @code{"16:9"} (Gemini family).
+@item cmacs-ai-image-size
+Default pixel size, e.g. @code{"1024x1024"} (OpenAI family).
+@item cmacs-ai-image-resolution
+Default resolution tier: @code{"1k"}, @code{"2k"} or @code{"4k"}.
+@item cmacs-ai-image-count
+Images per generation.  Default @code{1}.
+@item cmacs-ai-image-quality
+Default quality; translated to whichever vocabulary the model accepts.
+@item cmacs-ai-image-background
+@code{"transparent"} or @code{"opaque"}; needs a format with alpha.
+@item cmacs-ai-image-format
+Output encoding: @code{"png"}, @code{"jpeg"} or @code{"webp"}.
+@item cmacs-ai-image-negative
+Default negative prompt.
+@item cmacs-ai-image-dir
+Where images go when they cannot be attached to an Org node.  Default
+@file{$XDG_DATA_HOME/cmacs-ai/images/}.
+@item cmacs-ai-image-attach-method
+@code{mv} (default) or @code{cp}.
+@item cmacs-ai-image-file-name-format
+@code{format-time-string} pattern for generated names.
+@item cmacs-ai-image-insert-caption
+Insert a @code{#+CAPTION} recording the prompt.  Default @code{t}; this
+is what @code{cmacs-ai-image-regenerate} reads back.
+@item cmacs-ai-image-preview
+Preview inline after inserting.  Default @code{t}.
+@item cmacs-ai-image-timeout
+Seconds a synchronous generation may take.  Default @code{180}; applies
+to the org-babel path only.
+@item cmacs-ai-chat-enable-image-tool
+Offer the model a @code{generate_image} tool in chat.  Default
+@code{t}.
 @item cmacs-ai-search-provider
 Backend for the @code{web_search} tool: @code{auto} (default),
 @code{brave}, @code{bing}, @code{duckduckgo}, or @code{nil} (disabled).

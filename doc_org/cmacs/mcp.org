@@ -183,6 +183,34 @@ subsystem.
 | =video_list=              | video      | List live video stream handles         |
 | =video_snapshot=          | video      | Capture a video frame as a PNG image    |
 
+** ai --- Image Generation (optional)
+
+Built with =--with-cmacs-ai=.
+
+| Tool             | Purpose                                              |
+|------------------+------------------------------------------------------|
+| =generate_image= | Generate an image and insert it into a cmacs buffer  |
+
+In an Org buffer the image is attached to the current node with
+=org-attach= and previewed inline; elsewhere it is saved under
+=cmacs-ai-image-dir=.  Optional =references= is a comma-separated list of
+input images to condition on, each =PATH= or =PATH::ROLE= -- roles tell
+the model what each reference is for.  Also =provider= (gemini / openai /
+grok), =model=, =aspect=, =size=, =quality= and =buffer=.
+
+The tool is *not* named =ai_generate_image=: the MCP bridge hides every
+=^ai_= tool from in-process chat buffers to prevent recursive self-calls,
+and that is exactly where an agent should be able to draw something.
+
+The schema is flat -- hence references as one string -- because the
+bridge's schema translator rejects nested objects.
+
+Note this blocks the cmacs main thread for the tens of seconds
+generation takes.
+
+The AI subsystem also exposes =ai_prompt=, =ai_call=, =ai_list_providers=,
+=ai_list_models= and =ai_open_chat=; see [[file:cmacs-ai.org][cmacs-ai.org]].
+
 ** gi --- GObject Introspection (optional)
 
 Available when CMacs is built with =--with-cmacs-gi=.

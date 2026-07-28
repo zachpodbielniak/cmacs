@@ -146,6 +146,26 @@ thread; under =emacs --gowl= that is the Wayland compositor, so a long
 loop freezes the desktop.  Keep =-t= loops short, and prefer =ai
 prompt= (no tools) when driving a live =--gowl= session.
 
+=ai generate-image= generates an image and inserts it into a buffer of
+the target instance.  In an Org buffer it is attached to the current node
+and previewed inline; elsewhere it is saved under =cmacs-ai-image-dir=.
+
+#+BEGIN_EXAMPLE
+  emacsctl ai generate-image -p gemini -a 16:9 'a brass telescope'
+  emacsctl ai generate-image -m gemini-3-pro-image-preview \
+      -r logo.png::style -r subject.jpg::subject \
+      -b notes.org 'combine these into a poster'
+#+END_EXAMPLE
+
+=-r/--ref= is repeatable and each entry is =PATH= or =PATH::ROLE=; the
+role tells the model what that reference is for, which is what makes
+multi-image conditioning work.  =-b/--buffer= picks the target buffer.
+Not every model accepts references -- =emacsctl eval
+'(cmacs-ai-image-list-models)'= shows which do.
+
+Like =ai call=, this blocks the target's main thread for its whole
+duration, which for image generation is tens of seconds.
+
 =ai models= renders a provider/model table; =-o json= / =-o yaml=
 emit the provider→models map as structured data.  Without =-p= every
 provider is queried (API providers over the network, CLI providers
@@ -155,8 +175,9 @@ fast.  The model names that =ai models= prints are exactly what
 =-m/--model= accepts.
 
 The underlying typed methods are =Editor1.Ai= =Prompt= / =Call= /
-=ListModels= / =OpenChat=, with MCP parity via =ai_prompt= /
-=ai_call= / =ai_list_models= / =ai_open_chat=.
+=ListModels= / =OpenChat= / =GenerateImage=, with MCP parity via
+=ai_prompt= / =ai_call= / =ai_list_models= / =ai_open_chat= /
+=generate_image=.
 
 * Org buffers: =text insert-org=
 
