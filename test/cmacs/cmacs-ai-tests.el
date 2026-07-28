@@ -842,5 +842,97 @@ tool-return-value bridge).  Gated on a Claude API key."
                        h "x" (lambda (_) nil) nil))
       (cmacs-ai-client-free h))))
 
+(ert-deftest cmacs-ai-image-from-selected-text-inserts-after ()
+  "The image lands after the selection, leaving the prose in place."
+  (skip-unless (fboundp 'cmacs-ai-image-from-selected-text))
+  (let* ((dir (make-temp-file "cmacs-ai-img-" t))
+         (cmacs-ai-image-dir (expand-file-name "fallback" dir)))
+    (unwind-protect
+        (with-temp-buffer
+          (text-mode)
+          (insert "Intro line.\nA macaw on a telescope.\nTrailing line.\n")
+          (goto-char (point-min))
+          (forward-line 1)
+          (set-mark (point))
+          (end-of-line)
+          (activate-mark)
+          (cmacs-ai-tests--with-stub-image (cmacs-ai-tests--one-image)
+            (cmacs-ai-image-from-selected-text))
+          (let* ((text (buffer-string))
+                 (prose (string-match-p "A macaw on a telescope\\." text))
+                 (image (string-match-p "\\.png" text))
+                 (after (string-match-p "Trailing line\\." text)))
+            ;; The selection is the prompt, not something to consume.
+            (should prose)
+            (should after)
+            ;; ...and the image goes between it and what followed.
+            (should image)
+            (should (> image prose))
+            (should (< image after))
+            ;; The region has served its purpose; leaving it active would
+            ;; invite the next command to act on it too.
+            (should-not (region-active-p))))
+      (delete-directory dir t))))
+
+(ert-deftest cmacs-ai-image-from-selected-text-survives-edits ()
+  "The insertion point tracks edits made while the image generates."
+  (skip-unless (fboundp 'cmacs-ai-image-from-selected-text))
+  (let* ((dir (make-temp-file "cmacs-ai-img-" t))
+         (cmacs-ai-image-dir (expand-file-name "fallback" dir))
+         (deferred nil))
+    (unwind-protect
+        (with-temp-buffer
+          (text-mode)
+          (insert "TARGET.\nlater line\n")
+          (goto-char (point-min))
+          (set-mark (point))
+          (end-of-line)
+          (activate-mark)
+          ;; Hold the callback rather than firing it, so the buffer can be
+          ;; edited in between -- which is what really happens across the
+          ;; tens of seconds a generation takes.
+          (cl-letf (((symbol-function 'cmacs-ai-image-generate-async)
+                     (lambda (_h _p cb _o) (setq deferred cb) 1))
+                    ((symbol-function 'cmacs-ai-client-new) (lambda (&rest _) 1))
+                    ((symbol-function 'cmacs-ai-client-free) (lambda (&rest _) t))
+                    ((symbol-function 'cmacs-ai-image--ensure) (lambda () t)))
+            (cmacs-ai-image-from-selected-text))
+          (should deferred)
+          ;; Type above the anchor, shifting every raw offset below it.
+          (goto-char (point-min))
+          (insert "A NEW FIRST LINE\n")
+          (funcall deferred
+                   (list :images (cmacs-ai-tests--one-image)))
+          (let* ((text (buffer-string))
+                 (target (string-match-p "TARGET\\." text))
+                 (image (string-match-p "\\.png" text))
+                 (later (string-match-p "later line" text)))
+            (should image)
+            ;; Still bracketed by the same two lines, not displaced by the
+            ;; edit above -- which an integer position would not manage.
+            (should (> image target))
+            (should (< image later))))
+      (delete-directory dir t))))
+
+(ert-deftest cmacs-ai-image-from-selected-text-requires-region ()
+  "Without a selection the command says so rather than guessing."
+  (skip-unless (fboundp 'cmacs-ai-image-from-selected-text))
+  (with-temp-buffer
+    (insert "no selection here")
+    (deactivate-mark)
+    (should-error (cmacs-ai-image-from-selected-text) :type 'user-error)))
+
+(ert-deftest cmacs-ai-image-resolve-position ()
+  "Positions may be markers or integers, and are clamped to the buffer."
+  (skip-unless (fboundp 'cmacs-ai-image--resolve-position))
+  (with-temp-buffer
+    (insert "0123456789")
+    (should (= (cmacs-ai-image--resolve-position 4) 4))
+    (should (= (cmacs-ai-image--resolve-position (copy-marker 4)) 4))
+    ;; Past the end clamps rather than erroring.
+    (should (= (cmacs-ai-image--resolve-position 9999) (point-max)))
+    ;; A marker pointing nowhere falls back to point.
+    (should (integerp (cmacs-ai-image--resolve-position (make-marker))))))
+
 (provide 'cmacs-ai-tests)
 ;;; cmacs-ai-tests.el ends here

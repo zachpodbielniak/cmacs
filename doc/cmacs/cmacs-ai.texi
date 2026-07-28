@@ -439,6 +439,14 @@ Generate from a prompt, or the active region.  With a prefix argument,
 ask for provider, model and options --- but only the options the chosen
 model honours, so there is no way to interactively request something
 that would be silently dropped.
+@item cmacs-ai-image-from-selected-text
+Illustrate the selected text, inserting the image just after it.  The
+selection is the prompt and is left in place.  Unlike
+@code{cmacs-ai-image}, which inserts at point --- and point sits at
+whichever end of the region you finished selecting at --- this always
+puts the image below the text.  The insertion point is held with a
+marker, so it stays correct even if you keep editing elsewhere while the
+image generates.
 @item cmacs-ai-image-edit
 Generate conditioned on reference images.
 @item cmacs-ai-image-regenerate
@@ -455,6 +463,7 @@ Suggested bindings:
 
 @example
 (global-set-key (kbd "C-c a i i") #'cmacs-ai-image)
+(global-set-key (kbd "C-c a i s") #'cmacs-ai-image-from-selected-text)
 (global-set-key (kbd "C-c a i e") #'cmacs-ai-image-edit)
 (global-set-key (kbd "C-c a i r") #'cmacs-ai-image-regenerate)
 (global-set-key (kbd "C-c a i m") #'cmacs-ai-image-list-models)

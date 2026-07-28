@@ -293,17 +293,28 @@ inserted."
     (insert link "\n")
     (cmacs-ai-image--preview-region beg (point))))
 
+(defun cmacs-ai-image--resolve-position (position)
+  "Return a live buffer position for POSITION.
+POSITION may be an integer or a marker.  A marker is preferred by
+callers that must land relative to specific text: generation takes tens
+of seconds, and an integer captured beforehand points somewhere else
+entirely if the buffer is edited in the meantime."
+  (let ((p (cond ((markerp position) (marker-position position))
+                 ((integerp position) position))))
+    (min (or p (point)) (point-max))))
+
 (defun cmacs-ai-image--place (images prompt buffer position)
   "Store IMAGES and insert links for them in BUFFER at POSITION.
-IMAGES is the list from the C layer.  Entries without `:data' are
-skipped: those are images whose bytes could not be retrieved."
+POSITION is an integer or a marker.  IMAGES is the list from the C
+layer; entries without `:data' are skipped, those being images whose
+bytes could not be retrieved."
   (let ((total (length images))
         (index 0)
         (placed 0))
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
         (save-excursion
-          (goto-char (min position (point-max)))
+          (goto-char (cmacs-ai-image--resolve-position position))
           (dolist (img images)
             (let ((bytes (plist-get img :data))
                   (mime  (or (plist-get img :mime) "image/png")))
@@ -314,6 +325,10 @@ skipped: those are images whose bytes could not be retrieved."
                    link (or (plist-get img :revised) prompt))
                   (setq placed (1+ placed)))))
             (setq index (1+ index))))))
+    ;; Release the marker so it stops costing the buffer anything on
+    ;; every subsequent edit.
+    (when (markerp position)
+      (set-marker position nil))
     placed))
 
 ;;;; Generation --------------------------------------------------------
@@ -446,6 +461,43 @@ appears when it arrives.  OPTIONS is a plist as accepted by
      (list (cmacs-ai-image--read-prompt) opts)))
   (cmacs-ai-image--run prompt options (current-buffer) (point)
                        (cmacs-ai-image--default-done prompt)))
+
+;;;###autoload
+(defun cmacs-ai-image-from-selected-text (&optional options)
+  "Illustrate the selected text, inserting the image just after it.
+
+The region is the prompt and is left exactly as it was; the image goes
+in on a fresh line immediately after the selection, so the prose that
+described it stays above it.  In an Org buffer that means an attachment
+link under a `#+CAPTION', previewed inline.
+
+This differs from `cmacs-ai-image', which also accepts the region as a
+prompt but inserts at point -- and point sits at whichever end of the
+region you happened to finish selecting at, so the image can land above
+the text rather than below it.
+
+The insertion point is remembered with a marker, so it stays correct
+even if you keep editing elsewhere in the buffer while the image is
+generating.
+
+With a prefix argument, prompt for the provider, model and the options
+that model supports.  OPTIONS is a plist as accepted by
+`cmacs-ai-image-generate-async', plus `:provider'."
+  (interactive
+   (list (when current-prefix-arg (cmacs-ai-image--read-options))))
+  (unless (use-region-p)
+    (user-error "No region active; select the text to illustrate"))
+  (let ((prompt (string-trim (buffer-substring-no-properties
+                              (region-beginning) (region-end))))
+        (anchor (copy-marker (region-end))))
+    (when (string-empty-p prompt)
+      (set-marker anchor nil)
+      (user-error "The selected text is empty"))
+    ;; Drop the highlight now: the region has served its purpose, and
+    ;; leaving it active invites the next command to act on it too.
+    (deactivate-mark)
+    (cmacs-ai-image--run prompt options (current-buffer) anchor
+                         (cmacs-ai-image--default-done prompt))))
 
 ;;;###autoload
 (defun cmacs-ai-image-edit (prompt references &optional options)

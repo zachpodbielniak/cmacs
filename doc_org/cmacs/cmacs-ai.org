@@ -366,6 +366,7 @@ start in a temporary file, so moving is both correct and cheaper.
 | Command                       | What it does                                        |
 |-------------------------------+-----------------------------------------------------|
 | =cmacs-ai-image=              | generate from a prompt, or the active region        |
+| =cmacs-ai-image-from-selected-text= | illustrate the selection, inserting after it  |
 | =cmacs-ai-image-edit=         | generate conditioned on reference images            |
 | =cmacs-ai-image-regenerate=   | re-run the image at point from its =#+CAPTION=      |
 | =cmacs-ai-image-variations=   | several images for one prompt                       |
@@ -377,10 +378,37 @@ options -- but only the options the chosen model actually honours, so
 there is no way to interactively request something that would be
 silently dropped.
 
+*** Illustrating prose you have already written
+
+=cmacs-ai-image-from-selected-text= is the one to reach for when the
+text describing the picture is already in the buffer.  Select it and run
+the command: the selection becomes the prompt, is left exactly as it
+was, and the image goes in on a fresh line immediately after it.
+
+#+BEGIN_EXAMPLE
+,* Chapter one
+A hyacinth macaw perched on a brass telescope, cinematic lighting.
+    <- select this line, M-x cmacs-ai-image-from-selected-text
+
+,* Chapter one
+A hyacinth macaw perched on a brass telescope, cinematic lighting.
+,#+CAPTION: A hyacinth macaw perched on a brass telescope, cinematic lighting.
+[[attachment:cmacs-ai-20260728-142233.png]]
+#+END_EXAMPLE
+
+=cmacs-ai-image= also accepts the region as a prompt, but inserts at
+point -- and point sits at whichever end of the region you finished
+selecting at, so the image can land *above* the text instead of below
+it.  This command always puts it after.
+
+The insertion point is held with a marker, so it stays correct even if
+you carry on editing elsewhere in the buffer while the image generates.
+
 Suggested bindings, beside the other cmacs-ai ones:
 
 #+BEGIN_SRC elisp
 (global-set-key (kbd "C-c a i i") #'cmacs-ai-image)
+(global-set-key (kbd "C-c a i s") #'cmacs-ai-image-from-selected-text)
 (global-set-key (kbd "C-c a i e") #'cmacs-ai-image-edit)
 (global-set-key (kbd "C-c a i r") #'cmacs-ai-image-regenerate)
 (global-set-key (kbd "C-c a i m") #'cmacs-ai-image-list-models)
