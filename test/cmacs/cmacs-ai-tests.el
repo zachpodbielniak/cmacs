@@ -934,5 +934,114 @@ tool-return-value bridge).  Gated on a Claude API key."
     ;; A marker pointing nowhere falls back to point.
     (should (integerp (cmacs-ai-image--resolve-position (make-marker))))))
 
+(require 'cmacs-ai-image-menu nil 'noerror)
+
+(defmacro cmacs-ai-tests--with-menu (state &rest body)
+  "Run BODY with the image menu composed to STATE."
+  (declare (indent 1))
+  `(let ((cmacs-ai-image-menu--state ,state))
+     ,@body))
+
+(ert-deftest cmacs-ai-image-menu-prefix-is-well-formed ()
+  "The transient prefix exists as a command with a layout."
+  (skip-unless (fboundp 'cmacs-ai-image-menu))
+  (should (commandp 'cmacs-ai-image-menu))
+  (should (get 'cmacs-ai-image-menu 'transient--layout)))
+
+(ert-deftest cmacs-ai-image-menu-gates-on-model-capability ()
+  "Only options the selected model honours are offered."
+  (skip-unless (fboundp 'cmacs-ai-image-menu--supports-p))
+  (skip-unless (fboundp 'cmacs-ai-client-new))
+  ;; Nano Banana Pro: ratios and a resolution tier, no pixel sizes.
+  (cmacs-ai-tests--with-menu
+      '(:provider gemini :model "gemini-3-pro-image-preview")
+    (should (cmacs-ai-image-menu--supports-p 'aspect-ratio))
+    (should (cmacs-ai-image-menu--supports-p 'resolution-tier))
+    (should (cmacs-ai-image-menu--supports-p 'reference-images))
+    (should-not (cmacs-ai-image-menu--supports-p 'pixel-size)))
+  ;; GPT Image: the other way round, plus transparency and masks.
+  (cmacs-ai-tests--with-menu '(:provider openai :model "gpt-image-2")
+    (should (cmacs-ai-image-menu--supports-p 'pixel-size))
+    (should (cmacs-ai-image-menu--supports-p 'transparency))
+    (should (cmacs-ai-image-menu--supports-p 'mask))
+    (should-not (cmacs-ai-image-menu--supports-p 'aspect-ratio))
+    ;; ...and no style, which is exactly what GPT Image rejects.
+    (should-not (cmacs-ai-image-menu--supports-p 'style)))
+  ;; DALL-E 3 takes no reference images at all.
+  (cmacs-ai-tests--with-menu '(:provider openai :model "dall-e-3")
+    (should (cmacs-ai-image-menu--supports-p 'style))
+    (should-not (cmacs-ai-image-menu--supports-p 'reference-images))))
+
+(ert-deftest cmacs-ai-image-menu-choices-come-from-the-model ()
+  "Offered values are the model's own, not a hardcoded list."
+  (skip-unless (fboundp 'cmacs-ai-image-menu--info))
+  (skip-unless (fboundp 'cmacs-ai-client-new))
+  (cmacs-ai-tests--with-menu
+      '(:provider gemini :model "gemini-3-pro-image-preview")
+    (let ((ratios (plist-get (cmacs-ai-image-menu--info) :aspect-ratios)))
+      (should (member "21:9" ratios))
+      (should (member "1:1" ratios))))
+  ;; The two OpenAI families name quality differently, and each rejects
+  ;; the other's words -- so the menu must offer the right ones.
+  (cmacs-ai-tests--with-menu '(:provider openai :model "gpt-image-2")
+    (should (equal (plist-get (cmacs-ai-image-menu--info) :qualities)
+                   '("auto" "low" "medium" "high"))))
+  (cmacs-ai-tests--with-menu '(:provider openai :model "dall-e-3")
+    (should (equal (plist-get (cmacs-ai-image-menu--info) :qualities)
+                   '("standard" "hd")))))
+
+(ert-deftest cmacs-ai-image-menu-references-accumulate ()
+  "References are an ordered list, each optionally carrying a role."
+  (skip-unless (fboundp 'cmacs-ai-image-menu--put))
+  (cmacs-ai-tests--with-menu nil
+    (cmacs-ai-image-menu--put
+     :references (list (cons "/tmp/a.png" "style")
+                       "/tmp/b.png"
+                       (cons "/tmp/c.png" "subject")))
+    (let ((refs (cmacs-ai-image-menu--references)))
+      (should (= (length refs) 3))
+      (should (equal (cdr (nth 0 refs)) "style"))
+      (should (stringp (nth 1 refs)))
+      (should (equal (cdr (nth 2 refs)) "subject"))
+      ;; Labels show the role so the menu can display what is set.
+      (should (string-match-p "style"
+                              (cmacs-ai-image-menu--reference-label
+                               (nth 0 refs)))))))
+
+(ert-deftest cmacs-ai-image-menu-clearing-removes-the-key ()
+  "An emptied option is absent, not set to nil.
+That is what leaves the provider on its own default."
+  (skip-unless (fboundp 'cmacs-ai-image-menu--put))
+  (cmacs-ai-tests--with-menu nil
+    (cmacs-ai-image-menu--put :aspect "16:9")
+    (should (plist-member cmacs-ai-image-menu--state :aspect))
+    (cmacs-ai-image-menu--put :aspect nil)
+    (should-not (plist-member cmacs-ai-image-menu--state :aspect))))
+
+(ert-deftest cmacs-ai-image-menu-options-exclude-prompt ()
+  "The prompt is an argument, not an option."
+  (skip-unless (fboundp 'cmacs-ai-image-menu--options))
+  (cmacs-ai-tests--with-menu '(:prompt "a cat" :aspect "16:9")
+    (let ((opts (cmacs-ai-image-menu--options)))
+      (should-not (plist-member opts :prompt))
+      (should (equal (plist-get opts :aspect) "16:9")))))
+
+(ert-deftest cmacs-ai-image-menu-provider-change-resets-model-scope ()
+  "Switching provider drops choices made from the old model's vocabulary."
+  (skip-unless (fboundp 'cmacs-ai-image-menu-set-provider))
+  (skip-unless (fboundp 'cmacs-ai-client-new))
+  (cmacs-ai-tests--with-menu
+      '(:provider gemini :model "gemini-3-pro-image-preview"
+        :aspect "21:9" :quality "high" :count 2)
+    (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "openai")))
+      (call-interactively #'cmacs-ai-image-menu-set-provider))
+    (should (eq (cmacs-ai-image-menu--get :provider) 'openai))
+    ;; These belonged to the old model.
+    (should-not (cmacs-ai-image-menu--get :model))
+    (should-not (cmacs-ai-image-menu--get :aspect))
+    (should-not (cmacs-ai-image-menu--get :quality))
+    ;; This did not, so it survives.
+    (should (equal (cmacs-ai-image-menu--get :count) 2))))
+
 (provide 'cmacs-ai-tests)
 ;;; cmacs-ai-tests.el ends here

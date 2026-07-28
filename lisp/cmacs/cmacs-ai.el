@@ -381,7 +381,8 @@ handles (use `cmacs-ai-free-session')."
   '(cmacs-ai-chat cmacs-ai-region cmacs-ai-commit
     cmacs-ai-completion cmacs-ai-org-block cmacs-ai-agent
     cmacs-ai-voice cmacs-ai-context-menu
-    cmacs-ai-image cmacs-ai-image-block cmacs-ai-image-chat)
+    cmacs-ai-image cmacs-ai-image-block cmacs-ai-image-chat
+    cmacs-ai-image-menu)
   "Submodules that ship with cmacs-ai.")
 
 (defun cmacs-ai-load-all ()

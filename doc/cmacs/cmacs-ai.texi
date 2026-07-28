@@ -439,6 +439,15 @@ Generate from a prompt, or the active region.  With a prefix argument,
 ask for provider, model and options --- but only the options the chosen
 model honours, so there is no way to interactively request something
 that would be silently dropped.
+@item cmacs-ai-image-menu
+A transient for composing a request option by option.  It is
+capability-aware: every option is offered against the model actually
+selected --- aspect ratios from that model's own list, quality words
+from its own vocabulary --- and options the model cannot honour are
+hidden rather than shown and silently dropped.  Reference images
+accumulate, as many as the model accepts, each with an optional role.
+Emptying a prompt clears that option, returning it to the model's
+default.
 @item cmacs-ai-image-from-selected-text
 Illustrate the selected text, inserting the image just after it.  The
 selection is the prompt and is left in place.  Unlike
@@ -462,6 +471,7 @@ Show what each model supports.
 Suggested bindings:
 
 @example
+(global-set-key (kbd "C-c a i RET") #'cmacs-ai-image-menu)
 (global-set-key (kbd "C-c a i i") #'cmacs-ai-image)
 (global-set-key (kbd "C-c a i s") #'cmacs-ai-image-from-selected-text)
 (global-set-key (kbd "C-c a i e") #'cmacs-ai-image-edit)

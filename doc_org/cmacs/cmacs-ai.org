@@ -365,6 +365,7 @@ start in a temporary file, so moving is both correct and cheaper.
 
 | Command                       | What it does                                        |
 |-------------------------------+-----------------------------------------------------|
+| =cmacs-ai-image-menu=         | transient: compose a request option by option       |
 | =cmacs-ai-image=              | generate from a prompt, or the active region        |
 | =cmacs-ai-image-from-selected-text= | illustrate the selection, inserting after it  |
 | =cmacs-ai-image-edit=         | generate conditioned on reference images            |
@@ -377,6 +378,46 @@ A prefix argument to =cmacs-ai-image= asks for provider, model and
 options -- but only the options the chosen model actually honours, so
 there is no way to interactively request something that would be
 silently dropped.
+
+*** The transient menu
+
+=M-x cmacs-ai-image-menu= opens a transient for composing a request a
+piece at a time, rather than remembering which plist keys exist:
+
+#+BEGIN_EXAMPLE
+Compose an image request
+ gemini / gemini-3-pro-image-preview   up to 14 references
+ Multi-reference conditioning, up to 4K
+
+Model                Geometry              Appearance
+ p provider  gemini   a aspect      16:9    q quality     —
+ m model     nano...  R resolution  2k      y style       —
+
+Output               Prompt                References
+ f format    —        t prompt      ...     r add reference  2 of 14
+ c compress  —        N negative    —       e set a reference's role
+ n count     2        S seed        42      d remove a reference
+
+Generate
+ g generate at point      M list models
+ G generate from selection, insert after it
+#+END_EXAMPLE
+
+What makes it worth using over the plain commands is that it is
+*capability-aware*.  Every option is offered against the model actually
+selected: the aspect ratios come from that model's own list, the quality
+words from its own vocabulary, and options the model cannot honour are
+not shown at all rather than shown and silently dropped.  Pick
+=gpt-image-2= and you get pixel sizes, transparency and masks but no
+aspect ratio; pick Nano Banana Pro and you get ratios and a resolution
+tier but no pixel sizes.  Changing the model re-reads all of it.
+
+Reference images accumulate --- as many as the model accepts, and it
+says how many that is --- and each can carry a role saying what it is
+for.  =e= changes a role afterwards, =d= drops one.
+
+Emptying any prompt clears that option, which is how you get back to the
+model's own default.  =C-k= resets everything.
 
 *** Illustrating prose you have already written
 
@@ -407,6 +448,7 @@ you carry on editing elsewhere in the buffer while the image generates.
 Suggested bindings, beside the other cmacs-ai ones:
 
 #+BEGIN_SRC elisp
+(global-set-key (kbd "C-c a i RET") #'cmacs-ai-image-menu)
 (global-set-key (kbd "C-c a i i") #'cmacs-ai-image)
 (global-set-key (kbd "C-c a i s") #'cmacs-ai-image-from-selected-text)
 (global-set-key (kbd "C-c a i e") #'cmacs-ai-image-edit)
