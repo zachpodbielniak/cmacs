@@ -32,6 +32,12 @@
 (declare-function cmacs-ai-client-provider-name
                   "cmacs-ai-client.c" (handle))
 (declare-function cmacs-ai-tools-new "cmacs-ai-tools.c" ())
+;; Loaded lazily with `require ... noerror', so these may legitimately be
+;; absent (a build without image support, or a stripped lisp/cmacs).
+(declare-function cmacs-ai-image-chat-register "cmacs-ai-image-chat"
+                  (executor))
+(declare-function cmacs-ai-image-chat-slash-command "cmacs-ai-image-chat"
+                  (line))
 (declare-function cmacs-ai-tools-free "cmacs-ai-tools.c" (handle))
 (declare-function cmacs-ai-tools-register-mcp-bridge
                   "cmacs-ai-tools.c"
@@ -156,6 +162,13 @@ ai-glib's web_search backend.  Shared by `cmacs-ai-chat--init' and
          cmacs-ai-mcp-bridge-readonly-only)
       (error
        (message "cmacs-ai: MCP bridge unavailable: %S" err))))
+  ;; Offer the model a generate_image tool, so it can draw something
+  ;; mid-conversation.  Deliberately not `ai_'-prefixed: the MCP bridge
+  ;; hides "^ai_" tools from in-process chat buffers, which is exactly
+  ;; where this one has to be visible.
+  (when cmacs-ai-chat-tool-executor
+    (when (require 'cmacs-ai-image-chat nil 'noerror)
+      (cmacs-ai-image-chat-register cmacs-ai-chat-tool-executor)))
   ;; Enable ai-glib's web_search tool with the configured backend.
   ;; `auto' never fails (keyless DuckDuckGo fallback); a keyed
   ;; provider with no key just logs and leaves web_search off.
@@ -581,23 +594,29 @@ result, and continue the stream until the model stops."
   (interactive)
   (let ((text (cmacs-ai-chat--read-compose)))
     (unless text (user-error "Compose is empty"))
-    (cmacs-ai-chat--insert-heading
-     (current-buffer) (cmacs-ai-chat--user-label) text)
-    ;; Persist the user turn before the network round-trip, so the
-    ;; message survives a crash / cancel before the model replies.
-    (when cmacs-ai-chat-autosave (cmacs-ai-chat-save-quietly))
-    ;; Reset per-turn state.
-    (setq cmacs-ai-chat--pending-tool-uses nil
-          cmacs-ai-chat--tool-loop-depth 0)
-    (let* ((buf (current-buffer))
-           (session (cdr cmacs-ai-chat-session-pair))
-           (executor cmacs-ai-chat-tool-executor)
-           (sent (cmacs-ai-chat--apply-pre-prompt text)))
-      (cmacs-ai-chat-stream
-       session sent
-       (lambda (payload)
-         (cmacs-ai-chat--stream-callback buf payload))
-       executor))))
+    (if (and (require 'cmacs-ai-image-chat nil 'noerror)
+             (cmacs-ai-image-chat-slash-command text))
+        ;; `/image PROMPT' generates directly, with no model turn: the
+        ;; compose text was a command to us, not something to send on.
+        ;; `cmacs-ai-chat--read-compose' has already emptied the region.
+        (message "cmacs-ai-image: generating...")
+      (cmacs-ai-chat--insert-heading
+       (current-buffer) (cmacs-ai-chat--user-label) text)
+      ;; Persist the user turn before the network round-trip, so the
+      ;; message survives a crash / cancel before the model replies.
+      (when cmacs-ai-chat-autosave (cmacs-ai-chat-save-quietly))
+      ;; Reset per-turn state.
+      (setq cmacs-ai-chat--pending-tool-uses nil
+            cmacs-ai-chat--tool-loop-depth 0)
+      (let* ((buf (current-buffer))
+             (session (cdr cmacs-ai-chat-session-pair))
+             (executor cmacs-ai-chat-tool-executor)
+             (sent (cmacs-ai-chat--apply-pre-prompt text)))
+        (cmacs-ai-chat-stream
+         session sent
+         (lambda (payload)
+           (cmacs-ai-chat--stream-callback buf payload))
+         executor)))))
 
 (defun cmacs-ai-chat-cancel-stream ()
   "Cancel any in-flight chat request on this buffer."

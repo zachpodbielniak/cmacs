@@ -380,7 +380,8 @@ handles (use `cmacs-ai-free-session')."
 (defvar cmacs-ai--submodules
   '(cmacs-ai-chat cmacs-ai-region cmacs-ai-commit
     cmacs-ai-completion cmacs-ai-org-block cmacs-ai-agent
-    cmacs-ai-voice cmacs-ai-context-menu cmacs-ai-image)
+    cmacs-ai-voice cmacs-ai-context-menu
+    cmacs-ai-image cmacs-ai-image-block cmacs-ai-image-chat)
   "Submodules that ship with cmacs-ai.")
 
 (defun cmacs-ai-load-all ()
