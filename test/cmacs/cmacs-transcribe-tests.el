@@ -16,6 +16,12 @@
 (require 'ert)
 (require 'cmacs-transcribe nil t)
 
+;; Evil is an external package; the keymap test skips without it.
+(declare-function evil-change-state "evil-core" (state &optional message))
+(declare-function evil-normalize-keymaps "evil-core" (&optional state))
+(declare-function evil-snipe-local-mode "evil-snipe" (&optional arg))
+(declare-function evil-snipe-override-local-mode "evil-snipe" (&optional arg))
+
 (defmacro cmacs-transcribe-tests--skip-unless-loaded ()
   "Skip the test unless `cmacs-transcribe' loaded."
   '(skip-unless (featurep 'cmacs-transcribe)))
@@ -298,6 +304,40 @@
   (let ((cmacs-transcribe-model "ggml-base.en.bin")
         (cmacs-transcribe-remote-model-dir "/opt/models"))
     (should (equal (cmacs-transcribe--remote-model) "/opt/models/ggml-base.en.bin"))))
+
+;;; ---------------------------------------------------------------------
+;;; Keymap: no shadowed keys, under plain Emacs and under Evil/Doom
+;;; ---------------------------------------------------------------------
+
+(ert-deftest cmacs-transcribe-test-keymap-commands-bound ()
+  "Every key in the queue map is bound to a real interactive command."
+  (cmacs-transcribe-tests--skip-unless-loaded)
+  (dolist (binding (cmacs-evil--own-bindings cmacs-transcribe-mode-map))
+    (should (commandp (cdr binding)))))
+
+(ert-deftest cmacs-transcribe-test-keymap-wins-under-evil ()
+  "Under Evil every queue key resolves to its own command.
+Regression: with only `evil-make-overriding-map', evil-snipe's minor-mode
+maps stole `s'/`S' in normal state and `f'/`T' in motion state, so
+summarise, summary-type, formats and tags did nothing under Doom."
+  (cmacs-transcribe-tests--skip-unless-loaded)
+  (skip-unless (require 'evil nil t))
+  (let ((buffer (generate-new-buffer " *cmacs-transcribe-keymap-test*")))
+    (unwind-protect
+        (with-current-buffer buffer
+          (cmacs-transcribe-mode)
+          ;; Force evil-snipe on even though `cmacs-transcribe-mode' is in
+          ;; `evil-snipe-disabled-modes': the intercept map must win alone.
+          (when (require 'evil-snipe nil t)
+            (evil-snipe-local-mode 1)
+            (evil-snipe-override-local-mode 1))
+          (dolist (state '(normal motion))
+            (evil-change-state state)
+            (evil-normalize-keymaps)
+            (dolist (binding (cmacs-evil--own-bindings cmacs-transcribe-mode-map))
+              (should (eq (key-binding (vector (car binding)) t)
+                          (cdr binding))))))
+      (kill-buffer buffer))))
 
 (ert-deftest cmacs-transcribe-test-session-execution ()
   "The session execution mode comes from the options plist, else the custom."

@@ -74,9 +74,9 @@ the pool drains.
 
 @table @kbd
 @item h j k l
-Move left/down/up/right.  The mode map is an Evil overriding map, so these
-motion keys work under Doom/Evil as well as in vanilla Emacs (the action
-commands avoid @kbd{h}/@kbd{j}/@kbd{k}/@kbd{l}).
+Move left/down/up/right.  The mode map takes over completely under Doom/Evil
+(see below), so these motion keys work there as well as in vanilla Emacs (the
+action commands avoid @kbd{h}/@kbd{j}/@kbd{k}/@kbd{l}).
 @item a
 Add a media file or directory (prefix arg: recurse directories).  Directories
 match only the current session kind's extensions (@pxref{Transcode Recursive}).
@@ -130,8 +130,22 @@ Echo the key hints.
 Each session holds a job list plus an options plist that is @emph{seeded} from
 the @code{defcustom} values (@pxref{Transcode Options}) when the session is
 created; the single-key commands override those per session without mutating
-the customs.  Under Evil/Doom the mode map is made an overriding map so the
-single-key bindings win in every state.
+the customs.
+
+@subsection Evil and Doom Emacs
+
+The queue map is installed with @code{cmacs-evil-setup-mode-map}
+(@file{lisp/cmacs/cmacs-evil.el}), so every key above fires unchanged under
+Evil and Doom.  An Evil @emph{overriding} map --- the obvious approach, and
+what this mode used to do --- is not enough: it still loses to Evil's
+minor-mode state maps, and @code{evil-snipe} (on by default in Doom) owns
+@kbd{f}/@kbd{F}/@kbd{t}/@kbd{T} in motion state and @kbd{s}/@kbd{S} in normal
+state, which silently swallowed @kbd{f} (set format).  The mode's own bindings
+are therefore promoted to an Evil @emph{intercept map} in normal and motion
+state, and @code{cmacs-transcode-mode} is registered in
+@code{evil-snipe-disabled-modes}.  Keys the mode does not bind (the Doom
+@key{SPC} leader, @kbd{C-w}, @key{ESC}, ...) are untouched.  @xref{Evil and
+Doom}, for the full precedence story and the list of covered modes.
 
 @node Transcode Recursive
 @section Recursive Directory-Mirroring

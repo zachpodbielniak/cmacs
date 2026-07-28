@@ -31,6 +31,7 @@
 (require 'subr-x)
 (require 'json)
 (require 'url)
+(require 'cmacs-evil)                   ;Evil/Doom keymap precedence
 ;; The C input handler dispatches every globe click to
 ;; `cmacs-libregnum--node-clicked' (defined in cmacs-libregnum.el), which
 ;; routes it back to `cmacs-gnuseye--on-pick'.  Without this require, a
@@ -2373,6 +2374,19 @@ just the globe viewport."
   ;; render window.  Hand C-w to the Evil window map there.
   (when (boundp 'evil-window-map)
     (define-key cmacs-gnuseye-mode-map (kbd "C-w") evil-window-map)))
+
+;; The auxiliary maps above are still below Evil's *minor-mode* maps, so
+;; evil-snipe (default-on in Doom) can swallow `s'/`f'/`t' in the panes it
+;; is active in.  Promote each pane's aux maps to intercept precedence,
+;; keeping the bindings exactly as written above.  The globe viewport is
+;; deliberately left out: it runs in Emacs state, where Evil binds nothing
+;; and `C-z' back to Normal state must keep working.
+(cmacs-evil-intercept-mode-map cmacs-gnuseye-list-mode-map
+                               'cmacs-gnuseye-list-mode)
+(cmacs-evil-intercept-mode-map cmacs-gnuseye-layers-mode-map
+                               'cmacs-gnuseye-layers-mode)
+(cmacs-evil-intercept-mode-map cmacs-gnuseye-inspector-mode-map
+                               'cmacs-gnuseye-inspector-mode)
 
 (provide 'cmacs-gnuseye)
 ;;; cmacs-gnuseye.el ends here

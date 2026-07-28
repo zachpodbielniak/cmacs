@@ -73,9 +73,10 @@ textual timeline is shown in the native path meanwhile.
 | ~G~       | ~cmacs-vidstudio-export-gif-cmd~     | Export animated GIF          |
 
 ~mouse-3~ pops the editor context menu.  Like imgedit, the rendered buffer
-carries a =keymap= text property and the mode map is registered with
-~evil-make-overriding-map~, so the menu and the keys above work unmodified
-under Doom/Evil and =context-menu-mode=.  (Exception: Doom's leader owns
+carries a =keymap= text property and the mode map is installed as an Evil
+*intercept map* by ~cmacs-evil-setup-mode-map~ (see [[file:evil.org][Evil / Doom
+compatibility]]), so the menu and the keys above work unmodified under
+Doom/Evil and =context-menu-mode=.  (Exception: Doom's leader owns
 ~SPC~ through a =general.el= override map that outranks even overriding mode
 maps — use ~p~ for play/pause there.)
 

@@ -1,0 +1,124 @@
+#+title: Evil and Doom Emacs compatibility
+#+description: How cmacs single-key mode maps are made to win under Evil, and what that means for the Doom leader, evil-snipe and your own bindings
+#+authors: Zach Podbielniak
+#+categories: cmacs
+#+created: 2026-07-28
+#+updated: 2026-07-28
+#+version: 1
+
+* Why this exists
+
+Most cmacs subsystems put a read-only "console" buffer in front of you — the transcribe and transcode queues, the imgedit canvas, the vidstudio timeline, the CAD model viewer and sketcher, the calculator menu, the gsurf panes, the gnuseye entity list, the video and audio players. All of them are driven by *bare single-letter keys*, which is exactly the space Evil claims for its own commands. Under Evil, and therefore under Doom, a plain major-mode keymap never sees those keys.
+
+The fix lives in one place, =lisp/cmacs/cmacs-evil.el=, and every affected mode is a one-line call into it. If you are adding a new single-key mode to cmacs, that call is the whole story — read [[#adding-a-new-mode][Adding a new mode]] and skip the rest.
+
+* Evil's precedence stack
+
+Evil does not install its bindings in a major-mode map or a minor-mode map. It builds =evil-mode-map-alist= per buffer and puts it in =emulation-mode-map-alists=, which Emacs consults *before* minor-mode maps and long before the major-mode map. Within that alist, =evil-state-keymaps= (evil-core.el) orders the maps like this, highest precedence first:
+
+| # | Layer                | Installed with                                     |
+|---+----------------------+----------------------------------------------------|
+| 1 | intercept keymaps    | =evil-make-intercept-map=                          |
+| 2 | state local keymap   | =evil-normal-state-local-map=                      |
+| 3 | minor-mode state maps | =evil-define-minor-mode-key= (this is evil-snipe) |
+| 4 | auxiliary keymaps    | =evil-define-key= / =evil-define-key*= on a keymap |
+| 5 | overriding keymaps   | =evil-make-overriding-map=                         |
+| 6 | state global keymap  | =evil-normal-state-map= and friends                |
+
+Two consequences drive everything below:
+
+- =evil-make-overriding-map= — the obvious fix, and what most cmacs modes used to do — only beats layer 6. It loses to *every* Evil add-on that binds keys per state.
+- =evil-snipe=, which Doom enables by default, lives in layer 3. It owns =s= / =S= (normal *and* motion state) through =evil-snipe-local-mode-map=, and =f= / =F= / =t= / =T= (motion state) through =evil-snipe-override-local-mode-map=.
+
+So a cmacs queue buffer under Doom would run almost every key correctly and then silently drop =s=, =S=, and — whenever the buffer was in motion state — =f= and =T= as well. That was the original bug report: "s/S and some others don't work in the transcribe menu."
+
+Note that in *normal* state the motion-state maps are appended after all the normal-state ones, which is why =f= and =T= appeared to work there while =s= and =S= did not. The failure was state-dependent, which is what made it look arbitrary.
+
+* What cmacs-evil.el does
+
+=cmacs-evil-setup-mode-map= copies a mode map's *own* bindings into the auxiliary keymap for each requested Evil state and marks that keymap as an *intercept* map — layer 1, above everything Evil or its add-ons can install. The mode is also registered in =evil-snipe-disabled-modes=, so snipe never turns on in a buffer where its keys could not fire anyway (no stray ~snipe~ lighter, no =;= / =,= transient map).
+
+The boundaries are deliberate:
+
+- *Only keys the mode itself binds are promoted.* Bindings inherited from =special-mode-map= (=SPC=, =DEL=, =n=, =p=, …) are excluded, and keys the mode does not bind fall through to Evil untouched: =C-w=, =ESC=, =:=, =/=, digit arguments and the rest behave exactly as in any other buffer.
+- *Only =normal= and =motion= state are intercepted* (=cmacs-evil-intercept-states=). Insert, visual, replace and Emacs state are left alone.
+- *The Doom leader always wins.* general.el installs =general-maps-alist= ahead of =evil-mode-map-alist= in =emulation-mode-map-alists=, so =SPC= reaches the leader even against an intercept map. A mode that binds =SPC= (the video and audio players, the vidstudio transport) therefore keeps that key only in vanilla Emacs; under Doom use the mode's alternate key or =M-x=.
+- *Your bindings still win.* =evil-define-key= on the same mode map writes into the very keymap that is marked as the intercept map, so a config that runs after the mode's file loads overrides the default:
+
+  #+begin_src elisp
+  (with-eval-after-load 'cmacs-transcribe
+    (evil-define-key 'normal cmacs-transcribe-mode-map "s" #'my-command))
+  #+end_src
+
+The companion entry point =cmacs-evil-intercept-mode-map= does the promotion *without* copying, for a mode that already installs its keys per state with =evil-define-key*= and wants exactly those bindings kept (gsurf, gsurf-lite, gnuseye's panes).
+
+Both are no-ops when Evil is absent, and defer their work with =with-eval-after-load= when Evil has not loaded yet — so a vanilla Emacs build behaves as if none of this existed.
+
+* Which modes are covered
+
+| Mode                             | Treatment                                             |
+|----------------------------------+-------------------------------------------------------|
+| =cmacs-transcribe-mode=          | intercept (copied)                                    |
+| =cmacs-transcode-mode=           | intercept (copied)                                    |
+| =cmacs-imgedit-mode=             | intercept (copied)                                    |
+| =cmacs-vidstudio-mode=           | intercept (copied); =SPC= is the leader under Doom    |
+| =cmacs-calculator-menu-mode=     | intercept (copied)                                    |
+| =cmacs-calculator-chart-mode=    | intercept (copied)                                    |
+| =cmacs-cad-model-mode=           | intercept (copied)                                    |
+| =cmacs-cad-sketch-mode=          | intercept (copied)                                    |
+| =cmacs-cad-feature-tree-mode=    | intercept (copied)                                    |
+| =cmacs-video-mode=               | intercept (copied); =SPC= is the leader under Doom    |
+| =cmacs-audio-mode=               | intercept (copied); =SPC= is the leader under Doom    |
+| =cmacs-gnuseye-forecast-mode=    | intercept (copied)                                    |
+| =cmacs-gsurf-dom-mode=, console  | intercept (copied)                                    |
+| =cmacs-gsurf-bookmarks-mode=     | intercept (copied)                                    |
+| =cmacs-gsurf-downloads-mode=     | intercept (copied)                                    |
+| =cmacs-gsurf-mode=               | intercept (existing aux maps kept verbatim)           |
+| =cmacs-gsurf-lite-mode=          | intercept (existing aux maps)                         |
+| =cmacs-gnuseye-list-mode=        | intercept (existing aux maps)                         |
+| =cmacs-gnuseye-layers-mode=      | intercept (existing aux maps)                         |
+| =cmacs-gnuseye-inspector-mode=   | intercept (existing aux maps)                         |
+
+Three groups are deliberately *not* intercepted:
+
+- *Emacs-state buffers* — the gnuseye globe viewport (=cmacs-gnuseye-mode=) and the libregnum viewport/editor (=cmacs-libregnum-mode=, =cmacs-libregnum-editor-mode=). Evil binds nothing in Emacs state, so their single keys already reach the mode map; intercepting normal state would break =C-z= as the way back to Evil.
+- *Panels that avoid the contested keys* — the libregnum outliner, palette, assets and inspector panes bind =g=, =m=, =r=, =D=, =RET= in motion/normal auxiliary maps and never collide with a minor-mode map.
+- *Editable text buffers* — =cmacs-cad-gcode-mode= derives from =prog-mode= and holds real G-code text. Its bare =g= / =G= / =e= viewer keys are a pre-existing design wart there (they shadow self-insert in vanilla Emacs too); promoting them over Evil's =e= and =g= motions would trade one problem for a worse one.
+
+Modes derived from =tabulated-list-mode= are immune to evil-snipe on their own (snipe ships =tabulated-list-mode= in its default =evil-snipe-disabled-modes=) but are still shadowed by Evil's *state* maps, which is why the gsurf bookmark and download lists are in the table above.
+
+* Adding a new mode
+:PROPERTIES:
+:CUSTOM_ID: adding-a-new-mode
+:END:
+
+For a new read-only console mode whose keys are plain =define-key= entries in the mode map:
+
+#+begin_src elisp
+(require 'cmacs-evil)                   ;Evil/Doom keymap precedence
+
+;; ... defvar the mode map, define-key its keys, define-derived-mode ...
+
+(cmacs-evil-setup-mode-map my-mode-map 'my-mode)
+#+end_src
+
+For a mode that already installs per-state bindings with =evil-define-key*=, keep them and promote instead:
+
+#+begin_src elisp
+(cmacs-evil-intercept-mode-map my-mode-map 'my-mode)
+#+end_src
+
+Both take an optional third argument, the list of states (default =normal= and =motion=).
+
+* Verifying
+
+=test/cmacs/cmacs-evil-tests.el= holds the regression tests. The pure ones (which bindings get collected, what is excluded) run everywhere; the precedence ones need the real Evil, so they skip unless it is on =load-path=. To run the whole suite against a Doom install — including the sweep that walks every covered mode map with evil-snipe forced on:
+
+#+begin_src bash
+src/emacs -Q --batch \
+  -L lisp/cmacs -L test/cmacs \
+  $(printf -- '-L %s ' ~/.config/emacs/.local/straight/build-*/evil{,-snipe,-collection}) \
+  -l ert -l cmacs-evil-tests -f ert-run-tests-batch-and-exit
+#+end_src
+
+Loading Doom itself in batch does *not* work as a test harness: its =use-package= deferrals never fire without an interactive session, so Evil and evil-snipe are never enabled and every key looks fine.

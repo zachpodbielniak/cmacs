@@ -94,8 +94,20 @@ drains.
 Each session holds a job list plus an options plist *seeded from the
 =defcustom= values* (see [[file:reference.org][reference]]) when the session is created; the
 single-key commands override those per session without mutating the customs.
-Under Evil/Doom the mode map is an overriding map, so the single-key bindings
-win in every state.
+
+*** Evil and Doom Emacs
+
+The queue map is installed with =cmacs-evil-setup-mode-map=
+(=lisp/cmacs/cmacs-evil.el=), so every key above fires unchanged under Evil and
+Doom.  An Evil *overriding* map — the obvious approach, and what this mode used
+to do — is not enough: it still loses to Evil's minor-mode state maps, and
+=evil-snipe= (on by default in Doom) owns =f= / =F= / =t= / =T= in motion state
+and =s= / =S= in normal state, which silently swallowed =f= (set format).  The
+mode's own bindings are therefore promoted to an Evil *intercept map* in normal
+and motion state, and =cmacs-transcode-mode= is registered in
+=evil-snipe-disabled-modes=.  Keys the mode does not bind (the Doom =SPC=
+leader, =C-w=, =ESC=, …) are untouched.  See [[file:../evil.org][Evil / Doom compatibility]] for
+the full precedence story and the list of covered modes.
 
 * Recursive directory-mirroring
 

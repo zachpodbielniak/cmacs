@@ -33,6 +33,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'cmacs-evil)                   ;Evil/Doom keymap precedence
 (require 'cmacs-gnuseye)
 (require 'cmacs-gnuseye-overlay)
 
@@ -1217,6 +1218,11 @@ faintly -- tune `cmacs-gnuseye-clouds-luma' or pick an IR layer."
 
 (define-derived-mode cmacs-gnuseye-forecast-mode special-mode "GnuseyeWx"
   "Read-only viewer for GNU's Eye point forecasts.")
+
+;; Under Evil (Doom) `q' records a macro instead of quitting this pane;
+;; install the map as an Evil intercept map (see cmacs-evil.el).
+(cmacs-evil-setup-mode-map cmacs-gnuseye-forecast-mode-map
+                           'cmacs-gnuseye-forecast-mode)
 
 (defun cmacs-gnuseye-meteo--spark (values)
   "Sparkline string for VALUES (SVG when available, else unicode)."

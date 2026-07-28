@@ -21,6 +21,7 @@
 
 (require 'subr-x)
 (require 'cl-lib)
+(require 'cmacs-evil)                   ;Evil/Doom keymap precedence
 (require 'seq)
 (require 'json)
 (require 'format-spec)
@@ -1004,6 +1005,12 @@ With a prefix argument, pipe the page HTML instead of the rendered text."
   (when (fboundp 'evil-make-overriding-map)
     (evil-make-overriding-map cmacs-gsurf-mode-map 'normal)
     (evil-make-overriding-map cmacs-gsurf-mode-map 'motion)))
+
+;; An overriding map is still below evil's *minor-mode* maps, so evil-snipe
+;; (default-on in Doom) owns `f'/`F' in motion state -- link-following and
+;; forward-buffer died there.  Promote the aux maps installed above to
+;; intercept precedence; the bindings themselves stay exactly as written.
+(cmacs-evil-intercept-mode-map cmacs-gsurf-mode-map 'cmacs-gsurf-mode)
 
 ;;;; Interactive commands ---------------------------------------------
 

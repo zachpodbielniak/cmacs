@@ -25,6 +25,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'cmacs-evil)                   ;Evil/Doom keymap precedence
 (require 'cmacs-cad)
 
 (declare-function cmacs-libregnum-editor "cmacs-libregnum")
@@ -368,6 +369,11 @@ so the override never fails the kernel's bounds check."
 (define-derived-mode cmacs-cad-feature-tree-mode special-mode
   "cmacs-CAD-Tree"
   "Major mode for the CAD feature tree panel.")
+
+;; Under Evil (Doom) `g' is a prefix and RET a motion, so neither reached
+;; this panel.  Install the map as an Evil intercept map (see cmacs-evil.el).
+(cmacs-evil-setup-mode-map cmacs-cad-feature-tree-mode-map
+                           'cmacs-cad-feature-tree-mode)
 
 (defvar-local cmacs-cad-tree--part-buffer nil)
 

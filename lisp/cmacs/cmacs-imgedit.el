@@ -20,6 +20,7 @@
 
 (require 'cl-lib)
 (require 'cmacs-libregnum)  ; for cmacs-libregnum-popup-menu (GTK vs --lrg routing)
+(require 'cmacs-evil)       ; Evil/Doom keymap precedence
 (require 'transient)        ; `?' -> keybinding cheat-sheet menu
 
 (defgroup cmacs-imgedit nil
@@ -1845,12 +1846,14 @@ Sets `cmacs-imgedit--live' on success; leaves it nil (native path) otherwise."
 
 ;; Under Evil (Doom), the motion/normal state maps shadow the mode map
 ;; (emulation maps outrank major modes): down-mouse-1 runs
-;; `evil-mouse-drag-region' and the tool letters run motions.  Give this
-;; mode's map precedence in every state.  Canvas mouse clicks are further
-;; protected by the `keymap' text property, which outranks Evil regardless.
-(with-eval-after-load 'evil
-  (when (fboundp 'evil-make-overriding-map)
-    (evil-make-overriding-map cmacs-imgedit-mode-map)))
+;; `evil-mouse-drag-region' and the tool letters run motions.  An Evil
+;; *overriding* map is not enough -- it still loses to Evil's minor-mode
+;; maps, and evil-snipe owns `s' (save) in normal state plus `f' (fill),
+;; `t'/`T' (text tool / size) in motion state.  Install the map as an Evil
+;; intercept map instead, so every tool key fires.  Canvas mouse clicks are
+;; further protected by the `keymap' text property, which outranks Evil
+;; regardless.
+(cmacs-evil-setup-mode-map cmacs-imgedit-mode-map 'cmacs-imgedit-mode)
 
 (provide 'cmacs-imgedit)
 ;;; cmacs-imgedit.el ends here

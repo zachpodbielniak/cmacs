@@ -29,6 +29,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'cmacs-evil)                   ;Evil/Doom keymap precedence
 
 (defgroup cmacs-video nil
   "GStreamer-backed inline video embedding."
@@ -287,6 +288,15 @@ if any, else prompt from the live list."
     (define-key m (kbd "i")    #'cmacs-video-show-info)
     m)
   "Keymap for `cmacs-video-mode'.")
+
+;; Under Evil (Doom) the state maps outrank the major-mode map, so every
+;; transport key here would run an Evil command instead (`s' snipe, `f'
+;; find-char, `b' back-word, `i' insert, `0' beginning-of-line, ...).
+;; Install the map as an Evil intercept map so playback control works in
+;; normal and motion state.  SPC (play/pause) is the one exception: under
+;; Doom the leader's override map outranks every Evil keymap, so SPC stays
+;; the leader there and play/pause needs a user binding or M-x.
+(cmacs-evil-setup-mode-map cmacs-video-mode-map 'cmacs-video-mode)
 
 (define-derived-mode cmacs-video-mode special-mode "CMacs-Video"
   "Major mode for full-window standalone video playback.

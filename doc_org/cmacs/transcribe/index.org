@@ -116,8 +116,28 @@ default is 1 job × 4 threads.
 Each session holds a job list plus an options plist *seeded from the
 =defcustom= values* (see [[file:reference.org][reference]]) when the session is created; the
 single-key commands override those per session without mutating the customs.
-Under Evil/Doom the mode map is an overriding map, so the single-key bindings
-win in every state.
+
+*** Evil and Doom Emacs
+
+Every key in the table above fires unchanged under Evil, and therefore under
+Doom.  That takes more than the obvious =evil-make-overriding-map=: Evil
+resolves keys through =evil-mode-map-alist=, which sits *ahead of* the
+major-mode map, and an overriding map only outranks the bottom of that stack
+(=evil-normal-state-map= and friends).  It still loses to Evil's *minor-mode*
+state maps — which is where =evil-snipe=, enabled by default in Doom, binds
+=s= / =S= (normal and motion state) and =f= / =F= / =t= / =T= (motion state).
+The symptom was that =s= (toggle summaries), =S= (summary type), =f= (extra
+formats) and =T= (tags) did nothing in the queue buffer under Doom while the
+rest of the map worked.
+
+The queue map is therefore installed by =cmacs-evil-setup-mode-map=
+(=lisp/cmacs/cmacs-evil.el=), which copies the mode's *own* bindings into the
+auxiliary keymap for Evil =normal= and =motion= state and marks that keymap as
+an *intercept map* — the top of Evil's precedence stack.  Only the keys this
+mode binds are affected; the Doom =SPC= leader, =C-w=, =ESC= and friends are
+untouched, and your own =evil-define-key= on the mode map still wins.  See
+[[file:../evil.org][Evil / Doom compatibility]] for the full precedence rules, the list of covered
+modes, and how to add a new one.
 
 ** Opening results and summarising after the fact
 

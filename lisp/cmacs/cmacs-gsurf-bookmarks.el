@@ -15,6 +15,7 @@
 
 (require 'subr-x)
 (require 'cl-lib)
+(require 'cmacs-evil)                   ;Evil/Doom keymap precedence
 (require 'tabulated-list)
 
 (declare-function cmacs-gsurf "cmacs-gsurf" (&optional url))
@@ -164,6 +165,12 @@ comma-separated tags."
   (setq tabulated-list-sort-key '("Added" t))
   (add-hook 'tabulated-list-revert-hook #'cmacs-gsurf-bookmarks--refresh nil t)
   (tabulated-list-init-header))
+
+;; Under Evil (Doom) the state maps outrank the major-mode map, so `o'/`d'
+;; /`e'/`a' ran Evil commands instead of the list actions.  Install the map
+;; as an Evil intercept map (see cmacs-evil.el).
+(cmacs-evil-setup-mode-map cmacs-gsurf-bookmarks-mode-map
+                           'cmacs-gsurf-bookmarks-mode)
 
 ;;;###autoload
 (defun cmacs-gsurf-bookmarks ()

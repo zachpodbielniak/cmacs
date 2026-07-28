@@ -22,6 +22,7 @@
 ;;; Code:
 
 (require 'cmacs-gsurf)
+(require 'cmacs-evil)                   ;Evil/Doom keymap precedence
 (require 'subr-x)
 (require 'json)
 
@@ -177,6 +178,11 @@ return JSON.stringify(o);})(%d)" id)
   "Major mode for the gsurf DOM inspector tree."
   (setq-local truncate-lines t))
 
+;; Under Evil (Doom) `g' is a prefix, `h' a motion and `c' an operator, so
+;; none of the inspector keys reached this map.  Install it as an Evil
+;; intercept map (see cmacs-evil.el).
+(cmacs-evil-setup-mode-map cmacs-gsurf-dom-mode-map 'cmacs-gsurf-dom-mode)
+
 ;;;###autoload
 (defun cmacs-gsurf-inspect ()
   "Open the DOM inspector for the current gsurf buffer."
@@ -253,6 +259,12 @@ catch(e){return String(x);}});window.cmacs&&window.cmacs.send('console',\
     (define-key m (kbd "g") #'ignore)
     m)
   "Keymap for the gsurf console buffer.")
+
+;; The console buffer is a plain `special-mode' buffer with this map
+;; installed by `use-local-map', so pass no mode symbol: `special-mode'
+;; itself must not be added to `evil-snipe-disabled-modes'.  Evil still
+;; finds the map (it is the local map), so the intercept promotion works.
+(cmacs-evil-setup-mode-map cmacs-gsurf-console-mode-map)
 
 ;;;###autoload
 (defun cmacs-gsurf-console ()

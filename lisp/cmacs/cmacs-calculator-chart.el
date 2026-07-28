@@ -35,6 +35,7 @@
 ;;; Code:
 
 (require 'cmacs-calculator)
+(require 'cmacs-evil)                   ;Evil/Doom keymap precedence
 (require 'svg nil t)
 (require 'seq)
 
@@ -531,6 +532,12 @@ the shared libregnum view, which owns the backend difference."
 \\{cmacs-calculator-chart-mode-map}"
   (buffer-disable-undo)
   (setq-local cursor-type nil))
+
+;; Under Evil (Doom) the state maps outrank the major-mode map, so `g' would
+;; start an Evil prefix and `q' would record a macro.  Install the map as an
+;; Evil intercept map.
+(cmacs-evil-setup-mode-map cmacs-calculator-chart-mode-map
+                           'cmacs-calculator-chart-mode)
 
 (provide 'cmacs-calculator-chart)
 ;;; cmacs-calculator-chart.el ends here

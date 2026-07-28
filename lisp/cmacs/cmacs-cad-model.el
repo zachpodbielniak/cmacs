@@ -18,6 +18,7 @@
 (require 'cl-lib)
 (require 'widget)
 (require 'wid-edit)
+(require 'cmacs-evil)                   ;Evil/Doom keymap precedence
 (require 'cmacs-cad nil t)
 (require 'cmacs-cad-slicer nil t)
 (require 'cmacs-libregnum nil t)
@@ -800,6 +801,12 @@ this redundant file buffer; otherwise set up a fresh viewer."
     (define-key map (kbd "q") #'quit-window)
     map)
   "Keymap for `cmacs-cad-model-mode'.")
+
+;; Under Evil (Doom) the state maps outrank the major-mode map, so none of
+;; these keys reached the viewer (`g' is an Evil prefix, `e'/`b' are motions,
+;; `S' is evil-snipe, `q' records a macro).  Install the map as an Evil
+;; intercept map -- see cmacs-evil.el for the precedence rules.
+(cmacs-evil-setup-mode-map cmacs-cad-model-mode-map 'cmacs-cad-model-mode)
 
 ;;;###autoload
 (define-derived-mode cmacs-cad-model-mode special-mode "CAD-Model"

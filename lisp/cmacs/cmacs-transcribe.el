@@ -39,6 +39,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'files-x)                      ;`with-connection-local-variables'
+(require 'cmacs-evil)                   ;Evil/Doom keymap precedence
 (require 'cmacs-transcode)              ;reuse backend / io / command helpers
 (require 'cmacs-whisper nil t)          ;model-path helpers + STT DEFUNs (soft)
 
@@ -1381,7 +1382,9 @@ STANDALONE is forwarded to `cmacs-transcribe--finish-summary'."
   "Keymap for `cmacs-transcribe-mode'.")
 
 ;; Bind on every load (reload-safe).  hjkl are motion; action commands avoid
-;; h/j/k/l so the map can be an Evil overriding map (kill is `K', log `L').
+;; h/j/k/l so the map can take over completely under Evil (kill is `K', log
+;; `L').  `cmacs-evil-setup-mode-map' at the end of this file is what makes
+;; these keys survive Doom -- see the Evil precedence notes in cmacs-evil.el.
 (let ((map cmacs-transcribe-mode-map))
   (define-key map (kbd "j") #'next-line)
   (define-key map (kbd "k") #'previous-line)
@@ -1847,11 +1850,12 @@ for the whisper stage)."
   (interactive)
   (message "%s" (mapconcat #'string-trim cmacs-transcribe--hint-lines "  |  ")))
 
-;; Under Evil (Doom) the state maps shadow single-key bindings; give this
-;; mode's map precedence in every state.
-(with-eval-after-load 'evil
-  (when (fboundp 'evil-make-overriding-map)
-    (evil-make-overriding-map cmacs-transcribe-mode-map)))
+;; Under Evil (Doom) both the state maps and the add-on minor-mode maps
+;; shadow single-key bindings -- evil-snipe owns `s'/`S' in normal state and
+;; `f'/`F'/`t'/`T' in motion state, which silently swallowed this mode's
+;; summarise/summary-type/formats/tags keys.  Install the map as an Evil
+;; intercept map so every key here fires as documented.
+(cmacs-evil-setup-mode-map cmacs-transcribe-mode-map 'cmacs-transcribe-mode)
 
 (provide 'cmacs-transcribe)
 ;;; cmacs-transcribe.el ends here

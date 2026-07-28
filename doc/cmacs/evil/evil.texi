@@ -1,0 +1,222 @@
+@c -*- mode: texinfo; coding: utf-8 -*-
+@c This file is part of the CMacs manual.
+@c Copyright (C) 2026 Zach Podbielniak
+@c SPDX-License-Identifier: AGPL-3.0-or-later
+
+@node Evil and Doom
+@chapter Evil and Doom Emacs Compatibility
+@cindex Evil
+@cindex Doom Emacs
+@cindex evil-snipe
+@cindex intercept map
+
+Most cmacs subsystems put a read-only ``console'' buffer in front of you
+--- the transcribe and transcode queues, the imgedit canvas, the
+vidstudio timeline, the CAD model viewer and sketcher, the calculator
+menu, the gsurf panes, the gnuseye entity list, the video and audio
+players.  All of them are driven by @emph{bare single-letter keys},
+which is exactly the space Evil claims for its own commands.  Under
+Evil, and therefore under Doom, a plain major-mode keymap never sees
+those keys.
+
+The fix lives in one place, @file{lisp/cmacs/cmacs-evil.el}, and every
+affected mode is a one-line call into it.
+
+@menu
+* Evil Precedence::             Why an overriding map is not enough.
+* Evil Shim::                   What cmacs-evil.el does, and its boundaries.
+* Evil Covered Modes::          Which modes are intercepted, and which are not.
+* Evil New Modes::              Adding a new single-key mode.
+@end menu
+
+@node Evil Precedence
+@section Evil's Precedence Stack
+
+Evil does not install its bindings in a major-mode map or a minor-mode
+map.  It builds @code{evil-mode-map-alist} per buffer and puts it in
+@code{emulation-mode-map-alists}, which Emacs consults @emph{before}
+minor-mode maps and long before the major-mode map.  Within that alist,
+@code{evil-state-keymaps} (evil-core.el) orders the maps like this,
+highest precedence first:
+
+@multitable @columnfractions .08 .40 .52
+@headitem # @tab Layer @tab Installed with
+@item 1 @tab intercept keymaps @tab @code{evil-make-intercept-map}
+@item 2 @tab state local keymap @tab @code{evil-normal-state-local-map}
+@item 3 @tab minor-mode state maps @tab @code{evil-define-minor-mode-key} (evil-snipe)
+@item 4 @tab auxiliary keymaps @tab @code{evil-define-key} on a keymap
+@item 5 @tab overriding keymaps @tab @code{evil-make-overriding-map}
+@item 6 @tab state global keymap @tab @code{evil-normal-state-map} etc.
+@end multitable
+
+Two consequences drive everything below:
+
+@itemize @bullet
+@item
+@code{evil-make-overriding-map} --- the obvious fix, and what most cmacs
+modes used to do --- only beats layer 6.  It loses to @emph{every} Evil
+add-on that binds keys per state.
+@item
+@code{evil-snipe}, which Doom enables by default, lives in layer 3.  It
+owns @kbd{s}/@kbd{S} (normal @emph{and} motion state) through
+@code{evil-snipe-local-mode-map}, and @kbd{f}/@kbd{F}/@kbd{t}/@kbd{T}
+(motion state) through @code{evil-snipe-override-local-mode-map}.
+@end itemize
+
+So a cmacs queue buffer under Doom would run almost every key correctly
+and then silently drop @kbd{s}, @kbd{S}, and --- whenever the buffer was
+in motion state --- @kbd{f} and @kbd{T} as well.  In @emph{normal} state
+the motion-state maps are appended after all the normal-state ones,
+which is why @kbd{f} and @kbd{T} appeared to work there while @kbd{s}
+and @kbd{S} did not; the failure was state-dependent, which is what made
+it look arbitrary.
+
+@node Evil Shim
+@section What cmacs-evil.el Does
+
+@code{cmacs-evil-setup-mode-map} copies a mode map's @emph{own} bindings
+into the auxiliary keymap for each requested Evil state and marks that
+keymap as an @emph{intercept} map --- layer 1, above everything Evil or
+its add-ons can install.  The mode is also registered in
+@code{evil-snipe-disabled-modes}, so snipe never turns on in a buffer
+where its keys could not fire anyway (no stray @samp{snipe} lighter, no
+@kbd{;}/@kbd{,} transient map).
+
+The boundaries are deliberate:
+
+@itemize @bullet
+@item
+@strong{Only keys the mode itself binds are promoted.}  Bindings
+inherited from @code{special-mode-map} (@key{SPC}, @key{DEL}, @kbd{n},
+@kbd{p}, ...) are excluded, and keys the mode does not bind fall through
+to Evil untouched: @kbd{C-w}, @key{ESC}, @kbd{:}, @kbd{/}, digit
+arguments and the rest behave exactly as in any other buffer.
+@item
+@strong{Only @code{normal} and @code{motion} state are intercepted}
+(@code{cmacs-evil-intercept-states}).  Insert, visual, replace and Emacs
+state are left alone.
+@item
+@strong{The Doom leader always wins.}  general.el installs
+@code{general-maps-alist} ahead of @code{evil-mode-map-alist} in
+@code{emulation-mode-map-alists}, so @key{SPC} reaches the leader even
+against an intercept map.  A mode that binds @key{SPC} (the video and
+audio players, the vidstudio transport) therefore keeps that key only in
+vanilla Emacs; under Doom use the mode's alternate key or @kbd{M-x}.
+@item
+@strong{Your bindings still win.}  @code{evil-define-key} on the same
+mode map writes into the very keymap that is marked as the intercept
+map, so a config that runs after the mode's file loads overrides the
+default:
+
+@example
+(with-eval-after-load 'cmacs-transcribe
+  (evil-define-key 'normal cmacs-transcribe-mode-map "s" #'my-command))
+@end example
+@end itemize
+
+The companion entry point @code{cmacs-evil-intercept-mode-map} does the
+promotion @emph{without} copying, for a mode that already installs its
+keys per state with @code{evil-define-key*} and wants exactly those
+bindings kept (gsurf, gsurf-lite, gnuseye's panes).
+
+Both are no-ops when Evil is absent, and defer their work with
+@code{with-eval-after-load} when Evil has not loaded yet --- so a vanilla
+Emacs build behaves as if none of this existed.
+
+@node Evil Covered Modes
+@section Which Modes Are Covered
+
+@multitable @columnfractions .45 .55
+@headitem Mode @tab Treatment
+@item @code{cmacs-transcribe-mode} @tab intercept (copied)
+@item @code{cmacs-transcode-mode} @tab intercept (copied)
+@item @code{cmacs-imgedit-mode} @tab intercept (copied)
+@item @code{cmacs-vidstudio-mode} @tab intercept; @key{SPC} is the Doom leader
+@item @code{cmacs-calculator-menu-mode} @tab intercept (copied)
+@item @code{cmacs-calculator-chart-mode} @tab intercept (copied)
+@item @code{cmacs-cad-model-mode} @tab intercept (copied)
+@item @code{cmacs-cad-sketch-mode} @tab intercept (copied)
+@item @code{cmacs-cad-feature-tree-mode} @tab intercept (copied)
+@item @code{cmacs-video-mode} @tab intercept; @key{SPC} is the Doom leader
+@item @code{cmacs-audio-mode} @tab intercept; @key{SPC} is the Doom leader
+@item @code{cmacs-gnuseye-forecast-mode} @tab intercept (copied)
+@item @code{cmacs-gsurf-dom-mode} + console @tab intercept (copied)
+@item @code{cmacs-gsurf-bookmarks-mode} @tab intercept (copied)
+@item @code{cmacs-gsurf-downloads-mode} @tab intercept (copied)
+@item @code{cmacs-gsurf-mode} @tab intercept (existing aux maps kept)
+@item @code{cmacs-gsurf-lite-mode} @tab intercept (existing aux maps)
+@item @code{cmacs-gnuseye-list-mode} @tab intercept (existing aux maps)
+@item @code{cmacs-gnuseye-layers-mode} @tab intercept (existing aux maps)
+@item @code{cmacs-gnuseye-inspector-mode} @tab intercept (existing aux maps)
+@end multitable
+
+Three groups are deliberately @emph{not} intercepted:
+
+@itemize @bullet
+@item
+@strong{Emacs-state buffers} --- the gnuseye globe viewport
+(@code{cmacs-gnuseye-mode}) and the libregnum viewport/editor
+(@code{cmacs-libregnum-mode}, @code{cmacs-libregnum-editor-mode}).  Evil
+binds nothing in Emacs state, so their single keys already reach the
+mode map; intercepting normal state would break @kbd{C-z} as the way
+back to Evil.
+@item
+@strong{Panels that avoid the contested keys} --- the libregnum
+outliner, palette, assets and inspector panes bind @kbd{g}, @kbd{m},
+@kbd{r}, @kbd{D}, @key{RET} in motion/normal auxiliary maps and never
+collide with a minor-mode map.
+@item
+@strong{Editable text buffers} --- @code{cmacs-cad-gcode-mode} derives
+from @code{prog-mode} and holds real G-code text.  Its bare
+@kbd{g}/@kbd{G}/@kbd{e} viewer keys are a pre-existing design wart there
+(they shadow self-insert in vanilla Emacs too); promoting them over
+Evil's @kbd{e} and @kbd{g} motions would trade one problem for a worse
+one.
+@end itemize
+
+Modes derived from @code{tabulated-list-mode} are immune to evil-snipe
+on their own (snipe ships @code{tabulated-list-mode} in its default
+@code{evil-snipe-disabled-modes}) but are still shadowed by Evil's
+@emph{state} maps, which is why the gsurf bookmark and download lists
+are in the table above.
+
+@node Evil New Modes
+@section Adding a New Single-Key Mode
+
+For a new read-only console mode whose keys are plain @code{define-key}
+entries in the mode map:
+
+@example
+(require 'cmacs-evil)                   ;Evil/Doom keymap precedence
+
+;; ... defvar the mode map, define-key its keys, define-derived-mode ...
+
+(cmacs-evil-setup-mode-map my-mode-map 'my-mode)
+@end example
+
+For a mode that already installs per-state bindings with
+@code{evil-define-key*}, keep them and promote instead:
+
+@example
+(cmacs-evil-intercept-mode-map my-mode-map 'my-mode)
+@end example
+
+Both take an optional third argument, the list of states (default
+@code{normal} and @code{motion}).
+
+@file{test/cmacs/cmacs-evil-tests.el} holds the regression tests.  The
+pure ones run everywhere; the precedence ones need the real Evil, so
+they skip unless it is on @code{load-path}.  To run them against a Doom
+install --- including the sweep that walks every covered mode map with
+evil-snipe forced on:
+
+@example
+src/emacs -Q --batch \
+  -L lisp/cmacs -L test/cmacs \
+  $(printf -- '-L %s ' ~/.config/emacs/.local/straight/build-*/evil@{,-snipe,-collection@}) \
+  -l ert -l cmacs-evil-tests -f ert-run-tests-batch-and-exit
+@end example
+
+Loading Doom itself in batch does @emph{not} work as a test harness: its
+@code{use-package} deferrals never fire without an interactive session,
+so Evil and evil-snipe are never enabled and every key looks fine.

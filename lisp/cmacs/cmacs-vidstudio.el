@@ -19,6 +19,7 @@
 
 (require 'cl-lib)
 (require 'cmacs-libregnum)  ; for cmacs-libregnum-popup-menu (GTK vs --lrg routing)
+(require 'cmacs-evil)       ; Evil/Doom keymap precedence
 (require 'transient)        ; `?' -> keybinding cheat-sheet menu
 
 (defgroup cmacs-vidstudio nil
@@ -1703,10 +1704,13 @@ playhead after a scrub."
     buffer))
 
 ;; Under Evil (Doom) the state maps shadow the mode map's transport/editing
-;; keys (SPC, i, s, g, …).  Give this mode's map precedence in every state.
-(with-eval-after-load 'evil
-  (when (fboundp 'evil-make-overriding-map)
-    (evil-make-overriding-map cmacs-vidstudio-mode-map)))
+;; keys (SPC, i, s, g, …), and an Evil *overriding* map is not enough: it
+;; still loses to Evil's minor-mode maps, and evil-snipe owns `s' (split) in
+;; normal state plus `t'/`T' (transition / title) in motion state.  Install
+;; the map as an Evil intercept map instead.  SPC stays the Doom leader
+;; regardless -- general.el's override map outranks every Evil keymap -- so
+;; `p' is the play toggle there, as noted in the keymap above.
+(cmacs-evil-setup-mode-map cmacs-vidstudio-mode-map 'cmacs-vidstudio-mode)
 
 (provide 'cmacs-vidstudio)
 ;;; cmacs-vidstudio.el ends here

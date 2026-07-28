@@ -69,6 +69,7 @@ interaction.
 * CMacs Transcribe::            Batch speech-to-text (whisper STT + AI summaries).
 * CMacs Calculator::            Desktop/financial/physics/tax calculator + CAS over GNU Calc.
 * CMacs LSP::                   In-binary LSP language servers (emacs --cmacs-lsp).
+* Evil and Doom::               Single-key cmacs modes under Evil / Doom Emacs.
 * Build Configuration::         Configure flags and dependencies.
 * Upstream Changes::            Every edit cmacs makes to stock Emacs sources.
 @end menu
@@ -8850,9 +8851,10 @@ Opened images auto-fit their zoom (sprites high, screenshots 1x); transparent
 areas render on @code{cmacs-imgedit-canvas-background} so dark strokes stay
 visible on dark themes.  Every stroke echoes what it painted and on which
 layer.  The canvas carries its own @code{keymap} text property, which outranks
-Evil state maps and @code{context-menu-mode}, and the mode map is registered
-with @code{evil-make-overriding-map} --- mouse painting, the right-click menu
-and the tool keys all work unmodified under Doom/Evil.
+Evil state maps and @code{context-menu-mode}, and the mode map is installed
+as an Evil intercept map by @code{cmacs-evil-setup-mode-map} (@pxref{Evil and
+Doom}) --- mouse painting, the right-click menu and the tool keys all work
+unmodified under Doom/Evil.
 
 @section Model API
 
@@ -8946,9 +8948,10 @@ effect, @kbd{s} split at playhead, @kbd{g} go to frame, @kbd{p} (or
 @kbd{SPC}) play/pause, @kbd{@key{left}}/@kbd{@key{right}} step, @kbd{E}
 export MP4, @kbd{G} export GIF.
 Like imgedit, the rendered buffer carries a @code{keymap} text property and
-the mode map is registered with @code{evil-make-overriding-map}, so the menu
-and keys work unmodified under Doom/Evil and @code{context-menu-mode} ---
-except @kbd{SPC}, which Doom's leader owns; use @kbd{p} there.
+the mode map is installed as an Evil intercept map (@pxref{Evil and Doom}), so
+the menu and keys work unmodified under Doom/Evil and
+@code{context-menu-mode} --- except @kbd{SPC}, which Doom's leader owns; use
+@kbd{p} there.
 
 @kbd{i} imports the @emph{whole video} by default; it prompts for optional
 In/Out points (source seconds, blank In = start, blank Out = whole video) to
@@ -9040,6 +9043,9 @@ viewport; a low-resolution proxy keeps playback near real-time.
 
 @c ===================================================================
 @include lsp/lsp.texi
+
+@c ===================================================================
+@include evil/evil.texi
 
 @c ===================================================================
 @node Build Configuration

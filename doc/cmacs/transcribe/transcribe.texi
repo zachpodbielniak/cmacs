@@ -132,6 +132,29 @@ default is 1 job x 4 threads.
 @item @kbd{?} @tab @code{cmacs-transcribe-help} @tab Echo the key hints
 @end multitable
 
+@subsection Evil and Doom Emacs
+
+Every key above fires unchanged under Evil, and therefore under Doom.  That
+takes more than the obvious @code{evil-make-overriding-map}: Evil resolves keys
+through @code{evil-mode-map-alist}, which sits @emph{ahead of} the major-mode
+map, and an overriding map only outranks the bottom of that stack
+(@code{evil-normal-state-map} and friends).  It still loses to Evil's
+@emph{minor-mode} state maps --- which is where @code{evil-snipe}, enabled by
+default in Doom, binds @kbd{s}/@kbd{S} (normal and motion state) and
+@kbd{f}/@kbd{F}/@kbd{t}/@kbd{T} (motion state).  The symptom was that @kbd{s}
+(toggle summaries), @kbd{S} (summary type), @kbd{f} (extra formats) and
+@kbd{T} (tags) did nothing in the queue buffer under Doom while the rest of
+the map worked.
+
+The queue map is therefore installed by @code{cmacs-evil-setup-mode-map}
+(@file{lisp/cmacs/cmacs-evil.el}), which copies the mode's @emph{own} bindings
+into the auxiliary keymap for Evil @code{normal} and @code{motion} state and
+marks that keymap as an @emph{intercept map} --- the top of Evil's precedence
+stack.  Only the keys this mode binds are affected; the Doom @key{SPC} leader,
+@kbd{C-w}, @key{ESC} and friends are untouched, and your own
+@code{evil-define-key} on the mode map still wins.  @xref{Evil and Doom}, for
+the full precedence rules, the list of covered modes, and how to add one.
+
 @node Transcribe Pipeline
 @section The Pipeline
 

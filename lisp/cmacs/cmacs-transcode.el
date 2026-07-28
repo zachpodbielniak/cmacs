@@ -31,6 +31,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'files-x)                      ;`with-connection-local-variables'
+(require 'cmacs-evil)                   ;Evil/Doom keymap precedence
 
 (declare-function project-current "project" (&optional maybe-prompt directory))
 (declare-function project-root "project" (project))
@@ -1290,9 +1291,10 @@ runs on the job's execution host (remote via TRAMP when the job is remote)."
 
 ;; Bind on every load (reload-safe; the defvar above is a no-op once bound).
 (let ((map cmacs-transcode-mode-map))
-  ;; hjkl + arrow navigation.  The mode map is made an Evil overriding map
-  ;; below, so under Doom/Evil the motion keys must be bound here explicitly
-  ;; (and the action commands avoid h/j/k/l -- kill is `K', log is `L').
+  ;; hjkl + arrow navigation.  The mode map takes over completely under Evil
+  ;; (see the `cmacs-evil-setup-mode-map' call below), so the motion keys must
+  ;; be bound here explicitly -- and the action commands avoid h/j/k/l (kill
+  ;; is `K', log is `L').
   (define-key map (kbd "j") #'next-line)
   (define-key map (kbd "k") #'previous-line)
   (define-key map (kbd "h") #'backward-char)
@@ -1689,11 +1691,12 @@ time, so this only affects directories added after toggling."
    "%s"
    (mapconcat #'string-trim cmacs-transcode--hint-lines "  |  ")))
 
-;; Under Evil (Doom) the state maps shadow single-key bindings; give this
-;; mode's map precedence in every state.
-(with-eval-after-load 'evil
-  (when (fboundp 'evil-make-overriding-map)
-    (evil-make-overriding-map cmacs-transcode-mode-map)))
+;; Under Evil (Doom) both the state maps and the add-on minor-mode maps
+;; shadow single-key bindings -- evil-snipe owns `f'/`F'/`t'/`T' in motion
+;; state and `s'/`S' in normal state, which silently swallowed this mode's
+;; `f' (set format).  Install the map as an Evil intercept map so every key
+;; here fires as documented.
+(cmacs-evil-setup-mode-map cmacs-transcode-mode-map 'cmacs-transcode-mode)
 
 (provide 'cmacs-transcode)
 ;;; cmacs-transcode.el ends here

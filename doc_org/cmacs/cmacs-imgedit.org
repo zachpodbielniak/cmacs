@@ -199,8 +199,11 @@ The canvas carries its own =keymap= text property, which outranks Evil state
 maps (Evil binds ~down-mouse-1~ to ~evil-mouse-drag-region~ in Motion/Normal
 state) and =context-menu-mode= (which claims ~down-mouse-3~), so mouse
 painting and the imgedit right-click menu work unmodified under Doom.  The
-mode map is also registered with ~evil-make-overriding-map~ so the tool keys
-above beat Evil's motions in editor buffers.
+mode map itself is installed as an Evil *intercept map* by
+~cmacs-evil-setup-mode-map~, so the tool keys above beat both Evil's motions
+and its add-ons — an overriding map was not enough, because =evil-snipe= owns
+~s~ (save) in normal state and ~f~/~t~/~T~ in motion state.  See
+[[file:evil.org][Evil / Doom compatibility]].
 
 * Model API (the ~cmacs-imgedit-*~ primitives)
 

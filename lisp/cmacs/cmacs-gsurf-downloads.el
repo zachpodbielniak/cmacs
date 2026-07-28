@@ -16,6 +16,7 @@
 ;;; Code:
 
 (require 'subr-x)
+(require 'cmacs-evil)                   ;Evil/Doom keymap precedence
 (require 'tabulated-list)
 
 (declare-function cmacs-gsurf-download-cancel "cmacs-gsurf-defuns.c" (id))
@@ -186,6 +187,12 @@ PLIST keys: :uri :dest :received :total :state :time.")
   (setq tabulated-list-sort-key '("ID" t))
   (add-hook 'tabulated-list-revert-hook #'cmacs-gsurf-downloads--refresh nil t)
   (tabulated-list-init-header))
+
+;; Under Evil (Doom) the state maps outrank the major-mode map, so `c'/`o'
+;; /`d' ran Evil operators instead of the download actions.  Install the map
+;; as an Evil intercept map (see cmacs-evil.el).
+(cmacs-evil-setup-mode-map cmacs-gsurf-downloads-mode-map
+                           'cmacs-gsurf-downloads-mode)
 
 ;;;###autoload
 (defun cmacs-gsurf-downloads ()

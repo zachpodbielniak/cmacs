@@ -22,6 +22,7 @@
 
 (require 'svg)
 (require 'cl-lib)
+(require 'cmacs-evil)                   ;Evil/Doom keymap precedence
 
 (declare-function cmacs-cad-sketch-new "cmacs-cad-sketch.c")
 (declare-function cmacs-cad-sketch-free "cmacs-cad-sketch.c")
@@ -341,6 +342,12 @@
     (define-key map (kbd "C-c C-c") #'cmacs-cad-sketch-finish)
     map)
   "Keymap for `cmacs-cad-sketch-mode'.")
+
+;; Under Evil (Doom) the state maps outrank the major-mode map, so the whole
+;; tool/constraint alphabet ran Evil commands instead (`p' paste, `c'/`s'
+;; change/substitute, `u' undo, `D'/`R'/`A' delete-line/replace/append, ...).
+;; Install the map as an Evil intercept map -- see cmacs-evil.el.
+(cmacs-evil-setup-mode-map cmacs-cad-sketch-mode-map 'cmacs-cad-sketch-mode)
 
 (define-derived-mode cmacs-cad-sketch-mode special-mode "cmacs-Sketch"
   "Major mode for the interactive 2D constraint sketcher."

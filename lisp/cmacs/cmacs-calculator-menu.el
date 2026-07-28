@@ -37,6 +37,7 @@
 (require 'cmacs-calculator-sheet)
 (require 'cmacs-calculator-inline)       ; `cmacs-calculator-error-message'
 (require 'cmacs-calculator-repl)
+(require 'cmacs-evil)                   ;Evil/Doom keymap precedence
 (require 'subr-x)
 
 (eval-when-compile (require 'cl-lib))
@@ -465,11 +466,12 @@ a hand-kept list."
     (pop-to-buffer buffer)
     buffer))
 
-;; Under Evil (Doom) the state maps shadow single-key bindings; give this
-;; mode's map precedence in every state.
-(with-eval-after-load 'evil
-  (when (fboundp 'evil-make-overriding-map)
-    (evil-make-overriding-map cmacs-calculator-menu-mode-map)))
+;; Under Evil (Doom) both the state maps and the add-on minor-mode maps
+;; shadow single-key bindings -- evil-snipe owns `s' in normal state, which
+;; swallowed this menu's filter key.  Install the map as an Evil intercept
+;; map so every key here fires as documented.
+(cmacs-evil-setup-mode-map cmacs-calculator-menu-mode-map
+                           'cmacs-calculator-menu-mode)
 
 (provide 'cmacs-calculator-menu)
 ;;; cmacs-calculator-menu.el ends here

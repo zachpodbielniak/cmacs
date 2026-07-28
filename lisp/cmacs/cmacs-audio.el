@@ -24,6 +24,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'cmacs-evil)                   ;Evil/Doom keymap precedence
 
 (defgroup cmacs-audio nil
   "GStreamer-backed audio capture and playback."
@@ -173,6 +174,12 @@ for music capture if you do not need transcription."
               (when cmacs-audio-mode--handle
                 (ignore-errors (cmacs-audio-close cmacs-audio-mode--handle)))
               (kill-buffer)))
+
+;; Under Evil (Doom) `q' records a macro instead of closing the player, so
+;; install the map as an Evil intercept map (see cmacs-evil.el).  SPC stays
+;; the Doom leader there -- its override map outranks every Evil keymap --
+;; so play/pause is a `M-x cmacs-audio-play' / user-binding affair.
+(cmacs-evil-setup-mode-map cmacs-audio-mode-map 'cmacs-audio-mode)
 
 (defun cmacs-audio-open-buffer (path)
   "Open PATH in a new cmacs-audio-mode buffer."

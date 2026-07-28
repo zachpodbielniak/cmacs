@@ -38,6 +38,7 @@
 ;;; Code:
 
 (require 'cmacs-gsurf)
+(require 'cmacs-evil)                   ;Evil/Doom keymap precedence
 (require 'shr)
 (require 'dom)
 (require 'cl-lib)
@@ -931,6 +932,12 @@ Interactively, prompt for a URL or search query."
       (kbd "<backtab>") #'cmacs-gsurf-lite-prev-field
       (kbd "C-c C-c") #'cmacs-gsurf-lite-submit
       "q"  #'quit-window)))
+
+;; Auxiliary maps still lose to Evil's minor-mode maps (evil-snipe owns `F'
+;; in motion state), so promote them to intercept precedence -- the bindings
+;; above are kept verbatim.  See cmacs-evil.el for the precedence rules.
+(cmacs-evil-intercept-mode-map cmacs-gsurf-lite-mode-map
+                               'cmacs-gsurf-lite-mode)
 
 (provide 'cmacs-gsurf-lite)
 ;;; cmacs-gsurf-lite.el ends here
