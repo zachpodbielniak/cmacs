@@ -239,6 +239,10 @@ static gboolean ai_opt_tools = FALSE;
     "Model name overriding the provider's default " \
     "(see 'ai models')", "MODEL" }
 
+static gchar *ai_opt_aspect = NULL;
+static gchar **ai_opt_refs = NULL;
+static gchar *ai_opt_buffer = NULL;
+
 static const GOptionEntry ai_prompt_entries[] = {
   AI_PROVIDER_ENTRY,
   AI_MODEL_ENTRY,
@@ -264,6 +268,19 @@ static const GOptionEntry ai_call_entries[] = {
 
 static const GOptionEntry ai_models_entries[] = {
   AI_PROVIDER_ENTRY,
+  { NULL, 0, 0, 0, NULL, NULL, NULL }
+};
+
+static const GOptionEntry ai_image_entries[] = {
+  AI_PROVIDER_ENTRY,
+  AI_MODEL_ENTRY,
+  { "aspect", 'a', 0, G_OPTION_ARG_STRING, &ai_opt_aspect,
+    "Aspect ratio, e.g. 16:9", "RATIO" },
+  { "ref", 'r', 0, G_OPTION_ARG_STRING_ARRAY, &ai_opt_refs,
+    "Reference image as PATH or PATH::ROLE (repeatable, for "
+    "multi-image conditioning)", "PATH" },
+  { "buffer", 'b', 0, G_OPTION_ARG_STRING, &ai_opt_buffer,
+    "Insert into this buffer (default: the current one)", "NAME" },
   { NULL, 0, 0, 0, NULL, NULL, NULL }
 };
 
@@ -601,6 +618,51 @@ cmd_ai_chat (CtlCommand *self, CtlInvocation *inv, GError **error)
   return ok ? CTL_EXIT_OK : CTL_EXIT_ERROR;
 }
 
+static gint
+cmd_ai_generate_image (CtlCommand *self, CtlInvocation *inv, GError **error)
+{
+  const gchar *provider = ai_opt_provider != NULL ? ai_opt_provider : "";
+  const gchar *model = ai_opt_model != NULL ? ai_opt_model : "";
+  const gchar *aspect = ai_opt_aspect != NULL ? ai_opt_aspect : "";
+  const gchar *buffer = ai_opt_buffer != NULL ? ai_opt_buffer : "";
+  gchar *prompt = ai_join_args (inv);
+  gchar *refs;
+  gchar *out;
+  CtlResult *result;
+  gboolean ok;
+
+  (void) self;
+
+  if (prompt == NULL || *prompt == '\0')
+    {
+      g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                   "a prompt is required");
+      g_free (prompt);
+      return CTL_EXIT_ERROR;
+    }
+
+  /* The wire format is one comma-separated string, matching the MCP
+   * tool -- the bridge's schema translator cannot carry a list. */
+  refs = (ai_opt_refs != NULL)
+    ? g_strjoinv (",", ai_opt_refs)
+    : g_strdup ("");
+
+  out = ai_call (inv, "GenerateImage",
+                 g_variant_new ("(ssssss)", prompt, provider, model,
+                                aspect, refs, buffer),
+                 error);
+  g_free (prompt);
+  g_free (refs);
+  if (out == NULL)
+    return ctl_exit_code_for_error (error != NULL ? *error : NULL);
+
+  result = ctl_result_new_scalar (out);
+  ok = ctl_invocation_emit (inv, result, error);
+  ctl_result_unref (result);
+  g_free (out);
+  return ok ? CTL_EXIT_OK : CTL_EXIT_ERROR;
+}
+
 void
 ctl_cmd_subsys_register (CtlCommandRegistry *registry)
 {
@@ -625,4 +687,9 @@ ctl_cmd_subsys_register (CtlCommandRegistry *registry)
     ctl_simple_command_new_with_options (
       "ai chat", "Open a chat buffer (optionally sending a prompt)",
       "[PROMPT...]", ai_chat_entries, cmd_ai_chat));
+  ctl_command_registry_add (registry,
+    ctl_simple_command_new_with_options (
+      "ai generate-image",
+      "Generate an image and insert it into a buffer (blocking)",
+      "[PROMPT...]", ai_image_entries, cmd_ai_generate_image));
 }

@@ -48,6 +48,15 @@ static const gchar *iface_xml =
   "      <arg type='b' name='tools' direction='in'/>"
   "      <arg type='s' name='response' direction='out'/>"
   "    </method>"
+  "    <method name='GenerateImage'>"
+  "      <arg type='s' name='prompt' direction='in'/>"
+  "      <arg type='s' name='provider' direction='in'/>"
+  "      <arg type='s' name='model' direction='in'/>"
+  "      <arg type='s' name='aspect' direction='in'/>"
+  "      <arg type='s' name='references' direction='in'/>"
+  "      <arg type='s' name='buffer' direction='in'/>"
+  "      <arg type='s' name='result' direction='out'/>"
+  "    </method>"
   "    <method name='OpenChat'>"
   "      <arg type='s' name='provider' direction='in'/>"
   "      <arg type='s' name='prompt' direction='in'/>"
@@ -237,6 +246,106 @@ on_method_call (GDBusConnection *c, const gchar *s, const gchar *o,
       g_free (provider_form);
       g_free (system_form);
       g_free (model_form);
+
+      result = cmacs_dispatch_eval_string (expr, &err);
+      g_free (expr);
+      if (result == NULL)
+        {
+          cmacs_dbus_return_gerror (iv, err);
+          return;
+        }
+      g_dbus_method_invocation_return_value (
+        iv, g_variant_new ("(s)", result));
+      g_free (result);
+    }
+  else if (g_strcmp0 (m, "GenerateImage") == 0)
+    {
+      /* MCP parity: the generate_image tool in
+       * cmacs/mcp/cmacs-mcp-tools-ai.c.  Blocks for as long as the
+       * provider takes, which is tens of seconds. */
+      const gchar *prompt, *provider, *model, *aspect, *refs, *buffer;
+      gchar *prompt_q, *provider_form, *model_form;
+      gchar *aspect_arg, *refs_arg, *buffer_form;
+      gchar *expr;
+      gchar *result;
+      GError *err = NULL;
+
+      g_variant_get (p, "(&s&s&s&s&s&s)", &prompt, &provider, &model,
+                     &aspect, &refs, &buffer);
+      if (*prompt == '\0')
+        {
+          g_dbus_method_invocation_return_dbus_error (
+            iv, "org.cmacs.Editor1.Error", "prompt is required");
+          return;
+        }
+      if (*provider != '\0' && !valid_provider_name (provider))
+        {
+          g_dbus_method_invocation_return_dbus_error (
+            iv, "org.cmacs.Editor1.Error", "invalid provider name");
+          return;
+        }
+
+      prompt_q = cmacs_dbus_lisp_escape (prompt);
+      provider_form = (*provider != '\0')
+        ? g_strdup_printf ("(quote %s)", provider)
+        : g_strdup ("nil");
+      if (*model != '\0')
+        {
+          gchar *esc = cmacs_dbus_lisp_escape (model);
+          model_form = g_strdup_printf ("\"%s\"", esc);
+          g_free (esc);
+        }
+      else
+        model_form = g_strdup ("nil");
+      if (*aspect != '\0')
+        {
+          gchar *esc = cmacs_dbus_lisp_escape (aspect);
+          aspect_arg = g_strdup_printf (":aspect \"%s\"", esc);
+          g_free (esc);
+        }
+      else
+        aspect_arg = g_strdup ("");
+      if (*refs != '\0')
+        {
+          gchar *esc = cmacs_dbus_lisp_escape (refs);
+          refs_arg = g_strdup_printf (
+            ":references (cmacs-ai-image-chat--parse-refs \"%s\")", esc);
+          g_free (esc);
+        }
+      else
+        refs_arg = g_strdup ("");
+      if (*buffer != '\0')
+        {
+          gchar *esc = cmacs_dbus_lisp_escape (buffer);
+          buffer_form = g_strdup_printf (
+            "(or (get-buffer \"%s\") (current-buffer))", esc);
+          g_free (esc);
+        }
+      else
+        buffer_form = g_strdup ("(current-buffer)");
+
+      expr = g_strdup_printf (
+        "(condition-case e"
+        " (progn (require 'cmacs-ai-image) (require 'cmacs-ai-image-chat)"
+        "  (with-current-buffer %s"
+        "   (let* ((h (cmacs-ai-image--client %s %s))"
+        "          (pl (unwind-protect"
+        "                  (cmacs-ai-image-generate-sync"
+        "                   h \"%s\" (list %s %s) cmacs-ai-image-timeout)"
+        "                (ignore-errors (cmacs-ai-client-free h))))"
+        "          (n (cmacs-ai-image--place (plist-get pl :images)"
+        "                                     \"%s\" (current-buffer)"
+        "                                     (point))))"
+        "     (format \"Inserted %%d image(s) into %%s\" n (buffer-name)))))"
+        " (error (format \"error: %%S\" e)))",
+        buffer_form, provider_form, model_form, prompt_q,
+        aspect_arg, refs_arg, prompt_q);
+      g_free (prompt_q);
+      g_free (provider_form);
+      g_free (model_form);
+      g_free (aspect_arg);
+      g_free (refs_arg);
+      g_free (buffer_form);
 
       result = cmacs_dispatch_eval_string (expr, &err);
       g_free (expr);

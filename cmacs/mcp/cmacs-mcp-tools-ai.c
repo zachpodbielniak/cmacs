@@ -10,6 +10,8 @@
  *   - ai_list_providers: enumerate provider symbols
  *   - ai_list_models:   enumerate model names per provider
  *   - ai_open_chat:     open a chat buffer with an initial prompt
+ *   - generate_image:   generate an image and insert it into a buffer
+ *                       (unprefixed on purpose -- see its handler)
  *
  * D-Bus parity: org.cmacs.Editor1.Ai in
  * cmacs/dbus/cmacs-dbus-iface-ai.c (sync discipline: adding a tool
@@ -145,6 +147,100 @@ handle_ai_call (McpServer *server, const gchar *name,
   return r;
 }
 
+/*
+ * generate_image
+ *
+ * Deliberately NOT named ai_generate_image: the MCP bridge hides every
+ * "^ai_" tool from in-process chat buffers to stop the model calling
+ * itself, and an in-process chat buffer is precisely where an agent
+ * should be able to draw something.
+ *
+ * The schema is flat -- references arrive as a comma-separated string --
+ * because the bridge's schema translator rejects nested objects.
+ */
+static McpToolResult *
+handle_generate_image (McpServer *server, const gchar *name,
+                       JsonObject *arguments, gpointer user_data)
+{
+  (void) server; (void) name; (void) user_data;
+  const gchar *prompt = json_object_has_member (arguments, "prompt")
+    ? json_object_get_string_member (arguments, "prompt") : NULL;
+  const gchar *provider = json_object_has_member (arguments, "provider")
+    ? json_object_get_string_member (arguments, "provider") : NULL;
+  const gchar *model = json_object_has_member (arguments, "model")
+    ? json_object_get_string_member (arguments, "model") : NULL;
+  const gchar *aspect = json_object_has_member (arguments, "aspect")
+    ? json_object_get_string_member (arguments, "aspect") : NULL;
+  const gchar *size = json_object_has_member (arguments, "size")
+    ? json_object_get_string_member (arguments, "size") : NULL;
+  const gchar *quality = json_object_has_member (arguments, "quality")
+    ? json_object_get_string_member (arguments, "quality") : NULL;
+  const gchar *refs = json_object_has_member (arguments, "references")
+    ? json_object_get_string_member (arguments, "references") : NULL;
+  const gchar *buffer = json_object_has_member (arguments, "buffer")
+    ? json_object_get_string_member (arguments, "buffer") : NULL;
+
+  if (prompt == NULL || *prompt == '\0')
+    {
+      McpToolResult *r = mcp_tool_result_new (TRUE);
+      mcp_tool_result_add_text (r, "generate_image: missing 'prompt'");
+      return r;
+    }
+
+  g_autofree gchar *prompt_esc = escape_for_lisp (prompt);
+  /* These two are positional arguments to cmacs-ai-image--client, so
+   * they must evaluate to a value (or nil), not to a keyword pair. */
+  g_autofree gchar *provider_form = provider && *provider
+    ? g_strdup_printf ("(quote %s)", provider) : g_strdup ("nil");
+  g_autofree gchar *model_esc = escape_for_lisp (model ? model : "");
+  g_autofree gchar *model_form = model && *model
+    ? g_strdup_printf ("\"%s\"", model_esc) : g_strdup ("nil");
+  g_autofree gchar *aspect_esc = escape_for_lisp (aspect ? aspect : "");
+  g_autofree gchar *aspect_arg = aspect && *aspect
+    ? g_strdup_printf (":aspect \"%s\"", aspect_esc) : g_strdup ("");
+  g_autofree gchar *size_esc = escape_for_lisp (size ? size : "");
+  g_autofree gchar *size_arg = size && *size
+    ? g_strdup_printf (":custom-size \"%s\"", size_esc) : g_strdup ("");
+  g_autofree gchar *quality_esc = escape_for_lisp (quality ? quality : "");
+  g_autofree gchar *quality_arg = quality && *quality
+    ? g_strdup_printf (":quality \"%s\"", quality_esc) : g_strdup ("");
+  g_autofree gchar *refs_esc = escape_for_lisp (refs ? refs : "");
+  g_autofree gchar *refs_arg = refs && *refs
+    ? g_strdup_printf (":references (cmacs-ai-image-chat--parse-refs \"%s\")",
+                       refs_esc)
+    : g_strdup ("");
+  g_autofree gchar *buffer_esc = escape_for_lisp (buffer ? buffer : "");
+
+  /* Runs synchronously: an MCP call is a request/response, and the
+   * caller is waiting on the result. */
+  g_autoptr (GError) err = NULL;
+  g_autofree gchar *expr = g_strdup_printf (
+    "(condition-case e"
+    " (progn (require 'cmacs-ai-image) (require 'cmacs-ai-image-chat)"
+    "  (with-current-buffer %s%s%s"
+    "   (let* ((h (cmacs-ai-image--client %s %s))"
+    "          (p (unwind-protect"
+    "                 (cmacs-ai-image-generate-sync"
+    "                  h \"%s\" (list %s %s %s %s) cmacs-ai-image-timeout)"
+    "               (ignore-errors (cmacs-ai-client-free h))))"
+    "          (n (cmacs-ai-image--place (plist-get p :images)"
+    "                                    \"%s\" (current-buffer) (point))))"
+    "    (format \"Inserted %%d image(s) into %%s\" n (buffer-name)))))"
+    " (error (format \"error: %%S\" e)))",
+    buffer && *buffer ? "(or (get-buffer \"" : "(current-buffer)",
+    buffer && *buffer ? buffer_esc : "",
+    buffer && *buffer ? "\") (current-buffer))" : "",
+    provider_form, model_form,
+    prompt_esc,
+    aspect_arg, size_arg, quality_arg, refs_arg,
+    prompt_esc);
+  g_autofree gchar *res = cmacs_dispatch_eval_string (expr, &err);
+  McpToolResult *r = mcp_tool_result_new (res == NULL);
+  mcp_tool_result_add_text (r,
+    res ? res : (err ? err->message : "generate_image failed"));
+  return r;
+}
+
 static McpToolResult *
 handle_ai_list_providers (McpServer *server, const gchar *name,
                           JsonObject *arguments, gpointer user_data)
@@ -273,6 +369,34 @@ cmacs_mcp_tools_ai_register (McpServer *server)
     "},\"required\":[\"prompt\"]}");
   mcp_tool_set_input_schema (tool, schema);
   mcp_server_add_tool (server, tool, handle_ai_call, NULL, NULL);
+  g_object_unref (tool);
+
+  tool = mcp_tool_new ("generate_image",
+    "Generate an image from a text prompt and insert it into a cmacs "
+    "buffer.  In an Org buffer the image is attached to the current "
+    "node and previewed inline; elsewhere it is saved under "
+    "cmacs-ai-image-dir.  Optional 'references' is a comma-separated "
+    "list of input images to condition on, each PATH or PATH::ROLE "
+    "(e.g. \"logo.png::style,cat.jpg::subject\") -- roles tell the "
+    "model what each reference is for.  Optional 'provider' (gemini / "
+    "openai / grok), 'model', 'aspect' (e.g. 16:9), 'size' (e.g. "
+    "1024x1024) and 'quality'.  Optional 'buffer' names the target "
+    "buffer; the current one is used otherwise.  WARNING: this blocks "
+    "the cmacs main thread for the tens of seconds generation takes.");
+  schema = cmacs_mcp_schema_from_string (
+    "{\"type\":\"object\",\"properties\":{"
+    "\"prompt\":{\"type\":\"string\",\"description\":\"What to depict\"},"
+    "\"references\":{\"type\":\"string\",\"description\":"
+    "\"Comma-separated PATH or PATH::ROLE reference images\"},"
+    "\"provider\":{\"type\":\"string\",\"description\":\"gemini/openai/grok\"},"
+    "\"model\":{\"type\":\"string\",\"description\":\"Model id\"},"
+    "\"aspect\":{\"type\":\"string\",\"description\":\"Aspect ratio\"},"
+    "\"size\":{\"type\":\"string\",\"description\":\"Pixel size\"},"
+    "\"quality\":{\"type\":\"string\",\"description\":\"Quality level\"},"
+    "\"buffer\":{\"type\":\"string\",\"description\":\"Target buffer name\"}"
+    "},\"required\":[\"prompt\"]}");
+  mcp_tool_set_input_schema (tool, schema);
+  mcp_server_add_tool (server, tool, handle_generate_image, NULL, NULL);
   g_object_unref (tool);
 
   tool = mcp_tool_new ("ai_list_providers",
