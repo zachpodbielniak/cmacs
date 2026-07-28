@@ -15,6 +15,8 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cl-lib)
+(require 'seq)
 
 ;; Load only the parts we exercise here so the rest of the suite
 ;; doesn't drag in major-mode setup it doesn't need.
@@ -604,6 +606,241 @@ tool-return-value bridge).  Gated on a Claude API key."
     (should fired)
     (should (stringp ans))
     (should (string-match-p "ZORP-8842" ans))))
+
+;;;; Image generation ----------------------------------------------
+;;
+;; The generator itself is stubbed throughout: these cover the layer
+;; that decides where an image goes and what gets written into the
+;; buffer, which is where the interesting behaviour lives.
+
+(require 'cmacs-ai-image nil 'noerror)
+(require 'cmacs-ai-image-block nil 'noerror)
+(require 'cmacs-ai-image-chat nil 'noerror)
+
+(defconst cmacs-ai-tests--png
+  (apply #'unibyte-string
+         (list 137 80 78 71 13 10 26 10 0 0 0 13 73 72 68 82
+               0 0 0 1 0 0 0 1 8 6 0 0 0 31 21 196 137
+               0 0 0 10 73 68 65 84 120 156 99 0 1 0 0 5 0 1
+               13 10 45 180 0 0 0 0 73 69 78 68 174 66 96 130))
+  "A one-pixel PNG, so tests write something a decoder would accept.")
+
+(defmacro cmacs-ai-tests--with-stub-image (images &rest body)
+  "Run BODY with the image generator stubbed to return IMAGES."
+  (declare (indent 1))
+  `(cl-letf (((symbol-function 'cmacs-ai-image-generate-async)
+              (lambda (_h _prompt cb _opts) (funcall cb (list :images ,images)) 1))
+             ((symbol-function 'cmacs-ai-image-generate-sync)
+              (lambda (_h _prompt _opts &optional _t) (list :images ,images)))
+             ((symbol-function 'cmacs-ai-client-new) (lambda (&rest _) 1))
+             ((symbol-function 'cmacs-ai-client-free) (lambda (&rest _) t))
+             ((symbol-function 'cmacs-ai-image--ensure) (lambda () t))
+             ((symbol-function 'cmacs-ai-image--available-p) (lambda () t)))
+     ,@body))
+
+(defun cmacs-ai-tests--one-image ()
+  (list (list :data cmacs-ai-tests--png :mime "image/png")))
+
+(ert-deftest cmacs-ai-image-mime-extension ()
+  "MIME types map to the extension the file is saved under."
+  (skip-unless (fboundp 'cmacs-ai-image--extension))
+  (should (equal (cmacs-ai-image--extension "image/png") ".png"))
+  (should (equal (cmacs-ai-image--extension "image/jpeg") ".jpg"))
+  (should (equal (cmacs-ai-image--extension "image/webp") ".webp"))
+  ;; An unknown type must still produce something writable.
+  (should (equal (cmacs-ai-image--extension "application/octet-stream")
+                 ".png")))
+
+(ert-deftest cmacs-ai-image-basename-numbers-batches ()
+  "A single image gets a bare name; a batch gets numbered ones."
+  (skip-unless (fboundp 'cmacs-ai-image--basename))
+  ;; Pin the name format: the default is a timestamp, which contains
+  ;; its own "-NNNNNN" and makes a suffix assertion ambiguous.
+  (let* ((cmacs-ai-image-file-name-format "img")
+         (solo  (cmacs-ai-image--basename "image/png" 0 1))
+         (first (cmacs-ai-image--basename "image/png" 0 3))
+         (third (cmacs-ai-image--basename "image/jpeg" 2 3)))
+    (should (equal solo "img.png"))
+    (should (equal first "img-1.png"))
+    (should (equal third "img-3.jpg"))))
+
+(ert-deftest cmacs-ai-image-options-omit-nil ()
+  "Unset defcustoms are omitted, so providers keep their own defaults."
+  (skip-unless (fboundp 'cmacs-ai-image--options))
+  (let ((cmacs-ai-image-model nil)
+        (cmacs-ai-image-aspect nil)
+        (cmacs-ai-image-size nil)
+        (cmacs-ai-image-resolution nil)
+        (cmacs-ai-image-quality nil)
+        (cmacs-ai-image-background nil)
+        (cmacs-ai-image-format nil)
+        (cmacs-ai-image-negative nil)
+        (cmacs-ai-image-count 1))
+    (let ((opts (cmacs-ai-image--options)))
+      (should-not (plist-member opts :model))
+      (should-not (plist-member opts :aspect))
+      (should-not (plist-member opts :quality))
+      ;; count is genuinely set, so it survives
+      (should (equal (plist-get opts :count) 1)))))
+
+(ert-deftest cmacs-ai-image-options-overrides-win ()
+  "Explicit overrides beat the defcustom defaults."
+  (skip-unless (fboundp 'cmacs-ai-image--options))
+  (let* ((cmacs-ai-image-aspect "1:1")
+         (opts (cmacs-ai-image--options '(:aspect "16:9" :seed 42))))
+    (should (equal (plist-get opts :aspect) "16:9"))
+    (should (equal (plist-get opts :seed) 42))))
+
+(ert-deftest cmacs-ai-image-attaches-in-org ()
+  "In Org the image is attached to the node and linked as an attachment."
+  (skip-unless (fboundp 'cmacs-ai-image))
+  (let* ((dir (make-temp-file "cmacs-ai-img-" t))
+         (cmacs-ai-image-dir (expand-file-name "fallback" dir))
+         (org-id-locations-file (expand-file-name "id-locations" dir))
+         (file (expand-file-name "notes.org" dir)))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "* Heading\n\n"))
+          (let ((buf (find-file-noselect file)))
+            (unwind-protect
+                (with-current-buffer buf
+                  (goto-char (point-max))
+                  (cmacs-ai-tests--with-stub-image
+                      (cmacs-ai-tests--one-image)
+                    (cmacs-ai-image "a brass telescope" nil))
+                  (let ((text (buffer-string)))
+                    (should (string-match-p "\\[\\[attachment:" text))
+                    (should (string-match-p "#\\+CAPTION: a brass telescope"
+                                            text))
+                    ;; org-attach needs an ID to hang the directory off.
+                    (should (string-match-p ":ID:" text)))
+                  ;; The bytes must really be on disk, not just linked.
+                  (goto-char (point-min))
+                  (org-back-to-heading t)
+                  (let ((adir (org-attach-dir)))
+                    (should adir)
+                    (should (directory-files adir nil "\\.png\\'"))))
+              (kill-buffer buf))))
+      (delete-directory dir t))))
+
+(ert-deftest cmacs-ai-image-falls-back-outside-org ()
+  "Outside Org the image lands in the fallback dir as a bare path."
+  (skip-unless (fboundp 'cmacs-ai-image))
+  (let* ((dir (make-temp-file "cmacs-ai-img-" t))
+         (cmacs-ai-image-dir (expand-file-name "fallback" dir)))
+    (unwind-protect
+        (with-temp-buffer
+          (text-mode)
+          (cmacs-ai-tests--with-stub-image (cmacs-ai-tests--one-image)
+            (cmacs-ai-image "a fallback image" nil))
+          (let ((text (string-trim (buffer-string))))
+            ;; A bare path, not Org bracket syntax, which would be noise
+            ;; in a plain buffer.
+            (should-not (string-match-p "\\[\\[" text))
+            (should (string-suffix-p ".png" text))
+            (should (file-exists-p text))))
+      (delete-directory dir t))))
+
+(ert-deftest cmacs-ai-image-skips-entries-without-data ()
+  "An image whose bytes could not be fetched is skipped, not fatal."
+  (skip-unless (fboundp 'cmacs-ai-image--place))
+  (let* ((dir (make-temp-file "cmacs-ai-img-" t))
+         (cmacs-ai-image-dir (expand-file-name "fallback" dir)))
+    (unwind-protect
+        (with-temp-buffer
+          (text-mode)
+          (let ((placed (cmacs-ai-image--place
+                         (list (list :mime "image/png" :url "https://x/y.png")
+                               (list :data cmacs-ai-tests--png
+                                     :mime "image/png"))
+                         "prompt" (current-buffer) (point))))
+            ;; Two returned, one retrievable.
+            (should (= placed 1))))
+      (delete-directory dir t))))
+
+(ert-deftest cmacs-ai-image-block-coerces-numbers ()
+  "Org hands header args over as strings; numeric options are coerced."
+  (skip-unless (fboundp 'cmacs-ai-image-block--options))
+  (let ((opts (cmacs-ai-image-block--options
+               '((:count . "3") (:seed . "42") (:strength . "0.5")
+                 (:aspect . "16:9")))))
+    (should (integerp (plist-get opts :count)))
+    (should (= (plist-get opts :count) 3))
+    (should (integerp (plist-get opts :seed)))
+    (should (floatp (plist-get opts :strength)))
+    (should (equal (plist-get opts :aspect) "16:9"))))
+
+(ert-deftest cmacs-ai-image-block-collects-refs ()
+  "Repeated :ref header args accumulate, with optional ::ROLE labels."
+  (skip-unless (fboundp 'cmacs-ai-image-block--references))
+  (let ((refs (cmacs-ai-image-block--references
+               '((:ref . "logo.png::style") (:ref . "cat.jpg")))))
+    (should (= (length refs) 2))
+    (should (consp (nth 0 refs)))
+    (should (equal (cdr (nth 0 refs)) "style"))
+    ;; An unlabelled reference stays a bare path.
+    (should (stringp (nth 1 refs)))))
+
+(ert-deftest cmacs-ai-image-chat-parses-references ()
+  "The flat comma-separated reference string parses into paths + roles."
+  (skip-unless (fboundp 'cmacs-ai-image-chat--parse-refs))
+  (let ((refs (cmacs-ai-image-chat--parse-refs
+               "a.png::style, b.jpg , c.webp::subject")))
+    (should (= (length refs) 3))
+    (should (equal (cdr (nth 0 refs)) "style"))
+    (should (stringp (nth 1 refs)))
+    (should (equal (cdr (nth 2 refs)) "subject")))
+  ;; Empty input must not produce a one-element list of nothing.
+  (should-not (cmacs-ai-image-chat--parse-refs ""))
+  (should-not (cmacs-ai-image-chat--parse-refs nil)))
+
+(ert-deftest cmacs-ai-image-chat-slash-command ()
+  "`/image PROMPT' is consumed; ordinary text is not."
+  (skip-unless (fboundp 'cmacs-ai-image-chat-slash-command))
+  (let (seen)
+    (cl-letf (((symbol-function 'cmacs-ai-image--run)
+               (lambda (p &rest _) (setq seen p) t)))
+      (should (cmacs-ai-image-chat-slash-command "/image a red cube"))
+      (should (equal seen "a red cube"))
+      (setq seen nil)
+      (should-not (cmacs-ai-image-chat-slash-command "just a message"))
+      (should-not seen)
+      ;; `/image' with no prompt is not a command either.
+      (should-not (cmacs-ai-image-chat-slash-command "/image")))))
+
+(ert-deftest cmacs-ai-image-models-shape ()
+  "The capability query returns plists with the documented keys."
+  (skip-unless (fboundp 'cmacs-ai-image-models))
+  (skip-unless (fboundp 'cmacs-ai-client-new))
+  (let ((h (cmacs-ai-client-new 'gemini)))
+    (unwind-protect
+        (let ((models (cmacs-ai-image-models h)))
+          (should models)
+          (dolist (m models)
+            (should (stringp (plist-get m :id)))
+            (should (integerp (plist-get m :max-references)))
+            (should (integerp (plist-get m :max-count)))
+            (should (listp (plist-get m :capabilities))))
+          ;; Nano Banana Pro is the multi-reference model.
+          (let ((pro (seq-find
+                      (lambda (m)
+                        (equal (plist-get m :id)
+                               "gemini-3-pro-image-preview"))
+                      models)))
+            (should pro)
+            (should (memq 'multi-reference (plist-get pro :capabilities)))
+            (should (= (plist-get pro :max-references) 14))))
+      (cmacs-ai-client-free h))))
+
+(ert-deftest cmacs-ai-image-rejects-non-image-provider ()
+  "Asking a provider with no image API for an image errors clearly."
+  (skip-unless (fboundp 'cmacs-ai-image-generate-async))
+  (skip-unless (fboundp 'cmacs-ai-client-new))
+  (let ((h (cmacs-ai-client-new 'claude)))
+    (unwind-protect
+        (should-error (cmacs-ai-image-generate-async
+                       h "x" (lambda (_) nil) nil))
+      (cmacs-ai-client-free h))))
 
 (provide 'cmacs-ai-tests)
 ;;; cmacs-ai-tests.el ends here
