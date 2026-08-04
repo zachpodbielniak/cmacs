@@ -123,6 +123,13 @@ of turns, and floating point drift in the one figure a limit acts on would be
 the worst possible place for it. A model with no price is reported as
 *unpriced*, never as free — the two are indistinguishable once summed.
 
+
+** Budgets and what zero means
+
+A budget of =0.00= means /no ceiling/, not a zero-dollar cap. That follows ai-glib's =AiBudget=, where every limit is tested only when it is greater than zero — so a zero token, turn or wall-clock limit is likewise unlimited. =cmacs-brigade-default-budget-usd= is =0.00=, so an agent that does not name a budget is uncapped.
+
+Be aware that nothing enforces the number yet on the worker paths cmacs ships. =cmacs-brigade-run= spawns =claude-code=, =opencode= or a shell as a subprocess, and a subprocess spends what it spends; the =AiBudget= ceiling lives in ai-glib's in-process agent runtime, which the Elisp runner does not drive. The value is carried on the definition and reported, but it does not stop a run, and the =over-budget= state is currently unreachable.
+
 * Tool access
 
 Each agent gets a freshly minted random token and a 0600 =.mcp.json= under

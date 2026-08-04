@@ -32,6 +32,7 @@
 ;; defcustom in scope at compile time or the compiler makes it lexical
 ;; while the loaded file makes it dynamic.
 (require 'cmacs-brigade-dashboard nil 'noerror)
+(require 'cmacs-brigade-agent-def nil 'noerror)
 
 (defconst cmacs-brigade-tests--root
   (expand-file-name "../.." (file-name-directory
@@ -357,6 +358,30 @@ the full-frame state as the layout to return to."
       (cmacs-brigade-dashboard)
       (cmacs-brigade-dashboard-quit)
       (should (= before (length (window-list)))))))
+
+
+(ert-deftest cmacs-brigade-runner-is-actually-loaded ()
+  "Loading cmacs-brigade must bind the functions its UI dispatches to.
+
+`cmacs-brigade-run' has no autoload cookie, so if it drops out of the
+eager-load set nothing pulls it in and the dashboard's keys and every
+scheduled fire die on a void function.  That is invisible until someone
+presses a key, which is why it is asserted here."
+  (skip-unless (featurep 'cmacs-brigade))
+  (dolist (fn '(cmacs-brigade-start-task
+                cmacs-brigade-cancel-task
+                cmacs-brigade-live-count
+                cmacs-brigade-can-start-p))
+    (should (fboundp fn))))
+
+(ert-deftest cmacs-brigade-default-budget-is-unlimited ()
+  "Zero is the documented \"no ceiling\" value, not a zero-dollar cap."
+  (skip-unless (featurep 'cmacs-brigade-agent-def))
+  (should (= 0 cmacs-brigade-default-budget-usd))
+  ;; An agent that names no budget inherits it rather than inventing one.
+  (let ((agent (cmacs-brigade-agent--from-text
+                "---\nname: budget-test\n---\nbody" nil)))
+    (should (= 0 (plist-get agent :budget-usd)))))
 
 (provide 'cmacs-brigade-tests)
 

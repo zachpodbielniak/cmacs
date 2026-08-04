@@ -31,6 +31,9 @@
 
 (require 'cmacs-brigade)
 (require 'cmacs-brigade-registry)
+;; Every command here dispatches into the runner; without this the keys
+;; are bound to void functions.
+(require 'cmacs-brigade-run)
 (require 'cl-lib)
 (require 'subr-x)
 

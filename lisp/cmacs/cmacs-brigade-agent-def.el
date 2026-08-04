@@ -64,10 +64,20 @@ directory is consulted separately per project and always wins."
   :type 'string
   :group 'cmacs-brigade)
 
-(defcustom cmacs-brigade-default-budget-usd 0.50
+(defcustom cmacs-brigade-default-budget-usd 0.00
   "Spend ceiling, in US dollars, for an agent that does not set one.
 
-A ceiling rather than a guideline: the run stops when it is reached."
+Zero means no ceiling, matching ai-glib\='s `AiBudget\=' convention, where
+every limit is tested only when it is greater than zero -- so a zero
+input-token, turn or wall-clock limit is likewise unlimited.
+
+Note that nothing enforces this yet on the worker paths cmacs currently
+ships.  `cmacs-brigade-run\=' spawns claude-code, opencode or a shell as a
+subprocess, and a subprocess spends what it spends; the `AiBudget\='
+ceiling lives in ai-glib\='s in-process agent runtime, which the Elisp
+runner does not drive.  The value is carried on the agent definition and
+reported, but it does not stop a run, and the `over-budget\=' state is
+currently unreachable."
   :type 'number
   :group 'cmacs-brigade)
 

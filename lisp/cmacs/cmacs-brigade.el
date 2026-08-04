@@ -164,6 +164,11 @@ The subsystem's own symbols use the shorter `cmacs-brigade-' prefix.")
   (require 'cmacs-brigade-agent-def nil 'noerror)
   (require 'cmacs-brigade-isolation nil 'noerror)
   (require 'cmacs-brigade-host nil 'noerror)
+  ;; The runner itself.  Nothing autoloads it and the dashboard and
+  ;; scheduler both call into it, so leaving it out made `s' in the
+  ;; dashboard and every scheduled fire die on a void
+  ;; `cmacs-brigade-start-task'.
+  (require 'cmacs-brigade-run nil 'noerror)
   (require 'cmacs-brigade-genmail nil 'noerror)
   (require 'cmacs-brigade-deliver nil 'noerror)
   ;; Eager for the same reason, and for one more: notification is only

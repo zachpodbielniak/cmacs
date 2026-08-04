@@ -39,6 +39,9 @@
 
 (require 'cmacs-brigade)
 (require 'cmacs-brigade-registry)
+;; Firing a schedule starts a task, so the runner has to be present --
+;; a `declare-function' alone silences the compiler without loading it.
+(require 'cmacs-brigade-run)
 (require 'cl-lib)
 (require 'subr-x)
 
@@ -122,7 +125,6 @@ rather than looping forever."
 ;; second definition of what a task's identity and prompt are.
 (declare-function cmacs-brigade-plan--entry-id "cmacs-brigade-plan")
 (declare-function cmacs-brigade-plan--entry-body "cmacs-brigade-plan")
-(declare-function cmacs-brigade-start-task "cmacs-brigade-run")
 (declare-function cmacs-brigade-task-transition "cmacs-brigade-state.c")
 (declare-function cmacs-brigade-agent-get "cmacs-brigade-agent-def")
 (declare-function cmacs-ai-call "cmacs-ai-call")

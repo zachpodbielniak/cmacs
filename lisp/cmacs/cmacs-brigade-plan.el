@@ -409,7 +409,7 @@ may refuse."
             "* TODO Example task                                    :brigade:\n"
             "  :PROPERTIES:\n"
             "  :AGENT:  researcher\n"
-            "  :BUDGET: 0.50\n"
+            "  :BUDGET: 0.00\n"
             "  :END:\n"
             "  Describe what this agent should do.  This body is the prompt.\n")
     (save-buffer))
