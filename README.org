@@ -410,6 +410,7 @@ cd cmacs
   --with-cmacs-podomation \
   --with-cmacs-libreclaw \
   --with-cmacs-ai \
+  --with-cmacs-ai-brigade \
   --with-cmacs-org-ex \
   --with-cmacs-mcp \
   --with-cmacs-print \
@@ -535,6 +536,7 @@ Requires =autoconf= (>= 2.65) and =automake=.
   --with-cmacs-podomation \
   --with-cmacs-libreclaw \
   --with-cmacs-ai \
+  --with-cmacs-ai-brigade \
   --with-cmacs-org-ex \
   --with-cmacs-mcp \
   --with-cmacs-print \
@@ -618,6 +620,8 @@ Module flags:
 - =--with-cmacs-vidstudio= — Video editor on libregnum's *Reel* composition system: multi-track timeline (each track an =LrgReelTransitionSeries=), 9 transition types, 5 effects, split/trim/move/ripple, text/solid/image/video clips, CPU preview and ffmpeg-backed mp4/gif export.  =M-x cmacs-vidstudio=; video clips decode on a worker thread (import never blocks) and playback paces itself from the wall clock so the editor never freezes.  Headless + MCP-driveable (=vidstudio_*= tools).  Part of the standard flag set; requires =--with-cmacs-libregnum= + =--with-cmacs-glib= (the =ffmpeg= binary at runtime for video clips/export).  See [[file:doc_org/cmacs/cmacs-vidstudio.org][the manual]].
 - =--with-cmacs-calculator= — Calculator: desktop arithmetic, financial (loans/amortization/bonds/options/tax), physics, relativity, and a CAS — built on *GNU Calc*, which already ships with Emacs, wrapped to correct its defaults (stock Calc reads =2/3*4= as 2/(3*4), defaults to degrees, and answers bad input by echoing it back unevaluated).  Every calculator is a first-class algebraic function, so =bscall(100,100,0.05,0.2,1) - bsput(...)= composes — as do all 415 GNU Calc built-ins (=deriv=, =integ=, =solve=, …), each documented in [[file:doc_org/cmacs/calculator/builtins.org][the built-ins catalog]].  Surfaces: =.calc= sheet buffers (=C-c C-c=), =M-x cmacs-calculator= landing page, =C-c ==​ inline evaluation in *any* major mode, =emacs --calc [EXPR]= CLI REPL, and MCP tools.  Charts render inline as SVG (works headless/TTY) or, with =--with-cmacs-libregnum=, on the GPU via libregnum's chart module (identical under pgtk and =emacs --lrg=).  Part of the standard flag set; libregnum is *optional* — without it the SVG chart tier still works.  See [[file:doc_org/cmacs/calculator/index.org][the manual]].
 - =--with-cmacs-lsp= — In-binary *LSP language servers*: =emacs --cmacs-lsp LANG= runs a pure C/GLib JSON-RPC-over-stdio server compiled into the emacs binary itself (the =--bacon= never-return model — no editor, no Lisp VM), and clients spawn it as a subprocess call back to the same binary, so client and server always agree on what was compiled in.  =emacs --help= auto-lists the compiled-in servers.  First server: *gnucalc* for =.calc= calculator sheets (requires =--with-cmacs-calculator=) — completion/hover/signature-help over all 415 GNU Calc built-ins, every cmacs calculator, constants and units from a table generated out of [[file:doc_org/cmacs/calculator/builtins.org][the built-ins catalog]], plus lexical diagnostics, =:== symbols/definitions and semantic tokens.  Inside cmacs, =.calc= buffers auto-start eglot against it; external editors (nvim, …) point at the same command.  Part of the standard flag set.  See [[file:doc_org/cmacs/lsp.org][the LSP manual]].
+
+- =--with-cmacs-ai-brigade= — The AI *fabric*: the layer other cmacs subsystems and your own config lay on top of to get AI capability, agent orchestration and memory.  Its primary deliverable is the *extension surface* — a single =cmacs-brigade-deftool= form in =init.el= publishes a capability to in-process HTTP agents, to CLI agents (=claude-code=, =opencode=) over an =emacs --mcp-relay= MCP bridge scoped by a freshly minted per-agent capability token, *and* to external MCP clients, all at once.  Public registries cover tools, agents, execution workers, isolation backends, memory sources, deliverables and dashboard panels; the shipped features consume exactly that API, with no private back doors.  Out of the box: a self-contained mmap'd fp16 memory index over your notes (runtime F16C dispatch with a scalar fallback, so one binary runs anywhere), an org-file-as-plan model where C owns runtime state and org owns intent, an agent dashboard that degrades cleanly to TUI and =--lrg=, GenMail, and deliverable generators.  Part of the standard flag set; *requires* =--with-cmacs-ai=, and =--with-cmacs-libreclaw= is optional.  See [[file:doc_org/cmacs/ai-brigade/index.org][the manual]] and [[file:doc_org/cmacs/ai-brigade/extending.org][the extension guide]].
 
 - =--with-cmacs-transcode= — Native batch video/audio *transcoder*, a
   reimplementation of the author's =compress_video= / =compress_audio= shell

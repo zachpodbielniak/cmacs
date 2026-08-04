@@ -191,6 +191,7 @@ RUN ./autogen.sh \
         --with-cmacs-podomation \
         --with-cmacs-libreclaw \
         --with-cmacs-ai \
+        --with-cmacs-ai-brigade \
         --with-cmacs-org-ex \
         --with-cmacs-mcp \
         --with-cmacs-print \

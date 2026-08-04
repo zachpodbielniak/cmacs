@@ -93,8 +93,8 @@ Several small hunks, all in =main()= / its init path:
 - *=syms_of_cmacs_*= block*: register every subsystem's DEFUNs at dump
   time (one =#ifdef HAVE_CMACS_*= guard per subsystem: glib, gobject,
   dbus, gi, crispy, bacon, gowl, podomation, libreclaw, org-ex, mcp,
-  cintrospect, cpatch, video, audio, whisper, piper, ai, libregnum,
-  gnuseye, gsurf).  The block opens with one *unconditional* call,
+  cintrospect, cpatch, video, audio, whisper, piper, ai, ai-brigade,
+  libregnum, gnuseye, gsurf).  The block opens with one *unconditional* call,
   =syms_of_cmacs_features ()= (marked =/* CMACS: always-linked
   IS-CMACS-* flags */=), because =cmacs/core/cmacs-features.c= is linked
   in every configuration (it defines the =IS-CMACS-<NAME>= feature-flag

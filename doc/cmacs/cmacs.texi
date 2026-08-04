@@ -69,6 +69,7 @@ interaction.
 * CMacs Transcribe::            Batch speech-to-text (whisper STT + AI summaries).
 * CMacs Calculator::            Desktop/financial/physics/tax calculator + CAS over GNU Calc.
 * CMacs LSP::                   In-binary LSP language servers (emacs --cmacs-lsp).
+* CMacs AI Brigade::            Multi-agent orchestration, memory, and the AI tool fabric.
 * Evil and Doom::               Single-key cmacs modes under Evil / Doom Emacs.
 * Build Configuration::         Configure flags and dependencies.
 * Upstream Changes::            Every edit cmacs makes to stock Emacs sources.
@@ -9043,6 +9044,7 @@ viewport; a low-resolution proxy keeps playback near real-time.
 
 @c ===================================================================
 @include lsp/lsp.texi
+@include ai-brigade/ai-brigade.texi
 
 @c ===================================================================
 @include evil/evil.texi
@@ -9083,6 +9085,7 @@ fully-featured build matching Fedora defaults, use:
   --with-cmacs-podomation \
   --with-cmacs-libreclaw \
   --with-cmacs-ai \
+  --with-cmacs-ai-brigade \
   --with-cmacs-org-ex \
   --with-cmacs-mcp \
   --with-cmacs-print \

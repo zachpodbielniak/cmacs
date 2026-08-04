@@ -1,0 +1,119 @@
+#+title: CMacs AI Brigade
+#+description: Multi-agent orchestration, memory, and the extensible AI tool fabric
+#+authors: Zach Podbielniak
+#+categories: cmacs, ai, agents
+#+created: [2026-08-03 Sun]
+#+updated: [2026-08-03 Sun]
+#+version: 0.1.0
+
+* Overview
+
+The brigade is not a feature so much as a /fabric/: the layer every other
+cmacs subsystem — and every user's own code — lays on top of to get AI
+capability, agent orchestration, and memory.
+
+It ships out-of-the-box features (a memory index over your notes, an agent
+dashboard, GenMail, deliverable generators, AI in imgedit and vidstudio),
+but its primary deliverable is the *extension surface*. Exposing something
+of your own to every agent is one form in your init, and that one form
+lights it up on all three delivery paths at once:
+
+1. *in-process HTTP agents* — as a tool on the agent's executor
+2. *CLI agents* (=claude-code=, =opencode=) — as an MCP tool reached through
+   the =emacs --mcp-relay= bridge, scoped by the agent's capability token
+3. *external MCP clients* — on cmacs's existing MCP server
+
+Everything the shipped features use goes through the same public API you
+get. There are deliberately no private back doors: if a built-in needs a
+hook, that hook is public.
+
+See [[file:extending.org][Extending the brigade]] — that is the document that matters.
+
+* Design principles
+
+** Nothing is hardcoded
+
+Every path, model, budget, endpoint, and backend is a =defcustom=. Shipped
+values are /defaults/, never assumptions: your notes are not necessarily in
+=~/Documents/notes= and your ollama is not necessarily on localhost. An ERT
+test scans the brigade sources and fails if a literal path, model id, or
+endpoint appears outside a =defcustom= form.
+
+** Org is the plan, the dashboard is a view
+
+A live org buffer is the durable plan model — TODO keywords are the state
+machine, properties carry model/budget/tools, and org-agenda, org-clock,
+refile, capture and git history work on it for free. The dashboard renders
+the same data and never writes state of its own.
+
+The ownership rule, stated once and enforced everywhere: *C is authoritative
+for runtime, org is authoritative for intent.* The TODO keyword is a
+projection of runtime state and an input channel for commands, never a
+stored value.
+
+** Agents run out of process
+
+A =--gowl= cmacs instance /is/ the user's Wayland session. An agent that
+blocks or errors in-process takes the desktop with it, so agents run in
+supervised children and only trivial read-only work happens inline.
+
+** Capability scoping is real, not advisory
+
+Each agent gets a randomly minted token and a 0600 =.mcp.json= under
+=$XDG_RUNTIME_DIR=; the allowlist is enforced server-side in C at the tool
+dispatch point. An allowlist implemented in Elisp is bypassable by any
+agent that reaches =eval=, so it is not implemented there.
+
+* Requirements
+
+The subsystem is gated on =--with-cmacs-ai-brigade=, which *hard-requires*
+=--with-cmacs-ai= (configure errors otherwise — brigade drives ai-glib's
+provider and tool-executor types directly).
+
+=--with-cmacs-libreclaw= is optional and adds extra surfaces when present.
+
+* Status
+
+| Phase | Contents                                        | State       |
+|-------+-------------------------------------------------+-------------|
+|     0 | Subsystem wiring, feature flag, capability probe | done        |
+|     1 | The extension fabric: registries, =deftool=, relay | in progress |
+|     2 | Memory / SecondBrain                             | planned     |
+|     3 | Agent definitions + plan model                   | planned     |
+|     4 | Agent runtime + dashboard                        | planned     |
+|     5 | GenMail                                          | planned     |
+|     6 | imgedit + vidstudio AI                           | planned     |
+|     7 | Deliverable generators                           | planned     |
+
+* Probing the build
+
+#+begin_src elisp
+(cmacs-brigade-available-p)          ;; => t when compiled in
+(cmacs-brigade-capability :mcp)      ;; => t when the MCP host is available
+(cmacs-brigade-capabilities)         ;; => (:libreclaw t :mcp t :f16c t)
+#+end_src
+
+=M-x cmacs-brigade-version= reports the same interactively.
+
+=IS-CMACS-AI-BRIGADE= (and the lower-case alias =is-cmacs-ai-brigade=) is
+always bound, even in a build with the feature off, so a user config can
+branch on it without a =void-variable= error:
+
+#+begin_src elisp
+(when IS-CMACS-AI-BRIGADE
+  (require 'cmacs-brigade))
+#+end_src
+
+The =:f16c= capability reports only that the F16C vector-scan path could be
+/compiled/, not that this CPU has the instructions — that is decided at
+runtime by =__builtin_cpu_supports=, with a scalar fallback, so one binary
+runs on hosts with and without it.
+
+* Files
+
+| Path                         | Contents                          |
+|------------------------------+-----------------------------------|
+| =cmacs/ai-brigade/=            | C: registries, state, index, host |
+| =lisp/cmacs/cmacs-brigade*.el= | Elisp: registries, UI, org, mail  |
+| =etc/cmacs/brigade/agents/=    | Shipped agent definitions         |
+| =test/cmacs/cmacs-brigade*=    | ERT tests                         |

@@ -2915,6 +2915,9 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #ifdef HAVE_CMACS_AI
       syms_of_cmacs_ai ();
 #endif
+#ifdef HAVE_CMACS_AI_BRIGADE
+      syms_of_cmacs_ai_brigade ();
+#endif
 #ifdef HAVE_CMACS_LIBREGNUM
       syms_of_cmacs_libregnum ();
 #endif
@@ -3059,6 +3062,9 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #endif
 #ifdef HAVE_CMACS_AI
   init_cmacs_ai ();
+#endif
+#ifdef HAVE_CMACS_AI_BRIGADE
+  init_cmacs_ai_brigade ();
 #endif
 #ifdef HAVE_CMACS_LIBREGNUM
   init_cmacs_libregnum ();

@@ -69,6 +69,7 @@ unavailable at runtime is excluded."
                       (cmacs-compiled-features)
                     ;; Fallback if the C feature registry is absent.
                     '(glib gi crispy bacon gowl podomation libreclaw ai
+                      ai-brigade
                       libregnum lrgterm imgedit vidstudio gnuseye cad
                       screensaver org-ex mcp print video audio whisper
                       piper gsurf gsurf-lrg emacsctl cintrospect cpatch

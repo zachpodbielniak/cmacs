@@ -42,6 +42,7 @@ All CMacs features are auto-detected.  You can force them on or off:
 | =--with-cmacs-transcribe=     | Batch speech-to-text (whisper STT + transcode pre-pass, AI summaries, hooks) |
 | =--with-cmacs-calculator=     | Calculator over GNU Calc: desktop/financial/physics/relativity/CAS, SVG + libregnum charts, =emacs --calc= REPL (libregnum optional) |
 | =--with-cmacs-lsp=            | In-binary LSP language servers (=emacs --cmacs-lsp LANG=); the gnucalc =.calc= server needs the calculator too |
+| =--with-cmacs-ai-brigade=     | AI fabric: multi-agent orchestration, notes memory index, extensible tool bus.  *Requires* =--with-cmacs-ai= |
 | =--enable-cmacs-cpatch=       | Runtime C hot-patching (DANGEROUS)      |
 | =--enable-cmacs-deps-debug=   | In-house deps -O0 -g3 DWARF (gdb + cintrospect); default |
 
@@ -86,6 +87,7 @@ Example with explicit flags:
   --with-cmacs-transcribe \
   --with-cmacs-calculator \
   --with-cmacs-lsp \
+  --with-cmacs-ai-brigade \
   --enable-cmacs-cpatch \
   --enable-cmacs-deps-debug   # in-house deps -O0 -g3 (DWARF): gdb + runtime cintrospection
 #+end_example

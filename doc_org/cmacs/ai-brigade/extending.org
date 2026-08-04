@@ -1,0 +1,180 @@
+#+title: Extending the AI Brigade
+#+description: Exposing your own capabilities, agents, memory sources and panels to the fabric
+#+authors: Zach Podbielniak
+#+categories: cmacs, ai, agents, extending
+#+created: [2026-08-03 Sun]
+#+updated: [2026-08-03 Sun]
+#+version: 0.1.0
+
+* Why this document is the important one
+
+The brigade's shipped features are a demonstration. The product is the
+registration API: it should be trivial to hand the AI something of yours,
+and doing so should light it up everywhere at once.
+
+The acceptance test for the whole design is [[*Worked example: "Call For Me"][the worked example]] at the
+bottom — a telephony feature cmacs deliberately does *not* implement,
+built entirely from a user's own config. If anything in it required
+patching cmacs, the fabric would have failed.
+
+* One registration, three surfaces
+
+=cmacs-brigade-deftool= registers a plain Elisp function. It immediately
+becomes callable by in-process HTTP agents (as a tool on their executor),
+by CLI agents such as =claude-code= and =opencode= (as an MCP tool through
+the =emacs --mcp-relay= bridge, scoped by that agent's capability token),
+and by external MCP clients on cmacs's own MCP server.
+
+#+begin_src elisp
+(cmacs-brigade-deftool weather-now
+  "Current conditions for a place, as a short sentence."
+  ((place string  "City or 'lat,lon'")
+   (units string  "metric or imperial" :optional t :default "metric"))
+  :group 'weather
+  (my/fetch-weather place units))
+#+end_src
+
+Parameter specs are =(NAME TYPE DOC &rest KEYWORDS)=. =TYPE= is one of
+=string=, =integer=, =number=, =boolean=. Keywords: =:optional=, =:default=,
+=:enum=.
+
+Tool-level keywords:
+
+| Keyword        | Meaning                                                       |
+|----------------+---------------------------------------------------------------|
+| =:group=         | Allowlist vocabulary — an agent can ask for the whole group   |
+| =:destructive=   | Excluded from read-only agents unless named explicitly        |
+| =:confirm=       | =nil= / =ask= / =always= — gated before dispatch, via the approval handler |
+| =:async=         | Body receives a =done= callback instead of returning           |
+| =:timeout=       | Seconds before an async tool is failed and reaped              |
+
+** Async tools
+
+A phone call or a long build cannot block. With =:async t= the body is
+handed a =done= function and its return value is ignored:
+
+#+begin_src elisp
+(cmacs-brigade-deftool build-and-test
+  "Run the full build and test suite; returns the summary."
+  ((target string "make target"))
+  :async t :timeout 1800
+  (my/start-build target (lambda (summary) (funcall done summary))))
+#+end_src
+
+The Lisp closure is held in cmacs's GC-rooted callback registry for the
+duration, so it survives collection across the round trip.
+
+** Programmatic registration
+
+=cmacs-brigade-deftool= is a thin macro over =cmacs-brigade-register-tool=,
+which takes a plist. Use it directly to register in a loop, from a config
+file, or from crispy C.
+
+* The registries
+
+Every variation point is public. Shipped features consume exactly these.
+
+| Function                                    | Extends                        |
+|---------------------------------------------+--------------------------------|
+| =cmacs-brigade-register-tool=                 | the tool bus                   |
+| =cmacs-brigade-register-agent=                | agent registry (Lisp-side)     |
+| =cmacs-brigade-register-worker=               | how an agent executes          |
+| =cmacs-brigade-register-isolation=            | sandbox backends               |
+| =cmacs-brigade-register-memory-source=        | what gets indexed              |
+| =cmacs-brigade-register-deliverable=          | output types                   |
+| =cmacs-brigade-register-panel=                | dashboard sections             |
+| =cmacs-brigade-register-context-provider=     | auto-injected prompt context   |
+| =cmacs-brigade-register-approval-handler=     | how confirmations are asked    |
+
+** Memory sources
+
+Worth calling out. A source supplies =enumerate= (return a list of item
+identifiers) and =read-chunk= (return text for one), so you can index a
+Postgres table, a code tree, a Zotero library or an IMAP folder into the
+same vector index — and every agent's =memory_search= covers it with no
+further work.
+
+** Workers
+
+A worker decides /how/ an agent runs: in-process, as a =claude-code=
+subprocess, as a detached job, on another machine. Registering one is how
+you add an execution model the brigade does not ship.
+
+* Hooks and events
+
+Abnormal hooks fire on every lifecycle edge:
+
+- =cmacs-brigade-before-agent-start-functions=
+- =cmacs-brigade-after-agent-finish-functions=
+- =cmacs-brigade-before-tool-call-functions= — *may veto*, which is how you
+  implement your own policy layer without touching the C gate
+
+The same edges are published as podomation events, so a pod can react
+with no Elisp at all: =on_brigade_task_state=, =on_brigade_task_done=,
+=on_brigade_needs_input=, =on_brigade_budget_exceeded=,
+=on_brigade_tool_called=, =on_brigade_tool_denied=,
+=on_brigade_memory_indexed=, =on_brigade_deliverable_ready=,
+=on_genmail_triaged=.
+
+* Worked example: "Call For Me"
+
+Genspark ships a feature that places real phone calls. cmacs deliberately
+does not — telephony is a separate concern with a hard real-time latency
+budget. Here it is anyway, entirely in userspace.
+
+#+begin_src elisp
+;;; ~/.config/cmacs/init.el
+
+;; 1. Expose the capability.  One form: HTTP agents, CLI agents over MCP,
+;;    and external MCP clients all gain `call_for_me'.
+(cmacs-brigade-deftool call-for-me
+  "Place a phone call, speak a script, return a transcript."
+  ((number string "Destination in E.164 form, e.g. +15551234567")
+   (script string "What to say"))
+  :group 'telephony :destructive t :confirm 'ask :async t :timeout 600
+  (my/asterisk-call number script
+                    (lambda (wav)
+                      (funcall done (cmacs-whisper-transcribe-file wav)))))
+
+;; 2. An agent that uses it, defined from Lisp rather than a file.
+(cmacs-brigade-register-agent
+ :name    "caller"
+ :model   "claude/claude-sonnet-4-6"
+ :tools   '(call-for-me memory_search)
+ :isolation 'none
+ :budget-usd 0.25
+ :prompt  "You place phone calls on the user's behalf.  Confirm the
+number and what you intend to say before dialling.")
+
+;; 3. Index call transcripts into the same memory the notes live in.
+(cmacs-brigade-register-memory-source
+ :name 'calls :kind 'text
+ :enumerate  (lambda () (directory-files "~/calls" t "\\.txt\\'"))
+ :read-chunk #'my/call-transcript-chunks)
+
+;; 4. Show recent calls on the dashboard.
+(cmacs-brigade-register-panel
+ :name 'calls :title "Recent calls" :render #'my/calls-panel)
+#+end_src
+
+You wrote a SIP bridge and four registration forms. You got a tool every
+agent can call on every transport, an agent definition, transcripts in the
+vector index alongside your notes, a dashboard panel, budget accounting,
+confirmation prompts, allowlist scoping, and podomation events — none of
+which you implemented.
+
+* A note on the safety tension
+
+The easier it is to expose something, the easier it is to expose something
+dangerous. That is inherent to the goal, not an oversight, and it is why
+=:destructive= and =:confirm= exist on =deftool= from the first release rather
+than being retrofitted once someone gets bitten.
+
+Two rules follow:
+
+- =eval=, =shell= and the C-patching tools are *default-deny* even for an
+  agent that names them, unless explicitly opted in. The gate is in C at
+  the dispatch point, because an allowlist in Elisp is bypassable by any
+  agent that reaches =eval=.
+- =:isolation none= is only as strong as the allowlist. No shipped agent
+  definition uses it as a default.

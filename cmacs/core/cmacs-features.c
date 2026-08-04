@@ -52,6 +52,9 @@ const char *const cmacs_feature_names[] = {
 #ifdef HAVE_CMACS_AI
   "ai",
 #endif
+#ifdef HAVE_CMACS_AI_BRIGADE
+  "ai-brigade",
+#endif
 #ifdef HAVE_CMACS_LIBREGNUM
   "libregnum",
 #endif
@@ -201,6 +204,12 @@ syms_of_cmacs_features (void)
     doc: /* Non-nil if this build was configured --with-cmacs-ai.  */);
 #ifdef HAVE_CMACS_AI
   is_cmacs_ai = true;
+#endif
+
+  DEFVAR_BOOL ("IS-CMACS-AI-BRIGADE", is_cmacs_ai_brigade,
+    doc: /* Non-nil if this build was configured --with-cmacs-ai-brigade.  */);
+#ifdef HAVE_CMACS_AI_BRIGADE
+  is_cmacs_ai_brigade = true;
 #endif
 
   DEFVAR_BOOL ("IS-CMACS-LIBREGNUM", is_cmacs_libregnum,
@@ -361,6 +370,7 @@ syms_of_cmacs_features (void)
   cmacs_features__alias ("is-cmacs-podomation",  "IS-CMACS-PODOMATION");
   cmacs_features__alias ("is-cmacs-libreclaw",   "IS-CMACS-LIBRECLAW");
   cmacs_features__alias ("is-cmacs-ai",          "IS-CMACS-AI");
+  cmacs_features__alias ("is-cmacs-ai-brigade",  "IS-CMACS-AI-BRIGADE");
   cmacs_features__alias ("is-cmacs-libregnum",   "IS-CMACS-LIBREGNUM");
   cmacs_features__alias ("is-cmacs-lrgterm",     "IS-CMACS-LRGTERM");
   cmacs_features__alias ("is-cmacs-imgedit",     "IS-CMACS-IMGEDIT");

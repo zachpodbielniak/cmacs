@@ -62,6 +62,7 @@ is marked `/* CMACS: ... */`; the full catalogue with rationale is
             --with-cmacs-transcribe \
             --with-cmacs-calculator \
             --with-cmacs-lsp \
+            --with-cmacs-ai-brigade \
             --enable-cmacs-cpatch \
             --enable-cmacs-deps-debug  # in-house deps -O0 -g3 DWARF (gdb + cintrospect); full set: README.org
 make -j$(nproc)           # builds deps + emacs
@@ -172,6 +173,7 @@ C source `cmacs/<name>/`, Elisp `lisp/cmacs/`, tests `test/cmacs/`, docs
 | **gowl** | `cmacs/gowl/` | wlroots-based Wayland compositor — full WM control via DEFUNs |
 | **podomation** | `cmacs/podomation/` | Event-driven automation engine — DSL + REPL |
 | **libreclaw** | `cmacs/libreclaw/` | Chat gateway: **embedded** (in-proc LcApp, shared PodEngine) + **remote** (dial-out bridge that tunnels cmacs's MCP server to a remote agent) |
+| **ai-brigade** | `cmacs/ai-brigade/` + `lisp/cmacs/` | The AI **fabric**: the layer other subsystems and user config lay on top of for AI capability, agent orchestration, and memory. Primary deliverable is the *extension surface* — one `cmacs-brigade-deftool` form in `init.el` publishes a capability to in-process HTTP agents, CLI agents (claude-code/opencode) over an `emacs --mcp-relay` MCP bridge scoped by a minted capability token, **and** external MCP clients. Public registries for tools/agents/workers/isolation/memory-sources/deliverables/panels; shipped features use the same API (no private back doors). Also: flat mmap'd fp16 memory index over the notes repo (runtime F16C dispatch + scalar fallback), org-file-as-plan model (C owns runtime, org owns intent), dashboard, GenMail, deliverable generators. Requires `--with-cmacs-ai`; libreclaw optional. In the default flag set |
 | **ai** | `cmacs/ai/` | Coding-agent surface over `ai-glib`: 8 providers, streaming chat org buffers, region cmds, FIM completion, voice loop, MCP tool bridge, generic tools-capable one-shot calls (`cmacs-ai-call` / C `cmacs-ai--call`, also on D-Bus `Ai.Call` / `emacsctl ai call` / MCP `ai_call`) (`deps/ai-glib`, shared with libreclaw) |
 | **org-ex** | `cmacs/org-ex/` | Interactive widget embedding for Org (liborgex-1.0.a); includes cmacs-ink |
 | **mcp** | `cmacs/mcp/` | MCP server over Unix socket — AI-native runtime introspection & control |

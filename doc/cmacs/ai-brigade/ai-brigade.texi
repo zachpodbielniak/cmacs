@@ -1,0 +1,153 @@
+@c -*- mode: texinfo; coding: utf-8 -*-
+@c This is part of the CMacs manual.
+@c Copyright (C) 2026 Zach Podbielniak
+@c SPDX-License-Identifier: AGPL-3.0-or-later
+@c See file cmacs.texi for copying conditions.
+
+@node CMacs AI Brigade
+@chapter CMacs AI Brigade
+@cindex AI brigade
+@cindex agents
+@cindex multi-agent orchestration
+
+The brigade is not a feature so much as a @dfn{fabric}: the layer every
+other cmacs subsystem---and every user's own code---lays on top of to get
+AI capability, agent orchestration, and memory.
+
+It ships out-of-the-box features (a memory index over your notes, an agent
+dashboard, GenMail, deliverable generators, AI in imgedit and vidstudio),
+but its primary deliverable is the @emph{extension surface}: exposing
+something of your own to every agent is one form in your init, and that
+one form lights it up on all three delivery paths at once.
+
+@menu
+* Brigade Overview::            What the fabric is and why.
+* Brigade Requirements::        Configure flags and dependencies.
+* Brigade Probing::             Detecting the feature at runtime.
+* Brigade Extending::           Registering your own capabilities.
+@end menu
+
+@node Brigade Overview
+@section Overview
+
+A registered capability becomes callable by:
+
+@enumerate
+@item
+in-process HTTP agents, as a tool on the agent's executor;
+@item
+CLI agents (@command{claude-code}, @command{opencode}), as an MCP tool
+reached through the @option{--mcp-relay} bridge, scoped by that agent's
+capability token;
+@item
+external MCP clients, on cmacs's existing MCP server.
+@end enumerate
+
+Everything the shipped features use goes through the same public API you
+get.  There are deliberately no private back doors: if a built-in needs a
+hook, that hook is public.
+
+@subsection Design principles
+
+@table @asis
+@item Nothing is hardcoded
+Every path, model, budget, endpoint and backend is a @code{defcustom}.
+Shipped values are @emph{defaults}, never assumptions.  An ERT test scans
+the brigade sources and fails if a literal path, model id, or endpoint
+appears outside a @code{defcustom} form.
+
+@item Org is the plan, the dashboard is a view
+A live Org buffer is the durable plan model, so org-agenda, org-clock,
+refile, capture and git history all work on it for free.  C is
+authoritative for @emph{runtime}; Org is authoritative for @emph{intent}.
+The @code{TODO} keyword is a projection of runtime state and an input
+channel for commands, never a stored value.
+
+@item Agents run out of process
+A @option{--gowl} cmacs instance @emph{is} the user's Wayland session.  An
+agent that blocks or errors in-process takes the desktop with it, so
+agents run in supervised children.
+
+@item Capability scoping is real
+Each agent gets a randomly minted token and a 0600 @file{.mcp.json} under
+@env{XDG_RUNTIME_DIR}; the allowlist is enforced in C at the tool dispatch
+point.  An allowlist implemented in Lisp is bypassable by any agent that
+reaches @code{eval}, so it is not implemented there.
+@end table
+
+@node Brigade Requirements
+@section Requirements
+
+The subsystem is gated on @option{--with-cmacs-ai-brigade}, which
+@emph{hard-requires} @option{--with-cmacs-ai}; @command{configure} errors
+out otherwise, because the brigade drives ai-glib's provider and
+tool-executor types directly.
+
+@option{--with-cmacs-libreclaw} is optional and adds extra surfaces when
+present.
+
+@node Brigade Probing
+@section Probing the build
+
+@defun cmacs-brigade-available-p
+Return non-@code{nil} when this cmacs was built with the brigade.
+@end defun
+
+@defun cmacs-brigade-capabilities
+Return a plist of compile-time capabilities: @code{:libreclaw},
+@code{:mcp} and @code{:f16c}.
+@end defun
+
+@defun cmacs-brigade-capability key
+Return one capability from that plist.  Returns @code{nil} when the
+brigade is absent, so callers need not guard first.
+@end defun
+
+@code{IS-CMACS-AI-BRIGADE} (and the lower-case alias
+@code{is-cmacs-ai-brigade}) is always bound, even in a build with the
+feature off, so a user config can branch without a @code{void-variable}
+error:
+
+@example
+(when IS-CMACS-AI-BRIGADE
+  (require 'cmacs-brigade))
+@end example
+
+The @code{:f16c} capability reports only that the F16C vector-scan path
+could be @emph{compiled}, not that this CPU has the instructions---that is
+decided at runtime by @code{__builtin_cpu_supports}, with a scalar
+fallback, so a single binary runs on hosts with and without it.
+
+@node Brigade Extending
+@section Extending the brigade
+
+@code{cmacs-brigade-deftool} registers a plain Lisp function and publishes
+it on all three surfaces:
+
+@example
+(cmacs-brigade-deftool weather-now
+  "Current conditions for a place, as a short sentence."
+  ((place string "City or 'lat,lon'")
+   (units string "metric or imperial" :optional t :default "metric"))
+  :group 'weather
+  (my/fetch-weather place units))
+@end example
+
+Tool keywords are @code{:group} (allowlist vocabulary), @code{:destructive}
+(excluded from read-only agents), @code{:confirm} (@code{nil}/@code{ask}/
+@code{always}), @code{:async} (the body receives a @code{done} callback),
+and @code{:timeout}.
+
+The other registries are @code{cmacs-brigade-register-agent},
+@code{-worker}, @code{-isolation}, @code{-memory-source},
+@code{-deliverable}, @code{-panel}, @code{-context-provider} and
+@code{-approval-handler}.
+
+A memory source supplies @code{enumerate} and @code{read-chunk}, so a
+Postgres table, a code tree or a Zotero library can be indexed into the
+same vector store and every agent's @code{memory_search} covers it.
+
+@xref{Top,,, cmacs, the org manual}, file
+@file{doc_org/cmacs/ai-brigade/extending.org}, for the full worked
+example: a telephony @samp{Call For Me} feature that cmacs deliberately
+does not implement, built end to end from a user's own init file.

@@ -660,6 +660,7 @@ OPTION_DEFAULT_OFF([cmacs-gowl],  [CMacs Gowl Wayland compositor])
 OPTION_DEFAULT_OFF([cmacs-podomation], [CMacs podomation automation engine])
 OPTION_DEFAULT_OFF([cmacs-libreclaw], [CMacs libreclaw chat/Matrix client integration])
 OPTION_DEFAULT_OFF([cmacs-ai], [CMacs ai-glib AI subsystem (multi-provider chat, tools, voice)])
+OPTION_DEFAULT_OFF([cmacs-ai-brigade], [CMacs AI brigade fabric (multi-agent orchestration, notes memory index, extensible tool bus; requires --with-cmacs-ai)])
 OPTION_DEFAULT_OFF([cmacs-libregnum], [CMacs libregnum 3D scene buffers (raylib + GObject scene graph)])
 OPTION_DEFAULT_OFF([cmacs-lrgterm], [CMacs independent libregnum/raylib display backend (output_lrg; peer to pgtk)])
 OPTION_DEFAULT_OFF([cmacs-imgedit], [CMacs 2D image / sprite editor (layers, blend modes, undo; libregnum LrgImageDocument)])
@@ -937,6 +938,45 @@ if test "$with_cmacs_ai" != "no"; then
   # external Claude Code drives via the Unix socket).
   if test "$with_cmacs_mcp" != "no"; then
     CMACS_AI_OBJ="$CMACS_AI_OBJ cmacs-ai-mcp-bridge.o"
+  fi
+fi
+if test "$with_cmacs_ai_brigade" != "no"; then
+  # The AI brigade fabric: multi-agent orchestration, the notes memory
+  # index, and the extensible tool bus.  It is a layer directly on top of
+  # cmacs-ai (it drives AiProvider/AiToolExecutor), so cmacs-ai is a hard
+  # requirement rather than a soft degrade.
+  if test "$with_cmacs_ai" = "no"; then
+    AC_MSG_ERROR([--with-cmacs-ai-brigade requires --with-cmacs-ai])
+  fi
+  # ai-glib's headers and archive come from the cmacs-ai block above
+  # (one canonical deps/ai-glib build); brigade only adds its own -I.
+  PKG_CHECK_MODULES([CMACS_AI_BRIGADE_DEPS],
+    [glib-2.0 gobject-2.0 gio-2.0 libsoup-3.0 json-glib-1.0 >= 1.6])
+  CMACS_AI_BRIGADE_CFLAGS="-I\$(abs_top_srcdir)/deps/ai-glib/src \
+    -I\$(abs_top_srcdir)/deps/ai-glib/build/$cmacs_dep_buildtype \
+    $CMACS_AI_BRIGADE_DEPS_CFLAGS"
+  CMACS_AI_BRIGADE_LIBS="$CMACS_AI_BRIGADE_DEPS_LIBS"
+  AC_DEFINE([HAVE_CMACS_AI_BRIGADE], 1, [CMacs AI brigade fabric])
+  CMACS_AI_BRIGADE_OBJ="cmacs-brigade-init.o cmacs-brigade-defuns.o"
+  dnl NOTE: do not add AC_CHECK_HEADERS / AC_COMPILE_IFELSE here.  The
+  dnl cmacs feature blocks run before AC_USE_SYSTEM_EXTENSIONS, so any
+  dnl compile test expands AC_CHECK_INCLUDES_DEFAULT early and _GNU_SOURCE
+  dnl is then missing for every later check -- which silently breaks
+  dnl unrelated probes (memfd_create, and with it --with-cmacs-screensaver).
+  dnl The fp16 vector scan detects F16C in C instead: __x86_64__/__i386__
+  dnl plus __has_include(<immintrin.h>) at compile time, and
+  dnl __builtin_cpu_supports("f16c") at RUNTIME, with a scalar LUT
+  dnl fallback.  Never gate the TU on -mf16c, or a container or aarch64
+  dnl builder produces a binary that SIGILLs on the host.
+  dnl Optional runtime helpers.  Missing ones only disable an isolation
+  dnl backend at runtime, so warn rather than fail.
+  AC_CHECK_PROG([CMACS_BRIGADE_HAVE_GIT], [git], [yes], [no])
+  if test "$CMACS_BRIGADE_HAVE_GIT" != "yes"; then
+    AC_MSG_WARN([cmacs-ai-brigade: git not found, worktree isolation will be unavailable at runtime])
+  fi
+  AC_CHECK_PROG([CMACS_BRIGADE_HAVE_PODMAN], [podman], [yes], [no])
+  if test "$CMACS_BRIGADE_HAVE_PODMAN" != "yes"; then
+    AC_MSG_WARN([cmacs-ai-brigade: podman not found, container isolation will be unavailable at runtime])
   fi
 fi
 if test "$with_cmacs_libregnum" != "no"; then
@@ -1720,6 +1760,9 @@ AC_SUBST(CMACS_LIBRECLAW_BUNDLED)
 AC_SUBST(CMACS_AI_OBJ)
 AC_SUBST(CMACS_AI_CFLAGS)
 AC_SUBST(CMACS_AI_LIBS)
+AC_SUBST(CMACS_AI_BRIGADE_OBJ)
+AC_SUBST(CMACS_AI_BRIGADE_CFLAGS)
+AC_SUBST(CMACS_AI_BRIGADE_LIBS)
 
 AC_SUBST(CMACS_LIBREGNUM_OBJ)
 AC_SUBST(CMACS_LIBREGNUM_CFLAGS)
