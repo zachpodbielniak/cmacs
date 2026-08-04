@@ -139,3 +139,9 @@ allowlist. See [[file:extending.org][Extending the brigade]] for how the allowli
 The token is never derived from the agent's name or id. Agents quote their own
 context into prompts and logs constantly, so a secret derived from something
 they know about themselves is a secret by construction only.
+
+* When they are loaded
+
+The definitions on `cmacs-brigade-agent-path' are read once when the brigade loads, so a stock plan naming =researcher= works with no setup. After editing or adding a definition, press =A= in the dashboard or run =M-x cmacs-brigade-agent-reload=.
+
+A malformed definition is reported and skipped rather than aborting the load, so one bad file cannot stop cmacs from starting or hide the other agents.

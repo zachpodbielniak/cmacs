@@ -33,6 +33,7 @@
 ;; while the loaded file makes it dynamic.
 (require 'cmacs-brigade-dashboard nil 'noerror)
 (require 'cmacs-brigade-agent-def nil 'noerror)
+(require 'cmacs-brigade-plan nil 'noerror)
 
 (defconst cmacs-brigade-tests--root
   (expand-file-name "../.." (file-name-directory
@@ -382,6 +383,111 @@ presses a key, which is why it is asserted here."
   (let ((agent (cmacs-brigade-agent--from-text
                 "---\nname: budget-test\n---\nbody" nil)))
     (should (= 0 (plist-get agent :budget-usd)))))
+
+
+;;;; Agent definitions actually reach the runtime
+
+(ert-deftest cmacs-brigade-ships-agent-definitions-loaded ()
+  "The shipped definitions are registered without anyone calling reload.
+
+Registering the loader without ever calling it is what produced
+\"no agent definition named researcher\" on a stock plan: the files were
+in etc/ the whole time, nothing had read them."
+  (skip-unless (featurep 'cmacs-brigade-agent-def))
+  (let ((agents (cmacs-brigade-registry-list 'agent)))
+    (dolist (a '(researcher critic librarian))
+      (should (memq a agents))
+      (should (cmacs-brigade-agent-get a)))))
+
+(ert-deftest cmacs-brigade-agent-derive-passes-through-without-overrides ()
+  "No overrides means no derived agent, so the UI shows the plain name."
+  (skip-unless (featurep 'cmacs-brigade-agent-def))
+  (cmacs-brigade-register-agent :name 'derive-base :prompt "p"
+                                :model "base/model")
+  (should (eq 'derive-base
+              (cmacs-brigade-agent-derive "derive-base" "abc" nil)))
+  (should (eq 'derive-base (cmacs-brigade-agent-base-name 'derive-base))))
+
+(ert-deftest cmacs-brigade-agent-derive-applies-and-inherits ()
+  "An override wins; everything unmentioned comes from the base."
+  (skip-unless (featurep 'cmacs-brigade-agent-def))
+  (cmacs-brigade-register-agent :name 'derive-base2 :prompt "sysprompt"
+                                :model "base/model" :tools '(a b)
+                                :budget-usd 3.0 :isolation 'worktree)
+  (let* ((name (cmacs-brigade-agent-derive "derive-base2" "xyz"
+                                           '(:model "over/model")))
+         (def (cmacs-brigade-agent-get name)))
+    (should-not (eq name 'derive-base2))
+    (should (equal (plist-get def :model) "over/model"))
+    (should (equal (plist-get def :tools) '(a b)))
+    (should (eq (plist-get def :isolation) 'worktree))
+    (should (equal (plist-get def :prompt) "sysprompt"))
+    ;; and the UI can still name it
+    (should (eq 'derive-base2 (cmacs-brigade-agent-base-name name)))))
+
+(ert-deftest cmacs-brigade-agent-derive-reports-an-unknown-base ()
+  (skip-unless (featurep 'cmacs-brigade-agent-def))
+  (should-error (cmacs-brigade-agent-derive "no-such-agent" "x"
+                                            '(:model "m/n"))
+                :type 'cmacs-brigade-agent-error))
+
+(ert-deftest cmacs-brigade-plan-model-reaches-the-runtime ()
+  "A :MODEL: on a headline must survive adopt as a string.
+
+The record carries the agent as a string; handing the C DEFUN a symbol
+stores nil, and the task then runs with no agent at all -- which looks
+exactly like having forgotten to set one."
+  (skip-unless (and (featurep 'cmacs-brigade-plan)
+                    (fboundp 'cmacs-brigade-task-get)))
+  (let* ((dir (make-temp-file "brigade-plan" t))
+         (file (expand-file-name "p.org" dir)))
+    (unwind-protect
+        (progn
+          (cmacs-brigade-register-agent :name 'plan-base :prompt "p"
+                                        :model "base/model")
+          (with-temp-file file
+            (insert "#+title: t\n" cmacs-brigade-plan-todo-line "\n\n"
+                    "* TODO Overridden  :brigade:\n  :PROPERTIES:\n"
+                    "  :AGENT: plan-base\n  :MODEL: over/model\n"
+                    "  :END:\n  body\n"))
+          (with-current-buffer (find-file-noselect file)
+            (let* ((res (cmacs-brigade-plan-adopt))
+                   (rec (cmacs-brigade-task-get (plist-get (car res) :id)))
+                   (agent (plist-get rec :agent)))
+              (should (stringp agent))
+              (should (equal "over/model"
+                             (plist-get (cmacs-brigade-agent-get (intern agent))
+                                        :model)))
+              (should (eq 'plan-base
+                          (cmacs-brigade-agent-base-name (intern agent)))))))
+      (when-let* ((b (find-buffer-visiting file)))
+        (with-current-buffer b (set-buffer-modified-p nil))
+        (kill-buffer b))
+      (delete-directory dir t))))
+
+
+;;;; Keymap: vanilla and Doom
+
+(ert-deftest cmacs-brigade-dashboard-binds-what-it-advertises ()
+  "Every key the hint line names is actually bound."
+  (skip-unless (featurep 'cmacs-brigade-dashboard))
+  (dolist (key '("s" "K" "RET" "c" "p" "a" "m" "b" "t" "A" "g" "M" "?" "q"))
+    (should (commandp (lookup-key cmacs-brigade-dashboard-mode-map
+                                  (kbd key))))))
+
+(ert-deftest cmacs-brigade-dashboard-survives-evil ()
+  "The dashboard installs an Evil intercept map.
+
+Without it `s' runs evil-snipe and `c' starts a change operator under
+Doom, so the documented keys do nothing.  This asserts the setup call is
+reached -- an `fboundp' guard around it silently skipped the whole thing
+whenever cmacs-evil had not been loaded."
+  (skip-unless (featurep 'cmacs-brigade-dashboard))
+  (should (featurep 'cmacs-evil))
+  (should (fboundp 'cmacs-evil-setup-mode-map))
+  ;; evil-snipe must not turn on here even if the user has it
+  (when (boundp 'evil-snipe-disabled-modes)
+    (should (memq 'cmacs-brigade-dashboard-mode evil-snipe-disabled-modes))))
 
 (provide 'cmacs-brigade-tests)
 

@@ -92,3 +92,38 @@ By default the dashboard fills the frame, and gives your layout back when you qu
 #+end_src
 
 None of the three ever creates a window. =display-buffer-alist= still applies if you want to place it somewhere specific.
+
+* Keys
+
+| Key | What it does |
+|-----+--------------|
+| =s= | start the task on this line |
+| =K= | cancel it |
+| =RET= | jump to its headline in the plan |
+| =c= | create a new plan and open it |
+| =p= | open an existing plan |
+| =a= | set the agent |
+| =m= | set the provider and model |
+| =b= | set the spend ceiling |
+| =t= | set the tool allowlist |
+| =A= | re-read agent definitions from disk |
+| =g= | refresh |
+| =M= | search memory |
+| =?= | describe every key |
+| =q= | quit, restoring your layout |
+
+=a=, =m=, =b= and =t= write the org headline and re-adopt it. They do not poke the runtime: org owns intent, and a dashboard that could set a model the plan file did not know about would be a second source of truth.
+
+** Setting a provider and model
+
+=m= asks for a provider first, then a model from that provider. The two are one string on the wire (=claude/claude-sonnet-4-6=), but choosing a model without first narrowing to a provider means reading one list of everything.
+
+The model list is completion, not a fixed set — a provider ships new model names between cmacs releases, and a closed list would make the newest model the one thing the UI cannot express. Leave the model empty to use the provider's default.
+
+Because the runtime record carries only an agent /name/, a task that overrides the model gets a derived agent registered under =<agent>@<id>=. The dashboard shows the base name, so this is invisible unless you go looking; =cmacs-brigade-agent-base-name= is what does the unwrapping.
+
+** Under Doom and Evil
+
+Every key above is a single keypress in a read-only buffer, which is exactly what Evil's state maps and minor modes like =evil-snipe= would otherwise swallow — =s=, =c=, =a=, =b=, =t= and =p= are all Evil commands in normal state.
+
+The dashboard installs its map as an Evil /intercept/ map through =cmacs-evil-setup-mode-map=, which puts it above both the state maps and minor-mode maps, and adds the mode to =evil-snipe-disabled-modes=. Keys the dashboard does not bind are untouched, so the Doom leader, =C-w= and =ESC= keep working. In vanilla Emacs it is an ordinary =special-mode= map and none of this applies.

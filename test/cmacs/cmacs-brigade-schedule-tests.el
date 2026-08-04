@@ -384,7 +384,10 @@ intersection instead would make \"1 * * 1 mon\" fire almost never."
                 (cmacs-brigade-schedule-ensure-agent
                  (cmacs-brigade-schedule-get id)))))
       (should (equal (plist-get ag :model) "m/n"))
-      (should (string-match-p "scheduled task" (plist-get ag :prompt))))))
+      ;; A definition of its own, with a usable system prompt, even
+      ;; though the schedule named no base agent.
+      (should (stringp (plist-get ag :prompt)))
+      (should-not (string-empty-p (plist-get ag :prompt))))))
 
 (ert-deftest cmacs-brigade-schedule-unknown-base-agent-is-an-error ()
   "Fail loudly at fire time rather than running with the wrong model."
@@ -412,10 +415,14 @@ intersection instead would make \"1 * * 1 mon\" fire almost never."
                       (cmacs-brigade-schedule-get id))))
           (should task)
           (should (equal started (list task)))
-          (let ((rec (cmacs-brigade-task-get task)))
+          (let* ((rec (cmacs-brigade-task-get task))
+                 (agent (plist-get rec :agent)))
             (should rec)
-            (should (string-match-p "schedule:"
-                                    (format "%s" (plist-get rec :agent)))))
+            ;; Runs as a derived agent -- asserted through the registry
+            ;; rather than by matching its generated name, which is an
+            ;; internal detail.
+            (should agent)
+            (should (cmacs-brigade-agent-get (intern agent))))
           ;; and the fire is remembered, so a restart does not repeat it
           (should (cmacs-brigade-schedule-last-fire id)))))))
 

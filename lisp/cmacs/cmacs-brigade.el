@@ -162,6 +162,14 @@ The subsystem's own symbols use the shorter `cmacs-brigade-' prefix.")
   (require 'cmacs-brigade-tools)
   (require 'cmacs-brigade-memory nil 'noerror)
   (require 'cmacs-brigade-agent-def nil 'noerror)
+  ;; Actually read the definitions.  Registering the *loader* without
+  ;; ever calling it left every plan failing with "no agent definition
+  ;; named researcher" -- the shipped agents exist in etc/, nothing had
+  ;; pulled them in.  Errors are swallowed so one malformed user
+  ;; definition cannot stop cmacs from starting.
+  (when (fboundp 'cmacs-brigade-agent-reload)
+    (with-demoted-errors "cmacs-brigade: agent load: %S"
+      (cmacs-brigade-agent-reload)))
   (require 'cmacs-brigade-isolation nil 'noerror)
   (require 'cmacs-brigade-host nil 'noerror)
   ;; The runner itself.  Nothing autoloads it and the dashboard and

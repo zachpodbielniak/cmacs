@@ -34,6 +34,14 @@
 ;; Every command here dispatches into the runner; without this the keys
 ;; are bound to void functions.
 (require 'cmacs-brigade-run)
+;; Required, not fboundp-guarded: every other cmacs UI file requires this
+;; for Evil/Doom keymap precedence, and a guard that quietly does nothing
+;; is how `s' ends up running evil-snipe instead of starting an agent.
+(require 'cmacs-evil)
+;; The editing keys write org headlines and re-adopt, and the plan
+;; commands need the directory default, so the plan layer is a hard
+;; dependency rather than something to declare-function around.
+(require 'cmacs-brigade-plan)
 (require 'cl-lib)
 (require 'subr-x)
 
@@ -101,12 +109,12 @@
           (cmacs-brigade-dashboard--insert-header records)
           (insert (make-string 78 ?─) "\n")
           (insert (propertize
-                   (format "%-3s %-10s %-12s %-26s %5s %8s %9s\n"
-                           "ST" "ID" "AGENT" "TASK" "TURNS" "TOKENS" "COST")
+                   (format "%-3s %-10s %-12s %-18s %-24s %5s %8s %9s\n"
+                           "ST" "ID" "AGENT" "MODEL" "TASK"
+                           "TURNS" "TOKENS" "COST")
                    'face 'bold))
           (if (null records)
-              (insert "\n  No tasks.  Open a plan and "
-                      "M-x cmacs-brigade-start-plan.\n")
+              (cmacs-brigade-dashboard--insert-empty)
             (dolist (r (cmacs-brigade-dashboard--sort records))
               (cmacs-brigade-dashboard--insert-row r)))
           (insert (make-string 78 ?─) "\n")
@@ -151,13 +159,22 @@
 (defun cmacs-brigade-dashboard--insert-row (r)
   (let* ((state (plist-get r :state))
          (id (or (plist-get r :id) "?"))
-         (line (format "%-3s %-10s %-12s %-26s %5s %8s %9s"
+         (agent (plist-get r :agent))
+         (line (format "%-3s %-10s %-12s %-18s %-24s %5s %8s %9s"
                        (cmacs-brigade-dashboard--glyph state)
                        (truncate-string-to-width id 10)
+                       ;; The base name, not the internal `researcher@b12c7a46'
+                       ;; that a per-task model override produces.
                        (truncate-string-to-width
-                        (or (plist-get r :agent) "—") 12)
+                        (if agent
+                            (format "%s" (cmacs-brigade-agent-base-name
+                                          (intern agent)))
+                          "—")
+                        12)
                        (truncate-string-to-width
-                        (or (plist-get r :title) id) 26)
+                        (cmacs-brigade-dashboard--model r) 18)
+                       (truncate-string-to-width
+                        (or (plist-get r :title) id) 24)
                        (or (plist-get r :turns) 0)
                        (format "%s/%s" (or (plist-get r :in-tokens) 0)
                                (or (plist-get r :out-tokens) 0))
@@ -168,7 +185,39 @@
     (insert (propertize line 'cmacs-brigade-record r) "\n")
     (when (plist-get r :error)
       (insert (propertize (format "     %s\n" (plist-get r :error))
-                          'face 'error)))))
+                          'face 'error))
+      ;; An error naming an agent is nearly always a definition that was
+      ;; never loaded, and the fix is one key away -- say so rather than
+      ;; leaving the message to be interpreted.
+      (when (string-match-p "no agent definition" (plist-get r :error))
+        (insert (propertize
+                 (format "     %d definition(s) loaded; press A to reload, \
+a to pick another\n"
+                         (length (cmacs-brigade-registry-list 'agent)))
+                 'face 'shadow))))))
+
+(defun cmacs-brigade-dashboard--model (r)
+  "The model R will actually run with, as a display string."
+  (let* ((agent (plist-get r :agent))
+         (def (and agent (cmacs-brigade-agent-get (intern agent)))))
+    (or (plist-get def :model)
+        (and (boundp 'cmacs-brigade-default-model) cmacs-brigade-default-model)
+        "—")))
+
+(defun cmacs-brigade-dashboard--insert-empty ()
+  "What to show when there are no tasks: how to get one."
+  (insert "\n  No tasks yet.\n\n")
+  (insert "    c   create a plan and open it\n")
+  (insert "    p   open an existing plan\n")
+  (insert "    ?   all keys\n\n")
+  (let ((agents (cmacs-brigade-registry-list 'agent)))
+    (insert (if agents
+                (format "  %d agent definition(s): %s\n"
+                        (length agents)
+                        (mapconcat #'symbol-name agents ", "))
+              (propertize
+               "  No agent definitions loaded -- press A to reload.\n"
+               'face 'warning)))))
 
 (defun cmacs-brigade-dashboard--insert-panels ()
   "Render registered panels, lowest :order first."
@@ -194,7 +243,9 @@
                              'face 'error)))))))
 
 (defun cmacs-brigade-dashboard--hints ()
-  " s start  K cancel  RET plan  o output  g refresh  M memory  q quit")
+  (concat " s start   K cancel  RET plan   c new plan  p open plan\n"
+          " a agent   m model   b budget   t tools     A reload agents\n"
+          " g refresh M memory  ? keys     q quit"))
 
 (defun cmacs-brigade-dashboard--record-at-point ()
   (get-text-property (line-beginning-position) 'cmacs-brigade-record))
@@ -256,6 +307,148 @@
                (when (get-buffer-window "*brigade*" t)
                  (cmacs-brigade-dashboard--render))))))))
 
+
+;;;; Editing a task from the dashboard
+;;
+;; Every one of these writes the org headline and re-adopts, rather than
+;; poking the runtime.  Org owns intent; the dashboard is a projection,
+;; and a projection that could set a model the plan file did not know
+;; about would be a second source of truth.
+
+(defun cmacs-brigade-dashboard--set-property (r property value)
+  "Set PROPERTY to VALUE on R's headline in its plan, and re-adopt."
+  (let ((plan (plist-get r :plan))
+        (id (plist-get r :id)))
+    (unless (and plan (file-exists-p plan))
+      (user-error "cmacs-brigade: this task has no plan file to edit"))
+    (with-current-buffer (find-file-noselect plan)
+      (let ((index (cmacs-brigade-plan--id-index)))
+        (let ((marker (gethash id index)))
+          (unless marker
+            (user-error "cmacs-brigade: %s is not in %s" id plan))
+          (save-excursion
+            (goto-char marker)
+            (if (and value (not (string-empty-p value)))
+                (org-entry-put nil property value)
+              (org-entry-delete nil property)))))
+      (save-buffer)
+      (cmacs-brigade-plan-adopt))
+    (cmacs-brigade-dashboard-refresh)))
+
+(defun cmacs-brigade-dashboard--record-or-error ()
+  (or (cmacs-brigade-dashboard--record-at-point)
+      (user-error "No task on this line")))
+
+(defun cmacs-brigade-dashboard-set-agent ()
+  "Set the agent for the task on this line."
+  (interactive)
+  (let* ((r (cmacs-brigade-dashboard--record-or-error))
+         (agents (cmacs-brigade-registry-list 'agent)))
+    (unless agents
+      (user-error "cmacs-brigade: no agent definitions loaded; press A"))
+    (cmacs-brigade-dashboard--set-property
+     r "AGENT" (completing-read "Agent: " (mapcar #'symbol-name agents)
+                                nil t))))
+
+(defun cmacs-brigade-dashboard-set-model ()
+  "Set the provider and model for the task on this line.
+
+Provider first, then its models: the two are one string on the wire
+\(`claude/claude-sonnet-4-6\='), but picking a model without first
+narrowing to a provider means reading one list of everything."
+  (interactive)
+  (let* ((r (cmacs-brigade-dashboard--record-or-error))
+         (provider (cmacs-brigade-dashboard--read-provider))
+         (model (cmacs-brigade-dashboard--read-model provider)))
+    (cmacs-brigade-dashboard--set-property
+     r "MODEL" (if (string-empty-p model) "" (format "%s/%s" provider model)))))
+
+(defun cmacs-brigade-dashboard--read-provider ()
+  "Prompt for an AI provider."
+  (let ((providers (if (fboundp 'cmacs-ai-providers)
+                       (mapcar #'symbol-name (cmacs-ai-providers))
+                     '("claude" "openai" "gemini" "grok" "ollama"
+                       "claude-code" "opencode" "claude-tmux"))))
+    (completing-read "Provider: " providers nil nil
+                     (and (boundp 'cmacs-ai-default-provider)
+                          (format "%s" cmacs-ai-default-provider)))))
+
+(defun cmacs-brigade-dashboard--read-model (provider)
+  "Prompt for a model offered by PROVIDER.
+
+Completion, not a fixed set: a provider ships new model names between
+cmacs releases, and a closed list would make the newest model the one
+option the UI cannot express."
+  (let ((models (and (fboundp 'cmacs-ai-list-models)
+                     (ignore-errors
+                       (mapcar (lambda (m) (format "%s" m))
+                               (cmacs-ai-list-models (intern provider)))))))
+    (completing-read (format "Model for %s (empty = provider default): "
+                             provider)
+                     models nil nil)))
+
+(defun cmacs-brigade-dashboard-set-budget ()
+  "Set the spend ceiling for the task on this line.  Empty or 0 means none."
+  (interactive)
+  (let ((r (cmacs-brigade-dashboard--record-or-error)))
+    (cmacs-brigade-dashboard--set-property
+     r "BUDGET" (read-string "Budget in dollars (0 = no ceiling): " "0.00"))))
+
+(defun cmacs-brigade-dashboard-set-tools ()
+  "Set the tool allowlist for the task on this line."
+  (interactive)
+  (let* ((r (cmacs-brigade-dashboard--record-or-error))
+         (tools (completing-read-multiple
+                 "Tools (comma-separated, empty = agent default): "
+                 (mapcar #'symbol-name
+                         (cmacs-brigade-registry-list 'tool)))))
+    (cmacs-brigade-dashboard--set-property
+     r "TOOLS" (string-join tools ", "))))
+
+(defun cmacs-brigade-dashboard-reload-agents ()
+  "Re-read agent definitions from disk."
+  (interactive)
+  (let ((n (length (cmacs-brigade-agent-reload))))
+    (cmacs-brigade-dashboard-refresh)
+    (message "cmacs-brigade: %d agent definition(s): %s" n
+             (mapconcat #'symbol-name
+                        (cmacs-brigade-registry-list 'agent) ", "))))
+
+
+;;;; Getting a plan in the first place
+
+(defun cmacs-brigade-dashboard-new-plan (file title)
+  "Create plan FILE titled TITLE and open it.
+
+On the dashboard because creating a plan was otherwise a matter of
+knowing that `cmacs-brigade-plan-create\=' exists and where plans live."
+  (interactive
+   (let* ((title (read-string "Plan title: "))
+          (default (concat (replace-regexp-in-string
+                            "[^a-z0-9]+" "-" (downcase title))
+                           ".org")))
+     (list (read-file-name "Plan file: "
+                           (file-name-as-directory
+                            cmacs-brigade-plan-directory)
+                           nil nil default)
+           title)))
+  (cmacs-brigade-plan-create file title)
+  (message "cmacs-brigade: edit the task, then C-c C-c (or save) to adopt it"))
+
+(defun cmacs-brigade-dashboard-open-plan (file)
+  "Open an existing plan."
+  (interactive
+   (list (read-file-name "Plan: " (file-name-as-directory
+                                   cmacs-brigade-plan-directory)
+                         nil t)))
+  (find-file file)
+  (when (fboundp 'cmacs-brigade-plan-mode) (cmacs-brigade-plan-mode 1)))
+
+(defun cmacs-brigade-dashboard-help ()
+  "Describe every dashboard key."
+  (interactive)
+  (describe-keymap 'cmacs-brigade-dashboard-mode-map))
+
 (defvar cmacs-brigade-dashboard-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "s") #'cmacs-brigade-dashboard-start)
@@ -263,6 +456,16 @@
     (define-key map (kbd "RET") #'cmacs-brigade-dashboard-visit)
     (define-key map (kbd "g") #'cmacs-brigade-dashboard-refresh)
     (define-key map (kbd "M") #'cmacs-brigade-memory-find)
+    ;; Getting a plan without having to know where plans live.
+    (define-key map (kbd "c") #'cmacs-brigade-dashboard-new-plan)
+    (define-key map (kbd "p") #'cmacs-brigade-dashboard-open-plan)
+    ;; Per-task intent.  Each writes the org headline and re-adopts.
+    (define-key map (kbd "a") #'cmacs-brigade-dashboard-set-agent)
+    (define-key map (kbd "m") #'cmacs-brigade-dashboard-set-model)
+    (define-key map (kbd "b") #'cmacs-brigade-dashboard-set-budget)
+    (define-key map (kbd "t") #'cmacs-brigade-dashboard-set-tools)
+    (define-key map (kbd "A") #'cmacs-brigade-dashboard-reload-agents)
+    (define-key map (kbd "?") #'cmacs-brigade-dashboard-help)
     (define-key map (kbd "q") #'cmacs-brigade-dashboard-quit)
     ;; Evil's intercept map takes the buffer over completely, so motion
     ;; has to be bound explicitly to survive.
@@ -296,9 +499,8 @@ updates buffers that are already open.")
 
 ;; Mandatory for any single-key cmacs mode: without it s/K/g are eaten
 ;; by Evil's own bindings under Doom.
-(when (fboundp 'cmacs-evil-setup-mode-map)
-  (cmacs-evil-setup-mode-map cmacs-brigade-dashboard-mode-map
-                             'cmacs-brigade-dashboard-mode))
+(cmacs-evil-setup-mode-map cmacs-brigade-dashboard-mode-map
+                           'cmacs-brigade-dashboard-mode)
 
 (defcustom cmacs-brigade-dashboard-display 'full-frame
   "How the dashboard takes over the screen.

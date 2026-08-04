@@ -48,6 +48,7 @@
 (require 'cmacs-brigade)
 (require 'cmacs-brigade-registry)
 (require 'cmacs-brigade-agent-def)
+(require 'cmacs-brigade-agent-def)
 (require 'org)
 (require 'org-id nil 'noerror)
 (require 'cl-lib)
@@ -220,10 +221,47 @@ put a runtime record behind every heading someone wrote."
   (or (org-entry-get nil "AGENT")
       (member "brigade" (org-get-tags nil t))))
 
+(defun cmacs-brigade-plan--effective-agent (entry id)
+  "Return the agent name for ENTRY, deriving one if it overrides anything.
+
+A string, not a symbol: `cmacs-brigade-task-adopt\=' is a C DEFUN that
+takes the agent as a string, and handing it a symbol stores nil -- the
+task then runs with no agent at all, which looks exactly like having
+forgotten to set one."
+  (let* ((base (plist-get entry :agent))
+         (name
+    (condition-case err
+        (cmacs-brigade-agent-derive
+         base (substring id 0 (min 8 (length id)))
+         (list :model (plist-get entry :model)
+               :tools (cmacs-brigade-plan--tools (plist-get entry :tools))
+               :budget-usd (when-let* ((b (plist-get entry :budget)))
+                             (string-to-number b))
+               :isolation (when-let* ((i (plist-get entry :isolation)))
+                            (intern i))))
+      ;; An unknown base agent is reported by the runner with a clear
+      ;; message; refusing to adopt here would hide the task entirely and
+      ;; leave nothing on screen to fix.
+      (cmacs-brigade-agent-error
+       (ignore err)
+       (and base (if (stringp base) (intern base) base))))))
+    (and name (format "%s" name))))
+
+(defun cmacs-brigade-plan--tools (s)
+  "Parse a :TOOLS: property S into a list of symbols."
+  (when (and s (not (string-empty-p (string-trim s))))
+    (mapcar #'intern (split-string s "[, \t]+" t))))
+
 (defun cmacs-brigade-plan--adopt-entry (id plan)
   "Adopt the entry at point under ID, applying any pending command."
   (let* ((entry (cmacs-brigade-plan--read-entry))
-         (agent (plist-get entry :agent))
+         ;; :MODEL:, :TOOLS:, :BUDGET: and :ISOLATION: on the headline are
+         ;; intent, and have to reach the runner.  The runtime record
+         ;; carries only an agent name, so the overrides are baked into a
+         ;; derived agent and the record points at that.  With no
+         ;; overrides this returns the plain agent name and registers
+         ;; nothing.
+         (agent (cmacs-brigade-plan--effective-agent entry id))
          (record (cmacs-brigade-task-adopt id plan agent
                                            (plist-get entry :title)))
          (current (plist-get record :state))

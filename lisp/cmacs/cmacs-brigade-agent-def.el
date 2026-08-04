@@ -264,6 +264,84 @@ NAME may be a symbol or a string."
                     (if (symbolp tv) (symbol-name tv) tv)))
                  tools ","))))
 
+
+;;;; Deriving an agent
+;;
+;; A task or a schedule that names its own model, tools or budget needs
+;; those to actually reach the runner.  The runtime record carries only
+;; an agent *name* -- adding fields to it would mean a C change and an
+;; ABI bump every time a new knob appears -- so instead the overrides are
+;; baked into a derived agent registered under its own name, through the
+;; same public registry a user would use.  The record then points at
+;; that, and every path downstream works unchanged.
+
+(defconst cmacs-brigade-agent-generic-prompt
+  "You are running as part of a brigade task.  Do the work described
+below, make the most reasonable choice when something is ambiguous rather
+than stopping to ask, and finish with a short summary of what you did."
+  "System prompt for a derived agent with no base definition.")
+
+(defun cmacs-brigade-agent-base-name (name)
+  "Return the definition NAME was derived from, or NAME itself.
+
+What the UI should show: `researcher\=' rather than the internal
+`researcher@b12c7a46\=' a per-task model override produces."
+  (let ((def (cmacs-brigade-agent-get name)))
+    (or (plist-get def :base) name)))
+
+(defun cmacs-brigade-agent-derive (base-name suffix overrides &optional force)
+  "Register an agent deriving from BASE-NAME with OVERRIDES, and return its name.
+
+SUFFIX distinguishes it from its base and from other derivations.
+OVERRIDES is a plist of :model, :tools, :budget-usd, :isolation and
+:worker; a nil or absent value inherits from the base.
+
+Returns BASE-NAME unchanged when there is nothing to override, so the
+common case adds no registry entry and the dashboard shows the plain
+name.  With FORCE, always registers a derivation -- what a schedule
+wants, since it needs a definition of its own even when it names no
+base agent and overrides nothing."
+  (let* ((base (and base-name (cmacs-brigade-agent-get base-name)))
+         (model (plist-get overrides :model))
+         (tools (plist-get overrides :tools))
+         (budget (plist-get overrides :budget-usd))
+         (isolation (plist-get overrides :isolation))
+         (worker (plist-get overrides :worker)))
+    (when (and base-name (null base))
+      (signal 'cmacs-brigade-agent-error
+              (list (format "no agent definition named %s" base-name)
+                    (format "known: %s"
+                            (or (cmacs-brigade-registry-list 'agent) "none")))))
+    (if (and (not force) (not (or model tools budget isolation worker)))
+        ;; Nothing to override.  Returning the base name keeps the
+        ;; registry free of one entry per task that changed nothing.
+        (and base-name (if (stringp base-name) (intern base-name) base-name))
+      (let ((name (intern (format "%s@%s" (or base-name "task") suffix))))
+        (apply #'cmacs-brigade-register-agent
+               (append
+                (list :name name
+                      :base (and base-name
+                                 (if (stringp base-name)
+                                     (intern base-name) base-name))
+                      :prompt (or (plist-get base :prompt)
+                                  cmacs-brigade-agent-generic-prompt)
+                      :isolation (or isolation (plist-get base :isolation) 'none)
+                      :description (format "derived from %s"
+                                           (or base-name "no base")))
+                (when-let* ((m (or model (plist-get base :model))))
+                  (list :model m))
+                (when-let* ((tl (or tools (plist-get base :tools))))
+                  (list :tools tl))
+                (when-let* ((b (or budget (plist-get base :budget-usd))))
+                  (list :budget-usd b))
+                (when-let* ((w (or worker (plist-get base :worker))))
+                  (list :worker w))
+                (when-let* ((mt (plist-get base :max-turns)))
+                  (list :max-turns mt))
+                (when-let* ((fm (plist-get base :fallback-model)))
+                  (list :fallback-model fm))))
+        name))))
+
 (provide 'cmacs-brigade-agent-def)
 
 ;;; cmacs-brigade-agent-def.el ends here

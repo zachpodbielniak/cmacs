@@ -42,6 +42,7 @@
 ;; Firing a schedule starts a task, so the runner has to be present --
 ;; a `declare-function' alone silences the compiler without loading it.
 (require 'cmacs-brigade-run)
+(require 'cmacs-brigade-agent-def)
 (require 'cl-lib)
 (require 'subr-x)
 
@@ -579,52 +580,33 @@ actually are."
 ;; runner, so a schedule can say exactly what a hand-written agent
 ;; definition can, and nothing it could not.
 
-(defconst cmacs-brigade-schedule--default-prompt
-  "You are running as a scheduled task.  Nobody is watching, so do not
-ask questions -- make the most reasonable choice and say which choice you
-made.  Finish with a short summary of what you did and what you found."
-  "System prompt for a schedule that names no agent.")
-
 (defun cmacs-brigade-schedule--agent-name (sched)
   "The registered agent name backing SCHED."
   (intern (format "schedule:%s" (plist-get sched :id))))
 
 (defun cmacs-brigade-schedule-ensure-agent (sched)
-  "Register the agent SCHED runs as, and return its name."
-  (let* ((base-name (plist-get sched :agent))
-         (base (and base-name (cmacs-brigade-agent-get base-name)))
-         (name (cmacs-brigade-schedule--agent-name sched))
-         (model (or (plist-get sched :model) (plist-get base :model)))
-         (tools (or (plist-get sched :tools) (plist-get base :tools)))
-         (budget (or (and (plist-get sched :budget)
-                          (string-to-number (plist-get sched :budget)))
-                     (plist-get base :budget-usd)))
-         (isolation (or (and (plist-get sched :isolation)
-                             (intern (plist-get sched :isolation)))
-                        (plist-get base :isolation) 'none))
-         (worker (or (and (plist-get sched :worker)
-                          (intern (plist-get sched :worker)))
-                     (plist-get base :worker))))
-    (when (and base-name (null base))
-      (signal 'cmacs-brigade-schedule-error
-              (list (format "no agent definition named %s" base-name))))
-    (apply #'cmacs-brigade-register-agent
-           (append
-            (list :name name
-                  :prompt (or (plist-get base :prompt)
-                              cmacs-brigade-schedule--default-prompt)
-                  :isolation isolation
-                  :description (format "scheduled: %s"
-                                       (plist-get sched :title)))
-            (when model (list :model model))
-            (when tools (list :tools tools))
-            (when budget (list :budget-usd budget))
-            (when worker (list :worker worker))
-            (when (plist-get base :max-turns)
-              (list :max-turns (plist-get base :max-turns)))
-            (when (plist-get base :fallback-model)
-              (list :fallback-model (plist-get base :fallback-model)))))
-    name))
+  "Register the agent SCHED runs as, and return its name.
+
+Delegates to `cmacs-brigade-agent-derive\=' -- the same primitive a plan
+task with its own :MODEL: uses -- so there is one definition of what
+overriding a model or a tool list means rather than two that drift."
+  (condition-case err
+      (cmacs-brigade-agent-derive
+       (plist-get sched :agent)
+       (plist-get sched :id)
+       (list :model (plist-get sched :model)
+             :tools (plist-get sched :tools)
+             :budget-usd (when-let* ((b (plist-get sched :budget)))
+                           (string-to-number b))
+             :isolation (when-let* ((i (plist-get sched :isolation)))
+                          (intern i))
+             :worker (when-let* ((w (plist-get sched :worker)))
+                       (intern w)))
+       ;; Forced: a schedule needs an agent even when it names no base
+       ;; and overrides nothing.
+       t)
+    (cmacs-brigade-agent-error
+     (signal 'cmacs-brigade-schedule-error (cdr err)))))
 
 
 ;;;; Persisted last-fire times
