@@ -1,0 +1,125 @@
+#+title: Brigade Plans
+#+description: Org files as the durable model for what agents are doing
+#+authors: Zach Podbielniak
+#+categories: cmacs, ai, org
+#+created: [2026-08-04 Tue]
+#+updated: [2026-08-04 Tue]
+#+version: 0.1.0
+
+* A plan is an org file
+
+Headlines are tasks, the body is the prompt, properties carry the agent and its
+budget, and the TODO keyword shows what is happening. org-agenda, org-clock,
+refile, capture, export and git history then work on it for free — which is the
+whole reason the plan is a file and not a data structure.
+
+#+begin_example
+,#+TODO: TODO(t) NEXT(n) INPROGRESS(i) WAIT(w) HOLD(h) | DONE(d) FAILED(f) CANCELLED(c)
+
+,* TODO Survey the competition                            :brigade:
+  :PROPERTIES:
+  :AGENT:  researcher
+  :BUDGET: 0.50
+  :END:
+  Compare their feature set against ours and produce a cited brief.
+#+end_example
+
+A headline is a task when it has an =:AGENT:= property or a =:brigade:= tag.
+Everything else is ordinary org — a plan file is still a file, and putting a
+runtime record behind every heading someone wrote would make the dashboard
+meaningless.
+
+=M-x cmacs-brigade-plan-create= scaffolds one. =M-x cmacs-brigade-plan-mode=
+turns an existing org file into a plan.
+
+* Who owns what
+
+The design that stops the two representations drifting is *disjoint field
+ownership*.
+
+| Owner | Fields                                                          |
+|-------+-----------------------------------------------------------------|
+| Org   | title, body, =:AGENT:=, =:MODEL:=, =:BUDGET:=, =:TOOLS:=, =:ISOLATION:=, =:DEPENDS:=, tags, priority |
+| C     | state, turns, tokens, cost, timestamps, error — rendered into =:BRIGADE-*:= |
+
+C never writes an intent field. Elisp never sets a runtime field except through
+a DEFUN. Nothing is owned twice, so there is nothing to merge and no
+last-write-wins.
+
+** The TODO keyword
+
+Looks like an exception, and is not.
+
+Outbound it is a *projection* of the C state. Inbound it is a *command*: typing
+=C-c C-t= is requesting a transition, and the state machine decides whether that
+request is legal.
+
+| You set      | From        | Means                          |
+|--------------+-------------+--------------------------------|
+| =NEXT=         | draft       | queue it                       |
+| =TODO=         | queued      | unqueue it                     |
+| =TODO=         | running     | *refused* — cancel it first    |
+| =CANCELLED=    | any live    | cancel — always allowed        |
+| =DONE=         | running     | *refused* — the agent decides  |
+| =NEXT=         | done/failed | retry                          |
+
+A refusal restores the keyword and says why. Leaving it where you put it would
+display a state the task is not in, which is worse than declining the edit, and
+obeying it would orphan a live agent that is still spending money.
+
+The exact state is always in =:BRIGADE-STATE:=; several states share a keyword,
+so that property is what a program should read.
+
+* Identity
+
+Org's own =:ID:= when =org-id= is available — which buys =org-id-goto=,
+=org-store-link= and refile safety for nothing — falling back to
+=:BRIGADE-ID:=. Written once on adopt, never rewritten, so renaming a headline
+does not orphan its history.
+
+Copying a subtree brings its =:ID:= along, and this happens constantly. The
+second occurrence in buffer order gets a fresh id, because what the person meant
+was another task, not a second view of the same one.
+
+* When things are written
+
+*Adopt* (org → runtime) runs on save, on =g=, and on a keyword change. It reads
+every task into one atomic transaction, and writes back only what the runtime
+returned.
+
+*Render* (runtime → org) never touches the buffer directly. The runtime hands
+over changed records and the org layer applies them, to =:BRIGADE-*:= properties
+and the keyword only.
+
+Three rules about what a person is actually doing when this fires:
+
+- Renders are *queued*, drained on an idle timer. Nothing rewrites the buffer
+  between two keystrokes.
+- Headlines are *never reordered*. Order is human-owned, permanently;
+  re-sorting someone's buffer under them is the most destructive thing this code
+  could do.
+- A buffer whose file changed on disk, or which contains conflict markers,
+  *refuses to render*. The runtime data is reconstructible and your edits are
+  not.
+
+With the buffer closed — the common case once agents are running — updates are
+batched and flushed to the file. The alternative, a journal reconciled later, is
+drift by another name.
+
+* After a restart
+
+Anything that was running becomes =interrupted=, which is neither done nor
+failed. It was abandoned, and nobody watched it stop.
+
+Nothing resumes automatically. =interrupted= can only be retried or dropped.
+
+* Checking for drift
+
+=M-x cmacs-brigade-plan-lint= reports any disagreement between the file and the
+runtime, rather than leaving it to be inferred from a dashboard that looks
+wrong.
+
+The property tests in =test/cmacs/cmacs-brigade-plan-tests.el= assert the
+invariants directly: adopt is idempotent, render is byte-identical when
+repeated, a copied subtree yields distinct ids, an illegal keyword is restored,
+a stale buffer refuses, and order survives.

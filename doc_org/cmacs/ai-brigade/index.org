@@ -29,6 +29,20 @@ hook, that hook is public.
 
 See [[file:extending.org][Extending the brigade]] — that is the document that matters.
 
+* Contents
+
+| Document                | Covers                                            |
+|-------------------------+---------------------------------------------------|
+| [[file:extending.org][Extending]]           | the registration API; the Call For Me example     |
+| [[file:agents.org][Agents]]              | definitions, workers, isolation, budgets          |
+| [[file:plan.org][Plans]]               | org files as the durable model; who owns what     |
+| [[file:dashboard.org][Dashboard]]           | watching agents, in any backend                   |
+| [[file:memory.org][Memory]]              | the index over your notes and other corpora       |
+| [[file:genmail.org][GenMail]]             | triage, voice, briefing                           |
+| [[file:deliverables.org][Deliverables]]        | reports, decks, pods, reels                       |
+| [[file:mcp.org][MCP]]                 | the relay, capability tokens, scoping             |
+| [[file:troubleshooting.org][Troubleshooting]]     | what the refusals mean                            |
+
 * Design principles
 
 ** Nothing is hardcoded
@@ -83,7 +97,7 @@ provider and tool-executor types directly).
 |     4 | Agent runtime + dashboard                        | done        |
 |     5 | GenMail                                          | done        |
 |     6 | imgedit + vidstudio AI                           | done        |
-|     7 | Deliverable generators                           | planned     |
+|     7 | Deliverable generators                           | done        |
 
 * Probing the build
 

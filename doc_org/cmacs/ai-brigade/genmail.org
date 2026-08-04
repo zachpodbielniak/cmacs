@@ -1,0 +1,100 @@
+#+title: Brigade GenMail
+#+description: Triage, drafting in your own voice, and a morning briefing
+#+authors: Zach Podbielniak
+#+categories: cmacs, ai, mail
+#+created: [2026-08-04 Tue]
+#+updated: [2026-08-04 Tue]
+#+version: 0.1.0
+
+* Requirements
+
+=mu=, with an index. Nothing else — no IMAP client, no MIME parser, no second
+index. =mu find --format=sexp= already hands everything back as Lisp.
+
+Availability is *probed*, not assumed: the binary being installed does not mean
+it has a database, and mu exits 1 with "failed to open database" when it has
+never indexed. Every mail function degrades to a graceful no rather than an
+error report.
+
+* Triage
+
+=M-x cmacs-brigade-genmail-triage=.
+
+A deterministic pass runs first. A =List-Unsubscribe= header identifies a
+newsletter with certainty; spending a model call to reach the same answer less
+reliably would be the most common thing this code does and the least useful.
+On the author's real inbox that classified 92 of 100 unread messages with *no
+model call at all*.
+
+What survives goes to =cmacs-brigade-genmail-triage-model=, a local model by
+default. Sorting mail is pattern recognition and does not warrant a frontier
+model.
+
+Output is org, one headline per message, with a =[[mu4e:msgid:...]]= link — so
+the report is a place to act from rather than something to read and then go
+looking. It also lands in the notes corpus, which means next month's triage can
+search it.
+
+| Bucket         | Meaning                          |
+|----------------+----------------------------------|
+| =act-now=        | needs attention today            |
+| =reply=          | needs a response                 |
+| =waiting-on-me=  | someone is blocked on you        |
+| =fyi=            | read when convenient             |
+| =newsletter=     | bulk                             |
+| =receipt=        | transactional                    |
+| =noise=          | no action, ever                  |
+
+Nothing is deleted. Nothing is moved to spam. Flags are only applied when
+=cmacs-brigade-genmail-apply-flags= is on, and it is off by default — triage is
+a suggestion until you have watched it be right for a while.
+
+* Voice
+
+=M-x cmacs-brigade-genmail-build-voice= reads your sent mail and derives a
+profile.
+
+Derived, not stuffed. Quoted passages, signatures and forwarded tails are
+stripped: they are someone else's writing and would teach the model their voice
+instead of yours. What remains becomes per-bucket measurements — typical length,
+sentence length, how often you greet, how often you sign off — plus a dozen
+verbatim exemplars chosen *across the length range*, because twelve copies of
+the same three-line reply teach nothing about how you write a considered one.
+
+Feeding two hundred raw emails into the prompt instead burns tokens and produces
+worse results, because the model imitates whichever example is nearest rather
+than the pattern.
+
+Recipients are bucketed as =work=, =personal=, =vendor= or =list=, since nobody
+writes to all four the same way. Set =cmacs-brigade-genmail-work-domains= to
+make the work bucket meaningful.
+
+* Drafting
+
+=M-x cmacs-brigade-genmail-draft=.
+
+The prompt carries the style profile, the three nearest exemplars, the thread —
+and a =memory_search= over the sender and subject. That last part is the point:
+"you told them in November you would send the schematic" is the thing a person
+cannot remember and the index can find.
+
+Output goes into a real mu4e compose buffer, never the Drafts maildir, so your
+signature, your send path and your encryption all apply. Writing a file into
+Drafts would quietly bypass all three.
+
+Nothing is ever sent without confirmation.
+
+* Briefing
+
+=M-x cmacs-brigade-genmail-briefing= assembles overnight triage into a summary
+and *appends* it to today's note. Appends, never clobbers: daily notes are
+handwritten, and overwriting someone's own writing to make room for a summary
+would be indefensible.
+
+Point =cmacs-brigade-genmail-daily-note-function= at whatever produces today's
+file.
+
+* Tools
+
+=mail_search= and =mail_read= are published to agents, both read-only. An agent
+can look through your mail to answer a question; it cannot send, flag or delete.

@@ -1,0 +1,124 @@
+#+title: Brigade Troubleshooting
+#+description: Things that go wrong, and what they mean
+#+authors: Zach Podbielniak
+#+categories: cmacs, ai
+#+created: [2026-08-04 Tue]
+#+updated: [2026-08-04 Tue]
+#+version: 0.1.0
+
+* An agent has no tools
+
+Almost always the allowlist.
+
+#+begin_src elisp
+(cmacs-brigade-agent-allowlist (cmacs-brigade-agent-get 'researcher))
+(cmacs-brigade-allowlist-expand "memory,web_search")
+#+end_src
+
+If expansion returns a group name unchanged, no tool is registered under that
+group — check =(cmacs-brigade-registry-list 'tool)=. If a tool you expect is
+missing, its file has not loaded.
+
+If the agent has *nothing*, the allowlist was empty. That fails closed by
+design: an empty allowlist grants nothing rather than everything.
+
+* An agent cannot call =eval= (or bash, or shell)
+
+Working as intended. Those are privileged and unreachable through =*= or a
+group; name them outright in the agent's =tools:= list if you genuinely want
+that.
+
+Think about it first. An agent with =eval= can rewrite anything, including the
+code deciding what it is allowed to do.
+
+* "no such agent" on a task
+
+The =:AGENT:= property names a definition that did not load. =M-x
+cmacs-brigade-agent-reload= rescans and reports files it skipped.
+
+A definition that fails to parse is skipped rather than aborting the scan, so
+check the =*Messages*= buffer for what it objected to.
+
+* A keyword change was refused
+
+The state machine declined the transition, and the keyword was put back.
+
+Marking a running task =DONE= is refused because it would orphan a live agent
+that is still spending money. Cancel it instead — cancellation is always allowed
+from any live state.
+
+=M-x cmacs-brigade-plan-lint= reports any disagreement between the file and the
+runtime.
+
+* Plan updates stopped appearing
+
+Two causes, both deliberate:
+
+- *the file changed on disk* — a git pull, another machine. Revert the buffer.
+  Writing into it would discard whatever arrived, and the runtime data is
+  reconstructible while your edits are not.
+- *conflict markers* in the buffer. Finish the merge.
+
+Both report to =*Messages*= rather than failing silently.
+
+* Everything says "interrupted" after a restart
+
+Correct. An agent that was running when cmacs stopped did not finish and did not
+fail; it was abandoned, and nobody watched it stop.
+
+Nothing resumes automatically, because resuming work whose outcome nobody
+observed is how two agents end up doing the same thing. Retry or drop it.
+
+* Memory search finds nothing
+
+Check coverage first:
+
+: M-x cmacs-brigade-memory-stats
+
+An index that is 40% built will answer confidently and wrongly, which is why
+=memory_stats= exists and why agents are told to call it.
+
+*STALE* means the embedding model or chunk size changed since the build.
+Vectors from a different model are not out of date, they are incomparable —
+rebuild.
+
+If there is no index at all, memory is off by default. Set
+=cmacs-brigade-memory-enabled= and run =M-x cmacs-brigade-memory-build=.
+
+* The index build is slow
+
+It is. Embedding is the bottleneck: roughly 21 chunks/second against a local
+model, so a large notes repository takes hours.
+
+It is resumable and processes newest files first, so it is useful long before it
+finishes — the last month of notes is searchable within minutes.
+
+Concurrency does *not* help. The server serialises embedding requests, so extra
+parallelism buys nothing and costs scheduler overhead. The batch size
+(=cmacs-brigade-embed-batch=, 32) is the lever that does.
+
+* A worktree agent failed to start
+
+=worktree= isolation needs =git=, and the repository needs at least one commit
+— =git worktree add= has nothing to check out otherwise.
+
+Worktrees live under =cmacs-brigade-worktree-root=, outside the repository. If
+you point that inside the repo, every other agent's =rg= and =find= will walk
+it.
+
+* The relay refuses to run
+
+: cmacs --mcp-relay: CMACS_BRIGADE_SOCKET is unset.
+
+Correct — it is spawned by cmacs through a generated =.mcp.json=, not run by
+hand. Failing closed matters more here than anywhere else in the brigade.
+
+* A dashboard panel shows an error
+
+A registered panel signalled. It is caught and reported in place rather than
+taking the dashboard down, since the dashboard is how you would notice.
+
+* Mail functions say mu is unavailable
+
+The binary being installed is not enough — mu needs an index. Run =mu init= and
+=mu index=, then =(cmacs-brigade-genmail-available-p t)= to re-probe.

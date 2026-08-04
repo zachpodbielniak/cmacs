@@ -1,0 +1,115 @@
+#+title: Brigade and MCP
+#+description: How agents reach cmacs's tools, and how access is scoped
+#+authors: Zach Podbielniak
+#+categories: cmacs, ai, mcp, security
+#+created: [2026-08-04 Tue]
+#+updated: [2026-08-04 Tue]
+#+version: 0.1.0
+
+* Why a relay exists
+
+cmacs's MCP server listens on a Unix socket. =claude --mcp-config= understands a
+stdio command or an HTTP URL, and neither is a Unix socket, so a CLI agent
+cannot reach cmacs directly.
+
+=emacs --mcp-relay= is the stdio command it does understand. It speaks NDJSON on
+stdin and stdout, forwards to the socket, and enforces the agent's allowlist in
+between.
+
+* No Lisp VM in the relay
+
+It follows the =--bacon= / =--cmacs-lsp= never-return model: the hook runs in
+=main()= before any Emacs initialisation.
+
+That is not an optimisation, it is the security property. The relay is the thing
+standing between an agent and the editor's whole tool surface. If it could
+evaluate Lisp, an agent that got a prompt injection through would be evaluating
+Lisp inside the process that is supposed to be restraining it.
+
+stdout is protocol-only for the same reason: a stray message corrupts the
+JSON-RPC stream.
+
+* What it filters
+
+| Method       | Treatment                                                  |
+|--------------+------------------------------------------------------------|
+| =tools/list=   | pruned to what the allowlist admits                        |
+| =tools/call=   | anything else answered locally, never forwarded            |
+
+Hiding beats refusing. A model that can see =eval= in the tool list will keep
+trying it and burn turns; one that never learns it exists does not.
+
+The denial is =-32601= "method not found" rather than a permission code — as far
+as that agent is concerned the tool does not exist, which is also what
+=tools/list= told it.
+
+* Provisioning
+
+Before a CLI agent starts, the brigade:
+
+1. mints a fresh random token;
+2. expands the agent's allowlist to concrete tool names;
+3. writes a 0600 =.mcp.json= under =XDG_RUNTIME_DIR= naming the relay, with the
+   socket path, the allowlist and the token in its =env= block;
+4. hands the path to the worker as =--mcp-config=.
+
+Four decisions worth knowing:
+
+- *The token is random*, never derived from the agent's name or id. Agents quote
+  their own context into prompts and logs constantly, so a secret derived from
+  something they know about themselves is a secret by construction only.
+- *It goes in =XDG_RUNTIME_DIR=*, not the workspace. A project =.mcp.json= is
+  user-authored, usually git-tracked and shared by every agent; writing there
+  would clobber it and make concurrent agents race.
+- *The file is created 0600*, not written and then tightened. That gap is
+  exactly when a credential is readable by anything on the machine.
+- *Revoke runs before provision*, not only at teardown. A partial failure would
+  otherwise leave the old token valid with no file naming it — a credential
+  nobody can find to remove.
+
+The filename is a random UUID rather than the agent id, since ids end up in
+prompts and a path is a disclosure.
+
+Every provision is revoked when the run ends, and all of them on
+=kill-emacs-hook=.
+
+* Where the allowlist is evaluated
+
+Group names are expanded *in cmacs*, before the config is written. The relay
+runs in its own process, spawned by the AI CLI, and has never had
+=cmacs-brigade-deftool= called in it — its registry is empty, so a group name
+reaching that side would match nothing, silently.
+
+Unrecognised names pass through expansion untouched, because most of what an
+agent uses (=project_read_file=, =memory_search=, =gowl_*=) is a built-in MCP
+tool the brigade registry has never seen. Dropping them would quietly strip an
+agent of nearly everything it was granted.
+
+Two rules the relay enforces with no registry at all:
+
+- =ai_*= and =brigade_*= are refused unconditionally, so an agent cannot spawn
+  agents outside the orchestrator's budget accounting.
+- The *privileged set* — =eval=, =bash=, =shell=, =execute_command=,
+  =send_keys=, the C-patching tools, =crispy_eval=, =bacon_eval=, the podomation
+  evaluators — is unreachable through =*= or a group. Granting one is a
+  deliberate act: name it outright or the agent does not get it.
+
+* Checking
+
+#+begin_src elisp
+(cmacs-brigade-tool-allowed-p "weather,project_read_file" "weather_now") ;; => t
+(cmacs-brigade-tool-allowed-p "*" "eval")                                ;; => nil
+(cmacs-brigade-tool-privileged-p "eval")                                 ;; => t
+(cmacs-brigade-allowlist-expand "weather")                               ;; => "weather_now"
+#+end_src
+
+Verified end to end against a live cmacs: with an allowlist of two tools the
+relay showed *2 of 195*, the permitted call returned a real result, and =eval=
+was denied. With =*=, all 195 were visible except =eval=.
+
+* External clients
+
+An external Claude Code connects to cmacs's MCP socket directly, through the
+existing shim, and sees the full tool set including everything registered with
+=cmacs-brigade-deftool=. The relay is for *scoped* access, which is what an
+agent the brigade spawned gets.

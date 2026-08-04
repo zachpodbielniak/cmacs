@@ -30,6 +30,13 @@
 (require 'cl-lib)
 (require 'subr-x)
 
+;; Soft dependencies: this file works without them (the commands that
+;; need them refuse), so they are declared rather than required.
+(declare-function cmacs-ai-image--run "cmacs-ai-image"
+                  (prompt options buffer position on-done))
+(declare-function cmacs-imgedit-add-layer-from-file "cmacs-imgedit"
+                  (handle file))
+
 (defgroup cmacs-imgedit-ai nil
   "Prompt-driven image editing."
   :group 'cmacs-imgedit
@@ -251,27 +258,37 @@ turns into."
 
 ;;;###autoload
 (defun cmacs-imgedit-ai-generate-layer (prompt)
-  "Generate an image from PROMPT and add it as a new layer."
+  "Generate an image from PROMPT and add it as a new layer.
+
+Asynchronous, because generation takes tens of seconds and blocking the
+editor for it is unreasonable -- and under `emacs --gowl' it would block
+the whole desktop."
   (interactive "sGenerate layer: ")
   (unless (and (boundp 'cmacs-imgedit--handle) cmacs-imgedit--handle)
     (user-error "Not in an imgedit buffer"))
-  (unless (fboundp 'cmacs-ai-image-generate-sync)
+  (unless (fboundp 'cmacs-ai-image--run)
     (user-error "Image generation is not available in this build"))
-  (let* ((handle cmacs-imgedit--handle)
-         (w (cmacs-imgedit-width handle))
-         (h (cmacs-imgedit-height handle))
-         (file (make-temp-file "cmacs-imgedit-gen" nil ".png")))
-    (unwind-protect
-        (progn
-          (message "cmacs-imgedit: generating...")
-          (cmacs-ai-image-generate-sync prompt file nil nil
-                                        (format "%dx%d" w h))
-          (undo-boundary)
-          (cmacs-imgedit-add-layer-from-file handle file)
-          (undo-boundary)
-          (when (fboundp 'cmacs-imgedit--render) (cmacs-imgedit--render))
-          (message "cmacs-imgedit: added generated layer"))
-      (ignore-errors (delete-file file)))))
+  (let* ((doc cmacs-imgedit--handle)
+         (buffer (current-buffer))
+         (w (cmacs-imgedit-width doc))
+         (h (cmacs-imgedit-height doc)))
+    ;; Goes through cmacs-ai-image's own runner rather than the C
+    ;; primitive: that is where client creation, the option plist and
+    ;; freeing the client on every exit path already live.
+    (cmacs-ai-image--run
+     prompt
+     (list :custom-size (format "%dx%d" w h))
+     buffer nil
+     (lambda (images _buf _pos)
+       (let ((path (plist-get (car images) :path)))
+         (if (not (and path (file-readable-p path)))
+             (message "cmacs-imgedit: generation returned no usable image")
+           (with-current-buffer buffer
+             (undo-boundary)
+             (cmacs-imgedit-add-layer-from-file doc path)
+             (undo-boundary)
+             (when (fboundp 'cmacs-imgedit--render) (cmacs-imgedit--render)))
+           (message "cmacs-imgedit: added generated layer")))))))
 
 ;;;###autoload
 (defun cmacs-imgedit-ai-describe ()

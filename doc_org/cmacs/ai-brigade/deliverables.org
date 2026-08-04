@@ -1,0 +1,112 @@
+#+title: Brigade Deliverables
+#+description: Turning agent output into artifacts
+#+authors: Zach Podbielniak
+#+categories: cmacs, ai, export
+#+created: [2026-08-04 Tue]
+#+updated: [2026-08-04 Tue]
+#+version: 0.1.0
+
+* The four
+
+| Kind        | Produces                                    | Built on              |
+|-------------+---------------------------------------------+-----------------------|
+| =sparkpage=   | a cited report, one self-contained HTML file | =ox-html=              |
+| =slides=      | a deck                                       | =org-tree-slide=, =ox-html= |
+| =pod=         | a two-voice audio conversation               | =cmacs-piper=, ffmpeg  |
+| =clip=        | a highlight reel                             | =cmacs-vidstudio=, =cmacs-transcribe= |
+
+=M-x cmacs-brigade-deliver-list= shows what is registered; agents call
+=deliverable_emit=.
+
+Each is mostly a spec over an org file plus a subsystem that already exists.
+What is genuinely new is small, and named below.
+
+* Sparkpage, and why it can refuse
+
+An agent that writes a confident paragraph with no source is the failure mode of
+every research tool, and the only defence that works is refusing to produce the
+artifact.
+
+Sources are declared and claims reference them:
+
+#+begin_example
+,#+title: What the competition ships
+,#+BRIGADE_SOURCE: pricing-page
+,#+BRIGADE_SOURCE: their-changelog
+
+They ship three tiers, the cheapest of which excludes the API. [[cite:pricing-page]]
+#+end_example
+
+The linter fails the export on two things:
+
+- *a claim with no citation* — the tool inventing things;
+- *a citation naming a source that was never declared* — the tool citing
+  something that does not exist, which reads as more trustworthy and is
+  therefore worse.
+
+=cmacs-brigade-deliver-require-citations= turns the first check off. It should
+stay on: a research artifact whose citations are optional is one whose citations
+are decorative.
+
+Export inlines its CSS and assets. A report that only renders next to its
+supporting files is one you cannot send to anybody.
+
+* Slides
+
+One subtree per slide, =:LAYOUT:= choosing how it is shown — =title=,
+=bullets=, =image=, =chart=, =quote= or =code=. An unknown layout is reported
+before anything renders.
+
+No new deck engine. =org-tree-slide= already presents an org file inside Emacs,
+including in a terminal; the HTML export is for sending to someone else.
+
+* Pod
+
+A headline per turn, =:VOICE:= naming the speaker. piper speaks each turn
+offline and ffmpeg concatenates them.
+
+#+begin_example
+,* Turn
+  :PROPERTIES:
+  :VOICE: a
+  :END:
+  So the interesting part is what happens under contention.
+
+,* Turn
+  :PROPERTIES:
+  :VOICE: b
+  :END:
+  Which is where the whole design earns its keep.
+#+end_example
+
+Property drawers are stripped from what is spoken — otherwise the narrator reads
+them aloud.
+
+* Clip
+
+Given a recording that =cmacs-transcribe= has already processed, a model is
+asked which /spans/ are worth keeping. That is a text question about text, which
+models are good at, rather than asking one to watch a video, which they are not.
+
+Spans are padded outward before becoming clips: a cut exactly on a word boundary
+sounds clipped.
+
+=M-x cmacs-vidstudio-ai-suggest-cuts= shows the proposal without touching a
+timeline. Seeing it first is the difference between a suggestion and a surprise.
+
+* Adding a fifth
+
+Nothing above is privileged. A new deliverable is one form:
+
+#+begin_src elisp
+(cmacs-brigade-register-deliverable
+ :name 'onepager
+ :description "A single-page PDF summary."
+ :extension "pdf"
+ :validate (lambda (src) (unless (my/has-summary-p src) '("no summary section")))
+ :render   #'my/render-onepager)
+#+end_src
+
+=:validate= returning a list of problems refuses the render, and the agent is
+told why — which for an uncited claim is exactly what it needs to fix it and try
+again.

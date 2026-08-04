@@ -1,0 +1,134 @@
+#+title: Brigade Agents
+#+description: Defining agents, how they run, and where they are allowed to make a mess
+#+authors: Zach Podbielniak
+#+categories: cmacs, ai, agents
+#+created: [2026-08-04 Tue]
+#+updated: [2026-08-04 Tue]
+#+version: 0.1.0
+
+* Definitions
+
+An agent is a markdown file with YAML frontmatter: metadata above, the system
+prompt below.
+
+#+begin_example
+---
+name: researcher
+description: Deep research across notes and the web; produces a cited brief.
+model: claude/claude-sonnet-4-6
+fallback-model: ollama/gpt-oss:20b
+tools: [memory, web_search, project_read_file]
+isolation: none
+worker: inproc
+budget-usd: 0.50
+max-turns: 40
+emits: [brief]
+---
+You are a research analyst working inside the user's own editor...
+#+end_example
+
+Not org, even though everything else here is. Agent definitions would otherwise
+be indexed as part of the notes corpus and retrieved as knowledge, so a question
+about research methodology would surface the researcher's own prompt. Not a
+=defcustom= either: the body is prose, and prose in a customization string is
+miserable to edit and diffs badly.
+
+Markdown with frontmatter is also the interop surface — =worker: claude-code=
+hands the file to an external CLI more or less verbatim, and the same format
+already sits in =~/.claude/agents=.
+
+A file with *no* frontmatter still parses, taking its name from the filename.
+That is what makes an existing =~/.claude/agents= directory importable rather
+than something to convert.
+
+Unrecognised keys are kept, not dropped. Whoever added one is presumably using
+it.
+
+** Search path
+
+=cmacs-brigade-agent-path=, earliest to latest, later wins by name:
+
+1. shipped, under =data-directory=
+2. =~/.config/cmacs/brigade/agents/=
+3. =~/.claude/agents/= — imported read-only
+4. =<project>/.cmacs/agents/= — consulted per project, always wins
+
+=M-x cmacs-brigade-agent-reload= rescans. A definition that fails to parse is
+reported and skipped rather than aborting the scan: one malformed file should
+not cost you every other agent in the directory.
+
+** From Lisp
+
+=cmacs-brigade-register-agent= populates the same registry, so an agent defined
+in your init is referenced from a plan exactly like a file-defined one.
+
+* Shipped agents
+
+| Agent     | For                                                    |
+|-----------+--------------------------------------------------------|
+| researcher | Notes + web research producing a cited brief          |
+| librarian  | Answers strictly from your own notes. Read-only       |
+| critic     | Argues against a plan or a piece of work              |
+
+* Workers
+
+A worker decides /how/ an agent runs.
+
+| Worker        | Runs as                                    |
+|---------------+--------------------------------------------|
+| =claude-code=   | a =claude --print= subprocess (the default) |
+| =opencode=      | an =opencode run= subprocess               |
+| =shell=         | a shell script                             |
+| =inproc=        | in the editor's own process                |
+
+Agents run *out of process* by default, and this is not a performance choice.
+A =--gowl= cmacs instance /is/ the user's Wayland session: an agent that blocks
+or errors inside the editor takes the desktop and every application in it.
+
+Register your own with =cmacs-brigade-register-worker=. A worker that cannot
+push its state — a detached process is reparented to init, so no =SIGCHLD= ever
+arrives — supplies =:poll= instead and gets swept.
+
+* Isolation
+
+| Backend    | What it does                                             |
+|------------+----------------------------------------------------------|
+| =none=       | runs in place; safety comes from the allowlist alone     |
+| =worktree=   | a git worktree, outside the repository                   |
+| =podman=     | a container with no network                              |
+
+Worktrees go *outside* the repo being worked on. One under the repo is walked by
+every other agent's =rg= and =find=, which turns every search into duplicate
+hits across sibling checkouts and quietly degrades everything.
+
+Teardown forces removal, because an agent's worktree is dirty by definition —
+that is what it is for — and =git worktree remove= refuses a dirty checkout.
+Every teardown tolerates being called twice and being called after a prepare
+that failed halfway: it runs from an unwind path, which is exactly when the
+state is least predictable.
+
+=none= is not a default anywhere, and should not be one in an agent you write.
+It is only as strong as the allowlist.
+
+* Budgets
+
+Ceilings, not guidance. An agent that reaches one stops.
+
+Both levels are enforced: an agent's own budget catches one runaway, and the
+brigade's shared budget catches fifty well-behaved agents that add up to too
+much. Neither subsumes the other.
+
+Cost is carried in integer micro-dollars because it is summed across thousands
+of turns, and floating point drift in the one figure a limit acts on would be
+the worst possible place for it. A model with no price is reported as
+*unpriced*, never as free — the two are indistinguishable once summed.
+
+* Tool access
+
+Each agent gets a freshly minted random token and a 0600 =.mcp.json= under
+=XDG_RUNTIME_DIR=, naming =emacs --mcp-relay= with the agent's expanded
+allowlist. See [[file:extending.org][Extending the brigade]] for how the allowlist is evaluated.
+
+The token is never derived from the agent's name or id. Agents quote their own
+context into prompts and logs constantly, so a secret derived from something
+they know about themselves is a secret by construction only.

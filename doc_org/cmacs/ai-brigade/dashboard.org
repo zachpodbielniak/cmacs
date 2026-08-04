@@ -1,0 +1,82 @@
+#+title: Brigade Dashboard
+#+description: Watching agents, in a terminal or a window
+#+authors: Zach Podbielniak
+#+categories: cmacs, ai, ui
+#+created: [2026-08-04 Tue]
+#+updated: [2026-08-04 Tue]
+#+version: 0.1.0
+
+* Opening it
+
+=M-x cmacs-brigade-dashboard= (or =M-x cmacs-brigade=).
+
+#+begin_example
+ brigade    live 1    spend $0.0054    idx 284,102 chunks
+──────────────────────────────────────────────────────────────────────────────
+ST  ID         AGENT        TASK                       TURNS   TOKENS      COST
+▶   a17        researcher   Survey the competition         4  900/210   $0.0054
+✔   a16        triage       Morning mail                   7  1200/340  $0.0210
+✖   a15        coder        Patch the index               22  88k/12k   $0.3100
+    worker exited 1
+──────────────────────────────────────────────────────────────────────────────
+
+ s start  K cancel  RET plan  o output  g refresh  M memory  q quit
+#+end_example
+
+* Keys
+
+| Key   | Does                                   |
+|-------+----------------------------------------|
+| =s=     | queue and start the task on this line  |
+| =K=     | cancel it                              |
+| =RET=   | jump to its headline in the plan       |
+| =g=     | redraw now                             |
+| =M=     | search the memory index                |
+| =j= =k= | move                                   |
+| =q=     | quit                                   |
+
+* It is a projection
+
+The dashboard holds no state of its own, and its keys call exactly the functions
+the org hooks call. There are two writers — org and the runtime — and three
+readers. A third thing that thought it knew the answer would be a third thing to
+keep in sync.
+
+* Rendering
+
+A full redraw on =special-mode= rather than =tabulated-list-mode=: the view is a
+tree with per-row progress, which tabulated-list does badly, and
+=cmacs-transcode= had already worked out how to redraw without losing the cursor.
+
+Refresh is *event-driven with a coalescing idle timer*, never a poll. Eight
+streaming agents deliver progress at tens of hertz each; redrawing per event
+melts the display. A two-second heartbeat refreshes elapsed times, and nothing
+redraws at all while the buffer is not visible.
+
+* Every backend
+
+The dashboard is text, so it works identically in a terminal, under PGTK, and
+under =emacs --lrg=.
+
+Status glyphs fall back to ASCII where Unicode cannot be displayed
+(=cmacs-brigade-dashboard-unicode=, =auto= by default).
+
+The trap under =--lrg= is menus: =display-graphic-p= returns =t= there, so the
+obvious guard passes, but lrgterm draws no menu bar. Use
+=cmacs-libregnum-popup-menu=, which falls through to the native menu on PGTK.
+An ERT test greps the brigade sources for =x-popup-menu=, =image-map= and
+=menu-bar-*= to keep it that way.
+
+* Panels
+
+Sections come from =cmacs-brigade-register-panel=, so a configuration can add
+its own:
+
+#+begin_src elisp
+(cmacs-brigade-register-panel
+ :name 'calls :title "Recent calls" :order 20
+ :render (lambda () (list "  +15551234567  2m ago")))
+#+end_src
+
+A panel that signals is caught and reported in place rather than taking the
+dashboard down — the dashboard is how you would notice the panel is broken.

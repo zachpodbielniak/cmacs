@@ -222,6 +222,54 @@ rows outrank Evil's state maps."
                      (rx (or "x-popup-menu" "image-map" "menu-bar-"))))))
     (should (null hits))))
 
+(ert-deftest cmacs-brigade-docs-cover-the-api ()
+  "Every public registry and shipped tool is documented.
+
+An extension surface nobody can find is not one.  This checks the
+manual actually mentions each entry point rather than trusting that it
+was updated alongside the code."
+  (let* ((dir (expand-file-name "doc_org/cmacs/ai-brigade"
+                                cmacs-brigade-tests--root))
+         (text (and (file-directory-p dir)
+                    (mapconcat (lambda (f)
+                                 (with-temp-buffer
+                                   (insert-file-contents f)
+                                   (buffer-string)))
+                               (directory-files dir t "\\.org\\'") "\n"))))
+    (skip-unless text)
+    (dolist (fn '("cmacs-brigade-register-tool"
+                  "cmacs-brigade-register-agent"
+                  "cmacs-brigade-register-worker"
+                  "cmacs-brigade-register-isolation"
+                  "cmacs-brigade-register-memory-source"
+                  "cmacs-brigade-register-deliverable"
+                  "cmacs-brigade-register-panel"
+                  "cmacs-brigade-register-context-provider"
+                  "cmacs-brigade-register-approval-handler"
+                  "cmacs-brigade-deftool"))
+      (should (string-search fn text)))
+    ;; and the tools an agent is actually given
+    (dolist (tool '("memory_search" "memory_get" "memory_stats"
+                    "mail_search" "mail_read" "deliverable_emit"))
+      (should (string-search tool text)))))
+
+(ert-deftest cmacs-brigade-docs-mirrored-in-texinfo ()
+  "The Info manual has a brigade chapter and includes it.
+
+doc/ and doc_org/ are maintained in parallel; a chapter that exists in
+one and not the other is how they drift apart."
+  (let ((texi (expand-file-name "doc/cmacs/ai-brigade/ai-brigade.texi"
+                                cmacs-brigade-tests--root))
+        (main (expand-file-name "doc/cmacs/cmacs.texi"
+                                cmacs-brigade-tests--root)))
+    (skip-unless (file-readable-p main))
+    (should (file-readable-p texi))
+    (with-temp-buffer
+      (insert-file-contents main)
+      (let ((s (buffer-string)))
+        (should (string-search "@include ai-brigade/ai-brigade.texi" s))
+        (should (string-search "* CMacs AI Brigade::" s))))))
+
 (provide 'cmacs-brigade-tests)
 
 ;;; cmacs-brigade-tests.el ends here
