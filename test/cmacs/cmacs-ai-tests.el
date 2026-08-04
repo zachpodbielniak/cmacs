@@ -1114,5 +1114,83 @@ literally named \"~\" if handed one."
       (when (buffer-live-p buf) (kill-buffer buf))
       (delete-directory dir t))))
 
+
+;;;; Provider label
+
+(ert-deftest cmacs-ai-label-uses-the-provider-symbol ()
+  "The heading names the provider you can actually select.
+
+ai-glib returns prose -- \"Claude Code\", \"Claude (TUI via tmux)\" --
+and downcasing that gave \"claude code\", which is not a provider symbol
+and cannot be typed anywhere in the Elisp API."
+  (skip-unless (fboundp 'cmacs-ai-chat-open))
+  (dolist (p '(claude-code claude-tmux opencode claude))
+    (let ((buf (cmacs-ai-chat-open p "sonnet")))
+      (unwind-protect
+          (with-current-buffer buf
+            (should (equal (cmacs-ai-chat--assistant-label)
+                           (format "%s/sonnet" p))))
+        (kill-buffer buf)))))
+
+(ert-deftest cmacs-ai-provider-slug-is-identifier-shaped ()
+  "The display-name fallback still yields something symbol-like."
+  (skip-unless (fboundp 'cmacs-ai-chat--provider-slug))
+  (should (equal "claude-code" (cmacs-ai-chat--provider-slug "Claude Code")))
+  (should (equal "claude" (cmacs-ai-chat--provider-slug
+                           "Claude (TUI via tmux)")))
+  (should (equal "openai" (cmacs-ai-chat--provider-slug "OpenAI"))))
+
+
+;;;; Model prompt
+
+(ert-deftest cmacs-ai-offers-cli-model-aliases ()
+  "Both CLI providers offer the aliases you would actually type."
+  (skip-unless (fboundp 'cmacs-ai--models-for))
+  (dolist (p '(claude-code claude-tmux))
+    (let ((models (cmacs-ai--models-for p)))
+      (dolist (m '("haiku" "sonnet" "opus" "fable"))
+        (should (member m models))))))
+
+(ert-deftest cmacs-ai-model-prompt-survives-a-mute-provider ()
+  "A provider that cannot answer still leaves the chat selectable."
+  (skip-unless (fboundp 'cmacs-ai--models-for))
+  (cl-letf (((symbol-function 'cmacs-ai-list-models)
+             (lambda (&rest _) (error "no daemon"))))
+    (should-not (cmacs-ai--models-for 'ollama))))
+
+
+;;;; Directory prompt
+
+(ert-deftest cmacs-ai-directory-table-shows-saved-roots ()
+  "The roots you saved are offered before you type anything."
+  (skip-unless (fboundp 'cmacs-ai--chat-directory-table))
+  (let* ((cmacs-ai-chat-directories '("~/some/project" "~/another"))
+         (table (cmacs-ai--chat-directory-table))
+         (offered (all-completions "" table)))
+    (should (member "~/some/project/" offered))
+    (should (member "~/another/" offered))))
+
+(ert-deftest cmacs-ai-directory-table-browses-the-filesystem ()
+  "Anywhere else is still reachable, as in `find-file'."
+  (skip-unless (fboundp 'cmacs-ai--chat-directory-table))
+  (let ((dir (file-name-as-directory (make-temp-file "cmacs-ai-br" t))))
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name "alpha" dir))
+          (make-directory (expand-file-name "beta" dir))
+          (let* ((cmacs-ai-chat-directories nil)
+                 (table (cmacs-ai--chat-directory-table))
+                 (all (all-completions dir table)))
+            (should (member (concat dir "alpha/") all))
+            (should (member (concat dir "beta/") all))
+            ;; directories only -- a file is not somewhere to start an agent
+            (with-temp-file (expand-file-name "afile" dir) (insert "x"))
+            (should-not (member (concat dir "afile")
+                                (all-completions dir table)))
+            ;; and partial input narrows
+            (should (equal (list (concat dir "alpha/"))
+                           (all-completions (concat dir "al") table)))))
+      (delete-directory dir t))))
+
 (provide 'cmacs-ai-tests)
 ;;; cmacs-ai-tests.el ends here

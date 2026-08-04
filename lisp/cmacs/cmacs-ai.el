@@ -455,50 +455,123 @@ Default is `cmacs-ai-default-provider'."
            (symbol-name cmacs-ai-default-provider))))
 
 ;;;###autoload
-(defun cmacs-ai-chat (&optional provider)
+(defun cmacs-ai-chat (&optional provider model)
   "Open a new cmacs-ai chat buffer with PROVIDER.
 With no PROVIDER (the default M-x form), uses
 `cmacs-ai-default-provider'.  With a prefix arg, prompts for a
 provider.  Call from Lisp with an explicit PROVIDER symbol to skip
 the prompt."
   (interactive
-   (list (when current-prefix-arg (cmacs-ai--read-provider))))
+   (when current-prefix-arg
+     (let ((p (cmacs-ai--read-provider)))
+       (list p (cmacs-ai--read-model p)))))
   (require 'cmacs-ai-chat)
-  (cmacs-ai-chat-open provider))
+  (cmacs-ai-chat-open provider model))
 
 ;;;###autoload
-(defun cmacs-ai-chat-with-provider (provider)
-  "Open a new cmacs-ai chat buffer, prompting for PROVIDER.
-Like `cmacs-ai-chat' with a prefix arg, but always prompts so
-the M-x discovery surface is uniform."
-  (interactive (list (cmacs-ai--read-provider "Chat with provider: ")))
+(defun cmacs-ai-chat-with-provider (provider &optional model)
+  "Open a new cmacs-ai chat buffer, prompting for PROVIDER then MODEL.
+
+The model prompt completes on what the provider actually offers -- for
+the CLI providers that is haiku, sonnet, opus and fable -- and an empty
+answer takes the provider's default."
+  (interactive
+   (let ((p (cmacs-ai--read-provider "Chat with provider: ")))
+     (list p (cmacs-ai--read-model p))))
   (require 'cmacs-ai-chat)
-  (cmacs-ai-chat-open provider))
+  (cmacs-ai-chat-open provider model))
 
 (declare-function cmacs-ai-chat-open "cmacs-ai-chat")
 (defvar cmacs-ai-chat-directories)
 
-(defun cmacs-ai--read-chat-directory (&optional prompt)
-  "Read a directory to run a chat in.
+(defcustom cmacs-ai-read-model-timeout 8
+  "Seconds to wait for a provider's model list before giving up.
 
-Completes on `cmacs-ai-chat-directories' first, since the point of the
-command is a handful of project roots you return to, and falls through
-to ordinary file-name completion for anything else."
-  (let* ((known (mapcar #'abbreviate-file-name
-                        (and (boundp 'cmacs-ai-chat-directories)
-                             cmacs-ai-chat-directories)))
-         (answer (completing-read (or prompt "Run agent in directory: ")
-                                  known nil nil nil nil
-                                  (abbreviate-file-name default-directory))))
-    (if (file-directory-p (expand-file-name answer))
-        (expand-file-name answer)
-      ;; Not one of the shortcuts and not a directory as typed: fall back
-      ;; to a real directory prompt rather than starting an agent
-      ;; somewhere that does not exist.
+The list is a convenience, and a provider that is slow to answer must
+not hold up opening a chat -- the prompt falls back to free text."
+  :type 'number
+  :group 'cmacs-ai)
+
+(defun cmacs-ai--models-for (provider)
+  "Models PROVIDER offers, or nil.
+
+Errors are swallowed on purpose: a provider with no key, no daemon
+running or no network still has to be selectable, just without
+completion."
+  (condition-case nil
+      (with-timeout (cmacs-ai-read-model-timeout nil)
+        (cmacs-ai-list-models provider))
+    (error nil)))
+
+(defun cmacs-ai--read-model (provider &optional prompt)
+  "Read a model for PROVIDER, completing on the ones it offers.
+
+Not `require-match': every provider ships new model names between cmacs
+releases, and a closed list would make the newest model the one thing
+this prompt cannot express.  An empty answer means the provider's own
+default."
+  (let* ((models (cmacs-ai--models-for provider))
+         (answer (completing-read
+                  (or prompt (format "Model for %s (empty = default): "
+                                     provider))
+                  models nil nil)))
+    (unless (string-empty-p (string-trim answer))
+      (string-trim answer))))
+
+(defun cmacs-ai--chat-directory-table ()
+  "Completion table offering the saved roots and the filesystem.
+
+`completion-table-in-turn' tries the saved list first and falls through
+to ordinary file-name completion, so the directories you use are right
+there without having to remember them, and anywhere else is still one
+TAB away -- the same feel as \\[find-file], for directories."
+  (let ((known (mapcar (lambda (d)
+                         (file-name-as-directory (abbreviate-file-name d)))
+                       (and (boundp 'cmacs-ai-chat-directories)
+                            cmacs-ai-chat-directories))))
+    (lambda (string pred action)
+      (if (eq action 'metadata)
+          ;; Tell the completion UI these are files, so vertico and
+          ;; friends render and sort them as paths.
+          '(metadata (category . file))
+        (complete-with-action
+         action
+         (append known
+                 ;; Directories under whatever has been typed so far.
+                 (let* ((dir (or (file-name-directory string) ""))
+                        (expanded (expand-file-name dir)))
+                   (when (file-directory-p expanded)
+                     (condition-case nil
+                         (mapcar (lambda (f) (concat dir f))
+                                 (seq-filter
+                                  (lambda (f)
+                                    (and (string-suffix-p "/" f)
+                                         (not (member f '("./" "../")))))
+                                  (file-name-all-completions
+                                   (file-name-nondirectory string) expanded)))
+                       (error nil)))))
+         string pred)))))
+
+(defun cmacs-ai--read-chat-directory (&optional prompt)
+  "Read a directory to run a chat in."
+  (let ((answer (completing-read
+                 (or prompt "Run agent in directory: ")
+                 (cmacs-ai--chat-directory-table)
+                 nil nil nil 'cmacs-ai--chat-directory-history
+                 (abbreviate-file-name default-directory))))
+    (setq answer (expand-file-name (string-trim answer)))
+    (if (file-directory-p answer)
+        (file-name-as-directory answer)
+      ;; Typed something that is not a directory: ask again with the real
+      ;; directory reader rather than starting an agent nowhere.
       (read-directory-name "Run agent in directory: " nil nil t))))
 
+(defvar cmacs-ai--chat-directory-history nil
+  "Minibuffer history for the chat-directory prompt.")
+
 ;;;###autoload
-(defun cmacs-ai-chat-with-provider-in-directory (provider directory)
+(defun cmacs-ai-chat-with-provider-in-directory (provider directory
+                                                         &optional model)
   "Open a chat on PROVIDER running in DIRECTORY.
 
 The point of this over `cmacs-ai-chat-with-provider' is the CLI
@@ -511,21 +584,23 @@ anywhere else.
 The buffer's `default-directory' follows too, so the filesystem and
 project tools resolve against the same tree."
   (interactive
-   (list (cmacs-ai--read-provider "Chat with provider: ")
-         (cmacs-ai--read-chat-directory)))
+   (let ((p (cmacs-ai--read-provider "Chat with provider: ")))
+     (list p (cmacs-ai--read-chat-directory) (cmacs-ai--read-model p))))
   (require 'cmacs-ai-chat)
-  (cmacs-ai-chat-open provider nil directory))
+  (cmacs-ai-chat-open provider model directory))
 
 ;;;###autoload
-(defun cmacs-ai-chat-here (&optional provider)
+(defun cmacs-ai-chat-here (&optional provider model)
   "Open a chat running in the current buffer's directory.
 
 The common case of `cmacs-ai-chat-with-provider-in-directory': you are
 already in the project you want the agent to work on."
   (interactive
-   (list (when current-prefix-arg (cmacs-ai--read-provider))))
+   (when current-prefix-arg
+     (let ((p (cmacs-ai--read-provider)))
+       (list p (cmacs-ai--read-model p)))))
   (require 'cmacs-ai-chat)
-  (cmacs-ai-chat-open provider nil default-directory))
+  (cmacs-ai-chat-open provider model default-directory))
 
 ;;;###autoload
 (defun cmacs-ai-resume-chat ()

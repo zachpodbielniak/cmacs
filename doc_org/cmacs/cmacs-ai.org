@@ -776,7 +776,9 @@ This matters mainly for the CLI providers. A command-line agent finds its projec
 
 Both the CLI subprocess and the buffer's =default-directory= follow, so the filesystem and project tools resolve against the same tree. The directory also goes in the buffer name, since that is what distinguishes two otherwise identical chats.
 
-For the directories you return to, list them and the prompt completes on them:
+The directory prompt behaves like =C-x C-f= for directories: it lists the roots you saved first, then browses the filesystem as you type, and only offers directories. Anywhere is still reachable, the saved ones just do not have to be remembered.
+
+For the directories you return to, list them and they appear at the top:
 
 #+begin_src elisp
 (setq cmacs-ai-chat-directories
@@ -789,3 +791,16 @@ For the directories you return to, list them and the prompt completes on them:
 From Lisp, =cmacs-ai-chat-open= takes it as a third argument.
 
 An HTTP provider has no subprocess to place anywhere, so the directory only affects the buffer; =cmacs-ai-client-set-working-directory= returns nil there to say so.
+
+* Choosing a model
+
+Every provider prompt is followed by a model prompt, completing on what that provider actually offers:
+
+- =claude-code= and =claude-tmux= offer =haiku=, =sonnet=, =opus= and =fable=, plus the full model ids.
+- =opencode= offers its =vendor/model= names, =ollama= whatever you have pulled, and the HTTP providers their catalogues.
+
+It is not a closed list — every provider ships new model names between cmacs releases, and requiring a match would make the newest model the one thing the prompt cannot express. An empty answer takes the provider's own default.
+
+A provider that cannot answer (no key, no daemon, no network) simply offers no completions rather than blocking; =cmacs-ai-read-model-timeout= bounds the wait.
+
+The heading on each reply names the provider symbol you selected and the model that answered, as =claude-code/sonnet= — the provider half is the symbol, not ai-glib's display name, so it matches what you type at the prompt.

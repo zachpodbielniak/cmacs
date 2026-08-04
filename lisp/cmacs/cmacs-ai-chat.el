@@ -384,23 +384,38 @@ Honors `cmacs-ai-user-label' first, then $USER, then \"user\"."
   "Resolve the assistant-side heading label as \"provider/model\".
 Pulls the provider name and effective model from ai-glib so the
 label reflects what's actually answering (including model defaults).
-The provider half is downcased (`ollama' rather than `Ollama') to
-match the symbols used in the Elisp API.  The model half is left
+The provider half is the symbol you selected -- `claude-code', not
+ai-glib's display name -- so it matches what the Elisp API and the
+provider prompt use.  The model half is left
 untouched -- ai-glib's strings tend to be the provider's own
 canonical model id (e.g. `claude-sonnet-5', `gpt-oss:20b').
 Falls back to the buffer-local provider symbol when no client is
 available."
   (let* ((client (car-safe cmacs-ai-chat-session-pair))
-         (raw-provider (or (and client
-                                (cmacs-ai-client-provider-name client))
-                           (and cmacs-ai-chat-provider
-                                (symbol-name cmacs-ai-chat-provider))
-                           "assistant"))
-         (provider (downcase raw-provider))
+         ;; The symbol first, ai-glib's display name only as a fallback.
+         ;; ai-glib returns prose -- "Claude Code", "Claude (TUI via
+         ;; tmux)" -- and downcasing that gives "claude code", which is
+         ;; not a provider you can name anywhere in the Elisp API.
+         (provider (or (and cmacs-ai-chat-provider
+                            (symbol-name cmacs-ai-chat-provider))
+                       (and client
+                            (cmacs-ai-chat--provider-slug
+                             (cmacs-ai-client-provider-name client)))
+                       "assistant"))
          (model (and client (cmacs-ai-client-effective-model client))))
     (if (and model (not (string-empty-p model)))
         (format cmacs-ai-assistant-label-format provider model)
       provider)))
+
+(defun cmacs-ai-chat--provider-slug (name)
+  "Turn ai-glib display NAME into something shaped like a provider symbol."
+  (when name
+    (let ((s (downcase name)))
+      ;; Drop parenthetical asides, then collapse whatever is left into
+      ;; hyphens: "Claude (TUI via tmux)" is a label, not an identifier.
+      (setq s (replace-regexp-in-string "(.*)" "" s))
+      (setq s (replace-regexp-in-string "[^a-z0-9]+" "-" s))
+      (string-trim s "-+" "-+"))))
 
 ;;;; History rendering ----------------------------------------------
 
