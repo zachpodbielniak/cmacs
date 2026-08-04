@@ -57,7 +57,7 @@ Zero means it lasts as long as the run."
   (or cmacs-brigade-relay-command
       (expand-file-name invocation-name invocation-directory)))
 
-(defun cmacs-brigade-host-provision (agent-id allowlist)
+(cl-defun cmacs-brigade-host-provision (agent-id allowlist)
   "Provision scoped tool access for AGENT-ID limited to ALLOWLIST.
 
 Returns a plist with :path (the MCP config) and :token, or nil when the

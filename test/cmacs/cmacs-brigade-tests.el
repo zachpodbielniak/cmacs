@@ -489,6 +489,31 @@ whenever cmacs-evil had not been loaded."
   (when (boundp 'evil-snipe-disabled-modes)
     (should (memq 'cmacs-brigade-dashboard-mode evil-snipe-disabled-modes))))
 
+
+(ert-deftest cmacs-brigade-no-cl-return-from-in-plain-defun ()
+  "`cl-return-from' needs the block `cl-defun' establishes.
+
+In a plain `defun' it byte-compiles cleanly and then dies at runtime with
+a void `--cl-block-NAME--', but only on the branch that returns early --
+so it survives every test that does not take that branch.  Two of these
+shipped before anyone hit one."
+  (let (bad)
+    (dolist (f (cmacs-brigade-tests--elisp-files))
+      (with-temp-buffer
+        (insert-file-contents f)
+        (emacs-lisp-mode)
+        (goto-char (point-min))
+        (let ((cl nil) (name nil))
+          (while (re-search-forward
+                  "^(\\(cl-\\)?defun \\([^ \t\n]+\\)\\|cl-return-from" nil t)
+            (if (match-beginning 2)
+                (setq cl (match-beginning 1)
+                      name (match-string 2))
+              (unless (or cl (nth 4 (syntax-ppss)))
+                (push (format "%s: %s" (file-name-nondirectory f) name)
+                      bad)))))))
+    (should (equal nil bad))))
+
 (provide 'cmacs-brigade-tests)
 
 ;;; cmacs-brigade-tests.el ends here

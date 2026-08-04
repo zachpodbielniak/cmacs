@@ -26,6 +26,20 @@
 (require 'cl-lib)
 (require 'subr-x)
 
+;; cmacs-ai is a hard requirement of the subsystem but a soft one of this
+;; file: the subprocess workers do not touch it, so it is declared rather
+;; than required and the inproc worker checks at start time.
+(declare-function cmacs-ai-make-session "cmacs-ai")
+(declare-function cmacs-ai-free-session "cmacs-ai")
+(declare-function cmacs-ai-tools-new "cmacs-ai-tools.c")
+(declare-function cmacs-ai-tools-free "cmacs-ai-tools.c")
+(declare-function cmacs-ai-tools-run-async "cmacs-ai-tools.c")
+(declare-function cmacs-ai-session-append-message "cmacs-ai-session.c")
+(declare-function cmacs-ai-chat-cancel "cmacs-ai-stream.c")
+(declare-function cmacs-brigade-install-tools "cmacs-brigade-tools")
+(declare-function cmacs-brigade-plan-adopt "cmacs-brigade-plan")
+(defvar cmacs-ai-default-provider)
+
 (defcustom cmacs-brigade-max-concurrent 4
   "How many agents may run at once.
 Beyond this, tasks stay queued until a slot frees."
@@ -73,7 +87,7 @@ Beyond this, tasks stay queued until a slot frees."
                (when model (list "--model" model))))
       ('shell (list "bash" "-c" (format "cat %s | bash"
                                         (shell-quote-argument prompt-file))))
-      (_ (user-error "cmacs-brigade: unknown worker %s" worker)))))
+      (_ (user-error "cmacs-brigade: %s has no subprocess form" worker)))))
 
 (defun cmacs-brigade--start-process (task-id agent prompt cwd env endpoint)
   "Spawn AGENT's worker for TASK-ID.  Returns the process."
@@ -104,32 +118,146 @@ Beyond this, tasks stay queued until a slot frees."
     (process-send-eof proc)
     proc))
 
+(defun cmacs-brigade--finish (task-id state output &optional reason)
+  "Retire TASK-ID in STATE, having produced OUTPUT.
+
+Shared by every worker: whatever ran, the credential has to be revoked,
+the sandbox torn down, the state recorded and the queue drained, and
+having each worker do that itself is how one of them ends up not doing
+one of them."
+  (let ((run (gethash task-id cmacs-brigade--runs)))
+    (when run
+      ;; Order matters: revoke the credential before anything else can
+      ;; fail, so a token never outlives the run that needed it.
+      (cmacs-brigade-host-revoke task-id)
+      (cmacs-brigade-isolation-teardown (plist-get run :isolation) task-id)
+      (remhash task-id cmacs-brigade--runs)))
+  (when (fboundp 'cmacs-brigade-task-transition)
+    (cmacs-brigade-task-transition task-id state reason))
+  (run-hook-with-args 'cmacs-brigade-run-finished-functions task-id state
+                      output)
+  (cmacs-brigade--drain-queue))
+
 (defun cmacs-brigade--on-exit (task-id proc)
   "Record that TASK-ID's PROC finished."
-  (let* ((run (gethash task-id cmacs-brigade--runs))
-         (status (process-exit-status proc))
+  (let* ((status (process-exit-status proc))
          (buf (process-buffer proc))
          (output (when (buffer-live-p buf)
                    (with-current-buffer buf (buffer-string))))
          (state (if (zerop status) 'done 'failed)))
     (when-let* ((f (process-get proc 'brigade-prompt-file)))
       (ignore-errors (delete-file f)))
-    (when run
-      ;; Order matters: revoke the credential before anything else can
-      ;; fail, so a token never outlives the run that needed it.
-      (cmacs-brigade-host-revoke task-id)
-      (cmacs-brigade-isolation-teardown (plist-get run :isolation) task-id)
-      (remhash task-id cmacs-brigade--runs))
-    (when (fboundp 'cmacs-brigade-task-transition)
-      (cmacs-brigade-task-transition
-       task-id state (unless (zerop status)
-                       (format "worker exited %s" status))))
     (when (buffer-live-p buf)
       (with-current-buffer buf (set-buffer-modified-p nil))
       (kill-buffer buf))
-    (run-hook-with-args 'cmacs-brigade-run-finished-functions task-id state
-                        output)
-    (cmacs-brigade--drain-queue)))
+    (cmacs-brigade--finish task-id state output
+                           (unless (zerop status)
+                             (format "worker exited %s" status)))))
+
+
+;;;; The in-process worker
+;;
+;; Runs the tool loop inside cmacs against a provider's HTTP API, rather
+;; than shelling out to a CLI.  The loop itself happens on an ai-glib
+;; worker thread and reports back through the dispatch callback registry,
+;; so the editor is never blocked -- which matters more than usual here,
+;; because under `--gowl' the editor is the compositor.
+
+(defun cmacs-brigade--split-model (model)
+  "Split MODEL, a \"provider/name\" string, into (PROVIDER . NAME).
+
+PROVIDER is a symbol.  With no slash the whole string is the model name
+and the provider is the configured default -- so `gpt-oss:20b\' still
+works, and so does a name that itself contains a slash after the first."
+  (if (and model (string-match "\\`\\([^/]+\\)/\\(.+\\)\\'" model))
+      (cons (intern (match-string 1 model)) (match-string 2 model))
+    (cons (and (boundp 'cmacs-ai-default-provider) cmacs-ai-default-provider)
+          model)))
+
+(defun cmacs-brigade--worker-inproc (task-id agent prompt _cwd _env _endpoint)
+  "Run AGENT's turn for TASK-ID inside cmacs.  Returns the run state."
+  (unless (fboundp 'cmacs-ai-tools-run-async)
+    (user-error "cmacs-brigade: the inproc worker needs --with-cmacs-ai"))
+  (let* ((split (cmacs-brigade--split-model (plist-get agent :model)))
+         (pair (cmacs-ai-make-session (car split) (cdr split)
+                                      (plist-get agent :prompt)))
+         (executor (cmacs-ai-tools-new))
+         (allowlist (cmacs-brigade-agent-allowlist agent)))
+    (condition-case err
+        (progn
+          ;; Built from the allowlist, so the agent cannot name a tool
+          ;; that was not installed -- enforcement by construction rather
+          ;; than a check at call time.
+          (cmacs-brigade-install-tools executor allowlist
+                                       (plist-get agent :name))
+          (cmacs-ai-session-append-message (cdr pair) 'user prompt)
+          (cmacs-ai-tools-run-async
+           (cdr pair) executor
+           (lambda (payload)
+             (cmacs-brigade--inproc-done task-id payload)))
+          (list :session pair :executor executor))
+      (error
+       ;; Nothing is in the run table yet, so unwind by hand.
+       (ignore-errors (cmacs-ai-tools-free executor))
+       (ignore-errors (cmacs-ai-free-session pair))
+       (signal (car err) (cdr err))))))
+
+(defun cmacs-brigade--inproc-done (task-id payload)
+  "Finish TASK-ID from the tool loop's PAYLOAD."
+  (let* ((run (gethash task-id cmacs-brigade--runs))
+         (text (plist-get payload :text))
+         (err (plist-get payload :error)))
+    ;; Freed before the state transition: the finished hooks can run
+    ;; arbitrary user code, and a handle leaked because one of them
+    ;; signalled would outlive the run.
+    (when run
+      (ignore-errors (cmacs-ai-tools-free (plist-get run :executor)))
+      (ignore-errors (cmacs-ai-free-session (plist-get run :session))))
+    (cmacs-brigade--finish task-id (if err 'failed 'done)
+                           (or text err) err)))
+
+(defun cmacs-brigade--cancel-inproc (_task-id run)
+  "Stop an in-process run described by RUN."
+  (when-let* ((pair (plist-get run :session)))
+    (when (fboundp 'cmacs-ai-chat-cancel)
+      (ignore-errors (cmacs-ai-chat-cancel (cdr pair))))
+    (ignore-errors (cmacs-ai-tools-free (plist-get run :executor)))
+    (ignore-errors (cmacs-ai-free-session pair))))
+
+(defun cmacs-brigade--cancel-process (_task-id run)
+  "Stop a subprocess run described by RUN."
+  (when-let* ((proc (plist-get run :process)))
+    (when (process-live-p proc) (delete-process proc))))
+
+
+;;;; Shipped workers
+;;
+;; Registered through the public `cmacs-brigade-register-worker' and
+;; dispatched through the registry, so a user-registered worker is
+;; reached by exactly the same path as a built-in one.  The runner used
+;; to `pcase' over a hardcoded list instead, which made the registry
+;; decorative and meant `inproc' -- the default in every agent
+;; definition -- failed with "unknown worker".
+
+(defun cmacs-brigade--worker-subprocess (task-id agent prompt cwd env endpoint)
+  "Start AGENT for TASK-ID as a subprocess.  Returns the run state."
+  (list :process (cmacs-brigade--start-process task-id agent prompt
+                                               cwd env endpoint)))
+
+(cmacs-brigade-register-worker
+ :name 'inproc
+ :description "Run the tool loop inside cmacs against a provider HTTP API."
+ :start #'cmacs-brigade--worker-inproc
+ :cancel #'cmacs-brigade--cancel-inproc)
+
+(dolist (w '((claude-code . "Drive the claude CLI in --print mode.")
+             (opencode    . "Drive the opencode CLI.")
+             (shell       . "Pipe the prompt to bash.  Mostly for testing.")))
+  (cmacs-brigade-register-worker
+   :name (car w)
+   :description (cdr w)
+   :start #'cmacs-brigade--worker-subprocess
+   :cancel #'cmacs-brigade--cancel-process))
 
 
 ;;;; Starting
@@ -161,11 +289,20 @@ Beyond this, tasks stay queued until a slot frees."
       nil)
      (t (cmacs-brigade--start-now task-id record agent)))))
 
-(defun cmacs-brigade--start-now (task-id record agent)
+(cl-defun cmacs-brigade--start-now (task-id record agent)
   "Actually start TASK-ID with AGENT."
   (let* ((isolation (or (plist-get agent :isolation) 'none))
          (allowlist (cmacs-brigade-agent-allowlist agent))
+         (worker-name (or (plist-get agent :worker) cmacs-brigade-worker))
+         (worker (cmacs-brigade-registry-get 'worker worker-name))
          prepared endpoint proc)
+    (unless worker
+      (cmacs-brigade-task-transition
+       task-id 'failed
+       (format "unknown worker %s (known: %s)" worker-name
+               (mapconcat #'symbol-name
+                          (cmacs-brigade-registry-list 'worker) ", ")))
+      (cl-return-from cmacs-brigade--start-now nil))
     (unless (cmacs-brigade-isolation-available-p isolation)
       (cmacs-brigade-task-transition
        task-id 'failed (format "%s isolation is unavailable here" isolation))
@@ -175,15 +312,17 @@ Beyond this, tasks stay queued until a slot frees."
         (progn
           (setq prepared (cmacs-brigade-isolation-prepare isolation task-id))
           (setq endpoint (cmacs-brigade-host-provision task-id allowlist))
-          (setq proc (cmacs-brigade--start-process
-                      task-id agent
-                      (cmacs-brigade--build-prompt record agent)
-                      (plist-get prepared :cwd)
-                      (plist-get prepared :env)
-                      endpoint))
-          (puthash task-id (list :process proc :isolation isolation
-                                 :agent (plist-get agent :name)
-                                 :started (float-time))
+          (setq proc (funcall (plist-get worker :start)
+                              task-id agent
+                              (cmacs-brigade--build-prompt record agent)
+                              (plist-get prepared :cwd)
+                              (plist-get prepared :env)
+                              endpoint))
+          (puthash task-id (append proc
+                                   (list :isolation isolation
+                                         :worker worker-name
+                                         :agent (plist-get agent :name)
+                                         :started (float-time)))
                    cmacs-brigade--runs)
           (cmacs-brigade-task-transition task-id 'running)
           t)
@@ -222,8 +361,13 @@ Beyond this, tasks stay queued until a slot frees."
   (interactive "sTask id: ")
   (let ((run (gethash task-id cmacs-brigade--runs)))
     (when run
-      (let ((proc (plist-get run :process)))
-        (when (process-live-p proc) (delete-process proc))))
+      ;; Through the registry, so a user-registered worker gets to stop
+      ;; its own kind of run rather than having a `delete-process' aimed
+      ;; at something that is not a process.
+      (when-let* ((w (cmacs-brigade-registry-get 'worker
+                                                 (plist-get run :worker)))
+                  (cancel (plist-get w :cancel)))
+        (ignore-errors (funcall cancel task-id run))))
     (cmacs-brigade-task-transition task-id 'cancelled)
     (cmacs-brigade-host-revoke task-id)
     (when run

@@ -145,3 +145,34 @@ they know about themselves is a secret by construction only.
 The definitions on `cmacs-brigade-agent-path' are read once when the brigade loads, so a stock plan naming =researcher= works with no setup. After editing or adding a definition, press =A= in the dashboard or run =M-x cmacs-brigade-agent-reload=.
 
 A malformed definition is reported and skipped rather than aborting the load, so one bad file cannot stop cmacs from starting or hide the other agents.
+
+* Workers
+
+A worker decides /how/ an agent runs. Four ship, and all four are registered through the public =cmacs-brigade-register-worker=, so one you register yourself is reached by exactly the same path.
+
+| Worker | What it does |
+|--------+--------------|
+| =inproc= | runs the tool loop inside cmacs against the provider's HTTP API (the default) |
+| =claude-code= | drives the =claude= CLI in =--print= mode |
+| =opencode= | drives the =opencode= CLI |
+| =shell= | pipes the prompt to bash; mostly for testing |
+
+=inproc= is the default because it is the one that honours =:MODEL:= and the tool allowlist directly: the executor is built from the allowlist, so the agent cannot name a tool that was not installed. The loop itself runs on an ai-glib worker thread and reports back through the dispatch callback registry, so the editor is never blocked — which matters more than usual under =--gowl=, where the editor is the compositor.
+
+The CLI workers get their tools over MCP instead, through a scoped =.mcp.json= — see [[file:mcp.org][MCP]].
+
+** Registering your own
+
+#+begin_src elisp
+(cmacs-brigade-register-worker
+ :name 'my-runner
+ :description "Run the agent on the build box."
+ :start (lambda (task-id agent prompt cwd env endpoint)
+          ;; return a plist describing the run; it is merged into the
+          ;; runtime entry and handed back to :cancel
+          (list :ssh-job (my/dispatch-remote agent prompt)))
+ :cancel (lambda (task-id run)
+           (my/kill-remote (plist-get run :ssh-job))))
+#+end_src
+
+Call `cmacs-brigade--finish' with the task id, a final state and the output when the run ends. An unknown worker fails the task with a message naming the ones that are registered, rather than erroring somewhere further down.

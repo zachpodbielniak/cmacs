@@ -10,6 +10,7 @@
 (require 'cmacs-brigade-host nil 'noerror)
 (require 'cmacs-brigade-isolation nil 'noerror)
 (require 'cmacs-brigade-run nil 'noerror)
+(require 'cmacs-brigade-agent-def nil 'noerror)
 (require 'cmacs-brigade-dashboard nil 'noerror)
 
 (defun cmacs-brigade-run-tests--available-p ()
@@ -190,6 +191,110 @@ The dashboard is how someone would notice the panel is broken."
         (should (string-match-p "panel test-explodes failed" (buffer-string))))
     (remhash 'test-explodes (cmacs-brigade--registry 'panel))
     (when (get-buffer "*brigade*") (kill-buffer "*brigade*"))))
+
+
+;;;; Workers
+;;
+;; `inproc' is the default in every agent definition, and the runner used
+;; to pcase over a hardcoded list that did not include it -- so a stock
+;; agent failed with "unknown worker inproc".  These pin the dispatch
+;; rather than the list.
+
+(ert-deftest cmacs-brigade-workers-registered ()
+  "Every shipped worker goes through the public registry, inproc included."
+  (skip-unless (featurep 'cmacs-brigade-run))
+  (dolist (w '(inproc claude-code opencode shell))
+    (let ((def (cmacs-brigade-registry-get 'worker w)))
+      (should def)
+      (should (functionp (plist-get def :start)))
+      (should (functionp (plist-get def :cancel))))))
+
+(ert-deftest cmacs-brigade-default-agent-worker-is-runnable ()
+  "The worker an agent gets by default must actually be registered.
+
+The two defaults are set in different files; nothing otherwise notices
+when they stop agreeing."
+  (skip-unless (featurep 'cmacs-brigade-run))
+  (let ((agent (cmacs-brigade-agent--from-text
+                "---\nname: worker-default-test\n---\nbody" nil)))
+    (should (cmacs-brigade-registry-get 'worker (plist-get agent :worker))))
+  (should (cmacs-brigade-registry-get 'worker cmacs-brigade-worker)))
+
+(ert-deftest cmacs-brigade-start-dispatches-to-the-worker ()
+  "Starting a task calls the registered worker's :start."
+  (skip-unless (cmacs-brigade-run-tests--available-p))
+  (let ((called nil))
+    (cmacs-brigade-register-worker
+     :name 'test-worker
+     :start (lambda (task-id &rest _) (setq called task-id) (list :fake t))
+     :cancel #'ignore)
+    (cmacs-brigade-register-agent :name 'worker-test-agent :prompt "p"
+                                  :worker 'test-worker :isolation 'none)
+    (let ((id "worker-dispatch-1"))
+      (cmacs-brigade-task-adopt id "plan.org" "worker-test-agent" "t")
+      (cmacs-brigade-task-transition id 'queued)
+      (unwind-protect
+          (progn
+            (should (cmacs-brigade-start-task id))
+            (should (equal called id))
+            (should (eq 'running (plist-get (cmacs-brigade-task-get id)
+                                            :state))))
+        (ignore-errors (cmacs-brigade-cancel-task id))
+        (ignore-errors (cmacs-brigade-task-forget id))))))
+
+(ert-deftest cmacs-brigade-cancel-dispatches-to-the-worker ()
+  "Cancelling calls the worker's own :cancel, not delete-process.
+
+A user-registered worker whose run is not a process would otherwise get
+a `delete-process' aimed at whatever it did return."
+  (skip-unless (cmacs-brigade-run-tests--available-p))
+  (let ((cancelled nil))
+    (cmacs-brigade-register-worker
+     :name 'test-worker-2
+     :start (lambda (&rest _) (list :fake t))
+     :cancel (lambda (task-id _run) (setq cancelled task-id)))
+    (cmacs-brigade-register-agent :name 'worker-test-agent-2 :prompt "p"
+                                  :worker 'test-worker-2 :isolation 'none)
+    (let ((id "worker-dispatch-2"))
+      (cmacs-brigade-task-adopt id "plan.org" "worker-test-agent-2" "t")
+      (cmacs-brigade-task-transition id 'queued)
+      (unwind-protect
+          (progn
+            (cmacs-brigade-start-task id)
+            (cmacs-brigade-cancel-task id)
+            (should (equal cancelled id)))
+        (ignore-errors (cmacs-brigade-task-forget id))))))
+
+(ert-deftest cmacs-brigade-unknown-worker-says-what-is-known ()
+  "An unknown worker fails the task with a message naming the real ones."
+  (skip-unless (cmacs-brigade-run-tests--available-p))
+  (cmacs-brigade-register-agent :name 'bad-worker-agent :prompt "p"
+                                :worker 'no-such-worker :isolation 'none)
+  (let ((id "worker-dispatch-3"))
+    (cmacs-brigade-task-adopt id "plan.org" "bad-worker-agent" "t")
+    (cmacs-brigade-task-transition id 'queued)
+    (unwind-protect
+        (progn
+          (should-not (cmacs-brigade-start-task id))
+          (let ((rec (cmacs-brigade-task-get id)))
+            (should (eq 'failed (plist-get rec :state)))
+            (should (string-match-p "unknown worker" (plist-get rec :error)))
+            ;; and it says what would have worked
+            (should (string-match-p "inproc" (plist-get rec :error)))))
+      (ignore-errors (cmacs-brigade-task-forget id)))))
+
+(ert-deftest cmacs-brigade-splits-provider-from-model ()
+  "\"provider/model\" splits; a bare name keeps the default provider."
+  (skip-unless (featurep 'cmacs-brigade-run))
+  (should (equal (cmacs-brigade--split-model "claude/claude-sonnet-4-6")
+                 '(claude . "claude-sonnet-4-6")))
+  (should (equal (cmacs-brigade--split-model "ollama/gpt-oss:20b")
+                 '(ollama . "gpt-oss:20b")))
+  ;; Only the first slash separates, so a model name may contain one.
+  (should (equal (cmacs-brigade--split-model "openai/org/model-x")
+                 '(openai . "org/model-x")))
+  (should (equal (cdr (cmacs-brigade--split-model "gpt-oss:20b"))
+                 "gpt-oss:20b")))
 
 (provide 'cmacs-brigade-run-tests)
 

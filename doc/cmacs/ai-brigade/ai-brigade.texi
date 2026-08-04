@@ -25,6 +25,7 @@ one form lights it up on all three delivery paths at once.
 * Brigade Requirements::        Configure flags and dependencies.
 * Brigade Probing::             Detecting the feature at runtime.
 * Brigade Extending::           Registering your own capabilities.
+* Brigade Workers::             How an agent actually runs.
 * Brigade Dashboard Display::   How the dashboard takes the screen.
 * Brigade Notifications::       Being told when it finishes; voice.
 * Brigade Scheduling::          Running a prompt on a cron schedule.
@@ -280,6 +281,30 @@ to hear the status.
 
 @xref{Top,,, cmacs, the org manual}, file
 @file{doc_org/cmacs/ai-brigade/notifications.org}, for the full chapter.
+
+@node Brigade Workers
+@section Workers
+
+A worker decides @emph{how} an agent runs.  Four ship---@code{inproc}
+(the default), @code{claude-code}, @code{opencode} and @code{shell}---and
+all four are registered through the public
+@code{cmacs-brigade-register-worker}, so one you register yourself is
+reached by exactly the same path.
+
+@code{inproc} runs the tool loop inside cmacs against the provider's HTTP
+API.  It is the default because it honours @code{:MODEL:} and the tool
+allowlist directly: the executor is built from the allowlist, so the
+agent cannot name a tool that was not installed.  The loop runs on an
+ai-glib worker thread and reports back through the dispatch callback
+registry, so the editor is never blocked---which matters more than usual
+under @option{--gowl}, where the editor is the compositor.
+
+@defun cmacs-brigade-register-worker &rest plist
+Keys: @code{:name}, @code{:start} (called with task id, agent, prompt,
+cwd, env and endpoint; returns a plist describing the run), and
+@code{:cancel} (called with the task id and that plist).  An unknown
+worker fails the task with a message naming the registered ones.
+@end defun
 
 @node Brigade Dashboard Display
 @section How the dashboard takes the screen
