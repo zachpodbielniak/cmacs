@@ -41,6 +41,7 @@ See [[file:extending.org][Extending the brigade]] — that is the document that 
 | [[file:genmail.org][GenMail]]             | triage, voice, briefing                           |
 | [[file:deliverables.org][Deliverables]]        | reports, decks, pods, reels                       |
 | [[file:notifications.org][Notifications]]       | being told when it finishes; voice in and out     |
+| [[file:scheduling.org][Scheduling]]          | cron for agents; letting the AI set them up       |
 | [[file:mcp.org][MCP]]                 | the relay, capability tokens, scoping             |
 | [[file:troubleshooting.org][Troubleshooting]]     | what the refusals mean                            |
 

@@ -171,7 +171,11 @@ The subsystem's own symbols use the shorter `cmacs-brigade-' prefix.")
   ;; finishes.  Arming it on first use would mean it is never armed for
   ;; the run that most needed it.
   (require 'cmacs-brigade-notify nil 'noerror)
-  (require 'cmacs-brigade-voice nil 'noerror))
+  (require 'cmacs-brigade-voice nil 'noerror)
+  ;; Loaded so its tools and dashboard panel register; nothing is armed
+  ;; until `cmacs-brigade-schedule-mode' is turned on.  Loading a file
+  ;; must not start firing jobs.
+  (require 'cmacs-brigade-schedule nil 'noerror))
 
 ;; The AI layers over imgedit and vidstudio are NOT loaded from here.
 ;; They depend on the brigade registry, not the other way round, and

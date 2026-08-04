@@ -1,0 +1,186 @@
+#+title: Scheduled runs
+#+description: Cron for agents — a prompt, a model, tools, and a time to fire
+#+authors: Zach Podbielniak
+#+categories: cmacs ai-brigade
+#+created: 2026-08-04T00:00:00-04:00
+#+updated: 2026-08-04T00:00:00-04:00
+#+version: 1
+
+* What this is
+
+A schedule is a prompt, a provider and model, a tool allowlist, and a time to fire. When it fires it creates an ordinary brigade task and runs it, so everything that already works for a hand-written task — tools, budgets, isolation, the dashboard, notifications — works for a scheduled one without knowing it was scheduled.
+
+Turn it on with:
+
+#+begin_src elisp
+(cmacs-brigade-schedule-mode 1)
+#+end_src
+
+Loading cmacs does not arm anything. The tools and the dashboard panel register at load, but no schedule fires until the mode is on — loading a file should never start spending money on a timer.
+
+* Schedules are org headlines
+
+For the same reason plans are. The headline is the description, the body is the prompt, and the properties are the schedule — so a schedule is greppable, refilable, diffable and in git, and =org-agenda= can see it without being taught anything.
+
+#+begin_src org
+,* Weekday mail briefing                                :brigade_schedule:
+  :PROPERTIES:
+  :CRON:   0 8 * * 1-5
+  :AGENT:  triage
+  :MODEL:  claude/claude-sonnet-4-6
+  :TOOLS:  mail_search, mail_read, memory_search
+  :BUDGET: 0.25
+  :END:
+  Summarise anything that arrived overnight and flag what needs a reply
+  today.
+#+end_src
+
+They live in =cmacs-brigade-schedule-file=, which defaults to =schedules.org= in your plan directory. The file is created on first use.
+
+** Properties
+
+| Property | Meaning |
+|----------+---------|
+| =:CRON:= | when it fires. Required — a headline without it is not a schedule |
+| =:AGENT:= | agent definition to base it on. Optional |
+| =:MODEL:= | provider/model, e.g. =claude/claude-sonnet-4-6=. Overrides the agent's |
+| =:TOOLS:= | comma-separated tools it may use. Overrides the agent's |
+| =:BUDGET:= | spend ceiling per run, in dollars |
+| =:ISOLATION:= | =none=, =worktree=, =podman=, or one you registered |
+| =:WORKER:= | =inproc=, =claude-code=, =opencode=, =shell= |
+| =:CATCHUP:= | =skip= or =run= — see /Missed runs/ below |
+| =:ENABLED:= | =no= to park it without deleting it |
+| =:DESC:= | a longer note, when the headline is not room enough |
+
+A headline with no =:CRON:= is not a schedule. A schedule file is still an org file, and prose headings in it stay prose.
+
+** How model and tool selection works
+
+A schedule does not get a private path into the runner. It derives an agent from the one it names, applies its overrides, and registers the result under a schedule-specific name through the ordinary =cmacs-brigade-register-agent=. So a schedule can express exactly what a hand-written agent definition can, and nothing it could not.
+
+Naming no =:AGENT:= is fine — you get a generic one whose system prompt tells the model nobody is watching, so it should make the reasonable choice rather than stop to ask.
+
+* The cron dialect
+
+Five fields, in the usual order:
+
+: minute  hour  day-of-month  month  day-of-week
+:  0-59   0-23      1-31       1-12    0-6 (0 and 7 are both Sunday)
+
+Each field takes =*=, a number, a list (=1,15=), a range (=9-17=), a step (=*/15=, =0-12/6=, =5/6= meaning "from 5 onwards"), or a name. =?= is accepted as a synonym for =*=.
+
+Names work for months and days, matched as a prefix of at least three letters: =jan=, =january=, =mon=, =monday=. The whole word has to be that prefix — =monkey= and =jan1= are rejected rather than quietly read as Monday and January.
+
+** Macros
+
+| Macro | Equivalent |
+|-------+------------|
+| =@yearly=, =@annually= | =0 0 1 1 *= |
+| =@monthly= | =0 0 1 * *= |
+| =@weekly= | =0 0 * * 0= |
+| =@daily=, =@midnight= | =0 0 * * *= |
+| =@hourly= | =0 * * * *= |
+| =@reboot= | once, when the mode is turned on |
+| =@every N<s\vert m\vert h\vert d\vert w>= | a plain interval, e.g. =@every 30m= |
+
+=@every= exists for things that do not fit a wall-clock grid. A bare number means minutes, so =@every 90= is an hour and a half.
+
+** The day-of-month / day-of-week trap
+
+When *both* day fields are restricted, cron matches *either* — not both. =0 0 1 * mon= fires on the 1st of every month *and* on every Monday. That surprises people, but it is what every other cron does, and quietly using intersection instead would make that expression fire almost never.
+
+When only one is restricted, that one gates normally.
+
+** Checking an expression before trusting it
+
+A wrong cron expression is silent: nothing errors, the job just never runs, or runs seven times more often than you meant, and you find out weeks later. So read it back in English first:
+
+#+begin_src elisp
+(cmacs-brigade-schedule-describe "0 8 * * 1-5")
+;; => "at 08:00, on Monday, Tuesday, Wednesday, Thursday and Friday"
+
+(cmacs-brigade-schedule-next-runs "0 8 * * 1-5" 3)
+#+end_src
+
+Both are also tools, so the model can check its own work — see below.
+
+* Having the AI set one up
+
+#+begin_src elisp
+M-x cmacs-brigade-schedule-from-prompt
+#+end_src
+
+Describe what you want in your own words — /"every weekday at 8am, summarise my unread mail and flag anything needing a reply"/ — and it asks a model to turn that into a cron expression and a prompt, then shows you what it would actually do:
+
+#+begin_example
+Weekday mail briefing
+
+  cron    0 8 * * 1-5
+  means   at 08:00, on Monday, Tuesday, Wednesday, Thursday and Friday
+  agent   triage
+  tools   mail_search, memory_search
+
+  next runs
+    2026-08-05 Wed 08:00
+    2026-08-06 Thu 08:00
+    ...
+#+end_example
+
+Nothing is written until you agree. The confirmation is the point: the model is good at cron and still occasionally puts the hour in the minute field, and =8 0 * * 1-5= is a job that runs at ten past midnight forever without ever complaining.
+
+** From inside a conversation
+
+Any agent with the =schedule= tool group can do the same thing:
+
+| Tool | What it does |
+|------+--------------|
+| =schedule_list= | every schedule, what it runs, when it next fires |
+| =schedule_preview= | a cron expression in English plus its next few runs |
+| =schedule_create= | create one |
+| =schedule_set_enabled= | park or resume one |
+| =schedule_delete= | remove one |
+
+=schedule_preview= is deliberately free and unconfirmed so the model is not discouraged from checking itself. The three that change things are =:destructive= and =:confirm 'ask=: creating a recurring job commits you to spend on a timer, which is precisely the kind of thing that should not happen because a model thought it sounded helpful.
+
+* Seeing what is scheduled
+
+=M-x cmacs-brigade-schedules= lists everything with its next and last run. The same information is a dashboard panel, registered through the public =cmacs-brigade-register-panel=, so it sits alongside the live agents.
+
+=M-x cmacs-brigade-schedule-run-now= fires one immediately without waiting — the thing you want while writing the prompt.
+
+* Missed runs
+
+When cmacs was not running at 3am, the 3am job did not run. What happens next is =:CATCHUP:=, or =cmacs-brigade-schedule-catchup= for the default:
+
+- =skip= (the default) forgets it. The common missed run is an overnight one whose moment has passed; an 8am briefing delivered at 6pm is noise.
+- =run= fires it once at startup, however many were missed.
+
+=cmacs-brigade-schedule-catchup-grace= (default one day) bounds it either way: a machine that was off for a month does not wake up and fire a month of backlog.
+
+Last-fire times are persisted to =cmacs-brigade-schedule-state-file=, so this survives a restart rather than either re-running everything or silently losing the fact that anything was missed.
+
+* Reacting to a run
+
+=cmacs-brigade-schedule-fired-functions= is an abnormal hook run with the schedule and the new task id. Everything downstream is an ordinary brigade task, so [[file:notifications.org][notifications]] already cover completion, failure and the away digest without any scheduling-specific wiring.
+
+* Configuration
+
+#+begin_src elisp
+(setq cmacs-brigade-schedule-file        nil   ; schedules.org in the plan dir
+      cmacs-brigade-schedule-log-file    nil   ; schedule-runs.org beside it
+      cmacs-brigade-schedule-state-file  nil   ; schedules.eld in the state dir
+      cmacs-brigade-schedule-tag         "brigade_schedule"
+      cmacs-brigade-schedule-catchup     'skip
+      cmacs-brigade-schedule-catchup-grace 86400)
+#+end_src
+
+The tag is underscored on purpose: org tags are drawn from =[[:alnum:]_@#%]=, so a hyphenated tag silently is not a tag at all — it stays part of the heading text and turns up in the title.
+
+Fired runs are appended to the log file as ordinary tasks, kept separate from the schedules so a year of history does not bury the half-dozen headlines you actually edit.
+
+* See also
+
+- [[file:notifications.org][Notifications and voice]] — finding out what a scheduled run did
+- [[file:agents.org][Agents]] — what a schedule derives from
+- [[file:plan.org][Plans]] — the task model a fired schedule becomes
+- [[file:extending.org][Extending the brigade]] — the registries used here

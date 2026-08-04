@@ -26,6 +26,7 @@ one form lights it up on all three delivery paths at once.
 * Brigade Probing::             Detecting the feature at runtime.
 * Brigade Extending::           Registering your own capabilities.
 * Brigade Notifications::       Being told when it finishes; voice.
+* Brigade Scheduling::          Running a prompt on a cron schedule.
 @end menu
 
 @node Brigade Overview
@@ -278,3 +279,114 @@ to hear the status.
 
 @xref{Top,,, cmacs, the org manual}, file
 @file{doc_org/cmacs/ai-brigade/notifications.org}, for the full chapter.
+
+@node Brigade Scheduling
+@section Scheduled runs
+
+A schedule is a prompt, a provider and model, a tool allowlist, and a
+time to fire.  When it fires it creates an ordinary brigade task, so
+tools, budgets, isolation, the dashboard and notifications all work for a
+scheduled run without knowing it was scheduled.
+
+@example
+(cmacs-brigade-schedule-mode 1)
+@end example
+
+Loading cmacs arms nothing: the tools and dashboard panel register at
+load, but no schedule fires until the mode is on.
+
+Schedules are org headlines, for the same reason plans are---greppable,
+refilable, diffable, and visible to @code{org-agenda} for free.  The
+headline is the description, the body is the prompt, the properties are
+the schedule.
+
+@example
+* Weekday mail briefing                          :brigade_schedule:
+  :PROPERTIES:
+  :CRON:   0 8 * * 1-5
+  :AGENT:  triage
+  :MODEL:  claude/claude-sonnet-4-6
+  :TOOLS:  mail_search, mail_read, memory_search
+  :BUDGET: 0.25
+  :END:
+  Summarise anything that arrived overnight.
+@end example
+
+Recognised properties are @code{:CRON:} (required), @code{:AGENT:},
+@code{:MODEL:}, @code{:TOOLS:}, @code{:BUDGET:}, @code{:ISOLATION:},
+@code{:WORKER:}, @code{:CATCHUP:}, @code{:ENABLED:} and @code{:DESC:}.  A
+headline without @code{:CRON:} is not a schedule---a schedule file is
+still an org file, and prose headings in it stay prose.
+
+Model and tool selection works by deriving an agent from the named one,
+applying the overrides, and registering it through the ordinary
+@code{cmacs-brigade-register-agent}.  A schedule can therefore express
+exactly what a hand-written agent definition can, and nothing it could
+not.
+
+@subsection The cron dialect
+
+Five fields---minute, hour, day-of-month, month, day-of-week---each
+taking @samp{*}, a number, a list, a range, a step (@samp{*/15},
+@samp{0-12/6}, @samp{5/6} meaning ``from 5 onwards''), or a name.
+@samp{?} is a synonym for @samp{*}, and 0 and 7 are both Sunday.
+
+Month and day names match as a prefix of at least three letters
+(@samp{jan}, @samp{january}), and the whole word must be that
+prefix---@samp{monkey} and @samp{jan1} are rejected rather than quietly
+read as Monday and January.
+
+Macros: @code{@@yearly}, @code{@@monthly}, @code{@@weekly},
+@code{@@daily}, @code{@@hourly}, @code{@@reboot}, and
+@code{@@every N} followed by @samp{s}, @samp{m}, @samp{h}, @samp{d} or
+@samp{w} for intervals that do not fit a wall-clock grid.
+
+@strong{The day-field trap.}  When both day fields are restricted, cron
+matches @emph{either}---@samp{0 0 1 * mon} fires on the 1st @emph{and}
+every Monday.  That surprises people, but it is what every other cron
+does, and using intersection instead would make the expression fire
+almost never.
+
+@subsection Having the AI set one up
+
+@code{M-x cmacs-brigade-schedule-from-prompt} takes a request in plain
+words, asks a model to turn it into a cron expression and a prompt, and
+shows what that would actually do---the expression in English plus its
+next five firing times---before writing anything.  The confirmation is
+the point: a model is good at cron and still occasionally puts the hour
+in the minute field, and @samp{8 0 * * 1-5} runs at ten past midnight
+forever without ever complaining.
+
+Agents with the @code{schedule} tool group get @code{schedule_list},
+@code{schedule_preview}, @code{schedule_create},
+@code{schedule_set_enabled} and @code{schedule_delete}.
+@code{schedule_preview} is unconfirmed so the model is not discouraged
+from checking itself; the three that change things are
+@code{:destructive} and confirmed, because creating a recurring job
+commits the user to spend on a timer.
+
+@subsection Missed runs
+
+@code{:CATCHUP:} decides what happens to a fire missed while cmacs was
+not running: @code{skip} (the default) forgets it, @code{run} fires it
+once at startup.  @code{cmacs-brigade-schedule-catchup-grace} bounds it
+either way, so a machine off for a month does not wake up and fire a
+month of backlog.
+
+@defun cmacs-brigade-schedule-describe cron
+Return @var{cron} in English.
+@end defun
+
+@defun cmacs-brigade-schedule-next-runs cron n
+Return the next @var{n} times @var{cron} fires.
+@end defun
+
+@defun cmacs-brigade-schedule-add title cron prompt &rest props
+Append a schedule and return its id.  @var{props} may carry
+@code{:agent}, @code{:model}, @code{:tools}, @code{:budget},
+@code{:isolation}, @code{:worker}, @code{:catchup} and
+@code{:description}.
+@end defun
+
+@xref{Top,,, cmacs, the org manual}, file
+@file{doc_org/cmacs/ai-brigade/scheduling.org}, for the full chapter.

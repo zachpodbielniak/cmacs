@@ -251,7 +251,8 @@ was updated alongside the code."
       (should (string-search fn text)))
     ;; and the tools an agent is actually given
     (dolist (tool '("memory_search" "memory_get" "memory_stats"
-                    "mail_search" "mail_read" "deliverable_emit"))
+                    "mail_search" "mail_read" "deliverable_emit"
+                    "schedule_create" "schedule_preview" "schedule_list"))
       (should (string-search tool text)))))
 
 (ert-deftest cmacs-brigade-docs-mirrored-in-texinfo ()
