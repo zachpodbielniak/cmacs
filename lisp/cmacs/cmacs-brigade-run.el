@@ -25,20 +25,16 @@
 (require 'cmacs-brigade-isolation)
 (require 'cl-lib)
 (require 'subr-x)
+;; Required, not declared.  `declare-function' satisfies the byte-compiler
+;; and loads nothing, so the inproc worker died on a void
+;; `cmacs-ai-make-session' the first time anyone pressed s.  The subsystem
+;; hard-requires --with-cmacs-ai at configure time, so this is not
+;; optional and must not be guarded as if it were.
+(require 'cmacs-ai)
+(require 'cmacs-brigade-tools)
 
-;; cmacs-ai is a hard requirement of the subsystem but a soft one of this
-;; file: the subprocess workers do not touch it, so it is declared rather
-;; than required and the inproc worker checks at start time.
-(declare-function cmacs-ai-make-session "cmacs-ai")
-(declare-function cmacs-ai-free-session "cmacs-ai")
-(declare-function cmacs-ai-tools-new "cmacs-ai-tools.c")
-(declare-function cmacs-ai-tools-free "cmacs-ai-tools.c")
-(declare-function cmacs-ai-tools-run-async "cmacs-ai-tools.c")
-(declare-function cmacs-ai-session-append-message "cmacs-ai-session.c")
-(declare-function cmacs-ai-chat-cancel "cmacs-ai-stream.c")
-(declare-function cmacs-brigade-install-tools "cmacs-brigade-tools")
 (declare-function cmacs-brigade-plan-adopt "cmacs-brigade-plan")
-(defvar cmacs-ai-default-provider)
+(declare-function cmacs-brigade-plan-task-prompt "cmacs-brigade-plan")
 
 (defcustom cmacs-brigade-max-concurrent 4
   "How many agents may run at once.
@@ -46,10 +42,33 @@ Beyond this, tasks stay queued until a slot frees."
   :type 'integer
   :group 'cmacs-brigade)
 
-(defcustom cmacs-brigade-worker 'claude-code
-  "Default execution backend for an agent that does not name one."
+(defcustom cmacs-brigade-worker 'inproc
+  "Worker used when neither the agent nor its provider implies one.
+
+Only consulted last: an agent that names a worker gets it, and a model
+naming a CLI provider (`claude-code/opus\=') gets that CLI's worker, since
+running a CLI provider through the in-process tool loop would silently
+drop every tool -- the CLI clients ignore the tools argument and take
+them over MCP instead."
   :type 'symbol
   :group 'cmacs-brigade)
+
+(defconst cmacs-brigade-cli-providers
+  '((claude-code . claude-code)
+    (opencode    . opencode)
+    (claude-tmux . claude-code))
+  "Providers that are a CLI, and the worker each implies.")
+
+(defun cmacs-brigade-resolve-worker (agent)
+  "Return the worker AGENT should run under.
+
+An explicit `worker:\=' in the definition wins; otherwise a CLI provider
+in the model string picks its own worker; otherwise
+`cmacs-brigade-worker\='."
+  (or (plist-get agent :worker)
+      (alist-get (car (cmacs-brigade--split-model (plist-get agent :model)))
+                 cmacs-brigade-cli-providers)
+      cmacs-brigade-worker))
 
 (defcustom cmacs-brigade-claude-program "claude"
   "Program used by the `claude-code' worker."
@@ -80,11 +99,17 @@ Beyond this, tasks stay queued until a slot frees."
                ;; The prompt arrives on stdin rather than argv: prompts
                ;; routinely exceed ARG_MAX, and argv is world-readable.
                (when config (list "--mcp-config" config))
+               ;; The bare name: the provider prefix is ours, not the
+               ;; CLI's, and passing "claude-code/opus" through as
+               ;; --model asks for a model that does not exist.
                (when model (list "--model"
-                                 (string-remove-prefix "claude/" model)))))
+                                 (cdr (cmacs-brigade--split-model model))))))
       ('opencode
        (append (list cmacs-brigade-opencode-program "run" "--format" "json")
-               (when model (list "--model" model))))
+               ;; Everything after the first slash, so opencode's own
+               ;; "vendor/model" spelling survives ours.
+               (when model (list "--model"
+                                 (cdr (cmacs-brigade--split-model model))))))
       ('shell (list "bash" "-c" (format "cat %s | bash"
                                         (shell-quote-argument prompt-file))))
       (_ (user-error "cmacs-brigade: %s has no subprocess form" worker)))))
@@ -175,12 +200,15 @@ works, and so does a name that itself contains a slash after the first."
           model)))
 
 (defun cmacs-brigade--worker-inproc (task-id agent prompt _cwd _env _endpoint)
-  "Run AGENT's turn for TASK-ID inside cmacs.  Returns the run state."
+  "Run AGENT's turn for TASK-ID inside cmacs.  Returns the run state.
+
+PROMPT is the task text only: the agent's own instructions go in as the
+session's system prompt, so they are not repeated inside the user turn."
   (unless (fboundp 'cmacs-ai-tools-run-async)
     (user-error "cmacs-brigade: the inproc worker needs --with-cmacs-ai"))
   (let* ((split (cmacs-brigade--split-model (plist-get agent :model)))
          (pair (cmacs-ai-make-session (car split) (cdr split)
-                                      (plist-get agent :prompt)))
+                                      (cmacs-brigade--system-prompt agent)))
          (executor (cmacs-ai-tools-new))
          (allowlist (cmacs-brigade-agent-allowlist agent)))
     (condition-case err
@@ -293,7 +321,7 @@ works, and so does a name that itself contains a slash after the first."
   "Actually start TASK-ID with AGENT."
   (let* ((isolation (or (plist-get agent :isolation) 'none))
          (allowlist (cmacs-brigade-agent-allowlist agent))
-         (worker-name (or (plist-get agent :worker) cmacs-brigade-worker))
+         (worker-name (cmacs-brigade-resolve-worker agent))
          (worker (cmacs-brigade-registry-get 'worker worker-name))
          prepared endpoint proc)
     (unless worker
@@ -314,7 +342,9 @@ works, and so does a name that itself contains a slash after the first."
           (setq endpoint (cmacs-brigade-host-provision task-id allowlist))
           (setq proc (funcall (plist-get worker :start)
                               task-id agent
-                              (cmacs-brigade--build-prompt record agent)
+                              (if (eq worker-name 'inproc)
+                                  (cmacs-brigade--task-prompt record)
+                                (cmacs-brigade--build-prompt record agent))
                               (plist-get prepared :cwd)
                               (plist-get prepared :env)
                               endpoint))
@@ -335,8 +365,8 @@ works, and so does a name that itself contains a slash after the first."
                                       (error-message-string err))
        nil))))
 
-(defun cmacs-brigade--build-prompt (record agent)
-  "Assemble the prompt for RECORD run by AGENT."
+(defun cmacs-brigade--system-prompt (agent)
+  "The standing instructions for AGENT: its own prompt plus context."
   (let ((parts (list (plist-get agent :prompt))))
     ;; Context providers are a public registry, so a configuration can
     ;; inject whatever it wants here without patching this function.
@@ -345,8 +375,29 @@ works, and so does a name that itself contains a slash after the first."
              (text (ignore-errors (funcall (plist-get p :provide) agent))))
         (when (and text (not (string-empty-p text)))
           (push text parts))))
-    (push (or (plist-get record :prompt) "") parts)
     (string-join (nreverse (delq nil parts)) "\n\n")))
+
+(defun cmacs-brigade--task-prompt (record)
+  "The task text for RECORD.
+
+Not `(plist-get record :prompt)\=': the record comes from the C state
+table, which holds runtime fields only and has never had a prompt in it.
+Reading it from there silently produced an empty task, so every agent ran
+with its standing instructions and no work to do."
+  (or (cmacs-brigade-plan-task-prompt (plist-get record :plan)
+                                      (plist-get record :id))
+      ""))
+
+(defun cmacs-brigade--build-prompt (record agent)
+  "Assemble one prompt blob for RECORD run by AGENT.
+
+For the CLI workers, which take a single blob on stdin.  The in-process
+worker keeps the two apart -- see `cmacs-brigade--worker-inproc\=' -- so
+the agent\='s instructions land in the system prompt rather than being
+repeated inside the user turn."
+  (string-join (delq nil (list (cmacs-brigade--system-prompt agent)
+                               (cmacs-brigade--task-prompt record)))
+               "\n\n"))
 
 (defun cmacs-brigade--drain-queue ()
   "Start whatever queued tasks now fit."

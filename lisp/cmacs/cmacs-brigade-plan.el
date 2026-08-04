@@ -235,8 +235,14 @@ forgotten to set one."
          base (substring id 0 (min 8 (length id)))
          (list :model (plist-get entry :model)
                :tools (cmacs-brigade-plan--tools (plist-get entry :tools))
-               :budget-usd (when-let* ((b (plist-get entry :budget)))
-                             (string-to-number b))
+               ;; 0 means "no ceiling", which is what not setting one
+               ;; means too -- so it is not an override, and treating it
+               ;; as one would derive an agent for every task the
+               ;; template produces.
+               :budget-usd (when-let* ((b (plist-get entry :budget))
+                                       (n (string-to-number b))
+                                       ((> n 0)))
+                             n)
                :isolation (when-let* ((i (plist-get entry :isolation)))
                             (intern i))))
       ;; An unknown base agent is reported by the runner with a clear
@@ -252,6 +258,28 @@ forgotten to set one."
   (when (and s (not (string-empty-p (string-trim s))))
     (mapcar #'intern (split-string s "[, \t]+" t))))
 
+(defvar cmacs-brigade-plan--prompt-cache (make-hash-table :test 'equal)
+  "Task id -> prompt, filled at adopt.
+
+A cache, not the record: the plan file owns the prompt.  This only
+covers plans that have no file to re-read -- an adopted buffer that was
+never saved -- and saves a file read on the common path.")
+
+(defun cmacs-brigade-plan-task-prompt (plan id)
+  "Return the prompt body for task ID in PLAN.
+
+Read back from the org file rather than carried on the runtime record:
+the record is C-owned and holds runtime fields only, and the prompt is
+intent.  Falls back to what adopt saw, for a plan with no file."
+  (or (and plan (stringp plan) (file-readable-p plan)
+           (with-current-buffer (find-file-noselect plan)
+             (save-excursion
+               (let ((marker (gethash id (cmacs-brigade-plan--id-index))))
+                 (when marker
+                   (goto-char marker)
+                   (cmacs-brigade-plan--entry-body))))))
+      (gethash id cmacs-brigade-plan--prompt-cache)))
+
 (defun cmacs-brigade-plan--adopt-entry (id plan)
   "Adopt the entry at point under ID, applying any pending command."
   (let* ((entry (cmacs-brigade-plan--read-entry))
@@ -264,6 +292,8 @@ forgotten to set one."
          (agent (cmacs-brigade-plan--effective-agent entry id))
          (record (cmacs-brigade-task-adopt id plan agent
                                            (plist-get entry :title)))
+         (_ (puthash id (plist-get entry :prompt)
+                     cmacs-brigade-plan--prompt-cache))
          (current (plist-get record :state))
          (wanted (alist-get (or (plist-get entry :keyword) "TODO")
                             cmacs-brigade-plan-keyword->command

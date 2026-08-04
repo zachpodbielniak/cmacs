@@ -184,8 +184,10 @@ indented `- item' lines.  Comments and blank lines are skipped."
           :isolation (or (cmacs-brigade-agent--as-symbol
                           (alist-get 'isolation fm))
                          'none)
-          :worker (or (cmacs-brigade-agent--as-symbol (alist-get 'worker fm))
-                      'inproc)
+          ;; Left nil when unspecified on purpose: `cmacs-brigade-resolve-worker'
+          ;; then gets to pick from the provider, and a default baked in
+          ;; here would look like a deliberate choice and override it.
+          :worker (cmacs-brigade-agent--as-symbol (alist-get 'worker fm))
           :budget-usd (or (alist-get 'budget-usd fm)
                           cmacs-brigade-default-budget-usd)
           :max-turns (or (alist-get 'max-turns fm)

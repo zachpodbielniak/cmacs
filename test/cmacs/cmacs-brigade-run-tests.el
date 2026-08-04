@@ -11,6 +11,8 @@
 (require 'cmacs-brigade-isolation nil 'noerror)
 (require 'cmacs-brigade-run nil 'noerror)
 (require 'cmacs-brigade-agent-def nil 'noerror)
+(require 'cmacs-brigade-plan nil 'noerror)
+(require 'cl-lib)
 (require 'cmacs-brigade-dashboard nil 'noerror)
 
 (defun cmacs-brigade-run-tests--available-p ()
@@ -210,14 +212,19 @@ The dashboard is how someone would notice the panel is broken."
       (should (functionp (plist-get def :cancel))))))
 
 (ert-deftest cmacs-brigade-default-agent-worker-is-runnable ()
-  "The worker an agent gets by default must actually be registered.
+  "Whatever worker an agent resolves to must actually be registered.
 
-The two defaults are set in different files; nothing otherwise notices
-when they stop agreeing."
+A definition naming none leaves :worker nil on purpose, so the resolver
+gets to pick from the provider; the thing that must hold is that the
+answer exists, whichever way it was reached."
   (skip-unless (featurep 'cmacs-brigade-run))
-  (let ((agent (cmacs-brigade-agent--from-text
-                "---\nname: worker-default-test\n---\nbody" nil)))
-    (should (cmacs-brigade-registry-get 'worker (plist-get agent :worker))))
+  (dolist (front '("" "model: claude/sonnet\n" "model: claude-code/opus\n"
+                   "worker: shell\n"))
+    (let ((agent (cmacs-brigade-agent--from-text
+                  (format "---\nname: worker-default-test\n%s---\nbody" front)
+                  nil)))
+      (should (cmacs-brigade-registry-get
+               'worker (cmacs-brigade-resolve-worker agent)))))
   (should (cmacs-brigade-registry-get 'worker cmacs-brigade-worker)))
 
 (ert-deftest cmacs-brigade-start-dispatches-to-the-worker ()
@@ -295,6 +302,183 @@ a `delete-process' aimed at whatever it did return."
                  '(openai . "org/model-x")))
   (should (equal (cdr (cmacs-brigade--split-model "gpt-oss:20b"))
                  "gpt-oss:20b")))
+
+
+;;;; End to end
+;;
+;; The unit tests above all passed while the pipeline was broken in three
+;; separate places, because each half worked in isolation.  These run a
+;; task the whole way through: adopt the org, resolve the agent, dispatch
+;; to a worker, run it, and come back out through the finished hook.
+
+(defmacro cmacs-brigade-run-tests--with-plan (body-text &rest forms)
+  "Adopt a one-task plan whose prompt is BODY-TEXT, then run FORMS.
+Binds `id' to the task id and `plan-file' to the file."
+  (declare (indent 1))
+  `(let* ((dir (make-temp-file "brigade-e2e" t))
+          (plan-file (expand-file-name "p.org" dir))
+          (cmacs-brigade-plan-directory dir))
+     (unwind-protect
+         (progn
+           (with-temp-file plan-file
+             (insert "#+title: e2e\n" cmacs-brigade-plan-todo-line "\n\n"
+                     "* TODO Smoke  :brigade:\n  :PROPERTIES:\n"
+                     "  :AGENT: e2e-agent\n  :END:\n  " ,body-text "\n"))
+           (with-current-buffer (find-file-noselect plan-file)
+             (let ((id (plist-get (car (cmacs-brigade-plan-adopt)) :id)))
+               (ignore id)
+               ,@forms)))
+       (dolist (b (buffer-list))
+         (when (and (buffer-file-name b)
+                    (string-prefix-p dir (buffer-file-name b)))
+           (with-current-buffer b (set-buffer-modified-p nil))
+           (kill-buffer b)))
+       (delete-directory dir t))))
+
+(ert-deftest cmacs-brigade-e2e-shell-worker-runs-a-task ()
+  "Adopt a plan, start it, and get the task's own output back.
+
+The marker is the point: it can only appear if the *task* prompt reached
+the worker.  It did not for a long time -- `cmacs-brigade--build-prompt'
+read :prompt off the C runtime record, which has no such field, so every
+agent ran with its standing instructions and no work to do, exited 0, and
+reported success."
+  (skip-unless (and (cmacs-brigade-run-tests--available-p)
+                    (executable-find "bash")))
+  (cmacs-brigade-register-agent
+   :name 'e2e-agent :prompt "# standing instructions"
+   :worker 'shell :isolation 'none)
+  (let (finished)
+    (let ((cmacs-brigade-run-finished-functions
+           (list (lambda (i st out) (setq finished (list i st out))))))
+      (cmacs-brigade-run-tests--with-plan "echo BRIGADE_E2E_OK"
+        (cmacs-brigade-task-transition id 'queued)
+        (should (cmacs-brigade-start-task id))
+        (let ((deadline (+ (float-time) 20)))
+          (while (and (null finished) (< (float-time) deadline))
+            (accept-process-output nil 0.05)))
+        (should finished)
+        (should (equal id (nth 0 finished)))
+        (should (eq 'done (nth 1 finished)))
+        (should (string-match-p "BRIGADE_E2E_OK" (or (nth 2 finished) "")))
+        (should (eq 'done (plist-get (cmacs-brigade-task-get id) :state)))
+        ;; and it cleaned up after itself.  This task specifically:
+        ;; the global count picks up runs other tests left behind.
+        (should-not (gethash id cmacs-brigade--runs))))))
+
+(ert-deftest cmacs-brigade-task-prompt-comes-from-the-plan ()
+  "The prompt is read back from the org file, not from the record."
+  (skip-unless (cmacs-brigade-run-tests--available-p))
+  (cmacs-brigade-register-agent :name 'e2e-agent :prompt "sys"
+                                :worker 'shell :isolation 'none)
+  (cmacs-brigade-run-tests--with-plan "the actual task text"
+    (let ((rec (cmacs-brigade-task-get id)))
+      (should (equal "the actual task text"
+                     (cmacs-brigade--task-prompt rec)))
+      ;; the blob a CLI worker gets carries both, in that order
+      (let ((blob (cmacs-brigade--build-prompt
+                   rec (cmacs-brigade-agent-get 'e2e-agent))))
+        (should (string-match-p "sys" blob))
+        (should (string-match-p "the actual task text" blob))
+        (should (< (string-match "sys" blob)
+                   (string-match "the actual" blob)))))))
+
+(ert-deftest cmacs-brigade-e2e-inproc-splits-system-from-task ()
+  "The inproc worker sends standing instructions as the system prompt.
+
+Concatenating them into the user turn as well is not merely untidy: the
+agent then reads its own instructions as part of the request."
+  (skip-unless (cmacs-brigade-run-tests--available-p))
+  (cmacs-brigade-register-agent
+   :name 'e2e-agent :prompt "standing instructions"
+   :model "claude/some-model" :worker 'inproc :isolation 'none)
+  (let (system-got user-got finished)
+    (cl-letf (((symbol-function 'cmacs-ai-make-session)
+               (lambda (_p _m &optional sys) (setq system-got sys) (cons 1 2)))
+              ((symbol-function 'cmacs-ai-free-session) #'ignore)
+              ((symbol-function 'cmacs-ai-tools-new) (lambda () 99))
+              ((symbol-function 'cmacs-ai-tools-free) #'ignore)
+              ((symbol-function 'cmacs-brigade-install-tools)
+               (lambda (&rest _) 0))
+              ((symbol-function 'cmacs-ai-session-append-message)
+               (lambda (_s _role text) (setq user-got text)))
+              ((symbol-function 'cmacs-ai-tools-run-async)
+               (lambda (_s _e cb) (funcall cb '(:text "stub reply")))))
+      (let ((cmacs-brigade-run-finished-functions
+             (list (lambda (i st out) (setq finished (list i st out))))))
+        (cmacs-brigade-run-tests--with-plan "do the task"
+          (cmacs-brigade-task-transition id 'queued)
+          (should (cmacs-brigade-start-task id))
+          (should (equal system-got "standing instructions"))
+          (should (equal user-got "do the task"))
+          (should (eq 'done (nth 1 finished)))
+          (should (equal "stub reply" (nth 2 finished))))))))
+
+(ert-deftest cmacs-brigade-e2e-inproc-reports-a-failure ()
+  "An error from the tool loop fails the task with its message."
+  (skip-unless (cmacs-brigade-run-tests--available-p))
+  (cmacs-brigade-register-agent :name 'e2e-agent :prompt "s"
+                                :model "claude/m" :worker 'inproc
+                                :isolation 'none)
+  (let (finished)
+    (cl-letf (((symbol-function 'cmacs-ai-make-session)
+               (lambda (&rest _) (cons 1 2)))
+              ((symbol-function 'cmacs-ai-free-session) #'ignore)
+              ((symbol-function 'cmacs-ai-tools-new) (lambda () 99))
+              ((symbol-function 'cmacs-ai-tools-free) #'ignore)
+              ((symbol-function 'cmacs-brigade-install-tools) (lambda (&rest _) 0))
+              ((symbol-function 'cmacs-ai-session-append-message) #'ignore)
+              ((symbol-function 'cmacs-ai-tools-run-async)
+               (lambda (_s _e cb) (funcall cb '(:error "no API key")))))
+      (let ((cmacs-brigade-run-finished-functions
+             (list (lambda (i st out) (setq finished (list i st out))))))
+        (cmacs-brigade-run-tests--with-plan "x"
+          (cmacs-brigade-task-transition id 'queued)
+          (cmacs-brigade-start-task id)
+          (should (eq 'failed (nth 1 finished)))
+          (should (eq 'failed (plist-get (cmacs-brigade-task-get id) :state)))
+          (should (string-match-p "no API key"
+                                  (plist-get (cmacs-brigade-task-get id)
+                                             :error))))))))
+
+
+;;;; Worker resolution
+
+(ert-deftest cmacs-brigade-provider-picks-the-cli-worker ()
+  "A CLI provider implies its own worker.
+
+Running a CLI provider through the in-process tool loop silently drops
+every tool -- the CLI clients ignore the tools argument and take them
+over MCP -- so picking `claude-code' as the provider has to pick the
+claude-code worker too."
+  (skip-unless (featurep 'cmacs-brigade-run))
+  (should (eq 'claude-code
+              (cmacs-brigade-resolve-worker '(:model "claude-code/opus"))))
+  (should (eq 'opencode
+              (cmacs-brigade-resolve-worker '(:model "opencode/gpt-5"))))
+  ;; An HTTP provider keeps the in-process worker.
+  (should (eq 'inproc
+              (cmacs-brigade-resolve-worker '(:model "claude/sonnet"))))
+  ;; An explicit worker always wins.
+  (should (eq 'shell
+              (cmacs-brigade-resolve-worker
+               '(:model "claude-code/opus" :worker shell))))
+  ;; Every worker a provider can imply must actually exist.
+  (dolist (cell cmacs-brigade-cli-providers)
+    (should (cmacs-brigade-registry-get 'worker (cdr cell)))))
+
+(ert-deftest cmacs-brigade-cli-model-arg-is-the-bare-name ()
+  "The provider prefix is ours, not the CLI's."
+  (skip-unless (featurep 'cmacs-brigade-run))
+  (let ((argv (cmacs-brigade--worker-command
+               'claude-code '(:model "claude-code/opus") "/tmp/p" nil)))
+    (should (member "--model" argv))
+    (should (member "opus" argv))
+    (should-not (member "claude-code/opus" argv)))
+  ;; opencode spells its own models "vendor/model"; only our prefix goes.
+  (let ((argv (cmacs-brigade--worker-command
+               'opencode '(:model "opencode/anthropic/claude-3") "/tmp/p" nil)))
+    (should (member "anthropic/claude-3" argv))))
 
 (provide 'cmacs-brigade-run-tests)
 

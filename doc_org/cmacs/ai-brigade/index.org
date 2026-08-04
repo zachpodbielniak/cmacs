@@ -29,6 +29,41 @@ hook, that hook is public.
 
 See [[file:extending.org][Extending the brigade]] — that is the document that matters.
 
+* Your first run
+
+#+begin_src elisp
+M-x cmacs-brigade          ; the dashboard
+#+end_src
+
+Then, from the dashboard:
+
+1. =c= — create a plan. You get one example task using the shipped =researcher= agent.
+2. =RET= — jump to it and replace the body with what you actually want done. The body /is/ the prompt.
+3. =m= — pick a provider and model, if you do not want the agent's default.
+4. Save the plan (=C-x C-s=), which adopts it, then =g= back on the dashboard.
+5. =s= — start it.
+
+The =ST= column tracks it; an error appears under the row. Nothing else needs configuring: agent definitions load themselves, and a task with no explicit worker runs in-process against the provider's API.
+
+** What a failure means
+
+| Message | Cause |
+|---------+-------|
+| =Authentication failed (HTTP 401)= | no API key for that provider — either export one or pick a CLI provider with =m= |
+| =no agent definition named X= | the definition is not on `cmacs-brigade-agent-path'; press =A= to reload |
+| =unknown worker X= | a =worker:= in the definition naming something unregistered |
+| =unavailable isolation= | =worktree= needs git, =podman= needs podman |
+
+** Choosing how it runs
+
+The model string is =provider/model=. Which provider you name decides how the agent runs:
+
+- =claude/claude-sonnet-4-6= — an HTTP provider, so it runs in-process, and tools are handed to it directly.
+- =claude-code/opus= — a CLI provider, so it runs the =claude= CLI and tools go over a scoped MCP config instead.
+
+You do not have to pick a worker; naming the provider is enough. See [[file:agents.org][Agents]] if you want to override that.
+
+
 * Contents
 
 | Document                | Covers                                            |

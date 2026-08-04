@@ -514,6 +514,42 @@ shipped before anyone hit one."
                       bad)))))))
     (should (equal nil bad))))
 
+
+(ert-deftest cmacs-brigade-declared-cmacs-functions-are-loaded ()
+  "Every cmacs- function the brigade declares must be bound after load.
+
+`declare-function' satisfies the byte-compiler and loads nothing, so a
+declared-but-never-required function compiles clean, passes every unit
+test that stubs it, and dies the first time a human presses a key.  That
+shipped four times: cmacs-brigade-run itself, cmacs-evil, and twice for
+cmacs-ai.
+
+Only cmacs- symbols are checked.  Declarations for optional subsystems
+\(piper, whisper\) are legitimately unbound in a build without them, and
+those are all guarded at their call sites."
+  (skip-unless (featurep 'cmacs-brigade))
+  ;; Load everything a user reaches interactively, not just the eager set.
+  (dolist (f '(cmacs-brigade-dashboard cmacs-brigade-plan
+               cmacs-brigade-schedule cmacs-brigade-run))
+    (require f nil 'noerror))
+  (let ((optional '("piper" "whisper" "audio" "libregnum" "imgedit"
+                    "vidstudio" "transcribe" "mu4e" "libreclaw"))
+        bad)
+    (dolist (file (cmacs-brigade-tests--elisp-files))
+      (with-temp-buffer
+        (insert-file-contents file)
+        (goto-char (point-min))
+        (while (re-search-forward "^(declare-function \\([^ \t\n)]+\\)" nil t)
+          (let ((name (match-string 1)))
+            (when (and (string-prefix-p "cmacs-" name)
+                       (not (cl-some (lambda (o) (string-match-p o name))
+                                     optional))
+                       (not (fboundp (intern name))))
+              (push (format "%s (declared in %s)" name
+                            (file-name-nondirectory file))
+                    bad))))))
+    (should (equal nil (sort (delete-dups bad) #'string<)))))
+
 (provide 'cmacs-brigade-tests)
 
 ;;; cmacs-brigade-tests.el ends here

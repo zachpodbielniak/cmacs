@@ -157,6 +157,8 @@ A worker decides /how/ an agent runs. Four ship, and all four are registered thr
 | =opencode= | drives the =opencode= CLI |
 | =shell= | pipes the prompt to bash; mostly for testing |
 
+*You rarely name a worker.* It is resolved in this order: an explicit =worker:= in the definition, then the worker implied by the model's provider (=claude-code/= and =opencode/= pick their own CLI), then =cmacs-brigade-worker=. Running a CLI provider through the in-process loop would silently drop every tool — the CLI clients ignore the tools argument and take them over MCP — so the provider gets to decide.
+
 =inproc= is the default because it is the one that honours =:MODEL:= and the tool allowlist directly: the executor is built from the allowlist, so the agent cannot name a tool that was not installed. The loop itself runs on an ai-glib worker thread and reports back through the dispatch callback registry, so the editor is never blocked — which matters more than usual under =--gowl=, where the editor is the compositor.
 
 The CLI workers get their tools over MCP instead, through a scoped =.mcp.json= — see [[file:mcp.org][MCP]].

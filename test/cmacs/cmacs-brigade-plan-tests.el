@@ -16,6 +16,7 @@
 (require 'cmacs-brigade nil 'noerror)
 (require 'cmacs-brigade-plan nil 'noerror)
 (require 'cmacs-brigade-agent-def nil 'noerror)
+(require 'cmacs-brigade-run nil 'noerror)
 
 (defun cmacs-brigade-plan-tests--available-p ()
   (and (featurep 'cmacs-brigade-plan)
@@ -64,7 +65,11 @@ Binds FILE and BUF."
     (should (equal "Prompt here." (plist-get def :prompt)))
     ;; defaults apply where the file is silent
     (should (plist-get def :max-turns))
-    (should (eq 'inproc (plist-get def :worker)))))
+    ;; No worker unless the definition names one: the resolver picks
+    ;; from the provider instead, so a claude-code model does not end up
+    ;; in the in-process loop where its tools would be dropped.
+    (should (null (plist-get def :worker)))
+    (should (eq 'inproc (cmacs-brigade-resolve-worker def)))))
 
 (ert-deftest cmacs-brigade-agent-keeps-unknown-keys ()
   "A key the parser does not recognise is carried, not discarded.
