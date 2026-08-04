@@ -700,6 +700,30 @@ brigade requires cmacs-ai and the reverse would be a cycle."
         (should (> (cmacs-brigade-install-tools ex "agent") 0))
       (cmacs-ai-tools-free ex))))
 
+
+(ert-deftest cmacs-brigade-cli-workers-can-use-their-tools ()
+  "A CLI worker is told not to ask before using what it was granted.
+
+Without this the agent sees the tools its MCP config grants and cannot
+call one of them: there is no human at a prompt to approve them.  What it
+may reach is bounded by the capability token in that config, which is the
+gate that actually matters."
+  (skip-unless (featurep 'cmacs-brigade-run))
+  (let ((argv (cmacs-brigade--worker-command
+               'claude-code '(:model "claude-code/opus") "/tmp/p"
+               '(:path "/run/x.json"))))
+    (should (member "--dangerously-skip-permissions" argv)))
+  ;; opencode spells the same thing as an environment variable.
+  (should (equal cmacs-brigade-opencode-allow-all
+                 (cdr (assoc "OPENCODE_PERMISSION"
+                             (cmacs-brigade--worker-env 'opencode nil)))))
+  ;; and a plain shell worker gets neither
+  (should-not (assoc "OPENCODE_PERMISSION"
+                     (cmacs-brigade--worker-env 'shell nil)))
+  (should-not (member "--dangerously-skip-permissions"
+                      (cmacs-brigade--worker-command
+                       'shell '(:model nil) "/tmp/p" nil))))
+
 (provide 'cmacs-brigade-run-tests)
 
 ;;; cmacs-brigade-run-tests.el ends here

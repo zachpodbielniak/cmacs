@@ -96,6 +96,12 @@ in the model string picks its own worker; otherwise
     (pcase worker
       ('claude-code
        (append (list cmacs-brigade-claude-program "--print"
+                     ;; Without this the agent can see the tools its MCP
+                     ;; config grants and cannot call any of them: run
+                     ;; non-interactively there is nobody to approve
+                     ;; them.  The allowlist in that config is the real
+                     ;; gate.
+                     "--dangerously-skip-permissions"
                      ;; JSON so the run reports its own usage: it carries
                      ;; result, num_turns, usage and total_cost_usd, and
                      ;; without it turns and cost stay stuck at zero with
@@ -115,9 +121,23 @@ in the model string picks its own worker; otherwise
                ;; "vendor/model" spelling survives ours.
                (when model (list "--model"
                                  (cdr (cmacs-brigade--split-model model))))))
+      ;; opencode has no flag for it; the same thing is an environment
+      ;; variable, applied in `cmacs-brigade--worker-env'.
       ('shell (list "bash" "-c" (format "cat %s | bash"
                                         (shell-quote-argument prompt-file))))
       (_ (user-error "cmacs-brigade: %s has no subprocess form" worker)))))
+
+(defconst cmacs-brigade-opencode-allow-all "{\"*\":\"allow\"}"
+  "Value of OPENCODE_PERMISSION that auto-approves every category.
+
+opencode expresses what claude does with a flag as an environment
+variable; this mirrors what ai-glib sets for the same purpose.")
+
+(defun cmacs-brigade--worker-env (worker env)
+  "Environment for WORKER, on top of ENV."
+  (if (eq worker 'opencode)
+      (cons (cons "OPENCODE_PERMISSION" cmacs-brigade-opencode-allow-all) env)
+    env))
 
 (defun cmacs-brigade--start-process (task-id agent prompt cwd env endpoint)
   "Spawn AGENT's worker for TASK-ID.  Returns the process."
@@ -130,7 +150,8 @@ in the model string picks its own worker; otherwise
                                               endpoint))
          (default-directory (or cwd default-directory))
          (process-environment
-          (append (mapcar (lambda (c) (format "%s=%s" (car c) (cdr c))) env)
+          (append (mapcar (lambda (c) (format "%s=%s" (car c) (cdr c)))
+                          (cmacs-brigade--worker-env worker env))
                   process-environment))
          (buf (generate-new-buffer (format " *brigade-%s*" task-id)))
          proc)

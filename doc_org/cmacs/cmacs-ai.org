@@ -804,3 +804,13 @@ It is not a closed list — every provider ships new model names between cmacs r
 A provider that cannot answer (no key, no daemon, no network) simply offers no completions rather than blocking; =cmacs-ai-read-model-timeout= bounds the wait.
 
 The heading on each reply names the provider symbol you selected and the model that answered, as =claude-code/sonnet= — the provider half is the symbol, not ai-glib's display name, so it matches what you type at the prompt.
+
+* Why a CLI agent could not call its tools
+
+A command-line agent run non-interactively has nobody to approve anything. Claude and opencode both default to asking before using a tool, and with no prompt to answer, every tool that would need approval is simply unavailable — so the agent can /see/ the tools it was granted, list their schemas, and report that it has no way to invoke them.
+
+cmacs therefore tells CLI providers not to ask: =--dangerously-skip-permissions= for claude-code and claude-tmux, =OPENCODE_PERMISSION= set to allow-all for opencode. This is what libreclaw does for the same three, and it applies to a chat buffer and to the brigade's CLI workers alike.
+
+Set =cmacs-ai-cli-skip-permissions= to nil to turn it off, understanding that a CLI chat then has no working tools.
+
+The name of the flag is accurate and worth taking seriously — it removes claude's own confirmation step entirely, including for writes and shell commands. What bounds the agent is not that prompt but the *capability token* in its MCP config: the tool allowlist is enforced server-side by the C gate, the privileged set (=eval=, =shell=, the C-patching tools) is unreachable through =*= or a group, and the token is revoked when the buffer is killed. See [[file:ai-brigade/mcp.org][MCP]] for what that gate does and does not cover. An agent's own built-in tools -- reading and writing files, running commands in its working directory -- are not covered by it, which is the other reason [[file:ai-brigade/index.org][running a chat in a directory]] matters.

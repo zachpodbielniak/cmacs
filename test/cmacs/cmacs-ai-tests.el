@@ -1192,5 +1192,26 @@ and cannot be typed anywhere in the Elisp API."
                            (all-completions (concat dir "al") table)))))
       (delete-directory dir t))))
 
+
+;;;; CLI tool permissions
+
+(ert-deftest cmacs-ai-skip-permissions-is-cli-only ()
+  "All three CLI providers take it; an HTTP one has no such notion."
+  (skip-unless (fboundp 'cmacs-ai-client-set-skip-permissions))
+  (dolist (p '(claude-code claude-tmux opencode))
+    (should (cmacs-ai-client-set-skip-permissions
+             (cmacs-ai-client-new p nil) t)))
+  (should-not (cmacs-ai-client-set-skip-permissions
+               (cmacs-ai-client-new 'claude nil) t)))
+
+(ert-deftest cmacs-ai-cli-skip-permissions-defaults-on ()
+  "Off by default would mean a CLI chat that cannot call its own tools.
+
+Run non-interactively there is nobody to approve anything, so every tool
+needing approval is unavailable -- the agent lists them and reports it
+has no way to invoke them."
+  (skip-unless (boundp 'cmacs-ai-cli-skip-permissions))
+  (should cmacs-ai-cli-skip-permissions))
+
 (provide 'cmacs-ai-tests)
 ;;; cmacs-ai-tests.el ends here

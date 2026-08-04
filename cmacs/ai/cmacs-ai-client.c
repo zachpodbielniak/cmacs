@@ -386,6 +386,39 @@ DEFUN ("cmacs-ai-client-working-directory",
   return wd ? DECODE_FILE (build_unibyte_string (wd)) : Qnil;
 }
 
+DEFUN ("cmacs-ai-client-set-skip-permissions",
+       Fcmacs_ai_client_set_skip_permissions,
+       Scmacs_ai_client_set_skip_permissions, 2, 2, 0,
+       doc: /* Let HANDLE's CLI agent use its tools without asking.  ENABLE is a boolean.
+
+Returns t for a CLI provider, nil for an HTTP one, which has no such
+notion.
+
+Necessary rather than merely convenient.  A command-line agent run
+non-interactively cannot be asked to approve anything: there is nobody at
+a prompt, so every tool that would need approval is simply unavailable to
+it.  The visible symptom is an agent that can see cmacs's tools listed
+and reports it has no way to call them.
+
+For claude this emits --dangerously-skip-permissions; for opencode it
+sets OPENCODE_PERMISSION to allow-all.  The tools an agent may reach are
+already bounded by the capability token in its MCP config, which is the
+gate that actually matters -- this only stops it asking about the ones it
+was granted.  */)
+  (Lisp_Object handle, Lisp_Object enable)
+{
+  CHECK_FIXNAT (handle);
+  gpointer p = cmacs_ai_client_lookup (XFIXNUM (handle));
+  if (p == NULL) error ("cmacs-ai: bad client handle");
+  if (!AI_IS_CLI_CLIENT (p)) return Qnil;
+  if (g_object_class_find_property (G_OBJECT_GET_CLASS (p),
+                                    "skip-permissions") == NULL)
+    return Qnil;
+  g_object_set (G_OBJECT (p), "skip-permissions",
+                NILP (enable) ? FALSE : TRUE, NULL);
+  return Qt;
+}
+
 void syms_of_cmacs_ai_client_defuns (void);
 void
 syms_of_cmacs_ai_client_defuns (void)
@@ -404,6 +437,7 @@ syms_of_cmacs_ai_client_defuns (void)
   defsubr (&Scmacs_ai_client_set_mcp_config);
   defsubr (&Scmacs_ai_client_set_working_directory);
   defsubr (&Scmacs_ai_client_working_directory);
+  defsubr (&Scmacs_ai_client_set_skip_permissions);
 }
 
 #endif /* HAVE_CMACS_AI */

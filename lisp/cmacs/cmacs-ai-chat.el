@@ -151,6 +151,21 @@ sends work to the wrong project."
                               (expand-file-name directory))))
             "")))
 
+(defcustom cmacs-ai-cli-skip-permissions t
+  "Whether a CLI agent may use its tools without asking first.
+
+On by default, and effectively required: a command-line agent run
+non-interactively has nobody to ask, so every tool needing approval is
+simply unavailable to it.  The symptom is an agent that can see cmacs's
+tools listed and says it has no way to call them.
+
+What it may reach is already bounded by the capability token in its MCP
+config, which is the gate that matters; this only stops it asking about
+the tools it was granted.  libreclaw does the same for all three CLI
+providers."
+  :type 'boolean
+  :group 'cmacs-ai)
+
 (defcustom cmacs-ai-chat-cli-tool-allowlist "*"
   "Tools a CLI provider may reach over MCP in a chat buffer.
 
@@ -258,6 +273,13 @@ ai-glib's web_search backend.  Shared by `cmacs-ai-chat--init' and
                cmacs-ai-chat-enable-tools
                (fboundp 'cmacs-ai-client-cli-p)
                (cmacs-ai-client-cli-p client))
+      ;; First, and regardless of whether cmacs can provision anything:
+      ;; this governs the agent's own built-in tools too, not just the
+      ;; ones cmacs grants, and tying it to provisioning left an agent
+      ;; unable to so much as read a file whenever the MCP server was
+      ;; not up.
+      (when cmacs-ai-cli-skip-permissions
+        (cmacs-ai-client-set-skip-permissions client t))
       (cond
        ((not (fboundp 'cmacs-brigade-host-provision))
         ;; Said out loud rather than skipped quietly: without this the
