@@ -1043,5 +1043,76 @@ That is what leaves the provider on its own default."
     ;; This did not, so it survives.
     (should (equal (cmacs-ai-image-menu--get :count) 2))))
 
+
+;;;; Running a chat in a project directory
+;;
+;; The CLI providers find their project by where the process starts:
+;; CLAUDE.md, .claude/, a project MCP config and the repository are all
+;; resolved from there.  An agent started in the wrong directory is a
+;; different agent, and nothing about the conversation would say so.
+
+(ert-deftest cmacs-ai-chat-runs-in-the-given-directory ()
+  "The buffer and the CLI subprocess both follow the directory."
+  (skip-unless (and (fboundp 'cmacs-ai-chat-open)
+                    (fboundp 'cmacs-ai-client-working-directory)))
+  (let* ((dir (file-name-as-directory (make-temp-file "cmacs-ai-proj" t)))
+         (buf nil))
+    (unwind-protect
+        (progn
+          (setq buf (cmacs-ai-chat-open 'claude-code nil dir))
+          (with-current-buffer buf
+            (should (equal (expand-file-name default-directory)
+                           (expand-file-name dir)))
+            (should (equal (expand-file-name
+                            (cmacs-ai-client-working-directory
+                             (car cmacs-ai-chat-session-pair)))
+                           (expand-file-name dir)))
+            ;; and the name says which project, so two chats are telling
+            ;; apart before you send anything to the wrong one
+            (should (string-match-p (regexp-quote
+                                     (file-name-nondirectory
+                                      (directory-file-name dir)))
+                                    (buffer-name)))))
+      (when (buffer-live-p buf) (kill-buffer buf))
+      (delete-directory dir t))))
+
+(ert-deftest cmacs-ai-working-directory-is-cli-only ()
+  "An HTTP provider has no subprocess to place anywhere."
+  (skip-unless (fboundp 'cmacs-ai-client-set-working-directory))
+  (let ((http (cmacs-ai-client-new 'claude "claude-sonnet-4-6"))
+        (cli (cmacs-ai-client-new 'claude-code "haiku")))
+    (should-not (cmacs-ai-client-set-working-directory http "/tmp"))
+    (should-not (cmacs-ai-client-working-directory http))
+    (should (cmacs-ai-client-set-working-directory cli "/tmp"))
+    (should (equal "/tmp/" (file-name-as-directory
+                            (cmacs-ai-client-working-directory cli))))))
+
+(ert-deftest cmacs-ai-working-directory-is-expanded ()
+  "A relative or ~-prefixed path is resolved before the process sees it.
+
+The subprocess does not expand ~, and would start in a directory
+literally named \"~\" if handed one."
+  (skip-unless (fboundp 'cmacs-ai-client-set-working-directory))
+  (let ((cli (cmacs-ai-client-new 'claude-code "haiku")))
+    (cmacs-ai-client-set-working-directory cli "~")
+    (should (equal (expand-file-name "~/")
+                   (file-name-as-directory
+                    (cmacs-ai-client-working-directory cli))))))
+
+(ert-deftest cmacs-ai-chat-directory-default-applies ()
+  "`cmacs-ai-chat-default-directory' is used when none is passed."
+  (skip-unless (fboundp 'cmacs-ai-chat-open))
+  (let* ((dir (file-name-as-directory (make-temp-file "cmacs-ai-def" t)))
+         (cmacs-ai-chat-default-directory dir)
+         (buf nil))
+    (unwind-protect
+        (progn
+          (setq buf (cmacs-ai-chat-open 'claude-code))
+          (with-current-buffer buf
+            (should (equal (expand-file-name default-directory)
+                           (expand-file-name dir)))))
+      (when (buffer-live-p buf) (kill-buffer buf))
+      (delete-directory dir t))))
+
 (provide 'cmacs-ai-tests)
 ;;; cmacs-ai-tests.el ends here

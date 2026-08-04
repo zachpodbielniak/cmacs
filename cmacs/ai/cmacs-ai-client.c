@@ -348,6 +348,44 @@ the server described there.  */)
   return Qt;
 }
 
+DEFUN ("cmacs-ai-client-set-working-directory",
+       Fcmacs_ai_client_set_working_directory,
+       Scmacs_ai_client_set_working_directory, 2, 2, 0,
+       doc: /* Run HANDLE's CLI agent with DIRECTORY as its working directory.
+
+Returns t for a CLI provider, nil for an HTTP one, which has no
+subprocess to place anywhere.
+
+This is how a command-line agent finds its project: CLAUDE.md, the
+.claude directory, a project MCP config and the repository itself are all
+resolved relative to where the process starts, so an agent launched in
+the wrong directory is a different agent.  */)
+  (Lisp_Object handle, Lisp_Object directory)
+{
+  CHECK_FIXNAT (handle);
+  CHECK_STRING (directory);
+  gpointer p = cmacs_ai_client_lookup (XFIXNUM (handle));
+  if (p == NULL) error ("cmacs-ai: bad client handle");
+  if (!AI_IS_CLI_CLIENT (p)) return Qnil;
+  Lisp_Object enc = ENCODE_FILE (Fexpand_file_name (directory, Qnil));
+  ai_cli_client_set_working_directory (AI_CLI_CLIENT (p), SSDATA (enc));
+  return Qt;
+}
+
+DEFUN ("cmacs-ai-client-working-directory",
+       Fcmacs_ai_client_working_directory,
+       Scmacs_ai_client_working_directory, 1, 1, 0,
+       doc: /* Return where HANDLE's CLI agent runs, or nil.  */)
+  (Lisp_Object handle)
+{
+  CHECK_FIXNAT (handle);
+  gpointer p = cmacs_ai_client_lookup (XFIXNUM (handle));
+  if (p == NULL) error ("cmacs-ai: bad client handle");
+  if (!AI_IS_CLI_CLIENT (p)) return Qnil;
+  const gchar *wd = ai_cli_client_get_working_directory (AI_CLI_CLIENT (p));
+  return wd ? DECODE_FILE (build_unibyte_string (wd)) : Qnil;
+}
+
 void syms_of_cmacs_ai_client_defuns (void);
 void
 syms_of_cmacs_ai_client_defuns (void)
@@ -364,6 +402,8 @@ syms_of_cmacs_ai_client_defuns (void)
   defsubr (&Scmacs_ai_client_list);
   defsubr (&Scmacs_ai_client_cli_p);
   defsubr (&Scmacs_ai_client_set_mcp_config);
+  defsubr (&Scmacs_ai_client_set_working_directory);
+  defsubr (&Scmacs_ai_client_working_directory);
 }
 
 #endif /* HAVE_CMACS_AI */

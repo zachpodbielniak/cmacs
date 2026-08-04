@@ -519,7 +519,16 @@ load_gccjit_if_necessary (bool mandatory)
 #define SETJMP_NAME SETJMP
 
 /* Max number function importable by native-compiled code.  */
-#define F_RELOC_MAX_SIZE 2500
+/* CMACS: raised from upstream's 2500.  cmacs defines roughly a thousand
+   DEFUNs of its own on top of Emacs's, and every subr goes in this
+   table, so a stock build sat about a dozen entries under the ceiling --
+   at which point native compilation of *any* unit, and of the
+   trampolines Emacs generates when a primitive is advised or rebound,
+   dies with the fatal below.  The failure is easy to misread: it
+   surfaces as an unrelated file failing to compile, and a stale .eln
+   hides it until something forces a rebuild.  The table is a static
+   array of pointers, so the headroom costs 64 KB of BSS.  */
+#define F_RELOC_MAX_SIZE 8192
 
 typedef struct {
   void *link_table[F_RELOC_MAX_SIZE];

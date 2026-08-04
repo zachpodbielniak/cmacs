@@ -475,6 +475,58 @@ the M-x discovery surface is uniform."
   (require 'cmacs-ai-chat)
   (cmacs-ai-chat-open provider))
 
+(declare-function cmacs-ai-chat-open "cmacs-ai-chat")
+(defvar cmacs-ai-chat-directories)
+
+(defun cmacs-ai--read-chat-directory (&optional prompt)
+  "Read a directory to run a chat in.
+
+Completes on `cmacs-ai-chat-directories' first, since the point of the
+command is a handful of project roots you return to, and falls through
+to ordinary file-name completion for anything else."
+  (let* ((known (mapcar #'abbreviate-file-name
+                        (and (boundp 'cmacs-ai-chat-directories)
+                             cmacs-ai-chat-directories)))
+         (answer (completing-read (or prompt "Run agent in directory: ")
+                                  known nil nil nil nil
+                                  (abbreviate-file-name default-directory))))
+    (if (file-directory-p (expand-file-name answer))
+        (expand-file-name answer)
+      ;; Not one of the shortcuts and not a directory as typed: fall back
+      ;; to a real directory prompt rather than starting an agent
+      ;; somewhere that does not exist.
+      (read-directory-name "Run agent in directory: " nil nil t))))
+
+;;;###autoload
+(defun cmacs-ai-chat-with-provider-in-directory (provider directory)
+  "Open a chat on PROVIDER running in DIRECTORY.
+
+The point of this over `cmacs-ai-chat-with-provider' is the CLI
+providers.  A command-line agent finds its project by where its process
+starts -- CLAUDE.md, the .claude directory, a project MCP config and the
+repository itself are all resolved from there -- so an agent started in
+~/Documents/gnuisaince is a different agent from the same binary started
+anywhere else.
+
+The buffer's `default-directory' follows too, so the filesystem and
+project tools resolve against the same tree."
+  (interactive
+   (list (cmacs-ai--read-provider "Chat with provider: ")
+         (cmacs-ai--read-chat-directory)))
+  (require 'cmacs-ai-chat)
+  (cmacs-ai-chat-open provider nil directory))
+
+;;;###autoload
+(defun cmacs-ai-chat-here (&optional provider)
+  "Open a chat running in the current buffer's directory.
+
+The common case of `cmacs-ai-chat-with-provider-in-directory': you are
+already in the project you want the agent to work on."
+  (interactive
+   (list (when current-prefix-arg (cmacs-ai--read-provider))))
+  (require 'cmacs-ai-chat)
+  (cmacs-ai-chat-open provider nil default-directory))
+
 ;;;###autoload
 (defun cmacs-ai-resume-chat ()
   "Resume an archived cmacs-ai chat from `cmacs-ai-chat-dir'.

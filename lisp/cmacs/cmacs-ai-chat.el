@@ -136,10 +136,20 @@ sends the compose body and streams the response into a fresh
 (defun cmacs-ai-chat--ts ()
   (format-time-string "%Y-%m-%d %H:%M:%S"))
 
-(defun cmacs-ai-chat--buffer-name (provider)
-  (format "*cmacs-ai: %s [%s]*"
+(defun cmacs-ai-chat--buffer-name (provider &optional directory)
+  "Name for a chat buffer on PROVIDER, in DIRECTORY.
+
+The directory is in the name because it is the thing that makes two
+otherwise identical chats different agents, and picking the wrong buffer
+sends work to the wrong project."
+  (format "*cmacs-ai: %s [%s]%s*"
           (format-time-string "%H:%M:%S")
-          (or provider cmacs-ai-default-provider)))
+          (or provider cmacs-ai-default-provider)
+          (if directory
+              (format " %s" (file-name-nondirectory
+                             (directory-file-name
+                              (expand-file-name directory))))
+            "")))
 
 (defcustom cmacs-ai-chat-cli-tool-allowlist "*"
   "Tools a CLI provider may reach over MCP in a chat buffer.
@@ -155,6 +165,25 @@ C-patching tools have to be named outright."
 ;; requires cmacs-ai.
 (declare-function cmacs-brigade-host-provision "cmacs-brigade-host")
 (declare-function cmacs-brigade-host-revoke "cmacs-brigade-host")
+
+(defcustom cmacs-ai-chat-default-directory nil
+  "Directory new chats run in.  nil means wherever the buffer was opened.
+
+Chiefly for the CLI providers: a command-line agent finds its project by
+where its process starts, so this is what decides whether it sees a
+repository, a CLAUDE.md and a .claude directory or none of them."
+  :type '(choice (const :tag "Current directory" nil) directory)
+  :group 'cmacs-ai)
+
+(defcustom cmacs-ai-chat-directories nil
+  "Project roots offered when prompting for a chat directory.
+
+A list of directories you start agents in often, so the prompt completes
+on them instead of making you type the path each time.  For example, set
+it to a list containing \"~/Documents/gnuisaince\" and your source
+checkouts."
+  :type '(repeat directory)
+  :group 'cmacs-ai)
 
 (defvar cmacs-ai-chat-executor-functions nil
   "Abnormal hook run with a new tool executor and the session's provider.
@@ -259,7 +288,7 @@ ai-glib's web_search backend.  Shared by `cmacs-ai-chat--init' and
       (cmacs-brigade-host-revoke (format "chat-%s" (buffer-name))))
     (setq cmacs-ai-chat--cli-endpoint nil)))
 
-(defun cmacs-ai-chat--init (buf provider &optional model)
+(defun cmacs-ai-chat--init (buf provider &optional model directory)
   (with-current-buffer buf
     (let ((inhibit-read-only t)
           (m (or model cmacs-ai-default-model)))
@@ -271,13 +300,29 @@ ai-glib's web_search backend.  Shared by `cmacs-ai-chat--init' and
       (insert (format "#+PROPERTY: provider %s\n" provider))
       (when m
         (insert (format "#+PROPERTY: model %s\n" m)))
+      (when directory
+        (insert (format "#+PROPERTY: directory %s\n"
+                        (abbreviate-file-name directory))))
       (insert "\n")
       (insert "* Conversation\n\n")
       (insert "* Compose                                              :compose:\n"))
     (cmacs-ai-chat-mode)
     (setq-local cmacs-ai-chat-provider provider)
+    ;; Set before the session exists so anything the setup consults --
+    ;; the MCP bridge's project tools, a shell tool -- already resolves
+    ;; against the right tree rather than wherever the buffer was opened.
+    (when directory
+      (setq-local default-directory (file-name-as-directory
+                                     (expand-file-name directory))))
     (setq-local cmacs-ai-chat-session-pair
                 (cmacs-ai-make-session provider model))
+    ;; A CLI agent finds its project by where its process starts:
+    ;; CLAUDE.md, .claude/, a project MCP config and the repository are
+    ;; all resolved from there, so this is what makes it *that* agent
+    ;; rather than a generic one.
+    (when directory
+      (cmacs-ai-client-set-working-directory
+       (car cmacs-ai-chat-session-pair) default-directory))
     (cmacs-ai-chat--setup-executor)
     (setq-local cmacs-ai-chat--created-at (current-time))
     (setq-local cmacs-ai-chat--compose-marker
@@ -285,15 +330,20 @@ ai-glib's web_search backend.  Shared by `cmacs-ai-chat--init' and
     (set-marker-insertion-type cmacs-ai-chat--compose-marker nil)
     (goto-char (point-max))))
 
-(defun cmacs-ai-chat-open (&optional provider model)
+(defun cmacs-ai-chat-open (&optional provider model directory)
   "Open a fresh chat buffer with PROVIDER (default
 `cmacs-ai-default-provider').  Optional MODEL overrides the
-provider's default model for this chat's session."
+provider's default model for this chat's session.
+
+Optional DIRECTORY runs the conversation there: a CLI agent's
+subprocess starts in it, and the buffer's `default-directory' follows,
+so filesystem tools resolve against the same tree."
   (interactive)
   (cmacs-ai--ensure)
   (let* ((p (or provider cmacs-ai-default-provider))
-         (buf (get-buffer-create (cmacs-ai-chat--buffer-name p))))
-    (cmacs-ai-chat--init buf p model)
+         (d (or directory cmacs-ai-chat-default-directory))
+         (buf (get-buffer-create (cmacs-ai-chat--buffer-name p d))))
+    (cmacs-ai-chat--init buf p model d)
     (switch-to-buffer buf)
     buf))
 

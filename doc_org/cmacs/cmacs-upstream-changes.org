@@ -104,6 +104,21 @@ Several small hunks, all in =main()= / its init path:
   (=init_cmacs_glib=, =init_cmacs_dbus=, =init_cmacs_gowl=,
   =init_cmacs_podomation=, ... =init_cmacs_gsurf=).
 
+** src/comp.c --- native-compilation relocation table
+
+One constant:
+
+#+begin_src c
+/* CMACS: raised from upstream's 2500 ... */
+#define F_RELOC_MAX_SIZE 8192
+#+end_src
+
+Every subr goes in this table, and cmacs defines roughly a thousand DEFUNs of its own on top of Emacs's. A stock cmacs build sits about a dozen entries under upstream's 2500 ceiling, so adding a handful of new DEFUNs tips it over.
+
+Worth knowing because the failure is easy to misread. Overflowing it is fatal, and it fires while native-compiling /any/ unit --- including the trampolines Emacs generates when a primitive is advised or rebound --- so it surfaces as some unrelated file failing to compile, or as a scatter of test failures across subsystems that have nothing in common. A stale =.eln= hides it until something forces a rebuild, at which point a previously green tree stops building.
+
+The table is a static array of pointers, so the headroom costs 64 KB of BSS. Re-apply on merge by keeping the constant at 8192 or higher; if upstream raises it past that, take upstream's value.
+
 ** src/process.c --- GLib event-loop hooks
 
 cmacs does *not* replace Emacs's event loop; it hooks Emacs's =pselect()=

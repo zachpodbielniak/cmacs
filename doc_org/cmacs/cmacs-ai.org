@@ -764,3 +764,28 @@ built-ins do (see /Tool use/).  Default nil = full trust.
 | =cmacs-ai-chat-enable-image-tool= | t                          |
 | =cmacs-ai-completion-provider=  | ='claude-code=               |
 | =cmacs-ai-completion-idle-delay= | 0.3 s                        |
+
+* Running a chat in a project directory
+
+#+begin_src elisp
+M-x cmacs-ai-chat-with-provider-in-directory   ; prompts for both
+M-x cmacs-ai-chat-here                         ; this buffer's directory
+#+end_src
+
+This matters mainly for the CLI providers. A command-line agent finds its project by where its process starts: =CLAUDE.md=, the =.claude= directory, a project MCP config and the repository itself are all resolved from there. An agent launched in =~/Documents/gnuisaince= is a different agent from the same binary launched anywhere else, and nothing about the conversation would tell you which one you got.
+
+Both the CLI subprocess and the buffer's =default-directory= follow, so the filesystem and project tools resolve against the same tree. The directory also goes in the buffer name, since that is what distinguishes two otherwise identical chats.
+
+For the directories you return to, list them and the prompt completes on them:
+
+#+begin_src elisp
+(setq cmacs-ai-chat-directories
+      (list "~/Documents/gnuisaince" "~/source/projects/cmacs"))
+
+;; or make every chat start somewhere specific
+(setq cmacs-ai-chat-default-directory "~/Documents/gnuisaince")
+#+end_src
+
+From Lisp, =cmacs-ai-chat-open= takes it as a third argument.
+
+An HTTP provider has no subprocess to place anywhere, so the directory only affects the buffer; =cmacs-ai-client-set-working-directory= returns nil there to say so.
