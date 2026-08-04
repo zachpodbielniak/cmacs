@@ -265,6 +265,9 @@
     ;; has to be bound explicitly to survive.
     (define-key map (kbd "j") #'next-line)
     (define-key map (kbd "k") #'previous-line)
+    ;; Voice under `v', only in a build that can actually record.
+    (when (fboundp 'cmacs-brigade-voice-setup-dashboard)
+      (cmacs-brigade-voice-setup-dashboard map))
     map)
   "Keymap for `cmacs-brigade-dashboard-mode'.
 Defined at top level and mutated in place, so reloading this file

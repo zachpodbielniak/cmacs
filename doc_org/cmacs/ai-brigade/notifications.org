@@ -1,0 +1,215 @@
+#+title: Notifications and voice
+#+description: Getting told when an agent finishes or needs you, and talking to the brigade
+#+authors: Zach Podbielniak
+#+categories: cmacs ai-brigade
+#+created: 2026-08-04T00:00:00-04:00
+#+updated: 2026-08-04T00:00:00-04:00
+#+version: 1
+
+* The problem
+
+The expensive failure is not an agent finishing silently. It is walking away while one runs, and coming back forty minutes after it finished without knowing. Those forty minutes are the cost, and a notification fired at the moment of completion does not recover them, because you were not there to hear it.
+
+So there are three mechanisms, and the third is the one that matters.
+
+1. *Notify when it happens.* Customisable: speak, play a sound, raise a desktop notification, run a script, print a receipt, or anything you register yourself.
+2. *Escalate what is blocked.* An agent that finished costs you nothing by waiting. One that is waiting on an answer is burning wall-clock doing nothing, so it repeats, at widening intervals, until you deal with it.
+3. *Tell you what happened while you were gone.* Events that fire while you are away are held and delivered the moment you return — which is the first command you run after a long idle. This is the mechanism that actually closes the gap, because it does not require you to have been present.
+
+Plus a modeline indicator, so /is anything still running/ is answerable by glancing rather than by remembering to check.
+
+* Turning it on
+
+#+begin_src elisp
+(cmacs-brigade-notify-mode 1)
+#+end_src
+
+That is the whole setup. It hooks run completion, observes state transitions, and adds the modeline indicator.
+
+* Routing
+
+=cmacs-brigade-notify-routes= maps each kind of event to the notifiers that fire for it.
+
+#+begin_src elisp
+(setq cmacs-brigade-notify-routes
+      '((needs-input     . (speak desktop sound))
+        (failed          . (speak desktop))
+        (budget-exceeded . (speak desktop))
+        (finished        . (sound message))
+        (all-done        . (speak))
+        (started         . ())
+        (away-quiet      . (sound))))
+#+end_src
+
+The defaults are deliberately uneven. Something that needs /you/ is worth interrupting for on every channel. A single agent finishing among several is worth a sound and nothing more — a spoken sentence per completion during a fan-out is unbearable. =all-done=, the last agent finishing, is the one worth saying out loud.
+
+=away-quiet= is used for a non-urgent event that fires while you are away. It stays quiet on purpose: the event will be in the digest when you return, and this route only exists in case you happen to be in earshot.
+
+** Event kinds
+
+| Kind | When |
+|------+------|
+| =started= | an agent began |
+| =finished= | an agent completed successfully |
+| =failed= | an agent exited non-zero |
+| =needs-input= | an agent entered =waiting-input= or =blocked= |
+| =budget-exceeded= | an agent stopped against its ceiling |
+| =all-done= | the last live agent finished |
+| =away-quiet= | routing used for a non-urgent event while you are away |
+
+* Shipped notifiers
+
+| Name | What it does | Needs |
+|------+--------------+-------|
+| =message= | echo area | — |
+| =speak= | reads it aloud | =--with-cmacs-piper= |
+| =sound= | plays a sound | =canberra-gtk-play= or =paplay= |
+| =desktop= | desktop notification | =notify-send= |
+| =command= | runs =cmacs-brigade-notify-command= | a script |
+| =receipt= | prints it | =receipt-print= |
+
+A notifier whose =:available= predicate returns nil is skipped rather than erroring, so a route naming =speak= is harmless in a build without piper.
+
+Urgent events change two behaviours: =sound= plays =dialog-warning= instead of =complete=, and =desktop= raises the urgency and drops the expiry, because a notification that times out is one you can miss by being in another window — the whole failure mode.
+
+** The =command= notifier
+
+#+begin_src elisp
+(setq cmacs-brigade-notify-command "~/bin/scripts/brigade-alert")
+#+end_src
+
+The script receives the event in its environment:
+
+| Variable | Contents |
+|----------+----------|
+| =BRIGADE_EVENT= | the kind, e.g. =finished= |
+| =BRIGADE_TASK= | task id |
+| =BRIGADE_AGENT= | agent name |
+| =BRIGADE_STATE= | runtime state |
+| =BRIGADE_TEXT= | the sentence that would have been spoken |
+
+It is run detached, with output discarded. Notifiers are called from a process sentinel: a script that blocked would stall the run trying to report it, and under =--gowl= that is the compositor.
+
+* Registering your own
+
+=cmacs-brigade-register-notifier= takes the same shape as every other registry in the fabric.
+
+#+begin_src elisp
+(cmacs-brigade-register-notifier
+ :name 'pushover
+ :available (lambda () (getenv "PUSHOVER_TOKEN"))
+ :notify (lambda (ev)
+           (my/pushover-send (plist-get ev :text)
+                             :priority (if (plist-get ev :urgent) 1 0))))
+
+;; Then route to it.
+(setf (alist-get 'needs-input cmacs-brigade-notify-routes)
+      '(speak pushover))
+#+end_src
+
+The event plist carries =:kind=, =:task=, =:agent=, =:state=, =:text= and =:urgent=.
+
+One broken notifier does not cost you the others: a =:notify= that signals is caught and logged, and the remaining notifiers in the route still fire. Finding out that something happened is the point.
+
+* Away detection and the digest
+
+/Away/ means you were not looking at Emacs. Idle time is the right proxy: whether you left the room or were reading a browser tab, you did not see the notification either way.
+
+#+begin_src elisp
+(setq cmacs-brigade-notify-away-seconds 120     ; how long counts as away
+      cmacs-brigade-notify-digest-on-return t   ; summarise on return
+      cmacs-brigade-notify-digest-speak t)      ; and say it aloud
+#+end_src
+
+Two minutes is short enough to catch stepping out for coffee and long enough not to fire because you read a paragraph.
+
+The digest is delivered on the first command after a long silence, which is precisely the moment you return. You get a one-line summary in the echo area, the same sentence spoken, and a =*brigade: while you were away*= buffer listing each event and anything still waiting on you. It is both shown and said because a spoken summary is gone as soon as it finishes, and you may want to read which task it was.
+
+=cmacs-brigade-notify-digest-functions= is an abnormal hook run with the held events, so the digest can also go to a receipt, a Matrix room, or an org capture without replacing the shipped behaviour.
+
+* Escalation
+
+#+begin_src elisp
+(setq cmacs-brigade-notify-escalate-seconds '(60 300 900))
+#+end_src
+
+An agent that stops to ask something re-announces itself after one minute, five, and fifteen, each time as urgent. Widening gaps: insistent enough not to be forgotten, spaced enough not to become noise you learn to ignore. Set to nil to never repeat.
+
+A repeat only fires if the task is still unanswered. Re-announcing something you already dealt with is exactly how a notification sound becomes one you stop hearing.
+
+Anything that ends the wait — answering it, the task transitioning onward, the run finishing — acknowledges it. =cmacs-brigade-notify-acknowledge= does it by hand, and =cmacs-brigade-notify-pending= returns what is currently blocked on you.
+
+* Modeline
+
+With =cmacs-brigade-notify-modeline= on (the default), the modeline carries =brigade:3= while three agents run, and =brigade:1?= in the warning face when one is waiting on you. Nothing is shown when nothing is running. Waiting is the state worth colouring, because a blocked agent is the one spending wall-clock on nothing.
+
+* Voice
+
+=cmacs-brigade-voice= adds speech in both directions. It needs =--with-cmacs-whisper= for input and =--with-cmacs-piper= for output; =cmacs-brigade-voice-available-p= reports whether input is usable.
+
+** Push to talk
+
+=cmacs-brigade-voice-listen= is the primitive: it records a phrase and calls back with the text.
+
+#+begin_src elisp
+(cmacs-brigade-voice-listen
+ "Note"
+ (lambda (text) (my/capture text)))
+;; ... speak ...
+;; M-x cmacs-brigade-voice-stop
+#+end_src
+
+It is deliberately not =cmacs-whisper-dictate=. That command is a streaming insert-as-you-talk toggle, which is the right shape for writing prose into a buffer and the wrong shape here. Transcribing the phrase whole also transcribes it better: a sentence split across three-second windows loses the context that makes the middle of it unambiguous.
+
+Recording stops on its own after =cmacs-brigade-voice-max-seconds= (default 120), a backstop against a push-to-talk that never gets its second push.
+
+** Dictating a task
+
+=M-x cmacs-brigade-voice-task=, speak, then =cmacs-brigade-voice-stop=. The transcript is shown for confirmation — transcription is good but not perfect, and the failure mode is an agent spending real money on a misheard instruction — and then appended to a plan as an ordinary org headline and adopted.
+
+It goes through org rather than poking the runtime directly. Org is authoritative for intent; a spoken task is still intent, and it should be as editable, refilable and git-tracked as one you typed. The heading is a summary and the body is the prompt, which keeps the agenda readable when a spoken task runs long.
+
+#+begin_src elisp
+(setq cmacs-brigade-voice-plan-file nil   ; nil = inbox.org in the plan dir
+      cmacs-brigade-voice-agent 'researcher
+      cmacs-brigade-voice-confirm t)
+#+end_src
+
+** Asking about state
+
+=M-x cmacs-brigade-voice-ask=, then say what you want to know. Four questions are recognised — what is running, what is waiting on me, what has this cost, what has finished — and answered aloud.
+
+The matching is regexps, not a model call. There are four questions, the answers are already computed, and round-tripping /what is running/ through an LLM to find out would take longer than the answer is worth.
+
+=cmacs-brigade-notify-status= answers the same thing from the keyboard.
+
+** Confirmations read aloud
+
+Opt-in, with one form:
+
+#+begin_src elisp
+(cmacs-brigade-voice-setup-approvals)
+#+end_src
+
+This registers an approval handler at =:order= 90 that speaks the request before asking. The answer is still typed: approval is a synchronous gate, and blocking the editor for several seconds to record a spoken yes would stall whatever else is running — under =--gowl= that is the compositor. Hearing the question from across the room is the part that matters; you are coming back to the keyboard either way.
+
+It is opt-in rather than automatic because registering /any/ approval handler replaces the built-in fallback, and that fallback refuses when it cannot ask. A headless or batch session must not have "could not ask" quietly become "went ahead anyway" merely because this file was loaded. The voice handler keeps that property: with no display it refuses rather than prompting.
+
+Set =cmacs-brigade-voice-speak-approvals= to nil to keep confirmations silent while still using the handler. A handler you register yourself at a lower =:order= still wins.
+
+** In the dashboard
+
+Voice commands live under =v=, and only in a build that can record.
+
+| Key | Command |
+|-----+---------|
+| =v t= | dictate a task |
+| =v q= | ask a spoken question |
+| =v s= | stop recording |
+| =v ?= | speak the current status |
+
+* See also
+
+- [[file:extending.org][Extending the brigade]] — the other registries
+- [[file:dashboard.org][The dashboard]]
+- [[file:plan.org][Plans]] — where a dictated task lands

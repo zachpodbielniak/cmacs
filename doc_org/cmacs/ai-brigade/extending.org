@@ -85,6 +85,7 @@ Every variation point is public. Shipped features consume exactly these.
 | =cmacs-brigade-register-panel=                | dashboard sections             |
 | =cmacs-brigade-register-context-provider=     | auto-injected prompt context   |
 | =cmacs-brigade-register-approval-handler=     | how confirmations are asked    |
+| =cmacs-brigade-register-notifier=             | how you are told something happened |
 
 ** Memory sources
 
@@ -99,6 +100,29 @@ further work.
 A worker decides /how/ an agent runs: in-process, as a =claude-code=
 subprocess, as a detached job, on another machine. Registering one is how
 you add an execution model the brigade does not ship.
+
+** Notifiers
+
+A notifier is a way of getting your attention. The brigade ships six —
+echo area, speech, sound, desktop notification, a shell script, and a
+thermal-printed receipt — and registering a seventh is one form:
+
+#+begin_src elisp
+(cmacs-brigade-register-notifier
+ :name 'pushover
+ :available (lambda () (getenv "PUSHOVER_TOKEN"))
+ :notify (lambda (ev)
+           (my/pushover-send (plist-get ev :text)
+                             :priority (if (plist-get ev :urgent) 1 0))))
+
+(setf (alist-get 'needs-input cmacs-brigade-notify-routes)
+      '(speak pushover))
+#+end_src
+
+Which notifiers fire for which events is =cmacs-brigade-notify-routes=,
+so a registered notifier is inert until you route something to it. See
+[[file:notifications.org][Notifications and voice]] — including the part that matters most, which
+is not the notification but the summary you get when you come back.
 
 * Hooks and events
 

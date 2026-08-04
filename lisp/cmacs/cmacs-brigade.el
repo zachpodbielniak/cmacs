@@ -165,7 +165,13 @@ The subsystem's own symbols use the shorter `cmacs-brigade-' prefix.")
   (require 'cmacs-brigade-isolation nil 'noerror)
   (require 'cmacs-brigade-host nil 'noerror)
   (require 'cmacs-brigade-genmail nil 'noerror)
-  (require 'cmacs-brigade-deliver nil 'noerror))
+  (require 'cmacs-brigade-deliver nil 'noerror)
+  ;; Eager for the same reason, and for one more: notification is only
+  ;; useful if it is already listening when the run you walked away from
+  ;; finishes.  Arming it on first use would mean it is never armed for
+  ;; the run that most needed it.
+  (require 'cmacs-brigade-notify nil 'noerror)
+  (require 'cmacs-brigade-voice nil 'noerror))
 
 ;; The AI layers over imgedit and vidstudio are NOT loaded from here.
 ;; They depend on the brigade registry, not the other way round, and

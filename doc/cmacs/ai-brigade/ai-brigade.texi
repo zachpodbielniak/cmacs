@@ -25,6 +25,7 @@ one form lights it up on all three delivery paths at once.
 * Brigade Requirements::        Configure flags and dependencies.
 * Brigade Probing::             Detecting the feature at runtime.
 * Brigade Extending::           Registering your own capabilities.
+* Brigade Notifications::       Being told when it finishes; voice.
 @end menu
 
 @node Brigade Overview
@@ -140,8 +141,8 @@ and @code{:timeout}.
 
 The other registries are @code{cmacs-brigade-register-agent},
 @code{-worker}, @code{-isolation}, @code{-memory-source},
-@code{-deliverable}, @code{-panel}, @code{-context-provider} and
-@code{-approval-handler}.
+@code{-deliverable}, @code{-panel}, @code{-context-provider},
+@code{-approval-handler} and @code{cmacs-brigade-register-notifier}.
 
 A memory source supplies @code{enumerate} and @code{read-chunk}, so a
 Postgres table, a code tree or a Zotero library can be indexed into the
@@ -188,3 +189,92 @@ Resolve group names in @var{allowlist} to concrete tool names.
 @file{doc_org/cmacs/ai-brigade/extending.org}, for the full worked
 example: a telephony @samp{Call For Me} feature that cmacs deliberately
 does not implement, built end to end from a user's own init file.
+
+@node Brigade Notifications
+@section Notifications and voice
+
+The expensive failure is not an agent finishing silently.  It is walking
+away while one runs and coming back forty minutes after it finished
+without knowing.  A notification fired at the moment of completion does
+not recover those minutes, because you were not there to hear it.  So
+there are three mechanisms:
+
+@enumerate
+@item
+@strong{Notify when it happens}---speak, play a sound, raise a desktop
+notification, run a script, print a receipt, or anything you register.
+@item
+@strong{Escalate what is blocked.}  A finished agent costs you nothing by
+waiting; one waiting on an answer is burning wall-clock doing nothing, so
+it repeats at widening intervals until dealt with.
+@item
+@strong{Report what happened while you were gone.}  Events that fire
+while you are away are held and delivered the moment you return---the
+first command after a long idle.  This is the mechanism that closes the
+gap, because it does not require you to have been present.
+@end enumerate
+
+@example
+(cmacs-brigade-notify-mode 1)
+@end example
+
+@code{cmacs-brigade-notify-routes} maps each event kind
+(@code{started}, @code{finished}, @code{failed}, @code{needs-input},
+@code{budget-exceeded}, @code{all-done}, @code{away-quiet}) to the
+notifiers that fire for it.  The shipped notifiers are @code{message},
+@code{speak} (piper), @code{sound}, @code{desktop} (@command{notify-send}),
+@code{command} (a script, given the event in its environment) and
+@code{receipt}.  A notifier whose @code{:available} predicate returns
+@code{nil} is skipped rather than erroring, and one that signals is caught
+and logged so the rest of the route still fires.
+
+@defun cmacs-brigade-register-notifier &rest plist
+Register a way of getting the user's attention.  Keys: @code{:name},
+@code{:notify} (called with the event plist), and optionally
+@code{:available}.  The event carries @code{:kind}, @code{:task},
+@code{:agent}, @code{:state}, @code{:text} and @code{:urgent}.
+@end defun
+
+@defun cmacs-brigade-notify-status
+Report what the brigade is doing right now, aloud when called
+interactively.
+@end defun
+
+@defun cmacs-brigade-notify-pending
+Return the tasks currently waiting on you.
+@end defun
+
+@subsection Voice
+
+@code{cmacs-brigade-voice} adds speech in both directions, needing
+whisper for input and piper for output.
+@code{cmacs-brigade-voice-listen} is the primitive: it records one phrase
+and calls back with the text.  It is deliberately not
+@code{cmacs-whisper-dictate}, which is a streaming insert-as-you-talk
+toggle---transcribing a phrase whole also transcribes it better, since a
+sentence split across three-second windows loses the context that
+disambiguates its middle.
+
+@code{cmacs-brigade-voice-task} dictates a task: it is confirmed, then
+appended to a plan as an ordinary org headline and adopted, because org
+is authoritative for intent and a spoken task should be as editable and
+git-tracked as a typed one.  @code{cmacs-brigade-voice-ask} answers four
+spoken questions---what is running, what is waiting on me, what has this
+cost, what has finished---matched by regexp rather than by a model call,
+since the answers are already computed.
+
+@code{cmacs-brigade-voice-setup-approvals} registers an approval handler
+that reads a confirmation request aloud.  The answer is still typed:
+approval is a synchronous gate, and blocking the editor to record a
+spoken yes would stall whatever else is running---under @option{--gowl}
+that is the compositor.  It is opt-in rather than automatic because
+registering any approval handler replaces the built-in fallback, which
+refuses when it cannot ask; a headless session must not have ``could not
+ask'' become ``went ahead anyway'' merely because this file was loaded.
+
+In the dashboard the voice commands live under @kbd{v}: @kbd{v t} to
+dictate a task, @kbd{v q} to ask, @kbd{v s} to stop recording, @kbd{v ?}
+to hear the status.
+
+@xref{Top,,, cmacs, the org manual}, file
+@file{doc_org/cmacs/ai-brigade/notifications.org}, for the full chapter.

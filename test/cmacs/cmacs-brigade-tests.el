@@ -246,6 +246,7 @@ was updated alongside the code."
                   "cmacs-brigade-register-panel"
                   "cmacs-brigade-register-context-provider"
                   "cmacs-brigade-register-approval-handler"
+                  "cmacs-brigade-register-notifier"
                   "cmacs-brigade-deftool"))
       (should (string-search fn text)))
     ;; and the tools an agent is actually given
