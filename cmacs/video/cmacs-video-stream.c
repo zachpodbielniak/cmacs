@@ -101,6 +101,7 @@ cmacs_video__lisp_remove (uint64_t handle)
  * cmacs_video__init_symbols. */
 static Lisp_Object QCcv_callbacks;
 static Lisp_Object QCcv_anchor_buffer;
+static Lisp_Object QCcv_anchor_frame;
 static Lisp_Object QCcv_anchor_marker;
 
 /* ====================================================================
@@ -146,9 +147,11 @@ cmacs_video__init_symbols (void)
   QCcv_callbacks     = intern_c_string (":cmacs-video-callbacks");
   QCcv_anchor_buffer = intern_c_string (":cmacs-video-anchor-buffer");
   QCcv_anchor_marker = intern_c_string (":cmacs-video-anchor-marker");
+  QCcv_anchor_frame  = intern_c_string (":cmacs-video-anchor-frame");
   staticpro (&QCcv_callbacks);
   staticpro (&QCcv_anchor_buffer);
   staticpro (&QCcv_anchor_marker);
+  staticpro (&QCcv_anchor_frame);
   Qcv_initializing  = intern_c_string ("initializing");
   Qcv_buffering     = intern_c_string ("buffering");
   Qcv_playing       = intern_c_string ("playing");
@@ -665,6 +668,7 @@ cmacs_video_stream_attach_buffer (CmacsVideoStream *s, Lisp_Object marker)
   Lisp_Object buf = (MARKERP (marker) && BUFFERP (Fmarker_buffer (marker)))
                     ? Fmarker_buffer (marker) : Qnil;
   cmacs_video__lisp_set (s->handle, QCcv_anchor_buffer, buf);
+  cmacs_video__lisp_set (s->handle, QCcv_anchor_frame, Qnil);
   s->standalone_frame = NULL;
 }
 
@@ -675,6 +679,19 @@ cmacs_video_stream_attach_frame (CmacsVideoStream *s, struct frame *f,
   if (!s) return;
   cmacs_video__lisp_set (s->handle, QCcv_anchor_buffer, Qnil);
   cmacs_video__lisp_set (s->handle, QCcv_anchor_marker, Qnil);
+  /* Keep the frame as a Lisp_Object in the GC-rooted table as well as a
+   * raw pointer.  The raw pointer is fine for the paint hook, which runs
+   * from the frame's own draw path and therefore only ever sees a live
+   * frame -- but the redraw idle below fires asynchronously and can
+   * outlive `delete-frame'.  Dereferencing a freed frame there produced
+   * a Lisp_Object pointing at reused heap, and the crash surfaced deep
+   * inside redisplay with no hint of where it came from.  Same reasoning
+   * as the table's own header comment. */
+  {
+    Lisp_Object fobj;
+    XSETFRAME (fobj, f);
+    cmacs_video__lisp_set (s->handle, QCcv_anchor_frame, fobj);
+  }
   s->standalone_frame = f;
   s->standalone_x = x;
   s->standalone_y = y;
@@ -688,6 +705,7 @@ cmacs_video_stream_detach (CmacsVideoStream *s)
   if (!s) return;
   cmacs_video__lisp_set (s->handle, QCcv_anchor_buffer, Qnil);
   cmacs_video__lisp_set (s->handle, QCcv_anchor_marker, Qnil);
+  cmacs_video__lisp_set (s->handle, QCcv_anchor_frame, Qnil);
   s->standalone_frame = NULL;
 }
 
@@ -821,11 +839,17 @@ cmacs_video__redraw_idle (gpointer ud)
     {
       cmacs_dispatch_safe_call1 (intern ("force-window-update"), anchor_buf);
     }
-  else if (s->standalone_frame)
+  else
     {
-      Lisp_Object frame;
-      XSETFRAME (frame, s->standalone_frame);
-      cmacs_dispatch_safe_call1 (intern ("force-window-update"), frame);
+      /* Read the frame from the GC-rooted table rather than
+       * XSETFRAME-ing the raw pointer: this callback is queued from the
+       * streaming thread and can be dispatched after the frame has been
+       * deleted, at which point the raw pointer names freed heap.  A
+       * frame object that is merely dead is still valid memory, so
+       * FRAME_LIVE_P is answerable; a dangling pointer is not. */
+      Lisp_Object frame = cmacs_video__lisp_get (s->handle, QCcv_anchor_frame);
+      if (FRAMEP (frame) && FRAME_LIVE_P (XFRAME (frame)))
+        cmacs_dispatch_safe_call1 (intern ("force-window-update"), frame);
     }
   return G_SOURCE_REMOVE;
 }
