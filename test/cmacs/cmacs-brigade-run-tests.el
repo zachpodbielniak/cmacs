@@ -12,6 +12,7 @@
 (require 'cmacs-brigade-run nil 'noerror)
 (require 'cmacs-brigade-agent-def nil 'noerror)
 (require 'cmacs-brigade-plan nil 'noerror)
+(require 'cmacs-brigade-output nil 'noerror)
 (require 'cl-lib)
 (require 'cmacs-brigade-dashboard nil 'noerror)
 
@@ -479,6 +480,135 @@ claude-code worker too."
   (let ((argv (cmacs-brigade--worker-command
                'opencode '(:model "opencode/anthropic/claude-3") "/tmp/p" nil)))
     (should (member "anthropic/claude-3" argv))))
+
+
+;;;; Output
+
+(defmacro cmacs-brigade-run-tests--with-output-dir (&rest body)
+  (declare (indent 0))
+  `(let* ((dir (make-temp-file "brigade-out" t))
+          (cmacs-brigade-output-dir dir)
+          (cmacs-brigade-output--cache (make-hash-table :test 'equal)))
+     (unwind-protect (progn ,@body) (delete-directory dir t))))
+
+(ert-deftest cmacs-brigade-output-round-trips ()
+  (skip-unless (featurep 'cmacs-brigade-output))
+  (cmacs-brigade-run-tests--with-output-dir
+    (cmacs-brigade-output-put "t1" "the answer")
+    (should (equal "the answer" (cmacs-brigade-output-get "t1")))
+    ;; and again with the session cache gone, which is the case that
+    ;; matters: the usual question is what last night's run said.
+    (let ((cmacs-brigade-output--cache (make-hash-table :test 'equal)))
+      (should (equal "the answer" (cmacs-brigade-output-get "t1"))))))
+
+(ert-deftest cmacs-brigade-output-is-recorded-by-the-finished-hook ()
+  "Output is captured without anyone remembering to capture it."
+  (skip-unless (featurep 'cmacs-brigade-output))
+  (cmacs-brigade-run-tests--with-output-dir
+    (run-hook-with-args 'cmacs-brigade-run-finished-functions
+                        "t-hooked" 'done "hook output")
+    (should (equal "hook output" (cmacs-brigade-output-get "t-hooked")))))
+
+(ert-deftest cmacs-brigade-output-missing-is-not-an-empty-buffer ()
+  "Nothing-produced and not-started must not look identical."
+  (skip-unless (featurep 'cmacs-brigade-output))
+  (cmacs-brigade-run-tests--with-output-dir
+    (let ((buf (cmacs-brigade-output-show "never-ran")))
+      (unwind-protect
+          (should (string-match-p "no output"
+                                  (with-current-buffer buf (buffer-string))))
+        (kill-buffer buf)))))
+
+(ert-deftest cmacs-brigade-output-shows-text-and-usage ()
+  (skip-unless (and (featurep 'cmacs-brigade-output)
+                    (fboundp 'cmacs-brigade-task-adopt)))
+  (cmacs-brigade-run-tests--with-output-dir
+    (let ((id "out-show-1"))
+      (cmacs-brigade-task-adopt id "p.org" nil "Some task")
+      (cmacs-brigade-task-progress id 3 100 200 45000)
+      (cmacs-brigade-output-put id "the produced answer")
+      (let ((buf (cmacs-brigade-output-show id)))
+        (unwind-protect
+            (let ((text (with-current-buffer buf (buffer-string))))
+              (should (string-match-p "Some task" text))
+              (should (string-match-p "the produced answer" text))
+              (should (string-match-p "3 turns" text))
+              (should (string-match-p "100/200 tokens" text))
+              (should (string-match-p "0\\.0450" text)))
+          (kill-buffer buf)
+          (ignore-errors (cmacs-brigade-task-forget id)))))))
+
+(ert-deftest cmacs-brigade-dashboard-binds-output ()
+  (skip-unless (featurep 'cmacs-brigade-dashboard))
+  (should (eq 'cmacs-brigade-dashboard-output
+              (lookup-key cmacs-brigade-dashboard-mode-map (kbd "o")))))
+
+
+;;;; Reading a CLI's report
+
+(ert-deftest cmacs-brigade-parses-a-cli-report ()
+  "Text comes out and usage is recorded, which is why JSON is asked for."
+  (skip-unless (and (featurep 'cmacs-brigade-run)
+                    (fboundp 'cmacs-brigade-task-adopt)))
+  (let ((id "report-1"))
+    (cmacs-brigade-task-adopt id "p.org" nil "t")
+    (unwind-protect
+        (let ((text (cmacs-brigade--parse-cli-report
+                     (concat "{\"result\":\"Paris.\",\"num_turns\":2,"
+                             "\"total_cost_usd\":0.0329,"
+                             "\"usage\":{\"input_tokens\":10,"
+                             "\"output_tokens\":78}}")
+                     id)))
+          (should (equal "Paris." text))
+          (let ((r (cmacs-brigade-task-get id)))
+            (should (= 2 (plist-get r :turns)))
+            (should (= 10 (plist-get r :in-tokens)))
+            (should (= 78 (plist-get r :out-tokens)))
+            ;; integer micro-dollars, so repeated sums do not drift
+            (should (= 32900 (plist-get r :cost-micros)))))
+      (ignore-errors (cmacs-brigade-task-forget id)))))
+
+(ert-deftest cmacs-brigade-non-report-output-is-passed-through ()
+  "A worker that prints prose must not have it swallowed."
+  (skip-unless (featurep 'cmacs-brigade-run))
+  (should (equal "just some text"
+                 (cmacs-brigade--parse-cli-report "just some text" "x")))
+  ;; JSON that is not a report keeps its raw form rather than vanishing
+  (should (equal "{\"unrelated\":1}"
+                 (cmacs-brigade--parse-cli-report "{\"unrelated\":1}" "x")))
+  ;; and a report with no usage block still yields its text
+  (should (equal "hi" (cmacs-brigade--parse-cli-report
+                       "{\"result\":\"hi\"}" "x"))))
+
+(ert-deftest cmacs-brigade-report-survives-a-preamble ()
+  "A CLI warning printed before the JSON must not break parsing."
+  (skip-unless (featurep 'cmacs-brigade-run))
+  (should (equal "ok" (cmacs-brigade--parse-cli-report
+                       "warning: something\n{\"result\":\"ok\"}" "x"))))
+
+(ert-deftest cmacs-brigade-subprocess-argv-uses-the-resolved-worker ()
+  "The argv comes from the resolved worker, not a second copy of the rule.
+
+Computing the worker again inside the spawn path is how a run dispatched
+to claude-code ended up asking for inproc's argv and failing with
+\"inproc has no subprocess form\"."
+  (skip-unless (featurep 'cmacs-brigade-run))
+  (let ((argv nil)
+        (orig (symbol-function 'make-process)))
+    ;; Capture the argv, then delegate to the real `make-process' with a
+    ;; harmless command.  Calling `start-process' from the stub instead
+    ;; recurses, since that is implemented in terms of `make-process'.
+    (cl-letf (((symbol-function 'make-process)
+               (lambda (&rest args)
+                 (setq argv (plist-get args :command))
+                 (apply orig (plist-put (copy-sequence args)
+                                        :command (list "true"))))))
+      (cmacs-brigade--start-process
+       "argv-test" '(:name argv-agent :model "claude-code/opus") "prompt"
+       nil nil nil))
+    (should (equal (car argv) cmacs-brigade-claude-program))
+    (should (member "--print" argv))
+    (should (member "opus" argv))))
 
 (provide 'cmacs-brigade-run-tests)
 

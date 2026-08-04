@@ -42,6 +42,7 @@
 ;; commands need the directory default, so the plan layer is a hard
 ;; dependency rather than something to declare-function around.
 (require 'cmacs-brigade-plan)
+(require 'cmacs-brigade-output)
 (require 'cl-lib)
 (require 'subr-x)
 
@@ -208,6 +209,7 @@ a to pick another\n"
   "What to show when there are no tasks: how to get one."
   (insert "\n  No tasks yet.\n\n")
   (insert "    c   create a plan and open it\n")
+  (insert "    o   read what a finished task produced\n")
   (insert "    p   open an existing plan\n")
   (insert "    ?   all keys\n\n")
   (let ((agents (cmacs-brigade-registry-list 'agent)))
@@ -243,9 +245,9 @@ a to pick another\n"
                              'face 'error)))))))
 
 (defun cmacs-brigade-dashboard--hints ()
-  (concat " s start   K cancel  RET plan   c new plan  p open plan\n"
-          " a agent   m model   b budget   t tools     A reload agents\n"
-          " g refresh M memory  ? keys     q quit"))
+  (concat " s start   K cancel  o output   RET plan    c new plan\n"
+          " a agent   m model   b budget   t tools     p open plan\n"
+          " g refresh M memory  A agents   ? keys      q quit"))
 
 (defun cmacs-brigade-dashboard--record-at-point ()
   (get-text-property (line-beginning-position) 'cmacs-brigade-record))
@@ -405,6 +407,12 @@ option the UI cannot express."
     (cmacs-brigade-dashboard--set-property
      r "TOOLS" (string-join tools ", "))))
 
+(defun cmacs-brigade-dashboard-output ()
+  "Show what the task on this line produced."
+  (interactive)
+  (let ((r (cmacs-brigade-dashboard--record-or-error)))
+    (cmacs-brigade-output-show (plist-get r :id))))
+
 (defun cmacs-brigade-dashboard-reload-agents ()
   "Re-read agent definitions from disk."
   (interactive)
@@ -454,6 +462,7 @@ knowing that `cmacs-brigade-plan-create\=' exists and where plans live."
     (define-key map (kbd "s") #'cmacs-brigade-dashboard-start)
     (define-key map (kbd "K") #'cmacs-brigade-dashboard-cancel)
     (define-key map (kbd "RET") #'cmacs-brigade-dashboard-visit)
+    (define-key map (kbd "o") #'cmacs-brigade-dashboard-output)
     (define-key map (kbd "g") #'cmacs-brigade-dashboard-refresh)
     (define-key map (kbd "M") #'cmacs-brigade-memory-find)
     ;; Getting a plan without having to know where plans live.

@@ -99,6 +99,7 @@ None of the three ever creates a window. =display-buffer-alist= still applies if
 |-----+--------------|
 | =s= | start the task on this line |
 | =K= | cancel it |
+| =o= | read what it produced |
 | =RET= | jump to its headline in the plan |
 | =c= | create a new plan and open it |
 | =p= | open an existing plan |

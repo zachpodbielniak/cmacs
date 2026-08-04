@@ -95,7 +95,12 @@ in the model string picks its own worker; otherwise
         (config (and endpoint (plist-get endpoint :path))))
     (pcase worker
       ('claude-code
-       (append (list cmacs-brigade-claude-program "--print")
+       (append (list cmacs-brigade-claude-program "--print"
+                     ;; JSON so the run reports its own usage: it carries
+                     ;; result, num_turns, usage and total_cost_usd, and
+                     ;; without it turns and cost stay stuck at zero with
+                     ;; no way to tell a cheap run from an expensive one.
+                     "--output-format" "json")
                ;; The prompt arrives on stdin rather than argv: prompts
                ;; routinely exceed ARG_MAX, and argv is world-readable.
                (when config (list "--mcp-config" config))
@@ -116,7 +121,10 @@ in the model string picks its own worker; otherwise
 
 (defun cmacs-brigade--start-process (task-id agent prompt cwd env endpoint)
   "Spawn AGENT's worker for TASK-ID.  Returns the process."
-  (let* ((worker (or (plist-get agent :worker) cmacs-brigade-worker))
+  ;; The resolver, not a second copy of its rule: computing the worker
+  ;; here as well is how a run dispatched to claude-code ended up asking
+  ;; for inproc's argv.
+  (let* ((worker (cmacs-brigade-resolve-worker agent))
          (prompt-file (make-temp-file "cmacs-brigade-prompt"))
          (argv (cmacs-brigade--worker-command worker agent prompt-file
                                               endpoint))
@@ -175,9 +183,18 @@ one of them."
     (when (buffer-live-p buf)
       (with-current-buffer buf (set-buffer-modified-p nil))
       (kill-buffer buf))
-    (cmacs-brigade--finish task-id state output
-                           (unless (zerop status)
-                             (format "worker exited %s" status)))))
+    ;; Through the worker's own reader, so a CLI that reports usage gets
+    ;; it recorded and one that does not is passed through untouched.
+    (let* ((run (gethash task-id cmacs-brigade--runs))
+           (w (and run (cmacs-brigade-registry-get 'worker
+                                                   (plist-get run :worker))))
+           (parse (and w (plist-get w :parse-output))))
+      (when (and parse output)
+        (setq output (or (ignore-errors (funcall parse output task-id))
+                         output)))
+      (cmacs-brigade--finish task-id state output
+                             (unless (zerop status)
+                               (format "worker exited %s" status))))))
 
 
 ;;;; The in-process worker
@@ -258,6 +275,55 @@ session's system prompt, so they are not repeated inside the user turn."
     (when (process-live-p proc) (delete-process proc))))
 
 
+;;;; Reading a CLI's report
+;;
+;; The CLI workers are asked for JSON so a finished run can say what it
+;; cost.  Parsing is best-effort in both directions: a JSON body that
+;; does not look like a report is shown raw rather than swallowed, and a
+;; report missing a usage block still yields its text.
+
+(defun cmacs-brigade--parse-cli-report (raw task-id)
+  "Extract the answer from RAW, recording TASK-ID's usage on the way.
+
+Returns the text to keep.  RAW unchanged when it is not a report."
+  (let ((json (and raw (cmacs-brigade--json-object raw))))
+    (if (null json) raw
+      (let* ((usage (alist-get 'usage json))
+             (turns (alist-get 'num_turns json))
+             (in (or (alist-get 'input_tokens usage)
+                     (alist-get 'inputTokens usage)))
+             (out (or (alist-get 'output_tokens usage)
+                      (alist-get 'outputTokens usage)))
+             (cost (alist-get 'total_cost_usd json))
+             (text (or (alist-get 'result json)
+                       (alist-get 'text json)
+                       (alist-get 'output json))))
+        (when (and (fboundp 'cmacs-brigade-task-progress)
+                   (or turns in out cost))
+          (ignore-errors
+            (cmacs-brigade-task-progress
+             task-id (or turns 0) (or in 0) (or out 0)
+             ;; Integer micro-dollars: cost is summed across runs and
+             ;; float drift in the one number a budget acts on is worse
+             ;; than no number at all.
+             (round (* 1000000 (or cost 0))))))
+        (if (stringp text) text raw)))))
+
+(defun cmacs-brigade--json-object (raw)
+  "Parse RAW as a JSON object, or nil.
+
+Located rather than assumed to be the whole string: a CLI may print a
+warning on stdout before its report."
+  (let* ((start (string-search "{" raw))
+         (end (and start (cl-position ?} raw :from-end t))))
+    (when (and start end (< start end))
+      (condition-case nil
+          (let ((v (json-parse-string (substring raw start (1+ end))
+                                      :object-type 'alist :array-type 'list
+                                      :null-object nil :false-object nil)))
+            (and (listp v) v))
+        (error nil)))))
+
 ;;;; Shipped workers
 ;;
 ;; Registered through the public `cmacs-brigade-register-worker' and
@@ -278,14 +344,16 @@ session's system prompt, so they are not repeated inside the user turn."
  :start #'cmacs-brigade--worker-inproc
  :cancel #'cmacs-brigade--cancel-inproc)
 
-(dolist (w '((claude-code . "Drive the claude CLI in --print mode.")
-             (opencode    . "Drive the opencode CLI.")
-             (shell       . "Pipe the prompt to bash.  Mostly for testing.")))
+(dolist (w '((claude-code "Drive the claude CLI in --print mode." t)
+             (opencode    "Drive the opencode CLI." t)
+             (shell       "Pipe the prompt to bash.  Mostly for testing." nil)))
   (cmacs-brigade-register-worker
-   :name (car w)
-   :description (cdr w)
+   :name (nth 0 w)
+   :description (nth 1 w)
    :start #'cmacs-brigade--worker-subprocess
-   :cancel #'cmacs-brigade--cancel-process))
+   :cancel #'cmacs-brigade--cancel-process
+   ;; shell has no report to read; its stdout is the answer.
+   :parse-output (when (nth 2 w) #'cmacs-brigade--parse-cli-report)))
 
 
 ;;;; Starting

@@ -183,6 +183,10 @@ The subsystem's own symbols use the shorter `cmacs-brigade-' prefix.")
   ;; useful if it is already listening when the run you walked away from
   ;; finishes.  Arming it on first use would mean it is never armed for
   ;; the run that most needed it.
+  ;; Eager so output is captured from the very first run: the hook that
+  ;; records it has to already be on `cmacs-brigade-run-finished-functions'
+  ;; when that run ends, and loading on first view would be too late.
+  (require 'cmacs-brigade-output nil 'noerror)
   (require 'cmacs-brigade-notify nil 'noerror)
   (require 'cmacs-brigade-voice nil 'noerror)
   ;; Loaded so its tools and dashboard panel register; nothing is armed
