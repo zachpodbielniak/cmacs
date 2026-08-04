@@ -166,4 +166,9 @@ The subsystem's own symbols use the shorter `cmacs-brigade-' prefix.")
   (require 'cmacs-brigade-host nil 'noerror)
   (require 'cmacs-brigade-genmail nil 'noerror))
 
+;; The AI layers over imgedit and vidstudio are NOT loaded from here.
+;; They depend on the brigade registry, not the other way round, and
+;; requiring them here as well makes that a cycle.  Each one requires
+;; what it needs and registers its own tools.
+
 ;;; cmacs-brigade.el ends here
