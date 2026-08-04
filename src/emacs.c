@@ -174,6 +174,11 @@ extern char etext;
 #include "cmacs-lsp-cli.h"
 #endif
 
+/* CMACS: --mcp-relay scoped MCP bridge for brigade CLI agents.  */
+#ifdef HAVE_CMACS_AI_BRIGADE
+#include "cmacs-brigade.h"
+#endif
+
 #ifdef HAVE_CMACS_GOWL
 #include <gowl.h>
 #include <wayland-server-core.h>
@@ -342,6 +347,13 @@ Initialization options:\n\
 --cmacs-lsp LANG            run the built-in LSP language server for\n\
                               LANG over stdio, no editor; with no LANG,\n\
                               list the compiled-in language servers\n\
+",
+#endif
+#ifdef HAVE_CMACS_AI_BRIGADE
+    "\
+--mcp-relay                 bridge stdio MCP to this cmacs's socket,\n\
+                              scoped to CMACS_BRIGADE_ALLOW; spawned by\n\
+                              the brigade, not run by hand\n\
 ",
 #endif
 #ifdef HAVE_CMACS_CRISPY
@@ -1484,6 +1496,16 @@ android_emacs_init (int argc, char **argv, char *dump_file)
           break;
       }
   }
+#endif
+
+  /* CMACS: --mcp-relay bridges a brigade CLI agent's stdio MCP stream
+     to this cmacs's Unix socket, filtered by the agent's allowlist, and
+     never returns.  Same never-return model as --bacon and --cmacs-lsp,
+     and for a stronger reason: the relay is what stands between an
+     agent and the editor's whole tool surface, so no Lisp VM may exist
+     in that process.  See doc_org/cmacs/cmacs-upstream-changes.org.  */
+#ifdef HAVE_CMACS_AI_BRIGADE
+  cmacs_brigade_relay_maybe_main (argc, argv);
 #endif
 
 #ifdef HAVE_CMACS_LRGTERM

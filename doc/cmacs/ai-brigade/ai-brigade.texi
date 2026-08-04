@@ -147,6 +147,43 @@ A memory source supplies @code{enumerate} and @code{read-chunk}, so a
 Postgres table, a code tree or a Zotero library can be indexed into the
 same vector store and every agent's @code{memory_search} covers it.
 
+@subsection Allowlists and the relay
+
+An agent's tool list may name individual tools, groups, or @samp{*}.
+Before a CLI agent is spawned that list is expanded by
+@code{cmacs-brigade-allowlist-expand}: group names resolve to the tools
+in them, while @samp{*} and any unrecognised name pass through.
+
+Expansion happens in cmacs rather than in the relay because the relay
+runs in its own process, spawned by the AI CLI, with an empty
+registry---a group name reaching that side would match nothing,
+silently.  Unrecognised names pass through because most of what an agent
+uses (@code{project_read_file}, @code{memory_search}, @code{gowl_*}) is a
+built-in MCP tool the brigade registry has never seen.
+
+Two rules the relay enforces with no registry at all:
+
+@itemize @bullet
+@item
+Tools named @code{ai_*} or @code{brigade_*} are refused
+unconditionally, so an agent cannot spawn agents outside the
+orchestrator's budget accounting.
+@item
+The @dfn{privileged set}---@code{eval}, @code{bash}, @code{shell},
+@code{execute_command}, @code{send_keys}, the C-patching tools,
+@code{crispy_eval}, @code{bacon_eval}---is unreachable through
+@samp{*} or a group.  Granting one is a deliberate act: name it
+outright or the agent does not get it.
+@end itemize
+
+@defun cmacs-brigade-tool-allowed-p allowlist tool-name
+Return non-@code{nil} if @var{allowlist} authorises @var{tool-name}.
+@end defun
+
+@defun cmacs-brigade-allowlist-expand allowlist
+Resolve group names in @var{allowlist} to concrete tool names.
+@end defun
+
 @xref{Top,,, cmacs, the org manual}, file
 @file{doc_org/cmacs/ai-brigade/extending.org}, for the full worked
 example: a telephony @samp{Call For Me} feature that cmacs deliberately

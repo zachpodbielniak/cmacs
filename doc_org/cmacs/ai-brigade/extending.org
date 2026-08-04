@@ -163,6 +163,39 @@ vector index alongside your notes, a dashboard panel, budget accounting,
 confirmation prompts, allowlist scoping, and podomation events — none of
 which you implemented.
 
+* Allowlists and the relay
+
+An agent's =tools:= list may name individual tools, groups, or =*=.  Before a
+CLI agent is spawned, that list is *expanded* by
+=cmacs-brigade-allowlist-expand=: group names resolve to the concrete tools in
+them, while =*= and any unrecognised name pass through untouched.
+
+The expansion happens in cmacs, not in the relay, and the reason is worth
+knowing if you ever debug an agent that mysteriously has no tools.  The relay
+runs in its own process, spawned by the AI CLI rather than by cmacs, so nothing
+has ever called =cmacs-brigade-deftool= there and its registry is empty.  A
+group name reaching that side would match nothing — silently.  Unrecognised
+names pass through because most of what an agent uses (=project_read_file=,
+=memory_search=, =gowl_*=) is a built-in MCP tool the brigade registry has never
+seen; dropping those would strip an agent of nearly everything it was granted.
+
+Two rules the relay enforces without needing a registry at all:
+
+- Tools named =ai_*= or =brigade_*= are refused unconditionally, so an agent
+  cannot spawn agents outside the orchestrator's budget accounting.
+- The *privileged set* — =eval=, =bash=, =shell=, =execute_command=, =send_keys=,
+  the C-patching tools, =crispy_eval=, =bacon_eval=, the podomation evaluators —
+  is unreachable through =*= or a group.  Granting one is a deliberate act:
+  name it outright or the agent does not get it.
+
+You can ask what an agent would be permitted without running it:
+
+#+begin_src elisp
+(cmacs-brigade-tool-allowed-p "weather,project_read_file" "weather_now") ;; => t
+(cmacs-brigade-tool-allowed-p "*" "eval")                               ;; => nil
+(cmacs-brigade-allowlist-expand "weather")  ;; => "weather_now"
+#+end_src
+
 * A note on the safety tension
 
 The easier it is to expose something, the easier it is to expose something

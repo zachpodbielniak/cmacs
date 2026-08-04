@@ -66,6 +66,15 @@ cmacs_mcp_register_all_tools (McpServer *server)
   cmacs_mcp_tools_shell_register (server);
   cmacs_mcp_tools_project_register (server);
 
+#ifdef HAVE_CMACS_AI_BRIGADE
+  /* Registered after the built-ins so it can see them: a brigade tool
+     whose name collides with one is skipped with a warning rather than
+     replacing it (mcp_server_add_tool replaces on collision, so a user
+     tool called "eval" would otherwise silently take over the real
+     one). */
+  cmacs_mcp_tools_brigade_register (server);
+#endif
+
 #ifdef HAVE_CMACS_GI
   cmacs_mcp_tools_gi_register (server);
 #endif

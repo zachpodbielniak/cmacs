@@ -77,7 +77,7 @@ provider and tool-executor types directly).
 | Phase | Contents                                        | State       |
 |-------+-------------------------------------------------+-------------|
 |     0 | Subsystem wiring, feature flag, capability probe | done        |
-|     1 | The extension fabric: registries, =deftool=, relay | in progress |
+|     1 | The extension fabric: registries, =deftool=, relay | done        |
 |     2 | Memory / SecondBrain                             | planned     |
 |     3 | Agent definitions + plan model                   | planned     |
 |     4 | Agent runtime + dashboard                        | planned     |

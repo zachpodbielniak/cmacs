@@ -25,6 +25,13 @@
 
 (require 'cmacs nil 'noerror)
 
+;; Defined here rather than relying on the C DEFSYM so the Elisp layer
+;; still has a usable error hierarchy in a build without the feature --
+;; `define-error' with this as a parent would fail otherwise.  Harmless
+;; when the C side already established it: define-error is idempotent
+;; for an identical definition.
+(define-error 'cmacs-brigade-error "CMacs brigade error")
+
 (defconst cmacs-brigade-abi-expected 1
   "C ABI version this Elisp layer is written against.
 Checked against `cmacs-brigade-abi-version' at load so a stale .elc

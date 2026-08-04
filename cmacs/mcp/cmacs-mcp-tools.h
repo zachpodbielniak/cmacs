@@ -82,6 +82,13 @@ void cmacs_mcp_tools_vidstudio_register (McpServer *server);
 #endif
 
 /* Resource and prompt registration. */
+#ifdef HAVE_CMACS_AI_BRIGADE
+/* Publishes every capability registered through `cmacs-brigade-deftool'.
+ * Walks the live registry rather than a static table, because a tool can
+ * be registered at any point after startup. */
+void cmacs_mcp_tools_brigade_register (McpServer *server);
+#endif
+
 void cmacs_mcp_register_resources (McpServer *server);
 void cmacs_mcp_register_prompts   (McpServer *server);
 

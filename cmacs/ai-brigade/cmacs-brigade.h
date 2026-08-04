@@ -43,6 +43,74 @@
  * well would put two declarations in every translation unit and trip
  * -Wredundant-decls, which this tree treats as an error.  */
 
+/* ── Tool registry mirror ─────────────────────────────────────────
+ *
+ * The authoritative registry is Elisp; this is the C mirror used for
+ * MCP publication and the allowlist gate.  See cmacs-brigade-registry.c
+ * for why it exists at all.  */
+
+enum cmacs_brigade_confirm
+{
+  CMACS_BRIGADE_CONFIRM_NONE = 0,
+  CMACS_BRIGADE_CONFIRM_ASK,
+  CMACS_BRIGADE_CONFIRM_ALWAYS
+};
+
+typedef struct
+{
+  gchar    *name;         /* wire name, e.g. "call_for_me" */
+  gchar    *description;
+  gchar    *params_json;  /* JSON array of parameter objects */
+  gchar    *group;        /* nullable; allowlist vocabulary */
+  gboolean  destructive;
+  enum cmacs_brigade_confirm confirm;
+  gboolean  async;
+  gint      timeout_ms;   /* 0 = use the default */
+} CmacsBrigadeTool;
+
+typedef void (*CmacsBrigadeToolFunc) (const CmacsBrigadeTool *tool,
+                                      gpointer user_data);
+
+extern void  cmacs_brigade_registry_init    (void);
+extern void  cmacs_brigade_registry_foreach (CmacsBrigadeToolFunc fn,
+                                             gpointer user_data);
+/* Returns a copy; free with cmacs_brigade_tool_destroy. */
+extern CmacsBrigadeTool *cmacs_brigade_registry_lookup (const gchar *name);
+extern void  cmacs_brigade_tool_destroy     (CmacsBrigadeTool *tool);
+extern guint cmacs_brigade_registry_size    (void);
+
+/* ── Allowlist gate ───────────────────────────────────────────────
+ *
+ * Decides whether an agent holding ALLOWLIST may call TOOL_NAME.
+ * ALLOWLIST is a comma-separated list of tool names and/or group names,
+ * or NULL/"" meaning "nothing".  The literal "*" means every
+ * non-privileged tool; it never unlocks the privileged set.
+ *
+ * Deliberately not Lisp: an agent that reaches `eval' could otherwise
+ * rewrite the function that decides what it is allowed to do.  */
+extern gboolean cmacs_brigade_tool_allowed (const gchar *allowlist,
+                                            const gchar *tool_name);
+
+/* True when TOOL_NAME is in the privileged set that is denied unless an
+ * allowlist names it explicitly (never via "*" or a group).  */
+extern gboolean cmacs_brigade_tool_privileged (const gchar *tool_name);
+
+/* Resolve group names in ALLOWLIST to concrete tool names, for handing
+ * to a relay process that has no registry of its own.  Caller frees. */
+extern gchar *cmacs_brigade_allowlist_expand (const gchar *allowlist);
+
+/* ── `emacs --mcp-relay' ──────────────────────────────────────────
+ *
+ * Scans ARGV for --mcp-relay and, if present, takes over the process
+ * entirely and exits -- it never returns to the caller.  Called from
+ * main() before any Emacs initialisation, the same never-return model
+ * as --bacon and --cmacs-lsp.
+ *
+ * Declared here (rather than in a private header) because src/emacs.c
+ * is the only caller and cmacs-brigade.h is what it already includes. */
+extern void cmacs_brigade_relay_maybe_main (int argc, char **argv);
+extern int  cmacs_brigade_relay_main       (int argc, char **argv);
+
 /* The GThread that owns the Lisp VM, captured in init_cmacs_ai_brigade.
  *
  * Worker threads must never touch Lisp directly.  Code that may run off
