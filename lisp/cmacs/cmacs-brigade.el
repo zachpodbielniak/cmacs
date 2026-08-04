@@ -187,6 +187,10 @@ The subsystem's own symbols use the shorter `cmacs-brigade-' prefix.")
   ;; records it has to already be on `cmacs-brigade-run-finished-functions'
   ;; when that run ends, and loading on first view would be too late.
   (require 'cmacs-brigade-output nil 'noerror)
+  ;; Eager: the subagent tools must be in the registry before an MCP
+  ;; session or a chat buffer asks what tools exist, and both can happen
+  ;; before any user code runs.
+  (require 'cmacs-brigade-subagent nil 'noerror)
   (require 'cmacs-brigade-notify nil 'noerror)
   (require 'cmacs-brigade-voice nil 'noerror)
   ;; Loaded so its tools and dashboard panel register; nothing is armed

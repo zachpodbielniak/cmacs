@@ -124,6 +124,36 @@ so a registered notifier is inert until you route something to it. See
 [[file:notifications.org][Notifications and voice]] — including the part that matters most, which
 is not the notification but the summary you get when you come back.
 
+* Subagents
+
+Five tools let a model hand work to another model:
+
+| Tool | What it does |
+|------+--------------|
+| =agent_spawn= | queue work for another agent; returns a task id immediately |
+| =agent_status= | what state that task is in, with turns, tokens and cost |
+| =agent_result= | collect what it produced |
+| =agent_cancel= | stop it |
+| =agent_list= | the agents available to spawn, and every known task |
+
+They are asynchronous on purpose. =agent_spawn= does not wait: a blocking spawn holds a turn open for minutes, and every provider has a tool-call timeout shorter than the work is likely to take. The parent polls and collects.
+
+Spawning is deliberately *not* named =brigade_spawn=. The allowlist refuses every =brigade_= and =ai_= name outright, so an agent cannot reach back into the orchestrator and start work outside its budget accounting; these five are the sanctioned way through that wall. They go through the same queue, concurrency cap and state machine as a task you started by hand, and a spawned task appears in =subagents.org= like any other.
+
+=cmacs-brigade-subagent-max-depth= (2) bounds nesting: a subagent that can spawn can spawn something that spawns, and a runaway tree is expensive in a way that is not noticed until the bill.
+
+** In a chat buffer
+
+A =cmacs-ai= chat gets the =agent= and =memory= groups, so you can spawn from a conversation by hand. =cmacs-brigade-chat-tools= changes which groups, or nil for none.
+
+That happens through =cmacs-ai-chat-executor-functions=, a hook cmacs-ai offers rather than cmacs-ai knowing about the brigade — the brigade requires cmacs-ai, and the reverse would be a cycle. Your own subsystem can add tools to every chat the same way.
+
+** With a CLI provider
+
+ai-glib's CLI clients ignore the tools argument entirely (=(void)tools= in the claude-code and claude-tmux clients), so tools registered on an executor do not exist as far as those models are concerned. A chat buffer on =claude-code= or =claude-tmux= is therefore given a scoped MCP config instead, which is how those agents take tools — the same mechanism the brigade uses for CLI workers. The credential is revoked when the buffer is killed.
+
+=opencode= has no MCP config property, so a chat on it says so rather than looking tool-enabled and having none.
+
 * Hooks and events
 
 Abnormal hooks fire on every lifecycle edge:

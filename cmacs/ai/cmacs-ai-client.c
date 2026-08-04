@@ -20,6 +20,7 @@
 #ifdef HAVE_CMACS_AI
 
 #include "lisp.h"
+#include "coding.h"   /* ENCODE_FILE for the MCP config path */
 #include "cmacs-ai.h"
 
 #include <ai-glib.h>
@@ -305,6 +306,48 @@ DEFUN ("cmacs-ai-client-list", Fcmacs_ai_client_list,
   return out;
 }
 
+DEFUN ("cmacs-ai-client-cli-p", Fcmacs_ai_client_cli_p,
+       Scmacs_ai_client_cli_p, 1, 1, 0,
+       doc: /* Return t when HANDLE drives a command-line agent.
+
+The CLI providers (claude-code, opencode, claude-tmux) are a different
+GObject hierarchy from the HTTP ones, and they ignore the tools argument
+entirely -- ai-glib discards it.  A caller that wants the model to have
+tools must therefore hand a CLI provider an MCP config instead of
+registering them on an executor, and this is how it finds out which case
+it is in.  */)
+  (Lisp_Object handle)
+{
+  CHECK_FIXNAT (handle);
+  gpointer p = cmacs_ai_client_lookup (XFIXNUM (handle));
+  if (p == NULL) error ("cmacs-ai: bad client handle");
+  return AI_IS_CLI_CLIENT (p) ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-ai-client-set-mcp-config", Fcmacs_ai_client_set_mcp_config,
+       Scmacs_ai_client_set_mcp_config, 2, 2, 0,
+       doc: /* Point HANDLE's CLI agent at the MCP config file PATH.
+
+Returns t when the provider accepts one, nil when it has no such
+property -- opencode, for instance.  Setting it is how a CLI provider
+gets tools at all: it is passed as --mcp-config and the agent connects to
+the server described there.  */)
+  (Lisp_Object handle, Lisp_Object path)
+{
+  CHECK_FIXNAT (handle);
+  CHECK_STRING (path);
+  gpointer p = cmacs_ai_client_lookup (XFIXNUM (handle));
+  if (p == NULL) error ("cmacs-ai: bad client handle");
+  /* Probed rather than assumed: the three CLI clients do not all carry
+   * the property, and g_object_set on a missing one is a CRITICAL. */
+  if (g_object_class_find_property (G_OBJECT_GET_CLASS (p),
+                                    "mcp-config-path") == NULL)
+    return Qnil;
+  Lisp_Object enc = ENCODE_FILE (path);
+  g_object_set (G_OBJECT (p), "mcp-config-path", SSDATA (enc), NULL);
+  return Qt;
+}
+
 void syms_of_cmacs_ai_client_defuns (void);
 void
 syms_of_cmacs_ai_client_defuns (void)
@@ -319,6 +362,8 @@ syms_of_cmacs_ai_client_defuns (void)
   defsubr (&Scmacs_ai_client_set_max_tokens);
   defsubr (&Scmacs_ai_client_set_temperature);
   defsubr (&Scmacs_ai_client_list);
+  defsubr (&Scmacs_ai_client_cli_p);
+  defsubr (&Scmacs_ai_client_set_mcp_config);
 }
 
 #endif /* HAVE_CMACS_AI */

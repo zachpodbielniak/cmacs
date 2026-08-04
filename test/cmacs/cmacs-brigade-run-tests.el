@@ -13,6 +13,8 @@
 (require 'cmacs-brigade-agent-def nil 'noerror)
 (require 'cmacs-brigade-plan nil 'noerror)
 (require 'cmacs-brigade-output nil 'noerror)
+(require 'cmacs-brigade-subagent nil 'noerror)
+(require 'cmacs-ai-chat nil 'noerror)
 (require 'cl-lib)
 (require 'cmacs-brigade-dashboard nil 'noerror)
 
@@ -609,6 +611,94 @@ to claude-code ended up asking for inproc's argv and failing with
     (should (equal (car argv) cmacs-brigade-claude-program))
     (should (member "--print" argv))
     (should (member "opus" argv))))
+
+
+;;;; Subagents
+
+(ert-deftest cmacs-brigade-subagent-tools-are-registered ()
+  "The five spawn tools exist.
+
+They were specified in the design and never implemented, so an agent had
+no way to hand work to another agent and a chat buffer had nothing to
+show."
+  (skip-unless (featurep 'cmacs-brigade-subagent))
+  (dolist (n '(agent-spawn agent-status agent-result agent-cancel agent-list))
+    (should (cmacs-brigade-registry-get 'tool n))
+    (should (eq 'agent (cmacs-brigade-tool-group
+                        (cmacs-brigade-registry-get 'tool n)))))
+  ;; Spawning spends money on a schedule the user did not choose.
+  (should (cmacs-brigade-tool-destructive
+           (cmacs-brigade-registry-get 'tool 'agent-spawn)))
+  (should (cmacs-brigade-tool-confirm
+           (cmacs-brigade-registry-get 'tool 'agent-spawn)))
+  ;; Reading status must not be gated, or polling becomes unusable.
+  (should-not (cmacs-brigade-tool-destructive
+               (cmacs-brigade-registry-get 'tool 'agent-status))))
+
+(ert-deftest cmacs-brigade-subagent-tools-are-not-blocked-by-the-gate ()
+  "`agent_*' has to pass the allowlist, unlike `brigade_*' and `ai_*'.
+
+Those two prefixes are refused outright so an agent cannot reach the
+orchestrator directly; these five are the sanctioned way through, and a
+gate that blocked them too would make spawning impossible."
+  (skip-unless (fboundp 'cmacs-brigade-tool-allowed-p))
+  (should (cmacs-brigade-tool-allowed-p "agent" "agent_spawn"))
+  (should (cmacs-brigade-tool-allowed-p "*" "agent_status"))
+  (should-not (cmacs-brigade-tool-allowed-p "*" "brigade_start"))
+  (should-not (cmacs-brigade-tool-allowed-p "*" "ai_call")))
+
+(ert-deftest cmacs-brigade-subagent-spawn-checks-its-agent ()
+  "An unknown agent is reported with what would have worked."
+  (skip-unless (featurep 'cmacs-brigade-subagent))
+  (let ((err (should-error (cmacs-brigade-subagent-spawn
+                            'definitely-no-such-agent "do a thing")
+                           :type 'cmacs-brigade-error)))
+    (should (string-match-p "no agent named" (format "%s" err)))))
+
+(ert-deftest cmacs-brigade-subagent-depth-is-bounded ()
+  "Spawning cannot nest without limit.
+
+A subagent that can spawn can spawn something that spawns, and a runaway
+tree is expensive in a way that is not noticed until the bill."
+  (skip-unless (featurep 'cmacs-brigade-subagent))
+  (let ((cmacs-brigade-subagent--parent (make-hash-table :test 'equal))
+        (cmacs-brigade-subagent-max-depth 2))
+    (cmacs-brigade-register-agent :name 'depth-agent :prompt "p")
+    (puthash "b" "a" cmacs-brigade-subagent--parent)
+    (puthash "c" "b" cmacs-brigade-subagent--parent)
+    (should (= 0 (cmacs-brigade-subagent-depth "a")))
+    (should (= 2 (cmacs-brigade-subagent-depth "c")))
+    (should (equal '("b") (cmacs-brigade-subagent-children "a")))
+    ;; spawning from c would be depth 3
+    (should-error (cmacs-brigade-subagent-spawn 'depth-agent "x" nil "c")
+                  :type 'cmacs-brigade-error)))
+
+(ert-deftest cmacs-brigade-subagent-result-waits-for-the-run ()
+  "Collecting early says so instead of returning an empty answer."
+  (skip-unless (and (featurep 'cmacs-brigade-subagent)
+                    (fboundp 'cmacs-brigade-task-adopt)))
+  (let ((id "subagent-result-1"))
+    (cmacs-brigade-task-adopt id "p.org" nil "t")
+    (unwind-protect
+        (let ((tool (cmacs-brigade-registry-get 'tool 'agent-result)))
+          (should (string-match-p
+                   "Still draft"
+                   (funcall (cmacs-brigade-tool-handler tool) id))))
+      (ignore-errors (cmacs-brigade-task-forget id)))))
+
+(ert-deftest cmacs-brigade-chat-executor-hook-installs-tools ()
+  "A cmacs-ai chat buffer gets the brigade's tools through the hook.
+
+The hook is on cmacs-ai's side and the brigade adds to it, because the
+brigade requires cmacs-ai and the reverse would be a cycle."
+  (skip-unless (and (featurep 'cmacs-brigade-subagent)
+                    (fboundp 'cmacs-ai-tools-new)))
+  (should (memq 'cmacs-brigade-chat-install-tools
+                cmacs-ai-chat-executor-functions))
+  (let ((ex (cmacs-ai-tools-new)))
+    (unwind-protect
+        (should (> (cmacs-brigade-install-tools ex "agent") 0))
+      (cmacs-ai-tools-free ex))))
 
 (provide 'cmacs-brigade-run-tests)
 

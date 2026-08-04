@@ -126,6 +126,9 @@ sends the compose body and streams the response into a fresh
             #'cmacs-ai-chat--protect-history nil t)
   (add-hook 'kill-buffer-hook
             #'cmacs-ai-chat--on-buffer-killed nil t)
+  ;; A capability token must not outlive the buffer that needed it.
+  (add-hook 'kill-buffer-hook
+            #'cmacs-ai-chat--revoke-cli-tools nil t)
   (push (current-buffer) cmacs-ai-chat--buffers))
 
 ;;;; Buffer construction --------------------------------------------
@@ -137,6 +140,30 @@ sends the compose body and streams the response into a fresh
   (format "*cmacs-ai: %s [%s]*"
           (format-time-string "%H:%M:%S")
           (or provider cmacs-ai-default-provider)))
+
+(defcustom cmacs-ai-chat-cli-tool-allowlist "*"
+  "Tools a CLI provider may reach over MCP in a chat buffer.
+
+Comma-separated names or groups; `*' is everything the gate permits.
+Note that `*' never includes the privileged set -- eval, shell and the
+C-patching tools have to be named outright."
+  :type 'string
+  :group 'cmacs-ai)
+
+;; Genuinely optional, and guarded at every call site with a message
+;; when absent: cmacs-ai cannot require the brigade, because the brigade
+;; requires cmacs-ai.
+(declare-function cmacs-brigade-host-provision "cmacs-brigade-host")
+(declare-function cmacs-brigade-host-revoke "cmacs-brigade-host")
+
+(defvar cmacs-ai-chat-executor-functions nil
+  "Abnormal hook run with a new tool executor and the session's provider.
+
+Called as (EXECUTOR PROVIDER) once the executor exists, so a subsystem
+can add its own tools to a chat session without cmacs-ai having to know
+about it.  The brigade uses this to publish its tool registry -- the
+dependency runs that way round, since the brigade requires cmacs-ai and
+not the other way about.")
 
 (defun cmacs-ai-chat--setup-executor ()
   "Create and configure this buffer's tool executor.
@@ -181,7 +208,56 @@ ai-glib's web_search backend.  Shared by `cmacs-ai-chat--init' and
          cmacs-ai-search-provider
          cmacs-ai-search-api-key)
       (error
-       (message "cmacs-ai: web_search unavailable: %S" err)))))
+       (message "cmacs-ai: web_search unavailable: %S" err))))
+  ;; Let other subsystems contribute tools.  Runs last so a subsystem
+  ;; can see, and deliberately shadow, what is already installed.
+  (when cmacs-ai-chat-tool-executor
+    (run-hook-with-args 'cmacs-ai-chat-executor-functions
+                        cmacs-ai-chat-tool-executor
+                        cmacs-ai-chat-provider))
+  ;; A CLI provider ignores the tools argument entirely -- ai-glib
+  ;; discards it (`(void)tools' in the claude-code and claude-tmux
+  ;; clients) -- so everything registered above would silently not exist
+  ;; for the model.  Hand it an MCP config instead, which is how those
+  ;; agents take tools.
+  (cmacs-ai-chat--wire-cli-tools))
+
+(defun cmacs-ai-chat--wire-cli-tools ()
+  "Give a CLI provider its tools over MCP, since it ignores the executor."
+  (let ((client (car-safe cmacs-ai-chat-session-pair)))
+    (when (and client
+               cmacs-ai-chat-enable-tools
+               (fboundp 'cmacs-ai-client-cli-p)
+               (cmacs-ai-client-cli-p client))
+      (cond
+       ((not (fboundp 'cmacs-brigade-host-provision))
+        ;; Said out loud rather than skipped quietly: without this the
+        ;; session looks tool-enabled and has none.
+        (message "cmacs-ai: %s takes tools over MCP; needs --with-cmacs-ai-brigade to provision one"
+                 cmacs-ai-chat-provider))
+       (t
+        (let ((endpoint (cmacs-brigade-host-provision
+                         (format "chat-%s" (buffer-name))
+                         cmacs-ai-chat-cli-tool-allowlist)))
+          (cond
+           ((null endpoint)
+            (message "cmacs-ai: could not provision MCP tools for %s"
+                     cmacs-ai-chat-provider))
+           ((not (cmacs-ai-client-set-mcp-config client
+                                                 (plist-get endpoint :path)))
+            (message "cmacs-ai: %s does not accept an MCP config; this session has no tools" cmacs-ai-chat-provider))
+           (t (setq-local cmacs-ai-chat--cli-endpoint endpoint)))))))))
+
+(defvar-local cmacs-ai-chat--cli-endpoint nil
+  "Provisioned MCP endpoint for a CLI provider in this buffer.")
+
+(defun cmacs-ai-chat--revoke-cli-tools ()
+  "Drop this buffer's MCP credential when the buffer goes."
+  (when (and cmacs-ai-chat--cli-endpoint
+             (fboundp 'cmacs-brigade-host-revoke))
+    (ignore-errors
+      (cmacs-brigade-host-revoke (format "chat-%s" (buffer-name))))
+    (setq cmacs-ai-chat--cli-endpoint nil)))
 
 (defun cmacs-ai-chat--init (buf provider &optional model)
   (with-current-buffer buf
