@@ -160,6 +160,9 @@ The subsystem's own symbols use the shorter `cmacs-brigade-' prefix.")
 (when (cmacs-brigade-available-p)
   (require 'cmacs-brigade-registry)
   (require 'cmacs-brigade-tools)
-  (require 'cmacs-brigade-memory nil 'noerror))
+  (require 'cmacs-brigade-memory nil 'noerror)
+  (require 'cmacs-brigade-agent-def nil 'noerror)
+  (require 'cmacs-brigade-isolation nil 'noerror)
+  (require 'cmacs-brigade-host nil 'noerror))
 
 ;;; cmacs-brigade.el ends here

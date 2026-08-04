@@ -224,7 +224,8 @@ put a runtime record behind every heading someone wrote."
   "Adopt the entry at point under ID, applying any pending command."
   (let* ((entry (cmacs-brigade-plan--read-entry))
          (agent (plist-get entry :agent))
-         (record (cmacs-brigade-task-adopt id plan agent))
+         (record (cmacs-brigade-task-adopt id plan agent
+                                           (plist-get entry :title)))
          (current (plist-get record :state))
          (wanted (alist-get (or (plist-get entry :keyword) "TODO")
                             cmacs-brigade-plan-keyword->command

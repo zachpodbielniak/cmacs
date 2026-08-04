@@ -112,11 +112,18 @@ cmacs_brigade_state_can_transition (CmacsBrigadeState from,
   switch (from)
     {
     case CMACS_BRIGADE_STATE_DRAFT:
-      return to == CMACS_BRIGADE_STATE_QUEUED;
+      /* FAILED is reachable without ever running: a task can name an
+       * agent that does not exist, or ask for an isolation backend this
+       * machine has no tool for.  Those are discovered before anything
+       * starts, and without this the failure is simply dropped and the
+       * task sits in draft looking untouched. */
+      return to == CMACS_BRIGADE_STATE_QUEUED
+        || to == CMACS_BRIGADE_STATE_FAILED;
 
     case CMACS_BRIGADE_STATE_QUEUED:
       return to == CMACS_BRIGADE_STATE_DRAFT      /* unqueue */
-        || to == CMACS_BRIGADE_STATE_STARTING;
+        || to == CMACS_BRIGADE_STATE_STARTING
+        || to == CMACS_BRIGADE_STATE_FAILED;
 
     case CMACS_BRIGADE_STATE_STARTING:
       return to == CMACS_BRIGADE_STATE_RUNNING
@@ -175,6 +182,7 @@ typedef struct
   gint64             ended_at;
   gchar             *error;
   gchar             *agent;
+  gchar             *title;
 } CmacsBrigadeTask;
 
 static GHashTable *cmacs_brigade__tasks;    /* id -> CmacsBrigadeTask* */
@@ -191,6 +199,7 @@ task_free (gpointer data)
   g_free (t->plan);
   g_free (t->error);
   g_free (t->agent);
+  g_free (t->title);
   g_free (t);
 }
 
@@ -217,19 +226,22 @@ task_to_plist (const CmacsBrigadeTask *t)
                intern (":started-at"), make_fixnum (t->started_at),
                intern (":ended-at"), make_fixnum (t->ended_at),
                intern (":agent"), t->agent ? build_string (t->agent) : Qnil,
+               intern (":title"), t->title ? build_string (t->title) : Qnil,
                intern (":error"), t->error ? build_string (t->error) : Qnil);
 }
 
 /* ── DEFUNs ───────────────────────────────────────────────────────── */
 
 DEFUN ("cmacs-brigade-task-adopt", Fcmacs_brigade_task_adopt,
-       Scmacs_brigade_task_adopt, 2, 3, 0,
+       Scmacs_brigade_task_adopt, 2, 4, 0,
        doc: /* Ensure a task record exists for ID in PLAN, and return it.
 
-AGENT names the agent the task will run under.  An existing record is
-returned unchanged: adopting is how the org side announces "this task
-exists", not how it sets runtime state, which it may not touch.  */)
-  (Lisp_Object id, Lisp_Object plan, Lisp_Object agent)
+AGENT names the agent the task will run under and TITLE is the headline,
+kept so a dashboard can name a task without reopening its plan.  An
+existing record is returned with those refreshed but its runtime state
+untouched: adopting is how the org side announces "this task exists", not
+how it sets runtime state, which it may not touch.  */)
+  (Lisp_Object id, Lisp_Object plan, Lisp_Object agent, Lisp_Object title)
 {
   CmacsBrigadeTask *t;
 
@@ -251,6 +263,11 @@ exists", not how it sets runtime state, which it may not touch.  */)
     {
       g_free (t->agent);
       t->agent = g_strdup (SSDATA (agent));
+    }
+  if (STRINGP (title))
+    {
+      g_free (t->title);
+      t->title = g_strdup (SSDATA (title));
     }
   {
     Lisp_Object out = task_to_plist (t);

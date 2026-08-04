@@ -80,7 +80,7 @@ provider and tool-executor types directly).
 |     1 | The extension fabric: registries, =deftool=, relay | done        |
 |     2 | Memory / SecondBrain                             | done        |
 |     3 | Agent definitions + plan model                   | done        |
-|     4 | Agent runtime + dashboard                        | planned     |
+|     4 | Agent runtime + dashboard                        | done        |
 |     5 | GenMail                                          | planned     |
 |     6 | imgedit + vidstudio AI                           | planned     |
 |     7 | Deliverable generators                           | planned     |
