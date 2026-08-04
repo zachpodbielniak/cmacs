@@ -143,6 +143,23 @@ The subsystem's own symbols use the shorter `cmacs-brigade-' prefix.")
 (when (cmacs-brigade-available-p)
   (cmacs-brigade--check-abi))
 
+
 (provide 'cmacs-brigade)
+
+;; Load the rest of the fabric eagerly when brigade is compiled in.
+;;
+;; After `provide' rather than before, because every one of these
+;; requires this file back -- they need the defgroup and the paths --
+;; and doing it above would be a recursive require.
+;;
+;; Eager at all because the registries must be populated before cmacs's
+;; MCP server publishes its tool set to a new session, and a session can
+;; open before any user code has run; an external agent connecting at
+;; startup would otherwise see the built-in tools and none of the
+;; brigade's.
+(when (cmacs-brigade-available-p)
+  (require 'cmacs-brigade-registry)
+  (require 'cmacs-brigade-tools)
+  (require 'cmacs-brigade-memory nil 'noerror))
 
 ;;; cmacs-brigade.el ends here

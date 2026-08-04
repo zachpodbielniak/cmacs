@@ -49,21 +49,44 @@
     (and (file-directory-p dir)
          (directory-files dir t "\\.[ch]\\'"))))
 
+(defun cmacs-brigade-tests--in-defcustom-p ()
+  "Non-nil if point is inside a top-level `defcustom' form.
+
+Checked by walking out to the enclosing form rather than by looking at
+the current line: a `defcustom' whose value spans several lines puts the
+literal on a continuation line, and a line-based test would flag it even
+though it is exactly where such a literal belongs."
+  (save-excursion
+    (let ((start (nth 1 (syntax-ppss))))
+      (while (and start (nth 1 (syntax-ppss start)))
+        (setq start (nth 1 (syntax-ppss start))))
+      (when start
+        (goto-char start)
+        (looking-at-p "([ \t\n]*def\\(custom\\|const\\|group\\)")))))
+
 (defun cmacs-brigade-tests--scan (files regexp)
   "Return a list of \"FILE:LINE: TEXT\" for each match of REGEXP in FILES.
-Lines whose match sits inside a comment are ignored, since the whole
-point of these guards is to catch live code, and the prose above a
-`defcustom' legitimately names the default it documents."
+
+Matches inside a comment or inside a `defcustom'/`defconst' form are
+ignored: the point of these guards is live code that assumes a value,
+and both the prose documenting a default and the default itself are
+legitimate places for the literal to appear."
   (let (hits)
     (dolist (f files)
       (with-temp-buffer
         (insert-file-contents f)
+        ;; Needed for `syntax-ppss' to understand strings and comments.
+        (if (string-suffix-p ".el" f)
+            (emacs-lisp-mode)
+          (c-mode))
         (goto-char (point-min))
         (while (re-search-forward regexp nil t)
           (let ((line (buffer-substring-no-properties
-                       (line-beginning-position) (line-end-position))))
-            ;; Elisp comment or C comment / continuation line.
-            (unless (string-match-p "\\`[ \t]*\\(;\\|\\*\\|/\\*\\|//\\)" line)
+                       (line-beginning-position) (line-end-position)))
+                (state (syntax-ppss)))
+            (unless (or (nth 4 state)          ; inside a comment
+                        (string-match-p "\\`[ \t]*\\(;\\|\\*\\|/\\*\\|//\\)" line)
+                        (cmacs-brigade-tests--in-defcustom-p))
               (push (format "%s:%d: %s"
                             (file-name-nondirectory f)
                             (line-number-at-pos)
@@ -182,9 +205,6 @@ localhost, so every one of these has to be reachable through Custom."
                              "nomic-embed"
                              "/Maildir"
                              ".local/share/mail"))))))
-    ;; Filter out the defcustom forms themselves, which are exactly
-    ;; where these literals belong.
-    (setq hits (seq-remove (lambda (h) (string-match-p "defcustom" h)) hits))
     (should (null hits))))
 
 (ert-deftest cmacs-brigade-no-lrg-hostile-ui ()

@@ -18,6 +18,7 @@
 extern void syms_of_cmacs_ai_brigade_defuns    (void);
 extern void syms_of_cmacs_ai_brigade_registry  (void);
 extern void syms_of_cmacs_ai_brigade_allowlist (void);
+extern void syms_of_cmacs_ai_brigade_memory    (void);
 
 GThread *cmacs_brigade__main_gthread = NULL;
 
@@ -29,6 +30,7 @@ syms_of_cmacs_ai_brigade (void)
   syms_of_cmacs_ai_brigade_defuns ();
   syms_of_cmacs_ai_brigade_registry ();
   syms_of_cmacs_ai_brigade_allowlist ();
+  syms_of_cmacs_ai_brigade_memory ();
 }
 
 void

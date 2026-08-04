@@ -99,6 +99,61 @@ extern gboolean cmacs_brigade_tool_privileged (const gchar *tool_name);
  * to a relay process that has no registry of its own.  Caller frees. */
 extern gchar *cmacs_brigade_allowlist_expand (const gchar *allowlist);
 
+/* ── Memory: chunking ─────────────────────────────────────────────
+ *
+ * A chunk is what gets embedded.  HEADING is the synthetic breadcrumb
+ * ("file > Section > Subsection") prepended before embedding: without it
+ * a chunk reading "yes, Tuesday works" has no content words and is
+ * unretrievable.  BYTE_START/BYTE_LEN locate it in the source document
+ * so a hit can be widened to its neighbours on demand. */
+typedef struct
+{
+  gchar *text;
+  gchar *heading;
+  gsize  byte_start;
+  gsize  byte_len;
+} CmacsBrigadeChunk;
+
+/* Returns a GPtrArray of CmacsBrigadeChunk* with a free func set.
+ * TARGET and OVERLAP of 0 select the defaults. */
+extern GPtrArray *cmacs_brigade_chunk_text (const gchar *text,
+                                            const gchar *path,
+                                            gsize target, gsize overlap);
+extern void cmacs_brigade_chunk_free (CmacsBrigadeChunk *chunk);
+
+/* ── Memory: the flat fp16 index ──────────────────────────────────
+ *
+ * Brute-force cosine over an mmap'd array of L2-normalised fp16 rows.
+ * See cmacs-brigade-index.c for why there is no ANN structure. */
+typedef struct _CmacsBrigadeIndex       CmacsBrigadeIndex;
+typedef struct _CmacsBrigadeIndexWriter CmacsBrigadeIndexWriter;
+
+extern CmacsBrigadeIndex *cmacs_brigade_index_open  (const gchar *dir,
+                                                     GError **error);
+extern void               cmacs_brigade_index_close (CmacsBrigadeIndex *ix);
+extern guint64            cmacs_brigade_index_count (CmacsBrigadeIndex *ix);
+extern guint32            cmacs_brigade_index_dim   (CmacsBrigadeIndex *ix);
+
+/* Fills OUT_IDS/OUT_SCORES (each at least K long) with the best K rows,
+ * best first.  Returns how many were written. */
+extern guint cmacs_brigade_index_search (CmacsBrigadeIndex *ix,
+                                         const float *query, guint k,
+                                         guint32 *out_ids,
+                                         float *out_scores);
+
+/* True when the fp16 scan is using F16C rather than the scalar table.
+ * Exposed so a test can assert both paths agree. */
+extern gboolean cmacs_brigade_index_using_f16c (void);
+
+extern CmacsBrigadeIndexWriter *
+cmacs_brigade_index_writer_new (const gchar *dir, guint32 dim, GError **error);
+extern gboolean cmacs_brigade_index_writer_add (CmacsBrigadeIndexWriter *w,
+                                                const float *vec, guint32 dim);
+extern gboolean cmacs_brigade_index_writer_commit (CmacsBrigadeIndexWriter *w,
+                                                   GError **error);
+extern void     cmacs_brigade_index_writer_free (CmacsBrigadeIndexWriter *w);
+extern guint64  cmacs_brigade_index_writer_count (CmacsBrigadeIndexWriter *w);
+
 /* ── `emacs --mcp-relay' ──────────────────────────────────────────
  *
  * Scans ARGV for --mcp-relay and, if present, takes over the process

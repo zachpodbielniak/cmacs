@@ -1,0 +1,150 @@
+#+title: Brigade Memory
+#+description: Semantic search over your notes and any other corpus you register
+#+authors: Zach Podbielniak
+#+categories: cmacs, ai, memory, search
+#+created: [2026-08-03 Sun]
+#+updated: [2026-08-03 Sun]
+#+version: 0.1.0
+
+* What it is
+
+A vector index over your own material, so an agent can answer "what did I
+decide about X" from your notes instead of guessing.
+
+Your notes are the source of truth; the index is a disposable derivative.
+Delete it and rebuild — nothing is lost. That is deliberate: an index that
+becomes authoritative for anything is a thing you have to back up, migrate
+and trust.
+
+* Turning it on
+
+Off by default. The first build of a large corpus embeds every chunk, which
+on a local model takes hours; that is a fine thing to ask for and a terrible
+thing to inflict on someone who merely installed a new cmacs.
+
+#+begin_src elisp
+(setq cmacs-brigade-memory-enabled t)
+(setq cmacs-brigade-memory-roots
+      (list (list :path "~/notes" :kind 'org :exclude '("/.git/"))))
+#+end_src
+
+Then =M-x cmacs-brigade-memory-build=. =M-x cmacs-brigade-memory-stats= reports
+coverage, and =M-x cmacs-brigade-memory-find= searches interactively.
+
+Measured on the author's machine: 407 files became 1,484 chunks in 97 seconds,
+so roughly 15 chunks/second end to end. Scale from there.
+
+* Chunking
+
+Three passes, in C, over a line scanner rather than an org parser — the latter
+would be a second implementation of a format Emacs already owns, and
+=org-element-parse-buffer= across tens of thousands of files blocks the main
+thread for minutes.
+
+1. Cut at headline boundaries, so a chunk never spans two sections.
+2. Pack consecutive siblings up to =cmacs-brigade-chunk-target-bytes=, so an
+   outline of one-line entries does not become hundreds of useless chunks.
+3. Split anything still oversized on a blank line, then a sentence, then a hard
+   cut — never mid-UTF-8, because an invalid sequence embeds as replacement
+   characters and silently poisons that vector.
+
+Every chunk carries a *breadcrumb*: =notes/plan.org > Decisions > Rationale=.
+It is embedded along with the text, and it is what makes short chunks
+retrievable at all — a chunk reading "yes, Tuesday works" has no content words
+of its own, and everything identifying it lives three headlines up.
+
+A chunk is labelled with where its content *started*, not where the scanner
+happened to be when the buffer overflowed. Those differ whenever siblings get
+packed, and a chunk labelled with the wrong section is worse than one labelled
+with none.
+
+Skipped: =:LOGBOOK:= and =:PROPERTIES:= drawers (clock lines and IDs are not
+prose), and source blocks over ten lines — code embedded into a prose space
+makes every query about "the parser" return the parser.
+
+* Retrieval
+
+Hybrid, and not optionally so. Pure cosine is hopeless at exact identifiers: an
+embedding of a ticket number or an unusual surname the model has never seen is
+noise, while grep finds it instantly. So a ripgrep pass runs alongside the
+vector scan and the two rankings are fused by *reciprocal rank*
+(=1/(k + rank)=, =k= = 60). A document appearing in both rises above one that
+merely placed highly in either.
+
+The semantic side over-fetches before fusion. A document the lexical pass would
+promote has to be present in the semantic list for its rank to count, so taking
+exactly =k= there would discard the candidates fusion exists to rescue.
+
+* Why a flat index
+
+Brute force, no ANN. At a few hundred thousand chunks the scan is
+memory-bandwidth-bound rather than compute-bound — 300k × 768 fp16 is 460 MB to
+read, roughly 10 ms warm. An approximate structure would add a build step, a
+tuning knob, a recall cliff and a second thing to invalidate, to save
+single-digit milliseconds. Worth revisiting somewhere north of a few million
+chunks.
+
+Rows are L2-normalised at write time, so a query is a plain dot product with no
+per-vector =sqrt= in the inner loop. Magnitude is discarded entirely, which is
+what stops a long document outranking a relevant one merely for being long.
+
+fp16 → f32 conversion dispatches at *runtime* on
+=__builtin_cpu_supports("f16c")=, with a table-driven scalar fallback. The F16C
+routine carries a function-level =target= attribute; the translation unit is
+never built with =-mf16c=. Compiling the whole file for the ISA would let the
+compiler emit AVX in the dispatch code and the fallback too, which is precisely
+how a binary ends up crashing on the machine it was supposed to fall back on.
+
+* Files
+
+| File           | Contents                                            |
+|----------------+-----------------------------------------------------|
+| =vectors.f16=    | 64 B header, then count × dim fp16, normalised      |
+| =meta.eld=       | one record per chunk, parallel to the rows          |
+| =manifest.eld=   | model, dim, chunk params, counts, build time        |
+| =lock=           | flock target; one builder at a time                 |
+
+The index is written to a temporary and renamed into place at commit, so a
+reader never observes a half-built index and an interrupted build leaves the
+previous one intact.
+
+The manifest records the embedding model and the chunk size. A mismatch counts
+as *stale*, not merely old: vectors from a different model occupy a different
+space, and comparing them produces confident nonsense. Changing either setting
+forces a rebuild rather than silently mixing them.
+
+* Adding your own corpus
+
+Nothing about the index is org-specific. Register a source:
+
+#+begin_src elisp
+(cmacs-brigade-register-memory-source
+ :name 'tickets :kind 'text
+ :enumerate  (lambda (root) (my/list-ticket-ids (plist-get root :path)))
+ :read-chunk (lambda (id) (list (list :text (my/ticket-body id)
+                                      :heading (format "ticket %s" id)
+                                      :start 0 :length 0))))
+
+(add-to-list 'cmacs-brigade-memory-roots
+             (list :path "/var/tickets" :kind 'tickets))
+#+end_src
+
+The shipped =org= source is registered through exactly this API — there is no
+privileged path. Every agent's =memory_search= then covers your corpus with no
+further work.
+
+* Tools
+
+| Tool            | Purpose                                              |
+|-----------------+------------------------------------------------------|
+| =memory_search=   | ranked excerpts for a question                       |
+| =memory_get=      | read one indexed file in full                        |
+| =memory_stats=    | how much is actually indexed                         |
+
+=memory_stats= exists because an agent that queries a 40%-built index and finds
+nothing will otherwise report, confidently, that your notes say nothing about
+the subject.
+
+=memory_get= resolves paths against the configured roots and refuses anything
+that escapes them. The check is on the resolved path, since that is what the
+filesystem acts on.
