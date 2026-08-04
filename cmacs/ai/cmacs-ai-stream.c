@@ -163,10 +163,8 @@ cmacs_ai__stop_reason_sym (AiStopReason r)
 }
 
 static void
-on_stream_end (AiStreamable *src, AiResponse *resp, gpointer user)
+cmacs_ai_stream__complete (CmacsAiStream *s, AiResponse *resp)
 {
-  (void) src;
-  CmacsAiStream *s = user;
   const gchar *text = s->text ? s->text->str : "";
   Lisp_Object stop  = cmacs_ai__stop_reason_sym (
     ai_response_get_stop_reason (resp));
@@ -185,8 +183,9 @@ on_stream_end (AiStreamable *src, AiResponse *resp, gpointer user)
            l != NULL; l = l->next)
         {
           AiContentBlock *b = l->data;
-          ai_message_add_content_block (m,
-            (AiContentBlock *) g_object_ref (b));
+          /* g_object_ref is type-preserving in this GLib, so the old
+           * cast here is now flagged as useless. */
+          ai_message_add_content_block (m, g_object_ref (b));
           has_block = TRUE;
         }
       if (has_block)
@@ -223,6 +222,52 @@ on_stream_end (AiStreamable *src, AiResponse *resp, gpointer user)
 }
 
 static void
+on_stream_end (AiStreamable *src, AiResponse *resp, gpointer user)
+{
+  (void) src;
+  cmacs_ai_stream__complete ((CmacsAiStream *) user, resp);
+}
+
+/* ── Non-streaming fallback ──────────────────────────────────────
+ *
+ * Not every provider implements AiStreamable -- claude-tmux, for one --
+ * and refusing to talk to those at all made a provider the chat UI
+ * offers simply not work when chosen.  Every AiProvider implements the
+ * plain chat call, so the answer is fetched whole and delivered through
+ * the same payload sequence a streamed reply produces: :start, one
+ * :delta carrying all of it, then :end.  The Elisp side cannot tell the
+ * difference apart from the text arriving at once.  */
+
+static void
+on_chat_finished (GObject *source, GAsyncResult *res, gpointer user)
+{
+  CmacsAiStream *s = user;
+  GError *err = NULL;
+  g_autoptr (AiResponse) resp = ai_provider_chat_finish (AI_PROVIDER (source),
+                                                         res, &err);
+  if (resp == NULL)
+    {
+      cmacs_ai_stream__deliver (s, list2 (intern (":error"),
+                                           build_string (err ? err->message
+                                                             : "chat failed")));
+      if (err) g_error_free (err);
+      cmacs_ai_stream__free (s);
+      return;
+    }
+
+  /* One delta with the whole answer, so a caller accumulating deltas
+   * ends up with the same string a streamed reply would have given it. */
+  const gchar *text = ai_response_get_text (resp);
+  if (text != NULL && *text != '\0')
+    {
+      if (s->text) g_string_append (s->text, text);
+      cmacs_ai_stream__deliver (s, list2 (intern (":delta"),
+                                           build_string (text)));
+    }
+  cmacs_ai_stream__complete (s, resp);
+}
+
+static void
 on_stream_finished (GObject *source, GAsyncResult *res, gpointer user)
 {
   CmacsAiStream *s = user;
@@ -254,8 +299,7 @@ cmacs_ai__start_stream (Lisp_Object session, Lisp_Object callback,
   if (sess == NULL) error ("cmacs-ai: bad session handle");
   AiProvider *prov = cmacs_ai_session_get_provider (sess);
   if (prov == NULL) error ("cmacs-ai: session has no live client");
-  if (!AI_IS_STREAMABLE (prov))
-    error ("cmacs-ai: provider does not support streaming");
+
 
   /* Optionally append a fresh user turn. */
   if (append_user_msg)
@@ -278,11 +322,23 @@ cmacs_ai__start_stream (Lisp_Object session, Lisp_Object callback,
     }
 
   CmacsAiStream *s = g_new0 (CmacsAiStream, 1);
-  s->streamable     = AI_STREAMABLE (prov);
+  /* NULL for a non-streaming provider: the field doubles as the handle
+   * the signal disconnects run against, and connecting them to a
+   * provider that never emits them would leave dangling ids. */
+  s->streamable     = AI_IS_STREAMABLE (prov) ? AI_STREAMABLE (prov) : NULL;
   s->session_handle = XFIXNUM (session);
   s->stream_id      = cmacs_ai__next_stream_id++;
   s->text           = g_string_new (NULL);
   cmacs_ai_stream__callback_set (s->stream_id, callback);
+
+  if (s->streamable == NULL)
+    {
+      GCancellable *c = cmacs_ai_session_install_cancellable (sess);
+      cmacs_ai_stream__deliver (s, list1 (intern (":start")));
+      ai_provider_chat_async (prov, cmacs_ai_session_get_messages (sess),
+                              NULL, 0, tools, c, on_chat_finished, s);
+      return Qt;
+    }
 
   s->sig_start = g_signal_connect (prov, "stream-start",
                                    G_CALLBACK (on_stream_start), s);
