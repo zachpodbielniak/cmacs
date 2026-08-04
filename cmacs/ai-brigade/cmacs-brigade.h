@@ -99,6 +99,36 @@ extern gboolean cmacs_brigade_tool_privileged (const gchar *tool_name);
  * to a relay process that has no registry of its own.  Caller frees. */
 extern gchar *cmacs_brigade_allowlist_expand (const gchar *allowlist);
 
+/* ── Plan task state ──────────────────────────────────────────────
+ *
+ * C owns runtime, org owns intent.  The TODO keyword is a projection of
+ * the state on the way out and a transition request on the way in; it
+ * is never a stored value.  See cmacs-brigade-state.c. */
+
+typedef enum
+{
+  CMACS_BRIGADE_STATE_DRAFT = 0,
+  CMACS_BRIGADE_STATE_QUEUED,
+  CMACS_BRIGADE_STATE_STARTING,
+  CMACS_BRIGADE_STATE_RUNNING,
+  CMACS_BRIGADE_STATE_WAITING_INPUT,
+  CMACS_BRIGADE_STATE_BLOCKED,
+  CMACS_BRIGADE_STATE_DONE,
+  CMACS_BRIGADE_STATE_FAILED,
+  CMACS_BRIGADE_STATE_CANCELLED,
+  CMACS_BRIGADE_STATE_OVER_BUDGET,
+  CMACS_BRIGADE_STATE_INTERRUPTED,
+  CMACS_BRIGADE_STATE_COUNT
+} CmacsBrigadeState;
+
+extern void         cmacs_brigade_state_init      (void);
+extern const gchar *cmacs_brigade_state_name      (CmacsBrigadeState s);
+extern CmacsBrigadeState cmacs_brigade_state_from_name (const gchar *name);
+extern gboolean     cmacs_brigade_state_terminal  (CmacsBrigadeState s);
+extern gboolean     cmacs_brigade_state_live      (CmacsBrigadeState s);
+extern gboolean     cmacs_brigade_state_can_transition (CmacsBrigadeState from,
+                                                        CmacsBrigadeState to);
+
 /* ── Memory: chunking ─────────────────────────────────────────────
  *
  * A chunk is what gets embedded.  HEADING is the synthetic breadcrumb

@@ -19,6 +19,7 @@ extern void syms_of_cmacs_ai_brigade_defuns    (void);
 extern void syms_of_cmacs_ai_brigade_registry  (void);
 extern void syms_of_cmacs_ai_brigade_allowlist (void);
 extern void syms_of_cmacs_ai_brigade_memory    (void);
+extern void syms_of_cmacs_ai_brigade_state     (void);
 
 GThread *cmacs_brigade__main_gthread = NULL;
 
@@ -31,6 +32,7 @@ syms_of_cmacs_ai_brigade (void)
   syms_of_cmacs_ai_brigade_registry ();
   syms_of_cmacs_ai_brigade_allowlist ();
   syms_of_cmacs_ai_brigade_memory ();
+  syms_of_cmacs_ai_brigade_state ();
 }
 
 void
@@ -43,6 +45,7 @@ init_cmacs_ai_brigade (void)
    * back before touching Lisp. */
   cmacs_brigade__main_gthread = g_thread_self ();
   cmacs_brigade_registry_init ();
+  cmacs_brigade_state_init ();
 }
 
 #endif /* HAVE_CMACS_AI_BRIGADE */

@@ -79,7 +79,7 @@ provider and tool-executor types directly).
 |     0 | Subsystem wiring, feature flag, capability probe | done        |
 |     1 | The extension fabric: registries, =deftool=, relay | done        |
 |     2 | Memory / SecondBrain                             | done        |
-|     3 | Agent definitions + plan model                   | planned     |
+|     3 | Agent definitions + plan model                   | done        |
 |     4 | Agent runtime + dashboard                        | planned     |
 |     5 | GenMail                                          | planned     |
 |     6 | imgedit + vidstudio AI                           | planned     |

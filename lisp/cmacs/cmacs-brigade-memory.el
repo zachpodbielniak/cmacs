@@ -194,7 +194,7 @@ incomparable."
 (define-error 'cmacs-brigade-embed-error
   "Embedding request failed" 'cmacs-brigade-error)
 
-(defun cmacs-brigade-memory--embed (texts)
+(cl-defun cmacs-brigade-memory--embed (texts)
   "Embed TEXTS, a list of strings, and return a list of vectors.
 
 Uses the batch endpoint and keeps exactly one request in flight."
@@ -321,7 +321,7 @@ about, and the decade-old material fills in behind it."
     (sort files (lambda (a b) (> (cdr a) (cdr b))))))
 
 ;;;###autoload
-(defun cmacs-brigade-memory-build (&optional force)
+(cl-defun cmacs-brigade-memory-build (&optional force)
   "Build the memory index over `cmacs-brigade-memory-roots'.
 
 With FORCE, rebuild even when the manifest already matches.

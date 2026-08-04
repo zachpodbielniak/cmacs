@@ -959,7 +959,8 @@ if test "$with_cmacs_ai_brigade" != "no"; then
   AC_DEFINE([HAVE_CMACS_AI_BRIGADE], 1, [CMacs AI brigade fabric])
   CMACS_AI_BRIGADE_OBJ="cmacs-brigade-init.o cmacs-brigade-defuns.o \
  cmacs-brigade-registry.o cmacs-brigade-allowlist.o cmacs-brigade-relay.o \
- cmacs-brigade-chunk.o cmacs-brigade-index.o cmacs-brigade-memory-defuns.o"
+ cmacs-brigade-chunk.o cmacs-brigade-index.o cmacs-brigade-memory-defuns.o \
+ cmacs-brigade-state.o"
   dnl NOTE: do not add AC_CHECK_HEADERS / AC_COMPILE_IFELSE here.  The
   dnl cmacs feature blocks run before AC_USE_SYSTEM_EXTENSIONS, so any
   dnl compile test expands AC_CHECK_INCLUDES_DEFAULT early and _GNU_SOURCE
