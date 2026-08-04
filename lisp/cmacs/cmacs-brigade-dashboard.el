@@ -260,7 +260,7 @@
     (define-key map (kbd "RET") #'cmacs-brigade-dashboard-visit)
     (define-key map (kbd "g") #'cmacs-brigade-dashboard-refresh)
     (define-key map (kbd "M") #'cmacs-brigade-memory-find)
-    (define-key map (kbd "q") #'quit-window)
+    (define-key map (kbd "q") #'cmacs-brigade-dashboard-quit)
     ;; Evil's intercept map takes the buffer over completely, so motion
     ;; has to be bound explicitly to survive.
     (define-key map (kbd "j") #'next-line)
@@ -297,16 +297,69 @@ updates buffers that are already open.")
   (cmacs-evil-setup-mode-map cmacs-brigade-dashboard-mode-map
                              'cmacs-brigade-dashboard-mode))
 
+(defcustom cmacs-brigade-dashboard-display 'full-frame
+  "How the dashboard takes over the screen.
+
+`full-frame' gives it the whole frame and restores your layout when you
+quit; `same-window' reuses the selected window and leaves the rest of the
+layout alone; `other-window' is Emacs's default splitting behaviour.
+
+`full-frame' is the default because the dashboard is a wide table plus
+panels -- in half a frame the columns wrap and it becomes hard to read.
+None of these ever create a window, which the old `pop-to-buffer' did on
+every invocation from a single-window frame."
+  :type '(choice (const :tag "Whole frame, restoring layout on quit" full-frame)
+                 (const :tag "Reuse the selected window" same-window)
+                 (const :tag "Split (Emacs default)" other-window))
+  :group 'cmacs-brigade)
+
+(defvar-local cmacs-brigade-dashboard--saved-layout nil
+  "Window configuration to restore when this dashboard is quit.")
+
 ;;;###autoload
 (defun cmacs-brigade-dashboard ()
-  "Show the brigade dashboard."
+  "Show the brigade dashboard.
+
+Honours `cmacs-brigade-dashboard-display'; by default it takes the whole
+frame and gives your layout back on `q'."
   (interactive)
-  (let ((buf (get-buffer-create "*brigade*")))
+  (let* ((buf (get-buffer-create "*brigade*"))
+         ;; Captured before anything is displayed, so it is genuinely the
+         ;; layout the user was looking at.
+         (layout (current-window-configuration))
+         ;; Likewise checked before displaying: whether the dashboard was
+         ;; already on screen is what decides if this is a re-render or a
+         ;; fresh open, and after `pop-to-buffer-same-window' it always
+         ;; looks like the former.
+         (already (get-buffer-window buf)))
     (with-current-buffer buf
       (unless (derived-mode-p 'cmacs-brigade-dashboard-mode)
         (cmacs-brigade-dashboard-mode)))
     (cmacs-brigade-dashboard--render)
-    (pop-to-buffer buf)))
+    (pcase cmacs-brigade-dashboard-display
+      ('full-frame
+       (pop-to-buffer-same-window buf)
+       ;; Re-running the command while already looking at the dashboard
+       ;; keeps the layout it originally replaced; opening it afresh
+       ;; records the one being replaced now.  Keying this off the
+       ;; stored value instead would restore a layout from some earlier
+       ;; visit that was left by switching away rather than quitting.
+       (unless already
+         (setq cmacs-brigade-dashboard--saved-layout layout))
+       (delete-other-windows))
+      ('same-window (pop-to-buffer-same-window buf))
+      (_ (pop-to-buffer buf)))
+    buf))
+
+(defun cmacs-brigade-dashboard-quit ()
+  "Leave the dashboard, restoring the layout it replaced."
+  (interactive)
+  (let ((layout cmacs-brigade-dashboard--saved-layout))
+    (setq cmacs-brigade-dashboard--saved-layout nil)
+    (if (and layout (window-configuration-p layout))
+        (progn (bury-buffer)
+               (set-window-configuration layout))
+      (quit-window))))
 
 ;;;###autoload
 (defalias 'cmacs-brigade #'cmacs-brigade-dashboard)

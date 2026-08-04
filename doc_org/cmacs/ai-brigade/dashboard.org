@@ -80,3 +80,15 @@ its own:
 
 A panel that signals is caught and reported in place rather than taking the
 dashboard down — the dashboard is how you would notice the panel is broken.
+
+* How it takes the screen
+
+By default the dashboard fills the frame, and gives your layout back when you quit with =q=. It is a wide table plus panels; in half a frame the columns wrap and it stops being glanceable.
+
+#+begin_src elisp
+(setq cmacs-brigade-dashboard-display 'full-frame)   ; default
+;; or 'same-window  -- reuse the selected window, leave the rest alone
+;; or 'other-window -- Emacs's default splitting behaviour
+#+end_src
+
+None of the three ever creates a window. =display-buffer-alist= still applies if you want to place it somewhere specific.

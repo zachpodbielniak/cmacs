@@ -25,6 +25,7 @@ one form lights it up on all three delivery paths at once.
 * Brigade Requirements::        Configure flags and dependencies.
 * Brigade Probing::             Detecting the feature at runtime.
 * Brigade Extending::           Registering your own capabilities.
+* Brigade Dashboard Display::   How the dashboard takes the screen.
 * Brigade Notifications::       Being told when it finishes; voice.
 * Brigade Scheduling::          Running a prompt on a cron schedule.
 @end menu
@@ -279,6 +280,21 @@ to hear the status.
 
 @xref{Top,,, cmacs, the org manual}, file
 @file{doc_org/cmacs/ai-brigade/notifications.org}, for the full chapter.
+
+@node Brigade Dashboard Display
+@section How the dashboard takes the screen
+
+By default the dashboard fills the frame and restores your layout when
+you quit with @kbd{q}: it is a wide table plus panels, and in half a
+frame the columns wrap and it stops being glanceable.
+
+@defopt cmacs-brigade-dashboard-display
+@code{full-frame} (the default) takes the whole frame and gives the
+layout back on quit; @code{same-window} reuses the selected window and
+leaves the rest of the layout alone; @code{other-window} is Emacs's
+default splitting behaviour.  None of the three ever creates a window,
+and @code{display-buffer-alist} still applies.
+@end defopt
 
 @node Brigade Scheduling
 @section Scheduled runs

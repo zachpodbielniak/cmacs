@@ -27,6 +27,11 @@
 
 (require 'ert)
 (require 'cmacs-brigade nil 'noerror)
+;; Not in the eager-load set (it is autoloaded), but the window-behaviour
+;; tests below rebind `cmacs-brigade-dashboard-display', which needs the
+;; defcustom in scope at compile time or the compiler makes it lexical
+;; while the loaded file makes it dynamic.
+(require 'cmacs-brigade-dashboard nil 'noerror)
 
 (defconst cmacs-brigade-tests--root
   (expand-file-name "../.." (file-name-directory
@@ -271,6 +276,87 @@ one and not the other is how they drift apart."
       (let ((s (buffer-string)))
         (should (string-search "@include ai-brigade/ai-brigade.texi" s))
         (should (string-search "* CMacs AI Brigade::" s))))))
+
+
+;;;; Dashboard display
+;;
+;; The dashboard used to open with `pop-to-buffer', which splits a
+;; single-window frame every time.  These pin the window count, because
+;; "it made a new window" is not something a test of the rendering
+;; would ever notice.
+
+(ert-deftest cmacs-brigade-dashboard-does-not-create-a-window ()
+  "No display mode may add a window to the frame."
+  (skip-unless (featurep 'cmacs-brigade-dashboard))
+  (dolist (mode '(full-frame same-window))
+    (save-window-excursion
+      (delete-other-windows)
+      (let ((cmacs-brigade-dashboard-display mode)
+            (before (length (window-list))))
+        (cmacs-brigade-dashboard)
+        (should (= (length (window-list)) before))
+        (should (eq (current-buffer) (get-buffer "*brigade*")))))))
+
+(ert-deftest cmacs-brigade-dashboard-full-frame-takes-the-frame ()
+  "full-frame leaves exactly one window, whatever the layout was."
+  (skip-unless (featurep 'cmacs-brigade-dashboard))
+  (save-window-excursion
+    (delete-other-windows)
+    (split-window-right)
+    (split-window-below)
+    (should (> (length (window-list)) 1))
+    (let ((cmacs-brigade-dashboard-display 'full-frame))
+      (cmacs-brigade-dashboard)
+      (should (= 1 (length (window-list)))))))
+
+(ert-deftest cmacs-brigade-dashboard-quit-restores-the-layout ()
+  "Taking the whole frame is only polite if q gives it back."
+  (skip-unless (featurep 'cmacs-brigade-dashboard))
+  (save-window-excursion
+    (delete-other-windows)
+    (split-window-right)
+    (let ((before (length (window-list)))
+          (cmacs-brigade-dashboard-display 'full-frame))
+      (cmacs-brigade-dashboard)
+      (should (= 1 (length (window-list))))
+      (cmacs-brigade-dashboard-quit)
+      (should (= before (length (window-list))))
+      (should-not (eq (current-buffer) (get-buffer "*brigade*"))))))
+
+(ert-deftest cmacs-brigade-dashboard-reopen-after-switching-away ()
+  "Leaving by switching buffers, then reopening, restores the layout
+that was on screen at the *second* open -- not a stale one recorded
+during the first visit."
+  (skip-unless (featurep 'cmacs-brigade-dashboard))
+  (save-window-excursion
+    (let ((cmacs-brigade-dashboard-display 'full-frame))
+      ;; First visit, left without quitting.
+      (delete-other-windows)
+      (cmacs-brigade-dashboard)
+      (switch-to-buffer "*scratch*")
+      ;; Second visit, from a two-window layout.
+      (delete-other-windows)
+      (split-window-right)
+      (let ((before (length (window-list))))
+        (cmacs-brigade-dashboard)
+        (should (= 1 (length (window-list))))
+        (cmacs-brigade-dashboard-quit)
+        (should (= before (length (window-list))))))))
+
+(ert-deftest cmacs-brigade-dashboard-reopen-does-not-clobber-the-layout ()
+  "Re-running the command while already in it must not record
+the full-frame state as the layout to return to."
+  (skip-unless (featurep 'cmacs-brigade-dashboard))
+  (save-window-excursion
+    (delete-other-windows)
+    (split-window-right)
+    (let ((before (length (window-list)))
+          (cmacs-brigade-dashboard-display 'full-frame))
+      (cmacs-brigade-dashboard)
+      (cmacs-brigade-dashboard)
+      (cmacs-brigade-dashboard)
+      (cmacs-brigade-dashboard-quit)
+      (should (= before (length (window-list)))))))
 
 (provide 'cmacs-brigade-tests)
 
