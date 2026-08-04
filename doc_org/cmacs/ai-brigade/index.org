@@ -81,7 +81,7 @@ provider and tool-executor types directly).
 |     2 | Memory / SecondBrain                             | done        |
 |     3 | Agent definitions + plan model                   | done        |
 |     4 | Agent runtime + dashboard                        | done        |
-|     5 | GenMail                                          | planned     |
+|     5 | GenMail                                          | done        |
 |     6 | imgedit + vidstudio AI                           | planned     |
 |     7 | Deliverable generators                           | planned     |
 
