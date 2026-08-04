@@ -886,9 +886,16 @@ if test "$with_cmacs_libreclaw" != "no"; then
       -DLC_COMPILATION \
       -DCMACS_LIBRECLAW_GIR_DIR=\\\"\$(abs_top_srcdir)/deps/libreclaw/build/$cmacs_dep_buildtype\\\" \
       $CMACS_LIBRECLAW_DEPS_CFLAGS"
+    # htmx-glib (libreclaw >= 0.24.0) backs the server-rendered dashboard.
+    # liblc-1.0.a is linked --whole-archive, so lc-dashboard-pages.o is always
+    # pulled in and its htmx_* references must be resolvable.  libreclaw builds
+    # its htmx-glib submodule with DEBUG=0 unconditionally, so the archive lives
+    # under build/release/ regardless of $cmacs_dep_buildtype.  It exports only
+    # htmx_* symbols and vendors no deps of its own, so no dedup rule is needed.
     CMACS_LIBRECLAW_LIBS="-Wl,--whole-archive \$(srcdir)/../deps/libreclaw/build/$cmacs_dep_buildtype/liblc-1.0.a \
       -Wl,--no-whole-archive \
       \$(abs_top_srcdir)/deps/ai-glib/build/$cmacs_dep_buildtype/libai-glib-1.0.a \
+      \$(srcdir)/../deps/libreclaw/deps/htmx-glib/build/release/libhtmx-glib-1.0.a \
       $CMACS_LIBRECLAW_DEPS_LIBS"
     CMACS_LIBRECLAW_BUNDLED=yes
   fi
