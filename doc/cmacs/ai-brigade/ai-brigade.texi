@@ -384,8 +384,9 @@ per-task overrides runs under a derived agent
 overrides stay editable in the transient rather than frozen into a
 definition belonging to the original.
 @item x
-The transient itself, empty.  Also @kbd{M-x cmacs-brigade-compose}.
-@kbd{q} leaves it and discards what was composed.
+The transient itself.  Also @kbd{M-x cmacs-brigade-compose}.  Inside it,
+@kbd{e} opens the brigade's settings and @kbd{q} leaves, discarding what
+was composed.
 @end table
 
 Names the drafting model invented for agents, tools or providers are
@@ -447,6 +448,25 @@ the request itself becomes the prompt and you fill in the rest.
 @code{window} (the default) opens a small buffer at the bottom, since a
 task worth handing to an agent rarely fits on one line;
 @code{minibuffer} reads one line instead.
+@end defopt
+
+@defopt cmacs-brigade-compose-default-agent
+@defoptx cmacs-brigade-compose-default-model
+What an empty menu starts on: @code{general} and
+@code{claude-code/sonnet}.  An empty menu is not much use if the first
+two things you do are always pick the same agent and the same model.
+
+Both are only fallbacks.  An agent or provider named in your request,
+proposed by the draft, or carried by a clone wins over them, and the
+model default applies only when @emph{neither} a provider nor a model is
+already set---so ``use grok'' keeps grok rather than quietly acquiring
+the other half from here.  @code{nil} leaves the field empty, handing the
+decision to the agent definition; a default naming an agent that is not
+loaded is ignored rather than written into a plan that would fail at
+start.
+
+Distinct from @code{cmacs-brigade-default-model}, which is what an agent
+@emph{definition} falls back to when its frontmatter names no model.
 @end defopt
 
 @defopt cmacs-brigade-compose-plan-file

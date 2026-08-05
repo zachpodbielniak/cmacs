@@ -168,8 +168,33 @@ Compose a brigade task
  RET create it   S create and start it   e create and open in the plan
 #+end_example
 
-=q= leaves the menu and discards what was composed; =M-x cmacs-brigade-compose=
-reaches it from anywhere.
+=e= opens the brigade's settings, =q= leaves the menu and discards what was
+composed, and =M-x cmacs-brigade-compose= reaches it from anywhere.
+
+*** What it opens on
+
+An empty menu is not much use if the first two things you do are always pick
+the same agent and the same model, so it starts on them:
+
+| Option                                | Default              |
+|---------------------------------------+----------------------|
+| =cmacs-brigade-compose-default-agent=   | =general=              |
+| =cmacs-brigade-compose-default-model=   | =claude-code/sonnet=   |
+
+Both are only ever fallbacks. An agent or provider named in your request,
+proposed by the draft, or carried by a clone wins over them — say "use grok"
+and you get grok, not the default. The model default is applied only when
+*neither* a provider nor a model is already set, so naming half of one does not
+silently acquire the other half from here.
+
+Set either to nil to leave that field empty, which hands the decision back to
+the agent definition. A default naming an agent that is not loaded is ignored
+rather than written into a plan that would fail at start.
+
+Note =cmacs-brigade-compose-default-model= is distinct from
+=cmacs-brigade-default-model=: the latter is what an agent /definition/ falls
+back to when its frontmatter names no model, this one is what the /menu/ starts
+on.
 
 ** What gets written
 

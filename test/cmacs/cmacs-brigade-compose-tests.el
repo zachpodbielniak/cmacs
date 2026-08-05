@@ -496,6 +496,98 @@ and report what was decided, with dates.\"}"
     (cmacs-brigade-compose-quit)
     (should-not cmacs-brigade-compose--state)))
 
+
+;;;; Defaults the menu opens on
+
+(defmacro cmacs-brigade-compose-tests--opened (state &rest body)
+  "Open the menu on STATE with `transient-setup\=' stubbed, then run BODY."
+  (declare (indent 1))
+  `(cl-letf (((symbol-function 'transient-setup) (lambda (&rest _) nil)))
+     (setq cmacs-brigade-compose--state ,state)
+     (cmacs-brigade-compose-show)
+     ,@body))
+
+(ert-deftest cmacs-brigade-compose-blank-menu-is-runnable ()
+  "Opening the menu empty starts on the configured agent and model.
+
+`x\=' used to open on nothing at all, so the first two things anyone did
+were pick the same agent and the same model."
+  (skip-unless (featurep 'cmacs-brigade-compose))
+  (cmacs-brigade-agent-reload)
+  (skip-unless (cmacs-brigade-agent-get
+                (intern cmacs-brigade-compose-default-agent)))
+  (cmacs-brigade-compose-tests--opened nil
+    (should (equal cmacs-brigade-compose-default-agent
+                   (cmacs-brigade-compose--get :agent)))
+    (should (equal cmacs-brigade-compose-default-model
+                   (cmacs-brigade-compose--model-string)))))
+
+(ert-deftest cmacs-brigade-compose-defaults-never-overrule-you ()
+  "A provider or agent the request named survives the defaults.
+
+The failure this guards is quiet and expensive: you say \"use grok\", the
+menu fills in claude-code because the model field was empty, and the run
+goes to the wrong provider."
+  (skip-unless (featurep 'cmacs-brigade-compose))
+  (cmacs-brigade-agent-reload)
+  (cmacs-brigade-register-agent :name 'researcher :prompt "p")
+  (cmacs-brigade-compose-tests--opened
+      (cmacs-brigade-compose--fallback-state "use grok to survey my notes")
+    (should (equal "grok" (cmacs-brigade-compose--get :provider)))
+    ;; and no model was invented for it
+    (should-not (cmacs-brigade-compose--get :model)))
+  (cmacs-brigade-compose-tests--opened
+      (cmacs-brigade-compose--fallback-state "have the researcher agent look")
+    (should (equal "researcher" (cmacs-brigade-compose--get :agent)))))
+
+(ert-deftest cmacs-brigade-compose-default-agent-must-exist ()
+  "A default naming an agent that is not loaded is ignored, not written."
+  (skip-unless (featurep 'cmacs-brigade-compose))
+  (let ((cmacs-brigade-compose-default-agent "definitely-not-an-agent"))
+    (cmacs-brigade-compose-tests--opened nil
+      (should-not (cmacs-brigade-compose--get :agent)))))
+
+(ert-deftest cmacs-brigade-compose-defaults-can-be-turned-off ()
+  "nil means leave the field alone, so the agent definition decides."
+  (skip-unless (featurep 'cmacs-brigade-compose))
+  (let ((cmacs-brigade-compose-default-agent nil)
+        (cmacs-brigade-compose-default-model nil))
+    (cmacs-brigade-compose-tests--opened nil
+      (should-not (cmacs-brigade-compose--get :agent))
+      (should-not (cmacs-brigade-compose--get :model))
+      (should-not (cmacs-brigade-compose--get :provider)))))
+
+(ert-deftest cmacs-brigade-compose-transient-keys-are-distinct ()
+  "No two suffixes claim the same key.
+
+`e\=' was create-and-open before it became the settings key; a duplicate
+binding here is silent, and one of the two commands simply stops being
+reachable."
+  (skip-unless (featurep 'cmacs-brigade-compose))
+  (should (commandp 'cmacs-brigade-compose-settings))
+  (let ((keys nil))
+    ;; The layout nests [class plist (children)] vectors, with leaves
+    ;; shaped (transient-suffix :key "p" :command foo).  Rather than
+    ;; model that, walk everything and collect every :key seen -- which
+    ;; means walking list *tails*, not just elements.
+    (letrec ((walk (lambda (node)
+                     (cond
+                      ((vectorp node)
+                       (mapc (lambda (x) (funcall walk x)) (append node nil)))
+                      ((consp node)
+                       (let ((tail node))
+                         (while (consp tail)
+                           (when (and (eq (car tail) :key)
+                                      (stringp (cadr tail)))
+                             (push (cadr tail) keys))
+                           (funcall walk (car tail))
+                           (setq tail (cdr tail)))))))))
+      (funcall walk (get 'cmacs-brigade-compose 'transient--layout)))
+    (should keys)
+    (should (equal (length keys) (length (delete-dups (copy-sequence keys)))))
+    (should (member "e" keys))
+    (should (member "o" keys))))
+
 (provide 'cmacs-brigade-compose-tests)
 
 ;;; cmacs-brigade-compose-tests.el ends here

@@ -118,6 +118,32 @@ a task you dictated in a hurry is worth nothing if you cannot find it."
   :type '(choice (const :tag "compose.org in the plan directory" nil) file)
   :group 'cmacs-brigade)
 
+(defcustom cmacs-brigade-compose-default-agent "general"
+  "Agent a composed task gets when nothing named one.
+
+Filled in when the menu opens, so `x\=' starts on something runnable
+rather than on a blank you have to notice.  Only ever a fallback: an
+agent named in your request, drafted by the model, or carried by a
+clone wins over it.
+
+nil leaves the field empty, which the runner then resolves through
+`cmacs-brigade-subagent-default-agent\='.  A name that is not loaded is
+ignored rather than written into a plan that would fail at start."
+  :type '(choice (const :tag "Leave empty" nil) string)
+  :group 'cmacs-brigade)
+
+(defcustom cmacs-brigade-compose-default-model "claude-code/sonnet"
+  "Model a composed task gets when nothing named one, as `provider/model\='.
+
+Applied only when the request named *neither* a provider nor a model --
+\"use grok to ...\" keeps grok and does not silently acquire this instead.
+
+nil leaves the field empty, which means the agent definition's own model
+is used.  Distinct from `cmacs-brigade-default-model\=', which is what an
+agent *definition* falls back to; this one is about the menu."
+  :type '(choice (const :tag "Leave empty (agent decides)" nil) string)
+  :group 'cmacs-brigade)
+
 (defcustom cmacs-brigade-compose-start-immediately nil
   "Whether creating a task from the transient also starts it.
 
@@ -304,12 +330,37 @@ this file does to arrive at a pre-filled transient goes through here."
   ;; command loop instead, which is where a menu belongs.
   (run-at-time 0 nil #'cmacs-brigade-compose-show))
 
+(defun cmacs-brigade-compose--apply-defaults ()
+  "Fill in the agent and model nothing else decided.
+
+Run whenever the menu opens, so every route in -- blank, drafted, voice,
+clone -- lands on the same starting point.  Everything here defers to a
+value that is already set, because \"nothing decided\" is the only case
+worth guessing at."
+  (unless (cmacs-brigade-compose--get :agent)
+    (when-let* ((name cmacs-brigade-compose-default-agent))
+      ;; Only if it is actually loaded.  Writing a name no definition
+      ;; backs would put the failure at start time, where it reads as a
+      ;; broken task rather than a missing default.
+      (when (cmacs-brigade-agent-get (intern name))
+        (cmacs-brigade-compose--put :agent name))))
+  ;; Neither half: a request that named a provider has chosen one, and
+  ;; quietly replacing it with the default would be the menu overruling
+  ;; you.
+  (unless (or (cmacs-brigade-compose--get :provider)
+              (cmacs-brigade-compose--get :model))
+    (when-let* ((m cmacs-brigade-compose-default-model))
+      (let ((split (cmacs-brigade-compose--split m)))
+        (cmacs-brigade-compose--put :provider (car split))
+        (cmacs-brigade-compose--put :model (cdr split))))))
+
 (defun cmacs-brigade-compose-show ()
   "Open the compose transient on whatever state is composed.
 
 `transient-setup' rather than calling the prefix as a function: that is
 the documented way in, and it is what keeps this callable from a timer
 and from Lisp as well as from a key."
+  (cmacs-brigade-compose--apply-defaults)
   (transient-setup 'cmacs-brigade-compose))
 
 (defun cmacs-brigade-compose--from-record (record)
@@ -1105,6 +1156,12 @@ M-x cmacs-brigade-agent-reload"))
     (find-file file)
     (when (fboundp 'org-id-goto) (ignore-errors (org-id-goto id)))))
 
+(transient-define-suffix cmacs-brigade-compose-settings ()
+  "Edit the brigade's settings."
+  :description "edit brigade settings"
+  (interactive)
+  (customize-group 'cmacs-brigade))
+
 (transient-define-suffix cmacs-brigade-compose-quit ()
   "Close the menu and forget what was composed."
   :description "quit, discarding this"
@@ -1156,8 +1213,10 @@ Nothing is written to a plan until you choose to create it."
   [["Create"
     ("RET" cmacs-brigade-compose-do-create)
     ("S" cmacs-brigade-compose-do-start)
-    ("e" cmacs-brigade-compose-do-edit)]
-   ["Leave"
+    ;; `o\=' for open, not `e\=': `e\=' is the settings key now.
+    ("o" cmacs-brigade-compose-do-edit)]
+   ["Brigade"
+    ("e" cmacs-brigade-compose-settings)
     ("q" cmacs-brigade-compose-quit)]])
 
 (provide 'cmacs-brigade-compose)
