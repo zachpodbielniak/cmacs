@@ -107,9 +107,17 @@
     (should (string-match-p "editfns\\.c" (or (plist-get info :file) "")))))
 
 (ert-deftest cintro-defun-info-non-defun-returns-nil ()
-  "`cmacs-c-defun-info' on a defvar returns nil."
+  "`cmacs-c-defun-info' on a variable that is not also a function returns nil.
+
+Not `emacs-version', which this used to use: that is a variable *and* a
+function (`emacs-version &optional here', in version.el), and under
+`--with-native-compilation=aot' its .eln makes it a genuine `subr' -- so
+the lookup was right to report it and the test was wrong to expect
+otherwise.  It passed only in a tree where that .eln had not been built,
+which made it a test of the build state rather than of the code."
   (skip-unless (cmacs-cintrospect-test--available-p))
-  (should-not (cmacs-c-defun-info 'emacs-version)))
+  (should-not (fboundp 'most-positive-fixnum))
+  (should-not (cmacs-c-defun-info 'most-positive-fixnum)))
 
 ;;; ─── Address ↔ source ──────────────────────────────────────────
 

@@ -110,6 +110,107 @@ cmacs_ai_tool_ctx_free (gpointer p)
   g_free (c);
 }
 
+/* One Elisp tool call, marshalled from a worker thread to the main one.
+ *
+ * Everything crossing the boundary is a C string.  Emacs's allocator is
+ * not thread-safe, so `build_string' -- and therefore every Lisp_Object
+ * in this call -- has to happen on the main thread; a worker that built
+ * them itself would corrupt the heap under a concurrent GC.  For the
+ * same reason there is no Lisp_Object in this struct: one sitting in
+ * C-heap memory across a GC is unrooted and would be collected. */
+typedef struct
+{
+  gint      refs;          /* worker + pending main-thread source */
+  guint     exec_id;
+  gchar    *tool_name;     /* owned */
+  gchar    *input_json;    /* owned */
+  gchar    *tool_id;       /* owned */
+  gchar    *result;        /* out, owned; NULL when error is set */
+  gchar    *error;         /* out, owned */
+  gboolean  done;
+  GMutex    lock;
+  GCond     cond;
+} CmacsAiToolCall;
+
+/* Reference counted, because the worker may give up waiting while the
+ * main-thread source is still queued.  A stack-allocated struct could
+ * not be abandoned -- the source would write into a dead frame -- so
+ * whichever side finishes last frees it. */
+static CmacsAiToolCall *
+cmacs_ai_tool_call_new (guint exec_id, const gchar *tool_name,
+                        const gchar *input_json, const gchar *tool_id)
+{
+  CmacsAiToolCall *c = g_new0 (CmacsAiToolCall, 1);
+  c->refs       = 2;
+  c->exec_id    = exec_id;
+  c->tool_name  = g_strdup (tool_name);
+  c->input_json = g_strdup (input_json);
+  c->tool_id    = g_strdup (tool_id ? tool_id : "");
+  g_mutex_init (&c->lock);
+  g_cond_init (&c->cond);
+  return c;
+}
+
+static void
+cmacs_ai_tool_call_unref (CmacsAiToolCall *c)
+{
+  if (c == NULL || !g_atomic_int_dec_and_test (&c->refs))
+    return;
+  g_free (c->tool_name);
+  g_free (c->input_json);
+  g_free (c->tool_id);
+  g_free (c->result);
+  g_free (c->error);
+  g_cond_clear (&c->cond);
+  g_mutex_clear (&c->lock);
+  g_free (c);
+}
+
+/* Run one Elisp tool on the main thread.  Always signals, on every
+ * path: a worker is asleep on the condition and a path that returned
+ * without signalling would leave it there for good. */
+static gboolean
+cmacs_ai_tool__call_on_main (gpointer user)
+{
+  CmacsAiToolCall *c = user;
+  Lisp_Object key = cmacs_ai_tools__cb_key (c->exec_id, c->tool_name);
+  Lisp_Object cb  = Fgethash (key, Vcmacs_ai__tool_callbacks, Qnil);
+
+  if (NILP (cb))
+    c->error = g_strdup_printf ("cmacs-ai: no callback registered for tool %s",
+                                c->tool_name);
+  else
+    {
+      /* The callback is called as (CB NAME INPUT-JSON ID) and must
+       * return a string.  safe_callN_value so a Lisp error in one tool
+       * does not abort the whole loop. */
+      Lisp_Object args[3];
+      args[0] = build_string (c->tool_name);
+      args[1] = build_string (c->input_json);
+      args[2] = build_string (c->tool_id);
+
+      Lisp_Object rv = cmacs_dispatch_safe_callN_value (cb, 3, args);
+      if (STRINGP (rv))
+        c->result = g_strdup (SSDATA (rv));
+      else if (NILP (rv))
+        c->error = g_strdup_printf ("cmacs-ai: tool '%s' returned nil",
+                                    c->tool_name);
+      else
+        {
+          /* Non-string, non-nil: hand the model its printed form. */
+          Lisp_Object printed = Fprin1_to_string (rv, Qnil, Qnil);
+          c->result = g_strdup (SSDATA (printed));
+        }
+    }
+
+  g_mutex_lock (&c->lock);
+  c->done = TRUE;
+  g_cond_signal (&c->cond);
+  g_mutex_unlock (&c->lock);
+  cmacs_ai_tool_call_unref (c);
+  return G_SOURCE_REMOVE;
+}
+
 static gchar *
 cmacs_ai_tool__elisp_dispatch (AiToolUse    *tool_use,
                                GCancellable *cancellable,
@@ -118,51 +219,68 @@ cmacs_ai_tool__elisp_dispatch (AiToolUse    *tool_use,
 {
   (void) cancellable;
   CmacsAiToolCtx *ctx = user_data;
-  Lisp_Object key = cmacs_ai_tools__cb_key (ctx->exec_id, ctx->tool_name);
-  Lisp_Object cb  = Fgethash (key, Vcmacs_ai__tool_callbacks, Qnil);
-  if (NILP (cb))
-    {
-      g_set_error (error, AI_ERROR, AI_ERROR_INVALID_REQUEST,
-                   "cmacs-ai: no callback registered for tool %s",
-                   ctx->tool_name);
-      return NULL;
-    }
   JsonNode *in = ai_tool_use_get_input (tool_use);
   g_autofree gchar *input_str = in
     ? json_to_string (in, FALSE) : g_strdup ("{}");
+  CmacsAiToolCall *call =
+    cmacs_ai_tool_call_new (ctx->exec_id, ctx->tool_name, input_str,
+                            ai_tool_use_get_id (tool_use));
+  gchar *result = NULL;
+  gboolean timed_out = FALSE;
 
-  /* Marshal: cb is called as (CB NAME INPUT-JSON ID) and must return
-   * a string (or nil for error).  We use safe_call3 so a Lisp error
-   * doesn't abort the whole tool loop. */
-  Lisp_Object args[3];
-  args[0] = build_string (ctx->tool_name);
-  args[1] = build_string (input_str);
-  args[2] = build_string (ai_tool_use_get_id (tool_use) ?: "");
-  /* On the Emacs main thread (the synchronous `cmacs-ai-call' path) it
-   * is safe to call back into Lisp and hand the tool's real return value
-   * to the model.  On a worker thread (`cmacs-ai-tools-run-async')
-   * calling Lisp is unsafe, so fall back to the fire-and-forget
-   * placeholder -- a proper async fix would marshal the callback onto
-   * the main thread. */
   if (cmacs_ai__main_gthread != NULL
       && g_thread_self () == cmacs_ai__main_gthread)
     {
-      Lisp_Object rv = cmacs_dispatch_safe_callN_value (cb, 3, args);
-      if (STRINGP (rv))
-        return g_strdup (SSDATA (rv));
-      if (NILP (rv))
+      /* Already on the main thread -- the synchronous `cmacs-ai-call'
+       * path.  Going through the invoke would deadlock: the source
+       * cannot run until this call returns. */
+      cmacs_ai_tool__call_on_main (call);
+    }
+  else
+    {
+      /* From `cmacs-ai-tools-run-async''s worker.  Hand the call to the
+       * main thread and wait for its answer, so the model gets what the
+       * tool actually returned.  This used to return the placeholder
+       * string "(cmacs-ai tool dispatched)" and discard the real result,
+       * which made every Elisp tool -- so every brigade tool -- useless
+       * to an in-process agent. */
+      gint64 deadline = g_get_monotonic_time ()
+        + cmacs_ai_tool_call_timeout * G_TIME_SPAN_SECOND;
+
+      g_main_context_invoke (cmacs_glib_get_context (),
+                             cmacs_ai_tool__call_on_main, call);
+
+      g_mutex_lock (&call->lock);
+      while (!call->done && !timed_out)
         {
-          g_set_error (error, AI_ERROR, AI_ERROR_INVALID_REQUEST,
-                       "cmacs-ai: tool '%s' returned nil", ctx->tool_name);
-          return NULL;
+          if (!g_cond_wait_until (&call->cond, &call->lock, deadline))
+            timed_out = TRUE;
         }
-      /* Non-string, non-nil: hand the model its printed representation. */
-      Lisp_Object printed = Fprin1_to_string (rv, Qnil, Qnil);
-      return g_strdup (SSDATA (printed));
+      g_mutex_unlock (&call->lock);
     }
 
-  cmacs_dispatch_safe_callN (cb, 3, args);
-  return g_strdup ("(cmacs-ai tool dispatched)");
+  if (timed_out)
+    {
+      /* Give up on this one tool rather than park the worker for the
+       * rest of the session.  The source still holds a reference, so it
+       * is free to fire later and write into a struct that is still
+       * alive; whichever side unrefs last frees it. */
+      g_set_error (error, AI_ERROR, AI_ERROR_TOOL_ERROR,
+                   "cmacs-ai: tool '%s' timed out after %d seconds waiting "
+                   "for the Emacs main thread",
+                   ctx->tool_name, (int) cmacs_ai_tool_call_timeout);
+      cmacs_ai_tool_call_unref (call);
+      return NULL;
+    }
+
+  if (call->error != NULL)
+    g_set_error_literal (error, AI_ERROR, AI_ERROR_INVALID_REQUEST,
+                         call->error);
+  else
+    result = g_strdup (call->result);
+
+  cmacs_ai_tool_call_unref (call);
+  return result;
 }
 
 /* ── DEFUNs ─────────────────────────────────────────────────────── */
@@ -299,9 +417,34 @@ static gpointer
 cmacs_ai_tools__worker (gpointer user)
 {
   CmacsAiToolsJob *j = user;
+  GMainContext *ctx;
+
+  /* A PRIVATE main context, pushed as this thread's default for the
+   * duration of the run.  Without it the whole point of the worker is
+   * lost, in a way that is invisible until something blocks:
+   *
+   * `ai_tool_executor_run' binds its GMainLoop to the thread-default
+   * context, and with none pushed that is the process-global default --
+   * the very context Emacs's own loop iterates from `xg_select'.  The
+   * provider's libsoup calls attach there too.  So the main thread won
+   * the race to own that context, dispatched the HTTP completion, and
+   * ran the model's tool calls itself, while this thread sat in
+   * g_main_context_wait_internal waiting for a context it would never
+   * get.  A `bash' tool running `just bootstrap' then blocked the
+   * editor in wait4 for the length of a full build.
+   *
+   * With a private context the loop, the HTTP completion and the tool
+   * calls all belong to this thread, and Emacs never touches them.  */
+  ctx = g_main_context_new ();
+  g_main_context_push_thread_default (ctx);
+
   j->result = ai_tool_executor_run (j->exec, j->provider,
                                     j->messages, j->system_prompt,
                                     j->max_tokens, NULL, &j->error);
+
+  g_main_context_pop_thread_default (ctx);
+  g_main_context_unref (ctx);
+
   g_main_context_invoke (cmacs_glib_get_context (),
                          cmacs_ai_tools__main_done, j);
   return NULL;
@@ -565,6 +708,20 @@ syms_of_cmacs_ai_tools_defuns (void)
 {
   Vcmacs_ai__tool_callbacks = Qnil;
   staticpro (&Vcmacs_ai__tool_callbacks);
+
+  DEFVAR_INT ("cmacs-ai-tool-call-timeout", cmacs_ai_tool_call_timeout,
+	      doc: /* Seconds a background tool loop waits for the Emacs main thread.
+
+An in-process agent runs its tool loop on a worker thread, but an Elisp
+tool has to run where Lisp lives, so the worker hands the call to the
+main thread and waits for the answer.  The main thread picks it up from
+its GLib dispatch, which happens whenever Emacs reaches the event loop --
+so in practice this is immediate.
+
+If it does not, the agent gets a timeout error for that one tool call
+rather than the worker parking forever.  Raise it if you have Elisp tools
+that legitimately take minutes.  */);
+  cmacs_ai_tool_call_timeout = 120;
   defsubr (&Scmacs_ai_tools_new);
   defsubr (&Scmacs_ai_tools_free);
   defsubr (&Scmacs_ai_tools_register);

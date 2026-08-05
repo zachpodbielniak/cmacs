@@ -23,6 +23,10 @@
 (require 'cmacs-brigade-agent-def)
 (require 'cmacs-brigade-host)
 (require 'cmacs-brigade-isolation)
+;; `cmacs-brigade--task-prompt' and `--task-cwd' call into the plan layer
+;; unguarded; declaring them loads nothing.  It happened to work only
+;; because something else in the session had pulled org in first.
+(require 'cmacs-brigade-plan)
 (require 'cl-lib)
 (require 'subr-x)
 ;; Required, not declared.  `declare-function' satisfies the byte-compiler

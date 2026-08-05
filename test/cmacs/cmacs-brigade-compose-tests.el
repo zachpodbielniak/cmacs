@@ -310,6 +310,71 @@ nothing ever loaded; the halves each work and the whole is void."
     (let ((cmacs-brigade-compose--state '(:title "Nothing")))
       (should-error (cmacs-brigade-compose-create nil) :type 'user-error))))
 
+;;;; Declared but never required
+;;
+;; The single most repeated defect in this subsystem: a file names an
+;; Elisp function with `declare-function' -- which silences the byte
+;; compiler and loads nothing -- and the call dies with "Symbol's
+;; function definition is void" the first time anyone reaches that code
+;; path.  It has now happened to `cmacs-brigade-start-task',
+;; `cmacs-ai-make-session' and `cmacs-whisper-model-path'.
+;;
+;; A `declare-function' pointing at a .c file is fine: those are DEFUNs,
+;; present or absent at build time and correctly guarded with `fboundp'.
+;; One pointing at an Elisp library is a promise that the library is
+;; loaded, and only `require' keeps it.
+
+(defun cmacs-brigade-compose-tests--declared-elisp (file)
+  "Return the Elisp libraries FILE declares functions from but never requires."
+  (with-temp-buffer
+    (insert-file-contents file)
+    (let ((declared nil) (required nil) (missing nil))
+      (goto-char (point-min))
+      (while (re-search-forward
+              "^[ \t]*(declare-function[ \t\n]+[^ \t\n]+[ \t\n]+\"\\([^\"]+\\)\""
+              nil t)
+        (let ((lib (match-string 1)))
+          ;; .c means a DEFUN: compiled in or not, and guarded already.
+          (unless (string-suffix-p ".c" lib)
+            (cl-pushnew (file-name-sans-extension lib) declared :test #'equal))))
+      (goto-char (point-min))
+      (while (re-search-forward "(require '\\([^ \t\n)]+\\)" nil t)
+        (push (match-string 1) required))
+      (dolist (lib declared)
+        (unless (member lib required)
+          (push lib missing)))
+      (nreverse missing))))
+
+(defconst cmacs-brigade-compose-tests--cycle-breaks
+  '(("cmacs-brigade-compose.el" . "cmacs-brigade-dashboard"))
+  "Declarations that must stay declarations, with the reason.
+
+The dashboard requires compose -- for its `n', `V', `C' and `x' keys and
+for the provider/model reader -- so compose requiring the dashboard back
+would be a load cycle.  Both call sites in compose are `fboundp'-guarded
+and do nothing useful when the dashboard is absent, which is the correct
+shape for a back-reference.  Anything else on this list needs the same
+argument made for it in writing.")
+
+(ert-deftest cmacs-brigade-compose-no-declared-but-unrequired-libraries ()
+  "Every brigade file requires the Elisp libraries it declares functions from.
+
+The exceptions are load cycles, listed and argued for above.  Everything
+else is a void-function waiting for the first person to reach that code
+path -- which is how `cmacs-brigade-start-task', `cmacs-ai-make-session'
+and `cmacs-whisper-model-path' each shipped."
+  (let ((dir (file-name-directory (locate-library "cmacs-brigade")))
+        (bad nil))
+    (skip-unless dir)
+    (dolist (file (directory-files dir t "\\`cmacs-brigade.*\\.el\\'"))
+      (let ((base (file-name-nondirectory file)))
+        (dolist (lib (cmacs-brigade-compose-tests--declared-elisp file))
+          (unless (member (cons base lib)
+                          cmacs-brigade-compose-tests--cycle-breaks)
+            (push (format "%s declares from %s but never requires it" base lib)
+                  bad)))))
+    (should (equal nil (nreverse bad)))))
+
 (provide 'cmacs-brigade-compose-tests)
 
 ;;; cmacs-brigade-compose-tests.el ends here

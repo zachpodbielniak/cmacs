@@ -128,7 +128,11 @@ rather than looping forever."
 (declare-function cmacs-brigade-plan--entry-body "cmacs-brigade-plan")
 (declare-function cmacs-brigade-task-transition "cmacs-brigade-state.c")
 (declare-function cmacs-brigade-agent-get "cmacs-brigade-agent-def")
-(declare-function cmacs-ai-call "cmacs-ai-call")
+;; Loaded rather than merely declared: the `fboundp' guard below would
+;; otherwise report "cmacs-ai is not available in this build" for a build
+;; that has it and simply had not loaded it yet.
+(require 'cmacs-ai-call nil t)
+(require 'org-id nil t)
 (declare-function org-id-new "org-id")
 
 (defvar cmacs-brigade-plan-directory)

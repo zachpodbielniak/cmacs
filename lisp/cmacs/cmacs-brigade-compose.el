@@ -38,6 +38,11 @@
 (require 'cmacs-brigade-registry)
 (require 'cmacs-brigade-plan)
 (require 'cmacs-brigade-agent-def)
+;; Required, not declared: `cmacs-brigade-compose-create' calls
+;; `cmacs-brigade-start-task' with no `fboundp' guard, and a
+;; `declare-function' loads nothing -- which is exactly how the dashboard
+;; came to have an `s' key bound to a void function.
+(require 'cmacs-brigade-run)
 (require 'transient)
 (require 'cl-lib)
 (require 'subr-x)
@@ -49,15 +54,12 @@
                   (session prompt callback &optional executor))
 (declare-function cmacs-ai-list-models "cmacs-ai-stream.c" (&optional provider))
 (declare-function cmacs-ai-providers "cmacs-ai-defuns.c" ())
-(declare-function cmacs-brigade-start-task "cmacs-brigade-run" (task-id))
 (declare-function cmacs-brigade-task-transition "cmacs-brigade-defuns.c"
                   (id state &optional reason))
 (declare-function cmacs-brigade-dashboard-refresh "cmacs-brigade-dashboard" ())
 (declare-function cmacs-brigade-voice-listen "cmacs-brigade-voice"
                   (label callback))
 (declare-function cmacs-brigade-voice-available-p "cmacs-brigade-voice" ())
-(declare-function cmacs-evil-setup-mode-map "cmacs-evil"
-                  (map &optional mode states))
 
 (defvar cmacs-ai-default-provider)
 

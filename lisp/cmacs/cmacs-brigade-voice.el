@@ -35,6 +35,22 @@
 (require 'cl-lib)
 (require 'subr-x)
 
+;; Required, not merely declared.  `cmacs-whisper-model-path' and the
+;; capture defaults are Elisp, and a `declare-function' or a bare
+;; `defvar' loads nothing: `cmacs-brigade-voice-listen' died on a void
+;; `cmacs-whisper-model-path' the first time anyone pressed the key,
+;; because nothing in a session had happened to pull those files in.
+;; Soft, so a build without whisper or audio still loads this file --
+;; `cmacs-brigade-voice-available-p' is what decides whether the
+;; commands can run.
+(require 'cmacs-whisper nil t)
+(require 'cmacs-audio nil t)
+(require 'cmacs-piper nil t)
+;; The voice keymap binds `cmacs-brigade-compose-voice', so the compose
+;; layer has to be there when the map is built.  No cycle: compose pulls
+;; voice in at call time, not load time.
+(require 'cmacs-brigade-compose)
+
 (defgroup cmacs-brigade-voice nil
   "Voice control for the brigade."
   :group 'cmacs-brigade
@@ -104,8 +120,6 @@ something notices."
 (declare-function cmacs-brigade-plan-mode "cmacs-brigade-plan")
 (declare-function cmacs-brigade-plan-append-task "cmacs-brigade-plan"
                   (file spec))
-(declare-function cmacs-brigade-compose-voice "cmacs-brigade-compose" ())
-(declare-function org-back-to-heading "org")
 
 ;; Both live in cmacs-brigade-plan.el, which is loaded on demand rather
 ;; than required here: dictating a task is the only path that needs the
@@ -119,10 +133,17 @@ something notices."
 (defvar cmacs-whisper-language)
 
 (defun cmacs-brigade-voice-available-p ()
-  "Whether voice input is usable in this build."
+  "Whether voice input is usable in this build.
+
+Checks the Elisp layers too, not just the C DEFUNs.  Testing only
+`cmacs-whisper-supported-p' reported voice as available in a build where
+the whisper Lisp file had never been loaded, so the key worked right up
+until it called `cmacs-whisper-model-path' and died."
   (and (fboundp 'cmacs-whisper-supported-p)
        (cmacs-whisper-supported-p)
-       (fboundp 'cmacs-audio--capture-open-1)))
+       (fboundp 'cmacs-audio--capture-open-1)
+       (fboundp 'cmacs-whisper-model-path)
+       (boundp 'cmacs-audio-default-rate)))
 
 (defun cmacs-brigade-voice--say (text)
   "Speak TEXT if speech is available and wanted.  Returns TEXT."
