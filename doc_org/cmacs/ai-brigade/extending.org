@@ -179,12 +179,24 @@ ai-glib's CLI clients ignore the tools argument entirely (=(void)tools= in the c
 
 * Confirmation, and why it cannot prompt
 
-A tool with =:confirm= is /declined/ rather than asked about when the call arrives from a chat or any other GLib callback, and =cmacs-brigade-auto-approve= is how you say yes in advance:
+A tool with =:confirm= is /declined/ rather than asked about when the call arrives from a chat or any other GLib callback, and =cmacs-brigade-auto-approve= is how you say yes in advance.
+
+The five subagent tools are on that list by default, so handing work to another agent works out of the box:
 
 #+begin_src elisp
-(setq cmacs-brigade-auto-approve '("agent_spawn" "agent_cancel"))
-;; or t for everything
+(setq cmacs-brigade-auto-approve
+      '("agent_spawn" "agent_status" "agent_result"
+        "agent_list" "agent_cancel"))     ; the default
 #+end_src
+
+Nothing else is opened up — a gated tool of your own, or =project_write_file=, still asks. To put the gate back on spawning, drop it from the list, understanding that outside an interactive command that means it is declined rather than prompted for:
+
+#+begin_src elisp
+(setq cmacs-brigade-auto-approve
+      '("agent_status" "agent_result" "agent_list"))
+#+end_src
+
+What is being approved: =agent_spawn= starts a run that spends money, bounded by the spawning agent's budget and by =cmacs-brigade-subagent-max-depth= rather than by a prompt. The other four read state or stop something and cost nothing.
 
 The reason is structural rather than a policy choice. A tool call from a chat runs inside a GLib dispatch, which is itself inside Emacs's =pselect= hook. Lisp that prompts there enters a recursive edit /underneath/ the dispatch: the minibuffer's =read_char= calls =wait_reading_process_output=, which calls =xg_select=, which dispatches the same =GMainContext= again. The editor wedges, and =C-g= cannot break it because the dispatch guard cleared =waiting_for_input= on the way in — the flag that lets a quit interrupt.
 

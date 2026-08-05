@@ -105,22 +105,34 @@ message the model cannot act on."
 
 ;;;; Confirmation
 
-(defcustom cmacs-brigade-auto-approve nil
+(defcustom cmacs-brigade-auto-approve
+  '("agent_spawn" "agent_status" "agent_result"
+    "agent_list" "agent_cancel")
   "Tools that may run without asking.
 
-t approves everything; a list approves the wire names in it, e.g.
-\\='(\"agent_spawn\" \"agent_cancel\").
+t approves everything; a list approves the wire names in it; nil asks,
+which in practice means declines.
 
-This exists because a confirmation prompt is impossible on the path that
-needs it most.  A tool call arriving from a chat runs inside a GLib
-dispatch, where Lisp cannot prompt -- a minibuffer there re-enters the
-main loop underneath the dispatch and wedges the editor -- so cmacs binds
-`inhibit-interaction\\=' for the duration and a `:confirm\\=' tool is
-declined rather than asked about.  Naming it here is how you say yes in
-advance.
+The subagent tools are approved by default because handing work to
+another agent is the ordinary way to use the brigade, and a confirmation
+there is not merely inconvenient -- it is unanswerable.  A tool call
+arriving from a chat runs inside a GLib dispatch, where Lisp cannot
+prompt: a minibuffer there re-enters the main loop underneath the
+dispatch and wedges the editor, so cmacs binds `inhibit-interaction\\=' and
+a gated tool is declined instead of asked about.  Left unapproved,
+`agent_spawn\\=' could never succeed from the surface that most wants it.
 
-Weigh it per tool.  `agent_spawn\\=' commits to spend on your behalf, which
-is what the confirmation was for; the read-only ones were never gated."
+Everything else still asks.  Removing `agent_spawn\\=' from this list is
+the way to get a confirmation back, understanding that outside an
+interactive command it will decline rather than prompt:
+
+  (setq cmacs-brigade-auto-approve
+        \\='(\"agent_status\" \"agent_result\" \"agent_list\"))
+
+Worth knowing what is being approved: `agent_spawn\\=' starts a run that
+spends money, bounded by the spawning agent\\='s budget and by
+`cmacs-brigade-subagent-max-depth\\=', not by a prompt.  The other four
+read state or stop something and cost nothing."
   :type '(choice (const :tag "Ask (declines where it cannot ask)" nil)
                  (const :tag "Approve everything" t)
                  (repeat string))

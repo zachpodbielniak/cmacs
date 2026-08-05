@@ -1063,6 +1063,34 @@ template at all."
           (kill-buffer b)))
       (delete-directory dir t))))
 
+
+(ert-deftest cmacs-brigade-subagent-tools-approved-by-default ()
+  "Spawning works out of the box, and nothing else is opened up.
+
+A confirmation on `agent_spawn' is not merely inconvenient, it is
+unanswerable: the call arrives inside a GLib dispatch where Lisp cannot
+prompt, so a gated tool is declined rather than asked about.  Left
+unapproved it could never succeed from a chat, which is the surface that
+most wants it."
+  (skip-unless (featurep 'cmacs-brigade-tools))
+  (dolist (n '("agent_spawn" "agent_status" "agent_result"
+               "agent_list" "agent_cancel"))
+    (should (cmacs-brigade--auto-approved-p n)))
+  ;; and the blanket is not open: an unrelated gated tool still asks
+  (should-not (cmacs-brigade--auto-approved-p "project_write_file"))
+  (should-not (cmacs-brigade--auto-approved-p "eval"))
+  (should-not (eq cmacs-brigade-auto-approve t)))
+
+(ert-deftest cmacs-brigade-auto-approve-remains-a-user-choice ()
+  "Narrowing the list puts the gate back on spawning."
+  (skip-unless (featurep 'cmacs-brigade-subagent))
+  (let ((cmacs-brigade-auto-approve '("agent_status" "agent_result"))
+        (cmacs-brigade-confirm-function nil))
+    (should-not (cmacs-brigade--auto-approved-p "agent_spawn"))
+    (let ((out (cmacs-brigade-call-tool "agent_spawn"
+                                        "{\"task\":\"x\"}" "grok")))
+      (should (string-match-p "needs approval" out)))))
+
 (provide 'cmacs-brigade-run-tests)
 
 ;;; cmacs-brigade-run-tests.el ends here
