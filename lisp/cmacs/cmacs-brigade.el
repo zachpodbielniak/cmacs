@@ -24,6 +24,7 @@
 ;;; Code:
 
 (require 'cmacs nil 'noerror)
+(require 'cl-lib)
 
 ;; Defined here rather than relying on the C DEFSYM so the Elisp layer
 ;; still has a usable error hierarchy in a build without the feature --
@@ -97,6 +98,25 @@ under `temporary-file-directory', which may be world-readable -- the
 file modes still apply, but a real XDG_RUNTIME_DIR is preferred."
   :type 'directory
   :group 'cmacs-brigade)
+
+
+;;;; Reading JSON back out of a model's reply
+
+(defun cmacs-brigade-parse-json-object (answer)
+  "Return the JSON object in ANSWER as an alist, or nil.
+
+The object is located rather than assumed to be the whole reply: models
+wrap JSON in prose and code fences however firmly they are asked not to,
+and a reply that is 95% the right answer should not be thrown away over
+the other 5%."
+  (when (stringp answer)
+    (let* ((start (string-search "{" answer))
+           (end (and start (cl-position ?} answer :from-end t)))
+           (json (and start end (> end start) (substring answer start (1+ end)))))
+      (when json
+        (ignore-errors
+          (json-parse-string json :object-type 'alist :array-type 'list
+                             :null-object nil :false-object nil))))))
 
 
 ;;;; Feature probes
@@ -193,6 +213,11 @@ The subsystem's own symbols use the shorter `cmacs-brigade-' prefix.")
   (require 'cmacs-brigade-subagent nil 'noerror)
   (require 'cmacs-brigade-notify nil 'noerror)
   (require 'cmacs-brigade-voice nil 'noerror)
+  ;; Eager so the dashboard's clone and compose keys are bound the first
+  ;; time it opens.  Autoloading would do for the M-x entry points, but
+  ;; the dashboard's keymap is built at load time and a key bound to an
+  ;; autoload cookie that has not been generated yet is just void.
+  (require 'cmacs-brigade-compose nil 'noerror)
   ;; Loaded so its tools and dashboard panel register; nothing is armed
   ;; until `cmacs-brigade-schedule-mode' is turned on.  Loading a file
   ;; must not start firing jobs.

@@ -332,6 +332,136 @@ intent.  Falls back to what adopt saw, for a plan with no file."
     (org-todo (cmacs-brigade-plan--keyword-for state))))
 
 
+;;;; Writing a task into a plan
+;;
+;; The one place a new task headline is composed.  Voice dictation, the
+;; compose transient and a clone all arrive here, so the shape of a task
+;; on disk is decided once rather than in each caller -- three
+;; hand-written copies of this had already drifted apart on whether the
+;; tag went on, how the body was indented, and whether the file was
+;; created if missing.
+
+(defun cmacs-brigade-plan-ensure-file (file &optional title)
+  "Return plan FILE, creating an empty plan titled TITLE if it is absent.
+
+The `#+TODO\=' line goes in at creation so a plan's keywords never depend
+on the reader\='s global `org-todo-keywords\='."
+  (unless (file-exists-p file)
+    (make-directory (file-name-directory file) t)
+    (with-temp-file file
+      (insert "#+title: " (or title (file-name-base file)) "\n"
+              cmacs-brigade-plan-todo-line "\n\n")))
+  file)
+
+(defun cmacs-brigade-plan--headline-text (title)
+  "TITLE reduced to something that can be one org headline.
+
+Newlines and leading stars are the two characters that would turn a
+title into structure rather than text; a title long enough to hide the
+properties after it is truncated."
+  (let ((one (string-trim
+              (replace-regexp-in-string
+               "\\`\\*+" "" (replace-regexp-in-string
+                             "[ \t\n\r]+" " " (or title ""))))))
+    (cond ((string-empty-p one) "Untitled task")
+          ((<= (length one) 70) one)
+          (t (concat (substring one 0 67) "...")))))
+
+(defun cmacs-brigade-plan--body-text (prompt)
+  "PROMPT indented so no line of it can be read as org structure.
+
+A prompt is prose the user wrote, and prose contains lines starting with
+`*\=' -- a bullet list, a shell glob, a footnote.  At column zero org
+reads that as a headline and the rest of the prompt silently becomes a
+separate task."
+  (mapconcat (lambda (line) (concat "  " line))
+             (split-string (string-trim (or prompt "")) "\n")
+             "\n"))
+
+(defun cmacs-brigade-plan-append-task (file spec)
+  "Append SPEC to plan FILE as a new task, adopt it, and return its id.
+
+SPEC is a plist of intent: :title and :prompt, plus any of :agent,
+:model, :budget, :tools, :isolation, :cwd, and :properties (an alist of
+further PROPERTY . VALUE pairs written verbatim).  :tools may be a list
+or an already-joined string.
+
+The id is minted by org, so the task is addressable by `org-id-goto\=' and
+survives a refile."
+  (cmacs-brigade-plan-ensure-file file (plist-get spec :title))
+  (let ((props (cmacs-brigade-plan--task-properties spec))
+        (id nil))
+    (with-current-buffer (find-file-noselect file)
+      (unless (derived-mode-p 'org-mode)
+        (signal 'cmacs-brigade-plan-error (list "not an org file" file)))
+      (save-excursion
+        (goto-char (point-max))
+        (unless (bolp) (insert "\n"))
+        (insert (format "* TODO %s  :brigade:\n"
+                        (cmacs-brigade-plan--headline-text
+                         (plist-get spec :title))))
+        (when props
+          (insert "  :PROPERTIES:\n")
+          (dolist (p props)
+            (insert (format "  :%s:  %s\n" (car p) (cdr p))))
+          (insert "  :END:\n"))
+        (let ((body (cmacs-brigade-plan--body-text (plist-get spec :prompt))))
+          (unless (string-empty-p (string-trim body))
+            (insert body "\n")))
+        (org-back-to-heading t)
+        (setq id (cmacs-brigade-plan--entry-id 'create)))
+      (save-buffer)
+      (cmacs-brigade-plan-adopt))
+    id))
+
+(defun cmacs-brigade-plan--task-properties (spec)
+  "The property drawer entries SPEC asks for, as an alist.
+
+An empty value is left out entirely rather than written blank: an empty
+:MODEL: is not the same request as no :MODEL:, and the runner reads the
+absent one as \"whatever the agent definition says\"."
+  (let ((out nil))
+    (dolist (pair '((:agent . "AGENT") (:model . "MODEL")
+                    (:budget . "BUDGET") (:isolation . "ISOLATION")))
+      (let ((v (plist-get spec (car pair))))
+        (when (and v (not (equal v "")))
+          (push (cons (cdr pair) (format "%s" v)) out))))
+    (let ((tools (plist-get spec :tools)))
+      (when tools
+        (let ((s (if (stringp tools)
+                     tools
+                   (mapconcat (lambda (x) (format "%s" x)) tools ", "))))
+          (unless (string-empty-p (string-trim s))
+            (push (cons "TOOLS" s) out)))))
+    ;; Abbreviated on the way in, expanded on the way out (see
+    ;; `cmacs-brigade--task-cwd'), so the plan stays readable.
+    (when-let* ((cwd (plist-get spec :cwd)))
+      (unless (string-empty-p (format "%s" cwd))
+        (push (cons "CWD" (abbreviate-file-name
+                           (file-name-as-directory
+                            (expand-file-name (format "%s" cwd)))))
+              out)))
+    (dolist (extra (plist-get spec :properties))
+      (when (and (cdr extra) (not (equal (cdr extra) "")))
+        (push (cons (car extra) (format "%s" (cdr extra))) out)))
+    (nreverse out)))
+
+(defun cmacs-brigade-plan-read-task (plan id)
+  "Return the intent fields of task ID in PLAN, as a plist, or nil.
+
+What a human wrote, not what the runtime made of it -- so a task whose
+per-task overrides produced a derived agent reads back as the base agent
+it was written with.  This is what a clone copies."
+  (when (and plan (stringp plan) (file-readable-p plan))
+    (with-current-buffer (find-file-noselect plan)
+      (save-excursion
+        (when-let* ((marker (gethash id (cmacs-brigade-plan--id-index))))
+          (goto-char marker)
+          (append (cmacs-brigade-plan--read-entry)
+                  (list :cwd (org-entry-get nil "CWD")
+                        :plan (buffer-file-name))))))))
+
+
 ;;;; Render: C -> org
 ;;
 ;; C never touches the buffer.  It hands over records and this applies

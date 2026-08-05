@@ -25,9 +25,10 @@ one form lights it up on all three delivery paths at once.
 * Brigade Requirements::        Configure flags and dependencies.
 * Brigade Probing::             Detecting the feature at runtime.
 * Brigade Extending::           Registering your own capabilities.
+* Brigade Notifications::       Being told when it finishes; voice.
 * Brigade Workers::             How an agent actually runs.
 * Brigade Dashboard Display::   How the dashboard takes the screen.
-* Brigade Notifications::       Being told when it finishes; voice.
+* Brigade Composing::           Getting a task without knowing the format.
 * Brigade Scheduling::          Running a prompt on a cron schedule.
 @end menu
 
@@ -320,6 +321,86 @@ leaves the rest of the layout alone; @code{other-window} is Emacs's
 default splitting behaviour.  None of the three ever creates a window,
 and @code{display-buffer-alist} still applies.
 @end defopt
+
+@node Brigade Composing
+@section Getting a task without knowing the format
+
+Writing a task by hand means knowing that a plan is an org file, where
+plans live, which properties mean what, and that @code{:MODEL:} is
+spelled @code{provider/model}.  Four dashboard keys skip all of it, and
+every one of them ends in the same transient, so you get a look at the
+task before it exists.
+
+@table @kbd
+@item n
+Describe the task in plain English in a small window at the bottom of
+the frame, then @kbd{C-c C-c}.  What you wrote goes to a model, which
+proposes the whole spec --- title, prompt, agent, provider, model,
+tools, budget, working directory --- and the transient opens already
+filled in.  Nothing is created by that call.
+@item V
+The same, spoken: records until @code{cmacs-brigade-voice-stop},
+transcribes with whisper, drafts, and shows you the result.  Also on
+@kbd{v n}.  A transcript is never turned straight into a run --- the
+failure mode is an agent spending real money on a misheard instruction.
+@item C
+Clone the task under point.  The copy carries everything the original
+@emph{said} --- agent, model, tools, budget, directory, prompt --- and
+nothing it @emph{did}: its own id, and draft state.  A task with
+per-task overrides runs under a derived agent
+(@code{researcher@@b12c7a46}); the clone carries the base name, so the
+overrides stay editable in the transient rather than frozen into a
+definition belonging to the original.
+@item x
+The transient itself, empty.  Also @kbd{M-x cmacs-brigade-compose}.
+@end table
+
+Names the drafting model invented for agents, tools or providers are
+dropped before you see them: an invented agent is a task that fails at
+start, and an invented tool is worse, because it looks like it worked.
+
+What gets written is an ordinary org headline in an ordinary plan file,
+adopted exactly as if you had typed it --- so a composed task is
+editable, refilable and in git like every other one.
+
+@defopt cmacs-brigade-compose-author-provider
+@defoptx cmacs-brigade-compose-author-model
+The provider and model asked to turn a request into a spec;
+@code{claude-code} and @code{sonnet} by default.  A CLI provider because
+it needs no API key configured before the feature works at all, and
+Sonnet rather than something cheaper because this call decides which
+agent runs and with what tools.
+@end defopt
+
+@defopt cmacs-brigade-compose-author-timeout
+Seconds to wait for the draft before giving up on it (120).  On expiry
+the request itself becomes the prompt and you fill in the rest.
+@end defopt
+
+@defopt cmacs-brigade-compose-entry
+@code{window} (the default) opens a small buffer at the bottom, since a
+task worth handing to an agent rarely fits on one line;
+@code{minibuffer} reads one line instead.
+@end defopt
+
+@defopt cmacs-brigade-compose-plan-file
+The plan composed tasks are appended to; @file{compose.org} under
+@code{cmacs-brigade-plan-directory} by default.
+@end defopt
+
+@defun cmacs-brigade-plan-append-task file spec
+Append @var{spec} to plan @var{file} as a new task, adopt it, and return
+its id.  @var{spec} is a plist of intent: @code{:title} and
+@code{:prompt}, plus any of @code{:agent}, @code{:model},
+@code{:budget}, @code{:tools}, @code{:isolation}, @code{:cwd} and
+@code{:properties}.  The one place a task headline is composed, so its
+shape on disk is decided once.
+@end defun
+
+@defun cmacs-brigade-compose-set spec
+Replace the composed state with @var{spec} and show the transient.  The
+way in for filling the menu from your own code.
+@end defun
 
 @node Brigade Scheduling
 @section Scheduled runs

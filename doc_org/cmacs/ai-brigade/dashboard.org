@@ -20,20 +20,110 @@ ST  ID         AGENT        TASK                       TURNS   TOKENS      COST
     worker exited 1
 ──────────────────────────────────────────────────────────────────────────────
 
+ n new (describe it)   V new (say it)   C clone   x compose
  s start  K cancel  RET plan  o output  g refresh  M memory  q quit
 #+end_example
 
 * Keys
 
-| Key   | Does                                   |
-|-------+----------------------------------------|
-| =s=     | queue and start the task on this line  |
-| =K=     | cancel it                              |
-| =RET=   | jump to its headline in the plan       |
-| =g=     | redraw now                             |
-| =M=     | search the memory index                |
-| =j= =k= | move                                   |
-| =q=     | quit                                   |
+| Key   | Does                                            |
+|-------+-------------------------------------------------|
+| =n=     | describe a task in plain English; one is drafted |
+| =V=     | say it instead                                  |
+| =C=     | clone the task on this line                     |
+| =x=     | compose one field by field                      |
+| =s=     | queue and start the task on this line           |
+| =K=     | cancel it                                       |
+| =d=     | delete it, from the runtime and from its plan   |
+| =RET=   | jump to its headline in the plan                |
+| =o=     | read what it produced                           |
+| =a= =m= =b= =t= | set its agent / model / budget / tools   |
+| =c= =p= | create or open a plan file                      |
+| =N= =T= =A= | write an agent / list tools / reload agents |
+| =g=     | redraw now                                      |
+| =M=     | search the memory index                         |
+| =j= =k= | move                                            |
+| =q=     | quit                                            |
+
+* Getting a task without knowing the format
+
+Writing a task by hand means knowing that a plan is an org file, where plans
+live, which properties mean what, and that =:MODEL:= is spelled
+=provider/model=. That is a lot to know before you can ask an agent to do
+something. Four keys skip all of it, and every one of them ends in the same
+transient so you get a look at the task before it exists.
+
+** =n= — describe it
+
+Opens a small window at the bottom of the frame. Write what you want done, in
+as many lines as it takes, then =C-c C-c=. What you wrote goes to a model
+(=claude-code/sonnet= by default, see =cmacs-brigade-compose-author-provider=
+and =-author-model=), which proposes the whole spec — title, prompt, agent,
+provider, model, tools, budget, working directory — and the transient opens
+already filled in.
+
+Nothing is created by that call. The model's proposal is a *draft*: names it
+invented for agents, tools or providers are dropped before you ever see them,
+and you still have to press =RET=.
+
+Set =cmacs-brigade-compose-entry= to =minibuffer= for a one-line prompt
+instead of the window.
+
+** =V= — say it
+
+The same thing, spoken. Records until =cmacs-brigade-voice-stop=, transcribes
+with whisper, drafts, and shows you the result. Also on =v n=.
+
+It is deliberately never created straight off a transcript. Whisper is good,
+but the failure mode is an agent spending real money on a misheard
+instruction, and a wrong word is cheap to fix on screen.
+
+** =C= — clone
+
+Copies everything the task under point *said* — agent, model, tools, budget,
+working directory, and the prompt itself — and none of what it *did*. The copy
+gets its own id and starts as a draft, and the transient opens on it so you can
+change the one thing you wanted different. That is the reason to clone rather
+than re-run.
+
+A task with per-task overrides runs under a derived agent
+(=researcher@b12c7a46=); the clone carries the base name =researcher=, so the
+overrides stay in the transient where you can edit them rather than frozen into
+a definition belonging to the original.
+
+** =x= — compose
+
+The transient itself, empty. Every field shows what it is set to, and an unset
+field means "whatever the agent definition says" rather than a hidden default.
+
+#+begin_example
+Compose a brigade task
+ drafted from your request
+ into ~/.local/state/cmacs/brigade/brigade/compose.org
+
+ Task                      Who runs it
+ p prompt   Survey the...  a agent     researcher
+ T title    Survey gaps    m model     claude-code/sonnet
+                           t tools     memory_search, web_search
+
+ Where and how much        Draft
+ d directory  ~/src/foo/   ! re-draft from a description
+ b budget     0.50         v re-draft from your voice
+ f plan file  compose.org  r reset
+
+ Create
+ RET create it   S create and start it   e create and open in the plan
+#+end_example
+
+=M-x cmacs-brigade-compose= reaches it from anywhere.
+
+** What gets written
+
+An ordinary org headline in an ordinary plan file
+(=cmacs-brigade-compose-plan-file=, =compose.org= under the plan directory by
+default), adopted exactly as if you had typed it. A composed task is editable,
+refilable, greppable and in git like every other one — there is no second
+representation.
 
 * It is a projection
 

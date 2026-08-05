@@ -102,6 +102,9 @@ something notices."
 (declare-function cmacs-audio-read-pcm "cmacs-audio-defuns.c")
 (declare-function cmacs-brigade-plan-adopt "cmacs-brigade-plan")
 (declare-function cmacs-brigade-plan-mode "cmacs-brigade-plan")
+(declare-function cmacs-brigade-plan-append-task "cmacs-brigade-plan"
+                  (file spec))
+(declare-function cmacs-brigade-compose-voice "cmacs-brigade-compose" ())
 (declare-function org-back-to-heading "org")
 
 ;; Both live in cmacs-brigade-plan.el, which is loaded on demand rather
@@ -272,26 +275,21 @@ adopted -- so it is editable, refilable and in git like any other."
        (cmacs-brigade-voice--queue text agent)))))
 
 (defun cmacs-brigade-voice--queue (text agent)
-  "Append TEXT as a task for AGENT to the voice plan, and adopt it."
+  "Append TEXT as a task for AGENT to the voice plan, and adopt it.
+
+The heading is a summary and the body is the prompt: splitting them
+keeps the agenda readable when the spoken task runs long."
+  (require 'cmacs-brigade-plan)
   (let ((file (cmacs-brigade-voice--plan-file)))
+    (cmacs-brigade-plan-append-task
+     file (list :title (cmacs-brigade-voice--summarize text)
+                :prompt text
+                :agent agent))
     (with-current-buffer (find-file-noselect file)
-      (save-excursion
-        (goto-char (point-max))
-        (unless (bolp) (insert "\n"))
-        ;; The heading is a summary; the body is the prompt.  Splitting
-        ;; them keeps the agenda readable when the spoken task runs long.
-        (insert "* TODO " (cmacs-brigade-voice--summarize text)
-                "  :brigade:\n")
-        (when agent
-          (insert "  :PROPERTIES:\n  :AGENT:  " (format "%s" agent)
-                  "\n  :END:\n"))
-        (insert "  " text "\n"))
-      (save-buffer)
-      (when (fboundp 'cmacs-brigade-plan-mode) (cmacs-brigade-plan-mode 1))
-      (when (fboundp 'cmacs-brigade-plan-adopt) (cmacs-brigade-plan-adopt))
-      (cmacs-brigade-voice--say
-       (format "Queued for %s." (or agent "the default agent")))
-      file)))
+      (when (fboundp 'cmacs-brigade-plan-mode) (cmacs-brigade-plan-mode 1)))
+    (cmacs-brigade-voice--say
+     (format "Queued for %s." (or agent "the default agent")))
+    file))
 
 (defun cmacs-brigade-voice--summarize (text)
   "A headline-length summary of TEXT."
@@ -431,6 +429,10 @@ late `:order', so a handler you register yourself still wins."
 (defvar cmacs-brigade-voice-map
   (let ((m (make-sparse-keymap)))
     (define-key m (kbd "t") #'cmacs-brigade-voice-task)
+    ;; The drafted counterpart of `t': same recording, but a model turns
+    ;; what you said into a whole spec and you get a look at it before
+    ;; anything is created.
+    (define-key m (kbd "n") #'cmacs-brigade-compose-voice)
     (define-key m (kbd "q") #'cmacs-brigade-voice-ask)
     (define-key m (kbd "s") #'cmacs-brigade-voice-stop)
     (define-key m (kbd "?") #'cmacs-brigade-notify-status)

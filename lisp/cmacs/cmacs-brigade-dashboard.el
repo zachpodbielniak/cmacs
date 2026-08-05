@@ -43,6 +43,10 @@
 ;; dependency rather than something to declare-function around.
 (require 'cmacs-brigade-plan)
 (require 'cmacs-brigade-output)
+;; The compose transient backs `n', `C', `V' and `x', and also supplies
+;; the provider/model reader `m' uses -- so it is a hard dependency for
+;; the same reason the plan layer is.
+(require 'cmacs-brigade-compose)
 (require 'cl-lib)
 (require 'subr-x)
 
@@ -258,6 +262,9 @@ a to pick another\n"
 (defun cmacs-brigade-dashboard--insert-empty ()
   "What to show when there are no tasks: how to get one."
   (insert "\n  No tasks yet.\n\n")
+  (insert "    n   describe a task in plain English -- one is drafted for you\n")
+  (insert "    V   say it instead\n")
+  (insert "    x   compose one field by field\n")
   (insert "    c   create a plan and open it\n")
   (insert "    o   read what a finished task produced\n")
   (insert "    N   write a new agent definition\n")
@@ -296,7 +303,8 @@ a to pick another\n"
                              'face 'error)))))))
 
 (defun cmacs-brigade-dashboard--hints ()
-  (concat " s start   K cancel  d delete   o output    RET plan\n"
+  (concat " n new (describe it)   V new (say it)   C clone   x compose\n"
+          " s start   K cancel  d delete   o output    RET plan\n"
           " a agent   m model   b budget   t tools      c new plan\n"
           " N new agent  T tool list  A reload agents   p open plan\n"
           " g refresh M memory  ? keys     q quit"))
@@ -409,37 +417,15 @@ a to pick another\n"
 
 Provider first, then its models: the two are one string on the wire
 \(`claude/claude-sonnet-4-6\='), but picking a model without first
-narrowing to a provider means reading one list of everything."
+narrowing to a provider means reading one list of everything.
+
+Leaving either empty clears the override rather than writing half of
+one.  A bare `claude-code/\=' parses as a model *name* on the default
+provider, so the half-answer would quietly run something else."
   (interactive)
-  (let* ((r (cmacs-brigade-dashboard--record-or-error))
-         (provider (cmacs-brigade-dashboard--read-provider))
-         (model (cmacs-brigade-dashboard--read-model provider)))
+  (let ((r (cmacs-brigade-dashboard--record-or-error)))
     (cmacs-brigade-dashboard--set-property
-     r "MODEL" (if (string-empty-p model) "" (format "%s/%s" provider model)))))
-
-(defun cmacs-brigade-dashboard--read-provider ()
-  "Prompt for an AI provider."
-  (let ((providers (if (fboundp 'cmacs-ai-providers)
-                       (mapcar #'symbol-name (cmacs-ai-providers))
-                     '("claude" "openai" "gemini" "grok" "ollama"
-                       "claude-code" "opencode" "claude-tmux"))))
-    (completing-read "Provider: " providers nil nil
-                     (and (boundp 'cmacs-ai-default-provider)
-                          (format "%s" cmacs-ai-default-provider)))))
-
-(defun cmacs-brigade-dashboard--read-model (provider)
-  "Prompt for a model offered by PROVIDER.
-
-Completion, not a fixed set: a provider ships new model names between
-cmacs releases, and a closed list would make the newest model the one
-option the UI cannot express."
-  (let ((models (and (fboundp 'cmacs-ai-list-models)
-                     (ignore-errors
-                       (mapcar (lambda (m) (format "%s" m))
-                               (cmacs-ai-list-models (intern provider)))))))
-    (completing-read (format "Model for %s (empty = provider default): "
-                             provider)
-                     models nil nil)))
+     r "MODEL" (or (cmacs-brigade-compose-read-model) ""))))
 
 (defun cmacs-brigade-dashboard-set-budget ()
   "Set the spend ceiling for the task on this line.  Empty or 0 means none."
@@ -493,6 +479,23 @@ record with nothing behind it."
         (cmacs-brigade-task-forget id))
       (cmacs-brigade-dashboard-refresh)
       (message "cmacs-brigade: deleted %s" title))))
+
+(defun cmacs-brigade-dashboard-clone ()
+  "Compose a copy of the task on this line.
+
+The copy carries everything the original *said* -- agent, model, tools,
+budget, directory, prompt -- and nothing it *did*: it gets its own id and
+starts as a draft.  The transient opens on it so you can change the one
+thing you wanted different, which is the reason to clone rather than
+re-run."
+  (interactive)
+  (cmacs-brigade-compose-clone (cmacs-brigade-dashboard--record-or-error)))
+
+(defun cmacs-brigade-dashboard-compose ()
+  "Compose a task field by field."
+  (interactive)
+  (setq cmacs-brigade-compose--state nil)
+  (cmacs-brigade-compose-show))
 
 (defun cmacs-brigade-dashboard-new-agent ()
   "Create a new agent definition."
@@ -556,6 +559,12 @@ knowing that `cmacs-brigade-plan-create\=' exists and where plans live."
     (define-key map (kbd "o") #'cmacs-brigade-dashboard-output)
     (define-key map (kbd "g") #'cmacs-brigade-dashboard-refresh)
     (define-key map (kbd "M") #'cmacs-brigade-memory-find)
+    ;; Getting a task without having to know that a plan is an org file,
+    ;; where plans live, or how :MODEL: is spelled.
+    (define-key map (kbd "n") #'cmacs-brigade-compose-quick)
+    (define-key map (kbd "V") #'cmacs-brigade-compose-voice)
+    (define-key map (kbd "C") #'cmacs-brigade-dashboard-clone)
+    (define-key map (kbd "x") #'cmacs-brigade-dashboard-compose)
     ;; Getting a plan without having to know where plans live.
     (define-key map (kbd "c") #'cmacs-brigade-dashboard-new-plan)
     (define-key map (kbd "p") #'cmacs-brigade-dashboard-open-plan)

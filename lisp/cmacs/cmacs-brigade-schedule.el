@@ -1127,13 +1127,7 @@ Available tools: %s"
 
 Models wrap JSON in prose and fences however firmly they are asked not
 to, so the object is located rather than assumed to be the whole reply."
-  (let* ((start (string-search "{" answer))
-         (end (and start (cl-position ?} answer :from-end t)))
-         (json (and start end (substring answer start (1+ end)))))
-    (when json
-      (ignore-errors
-        (json-parse-string json :object-type 'alist :array-type 'list
-                           :null-object nil :false-object nil)))))
+  (cmacs-brigade-parse-json-object answer))
 
 (defun cmacs-brigade-schedule--confirm (spec)
   "Show SPEC and ask whether to create it."
