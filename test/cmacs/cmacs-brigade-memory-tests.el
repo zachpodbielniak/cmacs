@@ -307,6 +307,155 @@ than warn."
   (should (eq 'memory (cmacs-brigade-tool-group
                        (cmacs-brigade-registry-get 'tool 'memory-search)))))
 
+;;;; The background build
+;;
+;; The point of these is that the build does not block, and that every
+;; way of stopping it early leaves the index you already had.  A stubbed
+;; embedder stands in for the server, so they run anywhere: what is being
+;; tested is the state machine, not ollama.
+
+(defmacro cmacs-brigade-memory-tests--with-corpus (n &rest body)
+  "Run BODY over a corpus of N org files, with roots and index dir bound."
+  (declare (indent 1))
+  `(let ((corpus (make-temp-file "cmacs-brigade-corpus" t))
+         (idx (make-temp-file "cmacs-brigade-ix" t)))
+     (unwind-protect
+         (progn
+           (dotimes (i ,n)
+             (with-temp-file (expand-file-name (format "n-%03d.org" i) corpus)
+               (insert (format "#+title: N %d\n\n* Thing %d\n  Prose %d.\n"
+                               i i i))))
+           (let ((cmacs-brigade-memory-roots
+                  (list (list :path corpus :kind 'org)))
+                 (cmacs-brigade-memory-index-dir idx))
+             ,@body))
+       (when (cmacs-brigade-memory-build-running-p)
+         (cmacs-brigade-memory-build-cancel))
+       (delete-directory corpus t)
+       (delete-directory idx t))))
+
+(defmacro cmacs-brigade-memory-tests--with-stub-embedder (&rest body)
+  "Run BODY with the embedder replaced by a local one that always works."
+  (declare (indent 0))
+  `(cl-letf (((symbol-function 'cmacs-brigade-memory--embed-argv)
+              (lambda (tmp)
+                ;; Emit one all-zero vector per input, so the shape is
+                ;; right and no server is involved.
+                (list "sh" "-c"
+                      (format "n=$(grep -o 'search_document' %s | wc -l); \
+printf '{\"embeddings\":['; i=0; while [ $i -lt $n ]; do \
+[ $i -gt 0 ] && printf ','; printf '['; j=0; while [ $j -lt %d ]; do \
+[ $j -gt 0 ] && printf ','; printf '0.1'; j=$((j+1)); done; printf ']'; \
+i=$((i+1)); done; printf ']}'"
+                              (shell-quote-argument tmp)
+                              cmacs-brigade-embed-dim)))))
+     ,@body))
+
+(defun cmacs-brigade-memory-tests--drain (&optional limit)
+  "Pump the event loop until the build ends or LIMIT seconds pass."
+  (let ((t0 (float-time)))
+    (while (and (cmacs-brigade-memory-build-running-p)
+                (< (- (float-time) t0) (or limit 60)))
+      (accept-process-output nil 0.05))))
+
+(ert-deftest cmacs-brigade-memory-build-returns-before-it-finishes ()
+  "The build is started, not run, by the command that starts it.
+
+This is the whole point: the old implementation ran the entire corpus in
+one synchronous loop and Emacs was unusable until it ended."
+  (skip-unless (cmacs-brigade-memory-tests--available-p))
+  (skip-unless (fboundp 'cmacs-brigade-index-writer-new))
+  (cmacs-brigade-memory-tests--with-corpus 40
+    (cmacs-brigade-memory-tests--with-stub-embedder
+      (should (cmacs-brigade-memory-build t))
+      ;; Still running the moment the call returned.
+      (should (cmacs-brigade-memory-build-running-p))
+      (let ((p (cmacs-brigade-memory-build-progress)))
+        (should (= 40 (plist-get p :nfiles))))
+      (cmacs-brigade-memory-tests--drain)
+      (should-not (cmacs-brigade-memory-build-running-p))
+      (let ((m (cmacs-brigade-memory-manifest)))
+        (should m)
+        (should (= 40 (plist-get m :files)))
+        (should (> (plist-get m :count) 0))))))
+
+(ert-deftest cmacs-brigade-memory-build-refuses-to-double-start ()
+  "A second build while one runs is refused, not queued or interleaved."
+  (skip-unless (cmacs-brigade-memory-tests--available-p))
+  (skip-unless (fboundp 'cmacs-brigade-index-writer-new))
+  (cmacs-brigade-memory-tests--with-corpus 40
+    (cmacs-brigade-memory-tests--with-stub-embedder
+      (cmacs-brigade-memory-build t)
+      (should-error (cmacs-brigade-memory-build t) :type 'user-error)
+      (cmacs-brigade-memory-build-cancel))))
+
+(ert-deftest cmacs-brigade-memory-build-cancel-leaves-no-index ()
+  "Cancelling discards the partial index and stays cancelled.
+
+Staying cancelled is the part worth asserting: killing the process runs
+its sentinel, and a sentinel that still thought a build was live would
+start the next batch and quietly carry on."
+  (skip-unless (cmacs-brigade-memory-tests--available-p))
+  (skip-unless (fboundp 'cmacs-brigade-index-writer-new))
+  (cmacs-brigade-memory-tests--with-corpus 60
+    (cmacs-brigade-memory-tests--with-stub-embedder
+      (cmacs-brigade-memory-build t)
+      (accept-process-output nil 0.2)
+      (cmacs-brigade-memory-build-cancel)
+      (should-not (cmacs-brigade-memory-build-running-p))
+      ;; Pump: nothing may restart it.
+      (dotimes (_ 10) (accept-process-output nil 0.05))
+      (should-not (cmacs-brigade-memory-build-running-p))
+      (should-not (cmacs-brigade-memory-manifest)))))
+
+(ert-deftest cmacs-brigade-memory-build-survives-a-dead-endpoint ()
+  "An embedder that cannot be reached fails the build, not Emacs.
+
+And leaves no manifest: a half-built index that claimed to be complete
+would answer searches with a fraction of the corpus and no sign of it."
+  (skip-unless (cmacs-brigade-memory-tests--available-p))
+  (skip-unless (fboundp 'cmacs-brigade-index-writer-new))
+  (cmacs-brigade-memory-tests--with-corpus 10
+    (let ((cmacs-brigade-embed-endpoint "http://127.0.0.1:9"))
+      (cmacs-brigade-memory-build t)
+      (cmacs-brigade-memory-tests--drain 30)
+      (should-not (cmacs-brigade-memory-build-running-p))
+      (should-not (cmacs-brigade-memory-manifest)))))
+
+(ert-deftest cmacs-brigade-memory-build-skips-an-unreadable-file ()
+  "One bad file is skipped, not fatal.
+
+A four-hour build that dies on file 12,000 because of one unreadable
+entry is a build nobody ever completes."
+  (skip-unless (cmacs-brigade-memory-tests--available-p))
+  (skip-unless (fboundp 'cmacs-brigade-index-writer-new))
+  (cmacs-brigade-memory-tests--with-corpus 6
+    (cmacs-brigade-memory-tests--with-stub-embedder
+      (let ((calls 0))
+        (cl-letf* ((orig (symbol-function
+                          'cmacs-brigade-memory--org-read-chunks))
+                   ((symbol-function 'cmacs-brigade-memory--org-read-chunks)
+                    (lambda (file)
+                      (setq calls (1+ calls))
+                      (if (= calls 2)
+                          (error "simulated read failure")
+                        (funcall orig file)))))
+          (cmacs-brigade-memory-build t)
+          (cmacs-brigade-memory-tests--drain)
+          (should-not (cmacs-brigade-memory-build-running-p))
+          (let ((m (cmacs-brigade-memory-manifest)))
+            (should m)
+            ;; Every file was visited; one contributed nothing.
+            (should (= 6 (plist-get m :files)))
+            (should (= 5 (plist-get m :count)))))))))
+
+(ert-deftest cmacs-brigade-memory-build-progress-is-public ()
+  "The dashboard reads progress through a public function, not the state."
+  (skip-unless (cmacs-brigade-memory-tests--available-p))
+  (should-not (cmacs-brigade-memory-build-progress))
+  (should (fboundp 'cmacs-brigade-memory-build-progress))
+  (should (fboundp 'cmacs-brigade-memory-build-running-p)))
+
 (provide 'cmacs-brigade-memory-tests)
 
 ;;; cmacs-brigade-memory-tests.el ends here

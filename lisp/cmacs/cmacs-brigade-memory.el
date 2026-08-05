@@ -194,49 +194,101 @@ incomparable."
 (define-error 'cmacs-brigade-embed-error
   "Embedding request failed" 'cmacs-brigade-error)
 
+(defun cmacs-brigade-memory--embed-url ()
+  (concat (string-remove-suffix "/" cmacs-brigade-embed-endpoint) "/api/embed"))
+
+(defun cmacs-brigade-memory--embed-payload-file (texts)
+  "Write the request body for TEXTS to a temporary file and return it.
+
+Through a file rather than an argument because a batch of 32 chunks is
+tens of kilobytes of JSON, which is a long way past what belongs on a
+command line."
+  (let ((tmp (make-temp-file "cmacs-brigade-embed" nil ".json"))
+        (coding-system-for-write 'utf-8))
+    (with-temp-file tmp
+      (insert (json-serialize (list :model cmacs-brigade-embed-model
+                                    :input (vconcat texts)))))
+    tmp))
+
+(defun cmacs-brigade-memory--embed-argv (tmp)
+  "The curl command line posting TMP to the embedding endpoint."
+  (list "curl" "-sS" "--max-time" "300"
+        "-H" "Content-Type: application/json"
+        "--data-binary" (concat "@" tmp)
+        (cmacs-brigade-memory--embed-url)))
+
+(defun cmacs-brigade-memory--embed-parse (buffer)
+  "Return the vectors in BUFFER's embedding reply, or signal."
+  (with-current-buffer buffer
+    (goto-char (point-min))
+    (let* ((reply (condition-case err
+                      (json-parse-buffer :object-type 'plist
+                                         :array-type 'list)
+                    (error
+                     (signal 'cmacs-brigade-embed-error
+                             (list "unparseable reply"
+                                   (error-message-string err))))))
+           (embeddings (plist-get reply :embeddings)))
+      (unless embeddings
+        (signal 'cmacs-brigade-embed-error
+                (list (or (plist-get reply :error)
+                          "no embeddings in reply"))))
+      (mapcar #'vconcat embeddings))))
+
 (cl-defun cmacs-brigade-memory--embed (texts)
   "Embed TEXTS, a list of strings, and return a list of vectors.
 
-Uses the batch endpoint and keeps exactly one request in flight."
+Synchronous, and therefore only for a single query: this blocks Emacs
+for as long as the server takes.  Indexing uses
+`cmacs-brigade-memory--embed-async', which does not."
   (unless texts (cl-return-from cmacs-brigade-memory--embed nil))
-  (let* ((url (concat (string-remove-suffix "/" cmacs-brigade-embed-endpoint)
-                      "/api/embed"))
-         (payload (json-serialize
-                   (list :model cmacs-brigade-embed-model
-                         :input (vconcat texts))))
-         (tmp (make-temp-file "cmacs-brigade-embed" nil ".json"))
-         (out (generate-new-buffer " *brigade-embed*")))
+  (let ((tmp (cmacs-brigade-memory--embed-payload-file texts))
+        (out (generate-new-buffer " *brigade-embed*")))
     (unwind-protect
-        (progn
-          (let ((coding-system-for-write 'utf-8))
-            (with-temp-file tmp (insert payload)))
-          (let ((status (call-process "curl" nil out nil
-                                      "-sS" "--max-time" "300"
-                                      "-H" "Content-Type: application/json"
-                                      "--data-binary" (concat "@" tmp)
-                                      url)))
-            (unless (eq status 0)
-              (signal 'cmacs-brigade-embed-error
-                      (list (format "curl exited %s talking to %s"
-                                    status url))))
-            (with-current-buffer out
-              (goto-char (point-min))
-              (let* ((json-object-type 'plist)
-                     (reply (condition-case err
-                                (json-parse-buffer :object-type 'plist
-                                                   :array-type 'list)
-                              (error
-                               (signal 'cmacs-brigade-embed-error
-                                       (list "unparseable reply"
-                                             (error-message-string err))))))
-                     (embeddings (plist-get reply :embeddings)))
-                (unless embeddings
-                  (signal 'cmacs-brigade-embed-error
-                          (list (or (plist-get reply :error)
-                                    "no embeddings in reply"))))
-                (mapcar #'vconcat embeddings)))))
+        (let ((status (apply #'call-process (car (cmacs-brigade-memory--embed-argv tmp))
+                             nil out nil
+                             (cdr (cmacs-brigade-memory--embed-argv tmp)))))
+          (unless (eq status 0)
+            (signal 'cmacs-brigade-embed-error
+                    (list (format "curl exited %s talking to %s" status
+                                  (cmacs-brigade-memory--embed-url)))))
+          (cmacs-brigade-memory--embed-parse out))
       (delete-file tmp)
       (kill-buffer out))))
+
+(defun cmacs-brigade-memory--embed-async (texts on-ok on-error)
+  "Embed TEXTS, calling ON-OK with the vectors or ON-ERROR with a message.
+
+Returns the process.  The whole reason indexing does not halt Emacs: a
+thread would not have helped, because a thread sitting in `call-process'
+holds the global Lisp lock and the main thread cannot run at all until it
+returns.  Waiting on a process object releases it."
+  (let* ((tmp (cmacs-brigade-memory--embed-payload-file texts))
+         (out (generate-new-buffer " *brigade-embed*")))
+    (make-process
+     :name "brigade-embed"
+     :buffer out
+     :noquery t
+     :connection-type 'pipe
+     :command (cmacs-brigade-memory--embed-argv tmp)
+     :sentinel
+     (lambda (proc _event)
+       (unless (process-live-p proc)
+         (let ((status (process-exit-status proc)))
+           (unwind-protect
+               (if (not (eq status 0))
+                   (funcall on-error
+                            (format "curl exited %s talking to %s" status
+                                    (cmacs-brigade-memory--embed-url)))
+                 (condition-case err
+                     (funcall on-ok (cmacs-brigade-memory--embed-parse out))
+                   ;; An error raised by ON-OK itself is the caller's
+                   ;; problem, but it must not escape a sentinel -- an
+                   ;; error there is swallowed by the command loop and
+                   ;; the build would simply stop, silently.
+                   (error (funcall on-error (error-message-string err)))))
+             (ignore-errors (delete-file tmp))
+             (when (buffer-live-p out) (kill-buffer out)))))))))
 
 (defun cmacs-brigade-memory-embed-query (text)
   "Embed TEXT as a query and return one vector."
@@ -298,8 +350,13 @@ Uses the batch endpoint and keeps exactly one request in flight."
 ;; large corpus runs for hours; losing it to a restart would mean nobody
 ;; ever finishes one.
 
-(defvar cmacs-brigade-memory--build-state nil
-  "Plist describing an in-progress build, or nil.")
+(defvar cmacs-brigade-memory--build nil
+  "Plist describing an in-progress build, or nil.
+
+Keys: :writer :catalog :pending :file :meta :nfiles :fileno :total :t0
+:last-report :proc.  Read and written from a process sentinel as well as
+from commands, which is why every access goes through
+`cmacs-brigade-memory--bget' and `-bset'.")
 
 (defun cmacs-brigade-memory--catalog ()
   "Return a list of (FILE . MTIME), newest first.
@@ -320,80 +377,307 @@ about, and the decade-old material fills in behind it."
                 files))))
     (sort files (lambda (a b) (> (cdr a) (cdr b))))))
 
+(defcustom cmacs-brigade-memory-build-report-interval 10
+  "Seconds between build progress reports.
+
+Reports go through `message', so they accumulate in *Messages* whether
+or not you were looking at the echo area when one landed -- which is the
+point, since the build outlives your attention span by some hours."
+  :type 'number
+  :group 'cmacs-brigade-memory)
+
+(defcustom cmacs-brigade-memory-build-scan-budget 200
+  "Files examined per turn before handing control back to Emacs.
+
+Only reached by files that produce no chunks at all; a run of thousands
+of them would otherwise be one long uninterruptible scan."
+  :type 'integer
+  :group 'cmacs-brigade-memory)
+
+(defun cmacs-brigade-memory-build-running-p ()
+  "Whether an index build is in progress."
+  (and cmacs-brigade-memory--build t))
+
+;; The build state is one plist in one global, read and written from a
+;; process sentinel as well as from commands.  Accessors rather than
+;; open-coded `plist-put', because `plist-put' only mutates in place when
+;; the key is already there -- and a build that quietly dropped a field
+;; the first time it was set would be a very confusing bug to find.
+
+(defun cmacs-brigade-memory--bget (key)
+  (plist-get cmacs-brigade-memory--build key))
+
+(defun cmacs-brigade-memory--bset (key value)
+  (setq cmacs-brigade-memory--build
+        (plist-put cmacs-brigade-memory--build key value))
+  value)
+
+(defun cmacs-brigade-memory--report (format &rest args)
+  "Log a build message, without stealing a minibuffer you are using.
+
+`inhibit-message' suppresses only the echo area; the text still reaches
+*Messages*, which is where a report from four hours ago has to be."
+  (let ((inhibit-message (and (active-minibuffer-window) t)))
+    (apply #'message format args)))
+
+(defun cmacs-brigade-memory-build-progress ()
+  "Return how far the running build has got, as a plist, or nil.
+
+Keys: :files :nfiles :chunks :elapsed :percent.  The public view of the
+build for anything that wants to display it -- the dashboard reads this
+rather than the state plist, so the state stays private."
+  (when cmacs-brigade-memory--build
+    (let ((n (cmacs-brigade-memory--bget :nfiles))
+          (i (cmacs-brigade-memory--bget :fileno)))
+      (list :files i :nfiles n
+            :chunks (cmacs-brigade-memory--bget :total)
+            :elapsed (- (float-time) (cmacs-brigade-memory--bget :t0))
+            :percent (if (> n 0) (/ (* 100 i) n) 0)))))
+
+(defun cmacs-brigade-memory-build-status ()
+  "Report how far the running build has got."
+  (interactive)
+  (if (not cmacs-brigade-memory--build)
+      (message "cmacs-brigade: no build running")
+    (let* ((st cmacs-brigade-memory--build)
+           (n (plist-get st :nfiles))
+           (i (plist-get st :fileno)))
+      (message "cmacs-brigade: %d/%d files (%d%%), %d chunks, %s elapsed"
+               i n (if (> n 0) (/ (* 100 i) n) 0) (plist-get st :total)
+               (format-seconds "%h:%.2m:%.2s"
+                               (- (float-time) (plist-get st :t0)))))))
+
 ;;;###autoload
-(cl-defun cmacs-brigade-memory-build (&optional force)
+(defun cmacs-brigade-memory-build-cancel ()
+  "Stop the running build.  The existing index is left as it was."
+  (interactive)
+  (if (not cmacs-brigade-memory--build)
+      (message "cmacs-brigade: no build running")
+    (let ((st cmacs-brigade-memory--build))
+      ;; Cleared *before* the process is killed.  `delete-process' can
+      ;; run the sentinel then and there, and a sentinel that still saw a
+      ;; live build would abort the writer a second time and report a
+      ;; failure for something that was cancelled on purpose.
+      (setq cmacs-brigade-memory--build nil)
+      (when-let* ((p (plist-get st :proc)))
+        (when (process-live-p p) (delete-process p)))
+      ;; Abort discards the temporary; the live index never saw any of it.
+      (ignore-errors (cmacs-brigade-index-writer-abort (plist-get st :writer)))
+      (message "cmacs-brigade: build cancelled after %d chunks"
+               (plist-get st :total)))))
+
+;;;###autoload
+(defun cmacs-brigade-memory-build (&optional force)
   "Build the memory index over `cmacs-brigade-memory-roots'.
 
 With FORCE, rebuild even when the manifest already matches.
 
-Runs to completion in this Emacs.  On a large corpus that is a long time,
-so progress is reported and the partial index is committed at the end;
-interrupting with \\[keyboard-quit] leaves the previous index intact
-because the new one is written to a temporary until it is complete."
+Runs in the background and returns immediately.  Emacs stays usable
+throughout: the time is spent waiting on the embedding server, and that
+wait happens on a process object rather than inside a blocking call, so
+the main loop keeps running.  Progress goes to *Messages* every
+`cmacs-brigade-memory-build-report-interval' seconds.
+
+A first build of a large corpus runs for hours.  Nothing is written to
+the live index until it finishes -- the new one is assembled in a
+temporary -- so \\[cmacs-brigade-memory-build-cancel], a crash, or
+quitting Emacs all leave the index you already had.
+
+Note that a thread would not have helped here, whatever it looks like:
+an Emacs thread sitting in `call-process' holds the global Lisp lock, so
+the main thread cannot run until the call returns.  Measured on this
+machine, one second of main-thread work took 3.95 seconds alongside such
+a thread, and 1.00 seconds alongside one waiting on a process."
   (interactive "P")
   (unless (fboundp 'cmacs-brigade-index-writer-new)
     (user-error "This cmacs was built without --with-cmacs-ai-brigade"))
+  (when cmacs-brigade-memory--build
+    (user-error "cmacs-brigade: a build is already running (%d/%d files); \
+M-x cmacs-brigade-memory-build-cancel"
+                (plist-get cmacs-brigade-memory--build :fileno)
+                (plist-get cmacs-brigade-memory--build :nfiles)))
   (let ((m (cmacs-brigade-memory-manifest)))
-    (when (and (not force) (cmacs-brigade-memory--manifest-matches-p m))
-      (message "cmacs-brigade: index is current (%s chunks); C-u to force"
-               (plist-get m :count))
-      (cl-return-from cmacs-brigade-memory-build nil)))
-  (let* ((catalog (cmacs-brigade-memory--catalog))
-         (writer (cmacs-brigade-index-writer-new
-                  cmacs-brigade-memory-index-dir cmacs-brigade-embed-dim))
-         (meta nil)
-         (nfiles (length catalog))
-         (fileno 0)
-         (total 0)
-         (t0 (float-time))
-         (committed nil))
-    (message "cmacs-brigade: indexing %d files..." nfiles)
-    (unwind-protect
+    (if (and (not force) (cmacs-brigade-memory--manifest-matches-p m))
+        (progn (message "cmacs-brigade: index is current (%s chunks); \
+C-u to force" (plist-get m :count))
+               nil)
+      (let ((catalog (cmacs-brigade-memory--catalog)))
+        (setq cmacs-brigade-memory--build
+              (list :writer (cmacs-brigade-index-writer-new
+                             cmacs-brigade-memory-index-dir
+                             cmacs-brigade-embed-dim)
+                    :catalog catalog
+                    :pending nil
+                    :file nil
+                    :meta nil
+                    :nfiles (length catalog)
+                    :fileno 0
+                    :total 0
+                    :t0 (float-time)
+                    :last-report (float-time)
+                    :proc nil))
+        (cmacs-brigade-memory--report
+         "cmacs-brigade: indexing %d files in the background (\
+M-x cmacs-brigade-memory-build-status)" (length catalog))
+        (cmacs-brigade-memory--build-step)
+        t))))
+
+;;;###autoload
+(defun cmacs-brigade-memory-build-sync (&optional force)
+  "Build the index and wait for it, pumping the event loop.
+
+For batch use and tests, where nothing else would ever drive the
+sentinels.  Interactively you want `cmacs-brigade-memory-build', which
+does not block."
+  (interactive "P")
+  (when (cmacs-brigade-memory-build force)
+    (while cmacs-brigade-memory--build
+      (accept-process-output nil 0.1))
+    t))
+
+(defun cmacs-brigade-memory--build-next-batch ()
+  "Return the next batch of chunks to embed, advancing the catalog.
+
+Returns nil when the corpus is exhausted, and `:yield' when it has
+looked at as many chunkless files as it is willing to in one turn."
+  (let ((scanned 0)
+        (result nil)
+        (done nil))
+    (while (not done)
+      (let ((pending (cmacs-brigade-memory--bget :pending)))
+        (cond
+         (pending
+          ;; Batch across chunks rather than files: most notes are one
+          ;; chunk, and a request per file would waste most of the
+          ;; batching win the endpoint exists to give.
+          (setq result (seq-take pending cmacs-brigade-embed-batch))
+          (cmacs-brigade-memory--bset
+           :pending (seq-drop pending cmacs-brigade-embed-batch))
+          (setq done t))
+         ;; Nothing pending and nothing left to read: the corpus is done.
+         ((null (cmacs-brigade-memory--bget :catalog))
+          (setq result nil done t))
+         ((>= scanned cmacs-brigade-memory-build-scan-budget)
+          (setq result :yield done t))
+         (t
+          (let* ((catalog (cmacs-brigade-memory--bget :catalog))
+                 (file (car (car catalog)))
+                 (kind (cmacs-brigade-memory--kind-for file))
+                 (src (cmacs-brigade-registry-get 'memory-source kind)))
+            (cmacs-brigade-memory--bset :catalog (cdr catalog))
+            (cmacs-brigade-memory--bset
+             :fileno (1+ (cmacs-brigade-memory--bget :fileno)))
+            (cmacs-brigade-memory--bset :file file)
+            (setq scanned (1+ scanned))
+            (cmacs-brigade-memory--bset
+             :pending
+             (condition-case err
+                 (and src (funcall (plist-get src :read-chunk) file))
+               ;; One unreadable file must not end a four-hour build.
+               (error
+                (cmacs-brigade-memory--report
+                 "cmacs-brigade: skipping %s: %s" file
+                 (error-message-string err))
+                nil))))))))
+    result))
+
+(defun cmacs-brigade-memory--build-step ()
+  "Embed the next batch, or finish.  Returns immediately."
+  (when cmacs-brigade-memory--build
+    (let ((batch (cmacs-brigade-memory--build-next-batch)))
+      (cond
+       ((eq batch :yield)
+        ;; Back to the command loop, then carry on.  A zero timer, not a
+        ;; recursive call: recursion here would rebuild the whole stack
+        ;; depth of a 24,000-file corpus.
+        (run-at-time 0 nil #'cmacs-brigade-memory--build-step))
+       ((null batch) (cmacs-brigade-memory--build-finish))
+       (t
+        (let ((file (cmacs-brigade-memory--bget :file)))
+          (cmacs-brigade-memory--bset
+           :proc (cmacs-brigade-memory--embed-async
+                  (mapcar #'cmacs-brigade-memory--embed-text batch)
+                  (lambda (vecs)
+                    (cmacs-brigade-memory--build-absorb batch vecs file))
+                  #'cmacs-brigade-memory--build-failed))))))))
+
+(defun cmacs-brigade-memory--build-absorb (batch vecs file)
+  "Add VECS for BATCH from FILE to the index being built, then continue."
+  (when cmacs-brigade-memory--build
+    (let ((writer (cmacs-brigade-memory--bget :writer)))
+      (cl-loop for c in batch
+               for v in vecs
+               do (cmacs-brigade-index-writer-add writer v)
+                  (cmacs-brigade-memory--bset
+                   :meta (cons (list :path file
+                                     :display
+                                     (cmacs-brigade-memory--display-path file)
+                                     :heading (plist-get c :heading)
+                                     :text (plist-get c :text))
+                               (cmacs-brigade-memory--bget :meta)))
+                  (cmacs-brigade-memory--bset
+                   :total (1+ (cmacs-brigade-memory--bget :total)))))
+    (let ((elapsed (- (float-time) (cmacs-brigade-memory--bget :t0))))
+      (when (>= (- (float-time) (cmacs-brigade-memory--bget :last-report))
+                cmacs-brigade-memory-build-report-interval)
+        (cmacs-brigade-memory--bset :last-report (float-time))
+        (cmacs-brigade-memory--report
+         "cmacs-brigade: indexing %d/%d files, %d chunks, %.1f/s, %s elapsed"
+         (cmacs-brigade-memory--bget :fileno)
+         (cmacs-brigade-memory--bget :nfiles)
+         (cmacs-brigade-memory--bget :total)
+         (/ (cmacs-brigade-memory--bget :total) (max 1.0 elapsed))
+         (format-seconds "%h:%.2m:%.2s" elapsed))))
+    (cmacs-brigade-memory--build-step)))
+
+(defun cmacs-brigade-memory--build-failed (why)
+  "Abandon the build because WHY.  The existing index is untouched."
+  (when cmacs-brigade-memory--build
+    (let ((st cmacs-brigade-memory--build))
+      (setq cmacs-brigade-memory--build nil)
+      (ignore-errors (cmacs-brigade-index-writer-abort (plist-get st :writer)))
+      (message "cmacs-brigade: build failed after %d chunks: %s"
+               (plist-get st :total) why))))
+
+(defun cmacs-brigade-memory--build-finish ()
+  "Commit the built index and record what it was built from."
+  (let ((st cmacs-brigade-memory--build))
+    (setq cmacs-brigade-memory--build nil)
+    (condition-case err
         (progn
-          (dolist (entry catalog)
-            (let* ((file (car entry))
-                   (kind (cmacs-brigade-memory--kind-for file))
-                   (src (cmacs-brigade-registry-get 'memory-source kind))
-                   (chunks (funcall (plist-get src :read-chunk) file)))
-              (setq fileno (1+ fileno))
-              ;; Batch across chunks, not across files: a file with one
-              ;; chunk would otherwise make a request per file.
-              (while chunks
-                (let* ((batch (seq-take chunks cmacs-brigade-embed-batch))
-                       (rest (seq-drop chunks cmacs-brigade-embed-batch))
-                       (texts (mapcar #'cmacs-brigade-memory--embed-text batch))
-                       (vecs (cmacs-brigade-memory--embed texts)))
-                  (cl-loop for c in batch
-                           for v in vecs
-                           do (cmacs-brigade-index-writer-add writer v)
-                              (push (list :path file
-                                          :display (cmacs-brigade-memory--display-path file)
-                                          :heading (plist-get c :heading)
-                                          :text (plist-get c :text))
-                                    meta)
-                              (setq total (1+ total)))
-                  (setq chunks rest)))
-              (when (zerop (% fileno 25))
-                (message "cmacs-brigade: %d/%d files, %d chunks, %.0fs"
-                         fileno nfiles total (- (float-time) t0)))))
-          (cmacs-brigade-index-writer-commit writer)
-          (setq committed t)
-          (cmacs-brigade-memory--write-meta (nreverse meta))
+          (cmacs-brigade-index-writer-commit (plist-get st :writer))
+          (cmacs-brigade-memory--write-meta (nreverse (plist-get st :meta)))
           (cmacs-brigade-memory--write-manifest
            (list :version 1
                  :model cmacs-brigade-embed-model
                  :dim cmacs-brigade-embed-dim
                  :chunk-target cmacs-brigade-chunk-target-bytes
                  :chunk-overlap cmacs-brigade-chunk-overlap
-                 :count total
-                 :files nfiles
+                 :count (plist-get st :total)
+                 :files (plist-get st :nfiles)
                  :built-at (format-time-string "%FT%T%z")))
-          (message "cmacs-brigade: indexed %d chunks from %d files in %.0fs"
-                   total nfiles (- (float-time) t0))
-          total)
-      (unless committed
-        ;; Abort discards the temporary; the live index is untouched.
-        (ignore-errors (cmacs-brigade-index-writer-abort writer))))))
+          ;; The open index is the pre-build one; drop it so the next
+          ;; search maps what was just committed.
+          (ignore-errors (cmacs-brigade-memory-close))
+          (message "cmacs-brigade: indexed %d chunks from %d files in %s"
+                   (plist-get st :total) (plist-get st :nfiles)
+                   (format-seconds "%h:%.2m:%.2s"
+                                   (- (float-time) (plist-get st :t0))))
+          (plist-get st :total))
+      (error
+       (ignore-errors (cmacs-brigade-index-writer-abort (plist-get st :writer)))
+       (message "cmacs-brigade: could not commit the index: %s"
+                (error-message-string err))
+       nil))))
+
+;; A build in flight owns a temporary index directory.  Exiting without
+;; discarding it leaves that behind to be found later and puzzled over.
+(add-hook 'kill-emacs-hook
+          (lambda ()
+            (when cmacs-brigade-memory--build
+              (ignore-errors
+                (cmacs-brigade-index-writer-abort
+                 (plist-get cmacs-brigade-memory--build :writer))))))
 
 (defun cmacs-brigade-memory--embed-text (chunk)
   "Return the string actually embedded for CHUNK.

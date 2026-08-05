@@ -29,6 +29,7 @@ one form lights it up on all three delivery paths at once.
 * Brigade Workers::             How an agent actually runs.
 * Brigade Dashboard Display::   How the dashboard takes the screen.
 * Brigade Composing::           Getting a task without knowing the format.
+* Brigade Memory Builds::       Indexing your notes without blocking.
 * Brigade Scheduling::          Running a prompt on a cron schedule.
 @end menu
 
@@ -401,6 +402,63 @@ shape on disk is decided once.
 Replace the composed state with @var{spec} and show the transient.  The
 way in for filling the menu from your own code.
 @end defun
+
+@node Brigade Memory Builds
+@section Indexing your notes without blocking
+
+@code{cmacs-brigade-memory-build} returns immediately and Emacs stays
+usable while it runs.  Nearly all the wall time goes on waiting for the
+embedding server, and that wait happens on a process object rather than
+inside a blocking call, so the main loop keeps running.
+
+Nothing touches the live index until the build finishes: the new one is
+assembled in a temporary and renamed into place at the end.  Cancelling,
+a crash, a dead embedding server or quitting Emacs mid-build all leave
+the index you already had.  One unreadable file is skipped and logged
+rather than ending the run.
+
+@table @code
+@item cmacs-brigade-memory-build
+Start it.  With a prefix argument, rebuild even when the manifest
+already matches.
+@item cmacs-brigade-memory-build-status
+Report how far it has got.
+@item cmacs-brigade-memory-build-cancel
+Stop it; the existing index is left as it was.
+@item cmacs-brigade-memory-build-sync
+Start it and wait, pumping the event loop.  For batch use and tests,
+where nothing else would ever drive the sentinels.
+@end table
+
+@defun cmacs-brigade-memory-build-progress
+Return a plist describing the running build --- @code{:files},
+@code{:nfiles}, @code{:chunks}, @code{:elapsed}, @code{:percent} --- or
+@code{nil}.  The public view for anything that wants to display it; the
+dashboard header uses this.
+@end defun
+
+@defopt cmacs-brigade-memory-build-report-interval
+Seconds between progress reports (10).  Reports go through
+@code{message}, so they accumulate in @file{*Messages*} whether or not
+you were watching the echo area --- which is the point, since the build
+outlasts your attention by some hours.  One landing while you are in the
+minibuffer is written to @file{*Messages*} only.
+@end defopt
+
+@subsection Why not a thread
+
+Because a thread does not fix this.  Emacs threads are cooperative: only
+one runs Lisp at a time, and @code{call-process} is not a yield point, so
+a thread sitting in it holds the global Lisp lock and the main thread
+cannot run at all until it returns.  Measured here, one second of
+main-thread work alongside a thread doing @code{(call-process "sleep" nil
+nil nil "3")} took @strong{3.95 seconds}; alongside one waiting on a
+process object it took @strong{1.00 seconds}.
+
+So the fix has to make the embedding call asynchronous --- and once it
+is, a thread adds nothing while still bringing a second Lisp execution
+context into a subsystem that calls into GLib.  Under @option{--gowl} a
+crash there takes the desktop session with it.
 
 @node Brigade Scheduling
 @section Scheduled runs

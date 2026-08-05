@@ -204,10 +204,18 @@ them."
                       "memory off")))))
 
 (defun cmacs-brigade-dashboard--memory-summary ()
-  (if (fboundp 'cmacs-brigade-memory-manifest)
-      (let ((m (cmacs-brigade-memory-manifest)))
-        (if m (format "idx %s chunks" (plist-get m :count)) "no index"))
-    "memory unavailable"))
+  (cond
+   ((not (fboundp 'cmacs-brigade-memory-manifest)) "memory unavailable")
+   ;; A running build outranks the index it will replace: it is the thing
+   ;; that is changing, and it is the number you came to look at.
+   ((and (fboundp 'cmacs-brigade-memory-build-progress)
+         (cmacs-brigade-memory-build-progress))
+    (let ((p (cmacs-brigade-memory-build-progress)))
+      (format "indexing %d/%d (%d%%), %d chunks"
+              (plist-get p :files) (plist-get p :nfiles)
+              (plist-get p :percent) (plist-get p :chunks))))
+   (t (let ((m (cmacs-brigade-memory-manifest)))
+        (if m (format "idx %s chunks" (plist-get m :count)) "no index")))))
 
 (defun cmacs-brigade-dashboard--insert-row (r &optional c)
   (let* ((c (or c (cmacs-brigade-dashboard--columns)))

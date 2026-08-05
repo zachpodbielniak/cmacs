@@ -34,6 +34,52 @@ coverage, and =M-x cmacs-brigade-memory-find= searches interactively.
 Measured on the author's machine: 407 files became 1,484 chunks in 97 seconds,
 so roughly 15 chunks/second end to end. Scale from there.
 
+* Building in the background
+
+The build returns immediately and Emacs stays usable while it runs. Nearly all
+of the wall time is spent waiting on the embedding server, and that wait
+happens on a process object rather than inside a blocking call, so the main
+loop keeps running throughout.
+
+| Command                             | Does                          |
+|-------------------------------------+-------------------------------|
+| =cmacs-brigade-memory-build=          | start it; returns immediately |
+| =cmacs-brigade-memory-build-status=   | how far it has got            |
+| =cmacs-brigade-memory-build-cancel=   | stop it; index left as it was |
+| =cmacs-brigade-memory-build-sync=     | start and wait — batch, tests |
+
+Progress goes through =message=, so it accumulates in =*Messages*= every
+=cmacs-brigade-memory-build-report-interval= seconds (10) whether or not you
+were watching the echo area — which is the point, given the build outlasts
+your attention by some hours. A report landing while you are in the minibuffer
+is written to =*Messages*= only, rather than stomping on what you are typing.
+
+Nothing touches the live index until the build finishes: the new one is
+assembled in a temporary and renamed into place at the end. Cancelling, a
+crash, a dead embedding server, or quitting Emacs mid-build all leave the index
+you already had. The dashboard header shows progress while it runs.
+
+** Why not a thread
+
+Because a thread does not fix this, and it is worth writing down so nobody
+tries again. Emacs threads are cooperative: only one runs Lisp at a time, and a
+thread only yields at specific points. =call-process= is not one of them — a
+thread sitting in it holds the global Lisp lock and the main thread cannot run
+at all until it returns.
+
+Measured here, one second of main-thread work alongside a thread doing
+=(call-process "sleep" nil nil nil "3")=:
+
+| Thread is doing                    | 1s of main-thread work takes |
+|------------------------------------+------------------------------|
+| =call-process=                       | 3.95s                        |
+| =accept-process-output= on a process | 1.00s                        |
+
+So the fix has to make the embedding call asynchronous — and once it is, the
+thread has nothing left to contribute, while still bringing a second Lisp
+execution context into a subsystem that calls into GLib. Under =--gowl= a crash
+there takes the desktop session with it. Sentinels, not threads.
+
 * Chunking
 
 Three passes, in C, over a line scanner rather than an org parser — the latter
