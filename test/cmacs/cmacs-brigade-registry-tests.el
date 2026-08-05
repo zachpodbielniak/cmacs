@@ -193,9 +193,12 @@ whole turn, a returned one lets the model read what went wrong."
       "ran")
     ;; noninteractive is t under ERT batch: "could not ask" must not
     ;; mean "went ahead anyway"
-    (should (string-match-p "declined"
-                            (cmacs-brigade-call-tool "test_confirm"
-                                                     "{\"a\":\"x\"}")))
+    (let ((out (cmacs-brigade-call-tool "test_confirm" "{\"a\":\"x\"}")))
+      ;; refused, and the body did not run
+      (should-not (equal "ran" out))
+      (should (string-match-p "needs approval" out))
+      ;; and it says how to allow it, since there is nowhere to ask
+      (should (string-match-p "cmacs-brigade-auto-approve" out)))
     ;; an explicit confirm function is honoured
     (let ((cmacs-brigade-confirm-function (lambda (_) t)))
       (should (equal "ran" (cmacs-brigade-call-tool "test_confirm"

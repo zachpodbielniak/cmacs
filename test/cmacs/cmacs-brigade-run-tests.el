@@ -840,6 +840,81 @@ saw a brigade with no tools."
         (should (< (string-search "(require 'cmacs-brigade nil t)" text)
                    (string-search "cmacs_brigade_registry_foreach" text)))))))
 
+
+;;;; Confirmation must never prompt from a dispatch
+;;
+;; A chat model called a :confirm tool, the handler reached
+;; `yes-or-no-p', and the whole editor wedged with C-g dead.  The
+;; minibuffer's read_char calls wait_reading_process_output, which calls
+;; xg_select, which dispatches the same GMainContext the tool call was
+;; already running inside -- a recursive edit underneath a live dispatch,
+;; entered with waiting_for_input cleared so quitting could not break it.
+
+(ert-deftest cmacs-brigade-tool-dispatch-cannot-prompt ()
+  "Lisp reached through the dispatch wrappers has interaction inhibited.
+
+Tested through the same frames as the hang -- execute-into-session down
+to the tool handler -- rather than by calling the handler directly,
+because it is the wrappers in between that do the binding."
+  (skip-unless (and (fboundp 'cmacs-ai-tools-execute-into-session)
+                    (fboundp 'cmacs-brigade-install-tools)))
+  (cmacs-brigade-deftool dispatch-probe "probe" ()
+    (format "%S" inhibit-interaction))
+  (let* ((pair (cmacs-ai-make-session 'claude "x"))
+         (ex (cmacs-ai-tools-new)))
+    (unwind-protect
+        (progn
+          (cmacs-brigade-install-tools ex "*" nil t)
+          (should (equal "t" (cmacs-ai-tools-execute-into-session
+                              (cdr pair) ex "dispatch_probe" "{}" "c1"))))
+      (cmacs-ai-tools-free ex)
+      (cmacs-ai-free-session pair))))
+
+(ert-deftest cmacs-brigade-confirm-declines-when-it-cannot-ask ()
+  "A gated tool is declined, with a message naming the way to allow it.
+
+Declining is the only safe answer: there is nowhere to ask, and \"could
+not ask\" must not become \"went ahead anyway\" for a tool whose author
+asked for a prompt."
+  (skip-unless (fboundp 'cmacs-brigade-call-tool))
+  (cmacs-brigade-deftool confirm-probe "probe" ()
+    :destructive t :confirm 'ask
+    "should not run")
+  (let ((cmacs-brigade-auto-approve nil)
+        (cmacs-brigade-confirm-function nil))
+    (let ((out (cmacs-brigade-call-tool "confirm_probe" "{}" "grok")))
+      (should (string-match-p "needs approval" out))
+      (should (string-match-p "cmacs-brigade-auto-approve" out))
+      (should-not (string-match-p "should not run" out)))))
+
+(ert-deftest cmacs-brigade-auto-approve-allows-a-named-tool ()
+  "Pre-authorising is how a gated tool runs where nothing can ask."
+  (skip-unless (fboundp 'cmacs-brigade-call-tool))
+  (cmacs-brigade-deftool approve-probe "probe" ()
+    :destructive t :confirm 'ask
+    "it ran")
+  (let ((cmacs-brigade-confirm-function nil))
+    ;; named
+    (let ((cmacs-brigade-auto-approve '("approve_probe")))
+      (should (equal "it ran"
+                     (cmacs-brigade-call-tool "approve_probe" "{}" "grok"))))
+    ;; everything
+    (let ((cmacs-brigade-auto-approve t))
+      (should (equal "it ran"
+                     (cmacs-brigade-call-tool "approve_probe" "{}" "grok"))))
+    ;; a different tool named does not approve this one
+    (let ((cmacs-brigade-auto-approve '("something_else")))
+      (should (string-match-p "needs approval"
+                              (cmacs-brigade-call-tool "approve_probe" "{}"
+                                                       "grok"))))))
+
+(ert-deftest cmacs-brigade-ungated-tools-are-unaffected ()
+  "A tool with no :confirm still runs without any of this applying."
+  (skip-unless (fboundp 'cmacs-brigade-call-tool))
+  (cmacs-brigade-deftool ungated-probe "probe" () "fine")
+  (let ((cmacs-brigade-auto-approve nil))
+    (should (equal "fine" (cmacs-brigade-call-tool "ungated_probe" "{}" "x")))))
+
 (provide 'cmacs-brigade-run-tests)
 
 ;;; cmacs-brigade-run-tests.el ends here

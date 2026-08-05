@@ -177,6 +177,21 @@ ai-glib's CLI clients ignore the tools argument entirely (=(void)tools= in the c
 
 =opencode= has no MCP config property, so a chat on it says so rather than looking tool-enabled and having none.
 
+* Confirmation, and why it cannot prompt
+
+A tool with =:confirm= is /declined/ rather than asked about when the call arrives from a chat or any other GLib callback, and =cmacs-brigade-auto-approve= is how you say yes in advance:
+
+#+begin_src elisp
+(setq cmacs-brigade-auto-approve '("agent_spawn" "agent_cancel"))
+;; or t for everything
+#+end_src
+
+The reason is structural rather than a policy choice. A tool call from a chat runs inside a GLib dispatch, which is itself inside Emacs's =pselect= hook. Lisp that prompts there enters a recursive edit /underneath/ the dispatch: the minibuffer's =read_char= calls =wait_reading_process_output=, which calls =xg_select=, which dispatches the same =GMainContext= again. The editor wedges, and =C-g= cannot break it because the dispatch guard cleared =waiting_for_input= on the way in — the flag that lets a quit interrupt.
+
+So cmacs binds =inhibit-interaction= for the duration of any Lisp called from a GLib callback, and a prompt signals instead of hanging. The signal surfaces as an ordinary tool error the model can read and report.
+
+Weigh the pre-authorisation per tool. =agent_spawn= commits to spend on your behalf, which is what the confirmation was for; the read-only agent tools were never gated.
+
 * Hooks and events
 
 Abnormal hooks fire on every lifecycle edge:

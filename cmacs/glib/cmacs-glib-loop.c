@@ -297,7 +297,14 @@ cmacs_glib_timer_cb (gpointer user_data)
   Lisp_Object result;
 
   /* Call the elisp function.  If it returns nil, remove the source. */
+  /* Same hazard as the dispatch wrappers: this runs Lisp from a GLib
+   * callback inside Emacs's pselect hook, so a prompt here would enter a
+   * recursive edit underneath the dispatch and wedge the editor.  See
+   * cmacs-eval-dispatch.c for the full account. */
+  specpdl_ref timer_count = SPECPDL_INDEX ();
+  specbind (intern ("inhibit-interaction"), Qt);
   result = safe_calln (data->callback);
+  unbind_to (timer_count, Qnil);
   return !NILP (result);
 }
 

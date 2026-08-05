@@ -105,6 +105,33 @@ message the model cannot act on."
 
 ;;;; Confirmation
 
+(defcustom cmacs-brigade-auto-approve nil
+  "Tools that may run without asking.
+
+t approves everything; a list approves the wire names in it, e.g.
+\\='(\"agent_spawn\" \"agent_cancel\").
+
+This exists because a confirmation prompt is impossible on the path that
+needs it most.  A tool call arriving from a chat runs inside a GLib
+dispatch, where Lisp cannot prompt -- a minibuffer there re-enters the
+main loop underneath the dispatch and wedges the editor -- so cmacs binds
+`inhibit-interaction\\=' for the duration and a `:confirm\\=' tool is
+declined rather than asked about.  Naming it here is how you say yes in
+advance.
+
+Weigh it per tool.  `agent_spawn\\=' commits to spend on your behalf, which
+is what the confirmation was for; the read-only ones were never gated."
+  :type '(choice (const :tag "Ask (declines where it cannot ask)" nil)
+                 (const :tag "Approve everything" t)
+                 (repeat string))
+  :group 'cmacs-brigade)
+
+(defun cmacs-brigade--auto-approved-p (wire-name)
+  "Whether WIRE-NAME is pre-approved."
+  (cond ((eq cmacs-brigade-auto-approve t) t)
+        ((listp cmacs-brigade-auto-approve)
+         (and (member wire-name cmacs-brigade-auto-approve) t))))
+
 (defun cmacs-brigade--confirm (tool args agent)
   "Return non-nil if the call of TOOL with ARGS on behalf of AGENT may proceed."
   (let ((mode (cmacs-brigade-tool-confirm tool))
@@ -113,6 +140,7 @@ message the model cannot act on."
                    :destructive (cmacs-brigade-tool-destructive tool))))
     (cond
      ((null mode) t)
+     ((cmacs-brigade--auto-approved-p (cmacs-brigade-tool-wire-name tool)) t)
      (cmacs-brigade-confirm-function (funcall cmacs-brigade-confirm-function req))
      ;; Registered handlers, lowest :order first; the first one that
      ;; answers decides.  Ordering matters because a headless handler
@@ -126,10 +154,17 @@ message the model cannot act on."
                             (lambda (a b) (< (or (plist-get a :order) 50)
                                              (or (plist-get b :order) 50))))))
         (funcall (plist-get (car handlers) :ask) req)))
-     ;; No handler and no display: refuse rather than silently allow.
-     ;; A batch session cannot ask, and "could not ask" must not mean
-     ;; "went ahead anyway" for a tool whose author asked for a prompt.
-     (noninteractive nil)
+     ;; Nowhere to ask: refuse rather than silently allow.  A batch
+     ;; session has nobody at a prompt, and `inhibit-interaction' means
+     ;; we are inside a GLib dispatch, where prompting would re-enter the
+     ;; main loop underneath the dispatch and wedge the editor.  "Could
+     ;; not ask" must not become "went ahead anyway" for a tool whose
+     ;; author asked for a prompt.
+     ((or noninteractive
+          (and (boundp 'inhibit-interaction) inhibit-interaction))
+      (signal 'cmacs-brigade-error
+              (list (format "%s needs approval and cannot be asked for it here; add it to `cmacs-brigade-auto-approve' to allow it"
+                            (cmacs-brigade-tool-wire-name tool)))))
      (t (yes-or-no-p
          (format "Agent %s wants to run %s%s.  Allow? "
                  (or agent "?")

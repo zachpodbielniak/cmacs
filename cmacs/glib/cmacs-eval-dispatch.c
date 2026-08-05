@@ -28,7 +28,21 @@
  * See the long comment in dispatch_safe_eval below for the why.  These
  * helpers are the public API for any GLib callback that needs to
  * invoke Lisp.  They mirror safe_calln but clear waiting_for_input
- * around the call so signals stay inside the condition-case. */
+ * around the call so signals stay inside the condition-case.
+ *
+ * They also bind `inhibit-interaction', for the same reason
+ * dispatch_safe_eval does but with a worse failure mode if omitted.
+ * These run from a GLib dispatch inside Emacs's pselect hook, so Lisp
+ * that prompts enters a recursive edit *underneath* the dispatch: the
+ * minibuffer's read_char calls wait_reading_process_output, which calls
+ * xg_select, which dispatches the same GMainContext again.  The editor
+ * wedges, and C-g cannot break it because waiting_for_input was cleared
+ * on the way in.  Observed for real: a chat model called a tool whose
+ * :confirm asked yes-or-no-p, and the whole session had to be killed.
+ *
+ * With this bound, a prompt signals `inhibited-interaction' instead,
+ * which the surrounding condition-case turns into an ordinary error the
+ * caller can report. */
 
 void
 cmacs_dispatch_safe_callN (Lisp_Object fn, ptrdiff_t nargs,
@@ -49,7 +63,10 @@ cmacs_dispatch_safe_callN (Lisp_Object fn, ptrdiff_t nargs,
   bool was_waiting = waiting_for_input;
   if (was_waiting)
     clear_waiting_for_input ();
+  specpdl_ref count = SPECPDL_INDEX ();
+  specbind (intern ("inhibit-interaction"), Qt);
   safe_funcall (nargs + 1, full);
+  unbind_to (count, Qnil);
   if (was_waiting)
     set_waiting_for_input (input_available_clear_time);
   if (full != stkbuf)
@@ -76,7 +93,10 @@ cmacs_dispatch_safe_callN_value (Lisp_Object fn, ptrdiff_t nargs,
   bool was_waiting = waiting_for_input;
   if (was_waiting)
     clear_waiting_for_input ();
+  specpdl_ref count = SPECPDL_INDEX ();
+  specbind (intern ("inhibit-interaction"), Qt);
   Lisp_Object result = safe_funcall (nargs + 1, full);
+  unbind_to (count, Qnil);
   if (was_waiting)
     set_waiting_for_input (input_available_clear_time);
   if (full != stkbuf)
@@ -745,10 +765,10 @@ cmacs_dispatch_gowl_list_clients (GError **error)
         gowl_client_get_id (c),
         gowl_client_get_title (c) ? : "",
         gowl_client_get_app_id (c) ? : "",
-        (guint)gowl_client_get_tags (c),
+        gowl_client_get_tags (c),
         gowl_client_get_floating (c) ? "true" : "false",
         gowl_client_get_fullscreen (c) ? "true" : "false",
-        (int)gowl_client_get_pid (c),
+        gowl_client_get_pid (c),
         x, y, w, h);
     }
   g_string_append_c (buf, ']');
@@ -775,9 +795,9 @@ cmacs_dispatch_gowl_focused_client (GError **error)
     gowl_client_get_id (c),
     gowl_client_get_title (c) ? : "",
     gowl_client_get_app_id (c) ? : "",
-    (guint)gowl_client_get_tags (c),
+    gowl_client_get_tags (c),
     gowl_client_get_floating (c) ? "true" : "false",
-    (int)gowl_client_get_pid (c),
+    gowl_client_get_pid (c),
     x, y, w, h);
 }
 
@@ -830,7 +850,7 @@ cmacs_dispatch_gowl_list_monitors (GError **error)
         gowl_monitor_get_name (m) ? : "",
         gowl_monitor_get_mfact (m),
         gowl_monitor_get_nmaster (m),
-        (guint)gowl_monitor_get_tags (m),
+        gowl_monitor_get_tags (m),
         gowl_monitor_get_layout_symbol (m) ? : "",
         gowl_monitor_get_enabled (m) ? "true" : "false",
         gowl_monitor_get_scale (m),
@@ -1079,7 +1099,7 @@ cmacs_dispatch_gowl_find_client (const gchar *pattern, const gchar *by,
     gowl_client_get_id (c),
     gowl_client_get_title (c) ? : "",
     gowl_client_get_app_id (c) ? : "",
-    (guint)gowl_client_get_tags (c),
+    gowl_client_get_tags (c),
     x, y, w, h);
 }
 
@@ -1116,7 +1136,7 @@ cmacs_dispatch_gowl_monitor_info (const gchar *name, GError **error)
     gowl_monitor_get_name (m) ? : "",
     gowl_monitor_get_mfact (m),
     gowl_monitor_get_nmaster (m),
-    (guint)gowl_monitor_get_tags (m),
+    gowl_monitor_get_tags (m),
     gowl_monitor_get_layout_symbol (m) ? : "",
     gowl_monitor_get_enabled (m) ? "true" : "false",
     gowl_monitor_get_scale (m),
