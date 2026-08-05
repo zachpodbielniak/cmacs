@@ -1438,5 +1438,97 @@ the number that costs something on every turn."
       (should captured)
       (should-not (string-match-p "SOUL-BODY" captured)))))
 
+
+;;;; Tool-call rendering
+
+(ert-deftest cmacs-ai-tool-calls-hidden-by-default ()
+  "A tool loop can run a dozen calls whose arguments and output are each
+a JSON block, which buries the conversation they were in service of."
+  (skip-unless (boundp 'cmacs-ai-chat-show-tool-calls))
+  (let ((process-environment
+         (cons "CMACS_AI_SHOW_TOOL_CALLS=" process-environment)))
+    (should-not (cmacs-ai--env-truthy "CMACS_AI_SHOW_TOOL_CALLS"))))
+
+(ert-deftest cmacs-ai-tool-call-env-var-truth-values ()
+  "true / TRUE / 1 turn it on; anything else does not."
+  (skip-unless (fboundp 'cmacs-ai--env-truthy))
+  (dolist (v '("true" "TRUE" "True" "1" "yes" "on" " true "))
+    (let ((process-environment
+           (cons (concat "CMACS_AI_SHOW_TOOL_CALLS=" v) process-environment)))
+      (should (cmacs-ai--env-truthy "CMACS_AI_SHOW_TOOL_CALLS"))))
+  (dolist (v '("false" "FALSE" "0" "no" "off" "" "banana"))
+    (let ((process-environment
+           (cons (concat "CMACS_AI_SHOW_TOOL_CALLS=" v) process-environment)))
+      (should-not (cmacs-ai--env-truthy "CMACS_AI_SHOW_TOOL_CALLS")))))
+
+(ert-deftest cmacs-ai-hidden-tool-calls-render-nothing ()
+  "Nothing reaches the buffer when they are hidden, and does when shown."
+  (skip-unless (fboundp 'cmacs-ai-chat--render-tool-result))
+  (let ((buf (cmacs-ai-chat-open 'claude nil)))
+    (unwind-protect
+        (with-current-buffer buf
+          (let ((before (buffer-size)))
+            (let ((cmacs-ai-chat-show-tool-calls nil))
+              (cmacs-ai-chat--render-tool-result buf "list_buffers" "id1" "out"))
+            (should (= before (buffer-size)))
+            (let ((cmacs-ai-chat-show-tool-calls t))
+              (cmacs-ai-chat--render-tool-result buf "list_buffers" "id1" "out"))
+            (should (> (buffer-size) before))
+            (should (string-match-p "tool-result/list_buffers"
+                                    (buffer-string)))))
+      (kill-buffer buf))))
+
+(ert-deftest cmacs-ai-hidden-tool-calls-still-run ()
+  "Hiding is rendering only: the call still happens.
+
+The queueing that drives the tool loop sits in the same branch as the
+rendering, so suppressing the wrong one would quietly disable tools
+rather than just hiding them."
+  (skip-unless (fboundp 'cmacs-ai-chat--stream-callback))
+  (let ((buf (cmacs-ai-chat-open 'claude nil)))
+    (unwind-protect
+        (with-current-buffer buf
+          (let ((cmacs-ai-chat-show-tool-calls nil))
+            (cmacs-ai-chat--stream-callback
+             buf '(:tool-use "list_buffers" "{}" "call-1"))
+            ;; queued for execution despite rendering nothing
+            (should (= 1 (length cmacs-ai-chat--pending-tool-uses)))
+            (should (equal "call-1" (nth 2 (car cmacs-ai-chat--pending-tool-uses))))
+            ;; and the dedup by id still holds
+            (cmacs-ai-chat--stream-callback
+             buf '(:tool-use "list_buffers" "{}" "call-1"))
+            (should (= 1 (length cmacs-ai-chat--pending-tool-uses)))))
+      (kill-buffer buf))))
+
+(ert-deftest cmacs-ai-tool-call-visibility-is-per-buffer ()
+  "The toggle is buffer-local, so one noisy chat does not change the rest."
+  (skip-unless (fboundp 'cmacs-ai-chat-toggle-tool-calls))
+  (let ((a (cmacs-ai-chat-open 'claude nil))
+        (b (cmacs-ai-chat-open 'claude nil)))
+    (unwind-protect
+        (progn
+          (with-current-buffer a (cmacs-ai-chat-toggle-tool-calls)
+                                 (should cmacs-ai-chat-show-tool-calls))
+          (with-current-buffer b (should-not cmacs-ai-chat-show-tool-calls)))
+      (kill-buffer a)
+      (kill-buffer b))))
+
+
+(ert-deftest cmacs-ai-two-chats-opened-together-are-two-buffers ()
+  "Opening a second chat must not land in the first.
+
+The buffer name is second-granular, so two opened in the same second
+resolved to one buffer through `get-buffer-create' -- and the erase in
+`cmacs-ai-chat--init' then hit the read-only history guard, so the
+second open failed outright."
+  (skip-unless (fboundp 'cmacs-ai-chat-open))
+  (let (buffers)
+    (unwind-protect
+        (progn
+          (dotimes (_ 3) (push (cmacs-ai-chat-open 'claude nil) buffers))
+          (should (= 3 (length (delete-dups (copy-sequence buffers)))))
+          (dolist (b buffers) (should (buffer-live-p b))))
+      (dolist (b buffers) (when (buffer-live-p b) (kill-buffer b))))))
+
 (provide 'cmacs-ai-tests)
 ;;; cmacs-ai-tests.el ends here

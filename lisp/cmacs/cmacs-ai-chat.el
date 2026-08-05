@@ -371,7 +371,12 @@ so filesystem tools resolve against the same tree."
   (cmacs-ai--ensure)
   (let* ((p (or provider cmacs-ai-default-provider))
          (d (or directory cmacs-ai-chat-default-directory))
-         (buf (get-buffer-create (cmacs-ai-chat--buffer-name p d))))
+         ;; `generate-new-buffer', not `get-buffer-create': the name is
+         ;; second-granular, so two chats opened in the same second
+         ;; resolved to one buffer -- and `cmacs-ai-chat--init' erasing
+         ;; it then hit the read-only history guard, so the second open
+         ;; failed outright rather than merely reusing the first.
+         (buf (generate-new-buffer (cmacs-ai-chat--buffer-name p d))))
     (cmacs-ai-chat--init buf p model d)
     (switch-to-buffer buf)
     buf))
@@ -525,15 +530,52 @@ Returns nil if the region is empty."
         (delete-region beg end))
       trimmed)))
 
+(defconst cmacs-ai-show-tool-calls-env "CMACS_AI_SHOW_TOOL_CALLS"
+  "Environment variable that turns tool-call rendering on.
+
+Accepts `true', `TRUE' or `1'.  An environment variable rather than only
+a `defcustom' so a single debugging session can be started with them
+visible -- `CMACS_AI_SHOW_TOOL_CALLS=1 emacs' -- without editing config
+that then has to be edited back.")
+
+(defun cmacs-ai--env-truthy (name)
+  "Whether environment variable NAME is set to something meaning yes."
+  (let ((v (getenv name)))
+    (and v (member (downcase (string-trim v)) '("true" "1" "yes" "on")) t)))
+
+(defcustom cmacs-ai-chat-show-tool-calls
+  (cmacs-ai--env-truthy cmacs-ai-show-tool-calls-env)
+  "Whether tool calls and their results appear in the chat buffer.
+
+Off by default.  A tool loop can run a dozen calls whose arguments and
+output are each a JSON block, which buries the conversation those calls
+were in service of -- the transcript stops being readable as a
+conversation and becomes a log.
+
+The tools still run when this is nil; only the rendering is suppressed,
+and the model's own account of what it did is unaffected.  Turn it on
+for a session with `CMACS_AI_SHOW_TOOL_CALLS=1', or set this."
+  :type 'boolean
+  :group 'cmacs-ai)
+
+(defun cmacs-ai-chat-toggle-tool-calls ()
+  "Show or hide tool calls in new turns of this chat."
+  (interactive)
+  (setq-local cmacs-ai-chat-show-tool-calls
+              (not cmacs-ai-chat-show-tool-calls))
+  (message "cmacs-ai: tool calls %s"
+           (if cmacs-ai-chat-show-tool-calls "shown" "hidden")))
+
 (defun cmacs-ai-chat--render-tool-result (buf name id result)
   "Render a tool RESULT for tool NAME / ID as a nested `***' heading.
 Nests under the assistant `**' turn that requested the call so the
 org outline groups call-and-result with the response that drove them."
-  (cmacs-ai-chat--insert-heading
-   buf (format "tool-result/%s" name)
-   (format ":PROPERTIES:\n:tool: %s\n:id: %s\n:END:\n#+BEGIN_SRC text\n%s\n#+END_SRC"
-           name id (or result ""))
-   3))
+  (when cmacs-ai-chat-show-tool-calls
+    (cmacs-ai-chat--insert-heading
+     buf (format "tool-result/%s" name)
+     (format ":PROPERTIES:\n:tool: %s\n:id: %s\n:END:\n#+BEGIN_SRC text\n%s\n#+END_SRC"
+             name id (or result ""))
+     3)))
 
 (defun cmacs-ai-chat--drive-tool-loop (buf)
   "Drain pending tool-use requests for BUF and re-stream.
@@ -610,11 +652,14 @@ reason or `cmacs-ai-chat-tool-loop-max-turns' is reached."
            ;; first occurrence gets rendered + queued.
            (unless (cl-some (lambda (tu) (equal (nth 2 tu) id))
                             cmacs-ai-chat--pending-tool-uses)
-             (cmacs-ai-chat--insert-heading
-              buf (format "tool-use/%s" name)
-              (format ":PROPERTIES:\n:tool: %s\n:id: %s\n:END:\n#+BEGIN_SRC json\n%s\n#+END_SRC"
-                      name id input)
-              3)
+             ;; Rendering only.  The queueing below is what makes the
+             ;; call happen, and must not depend on whether it is shown.
+             (when cmacs-ai-chat-show-tool-calls
+               (cmacs-ai-chat--insert-heading
+                buf (format "tool-use/%s" name)
+                (format ":PROPERTIES:\n:tool: %s\n:id: %s\n:END:\n#+BEGIN_SRC json\n%s\n#+END_SRC"
+                        name id input)
+                3))
              (push (list name input id) cmacs-ai-chat--pending-tool-uses))))
         (:end
          ;; Preview image links in the region we just rendered before the
