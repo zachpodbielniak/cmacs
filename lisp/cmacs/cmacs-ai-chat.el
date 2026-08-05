@@ -344,7 +344,14 @@ ai-glib's web_search backend.  Shared by `cmacs-ai-chat--init' and
     ;; rather than a generic one.
     (when directory
       (cmacs-ai-client-set-working-directory
-       (car cmacs-ai-chat-session-pair) default-directory))
+       (car cmacs-ai-chat-session-pair) default-directory)
+      ;; Noted, not read: the file is only worth sending if a
+      ;; conversation actually happens.  Skipped for the CLI providers,
+      ;; which read it themselves from their working directory -- an
+      ;; injected copy would be the same instructions twice.
+      (unless (cmacs-ai-client-cli-p (car cmacs-ai-chat-session-pair))
+        (setq-local cmacs-ai-chat--bootstrap-file
+                    (cmacs-ai-chat--find-bootstrap default-directory))))
     (cmacs-ai-chat--setup-executor)
     (setq-local cmacs-ai-chat--created-at (current-time))
     (setq-local cmacs-ai-chat--compose-marker
@@ -740,6 +747,105 @@ what the user typed."
         (concat pre "\n\n---\n\n" text)
       text)))
 
+(defcustom cmacs-ai-chat-bootstrap-files '("CLAUDE.md" "AGENTS.md")
+  "Files that bootstrap an HTTP provider on a project directory.
+
+When a chat is opened in a directory and one of these is there, its
+contents are added to the session's system prompt on the first send.
+When several are present the largest one wins, on the assumption that
+the fuller document is the one being maintained.
+
+Only for the HTTP providers.  The CLI agents read these files
+themselves, from the directory their process starts in, so injecting a
+copy would send it twice."
+  :type '(repeat string)
+  :group 'cmacs-ai)
+
+(defcustom cmacs-ai-chat-bootstrap t
+  "Whether to bootstrap an HTTP chat from the project's agent file."
+  :type 'boolean
+  :group 'cmacs-ai)
+
+(defcustom cmacs-ai-chat-bootstrap-max-bytes 200000
+  "Largest bootstrap file that will be sent.
+
+A big one is a real cost on every turn of the conversation, not just the
+first, because it stays in the system prompt.  Past this the file is
+skipped and said so rather than truncated: half a document of
+instructions is worse than none."
+  :type 'integer
+  :group 'cmacs-ai)
+
+(defcustom cmacs-ai-chat-bootstrap-announce t
+  "Whether to say in the echo area that a project file was sent.
+
+Nothing is added to the conversation either way -- this is only a note
+in *Messages*.  On by default because the alternative is silently
+shipping a file from your disk to a remote API, which you should be able
+to find out about after the fact."
+  :type 'boolean
+  :group 'cmacs-ai)
+
+(defvar-local cmacs-ai-chat--bootstrap-file nil
+  "Project file to fold into the system prompt on the first send.")
+
+(defun cmacs-ai-chat--find-bootstrap (directory)
+  "Return the bootstrap file in DIRECTORY, or nil.
+
+The largest candidate wins when more than one is present."
+  (when (and cmacs-ai-chat-bootstrap directory)
+    (let (best best-size)
+      (dolist (name cmacs-ai-chat-bootstrap-files)
+        (let ((path (expand-file-name name directory)))
+          (when (file-readable-p path)
+            (let ((size (file-attribute-size (file-attributes path))))
+              (when (or (null best-size) (> size best-size))
+                (setq best path best-size size))))))
+      best)))
+
+(defun cmacs-ai-chat--apply-bootstrap ()
+  "Fold this buffer's bootstrap file into the session's system prompt.
+
+Done on the first send rather than when the chat opens: opening a chat
+should cost nothing, and a directory's instructions are only worth
+sending if the conversation actually happens.
+
+The contents go in the system prompt rather than the visible transcript,
+so the conversation reads as what was typed."
+  (when-let* ((path cmacs-ai-chat--bootstrap-file)
+              (client (car-safe cmacs-ai-chat-session-pair)))
+    ;; Once only, whatever happens below: a file that is too big or has
+    ;; gone away must not be reconsidered on every turn.
+    (setq cmacs-ai-chat--bootstrap-file nil)
+    (condition-case err
+        (let ((size (file-attribute-size (file-attributes path))))
+          (cond
+           ((null size) nil)
+           ((> size cmacs-ai-chat-bootstrap-max-bytes)
+            (message "cmacs-ai: %s is %dkB, over the bootstrap limit; not sent"
+                     (file-name-nondirectory path) (/ size 1024)))
+           (t
+            (let ((text (with-temp-buffer
+                          (insert-file-contents path)
+                          (buffer-string))))
+              (cmacs-ai-client-set-system-prompt
+               client
+               (string-join
+                (delq nil
+                      (list (and cmacs-ai-system-prompt
+                                 (not (string-empty-p cmacs-ai-system-prompt))
+                                 cmacs-ai-system-prompt)
+                            (format "The following is %s from the project \
+directory you are working in.  Treat it as standing instructions.\n\n%s"
+                                    (file-name-nondirectory path) text)))
+                "\n\n"))
+              (when cmacs-ai-chat-bootstrap-announce
+                (message "cmacs-ai: bootstrapped from %s (%dkB)"
+                         (file-name-nondirectory path) (/ size 1024)))))))
+      (error
+       (message "cmacs-ai: could not read %s: %s"
+                path (error-message-string err))))))
+
 (defun cmacs-ai-chat-send-compose ()
   "Send the contents of the compose region and stream the reply.
 
@@ -775,6 +881,8 @@ result, and continue the stream until the model stops."
              (session (cdr cmacs-ai-chat-session-pair))
              (executor cmacs-ai-chat-tool-executor)
              (sent (cmacs-ai-chat--apply-pre-prompt text)))
+        ;; Before the first request only, and invisible in the buffer.
+        (cmacs-ai-chat--apply-bootstrap)
         (cmacs-ai-chat-stream
          session sent
          (lambda (payload)

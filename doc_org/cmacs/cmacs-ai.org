@@ -792,6 +792,29 @@ From Lisp, =cmacs-ai-chat-open= takes it as a third argument.
 
 An HTTP provider has no subprocess to place anywhere, so the directory only affects the buffer; =cmacs-ai-client-set-working-directory= returns nil there to say so.
 
+* Bootstrapping from the project
+
+When a chat is opened in a directory and that directory holds a =CLAUDE.md= or an =AGENTS.md=, its contents are folded into the session's system prompt — so an HTTP model arrives already knowing the project's standing instructions, the way a CLI agent does.
+
+Only for the HTTP providers. =claude-code=, =claude-tmux= and =opencode= read those files themselves from the directory their process starts in, and injecting a copy would send the same instructions twice.
+
+Three details worth knowing:
+
+- *It happens on the first send, not when the chat opens.* Opening a chat costs nothing, and the instructions are only worth sending if a conversation actually happens.
+- *Nothing appears in the transcript.* The conversation reads as what you typed; the file goes into the system prompt, which is also why it is sent once rather than prepended to every turn.
+- *The larger file wins* when both are present, on the assumption that the fuller document is the one being maintained.
+
+#+begin_src elisp
+(setq cmacs-ai-chat-bootstrap t                        ; the feature
+      cmacs-ai-chat-bootstrap-files '("CLAUDE.md" "AGENTS.md")
+      cmacs-ai-chat-bootstrap-max-bytes 200000
+      cmacs-ai-chat-bootstrap-announce t)
+#+end_src
+
+Past =-max-bytes= the file is skipped rather than truncated: half a document of standing instructions is worse than none. The size cap matters because this lands in the system prompt and is therefore paid for on every turn, not just the first.
+
+=-announce= puts one line in the echo area the first time. Nothing is added to the conversation either way; it is on by default because the alternative is silently sending a file from your disk to a remote API with no record that it happened.
+
 * Choosing a model
 
 Every provider prompt is followed by a model prompt, completing on what that provider actually offers:

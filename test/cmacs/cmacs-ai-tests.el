@@ -1213,5 +1213,112 @@ has no way to invoke them."
   (skip-unless (boundp 'cmacs-ai-cli-skip-permissions))
   (should cmacs-ai-cli-skip-permissions))
 
+
+;;;; Bootstrapping from a project's agent file
+
+(defmacro cmacs-ai-tests--with-project (files &rest body)
+  "Make a temp directory containing FILES, an alist of name to content."
+  (declare (indent 1))
+  `(let ((dir (file-name-as-directory (make-temp-file "cmacs-ai-boot" t))))
+     (unwind-protect
+         (progn
+           (dolist (f ,files)
+             (with-temp-file (expand-file-name (car f) dir) (insert (cdr f))))
+           ,@body)
+       (delete-directory dir t))))
+
+(ert-deftest cmacs-ai-bootstrap-prefers-the-larger-file ()
+  "With both present the fuller document wins."
+  (skip-unless (fboundp 'cmacs-ai-chat--find-bootstrap))
+  (cmacs-ai-tests--with-project
+      (list (cons "CLAUDE.md" "short")
+            (cons "AGENTS.md" (make-string 500 ?x)))
+    (should (equal "AGENTS.md"
+                   (file-name-nondirectory
+                    (cmacs-ai-chat--find-bootstrap dir)))))
+  ;; ...and the other way round, so it is size and not file order
+  (cmacs-ai-tests--with-project
+      (list (cons "CLAUDE.md" (make-string 500 ?x))
+            (cons "AGENTS.md" "short"))
+    (should (equal "CLAUDE.md"
+                   (file-name-nondirectory
+                    (cmacs-ai-chat--find-bootstrap dir))))))
+
+(ert-deftest cmacs-ai-bootstrap-handles-one-or-none ()
+  (skip-unless (fboundp 'cmacs-ai-chat--find-bootstrap))
+  (cmacs-ai-tests--with-project (list (cons "AGENTS.md" "only this"))
+    (should (equal "AGENTS.md" (file-name-nondirectory
+                                (cmacs-ai-chat--find-bootstrap dir)))))
+  (cmacs-ai-tests--with-project (list (cons "README.md" "not a bootstrap"))
+    (should-not (cmacs-ai-chat--find-bootstrap dir))))
+
+(ert-deftest cmacs-ai-bootstrap-is-http-only ()
+  "A CLI agent reads the file itself; injecting would send it twice."
+  (skip-unless (fboundp 'cmacs-ai-chat-open))
+  (cmacs-ai-tests--with-project (list (cons "CLAUDE.md" "rules"))
+    (let ((http (cmacs-ai-chat-open 'claude nil dir))
+          (cli (cmacs-ai-chat-open 'claude-code nil dir)))
+      (unwind-protect
+          (progn
+            (should (with-current-buffer http cmacs-ai-chat--bootstrap-file))
+            (should-not (with-current-buffer cli
+                          cmacs-ai-chat--bootstrap-file)))
+        (kill-buffer http)
+        (kill-buffer cli)))))
+
+(ert-deftest cmacs-ai-bootstrap-is-lazy-and-once ()
+  "Nothing is read at open, and nothing is re-sent on later turns.
+
+Lazy because opening a chat should cost nothing; once because the file
+lands in the system prompt, which persists for the whole conversation."
+  (skip-unless (fboundp 'cmacs-ai-chat-open))
+  (cmacs-ai-tests--with-project (list (cons "CLAUDE.md" "distinctive-rule"))
+    (let ((sets 0) (last nil))
+      (cl-letf* ((orig (symbol-function 'cmacs-ai-client-set-system-prompt))
+                 ((symbol-function 'cmacs-ai-client-set-system-prompt)
+                  (lambda (c text) (setq sets (1+ sets) last text)
+                    (funcall orig c text))))
+        (let ((buf (cmacs-ai-chat-open 'claude nil dir)))
+          (unwind-protect
+              (with-current-buffer buf
+                ;; opening read nothing
+                (setq sets 0 last nil)
+                (cmacs-ai-chat--apply-bootstrap)
+                (should (= 1 sets))
+                (should (string-match-p "distinctive-rule" last))
+                ;; the shipped system prompt is kept, not replaced
+                (should (string-match-p (regexp-quote
+                                         (substring cmacs-ai-system-prompt 0 20))
+                                        last))
+                (cmacs-ai-chat--apply-bootstrap)
+                (should (= 1 sets)))
+            (kill-buffer buf)))))))
+
+(ert-deftest cmacs-ai-bootstrap-refuses-an-oversized-file ()
+  "Past the cap it is skipped, not truncated.
+
+Half a document of standing instructions is worse than none."
+  (skip-unless (fboundp 'cmacs-ai-chat-open))
+  (cmacs-ai-tests--with-project (list (cons "CLAUDE.md" (make-string 5000 ?x)))
+    (let ((sets 0)
+          (cmacs-ai-chat-bootstrap-max-bytes 100))
+      (cl-letf (((symbol-function 'cmacs-ai-client-set-system-prompt)
+                 (lambda (&rest _) (setq sets (1+ sets)))))
+        (let ((buf (cmacs-ai-chat-open 'claude nil dir)))
+          (unwind-protect
+              (with-current-buffer buf
+                (setq sets 0)
+                (cmacs-ai-chat--apply-bootstrap)
+                (should (= 0 sets))
+                ;; and it is not retried on the next turn either
+                (should-not cmacs-ai-chat--bootstrap-file))
+            (kill-buffer buf)))))))
+
+(ert-deftest cmacs-ai-bootstrap-can-be-turned-off ()
+  (skip-unless (fboundp 'cmacs-ai-chat--find-bootstrap))
+  (cmacs-ai-tests--with-project (list (cons "CLAUDE.md" "rules"))
+    (let ((cmacs-ai-chat-bootstrap nil))
+      (should-not (cmacs-ai-chat--find-bootstrap dir)))))
+
 (provide 'cmacs-ai-tests)
 ;;; cmacs-ai-tests.el ends here
