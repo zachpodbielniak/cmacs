@@ -803,6 +803,76 @@ The largest candidate wins when more than one is present."
                 (setq best path best-size size))))))
       best)))
 
+(defcustom cmacs-ai-chat-bootstrap-expand-imports t
+  "Whether to expand `@file' references inside a bootstrap file.
+
+The convention comes from Claude Code: a line naming `@SOUL.org' means
+\"read that file here\".  A CLI agent resolves them itself because it can
+open files; an HTTP model cannot, so without expansion it receives a
+manifest of filenames it has no way to follow and behaves as though the
+project said nothing.  A CLAUDE.md that is only a list of imports -- a
+common shape -- is then worth exactly nothing to it."
+  :type 'boolean
+  :group 'cmacs-ai)
+
+(defcustom cmacs-ai-chat-bootstrap-max-depth 5
+  "How deep `@file' imports may nest.
+
+An imported file may import others.  Bounded because a cycle would
+otherwise not terminate, and because depth is a decent proxy for
+\"nobody meant to send this much\"."
+  :type 'integer
+  :group 'cmacs-ai)
+
+(defun cmacs-ai-chat--expand-imports (text dir depth seen)
+  "Replace `@file' references in TEXT with those files' contents.
+
+DIR is what relative references resolve against -- the directory of the
+file being expanded, not the chat's, so a nested import means what it
+says.  DEPTH is the remaining budget and SEEN is a hash of already
+expanded truenames.
+
+A reference is only expanded when it resolves to a readable file, which
+is what keeps `foo@example.com' and an `@' inside prose from being
+mistaken for one.  Anything unresolved is left exactly as written, so
+the model still sees that a file was meant even when it is missing."
+  (if (<= depth 0)
+      text
+    (let ((case-fold-search nil))
+      (replace-regexp-in-string
+       "\\(^\\|[[:space:]]\\)@\\([^[:space:]]+\\)"
+       (lambda (m)
+         (let* ((lead (match-string 1 m))
+                (ref (match-string 2 m))
+                ;; Trailing punctuation is sentence, not filename.
+                (ref (replace-regexp-in-string "[.,;:)]+\\'" "" ref))
+                (path (expand-file-name ref dir)))
+           (cond
+            ((not (and (file-readable-p path) (file-regular-p path)))
+             m)
+            ((gethash (file-truename path) seen)
+             ;; Named twice.  The content is already above; repeating it
+             ;; is only cost.
+             (format "%s[%s: included above]" lead
+                     (file-name-nondirectory path)))
+            (t
+             (puthash (file-truename path) t seen)
+             (condition-case err
+                 (let ((body (with-temp-buffer
+                               (insert-file-contents path)
+                               (buffer-string))))
+                   (format "%s\n\n===== BEGIN %s =====\n%s\n===== END %s =====\n"
+                           lead
+                           (file-name-nondirectory path)
+                           (cmacs-ai-chat--expand-imports
+                            body (file-name-directory path) (1- depth) seen)
+                           (file-name-nondirectory path)))
+               (error
+                (format "%s[%s: unreadable: %s]" lead
+                        (file-name-nondirectory path)
+                        (error-message-string err))))))))
+       text t t))))
+
 (defun cmacs-ai-chat--apply-bootstrap ()
   "Fold this buffer's bootstrap file into the session's system prompt.
 
@@ -818,30 +888,40 @@ so the conversation reads as what was typed."
     ;; gone away must not be reconsidered on every turn.
     (setq cmacs-ai-chat--bootstrap-file nil)
     (condition-case err
-        (let ((size (file-attribute-size (file-attributes path))))
-          (cond
-           ((null size) nil)
-           ((> size cmacs-ai-chat-bootstrap-max-bytes)
-            (message "cmacs-ai: %s is %dkB, over the bootstrap limit; not sent"
-                     (file-name-nondirectory path) (/ size 1024)))
-           (t
-            (let ((text (with-temp-buffer
-                          (insert-file-contents path)
-                          (buffer-string))))
-              (cmacs-ai-client-set-system-prompt
-               client
-               (string-join
-                (delq nil
-                      (list (and cmacs-ai-system-prompt
-                                 (not (string-empty-p cmacs-ai-system-prompt))
-                                 cmacs-ai-system-prompt)
-                            (format "The following is %s from the project \
+        (let* ((raw (with-temp-buffer
+                      (insert-file-contents path)
+                      (buffer-string)))
+               ;; Imports first, then measure.  A manifest of @references
+               ;; is a couple of hundred bytes and means nothing on its
+               ;; own, so the size worth checking is what actually gets
+               ;; sent.
+               (text (if cmacs-ai-chat-bootstrap-expand-imports
+                         (cmacs-ai-chat--expand-imports
+                          raw (file-name-directory path)
+                          cmacs-ai-chat-bootstrap-max-depth
+                          (let ((h (make-hash-table :test 'equal)))
+                            (puthash (file-truename path) t h)
+                            h))
+                       raw))
+               (size (string-bytes text)))
+          (if (> size cmacs-ai-chat-bootstrap-max-bytes)
+              (message "cmacs-ai: %s expands to %dkB, over the bootstrap \
+limit; not sent"
+                       (file-name-nondirectory path) (/ size 1024))
+            (cmacs-ai-client-set-system-prompt
+             client
+             (string-join
+              (delq nil
+                    (list (and cmacs-ai-system-prompt
+                               (not (string-empty-p cmacs-ai-system-prompt))
+                               cmacs-ai-system-prompt)
+                          (format "The following is %s from the project \
 directory you are working in.  Treat it as standing instructions.\n\n%s"
-                                    (file-name-nondirectory path) text)))
-                "\n\n"))
-              (when cmacs-ai-chat-bootstrap-announce
-                (message "cmacs-ai: bootstrapped from %s (%dkB)"
-                         (file-name-nondirectory path) (/ size 1024)))))))
+                                  (file-name-nondirectory path) text)))
+              "\n\n"))
+            (when cmacs-ai-chat-bootstrap-announce
+              (message "cmacs-ai: bootstrapped from %s (%dkB)"
+                       (file-name-nondirectory path) (/ size 1024)))))
       (error
        (message "cmacs-ai: could not read %s: %s"
                 path (error-message-string err))))))

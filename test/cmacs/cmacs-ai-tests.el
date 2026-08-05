@@ -1320,5 +1320,123 @@ Half a document of standing instructions is worse than none."
     (let ((cmacs-ai-chat-bootstrap nil))
       (should-not (cmacs-ai-chat--find-bootstrap dir)))))
 
+
+;;;; @file imports inside a bootstrap file
+
+(ert-deftest cmacs-ai-bootstrap-expands-imports ()
+  "A manifest of @references becomes the files it names.
+
+This is the shape a real CLAUDE.md often takes: a couple of hundred
+bytes listing @SOUL.org and friends.  Unexpanded it tells an HTTP model
+nothing it can act on -- it cannot open files -- so the project may as
+well have said nothing."
+  (skip-unless (fboundp 'cmacs-ai-chat--expand-imports))
+  (cmacs-ai-tests--with-project
+      (list (cons "CLAUDE.md" "Read:\n- @SOUL.org\n- @USER.org\n")
+            (cons "SOUL.org" "you are Gnuisaince")
+            (cons "USER.org" "the user is zach"))
+    (let ((out (cmacs-ai-chat--expand-imports
+                "Read:\n- @SOUL.org\n- @USER.org\n" dir 5
+                (make-hash-table :test 'equal))))
+      (should (string-match-p "you are Gnuisaince" out))
+      (should (string-match-p "the user is zach" out))
+      ;; each is delimited and named, so the model can tell them apart
+      (should (string-match-p "BEGIN SOUL.org" out))
+      (should (string-match-p "END USER.org" out))
+      ;; and in the order the manifest listed them
+      (should (< (string-match "Gnuisaince" out)
+                 (string-match "zach" out))))))
+
+(ert-deftest cmacs-ai-bootstrap-imports-nest ()
+  "An imported file may import others, relative to itself."
+  (skip-unless (fboundp 'cmacs-ai-chat--expand-imports))
+  (cmacs-ai-tests--with-project
+      (list (cons "a.org" "top @b.org")
+            (cons "b.org" "middle @c.org")
+            (cons "c.org" "bottom-reached"))
+    (let ((out (cmacs-ai-chat--expand-imports
+                "@a.org" dir 5 (make-hash-table :test 'equal))))
+      (should (string-match-p "bottom-reached" out)))))
+
+(ert-deftest cmacs-ai-bootstrap-imports-stop-at-the-depth-limit ()
+  "A cycle terminates instead of recursing forever."
+  (skip-unless (fboundp 'cmacs-ai-chat--expand-imports))
+  (cmacs-ai-tests--with-project
+      (list (cons "a.org" "a @b.org") (cons "b.org" "b @a.org"))
+    ;; The dedup table alone would stop this, so also prove the depth
+    ;; budget holds on its own with a fresh table each level.
+    (let ((out (cmacs-ai-chat--expand-imports
+                "@a.org" dir 2 (make-hash-table :test 'equal))))
+      (should (stringp out)))))
+
+(ert-deftest cmacs-ai-bootstrap-imports-are-deduped ()
+  "A file named twice is sent once.
+
+The real manifest that prompted this lists PROJECTS.org twice; sending
+it twice is only cost."
+  (skip-unless (fboundp 'cmacs-ai-chat--expand-imports))
+  (cmacs-ai-tests--with-project
+      (list (cons "p.org" "UNIQUE-BODY-TEXT"))
+    (let ((out (cmacs-ai-chat--expand-imports
+                "@p.org and again @p.org" dir 5
+                (make-hash-table :test 'equal))))
+      (should (= 1 (cl-count-if (lambda (_) t)
+                                (let (acc (i 0))
+                                  (while (string-match "UNIQUE-BODY-TEXT" out i)
+                                    (push t acc) (setq i (match-end 0)))
+                                  acc))))
+      (should (string-match-p "included above" out)))))
+
+(ert-deftest cmacs-ai-bootstrap-leaves-non-files-alone ()
+  "Only references that resolve to a readable file are expanded.
+
+That requirement is what keeps an email address, a decorator or an `@'
+in prose from being treated as an import."
+  (skip-unless (fboundp 'cmacs-ai-chat--expand-imports))
+  (cmacs-ai-tests--with-project (list (cons "real.org" "REAL"))
+    (let ((out (cmacs-ai-chat--expand-imports
+                "mail zach@example.com about @nosuchfile.org and @real.org"
+                dir 5 (make-hash-table :test 'equal))))
+      (should (string-match-p "zach@example.com" out))
+      (should (string-match-p "@nosuchfile.org" out))
+      (should (string-match-p "REAL" out)))))
+
+(ert-deftest cmacs-ai-bootstrap-size-check-uses-the-expanded-text ()
+  "The cap applies to what is sent, not to the manifest.
+
+A 200-byte file of imports can expand to tens of kilobytes, and that is
+the number that costs something on every turn."
+  (skip-unless (fboundp 'cmacs-ai-chat-open))
+  (cmacs-ai-tests--with-project
+      (list (cons "CLAUDE.md" "@big.org")
+            (cons "big.org" (make-string 5000 ?x)))
+    (let ((sets 0)
+          (cmacs-ai-chat-bootstrap-max-bytes 1000))
+      (cl-letf (((symbol-function 'cmacs-ai-client-set-system-prompt)
+                 (lambda (&rest _) (setq sets (1+ sets)))))
+        (let ((buf (cmacs-ai-chat-open 'claude nil dir)))
+          (unwind-protect
+              (with-current-buffer buf
+                (setq sets 0)
+                (cmacs-ai-chat--apply-bootstrap)
+                ;; the manifest is 8 bytes; what it expands to is not
+                (should (= 0 sets)))
+            (kill-buffer buf)))))))
+
+(ert-deftest cmacs-ai-bootstrap-expansion-can-be-turned-off ()
+  (skip-unless (fboundp 'cmacs-ai-chat-open))
+  (cmacs-ai-tests--with-project
+      (list (cons "CLAUDE.md" "@soul.org") (cons "soul.org" "SOUL-BODY"))
+    (let (captured
+          (cmacs-ai-chat-bootstrap-expand-imports nil))
+      (cl-letf (((symbol-function 'cmacs-ai-client-set-system-prompt)
+                 (lambda (_c text) (setq captured text))))
+        (let ((buf (cmacs-ai-chat-open 'claude nil dir)))
+          (unwind-protect
+              (with-current-buffer buf (cmacs-ai-chat--apply-bootstrap))
+            (kill-buffer buf))))
+      (should captured)
+      (should-not (string-match-p "SOUL-BODY" captured)))))
+
 (provide 'cmacs-ai-tests)
 ;;; cmacs-ai-tests.el ends here

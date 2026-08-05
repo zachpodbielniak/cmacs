@@ -802,7 +802,7 @@ Three details worth knowing:
 
 - *It happens on the first send, not when the chat opens.* Opening a chat costs nothing, and the instructions are only worth sending if a conversation actually happens.
 - *Nothing appears in the transcript.* The conversation reads as what you typed; the file goes into the system prompt, which is also why it is sent once rather than prepended to every turn.
-- *The larger file wins* when both are present, on the assumption that the fuller document is the one being maintained.
+- *The larger file wins* when both are present, on the assumption that the fuller document is the one being maintained. When they are the same size the order of =cmacs-ai-chat-bootstrap-files= decides.
 
 #+begin_src elisp
 (setq cmacs-ai-chat-bootstrap t                        ; the feature
@@ -810,6 +810,28 @@ Three details worth knowing:
       cmacs-ai-chat-bootstrap-max-bytes 200000
       cmacs-ai-chat-bootstrap-announce t)
 #+end_src
+
+** =@file= imports
+
+A bootstrap file is very often not instructions at all but a manifest of them:
+
+#+begin_example
+# Bootstrap
+Read the following in order:
+- @SOUL.org
+- @IDENTITY.org
+- @USER.org
+#+end_example
+
+That convention comes from Claude Code, and a CLI agent resolves it itself because it can open files. An HTTP model cannot, so unexpanded it receives a couple of hundred bytes naming files it has no way to follow — and behaves exactly as if the project had said nothing.
+
+So the references are resolved and inlined, in the order listed, each delimited and named. Relative paths resolve against the file containing them, so a nested import means what it says; imports nest to =cmacs-ai-chat-bootstrap-max-depth= (5), and a file named twice is sent once with a note in its place.
+
+A reference is only expanded when it resolves to a readable file. That is what keeps =zach@example.com=, a decorator, or an =@= in prose from being mistaken for an import; anything unresolved is left exactly as written, so the model still sees a file was meant even when it is missing.
+
+Set =cmacs-ai-chat-bootstrap-expand-imports= to nil to send the manifest verbatim.
+
+Worth knowing what this costs: a 181-byte manifest in a real project expands to about 67 kB, and it lives in the system prompt, so you pay for it on every turn of that conversation rather than once.
 
 Past =-max-bytes= the file is skipped rather than truncated: half a document of standing instructions is worse than none. The size cap matters because this lands in the system prompt and is therefore paid for on every turn, not just the first.
 
