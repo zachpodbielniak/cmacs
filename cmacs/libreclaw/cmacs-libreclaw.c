@@ -30,7 +30,9 @@
 #include "cmacs-podomation.h"
 #include "cmacs-eval-dispatch.h"
 
+#include <errno.h>
 #include <glib.h>
+#include <glib/gstdio.h>
 
 /* Forward decl from pod-cmacs-libreclaw-module.c. */
 extern PodModule *pod_cmacs_libreclaw_module_new (void);
@@ -281,7 +283,13 @@ existing PodEngine obtained from `cmacs-podomation-get-engine'.  */)
       cmacs_lc_pod_module = fresh;
     }
 
-  /* Create the embedded LcApp on cmacs's GMainContext. */
+  /* Create the embedded LcApp on cmacs's GMainContext.
+   *
+   * Session persistence needs no wiring here: libreclaw defaults its
+   * persist_dir under XDG when the config file does not name one.  It
+   * used to leave it unset, so every async save failed with "No
+   * persist_dir configured" -- a warning per save, for a setting most
+   * people have no reason to know exists. */
   cmacs_lc_app = lc_app_new_embedded (cmacs_lc_config,
                                       NULL,   /* default context */
                                       shared_engine);
