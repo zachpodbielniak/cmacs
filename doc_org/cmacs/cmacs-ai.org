@@ -811,6 +811,23 @@ Three details worth knowing:
       cmacs-ai-chat-bootstrap-announce t)
 #+end_src
 
+** Telling the model to act on it
+
+Putting the file in the system prompt is not enough on its own. There it reads as background — a description of the project — so a model whose instructions include a startup ritual will answer /hey there/ with /hey!/ and perform none of it.
+
+So the first message also carries a short directive, prepended invisibly, immediately before what you typed:
+
+#+begin_example
+Before replying, carry out any startup or bootstrap steps CLAUDE.md
+specifies above -- reading the files it points at, loading memory,
+whatever it asks for.  Do that first, report only what matters about
+it, then answer what follows.
+
+hey there
+#+end_example
+
+It rides the first turn only, and the buffer still shows just what you typed. =cmacs-ai-chat-bootstrap-directive= is the format string (=%s= is the file); nil sends the file with no accompanying instruction.
+
 ** =@file= imports
 
 A bootstrap file is very often not instructions at all but a manifest of them:

@@ -821,6 +821,28 @@ instructions is worse than none."
   :type 'integer
   :group 'cmacs-ai)
 
+(defcustom cmacs-ai-chat-bootstrap-directive
+  "Before replying, carry out any startup or bootstrap steps %s specifies \
+above -- reading the files it points at, loading memory, whatever it \
+asks for.  Do that first, report only what matters about it, then answer \
+what follows.\n\n"
+  "Instruction prepended to the first message after a bootstrap.
+
+A format string; %s is the file the instructions came from.  Set to nil
+to send nothing.
+
+The file alone is not enough.  Put in the system prompt it reads as
+background -- a description of the project rather than something to act
+on -- so a model given a startup ritual will happily answer \"hey there\"
+with \"hey!\" and perform none of it.  Saying so in the user turn, which
+is where a model looks for what it is being asked to do, is what
+actually gets it done.
+
+Prepended invisibly, like `cmacs-ai-pre-prompt': the buffer still shows
+exactly what was typed."
+  :type '(choice (const :tag "Say nothing" nil) string)
+  :group 'cmacs-ai)
+
 (defcustom cmacs-ai-chat-bootstrap-announce t
   "Whether to say in the echo area that a project file was sent.
 
@@ -966,7 +988,10 @@ directory you are working in.  Treat it as standing instructions.\n\n%s"
               "\n\n"))
             (when cmacs-ai-chat-bootstrap-announce
               (message "cmacs-ai: bootstrapped from %s (%dkB)"
-                       (file-name-nondirectory path) (/ size 1024)))))
+                       (file-name-nondirectory path) (/ size 1024)))
+            ;; The caller prepends a directive to this turn only when a
+            ;; bootstrap actually happened.
+            (file-name-nondirectory path)))
       (error
        (message "cmacs-ai: could not read %s: %s"
                 path (error-message-string err))))))
@@ -1005,9 +1030,19 @@ result, and continue the stream until the model stops."
       (let* ((buf (current-buffer))
              (session (cdr cmacs-ai-chat-session-pair))
              (executor cmacs-ai-chat-tool-executor)
-             (sent (cmacs-ai-chat--apply-pre-prompt text)))
-        ;; Before the first request only, and invisible in the buffer.
-        (cmacs-ai-chat--apply-bootstrap)
+             ;; Before the first request only, and invisible in the
+             ;; buffer.  Returns the file it injected, if any.
+             (bootstrapped (cmacs-ai-chat--apply-bootstrap))
+             ;; Directive immediately before what was typed, and inside
+             ;; the pre-prompt rather than ahead of it: "then answer what
+             ;; follows" has to point at the user's message, not at the
+             ;; formatting rules.
+             (body (if (and bootstrapped cmacs-ai-chat-bootstrap-directive)
+                       (concat (format cmacs-ai-chat-bootstrap-directive
+                                       bootstrapped)
+                               text)
+                     text))
+             (sent (cmacs-ai-chat--apply-pre-prompt body)))
         (cmacs-ai-chat-stream
          session sent
          (lambda (payload)

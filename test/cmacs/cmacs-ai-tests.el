@@ -1530,5 +1530,92 @@ second open failed outright."
           (dolist (b buffers) (should (buffer-live-p b))))
       (dolist (b buffers) (when (buffer-live-p b) (kill-buffer b))))))
 
+
+(ert-deftest cmacs-ai-bootstrap-directive-rides-the-first-turn ()
+  "The first message carries an instruction to act on the project file.
+
+The file in the system prompt is not enough on its own: there it reads
+as background -- a description of the project -- so a model given a
+startup ritual answers \"hey there\" with \"hey!\" and performs none of
+it.  Saying so in the user turn is where a model looks for what it is
+being asked to do."
+  (skip-unless (fboundp 'cmacs-ai-chat-send-compose))
+  (cmacs-ai-tests--with-project (list (cons "CLAUDE.md" "read @SOUL.org")
+                                      (cons "SOUL.org" "you are Gnuisaince"))
+    (let (turns (cmacs-ai-chat-autosave nil))
+      (cl-letf (((symbol-function 'cmacs-ai-chat-stream)
+                 (lambda (_s text &rest _) (push text turns) t)))
+        (let ((buf (cmacs-ai-chat-open 'claude nil dir)))
+          (unwind-protect
+              (with-current-buffer buf
+                (goto-char (point-max)) (insert "hey there")
+                (cmacs-ai-chat-send-compose)
+                (goto-char (point-max)) (insert "second")
+                (cmacs-ai-chat-send-compose)
+                (let ((first (car (last turns)))
+                      (second (car turns)))
+                  ;; named the file it came from
+                  (should (string-match-p "CLAUDE.md" first))
+                  (should (string-match-p "startup or bootstrap" first))
+                  ;; immediately before what was typed, so "then answer
+                  ;; what follows" points at the message and not at the
+                  ;; formatting pre-prompt
+                  (should (string-match-p "then answer what follows\\.\n\nhey there"
+                                          first))
+                  ;; once only
+                  (should-not (string-match-p "startup or bootstrap" second))
+                  (should (string-match-p "second" second))))
+            (kill-buffer buf)))))))
+
+(ert-deftest cmacs-ai-bootstrap-directive-stays-out-of-the-buffer ()
+  "The transcript still shows exactly what was typed."
+  (skip-unless (fboundp 'cmacs-ai-chat-send-compose))
+  (cmacs-ai-tests--with-project (list (cons "CLAUDE.md" "instructions"))
+    (let ((cmacs-ai-chat-autosave nil))
+     (cl-letf (((symbol-function 'cmacs-ai-chat-stream) (lambda (&rest _) t)))
+      (let ((buf (cmacs-ai-chat-open 'claude nil dir)))
+        (unwind-protect
+            (with-current-buffer buf
+              (goto-char (point-max)) (insert "hey there")
+              (cmacs-ai-chat-send-compose)
+              (should (string-match-p "hey there" (buffer-string)))
+              (should-not (string-match-p "startup or bootstrap"
+                                          (buffer-string))))
+          (kill-buffer buf)))))))
+
+(ert-deftest cmacs-ai-bootstrap-directive-can-be-silenced ()
+  "nil sends the file with no accompanying instruction."
+  (skip-unless (fboundp 'cmacs-ai-chat-send-compose))
+  (cmacs-ai-tests--with-project (list (cons "CLAUDE.md" "instructions"))
+    (let (turns
+          (cmacs-ai-chat-autosave nil)
+          (cmacs-ai-chat-bootstrap-directive nil))
+      (cl-letf (((symbol-function 'cmacs-ai-chat-stream)
+                 (lambda (_s text &rest _) (push text turns) t)))
+        (let ((buf (cmacs-ai-chat-open 'claude nil dir)))
+          (unwind-protect
+              (with-current-buffer buf
+                (goto-char (point-max)) (insert "hey")
+                (cmacs-ai-chat-send-compose)
+                (should-not (string-match-p "startup or bootstrap"
+                                            (car turns))))
+            (kill-buffer buf)))))))
+
+(ert-deftest cmacs-ai-no-bootstrap-means-no-directive ()
+  "A chat with no project file gets an unmodified first turn."
+  (skip-unless (fboundp 'cmacs-ai-chat-send-compose))
+  (cmacs-ai-tests--with-project (list (cons "README.md" "not a bootstrap"))
+    (let (turns (cmacs-ai-chat-autosave nil))
+      (cl-letf (((symbol-function 'cmacs-ai-chat-stream)
+                 (lambda (_s text &rest _) (push text turns) t)))
+        (let ((buf (cmacs-ai-chat-open 'claude nil dir)))
+          (unwind-protect
+              (with-current-buffer buf
+                (goto-char (point-max)) (insert "hey")
+                (cmacs-ai-chat-send-compose)
+                (should-not (string-match-p "startup or bootstrap"
+                                            (car turns))))
+            (kill-buffer buf)))))))
+
 (provide 'cmacs-ai-tests)
 ;;; cmacs-ai-tests.el ends here
