@@ -79,7 +79,8 @@ enumerate any of them without each kind needing its own variable.")
 (defun cmacs-brigade-registry-list (kind)
   "Return the names registered under KIND, sorted.
 KIND is one of `tool', `agent', `worker', `isolation', `memory-source',
-`deliverable', `panel', `context-provider' or `approval-handler'."
+`deliverable', `panel', `context-provider', `client' or
+`approval-handler'."
   (sort (hash-table-keys (cmacs-brigade--registry kind))
         (lambda (a b) (string< (symbol-name a) (symbol-name b)))))
 
@@ -385,6 +386,24 @@ Recognised keys: :name, :provide (agent -> string or nil), :order.
 
 Providers run for every agent start, so :provide should be cheap and
 must tolerate being called with an agent it knows nothing about.")
+
+(cmacs-brigade--define-registry client (:deliver)
+  "Register a conversational client that can be woken from PLIST.
+
+Recognised keys: :name, :deliver (TARGET TEXT -> non-nil when the
+message was accepted), :targets (-> list of (TARGET-ID . LABEL) that are
+live now), :live-p, :ready-p (TARGET -> nil while it is busy, so a
+message waits rather than interleaving) and :current (-> the target id
+for the context this is being called from, or nil).
+
+This is how a finished agent reaches whatever asked for it.  A chat that
+spawns a subagent otherwise sits waiting for a human to notice and say
+\"check on it\"; with a client registered, the finished run delivers a
+turn back into that conversation and it carries on by itself.
+
+The shipped implementation covers `cmacs-ai' chat buffers.  libreclaw
+channels, a Matrix room or anything else register their own and are
+reached by exactly the same path.")
 
 (cmacs-brigade--define-registry approval-handler (:ask)
   "Register a way of asking the user to confirm a tool call from PLIST.

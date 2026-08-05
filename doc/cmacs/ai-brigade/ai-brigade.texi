@@ -29,6 +29,7 @@ one form lights it up on all three delivery paths at once.
 * Brigade Workers::             How an agent actually runs.
 * Brigade Dashboard Display::   How the dashboard takes the screen.
 * Brigade Composing::           Getting a task without knowing the format.
+* Brigade Loopback::            Telling the conversation an agent is done.
 * Brigade Memory Builds::       Indexing your notes without blocking.
 * Brigade Scheduling::          Running a prompt on a cron schedule.
 @end menu
@@ -486,6 +487,56 @@ shape on disk is decided once.
 @defun cmacs-brigade-compose-set spec
 Replace the composed state with @var{spec} and show the transient.  The
 way in for filling the menu from your own code.
+@end defun
+
+@node Brigade Loopback
+@section Telling the conversation when an agent is done
+
+A chat that spawns a subagent sits parked.  @code{agent_spawn} returns an
+id immediately---a blocking spawn holds a turn open for minutes---so the
+work finishes, nothing says so, and the conversation waits for a human to
+come back and ask.  The model had everything it needed to carry on and no
+way to know it was time.
+
+A finished run now delivers a turn back into the conversation that asked
+for it: @samp{[automatic] Subagent a17 (researcher) has finished with
+state `done'.  Call agent_result @dots{}}.  The model collects the result
+and continues.
+
+A task acquires a target either implicitly---@code{agent_spawn} running
+inside a chat notices which chat, because the chat layer executes tools
+with its own buffer current---or explicitly, from the compose transient's
+@kbd{N} key.  Either way it lands in a @code{:NOTIFY:} property, so it is
+visible in the plan and editable like any other intent.
+
+Delivery never happens mid-turn.  A message inserted while a reply is
+streaming interleaves with the model's own output, and one inserted while
+you have something half-typed in the compose region would send your draft
+too.  In both cases it queues and goes out when the conversation is idle,
+or is dropped once @code{cmacs-brigade-loopback-give-up-seconds} passes.
+A closed chat is dropped at once, and each task notifies exactly once.
+
+@defopt cmacs-brigade-loopback-enabled
+Whether a finished agent tells the conversation that asked for it (t).
+Tasks that never recorded a target are unaffected either way.
+@end defopt
+
+@defopt cmacs-brigade-loopback-message
+The message delivered, taking the task id, agent name, final state and id
+again.  It reports the state but not the output: results can be long, and
+@code{agent_result} is a tool the model already has.
+@end defopt
+
+@defun cmacs-brigade-register-client &rest plist
+Register a conversational client that can be woken.  Keys: @code{:name},
+@code{:deliver} (TARGET TEXT), @code{:targets}, @code{:live-p},
+@code{:ready-p} and @code{:current}.  A target id is
+@code{CLIENT:REST}---the prefix picks the client, the rest means whatever
+that client wants.  @code{:current} answers ``is this being called from
+inside you?'', which is how a spawn records its origin with no plumbing.
+
+The shipped implementation covers @code{cmacs-ai} chat buffers; libreclaw
+channels or a Matrix room register their own and are reached identically.
 @end defun
 
 @node Brigade Memory Builds

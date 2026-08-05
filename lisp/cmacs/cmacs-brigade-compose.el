@@ -43,6 +43,9 @@
 ;; `declare-function' loads nothing -- which is exactly how the dashboard
 ;; came to have an `s' key bound to a void function.
 (require 'cmacs-brigade-run)
+;; The `N' key lists live conversations, so the client registry has to be
+;; populated by the time the menu is built.
+(require 'cmacs-brigade-loopback)
 (require 'transient)
 (require 'cl-lib)
 (require 'subr-x)
@@ -283,7 +286,12 @@ is the shape a model's proposal usually arrives in."
         :model (cmacs-brigade-compose--model-string)
         :budget (cmacs-brigade-compose--get :budget)
         :tools (cmacs-brigade-compose--get :tools)
-        :cwd (cmacs-brigade-compose--get :cwd)))
+        :cwd (cmacs-brigade-compose--get :cwd)
+        ;; Where to report back to when it finishes.  A property rather
+        ;; than a field of its own, so it is visible in the plan and
+        ;; editable like every other piece of intent.
+        :properties (when-let* ((n (cmacs-brigade-compose--get :notify)))
+                      (list (cons "NOTIFY" n)))))
 
 (defun cmacs-brigade-compose--summarize (text)
   "A headline-length summary of TEXT."
@@ -391,6 +399,8 @@ and from Lisp as well as from a key."
           :tools (plist-get entry :tools)
           :budget (plist-get entry :budget)
           :cwd (plist-get entry :cwd)
+          :notify (cmacs-brigade-plan-task-property
+                   plan (plist-get record :id) "NOTIFY")
           :plan plan
           :source (format "clone of %s" (or (plist-get record :id) "a task")))))
 
@@ -1155,6 +1165,28 @@ M-x cmacs-brigade-agent-reload"))
          (id (cmacs-brigade-compose-create nil)))
     (find-file file)
     (when (fboundp 'org-id-goto) (ignore-errors (org-id-goto id)))))
+
+(transient-define-suffix cmacs-brigade-compose-set-notify ()
+  "Choose a conversation to tell when this task finishes."
+  :transient t
+  :description
+  (lambda ()
+    (cmacs-brigade-compose--label
+     "notify" :notify
+     (when-let* ((n (cmacs-brigade-compose--get :notify)))
+       ;; The client prefix is plumbing; the name is the part you chose.
+       (replace-regexp-in-string "\\`[^:]+:" "" n))))
+  (interactive)
+  (let ((targets (cmacs-brigade-loopback-targets)))
+    (if (null targets)
+        (progn (cmacs-brigade-compose--put :notify nil)
+               (message "cmacs-brigade: no chat or client is open to notify"))
+      (let* ((labels (append (mapcar #'cdr targets) (list "none")))
+             (pick (completing-read "Tell which conversation when it finishes: "
+                                    labels nil t)))
+        (cmacs-brigade-compose--put
+         :notify (unless (equal pick "none")
+                   (car (rassoc pick targets))))))))
 
 (transient-define-suffix cmacs-brigade-compose-settings ()
   "Edit the brigade's settings."

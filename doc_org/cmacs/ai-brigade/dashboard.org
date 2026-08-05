@@ -122,6 +122,62 @@ answers a request to describe a task by spawning one — which it did, twice,
 before this. An empty directory removes the temptation rather than arguing
 with it.
 
+*** Telling the conversation when it is done
+
+=N= picks a conversation to notify when the task finishes. A chat that spawns
+a subagent otherwise sits parked: =agent_spawn= returns an id immediately (a
+blocking spawn holds a turn open for minutes), the work finishes, nothing says
+so, and it waits for you to come back and type "is it done yet".
+
+With a target set, the finished run delivers a turn into that conversation —
+
+#+begin_example
+[automatic] Subagent a17 (researcher) has finished with state `done'.
+Call agent_result with id "a17" to collect what it produced, then carry
+on with what you were doing.
+#+end_example
+
+— and the model picks it up and continues on its own. A spawn made *from* a
+chat records that chat automatically, so =N= is only needed for a task you
+started by hand.
+
+It is a =:NOTIFY:= property on the task, so the target is visible in the plan,
+survives a restart, and is editable like any other intent.
+
+**** When it waits
+
+Never mid-turn. A message inserted while a reply is streaming interleaves with
+the model's own output, and one inserted while you have something half-typed in
+the compose region would send your draft along with it. In both cases the
+message queues and goes out when the conversation is idle
+(=cmacs-brigade-loopback-retry-seconds=), or is dropped after
+=cmacs-brigade-loopback-give-up-seconds= — a conversation abandoned mid-stream
+for a quarter of an hour is not coming back to this. A closed chat is dropped
+immediately. Each task notifies once.
+
+Turn the whole thing off with =cmacs-brigade-loopback-enabled=.
+
+**** Other clients
+
+Delivery goes through the =client= registry, not through knowledge of chat
+buffers, so anything conversational can be a target:
+
+#+begin_src elisp
+(cmacs-brigade-register-client
+ :name 'matrix
+ :targets (lambda () (mapcar (lambda (r) (cons (format "matrix:%s" r) r))
+                             (my/joined-rooms)))
+ :ready-p (lambda (_target) t)
+ :deliver (lambda (target text)
+            (my/matrix-send (string-remove-prefix "matrix:" target) text)))
+#+end_src
+
+A target id is =CLIENT:REST=; the prefix picks the client out of the registry
+and the rest means whatever that client wants. =:current= is the one worth
+implementing if spawns should record your client automatically — it answers
+"is this being called from inside you?", which is how the chat client works
+without any plumbing between the two.
+
 ** =V= — say it
 
 The same thing, spoken. Records until =cmacs-brigade-voice-stop=, transcribes

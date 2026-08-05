@@ -351,15 +351,25 @@ nothing ever loaded; the halves each work and the whole is void."
       (nreverse missing))))
 
 (defconst cmacs-brigade-compose-tests--cycle-breaks
-  '(("cmacs-brigade-compose.el" . "cmacs-brigade-dashboard"))
+  '(("cmacs-brigade-compose.el" . "cmacs-brigade-dashboard")
+    ("cmacs-brigade-loopback.el" . "cmacs-ai-chat"))
   "Declarations that must stay declarations, with the reason.
 
 The dashboard requires compose -- for its `n', `V', `C' and `x' keys and
 for the provider/model reader -- so compose requiring the dashboard back
 would be a load cycle.  Both call sites in compose are `fboundp'-guarded
 and do nothing useful when the dashboard is absent, which is the correct
-shape for a back-reference.  Anything else on this list needs the same
-argument made for it in writing.")
+shape for a back-reference.
+
+cmacs-brigade-loopback is loaded eagerly, and requiring cmacs-ai-chat
+from it would pull the whole chat layer into every session including one
+that never opens a chat.  It does not need to: the only call is inside
+the chat client's `deliver', which is reachable only through a live
+buffer in `cmacs-ai-chat-mode' -- which cannot exist unless that layer is
+already loaded.
+
+Anything else on this list needs the same argument made for it in
+writing.")
 
 (ert-deftest cmacs-brigade-compose-no-declared-but-unrequired-libraries ()
   "Every brigade file requires the Elisp libraries it declares functions from.

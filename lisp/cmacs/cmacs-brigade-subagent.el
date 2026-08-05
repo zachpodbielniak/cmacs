@@ -32,6 +32,9 @@
 (require 'cmacs-brigade-registry)
 (require 'cmacs-brigade-run)
 (require 'cmacs-brigade-output)
+;; A spawn records where it came from, so the client registry has to be
+;; live by then.  No cycle: loopback knows nothing about subagents.
+(require 'cmacs-brigade-loopback)
 (require 'cmacs-ai nil 'noerror)
 (require 'cl-lib)
 (require 'subr-x)
@@ -134,7 +137,9 @@ says, which is the usual case."
          ;; directory, so recording it there wrote the wrong answer --
          ;; the notes tree rather than the project the spawn came from.
          (cwd (file-name-as-directory
-               (expand-file-name (or directory default-directory)))))
+               (expand-file-name (or directory default-directory))))
+         (notify (and (fboundp 'cmacs-brigade-loopback-current-target)
+                      (cmacs-brigade-loopback-current-target))))
     (unless agent
       (signal 'cmacs-brigade-error (list "no agent definitions are loaded")))
     (unless (cmacs-brigade-agent-get agent)
@@ -165,6 +170,12 @@ says, which is the usual case."
                   (if (and model (not (string-empty-p model)))
                       (format "  :MODEL:  %s\n" model) "")
                   (format "  :CWD:    %s\n" (abbreviate-file-name cwd))
+                  ;; Where to report back to when this finishes.  Captured
+                  ;; at spawn because that is the only moment the origin
+                  ;; is knowable: the chat's tool loop runs with its own
+                  ;; buffer current, and by the time the subagent ends
+                  ;; that context is long gone.
+                  (if notify (format "  :NOTIFY: %s\n" notify) "")
                   (if parent (format "  :SPAWNED-BY: %s\n" parent) "")
                   "  :END:\n")
           (insert "  " task "\n")

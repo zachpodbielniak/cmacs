@@ -530,7 +530,12 @@ those are all guarded at their call sites."
   (skip-unless (featurep 'cmacs-brigade))
   ;; Load everything a user reaches interactively, not just the eager set.
   (dolist (f '(cmacs-brigade-dashboard cmacs-brigade-plan
-               cmacs-brigade-schedule cmacs-brigade-run))
+               cmacs-brigade-schedule cmacs-brigade-run
+               ;; The chat layer counts: the loopback client delivers
+               ;; into a chat buffer, and a chat is something a user
+               ;; reaches interactively even though nothing loads it
+               ;; eagerly.
+               cmacs-ai-chat))
     (require f nil 'noerror))
   (let ((optional '("piper" "whisper" "audio" "libregnum" "imgedit"
                     "vidstudio" "transcribe" "mu4e" "libreclaw"))

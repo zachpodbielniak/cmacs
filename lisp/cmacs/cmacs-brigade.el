@@ -211,6 +211,10 @@ The subsystem's own symbols use the shorter `cmacs-brigade-' prefix.")
   ;; session or a chat buffer asks what tools exist, and both can happen
   ;; before any user code runs.
   (require 'cmacs-brigade-subagent nil 'noerror)
+  ;; Eager: the finished-run hook has to be in place before the first
+  ;; run ends, and a spawn has to be able to notice its origin the first
+  ;; time a chat calls agent_spawn.
+  (require 'cmacs-brigade-loopback nil 'noerror)
   (require 'cmacs-brigade-notify nil 'noerror)
   (require 'cmacs-brigade-voice nil 'noerror)
   ;; Eager so the dashboard's clone and compose keys are bound the first
