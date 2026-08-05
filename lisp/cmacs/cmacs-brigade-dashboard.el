@@ -134,16 +134,65 @@ has no upper bound, and the only one worth truncating first."
           :turns 5 :tokens 11 :cost 9
           :total (+ fixed task 1))))
 
-(defun cmacs-brigade-dashboard--row-format (c)
-  "Build the row format string for column widths C.
+(defconst cmacs-brigade-dashboard--fields
+  '(:st :id :agent :model :task :turns :tokens :cost)
+  "The table's columns, left to right.")
 
-Emacs `format\=' has no `%-*s\=' -- the star width is a C printf feature --
-so the spec is assembled from the widths rather than passed alongside
-them."
-  (format "%%-%ds %%-%ds %%-%ds %%-%ds %%-%ds %%%ds %%%ds %%%ds"
-          (plist-get c :st) (plist-get c :id) (plist-get c :agent)
-          (plist-get c :model) (plist-get c :task) (plist-get c :turns)
-          (plist-get c :tokens) (plist-get c :cost)))
+(defconst cmacs-brigade-dashboard--right-aligned '(:turns :tokens :cost)
+  "Columns whose contents are numbers and read better flush right.")
+
+(defun cmacs-brigade-dashboard--offsets (c)
+  "Where each column starts, in display columns, for widths C."
+  (let ((at 0) out)
+    (dolist (f cmacs-brigade-dashboard--fields)
+      (push (cons f at) out)
+      ;; One space between columns.
+      (setq at (+ at (plist-get c f) 1)))
+    (nreverse out)))
+
+(defun cmacs-brigade-dashboard--row (c values)
+  "Lay VALUES out in the columns C describes.  Returns one line.
+
+Aligned with `:align-to\=' display specifications rather than by padding
+with spaces, because a space is exactly one column wide and a glyph is
+not necessarily anything of the sort.
+
+The status glyphs are precisely the characters this goes wrong for.
+`string-width\=' reports 1 for `▶\=', `✔\=' and `✖\=' -- they are
+East-Asian-Ambiguous, and the table says narrow -- while a graphical
+frame lays them out from the font\='s own advance, which for these is two
+columns.  So `%-3s\=' emitted three characters that drew as four, and
+every row for a task that had actually done something sat one column
+right of the rows that had not.  Padding cannot fix that: the width
+Emacs would pad by is the width that is wrong.  Anchoring each column to
+an absolute position sidesteps the question."
+  (let ((offsets (cmacs-brigade-dashboard--offsets c))
+        (parts nil))
+    (dolist (f cmacs-brigade-dashboard--fields)
+      (let* ((width (plist-get c f))
+             (raw (format "%s" (or (plist-get values f) "")))
+             ;; Truncated by display width, so an over-long cell cannot
+             ;; shove the next column past its anchor.
+             (text (if (> (string-width raw) width)
+                       (truncate-string-to-width raw width)
+                     raw))
+             (at (alist-get f offsets)))
+        ;; Padded to the nominal width *as well as* anchored.  The
+        ;; padding is what makes the buffer's plain text line up when it
+        ;; is copied out or read by something that ignores display
+        ;; properties; the anchor is what makes the *display* line up
+        ;; when a glyph turns out to be wider than its character count
+        ;; claims.  Where the two disagree the anchor absorbs the
+        ;; difference, because a padded wide glyph lands exactly on it
+        ;; and the spacer collapses to nothing.
+        (let ((pad (make-string (max 0 (- width (string-width text))) ?\s)))
+          (setq text (if (memq f cmacs-brigade-dashboard--right-aligned)
+                         (concat pad text)
+                       (concat text pad))))
+        (unless (zerop at)
+          (push (propertize " " 'display `(space :align-to ,at)) parts))
+        (push text parts)))
+    (apply #'concat (nreverse parts))))
 
 (defun cmacs-brigade-dashboard--render ()
   "Redraw the dashboard, keeping the cursor where it was."
@@ -161,9 +210,11 @@ them."
             ;; stopped matching the moment a column changed.
             (insert (make-string (plist-get c :total) ?─) "\n")
             (insert (propertize
-                     (concat (format (cmacs-brigade-dashboard--row-format c)
-                                     "ST" "ID" "AGENT" "MODEL" "TASK"
-                                     "TURNS" "TOKENS" "COST")
+                     (concat (cmacs-brigade-dashboard--row
+                              c (list :st "ST" :id "ID" :agent "AGENT"
+                                      :model "MODEL" :task "TASK"
+                                      :turns "TURNS" :tokens "TOKENS"
+                                      :cost "COST"))
                              "\n")
                      'face 'bold))
             (if (null records)
@@ -222,27 +273,24 @@ them."
          (state (plist-get r :state))
          (id (or (plist-get r :id) "?"))
          (agent (plist-get r :agent))
-         (line (format (cmacs-brigade-dashboard--row-format c)
-                       (cmacs-brigade-dashboard--glyph state)
-                       (truncate-string-to-width id (plist-get c :id))
-                       ;; The base name, not the internal `researcher@b12c7a46'
-                       ;; that a per-task model override produces.
-                       (truncate-string-to-width
-                        (if agent
-                            (format "%s" (cmacs-brigade-agent-base-name
-                                          (intern agent)))
-                          "—")
-                        (plist-get c :agent))
-                       (truncate-string-to-width
-                        (cmacs-brigade-dashboard--model r)
-                        (plist-get c :model))
-                       (truncate-string-to-width
-                        (or (plist-get r :title) id) (plist-get c :task))
-                       (or (plist-get r :turns) 0)
-                       (format "%s/%s" (or (plist-get r :in-tokens) 0)
-                               (or (plist-get r :out-tokens) 0))
-                       (format "$%.4f" (/ (or (plist-get r :cost-micros) 0)
-                                          1000000.0)))))
+         (line (cmacs-brigade-dashboard--row
+                c (list
+                   :st (cmacs-brigade-dashboard--glyph state)
+                   :id id
+                   ;; The base name, not the internal `researcher@b12c7a46'
+                   ;; that a per-task model override produces.
+                   :agent (if agent
+                              (format "%s" (cmacs-brigade-agent-base-name
+                                            (intern agent)))
+                            "—")
+                   :model (cmacs-brigade-dashboard--model r)
+                   :task (or (plist-get r :title) id)
+                   :turns (or (plist-get r :turns) 0)
+                   :tokens (format "%s/%s" (or (plist-get r :in-tokens) 0)
+                                   (or (plist-get r :out-tokens) 0))
+                   :cost (format "$%.4f"
+                                 (/ (or (plist-get r :cost-micros) 0)
+                                    1000000.0))))))
     ;; The record travels with the row, so a command acts on what the
     ;; cursor is on rather than re-deriving it from the display.
     (insert (propertize line 'cmacs-brigade-record r) "\n")

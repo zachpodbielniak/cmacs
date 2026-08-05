@@ -286,6 +286,21 @@ under =emacs --lrg=.
 Status glyphs fall back to ASCII where Unicode cannot be displayed
 (=cmacs-brigade-dashboard-unicode=, =auto= by default).
 
+Columns are anchored with =:align-to= display properties, not laid out by
+padding with spaces. That distinction is the difference between a table and a
+nearly-a-table: a space is exactly one column wide, and a glyph is not
+necessarily anything of the sort. =▶=, =✔= and =✖= are East-Asian-Ambiguous —
+=string-width= reports one column, and a graphical frame lays them out as two
+from the font's own advance. Padded rows therefore came out a column short for
+exactly the states you notice, since a fresh task shows the narrow =·= and
+everything else shows a wide glyph. Padding could not fix it, because the width
+it would pad by is the width that is wrong.
+
+Rows are padded /as well as/ anchored: the padding is what makes the buffer's
+plain text line up when it is copied out or read by something that ignores
+display properties, and the anchor is what makes the display line up when the
+two disagree. Where they do, the anchor absorbs the difference.
+
 The trap under =--lrg= is menus: =display-graphic-p= returns =t= there, so the
 obvious guard passes, but lrgterm draws no menu bar. Use
 =cmacs-libregnum-popup-menu=, which falls through to the native menu on PGTK.

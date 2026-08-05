@@ -948,8 +948,13 @@ cannot match against the one an agent printed is not an id."
   "The horizontal rule is as wide as the row, not a stale constant."
   (skip-unless (featurep 'cmacs-brigade-dashboard))
   (let* ((c (cmacs-brigade-dashboard--columns))
-         (row (format (cmacs-brigade-dashboard--row-format c)
-                      "ST" "ID" "AGENT" "MODEL" "TASK" "T" "TOK" "C")))
+         ;; Plain text: the anchors are display properties and contribute
+         ;; one character each, which is what the widths already allow
+         ;; for as the inter-column space.
+         (row (substring-no-properties
+               (cmacs-brigade-dashboard--row
+                c (list :st "ST" :id "ID" :agent "AGENT" :model "MODEL"
+                        :task "TASK" :turns "T" :tokens "TOK" :cost "C")))))
     (should (= (length row) (plist-get c :total)))))
 
 (ert-deftest cmacs-brigade-dashboard-row-shows-values-whole ()

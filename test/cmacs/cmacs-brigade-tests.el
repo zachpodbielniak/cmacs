@@ -555,6 +555,89 @@ those are all guarded at their call sites."
                     bad))))))
     (should (equal nil (sort (delete-dups bad) #'string<)))))
 
+(defun cmacs-brigade-tests--row-anchors (line)
+  "The `:align-to' column positions LINE anchors its fields at."
+  (let (out (pos 0))
+    (while (setq pos (next-single-property-change pos 'display line))
+      (let ((d (get-text-property pos 'display line)))
+        (when (eq (car-safe d) 'space)
+          (push (plist-get (cdr d) :align-to) out)))
+      (setq pos (1+ pos)))
+    (nreverse out)))
+
+(ert-deftest cmacs-brigade-dashboard-columns-do-not-move-with-the-glyph ()
+  "Every status glyph leaves the following columns in the same place.
+
+The table used to be laid out by padding with spaces, which assumes a
+glyph is as many columns wide as `string-width' says.  For the status
+set that is false: `▶', `✔' and `✖' are East-Asian-Ambiguous, reported
+as one column, and laid out by a graphical frame as two from the font's
+own advance.  So `%-3s' emitted three characters that drew as four, and
+every row for a task that had done something sat one column right of a
+row that had not -- exactly the states you notice, since a fresh task
+shows the narrow `·'."
+  (skip-unless (featurep 'cmacs-brigade-dashboard))
+  (let* ((c (list :st 3 :id 8 :agent 10 :model 12 :task 20
+                  :turns 5 :tokens 11 :cost 9 :total 84))
+         (expected (cmacs-brigade-tests--row-anchors
+                    (cmacs-brigade-dashboard--row
+                     c (list :st "ST" :id "ID" :agent "AGENT" :model "MODEL"
+                             :task "TASK" :turns "TURNS" :tokens "TOKENS"
+                             :cost "COST")))))
+    (should expected)
+    ;; Both glyph sets, every state, narrow and wide alike.
+    (dolist (unicode '(t nil))
+      (let ((cmacs-brigade-dashboard-unicode unicode))
+        (dolist (state '(draft running starting queued waiting-input blocked
+                         interrupted done failed over-budget cancelled))
+          (let ((line (cmacs-brigade-dashboard--row
+                       c (list :st (cmacs-brigade-dashboard--glyph state)
+                               :id "abcd1234" :agent "general" :model "m"
+                               :task "t" :turns 1 :tokens "2/3"
+                               :cost "$0.1000"))))
+            (should (equal expected
+                           (cmacs-brigade-tests--row-anchors line)))))))))
+
+(ert-deftest cmacs-brigade-dashboard-plain-text-still-lines-up ()
+  "The buffer's text aligns too, not only its display.
+
+Anchors alone would have left the plain text ragged, which is what you
+get when you copy rows out of the buffer or read it with anything that
+ignores display properties.  Padding and anchoring do different jobs and
+both are needed."
+  (skip-unless (featurep 'cmacs-brigade-dashboard))
+  (let* ((c (list :st 3 :id 8 :agent 10 :model 12 :task 20
+                  :turns 5 :tokens 11 :cost 9 :total 84))
+         (widths nil))
+    (dolist (state '(draft running done failed))
+      (let* ((line (substring-no-properties
+                    (cmacs-brigade-dashboard--row
+                     c (list :st (cmacs-brigade-dashboard--glyph state)
+                             :id "abcd1234" :agent "general" :model "m"
+                             :task "t" :turns 1 :tokens "2/3"
+                             :cost "$0.1000"))))
+             ;; Where the ID column actually starts in the text.
+             (at (string-match-p "abcd1234" line)))
+        (push at widths)))
+    (should (= 1 (length (delete-dups widths))))))
+
+(ert-deftest cmacs-brigade-dashboard-row-truncates-by-display-width ()
+  "An over-long cell cannot shove the next column past its anchor."
+  (skip-unless (featurep 'cmacs-brigade-dashboard))
+  (let* ((c (list :st 3 :id 8 :agent 10 :model 12 :task 20
+                  :turns 5 :tokens 11 :cost 9 :total 84))
+         (line (cmacs-brigade-dashboard--row
+                c (list :st "·" :id (make-string 40 ?x)
+                        :agent "般般般般般般般般般般般" :model "m" :task "t"
+                        :turns 1 :tokens "2/3" :cost "$0.1"))))
+    ;; The anchors are still the ones the header uses.
+    (should (equal '(4 13 24 37 58 64 76)
+                   (cmacs-brigade-tests--row-anchors line)))
+    ;; And the wide-character field was cut by display width, not by
+    ;; character count -- 11 CJK characters are 22 columns, not 11.
+    (should (<= (string-width (substring-no-properties line))
+                (+ (plist-get c :total) 8)))))
+
 (provide 'cmacs-brigade-tests)
 
 ;;; cmacs-brigade-tests.el ends here
