@@ -462,29 +462,50 @@ A bare mention is not a choice: \"summarise the gemini pricing page\"
 names a provider and asks for nothing of the sort.  Requiring a cue in
 front turns a guess into a reading.")
 
+(defconst cmacs-brigade-compose--qualifiers
+  '("agent" "model" "provider")
+  "Words naming what kind of thing is being chosen.
+
+They stand in for a cue, because they say the same thing more plainly:
+\"model sonnet\" after a comma is as clear a choice as \"with sonnet\",
+and nobody puts \"model\" in front of a name they are merely discussing.
+Accepted before the name and after it, so \"use agent researcher\" and
+\"with the sonnet model\" both read.")
+
+(defun cmacs-brigade-compose--choice-prefix ()
+  "Regexp for what introduces a chosen name.
+
+Either a cue word -- optionally followed by `the\\=' and/or a qualifier --
+or a qualifier on its own.  A bare name never qualifies: that is the
+whole difference between choosing gemini and asking about gemini."
+  (let ((cues (regexp-opt cmacs-brigade-compose--cues))
+        (quals (regexp-opt cmacs-brigade-compose--qualifiers)))
+    (format "\\(?:\\(?:%s\\)[ \t]+\\(?:the[ \t]+\\)?\\(?:%s[ \t]+\\)?\\|%s[ \t]+\\)"
+            cues quals quals)))
+
 (defun cmacs-brigade-compose--cue-regexp (name)
   "A regexp matching NAME where it is being chosen rather than discussed."
-  (format "\\(?:%s\\)[ \t]+\\(?:the[ \t]+\\)?%s\\_>"
-          (regexp-opt cmacs-brigade-compose--cues)
+  (format "%s%s\\_>" (cmacs-brigade-compose--choice-prefix)
           (regexp-quote name)))
 
-(defun cmacs-brigade-compose--find-named (text names &optional suffix)
+(defun cmacs-brigade-compose--find-named (text names &optional _suffix)
   "Return the first of NAMES that TEXT chooses, or nil.
 
-A name counts as chosen when a cue word precedes it, or when SUFFIX (say
-\"agent\") follows it -- \"the researcher agent\" needs no cue.  Longest
-name first, so `claude-code' is not read as `claude'."
+A name counts as chosen when something introduces it -- a cue word, a
+qualifier, or both -- or when a qualifier follows it, as in \"the
+researcher agent\" or \"the sonnet model\".  Longest name first, so
+`claude-code' is not read as `claude'."
   (let ((sorted (sort (copy-sequence names)
                       (lambda (a b) (> (length a) (length b)))))
+        (quals (regexp-opt cmacs-brigade-compose--qualifiers))
         (case-fold-search t)
         found)
     (dolist (n sorted)
       (unless found
         (when (or (string-match-p (cmacs-brigade-compose--cue-regexp n) text)
-                  (and suffix
-                       (string-match-p
-                        (format "\\_<%s[ \t]+%s\\_>" (regexp-quote n) suffix)
-                        text)))
+                  (string-match-p
+                   (format "\\_<%s[ \t]+%s\\_>" (regexp-quote n) quals)
+                   text))
           (setq found n))))
     found))
 
@@ -561,12 +582,14 @@ the first."
                                 (plist-get named :agent))))
          (case-fold-search t))
     (when names
-      (let ((choice (concat "[ \t]*\\(?:" (regexp-opt
-                                           cmacs-brigade-compose--cues)
-                            "\\)[ \t]+\\(?:the[ \t]+\\)?"
+      (let ((choice (concat "[ \t]*"
+                            (cmacs-brigade-compose--choice-prefix)
                             "\\(?:" (regexp-opt names) "\\)"
                             "\\(?:[ \t]+\\(?:" (regexp-opt names) "\\)\\)*"
-                            "\\(?:[ \t]+agent\\)?"
+                            ;; "the sonnet model", "the researcher agent"
+                            "\\(?:[ \t]+"
+                            (regexp-opt cmacs-brigade-compose--qualifiers)
+                            "\\)?"
                             ;; The comma takes its whitespace with it.  A
                             ;; bare "[ \t]*,?" ate the space before "to"
                             ;; instead, so "use grok to survey X" left a
@@ -582,7 +605,12 @@ the first."
     (setq s (replace-regexp-in-string "\\` *[,;] *" "" s t t))
     (setq s (replace-regexp-in-string " +\\([,.;]\\)" "\\1" s t))
     (setq s (replace-regexp-in-string "\\`\\(?:and\\|then\\)[ \t]+" "" s t t))
-    (string-trim s)))
+    (setq s (string-trim s))
+    ;; "use grok, model grok-4.5" is entirely a routing decision and
+    ;; describes no work at all.  Stripping it to nothing would leave the
+    ;; menu refusing to create anything with no hint why, so hand back
+    ;; what was said and let the prompt field show it.
+    (if (string-match-p "[[:alnum:]]" s) s (string-trim (or text "")))))
 
 (defun cmacs-brigade-compose--derive-title (request)
   "A short label for REQUEST, distinct from the request itself.

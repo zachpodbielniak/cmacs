@@ -668,6 +668,73 @@ The model is told to leave it out and regularly does not."
     (should-not (string-match-p "grok" (plist-get state :prompt)))
     (should (string-match-p "pwd" (plist-get state :prompt)))))
 
+
+;;;; Model and agent, in the shapes people write them
+
+(ert-deftest cmacs-brigade-compose-strips-the-model-too ()
+  "A model named any of the usual ways leaves the brief."
+  (skip-unless (featurep 'cmacs-brigade-compose))
+  (cmacs-brigade-agent-reload)
+  (dolist (case '(("run pwd with sonnet"                  . "run pwd")
+                  ("run pwd using haiku"                  . "run pwd")
+                  ("run pwd with claude-code sonnet"      . "run pwd")
+                  ("run pwd with the sonnet model"        . "run pwd")
+                  ("run pwd on claude-code, model sonnet" . "run pwd")))
+    (should (equal (cdr case)
+                   (cmacs-brigade-compose--strip-choices (car case))))))
+
+(ert-deftest cmacs-brigade-compose-strips-the-agent-too ()
+  "An agent named any of the usual ways leaves the brief."
+  (skip-unless (featurep 'cmacs-brigade-compose))
+  (cmacs-brigade-agent-reload)
+  (cmacs-brigade-register-agent :name 'researcher :prompt "p")
+  (dolist (case '(("use the researcher agent to look at this" . "look at this")
+                  ("have researcher do this"                  . "do this")
+                  ("ask the general agent to run pwd"          . "run pwd")
+                  ("use agent researcher for this"             . "for this")))
+    (should (equal (cdr case)
+                   (cmacs-brigade-compose--strip-choices (car case))))))
+
+(ert-deftest cmacs-brigade-compose-qualifier-alone-is-a-choice ()
+  "`model X' and `agent X' are choices without needing a cue as well.
+
+They are how people write it after a comma -- \"use grok, model
+grok-4.5\" -- and nobody puts `model' in front of a name they are merely
+discussing."
+  (skip-unless (featurep 'cmacs-brigade-compose))
+  (cmacs-brigade-agent-reload)
+  (cmacs-brigade-register-agent :name 'researcher :prompt "p")
+  (let ((e (cmacs-brigade-compose--extract "use grok, model grok-4.5")))
+    (should (equal "grok" (plist-get e :provider)))
+    (should (equal "grok-4.5" (plist-get e :model))))
+  (should (equal "researcher"
+                 (plist-get (cmacs-brigade-compose--extract
+                             "use agent researcher for this")
+                            :agent))))
+
+(ert-deftest cmacs-brigade-compose-strip-never-empties-the-prompt ()
+  "A request that is only routing still leaves something to edit.
+
+Stripping it to nothing would make the menu refuse to create anything
+with no hint why."
+  (skip-unless (featurep 'cmacs-brigade-compose))
+  (cmacs-brigade-agent-reload)
+  (let ((out (cmacs-brigade-compose--strip-choices "use grok, model grok-4.5")))
+    (should (string-match-p "[[:alnum:]]" out))
+    (should (equal out "use grok, model grok-4.5"))))
+
+(ert-deftest cmacs-brigade-compose-strip-keeps-a-subject-mention ()
+  "A qualifier inside a noun phrase is not a choice being made.
+
+The extraction is the eager half here and may still pick a model out of
+\"the sonnet model documentation\" -- which is visible in the menu and one
+key to clear.  The prompt is the half that must not be damaged, and it is
+left exactly as written."
+  (skip-unless (featurep 'cmacs-brigade-compose))
+  (cmacs-brigade-agent-reload)
+  (let ((text "compare the sonnet model documentation with the haiku one"))
+    (should (equal text (cmacs-brigade-compose--strip-choices text)))))
+
 (provide 'cmacs-brigade-compose-tests)
 
 ;;; cmacs-brigade-compose-tests.el ends here

@@ -86,8 +86,20 @@ possible in this build.
 | =using grok-4.5 write a summary=                      | provider =grok=, model =grok-4.5=  |
 | =summarise the gemini pricing page=                   | nothing — a mention is not a choice |
 
-A cue word (=use=, =with=, =via=, =run=, =using=, …) has to precede the name, or
-=agent= follow it. Without that rule any mention matched, and asking about a
+A name counts as chosen when something introduces it — a cue word (=use=,
+=with=, =via=, =run=, =using=, …), a qualifier (=agent=, =model=, =provider=),
+or both — or when a qualifier follows it. So all of these read:
+
+#+begin_example
+run pwd with sonnet                     model  sonnet
+run pwd with the sonnet model           model  sonnet
+run pwd on claude-code, model sonnet    claude-code / sonnet
+use the researcher agent to look at X   agent  researcher
+use agent researcher for this           agent  researcher
+have researcher do this                 agent  researcher
+#+end_example
+
+A bare mention never counts. Without that rule any mention matched, and asking about a
 vendor's pricing page silently routed the task to that vendor.
 
 Whatever is read out is also *removed from the prompt*. "Run the command pwd
@@ -104,11 +116,21 @@ grok, which it reasonably finds confusing:
 | =summarise the gemini pricing page=               | unchanged — nothing was read out |
 | =with grok, summarise the grok pricing page=      | summarise the grok pricing page  |
 
-The removal is driven by the same cue rule as the extraction, so it can only
-ever take out what became a field. The last row is the case that shows it: the
+The removal is driven by the same rule as the extraction, so it can only ever
+take out what became a field. The last row is the case that shows it: the
 first =grok= was a choice and the second is the subject, and only the choice
 goes. The drafted path is cleaned too — the model is told to leave the routing
 out of the brief, and regularly does not.
+
+The two halves are deliberately not equally eager. Extraction may over-read —
+=compare the sonnet model documentation= will set the model field, because
+"the sonnet model" is exactly the shape of a choice — and that is visible in
+the menu and one key to clear. The prompt is the half that must not be damaged,
+so it only loses a phrase that was *introduced* as a choice; that sentence
+reaches the agent exactly as written. A request that is nothing but routing
+(=use grok, model grok-4.5=) keeps its text rather than being stripped to
+nothing, which would leave the menu refusing to create anything with no hint
+why.
 
 *** Titles
 
