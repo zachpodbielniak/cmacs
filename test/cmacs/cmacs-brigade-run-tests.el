@@ -16,6 +16,11 @@
 (require 'cmacs-brigade-subagent nil 'noerror)
 (require 'cmacs-ai-chat nil 'noerror)
 (require 'cl-lib)
+
+(defconst cmacs-brigade-tests--root
+  (expand-file-name "../.." (file-name-directory
+                             (or load-file-name buffer-file-name)))
+  "Repository root, for the cross-surface parity checks.")
 (require 'cmacs-brigade-dashboard nil 'noerror)
 
 (defun cmacs-brigade-run-tests--available-p ()
@@ -723,6 +728,74 @@ gate that actually matters."
   (should-not (member "--dangerously-skip-permissions"
                       (cmacs-brigade--worker-command
                        'shell '(:model nil) "/tmp/p" nil))))
+
+
+;;;; Subagent controls on every surface
+;;
+;; One registration is supposed to light up in-process agents, CLI agents
+;; over MCP, external MCP clients, a chat buffer, D-Bus and emacsctl.
+;; These check the ones reachable from Elisp; the D-Bus and emacsctl
+;; halves are C and are covered by the parity test below.
+
+(ert-deftest cmacs-brigade-subagent-tools-reach-the-mcp-mirror ()
+  "The C mirror is what the MCP server publishes from.
+
+An Elisp tool that never reaches the mirror is invisible to every MCP
+client, which is the whole external surface."
+  (skip-unless (and (featurep 'cmacs-brigade-subagent)
+                    (fboundp 'cmacs-brigade--mirror-names)))
+  (let ((mirrored (cmacs-brigade--mirror-names)))
+    (dolist (n '("agent_spawn" "agent_status" "agent_result"
+                 "agent_cancel" "agent_list"))
+      (should (member n mirrored)))))
+
+(ert-deftest cmacs-brigade-chat-can-spawn-not-just-watch ()
+  "A chat buffer gets the destructive agent tools too.
+
+`cmacs-brigade-install-tools' filters destructive tools by default, which
+left a chat able to inspect subagents and never start one.  A chat has a
+human in it and these carry :confirm, so the confirmation is the gate."
+  (skip-unless (and (featurep 'cmacs-brigade-subagent)
+                    (fboundp 'cmacs-ai-tools-new)))
+  (let ((ex (cmacs-ai-tools-new)))
+    (unwind-protect
+        (progn
+          (cmacs-brigade-chat-install-tools ex 'claude)
+          (let ((installed (cmacs-ai-tools-list ex)))
+            (dolist (n '("agent_spawn" "agent_cancel"
+                         "agent_status" "agent_result" "agent_list"))
+              (should (member n installed)))))
+      (cmacs-ai-tools-free ex))))
+
+(ert-deftest cmacs-brigade-dbus-and-mcp-agree-on-the-verbs ()
+  "The D-Bus interface exposes a method per subagent tool.
+
+Read out of the C source rather than a live bus so it holds in batch:
+the point is the sync discipline, not the transport."
+  (skip-unless (featurep 'cmacs-brigade-subagent))
+  (let ((file (expand-file-name "cmacs/dbus/cmacs-dbus-iface-brigade.c"
+                                cmacs-brigade-tests--root)))
+    (skip-unless (file-readable-p file))
+    (let ((text (with-temp-buffer (insert-file-contents file)
+                                  (buffer-string))))
+      (dolist (m '("Spawn" "Status" "Result" "Cancel" "List"))
+        (should (string-match-p (format "name='%s'" m) text)))
+      ;; and each routes to the matching tool
+      (dolist (tool '("agent_spawn" "agent_status" "agent_result"
+                      "agent_cancel" "agent_list"))
+        (should (string-search tool text))))))
+
+(ert-deftest cmacs-brigade-emacsctl-exposes-the-verbs ()
+  "emacsctl has a brigade command per D-Bus method."
+  (skip-unless (featurep 'cmacs-brigade-subagent))
+  (let ((file (expand-file-name "cmacs/emacsctl/ctl-cmd-subsys.c"
+                                cmacs-brigade-tests--root)))
+    (skip-unless (file-readable-p file))
+    (let ((text (with-temp-buffer (insert-file-contents file)
+                                  (buffer-string))))
+      (dolist (verb '("brigade spawn" "brigade status" "brigade result"
+                      "brigade cancel" "brigade list" "brigade agents"))
+        (should (string-search verb text))))))
 
 (provide 'cmacs-brigade-run-tests)
 

@@ -130,6 +130,9 @@ static guint reg_iface_lrg      = 0;
 #ifdef HAVE_CMACS_CALCULATOR
 static guint reg_iface_calculator = 0;
 #endif
+#ifdef HAVE_CMACS_AI_BRIGADE
+static guint reg_iface_brigade  = 0;
+#endif
 
 /* ── Public connection / name accessors ─────────────────────────── */
 
@@ -425,6 +428,12 @@ register_modules (GDBusConnection *conn, GError **error)
   if (reg_iface_calculator == 0) return FALSE;
 #endif
 
+#ifdef HAVE_CMACS_AI_BRIGADE
+  reg_iface_brigade = cmacs_dbus_iface_brigade_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_brigade == 0) return FALSE;
+#endif
+
   return TRUE;
 }
 
@@ -432,6 +441,11 @@ static void
 unregister_modules (GDBusConnection *conn)
 {
   /* Phase 6 MCP-parity ifaces (reverse registration order). */
+#ifdef HAVE_CMACS_AI_BRIGADE
+  if (reg_iface_brigade)
+    { cmacs_dbus_iface_brigade_unregister (conn, reg_iface_brigade);
+      reg_iface_brigade = 0; }
+#endif
 #ifdef HAVE_CMACS_CALCULATOR
   if (reg_iface_calculator)
     { cmacs_dbus_iface_calculator_unregister (conn, reg_iface_calculator);

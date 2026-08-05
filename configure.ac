@@ -981,6 +981,13 @@ if test "$with_cmacs_ai_brigade" != "no"; then
   if test "$CMACS_BRIGADE_HAVE_PODMAN" != "yes"; then
     AC_MSG_WARN([cmacs-ai-brigade: podman not found, container isolation will be unavailable at runtime])
   fi
+  dnl The D-Bus subagent surface lives with the other dbus ifaces (it is
+  dnl dbus/eval-dispatch plumbing, not brigade's own objects), so it only
+  dnl builds when BOTH the brigade and cmacs-glib are enabled --- matching
+  dnl the file's HAVE_CMACS_GLIB && HAVE_CMACS_AI_BRIGADE guard.
+  if test "$with_cmacs_glib" != "no"; then
+    CMACS_GLIB_OBJ="$CMACS_GLIB_OBJ cmacs-dbus-iface-brigade.o"
+  fi
 fi
 if test "$with_cmacs_libregnum" != "no"; then
   if test "$with_cmacs_glib" = "no"; then

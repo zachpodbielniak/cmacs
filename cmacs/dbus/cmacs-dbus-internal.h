@@ -148,6 +148,9 @@ CMACS_DBUS_IFACE_DECL (lrg)
 #ifdef HAVE_CMACS_CALCULATOR
 CMACS_DBUS_IFACE_DECL (calculator)
 #endif
+#ifdef HAVE_CMACS_AI_BRIGADE
+CMACS_DBUS_IFACE_DECL (brigade)
+#endif
 
 /* Phase 4 desktop integration. */
 guint cmacs_dbus_application_register   (GDBusConnection *, const gchar *, GError **);

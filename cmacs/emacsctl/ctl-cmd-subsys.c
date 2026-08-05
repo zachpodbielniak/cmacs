@@ -43,6 +43,23 @@ static const CtlMethodSpec subsys_specs[] = {
   { "ai providers", "List configured AI providers",
     CTL_IFACE_AI, "ListProviders", NULL, CTL_REPLY_STRING },
 
+  /* brigade --- subagent control.  Same five verbs as the agent_* tools
+   * an agent gets over MCP, so a shell script and a model drive the
+   * queue through the same path. */
+  { "brigade spawn", "Hand a task to an agent; prints the task id",
+    CTL_IFACE_BRIGADE, "Spawn", "s:task s?:agent s?:title",
+    CTL_REPLY_STRING },
+  { "brigade status", "State, turns, tokens and cost of a task",
+    CTL_IFACE_BRIGADE, "Status", "s:id", CTL_REPLY_STRING },
+  { "brigade result", "What a task produced",
+    CTL_IFACE_BRIGADE, "Result", "s:id", CTL_REPLY_STRING },
+  { "brigade cancel", "Stop a running task",
+    CTL_IFACE_BRIGADE, "Cancel", "s:id", CTL_REPLY_STRING },
+  { "brigade list", "Every known task with its state",
+    CTL_IFACE_BRIGADE, "List", NULL, CTL_REPLY_STRING },
+  { "brigade agents", "Agent definitions available to spawn",
+    CTL_IFACE_BRIGADE, "Agents", NULL, CTL_REPLY_STRING },
+
   /* gsurf */
   { "gsurf open", "Open a URL in a new gsurf buffer",
     CTL_IFACE_GSURF, "Open", "s:url", CTL_REPLY_STRING },

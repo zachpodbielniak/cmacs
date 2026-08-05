@@ -142,6 +142,29 @@ Spawning is deliberately *not* named =brigade_spawn=. The allowlist refuses ever
 
 =cmacs-brigade-subagent-max-depth= (2) bounds nesting: a subagent that can spawn can spawn something that spawns, and a runaway tree is expensive in a way that is not noticed until the bill.
 
+** On every surface
+
+One registration reaches all of them:
+
+| Surface | How |
+|---------+-----|
+| in-process HTTP agents | tools on the agent's executor |
+| CLI agents | over the =emacs --mcp-relay= bridge, scoped by the agent's token |
+| external MCP clients | cmacs's MCP server |
+| a =cmacs-ai= chat buffer | see below |
+| D-Bus | =org.cmacs.Editor1.Brigade= — =Spawn=, =Status=, =Result=, =Cancel=, =List=, =Agents= |
+| =emacsctl= | =emacsctl brigade spawn/status/result/cancel/list/agents= |
+
+D-Bus and emacsctl exist because they reach a running cmacs from /outside/ it — a shell script, a systemd unit, a cron job, another machine over the emacsctl ssh tunnel — with no MCP client and no agent involved:
+
+#+begin_src sh
+emacsctl brigade spawn "survey what changed in deps/ this week" researcher
+emacsctl brigade list
+emacsctl brigade result <id>
+#+end_src
+
+Both route through the same tool the model calls, so a script and an agent drive the same queue, concurrency cap and state machine. Confirmation is bypassed on the D-Bus path: it exists so an /agent/ cannot start paid work unattended, and a D-Bus caller is the session owner, who already has =org.cmacs.Editor1.Eval= on the same bus. It could not work anyway — RPC evals bind =inhibit-interaction=, so a prompt inside a dispatch signals rather than asking.
+
 ** In a chat buffer
 
 A =cmacs-ai= chat gets the =agent= and =memory= groups, so you can spawn from a conversation by hand. =cmacs-brigade-chat-tools= changes which groups, or nil for none.

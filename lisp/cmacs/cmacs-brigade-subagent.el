@@ -260,7 +260,12 @@ useful to have by hand and safe to hand a model unprompted."
   "Add the brigade's tools to a cmacs-ai chat EXECUTOR."
   (when (and cmacs-brigade-chat-tools executor)
     (condition-case err
-        (cmacs-brigade-install-tools executor cmacs-brigade-chat-tools)
+        ;; include-destructive: a chat buffer has a human in it, and
+        ;; agent_spawn and agent_cancel are the whole point of having
+        ;; these here.  They carry :confirm \='ask, so the confirmation
+        ;; is the gate rather than the filter -- excluding them left a
+        ;; chat that could inspect subagents and never start one.
+        (cmacs-brigade-install-tools executor cmacs-brigade-chat-tools nil t)
       (error (message "cmacs-brigade: could not add tools to the chat: %s"
                       (error-message-string err))))))
 
