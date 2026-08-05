@@ -265,6 +265,19 @@ A cache, not the record: the plan file owns the prompt.  This only
 covers plans that have no file to re-read -- an adopted buffer that was
 never saved -- and saves a file read on the common path.")
 
+(defun cmacs-brigade-plan-task-property (plan id property)
+  "Return PROPERTY of task ID in PLAN, or nil.
+
+Read back from the org file for the same reason the prompt is: the
+runtime record is C-owned and holds runtime fields only, and anything the
+human wrote is intent."
+  (when (and plan (stringp plan) (file-readable-p plan))
+    (with-current-buffer (find-file-noselect plan)
+      (save-excursion
+        (when-let* ((marker (gethash id (cmacs-brigade-plan--id-index))))
+          (goto-char marker)
+          (org-entry-get nil property))))))
+
 (defun cmacs-brigade-plan-task-prompt (plan id)
   "Return the prompt body for task ID in PLAN.
 

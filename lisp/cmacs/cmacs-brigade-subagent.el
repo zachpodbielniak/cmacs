@@ -45,8 +45,15 @@ and cancellable as a task you wrote by hand."
   :type '(choice (const :tag "subagents.org in the plan directory") file)
   :group 'cmacs-brigade)
 
-(defcustom cmacs-brigade-subagent-default-agent nil
-  "Agent used when a spawn names none.  nil means the first registered."
+(defcustom cmacs-brigade-subagent-default-agent 'general
+  "Agent used when a spawn names none.
+
+`general\=' is a neutral agent that ships with cmacs.  It matters that the
+default is deliberate: the fallback used to be whichever agent sorted
+first, which on a machine with `~/.claude/agents\=' meant every unqualified
+spawn silently inherited a code reviewer\='s system prompt.
+
+nil restores that alphabetical fallback."
   :type '(choice (const :tag "First registered" nil) symbol)
   :group 'cmacs-brigade)
 
@@ -104,16 +111,30 @@ tree is expensive in a way that is hard to notice until the bill.  Depth
   "The task that spawned TASK-ID, or nil."
   (gethash task-id cmacs-brigade-subagent--parent))
 
-(defun cmacs-brigade-subagent-spawn (agent task &optional title parent model)
+(defun cmacs-brigade-subagent-spawn (agent task &optional title parent model
+                                           directory)
   "Queue TASK for AGENT and return the new task id.
 
 PARENT, when given, is the task doing the spawning; it bounds depth and
 puts the pair on the dashboard as a tree.  MODEL overrides the agent's
 own, as \"provider/model\"; nil keeps whatever the agent definition
 says, which is the usual case."
-  (let* ((agent (or agent cmacs-brigade-subagent-default-agent
+  (let* ((agent (or agent
+                    ;; Only fall through when the named default is not
+                    ;; loaded: a missing `general' should not silently
+                    ;; become whatever sorts first.
+                    (and cmacs-brigade-subagent-default-agent
+                         (cmacs-brigade-agent-get
+                          cmacs-brigade-subagent-default-agent)
+                         cmacs-brigade-subagent-default-agent)
                     (car (cmacs-brigade-registry-list 'agent))))
-         (depth (if parent (1+ (cmacs-brigade-subagent-depth parent)) 0)))
+         (depth (if parent (1+ (cmacs-brigade-subagent-depth parent)) 0))
+         ;; Captured before the plan buffer is opened below: inside that
+         ;; `with-current-buffer', `default-directory' is the plan file's
+         ;; directory, so recording it there wrote the wrong answer --
+         ;; the notes tree rather than the project the spawn came from.
+         (cwd (file-name-as-directory
+               (expand-file-name (or directory default-directory)))))
     (unless agent
       (signal 'cmacs-brigade-error (list "no agent definitions are loaded")))
     (unless (cmacs-brigade-agent-get agent)
@@ -143,6 +164,7 @@ says, which is the usual case."
                   ;; hand-written one does.
                   (if (and model (not (string-empty-p model)))
                       (format "  :MODEL:  %s\n" model) "")
+                  (format "  :CWD:    %s\n" (abbreviate-file-name cwd))
                   (if parent (format "  :SPAWNED-BY: %s\n" parent) "")
                   "  :END:\n")
           (insert "  " task "\n")

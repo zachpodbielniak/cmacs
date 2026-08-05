@@ -35,6 +35,7 @@
 
 (declare-function cmacs-brigade-plan-adopt "cmacs-brigade-plan")
 (declare-function cmacs-brigade-plan-task-prompt "cmacs-brigade-plan")
+(declare-function cmacs-brigade-plan-task-property "cmacs-brigade-plan")
 
 (defcustom cmacs-brigade-max-concurrent 4
   "How many agents may run at once.
@@ -311,8 +312,18 @@ Returns the text to keep.  RAW unchanged when it is not a report."
     (if (null json) raw
       (let* ((usage (alist-get 'usage json))
              (turns (alist-get 'num_turns json))
-             (in (or (alist-get 'input_tokens usage)
-                     (alist-get 'inputTokens usage)))
+             ;; Cache creation and cache reads are billed, and for a CLI
+             ;; agent they dwarf the rest: a "say ok" turn reported 10
+             ;; input tokens against 28k cache-creation and 22k
+             ;; cache-read.  Counting only input_tokens made the cost
+             ;; look two orders of magnitude wrong when it was the token
+             ;; figure that was incomplete.
+             (in (+ (or (alist-get 'input_tokens usage)
+                        (alist-get 'inputTokens usage) 0)
+                    (or (alist-get 'cache_creation_input_tokens usage)
+                        (alist-get 'cacheCreationInputTokens usage) 0)
+                    (or (alist-get 'cache_read_input_tokens usage)
+                        (alist-get 'cacheReadInputTokens usage) 0)))
              (out (or (alist-get 'output_tokens usage)
                       (alist-get 'outputTokens usage)))
              (cost (alist-get 'total_cost_usd json))
@@ -428,6 +439,16 @@ warning on stdout before its report."
     (condition-case err
         (progn
           (setq prepared (cmacs-brigade-isolation-prepare isolation task-id))
+          ;; A :CWD: recorded when the task was created wins over
+          ;; whatever `default-directory' the isolation backend saw.  By
+          ;; the time a task starts the current buffer is whatever the
+          ;; main loop happens to be in, so `none' isolation was picking
+          ;; up an unrelated project -- a spawn from a chat ran in the
+          ;; wrong tree.  A real sandbox still decides its own cwd.
+          (when (eq isolation 'none)
+            (when-let* ((recorded (cmacs-brigade--task-cwd record)))
+              (setq prepared (plist-put (copy-sequence prepared)
+                                        :cwd recorded))))
           (setq endpoint (cmacs-brigade-host-provision task-id allowlist))
           (setq proc (funcall (plist-get worker :start)
                               task-id agent
@@ -465,6 +486,17 @@ warning on stdout before its report."
         (when (and text (not (string-empty-p text)))
           (push text parts))))
     (string-join (nreverse (delq nil parts)) "\n\n")))
+
+(defun cmacs-brigade--task-cwd (record)
+  "Where RECORD asked to run, or nil.
+
+Expanded here rather than at write time so the property stays readable
+in the plan -- it is written abbreviated, and a subprocess does not
+expand a tilde."
+  (when-let* ((raw (cmacs-brigade-plan-task-property
+                    (plist-get record :plan) (plist-get record :id) "CWD")))
+    (let ((dir (expand-file-name raw)))
+      (and (file-directory-p dir) (file-name-as-directory dir)))))
 
 (defun cmacs-brigade--task-prompt (record)
   "The task text for RECORD.

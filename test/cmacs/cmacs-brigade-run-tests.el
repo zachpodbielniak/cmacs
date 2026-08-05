@@ -286,7 +286,11 @@ a `delete-process' aimed at whatever it did return."
   (skip-unless (cmacs-brigade-run-tests--available-p))
   (cmacs-brigade-register-agent :name 'bad-worker-agent :prompt "p"
                                 :worker 'no-such-worker :isolation 'none)
-  (let ((id "worker-dispatch-3"))
+  ;; Unlimited: earlier tests leave entries in the run table, and the
+  ;; concurrency cap would refuse the start before the worker is ever
+  ;; looked up -- which is not what this asserts.
+  (let ((cmacs-brigade-max-concurrent 0)
+        (id "worker-dispatch-3"))
     (cmacs-brigade-task-adopt id "plan.org" "bad-worker-agent" "t")
     (cmacs-brigade-task-transition id 'queued)
     (unwind-protect
@@ -1128,6 +1132,125 @@ budget accounting and can recurse into itself through `ai_call'.  The
     (let ((out (cmacs-brigade-call-tool "agent_spawn"
                                         "{\"task\":\"x\"}" "grok")))
       (should (string-match-p "needs approval" out)))))
+
+
+;;;; The default agent, and where a spawn runs
+
+(ert-deftest cmacs-brigade-ships-a-neutral-default-agent ()
+  "An unqualified spawn gets `general', not whatever sorts first.
+
+The fallback used to be the alphabetically first registered agent, so on
+a machine with ~/.claude/agents every unqualified spawn silently
+inherited a code reviewer's system prompt."
+  (skip-unless (featurep 'cmacs-brigade-subagent))
+  (should (eq 'general cmacs-brigade-subagent-default-agent))
+  (let ((def (cmacs-brigade-agent-get 'general)))
+    (should def)
+    (should (equal "claude-code/sonnet" (plist-get def :model)))
+    ;; neutral: it must not read as any particular speciality
+    (should-not (string-match-p "review\\|critic\\|librarian"
+                                (downcase (plist-get def :prompt))))))
+
+(ert-deftest cmacs-brigade-default-agent-is-not-alphabetical-luck ()
+  "`general' is chosen because it is named, not because it sorts first."
+  (skip-unless (featurep 'cmacs-brigade-subagent))
+  (cmacs-brigade-register-agent :name 'aaa-would-sort-first :prompt "p")
+  ;; This one now sorts first, so the old fallback would pick it.  What
+  ;; must hold is that the spawn still uses the named default.
+  (should (eq 'aaa-would-sort-first
+              (car (cmacs-brigade-registry-list 'agent))))
+  (let ((dir (file-name-as-directory (make-temp-file "brigade-def" t))))
+    (unwind-protect
+        (let ((cmacs-brigade-plan-directory dir)
+              (cmacs-brigade-subagent-plan (expand-file-name "s.org" dir)))
+          (cl-letf (((symbol-function 'cmacs-brigade-start-task) #'ignore))
+            (let ((id (cmacs-brigade-subagent-spawn nil "x")))
+              (should (equal "general"
+                             (plist-get (cmacs-brigade-task-get id) :agent))))))
+      (dolist (b (buffer-list))
+        (when (and (buffer-file-name b)
+                   (string-prefix-p dir (buffer-file-name b)))
+          (with-current-buffer b (set-buffer-modified-p nil))
+          (kill-buffer b)))
+      (delete-directory dir t))))
+
+(ert-deftest cmacs-brigade-spawn-records-where-it-came-from ()
+  "The spawn's directory is recorded, not the plan file's.
+
+Captured before the plan buffer is opened: inside that
+`with-current-buffer', `default-directory' is the notes tree, which is
+what a spawn was previously recording and running in."
+  (skip-unless (featurep 'cmacs-brigade-subagent))
+  (let* ((root (file-name-as-directory (make-temp-file "brigade-cwd" t)))
+         (plans (expand-file-name "plans/" root))
+         (proj (expand-file-name "proj/" root)))
+    (unwind-protect
+        (progn
+          (make-directory plans t)
+          (make-directory proj t)
+          (let ((cmacs-brigade-plan-directory plans)
+                (cmacs-brigade-subagent-plan (expand-file-name "s.org" plans)))
+            (cl-letf (((symbol-function 'cmacs-brigade-start-task) #'ignore))
+              (let* ((default-directory proj)
+                     (id (cmacs-brigade-subagent-spawn nil "x"))
+                     (rec (cmacs-brigade-task-get id)))
+                (should (equal (file-truename proj)
+                               (file-truename (cmacs-brigade--task-cwd rec))))
+                ;; and it is read from the record, so the buffer that
+                ;; happens to be current when the task starts is
+                ;; irrelevant -- which is the actual bug
+                (let ((default-directory temporary-file-directory))
+                  (should (equal (file-truename proj)
+                                 (file-truename
+                                  (cmacs-brigade--task-cwd rec)))))))))
+      (dolist (b (buffer-list))
+        (when (and (buffer-file-name b)
+                   (string-prefix-p root (buffer-file-name b)))
+          (with-current-buffer b (set-buffer-modified-p nil))
+          (kill-buffer b)))
+      (delete-directory root t))))
+
+(ert-deftest cmacs-brigade-usage-counts-cache-tokens ()
+  "Cache creation and reads are billed, so they are counted.
+
+A \"say ok\" turn reports ten input tokens against twenty-eight thousand
+cache-creation and twenty-two thousand cache-read.  Counting only
+input_tokens made the cost look two orders of magnitude wrong when it
+was the token figure that was incomplete."
+  (skip-unless (and (featurep 'cmacs-brigade-run)
+                    (fboundp 'cmacs-brigade-task-adopt)))
+  (let ((id "usage-cache-probe"))
+    (cmacs-brigade-task-adopt id "p.org" nil "t")
+    (unwind-protect
+        (progn
+          (cmacs-brigade--parse-cli-report
+           (concat "{\"result\":\"ok\",\"num_turns\":1,"
+                   "\"total_cost_usd\":0.0587,"
+                   "\"usage\":{\"input_tokens\":10,\"output_tokens\":48,"
+                   "\"cache_creation_input_tokens\":28123,"
+                   "\"cache_read_input_tokens\":21739}}")
+           id)
+          (let ((r (cmacs-brigade-task-get id)))
+            (should (= 49872 (plist-get r :in-tokens)))
+            (should (= 48 (plist-get r :out-tokens)))
+            (should (= 58700 (plist-get r :cost-micros)))))
+      (ignore-errors (cmacs-brigade-task-forget id)))))
+
+(ert-deftest cmacs-brigade-usage-without-cache-fields-still-works ()
+  "A provider that reports no cache figures is unaffected."
+  (skip-unless (and (featurep 'cmacs-brigade-run)
+                    (fboundp 'cmacs-brigade-task-adopt)))
+  (let ((id "usage-plain-probe"))
+    (cmacs-brigade-task-adopt id "p.org" nil "t")
+    (unwind-protect
+        (progn
+          (cmacs-brigade--parse-cli-report
+           "{\"result\":\"ok\",\"usage\":{\"input_tokens\":7,\"output_tokens\":9}}"
+           id)
+          (let ((r (cmacs-brigade-task-get id)))
+            (should (= 7 (plist-get r :in-tokens)))
+            (should (= 9 (plist-get r :out-tokens)))))
+      (ignore-errors (cmacs-brigade-task-forget id)))))
 
 (provide 'cmacs-brigade-run-tests)
 

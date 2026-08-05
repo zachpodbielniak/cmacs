@@ -209,3 +209,15 @@ emacsctl brigade spawn "survey deps/" researcher "" claude-code/opus
 #+end_src
 
 and on D-Bus as =Providers=, =Models= and =Spawn='s fourth argument.
+
+* The default agent
+
+An unqualified spawn uses =general=, a neutral agent that ships with cmacs on =claude-code/sonnet=. =cmacs-brigade-subagent-default-agent= names it.
+
+It is named rather than inferred on purpose. The fallback used to be whichever agent sorted first, so on a machine with =~/.claude/agents= every unqualified spawn silently inherited a code reviewer's system prompt — the spawn worked, the result was subtly wrong, and nothing said why.
+
+* Where a spawned agent runs
+
+The directory the spawn came from, recorded as =:CWD:= on the task when it is created.
+
+Captured at spawn time rather than read at start time, because by the time a task starts the current buffer is whatever the main loop happens to be in — so a spawn from a chat in one project would run in whichever project the editor was last sitting in. A =worktree= or =podman= agent still gets the directory its sandbox decides.
