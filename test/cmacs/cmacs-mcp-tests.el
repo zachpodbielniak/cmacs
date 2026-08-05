@@ -18,6 +18,12 @@
 
 (require 'ert)
 
+(defconst cmacs-mcp-tests--root
+  (expand-file-name "../.." (file-name-directory
+                             (or load-file-name buffer-file-name)))
+  "Repository root, captured at load: `load-file-name' is nil by the
+time a test body runs.")
+
 (defun cmacs-mcp-tests--available-p ()
   (and (fboundp 'cmacs-mcp-start) (fboundp 'cmacs-mcp-socket-path)))
 
@@ -92,6 +98,41 @@ that clears a machine which has already accumulated them."
           (cmacs-mcp-stop))
       (dolist (f (list live other))
         (ignore-errors (delete-file f))))))
+
+
+;;;; Missing tool arguments
+
+(ert-deftest cmacs-mcp-missing-argument-is-an-error-not-a-critical ()
+  "A tool called without a required argument answers, quietly.
+
+Arguments come from a model, so a missing one is ordinary input, not a
+programming error.  `json_object_get_string_member' asserts when the
+member is absent -- it still returns NULL, so the handlers behaved
+correctly, but every such call logged a Json-CRITICAL, which is fatal
+under G_DEBUG=fatal-criticals.  The handlers now use the with-default
+form, which returns NULL for an absent *or* null member without
+complaining."
+  (skip-unless (cmacs-mcp-tests--available-p))
+  (let ((file (expand-file-name "cmacs/mcp" cmacs-mcp-tests--root)))
+    (skip-unless (file-directory-p file))
+    ;; Asserted against the sources: the criticals happen in a live
+    ;; session against a running server, which ERT cannot observe.
+    (let ((offenders nil))
+      (dolist (f (directory-files file t "\\.c\\'"))
+        (with-temp-buffer
+          (insert-file-contents f)
+          (goto-char (point-min))
+          (while (re-search-forward
+                  "json_object_get_string_member ([^)]*\"" nil t)
+            ;; A literal key with no has_member guard on the same line is
+            ;; the shape that logs.
+            (let ((line (buffer-substring (line-beginning-position)
+                                          (line-end-position))))
+              (unless (string-match-p "has_member" line)
+                (push (format "%s: %s" (file-name-nondirectory f)
+                              (string-trim line))
+                      offenders))))))
+      (should (equal nil offenders)))))
 
 (provide 'cmacs-mcp-tests)
 

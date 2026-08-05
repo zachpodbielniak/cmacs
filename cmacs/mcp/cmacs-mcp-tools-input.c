@@ -35,7 +35,7 @@ handle_send_keys (McpServer   *server,
   (void) name;
   (void) user_data;
 
-  keys = json_object_get_string_member (arguments, "keys");
+  keys = json_object_get_string_member_with_default (arguments, "keys", NULL);
   if (keys == NULL)
     {
       result = mcp_tool_result_new (TRUE);
@@ -86,7 +86,7 @@ handle_execute_command (McpServer   *server,
   (void) name;
   (void) user_data;
 
-  command = json_object_get_string_member (arguments, "command");
+  command = json_object_get_string_member_with_default (arguments, "command", NULL);
   if (command == NULL)
     {
       result = mcp_tool_result_new (TRUE);

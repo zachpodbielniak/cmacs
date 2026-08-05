@@ -68,7 +68,7 @@ static gchar *
 cad_path_arg (JsonObject *a)
 {
   return cad_lisp_str (json_object_has_member (a, "path")
-    ? json_object_get_string_member (a, "path") : NULL);
+    ? json_object_get_string_member_with_default (a, "path", NULL) : NULL);
 }
 
 static McpToolResult *
@@ -93,7 +93,7 @@ handle_set_source (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
 {
   g_autofree gchar *p = cad_path_arg (a);
   g_autofree gchar *src = cad_lisp_str (json_object_has_member (a, "source")
-    ? json_object_get_string_member (a, "source") : NULL);
+    ? json_object_get_string_member_with_default (a, "source", NULL) : NULL);
   (void) s; (void) n; (void) u;
   return cad_eval_result
     (g_strdup_printf ("(cmacs-cad-mcp-set-source %s %s)", p, src));
@@ -104,9 +104,9 @@ handle_patch_source (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
 {
   g_autofree gchar *p = cad_path_arg (a);
   g_autofree gchar *old = cad_lisp_str (json_object_has_member (a, "old")
-    ? json_object_get_string_member (a, "old") : NULL);
+    ? json_object_get_string_member_with_default (a, "old", NULL) : NULL);
   g_autofree gchar *nw = cad_lisp_str (json_object_has_member (a, "new")
-    ? json_object_get_string_member (a, "new") : NULL);
+    ? json_object_get_string_member_with_default (a, "new", NULL) : NULL);
   (void) s; (void) n; (void) u;
   return cad_eval_result
     (g_strdup_printf ("(cmacs-cad-mcp-patch-source %s %s %s)", p, old, nw));
@@ -150,7 +150,7 @@ handle_section (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
 {
   g_autofree gchar *p = cad_path_arg (a);
   g_autofree gchar *axis = cad_lisp_str (json_object_has_member (a, "axis")
-    ? json_object_get_string_member (a, "axis") : "z");
+    ? json_object_get_string_member_with_default (a, "axis", NULL) : "z");
   double offset = json_object_has_member (a, "offset")
     ? json_object_get_double_member (a, "offset") : 0.0;
   (void) s; (void) n; (void) u;
@@ -163,9 +163,9 @@ handle_export (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
 {
   g_autofree gchar *p = cad_path_arg (a);
   g_autofree gchar *out = cad_lisp_str (json_object_has_member (a, "out")
-    ? json_object_get_string_member (a, "out") : NULL);
+    ? json_object_get_string_member_with_default (a, "out", NULL) : NULL);
   g_autofree gchar *fmt = cad_lisp_str (json_object_has_member (a, "format")
-    ? json_object_get_string_member (a, "format") : "stl");
+    ? json_object_get_string_member_with_default (a, "format", NULL) : "stl");
   (void) s; (void) n; (void) u;
   return cad_eval_result
     (g_strdup_printf ("(cmacs-cad-mcp-export %s %s %s)", p, out, fmt));
@@ -224,10 +224,10 @@ handle_print (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
 {
   g_autofree gchar *printer = cad_lisp_str
     (json_object_has_member (a, "printer")
-       ? json_object_get_string_member (a, "printer") : NULL);
+       ? json_object_get_string_member_with_default (a, "printer", NULL) : NULL);
   g_autofree gchar *gcode = cad_lisp_str
     (json_object_has_member (a, "gcode")
-       ? json_object_get_string_member (a, "gcode") : NULL);
+       ? json_object_get_string_member_with_default (a, "gcode", NULL) : NULL);
   gboolean start = json_object_has_member (a, "start")
     && json_object_get_boolean_member (a, "start");
   gboolean confirm = json_object_has_member (a, "confirm")
@@ -243,7 +243,7 @@ static gchar *
 cad_name_arg (JsonObject *a)
 {
   return cad_lisp_str (json_object_has_member (a, "name")
-    ? json_object_get_string_member (a, "name") : NULL);
+    ? json_object_get_string_member_with_default (a, "name", NULL) : NULL);
 }
 
 static McpToolResult *

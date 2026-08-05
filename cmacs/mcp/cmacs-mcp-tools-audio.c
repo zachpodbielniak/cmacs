@@ -55,7 +55,7 @@ handle_record_audio (McpServer *server, const gchar *name,
     }
   gdouble seconds = json_object_get_double_member (arguments, "seconds");
   const gchar *out = json_object_has_member (arguments, "output_path")
-                   ? json_object_get_string_member (arguments, "output_path")
+                   ? json_object_get_string_member_with_default (arguments, "output_path", NULL)
                    : NULL;
   g_autoptr (GError) err = NULL;
   g_autofree gchar *res =
@@ -85,9 +85,9 @@ handle_transcribe (McpServer *server, const gchar *name,
 {
   (void) server; (void) name; (void) user_data;
   const gchar *path = arguments && json_object_has_member (arguments, "audio_path")
-                    ? json_object_get_string_member (arguments, "audio_path") : NULL;
+                    ? json_object_get_string_member_with_default (arguments, "audio_path", NULL) : NULL;
   const gchar *lang = arguments && json_object_has_member (arguments, "language")
-                    ? json_object_get_string_member (arguments, "language") : "en";
+                    ? json_object_get_string_member_with_default (arguments, "language", NULL) : "en";
   if (!path)
     {
       McpToolResult *r = mcp_tool_result_new (TRUE);
@@ -134,9 +134,9 @@ handle_synthesize_speech (McpServer *server, const gchar *name,
 {
   (void) server; (void) name; (void) user_data;
   const gchar *text = arguments && json_object_has_member (arguments, "text")
-                    ? json_object_get_string_member (arguments, "text") : NULL;
+                    ? json_object_get_string_member_with_default (arguments, "text", NULL) : NULL;
   const gchar *out  = arguments && json_object_has_member (arguments, "output_path")
-                    ? json_object_get_string_member (arguments, "output_path") : NULL;
+                    ? json_object_get_string_member_with_default (arguments, "output_path", NULL) : NULL;
   if (!text)
     {
       McpToolResult *r = mcp_tool_result_new (TRUE);

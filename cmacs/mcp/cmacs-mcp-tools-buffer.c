@@ -67,7 +67,7 @@ handle_get_buffer_content (McpServer   *server,
   (void) name;
   (void) user_data;
 
-  buffer_name = json_object_get_string_member (arguments, "buffer");
+  buffer_name = json_object_get_string_member_with_default (arguments, "buffer", NULL);
   if (buffer_name == NULL)
     {
       result = mcp_tool_result_new (TRUE);
@@ -119,8 +119,8 @@ handle_set_buffer_content (McpServer   *server,
   (void) name;
   (void) user_data;
 
-  buffer_name = json_object_get_string_member (arguments, "buffer");
-  content = json_object_get_string_member (arguments, "content");
+  buffer_name = json_object_get_string_member_with_default (arguments, "buffer", NULL);
+  content = json_object_get_string_member_with_default (arguments, "content", NULL);
   if (buffer_name == NULL || content == NULL)
     {
       result = mcp_tool_result_new (TRUE);
@@ -178,7 +178,7 @@ handle_create_buffer (McpServer   *server,
   (void) name;
   (void) user_data;
 
-  buffer_name = json_object_get_string_member (arguments, "name");
+  buffer_name = json_object_get_string_member_with_default (arguments, "name", NULL);
   if (buffer_name == NULL)
     {
       result = mcp_tool_result_new (TRUE);
@@ -187,7 +187,7 @@ handle_create_buffer (McpServer   *server,
       return result;
     }
 
-  content = json_object_get_string_member (arguments, "content");
+  content = json_object_get_string_member_with_default (arguments, "content", NULL);
   if (content != NULL)
     {
       g_autofree gchar *escaped = g_strescape (content, NULL);
@@ -227,7 +227,7 @@ handle_kill_buffer (McpServer   *server,
   (void) name;
   (void) user_data;
 
-  buffer_name = json_object_get_string_member (arguments, "buffer");
+  buffer_name = json_object_get_string_member_with_default (arguments, "buffer", NULL);
   if (buffer_name == NULL)
     {
       result = mcp_tool_result_new (TRUE);
@@ -262,7 +262,7 @@ handle_switch_to_buffer (McpServer   *server,
   (void) name;
   (void) user_data;
 
-  buffer_name = json_object_get_string_member (arguments, "buffer");
+  buffer_name = json_object_get_string_member_with_default (arguments, "buffer", NULL);
   if (buffer_name == NULL)
     {
       result = mcp_tool_result_new (TRUE);
@@ -298,7 +298,7 @@ handle_save_buffer (McpServer   *server,
   (void) name;
   (void) user_data;
 
-  buffer_name = json_object_get_string_member (arguments, "buffer");
+  buffer_name = json_object_get_string_member_with_default (arguments, "buffer", NULL);
   if (buffer_name == NULL)
     {
       result = mcp_tool_result_new (TRUE);
@@ -350,7 +350,7 @@ handle_find_file (McpServer   *server,
   (void) name;
   (void) user_data;
 
-  path = json_object_get_string_member (arguments, "path");
+  path = json_object_get_string_member_with_default (arguments, "path", NULL);
   if (path == NULL)
     {
       result = mcp_tool_result_new (TRUE);

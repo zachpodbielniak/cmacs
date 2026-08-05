@@ -52,7 +52,7 @@ gowl_eval (const gchar *expr)
 static const gchar *
 gowl_by_field (JsonObject *a)
 {
-  const gchar *by = json_object_get_string_member (a, "by");
+  const gchar *by = json_object_get_string_member_with_default (a, "by", NULL);
   if (by != NULL && g_strcmp0 (by, "title") == 0)
     return "title";
   return "app-id";
@@ -85,7 +85,7 @@ handle_gowl_spawn (McpServer *s, const gchar *n,
   g_autoptr (GError) error = NULL;
   const gchar *command;
   (void) s; (void) n; (void) u;
-  command = json_object_get_string_member (a, "command");
+  command = json_object_get_string_member_with_default (a, "command", NULL);
   if (command == NULL)
     {
       McpToolResult *r = mcp_tool_result_new (TRUE);
@@ -120,8 +120,8 @@ handle_gowl_find_client (McpServer *s, const gchar *n,
   g_autoptr (GError) error = NULL;
   const gchar *pattern, *by;
   (void) s; (void) n; (void) u;
-  pattern = json_object_get_string_member (a, "pattern");
-  by = json_object_get_string_member (a, "by");
+  pattern = json_object_get_string_member_with_default (a, "pattern", NULL);
+  by = json_object_get_string_member_with_default (a, "by", NULL);
   if (pattern == NULL)
     {
       McpToolResult *r = mcp_tool_result_new (TRUE);
@@ -154,7 +154,7 @@ handle_screensaver_set_wallpaper (McpServer *s, const gchar *n,
   const gchar *config = NULL;
   (void) s; (void) n; (void) u;
   if (a != NULL && json_object_has_member (a, "config"))
-    config = json_object_get_string_member (a, "config");
+    config = json_object_get_string_member_with_default (a, "config", NULL);
   return gowl_result (
     cmacs_dispatch_screensaver_set_wallpaper (config, &error), error);
 }
@@ -237,7 +237,7 @@ handle_gowl_set_monitor_transform (McpServer *s, const gchar *n,
   gint64 xform;
   (void) s; (void) n; (void) u;
 
-  name = json_object_get_string_member (a, "name");
+  name = json_object_get_string_member_with_default (a, "name", NULL);
   if (name == NULL)
     {
       McpToolResult *r = mcp_tool_result_new (TRUE);
@@ -264,7 +264,7 @@ handle_gowl_focus_client (McpServer *s, const gchar *n,
   g_autofree gchar *ep = NULL, *expr = NULL;
   (void) s; (void) n; (void) u;
 
-  pattern = json_object_get_string_member (a, "pattern");
+  pattern = json_object_get_string_member_with_default (a, "pattern", NULL);
   if (pattern == NULL)
     {
       McpToolResult *r = mcp_tool_result_new (TRUE);
@@ -288,7 +288,7 @@ handle_gowl_close_client (McpServer *s, const gchar *n,
   g_autofree gchar *ep = NULL, *expr = NULL;
   (void) s; (void) n; (void) u;
 
-  pattern = json_object_get_string_member (a, "pattern");
+  pattern = json_object_get_string_member_with_default (a, "pattern", NULL);
   if (pattern == NULL)
     {
       McpToolResult *r = mcp_tool_result_new (TRUE);
@@ -313,7 +313,7 @@ handle_gowl_set_client_geometry (McpServer *s, const gchar *n,
   gint64 x, y, w, h;
   (void) s; (void) n; (void) u;
 
-  pattern = json_object_get_string_member (a, "pattern");
+  pattern = json_object_get_string_member_with_default (a, "pattern", NULL);
   if (pattern == NULL
       || !json_object_has_member (a, "x")
       || !json_object_has_member (a, "y")
@@ -348,7 +348,7 @@ handle_gowl_set_layout (McpServer *s, const gchar *n,
   g_autofree gchar *el = NULL, *expr = NULL;
   (void) s; (void) n; (void) u;
 
-  layout = json_object_get_string_member (a, "layout");
+  layout = json_object_get_string_member_with_default (a, "layout", NULL);
   if (layout == NULL)
     {
       McpToolResult *r = mcp_tool_result_new (TRUE);
@@ -403,8 +403,8 @@ handle_gowl_screenshot (McpServer *s, const gchar *n,
 
   path = g_strdup_printf ("%s/cmacs-mcp-shot-%u.png",
                           g_get_tmp_dir (), g_random_int ());
-  pattern = json_object_get_string_member (a, "client");
-  mode = json_object_get_string_member (a, "mode");
+  pattern = json_object_get_string_member_with_default (a, "client", NULL);
+  mode = json_object_get_string_member_with_default (a, "mode", NULL);
   if (mode == NULL
       || (g_strcmp0 (mode, "desktop") != 0
           && g_strcmp0 (mode, "window") != 0

@@ -97,7 +97,7 @@ handle_project_read_file (McpServer *s, const gchar *n,
 
   (void) s; (void) n; (void) u;
 
-  path = json_object_get_string_member (a, "path");
+  path = json_object_get_string_member_with_default (a, "path", NULL);
   if (path == NULL)
     return project_error ("Missing required argument: path");
 
@@ -132,8 +132,8 @@ handle_project_write_file (McpServer *s, const gchar *n,
 
   (void) s; (void) n; (void) u;
 
-  path = json_object_get_string_member (a, "path");
-  content = json_object_get_string_member (a, "content");
+  path = json_object_get_string_member_with_default (a, "path", NULL);
+  content = json_object_get_string_member_with_default (a, "content", NULL);
   if (path == NULL || content == NULL)
     return project_error (
       "Missing required arguments: path, content");
@@ -171,7 +171,7 @@ handle_project_list_files (McpServer *s, const gchar *n,
 
   (void) s; (void) n; (void) u;
 
-  directory = json_object_get_string_member (a, "directory");
+  directory = json_object_get_string_member_with_default (a, "directory", NULL);
   ed = g_strescape (directory ? directory : ".", NULL);
   expr = project_expr (ed,
     "(if (file-directory-p target)"
@@ -209,7 +209,7 @@ handle_project_find_files (McpServer *s, const gchar *n,
 
   (void) s; (void) n; (void) u;
 
-  pattern = json_object_get_string_member (a, "pattern");
+  pattern = json_object_get_string_member_with_default (a, "pattern", NULL);
   if (pattern == NULL)
     return project_error ("Missing required argument: pattern");
 

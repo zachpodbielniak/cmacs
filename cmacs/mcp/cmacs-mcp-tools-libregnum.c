@@ -83,7 +83,7 @@ handle_add_primitive (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
   gint64 prim = json_object_has_member (a, "primitive")
     ? json_object_get_int_member (a, "primitive") : 1;
   g_autofree gchar *name = lrg_lisp_str (json_object_has_member (a, "name")
-    ? json_object_get_string_member (a, "name") : "Object");
+    ? json_object_get_string_member_with_default (a, "name", NULL) : "Object");
   (void) s; (void) n; (void) u;
   return lrg_eval_result (lrg_with_editor (g_strdup_printf
     ("(format \"added node %%S\""
@@ -97,9 +97,9 @@ handle_add_visual (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
   gint64 kind = json_object_has_member (a, "kind")
     ? json_object_get_int_member (a, "kind") : 2;
   g_autofree gchar *asset = lrg_lisp_str (json_object_has_member (a, "asset")
-    ? json_object_get_string_member (a, "asset") : NULL);
+    ? json_object_get_string_member_with_default (a, "asset", NULL) : NULL);
   g_autofree gchar *name = lrg_lisp_str (json_object_has_member (a, "name")
-    ? json_object_get_string_member (a, "name") : "Object");
+    ? json_object_get_string_member_with_default (a, "name", NULL) : "Object");
   (void) s; (void) n; (void) u;
   return lrg_eval_result (lrg_with_editor (g_strdup_printf
     ("(format \"added node %%S\""
@@ -144,7 +144,7 @@ static McpToolResult *
 handle_save (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
 {
   g_autofree gchar *path = lrg_lisp_str (json_object_has_member (a, "path")
-    ? json_object_get_string_member (a, "path") : "level.rlevel");
+    ? json_object_get_string_member_with_default (a, "path", NULL) : "level.rlevel");
   (void) s; (void) n; (void) u;
   return lrg_eval_result (lrg_with_editor (g_strdup_printf
     ("(progn (cmacs-libregnum-editor-save buf %s) \"saved\")", path)));
@@ -154,7 +154,7 @@ static McpToolResult *
 handle_open (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
 {
   g_autofree gchar *path = lrg_lisp_str (json_object_has_member (a, "path")
-    ? json_object_get_string_member (a, "path") : "level.rlevel");
+    ? json_object_get_string_member_with_default (a, "path", NULL) : "level.rlevel");
   (void) s; (void) n; (void) u;
   /* Require first: in a session that never loaded cmacs-libregnum.el the
    * entry command -- and the C->Elisp click dispatchers defined alongside

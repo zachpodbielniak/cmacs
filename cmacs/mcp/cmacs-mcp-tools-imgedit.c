@@ -72,7 +72,7 @@ static McpToolResult *
 handle_open (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
 {
   g_autofree gchar *path =
-    ie_lisp_str (json_object_get_string_member (a, "path"));
+    ie_lisp_str (json_object_get_string_member_with_default (a, "path", NULL));
   (void) s; (void) n; (void) u;
   return ie_eval_result (g_strdup_printf
     ("(let ((h (cmacs-imgedit-open %s)))"
@@ -84,7 +84,7 @@ static McpToolResult *
 handle_save (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
 {
   g_autofree gchar *path =
-    ie_lisp_str (json_object_get_string_member (a, "path"));
+    ie_lisp_str (json_object_get_string_member_with_default (a, "path", NULL));
   (void) s; (void) n; (void) u;
   return ie_eval_result (g_strdup_printf
     ("(progn (cmacs-imgedit-save %" G_GINT64_FORMAT " %s) \"saved\")",
@@ -122,7 +122,7 @@ handle_set_color (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
 static McpToolResult *
 handle_draw_shape (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
 {
-  const gchar *shape = json_object_get_string_member (a, "shape");
+  const gchar *shape = json_object_get_string_member_with_default (a, "shape", NULL);
   gint64 h = ie_int (a, "handle", 0);
   gint64 x1 = ie_int (a, "x1", 0), y1 = ie_int (a, "y1", 0);
   gint64 x2 = ie_int (a, "x2", 0), y2 = ie_int (a, "y2", 0);
@@ -178,7 +178,7 @@ static McpToolResult *
 handle_draw_text (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
 {
   g_autofree gchar *text =
-    ie_lisp_str (json_object_get_string_member (a, "text"));
+    ie_lisp_str (json_object_get_string_member_with_default (a, "text", NULL));
   (void) s; (void) n; (void) u;
   return ie_eval_result (g_strdup_printf
     ("(progn (cmacs-imgedit-push-undo %" G_GINT64_FORMAT ")"
@@ -193,7 +193,7 @@ static McpToolResult *
 handle_add_layer (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
 {
   g_autofree gchar *name = ie_lisp_str (json_object_has_member (a, "name")
-    ? json_object_get_string_member (a, "name") : NULL);
+    ? json_object_get_string_member_with_default (a, "name", NULL) : NULL);
   (void) s; (void) n; (void) u;
   return ie_eval_result (g_strdup_printf
     ("(format \"layer %%d\" (cmacs-imgedit-add-layer %" G_GINT64_FORMAT
@@ -228,7 +228,7 @@ static McpToolResult *
 handle_adjust (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
 {
   gint64 h = ie_int (a, "handle", 0);
-  const gchar *kind = json_object_get_string_member (a, "kind");
+  const gchar *kind = json_object_get_string_member_with_default (a, "kind", NULL);
   gdouble amt = json_object_has_member (a, "amount")
     ? json_object_get_double_member (a, "amount") : 0.0;
   gchar *op = NULL;
@@ -265,7 +265,7 @@ static McpToolResult *
 handle_filter (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
 {
   gint64 h = ie_int (a, "handle", 0);
-  const gchar *kind = json_object_get_string_member (a, "kind");
+  const gchar *kind = json_object_get_string_member_with_default (a, "kind", NULL);
   gint64 radius = ie_int (a, "radius", 2);
   gchar *op = NULL;
   (void) s; (void) n; (void) u;
@@ -296,7 +296,7 @@ static McpToolResult *
 handle_transform (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
 {
   gint64 h = ie_int (a, "handle", 0);
-  const gchar *kind = json_object_get_string_member (a, "kind");
+  const gchar *kind = json_object_get_string_member_with_default (a, "kind", NULL);
   gchar *op = NULL;
   (void) s; (void) n; (void) u;
   if (g_strcmp0 (kind, "flip-h") == 0)

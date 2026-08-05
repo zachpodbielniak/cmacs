@@ -127,9 +127,9 @@ handle_edit_buffer (McpServer *s, const gchar *n,
 
   (void) s; (void) n; (void) u;
 
-  buffer = json_object_get_string_member (a, "buffer");
-  old_string = json_object_get_string_member (a, "old_string");
-  new_string = json_object_get_string_member (a, "new_string");
+  buffer = json_object_get_string_member_with_default (a, "buffer", NULL);
+  old_string = json_object_get_string_member_with_default (a, "old_string", NULL);
+  new_string = json_object_get_string_member_with_default (a, "new_string", NULL);
   if (buffer == NULL || old_string == NULL || new_string == NULL)
     return edit_error (
       "Missing required arguments: buffer, old_string, new_string");
@@ -175,9 +175,9 @@ handle_replace_in_buffer (McpServer *s, const gchar *n,
 
   (void) s; (void) n; (void) u;
 
-  buffer = json_object_get_string_member (a, "buffer");
-  regexp = json_object_get_string_member (a, "regexp");
-  replacement = json_object_get_string_member (a, "replacement");
+  buffer = json_object_get_string_member_with_default (a, "buffer", NULL);
+  regexp = json_object_get_string_member_with_default (a, "regexp", NULL);
+  replacement = json_object_get_string_member_with_default (a, "replacement", NULL);
   if (buffer == NULL || regexp == NULL || replacement == NULL)
     return edit_error (
       "Missing required arguments: buffer, regexp, replacement");
@@ -210,8 +210,8 @@ handle_search_buffer (McpServer *s, const gchar *n,
 
   (void) s; (void) n; (void) u;
 
-  buffer = json_object_get_string_member (a, "buffer");
-  regexp = json_object_get_string_member (a, "regexp");
+  buffer = json_object_get_string_member_with_default (a, "buffer", NULL);
+  regexp = json_object_get_string_member_with_default (a, "regexp", NULL);
   if (buffer == NULL || regexp == NULL)
     return edit_error ("Missing required arguments: buffer, regexp");
 
@@ -250,7 +250,7 @@ handle_goto_line (McpServer *s, const gchar *n,
 
   (void) s; (void) n; (void) u;
 
-  buffer = json_object_get_string_member (a, "buffer");
+  buffer = json_object_get_string_member_with_default (a, "buffer", NULL);
   if (buffer == NULL || !json_object_has_member (a, "line"))
     return edit_error ("Missing required arguments: buffer, line");
   line = json_object_get_int_member (a, "line");
@@ -281,11 +281,11 @@ handle_project_grep (McpServer *s, const gchar *n,
 
   (void) s; (void) n; (void) u;
 
-  regexp = json_object_get_string_member (a, "regexp");
+  regexp = json_object_get_string_member_with_default (a, "regexp", NULL);
   if (regexp == NULL)
     return edit_error ("Missing required argument: regexp");
-  directory = json_object_get_string_member (a, "directory");
-  file_glob = json_object_get_string_member (a, "file_glob");
+  directory = json_object_get_string_member_with_default (a, "directory", NULL);
+  file_glob = json_object_get_string_member_with_default (a, "file_glob", NULL);
 
   er = g_strescape (regexp, NULL);
 

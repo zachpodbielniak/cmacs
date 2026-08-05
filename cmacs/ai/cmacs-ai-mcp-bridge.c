@@ -105,9 +105,9 @@ build_ai_tool_params (AiTool *tool, JsonNode *schema, const gchar *tool_name)
         continue;
       JsonObject *po = json_node_get_object (pn);
       const gchar *ptype = json_object_has_member (po, "type")
-        ? json_object_get_string_member (po, "type") : "string";
+        ? json_object_get_string_member_with_default (po, "type", NULL) : "string";
       const gchar *pdesc = json_object_has_member (po, "description")
-        ? json_object_get_string_member (po, "description") : "";
+        ? json_object_get_string_member_with_default (po, "description", NULL) : "";
 
       /* Reject nested-object properties: ai-glib has no way to
        * express the inner schema, and the model would have to guess
@@ -148,10 +148,10 @@ extract_text_from_result (McpToolResult *r)
       if (!JSON_NODE_HOLDS_OBJECT (item)) continue;
       JsonObject *io = json_node_get_object (item);
       const gchar *type = json_object_has_member (io, "type")
-        ? json_object_get_string_member (io, "type") : NULL;
+        ? json_object_get_string_member_with_default (io, "type", NULL) : NULL;
       if (g_strcmp0 (type, "text") != 0) continue;
       const gchar *t = json_object_has_member (io, "text")
-        ? json_object_get_string_member (io, "text") : NULL;
+        ? json_object_get_string_member_with_default (io, "text", NULL) : NULL;
       if (t)
         {
           if (out->len > 0) g_string_append_c (out, '\n');

@@ -66,8 +66,8 @@ handle_send_to_process (McpServer   *server,
   (void) name;
   (void) user_data;
 
-  process_name = json_object_get_string_member (arguments, "process");
-  input = json_object_get_string_member (arguments, "input");
+  process_name = json_object_get_string_member_with_default (arguments, "process", NULL);
+  input = json_object_get_string_member_with_default (arguments, "input", NULL);
   if (process_name == NULL || input == NULL)
     {
       result = mcp_tool_result_new (TRUE);

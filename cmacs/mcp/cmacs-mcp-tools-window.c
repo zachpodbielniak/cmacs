@@ -101,7 +101,7 @@ handle_split_window (McpServer   *server,
   (void) name;
   (void) user_data;
 
-  direction = json_object_get_string_member (arguments, "direction");
+  direction = json_object_get_string_member_with_default (arguments, "direction", NULL);
   if (direction != NULL && g_strcmp0 (direction, "horizontal") == 0)
     expr = g_strdup ("(split-window nil nil 'right)");
   else
@@ -156,7 +156,7 @@ handle_select_window (McpServer   *server,
   (void) name;
   (void) user_data;
 
-  direction = json_object_get_string_member (arguments, "direction");
+  direction = json_object_get_string_member_with_default (arguments, "direction", NULL);
   if (direction == NULL)
     expr = g_strdup ("(other-window 1) (buffer-name)");
   else if (g_strcmp0 (direction, "up") == 0)

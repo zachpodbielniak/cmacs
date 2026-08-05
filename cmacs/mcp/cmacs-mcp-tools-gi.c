@@ -31,8 +31,8 @@ handle_gi_call (McpServer   *server,
   (void) name;
   (void) user_data;
 
-  ns = json_object_get_string_member (arguments, "namespace");
-  func = json_object_get_string_member (arguments, "function");
+  ns = json_object_get_string_member_with_default (arguments, "namespace", NULL);
+  func = json_object_get_string_member_with_default (arguments, "function", NULL);
   if (ns == NULL || func == NULL)
     {
       result = mcp_tool_result_new (TRUE);
@@ -117,8 +117,8 @@ handle_gi_describe (McpServer   *server,
   (void) name;
   (void) user_data;
 
-  ns = json_object_get_string_member (arguments, "namespace");
-  symbol = json_object_get_string_member (arguments, "symbol");
+  ns = json_object_get_string_member_with_default (arguments, "namespace", NULL);
+  symbol = json_object_get_string_member_with_default (arguments, "symbol", NULL);
   if (ns == NULL || symbol == NULL)
     {
       result = mcp_tool_result_new (TRUE);
@@ -152,7 +152,7 @@ handle_gi_list_functions (McpServer   *server,
   (void) name;
   (void) user_data;
 
-  ns = json_object_get_string_member (arguments, "namespace");
+  ns = json_object_get_string_member_with_default (arguments, "namespace", NULL);
   if (ns == NULL)
     {
       result = mcp_tool_result_new (TRUE);

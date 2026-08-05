@@ -76,7 +76,7 @@ static McpToolResult *
 handle_toggle_layer (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
 {
   g_autofree gchar *name = ge_lisp_str (json_object_has_member (a, "name")
-    ? json_object_get_string_member (a, "name") : NULL);
+    ? json_object_get_string_member_with_default (a, "name", NULL) : NULL);
   (void) s; (void) n; (void) u;
   return ge_eval_result (g_strdup_printf
     ("(progn (require 'cmacs-gnuseye) (cmacs-gnuseye--load-layers)"
@@ -119,7 +119,7 @@ static McpToolResult *
 handle_query_entities (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
 {
   g_autofree gchar *kind = ge_lisp_str (json_object_has_member (a, "kind")
-    ? json_object_get_string_member (a, "kind") : NULL);
+    ? json_object_get_string_member_with_default (a, "kind", NULL) : NULL);
   double w = json_object_has_member (a, "west")  ? json_object_get_double_member (a, "west")  : -180.0;
   double e = json_object_has_member (a, "east")  ? json_object_get_double_member (a, "east")  :  180.0;
   double so = json_object_has_member (a, "south") ? json_object_get_double_member (a, "south") :  -90.0;
@@ -161,7 +161,7 @@ static McpToolResult *
 handle_add_geofence (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
 {
   g_autofree gchar *name = ge_lisp_str (json_object_has_member (a, "name")
-    ? json_object_get_string_member (a, "name") : "fence");
+    ? json_object_get_string_member_with_default (a, "name", NULL) : "fence");
   double lat = json_object_has_member (a, "lat") ? json_object_get_double_member (a, "lat") : 0.0;
   double lon = json_object_has_member (a, "lon") ? json_object_get_double_member (a, "lon") : 0.0;
   double rad = json_object_has_member (a, "radius_km")

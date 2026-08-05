@@ -30,7 +30,7 @@ handle_eval (McpServer   *server,
   (void) name;
   (void) user_data;
 
-  expression = json_object_get_string_member (arguments, "expression");
+  expression = json_object_get_string_member_with_default (arguments, "expression", NULL);
   if (expression == NULL)
     {
       result = mcp_tool_result_new (TRUE);
@@ -70,7 +70,7 @@ handle_describe_function (McpServer   *server,
   (void) name;
   (void) user_data;
 
-  symbol = json_object_get_string_member (arguments, "symbol");
+  symbol = json_object_get_string_member_with_default (arguments, "symbol", NULL);
   if (symbol == NULL)
     {
       result = mcp_tool_result_new (TRUE);
@@ -114,7 +114,7 @@ handle_describe_variable (McpServer   *server,
   (void) name;
   (void) user_data;
 
-  symbol = json_object_get_string_member (arguments, "symbol");
+  symbol = json_object_get_string_member_with_default (arguments, "symbol", NULL);
   if (symbol == NULL)
     {
       result = mcp_tool_result_new (TRUE);
@@ -159,7 +159,7 @@ handle_apropos (McpServer   *server,
   (void) name;
   (void) user_data;
 
-  pattern = json_object_get_string_member (arguments, "pattern");
+  pattern = json_object_get_string_member_with_default (arguments, "pattern", NULL);
   if (pattern == NULL)
     {
       result = mcp_tool_result_new (TRUE);
@@ -197,7 +197,7 @@ handle_completions (McpServer   *server,
   (void) name;
   (void) user_data;
 
-  prefix = json_object_get_string_member (arguments, "prefix");
+  prefix = json_object_get_string_member_with_default (arguments, "prefix", NULL);
   if (prefix == NULL)
     {
       result = mcp_tool_result_new (TRUE);

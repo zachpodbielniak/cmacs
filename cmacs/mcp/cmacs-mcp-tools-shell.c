@@ -56,7 +56,7 @@ handle_bacon_eval (McpServer *s, const gchar *n,
 
   (void) s; (void) n; (void) u;
 
-  command = json_object_get_string_member (a, "command");
+  command = json_object_get_string_member_with_default (a, "command", NULL);
   if (command == NULL)
     return shell_error ("Missing required argument: command");
 
@@ -81,7 +81,7 @@ handle_crispy_eval (McpServer *s, const gchar *n,
 
   (void) s; (void) n; (void) u;
 
-  code = json_object_get_string_member (a, "code");
+  code = json_object_get_string_member_with_default (a, "code", NULL);
   if (code == NULL)
     return shell_error ("Missing required argument: code");
 
@@ -137,7 +137,7 @@ handle_podomation_emit_event (McpServer *s, const gchar *n,
 
   (void) s; (void) n; (void) u;
 
-  event = json_object_get_string_member (a, "event");
+  event = json_object_get_string_member_with_default (a, "event", NULL);
   if (event == NULL)
     return shell_error ("Missing required argument: event");
 
@@ -170,7 +170,7 @@ handle_podomation_eval_dsl (McpServer *s, const gchar *n,
 
   (void) s; (void) n; (void) u;
 
-  dsl = json_object_get_string_member (a, "dsl");
+  dsl = json_object_get_string_member_with_default (a, "dsl", NULL);
   if (dsl == NULL)
     return shell_error ("Missing required argument: dsl");
 
@@ -206,7 +206,7 @@ handle_podomation_load_file (McpServer *s, const gchar *n,
 
   (void) s; (void) n; (void) u;
 
-  file = json_object_get_string_member (a, "file");
+  file = json_object_get_string_member_with_default (a, "file", NULL);
   if (file == NULL)
     return shell_error ("Missing required argument: file");
 
@@ -255,7 +255,7 @@ handle_podomation_control (McpServer *s, const gchar *n,
 
   (void) s; (void) n; (void) u;
 
-  action = json_object_get_string_member (a, "action");
+  action = json_object_get_string_member_with_default (a, "action", NULL);
   if (action == NULL)
     return shell_error ("Missing required argument: action");
 
@@ -281,7 +281,7 @@ handle_podomation_repl_eval (McpServer *s, const gchar *n,
 
   (void) s; (void) n; (void) u;
 
-  line = json_object_get_string_member (a, "line");
+  line = json_object_get_string_member_with_default (a, "line", NULL);
   if (line == NULL)
     return shell_error ("Missing required argument: line");
 

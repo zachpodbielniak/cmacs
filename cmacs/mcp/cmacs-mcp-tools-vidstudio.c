@@ -107,7 +107,7 @@ handle_add_track (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
 static McpToolResult *
 handle_add_clip (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
 {
-  const gchar *kind = json_object_get_string_member (a, "kind");
+  const gchar *kind = json_object_get_string_member_with_default (a, "kind", NULL);
   gint64 h = vs_int (a, "handle", 0);
   gint64 track = vs_int (a, "track", 0);
   gint64 dur = vs_int (a, "duration_frames", 90);
@@ -119,7 +119,7 @@ handle_add_clip (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
   if (g_strcmp0 (kind, "video") == 0 || g_strcmp0 (kind, "image") == 0)
     {
       g_autofree gchar *path =
-        vs_lisp_str (json_object_get_string_member (a, "path"));
+        vs_lisp_str (json_object_get_string_member_with_default (a, "path", NULL));
       elisp = g_strdup_printf
         ("(format \"clip %%d\" (cmacs-vidstudio-add-%s-clip"
          " %" G_GINT64_FORMAT " %" G_GINT64_FORMAT " %s %" G_GINT64_FORMAT
@@ -134,7 +134,7 @@ handle_add_clip (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
   else if (g_strcmp0 (kind, "text") == 0)
     {
       g_autofree gchar *text =
-        vs_lisp_str (json_object_get_string_member (a, "text"));
+        vs_lisp_str (json_object_get_string_member_with_default (a, "text", NULL));
       elisp = g_strdup_printf
         ("(format \"clip %%d\" (cmacs-vidstudio-add-text-clip"
          " %" G_GINT64_FORMAT " %" G_GINT64_FORMAT " %s %" G_GINT64_FORMAT
@@ -186,7 +186,7 @@ static McpToolResult *
 handle_render_frame (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
 {
   g_autofree gchar *path =
-    vs_lisp_str (json_object_get_string_member (a, "path"));
+    vs_lisp_str (json_object_get_string_member_with_default (a, "path", NULL));
   (void) s; (void) n; (void) u;
   return vs_eval_result (g_strdup_printf
     ("(let ((png (cmacs-vidstudio-render-png %" G_GINT64_FORMAT
@@ -200,9 +200,9 @@ static McpToolResult *
 handle_export (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
 {
   const gchar *format = json_object_has_member (a, "format")
-    ? json_object_get_string_member (a, "format") : "mp4";
+    ? json_object_get_string_member_with_default (a, "format", NULL) : "mp4";
   g_autofree gchar *path =
-    vs_lisp_str (json_object_get_string_member (a, "path"));
+    vs_lisp_str (json_object_get_string_member_with_default (a, "path", NULL));
   (void) s; (void) n; (void) u;
   if (g_strcmp0 (format, "gif") == 0)
     return vs_eval_result (g_strdup_printf
@@ -248,7 +248,7 @@ static McpToolResult *
 handle_add_audio (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
 {
   gint64 h = vs_int (a, "handle", 0), from = vs_int (a, "from_frame", 0);
-  const gchar *path = json_object_get_string_member (a, "path");
+  const gchar *path = json_object_get_string_member_with_default (a, "path", NULL);
   gdouble vol = json_object_has_member (a, "volume")
     ? json_object_get_double_member (a, "volume") : 1.0;
   (void) s; (void) n; (void) u;

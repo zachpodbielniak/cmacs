@@ -56,13 +56,13 @@ handle_ai_prompt (McpServer *server, const gchar *name,
 {
   (void) server; (void) name; (void) user_data;
   const gchar *prompt = json_object_has_member (arguments, "prompt")
-    ? json_object_get_string_member (arguments, "prompt") : NULL;
+    ? json_object_get_string_member_with_default (arguments, "prompt", NULL) : NULL;
   const gchar *provider = json_object_has_member (arguments, "provider")
-    ? json_object_get_string_member (arguments, "provider") : NULL;
+    ? json_object_get_string_member_with_default (arguments, "provider", NULL) : NULL;
   const gchar *system   = json_object_has_member (arguments, "system")
-    ? json_object_get_string_member (arguments, "system") : NULL;
+    ? json_object_get_string_member_with_default (arguments, "system", NULL) : NULL;
   const gchar *model    = json_object_has_member (arguments, "model")
-    ? json_object_get_string_member (arguments, "model") : NULL;
+    ? json_object_get_string_member_with_default (arguments, "model", NULL) : NULL;
 
   if (prompt == NULL || *prompt == '\0')
     {
@@ -102,13 +102,13 @@ handle_ai_call (McpServer *server, const gchar *name,
 {
   (void) server; (void) name; (void) user_data;
   const gchar *prompt = json_object_has_member (arguments, "prompt")
-    ? json_object_get_string_member (arguments, "prompt") : NULL;
+    ? json_object_get_string_member_with_default (arguments, "prompt", NULL) : NULL;
   const gchar *provider = json_object_has_member (arguments, "provider")
-    ? json_object_get_string_member (arguments, "provider") : NULL;
+    ? json_object_get_string_member_with_default (arguments, "provider", NULL) : NULL;
   const gchar *system   = json_object_has_member (arguments, "system")
-    ? json_object_get_string_member (arguments, "system") : NULL;
+    ? json_object_get_string_member_with_default (arguments, "system", NULL) : NULL;
   const gchar *model    = json_object_has_member (arguments, "model")
-    ? json_object_get_string_member (arguments, "model") : NULL;
+    ? json_object_get_string_member_with_default (arguments, "model", NULL) : NULL;
   gboolean tools = json_object_has_member (arguments, "tools")
     ? json_object_get_boolean_member (arguments, "tools") : FALSE;
 
@@ -164,21 +164,21 @@ handle_generate_image (McpServer *server, const gchar *name,
 {
   (void) server; (void) name; (void) user_data;
   const gchar *prompt = json_object_has_member (arguments, "prompt")
-    ? json_object_get_string_member (arguments, "prompt") : NULL;
+    ? json_object_get_string_member_with_default (arguments, "prompt", NULL) : NULL;
   const gchar *provider = json_object_has_member (arguments, "provider")
-    ? json_object_get_string_member (arguments, "provider") : NULL;
+    ? json_object_get_string_member_with_default (arguments, "provider", NULL) : NULL;
   const gchar *model = json_object_has_member (arguments, "model")
-    ? json_object_get_string_member (arguments, "model") : NULL;
+    ? json_object_get_string_member_with_default (arguments, "model", NULL) : NULL;
   const gchar *aspect = json_object_has_member (arguments, "aspect")
-    ? json_object_get_string_member (arguments, "aspect") : NULL;
+    ? json_object_get_string_member_with_default (arguments, "aspect", NULL) : NULL;
   const gchar *size = json_object_has_member (arguments, "size")
-    ? json_object_get_string_member (arguments, "size") : NULL;
+    ? json_object_get_string_member_with_default (arguments, "size", NULL) : NULL;
   const gchar *quality = json_object_has_member (arguments, "quality")
-    ? json_object_get_string_member (arguments, "quality") : NULL;
+    ? json_object_get_string_member_with_default (arguments, "quality", NULL) : NULL;
   const gchar *refs = json_object_has_member (arguments, "references")
-    ? json_object_get_string_member (arguments, "references") : NULL;
+    ? json_object_get_string_member_with_default (arguments, "references", NULL) : NULL;
   const gchar *buffer = json_object_has_member (arguments, "buffer")
-    ? json_object_get_string_member (arguments, "buffer") : NULL;
+    ? json_object_get_string_member_with_default (arguments, "buffer", NULL) : NULL;
 
   if (prompt == NULL || *prompt == '\0')
     {
@@ -261,7 +261,7 @@ handle_ai_list_models (McpServer *server, const gchar *name,
 {
   (void) server; (void) name; (void) user_data;
   const gchar *provider = json_object_has_member (arguments, "provider")
-    ? json_object_get_string_member (arguments, "provider") : NULL;
+    ? json_object_get_string_member_with_default (arguments, "provider", NULL) : NULL;
 
   /* No provider = every supported provider; each one guarded so a
    * keyless/offline provider reports instead of failing the whole
@@ -295,11 +295,11 @@ handle_ai_open_chat (McpServer *server, const gchar *name,
 {
   (void) server; (void) name; (void) user_data;
   const gchar *prompt = json_object_has_member (arguments, "prompt")
-    ? json_object_get_string_member (arguments, "prompt") : NULL;
+    ? json_object_get_string_member_with_default (arguments, "prompt", NULL) : NULL;
   const gchar *provider = json_object_has_member (arguments, "provider")
-    ? json_object_get_string_member (arguments, "provider") : NULL;
+    ? json_object_get_string_member_with_default (arguments, "provider", NULL) : NULL;
   const gchar *model = json_object_has_member (arguments, "model")
-    ? json_object_get_string_member (arguments, "model") : NULL;
+    ? json_object_get_string_member_with_default (arguments, "model", NULL) : NULL;
 
   g_autofree gchar *provider_arg = provider && *provider
     ? g_strdup_printf ("(quote %s)", provider)
