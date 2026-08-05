@@ -208,12 +208,15 @@ reach it."
   "An agent, tool or provider the model made up does not reach the plan."
   (skip-unless (featurep 'cmacs-brigade-compose))
   (let ((state (cmacs-brigade-compose--state-from-json
-                "{\"title\":\"T\",\"prompt\":\"P\",\"agent\":\"no-such-agent\",\
+                "{\"title\":\"Short label\",\
+\"prompt\":\"Do the thing that was asked for, carefully.\",\
+\"agent\":\"no-such-agent\",\
 \"tools\":[\"no_such_tool\"],\"provider\":\"no-such-provider\",\
 \"model\":\"m\",\"budget\":0}"
-                "the request")))
-    (should (equal (plist-get state :title) "T"))
-    (should (equal (plist-get state :prompt) "P"))
+                "do the thing that was asked")))
+    (should (equal (plist-get state :title) "Short label"))
+    (should (equal (plist-get state :prompt)
+                   "Do the thing that was asked for, carefully."))
     (should-not (plist-get state :agent))
     (should-not (plist-get state :tools))
     (should-not (plist-get state :provider))
@@ -240,8 +243,10 @@ would open two menus over one request."
   "With nothing to draft with, the request itself becomes the prompt."
   (skip-unless (featurep 'cmacs-brigade-compose))
   (let ((state (cmacs-brigade-compose--fallback-state "do the thing")))
+    ;; The prompt is exactly what was said; the title is a label made
+    ;; from it, which for a request this short means capitalising it.
     (should (equal (plist-get state :prompt) "do the thing"))
-    (should (equal (plist-get state :title) "do the thing"))))
+    (should (equal (plist-get state :title) "Do the thing"))))
 
 
 ;;;; The model string
@@ -374,6 +379,122 @@ and `cmacs-whisper-model-path' each shipped."
             (push (format "%s declares from %s but never requires it" base lib)
                   bad)))))
     (should (equal nil (nreverse bad)))))
+
+
+;;;; Reading a request
+
+(ert-deftest cmacs-brigade-compose-extracts-what-you-named ()
+  "Provider, model and agent are read out of the request itself."
+  (skip-unless (featurep 'cmacs-brigade-compose))
+  (cmacs-brigade-register-agent :name 'researcher :prompt "p")
+  (should (equal "grok" (plist-get (cmacs-brigade-compose--extract
+                                    "use grok to survey my notes")
+                                   :provider)))
+  (should (equal "researcher"
+                 (plist-get (cmacs-brigade-compose--extract
+                             "have the researcher agent look at this")
+                            :agent)))
+  ;; A model named after its provider needs no cue of its own.
+  (let ((e (cmacs-brigade-compose--extract
+            "with claude-code sonnet, refactor the keybind table")))
+    (should (equal "claude-code" (plist-get e :provider)))
+    (should (equal "sonnet" (plist-get e :model))))
+  ;; Longest first: claude-code is not read as claude.
+  (should (equal "claude-code"
+                 (plist-get (cmacs-brigade-compose--extract "use claude-code")
+                            :provider))))
+
+(ert-deftest cmacs-brigade-compose-mention-is-not-a-choice ()
+  "A provider named as the subject is not a provider being chosen.
+
+Without a cue word this matched any mention, so asking about a vendor's
+pricing page silently routed the task to that vendor."
+  (skip-unless (featurep 'cmacs-brigade-compose))
+  (should-not (plist-get (cmacs-brigade-compose--extract
+                          "summarise the gemini pricing page for me")
+                         :provider))
+  (should-not (plist-get (cmacs-brigade-compose--extract
+                          "compare grok and claude for tool use")
+                         :provider)))
+
+(ert-deftest cmacs-brigade-compose-title-is-not-the-prompt ()
+  "The derived title is a label, not the instruction restated."
+  (skip-unless (featurep 'cmacs-brigade-compose))
+  (let* ((req "use grok to survey my notes for the infinity fund")
+         (title (cmacs-brigade-compose--derive-title req)))
+    (should-not (equal title req))
+    ;; The choice is a field now, so it is not in the headline.
+    (should-not (string-match-p "grok" title))
+    (should (string-match-p "infinity fund" title)))
+  ;; Politeness is scaffolding, not subject.
+  (should (equal "Go through the inbox"
+                 (cmacs-brigade-compose--derive-title
+                  "please can you go through the inbox")))
+  (should (equal "Untitled task" (cmacs-brigade-compose--derive-title "  "))))
+
+(ert-deftest cmacs-brigade-compose-title-survives-a-version-number ()
+  "Splitting sentences must not cut a model name in half.
+
+A bare `\\.' split titled the task \"Using grok-4\"."
+  (skip-unless (featurep 'cmacs-brigade-compose))
+  (let ((title (cmacs-brigade-compose--derive-title
+                "using grok-4.5 write a summary of yesterdays commits")))
+    (should-not (string-match-p "grok-4\\'" title))
+    (should (string-match-p "summary" title))))
+
+(ert-deftest cmacs-brigade-compose-refuses-a-title-that-is-the-prompt ()
+  "A model proposing the instruction as its own headline is overruled."
+  (skip-unless (featurep 'cmacs-brigade-compose))
+  (let ((same "Search the notes and report the decisions"))
+    (should-not (equal same (cmacs-brigade-compose--pick-title
+                             same same "search the notes")))
+    ;; A genuinely shorter label is kept.
+    (should (equal "Infinity fund decisions"
+                   (cmacs-brigade-compose--pick-title
+                    "Infinity fund decisions" same "search the notes")))))
+
+(ert-deftest cmacs-brigade-compose-refuses-a-slug-as-the-prompt ()
+  "An identifier is not an instruction, however confidently offered."
+  (skip-unless (featurep 'cmacs-brigade-compose))
+  (let ((req "survey my notes for what I decided about the infinity fund"))
+    (should (equal req (cmacs-brigade-compose--pick-prompt
+                        "survey_notes_for_infinity_fund_decisions" req)))
+    (should (equal req (cmacs-brigade-compose--pick-prompt "" req)))
+    (let ((good "Search the notes for the infinity fund and report decisions."))
+      (should (equal good (cmacs-brigade-compose--pick-prompt good req))))))
+
+(ert-deftest cmacs-brigade-compose-reads-an-off-schema-draft ()
+  "The dialect models actually emit still yields a usable spec.
+
+This is the reply claude-code gave verbatim: a slug under `task', the
+real brief under `objective', and an invented `action' key."
+  (skip-unless (featurep 'cmacs-brigade-compose))
+  (let ((state (cmacs-brigade-compose--state-from-json
+                "{\"task\": \"survey_notes_for_infinity_fund\",
+                  \"action\": \"describe_only\",
+                  \"objective\": \"Search the notes for the infinity fund \
+and report what was decided, with dates.\"}"
+                "use grok to survey my notes for the infinity fund")))
+    (should (string-match-p "Search the notes" (plist-get state :prompt)))
+    (should-not (string-match-p "_" (plist-get state :prompt)))
+    (should (equal "grok" (plist-get state :provider)))
+    (should-not (equal (plist-get state :title) (plist-get state :prompt)))))
+
+(ert-deftest cmacs-brigade-compose-undrafted-still-carries-the-choices ()
+  "With no model available, what the request named still reaches the menu."
+  (skip-unless (featurep 'cmacs-brigade-compose))
+  (let ((state (cmacs-brigade-compose--fallback-state
+                "use grok to survey my notes for the infinity fund")))
+    (should (equal "grok" (plist-get state :provider)))
+    (should-not (equal (plist-get state :title) (plist-get state :prompt)))))
+
+(ert-deftest cmacs-brigade-compose-transient-can-be-quit ()
+  "The menu has a way out that composes nothing."
+  (skip-unless (featurep 'cmacs-brigade-compose))
+  (should (commandp 'cmacs-brigade-compose-quit))
+  (let ((cmacs-brigade-compose--state '(:title "x")))
+    (cmacs-brigade-compose-quit)
+    (should-not cmacs-brigade-compose--state)))
 
 (provide 'cmacs-brigade-compose-tests)
 

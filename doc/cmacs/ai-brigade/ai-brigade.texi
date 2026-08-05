@@ -385,11 +385,45 @@ overrides stay editable in the transient rather than frozen into a
 definition belonging to the original.
 @item x
 The transient itself, empty.  Also @kbd{M-x cmacs-brigade-compose}.
+@kbd{q} leaves it and discards what was composed.
 @end table
 
 Names the drafting model invented for agents, tools or providers are
 dropped before you see them: an invented agent is a task that fails at
 start, and an invented tool is worse, because it looks like it worked.
+
+@subsection What is read out of the request
+
+Provider, model and agent are picked out of what you said @emph{before}
+any model sees it, and they win over whatever the draft proposes.  Those
+three are stated rather than inferred, so matching them against the
+providers, model lists and agent registry that exist is exact, instant,
+cannot invent a name, and survives a drafting call that fails.
+
+A cue word (@samp{use}, @samp{with}, @samp{via}, @samp{run}, @samp{using}
+@dots{}) must precede the name, or @samp{agent} follow it.  Without that
+rule any mention matched, and asking about a vendor's pricing page
+silently routed the task to that vendor.
+
+The headline is a short label, never the instruction restated---the
+choices are stripped from it, as is the polite opening.  A title the
+model proposes is used only when it is genuinely shorter than the prompt
+and not a prefix of it; models restate the instruction as the title
+constantly.
+
+@subsection When the draft comes back the wrong shape
+
+It usually does.  Asked to @emph{describe} a task, claude-code answered
+with an @code{agent_spawn}-shaped object---@code{action}, @code{task}---and
+once put a slug under @code{task} with the real brief under
+@code{objective}.  So the parser accepts the aliases models actually use,
+picks the most prose-like value for each field, and refuses a prompt that
+is a bare identifier or shorter than the request it was meant to expand.
+
+The CLI author runs in an empty scratch directory for the same reason:
+started inside a project it picks up that project's @file{.mcp.json},
+sees the brigade tools, and answers a request to describe a task by
+spawning one.
 
 What gets written is an ordinary org headline in an ordinary plan file,
 adopted exactly as if you had typed it --- so a composed task is

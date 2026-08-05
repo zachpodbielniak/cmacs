@@ -69,6 +69,59 @@ and you still have to press =RET=.
 Set =cmacs-brigade-compose-entry= to =minibuffer= for a one-line prompt
 instead of the window.
 
+*** What gets read out of what you said
+
+Provider, model and agent are picked out of the request /before/ any model sees
+it, and they win over whatever the draft proposes. These three are stated
+rather than inferred, and matching them against the providers, model lists and
+agent registry that actually exist is exact, instant, and cannot invent a name.
+It also means they survive a drafting call that fails, times out, or is not
+possible in this build.
+
+| You said                                            | Read as                        |
+|-----------------------------------------------------+--------------------------------|
+| =use grok to survey my notes=                         | provider =grok=                  |
+| =with claude-code sonnet, refactor the keybinds=      | provider =claude-code=, model =sonnet= |
+| =have the researcher agent look at this=              | agent =researcher=               |
+| =using grok-4.5 write a summary=                      | provider =grok=, model =grok-4.5=  |
+| =summarise the gemini pricing page=                   | nothing — a mention is not a choice |
+
+A cue word (=use=, =with=, =via=, =run=, =using=, …) has to precede the name, or
+=agent= follow it. Without that rule any mention matched, and asking about a
+vendor's pricing page silently routed the task to that vendor.
+
+*** Titles
+
+The headline is a short label, never the instruction restated — a task list
+where every row is the whole prompt is one you cannot scan. The choices are
+stripped out of it (they are fields now), as is the polite opening:
+
+| Request                                                    | Title                       |
+|------------------------------------------------------------+-----------------------------|
+| =use grok to survey my notes for the infinity fund=          | Survey my notes for the infinity fund |
+| =have the general agent clean up the queue, then report=     | Clean up the queue          |
+| =please can you go through the inbox and flag anything urgent= | Go through the inbox and flag anything urgent |
+
+A title the model proposes is used only if it is genuinely shorter than the
+prompt and not a prefix of it; otherwise one is derived. Models restate the
+instruction as the title constantly.
+
+*** When the draft comes back the wrong shape
+
+It usually does, and that is handled rather than argued with. Asked to
+*describe* a task, claude-code answered with an =agent_spawn=-shaped object —
+=action=, =task= — and once put a slug (=survey_notes_for_infinity_fund=) under
+=task= with the real brief under =objective=. So the parser accepts the aliases
+models actually use and picks the most prose-like value for each field, and a
+prompt that is a bare identifier, or shorter than the request it was meant to
+expand, is refused in favour of what you typed.
+
+The CLI author also runs in an empty scratch directory. Started inside a
+project it picks up that project's =.mcp.json=, sees the brigade tools, and
+answers a request to describe a task by spawning one — which it did, twice,
+before this. An empty directory removes the temptation rather than arguing
+with it.
+
 ** =V= — say it
 
 The same thing, spoken. Records until =cmacs-brigade-voice-stop=, transcribes
@@ -115,7 +168,8 @@ Compose a brigade task
  RET create it   S create and start it   e create and open in the plan
 #+end_example
 
-=M-x cmacs-brigade-compose= reaches it from anywhere.
+=q= leaves the menu and discards what was composed; =M-x cmacs-brigade-compose=
+reaches it from anywhere.
 
 ** What gets written
 
