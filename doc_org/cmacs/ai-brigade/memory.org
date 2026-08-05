@@ -3,7 +3,7 @@
 #+authors: Zach Podbielniak
 #+categories: cmacs, ai, memory, search
 #+created: [2026-08-03 Sun]
-#+updated: [2026-08-03 Sun]
+#+updated: [2026-08-05 Wed]
 #+version: 0.1.0
 
 * What it is
@@ -47,6 +47,15 @@ loop keeps running throughout.
 | =cmacs-brigade-memory-build-status=   | how far it has got            |
 | =cmacs-brigade-memory-build-cancel=   | stop it; index left as it was |
 | =cmacs-brigade-memory-build-sync=     | start and wait — batch, tests |
+| =cmacs-brigade-memory-build-running-p= | whether one is in progress    |
+| =cmacs-brigade-memory-build-progress=  | :files :nfiles :chunks :elapsed :percent |
+
+=cmacs-brigade-memory-build-progress= is the public view of a running build —
+the dashboard header reads it rather than the state plist, so the state stays
+private. =cmacs-brigade-memory-build-scan-budget= (200) bounds how many files
+are examined per turn before control goes back to Emacs; only files that
+produce no chunks at all reach it, but a run of thousands would otherwise be
+one long uninterruptible scan.
 
 Progress goes through =message=, so it accumulates in =*Messages*= every
 =cmacs-brigade-memory-build-report-interval= seconds (10) whether or not you

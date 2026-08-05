@@ -3,7 +3,7 @@
 #+authors: Zach Podbielniak
 #+categories: cmacs, ai, agents, extending
 #+created: [2026-08-03 Sun]
-#+updated: [2026-08-03 Sun]
+#+updated: [2026-08-05 Wed]
 #+version: 0.1.0
 
 * Why this document is the important one
@@ -86,6 +86,12 @@ Every variation point is public. Shipped features consume exactly these.
 | =cmacs-brigade-register-context-provider=     | auto-injected prompt context   |
 | =cmacs-brigade-register-approval-handler=     | how confirmations are asked    |
 | =cmacs-brigade-register-notifier=             | how you are told something happened |
+| =cmacs-brigade-register-client=               | a conversation a finished agent can wake |
+
+Writing a tool that asks a model for structured data? =cmacs-brigade-parse-json-object=
+locates the JSON object in a reply and returns it as an alist. Models wrap JSON
+in prose and code fences however firmly they are asked not to, and a reply that
+is 95% the right answer should not be thrown away over the other 5%.
 
 ** Memory sources
 
@@ -257,6 +263,14 @@ number and what you intend to say before dialling.")
  :read-chunk #'my/call-transcript-chunks)
 
 ;; 4. Show recent calls on the dashboard.
+(cmacs-brigade-register-client
+ :name 'matrix
+ :targets (lambda () (mapcar (lambda (r) (cons (format "matrix:%s" r) r))
+                             (my/joined-rooms)))
+ :ready-p (lambda (_target) t)
+ :deliver (lambda (target text)
+            (my/matrix-send (string-remove-prefix "matrix:" target) text)))
+
 (cmacs-brigade-register-panel
  :name 'calls :title "Recent calls" :render #'my/calls-panel)
 #+end_src

@@ -154,6 +154,14 @@ A memory source supplies @code{enumerate} and @code{read-chunk}, so a
 Postgres table, a code tree or a Zotero library can be indexed into the
 same vector store and every agent's @code{memory_search} covers it.
 
+@defun cmacs-brigade-parse-json-object answer
+Return the JSON object in @var{answer} as an alist, or @code{nil}.  The
+object is located rather than assumed to be the whole reply: models wrap
+JSON in prose and code fences however firmly they are asked not to, and a
+reply that is 95%% the right answer should not be thrown away over the
+other 5%%.  Useful in any tool that asks a model for structured data.
+@end defun
+
 @subsection Allowlists and the relay
 
 An agent's tool list may name individual tools, groups, or @samp{*}.
@@ -347,6 +355,21 @@ By default the dashboard fills the frame and restores your layout when
 you quit with @kbd{q}: it is a wide table plus panels, and in half a
 frame the columns wrap and it stops being glanceable.
 
+Columns are anchored with @code{:align-to} display properties, not laid
+out by padding with spaces.  A space is exactly one column wide and a
+glyph is not necessarily anything of the sort: @samp{▶}, @samp{✔} and
+@samp{✖} are East-Asian-Ambiguous, so @code{string-width} reports one
+column while a graphical frame lays them out as two from the font's own
+advance.  Padded rows therefore came out a column short for exactly the
+states you notice, since a fresh task shows the narrow @samp{·} and
+everything else shows a wide glyph---and padding could not fix it,
+because the width it would pad by is the width that is wrong.
+
+Rows are padded @emph{as well as} anchored: the padding makes the
+buffer's plain text line up when it is copied out, the anchor makes the
+display line up when the two disagree, and where they do the anchor
+absorbs the difference.
+
 @defopt cmacs-brigade-dashboard-display
 @code{full-frame} (the default) takes the whole frame and gives the
 layout back on quit; @code{same-window} reuses the selected window and
@@ -489,10 +512,53 @@ Distinct from @code{cmacs-brigade-default-model}, which is what an agent
 @emph{definition} falls back to when its frontmatter names no model.
 @end defopt
 
+Every key has a command behind it, reachable with @kbd{M-x} anywhere:
+@code{cmacs-brigade-compose}, @code{cmacs-brigade-compose-quick},
+@code{cmacs-brigade-compose-voice}, @code{cmacs-brigade-compose-clone}
+and @code{cmacs-brigade-compose-read-model}.
+
+@defun cmacs-brigade-compose-set spec
+Replace the composed state with @var{spec} and show the transient.  The
+way in for filling the menu from your own code: a plist with any of
+@code{:title}, @code{:prompt}, @code{:agent}, @code{:provider},
+@code{:model}, @code{:tools}, @code{:budget}, @code{:cwd},
+@code{:notify} and @code{:plan}.
+@end defun
+
+@defun cmacs-brigade-compose-read-model &optional provider
+Read a provider and one of its models, returning
+@code{"provider/model"} or @code{nil}.  Never returns a half-built
+@code{"provider/"}: the runner reads that as a model @emph{name} on the
+default provider, so the half-answer would run the wrong thing.
+@end defun
+
+@defopt cmacs-brigade-compose-entry-height
+Height in lines of the compose entry window (8).
+@end defopt
+
+@defopt cmacs-brigade-compose-start-immediately
+Whether creating from the transient also starts the task (nil).  Off by
+default because the transient exists so you get a look at what is about
+to run; turning it on makes @key{RET} mean go.
+@end defopt
+
 @defopt cmacs-brigade-compose-plan-file
 The plan composed tasks are appended to; @file{compose.org} under
 @code{cmacs-brigade-plan-directory} by default.
 @end defopt
+
+@defun cmacs-brigade-plan-read-task plan id
+The intent fields of task @var{id} in @var{plan}, as a plist.  What a
+human wrote, not what the runtime made of it---so a task whose per-task
+overrides produced a derived agent reads back as the base agent it was
+written with.  This is what a clone copies.
+@end defun
+
+@defun cmacs-brigade-plan-ensure-file file &optional title
+Return @var{file}, creating it as an empty plan if absent.  The
+@code{#+TODO:} line goes in at creation so a plan's keywords never
+depend on the reader's global @code{org-todo-keywords}.
+@end defun
 
 @defun cmacs-brigade-plan-append-task file spec
 Append @var{spec} to plan @var{file} as a new task, adopt it, and return
@@ -546,6 +612,31 @@ again.  It reports the state but not the output: results can be long, and
 @code{agent_result} is a tool the model already has.
 @end defopt
 
+@defopt cmacs-brigade-loopback-retry-seconds
+How often a queued message re-checks whether its target has gone idle
+(5 seconds).
+@end defopt
+
+@defun cmacs-brigade-loopback-targets
+Every live target across every registered client, as
+@code{(ID . LABEL)}.  What the transient's @kbd{N} key lists.
+@end defun
+
+@defun cmacs-brigade-loopback-current-target
+The target for the context this is called from, or @code{nil}.  What
+@code{agent_spawn} uses to notice it is running inside a chat.
+@end defun
+
+@defun cmacs-brigade-loopback-deliver target text
+Deliver @var{text} to @var{target}, queueing it if the target is busy.
+Returns non-@code{nil} when it went out immediately.
+@end defun
+
+@defun cmacs-brigade-loopback-task-target task-id
+The target @var{task-id} reports to, read from its @code{:NOTIFY:}
+property, or @code{nil}.
+@end defun
+
 @defun cmacs-brigade-register-client &rest plist
 Register a conversational client that can be woken.  Keys: @code{:name},
 @code{:deliver} (TARGET TEXT), @code{:targets}, @code{:live-p},
@@ -591,6 +682,16 @@ Return a plist describing the running build --- @code{:files},
 @code{nil}.  The public view for anything that wants to display it; the
 dashboard header uses this.
 @end defun
+
+@defun cmacs-brigade-memory-build-running-p
+Whether an index build is in progress.
+@end defun
+
+@defopt cmacs-brigade-memory-build-scan-budget
+Files examined per turn before control goes back to Emacs (200).  Only
+files that produce no chunks at all reach it, but a run of thousands
+would otherwise be one long uninterruptible scan.
+@end defopt
 
 @defopt cmacs-brigade-memory-build-report-interval
 Seconds between progress reports (10).  Reports go through

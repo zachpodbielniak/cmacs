@@ -3,7 +3,7 @@
 #+authors: Zach Podbielniak
 #+categories: cmacs, ai, agents
 #+created: [2026-08-04 Tue]
-#+updated: [2026-08-04 Tue]
+#+updated: [2026-08-05 Wed]
 #+version: 0.1.0
 
 * Definitions

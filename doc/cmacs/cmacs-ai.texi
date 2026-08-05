@@ -172,7 +172,8 @@ on a build without @option{--with-cmacs-ai}.
 @code{cmacs-ai-call} takes a plist: @code{:provider} (symbol),
 @code{:system}, @code{:model}, @code{:max-tokens}, @code{:tools} (tool
 specs), @code{:builtin-tools}, @code{:mcp-bridge} (needs
-@option{--with-cmacs-mcp}), and @code{:search-provider}.  Any tool
+@option{--with-cmacs-mcp}), @code{:search-provider}, and
+@code{:directory} (@pxref{CMacs AI Tool Use}).  Any tool
 option builds a throwaway executor, uses it, and frees it.  It signals
 @code{cmacs-ai-error} on failure.
 
@@ -283,9 +284,49 @@ bodies are cached in-process for 15 minutes.  With an optional
 chat's active provider) and returns only the requested information
 instead of the whole page.
 
+@subsection Where the tools run
+
+The built-in tools resolve relative paths against the executor's working
+directory, and @code{bash} runs its command there.
+
+@defun cmacs-ai-tools-set-working-directory executor directory
+Point @var{executor}'s built-in tools at @var{directory}.  @code{nil}
+restores the default, which is the Emacs process's own working
+directory---for a long-lived editor, wherever you last visited a file,
+and almost never what the model meant by @file{src/main.c}.  An absolute
+path from the model is always used as given.
+
+@code{cmacs-ai-call} takes the same thing as @code{:directory}.
+Underneath it is ai-glib's
+@code{ai_tool_executor_set_working_directory}; @code{bash} spawns
+through @code{GSubprocess} rather than @code{popen} so the directory can
+be set at all, which also makes the command cancellable and keeps its
+output valid UTF-8.
+@end defun
+
+@subsection Custom Elisp tools
+
 Custom Elisp tools are registered via
 @code{cmacs-ai-tools-register}; the callback is invoked with
-@code{(NAME INPUT-JSON ID)} on each model call.
+@code{(NAME INPUT-JSON ID)} on each model call and must return a string.
+
+Callbacks may safely touch buffers and Emacs state.  On the synchronous
+@code{cmacs-ai-call} path they run on the main thread directly; on the
+background path (@code{cmacs-ai-tools-run-async}, which is what an
+in-process brigade agent uses) the tool loop runs on a worker thread, so
+the call is marshalled to the main thread and waited for.  It has to be:
+Emacs's allocator is not thread-safe, so every @code{Lisp_Object}
+involved must be built where Lisp lives, and only C strings cross the
+boundary.
+
+@defopt cmacs-ai-tool-call-timeout
+Seconds a background tool loop waits for the main thread (120).  The
+main thread picks the call up from its GLib dispatch, which happens
+whenever Emacs reaches the event loop, so in practice this is immediate;
+if it is not, the agent gets a timeout error for that one tool call
+rather than the worker parking for the rest of the session.  Raise it if
+you have Elisp tools that legitimately take minutes.
+@end defopt
 
 In addition to ai-glib's built-ins, every chat buffer is augmented
 with cmacs's own MCP tool surface (buffer / file / project / eval /

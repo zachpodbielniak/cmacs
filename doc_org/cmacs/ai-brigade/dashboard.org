@@ -3,7 +3,7 @@
 #+authors: Zach Podbielniak
 #+categories: cmacs, ai, ui
 #+created: [2026-08-04 Tue]
-#+updated: [2026-08-04 Tue]
+#+updated: [2026-08-05 Wed]
 #+version: 0.1.0
 
 * Opening it
@@ -197,7 +197,11 @@ message queues and goes out when the conversation is idle
 for a quarter of an hour is not coming back to this. A closed chat is dropped
 immediately. Each task notifies once.
 
-Turn the whole thing off with =cmacs-brigade-loopback-enabled=.
+Turn the whole thing off with =cmacs-brigade-loopback-enabled=, or change the
+wording with =cmacs-brigade-loopback-message= — it takes the task id, the agent
+name, the final state and the id again. It reports the state but not the
+output: results can be long, and =agent_result= is a tool the model already
+has.
 
 **** Other clients
 
@@ -215,10 +219,52 @@ buffers, so anything conversational can be a target:
 #+end_src
 
 A target id is =CLIENT:REST=; the prefix picks the client out of the registry
-and the rest means whatever that client wants. =:current= is the one worth
+and the rest means whatever that client wants. The functions that go with it:
+
+| Function                                | Returns                        |
+|-----------------------------------------+--------------------------------|
+| =cmacs-brigade-loopback-targets=          | every live target, as (ID . LABEL) |
+| =cmacs-brigade-loopback-current-target=   | the target for the context you are in |
+| =cmacs-brigade-loopback-deliver=          | sends TEXT, or queues it if busy |
+| =cmacs-brigade-loopback-task-target=      | the target a task reports to   |
+
+=cmacs-brigade-loopback-retry-seconds= (5) is how often a queued message
+re-checks whether its target has gone idle. =:current= is the one worth
 implementing if spawns should record your client automatically — it answers
 "is this being called from inside you?", which is how the chat client works
 without any plumbing between the two.
+
+*** Commands and options
+
+Every key has a command behind it, reachable with =M-x= from anywhere:
+
+| Command                          | What it does                          |
+|----------------------------------+---------------------------------------|
+| =cmacs-brigade-compose=            | the transient, on whatever is composed |
+| =cmacs-brigade-compose-quick=      | describe a task, draft it, then the menu |
+| =cmacs-brigade-compose-voice=      | say it, draft it, then the menu       |
+| =cmacs-brigade-compose-clone=      | copy an existing task into the menu   |
+| =cmacs-brigade-compose-set=        | fill the menu in from your own code   |
+| =cmacs-brigade-compose-read-model= | read a provider and one of its models |
+
+| Option                                  | Default            |
+|-----------------------------------------+--------------------|
+| =cmacs-brigade-compose-default-agent=     | =general=            |
+| =cmacs-brigade-compose-default-model=     | =claude-code/sonnet= |
+| =cmacs-brigade-compose-author-provider=   | =claude-code=        |
+| =cmacs-brigade-compose-author-model=      | =sonnet=             |
+| =cmacs-brigade-compose-author-timeout=    | 120 seconds        |
+| =cmacs-brigade-compose-entry=             | =window=             |
+| =cmacs-brigade-compose-entry-height=      | 8 lines            |
+| =cmacs-brigade-compose-plan-file=         | =compose.org= in the plan directory |
+| =cmacs-brigade-compose-start-immediately= | nil                |
+
+=cmacs-brigade-compose-set= is the way in for your own code: hand it a plist
+with any of =:title=, =:prompt=, =:agent=, =:provider=, =:model=, =:tools=,
+=:budget=, =:cwd=, =:notify= and =:plan=, and the menu opens on it.
+
+With =cmacs-brigade-compose-start-immediately= on, =RET= means go rather than
+leaving the task as a draft.
 
 ** =V= — say it
 

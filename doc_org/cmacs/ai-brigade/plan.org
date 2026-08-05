@@ -3,7 +3,7 @@
 #+authors: Zach Podbielniak
 #+categories: cmacs, ai, org
 #+created: [2026-08-04 Tue]
-#+updated: [2026-08-04 Tue]
+#+updated: [2026-08-05 Wed]
 #+version: 0.1.0
 
 * A plan is an org file
@@ -123,3 +123,47 @@ The property tests in =test/cmacs/cmacs-brigade-plan-tests.el= assert the
 invariants directly: adopt is idempotent, render is byte-identical when
 repeated, a copied subtree yields distinct ids, an illegal keyword is restored,
 a stale buffer refuses, and order survives.
+
+* Writing a task from Lisp
+
+One function composes a task headline, and everything that creates one goes
+through it — voice dictation, the compose transient, a clone. Three
+hand-written copies of this had already drifted apart on whether the tag went
+on, how the body was indented, and whether the file was created if missing.
+
+#+begin_src elisp
+(cmacs-brigade-plan-append-task
+ "~/notes/01_projects/personal/brigade/plan.org"
+ (list :title  "Survey the competition"
+       :prompt "Read the last quarter of release notes and summarise what
+changed."
+       :agent  "researcher"
+       :model  "claude-code/sonnet"
+       :budget "0.50"
+       :tools  '(memory_search web_search)
+       :cwd    "~/src/project"
+       :properties '(("NOTIFY" . "chat:*cmacs-ai: grok*"))))
+#+end_src
+
+It creates the file if absent, appends the headline, adopts it, and returns the
+new task id. An empty value is left out of the drawer entirely rather than
+written blank: an empty =:MODEL:= is a different request from no =:MODEL:=, and
+the runner reads the absent one as "whatever the agent definition says".
+
+The body is indented, which is not cosmetic. A prompt is prose someone wrote,
+and prose contains lines starting with =*= — a bullet, a glob, a footnote. At
+column zero org reads that as a headline, and the rest of the prompt silently
+becomes a separate task, so the agent runs the first sentence of its
+instruction and nothing else.
+
+| Function                          | Does                              |
+|-----------------------------------+-----------------------------------|
+| =cmacs-brigade-plan-append-task=    | compose, adopt, return the id     |
+| =cmacs-brigade-plan-read-task=      | the intent fields of a task, as a plist |
+| =cmacs-brigade-plan-ensure-file=    | create an empty plan if absent    |
+| =cmacs-brigade-plan-task-property=  | one property of one task          |
+| =cmacs-brigade-plan-task-prompt=    | a task's prompt, read back from the file |
+
+=cmacs-brigade-plan-read-task= reads what a human wrote, not what the runtime
+made of it — so a task whose per-task overrides produced a derived agent reads
+back as the base agent it was written with. That is what a clone copies.

@@ -103,9 +103,39 @@ your config must also run on a build without =--with-cmacs-ai=.
 =cmacs-ai-call= takes a plist: =:provider= (symbol), =:system=,
 =:model=, =:max-tokens=, =:tools= (a list of tool specs),
 =:builtin-tools=, =:mcp-bridge= (expose the cmacs MCP surface; needs
-=--with-cmacs-mcp=), and =:search-provider=.  Any tool option builds a
-throwaway executor, uses it, and frees it under =unwind-protect=.  It
-signals =cmacs-ai-error= on failure.
+=--with-cmacs-mcp=), =:search-provider=, and =:directory=.  Any tool
+option builds a throwaway executor, uses it, and frees it under
+=unwind-protect=.  It signals =cmacs-ai-error= on failure.
+
+** Where the built-in tools run
+
+=:directory= decides where the built-in tools work: relative paths
+resolve against it, and =bash= runs its command there.
+
+#+begin_src emacs-lisp
+(cmacs-ai-call "what is in this project, and does it build?"
+               :builtin-tools t
+               :directory "~/src/project")
+#+end_src
+
+Without it they use the Emacs process's own working directory, which for
+a long-lived editor is wherever you last visited a file — almost never
+what the model meant by =src/main.c=. An absolute path from the model is
+always used as given.
+
+The same knob exists on an executor you build yourself:
+
+#+begin_src emacs-lisp
+(let ((exec (cmacs-ai-tools-new)))
+  (cmacs-ai-tools-set-working-directory exec "~/src/project")
+  ...)
+#+end_src
+
+=nil= restores the default. Underneath, this is ai-glib's
+=ai_tool_executor_set_working_directory=; =bash= spawns through
+=GSubprocess= rather than =popen= so the directory can be set at all,
+which also makes the command cancellable and keeps its output valid
+UTF-8.
 
 *Custom tools.*  =cmacs-ai-define-tool= builds a tool spec whose Elisp
 callback's *return value* is handed back to the model -- so the model
@@ -127,9 +157,22 @@ can act on it:
 #+end_src
 
 The callback is called as =(funcall CALLBACK NAME INPUT-JSON ID)= and
-must return a string (nil signals a tool error to the model).  The
-executor runs synchronously on the main thread, so callbacks may safely
-touch buffers and Emacs state.
+must return a string (nil signals a tool error to the model).
+
+Callbacks may safely touch buffers and Emacs state. On the synchronous
+=cmacs-ai-call= path they simply run on the main thread; on the
+background path (=cmacs-ai-tools-run-async=, which is what an in-process
+brigade agent uses) the tool loop runs on a worker thread, so the call is
+marshalled to the main thread and waited for. It has to be: Emacs's
+allocator is not thread-safe, so every =Lisp_Object= involved must be
+built where Lisp lives, and only C strings cross the boundary.
+
+=cmacs-ai-tool-call-timeout= (120 seconds) bounds that wait. The main
+thread picks the call up from its GLib dispatch, which happens whenever
+Emacs reaches the event loop, so in practice it is immediate; if it is
+not, the agent gets a timeout error for that one tool rather than the
+worker parking forever. Raise it if you have Elisp tools that
+legitimately take minutes.
 
 Under the hood, =cmacs-ai-call= wraps the C primitive =cmacs-ai--call=
 (positional: =PROMPT &optional PROVIDER SYSTEM MODEL EXECUTOR
