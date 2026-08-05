@@ -185,7 +185,12 @@ whole turn, a returned one lets the model read what went wrong."
                                                     "{\"a\":\"x\"}"))))))
 
 (ert-deftest cmacs-brigade-confirm-refuses-when-it-cannot-ask ()
-  "A :confirm tool is refused in batch rather than silently allowed."
+  "A :confirm tool is refused rather than silently allowed.
+
+Exercised with `cmacs-brigade-auto-approve' bound to nil: it ships as t,
+so this path is only reached by a user who asked to be consulted, and
+what must hold for them is that being unable to ask does not become
+going ahead anyway."
   (skip-unless (cmacs-brigade-registry-tests--available-p))
   (cmacs-brigade-tests--with-clean-registry
     (cmacs-brigade-deftool test-confirm "Needs confirmation." ((a string "a"))
@@ -193,7 +198,8 @@ whole turn, a returned one lets the model read what went wrong."
       "ran")
     ;; noninteractive is t under ERT batch: "could not ask" must not
     ;; mean "went ahead anyway"
-    (let ((out (cmacs-brigade-call-tool "test_confirm" "{\"a\":\"x\"}")))
+    (let* ((cmacs-brigade-auto-approve nil)
+           (out (cmacs-brigade-call-tool "test_confirm" "{\"a\":\"x\"}")))
       ;; refused, and the body did not run
       (should-not (equal "ran" out))
       (should (string-match-p "needs approval" out))

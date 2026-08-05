@@ -105,36 +105,41 @@ message the model cannot act on."
 
 ;;;; Confirmation
 
-(defcustom cmacs-brigade-auto-approve
-  '("agent_spawn" "agent_status" "agent_result"
-    "agent_list" "agent_cancel")
+(defcustom cmacs-brigade-auto-approve t
   "Tools that may run without asking.
 
-t approves everything; a list approves the wire names in it; nil asks,
-which in practice means declines.
+t, the default, approves everything; a list approves the wire names in
+it; nil asks, which in practice means declines.
 
-The subagent tools are approved by default because handing work to
-another agent is the ordinary way to use the brigade, and a confirmation
-there is not merely inconvenient -- it is unanswerable.  A tool call
-arriving from a chat runs inside a GLib dispatch, where Lisp cannot
-prompt: a minibuffer there re-enters the main loop underneath the
-dispatch and wedges the editor, so cmacs binds `inhibit-interaction\\=' and
-a gated tool is declined instead of asked about.  Left unapproved,
-`agent_spawn\\=' could never succeed from the surface that most wants it.
+What this switches off is the *confirmation prompt*, not the gate.  What
+an agent may reach at all is its tool allowlist, enforced in C at the
+dispatch point, and that is unaffected: an agent asking for `*\\=' still
+cannot call `eval\\=', `shell\\=', `bash\\=', `execute_command\\=', `send_keys\\=',
+`crispy_eval\\=' or the C-patching tools.  Those have to be named outright
+in the agent's definition, which is a deliberate act by whoever wrote it.
+So `t\\=' means \"do not interrupt me about the tools I already granted\",
+not \"grant everything\".
 
-Everything else still asks.  Removing `agent_spawn\\=' from this list is
-the way to get a confirmation back, understanding that outside an
-interactive command it will decline rather than prompt:
+Default because the prompt was mostly unanswerable anyway.  A tool call
+arriving from a chat or any other GLib callback runs inside a dispatch,
+where Lisp cannot prompt -- a minibuffer there re-enters the main loop
+underneath the dispatch and wedges the editor -- so cmacs binds
+`inhibit-interaction\\=' and a gated tool is declined rather than asked
+about.  Leaving the default at nil meant every `:confirm\\=' tool silently
+failed on the surface that most used it.
+
+Set a list to be asked about specific tools, understanding that outside
+an interactive command being asked means being declined:
 
   (setq cmacs-brigade-auto-approve
         \\='(\"agent_status\" \"agent_result\" \"agent_list\"))
 
-Worth knowing what is being approved: `agent_spawn\\=' starts a run that
-spends money, bounded by the spawning agent\\='s budget and by
-`cmacs-brigade-subagent-max-depth\\=', not by a prompt.  The other four
-read state or stop something and cost nothing."
-  :type '(choice (const :tag "Ask (declines where it cannot ask)" nil)
-                 (const :tag "Approve everything" t)
+Worth knowing what `t\\=' now covers that a prompt used to: an agent
+granted `project_write_file\\=' writes files without asking, and
+`agent_spawn\\=' starts runs that spend money -- bounded by the agent's
+budget and `cmacs-brigade-subagent-max-depth\\=', not by you."
+  :type '(choice (const :tag "Approve everything (default)" t)
+                 (const :tag "Ask (declines where it cannot ask)" nil)
                  (repeat string))
   :group 'cmacs-brigade)
 

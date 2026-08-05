@@ -1064,25 +1064,39 @@ template at all."
       (delete-directory dir t))))
 
 
-(ert-deftest cmacs-brigade-subagent-tools-approved-by-default ()
-  "Spawning works out of the box, and nothing else is opened up.
+(ert-deftest cmacs-brigade-tools-run-unprompted-by-default ()
+  "Nothing asks for confirmation out of the box.
 
-A confirmation on `agent_spawn' is not merely inconvenient, it is
-unanswerable: the call arrives inside a GLib dispatch where Lisp cannot
-prompt, so a gated tool is declined rather than asked about.  Left
-unapproved it could never succeed from a chat, which is the surface that
-most wants it."
+The prompt was mostly unanswerable anyway: a call arriving from a chat
+runs inside a GLib dispatch where Lisp cannot prompt, so a gated tool was
+declined rather than asked about, and every `:confirm' tool silently
+failed on the surface that most used it."
   (skip-unless (featurep 'cmacs-brigade-tools))
-  (dolist (n '("agent_spawn" "agent_status" "agent_result"
-               "agent_list" "agent_cancel"))
-    (should (cmacs-brigade--auto-approved-p n)))
-  ;; and the blanket is not open: an unrelated gated tool still asks
-  (should-not (cmacs-brigade--auto-approved-p "project_write_file"))
-  (should-not (cmacs-brigade--auto-approved-p "eval"))
-  (should-not (eq cmacs-brigade-auto-approve t)))
+  (should (eq t cmacs-brigade-auto-approve))
+  (dolist (n '("agent_spawn" "agent_cancel" "project_write_file" "eval"))
+    (should (cmacs-brigade--auto-approved-p n))))
+
+(ert-deftest cmacs-brigade-allowlist-still-gates-the-privileged-set ()
+  "Approving by default switches off the prompt, not the gate.
+
+This is what makes the default defensible, so it is asserted rather than
+assumed: the C allowlist is a separate mechanism, and an agent asking for
+`*' still cannot reach anything in the privileged set.  Those have to be
+named outright in an agent definition, which is a deliberate act by
+whoever wrote it."
+  (skip-unless (fboundp 'cmacs-brigade-tool-allowed-p))
+  (let ((cmacs-brigade-auto-approve t))
+    (dolist (n '("eval" "shell" "bash" "execute_command" "send_keys"
+                 "crispy_eval" "bacon_eval" "cmacs_c_patch_defun"))
+      (should-not (cmacs-brigade-tool-allowed-p "*" n))
+      ;; ...and naming it outright is what grants it
+      (should (cmacs-brigade-tool-allowed-p n n)))
+    ;; the recursion guard is likewise unaffected
+    (should-not (cmacs-brigade-tool-allowed-p "*" "brigade_start"))
+    (should-not (cmacs-brigade-tool-allowed-p "*" "ai_call"))))
 
 (ert-deftest cmacs-brigade-auto-approve-remains-a-user-choice ()
-  "Narrowing the list puts the gate back on spawning."
+  "Narrowing to a list puts the confirmation back on what it omits."
   (skip-unless (featurep 'cmacs-brigade-subagent))
   (let ((cmacs-brigade-auto-approve '("agent_status" "agent_result"))
         (cmacs-brigade-confirm-function nil))
