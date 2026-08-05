@@ -1076,24 +1076,48 @@ failed on the surface that most used it."
   (dolist (n '("agent_spawn" "agent_cancel" "project_write_file" "eval"))
     (should (cmacs-brigade--auto-approved-p n))))
 
-(ert-deftest cmacs-brigade-allowlist-still-gates-the-privileged-set ()
-  "Approving by default switches off the prompt, not the gate.
+(ert-deftest cmacs-brigade-wildcard-grants-everything-by-default ()
+  "`*' hands over every tool, including the dangerous ones.
 
-This is what makes the default defensible, so it is asserted rather than
-assumed: the C allowlist is a separate mechanism, and an agent asking for
-`*' still cannot reach anything in the privileged set.  Those have to be
-named outright in an agent definition, which is a deliberate act by
-whoever wrote it."
+Shipped that way deliberately: it is the user's editor and their agents,
+and the confirmation prompt that used to stand in front of these was
+unanswerable anyway on the surface that reaches them."
   (skip-unless (fboundp 'cmacs-brigade-tool-allowed-p))
-  (let ((cmacs-brigade-auto-approve t))
-    (dolist (n '("eval" "shell" "bash" "execute_command" "send_keys"
-                 "crispy_eval" "bacon_eval" "cmacs_c_patch_defun"))
+  (should-not cmacs-brigade-restrict-privileged-tools)
+  (dolist (n '("eval" "shell" "bash" "execute_command" "send_keys"
+               "crispy_eval" "bacon_eval" "cmacs_c_patch_defun"
+               "project_write_file"))
+    (should (cmacs-brigade-tool-allowed-p "*" n))))
+
+(ert-deftest cmacs-brigade-privileged-restriction-is-available ()
+  "Setting the variable puts the dangerous tools back behind naming.
+
+The mechanism has to still work, or the escape hatch documented in the
+docstring would be a lie."
+  (skip-unless (fboundp 'cmacs-brigade-tool-allowed-p))
+  (let ((cmacs-brigade-restrict-privileged-tools t))
+    (dolist (n '("eval" "shell" "bash" "cmacs_c_patch_defun"))
       (should-not (cmacs-brigade-tool-allowed-p "*" n))
-      ;; ...and naming it outright is what grants it
+      ;; naming it outright is what grants it
       (should (cmacs-brigade-tool-allowed-p n n)))
-    ;; the recursion guard is likewise unaffected
-    (should-not (cmacs-brigade-tool-allowed-p "*" "brigade_start"))
-    (should-not (cmacs-brigade-tool-allowed-p "*" "ai_call"))))
+    ;; ordinary tools are unaffected either way
+    (should (cmacs-brigade-tool-allowed-p "*" "memory_search"))))
+
+(ert-deftest cmacs-brigade-recursion-guard-is-separate-and-on ()
+  "`ai_*' and `brigade_*' stay blocked, and are their own switch.
+
+A different thing from the privileged set: those names re-enter the
+orchestrator, so an agent that can call them starts work outside its own
+budget accounting and can recurse into itself through `ai_call'.  The
+`agent_*' tools are the sanctioned way through and are unaffected."
+  (skip-unless (fboundp 'cmacs-brigade-tool-allowed-p))
+  (should cmacs-brigade-block-recursive-tools)
+  (should-not (cmacs-brigade-tool-allowed-p "*" "ai_call"))
+  (should-not (cmacs-brigade-tool-allowed-p "*" "brigade_start"))
+  (should (cmacs-brigade-tool-allowed-p "*" "agent_spawn"))
+  ;; and it can be lifted on its own, without touching the other switch
+  (let ((cmacs-brigade-block-recursive-tools nil))
+    (should (cmacs-brigade-tool-allowed-p "*" "ai_call"))))
 
 (ert-deftest cmacs-brigade-auto-approve-remains-a-user-choice ()
   "Narrowing to a list puts the confirmation back on what it omits."

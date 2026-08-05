@@ -17,7 +17,9 @@
  *      so the decision has to be a plain C function over a string.
  *
  *   3. It fails closed.  An unparseable or empty allowlist grants
- *      nothing.  The privileged set below is denied even to "*".
+ *      nothing.  The privileged set below is withheld from "*" only when
+ *      `cmacs-brigade-restrict-privileged-tools' is set; by default the
+ *      wildcard grants everything an agent could call.
  *
  * The gate is a filter, not just a check: an in-process agent is handed
  * an executor containing only the tools it passed, so an unauthorised
@@ -108,9 +110,15 @@ cmacs_brigade_tool_allowed (const gchar *allowlist, const gchar *tool_name)
   /* Fail closed on anything malformed or empty. */
   if (tool_name == NULL || tool_name[0] == '\0') return FALSE;
   if (allowlist == NULL || allowlist[0] == '\0') return FALSE;
-  if (blocked_outright (tool_name)) return FALSE;
+  if (!NILP (Vcmacs_brigade_block_recursive_tools)
+      && blocked_outright (tool_name))
+    return FALSE;
 
-  privileged = cmacs_brigade_tool_privileged (tool_name);
+  /* Off by default: "*" hands over everything, the privileged set
+   * included.  Setting `cmacs-brigade-restrict-privileged-tools' puts
+   * those back behind naming each one outright. */
+  privileged = !NILP (Vcmacs_brigade_restrict_privileged_tools)
+               && cmacs_brigade_tool_privileged (tool_name);
 
   /* Resolve the tool's group once, so a group grant can be matched
    * without holding the registry lock inside the scan loop. */
@@ -180,7 +188,9 @@ expand_group (const CmacsBrigadeTool *tool, gpointer user_data)
   if (tool->group == NULL || strcmp (tool->group, ctx->group) != 0) return;
   /* A group must not smuggle in a privileged tool -- same rule the
    * matcher applies, restated here because expansion bypasses it. */
-  if (cmacs_brigade_tool_privileged (tool->name)) return;
+  if (!NILP (Vcmacs_brigade_restrict_privileged_tools)
+      && cmacs_brigade_tool_privileged (tool->name))
+    return;
   if (ctx->out->len > 0) g_string_append_c (ctx->out, ',');
   g_string_append (ctx->out, tool->name);
   *ctx->any = TRUE;
@@ -303,6 +313,37 @@ void syms_of_cmacs_ai_brigade_allowlist (void);
 void
 syms_of_cmacs_ai_brigade_allowlist (void)
 {
+  DEFVAR_LISP ("cmacs-brigade-restrict-privileged-tools",
+               Vcmacs_brigade_restrict_privileged_tools,
+               doc: /* Whether `*' withholds the privileged tools.
+
+nil, the default, means `*' grants everything an agent could call --
+eval, shell, bash, execute_command, send_keys, crispy_eval, bacon_eval
+and the C-patching tools included.
+
+Set it to t to put those back behind a deliberate naming, so an agent
+granted `*' cannot reach them and a definition has to list each one it
+wants:
+
+  (setq cmacs-brigade-restrict-privileged-tools t)
+
+Which tools an agent is offered at all is still its own allowlist; this
+only decides whether the wildcard covers the dangerous end of it.  */);
+  Vcmacs_brigade_restrict_privileged_tools = Qnil;
+
+  DEFVAR_LISP ("cmacs-brigade-block-recursive-tools",
+               Vcmacs_brigade_block_recursive_tools,
+               doc: /* Whether tools named `ai_*' or `brigade_*' are refused.
+
+t by default, and a different thing from the privileged set.  Those names
+reach back into the orchestrator: an agent that can call them starts work
+outside its own budget accounting, and through `ai_call' can recurse into
+itself without bound.  The `agent_*' tools are the sanctioned way to hand
+work to another agent and are unaffected by this.
+
+Set to nil to lift it.  */);
+  Vcmacs_brigade_block_recursive_tools = Qt;
+
   defsubr (&Scmacs_brigade_tool_allowed_p);
   defsubr (&Scmacs_brigade_allowlist_expand);
   defsubr (&Scmacs_brigade_tool_privileged_p);

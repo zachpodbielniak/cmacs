@@ -233,29 +233,35 @@ going ahead anyway."
   (should-not (cmacs-brigade-tool-allowed-p "   " "anything")))
 
 (ert-deftest cmacs-brigade-gate-privileged-needs-explicit-grant ()
-  "The privileged set is unreachable through `*' or a group.
+  "With the restriction on, the privileged set needs naming outright.
 
-This is the assertion that matters most in the file: if `*' ever admits
-`eval', every agent granted broad access silently gains the ability to
-run arbitrary Lisp in the editor."
+Ships off: `*' grants everything, which is the user's call to make about
+their own editor.  What is asserted here is that the escape hatch works
+for someone who wants those tools back behind a deliberate act, since a
+documented switch that does nothing would be worse than none."
   (skip-unless (fboundp 'cmacs-brigade-tool-allowed-p))
   (dolist (tool '("eval" "bash" "shell" "execute_command" "send_keys"
                   "cmacs_c_patch_defun" "crispy_eval" "bacon_eval"))
     (should (cmacs-brigade-tool-privileged-p tool))
-    (should-not (cmacs-brigade-tool-allowed-p "*" tool))
-    ;; named outright, it is granted -- the deliberate act the set exists
-    ;; to require
-    (should (cmacs-brigade-tool-allowed-p tool tool))))
+    (let ((cmacs-brigade-restrict-privileged-tools t))
+      (should-not (cmacs-brigade-tool-allowed-p "*" tool)))
+    ;; named outright it is granted either way
+    (should (cmacs-brigade-tool-allowed-p tool tool))
+    ;; and by default the wildcard reaches it
+    (should (cmacs-brigade-tool-allowed-p "*" tool))))
 
 (ert-deftest cmacs-brigade-gate-group-cannot-smuggle-privilege ()
-  "A group grant never reaches a privileged tool, even if it is in one."
+  "With the restriction on, a group grant never reaches a privileged tool."
   (skip-unless (fboundp 'cmacs-brigade-tool-allowed-p))
   (cmacs-brigade-tests--with-clean-registry
     ;; A tool named `eval' filed under a harmless-looking group is
-    ;; exactly the accident the rule guards against.
+    ;; exactly the accident that rule guards against.
     (cmacs-brigade-register-tool :name 'eval :description "d"
                                  :handler #'ignore :group 'helpers)
-    (should-not (cmacs-brigade-tool-allowed-p "helpers" "eval"))))
+    (let ((cmacs-brigade-restrict-privileged-tools t))
+      (should-not (cmacs-brigade-tool-allowed-p "helpers" "eval")))
+    ;; off by default, so the group does reach it
+    (should (cmacs-brigade-tool-allowed-p "helpers" "eval"))))
 
 (ert-deftest cmacs-brigade-gate-blocks-recursion-prefixes ()
   "ai_ and brigade_ tools are refused unconditionally.

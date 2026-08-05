@@ -20,6 +20,11 @@
 #include "cmacs-glib-loop.h"
 
 #include <mcp.h>
+#include <errno.h>
+#include <glib/gstdio.h>
+#include <signal.h>
+#include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 /* ── Static state ─────────────────────────────────────────────────── */
@@ -75,6 +80,96 @@ cmacs_mcp_get_internal_server (void)
   return cmacs_mcp_internal_server;
 }
 
+/* ── Socket file lifecycle ────────────────────────────────────────────
+ *
+ * The listening socket is a real file in $XDG_RUNTIME_DIR, and nothing
+ * removed it: stopping the server closed the listener and left the inode
+ * behind, so a machine accumulated one dead cmacs-mcp-<pid>.sock per
+ * session ever run.  Three ways they are cleaned up, because there are
+ * three ways they are left:
+ *
+ *   - a clean stop unlinks its own (cmacs_mcp_do_stop);
+ *   - exiting without stopping is covered by an atexit handler, which
+ *     `kill-emacs' reaches because it calls exit();
+ *   - a crash or SIGKILL reaches neither, so a start sweeps the
+ *     directory for sockets whose owning process is gone.
+ *
+ * The sweep is what actually clears a machine that has been accumulating
+ * them; the other two stop it happening again. */
+
+static void
+cmacs_mcp_unlink_socket (void)
+{
+  if (socket_path == NULL)
+    return;
+  if (g_unlink (socket_path) != 0 && errno != ENOENT)
+    g_debug ("cmacs-mcp: could not remove %s: %s",
+             socket_path, g_strerror (errno));
+}
+
+static void
+cmacs_mcp_atexit (void)
+{
+  /* Only the file.  Tearing the server down here would run GObject
+   * finalisers at exit, and this may be reached from an unusual state. */
+  cmacs_mcp_unlink_socket ();
+}
+
+/* True when PID names a process that is still around.  Signal 0 does no
+ * signalling, only the permission-and-existence check; EPERM means it
+ * exists and is not ours, which still counts as live. */
+static gboolean
+cmacs_mcp_pid_alive (long pid)
+{
+  if (pid <= 0)
+    return TRUE;                /* unparseable: leave it alone */
+  if (kill ((pid_t) pid, 0) == 0)
+    return TRUE;
+  return errno != ESRCH;
+}
+
+/* Remove cmacs-mcp-<pid>.sock files whose process is gone.  Bounded to
+ * this user's runtime directory, and never touches a live one -- another
+ * running cmacs is a normal thing to find here. */
+static void
+cmacs_mcp_sweep_stale_sockets (void)
+{
+  const gchar *dirname = g_get_user_runtime_dir ();
+  g_autoptr (GDir) dir = NULL;
+  const gchar *name;
+
+  if (dirname == NULL)
+    return;
+  dir = g_dir_open (dirname, 0, NULL);
+  if (dir == NULL)
+    return;
+
+  while ((name = g_dir_read_name (dir)) != NULL)
+    {
+      const gchar *digits;
+      gchar *end = NULL;
+      long pid;
+      g_autofree gchar *path = NULL;
+
+      if (!g_str_has_prefix (name, "cmacs-mcp-")
+          || !g_str_has_suffix (name, ".sock"))
+        continue;
+
+      digits = name + strlen ("cmacs-mcp-");
+      pid = strtol (digits, &end, 10);
+      /* Only the exact cmacs-mcp-<digits>.sock shape, so a file that
+       * merely looks similar is never removed. */
+      if (end == digits || g_strcmp0 (end, ".sock") != 0)
+        continue;
+      if (cmacs_mcp_pid_alive (pid))
+        continue;
+
+      path = g_build_filename (dirname, name, NULL);
+      if (g_unlink (path) == 0)
+        g_debug ("cmacs-mcp: removed stale socket %s", path);
+    }
+}
+
 /* ── Start / stop helpers ─────────────────────────────────────────── */
 
 static gboolean
@@ -89,10 +184,29 @@ cmacs_mcp_do_start (GError **error)
       return FALSE;
     }
 
+  /* Clear out sockets left by sessions that never got to remove their
+   * own, before claiming ours. */
+  cmacs_mcp_sweep_stale_sockets ();
+
   g_free (socket_path);
   socket_path = g_strdup_printf ("%s/cmacs-mcp-%d.sock",
                                  g_get_user_runtime_dir (),
                                  (int) getpid ());
+
+  /* Our own path may still exist if a previous process held this pid and
+   * died badly; binding onto a leftover inode fails. */
+  cmacs_mcp_unlink_socket ();
+
+  /* Registered once, and only when a server is actually started, so a
+   * session that never runs one adds no exit work. */
+  {
+    static gboolean atexit_registered = FALSE;
+    if (!atexit_registered)
+      {
+        atexit (cmacs_mcp_atexit);
+        atexit_registered = TRUE;
+      }
+  }
 
   mcp_server = mcp_unix_socket_server_new ("cmacs-mcp",
                                             PACKAGE_VERSION,
@@ -147,6 +261,9 @@ cmacs_mcp_do_stop (void)
 
   mcp_unix_socket_server_stop (mcp_server);
   g_clear_object (&mcp_server);
+  /* After the listener is closed, so nothing can connect to a path that
+   * is no longer being served. */
+  cmacs_mcp_unlink_socket ();
 }
 
 /* ── DEFUNs ───────────────────────────────────────────────────────── */

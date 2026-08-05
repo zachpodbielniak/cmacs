@@ -181,7 +181,15 @@ ai-glib's CLI clients ignore the tools argument entirely (=(void)tools= in the c
 
 Nothing asks for confirmation by default: =cmacs-brigade-auto-approve= is =t=.
 
-That switches off the *prompt*, not the *gate*. What an agent may reach at all is its tool allowlist, enforced in C at the dispatch point, and it is unaffected — an agent asking for =*= still cannot call =eval=, =shell=, =bash=, =execute_command=, =send_keys=, =crispy_eval= or the C-patching tools. Those have to be named outright in the agent's definition, which is a deliberate act by whoever wrote it. So =t= means /do not interrupt me about the tools I already granted/, not /grant everything/.
+=*= likewise grants everything an agent could call — =eval=, =shell=, =bash=, =execute_command=, =send_keys=, =crispy_eval=, =bacon_eval= and the C-patching tools included. Both defaults are deliberate: it is your editor and your agents, and the prompt that used to stand in front of these was unanswerable anyway on the surface that reaches them.
+
+To put the dangerous end back behind a deliberate naming, so an agent granted =*= cannot reach it and a definition has to list each one:
+
+#+begin_src elisp
+(setq cmacs-brigade-restrict-privileged-tools t)
+#+end_src
+
+One thing stays on: =cmacs-brigade-block-recursive-tools= (t) still refuses =ai_*= and =brigade_*=. That is a different mechanism from the privileged set — those names re-enter the orchestrator, so an agent that can call them starts work outside its own budget accounting and, through =ai_call=, can recurse into itself without bound. The =agent_*= tools are the sanctioned way to hand work to another agent and are unaffected. Set it to nil to lift that too.
 
 It is the default because the prompt was mostly unanswerable. A tool call arriving from a chat, or any other GLib callback, runs inside a dispatch where Lisp cannot prompt: a minibuffer there enters a recursive edit /underneath/ the dispatch — =read_char= calls =wait_reading_process_output=, which calls =xg_select=, which dispatches the same =GMainContext= again — and the editor wedges, with =C-g= dead because the dispatch guard cleared =waiting_for_input=. cmacs therefore binds =inhibit-interaction= for the duration, a prompt signals instead of hanging, and a =:confirm= tool is declined. Left asking, every gated tool silently failed on the surface that most used it.
 
