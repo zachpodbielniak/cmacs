@@ -90,6 +90,26 @@ A cue word (=use=, =with=, =via=, =run=, =using=, …) has to precede the name, 
 =agent= follow it. Without that rule any mention matched, and asking about a
 vendor's pricing page silently routed the task to that vendor.
 
+Whatever is read out is also *removed from the prompt*. "Run the command pwd
+with Grok" is an instruction plus a routing decision, and only the first
+belongs in the brief — passing the second on asks grok to do something about
+grok, which it reasonably finds confusing:
+
+| You said                                        | Prompt the agent gets            |
+|-------------------------------------------------+----------------------------------|
+| =i need you to run the command PWD with Grok=     | i need you to run the command PWD |
+| =use grok to survey my notes=                     | survey my notes                  |
+| =with claude-code sonnet, refactor the table=     | refactor the table               |
+| =run the command pwd with grok and report back=   | run the command pwd and report back |
+| =summarise the gemini pricing page=               | unchanged — nothing was read out |
+| =with grok, summarise the grok pricing page=      | summarise the grok pricing page  |
+
+The removal is driven by the same cue rule as the extraction, so it can only
+ever take out what became a field. The last row is the case that shows it: the
+first =grok= was a choice and the second is the subject, and only the choice
+goes. The drafted path is cleaned too — the model is told to leave the routing
+out of the brief, and regularly does not.
+
 *** Titles
 
 The headline is a short label, never the instruction restated — a task list

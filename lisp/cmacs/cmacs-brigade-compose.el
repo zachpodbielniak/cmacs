@@ -539,6 +539,51 @@ Only what is actually there; absent keys mean the request did not say."
 
 ;;;; A title that is not the prompt again
 
+(defun cmacs-brigade-compose--strip-choices (text &optional named)
+  "TEXT with the provider, model and agent it names removed.
+
+\"Run the command pwd with Grok\" is two things: an instruction, and a
+routing decision.  Only the first belongs in the brief.  Leaving the
+second in means the agent is told to use itself -- and grok, handed
+\"run pwd with Grok\", reasonably wonders what it is being asked to do
+about grok.
+
+NAMED is the result of `cmacs-brigade-compose--extract'; computed here
+when absent.  Only names it actually found are removed, and only where a
+cue word introduces them, so \"summarise the grok pricing page\" keeps
+its subject and \"with grok, summarise the grok pricing page\" loses only
+the first."
+  (let* ((s (string-trim (replace-regexp-in-string "[ \t\n\r]+" " "
+                                                   (or text ""))))
+         (named (or named (cmacs-brigade-compose--extract s)))
+         (names (delq nil (list (plist-get named :model)
+                                (plist-get named :provider)
+                                (plist-get named :agent))))
+         (case-fold-search t))
+    (when names
+      (let ((choice (concat "[ \t]*\\(?:" (regexp-opt
+                                           cmacs-brigade-compose--cues)
+                            "\\)[ \t]+\\(?:the[ \t]+\\)?"
+                            "\\(?:" (regexp-opt names) "\\)"
+                            "\\(?:[ \t]+\\(?:" (regexp-opt names) "\\)\\)*"
+                            "\\(?:[ \t]+agent\\)?"
+                            ;; The comma takes its whitespace with it.  A
+                            ;; bare "[ \t]*,?" ate the space before "to"
+                            ;; instead, so "use grok to survey X" left a
+                            ;; stranded "to survey X".
+                            "\\(?:[ \t]*,\\)?"
+                            "\\(?:[ \t]+to\\)?")))
+        ;; FIXEDCASE, so nothing downstream tries to case-match a
+        ;; replacement that is empty anyway.
+        (setq s (replace-regexp-in-string choice " " s t t))))
+    ;; Tidy what the removal left behind: doubled spaces, a stranded
+    ;; conjunction, a comma with nothing before it.
+    (setq s (replace-regexp-in-string "[ \t]+" " " s t t))
+    (setq s (replace-regexp-in-string "\\` *[,;] *" "" s t t))
+    (setq s (replace-regexp-in-string " +\\([,.;]\\)" "\\1" s t))
+    (setq s (replace-regexp-in-string "\\`\\(?:and\\|then\\)[ \t]+" "" s t t))
+    (string-trim s)))
+
 (defun cmacs-brigade-compose--derive-title (request)
   "A short label for REQUEST, distinct from the request itself.
 
@@ -547,8 +592,7 @@ whole instruction there answers it worse than a few words would, and
 makes every row look alike.  So: drop the polite opening, drop the
 choices that are carried as their own fields, keep the first clause."
   (let ((s (string-trim (replace-regexp-in-string "[ \t\n\r]+" " "
-                                                  (or request ""))))
-        (named (cmacs-brigade-compose--extract (or request ""))))
+                                                  (or request "")))))
     ;; "please could you ...", "I want you to ..." -- scaffolding.
     (setq s (replace-regexp-in-string
              (concat "\\`\\(?:please[, ]*\\)?\\(?:can\\|could\\|would\\) "
@@ -557,19 +601,9 @@ choices that are carried as their own fields, keep the first clause."
     (setq s (replace-regexp-in-string
              "\\`\\(?:i \\(?:want\\|need\\|would like\\) \\(?:you \\)?to \\)"
              "" s t))
-    ;; The choice clause: "use grok to", "with claude-code sonnet,",
-    ;; "have the general agent".  Built from the names actually found, so
-    ;; it strips exactly what became a field and nothing else.
-    (let ((names (delq nil (list (plist-get named :model)
-                                 (plist-get named :provider)
-                                 (plist-get named :agent)))))
-      (when names
-        (setq s (replace-regexp-in-string
-                 (concat "\\`\\(?:" (regexp-opt cmacs-brigade-compose--cues)
-                         "\\)[ \t]+\\(?:the[ \t]+\\)?"
-                         "\\(?:" (regexp-opt names) "[ \t,]*\\)+"
-                         "\\(?:agent[ \t,]*\\)?\\(?:to[ \t]+\\)?")
-                 "" s t))))
+    ;; The same removal the prompt gets, so the two agree about what the
+    ;; work actually is.
+    (setq s (cmacs-brigade-compose--strip-choices s))
     ;; Removing the choice clause can leave behind the preposition that
     ;; joined it on: "run the researcher agent on the X" -> "on the X".
     (setq s (replace-regexp-in-string
@@ -754,10 +788,14 @@ beats waiting forever."
 Still carries whatever the request named -- provider, model, agent are
 read out of it directly, so they survive a drafting call that failed,
 timed out, or was never possible in this build."
-  (append (list :title (cmacs-brigade-compose--derive-title request)
-                :prompt request
-                :source "your words, undrafted")
-          (cmacs-brigade-compose--extract request)))
+  (let ((named (cmacs-brigade-compose--extract request)))
+    (append (list :title (cmacs-brigade-compose--derive-title request)
+                  ;; Not the request verbatim: the provider it names is a
+                  ;; field now, and passing "with grok" on to grok asks
+                  ;; it to do something about itself.
+                  :prompt (cmacs-brigade-compose--strip-choices request named)
+                  :source "your words, undrafted")
+            named)))
 
 (defconst cmacs-brigade-compose--aliases
   '((title  . (title name headline summary label))
@@ -841,8 +879,14 @@ plan that would then fail at start with a puzzling error."
                    (cmacs-brigade-compose--prose-field spec 'prompt)
                    request)))
       (list :title title
-            :prompt (cmacs-brigade-compose--pick-prompt
-                     (cmacs-brigade-compose--prose-field spec 'prompt) request)
+            ;; Cleaned whichever way the prompt was arrived at: the
+            ;; model is told to leave the routing out and regularly does
+            ;; not, and `--pick-prompt' falls back to the raw request.
+            :prompt (cmacs-brigade-compose--strip-choices
+                     (cmacs-brigade-compose--pick-prompt
+                      (cmacs-brigade-compose--prose-field spec 'prompt)
+                      request)
+                     said)
             :agent agent
             :provider provider
             :model model

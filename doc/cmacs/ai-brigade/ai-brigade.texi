@@ -407,6 +407,16 @@ A cue word (@samp{use}, @samp{with}, @samp{via}, @samp{run}, @samp{using}
 rule any mention matched, and asking about a vendor's pricing page
 silently routed the task to that vendor.
 
+Whatever is read out is also removed from the prompt.  ``Run the command
+pwd with Grok'' is an instruction plus a routing decision, and only the
+first belongs in the brief; passing the second on asks grok to do
+something about grok.  The removal uses the same cue rule as the
+extraction, so it can only take out what became a field---in ``with
+grok, summarise the grok pricing page'' the first is a choice and the
+second is the subject, and only the choice goes.  The drafted path is
+cleaned as well, because the model is told to leave the routing out and
+regularly does not.
+
 The headline is a short label, never the instruction restated---the
 choices are stripped from it, as is the polite opening.  A title the
 model proposes is used only when it is genuinely shorter than the prompt

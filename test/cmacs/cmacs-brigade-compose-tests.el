@@ -598,6 +598,76 @@ reachable."
     (should (member "e" keys))
     (should (member "o" keys))))
 
+
+;;;; The brief is not the routing
+
+(ert-deftest cmacs-brigade-compose-prompt-loses-the-provider ()
+  "The provider is a field, so it does not also reach the agent.
+
+\"Run the command pwd with Grok\" is an instruction plus a routing
+decision.  Passing the second on means grok is asked to do something
+about grok, which it reasonably finds confusing."
+  (skip-unless (featurep 'cmacs-brigade-compose))
+  (cmacs-brigade-agent-reload)
+  (should (equal "i need you to run the command PWD"
+                 (cmacs-brigade-compose--strip-choices
+                  "i need you to run the command PWD with Grok")))
+  (should (equal "survey my notes for the infinity fund"
+                 (cmacs-brigade-compose--strip-choices
+                  "use grok to survey my notes for the infinity fund")))
+  (should (equal "refactor the gowl keybind table"
+                 (cmacs-brigade-compose--strip-choices
+                  "with claude-code sonnet, refactor the gowl keybind table")))
+  ;; Mid-sentence, not just at either end.
+  (should (equal "run the command pwd and report back"
+                 (cmacs-brigade-compose--strip-choices
+                  "run the command pwd with grok and report back"))))
+
+(ert-deftest cmacs-brigade-compose-strip-keeps-the-subject ()
+  "A name that is the subject of the work survives.
+
+The strip is driven by the same cue rule the extraction uses, so
+anything it did not read as a choice is left alone -- including a second
+mention of the very provider it did strip."
+  (skip-unless (featurep 'cmacs-brigade-compose))
+  (let ((text "summarise the gemini pricing page for me"))
+    (should (equal text (cmacs-brigade-compose--strip-choices text))))
+  (should (equal "summarise the grok pricing page"
+                 (cmacs-brigade-compose--strip-choices
+                  "with grok, summarise the grok pricing page")))
+  ;; Nothing named at all: unchanged.
+  (should (equal "clean up the queue"
+                 (cmacs-brigade-compose--strip-choices "clean up the queue"))))
+
+(ert-deftest cmacs-brigade-compose-strip-leaves-no-stranded-words ()
+  "Removing the clause does not leave its grammar behind.
+
+A stranded leading `to' was exactly what a too-greedy whitespace match
+produced: \"use grok to survey X\" became \"to survey X\"."
+  (skip-unless (featurep 'cmacs-brigade-compose))
+  (dolist (req '("use grok to survey my notes"
+                 "using grok-4.5 write a summary"
+                 "with claude-code sonnet, refactor the table"
+                 "have the general agent clean up the queue"))
+    (let ((out (cmacs-brigade-compose--strip-choices req)))
+      (should-not (string-match-p "\\`\\(?:to\\|and\\|then\\|,\\)\\_>" out))
+      (should-not (string-match-p "\\`[ \t,]" out))
+      (should-not (string-match-p "  " out)))))
+
+(ert-deftest cmacs-brigade-compose-drafted-prompt-is-cleaned-too ()
+  "Both routes to a prompt drop the routing, not just the fallback.
+
+The model is told to leave it out and regularly does not."
+  (skip-unless (featurep 'cmacs-brigade-compose))
+  (cmacs-brigade-agent-reload)
+  (let ((state (cmacs-brigade-compose--state-from-json
+                "{\"title\":\"Print the directory\",\
+\"prompt\":\"Use grok to run the command pwd and report the output.\"}"
+                "run the command pwd with grok")))
+    (should (equal "grok" (plist-get state :provider)))
+    (should-not (string-match-p "grok" (plist-get state :prompt)))
+    (should (string-match-p "pwd" (plist-get state :prompt)))))
+
 (provide 'cmacs-brigade-compose-tests)
 
 ;;; cmacs-brigade-compose-tests.el ends here
