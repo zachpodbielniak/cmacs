@@ -29,6 +29,16 @@ hook, that hook is public.
 
 See [[file:extending.org][Extending the brigade]] — that is the document that matters.
 
+* When the fabric loads
+
+Lazily, and you should not have to think about it. Nothing requires =cmacs-brigade= at startup — its own eager-load block lives inside the file — so it is pulled in by whichever surface needs it first:
+
+- opening a =cmacs-ai= chat, through an autoloaded hook registered in loaddefs;
+- starting the MCP server, which loads the Elisp side before publishing from the C mirror;
+- any =cmacs-brigade-*= command, =emacsctl brigade …=, or a D-Bus call.
+
+Worth knowing because it used to be none of them: the fabric only existed after you ran a brigade command by hand, so a chat and an MCP client both saw a brigade with no tools and no way to tell that was why.
+
 * Your first run
 
 #+begin_src elisp

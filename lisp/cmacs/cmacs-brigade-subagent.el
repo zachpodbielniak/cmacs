@@ -256,6 +256,7 @@ useful to have by hand and safe to hand a model unprompted."
   :type '(choice (const :tag "None" nil) string)
   :group 'cmacs-brigade)
 
+;;;###autoload
 (defun cmacs-brigade-chat-install-tools (executor _provider)
   "Add the brigade's tools to a cmacs-ai chat EXECUTOR."
   (when (and cmacs-brigade-chat-tools executor)
@@ -269,9 +270,15 @@ useful to have by hand and safe to hand a model unprompted."
       (error (message "cmacs-brigade: could not add tools to the chat: %s"
                       (error-message-string err))))))
 
-(with-eval-after-load 'cmacs-ai-chat
-  (add-hook 'cmacs-ai-chat-executor-functions
-            #'cmacs-brigade-chat-install-tools))
+;; The hook goes into loaddefs as a bare form, so it is in place at
+;; startup without this file -- or the brigade at all -- being loaded.
+;; Nothing requires `cmacs-brigade': its own eager-load block sits inside
+;; it, so unless something pulls the file in, the registries stay empty
+;; and a chat sees no brigade tools.  Registering the hook eagerly and
+;; the handler lazily means opening a chat is what loads the fabric.
+;;;###autoload (add-hook 'cmacs-ai-chat-executor-functions #'cmacs-brigade-chat-install-tools)
+(add-hook 'cmacs-ai-chat-executor-functions
+          #'cmacs-brigade-chat-install-tools)
 
 (provide 'cmacs-brigade-subagent)
 

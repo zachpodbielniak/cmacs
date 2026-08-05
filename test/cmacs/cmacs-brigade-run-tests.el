@@ -15,6 +15,7 @@
 (require 'cmacs-brigade-output nil 'noerror)
 (require 'cmacs-brigade-subagent nil 'noerror)
 (require 'cmacs-ai-chat nil 'noerror)
+(require 'cmacs-brigade-subagent nil 'noerror)
 (require 'cl-lib)
 
 (defconst cmacs-brigade-tests--root
@@ -796,6 +797,48 @@ the point is the sync discipline, not the transport."
       (dolist (verb '("brigade spawn" "brigade status" "brigade result"
                       "brigade cancel" "brigade list" "brigade agents"))
         (should (string-search verb text))))))
+
+
+(ert-deftest cmacs-brigade-chat-hook-is-armed-without-loading-the-fabric ()
+  "The executor hook is in place at startup, before the brigade loads.
+
+Nothing requires `cmacs-brigade' -- its eager-load block sits inside the
+file -- so in a real session none of it existed until a brigade command
+was run by hand.  A chat therefore saw no brigade tools, and neither did
+an MCP client.  The hook is now a bare form in loaddefs and the handler
+is autoloaded, so opening a chat is what pulls the fabric in."
+  (skip-unless (featurep 'cmacs-brigade-subagent))
+  (should (memq 'cmacs-brigade-chat-install-tools
+                cmacs-ai-chat-executor-functions))
+  ;; and it is registered through an autoload cookie, so a cold session
+  ;; has it too -- asserted against the source, since this session has
+  ;; the file loaded already
+  (let ((file (expand-file-name "lisp/cmacs/cmacs-brigade-subagent.el"
+                                cmacs-brigade-tests--root)))
+    (skip-unless (file-readable-p file))
+    (with-temp-buffer
+      (insert-file-contents file)
+      (should (string-match-p
+               ";;;###autoload (add-hook 'cmacs-ai-chat-executor-functions"
+               (buffer-string))))))
+
+(ert-deftest cmacs-brigade-mcp-publication-loads-the-lisp-side ()
+  "The MCP publisher pulls in the Elisp registry before reading the mirror.
+
+The mirror is filled by `cmacs-brigade-register-tool'; with nothing
+requiring the brigade it was empty at server start, so every MCP client
+saw a brigade with no tools."
+  (skip-unless (featurep 'cmacs-brigade-subagent))
+  (let ((file (expand-file-name "cmacs/mcp/cmacs-mcp-tools-brigade.c"
+                                cmacs-brigade-tests--root)))
+    (skip-unless (file-readable-p file))
+    (with-temp-buffer
+      (insert-file-contents file)
+      (let ((text (buffer-string)))
+        (should (string-search "(require 'cmacs-brigade nil t)" text))
+        ;; before the mirror is walked, not after
+        (should (< (string-search "(require 'cmacs-brigade nil t)" text)
+                   (string-search "cmacs_brigade_registry_foreach" text)))))))
 
 (provide 'cmacs-brigade-run-tests)
 

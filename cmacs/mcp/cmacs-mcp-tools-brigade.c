@@ -226,6 +226,26 @@ publish_one (const CmacsBrigadeTool *tool, gpointer user_data)
 void
 cmacs_mcp_tools_brigade_register (McpServer *server)
 {
+  GError *err = NULL;
+  gchar *res;
+
+  /* Load the Elisp side first.  The C mirror this publishes from is
+   * filled by `cmacs-brigade-register-tool', and nothing else requires
+   * `cmacs-brigade' -- its eager-load block lives inside the file -- so
+   * without this the mirror is empty at server start and every MCP
+   * client sees a brigade with no tools, the subagent controls
+   * included.  Failure is not fatal: an MCP server with the built-in
+   * tools and none of the brigade's is still worth having. */
+  res = cmacs_dispatch_eval_string ("(require 'cmacs-brigade nil t)", &err);
+  if (res == NULL)
+    {
+      g_warning ("cmacs-brigade: could not load the Lisp side for MCP: %s",
+                 err ? err->message : "unknown error");
+      g_clear_error (&err);
+    }
+  else
+    g_free (res);
+
   cmacs_brigade_registry_init ();
   cmacs_brigade_registry_foreach (publish_one, server);
 }
