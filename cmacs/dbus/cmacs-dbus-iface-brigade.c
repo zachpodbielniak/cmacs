@@ -39,6 +39,7 @@ static const gchar *iface_xml =
   "      <arg type='s' name='task' direction='in'/>"
   "      <arg type='s' name='agent' direction='in'/>"
   "      <arg type='s' name='title' direction='in'/>"
+  "      <arg type='s' name='model' direction='in'/>"
   "      <arg type='s' name='id' direction='out'/>"
   "    </method>"
   "    <method name='Status'>"
@@ -58,6 +59,13 @@ static const gchar *iface_xml =
   "    </method>"
   "    <method name='Agents'>"
   "      <arg type='s' name='agents' direction='out'/>"
+  "    </method>"
+  "    <method name='Providers'>"
+  "      <arg type='s' name='providers' direction='out'/>"
+  "    </method>"
+  "    <method name='Models'>"
+  "      <arg type='s' name='provider' direction='in'/>"
+  "      <arg type='s' name='models' direction='out'/>"
   "    </method>"
   "  </interface>"
   "</node>";
@@ -164,10 +172,10 @@ on_method_call (GDBusConnection *c, const gchar *s, const gchar *o,
 
   if (g_strcmp0 (m, "Spawn") == 0)
     {
-      const gchar *task, *agent, *title;
+      const gchar *task, *agent, *title, *model;
       g_autofree gchar *args = NULL;
 
-      g_variant_get (p, "(&s&s&s)", &task, &agent, &title);
+      g_variant_get (p, "(&s&s&s&s)", &task, &agent, &title, &model);
       if (*task == '\0')
         {
           g_dbus_method_invocation_return_dbus_error (
@@ -181,7 +189,8 @@ on_method_call (GDBusConnection *c, const gchar *s, const gchar *o,
             "agent must be an agent name ([a-zA-Z][a-zA-Z0-9_@:-]*)");
           return;
         }
-      args = build_args ("task", task, "agent", agent, "title", title, NULL);
+      args = build_args ("task", task, "agent", agent, "title", title,
+                         "model", model, NULL);
       call_tool (iv, "agent_spawn", args);
     }
   else if (g_strcmp0 (m, "Status") == 0
@@ -207,6 +216,25 @@ on_method_call (GDBusConnection *c, const gchar *s, const gchar *o,
   else if (g_strcmp0 (m, "List") == 0)
     {
       call_tool (iv, "agent_list", "{}");
+    }
+  else if (g_strcmp0 (m, "Providers") == 0)
+    {
+      call_tool (iv, "agent_providers", "{}");
+    }
+  else if (g_strcmp0 (m, "Models") == 0)
+    {
+      const gchar *provider;
+      g_autofree gchar *args = NULL;
+
+      g_variant_get (p, "(&s)", &provider);
+      if (*provider == '\0')
+        {
+          g_dbus_method_invocation_return_dbus_error (
+            iv, "org.cmacs.Editor1.Error", "missing provider");
+          return;
+        }
+      args = build_args ("provider", provider, NULL);
+      call_tool (iv, "agent_models", args);
     }
   else if (g_strcmp0 (m, "Agents") == 0)
     {

@@ -47,7 +47,7 @@ static const CtlMethodSpec subsys_specs[] = {
    * an agent gets over MCP, so a shell script and a model drive the
    * queue through the same path. */
   { "brigade spawn", "Hand a task to an agent; prints the task id",
-    CTL_IFACE_BRIGADE, "Spawn", "s:task s?:agent s?:title",
+    CTL_IFACE_BRIGADE, "Spawn", "s:task s?:agent s?:title s?:model",
     CTL_REPLY_STRING },
   { "brigade status", "State, turns, tokens and cost of a task",
     CTL_IFACE_BRIGADE, "Status", "s:id", CTL_REPLY_STRING },
@@ -59,6 +59,10 @@ static const CtlMethodSpec subsys_specs[] = {
     CTL_IFACE_BRIGADE, "List", NULL, CTL_REPLY_STRING },
   { "brigade agents", "Agent definitions available to spawn",
     CTL_IFACE_BRIGADE, "Agents", NULL, CTL_REPLY_STRING },
+  { "brigade providers", "AI providers this cmacs can reach",
+    CTL_IFACE_BRIGADE, "Providers", NULL, CTL_REPLY_STRING },
+  { "brigade models", "Models a provider offers, as provider/model",
+    CTL_IFACE_BRIGADE, "Models", "s:provider", CTL_REPLY_STRING },
 
   /* gsurf */
   { "gsurf open", "Open a URL in a new gsurf buffer",

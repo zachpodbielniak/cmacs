@@ -107,6 +107,9 @@ None of the three ever creates a window. =display-buffer-alist= still applies if
 | =m= | set the provider and model |
 | =b= | set the spend ceiling |
 | =t= | set the tool allowlist |
+| =d= | delete the task, from the runtime and its plan |
+| =N= | write a new agent definition |
+| =T= | list the tools an agent can be given |
 | =A= | re-read agent definitions from disk |
 | =g= | refresh |
 | =M= | search memory |

@@ -97,6 +97,50 @@
       (let ((secs (- (if (and end (> end 0)) end (floor (float-time))) start)))
         (format "%d:%02d" (/ secs 60) (% secs 60))))))
 
+(defcustom cmacs-brigade-dashboard-min-width 150
+  "Narrowest the table is laid out at, however narrow the window is.
+
+Below this the columns truncate to nothing useful: a task id clipped to
+ten characters cannot be matched against the one an agent reported, and a
+model clipped to eighteen loses the half that says which model it is.
+The dashboard sets `truncate-lines\=', so in a narrower window the line
+scrolls rather than wrapping -- the lesser problem."
+  :type 'integer
+  :group 'cmacs-brigade)
+
+(defun cmacs-brigade-dashboard--columns ()
+  "Column widths for the table, as a plist, fitted to the window.
+
+TASK takes whatever is left over: it is the one field whose useful length
+has no upper bound, and the only one worth truncating first."
+  (let* ((total (max cmacs-brigade-dashboard-min-width
+                     (- (window-width
+                         (get-buffer-window (current-buffer) t))
+                        1)))
+         ;; A uuid is 36; ids are compared against what an agent prints,
+         ;; so it is shown whole.
+         (id 36)
+         (agent 20)
+         (model 28)
+         (fixed (+ 3 1 id 1 agent 1 model 1 5 1 11 1 9))
+         ;; TASK absorbs the slack, with a floor: a title cut to a
+         ;; dozen characters is as useless as no title.
+         (task (max 24 (- total fixed 1))))
+    (list :st 3 :id id :agent agent :model model :task task
+          :turns 5 :tokens 11 :cost 9
+          :total (+ fixed task 1))))
+
+(defun cmacs-brigade-dashboard--row-format (c)
+  "Build the row format string for column widths C.
+
+Emacs `format\=' has no `%-*s\=' -- the star width is a C printf feature --
+so the spec is assembled from the widths rather than passed alongside
+them."
+  (format "%%-%ds %%-%ds %%-%ds %%-%ds %%-%ds %%%ds %%%ds %%%ds"
+          (plist-get c :st) (plist-get c :id) (plist-get c :agent)
+          (plist-get c :model) (plist-get c :task) (plist-get c :turns)
+          (plist-get c :tokens) (plist-get c :cost)))
+
 (defun cmacs-brigade-dashboard--render ()
   "Redraw the dashboard, keeping the cursor where it was."
   (let ((buf (get-buffer "*brigade*")))
@@ -107,18 +151,22 @@
               (records (and (fboundp 'cmacs-brigade-task-list)
                             (cmacs-brigade-task-list))))
           (erase-buffer)
-          (cmacs-brigade-dashboard--insert-header records)
-          (insert (make-string 78 ?─) "\n")
-          (insert (propertize
-                   (format "%-3s %-10s %-12s %-18s %-24s %5s %8s %9s\n"
-                           "ST" "ID" "AGENT" "MODEL" "TASK"
-                           "TURNS" "TOKENS" "COST")
-                   'face 'bold))
-          (if (null records)
-              (cmacs-brigade-dashboard--insert-empty)
-            (dolist (r (cmacs-brigade-dashboard--sort records))
-              (cmacs-brigade-dashboard--insert-row r)))
-          (insert (make-string 78 ?─) "\n")
+          (let ((c (cmacs-brigade-dashboard--columns)))
+            (cmacs-brigade-dashboard--insert-header records)
+            ;; The rule matches the table, rather than a constant that
+            ;; stopped matching the moment a column changed.
+            (insert (make-string (plist-get c :total) ?─) "\n")
+            (insert (propertize
+                     (concat (format (cmacs-brigade-dashboard--row-format c)
+                                     "ST" "ID" "AGENT" "MODEL" "TASK"
+                                     "TURNS" "TOKENS" "COST")
+                             "\n")
+                     'face 'bold))
+            (if (null records)
+                (cmacs-brigade-dashboard--insert-empty)
+              (dolist (r (cmacs-brigade-dashboard--sort records))
+                (cmacs-brigade-dashboard--insert-row r c)))
+            (insert (make-string (plist-get c :total) ?─) "\n"))
           (cmacs-brigade-dashboard--insert-panels)
           (insert "\n" (cmacs-brigade-dashboard--hints) "\n")
           (goto-char (point-min))
@@ -157,13 +205,14 @@
         (if m (format "idx %s chunks" (plist-get m :count)) "no index"))
     "memory unavailable"))
 
-(defun cmacs-brigade-dashboard--insert-row (r)
-  (let* ((state (plist-get r :state))
+(defun cmacs-brigade-dashboard--insert-row (r &optional c)
+  (let* ((c (or c (cmacs-brigade-dashboard--columns)))
+         (state (plist-get r :state))
          (id (or (plist-get r :id) "?"))
          (agent (plist-get r :agent))
-         (line (format "%-3s %-10s %-12s %-18s %-24s %5s %8s %9s"
+         (line (format (cmacs-brigade-dashboard--row-format c)
                        (cmacs-brigade-dashboard--glyph state)
-                       (truncate-string-to-width id 10)
+                       (truncate-string-to-width id (plist-get c :id))
                        ;; The base name, not the internal `researcher@b12c7a46'
                        ;; that a per-task model override produces.
                        (truncate-string-to-width
@@ -171,11 +220,12 @@
                             (format "%s" (cmacs-brigade-agent-base-name
                                           (intern agent)))
                           "—")
-                        12)
+                        (plist-get c :agent))
                        (truncate-string-to-width
-                        (cmacs-brigade-dashboard--model r) 18)
+                        (cmacs-brigade-dashboard--model r)
+                        (plist-get c :model))
                        (truncate-string-to-width
-                        (or (plist-get r :title) id) 24)
+                        (or (plist-get r :title) id) (plist-get c :task))
                        (or (plist-get r :turns) 0)
                        (format "%s/%s" (or (plist-get r :in-tokens) 0)
                                (or (plist-get r :out-tokens) 0))
@@ -210,6 +260,7 @@ a to pick another\n"
   (insert "\n  No tasks yet.\n\n")
   (insert "    c   create a plan and open it\n")
   (insert "    o   read what a finished task produced\n")
+  (insert "    N   write a new agent definition\n")
   (insert "    p   open an existing plan\n")
   (insert "    ?   all keys\n\n")
   (let ((agents (cmacs-brigade-registry-list 'agent)))
@@ -245,9 +296,10 @@ a to pick another\n"
                              'face 'error)))))))
 
 (defun cmacs-brigade-dashboard--hints ()
-  (concat " s start   K cancel  o output   RET plan    c new plan\n"
-          " a agent   m model   b budget   t tools     p open plan\n"
-          " g refresh M memory  A agents   ? keys      q quit"))
+  (concat " s start   K cancel  d delete   o output    RET plan\n"
+          " a agent   m model   b budget   t tools      c new plan\n"
+          " N new agent  T tool list  A reload agents   p open plan\n"
+          " g refresh M memory  ? keys     q quit"))
 
 (defun cmacs-brigade-dashboard--record-at-point ()
   (get-text-property (line-beginning-position) 'cmacs-brigade-record))
@@ -413,6 +465,45 @@ option the UI cannot express."
   (let ((r (cmacs-brigade-dashboard--record-or-error)))
     (cmacs-brigade-output-show (plist-get r :id))))
 
+(defun cmacs-brigade-dashboard-delete ()
+  "Delete the task on this line, from the runtime and from its plan.
+
+Both, because deleting only the runtime record leaves the headline to be
+re-adopted on the next save, and deleting only the headline leaves a
+record with nothing behind it."
+  (interactive)
+  (let* ((r (cmacs-brigade-dashboard--record-or-error))
+         (id (plist-get r :id))
+         (plan (plist-get r :plan))
+         (title (or (plist-get r :title) id)))
+    (when (y-or-n-p (format "Delete %s? " title))
+      ;; A running task is stopped first: forgetting the record while the
+      ;; process lives would orphan it, still spending.
+      (when (memq (plist-get r :state) '(running starting queued))
+        (ignore-errors (cmacs-brigade-cancel-task id)))
+      (when (and plan (stringp plan) (file-exists-p plan))
+        (with-current-buffer (find-file-noselect plan)
+          (save-excursion
+            (when-let* ((marker (gethash id (cmacs-brigade-plan--id-index))))
+              (goto-char marker)
+              (org-back-to-heading t)
+              (org-cut-subtree)))
+          (save-buffer)))
+      (when (fboundp 'cmacs-brigade-task-forget)
+        (cmacs-brigade-task-forget id))
+      (cmacs-brigade-dashboard-refresh)
+      (message "cmacs-brigade: deleted %s" title))))
+
+(defun cmacs-brigade-dashboard-new-agent ()
+  "Create a new agent definition."
+  (interactive)
+  (call-interactively #'cmacs-brigade-new-agent))
+
+(defun cmacs-brigade-dashboard-list-tools ()
+  "Show the tools an agent can be given."
+  (interactive)
+  (cmacs-brigade-list-tools))
+
 (defun cmacs-brigade-dashboard-reload-agents ()
   "Re-read agent definitions from disk."
   (interactive)
@@ -474,6 +565,9 @@ knowing that `cmacs-brigade-plan-create\=' exists and where plans live."
     (define-key map (kbd "b") #'cmacs-brigade-dashboard-set-budget)
     (define-key map (kbd "t") #'cmacs-brigade-dashboard-set-tools)
     (define-key map (kbd "A") #'cmacs-brigade-dashboard-reload-agents)
+    (define-key map (kbd "d") #'cmacs-brigade-dashboard-delete)
+    (define-key map (kbd "N") #'cmacs-brigade-dashboard-new-agent)
+    (define-key map (kbd "T") #'cmacs-brigade-dashboard-list-tools)
     (define-key map (kbd "?") #'cmacs-brigade-dashboard-help)
     (define-key map (kbd "q") #'cmacs-brigade-dashboard-quit)
     ;; Evil's intercept map takes the buffer over completely, so motion

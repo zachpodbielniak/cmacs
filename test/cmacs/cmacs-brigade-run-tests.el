@@ -915,6 +915,154 @@ asked for a prompt."
   (let ((cmacs-brigade-auto-approve nil))
     (should (equal "fine" (cmacs-brigade-call-tool "ungated_probe" "{}" "x")))))
 
+
+;;;; Table layout
+
+(ert-deftest cmacs-brigade-dashboard-columns-fit-real-values ()
+  "Every column is wide enough for what actually goes in it.
+
+The reported symptom was a table whose fields were all clipped: a uuid
+cut to ten characters, `agent-code-r', `claude/claude-sonn'.  An id you
+cannot match against the one an agent printed is not an id."
+  (skip-unless (featurep 'cmacs-brigade-dashboard))
+  (let ((c (cmacs-brigade-dashboard--columns)))
+    ;; a uuid is 36
+    (should (>= (plist-get c :id) 36))
+    (should (>= (plist-get c :agent) (length "agent-code-reviewer")))
+    (should (>= (plist-get c :model) (length "claude/claude-sonnet-4-6")))
+    (should (>= (plist-get c :task) 24))))
+
+(ert-deftest cmacs-brigade-dashboard-rule-matches-the-table ()
+  "The horizontal rule is as wide as the row, not a stale constant."
+  (skip-unless (featurep 'cmacs-brigade-dashboard))
+  (let* ((c (cmacs-brigade-dashboard--columns))
+         (row (format (cmacs-brigade-dashboard--row-format c)
+                      "ST" "ID" "AGENT" "MODEL" "TASK" "T" "TOK" "C")))
+    (should (= (length row) (plist-get c :total)))))
+
+(ert-deftest cmacs-brigade-dashboard-row-shows-values-whole ()
+  "A realistic row is not truncated."
+  (skip-unless (and (featurep 'cmacs-brigade-dashboard)
+                    (fboundp 'cmacs-brigade-task-adopt)))
+  (cmacs-brigade-register-agent :name 'layout-probe-agent :prompt "p"
+                                :model "claude/claude-sonnet-4-6")
+  (let ((id "04987c35-9c3f-4a1b-8e2d-000000000000"))
+    (cmacs-brigade-task-adopt id "p.org" "layout-probe-agent"
+                              "test pwd via subagent")
+    (unwind-protect
+        (with-temp-buffer
+          (cmacs-brigade-dashboard--insert-row (cmacs-brigade-task-get id))
+          (let ((line (buffer-string)))
+            (should (string-match-p (regexp-quote id) line))
+            (should (string-match-p "layout-probe-agent" line))
+            (should (string-match-p "claude/claude-sonnet-4-6" line))
+            (should (string-match-p "test pwd via subagent" line))))
+      (ignore-errors (cmacs-brigade-task-forget id)))))
+
+(ert-deftest cmacs-brigade-dashboard-binds-delete-and-new-agent ()
+  (skip-unless (featurep 'cmacs-brigade-dashboard))
+  (dolist (cell '(("d" . cmacs-brigade-dashboard-delete)
+                  ("N" . cmacs-brigade-dashboard-new-agent)
+                  ("T" . cmacs-brigade-dashboard-list-tools)))
+    (should (eq (cdr cell)
+                (lookup-key cmacs-brigade-dashboard-mode-map
+                            (kbd (car cell)))))))
+
+
+;;;; Provider and model selection
+
+(ert-deftest cmacs-brigade-provider-and-model-tools-exist ()
+  "An agent can find out what it may spawn with, on every surface."
+  (skip-unless (featurep 'cmacs-brigade-subagent))
+  (dolist (n '(agent-providers agent-models))
+    (should (cmacs-brigade-registry-get 'tool n))
+    ;; read-only: gating these would make choosing a model impossible
+    (should-not (cmacs-brigade-tool-destructive
+                 (cmacs-brigade-registry-get 'tool n)))))
+
+(ert-deftest cmacs-brigade-spawn-takes-an-optional-model ()
+  "The model is optional and defaults to the agent's own."
+  (skip-unless (featurep 'cmacs-brigade-subagent))
+  (let* ((tool (cmacs-brigade-registry-get 'tool 'agent-spawn))
+         (params (cmacs-brigade-tool-params tool))
+         (model (cl-find "model" params
+                         :key (lambda (p) (format "%s" (plist-get p :name)))
+                         :test #'equal)))
+    (should model)
+    (should-not (plist-get model :required))))
+
+(ert-deftest cmacs-brigade-spawn-model-reaches-the-plan ()
+  "A model passed to spawn is written as :MODEL: on the task.
+
+Through the plan rather than held in memory, so the override is visible,
+editable and survives a restart like a hand-written one."
+  (skip-unless (featurep 'cmacs-brigade-subagent))
+  (let* ((dir (file-name-as-directory (make-temp-file "brigade-spawn" t)))
+         (cmacs-brigade-plan-directory dir)
+         (cmacs-brigade-subagent-plan (expand-file-name "s.org" dir)))
+    (unwind-protect
+        (progn
+          (cmacs-brigade-register-agent :name 'spawn-model-agent :prompt "p"
+                                        :model "base/model")
+          (cl-letf (((symbol-function 'cmacs-brigade-start-task) #'ignore))
+            (cmacs-brigade-subagent-spawn 'spawn-model-agent "do it" nil nil
+                                          "ollama/gpt-oss:20b"))
+          (with-temp-buffer
+            (insert-file-contents cmacs-brigade-subagent-plan)
+            (should (string-match-p ":MODEL:  ollama/gpt-oss:20b"
+                                    (buffer-string)))))
+      (dolist (b (buffer-list))
+        (when (and (buffer-file-name b)
+                   (string-prefix-p dir (buffer-file-name b)))
+          (with-current-buffer b (set-buffer-modified-p nil))
+          (kill-buffer b)))
+      (delete-directory dir t))))
+
+(ert-deftest cmacs-brigade-dbus-and-emacsctl-offer-provider-and-model ()
+  "The same two lookups exist off-editor, and spawn takes a model there."
+  (skip-unless (featurep 'cmacs-brigade-subagent))
+  (let ((dbus (expand-file-name "cmacs/dbus/cmacs-dbus-iface-brigade.c"
+                                cmacs-brigade-tests--root))
+        (ctl (expand-file-name "cmacs/emacsctl/ctl-cmd-subsys.c"
+                               cmacs-brigade-tests--root)))
+    (skip-unless (and (file-readable-p dbus) (file-readable-p ctl)))
+    (let ((d (with-temp-buffer (insert-file-contents dbus) (buffer-string)))
+          (k (with-temp-buffer (insert-file-contents ctl) (buffer-string))))
+      (dolist (m '("Providers" "Models"))
+        (should (string-match-p (format "name='%s'" m) d)))
+      ;; Spawn's XML and its g_variant_get must agree, or every call fails
+      (should (string-match-p "name='model' direction='in'" d))
+      (should (string-search "\"(&s&s&s&s)\"" d))
+      (dolist (v '("brigade providers" "brigade models"))
+        (should (string-search v k)))
+      (should (string-search "s?:model" k)))))
+
+(ert-deftest cmacs-brigade-agent-skeleton-is-loadable ()
+  "The skeleton `cmacs-brigade-new-agent' writes parses as a definition.
+
+Writing a template that the parser then rejects would be worse than no
+template at all."
+  (skip-unless (fboundp 'cmacs-brigade-new-agent))
+  (let* ((dir (file-name-as-directory (make-temp-file "brigade-agent" t)))
+         (cmacs-brigade-agent-path (list dir dir)))
+    (unwind-protect
+        (let ((file (cmacs-brigade-new-agent "skeleton-probe")))
+          (with-current-buffer (find-buffer-visiting file)
+            (save-buffer))
+          (let ((def (cmacs-brigade-agent-load-file file)))
+            (should def)
+            (should (cmacs-brigade-agent-get 'skeleton-probe))
+            ;; and the worker resolves, since the skeleton leaves it out
+            (should (cmacs-brigade-registry-get
+                     'worker (cmacs-brigade-resolve-worker
+                              (cmacs-brigade-agent-get 'skeleton-probe))))))
+      (dolist (b (buffer-list))
+        (when (and (buffer-file-name b)
+                   (string-prefix-p dir (buffer-file-name b)))
+          (with-current-buffer b (set-buffer-modified-p nil))
+          (kill-buffer b)))
+      (delete-directory dir t))))
+
 (provide 'cmacs-brigade-run-tests)
 
 ;;; cmacs-brigade-run-tests.el ends here

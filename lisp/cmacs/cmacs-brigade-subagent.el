@@ -32,6 +32,7 @@
 (require 'cmacs-brigade-registry)
 (require 'cmacs-brigade-run)
 (require 'cmacs-brigade-output)
+(require 'cmacs-ai nil 'noerror)
 (require 'cl-lib)
 (require 'subr-x)
 
@@ -62,6 +63,10 @@ tree is expensive in a way that is hard to notice until the bill.  Depth
   "Task id -> the task that spawned it.")
 
 (declare-function cmacs-brigade-plan-adopt "cmacs-brigade-plan")
+(declare-function cmacs-ai-providers "cmacs-ai-defuns.c")
+(declare-function cmacs-ai-list-models "cmacs-ai-stream.c")
+(declare-function cmacs-ai-client-new "cmacs-ai-client.c")
+(declare-function cmacs-ai-client-cli-p "cmacs-ai-client.c")
 (declare-function cmacs-brigade-plan--entry-id "cmacs-brigade-plan")
 (defvar cmacs-brigade-plan-todo-line)
 (defvar cmacs-brigade-plan-directory)
@@ -99,11 +104,13 @@ tree is expensive in a way that is hard to notice until the bill.  Depth
   "The task that spawned TASK-ID, or nil."
   (gethash task-id cmacs-brigade-subagent--parent))
 
-(defun cmacs-brigade-subagent-spawn (agent task &optional title parent)
+(defun cmacs-brigade-subagent-spawn (agent task &optional title parent model)
   "Queue TASK for AGENT and return the new task id.
 
 PARENT, when given, is the task doing the spawning; it bounds depth and
-puts the pair on the dashboard as a tree."
+puts the pair on the dashboard as a tree.  MODEL overrides the agent's
+own, as \"provider/model\"; nil keeps whatever the agent definition
+says, which is the usual case."
   (let* ((agent (or agent cmacs-brigade-subagent-default-agent
                     (car (cmacs-brigade-registry-list 'agent))))
          (depth (if parent (1+ (cmacs-brigade-subagent-depth parent)) 0)))
@@ -131,6 +138,11 @@ puts the pair on the dashboard as a tree."
                               (cmacs-brigade-subagent--summarize task))))
           (insert "  :PROPERTIES:\n"
                   (format "  :AGENT:  %s\n" agent)
+                  ;; Written as a property so the override is visible in
+                  ;; the plan and survives a restart, the same way a
+                  ;; hand-written one does.
+                  (if (and model (not (string-empty-p model)))
+                      (format "  :MODEL:  %s\n" model) "")
                   (if parent (format "  :SPAWNED-BY: %s\n" parent) "")
                   "  :END:\n")
           (insert "  " task "\n")
@@ -175,6 +187,9 @@ rather than spawning one and waiting."
 instruction: the subagent does not see your conversation.")
    (agent string "Which agent definition to use; omit for the default"
           :optional t)
+   (model string "Model as provider/model, e.g. claude/claude-sonnet-4-6.
+Omit to use the agent's own -- call agent_models first if you want to
+choose one." :optional t)
    (title string "Short label for the dashboard" :optional t))
   :group 'agent
   ;; Destructive: it spends money on your behalf, on a schedule you do
@@ -184,7 +199,9 @@ instruction: the subagent does not see your conversation.")
       (let ((id (cmacs-brigade-subagent-spawn
                  (and agent (not (string-empty-p agent)) (intern agent))
                  task
-                 (and title (not (string-empty-p title)) title))))
+                 (and title (not (string-empty-p title)) title)
+                 nil
+                 (and model (not (string-empty-p model)) model))))
         (format "Spawned %s.  Poll it with agent_status(\"%s\")." id id))
     (error (format "Could not spawn: %s" (error-message-string err)))))
 
@@ -211,6 +228,39 @@ failure, which is usually the explanation."
      (t (or (cmacs-brigade-output-get id)
             (format "%s finished with state %s and produced no output."
                     id (plist-get r :state)))))))
+
+
+(cmacs-brigade-deftool agent-providers
+  "List the AI providers this cmacs can reach, and whether each looks
+usable.  Use before agent_models when you want to pick a model for a
+spawn."
+  ()
+  :group 'agent
+  (if (not (fboundp 'cmacs-ai-providers))
+      "cmacs-ai is not available in this build."
+    (mapconcat
+     (lambda (p)
+       (format "%s%s" p
+               (if (and (fboundp 'cmacs-ai-client-cli-p)
+                        (ignore-errors
+                          (cmacs-ai-client-cli-p
+                           (cmacs-ai-client-new p nil))))
+                   "  (command-line agent)" "  (HTTP API)")))
+     (cmacs-ai-providers) "\n")))
+
+(cmacs-brigade-deftool agent-models
+  "List the models a provider offers, for use as agent_spawn's model
+argument.  The value to pass is \"provider/model\"."
+  ((provider string "Provider name, from agent_providers"))
+  :group 'agent
+  (condition-case err
+      (let ((models (cmacs-ai-list-models (intern provider))))
+        (if (null models)
+            (format "%s offers no model list; pass any name it accepts."
+                    provider)
+          (mapconcat (lambda (m) (format "%s/%s" provider m)) models "\n")))
+    (error (format "Could not list models for %s: %s"
+                   provider (error-message-string err)))))
 
 (cmacs-brigade-deftool agent-cancel
   "Stop a subagent you spawned."

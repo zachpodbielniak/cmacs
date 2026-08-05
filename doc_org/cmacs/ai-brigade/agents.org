@@ -178,3 +178,34 @@ The CLI workers get their tools over MCP instead, through a scoped =.mcp.json= �
 #+end_src
 
 Call `cmacs-brigade--finish' with the task id, a final state and the output when the run ends. An unknown worker fails the task with a message naming the ones that are registered, rather than erroring somewhere further down.
+
+* Writing one
+
+#+begin_src elisp
+M-x cmacs-brigade-new-agent        ; or N in the dashboard
+#+end_src
+
+Writes a commented skeleton into the first writable directory on =cmacs-brigade-agent-path= and opens it. Save, then =A= in the dashboard to load it.
+
+The format is markdown with YAML frontmatter because that is the interop surface — =worker: claude-code= hands the same file to an external CLI verbatim — but it is not guessable, which is what the skeleton is for. =M-x cmacs-brigade-list-tools= (=T= in the dashboard) shows every tool and its group, for the =tools:= list.
+
+* Choosing a model at spawn time
+
+An agent's model is whatever its definition says, and a spawn can override it:
+
+| Tool | What it does |
+|------+--------------|
+| =agent_providers= | providers this cmacs can reach, and whether each is HTTP or a CLI |
+| =agent_models= | models a provider offers, already formatted as =provider/model= |
+
+=agent_spawn= takes an optional =model=; omitted, the agent's own is used. The override is written as =:MODEL:= on the spawned task, so it is visible in the plan, editable, and survives a restart exactly like a hand-written one.
+
+The same two lookups are on every surface:
+
+#+begin_src sh
+emacsctl brigade providers
+emacsctl brigade models claude-code
+emacsctl brigade spawn "survey deps/" researcher "" claude-code/opus
+#+end_src
+
+and on D-Bus as =Providers=, =Models= and =Spawn='s fourth argument.

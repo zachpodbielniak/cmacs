@@ -344,6 +344,89 @@ base agent and overrides nothing."
                   (list :fallback-model fm))))
         name))))
 
+;;;###autoload
+(defun cmacs-brigade-new-agent (name)
+  "Write a new agent definition and open it.
+
+Agents are markdown with YAML frontmatter, which is the interop surface
+-- `worker: claude-code' hands the same file to an external CLI verbatim
+-- but nothing said so anywhere you would look, and the format is not
+guessable.  This writes a commented skeleton into the first writable
+directory on `cmacs-brigade-agent-path' and leaves you in it."
+  (interactive "sAgent name: ")
+  (let* ((name (string-trim name))
+         (dir (or (cl-find-if (lambda (d)
+                                (or (file-writable-p d)
+                                    (file-writable-p
+                                     (file-name-directory
+                                      (directory-file-name d)))))
+                              (cdr cmacs-brigade-agent-path))
+                  (car (last cmacs-brigade-agent-path))))
+         (file (expand-file-name (format "%s.md" name) dir)))
+    (when (string-empty-p name)
+      (user-error "cmacs-brigade: an agent needs a name"))
+    (when (and (file-exists-p file)
+               (not (y-or-n-p (format "%s exists.  Edit it? " file))))
+      (user-error "cmacs-brigade: not overwriting %s" file))
+    (make-directory dir t)
+    (find-file file)
+    (when (zerop (buffer-size))
+      (insert "---\n"
+              (format "name: %s\n" name)
+              "description: what this agent is for\n"
+              (format "model: %s\n" (or cmacs-brigade-default-model
+                                        "claude/claude-sonnet-4-6"))
+              "# worker: inproc | claude-code | opencode | shell\n"
+              "#   omit it and the provider decides: a claude-code/ or\n"
+              "#   opencode/ model picks that CLI, anything else runs\n"
+              "#   in-process.\n"
+              "# isolation: none | worktree | podman\n"
+              "tools: []\n"
+              "#   names or groups; see M-x cmacs-brigade-list-tools.\n"
+              "#   An empty list means no tools at all.\n"
+              "budget-usd: 0.00\n"
+              "#   0 is no ceiling.\n"
+              "max-turns: 40\n"
+              "---\n\n"
+              "You are ...\n\n"
+              "Describe what this agent does and how it should behave.\n"
+              "This prose is the system prompt, verbatim.\n")
+      (goto-char (point-min)))
+    (message "cmacs-brigade: save, then press A in the dashboard to load it")
+    file))
+
+;;;###autoload
+(defun cmacs-brigade-list-tools ()
+  "Show every registered tool, with its group, for an agent's tools: list."
+  (interactive)
+  (let ((tools (cmacs-brigade-registry-list 'tool)))
+    (with-current-buffer (get-buffer-create "*brigade tools*")
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (propertize "Tools an agent may be given\n\n" 'face 'bold))
+        (insert "Name these in an agent's `tools:' list, or name a whole\n"
+                "group.  An empty list means no tools.\n\n")
+        (let (by-group)
+          (dolist (n tools)
+            (let* ((tool (cmacs-brigade-registry-get 'tool n))
+                   (g (or (cmacs-brigade-tool-group tool) 'ungrouped)))
+              (push (cons (cmacs-brigade-tool-wire-name tool) tool)
+                    (alist-get g by-group))))
+          (dolist (cell (sort by-group (lambda (a b)
+                                         (string< (symbol-name (car a))
+                                                  (symbol-name (car b))))))
+            (insert (propertize (format "\n%s\n" (car cell)) 'face 'bold))
+            (dolist (tc (sort (cdr cell) (lambda (a b) (string< (car a) (car b)))))
+              (insert (format "  %-28s%s%s\n" (car tc)
+                              (if (cmacs-brigade-tool-destructive (cdr tc))
+                                  "[destructive] " "")
+                              (truncate-string-to-width
+                               (or (cmacs-brigade-tool-description (cdr tc)) "")
+                               60))))))
+        (goto-char (point-min)))
+      (special-mode)
+      (display-buffer (current-buffer)))))
+
 (provide 'cmacs-brigade-agent-def)
 
 ;;; cmacs-brigade-agent-def.el ends here
