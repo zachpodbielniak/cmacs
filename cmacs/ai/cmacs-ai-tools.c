@@ -20,6 +20,9 @@
 #ifdef HAVE_CMACS_AI
 
 #include "lisp.h"
+/* ENCODE_FILE, for handing a directory name to a subprocess in the
+ * filesystem's encoding rather than Emacs's internal one. */
+#include "coding.h"
 #include "cmacs-ai.h"
 #include "cmacs-glib-loop.h"
 #include "cmacs-eval-dispatch.h"
@@ -613,6 +616,39 @@ Returns the integer count of tools successfully registered.  */)
 
 /* ── web_search provider wiring ─────────────────────────────────── */
 
+DEFUN ("cmacs-ai-tools-set-working-directory",
+       Fcmacs_ai_tools_set_working_directory,
+       Scmacs_ai_tools_set_working_directory, 2, 2, 0,
+       doc: /* Run EXECUTOR\'s built-in tools in DIRECTORY.
+
+The built-in tools -- bash, read, write, edit, glob, grep, ls -- resolve
+relative paths against DIRECTORY and run commands there.  A nil
+DIRECTORY restores the default, which is the directory Emacs itself is
+in: whatever buffer you last visited a file from, which is almost never
+what an agent meant by "src/main.c".
+
+An absolute path from the model is always used as given.  Returns t.  */)
+  (Lisp_Object executor, Lisp_Object directory)
+{
+  CHECK_FIXNAT (executor);
+  if (!NILP (directory))
+    CHECK_STRING (directory);
+
+  AiToolExecutor *exec = cmacs_ai_tools_lookup (XFIXNUM (executor));
+  if (exec == NULL) error ("cmacs-ai: bad executor handle");
+
+  if (NILP (directory))
+    ai_tool_executor_set_working_directory (exec, NULL);
+  else
+    {
+      /* ENCODE_FILE, not SSDATA: a directory name is a file name, and
+       * the subprocess wants it in the filesystem\'s encoding. */
+      Lisp_Object encoded = ENCODE_FILE (Fexpand_file_name (directory, Qnil));
+      ai_tool_executor_set_working_directory (exec, SSDATA (encoded));
+    }
+  return Qt;
+}
+
 DEFUN ("cmacs-ai-tools-set-search-provider",
        Fcmacs_ai_tools_set_search_provider,
        Scmacs_ai_tools_set_search_provider, 2, 3, 0,
@@ -728,6 +764,7 @@ that legitimately take minutes.  */);
   defsubr (&Scmacs_ai_tools_run_async);
   defsubr (&Scmacs_ai_tools_execute_into_session);
   defsubr (&Scmacs_ai_tools_set_search_provider);
+  defsubr (&Scmacs_ai_tools_set_working_directory);
   defsubr (&Scmacs_ai_tools_list);
 #ifdef HAVE_CMACS_MCP
   defsubr (&Scmacs_ai_tools_register_mcp_bridge);

@@ -816,7 +816,12 @@ M-x cmacs-brigade-agent-reload"))
    (format "into %s" (abbreviate-file-name
                       (cmacs-brigade-compose--plan-file)))))
 
-;;;###autoload
+;; An explicit autoload form, not a bare cookie on the macro.  A bare
+;; cookie copied the whole `transient-define-prefix' call into
+;; loaddefs.el, which loadup then evaluated before transient existed --
+;; "void-variable cmacs-brigade-compose", during the pdump, so the build
+;; failed rather than the feature.
+;;;###autoload (autoload 'cmacs-brigade-compose "cmacs-brigade-compose" nil t)
 (transient-define-prefix cmacs-brigade-compose ()
   "Compose one brigade task, then create it.
 

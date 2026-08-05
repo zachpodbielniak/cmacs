@@ -296,10 +296,41 @@ reached by exactly the same path.
 @code{inproc} runs the tool loop inside cmacs against the provider's HTTP
 API.  It is the default because it honours @code{:MODEL:} and the tool
 allowlist directly: the executor is built from the allowlist, so the
-agent cannot name a tool that was not installed.  The loop runs on an
-ai-glib worker thread and reports back through the dispatch callback
-registry, so the editor is never blocked---which matters more than usual
-under @option{--gowl}, where the editor is the compositor.
+agent cannot name a tool that was not installed.
+
+The loop runs on a worker thread with its own @code{GMainContext}, and
+reports back through the dispatch callback registry, so the editor is not
+blocked---which matters more than usual under @option{--gowl}, where the
+editor is the compositor.  The private context is the load-bearing part
+and not an optimisation: without it the loop binds to the process-global
+default context, which is the one Emacs itself iterates, and the main
+thread ends up dispatching the provider's HTTP completions and running
+the model's tool calls.  A @code{bash} tool then blocks the editor for as
+long as the command takes.
+
+An Elisp tool cannot run on that worker---Emacs's allocator is not
+thread-safe---so the call is marshalled to the main thread and waited
+for, bounded by @code{cmacs-ai-tool-call-timeout} (120 seconds).
+
+@subsection Where the tools run
+
+An @code{inproc} agent's built-in tools---@code{bash}, @code{read},
+@code{write}, @code{edit}, @code{glob}, @code{grep}, @code{ls}---resolve
+relative paths against the task's directory and run commands there.  That
+is the @code{:CWD:} property on the task, which @code{agent_spawn}
+records from wherever the spawn came from, and which
+@code{worktree}/@code{podman} isolation sets to the sandbox it prepared.
+
+Without it they would use whatever directory Emacs is in, which is
+wherever you last visited a file---so an agent told to work in one tree
+would read, write and build in another.
+
+@defun cmacs-ai-tools-set-working-directory executor directory
+Point @var{executor}'s built-in tools at @var{directory}.  An absolute
+path from the model is still used as given; @code{nil} restores the
+default.  @code{cmacs-ai-call} takes the same thing as
+@code{:directory}.
+@end defun
 
 @defun cmacs-brigade-register-worker &rest plist
 Keys: @code{:name}, @code{:start} (called with task id, agent, prompt,

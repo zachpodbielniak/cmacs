@@ -242,11 +242,16 @@ works, and so does a name that itself contains a slash after the first."
     (cons (and (boundp 'cmacs-ai-default-provider) cmacs-ai-default-provider)
           model)))
 
-(defun cmacs-brigade--worker-inproc (task-id agent prompt _cwd _env _endpoint)
+(defun cmacs-brigade--worker-inproc (task-id agent prompt cwd _env _endpoint)
   "Run AGENT's turn for TASK-ID inside cmacs.  Returns the run state.
 
 PROMPT is the task text only: the agent's own instructions go in as the
-session's system prompt, so they are not repeated inside the user turn."
+session's system prompt, so they are not repeated inside the user turn.
+
+CWD is where the built-in tools work.  It used to be ignored, so an
+agent told to work in one tree resolved every relative path -- and ran
+every shell command -- against whatever directory Emacs happened to be
+in, which is wherever you last visited a file."
   (unless (fboundp 'cmacs-ai-tools-run-async)
     (user-error "cmacs-brigade: the inproc worker needs --with-cmacs-ai"))
   (let* ((split (cmacs-brigade--split-model (plist-get agent :model)))
@@ -256,6 +261,8 @@ session's system prompt, so they are not repeated inside the user turn."
          (allowlist (cmacs-brigade-agent-allowlist agent)))
     (condition-case err
         (progn
+          (when (and cwd (fboundp 'cmacs-ai-tools-set-working-directory))
+            (cmacs-ai-tools-set-working-directory executor cwd))
           ;; Built from the allowlist, so the agent cannot name a tool
           ;; that was not installed -- enforcement by construction rather
           ;; than a check at call time.

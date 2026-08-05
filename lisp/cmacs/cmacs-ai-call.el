@@ -86,6 +86,11 @@ KEYS is a plist:
                        --with-cmacs-mcp).
   :search-provider X   enable a web_search tool via backend X (a symbol:
                        auto/brave/bing/duckduckgo).
+  :directory DIR       run the built-in tools in DIR: relative paths
+                       resolve against it and shell commands run there.
+                       Without it they use Emacs's own directory, which
+                       is wherever you last visited a file -- almost
+                       never what the model meant by a relative path.
 
 Note: any tool-enabled call also carries the built-in tools, since a
 cmacs tool executor always includes them; custom tools are added on top.
@@ -102,7 +107,8 @@ the call -- keep tool loops short, especially under `emacs --gowl'."
          (builtin  (plist-get keys :builtin-tools))
          (mcp      (plist-get keys :mcp-bridge))
          (search   (plist-get keys :search-provider))
-         (want-tools (or tools builtin mcp search)))
+         (dir      (plist-get keys :directory))
+         (want-tools (or tools builtin mcp search dir)))
     (if (not want-tools)
         (cmacs-ai--call prompt provider system model nil maxtok)
       (let ((executor (cmacs-ai-tools-new)))
@@ -114,6 +120,8 @@ the call -- keep tool loops short, especially under `emacs --gowl'."
                 (cmacs-ai-tools-register-mcp-bridge executor))
               (when search
                 (cmacs-ai-tools-set-search-provider executor search))
+              (when dir
+                (cmacs-ai-tools-set-working-directory executor dir))
               (dolist (spec tools)
                 (cmacs-ai--register-tool executor spec))
               (cmacs-ai--call prompt provider system model executor maxtok))

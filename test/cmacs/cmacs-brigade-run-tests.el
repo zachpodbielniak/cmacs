@@ -411,6 +411,10 @@ agent then reads its own instructions as part of the request."
               ((symbol-function 'cmacs-ai-free-session) #'ignore)
               ((symbol-function 'cmacs-ai-tools-new) (lambda () 99))
               ((symbol-function 'cmacs-ai-tools-free) #'ignore)
+              ;; The worker now points the built-in tools at the task's
+              ;; directory; the real DEFUN would reject this stub handle.
+              ((symbol-function 'cmacs-ai-tools-set-working-directory)
+               #'ignore)
               ((symbol-function 'cmacs-brigade-install-tools)
                (lambda (&rest _) 0))
               ((symbol-function 'cmacs-ai-session-append-message)
@@ -439,6 +443,10 @@ agent then reads its own instructions as part of the request."
               ((symbol-function 'cmacs-ai-free-session) #'ignore)
               ((symbol-function 'cmacs-ai-tools-new) (lambda () 99))
               ((symbol-function 'cmacs-ai-tools-free) #'ignore)
+              ;; The worker now points the built-in tools at the task's
+              ;; directory; the real DEFUN would reject this stub handle.
+              ((symbol-function 'cmacs-ai-tools-set-working-directory)
+               #'ignore)
               ((symbol-function 'cmacs-brigade-install-tools) (lambda (&rest _) 0))
               ((symbol-function 'cmacs-ai-session-append-message) #'ignore)
               ((symbol-function 'cmacs-ai-tools-run-async)
@@ -1251,6 +1259,38 @@ was the token figure that was incomplete."
             (should (= 7 (plist-get r :in-tokens)))
             (should (= 9 (plist-get r :out-tokens)))))
       (ignore-errors (cmacs-brigade-task-forget id)))))
+
+(ert-deftest cmacs-brigade-e2e-inproc-points-tools-at-the-task-directory ()
+  "The in-process worker runs the built-in tools where the task lives.
+
+The cwd argument used to be ignored outright, so an agent told to work
+in one tree resolved every relative path -- and ran every shell command
+-- against whatever directory Emacs happened to be in.  That is how a
+`bash' tool came to run a build in the wrong repository."
+  (skip-unless (cmacs-brigade-run-tests--available-p))
+  (cmacs-brigade-register-agent
+   :name 'e2e-cwd-agent :prompt "p" :model "claude/some-model"
+   :worker 'inproc :isolation 'none)
+  (let ((where (make-temp-file "brigade-cwd" t))
+        got)
+    (unwind-protect
+        (cl-letf (((symbol-function 'cmacs-ai-make-session)
+                   (lambda (&rest _) (cons 1 2)))
+                  ((symbol-function 'cmacs-ai-free-session) #'ignore)
+                  ((symbol-function 'cmacs-ai-tools-new) (lambda () 99))
+                  ((symbol-function 'cmacs-ai-tools-free) #'ignore)
+                  ((symbol-function 'cmacs-brigade-install-tools)
+                   (lambda (&rest _) 0))
+                  ((symbol-function 'cmacs-ai-session-append-message) #'ignore)
+                  ((symbol-function 'cmacs-ai-tools-set-working-directory)
+                   (lambda (_e dir) (setq got dir)))
+                  ((symbol-function 'cmacs-ai-tools-run-async)
+                   (lambda (_s _e cb) (funcall cb '(:text "ok")))))
+          (cmacs-brigade--worker-inproc
+           "t1" (cmacs-brigade-agent-get 'e2e-cwd-agent) "do it"
+           where nil nil)
+          (should (equal got where)))
+      (delete-directory where t))))
 
 (provide 'cmacs-brigade-run-tests)
 
