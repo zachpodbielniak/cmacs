@@ -308,6 +308,93 @@ one that was typed."
  :ready-p #'cmacs-brigade-loopback--chat-ready-p
  :deliver #'cmacs-brigade-loopback--chat-deliver)
 
+
+;;;; The libreclaw client
+;;
+;; The other conversation surface in the editor.  Registered
+;; unconditionally: in a build without libreclaw no buffer carries the
+;; mode, so `:targets' returns nothing and the client costs a `nil'.
+;;
+;; Rooms and cmacs-channel rooms are one client, not two.  The channel
+;; mode derives from the room mode -- same compose region, same history
+;; protection -- and differs only in where a sent message goes, which is
+;; the one thing `:deliver' has to pick between.
+
+(declare-function cmacs-libreclaw-send-compose "cmacs-libreclaw" ())
+(declare-function cmacs-libreclaw-cmacs-channel-send-compose
+                  "cmacs-libreclaw-cmacs-channel" ())
+
+(defvar cmacs-libreclaw-room--compose-marker)
+
+(defun cmacs-brigade-loopback--libreclaw-buffer (target)
+  "The live libreclaw room buffer TARGET names, or nil."
+  (when (and target (string-prefix-p "libreclaw:" target))
+    (let ((buf (get-buffer (substring target (length "libreclaw:")))))
+      (when (and (buffer-live-p buf)
+                 (with-current-buffer buf
+                   (derived-mode-p 'cmacs-libreclaw-room-mode)))
+        buf))))
+
+(defun cmacs-brigade-loopback--libreclaw-current ()
+  "The target for the current buffer, when it is a libreclaw room."
+  (when (and (derived-mode-p 'cmacs-libreclaw-room-mode)
+             (buffer-live-p (current-buffer)))
+    (format "libreclaw:%s" (buffer-name))))
+
+(defun cmacs-brigade-loopback--libreclaw-targets ()
+  "Every open libreclaw room, as (TARGET . LABEL)."
+  (let (out)
+    (dolist (buf (buffer-list))
+      (with-current-buffer buf
+        (when (derived-mode-p 'cmacs-libreclaw-room-mode)
+          (push (cons (format "libreclaw:%s" (buffer-name)) (buffer-name))
+                out))))
+    (nreverse out)))
+
+(defun cmacs-brigade-loopback--libreclaw-ready-p (target)
+  "Whether the room TARGET names can take a message.
+
+Only one thing makes it not: something half-typed in the compose
+region, which sending would take along with it.  A libreclaw room has
+no streaming state of its own to wait on -- replies arrive as whole
+messages on a signal."
+  (when-let* ((buf (cmacs-brigade-loopback--libreclaw-buffer target)))
+    (with-current-buffer buf
+      (or (null cmacs-libreclaw-room--compose-marker)
+          (string-empty-p
+           (string-trim
+            (buffer-substring-no-properties
+             (marker-position cmacs-libreclaw-room--compose-marker)
+             (point-max))))))))
+
+(defun cmacs-brigade-loopback--libreclaw-deliver (target text)
+  "Put TEXT in the room TARGET names and send it.
+
+Through the buffer's own send command, so the message is echoed,
+persisted and routed exactly like one that was typed -- including out
+to Matrix or the bridge when that is where the room goes."
+  (when-let* ((buf (cmacs-brigade-loopback--libreclaw-buffer target)))
+    (with-current-buffer buf
+      (let ((send (if (derived-mode-p 'cmacs-libreclaw-cmacs-channel-room-mode)
+                      'cmacs-libreclaw-cmacs-channel-send-compose
+                    'cmacs-libreclaw-send-compose)))
+        (unless (and cmacs-libreclaw-room--compose-marker (fboundp send))
+          (error "cmacs-brigade: %s has no compose region" target))
+        (save-excursion
+          (goto-char (point-max))
+          (let ((inhibit-read-only t))
+            (insert text)))
+        (funcall send)
+        t))))
+
+(cmacs-brigade-register-client
+ :name 'libreclaw
+ :current #'cmacs-brigade-loopback--libreclaw-current
+ :targets #'cmacs-brigade-loopback--libreclaw-targets
+ :live-p (lambda (target) (cmacs-brigade-loopback--libreclaw-buffer target))
+ :ready-p #'cmacs-brigade-loopback--libreclaw-ready-p
+ :deliver #'cmacs-brigade-loopback--libreclaw-deliver)
+
 (provide 'cmacs-brigade-loopback)
 
 ;;; cmacs-brigade-loopback.el ends here

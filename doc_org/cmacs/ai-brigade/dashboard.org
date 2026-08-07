@@ -3,7 +3,7 @@
 #+authors: Zach Podbielniak
 #+categories: cmacs, ai, ui
 #+created: [2026-08-04 Tue]
-#+updated: [2026-08-05 Wed]
+#+updated: [2026-08-07 Fri]
 #+version: 0.1.0
 
 * Opening it
@@ -180,8 +180,32 @@ on with what you were doing.
 #+end_example
 
 — and the model picks it up and continues on its own. A spawn made *from* a
-chat records that chat automatically, so =N= is only needed for a task you
-started by hand.
+conversation records that conversation automatically, so =N= is only needed for
+a task you started by hand. It defaults to none: a task you composed yourself
+reports to nobody unless you say otherwise.
+
+**** Which conversations can be told
+
+Both of the editor's conversation surfaces, listed together in the picker:
+
+- *cmacs-ai chat buffers* (=cmacs-ai-chat-mode=);
+- *libreclaw rooms* (=cmacs-libreclaw-room-mode= and cmacs-channel rooms),
+  which reach Matrix and the bridge as well, since delivery goes through the
+  room's own send command rather than around it.
+
+Neither is special-cased. Each is a =client= in the registry
+(=cmacs-brigade-register-client=), so a surface of your own — another chat
+front-end, a room in something not shipped here — becomes a notify target by
+registering =:current=, =:targets=, =:live-p=, =:ready-p= and =:deliver=. See
+[[file:extending.org][Extending the brigade]].
+
+The two surfaces differ in one way, and it is worth knowing which you are in.
+*Automatic* capture works for cmacs-ai chat because that chat layer runs its
+tool loop in Elisp with the chat buffer current, so =agent_spawn= simply
+notices where it is. A libreclaw agent runs its tool loop in C, with no room
+buffer current, so a spawn *it* makes records no target — use =N=, or spawn
+from the room buffer yourself. Delivery into a libreclaw room works either way;
+it is only the noticing that does not.
 
 It is a =:NOTIFY:= property on the task, so the target is visible in the plan,
 survives a restart, and is editable like any other intent.

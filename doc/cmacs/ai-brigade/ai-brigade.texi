@@ -626,10 +626,27 @@ state `done'.  Call agent_result @dots{}}.  The model collects the result
 and continues.
 
 A task acquires a target either implicitly---@code{agent_spawn} running
-inside a chat notices which chat, because the chat layer executes tools
-with its own buffer current---or explicitly, from the compose transient's
-@kbd{N} key.  Either way it lands in a @code{:NOTIFY:} property, so it is
-visible in the plan and editable like any other intent.
+inside a conversation notices which one, because the chat layer executes
+tools with its own buffer current---or explicitly, from the compose
+transient's @kbd{N} key, which defaults to none.  Either way it lands in
+a @code{:NOTIFY:} property, so it is visible in the plan and editable
+like any other intent.
+
+Both of the editor's conversation surfaces are offered: cmacs-ai chat
+buffers, and libreclaw rooms (including cmacs-channel rooms, and so
+Matrix and the bridge, since delivery goes through the room's own send
+command rather than around it).  Neither is special-cased---each is a
+@code{client} in the registry, so a surface of your own becomes a notify
+target by registering @code{:current}, @code{:targets}, @code{:live-p},
+@code{:ready-p} and @code{:deliver} with
+@code{cmacs-brigade-register-client}.
+
+They differ in one way.  @emph{Automatic} capture works for cmacs-ai
+chat, whose tool loop runs in Elisp with the chat buffer current.  A
+libreclaw agent runs its tool loop in C, with no room buffer current, so
+a spawn it makes records no target---use @kbd{N}, or spawn from the room
+buffer yourself.  Delivery into a libreclaw room works either way; it is
+only the noticing that does not.
 
 Delivery never happens mid-turn.  A message inserted while a reply is
 streaming interleaves with the model's own output, and one inserted while

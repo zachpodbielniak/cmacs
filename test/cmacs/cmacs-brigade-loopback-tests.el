@@ -232,6 +232,96 @@ ends, which is well before anyone opens the dashboard."
                 cmacs-brigade-run-finished-functions))
   (should (cmacs-brigade-registry-get 'client 'chat)))
 
+
+;;;; libreclaw rooms as targets
+
+(defmacro cmacs-brigade-loopback-tests--with-room (mode &rest body)
+  "Run BODY with BUF bound to a libreclaw room in MODE, TARGET to its id.
+
+The modes are defined here rather than required: the point is the
+loopback client's view of a room, and a build without libreclaw must
+still exercise it."
+  (declare (indent 1))
+  `(let* ((buf (generate-new-buffer "*lc: ert*"))
+          (target (format "libreclaw:%s" (buffer-name buf))))
+     (unless (fboundp 'cmacs-libreclaw-room-mode)
+       (define-derived-mode cmacs-libreclaw-room-mode org-mode "LC-Room"))
+     (unless (fboundp 'cmacs-libreclaw-cmacs-channel-room-mode)
+       (define-derived-mode cmacs-libreclaw-cmacs-channel-room-mode
+         cmacs-libreclaw-room-mode "LC-Cmacs"))
+     (unwind-protect
+         (progn
+           (with-current-buffer buf
+             (funcall ,mode)
+             (insert "* Room\n\n* Compose\n")
+             (setq-local cmacs-libreclaw-room--compose-marker
+                         (copy-marker (point-max)))
+             (set-marker-insertion-type
+              cmacs-libreclaw-room--compose-marker nil))
+           ,@body)
+       (when (buffer-live-p buf) (kill-buffer buf)))))
+
+(ert-deftest cmacs-brigade-loopback-libreclaw-client-is-registered ()
+  "libreclaw is a target surface, not only cmacs-ai chat.
+
+Registered unconditionally: in a build without libreclaw no buffer
+carries the mode, so it simply offers nothing."
+  (skip-unless (featurep 'cmacs-brigade-loopback))
+  (should (cmacs-brigade-registry-get 'client 'libreclaw)))
+
+(ert-deftest cmacs-brigade-loopback-sees-a-libreclaw-room ()
+  "A room is enumerable, addressable, and knows when it is being typed in."
+  (skip-unless (featurep 'cmacs-brigade-loopback))
+  (cmacs-brigade-loopback-tests--with-room #'cmacs-libreclaw-room-mode
+    (should (assoc target (cmacs-brigade-loopback-targets)))
+    (should (equal target (with-current-buffer buf
+                            (cmacs-brigade-loopback-current-target))))
+    (should (cmacs-brigade-loopback-live-p target))
+    (should (cmacs-brigade-loopback-ready-p target))
+    ;; a half-typed message must not be swept up and sent
+    (with-current-buffer buf
+      (goto-char (point-max))
+      (insert "something I was still writing"))
+    (should-not (cmacs-brigade-loopback-ready-p target)))
+  ;; and a room that has been killed is not a target any more
+  (should-not (cmacs-brigade-loopback-live-p "libreclaw:*lc: gone*")))
+
+(ert-deftest cmacs-brigade-loopback-libreclaw-uses-the-rooms-own-send ()
+  "Delivery goes through the send command that room actually uses.
+
+A cmacs-channel room injects into libreclaw's inbound pipeline; a plain
+room routes to Matrix or the bridge.  Calling the wrong one drops the
+message somewhere the conversation will never see it."
+  (skip-unless (featurep 'cmacs-brigade-loopback))
+  (let (sent-by)
+    (cl-letf (((symbol-function 'cmacs-libreclaw-send-compose)
+               (lambda () (setq sent-by 'room)))
+              ((symbol-function 'cmacs-libreclaw-cmacs-channel-send-compose)
+               (lambda () (setq sent-by 'channel))))
+      (cmacs-brigade-loopback-tests--with-room #'cmacs-libreclaw-room-mode
+        (should (cmacs-brigade-loopback-deliver target "ping"))
+        (should (eq 'room sent-by))
+        (should (string-search "ping" (with-current-buffer buf
+                                        (buffer-string)))))
+      (setq sent-by nil)
+      (cmacs-brigade-loopback-tests--with-room
+          #'cmacs-libreclaw-cmacs-channel-room-mode
+        (should (cmacs-brigade-loopback-deliver target "ping"))
+        (should (eq 'channel sent-by))))))
+
+(ert-deftest cmacs-brigade-loopback-notify-is-reachable-from-the-transient ()
+  "The notify field is bound in the compose transient, not merely defined.
+
+This subsystem's recurring failure is a capability that exists with
+nothing invoking it: the suffix was written, documented as the `N' key,
+and left out of the layout, so choosing a conversation by hand was
+impossible from the UI that is supposed to offer it."
+  (skip-unless (and (featurep 'cmacs-brigade-compose)
+                    (fboundp 'cmacs-brigade-compose-set-notify)))
+  (should (string-match-p
+           "cmacs-brigade-compose-set-notify"
+           (format "%S" (get 'cmacs-brigade-compose 'transient--layout)))))
+
 (provide 'cmacs-brigade-loopback-tests)
 
 ;;; cmacs-brigade-loopback-tests.el ends here

@@ -1305,7 +1305,8 @@ Nothing is written to a plan until you choose to create it."
    ["Who runs it"
     ("a" cmacs-brigade-compose-set-agent)
     ("m" cmacs-brigade-compose-set-model)
-    ("t" cmacs-brigade-compose-set-tools)]]
+    ("t" cmacs-brigade-compose-set-tools)
+    ("N" cmacs-brigade-compose-set-notify)]]
   [["Where and how much"
     ("d" cmacs-brigade-compose-set-directory)
     ("b" cmacs-brigade-compose-set-budget)
