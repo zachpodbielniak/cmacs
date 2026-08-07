@@ -1617,5 +1617,101 @@ being asked to do."
                                             (car turns))))
             (kill-buffer buf)))))))
 
+;;;; One heading per exchange
+
+(defmacro cmacs-ai-tests--with-chat-buffer (&rest body)
+  "Run BODY in a bare chat buffer bound to BUF, with sending stubbed."
+  (declare (indent 0))
+  `(let ((buf (generate-new-buffer "*cmacs-ai: render*")))
+     (unwind-protect
+         (with-current-buffer buf
+           (cmacs-ai-chat-mode)
+           (let ((inhibit-read-only t))
+             (insert "* Conversation\n\n* Compose\n"))
+           (setq-local cmacs-ai-chat--compose-marker (copy-marker (point-max)))
+           (set-marker-insertion-type cmacs-ai-chat--compose-marker nil)
+           (cl-letf (((symbol-function 'cmacs-ai-chat--assistant-label)
+                      (lambda () "prov/model"))
+                     ((symbol-function 'cmacs-ai-chat--drive-tool-loop)
+                      (lambda (_) nil))
+                     ((symbol-function 'cmacs-ai-chat-save-quietly)
+                      (lambda () nil)))
+             ,@body))
+       (when (buffer-live-p buf) (kill-buffer buf)))))
+
+(defun cmacs-ai-tests--assistant-headings (buf)
+  "Count `**' headings in BUF."
+  (with-current-buffer buf
+    (cl-count-if (lambda (l) (string-prefix-p "** " l))
+                 (split-string (buffer-string) "\n"))))
+
+(ert-deftest cmacs-ai-chat-tool-loop-is-one-turn ()
+  "A tool loop renders as one assistant turn, not one per segment.
+
+Every re-stream used to open its own `** TIMESTAMP provider' heading,
+so a bootstrap that read six files produced seven of them -- several
+empty, because a segment that only calls tools has no text to show."
+  (skip-unless (fboundp 'cmacs-ai-chat-mode))
+  (cmacs-ai-tests--with-chat-buffer
+    ;; prose, a tool call, a segment with nothing but a tool call, then
+    ;; the answer
+    (cmacs-ai-chat--stream-callback buf '(:start))
+    (cmacs-ai-chat--stream-callback buf '(:delta "Looking around.\n"))
+    (cmacs-ai-chat--stream-callback buf '(:tool-use "read" "{}" "id1"))
+    (cmacs-ai-chat--stream-callback buf '(:end :stop tool-use))
+    (cmacs-ai-chat--stream-callback buf '(:start))
+    (cmacs-ai-chat--stream-callback buf '(:tool-use "read" "{}" "id2"))
+    (cmacs-ai-chat--stream-callback buf '(:end :stop tool-use))
+    (cmacs-ai-chat--stream-callback buf '(:start))
+    (cmacs-ai-chat--stream-callback buf '(:delta "Done.\n"))
+    (cmacs-ai-chat--stream-callback buf '(:end :stop end-turn))
+    (should (= 1 (cmacs-ai-tests--assistant-headings buf)))
+    (let ((s (buffer-string)))
+      ;; both halves of what the model said are there, in order
+      (should (string-match-p "Looking around\\(.\\|\n\\)*Done\\." s))
+      ;; and the turn is closed
+      (should-not cmacs-ai-chat--turn-open)
+      (should-not cmacs-ai-chat--assistant-marker))))
+
+(ert-deftest cmacs-ai-chat-a-silent-stream-adds-nothing ()
+  "A stream that produces no text leaves no heading behind."
+  (skip-unless (fboundp 'cmacs-ai-chat-mode))
+  (cmacs-ai-tests--with-chat-buffer
+    (cmacs-ai-chat--stream-callback buf '(:start))
+    (cmacs-ai-chat--stream-callback buf '(:end :stop end-turn))
+    (should (= 0 (cmacs-ai-tests--assistant-headings buf)))))
+
+(ert-deftest cmacs-ai-chat-turn-stays-open-across-a-tool-call ()
+  "The turn flag spans the gap between streams.
+
+Anything asking whether the chat is busy -- the brigade loopback, for
+one -- reads this.  The segment marker is released between streams, so
+the marker alone reads as idle in exactly the gap where the model is
+about to say more, and a message delivered there lands mid-turn."
+  (skip-unless (fboundp 'cmacs-ai-chat-mode))
+  (cmacs-ai-tests--with-chat-buffer
+    (cmacs-ai-chat--stream-callback buf '(:start))
+    (cmacs-ai-chat--stream-callback buf '(:delta "thinking"))
+    (cmacs-ai-chat--stream-callback buf '(:tool-use "read" "{}" "id1"))
+    (cmacs-ai-chat--stream-callback buf '(:end :stop tool-use))
+    (should cmacs-ai-chat--turn-open)
+    (should-not cmacs-ai-chat--assistant-marker)
+    (cmacs-ai-chat--stream-callback buf '(:start))
+    (cmacs-ai-chat--stream-callback buf '(:delta "done"))
+    (cmacs-ai-chat--stream-callback buf '(:end :stop end-turn))
+    (should-not cmacs-ai-chat--turn-open)))
+
+(ert-deftest cmacs-ai-system-prompt-says-not-to-poll ()
+  "The shipped prompt tells the model spawns are asynchronous.
+
+Without it a model calls `agent_status' in a loop until it gives up,
+which costs turns and money and learns nothing: the loopback already
+delivers a message when the agent finishes."
+  (skip-unless (boundp 'cmacs-ai-system-prompt))
+  (let ((p (default-value 'cmacs-ai-system-prompt)))
+    (should (string-match-p "DO NOT POLL" p))
+    (should (string-match-p "agent_result" p))
+    (should (string-match-p "automatically" p))))
+
 (provide 'cmacs-ai-tests)
 ;;; cmacs-ai-tests.el ends here

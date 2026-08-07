@@ -51,6 +51,7 @@
 
 (defvar cmacs-ai-chat--compose-marker)
 (defvar cmacs-ai-chat--assistant-marker)
+(defvar cmacs-ai-chat--turn-open)
 (defvar cmacs-ai-chat--pending-tool-uses)
 
 (defcustom cmacs-brigade-loopback-enabled t
@@ -269,12 +270,17 @@ where we are needs no plumbing between the two."
 (defun cmacs-brigade-loopback--chat-ready-p (target)
   "Whether the chat TARGET names is idle enough to take a message.
 
-Three ways it is not: a reply is streaming, tool calls are pending, or
-the human has something half-typed in the compose region -- and sending
-then would take their draft along with it."
+Four ways it is not: the turn is still open, a reply is streaming, tool
+calls are pending, or the human has something half-typed in the compose
+region -- and sending then would take their draft along with it.
+
+The turn check is the load-bearing one.  A chat's assistant marker is
+released between the streams of a tool loop, so the marker alone reads
+as idle in exactly the gaps where the model is about to say more."
   (when-let* ((buf (cmacs-brigade-loopback--chat-buffer target)))
     (with-current-buffer buf
-      (and (not (bound-and-true-p cmacs-ai-chat--assistant-marker))
+      (and (not (bound-and-true-p cmacs-ai-chat--turn-open))
+           (not (bound-and-true-p cmacs-ai-chat--assistant-marker))
            (null (bound-and-true-p cmacs-ai-chat--pending-tool-uses))
            (or (null cmacs-ai-chat--compose-marker)
                (string-empty-p

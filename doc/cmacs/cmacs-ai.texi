@@ -115,6 +115,26 @@ region below is the editable prompt area.  @kbd{C-c C-c} sends the
 compose body and streams the response into a fresh @code{** assistant}
 heading via the @code{AiStreamable} signal pipeline.
 
+@subsection One heading per exchange
+
+What you send produces exactly one @code{** TIMESTAMP provider/model}
+heading, however many times the model stops to call a tool.  Tool calls
+and results nest under it as @code{***} entries, and what the model says
+afterwards continues beneath.
+
+The heading is opened by the model's first @emph{text}, not by the
+stream.  A segment that only calls a tool has nothing to show, and
+opening its heading up front is what littered a transcript with empty
+ones---a bootstrap reading six files produced seven headings, most
+blank.
+
+Two consequences for code written against this:
+@code{cmacs-ai-chat--assistant-marker} is nil in the gaps between the
+streams of a tool loop, so it means ``no segment is appending'', not
+``the chat is idle''; @code{cmacs-ai-chat--turn-open} is the flag that
+spans the whole exchange, and anything asking whether the chat is busy
+has to read that one or it will deliver into the middle of a turn.
+
 @table @kbd
 @item C-c C-c
 Send the compose region.
@@ -885,7 +905,14 @@ Default provider symbol.  Default @code{claude}.
 @item cmacs-ai-default-model
 Default model string, or @code{nil} for the provider default.
 @item cmacs-ai-system-prompt
-System prompt for new chat sessions.
+System prompt for new chat sessions.  Besides the coding-assistant
+boilerplate it states the conventions of the tools cmacs ships, which a
+model cannot infer from a tool schema.  Chiefly: @code{agent_spawn} is
+asynchronous and @strong{must not be polled}---it returns an id at once
+and the brigade loopback delivers a message into the conversation when
+the agent finishes, so a model that has not been told sits in an
+@code{agent_status} loop until it gives up.  Also that only the tools in
+its list exist, and that the editor it is acting on is live.
 @item cmacs-ai-max-tokens
 Default max output tokens.  Default @code{4096}.
 @item cmacs-ai-enabled-tools

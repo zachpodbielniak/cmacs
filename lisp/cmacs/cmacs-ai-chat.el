@@ -63,8 +63,20 @@
   "Marker at the start of the editable compose region.")
 
 (defvar-local cmacs-ai-chat--assistant-marker nil
-  "Marker into the in-progress assistant heading, or nil when idle.
-Set when a stream starts; cleared on :end / :error.")
+  "Marker where the current assistant segment appends, or nil.
+
+Opened by the first text of a segment rather than by the stream, and
+cleared at the end of each segment.  Nil therefore does *not* mean the
+turn is over -- see `cmacs-ai-chat--turn-open'.")
+
+(defvar-local cmacs-ai-chat--turn-open nil
+  "Non-nil while an assistant turn is in progress.
+
+A turn spans every stream a single user message produces, tool loop and
+all, so the transcript gets one heading per exchange instead of one per
+model segment.  This is also what tells anything asking whether the
+chat is busy that a tool loop is still running, since the segment
+marker is nil in the gaps between streams.")
 
 (defvar-local cmacs-ai-chat--assistant-start nil
   "Non-advancing marker at the start of the current assistant body.
@@ -505,6 +517,56 @@ separator below it always remains intact."
           (set-marker-insertion-type m t)
           m)))))
 
+(defun cmacs-ai-chat--open-continuation (buf)
+  "Open a body region above the compose sentinel in BUF, with no heading.
+
+Where an assistant turn resumes after tool calls.  The same character
+layout `cmacs-ai-chat--insert-heading' produces, minus the heading line,
+so the continued prose lands *below* the tool blocks under the one
+heading this turn already has, and the separator stays pinned."
+  (with-current-buffer buf
+    (save-excursion
+      (goto-char cmacs-ai-chat--compose-marker)
+      (forward-line -1)
+      (beginning-of-line)
+      (let ((inhibit-read-only t)
+            (cmacs-ai-chat--allow-history-edit t))
+        (insert "\n\n")
+        (forward-line -2)
+        (let ((m (point-marker)))
+          (set-marker-insertion-type m t)
+          m)))))
+
+(defun cmacs-ai-chat--ensure-segment (buf)
+  "Return the marker the current assistant segment appends at.
+
+Opened lazily, on the first text of a segment: a segment that only
+calls tools produces no text, and creating its heading up front is what
+littered the transcript with empty ones.  The first text of a turn
+opens the heading; text after a tool call continues underneath it."
+  (with-current-buffer buf
+    (or cmacs-ai-chat--assistant-marker
+        (setq cmacs-ai-chat--assistant-marker
+              (if cmacs-ai-chat--turn-open
+                  (cmacs-ai-chat--open-continuation buf)
+                (setq cmacs-ai-chat--turn-open t)
+                (let ((m (cmacs-ai-chat--insert-heading
+                          buf (cmacs-ai-chat--assistant-label) "")))
+                  ;; Pins the start of the whole turn, so the image
+                  ;; preview at the end covers everything it produced.
+                  (setq cmacs-ai-chat--assistant-start
+                        (and m (copy-marker m nil)))
+                  m))))))
+
+(defun cmacs-ai-chat--close-turn (buf)
+  "Finish the assistant turn in BUF: preview images and clear the state."
+  (with-current-buffer buf
+    (cmacs-ai-chat--preview-images cmacs-ai-chat--assistant-start
+                                   cmacs-ai-chat--assistant-marker)
+    (setq cmacs-ai-chat--assistant-marker nil
+          cmacs-ai-chat--assistant-start nil
+          cmacs-ai-chat--turn-open nil)))
+
 (defun cmacs-ai-chat--append-at-marker (marker text)
   "Insert TEXT at MARKER (assistant streaming) in MARKER's buffer."
   (when (and marker (marker-buffer marker))
@@ -629,19 +691,15 @@ reason or `cmacs-ai-chat-tool-loop-max-turns' is reached."
     (with-current-buffer buf
       (pcase (car payload)
         (:start
-         (setq cmacs-ai-chat--assistant-marker
-               (cmacs-ai-chat--insert-heading
-                buf (cmacs-ai-chat--assistant-label) ""))
-         ;; A non-advancing twin marker pins the body start, so :end can
-         ;; preview the whole just-rendered region (the advancing marker
-         ;; above tracks the end).
-         (setq cmacs-ai-chat--assistant-start
-               (and cmacs-ai-chat--assistant-marker
-                    (copy-marker cmacs-ai-chat--assistant-marker nil))))
+         ;; Nothing is rendered here.  A stream that only calls tools
+         ;; would otherwise leave a heading with no body behind it, and
+         ;; a tool loop produced one of those per round.
+         nil)
         (:delta
          (let ((chunk (cadr payload)))
-           (cmacs-ai-chat--append-at-marker
-            cmacs-ai-chat--assistant-marker chunk)))
+           (when (and chunk (> (length chunk) 0))
+             (cmacs-ai-chat--append-at-marker
+              (cmacs-ai-chat--ensure-segment buf) chunk))))
         (:tool-use
          (let ((name (nth 1 payload))
                (input (nth 2 payload))
@@ -662,24 +720,24 @@ reason or `cmacs-ai-chat-tool-loop-max-turns' is reached."
                 3))
              (push (list name input id) cmacs-ai-chat--pending-tool-uses))))
         (:end
-         ;; Preview image links in the region we just rendered before the
-         ;; markers are cleared.
-         (cmacs-ai-chat--preview-images cmacs-ai-chat--assistant-start
-                                        cmacs-ai-chat--assistant-marker)
-         (setq cmacs-ai-chat--assistant-marker nil)
-         (setq cmacs-ai-chat--assistant-start nil)
          (when cmacs-ai-chat-autosave (cmacs-ai-chat-save-quietly))
          ;; If the model stopped to call tools and we have any pending,
-         ;; drive the loop.  Otherwise the turn is done -- reset depth.
+         ;; drive the loop.  The turn stays *open* across that: the tool
+         ;; results and whatever the model says afterwards belong to the
+         ;; exchange the user started, not to a new one.  Only the
+         ;; segment marker is released, so the next text opens a
+         ;; continuation under the same heading.
          (if (and (eq (plist-get (cdr payload) :stop) 'tool-use)
                   cmacs-ai-chat--pending-tool-uses)
-             (cmacs-ai-chat--drive-tool-loop buf)
+             (progn
+               (setq cmacs-ai-chat--assistant-marker nil)
+               (cmacs-ai-chat--drive-tool-loop buf))
+           (cmacs-ai-chat--close-turn buf)
            (setq cmacs-ai-chat--tool-loop-depth 0)))
         (:error
          (cmacs-ai-chat--insert-heading
           buf "error" (cadr payload))
-         (setq cmacs-ai-chat--assistant-marker nil)
-         (setq cmacs-ai-chat--assistant-start nil)
+         (cmacs-ai-chat--close-turn buf)
          (setq cmacs-ai-chat--tool-loop-depth 0)
          (setq cmacs-ai-chat--pending-tool-uses nil))))))
 

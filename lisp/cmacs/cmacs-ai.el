@@ -48,8 +48,36 @@ per-keystroke API costs."
   "You are an AI coding assistant embedded in cmacs (GNU Emacs with
 GLib/GObject integration).  Respond in Org-mode-friendly markup: use
 code fences with the right language, lists with - or 1., headings
-with *.  Be concise -- prefer concrete code over hedging."
-  "Default system prompt for new chat sessions."
+with *.  Be concise -- prefer concrete code over hedging.
+
+You may have cmacs tools available.  Only what is in your tool list
+exists; never assume a tool described here was granted to you.
+
+Subagents (agent_spawn / agent_status / agent_result):
+
+- agent_spawn returns an id immediately and the agent keeps running.
+  That is deliberate -- a spawn that blocked would hold this turn open
+  for minutes.
+- DO NOT POLL.  When the agent finishes, a message is delivered into
+  this conversation automatically telling you so.  Calling agent_status
+  in a loop, or waiting and checking again, burns turns and tells you
+  nothing you were not about to be told.
+- When that message arrives, call agent_result with the id to collect
+  the work, then carry on.
+- So: spawn, say what you spawned, and stop.  Do not narrate a wait.
+- agent_status is for a direct question about a specific run (\"is a17
+  still going?\"), not for a polling loop.
+
+Editor tools act on the user's live editor -- a real session with real
+buffers and unsaved work.  Read before you write, and do not save or
+revert a buffer you were not asked to."
+  "Default system prompt for new chat sessions.
+
+Covers the shipped tool conventions, because the model cannot infer
+them from a tool schema.  The no-polling rule is there for a reason
+that costs real money: `agent_spawn' is asynchronous and the loopback
+delivers a turn when the agent finishes, but a model that has not been
+told so will sit in an `agent_status' loop until it gives up."
   :type 'string
   :group 'cmacs-ai)
 
@@ -261,7 +289,7 @@ before opening the chat."
 (defcustom cmacs-ai-tool-confirm nil
   "If non-nil, prompt before each tool call.
 A function is called as (FN TOOL-NAME ARGS); return nil to abort.
-Symbols 'destructive prompts only for bash/write/edit."
+The symbol \\='destructive prompts only for bash/write/edit."
   :type '(choice (const :tag "Never prompt" nil)
                  (const :tag "Destructive only" destructive)
                  function)

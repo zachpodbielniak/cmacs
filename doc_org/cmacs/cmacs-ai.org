@@ -35,6 +35,27 @@ with =--with-cmacs-libreclaw= when both are enabled.
 =* Compose= sentinel is read-only; =C-c C-c= sends the compose body
 and streams the response into a fresh =** assistant= heading.
 
+** One heading per exchange
+
+What you send produces exactly one =** TIMESTAMP provider/model= heading, no
+matter how many times the model stops to call a tool along the way. Tool calls
+and their results nest under it as =***= entries, and whatever the model says
+after them continues beneath.
+
+The heading is opened by the model's first *text*, not by the stream. A model
+segment that only calls a tool has nothing to show, and creating its heading up
+front is what used to litter a transcript with empty ones — a bootstrap that
+read six files produced seven headings, most of them blank.
+
+Two things follow that are worth knowing if you write code against this:
+
+- =cmacs-ai-chat--assistant-marker= is nil in the gaps between the streams of a
+  tool loop. It means "no segment is appending right now", not "the chat is
+  idle".
+- =cmacs-ai-chat--turn-open= is the one that spans the whole exchange. Anything
+  asking whether the chat is busy — the brigade loopback, for one — has to read
+  that, or it will deliver a message into the middle of a turn.
+
 Keymap:
 
 | Key         | Command                       |
@@ -776,7 +797,7 @@ built-ins do (see /Tool use/).  Default nil = full trust.
 |---------------------------------+------------------------------|
 | =cmacs-ai-default-provider=     | ='claude=                    |
 | =cmacs-ai-default-model=        | nil (provider default)       |
-| =cmacs-ai-system-prompt=        | coding-assistant boilerplate |
+| =cmacs-ai-system-prompt=        | coding assistant + tool conventions |
 | =cmacs-ai-max-tokens=           | 4096                         |
 | =cmacs-ai-enabled-tools=        | full built-in set            |
 | =cmacs-ai-tool-confirm=         | nil                          |
@@ -909,6 +930,27 @@ It is not a closed list — every provider ships new model names between cmacs r
 A provider that cannot answer (no key, no daemon, no network) simply offers no completions rather than blocking; =cmacs-ai-read-model-timeout= bounds the wait.
 
 The heading on each reply names the provider symbol you selected and the model that answered, as =claude-code/sonnet= — the provider half is the symbol, not ai-glib's display name, so it matches what you type at the prompt.
+
+** What the shipped system prompt says
+
+=cmacs-ai-system-prompt= is not only "be a helpful coding assistant". It also
+states the conventions of the tools cmacs ships, because a model cannot infer
+them from a tool schema:
+
+- *Subagents are asynchronous, so do not poll.* =agent_spawn= returns an id
+  immediately — a spawn that blocked would hold the turn open for minutes — and
+  the [[file:ai-brigade/dashboard.org][loopback]] delivers a message into this
+  conversation when the agent finishes. A model that has not been told so sits
+  in an =agent_status= loop until it gives up, which costs turns and money and
+  learns nothing. Spawn, say what you spawned, stop. Collect with
+  =agent_result= when the message arrives.
+- *Only the tools in the list exist.* The prompt describes conventions, not
+  grants; nothing here implies a tool was given to this session.
+- *The editor is live.* Read before writing, and do not save or revert a buffer
+  you were not asked to.
+
+Replace it wholesale if you want something else — it is one string, and nothing
+downstream parses it.
 
 ** A local model through the claude CLI
 
