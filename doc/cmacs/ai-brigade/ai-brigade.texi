@@ -322,6 +322,42 @@ An Elisp tool cannot run on that worker---Emacs's allocator is not
 thread-safe---so the call is marshalled to the main thread and waited
 for, bounded by @code{cmacs-ai-tool-call-timeout} (120 seconds).
 
+@subsection Running a local model through a CLI worker
+
+@code{claude-code} and @code{claude-tmux} accept a model spelled
+@samp{ollama/NAME} and run it through Ollama as the transport rather than
+through Anthropic.  The command becomes
+
+@example
+ollama launch claude --model NAME -- @var{the claude arguments}
+@end example
+
+with claude's own @option{--model} omitted, because Ollama supplies it.
+With the cmacs provider prefix on the front that is a model of
+@samp{claude-code/ollama/qwen3.5:9b}: the first component picks the
+provider, and everything after it is the model string that provider
+receives, so the @samp{ollama/} ai-glib looks for survives intact.
+
+Both worker paths have to build that command and agree.  @code{inproc}
+gets it from ai-glib (@file{ai-claude-launch.c}); the subprocess worker
+builds the same argv itself, because it spawns the CLI directly and never
+goes through ai-glib.  Inspect either with
+@samp{ai -p claude-code -m ollama/NAME --dry-run "hi"}.
+
+Two things this is not.  @samp{ollama/qwen3.5:9b} with no CLI prefix is
+the plain Ollama provider talking HTTP to the server, with no CLI in the
+picture, and it resolves to the @code{inproc} worker.  And
+@samp{opencode/ollama/NAME} is opencode's own @samp{vendor/model}
+spelling, passed through untouched---opencode has no launcher
+indirection.
+
+The claude CLI must still be installed.
+
+@defopt cmacs-brigade-ollama-program
+The launcher binary (@samp{ollama}).  @env{OLLAMA_PATH} overrides it,
+matching what ai-glib does for the same case.
+@end defopt
+
 @subsection Where the tools run
 
 An @code{inproc} agent's built-in tools---@code{bash}, @code{read},

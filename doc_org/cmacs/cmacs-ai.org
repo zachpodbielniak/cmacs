@@ -901,7 +901,7 @@ Past =-max-bytes= the file is skipped rather than truncated: half a document of 
 
 Every provider prompt is followed by a model prompt, completing on what that provider actually offers:
 
-- =claude-code= and =claude-tmux= offer =haiku=, =sonnet=, =opus= and =fable=, plus the full model ids.
+- =claude-code= and =claude-tmux= offer =haiku=, =sonnet=, =opus= and =fable=, plus the full model ids — and additionally accept =ollama/NAME=, which runs a local model through the CLI (see below).
 - =opencode= offers its =vendor/model= names, =ollama= whatever you have pulled, and the HTTP providers their catalogues.
 
 It is not a closed list — every provider ships new model names between cmacs releases, and requiring a match would make the newest model the one thing the prompt cannot express. An empty answer takes the provider's own default.
@@ -909,6 +909,20 @@ It is not a closed list — every provider ships new model names between cmacs r
 A provider that cannot answer (no key, no daemon, no network) simply offers no completions rather than blocking; =cmacs-ai-read-model-timeout= bounds the wait.
 
 The heading on each reply names the provider symbol you selected and the model that answered, as =claude-code/sonnet= — the provider half is the symbol, not ai-glib's display name, so it matches what you type at the prompt.
+
+** A local model through the claude CLI
+
+=claude-code= and =claude-tmux= treat a model beginning with =ollama/= as a request to use Ollama as the /transport/: ai-glib spawns
+
+: ollama launch claude --model NAME -- <the claude arguments>
+
+rather than =claude= directly, omitting claude's own =--model= because Ollama supplies it. Answer the model prompt with =ollama/qwen3.5:9b= after choosing =claude-code=, or write the pair as one string anywhere a =PROVIDER/MODEL= is taken:
+
+: claude-code/ollama/qwen3.5:9b
+
+This is a different thing from the =ollama= provider, which talks HTTP to the Ollama server with no CLI in the picture. Use the CLI form when you want that harness — its prompt handling, its tool conventions — around a model that never leaves the machine; use the plain =ollama= provider when you just want the model.
+
+The claude CLI must still be installed; =OLLAMA_PATH= overrides the launcher binary. =ai -p claude-code -m ollama/NAME --dry-run "hi"= prints the exact command without running it.
 
 * Why a CLI agent could not call its tools
 

@@ -501,6 +501,49 @@ claude-code worker too."
                'opencode '(:model "opencode/anthropic/claude-3") "/tmp/p" nil)))
     (should (member "anthropic/claude-3" argv))))
 
+(ert-deftest cmacs-brigade-ollama-transport-model-is-recognised ()
+  "Only `PROVIDER/ollama/NAME' is an Ollama-transport model."
+  (skip-unless (featurep 'cmacs-brigade-run))
+  (should (equal "qwen3.5:9b"
+                 (cmacs-brigade--ollama-transport-model
+                  "claude-code/ollama/qwen3.5:9b")))
+  (should (equal "gemma4:12b"
+                 (cmacs-brigade--ollama-transport-model
+                  "claude-tmux/ollama/gemma4:12b")))
+  ;; the plain ollama provider is a different thing -- it talks HTTP to
+  ;; the ollama server, and never launches a CLI
+  (should-not (cmacs-brigade--ollama-transport-model "ollama/qwen3.5:9b"))
+  (should-not (cmacs-brigade--ollama-transport-model "claude-code/opus"))
+  (should-not (cmacs-brigade--ollama-transport-model nil))
+  ;; "ollama/" with nothing after it names no model
+  (should-not (cmacs-brigade--ollama-transport-model "claude-code/ollama/")))
+
+(ert-deftest cmacs-brigade-cli-runs-ollama-models-through-the-launcher ()
+  "An `ollama/' model execs the launcher, not claude directly.
+
+The claude CLI has no such model; ai-glib runs the same model as
+\"ollama launch claude --model NAME --\" in the in-process path, and the
+subprocess worker has to build the identical command or a model that
+works one way silently fails the other."
+  (skip-unless (featurep 'cmacs-brigade-run))
+  (let ((argv (cmacs-brigade--worker-command
+               'claude-code '(:model "claude-code/ollama/qwen3.5:9b")
+               "/tmp/p" nil)))
+    (should (equal '("launch" "claude" "--model" "qwen3.5:9b" "--")
+                   (seq-subseq argv 1 6)))
+    (should (string-match-p "ollama\\'" (car argv)))
+    ;; claude's own --model must not also be passed: ollama supplies it
+    (should-not (member "--model" (seq-drop argv 6)))
+    (should-not (member "ollama/qwen3.5:9b" argv))
+    ;; and the claude arguments still ride after the "--"
+    (should (member "--print" argv))
+    (should (member "--output-format" argv)))
+  ;; a plain model is untouched
+  (let ((argv (cmacs-brigade--worker-command
+               'claude-code '(:model "claude-code/opus") "/tmp/p" nil)))
+    (should (equal cmacs-brigade-claude-program (car argv)))
+    (should-not (member "launch" argv))))
+
 
 ;;;; Output
 

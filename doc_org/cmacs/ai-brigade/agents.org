@@ -3,8 +3,8 @@
 #+authors: Zach Podbielniak
 #+categories: cmacs, ai, agents
 #+created: [2026-08-04 Tue]
-#+updated: [2026-08-05 Wed]
-#+version: 0.1.0
+#+updated: [2026-08-07 Fri]
+#+version: 0.2.0
 
 * Definitions
 
@@ -160,6 +160,20 @@ A worker decides /how/ an agent runs. Four ship, and all four are registered thr
 *You rarely name a worker.* It is resolved in this order: an explicit =worker:= in the definition, then the worker implied by the model's provider (=claude-code/= and =opencode/= pick their own CLI), then =cmacs-brigade-worker=. Running a CLI provider through the in-process loop would silently drop every tool — the CLI clients ignore the tools argument and take them over MCP — so the provider gets to decide.
 
 =inproc= is the default because it is the one that honours =:MODEL:= and the tool allowlist directly: the executor is built from the allowlist, so the agent cannot name a tool that was not installed.
+
+** Running a local model through a CLI worker
+
+=claude-code= and =claude-tmux= accept a model spelled =ollama/NAME= and run it through Ollama as the transport instead of Anthropic: the command becomes =ollama launch claude --model NAME --= followed by the usual claude arguments, and claude's own =--model= is omitted because Ollama supplies it. So a model of
+
+: model: claude-code/ollama/qwen3.5:9b
+
+gets you the claude-code harness driving a model that never leaves the machine. The first component picks the cmacs provider; everything after it is the model string that provider receives, which is why the =ollama/= ai-glib looks for survives intact.
+
+Both worker paths build that command, and they have to agree: =inproc= gets it from ai-glib (=ai-claude-launch.c=), and the subprocess worker builds the same argv itself, since it spawns the CLI directly and never goes through ai-glib. Verify either with =ai -p claude-code -m ollama/NAME --dry-run "hi"=.
+
+Two things this is *not*. =ollama/qwen3.5:9b= with no CLI prefix is the plain Ollama provider talking HTTP to the server — no CLI involved, and it resolves to the =inproc= worker. And =opencode/ollama/NAME= is opencode's own =vendor/model= spelling, passed through untouched; opencode has no launcher indirection.
+
+The claude CLI must still be installed. =OLLAMA_PATH= overrides the launcher binary, and =cmacs-brigade-ollama-program= is the =defcustom= behind it.
 
 The loop runs on a worker thread with its *own* =GMainContext=, reporting back through the dispatch callback registry, so the editor is not blocked — which matters more than usual under =--gowl=, where the editor is the compositor.
 

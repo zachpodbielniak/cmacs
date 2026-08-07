@@ -262,7 +262,29 @@ brigade uses:
 
 ;; or a hosted one, if the local answers are not good enough
 (setq cmacs-brigade-genmail-triage-model "claude/claude-sonnet-4-6")
+
+;; or a local model driven through the claude-code CLI, which gets you
+;; that CLI's harness around a model that never leaves the machine
+(setq cmacs-brigade-genmail-triage-model "claude-code/ollama/qwen3.5:9b")
 #+end_src
+
+*** Ollama through a CLI provider
+
+=claude-code= and =claude-tmux= accept a model spelled =ollama/NAME= and run it
+through Ollama as the transport rather than through Anthropic — ai-glib spawns
+=ollama launch claude --model NAME --= instead of =claude=. With our own provider
+prefix on the front that is:
+
+: claude-code/ollama/qwen3.5:9b
+
+Both halves are meaningful and the order matters. The first component picks the
+cmacs provider (which harness runs the turn); everything after it is the model
+string handed to that provider, so the =ollama/= that ai-glib looks for stays
+intact. =ollama/qwen3.5:9b= with no CLI prefix is a different thing entirely: the
+plain Ollama provider, talking HTTP to the server with no CLI in the picture.
+
+The claude CLI must still be installed — Ollama supplies the model, not the
+harness. =OLLAMA_PATH= overrides the launcher binary.
 
 Set it per-machine without editing init by wrapping it, since a laptop and a
 workstation rarely have the same models pulled:

@@ -63,6 +63,34 @@ The @command{opencode} CLI.
 @command{claude} driven via an ephemeral tmux session.
 @end table
 
+@subsection A local model through the claude CLI
+
+@code{claude-code} and @code{claude-tmux} treat a model beginning with
+@samp{ollama/} as a request to use Ollama as the @emph{transport}:
+ai-glib spawns
+
+@example
+ollama launch claude --model NAME -- @var{the claude arguments}
+@end example
+
+rather than @command{claude} directly, omitting claude's own
+@option{--model} because Ollama supplies it.  Answer the model prompt
+with @samp{ollama/qwen3.5:9b} after choosing @code{claude-code}, or write
+the pair as one string wherever a @samp{PROVIDER/MODEL} is taken:
+
+@example
+claude-code/ollama/qwen3.5:9b
+@end example
+
+This is a different thing from the @code{ollama} provider, which talks
+HTTP to the Ollama server with no CLI in the picture.  Use the CLI form
+when you want that harness around a model that never leaves the machine;
+use the plain @code{ollama} provider when you just want the model.
+
+The claude CLI must still be installed, and @env{OLLAMA_PATH} overrides
+the launcher binary.  @samp{ai -p claude-code -m ollama/NAME --dry-run
+"hi"} prints the exact command without running it.
+
 @node CMacs AI Chat Buffers
 @section Chat Buffers
 

@@ -324,6 +324,26 @@ leave a message permanently waiting on an answer that already came."
   (should-not (memq 'pending cmacs-brigade-genmail-buckets))
   (should (equal [nil] (cmacs-brigade-genmail--parse-buckets "1 pending\n" 1))))
 
+(ert-deftest cmacs-brigade-genmail-takes-a-cli-ollama-model ()
+  "A `claude-code/ollama/NAME' triage model splits the way ai-glib needs.
+
+The provider is the first component only; everything after it is the
+model string that provider receives, so the `ollama/' prefix the CLI
+clients look for has to survive the split intact."
+  (skip-unless (cmacs-brigade-genmail-tests--available-p))
+  (should (equal '(claude-code . "ollama/qwen3.5:9b")
+                 (cmacs-brigade-genmail--split-model
+                  "claude-code/ollama/qwen3.5:9b")))
+  (should (equal '(claude-tmux . "ollama/gemma4:12b")
+                 (cmacs-brigade-genmail--split-model
+                  "claude-tmux/ollama/gemma4:12b")))
+  ;; and the plain provider forms are unaffected
+  (should (equal '(ollama . "qwen3.5:9b")
+                 (cmacs-brigade-genmail--split-model "ollama/qwen3.5:9b")))
+  (should (equal '(claude . "claude-sonnet-4-6")
+                 (cmacs-brigade-genmail--split-model
+                  "claude/claude-sonnet-4-6"))))
+
 (ert-deftest cmacs-brigade-genmail-report-links-are-followable ()
   "Something answers a `mu4e:' link, with or without mu4e.
 

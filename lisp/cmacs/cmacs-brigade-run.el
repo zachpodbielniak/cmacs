@@ -85,6 +85,45 @@ in the model string picks its own worker; otherwise
   :type 'string
   :group 'cmacs-brigade)
 
+(defcustom cmacs-brigade-ollama-program "ollama"
+  "Program that launches a claude-code model through Ollama.
+
+Used only for an `ollama/\=' transport model -- see
+`cmacs-brigade--ollama-transport-model'.  `OLLAMA_PATH\=' overrides it,
+matching what ai-glib does for the same case."
+  :type 'string
+  :group 'cmacs-brigade)
+
+(defun cmacs-brigade--ollama-transport-model (model)
+  "Return the Ollama model name in MODEL, or nil.
+
+The claude-code and claude-tmux CLI clients accept a model spelled
+`ollama/NAME\=' and run it through Ollama as the transport rather than
+through Anthropic.  With our own provider prefix on the front that is
+`claude-code/ollama/NAME\=', so the name to hand Ollama is whatever
+follows the *second* slash."
+  (let ((bare (cdr (cmacs-brigade--split-model model))))
+    (when (and bare (string-match "\\`ollama/\\(.+\\)\\'" bare))
+      (match-string 1 bare))))
+
+(defun cmacs-brigade--claude-argv-prefix (model)
+  "Return the program and leading arguments for running MODEL.
+
+Plain models exec the claude CLI.  An `ollama/\=' transport model execs
+
+  ollama launch claude --model NAME --
+
+instead, which is the invocation ai-glib builds for the same model in
+the in-process path; claude itself must still be installed, and its own
+--model is omitted because Ollama supplies it.  Emitting
+`claude --model ollama/NAME\=' -- which is what happened before -- asks
+claude for a model that does not exist."
+  (let ((ollama (cmacs-brigade--ollama-transport-model model)))
+    (if ollama
+        (list (or (getenv "OLLAMA_PATH") cmacs-brigade-ollama-program)
+              "launch" "claude" "--model" ollama "--")
+      (list cmacs-brigade-claude-program))))
+
 (defvar cmacs-brigade--runs (make-hash-table :test 'equal)
   "TASK-ID -> plist describing a live run.")
 
@@ -100,7 +139,8 @@ in the model string picks its own worker; otherwise
         (config (and endpoint (plist-get endpoint :path))))
     (pcase worker
       ('claude-code
-       (append (list cmacs-brigade-claude-program "--print"
+       (append (cmacs-brigade--claude-argv-prefix model)
+               (list "--print"
                      ;; Without this the agent can see the tools its MCP
                      ;; config grants and cannot call any of them: run
                      ;; non-interactively there is nobody to approve
@@ -118,8 +158,13 @@ in the model string picks its own worker; otherwise
                ;; The bare name: the provider prefix is ours, not the
                ;; CLI's, and passing "claude-code/opus" through as
                ;; --model asks for a model that does not exist.
-               (when model (list "--model"
-                                 (cdr (cmacs-brigade--split-model model))))))
+               ;;
+               ;; Omitted entirely for an ollama/ transport model: the
+               ;; name went to `ollama launch --model' in the prefix
+               ;; above, and claude must not be asked for it as well.
+               (when (and model
+                          (not (cmacs-brigade--ollama-transport-model model)))
+                 (list "--model" (cdr (cmacs-brigade--split-model model))))))
       ('opencode
        (append (list cmacs-brigade-opencode-program "run" "--format" "json")
                ;; Everything after the first slash, so opencode's own
