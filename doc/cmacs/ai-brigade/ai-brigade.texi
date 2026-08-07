@@ -32,6 +32,7 @@ one form lights it up on all three delivery paths at once.
 * Brigade Loopback::            Telling the conversation an agent is done.
 * Brigade Memory Builds::       Indexing your notes without blocking.
 * Brigade Scheduling::          Running a prompt on a cron schedule.
+* Brigade GenMail::             Triaging the mail you already have.
 @end menu
 
 @node Brigade Overview
@@ -826,3 +827,122 @@ Append a schedule and return its id.  @var{props} may carry
 
 @xref{Top,,, cmacs, the org manual}, file
 @file{doc_org/cmacs/ai-brigade/scheduling.org}, for the full chapter.
+
+@node Brigade GenMail
+@section Triaging the mail you already have
+@cindex genmail
+@cindex mail triage
+
+@code{cmacs-brigade-genmail-triage} sorts unread mail into buckets and
+writes an org report you can act from.  It needs @command{mu} with an
+index and nothing else: @command{mu} already indexed the mail and
+@samp{mu find --format=sexp} hands it back as Lisp, so there is no
+second indexer, no IMAP client and no MIME parser of our own.
+
+@subsection The inbox, not the store
+
+Triage reads unread mail @emph{in the inbox}.  Mail that has already
+been filed is unread on purpose---an archive of things to read later, a
+list folder nobody opens---and hauling it back out every morning buries
+the mail that actually arrived.
+
+The folders come from @samp{mu info maildirs}: every maildir whose last
+component is an inbox, so one account and one INBOX per account both
+work with no configuration.  A store with nothing inbox-shaped in it
+falls back to @samp{maildir:/INBOX}, which may match nothing, but never
+to the whole store: a morning with nothing to triage is a wrong answer
+you can see, and a morning spent triaging the archive is one you cannot.
+
+@defopt cmacs-brigade-genmail-inbox-query
+The mu query selecting the folders triage and the briefing read.
+@code{nil} derives it as above.
+@end defopt
+
+@subsection Rules first, then a model
+
+A deterministic pass runs first.  A @code{List-Unsubscribe} header
+identifies a newsletter with certainty, and spending a model call to
+reach the same answer less reliably would be the most common thing this
+code does and the least useful.  On a real inbox that classified 92 of
+100 unread messages with no model call at all.
+
+Whatever the rules cannot decide goes to the model in @emph{one} batched
+call.  If the rules decide everything, no call happens---which is the
+common case, and is indistinguishable from a broken model pass unless
+you look at the @code{:BY:} property.  @kbd{C-u M-x
+cmacs-brigade-genmail-triage} sends every message to the model instead,
+which is how to prove the pass runs and how to second-guess a rule.
+
+@code{:BY:} records how each message was decided: @code{rule},
+@code{model}, @code{pending} (in the interim report only) or
+@code{unclassified}, the last meaning the message was filed under
+@code{reply} as a fallback because no model answer covered it.  A guess
+is never recorded as a decision.
+
+@defopt cmacs-brigade-genmail-triage-model
+Provider and model, @samp{PROVIDER/MODEL} (@samp{ollama/qwen3.5:9b}).
+Local models differ far more in speed and in whether they honour a
+requested output form than their parameter counts suggest: on one
+three-message batch qwen3.5:9b answered in the requested form in about
+84 seconds where gemma4:12b produced nothing in 400.  Measure before
+trusting a morning job to a different one.
+@end defopt
+
+@defopt cmacs-brigade-genmail-use-model
+Whether to ask a model at all (@code{t}).  @code{nil} is rules only.
+@end defopt
+
+@defopt cmacs-brigade-genmail-triage-timeout
+Seconds to wait before falling back to rules only (600).  For a job that
+runs before you wake up, no report at all is the worst outcome.
+@end defopt
+
+@subsection The report arrives in two passes
+
+The rules finish in milliseconds and a local model takes a minute or
+more, so the report is written and opened straight away with everything
+the rules decided, and rewrites itself when the answer lands.  Waiting
+for the model before showing anything means staring at a minibuffer
+message while finished work sits unwritten.
+
+Undecided messages go in their own @samp{* pending} section, and the
+header says what is outstanding.  When the answer arrives the file is
+rewritten and a buffer already visiting it is reverted in place with
+point kept---an answer landing while you read must not throw away where
+you were.  A buffer with unsaved edits is left alone: notes you typed on
+the mail outrank the rewrite.
+
+The call is asynchronous for a harder reason than responsiveness, too.
+Under @option{--gowl} the editor is the compositor, so a synchronous
+model call would freeze the desktop for as long as the model took.
+
+@subsection Following a link in the report
+
+Each headline carries a @samp{[[mu4e:msgid:...]]} link.  mu4e's own
+@file{mu4e-org} handles that type when it is loaded; genmail requires it
+when it can and otherwise registers a handler of its own, because an
+unregistered org link type is not an error.  Org falls through to a
+heading search, so the link answers @samp{No match --- create this as a
+new heading?} and the report becomes a list of things to go find by
+hand.  mu4e is also not on the load path of an in-tree @command{src/emacs}
+unless your init puts it there, so this is the common case.
+
+The built-in view lands in @file{*genmail message*}: the headers worth
+reading, then the message text, MIME decoded, the charset honoured, and
+@code{text/html} rendered through shr when that is the only part on
+offer.  @kbd{C-c C-r} opens the raw file, @kbd{q} buries it.
+
+@defun cmacs-brigade-genmail-open-msgid msgid
+Open the message with @var{msgid}, preferring mu4e.
+@end defun
+
+@defun cmacs-brigade-genmail-message-text path
+The readable text of the message at @var{path}.  Distinct from
+@code{cmacs-brigade-genmail-body}, which strips quoted passages and
+signatures for the voice profile.  Triage prompts use this one: mail
+that arrives now is HTML, and a raw excerpt is 400 characters of doctype
+and quoted-printable with no signal to classify on.
+@end defun
+
+@xref{Top,,, cmacs, the org manual}, file
+@file{doc_org/cmacs/ai-brigade/genmail.org}, for the full chapter.

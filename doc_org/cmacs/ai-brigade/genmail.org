@@ -3,8 +3,8 @@
 #+authors: Zach Podbielniak
 #+categories: cmacs, ai, mail
 #+created: [2026-08-04 Tue]
-#+updated: [2026-08-04 Tue]
-#+version: 0.1.0
+#+updated: [2026-08-07 Fri]
+#+version: 0.2.0
 
 * Requirements
 
@@ -20,20 +20,154 @@ error report.
 
 =M-x cmacs-brigade-genmail-triage=.
 
+** Scope: the inbox
+
+Triage reads *unread mail in the inbox*, not every unread message in the store.
+Mail that has already been filed is unread on purpose — an archive of things to
+read later, a list folder nobody opens — and hauling it back out every morning
+buries the mail that actually arrived.
+
+The folders are derived from =mu info maildirs=: every maildir whose last
+component is an inbox, so a single account and one INBOX per account both work
+without configuration. Set =cmacs-brigade-genmail-inbox-query= to a mu query to
+override it.
+
+A store with nothing inbox-shaped in it falls back to =maildir:/INBOX=, which
+may match nothing — never to the whole store. A morning with nothing to triage
+is a wrong answer you can see; a morning spent triaging the archive is one you
+cannot.
+
+The same scope applies to the briefing.
+
+** Classification
+
 A deterministic pass runs first. A =List-Unsubscribe= header identifies a
 newsletter with certainty; spending a model call to reach the same answer less
 reliably would be the most common thing this code does and the least useful.
 On the author's real inbox that classified 92 of 100 unread messages with *no
 model call at all*.
 
-What survives goes to =cmacs-brigade-genmail-triage-model=, a local model by
-default. Sorting mail is pattern recognition and does not warrant a frontier
-model.
+What survives goes to =cmacs-brigade-genmail-triage-model=, which defaults to
+=ollama/qwen3.5:9b= — local, and free at the point of use. Triage runs over
+every unread inbox message every morning, and sorting mail is mostly pattern
+recognition; paying a frontier model for it is a poor trade. Point the variable
+at any provider/model pair =cmacs-ai= knows, e.g. =claude/claude-sonnet-4-6=,
+if you want a stronger one, or set =cmacs-brigade-genmail-use-model= to nil for
+rules only.
+
+The whole batch goes in *one* call, not one call per message: a dozen round
+trips to a local model costs a dozen model loads' worth of latency for an answer
+that fits in a single prompt.
+
+** The report arrives in two passes
+
+The rules finish in milliseconds; a local model takes a minute or more. So the
+report is *written and opened straight away* with everything the rules decided,
+and rewrites itself when the model answers. Waiting for the model before showing
+anything means staring at a minibuffer message while finished work sits
+unwritten.
+
+The first pass puts the undecided messages in their own =* pending= section, and
+says so at the top of the file:
+
+#+begin_example
+  Waiting on ollama/qwen3.5:9b for 1 message(s).  This file rewrites
+  itself when the answer lands; everything below is what the rules
+  already decided.
+#+end_example
+
+When the answer lands, the file is rewritten, the =pending= section is gone, and
+a buffer already visiting the report is reverted *in place with point kept* — an
+answer arriving while you read does not throw away where you were. A buffer with
+unsaved edits is left alone and you get a message instead: notes you typed on
+the mail outrank the rewrite.
+
+The call is asynchronous for a harder reason than responsiveness, too: under
+=--gowl= the editor is the compositor, so a synchronous model call would freeze
+the desktop for as long as the model took.
+
+Consequences worth knowing:
+
+- The =cmacs-brigade-genmail-triaged-functions= hook runs once, when the final
+  report is written — not for the interim one, and not when the command returns.
+- =cmacs-brigade-genmail-triage-timeout= (default 600s) bounds the wait. A cold
+  or wedged local model then falls back to rules only, because for a job that
+  runs before you wake up, no report at all is the worst outcome.
+- The =:BY:= property records how each message was decided: =rule= (the
+  deterministic pass), =model=, =pending= (in the interim report only — the
+  model is being asked right now), or =unclassified= — the last meaning it was
+  filed under =reply= as a fallback because no model answer covered it. A guess
+  is never recorded as a decision.
+
+** When the model does not decide
+
+Two different things look the same in the report, and it is worth being able to
+tell them apart.
+
+*The model was never called.* If the rules classify everything, there is nothing
+to ask about — by design, and it is the common case. A morning where every
+unread message is a newsletter and a receipt is a morning ollama never hears
+from. A report where every =:BY:= says =rule= is that working, not the model
+pass being broken.
+
+Correct is not the same as verifiable, though, so =C-u M-x
+cmacs-brigade-genmail-triage= sends *every* message to the model and lets the
+rules only advise. That is how to prove the model pass runs — and how to
+second-guess a rule you think is wrong on a particular message. The echo area
+also reports the split after every run: "triaged 2 message(s), 2 by rule, 0 by
+model".
+
+*The model answered unusably.* Small local models substitute their own
+vocabulary: asked to fill in =1 BUCKET=, gemma4:12b will happily answer =1
+Internal Collaboration=. Two defences, both needed —
+
+- the prompt carries the bucket list in the *user* turn, not only the system
+  prompt, because a model that never sees the vocabulary cannot use it (and some
+  local backends weight a system prompt lightly or not at all);
+- the parser reads the requested numbered form first, then falls back to
+  scanning prose for bucket names, so a model that answers with an essay is
+  still usable.
+
+What survives neither is left =unclassified= rather than guessed at.
+
+Expect a local model to be slow, and expect the difference between models to be
+larger than the difference between their sizes suggests. Measured on the
+author's workstation, warm and resident, on the same three-message batch:
+
+| Model               | Batch of 3 | Outcome                            |
+|---------------------+------------+------------------------------------|
+| =ollama/qwen3.5:9b= | ~84s       | answered in the requested form     |
+| =ollama/gemma4:12b= | >400s      | no answer before the wait ran out   |
+
+That is the cost of the call being free, and the reason it does not block the
+editor. It is also why the model is a =defcustom=: measure yours before
+trusting a morning job to it. Multiply the batch time by
+=cmacs-brigade-genmail-max-triage= / 3 for a worst-case morning, and set
+=cmacs-brigade-genmail-triage-timeout= above it.
 
 Output is org, one headline per message, with a =[[mu4e:msgid:...]]= link — so
 the report is a place to act from rather than something to read and then go
 looking. It also lands in the notes corpus, which means next month's triage can
 search it.
+
+** Following a link
+
+The link opens the message. Which reader you get depends on what is loaded:
+
+- *mu4e*, when =mu4e-org= can be required — its own handler, its own view,
+  with replies and attachments.
+- *A built-in view* otherwise, in =*genmail message*=: the headers worth
+  reading, then the message text — MIME decoded, the charset honoured, and
+  =text/html= rendered through shr when that is the only part on offer, which
+  for most mail now it is. =C-c C-r= opens the raw file when the rendering lost
+  something; =q= buries it.
+
+The fallback exists because the alternative is worse than it sounds. An
+unregistered org link type is not an error: org falls through to a heading
+search, so the link answers "No match — create this as a new heading?" and the
+report becomes a list of things you then have to go find by hand. mu4e is also
+not on the load path of an in-tree =src/emacs= unless your init puts it there,
+so this is the common case, not the exotic one.
 
 | Bucket         | Meaning                          |
 |----------------+----------------------------------|
@@ -82,6 +216,10 @@ Output goes into a real mu4e compose buffer, never the Drafts maildir, so your
 signature, your send path and your encryption all apply. Writing a file into
 Drafts would quietly bypass all three.
 
+The model call itself is *not implemented yet*: the prompt is assembled and,
+without mu4e, handed back in a =*genmail draft prompt*= buffer, but nothing
+generates reply text from it. Triage's model pass is live; this one is not.
+
 Nothing is ever sent without confirmation.
 
 * Briefing
@@ -93,6 +231,67 @@ would be indefensible.
 
 Point =cmacs-brigade-genmail-daily-note-function= at whatever produces today's
 file.
+
+* Configuration
+
+Every knob is a =defcustom=, so it is a =setq= in your init or =M-x
+customize-group RET cmacs-brigade-genmail RET=. Nothing here needs a rebuild.
+
+#+begin_src elisp
+(setq cmacs-brigade-genmail-triage-model    "ollama/qwen3.5:9b"  ; local, default
+      cmacs-brigade-genmail-use-model       t      ; nil -> rules only
+      cmacs-brigade-genmail-triage-timeout  600    ; then fall back to rules
+      cmacs-brigade-genmail-draft-model     nil    ; nil -> cmacs-brigade-default-model
+      cmacs-brigade-genmail-inbox-query     nil    ; nil -> derive from the store
+      cmacs-brigade-genmail-max-triage      40
+      cmacs-brigade-genmail-work-domains    '("corp.example")
+      cmacs-brigade-genmail-apply-flags     nil    ; triage never touches mail
+      cmacs-brigade-genmail-output-directory nil   ; genmail/ in the state dir
+      cmacs-brigade-genmail-mu-program      "mu")
+#+end_src
+
+** Choosing the models
+
+Both model variables take a =PROVIDER/MODEL= string, the same form the rest of
+brigade uses:
+
+#+begin_src elisp
+;; another local model -- nothing leaves the machine.  `ollama list'
+;; shows what is pulled; see the timings below before picking one.
+(setq cmacs-brigade-genmail-triage-model "ollama/gemma4:26b")
+
+;; or a hosted one, if the local answers are not good enough
+(setq cmacs-brigade-genmail-triage-model "claude/claude-sonnet-4-6")
+#+end_src
+
+Set it per-machine without editing init by wrapping it, since a laptop and a
+workstation rarely have the same models pulled:
+
+#+begin_src elisp
+;; nothing big pulled on the laptop, so pay for the hosted one there
+(unless (string= (system-name) "workstation")
+  (setq cmacs-brigade-genmail-triage-model "claude/claude-sonnet-4-6"))
+#+end_src
+
+Valid names come from the provider, not from cmacs: =M-x
+cmacs-ai-list-providers= shows which providers are usable and which have an API
+key, =(cmacs-ai-list-models 'ollama)= returns what one of them offers (a
+function, not a command — evaluate it), and for ollama =ollama list= is the same
+answer from the shell. A name that is not pulled locally fails at call time, not
+at =setq= time.
+
+The two models are separate on purpose. Triage runs over every unread inbox
+message every morning and is mostly pattern recognition, so it defaults local
+and free. Drafting writes in your name and is worth more — leaving
+=cmacs-brigade-genmail-draft-model= at =nil= is defined to inherit
+=cmacs-brigade-default-model=, so raising your brigade-wide model raises drafting
+with it while triage stays cheap.
+
+=cmacs-brigade-genmail-triage-model= is live: triage calls it. The drafting
+model is *not yet wired* — =cmacs-brigade-genmail-draft= assembles the prompt
+(style profile, exemplars, thread, memory hits) and hands it to a mu4e compose
+buffer, but no model generates the reply text. Setting the variable today
+records the choice; it does not change what drafting does.
 
 * Tools
 
