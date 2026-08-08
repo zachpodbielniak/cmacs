@@ -913,11 +913,29 @@ The mu query selecting the folders triage and the briefing read.
 
 @subsection Rules first, then a model
 
-A deterministic pass runs first.  A @code{List-Unsubscribe} header
-identifies a newsletter with certainty, and spending a model call to
-reach the same answer less reliably would be the most common thing this
-code does and the least useful.  On a real inbox that classified 92 of
-100 unread messages with no model call at all.
+A deterministic pass runs first, and it only decides what it can know
+with certainty: a @code{List-Unsubscribe} header identifies bulk mail
+conclusively, and a transactional subject is precise enough to trust.
+The rules used to guess more---@samp{noreply} meant noise, a bulk-mail
+domain meant newsletter---and the guesses were wrong exactly where being
+wrong mattered: security alerts come from noreply addresses, and
+credit-report notices arrive from @samp{mail.<bank>.com}.  An
+@emph{attention guard} now runs before the newsletter rule: a subject
+that smells of security, money or the account itself is never
+rule-filed, whatever the headers say.  The model reads all of it.
+
+@defopt cmacs-brigade-genmail-address-rules
+Alist of @code{(REGEXP . BUCKET)} matched against the sender's address,
+checked before every built-in rule and before the model.  Settle a
+sender the built-ins or the model keep getting wrong, once.  A rule
+naming a bucket that is not in @code{cmacs-brigade-genmail-buckets} is
+skipped.
+@end defopt
+
+@defopt cmacs-brigade-genmail-subject-rules
+The same, matched against the lower-cased subject, checked right after
+the address rules.
+@end defopt
 
 Whatever the rules cannot decide goes to the model in @emph{one} batched
 call.  If the rules decide everything, no call happens---which is the
@@ -968,6 +986,70 @@ the mail outrank the rewrite.
 The call is asynchronous for a harder reason than responsiveness, too.
 Under @option{--gowl} the editor is the compositor, so a synchronous
 model call would freeze the desktop for as long as the model took.
+
+@subsection Second opinions, from inside the report
+
+Every report carries @samp{cmacs-genmail:} retriage buttons at three
+scopes: at the top (reclassify everything), under each section heading
+(one bucket's worth), and next to each message's @samp{open} link (one
+message).  All three dispatch to
+@code{cmacs-brigade-genmail-reclassify}, which sends the chosen entries
+back to the model with the rules only advising.  It operates on what
+the report says, not on a fresh unread query, and the flow is the same
+two-pass rewrite as triage itself.
+
+@deffn Command cmacs-brigade-genmail-reclassify &optional selector file
+Send report entries back to the model.  @var{selector} is @code{all},
+@code{(bucket . NAME)} or @code{(msgid . ID)}; interactively,
+everything.  The model's answer replaces the standing verdict; a model
+that fails to answer restores the verdict each message already had,
+never the @code{reply} fallback.  One pass runs at a time.
+@end deffn
+
+@subsection Acting from the report
+
+Each message carries a recommended action---@code{trash},
+@code{archive}, @code{reply}, @code{todo} or @code{triage}---from the
+model (the answer template is @samp{N BUCKET ACTION}) or from the
+bucket's default for rule-decided mail, plus the buttons to take it.
+The recommendation is recorded in the @code{:SUGGEST:} property and
+shown on a @samp{suggested action:} line under the buttons.
+Trash and archive are mu4e's mark-then-execute in one click: the move
+goes through mu4e's server when mu4e is around (folder functions, flag
+overrides and @code{mu4e-change-filenames-when-moving} all respected),
+and falls back to a by-hand file move plus an async @command{mu index}
+otherwise.  Todo appends a linked @samp{* TODO} entry to the day's
+file: the org-roam daily when dailies are configured, else
+@code{cmacs-brigade-genmail-daily-note-function}.  An acted-on message
+shows @samp{done: trashed} in place of its buttons.
+
+@defopt cmacs-brigade-genmail-trash-folder
+@defoptx cmacs-brigade-genmail-archive-folder
+Target maildirs, string or function of the message plist.  @code{nil}
+derives them from @code{mu4e-trash-folder} / @code{mu4e-refile-folder}.
+@end defopt
+
+@defopt cmacs-brigade-genmail-trash-flags
+Server flags for trashing (@code{"-N"}).  Not @code{"+T-N"}: under
+mbsync with @samp{Expunge Both}, a local file carrying the T flag and
+no remote UID is expunged locally without the delete ever reaching the
+server.  Moving into the trash maildir already is the delete.
+@end defopt
+
+@defopt cmacs-brigade-genmail-confirm-moves
+Ask before moving (@code{t}).  mu4e's own flow is two deliberate keys;
+an org-link click should not be quieter.
+@end defopt
+
+@defopt cmacs-brigade-genmail-sync-after-move
+Run @code{mu4e-update-mail-and-index} debounced after report-button
+moves (@code{t}), mirroring what executing marks does.
+@end defopt
+
+@defopt cmacs-brigade-genmail-todo-file-function
+Function returning the todo button's target file.  @code{nil} derives
+the org-roam daily, then the briefing's daily-note function.
+@end defopt
 
 @subsection Following a link in the report
 

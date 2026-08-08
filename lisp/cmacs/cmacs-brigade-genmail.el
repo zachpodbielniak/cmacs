@@ -41,6 +41,15 @@
 (declare-function cmacs-ai-supported-p "cmacs-ai-stream.c" ())
 (declare-function cmacs-brigade--split-model "cmacs-brigade-run" (model))
 
+;; mu4e's move machinery (used only when mu4e is around).
+(declare-function mu4e "mu4e" (&optional background))
+(declare-function mu4e-running-p "mu4e-server" ())
+(declare-function mu4e--server-move "mu4e-server"
+                  (docid-or-msgid maildir flags &optional rename no-view))
+(declare-function mu4e-get-trash-folder "mu4e-folders" (msg))
+(declare-function mu4e-get-refile-folder "mu4e-folders" (msg))
+(declare-function mu4e-update-mail-and-index "mu4e-update" (run-in-background))
+
 (defgroup cmacs-brigade-genmail nil
   "Agentic mail over an existing mu index."
   :group 'cmacs-brigade
@@ -148,6 +157,76 @@ right for a while, and a wrong flag on real mail is a real cost."
 (defcustom cmacs-brigade-genmail-max-triage 40
   "Most messages to triage in one pass."
   :type 'integer
+  :group 'cmacs-brigade-genmail)
+
+(defcustom cmacs-brigade-genmail-address-rules nil
+  "Alist of (REGEXP . BUCKET) matched against the sender's address.
+
+Checked before every built-in rule and before the model, so this is
+where a sender that keeps being judged wrong is settled once and for
+all.  BUCKET must be one of `cmacs-brigade-genmail-buckets'; an entry
+naming anything else is ignored rather than inventing a section the
+report would never print."
+  :type '(alist :key-type regexp :value-type symbol)
+  :group 'cmacs-brigade-genmail)
+
+(defcustom cmacs-brigade-genmail-subject-rules nil
+  "Alist of (REGEXP . BUCKET) matched against the subject, lower-cased.
+Same contract as `cmacs-brigade-genmail-address-rules', checked right
+after it."
+  :type '(alist :key-type regexp :value-type symbol)
+  :group 'cmacs-brigade-genmail)
+
+(defcustom cmacs-brigade-genmail-trash-folder nil
+  "Maildir the trash button moves mail into, e.g. \"/Trash\".
+A function is called with the message plist and returns the maildir.
+Nil derives it from mu4e (`mu4e-trash-folder') when mu4e is around."
+  :type '(choice (const :tag "Derive from mu4e" nil) string function)
+  :group 'cmacs-brigade-genmail)
+
+(defcustom cmacs-brigade-genmail-archive-folder nil
+  "Maildir the archive button moves mail into, e.g. \"/Archive\".
+Same contract as `cmacs-brigade-genmail-trash-folder', derived from
+`mu4e-refile-folder' when nil."
+  :type '(choice (const :tag "Derive from mu4e" nil) string function)
+  :group 'cmacs-brigade-genmail)
+
+(defcustom cmacs-brigade-genmail-trash-flags "-N"
+  "Flags passed to the mu4e server when trashing.
+
+Not \"+T-N\" (stock mu4e trash) on purpose.  Under mbsync with
+`Expunge Both', a local file carrying the T flag and no remote UID
+reads as \"marked deleted, never uploaded\" and is expunged locally
+without the delete ever reaching the server.  Moving into the trash
+maildir already is the delete; the T flag is redundant there and
+destructive here.  Set this to \"+T-N\" only when the store is not
+synced by mbsync."
+  :type 'string
+  :group 'cmacs-brigade-genmail)
+
+(defcustom cmacs-brigade-genmail-confirm-moves t
+  "Whether the trash and archive buttons ask before moving.
+
+On by default: mu4e's own flow is mark then execute, two deliberate
+steps, and a single org-link click should not be quieter than that."
+  :type 'boolean
+  :group 'cmacs-brigade-genmail)
+
+(defcustom cmacs-brigade-genmail-sync-after-move t
+  "Whether to run mu4e's mail update after a report-button move.
+
+Mirrors executing marks inside mu4e: the move is only local until
+mbsync pushes it, and a trash that never reaches the server is not a
+trash.  Debounced, so a burst of clicks syncs once."
+  :type 'boolean
+  :group 'cmacs-brigade-genmail)
+
+(defcustom cmacs-brigade-genmail-todo-file-function nil
+  "Function returning the file the todo button appends to.
+
+Nil derives it: the org-roam daily for today when org-roam's dailies
+are configured, else `cmacs-brigade-genmail-daily-note-function'."
+  :type '(choice (const :tag "Derive it" nil) function)
   :group 'cmacs-brigade-genmail)
 
 (define-error 'cmacs-brigade-genmail-error
@@ -671,19 +750,46 @@ mu4e rather than standing in for it."
       (cmacs-brigade-genmail-open-msgid (match-string 1 link))
     (user-error "cmacs-brigade: unsupported mu4e link: %s" link)))
 
-(defun cmacs-brigade-genmail-ensure-link-type ()
-  "Make sure following a `mu4e:' link in a report opens the message.
+(defun cmacs-brigade-genmail--follow-retriage (path &optional _prefix)
+  "Follow PATH, the path part of a `cmacs-genmail:' report link.
 
-Loads mu4e's own handler when it can, and stands in only when there is
-nothing registered at all -- if `mu4e-org' loads later it re-registers
-the type and wins, which is the right outcome."
+The report's buttons: `retriage:all', `retriage:bucket:NAME' and
+`retriage:msgid:ID' for second opinions; `trash:ID', `archive:ID' and
+`todo:ID' for acting on one message."
+  (cond
+   ((string-equal path "retriage:all")
+    (cmacs-brigade-genmail-reclassify 'all))
+   ((string-match "\\`retriage:bucket:\\([a-z-]+\\)\\'" path)
+    (cmacs-brigade-genmail-reclassify
+     (cons 'bucket (intern (match-string 1 path)))))
+   ((string-match "\\`retriage:msgid:\\(.+\\)\\'" path)
+    (cmacs-brigade-genmail-reclassify
+     (cons 'msgid (match-string 1 path))))
+   ((string-match "\\`trash:\\(.+\\)\\'" path)
+    (cmacs-brigade-genmail-trash-message (match-string 1 path)))
+   ((string-match "\\`archive:\\(.+\\)\\'" path)
+    (cmacs-brigade-genmail-archive-message (match-string 1 path)))
+   ((string-match "\\`todo:\\(.+\\)\\'" path)
+    (cmacs-brigade-genmail-log-todo (match-string 1 path)))
+   (t (user-error "cmacs-brigade: unsupported genmail link: %s" path))))
+
+(defun cmacs-brigade-genmail-ensure-link-type ()
+  "Make sure the links a triage report writes actually do something.
+
+For `mu4e:' links, loads mu4e's own handler when it can and stands in
+only when there is nothing registered at all -- if `mu4e-org' loads
+later it re-registers the type and wins, which is the right outcome.
+The `cmacs-genmail:' retriage links are ours alone, so those are simply
+registered."
   (require 'ol nil t)
-  (unless (require 'mu4e-org nil t)
-    (when (and (fboundp 'org-link-set-parameters)
-               (fboundp 'org-link-get-parameter)
-               (null (org-link-get-parameter "mu4e" :follow)))
-      (org-link-set-parameters
-       "mu4e" :follow #'cmacs-brigade-genmail--follow-link))))
+  (when (and (fboundp 'org-link-set-parameters)
+             (fboundp 'org-link-get-parameter))
+    (unless (require 'mu4e-org nil t)
+      (when (null (org-link-get-parameter "mu4e" :follow))
+        (org-link-set-parameters
+         "mu4e" :follow #'cmacs-brigade-genmail--follow-link)))
+    (org-link-set-parameters
+     "cmacs-genmail" :follow #'cmacs-brigade-genmail--follow-retriage)))
 
 (with-eval-after-load 'org
   (cmacs-brigade-genmail-ensure-link-type))
@@ -691,31 +797,102 @@ the type and wins, which is the right outcome."
 
 ;;;; Triage
 
-(defun cmacs-brigade-genmail--obviously-automated-p (msg)
-  "Return a bucket symbol when MSG can be classified with no model.
+(defvar cmacs-brigade-genmail--inflight nil
+  "Non-nil while a triage model pass is running.
 
-A List-Unsubscribe header identifies a newsletter with certainty.
-Spending a model call to reach the same answer less reliably would be
-the most common thing this code does and the least useful."
-  (let* ((addr (downcase (or (cmacs-brigade-genmail--address
-                              (car (plist-get msg :from))) "")))
-         (subject (or (plist-get msg :subject) "")))
-    (cond
-     ((plist-get msg :list) 'newsletter)
-     ;; Bulk senders that set neither header still announce themselves
-     ;; in the From address often enough to be worth a rule.
-     ((string-match-p "newsletter\\|digest\\|@\\(news\\|mail\\|email\\)\\." addr)
-      'newsletter)
-     ((string-match-p "noreply\\|no-reply\\|donotreply" addr) 'noise)
-     ((string-match-p
-       "\\(receipt\\|invoice\\|your order\\|order .* confirmed\\|payment \\(received\\|due\\)\\|shipped\\)"
-       (downcase subject))
-      'receipt)
-     (t nil))))
+One at a time: two async passes rewriting the same report would race,
+and the loser's answer would look like it never came.")
 
 (defconst cmacs-brigade-genmail-buckets
   '(act-now reply waiting-on-me fyi newsletter receipt noise)
   "The buckets triage sorts into, in report order.")
+
+(defconst cmacs-brigade-genmail-actions
+  '(trash archive reply todo triage)
+  "The actions triage may recommend for a message.
+
+`trash' and `archive' have buttons that do the move; `todo' has one
+that logs the message on the day's list; `reply' and `triage' are the
+reader's -- one is answered in mu4e, the other means a human has to
+look before anything is decided.")
+
+(defun cmacs-brigade-genmail--default-action (bucket)
+  "Return the recommended action implied by BUCKET alone.
+
+Used for rule-decided messages, where no model was asked, and as the
+fallback when the model named a bucket but no action.  Deliberately
+conservative at the edges: an unrecognised bucket recommends `triage',
+never a move."
+  (pcase bucket
+    ('act-now 'todo)
+    ('reply 'reply)
+    ('waiting-on-me 'todo)
+    ('fyi 'archive)
+    ('newsletter 'trash)
+    ('receipt 'archive)
+    ('noise 'trash)
+    (_ 'triage)))
+
+(defconst cmacs-brigade-genmail--attention-subject-re
+  (concat "security\\|alert\\|fraud\\|suspicious\\|unauthorized\\|"
+          "verif\\|password\\|sign.?in\\|log.?in\\|expir\\|deadline\\|"
+          "action required\\|urgent\\|account\\|credit\\|statement\\|"
+          "report\\|balance\\|renew\\|overdue")
+  "Subjects no rule may file as newsletter or noise.
+
+Security, money and the account itself: exactly where a wrong bucket
+costs the most, and bulk senders mail about all three -- Credit Karma
+sets List-Unsubscribe on a credit-report change, Google sends security
+alerts from a noreply address.  A subject matching this goes to the
+model, whatever the headers say.")
+
+(defun cmacs-brigade-genmail--custom-rule (addr subject)
+  "Return the bucket the user's own rules assign, or nil.
+
+ADDR and SUBJECT are already lower-cased.  A rule naming a bucket that
+is not in `cmacs-brigade-genmail-buckets' is skipped: a typo there must
+not create a section the report never prints."
+  (cl-loop for (re . bucket)
+           in (append (mapcar (lambda (r) (cons (car r) (cons 'addr (cdr r))))
+                              cmacs-brigade-genmail-address-rules)
+                      (mapcar (lambda (r) (cons (car r) (cons 'subj (cdr r))))
+                              cmacs-brigade-genmail-subject-rules))
+           when (and (memq (cdr bucket) cmacs-brigade-genmail-buckets)
+                     (string-match-p re (if (eq (car bucket) 'addr)
+                                            addr subject)))
+           return (cdr bucket)))
+
+(defun cmacs-brigade-genmail--obviously-automated-p (msg)
+  "Return a bucket symbol when MSG can be classified with no model.
+
+Only what a rule can know with certainty.  An earlier version of this
+also guessed -- `noreply' in the sender meant noise, a bulk-mail domain
+meant newsletter -- and the guesses were wrong exactly where being
+wrong mattered: security alerts come from noreply addresses, and
+credit-report notices arrive from mail.<bank>.com.  A rule that cannot
+be certain now answers nil and the model decides."
+  (let* ((addr (downcase (or (cmacs-brigade-genmail--address
+                              (car (plist-get msg :from))) "")))
+         (subject (downcase (or (plist-get msg :subject) ""))))
+    (cond
+     ;; The user's own rules outrank everything, the attention guard
+     ;; included: a sender they have already ruled on is settled.
+     ((cmacs-brigade-genmail--custom-rule addr subject))
+     ;; Transactional subjects are precise enough to trust.
+     ((string-match-p
+       "\\(receipt\\|invoice\\|your order\\|order .* confirmed\\|payment \\(received\\|due\\)\\|shipped\\)"
+       subject)
+      'receipt)
+     ;; Security, money, the account: never rule-filed, whatever the
+     ;; headers say.  See `cmacs-brigade-genmail--attention-subject-re'.
+     ((string-match-p cmacs-brigade-genmail--attention-subject-re subject)
+      nil)
+     ;; With the guard above already passed, a mailing-list header is
+     ;; conclusive, and a sender announcing itself as a newsletter is
+     ;; close enough.
+     ((plist-get msg :list) 'newsletter)
+     ((string-match-p "newsletter\\|digest" addr) 'newsletter)
+     (t nil))))
 
 (defun cmacs-brigade-genmail--ai-available-p ()
   "Non-nil when the cmacs-ai layer is built and reports itself usable.
@@ -754,16 +931,32 @@ the dependency stays lazy rather than becoming a top-level `require'."
   (concat
    "You sort a person's unread mail into exactly one bucket each.\n\n"
    "Buckets:\n"
-   "  act-now       needs attention today; a deadline, an outage, money at risk\n"
+   "  act-now       needs attention today; a deadline, an outage, money at\n"
+   "                risk, a security alert about a sign-in that may not be theirs\n"
    "  reply         a person is waiting on a response from the reader\n"
    "  waiting-on-me someone downstream is blocked until the reader acts\n"
-   "  fyi           worth reading, needs nothing\n"
-   "  newsletter    bulk or subscription content\n"
+   "  fyi           worth reading, needs nothing: account notices, statements,\n"
+   "                reports about the reader's money or accounts, routine\n"
+   "                security confirmations\n"
+   "  newsletter    bulk or subscription content sent to a list\n"
    "  receipt       transactional: orders, invoices, payments, shipping\n"
-   "  noise         no action, ever\n\n"
+   "  noise         nothing to read and nothing to do: marketing blasts,\n"
+   "                promotional offers, social-network activity\n\n"
+   "A security alert or a notice about the reader's own account or money\n"
+   "is never noise and never newsletter, even when the sender is bulk\n"
+   "mail.  When fyi and noise both fit, prefer fyi.\n\n"
+   "After the bucket, recommend exactly one action:\n"
+   "  trash    nothing of value; delete it\n"
+   "  archive  worth keeping for reference; file it\n"
+   "  reply    the reader should answer it\n"
+   "  todo     the reader must do something beyond replying\n"
+   "  triage   you are not sure; a human should look\n\n"
+   "When unsure of the action, say triage rather than trash: a wrong\n"
+   "triage costs a glance, a wrong trash costs a message.\n\n"
    "Output the answer template with each BUCKET replaced by one bucket\n"
-   "name.  Output nothing else: no preamble, no reasoning, no markdown,\n"
-   "no table, no restating of the messages."))
+   "name and each ACTION by one action name.  Output nothing else: no\n"
+   "preamble, no reasoning, no markdown, no table, no restating of the\n"
+   "messages."))
 
 (defun cmacs-brigade-genmail--triage-prompt (msgs)
   "Return the user prompt classifying MSGS, numbered from 1.
@@ -808,40 +1001,55 @@ no better answer."
    ;; asked to "answer NUMBER BUCKET" writes an essay with a summary
    ;; table; asked to complete these exact lines it usually completes
    ;; them.  The parser still assumes it did not.
-   "\nAnswer template -- replace each BUCKET, output these lines only:\n"
-   (mapconcat (lambda (n) (format "%d BUCKET" n))
+   "\nAnswer template -- replace each BUCKET and ACTION, output these"
+   "\nlines only:\n"
+   (mapconcat (lambda (n) (format "%d BUCKET ACTION" n))
               (number-sequence 1 (length msgs)) "\n")
    "\n"))
 
-(defun cmacs-brigade-genmail--parse-buckets (text count)
-  "Parse TEXT into a vector of COUNT bucket symbols, nil where unanswered.
+(defun cmacs-brigade-genmail--parse-verdicts (text count)
+  "Parse TEXT into a vector of COUNT (BUCKET . ACTION) conses.
 
-Tolerant on purpose: a small local model will number its lines \"1.\",
-\"1)\" or \"1 -\", and will occasionally add a sentence nobody asked
-for.  Anything that is not a known bucket is left nil rather than
-guessed at, and the caller falls back to `reply'."
+A slot is nil where no bucket was answered; ACTION is nil when only
+the bucket was.  Tolerant on purpose: a small local model will number
+its lines \"1.\", \"1)\" or \"1 -\", and will occasionally add a
+sentence nobody asked for.  Anything that is not a known bucket or
+action is left nil rather than guessed at."
   (let ((out (make-vector count nil)))
-    ;; First pass: the format that was asked for.
+    ;; First pass: the format that was asked for -- "N BUCKET ACTION".
     (dolist (line (split-string (or text "") "\n" t))
       (when (string-match
-             "\\`[^0-9]*\\([0-9]+\\)[.):[:space:]-]+\\**\\([a-zA-Z-]+\\)" line)
+             (concat "\\`[^0-9]*\\([0-9]+\\)[.):[:space:]-]+\\**\\([a-zA-Z-]+\\)"
+                     "\\(?:[[:space:],*]+\\([a-zA-Z-]+\\)\\)?")
+             line)
         (let ((n (string-to-number (match-string 1 line)))
-              (bucket (intern (downcase (match-string 2 line)))))
+              (bucket (intern (downcase (match-string 2 line))))
+              (action (and (match-string 3 line)
+                           (intern (downcase (match-string 3 line))))))
           (when (and (>= n 1) (<= n count)
                      (memq bucket cmacs-brigade-genmail-buckets))
-            (aset out (1- n) bucket)))))
+            (aset out (1- n)
+                  (cons bucket (and (memq action cmacs-brigade-genmail-actions)
+                                    action)))))))
     ;; Second pass: the answer was prose.  Split it at the numbering and
-    ;; take the first bucket word named in each message's own section --
-    ;; a model that wrote a paragraph about message 2 usually still says
-    ;; "act-now" somewhere inside it.
+    ;; take the first bucket and action words named in each message's own
+    ;; section -- a model that wrote a paragraph about message 2 usually
+    ;; still says "act-now" somewhere inside it.
     (unless (cl-every #'identity (append out nil))
       (cmacs-brigade-genmail--scan-sections text count out))
     out))
 
+(defun cmacs-brigade-genmail--parse-buckets (text count)
+  "Parse TEXT into a vector of COUNT bucket symbols, nil where unanswered.
+The bucket half of `cmacs-brigade-genmail--parse-verdicts'."
+  (vconcat (mapcar #'car-safe
+                   (cmacs-brigade-genmail--parse-verdicts text count))))
+
 (defun cmacs-brigade-genmail--scan-sections (text count out)
   "Fill unanswered slots of OUT by scanning TEXT's numbered sections.
 
-COUNT is how many messages were asked about.  Modifies and returns OUT."
+COUNT is how many messages were asked about; OUT holds (BUCKET . ACTION)
+conses.  Modifies and returns OUT."
   (let ((marks nil))
     (with-temp-buffer
       (insert (or text ""))
@@ -859,13 +1067,20 @@ COUNT is how many messages were asked about.  Modifies and returns OUT."
                  (n (car this)))
             (when (null (aref out (1- n)))
               (goto-char (cdr this))
-              (let ((found nil))
-                (while (and (not found)
+              (let ((bucket nil) (action nil))
+                (while (and (not bucket)
                             (re-search-forward
                              "\\_<\\(act-now\\|waiting-on-me\\|newsletter\\|receipt\\|reply\\|noise\\|fyi\\)\\_>"
                              end t))
-                  (setq found (intern (downcase (match-string 1)))))
-                (when found (aset out (1- n) found)))))
+                  (setq bucket (intern (downcase (match-string 1)))))
+                (when bucket
+                  (save-excursion
+                    (while (and (not action)
+                                (re-search-forward
+                                 "\\_<\\(trash\\|archive\\|todo\\|triage\\)\\_>"
+                                 end t))
+                      (setq action (intern (downcase (match-string 1))))))
+                  (aset out (1- n) (cons bucket action))))))
           (setq rest (cdr rest))))))
   out)
 
@@ -889,6 +1104,8 @@ the two apart, and how you second-guess a rule you think is wrong."
   (interactive (list nil current-prefix-arg))
   (unless (cmacs-brigade-genmail-available-p)
     (user-error "cmacs-brigade: mu is not installed"))
+  (when cmacs-brigade-genmail--inflight
+    (user-error "cmacs-brigade: a triage model pass is already running"))
   (let* ((msgs (cmacs-brigade-genmail-query
                 (cmacs-brigade-genmail--unread-query)
                 (or limit cmacs-brigade-genmail-max-triage)))
@@ -899,7 +1116,10 @@ the two apart, and how you second-guess a rule you think is wrong."
       (let* ((cheap (and (not force)
                          (cmacs-brigade-genmail--obviously-automated-p m)))
              (entry (append m (list :bucket (or cheap 'pending)
-                                    :by (if cheap 'rule 'pending)))))
+                                    :by (if cheap 'rule 'pending)
+                                    :action (and cheap
+                                                 (cmacs-brigade-genmail--default-action
+                                                  cheap))))))
         (unless cheap (push entry pending))
         (push entry classified)))
     (setq classified (nreverse classified)
@@ -927,21 +1147,41 @@ the two apart, and how you second-guess a rule you think is wrong."
       (cmacs-brigade-genmail--triage-finish classified interactive-p))))
 
 (defun cmacs-brigade-genmail--settle-pending (pending)
-  "File anything still PENDING under `reply', recorded as unclassified.
+  "File anything still PENDING, honestly labelled.
 
-The safe bucket, and honestly labelled: nobody decided this one."
+A message being re-judged carries its previous verdict in
+`:prior-bucket', and when the model fails to answer that verdict comes
+back -- the old answer was at least an answer.  A message that never
+had one is filed under `reply', recorded as unclassified: the safe
+bucket, and nobody decided this one."
   (dolist (m pending)
     (when (eq 'pending (plist-get m :by))
-      (plist-put m :bucket 'reply)
-      (plist-put m :by 'unclassified))))
+      (cmacs-brigade-genmail--restore-or-default m))))
 
-(defun cmacs-brigade-genmail--triage-model-pass (classified pending interactive-p)
-  "Ask the model about PENDING, then finish CLASSIFIED.
+(defun cmacs-brigade-genmail--restore-or-default (m)
+  "Give M back its prior verdict, or file it under `reply' unclassified.
+
+The recommended action comes back with it; a message nobody decided
+recommends `triage', which is what unclassified means."
+  (let ((prior (plist-get m :prior-bucket)))
+    (if prior
+        (progn (plist-put m :bucket prior)
+               (plist-put m :by (or (plist-get m :prior-by) 'unclassified))
+               (plist-put m :action (or (plist-get m :prior-action)
+                                        (cmacs-brigade-genmail--default-action
+                                         prior))))
+      (plist-put m :bucket 'reply)
+      (plist-put m :by 'unclassified)
+      (plist-put m :action 'triage))))
+
+(defun cmacs-brigade-genmail--triage-model-pass (classified pending interactive-p
+                                                            &optional file)
+  "Ask the model about PENDING, then finish CLASSIFIED into FILE.
 
 One call for the whole batch rather than one per message: a dozen round
 trips to a local model costs a dozen model loads' worth of latency for
 an answer that fits in one prompt.  Returns the report path, which is
-written from the stream callback."
+written from the stream callback.  FILE defaults to today's report."
   (let* ((split (cmacs-brigade-genmail--split-model
                  cmacs-brigade-genmail-triage-model))
          (answer "")
@@ -949,6 +1189,7 @@ written from the stream callback."
          (timer nil)
          (finished nil)
          (finish nil))
+    (setq cmacs-brigade-genmail--inflight t)
     ;; One exit point, run once.  The stream and the timeout race each
     ;; other by construction, and finishing twice would write the report
     ;; twice and run the hook twice.
@@ -956,6 +1197,7 @@ written from the stream callback."
           (lambda (failure)
             (unless finished
               (setq finished t)
+              (setq cmacs-brigade-genmail--inflight nil)
               (when timer (cancel-timer timer) (setq timer nil))
               (ignore-errors (cmacs-ai-free-session pair))
               (if failure
@@ -967,7 +1209,7 @@ written from the stream callback."
                     (cmacs-brigade-genmail--settle-pending pending))
                 (cmacs-brigade-genmail--apply-buckets pending answer))
               (cmacs-brigade-genmail--triage-finish classified
-                                                    interactive-p))))
+                                                    interactive-p file))))
     (condition-case err
         (progn
           (setq pair (cmacs-ai-make-session
@@ -999,17 +1241,28 @@ written from the stream callback."
                                         (or (cadr payload) "stream error"))))))))
       (error
        (funcall finish (format "unavailable (%s)" (error-message-string err)))))
-    (cmacs-brigade-genmail--triage-file)))
+    (or file (cmacs-brigade-genmail--triage-file))))
 
 (defun cmacs-brigade-genmail--apply-buckets (pending answer)
-  "Set the bucket on each of PENDING from the model's ANSWER."
-  (let ((buckets (cmacs-brigade-genmail--parse-buckets
-                  answer (length pending)))
+  "Set bucket and action on each of PENDING from the model's ANSWER.
+
+A slot the model left unanswered falls back the same way a failed call
+does: the prior verdict when there was one, else `reply' recorded as
+unclassified.  A bucket with no action gets the bucket's default."
+  (let ((verdicts (cmacs-brigade-genmail--parse-verdicts
+                   answer (length pending)))
         (n 0))
     (dolist (m pending)
-      (let ((bucket (aref buckets n)))
-        (plist-put m :bucket (or bucket 'reply))
-        (plist-put m :by (if bucket 'model 'unclassified)))
+      (let* ((v (aref verdicts n))
+             (bucket (car-safe v)))
+        (if bucket
+            (progn (plist-put m :bucket bucket)
+                   (plist-put m :by 'model)
+                   (plist-put m :action
+                              (or (cdr v)
+                                  (cmacs-brigade-genmail--default-action
+                                   bucket))))
+          (cmacs-brigade-genmail--restore-or-default m)))
       (cl-incf n))))
 
 (defun cmacs-brigade-genmail--refresh-report (file)
@@ -1030,9 +1283,11 @@ left alone -- your notes on the mail outrank our rewrite."
             (goto-char (min pos (point-max)))))))
     buf))
 
-(defun cmacs-brigade-genmail--triage-finish (classified interactive-p)
-  "Write CLASSIFIED, run the hook, and report.  Returns the path."
-  (let* ((file (cmacs-brigade-genmail--write-triage classified))
+(defun cmacs-brigade-genmail--triage-finish (classified interactive-p
+                                                        &optional file)
+  "Write CLASSIFIED into FILE, run the hook, and report.  Returns the path.
+FILE defaults to today's report."
+  (let* ((file (cmacs-brigade-genmail--write-triage classified file))
          ;; The report may already be on screen from the rules pass; in
          ;; that case update it in place rather than opening a second
          ;; window on the same file.
@@ -1051,13 +1306,12 @@ left alone -- your notes on the mail outrank our rewrite."
 (defvar cmacs-brigade-genmail-triaged-functions nil
   "Abnormal hook run with the classified message list after triage.")
 
-(defun cmacs-brigade-genmail--write-triage (messages)
-  "Write MESSAGES as an org report and return the path."
-  (let* ((dir (cmacs-brigade-genmail--output-dir))
-         ;; One place decides the name, so the path `triage' promised
-         ;; before the model answered is the path that gets written.
-         (file (cmacs-brigade-genmail--triage-file)))
-    (make-directory dir t)
+(defun cmacs-brigade-genmail--write-triage (messages &optional file)
+  "Write MESSAGES as an org report to FILE and return the path.
+FILE defaults to today's report, so the path `triage' promised before
+the model answered is the path that gets written."
+  (let ((file (or file (cmacs-brigade-genmail--triage-file))))
+    (make-directory (file-name-directory file) t)
     (with-temp-file file
       (insert "#+title: Mail triage " (format-time-string "%F") "\n"
               "#+created: " (format-time-string "[%F %a %H:%M]") "\n\n")
@@ -1071,6 +1325,13 @@ left alone -- your notes on the mail outrank our rewrite."
                    cmacs-brigade-genmail-triage-model waiting)
                   "itself when the answer lands; everything below is what\n"
                   "the rules already decided.\n\n")))
+      ;; The second-opinion button: everything back to the model, the
+      ;; rules only advising.  Written even when the model pass is off
+      ;; -- following it then says why nothing happened, which beats a
+      ;; report that silently has no way to disagree with a rule.
+      (when messages
+        (insert "[[cmacs-genmail:retriage:all]"
+                "[Ask the model to reclassify everything]]\n\n"))
       ;; `pending' is a report-only bucket -- it is deliberately not in
       ;; `cmacs-brigade-genmail-buckets', so a model cannot answer with it.
       (dolist (bucket (cons 'pending cmacs-brigade-genmail-buckets))
@@ -1079,6 +1340,13 @@ left alone -- your notes on the mail outrank our rewrite."
                           messages)))
           (when in-bucket
             (insert (format "* %s (%d)\n" bucket (length in-bucket)))
+            ;; The same button scoped to one section, for when a rule
+            ;; got a whole class of mail wrong.  Not on `pending': those
+            ;; are already on their way to the model.
+            (unless (eq bucket 'pending)
+              (insert (format
+                       "  [[cmacs-genmail:retriage:bucket:%s][ask the model about these]]\n"
+                       bucket)))
             (dolist (m in-bucket)
               (insert (format "** %s\n" (or (plist-get m :subject) "(no subject)")))
               (insert "   :PROPERTIES:\n")
@@ -1088,13 +1356,365 @@ left alone -- your notes on the mail outrank our rewrite."
               (when (plist-get m :message-id)
                 (insert (format "   :MSGID: %s\n" (plist-get m :message-id))))
               (insert (format "   :BY: %s\n" (plist-get m :by)))
+              (when (and (plist-get m :action) (not (eq bucket 'pending)))
+                (insert (format "   :SUGGEST: %s\n" (plist-get m :action))))
+              (when (plist-get m :acted)
+                (insert (format "   :ACTED: %s\n" (plist-get m :acted))))
               (insert "   :END:\n")
               ;; A link back into mu4e, so the report is a place to act
-              ;; from rather than a thing to read and then go looking.
+              ;; from rather than a thing to read and then go looking --
+              ;; with the second opinion and the disposal actions beside
+              ;; it.  A message already acted on keeps only its record:
+              ;; the buttons' work is done.
               (when (plist-get m :message-id)
-                (insert (format "   [[mu4e:msgid:%s][open]]\n"
-                                (plist-get m :message-id)))))))))
+                (let ((id (plist-get m :message-id)))
+                  (insert (format "   [[mu4e:msgid:%s][open]]" id))
+                  (cond
+                   ((plist-get m :acted)
+                    (insert (format "  done: %s" (plist-get m :acted))))
+                   ((not (eq bucket 'pending))
+                    (insert (format "  [[cmacs-genmail:retriage:msgid:%s][reclassify]]" id))
+                    (insert (format "  [[cmacs-genmail:trash:%s][trash]]" id))
+                    (insert (format "  [[cmacs-genmail:archive:%s][archive]]" id))
+                    (insert (format "  [[cmacs-genmail:todo:%s][todo]]" id))))
+                  (insert "\n")
+                  (when (and (plist-get m :action)
+                             (not (plist-get m :acted))
+                             (not (eq bucket 'pending)))
+                    (insert (format "   *suggested action:* _%s_\n"
+                                    (plist-get m :action)))))))))))
     file))
+
+;;;; Second opinions
+;;
+;; The report is the state.  Reclassifying re-reads what the report
+;; says rather than re-querying unread mail, so a message you read
+;; since triage is still re-judged, and one that arrived since is not
+;; silently pulled in.  This is what the report's own buttons dispatch
+;; to, and it is how you overrule a rule without editing any code.
+
+(defun cmacs-brigade-genmail--context-report ()
+  "Return the report the current buffer is reading, else today's."
+  (or (and buffer-file-name
+           (string-match-p "_triage\\.org\\'" buffer-file-name)
+           buffer-file-name)
+      (cmacs-brigade-genmail--triage-file)))
+
+(defun cmacs-brigade-genmail--report-entries (file)
+  "Parse the triage report at FILE back into classified message plists.
+
+Each entry is re-fetched from mu by message id so the model prompt can
+read the body; a message mu no longer finds keeps what the report knew,
+which is enough to classify on sender and subject."
+  (when (file-readable-p file)
+    (let (bucket entry out)
+      (with-temp-buffer
+        (insert-file-contents file)
+        (dolist (line (split-string (buffer-string) "\n"))
+          (cond
+           ((string-match "\\`\\* \\([a-z-]+\\) (" line)
+            (setq bucket (intern (match-string 1 line))))
+           ((string-match "\\`\\*\\* \\(.*\\)\\'" line)
+            (when entry (push entry out))
+            (setq entry (list :subject (match-string 1 line)
+                              :bucket bucket :by 'unclassified)))
+           ((and entry (string-match "\\`[ \t]*:FROM: \\(.*\\)\\'" line))
+            ;; A bare string: the address accessors accept it, and
+            ;; re-parsing "Name <email>" would be a second parser for a
+            ;; format this file itself wrote.
+            (plist-put entry :from (list (match-string 1 line))))
+           ((and entry (string-match "\\`[ \t]*:MSGID: \\(.*\\)\\'" line))
+            (plist-put entry :message-id (match-string 1 line)))
+           ((and entry (string-match "\\`[ \t]*:BY: \\([a-z-]+\\)\\'" line))
+            (plist-put entry :by (intern (match-string 1 line))))
+           ((and entry (string-match "\\`[ \t]*:SUGGEST: \\([a-z-]+\\)\\'" line))
+            (plist-put entry :action (intern (match-string 1 line))))
+           ((and entry (string-match "\\`[ \t]*:ACTED: \\([a-z-]+\\)\\'" line))
+            (plist-put entry :acted (intern (match-string 1 line)))))))
+      (when entry (push entry out))
+      (mapcar
+       (lambda (e)
+         (let* ((id (plist-get e :message-id))
+                (m (and id (ignore-errors
+                             (car (cmacs-brigade-genmail-query
+                                   (format "msgid:%s" id) 1))))))
+           (if m
+               (append m (list :bucket (plist-get e :bucket)
+                               :by (plist-get e :by)
+                               :action (plist-get e :action)
+                               :acted (plist-get e :acted)))
+             e)))
+       (nreverse out)))))
+
+;;;###autoload
+(defun cmacs-brigade-genmail-reclassify (&optional selector file)
+  "Send triage-report entries back to the model, whatever the rules said.
+
+SELECTOR is `all', (bucket . NAME) for one section, or (msgid . ID) for
+one message; interactively, everything.  FILE is the report to operate
+on -- the one behind the current buffer when that is a triage report,
+else today's.  Returns the report path, which rewrites itself when the
+model answers, exactly like first-pass triage.
+
+The model's answer replaces the rule's; a message the model still does
+not decide keeps the verdict it had."
+  (interactive (list 'all))
+  (unless (cmacs-brigade-genmail-available-p)
+    (user-error "cmacs-brigade: mu is not installed"))
+  (when cmacs-brigade-genmail--inflight
+    (user-error "cmacs-brigade: a triage model pass is already running"))
+  (unless (and cmacs-brigade-genmail-use-model
+               (cmacs-brigade-genmail--ai-available-p))
+    (user-error
+     "cmacs-brigade: no model to ask (check `cmacs-brigade-genmail-use-model')"))
+  (let* ((selector (or selector 'all))
+         (file (or file (cmacs-brigade-genmail--context-report)))
+         (entries (cmacs-brigade-genmail--report-entries file))
+         (pred (pcase selector
+                 ('all (lambda (_) t))
+                 (`(bucket . ,b) (lambda (e) (eq b (plist-get e :bucket))))
+                 (`(msgid . ,id) (lambda (e)
+                                   (equal id (plist-get e :message-id))))
+                 (_ (user-error "cmacs-brigade: bad selector %S" selector))))
+         (chosen nil))
+    (unless entries
+      (user-error "cmacs-brigade: no triage report at %s" file))
+    (dolist (e entries)
+      ;; An acted-on message is settled twice over -- it is not even in
+      ;; the inbox any more -- so bucket-wide and report-wide selectors
+      ;; step around it.
+      (when (and (funcall pred e) (not (plist-get e :acted)))
+        ;; Remember the standing verdict: a model that fails to answer
+        ;; restores it, rather than downgrading a decided message to
+        ;; the `reply' fallback.
+        (plist-put e :prior-bucket (plist-get e :bucket))
+        (plist-put e :prior-by (plist-get e :by))
+        (plist-put e :prior-action (plist-get e :action))
+        (plist-put e :bucket 'pending)
+        (plist-put e :by 'pending)
+        (push e chosen)))
+    (setq chosen (nreverse chosen))
+    (unless chosen
+      (user-error "cmacs-brigade: nothing in the report matches %S" selector))
+    ;; Show the pending state now, exactly like first-pass triage: the
+    ;; wait is visible, and the report never claims more than it knows.
+    (cmacs-brigade-genmail--write-triage entries file)
+    (cmacs-brigade-genmail--refresh-report file)
+    (message "cmacs-brigade: asking %s to reclassify %d message(s)..."
+             cmacs-brigade-genmail-triage-model (length chosen))
+    (cmacs-brigade-genmail--triage-model-pass entries chosen t file)))
+
+;;;; Acting on a message
+;;
+;; The trash and archive buttons are mu4e's own mark-then-execute, one
+;; click.  When mu4e is around the move goes through its server --
+;; which is the only way to respect the user's folder functions, their
+;; flag overrides, and the mbsync rename requirement all at once.  A
+;; build with no mu4e falls back to moving the file by hand and
+;; reindexing, which is what the server would have done.
+
+(defvar cmacs-brigade-genmail--sync-timer nil
+  "Debounce timer behind `cmacs-brigade-genmail-sync-after-move'.")
+
+(defun cmacs-brigade-genmail--target-folder (kind msg)
+  "Return the maildir a KIND move (`trash' or `archive') sends MSG to."
+  (let ((custom (if (eq kind 'trash) cmacs-brigade-genmail-trash-folder
+                  cmacs-brigade-genmail-archive-folder)))
+    (or (if (functionp custom) (funcall custom msg) custom)
+        (and (require 'mu4e nil t)
+             (ignore-errors
+               (if (eq kind 'trash)
+                   (mu4e-get-trash-folder msg)
+                 (mu4e-get-refile-folder msg))))
+        ;; mu4e loaded but its folder unset, or no mu4e at all: the
+        ;; conventional names are wrong often enough that guessing a
+        ;; move target is worse than asking.
+        (user-error
+         "cmacs-brigade: set `cmacs-brigade-genmail-%s-folder'"
+         (if (eq kind 'trash) "trash" "archive")))))
+
+(defun cmacs-brigade-genmail--move-message (msg folder flags)
+  "Move MSG into FOLDER with FLAGS, preferring mu4e's server.
+
+No filesystem fallback while mu4e is present: its server may hold the
+xapian write lock, and moving files behind a live server means a CLI
+reindex that cannot get the lock and an index that disagrees with the
+disk."
+  (if (and (require 'mu4e nil t) (fboundp 'mu4e--server-move))
+      (progn
+        ;; A background session, not a UI: loads the user's real config
+        ;; (folders, rename-on-move) and starts the server.
+        (unless (and (fboundp 'mu4e-running-p) (mu4e-running-p))
+          (mu4e t))
+        (mu4e--server-move (plist-get msg :message-id) folder flags
+                           (bound-and-true-p mu4e-change-filenames-when-moving))
+        (cmacs-brigade-genmail--schedule-sync))
+    (cmacs-brigade-genmail--fs-move msg folder)))
+
+(defun cmacs-brigade-genmail--schedule-sync ()
+  "Push local moves to the mail server soon, once per burst of clicks."
+  (when (and cmacs-brigade-genmail-sync-after-move
+             (fboundp 'mu4e-update-mail-and-index))
+    (when (timerp cmacs-brigade-genmail--sync-timer)
+      (cancel-timer cmacs-brigade-genmail--sync-timer))
+    (setq cmacs-brigade-genmail--sync-timer
+          (run-at-time 5 nil
+                       (lambda ()
+                         (setq cmacs-brigade-genmail--sync-timer nil)
+                         (ignore-errors
+                           (mu4e-update-mail-and-index t)))))))
+
+(defun cmacs-brigade-genmail--maildir-root (path maildir)
+  "Return the store root, given a message PATH and its MAILDIR."
+  (let* ((dir (directory-file-name (file-name-directory path)))
+         (box (directory-file-name (file-name-directory dir))))
+    (unless (string-suffix-p maildir box)
+      (user-error "cmacs-brigade: %s is not under maildir %s" path maildir))
+    (substring box 0 (- (length box) (length maildir)))))
+
+(defun cmacs-brigade-genmail--fs-move (msg folder)
+  "Move MSG's file into FOLDER by hand and reindex.  The no-mu4e path.
+
+The file gets a fresh maildir basename, which is what mbsync needs to
+see a move as a move; the flags suffix survives.  Returns the new
+path."
+  (let ((path (plist-get msg :path))
+        (maildir (plist-get msg :maildir)))
+    (unless (and path (file-exists-p path))
+      (user-error "cmacs-brigade: no file on disk for this message"))
+    (unless maildir
+      (user-error "cmacs-brigade: mu reported no maildir for this message"))
+    (let* ((root (cmacs-brigade-genmail--maildir-root path maildir))
+           (target-dir (expand-file-name
+                        (concat (substring folder 1) "/cur/") root)))
+      (unless (file-directory-p target-dir)
+        (user-error "cmacs-brigade: no maildir %s under %s (mu mkdir first)"
+                    folder root))
+      (let* ((old (file-name-nondirectory path))
+             (flags (if (string-match ":2,\\([A-Za-z]*\\)\\'" old)
+                        (match-string 1 old) ""))
+             (target (expand-file-name
+                      (format "%d.%06d.%s:2,%s"
+                              (time-convert nil 'integer) (random 1000000)
+                              (system-name) flags)
+                      target-dir)))
+        (rename-file path target)
+        (cmacs-brigade-genmail--reindex)
+        target))))
+
+(defun cmacs-brigade-genmail--reindex ()
+  "Update the mu index in the background.
+
+Async on principle: `call-process' here would sit inside a click on an
+org link, and under `--gowl' that is the compositor waiting on xapian."
+  (make-process
+   :name "genmail-mu-index"
+   :command (list cmacs-brigade-genmail-mu-program "index" "--quiet")
+   :noquery t
+   :sentinel (lambda (proc _event)
+               (unless (eq 0 (process-exit-status proc))
+                 (message "cmacs-brigade: mu index exited %s (is a mu server running?)"
+                          (process-exit-status proc))))))
+
+(defun cmacs-brigade-genmail--mark-acted (msgid acted file)
+  "Record ACTED against MSGID in the report at FILE, best effort.
+
+Best effort because the real action already happened; a report that
+missed the memo costs a stale pair of buttons, not a lost message."
+  (let* ((entries (cmacs-brigade-genmail--report-entries file))
+         (e (cl-find msgid entries
+                     :key (lambda (x) (plist-get x :message-id))
+                     :test #'equal)))
+    (when e
+      (plist-put e :acted acted)
+      (cmacs-brigade-genmail--write-triage entries file)
+      (cmacs-brigade-genmail--refresh-report file))))
+
+(defun cmacs-brigade-genmail--entry-for (msgid file)
+  "Return the freshest message plist for MSGID: mu first, then FILE."
+  (or (ignore-errors
+        (car (cmacs-brigade-genmail-query (format "msgid:%s" msgid) 1)))
+      (cl-find msgid (cmacs-brigade-genmail--report-entries file)
+               :key (lambda (x) (plist-get x :message-id))
+               :test #'equal)
+      (user-error "cmacs-brigade: no message %s" msgid)))
+
+(defun cmacs-brigade-genmail--move-and-record (msgid kind file)
+  "Move MSGID per KIND (`trash' or `archive') and update the report."
+  (let* ((file (or file (cmacs-brigade-genmail--context-report)))
+         (msg (cmacs-brigade-genmail--entry-for msgid file))
+         (subject (or (plist-get msg :subject) "(no subject)"))
+         (folder (cmacs-brigade-genmail--target-folder kind msg))
+         (flags (if (eq kind 'trash) cmacs-brigade-genmail-trash-flags "-N")))
+    (when (and cmacs-brigade-genmail-confirm-moves
+               (not (y-or-n-p (format "%s \"%s\" -> %s? "
+                                      (capitalize (symbol-name kind))
+                                      subject folder))))
+      (user-error "cmacs-brigade: cancelled"))
+    (cmacs-brigade-genmail--move-message msg folder flags)
+    (cmacs-brigade-genmail--mark-acted
+     msgid (if (eq kind 'trash) 'trashed 'archived) file)
+    (message "cmacs-brigade: %s -> %s" subject folder)))
+
+;;;###autoload
+(defun cmacs-brigade-genmail-trash-message (msgid &optional file)
+  "Move MSGID to the trash folder -- mu4e's d-then-x, one click.
+
+Never a delete: the message moves to a maildir it can be fished back
+out of, and `cmacs-brigade-genmail-confirm-moves' asks first."
+  (interactive "sMessage id: ")
+  (cmacs-brigade-genmail--move-and-record msgid 'trash file))
+
+;;;###autoload
+(defun cmacs-brigade-genmail-archive-message (msgid &optional file)
+  "Move MSGID to the archive folder -- mu4e's r-then-x, one click."
+  (interactive "sMessage id: ")
+  (cmacs-brigade-genmail--move-and-record msgid 'archive file))
+
+(defun cmacs-brigade-genmail--todo-file ()
+  "Return the file the todo button appends to.
+
+The org-roam daily when org-roam's dailies are configured -- that is
+where the user's own capture flow logs the day's todos -- else the
+briefing's daily-note function."
+  (or (and cmacs-brigade-genmail-todo-file-function
+           (funcall cmacs-brigade-genmail-todo-file-function))
+      (and (boundp 'org-roam-directory) (boundp 'org-roam-dailies-directory)
+           (expand-file-name
+            (format-time-string "%Y-%m-%d.org")
+            (expand-file-name (symbol-value 'org-roam-dailies-directory)
+                              (symbol-value 'org-roam-directory))))
+      (and cmacs-brigade-genmail-daily-note-function
+           (funcall cmacs-brigade-genmail-daily-note-function))
+      (user-error
+       "cmacs-brigade: set `cmacs-brigade-genmail-todo-file-function'")))
+
+;;;###autoload
+(defun cmacs-brigade-genmail-log-todo (msgid &optional file)
+  "Append a TODO for MSGID to the day's todo file.
+
+The entry carries a link back to the mail, so working the todo starts
+from the message rather than from a memory of it.  Appended, never
+inserted into someone's own outline structure."
+  (interactive "sMessage id: ")
+  (let* ((file (or file (cmacs-brigade-genmail--context-report)))
+         (msg (cmacs-brigade-genmail--entry-for msgid file))
+         (subject (or (plist-get msg :subject) "(no subject)"))
+         (from (cmacs-brigade-genmail--format-addr (car (plist-get msg :from))))
+         (todo-file (cmacs-brigade-genmail--todo-file)))
+    (with-current-buffer (find-file-noselect todo-file)
+      (when (= (point-min) (point-max))
+        ;; A file this code created gets at least a title; the user's
+        ;; own daily template applies when *they* create the day.
+        (insert (format-time-string "#+title: %Y-%m-%d\n\n")))
+      (goto-char (point-max))
+      (unless (bolp) (insert "\n"))
+      (insert (format "* TODO %s\n:PROPERTIES:\n:CREATED: %s\n:END:\n[[mu4e:msgid:%s][mail]] from %s\n"
+                      subject (format-time-string "[%F %a %H:%M]") msgid from))
+      (save-buffer))
+    (cmacs-brigade-genmail--mark-acted msgid 'todo file)
+    (message "cmacs-brigade: TODO logged to %s"
+             (file-name-nondirectory todo-file))))
 
 (defun cmacs-brigade-genmail--plist-address-p (a)
   "Non-nil when A is mu's modern (:email ... :name ...) form.

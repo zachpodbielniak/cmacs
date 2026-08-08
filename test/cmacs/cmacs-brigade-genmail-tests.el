@@ -44,23 +44,73 @@ mismatch shows up as \"?\" in every report rather than as an error."
 (ert-deftest cmacs-brigade-genmail-cheap-rules ()
   "The no-model pass catches what it can identify with certainty.
 
-This is most of the inbox, and every message it classifies is a model
-call not made."
+Certainty only: every rule here either cannot be wrong or costs a
+glance when it is.  The guesses an earlier rule set made -- noreply
+means noise, a bulk-mail domain means newsletter -- are gone, because
+they were wrong exactly where being wrong mattered."
   (skip-unless (cmacs-brigade-genmail-tests--available-p))
   ;; a List-Unsubscribe header is conclusive
   (should (eq 'newsletter
               (cmacs-brigade-genmail--obviously-automated-p
                '(:list "x" :from ((:email "a@b.c")) :subject "hi"))))
-  (should (eq 'noise
-              (cmacs-brigade-genmail--obviously-automated-p
-               '(:from ((:email "no-reply@example.com")) :subject "hi"))))
   (should (eq 'receipt
               (cmacs-brigade-genmail--obviously-automated-p
                cmacs-brigade-genmail-tests--msg)))
+  ;; noreply is how automation says hello, not how noise does: Google
+  ;; sends security alerts from no-reply@.  The model decides these.
+  (should-not (cmacs-brigade-genmail--obviously-automated-p
+               '(:from ((:email "no-reply@example.com")) :subject "hi")))
+  ;; a bulk-mail domain is not a newsletter either -- credit-report
+  ;; notices arrive from mail.<bank>.com
+  (should-not (cmacs-brigade-genmail--obviously-automated-p
+               '(:from ((:email "notifications@mail.bank.example"))
+                 :subject "hi")))
   ;; and a real message from a person is left for the model
   (should-not (cmacs-brigade-genmail--obviously-automated-p
                '(:from ((:email "alice@example.com" :name "Alice"))
                  :subject "lunch?"))))
+
+(ert-deftest cmacs-brigade-genmail-attention-beats-list-header ()
+  "Security, money and account subjects always reach the model.
+
+Bulk senders mail about all three -- Credit Karma sets List-Unsubscribe
+on a credit-report change -- and a wrong `newsletter' there costs the
+most, so the guard outranks the otherwise-conclusive list header."
+  (skip-unless (cmacs-brigade-genmail-tests--available-p))
+  (dolist (subject '("Security alert"
+                     "A new payment was reported to TransUnion"
+                     "Your credits expire on Aug 8"
+                     "Zach, review your Google Account settings"
+                     "A new report of your securities on loan is available"))
+    (should-not (cmacs-brigade-genmail--obviously-automated-p
+                 `(:list "x" :from ((:email "notifications@mail.example"))
+                   :subject ,subject)))))
+
+(ert-deftest cmacs-brigade-genmail-user-rules-outrank-everything ()
+  "The user's own rules decide first, and a typo'd bucket is ignored.
+
+This is where a sender the model keeps getting wrong is settled once --
+so it must beat the attention guard, and it must never invent a bucket
+the report would not print."
+  (skip-unless (cmacs-brigade-genmail-tests--available-p))
+  (let ((cmacs-brigade-genmail-address-rules
+         '(("@mail\\.example\\'" . noise)))
+        (cmacs-brigade-genmail-subject-rules
+         '(("weekly portfolio" . newsletter))))
+    ;; an address rule beats the guard that would have sent it on
+    (should (eq 'noise
+                (cmacs-brigade-genmail--obviously-automated-p
+                 '(:from ((:email "alerts@mail.example"))
+                   :subject "Security alert"))))
+    ;; a subject rule matches case-insensitively via the lower-casing
+    (should (eq 'newsletter
+                (cmacs-brigade-genmail--obviously-automated-p
+                 '(:from ((:email "x@y.z"))
+                   :subject "Weekly Portfolio Performance")))))
+  ;; a bucket that is not one of ours is skipped, not filed
+  (let ((cmacs-brigade-genmail-address-rules '(("@spam\\." . junk))))
+    (should-not (cmacs-brigade-genmail--obviously-automated-p
+                 '(:from ((:email "a@spam.example")) :subject "hi")))))
 
 (ert-deftest cmacs-brigade-genmail-bucket-classification ()
   "Recipient class is inferred from the address."
@@ -145,8 +195,220 @@ someone writes a considered one."
               (should (string-search "Order US123 confirmed" s))
               ;; the report is a place to act from, not just to read
               (should (string-search "[[mu4e:msgid:abc@example.com]" s))
-              (should (string-search ":BY: rule" s)))))
+              (should (string-search ":BY: rule" s))
+              ;; and a place to disagree from: a second-opinion button
+              ;; at every scope -- the whole report, one section, one
+              ;; message
+              (should (string-search "[[cmacs-genmail:retriage:all]" s))
+              (should (string-search "[[cmacs-genmail:retriage:bucket:receipt]" s))
+              (should (string-search
+                       "[[cmacs-genmail:retriage:msgid:abc@example.com]" s)))))
       (delete-directory dir t))))
+
+(ert-deftest cmacs-brigade-genmail-report-round-trips ()
+  "A written report parses back into the entries that produced it.
+
+Reclassifying operates on what the report says, not on a fresh unread
+query, so the report has to be a faithful serialization -- bucket, BY
+and message id all survive the trip."
+  (skip-unless (cmacs-brigade-genmail-tests--available-p))
+  (let* ((dir (make-temp-file "genmail-roundtrip" t))
+         (cmacs-brigade-genmail-output-directory dir))
+    (unwind-protect
+        (let* ((file (cmacs-brigade-genmail--write-triage
+                      (list (append cmacs-brigade-genmail-tests--msg
+                                    (list :bucket 'receipt :by 'rule))
+                            (list :subject "a person wrote this"
+                                  :from '((:email "alice@example.com"))
+                                  :message-id "person@x"
+                                  :bucket 'reply :by 'model))))
+               (entries (cmacs-brigade-genmail--report-entries file)))
+          (should (= 2 (length entries)))
+          (let ((receipt (cl-find "abc@example.com" entries
+                                  :key (lambda (e) (plist-get e :message-id))
+                                  :test #'equal))
+                (person (cl-find "person@x" entries
+                                 :key (lambda (e) (plist-get e :message-id))
+                                 :test #'equal)))
+            (should (eq 'receipt (plist-get receipt :bucket)))
+            (should (eq 'rule (plist-get receipt :by)))
+            (should (eq 'reply (plist-get person :bucket)))
+            (should (eq 'model (plist-get person :by)))
+            (should (string-search "alice@example.com"
+                                   (cmacs-brigade-genmail--format-addr
+                                    (car (plist-get person :from)))))))
+      (delete-directory dir t))))
+
+(ert-deftest cmacs-brigade-genmail-failed-second-opinion-keeps-verdict ()
+  "A model that fails to answer restores the standing verdict.
+
+Reclassifying a decided message must not be able to lose the decision:
+falling back to `reply'/unclassified would downgrade mail the rules had
+already filed, purely because the second opinion never arrived."
+  (skip-unless (cmacs-brigade-genmail-tests--available-p))
+  ;; a failed pass (settle) restores the prior verdict
+  (let ((m (list :subject "x" :bucket 'pending :by 'pending
+                 :prior-bucket 'newsletter :prior-by 'rule)))
+    (cmacs-brigade-genmail--settle-pending (list m))
+    (should (eq 'newsletter (plist-get m :bucket)))
+    (should (eq 'rule (plist-get m :by))))
+  ;; an answer that skipped one slot restores that slot the same way
+  (let ((m1 (list :subject "a" :bucket 'pending :by 'pending
+                  :prior-bucket 'noise :prior-by 'model))
+        (m2 (list :subject "b" :bucket 'pending :by 'pending
+                  :prior-bucket 'noise :prior-by 'model)))
+    (cmacs-brigade-genmail--apply-buckets (list m1 m2) "1 fyi\n")
+    (should (eq 'fyi (plist-get m1 :bucket)))
+    (should (eq 'model (plist-get m1 :by)))
+    (should (eq 'noise (plist-get m2 :bucket)))
+    (should (eq 'model (plist-get m2 :by))))
+  ;; and one that never had a verdict still lands in the safe bucket
+  (let ((m (list :subject "x" :bucket 'pending :by 'pending)))
+    (cmacs-brigade-genmail--settle-pending (list m))
+    (should (eq 'reply (plist-get m :bucket)))
+    (should (eq 'unclassified (plist-get m :by)))))
+
+(ert-deftest cmacs-brigade-genmail-verdicts-carry-actions ()
+  "The model answers \"N BUCKET ACTION\", and both halves parse.
+
+An action that is not in the vocabulary is dropped rather than
+guessed at -- the bucket's default fills in later."
+  (skip-unless (cmacs-brigade-genmail-tests--available-p))
+  (should (equal [(newsletter . trash) (reply)]
+                 (cmacs-brigade-genmail--parse-verdicts
+                  "1 newsletter trash\n2 reply\n" 2)))
+  (should (equal [(fyi)]
+                 (cmacs-brigade-genmail--parse-verdicts "1 fyi shred\n" 1)))
+  ;; prose still yields both, from each message's own section
+  (should (equal [(noise . trash)]
+                 (cmacs-brigade-genmail--parse-verdicts
+                  "### 1. Message One\nPure marketing; noise, just trash it.\n" 1)))
+  ;; and `--parse-buckets' stays the bucket-only view of the same answer
+  (should (equal [newsletter reply]
+                 (cmacs-brigade-genmail--parse-buckets
+                  "1 newsletter trash\n2 reply todo\n" 2))))
+
+(ert-deftest cmacs-brigade-genmail-actions-fill-from-bucket ()
+  "Every path to a verdict leaves a recommended action behind.
+
+A model that named only the bucket gets the bucket's default; a rule
+decision does too; a message nobody decided recommends `triage'."
+  (skip-unless (cmacs-brigade-genmail-tests--available-p))
+  (let ((m1 (list :subject "a" :bucket 'pending :by 'pending))
+        (m2 (list :subject "b" :bucket 'pending :by 'pending)))
+    (cmacs-brigade-genmail--apply-buckets
+     (list m1 m2) "1 act-now todo\n2 newsletter\n")
+    (should (eq 'todo (plist-get m1 :action)))
+    (should (eq 'trash (plist-get m2 :action))))
+  (let ((m (list :subject "x" :bucket 'pending :by 'pending)))
+    (cmacs-brigade-genmail--settle-pending (list m))
+    (should (eq 'triage (plist-get m :action))))
+  ;; the mapping itself keeps the conservative edge: unknown -> triage
+  (should (eq 'triage (cmacs-brigade-genmail--default-action 'pending)))
+  (should (eq 'reply (cmacs-brigade-genmail--default-action 'reply))))
+
+(ert-deftest cmacs-brigade-genmail-report-carries-actions ()
+  "The report shows the suggestion and the buttons that act on it.
+
+An acted-on message keeps its record and loses its buttons: the work
+is done, and a button that would do it again is a trap."
+  (skip-unless (cmacs-brigade-genmail-tests--available-p))
+  (let* ((dir (make-temp-file "genmail-actions" t))
+         (cmacs-brigade-genmail-output-directory dir))
+    (unwind-protect
+        (progn
+          (let ((file (cmacs-brigade-genmail--write-triage
+                       (list (append cmacs-brigade-genmail-tests--msg
+                                     (list :bucket 'receipt :by 'rule
+                                           :action 'archive))))))
+            (with-temp-buffer
+              (insert-file-contents file)
+              (let ((s (buffer-string)))
+                (should (string-search ":SUGGEST: archive" s))
+                (should (string-search "*suggested action:* _archive_" s))
+                (should (string-search
+                         "[[cmacs-genmail:trash:abc@example.com][trash]]" s))
+                (should (string-search
+                         "[[cmacs-genmail:archive:abc@example.com][archive]]" s))
+                (should (string-search
+                         "[[cmacs-genmail:todo:abc@example.com][todo]]" s)))))
+          (let ((file (cmacs-brigade-genmail--write-triage
+                       (list (append cmacs-brigade-genmail-tests--msg
+                                     (list :bucket 'receipt :by 'rule
+                                           :action 'archive :acted 'trashed))))))
+            (with-temp-buffer
+              (insert-file-contents file)
+              (let ((s (buffer-string)))
+                (should (string-search ":ACTED: trashed" s))
+                (should (string-search "done: trashed" s))
+                (should-not (string-search "[[cmacs-genmail:trash:" s))
+                (should-not (string-search "suggested action:" s))))))
+      (delete-directory dir t))))
+
+(ert-deftest cmacs-brigade-genmail-acted-survives-the-round-trip ()
+  "Suggestion and acted state parse back out of the report.
+
+`--mark-acted' rewrites the report from its own parse, so anything the
+parse drops is state the report forgets on the next click."
+  (skip-unless (cmacs-brigade-genmail-tests--available-p))
+  (let* ((dir (make-temp-file "genmail-acted" t))
+         (cmacs-brigade-genmail-output-directory dir))
+    (unwind-protect
+        (let ((file (cmacs-brigade-genmail--write-triage
+                     (list (append cmacs-brigade-genmail-tests--msg
+                                   (list :bucket 'receipt :by 'rule
+                                         :action 'archive))))))
+          (cmacs-brigade-genmail--mark-acted "abc@example.com" 'archived file)
+          (let ((e (car (cmacs-brigade-genmail--report-entries file))))
+            (should (eq 'archive (plist-get e :action)))
+            (should (eq 'archived (plist-get e :acted)))
+            (should (eq 'rule (plist-get e :by)))))
+      (delete-directory dir t))))
+
+(ert-deftest cmacs-brigade-genmail-todo-lands-in-the-daily ()
+  "The todo button appends an entry with a link back to the mail."
+  (skip-unless (cmacs-brigade-genmail-tests--available-p))
+  (let* ((dir (make-temp-file "genmail-todo" t))
+         (cmacs-brigade-genmail-output-directory dir)
+         (todo (expand-file-name "todo.org" dir))
+         (cmacs-brigade-genmail-todo-file-function (lambda () todo)))
+    (unwind-protect
+        (let ((file (cmacs-brigade-genmail--write-triage
+                     (list (append cmacs-brigade-genmail-tests--msg
+                                   (list :bucket 'receipt :by 'rule
+                                         :action 'archive))))))
+          (cmacs-brigade-genmail-log-todo "abc@example.com" file)
+          (with-temp-buffer
+            (insert-file-contents todo)
+            (let ((s (buffer-string)))
+              (should (string-search "* TODO Order US123 confirmed" s))
+              (should (string-search "[[mu4e:msgid:abc@example.com][mail]]" s))
+              (should (string-search ":CREATED:" s))))
+          ;; and the report knows it happened
+          (let ((e (car (cmacs-brigade-genmail--report-entries file))))
+            (should (eq 'todo (plist-get e :acted)))))
+      (when-let* ((buf (find-buffer-visiting todo))) (kill-buffer buf))
+      (delete-directory dir t))))
+
+(ert-deftest cmacs-brigade-genmail-move-targets-resolve ()
+  "Move targets come from configuration, and paths decompose safely."
+  (skip-unless (cmacs-brigade-genmail-tests--available-p))
+  (let ((cmacs-brigade-genmail-trash-folder "/Trash")
+        (cmacs-brigade-genmail-archive-folder
+         (lambda (msg) (if (plist-get msg :work) "/work/Archive" "/Archive"))))
+    (should (equal "/Trash"
+                   (cmacs-brigade-genmail--target-folder 'trash '(:subject "x"))))
+    (should (equal "/Archive"
+                   (cmacs-brigade-genmail--target-folder 'archive '(:subject "x"))))
+    (should (equal "/work/Archive"
+                   (cmacs-brigade-genmail--target-folder
+                    'archive '(:subject "x" :work t)))))
+  ;; the store root falls out of path minus maildir
+  (should (equal "/home/u/mail/proton"
+                 (cmacs-brigade-genmail--maildir-root
+                  "/home/u/mail/proton/INBOX/cur/msg:2,S" "/INBOX")))
+  (should-error (cmacs-brigade-genmail--maildir-root
+                 "/home/u/mail/proton/INBOX/cur/msg:2,S" "/Archive")))
 
 (ert-deftest cmacs-brigade-genmail-unread-query-is-inbox-only ()
   "Triage reads the inbox, not every unread message in the store.
@@ -355,8 +617,11 @@ report exists to make easy."
   (require 'org)
   (cmacs-brigade-genmail-ensure-link-type)
   (should (org-link-get-parameter "mu4e" :follow))
+  ;; the retriage buttons are ours alone, so they are always registered
+  (should (org-link-get-parameter "cmacs-genmail" :follow))
   ;; and a link shape we do not write is refused rather than mishandled
-  (should-error (cmacs-brigade-genmail--follow-link "query:flag:unread")))
+  (should-error (cmacs-brigade-genmail--follow-link "query:flag:unread"))
+  (should-error (cmacs-brigade-genmail--follow-retriage "retriage:everything")))
 
 (ert-deftest cmacs-brigade-genmail-renders-a-message-readably ()
   "A message renders as headers plus text, not as MIME.

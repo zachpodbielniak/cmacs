@@ -83,7 +83,7 @@ You do not have to pick a worker; naming the provider is enough. See [[file:agen
 | [[file:plan.org][Plans]]               | org files as the durable model; who owns what     |
 | [[file:dashboard.org][Dashboard]]           | watching agents, in any backend                   |
 | [[file:memory.org][Memory]]              | the index over your notes and other corpora       |
-| [[file:genmail.org][GenMail]]             | triage, voice, briefing                           |
+| [[file:genmail.org][GenMail]]             | triage, actions from the report, voice, briefing  |
 | [[file:deliverables.org][Deliverables]]        | reports, decks, pods, reels                       |
 | [[file:notifications.org][Notifications]]       | being told when it finishes; voice in and out     |
 | [[file:scheduling.org][Scheduling]]          | cron for agents; letting the AI set them up       |

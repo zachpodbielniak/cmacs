@@ -3,8 +3,8 @@
 #+authors: Zach Podbielniak
 #+categories: cmacs, ai, mail
 #+created: [2026-08-04 Tue]
-#+updated: [2026-08-07 Fri]
-#+version: 0.2.0
+#+updated: [2026-08-08 Sat]
+#+version: 0.4.0
 
 * Requirements
 
@@ -41,11 +41,37 @@ The same scope applies to the briefing.
 
 ** Classification
 
-A deterministic pass runs first. A =List-Unsubscribe= header identifies a
-newsletter with certainty; spending a model call to reach the same answer less
-reliably would be the most common thing this code does and the least useful.
-On the author's real inbox that classified 92 of 100 unread messages with *no
-model call at all*.
+A deterministic pass runs first, and it only decides what it can know with
+certainty. A =List-Unsubscribe= header identifies bulk mail conclusively, and a
+transactional subject ("your order … confirmed") is precise enough to trust;
+spending a model call to reach those answers less reliably would be the most
+common thing this code does and the least useful.
+
+The rules used to guess more — =noreply= in the sender meant noise, a
+=@mail.<anything>= domain meant newsletter — and the guesses were wrong exactly
+where being wrong mattered: Google sends security alerts from a noreply
+address, and a credit-report notice arrives from =mail.<bank>.com=. Those rules
+are gone. On top of that, an *attention guard* runs before the newsletter rule:
+a subject that smells of security, money or the account itself (alerts, fraud,
+sign-ins, expiry, statements, reports, balances…) is never rule-filed, whatever
+the headers say — Credit Karma sets =List-Unsubscribe= on a credit-report
+change, and filing that as a newsletter is the expensive kind of wrong. The
+model reads all of it.
+
+Two alists let you settle a sender or subject the built-ins (or the model) keep
+getting wrong, checked before everything else including the guard:
+
+#+begin_src elisp
+(setq cmacs-brigade-genmail-address-rules
+      '(("@mailer\\.humblebundle\\.com\\'" . newsletter)
+        ("no-reply@usercrowd\\.com\\'"     . noise))
+      cmacs-brigade-genmail-subject-rules
+      '(("weekly portfolio performance" . fyi)))
+#+end_src
+
+Subjects are matched lower-cased. A rule naming a bucket that is not one of
+=cmacs-brigade-genmail-buckets= is skipped rather than inventing a section the
+report never prints.
 
 What survives goes to =cmacs-brigade-genmail-triage-model=, which defaults to
 =ollama/qwen3.5:9b= — local, and free at the point of use. Triage runs over
@@ -150,6 +176,92 @@ the report is a place to act from rather than something to read and then go
 looking. It also lands in the notes corpus, which means next month's triage can
 search it.
 
+** Second opinions, from inside the report
+
+The report is also a place to *disagree* from. Every report carries
+=cmacs-genmail:= buttons at three scopes:
+
+- at the top: /Ask the model to reclassify everything/;
+- under each section heading: /ask the model about these/ — for when a rule got
+  a whole class of mail wrong;
+- next to each message's =open= link: /reclassify/ — one message's worth of
+  second opinion.
+
+All three dispatch to =M-x cmacs-brigade-genmail-reclassify=, which sends the
+chosen entries back to the model with the rules only advising. It operates on
+*what the report says*, not on a fresh unread query — a message you read since
+triage is still re-judged, and one that arrived since is not silently pulled
+in. The flow is the same two-pass rewrite as triage itself: the chosen messages
+move to =* pending=, the file says what it is waiting on, and the answer
+rewrites it in place.
+
+The model's answer replaces the standing verdict and =:BY:= flips to =model=. A
+model that fails to answer — timeout, unusable vocabulary, dead ollama —
+*restores* the verdict each message already had, never downgrades it to the
+=reply= fallback: the old answer was at least an answer.
+
+One pass runs at a time; a button clicked while the morning pass is still
+thinking says so rather than racing it. When a reclassification keeps coming
+out wrong, that is what =cmacs-brigade-genmail-address-rules= and
+=cmacs-brigade-genmail-subject-rules= are for — settle it once, permanently,
+above both the rules and the model.
+
+** Acting from the report
+
+Each message also carries a *recommended action* and the buttons to take it:
+
+| Action    | Meaning                                | Button does                           |
+|-----------+----------------------------------------+---------------------------------------|
+| =trash=   | nothing of value                       | move to the trash maildir             |
+| =archive= | worth keeping for reference            | move to the archive maildir           |
+| =reply=   | answer it                              | — (open it and reply in mu4e)         |
+| =todo=    | do something beyond replying           | log a TODO in the day's file          |
+| =triage=  | the model is unsure; a human looks     | — (that human is you)                 |
+
+The recommendation comes from the model in the same batched call (the answer
+template is =N BUCKET ACTION=), or from the bucket's default for rule-decided
+mail (noise/newsletter → trash, fyi/receipt → archive, act-now/waiting-on-me →
+todo, reply → reply, unclassified → triage). It is written as the =:SUGGEST:=
+property and a =*suggested action:* _ACTION_= line (bold label, the action set
+off); the model is told that when unsure of the
+action, =triage= beats =trash= — a wrong triage costs a glance, a wrong trash
+costs a message.
+
+*Trash and archive* are mu4e's mark-then-execute in one click — the equivalent
+of =d x= / =r x= in the headers view. When mu4e is around the move goes through
+its own server (a background =(mu4e t)= session if none is running), which is
+the only path that respects your folder functions, your flag overrides and
+=mu4e-change-filenames-when-moving= all at once. Three deliberate choices:
+
+- *Trash never sets the T flag* (=cmacs-brigade-genmail-trash-flags= defaults
+  to ="-N"=, not stock mu4e's ="+T-N"=). Under mbsync with =Expunge Both=, a
+  local file carrying T and no remote UID is expunged locally without the
+  delete ever reaching the server. Moving into the trash maildir already is
+  the delete.
+- *A click asks first* (=cmacs-brigade-genmail-confirm-moves=, default on):
+  mu4e's own flow is two deliberate keys, and an org link should not be
+  quieter.
+- *The move is pushed to the server* afterwards
+  (=cmacs-brigade-genmail-sync-after-move=): =mu4e-update-mail-and-index= runs
+  debounced a few seconds after the last click, mirroring what executing marks
+  in mu4e does. A trash that never syncs is not a trash.
+
+Target folders derive from =mu4e-trash-folder= / =mu4e-refile-folder=;
+=cmacs-brigade-genmail-trash-folder= / =-archive-folder= (string or function of
+the message plist) override them. Without mu4e entirely, the file is moved by
+hand — fresh maildir basename, flags suffix preserved — and =mu index= runs
+asynchronously; if the target maildir does not exist the move refuses rather
+than inventing one.
+
+*Todo* appends a =* TODO <subject>= entry (with a =:CREATED:= property and a
+=[[mu4e:msgid:...][mail]]= link back) to the day's file: the org-roam daily
+when dailies are configured, else =cmacs-brigade-genmail-daily-note-function=,
+and =cmacs-brigade-genmail-todo-file-function= overrides both.
+
+Once acted on, the message's row shows =done: trashed= (or =archived=, =todo=)
+in place of its buttons, the =:ACTED:= property records it, and report-wide
+reclassification steps around it — it is not even in the inbox any more.
+
 ** Following a link
 
 The link opens the message. Which reader you get depends on what is loaded:
@@ -244,6 +356,14 @@ customize-group RET cmacs-brigade-genmail RET=. Nothing here needs a rebuild.
       cmacs-brigade-genmail-draft-model     nil    ; nil -> cmacs-brigade-default-model
       cmacs-brigade-genmail-inbox-query     nil    ; nil -> derive from the store
       cmacs-brigade-genmail-max-triage      40
+      cmacs-brigade-genmail-address-rules   nil    ; ((REGEXP . BUCKET) ...), beats everything
+      cmacs-brigade-genmail-subject-rules   nil    ; same, against the lower-cased subject
+      cmacs-brigade-genmail-trash-folder    nil    ; nil -> mu4e-trash-folder
+      cmacs-brigade-genmail-archive-folder  nil    ; nil -> mu4e-refile-folder
+      cmacs-brigade-genmail-trash-flags     "-N"   ; NOT "+T-N": the mbsync expunge trap
+      cmacs-brigade-genmail-confirm-moves   t      ; a click asks before moving
+      cmacs-brigade-genmail-sync-after-move t      ; debounced mbsync push after moves
+      cmacs-brigade-genmail-todo-file-function nil ; nil -> org-roam daily
       cmacs-brigade-genmail-work-domains    '("corp.example")
       cmacs-brigade-genmail-apply-flags     nil    ; triage never touches mail
       cmacs-brigade-genmail-output-directory nil   ; genmail/ in the state dir
