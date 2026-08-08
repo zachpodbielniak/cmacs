@@ -121,7 +121,17 @@ from any parent session's X server.
 clients at gowl's XWayland by setting =DISPLAY= to
 =gowl_compositor_get_xwayland_display=; Wayland-native toolkit hints are
 also set so GTK/Qt/SDL/Electron prefer Wayland.  X11 windows are managed
-like native ones (tiled, tagged, focusable).
+like native ones (tiled, tagged, focusable, and closable with
+=Super+Shift+c=).
+
+X11 clients differ from Wayland ones in one way that matters
+throughout the compositor: they carry a =wlr_xwayland_surface= and a
+=NULL= =xdg_toplevel=.  Anything that talks to a client's shell
+surface must branch on =client_is_x11()= (or go through a wrapper that
+does, such as =gowl_client_close()=) — sending an XDG request to an
+X11 client derefs =NULL= inside wlroots, and because the compositor
+*is* the =emacs --gowl= session, that crash takes the whole desktop
+and every application in it.
 
 X11 /override-redirect/ surfaces — popup menus, combo dropdowns,
 tooltips, and app confirmation dialogs (e.g. Zoom's "End meeting /
@@ -662,6 +672,54 @@ the second key to Emacs.
 
 The underlying primitive =gowl-embed-focus= can be called from Elisp
 to programmatically give keyboard focus to any embedded client.
+
+*** Launchers and other keyboard-interactive layer surfaces
+
+A layer-shell surface that asks for the keyboard -- a launcher such as
+=wofi= or =rofi=, an on-screen keyboard -- gets an *exclusive grab*
+from the compositor when it maps at the =TOP= or =OVERLAY= layer.
+While that grab is held, every cmacs path that would otherwise move
+seat keyboard focus does nothing:
+
+| Path                          | Behaviour while a launcher holds the keyboard |
+|-------------------------------+-----------------------------------------------|
+| =gowl-grant-focus-to-emacs=   | returns =nil=, focus unchanged                |
+| =gowl-return-focus-to-embed=  | returns =nil=, the redirect token is *kept*   |
+| =gowl-embed-focus=            | returns =nil=, focus unchanged                |
+| Prefix-key redirect           | no focus move                                 |
+| Focus-follows-mouse on an xwidget | no focus move                             |
+| Click on an embedded area     | no keyboard focus move (pointer still works)  |
+
+=gowl-return-focus-to-embed= deliberately keeps its token rather than
+popping it, so the restore simply happens on the first command after
+the launcher goes away -- =post-command-hook= calls it after every
+command anyway.
+
+This matters because cmacs moves seat focus *directly*, without going
+through the compositor's =gowl_compositor_focus_client()= -- embedded
+clients are deliberately absent from the compositor's focus stack.
+That bypasses the compositor's own guards, so each of these paths
+checks the grab itself, via
+=gowl_compositor_has_exclusive_keyboard_layer()=.
+
+Without those checks the launcher loses the keyboard within
+milliseconds of mapping (=post-command-hook= restoring embed focus is
+the usual culprit) and ends up *visible, on top of the whole output,
+and completely deaf* -- impossible to type into, impossible to
+dismiss, and covering everything that is still responding.  If you
+ever see that symptom again, confirm it client-side with:
+
+#+BEGIN_SRC bash
+WAYLAND_DEBUG=1 wofi --show drun 2>&1 | grep wl_keyboard
+#+END_SRC
+
+The last event must be =wl_keyboard.enter=.  A trailing =.leave= with
+no =.enter= after it is the bug.
+
+The grab is derived from live surface state, so it releases the
+instant the surface unmaps or stops asking for the keyboard; it cannot
+wedge keyboard focus.  The compositor-side rules are documented in
+=deps/gowl/docs/architecture.org= under *Keyboard Focus Arbitration*.
 
 * C Primitives
 

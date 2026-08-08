@@ -661,5 +661,156 @@ not the plain tag number / \"0\" that gowl's default-config.c uses."
   (should-error (gowl-pretag-pid "notapid" 2) :type 'wrong-type-argument)
   (should-error (gowl-pretag-pid 123 "notamask") :type 'wrong-type-argument))
 
+;;; Layer-surface keyboard grab
+;;
+;; Regression coverage for the "wofi maps, is drawn on top, and is
+;; completely deaf" defect reported by Ben Doty on 2026-08-08.  A
+;; keyboard-interactive layer surface is granted the keyboard by the
+;; compositor's `arrangelayers', and every cmacs path that moves seat
+;; keyboard focus must then leave it alone until it unmaps.
+;;
+;; cmacs moves seat focus by calling `wlr_seat_keyboard_notify_enter'
+;; directly rather than going through `gowl_compositor_focus_client'
+;; -- embedded clients are deliberately invisible to the compositor's
+;; focus stack -- so the compositor's own guards do NOT cover these
+;; paths.  `cmacs_gowl_layer_owns_keyboard' is the only thing that
+;; does, and the source-shape test below is what keeps it that way: a
+;; new seat-focus path that forgets the check reintroduces the bug,
+;; and no runtime test can catch that without a live compositor, a
+;; live layer-shell client, and a Wayland session.
+;;
+;; The decision logic itself (which layer surfaces take the keyboard,
+;; which focus changes are refused) is unit-tested on the gowl side in
+;; `deps/gowl/tests/test-focus-rules.c'.
+
+(defconst cmacs-gowl-tests--this-file
+  (or load-file-name buffer-file-name)
+  "Absolute path of this test file, captured at load time.
+`load-file-name' is nil while ERT bodies run, so the source-shape
+tests below cannot resolve the tree from inside a test.")
+
+(defun cmacs-gowl-tests--source-file (relative)
+  "Return the absolute path of RELATIVE inside the cmacs source tree.
+Resolves against this test file's own location, so it works from a
+worktree or an out-of-tree test run.  Returns nil when the file is
+not present (installed trees ship no C sources)."
+  (let* ((here (or cmacs-gowl-tests--this-file
+                   (locate-library "cmacs-gowl-tests")))
+         (root (and here
+                    (expand-file-name "../.." (file-name-directory here))))
+         (file (and root (expand-file-name relative root))))
+    (and file (file-readable-p file) file)))
+
+(defun cmacs-gowl-tests--strip-c-comments ()
+  "Replace every /* ... */ comment in the current buffer with a space.
+The C sources document these call sites at length, quoting the very
+identifiers the tests search for, so the prose has to go before any
+call-site matching can mean anything."
+  (goto-char (point-min))
+  (while (re-search-forward "/\\*" nil t)
+    (let ((start (match-beginning 0)))
+      (if (re-search-forward "\\*/" nil t)
+          (delete-region start (point))
+        ;; Unterminated comment: drop the rest of the buffer.
+        (delete-region start (point-max))))))
+
+(defun cmacs-gowl-tests--defun-bodies (source symbol)
+  "Return the code of each top-level C function in SOURCE calling SYMBOL.
+Comments are stripped first.  A body runs from the enclosing top-level
+function's opening brace (a `{' in column 0) through to the SYMBOL
+call.  Good enough to answer \"was the guard checked before this
+call?\" without parsing C."
+  (let ((bodies nil))
+    (with-temp-buffer
+      (insert-file-contents source)
+      (cmacs-gowl-tests--strip-c-comments)
+      (goto-char (point-min))
+      (while (re-search-forward
+              (concat "\\_<" (regexp-quote symbol) "\\_>[[:space:]]*(")
+              nil t)
+        (let ((call-end (point))
+              (start (save-excursion
+                       (if (re-search-backward "^{" nil t)
+                           (point)
+                         (point-min)))))
+          (push (buffer-substring-no-properties start call-end)
+                bodies))))
+    (nreverse bodies)))
+
+(ert-deftest cmacs-gowl-test-seat-focus-paths-check-layer-grab ()
+  "Every cmacs seat-keyboard-focus path consults the layer grab first.
+
+This is the regression guard for the deaf-launcher bug: a path that
+calls `wlr_seat_keyboard_notify_enter' without first checking
+`cmacs_gowl_layer_owns_keyboard' can take the keyboard away from a
+mapped launcher, leaving it visible, on top, and unable to receive a
+single keystroke."
+  (let ((source (cmacs-gowl-tests--source-file "cmacs/gowl/cmacs-gowl.c")))
+    (skip-unless source)
+    (let ((bodies (cmacs-gowl-tests--defun-bodies
+                   source "wlr_seat_keyboard_notify_enter")))
+      ;; Sanity: the call sites still exist and were actually found.
+      ;; A zero here would make the assertion below vacuously true.
+      (should (>= (length bodies) 4))
+      (dolist (body bodies)
+        (should (string-match-p "cmacs_gowl_layer_owns_keyboard" body))))))
+
+(ert-deftest cmacs-gowl-test-layer-grab-helper-uses-compositor-api ()
+  "`cmacs_gowl_layer_owns_keyboard' delegates to the compositor.
+
+The grab must be derived from live compositor state rather than
+cached in cmacs: a surface that unmaps or stops asking for the
+keyboard releases it immediately, so a stale cmacs-side copy could
+wedge keyboard focus with no way out."
+  (let ((source (cmacs-gowl-tests--source-file "cmacs/gowl/cmacs-gowl.c")))
+    (skip-unless source)
+    (with-temp-buffer
+      (insert-file-contents source)
+      (cmacs-gowl-tests--strip-c-comments)
+      (should (string-match-p
+               "gowl_compositor_has_exclusive_keyboard_layer"
+               (buffer-string))))))
+
+(ert-deftest cmacs-gowl-test-grant-focus-requires-running ()
+  "`gowl-grant-focus-to-emacs' errors when the compositor is not running."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (skip-unless (not (gowl-running-p)))
+  (should-error (gowl-grant-focus-to-emacs)))
+
+(ert-deftest cmacs-gowl-test-return-focus-without-redirect ()
+  "`gowl-return-focus-to-embed' is a no-op with no active redirect."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (should-not (gowl-return-focus-to-embed)))
+
+(ert-deftest cmacs-gowl-test-focus-redirect-predicates ()
+  "The focus-redirect predicates return booleans and default to nil."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (should (memq (gowl-focus-redirect-active-p) '(t nil)))
+  (should (memq (gowl-focus-redirect-sticky-p) '(t nil)))
+  ;; With no redirect pushed, neither is active.
+  (skip-unless (not (gowl-running-p)))
+  (should-not (gowl-focus-redirect-active-p))
+  (should-not (gowl-focus-redirect-sticky-p)))
+
+(ert-deftest cmacs-gowl-test-focus-post-command-is-safe ()
+  "The `post-command-hook' focus restore never errors.
+
+It runs after literally every command in the session; a signal here
+would make the editor unusable, so it must tolerate no compositor, no
+redirect, and a redirect blocked by a layer grab alike."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (require 'cmacs-gowl-focus)
+  (should-not (cmacs-gowl-focus--post-command)))
+
+(ert-deftest cmacs-gowl-test-prefix-keys-exclude-plain-escape ()
+  "Plain ESC is not a prefix key; it is the hardcoded sticky redirect.
+Listing it here would push a non-sticky redirect that
+`post-command-hook' pops one command later, defeating the escape
+hatch out of an embed."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (require 'cmacs-gowl-focus)
+  (should-not (member "Escape" cmacs-gowl-prefix-keys))
+  (should (member "Control+Escape" cmacs-gowl-prefix-keys)))
+
 (provide 'cmacs-gowl-tests)
 ;;; cmacs-gowl-tests.el ends here

@@ -58,6 +58,39 @@ cmacs_gowl_get_compositor (void)
   return cmacs_gowl_compositor;
 }
 
+/* TRUE while a keyboard-interactive layer-shell surface -- a launcher
+   such as wofi, an on-screen keyboard -- holds an exclusive keyboard
+   grab in the compositor.
+
+   Every cmacs path that moves seat keyboard focus does so by calling
+   wlr_seat_keyboard_notify_enter() directly rather than going through
+   gowl_compositor_focus_client(): embedded clients are deliberately
+   invisible to the compositor's focus stack, so the guards inside
+   focus_client() do not apply.  That makes this check the ONLY thing
+   standing between an embedded-focus move and a stolen launcher, and
+   it must be consulted before every one of them.
+
+   The failure it prevents: wofi maps, arrangelayers grants it the
+   keyboard, and milliseconds later a focus-follows-mouse enter, a
+   click, or `post-command-hook' -> `gowl-return-focus-to-embed' takes
+   the keyboard straight back.  wofi stays drawn, on top, covering the
+   whole output -- and completely deaf.  The user can neither type into
+   it, nor dismiss it, nor see that anything else is responding.
+   Reported by Ben Doty, 2026-08-08.
+
+   The compositor derives this from live surface state (mapped,
+   keyboard_interactive, layer), so it releases by itself the moment
+   the launcher goes away -- it cannot wedge focus permanently.
+   `test/cmacs/cmacs-gowl-tests.el' asserts that no
+   wlr_seat_keyboard_notify_enter call site in this file skips it.  */
+static gboolean
+cmacs_gowl_layer_owns_keyboard (void)
+{
+  return cmacs_gowl_compositor != NULL
+         && gowl_compositor_has_exclusive_keyboard_layer (
+              cmacs_gowl_compositor);
+}
+
 /* Shared-object globals that user-written C configs declare as
    `extern GowlCompositor *gowl_compositor;` / `extern GowlConfig
    *gowl_config;`.  Standalone gowl defines them in its main.c; when
@@ -462,8 +495,15 @@ gowl_embed_view_event (GtkWidget *widget, GdkEvent *event, gpointer data)
         wlr_seat_pointer_notify_button (seat, time_ms, btn, state);
         /* Click gives keyboard focus to the embedded client.
            Pass the actual keyboard state so the client doesn't
-           get desynced after repeated focus cycles. */
-        if (event->type == GDK_BUTTON_PRESS)
+           get desynced after repeated focus cycles.
+
+           Skipped while a layer surface holds the keyboard: a
+           launcher covers the output, so a click landing on an
+           embed underneath it is not the user asking to type
+           there -- taking the keyboard would leave the launcher
+           visible and deaf. */
+        if (event->type == GDK_BUTTON_PRESS
+            && !cmacs_gowl_layer_owns_keyboard ())
           {
             struct wlr_keyboard *kb = wlr_seat_get_keyboard (seat);
             if (kb)
@@ -618,6 +658,12 @@ cmacs_gowl_xwidget_keyboard_enter (struct xwidget *xw)
   struct wlr_surface *surface
     = gowl_client_get_wlr_surface (gview->client);
   if (seat == NULL || surface == NULL)
+    return;
+
+  /* Focus-follows-mouse must not fight a launcher for the keyboard:
+     the pointer crossing an xwidget while wofi is up is incidental,
+     not intent.  See cmacs_gowl_layer_owns_keyboard. */
+  if (cmacs_gowl_layer_owns_keyboard ())
     return;
 
   pthread_mutex_lock (&cmacs_gowl_mutex);
@@ -1060,7 +1106,23 @@ cmacs_gowl_find_emacs_client (GowlCompositor *comp)
 }
 
 /* Send wlr_seat_keyboard_notify_enter for the given GowlClient using
-   the current keyboard modifier state. */
+   the current keyboard modifier state.
+
+   This deliberately bypasses gowl_compositor_focus_client() -- the
+   whole point of the prefix-key redirect is to hand keys to Emacs
+   without disturbing the compositor's own focus bookkeeping -- which
+   means it also bypasses every guard that function applies.  So the
+   one guard that must not be bypassed is re-checked here by hand: a
+   keyboard-interactive layer surface (wofi and friends) holding an
+   exclusive grab.
+
+   Without this check the redirect races a launcher's map.  wofi maps,
+   arrangelayers grants it the keyboard, and ~50 ms later
+   `post-command-hook' -> `gowl-return-focus-to-embed' fires and takes
+   the keyboard straight back to the embed.  wofi stays drawn, on top,
+   covering the output -- and completely deaf: the user can neither
+   type into it nor dismiss it, and cannot see that anything else is
+   responding.  (Reported by Ben Doty, 2026-08-08.) */
 static void
 cmacs_gowl_wlr_focus_client (GowlCompositor *comp, GowlClient *target)
 {
@@ -1070,6 +1132,9 @@ cmacs_gowl_wlr_focus_client (GowlCompositor *comp, GowlClient *target)
 
   seat = gowl_compositor_get_wlr_seat (comp);
   if (seat == NULL || target == NULL)
+    return;
+
+  if (cmacs_gowl_layer_owns_keyboard ())
     return;
   surf = gowl_client_get_wlr_surface (target);
   if (surf == NULL)
@@ -1417,14 +1482,21 @@ the hood; you can also call it from Elisp directly to claim keyboard
 focus unconditionally (e.g. from a minibuffer prompt in a program
 that the embed has been stealing keys from).
 
-Returns t on success, nil if gowl is not running or there is no
-non-embedded client to focus.  */)
+Returns t on success, nil if gowl is not running, if a
+keyboard-interactive layer surface currently holds the keyboard, or if
+there is no non-embedded client to focus.  */)
   (void)
 {
   GowlClient *emacs_target;
   GowlSeat   *seat_obj;
 
   GOWL_CHECK_RUNNING ();
+
+  /* A launcher / on-screen keyboard holding an exclusive grab
+     outranks even an explicit grant: taking the keyboard here would
+     leave it visible on top of the output and deaf. */
+  if (cmacs_gowl_layer_owns_keyboard ())
+    return Qnil;
 
   if (cmacs_gowl_active_focus_token != NULL)
     /* Already redirected — keep the existing token, just idempotent. */
@@ -1456,6 +1528,14 @@ DEFUN ("gowl-return-focus-to-embed", Fgowl_return_focus_to_embed,
        doc: /* Restore the embed focus saved by `gowl-grant-focus-to-emacs'.
 Pops the active #GowlFocusToken and re-sends a wlr_seat keyboard
 enter for the recorded client.  No-op if no redirect is active.
+
+Also a no-op while a keyboard-interactive layer surface (a launcher
+such as wofi, an on-screen keyboard) holds the keyboard: the redirect
+token is deliberately left on the stack so that this runs again from
+`post-command-hook' once the launcher goes away.  Popping the token
+here would hand the keyboard back to the embed and leave the launcher
+visible but deaf.
+
 Returns t if a token was popped, nil otherwise.  */)
   (void)
 {
@@ -1465,6 +1545,13 @@ Returns t if a token was popped, nil otherwise.  */)
 
   if (cmacs_gowl_compositor == NULL
       || cmacs_gowl_active_focus_token == NULL)
+    return Qnil;
+
+  /* Keep the token: `post-command-hook' calls this after every
+     command, so the pop happens on the first command after the
+     launcher unmaps.  The grab is derived from live surface state,
+     so it cannot wedge the redirect permanently. */
+  if (cmacs_gowl_layer_owns_keyboard ())
     return Qnil;
 
   seat_obj = gowl_compositor_get_seat (cmacs_gowl_compositor);
@@ -2930,7 +3017,11 @@ DEFUN ("gowl-embed-focus", Fgowl_embed_focus,
        doc: /* Give keyboard focus to embedded CLIENT.
 This allows keyboard input to reach the embedded Wayland client.
 Use this to re-enter an embedded client after ESC returned
-control to Emacs.  CLIENT is a gowl client object. */)
+control to Emacs.  CLIENT is a gowl client object.
+
+Returns nil without moving focus while a keyboard-interactive layer
+surface (a launcher such as wofi) holds the keyboard -- taking it
+would leave that launcher visible on top of the output and deaf. */)
   (Lisp_Object client)
 {
   GowlClient *c = gowl_resolve_client (client);
@@ -2942,6 +3033,9 @@ control to Emacs.  CLIENT is a gowl client object. */)
     error ("gowl compositor not running");
   if (c == NULL)
     error ("Invalid client");
+
+  if (cmacs_gowl_layer_owns_keyboard ())
+    return Qnil;
 
   seat = gowl_compositor_get_wlr_seat (cmacs_gowl_compositor);
   surf = gowl_client_get_wlr_surface (c);
