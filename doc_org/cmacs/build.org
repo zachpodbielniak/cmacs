@@ -470,3 +470,27 @@ Test files in =test/cmacs/=:
 | =cmacs-gowl-tests.el=        | Wayland compositor |
 | =cmacs-crispy-tests.el=      | Crispy scripting  |
 | =cmacs-config-tests.el=      | Config loading    |
+
+** Expected failure: =emacs-tests/seccomp/allows-stdout=
+
+Upstream's own suite (=make -C test src/emacs-tests=) has one test that
+cmacs cannot pass.  It runs the editor under
+=lib-src/seccomp-filter.bpf= and expects a clean exit; under cmacs the
+process dies with =SIGSYS= ("Bad system call", exit 159).
+
+This is expected, and structural rather than a regression: that filter
+whitelists the syscalls an upstream-shaped Emacs makes at startup, and
+cmacs links GLib, wlroots and the rest of the subsystem stack, whose
+initialisation reaches outside that set before any Lisp runs.  Nothing
+short of regenerating the filter against cmacs's actual syscall set
+would change it, and nothing in cmacs depends on =--seccomp=.
+
+When triaging a post-merge run, prove a suspect failure is pre-existing
+the same way rather than assuming: the build leaves every previous
+binary in =src/= as =emacs-32.0.50.N=, so run the failing command
+against the newest one predating the merge.
+
+#+begin_example
+./src/emacs-32.0.50.142 --quick --batch \
+    --seccomp=lib-src/seccomp-filter.bpf --eval '(message "Hi")'
+#+end_example

@@ -9461,6 +9461,36 @@ The script is a clean no-op on a tree without @file{deps/}, so an
 upstream-style build is unaffected.
 @end itemize
 
+@section Testing
+
+@example
+make -C test check-cmacs    # every test/cmacs/*-tests.el
+@end example
+
+@subsection Expected failure: @code{emacs-tests/seccomp/allows-stdout}
+
+Upstream's own suite (@code{make -C test src/emacs-tests}) has one test
+cmacs cannot pass.  It runs the editor under
+@file{lib-src/seccomp-filter.bpf} and expects a clean exit; under cmacs
+the process dies with @code{SIGSYS} (``Bad system call'', exit 159).
+
+This is expected, and structural rather than a regression: the filter
+whitelists the syscalls an upstream-shaped Emacs makes at startup, and
+cmacs links GLib, wlroots and the rest of the subsystem stack, whose
+initialisation reaches outside that set before any Lisp runs.  Only
+regenerating the filter against cmacs's actual syscall set would change
+it, and nothing in cmacs depends on @code{--seccomp}.
+
+When triaging a post-merge run, prove a suspect failure is pre-existing
+rather than assuming it.  The build leaves every previous binary in
+@file{src/} as @file{emacs-32.0.50.N}, so run the failing command
+against the newest one predating the merge:
+
+@example
+./src/emacs-32.0.50.142 --quick --batch \
+    --seccomp=lib-src/seccomp-filter.bpf --eval '(message "Hi")'
+@end example
+
 @c ===================================================================
 @node Upstream Changes
 @chapter Upstream Changes

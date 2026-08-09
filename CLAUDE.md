@@ -265,6 +265,14 @@ Maintained in two formats that must stay in sync — **update both**:
 
 `make -C test check-cmacs` — ERT tests, one file per subsystem in `test/cmacs/`.
 
+**Known-failing upstream test.** `emacs-tests/seccomp/allows-stdout` dies `SIGSYS`
+(exit 159) and is *expected to*: `lib-src/seccomp-filter.bpf` whitelists the
+syscalls an upstream-shaped Emacs makes at startup, and cmacs links GLib/wlroots,
+whose init reaches outside that set before any Lisp runs. Not a regression, not
+worth chasing. To prove any other post-merge failure is likewise pre-existing, run
+it against the newest `src/emacs-32.0.50.N` predating the merge — the build keeps
+every previous binary there.
+
 ## Debugging crashes
 
 `coredumpctl dump --output=/tmp/emacs-core`, then launch the gdb-debugger agent
