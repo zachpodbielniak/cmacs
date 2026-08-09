@@ -154,6 +154,48 @@ failure with its own would lose the original."
 
 ;;;; Dashboard
 
+(ert-deftest cmacs-brigade-dashboard-hints-mention-every-action-key ()
+  "Every key the dashboard binds to one of its own commands is on screen.
+
+The hints line is the only discovery path short of `?', so a key that is
+bound but missing from it may as well not exist.  That is not
+hypothetical: the conversation keys shipped working and unfindable
+because updating this string was not part of adding them."
+  (skip-unless (and (featurep 'cmacs-brigade-dashboard)
+                    (fboundp 'cmacs-brigade-dashboard--hints)))
+  (let ((hints (cmacs-brigade-dashboard--hints))
+        ;; Case matters: `X' and `x' are different commands, and with
+        ;; folding on -- the default -- a missing `X' matches `x compose'
+        ;; and the check passes on a key that is not there.
+        (case-fold-search nil)
+        missing)
+    (map-keymap
+     (lambda (event def)
+       (when (and (characterp event)
+                  (symbolp def)
+                  (string-prefix-p "cmacs-brigade-dashboard-"
+                                   (symbol-name def)))
+         (let ((key (key-description (vector event))))
+           ;; Matched as a whole token, not a substring: a bare "i" is
+           ;; inside "list", so a loose search would pass on a key that
+           ;; is nowhere to be seen.
+           (unless (string-match-p
+                    (concat "\\(?:^\\|[ \n]\\)" (regexp-quote key) "[ \n]")
+                    hints)
+             (push key missing)))))
+     cmacs-brigade-dashboard-mode-map)
+    (should (equal nil (nreverse missing)))))
+
+(ert-deftest cmacs-brigade-dashboard-binds-the-conversation-keys ()
+  "`i', `I' and `X' reach the mailbox commands."
+  (skip-unless (featurep 'cmacs-brigade-dashboard))
+  (should (eq 'cmacs-brigade-dashboard-send
+              (lookup-key cmacs-brigade-dashboard-mode-map "i")))
+  (should (eq 'cmacs-brigade-dashboard-inbox
+              (lookup-key cmacs-brigade-dashboard-mode-map "I")))
+  (should (eq 'cmacs-brigade-dashboard-close
+              (lookup-key cmacs-brigade-dashboard-mode-map "X"))))
+
 (ert-deftest cmacs-brigade-dashboard-renders ()
   "The dashboard renders with and without tasks, and shows the numbers."
   (skip-unless (featurep 'cmacs-brigade-dashboard))

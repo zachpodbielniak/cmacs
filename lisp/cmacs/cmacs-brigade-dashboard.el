@@ -359,8 +359,13 @@ a to pick another\n"
                              'face 'error)))))))
 
 (defun cmacs-brigade-dashboard--hints ()
+  ;; The on-screen legend, and the only discovery path short of `?'.
+  ;; A key that is bound but absent from here may as well not exist: the
+  ;; conversation keys shipped working and unfindable because this string
+  ;; was not part of adding them.
   (concat " n new (describe it)   V new (say it)   C clone   x compose\n"
-          " s start   K cancel  d delete   o output    RET plan\n"
+          " s start   K cancel  d delete   o log       RET plan\n"
+          " i say more   I queued   X end conversation\n"
           " a agent   m model   b budget   t tools      c new plan\n"
           " N new agent  T tool list  A reload agents   p open plan\n"
           " g refresh M memory  ? keys     q quit"))
