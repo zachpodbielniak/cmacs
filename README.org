@@ -88,6 +88,12 @@ and 15 JSON dispatch methods expose complete window manager control:
 
 *** Lifecycle
 - =gowl-start= / =gowl-stop= / =gowl-running-p=
+- =emacs --gowl= starts the compositor; inside an existing Wayland session
+  it comes up nested, i.e. an *embedded session*.  =emacsclient --gowl=
+  (and =M-x cmacs-gowl-attach=) brings that session up in an Emacs that is
+  already running, falling back to =emacs --gowl= when no server answers.
+  The installed launchers /Emacs Gowl/ and /Emacs Gowl (Client)/ do both
+  for you.
 
 *** GObject Accessors (for GI runtime control)
 - =gowl-compositor= — the live =GowlCompositor= GObject

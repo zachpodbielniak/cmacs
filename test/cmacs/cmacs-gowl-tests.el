@@ -812,5 +812,76 @@ hatch out of an embed."
   (should-not (member "Escape" cmacs-gowl-prefix-keys))
   (should (member "Control+Escape" cmacs-gowl-prefix-keys)))
 
+;;; emacsclient --gowl / cmacs-gowl-attach
+
+(ert-deftest cmacs-gowl-test-attach-is-an-interactive-command ()
+  "`cmacs-gowl-attach' is defined and callable as a command.
+`emacsclient --gowl' reaches it through server.el's `-gowl' branch, and
+`M-x' through the autoload in `cmacs.el'."
+  (require 'cmacs-gowl)
+  (should (fboundp 'cmacs-gowl-attach))
+  (should (commandp 'cmacs-gowl-attach)))
+
+(ert-deftest cmacs-gowl-test-attach-refuses-without-a-display ()
+  "`cmacs-gowl-attach' errors instead of letting wlroots fail deep inside.
+A headless daemon has no parent session to nest in and no graphical
+frame whose display gowl could borrow, so there is nothing to host an
+output; the error is what `emacsclient --gowl' reports to the user."
+  ;; `fboundp' rather than `cmacs-feature-p': that helper lives in
+  ;; cmacs-glib-tests and is not loaded when this file runs alone.
+  (skip-unless (fboundp 'gowl-start))
+  (require 'cmacs-gowl)
+  (require 'cl-lib)
+  (skip-unless (not (gowl-running-p)))
+  (skip-unless (not (cl-some #'display-graphic-p (frame-list))))
+  (let ((process-environment (copy-sequence process-environment)))
+    (setenv "WAYLAND_DISPLAY" nil)
+    (should-error (cmacs-gowl-attach))))
+
+(ert-deftest cmacs-gowl-test-server-honours-the-gowl-request ()
+  "`lisp/server.el' still carries the `-gowl' client command.
+Without both hunks -- the request arm and the frame-dispatch branch --
+`emacsclient --gowl' either dies with \"Unknown command: -gowl\" or
+silently opens a frame on the launcher's terminal instead of bringing
+up the compositor.  Both are re-applied by hand after an upstream
+merge, so guard them."
+  (let ((source (cmacs-gowl-tests--source-file "lisp/server.el")))
+    (skip-unless source)
+    (with-temp-buffer
+      (insert-file-contents source)
+      (let ((text (buffer-string)))
+        (should (string-match-p "(\"-gowl\"" text))
+        (should (string-match-p "cmacs-gowl-attach" text))))))
+
+(ert-deftest cmacs-gowl-test-emacsclient-has-the-gowl-option ()
+  "`lib-src/emacsclient.c' still carries the `--gowl' option.
+Guards the other half of the same upstream touch-point: the long
+option, the request it sends, and the `emacs --gowl' fallback used when
+no server answers."
+  (let ((source (cmacs-gowl-tests--source-file "lib-src/emacsclient.c")))
+    (skip-unless source)
+    (with-temp-buffer
+      (insert-file-contents source)
+      (cmacs-gowl-tests--strip-c-comments)
+      (let ((text (buffer-string)))
+        (should (string-match-p "\"gowl\"[[:space:]]*," text))
+        (should (string-match-p "\"-gowl \"" text))
+        (should (string-match-p "emacs --gowl" text))))))
+
+(ert-deftest cmacs-gowl-test-desktop-launchers-exist ()
+  "The gowl application launchers ship and point at the right commands."
+  (let ((session (cmacs-gowl-tests--source-file "etc/emacs-gowl.desktop"))
+        (client (cmacs-gowl-tests--source-file "etc/emacsclient-gowl.desktop")))
+    (skip-unless (and session client))
+    (with-temp-buffer
+      (insert-file-contents session)
+      (should (string-match-p "^Exec=emacs --gowl" (buffer-string)))
+      ;; A compositor session must not become the handler for text files.
+      (should-not (string-match-p "^MimeType=" (buffer-string))))
+    (with-temp-buffer
+      (insert-file-contents client)
+      (should (string-match-p "^Exec=emacsclient --gowl" (buffer-string)))
+      (should-not (string-match-p "^MimeType=" (buffer-string))))))
+
 (provide 'cmacs-gowl-tests)
 ;;; cmacs-gowl-tests.el ends here

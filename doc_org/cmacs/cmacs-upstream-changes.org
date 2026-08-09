@@ -66,7 +66,8 @@ Several small hunks, all in =main()= / its init path:
 - *=--gowl= early start* (=HAVE_CMACS_GOWL=): create + configure the
   =GowlCompositor= (incl. the =evaluate-gowl-config-with-cmacs= /
   =evaluate-c-config-with-cmacs= gates) and start it before display init,
-  so PGTK/GDK connects to gowl's own Wayland display.
+  so PGTK/GDK connects to gowl's own Wayland display.  Plus a =--gowl=
+  usage line in =usage_message= (guarded, next to the =--lrg= one).
 - *JSC GC-signal redirect* (=HAVE_CMACS_GSURF || HAVE_XWIDGETS=), plus a
   guarded =#include <dlfcn.h>=, at the very top of =main()=:
   #+begin_src c
@@ -261,7 +262,10 @@ location and rules that install =cmacs/api/libcmacs-api.so= +
 =PATH_CMACS_API= in the installed =epaths.h= to =cmacsapidir=; the
 =cmacs-deps-docs= target (a prerequisite of =actual-all=, so it runs on
 every =make=) that mirrors each =deps/<dep>/docs= tree into
-=doc_org/cmacs/deps/=; and the optional "Print to cmacs" printer and
+=doc_org/cmacs/deps/=; the extra =install-etc= desktop launchers
+(=emacs-libregnum= / =emacsclient-libregnum= and =emacs-gowl= /
+=emacsclient-gowl=, each rewritten with the same =sed= recipe upstream uses
+for =emacs.desktop=); and the optional "Print to cmacs" printer and
 =org.cmacs.Editor= D-Bus service install/uninstall targets.
 
 ** java/Makefile.in --- Android Doom bundle
@@ -345,6 +349,28 @@ first Android launch.  Everything else cmacs adds is a *new* file under
 
 .gitignore also gains entries for cmacs build artifacts (generated
 =doc_org/cmacs/deps/= tree, installed module =.so= files, etc.).
+
+** lisp/server.el + lib-src/emacsclient.c --- =emacsclient --gowl=
+
+Both hunks are guarded / harmless elsewhere, and mirror the =--lrg= pair
+documented in the output_lrg chapter below:
+
+- =lisp/server.el= --- a =-gowl= client command: adds the =gowl-requested=
+  local, the =("-gowl" ...)= arm in the request =pcase=, and one =cond=
+  branch in the frame dispatch (after the two =lrg= ones) that calls
+  =cmacs-gowl-attach= to bring up the embedded compositor in *this* process
+  instead of opening a frame on the client's terminal --- unless the client
+  passed =-c=, in which case it also creates the requested frame.
+- =lib-src/emacsclient.c= --- the =--gowl= option (guarded
+  =HAVE_CMACS_GOWL=): long option + =case 'G'=, sends =-gowl= to the
+  server, defaults =--alternate-editor= to =emacs --gowl= so a missing
+  server still yields a gowl session, a =--help= line, and =|| gowl_requested=
+  in the "file name or argument required" test so a bare
+  =emacsclient --gowl= (an application launcher passes no file) is a valid
+  request.
+
+=lisp/cmacs/cmacs-gowl.el= (=cmacs-gowl-attach=) and the two
+=etc/emacs*-gowl.desktop= launchers are *new* cmacs files, not edits.
 
 * output_lrg display backend (=--with-cmacs-lrgterm=)
 

@@ -188,6 +188,9 @@ embedded dependency docs both appear."
 (autoload 'cmacs-gowl-spawn-command "cmacs-gowl"
   "Launch a Wayland client in the Gowl compositor." t)
 
+(autoload 'cmacs-gowl-attach "cmacs-gowl"
+  "Bring up the embedded Gowl compositor in this Emacs on demand." t)
+
 (autoload 'cmacs-org-ex-mode "cmacs-org-ex"
   "Toggle org-ex interactive widget mode." t)
 

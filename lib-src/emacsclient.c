@@ -170,6 +170,14 @@ static bool lrg_requested;
 static const char *lrg_mode;
 #endif
 
+#ifdef HAVE_CMACS_GOWL
+/* CMACS: --gowl brings up the embedded gowl compositor -- a nested Wayland
+   session inside the current one -- in the server process (via the server's
+   -gowl command), and defaults the fallback editor to `emacs --gowl' so a
+   missing server still yields a gowl session.  */
+static bool gowl_requested;
+#endif
+
 static _Noreturn void print_help_and_exit (void);
 
 /* Long command-line options.  */
@@ -199,6 +207,9 @@ static struct option const longopts[] =
   { "tramp",	required_argument, NULL, 'T' },
 #ifdef HAVE_CMACS_LRGTERM
   { "lrg",	optional_argument, NULL, 'L' },  /* CMACS: output_lrg backend */
+#endif
+#ifdef HAVE_CMACS_GOWL
+  { "gowl",	no_argument,	   NULL, 'G' },  /* CMACS: embedded gowl session */
 #endif
   { 0, 0, 0, 0 }
 };
@@ -607,6 +618,12 @@ decode_options (int argc, char **argv)
 	  break;
 #endif
 
+#ifdef HAVE_CMACS_GOWL
+	case 'G':			/* CMACS: --gowl */
+	  gowl_requested = true;
+	  break;
+#endif
+
 	case 'H':
 	  print_help_and_exit ();
 	  break;
@@ -639,6 +656,18 @@ decode_options (int argc, char **argv)
       else
 	snprintf (lrg_alt, sizeof lrg_alt, "emacs --lrg");
       alternate_editor = lrg_alt;
+    }
+#endif
+
+#ifdef HAVE_CMACS_GOWL
+  /* CMACS: with --gowl and no explicit fallback editor, fall back to
+     `emacs --gowl' so that when no server is reachable we still get a gowl
+     session (one compositor per process, so the client attaches to a running
+     Emacs and otherwise launches one that owns the compositor).  */
+  if (gowl_requested && !alternate_editor)
+    {
+      static char gowl_alt[] = "emacs --gowl";
+      alternate_editor = gowl_alt;
     }
 #endif
 
@@ -759,6 +788,11 @@ The following OPTIONS are accepted:\n\
 "--lrg[=MODE]            Reuse a running 'emacs --lrg' (libregnum/raylib)\n\
                         frame, or fall back to launching one; MODE is\n\
                         2d (default), 3d, or 3dvr\n"
+#endif
+#ifdef HAVE_CMACS_GOWL
+"--gowl                  Start the embedded gowl compositor (a nested\n\
+                        Wayland session) in a running Emacs, or fall back\n\
+                        to launching 'emacs --gowl'\n"
 #endif
 "-T PREFIX, --tramp=PREFIX\n\
                         PREFIX to prepend to filenames sent by emacsclient\n\
@@ -2057,7 +2091,14 @@ main (int argc, char **argv)
   /* Process options.  */
   decode_options (argc, argv);
 
-  if (! (optind < argc || eval || create_frame))
+  if (! (optind < argc || eval || create_frame
+#ifdef HAVE_CMACS_GOWL
+	 /* CMACS: `emacsclient --gowl' is a complete request on its own --
+	    it asks the server to bring up the compositor -- so it needs no
+	    file argument (an application launcher passes none).  */
+	 || gowl_requested
+#endif
+	 ))
     {
       message (true, ("%s: file name or argument required\n"
 		      "Try '%s --help' for more information\n"),
@@ -2179,6 +2220,12 @@ main (int argc, char **argv)
       quote_argument (emacs_socket, lrg_mode && *lrg_mode ? lrg_mode : "2d");
       send_to_emacs (emacs_socket, " ");
     }
+#endif
+
+#ifdef HAVE_CMACS_GOWL
+  /* CMACS: ask the server to start (or reuse) its embedded gowl session.  */
+  if (gowl_requested)
+    send_to_emacs (emacs_socket, "-gowl ");
 #endif
 
   if (optind < argc)

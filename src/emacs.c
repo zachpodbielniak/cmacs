@@ -330,6 +330,14 @@ Initialization options:\n\
                               2d [default], 3d, 3dvr; e.g. 3d:per-window:workshop)\n\
 ",
 #endif
+/* CMACS: gowl Wayland compositor session.  */
+#ifdef HAVE_CMACS_GOWL
+    "\
+--gowl                      run the embedded gowl Wayland compositor\n\
+                              (nested inside an existing Wayland session;\n\
+                              see also emacsclient --gowl)\n\
+",
+#endif
 /* CMACS: batch-mode entry points (see cmacs_bacon_main /
    cmacs_crispy_main below).  */
 #ifdef HAVE_CMACS_BACON

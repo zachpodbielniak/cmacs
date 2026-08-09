@@ -1755,6 +1755,50 @@ src/emacs --gowl
 Inside Emacs, the compositor is controlled via @code{cmacs-gowl-mode},
 which is auto-enabled by @option{--gowl}.
 
+@subsection Desktop Launchers and @code{emacsclient --gowl}
+@cindex desktop launcher, gowl
+@cindex embedded session
+@cindex emacsclient --gowl
+
+@command{make install} (and the container build) install two application
+launchers next to the usual @emph{Emacs} / @emph{Emacs (Client)} and
+@emph{Emacs Libregnum} ones: @emph{Emacs Gowl}, which runs
+@code{emacs --gowl} (@file{etc/emacs-gowl.desktop}), and @emph{Emacs Gowl
+(Client)}, which runs @code{emacsclient --gowl}
+(@file{etc/emacsclient-gowl.desktop}) and carries a @emph{New Instance}
+action for @code{emacs --gowl}.  Both set @code{StartupWMClass=cmacs}.
+Neither declares a @code{MimeType}: a compositor session is deliberately
+@emph{not} registered as the handler for text files, so double-clicking a
+source file still opens the plain @emph{Emacs} launchers.
+
+Clicked from inside a running Wayland session (GNOME, or another gowl),
+both launchers give an @emph{embedded session}: wlroots comes up on its
+nested backend, so the compositor is a window inside the outer one rather
+than a seat session.  For a real seat session, use a Wayland session entry
+instead---see the GDM recipe below.
+
+@command{emacsclient} accepts @option{--gowl} (shown in both
+@code{emacsclient --help} and @code{emacs --help}).  Because there is one
+compositor per process, @option{--gowl} never starts a @emph{second} one:
+it sends a @code{-gowl} request and the server brings up---or just
+returns---the embedded session in its own process via
+@code{cmacs-gowl-attach}, instead of opening a frame on the launcher's
+terminal.  Add @option{-c} if you also want a new Emacs frame
+(@code{emacsclient --gowl -c}).  When no server is reachable,
+@option{--gowl} defaults
+@option{--alternate-editor} to @code{emacs --gowl}, so a bare click always
+ends up in a gowl session.  Unlike the other clients,
+@code{emacsclient --gowl} needs no file argument---the request is complete
+on its own.
+
+@code{M-x cmacs-gowl-attach} does the same from inside a running Emacs: it
+enables @code{cmacs-gowl-mode} on demand (a no-op when gowl is already
+running, whichever way it started) and returns the frame hosting the
+session.  It signals a clean error when cmacs was built without
+@option{--with-cmacs-gowl}, or when there is no display to nest
+inside---a headless daemon cannot host a compositor, so start the Emacs
+that should own it inside a graphical session.
+
 @subsection Running as a GDM Login Session (in-repo debug build)
 @cindex GDM session
 @cindex debug session
@@ -9619,7 +9663,8 @@ other guarded cmacs includes.
 configure the @code{GowlCompositor} (including the
 @code{evaluate-gowl-config-with-cmacs} / @code{evaluate-c-config-with-cmacs}
 gates) and start it before display init, so PGTK/GDK connects to gowl's own
-Wayland display.
+Wayland display.  Plus a @option{--gowl} usage line in
+@code{usage_message}, next to the guarded @option{--lrg} one.
 @item
 @strong{JSC GC-signal redirect} (@code{HAVE_CMACS_GSURF || HAVE_XWIDGETS}),
 plus a guarded @code{#include <dlfcn.h>}, at the very top of @code{main()}:
@@ -9813,9 +9858,13 @@ location and rules installing @file{cmacs/api/libcmacs-api.so} +
 that rewrites @code{PATH_CMACS_API} in the installed @file{epaths.h} to
 @code{cmacsapidir}; the @code{cmacs-deps-docs} target (a prerequisite of
 @code{actual-all}, so it runs on every @code{make}) that mirrors each
-@file{deps/<dep>/docs} tree into @file{doc_org/cmacs/deps/}; and the
-optional ``Print to cmacs'' printer and @code{org.cmacs.Editor} D-Bus
-service install/uninstall targets.
+@file{deps/<dep>/docs} tree into @file{doc_org/cmacs/deps/}; the extra
+@code{install-etc} desktop launchers (@file{emacs-libregnum} /
+@file{emacsclient-libregnum} and @file{emacs-gowl} /
+@file{emacsclient-gowl}, each rewritten with the same @code{sed} recipe
+upstream uses for @file{emacs.desktop}); and the optional ``Print to
+cmacs'' printer and @code{org.cmacs.Editor} D-Bus service
+install/uninstall targets.
 
 @subsection java/Makefile.in --- Android Doom bundle
 
@@ -9912,6 +9961,34 @@ rides Emacs's stock @code{site-run-file} load to bootstrap the embedded
 Doom config on the first Android launch.  Everything else cmacs adds is a
 @emph{new} file under @file{lisp/cmacs/} picked up by the generated
 loaders.  @file{.gitignore} also gains entries for cmacs build artifacts.
+
+@subsection lisp/server.el + lib-src/emacsclient.c
+
+Two hunks that add @code{emacsclient --gowl}, guarded / harmless elsewhere,
+mirroring the @option{--lrg} pair:
+
+@itemize @bullet
+@item
+@file{lisp/server.el} --- a @code{-gowl} client command: the
+@code{gowl-requested} local, the @code{("-gowl" @dots{})} arm in the
+request @code{pcase}, and one @code{cond} branch in the frame dispatch
+(after the two @code{lrg} ones) that calls @code{cmacs-gowl-attach} to
+bring up the embedded compositor in @emph{this} process instead of opening
+a frame on the client's terminal---unless the client passed @option{-c}, in
+which case it also creates the requested frame.
+@item
+@file{lib-src/emacsclient.c} --- the @option{--gowl} option (guarded
+@code{HAVE_CMACS_GOWL}): long option plus @code{case 'G'}, sends
+@code{-gowl} to the server, defaults @option{--alternate-editor} to
+@code{emacs --gowl} so a missing server still yields a gowl session, a
+@option{--help} line, and @code{|| gowl_requested} in the ``file name or
+argument required'' test so a bare @code{emacsclient --gowl} (an
+application launcher passes no file) is a valid request.
+@end itemize
+
+@file{lisp/cmacs/cmacs-gowl.el} (@code{cmacs-gowl-attach}) and the two
+@file{etc/emacs*-gowl.desktop} launchers are @emph{new} cmacs files, not
+edits.
 
 @node Re-applying After a Merge
 @section Re-applying after a merge

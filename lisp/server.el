@@ -1257,6 +1257,7 @@ The following commands are accepted by the client:
 		tty-type   ; string.
 		lrg-reuse-frame  ; CMACS: existing output_lrg frame to reuse (-lrg)
 		lrg-mode  ; CMACS: requested output_lrg render mode, nil if no -lrg
+		gowl-requested  ; CMACS: t if the client asked for gowl (-gowl)
 		files
 		filepos
 		args-left)
@@ -1315,6 +1316,14 @@ The following commands are accepted by the client:
                          (dolist (fr (frame-list))
                            (when (eq (framep fr) 'lrg)
                              (throw 'found fr))))))
+
+                ;; CMACS: -gowl:  Start (or reuse) the embedded gowl
+                ;; compositor in THIS process -- a nested Wayland session
+                ;; inside the current one -- instead of opening a frame on
+                ;; the client's terminal.  See `cmacs-gowl-attach'.
+                ("-gowl"
+                 (setq dontkill t
+                       gowl-requested t))
 
                 ;; -resume:  Resume a suspended tty frame.
                 ("-resume"
@@ -1445,6 +1454,25 @@ The following commands are accepted by the client:
 		   ((and lrg-mode (fboundp 'cmacs-lrg-attach))
 		    (setq tty-name nil tty-type nil)
 		    (cmacs-lrg-attach lrg-mode))
+		   ;; CMACS: -gowl -- bring up (or reuse) the embedded gowl
+		   ;; compositor in this process and hand the client the frame
+		   ;; hosting it, rather than opening a frame on the launcher's
+		   ;; terminal.  There is one compositor per process, so a
+		   ;; second `emacsclient --gowl' just raises that frame.
+		   ;; cmacs-gowl-attach errors cleanly when gowl is not
+		   ;; compiled in or there is no display to nest inside, which
+		   ;; server propagates to the client.
+		   ((and gowl-requested
+			 (or (fboundp 'cmacs-gowl-attach)
+			     (require 'cmacs-gowl nil t)))
+		    (let ((host (cmacs-gowl-attach))
+			  (want-frame (eq tty-name 'window-system)))
+		      (setq tty-name nil tty-type nil)
+		      ;; `emacsclient --gowl -c' asked for a frame too.
+		      (if want-frame
+			  (server-create-window-system-frame
+			   display nowait proc parent-id frame-parameters)
+			host)))
 		   ((and use-current-frame
 			 (or (eq use-current-frame 'always)
 			     ;; We can't use the Emacs daemon's

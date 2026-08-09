@@ -595,6 +595,50 @@ When disabled, stops the compositor."
       (cmacs-gowl--start)
     (cmacs-gowl--stop)))
 
+;;;###autoload
+(defun cmacs-gowl-attach ()
+  "Bring up the embedded Gowl compositor in THIS Emacs; return its host frame.
+The runtime equivalent of the `--gowl' startup flag: `emacs --gowl' owns
+the compositor from early `main', while this enables `cmacs-gowl-mode' in
+an Emacs that is already up, so a running instance (or a daemon) can host
+the session on demand.  `emacsclient --gowl' uses it, via the server's
+`-gowl' request.
+
+Started inside an existing Wayland session, wlroots uses its nested
+backend, so the compositor is an *embedded* session -- a window in the
+outer compositor -- driven by this Emacs.
+
+There is one compositor per process, so this never starts a second one:
+with Gowl already running (either launch path) it just returns the host
+frame.
+
+Signals an error when this cmacs was built without `--with-cmacs-gowl',
+or when there is no display to nest inside (a headless daemon) -- wlroots
+cannot create an output then."
+  (interactive)
+  (unless (fboundp 'gowl-start)
+    (error "cmacs-gowl-attach: built without --with-cmacs-gowl"))
+  ;; A compositor needs either a parent Wayland session to nest in or a
+  ;; graphical frame whose display it can borrow (`gowl-start' recovers
+  ;; the socket name from GDK when WAYLAND_DISPLAY is unset).  Refuse
+  ;; early and clearly instead of letting wlroots fail deep inside.
+  (unless (or (gowl-running-p)
+              (getenv "WAYLAND_DISPLAY")
+              (cl-some #'display-graphic-p (frame-list)))
+    (error "cmacs-gowl-attach: no Wayland display to nest inside; start \
+the Emacs that should own the compositor inside a graphical session"))
+  (unless cmacs-gowl-mode
+    (cmacs-gowl-mode 1))
+  ;; Hand the client the frame that hosts the session: the selected one
+  ;; when it is graphical, else any graphical frame (a daemon's initial
+  ;; terminal frame is no use to a compositor).  nil is fine -- server
+  ;; then uses its own current frame.
+  (let ((frame (if (display-graphic-p) (selected-frame)
+                 (cl-find-if #'display-graphic-p (frame-list)))))
+    (when (frame-live-p frame)
+      (select-frame-set-input-focus frame))
+    frame))
+
 ;;; Interactive window management commands
 
 (defun cmacs-gowl-list-windows ()

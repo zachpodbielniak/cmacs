@@ -26,6 +26,46 @@ Inside Emacs, the compositor is controlled via =cmacs-gowl-mode=:
 M-x cmacs-gowl-mode           ;; toggle (usually auto-enabled by --gowl)
 #+end_example
 
+** Desktop launchers and =emacsclient --gowl=
+
+=make install= (and the container build) install two application launchers
+next to the usual *Emacs* / *Emacs (Client)* and *Emacs Libregnum* ones:
+
+- *Emacs Gowl* — runs =emacs --gowl= (=etc/emacs-gowl.desktop=).
+- *Emacs Gowl (Client)* — runs =emacsclient --gowl=
+  (=etc/emacsclient-gowl.desktop=), with a *New Instance* action for
+  =emacs --gowl=.
+
+Both set =StartupWMClass=cmacs=.  Neither declares a =MimeType=: a
+compositor session is deliberately *not* registered as the handler for
+text files, so double-clicking a source file still opens the plain
+*Emacs* launchers.
+
+Clicked from inside a running Wayland session (GNOME, or another gowl),
+both launchers give an *embedded session*: wlroots comes up on its nested
+backend, so the compositor is a window inside the outer one rather than a
+seat session.  (For a real seat session use a Wayland session entry — see
+the GDM recipe below.)
+
+=emacsclient= accepts =--gowl= (shown in both =emacsclient --help= and
+=emacs --help=).  There is one compositor per process, so it never starts
+a *second* one: it sends a =-gowl= request and the server brings up (or
+just returns) the embedded session in its own process via
+=cmacs-gowl-attach=, instead of opening a frame on the launcher's
+terminal.  Add =-c= if you also want a new Emacs frame
+(=emacsclient --gowl -c=).  When no server is reachable, =--gowl= defaults
+=--alternate-editor= to =emacs --gowl=, so a bare click always ends up in
+a gowl session.  Unlike the other clients, =emacsclient --gowl= needs no
+file argument — the request is complete on its own.
+
+=M-x cmacs-gowl-attach= does the same thing from inside a running Emacs:
+it enables =cmacs-gowl-mode= on demand (a no-op when gowl is already
+running, whichever way it started) and returns the frame hosting the
+session.  It signals a clean error when cmacs was built without
+=--with-cmacs-gowl=, or when there is no display to nest inside — a
+headless daemon cannot host a compositor, so start the Emacs that should
+own it inside a graphical session.
+
 ** Running as a GDM login session (in-repo debug build)
 
 To test compositor changes in a *real seat session* (not nested) without

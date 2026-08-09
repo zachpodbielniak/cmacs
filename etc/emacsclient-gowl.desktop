@@ -1,0 +1,17 @@
+[Desktop Entry]
+Name=Emacs Gowl (Client)
+GenericName=Window Manager
+Comment=Start the embedded Gowl compositor in a running Emacs
+Exec=emacsclient --gowl %F
+Icon=emacs
+Type=Application
+Terminal=false
+Categories=Development;TextEditor;
+StartupNotify=true
+StartupWMClass=cmacs
+Keywords=emacsclient;gowl;wayland;compositor;tiling;
+Actions=new-instance;
+
+[Desktop Action new-instance]
+Name=New Instance
+Exec=emacs --gowl %F

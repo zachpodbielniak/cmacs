@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Emacs Gowl
+GenericName=Window Manager
+Comment=Emacs as a Wayland compositor (embedded session when launched inside one)
+Exec=emacs --gowl %F
+Icon=emacs
+Type=Application
+Terminal=false
+Categories=Development;TextEditor;
+StartupNotify=true
+StartupWMClass=cmacs
+Keywords=gowl;wayland;compositor;tiling;
