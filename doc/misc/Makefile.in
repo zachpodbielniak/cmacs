@@ -63,20 +63,22 @@ INSTALL_DATA = @INSTALL_DATA@
 MAKEINFO = @MAKEINFO@
 MAKEINFO_OPTS = --force -I$(emacsdir)
 
-ifeq ($(LANG),)
-LANG:=default
-else ifeq ($(wildcard $(srcdir)/../translations/$(LANG)/info_common.mk),)
-LANG:=default
+ifeq ($(DOCLANG),)
+DOCLANG:=default
+else ifeq ($(wildcard $(srcdir)/../translations/$(DOCLANG)/misc/info_common.mk),)
+$(error No manual language $(DOCLANG) found)
+DOCLANG:=default
 endif
 
-lang_suffix:=$(filter-out -default,-$(LANG))
-lang_subdir:=$(filter-out ../translations/default/misc/,../translations/$(LANG)/misc/)
+lang_suffix:=$(filter-out -default,-$(DOCLANG))
+lang_subdir:=$(filter-out ../translations/default/misc/,../translations/$(DOCLANG)/misc/)
 
 ## On MS Windows, efaq-w32; otherwise blank.
 DOCMISC_W32 = @DOCMISC_W32@
+DOCMISC_W32_TARGET = efaq-w32
 
 ## Info files to build and install on all platforms.
-include $(srcdir)/../translations/$(LANG)/info_common.mk
+include $(srcdir)/../translations/$(DOCLANG)/misc/info_common.mk
 
 ## Info files to install on current platform.
 INFO_INSTALL = $(INFO_COMMON) $(DOCMISC_W32)
@@ -164,8 +166,6 @@ ${buildinfodir}/%$(lang_suffix).info: ${srcdir}/$(lang_subdir)%$(lang_suffix).te
 define info_template
 ## patsubst as "info" is already taken.
 $$(patsubst info, info-doc, $(1)): $$(buildinfodir)/$(1)$$(lang_suffix).info
-
-$$(buildinfodir)/$(1)$$(lang_suffix).info: $$(srcdir)/$$(lang_subdir)$(1)$$(lang_suffix).texi $$(gfdl) $$(style)
 endef
 
 $(foreach ifile,$(INFO_TARGETS),$(eval $(call info_template,$(ifile))))

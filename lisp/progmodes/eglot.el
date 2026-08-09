@@ -2,12 +2,12 @@
 
 ;; Copyright (C) 2018-2026 Free Software Foundation, Inc.
 
-;; Version: 1.23
+;; Version: 1.24
 ;; Author: João Távora <joaotavora@gmail.com>
 ;; Maintainer: João Távora <joaotavora@gmail.com>
 ;; URL: https://github.com/joaotavora/eglot
 ;; Keywords: convenience, languages
-;; Package-Requires: ((emacs "26.3") (eldoc "1.16.0") (external-completion "0.1") (flymake "1.4.5") (jsonrpc "1.0.28") (project "0.11.2") (seq "2.23") (xref "1.7.0"))
+;; Package-Requires: ((emacs "26.3") (eldoc "1.16.0") (external-completion "0.1") (flymake "1.4.5") (jsonrpc "1.0.29") (project "0.11.2") (seq "2.23") (xref "1.7.0"))
 
 ;; This is a GNU ELPA :core package.  Avoid adding functionality
 ;; that is not available in the version of Emacs recorded above or any
@@ -149,6 +149,8 @@
                         'eglot-managed-mode-hook "1.6")
 (define-obsolete-variable-alias 'eglot-confirm-server-initiated-edits
   'eglot-confirm-server-edits "1.16")
+(define-obsolete-variable-alias 'eglot-prefer-plaintext
+  'eglot-documentation-renderer "1.24")
 (make-obsolete-variable 'eglot-events-buffer-size
   'eglot-events-buffer-config "1.16")
 (define-obsolete-function-alias 'eglot--uri-to-path #'eglot-uri-to-path "1.16")
@@ -315,7 +317,7 @@ automatically)."
     ((toml-ts-mode conf-toml-mode) . ("tombi" "lsp"))
     (nix-mode . ,(eglot-alternatives '("nil" "rnix-lsp" "nixd")))
     (nickel-mode . ("nls"))
-    ((nushell-mode nushell-ts-mode) . ("nu" "--lsp"))
+    ((nushell-mode nushell-ts-mode nu-ts-mode) . ("nu" "--lsp"))
     (gdscript-mode . ("localhost" 6008))
     (fennel-mode . ("fennel-ls"))
     (move-mode . ("move-analyzer"))
@@ -535,10 +537,16 @@ or file operation kinds not in the alist."
   "If non-nil, activate Eglot in cross-referenced non-project files."
   :type 'boolean)
 
-(defcustom eglot-prefer-plaintext nil
-  "If non-nil, always request plaintext responses to hover requests."
-  :type 'boolean
-  :package-version '(Eglot . "1.17.30"))
+(defcustom eglot-documentation-renderer nil
+  "Controls rendering of LSP documentation fragments.
+If set to a major mode symbol like `gfm-view-mode', or the experimental
+`markdown-ts-view-mode', request markdown snippets and use that mode to
+render them.  If t, request and render plain text instead.  If nil,
+request markdown snippets and select a renderer dynamically."
+  :type '(choice (const :tag "Plain text" t)
+                (const :tag "Auto-detect" nil)
+                (function :tag "Renderer"))
+  :package-version '(Eglot . "1.24"))
 
 (defcustom eglot-report-progress t
   "If non-nil, show progress of long running LSP server work.
@@ -727,16 +735,11 @@ This can be useful when using docker to run a language server.")
 
 (declare-function treesit-grammar-location "treesit.c")
 
-(defun eglot--builtin-mdown-p ()
-  (and (fboundp 'markdown-ts-view-mode)
-       (fboundp 'treesit-grammar-location)
-       (treesit-grammar-location 'markdown)))
-
 (defun eglot--accepted-formats ()
-  (if (and (not eglot-prefer-plaintext)
-           (or (fboundp 'gfm-view-mode) (eglot--builtin-mdown-p)))
-      ["markdown" "plaintext"]
-    ["plaintext"]))
+  (if (or (eq t eglot-documentation-renderer)
+          (not (or eglot-documentation-renderer (fboundp 'gfm-view-mode))))
+      ["plaintext"]
+    ["markdown" "plaintext"]))
 
 (defconst eglot--uri-path-allowed-chars
   (let ((vec (copy-sequence url-path-allowed-chars)))
@@ -1261,7 +1264,8 @@ object."
     ;; `file-name-handler-alist' should know how to handle them
     ;; (bug#58790).
     (if (string= "file" (url-type url))
-        (let* ((unhexed (url-unhex-string (url-filename url)))
+        (let* ((unhexed (decode-coding-string
+                         (url-unhex-string (url-filename url)) 'utf-8-unix))
                ;; Remove the leading "/" for local MS Windows-style paths.
                (norm (if (and (not remote-prefix)
                                     (eq system-type 'windows-nt)
@@ -1487,6 +1491,11 @@ PRESERVE-BUFFERS as in `eglot-shutdown', which see."
          (lambda (x) (eq server
                          (get-text-property 0 'eglot--server (car x))))
          flymake-list-only-diagnostics))
+  ;; Cleanup progress reporters
+  (maphash (lambda (_ r)
+             (unless (eq (car r) 'eglot--mode-line-reporter )
+               (progress-reporter-done r)))
+           (eglot--progress-reporters server))
   (cond ((eglot--shutdown-requested server)
          t)
         ((not (eglot--inhibit-autoreconnect server))
@@ -2053,7 +2062,7 @@ Unless IMMEDIATE, send pending changes before making request."
 
 (defvar-local eglot--inflight-async-requests nil
   "An plist of symbols to lists of JSONRPC ids.
-The ids designate in-flight asynchronous requests that may be cancelled
+The ids designate in-flight asynchronous requests that may be canceled
 according to `eglot-advertise-cancellation'.")
 
 (cl-defun eglot--cancel-inflight-async-requests
@@ -2114,7 +2123,7 @@ and also used as a hint of the request cancellation mechanism (see
                       :timeout-fn (wrapfn timeout-fn)
                       moreargs)))
     (when (and hint eglot-advertise-cancellation)
-      (push id (plist-get inflight hint)))
+      (push id (cl-getf inflight hint)))
     id))
 
 (cl-defun eglot--delete-overlays (&optional (prop 'eglot--overlays))
@@ -2263,12 +2272,13 @@ If MODE, force MODE to be used for fontifying MARKUP."
                   finally return (buffer-string)))
        (calc2 (forced-mode)
          (cond
-          (forced-mode              `(,forced-mode))
-          ((eglot--builtin-mdown-p) `(,#'markdown-ts-view-mode))
-          ((fboundp 'gfm-view-mode) `(,#'gfm-view-mode ,#'gfm-extract))
-          (t                        `(#'text-mode))))
+          (forced-mode               forced-mode)
+          ((fboundp eglot-documentation-renderer) eglot-documentation-renderer)
+          ((fboundp 'gfm-view-mode) #'gfm-view-mode)
+          (t                        #'text-mode)))
        (calc (s &optional (forced-mode mode) &aux (x (calc2 forced-mode)))
-         (setq string s render (car x) extract (or (cadr x) #'buffer-string))))
+         (setq string s render x
+               extract (if (eq x 'gfm-view-mode) #'gfm-extract #'buffer-string))))
     (cond ((stringp markup) (calc markup))            ; plain string
           ((setq lang (plist-get markup :language))   ; deprecated MarkedString
            (calc (format "```%s\n%s\n```" lang (plist-get markup :value))))
@@ -2867,7 +2877,8 @@ return it back to the server.  :null is returned if the list was empty."
                 (if (eq eglot-report-progress 'messages)
                     (make-progress-reporter
                      (format "[eglot] %s %s: %s"
-                             (eglot-project-nickname server) token title))
+                             (eglot-project-nickname server) token title)
+                     0 100)
                   (list 'eglot--mode-line-reporter token title)))
               (upd (pcnt msg &optional
                          (pr (gethash token (eglot--progress-reporters server))))
@@ -2875,14 +2886,17 @@ return it back to the server.  :null is returned if the list was empty."
                   ((eq (car pr) 'eglot--mode-line-reporter)
                    (setcdr (cddr pr) (list msg pcnt))
                    (force-mode-line-update t))
-                  (pr (eglot--reporter-update pr pcnt msg)))))
+                  (pr
+                   (if (eql pcnt 100)
+                       (progress-reporter-done pr)
+                     (eglot--reporter-update pr pcnt msg))))))
       (eglot--dbind ((WorkDoneProgress) kind title percentage message) value
         (pcase kind
           ("begin"
-           (upd percentage (fmt title message)
+           (upd (or percentage 0) (fmt title message)
                 (puthash token (mkpr title)
                          (eglot--progress-reporters server))))
-          ("report" (upd percentage message))
+          ("report" (upd (or percentage 0) message))
           ("end" (upd (or percentage 100) message)
            (run-at-time 2 nil
                         (lambda ()

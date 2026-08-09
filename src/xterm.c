@@ -28122,7 +28122,8 @@ do_ewmh_fullscreen (struct frame *f)
 		  || cur == FULLSCREEN_MAXIMIZED)
 		set_wm_state (frame, false, dpyinfo->Xatom_net_wm_state_fullscreen,
 			      dpyinfo->Xatom_net_wm_state_maximized_vert);
-	      if (cur != FULLSCREEN_MAXIMIZED || x_frame_normalize_before_maximize)
+	      if ((cur != FULLSCREEN_MAXIMIZED  && cur != FULLSCREEN_BOTH)
+		  || x_frame_normalize_before_maximize)
 		set_wm_state (frame, true,
 			      dpyinfo->Xatom_net_wm_state_maximized_horz, None);
 	    }
@@ -28142,7 +28143,8 @@ do_ewmh_fullscreen (struct frame *f)
 		  || cur == FULLSCREEN_MAXIMIZED)
 		set_wm_state (frame, false, dpyinfo->Xatom_net_wm_state_fullscreen,
 			      dpyinfo->Xatom_net_wm_state_maximized_horz);
-	      if (cur != FULLSCREEN_MAXIMIZED || x_frame_normalize_before_maximize)
+	      if ((cur != FULLSCREEN_MAXIMIZED && cur != FULLSCREEN_BOTH)
+		  || x_frame_normalize_before_maximize)
 		set_wm_state (frame, true,
 			      dpyinfo->Xatom_net_wm_state_maximized_vert, None);
 	    }
@@ -28542,6 +28544,29 @@ x_set_window_size_1 (struct frame *f, bool change_gravity,
     }
 }
 
+/* Resizing an occluding window (such as a child frame) immediately
+   triggers a fill with background color on the exposed area on the
+   parent when the X server receives the corresponding command
+   (XResizeWindow, XMoveResizeWindow, etc), according to the X protocol.
+   But only if the window has a background assigned.
+
+   This creates flickering, so change the background pixmap to None.  */
+static void
+x_suspend_background_fills (struct frame *f)
+{
+  Display *dpy = FRAME_X_DISPLAY (f);
+
+  XSetWindowBackgroundPixmap (dpy, FRAME_X_WINDOW (f), None);
+}
+
+/* No automatic fill happens when the background is restored.  */
+static void
+x_restore_background_fills (struct frame *f)
+{
+  Display *dpy = FRAME_X_DISPLAY (f);
+
+  XSetWindowBackground (dpy, FRAME_X_WINDOW (f), FRAME_BACKGROUND_PIXEL (f));
+}
 
 /* Change the size of frame F's X window to WIDTH and HEIGHT pixels.  If
    CHANGE_GRAVITY, change to top-left-corner window gravity for this
@@ -28554,6 +28579,9 @@ x_set_window_size (struct frame *f, bool change_gravity,
 {
   block_input ();
 
+  if (FRAME_PARENT_FRAME (f))
+    x_suspend_background_fills (FRAME_PARENT_FRAME (f));
+
 #ifdef USE_GTK
   if (FRAME_GTK_WIDGET (f))
     xg_frame_set_char_size (f, width, height);
@@ -28564,6 +28592,9 @@ x_set_window_size (struct frame *f, bool change_gravity,
   if (!FRAME_PARENT_FRAME (f))
     x_clear_under_internal_border (f);
 #endif /* not USE_GTK */
+
+  if (FRAME_PARENT_FRAME (f))
+    x_restore_background_fills (FRAME_PARENT_FRAME (f));
 
   /* If cursor was outside the new size, mark it as off.  */
   mark_window_cursors_off (XWINDOW (f->root_window));
@@ -28626,6 +28657,9 @@ x_set_window_size_and_position (struct frame *f, int width, int height)
 {
   block_input ();
 
+  if (FRAME_PARENT_FRAME (f))
+    x_suspend_background_fills (FRAME_PARENT_FRAME (f));
+
 #ifdef USE_GTK
   if (FRAME_GTK_WIDGET (f))
     xg_frame_set_size_and_position (f, width, height);
@@ -28637,6 +28671,9 @@ x_set_window_size_and_position (struct frame *f, int width, int height)
 
   if (!FRAME_PARENT_FRAME (f))
     x_clear_under_internal_border (f);
+
+  if (FRAME_PARENT_FRAME (f))
+    x_restore_background_fills (FRAME_PARENT_FRAME (f));
 
   /* If cursor was outside the new size, mark it as off.  */
   mark_window_cursors_off (XWINDOW (FRAME_ROOT_WINDOW (f)));
@@ -28913,25 +28950,6 @@ x_get_focus_frame (struct frame *f)
   return lisp_focus;
 }
 
-/* Return the toplevel parent of F, if it is a child frame.
-   Otherwise, return NULL.  */
-
-static struct frame *
-x_get_toplevel_parent (struct frame *f)
-{
-  struct frame *parent;
-
-  if (!FRAME_PARENT_FRAME (f))
-    return NULL;
-
-  parent = FRAME_PARENT_FRAME (f);
-
-  while (FRAME_PARENT_FRAME (parent))
-    parent = FRAME_PARENT_FRAME (parent);
-
-  return parent;
-}
-
 static void
 x_set_input_focus (struct x_display_info *dpyinfo, Window window,
 		   Time time)
@@ -29055,17 +29073,21 @@ x_focus_frame (struct frame *f, bool noactivate)
 	     may not work if its parent is not activated.  */
 	  && !FRAME_PARENT_FRAME (f)
 	  /* If the focus is being transferred from a child frame to
-	     its toplevel parent, also use SetInputFocus.  */
+	     another frame, also use SetInputFocus.  */
 	  && (!dpyinfo->x_focus_frame
-	      || (x_get_toplevel_parent (dpyinfo->x_focus_frame)
-		  != f))
-	  && x_wm_supports (f, dpyinfo->Xatom_net_active_window))
+	      || !FRAME_PARENT_FRAME (dpyinfo->x_focus_frame))
+	  && !EQ (focus_follows_mouse, Qauto_raise))
 	{
 	  /* When window manager activation is possible, use it
 	     instead.  The window manager is expected to perform any
 	     necessary actions such as raising the frame, moving it to
 	     the current workspace, and mapping it, etc, before moving
-	     input focus to the frame.  */
+	     input focus to the frame.
+
+	     Don't use window manager activation when giving focus to a
+	     frame when the mouse would auto-raise it.  At least xfwm
+	     won't give a frame focus via x_ewmh_activate_frame in that
+	     case.  */
 	  x_ewmh_activate_frame (f);
 	  goto out;
 	}
@@ -29397,6 +29419,9 @@ x_make_frame_invisible (struct frame *f)
      by hand again (they have already done that once for this window.)  */
   x_wm_set_size_hint (f, 0, true);
 
+  if (FRAME_PARENT_FRAME (f))
+    x_suspend_background_fills (FRAME_PARENT_FRAME (f));
+
 #ifdef USE_GTK
   if (FRAME_GTK_OUTER_WIDGET (f))
     gtk_widget_hide (FRAME_GTK_OUTER_WIDGET (f));
@@ -29413,6 +29438,9 @@ x_make_frame_invisible (struct frame *f)
 	unblock_input ();
 	error ("Can't notify window manager of window withdrawal");
       }
+
+  if (FRAME_PARENT_FRAME (f))
+    x_restore_background_fills (FRAME_PARENT_FRAME (f));
 
   /* Don't perform the synchronization if the network connection is
      slow, and the user says it is unwanted.  */
@@ -30427,21 +30455,21 @@ x_free_pixmap (struct frame *f, Emacs_Pixmap pixmap)
 
 #ifdef USE_X_TOOLKIT
 static XrmOptionDescRec emacs_options[] = {
-  {(char *) "-geometry", (char *) ".geometry", XrmoptionSepArg, NULL},
-  {(char *) "-iconic", (char *) ".iconic", XrmoptionNoArg, (XtPointer) "yes"},
+  {"-geometry", ".geometry", XrmoptionSepArg, NULL},
+  {"-iconic", ".iconic", XrmoptionNoArg, (XtPointer) "yes"},
 
-  {(char *) "-internal-border-width",
-   (char *) "*EmacsScreen.internalBorderWidth", XrmoptionSepArg, NULL},
-  {(char *) "-ib", (char *) "*EmacsScreen.internalBorderWidth",
+  {"-internal-border-width",
+   "*EmacsScreen.internalBorderWidth", XrmoptionSepArg, NULL},
+  {"-ib", "*EmacsScreen.internalBorderWidth",
    XrmoptionSepArg, NULL},
-  {(char *) "-T", (char *) "*EmacsShell.title", XrmoptionSepArg, NULL},
-  {(char *) "-wn", (char *) "*EmacsShell.title", XrmoptionSepArg, NULL},
-  {(char *) "-title", (char *) "*EmacsShell.title", XrmoptionSepArg, NULL},
-  {(char *) "-iconname", (char *) "*EmacsShell.iconName",
+  {"-T", "*EmacsShell.title", XrmoptionSepArg, NULL},
+  {"-wn", "*EmacsShell.title", XrmoptionSepArg, NULL},
+  {"-title", "*EmacsShell.title", XrmoptionSepArg, NULL},
+  {"-iconname", "*EmacsShell.iconName",
    XrmoptionSepArg, NULL},
-  {(char *) "-in", (char *) "*EmacsShell.iconName", XrmoptionSepArg, NULL},
-  {(char *) "-mc", (char *) "*pointerColor", XrmoptionSepArg, NULL},
-  {(char *) "-cr", (char *) "*cursorColor", XrmoptionSepArg, NULL}
+  {"-in", "*EmacsShell.iconName", XrmoptionSepArg, NULL},
+  {"-mc", "*pointerColor", XrmoptionSepArg, NULL},
+  {"-cr", "*cursorColor", XrmoptionSepArg, NULL}
 };
 
 /* Whether atimer for Xt timeouts is activated or not.  */
@@ -30769,11 +30797,13 @@ x_term_init (Lisp_Object display_name, char *xrm_option, char *resource_name)
     int argc = 0;
     char *argv[3];
 
-    argv[0] = (char *) "";
+    static char const mt[] = "";
+    argv[0] = (char *) mt;
     argc = 1;
     if (xrm_option)
       {
-	argv[argc++] = (char *) "-xrm";
+	static char const xrmopt[] = "-xrm";
+	argv[argc++] = (char *) xrmopt;
 	argv[argc++] = xrm_option;
       }
     turn_on_atimers (false);
@@ -31584,7 +31614,7 @@ x_term_init (Lisp_Object display_name, char *xrm_option, char *resource_name)
     dpy = dpyinfo->display;
     d.addr = (XPointer) &dpy;
     d.size = sizeof (Display *);
-    fr.addr = (char *) XtDefaultFont;
+    fr.addr = XtDefaultFont;
     fr.size = sizeof (XtDefaultFont);
     to.size = sizeof (Font *);
     to.addr = (XPointer) &font;
@@ -32353,6 +32383,13 @@ static struct textconv_interface text_conversion_interface =
 void
 init_xterm (void)
 {
+#if defined(HAVE_XWIDGETS) && !defined(HAVE_PGTK)
+  /* Emacs uses off-screen gtk widgets for webkit views, which do not support
+     DMABUF or Compositing Mode; webkit aborts unless we disable those.  */
+    xputenv ("WEBKIT_DISABLE_DMABUF_RENDERER=1");
+    xputenv ("WEBKIT_DISABLE_COMPOSITING_MODE=1");
+#endif
+
 #ifndef HAVE_XINPUT2
   /* Emacs can handle only core input events when built without XI2
      support, so make sure Gtk doesn't use Xinput or Xinput2

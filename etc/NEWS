@@ -27,6 +27,9 @@ applies, and please also update docstrings as needed.
 
 * Startup Changes in Emacs 32.1
 
+** New terminal type Kmscon.
+Emacs now supports the Kmscon terminal emulator available on GNU/Linux
+systems.
 
 * Changes in Emacs 32.1
 
@@ -36,6 +39,73 @@ Previously, Emacs would immediately kill a child process and set its
 exit status to 256 if sending input to that process returned EPIPE.
 Now when this happens, Emacs closes the file descriptor to write to the
 child process, but allows it to continue execution as normal.
+
+---
+** New variable 'tty-cursor-movement-use-TAB'.
+If this is set to the nil value, Emacs will not use TABs to optimize
+cursor motion on text-mode terminals.  This is for the rare cases where
+the hardware tabs of the terminal were set to a non-default value by the
+'tabs' command or similar, or if using TABs for cursor movement has any
+other undesired effects.  The default is t, which preserves past
+behavior.
+
+If this variable is nil, 'tty-cursor-movement-use-TAB-BS' has no effect,
+and Emacs will never use TABs for any cursor-movement sequences.
+
+---
+** File- and directory-local variables respect user option setters.
+Values of variables that are user options mentioned in file-local
+variable sections and directory-locals via ".dir-locals.el" are now
+set similarly to 'setopt-local'; i.e., if a user option has a defcustom
+':set' function, that function will be invoked.
+
+---
+** New user option 'setopt-local-type-mismatch'.
+This option controls what 'setopt-local' does when it detects a type
+mismatch between the specified value and the ':type' specification of a
+user option.  Its backward-compatible default is nil which emits a
+warning and accepts the type-mismatched value.  You can control this by
+customizing 'setopt-local-type-mismatch' to a non-nil value: the value
+'accept' inhibits the warning and silently accepts type-mismatched
+values; the value 'discard' inhibits the warning and discards
+type-mismatched values; any other non-nil value prompts you whether to
+accept or ignore the value.
+
+---
+** Specifying a minor mode as a local variable enables that mode.
+The previous behavior, toggling the mode, was neither reliable nor
+generally desirable.
+
++++
+** Emacs tries to display the overlay arrow in the left margin.
+On a non-graphical display (or when the left fringe is not shown), if a
+left margin is present, Emacs will now display the overlay arrow into
+this margin.  Edebug is now using this feature by explicitly setting up
+a left margin for it.
+
+** Mode Line
+
+*** Popup menus invoked from mode line select another window.
+Clicking mode line elements in inactive windows now first
+selects another window before displaying the menu, so the
+commands invoked from the menu will operate on the right buffer.
+You can restore the previous behavior by removing
+'mode-line-window-select' from 'x-pre-popup-menu-hook'.
+
+** Minibuffer
+
+---
+*** The variable 'completion-ignore-case' is now customizable.
+
+---
+*** 'icomplete-in-buffer' users need no longer advise 'completion-at-point'.
+The "*Completions*" buffer no longer pops up in addition to Icomplete's
+in-buffer display of completions, by default.
+Therefore, the instructions in the NEWS file for Emacs 30.1 to add
+
+    (advice-add 'completion-at-point :after #'minibuffer-hide-completions)
+
+to your initialization file no longer apply, and you may remove it.
 
 
 * Editing Changes in Emacs 32.1
@@ -53,14 +123,193 @@ package with the same version.  This is useful if you have started
 making local changes to your tarball installation, and then decided to
 check out the repository to prepare a patch for the package maintainer.
 
+** Compilation mode
+
+---
+*** Messages from Ansible are now recognized.
+
+** Man
+
+---
+*** OSC 8 hyperlinks in man pages are now buttonized.
+When a man page contains OSC 8 hyperlink escape sequences, they
+are now buttonized, allowing using mouse or 'RET' to follow them.
+
+** Woman
+
+---
+*** The variable 'woman-topic-history' is now obsolete.
+Use 'Man-topic-history' instead.
+
+** VC
+
++++
+
+*** VC Directory outgoing revisions count is now asynchronous.
+This means it won't get in your way even if it's slow for your
+repository.  As such, the 'vc-dir-show-outgoing-count' option is now
+obsolete.
+
+---
+*** VC Directory now shows key binding hints.
+To hide these, you can customize the new user option
+'vc-dir-show-key-binding-hints' to nil.
+Backends can supply additional hints using the new 'dir-extra-hints'
+backend method.
+
+---
+*** VC Directory doesn't process very large status output by default.
+If the VCS status process used to populate the VC Directory buffer
+produces a very large amount of output, it often means that you did
+something accidental like renaming a subdirectory containing thousands
+of files, and Emacs can become unresponsive while trying to process all
+the output.  Now Emacs stops early.  When this happens, VC Directory
+includes a message saying so, with a button to override it.  You can
+customize the new user option 'vc-dir-process-output-limit' to control
+how early to stop, and to disable this feature.
+
+---
+*** VC-Dir resolves symbolic links only if the directory has no backend.
+When called interactively, 'M-x vc-dir' checks if the passed directory
+has a VC backend.  If it doesn't, but the directory's truename does
+have a backend, and 'vc-follow-symlinks' is non-nil, the truename is
+used instead.  Previously, the truename was used unconditionally.
+
++++
+*** Improved creation of commit log entry from ChangeLog.
+When VC detects that all log entries for the current changeset come from
+the same ChangeLog file or buffer, it now inserts the entire body of the
+ChangeLog entry into the "*vc-log*" buffer.  If the ChangeLog entry
+contains a summary line, VC inserts it into the "*vc-log*" Summary header.
+If VC detects that the set of changed files listed in the ChangeLog
+entry differs from the current VC fileset, it displays a warning.
+
+** Outline mode
+
+*** New command 'outline-show-entry-and-parents'.
+It is bound to 'C-e' and reveals the current entry
+with its parent hierarchy.
+
+---
+*** New function 'outline-search-from-regexp'.
+A generic 'outline-search-function' implementation driven by
+'outline-regexp', suitable for modes or minor modes that customize
+'outline-regexp' but do not need a custom search strategy.
+Install it with:
+
+    (setq-local outline-search-function #'outline-search-from-regexp)
+
+---
+*** 'outline-search-function' is now a user option.
+Previously a plain variable, it is now a 'defcustom'
+with named choices for the predefined search functions
+('outline-search-from-regexp' and 'outline-search-level')
+as well as the default nil and arbitrary user functions.
+
+---
+*** New command 'outline-occur'.
+It allows users to navigate the current buffer's outline using Occur.
+The 'outline-regexp' variable is used to find the beginning of the
+outline headings.  The 'outline-occur-regexp' buffer-local variable
+allows overriding this regexp.  It is bound to 'M-o'.
+
+** Newsticker
+
+---
+*** New command to copy the URL of the selected newsticker item.
+The new command 'newsticker-treeview-copy-url', bound to 'w', adds the
+URL of the currently selected item in the list view to the kill ring.
+
+** Rmail
+
++++
+*** Files named "RMAIL" or ending in ".rmail" are now visited in Rmail mode.
+You can now visit such files in Rmail mode using ordinary file-visiting
+commands, such as 'C-x C-f'.
+
+** Timeclock
+
+---
+*** New user option 'timeclock-use-24hr-format'.
+If this option is set to non-nil, displayed times (clocked in/out
+since, time to leave) will use 24-hour clock instead of 12-hour clock.
+
 
 * New Modes and Packages in Emacs 32.1
+
+** New major modes based on the tree-sitter library
+
+*** New major mode 'markdown-ts-mode'.
+A major mode based on the tree-sitter library for editing Markdown
+files.  Markdown files are visited using this mode when the required
+tree-sitter grammars ('markdown' and 'markdown-inline') are available,
+or when the user has opted in via 'treesit-enabled-modes'.  Otherwise,
+Markdown files fall back to 'text-mode'.
+
+To install the grammars, use 'M-x markdown-ts-mode-install-parsers'.
+
+** Speedbar
+
+---
+*** A nil value for 'speedbar-directory-unshown-regexp' means "show all".
+
+---
+*** A nil value for 'speedbar-file-unshown-regexp' means "show all".
 
 
 * Incompatible Lisp Changes in Emacs 32.1
 
++++
+** 'intern' and 'intern-soft' ignore 'read-symbol-shorthands'.
+This means they revert to the behavior of Emacs<28.
+In those cases where shorthands need to be obeyed, you now need to use
+'shorthands-intern', 'shorthands-intern-soft', or 'shorthands-to-longhand'.
+And 'shorthands-of-symbol' provides the reverse mapping.
+
+** Pcase
+
++++
+*** Add 'pcase-let*-strict'.
+This macro is like 'pcase-let*', but signals an error if a 'pcase'
+pattern does not match its corresponding value.  This can be useful for
+destructuring values when you do not wish to continue if the
+corresponding value is not as expected.
+
++++
+** The transition variable 'current-time-list' now defaults to nil.
+Therefore, timestamps now default to '(TICKS . HZ)' form instead of the
+older '(HIGH LOW USEC PSEC)' form.
+
 
 * Lisp Changes in Emacs 32.1
+
++++
+** 'ignore' is now also a place, acting as a "blackhole" like "/dev/null".
+E.g., '(push (new-elem) (pcase (foo) (0 var1) (1 var2) (_ (ignore))))'.
+
++++
+** 'kill-all-local-variables' can kill locals silently and reset the buffer.
+This function's KILL-PERMANENT argument now accepts the value
+'permanent-local', which kills all locals ignoring any variable
+watchers.  That argument can also be 'reset', which does what
+'permanent-local' does, and also resets the buffer as if it were newly
+created.  Use these with caution to avoid unexpected behavior such as
+'default-directory' being reset to nil.
+
+---
+** 'with-work-buffer' kills all locals silently and resets its buffers.
+When this macro returns a buffer to its buffer pool, it now kills all
+buffer locals silently, ignoring any variable watchers, and resets the
+buffer as if it were newly created.
+
++++
+** The new function 'markers-in' returns the set of markers in a region.
+
++++
+** New buffer-local variable 'comment-start-line-regexp'.
+Modes that support both line and block comments should set this
+variable to a regexp that matches only the start of line comments, so
+Emacs can distinguish between line and block comments.
 
 ---
 ** New variable 'completion-frontend-properties'.
@@ -77,8 +326,37 @@ The HANDLER argument of 'dbus-call-method-asynchronously' can be a cons
 cell '(HANDLER . ERROR-HANDLER)'.  ERROR-HANDLER is invoked if the
 method call returns with a D-Bus error; the error is passed as argument.
 
+** Elisp Scope
+
+*** Custom analyzers can be associated with multiple functions.
+Elisp Scope macros that define custom analyzer functions, such as
+'elisp-scope-define-function-analyzer' and
+'elisp-scope-define-macro-analyzer', can now take a list of symbols to
+which the defined analyzer should apply (or a single symbol, as before).
+This makes it easy to specify the same analyzer for multiple functions.
+
+*** New macro 'elisp-scope-define-function-spec'.
+This macro in a declarative alternative to
+'elisp-scope-define-function-analyzer'.  It lets you tell Elisp Scope
+how to analyze the arguments of a function by declaring the
+specification of each argument, rather than implementing an analyzer
+function as you would with 'elisp-scope-define-function-analyzer'.
+
++++
+** New variable 'display-buffer-default-alist'.
+Lisp programs may let-bind this variable to specify conditional actions
+for nested 'display-buffer' calls.
+
 
 * Changes in Emacs 32.1 on Non-Free Operating Systems
+
++++
+*** Emacs has been updated to target Android 17.
+Emacs has been updated to require the SDK for Android 17 (API level 37)
+during compilation, and to target that version of the operating system.
+A corollary of this change is that on Android 17 and later systems, it
+must be granted permission to access nearby devices from Settings in
+order to establish network connections to hosts on local networks.
 
 
 ----------------------------------------------------------------------

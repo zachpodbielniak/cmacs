@@ -1982,12 +1982,12 @@ See also `multi-occur'."
         (source-buffer-default-directory default-directory))
     ;; Handle the case where one of the buffers we're searching is the
     ;; output buffer.  Just rename it.
-    (when (member buf-name
-                  ;; FIXME: Use cl-exists.
-                  (mapcar
-                   (lambda (boo)
-                     (buffer-name (if (overlayp boo) (overlay-buffer boo) boo)))
-                   active-bufs))
+    (when (seq-some (lambda (boo)
+                      (equal buf-name
+                             (buffer-name (if (overlayp boo)
+                                              (overlay-buffer boo)
+                                            boo))))
+                    active-bufs)
       (with-current-buffer buf-name
 	(rename-uniquely)))
 
@@ -2062,7 +2062,7 @@ See also `multi-occur'."
 	  (setq occur-revert-arguments (list regexp nlines bufs))
           (if (= count 0)
               (kill-buffer occur-buf)
-            (display-buffer occur-buf)
+            (display-buffer occur-buf '(nil (category . occur)))
             (when occur--final-pos
               (set-window-point
                (get-buffer-window occur-buf 'all-frames)

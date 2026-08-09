@@ -78,14 +78,19 @@ disambiguation, we use the term @dfn{window-system window} when we mean
 the window-system window corresponding to an Emacs frame.
 
 @cindex tiled windows
+@cindex window layout
   Unlike X windows, Emacs windows are @dfn{tiled}; they never overlap
 within the area of their frame.  When a window is created, resized, or
 deleted, the change in window space is taken from or given to other
 windows on the same frame, so that the total area of the frame is
-unchanged.
+unchanged.  The @dfn{window layout} of a frame is the result of all
+tiling operations for that frame.
 
+@cindex window object
+@cindex window identity
 In Emacs Lisp, windows are represented by a special Lisp object type
-(@pxref{Window Type}).
+(@pxref{Window Type}).  Two windows are identical if and only if they are
+represented by the same Lisp object.
 
 @defun windowp object
 This function returns @code{t} if @var{object} is a window (whether or
@@ -2020,6 +2025,13 @@ combination.
 The default is @code{nil}.  Other values are reserved for future use.  A
 specific split operation may ignore the value of this variable if it is
 affected by a non-@code{nil} value of @code{window-combination-limit}.
+
+If you plan to use a sequence of @code{split-window} calls to produce a
+specific, predefined layout of windows on a frame, bind this variable
+temporarily to @code{nil}.  @code{window-state-put} (@pxref{Window
+Configurations}) and the functions which change window layouts
+(@pxref{Changing Window Layouts}) do that in order to restore a previous
+or systematically changed layout of a frame.
 @end defopt
 
   To illustrate the effect of @code{window-combination-resize}, consider
@@ -2286,7 +2298,10 @@ windows by deleting them first and resurrecting them
 (@pxref{Resurrecting Windows}) in their new locations afterwards.  No
 window gets lost and no window is added or duplicated.  Where possible,
 these commands try to preserve the relative size of windows as well as
-all other non-geometric properties including parameters.
+all other non-geometric properties including parameters.  These commands
+will signal an error if windows chosen to transpose or rotate are atomic
+or of fixed size.  The option @code{transpose-dedicated-windows} below
+decides whether dedicated windows may be transposed or rotated.
 
    The @var{window} argument of all functions described in this section
 must specify a valid parent window (@pxref{Windows and Frames}).  If it
@@ -2297,9 +2312,9 @@ below, we shall always assume that the windows displayed constitute
 their frame's main window and the @var{window} argument is @code{nil}
 unless stated otherwise.
 
-   The first two commands rotate a window layout either clockwise or
-counterclockwise.
 @cindex rotate window layout
+   The first two commands rotate an entire window layout either
+clockwise or counterclockwise.
 
 @deffn Command window-layout-rotate-clockwise &optional window
 This command rotates the window layout clockwise by 90 degrees.  Imagine
@@ -2339,9 +2354,10 @@ layout in the opposite direction as demonstrated in the example below.
 @end smallexample
 @end deffn
 
-The next two commands @sc{flip} the window layout---rotate it around an
-imaginary horizontal or vertical axis.
 @cindex flip window layout
+The next two commands @sc{flip} the window layout---rotate it around an
+imaginary horizontal or vertical axis.  If the number of windows to be
+flipped is odd, the window in the middle remains in its original place.
 
 @deffn Command window-layout-flip-topdown &optional window
 This command flips windows such that windows on the bottom become
@@ -2363,7 +2379,7 @@ windows on the top and vice-versa as in the example below.
 
 @deffn Command window-layout-flip-leftright &optional window
 This command rearranges window in a way that the windows on the right
-become the window on the left, and vice-versa.
+become the windows on the left, and vice-versa.
 
 @smallexample
 @group
@@ -2401,16 +2417,20 @@ becomes a vertical split and vice versa.
 @end smallexample
 @end deffn
 
-The final two commands can be used to rotate windows within the existing
-layout.  They are like the commands that rotate the layout but leave the
-underlying structure of the layout unchanged.  What actually changes are
-the positions of windows within the existing layout.
 @cindex rotating windows
+The final two commands can be used to @dfn{rotate} windows within the
+existing layout.  They are like the commands that rotate the layout but
+leave the underlying structure of the layout unchanged.  What actually
+changes are the positions of windows within the existing layout.  This
+happens in a way that the space formerly occupied by any window will be
+occupied by the window preceding (following if @var{reverse} is
+non-@code{nil}) it in the cyclic ordering of windows (@pxref{Cyclic
+Window Ordering}) on @var{window}'s frame.
 
 @deffn Command rotate-windows &optional window reverse
-This rotate windows under @var{window} in cyclic ordering.  The optional
-argument @var{reverse} means to rotate windows backward, in reverse
-cyclic order.
+This command rotates @var{window}'c child windows in cyclic ordering.
+The optional argument @var{reverse} means to rotate windows backwards,
+in reverse cyclic order.
 
 @smallexample
 @group
@@ -2427,7 +2447,7 @@ cyclic order.
 @end deffn
 
 @deffn Command rotate-windows-back &optional window
-This command rotates windows under @var{window} backward in cyclic
+This command rotates @var{window}'s child windows backwards in cyclic
 ordering.
 
 @smallexample
@@ -2444,13 +2464,22 @@ ordering.
 @end smallexample
 @end deffn
 
+All commands described above are subject to the following option.
+
+@defopt transpose-dedicated-windows
+If this is @code{nil}, the functions described in this section will
+report an error when they encounter a dedicated window (@pxref{Dedicated
+Windows}).  If this is @code{t}, they handle dedicated windows like
+non-dedicated ones.
+@end defopt
+
 The last two commands are subject to the following option.
 
 @defopt rotate-windows-change-selected
 If this is @code{nil}, the selected window will remain unaffected by
 @code{rotate-windows} and @code{rotate-windows-back}.  Otherwise, the
 selected window will change to the window that appears at the location
-of the selected window before any of these commands were invoked.
+of the window selected before any of these commands were invoked.
 @end defopt
 
 
@@ -3101,6 +3130,9 @@ The variable @code{display-buffer-overriding-action}.
 The user option @code{display-buffer-alist}.
 
 @item
+The variable @code{display-buffer-default-alist}.
+
+@item
 The @var{action} argument.
 
 @item
@@ -3162,6 +3194,13 @@ treated with the highest priority by @code{display-buffer}.  The
 default value is an empty display action, i.e., @w{@code{(nil . nil)}}.
 @end defvar
 
+@defvar display-buffer-default-alist
+The value of this variable is an alist mapping conditions to display
+actions (@pxref{display-buffer-alist}).  Lisp programs may let-bind it
+to specify conditional actions for nested @code{display-buffer} calls.
+@end defvar
+
+@anchor{display-buffer-alist}
 @defopt display-buffer-alist
 The value of this option is an alist mapping conditions to display
 actions.  Each condition is passed to @code{buffer-match-p}
@@ -3174,10 +3213,10 @@ use @code{derived-mode} or @code{major-mode} as condition,
 @code{display-buffer} is called before the major mode of the buffer is
 set.
 
-If the caller of @code{display-buffer} passes a category as a symbol
-in its @var{action} argument, then you can use the same category in
-@code{display-buffer-alist} to match buffers with different names,
-for example:
+If the caller of @code{display-buffer} passes a category as a symbol in
+its @var{action} argument, then you can use the same category in
+@code{display-buffer-alist} and @code{display-buffer-default-alist} to
+match buffers with different names, for example:
 
 @example
 @group
@@ -3195,10 +3234,10 @@ for example:
 @xref{Buffer List, @code{buffer-match-p}}.
 
 Regardless of the displayed buffer's name the caller defines a category
-as a symbol @code{comint}.  Then @code{display-buffer-alist} matches
-this category for all buffers displayed with the same category.
-This avoids the need to construct a complex regular expression
-that matches a buffer name.
+as a symbol @code{comint}.  Then @code{display-buffer-alist} and
+@code{display-buffer-default-alist} match this category for all buffers
+displayed with the same category.  This avoids the need to construct a
+complex regular expression that matches a buffer name.
 
 You can also match on the command now being executed.  This is useful
 when different commands display buffers with the same name, but you want
@@ -4048,13 +4087,15 @@ windows were selected afterwards within this command.
 @vindex category@r{, a buffer display action alist entry}
 @item category
 If the caller of @code{display-buffer} passes an alist entry
-@w{@code{(category . @var{symbol})}} in its @var{action} argument, then you
-can match the displayed buffer by using the same category symbol in the
-condition part of @code{display-buffer-alist} entries.  @xref{Buffer
-List, @code{buffer-match-p}}.  Thus, if a Lisp program uses a particular
+@w{@code{(category . @var{symbol})}} in its @var{action} argument, then
+you can match the displayed buffer by using the same category symbol in
+the condition part of @code{display-buffer-alist} and
+@code{display-buffer-default-alist} entries.  @xref{Buffer List,
+@code{buffer-match-p}}.  Thus, if a Lisp program uses a particular
 @var{symbol} as the category when calling @code{display-buffer}, users
 can customize how these buffers will be displayed by including such an
-entry in @code{display-buffer-alist}.
+entry in @code{display-buffer-alist}.  Programs can let-bind
+@code{display-buffer-default-alist} to achieve the same effect.
 
 @vindex tab-name@r{, a buffer display action alist entry}
 @item tab-name
@@ -4456,10 +4497,42 @@ displaying @file{*foo*} at the bottom of the frame.
 the window already showing @file{*foo*} since both functions supplied
 by the @var{action} argument try to reuse such a window first.
 
-   By setting the @var{action} argument, an application effectively
+   There are cases, however, where Lisp programs want to modify the
+default behavior of a @code{display-buffer} call hidden behind another
+function.  In those cases, setting the @var{action} argument is not an
+option.  Fortunately, the @code{display-buffer-default-alist} variable
+can be used to specify a list of conditional default actions.  Consider
+the following example:
+
+@example
+@group
+(defun foo (buffer)
+   (display-buffer
+    buffer
+    '((display-buffer-below-selected display-buffer-at-bottom))))
+
+(defun bar ()
+   (let ((display-buffer-default-alist
+         '(("\\*bar\\*" (display-buffer-pop-up-frame)))))
+     (foo (get-buffer-create "*bar*"))))
+
+(defun baz ()
+   (let ((display-buffer-default-alist
+         '(("\\*baz\\*" (display-buffer-same-window)))))
+     (foo (get-buffer-create "*baz*"))))
+@end group
+@end example
+
+   Here, @code{foo} calls @code{display-buffer} with a specific
+@var{action}.  Let-binding @code{display-buffer-default-alist} allows
+the functions @code{bar} and @code{baz} to specify their own action
+functions.
+
+   By setting the @var{action} argument and/or the
+@code{display-buffer-default-alist} variable, an application effectively
 overrules any customization of @code{display-buffer-base-action}.  Our
-user can now either accept the choice of the application, or redouble
-by customizing the option @code{display-buffer-alist} as follows:
+user can now either accept the choice of the application, or redouble by
+customizing the option @code{display-buffer-alist} as follows:
 
 @example
 @group
@@ -4934,6 +5007,11 @@ and @var{window-pos} is a marker that gives the window point position
 The list is ordered so that earlier elements correspond to more
 recently-shown buffers, and the first element usually corresponds to the
 buffer most recently removed from the window.
+
+As a rule, elements are removed from this list when their buffer gets
+killed.  In rare cases, however, elements may have survived the killing
+of their buffer.  It's a good idea therefore to always check buffers for
+liveness when processing the return value of this function.
 @end defun
 
 @defun set-window-prev-buffers window prev-buffers
@@ -7263,11 +7341,16 @@ and/or two columns.
 In the context of window states, the @dfn{clone of a window} is a window
 that has the same decorations and contents as the window whose state was
 used to produce it, but is actually represented by another window
-object.  Operating on the original or the clone of a window does not
-affect the other in any way.  Note that while @code{window-state-get}
-clones existing windows, these clones are not yet valid windows.  They
-become valid only after @code{window-state-put} has put them into a live
-frame.
+object.  Hence it does not have the same identity as the original
+window.  Operating on the original or the clone of a window does not
+affect the other in any way.
+
+Note that while @code{set-window-configuration} always restores the
+identity of the windows it puts back into their frame,
+@code{window-state-put} never does that.  Note also that while
+@code{window-state-get} clones existing windows, these clones are not
+yet valid windows.  They become valid only after @code{window-state-put}
+has put them into a live frame.
 
 By default, @code{set-window-configuration} and @code{window-state-put}
 may delete a window from the restored configuration or state when they

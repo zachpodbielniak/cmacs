@@ -2909,8 +2909,12 @@ read_char (int commandflag, Lisp_Object map,
      because the recursive call of read_char in read_char_minibuf_menu_prompt
      does not pass on any keymaps.  */
 
+  /* FIXME: If the keymap is *not* a menu, this fails miserably,
+     signaling (error "Empty menu") instead!  */
   if (KEYMAPP (map) && INTERACTIVE
       && !NILP (prev_event)
+      /* FIXME: These conditions are re-tested redundantly inside
+         read_char_x_menu_prompt!  */
       && EVENT_HAS_PARAMETERS (prev_event)
       && !EQ (XCAR (prev_event), Qmenu_bar)
       && !EQ (XCAR (prev_event), Qtab_bar)
@@ -2919,6 +2923,9 @@ read_char (int commandflag, Lisp_Object map,
       && !CONSP (Vunread_command_events))
     {
       c = read_char_x_menu_prompt (map, prev_event, used_mouse_menu);
+      /* FIXME: read_char_x_menu_prompt can sometimes do nothing and just
+         return nil, should we really stop the idle timer and jump to `exit`
+         in that case?  */
 
       /* Now that we have read an event, Emacs is not idle.  */
       if (!end_time)
@@ -3103,7 +3110,7 @@ read_char (int commandflag, Lisp_Object map,
      and loop around to read another event.  */
   save = Vquit_flag;
   Vquit_flag = Qnil;
-  tem = access_keymap (get_keymap (Vspecial_event_map, 0, 1), c, 0, 0, 1);
+  tem = access_keymap (get_keymap (Vspecial_event_map, 0, 1), c, 0, 0);
   Vquit_flag = save;
 
   if (!NILP (tem))
@@ -4029,14 +4036,10 @@ kbd_buffer_get_event (KBOARD **kbp,
 {
   Lisp_Object obj, str;
 #ifdef HAVE_X_WINDOWS
-  bool had_pending_selection_requests;
-
-  had_pending_selection_requests = false;
+  bool had_pending_selection_requests = false;
 #endif
 #ifdef HAVE_TEXT_CONVERSION
-  bool had_pending_conversion_events;
-
-  had_pending_conversion_events = false;
+  bool had_pending_conversion_events = false;
 #endif
 
   *event_frame = NULL;
@@ -8718,7 +8721,7 @@ menu_bar_items (Lisp_Object old)
   for (mapno = nmaps - 1; mapno >= 0; mapno--)
     if (!NILP (maps[mapno]))
       {
-	def = get_keymap (access_keymap (maps[mapno], Qmenu_bar, 1, 0, 1),
+	def = get_keymap (access_keymap (maps[mapno], Qmenu_bar, 1, 0),
 			  0, 1);
 	if (CONSP (def))
 	  {
@@ -9276,7 +9279,7 @@ tab_bar_items (Lisp_Object reuse, int *nitems)
       {
 	Lisp_Object keymap;
 
-	keymap = get_keymap (access_keymap (maps[i], Qtab_bar, 1, 0, 1), 0, 1);
+	keymap = get_keymap (access_keymap (maps[i], Qtab_bar, 1, 0), 0, 1);
 	if (CONSP (keymap))
 	  map_keymap (keymap, process_tab_bar_item, Qnil, NULL, 1);
       }
@@ -9660,7 +9663,7 @@ tool_bar_items (Lisp_Object reuse, int *nitems)
       {
 	Lisp_Object keymap;
 
-	keymap = get_keymap (access_keymap (maps[i], Qtool_bar, 1, 0, 1), 0, 1);
+	keymap = get_keymap (access_keymap (maps[i], Qtool_bar, 1, 0), 0, 1);
 	if (CONSP (keymap))
 	  map_keymap (keymap, process_tool_bar_item, Qnil, NULL, 1);
       }
@@ -10155,7 +10158,7 @@ static Lisp_Object
 follow_key (Lisp_Object keymap, Lisp_Object key)
 {
   return access_keymap (get_keymap (keymap, 0, 1),
-			key, 1, 0, 1);
+			key, 1, 0);
 }
 
 static Lisp_Object
@@ -10435,7 +10438,7 @@ access_keymap_keyremap (Lisp_Object map, Lisp_Object key, Lisp_Object prompt,
   Lisp_Object next;
   specpdl_ref count;
 
-  next = access_keymap (map, key, 1, 0, 1);
+  next = access_keymap (map, key, 1, 0);
 
   /* Handle a symbol whose function definition is a keymap
      or an array.  */
@@ -12098,10 +12101,6 @@ Only 'input_event' slots KIND and ARG are set.  */)
 {
   /* Check, that it is a special event.  */
   CHECK_CONS (event);
-  if (NILP (access_keymap
-	    (get_keymap (Vspecial_event_map, 0, 1), event, 0, 0, 1)))
-    signal_error ("Invalid event kind", XCAR (event));
-
   /* Construct an input event.  */
   struct input_event ie;
   EVENT_INIT (ie);
@@ -12137,7 +12136,7 @@ Only 'input_event' slots KIND and ARG are set.  */)
      : EQ (XCAR (event), Qfocus_out) ? FOCUS_OUT_EVENT
      : EQ (XCAR (event), Qmove_frame) ? MOVE_FRAME_EVENT
      : EQ (XCAR (event), Qsleep_event) ? SLEEP_EVENT
-     : NO_EVENT);
+     : (signal_error ("Invalid special event kind", XCAR (event)), NO_EVENT));
   ie.frame_or_window = Qnil;
   ie.arg = CDR (event);
 
@@ -13097,6 +13096,29 @@ The `posn-' functions access elements of such lists.  */)
   return tem;
 }
 
+DEFUN ("posn-point", Fposn_point, Sposn_point, 1, 1, 0,
+       doc: /* Return the buffer location in POSITION.
+POSITION should be a list of the form returned by the `event-start'
+and `event-end' functions.
+Return nil if POSITION does not correspond to any buffer location (e.g.,
+a click on a scroll bar).  */)
+  (Lisp_Object position)
+{
+  Lisp_Object posn = POSN_BUFFER_POSN (position);
+  if (!NILP (posn))
+    return posn;
+  /* POSITION is a short position list (such as returned by
+     `event--posn-at-point') without a POSN_BUFFER_POSN; fall back to
+     the location in POSN_POSN.  */
+  posn = POSN_POSN (position);
+  if (CONSP (posn))
+    return XCAR (posn);
+  /* Apparently, POSN can also be `vertical-scroll-bar' (bug#13979).  */
+  if (FIXNUMP (posn))
+    return posn;
+  return Qnil;
+}
+
 /* Set up a new kboard object with reasonable initial values.
    TYPE is a window system for which this keyboard is used.  */
 
@@ -13732,6 +13754,7 @@ This is effective only in `noninteractive' sessions.  */);
   defsubr (&Scurrent_input_mode);
   defsubr (&Sposn_at_point);
   defsubr (&Sposn_at_x_y);
+  defsubr (&Sposn_point);
 
   defsubr (&Sread_char);
   defsubr (&Sread_char_exclusive);

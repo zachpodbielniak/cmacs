@@ -229,6 +229,19 @@ of[ \t]+\"?\\([a-zA-Z]?:?[^\":\n]+\\)\"?:" 3 2 nil (1))
     (aix
      " in line \\([0-9]+\\) of file \\([^ \n]+[^. \n]\\)\\.? " 2 1)
 
+    (ansible-fatal
+     "^fatal: .*: FAILED!" nil nil nil 2 0 (0 compilation-error-face))
+    (ansible-error
+     "^\\[ERROR\\]:"
+     nil nil nil 2 0 (0 compilation-error-face))
+    (ansible-warning
+     "^\\[\\(?:DEPRECATION \\)?WARNING\\]:"
+     nil nil nil 1 0 (0 compilation-warning-face))
+    (ansible-included "^included: \\([^[:space:]]+\\)" 1 nil nil 0 1)
+    (ansible-origin
+     "^Origin: \\([^[:space:]]+\\):\\([[:digit:]]+\\):\\([[:digit:]]+\\)"
+     1 2 3 0 1)
+
     ;; Checkstyle task may report its own severity level: "[checkstyle] [ERROR] ..."
     ;; (see AuditEventDefaultFormatter.java in checkstyle sources).
     (ant
@@ -2838,7 +2851,7 @@ Optional arg DIFFERENT-FILE, if non-nil, means find next error for a
 file that is different from the current one.
 Optional arg PT, if non-nil, specifies the value of point to start
 looking for the next message.
-In interacvtive invocations, DIFFERENT-FILE and PT are always nil."
+In interactive invocations, DIFFERENT-FILE and PT are always nil."
   (interactive "p")
   (or (compilation-buffer-p (current-buffer))
       (error "Not in a compilation buffer"))
