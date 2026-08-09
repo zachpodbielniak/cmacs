@@ -1390,3 +1390,77 @@ in one tree resolved every relative path -- and ran every shell command
 (provide 'cmacs-brigade-run-tests)
 
 ;;; cmacs-brigade-run-tests.el ends here
+
+(ert-deftest cmacs-brigade-dashboard-render-follows-the-task-not-the-line ()
+  "Point stays on the same task when a redraw renumbers the rows.
+
+Rows are sorted with live tasks first, so a task changing state moves the
+others under the cursor.  Restoring by line number put the cursor on
+whatever had taken that row -- and then a command acted on the wrong
+task, or on none."
+  (skip-unless (and (featurep 'cmacs-brigade-dashboard)
+                    (fboundp 'cmacs-brigade-task-adopt)))
+  (let ((a "dash-follow-a") (b "dash-follow-b"))
+    (unwind-protect
+        (progn
+          (cmacs-brigade-task-adopt a "p.org" "general" "Aaa")
+          (cmacs-brigade-task-adopt b "p.org" "general" "Bbb")
+          (with-current-buffer (get-buffer-create "*brigade*")
+            (cmacs-brigade-dashboard-mode)
+            (cmacs-brigade-dashboard--render)
+            (goto-char (cmacs-brigade-dashboard--pos-of-id b))
+            (should (equal b (plist-get (cmacs-brigade-dashboard--record-at-point)
+                                        :id)))
+            ;; Make the other one live, which sorts it above and shifts
+            ;; every row below it.
+            (cmacs-brigade-task-transition a 'queued)
+            (cmacs-brigade-task-transition a 'starting)
+            (cmacs-brigade-task-transition a 'running)
+            (cmacs-brigade-dashboard--render)
+            (should (equal b (plist-get (cmacs-brigade-dashboard--record-at-point)
+                                        :id)))))
+      (ignore-errors (cmacs-brigade-task-forget a))
+      (ignore-errors (cmacs-brigade-task-forget b))
+      (when (get-buffer "*brigade*") (kill-buffer "*brigade*")))))
+
+(ert-deftest cmacs-brigade-dashboard-render-defers-under-a-prompt ()
+  "A redraw never erases the buffer while a prompt is open.
+
+The heartbeat fires every couple of seconds regardless of what you are
+doing.  Redrawing under an open minibuffer moved point out from under the
+command about to act on it, so answering a prompt ended in \"No task on
+this line\"."
+  (skip-unless (featurep 'cmacs-brigade-dashboard))
+  (let ((id "dash-defer-1"))
+    (unwind-protect
+        (progn
+          (cmacs-brigade-task-adopt id "p.org" "general" "Ccc")
+          (with-current-buffer (get-buffer-create "*brigade*")
+            (cmacs-brigade-dashboard-mode)
+            (cmacs-brigade-dashboard--render)
+            (let ((before (buffer-string)))
+              (cl-letf (((symbol-function 'minibuffer-window-active-p)
+                         (lambda (&rest _) t)))
+                (cmacs-brigade-task-forget id)
+                (cmacs-brigade-dashboard--render))
+              ;; Untouched: the row for a task that no longer exists is
+              ;; still there, because nothing was allowed to redraw.
+              (should (equal before (buffer-string))))))
+      (ignore-errors (cmacs-brigade-task-forget id))
+      (when (get-buffer "*brigade*") (kill-buffer "*brigade*")))))
+
+(ert-deftest cmacs-brigade-dashboard-send-acts-on-the-task-it-asked-about ()
+  "The id is carried from the prompt, not re-read from point afterwards."
+  (skip-unless (and (featurep 'cmacs-brigade-dashboard)
+                    (fboundp 'cmacs-brigade-mailbox-send)))
+  (let ((sent nil))
+    (cl-letf (((symbol-function 'cmacs-brigade-mailbox-send)
+               (lambda (id text &rest _) (push (cons id text) sent)))
+              ((symbol-function 'cmacs-brigade-mailbox-count) (lambda (_) 1))
+              ((symbol-function 'cmacs-brigade-dashboard-refresh) #'ignore)
+              ;; Point is nowhere useful, as it would be after the rows
+              ;; moved while the prompt was open.
+              ((symbol-function 'cmacs-brigade-dashboard--record-or-error)
+               (lambda () (error "should not be consulted"))))
+      (cmacs-brigade-dashboard-send "carry on" "explicit-id")
+      (should (equal '(("explicit-id" . "carry on")) sent)))))

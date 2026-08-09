@@ -194,15 +194,45 @@ an absolute position sidesteps the question."
         (push text parts)))
     (apply #'concat (nreverse parts))))
 
-(defun cmacs-brigade-dashboard--render ()
-  "Redraw the dashboard, keeping the cursor where it was."
+(defun cmacs-brigade-dashboard--render (&optional force)
+  "Redraw the dashboard, keeping the cursor on the task it was on.
+
+FORCE draws even with a prompt open, for the one caller that must: the
+command that opens the dashboard, which would otherwise be able to show
+an empty buffer if it were reached from a context that still had a
+minibuffer up.
+
+Two things this has to get right, and used to get wrong.
+
+It must not redraw while a prompt is open.  The heartbeat fires every
+couple of seconds whether or not you are in the middle of something, and
+erasing the buffer under an open minibuffer moved point out from under
+the command that was about to act on it -- so answering a prompt ended in
+\"No task on this line\".  The redraw is deferred instead; nothing is
+lost, because the task list is re-read from scratch each time anyway.
+
+It must follow the *task*, not the line number.  Rows are sorted with
+live tasks first, so a task changing state renumbers the lines under you;
+and the buffer's own `point' is stale whenever the dashboard is visible
+but not the selected window, which is exactly the case while you are
+typing at a prompt.  Restoring line N from a stale point is what made the
+cursor jump back to the top on its own."
   (let ((buf (get-buffer "*brigade*")))
-    (when (buffer-live-p buf)
+    (when (and (buffer-live-p buf)
+               (or force
+                   (not (minibuffer-window-active-p (minibuffer-window)))))
       (with-current-buffer buf
-        (let ((inhibit-read-only t)
-              (line (line-number-at-pos))
-              (records (and (fboundp 'cmacs-brigade-task-list)
-                            (cmacs-brigade-task-list))))
+        (let* ((inhibit-read-only t)
+               (line (line-number-at-pos))
+               ;; Per window, because each shows its own point and the
+               ;; buffer's is only one of them.
+               (saved (mapcar (lambda (w)
+                                (cons w (cmacs-brigade-dashboard--id-at
+                                         (window-point w))))
+                              (get-buffer-window-list buf nil t)))
+               (here (cmacs-brigade-dashboard--id-at (point)))
+               (records (and (fboundp 'cmacs-brigade-task-list)
+                             (cmacs-brigade-task-list))))
           (erase-buffer)
           (let ((c (cmacs-brigade-dashboard--columns)))
             (cmacs-brigade-dashboard--insert-header records)
@@ -224,8 +254,17 @@ an absolute position sidesteps the question."
             (insert (make-string (plist-get c :total) ?─) "\n"))
           (cmacs-brigade-dashboard--insert-panels)
           (insert "\n" (cmacs-brigade-dashboard--hints) "\n")
-          (goto-char (point-min))
-          (forward-line (1- line)))))))
+          ;; The same task if it is still there, else the line it was on.
+          (goto-char (or (cmacs-brigade-dashboard--pos-of-id here)
+                         (progn (goto-char (point-min))
+                                (forward-line (1- line))
+                                (point))))
+          (dolist (cell saved)
+            (when (window-live-p (car cell))
+              (set-window-point
+               (car cell)
+               (or (cmacs-brigade-dashboard--pos-of-id (cdr cell))
+                   (point))))))))))
 
 (defun cmacs-brigade-dashboard--sort (records)
   "Live tasks first, then by id, so what is happening is at the top."
@@ -404,6 +443,27 @@ a to pick another\n"
 (defun cmacs-brigade-dashboard--record-at-point ()
   (get-text-property (line-beginning-position) 'cmacs-brigade-record))
 
+(defun cmacs-brigade-dashboard--id-at (pos)
+  "The task id of the row containing POS, or nil."
+  (when (and pos (<= (point-min) pos) (<= pos (point-max)))
+    (let ((r (get-text-property (save-excursion (goto-char pos)
+                                                (line-beginning-position))
+                                'cmacs-brigade-record)))
+      (and r (plist-get r :id)))))
+
+(defun cmacs-brigade-dashboard--pos-of-id (id)
+  "Where ID's row begins after a redraw, or nil."
+  (when id
+    (save-excursion
+      (goto-char (point-min))
+      (catch 'found
+        (while (not (eobp))
+          (let ((r (get-text-property (point) 'cmacs-brigade-record)))
+            (when (and r (equal id (plist-get r :id)))
+              (throw 'found (point))))
+          (forward-line 1))
+        nil))))
+
 
 ;;;; Commands
 ;;
@@ -566,30 +626,32 @@ than the last reply on its own."
   (let ((r (cmacs-brigade-dashboard--record-or-error)))
     (cmacs-brigade-output-show (plist-get r :id))))
 
-(defun cmacs-brigade-dashboard-send (message)
-  "Say something more to the task on this line.
+(defun cmacs-brigade-dashboard-send (message &optional id)
+  "Say something more to task ID, or to the one on this line.
 
 Works whatever state it is in.  A running agent is told when its current
 turn ends; a finished one starts again with the same session, so it still
 remembers everything from before rather than beginning afresh."
-  ;; The task is resolved *before* the prompt, so pressing this on a
-  ;; header line refuses immediately instead of taking a message and then
-  ;; discarding it.  Reading first and checking afterwards is how you
-  ;; lose what somebody typed, which is the one outcome worth designing
-  ;; against here.
+  ;; The task is resolved *before* the prompt and then carried by id, not
+  ;; looked up again afterwards.  Both halves matter.  Resolving first
+  ;; means pressing this on a header line refuses immediately rather than
+  ;; taking a message and discarding it.  Carrying the id means the
+  ;; command still acts on the task you chose even if the rows move while
+  ;; you are typing -- which they do: agents finish, the sort puts live
+  ;; ones first, and the row under point becomes a different task.
   (interactive
    (let ((r (cmacs-brigade-dashboard--record-or-error)))
      (list (read-string (format "Message to %s: "
-                                (or (plist-get r :title) (plist-get r :id)))))))
-  (let ((r (cmacs-brigade-dashboard--record-or-error)))
+                                (or (plist-get r :title) (plist-get r :id))))
+           (plist-get r :id))))
+  (let ((id (or id (plist-get (cmacs-brigade-dashboard--record-or-error) :id))))
     (when (string-empty-p (string-trim message))
       (user-error "Nothing to send"))
     (condition-case err
         (progn
-          (cmacs-brigade-mailbox-send (plist-get r :id) message "human")
+          (cmacs-brigade-mailbox-send id message "human")
           (message "cmacs-brigade: queued for %s (%d waiting)"
-                   (plist-get r :id)
-                   (cmacs-brigade-mailbox-count (plist-get r :id))))
+                   id (cmacs-brigade-mailbox-count id)))
       (error (user-error "cmacs-brigade: %s" (error-message-string err))))
     (cmacs-brigade-dashboard-refresh)))
 
@@ -843,7 +905,7 @@ frame and gives your layout back on `q'."
     (when (fboundp 'cmacs-brigade-plan-restore)
       (with-demoted-errors "cmacs-brigade: plan restore: %S"
         (cmacs-brigade-plan-restore)))
-    (cmacs-brigade-dashboard--render)
+    (cmacs-brigade-dashboard--render 'force)
     (pcase cmacs-brigade-dashboard-display
       ('full-frame
        (pop-to-buffer-same-window buf)
