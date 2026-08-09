@@ -372,3 +372,208 @@ them is the most destructive thing this code could do."
 (provide 'cmacs-brigade-plan-tests)
 
 ;;; cmacs-brigade-plan-tests.el ends here
+
+
+;;;; Surviving a restart
+;;
+;; The runtime task table is a C hash that dies with the process; the
+;; plans are org files that do not.  Nothing used to go looking for them,
+;; so a fresh cmacs showed an empty dashboard while every task ever run
+;; sat on disk unmentioned.
+
+(defmacro cmacs-brigade-plan-tests--with-plan-dir (files &rest body)
+  "Run BODY with `cmacs-brigade-plan-directory' holding FILES.
+FILES is a list of (NAME . TEXT)."
+  (declare (indent 1))
+  `(let* ((dir (make-temp-file "cmacs-brigade-plans" t))
+          (cmacs-brigade-plan-directory dir)
+          (cmacs-brigade-plan--restored nil))
+     (unwind-protect
+         (progn
+           (dolist (f ,files)
+             (with-temp-file (expand-file-name (car f) dir)
+               (insert (cdr f))))
+           ,@body)
+       (dolist (b (buffer-list))
+         (when (and (buffer-file-name b)
+                    (string-prefix-p dir (buffer-file-name b)))
+           (with-current-buffer b (set-buffer-modified-p nil))
+           (kill-buffer b)))
+       (delete-directory dir t))))
+
+(defconst cmacs-brigade-plan-tests--finished-plan
+  (concat "#+title: Old work\n"
+          "#+TODO: TODO(t) NEXT(n) INPROGRESS(i) WAIT(w) HOLD(h) | \
+DONE(d) FAILED(f) CANCELLED(c)\n\n"
+          "* DONE Audit the config loader  :brigade:\n"
+          "  :PROPERTIES:\n"
+          "  :ID:  plan-restore-done\n"
+          "  :AGENT: general\n"
+          "  :BRIGADE-STATE: done\n"
+          "  :BRIGADE-TURNS: 4\n"
+          "  :BRIGADE-TOKENS: 1200/340\n"
+          "  :BRIGADE-COST: 0.0250\n"
+          "  :END:\n"
+          "  Go and audit it.\n\n"
+          "* INPROGRESS Was running when we quit  :brigade:\n"
+          "  :PROPERTIES:\n"
+          "  :ID:  plan-restore-live\n"
+          "  :AGENT: general\n"
+          "  :BRIGADE-STATE: running\n"
+          "  :END:\n"
+          "  Something long.\n")
+  "A plan as it looks after a run, with state written back into it.")
+
+(ert-deftest cmacs-brigade-plan-files-finds-plans-not-notes ()
+  "Only org files with a brigade-tagged headline count as plans."
+  (skip-unless (cmacs-brigade-plan-tests--available-p))
+  (cmacs-brigade-plan-tests--with-plan-dir
+      (list (cons "p.org" cmacs-brigade-plan-tests--finished-plan)
+            (cons "notes.org" "#+title: Just notes\n* A heading\nText.\n")
+            (cons "readme.txt" "not org at all\n"))
+    (let ((files (cmacs-brigade-plan-files)))
+      (should (= 1 (length files)))
+      (should (equal "p.org" (file-name-nondirectory (car files)))))))
+
+(ert-deftest cmacs-brigade-plan-restore-brings-back-state-and-figures ()
+  "A finished task returns as finished, with its counters."
+  (skip-unless (cmacs-brigade-plan-tests--available-p))
+  (cmacs-brigade-plan-tests--with-plan-dir
+      (list (cons "p.org" cmacs-brigade-plan-tests--finished-plan))
+    (unwind-protect
+        (progn
+          (should (= 2 (cmacs-brigade-plan-restore)))
+          (let ((r (cmacs-brigade-task-get "plan-restore-done")))
+            (should (eq 'done (plist-get r :state)))
+            (should (= 4 (plist-get r :turns)))
+            (should (= 1200 (plist-get r :in-tokens)))
+            (should (= 340 (plist-get r :out-tokens)))
+            ;; Dollars in the file, integer micro-dollars in the runtime.
+            (should (= 25000 (plist-get r :cost-micros)))))
+      (ignore-errors (cmacs-brigade-task-forget "plan-restore-done"))
+      (ignore-errors (cmacs-brigade-task-forget "plan-restore-live")))))
+
+(ert-deftest cmacs-brigade-plan-restore-does-not-resurrect-live-states ()
+  "A task that was running at exit comes back `interrupted'.
+
+Nothing is running -- the process died with the editor -- and presenting
+it as `running' would have the dashboard, the concurrency cap and the
+notifier all believing in an agent that is not there."
+  (skip-unless (cmacs-brigade-plan-tests--available-p))
+  (cmacs-brigade-plan-tests--with-plan-dir
+      (list (cons "p.org" cmacs-brigade-plan-tests--finished-plan))
+    (unwind-protect
+        (progn
+          (cmacs-brigade-plan-restore)
+          (should (eq 'interrupted
+                      (plist-get (cmacs-brigade-task-get "plan-restore-live")
+                                 :state))))
+      (ignore-errors (cmacs-brigade-task-forget "plan-restore-done"))
+      (ignore-errors (cmacs-brigade-task-forget "plan-restore-live")))))
+
+(ert-deftest cmacs-brigade-plan-restore-does-not-rewrite-the-keyword ()
+  "Restoring must not read DONE as a request to finish a fresh task.
+
+Before the recorded state was restored first, adoption saw a brand-new
+`draft' record, read the DONE keyword as a *command*, had it refused by
+the state machine, and rewrote the headline back to TODO -- so reopening
+cmacs destroyed the outcome the plan existed to record."
+  (skip-unless (cmacs-brigade-plan-tests--available-p))
+  (cmacs-brigade-plan-tests--with-plan-dir
+      (list (cons "p.org" cmacs-brigade-plan-tests--finished-plan))
+    (unwind-protect
+        (progn
+          (cmacs-brigade-plan-restore)
+          (with-temp-buffer
+            (insert-file-contents
+             (expand-file-name "p.org" cmacs-brigade-plan-directory))
+            (should (string-match-p "^\\* DONE Audit" (buffer-string)))))
+      (ignore-errors (cmacs-brigade-task-forget "plan-restore-done"))
+      (ignore-errors (cmacs-brigade-task-forget "plan-restore-live")))))
+
+(ert-deftest cmacs-brigade-plan-restore-runs-once-unless-forced ()
+  "Opening the dashboard repeatedly must not rescan the disk each time."
+  (skip-unless (cmacs-brigade-plan-tests--available-p))
+  (cmacs-brigade-plan-tests--with-plan-dir
+      (list (cons "p.org" cmacs-brigade-plan-tests--finished-plan))
+    (unwind-protect
+        (progn
+          (should (= 2 (cmacs-brigade-plan-restore)))
+          (should (= 0 (cmacs-brigade-plan-restore)))
+          (should (= 2 (cmacs-brigade-plan-restore t))))
+      (ignore-errors (cmacs-brigade-task-forget "plan-restore-done"))
+      (ignore-errors (cmacs-brigade-task-forget "plan-restore-live")))))
+
+(ert-deftest cmacs-brigade-plan-restore-skips-a-truncated-plan ()
+  "A plan with an unterminated drawer is skipped, and the others load.
+
+Not merely tidiness: adopting such a file does not fail, it hangs --
+somewhere inside org, writing an id into a drawer with no end.  Since
+restore runs when the brigade loads, that turned one truncated file into
+an editor that would not finish starting."
+  (skip-unless (cmacs-brigade-plan-tests--available-p))
+  (cmacs-brigade-plan-tests--with-plan-dir
+      (list (cons "bad.org" "* TODO broken  :brigade:\n  :PROPERTIES:\n  :ID:\n")
+            (cons "good.org" cmacs-brigade-plan-tests--finished-plan))
+    (unwind-protect
+        (progn
+          (should (= 1 (length (cmacs-brigade-plan-files))))
+          (cmacs-brigade-plan-restore)
+          (should (cmacs-brigade-task-get "plan-restore-done")))
+      (ignore-errors (cmacs-brigade-task-forget "plan-restore-done"))
+      (ignore-errors (cmacs-brigade-task-forget "plan-restore-live")))))
+
+(ert-deftest cmacs-brigade-plan-well-formed-detects-truncation ()
+  "The structural check accepts intact drawers and rejects a truncated one."
+  (skip-unless (cmacs-brigade-plan-tests--available-p))
+  (with-temp-buffer
+    (insert "* A\n  :PROPERTIES:\n  :ID: x\n  :END:\n* B\n  :PROPERTIES:\n  :ID: y\n  :END:\n")
+    (should (cmacs-brigade-plan--well-formed-p)))
+  (with-temp-buffer
+    (insert "* A\n  :PROPERTIES:\n  :ID: x\n  :END:\n* B\n  :PROPERTIES:\n  :ID: y\n")
+    (should-not (cmacs-brigade-plan--well-formed-p)))
+  (with-temp-buffer
+    (insert "* A with no drawer at all\n  text\n")
+    (should (cmacs-brigade-plan--well-formed-p))))
+
+(ert-deftest cmacs-brigade-plan-render-writes-runtime-state-back ()
+  "Runtime state reaches the plan file.
+
+The render machinery existed in full and had no callers, so a plan never
+learned what became of its tasks -- which is why nothing could be
+restored from one."
+  (skip-unless (cmacs-brigade-plan-tests--available-p))
+  (cmacs-brigade-plan-tests--with-plan
+      "* TODO Do the thing  :brigade:\n  :PROPERTIES:\n  :ID: render-back-1\n  :AGENT: general\n  :END:\n  Body.\n"
+    (unwind-protect
+        (progn
+          (cmacs-brigade-plan-adopt)
+          (cmacs-brigade-task-transition "render-back-1" 'queued)
+          (cmacs-brigade-plan-render
+           (buffer-file-name)
+           (list (cmacs-brigade-task-get "render-back-1")))
+          ;; From the headline, not from `point-min': that is the
+          ;; `#+title:' line, which is outside any entry, and
+          ;; `org-entry-get' there answers about the file rather than
+          ;; the task.
+          (save-excursion
+            (goto-char (point-min))
+            (re-search-forward "^\\* ")
+            (should (equal "queued" (org-entry-get nil "BRIGADE-STATE")))
+            (should (equal "0/0" (org-entry-get nil "BRIGADE-TOKENS")))
+            (should (equal "NEXT" (org-get-todo-state)))))
+      (ignore-errors (cmacs-brigade-task-forget "render-back-1")))))
+
+(ert-deftest cmacs-brigade-plan-transition-queues-a-render ()
+  "Transitioning a task asks for its plan to be updated."
+  (skip-unless (cmacs-brigade-plan-tests--available-p))
+  (let ((seen nil))
+    (cl-letf (((symbol-function 'cmacs-brigade-plan-queue-render)
+               (lambda (plan records) (push (cons plan records) seen))))
+      (cmacs-brigade-task-adopt "queue-render-1" "some-plan.org" "general" "t")
+      (unwind-protect
+          (progn
+            (cmacs-brigade-task-transition "queue-render-1" 'queued)
+            (should seen)
+            (should (equal "some-plan.org" (car (car seen)))))
+        (ignore-errors (cmacs-brigade-task-forget "queue-render-1"))))))

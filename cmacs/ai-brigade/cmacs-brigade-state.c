@@ -274,10 +274,17 @@ AGENT names the agent the task will run under and TITLE is the headline,
 kept so a dashboard can name a task without reopening its plan.  An
 existing record is returned with those refreshed but its runtime state
 untouched: adopting is how the org side announces "this task exists", not
-how it sets runtime state, which it may not touch.  */)
+how it sets runtime state, which it may not touch.
+
+The returned plist carries `:created' non-nil when this call is what
+brought the record into being.  The org side needs to tell the two apart:
+a record it just created has no runtime history to protect, so the
+state recorded in the plan file may be restored into it, while an
+existing one already knows more than the file does.  */)
   (Lisp_Object id, Lisp_Object plan, Lisp_Object agent, Lisp_Object title)
 {
   CmacsBrigadeTask *t;
+  bool created = false;
 
   CHECK_STRING (id);
   CHECK_STRING (plan);
@@ -287,6 +294,7 @@ how it sets runtime state, which it may not touch.  */)
   t = g_hash_table_lookup (cmacs_brigade__tasks, SSDATA (id));
   if (t == NULL)
     {
+      created = true;
       t = g_new0 (CmacsBrigadeTask, 1);
       t->id    = g_strdup (SSDATA (id));
       t->plan  = g_strdup (SSDATA (plan));
@@ -304,10 +312,66 @@ how it sets runtime state, which it may not touch.  */)
       t->title = g_strdup (SSDATA (title));
     }
   {
-    Lisp_Object out = task_to_plist (t);
+    Lisp_Object out = Fcons (intern (":created"),
+                             Fcons (created ? Qt : Qnil, task_to_plist (t)));
     g_mutex_unlock (&cmacs_brigade__task_mutex);
     return out;
   }
+}
+
+DEFUN ("cmacs-brigade-task-restore", Fcmacs_brigade_task_restore,
+       Scmacs_brigade_task_restore, 2, 7, 0,
+       doc: /* Force task ID into STATE, with the counters given.
+
+For reconstructing runtime state from a plan file at startup, and for
+nothing else.  Every other path goes through
+`cmacs-brigade-task-transition', which asks the state machine whether the
+move is legal; this one does not ask, because there is no move -- the
+task was already in that state when the editor last exited and the C
+table simply does not survive a restart.
+
+A state that was live at exit is restored as `interrupted' rather than as
+itself.  Nothing is running: the process is gone, and presenting a task
+as `running' when no process exists would have the dashboard, the
+concurrency cap and the notifier all believing in an agent that is not
+there.  `interrupted' is the honest answer and the retry path.
+
+TURNS, IN-TOKENS, OUT-TOKENS and COST-MICROS are totals, not deltas; nil
+leaves the current value.  ERROR, when a string, is recorded.  */)
+  (Lisp_Object id, Lisp_Object state, Lisp_Object turns,
+   Lisp_Object in_tokens, Lisp_Object out_tokens, Lisp_Object cost_micros,
+   Lisp_Object error)
+{
+  CmacsBrigadeTask *t;
+  CmacsBrigadeState to;
+  Lisp_Object out = Qnil;
+
+  CHECK_STRING (id);
+  CHECK_SYMBOL (state);
+  cmacs_brigade_state_init ();
+
+  to = cmacs_brigade_state_from_name (SSDATA (Fsymbol_name (state)));
+  if (cmacs_brigade_state_live (to))
+    to = CMACS_BRIGADE_STATE_INTERRUPTED;
+
+  g_mutex_lock (&cmacs_brigade__task_mutex);
+  t = g_hash_table_lookup (cmacs_brigade__tasks, SSDATA (id));
+  if (t != NULL)
+    {
+      t->state = to;
+      if (FIXNUMP (turns))       t->turns       = (guint) XFIXNUM (turns);
+      if (FIXNUMP (in_tokens))   t->in_tokens   = (guint64) XFIXNUM (in_tokens);
+      if (FIXNUMP (out_tokens))  t->out_tokens  = (guint64) XFIXNUM (out_tokens);
+      if (FIXNUMP (cost_micros)) t->cost_micros = XFIXNUM (cost_micros);
+      if (STRINGP (error))
+        {
+          g_free (t->error);
+          t->error = g_strdup (SSDATA (error));
+        }
+      out = task_to_plist (t);
+    }
+  g_mutex_unlock (&cmacs_brigade__task_mutex);
+  return out;
 }
 
 DEFUN ("cmacs-brigade-task-get", Fcmacs_brigade_task_get,
@@ -571,6 +635,7 @@ void
 syms_of_cmacs_ai_brigade_state (void)
 {
   defsubr (&Scmacs_brigade_task_adopt);
+  defsubr (&Scmacs_brigade_task_restore);
   defsubr (&Scmacs_brigade_task_get);
   defsubr (&Scmacs_brigade_task_forget);
   defsubr (&Scmacs_brigade_task_transition);

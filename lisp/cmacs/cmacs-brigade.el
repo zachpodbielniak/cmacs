@@ -207,6 +207,21 @@ The subsystem's own symbols use the shorter `cmacs-brigade-' prefix.")
   ;; dashboard and every scheduled fire die on a void
   ;; `cmacs-brigade-start-task'.
   (require 'cmacs-brigade-run nil 'noerror)
+  ;; Bring the plans on disk back into the runtime.  The task table is a
+  ;; C hash that does not survive the process; the plans do, and until
+  ;; this ran nothing went looking for them -- so a fresh cmacs showed an
+  ;; empty dashboard while every task you had ever run sat on disk
+  ;; unmentioned.  Errors are swallowed: one malformed plan must not be
+  ;; able to stop cmacs starting, nor hide the others.
+  ;; Not in batch.  Restoring opens org files and writes ids back into
+  ;; entries that lack them, and a test run or a `--script' has no
+  ;; business touching the user's real plans on its way past.  Anything
+  ;; headless that wants them calls `cmacs-brigade-plan-restore' itself.
+  (when (and (not noninteractive)
+             (bound-and-true-p cmacs-brigade-plan-restore-on-start)
+             (fboundp 'cmacs-brigade-plan-restore))
+    (with-demoted-errors "cmacs-brigade: plan restore: %S"
+      (cmacs-brigade-plan-restore)))
   (require 'cmacs-brigade-genmail nil 'noerror)
   (require 'cmacs-brigade-deliver nil 'noerror)
   ;; Eager for the same reason, and for one more: notification is only

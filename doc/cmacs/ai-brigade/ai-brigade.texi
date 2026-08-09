@@ -34,6 +34,7 @@ one form lights it up on all three delivery paths at once.
 * Brigade Scheduling::          Running a prompt on a cron schedule.
 * Brigade GenMail::             Triaging the mail you already have.
 * Brigade Mailbox::             Saying more to an agent; the transaction log.
+* Brigade Plan Restore::        Plans and their state across a restart.
 @end menu
 
 @node Brigade Overview
@@ -1196,3 +1197,53 @@ sending anything else'', not ``stop''.
 
 @xref{Top,,, cmacs, the org manual}, file
 @file{doc_org/cmacs/ai-brigade/mailbox.org}, for the full chapter.
+
+@node Brigade Plan Restore
+@section Plans across a restart
+
+The runtime task table is a C hash that dies with the process; the plans
+are org files that do not.  Two halves make the org side carry a task's
+history across a restart.
+
+@emph{Runtime state is written back.}  Every transition and progress
+update queues a render of the task's plan, applied once you are idle.
+The render writes @code{:BRIGADE-STATE:}, @code{:BRIGADE-TURNS:},
+@code{:BRIGADE-TOKENS:}, @code{:BRIGADE-COST:} and the TODO keyword; it
+refuses a file that changed on disk underneath it or carries conflict
+markers, and it updates plans whose buffer has been killed.
+
+@emph{The plans are adopted again on startup.}
+@code{cmacs-brigade-plan-restore} scans
+@code{cmacs-brigade-plan-directory} for org files with a
+@code{:brigade:}-tagged headline, so the dashboard shows your work rather
+than an empty table.  It runs once when the brigade loads and again the
+first time the dashboard opens.
+
+Restoring reads the recorded state directly rather than treating the
+keyword as a command.  That distinction is load-bearing: a fresh runtime
+record is @code{draft}, so a @code{DONE} keyword read as a request would
+ask the state machine to finish a task that had not started, be refused,
+and have the refusal path rewrite the headline back to @code{TODO} ---
+reopening cmacs would destroy the outcome the plan existed to record.
+
+A task that was live at exit comes back @code{interrupted}: the process
+died with the editor, and showing it as running would have the dashboard,
+the concurrency cap and the notifier all believing in an agent that is
+not there.
+
+Restore does not run in batch --- a test or a @option{--script} has no
+business rewriting your plans on the way past --- and it skips a file
+whose @code{:PROPERTIES:} drawer has no @code{:END:}, because adopting
+one does not fail but hangs inside org, which on the startup path is
+indistinguishable from cmacs refusing to boot.
+
+@defun cmacs-brigade-plan-restore &optional force
+Adopt every plan on disk, restoring each task's recorded state.  Runs
+once per session; @var{force} rescans.  Returns the number of tasks
+adopted.  One malformed plan cannot hide the others.
+@end defun
+
+@defun cmacs-brigade-plan-files &optional dir
+The plan files under @var{dir}: org files carrying a
+@code{:brigade:}-tagged headline and intact property drawers.
+@end defun

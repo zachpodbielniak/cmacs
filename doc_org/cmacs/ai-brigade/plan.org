@@ -81,6 +81,47 @@ resumed turn that could not start yet but is worth retrying. Neither is a state
 a plan re-adopt can un-queue — =WAIT= to =TODO= is refused — so an unrelated
 spawn cannot strand a task that is waiting to be answered.
 
+* Surviving a restart
+
+The runtime task table is a C hash that dies with the process. The plans do
+not — they are org files — so the org side is what carries a task's history
+across a restart, and two halves of that have to work.
+
+*Runtime state is written back into the plan.* Every transition and every
+progress update queues a render of the plan the task belongs to, applied once
+you are idle (=cmacs-brigade-plan-render-idle=, 0.4s). The render writes
+=:BRIGADE-STATE:=, =:BRIGADE-TURNS:=, =:BRIGADE-TOKENS:=, =:BRIGADE-COST:= and
+the TODO keyword, refuses to touch a file that changed on disk underneath it or
+that has conflict markers, and updates plans whose buffer has been killed
+(=cmacs-brigade-plan-write-when-closed=).
+
+*The plans are adopted again on startup.* =cmacs-brigade-plan-restore= scans
+=cmacs-brigade-plan-directory= for org files with a =:brigade:=-tagged headline
+and adopts each one, so the dashboard shows your work rather than an empty
+table. It runs once when the brigade loads and once more the first time the
+dashboard opens; =M-x cmacs-brigade-plan-restore= with a prefix argument
+rescans. Set =cmacs-brigade-plan-restore-on-start= to nil to turn the automatic
+pass off.
+
+Restoring reads the recorded state *directly* rather than treating the keyword
+as a command. That distinction is load-bearing: a freshly created runtime record
+is =draft=, so a =DONE= keyword read as a request would be a request to finish a
+task that had not started, the state machine would refuse it, and the refusal
+path would rewrite the headline back to =TODO=. Reopening cmacs would destroy
+the outcome the plan existed to record.
+
+A task that was live when the editor exited comes back =interrupted=, not
+=running=. Nothing is running: the process died with the editor, and showing it
+as live would have the dashboard, the concurrency cap and the notifier all
+believing in an agent that is not there. =INTERRUPTED= to =QUEUED= is the retry.
+
+Two things restore deliberately does not do. It does not run in batch, because a
+test or a =--script= has no business rewriting your plans on the way past. And
+it skips a file whose =:PROPERTIES:= drawer has no =:END:= — the shape a crash
+or a half-finished sync leaves — because adopting one does not fail, it hangs
+inside org, and on the startup path that is indistinguishable from cmacs
+refusing to boot.
+
 * Identity
 
 Org's own =:ID:= when =org-id= is available — which buys =org-id-goto=,
@@ -117,12 +158,9 @@ With the buffer closed — the common case once agents are running — updates a
 batched and flushed to the file. The alternative, a journal reconciled later, is
 drift by another name.
 
-* After a restart
-
 Anything that was running becomes =interrupted=, which is neither done nor
-failed. It was abandoned, and nobody watched it stop.
-
-Nothing resumes automatically. =interrupted= can only be retried or dropped.
+failed. It was abandoned, and nobody watched it stop. Nothing resumes
+automatically: =interrupted= can only be retried or dropped.
 
 * Checking for drift
 

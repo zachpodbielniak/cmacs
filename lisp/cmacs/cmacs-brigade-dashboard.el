@@ -268,6 +268,27 @@ an absolute position sidesteps the question."
    (t (let ((m (cmacs-brigade-memory-manifest)))
         (if m (format "idx %s chunks" (plist-get m :count)) "no index")))))
 
+(defun cmacs-brigade-dashboard--mail-mark (r)
+  "A prefix for R's task cell showing queued mail and an open conversation.
+
+Without this the mailbox is invisible: a message sits queued behind a
+concurrency cap with nothing on screen to say so, and pressing `i' looks
+like it did nothing at all.  `*' alone marks a task that still holds a
+conversation, which is what makes `i' meaningful and `s' a re-run."
+  (let* ((id (plist-get r :id))
+         (n (and id (fboundp 'cmacs-brigade-mailbox-count)
+                 (cmacs-brigade-mailbox-count id)))
+         (conv (and id (fboundp 'cmacs-brigade-conversation-p)
+                    (cmacs-brigade-conversation-p id))))
+    (cond
+     ((and n (> n 0))
+      (propertize (format "%s%d " (if (cmacs-brigade-dashboard--unicode-p)
+                                      "✉" "@")
+                          n)
+                  'face 'warning))
+     (conv (propertize "* " 'face 'shadow))
+     (t ""))))
+
 (defun cmacs-brigade-dashboard--insert-row (r &optional c)
   (let* ((c (or c (cmacs-brigade-dashboard--columns)))
          (state (plist-get r :state))
@@ -284,7 +305,8 @@ an absolute position sidesteps the question."
                                             (intern agent)))
                             "—")
                    :model (cmacs-brigade-dashboard--model r)
-                   :task (or (plist-get r :title) id)
+                   :task (concat (cmacs-brigade-dashboard--mail-mark r)
+                                 (or (plist-get r :title) id))
                    :turns (or (plist-get r :turns) 0)
                    :tokens (format "%s/%s" (or (plist-get r :in-tokens) 0)
                                    (or (plist-get r :out-tokens) 0))
@@ -326,6 +348,15 @@ a to pick another\n"
   (insert "    N   write a new agent definition\n")
   (insert "    p   open an existing plan\n")
   (insert "    ?   all keys\n\n")
+  ;; Say where it looked.  "No tasks yet" on a machine with a directory
+  ;; full of finished plans is not reassuring, it is alarming -- and the
+  ;; useful next question is whether the plans are somewhere else.
+  (let ((dir (and (boundp 'cmacs-brigade-plan-directory)
+                  cmacs-brigade-plan-directory)))
+    (when dir
+      (insert (format "  Plans are read from %s\n"
+                      (abbreviate-file-name dir)))
+      (insert "  M-x cmacs-brigade-plan-restore rescans it.\n\n")))
   (let ((agents (cmacs-brigade-registry-list 'agent)))
     (insert (if agents
                 (format "  %d agent definition(s): %s\n"
@@ -365,7 +396,7 @@ a to pick another\n"
   ;; was not part of adding them.
   (concat " n new (describe it)   V new (say it)   C clone   x compose\n"
           " s start   K cancel  d delete   o log       RET plan\n"
-          " i say more   I queued   X end conversation\n"
+          " i say more   I queued   X end conversation   (* open, ✉N waiting)\n"
           " a agent   m model   b budget   t tools      c new plan\n"
           " N new agent  T tool list  A reload agents   p open plan\n"
           " g refresh M memory  ? keys     q quit"))
@@ -380,13 +411,32 @@ a to pick another\n"
 ;; has no privileged path into the runtime.
 
 (defun cmacs-brigade-dashboard-start ()
-  "Start the task on this line."
+  "Start the task on this line, or re-run one that has already answered."
   (interactive)
   (let ((r (cmacs-brigade-dashboard--record-at-point)))
     (unless r (user-error "No task on this line"))
-    (cmacs-brigade-task-transition (plist-get r :id) 'queued)
-    (cmacs-brigade-start-task (plist-get r :id))
-    (cmacs-brigade-dashboard-refresh)))
+    (let* ((id (plist-get r :id))
+           (queued (and (fboundp 'cmacs-brigade-mailbox-count)
+                        (cmacs-brigade-mailbox-count id)))
+           ;; A task that has answered and holds a conversation is the
+           ;; ambiguous case: `s' means "run it", but running it means
+           ;; the *original* task text again, from the top, on a fresh
+           ;; turn -- not continuing where it left off.  That is almost
+           ;; never what someone pressing `s' on a finished agent wants,
+           ;; and it silently spends money to find out.
+           (rerun (and (fboundp 'cmacs-brigade-conversation-p)
+                       (cmacs-brigade-conversation-p id)
+                       (zerop (or queued 0))
+                       (memq (plist-get r :state)
+                             '(done failed cancelled over-budget)))))
+      (when (and rerun
+                 (not (yes-or-no-p
+                       (format "%s already answered.  Re-run it from the original task text?  (i sends a follow-up instead) "
+                               (or (plist-get r :title) id)))))
+        (user-error "Not re-run; press i to send it a follow-up"))
+      (cmacs-brigade-task-transition id 'queued)
+      (cmacs-brigade-start-task id)
+      (cmacs-brigade-dashboard-refresh))))
 
 (defun cmacs-brigade-dashboard-cancel ()
   "Cancel the task on this line."
@@ -522,12 +572,15 @@ than the last reply on its own."
 Works whatever state it is in.  A running agent is told when its current
 turn ends; a finished one starts again with the same session, so it still
 remembers everything from before rather than beginning afresh."
+  ;; The task is resolved *before* the prompt, so pressing this on a
+  ;; header line refuses immediately instead of taking a message and then
+  ;; discarding it.  Reading first and checking afterwards is how you
+  ;; lose what somebody typed, which is the one outcome worth designing
+  ;; against here.
   (interactive
-   (list (read-string
-          (let ((r (cmacs-brigade-dashboard--record-at-point)))
-            (format "Message to %s: "
-                    (if r (or (plist-get r :title) (plist-get r :id))
-                      "task"))))))
+   (let ((r (cmacs-brigade-dashboard--record-or-error)))
+     (list (read-string (format "Message to %s: "
+                                (or (plist-get r :title) (plist-get r :id)))))))
   (let ((r (cmacs-brigade-dashboard--record-or-error)))
     (when (string-empty-p (string-trim message))
       (user-error "Nothing to send"))
@@ -782,6 +835,14 @@ frame and gives your layout back on `q'."
     (with-current-buffer buf
       (unless (derived-mode-p 'cmacs-brigade-dashboard-mode)
         (cmacs-brigade-dashboard-mode)))
+    ;; Belt as well as braces: the load-time restore covers the usual
+    ;; case, but the dashboard is what a person opens expecting to see
+    ;; their work, and it must not be able to show an empty table simply
+    ;; because it was reached by a path that had not restored yet.  It is
+    ;; a no-op after the first call.
+    (when (fboundp 'cmacs-brigade-plan-restore)
+      (with-demoted-errors "cmacs-brigade: plan restore: %S"
+        (cmacs-brigade-plan-restore)))
     (cmacs-brigade-dashboard--render)
     (pcase cmacs-brigade-dashboard-display
       ('full-frame

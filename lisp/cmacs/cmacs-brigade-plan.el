@@ -293,6 +293,35 @@ intent.  Falls back to what adopt saw, for a plan with no file."
                    (cmacs-brigade-plan--entry-body))))))
       (gethash id cmacs-brigade-plan--prompt-cache)))
 
+(defun cmacs-brigade-plan--number (raw)
+  "RAW as an integer, or nil when it is missing or not a number."
+  (and (stringp raw) (string-match-p "\\`[0-9.]+\\'" raw)
+       (truncate (string-to-number raw))))
+
+(defun cmacs-brigade-plan--restore-entry (id)
+  "Put the runtime figures recorded on the entry at point back into ID.
+
+Returns the restored record, or nil when the entry carries no
+`:BRIGADE-STATE:' -- which is the normal case for a task nobody has run
+yet, and means there is nothing to restore."
+  (when-let* ((shown (org-entry-get nil "BRIGADE-STATE"))
+              (state (intern (string-trim shown))))
+    (let* ((tokens (org-entry-get nil "BRIGADE-TOKENS"))
+           (split (and tokens (string-match "\\`\\([0-9]+\\)/\\([0-9]+\\)\\'"
+                                            tokens)))
+           (in (and split (string-to-number (match-string 1 tokens))))
+           (out (and split (string-to-number (match-string 2 tokens))))
+           (cost (org-entry-get nil "BRIGADE-COST")))
+      (cmacs-brigade-task-restore
+       id state
+       (cmacs-brigade-plan--number (org-entry-get nil "BRIGADE-TURNS"))
+       in out
+       ;; Written as dollars with four decimals; the runtime counts
+       ;; integer micro-dollars, because a figure a budget acts on must
+       ;; not drift.
+       (and (stringp cost) (round (* 1000000 (string-to-number cost))))
+       (org-entry-get nil "BRIGADE-ERROR")))))
+
 (defun cmacs-brigade-plan--adopt-entry (id plan)
   "Adopt the entry at point under ID, applying any pending command."
   (let* ((entry (cmacs-brigade-plan--read-entry))
@@ -307,6 +336,20 @@ intent.  Falls back to what adopt saw, for a plan with no file."
                                            (plist-get entry :title)))
          (_ (puthash id (plist-get entry :prompt)
                      cmacs-brigade-plan--prompt-cache))
+         ;; A record this call created has no runtime history, so the
+         ;; state recorded in the file is the best -- and only -- account
+         ;; of where the task got to.  Restore it before looking at the
+         ;; keyword at all.
+         ;;
+         ;; Without this, reopening cmacs was destructive: a finished
+         ;; task came back as a fresh `draft', its DONE keyword was read
+         ;; as a *request* to finish a task that had not started, the
+         ;; state machine refused, and the refusal path rewrote the
+         ;; headline back to TODO.  The plan lost the outcome it existed
+         ;; to record.
+         (record (if (plist-get record :created)
+                     (or (cmacs-brigade-plan--restore-entry id) record)
+                   record))
          (current (plist-get record :state))
          (wanted (alist-get (or (plist-get entry :keyword) "TODO")
                             cmacs-brigade-plan-keyword->command
@@ -625,6 +668,158 @@ may refuse."
             "  Describe what this agent should do.  This body is the prompt.\n")
     (save-buffer))
   (cmacs-brigade-plan-mode 1))
+
+;;;; Finding the plans again after a restart
+;;
+;; The runtime task table is a C hash that does not survive the process.
+;; The plans do -- they are org files -- but nothing used to go looking
+;; for them, so a fresh cmacs showed an empty dashboard until you
+;; happened to open a plan and save it.  Every task you had ever run was
+;; still on disk and simply unmentioned.
+
+(defcustom cmacs-brigade-plan-restore-on-start t
+  "Whether to adopt the plans on disk when the brigade loads.
+
+Off means the dashboard starts empty until a plan buffer is saved, which
+is the behaviour that made finished work look lost."
+  :type 'boolean
+  :group 'cmacs-brigade)
+
+(defcustom cmacs-brigade-plan-restore-max 200
+  "Most plan files to adopt in one restore.
+
+A bound rather than a limit anyone should reach: adopting parses org, and
+a directory that has accumulated hundreds of plans should not make
+opening the dashboard feel broken.  What was skipped is reported."
+  :type 'integer
+  :group 'cmacs-brigade)
+
+(defvar cmacs-brigade-plan--restored nil
+  "Non-nil once `cmacs-brigade-plan-restore' has run this session.")
+
+(defun cmacs-brigade-plan--well-formed-p ()
+  "Whether the current buffer's property drawers are all terminated.
+
+Only the one structural check, and it earns its place: adopting a file
+whose `:PROPERTIES:' drawer has no `:END:' -- what a crash or a half
+finished sync leaves behind -- does not fail, it *hangs*, somewhere
+inside org while an id is being written into a drawer that has no end.
+On the startup path that would be indistinguishable from cmacs refusing
+to boot, over one truncated file."
+  (let ((opens 0) (closes 0))
+    (save-excursion
+      (goto-char (point-min))
+      (while (re-search-forward "^[ \t]*:\\(PROPERTIES\\|END\\):[ \t]*$" nil t)
+        (if (equal "END" (match-string 1))
+            (setq closes (1+ closes))
+          (setq opens (1+ opens)))))
+    (= opens closes)))
+
+(defun cmacs-brigade-plan-files (&optional dir)
+  "Return the plan files under DIR, or `cmacs-brigade-plan-directory'.
+
+A plan is an org file containing a `:brigade:'-tagged headline whose
+property drawers are intact.  Matched by reading the file rather than by
+opening it in org-mode: the directory may hold notes, exports and
+READMEs, and parsing all of them to discover that they are not plans is
+the expensive way to find out.
+
+A file that looks like a plan but is structurally broken is skipped with
+a message rather than adopted -- see `cmacs-brigade-plan--well-formed-p'
+for why that is not merely tidiness."
+  (let ((dir (or dir cmacs-brigade-plan-directory))
+        out)
+    (when (file-directory-p dir)
+      (dolist (f (directory-files-recursively dir "\\.org\\'"))
+        (with-temp-buffer
+          ;; The tag lives on a headline, so a bounded read from the
+          ;; front is enough for any plan that has one.
+          (insert-file-contents f nil 0 200000)
+          (goto-char (point-min))
+          (when (re-search-forward "^\\*+ .*:brigade:" nil t)
+            (if (cmacs-brigade-plan--well-formed-p)
+                (push f out)
+              (message "cmacs-brigade: %s has an unterminated property drawer; skipped"
+                       (file-name-nondirectory f)))))))
+    (nreverse out)))
+
+;;;###autoload
+(defun cmacs-brigade-plan-restore (&optional force)
+  "Adopt every plan on disk, restoring each task's recorded state.
+
+Runs once per session; FORCE (interactively, a prefix argument) rescans.
+Returns the number of tasks adopted.
+
+Errors in one plan do not stop the others: a single malformed file must
+not be able to hide every other task you have."
+  (interactive "P")
+  (if (and cmacs-brigade-plan--restored (not force))
+      0
+    (setq cmacs-brigade-plan--restored t)
+    (let ((files (cmacs-brigade-plan-files))
+          (tasks 0)
+          (plans 0))
+      (when (> (length files) cmacs-brigade-plan-restore-max)
+        (message "cmacs-brigade: %d plan files, adopting the first %d"
+                 (length files) cmacs-brigade-plan-restore-max)
+        (setq files (seq-take files cmacs-brigade-plan-restore-max)))
+      (dolist (file files)
+        (condition-case err
+            ;; org-id's global tracking is off for the duration.
+            ;; Adopting mints an ID for any entry that lacks one, and
+            ;; minting one with tracking on sends org-id away to rebuild
+            ;; `org-id-locations' -- which means opening and scanning
+            ;; every agenda file.  For anyone whose agenda is a notes
+            ;; repository that turns starting the editor into a
+            ;; minutes-long stall, triggered by nothing more than a plan
+            ;; entry with a missing id.  Entries that already have one --
+            ;; which is all of them, once a plan has been adopted once --
+            ;; are unaffected either way.
+            (let ((buf (find-buffer-visiting file))
+                  (org-id-track-globally nil)
+                  (org-agenda-files nil))
+              (with-current-buffer (or buf (find-file-noselect file t))
+                (unless (derived-mode-p 'org-mode) (org-mode))
+                ;; Adopting must not look like an edit: it writes ids
+                ;; into entries that lack them, and a plan the user never
+                ;; touched should not come back modified.
+                (let ((cmacs-brigade-plan--suppress t))
+                  (setq tasks (+ tasks (length (cmacs-brigade-plan-adopt))))
+                  (when (buffer-modified-p) (save-buffer)))
+                (setq plans (1+ plans))
+                ;; Only close what we opened.  Killing a buffer the user
+                ;; already had open would be a surprising thing for a
+                ;; refresh to do.
+                (unless buf (kill-buffer))))
+          (error (message "cmacs-brigade: could not adopt %s: %s"
+                          (file-name-nondirectory file)
+                          (error-message-string err)))))
+      (when (called-interactively-p 'any)
+        (message "cmacs-brigade: %d task(s) from %d plan(s)" tasks plans))
+      tasks)))
+
+
+;;;; Keeping the plan up to date
+;;
+;; The render machinery below existed in full -- modtime checks, conflict
+;; markers, atomic writes, closed-file handling -- and had no callers, so
+;; a plan never learned what became of its tasks.  Advice on the
+;; transition point rather than a call at each site: the runner, the
+;; dashboard and the plan buffer all transition tasks, and observing the
+;; one function covers callers added later too.
+
+(defun cmacs-brigade-plan--note-transition (result &rest _)
+  "Queue a render of the plan RESULT belongs to."
+  (when (and (listp result) (plist-get result :id) (plist-get result :plan))
+    (cmacs-brigade-plan-queue-render (plist-get result :plan) (list result)))
+  result)
+
+(advice-add 'cmacs-brigade-task-transition :filter-return
+            #'cmacs-brigade-plan--note-transition)
+(advice-add 'cmacs-brigade-task-progress :filter-return
+            #'cmacs-brigade-plan--note-transition)
+(advice-add 'cmacs-brigade-task-progress-add :filter-return
+            #'cmacs-brigade-plan--note-transition)
 
 ;;;###autoload
 (defun cmacs-brigade-plan-lint (&optional buffer)
