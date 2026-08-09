@@ -33,6 +33,7 @@ one form lights it up on all three delivery paths at once.
 * Brigade Memory Builds::       Indexing your notes without blocking.
 * Brigade Scheduling::          Running a prompt on a cron schedule.
 * Brigade GenMail::             Triaging the mail you already have.
+* Brigade Mailbox::             Saying more to an agent; the transaction log.
 @end menu
 
 @node Brigade Overview
@@ -1081,3 +1082,117 @@ and quoted-printable with no signal to classify on.
 
 @xref{Top,,, cmacs, the org manual}, file
 @file{doc_org/cmacs/ai-brigade/genmail.org}, for the full chapter.
+
+@node Brigade Mailbox
+@section Saying more to an agent
+
+A brigade task used to run exactly once: you gave it a prompt, it
+answered, and that was the whole relationship.  Every task now has a
+@dfn{mailbox}.  Put a message in it and the agent continues the same
+conversation, remembering everything it already said and did --- whether
+it is still running (the message is delivered when its current turn
+ends) or finished hours ago (it starts again on the same provider
+session).
+
+Alongside that, every task keeps a @dfn{transaction log}: an append-only
+record of every message it was given, every reply, and every tool it
+called.  Any agent can read any task's log, spawned by it or not, which
+is what makes a debugging sidecar possible.
+
+@subsection The model
+
+Three things, deliberately separate: the @emph{task} (the unit of work
+and its state), the @emph{conversation} (the provider session, the
+sandbox, the working directory and the running totals), and the
+@emph{mailbox} (a FIFO of undelivered messages).
+
+A task that answers you reaches @code{done}, exactly as before.  That
+matters: @code{done} is what the dashboard, the notifier and the plan all
+mean by finished, and a task left in some open state after answering
+would tell all three it was still going.  What makes it resumable is the
+conversation record outliving the turn, not the task's state.  A message
+arriving later moves it @code{done} @result{} @code{queued} @result{}
+@code{running}, which is the same transition a retry has always made.
+
+Across a turn the session, the isolation, the working directory and the
+tool allowlist all survive.  The capability token does not --- it is
+minted fresh each turn, which is strictly better than one long-lived
+credential.  Neither does the concurrency slot: an idle conversation must
+never hold a slot a queued task could use.
+
+Only a clean @code{done} keeps the conversation.  A failure, a
+cancellation or a budget stop releases it, because silently resuming a
+session whose last turn broke is recovery that should be asked for rather
+than assumed.
+
+@subsection Keys and tools
+
+In the dashboard, @kbd{i} sends a message to the task on the line,
+@kbd{I} shows what is queued for it, @kbd{X} closes the conversation, and
+@kbd{o} shows the transaction log rather than the last reply alone.
+@kbd{i} works in the output buffer too, so you can reply from where you
+are reading.
+
+Five tools make up the @code{mailbox} group: @code{agent_send},
+@code{agent_inbox}, @code{agent_drop}, @code{agent_log} and
+@code{agent_close}.  @code{agent_result} gained an optional @code{turn},
+so an earlier reply is still readable after later ones arrive.  An agent
+granted only @code{agent} does @emph{not} get these: being able to read
+another agent's log is a different capability from being able to spend
+money starting turns.
+
+The same verbs exist on every other surface --- @code{emacsctl brigade
+send/inbox/drop/log/close}, the identically named methods on
+@code{org.cmacs.Editor1.Brigade}, and @code{brigade} in bacon.
+
+@subsection The transaction log
+
+One JSON object per line at @file{<output-dir>/<id>.jsonl}.  JSONL rather
+than org because the primary reader is another agent: it needs to filter
+by turn and kind without parsing a document, and appending a line
+survives the editor dying in a way rewriting a document does not.  Four
+kinds --- @code{message}, @code{reply}, @code{tool}, @code{state} ---
+each carrying a turn and a timestamp.  A line that does not parse is
+skipped rather than fatal, because a truncated final line is the normal
+consequence of a crash.
+
+The log is deliberately richer than what the model is replayed: replay
+compacts tool traffic away to keep a long conversation affordable, while
+the log keeps all of it.  Per-tool entries are recorded for in-process
+agents; a CLI agent reaches its tools over the MCP relay, whose protocol
+carries the capability token but not the task id, so its individual calls
+cannot be attributed.  Its messages, replies and state changes are all
+still there.
+
+@subsection Bounds
+
+Cost accumulates across turns rather than being replaced by the last
+one's figures.  @code{cmacs-ai-history-limit} (default 200) caps the
+replayed history, since every turn re-sends the whole session and an
+unbounded one costs quadratically in turns.
+@code{cmacs-brigade-mailbox-max} (default 64) refuses a runaway sender.
+@code{cmacs-brigade-conversation-ttl} (default one day) sweeps an idle
+conversation, measuring idleness from the last delivery or completed turn
+so one waiting behind a busy cap is not swept with its message still
+pending.
+
+@defun cmacs-brigade-mailbox-send id text &optional from
+Queue @var{text} for task @var{id} and wake it if it is not running.
+The message is appended before anything looks at the task's state, so a
+completion racing the send cannot leave it undelivered.
+@end defun
+
+@defun cmacs-brigade-log-render id &optional from-turn kinds
+The task's log as readable text, optionally narrowed to entries from
+@var{from-turn} onward and to the given @var{kinds}.  Falls back to the
+legacy flat output file for runs recorded before the log existed.
+@end defun
+
+@defun cmacs-brigade-close-conversation id &optional reason
+Release the session, sandbox and queue task @var{id} was holding.  The
+task itself is usually already @code{done}: closing says ``I will not be
+sending anything else'', not ``stop''.
+@end defun
+
+@xref{Top,,, cmacs, the org manual}, file
+@file{doc_org/cmacs/ai-brigade/mailbox.org}, for the full chapter.

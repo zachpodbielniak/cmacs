@@ -122,3 +122,54 @@ taking the dashboard down, since the dashboard is how you would notice.
 
 The binary being installed is not enough — mu needs an index. Run =mu init= and
 =mu index=, then =(cmacs-brigade-genmail-available-p t)= to re-probe.
+
+* A message I sent was never delivered
+
+Check =emacsctl brigade inbox <id>= (or =I= in the dashboard). If it is still
+queued, one of three things is true:
+
+- *The concurrency cap is full.* The task is waiting its turn like any other;
+  the queue drains oldest-first, so it will get there.
+- *The turn keeps failing to start.* Look for =could not resume= in
+  =brigade log <id>=. After =cmacs-brigade-conversation-max-attempts= tries
+  (default 3) the conversation is released and the task fails loudly rather
+  than retrying forever with your message stranded.
+- *The conversation was swept.* Idle past =cmacs-brigade-conversation-ttl=
+  (default one day). A sweep with mail still queued writes a =swept= entry in
+  the log rather than dropping it silently.
+
+* agent_send says the task cannot be continued
+
+Its worker has no session. =shell= is the shipped one, and any worker
+registered without =:supports-session=. Re-running it with your follow-up would
+produce a process that has never seen the first message, so it is refused rather
+than presented as a continuation.
+
+* A resumed CLI agent has forgotten everything
+
+Almost always the working directory. =claude --resume= resolves a session id
+against the project directory, so resuming from somewhere else silently starts a
+*fresh* conversation instead of failing. cmacs resolves the conversation's
+directory once, at the first turn, and never re-resolves it — but a task whose
+=:CWD:= pointed somewhere that has since been deleted or moved will land
+elsewhere. Check the =:CWD:= property against where the agent actually ran.
+
+* A worktree agent's changes vanished between turns
+
+They should not: isolation is parked with the conversation and reused, precisely
+so an agent's uncommitted work survives a turn boundary. If it did happen, check
+whether the run *failed* rather than finishing — a failed turn releases the
+conversation, and with it the worktree.
+
+Separately: retrying a worktree task used to fail outright with "a branch named
+=brigade/…= already exists", because teardown removed the worktree and left the
+branch. Fixed, but a branch left behind by an older cmacs may still be lying
+around; =git branch -D brigade/<id>= clears it.
+
+* The cost on a long conversation looks too low
+
+It was, before per-turn figures were accumulated rather than assigned. A
+resumed CLI turn's report carries that invocation's usage only, so assigning it
+made every turn overwrite the running total with the last turn's. If you are
+looking at a task from an older cmacs, the number is the last turn's, not the
+conversation's.

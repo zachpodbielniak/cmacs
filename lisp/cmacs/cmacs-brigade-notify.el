@@ -54,6 +54,11 @@
     (finished        . (sound message))
     (all-done        . (speak))
     (started         . ())
+    ;; Unrouted by default.  A conversation you are going back and forth
+    ;; with produces one of these every turn, and a sound per turn during
+    ;; a twenty-turn exchange is the notification equivalent of shouting.
+    ;; `finished' still fires when the conversation actually ends.
+    (turn-finished   . ())
     ;; Used for a non-urgent event that fires while you are away.  Quiet,
     ;; because you are not there to hear it: it will be in the digest
     ;; when you return, and this only exists in case you are in earshot.
@@ -66,7 +71,7 @@ several is worth a sound and nothing more, because a spoken sentence per
 completion during a fan-out is unbearable.  `all-done' -- the last agent
 finishing -- is the one worth saying out loud.
 
-Recognised kinds: started, finished, failed, needs-input,
+Recognised kinds: started, finished, turn-finished, failed, needs-input,
 budget-exceeded, all-done.  Values name registered notifiers; see
 `cmacs-brigade-register-notifier'."
   :type '(alist :key-type symbol :value-type (repeat symbol))
@@ -352,28 +357,51 @@ message, an org capture -- without replacing the shipped behaviour.")
 
 ;;;; Escalation
 
-(defvar cmacs-brigade-notify--escalation-timers nil)
+(defvar cmacs-brigade-notify--escalation-timers (make-hash-table :test 'equal)
+  "Task id -> the timers still due to re-announce it.
+
+A hash rather than one flat list, so acknowledging a task can cancel its
+own timers.  The list version was only ever appended to: every
+`needs-input' pushed up to three timers and nothing ever removed one, so
+a session accumulated dead timers indefinitely -- and a conversation that
+asks a question each turn accumulates them briskly.")
 
 (defun cmacs-brigade-notify--schedule-escalation (ev)
   "Re-announce EV until it is acknowledged."
   (let ((id (plist-get ev :task)))
     (puthash id ev cmacs-brigade-notify--pending-input)
-    (dolist (secs cmacs-brigade-notify-escalate-seconds)
-      (push (run-at-time
-             secs nil
-             (lambda ()
-               ;; Only if still unanswered.  A repeat after you have
-               ;; already dealt with it teaches you to ignore the sound.
-               (when (gethash id cmacs-brigade-notify--pending-input)
-                 (cmacs-brigade-notify--dispatch
-                  (plist-put (copy-sequence ev) :urgent t)
-                  'needs-input))))
-            cmacs-brigade-notify--escalation-timers))))
+    ;; Cancel any still pending from a previous question by this task
+    ;; before adding more, or two rounds of escalation run concurrently.
+    (cmacs-brigade-notify--cancel-escalation id)
+    (let (timers)
+      (dolist (secs cmacs-brigade-notify-escalate-seconds)
+        (push (run-at-time
+               secs nil
+               (lambda ()
+                 ;; Only if still unanswered.  A repeat after you have
+                 ;; already dealt with it teaches you to ignore the sound.
+                 (when (gethash id cmacs-brigade-notify--pending-input)
+                   (cmacs-brigade-notify--dispatch
+                    (plist-put (copy-sequence ev) :urgent t)
+                    'needs-input))))
+              timers))
+      (puthash id timers cmacs-brigade-notify--escalation-timers))))
+
+(defun cmacs-brigade-notify--cancel-escalation (task-id)
+  "Cancel and forget TASK-ID's pending escalation timers."
+  (dolist (timer (gethash task-id cmacs-brigade-notify--escalation-timers))
+    (ignore-errors (cancel-timer timer)))
+  (remhash task-id cmacs-brigade-notify--escalation-timers))
 
 (defun cmacs-brigade-notify-acknowledge (task-id)
   "Note that TASK-ID no longer needs you, and stop escalating it."
   (interactive "sTask id: ")
-  (remhash task-id cmacs-brigade-notify--pending-input))
+  (remhash task-id cmacs-brigade-notify--pending-input)
+  ;; Cancelled, not merely ignored.  Leaving them armed meant every
+  ;; answered question left timers that would still wake up, check the
+  ;; hash, find nothing and do nothing -- correct behaviour from
+  ;; accumulating garbage.
+  (cmacs-brigade-notify--cancel-escalation task-id))
 
 (defun cmacs-brigade-notify-pending ()
   "Return the tasks currently waiting on you."
@@ -447,19 +475,42 @@ those escalate instead, so they are still waiting when you return."
                    (cmacs-brigade-task-get task-id)))
          (agent (or (plist-get rec :agent) task-id)))
     (cmacs-brigade-notify
-     (pcase state
-       ('done 'finished)
-       ('over-budget 'budget-exceeded)
-       (_ 'failed))
+     (cmacs-brigade-notify--kind-for task-id state)
      :task task-id :agent agent :state state
      :error (plist-get rec :error))
     ;; Whatever it was, it is no longer waiting on us.
     (cmacs-brigade-notify-acknowledge task-id)
     ;; The last one finishing is worth saying out loud even when a single
     ;; completion is not -- it means the whole fan-out is done.
-    (when (and (fboundp 'cmacs-brigade-live-count)
-               (zerop (cmacs-brigade-live-count)))
+    ;;
+    ;; Measured with `outstanding-count', not `live-count'.  The live
+    ;; count is the concurrency gate and counts running processes only,
+    ;; so it hits zero at every turn boundary of every conversation --
+    ;; which announced "all agents have finished" in the middle of one
+    ;; that was very much still going.  A task parked with messages
+    ;; queued is outstanding whatever the process table says.
+    (when (zerop (if (fboundp 'cmacs-brigade-outstanding-count)
+                     (cmacs-brigade-outstanding-count)
+                   (if (fboundp 'cmacs-brigade-live-count)
+                       (cmacs-brigade-live-count)
+                     0)))
       (cmacs-brigade-notify 'all-done))))
+
+(defun cmacs-brigade-notify--kind-for (task-id state)
+  "Which event kind TASK-ID reaching STATE should be announced as.
+
+`turn-finished' when messages are still queued for it: more is coming,
+and a sound per turn through a twenty-turn exchange is the notification
+equivalent of shouting.  Otherwise the ordinary `finished', because a
+task that answered with nothing waiting behind it is finished as far as
+you are concerned -- whatever session it is still holding open."
+  (cond
+   ((not (eq state 'done))
+    (if (eq state 'over-budget) 'budget-exceeded 'failed))
+   ((and (fboundp 'cmacs-brigade-mailbox-count)
+         (> (cmacs-brigade-mailbox-count task-id) 0))
+    'turn-finished)
+   (t 'finished)))
 
 (defun cmacs-brigade-notify--on-transition (task-id state &rest _)
   "Announce TASK-ID entering STATE, for the non-terminal states.
@@ -491,15 +542,26 @@ and observing it in one place also covers callers added later."
   "Refresh the live-agent indicator."
   (setq cmacs-brigade-notify--modeline
         (if (not cmacs-brigade-notify-modeline) ""
-          (let ((live (if (fboundp 'cmacs-brigade-live-count)
-                          (cmacs-brigade-live-count) 0))
-                (waiting (hash-table-count cmacs-brigade-notify--pending-input)))
+          (let* ((live (if (fboundp 'cmacs-brigade-live-count)
+                           (cmacs-brigade-live-count) 0))
+                 ;; Parked conversations with mail queued count here but
+                 ;; not in `live': they are outstanding work even though
+                 ;; no process is running, and a modeline that showed
+                 ;; nothing would say the brigade was idle when it was
+                 ;; merely between turns.
+                 (outstanding (if (fboundp 'cmacs-brigade-outstanding-count)
+                                  (cmacs-brigade-outstanding-count) live))
+                 (waiting (hash-table-count cmacs-brigade-notify--pending-input)))
             (cond
              ;; Waiting on you is the state worth colouring: an agent
              ;; that is blocked is spending wall-clock on nothing.
              ((> waiting 0)
               (propertize (format " brigade:%d?" waiting) 'face 'warning))
-             ((> live 0) (format " brigade:%d" live))
+             ((> live 0)
+              (if (> outstanding live)
+                  (format " brigade:%d+%d" live (- outstanding live))
+                (format " brigade:%d" live)))
+             ((> outstanding 0) (format " brigade:+%d" outstanding))
              (t "")))))
   (force-mode-line-update t))
 

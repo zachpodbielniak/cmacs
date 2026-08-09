@@ -334,6 +334,7 @@ extern gint cmd_monitor (CmacsApiTransport *transport, gint argc, gchar **argv);
 extern gint cmd_rg      (CmacsApiTransport *transport, gint argc, gchar **argv);
 extern gint cmd_bar     (CmacsApiTransport *transport, gint argc, gchar **argv);
 extern gint cmd_c       (CmacsApiTransport *transport, gint argc, gchar **argv);
+extern gint cmd_brigade (CmacsApiTransport *transport, gint argc, gchar **argv);
 
 /* ── Top-level dispatch table ─────────────────────────────────────── */
 
@@ -453,6 +454,11 @@ static const CmacsApiSubcmd subcmds[] = {
     { "c",            cmd_c,
       "c SUBCMD [ARGS...]",
       "C runtime introspection and hot-patching (cintrospect/cpatch)" },
+
+    /* ── AI brigade ────────────────────────────────────────────────── */
+    { "brigade",      cmd_brigade,
+      "brigade SUBCMD [ARGS...]",
+      "AI agents (spawn, status, result, send, inbox, log, close, ...)" },
 
     /* ── original commands ─────────────────────────────────────────── */
     { "eval",         cmd_eval,

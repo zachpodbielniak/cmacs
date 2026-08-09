@@ -96,12 +96,48 @@ dispatch, so it cannot go stale.
 
 Available when the @emph{target} cmacs was built with the subsystem;
 a missing subsystem maps to exit code 3 with a clear message:
-@code{crispy}, @code{bacon}, @code{eshell}, @code{ai}, @code{gsurf},
+@code{crispy}, @code{bacon}, @code{eshell}, @code{ai},
+@code{brigade}, @code{gsurf},
 @code{gnuseye}, @code{pod} (podomation), @code{video}, @code{audio},
 @code{speech} (whisper + piper), @code{lrg} (libregnum editor),
 @code{calc} (@code{eval}, @code{symbolic}, @code{units},
 @code{list}, @code{describe}), @code{compositor} and @code{monitor}
 (gowl).
+
+@subsection Agents: brigade spawn / brigade send / brigade log
+
+Hands work to a brigade agent and then goes on talking to it.  The same
+verbs an agent gets as MCP tools, so a shell script and a model drive the
+queue through one code path.
+
+@example
+emacsctl brigade spawn "audit the config loader" reviewer
+emacsctl brigade status 3f2a1c
+emacsctl brigade result 3f2a1c
+@end example
+
+@command{send} continues the conversation rather than starting a new
+one.  It works whether the agent is still running---the message is
+delivered when its current turn ends---or finished long ago, in which
+case it starts again on the same provider session and remembers
+everything from before.
+
+@example
+emacsctl brigade send 3f2a1c "now check the error paths too"
+emacsctl brigade inbox 3f2a1c
+emacsctl brigade drop 3f2a1c 0
+emacsctl brigade close 3f2a1c
+@end example
+
+@command{log} prints the whole transaction log---every message, reply and
+tool call in order---for @emph{any} task, not only ones you started.
+That is what makes it useful for inspecting an agent that is
+misbehaving: @samp{emacsctl brigade log 3f2a1c 2} reads from turn two
+onward.
+
+A task whose worker has no session concept (@code{shell}) refuses
+@command{send} rather than re-running with the follow-up as though it
+were a first prompt.
 
 @subsection AI: ai prompt / ai call / ai models / ai chat
 

@@ -502,10 +502,74 @@ provider, so the half-answer would quietly run something else."
      r "TOOLS" (string-join tools ", "))))
 
 (defun cmacs-brigade-dashboard-output ()
-  "Show what the task on this line produced."
+  "Show what the task on this line produced.
+
+For a task that has been spoken to more than once this is the whole
+transaction log -- every message, reply and tool call in order -- rather
+than the last reply on its own."
   (interactive)
   (let ((r (cmacs-brigade-dashboard--record-or-error)))
     (cmacs-brigade-output-show (plist-get r :id))))
+
+(defun cmacs-brigade-dashboard-send (message)
+  "Say something more to the task on this line.
+
+Works whatever state it is in.  A running agent is told when its current
+turn ends; a finished one starts again with the same session, so it still
+remembers everything from before rather than beginning afresh."
+  (interactive
+   (list (read-string
+          (let ((r (cmacs-brigade-dashboard--record-at-point)))
+            (format "Message to %s: "
+                    (if r (or (plist-get r :title) (plist-get r :id))
+                      "task"))))))
+  (let ((r (cmacs-brigade-dashboard--record-or-error)))
+    (when (string-empty-p (string-trim message))
+      (user-error "Nothing to send"))
+    (condition-case err
+        (progn
+          (cmacs-brigade-mailbox-send (plist-get r :id) message "human")
+          (message "cmacs-brigade: queued for %s (%d waiting)"
+                   (plist-get r :id)
+                   (cmacs-brigade-mailbox-count (plist-get r :id))))
+      (error (user-error "cmacs-brigade: %s" (error-message-string err))))
+    (cmacs-brigade-dashboard-refresh)))
+
+(defun cmacs-brigade-dashboard-inbox ()
+  "Show what is queued for the task on this line, and offer to drop one."
+  (interactive)
+  (let* ((r (cmacs-brigade-dashboard--record-or-error))
+         (id (plist-get r :id))
+         (msgs (cmacs-brigade-mailbox-list id)))
+    (if (null msgs)
+        (message "cmacs-brigade: nothing queued for %s" id)
+      (let ((choice (completing-read
+                     (format "%s has %d queued (RET to dismiss, pick to drop): "
+                             id (length msgs))
+                     (let ((i -1))
+                       (mapcar (lambda (m)
+                                 (setq i (1+ i))
+                                 (format "%d: [%s] %s" i
+                                         (or (plist-get m :from) "?")
+                                         (or (plist-get m :text) "")))
+                               msgs))
+                     nil t)))
+        (when (and choice (string-match "\\`\\([0-9]+\\):" choice))
+          (cmacs-brigade-mailbox-drop
+           id (string-to-number (match-string 1 choice)))
+          (message "cmacs-brigade: dropped; %d left"
+                   (cmacs-brigade-mailbox-count id))))
+      (cmacs-brigade-dashboard-refresh))))
+
+(defun cmacs-brigade-dashboard-close ()
+  "Finish with the task on this line: drop its queue, free its session."
+  (interactive)
+  (let* ((r (cmacs-brigade-dashboard--record-or-error))
+         (id (plist-get r :id)))
+    (when (yes-or-no-p (format "Close the conversation with %s? " id))
+      (cmacs-brigade-mailbox-drop id)
+      (cmacs-brigade-close-conversation id "closed from the dashboard")
+      (cmacs-brigade-dashboard-refresh))))
 
 (defun cmacs-brigade-dashboard-delete ()
   "Delete the task on this line, from the runtime and from its plan.
@@ -613,6 +677,11 @@ knowing that `cmacs-brigade-plan-create\=' exists and where plans live."
     (define-key map (kbd "K") #'cmacs-brigade-dashboard-cancel)
     (define-key map (kbd "RET") #'cmacs-brigade-dashboard-visit)
     (define-key map (kbd "o") #'cmacs-brigade-dashboard-output)
+    ;; The conversation keys.  `i' for the same reason vi uses it: this
+    ;; is where you type something.
+    (define-key map (kbd "i") #'cmacs-brigade-dashboard-send)
+    (define-key map (kbd "I") #'cmacs-brigade-dashboard-inbox)
+    (define-key map (kbd "X") #'cmacs-brigade-dashboard-close)
     (define-key map (kbd "g") #'cmacs-brigade-dashboard-refresh)
     (define-key map (kbd "M") #'cmacs-brigade-memory-find)
     ;; Getting a task without having to know that a plan is an org file,

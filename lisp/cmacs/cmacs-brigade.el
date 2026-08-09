@@ -192,6 +192,16 @@ The subsystem's own symbols use the shorter `cmacs-brigade-' prefix.")
       (cmacs-brigade-agent-reload)))
   (require 'cmacs-brigade-isolation nil 'noerror)
   (require 'cmacs-brigade-host nil 'noerror)
+  ;; Before the runner, which requires both: a turn ending writes to the
+  ;; log and consults the mailbox.  The mailbox is also eager for a
+  ;; reason of its own -- a message queued against a busy agent is
+  ;; persisted, and restoring it has to happen before anything drains the
+  ;; queue, or the message survives the restart and is then ignored.
+  (require 'cmacs-brigade-log nil 'noerror)
+  (require 'cmacs-brigade-mailbox nil 'noerror)
+  (when (fboundp 'cmacs-brigade-mailbox-restore)
+    (with-demoted-errors "cmacs-brigade: mailbox restore: %S"
+      (cmacs-brigade-mailbox-restore)))
   ;; The runner itself.  Nothing autoloads it and the dashboard and
   ;; scheduler both call into it, so leaving it out made `s' in the
   ;; dashboard and every scheduled fire die on a void

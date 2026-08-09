@@ -134,6 +134,9 @@ surface.  One interface per subsystem, registered at
 @code{HAVE_CMACS_*} build flag: @code{Editor1.Crispy},
 @code{.Bacon}, @code{.Eshell} (@file{cmacs-dbus-iface-lang.c});
 @code{.Edit}; @code{.Input}; @code{.Debug}; @code{.Ai};
+@code{.Brigade} (@file{cmacs-dbus-iface-brigade.c}: the @code{agent_*}
+tools, plus the mailbox @code{Send}/@code{Inbox}/@code{Drop}/@code{Log}/
+@code{Close});
 @code{.Gsurf}; @code{.GnusEye}; @code{.Podomation}; @code{.Video},
 @code{.Audio}, @code{.Speech} (@file{cmacs-dbus-iface-media.c});
 @code{.Lrg}; @code{.Calc}

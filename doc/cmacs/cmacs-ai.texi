@@ -367,6 +367,31 @@ Emacs's allocator is not thread-safe, so every @code{Lisp_Object}
 involved must be built where Lisp lives, and only C strings cross the
 boundary.
 
+The run's own messages---the assistant's turns and the results of any
+tools it called---are appended back onto the session before the callback
+fires.  That is what lets the same session be run again as a
+continuation rather than a restart: without it ai-glib's executor copies
+the message list, appends to its copy and frees it, so a second run would
+show the model its original instruction and the new question with no
+trace of what it had already said or done.
+
+Because every turn re-sends the whole session, a long conversation costs
+quadratically in the number of turns, and does it quietly.
+
+@defopt cmacs-ai-history-limit
+Most messages a session keeps before the oldest are dropped (200).  The
+oldest end is both the part the model is least likely to still need and
+the only part safe to lose: standing instructions live in the client's
+system prompt, not in this list, so they are never what gets dropped.
+Zero or negative keeps everything, which is the right setting only if you
+are watching the cost yourself.
+@end defopt
+
+@code{cmacs-ai-session-append-message} takes only @code{user} and
+@code{assistant}.  There is no @code{system} role: a system prompt
+belongs to the client, and is set with
+@code{cmacs-ai-client-set-system-prompt}.
+
 @defopt cmacs-ai-tool-call-timeout
 Seconds a background tool loop waits for the main thread (120).  The
 main thread picks the call up from its GLib dispatch, which happens

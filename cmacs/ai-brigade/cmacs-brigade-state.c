@@ -126,7 +126,13 @@ cmacs_brigade_state_can_transition (CmacsBrigadeState from,
         || to == CMACS_BRIGADE_STATE_FAILED;
 
     case CMACS_BRIGADE_STATE_STARTING:
+      /* WAITING_INPUT is where a resumed turn lands when it could not
+       * start but is worth retrying -- its message is still at the head
+       * of the mailbox, so parking again is honest and the next kick
+       * tries afresh.  Failing outright is reserved for the attempt
+       * budget running out. */
       return to == CMACS_BRIGADE_STATE_RUNNING
+        || to == CMACS_BRIGADE_STATE_WAITING_INPUT
         || to == CMACS_BRIGADE_STATE_FAILED;
 
     case CMACS_BRIGADE_STATE_RUNNING:
@@ -138,10 +144,23 @@ cmacs_brigade_state_can_transition (CmacsBrigadeState from,
         || to == CMACS_BRIGADE_STATE_INTERRUPTED;
 
     case CMACS_BRIGADE_STATE_WAITING_INPUT:
-      /* An answer resumes it; accepting the partial result finishes it. */
-      return to == CMACS_BRIGADE_STATE_RUNNING
+      /* An answer resumes it; accepting the partial result finishes it.
+       *
+       * QUEUED and STARTING are how a parked conversation resumes: a
+       * message arrives in its mailbox, it goes back in the queue, and
+       * the drain starts it like anything else.  It does NOT go straight
+       * to RUNNING -- that would let it walk past the concurrency cap
+       * that every hand-started task obeys.  Note DRAFT is deliberately
+       * still absent: a plan re-adopt translates a TODO keyword into an
+       * unqueue request, and allowing it here would let an unrelated
+       * spawn silently strand a conversation that is waiting to be
+       * answered. */
+      return to == CMACS_BRIGADE_STATE_QUEUED
+        || to == CMACS_BRIGADE_STATE_STARTING
+        || to == CMACS_BRIGADE_STATE_RUNNING
         || to == CMACS_BRIGADE_STATE_DONE
-        || to == CMACS_BRIGADE_STATE_FAILED;
+        || to == CMACS_BRIGADE_STATE_FAILED
+        || to == CMACS_BRIGADE_STATE_OVER_BUDGET;
 
     case CMACS_BRIGADE_STATE_BLOCKED:
       return to == CMACS_BRIGADE_STATE_RUNNING
@@ -180,6 +199,20 @@ typedef struct
   gint64             cost_micros;
   gint64             started_at;
   gint64             ended_at;
+  /* When this task most recently became eligible to run, in
+   * MICROSECONDS.  The queue drains oldest-first off this: without it
+   * the drain order is GHashTable bucket order, which is stable for a
+   * fixed key set, so a task in a late bucket loses every drain to the
+   * same competitors indefinitely.  That is invisible until a task is
+   * re-queued repeatedly, which is exactly what a multi-turn
+   * conversation does.
+   *
+   * Microseconds rather than the seconds the other timestamps use,
+   * because this one is an ordering key rather than something to show a
+   * user: a fan-out queues a dozen tasks inside the same second, and at
+   * second resolution they would all tie and fall back to precisely the
+   * arbitrary order this exists to replace. */
+  gint64             queued_at;
   gchar             *error;
   gchar             *agent;
   gchar             *title;
@@ -225,6 +258,7 @@ task_to_plist (const CmacsBrigadeTask *t)
                intern (":cost-micros"), make_fixnum (t->cost_micros),
                intern (":started-at"), make_fixnum (t->started_at),
                intern (":ended-at"), make_fixnum (t->ended_at),
+               intern (":queued-at-usec"), make_fixnum (t->queued_at),
                intern (":agent"), t->agent ? build_string (t->agent) : Qnil,
                intern (":title"), t->title ? build_string (t->title) : Qnil,
                intern (":error"), t->error ? build_string (t->error) : Qnil);
@@ -372,6 +406,15 @@ declined and the reason reported rather than obeyed.  */)
       g_clear_pointer (&t->error, g_free);
       t->ended_at = 0;
     }
+  /* Stamped on *entry* to a waiting state, not refreshed while already in
+   * one, so a task that sits queued keeps ageing rather than resetting
+   * its place in line every time something touches it.  WAITING_INPUT
+   * counts because a parked conversation with mail waiting is queued in
+   * every sense that matters to the drain. */
+  if ((to == CMACS_BRIGADE_STATE_QUEUED
+       || to == CMACS_BRIGADE_STATE_WAITING_INPUT)
+      && t->state != to)
+    t->queued_at = g_get_real_time ();
 
   if (STRINGP (detail))
     {
@@ -411,6 +454,40 @@ than no spend figure, since it is the one number a budget acts on.  */)
       if (FIXNUMP (in_tokens))   t->in_tokens   = (guint64) XFIXNUM (in_tokens);
       if (FIXNUMP (out_tokens))  t->out_tokens  = (guint64) XFIXNUM (out_tokens);
       if (FIXNUMP (cost_micros)) t->cost_micros = XFIXNUM (cost_micros);
+      out = task_to_plist (t);
+    }
+  g_mutex_unlock (&cmacs_brigade__task_mutex);
+  return out;
+}
+
+DEFUN ("cmacs-brigade-task-progress-add", Fcmacs_brigade_task_progress_add,
+       Scmacs_brigade_task_progress_add, 4, 5, 0,
+       doc: /* Add one turn's figures to task ID's running totals.
+
+The accumulating sibling of `cmacs-brigade-task-progress', which assigns.
+Assignment is right when the caller knows the whole conversation's
+figures; a resumed turn does not.  A CLI agent's JSON report carries the
+usage of *that invocation* only, so feeding it to the assigning form made
+every turn overwrite the conversation's cost with the last turn's -- the
+budget silently under-reporting by everything that came before.
+
+TURNS, IN-TOKENS, OUT-TOKENS and COST-MICROS are all deltas.  */)
+  (Lisp_Object id, Lisp_Object turns, Lisp_Object in_tokens,
+   Lisp_Object out_tokens, Lisp_Object cost_micros)
+{
+  CmacsBrigadeTask *t;
+  Lisp_Object out = Qnil;
+
+  CHECK_STRING (id);
+  cmacs_brigade_state_init ();
+  g_mutex_lock (&cmacs_brigade__task_mutex);
+  t = g_hash_table_lookup (cmacs_brigade__tasks, SSDATA (id));
+  if (t != NULL)
+    {
+      if (FIXNUMP (turns))       t->turns       += (guint) XFIXNUM (turns);
+      if (FIXNUMP (in_tokens))   t->in_tokens   += (guint64) XFIXNUM (in_tokens);
+      if (FIXNUMP (out_tokens))  t->out_tokens  += (guint64) XFIXNUM (out_tokens);
+      if (FIXNUMP (cost_micros)) t->cost_micros += XFIXNUM (cost_micros);
       out = task_to_plist (t);
     }
   g_mutex_unlock (&cmacs_brigade__task_mutex);
@@ -498,6 +575,7 @@ syms_of_cmacs_ai_brigade_state (void)
   defsubr (&Scmacs_brigade_task_forget);
   defsubr (&Scmacs_brigade_task_transition);
   defsubr (&Scmacs_brigade_task_progress);
+  defsubr (&Scmacs_brigade_task_progress_add);
   defsubr (&Scmacs_brigade_task_list);
   defsubr (&Scmacs_brigade_state_can_transition_p);
   defsubr (&Scmacs_brigade_state_interrupt_live);

@@ -88,6 +88,26 @@ Every variation point is public. Shipped features consume exactly these.
 | =cmacs-brigade-register-notifier=             | how you are told something happened |
 | =cmacs-brigade-register-client=               | a conversation a finished agent can wake |
 
+A worker also declares =:supports-session=, which says whether it can continue an
+existing conversation rather than only starting a fresh one — an in-process
+session handle, or a CLI that takes a session id. Without it, =agent_send= to a
+task run by that worker is refused rather than re-running it with the follow-up
+as though it were a first prompt.
+
+** Observing runs
+
+| Hook | Fires |
+|------+-------|
+| =cmacs-brigade-run-finished-functions= | =(TASK-ID STATE OUTPUT)= when a turn completes. Unchanged: every observer that predates conversations is wired here |
+| =cmacs-brigade-turn-finished-functions= | =(TASK-ID TURN OUTPUT)= once per turn, with the turn number |
+| =cmacs-brigade-mailbox-delivered-functions= | =(TASK-ID MESSAGE)= when a queued message is handed to a turn |
+| =cmacs-brigade-after-tool-call-functions= | every tool call, with =:task= naming the run that made it when there is one |
+
+Both of the first two fire for every completed turn. They differ in what they
+tell you: =run-finished= gives the task's state, =turn-finished= gives the turn
+number. Take the second when you care about the shape of a conversation, the
+first when you care about outcomes.
+
 Writing a tool that asks a model for structured data? =cmacs-brigade-parse-json-object=
 locates the JSON object in a reply and returns it as an alist. Models wrap JSON
 in prose and code fences however firmly they are asked not to, and a reply that

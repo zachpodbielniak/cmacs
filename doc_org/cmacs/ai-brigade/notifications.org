@@ -50,11 +50,25 @@ The defaults are deliberately uneven. Something that needs /you/ is worth interr
 | Kind | When |
 |------+------|
 | =started= | an agent began |
-| =finished= | an agent completed successfully |
+| =finished= | an agent completed successfully, with nothing more queued for it |
+| =turn-finished= | an agent answered but has further messages waiting; unrouted by default |
 | =failed= | an agent exited non-zero |
 | =needs-input= | an agent entered =waiting-input= or =blocked= |
 | =budget-exceeded= | an agent stopped against its ceiling |
-| =all-done= | the last live agent finished |
+| =all-done= | nothing is outstanding: nothing running, and no conversation with queued messages |
+
+=turn-finished= exists because a conversation you are going back and forth with
+produces a completion every turn, and a sound per turn through a twenty-turn
+exchange is the notification equivalent of shouting. The two are distinguished
+by whether anything is still queued for the task: an agent that answered with
+nothing waiting behind it is finished as far as you are concerned, whatever
+session it is still holding open. See [[file:mailbox.org][Mailboxes]].
+
+=all-done= counts /outstanding/ work, not live processes. A parked conversation
+with three messages queued is running nothing at all, and announcing that every
+agent had finished in the middle of one would be wrong. Note this is a
+different number from the concurrency gate, which stays processes-only so that a
+parked conversation cannot hold a slot.
 | =away-quiet= | routing used for a non-urgent event while you are away |
 
 * Shipped notifiers

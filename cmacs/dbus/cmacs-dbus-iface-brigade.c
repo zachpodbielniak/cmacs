@@ -67,6 +67,32 @@ static const gchar *iface_xml =
   "      <arg type='s' name='provider' direction='in'/>"
   "      <arg type='s' name='models' direction='out'/>"
   "    </method>"
+  /* The mailbox: continuing a conversation with a task rather than
+   * starting a new one, and reading what any task has been doing. */
+  "    <method name='Send'>"
+  "      <arg type='s' name='id' direction='in'/>"
+  "      <arg type='s' name='message' direction='in'/>"
+  "      <arg type='s' name='result' direction='out'/>"
+  "    </method>"
+  "    <method name='Inbox'>"
+  "      <arg type='s' name='id' direction='in'/>"
+  "      <arg type='s' name='messages' direction='out'/>"
+  "    </method>"
+  "    <method name='Drop'>"
+  "      <arg type='s' name='id' direction='in'/>"
+  "      <arg type='s' name='index' direction='in'/>"
+  "      <arg type='s' name='result' direction='out'/>"
+  "    </method>"
+  "    <method name='Log'>"
+  "      <arg type='s' name='id' direction='in'/>"
+  "      <arg type='s' name='from_turn' direction='in'/>"
+  "      <arg type='s' name='kinds' direction='in'/>"
+  "      <arg type='s' name='log' direction='out'/>"
+  "    </method>"
+  "    <method name='Close'>"
+  "      <arg type='s' name='id' direction='in'/>"
+  "      <arg type='s' name='result' direction='out'/>"
+  "    </method>"
   "  </interface>"
   "</node>";
 
@@ -156,6 +182,7 @@ call_tool (GDBusMethodInvocation *iv, const gchar *name, const gchar *args_json)
   eval_to_reply (iv, g_strdup_printf (
     "(progn (require 'cmacs-brigade)"
     " (require 'cmacs-brigade-subagent)"
+    " (require 'cmacs-brigade-mailbox nil t)"
     " (let ((cmacs-brigade-confirm-function (lambda (_) t)))"
     "  (condition-case e (cmacs-brigade-call-tool \"%s\" \"%s\" \"dbus\")"
     "   (error (format \"error: %%s\" (error-message-string e))))))",
@@ -195,11 +222,15 @@ on_method_call (GDBusConnection *c, const gchar *s, const gchar *o,
     }
   else if (g_strcmp0 (m, "Status") == 0
            || g_strcmp0 (m, "Result") == 0
-           || g_strcmp0 (m, "Cancel") == 0)
+           || g_strcmp0 (m, "Cancel") == 0
+           || g_strcmp0 (m, "Inbox") == 0
+           || g_strcmp0 (m, "Close") == 0)
     {
       const gchar *id;
       const gchar *tool = (g_strcmp0 (m, "Status") == 0) ? "agent_status"
                         : (g_strcmp0 (m, "Result") == 0) ? "agent_result"
+                        : (g_strcmp0 (m, "Inbox")  == 0) ? "agent_inbox"
+                        : (g_strcmp0 (m, "Close")  == 0) ? "agent_close"
                         : "agent_cancel";
       g_autofree gchar *args = NULL;
 
@@ -235,6 +266,58 @@ on_method_call (GDBusConnection *c, const gchar *s, const gchar *o,
         }
       args = build_args ("provider", provider, NULL);
       call_tool (iv, "agent_models", args);
+    }
+  else if (g_strcmp0 (m, "Send") == 0)
+    {
+      const gchar *id, *message;
+      g_autofree gchar *args = NULL;
+
+      g_variant_get (p, "(&s&s)", &id, &message);
+      if (*id == '\0' || *message == '\0')
+        {
+          g_dbus_method_invocation_return_dbus_error (
+            iv, "org.cmacs.Editor1.Error", "Send needs an id and a message");
+          return;
+        }
+      args = build_args ("id", id, "message", message, NULL);
+      call_tool (iv, "agent_send", args);
+    }
+  else if (g_strcmp0 (m, "Drop") == 0)
+    {
+      const gchar *id, *index;
+      g_autofree gchar *args = NULL;
+
+      g_variant_get (p, "(&s&s)", &id, &index);
+      if (*id == '\0')
+        {
+          g_dbus_method_invocation_return_dbus_error (
+            iv, "org.cmacs.Editor1.Error", "missing task id");
+          return;
+        }
+      /* An empty index is dropped by build_args, which leaves the tool's
+       * own optional argument unset -- and unset means "clear the whole
+       * queue", which is exactly what an omitted index should mean.  The
+       * number arrives as a string and the tool layer coerces it; every
+       * argument on this interface is a string so a shell caller does not
+       * have to think about D-Bus types. */
+      args = build_args ("id", id, "index", index, NULL);
+      call_tool (iv, "agent_drop", args);
+    }
+  else if (g_strcmp0 (m, "Log") == 0)
+    {
+      const gchar *id, *from_turn, *kinds;
+      g_autofree gchar *args = NULL;
+
+      g_variant_get (p, "(&s&s&s)", &id, &from_turn, &kinds);
+      if (*id == '\0')
+        {
+          g_dbus_method_invocation_return_dbus_error (
+            iv, "org.cmacs.Editor1.Error", "missing task id");
+          return;
+        }
+      args = build_args ("id", id, "from_turn", from_turn,
+                         "kinds", kinds, NULL);
+      call_tool (iv, "agent_log", args);
     }
   else if (g_strcmp0 (m, "Agents") == 0)
     {

@@ -70,6 +70,17 @@ obeying it would orphan a live agent that is still spending money.
 The exact state is always in =:BRIGADE-STATE:=; several states share a keyword,
 so that property is what a program should read.
 
+A =DONE= task may still be resumable. Sending it a message with =agent_send=
+moves it back through =queued= to =running= on the session it already had — the
+same transition a retry makes. So =DONE= means "answered", not "will never run
+again"; what makes it resumable is its conversation record, which the dashboard
+shows and =agent_close= releases. See [[file:mailbox.org][Mailboxes]].
+
+=WAIT= is reached in two ways: an agent that stopped to ask you something, and a
+resumed turn that could not start yet but is worth retrying. Neither is a state
+a plan re-adopt can un-queue — =WAIT= to =TODO= is refused — so an unrelated
+spawn cannot strand a task that is waiting to be answered.
+
 * Identity
 
 Org's own =:ID:= when =org-id= is available — which buys =org-id-goto=,

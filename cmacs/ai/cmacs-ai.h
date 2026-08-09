@@ -43,6 +43,11 @@ extern AiProvider *cmacs_ai_session_get_provider       (CmacsAiSession *s);
 extern GList      *cmacs_ai_session_get_messages       (CmacsAiSession *s);
 extern void        cmacs_ai_session_append_message_obj (CmacsAiSession *s,
                                                         AiMessage *msg);
+/* Drop the oldest messages until at most LIMIT remain; LIMIT <= 0 is a
+ * no-op.  For sessions that live across turns, where the whole list is
+ * re-sent every time. */
+extern void        cmacs_ai_session_trim               (CmacsAiSession *s,
+                                                        gint limit);
 extern AiToolExecutor *cmacs_ai_session_ensure_executor (CmacsAiSession *s);
 extern GCancellable *cmacs_ai_session_install_cancellable (CmacsAiSession *s);
 extern void        cmacs_ai_session_clear_cancellable  (CmacsAiSession *s);

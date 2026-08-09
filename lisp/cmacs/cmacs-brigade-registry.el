@@ -341,13 +341,22 @@ exactly like a file-defined one.")
 (cmacs-brigade--define-registry worker (:start)
   "Register an execution backend from PLIST.
 
-Recognised keys: :name, :start (function), :poll, :read-output, :cancel.
+Recognised keys: :name, :start (function), :poll, :read-output, :cancel,
+:parse-output, :supports-session.
 
 A worker decides *how* an agent runs -- in this process, as a
 `claude-code' subprocess, as a detached job, on another machine.  :poll
 exists for workers that cannot push state (a detached process has no
 SIGCHLD to deliver); leave it nil when the worker reports its own
-transitions.")
+transitions.
+
+:supports-session declares that the worker can continue an existing
+conversation rather than only starting a fresh one -- an in-process
+session handle, or a CLI that takes a session id.  Without it a task run
+by this worker refuses `agent_send': re-running it with a follow-up
+message would produce something that has never seen the first message,
+and presenting that as a continuation is a lie the caller cannot
+detect.")
 
 (cmacs-brigade--define-registry isolation (:prepare)
   "Register a sandbox backend from PLIST.

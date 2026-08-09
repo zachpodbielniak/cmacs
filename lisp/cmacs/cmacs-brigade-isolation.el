@@ -77,8 +77,15 @@ happened to be given a worktree."
     ;; fail on a path that already exists.
     (cmacs-brigade-isolation--worktree-teardown agent-id)
     (let ((default-directory repo))
+      ;; `-B' rather than `-b': the teardown above removes the worktree
+      ;; and prunes its administrative entry, but a branch is not part of
+      ;; either.  With `-b' the second prepare for a given agent id --
+      ;; a retry, or any turn after the first of a multi-turn
+      ;; conversation -- died on "a branch named brigade/... already
+      ;; exists".  `-B' resets it to HEAD instead, which is what starting
+      ;; over means.
       (unless (zerop (call-process "git" nil nil nil
-                                   "worktree" "add" "-b" branch dest "HEAD"))
+                                   "worktree" "add" "-B" branch dest "HEAD"))
         (user-error "cmacs-brigade: could not create a worktree at %s" dest)))
     (list :cwd (file-name-as-directory dest)
           :env (list (cons "CMACS_BRIGADE_WORKTREE" dest)
@@ -87,9 +94,10 @@ happened to be given a worktree."
 (defun cmacs-brigade-isolation--worktree-teardown (agent-id)
   "Remove AGENT-ID's worktree.  Safe on a path that was never created."
   (let* ((repo (or (vc-root-dir) default-directory))
-         (dest (cmacs-brigade-isolation--worktree-path agent-id)))
-    (when (file-directory-p dest)
-      (let ((default-directory repo))
+         (dest (cmacs-brigade-isolation--worktree-path agent-id))
+         (branch (format "brigade/%s" agent-id)))
+    (let ((default-directory repo))
+      (when (file-directory-p dest)
         ;; `git worktree remove' refuses when the checkout is dirty, and
         ;; an agent's worktree usually is -- that is the point of it.
         ;; Force, then prune the administrative entry the removal leaves
@@ -97,7 +105,15 @@ happened to be given a worktree."
         (ignore-errors
           (call-process "git" nil nil nil "worktree" "remove" "--force" dest))
         (when (file-directory-p dest) (delete-directory dest t))
-        (ignore-errors (call-process "git" nil nil nil "worktree" "prune"))))))
+        (ignore-errors (call-process "git" nil nil nil "worktree" "prune")))
+      ;; The branch, unconditionally: it outlives the worktree directory,
+      ;; and leaving it behind is what made a second prepare fail.  After
+      ;; the prune above nothing has it checked out, so `-D' succeeds --
+      ;; and if it does not, prepare's `-B' resets it anyway.  Attempted
+      ;; even when the directory was already gone, because that is
+      ;; precisely the state a half-finished teardown leaves.
+      (ignore-errors
+        (call-process "git" nil nil nil "branch" "-D" branch)))))
 
 (cmacs-brigade-register-isolation
  :name 'worktree

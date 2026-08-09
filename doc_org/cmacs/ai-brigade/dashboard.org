@@ -36,7 +36,10 @@ ST  ID         AGENT        TASK                       TURNS   TOKENS      COST
 | =K=     | cancel it                                       |
 | =d=     | delete it, from the runtime and from its plan   |
 | =RET=   | jump to its headline in the plan                |
-| =o=     | read what it produced                           |
+| =o=     | read its transaction log                        |
+| =i=     | send it another message                         |
+| =I=     | show what is queued for it, and drop one        |
+| =X=     | close the conversation, releasing its session   |
 | =a= =m= =b= =t= | set its agent / model / budget / tools   |
 | =c= =p= | create or open a plan file                      |
 | =N= =T= =A= | write an agent / list tools / reload agents |
@@ -451,7 +454,10 @@ None of the three ever creates a window. =display-buffer-alist= still applies if
 |-----+--------------|
 | =s= | start the task on this line |
 | =K= | cancel it |
-| =o= | read what it produced |
+| =o= | read its transaction log — every message, reply and tool call, not just the last answer |
+| =i= | send it another message; it continues the same conversation, running or long finished |
+| =I= | list what is queued for it, and optionally drop one |
+| =X= | close the conversation and release the session it is holding |
 | =RET= | jump to its headline in the plan |
 | =c= | create a new plan and open it |
 | =p= | open an existing plan |

@@ -1,0 +1,160 @@
+#+title: Talking Back: Mailboxes, Conversations and the Transaction Log
+#+description: Sending an agent another message, continuing its session, and reading what any agent actually did
+#+authors: Zach Podbielniak
+#+categories: cmacs, ai, agents
+#+created: [2026-08-09 Sat]
+#+updated: [2026-08-09 Sat]
+#+version: 0.1.0
+
+* Overview
+
+A brigade task used to run exactly once. You gave it a prompt, it answered, and that was the whole relationship — if you had one more thing to say you spawned a second agent and pasted the context in by hand.
+
+Now every task has a *mailbox*. You put a message in it; the agent picks it up and continues the same conversation, remembering everything it already said and did. It works whether the agent is still running (the message is delivered when its current turn ends) or finished hours ago (it starts again on the same provider session).
+
+Alongside that, every task keeps a *transaction log*: an append-only record of every message it was given, every reply, every tool it called. Any agent can read any task's log, whether or not it spawned it — which is the point. A debugging agent can be pointed at a misbehaving one and read what it actually did rather than what it says it did.
+
+* The model
+
+Three things, deliberately separate:
+
+- *the task* — the unit of work, with a state (=draft=, =queued=, =running=, =done=, …). Unchanged.
+- *the conversation* — the provider session, the sandbox, the working directory and the running totals. Created when a task first starts, and it *outlives the turn*.
+- *the mailbox* — a FIFO of messages waiting to be delivered.
+
+A task that answers you reaches =done=, exactly as before. That matters: =done= is what the dashboard, the notifier and the plan all mean by finished, and a task that sat in some open state after answering would tell all three that it was still going. What makes it resumable is the conversation record surviving, not the task's state.
+
+When a message arrives, the task goes =done= → =queued= → =running= again. That is the same transition a retry has always made; nothing new was needed in the state machine for the ordinary path.
+
+** What carries across a turn, and what does not
+
+| Thing | Survives? | Why |
+|-------+-----------+-----|
+| Provider session | yes | The whole point — the model sees what it already said |
+| Isolation (worktree, container) | yes | Rebuilding it would delete the agent's uncommitted work while its conversation still believed it made those edits |
+| Working directory | yes, resolved once | =claude --resume= resolves a session against the project directory, so a drifted cwd silently starts a *fresh* conversation instead of failing |
+| Tool allowlist | yes | Recorded at the first turn, so reloading an agent definition mid-conversation cannot quietly add or remove capabilities |
+| Capability token | *no* | Minted fresh each turn. A short-lived credential is strictly better than a long-lived one, and the config file naming it is regenerated anyway |
+| Concurrency slot | *no* | Released the moment a turn ends. An idle conversation must not hold a slot a queued task could use |
+
+** Ending badly ends the conversation
+
+Only a clean =done= keeps the conversation. A failure, a cancellation or a budget stop releases it — session, sandbox and all. Silently resuming a session whose last turn broke is the kind of recovery that should be asked for rather than assumed.
+
+* Using it
+
+** From the dashboard
+
+| Key | Does |
+|-----+------|
+| =i= | Send a message to the task on this line |
+| =I= | Show what is queued for it, and optionally drop one |
+| =X= | Close the conversation and release its session |
+| =o= | Show the transaction log (the whole exchange, not just the last reply) |
+
+=i= also works in the output buffer, so you can read an answer and reply from where you are reading it.
+
+** From an agent
+
+Five tools in the =mailbox= group:
+
+- =agent_send(id, message)= — queue a message; wakes a parked agent
+- =agent_inbox(id)= — what is queued but not yet delivered
+- =agent_drop(id, index)= — remove a queued message, or all of them
+- =agent_log(id, from_turn, kinds)= — read any task's transaction log
+- =agent_close(id)= — finish with an agent and release its session
+
+=agent_result= gained an optional =turn=, so the reply to one message can still be read after later ones have arrived.
+
+An agent must be granted the =mailbox= group to reach these. Granting =agent= alone does *not* include them — a subagent that can read logs is a different thing from one that can spend money starting turns.
+
+** From the shell
+
+#+begin_src bash
+emacsctl brigade spawn "audit the config loader" --agent reviewer
+emacsctl brigade send <id> "now check the error paths too"
+emacsctl brigade inbox <id>
+emacsctl brigade log <id> --from-turn 2
+emacsctl brigade close <id>
+#+end_src
+
+The same verbs exist in bacon (=brigade send ID MESSAGE=, =brigade log ID -f 2=) and on D-Bus (=org.cmacs.Editor1.Brigade.Send=, =.Inbox=, =.Drop=, =.Log=, =.Close=).
+
+* The transaction log
+
+One JSON object per line at =<output-dir>/<id>.jsonl=. JSONL rather than org because the primary reader is another agent: it needs to filter by turn and by kind without being handed a document to parse, and appending a line survives the editor dying in a way that rewriting a document does not.
+
+Four kinds:
+
+| Kind | Written when | Carries |
+|------+--------------+---------|
+| =message= | something is said *to* the agent | =text=, =from= (=human=, =agent=, =dbus=, =mcp=, =plan=) |
+| =reply= | a turn ends | =text=, =state=, that turn's tokens and cost |
+| =tool= | the agent calls a tool | =tool=, =args=, =result= or =error= |
+| =state= | a lifecycle transition | =state=, =reason= |
+
+Every entry carries =turn= and =at=. A line that does not parse is skipped rather than fatal — the file is appended to from a process sentinel, so a truncated final line is the normal consequence of a crash, and refusing to read the other nine hundred entries because of it would lose the record exactly when it is most wanted.
+
+** It is richer than what the model sees
+
+Replay compacts tool traffic away to keep a long conversation affordable. The log keeps all of it. That asymmetry is deliberate: the point of reading another agent's log is to see what it actually did, not the tidied version it would tell you about.
+
+** Tool attribution
+
+Per-tool entries are recorded for *in-process* agents, which call tools through cmacs and so can be attributed to the task that made the call. A CLI agent (=claude-code=, =opencode=) reaches the same tools over the MCP relay, whose protocol carries the capability token but not the task id, so individual calls from one cannot be attributed. Their logs still carry every message, reply and state change.
+
+* The sidecar debugging pattern
+
+The case =agent_log= exists for:
+
+#+begin_src elisp
+;; Something is wrong with a long-running agent.  Spawn a second one and
+;; point it at the first, without forwarding anything by hand.
+(cmacs-brigade-subagent-spawn
+ 'debugger
+ (format "Read agent_log for task %s. It was asked to migrate the config
+loader and reports success, but the tests still fail. Work out what it
+actually did, and whether its own account of it is accurate." id))
+#+end_src
+
+The debugger reads the whole exchange — the instructions, the tool calls, the outputs, the failures — and can then =agent_send= the first agent a correction, all without you relaying anything.
+
+Give such an agent =mailbox= and read-only tools and it can inspect and correct, but not spawn work of its own.
+
+* Costs, budgets and bounds
+
+- *Cost accumulates across turns.* A resumed CLI turn's report carries that invocation's usage only; those figures are added to the conversation's running totals rather than replacing them. (They used to replace them, which meant a long conversation reported the last turn's cost as though it were the whole thing.)
+- *History is capped.* Every turn re-sends the whole session, so an unbounded history costs quadratically in the number of turns. =cmacs-ai-history-limit= (default 200 messages) drops the oldest when it is exceeded. Standing instructions live in the system prompt, not the message list, so they are never what gets dropped.
+- *Mailboxes are bounded.* =cmacs-brigade-mailbox-max= (default 64) refuses further messages rather than letting a runaway sender queue forever.
+- *Conversations are swept.* =cmacs-brigade-conversation-ttl= (default one day) releases one that has been idle too long. Idleness is measured from the last delivery or completed turn, so a conversation waiting behind a busy concurrency cap is not swept while its message is still pending. A sweep with mail still queued is recorded in the log rather than dropping the messages quietly.
+
+* Workers that cannot do this
+
+A worker declares =:supports-session=. The =inproc=, =claude-code= and =opencode= workers have it; =shell= does not. Sending to a =shell= task is refused outright rather than re-running bash with the follow-up as though it were a first prompt — that would produce a process which has never seen the first message, and calling it a continuation would be a lie the caller could not detect.
+
+* Persistence
+
+Queued messages are written to =<state-dir>/mailbox/<id>.jsonl= and restored at startup. The point of queueing against a busy agent is that you can walk away; losing the message on the restart that happens while you are gone would make the queue pointless in exactly the case it exists for.
+
+The conversation itself does *not* survive a restart — an in-process provider session cannot — and such a task is marked =interrupted= on the next start, which is the honest answer and the normal retry path.
+
+* Ordering and fairness
+
+The queue drains oldest-first, by when each task entered it (=:queued-at-usec=). Without an explicit order the drain followed hash-table bucket order, which is arbitrary but *stable*: a task in a late bucket lost to the same competitors on every drain, indefinitely. Invisible while each task drained once, and real starvation as soon as a task could be re-queued repeatedly — which is exactly what a conversation does.
+
+A finishing turn does not start its own next turn directly, either. It puts itself back in the queue and lets the drain choose, so a chatty conversation cannot re-take the slot it just released ahead of tasks that have been waiting longer.
+
+* Hooks
+
+- =cmacs-brigade-turn-finished-functions= — =(TASK-ID TURN OUTPUT)=, once per turn.
+- =cmacs-brigade-run-finished-functions= — =(TASK-ID STATE OUTPUT)=, unchanged, still fires for every completed turn. Every observer that predates conversations is wired to this one.
+- =cmacs-brigade-mailbox-delivered-functions= — =(TASK-ID MESSAGE)= when a message is handed to a turn.
+
+Notification distinguishes the two cases by whether anything is still queued: a task that answered with nothing waiting behind it fires =finished=, one with messages still queued fires =turn-finished=, which is unrouted by default. A sound per turn through a twenty-turn exchange is the notification equivalent of shouting.
+
+* See also
+
+- [[file:agents.org][Agents]] — definitions, workers and isolation
+- [[file:dashboard.org][Dashboard]] — the keys
+- [[file:mcp.org][Tools and MCP]] — the tool groups and how they are published
+- [[file:extending.org][Extending the brigade]] — registering your own workers and hooks

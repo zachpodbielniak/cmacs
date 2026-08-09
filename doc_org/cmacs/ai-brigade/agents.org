@@ -150,12 +150,18 @@ A malformed definition is reported and skipped rather than aborting the load, so
 
 A worker decides /how/ an agent runs. Four ship, and all four are registered through the public =cmacs-brigade-register-worker=, so one you register yourself is reached by exactly the same path.
 
-| Worker | What it does |
-|--------+--------------|
-| =inproc= | runs the tool loop inside cmacs against the provider's HTTP API (the default) |
-| =claude-code= | drives the =claude= CLI in =--print= mode |
-| =opencode= | drives the =opencode= CLI |
-| =shell= | pipes the prompt to bash; mostly for testing |
+| Worker | What it does | Continues a conversation? |
+|--------+--------------+---------------------------|
+| =inproc= | runs the tool loop inside cmacs against the provider's HTTP API (the default) | yes, by keeping the session |
+| =claude-code= | drives the =claude= CLI in =--print= mode | yes, via =--resume= |
+| =opencode= | drives the =opencode= CLI | yes, via =--session= |
+| =shell= | pipes the prompt to bash; mostly for testing | no |
+
+The last column is the worker's =:supports-session= flag, and it is what
+=agent_send= checks. Sending to a =shell= task is refused rather than re-running
+bash with the follow-up as though it were a first prompt: that produces a
+process which has never seen the first message, and presenting it as a
+continuation would be a lie the caller cannot detect. See [[file:mailbox.org][Mailboxes]].
 
 *You rarely name a worker.* It is resolved in this order: an explicit =worker:= in the definition, then the worker implied by the model's provider (=claude-code/= and =opencode/= pick their own CLI), then =cmacs-brigade-worker=. Running a CLI provider through the in-process loop would silently drop every tool — the CLI clients ignore the tools argument and take them over MCP — so the provider gets to decide.
 

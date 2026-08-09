@@ -144,3 +144,44 @@ Programmatic clients should match on the error name to decide
 whether to surface to the user or retry.  Most languages' D-Bus
 bindings turn the error into a typed exception.  See
 @ref{D-Bus CLI Examples} for examples in each language.
+
+@subsection org.cmacs.Editor1.Brigade
+
+Drives AI agents.  Every argument and every return value is a string, so
+a shell caller never has to think about D-Bus types; numeric arguments
+are coerced on the far side.  All of them route through
+@code{cmacs-brigade-call-tool}, the same entry point an agent reaches
+over MCP---three surfaces, one code path.
+
+@table @code
+@item Spawn (task, agent, title, model) @result{} id
+Hand a task to an agent.  All but the first argument may be empty.
+@item Status (id), Result (id), Cancel (id), List ()
+State and cost, what it produced, stop it, everything known.
+@item Agents (), Providers (), Models (provider)
+What can be spawned, and what it can be run against.
+@item Send (id, message)
+Queue a message.  Continues the existing conversation, so the agent
+still remembers earlier turns; wakes a task that has already finished.
+@item Inbox (id), Drop (id, index)
+What is queued but not yet delivered, and removing one---an empty
+@var{index} clears the queue.
+@item Log (id, from_turn, kinds)
+The transaction log: every message, reply and tool call.  Works on any
+task, including ones the caller never spawned.  Both filters may be
+empty.
+@item Close (id)
+Release the conversation's session.
+@end table
+
+Confirmation prompts are bypassed on this interface deliberately.  They
+exist so an @emph{agent} cannot start paid work unattended; a D-Bus
+caller is the session owner, who already has
+@code{org.cmacs.Editor1.Eval} on the same bus.  It also could not work as
+written: RPC evals bind @code{inhibit-interaction}, so a prompt inside a
+dispatch signals rather than asking, and every @code{Spawn} would fail.
+
+@example
+busctl --user call org.cmacs.Editor1 /org/cmacs/Editor1 \
+  org.cmacs.Editor1.Brigade Send ss "$ID" "now check the error paths"
+@end example

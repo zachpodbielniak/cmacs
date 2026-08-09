@@ -43,9 +43,9 @@ static const CtlMethodSpec subsys_specs[] = {
   { "ai providers", "List configured AI providers",
     CTL_IFACE_AI, "ListProviders", NULL, CTL_REPLY_STRING },
 
-  /* brigade --- subagent control.  Same five verbs as the agent_* tools
-   * an agent gets over MCP, so a shell script and a model drive the
-   * queue through the same path. */
+  /* brigade --- subagent control.  Same verbs as the agent_* tools an
+   * agent gets over MCP, so a shell script and a model drive the queue
+   * through the same path. */
   { "brigade spawn", "Hand a task to an agent; prints the task id",
     CTL_IFACE_BRIGADE, "Spawn", "s:task s?:agent s?:title s?:model",
     CTL_REPLY_STRING },
@@ -63,6 +63,20 @@ static const CtlMethodSpec subsys_specs[] = {
     CTL_IFACE_BRIGADE, "Providers", NULL, CTL_REPLY_STRING },
   { "brigade models", "Models a provider offers, as provider/model",
     CTL_IFACE_BRIGADE, "Models", "s:provider", CTL_REPLY_STRING },
+  /* The mailbox: a task you can go on talking to.  `send' works whether
+   * the task is running (delivered when its turn ends) or already
+   * finished (it starts again on the same session). */
+  { "brigade send", "Queue a message for a task; wakes a parked agent",
+    CTL_IFACE_BRIGADE, "Send", "s:id s:message", CTL_REPLY_STRING },
+  { "brigade inbox", "Messages queued for a task but not yet delivered",
+    CTL_IFACE_BRIGADE, "Inbox", "s:id", CTL_REPLY_STRING },
+  { "brigade drop", "Remove a queued message; omit INDEX to clear the queue",
+    CTL_IFACE_BRIGADE, "Drop", "s:id s?:index", CTL_REPLY_STRING },
+  { "brigade log", "A task's transaction log: messages, replies, tool calls",
+    CTL_IFACE_BRIGADE, "Log", "s:id s?:from_turn s?:kinds",
+    CTL_REPLY_STRING },
+  { "brigade close", "End a conversation and release its session",
+    CTL_IFACE_BRIGADE, "Close", "s:id", CTL_REPLY_STRING },
 
   /* gsurf */
   { "gsurf open", "Open a URL in a new gsurf buffer",

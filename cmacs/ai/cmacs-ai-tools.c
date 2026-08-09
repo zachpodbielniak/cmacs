@@ -62,6 +62,40 @@ cmacs_ai_tools__cb_key (guint exec_id, const gchar *tool_name)
   return build_string (k);
 }
 
+/* Drop every callback registered against EXEC_ID.
+ *
+ * The table is staticpro'd, so an entry left behind is a Lisp closure
+ * rooted for the life of the process -- one per tool per executor, and
+ * the brigade installs an agent's whole allowlist on each.  Freeing the
+ * executor without this leaked them all, silently and permanently.
+ *
+ * Collected first and removed second: `maphash' must not mutate the
+ * table it is walking.  */
+static void
+cmacs_ai_tools__cb_forget (guint exec_id)
+{
+  g_autofree gchar *prefix = NULL;
+  Lisp_Object doomed = Qnil;
+  ptrdiff_t plen;
+
+  if (NILP (Vcmacs_ai__tool_callbacks)) return;
+
+  prefix = g_strdup_printf ("%u@", exec_id);
+  plen = strlen (prefix);
+
+  DOHASH (XHASH_TABLE (Vcmacs_ai__tool_callbacks), k, v)
+    {
+      (void) v;
+      if (STRINGP (k)
+	  && SBYTES (k) >= plen
+	  && memcmp (SSDATA (k), prefix, plen) == 0)
+	doomed = Fcons (k, doomed);
+    }
+
+  for (; CONSP (doomed); doomed = XCDR (doomed))
+    Fremhash (XCAR (doomed), Vcmacs_ai__tool_callbacks);
+}
+
 /* ── Executor handle registry ───────────────────────────────────── */
 
 static GHashTable *cmacs_ai__executors = NULL;   /* guint -> AiToolExecutor* */
@@ -306,7 +340,7 @@ Returns an integer handle.  Free with `cmacs-ai-tools-free'.  */)
 
 DEFUN ("cmacs-ai-tools-free", Fcmacs_ai_tools_free,
        Scmacs_ai_tools_free, 1, 1, 0,
-       doc: /* Free tool-executor HANDLE.  */)
+       doc: /* Free tool-executor HANDLE and forget its tool callbacks.  */)
   (Lisp_Object handle)
 {
   CHECK_FIXNAT (handle);
@@ -314,6 +348,7 @@ DEFUN ("cmacs-ai-tools-free", Fcmacs_ai_tools_free,
   g_mutex_lock (&cmacs_ai__executor_mutex);
   g_hash_table_remove (cmacs_ai__executors, GUINT_TO_POINTER (XFIXNUM (handle)));
   g_mutex_unlock (&cmacs_ai__executor_mutex);
+  cmacs_ai_tools__cb_forget (XFIXNUM (handle));
   return Qt;
 }
 
@@ -375,6 +410,15 @@ invokes the tool.  */)
 
 /* ── Async tool-loop runner ─────────────────────────────────────── */
 
+/* Read once, on the main thread, at the point of use.  DEFVAR_INT
+ * variables are plain C globals a user can set from Lisp at any time; the
+ * indirection is only so the clamp lives in one place. */
+static gint
+cmacs_ai_tools__history_limit (void)
+{
+  return (gint) cmacs_ai_history_limit;
+}
+
 typedef struct
 {
   AiToolExecutor *exec;     /* owned ref */
@@ -385,6 +429,14 @@ typedef struct
   uint64_t        cb_cookie;
   gchar          *result;   /* set in worker; read on main */
   GError         *error;    /* set in worker; read on main */
+  /* Which session to fold the run's own messages back into, by handle
+   * rather than by pointer: the session may be freed while the worker is
+   * still going, and a stale pointer would be dereferenced on the main
+   * thread long after.  Zero means do not fold anything back. */
+  guint           session_id;
+  /* (transfer full) the assistant turns and tool results the run
+   * produced.  Set in the worker, consumed on the main thread. */
+  GList          *new_messages;
 } CmacsAiToolsJob;
 
 static void
@@ -394,6 +446,7 @@ cmacs_ai_tools_job__free (CmacsAiToolsJob *j)
   g_clear_object (&j->exec);
   g_clear_object (&j->provider);
   g_list_free_full (j->messages, g_object_unref);
+  g_list_free_full (j->new_messages, g_object_unref);
   g_free (j->system_prompt);
   g_free (j->result);
   if (j->error) g_error_free (j->error);
@@ -405,6 +458,33 @@ cmacs_ai_tools__main_done (gpointer user)
 {
   CmacsAiToolsJob *j = user;
   Lisp_Object payload;
+
+  /* Fold the run's own messages back into the session before the
+   * callback fires, so anything the callback does -- including starting
+   * the next turn -- sees a session that remembers this one.
+   *
+   * Without this the tool executor's work was simply discarded: it
+   * copies the caller's message list, appends the assistant turns and
+   * tool results to its copy, and frees the lot.  A second turn on the
+   * same session therefore showed the model its original instruction and
+   * the new question, with no trace of what it had already said or
+   * done -- which is not a continued conversation, just a fresh one
+   * wearing the same handle.
+   *
+   * Looked up by handle here: freeing the session mid-run is legal, and
+   * finding it gone simply means there is nothing to fold into. */
+  if (j->session_id != 0 && j->new_messages != NULL)
+    {
+      CmacsAiSession *sess = cmacs_ai_session_lookup (j->session_id);
+      if (sess != NULL)
+        {
+          GList *l;
+          for (l = j->new_messages; l != NULL; l = l->next)
+            cmacs_ai_session_append_message_obj (sess, l->data);
+          cmacs_ai_session_trim (sess, cmacs_ai_tools__history_limit ());
+        }
+    }
+
   if (j->result)
     payload = list2 (intern (":text"), build_string (j->result));
   else
@@ -441,9 +521,10 @@ cmacs_ai_tools__worker (gpointer user)
   ctx = g_main_context_new ();
   g_main_context_push_thread_default (ctx);
 
-  j->result = ai_tool_executor_run (j->exec, j->provider,
-                                    j->messages, j->system_prompt,
-                                    j->max_tokens, NULL, &j->error);
+  j->result = ai_tool_executor_run_full (j->exec, j->provider,
+                                         j->messages, j->system_prompt,
+                                         j->max_tokens, NULL,
+                                         &j->new_messages, &j->error);
 
   g_main_context_pop_thread_default (ctx);
   g_main_context_unref (ctx);
@@ -457,7 +538,13 @@ DEFUN ("cmacs-ai-tools-run-async", Fcmacs_ai_tools_run_async,
        Scmacs_ai_tools_run_async, 3, 3, 0,
        doc: /* Run the multi-turn tool loop on SESSION using EXECUTOR.
 CALLBACK is fired once with (:text TEXT) on success or (:error MSG) on
-failure.  All current session messages are sent.  */)
+failure.  All current session messages are sent.
+
+The messages the run produces -- the assistant's turns and the results of
+any tools it called -- are appended back onto SESSION before CALLBACK
+fires, so running again on the same session continues the conversation
+rather than restarting it.  The session is then trimmed to
+`cmacs-ai-history-limit'.  */)
   (Lisp_Object session, Lisp_Object executor, Lisp_Object callback)
 {
   CHECK_FIXNAT (session);
@@ -484,6 +571,7 @@ failure.  All current session messages are sent.  */)
     snapshot = g_list_append (snapshot, g_object_ref (l->data));
   j->messages   = snapshot;
   j->max_tokens = 4096;
+  j->session_id = XFIXNUM (session);
   j->cb_cookie  = cmacs_dispatch_callback_register (callback);
 
   GThread *t = g_thread_new ("cmacs-ai-tools", cmacs_ai_tools__worker, j);
@@ -758,6 +846,24 @@ If it does not, the agent gets a timeout error for that one tool call
 rather than the worker parking forever.  Raise it if you have Elisp tools
 that legitimately take minutes.  */);
   cmacs_ai_tool_call_timeout = 120;
+
+  DEFVAR_INT ("cmacs-ai-history-limit", cmacs_ai_history_limit,
+	      doc: /* Most messages a session keeps before the oldest are dropped.
+
+Every turn re-sends the whole session, so a conversation that runs for
+dozens of turns costs quadratically in the number of turns -- and does it
+quietly, because nothing about a long conversation looks different from a
+short one until the bill arrives.
+
+Trimming takes from the oldest end, which is both the part the model is
+least likely to still need and the only part it is safe to lose: an
+agent's standing instructions live in the system prompt, not in this
+list, so they are never what gets dropped.
+
+Zero or negative keeps everything, which is the right setting only if you
+are watching the cost yourself.  */);
+  cmacs_ai_history_limit = 200;
+
   defsubr (&Scmacs_ai_tools_new);
   defsubr (&Scmacs_ai_tools_free);
   defsubr (&Scmacs_ai_tools_register);

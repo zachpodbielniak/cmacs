@@ -256,3 +256,45 @@ to surface to the user or retry.  Most languages' D-Bus bindings turn
 the error into a typed exception (=DBusException= in Python, =Error=
 in Rust zbus, etc.).  See [[file:cli-examples.org][cli-examples.org]]
 for examples in each language.
+
+* org.cmacs.Editor1.Brigade
+
+Drives AI agents. Every argument and every return value is a string, so a shell
+caller never has to think about D-Bus types; numeric arguments are coerced on
+the far side. All of these route through =cmacs-brigade-call-tool=, the same
+entry point an agent reaches over MCP — three surfaces, one code path.
+
+| Method | Arguments | Returns |
+|--------+-----------+---------|
+| =Spawn= | =task=, =agent=, =title=, =model= (all but the first may be empty) | the new task id |
+| =Status= | =id= | state, turns, tokens, cost |
+| =Result= | =id= | what the task produced |
+| =Cancel= | =id= | confirmation |
+| =List= | — | every known task with its state |
+| =Agents= | — | agent definitions available to spawn |
+| =Providers= | — | AI providers this cmacs can reach |
+| =Models= | =provider= | that provider's models, as =provider/model= |
+| =Send= | =id=, =message= | queues a message; wakes a task that has already finished |
+| =Inbox= | =id= | messages queued but not yet delivered |
+| =Drop= | =id=, =index= (empty clears the queue) | how many were removed |
+| =Log= | =id=, =from_turn=, =kinds= (both may be empty) | the transaction log |
+| =Close= | =id= | releases the conversation's session |
+
+=Send= continues an existing conversation rather than starting a new one, so the
+agent still remembers everything from earlier turns. =Log= works on any task,
+including ones the caller never spawned — see the mailbox chapter of the AI
+Brigade manual.
+
+Confirmation prompts are bypassed on this interface deliberately. They exist so
+an *agent* cannot start paid work unattended; a D-Bus caller is the session
+owner, who already has =org.cmacs.Editor1.Eval= on the same bus. It also could
+not work as written: RPC evals bind =inhibit-interaction=, so a prompt inside a
+dispatch signals rather than asking, and every =Spawn= would fail.
+
+#+begin_src bash
+busctl --user call org.cmacs.Editor1 /org/cmacs/Editor1 \
+  org.cmacs.Editor1.Brigade Send ss "$ID" "now check the error paths too"
+
+busctl --user call org.cmacs.Editor1 /org/cmacs/Editor1 \
+  org.cmacs.Editor1.Brigade Log sss "$ID" "2" ""
+#+end_src

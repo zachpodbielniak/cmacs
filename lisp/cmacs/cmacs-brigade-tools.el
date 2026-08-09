@@ -191,11 +191,17 @@ budget and `cmacs-brigade-subagent-max-depth\\=', not by you."
 
 ;;;; Dispatch
 
-(defun cmacs-brigade-call-tool (wire-name json-args &optional agent allowlist)
+(defun cmacs-brigade-call-tool (wire-name json-args &optional agent allowlist
+                                          task)
   "Call the tool named WIRE-NAME with JSON-ARGS and return its result string.
 
 AGENT names the caller for the audit trail and confirmation prompt.
-ALLOWLIST, when given, is checked through the C gate first.
+ALLOWLIST, when given, is checked through the C gate first.  TASK, when
+given, is the brigade task on whose behalf the call is being made; it
+reaches the hooks as `:task' and is what lets the transaction log record
+which run a tool call belonged to.  A call with no TASK -- from a chat
+buffer, or an external MCP client -- belongs to no run, which is a fact
+worth recording as absence rather than papering over.
 
 Errors are returned as an \"Error: ...\" string rather than signalled:
 that is ai-glib's soft-error convention, and it matters because a
@@ -212,7 +218,8 @@ the model read what went wrong and try something else."
                               (list :tool wire-name :agent agent))
           (error "Tool %s is not in this agent's allowlist" wire-name))
         (let* ((alist (cmacs-brigade--parse-args json-args))
-               (req (list :tool wire-name :args alist :agent agent)))
+               (req (list :tool wire-name :args alist :agent agent
+                          :task task)))
           (unless (run-hook-with-args-until-failure
                    'cmacs-brigade-before-tool-call-functions req)
             (error "Tool %s vetoed by a before-tool-call hook" wire-name))
@@ -225,7 +232,8 @@ the model read what went wrong and try something else."
     (error
      (let ((msg (format "Error: %s" (error-message-string err))))
        (run-hook-with-args 'cmacs-brigade-after-tool-call-functions
-                           (list :tool wire-name :agent agent :error err))
+                           (list :tool wire-name :agent agent :task task
+                                 :error err))
        msg))))
 
 (defun cmacs-brigade--tool-by-wire (wire-name)
@@ -285,12 +293,18 @@ read-only without having to enumerate every tool it must not have."
            collect tool))
 
 (defun cmacs-brigade-install-tools (executor allowlist
-                                    &optional agent include-destructive)
+                                    &optional agent include-destructive task)
   "Register on EXECUTOR every tool ALLOWLIST admits.  Returns the count.
 
 EXECUTOR is a `cmacs-ai-tools-new' handle.  Only permitted tools are
 installed, so the agent cannot call anything else -- the allowlist is
-enforced by construction here rather than by a check at call time."
+enforced by construction here rather than by a check at call time.
+
+TASK, when given, is the brigade task this executor belongs to; every
+call made through it is attributed to that task in the transaction log.
+It is captured here rather than passed per call because the executor
+outlives a single turn: a parked conversation reuses the same executor,
+and the task it belongs to does not change."
   (let ((tools (cmacs-brigade-tools-for-allowlist allowlist include-destructive))
         (n 0))
     (dolist (tool tools)
@@ -307,7 +321,7 @@ enforced by construction here rather than by a check at call time."
                ;; allowlist is not re-checked because this executor was
                ;; built from it.
                (lambda (name input-json _id)
-                 (cmacs-brigade-call-tool name input-json agent nil))))
+                 (cmacs-brigade-call-tool name input-json agent nil task))))
         (setq n (1+ n))))
     n))
 

@@ -153,6 +153,7 @@ on the matching =HAVE_CMACS_*= build flag:
 | =org.cmacs.Editor1.Input=      | =cmacs-dbus-iface-input.c=      | =send_keys=, =execute_command= |
 | =org.cmacs.Editor1.Debug=      | =cmacs-dbus-iface-debug.c=      | =backtrace=, =memory_info=, profiler, describe_* |
 | =org.cmacs.Editor1.Ai=         | =cmacs-dbus-iface-ai.c=         | =ai_*=                      |
+| =org.cmacs.Editor1.Brigade=    | =cmacs-dbus-iface-brigade.c=    | =agent_*= (spawn/status/result/cancel/list/agents/providers/models) and the mailbox =agent_send/inbox/drop/log/close= |
 | =org.cmacs.Editor1.Gsurf=      | =cmacs-dbus-iface-gsurf.c=      | =gsurf_*= (~20 tools)       |
 | =org.cmacs.Editor1.GnusEye=    | =cmacs-dbus-iface-gnuseye.c=    | =gnuseye_*=                 |
 | =org.cmacs.Editor1.Podomation= | =cmacs-dbus-iface-podomation.c= | =podomation_*=              |

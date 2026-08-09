@@ -94,6 +94,29 @@ Two rules the relay enforces with no registry at all:
   evaluators — is unreachable through =*= or a group. Granting one is a
   deliberate act: name it outright or the agent does not get it.
 
+* The mailbox group
+
+Five tools let an agent continue a conversation with another agent, or read
+what one has been doing:
+
+| Tool | What it does |
+|------+--------------|
+| =agent_send= | queue a message; wakes a task that has already finished |
+| =agent_inbox= | what is queued for a task but not yet delivered |
+| =agent_drop= | remove a queued message, or all of them |
+| =agent_log= | read *any* task's transaction log, spawned by you or not |
+| =agent_close= | finish with an agent and release its session |
+
+They are a separate group from =agent= on purpose. =agent= is the five spawning
+and polling tools; =mailbox= is the ability to start further paid turns on an
+existing agent and to read other agents' activity. An agent granted =agent= does
+not get =mailbox=, and a read-only debugging agent can be given =mailbox= —
+=agent_log= is not destructive — without also being able to spend money.
+
+=agent_log= is the sidecar-debugging tool: point a second agent at a
+misbehaving one and it reads every instruction, tool call and reply, rather
+than the account the first agent gives of itself. See [[file:mailbox.org][Mailboxes]].
+
 * Checking
 
 #+begin_src elisp

@@ -115,6 +115,34 @@ cmacs_ai_session_append_message_obj (CmacsAiSession *s, AiMessage *msg)
   s->messages = g_list_append (s->messages, g_object_ref (msg));
 }
 
+void
+cmacs_ai_session_trim (CmacsAiSession *s, gint limit)
+{
+  guint len;
+
+  if (!s || limit <= 0) return;
+  len = g_list_length (s->messages);
+  if (len <= (guint) limit) return;
+
+  /* Dropped from the front, oldest first.  A session that accumulates
+   * across turns is re-sent whole on every one of them, so an
+   * unbounded history makes a long conversation cost quadratically in
+   * the number of turns -- quietly, since nothing about it looks
+   * different from a short one until the bill arrives.
+   *
+   * The oldest end is also the right end to lose: it is the part the
+   * model is least likely to still need, and the standing instructions
+   * live in the system prompt rather than in this list, so they are
+   * never what gets dropped. */
+  while (g_list_length (s->messages) > (guint) limit)
+    {
+      GList *first = s->messages;
+      s->messages = g_list_remove_link (s->messages, first);
+      g_object_unref (first->data);
+      g_list_free_1 (first);
+    }
+}
+
 AiToolExecutor *
 cmacs_ai_session_ensure_executor (CmacsAiSession *s)
 {
@@ -168,8 +196,13 @@ DEFUN ("cmacs-ai-session-append-message",
        Fcmacs_ai_session_append_message,
        Scmacs_ai_session_append_message, 3, 3, 0,
        doc: /* Append a message to SESSION.
-ROLE is one of the symbols 'user / 'assistant / 'system.  TEXT is the
-message content as a string.  Returns t.  */)
+ROLE is either the symbol `user' or the symbol `assistant'.  TEXT is the
+message content as a string.  Returns t.
+
+There is deliberately no `system' role here: a system prompt belongs to
+the client, not to the message list, and is set with
+`cmacs-ai-client-set-system-prompt'.  This docstring used to offer
+`system' anyway, which meant the obvious call signalled.  */)
   (Lisp_Object session, Lisp_Object role, Lisp_Object text)
 {
   CHECK_FIXNAT (session);

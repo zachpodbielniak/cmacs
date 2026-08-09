@@ -36,6 +36,14 @@
 ;; optional and must not be guarded as if it were.
 (require 'cmacs-ai)
 (require 'cmacs-brigade-tools)
+;; Both required, not declared: a turn ending writes its reply to the log
+;; and consults the mailbox on the way out, so neither can be optional.
+;; They do not require this file back -- the mailbox reaches the run layer
+;; through `declare-function' precisely so this direction stays a plain
+;; dependency rather than a cycle.
+(require 'cmacs-brigade-log)
+(require 'cmacs-brigade-mailbox)
+(require 'cmacs-brigade-output)
 
 (declare-function cmacs-brigade-plan-adopt "cmacs-brigade-plan")
 (declare-function cmacs-brigade-plan-task-prompt "cmacs-brigade-plan")
@@ -127,13 +135,226 @@ claude for a model that does not exist."
 (defvar cmacs-brigade--runs (make-hash-table :test 'equal)
   "TASK-ID -> plist describing a live run.")
 
+(defvar cmacs-brigade--conversations (make-hash-table :test 'equal)
+  "TASK-ID -> plist describing a parked conversation.
+
+Unlike `cmacs-brigade--runs\=' this outlives a turn.  It holds whatever has
+to be the same next time: the provider session (a cmacs-ai handle pair
+and executor for `inproc\=', a session id string for a CLI), the isolation
+the agent has been making a mess in, the directory it works from, the
+allowlist it was granted, and its running totals.")
+
+(defvar cmacs-brigade--finishing (make-hash-table :test 'equal)
+  "TASK-IDs currently inside `cmacs-brigade--finish\='.
+
+A re-entrancy guard, not bookkeeping.  Tool calls arriving over MCP are
+evaluated from inside Emacs's pselect hook, and the finished hooks pump
+-- loopback opens files and sends chat messages.  So `agent_send\=' can
+genuinely run in the middle of a completion.  Without this flag a send
+arriving during the hooks would try to start a turn while the previous
+one was still being retired.")
+
 (defvar cmacs-brigade-run-finished-functions nil
-  "Abnormal hook run with the task id and final state when a run ends.")
+  "Abnormal hook run with the task id and final state when a run ends.
+
+\"Ends\" means the conversation is over, not that a turn finished.  A
+task that parks with messages waiting has not ended; use
+`cmacs-brigade-turn-finished-functions\=' to observe every turn.")
+
+(defvar cmacs-brigade-turn-finished-functions nil
+  "Abnormal hook run with the task id, turn number and output each turn.
+
+Fires once per turn, including the turn that ends the conversation.
+Split from `cmacs-brigade-run-finished-functions\=' because the two
+questions are different and most observers want only one of them: the
+transaction log wants every turn, a desktop notification saying \"all
+agents have finished\" wants only the last.")
+
+(defcustom cmacs-brigade-conversation-ttl 86400
+  "Seconds a parked conversation may sit idle before it is swept.
+
+A parked conversation holds a provider session, a tool executor and
+possibly a git worktree or a container, none of which are reclaimed by
+garbage collection -- they are handles into C-side registries and
+directories on disk.  Left alone they accumulate for as long as the
+editor runs.  nil disables the sweep, which is a choice about leaking,
+not about whether the sweep is needed."
+  :type '(choice (const :tag "Never sweep" nil) integer)
+  :group 'cmacs-brigade)
+
+(defcustom cmacs-brigade-conversation-max-attempts 3
+  "How many times a resumed turn may fail to start before giving up.
+
+Without a bound a conversation whose isolation has been deleted out from
+under it retries on every kick forever, and its mailbox is stranded with
+no path back and nobody told."
+  :type 'integer
+  :group 'cmacs-brigade)
+
+
+;;;; Conversations
+;;
+;; A conversation is what makes a task something you can go on talking
+;; to.  It is created the first time a task starts and torn down
+;; explicitly -- by `agent_close', by cancelling, by the idle sweep, or
+;; by Emacs exiting.  Crucially it is NOT torn down when a turn ends,
+;; which is the one thing that distinguishes this from what the brigade
+;; did before.
+
+(defun cmacs-brigade-conversation-get (id)
+  "The parked conversation record for task ID, or nil."
+  (gethash id cmacs-brigade--conversations))
+
+(defun cmacs-brigade-conversation-p (id)
+  "Whether task ID has a conversation that can be continued."
+  (and (gethash id cmacs-brigade--conversations) t))
+
+(defun cmacs-brigade-conversation-turn (id)
+  "How many turns task ID's conversation has completed, or nil."
+  (when-let* ((c (gethash id cmacs-brigade--conversations)))
+    (or (plist-get c :turn) 0)))
+
+(defun cmacs-brigade-conversation-session-id (id)
+  "The provider session id for task ID's conversation, or nil.
+Meaningful only for the CLI workers; `inproc\=' keeps a handle instead."
+  (when-let* ((c (gethash id cmacs-brigade--conversations)))
+    (plist-get c :session-id)))
+
+(defun cmacs-brigade-conversation-put (id &rest fields)
+  "Merge FIELDS into task ID's conversation record, creating it if absent."
+  (let ((c (or (gethash id cmacs-brigade--conversations) (list :turn 0))))
+    (while fields
+      (setq c (plist-put c (pop fields) (pop fields))))
+    (setq c (plist-put c :last-activity (float-time)))
+    (puthash id c cmacs-brigade--conversations)
+    c))
+
+(defun cmacs-brigade-task-supports-session-p (id)
+  "Whether task ID runs under a worker that can continue a conversation.
+
+A worker declares this with `:supports-session\='.  The `shell\=' worker
+does not: piping a follow-up message to bash produces a fresh process
+that has never seen the first one, and presenting that as a continued
+conversation would be a lie the caller cannot detect."
+  (let* ((rec (and (fboundp 'cmacs-brigade-task-get)
+                   (cmacs-brigade-task-get id)))
+         (agent (and rec (plist-get rec :agent)
+                     (cmacs-brigade-agent-get (plist-get rec :agent))))
+         (w (and agent (cmacs-brigade-registry-get
+                        'worker (cmacs-brigade-resolve-worker agent)))))
+    ;; Unknown worker or unknown agent: allow, and let the start fail
+    ;; with a real reason.  Refusing here would report "cannot be
+    ;; continued" for what is actually "no such agent".
+    (if w (and (plist-get w :supports-session) t) t)))
+
+(defun cmacs-brigade--teardown-conversation (id &optional reason)
+  "Release everything task ID's conversation is holding.
+
+The single place any of this happens, so that a conversation ended by
+cancelling, by `agent_close\=', by the idle sweep or by Emacs exiting is
+released the same way each time.  Ordering matters and is the same as
+`cmacs-brigade--finish\=' uses: the credential goes first, because it is
+the only piece whose survival is a security problem rather than a leak,
+and every later step is wrapped so one failure cannot skip the rest."
+  (let ((c (gethash id cmacs-brigade--conversations)))
+    (when c
+      (cmacs-brigade-host-revoke id)
+      (when-let* ((iso (plist-get c :isolation)))
+        (ignore-errors (cmacs-brigade-isolation-teardown iso id)))
+      ;; Executor before session, matching the in-process completion
+      ;; path: the executor holds tool registrations keyed by the
+      ;; session's client.
+      (when-let* ((e (plist-get c :executor)))
+        (ignore-errors (cmacs-ai-tools-free e)))
+      (when-let* ((s (plist-get c :session)))
+        (ignore-errors (cmacs-ai-free-session s)))
+      (remhash id cmacs-brigade--conversations)
+      (cmacs-brigade-log-append id "state" :state "closed"
+                                :turn (or (plist-get c :turn) 0)
+                                :reason reason)
+      t)))
+
+(defun cmacs-brigade-close-conversation (id &optional reason)
+  "End task ID's conversation, releasing the session it was holding.
+
+The task itself is usually already `done\=' -- closing says \"I will not
+be sending anything else\", not \"stop\".  A conversation that had not
+reached a terminal state yet (parked after a failed resume, say) is
+settled at `done\=', since whatever it produced is all it is going to."
+  (interactive "sTask id: ")
+  (let ((had (cmacs-brigade--teardown-conversation id (or reason "closed"))))
+    (when (and had (fboundp 'cmacs-brigade-task-get))
+      (when (memq (plist-get (cmacs-brigade-task-get id) :state)
+                  '(waiting-input blocked))
+        (cmacs-brigade-task-transition id 'done reason)))
+    had))
+
+(defun cmacs-brigade-sweep-conversations (&optional force)
+  "Tear down conversations idle past `cmacs-brigade-conversation-ttl'.
+
+FORCE ignores the TTL and sweeps every parked conversation.  A
+conversation that is running or mid-finish is never swept whatever the
+clock says: the worker holds its own references, and retiring the record
+underneath a callback that is about to fire into it trades a leak for a
+crash.  Idleness is measured from the last activity -- a delivery or a
+completed turn -- not from when the conversation started, so one waiting
+behind a busy concurrency cap is not swept while its message is still
+pending."
+  (interactive "P")
+  (let ((n 0)
+        (cutoff (and cmacs-brigade-conversation-ttl
+                     (- (float-time) cmacs-brigade-conversation-ttl))))
+    (when (or force cutoff)
+      (dolist (id (hash-table-keys cmacs-brigade--conversations))
+        (let ((c (gethash id cmacs-brigade--conversations)))
+          (when (and c
+                     (null (gethash id cmacs-brigade--runs))
+                     (null (gethash id cmacs-brigade--finishing))
+                     (or force (< (or (plist-get c :last-activity) 0) cutoff)))
+            ;; Undelivered mail is reported, never dropped quietly.  A
+            ;; message somebody queued and nobody ever saw is exactly the
+            ;; failure a mailbox exists to prevent.
+            (let ((pending (if (fboundp 'cmacs-brigade-mailbox-count)
+                               (cmacs-brigade-mailbox-count id)
+                             0)))
+              (when (> pending 0)
+                (message "cmacs-brigade: swept %s with %d undelivered message(s)"
+                         id pending)
+                (cmacs-brigade-log-append
+                 id "state" :state "swept"
+                 :turn (or (plist-get c :turn) 0)
+                 :reason (format "%d message(s) never delivered" pending))
+                ;; Attempted, not assumed: the task has usually already
+                ;; finished, and `done' to `failed' is refused -- rightly,
+                ;; since the run did succeed and it is the messages that
+                ;; were lost.  The log entry above is the record either
+                ;; way.
+                (cmacs-brigade-task-transition
+                 id 'failed
+                 (format "conversation swept with %d message(s) undelivered"
+                         pending)))
+              (cmacs-brigade--teardown-conversation
+               id (if (> pending 0) "swept with mail pending" "idle"))
+              (setq n (1+ n)))))))
+    (when (called-interactively-p 'any)
+      (message "cmacs-brigade: swept %d conversation(s)" n))
+    n))
+
+(defun cmacs-brigade--teardown-all-conversations ()
+  "Release every parked conversation.  For `kill-emacs-hook\='."
+  (dolist (id (hash-table-keys cmacs-brigade--conversations))
+    (ignore-errors (cmacs-brigade--teardown-conversation id "editor exiting"))))
+
+;; Parked isolation is a git worktree or a container, neither of which
+;; goes away on its own.  Without this every conversation alive at exit
+;; leaves one behind.
+(add-hook 'kill-emacs-hook #'cmacs-brigade--teardown-all-conversations)
 
 
 ;;;; Workers
 
-(defun cmacs-brigade--worker-command (worker agent prompt-file endpoint)
+(defun cmacs-brigade--worker-command (worker agent prompt-file endpoint
+                                             &optional session-id)
   "Return the argv for WORKER running AGENT with PROMPT-FILE."
   (let ((model (plist-get agent :model))
         (config (and endpoint (plist-get endpoint :path))))
@@ -155,6 +376,14 @@ claude for a model that does not exist."
                ;; The prompt arrives on stdin rather than argv: prompts
                ;; routinely exceed ARG_MAX, and argv is world-readable.
                (when config (list "--mcp-config" config))
+               ;; Continue the conversation rather than starting a new
+               ;; one.  claude resolves a session id against the project
+               ;; directory, which is why the conversation's cwd is
+               ;; parked and never re-resolved -- resuming from a
+               ;; different directory silently starts fresh instead of
+               ;; failing, which is the worst of both.
+               (when (and session-id (not (string-empty-p session-id)))
+                 (list "--resume" session-id))
                ;; The bare name: the provider prefix is ours, not the
                ;; CLI's, and passing "claude-code/opus" through as
                ;; --model asks for a model that does not exist.
@@ -167,6 +396,9 @@ claude for a model that does not exist."
                  (list "--model" (cdr (cmacs-brigade--split-model model))))))
       ('opencode
        (append (list cmacs-brigade-opencode-program "run" "--format" "json")
+               ;; opencode spells the same idea `--session'.
+               (when (and session-id (not (string-empty-p session-id)))
+                 (list "--session" session-id))
                ;; Everything after the first slash, so opencode's own
                ;; "vendor/model" spelling survives ours.
                (when model (list "--model"
@@ -196,8 +428,12 @@ variable; this mirrors what ai-glib sets for the same purpose.")
   ;; for inproc's argv.
   (let* ((worker (cmacs-brigade-resolve-worker agent))
          (prompt-file (make-temp-file "cmacs-brigade-prompt"))
-         (argv (cmacs-brigade--worker-command worker agent prompt-file
-                                              endpoint))
+         ;; Looked up here rather than threaded through the worker
+         ;; `:start' signature, so a user-registered worker written
+         ;; against the old four arguments still works.
+         (argv (cmacs-brigade--worker-command
+                worker agent prompt-file endpoint
+                (cmacs-brigade-conversation-session-id task-id)))
          (default-directory (or cwd default-directory))
          (process-environment
           (append (mapcar (lambda (c) (format "%s=%s" (car c) (cdr c)))
@@ -223,24 +459,116 @@ variable; this mirrors what ai-glib sets for the same purpose.")
     proc))
 
 (defun cmacs-brigade--finish (task-id state output &optional reason)
-  "Retire TASK-ID in STATE, having produced OUTPUT.
+  "End a turn of TASK-ID in STATE, having produced OUTPUT.
 
 Shared by every worker: whatever ran, the credential has to be revoked,
-the sandbox torn down, the state recorded and the queue drained, and
-having each worker do that itself is how one of them ends up not doing
-one of them."
-  (let ((run (gethash task-id cmacs-brigade--runs)))
-    (when run
-      ;; Order matters: revoke the credential before anything else can
-      ;; fail, so a token never outlives the run that needed it.
-      (cmacs-brigade-host-revoke task-id)
-      (cmacs-brigade-isolation-teardown (plist-get run :isolation) task-id)
-      (remhash task-id cmacs-brigade--runs)))
-  (when (fboundp 'cmacs-brigade-task-transition)
-    (cmacs-brigade-task-transition task-id state reason))
-  (run-hook-with-args 'cmacs-brigade-run-finished-functions task-id state
-                      output)
-  (cmacs-brigade--drain-queue))
+the state recorded and the queue drained, and having each worker do that
+itself is how one of them ends up not doing one of them.
+
+A turn ending is not the same as a conversation ending, but a task that
+answered you is `done\=' either way.  It is *not* parked in some open
+state: `done\=' is what every existing observer means by finished, and a
+task that sat in `waiting-input\=' after answering would tell the
+dashboard, the notifier and the plan that it was still going.
+
+What makes it resumable is the conversation record, which outlives a
+successful turn.  `done\=' to `queued\=' is a legal transition -- it is how
+retrying has always worked -- so a message arriving later simply starts
+the next turn on the session that is still there.  A turn that ended
+badly is a different matter: the conversation is released, because
+resuming a run that failed halfway is not something to do quietly."
+  ;; Guard first.  Everything below can yield -- the hooks open files and
+  ;; send chat messages, both of which pump the main loop -- and a second
+  ;; entry (a cancel racing a completing worker) would otherwise fire the
+  ;; turn hooks twice and deliver the same reply twice.
+  (if (gethash task-id cmacs-brigade--finishing)
+      nil
+    (puthash task-id t cmacs-brigade--finishing)
+    (unwind-protect
+        (let* ((run (gethash task-id cmacs-brigade--runs))
+               (conv (gethash task-id cmacs-brigade--conversations))
+               (turn (1+ (or (and conv (plist-get conv :turn)) 0)))
+               ;; Whether the conversation lives on past this turn.  Only
+               ;; a clean finish keeps it: a failure, a cancellation or a
+               ;; budget stop ends it whatever is queued, because
+               ;; resuming a session whose last turn broke is the kind of
+               ;; recovery that should be asked for rather than assumed.
+               (keep (and conv (eq state 'done))))
+          (when run
+            ;; Revoke the credential before anything else can fail, so a
+            ;; token never outlives the run that needed it.  The
+            ;; credential is per-turn on purpose -- a fresh random token
+            ;; each turn is strictly better than one long-lived one, and
+            ;; the config path it names is regenerated anyway.
+            (cmacs-brigade-host-revoke task-id)
+            ;; Isolation is NOT torn down while the conversation lives.
+            ;; Removing the worktree between turns would delete the
+            ;; agent's uncommitted work while its conversation still
+            ;; believes it made those edits -- the worst shape of
+            ;; failure available, because the model then builds
+            ;; confidently on files that no longer exist.
+            (unless keep
+              (cmacs-brigade-isolation-teardown
+               (plist-get run :isolation) task-id))
+            ;; Removed here, which is what releases the concurrency slot.
+            (remhash task-id cmacs-brigade--runs))
+          (when conv
+            (cmacs-brigade-conversation-put task-id :turn turn :attempts 0))
+          (cmacs-brigade-output-put task-id output turn)
+          (cmacs-brigade-log-append
+           task-id "reply" :turn turn :text output
+           :state (symbol-name state) :reason reason)
+          (when (fboundp 'cmacs-brigade-task-transition)
+            (cmacs-brigade-task-transition task-id state reason))
+          (unless keep
+            (when conv (cmacs-brigade--teardown-conversation task-id reason)))
+          ;; Both hooks fire, in that order.  `turn-finished' is the new,
+          ;; finer-grained one; `run-finished' keeps meaning exactly what
+          ;; it always did, so every existing observer -- output,
+          ;; notification, the plan -- goes on working unchanged.
+          (run-hook-with-args 'cmacs-brigade-turn-finished-functions
+                              task-id turn output)
+          (run-hook-with-args 'cmacs-brigade-run-finished-functions
+                              task-id state output))
+      (remhash task-id cmacs-brigade--finishing))
+    ;; Outside the guard, so a message that arrived *during* the hooks
+    ;; above is seen.  This is the second half of the delivery race: the
+    ;; sender enqueued unconditionally and its kick was refused by the
+    ;; flag, so the re-read here is what picks it up.  Nothing is lost
+    ;; and nothing starts twice.
+    (cmacs-brigade-kick-conversation task-id)
+    (cmacs-brigade--drain-queue)
+    t))
+
+(defun cmacs-brigade-kick-conversation (task-id)
+  "Queue TASK-ID for another turn if it is parked with a message waiting.
+
+Idempotent and safe to call from anywhere, which is the point: both
+`cmacs-brigade-mailbox-send\=' and the tail of `cmacs-brigade--finish\=' call
+it without either needing to know what the other is doing.  It does not
+start the turn itself -- it moves the task into the queue and lets
+`cmacs-brigade--drain-queue\=' apply one policy to every candidate.
+Starting directly from here would let a chatty conversation re-take the
+slot it just released ahead of tasks that have been waiting longer,
+making the release nominal.
+
+The task is usually `done\=' when this runs, which is the ordinary case:
+it answered, nobody had anything more to say at the time, and now
+somebody does.  `done\=' to `queued\=' is the same transition a retry
+makes."
+  (let ((rec (and (fboundp 'cmacs-brigade-task-get)
+                  (cmacs-brigade-task-get task-id))))
+    (when (and rec
+               (gethash task-id cmacs-brigade--conversations)
+               (null (gethash task-id cmacs-brigade--runs))
+               (null (gethash task-id cmacs-brigade--finishing))
+               (fboundp 'cmacs-brigade-mailbox-peek)
+               (cmacs-brigade-mailbox-peek task-id)
+               (not (memq (plist-get rec :state) '(starting running))))
+      (let ((res (cmacs-brigade-task-transition task-id 'queued)))
+        (unless (plist-get res :rejected)
+          (cmacs-brigade--drain-queue)
+          t)))))
 
 (defun cmacs-brigade--on-exit (task-id proc)
   "Record that TASK-ID's PROC finished."
@@ -296,56 +624,85 @@ session's system prompt, so they are not repeated inside the user turn.
 CWD is where the built-in tools work.  It used to be ignored, so an
 agent told to work in one tree resolved every relative path -- and ran
 every shell command -- against whatever directory Emacs happened to be
-in, which is wherever you last visited a file."
+in, which is wherever you last visited a file.
+
+A conversation that is already under way reuses its session and its
+executor rather than building new ones.  That is what makes the second
+turn a continuation: the session carries the previous turns' messages,
+so the model sees what it already said instead of being handed a
+follow-up with no idea what it is following up on."
   (unless (fboundp 'cmacs-ai-tools-run-async)
     (user-error "cmacs-brigade: the inproc worker needs --with-cmacs-ai"))
-  (let* ((split (cmacs-brigade--split-model (plist-get agent :model)))
-         (pair (cmacs-ai-make-session (car split) (cdr split)
-                                      (cmacs-brigade--system-prompt agent)))
-         (executor (cmacs-ai-tools-new))
-         (allowlist (cmacs-brigade-agent-allowlist agent)))
+  (let* ((conv (cmacs-brigade-conversation-get task-id))
+         (resumed (and conv (plist-get conv :session)))
+         (split (cmacs-brigade--split-model (plist-get agent :model)))
+         (pair (or resumed
+                   (cmacs-ai-make-session
+                    (car split) (cdr split)
+                    (cmacs-brigade--system-prompt agent))))
+         (executor (or (and conv (plist-get conv :executor))
+                       (cmacs-ai-tools-new)))
+         (allowlist (or (and conv (plist-get conv :allowlist))
+                        (cmacs-brigade-agent-allowlist agent))))
     (condition-case err
         (progn
           (when (and cwd (fboundp 'cmacs-ai-tools-set-working-directory))
             (cmacs-ai-tools-set-working-directory executor cwd))
-          ;; Built from the allowlist, so the agent cannot name a tool
-          ;; that was not installed -- enforcement by construction rather
-          ;; than a check at call time.
-          (cmacs-brigade-install-tools executor allowlist
-                                       (plist-get agent :name))
+          ;; Installed once, on the turn that creates the executor.  A
+          ;; resumed turn must not re-register: the tool set an agent
+          ;; holds should not change underneath it because the agent
+          ;; definition was reloaded between turns.
+          (unless resumed
+            ;; Built from the allowlist, so the agent cannot call a tool
+            ;; that was not installed -- enforcement by construction
+            ;; rather than a check at call time.  The task id goes in so
+            ;; the transaction log can attribute each call.
+            (cmacs-brigade-install-tools executor allowlist
+                                         (plist-get agent :name) nil task-id))
           (cmacs-ai-session-append-message (cdr pair) 'user prompt)
           (cmacs-ai-tools-run-async
            (cdr pair) executor
            (lambda (payload)
              (cmacs-brigade--inproc-done task-id payload)))
+          ;; Recorded on the conversation, not just the run: the run is
+          ;; removed when the turn ends and these have to survive it.
+          (cmacs-brigade-conversation-put task-id :session pair
+                                          :executor executor
+                                          :allowlist allowlist)
           (list :session pair :executor executor))
       (error
-       ;; Nothing is in the run table yet, so unwind by hand.
-       (ignore-errors (cmacs-ai-tools-free executor))
-       (ignore-errors (cmacs-ai-free-session pair))
+       ;; Only unwind what this call created.  Freeing a session we
+       ;; inherited from a previous turn would destroy the conversation
+       ;; because one turn failed to start.
+       (unless resumed
+         (ignore-errors (cmacs-ai-tools-free executor))
+         (ignore-errors (cmacs-ai-free-session pair)))
        (signal (car err) (cdr err))))))
 
 (defun cmacs-brigade--inproc-done (task-id payload)
-  "Finish TASK-ID from the tool loop's PAYLOAD."
-  (let* ((run (gethash task-id cmacs-brigade--runs))
-         (text (plist-get payload :text))
-         (err (plist-get payload :error)))
-    ;; Freed before the state transition: the finished hooks can run
-    ;; arbitrary user code, and a handle leaked because one of them
-    ;; signalled would outlive the run.
-    (when run
-      (ignore-errors (cmacs-ai-tools-free (plist-get run :executor)))
-      (ignore-errors (cmacs-ai-free-session (plist-get run :session))))
+  "Finish TASK-ID from the tool loop's PAYLOAD.
+
+The session and executor are deliberately not freed here.  They belong
+to the conversation now, and `cmacs-brigade--finish\=' releases them
+through `cmacs-brigade--teardown-conversation\=' when the conversation
+actually ends -- which for a parked task is later, and may be much
+later."
+  (let ((text (plist-get payload :text))
+        (err (plist-get payload :error)))
     (cmacs-brigade--finish task-id (if err 'failed 'done)
                            (or text err) err)))
 
 (defun cmacs-brigade--cancel-inproc (_task-id run)
-  "Stop an in-process run described by RUN."
+  "Stop an in-process run described by RUN.
+
+Cancels the in-flight request only.  Freeing the handles is the
+conversation's business -- `cmacs-brigade-cancel-task\=' tears the
+conversation down straight afterwards, and doing it here as well would
+be a double free of handles that are integers into a C-side registry,
+where the second free silently releases whatever now holds that number."
   (when-let* ((pair (plist-get run :session)))
     (when (fboundp 'cmacs-ai-chat-cancel)
-      (ignore-errors (cmacs-ai-chat-cancel (cdr pair))))
-    (ignore-errors (cmacs-ai-tools-free (plist-get run :executor)))
-    (ignore-errors (cmacs-ai-free-session pair))))
+      (ignore-errors (cmacs-ai-chat-cancel (cdr pair))))))
 
 (defun cmacs-brigade--cancel-process (_task-id run)
   "Stop a subprocess run described by RUN."
@@ -383,13 +740,30 @@ Returns the text to keep.  RAW unchanged when it is not a report."
              (out (or (alist-get 'output_tokens usage)
                       (alist-get 'outputTokens usage)))
              (cost (alist-get 'total_cost_usd json))
+             ;; opencode spells it `sessionID'; claude `session_id'.
+             (sid (or (alist-get 'session_id json)
+                      (alist-get 'sessionID json)
+                      (alist-get 'sessionId json)))
              (text (or (alist-get 'result json)
                        (alist-get 'text json)
                        (alist-get 'output json))))
-        (when (and (fboundp 'cmacs-brigade-task-progress)
-                   (or turns in out cost))
+        ;; Re-captured every turn, never pinned.  Some CLI versions fork
+        ;; a new session id when resuming, which is why ai-glib re-reads
+        ;; it from each response too.  Recording turn one's id and
+        ;; reusing it forever would mean turn three silently resumed the
+        ;; state after turn one, truncating history with nothing to show
+        ;; that it had happened.
+        (when (and (stringp sid) (not (string-empty-p sid))
+                   (cmacs-brigade-conversation-p task-id))
+          (cmacs-brigade-conversation-put task-id :session-id sid))
+        ;; Accumulated, not assigned.  A resumed turn's report carries
+        ;; that invocation's figures only, so assigning them made every
+        ;; turn overwrite the conversation's running cost with the last
+        ;; turn's -- under-reporting the budget by everything before it.
+        (when (and (or turns in out cost)
+                   (fboundp 'cmacs-brigade-task-progress-add))
           (ignore-errors
-            (cmacs-brigade-task-progress
+            (cmacs-brigade-task-progress-add
              task-id (or turns 0) (or in 0) (or out 0)
              ;; Integer micro-dollars: cost is summed across runs and
              ;; float drift in the one number a budget acts on is worse
@@ -430,18 +804,28 @@ warning on stdout before its report."
  :name 'inproc
  :description "Run the tool loop inside cmacs against a provider HTTP API."
  :start #'cmacs-brigade--worker-inproc
- :cancel #'cmacs-brigade--cancel-inproc)
+ :cancel #'cmacs-brigade--cancel-inproc
+ ;; The session is a live handle held across turns, so continuing is
+ ;; simply appending another user message to it.
+ :supports-session t)
 
-(dolist (w '((claude-code "Drive the claude CLI in --print mode." t)
-             (opencode    "Drive the opencode CLI." t)
-             (shell       "Pipe the prompt to bash.  Mostly for testing." nil)))
+;; The third field is whether the worker reports usage as JSON; the
+;; fourth is whether it can continue a conversation.  `shell' can do
+;; neither: piping a follow-up to bash produces a process that has never
+;; seen the first message, and calling that a continuation would be a lie
+;; the caller has no way to detect.
+(dolist (w '((claude-code "Drive the claude CLI in --print mode." t t)
+             (opencode    "Drive the opencode CLI." t t)
+             (shell       "Pipe the prompt to bash.  Mostly for testing."
+                          nil nil)))
   (cmacs-brigade-register-worker
    :name (nth 0 w)
    :description (nth 1 w)
    :start #'cmacs-brigade--worker-subprocess
    :cancel #'cmacs-brigade--cancel-process
    ;; shell has no report to read; its stdout is the answer.
-   :parse-output (when (nth 2 w) #'cmacs-brigade--parse-cli-report)))
+   :parse-output (when (nth 2 w) #'cmacs-brigade--parse-cli-report)
+   :supports-session (nth 3 w)))
 
 
 ;;;; Starting
@@ -491,26 +875,72 @@ warning on stdout before its report."
       (cmacs-brigade-task-transition
        task-id 'failed (format "%s isolation is unavailable here" isolation))
       (cl-return-from cmacs-brigade--start-now nil))
-    (cmacs-brigade-task-transition task-id 'starting)
+    ;; Checked, not assumed.  `cmacs-brigade-task-transition' returns
+    ;; `:rejected' rather than signalling, so discarding it meant an
+    ;; illegal transition -- `done' straight to `starting', say -- still
+    ;; fell through and spawned the process.  That run then held a slot,
+    ;; spent money and reported nowhere, because as far as the state
+    ;; table was concerned it had never started.  Refusing here is what
+    ;; makes every other lifecycle mistake loud instead of silent, and it
+    ;; must happen before anything is provisioned.
+    (let ((res (cmacs-brigade-task-transition task-id 'starting)))
+      (when (plist-get res :rejected)
+        (message "cmacs-brigade: %s cannot start: %s"
+                 task-id (plist-get res :reason))
+        (cl-return-from cmacs-brigade--start-now nil)))
     (condition-case err
-        (progn
-          (setq prepared (cmacs-brigade-isolation-prepare isolation task-id))
-          ;; A :CWD: recorded when the task was created wins over
-          ;; whatever `default-directory' the isolation backend saw.  By
-          ;; the time a task starts the current buffer is whatever the
-          ;; main loop happens to be in, so `none' isolation was picking
-          ;; up an unrelated project -- a spawn from a chat ran in the
-          ;; wrong tree.  A real sandbox still decides its own cwd.
-          (when (eq isolation 'none)
-            (when-let* ((recorded (cmacs-brigade--task-cwd record)))
-              (setq prepared (plist-put (copy-sequence prepared)
-                                        :cwd recorded))))
+        (let* ((conv (cmacs-brigade-conversation-get task-id))
+               ;; A turn is "resumed" when there is already a
+               ;; conversation with a message waiting for it.  The very
+               ;; first turn creates the conversation and uses the plan's
+               ;; task text; every turn after takes its prompt from the
+               ;; mailbox.
+               (message-in (and conv (fboundp 'cmacs-brigade-mailbox-peek)
+                                (cmacs-brigade-mailbox-peek task-id)))
+               (resumed (and conv message-in t)))
+          (if resumed
+              ;; Reused wholesale, not re-prepared.  The agent has been
+              ;; working in this directory and possibly editing files in
+              ;; it; preparing again would hand it a pristine tree while
+              ;; its conversation still believes it made those changes.
+              (setq prepared (plist-get conv :prepared))
+            (setq prepared (cmacs-brigade-isolation-prepare isolation task-id))
+            ;; A :CWD: recorded when the task was created wins over
+            ;; whatever `default-directory' the isolation backend saw.  By
+            ;; the time a task starts the current buffer is whatever the
+            ;; main loop happens to be in, so `none' isolation was picking
+            ;; up an unrelated project -- a spawn from a chat ran in the
+            ;; wrong tree.  A real sandbox still decides its own cwd.
+            (when (eq isolation 'none)
+              (when-let* ((recorded (cmacs-brigade--task-cwd record)))
+                (setq prepared (plist-put (copy-sequence prepared)
+                                          :cwd recorded))))
+            ;; Resolved once, here, and never again.  A resumed turn that
+            ;; re-resolved would pick up whatever `default-directory' the
+            ;; sentinel happened to fire in -- and for a CLI worker that
+            ;; is not merely untidy: claude resolves `--resume' against
+            ;; the project directory, so a drifted cwd silently starts a
+            ;; brand new conversation instead of failing.
+            (cmacs-brigade-conversation-put
+             task-id :isolation isolation :prepared prepared
+             :cwd (plist-get prepared :cwd) :allowlist allowlist))
           (setq endpoint (cmacs-brigade-host-provision task-id allowlist))
           (setq proc (funcall (plist-get worker :start)
                               task-id agent
-                              (if (eq worker-name 'inproc)
-                                  (cmacs-brigade--task-prompt record)
-                                (cmacs-brigade--build-prompt record agent))
+                              (cond
+                               ;; A resumed turn sends the message and
+                               ;; nothing else.  Not `--build-prompt':
+                               ;; that prepends the agent's standing
+                               ;; instructions, which the CLI already has
+                               ;; from the session being resumed and the
+                               ;; in-process session already has as its
+                               ;; system prompt.  Re-sending them wastes
+                               ;; tokens and re-injects the whole prompt
+                               ;; into the middle of a conversation.
+                               (resumed (plist-get message-in :text))
+                               ((eq worker-name 'inproc)
+                                (cmacs-brigade--task-prompt record))
+                               (t (cmacs-brigade--build-prompt record agent)))
                               (plist-get prepared :cwd)
                               (plist-get prepared :env)
                               endpoint))
@@ -520,16 +950,63 @@ warning on stdout before its report."
                                          :agent (plist-get agent :name)
                                          :started (float-time)))
                    cmacs-brigade--runs)
+          ;; Popped only now that the turn is genuinely under way.
+          ;; Popping at peek time meant a start that failed anywhere
+          ;; above silently ate what somebody had typed.
+          (when resumed
+            (cmacs-brigade-mailbox-pop task-id)
+            (cmacs-brigade-conversation-put task-id :attempts 0))
+          (unless conv
+            ;; First turn: record the opening instruction so the log
+            ;; reads as a conversation from the beginning rather than
+            ;; starting abruptly with a reply.
+            (cmacs-brigade-log-append
+             task-id "message" :turn 1 :role "user" :from "plan"
+             :text (cmacs-brigade--task-prompt record)))
+          (cmacs-brigade-log-append task-id "state" :state "running"
+                                    :turn (1+ (or (cmacs-brigade-conversation-turn
+                                                   task-id)
+                                                  0)))
           (cmacs-brigade-task-transition task-id 'running)
           t)
       (error
-       ;; Unwind whatever got as far as being created.  Both are safe to
-       ;; call on something that was never made.
+       ;; Unwind whatever got as far as being created.  The credential is
+       ;; always safe to revoke; isolation is torn down only when this
+       ;; call is what prepared it, since a resumed turn inherited a
+       ;; sandbox that the conversation still owns and that the *next*
+       ;; attempt will need.
        (cmacs-brigade-host-revoke task-id)
-       (cmacs-brigade-isolation-teardown isolation task-id)
-       (cmacs-brigade-task-transition task-id 'failed
-                                      (error-message-string err))
+       (unless (cmacs-brigade-conversation-get task-id)
+         (cmacs-brigade-isolation-teardown isolation task-id))
+       (cmacs-brigade--start-failed task-id (error-message-string err))
        nil))))
+
+(defun cmacs-brigade--start-failed (task-id reason)
+  "Record that TASK-ID could not start, and give up if it keeps happening.
+
+A conversation whose sandbox was deleted out from under it fails the same
+way on every kick.  Without a bound it would retry forever with its
+mailbox stranded and nobody told; with one, it fails loudly and releases
+what it was holding."
+  (let ((conv (cmacs-brigade-conversation-get task-id)))
+    (if (null conv)
+        (cmacs-brigade-task-transition task-id 'failed reason)
+      (let ((n (1+ (or (plist-get conv :attempts) 0))))
+        (cmacs-brigade-conversation-put task-id :attempts n)
+        (if (< n cmacs-brigade-conversation-max-attempts)
+            ;; Back to parked: the message is still at the head of the
+            ;; queue, so the next kick will try again.
+            (cmacs-brigade-task-transition task-id 'waiting-input reason)
+          (cmacs-brigade-log-append
+           task-id "state" :state "failed"
+           :turn (or (cmacs-brigade-conversation-turn task-id) 0)
+           :reason (format "gave up after %d attempts: %s" n reason))
+          (cmacs-brigade-task-transition
+           task-id 'failed
+           (format "could not resume after %d attempts: %s" n reason))
+          (cmacs-brigade--teardown-conversation task-id reason)
+          (run-hook-with-args 'cmacs-brigade-run-finished-functions
+                              task-id 'failed reason))))))
 
 (defun cmacs-brigade--system-prompt (agent)
   "The standing instructions for AGENT: its own prompt plus context."
@@ -577,15 +1054,41 @@ repeated inside the user turn."
                "\n\n"))
 
 (defun cmacs-brigade--drain-queue ()
-  "Start whatever queued tasks now fit."
+  "Start whatever queued tasks now fit, oldest first.
+
+Ordered on purpose.  `cmacs-brigade-task-list\=' returns hash-table bucket
+order, which is arbitrary but *stable* for a fixed set of keys -- so a
+task in a late bucket loses to the same competitors on every drain,
+indefinitely.  That is invisible while each task is drained once and
+becomes real starvation as soon as a task can be re-queued repeatedly,
+which is exactly what a conversation does.  `:queued-at-usec\=' is stamped
+by the C state layer on entry to the queue -- in microseconds, because a
+fan-out queues a dozen tasks inside the same second -- so a resumed turn
+takes its place in line by when it was ready rather than by where it
+hashes."
   (when (fboundp 'cmacs-brigade-task-list)
-    (dolist (rec (cmacs-brigade-task-list))
-      (when (and (eq 'queued (plist-get rec :state))
-                 (cmacs-brigade-can-start-p))
-        (cmacs-brigade-start-task (plist-get rec :id))))))
+    (let ((queued (sort (cl-remove-if-not
+                         (lambda (r) (eq 'queued (plist-get r :state)))
+                         (cmacs-brigade-task-list))
+                        (lambda (a b) (< (or (plist-get a :queued-at-usec) 0)
+                                         (or (plist-get b :queued-at-usec) 0))))))
+      (dolist (rec queued)
+        (when (cmacs-brigade-can-start-p)
+          (cmacs-brigade-start-task (plist-get rec :id)))))))
 
 (defun cmacs-brigade-cancel-task (task-id)
-  "Stop TASK-ID if it is running."
+  "Stop TASK-ID, whether it is running or parked mid-conversation.
+
+Returns non-nil only if the task actually reached `cancelled\='.  It used
+to return t unconditionally while discarding the transition's result,
+which for a parked conversation meant reporting \"Cancelled\" for
+something that stayed exactly as it was, still holding a session, a
+sandbox and a queue of messages.
+
+Everything the conversation holds goes first, before the transition, so
+that even a refused transition still releases the resources -- the caller
+asked for this to stop, and the least useful outcome is stopping nothing
+and saying so quietly."
   (interactive "sTask id: ")
   (let ((run (gethash task-id cmacs-brigade--runs)))
     (when run
@@ -596,13 +1099,56 @@ repeated inside the user turn."
                                                  (plist-get run :worker)))
                   (cancel (plist-get w :cancel)))
         (ignore-errors (funcall cancel task-id run))))
-    (cmacs-brigade-task-transition task-id 'cancelled)
+    (when (fboundp 'cmacs-brigade-mailbox-drop)
+      (cmacs-brigade-mailbox-drop task-id))
+    ;; Covers the credential, the parked isolation and the session
+    ;; handles.  For a task with no conversation this is a no-op and the
+    ;; two lines below do the work.
+    (cmacs-brigade--teardown-conversation task-id "cancelled")
     (cmacs-brigade-host-revoke task-id)
     (when run
       (cmacs-brigade-isolation-teardown (plist-get run :isolation) task-id))
     (remhash task-id cmacs-brigade--runs)
-    (cmacs-brigade--drain-queue)
-    t))
+    (remhash task-id cmacs-brigade--finishing)
+    (let* ((res (cmacs-brigade-task-transition task-id 'cancelled))
+           (rejected (plist-get res :rejected))
+           ;; A task that had already finished cannot become `cancelled',
+           ;; and does not need to: what the caller asked for was that it
+           ;; stop, and a terminal task with its conversation released is
+           ;; stopped.  Reporting failure here would be pedantry about
+           ;; the state name for an outcome that was achieved.
+           (already-done (and rejected
+                              (memq (plist-get (cmacs-brigade-task-get task-id)
+                                               :state)
+                                    '(done failed cancelled over-budget)))))
+      (cmacs-brigade--drain-queue)
+      (cond
+       ((not rejected)
+        (run-hook-with-args 'cmacs-brigade-run-finished-functions
+                            task-id 'cancelled
+                            (cmacs-brigade-output-get task-id))
+        t)
+       (already-done t)
+       (t (message "cmacs-brigade: %s could not be cancelled: %s"
+                   task-id (plist-get res :reason))
+          nil)))))
+
+(defun cmacs-brigade-outstanding-count ()
+  "How much work is still in flight, counting parked conversations.
+
+Not `cmacs-brigade-live-count\=', which is the concurrency gate and must
+keep counting running processes only -- inflating it would defeat the
+whole point of a parked conversation releasing its slot.  This is the
+number to ask when deciding whether everything is finished: a task
+sitting in `waiting-input\=' with three messages queued is emphatically not
+finished, however idle the process table looks."
+  (+ (hash-table-count cmacs-brigade--runs)
+     (let ((n 0))
+       (dolist (id (hash-table-keys cmacs-brigade--conversations) n)
+         (when (and (null (gethash id cmacs-brigade--runs))
+                    (fboundp 'cmacs-brigade-mailbox-count)
+                    (> (cmacs-brigade-mailbox-count id) 0))
+           (setq n (1+ n)))))))
 
 ;;;###autoload
 (defun cmacs-brigade-start-plan (&optional buffer)

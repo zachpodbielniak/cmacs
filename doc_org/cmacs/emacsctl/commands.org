@@ -99,6 +99,7 @@ missing subsystem maps to exit code 3 with a clear message.
 | =bacon=     | =eval=, =eval-c=, =complete=                                |
 | =eshell=    | =eval=                                                      |
 | =ai=        | =providers=, =models=, =prompt=, =chat=                     |
+| =brigade=   | =spawn=, =status=, =result=, =cancel=, =list=, =agents=, =providers=, =models=, =send=, =inbox=, =drop=, =log=, =close= |
 | =gsurf=     | =open=, =navigate=, =back=, =forward=, =reload=, =stop=, =url=, =title=, =current=, =list=, =modules=, =js=, =zoom=, =lite=, =text=, =downloads=, =download-cancel=, =snapshot=, =pdf=, =permission= |
 | =gnuseye=   | =open=, =brief=, =layers=, =toggle=, =fly-to=, =refresh=, =query=, =geofence=, =cii= |
 | =pod=       | =status=, =pods=, =modules=, =stats=, =emit=, =eval=, =repl-eval=, =load=, =reload=, =set-context= |
@@ -109,6 +110,44 @@ missing subsystem maps to exit code 3 with a clear message.
 | =calc=      | =eval=, =symbolic=, =units=, =list=, =describe= (also =eval -l calc= / =repl -l calc=) |
 | =compositor=| =clients=, =focused=, =spawn=, =find=, =focus=, =close=, =geometry=, =layout=, =workspaces=, =workspace=, =screenshot=, =keybinds=, =mfact=, =nmaster=, =tags=, =lock=, =unlock=, =reload=, =config= |
 | =monitor=   | =list=, =info=, =modes=, =set-mode=, =position=, =set-position=, =enable=, =scale=, =transform= |
+
+* Agents: =brigade spawn= / =brigade send= / =brigade log=
+
+Hands work to a brigade agent and then goes on talking to it. The same verbs an
+agent gets as MCP tools, so a shell script and a model drive the queue through
+one code path.
+
+#+begin_src bash
+emacsctl brigade spawn "audit the config loader" reviewer
+# -> 3f2a1c...
+
+emacsctl brigade status 3f2a1c
+emacsctl brigade result 3f2a1c
+#+end_src
+
+=send= continues the conversation rather than starting a new one. It works
+whether the agent is still running — the message is delivered when its current
+turn ends — or finished long ago, in which case it starts again on the same
+provider session and remembers everything from before.
+
+#+begin_src bash
+emacsctl brigade send 3f2a1c "now check the error paths too"
+emacsctl brigade inbox 3f2a1c          # queued but not yet delivered
+emacsctl brigade drop 3f2a1c 0         # changed your mind; omit the index for all
+emacsctl brigade close 3f2a1c          # done with it; releases the session
+#+end_src
+
+=log= prints the whole transaction log — every message, reply and tool call in
+order. It works on any task, not only ones you started, which is what makes it
+useful for looking at an agent that is misbehaving:
+
+#+begin_src bash
+emacsctl brigade log 3f2a1c
+emacsctl brigade log 3f2a1c 2          # only from turn 2 onward
+#+end_src
+
+A task whose worker has no session concept (=shell=) refuses =send= rather than
+re-running with the follow-up as though it were a first prompt.
 
 * AI: =ai prompt= / =ai call= / =ai models= / =ai chat=
 

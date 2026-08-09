@@ -78,6 +78,22 @@ and `agent_result' is the tool the model already knows.  Marked
   :type 'string
   :group 'cmacs-brigade)
 
+(defcustom cmacs-brigade-loopback-turn-message
+  "[automatic] Subagent %s (%s) has answered your last message (turn %d).  \
+Call agent_result with id \"%s\" to read it.  It is still open: send it \
+another message with agent_send, or close it with agent_close when you \
+are done with it."
+  "Message delivered when a subagent finishes a turn but stays open.
+
+Takes the task id, the agent name, the turn number, and the id again.
+
+Separate from `cmacs-brigade-loopback-message' because the two say
+different things.  \"Has finished ... then carry on\" is right for a task
+that is over and actively misleading for turn four of a conversation the
+model is still holding open."
+  :type 'string
+  :group 'cmacs-brigade)
+
 (defcustom cmacs-brigade-loopback-retry-seconds 5
   "How often a queued message re-checks whether its target is free."
   :type 'number
@@ -211,7 +227,13 @@ What `agent_spawn' uses to notice that it is running inside a chat."
 ;;;; The finished hook
 
 (defvar cmacs-brigade-loopback--notified (make-hash-table :test 'equal)
-  "Task ids already reported, so a re-fired hook cannot double-notify.")
+  "Reports already delivered, so a re-fired hook cannot double-notify.
+
+Keyed by \"TASK-ID/TURN\", not by task id.  Keying on the id alone meant
+the flag was set by turn one and never cleared, so every later turn of a
+conversation was silently swallowed -- the chat that started it heard
+once and then nothing, which is the exact failure a loopback exists to
+prevent.")
 
 (defun cmacs-brigade-loopback-task-target (task-id)
   "The target TASK-ID reports to, or nil."
@@ -221,17 +243,57 @@ What `agent_spawn' uses to notice that it is running inside a chat."
          (cmacs-brigade-plan-task-property
           (plist-get record :plan) task-id "NOTIFY"))))
 
-(defun cmacs-brigade-loopback-on-finished (task-id state &optional _output)
-  "Tell whoever asked for TASK-ID that it ended in STATE."
-  (when (and cmacs-brigade-loopback-enabled
-             (not (gethash task-id cmacs-brigade-loopback--notified)))
+(defun cmacs-brigade-loopback--report (task-id key text)
+  "Deliver TEXT for TASK-ID once, guarded by KEY.
+
+Also tears down a conversation whose target has gone: a chat buffer that
+was closed is never coming back, and an agent left parked reporting into
+it would hold a session and a sandbox for nobody's benefit."
+  (when cmacs-brigade-loopback-enabled
     (when-let* ((target (cmacs-brigade-loopback-task-target task-id)))
-      (puthash task-id t cmacs-brigade-loopback--notified)
-      (let* ((record (cmacs-brigade-task-get task-id))
-             (agent (or (plist-get record :agent) "an agent"))
-             (text (format cmacs-brigade-loopback-message
-                           task-id agent state task-id)))
-        (cmacs-brigade-loopback-deliver target text)))))
+      (cond
+       ((gethash key cmacs-brigade-loopback--notified) nil)
+       ((and (fboundp 'cmacs-brigade-conversation-p)
+             (cmacs-brigade-conversation-p task-id)
+             (not (cmacs-brigade-loopback-live-p target)))
+        (puthash key t cmacs-brigade-loopback--notified)
+        (message "cmacs-brigade: %s reports to %s, which is gone; closing it"
+                 task-id target)
+        (when (fboundp 'cmacs-brigade-close-conversation)
+          (cmacs-brigade-close-conversation task-id "loopback target gone")))
+       (t
+        (puthash key t cmacs-brigade-loopback--notified)
+        (cmacs-brigade-loopback-deliver target text))))))
+
+(defun cmacs-brigade-loopback-on-finished (task-id state &optional _output)
+  "Tell whoever asked for TASK-ID that it ended in STATE.
+
+Keyed by turn, not by task.  Keying by task alone meant the guard was
+set by the first turn and never cleared, so every later turn of a
+conversation was swallowed and the chat that started it heard once and
+then nothing.
+
+Which message depends on whether anything is still queued.  A task that
+answered and has nothing waiting is finished as far as the caller is
+concerned, whatever session it is still holding; one with messages
+behind it has more coming, and saying \"has finished, carry on\" would
+be wrong."
+  (let* ((record (and (fboundp 'cmacs-brigade-task-get)
+                      (cmacs-brigade-task-get task-id)))
+         (agent (or (plist-get record :agent) "an agent"))
+         (turn (or (and (fboundp 'cmacs-brigade-conversation-turn)
+                        (cmacs-brigade-conversation-turn task-id))
+                   1))
+         (pending (if (fboundp 'cmacs-brigade-mailbox-count)
+                      (cmacs-brigade-mailbox-count task-id)
+                    0)))
+    (cmacs-brigade-loopback--report
+     task-id (format "%s/%d" task-id turn)
+     (if (> pending 0)
+         (format cmacs-brigade-loopback-turn-message
+                 task-id agent turn task-id)
+       (format cmacs-brigade-loopback-message
+               task-id agent state task-id)))))
 
 (add-hook 'cmacs-brigade-run-finished-functions
           #'cmacs-brigade-loopback-on-finished)

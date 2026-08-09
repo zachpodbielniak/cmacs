@@ -1008,6 +1008,47 @@ ascii_formatd
 ascii_strcasecmp
 #+end_example
 
+* AI Brigade Commands
+
+Group: =brigade=
+
+Drives the [[file:ai-brigade/index.org][AI brigade]] from the bacon shell: hand work to an agent, watch it,
+and go on talking to it. Every verb bridges to =cmacs-brigade-call-tool=, the
+same entry point an agent reaches over MCP and a shell reaches over D-Bus, so
+bacon cannot end up on a different code path from a model making the same
+request.
+
+| Subcommand | Does |
+|------------+------|
+| =brigade spawn TASK [-a AGENT] [-t TITLE] [-m MODEL]= | hand a task to an agent; prints the task id |
+| =brigade status ID= | state, turns, tokens and cost |
+| =brigade result ID [-t TURN]= | what it produced; a named turn, or the latest |
+| =brigade cancel ID= | stop it, running or resumable |
+| =brigade list= | every known task with its state |
+| =brigade agents= | agent definitions available to spawn |
+| =brigade providers= | AI providers this cmacs can reach |
+| =brigade models PROVIDER= | that provider's models, as =provider/model= |
+| =brigade send ID MESSAGE= | queue a message; wakes a task that already finished |
+| =brigade inbox ID= | queued but not yet delivered |
+| =brigade drop ID [INDEX]= | remove one queued message, or all of them |
+| =brigade log ID [-f FROM-TURN] [-k KINDS]= | the transaction log |
+| =brigade close ID= | release the conversation's session |
+
+#+begin_example
+bacon> cmacsgi brigade spawn "audit the config loader" -a reviewer
+3f2a1c7e-...
+
+bacon> cmacsgi brigade send 3f2a1c7e "now check the error paths too"
+Queued for 3f2a1c7e (1 waiting).  Poll agent_status("3f2a1c7e").
+
+bacon> cmacsgi brigade log 3f2a1c7e -f 2 -k reply
+#+end_example
+
+=send= continues the existing conversation rather than starting a new one, so
+the agent still remembers what it already said and did. =log= works on any task,
+including ones this shell never started — which is how you point one agent at
+another to find out what it actually did.
+
 * C Runtime Introspection Commands
 
 Group: =c=

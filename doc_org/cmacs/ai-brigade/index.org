@@ -82,6 +82,7 @@ You do not have to pick a worker; naming the provider is enough. See [[file:agen
 | [[file:agents.org][Agents]]              | definitions, workers, isolation, budgets          |
 | [[file:plan.org][Plans]]               | org files as the durable model; who owns what     |
 | [[file:dashboard.org][Dashboard]]           | watching agents, in any backend                   |
+| [[file:mailbox.org][Mailboxes]]           | saying more to an agent; the transaction log      |
 | [[file:memory.org][Memory]]              | the index over your notes and other corpora       |
 | [[file:genmail.org][GenMail]]             | triage, actions from the report, voice, briefing  |
 | [[file:deliverables.org][Deliverables]]        | reports, decks, pods, reels                       |

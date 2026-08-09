@@ -742,9 +742,14 @@ tree is expensive in a way that is not noticed until the bill."
     (cmacs-brigade-task-adopt id "p.org" nil "t")
     (unwind-protect
         (let ((tool (cmacs-brigade-registry-get 'tool 'agent-result)))
+          ;; The handler's arity is the tool's full parameter list, so
+          ;; the optional turn is passed explicitly.  Real dispatch goes
+          ;; through `cmacs-brigade--tool-args', which fills in the
+          ;; missing ones; calling the handler directly is a test-only
+          ;; shortcut and has to do that job itself.
           (should (string-match-p
                    "Still draft"
-                   (funcall (cmacs-brigade-tool-handler tool) id))))
+                   (funcall (cmacs-brigade-tool-handler tool) id nil))))
       (ignore-errors (cmacs-brigade-task-forget id)))))
 
 (ert-deftest cmacs-brigade-chat-executor-hook-installs-tools ()

@@ -249,18 +249,29 @@ running, waiting-input, done, failed, cancelled and over-budget.  Only
 (cmacs-brigade-deftool agent-result
   "Collect what a subagent produced.  Call it once agent_status reports
 `done'; on a `failed' task it returns whatever was produced before the
-failure, which is usually the explanation."
-  ((id string "Task id returned by agent_spawn"))
+failure, which is usually the explanation.
+
+For an agent you have sent more than one message to, this returns the
+answer to the most recent one.  Pass `turn' to read an earlier one, or
+use agent_log to read the whole exchange."
+  ((id string "Task id returned by agent_spawn")
+   (turn integer "Which turn's reply to read; omit for the latest"
+         :optional t))
   :group 'agent
   (let ((r (cmacs-brigade-task-get id)))
     (cond
      ((null r) (format "No such task: %s" id))
+     ;; A parked conversation is `waiting-input', which is neither
+     ;; finished nor still working -- its last reply is there to be read,
+     ;; so it must not be reported as "still running".
      ((memq (plist-get r :state) '(draft queued starting running))
       (format "Still %s.  Poll agent_status again before collecting."
               (plist-get r :state)))
-     (t (or (cmacs-brigade-output-get id)
-            (format "%s finished with state %s and produced no output."
-                    id (plist-get r :state)))))))
+     (t (or (cmacs-brigade-output-get id (and turn (> turn 0) turn))
+            (if (and turn (> turn 0))
+                (format "%s has no reply recorded for turn %d." id turn)
+              (format "%s finished with state %s and produced no output."
+                      id (plist-get r :state))))))))
 
 
 (cmacs-brigade-deftool agent-providers
