@@ -1840,6 +1840,49 @@ instead (it keeps @env{WAYLAND_DISPLAY} so wlroots uses the nested
 backend).  Diagnose failures from @code{journalctl -b | grep -iE
 'gdm-wayland-session|cmacs|gowl|wlr|backend'}.
 
+@subsection Nested Mode: Capturing the Host's Shortcuts (Super)
+@cindex nested compositor
+@cindex Super key, nested mode
+@cindex keyboard shortcuts inhibit
+
+When gowl runs @emph{nested} inside another Wayland compositor
+(@code{just gowl}, or @code{./src/emacs --gowl} from inside a GNOME
+session), the host compositor sees key events first.  GNOME's Mutter
+claims the whole @key{Super} key for the Activities overview
+(@code{org.gnome.mutter overlay-key}), plus @kbd{Alt-@key{TAB}} and the
+rest of its bindings, so those never reach gowl and every
+@key{Super}-prefixed gowl keybind is dead.
+
+cmacs handles this the way a VM viewer or remote-desktop client
+``grabs'' the keyboard: it asks the host for
+@code{zwp_keyboard_shortcuts_inhibit_unstable_v1} on the nested output
+surface.  While that surface holds the host's keyboard focus, the host
+stops running its own bindings and forwards the raw keys through;
+focus another window and the host's shortcuts come back.  This needs no
+configuration --- cmacs requests it automatically at startup whenever it
+detects a nested Wayland output, on both the @option{--gowl} early path
+and @code{M-x gowl-start}.
+
+Mutter has honoured the inhibitor for the overlay key since GNOME 3.36.
+If @key{Super} still opens the overview, set
+@env{G_MESSAGES_DEBUG=all} and look for the @samp{gowl:} lines:
+
+@example
+gowl: requested shortcut inhibition on 1 nested output surface(s)
+gowl: parent-compositor shortcut inhibition ACTIVE
+@end example
+
+The @samp{ACTIVE} line comes from the host and is the only proof the
+grab took.  Common failures each log their own warning: a host that does
+not implement the protocol, or one that exposes no @code{wl_seat}.
+Nothing is requested or logged when gowl owns a real seat (DRM backend)
+--- there is no host to inhibit.
+
+As a last resort on a host that cannot be inhibited, clear the host's
+own binding instead, e.g.@: @code{gsettings set org.gnome.mutter
+overlay-key ""}, or bind gowl's modifier to a key the host does not
+claim.
+
 @subsection Running X11 Applications (XWayland)
 @cindex XWayland
 @cindex X11 applications
