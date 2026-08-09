@@ -109,6 +109,47 @@ Wayland session that launches the freshly-built in-repo binary, then pick
 Each of these bounced us back to GDM at least once; diagnose from the
 journal: =journalctl -b | grep -iE 'gdm-wayland-session|cmacs|gowl|wlr|backend'=.
 
+** Nested mode: capturing the host compositor's shortcuts (Super)
+
+When gowl runs *nested* inside another Wayland compositor (=just gowl=,
+or =./src/emacs --gowl= from inside a GNOME session), the host
+compositor sees the key events first.  GNOME's Mutter claims the whole
+=Super= key for the Activities overview (=org.gnome.mutter overlay-key=),
+plus =Alt-Tab=, =Super-L= and the rest of its bindings, so those never
+reach gowl and every =Super=-prefixed gowl keybind is dead.
+
+cmacs handles this the same way a VM viewer or remote-desktop client
+"grabs" the keyboard: it asks the host for
+=zwp_keyboard_shortcuts_inhibit_unstable_v1= on the nested output
+surface.  While that surface holds the host's keyboard focus, the host
+stops running its own bindings and forwards the raw keys through;
+focus another window and the host's shortcuts come straight back.  No
+configuration is needed — cmacs requests it automatically at startup
+whenever it detects a nested Wayland output, on both the =--gowl= early
+path and =M-x gowl-start=.
+
+Mutter has honoured the inhibitor for the overlay key since GNOME 3.36,
+so a current GNOME needs nothing extra.  If =Super= still opens the
+overview, turn on debug logging (=G_MESSAGES_DEBUG=all=) and look for
+the =gowl:= lines:
+
+#+begin_example
+gowl: requested shortcut inhibition on 1 nested output surface(s)
+gowl: parent-compositor shortcut inhibition ACTIVE
+#+end_example
+
+The =ACTIVE= line comes from the host and is the only proof the grab
+really took.  Common failures each log a warning of their own: a host
+that does not implement the protocol at all (older wlroots compositors,
+some X11-hosted setups), or one that exposes no =wl_seat=.  Nothing is
+logged and nothing is requested when gowl owns a real seat (DRM
+backend) — there is no host to inhibit.
+
+As a last-resort fallback on a host that cannot be inhibited, clear the
+host's own binding instead, e.g. =gsettings set org.gnome.mutter
+overlay-key ""=, or bind gowl's modifier to something the host does not
+claim.
+
 ** Running X11 applications (XWayland)
 
 gowl runs its own rootless *XWayland* server, so unmodified X11

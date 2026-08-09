@@ -27,6 +27,7 @@
 #include <wayland-client-core.h>
 #include <wlr/backend.h>
 #include <wlr/backend/wayland.h>
+#include <wlr/types/wlr_output.h>
 #include "keyboard-shortcuts-inhibit-v1-client.h"
 
 #ifdef HAVE_PGTK
@@ -713,8 +714,41 @@ cmacs_gowl_xwidget_keyboard_leave (void)
  */
 
 static struct zwp_keyboard_shortcuts_inhibit_manager_v1 *shortcuts_mgr = NULL;
-static struct zwp_keyboard_shortcuts_inhibitor_v1 *shortcuts_inhibitor = NULL;
 static struct wl_seat *parent_seat = NULL;
+
+/* One inhibitor per nested output surface.  A multi-monitor nested
+   session gets one parent surface per output, and the parent only
+   honours the inhibitor belonging to the surface that currently holds
+   its keyboard focus — so every surface needs its own. */
+#define CMACS_GOWL_MAX_INHIBITORS 16
+static struct zwp_keyboard_shortcuts_inhibitor_v1
+  *shortcuts_inhibitors[CMACS_GOWL_MAX_INHIBITORS];
+static int n_shortcuts_inhibitors = 0;
+
+/* The parent compositor tells us when inhibition actually takes hold
+   (it only does so while our surface is focused).  These are the only
+   direct evidence that Super really is ours, so log both. */
+static void
+shortcuts_inhibitor_handle_active (
+  void *data, struct zwp_keyboard_shortcuts_inhibitor_v1 *inhibitor)
+{
+  g_debug ("gowl: parent-compositor shortcut inhibition ACTIVE "
+           "(Super and friends now reach gowl)");
+}
+
+static void
+shortcuts_inhibitor_handle_inactive (
+  void *data, struct zwp_keyboard_shortcuts_inhibitor_v1 *inhibitor)
+{
+  g_debug ("gowl: parent-compositor shortcut inhibition inactive "
+           "(nested surface unfocused)");
+}
+
+static const struct zwp_keyboard_shortcuts_inhibitor_v1_listener
+shortcuts_inhibitor_listener = {
+  shortcuts_inhibitor_handle_active,
+  shortcuts_inhibitor_handle_inactive,
+};
 
 static void
 registry_handle_global (void *data, struct wl_registry *registry,
@@ -747,27 +781,68 @@ static const struct wl_registry_listener registry_listener = {
    Must be called after gowl_compositor_start() in nested mode,
    BEFORE the dispatch thread starts (roundtrips the parent display
    which is safe since the parent compositor is a separate process).
-   Uses wlroots backend accessors to get the parent display and
-   the output surface, then binds the shortcut inhibitor protocol.
 
-   NOT static — called from emacs.c --gowl handler. */
+   This is the same mechanism a VM viewer or remote-desktop client uses
+   to "grab" the keyboard: while our surface has the parent's keyboard
+   focus, the parent stops running its own bindings (GNOME's Super
+   overview, Alt+Tab, …) and forwards the raw keys to us instead.
+
+   Every failure path logs — a silent no-op here is indistinguishable
+   from a compositor that just ignores us, and that cost us once
+   already (see the multi-backend note below).
+
+   NOT static — called from emacs.c --gowl handler and Fgowl_start. */
 void
 cmacs_gowl_inhibit_parent_shortcuts (GowlCompositor *comp)
 {
-  struct wlr_backend *backend;
-  struct wl_display *parent_dpy;
+  struct wl_display *parent_dpy = NULL;
   struct wl_registry *registry;
-  GList *monitors;
-  struct wlr_output *output;
-  struct wl_surface *surface;
+  GList *monitors, *l;
+  int n_wl_outputs = 0;
 
-  backend = gowl_compositor_get_wlr_backend (comp);
-  if (backend == NULL || !wlr_backend_is_wl (backend))
-    return;  /* not nested */
-
-  parent_dpy = wlr_wl_backend_get_remote_display (backend);
-  if (parent_dpy == NULL)
+  if (comp == NULL)
     return;
+
+  if (n_shortcuts_inhibitors > 0)
+    return;  /* already inhibited */
+
+  /* Find the parent display via the OUTPUTS, not the compositor's
+     top-level backend.  gowl builds its backend with
+     wlr_backend_autocreate(), which always wraps the real backend in a
+     multi-backend — so wlr_backend_is_wl() on it is ALWAYS false, even
+     when nested, and testing it here silently disabled inhibition
+     entirely.  gowl's own nested detection (on_new_output) checks
+     wlr_output_is_wl() for exactly this reason; do the same.
+
+     The monitor list is transfer-none: borrow it, never free it. */
+  monitors = gowl_compositor_get_monitors (comp);
+  for (l = monitors; l != NULL; l = l->next)
+    {
+      struct wlr_output *output =
+        gowl_monitor_get_wlr_output (GOWL_MONITOR (l->data));
+
+      if (output == NULL || !wlr_output_is_wl (output))
+        continue;
+
+      n_wl_outputs++;
+      if (parent_dpy == NULL && output->backend != NULL
+          && wlr_backend_is_wl (output->backend))
+        parent_dpy = wlr_wl_backend_get_remote_display (output->backend);
+    }
+
+  if (n_wl_outputs == 0)
+    {
+      g_debug ("gowl: no nested Wayland outputs — running on DRM, "
+               "nothing to inhibit");
+      return;
+    }
+
+  if (parent_dpy == NULL)
+    {
+      g_warning ("gowl: nested output found but no remote display; "
+                 "parent compositor keeps Super/Alt-Tab");
+      return;
+    }
 
   /* Bind the shortcut inhibitor manager and a wl_seat from
      the parent compositor via its registry. */
@@ -776,26 +851,61 @@ cmacs_gowl_inhibit_parent_shortcuts (GowlCompositor *comp)
   wl_display_roundtrip (parent_dpy);
   wl_registry_destroy (registry);
 
-  if (shortcuts_mgr == NULL || parent_seat == NULL)
-    return;  /* parent doesn't support shortcut inhibition */
+  if (shortcuts_mgr == NULL)
+    {
+      g_warning ("gowl: parent compositor does not implement "
+                 "zwp_keyboard_shortcuts_inhibit_manager_v1; "
+                 "its shortcuts (Super) cannot be captured");
+      return;
+    }
+  if (parent_seat == NULL)
+    {
+      g_warning ("gowl: parent compositor exposes no wl_seat; "
+                 "cannot request shortcut inhibition");
+      return;
+    }
 
-  /* Inhibit shortcuts on the primary output surface. */
-  monitors = gowl_compositor_get_monitors (comp);
-  if (monitors == NULL)
-    return;
+  /* Inhibit on every nested output surface. */
+  for (l = monitors; l != NULL; l = l->next)
+    {
+      struct wlr_output *output =
+        gowl_monitor_get_wlr_output (GOWL_MONITOR (l->data));
+      struct wl_surface *surface;
+      struct zwp_keyboard_shortcuts_inhibitor_v1 *inhibitor;
 
-  output = gowl_monitor_get_wlr_output (GOWL_MONITOR (monitors->data));
-  if (output == NULL)
-    return;
+      if (output == NULL || !wlr_output_is_wl (output))
+        continue;
+      if (n_shortcuts_inhibitors >= CMACS_GOWL_MAX_INHIBITORS)
+        break;
 
-  surface = wlr_wl_output_get_surface (output);
-  if (surface == NULL)
-    return;
+      /* wlr_wl_output_get_surface() asserts on non-wl outputs; the
+         wlr_output_is_wl() test above is what makes this safe. */
+      surface = wlr_wl_output_get_surface (output);
+      if (surface == NULL)
+        {
+          g_warning ("gowl: nested output %s has no parent surface",
+                     output->name ? output->name : "(unnamed)");
+          continue;
+        }
 
-  shortcuts_inhibitor =
-    zwp_keyboard_shortcuts_inhibit_manager_v1_inhibit_shortcuts (
-      shortcuts_mgr, surface, parent_seat);
+      inhibitor =
+        zwp_keyboard_shortcuts_inhibit_manager_v1_inhibit_shortcuts (
+          shortcuts_mgr, surface, parent_seat);
+      if (inhibitor == NULL)
+        continue;
+
+      zwp_keyboard_shortcuts_inhibitor_v1_add_listener (
+        inhibitor, &shortcuts_inhibitor_listener, NULL);
+      shortcuts_inhibitors[n_shortcuts_inhibitors++] = inhibitor;
+    }
+
   wl_display_roundtrip (parent_dpy);
+
+  if (n_shortcuts_inhibitors == 0)
+    g_warning ("gowl: failed to inhibit parent-compositor shortcuts");
+  else
+    g_debug ("gowl: requested shortcut inhibition on %d nested "
+             "output surface(s)", n_shortcuts_inhibitors);
 }
 
 /* ── Compositor dispatch thread ───────────────────────────────────────
@@ -1444,6 +1554,12 @@ the event loop source and returns. */)
      unset (standalone / nested). */
   gowl_compositor_set_key_intercept (cmacs_gowl_compositor,
                                      cmacs_gowl_key_intercept, NULL);
+
+  /* If we came up nested inside another compositor, ask it to stop
+     eating Super/Alt-Tab while our surface is focused.  No-op on DRM.
+     Must run before the dispatch thread so the parent-display
+     roundtrip stays on this thread. */
+  cmacs_gowl_inhibit_parent_shortcuts (cmacs_gowl_compositor);
 
   cmacs_gowl_start_thread ();
 
