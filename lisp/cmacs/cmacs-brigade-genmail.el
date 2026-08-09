@@ -30,6 +30,10 @@
 (require 'cmacs-brigade-registry)
 (require 'cl-lib)
 (require 'subr-x)
+;; Built in, and small: the part decoder reads a charset off every
+;; MIME part it renders, so the one function it wants is worth having
+;; loaded rather than declared and hoped for.
+(require 'mail-parse)
 
 ;; cmacs-ai async streaming (present only in a --with-cmacs-ai build).
 (declare-function cmacs-ai-make-session "cmacs-ai"
@@ -558,6 +562,7 @@ but it is the message, and mu can always find it because mu is what
 indexed it."
   (interactive "sMessage id: ")
   (or (and (or (featurep 'mu4e) (require 'mu4e nil t))
+           (require 'mu4e-view nil t)
            (fboundp 'mu4e-view-message-with-message-id)
            (progn (mu4e-view-message-with-message-id msgid) t))
       (let* ((msg (car (cmacs-brigade-genmail-query
@@ -1522,6 +1527,7 @@ not decide keeps the verdict it had."
                   cmacs-brigade-genmail-archive-folder)))
     (or (if (functionp custom) (funcall custom msg) custom)
         (and (require 'mu4e nil t)
+             (require 'mu4e-folders nil t)
              (ignore-errors
                (if (eq kind 'trash)
                    (mu4e-get-trash-folder msg)
@@ -1540,7 +1546,9 @@ No filesystem fallback while mu4e is present: its server may hold the
 xapian write lock, and moving files behind a live server means a CLI
 reindex that cannot get the lock and an index that disagrees with the
 disk."
-  (if (and (require 'mu4e nil t) (fboundp 'mu4e--server-move))
+  (if (and (require 'mu4e nil t)
+           (require 'mu4e-server nil t)
+           (fboundp 'mu4e--server-move))
       (progn
         ;; A background session, not a UI: loads the user's real config
         ;; (folders, rename-on-move) and starts the server.
@@ -1554,6 +1562,7 @@ disk."
 (defun cmacs-brigade-genmail--schedule-sync ()
   "Push local moves to the mail server soon, once per burst of clicks."
   (when (and cmacs-brigade-genmail-sync-after-move
+             (require 'mu4e-update nil t)
              (fboundp 'mu4e-update-mail-and-index))
     (when (timerp cmacs-brigade-genmail--sync-timer)
       (cancel-timer cmacs-brigade-genmail--sync-timer))

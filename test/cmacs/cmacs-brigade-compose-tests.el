@@ -352,7 +352,9 @@ nothing ever loaded; the halves each work and the whole is void."
 
 (defconst cmacs-brigade-compose-tests--cycle-breaks
   '(("cmacs-brigade-compose.el" . "cmacs-brigade-dashboard")
-    ("cmacs-brigade-loopback.el" . "cmacs-ai-chat"))
+    ("cmacs-brigade-loopback.el" . "cmacs-ai-chat")
+    ("cmacs-brigade-loopback.el" . "cmacs-libreclaw")
+    ("cmacs-brigade-loopback.el" . "cmacs-libreclaw-cmacs-channel"))
   "Declarations that must stay declarations, with the reason.
 
 The dashboard requires compose -- for its `n', `V', `C' and `x' keys and
@@ -367,6 +369,14 @@ that never opens a chat.  It does not need to: the only call is inside
 the chat client's `deliver', which is reachable only through a live
 buffer in `cmacs-ai-chat-mode' -- which cannot exist unless that layer is
 already loaded.
+
+The two libreclaw entries are the same argument again, and libreclaw is
+in addition an optional build: its client is registered unconditionally
+so that a build without it costs a nil rather than a load error, and the
+only calls are in that client's `deliver', reachable only from a live
+buffer in `cmacs-libreclaw-room-mode' or the channel mode derived from
+it.  Requiring either library eagerly would both pull the chat layer
+into every session and break the builds that do not have it.
 
 Anything else on this list needs the same argument made for it in
 writing.")
