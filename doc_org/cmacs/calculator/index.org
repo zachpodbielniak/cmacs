@@ -2,6 +2,11 @@
 #+AUTHOR: Zach Podbielniak
 #+OPTIONS: toc:2 num:nil
 # SPDX-License-Identifier: AGPL-3.0-or-later
+# These topics are covered by @node sections inside
+# doc/cmacs/calculator/calculator.texi rather than by their own .texi
+# files; tools/sync-docs.sh reads this line so it does not report them
+# as missing.
+#+SYNC_DOCS: folded catalog reference
 
 =cmacs-calculator= is a *calculator you can actually use*: a desktop calculator
 with correct precedence, 121 named calculators across finance, physics,
