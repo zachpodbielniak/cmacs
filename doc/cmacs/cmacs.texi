@@ -58,6 +58,7 @@ interaction.
 * CMacs AI::                    ai-glib multi-provider coding agent.
 * CMacs Libregnum::             Embedded libregnum 3D scene buffers.
 * CMacs Gnuseye::               GNU's Eye live planetary globe.
+* CMacs Roamgraph::             Native org-roam knowledge-graph visualiser (2D + 3D).
 * CMacs Lrgscript::             Emacs Lisp scripting + game authoring for libregnum.
 * CMacs Gsurf::                 Embedded gsurf web browser buffers.
 * CMacs CAD::                   Parametric CAD parts (.cad/.ccad via cad-glib).
@@ -6809,8 +6810,9 @@ whether the pointer moved.
 Viewport clicks are handled in C: the click ray-picks a node
 synchronously, then @emph{defers} a dispatch onto the cmacs GMainContext
 to one of four Elisp entry points
-(@code{cmacs-libregnum--node-clicked} for scenes + gnuseye, and the
-editor's @code{--on-select} / @code{--drop} / @code{--context-menu}).
+(@code{cmacs-libregnum--node-clicked} for scenes, gnuseye and
+roamgraph, and the editor's @code{--on-select} / @code{--drop} /
+@code{--context-menu}).
 Two invariants follow.  First, @emph{the dispatcher's file must be
 loaded before a view can exist}: the dispatch goes through
 @code{safe_call}, which mutes a @code{void-function} error -- the click
@@ -6821,9 +6823,52 @@ dispatchers live in the same file as its entry command; the MCP
 @code{lrg_editor_open} tool requires the file first.  Second,
 @emph{numeric node ids go stale across scene rebuilds} (gnuseye's
 smooth tick renumbers them every ~0.4 s), so gnuseye resolves clicks
-by the pick-time @emph{path string} (its entity id); the editor is safe
-by construction -- its node table changes only on explicit edits and
-the engine-side selection happens synchronously at click time.
+by the pick-time @emph{path string} (its entity id), and roamgraph does
+the same with the org-roam id; the editor is safe by construction -- its
+node table changes only on explicit edits and the engine-side selection
+happens synchronously at click time.
+
+@subsubheading In-scene labels
+
+By default node labels are painted in cairo over the blitted
+framebuffer, from @code{pgtk_handle_draw}.  That means they do not exist
+under @command{emacs --lrg}, and they never appear in
+@code{cmacs-libregnum-snapshot}.  @code{cmacs-libregnum-set-inscene-labels}
+moves the pass @emph{into} the framebuffer instead, drawn at the end of
+@code{render_to_bgra}; both display backends funnel through that
+function (with a @code{NULL} destination on the lrg FBO-only path), so
+one code path serves both and the result is testable.  The cairo pass
+suppresses itself when the flag is on, so nothing is drawn twice; a
+context that never sets it keeps the legacy behaviour byte for byte.
+Companions are @code{cmacs-libregnum-set-label-font} (a real TTF, baked
+large and drawn small) and @code{cmacs-libregnum-set-label-style}
+(size, shadow, decluttering, and a per-frame cap).
+
+Two rules govern any 2D pass added there, both of which cost real
+debugging time to discover:
+
+@itemize @bullet
+@item
+@emph{Do not flip Y.}  The colour attachment is bottom-up in memory and
+the blit flips it at paint time, which invites a compensating flip.
+@code{BeginTextureMode} already installs a projection that makes 2D
+drawing top-down in the texture's own space --- the same orientation
+@code{GetWorldToScreenEx} reports.  Flipping mirrors every label about
+the middle of the viewport, so it lands below its node instead of above.
+@item
+@emph{Flush the batch.}  @code{EndMode3D} submits the 3D batch, but
+anything drawn after it opens a fresh one that @code{EndTextureMode}
+only submits @emph{after} the readback.  @code{rlDrawRenderBatchActive}
+must be unconditional and immediately precede @code{glReadPixels}.
+Omit it and the labels render fine under @command{--lrg} (which never
+reads back) and are invisible under pgtk --- the same asymmetry the
+calculator's chart mode documents.
+@end itemize
+
+@code{cmacs-libregnum-ink-bbox} exists to make that first rule testable:
+it returns the bounding box of the non-background pixels of a freshly
+rendered frame, in displayed orientation.  A snapshot proves pixels
+changed; this proves they changed in the right place.
 
 Keyboard (a highlighted selection cursor; the camera eases to frame
 it and its name is echoed):
@@ -7633,6 +7678,9 @@ mode does not composite in the editor FBO batch, so sprites/tiles use textured
 
 @c ===================================================================
 @include gnuseye/gnuseye.texi
+
+@c ===================================================================
+@include roamgraph/roamgraph.texi
 
 @c ===================================================================
 @include lrgscript/lrgscript.texi

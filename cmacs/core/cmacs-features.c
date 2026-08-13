@@ -82,6 +82,9 @@ const char *const cmacs_feature_names[] = {
 #ifdef HAVE_CMACS_GNUSEYE
   "gnuseye",
 #endif
+#ifdef HAVE_CMACS_ROAMGRAPH
+  "roamgraph",
+#endif
 #ifdef HAVE_CMACS_LRGSCRIPT
   "lrgscript",
 #endif
@@ -266,6 +269,12 @@ syms_of_cmacs_features (void)
   is_cmacs_gnuseye = true;
 #endif
 
+  DEFVAR_BOOL ("IS-CMACS-ROAMGRAPH", is_cmacs_roamgraph,
+    doc: /* Non-nil if this build was configured --with-cmacs-roamgraph.  */);
+#ifdef HAVE_CMACS_ROAMGRAPH
+  is_cmacs_roamgraph = true;
+#endif
+
   DEFVAR_BOOL ("IS-CMACS-LRGSCRIPT", is_cmacs_lrgscript,
     doc: /* Non-nil if this build was configured --with-cmacs-lrgscript.  */);
 #ifdef HAVE_CMACS_LRGSCRIPT
@@ -380,6 +389,7 @@ syms_of_cmacs_features (void)
   cmacs_features__alias ("is-cmacs-transcode",   "IS-CMACS-TRANSCODE");
   cmacs_features__alias ("is-cmacs-transcribe",  "IS-CMACS-TRANSCRIBE");
   cmacs_features__alias ("is-cmacs-gnuseye",     "IS-CMACS-GNUSEYE");
+  cmacs_features__alias ("is-cmacs-roamgraph",   "IS-CMACS-ROAMGRAPH");
   cmacs_features__alias ("is-cmacs-lrgscript",   "IS-CMACS-LRGSCRIPT");
   cmacs_features__alias ("is-cmacs-cad",         "IS-CMACS-CAD");
   cmacs_features__alias ("is-cmacs-screensaver", "IS-CMACS-SCREENSAVER");

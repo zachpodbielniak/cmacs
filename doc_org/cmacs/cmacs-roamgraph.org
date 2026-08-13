@@ -1,0 +1,297 @@
+#+title: CMacs Roamgraph — the org-roam knowledge graph, natively
+#+description: Native 2D/3D org-roam graph visualiser rendered through libregnum
+#+authors: Zach Podbielniak
+#+categories: cmacs subsystem roamgraph org-roam libregnum
+#+created: 2026-08-12T00:00:00-04:00
+#+updated: 2026-08-12T00:00:00-04:00
+#+version: 1.0
+
+* Overview
+
+=M-x cmacs-roamgraph= opens your org-roam link graph as a live libregnum scene inside a cmacs buffer. It is the in-editor replacement for [[https://github.com/org-roam/org-roam-ui][org-roam-ui]], which runs a local web server and drives a browser — the two things lowest on the tooling preference list.
+
+Everything happens inside the editor: orbit with the mouse, click a note to select it, navigate by keyboard, search incrementally, press =RET= to open the note at exactly the heading it lives under. It renders identically under pgtk and under =emacs --lrg=.
+
+Requires =--with-cmacs-roamgraph= (in the default flag set), which in turn needs =--with-cmacs-libregnum= and =--with-cmacs-glib=.
+
+* Entry points
+
+| Command                  | What it does                                                     |
+|--------------------------+------------------------------------------------------------------|
+| =cmacs-roamgraph=          | The whole graph, laid out flat                                   |
+| =cmacs-roamgraph-3d=       | The whole graph in three dimensions                              |
+| =cmacs-roamgraph-here=     | The graph centred on the org-roam node at point                  |
+| =cmacs-roamgraph-local=    | The N-hop neighbourhood of the node at point (prefix arg = N)    |
+| =cmacs-roamgraph-jump=     | Jump to a note by name, through =completing-read=                  |
+| =cmacs-roamgraph-refresh=  | Re-read the source and rebuild                                   |
+
+=cmacs-roamgraph-here= is the daily driver: you are reading a note, you want to see what it sits next to.
+
+* The two navigation tiers
+
+An org-roam graph is a general directed graph with cycles, not a tree, so "up" and "down" need defining. Rather than force one meaning onto =hjkl=, roamgraph offers both, always live.
+
+** Spatial: =h= =j= =k= =l= (and the arrow keys)
+
+Selects the nearest node in that direction *on screen*, within a 45° cone (=cmacs-roamgraph-cone-degrees=). This is what you mean when you are looking at a picture of a graph and want the node over there. It is defined everywhere, has no dead ends, and does not care about link structure.
+
+Candidates are scored by =distance / cos³(angle)=, so alignment matters more than raw distance, and ties break on the lower node id so repeated presses never oscillate.
+
+*** Exact reversal
+
+A cone metric is not self-inverse: going right then left could in principle land somewhere new. roamgraph keeps a small directional trail, so pressing the opposite direction *replays* the previous move rather than recomputing it. =l= then =h= always returns you exactly where you started. The trail is cleared whenever the camera moves, since the projection it was computed against no longer holds.
+
+*** The camera deliberately does not follow
+
+=cmacs-roamgraph-follow-camera= defaults to ='edge=: the camera moves only when the target would otherwise be off-screen. Flying on every keypress would invalidate the very projection the spatial keys navigate by, so the next =l= would mean something different — the classic "the graph runs away from me" bug. Set it to =t= to always fly, or =nil= to never.
+
+** Topological: =]= =[= =<= =>= =o=
+
+| Key            | Meaning                                                        |
+|----------------+----------------------------------------------------------------|
+| =]=              | Descend a forward link                                         |
+| =[=              | Ascend: pop the breadcrumb, else follow a backlink             |
+| =>= / =M-n=        | Next peer (wrapping)                                           |
+| =<= / =M-p=        | Previous peer (wrapping)                                       |
+| =o=              | Choose any of this node's links by name                        |
+
+Navigation state is an explicit *breadcrumb stack*, not a spanning tree recomputed on every move. A recomputed tree costs O(V+E) per keypress and — worse — makes the same =[= mean different things depending on where the traversal happened to start. The trail matches how you actually got here, and it degrades gracefully.
+
+The *peer set* is the other children of your navigation parent: the node you arrived from if the last move was an ascent, otherwise your first backlink. Peers are ordered by =cmacs-roamgraph-peer-sort= (title by default, downcased) so cycling is stable across a rebuild — that ordering is exactly what makes =>= then =<= return you where you started.
+
+*** Worked example
+
+Say =Linux Index= links to =Asahi= , =Btrfs= and =Zram=, and you have =Linux Index= selected:
+
+- =]= selects =Asahi= (first peer alphabetically) and pushes =(Linux Index . 0)=.
+- =>= moves to =Btrfs=, and rewrites the trail cursor to 1.
+- =[= pops back to =Linux Index=.
+- =]= now returns to =Btrfs=, not =Asahi= — the cursor was remembered.
+
+On a hub with forty forward links, cycling is hopeless: use =o=, which opens all of them, forward and back, in =completing-read=.
+
+Every move echoes what happened — =→ Asahi   (3 back / 7 fwd / peer 1 of 3)=. Without that line, graph navigation feels random.
+
+* Search
+
+Two commands, because finding things in a graph is two different tasks.
+
+** =/= — incremental, in place
+
+Highlights *every* match at once: hits take an accent colour and are labelled unconditionally, and the rest of the graph dims to a third of its brightness. Edges with neither endpoint matching fade further. This is the whole point of a visualiser — a completion list cannot show you that all six matches sit in one cluster.
+
+=C-n= / =C-p= walk the hits while you are still typing. =RET= keeps the highlight, so =n= and =N= stay live in the viewport afterwards. =C-g= clears it and restores the previous selection.
+
+Matching runs over title, aliases, tags and file name, precomputed and lowercased once per rebuild. =cmacs-roamgraph-search-style= chooses =literal= (default), =regexp= or =orderless=.
+
+** =g /= — jump palette
+
+=completing-read= over every note, so vertico/orderless/marginalia apply. One node, no highlight.
+
+** Search never re-lays-out
+
+Highlighting only. Rebuilding the layout on every keystroke would reshuffle every position while you are still typing, which is disorienting and expensive.
+
+* Panes
+
+=D= lays out the full dashboard: the tag list and node list on the left, the viewport in the middle, the inspector on the right. =W= closes them all again. Each pane can also be summoned alone.
+
+| Key | Pane      | What it gives you                                        |
+|-----+-----------+----------------------------------------------------------|
+| =e=   | nodes     | Sortable table: title, tags, out-degree, in-degree, group |
+| =i=   | inspector | Everything about the selected note, plus live link keys   |
+| =T=   | tags      | Every tag with a count; =RET= filters by it                 |
+
+** The inspector's live link keys
+
+Forward links are numbered =[1]…[9]= and backlinks lettered =[a]…[z]=. Those are real keys: pressing one moves the graph selection to that note. Together with =o= in the viewport, that gives you two ways at a forty-link hub — pick by name, or pick by position in the list.
+
+The inspector also shows a fontified preview of the note's body, skipping the heading and its property drawer so you see prose rather than plumbing. It refreshes on a 0.15 s idle timer, because rendering it reads the file: holding down =j= must not mean reading forty files off disk.
+
+Register your own actions with =cmacs-roamgraph-register-inspector-action=; it installs the Evil binding as well, without which a registered =a= would just be =evil-append= under Doom.
+
+* Filtering and colour
+
+| Key   | Command                                              |
+|-------+------------------------------------------------------|
+| =t=     | Filter by tag (=completing-read-multiple=, so they AND) |
+| =c=     | Clear all filters and the search highlight           |
+| =M-/=   | Keep only the search matches and their neighbours    |
+| =z=     | Show or hide the unlinked notes                      |
+| =C=     | Cycle the colour scheme                              |
+
+** Unlinked notes are hidden by default
+
+=cmacs-roamgraph-show-orphans= defaults to nil. An unlinked note carries no graph information, and a mature tree has enough of them to form a distracting ring around everything that does — 103 of your 1167, which is exactly the ring you would otherwise be looking at. =z= brings them back.
+
+** Colour schemes
+
+=C= cycles through four, and the mode line names the current one whenever it is not the default:
+
+- =para= — the PARA bucket (the default; fixed palette, so the colours mean the same thing every session)
+- =degree= — cool to warm by link count, so the hubs light up
+- =tag= — hue hashed from the note's first tag
+- =recency= — cool to warm by file modification time; the "what have I been working on" view
+
+Filtering genuinely re-solves the layout, because it changes which notes exist. That is precisely why it is a separate command from search, which only highlights: you would not want a re-solve on every keystroke.
+
+* Reading and rooting
+
+| Key   | Command                                |
+|-------+----------------------------------------|
+| =RET=   | Open the note                          |
+| =O=     | Open in another window                 |
+| =y=     | Copy an =[[id:…]]= link to the note      |
+| =g r=   | Re-root the view on the selection      |
+| =u= / =^= | Undo the last re-rooting               |
+
+=RET= honours *heading-level nodes*: it opens the file, jumps to the node's own character position and unfolds it. Without that, roughly half of a mature org-roam database would drop you at line 1 of a long file.
+
+* View and camera
+
+| Key            | Command                                    |
+|----------------+--------------------------------------------|
+| =2= / =3= / =v=      | Flat / three-dimensional / toggle          |
+| =0= or =<home>=    | Frame the whole graph                      |
+| =f=              | Ease the camera onto the selection         |
+| =+= =-=            | Zoom                                       |
+| =w= =a= =s= =d=      | Move the view around                       |
+| =.=              | Pin the selection so the solver ignores it |
+| left drag      | Orbit (3D only)                            |
+| right drag     | Move the view around                       |
+| scroll         | Zoom                                       |
+| right-click    | Context menu                               |
+
+** Moving around
+
+=w= =a= =s= =d= slide the view, and a right-drag does the same with the mouse. Both work identically in 2D and 3D: the camera moves across its own view plane, which is what "move around" means either way. =0= reframes the whole graph if you lose your place.
+
+That is the *map* navigation profile — left-drag orbits, right-drag moves. libregnum's default is the CAD profile, where either button orbits and panning lives on the middle button; roamgraph opts out of it, because a graph is more like a map than a modelling viewport, and because plenty of pointing devices have no usable middle button. Other libregnum scenes (gnuseye, CAD, the editor) keep the CAD profile.
+
+A right-*click* without movement opens a real context menu; only a drag moves the view.
+
+The menu routes through =cmacs-libregnum-popup-menu=, so it is a native GTK menu under pgtk and the in-engine libregnum popup under =emacs --lrg= — the same path gnuseye, imgedit and vidstudio use. It adapts to what you clicked: on a note you get open / open-other-window / copy-id-link, follow-a-link (with the out and in counts), centre-here, show-only-this-neighbourhood, pin, inspect, show-in-list, and a filter entry per tag the note carries; on empty space you get the view actions instead — fit, 2D/3D, colour scheme, show/hide unlinked, filter, deselect, dashboard, refresh. Anything registered with =cmacs-roamgraph-register-inspector-action= is appended, exactly as gnuseye appends its own.
+
+The popup is re-scheduled onto the command loop with a zero-delay timer rather than opened inline: the dispatch runs inside the pselect wait, and a nested GTK menu loop there re-enters the event machinery.
+
+Scrolling up moves the camera closer, as it does in every map and browser. That is also an opt-in: GDK reports a positive delta for scrolling *down*, and libregnum's zoom kernel moves closer for a positive amount, so passing the delta straight through — which is what the other libregnum scenes still do — makes the wheel work backwards.
+
+The 2D view is a front-facing camera over the XY plane — X right, Y up, the conventional reading — and the layout is re-solved with =z= pinned to zero. Orbiting is disabled while flat (pan and zoom still work): tumbling a planar layout only reveals that everything is coplanar.
+
+It is a *perspective* camera locked head-on, not an orthographic one, which is worth knowing because the obvious choice does not work. raylib overloads =fovy= to mean the view volume's world height when the projection is orthographic, while graylib's =grl_camera3d_set_fovy= asserts =fovy < 180= — a constraint that only makes sense for an angle. Framing a graph wider than 180 world units therefore trips that assertion on every frame, and =g_return_if_fail= leaves the camera holding a stale value. Head-on perspective keeps =fovy= a real angle, and it makes zoom (a dolly) actually do something: under an orthographic projection, moving the camera changes nothing at all. The foreshortening across a planar layout at this distance is not perceptible.
+
+* What things look like
+
+Nodes are spheres whose radius grows with the logarithm of their degree, so hubs read as bigger without dwarfing the map. Colour is the PARA bucket by default:
+
+| Bucket         | Colour   |
+|----------------+----------|
+| =00_inbox=       | amber    |
+| =01_projects=    | blue     |
+| =02_areas=       | green    |
+| =02_areas/dailies= | violet |
+| =03_resources=   | yellow   |
+| =04_archives=    | grey     |
+
+Dailies get their own colour rather than inheriting the areas one: they are a large fraction of a mature notes tree and would otherwise swamp it.
+
+The palette is fixed rather than derived from a hash of the directory name, so the colours mean the same thing in every session — which is the only way they become readable at a glance.
+
+Nodes with at least =cmacs-roamgraph-hub-degree= links (12) are labelled permanently and act as landmarks; everything else labels on hover, plus whatever is selected and its best-connected neighbours (capped by =cmacs-roamgraph-neighbour-labels=, default 8 — a hub can have a hundred links, and naming all of them buries the map).
+
+Edges are tinted with the average of the two notes they join, muted toward grey, so a link inside one PARA bucket reads as that bucket's colour and a cross-bucket link reads as neutral.
+
+Labels sit on a translucent plate, because over a dense graph the edges otherwise run straight through the text. The selection gets a wireframe halo in the scene plus a two-ring screen-space marker; the hovered node and search hits get thinner rings. Those rings are screen-space deliberately: they read the same whether you are zoomed right in or looking at the whole graph, which a fixed world-space marker does not.
+
+=?= opens a legend describing the active colour scheme and every key.
+
+* Where the data comes from
+
+=cmacs-roamgraph-source= selects a backend; =auto= (the default) picks the first that works.
+
+** =roam-db= — the org-roam database
+
+Reads =cmacs-roamgraph-db-location= directly through Emacs's builtin SQLite. Deliberately *not* through =org-roam-db-query=: that needs both the org-roam package and emacsql loaded, and a native subsystem should not depend on a package manager having installed something. The database is authoritative when it exists — it already knows about aliases, refs, tags and heading-level nodes — and reimplementing org's ID semantics in C would only drift from the one implementation Emacs already owns.
+
+Only =id= links become edges. A live notes tree also carries thousands of =https=, =file= and =fuzzy= links whose endpoints are not notes at all; including them would produce a hairball of dangling edges. Citation links can be added with =cmacs-roamgraph-include-cite-links=.
+
+*** The prin1 trap
+
+emacsql stores every value *printed*, so text columns come back wrapped in literal double quotes and =properties=/=olp= are printed sexps. Nothing may be read out of that database without =cmacs-roamgraph-db--unwrap=. This is the single most likely thing to get wrong when extending the reader.
+
+** =scan= — the native scanner
+
+For a notes tree with no org-roam database at all. Not yet implemented; the hook is in place (=cmacs-roamgraph-scan-supported-p= reports =nil= until it is).
+
+** Adding a backend
+
+=cmacs-roamgraph-sources= is an alist of a symbol to a thunk returning =(:nodes VECTOR :edges VECTOR)=. Node plists carry =:id :title :file :level :pos :tags :aliases :refs :group :color=; any extra keys you add are preserved and handed back by =cmacs-roamgraph-node-at=. Edge plists carry =:from :to :kind :weight=.
+
+* How the layout works
+
+Fruchterman–Reingold with Barnes–Hut repulsion, written in C.
+
+Barnes–Hut is not a deferred optimisation. Brute force at ~1200 nodes is about 1.4M pair evaluations per iteration — tolerable once, hopeless at 30 FPS. With the octree a full solve of a 1166-node graph takes about 0.7 s at 1.7 ms per iteration, which is comfortably real time.
+
+Setting the opening angle to zero (=cmacs-roamgraph-set-layout-theta=) degenerates the approximation into an exact all-pairs sum, which the test suite uses as a free reference implementation.
+
+** Choices worth knowing
+
+- *The ideal edge length is a constant*, not the textbook =k = C·√(area/n)=. That formula exists to pack a graph into a fixed frame; here the camera fits itself to the content, so making =k= depend on =n= would only make the map's scale depend on how many notes you happen to have. Spacing now reads the same at 20 nodes and at 2000.
+- *Gravity scales with the node count and with degree.* Fixed gravity lets the cloud grow without bound as the graph grows. Weighting by degree seats hubs centrally and lets their leaves fan out — uniform gravity balances at one radius, so every node drifts to the same shell and the middle hollows out.
+- *Components are seeded apart* on a Fibonacci sphere (3D) or phyllotaxis disc (2D) before iterating, so unlinked notes spread out instead of piling up at the origin.
+- *The solve is stepped, then stops.* A multi-second freeze on =M-x= is the org-roam-ui experience being replaced, and watching the graph unfold is genuinely informative; but a permanently hot render clock afterwards is pure waste, so the timer cancels itself on convergence.
+- *A refresh keeps surviving nodes where they are.* New nodes are seeded at the centroid of their already-placed neighbours. A rebuild that teleported everything would destroy the graph's value as a spatial memory aid.
+- *It is deterministic.* The solver draws from a per-graph xorshift stream, never =g_random_*=; the same seed and the same input give bit-identical positions.
+
+* Performance
+
+Measured on a 1166-node, 1321-edge database:
+
+| Stage                       | Time    |
+|-----------------------------+---------|
+| Read the database           | 0.06 s  |
+| Build the graph and scene   | 0.01 s  |
+| Full layout solve           | 0.70 s  |
+| One render + readback       | ~36 ms  |
+
+=cmacs-roamgraph-max-nodes= (4000) caps how much is handed to the renderer. Above it, the best-connected nodes are kept and a message says how many were dropped — silently truncating would read as "this is your whole graph" when it is not.
+
+* Architecture
+
+Three translation-unit classes, not the usual two:
+
+| File                       | Includes                | Why                                        |
+|----------------------------+-------------------------+--------------------------------------------|
+| =cmacs-roamgraph-scene.c=    | =<libregnum.h>=           | raylib's =Color= clashes with pgtk's         |
+| =cmacs-roamgraph-defuns.c=   | =lisp.h=                  | the Elisp boundary                         |
+| =cmacs-roamgraph-graph.c=    | neither, only glib      | so the graph model is testable headless    |
+| =cmacs-roamgraph-layout.c=   | neither, only glib      | so the solver is testable headless         |
+
+That third class is the point: the graph and the force solver can be exercised with no Lisp VM and no GL context, which is why the layout has real unit tests rather than only screenshots. Same split as gnuseye's geodesy.
+
+C owns geometry, the solver, the pick ray and the node table. Elisp owns where the data comes from, what a click means and every pane. C never touches org-roam. The whole contract is one DEFUN, =cmacs-roamgraph-set-graph=.
+
+** Identity: ids, not indices
+
+libregnum scene node ids are insertion indices and churn on *every* rebuild. So every piece of state — selection, breadcrumbs, matches, pins — is keyed on the org-roam id string, and that id is what the C side stores as the node's =path=. That is what arrives synchronously in the click dispatch; the numeric id in the same callback may already be stale by the time it is delivered.
+
+** In-scene labels
+
+Node labels used to be drawn in cairo over the blitted framebuffer, which happens only under pgtk — so under =emacs --lrg= there were no labels at all, and they never appeared in a snapshot. roamgraph turns on =cmacs-libregnum-set-inscene-labels=, which moves the label pass *into* the framebuffer, where both display backends and the snapshot path all see it. The cairo pass suppresses itself so nothing is drawn twice.
+
+See the CMacs Libregnum manual for the two rules that pass has to obey (do not flip Y, and flush the render batch before the readback).
+
+* Testing
+
+=make -C test check-cmacs=, or the file alone:
+
+#+begin_src bash
+./src/emacs -Q --batch -L lisp/cmacs -l ert -l test/cmacs/cmacs-roamgraph-tests.el -f ert-run-tests-batch-and-exit
+#+end_src
+
+Three tiers: pure logic (CSR, determinism, convergence, Barnes–Hut against its own exact mode), data source (the prin1 unwrap, PARA grouping, subgraph extraction), and render (labels, the Y-flip guard, match highlighting). Render tests need a display and skip without one.
+
+* Migrating from org-roam-ui
+
+Drop it from =packages.el=. Nothing in your notes or your org-roam configuration needs to change — roamgraph reads the same database.

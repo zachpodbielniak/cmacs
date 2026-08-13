@@ -99,6 +99,7 @@ configure_flags := """
     --with-cmacs-cintrospect
     --with-cmacs-libregnum
     --with-cmacs-gnuseye
+    --with-cmacs-roamgraph
     --with-cmacs-lrgscript
     --with-cmacs-cad
     --with-cmacs-screensaver

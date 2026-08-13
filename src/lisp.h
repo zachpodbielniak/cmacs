@@ -5584,6 +5584,10 @@ extern int lrg_requested_render_mode;
    cmacs/lrgterm/cmacs-lrgterm.c.  */
 extern const char *lrg_requested_3d_spec;
 #endif
+#ifdef HAVE_CMACS_ROAMGRAPH
+extern void syms_of_cmacs_roamgraph (void);
+extern void init_cmacs_roamgraph (void);
+#endif
 #ifdef HAVE_CMACS_GNUSEYE
 extern void syms_of_cmacs_gnuseye (void);
 extern void init_cmacs_gnuseye (void);

@@ -670,6 +670,7 @@ OPTION_DEFAULT_OFF([cmacs-transcribe], [CMacs batch speech-to-text (whisper.cpp 
 OPTION_DEFAULT_OFF([cmacs-calculator], [CMacs calculator (desktop/financial/physics/relativity/CAS over GNU Calc; SVG + libregnum charts; emacs --calc REPL)])
 OPTION_DEFAULT_OFF([cmacs-lsp], [CMacs in-binary LSP framework (emacs --cmacs-lsp LANG; gnucalc server for .calc sheets when the calculator is also enabled)])
 OPTION_DEFAULT_OFF([cmacs-gnuseye], [CMacs gnuseye live planetary globe (GNU's Eye; requires libregnum)])
+OPTION_DEFAULT_OFF([cmacs-roamgraph], [CMacs org-roam knowledge-graph visualiser, 2D + 3D (requires libregnum)])
 OPTION_DEFAULT_OFF([cmacs-lrgscript], [CMacs Emacs Lisp scripting backend + game authoring for libregnum (requires libregnum + glib)])
 OPTION_DEFAULT_OFF([cmacs-cad], [CMacs parametric CAD subsystem (cad-glib kernels; parts render as libregnum CAD nodes)])
 OPTION_DEFAULT_OFF([cmacs-screensaver], [CMacs libregnum screensavers as animated wallpaper / lock screen / buffer (requires libregnum; wallpaper+lock need gowl)])
@@ -1207,6 +1208,27 @@ if test "$with_cmacs_gnuseye" != "no"; then
     cmacs-gnuseye-geo.o cmacs-gnuseye-sgp4.o cmacs-gnuseye-http.o \
     cmacs-gnuseye-globe.o cmacs-gnuseye-overlay.o \
     cmacs-gnuseye-overlay-render.o"
+fi
+if test "$with_cmacs_roamgraph" != "no"; then
+  if test "$with_cmacs_libregnum" = "no"; then
+    AC_MSG_ERROR([--with-cmacs-roamgraph requires --with-cmacs-libregnum (the graph is rendered through libregnum)])
+  fi
+  if test "$with_cmacs_glib" = "no"; then
+    AC_MSG_ERROR([--with-cmacs-roamgraph requires --with-cmacs-glib (redraws are coalesced on the cmacs GMainContext)])
+  fi
+  # roamgraph renders an org-roam knowledge graph as a live libregnum
+  # scene.  Its scene half (cmacs-roamgraph-scene.c) includes
+  # libregnum.h, so it reuses the libregnum/graylib include paths
+  # already folded into CMACS_CFLAGS; the graph/layout halves are pure
+  # C over glib (also already global) and the data layer is Elisp over
+  # Emacs's builtin SQLite.  No extra deps -- deliberately no
+  # PKG_CHECK_MODULES here.
+  CMACS_ROAMGRAPH_CFLAGS=""
+  CMACS_ROAMGRAPH_LIBS=""
+  AC_DEFINE([HAVE_CMACS_ROAMGRAPH], 1, [CMacs org-roam knowledge-graph visualiser])
+  CMACS_ROAMGRAPH_OBJ="cmacs-roamgraph-init.o cmacs-roamgraph-defuns.o \
+    cmacs-roamgraph-graph.o cmacs-roamgraph-layout.o \
+    cmacs-roamgraph-scene.o cmacs-roamgraph-scan.o"
 fi
 if test "$with_cmacs_lrgscript" != "no"; then
   if test "$with_cmacs_libregnum" = "no"; then
@@ -1798,6 +1820,9 @@ AC_SUBST(CMACS_VIDSTUDIO_LIBS)
 AC_SUBST(CMACS_GNUSEYE_OBJ)
 AC_SUBST(CMACS_GNUSEYE_CFLAGS)
 AC_SUBST(CMACS_GNUSEYE_LIBS)
+AC_SUBST(CMACS_ROAMGRAPH_OBJ)
+AC_SUBST(CMACS_ROAMGRAPH_CFLAGS)
+AC_SUBST(CMACS_ROAMGRAPH_LIBS)
 AC_SUBST(CMACS_LRGSCRIPT_OBJ)
 AC_SUBST(CMACS_LRGSCRIPT_CFLAGS)
 AC_SUBST(CMACS_LRGSCRIPT_LIBS)

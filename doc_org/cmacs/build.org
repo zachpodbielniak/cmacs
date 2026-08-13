@@ -37,6 +37,7 @@ All CMacs features are auto-detected.  You can force them on or off:
 | =--with-cmacs-emacsctl=       | emacsctl/cmacsctl CLI (standalone binary)|
 | =--with-cmacs-lrgterm=        | output_lrg libregnum/raylib display backend (=emacs --lrg=) |
 | =--with-cmacs-lrgscript=      | Emacs Lisp scripting + full game authoring for libregnum (requires libregnum + glib) |
+| =--with-cmacs-roamgraph=      | Native org-roam knowledge-graph visualiser, 2D + 3D (requires libregnum + glib) |
 | =--with-cmacs-screensaver=    | libregnum screensavers as wallpaper / lock / buffer |
 | =--with-cmacs-transcode=      | Native ffmpeg video/audio transcoder (container/host; parallel pool) |
 | =--with-cmacs-transcribe=     | Batch speech-to-text (whisper STT + transcode pre-pass, AI summaries, hooks) |
@@ -80,6 +81,7 @@ Example with explicit flags:
   --with-cmacs-cintrospect \
   --with-cmacs-libregnum \
   --with-cmacs-lrgscript \
+  --with-cmacs-roamgraph \
   --with-cmacs-screensaver \
   --with-cmacs-emacsctl \
   --with-cmacs-lrgterm \
@@ -131,7 +133,8 @@ across builds.  Names cover every option: =IS-CMACS-GLIB=,
 =IS-CMACS-GI=, =IS-CMACS-CRISPY=, =IS-CMACS-BACON=, =IS-CMACS-GOWL=,
 =IS-CMACS-PODOMATION=, =IS-CMACS-LIBRECLAW=, =IS-CMACS-AI=,
 =IS-CMACS-LIBREGNUM=, =IS-CMACS-LRGTERM=, =IS-CMACS-IMGEDIT=,
-=IS-CMACS-VIDSTUDIO=, =IS-CMACS-GNUSEYE=, =IS-CMACS-CAD=,
+=IS-CMACS-VIDSTUDIO=, =IS-CMACS-GNUSEYE=, =IS-CMACS-ROAMGRAPH=,
+=IS-CMACS-CAD=,
 =IS-CMACS-SCREENSAVER=, =IS-CMACS-GSURF=, =IS-CMACS-GSURF-LRG=,
 =IS-CMACS-EMACSCTL=, =IS-CMACS-ORG-EX=, =IS-CMACS-MCP=,
 =IS-CMACS-PRINT=, =IS-CMACS-VIDEO=, =IS-CMACS-AUDIO=,
