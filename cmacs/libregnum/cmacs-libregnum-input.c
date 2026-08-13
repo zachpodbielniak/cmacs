@@ -664,11 +664,19 @@ cmacs_libregnum_handle_motion (struct frame *f, double x, double y)
       double dx = x - drag_state.last_x;
       double dy = y - drag_state.last_y;
       CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
-      /* CAD navigation profile (matches FreeCAD's "CAD" preset, and what a
-       * 3-D viewer user reaches for): left OR right drag orbits; middle drag
-       * pans; scroll zooms.  A right-click WITHOUT movement still pops the
-       * context menu (handled in the button-release branch). */
-      if (drag_state.dragging_middle)
+      /* Default is the CAD navigation profile (FreeCAD's "CAD" preset,
+       * and what a 3-D viewer user reaches for): left OR right drag
+       * orbits; middle drag pans; scroll zooms.  A context that calls
+       * set_right_drag_pans instead gets the map profile: left orbits,
+       * right pans -- which is what a map-like scene wants, and what a
+       * user without a middle button can actually reach.
+       *
+       * Either way a right-click WITHOUT movement still pops the context
+       * menu; that is decided in the button-release branch, which only
+       * fires the menu when the pointer did not move. */
+      if (drag_state.dragging_middle
+          || (drag_state.dragging_right
+              && cmacs_libregnum_render_ctx_right_drag_pans_p (ctx)))
         cmacs_libregnum_render_ctx_pan_camera (ctx, dx, dy);
       else
         cmacs_libregnum_render_ctx_orbit_camera (ctx, dx, dy);
@@ -944,8 +952,10 @@ cmacs_libregnum_handle_button (struct frame *f, int button, int press,
              click (a pan moves the pointer).  In the editor, ray-pick the node
              under the cursor (id may be -1 for empty space), capture the ground
              point, and defer the menu to Elisp -- which pops it from the
-             command loop.  A right-drag still pans (handled in the motion
-             handler off `dragging_right'); only the release branches here. */
+             command loop.  A right-DRAG orbits or pans (handled in the
+             motion handler off `dragging_right', per the context's
+             navigation profile); only the release branches here, and
+             only a release without movement is a menu click. */
           bool moved = (fabs (x - drag_state.rpress_x)
                         + fabs (y - drag_state.rpress_y)) > 5.0;
           drag_state.dragging_right = false;
@@ -1009,7 +1019,14 @@ cmacs_libregnum_handle_scroll (struct frame *f, double dx, double dy,
       cmacs_libregnum_view_request_redraw (v);
       return true;
     }
-  cmacs_libregnum_render_ctx_zoom_camera (ctx, dy);
+  /* GDK reports a positive delta for scrolling DOWN, and zoom_camera
+     moves closer for a positive amount -- so passing DY straight
+     through means scrolling down moves you closer, the opposite of what
+     every map and 3-D viewer does.  A context can ask for the
+     conventional direction; the default is left alone so scenes that
+     shipped with the old one are not silently flipped. */
+  cmacs_libregnum_render_ctx_zoom_camera
+    (ctx, cmacs_libregnum_render_ctx_wheel_up_zooms_in_p (ctx) ? -dy : dy);
   cmacs_libregnum_view_request_redraw (v);
   return true;
 }

@@ -1535,21 +1535,12 @@ commands act on it without prompting for a clip id."
                           (cmacs-vidstudio--menu))))
              (when (commandp choice) (call-interactively choice)))))))))
 
-(defun cmacs-vidstudio--label-font-file ()
-  "Resolve the Emacs default face's font family to a TTF/OTF file path.
-Used so the timeline clip-id labels are drawn in the same font as the
-editor.  Returns nil when it cannot be resolved (falls back to the
-built-in font)."
-  (ignore-errors
-    (let ((family (face-attribute 'default :family nil t)))
-      (when (and (stringp family)
-                 (not (string-empty-p family))
-                 (executable-find "fc-match"))
-        (let ((f (string-trim
-                  (shell-command-to-string
-                   (format "fc-match -f '%%{file}' %s"
-                           (shell-quote-argument family))))))
-          (and (stringp f) (> (length f) 0) (file-readable-p f) f))))))
+(defalias 'cmacs-vidstudio--label-font-file
+  #'cmacs-libregnum-default-font-file
+  "Resolve the default face's font family to a TTF/OTF file path.
+The implementation moved to `cmacs-libregnum-default-font-file' when the
+in-scene node labels started needing the same lookup; this alias keeps
+the vidstudio call sites unchanged.")
 
 (defun cmacs-vidstudio--maybe-attach-viewport (buffer)
   "Attach a live libregnum viewport to BUFFER, if available.

@@ -175,13 +175,54 @@ Mouse:
 - *Left-drag* still orbits, *right-drag* pans, *scroll* zooms.  A
   click is distinguished from a drag by whether the pointer moved.
 
+** In-scene labels
+
+Node labels are painted by default in cairo, over the blitted framebuffer, from
+=pgtk_handle_draw=.  That has two consequences worth naming: they do not exist
+at all under =emacs --lrg=, and they never appear in =cmacs-libregnum-snapshot=
+— so no automated test can see them.
+
+=cmacs-libregnum-set-inscene-labels= moves the pass *into* the framebuffer,
+drawn as a screen-space pass at the end of =render_to_bgra=.  Both display
+backends funnel through that one function (with a NULL destination on the lrg
+FBO-only path), so a single code path serves both, and snapshots show the
+result.  The cairo pass suppresses itself when the flag is on, so nothing is
+double-drawn under pgtk; a context that never sets the flag keeps the legacy
+behaviour byte for byte.  Companions: =cmacs-libregnum-set-label-font= (a real
+TTF, baked large at 32px and drawn small through a bilinear filter, with an
+extended codepoint set so em dashes and accents are not missing-glyph boxes)
+and =cmacs-libregnum-set-label-style= (size, shadow, decluttering, per-frame
+cap).
+
+Two rules govern any 2D pass added there.  Both cost real debugging time:
+
+1. *Do not flip Y.*  The colour attachment is bottom-up in memory and the blit
+   flips it at paint time, which strongly invites a compensating
+   ~y = vh - y - th~.  That is wrong: =BeginTextureMode= already installs a
+   projection making raylib's 2D drawing top-down in the texture's own space,
+   the same orientation =GetWorldToScreenEx= reports.  Adding the flip mirrors
+   every label about the middle of the viewport, so it lands *below* its node
+   instead of above.
+2. *Flush the batch.*  =EndMode3D= submits the 3D batch, but anything drawn
+   after it opens a fresh batch that =EndTextureMode= only submits *after*
+   =glReadPixels=.  =rlDrawRenderBatchActive()= must therefore be unconditional
+   and sit immediately before the readback.  Omit it and labels render fine
+   under =--lrg= (which never reads back) and are invisible under pgtk — the
+   same asymmetry the calculator's =chart_mode= documents.
+
+=cmacs-libregnum-ink-bbox= exists to make rule 1 testable: it returns the
+bounding box of the non-background pixels of a freshly rendered frame, in
+*displayed* orientation.  A snapshot proves that pixels changed; the ink box
+proves they changed in the right place, which is the distinction a mirrored
+label slips through.
+
 ** Click dispatch & the loading invariant
 
 All viewport clicks are handled in C (=cmacs-libregnum-input.c=): the click
 ray-picks a node synchronously, then *defers* a dispatch onto the cmacs
 GMainContext to one of four Elisp entry points — =cmacs-libregnum--node-clicked=
-(scenes + gnuseye, with the node id, its *path string*, is-dir flag, and the
-view-local click pixel), =cmacs-libregnum-editor--on-select=,
+(scenes, gnuseye and roamgraph, with the node id, its *path string*, is-dir
+flag, and the view-local click pixel), =cmacs-libregnum-editor--on-select=,
 =cmacs-libregnum-editor--drop=, and =cmacs-libregnum-editor--context-menu=.
 
 Two invariants follow from this design — both learned the hard way:

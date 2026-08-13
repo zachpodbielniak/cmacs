@@ -92,6 +92,11 @@ cmacs_libregnum__draw_labels (cairo_t *cr, CmacsLibregnumView *v,
   CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
   guint nc = cmacs_libregnum_render_ctx_node_count (ctx);
   if (nc == 0) return;
+  /* This context draws its labels inside the FBO instead (so they also
+   * exist under `emacs --lrg'); painting them here too would
+   * double-draw them under pgtk, in a second font, offset by the
+   * FBO-to-window scale factor. */
+  if (cmacs_libregnum_render_ctx_inscene_labels_p (ctx)) return;
   gint sel = cmacs_libregnum_render_ctx_get_selected (ctx);
   gint hov = cmacs_libregnum_render_ctx_get_hovered (ctx);
   double sxv = (double) pw / vw;

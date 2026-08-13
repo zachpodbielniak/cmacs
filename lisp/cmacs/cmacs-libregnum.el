@@ -24,6 +24,24 @@
   :type '(cons integer integer)
   :group 'cmacs-libregnum)
 
+(defun cmacs-libregnum-default-font-file ()
+  "Resolve the default face's font family to a TTF/OTF file path.
+Used by anything that draws text inside a libregnum framebuffer -- the
+in-scene node labels and the vidstudio timeline overlay -- so that text
+is rendered in the same font as the rest of the editor rather than
+raylib's built-in bitmap font.  Returns nil when it cannot be resolved,
+which the C side treats as \"use the built-in font\"."
+  (ignore-errors
+    (let ((family (face-attribute 'default :family nil t)))
+      (when (and (stringp family)
+                 (not (string-empty-p family))
+                 (executable-find "fc-match"))
+        (let ((f (string-trim
+                  (shell-command-to-string
+                   (format "fc-match -f '%%{file}' %s"
+                           (shell-quote-argument family))))))
+          (and (stringp f) (> (length f) 0) (file-readable-p f) f))))))
+
 (defcustom cmacs-libregnum-clear-color "#101015"
   "Background colour for libregnum scenes (informational; the C side
 holds the active value)."
@@ -359,6 +377,11 @@ GMainContext."
           ;; pick time -- stable across the per-tick marker rebuilds (the
           ;; numeric node id is NOT: it may be stale by dispatch time).
           (cmacs-gnuseye--on-pick buffer id vx vy path))
+         ((and (fboundp 'cmacs-roamgraph--on-pick)
+               (derived-mode-p 'cmacs-roamgraph-mode))
+          ;; Same discipline: PATH is the org-roam id string, which is
+          ;; what every piece of roamgraph state is keyed on.
+          (cmacs-roamgraph--on-pick buffer id vx vy path))
          (is-dir (cmacs-libregnum--drill-to buffer path))
          ((and (stringp path) (> (length path) 0)) (find-file path)))))))
 
@@ -372,9 +395,13 @@ timer (the editor does the same)."
     (let ((id (nth 0 info)) (path (nth 1 info))
           (vx (nth 3 info)) (vy (nth 4 info)))
       (with-current-buffer buffer
-        (when (and (fboundp 'cmacs-gnuseye--context-menu)
-                   (derived-mode-p 'cmacs-gnuseye-mode))
-          (cmacs-gnuseye--context-menu buffer id path vx vy))))))
+        (cond
+         ((and (fboundp 'cmacs-gnuseye--context-menu)
+               (derived-mode-p 'cmacs-gnuseye-mode))
+          (cmacs-gnuseye--context-menu buffer id path vx vy))
+         ((and (fboundp 'cmacs-roamgraph--context-menu)
+               (derived-mode-p 'cmacs-roamgraph-mode))
+          (cmacs-roamgraph--context-menu buffer id path vx vy)))))))
 
 ;; ── 2D image-mode input dispatchers ────────────────────────────────────
 ;; The C input layer defers image-viewport mouse events here (document pixel

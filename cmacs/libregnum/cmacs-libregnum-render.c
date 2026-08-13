@@ -168,6 +168,7 @@ typedef struct
   float    x, y, z;       /* center */
   float    hw, hh, hd;    /* half-extents (AABB) */
   int      label_mode;    /* CmacsLibregnumLabelMode; -1 == legacy default */
+  guint    flags;         /* CmacsLibregnumNodeFlags */
 } CmacsNode;
 
 static void
@@ -339,7 +340,30 @@ struct CmacsLibregnumRenderCtx
    * the bottom of the FBO.  image_clips holds CmacsTimelineClip records. */
   GArray       *image_clips;
   int           image_playhead, image_total_frames, image_ntracks;
-  GrlFont      *image_label_font;  /* owned; clip-id labels, or NULL=default */
+
+  /* ── Text labels ─────────────────────────────────────────────────────
+   * One font, shared by the vidstudio timeline overlay (which introduced
+   * it) and the in-scene node-label pass.  NULL falls back to raylib's
+   * built-in 10px bitmap font, which is fine for a debug HUD and much
+   * too ragged for anything a user reads.
+   *
+   * inscene_labels moves node labels OUT of the pgtk-only cairo overlay
+   * and INTO the FBO, so `emacs --lrg' gets them too: both backends
+   * funnel through render_to_bgra (DST==NULL for the lrg FBO-only path),
+   * so one code path serves both.  Contexts that leave it FALSE keep the
+   * legacy cairo overlay untouched. */
+  GrlFont      *label_font;        /* owned, or NULL for the default */
+  gboolean      inscene_labels;
+  gboolean      orbit_locked;    /* flat views must stay flat */
+  gboolean      right_drag_pans; /* else right-drag orbits (CAD profile) */
+  gboolean      wheel_up_zooms_in; /* else the legacy inverted wheel */
+  gboolean      label_backdrop;  /* translucent plate behind label text */
+  gboolean      emphasis_rings;  /* screen-space rings on sel/hover/match */
+  int           selection_style; /* CmacsLibregnumSelectionStyle */
+  int           label_px;          /* 0 = pick from the font baking size */
+  gboolean      label_shadow;
+  gboolean      label_declutter;
+  int           label_max;         /* cap on labels drawn per frame */
 
   /* ── 2D chart mode (cmacs-calculator) ────────────────────────────────
    * When chart_mode is TRUE, render_to_bgra draws an LrgChart widget
@@ -496,6 +520,9 @@ cmacs_libregnum_render_ctx_new (int w, int h)
   r->height = h;
   r->selected = -1;
   r->hovered = -1;
+  /* Legacy defaults: existing scenes keep the wireframe box and plain
+     labels until a caller asks for something else. */
+  r->selection_style = CMACS_LIBREGNUM_SELECTION_BOX;
   /* With a borrowed lrg context there is no LrgWindow object; a windowless
    * renderer is fine because render_to_bgra drives BeginTextureMode/Clear
    * itself and lrg_renderer_begin_frame/end_frame/clear are no-ops when the
@@ -561,7 +588,7 @@ cmacs_libregnum_render_ctx_free (CmacsLibregnumRenderCtx *r)
   g_clear_object (&r->image_pending);
   g_clear_pointer (&r->image_rgba, g_free);
   if (r->image_clips) g_array_unref (r->image_clips);
-  g_clear_object (&r->image_label_font);
+  g_clear_object (&r->label_font);
   /* Chart-mode resources (owned). */
   g_clear_object ((GObject **) &r->chart);
   /* Non-owning wrapper: drop it before the FBO it points at.  */
@@ -774,10 +801,10 @@ ctx_image_draw_overlay (CmacsLibregnumRenderCtx *r)
             int fs = MAX (11, MIN (20, rowh - 6));
             int tw, tx, ty;
             g_snprintf (idbuf, sizeof idbuf, "#%d", cl->id);
-            if (r->image_label_font != NULL)
+            if (r->label_font != NULL)
               {
                 g_autoptr (GrlVector2) m =
-                  grl_font_measure_text (r->image_label_font, idbuf,
+                  grl_font_measure_text (r->label_font, idbuf,
                                          (gfloat) fs, 1.0f);
                 tw = m ? (int) grl_vector2_get_x (m) : fs * 2;
               }
@@ -789,13 +816,13 @@ ctx_image_draw_overlay (CmacsLibregnumRenderCtx *r)
               {
                 g_autoptr (GrlColor) sh = grl_color_new (0, 0, 0, 210);
                 g_autoptr (GrlColor) fg = grl_color_new (255, 255, 255, 255);
-                if (r->image_label_font != NULL)
+                if (r->label_font != NULL)
                   {
                     g_autoptr (GrlVector2) ps = grl_vector2_new (tx + 1, ty + 1);
                     g_autoptr (GrlVector2) pf = grl_vector2_new (tx, ty);
-                    grl_draw_text_ex (r->image_label_font, idbuf, ps,
+                    grl_draw_text_ex (r->label_font, idbuf, ps,
                                       (gfloat) fs, 1.0f, sh);
-                    grl_draw_text_ex (r->image_label_font, idbuf, pf,
+                    grl_draw_text_ex (r->label_font, idbuf, pf,
                                       (gfloat) fs, 1.0f, fg);
                   }
                 else
@@ -900,25 +927,223 @@ cmacs_libregnum_render_ctx_image_timeline_set (CmacsLibregnumRenderCtx *r,
   r->image_ntracks = ntracks;
 }
 
-/* Set the font used for the timeline-strip clip-id labels (e.g. the Emacs UI
-   font, so the ids match the editor).  PATH is a TTF/OTF file; NULL/empty or
-   an unloadable file falls back to the built-in default font. */
+/* Build the codepoint set baked into a label font atlas.
+ *
+ * The loader's default set is the 95 printable ASCII characters, which
+ * is not enough for text a user wrote: an em dash, a curly quote or an
+ * accented name all come out as the missing-glyph box.  Org note titles
+ * are full of exactly those.  So bake ASCII plus Latin-1 Supplement
+ * plus General Punctuation -- around 300 glyphs, a trivial atlas. */
+static gint *
+label_font_codepoints (gint *n_out)
+{
+  gint *cp;
+  gint n = 0, i;
+
+  /* 0x20-0x7E, 0xA0-0xFF, 0x2010-0x205E, plus a few strays. */
+  cp = g_new0 (gint, 95 + 96 + 79 + 8);
+
+  for (i = 0x20; i <= 0x7E; i++)   cp[n++] = i;
+  for (i = 0xA0; i <= 0xFF; i++)   cp[n++] = i;
+  for (i = 0x2010; i <= 0x205E; i++) cp[n++] = i;
+  cp[n++] = 0x20AC;    /* euro sign */
+  cp[n++] = 0x2192;    /* rightwards arrow, used in breadcrumbs */
+  cp[n++] = 0x2190;    /* leftwards arrow */
+  cp[n++] = 0x2026;    /* horizontal ellipsis (also inside the range) */
+
+  if (n_out) *n_out = n;
+  return cp;
+}
+
+/* Set the font used for in-scene node labels and the timeline-strip
+   clip-id labels (e.g. the Emacs UI font, so the text matches the
+   editor).  PATH is a TTF/OTF file; NULL/empty or an unloadable file
+   falls back to the built-in bitmap font. */
+void
+cmacs_libregnum_render_ctx_set_label_font (CmacsLibregnumRenderCtx *r,
+                                           const char *path, int base_px)
+{
+  if (!r) return;
+  g_clear_object (&r->label_font);
+  if (path != NULL && path[0] != '\0')
+    {
+      /* Bake large and draw small: downsampling a 32px atlas through the
+       * bilinear filter is what makes the text look right, and it makes
+       * the draw size a free runtime knob with no font reload. */
+      gint ncp = 0;
+      g_autofree gint *cp = label_font_codepoints (&ncp);
+      GrlFont *f = grl_font_new_from_file_ex (path,
+                                              (base_px > 0) ? base_px : 32,
+                                              cp, ncp);
+      if (f != NULL && grl_font_is_valid (f))
+        {
+          grl_font_set_filter (f, GRL_TEXTURE_FILTER_BILINEAR);
+          r->label_font = f;
+        }
+      else
+        g_clear_object (&f);
+    }
+}
+
+/* Back-compat alias: vidstudio's timeline overlay named this first, and
+   the font is now shared with the in-scene node labels. */
 void
 cmacs_libregnum_render_ctx_image_set_label_font (CmacsLibregnumRenderCtx *r,
                                                  const char *path)
 {
+  cmacs_libregnum_render_ctx_set_label_font (r, path, 0);
+}
+
+void
+cmacs_libregnum_render_ctx_set_inscene_labels (CmacsLibregnumRenderCtx *r,
+                                               gboolean on)
+{
   if (!r) return;
-  g_clear_object (&r->image_label_font);
-  if (path != NULL && path[0] != '\0')
+  r->inscene_labels = on;
+}
+
+/* Suppress orbiting (pan and zoom keep working).  For a scene whose
+   content is planar and viewed head-on, tumbling the camera only
+   reveals that everything is coplanar. */
+/* Label decoration: a translucent plate behind the text, and
+   screen-space rings on the selected / hovered / matched nodes.  Both
+   off by default so existing scenes are untouched. */
+void
+cmacs_libregnum_render_ctx_set_label_decor (CmacsLibregnumRenderCtx *r,
+                                            gboolean backdrop,
+                                            gboolean rings)
+{
+  if (!r) return;
+  r->label_backdrop = backdrop;
+  r->emphasis_rings = rings;
+}
+
+/* How the selected node is marked in the 3D pass.  The legacy wireframe
+   box suits the file-tree and editor scenes, whose nodes ARE boxes; a
+   scene made of spheres wants a halo instead, and one drawing its own
+   screen-space rings wants neither. */
+void
+cmacs_libregnum_render_ctx_set_selection_style (CmacsLibregnumRenderCtx *r,
+                                                int style)
+{
+  if (!r) return;
+  r->selection_style = style;
+}
+
+void
+cmacs_libregnum_render_ctx_set_orbit_locked (CmacsLibregnumRenderCtx *r,
+                                             gboolean locked)
+{
+  if (!r) return;
+  r->orbit_locked = locked;
+}
+
+gboolean
+cmacs_libregnum_render_ctx_orbit_locked_p (CmacsLibregnumRenderCtx *r)
+{
+  return r ? r->orbit_locked : FALSE;
+}
+
+/* Choose what a right-drag does.  The default CAD profile orbits with
+   either button and pans with the middle one, which suits a modelling
+   viewport; a map-like scene wants right-drag to pan, because that is
+   what every map does and because a middle button is not always
+   there. */
+void
+cmacs_libregnum_render_ctx_set_right_drag_pans (CmacsLibregnumRenderCtx *r,
+                                                gboolean pans)
+{
+  if (!r) return;
+  r->right_drag_pans = pans;
+}
+
+gboolean
+cmacs_libregnum_render_ctx_right_drag_pans_p (CmacsLibregnumRenderCtx *r)
+{
+  return r ? r->right_drag_pans : FALSE;
+}
+
+/* Wheel direction.  GDK reports a positive delta for scrolling DOWN, and
+   the zoom kernel moves closer for a positive amount, so the inherited
+   behaviour is that scrolling down moves you closer -- the opposite of
+   what maps, browsers and 3-D viewers all do.  Contexts opt into the
+   conventional direction rather than it being flipped underneath the
+   scenes that already shipped with the old one. */
+void
+cmacs_libregnum_render_ctx_set_wheel_up_zooms_in (CmacsLibregnumRenderCtx *r,
+                                                  gboolean up_zooms_in)
+{
+  if (!r) return;
+  r->wheel_up_zooms_in = up_zooms_in;
+}
+
+gboolean
+cmacs_libregnum_render_ctx_wheel_up_zooms_in_p (CmacsLibregnumRenderCtx *r)
+{
+  return r ? r->wheel_up_zooms_in : FALSE;
+}
+
+/* Current framebuffer size.  Scene builders need the aspect ratio to
+   frame content correctly. */
+void
+cmacs_libregnum_render_ctx_get_size (CmacsLibregnumRenderCtx *r,
+                                     int *w, int *h)
+{
+  if (w) *w = r ? r->width : 0;
+  if (h) *h = r ? r->height : 0;
+}
+
+gboolean
+cmacs_libregnum_render_ctx_inscene_labels_p (CmacsLibregnumRenderCtx *r)
+{
+  return r ? r->inscene_labels : FALSE;
+}
+
+void
+cmacs_libregnum_render_ctx_set_label_style (CmacsLibregnumRenderCtx *r,
+                                            int px, gboolean shadow,
+                                            gboolean declutter, int max_labels)
+{
+  if (!r) return;
+  r->label_px        = (px > 0) ? px : 0;
+  r->label_shadow    = shadow;
+  r->label_declutter = declutter;
+  r->label_max       = (max_labels > 0) ? max_labels : 0;
+}
+
+/* Should node ID carry a label this frame?  Single source of truth for
+   the per-node label policy, shared by the in-scene pass and the legacy
+   cairo overlay so the two can never disagree. */
+gboolean
+cmacs_libregnum_render_ctx_label_visible_p (CmacsLibregnumRenderCtx *r,
+                                            guint id)
+{
+  CmacsNode *n;
+
+  if (!r || !r->nodes || id >= r->nodes->len) return FALSE;
+  n = &g_array_index (r->nodes, CmacsNode, id);
+
+  /* A search hit, a pin or a selection neighbour is labelled whatever
+     its own policy says: the point of highlighting something is to be
+     able to read its name without hunting for it. */
+  if (n->flags & (CMACS_LIBREGNUM_NODE_MATCH
+                  | CMACS_LIBREGNUM_NODE_PINNED
+                  | CMACS_LIBREGNUM_NODE_NEIGHBOUR))
+    return TRUE;
+
+  switch (n->label_mode)
     {
-      GrlFont *f = grl_font_new_from_file (path);
-      if (f != NULL && grl_font_is_valid (f))
-        {
-          grl_font_set_filter (f, GRL_TEXTURE_FILTER_BILINEAR);
-          r->image_label_font = f;
-        }
-      else
-        g_clear_object (&f);
+    case CMACS_LIBREGNUM_LABEL_NEVER:
+      return FALSE;
+    case CMACS_LIBREGNUM_LABEL_ALWAYS:
+      return TRUE;
+    case CMACS_LIBREGNUM_LABEL_SELECTED:
+      return r->selected == (gint) id;
+    case CMACS_LIBREGNUM_LABEL_HOVER:
+      return r->selected == (gint) id || r->hovered == (gint) id;
+    default:
+      /* Legacy: directories, plus whatever is selected. */
+      return n->is_dir || r->selected == (gint) id;
     }
 }
 
@@ -1679,6 +1904,21 @@ cmacs_libregnum_render_ctx_node_count (CmacsLibregnumRenderCtx *r)
   return (r && r->nodes) ? r->nodes->len : 0;
 }
 
+/* Move an existing node's pick box.  A scene whose drawables are
+   mutated in place (an animated force-directed layout, a dragged
+   node) must call this too, or picking and labelling keep pointing at
+   where the node used to be. */
+void
+cmacs_libregnum_render_ctx_move_node (CmacsLibregnumRenderCtx *r, gint id,
+                                      float x, float y, float z)
+{
+  CmacsNode *n;
+
+  if (!r || !r->nodes || id < 0 || (guint) id >= r->nodes->len) return;
+  n = &g_array_index (r->nodes, CmacsNode, id);
+  n->x = x; n->y = y; n->z = z;
+}
+
 /* Borrowed pointers; valid until the next clear/rebuild. */
 gboolean
 cmacs_libregnum_render_ctx_node_info (CmacsLibregnumRenderCtx *r, guint id,
@@ -1851,6 +2091,430 @@ cmacs_libregnum_render_ctx_label_at (CmacsLibregnumRenderCtx *r, guint id,
   if (gap > 0.25f) gap = 0.25f;
   return cmacs_libregnum_render_ctx_project (r, n->x, n->y + n->hh + gap,
                                              n->z, vw, vh, sx, sy);
+}
+
+/* ── Spatial navigation ────────────────────────────────────────────
+ * Nearest node in a screen-space direction from another node.  Must
+ * live in C: doing it from Lisp means one projection call per candidate
+ * per keypress, against a camera that may be mid-tween. */
+
+gint
+cmacs_libregnum_render_ctx_nearest_in_direction (CmacsLibregnumRenderCtx *r,
+                                                 gint from,
+                                                 double dx, double dy,
+                                                 int vw, int vh,
+                                                 double cone_cos,
+                                                 gboolean visible_only)
+{
+  CmacsNode *src;
+  double ox = 0, oy = 0, dlen;
+  double best = 0;
+  gint best_id = -1;
+  guint i;
+
+  if (!r || !r->nodes || from < 0 || (guint) from >= r->nodes->len)
+    return -1;
+  if (vw <= 0 || vh <= 0) return -1;
+
+  dlen = sqrt (dx * dx + dy * dy);
+  if (dlen < 1e-9) return -1;
+  dx /= dlen; dy /= dlen;
+
+  src = &g_array_index (r->nodes, CmacsNode, (guint) from);
+  if (!cmacs_libregnum_render_ctx_project (r, src->x, src->y, src->z,
+                                           vw, vh, &ox, &oy))
+    return -1;
+
+  for (i = 0; i < r->nodes->len; i++)
+    {
+      CmacsNode *n = &g_array_index (r->nodes, CmacsNode, i);
+      double sx = 0, sy = 0, vx, vy, len, c, score;
+
+      if ((gint) i == from) continue;
+      if (visible_only && !ctx_point_near_side (r, n->x, n->y, n->z)) continue;
+      if (!cmacs_libregnum_render_ctx_project (r, n->x, n->y, n->z,
+                                               vw, vh, &sx, &sy))
+        continue;
+
+      vx = sx - ox;
+      vy = sy - oy;
+      len = sqrt (vx * vx + vy * vy);
+      /* Nodes drawn on top of each other are not "to the left of" one
+         another in any useful sense. */
+      if (len < 4.0) continue;
+
+      c = (vx * dx + vy * dy) / len;
+      if (c < cone_cos) continue;
+
+      /* Prefer near and well-aligned; the cubed cosine makes alignment
+         matter more than raw distance, which is what "the node over
+         there" means when two candidates are similarly far. */
+      score = len / (c * c * c);
+      /* Ties broken by lower id so repeated presses are deterministic. */
+      if (best_id < 0 || score < best)
+        { best = score; best_id = (gint) i; }
+    }
+  return best_id;
+}
+
+gboolean
+cmacs_libregnum_render_ctx_node_onscreen_p (CmacsLibregnumRenderCtx *r,
+                                            gint id, int vw, int vh,
+                                            double margin_px)
+{
+  CmacsNode *n;
+  double sx = 0, sy = 0;
+
+  if (!r || !r->nodes || id < 0 || (guint) id >= r->nodes->len) return FALSE;
+  if (vw <= 0 || vh <= 0) return FALSE;
+  n = &g_array_index (r->nodes, CmacsNode, (guint) id);
+  if (!cmacs_libregnum_render_ctx_project (r, n->x, n->y, n->z,
+                                           vw, vh, &sx, &sy))
+    return FALSE;
+  return (sx >= margin_px && sy >= margin_px
+          && sx <= (double) vw - margin_px
+          && sy <= (double) vh - margin_px);
+}
+
+/* ── Node flags: search matches, dimming, pins ─────────────────────
+ * Deliberately separate from `selected', which is a single index and is
+ * already load-bearing (highlight box, focus_node, editor multi-select).
+ * A match set is a different concept and must coexist with a selection. */
+
+void
+cmacs_libregnum_render_ctx_set_node_flags (CmacsLibregnumRenderCtx *r,
+                                           gint id, guint flags)
+{
+  if (!r || !r->nodes || id < 0 || (guint) id >= r->nodes->len) return;
+  g_array_index (r->nodes, CmacsNode, (guint) id).flags = flags;
+}
+
+guint
+cmacs_libregnum_render_ctx_get_node_flags (CmacsLibregnumRenderCtx *r,
+                                           gint id)
+{
+  if (!r || !r->nodes || id < 0 || (guint) id >= r->nodes->len) return 0;
+  return g_array_index (r->nodes, CmacsNode, (guint) id).flags;
+}
+
+void
+cmacs_libregnum_render_ctx_clear_node_flags (CmacsLibregnumRenderCtx *r,
+                                             guint mask)
+{
+  guint i;
+
+  if (!r || !r->nodes) return;
+  for (i = 0; i < r->nodes->len; i++)
+    g_array_index (r->nodes, CmacsNode, i).flags &= ~mask;
+}
+
+void
+cmacs_libregnum_render_ctx_set_match_set (CmacsLibregnumRenderCtx *r,
+                                          const gint *ids, gsize n,
+                                          gboolean dim_rest)
+{
+  guint i;
+  gsize j;
+
+  if (!r || !r->nodes) return;
+
+  /* One call per keystroke instead of one per node. */
+  for (i = 0; i < r->nodes->len; i++)
+    {
+      CmacsNode *nd = &g_array_index (r->nodes, CmacsNode, i);
+      nd->flags &= ~(CMACS_LIBREGNUM_NODE_MATCH | CMACS_LIBREGNUM_NODE_DIM);
+      if (dim_rest && n > 0) nd->flags |= CMACS_LIBREGNUM_NODE_DIM;
+    }
+  for (j = 0; j < n; j++)
+    {
+      gint id = ids[j];
+      if (id < 0 || (guint) id >= r->nodes->len) continue;
+      {
+        CmacsNode *nd = &g_array_index (r->nodes, CmacsNode, (guint) id);
+        nd->flags |= CMACS_LIBREGNUM_NODE_MATCH;
+        nd->flags &= ~CMACS_LIBREGNUM_NODE_DIM;
+      }
+    }
+}
+
+/* ── In-scene node labels ──────────────────────────────────────────
+ * A 2D screen-space pass drawn inside the FBO bracket, after the 3D
+ * scene.  Replaces (for contexts that opt in) the pgtk-only cairo
+ * overlay, so `emacs --lrg' gets labels from the same code path.
+ *
+ * Two things here are load-bearing and easy to get wrong:
+ *
+ *  - Orientation.  The colour attachment is bottom-up in memory
+ *    (glReadPixels' origin is lower-left) and the pgtk blit flips it at
+ *    paint time, which invites a compensating flip here.  Do NOT add
+ *    one: BeginTextureMode installs a projection that already makes
+ *    raylib's 2D drawing top-down in the texture's own space -- the
+ *    same orientation GetWorldToScreenEx reports.  Flipping mirrors
+ *    every label about the middle of the viewport, so it lands below
+ *    its node instead of above.
+ *
+ *  - The anchor is computed in SCREEN space, not world space, unlike
+ *    the legacy `label_at'.  That one offsets by the node's half-height
+ *    along world +Y, which projects to nothing in a top-down or
+ *    front-facing orthographic view -- the label lands on top of the
+ *    node.  Projecting the node's screen radius instead is correct in
+ *    perspective and orthographic alike. */
+
+typedef struct
+{
+  guint  id;
+  float  sx, sy;        /* projected centre, FBO space */
+  float  rpx;           /* projected radius in pixels */
+  float  priority;      /* higher wins a collision */
+  const char *text;
+} LabelCand;
+
+static int
+label_cand_cmp (const void *pa, const void *pb)
+{
+  const LabelCand *a = pa, *b = pb;
+
+  if (a->priority > b->priority) return -1;
+  if (a->priority < b->priority) return 1;
+  /* Total order, so the frame-to-frame result does not flicker. */
+  return (a->id < b->id) ? -1 : (a->id > b->id) ? 1 : 0;
+}
+
+static void
+ctx_draw_node_labels (CmacsLibregnumRenderCtx *r)
+{
+  guint nc, i, ncand = 0, drawn = 0;
+  int vw, vh, fs, cap;
+  LabelCand *cand;
+  Camera3D cam;
+  float rightx, righty, rightz;
+  /* Accepted label rectangles, for the greedy overlap test. */
+  float *taken;
+  guint ntaken = 0;
+
+  if (!r || !r->nodes) return;
+  nc = r->nodes->len;
+  if (nc == 0) return;
+
+  vw = r->width;
+  vh = r->height;
+  if (vw <= 0 || vh <= 0) return;
+
+  fs = (r->label_px > 0) ? r->label_px : 13;
+  cap = (r->label_max > 0) ? r->label_max : 120;
+
+  cam = ctx_raylib_camera (r);
+
+  /* Camera right vector = normalize (forward x up).  Used to turn a
+     node's world radius into a pixel radius by projecting one point on
+     its silhouette. */
+  {
+    float fx = cam.target.x - cam.position.x;
+    float fy = cam.target.y - cam.position.y;
+    float fz = cam.target.z - cam.position.z;
+    float len;
+    rightx = fy * cam.up.z - fz * cam.up.y;
+    righty = fz * cam.up.x - fx * cam.up.z;
+    rightz = fx * cam.up.y - fy * cam.up.x;
+    len = sqrtf (rightx * rightx + righty * righty + rightz * rightz);
+    if (len < 1e-6f) { rightx = 1.0f; righty = 0.0f; rightz = 0.0f; }
+    else { rightx /= len; righty /= len; rightz /= len; }
+  }
+
+  cand  = g_new0 (LabelCand, nc);
+  taken = g_new0 (float, (gsize) cap * 4);
+
+  for (i = 0; i < nc; i++)
+    {
+      CmacsNode *n = &g_array_index (r->nodes, CmacsNode, i);
+      double sx = 0, sy = 0, ex = 0, ey = 0;
+      float extent;
+
+      if (!n->name || !n->name[0]) continue;
+      if (!cmacs_libregnum_render_ctx_label_visible_p (r, i)) continue;
+      /* Globe contexts hide labels on the far side of the sphere. */
+      if (!ctx_point_near_side (r, n->x, n->y, n->z)) continue;
+      if (!cmacs_libregnum_render_ctx_project (r, n->x, n->y, n->z,
+                                               vw, vh, &sx, &sy))
+        continue;
+      if (sx < -64 || sy < -64 || sx > vw + 64 || sy > vh + 64) continue;
+
+      extent = fmaxf (n->hw, fmaxf (n->hh, n->hd));
+      if (!cmacs_libregnum_render_ctx_project (r,
+                                               n->x + rightx * extent,
+                                               n->y + righty * extent,
+                                               n->z + rightz * extent,
+                                               vw, vh, &ex, &ey))
+        { ex = sx; ey = sy; }
+
+      cand[ncand].id   = i;
+      cand[ncand].sx   = (float) sx;
+      cand[ncand].sy   = (float) sy;
+      cand[ncand].rpx  = (float) fabs (ex - sx);
+      cand[ncand].text = n->name;
+      /* Selection and hover always win; after that, bigger nodes (which
+         are the hubs) beat smaller ones, and nearer beats further. */
+      cand[ncand].priority =
+        (r->selected == (gint) i) ? 1e9f
+        : (r->hovered == (gint) i) ? 5e8f
+        : (n->hw + n->hh + n->hd) * 1000.0f
+          - (float) cmacs_libregnum_render_ctx_camera_distance (r);
+      ncand++;
+    }
+
+  if (ncand > 1)
+    qsort (cand, ncand, sizeof (LabelCand), label_cand_cmp);
+
+  rlDisableDepthTest ();
+
+  /* Screen-space emphasis rings, drawn before the text so the labels
+     stay on top.  A ring scales with the node's projected size, so it
+     reads the same whether you are zoomed right in or looking at the
+     whole graph -- which a fixed-size world-space marker does not. */
+  if (r->emphasis_rings)
+    for (i = 0; i < ncand; i++)
+      {
+        LabelCand *c = &cand[i];
+        gboolean sel = (r->selected == (gint) c->id);
+        gboolean hov = (r->hovered == (gint) c->id);
+        guint flags = g_array_index (r->nodes, CmacsNode, c->id).flags;
+        float rr;
+
+        if (!sel && !hov && !(flags & CMACS_LIBREGNUM_NODE_MATCH)) continue;
+
+        rr = MAX (c->rpx, 3.0f);
+        {
+          g_autoptr (GrlVector2) at = grl_vector2_new (c->sx, c->sy);
+          if (sel)
+            {
+              /* Two rings: a soft outer glow and a crisp inner one, so
+                 the selection is unmistakable against any background. */
+              g_autoptr (GrlColor) glow = grl_color_new (255, 235, 120, 60);
+              g_autoptr (GrlColor) edge = grl_color_new (255, 235, 120, 235);
+              grl_draw_ring (at, rr + 3.0f, rr + 11.0f, 0.0f, 360.0f, 40, glow);
+              grl_draw_ring (at, rr + 3.0f, rr + 5.0f, 0.0f, 360.0f, 40, edge);
+            }
+          else if (hov)
+            {
+              g_autoptr (GrlColor) edge = grl_color_new (170, 220, 255, 190);
+              grl_draw_ring (at, rr + 2.0f, rr + 3.5f, 0.0f, 360.0f, 32, edge);
+            }
+          else
+            {
+              /* A search hit: the accent colour again, thinner. */
+              g_autoptr (GrlColor) edge = grl_color_new (255, 210, 74, 200);
+              grl_draw_ring (at, rr + 2.0f, rr + 4.0f, 0.0f, 360.0f, 32, edge);
+            }
+        }
+      }
+
+  for (i = 0; i < ncand && drawn < (guint) cap; i++)
+    {
+      LabelCand *c = &cand[i];
+      float tw, th, lx, ly, y_fbo;
+      gboolean collides = FALSE;
+      guint j;
+
+      if (r->label_font != NULL)
+        {
+          g_autoptr (GrlVector2) m =
+            grl_font_measure_text (r->label_font, c->text, (gfloat) fs, 1.0f);
+          tw = m ? grl_vector2_get_x (m) : (float) (fs * 2);
+          th = m ? grl_vector2_get_y (m) : (float) fs;
+        }
+      else
+        {
+          tw = (float) grl_measure_text (c->text, fs);
+          th = (float) fs;
+        }
+
+      /* Centre over the node, just above its silhouette. */
+      lx = c->sx - tw * 0.5f;
+      ly = c->sy - (c->rpx + 6.0f) - th;
+
+      if (r->label_declutter)
+        {
+          for (j = 0; j < ntaken; j++)
+            {
+              const float *t = &taken[j * 4];
+              if (lx < t[0] + t[2] && lx + tw > t[0]
+                  && ly < t[1] + t[3] && ly + th > t[1])
+                { collides = TRUE; break; }
+            }
+          /* Selection and hover are never suppressed -- the whole point
+             of pointing at something is to read its name. */
+          if (collides
+              && r->selected != (gint) c->id
+              && r->hovered != (gint) c->id)
+            continue;
+          if (ntaken < (guint) cap)
+            {
+              float *t = &taken[ntaken * 4];
+              t[0] = lx; t[1] = ly; t[2] = tw; t[3] = th;
+              ntaken++;
+            }
+        }
+
+      /* No flip.  The colour attachment is bottom-up in memory, but
+         BeginTextureMode installs a projection that makes raylib's 2D
+         drawing top-down in the texture's own space -- the same
+         orientation GetWorldToScreenEx reports and the blit displays.
+         Flipping here would mirror the label about the middle of the
+         viewport, putting it below its node instead of above (which is
+         precisely what cmacs-roamgraph-test-inscene-label-is-above-its-node
+         exists to catch, and did). */
+      y_fbo = ly;
+
+      /* Backdrop pill.  Over a dense graph the edges run straight
+         through the text and it becomes unreadable; a translucent
+         plate behind each label costs one quad and fixes it. */
+      if (r->label_backdrop)
+        {
+          g_autoptr (GrlRectangle) rect =
+            grl_rectangle_new (lx - 4.0f, y_fbo - 2.0f,
+                               tw + 8.0f, th + 4.0f);
+          g_autoptr (GrlColor) bgc =
+            (r->selected == (gint) c->id)
+            ? grl_color_new (58, 52, 20, 215)
+            : grl_color_new (12, 13, 18, 185);
+          grl_draw_rectangle_rounded (rect, 0.45f, 6, bgc);
+        }
+
+      {
+        g_autoptr (GrlColor) sh = grl_color_new (0, 0, 0, 200);
+        g_autoptr (GrlColor) fg =
+          (r->selected == (gint) c->id)
+          ? grl_color_new (255, 235, 120, 255)
+          : grl_color_new (235, 238, 245, 255);
+
+        if (r->label_font != NULL)
+          {
+            if (r->label_shadow)
+              {
+                g_autoptr (GrlVector2) ps =
+                  grl_vector2_new (lx + 1.0f, y_fbo + 1.0f);
+                grl_draw_text_ex (r->label_font, c->text, ps,
+                                  (gfloat) fs, 1.0f, sh);
+              }
+            {
+              g_autoptr (GrlVector2) pf = grl_vector2_new (lx, y_fbo);
+              grl_draw_text_ex (r->label_font, c->text, pf,
+                                (gfloat) fs, 1.0f, fg);
+            }
+          }
+        else
+          {
+            if (r->label_shadow)
+              grl_draw_text (c->text, (int) lx + 1, (int) y_fbo + 1, fs, sh);
+            grl_draw_text (c->text, (int) lx, (int) y_fbo, fs, fg);
+          }
+      }
+      drawn++;
+    }
+
+  rlEnableDepthTest ();
+  g_free (cand);
+  g_free (taken);
 }
 
 /* Aim the camera at node ID: target = node center, position backed off
@@ -2817,13 +3481,26 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
         else
 #endif
         if (r->selected >= 0 && r->nodes
-            && (guint) r->selected < r->nodes->len)
+            && (guint) r->selected < r->nodes->len
+            && r->selection_style != CMACS_LIBREGNUM_SELECTION_NONE)
           {
             CmacsNode *n = &g_array_index (r->nodes, CmacsNode,
                                            (guint) r->selected);
             Vector3 c = (Vector3){ n->x, n->y, n->z };
-            DrawCubeWires (c, n->hw * 2 + 0.35f, n->hh * 2 + 0.35f,
-                           n->hd * 2 + 0.35f, (Color){ 255, 235, 120, 255 });
+
+            if (r->selection_style == CMACS_LIBREGNUM_SELECTION_HALO)
+              {
+                /* A shell around the node.  Wireframe rather than solid
+                   so it reads as a marker and not as another node, and
+                   because a translucent sphere samples badly at the UV
+                   poles in this renderer. */
+                float rad = fmaxf (n->hw, fmaxf (n->hh, n->hd)) * 2.1f + 0.18f;
+                DrawSphereWires (c, rad, 8, 12,
+                                 (Color){ 255, 235, 120, 170 });
+              }
+            else
+              DrawCubeWires (c, n->hw * 2 + 0.35f, n->hh * 2 + 0.35f,
+                             n->hd * 2 + 0.35f, (Color){ 255, 235, 120, 255 });
           }
 #ifdef LRG_BUILD_EDITOR
         /* Transform gizmo handles over the selection (translate/rotate/scale). */
@@ -2832,6 +3509,23 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
         lrg_renderer_end_layer (r->renderer);
         lrg_renderer_end_frame (r->renderer);
       }
+
+    /* Screen-space label pass, INSIDE the FBO bracket.  Drawing labels
+     * here rather than in the pgtk cairo overlay is what makes them
+     * appear under `emacs --lrg' as well: both backends funnel through
+     * this function (DST==NULL for the lrg FBO-only path), so one code
+     * path serves both -- and snapshot_png can see them, which is what
+     * makes them testable at all. */
+    if (r->inscene_labels)
+      ctx_draw_node_labels (r);
+
+    /* Flush unconditionally.  EndMode3D (inside lrg_renderer_end_frame)
+     * submits the 3D batch, but anything drawn AFTER it opens a fresh
+     * batch that EndTextureMode would only submit *after* the readback
+     * below.  Omit this and labels render fine under --lrg (which never
+     * reads back) and are invisible under pgtk.  Same asymmetry the
+     * chart-mode path documents. */
+    rlDrawRenderBatchActive ();
 
     /* Read the FBO colour attachment back while it is still bound.
      * GL_BGRA + GL_UNSIGNED_BYTE matches cairo's ARGB32 byte order on
@@ -2844,6 +3538,77 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
   }
   EndTextureMode ();
 
+  return TRUE;
+}
+
+/* Bounding box of everything that is not the background colour, in
+   DISPLAYED orientation (y grows downward, the same convention
+   `project' and `label_at' report in).  Renders a frame synchronously,
+   like snapshot_png, so it works headless.
+
+   This exists for automated render verification.  A snapshot only tells
+   you that pixels changed; it cannot tell you they changed in the right
+   place -- and the framebuffer being bottom-up while the blit flips it
+   makes "in the right place" the specific thing worth asserting about
+   any 2D overlay pass.  Returns FALSE if nothing was drawn. */
+gboolean
+cmacs_libregnum_render_ctx_ink_bbox (CmacsLibregnumRenderCtx *r,
+                                     int *minx, int *miny,
+                                     int *maxx, int *maxy)
+{
+  unsigned char *buf;
+  int w, h, x, y;
+  int lo_x, lo_y, hi_x, hi_y;
+  unsigned char br, bg, bb;
+  gboolean any = FALSE;
+
+  if (!r) return FALSE;
+  w = r->width;
+  h = r->height;
+  if (w <= 0 || h <= 0) return FALSE;
+
+  buf = g_malloc0 ((gsize) w * h * 4);
+  if (!cmacs_libregnum_render_ctx_render_to_bgra (r, buf, w, h))
+    {
+      g_free (buf);
+      return FALSE;
+    }
+
+  /* The clear colour is the background; anything else is ink.  Sample
+     the corner rather than trusting a stored value, so this stays
+     correct for every render mode. */
+  bb = buf[0]; bg = buf[1]; br = buf[2];
+
+  lo_x = w; lo_y = h; hi_x = -1; hi_y = -1;
+  for (y = 0; y < h; y++)
+    for (x = 0; x < w; x++)
+      {
+        const unsigned char *p = buf + ((gsize) y * w + x) * 4;
+        /* Small tolerance: the scene is lit, so the background can
+           carry a little gradient noise. */
+        if (abs ((int) p[0] - (int) bb) <= 6
+            && abs ((int) p[1] - (int) bg) <= 6
+            && abs ((int) p[2] - (int) br) <= 6)
+          continue;
+        {
+          /* glReadPixels' origin is lower-left; report in the flipped,
+             displayed orientation so callers can compare against
+             `project'. */
+          int dy = h - 1 - y;
+          if (x < lo_x)  lo_x = x;
+          if (x > hi_x)  hi_x = x;
+          if (dy < lo_y) lo_y = dy;
+          if (dy > hi_y) hi_y = dy;
+          any = TRUE;
+        }
+      }
+
+  g_free (buf);
+  if (!any) return FALSE;
+  if (minx) *minx = lo_x;
+  if (miny) *miny = lo_y;
+  if (maxx) *maxx = hi_x;
+  if (maxy) *maxy = hi_y;
   return TRUE;
 }
 
@@ -2909,6 +3674,10 @@ cmacs_libregnum_render_ctx_orbit_camera (CmacsLibregnumRenderCtx *r,
 #ifdef LRG_BUILD_EDITOR
   if (r->camera_lookthrough) return; /* suppressed during look-through */
 #endif
+  /* A flat view stays flat: a scene showing a planar layout head-on has
+     nothing to orbit around, and tumbling it would only reveal that
+     everything is coplanar.  Pan and zoom stay live. */
+  if (r->orbit_locked) return;
   r->focusing = FALSE;   /* manual control cancels an in-flight focus */
   LrgCamera3D *c3 = LRG_CAMERA3D (r->camera);
   g_autoptr (GrlVector3) pos = lrg_camera3d_get_position (c3);

@@ -28,6 +28,11 @@
 #include "editor/lrg-script-binding.h"
 #undef LIBREGNUM_COMPILATION
 
+#include <math.h>
+
+/* Defined further down, but needed by DEFUNs that appear before it. */
+static double cmacs_libregnum__to_double (Lisp_Object obj);
+
 DEFUN ("cmacs-libregnum-supported-p", Fcmacs_libregnum_supported_p,
        Scmacs_libregnum_supported_p, 0, 0, 0,
        doc: /* Return t when cmacs-libregnum is built into this cmacs.  */)
@@ -559,6 +564,385 @@ also eases to frame it.  */)
     cmacs_libregnum_render_ctx_focus_node (ctx, i);
   cmacs_libregnum_view_request_redraw (v);
   return id;
+}
+
+DEFUN ("cmacs-libregnum-set-node-label-mode",
+       Fcmacs_libregnum_set_node_label_mode,
+       Scmacs_libregnum_set_node_label_mode, 3, 3, 0,
+       doc: /* Set the label policy for node ID in BUFFER's scene.
+MODE is one of the symbols `never', `selected', `hover', `always', or
+nil for the legacy default (label directories plus the selection).  */)
+  (Lisp_Object buffer, Lisp_Object id, Lisp_Object mode)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNAT (id);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  int m = CMACS_LIBREGNUM_LABEL_LEGACY;
+
+  if (EQ (mode, Qcmacs_label_never))         m = CMACS_LIBREGNUM_LABEL_NEVER;
+  else if (EQ (mode, Qcmacs_label_selected)) m = CMACS_LIBREGNUM_LABEL_SELECTED;
+  else if (EQ (mode, Qcmacs_label_hover))    m = CMACS_LIBREGNUM_LABEL_HOVER;
+  else if (EQ (mode, Qcmacs_label_always))   m = CMACS_LIBREGNUM_LABEL_ALWAYS;
+
+  cmacs_libregnum_render_ctx_set_node_label_mode (ctx, XFIXNUM (id), m);
+  cmacs_libregnum_view_request_redraw (v);
+  return mode;
+}
+
+DEFUN ("cmacs-libregnum-set-inscene-labels",
+       Fcmacs_libregnum_set_inscene_labels,
+       Scmacs_libregnum_set_inscene_labels, 2, 2, 0,
+       doc: /* Draw BUFFER's node labels inside the scene when ON is non-nil.
+
+By default labels are painted in cairo over the blitted framebuffer,
+which happens only under pgtk -- so they do not exist under `emacs
+--lrg', and never show up in `cmacs-libregnum-snapshot'.  With ON, they
+are drawn into the framebuffer itself, which both display backends
+share, and the cairo pass suppresses itself so nothing is drawn
+twice.  */)
+  (Lisp_Object buffer, Lisp_Object on)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  cmacs_libregnum_render_ctx_set_inscene_labels
+    (cmacs_libregnum_view_get_render_ctx (v), !NILP (on));
+  cmacs_libregnum_view_request_redraw (v);
+  return on;
+}
+
+DEFUN ("cmacs-libregnum-set-label-font", Fcmacs_libregnum_set_label_font,
+       Scmacs_libregnum_set_label_font, 2, 3, 0,
+       doc: /* Use the TrueType font at PATH for BUFFER's in-scene labels.
+BASE-PX is the atlas baking size (default 32); text is drawn smaller and
+filtered down, which is what makes it legible.  A nil or unloadable PATH
+falls back to the built-in bitmap font.  */)
+  (Lisp_Object buffer, Lisp_Object path, Lisp_Object base_px)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  Lisp_Object enc = NILP (path) ? Qnil : ENCODE_FILE (Fexpand_file_name (path, Qnil));
+  cmacs_libregnum_render_ctx_set_label_font
+    (cmacs_libregnum_view_get_render_ctx (v),
+     NILP (enc) ? NULL : SSDATA (enc),
+     FIXNUMP (base_px) ? (int) XFIXNUM (base_px) : 32);
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-set-label-style", Fcmacs_libregnum_set_label_style,
+       Scmacs_libregnum_set_label_style, 1, 5, 0,
+       doc: /* Configure BUFFER's in-scene label appearance.
+PX is the text height in pixels, SHADOW draws a drop shadow, DECLUTTER
+drops labels that would overlap one already placed (the selection and
+the hovered node are never dropped), and MAX-LABELS caps how many are
+drawn per frame.  */)
+  (Lisp_Object buffer, Lisp_Object px, Lisp_Object shadow,
+   Lisp_Object declutter, Lisp_Object max_labels)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  cmacs_libregnum_render_ctx_set_label_style
+    (cmacs_libregnum_view_get_render_ctx (v),
+     FIXNUMP (px) ? (int) XFIXNUM (px) : 0,
+     !NILP (shadow), !NILP (declutter),
+     FIXNUMP (max_labels) ? (int) XFIXNUM (max_labels) : 0);
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-nearest-in-direction",
+       Fcmacs_libregnum_nearest_in_direction,
+       Scmacs_libregnum_nearest_in_direction, 4, 6, 0,
+       doc: /* Return the node nearest FROM in screen direction (DX . DY).
+
+DX and DY are a screen-space direction with y growing downward; they
+need not be normalised.  CONE-DEGREES is the half-angle of the search
+cone (default 45).  VISIBLE-ONLY, when non-nil, ignores nodes the scene
+considers hidden.  Returns a node id, or nil when nothing qualifies.
+
+This is what makes h/j/k/l mean \"the node over there\" on a graph that
+has no rows or columns.  */)
+  (Lisp_Object buffer, Lisp_Object from, Lisp_Object dx, Lisp_Object dy,
+   Lisp_Object cone_degrees, Lisp_Object visible_only)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (from);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+
+  int vw = 0, vh = 0;
+  cmacs_libregnum_view_get_size (v, &vw, &vh);
+
+  double deg = FIXNUMP (cone_degrees) ? (double) XFIXNUM (cone_degrees)
+               : FLOATP (cone_degrees) ? XFLOAT_DATA (cone_degrees)
+               : 45.0;
+  if (deg <= 0.0) deg = 45.0;
+  if (deg >= 89.0) deg = 89.0;
+
+  gint hit = cmacs_libregnum_render_ctx_nearest_in_direction
+    (cmacs_libregnum_view_get_render_ctx (v), (gint) XFIXNUM (from),
+     cmacs_libregnum__to_double (dx), cmacs_libregnum__to_double (dy),
+     vw, vh, cos (deg * M_PI / 180.0), !NILP (visible_only));
+  return (hit < 0) ? Qnil : make_fixnum (hit);
+}
+
+DEFUN ("cmacs-libregnum-node-onscreen-p", Fcmacs_libregnum_node_onscreen_p,
+       Scmacs_libregnum_node_onscreen_p, 2, 3, 0,
+       doc: /* Return non-nil if node ID is inside BUFFER's viewport.
+MARGIN insets the test rectangle, so a node hugging the edge counts as
+off-screen.  */)
+  (Lisp_Object buffer, Lisp_Object id, Lisp_Object margin)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (id);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+
+  int vw = 0, vh = 0;
+  cmacs_libregnum_view_get_size (v, &vw, &vh);
+  return cmacs_libregnum_render_ctx_node_onscreen_p
+           (cmacs_libregnum_view_get_render_ctx (v), (gint) XFIXNUM (id),
+            vw, vh,
+            FIXNUMP (margin) ? (double) XFIXNUM (margin) : 0.0)
+         ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-libregnum-set-match-set", Fcmacs_libregnum_set_match_set,
+       Scmacs_libregnum_set_match_set, 2, 3, 0,
+       doc: /* Mark node IDS in BUFFER as search matches.
+
+IDS is a vector or list of node ids; nil clears the set.  With non-nil
+DIM-REST, every other node is de-emphasised, which is what makes a
+handful of matches readable on a crowded graph.
+
+One call replaces the whole set, so an incremental search costs one
+call per keystroke rather than one per node.  */)
+  (Lisp_Object buffer, Lisp_Object ids, Lisp_Object dim_rest)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+
+  Lisp_Object vec = NILP (ids) ? Qnil
+                    : (VECTORP (ids) ? ids : Fvconcat (1, &ids));
+  ptrdiff_t n = NILP (vec) ? 0 : ASIZE (vec);
+  gint *buf = (n > 0) ? xnmalloc (n, sizeof *buf) : NULL;
+  ptrdiff_t i, k = 0;
+
+  for (i = 0; i < n; i++)
+    {
+      Lisp_Object e = AREF (vec, i);
+      if (FIXNUMP (e)) buf[k++] = (gint) XFIXNUM (e);
+    }
+  cmacs_libregnum_render_ctx_set_match_set
+    (cmacs_libregnum_view_get_render_ctx (v), buf, (gsize) k,
+     !NILP (dim_rest));
+  xfree (buf);
+  cmacs_libregnum_view_request_redraw (v);
+  return make_fixnum (k);
+}
+
+DEFUN ("cmacs-libregnum-set-node-flags", Fcmacs_libregnum_set_node_flags,
+       Scmacs_libregnum_set_node_flags, 3, 3, 0,
+       doc: /* Set node ID's flag bitmask in BUFFER to FLAGS.
+Bit 0 is a search match, bit 1 de-emphasised, bit 2 pinned, bit 3 a
+neighbour of the selection.  */)
+  (Lisp_Object buffer, Lisp_Object id, Lisp_Object flags)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (id);
+  CHECK_FIXNUM (flags);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  cmacs_libregnum_render_ctx_set_node_flags
+    (cmacs_libregnum_view_get_render_ctx (v), (gint) XFIXNUM (id),
+     (guint) XFIXNUM (flags));
+  return flags;
+}
+
+DEFUN ("cmacs-libregnum-clear-node-flags", Fcmacs_libregnum_clear_node_flags,
+       Scmacs_libregnum_clear_node_flags, 2, 2, 0,
+       doc: /* Clear the bits in MASK on every node of BUFFER.  */)
+  (Lisp_Object buffer, Lisp_Object mask)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (mask);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  cmacs_libregnum_render_ctx_clear_node_flags
+    (cmacs_libregnum_view_get_render_ctx (v), (guint) XFIXNUM (mask));
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-node-flags", Fcmacs_libregnum_node_flags,
+       Scmacs_libregnum_node_flags, 2, 2, 0,
+       doc: /* Return the flag bitmask of node ID in BUFFER.  */)
+  (Lisp_Object buffer, Lisp_Object id)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (id);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  return make_fixnum
+    (cmacs_libregnum_render_ctx_get_node_flags
+       (cmacs_libregnum_view_get_render_ctx (v), (gint) XFIXNUM (id)));
+}
+
+DEFUN ("cmacs-libregnum-set-label-decor", Fcmacs_libregnum_set_label_decor,
+       Scmacs_libregnum_set_label_decor, 1, 3, 0,
+       doc: /* Decorate BUFFER's in-scene labels.
+With non-nil BACKDROP each label gets a translucent plate behind it, so
+the scene's own geometry does not run through the text.  With non-nil
+RINGS the selected, hovered and matched nodes get screen-space emphasis
+rings, which read the same at any zoom level.  */)
+  (Lisp_Object buffer, Lisp_Object backdrop, Lisp_Object rings)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  cmacs_libregnum_render_ctx_set_label_decor
+    (cmacs_libregnum_view_get_render_ctx (v), !NILP (backdrop), !NILP (rings));
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-set-selection-style",
+       Fcmacs_libregnum_set_selection_style,
+       Scmacs_libregnum_set_selection_style, 2, 2, 0,
+       doc: /* Set how BUFFER marks its selected node.
+STYLE is `box' (a wireframe cube, the default, right for scenes whose
+nodes are boxes), `halo' (a wireframe shell, right for spheres), or
+`none' for a scene that draws its own marker.  */)
+  (Lisp_Object buffer, Lisp_Object style)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  int st = CMACS_LIBREGNUM_SELECTION_BOX;
+  if (EQ (style, Qcmacs_sel_halo))      st = CMACS_LIBREGNUM_SELECTION_HALO;
+  else if (EQ (style, Qcmacs_sel_none)) st = CMACS_LIBREGNUM_SELECTION_NONE;
+  cmacs_libregnum_render_ctx_set_selection_style
+    (cmacs_libregnum_view_get_render_ctx (v), st);
+  cmacs_libregnum_view_request_redraw (v);
+  return style;
+}
+
+DEFUN ("cmacs-libregnum-pan", Fcmacs_libregnum_pan,
+       Scmacs_libregnum_pan, 3, 3, 0,
+       doc: /* Pan BUFFER's camera by DX and DY, in pixels of drag.
+Works whether or not orbiting is locked, so a flat view can still be
+moved around.  */)
+  (Lisp_Object buffer, Lisp_Object dx, Lisp_Object dy)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  cmacs_libregnum_render_ctx_pan_camera
+    (cmacs_libregnum_view_get_render_ctx (v),
+     cmacs_libregnum__to_double (dx), cmacs_libregnum__to_double (dy));
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-set-right-drag-pans",
+       Fcmacs_libregnum_set_right_drag_pans,
+       Scmacs_libregnum_set_right_drag_pans, 2, 2, 0,
+       doc: /* Make a right-drag in BUFFER pan when PANS is non-nil.
+
+The default is the CAD navigation profile: either mouse button orbits
+and the middle one pans.  With PANS, right-drag pans instead -- what a
+map-like scene wants, and what a user with no middle button can
+actually reach.  A right-click without movement still opens the context
+menu either way.  */)
+  (Lisp_Object buffer, Lisp_Object pans)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  cmacs_libregnum_render_ctx_set_right_drag_pans
+    (cmacs_libregnum_view_get_render_ctx (v), !NILP (pans));
+  return pans;
+}
+
+DEFUN ("cmacs-libregnum-set-wheel-up-zooms-in",
+       Fcmacs_libregnum_set_wheel_up_zooms_in,
+       Scmacs_libregnum_set_wheel_up_zooms_in, 2, 2, 0,
+       doc: /* Make the wheel zoom conventionally in BUFFER when UP-ZOOMS-IN.
+
+Scrolling up then moves the camera closer, as it does in every map and
+3-D viewer.  The inherited libregnum behaviour is the opposite --
+scroll down to move closer -- and is what you get with a nil argument,
+so scenes that shipped with it are not flipped underneath them.  */)
+  (Lisp_Object buffer, Lisp_Object up_zooms_in)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  cmacs_libregnum_render_ctx_set_wheel_up_zooms_in
+    (cmacs_libregnum_view_get_render_ctx (v), !NILP (up_zooms_in));
+  return up_zooms_in;
+}
+
+DEFUN ("cmacs-libregnum-orbit", Fcmacs_libregnum_orbit,
+       Scmacs_libregnum_orbit, 3, 3, 0,
+       doc: /* Orbit BUFFER's camera by DX and DY, in pixels of drag.
+A no-op when the view has orbiting locked (a flat scene viewed
+head-on).  Returns the new camera state.  */)
+  (Lisp_Object buffer, Lisp_Object dx, Lisp_Object dy)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  cmacs_libregnum_render_ctx_orbit_camera
+    (cmacs_libregnum_view_get_render_ctx (v),
+     cmacs_libregnum__to_double (dx), cmacs_libregnum__to_double (dy));
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-libregnum-set-orbit-locked", Fcmacs_libregnum_set_orbit_locked,
+       Scmacs_libregnum_set_orbit_locked, 2, 2, 0,
+       doc: /* Stop BUFFER's camera orbiting when LOCKED is non-nil.
+Pan and zoom keep working.  Intended for a scene whose content is
+planar and viewed head-on, where tumbling would only reveal that
+everything is coplanar.  */)
+  (Lisp_Object buffer, Lisp_Object locked)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  cmacs_libregnum_render_ctx_set_orbit_locked
+    (cmacs_libregnum_view_get_render_ctx (v), !NILP (locked));
+  return locked;
+}
+
+DEFUN ("cmacs-libregnum-ink-bbox", Fcmacs_libregnum_ink_bbox,
+       Scmacs_libregnum_ink_bbox, 1, 1, 0,
+       doc: /* Return the drawn extent of BUFFER's scene as (MINX MINY MAXX MAXY).
+
+Coordinates are view-local pixels in the orientation you see on screen,
+so they can be compared directly against `cmacs-libregnum-project'.
+Renders a frame synchronously, so it works headless.  Returns nil when
+the frame is entirely background.
+
+Intended for automated render verification: a snapshot shows that pixels
+changed, this shows where.  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+  if (!cmacs_libregnum_render_ctx_ink_bbox
+        (cmacs_libregnum_view_get_render_ctx (v), &x0, &y0, &x1, &y1))
+    return Qnil;
+  return list4 (make_fixnum (x0), make_fixnum (y0),
+                make_fixnum (x1), make_fixnum (y1));
 }
 
 DEFUN ("cmacs-libregnum-camera-state", Fcmacs_libregnum_camera_state,
@@ -2356,6 +2740,15 @@ void
 syms_of_cmacs_libregnum_defuns (void)
 {
   DEFSYM (Qcmacs_libregnum_error, "cmacs-libregnum-error");
+  /* Per-node label policy symbols (cmacs-libregnum-set-node-label-mode).
+     Namespaced C names because `never'/`always'/`hover'/`selected' are
+     far too generic to claim as global DEFSYMs. */
+  DEFSYM (Qcmacs_label_never, "never");
+  DEFSYM (Qcmacs_label_selected, "selected");
+  DEFSYM (Qcmacs_label_hover, "hover");
+  DEFSYM (Qcmacs_label_always, "always");
+  DEFSYM (Qcmacs_sel_halo, "halo");
+  DEFSYM (Qcmacs_sel_none, "none");
   Fput (Qcmacs_libregnum_error, Qerror_conditions,
         list2 (Qcmacs_libregnum_error, Qerror));
   Fput (Qcmacs_libregnum_error, Qerror_message,
@@ -2395,6 +2788,24 @@ syms_of_cmacs_libregnum_defuns (void)
   defsubr (&Scmacs_libregnum_animated_p);
   defsubr (&Scmacs_libregnum_tree_nodes);
   defsubr (&Scmacs_libregnum_set_selection);
+  defsubr (&Scmacs_libregnum_set_node_label_mode);
+  defsubr (&Scmacs_libregnum_set_inscene_labels);
+  defsubr (&Scmacs_libregnum_set_label_font);
+  defsubr (&Scmacs_libregnum_set_label_style);
+  defsubr (&Scmacs_libregnum_set_label_decor);
+  defsubr (&Scmacs_libregnum_set_selection_style);
+  defsubr (&Scmacs_libregnum_pan);
+  defsubr (&Scmacs_libregnum_set_right_drag_pans);
+  defsubr (&Scmacs_libregnum_set_wheel_up_zooms_in);
+  defsubr (&Scmacs_libregnum_orbit);
+  defsubr (&Scmacs_libregnum_set_orbit_locked);
+  defsubr (&Scmacs_libregnum_ink_bbox);
+  defsubr (&Scmacs_libregnum_nearest_in_direction);
+  defsubr (&Scmacs_libregnum_node_onscreen_p);
+  defsubr (&Scmacs_libregnum_set_match_set);
+  defsubr (&Scmacs_libregnum_set_node_flags);
+  defsubr (&Scmacs_libregnum_clear_node_flags);
+  defsubr (&Scmacs_libregnum_node_flags);
   defsubr (&Scmacs_libregnum_build_tree);
   defsubr (&Scmacs_libregnum_build_gobject);
   defsubr (&Scmacs_libregnum_build_mindmap);

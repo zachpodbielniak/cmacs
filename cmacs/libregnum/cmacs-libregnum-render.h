@@ -198,6 +198,157 @@ extern void cmacs_libregnum_render_ctx_set_hovered
 extern gint cmacs_libregnum_render_ctx_get_hovered
                               (CmacsLibregnumRenderCtx *r);
 
+/* Single source of truth for the per-node label policy above, shared by
+ * the in-scene pass and the legacy cairo overlay so they cannot
+ * disagree. */
+extern gboolean cmacs_libregnum_render_ctx_label_visible_p
+                              (CmacsLibregnumRenderCtx *r, guint id);
+
+/* ── In-scene labels ─────────────────────────────────────────────
+ * Node labels are drawn by default in cmacs-libregnum-overlay.c, in
+ * cairo, from pgtk_handle_draw -- which means they do not exist under
+ * `emacs --lrg', and never appear in a snapshot_png.  Turning this on
+ * moves them INTO the FBO, drawn as a screen-space pass at the end of
+ * render_to_bgra: both backends funnel through that function, so one
+ * code path serves both and the result is testable.
+ *
+ * The cairo pass suppresses itself when this is on, so nothing is
+ * double-drawn under pgtk.  Contexts that never call this keep the
+ * legacy behaviour byte for byte. */
+extern void     cmacs_libregnum_render_ctx_set_inscene_labels
+                              (CmacsLibregnumRenderCtx *r, gboolean on);
+extern gboolean cmacs_libregnum_render_ctx_inscene_labels_p
+                              (CmacsLibregnumRenderCtx *r);
+
+/* Suppress orbiting; pan and zoom keep working.  For a scene whose
+ * content is planar and viewed head-on there is nothing to orbit
+ * around, and tumbling it only reveals that everything is coplanar. */
+extern void     cmacs_libregnum_render_ctx_set_orbit_locked
+                              (CmacsLibregnumRenderCtx *r, gboolean locked);
+extern gboolean cmacs_libregnum_render_ctx_orbit_locked_p
+                              (CmacsLibregnumRenderCtx *r);
+
+/* What a right-drag does.  The default (FALSE) is the CAD profile:
+ * either button orbits, the middle one pans.  TRUE makes right-drag pan
+ * instead, which is what a map-like scene wants -- and what a user with
+ * no middle button can actually reach.  A right-click without movement
+ * still opens the context menu either way. */
+extern void     cmacs_libregnum_render_ctx_set_right_drag_pans
+                              (CmacsLibregnumRenderCtx *r, gboolean pans);
+extern gboolean cmacs_libregnum_render_ctx_right_drag_pans_p
+                              (CmacsLibregnumRenderCtx *r);
+
+/* Which way the wheel zooms.  GDK reports a positive delta for scrolling
+ * DOWN and the zoom kernel moves closer for a positive amount, so the
+ * inherited behaviour is "scroll down to move closer" -- the opposite of
+ * every map, browser and 3-D viewer.  TRUE selects the conventional
+ * direction (wheel up moves closer).  Default FALSE, so scenes that
+ * shipped with the old direction keep it until they opt in. */
+extern void     cmacs_libregnum_render_ctx_set_wheel_up_zooms_in
+                              (CmacsLibregnumRenderCtx *r,
+                               gboolean up_zooms_in);
+extern gboolean cmacs_libregnum_render_ctx_wheel_up_zooms_in_p
+                              (CmacsLibregnumRenderCtx *r);
+
+/* Current framebuffer size; scene builders need the aspect to frame
+ * their content. */
+extern void cmacs_libregnum_render_ctx_get_size
+                              (CmacsLibregnumRenderCtx *r, int *w, int *h);
+
+/* Load a TTF for label text.  Without one, labels fall back to raylib's
+ * built-in 10px bitmap font, which is ragged at any other size.  Bake
+ * BASE_PX large (32 is a good default) and draw smaller: downscaling
+ * through the bilinear filter is what makes it look right, and it makes
+ * the draw size a free runtime knob.  BASE_PX <= 0 uses the loader's
+ * default size. */
+extern void cmacs_libregnum_render_ctx_set_label_font
+                              (CmacsLibregnumRenderCtx *r,
+                               const char *ttf_path, int base_px);
+
+/* PX is the draw height (0 = built-in default), SHADOW draws a 1px
+ * offset drop shadow, DECLUTTER drops labels that would overlap one
+ * already placed (selection and hover are exempt), and MAX_LABELS caps
+ * how many are drawn per frame (0 = built-in default). */
+extern void cmacs_libregnum_render_ctx_set_label_style
+                              (CmacsLibregnumRenderCtx *r, int px,
+                               gboolean shadow, gboolean declutter,
+                               int max_labels);
+
+/* BACKDROP draws a translucent plate behind each label -- over a dense
+ * scene the geometry runs straight through the text otherwise.  RINGS
+ * draws screen-space emphasis rings on the selected, hovered and
+ * matched nodes; being screen-space, they read the same at any zoom,
+ * which a fixed world-space marker does not.  Both off by default. */
+extern void cmacs_libregnum_render_ctx_set_label_decor
+                              (CmacsLibregnumRenderCtx *r,
+                               gboolean backdrop, gboolean rings);
+
+/* How the selected node is marked in the 3D pass.  The legacy wireframe
+ * box suits scenes whose nodes are boxes (the file tree, the editor); a
+ * scene made of spheres wants HALO, and one drawing its own
+ * screen-space rings wants NONE. */
+typedef enum
+{
+  CMACS_LIBREGNUM_SELECTION_BOX  = 0,   /* legacy default */
+  CMACS_LIBREGNUM_SELECTION_NONE = 1,
+  CMACS_LIBREGNUM_SELECTION_HALO = 2
+} CmacsLibregnumSelectionStyle;
+
+extern void cmacs_libregnum_render_ctx_set_selection_style
+                              (CmacsLibregnumRenderCtx *r, int style);
+
+/* ── Per-node flags ──────────────────────────────────────────────
+ * A bitmask that coexists with the single `selected' index rather than
+ * competing with it: a search match set and a selection are different
+ * things and must both be expressible at once.  MATCH and DIM together
+ * give the "highlight these, fade the rest" reading that makes a search
+ * legible on a crowded graph. */
+typedef enum
+{
+  CMACS_LIBREGNUM_NODE_MATCH     = 1u << 0,  /* a search hit */
+  CMACS_LIBREGNUM_NODE_DIM       = 1u << 1,  /* de-emphasised */
+  CMACS_LIBREGNUM_NODE_PINNED    = 1u << 2,  /* user pinned */
+  CMACS_LIBREGNUM_NODE_NEIGHBOUR = 1u << 3   /* one hop from the selection */
+} CmacsLibregnumNodeFlags;
+
+extern void  cmacs_libregnum_render_ctx_set_node_flags
+                              (CmacsLibregnumRenderCtx *r, gint id,
+                               guint flags);
+extern guint cmacs_libregnum_render_ctx_get_node_flags
+                              (CmacsLibregnumRenderCtx *r, gint id);
+extern void  cmacs_libregnum_render_ctx_clear_node_flags
+                              (CmacsLibregnumRenderCtx *r, guint mask);
+
+/* Bulk update: clear MATCH everywhere, set it on IDS, and set DIM on
+ * everything else when DIM_REST.  One call per keystroke rather than
+ * one per node, which is the difference between a usable incremental
+ * search and an unusable one. */
+extern void  cmacs_libregnum_render_ctx_set_match_set
+                              (CmacsLibregnumRenderCtx *r,
+                               const gint *ids, gsize n,
+                               gboolean dim_rest);
+
+/* ── Spatial navigation ──────────────────────────────────────────
+ * Nearest node to FROM within a screen-space cone pointing (DX,DY)
+ * (y downward, need not be normalised).  CONE_COS is the minimum
+ * cosine of the angle to that axis; 0.7071 is a 45-degree half-cone.
+ * -1 when nothing qualifies.
+ *
+ * In C because the alternative is one projection call per candidate per
+ * keypress from Lisp, against a camera that may be mid-tween. */
+extern gint cmacs_libregnum_render_ctx_nearest_in_direction
+                              (CmacsLibregnumRenderCtx *r, gint from,
+                               double dx, double dy, int vw, int vh,
+                               double cone_cos, gboolean visible_only);
+
+/* TRUE when node ID projects inside the viewport, inset by MARGIN_PX.
+ * Lets a caller move the camera only when the target would otherwise be
+ * off-screen -- flying on every step invalidates the very projection
+ * the spatial keys navigate by. */
+extern gboolean cmacs_libregnum_render_ctx_node_onscreen_p
+                              (CmacsLibregnumRenderCtx *r, gint id,
+                               int vw, int vh, double margin_px);
+
 /* ── Scene node model ────────────────────────────────────────────
  * A scene builder records one entry per pickable/labelable node,
  * parallel to the drawables.  Node id == insertion index.  Cleared
@@ -210,6 +361,12 @@ extern guint cmacs_libregnum_render_ctx_add_node
                                float hw, float hh, float hd);
 extern guint cmacs_libregnum_render_ctx_node_count
                               (CmacsLibregnumRenderCtx *r);
+/* Move node ID's pick box.  Scene builders that mutate their drawables
+ * in place (an animated layout, a dragged node) must call this as well,
+ * or picking and labelling keep pointing at the old position. */
+extern void cmacs_libregnum_render_ctx_move_node
+                              (CmacsLibregnumRenderCtx *r, gint id,
+                               float x, float y, float z);
 /* PATH/NAME are borrowed (valid until the next clear/rebuild). */
 extern gboolean cmacs_libregnum_render_ctx_node_info
                               (CmacsLibregnumRenderCtx *r, guint id,
@@ -259,6 +416,19 @@ extern gboolean cmacs_libregnum_render_ctx_render_into_fbo
  * ctx is resized or freed.  NULL if the FBO is invalid. */
 extern gpointer cmacs_libregnum_render_ctx_get_fbo_texture
                               (CmacsLibregnumRenderCtx *r);
+
+/* Bounding box of the non-background pixels in a freshly rendered
+ * frame, in DISPLAYED orientation (y downward, matching what `project'
+ * and `label_at' report).  Synchronous, so it works headless.
+ *
+ * For automated render verification: a snapshot proves pixels changed,
+ * this proves they changed in the right place -- which matters because
+ * the colour attachment is bottom-up while the blit flips it, so an
+ * overlay pass that forgets the flip still changes pixels, just
+ * mirrored.  FALSE when the frame is entirely background. */
+extern gboolean cmacs_libregnum_render_ctx_ink_bbox
+                              (CmacsLibregnumRenderCtx *r,
+                               int *minx, int *miny, int *maxx, int *maxy);
 
 /* Render the current frame and write it to PATH as a PNG.  Synchronous
  * (renders + reads back immediately, independent of the animation clock),
