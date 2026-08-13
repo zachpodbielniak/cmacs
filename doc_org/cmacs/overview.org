@@ -7,43 +7,131 @@
 CMacs is GNU Emacs with deep GLib/GObject/Wayland integration.  It adds
 several subsystems as C primitives (DEFUNs), all built into the editor:
 
-| Subsystem  | Directory        | Purpose                                              |
-|------------+------------------+------------------------------------------------------|
-| *glib*     | =cmacs/glib/=    | GMainContext event loop integration, D-Bus, dispatch |
-| *gobject*  | =cmacs/gobject/= | GObject <-> Lisp bridge, GClosure wrappers            |
-| *gi*       | =cmacs/gi/=      | GObject Introspection --- call any GI library         |
-| *api*      | =cmacs/api/=     | Shared C library (libcmacs-api.so) for editor control |
-| *crispy*   | =cmacs/crispy/=  | C scripting --- compile and run C at runtime          |
-| *bacon*    | =cmacs/bacon/=   | Embedded shell (fork-of-self, socketpair IPC)         |
-| *gowl*     | =cmacs/gowl/=    | Wayland compositor (wlroots) --- 47 DEFUNs            |
-| *print*    | =cmacs/print/=   | "Print to cmacs" CUPS virtual printer + PDF intake    |
-| *audio*    | =cmacs/audio/=   | GStreamer audio capture + playback, =#+BEGIN_AUDIO=   |
-| *whisper*  | =cmacs/whisper/= | Offline STT via whisper.cpp; live dictation           |
-| *piper*    | =cmacs/piper/=   | Offline TTS via Piper subprocess; PGTK context menu   |
-| *cintrospect* | =cmacs/cintrospect/= | Runtime C self-introspection (libdw + JIT)      |
-| *cpatch*   | =cmacs/cpatch/=  | Runtime C hot-patching (DEFUN swap + detours)         |
-| *roamgraph* | =cmacs/roamgraph/= | org-roam knowledge graph as a live 2D/3D scene    |
+The list below is the compile-time feature set.  It is generated from
+the same table that backs the =IS-CMACS-*= variables ---
+=cmacs/core/cmacs-features.c=, the single source of truth for what is
+built in --- so =(cmacs-compiled-features)= in a live editor returns
+exactly these names.  Ask =(cmacs-feature-p 'roamgraph)= for one of them,
+or read [[file:build.org][build.org]] for the configure flags.
+
+** Foundations
+
+| Subsystem      | Directory            | Purpose                                                   |
+|----------------+----------------------+-----------------------------------------------------------|
+| *glib*         | =cmacs/glib/=          | GMainContext event-loop integration, D-Bus, eval dispatch |
+| *gobject*      | =cmacs/gobject/=       | GObject ↔ Lisp bridge, GClosure wrappers                  |
+| *gi*           | =cmacs/gi/=            | GObject Introspection --- call any GI-registered library    |
+| *api*          | =cmacs/api/=           | Shared C library (=libcmacs-api.so=) for editor control     |
+| *dbus*         | =cmacs/dbus/=          | The =org.cmacs.Editor1= surface and its events firehose     |
+| *mcp*          | =cmacs/mcp/=           | MCP server over a Unix socket; AI-native introspection    |
+| *emacsctl*     | =cmacs/emacsctl/=      | kubectl-style CLI over D-Bus; standalone binary           |
+
+** Languages and shells
+
+| Subsystem      | Directory            | Purpose                                                   |
+|----------------+----------------------+-----------------------------------------------------------|
+| *crispy*       | =cmacs/crispy/=        | Embedded C-like GObject scripting; compile and run at runtime |
+| *bacon*        | =cmacs/bacon/=         | Embedded shell (fork-of-self =--bacon=, socketpair IPC)     |
+| *lrgscript*    | =cmacs/lrgscript/=     | Emacs Lisp as a libregnum scripting language + game authoring |
+| *lsp*          | =cmacs/lsp/=           | In-binary LSP servers (=emacs --cmacs-lsp LANG=)            |
+| *cintrospect*  | =cmacs/cintrospect/=   | Runtime C self-introspection (DWARF + libgccjit)          |
+| *cpatch*       | =cmacs/cpatch/=        | Runtime C hot-patching (Lisp_Subr swap + detours)         |
+
+** Desktop and web
+
+| Subsystem      | Directory            | Purpose                                                   |
+|----------------+----------------------+-----------------------------------------------------------|
+| *gowl*         | =cmacs/gowl/=          | wlroots Wayland compositor --- Emacs *is* the window manager  |
+| *gsurf*        | =cmacs/gsurf/=         | Embedded web browser as live WebKitGTK buffers            |
+| *gsurf-lrg*    | =cmacs/gsurf/=         | GTK-free gsurf backend, for =emacs --lrg=                   |
+| *podomation*   | =cmacs/podomation/=    | Event-driven automation engine --- DSL + REPL               |
+| *print*        | =cmacs/print/=         | "Print to cmacs" CUPS virtual printer → annotatable org    |
+| *org-ex*       | =cmacs/org-ex/=        | Interactive widget embedding for Org; includes cmacs-ink   |
+
+** Graphics and media
+
+| Subsystem      | Directory            | Purpose                                                   |
+|----------------+----------------------+-----------------------------------------------------------|
+| *libregnum*    | =cmacs/libregnum/=     | raylib game engine as embedded 3D scene buffers           |
+| *lrgterm*      | =cmacs/lrgterm/=       | =output_lrg=: a libregnum display backend, peer to pgtk     |
+| *gnuseye*      | =cmacs/gnuseye/=       | "GNU's Eye": live planetary situational-awareness globe   |
+| *roamgraph*    | =cmacs/roamgraph/=     | org-roam knowledge graph as a live 2D/3D scene            |
+| *imgedit*      | =cmacs/imgedit/=       | 2D image / sprite editor (layers, blend modes, undo)      |
+| *vidstudio*    | =cmacs/vidstudio/=     | Video editor on libregnum's Reel timeline                 |
+| *screensaver*  | =cmacs/screensaver/=   | libregnum screensavers as wallpaper / lock / buffer       |
+| *cad*          | =cmacs/cad/=           | Parametric CAD parts (=.cad=/=.ccad= via cad-glib)          |
+| *video*        | =cmacs/video/=         | GStreamer video overlay (playbin3 → Cairo blit)           |
+| *audio*        | =cmacs/audio/=         | GStreamer audio capture + playback, =#+BEGIN_AUDIO=         |
+| *transcode*    | =lisp/cmacs/=          | Batch video/audio transcoder (pure Elisp, ffmpeg)         |
+
+** Voice and AI
+
+| Subsystem      | Directory            | Purpose                                                   |
+|----------------+----------------------+-----------------------------------------------------------|
+| *whisper*      | =cmacs/whisper/=       | Offline STT via whisper.cpp; live dictation               |
+| *piper*        | =cmacs/piper/=         | Offline TTS via a Piper subprocess                        |
+| *transcribe*   | =lisp/cmacs/=          | Batch speech-to-text (pure Elisp; whisper + transcode)    |
+| *ai*           | =cmacs/ai/=            | Coding-agent surface over ai-glib --- 8 providers, streaming |
+| *ai-brigade*   | =cmacs/ai-brigade/=    | The AI fabric: agents, memory index, extensible tool bus  |
+| *libreclaw*    | =cmacs/libreclaw/=     | Chat gateway --- embedded LcApp and remote MCP bridge       |
+
+** Tools
+
+| Subsystem      | Directory            | Purpose                                                   |
+|----------------+----------------------+-----------------------------------------------------------|
+| *calculator*   | =cmacs/calculator/=    | Desktop / financial / physics / CAS over GNU Calc          |
+
+Two entries are pure Elisp and so have no =cmacs/<name>/= directory:
+*transcode* and *transcribe* live entirely in =lisp/cmacs/=.  *gsurf-lrg*
+is a second backend inside =cmacs/gsurf/= rather than a subsystem of its
+own, but it carries its own configure flag and so its own feature name.
 
 * Source Layout
 
 #+begin_example
-cmacs/                C source for all subsystems
+cmacs/                C source, one directory per subsystem
+  core/               Feature registry (cmacs-features.c) -- always linked
   glib/               GLib loop, D-Bus, eval dispatch
-  gobject/            GObject bridge, GClosure
-  gi/                 GObject Introspection bridge
+  gobject/  gi/       GObject bridge; GObject Introspection
+  dbus/               org.cmacs.Editor1 surface + events firehose
   api/                Shared C library (libcmacs-api.so)
-  crispy/             Crispy language integration
-  bacon/              Bacon shell integration + IPC
-    modules/          Bacon native modules (starship, fzf, etc.)
+  crispy/  bacon/     C scripting; embedded shell
+    bacon/modules/    Bacon native modules (starship, fzf, ...)
   gowl/               Wayland compositor
+  gsurf/              Embedded web browser (+ its --lrg backend)
+    gsurf/modules/    gsurf native modules
+  libregnum/          3D scene buffers; the shared render context
+  lrgterm/            output_lrg display backend
+  lrgscript/          Elisp as a libregnum scripting language
+  gnuseye/            Planetary globe
+  roamgraph/          org-roam knowledge graph
+  imgedit/  vidstudio/  Image and video editors
+  screensaver/        Screensavers as wallpaper / lock / buffer
+    screensaver/render/  Out-of-process render child
+  cad/                Parametric CAD
+  video/  audio/  whisper/  piper/   Media, STT, TTS
+  ai/  ai-brigade/  libreclaw/       AI surface, fabric, chat gateway
+  calculator/  lsp/   Calculator; in-binary LSP servers
+  podomation/         Automation engine
+  org-ex/             Org widget embedding (+ org-ex/lib/)
+  mcp/                MCP server
+  emacsctl/           emacsctl/cmacsctl CLI (standalone binary)
+  cintrospect/  cpatch/   Runtime C introspection and hot-patching
+  print/              CUPS virtual printer
   compat/             Compatibility shims
   cmacs.h             Master header
-deps/                 Git submodules (crispy, bacon, gowl)
+deps/                 Git submodules (crispy, bacon, gowl, libregnum, ...)
 lisp/cmacs/           Elisp layer for each subsystem
-test/cmacs/           ERT tests for each subsystem
+test/cmacs/           ERT tests, one file per subsystem
 doc/cmacs/            Texinfo manual
 doc_org/cmacs/        Org manual (this documentation)
 #+end_example
+
+Every =.c= named in a subsystem's =CMACS_*_OBJ= is symlinked from
+=cmacs/<dir>/= into =src/= by the =cmacs-symlinks= target and compiled by
+the ordinary =src/= rules, which is why there is no per-directory
+Makefile.  =CMACS_DIRS= in =src/Makefile.in= lists the directories that
+target searches.
 
 * How The Pieces Fit Together
 
