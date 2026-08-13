@@ -1,0 +1,105 @@
+#+TITLE: Roamgraph — Comprehensive Reference
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:2 num:t
+
+This directory is the long-form reference for =--with-cmacs-roamgraph=. The user-facing manual is [[file:../cmacs-roamgraph.org][cmacs-roamgraph.org]]; the Info chapter is [[file:../../../doc/cmacs/roamgraph/roamgraph.texi][roamgraph.texi]].
+
+| File                    | What it covers                                            |
+|-------------------------+-----------------------------------------------------------|
+| [[file:README.org][README.org]]              | What it is, the design pillars, how it is put together    |
+| [[file:reference.org][reference.org]]           | The plist schemas, every DEFUN, every key, every defcustom |
+| [[file:extending.org][extending.org]]           | Writing a data source, adding an inspector action         |
+
+* What roamgraph is
+
+=M-x cmacs-roamgraph= renders your org-roam link graph as a live libregnum scene inside a cmacs buffer. It is the in-editor replacement for [[https://github.com/org-roam/org-roam-ui][org-roam-ui]], which runs a local web server and drives a browser.
+
+Everything happens inside the editor: orbit with the mouse, click a note to select it, navigate by keyboard, search incrementally, press =RET= to open the note at exactly the heading it lives under. It renders identically under pgtk and under =emacs --lrg=.
+
+* Design pillars
+
+** The data is Elisp's, the geometry is C's
+
+C owns the graph store, the force solver, the pick ray, the node table and the drawables. Elisp owns where the notes come from, what a click means, and every pane. C never touches org-roam, and never opens a file.
+
+The whole contract is one DEFUN — =cmacs-roamgraph-set-graph= — taking a vector of node plists and a vector of edge plists. Everything else is a consequence of that: a new data source is a function returning those two vectors, and needs no C at all.
+
+** Three translation-unit classes, not two
+
+The usual libregnum firewall has two sides: files that include =<libregnum.h>= (raylib's =Color= clashes with pgtk's) and files that include =lisp.h=. roamgraph adds a third that includes *neither*, only glib:
+
+| File                       | Includes           | Why                                     |
+|----------------------------+--------------------+-----------------------------------------|
+| =cmacs-roamgraph-scene.c=    | =<libregnum.h>=      | Drawables, node table, camera           |
+| =cmacs-roamgraph-defuns.c=   | =lisp.h=             | The Elisp boundary                      |
+| =cmacs-roamgraph-scan.c=     | =lisp.h=             | The native scanner backend              |
+| =cmacs-roamgraph-graph.c=    | *neither*          | Node/edge store, CSR adjacency          |
+| =cmacs-roamgraph-layout.c=   | *neither*          | Fruchterman–Reingold + Barnes–Hut       |
+
+That third class is the point. The graph model and the solver can be exercised with no Lisp VM and no GL context, which is why the layout has real unit assertions — determinism, convergence, an equilateral triangle, component separation, Barnes–Hut checked against its own exact mode — rather than only screenshots. It is the same split gnuseye uses for its geodesy ([[file:../gnuseye/README.org][cmacs-gnuseye-geomath.h]]).
+
+** Ids, never indices
+
+libregnum scene node ids are insertion indices and churn on *every* rebuild. So every piece of state — selection, breadcrumbs, search matches, pins, list rows, pane bookkeeping — keys on the org-roam id string.
+
+That id is also what the C side stores as the node table's =path=, which is what arrives synchronously in the click dispatch. The numeric id in that same callback may already be stale by the time it is delivered, because the dispatch is deferred onto the cmacs GMainContext. Resolve by string, always.
+
+** Measured, not assumed
+
+Two layout parameters were got wrong first and fixed against measurements on a real 1166-node database. Both are written up in [[file:../cmacs-roamgraph.org][the manual]]:
+
+- =k= (ideal edge length) is a *constant*, not the textbook =C·√(area/n)=.
+- Gravity scales with node count *and* degree, and is proportional to distance.
+
+A third — that a planar layout is an exact equilibrium in three dimensions — is why switching 2D to 3D deliberately breaks the symmetry.
+
+* How it is put together
+
+** C
+
+| File                     | Role                                                        |
+|--------------------------+-------------------------------------------------------------|
+| =cmacs-roamgraph.h=        | Subsystem header; documents the three-class firewall        |
+| =cmacs-roamgraph-init.c=   | =syms_of_= / =init_= aggregation                                |
+| =cmacs-roamgraph-graph.h/.c= | Nodes, edges, CSR adjacency, id map, diffing update       |
+| =cmacs-roamgraph-layout.h/.c= | Force solver, Barnes–Hut octree, component seeding       |
+| =cmacs-roamgraph-scene.h/.c= | Drawables, node table, flags, projection, camera fit      |
+| =cmacs-roamgraph-defuns.c= | Every DEFUN; per-buffer graph + payload plists              |
+| =cmacs-roamgraph-scan.c=   | Native =:ID:= / =[[id:]]= scanner (stubbed; see below)          |
+
+** Elisp
+
+| File                          | Role                                             |
+|-------------------------------+--------------------------------------------------|
+| =cmacs-roamgraph.el=            | Mode, keymap, navigation, filters, colours, menu |
+| =cmacs-roamgraph-db.el=         | Data sources; the org-roam SQLite reader         |
+| =cmacs-roamgraph-search.el=     | Incremental =/= search and the jump palette        |
+| =cmacs-roamgraph-panes.el=      | Node list, inspector, tag pane, dashboard        |
+
+** What it borrows from libregnum
+
+roamgraph drove several additions to the shared render context, all of which default to the previous behaviour so no other scene changed:
+
+- In-scene labels, so labels exist under =emacs --lrg= at all.
+- Per-node flags and a bulk match-set, for search highlighting.
+- =nearest_in_direction= and =node_onscreen_p=, for spatial navigation.
+- =move_node=, so an animated layout keeps its pick boxes in sync.
+- Label decoration, selection styles, and an orbit lock.
+- A map navigation profile: right-drag pans, wheel-up zooms in.
+
+See the *In-scene labels* section of [[file:../cmacs-libregnum.org][cmacs-libregnum.org]] for the two rules any 2D pass added there has to obey.
+
+* Build
+
+Part of the standard flag set:
+
+#+begin_src bash
+./configure ... --with-cmacs-roamgraph
+#+end_src
+
+Requires =--with-cmacs-libregnum= and =--with-cmacs-glib=. No extra system dependencies: the data layer uses Emacs's builtin SQLite, so there is deliberately no =PKG_CHECK_MODULES= for it.
+
+* Not implemented
+
+- The native =:ID:= / =[[id:]]= scanner. =cmacs-roamgraph-scan-supported-p= returns nil, and =auto= therefore always resolves to the database. The hook and the file exist.
+- ai-brigade similarity edges. The edge kind (=sim=), its weight in the solver, and its violet rendering all exist and are exercised; nothing produces them yet.

@@ -268,6 +268,100 @@ deferred onto the cmacs GMainContext so no Lisp runs inside the GTK
 event handler.  =cmacs-libregnum-tree-nodes= exposes the model to
 Lisp (a vector of =(:id :name :path :dir :depth :parent)= plists).
 
+* Scene appearance & navigation API
+
+A second wave of render-context knobs, driven by the roamgraph subsystem
+([[file:cmacs-roamgraph.org][cmacs-roamgraph.org]]).  *Every one of them defaults to the previous
+behaviour*, so the tree, gobject, mindmap, gnuseye, CAD and editor scenes
+are byte-for-byte unchanged unless they opt in.
+
+** Per-node flags
+
+A bitmask alongside the node table, kept deliberately separate from
+=selected= — that is a single =gint= and is already load-bearing (the
+highlight marker, =focus_node=, the editor's multi-select).  A search
+match set and a selection are different things and must coexist.
+
+| Bit | Name        | Meaning                          |
+|-----+-------------+----------------------------------|
+|   1 | =MATCH=       | A search hit                     |
+|   2 | =DIM=         | De-emphasised                    |
+|   4 | =PINNED=      | User pinned                      |
+|   8 | =NEIGHBOUR=   | One hop from the selection       |
+
+- =cmacs-libregnum-set-node-flags= / =-clear-node-flags= / =-node-flags=
+- =cmacs-libregnum-set-match-set= — replaces the *whole* set in one call,
+  optionally dimming everything else.
+
+That bulk call is the point: an incremental search costs one call per
+keystroke rather than one per node.  =MATCH=, =PINNED= and =NEIGHBOUR= also
+override the per-node label policy, because highlighting something you
+then cannot read the name of is useless.
+
+** Spatial navigation
+
+- =cmacs-libregnum-nearest-in-direction= — the nearest node to another
+  within a screen-space cone.  Candidates are scored =distance / cos³(angle)=
+  so alignment beats raw distance, and ties break on the lower node id so
+  repeated presses never oscillate.
+- =cmacs-libregnum-node-onscreen-p= — projects inside the viewport, inset
+  by a margin.  Lets a caller move the camera only when the target would
+  otherwise be off-screen.
+
+Both live in C because the alternative is one projection call per
+candidate per keypress, against a camera that may be mid-tween.
+
+Note that a cone metric is *not self-inverse*: going right then left can
+land somewhere new.  A caller that wants exact reversal has to remember
+the move rather than recompute it.
+
+** Appearance
+
+- =cmacs-libregnum-set-label-decor= — a translucent plate behind label
+  text (the scene's own geometry runs through it otherwise), and
+  screen-space emphasis rings on the selected, hovered and matched nodes.
+  Rings are screen-space on purpose: they read the same at any zoom,
+  which a fixed world-space marker does not.
+- =cmacs-libregnum-set-selection-style= — =box= (the legacy wireframe cube,
+  right for scenes whose nodes *are* boxes), =halo= (a wireframe shell,
+  right for spheres), or =none= for a scene drawing its own marker.
+- =cmacs-libregnum-set-label-font= bakes a real TTF at a large size and
+  draws it small through a bilinear filter.  Its codepoint set covers
+  ASCII, Latin-1 and General Punctuation — the loader's default is the 95
+  printable ASCII characters, which turns every em dash and accent in a
+  user's own prose into a missing-glyph box.
+
+** Navigation profiles
+
+Two mouse conventions, both opt-in:
+
+- =cmacs-libregnum-set-right-drag-pans= — the *map* profile: left-drag
+  orbits, right-drag pans.  The default is the *CAD* profile (either
+  button orbits, the middle one pans), which suits a modelling viewport
+  but assumes a middle button worth using.
+- =cmacs-libregnum-set-wheel-up-zooms-in= — the conventional wheel
+  direction.  GDK reports a *positive* delta for scrolling *down*, and the
+  zoom kernel moves closer for a positive amount, so passing the delta
+  straight through means scrolling down moves you closer.  That is the
+  inherited behaviour and it is backwards; scenes opt out rather than
+  having it flipped underneath them.
+
+A right-*click* without movement still opens the context menu under
+either profile — only a drag moves the camera.
+
+- =cmacs-libregnum-set-orbit-locked= — stop the camera tumbling while
+  leaving pan and zoom live.  For a scene showing a planar layout
+  head-on, orbiting only reveals that everything is coplanar.
+- =cmacs-libregnum-orbit= / =cmacs-libregnum-pan= drive the camera from
+  Lisp, which is also what makes the lock testable.
+
+** Keeping picks in sync
+
+=cmacs-libregnum-render-ctx-move-node= moves a node's pick box.  A scene
+that mutates its drawables in place — an animated force layout, a dragged
+node — must call it, or picking and labelling keep pointing at where the
+node used to be.
+
 * Game module hosting
 
 Beyond the built-in scene visualisers, a =cmacs-libregnum= buffer can

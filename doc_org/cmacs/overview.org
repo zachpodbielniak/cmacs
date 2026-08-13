@@ -22,6 +22,7 @@ several subsystems as C primitives (DEFUNs), all built into the editor:
 | *piper*    | =cmacs/piper/=   | Offline TTS via Piper subprocess; PGTK context menu   |
 | *cintrospect* | =cmacs/cintrospect/= | Runtime C self-introspection (libdw + JIT)      |
 | *cpatch*   | =cmacs/cpatch/=  | Runtime C hot-patching (DEFUN swap + detours)         |
+| *roamgraph* | =cmacs/roamgraph/= | org-roam knowledge graph as a live 2D/3D scene    |
 
 * Source Layout
 

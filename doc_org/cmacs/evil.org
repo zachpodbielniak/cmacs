@@ -78,10 +78,13 @@ Both are no-ops when Evil is absent, and defer their work with =with-eval-after-
 | =cmacs-gnuseye-list-mode=        | intercept (existing aux maps)                         |
 | =cmacs-gnuseye-layers-mode=      | intercept (existing aux maps)                         |
 | =cmacs-gnuseye-inspector-mode=   | intercept (existing aux maps)                         |
+| =cmacs-roamgraph-list-mode=      | intercept (existing aux maps)                         |
+| =cmacs-roamgraph-tags-mode=      | intercept (existing aux maps)                         |
+| =cmacs-roamgraph-inspector-mode= | intercept (existing aux maps)                         |
 
 Three groups are deliberately *not* intercepted:
 
-- *Emacs-state buffers* — the gnuseye globe viewport (=cmacs-gnuseye-mode=) and the libregnum viewport/editor (=cmacs-libregnum-mode=, =cmacs-libregnum-editor-mode=). Evil binds nothing in Emacs state, so their single keys already reach the mode map; intercepting normal state would break =C-z= as the way back to Evil.
+- *Emacs-state buffers* — the gnuseye globe viewport (=cmacs-gnuseye-mode=), the roamgraph viewport (=cmacs-roamgraph-mode=) and the libregnum viewport/editor (=cmacs-libregnum-mode=, =cmacs-libregnum-editor-mode=). Evil binds nothing in Emacs state, so their single keys already reach the mode map; intercepting normal state would break =C-z= as the way back to Evil.
 - *Panels that avoid the contested keys* — the libregnum outliner, palette, assets and inspector panes bind =g=, =m=, =r=, =D=, =RET= in motion/normal auxiliary maps and never collide with a minor-mode map.
 - *Editable text buffers* — =cmacs-cad-gcode-mode= derives from =prog-mode= and holds real G-code text. Its bare =g= / =G= / =e= viewer keys are a pre-existing design wart there (they shadow self-insert in vanilla Emacs too); promoting them over Evil's =e= and =g= motions would trade one problem for a worse one.
 

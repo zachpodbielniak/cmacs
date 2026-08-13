@@ -1,0 +1,124 @@
+#+TITLE: Roamgraph — Adding a Source or an Action
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:2 num:t
+
+Two extension points, both pure Elisp. Neither needs C, and neither needs a rebuild.
+
+* The 10-line data source
+
+A source is a thunk returning =(:nodes VECTOR :edges VECTOR)=. Register it and select it:
+
+#+begin_src elisp
+(defun my/roamgraph-denote-source ()
+  "Build a roamgraph from a Denote silo."
+  (let (nodes edges)
+    (dolist (file (directory-files-recursively "~/denote" "\\.org\\'"))
+      (push (list :id file
+                  :title (file-name-base file)
+                  :file file
+                  :level 0 :pos 1
+                  :group "denote")
+            nodes)
+      (dolist (target (my/denote-links-in file))
+        (push (list :from file :to target) edges)))
+    (list :nodes (vconcat (nreverse nodes))
+          :edges (vconcat (nreverse edges)))))
+
+(add-to-list 'cmacs-roamgraph-sources
+             (cons 'denote #'my/roamgraph-denote-source))
+(setq cmacs-roamgraph-source 'denote)
+#+end_src
+
+That is the whole interface. =:id= is the only required key; anything else you put in the plist is preserved and comes back from =cmacs-roamgraph-node-at= when the node is picked.
+
+Three things the framework does for you, so a source need not:
+
+- *Dangling edges are dropped.* An edge whose endpoints are not both in =:nodes= is discarded, so you can emit links to targets you did not enumerate.
+- *Duplicates and self-loops are dropped.* =A→B= plus =B→A= collapses to one spring.
+- *The cap is applied.* Above =cmacs-roamgraph-max-nodes= the best-connected survive, and a message says how many were dropped.
+
+** Colour
+
+If you set =:color= (=0xRRGGBBAA=) it is used as-is under the =para= scheme. If you do not, =cmacs-roamgraph-db--color= maps =:group= through the PARA palette, and unknown groups get a neutral grey. The =degree=, =tag= and =recency= schemes recompute =:color= themselves and ignore whatever you set.
+
+For =recency= to work, =:file= must point at a real file — it reads the modification time.
+
+** Similarity edges
+
+Emit =:kind 'sim= for a suggested rather than a written link. They are weighted 0.35 in the solver so they nudge without competing with real structure, render violet, and are excluded from =]= / =[= navigation.
+
+* Adding an inspector action
+
+Actions appear both in the inspector's footer and in the right-click context menu.
+
+#+begin_src elisp
+(cmacs-roamgraph-register-inspector-action
+ "A" "Ask AI about this note"
+ (lambda (id)
+   (let ((node (with-current-buffer (cmacs-roamgraph--buffer)
+                 (cmacs-roamgraph--node id))))
+     (cmacs-ai-call (format "Summarise %s" (plist-get node :file)))))
+ ;; Optional predicate: only offer it when the note has a file.
+ (lambda (id)
+   (plist-get (with-current-buffer (cmacs-roamgraph--buffer)
+                (cmacs-roamgraph--node id))
+              :file)))
+#+end_src
+
+The function receives the node id. The registration installs the Evil binding as well as the plain one — without that half a registered =a= would simply be =evil-append= under Doom, which is the kind of thing that looks like the action "not working".
+
+Gate anything that depends on another subsystem, so the action disappears rather than erroring on a build without it:
+
+#+begin_src elisp
+(when (cmacs-feature-p 'ai)
+  (cmacs-roamgraph-register-inspector-action ...))
+#+end_src
+
+* Recipe: a saved view
+
+Roamgraph keeps no view registry, but everything needed is a command:
+
+#+begin_src elisp
+(defun my/roamgraph-work-view ()
+  "Open the graph filtered to work notes, coloured by recency."
+  (interactive)
+  (cmacs-roamgraph)
+  (with-current-buffer (cmacs-roamgraph--buffer)
+    (setq cmacs-roamgraph--filter-tags '("work")
+          cmacs-roamgraph--color-by 'recency)
+    (cmacs-roamgraph--apply-filter)))
+#+end_src
+
+* Recipe: jump from the graph to somewhere else
+
+The selection is an org-roam id, so anything that speaks org ids composes:
+
+#+begin_src elisp
+(defun my/roamgraph-open-in-agenda ()
+  "Show the selected note's TODOs in the agenda."
+  (interactive)
+  (with-current-buffer (cmacs-roamgraph--buffer)
+    (let* ((node (cmacs-roamgraph--node cmacs-roamgraph--selected))
+           (file (plist-get node :file)))
+      (when file
+        (let ((org-agenda-files (list file)))
+          (org-todo-list))))))
+#+end_src
+
+* What you cannot extend from Elisp
+
+- *The layout.* The solver is C, and the only knobs exposed are the Barnes–Hut angle, the reheat parameters, and per-node pinning. Precomputing positions and pinning every node is the escape hatch if you genuinely need a different layout.
+- *Node geometry.* Every note is a sphere sized by degree. Marker shapes are a gnuseye feature; roamgraph deliberately has one visual vocabulary.
+- *Edge routing.* Edges are straight lines.
+
+* Testing an extension
+
+The graph model and solver are testable with no display, but attaching a viewport needs the hidden GL window. Follow the pattern in =test/cmacs/cmacs-roamgraph-tests.el=:
+
+#+begin_src elisp
+(skip-unless (and (fboundp 'cmacs-roamgraph-supported-p)
+                  (cmacs-roamgraph-supported-p)
+                  (or (getenv "DISPLAY") (getenv "WAYLAND_DISPLAY"))))
+#+end_src
+
+Guard =cmacs-feature-p= with =fboundp= first: it is void in a per-file test run, which would otherwise make the whole suite skip silently.

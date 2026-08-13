@@ -295,3 +295,13 @@ Three tiers: pure logic (CSR, determinism, convergence, Barnes–Hut against its
 * Migrating from org-roam-ui
 
 Drop it from =packages.el=. Nothing in your notes or your org-roam configuration needs to change — roamgraph reads the same database.
+
+* See also
+
+| Document                     | What it adds                                          |
+|------------------------------+-------------------------------------------------------|
+| [[file:roamgraph/README.org][roamgraph/README.org]]         | Design pillars, the three-TU-class split, file map     |
+| [[file:roamgraph/reference.org][roamgraph/reference.org]]      | Plist schemas, every DEFUN, every key, every defcustom |
+| [[file:roamgraph/extending.org][roamgraph/extending.org]]      | Writing a data source, adding an inspector action      |
+| [[file:cmacs-libregnum.org][cmacs-libregnum.org]]          | The scene API this is built on, and the label rules    |
+| [[file:evil.org][evil.org]]                     | Why the viewport is in Emacs state and the panes are not |

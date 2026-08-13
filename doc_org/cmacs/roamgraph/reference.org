@@ -1,0 +1,201 @@
+#+TITLE: Roamgraph — API & Interaction Reference
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:2 num:t
+
+* Node plist schema
+
+The vector handed to =cmacs-roamgraph-set-graph=. Only =:id= is required.
+
+| Key       | Type    | Meaning                                                  |
+|-----------+---------+----------------------------------------------------------|
+| =:id=       | string  | The org-roam id.  *The identity key* — everything keys on it |
+| =:title=    | string  | Display title (defaults to =:id=)                          |
+| =:file=     | string  | Absolute path of the file the note lives in              |
+| =:level=    | integer | 0 for a file-level node, >0 for a heading-level one       |
+| =:pos=      | integer | Character position of the node within =:file=              |
+| =:tags=     | list    | Strings, without the surrounding colons                  |
+| =:aliases=  | list    | Strings                                                  |
+| =:refs=     | list    | Strings                                                  |
+| =:group=    | string  | Colour/grouping bucket, e.g. the PARA directory          |
+| =:color=    | integer | =0xRRGGBBAA=                                               |
+
+Any *other* key is preserved untouched and handed back by =cmacs-roamgraph-node-at=. That is the extension point: attach whatever your source knows, read it back on a pick.
+
+=:level= and =:pos= are not decoration. =RET= uses them to open a heading-level node at its own heading rather than at line 1 of a long file, which is roughly half the nodes in a mature database.
+
+* Edge plist schema
+
+| Key      | Type   | Meaning                                        |
+|----------+--------+------------------------------------------------|
+| =:from=    | string | Source node id                                 |
+| =:to=      | string | Destination node id                            |
+| =:kind=    | symbol | =id= (default), =cite=, or =sim=                     |
+| =:weight=  | float  | Attraction weight; defaults to 1.0             |
+
+Edges whose endpoints are not *both* present are dropped silently — dangling =[[id:]]= links are normal in a live tree. Self-loops are dropped. An =A→B= and =B→A= pair collapses to one spring rather than double-weighting it.
+
+=sim= edges are weighted 0.35 in the solver so they nudge without competing with real links, render violet, and are excluded from link navigation.
+
+* C primitives (DEFUNs)
+
+** Lifecycle
+
+| DEFUN                          | Notes                                    |
+|--------------------------------+------------------------------------------|
+| =cmacs-roamgraph-supported-p=     | Compiled-in probe; used by the test skip |
+| =cmacs-roamgraph-attach=          | =(BUFFER &optional W H)=; idempotent       |
+| =cmacs-roamgraph-detach=          | Tears down state and the view            |
+| =cmacs-roamgraph-attached-p=      |                                          |
+
+** Data
+
+| DEFUN                          | Notes                                       |
+|--------------------------------+---------------------------------------------|
+| =cmacs-roamgraph-set-graph=       | =(BUFFER NODES EDGES &optional DIMS)=; the contract |
+| =cmacs-roamgraph-node-at=         | id → the full plist, extra keys included    |
+| =cmacs-roamgraph-node-index=      | id → graph index, or nil                    |
+| =cmacs-roamgraph-node-id=         | graph index → id, or nil                    |
+| =cmacs-roamgraph-neighbors=       | =(BUFFER ID &optional out|in|both)=           |
+| =cmacs-roamgraph-node-count=      |                                             |
+| =cmacs-roamgraph-edge-count=      | After dedup, so lower than the link count   |
+
+=cmacs-roamgraph-neighbors= returns forward links first, then backlinks, each group ordered by the neighbour's title. That order is stable across a rebuild, which is what makes =>= then =<= land back where it started.
+
+** Layout
+
+| DEFUN                                | Notes                                  |
+|--------------------------------------+----------------------------------------|
+| =cmacs-roamgraph-layout-step=          | =(BUFFER &optional N)=; t on convergence |
+| =cmacs-roamgraph-layout-converged-p=   |                                        |
+| =cmacs-roamgraph-layout-progress=      | Float in [0,1]                         |
+| =cmacs-roamgraph-layout-reheat=        | =(BUFFER &optional FRAC ITERS)=          |
+| =cmacs-roamgraph-set-layout-theta=     | Barnes–Hut angle; *0 forces exact*       |
+| =cmacs-roamgraph-node-position=        | id → =(X Y Z)=                           |
+| =cmacs-roamgraph-set-pinned=           | A pinned node is exempt from the solver |
+
+Theta 0 degenerates Barnes–Hut into an exact all-pairs sum. That is not a curiosity: it is the reference implementation the approximation is tested against.
+
+** View
+
+| DEFUN                             | Notes                                |
+|-----------------------------------+--------------------------------------|
+| =cmacs-roamgraph-set-projection=    | =(BUFFER FLAT)=                        |
+| =cmacs-roamgraph-flat-p=            |                                      |
+| =cmacs-roamgraph-fit=               | Frame the whole graph                |
+| =cmacs-roamgraph-zoom=              | Positive moves closer                |
+| =cmacs-roamgraph-pan=               | =(BUFFER DX DY)= screen pixels         |
+| =cmacs-roamgraph-apply-flags=        | Recolour from the per-node flags     |
+
+* Render-context additions (libregnum)
+
+roamgraph drove these; all default to the previous behaviour.
+
+| DEFUN                                       | Effect                              |
+|---------------------------------------------+-------------------------------------|
+| =cmacs-libregnum-set-inscene-labels=          | Labels into the framebuffer         |
+| =cmacs-libregnum-set-label-font=              | TTF, baked large and drawn small    |
+| =cmacs-libregnum-set-label-style=             | Size, shadow, declutter, cap        |
+| =cmacs-libregnum-set-label-decor=             | Backdrop plate, emphasis rings      |
+| =cmacs-libregnum-set-node-label-mode=         | Per-node label policy               |
+| =cmacs-libregnum-set-selection-style=         | =box= / =none= / =halo=                 |
+| =cmacs-libregnum-set-match-set=               | Bulk search highlight               |
+| =cmacs-libregnum-set-node-flags=              | Per-node flag mask                  |
+| =cmacs-libregnum-clear-node-flags=            |                                     |
+| =cmacs-libregnum-node-flags=                  |                                     |
+| =cmacs-libregnum-nearest-in-direction=        | Screen-space cone pick              |
+| =cmacs-libregnum-node-onscreen-p=             |                                     |
+| =cmacs-libregnum-orbit=                       |                                     |
+| =cmacs-libregnum-pan=                         |                                     |
+| =cmacs-libregnum-set-orbit-locked=            | Flat views stay flat                |
+| =cmacs-libregnum-set-right-drag-pans=         | Map profile instead of CAD          |
+| =cmacs-libregnum-set-wheel-up-zooms-in=       | Conventional wheel direction        |
+| =cmacs-libregnum-ink-bbox=                    | Drawn extent, for render tests      |
+
+Node flag bits: 1 match, 2 dim, 4 pinned, 8 neighbour.
+
+* Keybindings
+
+** Viewport
+
+| Key                | Command                                    |
+|--------------------+--------------------------------------------|
+| =h= =j= =k= =l=, arrows  | Nearest note in that screen direction      |
+| =w= =a= =s= =d=          | Move the view (same as right-drag)         |
+| =]= / =[=              | Descend a forward link / ascend            |
+| =>= =M-n= / =<= =M-p=      | Next / previous peer                       |
+| =o=                  | Follow a link chosen by name               |
+| =RET= / =O=            | Open the note / in another window          |
+| =y=                  | Copy an =[[id:…]]= link                      |
+| =/= =n= =N=              | Search, next match, previous match         |
+| =g /=                | Jump palette                               |
+| =M-/=                | Keep only matches and their neighbours     |
+| =t= / =c=              | Filter by tag / clear filters              |
+| =z=                  | Show or hide unlinked notes                |
+| =C=                  | Next colour scheme                         |
+| =2= / =3= / =v=          | Flat / 3D / toggle                         |
+| =0=, =<home>=          | Fit the whole graph                        |
+| =f=                  | Centre on the selection                    |
+| =+= =-=                | Zoom                                       |
+| =.=                  | Pin or unpin the selection                 |
+| =e= / =i= / =T=          | Node list / inspector / tags pane          |
+| =D= / =W=              | Dashboard / close panes                    |
+| =g g= / =g r= / =u=      | Refresh / re-root here / undo re-root      |
+| =?=                  | Legend                                     |
+| =<escape>=           | Clear search, else deselect, else normal state |
+| =q=                  | Quit                                       |
+
+** Mouse
+
+| Action        | Effect                                          |
+|---------------+-------------------------------------------------|
+| left click    | Select                                          |
+| left drag     | Orbit (3D only; locked when flat)               |
+| right drag    | Move the view                                   |
+| right click   | Context menu (GTK under pgtk, in-engine under =--lrg=) |
+| scroll        | Zoom; up moves closer                           |
+
+** Panes
+
+Node list and tags are =motion= state under Evil; the inspector is =normal=. All three are promoted with =cmacs-evil-intercept-mode-map= so evil-snipe stops shadowing =s=/=f=/=t=. =SPC= is deliberately never bound in a pane — it is the Doom leader there.
+
+| Pane      | Keys                                                    |
+|-----------+---------------------------------------------------------|
+| nodes     | =RET= select, =TAB= peek, =o= other window, =/= =s= =f= =c= =g= =q=   |
+| tags      | =RET= or =x= toggle the filter, =c= clear, =g= =q=            |
+| inspector | =RET= =O= =f= =y= =g= =q=, plus =1=–=9= / =a=–=z= live link keys  |
+
+* Defcustoms
+
+| Variable                             | Default    | Effect                        |
+|--------------------------------------+------------+-------------------------------|
+| =cmacs-roamgraph-source=               | =auto=       | =roam-db=, =scan=, or =auto=      |
+| =cmacs-roamgraph-db-location=          | org-roam's | Path to =org-roam.db=           |
+| =cmacs-roamgraph-directory=            | org-roam's | Notes root, for PARA grouping |
+| =cmacs-roamgraph-include-cite-links=   | nil        | Citations become edges too    |
+| =cmacs-roamgraph-max-nodes=            | 4000       | Cap; keeps the best-connected |
+| =cmacs-roamgraph-show-orphans=         | nil        | Include unlinked notes        |
+| =cmacs-roamgraph-hub-degree=           | 12         | Permanent-label threshold     |
+| =cmacs-roamgraph-neighbour-labels=     | 8          | Cap on labelled neighbours    |
+| =cmacs-roamgraph-max-labels=           | 120        | Per-frame label cap           |
+| =cmacs-roamgraph-label-size=           | 13         | Label pixels                  |
+| =cmacs-roamgraph-follow-camera=        | ='edge=     | When a move flies the camera  |
+| =cmacs-roamgraph-peer-sort=            | ='title=    | Peer/link ordering            |
+| =cmacs-roamgraph-cone-degrees=         | 45         | Spatial-nav cone half-angle   |
+| =cmacs-roamgraph-pan-step=             | 70         | Pixels per WASD press         |
+| =cmacs-roamgraph-layout-fps=           | 30         | While settling                |
+| =cmacs-roamgraph-search-style=         | ='literal=  | =literal=, =regexp=, =orderless=  |
+| =cmacs-roamgraph-list-max=             | 500        | Node-list rows                |
+| =cmacs-roamgraph-preview-lines=        | 12         | Inspector body preview        |
+
+* Performance
+
+Measured on a 1166-node, 1321-edge database at 1400×900:
+
+| Stage                     | Time    |
+|---------------------------+---------|
+| Read the database         | 0.06 s  |
+| Build the graph and scene | 0.01 s  |
+| Full layout solve         | 0.70 s  |
+| One render + readback     | ~36 ms  |
+
+The solve is 408 iterations at 1.7 ms each. Brute-force repulsion at that node count would be ~1.4M pair evaluations per iteration, which is why Barnes–Hut is not a deferred optimisation.

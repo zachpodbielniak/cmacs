@@ -6870,6 +6870,76 @@ it returns the bounding box of the non-background pixels of a freshly
 rendered frame, in displayed orientation.  A snapshot proves pixels
 changed; this proves they changed in the right place.
 
+@subsubheading Scene appearance and navigation
+
+A second wave of render-context knobs, driven by roamgraph
+(@pxref{CMacs Roamgraph}).  @emph{Every one defaults to the previous
+behaviour}, so the tree, gobject, mindmap, gnuseye, CAD and editor
+scenes are unchanged unless they opt in.
+
+@table @code
+@item cmacs-libregnum-set-node-flags
+@itemx cmacs-libregnum-clear-node-flags
+@itemx cmacs-libregnum-node-flags
+@itemx cmacs-libregnum-set-match-set
+A per-node bitmask --- match (1), dim (2), pinned (4), neighbour (8) ---
+kept deliberately separate from @code{selected}, which is a single index
+and already load-bearing.  A search match set and a selection are
+different things and must coexist.  The bulk setter replaces the whole
+set in one call, so an incremental search costs one call per keystroke
+rather than one per node.  Match, pinned and neighbour also override the
+per-node label policy: highlighting something whose name you then cannot
+read is useless.
+
+@item cmacs-libregnum-nearest-in-direction
+@itemx cmacs-libregnum-node-onscreen-p
+Screen-space keyboard navigation.  Candidates are scored
+@math{distance / cos^3(angle)} so alignment beats raw distance, with ties
+broken on the lower node id so repeated presses never oscillate.  In C
+because the alternative is one projection call per candidate per
+keypress against a camera that may be mid-tween.  Note that a cone
+metric is @emph{not} self-inverse: a caller wanting exact reversal must
+remember the move rather than recompute it.
+
+@item cmacs-libregnum-set-label-decor
+@itemx cmacs-libregnum-set-selection-style
+A translucent plate behind label text (the scene's geometry runs through
+it otherwise) and screen-space emphasis rings, which read the same at any
+zoom where a world-space marker does not.  The selection marker is
+@code{box} (the legacy wireframe cube, right for scenes whose nodes are
+boxes), @code{halo} (right for spheres) or @code{none}.
+
+@item cmacs-libregnum-set-label-font
+Bakes a real TTF large and draws it small through a bilinear filter.  Its
+codepoint set covers ASCII, Latin-1 and General Punctuation --- the
+loader's default is the 95 printable ASCII characters, which turns every
+em dash and accent in a user's own prose into a missing-glyph box.
+
+@item cmacs-libregnum-set-right-drag-pans
+@itemx cmacs-libregnum-set-wheel-up-zooms-in
+Two mouse conventions, both opt-in.  The first selects the @emph{map}
+profile (left-drag orbits, right-drag pans) over the default @emph{CAD}
+profile (either button orbits, middle pans), which suits a modelling
+viewport but assumes a middle button worth using.  The second selects
+the conventional wheel direction: GDK reports a positive delta for
+scrolling @emph{down} and the zoom kernel moves closer for a positive
+amount, so the inherited behaviour is that scrolling down moves you
+closer.  A right-@emph{click} without movement still opens the context
+menu under either profile.
+
+@item cmacs-libregnum-set-orbit-locked
+@itemx cmacs-libregnum-orbit
+@itemx cmacs-libregnum-pan
+Stop the camera tumbling while leaving pan and zoom live --- for a scene
+showing a planar layout head-on, orbiting only reveals that everything is
+coplanar.  The two drivers also make the lock testable.
+
+@item cmacs-libregnum-render-ctx-move-node
+Moves a node's pick box.  A scene that mutates its drawables in place ---
+an animated force layout, a dragged node --- must call it, or picking and
+labelling keep pointing at where the node used to be.
+@end table
+
 Keyboard (a highlighted selection cursor; the camera eases to frame
 it and its name is echoed):
 

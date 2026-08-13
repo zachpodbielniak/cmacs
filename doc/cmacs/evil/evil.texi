@@ -148,6 +148,9 @@ Emacs build behaves as if none of this existed.
 @item @code{cmacs-gnuseye-list-mode} @tab intercept (existing aux maps)
 @item @code{cmacs-gnuseye-layers-mode} @tab intercept (existing aux maps)
 @item @code{cmacs-gnuseye-inspector-mode} @tab intercept (existing aux maps)
+@item @code{cmacs-roamgraph-list-mode} @tab intercept (existing aux maps)
+@item @code{cmacs-roamgraph-tags-mode} @tab intercept (existing aux maps)
+@item @code{cmacs-roamgraph-inspector-mode} @tab intercept (existing aux maps)
 @end multitable
 
 Three groups are deliberately @emph{not} intercepted:
@@ -155,7 +158,8 @@ Three groups are deliberately @emph{not} intercepted:
 @itemize @bullet
 @item
 @strong{Emacs-state buffers} --- the gnuseye globe viewport
-(@code{cmacs-gnuseye-mode}) and the libregnum viewport/editor
+(@code{cmacs-gnuseye-mode}), the roamgraph viewport
+(@code{cmacs-roamgraph-mode}) and the libregnum viewport/editor
 (@code{cmacs-libregnum-mode}, @code{cmacs-libregnum-editor-mode}).  Evil
 binds nothing in Emacs state, so their single keys already reach the
 mode map; intercepting normal state would break @kbd{C-z} as the way
