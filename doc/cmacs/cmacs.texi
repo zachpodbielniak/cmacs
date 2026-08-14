@@ -56,6 +56,7 @@ interaction.
 * Cintrospect::                 Runtime C self-introspection (libdw + JIT).
 * Cpatch::                      Runtime C hot-patching (DEFUN swap + detours).
 * CMacs AI::                    ai-glib multi-provider coding agent.
+* CMacs AI Menu::               The universal AI right-click menu.
 * CMacs Libregnum::             Embedded libregnum 3D scene buffers.
 * CMacs Gnuseye::               GNU's Eye live planetary globe.
 * CMacs Roamgraph::             Native org-roam knowledge-graph visualiser (2D + 3D).
@@ -6650,6 +6651,9 @@ walkthrough.
 
 @c ===================================================================
 @include cmacs-ai.texi
+
+@c ===================================================================
+@include cmacs-ai-menu.texi
 
 @c ===================================================================
 @node CMacs Libregnum

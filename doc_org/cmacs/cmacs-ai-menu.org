@@ -1,0 +1,476 @@
+#+TITLE: cmacs-ai-menu
+#+SUBTITLE: the universal AI right-click menu
+#+OPTIONS: toc:2 num:nil
+
+* Overview
+
+Right-click anywhere in cmacs and the AI is there, acting on whatever
+you clicked.  A region, a file in dired, a failing test in a compilation
+buffer, a diff hunk, an org heading, the last command in a terminal, a
+note in the roamgraph -- each is understood as itself, not flattened to
+"the buffer".
+
+The feature is four layers, and the split is the point: adding a new
+place the menu works means writing one /resolver/, and adding a new
+thing the menu can do means writing one /action/.  Neither has to know
+the other exists, and nothing anywhere grows a =cond= over major modes.
+
+| Layer                | File                    | Answers                              |
+|----------------------+-------------------------+--------------------------------------|
+| Menu backends        | =lisp/cmacs/cmacs-menu.el=      | how do I draw a menu here?           |
+| Targets              | =lisp/cmacs/cmacs-ai-target.el= | what is under the click?             |
+| Resolvers            | =lisp/cmacs/cmacs-ai-targets.el=| ... in /this/ kind of buffer         |
+| Actions              | =lisp/cmacs/cmacs-ai-actions.el=| what can be done with it?            |
+| Text operations      | =lisp/cmacs/cmacs-ai-textops.el=| summarize / rephrase / reply / ...   |
+| Result window        | =lisp/cmacs/cmacs-ai-output.el= | where the answer goes                |
+| Wiring               | =lisp/cmacs/cmacs-ai-menu.el=   | the context-menu entry and bootstrap |
+
+Requires =--with-cmacs-ai=.  The Brigade group additionally requires
+=--with-cmacs-ai-brigade=, and the Chat group's libreclaw entry
+=--with-cmacs-libreclaw=; each group simply does not appear when its
+subsystem is not in the build.
+
+* Using it
+
+** The menu
+
+Right-click.  Everything cmacs adds hangs off a single top-level =AI=
+entry, so the menu you already had grows by exactly one line however many
+actions are registered -- the context menu is shared property, and org
+alone contributes a dozen items to it.
+
+#+begin_example
+AI > Ask AI  > Ask about this... / Summarize... / Rephrase... / Reply... / ...
+     Chat    > New chat with this / Send to an open chat... / ...
+     Brigade > Spawn an agent on this... / Pin as agent context / ...
+     Tools   > your own deftool forms
+#+end_example
+
+Four groups, in the same order everywhere:
+
+| Group     | For                                                       |
+|-----------+-----------------------------------------------------------|
+| =Ask AI=  | answer something about this, in a result window           |
+| =Chat=    | carry this into a conversation that persists              |
+| =Brigade= | hand this to an agent that works while you are not looking |
+| =Tools=   | your own =cmacs-brigade-deftool= forms that opted in      |
+
+When the whole menu comes to =cmacs-ai-menu-inline-limit= items or fewer
+(5 by default), the group submenus are skipped and the actions sit
+directly under =AI=.  A submenu holding two entries is a click you did
+not need.  Rename the top-level entry with =cmacs-ai-menu-label=.
+
+** From the keyboard
+
+Nothing is mouse-only.  =cmacs-ai-menu-command-map= holds the keyboard
+equivalents; cmacs does not claim a global prefix for it, so bind it
+where you like:
+
+#+begin_src elisp
+(global-set-key (kbd "C-c a") cmacs-ai-menu-command-map)
+#+end_src
+
+| Key | Command                | Does                                     |
+|-----+------------------------+------------------------------------------|
+| =a= | =cmacs-ai-menu-pick=   | choose an action by completion           |
+| =m= | =cmacs-ai-menu=        | pop the graphical menu at point          |
+| =s= | =cmacs-ai-summarize=   | summarize                                |
+| =r= | =cmacs-ai-rephrase=    | rephrase                                 |
+| =p= | =cmacs-ai-reply=       | draft a reply                            |
+| =e= | =cmacs-ai-explain=     | explain                                  |
+| =?= | =cmacs-ai-ask=         | ask a question about it                  |
+
+=cmacs-ai-menu-pick= is the one to reach for on a tty or under Evil: it
+is completion all the way down and never needs a popup.
+
+** Every action is a command
+
+A keybinding needs a command, and an action is a plist in a registry --
+so every shipped action also has a real named command, bindable and
+=M-x=-able.  The Ask group's were always commands; these are the ones
+that used to exist only as menu entries:
+
+| Command                        | Action                          |
+|--------------------------------+---------------------------------|
+| =cmacs-ai-chat-with-this=      | New chat with this              |
+| =cmacs-ai-send-to-open-chat=   | Send to an open chat            |
+| =cmacs-ai-send-to-libreclaw=   | Send to a libreclaw room        |
+| =cmacs-ai-spawn-agent=         | Spawn an agent on this          |
+| =cmacs-ai-send-to-task=        | Send to a running task          |
+| =cmacs-ai-pin-context=         | Pin as agent context            |
+| =cmacs-ai-make-brigade-task=   | Make this a brigade task        |
+
+For anything registered later -- your own actions, and the deftools that
+opted in with =:menu= -- there is no fixed key to bind, so use the
+per-group pickers, which read the registry every time:
+
+| Command                        | Offers                          |
+|--------------------------------+---------------------------------|
+| =cmacs-ai-menu-pick-ask=       | the Ask AI group                |
+| =cmacs-ai-menu-pick-chat=      | the Chat group                  |
+| =cmacs-ai-menu-pick-brigade=   | the Brigade group               |
+| =cmacs-ai-menu-pick-tools=     | the Tools group (your deftools) |
+| =cmacs-ai-run-action=          | any action, by name             |
+
+=cmacs-ai-run-action= checks the action's =:applies= before running it,
+so invoking "Rewrite in place" on a read-only buffer says so rather than
+failing somewhere less explicable.
+
+* Summarize, rephrase, reply
+
+The three operations that earn their place on highlighted text.
+
+Each asks one question in the minibuffer -- what to focus on, what tone,
+what you actually want to say -- and each treats =RET= on an empty answer
+as "use your judgement":
+
+| Operation | Prompt                                          | =RET= means                                 |
+|-----------+-------------------------------------------------+---------------------------------------------|
+| summarize | =Summarize -- focus on=                         | summarize it for someone new to it          |
+| rephrase  | =Rephrase -- how?=                              | clearer, tighter, more direct               |
+| reply     | =Reply -- what do you want to say?=             | draft the reply you judge most appropriate  |
+| explain   | =Explain -- focus on=                           | what it does and why, minus the obvious     |
+| ask       | =Ask about this=                                | the most useful thing to know about it      |
+
+History is per-operation, so last time's refinement is one =M-p= away.
+
+None of them touches your buffer.  =rephrase= deliberately /shows/ you
+the rewrite rather than applying it; the in-place version is
+=cmacs-ai-rewrite-region=, which has always been a different command
+with different consequences, and appears on the menu as *Rewrite in
+place...*.
+
+** The result window
+
+Output streams into a dedicated Org buffer, opened beside what you were
+reading or beneath it depending on the frame:
+
+| Key       | Does                                                    |
+|-----------+---------------------------------------------------------|
+| =q=       | cancel the request and close the window                 |
+| =C-c C-k= | the same                                                |
+| =w=       | copy the answer (without the header) to the kill ring   |
+| =g=       | run the same action again                               |
+
+Both closing keys /cancel/, not just hide.  A result window you have
+dismissed is one you have stopped reading, and a model still generating
+into it is spending money on nobody.
+
+Placement is chosen from the frame, not hardcoded: at
+=cmacs-ai-output-split-threshold= columns (150 by default) or wider the
+window opens side by side, below it underneath.  Both are ordinary
+=display-buffer= actions, so =display-buffer-alist= overrides them in
+the usual way.
+
+* Where it works
+
+Each surface below has a resolver, so the menu acts on the right thing
+rather than on the buffer as a whole.
+
+| Surface                          | Target kind    | What the model sees                     |
+|----------------------------------+----------------+-----------------------------------------|
+| Any highlighted text             | =region=       | the selection                           |
+| Diagnostics (flymake / flycheck) | =diagnostic=   | the message plus surrounding lines      |
+| Compilation and grep buffers     | =diagnostic=   | the error and the notes around it       |
+| Backtraces and the debugger      | =backtrace=    | the whole backtrace                     |
+| Terminals: vterm, eshell, term, shell, bacon, the REPLs | =terminal= | the last command and its output |
+| dired and dirvish                | =file= / =files= | the file at point, or every marked file |
+| Diffs: =diff-mode=, magit, vc    | =hunk=         | the enclosing hunk, and only it         |
+| Org                              | =org-node=     | the heading and its subtree             |
+| Org source blocks                | =region=       | the code, with its language             |
+| Mail: mu4e, gnus, notmuch, rmail, GenMail | =mail= | the message                             |
+| Chat: libreclaw rooms, cmacs-ai chats | =chat=    | the conversation above point            |
+| eww and gsurf-lite               | =url=          | the rendered page text                  |
+| gsurf (full WebKit)              | =gsurf-page=   | title and URL; the body via gsurf's own async fetch |
+| Images and imgedit               | =image=        | the file, for the multimodal path       |
+| vidstudio timelines              | =clip=         | the project                             |
+| The brigade dashboard            | =task=         | the task on this row                    |
+| roamgraph                        | =roam-node=    | the selected note, read from its file   |
+| gnuseye                          | =entity=       | the selected entity                     |
+| Calculator sheets                | =formula=      | the cell and the sheet                  |
+| C sources                        | =c-symbol=     | the symbol, its lines, its function     |
+| gowl client buffers              | =gowl-client=  | the mirrored window                     |
+
+Anywhere with no more specific answer falls back to the symbol at point,
+then to the buffer, so the menu is never empty where it could be useful.
+
+** vterm and dirvish
+
+Both are external packages and neither is required.  The resolvers
+declare them and decline cleanly when they are absent, so the same build
+works with or without them.
+
+- *vterm* is treated as a first-class terminal.  Terminals differ in how
+  they track prompts, so the resolver tries the mode's own prompt
+  navigation first (=vterm-previous-prompt=, =comint-previous-prompt=,
+  =eshell-previous-prompt=) to find the /previous/ prompt -- the one that
+  issued the command whose output you are looking at, not the empty
+  current one.  vterm only tracks prompts with shell integration
+  configured; without it the resolver falls back to the last
+  =cmacs-ai-target-terminal-lines= lines (120 by default), which is
+  always right enough to be useful.
+
+- *dirvish* needs nothing special: its buffers stay =dired-mode=
+  derived, so marked files, the file at point and the directory header
+  all behave exactly as they do in dired.  The dirvish major-mode names
+  are listed as well, for the versions that put their own mode on side
+  panes.
+
+** In-scene menus
+
+The libregnum surfaces -- roamgraph, gnuseye, the scene editor -- do not
+use =context-menu-functions= at all: their right-click is a ray-pick in
+the C input layer and they build their own menu for the node that was
+hit.  They splice in one *Ask AI...* entry that opens the full AI menu
+for whatever their own resolver reports:
+
+#+begin_src elisp
+(append items (and (fboundp 'cmacs-ai-menu-scene-items)
+                   (cmacs-ai-menu-scene-items)))
+#+end_src
+
+The helper returns nil when nothing applies, so the call can be
+unconditional.
+
+* Display backends
+
+The menu draws correctly under every way cmacs can be displayed, and
+callers never branch on which.
+
+| Backend        | Menu drawn by                       | Notes                       |
+|----------------+-------------------------------------+-----------------------------|
+| pgtk / x / ns  | =x-popup-menu=                      | a real GTK menu under pgtk  |
+| =emacs --lrg=  | =lrg-popup-menu= (in-engine)        | drawn by libregnum itself   |
+| tty            | =x-popup-menu= (text menus)         | Emacs's own tty menus       |
+| tty, no menus  | =tmm-prompt= / =completing-read=    | last resort                 |
+
+*This is not cosmetic.* Under =--lrg= a stock =context-menu-mode= does
+/nothing at all/ -- not just for cmacs, for every package.  Emacs routes
+mouse-3 through =x-popup-menu=, and the lrg backend's RIF
+=menu_show_hook= (=lrg_menu_show= in =cmacs/lrgterm/cmacs-lrgterm.c=)
+deliberately returns "nothing selected"; it has to exist, because
+=menu.c= calls it unconditionally for window-system frames and a NULL
+hook crashes, but it cannot show a menu.
+
+So mouse-3 is bound to =cmacs-menu-open-context-menu=, which builds the
+same =context-menu-map= -- every =context-menu-functions= entry still
+contributes, in the usual order -- and pops it through the routing
+above.  Bind that command yourself if you want right-click working under
+=--lrg= for menus that have nothing to do with the AI.
+
+Two API entry points, for alist menus and keymap menus:
+
+#+begin_src elisp
+(cmacs-menu-popup POSITION MENU)        ; -> the chosen VALUE
+(cmacs-menu-popup-keymap KEYMAP &optional POSITION) ; -> the chosen BINDING
+#+end_src
+
+=cmacs-menu-popup-keymap= returns a binding rather than an event path,
+because the backends disagree about what they return and every caller
+wants the same thing: something to =funcall=.
+
+=cmacs-libregnum-popup-menu= remains as a thin wrapper over
+=cmacs-menu-popup=; it is the name the libregnum-side callers already
+use.  The flattening code moved to =cmacs-menu.el= so that subsystems
+built /without/ =--with-cmacs-libregnum= can use it rather than grow a
+second copy that drifts.
+
+* Extending it
+
+** A new surface: write a resolver
+
+#+begin_src elisp
+(cmacs-ai-register-target-resolver
+ :name 'my-log-viewer
+ :modes '(my-log-mode)
+ :order 25
+ :resolve
+ (lambda (_click)
+   (cmacs-ai-target-create
+    :kind 'diagnostic
+    :label "log entry"
+    :text (buffer-substring-no-properties
+           (line-beginning-position) (line-end-position))
+    :buffer (current-buffer))))
+#+end_src
+
+Resolvers run in =:order= (ascending) and the first non-nil answer wins,
+so priority is explicit rather than an accident of load order.  Returning
+nil means "not mine" and the next resolver is tried, so a resolver may
+claim a mode cheaply and still decline for positions it does not
+understand.  =:resolve= runs with point already at the click, inside a
+=save-excursion=.
+
+Reserved slots in the ordering:
+
+| Order | Resolver | Why                                                |
+|-------+----------+----------------------------------------------------|
+|    10 | region   | highlighted text always wins                       |
+|    15 | diagnostic | a squiggle beats the identifier under it         |
+| 20-30 | (surfaces) | where mode-specific resolvers belong             |
+|    85 | c-symbol | adds the enclosing function                        |
+|    90 | symbol   | the symbol at point                                |
+|    95 | buffer   | the catch-all; never nil                           |
+
+A resolver must be cheap and must not prompt: it runs while a menu is
+being built, and under =--gowl= that is the compositor's main thread.
+One that signals is skipped with a message rather than taking the menu
+down.
+
+** A new capability: write an action
+
+#+begin_src elisp
+(cmacs-ai-register-action
+ :name 'my-lint-explainer
+ :group 'ask
+ :order 25
+ :label "Explain this lint warning"
+ :applies (lambda (target) (eq (cmacs-ai-target-kind target) 'diagnostic))
+ :run (lambda (target)
+        (cmacs-ai-textops-run 'explain target "Focus on how to fix it.")))
+#+end_src
+
+Actions /do/ get to prompt: they run from the command loop.  Re-
+registering a name replaces it, so reloading your init is idempotent.
+
+** A brigade tool, on the menu
+
+The symmetry the brigade already promises: one =cmacs-brigade-deftool=
+form publishes a capability to in-process agents, to CLI agents over the
+MCP relay, and to external MCP clients.  With =:menu= it reaches you as
+well -- no second registration, no menu-specific code in the tool:
+
+#+begin_src elisp
+(cmacs-brigade-deftool file-facts
+  "Report size, mtime and line count for a path."
+  ((path string "File to inspect"))
+  :menu '(file files) :menu-label "File facts"
+  (my/file-facts path))
+#+end_src
+
+=:menu t= offers the tool on anything; a list of target kinds restricts
+it.  The tool's first parameter receives the rendered target and the rest
+are read from the minibuffer.  A tool marked =:destructive= or
+=:confirm= is confirmed before it runs -- a menu click must not become a
+quieter way to do something the tool itself considers worth asking
+about.  Asynchronous tools are not offered, since their handler takes a
+=DONE= callback rather than returning a result.
+
+* Cost, and why nothing fires
+
+Every brigade entry on this menu *composes*; none of them *fires*.
+
+"Spawn an agent on this" fills in the compose transient -- agent, model,
+budget, tools, working directory, and your target as the prompt -- and
+shows it to you.  It does not start a run.  "Make this a brigade task"
+appends to a plan file without queueing it.
+
+A right-click is a cheap, half-deliberate gesture.  Starting paid work
+off one is how you end up with a bill you did not intend, and the
+compose path already takes this line for voice input for exactly the
+same reason.
+
+Two more bounds worth knowing:
+
+- =cmacs-ai-target-max-chars= (40000) clips target text middle-out, head
+  and tail kept.  Targets are routinely whole files or a terminal's
+  scrollback.
+- =cmacs-ai-actions-pinned-max= (8) bounds *Pin as agent context*.
+  Pinned items are served to every agent start through the brigade's own
+  =context-provider= registry; =M-x cmacs-ai-unpin-all= clears them.
+
+* Providers and keys
+
+The text operations default to the *=claude-code=* provider with the
+*=sonnet=* model, deliberately not to =cmacs-ai-default-provider=
+(=claude=, the HTTP Anthropic API).
+
+The reason is the failure mode.  These run off a right-click, and the
+HTTP providers need an API key in the environment
+(=ANTHROPIC_API_KEY=, =OPENAI_API_KEY=, ...); without one, a menu click
+answers with a bare =HTTP 401= in the result window and no hint as to
+why.  The CLI providers reuse the auth the =claude= binary already holds
+and cost nothing per call.  =cmacs-ai-completion-provider= defaults the
+same way for the same reason.
+
+=cmacs-ai-textops-provider= is a *symbol*, not a string --
+=cmacs-ai-client-new= checks for one:
+
+#+begin_src elisp
+;; Local and free; good for these short calls.
+(setq cmacs-ai-textops-provider 'ollama
+      cmacs-ai-textops-model "qwen3.5:9b")
+
+;; The HTTP API, if you have a key exported.
+(setq cmacs-ai-textops-provider 'claude
+      cmacs-ai-textops-model nil)      ; nil = the provider's own default
+#+end_src
+
+Setting them to nil defers to =cmacs-ai-default-provider= /
+=cmacs-ai-default-model=, which is what the rest of cmacs-ai uses.
+
+* Configuration
+
+| Variable                              | Default | Does                                        |
+|---------------------------------------+---------+---------------------------------------------|
+| =cmacs-ai-menu-auto-enable=           | =t=     | install the menu at startup                 |
+| =cmacs-menu-override-mouse-3=         | =t=     | rebind mouse-3 when something else owns it  |
+| =cmacs-ai-menu-label=                 | ="AI"=  | label of the single top-level menu entry     |
+| =cmacs-ai-menu-inline-limit=          | 5       | below this many items, skip the group submenus |
+| =cmacs-ai-target-max-chars=           | 40000   | clip target text at                         |
+| =cmacs-ai-target-terminal-lines=      | 120     | terminal scrollback when prompts are unknown |
+| =cmacs-ai-output-split-threshold=     | 150     | columns at which results open side by side  |
+| =cmacs-ai-output-width= / =-height=   | 0.42 / 0.4 | fraction of the frame for the result window |
+| =cmacs-ai-output-select=              | =t=     | select the result window when it opens      |
+| =cmacs-ai-textops-provider=           | =claude-code= | provider symbol for the text operations |
+| =cmacs-ai-textops-model=              | ="sonnet"= | model for the text operations             |
+| =cmacs-ai-summarize-system-prompt= etc | --     | the system prompt for each operation        |
+| =cmacs-ai-actions-plan-file=          | nil     | plan file for "Make this a brigade task"    |
+| =cmacs-ai-actions-tool-max=           | 12      | most tools shown in the Tools submenu       |
+
+The text operations read their system prompts through the variable
+/symbol/ each time, so customising one takes effect on the next
+invocation rather than at load time.
+
+** Doom, Evil, and mouse-3
+
+Doom leaves mouse-3 bound to =mouse-save-then-kill= and does not enable
+=context-menu-mode=, so the right-click never reaches
+=context-menu-map= and every entry any package adds is invisible.  The
+bootstrap detects this and rebinds, once, only when something that is
+not menu-shaped owns the binding -- a mouse-3 already bound to a keymap
+or to =context-menu-map= is left alone.
+
+=cmacs-menu-claim-mouse-3= is the shared implementation; cmacs-piper's
+TTS menu uses the same call for the same reason, so the two cannot drift
+into disagreeing about when to rebind.  Set
+=cmacs-menu-override-mouse-3= to nil to keep your binding; the menu
+stays reachable from the keyboard.
+
+* Migrating from the old region menu
+
+=cmacs-ai-context-menu.el= used to hold a small "AI ..." entry that
+appeared only over an active region -- and, because nothing ever called
+=cmacs-ai-context-menu-install=, never appeared at all: loading the file
+added the entry to no hook.
+
+That file is now a shim.  =cmacs-ai-context-menu-install= still works and
+calls =cmacs-ai-menu-bootstrap=; =cmacs-ai-context-menu= is an obsolete
+alias for =cmacs-ai-menu-populate=.  Nothing to change in an existing
+init, and the four commands it offered (explain, rewrite, document,
+generate a test) are all still on the menu -- now in every buffer rather
+than only over a region.
+
+* Testing
+
+=test/cmacs/cmacs-ai-menu-tests.el= covers all four layers: menu
+flattening and backend routing (with =x-popup-menu= and =lrg-popup-menu=
+mocked, since only one is ever present), resolver ordering and the
+individual surfaces, action filtering and grouping, the rendered
+context-menu keymap, the result window, and the text operations.
+
+#+begin_src bash
+make -C test check-cmacs
+#+end_src
+
+The suite needs no display, no build flags and no model call.
