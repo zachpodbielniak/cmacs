@@ -636,9 +636,16 @@ loop from inside the GLib dispatch re-enters the event machinery."
                            (cmacs-roamgraph--node path) path))
                   (title (if id (cmacs-roamgraph--title id) "org-roam graph"))
                   (items (cmacs-roamgraph--menu-items id)))
+             ;; Selection happens below, so the AI section is appended
+             ;; after it -- `cmacs-ai-menu-scene-items' resolves the
+             ;; buffer's target, which for a graph IS the selection.
              ;; Right-clicking a note selects it too, so the menu and the
              ;; viewport agree about what is being acted on.
              (when id (cmacs-roamgraph--select id nil 'click))
+             (setq items
+                   (append items
+                           (and (fboundp 'cmacs-ai-menu-scene-items)
+                                (cmacs-ai-menu-scene-items))))
              (let ((choice
                     (cmacs-libregnum-popup-menu
                      t (list title

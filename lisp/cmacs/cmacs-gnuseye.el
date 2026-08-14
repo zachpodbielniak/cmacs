@@ -1200,7 +1200,12 @@ Called from `cmacs-libregnum--node-context-menu' on the cmacs GMainContext;
 the actual popup is re-scheduled onto the command loop (a nested GTK menu
 loop inside the GLib dispatch would re-enter the event machinery)."
   (let* ((e (cmacs-gnuseye--resolve-pick buffer node-id path))
-         (items (cmacs-gnuseye--context-menu-items e))
+         (items (append (cmacs-gnuseye--context-menu-items e)
+                        ;; Present only in a --with-cmacs-ai build; the
+                        ;; helper returns nil when nothing applies.
+                        (and (fboundp 'cmacs-ai-menu-scene-items)
+                             (with-current-buffer buffer
+                               (cmacs-ai-menu-scene-items)))))
          (title (if e (format "%s" (or (plist-get e :label) (plist-get e :id)))
                   "GNU's Eye")))
     (run-with-timer

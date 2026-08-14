@@ -408,7 +408,12 @@ handles (use `cmacs-ai-free-session')."
 (defvar cmacs-ai--submodules
   '(cmacs-ai-chat cmacs-ai-region cmacs-ai-commit
     cmacs-ai-completion cmacs-ai-org-block cmacs-ai-agent
-    cmacs-ai-voice cmacs-ai-context-menu
+    cmacs-ai-voice
+    ;; The universal menu: targets, actions, the three text operations
+    ;; and the result window.  cmacs-ai-context-menu is the shim for the
+    ;; region-only menu these replaced.
+    cmacs-ai-target cmacs-ai-targets cmacs-ai-output cmacs-ai-textops
+    cmacs-ai-actions cmacs-ai-menu cmacs-ai-context-menu
     cmacs-ai-image cmacs-ai-image-block cmacs-ai-image-chat
     cmacs-ai-image-menu)
   "Submodules that ship with cmacs-ai.")

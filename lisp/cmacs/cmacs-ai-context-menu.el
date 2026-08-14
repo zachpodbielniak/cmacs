@@ -1,46 +1,34 @@
-;;; cmacs-ai-context-menu.el --- Right-click AI menu  -*- lexical-binding: t; -*-
+;;; cmacs-ai-context-menu.el --- Compatibility shim  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026  Zach Podbielniak
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
 ;;; Commentary:
 
-;; Adds an "AI ..." submenu to the standard right-click context
-;; menu via `context-menu-functions'.  Only active when there's a
-;; region selected.  Auto-enables `context-menu-mode' (Emacs 28+).
+;; This file used to hold a small "AI ..." context-menu entry that only
+;; appeared over an active region -- and, because nothing ever called
+;; `cmacs-ai-context-menu-install', never appeared at all: loading the
+;; file added the entry to no hook.
+;;
+;; The feature it was reaching for is now cmacs-ai-menu.el, which covers
+;; every buffer rather than only regions, works under `emacs --lrg' as
+;; well as pgtk, and installs itself.  This file remains so that an init
+;; calling `cmacs-ai-context-menu-install' keeps working.
 
 ;;; Code:
 
-(require 'cmacs-ai)
-
-(defun cmacs-ai-context-menu (menu click)
-  "Augment context-menu MENU with cmacs-ai actions for CLICK."
-  (when (use-region-p)
-    (define-key-after menu [cmacs-ai-sep] menu-bar-separator)
-    (define-key-after menu [cmacs-ai-explain]
-      '(menu-item "AI: Explain region" cmacs-ai-explain-region
-                  :help "Explain the selected code with cmacs-ai"))
-    (define-key-after menu [cmacs-ai-rewrite]
-      '(menu-item "AI: Rewrite region..."
-                  (lambda () (interactive)
-                    (call-interactively #'cmacs-ai-rewrite-region))
-                  :help "Rewrite the selection with cmacs-ai"))
-    (define-key-after menu [cmacs-ai-doc]
-      '(menu-item "AI: Document region" cmacs-ai-doc-region
-                  :help "Insert AI-written doc comment above region"))
-    (define-key-after menu [cmacs-ai-test]
-      '(menu-item "AI: Generate test for region" cmacs-ai-test-region
-                  :help "Synthesize a unit test for the selection")))
-  menu)
+(require 'cmacs-ai-menu)
 
 ;;;###autoload
 (defun cmacs-ai-context-menu-install ()
-  "Install the cmacs-ai context-menu entries."
+  "Install the cmacs AI context menu.
+Obsolete alias for `cmacs-ai-menu-bootstrap', kept for existing configs."
   (interactive)
-  (require 'cmacs-ai-region)
-  (unless (bound-and-true-p context-menu-mode)
-    (context-menu-mode 1))
-  (add-hook 'context-menu-functions #'cmacs-ai-context-menu 90))
+  (cmacs-ai-menu-bootstrap))
+
+(define-obsolete-function-alias 'cmacs-ai-context-menu
+  #'cmacs-ai-menu-populate "cmacs 32.0.50")
 
 (provide 'cmacs-ai-context-menu)
+
 ;;; cmacs-ai-context-menu.el ends here
