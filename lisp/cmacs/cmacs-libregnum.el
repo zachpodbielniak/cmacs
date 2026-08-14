@@ -2959,21 +2959,23 @@ their original order, so indices stay stable for dispatch."
            (or (eq k t) (memq ksym k)))))
    cmacs-libregnum-editor-context-menu-items))
 
-(defun cmacs-libregnum--lrg-frame-p (&optional frame)
+;; The backend detection, menu flattening and popup routing used to live
+;; here.  They now live in cmacs-menu.el, which carries no libregnum
+;; dependency, so subsystems built WITHOUT --with-cmacs-libregnum (the
+;; AI right-click menu, ai-brigade) can use the same code rather than
+;; grow a second copy that drifts.  The names below stay as delegations:
+;; every existing caller and test keeps working unchanged.
+(require 'cmacs-menu)
+
+(defalias 'cmacs-libregnum--lrg-frame-p #'cmacs-menu-lrg-frame-p
   "Non-nil when FRAME (or the selected frame) uses the --lrg display backend.
-The libregnum/raylib backend (`output_lrg') has no native (GTK) popup menus,
-so the context menus use the in-engine `lrg-popup-menu' there instead."
-  (eq (framep (or frame (selected-frame))) 'lrg))
+See `cmacs-menu-lrg-frame-p'.")
 
 (declare-function lrg-popup-menu "cmacs-lrgterm.c" (items &optional x y))
 
-(defun cmacs-libregnum--menu-xy (position)
-  "Return (X . Y) frame pixels from an `x-popup-menu' POSITION, else (nil.nil).
-POSITION `t' (current mouse) and other forms yield (nil . nil) so
-`lrg-popup-menu' falls back to the pointer position."
-  (if (and (consp position) (consp (car position)))
-      (cons (car (car position)) (car (cdr (car position))))
-    (cons nil nil)))
+(defalias 'cmacs-libregnum--menu-xy #'cmacs-menu-xy
+  "Return (X . Y) frame pixels from an `x-popup-menu' POSITION.
+See `cmacs-menu-xy'.")
 
 ;; The flatteners turn an Emacs menu into the NESTED tree `lrg-popup-menu'
 ;; takes: each node is nil (separator), (LABEL . INDEX) (a leaf returning the
@@ -2981,87 +2983,21 @@ POSITION `t' (current mouse) and other forms yield (nil . nil) so
 ;; A parallel VALUES vector maps each leaf's INDEX to its Lisp value, so the
 ;; chosen index round-trips back to the value regardless of nesting.
 
-(defun cmacs-libregnum--collapse-separators (tree)
+(defalias 'cmacs-libregnum--collapse-separators
+  #'cmacs-menu-collapse-separators
   "Return TREE with runs of separators collapsed to one, and edges trimmed.
-Kind-filtering can leave several separators in a row (the items between them
-were dropped); a leading/trailing separator is pure wasted space.  Recurses
-into submenu children (nodes whose cdr is a list)."
-  (let ((out nil) (prev-sep t))          ; prev-sep t => drop leading separators
-    (dolist (node tree)
-      (if (null node)                     ; separator
-          (progn (unless prev-sep (push nil out))
-                 (setq prev-sep t))
-        (push (if (and (consp node) (consp (cdr node)))   ; submenu -> recurse
-                  (cons (car node)
-                        (cmacs-libregnum--collapse-separators (cdr node)))
-                node)
-              out)
-        (setq prev-sep nil)))
-    (when (and out (null (car out)))      ; drop a trailing separator
-      (pop out))
-    (nreverse out)))
+See `cmacs-menu-collapse-separators'.")
 
 (defun cmacs-libregnum--alist-menu-to-lrg (menu)
   "Flatten an alist-form `x-popup-menu' MENU into (TREE . VALUES).
 MENU is (TITLE (PANE-TITLE ITEM...) ...); ITEM is (LABEL . VALUE) or a \"--\"
 separator.  Panes are joined with separator rows (no header text).  TREE is
 the `lrg-popup-menu' item tree; VALUES is a vector indexed by leaf INDEX."
-  (let ((panes (cdr menu)) (items nil) (values nil) (idx 0) (first t))
-    (dolist (pane panes)
-      (when (consp pane)
-        (unless first (push nil items))      ; separator between panes
-        (setq first nil)
-        (dolist (e (cdr pane))
-          (cond
-           ;; Emacs menu convention: a label of "--"... is a separator.
-           ((and (consp e) (stringp (car e))
-                 (not (string-prefix-p "--" (car e))))     ; (LABEL . VALUE)
-            (push (cons (car e) idx) items)
-            (push (cdr e) values)
-            (setq idx (1+ idx)))
-           (t (push nil items))))))          ; "--"/string/nil separator
-    (cons (cmacs-libregnum--collapse-separators (nreverse items))
-          (vconcat (nreverse values)))))
+  (cmacs-menu-alist-to-tree menu))
 
-(defun cmacs-libregnum--keymap-walk (keymap start-idx)
-  "Walk menu KEYMAP into (TREE NEXT-IDX . VALUES-REVERSED).
-Leaves are numbered from START-IDX; VALUES-REVERSED lists the leaf values in
-descending-index order.  Submenus recurse into real submenu nodes."
-  (let ((items nil) (idx start-idx) (values nil))
-    (map-keymap
-     (lambda (_event def)
-       (let (label real)
-         (cond
-          ((and (consp def) (eq (car def) 'menu-item))
-           (setq label (nth 1 def) real (nth 2 def)))
-          ((and (consp def) (stringp (car def)))    ; (LABEL [HELP] . REAL)
-           (setq label (car def)
-                 real (if (and (consp (cdr def)) (stringp (cadr def)))
-                          (cddr def) (cdr def)))))
-         (cond
-          ((or (null label)                          ; separator / unknown
-               (and (stringp label) (string-prefix-p "--" label)))
-           (push nil items))
-          ((keymapp real)                            ; submenu -> real node
-           (let ((sub (cmacs-libregnum--keymap-walk real idx)))
-             (push (cons (format "%s" label) (nth 0 sub)) items)
-             (setq idx (nth 1 sub))
-             (setq values (append (cddr sub) values))))
-          ((functionp real)                          ; leaf
-           (push (cons (format "%s" label) idx) items)
-           (push real values)
-           (setq idx (1+ idx)))
-          (t (push nil items)))))                    ; unknown -> separator
-     keymap)
-    (cons (nreverse items) (cons idx values))))
-
-(defun cmacs-libregnum--keymap-menu-to-lrg (keymap)
+(defalias 'cmacs-libregnum--keymap-menu-to-lrg #'cmacs-menu-keymap-to-tree
   "Flatten a menu KEYMAP into (TREE . VALUES) for `lrg-popup-menu'.
-Submenus (nested keymaps) become real submenu nodes; VALUES maps each leaf
-INDEX to its action closure."
-  (let ((r (cmacs-libregnum--keymap-walk keymap 0)))
-    (cons (cmacs-libregnum--collapse-separators (nth 0 r))
-          (vconcat (nreverse (cddr r))))))
+See `cmacs-menu-keymap-to-tree'.")
 
 (defun cmacs-libregnum-popup-menu (position menu)
   "Show MENU like `x-popup-menu' at POSITION and return the chosen value.
@@ -3069,13 +3005,12 @@ On graphical frames this pops a native menu; under the --lrg backend it draws
 the in-engine `lrg-popup-menu' (a libregnum/raylib-rendered popup) instead.
 MENU must be an alist-style menu (\"(TITLE (PANE (LABEL . VALUE)...)...)\");
 both paths return the chosen VALUE, so callers keep their result handling
-unchanged.  Keymap menus are handled at their call sites."
-  (if (cmacs-libregnum--lrg-frame-p)
-      (let* ((flat (cmacs-libregnum--alist-menu-to-lrg menu))
-             (xy   (cmacs-libregnum--menu-xy position))
-             (idx  (lrg-popup-menu (car flat) (car xy) (cdr xy))))
-        (and idx (aref (cdr flat) idx)))
-    (x-popup-menu position menu)))
+unchanged.  Keymap menus are handled at their call sites (or, more simply,
+by `cmacs-menu-popup-keymap').
+
+A thin wrapper over `cmacs-menu-popup', kept because it is the name the
+libregnum-side callers and their tests already use."
+  (cmacs-menu-popup position menu))
 
 (defun cmacs-libregnum-editor--menu-keymap (items buffer id &optional title)
   "Build a keymap menu from ITEMS for `x-popup-menu'.

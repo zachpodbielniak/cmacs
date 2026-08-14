@@ -33,6 +33,10 @@
 ;; piper command has run.  Forward-declare what we touch.
 (require 'mouse)
 (require 'menu-bar)
+;; Cheap and dependency-free: the portable popup routing and the shared
+;; mouse-3 detection.  Safe to require at load time even though
+;; cmacs-piper itself deliberately is not.
+(require 'cmacs-menu)
 (declare-function cmacs-piper-speak-region "cmacs-piper" (beg end))
 (declare-function cmacs-piper-stop         "cmacs-piper" ())
 (declare-function cmacs-piper-speaking-p   "cmacs-piper" ())
@@ -92,6 +96,7 @@ Enables `context-menu-mode' as a side effect; without it the entry
 in `context-menu-functions' is never invoked."
   :global t
   :init-value nil
+  :group 'cmacs-piper
   (if cmacs-piper-context-menu-mode
       (progn
         (add-to-list 'context-menu-functions
@@ -128,28 +133,22 @@ Doom-aware mouse-3 rebind specifically)."
 (defun cmacs-piper-context-menu--bootstrap-1 ()
   "Actual bootstrap work; gated by `cmacs-piper-context-menu-bootstrap'."
   (cmacs-piper-context-menu-mode 1)
-  ;; Doom-aware fallback.  context-menu-mode installs a remap on
-  ;; mouse-3 in `context-menu-mode-map' which usually wins, but Doom
-  ;; (and a few other configs) bind mouse-3 in a more specific keymap
-  ;; that shadows it -- typically `mouse-save-then-kill' from
-  ;; global-map left over from when context-menu-mode wasn't enabled.
-  ;; Detect and rebind only when actually needed.
+  ;; Doom-aware fallback.  context-menu-mode installs a remap on mouse-3
+  ;; in `context-menu-mode-map' which usually wins, but Doom (and a few
+  ;; other configs) bind mouse-3 more specifically and shadow it --
+  ;; typically `mouse-save-then-kill' left in global-map from before
+  ;; context-menu-mode existed.  The detection is shared with the AI
+  ;; menu, which has the identical problem; see
+  ;; `cmacs-menu-claim-mouse-3'.  Piper claims it for the generic
+  ;; context-menu opener rather than for anything piper-specific, so
+  ;; every registered `context-menu-functions' entry benefits.
   (when (and cmacs-piper-override-mouse-3
              ;; context-menu-map is only defvar'd once context-menu-mode
-             ;; runs; without it the global-set-key below would error.
-             ;; context-menu-mode 1 above should have done that, but
-             ;; tolerate weird load orders.
+             ;; runs.  The toggle above should have done it, but tolerate
+             ;; odd load orders.
              (boundp 'context-menu-map))
-    (let* ((after-toggle (lookup-key global-map [mouse-3]))
-           (looks-like-context (or (eq after-toggle 'context-menu-map)
-                                   (keymapp after-toggle))))
-      (unless looks-like-context
-        (let ((was after-toggle))
-          (global-set-key [mouse-3] context-menu-map)
-          (when (or (featurep 'doom) (boundp 'doom-version))
-            (message
-             "cmacs-piper: Doom detected with mouse-3 -> %s; rebound to context-menu-map.  (Set cmacs-piper-override-mouse-3 to nil to keep your original binding.)"
-             was)))))))
+    (let ((cmacs-menu-override-mouse-3 cmacs-piper-override-mouse-3))
+      (cmacs-menu-claim-mouse-3 #'cmacs-menu-open-context-menu))))
 
 ;;;###autoload
 (add-hook 'after-init-hook #'cmacs-piper-context-menu-bootstrap)
