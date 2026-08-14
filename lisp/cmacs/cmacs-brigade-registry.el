@@ -133,7 +133,9 @@ wire.  Pass structured data as a JSON string parameter.")
   confirm         ; nil | ask | always
   async           ; boolean
   timeout         ; seconds
-  handler)        ; function
+  handler         ; function
+  menu            ; nil | t | (TARGET-KIND...) -- see `cmacs-ai-menu'
+  menu-label)     ; string shown in the menu instead of the tool name
 
 (define-error 'cmacs-brigade-tool-error
   "Invalid brigade tool definition" 'cmacs-brigade-error)
@@ -182,7 +184,7 @@ SPEC is (NAME TYPE DOC &rest KEYWORDS) where KEYWORDS may include
 ;;;###autoload
 (cl-defun cmacs-brigade-register-tool
     (&key name description params handler
-          group destructive confirm async timeout)
+          group destructive confirm async timeout menu menu-label)
   "Publish a capability to every brigade agent surface.
 
 NAME is a symbol; the wire name is its snake_case form.  DESCRIPTION is
@@ -200,6 +202,22 @@ Optional keys:
   ASYNC        non-nil means HANDLER takes one extra leading argument,
                a DONE callback, and its return value is ignored
   TIMEOUT      seconds before an async call is abandoned
+  MENU         non-nil publishes the tool to the AI right-click menu as
+               well.  t means \"offer it on anything\"; a list of target
+               kinds -- (region file org-node ...) -- restricts it to
+               those.  The tool's first parameter receives the rendered
+               target; the rest are read from the minibuffer.  A tool
+               marked DESTRUCTIVE or CONFIRM is confirmed before it runs,
+               because a menu click must not become a quieter way to do
+               something the tool itself considers worth asking about.
+  MENU-LABEL   menu text, when the tool's name is not what you want to
+               read there
+
+MENU is what makes the extension surface symmetrical: one
+`cmacs-brigade-deftool' form in your init already publishes a capability
+to in-process agents, to CLI agents over the MCP relay and to external
+MCP clients.  With MENU it reaches you as well, without a second
+registration and without any menu-specific code in the tool.
 
 Re-registering a name replaces it, which is what makes reloading your
 init file idempotent.
@@ -222,7 +240,8 @@ directly when registering tools programmatically."
                   :params parsed :group group :destructive destructive
                   :confirm confirm :async async
                   :timeout (or timeout cmacs-brigade-tool-default-timeout)
-                  :handler handler)))
+                  :handler handler
+                  :menu menu :menu-label menu-label)))
     (cmacs-brigade--registry-put 'tool name tool)
     ;; Mirror the metadata into C for MCP publication and the allowlist
     ;; gate.  Absent when brigade is not compiled in, in which case the
@@ -253,8 +272,19 @@ DESCRIPTION is the model-facing summary.  PARAMS is a list of
 \(PNAME TYPE DOC &rest KEYWORDS) specs; each PNAME is bound in BODY.
 
 BODY may be preceded by keyword options -- :group, :destructive,
-:confirm, :async and :timeout -- which mean what they do in
-`cmacs-brigade-register-tool'.
+:confirm, :async, :timeout, :menu and :menu-label -- which mean what they
+do in `cmacs-brigade-register-tool'.
+
+:menu is how a tool reaches you as well as your agents:
+
+  (cmacs-brigade-deftool file-facts
+    \"Report size, mtime and line count for a path.\"
+    ((path string \"File to inspect\"))
+    :menu \\='(file files) :menu-label \"File facts\"
+    (my/file-facts path))
+
+That one form now answers to an in-process agent, a CLI agent over the
+MCP relay, an external MCP client, and a right-click on a file in dired.
 
 With :async t, BODY additionally has `done' in scope; call it with the
 result string when the work finishes, and BODY's own return value is
