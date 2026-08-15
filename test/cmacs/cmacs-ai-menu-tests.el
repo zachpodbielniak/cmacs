@@ -62,6 +62,24 @@ ACTIONS is a list of `cmacs-ai-register-action' argument lists."
            ,@body)
        (setq cmacs-ai-target--resolvers saved))))
 
+(defmacro cmacs-ai-menu-tests--with-repo (var &rest body)
+  "Run BODY in a throwaway git repo bound to VAR, with one commit."
+  (declare (indent 1))
+  `(let ((,var (make-temp-file "cmacs-ai-commit-test" t)))
+     (unwind-protect
+         (let ((default-directory (file-name-as-directory ,var))
+               (process-environment
+                (append '("GIT_AUTHOR_NAME=t" "GIT_AUTHOR_EMAIL=t@t"
+                          "GIT_COMMITTER_NAME=t" "GIT_COMMITTER_EMAIL=t@t")
+                        process-environment)))
+           (call-process "git" nil nil nil "init" "-q" "-b" "main")
+           (with-temp-file (expand-file-name "a.txt" ,var) (insert "one\n"))
+           (call-process "git" nil nil nil "add" "-A")
+           (call-process "git" nil nil nil "commit" "-qm"
+                         "feat(seed): the first commit")
+           ,@body)
+       (delete-directory ,var t))))
+
 (defun cmacs-ai-menu-tests--always (label)
   "An action list that always applies, labelled LABEL."
   (list :name (intern (format "test-%s" label))
@@ -538,25 +556,98 @@ being the first of them."
     (insert "not mail")
     (should-error (cmacs-ai-mail-digest) :type 'user-error)))
 
-;;;; Commit messages -----------------------------------------------------
+;;;; The Git group --------------------------------------------------------
 
-(defmacro cmacs-ai-menu-tests--with-repo (var &rest body)
-  "Run BODY in a throwaway git repo bound to VAR, with one commit."
-  (declare (indent 1))
-  `(let ((,var (make-temp-file "cmacs-ai-commit-test" t)))
-     (unwind-protect
-         (let ((default-directory (file-name-as-directory ,var))
-               (process-environment
-                (append '("GIT_AUTHOR_NAME=t" "GIT_AUTHOR_EMAIL=t@t"
-                          "GIT_COMMITTER_NAME=t" "GIT_COMMITTER_EMAIL=t@t")
-                        process-environment)))
-           (call-process "git" nil nil nil "init" "-q" "-b" "main")
-           (with-temp-file (expand-file-name "a.txt" ,var) (insert "one\n"))
-           (call-process "git" nil nil nil "add" "-A")
-           (call-process "git" nil nil nil "commit" "-qm"
-                         "feat(seed): the first commit")
-           ,@body)
-       (delete-directory ,var t))))
+(ert-deftest cmacs-ai-menu-tests-git-group-scoped ()
+  "The Git group appears in repo buffers and nowhere else."
+  (require 'cmacs-ai-git)
+  (skip-unless (and (fboundp 'cmacs-ai-supported-p) (cmacs-ai-supported-p)))
+  (cmacs-ai-menu-tests--with-repo dir
+    (dolist (probe '((magit-status-mode . t)
+                     (magit-diff-mode . t)
+                     (magit-revision-mode . t)
+                     (diff-mode . t)
+                     (text-mode . nil)))
+      (with-temp-buffer
+        (setq default-directory (file-name-as-directory dir))
+        (setq major-mode (car probe))
+        (setq-local diff-vc-backend nil)
+        (insert "@@ -1 +1 @@\n-one\n+two\n")
+        (let ((git (alist-get 'git (cmacs-ai-actions-for (cmacs-ai-target-at)))))
+          (should (eq (and git t) (cdr probe)))))))
+  ;; ...and not in a repo-shaped mode that is not actually in a repo.
+  (let ((tmp (make-temp-file "cmacs-ai-norepo" t)))
+    (unwind-protect
+        (with-temp-buffer
+          (setq default-directory (file-name-as-directory tmp))
+          (setq major-mode 'magit-status-mode)
+          (should-not (alist-get 'git (cmacs-ai-actions-for
+                                       (cmacs-ai-target-at)))))
+      (delete-directory tmp t))))
+
+(ert-deftest cmacs-ai-menu-tests-git-applies-need-nothing-loaded ()
+  "The Git entries appear WITHOUT cmacs-ai-commit having been loaded.
+
+The regression, twice over: an `:applies' that tests `fboundp' on a
+function living in a lazily-loaded file is always false in a real
+session, so the entry is invisible everywhere except in a test that
+required the file first.  This runs a fresh Emacs that loads only
+cmacs-ai-menu -- the exact state a live session is in -- so an in-process
+test that has already pulled the file in cannot mask it."
+  (skip-unless (and (fboundp 'cmacs-ai-supported-p) (cmacs-ai-supported-p)))
+  (let ((emacs (expand-file-name invocation-name invocation-directory))
+        (lisp (expand-file-name "lisp" source-directory)))
+    (skip-unless (file-executable-p emacs))
+    (cmacs-ai-menu-tests--with-repo dir
+      (with-temp-buffer
+        (let ((status
+               (call-process
+                emacs nil t nil "-Q" "--batch"
+                "-L" lisp "-L" (expand-file-name "cmacs" lisp)
+                "--eval"
+                (format "%S"
+                        `(progn
+                           (require 'cmacs-ai-menu)
+                           (when (featurep 'cmacs-ai-commit)
+                             (error "cmacs-ai-commit was loaded eagerly"))
+                           (with-temp-buffer
+                             (setq default-directory ,(file-name-as-directory dir))
+                             (setq major-mode 'magit-status-mode)
+                             (unless (alist-get
+                                      'git (cmacs-ai-actions-for
+                                            (cmacs-ai-target-at)))
+                               (error "Git group missing in magit-status"))
+                             (princ "ok")))))))
+          (should (eq status 0))
+          (should (string-match-p "ok" (buffer-string))))))))
+
+(ert-deftest cmacs-ai-menu-tests-git-commands-exist ()
+  "The Git actions are bindable commands too."
+  (require 'cmacs-ai-git)
+  (dolist (c '(cmacs-ai-git-review
+               cmacs-ai-git-summary
+               cmacs-ai-git-explain-hunk
+               cmacs-ai-suggest-commit-message
+               cmacs-ai-menu-pick-git))
+    (should (commandp c))))
+
+(ert-deftest cmacs-ai-menu-tests-git-repo-p-without-vc-mode ()
+  "`cmacs-ai-git--repo-p' works where `vc-root-dir' does not."
+  (require 'cmacs-ai-git)
+  (cmacs-ai-menu-tests--with-repo dir
+    (with-temp-buffer
+      (setq default-directory (file-name-as-directory dir))
+      (setq major-mode 'magit-status-mode)
+      (should (cmacs-ai-git--repo-p))
+      (should-not (ignore-errors (vc-root-dir)))))
+  (let ((tmp (make-temp-file "cmacs-ai-norepo" t)))
+    (unwind-protect
+        (with-temp-buffer
+          (setq default-directory (file-name-as-directory tmp))
+          (should-not (cmacs-ai-git--repo-p)))
+      (delete-directory tmp t))))
+
+;;;; Commit messages -----------------------------------------------------
 
 (ert-deftest cmacs-ai-menu-tests-commit-root-without-vc-mode ()
   "The repo root is found in a buffer with no file and no `vc-mode'.
@@ -633,26 +724,6 @@ it -- which would refuse the command in the one place it is most wanted."
   (with-temp-buffer
     (setq buffer-file-name "/tmp/x/.git/COMMIT_EDITMSG")
     (should (cmacs-ai-commit--commit-buffer-p))))
-
-(ert-deftest cmacs-ai-menu-tests-commit-action-scoped-to-vc-buffers ()
-  "The menu entry appears in magit/diff buffers inside a repo, not elsewhere."
-  (require 'cmacs-ai-commit)
-  (skip-unless (and (fboundp 'cmacs-ai-supported-p) (cmacs-ai-supported-p)))
-  (cmacs-ai-menu-tests--with-repo dir
-    (dolist (probe '((magit-status-mode . t)
-                     (magit-diff-mode . t)
-                     (diff-mode . t)
-                     (text-mode . nil)))
-      (with-temp-buffer
-        (setq default-directory (file-name-as-directory dir))
-        (setq major-mode (car probe))
-        (setq-local diff-vc-backend nil)
-        (insert "@@ -1 +1 @@\n-one\n+two\n")
-        (let* ((tg (cmacs-ai-target-at))
-               (labels (mapcar (lambda (a) (cmacs-ai-action-label a tg))
-                               (alist-get 'ask (cmacs-ai-actions-for tg)))))
-          (should (eq (and (member "Draft a commit message" labels) t)
-                      (cdr probe))))))))
 
 ;;;; Actions -----------------------------------------------------------
 

@@ -78,6 +78,8 @@ Four groups, in the same order everywhere:
 @multitable @columnfractions .18 .82
 @headitem Group @tab For
 @item @samp{Mail} @tab mail-specific; present only in a mail buffer
+@item @samp{Git} @tab git-specific; present only in magit, a diff or a
+  commit buffer
 @item @samp{Ask AI} @tab answer something about this, in a result window
 @item @samp{Chat} @tab carry this into a conversation that persists
 @item @samp{Brigade} @tab hand this to an agent that works while you are
@@ -324,6 +326,40 @@ one-prompt imitation would be strictly worse.
 Two entries are deliberately withheld from a folder: @samp{Rephrase} and
 @samp{Reply} mean something for one message and nothing for fifteen, so
 they apply only to single items.  Summarize, explain and ask still apply.
+
+@subsection The Git Group
+
+@cindex magit
+@cindex git
+
+In magit, a diff or a commit buffer the menu grows a @samp{Git} submenu,
+the sibling of the Mail group and for the same reason.
+
+@multitable @columnfractions .32 .68
+@headitem Entry @tab Does
+@item Draft a commit message
+  @tab from the diff and this project's commit style
+@item Review these changes
+  @tab what a careful colleague would say before it lands
+@item Summarize the changes
+  @tab for a release note or a merge-request description
+@item Explain this hunk @tab only when point is on one
+@end multitable
+
+The review prompt is told explicitly not to manufacture findings: a
+review that invents nits to look thorough is worse than no review, so it
+is asked to say plainly when a change looks fine.
+
+@strong{Every predicate in this group is deliberately self-contained.}
+The first version tested @code{fboundp} on a private function in
+@file{cmacs-ai-commit.el} -- a file nothing loads until an action runs --
+so the entry was invisible in every real session and visible only in a
+test that had required the file first.  Predicates test
+@code{locate-dominating-file} and the major mode, which need nothing
+loaded; @code{:run} does the requiring.  A subprocess test pins this,
+since an in-process test cannot: it starts a fresh Emacs that loads only
+@code{cmacs-ai-menu} and asserts both that the Git group is present and
+that @code{cmacs-ai-commit} is still unloaded.
 
 @subsection Commit Messages
 

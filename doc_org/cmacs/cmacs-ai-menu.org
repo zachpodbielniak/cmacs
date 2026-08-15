@@ -51,6 +51,7 @@ Four groups, in the same order everywhere:
 | Group     | For                                                       |
 |-----------+-----------------------------------------------------------|
 | =Mail=    | mail-specific; present only in a mail buffer               |
+| =Git=     | git-specific; present only in magit, a diff or a commit buffer |
 | =Ask AI=  | answer something about this, in a result window           |
 | =Chat=    | carry this into a conversation that persists              |
 | =Brigade= | hand this to an agent that works while you are not looking |
@@ -246,6 +247,33 @@ one-prompt imitation would be strictly worse.
 Two entries are deliberately withheld from a folder: *Rephrase* and
 *Reply* mean something for one message and nothing for fifteen, so they
 apply only to single items.  Summarize, explain and ask still apply.
+
+** The Git group
+
+In magit, a diff or a commit buffer the menu grows a *Git* submenu, the
+sibling of the Mail group and for the same reason.
+
+| Entry                    | Does                                             |
+|--------------------------+--------------------------------------------------|
+| Draft a commit message   | from the diff and this project's commit style    |
+| Review these changes     | what a careful colleague would say before it lands |
+| Summarize the changes    | for a release note or a merge-request description |
+| Explain this hunk        | only when point is on one                        |
+
+The review prompt is told explicitly not to manufacture findings: a
+review that invents nits to look thorough is worse than no review, so it
+is asked to say plainly when a change looks fine.
+
+*Every predicate in this group is deliberately self-contained.*  The
+first version tested =fboundp= on a private function in
+=cmacs-ai-commit.el= -- a file nothing loads until an action runs -- so
+the entry was invisible in every real session and visible only in a test
+that had required the file first.  Predicates test
+=locate-dominating-file= and the major mode, which need nothing loaded;
+=:run= does the requiring.  A subprocess test pins this, since an
+in-process test cannot: it starts a fresh Emacs that loads only
+=cmacs-ai-menu= and asserts both that the Git group is present and that
+=cmacs-ai-commit= is still unloaded.
 
 ** Commit messages
 

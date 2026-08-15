@@ -80,8 +80,6 @@
 (declare-function cmacs-brigade-tool-destructive "cmacs-brigade-registry" (tool))
 (declare-function cmacs-brigade-register-context-provider
                   "cmacs-brigade-registry" (&rest plist))
-(declare-function cmacs-ai-commit--root "cmacs-ai-commit" ())
-(declare-function cmacs-ai-suggest-commit-message "cmacs-ai-commit" ())
 (defvar cmacs-ai-chat--compose-marker)
 
 (defgroup cmacs-ai-actions nil
@@ -93,16 +91,17 @@
 
 (defconst cmacs-ai-action-groups
   '((mail    . "Mail")
+    (git     . "Git")
     (ask     . "Ask AI")
     (chat    . "Chat")
     (brigade . "Brigade")
     (tools   . "Tools"))
   "Submenu groups, in the order they appear.  See the Commentary.
 
-`mail' is domain-specific and sits first because it only appears at all
-in a mail buffer -- where it is what you came for -- and an empty group
-is omitted, so it costs nothing anywhere else.  The relative order of
-the general groups is the same everywhere.")
+`mail' and `git' are domain-specific and sit first because each appears
+only in its own buffers -- where it is what you came for -- and an empty
+group is omitted, so they cost nothing anywhere else.  The relative
+order of the general groups is the same everywhere.")
 
 (defun cmacs-ai-action-group-label (group)
   "The submenu label for GROUP."
@@ -308,37 +307,6 @@ piece of text ask for this as well."
          (set-mark (cdr bounds))
          (activate-mark)
          (call-interactively #'cmacs-ai-rewrite-region))))))
-
-(cmacs-ai-register-action
- :name 'cmacs-ai-commit-draft
- :group 'ask :order 12
- :label "Draft a commit message"
- :help "Draft one from the diff and this project's recent commit style"
- :applies
- (lambda (target)
-   ;; Keyed on the BUFFER, not the target kind: the useful place for this
-   ;; is magit-status, where the target under the pointer is a hunk, a
-   ;; file heading, or nothing in particular.  What matters is that you
-   ;; are looking at a repository.
-   (and (cmacs-ai-actions--ai-p)
-        (cmacs-ai-actions--library-p 'cmacs-ai-commit)
-        (buffer-live-p (cmacs-ai-target-buffer target))
-        (with-current-buffer (cmacs-ai-target-buffer target)
-          (and (or (derived-mode-p 'magit-status-mode 'magit-diff-mode
-                                   'magit-revision-mode 'magit-stash-mode
-                                   'diff-mode 'vc-dir-mode 'vc-diff-mode
-                                   'log-edit-mode 'vc-git-log-edit-mode)
-                   (bound-and-true-p git-commit-mode))
-               ;; `cmacs-ai-commit--root', not `vc-root-dir': the latter
-               ;; answers nil in a magit-status buffer, which would hide
-               ;; this entry exactly where it belongs.
-               (and (fboundp 'cmacs-ai-commit--root)
-                    (cmacs-ai-commit--root) t)))))
- :run
- (lambda (target)
-   (require 'cmacs-ai-commit)
-   (with-current-buffer (cmacs-ai-target-buffer target)
-     (cmacs-ai-suggest-commit-message))))
 
 (cmacs-ai-register-action
  :name 'cmacs-ai-document
