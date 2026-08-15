@@ -556,6 +556,187 @@ being the first of them."
     (insert "not mail")
     (should-error (cmacs-ai-mail-digest) :type 'user-error)))
 
+;;;; The Errors group ------------------------------------------------------
+
+(ert-deftest cmacs-ai-menu-tests-errors-group-scoped ()
+  "The Errors group follows the target kind, not the major mode."
+  (require 'cmacs-ai-errors)
+  (skip-unless (and (fboundp 'cmacs-ai-supported-p) (cmacs-ai-supported-p)))
+  (dolist (probe '((compilation-mode . t)
+                   (grep-mode . t)
+                   (backtrace-mode . t)
+                   (debugger-mode . t)
+                   (text-mode . nil)))
+    (with-temp-buffer
+      (setq major-mode (car probe))
+      (insert "foo.c:12:5: error: 'x' undeclared\n")
+      (should (eq (and (assq 'errors
+                             (cmacs-ai-actions-for (cmacs-ai-target-at)))
+                       t)
+                  (cdr probe))))))
+
+(ert-deftest cmacs-ai-menu-tests-errors-widen-context ()
+  "An Errors action fetches more source than the resolver captured.
+
+The resolver runs while a menu is being built and must stay cheap; the
+enclosing function is worth reading only once you have asked."
+  (require 'cmacs-ai-errors)
+  (let ((file (make-temp-file "cmacs-ai-err" nil ".c")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (dotimes (i 80) (insert (format "int line_%d(void);\n" i))))
+          (let ((buf (find-file-noselect file)))
+            (unwind-protect
+                (with-current-buffer buf
+                  (let* ((cmacs-ai-errors-context-lines 20)
+                         (target (cmacs-ai-target-create
+                                  :kind 'diagnostic :file file :buffer buf
+                                  :text "error here"
+                                  :plist (list :line 40)))
+                         (wider (cmacs-ai-errors--wider-source target)))
+                    (should wider)
+                    (should (string-match-p "line_39" wider))
+                    (should (string-match-p "line_58" wider))
+                    ;; ...but not the whole file.
+                    (should-not (string-match-p "line_5\\b" wider))))
+              (kill-buffer buf))))
+      (delete-file file))))
+
+(ert-deftest cmacs-ai-menu-tests-errors-no-buffer-context ()
+  "A diagnostic with no source buffer degrades instead of signalling."
+  (require 'cmacs-ai-errors)
+  (should-not (cmacs-ai-errors--wider-source
+               (cmacs-ai-target-create :kind 'diagnostic :text "x"))))
+
+;;;; The Terminal group ----------------------------------------------------
+
+(ert-deftest cmacs-ai-menu-tests-term-no-phantom-bacon-mode ()
+  "The terminal resolver must not claim a major mode that does not exist.
+
+`cmacs-bacon-mode' never existed: `M-x bacon' runs `cmacs --bacon'
+inside vterm, so a bacon buffer IS a vterm buffer.  Listing the phantom
+mode made bacon look supported while it was only ever matched by the
+vterm entry, and never identified as bacon at all."
+  (let ((r (gethash 'terminal cmacs-ai-target--resolvers)))
+    (should-not (memq 'cmacs-bacon-mode (plist-get r :modes)))
+    (should (memq 'vterm-mode (plist-get r :modes)))))
+
+(ert-deftest cmacs-ai-menu-tests-term-bacon-detection ()
+  "Bacon is recognised by buffer name, and told apart from other shells."
+  (require 'cmacs-ai-term)
+  (dolist (probe '(("*bacon*"    vterm-mode  t   "bacon")
+                   ("*bacon*<2>" vterm-mode  t   "bacon")
+                   ("*vterm*"    vterm-mode  nil "a POSIX shell")
+                   ("*eshell*"   eshell-mode nil "eshell")))
+    (with-temp-buffer
+      (setq major-mode (nth 1 probe))
+      (rename-buffer (nth 0 probe) t)
+      (should (eq (cmacs-ai-term-bacon-buffer-p) (nth 2 probe)))
+      (should (equal (cmacs-ai-term-shell-name) (nth 3 probe))))))
+
+(ert-deftest cmacs-ai-menu-tests-term-dialect-note ()
+  "The prompt is told which shell it is looking at.
+Advice about bash builtins is wrong in bacon, and vice versa."
+  (require 'cmacs-ai-term)
+  (with-temp-buffer
+    (setq major-mode 'vterm-mode)
+    (rename-buffer "*bacon*" t)
+    (let ((note (cmacs-ai-term--dialect-note (current-buffer))))
+      (should (string-match-p "BACON" note))
+      (should (string-match-p "not bash" note))))
+  (with-temp-buffer
+    (setq major-mode 'eshell-mode)
+    (should (string-match-p "eshell"
+                            (cmacs-ai-term--dialect-note (current-buffer)))))
+  (with-temp-buffer
+    (setq major-mode 'vterm-mode)
+    (should (string-empty-p
+             (cmacs-ai-term--dialect-note (current-buffer))))))
+
+(ert-deftest cmacs-ai-menu-tests-term-first-line ()
+  "Only the first non-empty line -- the command -- is extracted."
+  (require 'cmacs-ai-term)
+  (should (equal (cmacs-ai-term--first-line "\n\nls -la /tmp\n\nbecause...")
+                 "ls -la /tmp"))
+  (should-not (cmacs-ai-term--first-line "   \n \n")))
+
+(ert-deftest cmacs-ai-menu-tests-term-send-never-executes ()
+  "Text sent to a terminal carries NO newline.
+
+The safety property of the whole group: a menu that could execute a
+shell command it had just invented would be the most dangerous thing
+here.  The command lands at the prompt and stops."
+  (require 'cmacs-ai-term)
+  (let ((sent nil))
+    (cl-letf (((symbol-function 'vterm-send-string)
+               (lambda (s &optional _paste) (setq sent s))))
+      (with-temp-buffer
+        (setq major-mode 'vterm-mode)
+        (cmacs-ai-term--send (current-buffer) "rm -rf /tmp/x")
+        (should (equal sent "rm -rf /tmp/x"))
+        (should-not (string-match-p "\n" sent)))))
+  ;; The comint/eshell path inserts, and likewise must not add a newline.
+  (with-temp-buffer
+    (setq major-mode 'eshell-mode)
+    (cmacs-ai-term--send (current-buffer) "echo hi")
+    (should (equal (buffer-string) "echo hi"))))
+
+(ert-deftest cmacs-ai-menu-tests-term-group-scoped ()
+  "The Terminal group appears on terminal targets only."
+  (require 'cmacs-ai-term)
+  (skip-unless (and (fboundp 'cmacs-ai-supported-p) (cmacs-ai-supported-p)))
+  (dolist (probe '((vterm-mode . t) (eshell-mode . t) (comint-mode . t)
+                   (text-mode . nil)))
+    (with-temp-buffer
+      (setq major-mode (car probe))
+      (insert "$ ls\nout\n")
+      (should (eq (and (assq 'terminal
+                             (cmacs-ai-actions-for (cmacs-ai-target-at)))
+                       t)
+                  (cdr probe))))))
+
+;;;; The Notes group -------------------------------------------------------
+
+(ert-deftest cmacs-ai-menu-tests-notes-group-scoped ()
+  "The Notes group appears on org headings and roamgraph nodes."
+  (require 'cmacs-ai-notes)
+  (skip-unless (and (fboundp 'cmacs-ai-supported-p) (cmacs-ai-supported-p)))
+  (skip-unless (cmacs-ai-notes--corpus-available-p))
+  (with-temp-buffer
+    (org-mode)
+    (insert "* A note\n\nSome content.\n")
+    (goto-char (point-min))
+    (should (assq 'notes (cmacs-ai-actions-for (cmacs-ai-target-at)))))
+  (with-temp-buffer
+    (insert "not a note")
+    (should-not (assq 'notes (cmacs-ai-actions-for (cmacs-ai-target-at))))))
+
+(ert-deftest cmacs-ai-menu-tests-notes-refuse-without-index ()
+  "With no memory index the Notes actions say so instead of degrading.
+
+Quietly falling back to \"summarize this one note\" would look like it
+worked, and the whole point of the group is the OTHER notes."
+  (require 'cmacs-ai-notes)
+  (cl-letf (((symbol-function 'cmacs-ai-notes--related) (lambda (_t) nil)))
+    (should-error
+     (cmacs-ai-notes--run "links" "sys"
+                          (cmacs-ai-target-create
+                           :kind 'org-node :text "* A note\nbody"))
+     :type 'user-error)))
+
+(ert-deftest cmacs-ai-menu-tests-notes-query-is-bounded ()
+  "The retrieval query is clipped: an embedding of a whole note is a blur."
+  (require 'cmacs-ai-notes)
+  (let ((seen nil))
+    (cl-letf (((symbol-function 'cmacs-ai-notes--corpus-available-p)
+               (lambda () t))
+              ((symbol-function 'cmacs-brigade-memory-search)
+               (lambda (q &optional _k) (setq seen q) nil)))
+      (cmacs-ai-notes--related (make-string 9000 ?x))
+      (should seen)
+      (should (<= (length seen) 2000)))))
+
 ;;;; The Git group --------------------------------------------------------
 
 (ert-deftest cmacs-ai-menu-tests-git-group-scoped ()

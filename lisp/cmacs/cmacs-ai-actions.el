@@ -19,7 +19,11 @@
 ;; The groups are fixed, and deliberately so.  The same submenus in the
 ;; same order everywhere means you stop reading the menu after a week:
 ;;
-;;   Mail     mail-specific, and present only in a mail buffer
+;;   Mail      mail-specific, and present only in a mail buffer
+;;   Git       magit, diffs and commit buffers
+;;   Errors    diagnostics, build output and backtraces
+;;   Terminal  vterm, eshell, comint, the REPLs and bacon
+;;   Notes     org headings and roamgraph nodes
 ;;   Ask AI   answer something about this, in a result window
 ;;   Chat     carry this into a conversation that persists
 ;;   Brigade  hand this to an agent that works while you do not watch
@@ -90,18 +94,29 @@
 ;;;; Groups ------------------------------------------------------------
 
 (defconst cmacs-ai-action-groups
-  '((mail    . "Mail")
-    (git     . "Git")
-    (ask     . "Ask AI")
-    (chat    . "Chat")
-    (brigade . "Brigade")
-    (tools   . "Tools"))
+  '((mail     . "Mail")
+    (git      . "Git")
+    (errors   . "Errors")
+    (terminal . "Terminal")
+    (notes    . "Notes")
+    (ask      . "Ask AI")
+    (chat     . "Chat")
+    (brigade  . "Brigade")
+    (tools    . "Tools"))
   "Submenu groups, in the order they appear.  See the Commentary.
 
-`mail' and `git' are domain-specific and sit first because each appears
-only in its own buffers -- where it is what you came for -- and an empty
-group is omitted, so they cost nothing anywhere else.  The relative
-order of the general groups is the same everywhere.")
+The domain groups -- `mail', `git', `errors', `terminal', `notes' --
+sit first because each appears only in its own buffers, where it is what
+you came for.  An empty group is omitted, so they cost nothing
+elsewhere, and at most one or two are ever present at once.  The
+relative order of the general groups is the same everywhere.
+
+A domain earns a group when it has a corpus to read or an artifact to
+produce: mail has a folder of messages, git has history and a commit
+message, errors have the surrounding source, terminals have a command to
+write, notes have the rest of the knowledge base.  Where a surface has
+neither, the general operations already say everything sayable and a
+group would just be a second door.")
 
 (defun cmacs-ai-action-group-label (group)
   "The submenu label for GROUP."

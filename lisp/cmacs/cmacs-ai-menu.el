@@ -43,6 +43,9 @@
 ;; the user, since a group nobody loaded is a group that never appears.
 (require 'cmacs-ai-mail)
 (require 'cmacs-ai-git)
+(require 'cmacs-ai-errors)
+(require 'cmacs-ai-term)
+(require 'cmacs-ai-notes)
 
 (defgroup cmacs-ai-menu nil
   "The universal AI context menu."
@@ -205,7 +208,7 @@ and whatever your `cmacs-brigade-deftool' forms published with :menu."
 ;; One command per group, so each can have its own key.  Defined rather
 ;; than closed over, so they are ordinary named commands that `M-x' and
 ;; `where-is' can find.
-(dolist (group '(mail git ask chat brigade tools))
+(dolist (group '(mail git errors terminal notes ask chat brigade tools))
   (defalias (intern (format "cmacs-ai-menu-pick-%s" group))
     (lambda () (interactive) (cmacs-ai-menu-pick group))
     (format "Choose an AI action from the %s group for the thing at point."
@@ -213,6 +216,9 @@ and whatever your `cmacs-brigade-deftool' forms published with :menu."
 
 ;;;###autoload (autoload 'cmacs-ai-menu-pick-mail "cmacs-ai-menu" nil t)
 ;;;###autoload (autoload 'cmacs-ai-menu-pick-git "cmacs-ai-menu" nil t)
+;;;###autoload (autoload 'cmacs-ai-menu-pick-errors "cmacs-ai-menu" nil t)
+;;;###autoload (autoload 'cmacs-ai-menu-pick-terminal "cmacs-ai-menu" nil t)
+;;;###autoload (autoload 'cmacs-ai-menu-pick-notes "cmacs-ai-menu" nil t)
 ;;;###autoload (autoload 'cmacs-ai-menu-pick-ask "cmacs-ai-menu" nil t)
 ;;;###autoload (autoload 'cmacs-ai-menu-pick-chat "cmacs-ai-menu" nil t)
 ;;;###autoload (autoload 'cmacs-ai-menu-pick-brigade "cmacs-ai-menu" nil t)

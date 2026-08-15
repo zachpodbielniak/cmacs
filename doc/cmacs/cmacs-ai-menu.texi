@@ -80,6 +80,9 @@ Four groups, in the same order everywhere:
 @item @samp{Mail} @tab mail-specific; present only in a mail buffer
 @item @samp{Git} @tab git-specific; present only in magit, a diff or a
   commit buffer
+@item @samp{Errors} @tab diagnostics, build output and backtraces
+@item @samp{Terminal} @tab vterm, eshell, comint, the cmacs REPLs, bacon
+@item @samp{Notes} @tab org headings and roamgraph nodes
 @item @samp{Ask AI} @tab answer something about this, in a result window
 @item @samp{Chat} @tab carry this into a conversation that persists
 @item @samp{Brigade} @tab hand this to an agent that works while you are
@@ -326,6 +329,125 @@ one-prompt imitation would be strictly worse.
 Two entries are deliberately withheld from a folder: @samp{Rephrase} and
 @samp{Reply} mean something for one message and nothing for fifteen, so
 they apply only to single items.  Summarize, explain and ask still apply.
+
+@subsection The Errors Group
+
+@cindex diagnostics
+@cindex backtrace
+
+Wherever something failed: a flymake or flycheck diagnostic in a source
+buffer, a compilation or grep buffer, a backtrace, the debugger.  Keyed
+on the target @emph{kind}, not the major mode, so all three surfaces
+share one group.
+
+@multitable @columnfractions .38 .62
+@headitem Entry @tab Does
+@item Explain this error @tab what it means, and why it fires @emph{here}
+@item Suggest a fix @tab a unified diff to read and apply yourself
+@item Why is this happening? / Trace the root cause
+  @tab ranked hypotheses, each with what to check
+@end multitable
+
+Nothing edits your buffer and nothing runs a build.  An error is exactly
+the situation where you have least reason to trust a confident-sounding
+change you did not read, so a fix arrives as a diff.
+
+The prompts are written against the ways this goes wrong: the fix prompt
+is told that silencing a warning is not a fix, and to say what it would
+need to see rather than guess when the cause lies outside the excerpt;
+the cause prompt is told to state its confidence and to admit when the
+evidence does not decide between hypotheses.
+
+One thing this group does beyond prompting is @emph{widen the context}.
+The resolver captures a few lines around the error because a menu has to
+be cheap to build; by the time you have chosen to ask, the enclosing
+function is worth reading, so
+@code{cmacs-ai-errors-context-lines} (40) is fetched then.
+
+@subsection The Terminal Group
+
+@cindex vterm
+@cindex bacon
+
+In vterm, eshell, term, comint shells, the cmacs REPLs, and
+@strong{bacon}.
+
+@multitable @columnfractions .38 .62
+@headitem Entry @tab Does
+@item Explain what happened @tab the last command and its output
+@item Fix this command @tab the corrected command, first line
+@item Write a command@dots{} @tab describe what you want
+@end multitable
+
+What earns this a group is the @emph{destination}.  Everywhere else in
+the menu the answer is prose you read; here it is a command line, and the
+useful place for it is your prompt.  So the result window gains one key:
+
+@table @kbd
+@item C-c C-i
+send the first line to the terminal it came from
+@end table
+
+It is @strong{sent, not run}.  The text lands at your prompt and stops;
+you read it and press @key{RET} yourself.  A menu that could execute a
+shell command it had just invented would be the most dangerous thing in
+this whole feature, so the sender is confirmed, strips to a single line,
+and never appends a newline -- there is a test asserting exactly that.
+
+Because the first line is pasted verbatim, the two command prompts are
+told to put the command there alone, and to use capitalised placeholders
+like @code{FIXME-PATH} rather than inventing a plausible filename.  A
+guess that looks right is worse than a blank that does not.
+
+@subsubsection Bacon
+
+@command{M-x bacon} runs @command{cmacs --bacon} inside vterm, so a
+bacon buffer @emph{is} a vterm buffer -- there is no
+@code{cmacs-bacon-mode}, and an earlier version of the resolver listed
+one that never existed.  Bacon is recognised by its buffer name
+(@code{bacon-buffer-name}, and vterm's @samp{*bacon*<2>} uniquified
+form) instead.
+
+That matters beyond bookkeeping: the prompts are told which shell they
+are looking at, because advice about bash builtins is wrong in bacon and
+vice versa.  eshell and the crispy / calculator REPLs get the same
+treatment.
+
+@subsection The Notes Group
+
+@cindex org-roam
+@cindex second brain
+
+On org headings and roamgraph nodes.  The group where cmacs has leverage
+nothing general-purpose does: ai-brigade already maintains a similarity
+index over the notes repository, so the questions worth asking are the
+ones that need the @emph{other} notes.
+
+@multitable @columnfractions .38 .62
+@headitem Entry @tab Does
+@item Suggest links
+  @tab which related notes are worth linking, and why
+@item What does this contradict?
+  @tab real disagreements, not similar topics
+@item What is this note missing? @tab questions and an outline
+@end multitable
+
+Every action retrieves before it prompts: the note's text goes to
+@code{cmacs-brigade-memory-search} and the
+@code{cmacs-ai-notes-neighbours} (8) nearest notes are handed to the
+model alongside it.  The query is clipped to 2000 characters -- an
+embedding of a whole long note is a blur, and the opening is usually
+what it is actually about.
+
+With no index built the actions @emph{say so} and stop, rather than
+quietly degrading into a worse version of ``summarize'' that would look
+like it had worked.  Run @kbd{M-x cmacs-brigade-memory-build} first.
+
+Nothing here writes to your notes.  ``What is this note missing?'' is
+deliberately told to prompt rather than ghostwrite: a knowledge base
+filled with confident text nobody reasoned through is worse than a short
+honest one, and the failure mode of an eager assistant editing a second
+brain is not one you would notice quickly.
 
 @subsection The Git Group
 
@@ -704,6 +826,10 @@ Setting them to @code{nil} defers to @code{cmacs-ai-default-provider} and
   @tab model for the text operations
 @item @code{cmacs-ai-summarize-system-prompt} etc. @tab ---
   @tab the system prompt for each operation
+@item @code{cmacs-ai-errors-context-lines} @tab 40
+  @tab source fetched when an Errors action runs
+@item @code{cmacs-ai-notes-neighbours} @tab 8
+  @tab related notes retrieved as context
 @item @code{cmacs-ai-commit-conventional} @tab @code{t}
   @tab Conventional Commits as the default shape
 @item @code{cmacs-ai-commit-log-lookback} @tab 30

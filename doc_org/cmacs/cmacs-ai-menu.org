@@ -52,6 +52,9 @@ Four groups, in the same order everywhere:
 |-----------+-----------------------------------------------------------|
 | =Mail=    | mail-specific; present only in a mail buffer               |
 | =Git=     | git-specific; present only in magit, a diff or a commit buffer |
+| =Errors=  | diagnostics, build output and backtraces                    |
+| =Terminal= | vterm, eshell, comint, the cmacs REPLs and bacon           |
+| =Notes=   | org headings and roamgraph nodes                            |
 | =Ask AI=  | answer something about this, in a result window           |
 | =Chat=    | carry this into a conversation that persists              |
 | =Brigade= | hand this to an agent that works while you are not looking |
@@ -247,6 +250,104 @@ one-prompt imitation would be strictly worse.
 Two entries are deliberately withheld from a folder: *Rephrase* and
 *Reply* mean something for one message and nothing for fifteen, so they
 apply only to single items.  Summarize, explain and ask still apply.
+
+** The Errors group
+
+Wherever something failed: a flymake or flycheck diagnostic in a source
+buffer, a compilation or grep buffer, a backtrace, the debugger.  Keyed
+on the target /kind/, not the major mode, so all three surfaces share
+one group.
+
+| Entry               | Does                                            |
+|---------------------+-------------------------------------------------|
+| Explain this error  | what it means, and why it fires *here*          |
+| Suggest a fix       | a unified diff to read and apply yourself       |
+| Why is this happening? / Trace the root cause | ranked hypotheses, each with what to check |
+
+Nothing edits your buffer and nothing runs a build.  An error is exactly
+the situation where you have least reason to trust a confident-sounding
+change you did not read, so a fix arrives as a diff.
+
+The prompts are written against the ways this goes wrong: the fix prompt
+is told that silencing a warning is not a fix, and to say what it would
+need to see rather than guess when the cause is outside the excerpt; the
+cause prompt is told to state its confidence and to admit when the
+evidence does not decide between hypotheses.
+
+One thing this group does beyond prompting is /widen the context/.  The
+resolver captures a few lines around the error because a menu has to be
+cheap to build; by the time you have chosen to ask, the enclosing
+function is worth reading, so
+=cmacs-ai-errors-context-lines= (40) is fetched then.
+
+** The Terminal group
+
+In vterm, eshell, term, comint shells, the cmacs REPLs, and *bacon*.
+
+| Entry                | Does                                           |
+|----------------------+------------------------------------------------|
+| Explain what happened | the last command and its output                |
+| Fix this command      | the corrected command, first line              |
+| Write a command...    | describe what you want                         |
+
+What earns this a group is the /destination/.  Everywhere else in the
+menu the answer is prose you read; here it is a command line, and the
+useful place for it is your prompt.  So the result window gains one key:
+
+: C-c C-i   send the first line to the terminal it came from
+
+It is *sent, not run*.  The text lands at your prompt and stops; you
+read it and press RET yourself.  A menu that could execute a shell
+command it had just invented would be the most dangerous thing in this
+whole feature, so the sender is confirmed, strips to a single line, and
+never appends a newline -- there is a test asserting exactly that.
+
+Because the first line is pasted verbatim, the two command prompts are
+told to put the command there alone, and to use capitalised placeholders
+like =FIXME-PATH= rather than inventing a plausible filename.  A guess
+that looks right is worse than a blank that does not.
+
+*** Bacon
+
+=M-x bacon= runs =cmacs --bacon= inside vterm, so a bacon buffer *is* a
+vterm buffer -- there is no =cmacs-bacon-mode=, and an earlier version
+of the resolver listed one that never existed.  Bacon is recognised by
+its buffer name (=bacon-buffer-name=, and vterm's =*bacon*<2>=
+uniquified form) instead.
+
+That matters beyond bookkeeping: the prompts are told which shell they
+are looking at, because advice about bash builtins is wrong in bacon and
+vice versa.  eshell and the crispy / calculator REPLs get the same
+treatment.
+
+** The Notes group
+
+On org headings and roamgraph nodes.  The group where cmacs has leverage
+nothing general-purpose does: ai-brigade already maintains a similarity
+index over the notes repository, so the questions worth asking are the
+ones that need the *other* notes.
+
+| Entry                      | Does                                      |
+|----------------------------+-------------------------------------------|
+| Suggest links              | which related notes are worth linking, and why |
+| What does this contradict? | real disagreements, not similar topics    |
+| What is this note missing? | questions and an outline                  |
+
+Every action retrieves before it prompts: the note's text goes to
+=cmacs-brigade-memory-search= and the =cmacs-ai-notes-neighbours= (8)
+nearest notes are handed to the model alongside it.  The query is
+clipped to 2000 characters -- an embedding of a whole long note is a
+blur, and the opening is usually what it is actually about.
+
+With no index built the actions *say so* and stop, rather than quietly
+degrading into a worse version of "summarize" that would look like it
+had worked.  Run =M-x cmacs-brigade-memory-build= first.
+
+Nothing here writes to your notes.  "What is this note missing?" is
+deliberately told to prompt rather than ghostwrite: a knowledge base
+filled with confident text nobody reasoned through is worse than a short
+honest one, and the failure mode of an eager assistant editing a second
+brain is not one you would notice quickly.
 
 ** The Git group
 
@@ -571,6 +672,8 @@ Setting them to nil defers to =cmacs-ai-default-provider= /
 | =cmacs-ai-textops-provider=           | =claude-code= | provider symbol for the text operations |
 | =cmacs-ai-textops-model=              | ="sonnet"= | model for the text operations             |
 | =cmacs-ai-summarize-system-prompt= etc | --     | the system prompt for each operation        |
+| =cmacs-ai-errors-context-lines=       | 40      | source fetched when an Errors action runs   |
+| =cmacs-ai-notes-neighbours=           | 8       | related notes retrieved as context          |
 | =cmacs-ai-commit-conventional=        | =t=     | Conventional Commits as the default shape   |
 | =cmacs-ai-commit-log-lookback=        | 30      | commits read as a style reference           |
 | =cmacs-ai-commit-wrap-column=         | 72      | body wrap column                            |

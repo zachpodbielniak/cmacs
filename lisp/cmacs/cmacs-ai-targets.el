@@ -35,6 +35,7 @@
 (declare-function dired-get-subdir "dired" ())
 (declare-function dirvish-curr "dirvish" ())
 (declare-function vterm-previous-prompt "vterm" (&optional n))
+(declare-function cmacs-ai-term-shell-name "cmacs-ai-term" (&optional buffer))
 (declare-function comint-previous-prompt "comint" (n))
 (declare-function eshell-previous-prompt "em-prompt" (&optional n))
 (declare-function flymake-diagnostics "flymake" (&optional beg end))
@@ -99,8 +100,11 @@ which would capture nothing.  Falls back to a fixed number of lines."
 
 (cmacs-ai-register-target-resolver
  :name 'terminal :order 20
+ ;; NOT cmacs-bacon-mode: there is no such mode.  `M-x bacon' runs
+ ;; `cmacs --bacon' inside vterm, so a bacon buffer is a vterm buffer and
+ ;; is already covered here; it is identified by name further down.
  :modes '(vterm-mode eshell-mode term-mode shell-mode comint-mode
-          cmacs-bacon-mode crispy-repl-mode cmacs-podomation-repl-mode
+          crispy-repl-mode cmacs-podomation-repl-mode
           cmacs-c-jit-repl-mode cmacs-calculator-repl-mode)
  :resolve
  (lambda (_click)
@@ -108,17 +112,18 @@ which would capture nothing.  Falls back to a fixed number of lines."
           (beg (min (cmacs-ai-targets--terminal-start) end))
           (text (buffer-substring-no-properties beg end)))
      (unless (string-empty-p (string-trim text))
-       (cmacs-ai-target-create
-        :kind 'terminal
-        :label (format "terminal output (%s)"
-                       (cmacs-ai-target-lang-of-mode))
-        :text text
-        :buffer (current-buffer)
-        :bounds (cons beg end)
-        :file (and (boundp 'default-directory) default-directory)
-        :lang "shell session"
-        :plist (list :shell (cmacs-ai-target-lang-of-mode)
-                     :cwd default-directory))))))
+       (let ((shell (if (and (fboundp 'cmacs-ai-term-shell-name))
+                        (cmacs-ai-term-shell-name)
+                      (cmacs-ai-target-lang-of-mode))))
+         (cmacs-ai-target-create
+          :kind 'terminal
+          :label (format "terminal output (%s)" shell)
+          :text text
+          :buffer (current-buffer)
+          :bounds (cons beg end)
+          :file (and (boundp 'default-directory) default-directory)
+          :lang "shell session"
+          :plist (list :shell shell :cwd default-directory)))))))
 
 ;;;; Dired and dirvish -------------------------------------------------
 ;;

@@ -413,7 +413,8 @@ handles (use `cmacs-ai-free-session')."
     ;; and the result window.  cmacs-ai-context-menu is the shim for the
     ;; region-only menu these replaced.
     cmacs-ai-target cmacs-ai-targets cmacs-ai-output cmacs-ai-textops
-    cmacs-ai-actions cmacs-ai-mail cmacs-ai-git cmacs-ai-menu cmacs-ai-context-menu
+    cmacs-ai-actions cmacs-ai-mail cmacs-ai-git cmacs-ai-errors
+    cmacs-ai-term cmacs-ai-notes cmacs-ai-menu cmacs-ai-context-menu
     cmacs-ai-image cmacs-ai-image-block cmacs-ai-image-chat
     cmacs-ai-image-menu)
   "Submodules that ship with cmacs-ai.")
