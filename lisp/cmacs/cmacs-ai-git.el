@@ -26,11 +26,6 @@
 (require 'cmacs-ai-actions)
 
 (declare-function cmacs-ai-suggest-commit-message "cmacs-ai-commit" ())
-(declare-function cmacs-ai-commit--diff "cmacs-ai-commit" ())
-(declare-function cmacs-ai-commit--log "cmacs-ai-commit" ())
-;; The diff-size bound is shared with the commit drafter rather than
-;; duplicated; cmacs-ai-commit.el is loaded before any use of it.
-(defvar cmacs-ai-commit-max-diff-bytes)
 
 (defgroup cmacs-ai-git nil
   "AI actions for magit, diffs and commit buffers."
@@ -105,31 +100,95 @@ mode it recognises, and a magit-status buffer is none of the three."
        (with-current-buffer (cmacs-ai-target-buffer target)
          (and (cmacs-ai-git--vc-buffer-p) (cmacs-ai-git--repo-p)))))
 
-;;;; Running -------------------------------------------------------------
+(defcustom cmacs-ai-git-max-diff-bytes 32000
+  "Maximum diff bytes sent to the model."
+  :type 'integer
+  :safe #'integerp)
 
-(defun cmacs-ai-git--diff-text ()
-  "The staged diff, or the unstaged one, as (TEXT . STAGED-P).
-Loads cmacs-ai-commit on demand -- this runs from an action, never from
-a predicate."
-  (require 'cmacs-ai-commit)
-  (cmacs-ai-commit--diff))
+;;;; Reading the diff ----------------------------------------------------
+;;
+;; Scope is explicit, because the default everywhere else -- "staged if
+;; anything is staged" -- is right for a commit message and wrong for a
+;; summary.  A summary of only what you happened to stage describes a
+;; slice of your work and reads as though it described all of it.
 
-(defun cmacs-ai-git--run-on-diff (title system)
-  "Stream SYSTEM over the current diff into a result window called TITLE."
-  (pcase-let* ((`(,diff . ,staged) (cmacs-ai-git--diff-text)))
-    (when (string-empty-p (string-trim diff))
-      (user-error "cmacs-ai: nothing staged and nothing changed"))
-    (when (> (length diff) cmacs-ai-commit-max-diff-bytes)
-      (setq diff (concat (substring diff 0 cmacs-ai-commit-max-diff-bytes)
+(defun cmacs-ai-git--shell (cmd)
+  "Run CMD in the repository root and return its output."
+  (with-temp-buffer
+    (let ((default-directory (or (locate-dominating-file default-directory ".git")
+                                 default-directory)))
+      (call-process-shell-command cmd nil t)
+      (buffer-string))))
+
+(defun cmacs-ai-git--has-head-p ()
+  "Non-nil when the repository has at least one commit."
+  (not (string-empty-p
+        (string-trim (cmacs-ai-git--shell
+                      "git rev-parse --verify --quiet HEAD")))))
+
+(defun cmacs-ai-git--untracked ()
+  "Names of untracked, non-ignored files."
+  (seq-remove #'string-empty-p
+              (split-string
+               (cmacs-ai-git--shell "git ls-files --others --exclude-standard")
+               "\n")))
+
+(defun cmacs-ai-git--diff (scope)
+  "Return (TEXT . LABEL) for SCOPE, one of `all\=' or `staged\='.
+
+`all\=' is the working tree against HEAD -- staged and unstaged together,
+which is what \"what have I changed\" means to a person looking at a magit
+buffer.  Untracked files cannot appear in a diff at all, so they are
+listed by name; a summary that silently omitted a whole new file would
+be worse than one that mentions it without its contents.
+
+In a repository with no commits yet there is no HEAD to diff against, so
+the staged and unstaged diffs are concatenated instead."
+  (let* ((staged-only (eq scope 'staged))
+         (diff
+          (cond
+           (staged-only (cmacs-ai-git--shell "git diff --staged --no-color"))
+           ((cmacs-ai-git--has-head-p)
+            (cmacs-ai-git--shell "git diff HEAD --no-color"))
+           (t (concat (cmacs-ai-git--shell "git diff --staged --no-color")
+                      (cmacs-ai-git--shell "git diff --no-color")))))
+         (untracked (unless staged-only (cmacs-ai-git--untracked))))
+    (when (> (length diff) cmacs-ai-git-max-diff-bytes)
+      (setq diff (concat (substring diff 0 cmacs-ai-git-max-diff-bytes)
                          "\n\n[diff truncated]")))
+    (cons (concat diff
+                  (when untracked
+                    (concat "\n\nUntracked files (contents not shown):\n"
+                            (mapconcat (lambda (f) (concat "  " f))
+                                       untracked "\n"))))
+          (if staged-only
+              "staged changes only"
+            "all changes: staged, unstaged and untracked"))))
+
+(defun cmacs-ai-git--partially-staged-p ()
+  "Non-nil when staging splits the work: something staged, something not.
+
+The condition under which \"staged only\" is a different answer from \"all
+changes\".  When it is false the two scopes produce identical output, and
+offering both is noise."
+  (and (not (string-empty-p
+             (string-trim (cmacs-ai-git--shell
+                           "git diff --staged --name-only"))))
+       (or (not (string-empty-p
+                 (string-trim (cmacs-ai-git--shell "git diff --name-only"))))
+           (cmacs-ai-git--untracked))
+       t))
+
+(defun cmacs-ai-git--run-on-diff (title system scope)
+  "Stream SYSTEM over the SCOPE diff into a result window called TITLE."
+  (pcase-let* ((`(,diff . ,label) (cmacs-ai-git--diff scope)))
+    (when (string-empty-p (string-trim diff))
+      (user-error "cmacs-ai: no %s to look at"
+                  (if (eq scope 'staged) "staged changes" "changes")))
     (cmacs-ai-textops-stream
-     title
-     (if staged "the staged diff" "UNSTAGED changes -- nothing is staged")
-     system
-     (format "%s\n\n%s"
-             (if staged "Staged diff:" "Diff (NOT yet staged):")
-             diff)
-     (lambda () (cmacs-ai-git--run-on-diff title system)))))
+     title label system
+     (format "The %s in this repository:\n\n%s" label diff)
+     (lambda () (cmacs-ai-git--run-on-diff title system scope)))))
 
 ;;;; Commands ------------------------------------------------------------
 
@@ -139,19 +198,30 @@ a predicate."
     (user-error "cmacs-ai: not inside a git worktree")))
 
 ;;;###autoload
-(defun cmacs-ai-git-review ()
-  "Review the staged changes the way a colleague would."
-  (interactive)
+(defun cmacs-ai-git-review (&optional staged-only)
+  "Review your changes the way a colleague would.
+
+Everything you have changed by default -- staged, unstaged and the names
+of untracked files.  With a prefix argument, STAGED-ONLY, look at just
+what is staged."
+  (interactive "P")
   (cmacs-ai-git--ensure)
-  (cmacs-ai-git--run-on-diff "review" cmacs-ai-git-review-system-prompt))
+  (cmacs-ai-git--run-on-diff "review" cmacs-ai-git-review-system-prompt
+                             (if staged-only 'staged 'all)))
 
 ;;;###autoload
-(defun cmacs-ai-git-summary ()
-  "Summarize the staged changes for a release note or merge request."
-  (interactive)
+(defun cmacs-ai-git-summary (&optional staged-only)
+  "Summarize your changes for a release note or merge request.
+
+Everything you have changed by default: a summary of only what happened
+to be staged describes a slice of the work and reads as though it
+described all of it.  With a prefix argument, STAGED-ONLY, summarize
+just the staged changes."
+  (interactive "P")
   (cmacs-ai-git--ensure)
   (cmacs-ai-git--run-on-diff "change summary"
-                             cmacs-ai-git-summary-system-prompt))
+                             cmacs-ai-git-summary-system-prompt
+                             (if staged-only 'staged 'all)))
 
 ;;;###autoload
 (defun cmacs-ai-git-explain-hunk ()
@@ -182,22 +252,54 @@ a predicate."
 (cmacs-ai-register-action
  :name 'cmacs-ai-git-review
  :group 'git :order 20
- :label "Review these changes"
- :help "What a careful colleague would say before this lands"
+ :label "Review all changes"
+ :help "Staged and unstaged together -- what a colleague would say"
  :applies #'cmacs-ai-git--available-p
  :run (lambda (target)
         (with-current-buffer (cmacs-ai-target-buffer target)
-          (cmacs-ai-git-review))))
+          (cmacs-ai-git--run-on-diff
+           "review" cmacs-ai-git-review-system-prompt 'all))))
 
 (cmacs-ai-register-action
  :name 'cmacs-ai-git-summary
  :group 'git :order 30
- :label "Summarize the changes"
- :help "For a release note or a merge-request description"
+ :label "Summarize all changes"
+ :help "Staged, unstaged and untracked -- everything you have changed"
  :applies #'cmacs-ai-git--available-p
  :run (lambda (target)
         (with-current-buffer (cmacs-ai-target-buffer target)
-          (cmacs-ai-git-summary))))
+          (cmacs-ai-git--run-on-diff
+           "change summary" cmacs-ai-git-summary-system-prompt 'all))))
+
+;; The staged-only variants, offered only when staging actually splits
+;; the work in two.  With nothing staged, or with everything staged, they
+;; would say the same thing as the entries above and be pure noise.
+
+(cmacs-ai-register-action
+ :name 'cmacs-ai-git-summary-staged
+ :group 'git :order 35
+ :label "Summarize staged changes only"
+ :applies (lambda (target)
+            (and (cmacs-ai-git--available-p target)
+                 (with-current-buffer (cmacs-ai-target-buffer target)
+                   (cmacs-ai-git--partially-staged-p))))
+ :run (lambda (target)
+        (with-current-buffer (cmacs-ai-target-buffer target)
+          (cmacs-ai-git--run-on-diff
+           "change summary" cmacs-ai-git-summary-system-prompt 'staged))))
+
+(cmacs-ai-register-action
+ :name 'cmacs-ai-git-review-staged
+ :group 'git :order 25
+ :label "Review staged changes only"
+ :applies (lambda (target)
+            (and (cmacs-ai-git--available-p target)
+                 (with-current-buffer (cmacs-ai-target-buffer target)
+                   (cmacs-ai-git--partially-staged-p))))
+ :run (lambda (target)
+        (with-current-buffer (cmacs-ai-target-buffer target)
+          (cmacs-ai-git--run-on-diff
+           "review" cmacs-ai-git-review-system-prompt 'staged))))
 
 (cmacs-ai-register-action
  :name 'cmacs-ai-git-hunk

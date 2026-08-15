@@ -621,6 +621,77 @@ test that has already pulled the file in cannot mask it."
           (should (eq status 0))
           (should (string-match-p "ok" (buffer-string))))))))
 
+(defmacro cmacs-ai-menu-tests--with-mixed-repo (var &rest body)
+  "Run BODY in a repo bound to VAR holding staged, unstaged and untracked work."
+  (declare (indent 1))
+  `(cmacs-ai-menu-tests--with-repo ,var
+     (with-temp-file (expand-file-name "staged.txt" ,var)
+       (insert "STAGED-EDIT\n"))
+     (call-process "git" nil nil nil "add" "staged.txt")
+     (with-temp-file (expand-file-name "a.txt" ,var) (insert "UNSTAGED-EDIT\n"))
+     (with-temp-file (expand-file-name "brand-new.txt" ,var) (insert "NEW\n"))
+     ,@body))
+
+(ert-deftest cmacs-ai-menu-tests-git-diff-scope-all ()
+  "`all' covers staged, unstaged AND untracked; `staged' covers only staged.
+
+A summary of just what happened to be staged describes a slice of the
+work and reads as though it described all of it."
+  (require 'cmacs-ai-git)
+  (cmacs-ai-menu-tests--with-mixed-repo dir
+    (pcase-let ((`(,all . ,all-label) (cmacs-ai-git--diff 'all)))
+      (should (string-match-p "STAGED-EDIT" all))
+      (should (string-match-p "UNSTAGED-EDIT" all))
+      ;; Untracked files cannot appear in a diff, so they are named.
+      (should (string-match-p "brand-new.txt" all))
+      (should (string-match-p "unstaged" all-label)))
+    (pcase-let ((`(,staged . ,staged-label) (cmacs-ai-git--diff 'staged)))
+      (should (string-match-p "STAGED-EDIT" staged))
+      (should-not (string-match-p "UNSTAGED-EDIT" staged))
+      (should-not (string-match-p "brand-new.txt" staged))
+      (should (string-match-p "staged" staged-label)))))
+
+(ert-deftest cmacs-ai-menu-tests-git-scope-entries-offered ()
+  "Staged-only entries appear only when staging actually splits the work."
+  (require 'cmacs-ai-git)
+  (skip-unless (and (fboundp 'cmacs-ai-supported-p) (cmacs-ai-supported-p)))
+  (cmacs-ai-menu-tests--with-mixed-repo dir
+    (with-temp-buffer
+      (setq default-directory (file-name-as-directory dir))
+      (setq major-mode 'magit-status-mode)
+      (should (cmacs-ai-git--partially-staged-p))
+      (let* ((tg (cmacs-ai-target-at))
+             (labels (mapcar (lambda (a) (cmacs-ai-action-label a tg))
+                             (alist-get 'git (cmacs-ai-actions-for tg)))))
+        (should (member "Summarize all changes" labels))
+        (should (member "Summarize staged changes only" labels))))
+    ;; Stage everything: the two scopes now say the same thing, so the
+    ;; staged-only entries would be pure noise.
+    (call-process "git" nil nil nil "add" "-A")
+    (with-temp-buffer
+      (setq default-directory (file-name-as-directory dir))
+      (setq major-mode 'magit-status-mode)
+      (should-not (cmacs-ai-git--partially-staged-p))
+      (let* ((tg (cmacs-ai-target-at))
+             (labels (mapcar (lambda (a) (cmacs-ai-action-label a tg))
+                             (alist-get 'git (cmacs-ai-actions-for tg)))))
+        (should (member "Summarize all changes" labels))
+        (should-not (member "Summarize staged changes only" labels))))))
+
+(ert-deftest cmacs-ai-menu-tests-git-diff-without-head ()
+  "A repository with no commits yet still produces a diff.
+There is no HEAD to diff against, so the two halves are concatenated."
+  (require 'cmacs-ai-git)
+  (let ((dir (make-temp-file "cmacs-ai-nohead" t)))
+    (unwind-protect
+        (let ((default-directory (file-name-as-directory dir)))
+          (call-process "git" nil nil nil "init" "-q" "-b" "main")
+          (with-temp-file (expand-file-name "new.txt" dir) (insert "FIRST\n"))
+          (call-process "git" nil nil nil "add" "-A")
+          (should-not (cmacs-ai-git--has-head-p))
+          (should (string-match-p "FIRST" (car (cmacs-ai-git--diff 'all)))))
+      (delete-directory dir t))))
+
 (ert-deftest cmacs-ai-menu-tests-git-commands-exist ()
   "The Git actions are bindable commands too."
   (require 'cmacs-ai-git)

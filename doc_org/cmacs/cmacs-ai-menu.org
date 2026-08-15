@@ -253,12 +253,33 @@ apply only to single items.  Summarize, explain and ask still apply.
 In magit, a diff or a commit buffer the menu grows a *Git* submenu, the
 sibling of the Mail group and for the same reason.
 
-| Entry                    | Does                                             |
-|--------------------------+--------------------------------------------------|
-| Draft a commit message   | from the diff and this project's commit style    |
-| Review these changes     | what a careful colleague would say before it lands |
-| Summarize the changes    | for a release note or a merge-request description |
-| Explain this hunk        | only when point is on one                        |
+| Entry                          | Does                                       |
+|--------------------------------+--------------------------------------------|
+| Draft a commit message         | from the *staged* diff and this project's commit style |
+| Review all changes             | staged + unstaged, as a colleague would    |
+| Review staged changes only     | only when staging splits the work          |
+| Summarize all changes          | staged + unstaged + untracked, for a release note |
+| Summarize staged changes only  | only when staging splits the work          |
+| Explain this hunk              | only when point is on one                  |
+
+*Scope is explicit here, and the default is everything.*  "Staged if
+anything is staged" is right for a commit message -- that is what the
+commit will contain -- and wrong for a summary: a summary of only what
+you happened to stage describes a slice of the work and reads as though
+it described all of it.
+
+So =all= means the working tree against HEAD.  Untracked files cannot
+appear in a diff at all, so they are listed by name; a summary that
+silently omitted a whole new file would be worse than one that mentions
+it without its contents.  In a repository with no commits yet there is
+no HEAD to diff against, so the staged and unstaged diffs are
+concatenated instead.
+
+The staged-only entries appear only when staging actually splits the
+work -- something staged AND something not.  Otherwise both scopes
+produce identical output and offering both is noise.  From the keyboard
+the commands take a prefix argument for the staged-only reading:
+=C-u M-x cmacs-ai-git-summary=.
 
 The review prompt is told explicitly not to manufacture findings: a
 review that invents nits to look thorough is worse than no review, so it
