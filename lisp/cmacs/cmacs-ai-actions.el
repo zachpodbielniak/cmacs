@@ -16,13 +16,19 @@
 ;; list of things you can do -- the right-click menu, the `C-c a'
 ;; transient -- reads this registry and nothing else.
 ;;
-;; The groups are fixed, and deliberately so.  Four submenus in the same
-;; order everywhere means you stop reading the menu after a week:
+;; The groups are fixed, and deliberately so.  The same submenus in the
+;; same order everywhere means you stop reading the menu after a week:
 ;;
+;;   Mail     mail-specific, and present only in a mail buffer
 ;;   Ask AI   answer something about this, in a result window
 ;;   Chat     carry this into a conversation that persists
 ;;   Brigade  hand this to an agent that works while you do not watch
 ;;   Tools    whatever you published with `cmacs-brigade-deftool :menu t'
+;;
+;; Mail is the exception that proves the rule: a domain gets its own
+;; group when its useful questions have no vocabulary in the general
+;; ones -- "what needs a reply", "what can I unsubscribe from" -- and an
+;; empty group is omitted, so it costs nothing outside mu4e.
 ;;
 ;; One rule runs through every brigade action here: menu items COMPOSE,
 ;; they do not FIRE.  Choosing "Spawn agent on this" fills in the compose
@@ -86,11 +92,17 @@
 ;;;; Groups ------------------------------------------------------------
 
 (defconst cmacs-ai-action-groups
-  '((ask     . "Ask AI")
+  '((mail    . "Mail")
+    (ask     . "Ask AI")
     (chat    . "Chat")
     (brigade . "Brigade")
     (tools   . "Tools"))
-  "Submenu groups, in the order they appear.  See the Commentary.")
+  "Submenu groups, in the order they appear.  See the Commentary.
+
+`mail' is domain-specific and sits first because it only appears at all
+in a mail buffer -- where it is what you came for -- and an empty group
+is omitted, so it costs nothing anywhere else.  The relative order of
+the general groups is the same everywhere.")
 
 (defun cmacs-ai-action-group-label (group)
   "The submenu label for GROUP."
@@ -215,12 +227,24 @@ want it."
 
 (defun cmacs-ai-actions--textual-p (target)
   "Non-nil when TARGET has something a model can read.
-File-backed targets count: the content is fetched on demand, so a menu
-built over a thousand marked files still costs nothing to build."
+
+Deferred payloads count.  A file-backed target is read on demand, and a
+target carrying a CONTENT-FN -- a mail folder, say -- produces its text
+only when an action runs.  Testing TEXT alone would hide every action
+from exactly the targets that were built to be cheap."
   (and (cmacs-ai-actions--ai-p)
        (or (cmacs-ai-target-text target)
+           (cmacs-ai-target-content-fn target)
            (let ((f (cmacs-ai-target-file target)))
              (and f (file-readable-p f) (not (file-directory-p f)))))))
+
+(defun cmacs-ai-actions--single-item-p (target)
+  "Non-nil when TARGET is one thing rather than a collection.
+
+\"Rephrase\" and \"Reply\" mean something for a message and nothing for a
+folder of them, so the two operations that rewrite or answer a single
+piece of text ask for this as well."
+  (not (memq (cmacs-ai-target-kind target) '(mail-folder files directory))))
 
 (defun cmacs-ai-actions--editable-p (target)
   "Non-nil when TARGET names a live, writable span of a buffer."
@@ -257,8 +281,12 @@ built over a thousand marked files still costs nothing to build."
               ('explain "Explain..."))
      :help (format "%s this with cmacs-ai, in a result window"
                    (capitalize (symbol-name op)))
-     :applies #'cmacs-ai-actions--textual-p
-     :run (lambda (target) (cmacs-ai-textops-run op target)))))
+     :applies (if (memq op '(rephrase reply))
+                  (lambda (target)
+                    (and (cmacs-ai-actions--textual-p target)
+                         (cmacs-ai-actions--single-item-p target)))
+                #'cmacs-ai-actions--textual-p)
+     :run (let ((op op)) (lambda (target) (cmacs-ai-textops-run op target))))))
 
 (cmacs-ai-register-action
  :name 'cmacs-ai-rewrite-in-place

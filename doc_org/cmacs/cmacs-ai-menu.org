@@ -50,6 +50,7 @@ Four groups, in the same order everywhere:
 
 | Group     | For                                                       |
 |-----------+-----------------------------------------------------------|
+| =Mail=    | mail-specific; present only in a mail buffer               |
 | =Ask AI=  | answer something about this, in a result window           |
 | =Chat=    | carry this into a conversation that persists              |
 | =Brigade= | hand this to an agent that works while you are not looking |
@@ -216,6 +217,35 @@ works with or without them.
   all behave exactly as they do in dired.  The dirvish major-mode names
   are listed as well, for the versions that put their own mode on side
   panes.
+
+** The Mail group
+
+In a mu4e buffer the menu grows a *Mail* submenu, first in the list.
+Mail is the one place where the useful questions have no vocabulary in
+the general groups -- "what actually wants me", "what can I stop
+receiving" -- so it gets its own rather than more entries under Ask AI.
+Outside mail the group is empty, and an empty group is omitted.
+
+| Entry                            | Where     | Does                          |
+|----------------------------------+-----------+-------------------------------|
+| Read and summarize this folder   | headers   | a digest grouped by what each message wants from you |
+| Summarize this message           | view      | the thread, for someone joining late |
+| What needs my attention?         | both      | only real claims: questions, deadlines, payments, approvals |
+| Draft a reply...                 | view      | a reply in your voice         |
+| What could I unsubscribe from?   | headers   | bulk senders, with a warning against dropping transactional mail |
+| Ask about this mail...           | both      | a free-text question          |
+| Triage / Briefing (GenMail)      | both      | hands off to ai-brigade's GenMail, when built |
+
+All of them read the *messages*, not the header table -- see
+[[*Mail folders read the messages]].
+
+GenMail's triage and briefing are offered rather than reimplemented: it
+keeps buckets, state and an actionable report with buttons, and a
+one-prompt imitation would be strictly worse.
+
+Two entries are deliberately withheld from a folder: *Rephrase* and
+*Reply* mean something for one message and nothing for fifteen, so they
+apply only to single items.  Summarize, explain and ask still apply.
 
 ** Commit messages
 

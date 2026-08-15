@@ -449,6 +449,95 @@ mailbox built from nothing but the subject lines."
             (cmacs-ai-target-create
              :content-fn (lambda () (error "nope")))))))
 
+;;;; The Mail group -------------------------------------------------------
+
+(ert-deftest cmacs-ai-menu-tests-mail-group-only-in-mail ()
+  "The Mail group appears in mail buffers and nowhere else.
+
+An empty group is omitted, which is what lets a domain-specific group
+exist without cluttering every other buffer."
+  (require 'cmacs-ai-mail)
+  (skip-unless (and (fboundp 'cmacs-ai-supported-p) (cmacs-ai-supported-p)))
+  (cmacs-ai-menu-tests--with-maildir dir
+    (let ((buf (cmacs-ai-menu-tests--headers-buffer dir '("plain" "multi"))))
+      (unwind-protect
+          (with-current-buffer buf
+            (should (assq 'mail (cmacs-ai-actions-for (cmacs-ai-target-at)))))
+        (kill-buffer buf))))
+  (with-temp-buffer
+    (insert "just some prose")
+    (should-not (assq 'mail (cmacs-ai-actions-for (cmacs-ai-target-at))))))
+
+(ert-deftest cmacs-ai-menu-tests-mail-folder-vs-message-entries ()
+  "Folder-only entries are absent on a single message, and vice versa."
+  (require 'cmacs-ai-mail)
+  (skip-unless (and (fboundp 'cmacs-ai-supported-p) (cmacs-ai-supported-p)))
+  (cmacs-ai-menu-tests--with-maildir dir
+    (let ((buf (cmacs-ai-menu-tests--headers-buffer dir '("plain"))))
+      (unwind-protect
+          (with-current-buffer buf
+            (let* ((tg (cmacs-ai-target-at))
+                   (labels (mapcar (lambda (a) (cmacs-ai-action-label a tg))
+                                   (alist-get 'mail
+                                              (cmacs-ai-actions-for tg)))))
+              (should (member "Read and summarize this folder" labels))
+              (should (member "What could I unsubscribe from?" labels))
+              ;; Replying to a folder is meaningless.
+              (should-not (member "Draft a reply..." labels))))
+        (kill-buffer buf))))
+  (with-temp-buffer
+    (setq major-mode 'mu4e-view-mode)
+    (insert "From: a\nSubject: b\n\nbody\n")
+    (let* ((tg (cmacs-ai-target-at))
+           (labels (mapcar (lambda (a) (cmacs-ai-action-label a tg))
+                           (alist-get 'mail (cmacs-ai-actions-for tg)))))
+      (should (member "Summarize this message" labels))
+      (should (member "Draft a reply..." labels))
+      (should-not (member "What could I unsubscribe from?" labels)))))
+
+(ert-deftest cmacs-ai-menu-tests-deferred-payload-is-textual ()
+  "A target whose content is a thunk still counts as having text.
+
+The regression this pins: `cmacs-ai-actions--textual-p' tested TEXT and
+FILE only, so adding the deferred CONTENT-FN slot silently hid the Ask
+and Chat groups from every target built to be cheap -- a mail folder
+being the first of them."
+  (let ((tg (cmacs-ai-target-create
+             :kind 'mail-folder :content-fn (lambda () "bodies here"))))
+    (should (cmacs-ai-actions--textual-p tg))))
+
+(ert-deftest cmacs-ai-menu-tests-collections-refuse-single-item-ops ()
+  "Rephrase and reply are offered for one thing, not for a collection."
+  (skip-unless (and (fboundp 'cmacs-ai-supported-p) (cmacs-ai-supported-p)))
+  (let ((folder (cmacs-ai-target-create
+                 :kind 'mail-folder :content-fn (lambda () "bodies")))
+        (message (cmacs-ai-target-create :kind 'mail :text "one message")))
+    (should-not (cmacs-ai-actions--single-item-p folder))
+    (should (cmacs-ai-actions--single-item-p message))
+    (let ((labels (mapcar (lambda (a) (cmacs-ai-action-label a folder))
+                          (alist-get 'ask (cmacs-ai-actions-for folder)))))
+      (should (member "Summarize..." labels))
+      (should-not (member "Rephrase..." labels))
+      (should-not (member "Reply..." labels)))))
+
+(ert-deftest cmacs-ai-menu-tests-mail-commands-exist ()
+  "The Mail actions are bindable commands too."
+  (require 'cmacs-ai-mail)
+  (dolist (c '(cmacs-ai-mail-digest
+               cmacs-ai-mail-attention
+               cmacs-ai-mail-unsubscribe-candidates
+               cmacs-ai-mail-thread-summary
+               cmacs-ai-mail-ask
+               cmacs-ai-menu-pick-mail))
+    (should (commandp c))))
+
+(ert-deftest cmacs-ai-menu-tests-mail-commands-refuse-elsewhere ()
+  "A mail command outside a mail buffer says so rather than acting."
+  (require 'cmacs-ai-mail)
+  (with-temp-buffer
+    (insert "not mail")
+    (should-error (cmacs-ai-mail-digest) :type 'user-error)))
+
 ;;;; Commit messages -----------------------------------------------------
 
 (defmacro cmacs-ai-menu-tests--with-repo (var &rest body)

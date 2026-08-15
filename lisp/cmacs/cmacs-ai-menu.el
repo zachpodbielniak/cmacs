@@ -39,6 +39,9 @@
 (require 'cmacs-ai-target)
 (require 'cmacs-ai-targets)
 (require 'cmacs-ai-actions)
+;; Registers the Mail group's actions.  Required here rather than left to
+;; the user, since a group nobody loaded is a group that never appears.
+(require 'cmacs-ai-mail)
 
 (defgroup cmacs-ai-menu nil
   "The universal AI context menu."
@@ -201,12 +204,13 @@ and whatever your `cmacs-brigade-deftool' forms published with :menu."
 ;; One command per group, so each can have its own key.  Defined rather
 ;; than closed over, so they are ordinary named commands that `M-x' and
 ;; `where-is' can find.
-(dolist (group '(ask chat brigade tools))
+(dolist (group '(mail ask chat brigade tools))
   (defalias (intern (format "cmacs-ai-menu-pick-%s" group))
     (lambda () (interactive) (cmacs-ai-menu-pick group))
     (format "Choose an AI action from the %s group for the thing at point."
             (cmacs-ai-action-group-label group))))
 
+;;;###autoload (autoload 'cmacs-ai-menu-pick-mail "cmacs-ai-menu" nil t)
 ;;;###autoload (autoload 'cmacs-ai-menu-pick-ask "cmacs-ai-menu" nil t)
 ;;;###autoload (autoload 'cmacs-ai-menu-pick-chat "cmacs-ai-menu" nil t)
 ;;;###autoload (autoload 'cmacs-ai-menu-pick-brigade "cmacs-ai-menu" nil t)

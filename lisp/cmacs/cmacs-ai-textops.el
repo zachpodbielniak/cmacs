@@ -211,13 +211,9 @@ operation's default, which is the common case."
 (defun cmacs-ai-textops-run (op target &optional refinement)
   "Run text operation OP over TARGET and stream the result to a window.
 
-OP is `summarize', `rephrase', `reply', `explain' or `ask'.  REFINEMENT
+OP is `summarize\=', `rephrase\=', `reply\=', `explain\=' or `ask\='.  REFINEMENT
 is the free-text instruction; when omitted it is read from the
 minibuffer.  Returns the result buffer."
-  ;; cmacs-ai's Elisp loads lazily, and the menu can be the first thing
-  ;; in a session that needs it.
-  (require 'cmacs-ai)
-  (cmacs-ai--ensure)
   (unless (cmacs-ai-target-p target)
     (user-error "cmacs-ai: nothing here to %s" op))
   (let* ((spec (cmacs-ai-textops--spec op))
@@ -225,44 +221,61 @@ minibuffer.  Returns the result buffer."
          (content (cmacs-ai-target-content target)))
     (when (or (null content) (string-empty-p (string-trim content)))
       (user-error "cmacs-ai: no text to %s here" op))
-    (let* ((buf (cmacs-ai-output-buffer
-                 (plist-get spec :title)
-                 (format "%s -- %s"
-                         (cmacs-ai-target-describe target) refinement)))
-           ;; The system prompt is read through its symbol so a `setq' or
-           ;; a customise between calls is honoured.
-           (system (symbol-value (plist-get spec :system)))
-           (prompt (cmacs-ai-textops--prompt spec target refinement))
-           (pair (cmacs-ai-make-session cmacs-ai-textops-provider
-                                        cmacs-ai-textops-model
-                                        system))
-           (streamed 0))
-      (cmacs-ai-output-attach-session buf pair)
-      (cmacs-ai-output-set-retry
-       buf (lambda () (interactive) (cmacs-ai-textops-run op target refinement)))
-      (cmacs-ai-output-show buf)
-      (cmacs-ai-chat-stream
-       (cdr pair) prompt
-       (lambda (payload)
-         (pcase (car-safe payload)
-           (:start nil)
-           (:delta
-            (let ((chunk (cadr payload)))
-              (when chunk
-                (setq streamed (+ streamed (length chunk)))
-                (cmacs-ai-output-append buf chunk))))
-           (:tool-use nil)
-           (:end
-            ;; Providers that do not stream deliver everything here.  Only
-            ;; use it when nothing arrived incrementally, so a streaming
-            ;; provider does not get its answer printed twice.
-            (let ((final (plist-get (cdr payload) :text)))
-              (when (and final (zerop streamed))
-                (cmacs-ai-output-append buf final)))
-            (cmacs-ai-output-finish buf nil))
-           (:error
-            (cmacs-ai-output-finish buf (or (cadr payload) "stream error"))))))
-      buf)))
+    (cmacs-ai-textops-stream
+     (plist-get spec :title)
+     (format "%s -- %s" (cmacs-ai-target-describe target) refinement)
+     ;; The system prompt is read through its symbol so a `setq\=' or a
+     ;; customise between calls is honoured.
+     (symbol-value (plist-get spec :system))
+     (cmacs-ai-textops--prompt spec target refinement)
+     (lambda () (cmacs-ai-textops-run op target refinement)))))
+
+;;;###autoload
+(defun cmacs-ai-textops-stream (title subtitle system prompt &optional retry)
+  "Stream SYSTEM/PROMPT into a result window called TITLE.
+
+The plumbing every AI action that produces prose shares: make a session,
+open the window, append the deltas, settle the non-streaming case, free
+the session.  SUBTITLE says what produced it; RETRY, a thunk, is what
+`g\=' in the window re-runs.  Returns the result buffer.
+
+Public because it is the way to add an action that answers in prose
+without writing this loop again."
+  ;; cmacs-ai\='s Elisp loads lazily, and the menu can be the first thing in
+  ;; a session that needs it.
+  (require 'cmacs-ai)
+  (cmacs-ai--ensure)
+  (let* ((buf (cmacs-ai-output-buffer title subtitle))
+         (pair (cmacs-ai-make-session cmacs-ai-textops-provider
+                                      cmacs-ai-textops-model
+                                      system))
+         (streamed 0))
+    (cmacs-ai-output-attach-session buf pair)
+    (when retry
+      (cmacs-ai-output-set-retry buf (lambda () (interactive) (funcall retry))))
+    (cmacs-ai-output-show buf)
+    (cmacs-ai-chat-stream
+     (cdr pair) prompt
+     (lambda (payload)
+       (pcase (car-safe payload)
+         (:start nil)
+         (:delta
+          (let ((chunk (cadr payload)))
+            (when chunk
+              (setq streamed (+ streamed (length chunk)))
+              (cmacs-ai-output-append buf chunk))))
+         (:tool-use nil)
+         (:end
+          ;; Providers that do not stream deliver everything here.  Only
+          ;; use it when nothing arrived incrementally, so a streaming
+          ;; provider does not get its answer printed twice.
+          (let ((final (plist-get (cdr payload) :text)))
+            (when (and final (zerop streamed))
+              (cmacs-ai-output-append buf final)))
+          (cmacs-ai-output-finish buf nil))
+         (:error
+          (cmacs-ai-output-finish buf (or (cadr payload) "stream error"))))))
+    buf))
 
 ;;;; Interactive commands ----------------------------------------------
 
