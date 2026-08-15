@@ -286,6 +286,49 @@ exactly as they do in dired.  The dirvish major-mode names are listed as
 well, for the versions that put their own mode on side panes.
 @end table
 
+@subsection Commit Messages
+
+@cindex commit message
+@cindex Conventional Commits
+
+In magit, a diff, or a commit buffer, the Ask group gains @samp{Draft a
+commit message}.
+
+It reads two things, and the second is what makes it useful: the diff
+says what changed, and the last @code{cmacs-ai-commit-log-lookback}
+(30) subject lines say how this project writes about changes -- whether
+it uses scopes, how long its subjects run, whether bodies explain why or
+restate the diff.  A model given both writes something that looks like
+it belongs; a model given only the diff writes a generic summary of the
+patch.
+
+Conventional Commits is the default shape
+(@code{cmacs-ai-commit-conventional}), but the log is shown @emph{after}
+the spec and declared to win on style.  A project that has never written
+@samp{feat(scope):} in its life should not have it imposed by a default.
+
+Where the result goes depends on where you are:
+
+@itemize @bullet
+@item
+in a commit buffer, inserted at point as a @emph{single} undo step --
+text streaming in under your cursor makes a mess of both point and undo;
+@item
+anywhere else, streamed into a result window to read and copy, since
+there is no commit buffer to insert into yet.
+@end itemize
+
+Staged changes are what a commit message is about, so those win.  With
+nothing staged it falls back to the unstaged diff and says so in the
+prompt, rather than refusing at someone staring at real changes.
+
+One trap worth recording: the repo root is found with
+@code{locate-dominating-file}, @emph{not} @code{vc-root-dir}.  The
+latter goes through @code{vc-deduce-backend}, which needs
+@code{vc-mode}, a file-visiting buffer, or a mode it recognises -- and a
+magit-status buffer has none of the three, so it answers nil in the one
+place the command is most wanted.
+
 @subsection Mail Folders Read the Messages
 
 A folder listing and a message are different targets, and conflating
@@ -566,6 +609,12 @@ Setting them to @code{nil} defers to @code{cmacs-ai-default-provider} and
   @tab model for the text operations
 @item @code{cmacs-ai-summarize-system-prompt} etc. @tab ---
   @tab the system prompt for each operation
+@item @code{cmacs-ai-commit-conventional} @tab @code{t}
+  @tab Conventional Commits as the default shape
+@item @code{cmacs-ai-commit-log-lookback} @tab 30
+  @tab commits read as a style reference
+@item @code{cmacs-ai-commit-wrap-column} @tab 72
+  @tab body wrap column
 @item @code{cmacs-ai-actions-plan-file} @tab @code{nil}
   @tab plan file for @samp{Make this a brigade task}
 @item @code{cmacs-ai-actions-tool-max} @tab 12

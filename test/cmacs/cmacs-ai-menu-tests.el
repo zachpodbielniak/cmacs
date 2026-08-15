@@ -32,6 +32,10 @@
 (require 'cmacs-ai-actions)
 (require 'cmacs-ai-menu)
 (require 'cmacs-ai-output)
+;; Required, not merely declared: without it the commit defcustoms are not
+;; known to be special at compile time, so `let'-binding one in a test
+;; compiles to a lexical binding that silently does nothing.
+(require 'cmacs-ai-commit nil t)
 
 ;;;; Helpers -----------------------------------------------------------
 
@@ -444,6 +448,122 @@ mailbox built from nothing but the subject lines."
            (cmacs-ai-target-content
             (cmacs-ai-target-create
              :content-fn (lambda () (error "nope")))))))
+
+;;;; Commit messages -----------------------------------------------------
+
+(defmacro cmacs-ai-menu-tests--with-repo (var &rest body)
+  "Run BODY in a throwaway git repo bound to VAR, with one commit."
+  (declare (indent 1))
+  `(let ((,var (make-temp-file "cmacs-ai-commit-test" t)))
+     (unwind-protect
+         (let ((default-directory (file-name-as-directory ,var))
+               (process-environment
+                (append '("GIT_AUTHOR_NAME=t" "GIT_AUTHOR_EMAIL=t@t"
+                          "GIT_COMMITTER_NAME=t" "GIT_COMMITTER_EMAIL=t@t")
+                        process-environment)))
+           (call-process "git" nil nil nil "init" "-q" "-b" "main")
+           (with-temp-file (expand-file-name "a.txt" ,var) (insert "one\n"))
+           (call-process "git" nil nil nil "add" "-A")
+           (call-process "git" nil nil nil "commit" "-qm"
+                         "feat(seed): the first commit")
+           ,@body)
+       (delete-directory ,var t))))
+
+(ert-deftest cmacs-ai-menu-tests-commit-root-without-vc-mode ()
+  "The repo root is found in a buffer with no file and no `vc-mode'.
+
+A magit-status buffer is exactly that, and `vc-root-dir' answers nil for
+it -- which would refuse the command in the one place it is most wanted."
+  (require 'cmacs-ai-commit)
+  (cmacs-ai-menu-tests--with-repo dir
+    (with-temp-buffer
+      (setq default-directory (file-name-as-directory dir))
+      (should (cmacs-ai-commit--root))
+      (should (file-equal-p (cmacs-ai-commit--root) dir)))))
+
+(ert-deftest cmacs-ai-menu-tests-commit-prefers-staged ()
+  "Staged changes win; with none, the unstaged diff is used and flagged."
+  (require 'cmacs-ai-commit)
+  (cmacs-ai-menu-tests--with-repo dir
+    (with-temp-buffer
+      (setq default-directory (file-name-as-directory dir))
+      ;; Unstaged only.
+      (with-temp-file (expand-file-name "a.txt" dir) (insert "two\n"))
+      (pcase-let ((`(,diff . ,staged) (cmacs-ai-commit--diff)))
+        (should-not staged)
+        (should (string-match-p "two" diff)))
+      ;; Now staged: that is what a commit message is about.
+      (call-process "git" nil nil nil "add" "-A")
+      (pcase-let ((`(,diff . ,staged) (cmacs-ai-commit--diff)))
+        (should staged)
+        (should (string-match-p "two" diff))))))
+
+(ert-deftest cmacs-ai-menu-tests-commit-log-is-style-reference ()
+  "Recent subjects are read, and the prompt puts them before the diff."
+  (require 'cmacs-ai-commit)
+  (cmacs-ai-menu-tests--with-repo dir
+    (with-temp-buffer
+      (setq default-directory (file-name-as-directory dir))
+      (let ((log (cmacs-ai-commit--log)))
+        (should (string-match-p "feat(seed): the first commit" log))
+        (let ((prompt (cmacs-ai-commit--prompt "DIFFBODY" t log)))
+          (should (string-match-p "style reference" prompt))
+          (should (string-match-p "Staged diff:" prompt))
+          ;; Style before content, so the diff is read in that light.
+          (should (< (string-match "feat(seed)" prompt)
+                     (string-match "DIFFBODY" prompt))))))))
+
+(ert-deftest cmacs-ai-menu-tests-commit-unstaged-is-flagged ()
+  "An unstaged diff says so in the prompt, rather than passing as staged."
+  (require 'cmacs-ai-commit)
+  (should (string-match-p "NOT yet staged"
+                          (cmacs-ai-commit--prompt "d" nil "log"))))
+
+(ert-deftest cmacs-ai-menu-tests-commit-conventional-toggle ()
+  "Conventional Commits is the default shape and can be turned off."
+  (require 'cmacs-ai-commit)
+  (let ((cmacs-ai-commit-conventional t))
+    (should (string-match-p "Conventional Commits" (cmacs-ai-commit--system))))
+  (let ((cmacs-ai-commit-conventional nil))
+    (should-not (string-match-p "Conventional Commits"
+                                (cmacs-ai-commit--system))))
+  ;; The log outranks the spec either way -- a project that does not use
+  ;; Conventional Commits must not have them imposed by a default.
+  (should (string-match-p "authority on style" (cmacs-ai-commit--system)))
+  (let ((cmacs-ai-commit-wrap-column 64))
+    (should (string-match-p "64 columns" (cmacs-ai-commit--system)))))
+
+(ert-deftest cmacs-ai-menu-tests-commit-buffer-routing ()
+  "A commit buffer gets an insert; anything else gets a result window."
+  (require 'cmacs-ai-commit)
+  (with-temp-buffer
+    (should-not (cmacs-ai-commit--commit-buffer-p)))
+  (with-temp-buffer
+    (setq-local git-commit-mode t)
+    (should (cmacs-ai-commit--commit-buffer-p)))
+  (with-temp-buffer
+    (setq buffer-file-name "/tmp/x/.git/COMMIT_EDITMSG")
+    (should (cmacs-ai-commit--commit-buffer-p))))
+
+(ert-deftest cmacs-ai-menu-tests-commit-action-scoped-to-vc-buffers ()
+  "The menu entry appears in magit/diff buffers inside a repo, not elsewhere."
+  (require 'cmacs-ai-commit)
+  (skip-unless (and (fboundp 'cmacs-ai-supported-p) (cmacs-ai-supported-p)))
+  (cmacs-ai-menu-tests--with-repo dir
+    (dolist (probe '((magit-status-mode . t)
+                     (magit-diff-mode . t)
+                     (diff-mode . t)
+                     (text-mode . nil)))
+      (with-temp-buffer
+        (setq default-directory (file-name-as-directory dir))
+        (setq major-mode (car probe))
+        (setq-local diff-vc-backend nil)
+        (insert "@@ -1 +1 @@\n-one\n+two\n")
+        (let* ((tg (cmacs-ai-target-at))
+               (labels (mapcar (lambda (a) (cmacs-ai-action-label a tg))
+                               (alist-get 'ask (cmacs-ai-actions-for tg)))))
+          (should (eq (and (member "Draft a commit message" labels) t)
+                      (cdr probe))))))))
 
 ;;;; Actions -----------------------------------------------------------
 

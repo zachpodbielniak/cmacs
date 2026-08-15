@@ -217,6 +217,41 @@ works with or without them.
   are listed as well, for the versions that put their own mode on side
   panes.
 
+** Commit messages
+
+In magit, a diff, or a commit buffer, the Ask group gains *Draft a
+commit message*.
+
+It reads two things, and the second is what makes it useful: the diff
+says what changed, and the last =cmacs-ai-commit-log-lookback= (30)
+subject lines say how this project writes about changes -- whether it
+uses scopes, how long its subjects run, whether bodies explain why or
+restate the diff.  A model given both writes something that looks like
+it belongs; a model given only the diff writes a generic summary of the
+patch.
+
+Conventional Commits is the default shape
+(=cmacs-ai-commit-conventional=), but the log is shown *after* the spec
+and declared to win on style.  A project that has never written
+=feat(scope):= in its life should not have it imposed by a default.
+
+Where the result goes depends on where you are:
+
+- in a commit buffer, inserted at point as a *single* undo step -- text
+  streaming in under your cursor makes a mess of both point and undo;
+- anywhere else, streamed into a result window to read and copy, since
+  there is no commit buffer to insert into yet.
+
+Staged changes are what a commit message is about, so those win.  With
+nothing staged it falls back to the unstaged diff and says so in the
+prompt, rather than refusing at someone staring at real changes.
+
+One trap worth recording: the repo root is found with
+=locate-dominating-file=, *not* =vc-root-dir=.  The latter goes through
+=vc-deduce-backend=, which needs =vc-mode=, a file-visiting buffer, or a
+mode it recognises -- and a magit-status buffer has none of the three,
+so it answers nil in the one place the command is most wanted.
+
 ** Mail folders read the messages
 
 A folder listing and a message are different targets, and conflating
@@ -457,6 +492,9 @@ Setting them to nil defers to =cmacs-ai-default-provider= /
 | =cmacs-ai-textops-provider=           | =claude-code= | provider symbol for the text operations |
 | =cmacs-ai-textops-model=              | ="sonnet"= | model for the text operations             |
 | =cmacs-ai-summarize-system-prompt= etc | --     | the system prompt for each operation        |
+| =cmacs-ai-commit-conventional=        | =t=     | Conventional Commits as the default shape   |
+| =cmacs-ai-commit-log-lookback=        | 30      | commits read as a style reference           |
+| =cmacs-ai-commit-wrap-column=         | 72      | body wrap column                            |
 | =cmacs-ai-actions-plan-file=          | nil     | plan file for "Make this a brigade task"    |
 | =cmacs-ai-actions-tool-max=           | 12      | most tools shown in the Tools submenu       |
 
