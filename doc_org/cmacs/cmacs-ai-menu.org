@@ -178,7 +178,8 @@ rather than on the buffer as a whole.
 | Diffs: =diff-mode=, magit, vc    | =hunk=         | the enclosing hunk, and only it         |
 | Org                              | =org-node=     | the heading and its subtree             |
 | Org source blocks                | =region=       | the code, with its language             |
-| Mail: mu4e, gnus, notmuch, rmail, GenMail | =mail= | the message                             |
+| Mail folder listing (mu4e headers) | =mail-folder= | the message BODIES, read from the maildir |
+| Mail: mu4e view, gnus, notmuch, rmail, GenMail | =mail= | the message                    |
 | Chat: libreclaw rooms, cmacs-ai chats | =chat=    | the conversation above point            |
 | eww and gsurf-lite               | =url=          | the rendered page text                  |
 | gsurf (full WebKit)              | =gsurf-page=   | title and URL; the body via gsurf's own async fetch |
@@ -215,6 +216,35 @@ works with or without them.
   all behave exactly as they do in dired.  The dirvish major-mode names
   are listed as well, for the versions that put their own mode on side
   panes.
+
+** Mail folders read the messages
+
+A folder listing and a message are different targets, and conflating
+them is how you get a "summary" of a mailbox assembled from nothing but
+the From and Subject columns -- which is all a =mu4e-headers-mode=
+buffer actually renders.
+
+So acting on a folder listing reads the messages themselves, off the
+maildir, one file per row.  Each contributes its From, Date, Subject, a
+note if it carries =List-Unsubscribe= (bulk mail is worth knowing about
+when triaging), and the first =cmacs-ai-target-mail-body-chars= of body
+text.  Quoted-printable and base64 parts are decoded, =text/plain= is
+preferred over the =text/html= alternative, and extraction stops at the
+MIME boundary so the two do not run together.
+
+It is not a MIME parser and does not try to be.  It is enough for a
+model to tell a bill from a newsletter, which is what a folder summary
+needs.
+
+The read is *lazy*: the target carries a thunk, not text.  Resolvers run
+while the menu is being built, so reading bodies there would make every
+right-click in mu4e pay for content nobody asked for.  Nothing touches
+the disk until an action actually runs.
+
+Two bounds keep the prompt sane -- =cmacs-ai-target-mail-max-messages=
+(25) messages read in full, the rest listed by subject, and
+=cmacs-ai-target-mail-body-chars= (2000) per message, on top of the
+overall =cmacs-ai-target-max-chars= clip.
 
 ** In-scene menus
 
@@ -419,6 +449,8 @@ Setting them to nil defers to =cmacs-ai-default-provider= /
 | =cmacs-ai-menu-inline-limit=          | 5       | below this many items, skip the group submenus |
 | =cmacs-ai-target-max-chars=           | 40000   | clip target text at                         |
 | =cmacs-ai-target-terminal-lines=      | 120     | terminal scrollback when prompts are unknown |
+| =cmacs-ai-target-mail-max-messages=   | 25      | messages read in full from a folder listing |
+| =cmacs-ai-target-mail-body-chars=     | 2000    | body text kept per message                  |
 | =cmacs-ai-output-split-threshold=     | 150     | columns at which results open side by side  |
 | =cmacs-ai-output-width= / =-height=   | 0.42 / 0.4 | fraction of the frame for the result window |
 | =cmacs-ai-output-select=              | =t=     | select the result window when it opens      |

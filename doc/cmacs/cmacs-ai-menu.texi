@@ -233,7 +233,9 @@ rather than on the buffer as a whole.
   @tab the enclosing hunk, and only it
 @item Org @tab @code{org-node} @tab the heading and its subtree
 @item Org source blocks @tab @code{region} @tab the code, with its language
-@item Mail: mu4e, gnus, notmuch, rmail, GenMail @tab @code{mail}
+@item Mail folder listing (mu4e headers) @tab @code{mail-folder}
+  @tab the message @emph{bodies}, read from the maildir
+@item Mail: mu4e view, gnus, notmuch, rmail, GenMail @tab @code{mail}
   @tab the message
 @item Chat: libreclaw rooms, cmacs-ai chats @tab @code{chat}
   @tab the conversation above point
@@ -283,6 +285,37 @@ marked files, the file at point and the directory header all behave
 exactly as they do in dired.  The dirvish major-mode names are listed as
 well, for the versions that put their own mode on side panes.
 @end table
+
+@subsection Mail Folders Read the Messages
+
+A folder listing and a message are different targets, and conflating
+them is how you get a ``summary'' of a mailbox assembled from nothing
+but the From and Subject columns -- which is all a
+@code{mu4e-headers-mode} buffer actually renders.
+
+So acting on a folder listing reads the messages themselves, off the
+maildir, one file per row.  Each contributes its From, Date, Subject, a
+note if it carries @code{List-Unsubscribe} (bulk mail is worth knowing
+about when triaging), and the first
+@code{cmacs-ai-target-mail-body-chars} of body text.  Quoted-printable
+and base64 parts are decoded, @code{text/plain} is preferred over the
+@code{text/html} alternative, and extraction stops at the MIME boundary
+so the two do not run together.
+
+It is not a MIME parser and does not try to be.  It is enough for a
+model to tell a bill from a newsletter, which is what a folder summary
+needs.
+
+The read is @emph{lazy}: the target carries a thunk, not text.
+Resolvers run while the menu is being built, so reading bodies there
+would make every right-click in mu4e pay for content nobody asked for.
+Nothing touches the disk until an action actually runs.
+
+Two bounds keep the prompt sane --
+@code{cmacs-ai-target-mail-max-messages} (25) messages read in full, the
+rest listed by subject, and @code{cmacs-ai-target-mail-body-chars}
+(2000) per message, on top of the overall
+@code{cmacs-ai-target-max-chars} clip.
 
 @subsection In-Scene Menus
 
@@ -517,6 +550,10 @@ Setting them to @code{nil} defers to @code{cmacs-ai-default-provider} and
   @tab clip target text at
 @item @code{cmacs-ai-target-terminal-lines} @tab 120
   @tab terminal scrollback when prompts are unknown
+@item @code{cmacs-ai-target-mail-max-messages} @tab 25
+  @tab messages read in full from a folder listing
+@item @code{cmacs-ai-target-mail-body-chars} @tab 2000
+  @tab body text kept per message
 @item @code{cmacs-ai-output-split-threshold} @tab 150
   @tab columns at which results open side by side
 @item @code{cmacs-ai-output-width} / @code{-height} @tab 0.42 / 0.4

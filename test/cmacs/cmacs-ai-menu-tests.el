@@ -312,6 +312,139 @@ ACTIONS is a list of `cmacs-ai-register-action' argument lists."
             (should (equal (cmacs-ai-target-content tg) "on disk"))))
       (delete-file f))))
 
+;;;; Mail ---------------------------------------------------------------
+
+(defmacro cmacs-ai-menu-tests--with-maildir (var &rest body)
+  "Run BODY with VAR bound to a temp dir holding two RFC822 messages."
+  (declare (indent 1))
+  `(let ((,var (make-temp-file "cmacs-ai-mail-test" t)))
+     (unwind-protect
+         (progn
+           (with-temp-file (expand-file-name "plain" ,var)
+             (insert "From: Ally Bank <no-reply@ally.com>\n"
+                     "Date: Fri, 15 Aug 2026 13:02:13 -0400\n"
+                     "Subject: Your emergency fund\n"
+                     "\n"
+                     "Your APY changed to 3.60% effective September 1.\n"))
+           ;; Multipart, plain part quoted-printable, plus an HTML
+           ;; alternative that must not leak into the extract.
+           (with-temp-file (expand-file-name "multi" ,var)
+             (insert "From: Google <noreply@google.com>\n"
+                     "Date: Wed, 12 Aug 2026 09:00:00 -0400\n"
+                     "Subject: [Action Required] billing\n"
+                     "List-Unsubscribe: <https://example.com/u>\n"
+                     "Content-Type: multipart/alternative;"
+                     " boundary=\"BOUND\"\n"
+                     "\n"
+                     "--BOUND\n"
+                     "Content-Type: text/plain; charset=UTF-8\n"
+                     "Content-Transfer-Encoding: quoted-printable\n"
+                     "\n"
+                     "Update billing by Oct 12 or =\n"
+                     "access is suspended. Cost is =2450.\n"
+                     "--BOUND\n"
+                     "Content-Type: text/html; charset=UTF-8\n"
+                     "\n"
+                     "<html>UNIQUE-HTML-MARKER</html>\n"
+                     "--BOUND--\n"))
+           ,@body)
+       (delete-directory ,var t))))
+
+(defun cmacs-ai-menu-tests--headers-buffer (dir names)
+  "A buffer imitating `mu4e-headers-mode' listing NAMES from DIR.
+mu4e hangs the message plist off each header line as a `msg' text
+property; that is what the resolver reads."
+  (let ((buf (generate-new-buffer " *mu4e-headers-test*")))
+    (with-current-buffer buf
+      (setq major-mode 'mu4e-headers-mode)
+      (dolist (n names)
+        (let ((start (point)))
+          (insert (format "01:02 PM  Someone  %s\n" n))
+          (put-text-property start (1+ start) 'msg
+                             (list :subject n
+                                   :path (expand-file-name n dir)))))
+      (goto-char (point-min)))
+    buf))
+
+(ert-deftest cmacs-ai-menu-tests-mail-file-text-decodes ()
+  "Message extraction decodes quoted-printable and stops at the boundary."
+  (cmacs-ai-menu-tests--with-maildir dir
+    (let ((out (cmacs-ai-targets--mail-file-text
+                (expand-file-name "multi" dir))))
+      ;; Headers worth having.
+      (should (string-match-p "Subject: \\[Action Required\\] billing" out))
+      (should (string-match-p "bulk mail" out))   ; List-Unsubscribe noted
+      ;; Quoted-printable: soft line break joined, =24 -> $.
+      (should (string-match-p "Oct 12 or access is suspended" out))
+      (should (string-match-p "\\$50" out))
+      ;; The HTML alternative is a different part and must not leak in.
+      (should-not (string-match-p "UNIQUE-HTML-MARKER" out)))))
+
+(ert-deftest cmacs-ai-menu-tests-mail-folder-is-lazy ()
+  "A folder listing carries no payload until an action asks for one.
+
+The whole point of the `content-fn' slot: resolvers run while a menu is
+being built, so reading a folder of messages off disk there would make
+every right-click in mu4e pay for bodies nobody asked for."
+  (cmacs-ai-menu-tests--with-maildir dir
+    (let ((buf (cmacs-ai-menu-tests--headers-buffer dir '("plain" "multi"))))
+      (unwind-protect
+          (with-current-buffer buf
+            (let ((tg (cmacs-ai-target-at)))
+              (should (eq (cmacs-ai-target-kind tg) 'mail-folder))
+              (should (equal (cmacs-ai-target-label tg) "2 messages"))
+              (should (null (cmacs-ai-target-text tg)))
+              (should (functionp (cmacs-ai-target-content-fn tg)))))
+        (kill-buffer buf)))))
+
+(ert-deftest cmacs-ai-menu-tests-mail-folder-reads-bodies ()
+  "Acting on a folder listing gets the message BODIES, not the columns.
+
+The bug this pins: the headers buffer renders only From and Subject, so
+a resolver returning `buffer-substring' produced a \"summary\" of a
+mailbox built from nothing but the subject lines."
+  (cmacs-ai-menu-tests--with-maildir dir
+    (let ((buf (cmacs-ai-menu-tests--headers-buffer dir '("plain" "multi"))))
+      (unwind-protect
+          (with-current-buffer buf
+            (let* ((tg (cmacs-ai-target-at))
+                   (content (cmacs-ai-target-content tg)))
+              (should (string-match-p "3.60% effective September" content))
+              (should (string-match-p "access is suspended" content))
+              (should-not (string-match-p "UNIQUE-HTML-MARKER" content))))
+        (kill-buffer buf)))))
+
+(ert-deftest cmacs-ai-menu-tests-mail-folder-bounded ()
+  "Past `cmacs-ai-target-mail-max-messages', rows contribute a subject only."
+  (cmacs-ai-menu-tests--with-maildir dir
+    (let ((buf (cmacs-ai-menu-tests--headers-buffer dir '("plain" "multi"))))
+      (unwind-protect
+          (with-current-buffer buf
+            (let* ((cmacs-ai-target-mail-max-messages 1)
+                   (tg (cmacs-ai-target-at))
+                   (content (cmacs-ai-target-content tg)))
+              (should (string-match-p "3.60% effective September" content))
+              ;; The second one is listed but not read.
+              (should (string-match-p "subject lines only" content))
+              (should-not (string-match-p "access is suspended" content))))
+        (kill-buffer buf)))))
+
+(ert-deftest cmacs-ai-menu-tests-content-fn-precedence ()
+  "`cmacs-ai-target-content' prefers text, then content-fn, then file."
+  (should (equal (cmacs-ai-target-content
+                  (cmacs-ai-target-create
+                   :text "literal" :content-fn (lambda () "thunk")))
+                 "literal"))
+  (should (equal (cmacs-ai-target-content
+                  (cmacs-ai-target-create :content-fn (lambda () "thunk")))
+                 "thunk"))
+  ;; A thunk that signals degrades to a note, rather than killing the action.
+  (should (string-match-p
+           "could not read"
+           (cmacs-ai-target-content
+            (cmacs-ai-target-create
+             :content-fn (lambda () (error "nope")))))))
+
 ;;;; Actions -----------------------------------------------------------
 
 (ert-deftest cmacs-ai-menu-tests-actions-filtered-and-grouped ()

@@ -326,14 +326,175 @@ which would capture nothing.  Falls back to a fixed number of lines."
               :plist (list :heading heading :id id))))))))))
 
 ;;;; Mail --------------------------------------------------------------
+;;
+;; A message buffer and a folder listing are different targets, and
+;; conflating them is how you get a "summary" of a mailbox built from
+;; nothing but the From and Subject columns.  A view buffer holds the
+;; message, so the buffer text IS the payload.  A headers buffer holds a
+;; table -- the bodies live on disk, one maildir file per row -- so it
+;; carries a thunk that reads them, and only if an action runs.
+
+(defcustom cmacs-ai-target-mail-max-messages 25
+  "Messages read from a folder listing when acting on the whole folder.
+
+Bodies are read from disk, so this bounds both the time it takes and the
+size of the resulting prompt.  Rows past this many contribute their
+header line only.  The overall payload is still clipped by
+`cmacs-ai-target-max-chars'."
+  :type 'integer
+  :group 'cmacs-ai-target
+  :safe #'integerp)
+
+(defcustom cmacs-ai-target-mail-body-chars 2000
+  "Characters of body text kept from each message in a folder listing.
+Enough to know what a message is and what it wants; a newsletter's full
+HTML payload is not."
+  :type 'integer
+  :group 'cmacs-ai-target
+  :safe #'integerp)
+
+(defun cmacs-ai-targets--mail-decode-region (beg end encoding)
+  "Decode region BEG..END according to ENCODING, a Content-Transfer-Encoding."
+  (ignore-errors
+    (cond
+     ((and encoding (string-match-p "quoted-printable" encoding))
+      (require 'qp)
+      (quoted-printable-decode-region beg end))
+     ((and encoding (string-match-p "base64" encoding))
+      (base64-decode-region beg end)))))
+
+(defun cmacs-ai-targets--mail-file-text (path)
+  "Readable text of the RFC822 message file at PATH.
+
+Deliberately modest: the headers worth knowing, then the first
+text/plain part (decoded if it is quoted-printable or base64), falling
+back to whatever follows the header block.  This is not a MIME parser
+and does not try to be -- it is enough for a model to tell a bill from a
+newsletter, which is what a folder summary needs."
+  (with-temp-buffer
+    ;; Bounded read: a message with a 20MB attachment must not be pulled
+    ;; into memory to extract two paragraphs of text.
+    (insert-file-contents path nil 0 (* 8 cmacs-ai-target-mail-body-chars))
+    (goto-char (point-min))
+    (let* ((hdr-end (save-excursion
+                      (if (re-search-forward "^\r?$" nil t)
+                          (point) (point-max))))
+           (from (or (mail-fetch-field "from") ""))
+           (subject (or (mail-fetch-field "subject") ""))
+           (date (or (mail-fetch-field "date") ""))
+           (list-unsub (mail-fetch-field "list-unsubscribe"))
+           ;; The MIME boundary, so a text/plain part stops where it ends
+           ;; rather than running on into the text/html alternative -- which
+           ;; would hand the model a wall of markup it did not ask for, and
+           ;; the same content twice.
+           (boundary (save-restriction
+                       (narrow-to-region (point-min) hdr-end)
+                       (let ((ct (mail-fetch-field "content-type")))
+                         (when (and ct (string-match
+                                        "boundary=\"?\\([^\";\n]+\\)\"?" ct))
+                           (match-string 1 ct)))))
+           (body-beg hdr-end)
+           (encoding nil))
+      ;; Prefer a text/plain part when this is multipart.
+      (goto-char hdr-end)
+      (when (re-search-forward "^Content-Type:[ \t]*text/plain" nil t)
+        (let ((part-hdr-end (save-excursion
+                              (if (re-search-forward "^\r?$" nil t)
+                                  (point) (point-max)))))
+          (save-restriction
+            (narrow-to-region (line-beginning-position) part-hdr-end)
+            (setq encoding (mail-fetch-field "content-transfer-encoding")))
+          (setq body-beg part-hdr-end)))
+      (unless encoding
+        (save-restriction
+          (narrow-to-region (point-min) hdr-end)
+          (setq encoding (mail-fetch-field "content-transfer-encoding"))))
+      (let* ((part-end
+              (or (and boundary
+                       (save-excursion
+                         (goto-char body-beg)
+                         (when (re-search-forward
+                                (concat "^--" (regexp-quote boundary)) nil t)
+                           (line-beginning-position))))
+                  (point-max)))
+             (body-end (min part-end
+                            (+ body-beg cmacs-ai-target-mail-body-chars)))
+             (body (buffer-substring-no-properties body-beg body-end)))
+        (with-temp-buffer
+          (insert body)
+          (cmacs-ai-targets--mail-decode-region (point-min) (point-max) encoding)
+          (setq body (buffer-string)))
+        (concat "From: " from "\n"
+                "Date: " date "\n"
+                "Subject: " subject "\n"
+                (when list-unsub "List-Unsubscribe: yes (bulk mail)\n")
+                "\n"
+                (string-trim body))))))
+
+(defun cmacs-ai-targets--mu4e-messages ()
+  "The (SUBJECT . PATH) of every message listed in this headers buffer.
+
+mu4e hangs the message plist off each header line as a `msg' text
+property; that is the only supported way in to the rows, and it is
+cheap -- no disk access, just walking the buffer."
+  (let ((out nil))
+    (save-excursion
+      (goto-char (point-min))
+      (while (not (eobp))
+        (when-let* ((msg (get-text-property (line-beginning-position) 'msg))
+                    (path (plist-get msg :path)))
+          (push (cons (or (plist-get msg :subject) "") path) out))
+        (forward-line 1)))
+    (nreverse out)))
+
+(cmacs-ai-register-target-resolver
+ :name 'mail-folder :order 24
+ :modes '(mu4e-headers-mode)
+ :resolve
+ (lambda (_click)
+   (let* ((messages (cmacs-ai-targets--mu4e-messages))
+          (n (length messages))
+          (listing (buffer-substring-no-properties (point-min) (point-max))))
+     (cmacs-ai-target-create
+      :kind 'mail-folder
+      :label (if (zerop n) "mail folder" (format "%d messages" n))
+      ;; No :text -- that is what made this a subject-line summariser.
+      ;; The thunk runs only when an action does.
+      :text nil
+      :content-fn
+      (lambda ()
+        (let ((read-now (seq-take messages cmacs-ai-target-mail-max-messages))
+              (rest (nthcdr cmacs-ai-target-mail-max-messages messages))
+              (parts nil))
+          (dolist (m read-now)
+            (push (condition-case err
+                      (cmacs-ai-targets--mail-file-text (cdr m))
+                    (error (format "Subject: %s\n[unreadable: %s]"
+                                   (car m) (error-message-string err))))
+                  parts))
+          (concat
+           (format "%d messages in this folder%s.\n\n" n
+                   (if rest (format ", the first %d shown in full"
+                                    (length read-now))
+                     ""))
+           (mapconcat #'identity (nreverse parts)
+                      "\n\n-----------------------------------------\n\n")
+           (when rest
+             (concat "\n\nRemaining messages, subject lines only:\n"
+                     (mapconcat (lambda (m) (concat "  - " (car m)))
+                                rest "\n"))))))
+      :buffer (current-buffer)
+      :lang "email"
+      :plist (list :messages messages :listing listing)))))
 
 (cmacs-ai-register-target-resolver
  :name 'mail :order 25
- :modes '(mu4e-view-mode mu4e-headers-mode gnus-article-mode gnus-summary-mode
+ :modes '(mu4e-view-mode gnus-article-mode gnus-summary-mode
           notmuch-show-mode rmail-mode message-mode mail-mode
           cmacs-brigade-genmail-view-mode)
  :resolve
  (lambda (_click)
+   ;; A rendered message: the buffer text is the message.
    (cmacs-ai-target-create
     :kind 'mail
     :label "message"

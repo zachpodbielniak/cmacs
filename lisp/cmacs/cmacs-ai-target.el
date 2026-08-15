@@ -81,10 +81,17 @@ what makes in-place actions (rewrite, replace) possible.
 LANG is a language name derived from the major mode, for prompts that
 need to say \"this is C\".  MIME is set for non-text targets.
 
+CONTENT-FN is a thunk returning the payload, for targets whose real
+content is expensive to obtain -- a folder full of messages that have to
+be read off disk, say.  Resolvers run while a MENU IS BEING BUILT and
+must stay cheap; a thunk defers the cost to the moment an action
+actually runs, which may never happen.  `cmacs-ai-target-content'
+prefers TEXT, then CONTENT-FN, then reads FILE.
+
 PLIST carries whatever the resolver wants to pass through to its own
 actions (a task id, an org id, a compositor client), and is ignored by
 everything generic."
-  kind label text file files bounds buffer lang mime plist)
+  kind label text file files bounds buffer lang mime content-fn plist)
 
 (defun cmacs-ai-target-plist-get (target key)
   "Return KEY from TARGET's resolver-supplied plist."
@@ -212,12 +219,22 @@ in a buffer nobody has taught the menu about."
                 tail)))))
 
 (defun cmacs-ai-target-content (target)
-  "Return TARGET's payload text, truncated, reading its file if needed.
+  "Return TARGET's payload text, truncated, fetching it if needed.
 
-A file target carries no text until somebody asks for it; this is where
-that read happens, so a menu can be built over a thousand files without
-touching the disk."
+TEXT first, then CONTENT-FN, then the contents of FILE.  A file target
+and a folder-of-messages target both carry no payload until somebody
+asks for one; this is where that cost is paid, so a menu can be built
+over a thousand files without touching the disk."
   (or (cmacs-ai-target-truncate (cmacs-ai-target-text target))
+      (when-let* ((fn (cmacs-ai-target-content-fn target)))
+        (cmacs-ai-target-truncate
+         (condition-case err
+             (funcall fn)
+           (error
+            ;; Better a usable prompt with a note in it than no action at
+            ;; all: the label and file list still say what this was.
+            (format "[could not read this target: %s]"
+                    (error-message-string err))))))
       (let ((file (cmacs-ai-target-file target)))
         (when (and file (file-readable-p file)
                    (not (file-directory-p file)))
