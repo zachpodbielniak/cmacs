@@ -211,7 +211,7 @@ plus :source describing where it came from, for the header.")
     ;; A build without cmacs-ai still composes tasks; it just cannot ask
     ;; what providers exist, and a fixed list beats no completion.
     '("claude" "openai" "gemini" "grok" "ollama"
-      "claude-code" "opencode" "claude-tmux")))
+      "claude-code" "opencode" "claude-tmux" "grok-build")))
 
 (defvar cmacs-brigade-compose--model-cache nil
   "Alist of PROVIDER symbol to its model list.

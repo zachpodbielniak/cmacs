@@ -26,10 +26,15 @@
 
 (defcustom cmacs-ai-default-provider 'claude
   "Default provider symbol used by `cmacs-ai-chat'.
-One of: claude openai gemini grok ollama claude-code opencode claude-tmux."
+One of: claude openai gemini grok ollama claude-code opencode
+claude-tmux grok-build.
+
+`grok' is xAI's HTTP API; `grok-build' is the agentic `grok' CLI.  They
+take different model ids and are not interchangeable."
   :type '(choice (const claude) (const openai) (const gemini)
                  (const grok) (const ollama)
-                 (const claude-code) (const opencode) (const claude-tmux))
+                 (const claude-code) (const opencode) (const claude-tmux)
+                 (const grok-build))
   :group 'cmacs-ai)
 
 (defcustom cmacs-ai-default-model nil
@@ -444,7 +449,8 @@ AiConfig singleton + the `cmacs-ai-default-provider' defcustom)."
                 (ollama       . ("OLLAMA_HOST"))
                 (claude-code  . ("CLAUDE_CODE_PATH"))
                 (opencode     . ("OPENCODE_PATH"))
-                (claude-tmux  . ("CLAUDE_CODE_PATH")))))
+                (claude-tmux  . ("CLAUDE_CODE_PATH"))
+                (grok-build   . ("GROK_PATH")))))
     (with-current-buffer buf
       (let ((inhibit-read-only t))
         (erase-buffer)

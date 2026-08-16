@@ -430,6 +430,7 @@ cmacs_ai__provider_type (Lisp_Object provider)
   if (EQ (provider, intern ("claude-code"))) return AI_PROVIDER_CLAUDE_CODE;
   if (EQ (provider, intern ("opencode")))    return AI_PROVIDER_OPENCODE;
   if (EQ (provider, intern ("claude-tmux"))) return AI_PROVIDER_CLAUDE_TMUX;
+  if (EQ (provider, intern ("grok-build"))) return AI_PROVIDER_GROK_BUILD;
   error ("cmacs-ai: unknown provider %s",
          SSDATA (SYMBOL_NAME (provider)));
 }
@@ -606,7 +607,7 @@ DEFUN ("cmacs-ai-list-models", Fcmacs_ai_list_models,
        Scmacs_ai_list_models, 0, 1, 0,
        doc: /* Return the list of model names PROVIDER offers.
 PROVIDER is a symbol (claude / openai / gemini / grok / ollama /
-claude-code / opencode / claude-tmux), or nil for the configured
+claude-code / opencode / claude-tmux / grok-build), or nil for the configured
 default.  Queries the provider (network for API providers, static
 tables for CLI providers) with a 30 second timeout; signals
 `cmacs-ai-error' on failure.  */)

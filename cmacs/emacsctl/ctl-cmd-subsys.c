@@ -267,7 +267,8 @@ static gboolean ai_opt_tools = FALSE;
 #define AI_PROVIDER_ENTRY \
   { "provider", 'p', 0, G_OPTION_ARG_STRING, &ai_opt_provider, \
     "AI provider (claude / openai / gemini / grok / ollama / " \
-    "claude-code / opencode / claude-tmux; default: configured)", \
+    "claude-code / opencode / claude-tmux / grok-build; " \
+    "default: configured)", \
     "NAME" }
 #define AI_MODEL_ENTRY \
   { "model", 'm', 0, G_OPTION_ARG_STRING, &ai_opt_model, \

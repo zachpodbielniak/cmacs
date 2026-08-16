@@ -40,7 +40,7 @@ when both are enabled (libreclaw's sub-make is redirected via
 @node CMacs AI Providers
 @section Providers
 
-Eight providers are wired through the same @code{cmacs-ai-client-new}
+Nine providers are wired through the same @code{cmacs-ai-client-new}
 DEFUN:
 
 @table @code
@@ -61,7 +61,34 @@ The @command{claude} CLI in @option{--print} mode.
 The @command{opencode} CLI.
 @item claude-tmux
 @command{claude} driven via an ephemeral tmux session.
+@item grok-build
+xAI's @command{grok} CLI in headless mode.  Reads @env{GROK_PATH} to
+locate the binary.
 @end table
+
+@code{grok} and @code{grok-build} are two different backends, not two
+names for one.  @code{grok} is xAI's HTTP API and takes API model ids;
+@code{grok-build} wraps the agentic CLI and takes @emph{its} model ids
+(@samp{grok-4.6}, @samp{grok-4.5}), which the API rejects and vice
+versa.  Run @command{grok models} to see what the installed CLI offers.
+
+Three things about @code{grok-build} differ from the other CLI
+providers:
+
+@itemize @bullet
+@item
+It carries no @code{mcp-config-path}, so
+@code{cmacs-ai-client-set-mcp-config} returns @code{nil} for it and a
+grok-build agent gets no cmacs tools---only grok's own built-ins.
+(@code{opencode} is the same.)
+@item
+Skipping permissions on it emits @option{--permission-mode
+bypassPermissions}, which also lifts grok's sandbox.  The client's
+working directory is then the only bound on what it can reach.
+@item
+@code{max-tokens} does nothing: @command{grok} has no such flag.  Bound
+a run with a smaller model instead.
+@end itemize
 
 @subsection A local model through the claude CLI
 

@@ -27,6 +27,15 @@ with =--with-cmacs-libreclaw= when both are enabled.
 | =claude-code=    | CLI      | =claude= on PATH                     |
 | =opencode=       | CLI      | =opencode= on PATH                   |
 | =claude-tmux=    | CLI/tmux | =claude= + tmux on PATH              |
+| =grok-build=     | CLI      | =grok= on PATH (or =GROK_PATH=)      |
+
+=grok= and =grok-build= are two different backends, not two names for one. =grok= is xAI's HTTP API and takes API model ids; =grok-build= wraps the agentic =grok= CLI and takes /its/ model ids (=grok-4.6=, =grok-4.5=), which the API rejects and vice versa. Run =grok models= to see what the installed CLI offers.
+
+Three things about =grok-build= differ from the other CLI providers:
+
+- It carries no =mcp-config-path=, so =cmacs-ai-client-set-mcp-config= returns nil for it and a grok-build agent gets no cmacs tools — only grok's own built-ins. (=opencode= is the same.)
+- Skipping permissions on it emits =--permission-mode bypassPermissions=, which also lifts grok's sandbox. The client's working directory is then the only bound on what it can reach; see [[*Why a CLI agent could not call its tools][Why a CLI agent could not call its tools]].
+- =max-tokens= does nothing: =grok= has no such flag. Bound a run with a smaller model instead.
 
 * Chat buffers
 
@@ -992,7 +1001,9 @@ The claude CLI must still be installed; =OLLAMA_PATH= overrides the launcher bin
 
 A command-line agent run non-interactively has nobody to approve anything. Claude and opencode both default to asking before using a tool, and with no prompt to answer, every tool that would need approval is simply unavailable — so the agent can /see/ the tools it was granted, list their schemas, and report that it has no way to invoke them.
 
-cmacs therefore tells CLI providers not to ask: =--dangerously-skip-permissions= for claude-code and claude-tmux, =OPENCODE_PERMISSION= set to allow-all for opencode. This is what libreclaw does for the same three, and it applies to a chat buffer and to the brigade's CLI workers alike.
+cmacs therefore tells CLI providers not to ask: =--dangerously-skip-permissions= for claude-code and claude-tmux, =OPENCODE_PERMISSION= set to allow-all for opencode, =--permission-mode bypassPermissions= for grok-build. This is what libreclaw does for the same four, and it applies to a chat buffer and to the brigade's CLI workers alike.
+
+=grok-build= costs more than the others do here, and it is worth knowing before you point a chat at it: grok's bypass mode *also disables its sandbox*, so unlike the claude and opencode cases there is no second layer left underneath. The working directory is the whole boundary.
 
 Set =cmacs-ai-cli-skip-permissions= to nil to turn it off, understanding that a CLI chat then has no working tools.
 

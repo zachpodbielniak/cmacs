@@ -50,7 +50,8 @@ DEFUN ("cmacs-ai-providers", Fcmacs_ai_providers,
                intern ("ollama"),
                intern ("claude-code"),
                intern ("opencode"),
-               intern ("claude-tmux"));
+               intern ("claude-tmux"),
+               intern ("grok-build"));
 }
 
 DEFUN ("cmacs-ai-config-default-provider",

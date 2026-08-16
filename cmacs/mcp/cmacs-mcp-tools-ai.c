@@ -337,7 +337,8 @@ cmacs_mcp_tools_ai_register (McpServer *server)
   tool = mcp_tool_new ("ai_prompt",
     "Send PROMPT to an AI provider via cmacs-ai (synchronous).  "
     "Optional 'provider' (claude / openai / gemini / grok / ollama / "
-    "claude-code / opencode / claude-tmux) overrides the default; "
+    "claude-code / opencode / claude-tmux / grok-build) overrides the "
+    "default; "
     "optional 'system' is a system prompt; optional 'model' overrides "
     "the provider's default model.");
   schema = cmacs_mcp_schema_from_string (

@@ -51,7 +51,23 @@
     (should (memq 'ollama providers))
     (should (memq 'claude-code providers))
     (should (memq 'opencode providers))
-    (should (memq 'claude-tmux providers))))
+    (should (memq 'claude-tmux providers))
+    (should (memq 'grok-build providers))))
+
+(ert-deftest cmacs-ai-grok-build-is-its-own-provider ()
+  "`grok' and `grok-build' are different backends, not aliases.
+
+`grok' is xAI's HTTP API; `grok-build' wraps the agentic `grok' CLI.
+They take model ids that the other rejects, so collapsing them -- the
+obvious mistake when adding the second one -- produces a client that
+authenticates fine and then fails on every model string."
+  (skip-unless (fboundp 'cmacs-ai-client-new))
+  (skip-unless (fboundp 'cmacs-ai-client-cli-p))
+  (let ((http (cmacs-ai-client-new 'grok nil))
+        (cli  (cmacs-ai-client-new 'grok-build nil)))
+    (should-not (cmacs-ai-client-cli-p http))
+    (should (cmacs-ai-client-cli-p cli))
+    (should (equal "Grok Build" (cmacs-ai-client-provider-name cli)))))
 
 (ert-deftest cmacs-ai-typelib-loaded ()
   "gi-require finds AiGlib without manual setup."
@@ -1196,9 +1212,9 @@ and cannot be typed anywhere in the Elisp API."
 ;;;; CLI tool permissions
 
 (ert-deftest cmacs-ai-skip-permissions-is-cli-only ()
-  "All three CLI providers take it; an HTTP one has no such notion."
+  "Every CLI provider takes it; an HTTP one has no such notion."
   (skip-unless (fboundp 'cmacs-ai-client-set-skip-permissions))
-  (dolist (p '(claude-code claude-tmux opencode))
+  (dolist (p '(claude-code claude-tmux opencode grok-build))
     (should (cmacs-ai-client-set-skip-permissions
              (cmacs-ai-client-new p nil) t)))
   (should-not (cmacs-ai-client-set-skip-permissions

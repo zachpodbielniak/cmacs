@@ -74,8 +74,8 @@ always freed afterwards.
 
 KEYS is a plist:
   :provider SYMBOL     provider (claude / openai / gemini / grok / ollama
-                       / claude-code / opencode / claude-tmux); nil = the
-                       configured default.
+                       / claude-code / opencode / claude-tmux /
+                       grok-build); nil = the configured default.
   :system STRING       system prompt.
   :model STRING        model name overriding the provider's default.
   :max-tokens N        cap each turn's response length.

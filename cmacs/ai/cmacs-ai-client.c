@@ -96,6 +96,8 @@ cmacs_ai__make_client (Lisp_Object provider_sym)
     return AI_PROVIDER (ai_opencode_client_new ());
   if (EQ (provider_sym, intern ("claude-tmux")))
     return AI_PROVIDER (ai_claude_tmux_client_new ());
+  if (EQ (provider_sym, intern ("grok-build")))
+    return AI_PROVIDER (ai_grok_build_client_new ());
   return NULL;
 }
 
@@ -103,9 +105,9 @@ cmacs_ai__make_client (Lisp_Object provider_sym)
  *
  * The registry holds AiProvider implementors of two unrelated GObject
  * hierarchies: AiClient (HTTP API providers) and AiCliClient
- * (claude-code / opencode / claude-tmux).  Calling ai_client_* on a
- * CLI client is a CRITICAL + silent no-op, so every property access
- * routes on the instance type. */
+ * (claude-code / opencode / claude-tmux / grok-build).  Calling
+ * ai_client_* on a CLI client is a CRITICAL + silent no-op, so every
+ * property access routes on the instance type. */
 
 static void
 cmacs_ai__provider_set_model (gpointer p, const gchar *model)
@@ -150,9 +152,9 @@ DEFUN ("cmacs-ai-client-new", Fcmacs_ai_client_new,
        Scmacs_ai_client_new, 1, 2, 0,
        doc: /* Create an ai-glib client for PROVIDER.
 PROVIDER is one of the symbols: claude, openai, gemini, grok, ollama,
-claude-code, opencode, claude-tmux.  Optional MODEL is a string (passed
-to `ai-client-set-model').  Returns an integer handle.  Free with
-`cmacs-ai-client-free'.  */)
+claude-code, opencode, claude-tmux, grok-build.  Optional MODEL is a
+string (passed to `ai-client-set-model').  Returns an integer handle.
+Free with `cmacs-ai-client-free'.  */)
   (Lisp_Object provider, Lisp_Object model)
 {
   CHECK_SYMBOL (provider);
@@ -310,12 +312,12 @@ DEFUN ("cmacs-ai-client-cli-p", Fcmacs_ai_client_cli_p,
        Scmacs_ai_client_cli_p, 1, 1, 0,
        doc: /* Return t when HANDLE drives a command-line agent.
 
-The CLI providers (claude-code, opencode, claude-tmux) are a different
-GObject hierarchy from the HTTP ones, and they ignore the tools argument
-entirely -- ai-glib discards it.  A caller that wants the model to have
-tools must therefore hand a CLI provider an MCP config instead of
-registering them on an executor, and this is how it finds out which case
-it is in.  */)
+The CLI providers (claude-code, opencode, claude-tmux, grok-build) are
+a different GObject hierarchy from the HTTP ones, and they ignore the
+tools argument entirely -- ai-glib discards it.  A caller that wants the
+model to have tools must therefore hand a CLI provider an MCP config
+instead of registering them on an executor, and this is how it finds out
+which case it is in.  */)
   (Lisp_Object handle)
 {
   CHECK_FIXNAT (handle);
@@ -329,9 +331,9 @@ DEFUN ("cmacs-ai-client-set-mcp-config", Fcmacs_ai_client_set_mcp_config,
        doc: /* Point HANDLE's CLI agent at the MCP config file PATH.
 
 Returns t when the provider accepts one, nil when it has no such
-property -- opencode, for instance.  Setting it is how a CLI provider
-gets tools at all: it is passed as --mcp-config and the agent connects to
-the server described there.  */)
+property -- opencode and grok-build, which run only their own built-in
+tools.  Setting it is how a CLI provider gets tools at all: it is passed
+as --mcp-config and the agent connects to the server described there.  */)
   (Lisp_Object handle, Lisp_Object path)
 {
   CHECK_FIXNAT (handle);
@@ -401,10 +403,16 @@ it.  The visible symptom is an agent that can see cmacs's tools listed
 and reports it has no way to call them.
 
 For claude this emits --dangerously-skip-permissions; for opencode it
-sets OPENCODE_PERMISSION to allow-all.  The tools an agent may reach are
+sets OPENCODE_PERMISSION to allow-all; for grok-build it emits
+--permission-mode bypassPermissions.  The tools an agent may reach are
 already bounded by the capability token in its MCP config, which is the
 gate that actually matters -- this only stops it asking about the ones it
-was granted.  */)
+was granted.
+
+grok-build is the one exception worth knowing: its bypass ALSO lifts
+grok's own sandbox, so on that provider the client's working directory
+(see `cmacs-ai-client-set-working-directory') is the only remaining
+bound on what the agent can reach.  */)
   (Lisp_Object handle, Lisp_Object enable)
 {
   CHECK_FIXNAT (handle);

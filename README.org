@@ -267,8 +267,9 @@ orchestrates conversations across channels, =cmacs-ai= is raw,
 low-latency, single-conversation model invocation tuned for code
 editing.
 
-- Eight providers via one DEFUN: =claude=, =openai=, =gemini=,
-  =grok=, =ollama=, =claude-code=, =opencode=, =claude-tmux=
+- Nine providers via one DEFUN: =claude=, =openai=, =gemini=,
+  =grok=, =ollama=, =claude-code=, =opencode=, =claude-tmux=,
+  =grok-build=
 - Streaming chat buffers in =cmacs-ai-chat-mode= (derived from
   org-mode) with the same read-only history + =* Compose= sentinel
   pattern as libreclaw

@@ -58,7 +58,8 @@ reason."
   :type '(choice (const :tag "cmacs-ai default" nil)
                  (const claude) (const openai) (const gemini)
                  (const grok) (const ollama)
-                 (const claude-code) (const opencode) (const claude-tmux)))
+                 (const claude-code) (const opencode) (const claude-tmux)
+                 (const grok-build)))
 
 (defcustom cmacs-ai-textops-model "sonnet"
   "Model string used by summarize/rephrase/reply.
