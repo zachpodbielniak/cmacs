@@ -60,6 +60,7 @@ interaction.
 * CMacs Libregnum::             Embedded libregnum 3D scene buffers.
 * CMacs Gnuseye::               GNU's Eye live planetary globe.
 * CMacs Roamgraph::             Native org-roam knowledge-graph visualiser (2D + 3D).
+* CMacs Office::                Native .docx/.xlsx/.pptx and OpenDocument support.
 * CMacs Lrgscript::             Emacs Lisp scripting + game authoring for libregnum.
 * CMacs Gsurf::                 Embedded gsurf web browser buffers.
 * CMacs CAD::                   Parametric CAD parts (.cad/.ccad via cad-glib).
@@ -7755,6 +7756,9 @@ mode does not composite in the editor FBO batch, so sprites/tiles use textured
 
 @c ===================================================================
 @include roamgraph/roamgraph.texi
+
+@c ===================================================================
+@include office/office.texi
 
 @c ===================================================================
 @include lrgscript/lrgscript.texi

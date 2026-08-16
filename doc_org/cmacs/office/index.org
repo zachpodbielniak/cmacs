@@ -1,0 +1,85 @@
+#+TITLE: Office — Comprehensive Reference
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:2 num:t
+
+This directory is the long-form reference for =--with-cmacs-office=. The
+user-facing manual is [[file:../cmacs-office.org][cmacs-office.org]]; the Info chapter is
+[[file:../../../doc/cmacs/office/office.texi][office.texi]].
+
+| File | What it covers |
+|------+----------------|
+| [[file:index.org][index.org]] | This map, and the phase roadmap below |
+| [[file:architecture.org][architecture.org]] | The narrow waist, the shadow package, the TU split, DOM vs streaming |
+| [[file:formats.org][formats.org]] | What each of the six looks like inside, how they are identified, part layouts |
+| [[file:fidelity.org][fidelity.org]] | What round-trips, what is regenerated, what is lost — and how to tell |
+| [[file:reference.org][reference.org]] | Every primitive, every error condition, every limit |
+
+* What this subsystem is for
+
+Six formats — =.docx=/=.odt=, =.xlsx=/=.ods=, =.pptx=/=.odp= — treated as
+structured documents rather than as opaque blobs rendered to page images.
+
+The formats are two vocabularies over one idea: a zip package of XML parts, called
+OPC by OOXML and an ODF package by OpenDocument. That shared shape is why one
+container layer serves all six, and why the work factors into a container, three
+document models, and six thin codecs rather than six independent implementations.
+
+* Roadmap
+
+Every phase is implemented. This table is the honest status.
+
+| Phase | Scope | Status |
+|-------+-------+--------|
+| 0 | Package container: open, enumerate, read, replace, delete, save, save-as; hostile-input guards; the round-trip gate | *Implemented* |
+| 1 | Package layer over OPC/ODF metadata, the codec registry, content-based format detection, relationships, normalised metadata | *Implemented* |
+| 2 | Text and cell extraction for all six formats, projected to an org buffer with writeback anchors | *Implemented* |
+| 3 | Spreadsheets: cell editing with run-length splitting, grid projection, formulas through GNU Calc | *Implemented* |
+| 4 | Word documents: surgical paragraph editing resolved by anchor | *Implemented* |
+| 5 | Slides: shape text editing across both shape conventions | *Implemented* |
+| 6 | Authoring =.docx= from org via a template donor; =ox-odt= handoff for =.odt= | *Implemented* |
+| 7 | Page preview through =doc-view=, with flatpak-aware LibreOffice discovery | *Implemented* |
+| 8 | Brigade/MCP tools so agents can read and edit these documents | *Implemented* |
+
+** Why breadth before depth
+
+Phase 2 gives text extraction for all six formats before any one format gets deep
+treatment. Once the container exists that is cheap, and it is what makes every
+Office file in the notes repo and every mail attachment greppable and
+agent-readable — which is most of the day-to-day value, delivered before the
+expensive work starts.
+
+Phases 3, 4 and 5 are independent of each other. Any of them can be reordered or
+deferred without stranding the others.
+
+* Where the pieces live
+
+| Path | Contents |
+|------+----------|
+| =cmacs/office/cmacs-office-zip.c= | The zip container: parts in, parts out, lossless save |
+| =cmacs/office/cmacs-office-xml.c= | libxml2 helpers, shared by the package layer and every codec |
+| =cmacs/office/cmacs-office-codec.c= | The format registry — the one place formats are enumerated |
+| =cmacs/office/cmacs-office-package.c= | OPC/ODF semantics: detection, content types, relationships, metadata |
+| =cmacs/office/cmacs-office-extract.c= | Paragraph and slide text extraction |
+| =cmacs/office/cmacs-office-sheet.c= | Cell extraction and A1 addressing |
+| =cmacs/office/cmacs-office-defuns.c= | The Lisp boundary (see [[file:architecture.org][architecture.org]] for the TU split) |
+| =cmacs/office/cmacs-office-sheet-edit.c= | Surgical cell writeback, including ODF run splitting |
+| =lisp/cmacs/cmacs-office.el= | The org projection, the major mode, =auto-mode-alist= |
+| =lisp/cmacs/cmacs-office-formula.el= | Formula evaluation through GNU Calc |
+| =lisp/cmacs/cmacs-office-author.el= | org to =.docx= / =.odt= |
+| =lisp/cmacs/cmacs-office-preview.el= | Flatpak-aware LibreOffice discovery, =doc-view= wiring |
+| =lisp/cmacs/cmacs-office-tools.el= | The brigade/MCP tool surface |
+| =lisp/cmacs/cmacs-office-autoloads.el= | File associations for configs that regenerate autoloads (Doom) |
+| =etc/cmacs/office/template.docx= | The default style donor for authoring |
+| =src/cmacs-office-*.c= | Git-tracked symlinks into the above; the build resolves sources through =src/= |
+| =test/cmacs/cmacs-office-tests.el= | ERT suite |
+| =test/cmacs/fixtures/office/= | Real LibreOffice-produced sample documents, one per format |
+
+* The two rules to not break
+
+1. *The shadow package.* Never regenerate a part you did not parse. This is what
+   makes partial format coverage safe rather than reckless. [[file:fidelity.org][fidelity.org]] explains
+   the consequences in detail.
+
+2. *The container never sees =lisp.h=.* Keeping the package layer free of Emacs
+   headers is what keeps it testable without a Lisp VM, and what would let it be
+   lifted into a standalone library later without restructuring.

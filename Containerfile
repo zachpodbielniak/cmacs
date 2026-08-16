@@ -50,6 +50,7 @@ RUN dnf install -y \
         libeis-devel \
         libxcb-devel xcb-util-wm-devel \
         libyaml-devel json-glib-devel libdex-devel \
+        libzip-devel libxml2-devel \
         gdk-pixbuf2-devel \
         libsoup3-devel readline-devel \
         libetpan-devel sqlite-devel libpq-devel \
@@ -203,6 +204,7 @@ RUN ./autogen.sh \
         --with-cmacs-libregnum \
         --with-cmacs-gnuseye \
         --with-cmacs-roamgraph \
+        --with-cmacs-office \
         --with-cmacs-lrgscript \
         --with-cmacs-cad \
         --with-cmacs-screensaver \

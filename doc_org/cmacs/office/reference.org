@@ -1,0 +1,487 @@
+#+TITLE: Office — Primitive Reference
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:2 num:t
+
+Every primitive currently exposed by =--with-cmacs-office=. All of them signal
+=cmacs-office-error= on failure; none of them return =nil= to mean "something
+went wrong" except where explicitly noted.
+
+* Conventions
+
+- Documents are referenced by an *integer handle* from =cmacs-office-open=, which
+  is always the first argument.
+- Part names are package-relative, =/=-separated, e.g. ="word/document.xml"=.
+- Part contents are *raw bytes* in unibyte strings. Nothing is decoded for you:
+  package parts are XML in whatever encoding their declaration names, or opaque
+  media.
+- Edits are *deferred*. Nothing touches the file until you save.
+
+* Availability
+
+** =(cmacs-office-supported-p)=
+
+Non-nil when this build was configured =--with-cmacs-office=. Always defined —
+in a build without the feature it returns =nil= rather than being unbound, so
+=fboundp= plus a call is a complete check.
+
+The compile-time flag =IS-CMACS-OFFICE= (and its lower-case alias
+=is-cmacs-office=) is likewise always bound.
+
+* Lifecycle
+
+** =(cmacs-office-open PATH)= → handle
+
+Opens the OOXML or OpenDocument package at =PATH= read-only and returns an
+integer handle. =PATH= is expanded and encoded as a file name.
+
+Signals if the file is missing, is not a zip package, or declares more inflated
+content than the total cap allows.
+
+** =(cmacs-office-close HANDLE)= → nil
+
+Releases the package. Unsaved queued edits are discarded. Closing an
+already-closed handle is harmless; using one afterwards signals.
+
+** =(cmacs-office-path HANDLE)= → string
+
+The file name the handle was opened from, decoded as a file name.
+
+* Identity
+
+All of these read the *container*, never the file name. A =.docx= renamed
+=.xlsx= still reports =docx=.
+
+** =(cmacs-office-format HANDLE)= → symbol
+
+One of =docx=, =xlsx=, =pptx=, =odt=, =ods=, =odp=, or =unknown=.
+
+Determined from the OpenDocument =mimetype= part, or from the content type of
+the part the OOXML relationships name as the document body.
+
+Macro-enabled and template variants report as their base format — an =.xlsm= is
+=xlsx=, an =.ott= is =odt= — because the structure is identical. The macro part
+of an =.xlsm= is simply one more part that is never parsed and therefore never
+disturbed.
+
+** =(cmacs-office-kind HANDLE)= → symbol
+
+One of =text= (=.docx=/=.odt=), =sheet= (=.xlsx=/=.ods=), =slides=
+(=.pptx=/=.odp=), or =unknown=.
+
+This, not the format, is what decides which model and which major mode a
+document gets. A =.docx= and an =.odt= are both =text= and share everything
+above the codec layer.
+
+** =(cmacs-office-family HANDLE)= → symbol
+
+The packaging convention: =ooxml= (OPC), =odf= (OpenDocument package), or
+=unknown=. Mostly of interest when you are working at the part level and need to
+know which bookkeeping applies.
+
+** =(cmacs-office-main-part HANDLE)= → string or nil
+
+The part holding the document body.
+
+For OpenDocument this is always =content.xml=. For OOXML it is *resolved through
+the package relationships* rather than assumed, because nothing requires a
+=.docx= to call its body =word/document.xml=.
+
+=nil= when the package was not recognised.
+
+** =(cmacs-office-known-formats)= → list of plists
+
+The codec registry itself. Each entry has =:format=, =:kind=, =:family=,
+=:extension=, =:main-part= and =:description=. A format appears here exactly
+when this build can identify it, so it is the honest answer to "what is
+supported".
+
+* Package structure
+
+** =(cmacs-office-content-type HANDLE NAME)= → string or nil
+
+The declared content type of a part: an OpenDocument manifest =media-type=, or
+an OOXML =Override=, falling back to the =Default= declared for the part's
+extension. =nil= when the package declares nothing for it.
+
+** =(cmacs-office-relationships HANDLE &optional PART)= → list of plists
+
+The relationships declared *by* =PART=, which defaults to the package root.
+
+Each is a plist with =:id=, =:type=, =:target= and =:external=. A non-external
+=:target= is a package part name **already resolved against the directory of the
+part that declared it** — the body part's relationships name =styles.xml= and
+come back as =word/styles.xml=. An external target is a URI pointing outside the
+package and is left alone.
+
+The root relationships are the entry point to an OOXML document; from there you
+follow the graph outward to styles, numbering, images and embedded objects.
+
+OpenDocument has no relationship graph, so this returns =nil= for it — use
+=cmacs-office-content-type= and the manifest instead.
+
+#+begin_src elisp
+;; What does this document's body point at?
+(let ((h (cmacs-office-open "report.docx")))
+  (unwind-protect
+      (mapcar (lambda (r) (plist-get r :target))
+              (cmacs-office-relationships h (cmacs-office-main-part h)))
+    (cmacs-office-close h)))
+#+end_src
+
+** =(cmacs-office-metadata HANDLE)= → plist
+
+Document properties, normalised across both families onto shared keys, so the
+same call works whatever the format:
+
+=:title=, =:subject=, =:description=, =:creator=, =:last-modified-by=,
+=:keywords=, =:created=, =:modified=, =:generator=, =:company=, =:language=.
+
+Properties the document does not carry are simply absent; empty values are
+treated as absent rather than reported as empty strings. Dates come back as the
+strings the document stores — ISO 8601 in practice — and are not reformatted.
+
+* Content
+
+The readable content, extracted from the parts. What a document returns depends
+on its kind, so branch on =cmacs-office-kind= rather than on the format.
+
+** =(cmacs-office-blocks HANDLE)= → list of plists
+
+The readable content of a *document or presentation*, in document order.
+Spreadsheets return =nil= here and use =cmacs-office-cells= instead.
+
+Each block is one paragraph, heading, or slide shape:
+
+| Key | Meaning |
+|-----+---------|
+| =:part= | the package part it came from |
+| =:id= | a stable identifier *the file provides*, or =nil= |
+| =:index= | the block's ordinal within that part |
+| =:level= | heading level 1–9, or 0 for a body paragraph |
+| =:style= | the style name the document gives it, or =nil= |
+| =:slide= | 1-based slide number, or 0 outside a presentation |
+| =:shape= | slide shape name, or =nil= |
+| =:text= | the readable text |
+
+=:id= and =:index= together are the **writeback anchor**. Prefer =:id=: it
+survives edits elsewhere in the document, whereas =:index= only holds while
+nothing above the block is inserted or removed. Word supplies =w14:paraId= for
+most paragraphs; OpenDocument only gives a paragraph an id when something
+references it, which is exactly why =:index= exists as the fallback.
+
+Text present in the file but *not visible in the document* — tracked deletions,
+comment bodies — is deliberately excluded, so the projection matches what a
+reader sees rather than what the XML contains.
+
+** =(cmacs-office-sheet-names HANDLE)= → list of strings
+
+Sheet names in workbook order. =nil= for anything that is not a spreadsheet.
+
+** =(cmacs-office-cells HANDLE)= → list of plists
+
+Every *non-empty* cell, sheet by sheet in workbook order, then by row, then
+column. =nil= for anything that is not a spreadsheet.
+
+| Key | Meaning |
+|-----+---------|
+| =:sheet= | the sheet name |
+| =:row= | 1-based row |
+| =:col= | 1-based column |
+| =:ref= | the ="A1"= address, which is the anchor |
+| =:text= | the display text |
+| =:formula= | the source formula, or =nil= |
+
+Only cells carrying text or a formula come back. Spreadsheet writers pad rows
+out to a thousand or more empty cells using repeat counts; honouring those
+literally would bury a nine-cell sheet under millions of blanks.
+
+Signals =cmacs-office-error= on a sheet part too large to parse in memory —
+see the limits section.
+
+* Editing
+
+All three editors queue their change; `cmacs-office-save' is what reaches the
+file. Each rewrites exactly one part, surgically, leaving everything else in the
+package byte-identical.
+
+** =(cmacs-office-set-cell HANDLE SHEET ROW COL &optional TEXT FORMULA)=
+
+Set one spreadsheet cell. ROW and COL are 1-based; SHEET is a name from
+=cmacs-office-sheet-names=, or =nil= for the first sheet. TEXT =nil= or empty
+clears the cell. FORMULA is the source formula *without* its leading ~=~.
+
+Text that parses as a number is stored as a number, so it sums; anything else is
+stored as text. The cell's style index survives.
+
+** =(cmacs-office-set-block HANDLE ID INDEX TEXT)=
+
+Replace one paragraph in a word processing document. ID and INDEX come from
+=cmacs-office-blocks= — pass both, and =nil= for ID when the block has none. The
+block is found by ID, falling back to INDEX.
+
+The paragraph keeps its style and its first run's character formatting;
+formatting that varied *inside* it is flattened. See [[file:fidelity.org][fidelity.org]].
+
+** =(cmacs-office-set-slide-text HANDLE SLIDE INDEX TEXT)=
+
+Replace the text of one shape on a slide. SLIDE is 1-based; INDEX counts only
+shapes that hold text, exactly as extraction reports them.
+
+* Formulas
+
+From =lisp/cmacs/cmacs-office-formula.el=.
+
+** =(cmacs-office-formula-eval FORMULA CELLS &optional SHEET)=
+
+Evaluate FORMULA against CELLS, returning a string — or =nil= when the formula
+uses something outside =cmacs-office-formula-functions=, which is the signal to
+keep the value the file already cached rather than display a guess.
+
+Range functions (SUM, AVERAGE, MIN, MAX, COUNT, COUNTA, PRODUCT) are computed
+directly from cell values; whatever scalar arithmetic remains goes to
+=cmacs-calculator-eval=, bringing GNU Calc's precision and units with it.
+
+** =(cmacs-office-formula-normalise FORMULA)=
+
+Strip format-specific decoration: =of:=SUM([.A1:.A5])= and ~=SUM(A1:A5)~ both
+reduce to =SUM(A1:A5)=.
+
+* Authoring
+
+From =lisp/cmacs/cmacs-office-author.el=.
+
+** =(cmacs-office-author OUTPUT &optional BUFFER)=
+
+Write org content out, choosing a writer by OUTPUT's extension. =.docx= is
+generated natively from a template donor; =.odt= goes through org's own
+=ox-odt=.
+
+Spreadsheets and presentations are deliberately *not* generated from org — a
+deck is not an outline. Edit a real document instead.
+
+** =cmacs-office-author-template=
+
+The =.docx= used as the style donor. =nil= means the minimal template shipped in
+=etc/cmacs/office/template.docx=. Point it at a house-style document and
+everything exported adopts its styles, fonts and page setup — which is the whole
+reason for copying a document rather than generating one.
+
+* Preview
+
+From =lisp/cmacs/cmacs-office-preview.el=.
+
+** =(cmacs-office-preview &optional FILE)=
+
+Show laid-out pages instead of the org projection, via =doc-view=.
+
+** =(cmacs-office-preview-converter &optional REFRESH)=
+
+How to run LibreOffice headlessly, as a program plus leading arguments, or =nil=.
+Resolution: a native =soffice=/=libreoffice= on =exec-path= first, then the
+flatpaks in =cmacs-office-preview-flatpak-ids=.
+
+This exists because stock =doc-view= finds its converter with =executable-find=
+only, so on a host where LibreOffice is a flatpak it silently does nothing.
+=cmacs-office-preview-install= points =doc-view-odf->pdf-converter-function= at
+the flatpak-aware converter — no upstream change needed.
+
+Note the entry point is =libreoffice=, *not* =soffice=: soffice exists inside the
+sandbox but is not on its PATH, and =--command=soffice= fails with a bare
+"execvp: No such file or directory" that reads like a missing application.
+
+* Agent tools
+
+From =lisp/cmacs/cmacs-office-tools.el=, registered on the brigade tool bus and
+so reaching in-process agents, CLI agents over the MCP relay, external MCP
+clients and the AI context menu.
+
+| Tool | What it does |
+|------+--------------|
+| =office_read= | The document's text |
+| =office_info= | Format, kind, sheet/slide counts, properties |
+| =office_outline= | Blocks with the indices needed to edit them |
+| =office_cells= | Non-empty cells as ADDRESS/VALUE lines |
+| =office_set_cell= | Set one cell and save (destructive, confirms) |
+| =office_set_text= | Replace one block and save (destructive, confirms) |
+
+Documents are addressed by path rather than handle — an agent has no session to
+hold a handle across — and every tool opens, acts and closes, so an agent cannot
+leak a handle or act on stale state.
+
+* The Elisp layer
+
+Provided by =lisp/cmacs/cmacs-office.el=, which is loaded on demand.
+
+** =(cmacs-office-find-file PATH)= → buffer
+
+Open an Office document as an org projection. This is what
+=auto-mode-alist= runs, so plain =C-x C-f report.docx= does it.
+
+The buffer is a *projection*, not the document. The document stays open behind
+it as a handle in =cmacs-office--handle=, which is what the editing phases write
+through; the org text is never re-parsed to reconstruct the original. Killing
+the buffer closes the handle.
+
+** =cmacs-office-mode=
+
+Derived from =org-mode=, read-only. Keys: =g= refreshes from disk, =C-c C-e=
+writes the projection to a file, =C-c C-f= opens the source directory, =q=
+buries the buffer.
+
+Headings carry their anchors as =:CMACS_OFFICE_PART:=, =:CMACS_OFFICE_ID:= and
+=:CMACS_OFFICE_INDEX:= properties. Body paragraphs have nowhere to put
+properties, so the complete table for every block lives buffer-locally in
+=cmacs-office--blocks=.
+
+** =(cmacs-office-text HANDLE)= → string
+
+The document's readable text as one string — spreadsheets row by row with tabs
+between cells, everything else paragraph by paragraph. Meant for searching,
+yanking, and handing to an agent.
+
+** Doom (and anything that regenerates autoloads)
+
+If a =.docx= opens as an *unzip listing*, the association was lost. That listing
+is =archive-mode=: =lisp/files.el= maps these extensions to
+=doc-view-mode-maybe=, doc-view finds no converter, and its fallback re-runs
+=normal-mode= and lands on the =PK= entry in =magic-fallback-mode-alist=.
+Nothing errors, which is what makes it confusing.
+
+It happens because Doom regenerates its own autoloads — emitting stubs only for
+*definitions*, silently dropping bare =(add-to-list 'auto-mode-alist ...)=
+cookies — and reinitialises =auto-mode-alist= during startup, after the dumped
+entry was installed.
+
+Fix it permanently by requiring the associations file from your config:
+
+#+begin_src elisp
+(when IS-CMACS-OFFICE (require 'cmacs-office-autoloads))
+#+end_src
+
+That file carries only =autoload= declarations and =add-to-list= calls, so it is
+cheap to load unconditionally. It also installs the flatpak-aware =doc-view=
+converter once doc-view loads.
+
+=M-x cmacs-office-install-auto-mode= does the same thing for the current
+session, without editing your config.
+
+* Inspection
+
+** =(cmacs-office-part-count HANDLE)= → integer
+
+Number of parts, counting queued additions and excluding queued deletions.
+
+** =(cmacs-office-part-names HANDLE)= → list of strings
+
+Part names *in archive order*. The order is load-bearing, not cosmetic: an ODF
+package is only valid when =mimetype= comes first, and a stable order makes
+round-trip diffs readable. Queued parts that the file does not yet contain are
+appended in the order they were added.
+
+** =(cmacs-office-part-p HANDLE NAME)= → boolean
+
+Whether the package contains =NAME=. Returns =nil= rather than signalling when
+=NAME= is malformed, so it is safe to probe with untrusted input.
+
+** =(cmacs-office-part-size HANDLE NAME)= → integer
+
+Uncompressed size in bytes, read from the central directory. Costs no
+decompression, so it is safe to consult before deciding whether to read a part at
+all.
+
+* Reading
+
+** =(cmacs-office-part-bytes HANDLE NAME)= → unibyte string
+
+The raw bytes of the part. A part queued by =cmacs-office-set-part-bytes= reads
+back as the queued content, not as what is still on disk.
+
+To parse:
+
+#+begin_src elisp
+(with-temp-buffer
+  (set-buffer-multibyte nil)
+  (insert (cmacs-office-part-bytes h "word/document.xml"))
+  (libxml-parse-xml-region (point-min) (point-max)))
+#+end_src
+
+* Mutation (deferred)
+
+** =(cmacs-office-set-part-bytes HANDLE NAME BYTES)= → nil
+
+Queues =BYTES= as the new content of =NAME=, adding the part if absent. =BYTES=
+is used as raw bytes; encode it yourself if it is multibyte text.
+
+Signals when =NAME= is the =mimetype= part of an existing ODF package — see
+[[file:fidelity.org][fidelity.org]] for why that one is immutable.
+
+Note that this does *not* update =[Content_Types].xml= or any =_rels= part. Until
+Phase 1, keeping those consistent is the caller's responsibility.
+
+** =(cmacs-office-delete-part HANDLE NAME)= → nil
+
+Queues removal. Signals if the part is absent, or if it is =mimetype=.
+
+** =(cmacs-office-dirty-p HANDLE)= → boolean
+
+Whether anything is queued.
+
+** =(cmacs-office-revert HANDLE)= → nil
+
+Discards every queued edit. The file is not touched.
+
+* Saving
+
+** =(cmacs-office-save HANDLE)= → nil
+
+Writes queued edits back to the file the handle was opened from, then clears the
+queue.
+
+With nothing queued this does *nothing at all* — a guarantee, not an
+optimisation. With edits, untouched parts are copied through with their
+compressed bytes intact.
+
+** =(cmacs-office-save-as HANDLE DEST)= → nil
+
+Writes the document, with queued edits applied, to =DEST=, overwriting it if
+present.
+
+This is an *export*: the file the handle was opened from is left alone, and the
+queued edits stay queued. The copy happens before any editing, so a failed export
+cannot damage the source. With nothing queued it is a byte-exact file copy.
+
+* Limits
+
+** =(cmacs-office-set-limits HANDLE MAX-PART MAX-TOTAL)= → nil
+
+Sets the inflated-size caps for this handle, in bytes. Zero for either argument
+leaves that cap unchanged.
+
+Defaults are 512 MB per part and 2 GB per package. They exist because these files
+routinely arrive as mail attachments; see the hostile-input section of
+[[file:architecture.org][architecture.org]].
+
+* Errors
+
+All failures signal =cmacs-office-error=, whose condition list is
+=(cmacs-office-error error)=. Catch it the usual way:
+
+#+begin_src elisp
+(condition-case err
+    (cmacs-office-part-bytes h "no/such/part.xml")
+  (cmacs-office-error (message "%s" (error-message-string err))))
+#+end_src
+
+The underlying causes, all reported with a message naming the part:
+
+| Cause | When |
+|-------+------|
+| open | archive missing, unreadable, or not a zip |
+| no-part | no such part in the package |
+| bad-name | part name failed validation |
+| too-large | an inflated-size cap was hit, or a member exceeded its declared size |
+| read | truncated or corrupt member |
+| write | save failed |
+| readonly | structurally immutable part (=mimetype=) |
+
+A stale, closed or never-issued handle also signals =cmacs-office-error=.

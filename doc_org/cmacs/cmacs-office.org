@@ -1,0 +1,236 @@
+#+title: CMacs Office — .docx, .xlsx, .pptx and OpenDocument, natively
+#+description: Native OOXML + OpenDocument documents as structured, editable, agent-addressable objects
+#+authors: Zach Podbielniak
+#+categories: cmacs subsystem office ooxml opendocument docx xlsx pptx
+#+created: 2026-08-15T00:00:00-04:00
+#+updated: 2026-08-15T00:00:00-04:00
+#+version: 0.1
+
+* Overview
+
+Before this subsystem, an Office document in cmacs was a picture. =lisp/files.el=
+routes =.docx=, =.xlsx=, =.pptx= and the OpenDocument extensions to
+=doc-view-mode=, which shells out to LibreOffice, renders pages to PNG, and shows
+you the result. You cannot grep it, edit it, diff it, or hand it to an agent —
+and on a host with no system =soffice= (a flatpak-only install, say) you get
+nothing at all.
+
+=--with-cmacs-office= treats all six formats as what they actually are:
+structured documents you can read, edit and save without losing anything.
+
+The six are two families of the same idea. OOXML (=.docx=, =.xlsx=, =.pptx=) and
+OpenDocument (=.odt=, =.ods=, =.odp=) are both a *zip package of XML parts* — OPC
+in one vocabulary, an ODF package in the other. One container layer serves both.
+
+* Status
+
+Every phase is implemented: reading, editing, authoring, page preview and the
+agent tool surface. See [[file:office/index.org][the reference directory]] for the detail.
+
+What you can do:
+
+- *Read* any of the six formats as a readable org buffer.
+- *Edit* cells, paragraphs and slide text, saving back with the round-trip
+  guarantee below.
+- *Author* a =.docx= or =.odt= from an org file.
+- *Preview* laid-out pages, on hosts where LibreOffice is only a flatpak.
+- *Hand documents to agents*, which can read and edit them through the brigade
+  tool bus.
+
+* Reading a document
+
+Just open it. =C-x C-f report.docx= gives an org buffer, because the six
+extensions are claimed from =doc-view-mode=:
+
+#+begin_example
+#+TITLE: Quarterly report
+#+CMACS_OFFICE_SOURCE: /home/zach/Documents/report.docx
+#+CMACS_OFFICE_FORMAT: docx
+#+CMACS_OFFICE_KIND: text
+#+CMACS_OFFICE_MAIN_PART: word/document.xml
+
+* Summary
+:PROPERTIES:
+:CMACS_OFFICE_PART: word/document.xml
+:CMACS_OFFICE_ID: 5A2C1F09
+:CMACS_OFFICE_INDEX: 4
+:END:
+
+Revenue rose in the third quarter...
+#+end_example
+
+Spreadsheets come back as one org table per sheet; presentations as an outline,
+one heading per slide.
+
+The buffer is a *projection*, not the document. The document itself stays open
+behind it as a handle, and that is what the editing phases will write through —
+the org text is never re-parsed to reconstruct the original. Projecting a format
+we only partly understand is safe precisely because the projection is never the
+thing we save.
+
+For programmatic use the same content is available structured:
+
+#+begin_src elisp
+(cmacs-office-blocks h)       ; paragraphs / slide shapes, with anchors
+(cmacs-office-cells h)        ; addressed cells, non-empty only
+(cmacs-office-sheet-names h)
+(cmacs-office-text h)         ; the whole thing as one searchable string
+#+end_src
+
+* Entry points
+
+Everything is handle-based, in the style of =cmacs-imgedit= and
+=cmacs-vidstudio=: =cmacs-office-open= returns an integer handle, and every other
+primitive takes it as its first argument.
+
+#+begin_src elisp
+(let ((h (cmacs-office-open "~/Documents/report.docx")))
+  (unwind-protect
+      (progn
+        (cmacs-office-part-names h)           ; => ("_rels/.rels" "word/document.xml" ...)
+        (cmacs-office-part-size  h "word/document.xml")
+        (cmacs-office-part-bytes h "word/document.xml"))
+    (cmacs-office-close h)))
+#+end_src
+
+A document knows what it is, and it knows it from its *contents* — so a =.docx=
+someone renamed =.xlsx= still reports =docx=:
+
+#+begin_src elisp
+(let ((h (cmacs-office-open "report.docx")))
+  (unwind-protect
+      (list (cmacs-office-format h)      ; => docx
+            (cmacs-office-kind h)        ; => text
+            (cmacs-office-family h)      ; => ooxml
+            (cmacs-office-main-part h)   ; => "word/document.xml"
+            (cmacs-office-metadata h))   ; => (:generator "..." :language "en-US")
+    (cmacs-office-close h)))
+#+end_src
+
+=cmacs-office-kind= is the one to branch on: a =.docx= and an =.odt= are both
+=text=, and everything above the codec layer treats them the same.
+
+The body part is *resolved*, not assumed — nothing requires a =.docx= to call
+its body =word/document.xml=, so it is looked up through the package
+relationships, which you can walk yourself:
+
+#+begin_src elisp
+(cmacs-office-relationships h)                          ; the package root
+(cmacs-office-relationships h "word/document.xml")      ; what the body points at
+#+end_src
+
+Editing is deferred: nothing touches the file until you save.
+
+#+begin_src elisp
+(let ((h (cmacs-office-open "report.docx")))
+  (unwind-protect
+      (let ((xml (cmacs-office-part-bytes h "word/document.xml")))
+        (cmacs-office-set-part-bytes
+         h "word/document.xml"
+         (replace-regexp-in-string "Q3" "Q4" xml))
+        (cmacs-office-dirty-p h)              ; => t
+        (cmacs-office-save h))
+    (cmacs-office-close h)))
+#+end_src
+
+Because parts are raw bytes, Emacs's own XML machinery does the parsing:
+
+#+begin_src elisp
+(with-temp-buffer
+  (set-buffer-multibyte nil)
+  (insert (cmacs-office-part-bytes h "word/document.xml"))
+  (libxml-parse-xml-region (point-min) (point-max)))
+#+end_src
+
+See [[file:office/reference.org][reference.org]] for every primitive.
+
+* The guarantee
+
+Two properties, both enforced by tests, and everything else rests on them:
+
+1. *Saving a document you did not edit does not change a single byte.* Not
+   "reopens fine" — byte-identical. =cmacs-office-save= on a clean handle is a
+   no-op by construction.
+
+2. *Editing one part leaves every other part bit-for-bit identical* — same
+   bytes, same CRC, same compression method, uncompressed and recompressed
+   never entering the picture.
+
+The second is the one that matters. It means a feature this build does not
+understand — SmartArt, a macro, an embedded OLE object, a custom XML part, a
+chart, a signature — is never parsed and never regenerated, and so cannot be
+damaged by an edit somewhere else in the document.
+
+That is what makes it *safe* to support these formats partially. Full OOXML
+fidelity is a decade of work and is explicitly not a goal here; the shadow-package
+model is what lets coverage grow one feature at a time without ever putting the
+rest of the document at risk. [[file:office/fidelity.org][fidelity.org]] is the honest account of what
+round-trips and what does not.
+
+* What is deliberately refused
+
+An OpenDocument package is only valid if it begins with an uncompressed
+=mimetype= entry. Untouched entries keep their position and compression method,
+so that holds for free — right up until something rewrites =mimetype=, which
+would move it to the end and deflate it. =cmacs-office-set-part-bytes= and
+=cmacs-office-delete-part= therefore refuse that part outright.
+
+Part names are validated before any lookup: absolute paths, =..= components,
+backslashes and colons are rejected. These files routinely arrive as mail
+attachments, so the names in them are untrusted input. Inflated-size caps
+(=cmacs-office-set-limits=) bound a decompression bomb, and a member that
+declares one size and then delivers more is treated as a corrupt archive.
+
+* Architecture
+
+Three translation-unit classes, the same split =cmacs-roamgraph= uses:
+
+| File | Sees | Role |
+|------+------+------|
+| =cmacs-office-zip.c= | glib, libzip, gio | The package container. No Emacs headers at all. |
+| =cmacs-office-defuns.c= | =lisp.h= + the bridge headers | The only Lisp boundary. |
+| =cmacs-office-init.c= | =lisp.h= | =syms_of_= / =init_= aggregation. |
+
+The container never sees =lisp.h=, so it is testable with no Lisp VM, and the
+Lisp boundary never sees =zip.h=, so the container stays replaceable. Documents
+cross into Lisp as integer handles, never as a =Lisp_Object= stored in
+GLib-allocated memory — the GC invariant.
+
+Details in [[file:office/architecture.org][architecture.org]].
+
+* Requirements
+
+=--with-cmacs-office= needs =libzip= and =libxml2= (pkg-config =libzip= and
+=libxml-2.0=), plus glib/gobject/gio. On Fedora that is =libzip-devel= and
+=libxml2-devel=; =install-deps= carries them in =PKGS_OFFICE= for all five
+supported platforms.
+
+libzip is not incidental. It is chosen specifically because it copies untouched
+members through *without re-deflating them*, which is what makes property (2)
+above both lossless and cheap — a one-word edit to a deck carrying 100 MB of
+embedded video does not recompress the video.
+
+LibreOffice is *not* required and is never authoritative. It is used only for
+page preview and for legacy formats the native codecs do not cover, and it is
+found via =PATH= or via flatpak (=org.libreoffice.LibreOffice=,
+=com.collaboraoffice.Office=). See [[file:office/index.org][the roadmap]].
+
+* Testing
+
+=test/cmacs/cmacs-office-tests.el=, driven by real LibreOffice-produced fixtures
+in =test/cmacs/fixtures/office/= rather than hand-rolled zips, so they carry the
+structure real files have.
+
+#+begin_src bash
+make -C test check-cmacs
+#+end_src
+
+The round-trip gate runs over all six formats. Both properties above are asserted
+per format, along with the =mimetype= guard, the traversal rejections, and stale
+handle behaviour.
+
+* See also
+
+- [[file:office/index.org][The office reference directory]] — architecture, fidelity, the full primitive reference, roadmap
+- [[file:build.org][Build configuration]] — the =--with-cmacs-office= flag
+- [[file:cmacs-print.org][cmacs-print]] — the other "foreign format to org" pipeline, whose storage model this subsystem follows

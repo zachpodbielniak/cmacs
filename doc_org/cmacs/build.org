@@ -38,6 +38,7 @@ All CMacs features are auto-detected.  You can force them on or off:
 | =--with-cmacs-lrgterm=        | output_lrg libregnum/raylib display backend (=emacs --lrg=) |
 | =--with-cmacs-lrgscript=      | Emacs Lisp scripting + full game authoring for libregnum (requires libregnum + glib) |
 | =--with-cmacs-roamgraph=      | Native org-roam knowledge-graph visualiser, 2D + 3D (requires libregnum + glib) |
+| =--with-cmacs-office=         | Native Office documents: =.docx=/=.xlsx=/=.pptx= + =.odt=/=.ods=/=.odp= as editable packages, with lossless save-back (needs =libzip= + =libxml2=) |
 | =--with-cmacs-screensaver=    | libregnum screensavers as wallpaper / lock / buffer |
 | =--with-cmacs-transcode=      | Native ffmpeg video/audio transcoder (container/host; parallel pool) |
 | =--with-cmacs-transcribe=     | Batch speech-to-text (whisper STT + transcode pre-pass, AI summaries, hooks) |
@@ -82,6 +83,7 @@ Example with explicit flags:
   --with-cmacs-libregnum \
   --with-cmacs-lrgscript \
   --with-cmacs-roamgraph \
+  --with-cmacs-office \
   --with-cmacs-screensaver \
   --with-cmacs-emacsctl \
   --with-cmacs-lrgterm \
@@ -175,6 +177,7 @@ rest (see the Ubuntu 24.04 section below).
 | Org-Ex   | (built from =cmacs/org-ex/lib/=) | (always bundled)         |
 | MCP      | =mcp-glib-1.0= pkg-config      | =deps/mcp-glib/=           |
 | API      | (built from =cmacs/api/=)      | (always bundled)           |
+| Office   | =libzip= + =libxml-2.0= pkg-config | (none, system only)    |
 
 ** LibreClaw dependencies
 
@@ -473,6 +476,7 @@ Test files in =test/cmacs/=:
 | =cmacs-gowl-tests.el=        | Wayland compositor |
 | =cmacs-crispy-tests.el=      | Crispy scripting  |
 | =cmacs-config-tests.el=      | Config loading    |
+| =cmacs-office-tests.el=      | Office packages (round-trip gate) |
 
 ** Expected failure: =emacs-tests/seccomp/allows-stdout=
 

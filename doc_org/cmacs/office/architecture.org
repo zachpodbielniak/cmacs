@@ -1,0 +1,154 @@
+#+TITLE: Office — Architecture
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:2 num:t
+
+* The narrow waist
+
+Six formats times three kinds of document is a six-way problem only if each
+format gets its own model. It becomes a three-way problem plus six thin codecs
+if the *model* is the narrow waist:
+
+#+begin_example
+        .docx .odt        .xlsx .ods        .pptx .odp
+           |  |              |  |              |  |
+        [OfCodec]         [OfCodec]         [OfCodec]     <- vtable: probe/load/save
+           \  /              \  /              \  /
+        OfTextDoc         OfSheetDoc        OfSlideDoc    <- semantic models
+             \                 |                 /
+              `-------- OfDocument (abstract) --'
+                              |
+                          OfPackage                       <- zip container (OPC + ODF)
+#+end_example
+
+Adding RTF, legacy =.doc=, or a Markdown export later is one new codec; the
+models do not change. =OfCodec= is a plain C struct of function pointers,
+modelled on =CmacsLspLanguage= in =cmacs/lsp/cmacs-lsp-registry.h= — deliberately
+not a =GInterface=. roamgraph, calculator and lsp contain no =G_DEFINE_TYPE=
+between them, and this subsystem matches: plain C structs over =GArray= and
+=GHashTable=, GObject only where signals or introspection would actually earn it.
+
+Format detection reads *container content* — =[Content_Types].xml= for OOXML,
+=mimetype= for ODF — not the file extension, so a misnamed file still opens as
+what it is.
+
+* The shadow package
+
+Full OOXML fidelity is a decade of work. LibreOffice's =writerfilter= is
+enormous, and matching it is not the goal. The alternative is not "support less"
+but "never destroy what you do not understand":
+
+- =OfPackage= holds *every* part of the original zip.
+- Loading parses only the parts we understand into the semantic model.
+- Saving rewrites *only the parts actually mutated*. Everything else is copied
+  through byte-for-byte.
+
+So SmartArt, a macro, an embedded OLE object, a custom XML part, a chart, a
+digital signature — anything unparsed — survives an edit because it is never
+regenerated. Coverage can then grow one feature at a time, and each increment is
+safe rather than a new opportunity to corrupt documents.
+
+** Why libzip specifically
+
+libzip's =zip_close= copies unchanged entries' *already-compressed* bytes rather
+than inflating and re-deflating them. Three consequences:
+
+1. Untouched parts come out with identical bytes, identical CRC and identical
+   compression method. Losslessness is structural, not something we reconstruct.
+2. A one-word edit to a deck carrying 100 MB of embedded video does not
+   recompress the video.
+3. Entry *order* and per-entry compression method are preserved, which is what
+   keeps an ODF package's stored-and-first =mimetype= valid for free.
+
+libarchive was considered and rejected: its zip writer has no raw-passthrough
+mode, so every save would re-deflate every part. Hand-rolling a container over
+the already-linked zlib was also considered and rejected: it would add no
+dependency, but it would put a hand-written parser in front of untrusted mail
+attachments, and libzip has already absorbed that hardening.
+
+** Deferred writes
+
+Mutations are held in a pending table and only pushed into libzip at save time.
+That falls out of the design rather than being bolted on, and it buys:
+
+- Saving an unmodified package is a *no-op*, so byte-identity is guaranteed by
+  construction rather than by care.
+- =save-as= of an unmodified package degrades to a plain file copy, likewise
+  byte-exact.
+- Reads are consistent: a part you queued reads back as what you queued, not as
+  what is still on disk.
+- =save-as= copies first and edits the copy, so a failed export cannot damage the
+  source document.
+
+* Translation-unit classes
+
+Three, not two — the same split =cmacs-roamgraph= uses, and for the same reason:
+
+| TU | Includes | Why |
+|----+----------+-----|
+| =cmacs-office-zip.c= | glib, gio, libzip — *no Emacs headers* | The container |
+| =cmacs-office-xml.c= | glib, libxml2 | Shared XML helpers; matches by local name, never by prefix |
+| =cmacs-office-codec.c= | glib | The format registry — the only place formats are enumerated |
+| =cmacs-office-package.c= | glib, the above | OPC/ODF semantics: detection, content types, relationships, metadata |
+| =cmacs-office-extract.c= | glib, the above | Paragraph and slide text, with anchors |
+| =cmacs-office-sheet.c= | glib, the above | Cells and A1 addressing |
+| =cmacs-office-defuns.c= | =lisp.h=, =coding.h=, the bridge headers — *never* =zip.h= or libxml2 | The single Lisp boundary |
+| =cmacs-office-init.c= | =lisp.h= | =syms_of_= / =init_= aggregation, about 30 lines |
+
+Everything except the last two is testable with no Lisp VM. Later phases add the
+document models to that same class.
+
+One consequence of sharing a process with upstream Emacs: =src/xml.c= uses
+libxml2 too, so =cmacs_office_xml_init= only ever *initialises* it. Calling
+=xmlCleanupParser= would be a use-after-free in code we do not own.
+
+** Parsing is hostile-input shaped
+
+Package parts come from mail attachments, so the parser is configured for that:
+=XML_PARSE_NONET= (a part must never trigger a network fetch), and deliberately
+*not* =XML_PARSE_NOENT= (entity expansion is the billion-laughs vector) and
+*not* =XML_PARSE_HUGE= (which would lift libxml2's depth and size limits).
+libxml2's diagnostics are routed into =GError= rather than stderr, which in
+Emacs would mean scribbling on the user's terminal.
+
+* The Lisp boundary
+
+Documents cross into Lisp as *integer handles*, using the registry pattern copied
+verbatim from =cmacs-imgedit-defuns.c=: a =GPtrArray= where the handle is the
+index and a NULL slot is free and reusable.
+
+This is not a stylistic choice. A =Lisp_Object= stored in GLib-allocated memory
+is invisible to the garbage collector and crashes it; an integer handle sidesteps
+the problem entirely. Every lookup validates and signals =cmacs-office-error= on
+a stale or unknown handle rather than dereferencing.
+
+* Reading strategy: stream the big parts, DOM the small ones
+
+=.xlsx= is the pathological case — =sharedStrings.xml= and a sheet part can each
+run to hundreds of megabytes. Phase 3 therefore splits the reader:
+
+- *DOM* (libxml2 tree) for small parts: rels, styles, theme, docProps, slides, and
+  =document.xml= for typical documents. Mutable and straightforward to
+  re-serialise.
+- *Streaming* (=xmlTextReader=) for sheet data and shared strings, into a sparse
+  cell store keyed by (row, column). Never a node tree, or a large sheet exhausts
+  memory.
+
+The cell store is then the mutation surface and the sheet part is regenerated
+from it on save. That is the one place the shadow-package guarantee weakens, and
+it is documented as such in [[file:fidelity.org][fidelity.org]] rather than glossed over.
+
+* Hostile input
+
+These documents arrive as mail attachments, so the container treats their
+contents as untrusted:
+
+- Part names are validated *before* any lookup: no absolute paths, no =..=
+  component, no backslash, no colon, must be valid UTF-8, bounded length.
+- A whole-archive inflated-size cap is checked at open time from the central
+  directory, which costs no decompression.
+- A per-part cap is checked before reading.
+- A member that declares one size and then delivers more is rejected as corrupt,
+  which is the case the central-directory check alone cannot catch.
+
+=ZIP_CHECKCONS= is deliberately *not* used: it rejects archives real producers
+emit, and the checks above cover the failure mode that actually matters.

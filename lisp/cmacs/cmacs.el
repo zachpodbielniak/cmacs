@@ -75,7 +75,8 @@ unavailable at runtime is excluded."
                       roamgraph cad
                       screensaver org-ex mcp print video audio whisper
                       piper gsurf gsurf-lrg emacsctl cintrospect cpatch
-                      calculator lsp transcode transcribe lrgscript)))
+                      calculator lsp transcode transcribe lrgscript
+                      office)))
       (when (cmacs-feature-p feat)
         (push feat out)))
     (nreverse out)))

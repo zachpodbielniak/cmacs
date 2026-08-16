@@ -669,6 +669,7 @@ OPTION_DEFAULT_OFF([cmacs-transcode], [CMacs native ffmpeg video/audio transcode
 OPTION_DEFAULT_OFF([cmacs-transcribe], [CMacs batch speech-to-text (whisper.cpp STT + transcode pre-pass, AI summaries, hooks; Emacs-managed parallel pool)])
 OPTION_DEFAULT_OFF([cmacs-calculator], [CMacs calculator (desktop/financial/physics/relativity/CAS over GNU Calc; SVG + libregnum charts; emacs --calc REPL)])
 OPTION_DEFAULT_OFF([cmacs-lsp], [CMacs in-binary LSP framework (emacs --cmacs-lsp LANG; gnucalc server for .calc sheets when the calculator is also enabled)])
+OPTION_DEFAULT_OFF([cmacs-office], [CMacs native Office documents (.docx/.xlsx/.pptx + .odt/.ods/.odp) over libzip + libxml2])
 OPTION_DEFAULT_OFF([cmacs-gnuseye], [CMacs gnuseye live planetary globe (GNU's Eye; requires libregnum)])
 OPTION_DEFAULT_OFF([cmacs-roamgraph], [CMacs org-roam knowledge-graph visualiser, 2D + 3D (requires libregnum)])
 OPTION_DEFAULT_OFF([cmacs-lrgscript], [CMacs Emacs Lisp scripting backend + game authoring for libregnum (requires libregnum + glib)])
@@ -1185,6 +1186,31 @@ if test "$with_cmacs_vidstudio" != "no"; then
   CMACS_VIDSTUDIO_LIBS=""
   AC_DEFINE([HAVE_CMACS_VIDSTUDIO], 1, [CMacs video editor])
   CMACS_VIDSTUDIO_OBJ="cmacs-vidstudio-init.o cmacs-vidstudio-defuns.o cmacs-vidstudio-proj.o"
+fi
+if test "$with_cmacs_office" != "no"; then
+  # Native OOXML + OpenDocument support.  All six formats (.docx/.odt,
+  # .xlsx/.ods, .pptx/.odp) are zip packages of XML parts, so the whole
+  # subsystem rests on exactly two system libraries: libzip for the
+  # container and libxml2 for the parts.
+  #
+  # libxml2 is already linked by upstream Emacs for --with-xml2, but it
+  # is checked independently here so --with-cmacs-office stands alone:
+  # an --without-xml2 build must still get its own libxml2 flags rather
+  # than silently inheriting none.
+  #
+  # gio-2.0 is for the byte-exact package copy behind save-as.  No
+  # cmacs-glib dependency on purpose -- the package layer and the
+  # codecs are pure glib and must stay testable without the editor.
+  PKG_CHECK_MODULES([CMACS_OFFICE_DEPS],
+    [glib-2.0 gobject-2.0 gio-2.0 libxml-2.0 libzip])
+  CMACS_OFFICE_CFLAGS="$CMACS_OFFICE_DEPS_CFLAGS"
+  CMACS_OFFICE_LIBS="$CMACS_OFFICE_DEPS_LIBS"
+  AC_DEFINE([HAVE_CMACS_OFFICE], 1,
+            [CMacs native OOXML + OpenDocument subsystem])
+  CMACS_OFFICE_OBJ="cmacs-office-init.o cmacs-office-defuns.o \
+    cmacs-office-zip.o cmacs-office-xml.o cmacs-office-codec.o \
+    cmacs-office-package.o cmacs-office-extract.o cmacs-office-sheet.o \
+    cmacs-office-sheet-edit.o"
 fi
 if test "$with_cmacs_gnuseye" != "no"; then
   if test "$with_cmacs_libregnum" = "no"; then
@@ -1823,6 +1849,9 @@ AC_SUBST(CMACS_GNUSEYE_LIBS)
 AC_SUBST(CMACS_ROAMGRAPH_OBJ)
 AC_SUBST(CMACS_ROAMGRAPH_CFLAGS)
 AC_SUBST(CMACS_ROAMGRAPH_LIBS)
+AC_SUBST(CMACS_OFFICE_OBJ)
+AC_SUBST(CMACS_OFFICE_CFLAGS)
+AC_SUBST(CMACS_OFFICE_LIBS)
 AC_SUBST(CMACS_LRGSCRIPT_OBJ)
 AC_SUBST(CMACS_LRGSCRIPT_CFLAGS)
 AC_SUBST(CMACS_LRGSCRIPT_LIBS)

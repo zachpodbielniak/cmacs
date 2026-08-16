@@ -1,0 +1,185 @@
+#+TITLE: Office — Fidelity: what survives, what does not
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:2 num:t
+
+This is the honest account. Anyone editing an Office document through cmacs
+should be able to find out, precisely, what is guaranteed and what is not — and
+"we support .docx" is not that.
+
+* The guarantees
+
+Both are asserted by =test/cmacs/cmacs-office-tests.el= over all six formats. If
+either ever fails, the failure is more important than whatever feature broke it.
+
+** 1. A save without an edit changes nothing
+
+=cmacs-office-save= on a clean handle does not write. Not "writes an equivalent
+file" — does not write. The bytes on disk are the bytes that were there.
+
+This is why it is safe to open a document out of curiosity.
+
+** 2. An edit touches only the part you edited
+
+After replacing one part and saving, every other member of the package comes back
+with identical bytes, identical CRC, and identical compression method. Verified
+externally as well as in ERT:
+
+#+begin_example
+$ unzip -v edited.docx   # after rewriting word/document.xml
+ ... word/document.xml   1719  Defl:X   569  b4a10382   <- changed
+ ... the other 9 members  ...  Defl:N   ...  unchanged CRCs
+#+end_example
+
+The consequence that matters: *a feature this build cannot parse cannot be
+damaged by an edit elsewhere in the document.* SmartArt, macros, embedded OLE
+objects, charts, custom XML parts, digital signature blocks — none of them are
+read, so none of them are rewritten.
+
+* What is NOT guaranteed
+
+** Editing flattens formatting that varied inside a block
+
+Replacing a paragraph or a slide shape keeps its own style and the character
+properties of its *first run*. Formatting that varied *within* the block does
+not survive: a sentence with one bold word comes back in the first run's style
+throughout.
+
+This is a real loss and worth knowing before you edit prose that carries inline
+emphasis. It is bounded, though — everything outside the edited block, and every
+other part of the package, is untouched.
+
+Editing a cell has no equivalent problem: a cell's value and its formatting are
+separate attributes, so the style index survives untouched.
+
+** Everything is capped at 64 MB per part
+
+Both reading and editing parse a part into a tree, so a part larger than
+=CMACS_OFFICE_MAX_EDIT_DOM= (64 MB) is refused with an error naming the part and
+its size.
+
+*There is no streaming reader.* An earlier plan called for one, and it is not
+implemented — a genuinely enormous spreadsheet (a million-row export, say) will
+be refused rather than read. The limit is a stated refusal, never a silent
+truncation, so you always find out.
+
+Lifting it means a streaming reader feeding a sparse cell store for the read
+path. The write path would keep the ceiling regardless: regenerating a part from
+our model would lift the limit and silently drop everything the model does not
+represent, which is a worse trade than refusing.
+
+** Rewriting a part is your responsibility
+
+=cmacs-office-set-part-bytes= takes raw bytes and writes them. It does not
+validate that they are well-formed XML, schema-valid, or consistent with the
+rest of the package. Writing junk into =word/document.xml= produces a document
+Word will reject, and the subsystem will let you.
+
+Higher phases add model layers that maintain consistency; the raw primitive is
+deliberately unguarded.
+
+** Relationships and content types are not maintained for you
+
+Adding a part with =cmacs-office-set-part-bytes= does *not* register it in
+=[Content_Types].xml= or in the relevant =_rels= part. An OOXML consumer will
+ignore, or reject, a part nothing points at. Likewise, deleting a part leaves any
+relationship pointing at it dangling.
+
+This only affects the raw part primitives. The model-level editors —
+=cmacs-office-set-cell=, =cmacs-office-set-block=,
+=cmacs-office-set-slide-text= — modify parts that already exist and already have
+their bookkeeping, so they are unaffected.
+
+** Extraction is a projection, and drops what you cannot see
+
+=cmacs-office-blocks= returns the text a *reader* sees, which is not the same
+as the text the XML contains. Deliberately excluded:
+
+- **Tracked deletions.** Deleted runs are still in the file — that is the point
+  of tracked changes — and including them would produce a projection that
+  silently disagrees with Word and LibreOffice.
+- **Comment and footnote bodies.** They are separate parts or separate
+  subtrees, not body text.
+
+Also not modelled yet: tables come back as their constituent paragraphs rather
+than as table structure, and inline formatting (bold, links, footnote markers)
+is flattened to plain text. Nothing is *lost* by this — the parts are untouched
+— but the projection is lossy in the reading direction, which is the point of
+calling it a projection.
+
+** Cells are edited surgically, not regenerated
+
+Worth stating because an earlier design did plan to regenerate sheet parts from a
+cell model, which would have put everything the model does not represent at risk.
+That is *not* what happens.
+
+Setting a cell parses the sheet part, rewrites the one =<c>= or =<table-cell>=
+element, and re-serialises. Conditional formatting, data validations, merges,
+column widths, vendor extensions and the cell's own style index all survive,
+because none of them are regenerated.
+
+Two details of that surgery are worth knowing:
+
+- A new value is written as an *inline string* rather than added to the shared
+  string table, so one cell edit never touches =sharedStrings.xml= and never
+  disturbs another cell's string index.
+- OpenDocument run-length encodes runs of identical cells. Editing the third of
+  five hundred repeated cells *splits* that run into three, and the copies are
+  deep clones, so the styling the run carried is preserved on all of them.
+
+** Timestamps and archive metadata
+
+Untouched members keep their metadata. A member you rewrite gets a new
+modification time and a compression level chosen by libzip, which is usually a
+different deflate level than the original producer used. The *content* is what
+you wrote; the encoding of it is not byte-comparable with the original.
+
+** The ODF =mimetype= part is immutable
+
+An ODF package must begin with an uncompressed =mimetype= entry.
+=cmacs-office-set-part-bytes= and =cmacs-office-delete-part= refuse it, and
+signal =cmacs-office-error=.
+
+Rewriting it would move it to the end of the archive and deflate it, producing a
+package that many readers reject — and doing so *silently*, since the file would
+still be a valid zip. Refusing outright is better than a corruption you find out
+about later. Adding =mimetype= to a package that lacks one is permitted, because
+that is package creation rather than mutation.
+
+* What is rejected outright
+
+Not fidelity limits so much as refusals, but they belong in the same honest list:
+
+| Input | Result |
+|-------+--------|
+| Part name with =..=, a leading =/=, a backslash or a colon | =cmacs-office-error=, before any lookup |
+| Part name that is empty or not valid UTF-8 | =cmacs-office-error= |
+| Package whose declared inflated size exceeds the total cap | Refused at open |
+| Part whose declared inflated size exceeds the per-part cap | Refused at read |
+| Member that delivers more data than it declares | Refused as corrupt |
+| Truncated member | Refused as corrupt |
+
+Caps default to 512 MB per part and 2 GB per package, adjustable per handle with
+=cmacs-office-set-limits=.
+
+* How to check a document yourself
+
+The package layer is the ground truth, so you can always audit what happened:
+
+#+begin_src elisp
+;; Every part and its size, without decompressing anything.
+(let ((h (cmacs-office-open "suspect.docx")))
+  (unwind-protect
+      (mapcar (lambda (n) (cons n (cmacs-office-part-size h n)))
+              (cmacs-office-part-names h))
+    (cmacs-office-close h)))
+#+end_src
+
+And from the shell, to confirm an edit stayed local:
+
+#+begin_src bash
+unzip -v before.docx | sort > /tmp/a
+unzip -v after.docx  | sort > /tmp/b
+diff /tmp/a /tmp/b
+#+end_src
+
+Only the parts you meant to change should appear.

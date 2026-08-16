@@ -1,0 +1,152 @@
+#+TITLE: Office — The six formats
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:2 num:t
+
+What each format actually looks like inside, how it is identified, and which
+parts the subsystem reads. Everything format-specific in the C sources lives in
+=cmacs/office/cmacs-office-codec.c=; if a format check appears anywhere else,
+that is the abstraction leaking.
+
+* Two conventions, one idea
+
+All six are a zip package of XML parts. They differ only in how the package
+describes itself.
+
+| | OOXML (OPC) | OpenDocument (ODF) |
+|--+-------------+--------------------|
+| Formats | =.docx= =.xlsx= =.pptx= | =.odt= =.ods= =.odp= |
+| Self-description | =[Content_Types].xml= | =mimetype= (first, stored) |
+| Part typing | =Override= per part, =Default= per extension | =META-INF/manifest.xml= =media-type= |
+| Part graph | =_rels/*.rels= relationships | none |
+| Body part | named by the =officeDocument= relationship | always =content.xml= |
+| Properties | =docProps/core.xml= + =docProps/app.xml= | =meta.xml= |
+
+The consequence worth remembering: in OOXML almost nothing is at a fixed path,
+so the body is *resolved*; in ODF almost everything is, so it is simply known.
+
+* Detection
+
+Reading the file extension would be the obvious approach and is the wrong one —
+attachments and downloads get renamed constantly. Detection reads the container:
+
+1. If the package has a =mimetype= part, it is ODF. Its contents are a media
+   type string, matched against the registry.
+2. Otherwise, if it has =[Content_Types].xml=, it is OOXML. The root
+   relationships are searched for the one whose type ends in =/officeDocument=;
+   the content type of its target identifies the format, and that target *is*
+   the body part.
+3. If the root relationships are missing or malformed — some producers get this
+   wrong — any =Override= carrying a known main-part content type is used
+   instead.
+4. Otherwise the package opens with everything reported as =unknown=. It is
+   still fully inspectable at the part level, because being able to look inside
+   an odd zip beats refusing to.
+
+* Identifying content types
+
+** OpenDocument =mimetype= values
+
+| Format | =mimetype= |
+|--------+------------|
+| =odt= | =application/vnd.oasis.opendocument.text= (also =-template=, =-master=) |
+| =ods= | =application/vnd.oasis.opendocument.spreadsheet= (also =-template=) |
+| =odp= | =application/vnd.oasis.opendocument.presentation= (also =-template=) |
+
+Template variants map to the same codec: an =.ott= is an =.odt= you are meant to
+copy, and the structure is identical.
+
+** OOXML main-part content types
+
+| Format | Main-part content type |
+|--------+------------------------|
+| =docx= | =…wordprocessingml.document.main+xml= |
+| =xlsx= | =…spreadsheetml.sheet.main+xml= |
+| =pptx= | =…presentationml.presentation.main+xml= |
+
+Each also accepts its macro-enabled and template siblings —
+=application/vnd.ms-excel.sheet.macroEnabled.main+xml= and friends. A macro-
+enabled document reports as its base format because the structure is the same;
+the =vbaProject.bin= part is simply one more part that is never parsed, and
+therefore never damaged by an edit elsewhere.
+
+* Part layouts
+
+Typical layouts, as produced by LibreOffice and Microsoft Office. Nothing here
+is guaranteed by the specifications except where noted — which is exactly why
+the body part is resolved rather than assumed.
+
+** =.docx=
+
+#+begin_example
+[Content_Types].xml
+_rels/.rels                      -> names word/document.xml
+word/document.xml                <- body
+word/_rels/document.xml.rels     -> styles, numbering, images, embeddings
+word/styles.xml
+word/numbering.xml
+word/media/…                     images, unparsed and untouched
+docProps/core.xml, docProps/app.xml
+#+end_example
+
+** =.xlsx=
+
+#+begin_example
+[Content_Types].xml
+_rels/.rels                      -> names xl/workbook.xml
+xl/workbook.xml                  <- body: sheet names and ids
+xl/_rels/workbook.xml.rels       -> the sheets, sharedStrings, styles
+xl/worksheets/sheet1.xml         cell data (the part that can be enormous)
+xl/sharedStrings.xml             string pool (likewise)
+xl/styles.xml
+#+end_example
+
+The two large parts are why the spreadsheet reader streams rather than building
+a DOM — see [[file:architecture.org][architecture.org]].
+
+** =.pptx=
+
+#+begin_example
+[Content_Types].xml
+_rels/.rels                      -> names ppt/presentation.xml
+ppt/presentation.xml             <- body: slide order
+ppt/_rels/presentation.xml.rels  -> the slides, masters, theme
+ppt/slides/slide1.xml
+ppt/slideLayouts/…, ppt/slideMasters/…, ppt/theme/…
+#+end_example
+
+** =.odt= / =.ods= / =.odp=
+
+#+begin_example
+mimetype                         first entry, STORED, never rewritten
+META-INF/manifest.xml            types every part
+content.xml                      <- body, whatever the document kind
+styles.xml
+meta.xml                         document properties
+settings.xml
+Pictures/…                       images, unparsed and untouched
+#+end_example
+
+The three ODF formats differ only in the =mimetype= string and in what
+=content.xml= contains — =office:text=, =office:spreadsheet= or
+=office:presentation=. That is why one codec shape serves all three.
+
+* The =mimetype= rule
+
+An ODF package is only valid if =mimetype= is the *first* entry and is *stored*
+uncompressed. Untouched entries keep their position and compression method when
+a package is rewritten, so the rule holds for free — right up until something
+rewrites that part, which would move it to the end and deflate it, silently
+producing a package strict readers reject.
+
+The container refuses to replace or delete it. See [[file:fidelity.org][fidelity.org]].
+
+* Adding a seventh format
+
+One entry in =cmacs-office-codec.c=: a name, a document kind, a family, an
+extension, the strings that identify it, and where its body lives. Nothing else
+in the subsystem needs to change, because the container, the package layer and
+(from Phase 2 on) the document models are all format-agnostic.
+
+That is the whole point of the narrow waist. Legacy =.doc=/=.xls=/=.ppt= are the
+exception — they are not zip packages at all and would need a different
+container, which is why they are delegated to LibreOffice instead.

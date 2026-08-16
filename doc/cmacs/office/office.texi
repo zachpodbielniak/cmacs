@@ -1,0 +1,301 @@
+@c -*- mode: texinfo; coding: utf-8 -*-
+@c This file is part of the CMacs manual.
+@c Copyright (C) 2026 Zach Podbielniak
+@c SPDX-License-Identifier: AGPL-3.0-or-later
+
+@node CMacs Office
+@chapter CMacs Office: .docx, .xlsx, .pptx and OpenDocument, natively
+
+Before this subsystem, an Office document in cmacs was a picture.
+@file{lisp/files.el} routes @file{.docx}, @file{.xlsx}, @file{.pptx} and
+the OpenDocument extensions to @code{doc-view-mode}, which shells out to
+LibreOffice, renders pages to PNG, and shows you the result.  You cannot
+grep it, edit it, diff it, or hand it to an agent---and on a host with no
+system @command{soffice} you get nothing at all.
+
+@code{--with-cmacs-office} treats all six formats as what they actually
+are: structured documents you can read, edit and save without losing
+anything.
+
+The six are two vocabularies over one idea.  OOXML (@file{.docx},
+@file{.xlsx}, @file{.pptx}) and OpenDocument (@file{.odt}, @file{.ods},
+@file{.odp}) are both a zip package of XML parts---OPC in one naming, an
+ODF package in the other.  One container layer serves both.
+
+@menu
+* Office Status::               What is implemented today.
+* Office Entry Points::         Opening, reading and editing a package.
+* Office Identity::             Asking a document what it is.
+* Office Guarantee::            What a save does and does not change.
+* Office Refusals::             Input the container declines.
+* Office Architecture::         How the subsystem is put together.
+* Office Requirements::         Libraries and optional LibreOffice.
+* Office Testing::              The round-trip gate.
+@end menu
+
+@node Office Status
+@section Status
+
+Every phase is implemented: reading, editing, authoring, page preview
+and the agent tool surface.
+
+@itemize
+@item
+@strong{Read} any of the six formats as a readable Org buffer.
+@item
+@strong{Edit} cells, paragraphs and slide text, saving back with the
+round-trip guarantee described below.
+@item
+@strong{Author} a @file{.docx} or @file{.odt} from an Org file.
+@item
+@strong{Preview} laid-out pages, including on hosts where LibreOffice is
+only available as a flatpak---which stock @code{doc-view} cannot find.
+@item
+@strong{Hand documents to agents}, which read and edit them through the
+brigade tool bus.
+@end itemize
+
+Editing is surgical: @code{cmacs-office-set-cell},
+@code{cmacs-office-set-block} and @code{cmacs-office-set-slide-text}
+each rewrite exactly one element of one part, leaving every other part
+byte-identical.  Authoring copies a template document and replaces its
+body, so output inherits styles someone actually designed rather than a
+generated stylesheet.
+
+One limit worth stating up front: parts are parsed as trees, so a part
+larger than 64@tie{}MB is refused rather than read or edited.  There is
+no streaming reader.  The refusal names the part and its size---it is
+never a silent truncation.
+
+The detailed reference is @file{doc_org/cmacs/office/}.
+
+@code{C-x C-f report.docx} opens the projection directly: the six
+extensions are claimed from @code{doc-view-mode} by an
+@code{auto-mode-alist} entry placed ahead of it.  Spreadsheets render as
+one Org table per sheet, presentations as an outline with one heading
+per slide.
+
+The buffer is a @emph{projection}, not the document.  The document stays
+open behind it as a handle, and edits go through that handle rather than
+through the Org text---which is never re-parsed to reconstruct the
+original.  Projecting a format we only partly understand is safe
+precisely because the projection is never the thing we save.
+
+In a spreadsheet projection, @kbd{e} edits the cell at point, @kbd{=}
+evaluates its formula, and @kbd{C-x C-s} writes the document back.
+
+Structured access is available too: @code{cmacs-office-blocks} for
+paragraphs and slide shapes, @code{cmacs-office-cells} for addressed
+cells, and @code{cmacs-office-text} for the whole document as one
+searchable string.  Every block carries a writeback anchor---the part it
+came from, a stable id the file provides, and its ordinal within that
+part.
+
+@node Office Entry Points
+@section Entry points
+
+Everything is handle-based, in the style of @code{cmacs-imgedit} and
+@code{cmacs-vidstudio}: @code{cmacs-office-open} returns an integer
+handle, and every other primitive takes it as its first argument.
+
+@example
+(let ((h (cmacs-office-open "~/Documents/report.docx")))
+  (unwind-protect
+      (progn
+        (cmacs-office-part-names h)
+        (cmacs-office-part-size  h "word/document.xml")
+        (cmacs-office-part-bytes h "word/document.xml"))
+    (cmacs-office-close h)))
+@end example
+
+Editing is deferred; nothing touches the file until you save.
+
+@example
+(let ((h (cmacs-office-open "report.docx")))
+  (unwind-protect
+      (let ((xml (cmacs-office-part-bytes h "word/document.xml")))
+        (cmacs-office-set-part-bytes
+         h "word/document.xml"
+         (replace-regexp-in-string "Q3" "Q4" xml))
+        (cmacs-office-save h))
+    (cmacs-office-close h)))
+@end example
+
+Parts are raw bytes, so Emacs's own XML machinery does the parsing:
+
+@example
+(with-temp-buffer
+  (set-buffer-multibyte nil)
+  (insert (cmacs-office-part-bytes h "word/document.xml"))
+  (libxml-parse-xml-region (point-min) (point-max)))
+@end example
+
+The complete primitive reference---every argument, every error
+condition---is @file{doc_org/cmacs/office/reference.org}.
+
+@node Office Identity
+@section Asking a document what it is
+
+@example
+(let ((h (cmacs-office-open "report.docx")))
+  (unwind-protect
+      (list (cmacs-office-format h)      ; => docx
+            (cmacs-office-kind h)        ; => text
+            (cmacs-office-family h)      ; => ooxml
+            (cmacs-office-main-part h)   ; => "word/document.xml"
+            (cmacs-office-metadata h))
+    (cmacs-office-close h)))
+@end example
+
+All of this is read from the @emph{container}, never from the file name,
+so a @file{.docx} someone renamed @file{.xlsx} still reports @code{docx}.
+Attachments and downloads get renamed constantly; trusting the extension
+would be trusting the least reliable thing about the file.
+
+@code{cmacs-office-kind} is the one to branch on.  A @file{.docx} and an
+@file{.odt} are both @code{text}, and everything above the codec layer
+treats them identically---which is what keeps six formats from becoming
+six implementations.
+
+The body part is @emph{resolved}, not assumed.  Nothing requires a
+@file{.docx} to call its body @file{word/document.xml}, so it is looked
+up through the package relationships, which you can walk yourself:
+
+@example
+(cmacs-office-relationships h)                       ; the package root
+(cmacs-office-relationships h "word/document.xml")   ; what the body points at
+@end example
+
+Each relationship is a plist with @code{:id}, @code{:type},
+@code{:target} and @code{:external}.  A non-external target comes back
+already resolved against the directory of the part that declared it, so
+the body's reference to @file{styles.xml} reads as
+@file{word/styles.xml}.  OpenDocument has no relationship graph and
+returns nil; use @code{cmacs-office-content-type} and its manifest
+instead.
+
+@code{cmacs-office-metadata} normalises both families onto one set of
+keys---@code{:title}, @code{:creator}, @code{:created},
+@code{:generator} and friends---so asking who wrote a document never
+requires knowing its format.
+
+@code{cmacs-office-known-formats} returns the codec registry itself: a
+format appears there exactly when this build can identify it, which
+makes it the honest answer to what is supported.
+
+@node Office Guarantee
+@section The guarantee
+
+Two properties, both enforced by tests over all six formats, and
+everything else rests on them.
+
+@enumerate
+@item
+@strong{Saving a document you did not edit does not change a single
+byte.}  Not ``reopens fine''---byte-identical.  @code{cmacs-office-save}
+on a clean handle is a no-op by construction.
+
+@item
+@strong{Editing one part leaves every other part bit-for-bit
+identical}---same bytes, same CRC, same compression method, with
+inflation and recompression never entering the picture.
+@end enumerate
+
+The second is the one with teeth.  It means a feature this build does not
+understand---SmartArt, a macro, an embedded OLE object, a custom XML
+part, a chart, a signature---is never parsed and never regenerated, and
+so cannot be damaged by an edit somewhere else in the document.
+
+That is what makes it @emph{safe} to support these formats partially.
+Full OOXML fidelity is a decade of work and is explicitly not a goal
+here; this model is what lets coverage grow one feature at a time without
+ever putting the rest of the document at risk.
+
+@file{doc_org/cmacs/office/fidelity.org} is the honest account of what
+round-trips and what does not, including the limits: rewriting a part is
+unvalidated, relationships and content types are not maintained for you,
+and spreadsheet sheet parts will be regenerated rather than surgically
+edited when Phase 3 lands.
+
+@node Office Refusals
+@section What is deliberately refused
+
+An OpenDocument package is only valid if it begins with an uncompressed
+@file{mimetype} entry.  Untouched entries keep their position and
+compression method, so that holds for free---right up until something
+rewrites @file{mimetype}, which would move it to the end and deflate it,
+silently producing a package strict readers reject.
+@code{cmacs-office-set-part-bytes} and @code{cmacs-office-delete-part}
+therefore refuse that part outright.
+
+Part names are validated before any lookup: absolute paths, @samp{..}
+components, backslashes and colons are rejected.  These files routinely
+arrive as mail attachments, so the names inside them are untrusted input.
+Inflated-size caps bound a decompression bomb, and a member that declares
+one size and then delivers more is treated as a corrupt archive.
+
+@node Office Architecture
+@section Architecture
+
+Three translation-unit classes, the same split @code{cmacs-roamgraph}
+uses:
+
+@multitable @columnfractions .30 .30 .40
+@headitem File @tab Sees @tab Role
+@item @file{cmacs-office-zip.c}
+@tab glib, gio, libzip
+@tab The package container.  No Emacs headers at all.
+@item @file{cmacs-office-defuns.c}
+@tab @file{lisp.h} and the bridge headers
+@tab The only Lisp boundary.
+@item @file{cmacs-office-init.c}
+@tab @file{lisp.h}
+@tab @code{syms_of_} / @code{init_} aggregation.
+@end multitable
+
+The container never sees @file{lisp.h}, so it is testable with no Lisp
+VM; the Lisp boundary never sees @file{zip.h}, so the container stays
+replaceable.  Documents cross into Lisp as integer handles, never as a
+@code{Lisp_Object} stored in GLib-allocated memory---that would be
+invisible to the garbage collector and crash it.
+
+The design factors six formats into one container, three document models
+and six thin codecs, rather than six independent implementations.  Adding
+RTF or legacy @file{.doc} later is one new codec.  Details are in
+@file{doc_org/cmacs/office/architecture.org}.
+
+@node Office Requirements
+@section Requirements
+
+@code{--with-cmacs-office} needs @code{libzip} and @code{libxml2}
+(pkg-config @code{libzip} and @code{libxml-2.0}), plus glib, gobject and
+gio.  On Fedora that is @code{libzip-devel} and @code{libxml2-devel};
+@file{install-deps} carries them in @code{PKGS_OFFICE} for all five
+supported platforms.
+
+libzip is not incidental.  It is chosen because it copies untouched
+members through @emph{without re-deflating them}, which is what makes the
+guarantee above both lossless and cheap---a one-word edit to a deck
+carrying 100@tie{}MB of embedded video does not recompress the video.
+
+LibreOffice is @emph{not} required and is never authoritative.  It is
+used only for page preview and for legacy formats the native codecs do
+not cover, and it is discovered via @env{PATH} or via flatpak
+(@code{org.libreoffice.LibreOffice}, @code{com.collaboraoffice.Office}).
+
+@node Office Testing
+@section Testing
+
+@file{test/cmacs/cmacs-office-tests.el}, driven by real
+LibreOffice-produced fixtures in @file{test/cmacs/fixtures/office/}
+rather than hand-rolled zips, so they carry the structure real files
+have---including the ODF stored-and-first @file{mimetype} rule that a
+naive rewrite silently breaks.
+
+@example
+make -C test check-cmacs
+@end example
+
+The round-trip gate runs over all six formats.  Both properties above are
+asserted per format, along with the @file{mimetype} guard, the traversal
+rejections, and stale handle behaviour.
