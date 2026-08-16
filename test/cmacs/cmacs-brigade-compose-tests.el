@@ -354,7 +354,11 @@ nothing ever loaded; the halves each work and the whole is void."
   '(("cmacs-brigade-compose.el" . "cmacs-brigade-dashboard")
     ("cmacs-brigade-loopback.el" . "cmacs-ai-chat")
     ("cmacs-brigade-loopback.el" . "cmacs-libreclaw")
-    ("cmacs-brigade-loopback.el" . "cmacs-libreclaw-cmacs-channel"))
+    ("cmacs-brigade-loopback.el" . "cmacs-libreclaw-cmacs-channel")
+    ("cmacs-brigade-log.el" . "cmacs-brigade-run")
+    ("cmacs-brigade-mailbox.el" . "cmacs-brigade-run")
+    ("cmacs-brigade-output.el" . "cmacs-brigade-run")
+    ("cmacs-brigade-output.el" . "cmacs-brigade-mailbox"))
   "Declarations that must stay declarations, with the reason.
 
 The dashboard requires compose -- for its `n', `V', `C' and `x' keys and
@@ -377,6 +381,24 @@ only calls are in that client's `deliver', reachable only from a live
 buffer in `cmacs-libreclaw-room-mode' or the channel mode derived from
 it.  Requiring either library eagerly would both pull the chat layer
 into every session and break the builds that do not have it.
+
+The run layer requires the log, the mailbox and the output buffer
+outright -- a turn ending writes its reply to the log and consults the
+mailbox on the way out -- so any of the three requiring
+cmacs-brigade-run back would be a load cycle.  Each reaches the run
+layer only through `fboundp'-guarded calls, and each degrades to an
+answer rather than to an error when it is absent: the log reports turn
+0, the output buffer reports no conversation, and the mailbox queues a
+message without kicking a conversation that is not running.  That is
+load-bearing, not incidental -- reading a finished run's log has to work
+in a session that never starts an agent, which is most of them.
+
+cmacs-brigade-output reaching the mailbox is the same cycle one hop
+longer: the mailbox requires the log, which requires the output buffer.
+Its only call is in `cmacs-brigade-output-send', an interactive command
+in a live `cmacs-brigade-output-mode' buffer that refuses with a
+`user-error' when the mailbox is not loaded, so the guard is a path
+someone can actually take rather than a theoretical one.
 
 Anything else on this list needs the same argument made for it in
 writing.")
