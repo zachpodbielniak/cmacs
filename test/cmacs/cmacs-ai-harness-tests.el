@@ -155,6 +155,22 @@ and work in -- and is what this did first."
       (should (= (length (window-list)) before))
       (should (eq (window-buffer (selected-window)) (current-buffer))))))
 
+(ert-deftest cmacs-ai-harness-both-exports-are-reachable ()
+  "Two export keys, two commands, and neither shadows the other.
+
+`C-c C-E' is not a key.  Emacs cannot distinguish Control-Shift-letter
+from Control-letter, so (kbd \"C-c C-E\") and (kbd \"C-c C-e\") are the
+same sequence -- binding both meant the second `define-key' silently ate
+the first and one of the two exports could not be invoked at all.  It
+looked fine in the source, which is exactly why this asserts the
+resolved commands rather than reading the `define-key' calls."
+  (skip-unless (fboundp 'cmacs-ai-harness-new))
+  (let ((org (lookup-key cmacs-ai-harness-mode-map (kbd "C-c C-e")))
+        (md  (lookup-key cmacs-ai-harness-mode-map (kbd "C-c E"))))
+    (should (eq org 'cmacs-ai-harness-export-org))
+    (should (eq md 'cmacs-ai-harness-export-markdown))
+    (should-not (eq org md))))
+
 (ert-deftest cmacs-ai-harness-kill-clears-the-prompt-when-idle ()
   "One key for cancel-or-clear, and idle means clear."
   (skip-unless (fboundp 'cmacs-ai-harness-new))

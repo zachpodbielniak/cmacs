@@ -279,8 +279,8 @@ editing.
   the library rather than as a wall of JSON.  Slash commands and =@path=
   mentions complete from the same files =claude= and =opencode= already
   read on disk.  =C-c C-c= sends, =C-c C-k= cancels or clears, =C-c C-g=
-  writes the prompt in a dedicated buffer, =C-c C-e= / =C-c C-E= export
-  the session as markdown / org.  Distinct from a chat buffer: the
+  writes the prompt in a dedicated buffer, =C-c C-e= / =C-c E= export
+  the session as org / markdown.  Distinct from a chat buffer: the
   transcript is a *rendered view* the library owns, not an Org document —
   which is why exporting to org exists here at all.  See
   [[file:doc_org/cmacs/cmacs-ai-harness.org][the manual]].

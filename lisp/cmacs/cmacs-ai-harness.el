@@ -577,8 +577,14 @@ where the token includes a slash."
     (define-key m (kbd "C-c C-c") #'cmacs-ai-harness-send)
     (define-key m (kbd "C-c C-k") #'cmacs-ai-harness-kill)
     (define-key m (kbd "C-c C-g") #'cmacs-ai-harness-compose)
-    (define-key m (kbd "C-c C-e") #'cmacs-ai-harness-export-markdown)
-    (define-key m (kbd "C-c C-E") #'cmacs-ai-harness-export-org)
+    ;; `C-c C-E' is NOT a key.  Emacs cannot tell Control-Shift-letter
+    ;; from Control-letter, so (kbd "C-c C-E") and (kbd "C-c C-e") are
+    ;; the same sequence -- binding both meant the second define-key
+    ;; silently ate the first and one of the two exports was unreachable.
+    ;; `C-c E' is a distinct sequence and works on a tty, where
+    ;; Control-Shift-e is not expressible at all.
+    (define-key m (kbd "C-c C-e") #'cmacs-ai-harness-export-org)
+    (define-key m (kbd "C-c E") #'cmacs-ai-harness-export-markdown)
     (define-key m (kbd "TAB") #'completion-at-point)
     (define-key m (kbd "C-c C-t") #'cmacs-ai-harness-toggle-block)
     m)
@@ -599,8 +605,8 @@ where the token includes a slash."
 cancels a run or clears the prompt, and \\[cmacs-ai-harness-compose]
 opens a dedicated buffer to write a long one in.
 
-\\[cmacs-ai-harness-export-markdown] exports the session as markdown and
-\\[cmacs-ai-harness-export-org] as Org.  \\[completion-at-point]
+\\[cmacs-ai-harness-export-org] exports the session as Org and
+\\[cmacs-ai-harness-export-markdown] as markdown.  \\[completion-at-point]
 completes slash commands and @paths from the same files the terminal
 harness reads.
 

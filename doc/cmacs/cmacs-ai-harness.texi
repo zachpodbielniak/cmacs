@@ -46,8 +46,8 @@ different agent.
 @item @kbd{C-c C-c} @tab send the prompt
 @item @kbd{C-c C-k} @tab cancel the run, or clear the prompt when idle
 @item @kbd{C-c C-g} @tab write the prompt in a dedicated buffer
-@item @kbd{C-c C-e} @tab export the session as markdown
-@item @kbd{C-c C-E} @tab export the session as Org
+@item @kbd{C-c C-e} @tab export the session as Org
+@item @kbd{C-c E} @tab export the session as markdown
 @item @kbd{C-c C-t} @tab expand or collapse the block at point
 @item @kbd{TAB} @tab complete a @code{/command} or an @code{@@path}
 @end multitable
@@ -68,7 +68,8 @@ Emacs that would be an editor inside an editor, so it is just a buffer.
 
 @section Export
 
-@kbd{C-c C-e} and @kbd{C-c C-E} prompt with @code{read-file-name}, so it
+@kbd{C-c C-e} (Org) and @kbd{C-c E} (markdown) prompt with
+@code{read-file-name}, so it
 is the same directory browsing and completion as @kbd{C-x C-f} rather
 than a bespoke picker.  The default name mirrors
 @code{cmacs-ai-chat-save-name-format} with @samp{harness} in it:

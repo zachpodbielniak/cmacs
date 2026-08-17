@@ -39,8 +39,8 @@ The directory is not cosmetic. =CLAUDE.md=, =.claude=, the project's own command
 | =C-c C-c= | send the prompt |
 | =C-c C-k= | cancel the run, or clear the prompt when idle |
 | =C-c C-g= | write the prompt in a dedicated buffer |
-| =C-c C-e= | export the session as markdown |
-| =C-c C-E= | export the session as Org |
+| =C-c C-e= | export the session as Org |
+| =C-c E= | export the session as markdown |
 | =C-c C-t= | expand or collapse the block at point |
 | =TAB= | complete a =/command= or an =@path= |
 
@@ -54,7 +54,7 @@ The terminal harness hands the prompt to =$EDITOR= for this. Inside Emacs that w
 
 * Export
 
-=C-c C-e= and =C-c C-E= prompt with =read-file-name=, so it is the same directory browsing and completion as =C-x C-f= rather than a bespoke picker. The default name mirrors [[file:cmacs-ai.org][=cmacs-ai-chat-save-name-format=]] with =harness= in it:
+=C-c C-e= (Org) and =C-c E= (markdown) prompt with =read-file-name=, so it is the same directory browsing and completion as =C-x C-f= rather than a bespoke picker. The default name mirrors [[file:cmacs-ai.org][=cmacs-ai-chat-save-name-format=]] with =harness= in it:
 
 : 260816-225824-harness-ollama.org
 
