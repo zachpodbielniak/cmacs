@@ -39,6 +39,12 @@ Three things about =grok-build= differ from the other CLI providers:
 
 * Chat buffers
 
+A chat buffer is an Org document you edit and keep.  If you want an
+/agent/ instead --- tool calls grouped and summarised, slash commands and
+=@path= mentions, a transcript the library owns --- see
+[[file:cmacs-ai-harness.org][cmacs-ai-harness]].
+
+
 =M-x cmacs-ai-chat= opens a fresh chat buffer in
 =cmacs-ai-chat-mode= (derived from =org-mode=).  History above the
 =* Compose= sentinel is read-only; =C-c C-c= sends the compose body

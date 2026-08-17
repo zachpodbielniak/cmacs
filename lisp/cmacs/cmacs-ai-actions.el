@@ -99,15 +99,16 @@
     (errors   . "Errors")
     (terminal . "Terminal")
     (notes    . "Notes")
+    (harness  . "Harness")
     (ask      . "Ask AI")
     (chat     . "Chat")
     (brigade  . "Brigade")
     (tools    . "Tools"))
   "Submenu groups, in the order they appear.  See the Commentary.
 
-The domain groups -- `mail', `git', `errors', `terminal', `notes' --
-sit first because each appears only in its own buffers, where it is what
-you came for.  An empty group is omitted, so they cost nothing
+The domain groups -- `mail', `git', `errors', `terminal', `notes',
+`harness' -- sit first because each appears only in its own buffers,
+where it is what you came for.  An empty group is omitted, so they cost nothing
 elsewhere, and at most one or two are ever present at once.  The
 relative order of the general groups is the same everywhere.
 

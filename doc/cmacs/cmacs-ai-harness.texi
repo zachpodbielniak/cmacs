@@ -1,0 +1,177 @@
+@c -*- texinfo -*-
+@c This file is part of the CMacs manual.
+@c Copyright (C) 2026 Zach Podbielniak
+@c SPDX-License-Identifier: AGPL-3.0-or-later
+
+@node CMacs AI Harness
+@chapter CMacs AI Harness: an Agent in a Buffer
+
+@cindex AI harness
+@cindex agentic harness
+@cindex transcript
+
+@kbd{M-x cmacs-ai-harness} opens an agentic AI session in a buffer: a
+transcript the library owns, rendered natively, with an editable prompt
+at the end.
+
+It is @emph{not} @code{cmacs-ai-chat}, and the difference is worth
+stating because the two look similar from outside.  A chat buffer is an
+Org document you can edit and save; a harness buffer is a rendered view
+of a transcript ai-glib owns, redrawn from its blocks.  A chat is a
+conversation you keep; a harness is an agent you are driving.  That is
+also why exporting to Org exists here and not there --- the buffer is
+not Org to begin with.
+
+@section The three entry points
+
+@table @code
+@item cmacs-ai-harness
+Asks nothing.  Uses @code{cmacs-ai-harness-provider},
+@code{cmacs-ai-harness-model} and @code{default-directory}.
+@item cmacs-ai-harness-with-provider
+Asks for a provider, then a model.
+@item cmacs-ai-harness-with-provider-in-directory
+Asks for a provider, a directory, then a model.
+@end table
+
+The directory is not cosmetic.  @file{CLAUDE.md}, @file{.claude}, the
+project's own command files and every relative path a tool touches
+resolve against it --- an agent started in the wrong directory is a
+different agent.
+
+@section Keys
+
+@multitable @columnfractions .2 .8
+@headitem Key @tab Does
+@item @kbd{C-c C-c} @tab send the prompt
+@item @kbd{C-c C-k} @tab cancel the run, or clear the prompt when idle
+@item @kbd{C-c C-g} @tab write the prompt in a dedicated buffer
+@item @kbd{C-c C-e} @tab export the session as markdown
+@item @kbd{C-c C-E} @tab export the session as Org
+@item @kbd{C-c C-t} @tab expand or collapse the block at point
+@item @kbd{TAB} @tab complete a @code{/command} or an @code{@@path}
+@end multitable
+
+@kbd{C-c C-k} is one key for two things because that is what the
+terminal harness's @kbd{^C} does, and the two are never ambiguous:
+there is either a run to stop or there is not.
+
+@subsection The compose buffer
+
+@kbd{C-c C-g} opens a compose buffer seeded with whatever is already in
+the prompt, so reaching for a real buffer part-way through a long prompt
+does not lose it.  @kbd{C-c C-c} there installs the text as the prompt
+and closes the buffer; @kbd{C-c C-k} discards it.
+
+The terminal harness hands the prompt to @env{$EDITOR} for this.  Inside
+Emacs that would be an editor inside an editor, so it is just a buffer.
+
+@section Export
+
+@kbd{C-c C-e} and @kbd{C-c C-E} prompt with @code{read-file-name}, so it
+is the same directory browsing and completion as @kbd{C-x C-f} rather
+than a bespoke picker.  The default name mirrors
+@code{cmacs-ai-chat-save-name-format} with @samp{harness} in it:
+
+@example
+260816-225824-harness-ollama.org
+@end example
+
+controlled by @code{cmacs-ai-harness-export-name-format}, under
+@code{cmacs-ai-harness-dir}.  The extension comes from ai-glib, so an
+Org export and @command{ai-tui}'s @code{/export org} cannot disagree
+about what to call it.
+
+Three things about the export are ai-glib's doing and worth knowing:
+
+@itemize @bullet
+@item
+@strong{Blocks export expanded whatever the buffer shows.}  A collapsed
+tool group renders as one summary line, and a file recording ``Edited 3
+files'' without saying which is not a record of anything.
+@item
+@strong{The rendering is not the content.}  The @samp{>} markers and the
+@samp{✳ thinking ⌄} chrome orient a reader on screen and are noise in a
+file --- in Org, @samp{>} is not even syntax.  Prose blocks export their
+own text; tool and todo blocks keep their markers, because there
+@samp{✓} and @samp{+21-6} @emph{are} the information.
+@item
+@strong{Prose passes through, output is fenced.}  Models already write
+markdown, so escaping an answer would ruin every code fence in it.
+@end itemize
+
+@section The AI menu
+
+Right-click (or @code{cmacs-ai-menu-pick}) offers a @strong{Harness}
+group in these buffers: write this prompt for me, summarize this
+session, next steps from this session, explain this block, copy this
+block, and export as markdown or Org.
+
+``Write this prompt for me'' does two different things on purpose.  With
+an empty prompt it asks what you want and drafts one.  With a draft
+already there it strengthens what you wrote without broadening the
+scope --- replacing your intent with its own would make the feature
+worse than typing it yourself.
+
+``Summarize this session'' reads the @emph{exported} transcript rather
+than the buffer text, so it can say what the agent actually did and not
+only what it narrated.
+
+@section How it works
+
+The grouping, the summarising and the input pipeline all live in
+ai-glib.  This buffer knows nothing about what a tool is, exactly as
+@command{ai-tui} does not.
+
+@subsection Why a C bridge and not cmacs-gi
+
+ai-glib's own documentation shows this frontend written in Elisp over
+GObject Introspection.  That does not work here yet: cmacs-gi skips
+out-parameters entirely and has no signal support, and the harness needs
+both.  @code{ai_rendered_text_get_span()} and
+@code{ai_completion_result_get_item_fields()} are out-parameter APIs
+@emph{because} a plain struct behind a pointer does not survive
+@command{g-ir-scanner}, and @code{::block-changed} is what makes
+streaming appear at all.
+
+Teaching cmacs-gi those two things is worth doing and is a bigger,
+riskier change to a subsystem everything else already depends on.  So
+@file{cmacs/ai/cmacs-ai-harness.c} is a purpose-built bridge, in the
+shape @file{cmacs-ai-stream.c} already uses.
+
+@subsection Two things a frontend gets wrong
+
+Both are handled in one place here, and both are silent when wrong:
+
+@enumerate
+@item
+@strong{Span offsets are byte offsets into UTF-8.}
+@code{byte-to-position} converts.  Skip it and every face after the
+first accented filename lands somewhere else.
+@item
+@strong{@code{::block-changed} is not optional.}  Streaming mutates a
+block in place, which the insertion signal does not report.  Without it
+the buffer shows the first delta of each reply and then stops.
+@end enumerate
+
+@subsection Block ids, not positions
+
+@code{cmacs-ai-harness-block-at} reports an @code{:id} unique for the
+life of the process.  The buffer's region map is keyed on it, because
+positions shift when blocks are removed and ids do not.
+
+@section Configuration
+
+@multitable @columnfractions .4 .6
+@headitem Variable @tab Means
+@item @code{cmacs-ai-harness-provider} @tab provider symbol, or the configured default
+@item @code{cmacs-ai-harness-model} @tab model, or the provider's own default
+@item @code{cmacs-ai-harness-dir} @tab where exports are offered first
+@item @code{cmacs-ai-harness-export-name-format} @tab export file name, without extension
+@item @code{cmacs-ai-harness-prompt} @tab the prompt marker
+@end multitable
+
+Faces are one per ai-glib style role.  The library's tags are
+@strong{roles, not colours}: @code{added} says ``this run is an
+addition'' and says nothing about green, so the mapping is cmacs's and a
+theme can override any of it.

@@ -934,7 +934,8 @@ if test "$with_cmacs_ai" != "no"; then
   AC_DEFINE([HAVE_CMACS_AI], 1, [CMacs ai-glib AI subsystem])
   CMACS_AI_OBJ="cmacs-ai-init.o cmacs-ai-defuns.o cmacs-ai-config.o \
     cmacs-ai-client.o cmacs-ai-session.o cmacs-ai-stream.o \
-    cmacs-ai-tools.o cmacs-ai-image.o cmacs-ai-typelib.o"
+    cmacs-ai-tools.o cmacs-ai-image.o cmacs-ai-typelib.o \
+    cmacs-ai-harness.o"
   # When MCP is also enabled, expose cmacs MCP tools as ai-glib tool
   # callbacks (the in-process AI can use the same tool surface
   # external Claude Code drives via the Unix socket).

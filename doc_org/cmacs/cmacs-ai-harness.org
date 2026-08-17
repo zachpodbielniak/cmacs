@@ -1,0 +1,131 @@
+#+title: cmacs-ai-harness --- an agentic AI harness in a buffer
+#+description: ai-glib's transcript layer rendered natively into Emacs
+#+authors: Zach Podbielniak
+#+categories: cmacs, ai
+#+created: 2026-08-16
+#+updated: 2026-08-16
+#+version: 1
+
+* What this is
+
+=M-x cmacs-ai-harness= opens an agentic AI session in a buffer: a transcript the library owns, rendered natively, with an editable prompt at the end.
+
+It is *not* [[file:cmacs-ai.org][=cmacs-ai-chat=]], and the difference is worth stating because the two look similar from the outside:
+
+| | =cmacs-ai-chat= | =cmacs-ai-harness= |
+|---+---+---|
+| The buffer is | an Org document | a rendered view |
+| History is | text you can edit and save | the library's, redrawn from blocks |
+| Tool calls | not grouped | grouped and summarised by ai-glib |
+| Slash commands and =@= mentions | no | yes, from the same files other harnesses read |
+| Saving | autosaves as Org | exports on request as markdown, Org or text |
+
+A chat is a conversation you keep. A harness is an agent you are driving, and the transcript is a view of what it did.
+
+* The three entry points
+
+| Command | What it asks |
+|---+---|
+| =cmacs-ai-harness= | nothing --- uses =cmacs-ai-harness-provider=, =cmacs-ai-harness-model= and =default-directory= |
+| =cmacs-ai-harness-with-provider= | provider, then model |
+| =cmacs-ai-harness-with-provider-in-directory= | provider, directory, then model |
+
+The directory is not cosmetic. =CLAUDE.md=, =.claude=, the project's own command files and every relative path a tool touches resolve against it --- an agent started in the wrong directory is a different agent.
+
+* Keys
+
+| Key | Does |
+|---+---|
+| =C-c C-c= | send the prompt |
+| =C-c C-k= | cancel the run, or clear the prompt when idle |
+| =C-c C-g= | write the prompt in a dedicated buffer |
+| =C-c C-e= | export the session as markdown |
+| =C-c C-E= | export the session as Org |
+| =C-c C-t= | expand or collapse the block at point |
+| =TAB= | complete a =/command= or an =@path= |
+
+=C-c C-k= is one key for two things because that is what the terminal harness's =^C= does, and the two are never ambiguous: there is either a run to stop or there is not.
+
+** The compose buffer
+
+=C-c C-g= opens =*cmacs-ai harness compose*= seeded with whatever is already in the prompt, so reaching for a real buffer part-way through a long prompt does not lose it. =C-c C-c= there installs the text as the prompt and closes the buffer; =C-c C-k= discards it.
+
+The terminal harness hands the prompt to =$EDITOR= for this. Inside Emacs that would be an editor inside an editor, so it is just a buffer.
+
+* Export
+
+=C-c C-e= and =C-c C-E= prompt with =read-file-name=, so it is the same directory browsing and completion as =C-x C-f= rather than a bespoke picker. The default name mirrors [[file:cmacs-ai.org][=cmacs-ai-chat-save-name-format=]] with =harness= in it:
+
+: 260816-225824-harness-ollama.org
+
+controlled by =cmacs-ai-harness-export-name-format=, under =cmacs-ai-harness-dir= (the same directory chats are archived in --- a session is a session).
+
+The extension comes from ai-glib rather than from here, so an Org export and =ai-tui='s =/export org= cannot disagree about what to call it.
+
+Three things about the export are worth knowing, all of them ai-glib's doing:
+
+- *Blocks export expanded whatever the buffer shows.* A collapsed tool group renders as one summary line, and a file recording "Edited 3 files" without saying which is not a record of anything.
+- *The rendering is not the content.* The =›= markers and the =✳ thinking ⌄= chrome orient a reader on screen and are noise in a file --- in Org, =>= is not even syntax. Prose blocks export their own text; tool and todo blocks keep their markers, because there =✓= and =+21-6= /are/ the information.
+- *Prose passes through, output is fenced.* Models already write markdown, so escaping an answer would ruin every code fence in it.
+
+* The AI menu
+
+Right-click (or =cmacs-ai-menu-pick=) offers a *Harness* group in these buffers:
+
+| Action | Does |
+|---+---|
+| Write this prompt for me | with an empty prompt, asks what you want and drafts one; with a draft already there, strengthens it without broadening the scope |
+| Summarize this session | reads the /exported/ transcript, so it can say what the agent did and not only what it narrated |
+| Next steps from this session | a checklist of what to do next |
+| Explain this block | the block under the pointer |
+| Copy this block | to the kill ring |
+| Export session as markdown / Org | the same as the keys above |
+
+* Configuration
+
+| Variable | Default | Means |
+|---+---+---|
+| =cmacs-ai-harness-provider= | nil | provider symbol, or the configured default |
+| =cmacs-ai-harness-model= | nil | model, or the provider's own default |
+| =cmacs-ai-harness-dir= | =$XDG_DATA_HOME/cmacs-ai/= | where exports are offered first |
+| =cmacs-ai-harness-export-name-format= | =%y%m%d-%H%M%S-harness-<provider>= | export file name, without extension |
+| =cmacs-ai-harness-prompt= | =› = | the prompt marker |
+
+Faces are one per ai-glib style role --- =cmacs-ai-harness-tool-name=, =cmacs-ai-harness-added=, and so on. The library's tags are *roles, not colours*: =added= says "this run is an addition" and says nothing about green, so the mapping is cmacs's and a theme can override any of it.
+
+* How it works
+
+#+begin_example
+  provider ──emits AiEvent──▶ AiConversation ──folds into──▶ AiTranscript
+                              (the driver)                   (GListModel<AiViewBlock>)
+                                                                     │
+                                        cmacs-ai-harness-block-render
+                                                                     │
+                                                      text + spans ──▶ Emacs text properties
+#+end_example
+
+The grouping, the summarising and the input pipeline all live in ai-glib. This buffer knows nothing about what a tool is --- exactly as =ai-tui= does not.
+
+** Why a C bridge and not cmacs-gi
+
+ai-glib's own documentation shows this frontend written in Elisp over GObject Introspection. That does not work here yet: [[file:cmacs-gi.org][cmacs-gi]] skips out-parameters entirely and has no signal support, and the harness needs both. =ai_rendered_text_get_span()= and =ai_completion_result_get_item_fields()= are out-parameter APIs *because* a plain struct behind a pointer does not survive =g-ir-scanner=, and =::block-changed= is what makes streaming appear at all.
+
+Teaching cmacs-gi those two things is worth doing and is a bigger, riskier change to a subsystem everything else already depends on. So =cmacs/ai/cmacs-ai-harness.c= is a purpose-built bridge, in the shape =cmacs-ai-stream.c= already uses.
+
+** Two things a frontend gets wrong
+
+Both are handled in one place here, and both are silent when wrong:
+
+1. *Span offsets are byte offsets into UTF-8.* =byte-to-position= converts. Skip it and every face after the first accented filename lands somewhere else.
+2. *=::block-changed= is not optional.* Streaming mutates a block in place, which the insertion signal does not report. Without it the buffer shows the first delta of each reply and then stops.
+
+** Block ids, not positions
+
+=cmacs-ai-harness-block-at= reports an =:id= that is unique for the life of the process. The buffer's region map is keyed on it, because positions shift when blocks are removed and ids do not.
+
+* See also
+
+- [[file:cmacs-ai.org][cmacs-ai]] --- the provider surface, chat buffers and the region commands
+- [[file:cmacs-ai-menu.org][cmacs-ai-menu]] --- the action and target registries these actions plug into
+- =deps/ai-glib/docs/transcript.org= --- the view layer and the render contract
+- =deps/ai-glib/docs/harness.org= --- commands, skills, mentions and the input pipeline
