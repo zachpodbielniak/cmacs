@@ -119,6 +119,14 @@ Both are handled in one place here, and both are silent when wrong:
 1. *Span offsets are byte offsets into UTF-8.* =byte-to-position= converts. Skip it and every face after the first accented filename lands somewhere else.
 2. *=::block-changed= is not optional.* Streaming mutates a block in place, which the insertion signal does not report. Without it the buffer shows the first delta of each reply and then stops.
 
+** Evil, and why the mode is not a =special-mode=
+
+The obvious base class for a buffer with a read-only transcript is =special-mode=, and it is the wrong one. Two things follow from it and both are wrong here: the buffer becomes read-only outright, and *Evil gives modes derived from =special-mode= normal state* --- so under Doom every letter you type at the prompt is a motion or an operator, and the buffer looks broken rather than modal.
+
+So the mode derives from =fundamental-mode=, the transcript is protected by a =read-only= text property covering exactly the part that needs it, and the buffer opens in *insert* state --- the same treatment eshell, vterm and a commit message get, because the thing you do here is type. =ESC= still reaches normal state for reading back through the transcript with the motions you already know.
+
+The =evil-set-initial-state= call is inside =with-eval-after-load=, not behind a bare =fboundp= guard as some other cmacs modes use: that guard silently does nothing when the file loads before Evil, and the failure mode is landing in normal state, which does not look like an Evil problem when you hit it.
+
 ** Block ids, not positions
 
 =cmacs-ai-harness-block-at= reports an =:id= that is unique for the life of the process. The buffer's region map is keyed on it, because positions shift when blocks are removed and ids do not.

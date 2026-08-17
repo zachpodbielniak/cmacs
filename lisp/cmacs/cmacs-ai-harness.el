@@ -52,6 +52,7 @@
 (declare-function cmacs-ai-harness-set-working-directory "cmacs-ai-harness.c")
 (declare-function cmacs-ai-harness-provider-name "cmacs-ai-harness.c")
 (declare-function cmacs-ai-harness-model "cmacs-ai-harness.c")
+(declare-function evil-set-initial-state "evil-core" (mode state))
 
 (defgroup cmacs-ai-harness nil
   "An agentic AI harness in an Emacs buffer."
@@ -457,7 +458,10 @@ real buffer part-way through a long prompt does not lose it."
   (interactive)
   (let ((origin (current-buffer))
         (seed (cmacs-ai-harness-prompt-string)))
-    (pop-to-buffer (get-buffer-create "*cmacs-ai harness compose*"))
+    ;; Same window as the harness, for the same reason the harness takes
+    ;; its own: this is where you are writing, and a split halves it.
+    ;; `quit-window' puts the harness back when you are done.
+    (switch-to-buffer (get-buffer-create "*cmacs-ai harness compose*"))
     (cmacs-ai-harness-compose-mode)
     (setq cmacs-ai-harness--compose-origin origin)
     (erase-buffer)
@@ -471,7 +475,10 @@ real buffer part-way through a long prompt does not lose it."
     (unless (buffer-live-p origin)
       (user-error "That harness buffer is gone"))
     (quit-window t)
-    (pop-to-buffer origin)
+    ;; `quit-window' has already put the harness back in this window when
+    ;; compose replaced it there; switch anyway, because it has not when
+    ;; the user moved windows in between.
+    (switch-to-buffer origin)
     (cmacs-ai-harness-set-prompt text)
     (goto-char (point-max))))
 
@@ -480,7 +487,7 @@ real buffer part-way through a long prompt does not lose it."
   (interactive)
   (let ((origin cmacs-ai-harness--compose-origin))
     (quit-window t)
-    (when (buffer-live-p origin) (pop-to-buffer origin))))
+    (when (buffer-live-p origin) (switch-to-buffer origin))))
 
 ;;;; Export -----------------------------------------------------------
 
@@ -584,7 +591,7 @@ where the token includes a slash."
         (cmacs-ai-harness--busy "  [working]")
         (t "")))
 
-(define-derived-mode cmacs-ai-harness-mode special-mode "AI-Harness"
+(define-derived-mode cmacs-ai-harness-mode fundamental-mode "AI-Harness"
   "An ai-glib agent session in a buffer.
 
 \\<cmacs-ai-harness-mode-map>
@@ -602,15 +609,33 @@ it is redrawn from ai-glib's blocks, not edited in place."
   (setq-local cmacs-ai-harness--regions (make-hash-table :test 'eql))
   (setq-local cmacs-ai-harness--created-at (current-time))
   (setq-local truncate-lines nil)
-  ;; `special-mode' makes the whole buffer read-only, which is right for
-  ;; the transcript and wrong for the prompt.  Turning it off and marking
-  ;; the transcript read-only by text property is the way round that keeps
-  ;; the prompt editable without a second buffer.
-  (setq buffer-read-only nil)
+  (visual-line-mode 1)
+  ;; Derived from `fundamental-mode', NOT `special-mode', and the
+  ;; difference is the whole reason you can type here.  `special-mode'
+  ;; makes the buffer read-only -- which is right for the transcript and
+  ;; wrong for the prompt -- and, more to the point, Evil gives modes
+  ;; derived from it normal state, where the letters you meant to type
+  ;; into the prompt are motions and operators instead.  The transcript
+  ;; is protected by a text property, which protects exactly the part
+  ;; that needs it and leaves the prompt alone.
   (add-hook 'completion-at-point-functions
             #'cmacs-ai-harness-completion-at-point nil t)
   (setq-local mode-line-process '(:eval (cmacs-ai-harness--mode-line)))
   (add-hook 'kill-buffer-hook #'cmacs-ai-harness--cleanup nil t))
+
+;; The buffer is a prompt you type into that happens to have a transcript
+;; above it, so it opens ready to type -- the same call eshell, vterm and
+;; a commit message get.  ESC still reaches normal state for navigating
+;; the transcript with the motions you already know.
+;;
+;; `with-eval-after-load' rather than a bare `fboundp' guard, which the
+;; other cmacs modes use: that guard silently does nothing when this file
+;; loads before Evil, and the failure mode is landing in normal state
+;; where the letters you type are operators -- which is not obviously an
+;; Evil problem when you hit it.
+(with-eval-after-load 'evil
+  (evil-set-initial-state 'cmacs-ai-harness-mode 'insert)
+  (evil-set-initial-state 'cmacs-ai-harness-compose-mode 'insert))
 
 (defun cmacs-ai-harness--cleanup ()
   "Free this buffer's harness, cancelling anything in flight."
@@ -650,7 +675,10 @@ it is redrawn from ai-glib's blocks, not edited in place."
       (let ((inhibit-read-only t))
         (cmacs-ai-harness--draw-prompt))
       (goto-char (point-max)))
-    (pop-to-buffer buf)
+    ;; Takes the window, as a chat buffer does.  `pop-to-buffer' splits,
+    ;; which is wrong for something you sit in front of and work in.
+    (switch-to-buffer buf)
+    (goto-char (point-max))
     buf))
 
 ;;;###autoload

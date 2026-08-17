@@ -127,6 +127,34 @@ at all."
     (insert "typed")
     (should (equal (cmacs-ai-harness-prompt-string) "typed"))))
 
+(ert-deftest cmacs-ai-harness-is-not-a-special-mode ()
+  "Deriving from `special-mode' makes the buffer untypable under Evil.
+
+Two things follow from that derivation and both are wrong here: the
+buffer becomes read-only, and Evil gives modes derived from
+`special-mode' normal state -- so every letter meant for the prompt is a
+motion or an operator instead.  The transcript is protected by a text
+property, which covers exactly the part that needs it.
+
+Asserted as the derivation rather than by simulating a keystroke,
+because the failure only appears with Evil loaded and the suite runs
+without it."
+  (skip-unless (fboundp 'cmacs-ai-harness-new))
+  (should-not (provided-mode-derived-p 'cmacs-ai-harness-mode 'special-mode))
+  (cmacs-ai-harness-tests--with-session
+    (should-not buffer-read-only)))
+
+(ert-deftest cmacs-ai-harness-opens-in-one-window ()
+  "The harness takes the window rather than splitting it.
+
+`pop-to-buffer' splits, which is wrong for a buffer you sit in front of
+and work in -- and is what this did first."
+  (skip-unless (fboundp 'cmacs-ai-harness-new))
+  (let ((before (length (window-list))))
+    (cmacs-ai-harness-tests--with-session
+      (should (= (length (window-list)) before))
+      (should (eq (window-buffer (selected-window)) (current-buffer))))))
+
 (ert-deftest cmacs-ai-harness-kill-clears-the-prompt-when-idle ()
   "One key for cancel-or-clear, and idle means clear."
   (skip-unless (fboundp 'cmacs-ai-harness-new))
