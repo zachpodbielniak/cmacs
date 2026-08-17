@@ -251,7 +251,6 @@ multi-byte character in the buffer."
 (defun cmacs-ai-harness--draw-prompt ()
   "Create the prompt region at the end of the buffer."
   (goto-char (point-max))
-  (setq cmacs-ai-harness--transcript-end (copy-marker (point) t))
   (let ((start (point)))
     (insert "\n" cmacs-ai-harness-prompt)
     ;; The separator and the marker glyph belong to the transcript; only
@@ -261,6 +260,17 @@ multi-byte character in the buffer."
     (add-text-properties start (point)
                          '(read-only t rear-nonsticky t
                                      face cmacs-ai-harness-dim))
+    ;; Set AFTER the separator exists, pointing at where it begins.
+    ;; Setting it before and inserting the separator at the same position
+    ;; walked it: insertion type t means the marker advances past text
+    ;; inserted at it, so in an empty buffer it ended up on the far side
+    ;; of the separator, and every transcript block was then inserted
+    ;; into the prompt line instead of above it.
+    ;;
+    ;; Type t is still right for what comes later, and is the whole point:
+    ;; a block inserted here lands before the separator and pushes the
+    ;; marker along, so it keeps pointing at the separator afterwards.
+    (setq cmacs-ai-harness--transcript-end (copy-marker start t))
     (setq cmacs-ai-harness--prompt-marker (copy-marker (point) nil))))
 
 (defun cmacs-ai-harness-prompt-string ()
@@ -392,7 +402,11 @@ it cannot know what /clear means to a buffer."
                (substitute-command-keys "\\[cmacs-ai-harness-kill]")))
      (t
       (cmacs-ai-harness-set-prompt "")
-      (cmacs-ai-harness-send-input cmacs-ai-harness--handle line)))))
+      (cmacs-ai-harness-send-input cmacs-ai-harness--handle line)
+      ;; Blocks arrive above the separator and the handler restores point,
+      ;; but only relative to where it was -- so land explicitly in the
+      ;; prompt, which is where the next thing you type belongs.
+      (goto-char (point-max))))))
 
 (defun cmacs-ai-harness-kill ()
   "Cancel the run in flight, or clear the prompt when idle.

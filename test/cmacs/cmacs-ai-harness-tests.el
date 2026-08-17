@@ -171,6 +171,44 @@ resolved commands rather than reading the `define-key' calls."
     (should (eq md 'cmacs-ai-harness-export-markdown))
     (should-not (eq org md))))
 
+(ert-deftest cmacs-ai-harness-blocks-land-above-the-separator ()
+  "Transcript content goes above the prompt, never into it.
+
+The reported symptom was every reply appearing on the prompt line, so
+after two turns the first line read `> >'.  The cause: the transcript-end
+marker was created at the empty buffer's only position and the separator
+was then inserted at that same position.  Insertion type t means a marker
+advances past text inserted at it, so it ended up on the far side of the
+separator and every block was inserted into the prompt.
+
+Reproduced by inserting at the marker directly, which needs no model --
+what matters is where the position is, not what goes there."
+  (skip-unless (fboundp 'cmacs-ai-harness-new))
+  (cmacs-ai-harness-tests--with-session
+    (should (< (cmacs-ai-harness--transcript-end)
+               (marker-position cmacs-ai-harness--prompt-marker)))
+    (let ((inhibit-read-only t))
+      (save-excursion
+        (goto-char (cmacs-ai-harness--transcript-end))
+        (insert "a block\n\n")))
+    ;; Above the separator, so the prompt is still empty and still last.
+    (should (equal (cmacs-ai-harness-prompt-string) ""))
+    (should (string-prefix-p "a block" (buffer-substring-no-properties
+                                        (point-min) (point-max))))
+    ;; And the marker still points at the separator, ready for the next.
+    (should (< (cmacs-ai-harness--transcript-end)
+               (marker-position cmacs-ai-harness--prompt-marker)))
+    (let ((inhibit-read-only t))
+      (save-excursion
+        (goto-char (cmacs-ai-harness--transcript-end))
+        (insert "second block\n\n")))
+    (should (equal (cmacs-ai-harness-prompt-string) ""))
+    ;; Order preserved: the second block follows the first rather than
+    ;; being wedged in front of it.
+    (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+      (should (< (string-search "a block" text)
+                 (string-search "second block" text))))))
+
 (ert-deftest cmacs-ai-harness-kill-clears-the-prompt-when-idle ()
   "One key for cancel-or-clear, and idle means clear."
   (skip-unless (fboundp 'cmacs-ai-harness-new))
