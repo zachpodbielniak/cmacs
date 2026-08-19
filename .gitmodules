@@ -24,7 +24,7 @@
 	url = https://github.com/OHF-Voice/piper1-GPL.git
 [submodule "deps/ai-glib"]
 	path = deps/ai-glib
-	url = git@gitlab.com:zachpodbielniak/ai-glib.git
+	url = git@git-ssh.podbielniak.com:zachpodbielniak/ai-glib.git
 [submodule "deps/libregnum"]
 	path = deps/libregnum
 	url = git@gitlab.com:copyleft-games/libregnum.git
