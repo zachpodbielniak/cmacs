@@ -156,6 +156,30 @@ The agents do not agree on a config schema.
 decides how the file is delivered (a @option{--mcp-config} flag,
 @env{OPENCODE_CONFIG}, an overlay @env{GROK_HOME}).
 
+For grok the server is named @code{cmacs-brigade} rather than
+@code{cmacs}: grok scopes MCP servers by name across config sources, and
+a name a project's own @file{.mcp.json} already uses is judged repo-local
+and never started in an untrusted folder.
+
+@subsection When an agent says it has no tools
+
+The mode line is the first thing to read---a tool count, @code{mcp}, or a
+warning when wiring failed.  After that, @file{*Messages*} carries the
+reason: the wiring says so out loud rather than failing quietly, because
+a session that looks tool-enabled and has none is invisible from the
+transcript.
+
+For a CLI agent, that agent's own diagnostics are the authority on
+whether the server actually started:
+
+@example
+GROK_HOME=<overlay> grok mcp doctor cmacs-brigade --json
+@end example
+
+@command{grok mcp list} is @emph{not} a useful check---it reads the
+config file without applying grok's project-scope merge or its trust
+rule, so it prints servers that will never start.
+
 @subsection What a CLI agent may call
 
 @code{cmacs-ai-harness-cli-tool-allowlist} defaults to @code{*}, matching

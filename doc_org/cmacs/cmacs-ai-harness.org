@@ -137,6 +137,30 @@ provider decides how the file is delivered (a =--mcp-config= flag,
 beside the credential lifecycle would be a second place that has to agree about
 the 0600 write, the revoke-before-provision and the sweep.
 
+For grok the server is named =cmacs-brigade= rather than =cmacs=, because grok
+scopes MCP servers by name across config sources and a name a project's own
+=.mcp.json= already uses is judged repo-local and never started in an untrusted
+folder. See [[file:ai-brigade/mcp.org][Brigade and MCP]].
+
+** When an agent says it has no tools
+
+The mode line is the first thing to read: =60 tools=, =mcp=, or a warning when
+wiring failed. After that, =*Messages*= carries the reason --- the wiring says
+so out loud rather than failing quietly, because a session that looks
+tool-enabled and has none is invisible from the transcript.
+
+For a CLI agent, the agent's own diagnostics are the authority on whether the
+server actually started:
+
+#+begin_src bash
+  GROK_HOME=<overlay> grok mcp doctor cmacs-brigade --json   # grok
+  claude mcp list                                            # claude-code
+#+end_src
+
+=grok mcp list= is *not* a useful check --- it reads the config file without
+applying grok's project-scope merge or its trust rule, so it prints servers that
+will never start.
+
 ** What a CLI agent may call
 
 =cmacs-ai-harness-cli-tool-allowlist= defaults to =*=, matching the chat buffer.

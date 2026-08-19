@@ -24,6 +24,8 @@ one form lights it up on all three delivery paths at once.
 * Brigade Overview::            What the fabric is and why.
 * Brigade Requirements::        Configure flags and dependencies.
 * Brigade Probing::             Detecting the feature at runtime.
+* Brigade Reaching Grok::       The server name, trust, and diagnosing it.
+* Brigade Provisioning Load Order:: Why the brigade is loaded at use.
 * Brigade Extending::           Registering your own capabilities.
 * Brigade Notifications::       Being told when it finishes; voice.
 * Brigade Workers::             How an agent actually runs.
@@ -127,6 +129,66 @@ The @code{:f16c} capability reports only that the F16C vector-scan path
 could be @emph{compiled}, not that this CPU has the instructions---that is
 decided at runtime by @code{__builtin_cpu_supports}, with a scalar
 fallback, so a single binary runs on hosts with and without it.
+
+@node Brigade Reaching Grok
+@section Reaching grok
+
+grok needs two things the other agents do not.
+
+@subsection The server is named @code{cmacs-brigade}
+
+grok resolves its config sources by merging them per @strong{server
+name}, and a name that also appears in a project-scoped source---a
+repository's own @file{.mcp.json}---makes the merged entry
+@emph{repo-local}, even when the surviving definition came from the
+global config.  Repo-local servers are not started in a folder absent
+from @file{~/.grok/trusted_folders.toml}, silently and with no error
+anywhere the user can see.
+
+cmacs's own repository ships a git-tracked @file{.mcp.json} whose server
+is spelled exactly @code{cmacs}, and the harness runs the agent in the
+project root---so the obvious name was the one name guaranteed to fail
+there.
+
+claude and opencode keep the plain @code{cmacs}: they read a dedicated
+config file, which is neither merged by name nor trust-gated.  That
+asymmetry is why only grok was affected.
+
+A mitigation rather than a guarantee: a project whose @file{.mcp.json}
+happens to use @code{cmacs-brigade} reintroduces it.  @strong{Do not}
+work around it by writing a trusted @file{trusted_folders.toml} into the
+overlay---that also starts the project's own unvetted servers.
+
+@subsection Diagnosing it
+
+@example
+GROK_HOME=<overlay> grok mcp doctor cmacs-brigade --json
+@end example
+
+@command{grok mcp doctor} reports the trust scope @emph{and} the
+handshake.  @strong{@command{grok mcp list} is a trap}: it reads
+@file{config.toml} only and applies neither the project-scope merge nor
+the trust rule, so it prints a server that will never start.
+
+@code{conflict initialized response id: expected 0, got 0} is a JSON-RPC
+id @emph{type} mismatch---a numeric id answered as a string.  It reads as
+nonsense because both sides render the same.  Fixed in mcp-glib; any
+other MCP server built against an older copy fails identically until it
+is rebuilt.
+
+@node Brigade Provisioning Load Order
+@section Provisioning needs the brigade loaded
+
+@code{cmacs-ai} cannot @code{require} the brigade at top level, because
+the brigade requires @code{cmacs-ai}.  It loads
+@code{cmacs-brigade-host} at the point of use instead.
+
+Guarding on @code{fboundp} alone---which it used to do---made tool
+provisioning depend on whether something else had already pulled the
+brigade in: a dashboard, a timer, an earlier chat buffer.  The same
+provider got tools in one session and none in the next, and the failure
+message blamed a build flag for a feature that was compiled in the whole
+time.  A new frontend should load it at use rather than hoping.
 
 @node Brigade Extending
 @section Extending the brigade

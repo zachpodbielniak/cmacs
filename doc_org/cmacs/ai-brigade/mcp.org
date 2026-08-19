@@ -181,3 +181,73 @@ cannot distinguish a dead pid from one this Emacs may not inspect. This mirrors
 
 Files in the older uuid-only shape are left alone --- they carry no pid to judge
 by.
+
+* Reaching grok
+
+grok needs two things the other agents do not, and both were found the hard way.
+
+** The server is named =cmacs-brigade=, not =cmacs=
+
+grok resolves its config sources by merging them per *server name*, and a name
+that also appears in a project-scoped source --- a repository's own
+=.mcp.json= --- makes the merged entry *repo-local*, even when the surviving
+definition came from the global config. Repo-local servers are not started in a
+folder absent from =~/.grok/trusted_folders.toml=, silently and with no error
+anywhere the user can see.
+
+cmacs's own repository ships a git-tracked =.mcp.json= whose server is spelled
+exactly =cmacs=, and the harness runs the agent in the project root --- so the
+obvious name was the one name guaranteed to fail there.
+
+claude and opencode keep the plain =cmacs=: they read a dedicated config file,
+which is neither merged by name nor trust-gated. That asymmetry is why only
+grok was affected.
+
+This is a mitigation rather than a guarantee. A project whose =.mcp.json=
+happens to use =cmacs-brigade= reintroduces it, and nothing on the cmacs side
+can detect that.
+
+*Do not work around it by writing a trusted =trusted_folders.toml= into the
+overlay.* That also starts the project's own unvetted =.mcp.json= servers.
+
+** Diagnosing it
+
+#+begin_src bash
+  GROK_HOME=<overlay> grok mcp doctor cmacs-brigade --json
+#+end_src
+
+=grok mcp doctor= reports the trust scope *and* the handshake, which is what you
+need.
+
+*=grok mcp list= is a trap.* It reads =config.toml= only and applies neither the
+project-scope merge nor the trust rule, so it cheerfully prints a server that
+will never start. It is possible to "confirm" the mechanism twice that way while
+it has never worked in that directory.
+
+A healthy result looks like:
+
+#+begin_example
+  cmacs-brigade (stdio: .../src/emacs --mcp-relay)
+    ✓ command found     ✓ server started
+    ✓ handshake OK      ✓ 216 tools discovered
+#+end_example
+
+** If the handshake fails
+
+=conflict initialized response id: expected 0, got 0= is a JSON-RPC id *type*
+mismatch --- a numeric id answered as a string. It reads as nonsense because
+both sides render the same. Fixed in mcp-glib; any other MCP server built
+against an older copy fails the same way until it is rebuilt.
+
+* Provisioning needs the brigade loaded
+
+=cmacs-ai= cannot =require= the brigade at top level, because the brigade
+requires =cmacs-ai=. It therefore loads =cmacs-brigade-host= at the point of
+use.
+
+Guarding on =fboundp= alone --- which is what it used to do --- made tool
+provisioning depend on whether something else had already pulled the brigade in:
+a dashboard, a timer, an earlier chat buffer. The same provider got tools in one
+session and none in the next, and the failure message blamed a build flag for a
+feature that was compiled in the whole time. If you add another frontend, load
+it at use rather than hoping.
