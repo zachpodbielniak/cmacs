@@ -828,10 +828,18 @@ is delivered.
 
 The dialect is chosen by provider because the agents do not agree on
 one; the kind string is what tells ai-glib which it is being handed."
+  ;; Load it, do not merely hope for it.  Guarding on `fboundp' alone
+  ;; made this depend on whether something else had already pulled the
+  ;; brigade in -- a dashboard, a timer, an earlier chat -- so the same
+  ;; provider got tools in one session and none in the next, and the
+  ;; message below blamed a build flag for a feature that was compiled
+  ;; in all along.  cmacs-ai cannot `require' the brigade at top level
+  ;; (the brigade requires cmacs-ai), but it can here, at use.
+  (require 'cmacs-brigade-host nil 'noerror)
   (cond
    ((not (fboundp 'cmacs-brigade-host-provision))
-    (message "cmacs-ai-harness: %s takes tools over MCP; needs \
---with-cmacs-ai-brigade to provision one"
+    (message "cmacs-ai-harness: %s takes tools over MCP, and \
+cmacs-brigade-host could not be loaded; built --without-cmacs-ai-brigade?"
              (or cmacs-ai-harness--provider "this agent")))
    (t
     (let* ((fmt (cmacs-brigade-host-format-for-provider

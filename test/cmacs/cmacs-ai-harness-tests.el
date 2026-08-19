@@ -502,6 +502,51 @@ region pointing at its predecessor, which breaks the next re-render and
       (should (equal (cmacs-ai-harness-tests--region-text 2) "BBBBBBBB\n\n"))
       (should (equal (cmacs-ai-harness-tests--region-text 3) "CCCC\n\n")))))
 
+
+(ert-deftest cmacs-ai-harness-provisions-without-the-brigade-preloaded ()
+  "A CLI agent gets its MCP config even if nothing loaded the brigade.
+
+`cmacs-ai' cannot `require\=' `cmacs-brigade-host\=' at top level -- the
+brigade requires cmacs-ai -- so the wiring guarded on `fboundp\='.  That
+made tool provisioning depend on whether something else had happened to
+pull the brigade in first: a dashboard, a timer, an earlier chat.  The
+same provider got tools in one session and none in the next, and the
+failure message blamed a build flag for a feature that was compiled in
+all along.
+
+Run in a subprocess that loads only `cmacs-ai-harness\=', because load
+order cannot be tested inside a process where the suite has already
+loaded everything."
+  (skip-unless (fboundp 'cmacs-ai-harness-cli-p))
+  (skip-unless (file-executable-p (expand-file-name invocation-name
+                                                    invocation-directory)))
+  (let* ((script (make-temp-file "cmacs-harness-loadorder" nil ".el"))
+         (emacs (expand-file-name invocation-name invocation-directory))
+         (lisp (expand-file-name "lisp" source-directory))
+         out)
+    (unwind-protect
+        (progn
+          (with-temp-file script
+            (insert "(require 'cmacs-ai-harness)
+"
+                    "(cmacs-mcp-start)
+"
+                    "(let ((b (cmacs-ai-harness--start 'grok-build nil"
+                    " temporary-file-directory)))
+"
+                    "  (with-current-buffer b
+"
+                    "    (princ (format \"TOOLS=%S\" cmacs-ai-harness--tools)))
+"
+                    "  (kill-buffer b))
+"))
+          (setq out (with-output-to-string
+                      (call-process emacs nil standard-output nil
+                                    "-Q" "--batch" "-L" lisp "-l" script)))
+          ;; `mcp' means the CLI provisioning ran.  nil is the defect.
+          (should (string-match-p "TOOLS=mcp" out)))
+      (delete-file script))))
+
 (provide 'cmacs-ai-harness-tests)
 
 ;;; cmacs-ai-harness-tests.el ends here

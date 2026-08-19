@@ -296,6 +296,9 @@ ai-glib's web_search backend.  Shared by `cmacs-ai-chat--init' and
       ;; not up.
       (when cmacs-ai-cli-skip-permissions
         (cmacs-ai-client-set-skip-permissions client t))
+      ;; Same reason as the harness: guarding on `fboundp' alone makes
+      ;; tool provisioning depend on load order rather than on the build.
+      (require 'cmacs-brigade-host nil 'noerror)
       (cond
        ((not (fboundp 'cmacs-brigade-host-provision))
         ;; Said out loud rather than skipped quietly: without this the
