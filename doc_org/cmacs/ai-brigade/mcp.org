@@ -136,3 +136,48 @@ An external Claude Code connects to cmacs's MCP socket directly, through the
 existing shim, and sees the full tool set including everything registered with
 =cmacs-brigade-deftool=. The relay is for *scoped* access, which is what an
 agent the brigade spawned gets.
+
+* Config dialects
+
+The agents do not agree on a schema, so =cmacs-brigade-host-provision= takes a
+=:format=:
+
+| Format | Shape | Delivered as |
+|---+---+---|
+| =claude= (default) | ={"mcpServers": {...}}= | =--mcp-config PATH= |
+| =opencode= | ={"mcp": {NAME: {"type": "local", ...}}}= | =OPENCODE_CONFIG=PATH= |
+| =grok= | =[mcp_servers.NAME]= TOML | an overlay =GROK_HOME= |
+
+The *dialect* is ours, because we own the server being published. The
+*delivery* is ai-glib's, because it is that CLI's own mechanism; a provider
+advertises which =AiAgentEndpoint= kinds it accepts and cmacs mints the one that
+was asked for. Neither side learns the other's business, and ai-glib never
+parses an MCP config.
+
+=cmacs-brigade-host-format-for-provider= maps a provider symbol to a format, and
+=cmacs-brigade-host-endpoint-kind= maps that format to the kind string ai-glib
+expects.
+
+Every existing caller is unchanged: =:format= defaults to =claude=.
+
+* The stale sweep
+
+=cmacs-brigade--provisions= is in-memory only, so a crash --- or, under =--gowl=,
+a compositor death --- used to leave 0600 config files in the runtime directory
+forever. Each is a live capability token naming a socket nobody is listening on,
+and a harness that provisions per buffer multiplies them.
+
+Config filenames therefore carry the owning pid: =mcp-<pid>-<uuid>.json=. The
+pid is not a secret, is not derived from the agent, and the uuid still carries
+all the unguessability --- which is why the uuid is there at all, since ids reach
+prompts and a path is a disclosure.
+
+=cmacs-brigade-host-sweep-stale= runs once per session from the first provision
+and removes any config whose pid is gone *and* which is older than
+=cmacs-brigade-host-stale-age= (default 300s). Both conditions are required:
+=process-attributes= returning nil is weaker than kill(2)'s EPERM rule, since it
+cannot distinguish a dead pid from one this Emacs may not inspect. This mirrors
+=cmacs_mcp_sweep_stale_sockets=, which solves the same problem for the sockets.
+
+Files in the older uuid-only shape are left alone --- they carry no pid to judge
+by.

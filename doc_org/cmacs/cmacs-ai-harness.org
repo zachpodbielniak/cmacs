@@ -90,8 +90,82 @@ Right-click (or =cmacs-ai-menu-pick=) offers a *Harness* group in these buffers:
 | =cmacs-ai-harness-dir= | =$XDG_DATA_HOME/cmacs-ai/= | where exports are offered first |
 | =cmacs-ai-harness-export-name-format= | =%y%m%d-%H%M%S-harness-<provider>= | export file name, without extension |
 | =cmacs-ai-harness-prompt= | =› = | the prompt marker |
+| =cmacs-ai-harness-enable-tools= | t | give the agent cmacs's tools |
+| =cmacs-ai-harness-system-prompt= | (a short one) | instructions, or nil |
+| =cmacs-ai-harness-cli-tool-allowlist= | =*= | what a CLI agent may call |
+| =cmacs-ai-harness-default-directory-function= | project root | where a new harness runs |
+| =cmacs-ai-harness-executor-functions= | nil | hook, =(EXECUTOR PROVIDER)= |
+| =cmacs-ai-harness-run-chat-executor-functions= | nil | also run the chat hook |
 
 Faces are one per ai-glib style role --- =cmacs-ai-harness-tool-name=, =cmacs-ai-harness-added=, and so on. The library's tags are *roles, not colours*: =added= says "this run is an addition" and says nothing about green, so the mapping is cmacs's and a theme can override any of it.
+
+* Tools
+
+A harness has cmacs's whole MCP tool surface --- buffers, files, project
+search, =apropos=, =describe-function=, the lot --- on top of ai-glib's own
+=bash=, =read=, =write=, =edit=, =glob=, =grep=. Roughly sixty tools, filtered by
+the three =cmacs-ai-mcp-bridge-*= knobs =cmacs-ai-chat= already uses.
+
+=/tools= lists them. =/todos= shows the agent's todo list.
+
+** Two mechanisms, chosen by provider
+
+They are genuinely different, and ai-glib refuses to pretend otherwise.
+
+- An *HTTP model* (claude, openai, gemini, grok, ollama) is sent a =tools= array
+  built from the conversation's =AiToolExecutor=. cmacs adopts that executor
+  into its own handle registry, registers the MCP bridge on it, and sets
+  =local-tools=.
+- A *command-line agent* (claude-code, claude-tmux, opencode, grok-build) runs
+  its own tools in its own process and ignores that array entirely ---
+  =ai_conversation_set_local_tools= silently refuses one. It is handed an *MCP
+  config* naming this cmacs instead: =cmacs-brigade-host-provision= mints a
+  random token and a 0600 file under =XDG_RUNTIME_DIR= describing
+  =emacs --mcp-relay=, and the agent connects back.
+
+The mode line says which: =60 tools= for the first, =mcp= for the second, and a
+warning face for *no tools* if wiring failed. That indicator is not decoration
+--- a provider that silently took none is otherwise invisible from the
+transcript.
+
+** Dialects
+
+The agents do not agree on a config schema. =cmacs-brigade-host-provision= takes
+a =:format= --- =claude=, =opencode= or =grok= --- and emits the right one; the
+provider decides how the file is delivered (a =--mcp-config= flag,
+=OPENCODE_CONFIG=, an overlay =GROK_HOME=). Writing the dialect anywhere but
+beside the credential lifecycle would be a second place that has to agree about
+the 0600 write, the revoke-before-provision and the sweep.
+
+** What a CLI agent may call
+
+=cmacs-ai-harness-cli-tool-allowlist= defaults to =*=, matching the chat buffer.
+
+A harness buffer is a person typing a prompt and watching every tool call render
+in front of them --- the trust level of =M-x eval-expression=, not of an
+unattended worker running against a budget. Withholding =eval= from an agent you
+are driving turn by turn inside your own editor buys nothing and produces
+exactly the failure this feature fixes: an agent narrating tool calls it cannot
+make. Set =cmacs-brigade-restrict-privileged-tools= to =t= to hold =eval=,
+=bash= and the C-patching tools back from =*=.
+
+** Adding your own
+
+#+begin_src elisp
+  (add-hook 'cmacs-ai-harness-executor-functions
+            (lambda (executor _provider)
+              (cmacs-ai-tools-register executor "my_tool" "..." params #'fn)))
+#+end_src
+
+A *sibling* of =cmacs-ai-chat-executor-functions=, not the same hook: that one's
+members were written for chat buffers and include the brigade's agent-spawning
+tools, so running them here would silently change what every existing member is
+handed. Set =cmacs-ai-harness-run-chat-executor-functions= to opt into both.
+
+** Exports carry tool output
+
+A transcript exported with =C-c C-e= includes tool blocks verbatim --- command
+output, file contents, MCP results. Worth knowing before sharing one.
 
 * How it works
 

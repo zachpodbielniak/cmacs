@@ -118,6 +118,77 @@ worse than typing it yourself.
 than the buffer text, so it can say what the agent actually did and not
 only what it narrated.
 
+@section Tools
+
+A harness has cmacs's whole MCP tool surface---buffers, files, project
+search, @code{apropos}, @code{describe-function}---on top of ai-glib's
+own @code{bash}, @code{read}, @code{write}, @code{edit}, @code{glob} and
+@code{grep}.  Roughly sixty tools, filtered by the three
+@code{cmacs-ai-mcp-bridge-*} knobs @code{cmacs-ai-chat} already uses.
+
+@code{/tools} lists them; @code{/todos} shows the agent's todo list.
+
+@subsection Two mechanisms, chosen by provider
+
+They are genuinely different, and ai-glib refuses to pretend otherwise.
+
+An @strong{HTTP model} is sent a @code{tools} array built from the
+conversation's @code{AiToolExecutor}.  cmacs adopts that executor into
+its own handle registry, registers the MCP bridge on it, and sets
+@code{local-tools}.
+
+A @strong{command-line agent} runs its own tools in its own process and
+ignores that array entirely---@code{ai_conversation_set_local_tools}
+silently refuses one.  It is handed an @strong{MCP config} naming this
+cmacs instead: @code{cmacs-brigade-host-provision} mints a random token
+and a 0600 file under @env{XDG_RUNTIME_DIR} describing @command{emacs
+--mcp-relay}, and the agent connects back.
+
+The mode line says which is in play, and shows a warning when wiring
+failed.  A provider that silently took no tools is otherwise invisible
+from the transcript.
+
+@subsection Dialects
+
+The agents do not agree on a config schema.
+@code{cmacs-brigade-host-provision} takes a @code{:format}---@code{claude},
+@code{opencode} or @code{grok}---and emits the right one; the provider
+decides how the file is delivered (a @option{--mcp-config} flag,
+@env{OPENCODE_CONFIG}, an overlay @env{GROK_HOME}).
+
+@subsection What a CLI agent may call
+
+@code{cmacs-ai-harness-cli-tool-allowlist} defaults to @code{*}, matching
+the chat buffer.
+
+A harness buffer is a person typing a prompt and watching every tool call
+render in front of them---the trust level of @kbd{M-x eval-expression},
+not of an unattended worker running against a budget.  Withholding
+@code{eval} from an agent you are driving turn by turn buys nothing and
+produces exactly the failure this feature fixes: an agent narrating tool
+calls it cannot make.  Set
+@code{cmacs-brigade-restrict-privileged-tools} to @code{t} to hold
+@code{eval}, @code{bash} and the C-patching tools back from @code{*}.
+
+@subsection Adding your own
+
+@lisp
+(add-hook 'cmacs-ai-harness-executor-functions
+          (lambda (executor _provider)
+            (cmacs-ai-tools-register executor "my_tool" "..." params #'fn)))
+@end lisp
+
+A @emph{sibling} of @code{cmacs-ai-chat-executor-functions}, not the same
+hook: that one's members were written for chat buffers and include the
+brigade's agent-spawning tools, so running them here would silently
+change what every existing member is handed.
+
+@subsection Exports carry tool output
+
+A transcript exported with @kbd{C-c C-e} includes tool blocks
+verbatim---command output, file contents, MCP results.  Worth knowing
+before sharing one.
+
 @section How it works
 
 The grouping, the summarising and the input pipeline all live in
@@ -192,6 +263,12 @@ positions shift when blocks are removed and ids do not.
 @item @code{cmacs-ai-harness-dir} @tab where exports are offered first
 @item @code{cmacs-ai-harness-export-name-format} @tab export file name, without extension
 @item @code{cmacs-ai-harness-prompt} @tab the prompt marker
+@item @code{cmacs-ai-harness-enable-tools} @tab give the agent cmacs's tools
+@item @code{cmacs-ai-harness-system-prompt} @tab instructions, or nil
+@item @code{cmacs-ai-harness-cli-tool-allowlist} @tab what a CLI agent may call
+@item @code{cmacs-ai-harness-default-directory-function} @tab where a new harness runs
+@item @code{cmacs-ai-harness-executor-functions} @tab hook, @code{(EXECUTOR PROVIDER)}
+@item @code{cmacs-ai-harness-run-chat-executor-functions} @tab also run the chat hook
 @end multitable
 
 Faces are one per ai-glib style role.  The library's tags are
