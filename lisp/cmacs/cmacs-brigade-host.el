@@ -84,14 +84,33 @@ than written once and hoped over."
 (defun cmacs-brigade-host--config-grok (command args env)
   "A TOML fragment declaring one [mcp_servers.*] table.
 
+The server is named `cmacs-brigade\=' here and plain `cmacs\=' in the
+claude and opencode emitters.  That reads as gratuitous inconsistency
+and is not.  grok resolves its config sources by merging them per server
+NAME, and a name that also appears in a project-scoped source -- a
+repository\='s own .mcp.json -- makes the merged entry repo-local even
+when the surviving definition came from the global config.  Repo-local
+servers are not started in a folder absent from
+~/.grok/trusted_folders.toml, silently and with no error anyone can see.
+cmacs\='s own repository ships a git-tracked .mcp.json whose server is
+spelled exactly `cmacs\=', and the harness runs the agent in the project
+root -- so the obvious name is the one name guaranteed to fail there.
+
+claude and opencode are unaffected: they read a dedicated config file,
+which is neither merged by name nor subject to a trust gate.
+
+A mitigation, not a guarantee -- a project whose .mcp.json happens to
+use `cmacs-brigade\=' reintroduces it.  Nothing on this side can detect
+that; only `grok mcp doctor NAME --json\=' reports the truth.
+
 Returned as a string rather than a plist: grok reads TOML, and the
 provider appends this to a copy of the user's own config."
-  (concat "\n[mcp_servers.cmacs]\n"
+  (concat "\n[mcp_servers.cmacs-brigade]\n"
           (format "command = %S\n" command)
           (format "args = [%s]\n"
                   (mapconcat (lambda (a) (format "%S" a)) args ", "))
           (if env
-              (concat "\n[mcp_servers.cmacs.env]\n"
+              (concat "\n[mcp_servers.cmacs-brigade.env]\n"
                       (mapconcat
                        (lambda (pair)
                          (format "%s = %S" (car pair) (cdr pair)))
