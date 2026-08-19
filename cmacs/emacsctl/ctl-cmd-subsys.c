@@ -5,7 +5,7 @@
 
 /* ctl-cmd-subsys.c --- cmacs subsystem command groups (the Phase 6
  * MCP-parity interfaces): crispy, bacon, eshell, ai, gsurf, gnuseye,
- * podomation, video, audio, speech, libregnum, calc.
+ * podomation, video, audio, speech, libregnum, calc, db.
  *
  * If the target cmacs was built without a subsystem its interface is
  * absent and the call maps to exit code 3 with a clear message ---
@@ -236,6 +236,34 @@ static const CtlMethodSpec subsys_specs[] = {
     CTL_IFACE_CALC, "ListCalculators", "s?:category", CTL_REPLY_STRING },
   { "calc describe", "Describe one calculator by name",
     CTL_IFACE_CALC, "Describe", "s:name", CTL_REPLY_STRING },
+
+  /* db (database explorer) --- CONNECTION is always the name of a
+   * connection someone saved, never a URL, so a shell one-liner cannot
+   * reach a database the target cmacs was not already given.  The
+   * structured verbs reply with JSON, which -o table renders as rows
+   * and -o json/yaml passes through. */
+  { "db connections", "List saved and live database connections",
+    CTL_IFACE_DBEXPLORER, "Connections", NULL, CTL_REPLY_JSON },
+  { "db connect", "Connect to a saved database",
+    CTL_IFACE_DBEXPLORER, "Connect", "s:connection", CTL_REPLY_STRING },
+  { "db disconnect", "Close a connection, keeping its saved definition",
+    CTL_IFACE_DBEXPLORER, "Disconnect", "s:connection",
+    CTL_REPLY_STRING },
+  { "db query", "Run a read-only query (MAX_ROWS caps the rows fetched)",
+    CTL_IFACE_DBEXPLORER, "QueryLimited",
+    "s:connection s:sql i?:max_rows", CTL_REPLY_JSON },
+  { "db execute", "Run a writing statement; prints the rows affected",
+    CTL_IFACE_DBEXPLORER, "Execute", "s:connection s:sql",
+    CTL_REPLY_JSON },
+  { "db tables", "List tables and views, optionally in one schema",
+    CTL_IFACE_DBEXPLORER, "Tables", "s:connection s?:schema",
+    CTL_REPLY_JSON },
+  { "db columns", "Describe one table's columns",
+    CTL_IFACE_DBEXPLORER, "Columns", "s:connection s:table s?:schema",
+    CTL_REPLY_JSON },
+  { "db export", "Write a query's whole result to a file",
+    CTL_IFACE_DBEXPLORER, "Export",
+    "s:connection s:sql s:format s:path", CTL_REPLY_STRING },
 
   /* instance/log surface */
   { "logs show", "Recent *Messages* lines",

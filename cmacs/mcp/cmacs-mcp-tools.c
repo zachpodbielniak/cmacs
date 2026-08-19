@@ -126,6 +126,10 @@ cmacs_mcp_register_all_tools (McpServer *server)
 #ifdef HAVE_CMACS_VIDSTUDIO
   cmacs_mcp_tools_vidstudio_register (server);
 #endif
+
+#ifdef HAVE_CMACS_DBEXPLORER
+  cmacs_mcp_tools_dbexplorer_register (server);
+#endif
 }
 
 #endif /* HAVE_CMACS_MCP */

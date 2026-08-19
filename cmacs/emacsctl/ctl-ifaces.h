@@ -52,6 +52,7 @@
 #define CTL_IFACE_SPEECH     "org.cmacs.Editor1.Speech"
 #define CTL_IFACE_LRG        "org.cmacs.Editor1.Lrg"
 #define CTL_IFACE_CALC       "org.cmacs.Editor1.Calc"
+#define CTL_IFACE_DBEXPLORER "org.cmacs.Editor1.DbExplorer"
 #define CTL_IFACE_BRIGADE    "org.cmacs.Editor1.Brigade"
 #define CTL_IFACE_INSTANCE   "org.cmacs.Editor1.Instance"
 #define CTL_IFACE_LOG        "org.cmacs.Editor1.Log"

@@ -1257,6 +1257,12 @@ if test "$with_cmacs_dbexplorer" != "no"; then
   CMACS_DBEXPLORER_OBJ="cmacs-dbexplorer-init.o cmacs-dbexplorer-defuns.o \
     cmacs-dbexplorer-events.o cmacs-dbexplorer-conn.o \
     cmacs-dbexplorer-query.o cmacs-dbexplorer-schema.o"
+  dnl org.cmacs.Editor1.DbExplorer: the D-Bus twin of the db_* MCP tools.
+  dnl It lives with the other iface modules in CMACS_GLIB_OBJ (it needs the
+  dnl dbus/eval-dispatch plumbing, not the explorer's own objects), and
+  dnl cmacs-glib is a hard requirement above, so the guard here matches the
+  dnl file's HAVE_CMACS_GLIB && HAVE_CMACS_DBEXPLORER pair.
+  CMACS_GLIB_OBJ="$CMACS_GLIB_OBJ cmacs-dbus-iface-dbexplorer.o"
 fi
 if test "$with_cmacs_gnuseye" != "no"; then
   if test "$with_cmacs_libregnum" = "no"; then
@@ -1525,6 +1531,9 @@ if test "$with_cmacs_mcp" != "no"; then
   fi
   if test "$with_cmacs_calculator" != "no"; then
     CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-calculator.o"
+  fi
+  if test "$with_cmacs_dbexplorer" != "no"; then
+    CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-dbexplorer.o"
   fi
   if test "$with_cmacs_ai_brigade" != "no"; then
     CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-brigade.o"
