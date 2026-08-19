@@ -670,6 +670,7 @@ OPTION_DEFAULT_OFF([cmacs-transcribe], [CMacs batch speech-to-text (whisper.cpp 
 OPTION_DEFAULT_OFF([cmacs-calculator], [CMacs calculator (desktop/financial/physics/relativity/CAS over GNU Calc; SVG + libregnum charts; emacs --calc REPL)])
 OPTION_DEFAULT_OFF([cmacs-lsp], [CMacs in-binary LSP framework (emacs --cmacs-lsp LANG; gnucalc server for .calc sheets when the calculator is also enabled)])
 OPTION_DEFAULT_OFF([cmacs-office], [CMacs native Office documents (.docx/.xlsx/.pptx + .odt/.ods/.odp) over libzip + libxml2])
+OPTION_DEFAULT_OFF([cmacs-dbexplorer], [CMacs database explorer (query/browse/edit/export SQLite, PostgreSQL and MySQL through orm-glib)])
 OPTION_DEFAULT_OFF([cmacs-gnuseye], [CMacs gnuseye live planetary globe (GNU's Eye; requires libregnum)])
 OPTION_DEFAULT_OFF([cmacs-roamgraph], [CMacs org-roam knowledge-graph visualiser, 2D + 3D (requires libregnum)])
 OPTION_DEFAULT_OFF([cmacs-lrgscript], [CMacs Emacs Lisp scripting backend + game authoring for libregnum (requires libregnum + glib)])
@@ -1212,6 +1213,50 @@ if test "$with_cmacs_office" != "no"; then
     cmacs-office-zip.o cmacs-office-xml.o cmacs-office-codec.o \
     cmacs-office-package.o cmacs-office-extract.o cmacs-office-sheet.o \
     cmacs-office-sheet-edit.o"
+fi
+if test "$with_cmacs_dbexplorer" != "no"; then
+  if test "$with_cmacs_glib" = "no"; then
+    AC_MSG_ERROR([--with-cmacs-dbexplorer requires --with-cmacs-glib (queries complete on the cmacs GMainContext)])
+  fi
+  # The database explorer talks to databases through orm-glib, built once
+  # from the deps/orm-glib submodule and linked here as a static archive.
+  #
+  # Which backends orm-glib is built with is decided HERE rather than in
+  # the submodule, because the answer depends on what this machine has:
+  # SQLite is always available (Emacs already requires it), while libpq
+  # and the MariaDB connector are optional.  The flags computed below are
+  # handed to the orm-glib sub-make in src/Makefile.in, so the archive
+  # contains exactly the drivers whose system libraries we then link.
+  #
+  # PKG_CHECK_EXISTS rather than PKG_CHECK_MODULES for the optional two:
+  # a missing PostgreSQL client must narrow the feature, not fail the
+  # build.
+  PKG_CHECK_MODULES([CMACS_DBEXPLORER_DEPS], [glib-2.0 gobject-2.0 gio-2.0 sqlite3])
+  cmacs_dbx_pg=0
+  cmacs_dbx_my=0
+  CMACS_DBEXPLORER_BACKEND_LIBS=""
+  PKG_CHECK_EXISTS([libpq],
+    [cmacs_dbx_pg=1
+     CMACS_DBEXPLORER_BACKEND_LIBS="$CMACS_DBEXPLORER_BACKEND_LIBS `$PKG_CONFIG --libs libpq`"],
+    [AC_MSG_NOTICE([libpq not found -- cmacs-dbexplorer will not support postgresql:// URLs])])
+  PKG_CHECK_EXISTS([libmariadb],
+    [cmacs_dbx_my=1
+     CMACS_DBEXPLORER_BACKEND_LIBS="$CMACS_DBEXPLORER_BACKEND_LIBS `$PKG_CONFIG --libs libmariadb`"],
+    [PKG_CHECK_EXISTS([mariadb],
+      [cmacs_dbx_my=1
+       CMACS_DBEXPLORER_BACKEND_LIBS="$CMACS_DBEXPLORER_BACKEND_LIBS `$PKG_CONFIG --libs mariadb`"],
+      [AC_MSG_NOTICE([MariaDB connector not found -- cmacs-dbexplorer will not support mysql:// URLs])])])
+  CMACS_DBEXPLORER_ORM_FLAGS="ENABLE_SQLITE=1 ENABLE_POSTGRES=$cmacs_dbx_pg ENABLE_MYSQL=$cmacs_dbx_my BUILD_GIR=0"
+  CMACS_DBEXPLORER_CFLAGS="-I\$(abs_top_srcdir)/deps/orm-glib/src \
+    -I\$(abs_top_srcdir)/deps/orm-glib/build/$cmacs_dep_buildtype \
+    $CMACS_DBEXPLORER_DEPS_CFLAGS"
+  CMACS_DBEXPLORER_LIBS="\$(abs_top_srcdir)/deps/orm-glib/build/$cmacs_dep_buildtype/liborm-glib-0.2.a \
+    $CMACS_DBEXPLORER_BACKEND_LIBS $CMACS_DBEXPLORER_DEPS_LIBS"
+  AC_DEFINE([HAVE_CMACS_DBEXPLORER], 1,
+            [CMacs database explorer subsystem])
+  CMACS_DBEXPLORER_OBJ="cmacs-dbexplorer-init.o cmacs-dbexplorer-defuns.o \
+    cmacs-dbexplorer-events.o cmacs-dbexplorer-conn.o \
+    cmacs-dbexplorer-query.o cmacs-dbexplorer-schema.o"
 fi
 if test "$with_cmacs_gnuseye" != "no"; then
   if test "$with_cmacs_libregnum" = "no"; then
@@ -1853,6 +1898,10 @@ AC_SUBST(CMACS_ROAMGRAPH_LIBS)
 AC_SUBST(CMACS_OFFICE_OBJ)
 AC_SUBST(CMACS_OFFICE_CFLAGS)
 AC_SUBST(CMACS_OFFICE_LIBS)
+AC_SUBST(CMACS_DBEXPLORER_OBJ)
+AC_SUBST(CMACS_DBEXPLORER_CFLAGS)
+AC_SUBST(CMACS_DBEXPLORER_LIBS)
+AC_SUBST(CMACS_DBEXPLORER_ORM_FLAGS)
 AC_SUBST(CMACS_LRGSCRIPT_OBJ)
 AC_SUBST(CMACS_LRGSCRIPT_CFLAGS)
 AC_SUBST(CMACS_LRGSCRIPT_LIBS)

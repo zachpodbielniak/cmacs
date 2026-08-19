@@ -2975,6 +2975,9 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #ifdef HAVE_CMACS_OFFICE
       syms_of_cmacs_office ();	/* CMACS: OOXML + OpenDocument */
 #endif
+#ifdef HAVE_CMACS_DBEXPLORER
+      syms_of_cmacs_dbexplorer ();	/* CMACS: database explorer */
+#endif
 #ifdef HAVE_CMACS_LRGSCRIPT
       syms_of_cmacs_lrgscript ();	/* CMACS: elisp scripting for libregnum */
 #endif
@@ -3128,6 +3131,9 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #endif
 #ifdef HAVE_CMACS_OFFICE
   init_cmacs_office ();	/* CMACS: OOXML + OpenDocument */
+#endif
+#ifdef HAVE_CMACS_DBEXPLORER
+  init_cmacs_dbexplorer ();	/* CMACS: database explorer */
 #endif
 #ifdef HAVE_CMACS_LRGSCRIPT
   init_cmacs_lrgscript ();	/* CMACS: register elisp backend with libregnum */

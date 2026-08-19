@@ -9382,6 +9382,7 @@ fully-featured build matching Fedora defaults, use:
   --with-cmacs-transcribe \
   --with-cmacs-calculator \
   --with-cmacs-lsp \
+  --with-cmacs-dbexplorer \
   --enable-cmacs-cpatch \
   --enable-cmacs-deps-debug   # in-house deps -O0 -g3 (DWARF): gdb + runtime cintrospection
 @end example

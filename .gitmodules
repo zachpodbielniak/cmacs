@@ -37,3 +37,6 @@
 [submodule "deps/screensavers"]
 	path = deps/screensavers
 	url = git@git-ssh.podbielniak.com:zachpodbielniak/screensavers.git
+[submodule "deps/orm-glib"]
+	path = deps/orm-glib
+	url = git@git-ssh.podbielniak.com:zachpodbielniak/orm-glib.git

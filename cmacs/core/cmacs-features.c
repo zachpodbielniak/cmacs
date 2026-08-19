@@ -88,6 +88,9 @@ const char *const cmacs_feature_names[] = {
 #ifdef HAVE_CMACS_OFFICE
   "office",
 #endif
+#ifdef HAVE_CMACS_DBEXPLORER
+  "dbexplorer",
+#endif
 #ifdef HAVE_CMACS_LRGSCRIPT
   "lrgscript",
 #endif
@@ -284,6 +287,12 @@ syms_of_cmacs_features (void)
   is_cmacs_office = true;
 #endif
 
+  DEFVAR_BOOL ("IS-CMACS-DBEXPLORER", is_cmacs_dbexplorer,
+    doc: /* Non-nil if this build was configured --with-cmacs-dbexplorer.  */);
+#ifdef HAVE_CMACS_DBEXPLORER
+  is_cmacs_dbexplorer = true;
+#endif
+
   DEFVAR_BOOL ("IS-CMACS-LRGSCRIPT", is_cmacs_lrgscript,
     doc: /* Non-nil if this build was configured --with-cmacs-lrgscript.  */);
 #ifdef HAVE_CMACS_LRGSCRIPT
@@ -400,6 +409,7 @@ syms_of_cmacs_features (void)
   cmacs_features__alias ("is-cmacs-gnuseye",     "IS-CMACS-GNUSEYE");
   cmacs_features__alias ("is-cmacs-roamgraph",   "IS-CMACS-ROAMGRAPH");
   cmacs_features__alias ("is-cmacs-office",      "IS-CMACS-OFFICE");
+  cmacs_features__alias ("is-cmacs-dbexplorer", "IS-CMACS-DBEXPLORER");
   cmacs_features__alias ("is-cmacs-lrgscript",   "IS-CMACS-LRGSCRIPT");
   cmacs_features__alias ("is-cmacs-cad",         "IS-CMACS-CAD");
   cmacs_features__alias ("is-cmacs-screensaver", "IS-CMACS-SCREENSAVER");

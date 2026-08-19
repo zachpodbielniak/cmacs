@@ -218,6 +218,8 @@ RUN ./autogen.sh \
         --with-cmacs-transcribe \
         --with-cmacs-calculator \
         --with-cmacs-lsp \
+
+        --with-cmacs-dbexplorer \
         --enable-cmacs-cpatch \
         --enable-cmacs-deps-debug \
     && make -j"$(nproc)" \

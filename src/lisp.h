@@ -5592,6 +5592,10 @@ extern void init_cmacs_roamgraph (void);
 extern void syms_of_cmacs_office (void);
 extern void init_cmacs_office (void);
 #endif
+#ifdef HAVE_CMACS_DBEXPLORER
+extern void syms_of_cmacs_dbexplorer (void);
+extern void init_cmacs_dbexplorer (void);
+#endif
 #ifdef HAVE_CMACS_GNUSEYE
 extern void syms_of_cmacs_gnuseye (void);
 extern void init_cmacs_gnuseye (void);
