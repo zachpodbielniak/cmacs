@@ -60,6 +60,10 @@ extern void   cmacs_ai_typelib_autoload      (void);
  * and the chat layer; safe to call even without a session. */
 extern AiToolExecutor *cmacs_ai_tools_new_default (void);
 extern AiToolExecutor *cmacs_ai_tools_lookup      (guint handle);
+/* Give an executor cmacs did not create a handle in the same registry,
+ * so the MCP bridge and custom Elisp tools can reach it. */
+extern guint           cmacs_ai_tools_adopt       (AiToolExecutor *exec);
+extern void            cmacs_ai_tools_drop        (guint handle);
 
 /* The Emacs main GThread, captured in init_cmacs_ai (defined in
  * cmacs-ai-tools.c).  A tool callback fired on this thread may safely

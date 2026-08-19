@@ -653,5 +653,40 @@ same file."
   (require 'cmacs-ai-chat)
   (call-interactively #'cmacs-ai-chat-resume))
 
+(defun cmacs-ai--configure-executor (executor)
+  "Give EXECUTOR cmacs's MCP tool surface and the configured web search.
+
+The half of tool setup that `cmacs-ai-chat' and `cmacs-ai-harness' do
+identically.  Both are interactive buffers reading the same three
+`cmacs-ai-mcp-bridge-*' knobs, so a second copy would be a second place
+to forget one.
+
+Deliberately not used by `cmacs-ai-call', which registers the bridge
+with no allowlist at all: routing it through here would quietly narrow
+a one-shot call's tool surface to the editor tier.
+
+Each step is guarded on its own: a build --without-cmacs-mcp has no
+bridge, and a search backend that cannot start should cost web_search
+and not the whole executor.  Returns EXECUTOR."
+  (when executor
+    (when (and cmacs-ai-mcp-bridge-enable
+               (fboundp 'cmacs-ai-tools-register-mcp-bridge))
+      (condition-case err
+          (cmacs-ai-tools-register-mcp-bridge
+           executor
+           cmacs-ai-mcp-bridge-allowlist
+           cmacs-ai-mcp-bridge-denylist
+           cmacs-ai-mcp-bridge-readonly-only)
+        (error
+         (message "cmacs-ai: MCP bridge unavailable: %S" err))))
+    (when (and cmacs-ai-search-provider
+               (fboundp 'cmacs-ai-tools-set-search-provider))
+      (condition-case err
+          (cmacs-ai-tools-set-search-provider
+           executor cmacs-ai-search-provider cmacs-ai-search-api-key)
+        (error
+         (message "cmacs-ai: web_search unavailable: %S" err)))))
+  executor)
+
 (provide 'cmacs-ai)
 ;;; cmacs-ai.el ends here

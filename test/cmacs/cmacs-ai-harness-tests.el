@@ -284,6 +284,86 @@ that."
     (should (cmacs-ai-harness-free h))
     (should-not (cmacs-ai-harness-free h))))
 
+;;;; Tool wiring -------------------------------------------------------
+
+(ert-deftest cmacs-ai-harness-http-provider-gets-tools ()
+  "An HTTP-backed harness carries cmacs's tools, not none.
+
+The defect this guards: `local-tools' defaults nil and nothing set it,
+so the provider was sent no tools array at all.  An agent-tuned model
+asked to inspect the filesystem then narrates a tool call in prose --
+which is what it looks like from the buffer, and says nothing about
+where the fault is."
+  (skip-unless (fboundp 'cmacs-ai-harness-executor))
+  (cmacs-ai-harness-tests--with-session
+    (should-not (cmacs-ai-harness-cli-p cmacs-ai-harness--handle))
+    (should (eq cmacs-ai-harness--tools 'local))
+    (should (cmacs-ai-harness-local-tools-p cmacs-ai-harness--handle))
+    (let ((names (cmacs-ai-tools-list
+                  (cmacs-ai-harness-executor cmacs-ai-harness--handle))))
+      ;; ai-glib's own built-ins ...
+      (should (member "bash" names))
+      ;; ... and cmacs's MCP surface on top of them.
+      (should (seq-find (lambda (n) (string-prefix-p "project_" n)) names)))))
+
+(ert-deftest cmacs-ai-harness-executor-handle-is-memoized ()
+  "Asking twice returns one handle.
+
+A fresh handle per call would register the MCP bridge's callbacks onto
+the same executor again -- `ai_tool_executor_register_callback' does not
+dedupe -- so the model would see every tool twice."
+  (skip-unless (fboundp 'cmacs-ai-harness-executor))
+  (cmacs-ai-harness-tests--with-session
+    (should (= (cmacs-ai-harness-executor cmacs-ai-harness--handle)
+               (cmacs-ai-harness-executor cmacs-ai-harness--handle)))))
+
+(ert-deftest cmacs-ai-harness-does-not-expose-ai-tools-to-itself ()
+  "The `ai_' recursion guard survives the harness path.
+
+Without it an in-process session can call ai_prompt and drive itself."
+  (skip-unless (fboundp 'cmacs-ai-harness-executor))
+  (cmacs-ai-harness-tests--with-session
+    (let ((names (cmacs-ai-tools-list
+                  (cmacs-ai-harness-executor cmacs-ai-harness--handle))))
+      (should-not (seq-find (lambda (n) (string-prefix-p "ai_" n)) names)))))
+
+(ert-deftest cmacs-ai-harness-tools-can-be-turned-off ()
+  "`cmacs-ai-harness-enable-tools' nil means no tools, and says so."
+  (skip-unless (fboundp 'cmacs-ai-harness-executor))
+  (let ((cmacs-ai-harness-enable-tools nil))
+    (cmacs-ai-harness-tests--with-session
+      (should-not cmacs-ai-harness--tools)
+      (should-not (cmacs-ai-harness-local-tools-p cmacs-ai-harness--handle)))))
+
+(ert-deftest cmacs-ai-harness-tools-builtin-is-reachable ()
+  "/tools must not answer \"not available in this buffer\".
+
+It is ai-glib's own builtin and fell through to the catch-all, so the
+one command anybody would use to check whether tools are on denied they
+existed."
+  (skip-unless (fboundp 'cmacs-ai-harness-executor))
+  (cmacs-ai-harness-tests--with-session
+    (let (messages)
+      (cl-letf (((symbol-function 'message)
+                 (lambda (fmt &rest args)
+                   (push (apply #'format fmt args) messages))))
+        (cmacs-ai-harness--builtin "tools" nil))
+      (should-not (seq-find (lambda (m)
+                              (string-match-p "not available" m))
+                            messages)))
+    (should (get-buffer "*cmacs-ai-harness: tools*"))
+    (kill-buffer "*cmacs-ai-harness: tools*")))
+
+(ert-deftest cmacs-ai-harness-mode-line-reports-the-tool-surface ()
+  "The mode line says which mechanism is in play.
+
+A provider that silently took no tools is invisible from the transcript,
+and a one-shot startup message is not enough for a buffer open for
+hours."
+  (skip-unless (fboundp 'cmacs-ai-harness-executor))
+  (cmacs-ai-harness-tests--with-session
+    (should (string-match-p "tools" (cmacs-ai-harness--mode-line)))))
+
 ;;;; The directory a harness starts in ---------------------------------
 
 ;; The provider half of this -- that the conversation pushes the directory

@@ -320,6 +320,52 @@ cmacs_ai_tool__elisp_dispatch (AiToolUse    *tool_use,
   return result;
 }
 
+/* ── Adoption ───────────────────────────────────────────────────── */
+
+/* Give EXEC a handle in the same registry `cmacs-ai-tools-new' uses.
+ *
+ * The handle is the currency the rest of cmacs-ai speaks: the MCP
+ * bridge, the search provider and every custom Elisp tool are reached
+ * through one, and a custom tool's callback is keyed on the exec id.  An
+ * executor cmacs did not create -- the one an AiConversation makes for
+ * itself -- had no way into that table, so a frontend holding a
+ * conversation could not use any of it.
+ *
+ * Refs EXEC: the table's value-destroy is g_object_unref, so ownership
+ * is symmetric with cmacs_ai_tools_new_default's.  */
+guint
+cmacs_ai_tools_adopt (AiToolExecutor *exec)
+{
+  guint h;
+
+  if (exec == NULL) return 0;
+
+  cmacs_ai__executor_registry_init ();
+  g_mutex_lock (&cmacs_ai__executor_mutex);
+  h = cmacs_ai__next_exec_id++;
+  g_hash_table_insert (cmacs_ai__executors, GUINT_TO_POINTER (h),
+                       g_object_ref (exec));
+  g_mutex_unlock (&cmacs_ai__executor_mutex);
+
+  return h;
+}
+
+/* The C half of `cmacs-ai-tools-free', for a GLib free path that must
+ * not re-enter a DEFUN.  Dropping the callbacks is not optional: they
+ * are Lisp objects in a staticpro'd table, so an executor forgotten
+ * without this roots one closure per custom tool forever.  */
+void
+cmacs_ai_tools_drop (guint handle)
+{
+  if (handle == 0) return;
+
+  cmacs_ai__executor_registry_init ();
+  g_mutex_lock (&cmacs_ai__executor_mutex);
+  g_hash_table_remove (cmacs_ai__executors, GUINT_TO_POINTER (handle));
+  g_mutex_unlock (&cmacs_ai__executor_mutex);
+  cmacs_ai_tools__cb_forget (handle);
+}
+
 /* ── DEFUNs ─────────────────────────────────────────────────────── */
 
 DEFUN ("cmacs-ai-tools-new", Fcmacs_ai_tools_new,

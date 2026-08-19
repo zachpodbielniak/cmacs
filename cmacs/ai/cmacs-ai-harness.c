@@ -84,6 +84,8 @@ typedef struct
   AiCommandSet         *commands;        /* owned, may be NULL */
   AiCompletionContext  *completion;      /* owned, may be NULL */
 
+  guint                 executor_handle;   /* 0 until asked for */
+
   gulong                sig_items;
   gulong                sig_block;
   gulong                sig_busy;
@@ -99,6 +101,16 @@ cmacs_ai_harness__free (gpointer data)
   CmacsAiHarness *h = data;
 
   if (h == NULL) return;
+
+  /* Before the conversation goes, since dropping the handle forgets
+   * this harness's custom-tool closures and the conversation owns the
+   * executor those were registered on.  Skipping it roots one Lisp
+   * closure per custom tool for the life of the process. */
+  if (h->executor_handle != 0)
+    {
+      cmacs_ai_tools_drop (h->executor_handle);
+      h->executor_handle = 0;
+    }
 
   if (h->conversation != NULL)
     {
@@ -681,6 +693,187 @@ normal path rather than the caller redrawing by hand.  */)
   return Qt;
 }
 
+
+/* ── DEFUNs: tools ──────────────────────────────────────────────── */
+
+DEFUN ("cmacs-ai-harness-executor", Fcmacs_ai_harness_executor,
+       Scmacs_ai_harness_executor, 1, 1, 0,
+       doc: /* Return a tool-executor handle for harness HANDLE.
+
+The handle names the AiToolExecutor the conversation already created for
+itself, adopted into the same registry `cmacs-ai-tools-new' uses, so
+`cmacs-ai-tools-register-mcp-bridge', `cmacs-ai-tools-register' and
+`cmacs-ai-tools-set-search-provider' all work on it.
+
+The same handle every time.  Minting a fresh one per call would register
+the MCP bridge's tool callbacks onto the same executor again, and
+`ai_tool_executor_register_callback' does not dedupe.
+
+Freed with the harness; do not pass it to `cmacs-ai-tools-free'.  */)
+  (Lisp_Object handle)
+{
+  CmacsAiHarness *h = cmacs_ai_harness__lookup (handle);
+  AiToolExecutor *exec;
+
+  if (h->executor_handle != 0)
+    return make_uint (h->executor_handle);
+
+  exec = ai_conversation_get_executor (h->conversation);
+  if (exec == NULL)
+    error ("cmacs-ai-harness: conversation has no executor");
+
+  h->executor_handle = cmacs_ai_tools_adopt (exec);
+
+  return make_uint (h->executor_handle);
+}
+
+DEFUN ("cmacs-ai-harness-set-local-tools",
+       Fcmacs_ai_harness_set_local_tools,
+       Scmacs_ai_harness_set_local_tools, 2, 2, 0,
+       doc: /* Run harness HANDLE's tools in this process when FLAG.
+
+Returns the value that actually stuck, which is not always FLAG: ai-glib
+refuses local tools for a CLI provider, because those run their own
+tools in their own process and ignore the tools argument entirely.  A
+caller that reported the requested value would claim a claude-code
+harness had local tools when it has none.
+
+Without this the executor is decoration: the provider is sent no tools
+array at all, and an agent-tuned model asked to do something will
+describe a tool call in prose instead of making one.  */)
+  (Lisp_Object handle, Lisp_Object flag)
+{
+  CmacsAiHarness *h = cmacs_ai_harness__lookup (handle);
+
+  ai_conversation_set_local_tools (h->conversation, !NILP (flag));
+
+  return ai_conversation_get_local_tools (h->conversation) ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-ai-harness-local-tools-p",
+       Fcmacs_ai_harness_local_tools_p,
+       Scmacs_ai_harness_local_tools_p, 1, 1, 0,
+       doc: /* Return t when harness HANDLE runs tools in this process.  */)
+  (Lisp_Object handle)
+{
+  CmacsAiHarness *h = cmacs_ai_harness__lookup (handle);
+
+  return ai_conversation_get_local_tools (h->conversation) ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-ai-harness-set-system-prompt",
+       Fcmacs_ai_harness_set_system_prompt,
+       Scmacs_ai_harness_set_system_prompt, 2, 2, 0,
+       doc: /* Set harness HANDLE's system prompt to PROMPT, or nil for none.
+
+A model handed a tool array and no instructions is what produces a
+narrated tool call rather than a made one.  */)
+  (Lisp_Object handle, Lisp_Object prompt)
+{
+  CmacsAiHarness *h = cmacs_ai_harness__lookup (handle);
+
+  if (!NILP (prompt)) CHECK_STRING (prompt);
+
+  ai_conversation_set_system_prompt (h->conversation,
+                                     NILP (prompt) ? NULL : SSDATA (prompt));
+  return Qt;
+}
+
+DEFUN ("cmacs-ai-harness-cli-p", Fcmacs_ai_harness_cli_p,
+       Scmacs_ai_harness_cli_p, 1, 1, 0,
+       doc: /* Return t when harness HANDLE drives a command-line agent.
+
+Which half of the tool wiring applies depends on this: an HTTP provider
+takes a tools array built from the executor, a CLI one takes an MCP
+config naming a server.  They are different mechanisms, not two
+spellings of one.  */)
+  (Lisp_Object handle)
+{
+  CmacsAiHarness *h = cmacs_ai_harness__lookup (handle);
+  GObject *prov = ai_conversation_get_provider (h->conversation);
+
+  return (prov != NULL && AI_IS_CLI_CLIENT (prov)) ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-ai-harness-set-mcp-config",
+       Fcmacs_ai_harness_set_mcp_config,
+       Scmacs_ai_harness_set_mcp_config, 2, 3, 0,
+       doc: /* Point harness HANDLE's CLI agent at the MCP config PATH.
+
+KIND is the endpoint kind, a string, defaulting to "mcp-config" (Claude
+Code's schema).  Pass "mcp-config-opencode" or "mcp-config-grok" for a
+provider that reads a different dialect; the provider decides how the
+file is delivered.
+
+Returns t when the provider took it, nil when it does not accept that
+kind.  Nil is worth saying out loud: a session that looks tool-enabled
+and has none is the failure this exists to prevent.  */)
+  (Lisp_Object handle, Lisp_Object path, Lisp_Object kind)
+{
+  CmacsAiHarness *h = cmacs_ai_harness__lookup (handle);
+  g_autoptr (AiAgentEndpoint) ep = NULL;
+  g_autoptr (GError) gerror = NULL;
+  Lisp_Object enc;
+
+  CHECK_STRING (path);
+  if (!NILP (kind)) CHECK_STRING (kind);
+
+  enc = ENCODE_FILE (Fexpand_file_name (path, Qnil));
+  ep = ai_agent_endpoint_new (NILP (kind) ? AI_ENDPOINT_KIND_MCP_CONFIG
+                                          : SSDATA (kind),
+                              SSDATA (enc));
+
+  if (!ai_conversation_set_tool_endpoint (h->conversation, ep, &gerror))
+    return Qnil;
+
+  return Qt;
+}
+
+DEFUN ("cmacs-ai-harness-revoke-mcp-config",
+       Fcmacs_ai_harness_revoke_mcp_config,
+       Scmacs_ai_harness_revoke_mcp_config, 1, 1, 0,
+       doc: /* Withdraw harness HANDLE's MCP config.  Returns t.  */)
+  (Lisp_Object handle)
+{
+  CmacsAiHarness *h = cmacs_ai_harness__lookup (handle);
+  g_autoptr (GError) gerror = NULL;
+
+  ai_conversation_set_tool_endpoint (h->conversation, NULL, &gerror);
+
+  return Qt;
+}
+
+DEFUN ("cmacs-ai-harness-todos", Fcmacs_ai_harness_todos,
+       Scmacs_ai_harness_todos, 1, 1, 0,
+       doc: /* Return harness HANDLE's todo list as ((LABEL . STATE) ...).
+
+STATE is a string: "pending", "in_progress" or "completed".  */)
+  (Lisp_Object handle)
+{
+  CmacsAiHarness *h = cmacs_ai_harness__lookup (handle);
+  AiToolExecutor *exec = ai_conversation_get_executor (h->conversation);
+  Lisp_Object out = Qnil;
+  guint n, i;
+
+  if (exec == NULL) return Qnil;
+
+  n = ai_tool_executor_get_n_todos (exec);
+  for (i = 0; i < n; i++)
+    {
+      const gchar *content = NULL;
+      AiTodoState state = AI_TODO_PENDING;
+
+      if (!ai_tool_executor_get_todo_fields (exec, i, &content, &state))
+        continue;
+
+      out = Fcons (Fcons (build_string (content ? content : ""),
+                          build_string (ai_todo_state_to_string (state))),
+                   out);
+    }
+
+  return Fnreverse (out);
+}
+
 /* ── DEFUNs: export ─────────────────────────────────────────────── */
 
 DEFUN ("cmacs-ai-harness-export", Fcmacs_ai_harness_export,
@@ -938,6 +1131,14 @@ syms_of_cmacs_ai_harness (void)
   defsubr (&Scmacs_ai_harness_block_at);
   defsubr (&Scmacs_ai_harness_block_render);
   defsubr (&Scmacs_ai_harness_set_expanded);
+  defsubr (&Scmacs_ai_harness_executor);
+  defsubr (&Scmacs_ai_harness_set_local_tools);
+  defsubr (&Scmacs_ai_harness_local_tools_p);
+  defsubr (&Scmacs_ai_harness_set_system_prompt);
+  defsubr (&Scmacs_ai_harness_cli_p);
+  defsubr (&Scmacs_ai_harness_set_mcp_config);
+  defsubr (&Scmacs_ai_harness_revoke_mcp_config);
+  defsubr (&Scmacs_ai_harness_todos);
   defsubr (&Scmacs_ai_harness_export);
   defsubr (&Scmacs_ai_harness_export_extension);
   defsubr (&Scmacs_ai_harness_complete);

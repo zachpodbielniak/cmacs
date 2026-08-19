@@ -52,7 +52,24 @@
 (declare-function cmacs-ai-harness-set-working-directory "cmacs-ai-harness.c")
 (declare-function cmacs-ai-harness-provider-name "cmacs-ai-harness.c")
 (declare-function cmacs-ai-harness-model "cmacs-ai-harness.c")
+(declare-function cmacs-ai-harness-executor "cmacs-ai-harness.c")
+(declare-function cmacs-ai-harness-set-local-tools "cmacs-ai-harness.c")
+(declare-function cmacs-ai-harness-local-tools-p "cmacs-ai-harness.c")
+(declare-function cmacs-ai-harness-set-system-prompt "cmacs-ai-harness.c")
+(declare-function cmacs-ai-harness-cli-p "cmacs-ai-harness.c")
+(declare-function cmacs-ai-harness-set-mcp-config "cmacs-ai-harness.c")
+(declare-function cmacs-ai-harness-revoke-mcp-config "cmacs-ai-harness.c")
+(declare-function cmacs-ai-harness-todos "cmacs-ai-harness.c")
+(declare-function cmacs-ai-tools-list "cmacs-ai-tools.c")
+(declare-function cmacs-ai--configure-executor "cmacs-ai" (executor))
+(declare-function cmacs-brigade-host-provision "cmacs-brigade-host")
+(declare-function cmacs-brigade-host-revoke "cmacs-brigade-host")
+(declare-function cmacs-brigade-host-format-for-provider "cmacs-brigade-host")
+(declare-function cmacs-brigade-host-endpoint-kind "cmacs-brigade-host")
 (declare-function evil-set-initial-state "evil-core" (mode state))
+(declare-function project-current "project" (&optional maybe-prompt directory))
+(declare-function project-root "project" (project))
+(declare-function vc-root-dir "vc" ())
 
 (defgroup cmacs-ai-harness nil
   "An agentic AI harness in an Emacs buffer."
@@ -132,6 +149,58 @@ See `cmacs-ai-providers' for the symbols this accepts."
   :type '(choice (const :tag "Provider default" nil) string)
   :group 'cmacs-ai-harness)
 
+(defcustom cmacs-ai-harness-enable-tools t
+  "Whether a harness gives the agent cmacs's tools.
+
+An HTTP model receives them as a tools array built from the
+conversation's executor; a command-line agent is handed an MCP config
+naming this cmacs instead, because it runs its own tools in its own
+process and ignores the array.  Two mechanisms, one switch."
+  :type 'boolean
+  :group 'cmacs-ai-harness)
+
+(defcustom cmacs-ai-harness-system-prompt
+  "You are running inside cmacs, a GNU Emacs fork, as an agent in the
+user's editor.  You have tools; use them rather than describing what you
+would do.  Prefer the editor-native tools over shelling out."
+  "System prompt for a harness session, or nil for none.
+
+A model handed a tool array and no instructions tends to narrate a tool
+call instead of making one, which is exactly what an empty tool surface
+produced before tools were wired at all."
+  :type '(choice (const :tag "None" nil) string)
+  :group 'cmacs-ai-harness)
+
+(defvar cmacs-ai-harness-executor-functions nil
+  "Hook run to add tools to a harness, as (EXECUTOR PROVIDER).
+
+A sibling of `cmacs-ai-chat-executor-functions' rather than the same
+hook.  That one's members were written for chat buffers and include the
+brigade's agent-spawning tools; running them here would silently change
+what every existing member is handed.  Set
+`cmacs-ai-harness-run-chat-executor-functions' to opt into both.")
+
+(defcustom cmacs-ai-harness-cli-tool-allowlist "*"
+  "Tools a command-line agent started here may call.
+
+A comma-separated list of tool names or group names, expanded by
+`cmacs-brigade-allowlist-expand'.
+
+A harness buffer is a person typing a prompt and watching every tool
+call render in front of them.  That is the trust level of
+\\[eval-expression], not of an unattended worker running against a
+budget -- so the default is the same `*' the chat buffer uses.  Set
+`cmacs-brigade-restrict-privileged-tools' to t to hold back eval, bash
+and the C-patching tools from `*' here and everywhere else."
+  :type 'string
+  :group 'cmacs-ai-harness)
+
+(defcustom cmacs-ai-harness-run-chat-executor-functions nil
+  "Whether a harness also runs `cmacs-ai-chat-executor-functions'.
+For the user who genuinely wants one tool set in both frontends."
+  :type 'boolean
+  :group 'cmacs-ai-harness)
+
 (defcustom cmacs-ai-harness-dir
   (expand-file-name "cmacs-ai/"
                     (or (getenv "XDG_DATA_HOME")
@@ -162,6 +231,15 @@ with `harness' where a chat has nothing."
 
 (defvar-local cmacs-ai-harness--handle nil
   "Integer handle of this buffer's ai-glib harness.")
+
+(defvar-local cmacs-ai-harness--tools nil
+  "How this buffer got its tools: nil, `local' or `mcp'.")
+
+(defvar-local cmacs-ai-harness--cli-endpoint nil
+  "Provisioned MCP endpoint for a CLI agent in this buffer.")
+
+(defvar-local cmacs-ai-harness--tool-count 0
+  "How many tools the executor carries, for the mode line.")
 
 (defvar-local cmacs-ai-harness--regions nil
   "Hash of block id to (START-MARKER . END-MARKER).
@@ -375,11 +453,60 @@ it cannot know what /clear means to a buffer."
                   "?")
               (or (cmacs-ai-harness-model cmacs-ai-harness--handle)
                   "default")))
+    ("tools" (cmacs-ai-harness--show-tools))
+    ("todos" (cmacs-ai-harness--show-todos))
     ;; Everything else the library resolved but this frontend has no
     ;; screen for.  Said out loud rather than swallowed: a slash command
     ;; that silently did nothing reads as a broken harness.
     (_ (message "cmacs-ai-harness: /%s is not available in this buffer"
                 name))))
+
+(defun cmacs-ai-harness--show-tools ()
+  "List the tools this session's agent can call.
+
+/tools is ai-glib's own builtin and used to fall through to \"not
+available in this buffer\" -- so the one command anybody would reach for
+to check whether tools are on denied they existed."
+  (let ((buf (get-buffer-create "*cmacs-ai-harness: tools*")))
+    (with-help-window buf
+      (with-current-buffer buf
+        (pcase cmacs-ai-harness--tools
+          ('local
+           (insert (format "%d tools, run in this Emacs.\n\n"
+                           cmacs-ai-harness--tool-count))
+           (dolist (name (ignore-errors
+                           (cmacs-ai-tools-list
+                            (cmacs-ai-harness-executor
+                             cmacs-ai-harness--handle))))
+             (insert "  " name "\n")))
+          ('mcp
+           (insert (format "%s runs its own tools, and reaches cmacs's \
+over MCP.\n\n" (or cmacs-ai-harness--provider "This agent")))
+           (insert "  allowlist: " cmacs-ai-harness-cli-tool-allowlist "\n")
+           (insert "  config:    "
+                   (or (plist-get cmacs-ai-harness--cli-endpoint :path) "?")
+                   "\n"))
+          (_
+           (insert "No tools in this session.\n\n")
+           (insert (if cmacs-ai-harness-enable-tools
+                       "Wiring them failed; see *Messages*.\n"
+                     "`cmacs-ai-harness-enable-tools' is nil.\n"))))))))
+
+(defun cmacs-ai-harness--show-todos ()
+  "Show the agent's todo list."
+  (let ((todos (and (fboundp 'cmacs-ai-harness-todos)
+                    (cmacs-ai-harness-todos cmacs-ai-harness--handle))))
+    (if (null todos)
+        (message "cmacs-ai-harness: no todos")
+      (let ((buf (get-buffer-create "*cmacs-ai-harness: todos*")))
+        (with-help-window buf
+          (with-current-buffer buf
+            (pcase-dolist (`(,label . ,state) todos)
+              (insert (pcase state
+                        ("completed" "  [x] ")
+                        ("in_progress" "  [>] ")
+                        (_ "  [ ] "))
+                      label "\n"))))))))
 
 (defun cmacs-ai-harness--show-commands ()
   "List the slash commands this harness knows, in a help buffer."
@@ -620,12 +747,28 @@ where the token includes a slash."
     m)
   "Keymap for `cmacs-ai-harness-mode'.")
 
+(defun cmacs-ai-harness--tools-indicator ()
+  "Mode-line fragment naming how this session got its tools.
+
+Worth the space because the failure that matters most is invisible from
+the transcript: a provider that silently took none.  A one-shot message
+at startup is not enough for a buffer that stays open for hours."
+  (pcase cmacs-ai-harness--tools
+    ('local (propertize (format " %d tools" cmacs-ai-harness--tool-count)
+                        'face 'cmacs-ai-harness-dim))
+    ('mcp (propertize " mcp" 'face 'cmacs-ai-harness-dim))
+    (_ (if cmacs-ai-harness-enable-tools
+           (propertize " no tools" 'face 'cmacs-ai-harness-error)
+         ""))))
+
 (defun cmacs-ai-harness--mode-line ()
-  "Mode-line tail: what the agent is doing, when it is doing something."
-  (cond (cmacs-ai-harness--activity
-         (format "  [%s]" cmacs-ai-harness--activity))
-        (cmacs-ai-harness--busy "  [working]")
-        (t "")))
+  "Mode-line tail: what the agent is doing, and what it can do."
+  (concat
+   (cond (cmacs-ai-harness--activity
+          (format "  [%s]" cmacs-ai-harness--activity))
+         (cmacs-ai-harness--busy "  [working]")
+         (t ""))
+   (cmacs-ai-harness--tools-indicator)))
 
 (define-derived-mode cmacs-ai-harness-mode fundamental-mode "AI-Harness"
   "An ai-glib agent session in a buffer.
@@ -673,11 +816,110 @@ it is redrawn from ai-glib's blocks, not edited in place."
   (evil-set-initial-state 'cmacs-ai-harness-mode 'insert)
   (evil-set-initial-state 'cmacs-ai-harness-compose-mode 'insert))
 
+(defun cmacs-ai-harness--wire-cli-tools ()
+  "Hand a command-line agent an MCP config naming this cmacs.
+
+A CLI agent runs its own tools in its own process, so the executor is
+useless to it; what it takes is a config file describing a server to
+connect back to.  `cmacs-brigade-host-provision' mints one -- a random
+token, a 0600 file under XDG_RUNTIME_DIR, the allowlist expanded here
+where the tool registry lives -- and the provider decides how the path
+is delivered.
+
+The dialect is chosen by provider because the agents do not agree on
+one; the kind string is what tells ai-glib which it is being handed."
+  (cond
+   ((not (fboundp 'cmacs-brigade-host-provision))
+    (message "cmacs-ai-harness: %s takes tools over MCP; needs \
+--with-cmacs-ai-brigade to provision one"
+             (or cmacs-ai-harness--provider "this agent")))
+   (t
+    (let* ((fmt (cmacs-brigade-host-format-for-provider
+                 cmacs-ai-harness--provider))
+           (endpoint (cmacs-brigade-host-provision
+                      (format "harness-%s" (buffer-name))
+                      cmacs-ai-harness-cli-tool-allowlist
+                      :format fmt)))
+      (cond
+       ((null endpoint)
+        (message "cmacs-ai-harness: could not provision MCP tools for %s"
+                 (or cmacs-ai-harness--provider "this agent")))
+       ((not (cmacs-ai-harness-set-mcp-config
+              cmacs-ai-harness--handle
+              (plist-get endpoint :path)
+              (cmacs-brigade-host-endpoint-kind fmt)))
+        ;; Said out loud rather than swallowed: the buffer would
+        ;; otherwise look tool-enabled and have none.
+        (message "cmacs-ai-harness: %s did not accept an MCP config; \
+this session has no cmacs tools"
+                 (or cmacs-ai-harness--provider "this agent"))
+        (ignore-errors
+          (cmacs-brigade-host-revoke (format "harness-%s" (buffer-name)))))
+       (t
+        (setq cmacs-ai-harness--cli-endpoint endpoint
+              cmacs-ai-harness--tools 'mcp)))))))
+
+(defun cmacs-ai-harness--revoke-cli-tools ()
+  "Drop this buffer's MCP credential when the buffer goes."
+  (when (and cmacs-ai-harness--cli-endpoint
+             (fboundp 'cmacs-brigade-host-revoke))
+    (ignore-errors
+      (cmacs-brigade-host-revoke (format "harness-%s" (buffer-name))))
+    (setq cmacs-ai-harness--cli-endpoint nil)))
+
+(defun cmacs-ai-harness--wire-tools ()
+  "Give this buffer's agent cmacs's tools.
+
+Two mechanisms, chosen by provider kind, because they genuinely differ.
+An HTTP model is sent a tools array built from the conversation's
+executor.  A command-line agent ignores that array entirely -- ai-glib
+refuses local tools for one -- and instead takes an MCP config naming
+this cmacs, which `cmacs-ai-harness--wire-cli-tools' provisions.
+
+Says so out loud when it cannot: a session that looks tool-enabled and
+has none is the failure this whole path exists to prevent, and it is
+invisible from the transcript."
+  (when cmacs-ai-harness-enable-tools
+    (if (and (fboundp 'cmacs-ai-harness-cli-p)
+             (cmacs-ai-harness-cli-p cmacs-ai-harness--handle))
+        (cmacs-ai-harness--wire-cli-tools)
+      (cmacs-ai-harness--wire-local-tools))))
+
+(defun cmacs-ai-harness--wire-local-tools ()
+  "Register cmacs's MCP tools on this harness's own executor."
+  (when (fboundp 'cmacs-ai-harness-executor)
+    (let ((executor (cmacs-ai-harness-executor cmacs-ai-harness--handle)))
+      (cmacs-ai--configure-executor executor)
+      (run-hook-with-args 'cmacs-ai-harness-executor-functions
+                          executor cmacs-ai-harness--provider)
+      (when cmacs-ai-harness-run-chat-executor-functions
+        (run-hook-with-args 'cmacs-ai-chat-executor-functions
+                            executor cmacs-ai-harness--provider))
+      ;; Last, and not optional: without it the provider is sent no tools
+      ;; array at all and everything above is decoration.
+      (if (cmacs-ai-harness-set-local-tools cmacs-ai-harness--handle t)
+          (setq cmacs-ai-harness--tools 'local
+                cmacs-ai-harness--tool-count
+                (length (ignore-errors (cmacs-ai-tools-list executor))))
+        (message "cmacs-ai-harness: %s would not take local tools"
+                 (or cmacs-ai-harness--provider "this provider"))))))
+
 (defun cmacs-ai-harness--cleanup ()
-  "Free this buffer's harness, cancelling anything in flight."
+  "Free this buffer's harness, cancelling anything in flight.
+
+The order is load-bearing.  Cancel while the conversation is still
+whole, so the provider can react to its own cancellable.  Free the
+harness next, which drops the adopted executor handle and reaps any CLI
+subprocess.  Revoke the MCP credential last: revoking first would delete
+the config out from under an agent that is still shutting down, and its
+final tool call would fail in a way that reads as a cmacs bug."
   (when cmacs-ai-harness--handle
+    (when (ignore-errors
+            (cmacs-ai-harness-busy-p cmacs-ai-harness--handle))
+      (ignore-errors (cmacs-ai-harness-cancel cmacs-ai-harness--handle)))
     (ignore-errors (cmacs-ai-harness-free cmacs-ai-harness--handle))
-    (setq cmacs-ai-harness--handle nil)))
+    (setq cmacs-ai-harness--handle nil))
+  (cmacs-ai-harness--revoke-cli-tools))
 
 ;;;; Entry points -----------------------------------------------------
 
@@ -704,6 +946,14 @@ it is redrawn from ai-glib's blocks, not edited in place."
         (setq cmacs-ai-harness--provider
               (or (cmacs-ai-harness-provider-name cmacs-ai-harness--handle)
                   "ai")))
+      ;; After the provider is known, because which half of the tool
+      ;; wiring applies is decided by provider kind.
+      (when (and cmacs-ai-harness-system-prompt
+                 (fboundp 'cmacs-ai-harness-set-system-prompt))
+        (ignore-errors
+          (cmacs-ai-harness-set-system-prompt
+           cmacs-ai-harness--handle cmacs-ai-harness-system-prompt)))
+      (cmacs-ai-harness--wire-tools)
       (let ((this buf))
         (cmacs-ai-harness-set-callback
          cmacs-ai-harness--handle
