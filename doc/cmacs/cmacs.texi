@@ -75,6 +75,7 @@ interaction.
 * CMacs LSP::                   In-binary LSP language servers (emacs --cmacs-lsp).
 * CMacs AI Brigade::            Multi-agent orchestration, memory, and the AI tool fabric.
 * Evil and Doom::               Single-key cmacs modes under Evil / Doom Emacs.
+* CMacs Dbexplorer::            Query, browse, edit and export databases in buffers.
 * Build Configuration::         Configure flags and dependencies.
 * Upstream Changes::            Every edit cmacs makes to stock Emacs sources.
 @end menu
@@ -9328,6 +9329,145 @@ viewport; a low-resolution proxy keeps playback near real-time.
 @include evil/evil.texi
 
 @c ===================================================================
+@node CMacs Dbexplorer
+@chapter CMacs Dbexplorer: Databases as Buffers
+
+@cindex database explorer
+@cindex dbexplorer
+@cindex SQL
+
+@code{--with-cmacs-dbexplorer} turns a database into a set of buffers: a
+connections list, a schema tree, a SQL editor and an editable results grid.
+It sits on @code{orm-glib}, which resolves a backend from the URL scheme
+rather than a compiled-in switch, so SQLite, PostgreSQL and MySQL/MariaDB
+work today and a backend orm-glib gains later works here unchanged.
+
+The full manual is @file{doc_org/cmacs/cmacs-dbexplorer.org}.
+
+@menu
+* Dbexplorer Quick Start::
+* Dbexplorer Connections::
+* Dbexplorer Grid::
+* Dbexplorer Editing::
+* Dbexplorer Agents::
+* Dbexplorer Extending::
+@end menu
+
+@node Dbexplorer Quick Start
+@section Quick Start
+
+@lisp
+(setq cmacs-dbexplorer-connections
+      '(("notes" :url "sqlite:////home/zach/Documents/notes/.org-roam.db"
+                 :read-only t)
+        ("appdb" :url "postgresql://zach@@localhost:5432/appdb")))
+@end lisp
+
+@kbd{M-x cmacs-dbexplorer} composes the workbench: connections and schema in
+side windows, a SQL editor in the main area, the grid below it.  Each buffer
+also has its own command, so the workbench is a layout rather than a mode.
+
+@node Dbexplorer Connections
+@section Connections and Secrets
+
+A saved connection carries a URL @emph{without} a password.  At connect time
+the password comes from @code{auth-source}, using the host, user and port
+parsed out of the URL --- so it lives in @file{~/.authinfo.gpg} and your
+connection list is safe to commit.  @code{:inline-password t} skips the
+lookup for a throwaway local database.
+
+@cindex read-only connection
+Any connection may be marked @code{:read-only t}.  This is a flag on the
+C-side connection, not a UI toggle: the C layer refuses any statement that
+is not a read, so the guarantee holds identically for the grid, for
+@code{M-x} commands, for ai-brigade tools, for MCP clients, for D-Bus
+callers and for @command{emacsctl}, because they all arrive at the same
+handle.  Mark production read-only.
+
+@node Dbexplorer Grid
+@section The Results Grid
+
+Columns are laid out with @code{:align-to} display specifications rather
+than padding, because a space is one column wide and a glyph is not
+necessarily anything of the sort.  Numeric columns are right-aligned from
+the column's @emph{declared} type, so they stay aligned on a page where
+every value is NULL.
+
+Results arrive a page at a time (@code{cmacs-dbexplorer-page-size}).
+@kbd{o} sorts by re-running the query with an @code{ORDER BY} rather than
+sorting the fetched page, since sorting a page is not sorting a table and
+the difference is invisible until it misleads you.
+
+@node Dbexplorer Editing
+@section Editing
+
+Editing a cell @emph{stages} it.  @kbd{C-c C-c} opens a review buffer
+showing every pending change as the parameterized SQL that will run, and
+applies the lot in one transaction.  @kbd{R} switches to immediate mode,
+which announces itself in the header line in an error face because it is
+dangerous outside a scratch database.
+
+@cindex primary key, and editing
+Editing requires a way to name the row: a primary key, with every key column
+present in the result.  A table without one is not editable, and neither is
+@code{SELECT name FROM users} even though @code{users} has a key.  A
+@emph{partial} key is refused for the same reason a missing one is --- it
+still builds a valid @code{WHERE} clause, just one matching rows you never
+pointed at.  Every @code{UPDATE} and @code{DELETE} carries an expected
+affected-row count of 1, and the batch is rolled back if the database
+reports anything else.
+
+@node Dbexplorer Agents
+@section Agents and Remote Control
+
+Every operation is reachable through MCP tools (@code{db_query},
+@code{db_execute}, @code{db_tables}, @code{db_columns}, @code{db_export},
+@dots{}), the @code{org.cmacs.Editor1.DbExplorer} D-Bus interface, and
+@command{emacsctl db}.  Connections are addressed by saved @emph{name},
+never by URL, so no caller can bring up a database with credentials of its
+own.  @code{db_query} is classified as a read whatever it is handed and is
+row- and character-capped; @code{db_execute} is destructive, goes through
+the brigade approval flow, and is refused outright on a read-only
+connection.
+
+@cindex AI menu, database
+The AI context menu adds a @emph{Database} group in these buffers:
+@samp{Help me write a query@dots{}}, @samp{Explain this query},
+@samp{Optimize this query}, @samp{Explain this table},
+@samp{Suggest indexes}, @samp{Generate test data@dots{}} and
+@samp{Document this schema}.  These actions are handed the read-only tool
+set, so a query-writing assistant can read your schema and cannot run a
+write.
+
+@node Dbexplorer Extending
+@section Extending
+
+@code{cmacs-dbexplorer-model.el} owns the state and knows nothing about
+rendering; views render the model and never talk to each other.  Four
+registries are the extension surface:
+
+@table @code
+@item cmacs-dbexplorer-register-view
+A new way of looking at a result or a schema.  Immediately reachable from
+@code{cmacs-dbexplorer-open-view}.
+@item cmacs-dbexplorer-register-result-action
+A key in the grid.  Installed into the mode map and the Evil auxiliary map,
+with the on-screen legend generated from the same list.
+@item cmacs-dbexplorer-register-exporter
+An export format.
+@item cmacs-dbexplorer-register-connection-source
+Connections from somewhere other than the defcustom.
+@end table
+
+Four abnormal hooks report connection state, results, schema updates and
+applied edits; a handler that signals is reported and skipped rather than
+being allowed to fail the operation.
+
+This is what makes an additional view --- a libregnum 2D or 3D one, say ---
+a new file that registers itself rather than an edit to the code that
+already works.  State keys on the connection name and the row primary key,
+never on a buffer, so two views can be open on one connection at once.
+
 @node Build Configuration
 @chapter Build Configuration
 

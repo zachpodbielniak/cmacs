@@ -1,0 +1,385 @@
+#+title: CMacs Database Explorer — query, browse and edit databases in Emacs
+#+description: SQLite, PostgreSQL and MySQL as buffers you can read, edit, export and hand to an agent
+#+authors: Zach Podbielniak
+#+categories: cmacs subsystem dbexplorer database sql sqlite postgresql mysql orm-glib
+#+created: 2026-08-19T00:00:00-04:00
+#+updated: 2026-08-19T00:00:00-04:00
+#+version: 0.1
+
+* Overview
+
+Looking at a database from inside Emacs used to mean shelling out to =psql= or
+=sqlite3= in a =vterm= and reading columns that do not line up, or leaving the
+editor entirely for a GUI client that knows nothing about your buffers, your
+keybindings or your agents.
+
+=--with-cmacs-dbexplorer= makes a database a set of buffers: a connections list,
+a schema tree, a SQL editor and a results grid. The grid is editable — you change
+a cell, the change is *staged*, and you read the generated SQL before it runs.
+Everything the UI can do, an agent can do too, through the same enforcement.
+
+It sits on [[https://git.podbielniak.com/zachpodbielniak/orm-glib][orm-glib]],
+which resolves a backend from the URL scheme rather than a compiled-in switch. So
+SQLite, PostgreSQL and MySQL/MariaDB work today, and a backend orm-glib gains
+later works here with no change to this subsystem.
+
+** What it is not
+
+It is not an ORM front-end. The ORM half of orm-glib maps GObjects to rows; this
+subsystem deliberately ignores that and works in raw result sets, because a
+browser has to show you the table that is actually there rather than the one your
+model classes describe.
+
+* Quick start
+
+Add a connection and open the workbench:
+
+#+begin_src emacs-lisp
+(setq cmacs-dbexplorer-connections
+      '(("notes"  :url "sqlite:////home/zach/Documents/notes/.org-roam.db"
+                  :read-only t)
+        ("appdb"  :url "postgresql://zach@localhost:5432/appdb")))
+#+end_src
+
+Then =M-x cmacs-dbexplorer=. That composes the workbench: connections and schema
+in side windows, a SQL editor in the main area, and the results grid below it.
+
+To reach one piece on its own, every buffer has its own command —
+=cmacs-dbexplorer-connections=, =-schema=, =-sql=. The workbench is a layout, not
+a mode, so nothing depends on it.
+
+* Connections and secrets
+
+** Passwords never live in your config
+
+A saved connection carries a URL *without* a password. At connect time the
+password is resolved through =auth-source=, so it comes from =~/.authinfo.gpg=
+like every other credential:
+
+#+begin_example
+machine localhost port 5432 login zach password s3cret
+#+end_example
+
+The lookup uses the host, user and port parsed out of the URL. This is the same
+arrangement gnuseye uses for its API keys, and it means your connection list is
+safe to commit.
+
+For a throwaway local database where a password is not a secret, =:inline-password
+t= says the URL already carries one and skips the lookup. The docstring says
+plainly that the secret then lives in your config; the flag exists so that the
+common case can stay strict.
+
+** Read-only connections
+
+Any connection can be marked =:read-only t=. That is not a UI toggle — it is a
+flag on the C-side connection, and the C layer refuses any statement that is not
+a read. So it holds for the grid, for =M-x= commands, for ai-brigade tools, for
+MCP clients, for D-Bus callers and for =emacsctl= alike, because they all end up
+at the same handle.
+
+The classifier strips comments and leading whitespace and then allows only
+=SELECT=, =VALUES=, =EXPLAIN=, =SHOW=, a =WITH= whose body is a =SELECT=, and
+read-only pragmas. Anything else is refused with =cmacs-dbexplorer-error=.
+
+Mark production read-only. It costs nothing and it is the difference between a
+mistyped keystroke being annoying and being an incident.
+
+* The results grid
+
+** Reading
+
+Columns are laid out with =:align-to= display specifications rather than padding,
+because a space is one column wide and a glyph is not necessarily anything of the
+sort — status glyphs and CJK text both break naive padding. Numeric columns are
+right-aligned, using the column's *declared* type rather than the values in view,
+so a column of integers stays right-aligned on the page where every value happens
+to be NULL.
+
+- NULL renders as =∅= (=NULL= where that glyph will not display), in a face that
+  distinguishes it from the literal four-character string =NULL=.
+- A value wider than =cmacs-dbexplorer-column-max-width= is truncated with an
+  ellipsis; =RET= opens the whole value in its own buffer.
+- A value too large to have been sent shows as =<N bytes>=. Opening it fetches
+  that one cell by primary key, so browsing a table of images does not drag the
+  images across.
+
+** Paging
+
+Results arrive a page at a time (=cmacs-dbexplorer-page-size=, default 500).
+Browsing a table composes =LIMIT= and =OFFSET= natively; an ad-hoc query is run
+with a row cap and marked truncated if it hits it. =]= and =[= move between
+pages.
+
+A page beyond the first with no =ORDER BY= is not a stable window onto the data —
+the server may return rows in any order it likes — so the first time you page an
+unordered query the grid says so once.
+
+** Sorting and filtering
+
+=o= cycles a column through ascending, descending and unsorted. This *re-runs the
+query* with an =ORDER BY= rather than sorting the rows in Emacs, because sorting
+what you happen to have fetched sorts a page, not a table, and the difference is
+invisible until it misleads you.
+
+=f= takes a =WHERE= fragment. It is your SQL against your database, so it is not
+escaped or second-guessed — but it is a UI affordance only and is never exposed
+to agents.
+
+* Editing
+
+** Staged by default
+
+Editing a cell does not write to the database. It *stages* the change: the cell
+is highlighted, a marker appears in the gutter, and nothing has happened yet.
+=C-c C-c= opens a review buffer listing every pending change grouped by table,
+each rendered as the parameterized SQL that will run with the values it will
+bind. =c= applies the lot in one transaction.
+
+That is the whole point. You read the statement before it executes, and either
+all of it lands or none of it does.
+
+| Key       | Effect                                       |
+|-----------+----------------------------------------------|
+| =e=       | Edit the cell at point (=C-u e= stages NULL) |
+| =i=       | Insert a row                                 |
+| =D=       | Stage a delete of the row at point           |
+| =u= / =U= | Unstage the change at point / all of them    |
+| =C-c C-c= | Review and commit                            |
+| =R=       | Toggle staged ↔ immediate                    |
+
+** Immediate mode, and why it is loud
+
+=R= switches to immediate mode, where each edit writes as you make it. It is
+genuinely useful on a scratch database and genuinely dangerous everywhere else,
+so the mode is impossible to miss: the header line reads =[IMMEDIATE WRITES]= in
+an error face, and toggling says so in the echo area. Staged mode shows
+=[STAGED: n pending]=.
+
+The default is set by =cmacs-dbexplorer-edit-mode=; the toggle is per buffer, so
+switching one grid to immediate does not arm the others.
+
+** Why a row sometimes cannot be edited
+
+Editing needs a way to name the row you mean. That means a primary key, and it
+means every primary-key column being present in the result. Two consequences:
+
+- A table with no primary key is not editable. There is no expression that
+  identifies one of its rows and only that row.
+- =SELECT name FROM users= is not editable even though =users= has a key, because
+  =id= is not in the result.
+
+A *partial* key is refused for the same reason a missing one is: it still builds
+a syntactically valid =WHERE= clause, just one that matches rows you never pointed
+at. Every =UPDATE= and =DELETE= additionally carries an expected affected-row
+count of 1, and the C layer rolls the whole batch back if the database reports
+anything else.
+
+=cmacs-dbexplorer-allow-editing-without-pk= relaxes the first rule to an
+all-columns match, behind a confirmation on every commit. It exists for the
+occasional keyless lookup table; it is off by default because "delete the row
+that looks like this" is a different promise from "delete this row".
+
+* The SQL editor
+
+Derived from =sql-mode=, so you get its highlighting, and it is a normal editable
+buffer rather than a read-only one — under Evil it opens in insert state, because
+a buffer you type into should not treat your letters as motions.
+
+Bindings live entirely under =C-c= so nothing global is disturbed:
+
+| Key             | Effect                                    |
+|-----------------+-------------------------------------------|
+| =C-c C-c=       | Run the region, else the statement at point |
+| =C-c C-b=       | Run the whole buffer                      |
+| =C-c C-k=       | Cancel the running query                  |
+| =C-c C-e=       | =EXPLAIN= the statement at point          |
+| =C-c t b/c/r/s= | Begin / commit / rollback / savepoint     |
+| =C-c C-h=       | Query history                             |
+| =C-c C-w=       | Switch connection                         |
+| =C-c C-a=       | AI actions                                |
+
+History is per connection, capped, and persisted, so the query you ran last week
+is still there. =cmacs-dbexplorer-send-region= sends a region from *any*
+=sql-mode= buffer to a chosen connection, which is how a =.sql= file in a project
+becomes runnable without copying anything.
+
+Completion-at-point offers tables and columns from the cached schema.
+
+* Export
+
+=E= in the grid opens a transient: pick a format and a path. CSV and JSON come
+from orm-glib and stream, so exporting more rows than fit in memory works. An
+org-table exporter is provided in Elisp for pasting into notes.
+
+Exports run asynchronously with progress, and the query behind an export is
+always classified as a read.
+
+* Agents and remote control
+
+Everything above is reachable without a keyboard, and the read-only flag is
+enforced identically on every path.
+
+| MCP tool         | D-Bus =org.cmacs.Editor1.DbExplorer= | =emacsctl=            |
+|------------------+--------------------------------------+-----------------------|
+| =db_connections= | =Connections()=                      | =db connections=      |
+| =db_connect=     | =Connect(s)=                         | =db connect NAME=     |
+| =db_query=       | =Query(ss)=                          | =db query NAME SQL=   |
+| =db_execute=     | =Execute(ss)=                        | =db execute NAME SQL= |
+| =db_tables=      | =Tables(ss)=                         | =db tables NAME=      |
+| =db_columns=     | =Columns(ss)=                        | =db columns NAME=     |
+| =db_export=      | =Export(ssss)=                       | =db export ...=       |
+
+Two rules apply to all of them. Connections are addressed by *saved name*, never
+by URL, so no caller can talk a database into existence with credentials of its
+own choosing. And =db_query= is classified as a read whatever it is handed, with
+a row cap and a character cap, because an agent asking for a million rows is
+asking to be truncated rather than obeyed.
+
+=db_execute= is marked destructive and goes through the brigade approval flow.
+On a read-only connection the C layer refuses it regardless.
+
+** The AI menu
+
+Right-click (or =C-c C-a=) in a grid, schema tree or SQL buffer for a *Database*
+submenu:
+
+- *Help me write a query…* — describe what you want; the model gets the live
+  schema through the read-only tools and writes SQL into the editor. It is
+  inserted, never run.
+- *Explain this query* / *Optimize this query* — the latter gets the =EXPLAIN=
+  output and the relevant indexes.
+- *Explain this table* — the column, key and foreign-key structure in prose.
+- *Summarize these results*.
+- *Suggest indexes for this query*.
+- *Generate test data…* — writes =INSERT= statements into the editor for review.
+- *Document this schema* — produces org.
+
+The tool set handed to these actions is the read-only one. =db_execute= is not in
+it, so "help me write a query" cannot decide to run one.
+
+* Extending dbexplorer
+
+The subsystem is split so that a new view is a new file rather than an edit to a
+working one. =cmacs-dbexplorer-model.el= owns the state and knows nothing about
+rendering; the views render the model and never talk to each other.
+
+** Registries
+
+#+begin_src emacs-lisp
+;; A whole new way of looking at a result.
+(cmacs-dbexplorer-register-view 'scene3d
+  :label "3D scene"
+  :open (lambda (connection) (my-db-scene-open connection))
+  :supports '(result schema))
+
+;; A key in the results grid.
+(cmacs-dbexplorer-register-result-action 'copy-as-json
+  :key "J" :label "Copy row as JSON"
+  :run (lambda (result row _column) (my-copy-row-as-json result row)))
+
+;; An export format.
+(cmacs-dbexplorer-register-exporter 'parquet
+  :label "Parquet" :extension "parquet"
+  :run (lambda (result path) (my-write-parquet result path)))
+
+;; Connections from somewhere other than the defcustom.
+(cmacs-dbexplorer-register-connection-source 'pg-service
+  :enumerate #'my-read-pg-service-conf)
+#+end_src
+
+A registered view is immediately reachable from
+=cmacs-dbexplorer-open-view=. A registered result action is installed into the
+grid keymap *and* the Evil auxiliary map, and the on-screen legend is generated
+from the same list, so the two cannot drift apart.
+
+** Hooks
+
+Four abnormal hooks, each documented with the exact plist it receives:
+
+- =cmacs-dbexplorer-connection-state-functions=
+- =cmacs-dbexplorer-result-received-functions=
+- =cmacs-dbexplorer-schema-updated-functions=
+- =cmacs-dbexplorer-edits-applied-functions=
+
+A handler that signals is reported and skipped; it cannot stop the other
+listeners being told, and it cannot turn a successful query into a failed one.
+
+** A worked example: a 2D/3D view
+
+This is the case the split was designed for. A libregnum view would be one file
+that:
+
+1. requires =cmacs-dbexplorer-model=,
+2. registers itself with =cmacs-dbexplorer-register-view=,
+3. adds itself to =cmacs-dbexplorer-result-received-functions= and
+   =-schema-updated-functions=, and
+4. reads the =cmacs-dbexplorer-result= and schema structs to build its scene.
+
+Nothing in the core changes, the grid does not learn about it, and both views can
+be open on the same connection at once — because state is keyed on the connection
+name and the row primary key, not on any buffer.
+
+* Customization
+
+| Variable                                       | Default    | Effect                                    |
+|------------------------------------------------+------------+-------------------------------------------|
+| =cmacs-dbexplorer-connections=                  | =nil=      | Saved connections                         |
+| =cmacs-dbexplorer-edit-mode=                    | ='staged=  | Staged or immediate writes                |
+| =cmacs-dbexplorer-page-size=                    | =500=      | Rows per page                             |
+| =cmacs-dbexplorer-column-max-width=             | =40=       | Display width cap per column              |
+| =cmacs-dbexplorer-allow-editing-without-pk=     | =nil=      | Permit all-column-match updates           |
+| =cmacs-dbexplorer-history-size=                 | =200=      | Query history per connection              |
+| =cmacs-dbexplorer-tools-max-chars=              | =40000=    | Output cap for agent tools                |
+| =cmacs-dbexplorer-ai-allow-execute=             | =nil=      | Let AI actions run writing statements     |
+
+Faces are named =cmacs-dbexplorer-<role>= and every one inherits a built-in face,
+so themes apply without any per-theme configuration.
+
+* Internals
+
+** Translation-unit split
+
+The C half is divided so most of it is testable without a Lisp VM:
+
+- =cmacs-dbexplorer-conn.c=, =-query.c=, =-schema.c= include =<orm.h>= and glib
+  and *never* =lisp.h=. Connection handling, the read-only classifier and the
+  schema readers therefore need no editor to exercise.
+- =cmacs-dbexplorer-defuns.c= includes =lisp.h= and reaches the model only
+  through a plain-C bridge header; it never sees an =OrmConnection=.
+- =cmacs-dbexplorer-events.c= owns callback delivery.
+
+A test asserts the model TUs really do not pull in =lisp.h=, because that property
+is easy to lose to one stray include and its loss is not otherwise visible.
+
+Handles are integers, never =Lisp_Object=, because a =Lisp_Object= living in
+GLib-allocated memory has no GC root.
+
+** Delivering results to Lisp
+
+One-shot operations register their callback in cmacs-eval-dispatch's cookie
+registry — a staticpro'd hash table — so the callback stays GC-rooted while a C
+struct holds only an integer. Streams keep theirs in a table keyed by stream id
+until the terminating event.
+
+Everything is delivered through =cmacs_dispatch_safe_call*=, never =safe_calln=
+directly. A GLib callback can arrive while Emacs believes it is waiting for
+input, and a Lisp error raised in that state aborts the process rather than being
+caught.
+
+** Where staging lives
+
+The staged-edit set is Elisp: pending operations keyed by primary key, with
+overlays and a review buffer. It is UI state, and mirroring it in C would mean
+either storing =Lisp_Object=s in GLib memory or inventing a second value model.
+
+What C owns is the part that has to be right: identifier quoting through the
+dialect, values bound as parameters rather than interpolated, the whole batch in
+one transaction, and the affected-row check that rolls it back when a statement
+touched a number of rows nobody expected.
+
+* See also
+
+- [[file:build.org][Build and configure flags]]
+- [[file:cmacs-ai-menu.org][The AI context menu]]
+- [[file:ai-brigade/][ai-brigade — tools, agents and the extension surface]]
+- [[file:cmacs-office.org][CMacs Office]], which uses the same TU-split discipline
