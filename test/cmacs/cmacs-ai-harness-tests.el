@@ -284,6 +284,92 @@ that."
     (should (cmacs-ai-harness-free h))
     (should-not (cmacs-ai-harness-free h))))
 
+;;;; Transcript region bookkeeping ------------------------------------
+
+;; These drive `cmacs-ai-harness--insert-block' and `--replace-block'
+;; with the renderer stubbed, because the thing under test is the marker
+;; arithmetic and not the library: reaching a real block would need a
+;; model to answer, and the defect these guard against is invisible until
+;; a *second* block exists.
+
+(defmacro cmacs-ai-harness-tests--with-stub-blocks (table &rest body)
+  "Run BODY with `cmacs-ai-harness-block-render' answering from TABLE.
+TABLE maps a block id to the text that block renders to.
+
+The stub takes WIDTH even though `cmacs-ai-harness--insert-block' omits
+it.  Natively compiled code calls a subr at its full arity, filling the
+optionals with nil, so the replacement is handed three arguments here and
+two when the same code runs interpreted.  A two-argument stub passes a
+direct \\[ert] run and fails under `make check-cmacs'."
+  (declare (indent 1))
+  `(cl-letf (((symbol-function 'cmacs-ai-harness-block-render)
+              (lambda (_handle id &optional _width)
+                (cons (gethash id ,table) nil))))
+     ,@body))
+
+(defun cmacs-ai-harness-tests--region-text (id)
+  "Buffer text of block ID's recorded region."
+  (let ((r (gethash id cmacs-ai-harness--regions)))
+    (buffer-substring-no-properties (car r) (cdr r))))
+
+(defun cmacs-ai-harness-tests--draw (table ids)
+  "Insert each of IDS at the transcript end, rendering from TABLE."
+  (cmacs-ai-harness-tests--with-stub-blocks table
+    (let ((inhibit-read-only t))
+      (save-excursion
+        (dolist (id ids)
+          (goto-char (cmacs-ai-harness--transcript-end))
+          (cmacs-ai-harness--insert-block id))))))
+
+(ert-deftest cmacs-ai-harness-block-regions-do-not-swallow-their-successors ()
+  "Each block's recorded region is that block and nothing after it.
+
+The end marker used to be insertion type t, and the next block is
+inserted at exactly that position, so every block's region grew to cover
+the whole rest of the transcript.  Nothing visible broke until something
+re-rendered a block, at which point `--replace-block' deleted every later
+block with it -- so assert the regions, not just the buffer."
+  (skip-unless (fboundp 'cmacs-ai-harness-new))
+  (cmacs-ai-harness-tests--with-session
+    (let ((table (make-hash-table :test 'eql)))
+      (puthash 1 "AAAA" table)
+      (puthash 2 "BBBB" table)
+      (puthash 3 "CCCC" table)
+      (cmacs-ai-harness-tests--draw table '(1 2 3))
+      (should (equal (cmacs-ai-harness-tests--region-text 1) "AAAA\n\n"))
+      (should (equal (cmacs-ai-harness-tests--region-text 2) "BBBB\n\n"))
+      (should (equal (cmacs-ai-harness-tests--region-text 3) "CCCC\n\n")))))
+
+(ert-deftest cmacs-ai-harness-regrowing-a-block-leaves-its-neighbours ()
+  "A streaming block growing must not disturb the blocks around it.
+
+This is the failure the user sees: the reply grows, and the block below
+it disappears from the buffer.  The start marker has to be insertion type
+t for a later block to survive an earlier one being replaced -- fixing
+only the end marker keeps the buffer intact but leaves the later block's
+region pointing at its predecessor, which breaks the next re-render and
+`cmacs-ai-harness-copy-block' with it."
+  (skip-unless (fboundp 'cmacs-ai-harness-new))
+  (cmacs-ai-harness-tests--with-session
+    (let ((table (make-hash-table :test 'eql)))
+      (puthash 1 "AAAA" table)
+      (puthash 2 "BBBB" table)
+      (puthash 3 "CCCC" table)
+      (cmacs-ai-harness-tests--draw table '(1 2 3))
+      ;; Block 2 streams in more text and is re-rendered in place.
+      (puthash 2 "BBBBBBBB" table)
+      (cmacs-ai-harness-tests--with-stub-blocks table
+        (let ((inhibit-read-only t))
+          (cmacs-ai-harness--replace-block 2)))
+      ;; The buffer kept every block ...
+      (should (string-match-p "AAAA" (buffer-string)))
+      (should (string-match-p "BBBBBBBB" (buffer-string)))
+      (should (string-match-p "CCCC" (buffer-string)))
+      ;; ... and each region still names exactly its own block.
+      (should (equal (cmacs-ai-harness-tests--region-text 1) "AAAA\n\n"))
+      (should (equal (cmacs-ai-harness-tests--region-text 2) "BBBBBBBB\n\n"))
+      (should (equal (cmacs-ai-harness-tests--region-text 3) "CCCC\n\n")))))
+
 (provide 'cmacs-ai-harness-tests)
 
 ;;; cmacs-ai-harness-tests.el ends here

@@ -220,9 +220,25 @@ multi-byte character in the buffer."
     ;; discarded the next time the block grew.  `rear-nonsticky' keeps the
     ;; property from leaking onto whatever is inserted after it.
     (add-text-properties origin (point) '(read-only t rear-nonsticky t))
+    ;; The two insertion types are deliberately opposite, and both
+    ;; matter.  A block's region must be exactly that block: the END is
+    ;; type nil so appending the next block -- which is inserted at
+    ;; precisely this position -- does not drag the marker along and
+    ;; make every block's region swallow the rest of the transcript.
+    ;; The START is type t so that the block survives an *earlier*
+    ;; block being re-rendered: `cmacs-ai-harness--replace-block'
+    ;; deletes the old text and inserts the new at the same position,
+    ;; and every later block's start sits on that boundary, so only a
+    ;; type-t marker moves to the far side of the replacement instead
+    ;; of collapsing onto its front.
+    ;;
+    ;; The asymmetry is safe for the block being replaced because
+    ;; `cmacs-ai-harness--insert-block' always stores fresh markers for
+    ;; the block it draws, so its own start advancing past the new text
+    ;; is discarded a line later.
     (puthash id
-             (cons (copy-marker origin)
-                   (copy-marker (point) t))
+             (cons (copy-marker origin t)
+                   (copy-marker (point)))
              cmacs-ai-harness--regions)))
 
 (defun cmacs-ai-harness--replace-block (id)
