@@ -15,7 +15,7 @@
 	url = git@gitlab.com:copyleft-games/mcp-glib.git
 [submodule "deps/libreclaw"]
 	path = deps/libreclaw
-	url = git@gitlab.com:zachpodbielniak/libreclaw.git
+	url = git@git-ssh.podbielniak.com:zachpodbielniak/libreclaw.git
 [submodule "deps/whisper.cpp"]
 	path = deps/whisper.cpp
 	url = https://github.com/ggerganov/whisper.cpp.git
