@@ -103,7 +103,18 @@ the env var is the explicit override — see `cmacs_gowl_find_module`).
 
 **Rebuild rules**
 - After C source in `cmacs/`: `make -j$(nproc)`.
-- After `configure.ac`: `autoconf`, then `./configure` again.
+- After `configure.ac`: **`./autogen.sh`**, then `./configure` again. Bare `autoconf` is
+  not enough — it regenerates `configure` against a stale `aclocal.m4`, and the result
+  fails in a way that points nowhere near the cause: its compile probes report "no" for
+  tests that logged `$? = 0`, it decides gcc is clang, and it dies on the year-2038
+  check. `autogen.sh` runs the full `autoreconf -fi`.
+- **A new subsystem must `git add src/cmacs-<name>-*.c`.** Those are symlinks created by
+  `cmacs-symlinks`, they are tracked, and `gl-stamp` lists them as prerequisites — so
+  without them a clean build fails with `No rule to make target 'cmacs-<name>-init.c'`,
+  which names the file and not the subsystem.
+- **Never declare a DEFSYM'd symbol as a `static Lisp_Object`.** make-docfile emits it
+  into `globals.h` as a macro, so the declaration expands into a syntax error *reported
+  in globals.h* — the file that caused it is not mentioned.
 - After temacs-linked objects: the pdumper image regenerates automatically.
 - **`make` may not relink** after C changes (incomplete deps) — force with
   `rm -f src/temacs && make -j$(nproc)`.
