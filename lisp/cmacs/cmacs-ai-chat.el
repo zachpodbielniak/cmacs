@@ -182,8 +182,12 @@ providers."
   "Tools a CLI provider may reach over MCP in a chat buffer.
 
 Comma-separated names or groups; `*' is everything the gate permits.
-Note that `*' never includes the privileged set -- eval, shell and the
-C-patching tools have to be named outright."
+
+As shipped that includes the privileged set -- eval, shell, bash,
+execute_command, send_keys, crispy_eval, bacon_eval and the C-patching
+tools -- because `cmacs-brigade-restrict-privileged-tools' defaults to
+nil.  Set that to t to put them back behind a deliberate naming, here
+and everywhere else."
   :type 'string
   :group 'cmacs-ai)
 
