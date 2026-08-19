@@ -284,6 +284,58 @@ that."
     (should (cmacs-ai-harness-free h))
     (should-not (cmacs-ai-harness-free h))))
 
+;;;; The directory a harness starts in ---------------------------------
+
+;; The provider half of this -- that the conversation pushes the directory
+;; down to a CLI client, which is what actually decides the agent's $PWD --
+;; is ai-glib's contract and is asserted there
+;; (tests/test-conversation-input.c, /ai-glib/input/cwd-reaches-cli).  What
+;; belongs here is which directory cmacs chooses.
+
+(ert-deftest cmacs-ai-harness-default-directory-is-the-project-root ()
+  "A harness opened inside a project runs at its root, not at point.
+
+An agent's directory is not cosmetic: CLAUDE.md, .claude and every
+relative path a tool touches resolve against it, so a harness opened
+from a file three levels down must not start three levels down."
+  (skip-unless (fboundp 'cmacs-ai-harness-new))
+  (let* ((root (file-name-as-directory
+                (expand-file-name (make-temp-name "harness-root")
+                                  temporary-file-directory)))
+         (deep (expand-file-name "a/b/" root)))
+    (make-directory deep t)
+    (unwind-protect
+        (let ((default-directory deep))
+          (cl-letf (((symbol-function 'project-current)
+                     (lambda (&rest _) (list 'transient root)))
+                    ((symbol-function 'project-root)
+                     (lambda (p) (nth 1 p))))
+            (should (equal (file-name-as-directory
+                            (cmacs-ai-harness--default-directory))
+                           root))))
+      (delete-directory root t))))
+
+(ert-deftest cmacs-ai-harness-default-directory-falls-back ()
+  "Outside a project the directory is where you are, not an error."
+  (skip-unless (fboundp 'cmacs-ai-harness-new))
+  (let ((default-directory temporary-file-directory))
+    (cl-letf (((symbol-function 'project-current) (lambda (&rest _) nil))
+              ((symbol-function 'vc-root-dir) (lambda (&rest _) nil)))
+      (should (equal (file-name-as-directory
+                      (cmacs-ai-harness--default-directory))
+                     (file-name-as-directory
+                      (expand-file-name temporary-file-directory)))))))
+
+(ert-deftest cmacs-ai-harness-explicit-directory-beats-the-default ()
+  "\\[cmacs-ai-harness-with-provider-in-directory] is not a suggestion."
+  (skip-unless (fboundp 'cmacs-ai-harness-new))
+  (cmacs-ai-harness-tests--with-session
+    (should (equal (file-name-as-directory
+                    (cmacs-ai-harness-working-directory
+                     cmacs-ai-harness--handle))
+                   (file-name-as-directory
+                    (expand-file-name temporary-file-directory))))))
+
 ;;;; Transcript region bookkeeping ------------------------------------
 
 ;; These drive `cmacs-ai-harness--insert-block' and `--replace-block'

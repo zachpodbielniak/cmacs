@@ -717,28 +717,61 @@ it is redrawn from ai-glib's blocks, not edited in place."
     (goto-char (point-max))
     buf))
 
+(defun cmacs-ai-harness-project-or-default-directory ()
+  "Return the project root of `default-directory', or that directory.
+
+Falls back the same way `cmacs-ai-agent--project-root' does, so the two
+agree about what \"this project\" means."
+  (or (and (fboundp 'project-current)
+           (let ((p (project-current))) (when p (project-root p))))
+      (and (fboundp 'vc-root-dir) (vc-root-dir))
+      default-directory))
+
+(defcustom cmacs-ai-harness-default-directory-function
+  #'cmacs-ai-harness-project-or-default-directory
+  "How a new harness picks the directory it runs in.
+
+The project root rather than `default-directory' because an agent's
+directory is not cosmetic: CLAUDE.md, .claude, the project's own command
+files and every relative path a tool touches resolve against it, and a
+harness opened from a buffer three levels down would otherwise start
+somewhere the project's own configuration is invisible.
+
+Only supplies the default -- an explicit directory, as
+\\[cmacs-ai-harness-with-provider-in-directory] takes, always wins."
+  :type 'function
+  :group 'cmacs-ai-harness)
+
+(defun cmacs-ai-harness--default-directory ()
+  "Directory a new harness runs in when none was given."
+  (or (ignore-errors
+        (funcall cmacs-ai-harness-default-directory-function))
+      default-directory))
+
 ;;;###autoload
 (defun cmacs-ai-harness ()
   "Open an agentic AI harness in a buffer.
 
 Uses `cmacs-ai-harness-provider' and `cmacs-ai-harness-model', and runs
-in `default-directory'.  For a different provider see
-\\[cmacs-ai-harness-with-provider]; for a different directory see
+in the current project's root -- see
+`cmacs-ai-harness-default-directory-function'.  For a different provider
+see \\[cmacs-ai-harness-with-provider]; for a different directory see
 \\[cmacs-ai-harness-with-provider-in-directory]."
   (interactive)
-  (cmacs-ai-harness--start nil nil default-directory))
+  (cmacs-ai-harness--start nil nil (cmacs-ai-harness--default-directory)))
 
 ;;;###autoload
 (defun cmacs-ai-harness-with-provider (provider &optional model)
   "Open a harness on PROVIDER, optionally pinning MODEL.
-Runs in `default-directory'."
+Runs in the current project's root, as \\[cmacs-ai-harness] does."
   (interactive
    (let ((p (intern (completing-read
                      "Provider: "
                      (mapcar #'symbol-name (cmacs-ai-providers))
                      nil t))))
      (list p (cmacs-ai--read-model p))))
-  (cmacs-ai-harness--start provider model default-directory))
+  (cmacs-ai-harness--start provider model
+                           (cmacs-ai-harness--default-directory)))
 
 ;;;###autoload
 (defun cmacs-ai-harness-with-provider-in-directory (provider directory
