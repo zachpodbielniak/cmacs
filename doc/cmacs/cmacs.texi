@@ -9440,7 +9440,7 @@ Run the region, or the statement at point.
 @item C-c C-b
 Run the whole buffer as one statement.
 @item C-c C-k
-Cancel the running statement, or close the buffer when none is running.
+Cancel the running statement, or close this buffer when none is running.
 @item C-c C-e
 @code{EXPLAIN} the statement at point.
 @item C-c t b/c/r/s
@@ -9455,9 +9455,14 @@ AI actions.
 
 @kbd{C-c C-k} is one key for `stop what I started'.  While a statement is
 in flight it is the statement that stops; with nothing running there is
-nothing to stop, so the buffer is what was meant and it closes, restoring
-the workbench layout as @kbd{q} does elsewhere.  It is buried and never
-killed, so a half-written statement survives.
+nothing to stop, so this buffer is what was meant and it closes, putting
+back whatever its window was showing before.
+
+Only that window.  Leaving the SQL editor is not leaving the explorer, so
+the connections list, the schema tree and the grid stay put --- which is
+the difference between @kbd{C-c C-k} here and @kbd{q}, which quits the
+workbench as a whole.  The buffer is buried and never killed, so a
+half-written statement survives.
 
 @code{cmacs-dbexplorer-send-region} runs a region from @emph{any}
 @code{sql-mode} buffer on a chosen connection, which is how a @file{.sql}

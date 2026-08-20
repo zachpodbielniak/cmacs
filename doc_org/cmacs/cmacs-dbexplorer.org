@@ -275,9 +275,13 @@ Bindings live entirely under =C-c= so nothing global is disturbed:
 
 =C-c C-k= is one key for "stop what I started": while a statement is running it
 is the statement that stops, and with nothing running there is nothing to stop,
-so the buffer is what you meant and it closes — restoring the workbench layout
-just as =q= does elsewhere. It is buried, never killed, so a half-written
-statement survives.
+so this buffer is what you meant and it closes, putting back whatever the window
+was showing before.
+
+Only that window. Leaving the SQL editor is not leaving the explorer, so the
+connections list, the schema tree and the grid stay where they are — that is the
+difference between =C-c C-k= here and =q=, which quits the workbench as a whole.
+The buffer is buried, never killed, so a half-written statement survives.
 
 History is per connection, capped, and persisted, so the query you ran last week
 is still there. =cmacs-dbexplorer-send-region= sends a region from *any*

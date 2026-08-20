@@ -1248,16 +1248,68 @@ the statement to a comint buffer that is not our connection."
                 #'cmacs-dbexplorer-sql-send-buffer))))
 
 (ert-deftest cmacs-dbexplorer-sql-cancel-closes-when-idle ()
-  "With nothing running, C-c C-k puts the buffer away."
+  "With nothing running, C-c C-k puts this one buffer away.
+
+`quit-window' and not `cmacs-dbexplorer-quit', which is the whole point:
+the explorer's quit restores the window configuration the workbench
+replaced, so from the SQL editor it would also close the connections
+list, the schema tree and the grid.  Leaving the editor is not leaving
+the explorer, and this pins the difference."
   (skip-unless (cmacs-dbexplorer-tests--sql-p))
   (with-temp-buffer
     (cmacs-dbexplorer-sql-mode)
     (setq cmacs-dbexplorer-sql--stream nil)
-    (let ((quit nil))
-      (cl-letf (((symbol-function 'cmacs-dbexplorer-quit)
-                 (lambda () (setq quit t))))
+    (let ((quit-window-called nil) (explorer-quit nil))
+      (cl-letf (((symbol-function 'quit-window)
+                 (lambda (&rest _) (setq quit-window-called t)))
+                ((symbol-function 'cmacs-dbexplorer-quit)
+                 (lambda () (setq explorer-quit t))))
         (cmacs-dbexplorer-sql-cancel))
-      (should quit))))
+      (should quit-window-called)
+      (should-not explorer-quit))))
+
+(ert-deftest cmacs-dbexplorer-sql-cancel-leaves-the-other-windows ()
+  "Closing the SQL editor closes one window, not the workbench.
+
+Built out of real windows rather than a stubbed `quit-window', because
+the complaint this pins -- C-c C-k took down every explorer window -- is
+about what happens to the frame, and a stub cannot be wrong about that
+in the way the code was."
+  (skip-unless (cmacs-dbexplorer-tests--sql-p))
+  (let* ((sql (generate-new-buffer " *dbexplorer-sql-window-test*"))
+         (before (generate-new-buffer " *was-here-before*"))
+         (sibling (generate-new-buffer " *another-explorer-window*")))
+    (unwind-protect
+        (save-window-excursion
+          (delete-other-windows)
+          ;; The single-window configuration a workbench would have saved
+          ;; on the way in.  Without this the test proves nothing: the
+          ;; variable is a global, nil outside a workbench, and the old
+          ;; `cmacs-dbexplorer-quit' fell through to `quit-window' when it
+          ;; was nil -- so the broken code would have passed too.
+          (let ((pre-workbench (current-window-configuration))
+                (sibling-window (selected-window))
+                (sql-window (split-window)))
+            (set-window-buffer sibling-window sibling)
+            (select-window sql-window)
+            (switch-to-buffer before)
+            (switch-to-buffer sql)
+            (with-current-buffer sql
+              (cmacs-dbexplorer-sql-mode)
+              (setq cmacs-dbexplorer-sql--stream nil)
+              (let ((cmacs-dbexplorer--saved-window-configuration
+                     pre-workbench))
+                (cmacs-dbexplorer-sql-cancel)))
+            ;; The sibling is untouched and still showing its own buffer.
+            (should (window-live-p sibling-window))
+            (should (eq sibling (window-buffer sibling-window)))
+            ;; And the editor's window went back to what it had before.
+            (should (window-live-p sql-window))
+            (should (eq before (window-buffer sql-window)))
+            ;; Buried, not killed: the half-written statement survives.
+            (should (buffer-live-p sql))))
+      (mapc (lambda (buffer) (when (buffer-live-p buffer) (kill-buffer buffer)))
+            (list sql before sibling)))))
 
 (ert-deftest cmacs-dbexplorer-sql-cancel-cancels-when-running ()
   "With a statement in flight, C-c C-k cancels it and does not close."

@@ -261,19 +261,24 @@ worse than one that has to read the catalogue again."
   (cmacs-dbexplorer-sql-send (concat "EXPLAIN " (cmacs-dbexplorer-sql-statement))))
 
 (defun cmacs-dbexplorer-sql-cancel ()
-  "Stop the statement this buffer is running, or put the buffer away.
+  "Stop the statement this buffer is running, or put this buffer away.
 
 One key for `stop what I started'.  While a statement is in flight it is
 the statement that stops; with nothing running there is nothing to stop
-and the buffer is what you meant, so it closes -- inside the workbench
-that restores the layout the workbench replaced, exactly as `q' does in
-the other views.
+and this buffer is what you meant.
+
+`quit-window', deliberately, and not `cmacs-dbexplorer-quit': this closes
+one window and puts back whatever it was showing before.  The explorer's
+own quit restores the window configuration the workbench replaced, which
+from here would take down the connections list, the schema tree and the
+grid too -- three windows nobody asked to close.  Leaving the SQL editor
+is not leaving the explorer.
 
 The buffer is buried and never killed, so a statement you were half-way
 through writing is still there when you come back to it."
   (interactive)
   (if (null cmacs-dbexplorer-sql--stream)
-      (cmacs-dbexplorer-quit)
+      (quit-window)
     (cmacs-dbexplorer-cancel cmacs-dbexplorer-sql--stream)
     (setq cmacs-dbexplorer-sql--stream nil)
     (message "cmacs-dbexplorer: cancelled")))
