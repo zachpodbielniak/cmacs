@@ -114,6 +114,30 @@ A page beyond the first with no =ORDER BY= is not a stable window onto the data 
 the server may return rows in any order it likes — so the first time you page an
 unordered query the grid says so once.
 
+** Keys
+
+| Key           | Effect                                     |
+|---------------+--------------------------------------------|
+| =n= / =p=     | Next / previous row                        |
+| =j= / =k=     | Next / previous row (Evil)                 |
+| =h= / =l=     | Previous / next cell (Evil)                |
+| =TAB= / =S-TAB= | Next / previous cell                     |
+| =RET=         | Show the whole cell in its own buffer      |
+| =o=           | Sort by this column (asc → desc → none)    |
+| =f= / =F=     | Filter with a WHERE fragment / clear it    |
+| =]= / =[=     | Next / previous page                       |
+| =g=           | Re-run the query                           |
+| =K=           | Cancel a query still running               |
+| =y= / =Y=     | Copy the cell / the row as CSV             |
+| =w=           | Copy the SQL behind this view              |
+| =E=           | Export                                     |
+| =s=           | Open a SQL editor on this connection       |
+| =q=           | Quit, restoring the previous window layout |
+
+Editing adds =e=, =i=, =D=, =u=, =U=, =R= and =C-c C-c=; see
+[[*Editing][Editing]].  =SPC= is deliberately unbound, because under Doom it is
+the leader key.
+
 ** Sorting and filtering
 
 =o= cycles a column through ascending, descending and unsorted. This *re-runs the
