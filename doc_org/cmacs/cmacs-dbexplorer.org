@@ -84,6 +84,57 @@ read-only pragmas. Anything else is refused with =cmacs-dbexplorer-error=.
 Mark production read-only. It costs nothing and it is the difference between a
 mistyped keystroke being annoying and being an incident.
 
+* The schema tree
+
+=M-x cmacs-dbexplorer-schema=, or the upper-left pane of the workbench. This is
+how you browse a database without writing any SQL: schemas contain relations,
+relations contain columns, indexes and foreign keys, and =RET= on a table browses
+its rows.
+
+** Everything is lazy, except the first step
+
+A closed node has cost nothing — no query has been run for it. Opening one
+fetches that level and caches it in the model, and every later redraw reads the
+cache. This is what keeps a database with thousands of relations as cheap to open
+as one with three, and it is why the tree is a tree rather than a list.
+
+Taken literally, laziness means the first thing you see on a PostgreSQL
+connection is one closed node called =public=, which reads as an empty database
+rather than as a closed door. So exactly one node opens itself: the schema you
+were going to open anyway.
+
+- One schema, whatever it is called — including the unnamed node that stands in
+  for a dialect with no schemas at all, which is how SQLite shows its tables.
+- Several schemas, one of which is conventionally the default
+  (=cmacs-dbexplorer-schema-default-names=, default =public=, =main=, =dbo=).
+- Several schemas and no conventional name: nothing opens, because guessing wrong
+  means firing a catalogue query at a schema you never asked about.
+
+It happens once, and only while nothing has been opened yet. Close =public=,
+press =g=, and it stays closed. Set =cmacs-dbexplorer-schema-auto-expand= to nil
+to keep the tree fully closed on open, at the price of one keystroke.
+
+** Keys
+
+| Key       | Effect                                          |
+|-----------+-------------------------------------------------|
+| =TAB=     | Open or close this node                         |
+| =l= / =h= | Open / close (Evil); =l= on an open node enters |
+| =j= / =k= | Next / previous line (Evil)                     |
+| =RET=     | Browse this table, or toggle a non-table node   |
+| =c=       | Columns                                         |
+| =I=       | Indexes                                         |
+| =F=       | Foreign keys                                    |
+| =s=       | Open a SQL editor on this connection            |
+| =y=       | Copy this name, quoted for the dialect          |
+| =^=       | Go to the parent node                           |
+| =n= / =p= | Next / previous sibling                         |
+| =g=       | Refresh, discarding the cache                   |
+| =q=       | Quit, restoring the previous window layout      |
+
+Opening a table in the tree also makes its columns completable in the SQL editor:
+both halves read the same model cache, without either knowing about the other.
+
 * The results grid
 
 ** Reading
@@ -350,6 +401,10 @@ name and the row primary key, not on any buffer.
 | =cmacs-dbexplorer-connections=                  | =nil=      | Saved connections                         |
 | =cmacs-dbexplorer-edit-mode=                    | ='staged=  | Staged or immediate writes                |
 | =cmacs-dbexplorer-page-size=                    | =500=      | Rows per page                             |
+| =cmacs-dbexplorer-schema-auto-expand=           | =t=        | Open the obvious schema on connect        |
+| =cmacs-dbexplorer-schema-default-names=         | =("public" "main" "dbo")= | Schemas worth opening unasked |
+| =cmacs-dbexplorer-side-width=                   | =0.22=     | Width of the workbench side panes         |
+| =cmacs-dbexplorer-grid-height=                  | =0.45=     | Height of the workbench results pane      |
 | =cmacs-dbexplorer-column-max-width=             | =40=       | Display width cap per column              |
 | =cmacs-dbexplorer-allow-editing-without-pk=     | =nil=      | Permit all-column-match updates           |
 | =cmacs-dbexplorer-history-size=                 | =200=      | Query history per connection              |

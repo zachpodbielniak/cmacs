@@ -1142,5 +1142,87 @@ listening to, and the caller saw a successful-looking nothing."
             (should (eq 2 (plist-get summary :row-count))))
         (ignore-errors (delete-file path))))))
 
+;;;; Schema tree: opening the obvious schema ---------------------------
+
+;; No database and no C: the choice of which schema to open is a decision
+;; over a list of names, so it is tested as one.
+
+(defun cmacs-dbexplorer-tests--schema-ui-p ()
+  "Non-nil when the schema tree loaded."
+  (require 'cmacs-dbexplorer-schema-ui nil t)
+  (featurep 'cmacs-dbexplorer-schema-ui))
+
+(defmacro cmacs-dbexplorer-tests--with-tree (schemas &rest body)
+  "Run BODY in a schema-tree buffer whose schema list is SCHEMAS."
+  (declare (indent 1) (debug (form body)))
+  `(with-temp-buffer
+     (setq-local cmacs-dbexplorer-schema--schemas ,schemas)
+     (setq-local cmacs-dbexplorer-schema--expanded
+                 (make-hash-table :test 'equal))
+     ,@body))
+
+(ert-deftest cmacs-dbexplorer-tree-opens-the-only-schema ()
+  "A connection with one schema opens it, whatever it is called."
+  (skip-unless (cmacs-dbexplorer-tests--schema-ui-p))
+  (cmacs-dbexplorer-tests--with-tree '("weird_name")
+    (should (equal "weird_name" (cmacs-dbexplorer-schema--default-schema)))
+    (cmacs-dbexplorer-schema--auto-expand)
+    (should (cmacs-dbexplorer-schema--expanded-p
+             (cmacs-dbexplorer-schema--node-id "weird_name")))))
+
+(ert-deftest cmacs-dbexplorer-tree-opens-the-schemaless-node ()
+  "SQLite's nil stand-in schema is opened like any other sole schema.
+
+The nil node is exactly the case a naive `if the answer is nil, do
+nothing' guard would drop, leaving SQLite -- which has no schemas at all
+-- as the one dialect whose tables stay hidden."
+  (skip-unless (cmacs-dbexplorer-tests--schema-ui-p))
+  (cmacs-dbexplorer-tests--with-tree (list nil)
+    (cmacs-dbexplorer-schema--auto-expand)
+    (should (cmacs-dbexplorer-schema--expanded-p
+             (cmacs-dbexplorer-schema--node-id nil)))))
+
+(ert-deftest cmacs-dbexplorer-tree-picks-the-default-of-many ()
+  "With several schemas only a conventionally-default name is opened."
+  (skip-unless (cmacs-dbexplorer-tests--schema-ui-p))
+  (cmacs-dbexplorer-tests--with-tree '("audit" "public" "staging")
+    (cmacs-dbexplorer-schema--auto-expand)
+    (should (cmacs-dbexplorer-schema--expanded-p
+             (cmacs-dbexplorer-schema--node-id "public")))
+    (should-not (cmacs-dbexplorer-schema--expanded-p
+                 (cmacs-dbexplorer-schema--node-id "audit")))
+    (should-not (cmacs-dbexplorer-schema--expanded-p
+                 (cmacs-dbexplorer-schema--node-id "staging")))))
+
+(ert-deftest cmacs-dbexplorer-tree-opens-nothing-when-ambiguous ()
+  "Several schemas and no conventional name means none is opened."
+  (skip-unless (cmacs-dbexplorer-tests--schema-ui-p))
+  (cmacs-dbexplorer-tests--with-tree '("audit" "staging")
+    (should-not (cmacs-dbexplorer-schema--default-schema))
+    (cmacs-dbexplorer-schema--auto-expand)
+    (should (zerop (hash-table-count cmacs-dbexplorer-schema--expanded)))))
+
+(ert-deftest cmacs-dbexplorer-tree-respects-a-closed-schema ()
+  "Closing the default schema and refreshing leaves it closed.
+
+The guard is the emptiness of the expansion set, so anything the user has
+touched -- including a different node entirely -- stops this reaching in
+and reopening what they closed."
+  (skip-unless (cmacs-dbexplorer-tests--schema-ui-p))
+  (cmacs-dbexplorer-tests--with-tree '("public")
+    (puthash (cmacs-dbexplorer-schema--node-id "public" "t") t
+             cmacs-dbexplorer-schema--expanded)
+    (cmacs-dbexplorer-schema--auto-expand)
+    (should-not (cmacs-dbexplorer-schema--expanded-p
+                 (cmacs-dbexplorer-schema--node-id "public")))))
+
+(ert-deftest cmacs-dbexplorer-tree-auto-expand-is-optional ()
+  "Setting the defcustom to nil leaves the tree fully closed."
+  (skip-unless (cmacs-dbexplorer-tests--schema-ui-p))
+  (cmacs-dbexplorer-tests--with-tree '("public")
+    (let ((cmacs-dbexplorer-schema-auto-expand nil))
+      (cmacs-dbexplorer-schema--auto-expand))
+    (should (zerop (hash-table-count cmacs-dbexplorer-schema--expanded)))))
+
 (provide 'cmacs-dbexplorer-tests)
 ;;; cmacs-dbexplorer-tests.el ends here

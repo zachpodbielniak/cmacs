@@ -9347,6 +9347,7 @@ The full manual is @file{doc_org/cmacs/cmacs-dbexplorer.org}.
 @menu
 * Dbexplorer Quick Start::
 * Dbexplorer Connections::
+* Dbexplorer Schema Tree::
 * Dbexplorer Grid::
 * Dbexplorer Editing::
 * Dbexplorer Agents::
@@ -9383,6 +9384,31 @@ is not a read, so the guarantee holds identically for the grid, for
 @code{M-x} commands, for ai-brigade tools, for MCP clients, for D-Bus
 callers and for @command{emacsctl}, because they all arrive at the same
 handle.  Mark production read-only.
+
+@node Dbexplorer Schema Tree
+@section The Schema Tree
+
+@kbd{M-x cmacs-dbexplorer-schema}, or the upper-left workbench pane: how
+to browse a database without writing SQL.  @kbd{TAB} opens a node,
+@kbd{RET} on a table browses its rows, and @kbd{c}, @kbd{I} and @kbd{F}
+show columns, indexes and foreign keys.
+
+Every node is lazy --- a closed one has run no query, and an opened one
+caches its level in the model, which is also where the SQL editor's
+completion reads from.  That is what makes a database with thousands of
+relations as cheap to open as one with three.
+
+Taken literally, laziness means a PostgreSQL connection opens showing one
+closed node called @code{public}, which reads as an empty database rather
+than as a closed door.  So one node opens itself: the sole schema
+whatever its name (including the unnamed node a schemaless dialect like
+SQLite uses), or else one named in
+@code{cmacs-dbexplorer-schema-default-names}.  With several schemas and
+no conventional name among them, nothing opens --- guessing wrong would
+fire a catalogue query at a schema the user never asked about.  It
+applies only while nothing has been opened yet, so a schema you close
+stays closed across a refresh.  Set
+@code{cmacs-dbexplorer-schema-auto-expand} to @code{nil} to opt out.
 
 @node Dbexplorer Grid
 @section The Results Grid

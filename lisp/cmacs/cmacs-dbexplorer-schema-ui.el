@@ -61,6 +61,67 @@
        (gethash id cmacs-dbexplorer-schema--expanded)))
 
 
+;;;; Opening the obvious schema -----------------------------------------
+
+(defcustom cmacs-dbexplorer-schema-auto-expand t
+  "Whether the tree opens the obvious schema for you when it first appears.
+
+Everything in the tree is lazy, which is what keeps a database with
+thousands of relations cheap to open.  Taken literally that means the
+first thing you see is a single collapsed node called `public', which
+reads as an empty database rather than as a closed door -- so one node,
+the one you were going to open anyway, opens itself.
+
+The cost is one catalogue query on connect.  Set this to nil on a
+database where even that is unwelcome, and the tree stays fully closed."
+  :type 'boolean
+  :group 'cmacs-dbexplorer)
+
+(defcustom cmacs-dbexplorer-schema-default-names '("public" "main" "dbo")
+  "Schema names that count as the obvious one to open.
+
+Consulted only when a connection has several schemas; a connection with
+just one has no ambiguity to resolve and that one is opened whatever it
+is called.  Matched case-insensitively."
+  :type '(repeat string)
+  :group 'cmacs-dbexplorer)
+
+(defun cmacs-dbexplorer-schema--default-schema ()
+  "Return the schema to open unasked, or nil when none is obvious.
+
+A sole schema is opened whatever its name -- including the nil node that
+stands in for a dialect with no schemas at all, which is how SQLite gets
+its tables on screen.  With several, only a conventionally-default name
+qualifies, because guessing wrong means firing a catalogue query at a
+schema the user never asked about."
+  (if (null (cdr cmacs-dbexplorer-schema--schemas))
+      (car cmacs-dbexplorer-schema--schemas)
+    (cl-find-if (lambda (schema)
+                  (and schema
+                       (member (downcase schema)
+                               cmacs-dbexplorer-schema-default-names)))
+                cmacs-dbexplorer-schema--schemas)))
+
+(defun cmacs-dbexplorer-schema--auto-expand ()
+  "Open the default schema, but only while nothing has been opened yet.
+
+Guarded on the expansion set being empty rather than on a first-time
+flag, so it stays out of the way of the user: collapsing `public' and
+pressing `g' leaves it collapsed, because by then the set is no longer
+empty and this does nothing."
+  (when (and cmacs-dbexplorer-schema-auto-expand
+             cmacs-dbexplorer-schema--expanded
+             (zerop (hash-table-count cmacs-dbexplorer-schema--expanded))
+             ;; A one-schema connection returns nil for the SQLite node,
+             ;; which is a legitimate schema to open -- so the emptiness
+             ;; of the list, not the nil-ness of the answer, is the test.
+             (or (null (cdr cmacs-dbexplorer-schema--schemas))
+                 (cmacs-dbexplorer-schema--default-schema)))
+    (puthash (cmacs-dbexplorer-schema--node-id
+              (cmacs-dbexplorer-schema--default-schema))
+             t cmacs-dbexplorer-schema--expanded)))
+
+
 ;;;; Reading the C replies ----------------------------------------------
 
 (defun cmacs-dbexplorer-schema--entry-name (entry)
@@ -93,6 +154,7 @@
                        ;; A dialect with no schemas at all -- sqlite --
                        ;; still needs one node to hang its tables from.
                        (list nil)))
+             (cmacs-dbexplorer-schema--auto-expand)
              (cmacs-dbexplorer-schema--render))))))))
 
 (defun cmacs-dbexplorer-schema--fetch-tables (connection schema id)
