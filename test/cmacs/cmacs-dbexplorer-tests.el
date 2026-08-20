@@ -471,5 +471,562 @@ committed on purpose."
             (should (eq :null (gethash "note" (aref parsed 1))))))
       (delete-file file))))
 
+
+;;;; The C layer -------------------------------------------------------
+
+;; These do talk to a database: an in-memory SQLite one, which every
+;; build has, because Emacs already requires SQLite and orm-glib is built
+;; with that driver unconditionally.  They are the only tests here that
+;; need the primitives, and they are what covers the two things the model
+;; and view layers cannot check for themselves -- that a read-only
+;; connection really does refuse writes, and that a batch of edits really
+;; is all-or-nothing.
+
+(require 'seq)
+
+(defconst cmacs-dbexplorer-tests--timeout 15.0
+  "Seconds to wait for a database reply before failing.
+
+A timeout rather than an unbounded spin: a primitive that never calls
+back is a bug, and a suite that hangs on it reports nothing at all,
+whereas one that fails on it names the test that broke.")
+
+(defun cmacs-dbexplorer-tests--c-p ()
+  "Non-nil when the C primitives are present in this build."
+  (and (cmacs-dbexplorer-tests--available-p)
+       (fboundp 'cmacs-dbexplorer--connect-async)
+       (fboundp 'cmacs-dbexplorer--query-async)))
+
+(defun cmacs-dbexplorer-tests--wait (predicate what)
+  "Spin until PREDICATE returns non-nil, failing after the timeout.
+WHAT names what was being waited for, for the failure message."
+  (let ((deadline (+ (float-time) cmacs-dbexplorer-tests--timeout))
+        (value nil))
+    (while (and (not (setq value (funcall predicate)))
+                (< (float-time) deadline))
+      ;; `sit-for' is what runs Emacs's select loop, and the select loop
+      ;; is what dispatches cmacs's GMainContext -- so this is not idling
+      ;; while the answer arrives, it is what lets the answer arrive.
+      (sit-for 0.01))
+    (unless value
+      (ert-fail (format "timed out after %ss waiting for %s"
+                        cmacs-dbexplorer-tests--timeout what)))
+    value))
+
+(defun cmacs-dbexplorer-tests--call (fn &rest args)
+  "Call FN with ARGS and a callback, and return the reply it was given."
+  (let ((reply 'cmacs-dbexplorer-tests--pending))
+    (apply fn (append args (list (lambda (r) (setq reply r)))))
+    (cmacs-dbexplorer-tests--wait
+     (lambda ()
+       (unless (eq reply 'cmacs-dbexplorer-tests--pending)
+         (or reply t)))
+     (format "%s" fn))
+    reply))
+
+(defvar cmacs-dbexplorer-tests--events nil
+  "Stream events seen so far, as (ID . PAYLOAD), newest first.")
+
+(defun cmacs-dbexplorer-tests--collect (id payload)
+  "Record PAYLOAD as an event of stream ID."
+  (push (cons id payload) cmacs-dbexplorer-tests--events))
+
+(defun cmacs-dbexplorer-tests--events-for (id)
+  "Return the payloads seen for stream ID, oldest first."
+  (mapcar #'cdr (reverse (seq-filter (lambda (event) (eql id (car event)))
+                                     cmacs-dbexplorer-tests--events))))
+
+(defun cmacs-dbexplorer-tests--terminated-p (id)
+  "Return the terminating payload of stream ID, or nil."
+  (seq-find (lambda (payload) (memq (car payload) '(:end :error)))
+            (cmacs-dbexplorer-tests--events-for id)))
+
+(defun cmacs-dbexplorer-tests--stream (handle sql &optional params options)
+  "Run SQL on HANDLE and return its events, oldest first."
+  (setq cmacs-dbexplorer-tests--events nil)
+  (cmacs-dbexplorer--set-stream-callback #'cmacs-dbexplorer-tests--collect)
+  (let ((id (cmacs-dbexplorer--query-async handle sql params options)))
+    (cmacs-dbexplorer-tests--wait
+     (lambda () (cmacs-dbexplorer-tests--terminated-p id))
+     (format "the query %S to finish" sql))
+    (cmacs-dbexplorer-tests--events-for id)))
+
+(defun cmacs-dbexplorer-tests--rows (handle sql)
+  "Return the rows SQL selects on HANDLE, as a list of vectors."
+  (let ((rows nil))
+    (dolist (payload (cmacs-dbexplorer-tests--stream handle sql))
+      (when (eq :rows (car payload))
+        (setq rows (append rows (append (nth 1 payload) nil)))))
+    rows))
+
+(defun cmacs-dbexplorer-tests--scalar (handle sql)
+  "Return the first cell of the first row SQL selects on HANDLE."
+  (let ((rows (cmacs-dbexplorer-tests--rows handle sql)))
+    (and rows (aref (car rows) 0))))
+
+(defun cmacs-dbexplorer-tests--exec (handle sql &optional params)
+  "Run SQL on HANDLE for its effect, failing if it errors."
+  (let ((reply (cmacs-dbexplorer-tests--call
+                #'cmacs-dbexplorer--execute-async handle sql params)))
+    (when (alist-get :error reply)
+      (ert-fail (format "%s: %s" sql (alist-get :error reply))))
+    reply))
+
+(defun cmacs-dbexplorer-tests--open (&optional url)
+  "Open URL, or an in-memory database, and return the handle."
+  (let ((reply (cmacs-dbexplorer-tests--call
+                #'cmacs-dbexplorer--connect-async
+                (or url "sqlite:///:memory:") nil)))
+    (when (alist-get :error reply)
+      (ert-fail (format "cannot connect: %s" (alist-get :error reply))))
+    (alist-get :handle reply)))
+
+(defmacro cmacs-dbexplorer-tests--with-db (handle &rest body)
+  "Open an in-memory database, bind HANDLE to it, and run BODY."
+  (declare (indent 1) (debug t))
+  `(let ((,handle (cmacs-dbexplorer-tests--open)))
+     (unwind-protect
+         (progn
+           (cmacs-dbexplorer-tests--exec
+            ,handle "CREATE TABLE t (id INTEGER PRIMARY KEY, n TEXT)")
+           ,@body)
+       (cmacs-dbexplorer--disconnect ,handle))))
+
+(ert-deftest cmacs-dbexplorer-c-connection-lifecycle ()
+  "A connection opens, appears in the listing, and stops existing on close."
+  (skip-unless (cmacs-dbexplorer-tests--c-p))
+  (let* ((file (make-temp-file "cmacs-dbexplorer-test" nil ".db"))
+         (handle (cmacs-dbexplorer-tests--open (concat "sqlite://" file))))
+    (unwind-protect
+        (progn
+          (should (integerp handle))
+          (let ((info (cmacs-dbexplorer--connection-info handle)))
+            (should (equal handle (alist-get :handle info)))
+            (should (stringp (alist-get :dialect info)))
+            (should-not (alist-get :read-only info)))
+          (should (memq handle (mapcar (lambda (entry) (alist-get :handle entry))
+                                       (cmacs-dbexplorer--connection-list))))
+          ;; The flag really is a property of the connection, not of a
+          ;; struct somewhere above it.
+          (cmacs-dbexplorer--set-read-only handle t)
+          (should (alist-get :read-only
+                             (cmacs-dbexplorer--connection-info handle)))
+          (cmacs-dbexplorer--set-read-only handle nil)
+          (cmacs-dbexplorer--disconnect handle)
+          (should-not (memq handle
+                            (mapcar (lambda (entry) (alist-get :handle entry))
+                                    (cmacs-dbexplorer--connection-list))))
+          ;; Closing twice is not an error; the second one has nothing to
+          ;; do, which is what a `q' in two views amounts to.
+          (should-not (cmacs-dbexplorer--disconnect handle)))
+      (ignore-errors (delete-file file)))))
+
+(ert-deftest cmacs-dbexplorer-c-stale-handle-signals ()
+  "A handle that was never issued, or has been closed, signals.
+
+This is the one class of failure that IS a signal: it is a bug in the
+caller rather than something the database said, and the backtrace is
+what fixes it.  Everything the database reports arrives in a reply
+instead, because it is produced inside a GLib callback where a signal
+would abort Emacs."
+  (skip-unless (cmacs-dbexplorer-tests--c-p))
+  (should-error (cmacs-dbexplorer--connection-info 999999)
+                :type 'cmacs-dbexplorer-error)
+  (should-error (cmacs-dbexplorer--quote-identifier -1 "x")
+                :type 'cmacs-dbexplorer-error)
+  (let ((handle (cmacs-dbexplorer-tests--open)))
+    (cmacs-dbexplorer--disconnect handle)
+    (should-error (cmacs-dbexplorer--schemas-async handle #'ignore)
+                  :type 'cmacs-dbexplorer-error)
+    (should-error (cmacs-dbexplorer--query-async handle "SELECT 1" nil nil)
+                  :type 'cmacs-dbexplorer-error)))
+
+(ert-deftest cmacs-dbexplorer-c-stream-event-order ()
+  "A query reports its columns, then its rows, then exactly one ending."
+  (skip-unless (cmacs-dbexplorer-tests--c-p))
+  (cmacs-dbexplorer-tests--with-db handle
+    (cmacs-dbexplorer-tests--exec handle "INSERT INTO t (n) VALUES (?)"
+                                  (list "alpha"))
+    (cmacs-dbexplorer-tests--exec handle "INSERT INTO t (n) VALUES (?)"
+                                  (list :null))
+    (let* ((events (cmacs-dbexplorer-tests--stream
+                    handle "SELECT id, n FROM t ORDER BY id"))
+           (kinds (mapcar #'car events)))
+      (should (eq :meta (car kinds)))
+      (should (eq :end (car (last kinds))))
+      (should (= 1 (seq-count (lambda (k) (memq k '(:end :error))) kinds)))
+      ;; The column metadata arrives before any row, which is what lets a
+      ;; grid draw its header while the rows are still coming.
+      (should (< (seq-position kinds :meta) (seq-position kinds :rows)))
+      (let ((columns (nth 1 (car events))))
+        (should (equal '("id" "n")
+                       (mapcar (lambda (c) (plist-get c :name))
+                               (append columns nil)))))
+      (let ((rows (cmacs-dbexplorer-tests--rows
+                   handle "SELECT id, n FROM t ORDER BY id")))
+        (should (= 2 (length rows)))
+        (should (equal "alpha" (aref (nth 0 rows) 1)))
+        ;; A SQL NULL is the keyword, never the string "NULL".
+        (should (eq :null (aref (nth 1 rows) 1))))
+      (let ((end (car (last events))))
+        (should-not (plist-get (cdr end) :truncated))
+        (should (eq 2 (plist-get (cdr end) :row-count)))
+        (should (numberp (plist-get (cdr end) :elapsed-ms)))))))
+
+(ert-deftest cmacs-dbexplorer-c-stream-truncation ()
+  "A query capped by :max-rows stops there and says it was capped."
+  (skip-unless (cmacs-dbexplorer-tests--c-p))
+  (cmacs-dbexplorer-tests--with-db handle
+    (dotimes (i 5)
+      (cmacs-dbexplorer-tests--exec handle "INSERT INTO t (n) VALUES (?)"
+                                    (list (number-to-string i))))
+    (let* ((events (cmacs-dbexplorer-tests--stream
+                    handle "SELECT id FROM t ORDER BY id" nil '(:max-rows 2)))
+           (end (cdr (car (last events))))
+           (rows (seq-mapcat (lambda (payload)
+                               (when (eq :rows (car payload))
+                                 (append (nth 1 payload) nil)))
+                             events)))
+      (should (= 2 (length rows)))
+      (should (eq 2 (plist-get end :row-count)))
+      ;; The cap being reached is reported, because a view that silently
+      ;; showed two of five rows would be lying about the table.
+      (should (plist-get end :truncated)))))
+
+(ert-deftest cmacs-dbexplorer-c-cancel ()
+  "A cancelled stream stops reporting, and cancelling twice is harmless."
+  (skip-unless (cmacs-dbexplorer-tests--c-p))
+  (cmacs-dbexplorer-tests--with-db handle
+    (dotimes (i 20)
+      (cmacs-dbexplorer-tests--exec handle "INSERT INTO t (n) VALUES (?)"
+                                    (list (number-to-string i))))
+    (setq cmacs-dbexplorer-tests--events nil)
+    (cmacs-dbexplorer--set-stream-callback #'cmacs-dbexplorer-tests--collect)
+    (let ((id (cmacs-dbexplorer--query-async handle "SELECT * FROM t" nil nil)))
+      ;; Cancelled before the loop has run once, so nothing can have been
+      ;; delivered yet -- payloads only arrive from the event loop, and
+      ;; this has not yielded to it.
+      (cmacs-dbexplorer--cancel id)
+      (dotimes (_ 50) (sit-for 0.01))
+      (should-not (cmacs-dbexplorer-tests--terminated-p id))
+      ;; Cancelling an id that is already gone is the normal case, not a
+      ;; mistake: a view quits while a batch is in flight.
+      (should-not (cmacs-dbexplorer--cancel id))
+      (should-not (cmacs-dbexplorer--cancel 999999)))
+    ;; And the connection is usable straight afterwards.
+    (should (equal "20" (cmacs-dbexplorer-tests--scalar
+                         handle "SELECT count(*) FROM t")))))
+
+(ert-deftest cmacs-dbexplorer-c-read-only-classifier ()
+  "A read-only connection allows reads and refuses writes, on both paths.
+
+The matrix matters more than any single case.  A guard that classified
+statements one way for `cmacs-dbexplorer--query-async' and another for
+`cmacs-dbexplorer--execute-async' would look like a guard and be a hole,
+so every statement here is put through both."
+  (skip-unless (cmacs-dbexplorer-tests--c-p))
+  (cmacs-dbexplorer-tests--with-db handle
+    (cmacs-dbexplorer-tests--exec handle "INSERT INTO t (n) VALUES ('a')")
+    (cmacs-dbexplorer--set-read-only handle t)
+    (let ((reads '("SELECT 1"
+                   "  select 1"
+                   "WITH c AS (SELECT 1) SELECT * FROM c"
+                   "EXPLAIN SELECT 1"
+                   "PRAGMA table_info(t)"
+                   "PRAGMA foreign_keys"
+                   "-- a comment\nSELECT 1"
+                   "/* a comment */ SELECT 1"))
+          (writes '("INSERT INTO t (n) VALUES ('x')"
+                    "UPDATE t SET n = 'x'"
+                    "DELETE FROM t"
+                    "DROP TABLE t"
+                    "WITH c AS (SELECT 1) DELETE FROM t"
+                    "/*c*/DELETE FROM t"
+                    "-- c\nDELETE FROM t"
+                    "PRAGMA journal_mode = WAL"
+                    "CREATE TABLE u (a INTEGER)"
+                    "ATTACH DATABASE ':memory:' AS other")))
+      (dolist (sql writes)
+        (let ((reply (cmacs-dbexplorer-tests--call
+                      #'cmacs-dbexplorer--execute-async handle sql nil)))
+          (should (string-match-p "read-only"
+                                  (or (alist-get :error reply) ""))))
+        (let* ((events (cmacs-dbexplorer-tests--stream handle sql))
+               (last-event (car (last events))))
+          (should (eq :error (car last-event)))
+          (should (string-match-p "read-only" (nth 1 last-event)))))
+      (dolist (sql reads)
+        (let ((reply (cmacs-dbexplorer-tests--call
+                      #'cmacs-dbexplorer--execute-async handle sql nil)))
+          (should-not (string-match-p "read-only"
+                                      (or (alist-get :error reply) ""))))
+        (let ((last-event (car (last (cmacs-dbexplorer-tests--stream
+                                      handle sql)))))
+          (should-not (and (eq :error (car last-event))
+                           (string-match-p "read-only" (nth 1 last-event)))))))
+    ;; The table is still there, and still holds exactly what it did.
+    (cmacs-dbexplorer--set-read-only handle nil)
+    (should (equal "1" (cmacs-dbexplorer-tests--scalar
+                        handle "SELECT count(*) FROM t")))
+    ;; And with the flag off the same statements go through, which is
+    ;; what proves the guard is the flag and not the classifier refusing
+    ;; everything.
+    (cmacs-dbexplorer-tests--exec handle "DELETE FROM t")
+    (should (equal "0" (cmacs-dbexplorer-tests--scalar
+                        handle "SELECT count(*) FROM t")))))
+
+(ert-deftest cmacs-dbexplorer-c-transactions ()
+  "BEGIN, ROLLBACK, SAVEPOINT and COMMIT do what they say."
+  (skip-unless (cmacs-dbexplorer-tests--c-p))
+  (cmacs-dbexplorer-tests--with-db handle
+    ;; A rolled-back transaction leaves nothing behind.
+    (should-not (alist-get :error (cmacs-dbexplorer-tests--call
+                                   #'cmacs-dbexplorer--begin-async handle)))
+    (cmacs-dbexplorer-tests--exec handle "INSERT INTO t (n) VALUES ('gone')")
+    (should-not (alist-get
+                 :error (cmacs-dbexplorer-tests--call
+                         #'cmacs-dbexplorer--rollback-async handle nil)))
+    (should (equal "0" (cmacs-dbexplorer-tests--scalar
+                        handle "SELECT count(*) FROM t")))
+
+    ;; A savepoint rolls back only what happened after it, and leaves the
+    ;; transaction it is inside open.
+    (cmacs-dbexplorer-tests--call #'cmacs-dbexplorer--begin-async handle)
+    (cmacs-dbexplorer-tests--exec handle "INSERT INTO t (n) VALUES ('kept')")
+    (should-not (alist-get
+                 :error (cmacs-dbexplorer-tests--call
+                         #'cmacs-dbexplorer--savepoint-async handle "sp1")))
+    (cmacs-dbexplorer-tests--exec handle "INSERT INTO t (n) VALUES ('undone')")
+    (should-not (alist-get
+                 :error (cmacs-dbexplorer-tests--call
+                         #'cmacs-dbexplorer--rollback-async handle "sp1")))
+    (should-not (alist-get :error (cmacs-dbexplorer-tests--call
+                                   #'cmacs-dbexplorer--commit-async handle)))
+    (should (equal "1" (cmacs-dbexplorer-tests--scalar
+                        handle "SELECT count(*) FROM t")))
+    (should (equal "kept" (cmacs-dbexplorer-tests--scalar
+                           handle "SELECT n FROM t")))))
+
+(ert-deftest cmacs-dbexplorer-c-apply-edits ()
+  "A batch of edits is applied whole, or not at all."
+  (skip-unless (cmacs-dbexplorer-tests--c-p))
+  (cmacs-dbexplorer-tests--with-db handle
+    (cmacs-dbexplorer-tests--exec handle
+                                  "INSERT INTO t (id, n) VALUES (1, 'one')")
+    (cmacs-dbexplorer-tests--exec handle
+                                  "INSERT INTO t (id, n) VALUES (2, 'two')")
+
+    ;; The success path: an update, an insert and a delete in one batch.
+    (let ((reply (cmacs-dbexplorer-tests--call
+                  #'cmacs-dbexplorer--apply-edits-async handle
+                  (list (list :op 'update :table "t"
+                              :set '(("n" . "ONE")) :where '(("id" . 1))
+                              :expect 1)
+                        (list :op 'insert :table "t"
+                              :values '(("id" . 3) ("n" . "three")))
+                        (list :op 'delete :table "t"
+                              :where '(("id" . 2)) :expect 1)))))
+      (should-not (alist-get :error reply))
+      (should (eq 3 (alist-get :applied reply))))
+    (should (equal "ONE" (cmacs-dbexplorer-tests--scalar
+                          handle "SELECT n FROM t WHERE id = 1")))
+    (should (equal "2" (cmacs-dbexplorer-tests--scalar
+                        handle "SELECT count(*) FROM t")))
+
+    ;; The guard: an :expect that does not match rolls the WHOLE batch
+    ;; back, including the statements that already succeeded.  This is
+    ;; the case the feature exists for -- a WHERE matching the wrong
+    ;; number of rows means the row identity the view used is not the one
+    ;; the database has, and committing on that edits the wrong row.
+    (let ((reply (cmacs-dbexplorer-tests--call
+                  #'cmacs-dbexplorer--apply-edits-async handle
+                  (list (list :op 'update :table "t"
+                              :set '(("n" . "clobbered")) :where '(("id" . 1))
+                              :expect 1)
+                        (list :op 'update :table "t"
+                              :set '(("n" . "nope")) :where '(("id" . 999))
+                              :expect 1)))))
+      (should (alist-get :error reply))
+      (should (eq 1 (alist-get :failed-index reply)))
+      ;; The message names what actually happened, not just that it did.
+      (should (string-match-p "touched 0" (alist-get :error reply))))
+    (should (equal "ONE" (cmacs-dbexplorer-tests--scalar
+                          handle "SELECT n FROM t WHERE id = 1")))
+
+    ;; An update with no WHERE is every row in the table, so it is
+    ;; refused before it runs rather than caught by :expect afterwards.
+    (let ((reply (cmacs-dbexplorer-tests--call
+                  #'cmacs-dbexplorer--apply-edits-async handle
+                  (list (list :op 'update :table "t"
+                              :set '(("n" . "all")) :where nil)))))
+      (should (string-match-p "WHERE" (or (alist-get :error reply) ""))))
+    (should (equal "ONE" (cmacs-dbexplorer-tests--scalar
+                          handle "SELECT n FROM t WHERE id = 1")))))
+
+(ert-deftest cmacs-dbexplorer-c-apply-edits-nests-in-a-transaction ()
+  "A failed batch inside an open transaction undoes itself and no more.
+
+SQL has no nested BEGIN, so the batch wraps itself in a savepoint when
+one is already open.  Rolling back to that savepoint has to leave what
+the user did before it alone -- otherwise applying a bad batch would
+silently discard the rest of their transaction."
+  (skip-unless (cmacs-dbexplorer-tests--c-p))
+  (cmacs-dbexplorer-tests--with-db handle
+    (cmacs-dbexplorer-tests--exec handle
+                                  "INSERT INTO t (id, n) VALUES (1, 'one')")
+    (cmacs-dbexplorer-tests--call #'cmacs-dbexplorer--begin-async handle)
+    (cmacs-dbexplorer-tests--exec handle
+                                  "INSERT INTO t (id, n) VALUES (2, 'mine')")
+    (let ((reply (cmacs-dbexplorer-tests--call
+                  #'cmacs-dbexplorer--apply-edits-async handle
+                  (list (list :op 'delete :table "t"
+                              :where '(("id" . 1)) :expect 1)
+                        (list :op 'delete :table "t"
+                              :where '(("id" . 999)) :expect 1)))))
+      (should (alist-get :error reply)))
+    ;; The transaction is still open and still usable.
+    (should-not (alist-get :error (cmacs-dbexplorer-tests--call
+                                   #'cmacs-dbexplorer--commit-async handle)))
+    ;; Both rows survive: the batch's delete was undone, the user's
+    ;; insert was not.
+    (should (equal "2" (cmacs-dbexplorer-tests--scalar
+                        handle "SELECT count(*) FROM t")))))
+
+(ert-deftest cmacs-dbexplorer-c-hostile-identifiers ()
+  "A table named like an injection is a table name, not three statements."
+  (skip-unless (cmacs-dbexplorer-tests--c-p))
+  (cmacs-dbexplorer-tests--with-db handle
+    (let* ((table "a\";DROP TABLE x;--")
+           (column "n\";DROP TABLE x;--")
+           (quoted-table (cmacs-dbexplorer--quote-identifier handle table))
+           (quoted-column (cmacs-dbexplorer--quote-identifier handle column)))
+      ;; The dialect doubles its own quote character, which is what keeps
+      ;; the rest of the name inside the identifier.
+      (should (equal "\"a\"\";DROP TABLE x;--\"" quoted-table))
+
+      (cmacs-dbexplorer-tests--exec handle "CREATE TABLE x (a INTEGER)")
+      (cmacs-dbexplorer-tests--exec
+       handle (format "CREATE TABLE %s (id INTEGER PRIMARY KEY, %s TEXT)"
+                      quoted-table quoted-column))
+      (cmacs-dbexplorer-tests--exec
+       handle (format "INSERT INTO %s (id, %s) VALUES (1, 'before')"
+                      quoted-table quoted-column))
+
+      ;; Both halves of a staged edit go through the quoting: the table
+      ;; name and the column name.
+      (let ((reply (cmacs-dbexplorer-tests--call
+                    #'cmacs-dbexplorer--apply-edits-async handle
+                    (list (list :op 'update :table table
+                                :set (list (cons column "after"))
+                                :where '(("id" . 1)) :expect 1)))))
+        (should-not (alist-get :error reply))
+        (should (eq 1 (alist-get :applied reply))))
+
+      (should (equal "after"
+                     (cmacs-dbexplorer-tests--scalar
+                      handle (format "SELECT %s FROM %s WHERE id = 1"
+                                     quoted-column quoted-table))))
+      ;; The sentinel the injection would have dropped is still there.
+      (should (equal "1" (cmacs-dbexplorer-tests--scalar
+                          handle (concat "SELECT count(*) FROM sqlite_master"
+                                         " WHERE name = 'x'"))))
+      ;; And the hostile name survives a round trip through introspection.
+      (let ((info (cmacs-dbexplorer-tests--call
+                   #'cmacs-dbexplorer--table-info-async handle nil table)))
+        (should-not (alist-get :error info))
+        (should (member column
+                        (mapcar (lambda (c) (plist-get c :name))
+                                (append (alist-get :columns info) nil))))
+        (should (equal ["id"] (alist-get :primary-key info)))))))
+
+(ert-deftest cmacs-dbexplorer-c-introspection ()
+  "The schema reader answers with the shapes the tree and the editor read."
+  (skip-unless (cmacs-dbexplorer-tests--c-p))
+  (cmacs-dbexplorer-tests--with-db handle
+    (cmacs-dbexplorer-tests--exec handle "CREATE INDEX t_n ON t (n)")
+    (cmacs-dbexplorer-tests--exec
+     handle "CREATE TABLE child (id INTEGER PRIMARY KEY,
+                                 parent INTEGER REFERENCES t (id))")
+    (cmacs-dbexplorer-tests--exec handle "CREATE VIEW v AS SELECT id FROM t")
+
+    (let ((schemas (cmacs-dbexplorer-tests--call
+                    #'cmacs-dbexplorer--schemas-async handle)))
+      (should-not (alist-get :error schemas))
+      (should (vectorp (alist-get :schemas schemas))))
+
+    (let* ((tables (cmacs-dbexplorer-tests--call
+                    #'cmacs-dbexplorer--tables-async handle nil))
+           (relations (append (alist-get :relations tables) nil)))
+      (should-not (alist-get :error tables))
+      (should (member "t" (mapcar (lambda (r) (plist-get r :name)) relations)))
+      ;; A view is reported as one, so the tree can say so.
+      (should (eq 'view (plist-get (seq-find (lambda (r)
+                                               (equal "v" (plist-get r :name)))
+                                             relations)
+                                   :kind))))
+
+    (let ((info (cmacs-dbexplorer-tests--call
+                 #'cmacs-dbexplorer--table-info-async handle nil "t")))
+      (should-not (alist-get :error info))
+      (should (equal '("id" "n")
+                     (mapcar (lambda (c) (plist-get c :name))
+                             (append (alist-get :columns info) nil))))
+      (should (equal ["id"] (alist-get :primary-key info)))
+      (should (plist-get (aref (alist-get :columns info) 0) :primary-key))
+      (should (member "t_n" (mapcar (lambda (i) (plist-get i :name))
+                                    (append (alist-get :indexes info) nil)))))
+
+    (let ((info (cmacs-dbexplorer-tests--call
+                 #'cmacs-dbexplorer--table-info-async handle nil "child")))
+      (should (equal "t" (plist-get (aref (alist-get :foreign-keys info) 0)
+                                    :references))))
+
+    ;; A table that is not there is a reply carrying an error, not a
+    ;; signal: it is something the database said.
+    (let ((info (cmacs-dbexplorer-tests--call
+                 #'cmacs-dbexplorer--table-info-async handle nil "nope")))
+      (should (or (alist-get :error info)
+                  (equal [] (alist-get :columns info)))))))
+
+(ert-deftest cmacs-dbexplorer-c-export ()
+  "An export writes the rows to the file and reports that it finished."
+  (skip-unless (cmacs-dbexplorer-tests--c-p))
+  (cmacs-dbexplorer-tests--with-db handle
+    (cmacs-dbexplorer-tests--exec handle "INSERT INTO t (n) VALUES ('a,b')")
+    (cmacs-dbexplorer-tests--exec handle "INSERT INTO t (n) VALUES ('c')")
+    (let ((file (make-temp-file "cmacs-dbexplorer-export" nil ".csv")))
+      (unwind-protect
+          (progn
+            (setq cmacs-dbexplorer-tests--events nil)
+            (cmacs-dbexplorer--set-stream-callback
+             #'cmacs-dbexplorer-tests--collect)
+            (let ((id (cmacs-dbexplorer--export-async
+                       handle "SELECT id, n FROM t ORDER BY id"
+                       "csv" file nil)))
+              (cmacs-dbexplorer-tests--wait
+               (lambda () (cmacs-dbexplorer-tests--terminated-p id))
+               "the export to finish")
+              (let ((events (cmacs-dbexplorer-tests--events-for id)))
+                (should (eq :end (car (car (last events)))))
+                ;; Rows go to the file, not to the views: publishing them
+                ;; twice would be a result nobody asked to see.
+                (should-not (seq-find (lambda (p) (eq :rows (car p))) events))
+                (should (seq-find (lambda (p) (eq :progress (car p))) events))))
+            (let ((text (with-temp-buffer (insert-file-contents file)
+                                          (buffer-string))))
+              (should (string-match-p "id,n" text))
+              ;; A value holding the separator is quoted, not corrupted.
+              (should (string-match-p "\"a,b\"" text))))
+        (ignore-errors (delete-file file)))
+      ;; An unknown format is refused, and says so as a stream error
+      ;; rather than by writing a file nobody can read.
+      (setq cmacs-dbexplorer-tests--events nil)
+      (let ((id (cmacs-dbexplorer--export-async
+                 handle "SELECT 1" "parquet" file nil)))
+        (cmacs-dbexplorer-tests--wait
+         (lambda () (cmacs-dbexplorer-tests--terminated-p id))
+         "the refused export to report")
+        (should (eq :error (car (cmacs-dbexplorer-tests--terminated-p id))))))))
+
 (provide 'cmacs-dbexplorer-tests)
 ;;; cmacs-dbexplorer-tests.el ends here

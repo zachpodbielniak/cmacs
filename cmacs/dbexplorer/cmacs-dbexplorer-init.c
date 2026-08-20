@@ -23,6 +23,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later  */
 
 #ifdef HAVE_CMACS_DBEXPLORER
 
+#include "lisp.h"
 #include "cmacs-dbexplorer.h"
 
 static bool init_done = false;
@@ -41,6 +42,12 @@ init_cmacs_dbexplorer (void)
   if (init_done)
     return;
   init_done = true;
+
+  /* The model half publishes through function pointers rather than
+     calling into the Lisp half directly, so that the connection
+     handling, the SQL classifier and the schema readers stay linkable
+     and testable without a Lisp VM.  This is where the two are joined. */
+  cmacs_dbx_events_install ();
 }
 
 #endif /* HAVE_CMACS_DBEXPLORER */
