@@ -9349,6 +9349,7 @@ The full manual is @file{doc_org/cmacs/cmacs-dbexplorer.org}.
 * Dbexplorer Connections::
 * Dbexplorer Schema Tree::
 * Dbexplorer Grid::
+* Dbexplorer SQL Editor::
 * Dbexplorer Editing::
 * Dbexplorer Agents::
 * Dbexplorer Extending::
@@ -9423,6 +9424,45 @@ Results arrive a page at a time (@code{cmacs-dbexplorer-page-size}).
 @kbd{o} sorts by re-running the query with an @code{ORDER BY} rather than
 sorting the fetched page, since sorting a page is not sorting a table and
 the difference is invisible until it misleads you.
+
+@node Dbexplorer SQL Editor
+@section The SQL Editor
+
+@kbd{s} from any explorer buffer, or @kbd{M-x cmacs-dbexplorer-sql}.
+Derived from @code{sql-mode} for its highlighting, and a normal editable
+buffer rather than a read-only one --- under Evil it opens in insert
+state, since a buffer you type into should not read your letters as
+motions.  Every binding lives under @kbd{C-c}, so nothing global moves.
+
+@table @kbd
+@item C-c C-c
+Run the region, or the statement at point.
+@item C-c C-b
+Run the whole buffer as one statement.
+@item C-c C-k
+Cancel the running statement, or close the buffer when none is running.
+@item C-c C-e
+@code{EXPLAIN} the statement at point.
+@item C-c t b/c/r/s
+Begin, commit, roll back, savepoint.
+@item C-c C-h
+Query history --- per connection, capped and persisted.
+@item C-c C-w
+Switch connection.
+@item C-c C-a
+AI actions.
+@end table
+
+@kbd{C-c C-k} is one key for `stop what I started'.  While a statement is
+in flight it is the statement that stops; with nothing running there is
+nothing to stop, so the buffer is what was meant and it closes, restoring
+the workbench layout as @kbd{q} does elsewhere.  It is buried and never
+killed, so a half-written statement survives.
+
+@code{cmacs-dbexplorer-send-region} runs a region from @emph{any}
+@code{sql-mode} buffer on a chosen connection, which is how a @file{.sql}
+file in a project becomes runnable without being copied anywhere.
+Completion-at-point offers tables and columns from the cached schema.
 
 @node Dbexplorer Editing
 @section Editing

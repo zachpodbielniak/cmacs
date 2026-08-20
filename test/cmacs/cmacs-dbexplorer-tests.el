@@ -1224,5 +1224,81 @@ and reopening what they closed."
       (cmacs-dbexplorer-schema--auto-expand))
     (should (zerop (hash-table-count cmacs-dbexplorer-schema--expanded)))))
 
+;;;; The SQL buffer's two workhorse keys -------------------------------
+
+(defun cmacs-dbexplorer-tests--sql-p ()
+  "Non-nil when the SQL buffer loaded."
+  (require 'cmacs-dbexplorer-sql nil t)
+  (featurep 'cmacs-dbexplorer-sql))
+
+(ert-deftest cmacs-dbexplorer-sql-keys-survive-the-parent-mode ()
+  "C-c C-c runs and C-c C-k stops, over whatever `sql-mode' binds.
+
+The mode derives from `sql-mode', which binds C-c C-c to
+`sql-send-paragraph' -- a command that would look like it worked and send
+the statement to a comint buffer that is not our connection."
+  (skip-unless (cmacs-dbexplorer-tests--sql-p))
+  (with-temp-buffer
+    (cmacs-dbexplorer-sql-mode)
+    (should (eq (key-binding (kbd "C-c C-c"))
+                #'cmacs-dbexplorer-sql-send-dwim))
+    (should (eq (key-binding (kbd "C-c C-k"))
+                #'cmacs-dbexplorer-sql-cancel))
+    (should (eq (key-binding (kbd "C-c C-b"))
+                #'cmacs-dbexplorer-sql-send-buffer))))
+
+(ert-deftest cmacs-dbexplorer-sql-cancel-closes-when-idle ()
+  "With nothing running, C-c C-k puts the buffer away."
+  (skip-unless (cmacs-dbexplorer-tests--sql-p))
+  (with-temp-buffer
+    (cmacs-dbexplorer-sql-mode)
+    (setq cmacs-dbexplorer-sql--stream nil)
+    (let ((quit nil))
+      (cl-letf (((symbol-function 'cmacs-dbexplorer-quit)
+                 (lambda () (setq quit t))))
+        (cmacs-dbexplorer-sql-cancel))
+      (should quit))))
+
+(ert-deftest cmacs-dbexplorer-sql-cancel-cancels-when-running ()
+  "With a statement in flight, C-c C-k cancels it and does not close."
+  (skip-unless (cmacs-dbexplorer-tests--sql-p))
+  (with-temp-buffer
+    (cmacs-dbexplorer-sql-mode)
+    (setq cmacs-dbexplorer-sql--stream 4242)
+    (let ((quit nil) (cancelled nil))
+      (cl-letf (((symbol-function 'cmacs-dbexplorer-quit)
+                 (lambda () (setq quit t)))
+                ((symbol-function 'cmacs-dbexplorer-cancel)
+                 (lambda (id) (setq cancelled id))))
+        (cmacs-dbexplorer-sql-cancel))
+      (should (eq 4242 cancelled))
+      (should-not quit)
+      (should-not cmacs-dbexplorer-sql--stream))))
+
+(ert-deftest cmacs-dbexplorer-sql-forgets-a-finished-statement ()
+  "A statement that finishes leaves nothing to cancel.
+
+The regression this pins: the stream id was recorded when a query started
+and cleared only by cancelling it, so from the first successful query
+onwards the buffer claimed to be running one forever -- and C-c C-k spent
+the rest of the session cancelling a stream that had already ended
+instead of closing the buffer."
+  (skip-unless (cmacs-dbexplorer-tests--sql-p))
+  (with-temp-buffer
+    (cmacs-dbexplorer-sql-mode)
+    (setq cmacs-dbexplorer-sql--stream 99)
+    (cmacs-dbexplorer-sql--forget-stream (current-buffer))
+    (should-not cmacs-dbexplorer-sql--stream)))
+
+(ert-deftest cmacs-dbexplorer-sql-forget-tolerates-a-dead-buffer ()
+  "A reply landing after its buffer is gone is not an error.
+
+Both terminal callbacks close over the buffer, and a query outliving the
+buffer that started it is ordinary rather than exceptional."
+  (skip-unless (cmacs-dbexplorer-tests--sql-p))
+  (let ((buffer (generate-new-buffer " *dbexplorer-sql-test*")))
+    (kill-buffer buffer)
+    (should-not (cmacs-dbexplorer-sql--forget-stream buffer))))
+
 (provide 'cmacs-dbexplorer-tests)
 ;;; cmacs-dbexplorer-tests.el ends here

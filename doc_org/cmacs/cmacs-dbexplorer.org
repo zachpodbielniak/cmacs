@@ -266,12 +266,18 @@ Bindings live entirely under =C-c= so nothing global is disturbed:
 |-----------------+-------------------------------------------|
 | =C-c C-c=       | Run the region, else the statement at point |
 | =C-c C-b=       | Run the whole buffer                      |
-| =C-c C-k=       | Cancel the running query                  |
+| =C-c C-k=       | Cancel the running query, or close the buffer |
 | =C-c C-e=       | =EXPLAIN= the statement at point          |
 | =C-c t b/c/r/s= | Begin / commit / rollback / savepoint     |
 | =C-c C-h=       | Query history                             |
 | =C-c C-w=       | Switch connection                         |
 | =C-c C-a=       | AI actions                                |
+
+=C-c C-k= is one key for "stop what I started": while a statement is running it
+is the statement that stops, and with nothing running there is nothing to stop,
+so the buffer is what you meant and it closes — restoring the workbench layout
+just as =q= does elsewhere. It is buried, never killed, so a half-written
+statement survives.
 
 History is per connection, capped, and persisted, so the query you ran last week
 is still there. =cmacs-dbexplorer-send-region= sends a region from *any*

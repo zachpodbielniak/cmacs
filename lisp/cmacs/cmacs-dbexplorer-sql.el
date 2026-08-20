@@ -190,7 +190,19 @@ user gets, and the wrong guess costs a message rather than a row."
   (cmacs-dbexplorer-buffer-connection-or-error))
 
 (defvar-local cmacs-dbexplorer-sql--stream nil
-  "The stream id of the statement this buffer is running, or nil.")
+  "The stream id of the statement this buffer is running, or nil.
+
+Only ever set while a statement is actually in flight.  Both terminal
+callbacks clear it, because a variable that means `something is running'
+and is only ever cleared by cancelling would be a lie from the first
+query onwards -- and `C-c C-k' reads it to decide whether there is
+anything to cancel.")
+
+(defun cmacs-dbexplorer-sql--forget-stream (buffer)
+  "Record in BUFFER that its statement is no longer running."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (setq cmacs-dbexplorer-sql--stream nil))))
 
 (defun cmacs-dbexplorer-sql-send (sql)
   "Run SQL on this buffer's connection.
@@ -205,7 +217,7 @@ worse than one that has to read the catalogue again."
          (name (cmacs-dbexplorer-connection-name connection)))
     (cmacs-dbexplorer-sql--history-add name sql)
     (if (cmacs-dbexplorer-sql--returns-rows-p sql)
-        (progn
+        (let ((buffer (current-buffer)))
           (require 'cmacs-dbexplorer-grid)
           (setq cmacs-dbexplorer-sql--stream
                 (cmacs-dbexplorer-query
@@ -213,10 +225,13 @@ worse than one that has to read the catalogue again."
                  :options (list :max-rows (1+ cmacs-dbexplorer-page-size))
                  :on-result
                  (lambda (result)
+                   (cmacs-dbexplorer-sql--forget-stream buffer)
                    (cmacs-dbexplorer-grid-show
                     result (list :kind 'sql :sql sql) name))
                  :on-error
-                 (lambda (message) (message "cmacs-dbexplorer: %s" message))))
+                 (lambda (message)
+                   (cmacs-dbexplorer-sql--forget-stream buffer)
+                   (message "cmacs-dbexplorer: %s" message))))
           (message "cmacs-dbexplorer: running on %s..." name))
       (cmacs-dbexplorer-execute
        connection sql
@@ -246,10 +261,19 @@ worse than one that has to read the catalogue again."
   (cmacs-dbexplorer-sql-send (concat "EXPLAIN " (cmacs-dbexplorer-sql-statement))))
 
 (defun cmacs-dbexplorer-sql-cancel ()
-  "Cancel the statement this buffer is running."
+  "Stop the statement this buffer is running, or put the buffer away.
+
+One key for `stop what I started'.  While a statement is in flight it is
+the statement that stops; with nothing running there is nothing to stop
+and the buffer is what you meant, so it closes -- inside the workbench
+that restores the layout the workbench replaced, exactly as `q' does in
+the other views.
+
+The buffer is buried and never killed, so a statement you were half-way
+through writing is still there when you come back to it."
   (interactive)
   (if (null cmacs-dbexplorer-sql--stream)
-      (message "cmacs-dbexplorer: nothing running")
+      (cmacs-dbexplorer-quit)
     (cmacs-dbexplorer-cancel cmacs-dbexplorer-sql--stream)
     (setq cmacs-dbexplorer-sql--stream nil)
     (message "cmacs-dbexplorer: cancelled")))
