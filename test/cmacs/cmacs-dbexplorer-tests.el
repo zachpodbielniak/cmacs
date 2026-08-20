@@ -1028,5 +1028,119 @@ silently discard the rest of their transaction."
          "the refused export to report")
         (should (eq :error (car (cmacs-dbexplorer-tests--terminated-p id))))))))
 
+;;;; Export through the C streamer -------------------------------------
+
+;; `cmacs-dbexplorer-run-export' is the only export path that does not
+;; pull every row into Emacs first, so these check the thing that makes
+;; it worth having: the file on disk, and the fact that the caller is
+;; told what happened.
+
+(defun cmacs-dbexplorer-tests--connection-for (handle)
+  "Wrap a raw C HANDLE in the struct the Elisp layer passes around.
+
+The C tests deal in handles because that is what the DEFUNs take, while
+`cmacs-dbexplorer-run-export' takes a connection so it can name it in
+the events it emits.  This bridges the two without opening a second
+connection to the same database."
+  (cmacs-dbexplorer-connection-create
+   :name (format "ert-%s" handle) :handle handle :state 'idle
+   :dialect "SQLite"))
+
+(defun cmacs-dbexplorer-tests--export-temp (suffix)
+  "Return a temporary file name ending in SUFFIX, deleted if it exists."
+  (let ((path (make-temp-file "cmacs-dbexplorer-export-" nil suffix)))
+    (delete-file path)
+    path))
+
+(defun cmacs-dbexplorer-tests--run-export (handle sql format path &rest options)
+  "Export SQL to PATH through the C streamer and return its summary."
+  (let ((summary nil) (failure nil))
+    (cmacs-dbexplorer-run-export
+     (cmacs-dbexplorer-tests--connection-for handle) sql format path
+     :options options
+     :on-done (lambda (s) (setq summary s))
+     :on-error (lambda (m) (setq failure m)))
+    (cmacs-dbexplorer-tests--wait (lambda () (or summary failure))
+                                  (format "export to %s" path))
+    (when failure (ert-fail (format "export failed: %s" failure)))
+    summary))
+
+(ert-deftest cmacs-dbexplorer-c-export-writes-a-file ()
+  "An export streams rows to disk and reports how many it wrote."
+  (skip-unless (cmacs-dbexplorer-tests--c-p))
+  (cmacs-dbexplorer-tests--with-db handle
+    (cmacs-dbexplorer-tests--exec
+     handle "INSERT INTO t (id, n) VALUES (1,'one'),(2,'two'),(3,'three')")
+    (let ((path (cmacs-dbexplorer-tests--export-temp ".csv")))
+      (unwind-protect
+          (let ((summary (cmacs-dbexplorer-tests--run-export
+                          handle "SELECT id, n FROM t ORDER BY id" "csv" path
+                          :header t)))
+            (should (file-exists-p path))
+            (should (eq 3 (plist-get summary :row-count)))
+            (should (equal path (plist-get summary :path)))
+            (let ((text (with-temp-buffer
+                          (insert-file-contents path) (buffer-string))))
+              ;; Header first, then the rows in order.
+              (should (string-match-p "\\`id,n" text))
+              (should (string-match-p "1,one" text))
+              (should (string-match-p "3,three" text))))
+        (ignore-errors (delete-file path))))))
+
+(ert-deftest cmacs-dbexplorer-c-export-json ()
+  "The json format is accepted and produces parseable output."
+  (skip-unless (cmacs-dbexplorer-tests--c-p))
+  (cmacs-dbexplorer-tests--with-db handle
+    (cmacs-dbexplorer-tests--exec handle "INSERT INTO t (id, n) VALUES (1,'one')")
+    (let ((path (cmacs-dbexplorer-tests--export-temp ".json")))
+      (unwind-protect
+          (progn
+            (cmacs-dbexplorer-tests--run-export
+             handle "SELECT id, n FROM t" "json" path)
+            (should (file-exists-p path))
+            (let ((parsed (with-temp-buffer
+                            (insert-file-contents path)
+                            (json-parse-buffer :array-type 'list))))
+              (should (listp parsed))
+              (should (= 1 (length parsed)))))
+        (ignore-errors (delete-file path))))))
+
+(ert-deftest cmacs-dbexplorer-c-export-reports-failure ()
+  "A statement that cannot run reports an error rather than a summary.
+
+Without the stream being registered this is exactly the case that used
+to pass in silence: the terminating event arrived for an id nobody was
+listening to, and the caller saw a successful-looking nothing."
+  (skip-unless (cmacs-dbexplorer-tests--c-p))
+  (cmacs-dbexplorer-tests--with-db handle
+    (let ((path (cmacs-dbexplorer-tests--export-temp ".csv"))
+          (summary nil) (failure nil))
+      (unwind-protect
+          (progn
+            (cmacs-dbexplorer-run-export
+             (cmacs-dbexplorer-tests--connection-for handle)
+             "SELECT * FROM no_such_table" "csv" path
+             :on-done (lambda (s) (setq summary s))
+             :on-error (lambda (m) (setq failure m)))
+            (cmacs-dbexplorer-tests--wait (lambda () (or summary failure))
+                                          "the failing export to report")
+            (should failure)
+            (should-not summary))
+        (ignore-errors (delete-file path))))))
+
+(ert-deftest cmacs-dbexplorer-c-export-honours-max-rows ()
+  "An export stops at :max-rows and says the output was truncated."
+  (skip-unless (cmacs-dbexplorer-tests--c-p))
+  (cmacs-dbexplorer-tests--with-db handle
+    (cmacs-dbexplorer-tests--exec
+     handle "INSERT INTO t (id, n) VALUES (1,'a'),(2,'b'),(3,'c'),(4,'d')")
+    (let ((path (cmacs-dbexplorer-tests--export-temp ".csv")))
+      (unwind-protect
+          (let ((summary (cmacs-dbexplorer-tests--run-export
+                          handle "SELECT id FROM t ORDER BY id" "csv" path
+                          :max-rows 2)))
+            (should (eq 2 (plist-get summary :row-count))))
+        (ignore-errors (delete-file path))))))
+
 (provide 'cmacs-dbexplorer-tests)
 ;;; cmacs-dbexplorer-tests.el ends here

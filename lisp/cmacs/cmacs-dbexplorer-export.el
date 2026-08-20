@@ -31,6 +31,8 @@
 (require 'cmacs-dbexplorer)
 (require 'cmacs-dbexplorer-grid)
 
+(declare-function cmacs-dbexplorer-run-export "cmacs-dbexplorer"
+                  (connection sql format path &rest keys))
 (declare-function cmacs-dbexplorer--export-async
                   "src/cmacs-dbexplorer-defuns.c" (handle sql format path options))
 
@@ -209,9 +211,15 @@ the instant operation the other one is."
          (sql (cmacs-dbexplorer-grid-sql))
          (connection (cmacs-dbexplorer-buffer-connection-or-error)))
     (unless sql (user-error "cmacs-dbexplorer: no statement to export"))
-    (cmacs-dbexplorer--export-async
-     (cmacs-dbexplorer--handle connection) sql format (expand-file-name path)
-     (list :header (and (member "--header" arguments) t)))
+    (cmacs-dbexplorer-run-export
+     connection sql format path
+     :options (list :header (and (member "--header" arguments) t))
+     :on-done (lambda (summary)
+                (message "cmacs-dbexplorer: wrote %s rows to %s"
+                         (plist-get summary :row-count)
+                         (abbreviate-file-name (plist-get summary :path))))
+     :on-error (lambda (message)
+                 (message "cmacs-dbexplorer: export failed: %s" message)))
     (message "cmacs-dbexplorer: exporting to %s..." (abbreviate-file-name path))))
 
 (provide 'cmacs-dbexplorer-export)

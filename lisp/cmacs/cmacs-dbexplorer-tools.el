@@ -48,8 +48,8 @@
                   (connection sql &rest keys))
 (declare-function cmacs-dbexplorer-execute "cmacs-dbexplorer"
                   (connection sql &rest keys))
-(declare-function cmacs-dbexplorer-export-result "cmacs-dbexplorer-export"
-                  (result path format &optional header))
+(declare-function cmacs-dbexplorer-run-export "cmacs-dbexplorer"
+                  (connection sql format path &rest keys))
 (declare-function cmacs-dbexplorer--handle "cmacs-dbexplorer" (connection))
 (declare-function cmacs-dbexplorer--tables-async "src/cmacs-dbexplorer-defuns.c"
                   (handle schema callback))
@@ -313,23 +313,34 @@ Refused by the C layer on a read-only connection."
                      (cmacs-dbexplorer-tools--reply-vector info :columns))))))))
 
 (defun cmacs-dbexplorer-tool-export (name sql format path)
-  "Export the results of SQL from connection NAME to PATH in FORMAT."
+  "Export the results of SQL from connection NAME to PATH in FORMAT.
+
+Waits for the export to finish rather than reporting that it started.
+These three transports are request and response: the caller gets one
+reply and has no channel on which to hear how it went later, so \"an
+export has begun\" is a reply nobody can act on -- and a bad path or a
+failing statement would be indistinguishable from success.
+
+The rows are streamed from the database into the file by the C layer and
+never enter Emacs, so exporting a table larger than the editor could hold
+is a question of disk rather than memory."
   (let* ((connection (cmacs-dbexplorer-tools--connection name))
          (path (expand-file-name path))
-         (result (cmacs-dbexplorer-tools--await
-                  (lambda (done)
-                    (cmacs-dbexplorer-query
-                     connection sql
-                     :on-result (lambda (r) (funcall done r nil))
-                     :on-error (lambda (m) (funcall done nil m)))))))
-    (require 'cmacs-dbexplorer-export)
-    ;; With a header: an exported file is going somewhere this process
-    ;; cannot explain it, so the column names have to travel with it.
-    (cmacs-dbexplorer-export-result result path (intern format) t)
+         (summary
+          (cmacs-dbexplorer-tools--await
+           (lambda (done)
+             (cmacs-dbexplorer-run-export
+              connection sql format path
+              ;; With a header: the file is going somewhere this process
+              ;; cannot explain it, so the column names travel with it.
+              :options (list :header t)
+              :on-done (lambda (s) (funcall done s nil))
+              :on-error (lambda (m) (funcall done nil m)))))))
     (cmacs-dbexplorer-tools--json
-     (list (cons 'path path)
+     (list (cons 'path (plist-get summary :path))
            (cons 'format format)
-           (cons 'rows (cmacs-dbexplorer-result-row-count result))))))
+           (cons 'rows (plist-get summary :row-count))
+           (cons 'truncated (if (plist-get summary :truncated) t json-false))))))
 
 
 ;;;; ai-brigade ---------------------------------------------------------

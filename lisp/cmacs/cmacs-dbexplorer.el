@@ -485,7 +485,26 @@ for."
      (cmacs-dbexplorer--stream-failed stream (nth 1 payload)))
     (:end
      (remhash id cmacs-dbexplorer--streams)
-     (cmacs-dbexplorer--stream-finished stream (cdr payload)))))
+     ;; An export accumulated no rows -- its end carries a count and the
+     ;; file it wrote -- so it cannot be turned into a result the way a
+     ;; query is.
+     (if (eq (plist-get stream :kind) 'export)
+         (cmacs-dbexplorer--stream-exported stream (cdr payload))
+       (cmacs-dbexplorer--stream-finished stream (cdr payload))))))
+
+(defun cmacs-dbexplorer--stream-exported (stream end)
+  "Report that STREAM's export finished, END describing what it wrote."
+  (let ((fn (plist-get stream :on-done))
+        (summary (list :path (plist-get stream :path)
+                       :format (plist-get stream :format)
+                       :row-count (or (plist-get end :row-count) 0)
+                       :truncated (plist-get end :truncated)
+                       :elapsed-ms (plist-get end :elapsed-ms))))
+    (if fn
+        (funcall fn summary)
+      (message "cmacs-dbexplorer: wrote %s rows to %s"
+               (plist-get summary :row-count)
+               (abbreviate-file-name (or (plist-get stream :path) "?"))))))
 
 (defun cmacs-dbexplorer--stream-rows (stream)
   "Return STREAM's accumulated rows as one vector."
@@ -556,6 +575,42 @@ instead of passing callbacks."
                       :sql sql :table table :schema schema
                       :primary-key primary-key :offset offset
                       :on-result on-result :on-error on-error
+                      :on-progress on-progress
+                      :columns nil :batches nil)
+             cmacs-dbexplorer--streams)
+    id))
+
+(cl-defun cmacs-dbexplorer-run-export (connection sql format path
+                                                  &key options on-done on-error
+                                                  on-progress)
+  "Export SQL from CONNECTION to PATH in FORMAT, and return the stream id.
+
+FORMAT is \"csv\" or \"json\".  OPTIONS is the C option plist, which
+understands `:max-rows\' and `:header\'.
+
+The rows never enter Emacs.  The C layer streams them straight from the
+database into the file, which is the whole reason to prefer this over
+exporting a result already on screen: the file may be larger than the
+editor could hold.
+
+ON-DONE is called with a plist carrying `:path\', `:format\',
+`:row-count\', `:truncated\' and `:elapsed-ms\'.  ON-ERROR is called
+with a message.  ON-PROGRESS is called with the number of rows written so
+far, which for a long export is the only sign it is still moving.
+
+Registering the stream is what makes those callbacks fire at all: without
+it the terminating event arrives for an id nobody is listening to and the
+export finishes, or fails, in silence."
+  (cmacs-dbexplorer--need 'cmacs-dbexplorer--export-async)
+  (cmacs-dbexplorer--ensure-callbacks)
+  (let* ((connection (cmacs-dbexplorer-resolve connection))
+         (path (expand-file-name path))
+         (handle (cmacs-dbexplorer--handle connection))
+         (id (cmacs-dbexplorer--export-async handle sql format path options)))
+    (puthash id (list :kind 'export
+                      :connection (cmacs-dbexplorer-connection-name connection)
+                      :sql sql :path path :format format
+                      :on-done on-done :on-error on-error
                       :on-progress on-progress
                       :columns nil :batches nil)
              cmacs-dbexplorer--streams)
