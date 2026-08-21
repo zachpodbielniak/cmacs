@@ -411,7 +411,7 @@ handles (use `cmacs-ai-free-session')."
 ;;;; Loaders ---------------------------------------------------------
 
 (defvar cmacs-ai--submodules
-  '(cmacs-ai-chat cmacs-ai-region cmacs-ai-commit
+  '(cmacs-ai-chat cmacs-ai-region cmacs-ai-send cmacs-ai-commit
     cmacs-ai-completion cmacs-ai-org-block cmacs-ai-agent
     cmacs-ai-voice
     ;; The universal menu: targets, actions, the three text operations

@@ -24,6 +24,7 @@ when both are enabled (libreclaw's sub-make is redirected via
 * CMacs AI Providers::
 * CMacs AI Chat Buffers::
 * CMacs AI Region Commands::
+* CMacs AI Send::
 * CMacs AI Generic Calls::
 * CMacs AI Inline Completion::
 * CMacs AI Voice Loop::
@@ -228,6 +229,130 @@ Synthesize a unit test in a scratch buffer.
 
 A right-click context menu entry is installed via
 @code{cmacs-ai-context-menu-install}.
+
+@node CMacs AI Send
+@section Sending From the Buffer
+
+@kbd{M-x cmacs-ai-send} is the command for asking a question where you
+are already writing.  It takes the instruction at point, sends it, and
+writes the answer back into the same buffer underneath it --- the
+in-place equivalent of gptel's @code{gptel-send}.
+
+@subsection What gets sent
+
+The @emph{instruction} is deliberately small and local: the active
+region, else --- per @code{cmacs-ai-send-instruction-unit} --- the line
+at point, the paragraph, or everything from the start of the buffer to
+point.  A blank line falls back to the paragraph above it, so pressing
+the key on the empty line under a question does what you meant.
+
+The @emph{document} is sent separately as labelled context, with
+@code{cmacs-ai-send-insertion-marker} substituted at the exact position
+the answer will be inserted, so the model is told where it is writing
+rather than left to infer it.  Buffers over
+@code{cmacs-ai-send-context-max-chars} are windowed @emph{around} that
+position (plus @code{cmacs-ai-send-context-head-chars} from the head of
+the file, which is where the includes and the title live).  Set
+@code{cmacs-ai-send-context} to @code{none} to send only the
+instruction.
+
+@subsection Answering in the file's own notation
+
+The buffer's format is resolved to one of three profiles, which supplies
+both the delimiters written around the answer and the format contract
+given to the model:
+
+@table @asis
+@item markup
+Org and Markdown.  The answer uses that markup --- @code{#+BEGIN_SRC}
+and @code{*bold*} in Org, fences and @code{**bold**} in Markdown --- and
+emits no headings at all.  That last part matters more than it sounds:
+the reply lands in the @emph{middle} of a document, so a single
+@samp{* Title} re-parents every heading below the insertion point.  The
+model is told to label a section with a bolded line instead.  Set
+@code{cmacs-ai-send-allow-headings} to @code{t} to permit headings, in
+which case they are held to one level below the heading the answer lands
+under.
+@item source
+Any mode with a comment syntax.  The answer must be @emph{valid code}:
+bare code, with all prose written as comments in that language's syntax.
+Markdown fences are forbidden by name, because in a @file{.c} file they
+are a syntax error.
+@item prose
+Buffers with no comment syntax (@code{text-mode}, mail).  Plain text.
+@end table
+
+The source profile is derived from @code{comment-start} and
+@code{comment-end}, so a language cmacs has never heard of is handled
+correctly with no entry anywhere: C gets @code{/* @dots{} */}, Python
+and shell get @code{#}, Emacs Lisp gets @code{;;}.  Point inside an Org
+@code{#+begin_src c} block resolves to @emph{C}, not Org.
+
+The format is stated @emph{twice}: as a contract in the system prompt,
+and as a one-line reminder appended after the instruction in every user
+message.  The duplication is deliberate --- a system prompt alone does
+not reliably hold a model to Org, which is the same finding that made
+@code{cmacs-ai-pre-prompt} a per-turn pre-prompt rather than part of
+@code{cmacs-ai-system-prompt}.  Both are customisable per profile
+(@code{cmacs-ai-send-org-contract}, @code{cmacs-ai-send-org-reminder},
+and the same pair for the other formats).
+
+When editing them, write the contract @emph{in} the notation it demands.
+The Org contract shipped briefly with its own emphasis in Markdown, and
+models answered Org buffers in Markdown accordingly.
+
+Add or override a format with
+@code{cmacs-ai-send-register-format} (@code{:name}, @code{:modes},
+@code{:predicate}, @code{:order}, @code{:build}); @code{:build} returns a
+@code{cmacs-ai-send-format} struct or nil to decline.
+
+@subsection Delimiters, history and regeneration
+
+Responses are wrapped in visible, format-appropriate delimiters: an Org
+special block, an HTML comment in Markdown, an ordinary comment in
+source.
+
+@example
+What is a monoid?
+
+#+begin_ai claude/claude-opus-5
+A set with an associative operation and an identity element.
+#+end_ai
+@end example
+
+Because they survive a save, they are what the rest of the feature is
+built on.  @kbd{M-x cmacs-ai-send-delete-response} and @kbd{M-x
+cmacs-ai-send-regenerate} find the block around or before point; and in
+Org and Markdown, @code{cmacs-ai-send-history} replays the document as a
+conversation --- prose between blocks is read as your turns, block
+contents as the model's --- so a @file{.org} file behaves like a real
+chat with no state stored anywhere but the file you are editing.  When
+history applies the document is @emph{not} also sent as context; it is
+already in the replayed turns.
+
+History stays off in source buffers regardless: the code between two
+answers is not a conversation.
+
+@subsection Keys and options
+
+Nothing is bound by default.  A binding worth having:
+
+@lisp
+(when IS-CMACS-AI
+  (global-set-key (kbd "C-c C-<return>") #'cmacs-ai-send)
+  (global-set-key (kbd "C-c C-M-<return>") #'cmacs-ai-send-regenerate))
+@end lisp
+
+With a prefix argument @code{cmacs-ai-send} asks for the provider and
+model for that one send; otherwise it follows
+@code{cmacs-ai-send-provider} and @code{cmacs-ai-send-model}, which
+default to nil, meaning @code{cmacs-ai-default-provider} and
+@code{cmacs-ai-default-model}.
+
+The answer streams in (@code{cmacs-ai-send-stream}) but is recorded as a
+single undo step either way, so one @kbd{C-/} removes a whole response.
+@kbd{M-x cmacs-ai-send-cancel} aborts everything still streaming into the
+current buffer; killing the buffer does the same.
 
 @node CMacs AI Generic Calls
 @section Generic Calls

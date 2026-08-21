@@ -119,6 +119,173 @@ libreclaw's cmacs channel).
 | =cmacs-ai-test-region=         | Synthesize a unit test in a scratch buffer   |
 | =cmacs-ai-suggest-commit-message= | Draft a commit message from the staged diff |
 
+For the answer to land in the buffer you are editing rather than in a
+side window, see [[*Sending from the buffer][Sending from the buffer]].
+
+* Sending from the buffer
+
+=M-x cmacs-ai-send= is the command for asking a question where you are
+already writing.  It takes the instruction at point, sends it, and
+writes the answer back into the same buffer underneath it -- the
+in-place equivalent of gptel's =gptel-send=.
+
+** What gets sent
+
+The /instruction/ is deliberately small and local: the active region,
+else -- per =cmacs-ai-send-instruction-unit= -- the line at point, the
+paragraph, or everything from the start of the buffer to point.  A
+blank line falls back to the paragraph above it, so pressing the key on
+the empty line under a question does what you meant.
+
+The /document/ is sent separately as labelled context, with
+=cmacs-ai-send-insertion-marker= substituted at the exact position the
+answer will be inserted, so the model is told where it is writing
+rather than left to infer it.  Buffers over
+=cmacs-ai-send-context-max-chars= are windowed *around* that position
+(plus =cmacs-ai-send-context-head-chars= from the head of the file,
+where the includes and the =#+title= live).  Note that this is
+deliberately not =cmacs-ai-target-truncate=, which elides middle-out:
+that is right for "summarise this file" and exactly backwards here,
+since the part it discards is the part surrounding the question.
+
+Set =cmacs-ai-send-context= to =none= to send only the instruction.
+
+** Answering in the file's own notation
+
+The buffer's format resolves to one of three profiles, which supplies
+both the delimiters written around the answer and the format contract
+handed to the model:
+
+| Profile  | Buffers                        | The answer must be                          |
+|----------+--------------------------------+---------------------------------------------|
+| =markup= | Org, Markdown                  | that markup, and by default free of headings |
+| =source= | anything with =comment-start=  | valid code; all prose written as comments in that language |
+| =prose=  | =text-mode=, mail, no comments | plain text                                  |
+
+The source profile is /derived/ from =comment-start= and =comment-end=,
+so a language cmacs has never heard of is handled correctly with no
+entry anywhere: C gets =/* ... */=, Python and shell get =#=, Emacs
+Lisp gets =;;=.  That is why there is no table of languages in
+=cmacs-ai-send.el=.
+
+*No headings, by default.*  The answer is inserted into the middle of a
+document you are already writing, so a heading does not decorate it --
+it restructures it.  One =* Title= at the top of a reply silently
+re-parents every heading below the insertion point into a new section.
+The model is told to label a section with a =*bolded line*= instead,
+which reads the same and changes no outline.  Set
+=cmacs-ai-send-allow-headings= to =t= to permit them, in which case they
+are constrained to one level below the heading the answer lands under so
+they at least nest.
+
+The format is stated *twice*: as a contract in the system prompt, and as
+a one-line reminder appended after the instruction in every user
+message.  The duplication is deliberate.  A system prompt alone does not
+reliably hold a model to Org -- every provider has far more Markdown
+training behind it -- which is the same finding that made
+=cmacs-ai-pre-prompt= a per-turn pre-prompt rather than part of
+=cmacs-ai-system-prompt=.  The reminder goes last because that is the
+position a model weights most.
+
+Both are =defcustom=s per profile (=cmacs-ai-send-org-contract=,
+=cmacs-ai-send-org-reminder=, and the same pair for markdown, source and
+prose), so you can tighten them for a model that keeps drifting.
+
+One rule when editing them: *write the contract in the notation it is
+demanding*.  The Org contract shipped briefly as "respond in =**pure Org
+markup**=", with every example in backticks -- and grok duly answered an
+Org buffer in Markdown.  A contract that demonstrates the wrong syntax
+primes the model toward it, however emphatically the words say
+otherwise.  There is a regression test for this.
+
+The registry exists for the cases where the generic answer is wrong.
+Point inside an Org =#+begin_src c= block resolves to *C*, not Org --
+an Org special block written there would end the source block.
+
+#+begin_src emacs-lisp
+;; Teach it a format of your own.  :build returns a
+;; `cmacs-ai-send-format' struct, or nil to decline and fall through.
+(cmacs-ai-send-register-format
+ :name 'my-wiki
+ :modes '(my-wiki-mode)
+ :order 10
+ :build (lambda ()
+          (cmacs-ai-send-format-create
+           :name "MyWiki" :kind 'markup :lang "wiki"
+           :begin "{{ai %s}}" :end "{{/ai}}"
+           :begin-re "^{{ai" :end-re "^{{/ai}}[ \t]*$"
+           :history t
+           :contract "Respond in MediaWiki markup.")))
+#+end_src
+
+** Delimiters, history and regeneration
+
+Responses are wrapped in visible, format-appropriate delimiters -- an
+Org special block, an HTML comment in Markdown, an ordinary comment in
+source:
+
+#+begin_example
+What is a monoid?
+
+#+begin_ai claude/claude-opus-5
+A set with an associative operation and an identity element.
+#+end_ai
+#+end_example
+
+Because they survive a save, they are what the rest of the feature is
+built on.  =M-x cmacs-ai-send-delete-response= and =M-x
+cmacs-ai-send-regenerate= find the block around or before point ("or
+before" because after reading an answer point is usually below it).
+
+In Org and Markdown, =cmacs-ai-send-history= replays the document as a
+conversation: prose between blocks is read as your turns, block
+contents as the model's.  A =.org= file therefore behaves like a real
+chat, with no conversation state stored anywhere but the file you are
+editing.  When history applies the document is *not* also sent as
+context -- it is already in the replayed turns, and sending both pays
+for everything twice.
+
+History stays off in source buffers regardless.  The code between two
+answers is not a conversation.
+
+** Keys and options
+
+Nothing is bound by default.  A binding worth having:
+
+#+begin_src emacs-lisp
+(when IS-CMACS-AI
+  (global-set-key (kbd "C-c C-<return>")   #'cmacs-ai-send)
+  (global-set-key (kbd "C-c C-M-<return>") #'cmacs-ai-send-regenerate))
+#+end_src
+
+| Option                             | Default | What                                            |
+|------------------------------------+---------+-------------------------------------------------|
+| =cmacs-ai-send-provider=           | nil     | nil follows =cmacs-ai-default-provider=         |
+| =cmacs-ai-send-model=              | nil     | nil follows =cmacs-ai-default-model=            |
+| =cmacs-ai-send-instruction-unit=   | =line=  | =line= / =paragraph= / =buffer-to-point=        |
+| =cmacs-ai-send-context=            | =document= | =document= or =none=                         |
+| =cmacs-ai-send-context-max-chars=  | 12000   | nil for no limit                                |
+| =cmacs-ai-send-context-head-chars= | 800     | head of file always kept when windowing         |
+| =cmacs-ai-send-allow-headings=     | nil     | let a reply introduce headings (markup only)    |
+| =cmacs-ai-send-history=            | t       | replay prior blocks (markup buffers only)       |
+| =cmacs-ai-send-history-max-turns=  | 20      | turns, not exchanges                            |
+| =cmacs-ai-send-stream=             | t       | show the answer as it arrives                   |
+| =cmacs-ai-send-tag=                | ="ai"=  | word used in the delimiters                     |
+| =cmacs-ai-send-annotate-model=     | t       | record provider/model in the opening delimiter  |
+
+With a prefix argument =cmacs-ai-send= asks for the provider and model
+for that one send.
+
+The answer streams in, but is recorded as a *single undo step* either
+way, so one =C-/= removes a whole response.  =M-x cmacs-ai-send-cancel=
+aborts everything still streaming into the current buffer; killing the
+buffer does the same.
+
+Two failure modes are handled rather than left to chance: an empty
+answer leaves no empty block behind, and a stream that fails partway
+keeps what already arrived and closes the block around it, because
+deleting text you have watched appear is worse than a truncated answer.
+
 * Generic calls
 
 For scripting and user configs, =cmacs-ai-call= makes a one-shot AI
