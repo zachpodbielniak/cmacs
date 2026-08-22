@@ -51,6 +51,7 @@ extern void        cmacs_ai_session_trim               (CmacsAiSession *s,
 extern AiToolExecutor *cmacs_ai_session_ensure_executor (CmacsAiSession *s);
 extern GCancellable *cmacs_ai_session_install_cancellable (CmacsAiSession *s);
 extern void        cmacs_ai_session_clear_cancellable  (CmacsAiSession *s);
+extern void        cmacs_ai_session_cancel_current     (CmacsAiSession *s);
 
 /* Auto-load AiGlib-1.0 typelib so gi-require / cmacsgi find it
  * without manual GI_TYPELIB_PATH setup (cmacs-ai-typelib.c). */

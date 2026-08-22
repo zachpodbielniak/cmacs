@@ -168,6 +168,20 @@ cmacs_ai_session_clear_cancellable (CmacsAiSession *s)
   g_clear_object (&s->current_cancel);
 }
 
+void
+cmacs_ai_session_cancel_current (CmacsAiSession *s)
+{
+  /* Cancel the cancellable the in-flight task was actually given.
+   * This must run on the object installed at request start -- the task
+   * holds its own reference to that one, so replacing it first (as
+   * install_cancellable does) and cancelling the replacement reaches
+   * nothing.  */
+  if (!s) return;
+  if (s->current_cancel)
+    g_cancellable_cancel (s->current_cancel);
+  g_clear_object (&s->current_cancel);
+}
+
 /* ── DEFUNs ─────────────────────────────────────────────────────── */
 
 DEFUN ("cmacs-ai-session-new", Fcmacs_ai_session_new,

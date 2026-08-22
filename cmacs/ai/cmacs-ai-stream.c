@@ -406,12 +406,12 @@ DEFUN ("cmacs-ai-chat-cancel", Fcmacs_ai_chat_cancel,
   CHECK_FIXNAT (session);
   CmacsAiSession *sess = cmacs_ai_session_lookup (XFIXNUM (session));
   if (sess == NULL) return Qnil;
-  /* install_cancellable replaces -> previous one is dropped (and any
-   * active GCancellable still held by the in-flight task survives the
-   * replace; we cancel it explicitly via the fresh one returned).  */
-  GCancellable *c = cmacs_ai_session_install_cancellable (sess);
-  if (c) g_cancellable_cancel (c);
-  cmacs_ai_session_clear_cancellable (sess);
+  /* The in-flight task holds the cancellable installed when the request
+   * started, so that exact object is the one to cancel.  Installing a
+   * fresh one first and cancelling that -- which this used to do --
+   * cancelled an object the task had never seen, and the request ran to
+   * completion every time.  */
+  cmacs_ai_session_cancel_current (sess);
   return Qt;
 }
 
