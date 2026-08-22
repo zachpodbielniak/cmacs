@@ -180,6 +180,7 @@ typedef struct
      is given, so calling it per batch would produce a CSV header, or a
      closing JSON bracket, every 256 rows. */
   gboolean         exporting;
+  gboolean         header;
   gchar           *path;
   gchar           *format;
   GPtrArray       *rows;
@@ -307,6 +308,14 @@ dbx_stream_write_export (CmacsDbxStream *s, char **error)
   exporter = dbx_exporter_for (s->format, error);
   if (exporter == NULL)
     return FALSE;
+
+  /* The header choice only means anything in CSV -- JSON rows carry
+     their keys.  Set explicitly either way, so the Lisp-side `:header'
+     option is honoured rather than silently shadowed by the exporter's
+     default. */
+  if (ORM_IS_CSV_EXPORTER (exporter))
+    g_object_set (exporter, "include-header",
+                  s->header ? TRUE : FALSE, NULL);
 
   file = g_file_new_for_path (s->path);
   out = g_file_replace (file, NULL, FALSE, G_FILE_CREATE_NONE, NULL, &err);
@@ -679,7 +688,7 @@ cmacs_dbx_query_async (CmacsDbxConn *conn, const char *sql,
 long long
 cmacs_dbx_export_async (CmacsDbxConn *conn, const char *sql,
                         const char *format, const char *path,
-                        long long max_rows)
+                        long long max_rows, int header)
 {
   CmacsDbxStream *s;
   g_autofree gchar *format_error = NULL;
@@ -704,6 +713,7 @@ cmacs_dbx_export_async (CmacsDbxConn *conn, const char *sql,
 
   s = dbx_stream_start (conn, sql, NULL, 0, max_rows);
   s->exporting = TRUE;
+  s->header = header != 0;
   s->path = g_strdup (path);
   s->format = g_strdup (format);
   s->rows = g_ptr_array_new_with_free_func (g_object_unref);

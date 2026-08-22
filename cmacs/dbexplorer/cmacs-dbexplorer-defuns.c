@@ -92,6 +92,23 @@ dbx_lookup (Lisp_Object handle)
 /* Lisp to C                                                           */
 /* ------------------------------------------------------------------ */
 
+/* Signal unless STRING is a Lisp string that survives the char*
+   boundary intact.  g_strdup stops at the first NUL byte, so a string
+   with an embedded NUL -- in SQL text, an identifier, a value -- would
+   otherwise cross into C silently shortened; a value that cannot make
+   the trip is refused instead of clipped.  */
+static void
+dbx_check_cstring (Lisp_Object string)
+{
+  Lisp_Object encoded;
+
+  CHECK_STRING (string);
+  encoded = ENCODE_UTF_8 (string);
+  if ((size_t) SBYTES (encoded) != strlen (SSDATA (encoded)))
+    xsignal2 (Qcmacs_dbexplorer_error,
+              build_string ("string contains an embedded NUL byte"), string);
+}
+
 /* A C string owned by GLib, out of a Lisp string encoded as UTF-8.  The
    copy matters: SSDATA points into a Lisp string that the next
    allocation may move out from under a value the model layer keeps. */
@@ -100,7 +117,7 @@ dbx_dup_string (Lisp_Object string)
 {
   Lisp_Object encoded;
 
-  CHECK_STRING (string);
+  dbx_check_cstring (string);
   encoded = ENCODE_UTF_8 (string);
   return g_strdup (SSDATA (encoded));
 }
@@ -157,12 +174,65 @@ dbx_param_from_lisp (Lisp_Object value, CmacsDbxParam *param)
             build_string ("cannot bind that as a SQL parameter"), value);
 }
 
+/* Validation halves of the builders below.
+
+   Each builder allocates its whole array up front and fills it in a
+   loop.  A signal from inside that loop -- a bad value type, a
+   non-string column name, an unknown op -- would longjmp straight past
+   the half-built array and leak it along with every string already
+   copied into it.  So everything that can signal is checked here
+   first, and by the time an array exists the fill loop cannot throw.  */
+
+static void
+dbx_check_param (Lisp_Object value)
+{
+  if (NILP (value) || EQ (value, intern (":null")) || EQ (value, Qt)
+      || FLOATP (value))
+    return;
+  if (STRINGP (value))
+    {
+      dbx_check_cstring (value);
+      return;
+    }
+  if (FIXNUMP (value) || BIGNUMP (value))
+    {
+      check_integer_range (value, INTMAX_MIN, INTMAX_MAX);
+      return;
+    }
+
+  xsignal2 (Qcmacs_dbexplorer_error,
+            build_string ("cannot bind that as a SQL parameter"), value);
+}
+
+static void
+dbx_check_bindings (Lisp_Object alist)
+{
+  Lisp_Object tail;
+
+  if (NILP (alist))
+    return;
+
+  CHECK_LIST (alist);
+  for (tail = alist; CONSP (tail); tail = XCDR (tail))
+    {
+      Lisp_Object pair = XCAR (tail);
+
+      if (!CONSP (pair))
+        xsignal2 (Qcmacs_dbexplorer_error,
+                  build_string ("an edit binding must be (COLUMN . VALUE)"),
+                  pair);
+      dbx_check_cstring (XCAR (pair));
+      dbx_check_param (XCDR (pair));
+    }
+}
+
 /* A Lisp sequence of values into a freshly allocated parameter array. */
 static CmacsDbxParam *
 dbx_params_from_lisp (Lisp_Object params, int *n_params)
 {
   ptrdiff_t n;
   ptrdiff_t i;
+  Lisp_Object tail;
   CmacsDbxParam *out;
 
   *n_params = 0;
@@ -173,6 +243,9 @@ dbx_params_from_lisp (Lisp_Object params, int *n_params)
   n = list_length (params);
   if (n == 0)
     return NULL;
+
+  for (tail = params; CONSP (tail); tail = XCDR (tail))
+    dbx_check_param (XCAR (tail));
 
   out = g_new0 (CmacsDbxParam, n);
   for (i = 0; i < n; i++, params = XCDR (params))
@@ -197,7 +270,7 @@ dbx_bindings_from_lisp (Lisp_Object alist, int *n_bindings)
   if (NILP (alist))
     return NULL;
 
-  CHECK_LIST (alist);
+  dbx_check_bindings (alist);
   n = list_length (alist);
   if (n == 0)
     return NULL;
@@ -238,6 +311,7 @@ dbx_ops_from_lisp (Lisp_Object ops, int *n_ops)
 {
   ptrdiff_t n;
   ptrdiff_t i;
+  Lisp_Object tail;
   CmacsDbxEditOp *out;
 
   *n_ops = 0;
@@ -245,6 +319,27 @@ dbx_ops_from_lisp (Lisp_Object ops, int *n_ops)
   n = list_length (ops);
   if (n == 0)
     return NULL;
+
+  /* Validate every op before allocating anything (see the validators
+     above): dbx_op_kind and the binding checks signal on malformed
+     input, and they must do so while there is no array to leak.  */
+  for (tail = ops; CONSP (tail); tail = XCDR (tail))
+    {
+      Lisp_Object plist = XCAR (tail);
+      Lisp_Object schema = Fplist_get (plist, intern (":schema"), Qnil);
+      Lisp_Object table = Fplist_get (plist, intern (":table"), Qnil);
+      int kind = dbx_op_kind (Fplist_get (plist, intern (":op"), Qnil));
+
+      if (!NILP (schema))
+        dbx_check_cstring (schema);
+      if (!NILP (table))
+        dbx_check_cstring (table);
+      dbx_check_bindings (Fplist_get (plist,
+                                      intern (kind == CMACS_DBX_OP_INSERT
+                                              ? ":values" : ":set"),
+                                      Qnil));
+      dbx_check_bindings (Fplist_get (plist, intern (":where"), Qnil));
+    }
 
   out = g_new0 (CmacsDbxEditOp, n);
   for (i = 0; i < n; i++, ops = XCDR (ops))
@@ -293,6 +388,23 @@ dbx_option_integer (Lisp_Object options, const char *key, long long fallback)
   if (FIXNUMP (value))
     return (long long) XFIXNUM (value);
   return fallback;
+}
+
+/* A boolean option.  An absent key means FALLBACK; a present key means
+   its value, so `:header nil' is "explicitly off" rather than
+   indistinguishable from unset -- which a plain plist-get would make
+   it.  */
+static int
+dbx_option_bool (Lisp_Object options, const char *key, int fallback)
+{
+  Lisp_Object member;
+
+  if (!CONSP (options))
+    return fallback;
+  member = Fplist_member (options, intern (key), Qnil);
+  if (!CONSP (member) || !CONSP (XCDR (member)))
+    return fallback;
+  return NILP (XCAR (XCDR (member))) ? 0 : 1;
 }
 
 /* ------------------------------------------------------------------ */
@@ -614,7 +726,9 @@ DEFUN ("cmacs-dbexplorer--export-async", Fcmacs_dbexplorer__export_async,
        Scmacs_dbexplorer__export_async, 5, 5, 0,
        doc: /* Write SQL's rows from HANDLE to PATH in FORMAT.
 
-FORMAT is "csv" or "json".  OPTIONS is a plist and takes `:max-rows'.
+FORMAT is "csv" or "json".  OPTIONS is a plist and takes `:max-rows'
+and `:header' (whether the CSV column-name line is written; default t;
+ignored for JSON, whose rows carry their keys).
 Returns the integer stream id at once; the export reports (:progress N)
 with the rows read so far as it goes, and finishes with (:end ...) or
 (:error MESSAGE) on the session's stream callback.
@@ -642,7 +756,8 @@ result nobody asked to see.  */)
   c_path = g_strdup (SSDATA (encoded_path));
 
   id = cmacs_dbx_export_async (conn, c_sql, c_format, c_path,
-                               dbx_option_integer (options, ":max-rows", 0));
+                               dbx_option_integer (options, ":max-rows", 0),
+                               dbx_option_bool (options, ":header", 1));
   cmacs_dbx_events_track_stream (id);
   return make_int (id);
 }

@@ -319,10 +319,11 @@ long long cmacs_dbx_query_async (CmacsDbxConn *conn, const char *sql,
                                  long long max_rows);
 
 /* Start an export of SQL's rows to PATH in FORMAT ("csv" or "json").
+   HEADER non-zero writes the CSV column-name line (JSON ignores it).
    Returns a stream id on the same terms as the query above.  */
 long long cmacs_dbx_export_async (CmacsDbxConn *conn, const char *sql,
                                   const char *format, const char *path,
-                                  long long max_rows);
+                                  long long max_rows, int header);
 
 /* Stop a stream and forget it.  Silent on an id that is already gone:
    a cancel racing the last batch is normal, not an error. */
