@@ -133,6 +133,19 @@ A `|' in CONTENTS marks where point goes and is removed."
       ;; and history is off: code inside a block is not a transcript
       (should-not (cmacs-ai-send-format-history fmt)))))
 
+(ert-deftest cmacs-ai-send-format-org-src-block-mapped-lang ()
+  "Languages whose mode is not lang + \"-mode\" -- elisp, cpp, shell --
+must still resolve through Org's own lang table.  Guessing the mode name
+and missing silently falls back to the Org markup profile, whose special
+block would terminate the src block the answer lands in."
+  (require 'org-src)
+  (cmacs-ai-send-tests--in #'org-mode
+      "* Notes\n#+begin_src elisp\n(setq x 1)|\n#+end_src\n"
+    (let ((fmt (cmacs-ai-send-format-at-point)))
+      (should (eq (cmacs-ai-send-format-kind fmt) 'source))
+      ;; Emacs Lisp comments, not an Org block.
+      (should (equal (cmacs-ai-send-format-end fmt) ";; /ai")))))
+
 (ert-deftest cmacs-ai-send-format-tag-is-honoured ()
   "Changing the tag changes both the literals and the regexps together."
   (let ((cmacs-ai-send-tag "llm"))
@@ -525,6 +538,22 @@ in `**bold**' not to."
   (cmacs-ai-send-tests--in #'org-mode "just prose|\n"
     (should-not (cmacs-ai-send-response-at-point))))
 
+(ert-deftest cmacs-ai-send-response-at-point-refuses-unterminated ()
+  "An unterminated block above point must not borrow the next block's
+close: the resulting span would cover both blocks and the user's own
+text between them, and `cmacs-ai-send-delete-response' would eat it all."
+  (cmacs-ai-send-tests--in #'org-mode
+      "#+begin_ai m\nnever closed\n\nmy own pro|se\n\n#+begin_ai m\nB\n#+end_ai\n"
+    (should-not (cmacs-ai-send-response-at-point)))
+  ;; ...while a complete block below the damage still resolves normally.
+  (cmacs-ai-send-tests--in #'org-mode
+      "#+begin_ai m\nnever closed\n\n#+begin_ai m\nB\n#+end_ai\n|"
+    (let ((bounds (cmacs-ai-send-response-at-point)))
+      (should bounds)
+      (should (equal (buffer-substring-no-properties (car bounds)
+                                                     (cdr bounds))
+                     "#+begin_ai m\nB\n#+end_ai\n")))))
+
 ;;;; Registry -----------------------------------------------------------
 
 (ert-deftest cmacs-ai-send-registry-order-and-override ()
@@ -711,6 +740,48 @@ user has already watched appear."
     (with-temp-buffer
       (delay-mode-hooks (text-mode))
       (should-error (cmacs-ai-send) :type 'user-error))))
+
+(ert-deftest cmacs-ai-send-forgets-completed-requests ()
+  "A finished send must leave `cmacs-ai-send--inflight' empty.  The
+entries are keyed by the session pair itself; keyed wrong, every request
+stays \"in flight\" forever and `cmacs-ai-send-cancel' spends the rest of
+the session cancelling ghosts."
+  (cmacs-ai-send-tests--with-model
+      '((:delta "x") (:end :text "x"))
+    (cmacs-ai-send-tests--in #'text-mode "question|\n"
+      (cmacs-ai-send)
+      (should (null cmacs-ai-send--inflight))))
+  (cmacs-ai-send-tests--with-model '((:error "boom"))
+    (cmacs-ai-send-tests--in #'text-mode "question|\n"
+      (cmacs-ai-send)
+      (should (null cmacs-ai-send--inflight)))))
+
+(ert-deftest cmacs-ai-send-end-text-outrunning-deltas-reaches-buffer ()
+  "When the :end payload carries more text than the deltas delivered,
+the missing tail has to land in the buffer, not just in the character
+count of the completion message."
+  (cmacs-ai-send-tests--with-model
+      '((:delta "abc") (:end :text "abcdef"))
+    (cmacs-ai-send-tests--in #'text-mode "question|\n"
+      (cmacs-ai-send)
+      (should (string-match-p "abcdef" (buffer-string))))))
+
+(ert-deftest cmacs-ai-send-region-wins-on-the-history-path ()
+  "An active region is an explicit statement of scope and must survive
+into the prompt even in a markup buffer where history replay would
+otherwise send everything typed since the last response."
+  (cmacs-ai-send-tests--with-model
+      '((:delta "A2") (:end :text "A2"))
+    (cmacs-ai-send-tests--in #'org-mode
+        "Q1\n\n#+begin_ai m\nA1\n#+end_ai\n\nscratch notes\n\nonly this question\n|"
+      (let ((transient-mark-mode t))
+        (search-backward "only this question")
+        (push-mark (point) t t)
+        (goto-char (line-end-position))
+        (cmacs-ai-send))
+      (let ((prompt (cdr cmacs-ai-send-tests--sent)))
+        (should (string-match-p "only this question" prompt))
+        (should-not (string-match-p "scratch notes" prompt))))))
 
 (ert-deftest cmacs-ai-send-regenerate-replaces-the-block ()
   (cmacs-ai-send-tests--with-model

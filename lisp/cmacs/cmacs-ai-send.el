@@ -91,6 +91,7 @@
 (declare-function org-element-type "org-element" (element))
 (declare-function org-element-at-point "org-element" (&optional pom cached-only))
 (declare-function org-babel-get-src-block-info "ob-core" (&optional no-eval datum))
+(declare-function org-src-get-lang-mode "org-src" (lang))
 
 ;;;; Customisation ------------------------------------------------------
 
@@ -578,7 +579,16 @@ is the reason there is no table of languages in this file."
       (when (and element (eq (org-element-type element) 'src-block))
         (let* ((info (ignore-errors (org-babel-get-src-block-info t element)))
                (lang (and info (car info)))
-               (mode (and lang (intern-soft (concat lang "-mode")))))
+               ;; Org's own mapping, not (intern (concat lang "-mode")):
+               ;; the block languages people actually write -- elisp,
+               ;; cpp, shell, bash -- are exactly the ones whose mode is
+               ;; NOT lang + "-mode", and guessing wrong here silently
+               ;; falls back to the Org markup profile, whose special
+               ;; block would terminate the src block it lands in.
+               (mode (and lang
+                          (if (fboundp 'org-src-get-lang-mode)
+                              (org-src-get-lang-mode lang)
+                            (intern-soft (concat lang "-mode"))))))
           (when (and mode (fboundp mode))
             (cmacs-ai-send--source-format mode lang)))))))
 
@@ -836,13 +846,19 @@ provider has far more Markdown training behind."
       (push (concat "\n[format]\n\n" reminder) parts))
     (string-join (nreverse parts) "\n")))
 
-(defun cmacs-ai-send--request (fmt pos instruction)
+(defun cmacs-ai-send--request (fmt pos instruction &optional region)
   "Build the request for FMT at POS with INSTRUCTION.
 
 Returns a plist (:history TURNS :prompt STRING).  This is where the two
 context strategies are chosen between, and they are exclusive: when there
 are prior exchanges to replay, the document is already in them, and
-sending it again as context pays for the whole conversation twice."
+sending it again as context pays for the whole conversation twice.
+
+REGION non-nil means INSTRUCTION came from an active region.  That has
+to win even on the history path: normally the current turn is everything
+typed since the last response, but selecting a region is an explicit
+statement of scope, and \"the region always wins\" must not silently stop
+being true in the one buffer kind where history applies."
   (let* ((history-p (and cmacs-ai-send-history
                          (cmacs-ai-send-format-history fmt)))
          (parsed (and history-p (cmacs-ai-send--history-turns fmt pos)))
@@ -856,7 +872,9 @@ sending it again as context pays for the whole conversation twice."
           (list :history turns
                 :prompt (cmacs-ai-send--user-prompt
                          fmt
-                         (if (string-empty-p pending) instruction pending)
+                         (cond (region instruction)
+                               ((string-empty-p pending) instruction)
+                               (t pending))
                          nil
                          (unless (string-empty-p tail) tail))))
       (list :history nil
@@ -872,9 +890,12 @@ sending it again as context pays for the whole conversation twice."
   "In-flight sends into this buffer: a list of (PAIR . END-MARKER).")
 
 (defun cmacs-ai-send--forget (pair)
-  "Drop PAIR from `cmacs-ai-send--inflight'."
+  "Drop PAIR from `cmacs-ai-send--inflight'.
+The entries are keyed by the (CLIENT . SESSION) pair cons itself, not by
+the client: keying on `(car pair)' here would never match anything, and
+every completed request would stay \"in flight\" forever."
   (setq cmacs-ai-send--inflight
-        (assq-delete-all (car pair) cmacs-ai-send--inflight)))
+        (assq-delete-all pair cmacs-ai-send--inflight)))
 
 ;;;###autoload
 (defun cmacs-ai-send-cancel ()
@@ -971,16 +992,28 @@ improper list that breaks undo for the whole buffer."
 ACC is everything the model produced and STREAMED how much of it is
 already in the buffer -- non-streaming providers, and
 `cmacs-ai-send-stream' set to nil, leave that at zero and deliver
-everything at the end.  An empty answer leaves no empty block behind."
+everything at the end.  ACC can also be *longer* than what streamed:
+the :end payload carries the provider's authoritative full text, and
+when that outruns the deltas the missing tail still has to reach the
+buffer, not just the byte count in the completion message.  An empty
+answer leaves no empty block behind."
   (let ((end (cmacs-ai-send--silently
-               (when (zerop streamed)
+               (cond
+                ((zerop streamed)
                  (save-excursion
                    (goto-char body)
                    (insert (string-trim acc))))
+                ((> (length acc) streamed)
+                 (save-excursion
+                   (goto-char body)
+                   (insert (substring acc streamed)))))
                (cmacs-ai-send--close-block fmt body))))
     (if (string-empty-p (string-trim acc))
         (cmacs-ai-send--silently (delete-region beg end))
-      (cmacs-ai-send--record-undo beg end))))
+      (cmacs-ai-send--record-undo beg end))
+    ;; The marker has done its job; a marker left pointing into the
+    ;; buffer taxes every subsequent edit in it.
+    (set-marker body nil)))
 
 (defun cmacs-ai-send--stream (fmt pair request buffer pos)
   "Stream REQUEST for FMT into BUFFER at POS using session PAIR."
@@ -1067,7 +1100,8 @@ With prefix ARG, choose the provider and model for this one send."
     (when (string-empty-p instruction)
       (user-error "cmacs-ai-send: nothing to send here"))
     (let* ((pos (cmacs-ai-send--insertion-point (cdr bounds)))
-           (request (cmacs-ai-send--request fmt pos instruction))
+           (request (cmacs-ai-send--request fmt pos instruction
+                                            (use-region-p)))
            (provider (if arg
                          (cmacs-ai--read-provider "Send with provider: ")
                        (or cmacs-ai-send-provider cmacs-ai-default-provider)))
@@ -1099,7 +1133,18 @@ below it, and that still means \"this one\"."
           (let ((beg (match-beginning 0)))
             (goto-char beg)
             (when (re-search-forward end-re nil t)
-              (cons beg (min (point-max) (1+ (match-end 0)))))))))))
+              (let ((end (min (point-max) (1+ (match-end 0))))
+                    (close-beg (match-beginning 0)))
+                ;; A second opening line before that close means the
+                ;; block at BEG was never terminated (hand-edited, or a
+                ;; kill mid-stream) and the close belongs to the *next*
+                ;; block.  Returning that span would hand
+                ;; `cmacs-ai-send-delete-response' two blocks plus the
+                ;; user's own text between them.
+                (goto-char beg)
+                (forward-line 1)
+                (unless (re-search-forward begin-re close-beg t)
+                  (cons beg end))))))))))
 
 ;;;###autoload
 (defun cmacs-ai-send-delete-response ()
