@@ -285,6 +285,14 @@ result in unconditionally:
     (define-key map (kbd "p") #'cmacs-ai-reply)
     (define-key map (kbd "e") #'cmacs-ai-explain)
     (define-key map (kbd "?") #'cmacs-ai-ask)
+    ;; The in-place family: RET sends the thing at point and the answer
+    ;; lands underneath it, in the file.  `?' above answers off to the
+    ;; side; RET answers *here*, which is why it gets the key you press
+    ;; without thinking.
+    (define-key map (kbd "RET") #'cmacs-ai-send)
+    (define-key map (kbd "g") #'cmacs-ai-send-regenerate)
+    (define-key map (kbd "x") #'cmacs-ai-send-delete-response)
+    (define-key map (kbd "k") #'cmacs-ai-send-cancel)
     map)
   "Keyboard equivalents of the AI menu.
 

@@ -243,14 +243,27 @@ contents as the model's.  A =.org= file therefore behaves like a real
 chat, with no conversation state stored anywhere but the file you are
 editing.  When history applies the document is *not* also sent as
 context -- it is already in the replayed turns, and sending both pays
-for everything twice.
+for everything twice.  The current turn is everything typed since the
+last response -- unless a region is active, which is an explicit
+statement of scope and is sent as the turn instead.
 
 History stays off in source buffers regardless.  The code between two
 answers is not a conversation.
 
 ** Keys and options
 
-Nothing is bound by default.  A binding worth having:
+The whole family lives in =cmacs-ai-menu-command-map= alongside the
+textops commands, so one binding covers everything:
+
+| Key         | Command                          | What                                 |
+|-------------+----------------------------------+--------------------------------------|
+| =C-c a RET= | =cmacs-ai-send=                  | send the thing at point, answer here |
+| =C-c a g=   | =cmacs-ai-send-regenerate=       | delete the block at point, ask again |
+| =C-c a x=   | =cmacs-ai-send-delete-response=  | delete the block at point            |
+| =C-c a k=   | =cmacs-ai-send-cancel=           | cancel everything streaming here     |
+
+(assuming =cmacs-ai-menu-command-map= on =C-c a=; the map itself is not
+bound anywhere by default).  A direct binding worth having as well:
 
 #+begin_src emacs-lisp
 (when IS-CMACS-AI

@@ -328,14 +328,32 @@ conversation --- prose between blocks is read as your turns, block
 contents as the model's --- so a @file{.org} file behaves like a real
 chat with no state stored anywhere but the file you are editing.  When
 history applies the document is @emph{not} also sent as context; it is
-already in the replayed turns.
+already in the replayed turns.  The current turn is everything typed
+since the last response --- unless a region is active, which is an
+explicit statement of scope and is sent as the turn instead.
 
 History stays off in source buffers regardless: the code between two
 answers is not a conversation.
 
 @subsection Keys and options
 
-Nothing is bound by default.  A binding worth having:
+The whole family lives in @code{cmacs-ai-menu-command-map} alongside
+the textops commands, so one binding covers everything.  With the map
+on @kbd{C-c a}:
+
+@table @kbd
+@item C-c a RET
+@code{cmacs-ai-send} --- send the thing at point, answer lands here.
+@item C-c a g
+@code{cmacs-ai-send-regenerate} --- delete the block at point, ask again.
+@item C-c a x
+@code{cmacs-ai-send-delete-response} --- delete the block at point.
+@item C-c a k
+@code{cmacs-ai-send-cancel} --- cancel everything streaming here.
+@end table
+
+The map itself is not bound anywhere by default.  A direct binding
+worth having as well:
 
 @lisp
 (when IS-CMACS-AI
