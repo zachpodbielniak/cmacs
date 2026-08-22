@@ -358,6 +358,99 @@ committed on purpose."
         (cmacs-dbexplorer-edit-unstage-all))
       (should-not (cmacs-dbexplorer-edit-pending)))))
 
+(ert-deftest cmacs-dbexplorer-staged-edits-are-per-table ()
+  "A staged edit on one table must not leak onto another with the same key.
+
+The grid buffer is per-connection, so browsing a second table lands in
+the same buffer with the first table's edits still staged -- and two
+tables trivially share a key like ((\"id\" . \"1\")).  Matched on key
+alone, the second table's value silently replaced the first's and was
+committed to the first table."
+  (skip-unless (cmacs-dbexplorer-tests--ui-p))
+  (let ((people (cmacs-dbexplorer-tests--typed-result
+                 '("id" "name") '("id") '(("1" "alpha"))))
+        (orders (cmacs-dbexplorer-result-create
+                 :connection-name "test" :sql "SELECT" :table "orders"
+                 :schema "public" :primary-key '("id")
+                 :columns (vconcat (mapcar (lambda (c) (list :name c))
+                                           '("id" "status")))
+                 :rows (vconcat (mapcar #'vconcat '(("1" "OPEN")))))))
+    (cmacs-dbexplorer-tests--with-grid people
+      (cmacs-dbexplorer-tests--goto-row 0)
+      (cmacs-dbexplorer-edit--set people 0 1 "ALPHA")
+      ;; The same buffer now browses `orders', whose row shares the key.
+      (setq cmacs-dbexplorer-grid--result orders)
+      (cmacs-dbexplorer-grid--render)
+      ;; The people edit neither decorates nor overrides the orders row...
+      (should-not (cmacs-dbexplorer-edit-cell-override orders 0 1))
+      (should-not (cmacs-dbexplorer-edit-row-decoration orders 0))
+      ;; ...and editing the orders row stages a SECOND edit rather than
+      ;; merging into -- and later committing over -- the people one.
+      (cmacs-dbexplorer-tests--goto-row 0)
+      (cmacs-dbexplorer-edit--set orders 0 1 "CLOSED")
+      (let ((pending (cmacs-dbexplorer-edit-pending)))
+        (should (= 2 (length pending)))
+        (should (equal '("people" "orders")
+                       (mapcar #'cmacs-dbexplorer-edit-table pending)))))))
+
+(ert-deftest cmacs-dbexplorer-unstage-on-a-keyless-row-spares-inserts ()
+  "`u' on a row that names nothing must not throw staged inserts away.
+
+A keyless row's key is nil, and every staged insert's key is nil too;
+unguarded, the `equal' between them matched every insert in the buffer
+and `u' on any ordinary row of a primary-key-less table silently dropped
+them all."
+  (skip-unless (cmacs-dbexplorer-tests--ui-p))
+  (let ((result (cmacs-dbexplorer-tests--typed-result
+                 '("id" "name") '() '(("1" "alpha")))))
+    (cmacs-dbexplorer-tests--with-grid result
+      (cmacs-dbexplorer-edit-insert-row)
+      (should (= 1 (length (cmacs-dbexplorer-edit-pending))))
+      (cmacs-dbexplorer-tests--goto-row 0)
+      (should-error (cmacs-dbexplorer-edit-unstage) :type 'user-error)
+      (should (= 1 (length (cmacs-dbexplorer-edit-pending)))))))
+
+(ert-deftest cmacs-dbexplorer-cell-edit-finishes-against-the-key ()
+  "The long-value editor stages against the row's key, not its old index.
+
+The cell buffer stays open while the user writes, and the grid does not
+hold still: a re-sort or a page renumbers every row, and a value staged
+against a remembered index would land on whatever row occupies that
+position now."
+  (skip-unless (cmacs-dbexplorer-tests--ui-p))
+  (cmacs-dbexplorer-tests--with-grid
+      (cmacs-dbexplorer-tests--typed-result
+       '("id" "name") '("id") '(("1" "alpha") ("2" "beta")))
+    (let ((grid (current-buffer))
+          (cell (generate-new-buffer " *dbexplorer-cell-edit-test*")))
+      (unwind-protect
+          (progn
+            (with-current-buffer cell
+              (cmacs-dbexplorer-cell-edit-mode)
+              (insert "ALPHA")
+              (setq cmacs-dbexplorer-cell-edit--grid grid)
+              (setq cmacs-dbexplorer-cell-edit--key '(("id" . "1")))
+              (setq cmacs-dbexplorer-cell-edit--column-name "name"))
+            ;; The grid re-sorts while the cell buffer is open: the row
+            ;; that was index 0 is index 1 now.
+            (setq cmacs-dbexplorer-grid--result
+                  (cmacs-dbexplorer-tests--typed-result
+                   '("id" "name") '("id") '(("2" "beta") ("1" "alpha"))))
+            (cmacs-dbexplorer-grid--render)
+            (with-current-buffer cell
+              (cl-letf (((symbol-function 'pop-to-buffer) #'set-buffer))
+                (cmacs-dbexplorer-cell-edit-finish)))
+            (let ((pending (with-current-buffer grid
+                             (cmacs-dbexplorer-edit-pending))))
+              (should (= 1 (length pending)))
+              ;; Staged against id 1 -- the row it was opened on -- and
+              ;; not against whatever row index 0 holds now.
+              (should (equal '(("id" . "1"))
+                             (cmacs-dbexplorer-edit-key (car pending))))
+              (should (equal '(("name" . "ALPHA"))
+                             (cmacs-dbexplorer-edit-values (car pending))))))
+        (when (buffer-live-p cell) (kill-buffer cell))))))
+
 (ert-deftest cmacs-dbexplorer-edit-refuses-rows-it-cannot-name ()
   "Editing a keyless result is refused, and says why."
   (skip-unless (cmacs-dbexplorer-tests--ui-p))
@@ -732,10 +825,17 @@ so every statement here is put through both."
                    "  select 1"
                    "WITH c AS (SELECT 1) SELECT * FROM c"
                    "EXPLAIN SELECT 1"
+                   "EXPLAIN QUERY PLAN SELECT 1"
                    "PRAGMA table_info(t)"
                    "PRAGMA foreign_keys"
                    "-- a comment\nSELECT 1"
-                   "/* a comment */ SELECT 1"))
+                   "/* a comment */ SELECT 1"
+                   ;; A trailing semicolon -- with or without trailing
+                   ;; comments behind it -- is not a second statement.
+                   "SELECT 1;"
+                   "SELECT 1; -- done"
+                   ;; A semicolon inside a literal is data.
+                   "SELECT 'a;b'"))
           (writes '("INSERT INTO t (n) VALUES ('x')"
                     "UPDATE t SET n = 'x'"
                     "DELETE FROM t"
@@ -745,7 +845,21 @@ so every statement here is put through both."
                     "-- c\nDELETE FROM t"
                     "PRAGMA journal_mode = WAL"
                     "CREATE TABLE u (a INTEGER)"
-                    "ATTACH DATABASE ':memory:' AS other")))
+                    "ATTACH DATABASE ':memory:' AS other"
+                    ;; The multi-statement bypass: an unparameterised
+                    ;; string reaches sqlite3_exec/PQexec, which run
+                    ;; EVERY statement, while only the first keyword was
+                    ;; ever classified.
+                    "SELECT 1; DELETE FROM t"
+                    "SELECT 1;\n-- innocent\nDELETE FROM t"
+                    ;; PostgreSQL's EXPLAIN ANALYZE executes the DML
+                    ;; under it; EXPLAIN is only as read-only as what it
+                    ;; explains.
+                    "EXPLAIN ANALYZE DELETE FROM t"
+                    "EXPLAIN (ANALYZE, BUFFERS) DELETE FROM t"
+                    ;; A data-modifying CTE writes no matter what the
+                    ;; statement after the CTE list says.
+                    "WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM d")))
       (dolist (sql writes)
         (let ((reply (cmacs-dbexplorer-tests--call
                       #'cmacs-dbexplorer--execute-async handle sql nil)))
@@ -1087,6 +1201,26 @@ connection to the same database."
               (should (string-match-p "3,three" text))))
         (ignore-errors (delete-file path))))))
 
+(ert-deftest cmacs-dbexplorer-c-export-honours-header-off ()
+  "`:header nil' really omits the CSV column line.
+
+The regression this pins: the option was advertised by the Lisp API and
+the transient's `h' toggle, read by nobody in C, and every streamed
+export wrote the header regardless."
+  (skip-unless (cmacs-dbexplorer-tests--c-p))
+  (cmacs-dbexplorer-tests--with-db handle
+    (cmacs-dbexplorer-tests--exec handle "INSERT INTO t (id, n) VALUES (1,'one')")
+    (let ((path (cmacs-dbexplorer-tests--export-temp ".csv")))
+      (unwind-protect
+          (progn
+            (cmacs-dbexplorer-tests--run-export
+             handle "SELECT id, n FROM t" "csv" path :header nil)
+            (let ((text (with-temp-buffer
+                          (insert-file-contents path) (buffer-string))))
+              (should (string-match-p "\\`1,one" text))
+              (should-not (string-match-p "id,n" text))))
+        (ignore-errors (delete-file path))))))
+
 (ert-deftest cmacs-dbexplorer-c-export-json ()
   "The json format is accepted and produces parseable output."
   (skip-unless (cmacs-dbexplorer-tests--c-p))
@@ -1297,9 +1431,15 @@ in the way the code was."
             (with-current-buffer sql
               (cmacs-dbexplorer-sql-mode)
               (setq cmacs-dbexplorer-sql--stream nil)
-              (let ((cmacs-dbexplorer--saved-window-configuration
-                     pre-workbench))
-                (cmacs-dbexplorer-sql-cancel)))
+              ;; The snapshot a workbench would have saved on the way
+              ;; in -- a frame parameter now, so it is set and restored
+              ;; around the call rather than let-bound.
+              (set-frame-parameter nil 'cmacs-dbexplorer-window-configuration
+                                   pre-workbench)
+              (unwind-protect
+                  (cmacs-dbexplorer-sql-cancel)
+                (set-frame-parameter
+                 nil 'cmacs-dbexplorer-window-configuration nil)))
             ;; The sibling is untouched and still showing its own buffer.
             (should (window-live-p sibling-window))
             (should (eq sibling (window-buffer sibling-window)))
@@ -1339,7 +1479,25 @@ instead of closing the buffer."
   (with-temp-buffer
     (cmacs-dbexplorer-sql-mode)
     (setq cmacs-dbexplorer-sql--stream 99)
-    (cmacs-dbexplorer-sql--forget-stream (current-buffer))
+    (cmacs-dbexplorer-sql--forget-stream (current-buffer) 99)
+    (should-not cmacs-dbexplorer-sql--stream)))
+
+(ert-deftest cmacs-dbexplorer-sql-forget-only-clears-its-own-stream ()
+  "A superseded statement's termination must not clear its successor's id.
+
+The regression this pins: `--forget-stream' cleared unconditionally, so
+sending statement B while A was still in flight meant A's completion
+wiped B's id -- and C-c C-k was back to meaning nothing, for exactly the
+overlapping-queries case the previous fix never covered."
+  (skip-unless (cmacs-dbexplorer-tests--sql-p))
+  (with-temp-buffer
+    (cmacs-dbexplorer-sql-mode)
+    (setq cmacs-dbexplorer-sql--stream 100)
+    ;; Statement 99 -- an older, superseded one -- terminates.
+    (cmacs-dbexplorer-sql--forget-stream (current-buffer) 99)
+    (should (eql 100 cmacs-dbexplorer-sql--stream))
+    ;; Its own termination still clears it.
+    (cmacs-dbexplorer-sql--forget-stream (current-buffer) 100)
     (should-not cmacs-dbexplorer-sql--stream)))
 
 (ert-deftest cmacs-dbexplorer-sql-forget-tolerates-a-dead-buffer ()
@@ -1350,7 +1508,7 @@ buffer that started it is ordinary rather than exceptional."
   (skip-unless (cmacs-dbexplorer-tests--sql-p))
   (let ((buffer (generate-new-buffer " *dbexplorer-sql-test*")))
     (kill-buffer buffer)
-    (should-not (cmacs-dbexplorer-sql--forget-stream buffer))))
+    (should-not (cmacs-dbexplorer-sql--forget-stream buffer 99))))
 
 (provide 'cmacs-dbexplorer-tests)
 ;;; cmacs-dbexplorer-tests.el ends here

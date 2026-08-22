@@ -186,12 +186,22 @@ FORMAT is a registered exporter's name."
    ("S" "write the whole query (runs it again)"
     cmacs-dbexplorer-export-run-server)])
 
+(defun cmacs-dbexplorer-export--confirm-overwrite (path)
+  "Signal unless PATH is free to write, asking when a file is there.
+For the two interactive commands only -- the agent-facing export goes
+through `cmacs-dbexplorer-tool-export', which cannot answer a prompt."
+  (when (and (file-exists-p path)
+             (not (y-or-n-p (format "%s exists; overwrite? "
+                                    (abbreviate-file-name path)))))
+    (user-error "cmacs-dbexplorer: export cancelled")))
+
 (defun cmacs-dbexplorer-export-run (&optional arguments)
   "Write the grid's current page out, as ARGUMENTS describe."
   (interactive (list (transient-args 'cmacs-dbexplorer-export-menu)))
   (let* ((format (or (transient-arg-value "--format=" arguments) "csv"))
          (path (or (transient-arg-value "--file=" arguments)
                    (cmacs-dbexplorer-export--default-path format))))
+    (cmacs-dbexplorer-export--confirm-overwrite path)
     (cmacs-dbexplorer-export-result (cmacs-dbexplorer-grid-result) path
                                     (intern format)
                                     (and (member "--header" arguments) t))
@@ -208,9 +218,13 @@ the instant operation the other one is."
   (let* ((format (or (transient-arg-value "--format=" arguments) "csv"))
          (path (or (transient-arg-value "--file=" arguments)
                    (cmacs-dbexplorer-export--default-path format)))
-         (sql (cmacs-dbexplorer-grid-sql))
+         ;; The FULL statement: a browsed table's on-screen SQL carries
+         ;; the page's LIMIT/OFFSET, and exporting that would write one
+         ;; page while claiming to have written the table.
+         (sql (cmacs-dbexplorer-grid-sql t))
          (connection (cmacs-dbexplorer-buffer-connection-or-error)))
     (unless sql (user-error "cmacs-dbexplorer: no statement to export"))
+    (cmacs-dbexplorer-export--confirm-overwrite path)
     (cmacs-dbexplorer-run-export
      connection sql format path
      :options (list :header (and (member "--header" arguments) t))

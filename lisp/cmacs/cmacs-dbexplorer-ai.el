@@ -38,14 +38,17 @@
 (declare-function cmacs-ai-target-plist-get "cmacs-ai-target" (target key))
 (declare-function cmacs-ai-register-action "cmacs-ai-actions" (&rest plist))
 (declare-function cmacs-ai-call "cmacs-ai-call" (prompt &rest options))
-(declare-function cmacs-dbexplorer-result-at-point "cmacs-dbexplorer-grid" ())
-(declare-function cmacs-dbexplorer-cell-at-point "cmacs-dbexplorer-grid" ())
-(declare-function cmacs-dbexplorer-node-at-point "cmacs-dbexplorer-schema-ui" ())
-(declare-function cmacs-dbexplorer-buffer-connection "cmacs-dbexplorer" ())
-(declare-function cmacs-dbexplorer-statement-at-point "cmacs-dbexplorer-sql" ())
+;; The REAL point-accessors, verified against their defining files: an
+;; fboundp guard on a function that exists nowhere does not error, it
+;; silently resolves no target -- which made this whole menu dead in
+;; grid and schema buffers once before.
+(declare-function cmacs-dbexplorer-schema--node "cmacs-dbexplorer-schema-ui" ())
+(declare-function cmacs-dbexplorer-sql-statement "cmacs-dbexplorer-sql" ())
 (declare-function cmacs-dbexplorer-insert-sql "cmacs-dbexplorer-sql" (sql))
 
 (defvar cmacs-ai-action-groups)
+(defvar cmacs-dbexplorer-grid--result)
+(defvar cmacs-dbexplorer--connection-name)
 
 
 ;;;; Options ------------------------------------------------------------
@@ -126,8 +129,12 @@ pasting a whole schema into every prompt."
    :modes '(cmacs-dbexplorer-grid-mode)
    :resolve
    (lambda (_click)
-     (when (fboundp 'cmacs-dbexplorer-result-at-point)
-       (when-let* ((result (cmacs-dbexplorer-result-at-point)))
+     ;; The buffer-local directly, not `cmacs-dbexplorer-grid-result':
+     ;; that accessor signals on an empty grid, and a resolver declines
+     ;; by returning nil, never by erroring out of the menu.
+     (when-let* ((result (and (boundp 'cmacs-dbexplorer-grid--result)
+                              cmacs-dbexplorer-grid--result)))
+       (progn
          (cmacs-ai-target-create
           :kind 'db-result
           :label (format "%d rows" (cmacs-dbexplorer-result-row-count result))
@@ -147,17 +154,23 @@ pasting a whole schema into every prompt."
    :modes '(cmacs-dbexplorer-schema-mode)
    :resolve
    (lambda (_click)
-     (when (fboundp 'cmacs-dbexplorer-node-at-point)
-       (when-let* ((node (cmacs-dbexplorer-node-at-point)))
-         (cmacs-ai-target-create
-          :kind 'db-schema
-          :label (or (plist-get node :name) "schema")
-          :text (format "%s" node)
-          :buffer (current-buffer)
-          :lang "database schema"
-          :plist (list :db-connection (plist-get node :connection)
-                       :db-table (plist-get node :table)
-                       :db-node node))))))
+     (when-let* ((node (and (fboundp 'cmacs-dbexplorer-schema--node)
+                            (cmacs-dbexplorer-schema--node))))
+       (cmacs-ai-target-create
+        :kind 'db-schema
+        :label (or (plist-get node :name) (plist-get node :table)
+                   (plist-get node :schema) "schema")
+        :text (format "%s" node)
+        :buffer (current-buffer)
+        :lang "database schema"
+        ;; The buffer-local connection NAME: `--schema-context' hands
+        ;; this to `cmacs-dbexplorer-connection', which keys a hash by
+        ;; name -- a struct here would miss the lookup and then be
+        ;; printed into the prompt.
+        :plist (list :db-connection (and (boundp 'cmacs-dbexplorer--connection-name)
+                                         cmacs-dbexplorer--connection-name)
+                     :db-table (plist-get node :table)
+                     :db-node node)))))
 
   (cmacs-ai-register-target-resolver
    :name 'dbexplorer-sql :order 20
@@ -166,8 +179,8 @@ pasting a whole schema into every prompt."
    (lambda (_click)
      (let ((sql (if (use-region-p)
                     (buffer-substring-no-properties (region-beginning) (region-end))
-                  (and (fboundp 'cmacs-dbexplorer-statement-at-point)
-                       (cmacs-dbexplorer-statement-at-point)))))
+                  (and (fboundp 'cmacs-dbexplorer-sql-statement)
+                       (ignore-errors (cmacs-dbexplorer-sql-statement))))))
        (when (and sql (not (string-blank-p sql)))
          (cmacs-ai-target-create
           :kind 'db-sql
@@ -175,8 +188,8 @@ pasting a whole schema into every prompt."
           :text sql
           :buffer (current-buffer)
           :lang "sql"
-          :plist (list :db-connection (and (fboundp 'cmacs-dbexplorer-buffer-connection)
-                                           (cmacs-dbexplorer-buffer-connection))
+          :plist (list :db-connection (and (boundp 'cmacs-dbexplorer--connection-name)
+                                           cmacs-dbexplorer--connection-name)
                        :db-sql sql)))))))
 
 (defun cmacs-dbexplorer-ai--render-result (result)

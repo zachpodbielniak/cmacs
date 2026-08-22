@@ -198,11 +198,19 @@ and is only ever cleared by cancelling would be a lie from the first
 query onwards -- and `C-c C-k' reads it to decide whether there is
 anything to cancel.")
 
-(defun cmacs-dbexplorer-sql--forget-stream (buffer)
-  "Record in BUFFER that its statement is no longer running."
+(defun cmacs-dbexplorer-sql--forget-stream (buffer stream)
+  "Record in BUFFER that STREAM is no longer running.
+
+Cleared only when STREAM is still the one the buffer is tracking.  A
+second statement sent while the first is in flight replaces the tracked
+id, and the first statement's termination arriving afterwards must not
+clear the second's -- that would resurrect exactly the `C-c C-k' means
+nothing' failure this variable's contract exists to prevent, for the
+overlapping-queries case."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
-      (setq cmacs-dbexplorer-sql--stream nil))))
+      (when (eql cmacs-dbexplorer-sql--stream stream)
+        (setq cmacs-dbexplorer-sql--stream nil)))))
 
 (defun cmacs-dbexplorer-sql-send (sql)
   "Run SQL on this buffer's connection.
@@ -217,21 +225,27 @@ worse than one that has to read the catalogue again."
          (name (cmacs-dbexplorer-connection-name connection)))
     (cmacs-dbexplorer-sql--history-add name sql)
     (if (cmacs-dbexplorer-sql--returns-rows-p sql)
-        (let ((buffer (current-buffer)))
+        (let ((buffer (current-buffer))
+              (stream nil))
           (require 'cmacs-dbexplorer-grid)
-          (setq cmacs-dbexplorer-sql--stream
+          ;; The callbacks close over STREAM, which is bound before the
+          ;; query starts and set before any reply can be delivered --
+          ;; replies only ever arrive through the event loop, never
+          ;; synchronously from `cmacs-dbexplorer-query'.
+          (setq stream
                 (cmacs-dbexplorer-query
                  connection sql
                  :options (list :max-rows (1+ cmacs-dbexplorer-page-size))
                  :on-result
                  (lambda (result)
-                   (cmacs-dbexplorer-sql--forget-stream buffer)
+                   (cmacs-dbexplorer-sql--forget-stream buffer stream)
                    (cmacs-dbexplorer-grid-show
                     result (list :kind 'sql :sql sql) name))
                  :on-error
                  (lambda (message)
-                   (cmacs-dbexplorer-sql--forget-stream buffer)
+                   (cmacs-dbexplorer-sql--forget-stream buffer stream)
                    (message "cmacs-dbexplorer: %s" message))))
+          (setq cmacs-dbexplorer-sql--stream stream)
           (message "cmacs-dbexplorer: running on %s..." name))
       (cmacs-dbexplorer-execute
        connection sql

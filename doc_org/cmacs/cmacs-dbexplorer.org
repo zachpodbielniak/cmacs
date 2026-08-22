@@ -78,8 +78,14 @@ MCP clients, for D-Bus callers and for =emacsctl= alike, because they all end up
 at the same handle.
 
 The classifier strips comments and leading whitespace and then allows only
-=SELECT=, =VALUES=, =EXPLAIN=, =SHOW=, a =WITH= whose body is a =SELECT=, and
-read-only pragmas. Anything else is refused with =cmacs-dbexplorer-error=.
+=SELECT=, =VALUES=, =SHOW=, an =EXPLAIN= *of a read* — =EXPLAIN ANALYZE DELETE=
+runs the DELETE on PostgreSQL, so EXPLAIN is only as read-only as the statement
+under it — a =WITH= whose statement is a =SELECT= and whose CTE bodies contain
+no DML (PostgreSQL executes a data-modifying CTE), and read-only pragmas.  A
+string containing more than one statement is refused outright: the drivers run
+an unparameterised string through the multi-statement APIs, so
+="SELECT 1; DELETE FROM t"= would execute both while only the first keyword was
+judged.  Anything else is refused with =cmacs-dbexplorer-error=.
 
 Mark production read-only. It costs nothing and it is the difference between a
 mistyped keystroke being annoying and being an incident.
@@ -296,6 +302,14 @@ Completion-at-point offers tables and columns from the cached schema.
 from orm-glib and stream, so exporting more rows than fit in memory works. An
 org-table exporter is provided in Elisp for pasting into notes.
 
+Two acts on the transient, and the difference is the point.  =x= writes the
+*page on screen*, instantly, from Lisp.  =S= re-runs the statement through C and
+streams *everything* — for a browsed table that means the whole table (the
+page's =LIMIT/OFFSET= is dropped; the =WHERE= filter and =ORDER BY= you are
+looking at are kept), while a hand-written statement is run exactly as written,
+your own =LIMIT= included.  The =h= header toggle is honoured on both paths, and
+either command asks before overwriting an existing file.
+
 Exports run asynchronously with progress, and the query behind an export is
 always classified as a read.
 
@@ -322,6 +336,14 @@ asking to be truncated rather than obeyed.
 
 =db_execute= is marked destructive and goes through the brigade approval flow.
 On a read-only connection the C layer refuses it regardless.
+
+=db_connections= lists everything the other tools accept: the defcustom, every
+registered connection source, and live connections opened by other means.
+Agent calls wait =cmacs-dbexplorer-tools-timeout= (30s) for the database —
+except =db_export=, which gets =cmacs-dbexplorer-tools-export-timeout= (600s),
+because streaming a big table is the tool's entire purpose and a timeout that
+declared it failed while the file kept growing would be worse than the wait.
+On timing out the export is cancelled, not abandoned.
 
 ** The AI menu
 

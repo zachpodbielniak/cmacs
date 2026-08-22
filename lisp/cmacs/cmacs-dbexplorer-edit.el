@@ -170,12 +170,23 @@ match on every column instead"
 
 ;;;; Finding and staging ------------------------------------------------
 
-(defun cmacs-dbexplorer-edit--find (op key)
-  "Return the staged OP edit for KEY in this buffer, or nil."
-  (seq-find (lambda (edit)
-              (and (eq (cmacs-dbexplorer-edit-op edit) op)
-                   (equal (cmacs-dbexplorer-edit-key edit) key)))
-            cmacs-dbexplorer-edit--edits))
+(defun cmacs-dbexplorer-edit--find (op result key)
+  "Return the staged OP edit for KEY in RESULT's table, or nil.
+
+The table and schema are part of the match, not just the key.  The grid
+buffer is per-connection, so browsing another table lands in the *same*
+buffer with the previous table's staged edits still pending -- and two
+tables trivially share a key like ((\"id\" . \"1\")).  Matched on key
+alone, an edit staged against `users' would absorb, display and finally
+commit a value typed while looking at `orders'."
+  (let ((table (cmacs-dbexplorer-result-table result))
+        (schema (cmacs-dbexplorer-result-schema result)))
+    (seq-find (lambda (edit)
+                (and (eq (cmacs-dbexplorer-edit-op edit) op)
+                     (equal (cmacs-dbexplorer-edit-table edit) table)
+                     (equal (cmacs-dbexplorer-edit-schema edit) schema)
+                     (equal (cmacs-dbexplorer-edit-key edit) key)))
+              cmacs-dbexplorer-edit--edits)))
 
 (defun cmacs-dbexplorer-edit--stage (edit)
   "Add EDIT to this buffer's staged changes and redraw."
@@ -193,7 +204,7 @@ match on every column instead"
 (defun cmacs-dbexplorer-edit--update-for (result row)
   "Return the staged update for ROW of RESULT, creating one if needed."
   (let ((key (cmacs-dbexplorer-edit--row-key result row)))
-    (or (cmacs-dbexplorer-edit--find 'update key)
+    (or (cmacs-dbexplorer-edit--find 'update result key)
         (cmacs-dbexplorer-edit--stage
          (cmacs-dbexplorer-edit-create
           :op 'update
@@ -215,7 +226,7 @@ commit before you commit it."
     (let* ((key (cmacs-dbexplorer-result-row-key result row))
            (key (or key (and cmacs-dbexplorer-allow-editing-without-pk
                              (cmacs-dbexplorer-edit--all-columns-key result row))))
-           (edit (and key (cmacs-dbexplorer-edit--find 'update key)))
+           (edit (and key (cmacs-dbexplorer-edit--find 'update result key)))
            (name (nth column (cmacs-dbexplorer-result-column-names result)))
            (staged (and edit (assoc name (cmacs-dbexplorer-edit-values edit)))))
       (when staged (cons (cdr staged) 'cmacs-dbexplorer-staged)))))
@@ -228,9 +239,9 @@ commit before you commit it."
                              (cmacs-dbexplorer-edit--all-columns-key result row)))))
       (when key
         (cond
-         ((cmacs-dbexplorer-edit--find 'delete key)
+         ((cmacs-dbexplorer-edit--find 'delete result key)
           (cons (cmacs-dbexplorer-glyph 'staged) 'cmacs-dbexplorer-staged-delete))
-         ((cmacs-dbexplorer-edit--find 'update key)
+         ((cmacs-dbexplorer-edit--find 'update result key)
           (cons (cmacs-dbexplorer-glyph 'staged) nil)))))))
 
 (defun cmacs-dbexplorer-edit--display-value (value)
@@ -240,34 +251,45 @@ commit before you commit it."
 
 ;;;; Editing one cell ---------------------------------------------------
 
+(defun cmacs-dbexplorer-edit--set-insert (insert-edit name value)
+  "Set NAME to VALUE in the staged INSERT-EDIT and redraw."
+  (setf (cmacs-dbexplorer-edit-values insert-edit)
+        (cons (cons name value)
+              (assoc-delete-all name
+                                (cmacs-dbexplorer-edit-values insert-edit))))
+  (cmacs-dbexplorer-grid-refresh))
+
+(defun cmacs-dbexplorer-edit--set-cell (result row column value)
+  "Stage or apply VALUE for COLUMN of the existing ROW in RESULT.
+Unlike `cmacs-dbexplorer-edit--set' this never consults point, so it is
+safe to call from outside the grid -- the cell-edit buffer resolves its
+target row first and hands it here."
+  (let ((name (nth column (cmacs-dbexplorer-result-column-names result))))
+    (unless name (user-error "cmacs-dbexplorer: no column here"))
+    (if (eq cmacs-dbexplorer-edit-mode 'immediate)
+        (cmacs-dbexplorer-edit--apply
+         (list (cmacs-dbexplorer-edit-create
+                :op 'update
+                :table (cmacs-dbexplorer-result-table result)
+                :schema (cmacs-dbexplorer-result-schema result)
+                :key (cmacs-dbexplorer-edit--row-key result row)
+                :values (list (cons name value)))))
+      (let ((edit (cmacs-dbexplorer-edit--update-for result row)))
+        (setf (cmacs-dbexplorer-edit-values edit)
+              (cons (cons name value)
+                    (assoc-delete-all name (cmacs-dbexplorer-edit-values edit))))
+        (cmacs-dbexplorer-grid-refresh)))))
+
 (defun cmacs-dbexplorer-edit--set (result row column value)
   "Stage or apply VALUE for COLUMN of ROW in RESULT."
   (let* ((name (nth column (cmacs-dbexplorer-result-column-names result)))
          (insert-edit (cmacs-dbexplorer-grid-edit-at-point)))
     (unless name (user-error "cmacs-dbexplorer: no column here"))
-    (cond
-     ;; A staged insert is edited in place: it has no row in the database
-     ;; yet, so there is nothing to write through even in immediate mode.
-     (insert-edit
-      (setf (cmacs-dbexplorer-edit-values insert-edit)
-            (cons (cons name value)
-                  (assoc-delete-all name
-                                    (cmacs-dbexplorer-edit-values insert-edit))))
-      (cmacs-dbexplorer-grid-refresh))
-     ((eq cmacs-dbexplorer-edit-mode 'immediate)
-      (cmacs-dbexplorer-edit--apply
-       (list (cmacs-dbexplorer-edit-create
-              :op 'update
-              :table (cmacs-dbexplorer-result-table result)
-              :schema (cmacs-dbexplorer-result-schema result)
-              :key (cmacs-dbexplorer-edit--row-key result row)
-              :values (list (cons name value))))))
-     (t
-      (let ((edit (cmacs-dbexplorer-edit--update-for result row)))
-        (setf (cmacs-dbexplorer-edit-values edit)
-              (cons (cons name value)
-                    (assoc-delete-all name (cmacs-dbexplorer-edit-values edit))))
-        (cmacs-dbexplorer-grid-refresh))))))
+    ;; A staged insert is edited in place: it has no row in the database
+    ;; yet, so there is nothing to write through even in immediate mode.
+    (if insert-edit
+        (cmacs-dbexplorer-edit--set-insert insert-edit name value)
+      (cmacs-dbexplorer-edit--set-cell result row column value))))
 
 (defun cmacs-dbexplorer-edit-cell (&optional null)
   "Edit the cell at point.  With a prefix argument, set it to NULL.
@@ -306,7 +328,7 @@ truncating it would be worse than refusing."
      (insert-edit (cdr (assoc name (cmacs-dbexplorer-edit-values insert-edit))))
      (t
       (let* ((key (ignore-errors (cmacs-dbexplorer-edit--row-key result row)))
-             (edit (and key (cmacs-dbexplorer-edit--find 'update key)))
+             (edit (and key (cmacs-dbexplorer-edit--find 'update result key)))
              (staged (and edit (assoc name (cmacs-dbexplorer-edit-values edit)))))
         (if staged (cdr staged)
           (cmacs-dbexplorer-result-cell result row column)))))))
@@ -314,14 +336,24 @@ truncating it would be worse than refusing."
 
 ;;;; Editing a long value in its own buffer -----------------------------
 
+;; The cell buffer remembers its target by row KEY and column NAME, never
+;; by index.  It stays open while the user writes, and the grid does not
+;; hold still: a re-sort, a page, or the refresh after an immediate-mode
+;; apply renumbers every row, and an index captured at open time would
+;; then stage -- or in immediate mode write through -- against whatever
+;; row happens to occupy that position now.
+
 (defvar-local cmacs-dbexplorer-cell-edit--grid nil
   "The grid buffer this cell belongs to.")
 
-(defvar-local cmacs-dbexplorer-cell-edit--row nil
-  "The row index this cell belongs to.")
+(defvar-local cmacs-dbexplorer-cell-edit--key nil
+  "The primary-key alist naming the row this cell belongs to.")
 
-(defvar-local cmacs-dbexplorer-cell-edit--column nil
-  "The column index this cell belongs to.")
+(defvar-local cmacs-dbexplorer-cell-edit--column-name nil
+  "The name of the column this cell belongs to.")
+
+(defvar-local cmacs-dbexplorer-cell-edit--insert-edit nil
+  "The staged insert this cell belongs to, nil for an ordinary row.")
 
 (defvar cmacs-dbexplorer-cell-edit-mode-map
   (let ((map (make-sparse-keymap)))
@@ -344,10 +376,25 @@ truncating it would be worse than refusing."
 (with-eval-after-load 'evil
   (evil-set-initial-state 'cmacs-dbexplorer-cell-edit-mode 'insert))
 
+(defun cmacs-dbexplorer-edit--row-for-key (result key)
+  "Return the index of the row in RESULT that KEY names, or nil."
+  (let ((count (cmacs-dbexplorer-result-row-count result))
+        (found nil)
+        (row 0))
+    (while (and (not found) (< row count))
+      (when (equal key (ignore-errors
+                         (cmacs-dbexplorer-edit--row-key result row)))
+        (setq found row))
+      (setq row (1+ row)))
+    found))
+
 (defun cmacs-dbexplorer-edit--open-cell-buffer (result row column text)
   "Open a buffer holding TEXT for COLUMN of ROW in RESULT."
   (let* ((name (nth column (cmacs-dbexplorer-result-column-names result)))
          (grid (current-buffer))
+         (insert-edit (cmacs-dbexplorer-grid-edit-at-point))
+         (key (unless insert-edit
+                (cmacs-dbexplorer-edit--row-key result row)))
          (buffer (get-buffer-create
                   (format "*dbexplorer-edit: %s.%s*"
                           (or (cmacs-dbexplorer-result-table result) "?") name))))
@@ -357,25 +404,48 @@ truncating it would be worse than refusing."
       (insert text)
       (goto-char (point-min))
       (setq cmacs-dbexplorer-cell-edit--grid grid)
-      (setq cmacs-dbexplorer-cell-edit--row row)
-      (setq cmacs-dbexplorer-cell-edit--column column)
+      (setq cmacs-dbexplorer-cell-edit--key key)
+      (setq cmacs-dbexplorer-cell-edit--column-name name)
+      (setq cmacs-dbexplorer-cell-edit--insert-edit insert-edit)
       (setq header-line-format
             (format " %s -- C-c C-c to stage, C-c C-k to abandon" name)))
     (pop-to-buffer buffer)))
 
 (defun cmacs-dbexplorer-cell-edit-finish ()
-  "Take this buffer's value back to the grid."
+  "Take this buffer's value back to the grid.
+
+The target is re-resolved by key and column name against the grid as it
+is *now*, and the stage is refused if the row or column has gone -- the
+grid may have re-sorted, paged or re-queried while this buffer was open,
+and a value written against a remembered position would land on whatever
+row sits there today."
   (interactive)
   (let ((text (buffer-substring-no-properties (point-min) (point-max)))
         (grid cmacs-dbexplorer-cell-edit--grid)
-        (row cmacs-dbexplorer-cell-edit--row)
-        (column cmacs-dbexplorer-cell-edit--column)
+        (key cmacs-dbexplorer-cell-edit--key)
+        (name cmacs-dbexplorer-cell-edit--column-name)
+        (insert-edit cmacs-dbexplorer-cell-edit--insert-edit)
         (buffer (current-buffer)))
     (unless (buffer-live-p grid)
       (user-error "cmacs-dbexplorer: the grid this value came from is gone"))
     (with-current-buffer grid
-      (cmacs-dbexplorer-edit--set (cmacs-dbexplorer-grid-result)
-                                  row column text))
+      (if insert-edit
+          (progn
+            (unless (memq insert-edit cmacs-dbexplorer-edit--edits)
+              (user-error
+               "cmacs-dbexplorer: the staged row this value was for is gone"))
+            (cmacs-dbexplorer-edit--set-insert insert-edit name text))
+        (let* ((result (cmacs-dbexplorer-grid-result))
+               (column (cmacs-dbexplorer-result-column-index result name))
+               (row (cmacs-dbexplorer-edit--row-for-key result key)))
+          (unless column
+            (user-error
+             "cmacs-dbexplorer: column %s is no longer in this result" name))
+          (unless row
+            (user-error
+             "cmacs-dbexplorer: the row this value came from is no longer \
+in the grid"))
+          (cmacs-dbexplorer-edit--set-cell result row column text))))
     (kill-buffer buffer)
     (pop-to-buffer grid)))
 
@@ -424,13 +494,13 @@ table to insert into"))
              (row (cmacs-dbexplorer-grid-row-at-point-or-error)))
         (cmacs-dbexplorer-edit--ensure-editable result)
         (let* ((key (cmacs-dbexplorer-edit--row-key result row))
-               (existing (cmacs-dbexplorer-edit--find 'delete key)))
+               (existing (cmacs-dbexplorer-edit--find 'delete result key)))
           (if existing
               (cmacs-dbexplorer-edit--drop existing)
             ;; A row being deleted has no use for a pending update of the
             ;; same row; keeping both would send two statements whose
             ;; order decides whether the update succeeds.
-            (let ((update (cmacs-dbexplorer-edit--find 'update key)))
+            (let ((update (cmacs-dbexplorer-edit--find 'update result key)))
               (when update (cmacs-dbexplorer-edit--drop update)))
             (if (eq cmacs-dbexplorer-edit-mode 'immediate)
                 (cmacs-dbexplorer-edit--apply
@@ -455,10 +525,23 @@ table to insert into"))
       (let* ((result (cmacs-dbexplorer-grid-result))
              (row (cmacs-dbexplorer-grid-row-at-point-or-error))
              (key (ignore-errors (cmacs-dbexplorer-edit--row-key result row)))
-             (edits (seq-filter
-                     (lambda (edit)
-                       (equal key (cmacs-dbexplorer-edit-key edit)))
-                     cmacs-dbexplorer-edit--edits)))
+             (table (cmacs-dbexplorer-result-table result))
+             (schema (cmacs-dbexplorer-result-schema result))
+             ;; KEY can be nil -- a keyless row names nothing -- and a
+             ;; nil key `equal's the nil key every staged insert carries,
+             ;; so filtering without the guard would silently drop every
+             ;; staged insert in the buffer.  Match only named rows, and
+             ;; only ops that carry a key, in this result's table.
+             (edits (and key
+                         (seq-filter
+                          (lambda (edit)
+                            (and (memq (cmacs-dbexplorer-edit-op edit)
+                                       '(update delete))
+                                 (equal (cmacs-dbexplorer-edit-table edit) table)
+                                 (equal (cmacs-dbexplorer-edit-schema edit)
+                                        schema)
+                                 (equal key (cmacs-dbexplorer-edit-key edit))))
+                          cmacs-dbexplorer-edit--edits))))
         (unless edits (user-error "cmacs-dbexplorer: nothing staged on this row"))
         (dolist (edit edits) (cmacs-dbexplorer-edit--drop edit))))))
 

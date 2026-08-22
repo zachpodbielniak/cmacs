@@ -521,27 +521,37 @@ disagree the anchor absorbs the difference."
       ""
     (format " WHERE %s" cmacs-dbexplorer-grid--filter)))
 
-(defun cmacs-dbexplorer-grid--browse-sql (connection)
+(defun cmacs-dbexplorer-grid--browse-sql (connection &optional full)
   "Return the SQL for this buffer's browse source on CONNECTION.
 
 One more row than a page is asked for, so a full page and a full page
-with more behind it are distinguishable."
+with more behind it are distinguishable.  FULL drops the LIMIT/OFFSET
+window entirely while keeping the WHERE and ORDER BY: the streamed
+export asks for it, because its entire purpose is the rows that are
+*not* on screen, and \"write the whole table\" quietly bounded to one
+page would produce a complete-looking file with almost everything
+missing."
   (let ((source cmacs-dbexplorer-grid--source))
-    (format "SELECT * FROM %s%s%s LIMIT %d OFFSET %d"
+    (format "SELECT * FROM %s%s%s%s"
             (cmacs-dbexplorer-qualified-name connection
                                              (plist-get source :schema)
                                              (plist-get source :table))
             (cmacs-dbexplorer-grid--where)
             (cmacs-dbexplorer-grid--order-by connection)
-            (1+ cmacs-dbexplorer-page-size)
-            cmacs-dbexplorer-grid--offset)))
+            (if full ""
+              (format " LIMIT %d OFFSET %d"
+                      (1+ cmacs-dbexplorer-page-size)
+                      cmacs-dbexplorer-grid--offset)))))
 
-(defun cmacs-dbexplorer-grid-sql ()
-  "Return the statement this grid is showing the result of."
+(defun cmacs-dbexplorer-grid-sql (&optional full)
+  "Return the statement this grid is showing the result of.
+FULL asks a browse source for its statement without the page window --
+see `cmacs-dbexplorer-grid--browse-sql'.  Statement sources are returned
+as written either way: the user's own LIMIT is theirs to keep."
   (let ((source cmacs-dbexplorer-grid--source))
     (pcase (plist-get source :kind)
       ('browse (cmacs-dbexplorer-grid--browse-sql
-                (cmacs-dbexplorer-buffer-connection)))
+                (cmacs-dbexplorer-buffer-connection) full))
       ('sql (plist-get source :sql))
       (_ (and cmacs-dbexplorer-grid--result
               (cmacs-dbexplorer-result-sql cmacs-dbexplorer-grid--result))))))
@@ -700,13 +710,22 @@ your database, not something to be escaped into meaninglessness."
   "Show the whole value of the cell at point.
 
 The grid truncates to keep the table readable; this is where the rest of
-a value lives, and the only place a multi-line one is legible."
+a value lives, and the only place a multi-line one is legible.  Works on
+a staged-insert line too -- `y' already does, and a key that inspects
+every row except the ones being written would be a strange lesson in
+which rows count."
   (interactive)
   (let* ((result (cmacs-dbexplorer-grid-result))
-         (row (cmacs-dbexplorer-grid-row-at-point-or-error))
+         (insert-edit (cmacs-dbexplorer-grid-edit-at-point))
+         (row (unless insert-edit
+                (cmacs-dbexplorer-grid-row-at-point-or-error)))
          (column (cmacs-dbexplorer-grid-column-at-point))
-         (cell (cmacs-dbexplorer-result-cell result row column))
          (name (nth column (cmacs-dbexplorer-result-column-names result)))
+         (cell (if insert-edit
+                   (or (cdr (assoc name (cmacs-dbexplorer-edit-values
+                                         insert-edit)))
+                       :null)
+                 (cmacs-dbexplorer-result-cell result row column)))
          (buffer (get-buffer-create "*dbexplorer-cell*")))
     (with-current-buffer buffer
       (let ((inhibit-read-only t))
@@ -715,9 +734,10 @@ a value lives, and the only place a multi-line one is legible."
         (insert (propertize (format "%s\n" name) 'face 'cmacs-dbexplorer-header))
         (insert (propertize
                  (format "%s\n\n"
-                         (or (cmacs-dbexplorer--pairs
-                              (cmacs-dbexplorer-result-row-key result row))
-                             "no key"))
+                         (cond (insert-edit "staged insert -- not yet written")
+                               ((cmacs-dbexplorer--pairs
+                                 (cmacs-dbexplorer-result-row-key result row)))
+                               (t "no key")))
                  'face 'shadow))
         (insert (if (eq cell :null)
                     (propertize (cmacs-dbexplorer-glyph 'null)

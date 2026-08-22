@@ -9386,6 +9386,16 @@ is not a read, so the guarantee holds identically for the grid, for
 callers and for @command{emacsctl}, because they all arrive at the same
 handle.  Mark production read-only.
 
+The classifier fails closed.  It allows @code{SELECT}, @code{VALUES},
+@code{SHOW}, an @code{EXPLAIN} @emph{of a read} (PostgreSQL's
+@code{EXPLAIN ANALYZE DELETE} runs the DELETE, so EXPLAIN is only as
+read-only as the statement under it), a @code{WITH} whose statement is a
+SELECT and whose CTE bodies contain no DML (PostgreSQL executes
+data-modifying CTEs), and the introspection pragmas.  A string holding
+more than one statement is refused outright: the drivers run an
+unparameterised string through the multi-statement execution APIs, so
+only the first keyword would ever have been judged.
+
 @node Dbexplorer Schema Tree
 @section The Schema Tree
 
@@ -9424,6 +9434,15 @@ Results arrive a page at a time (@code{cmacs-dbexplorer-page-size}).
 @kbd{o} sorts by re-running the query with an @code{ORDER BY} rather than
 sorting the fetched page, since sorting a page is not sorting a table and
 the difference is invisible until it misleads you.
+
+@cindex export, database results
+@kbd{E} opens the export transient.  @kbd{x} writes the @emph{page on
+screen}, instantly, from Lisp; @kbd{S} re-runs the statement through C
+and streams @emph{everything} to the file --- for a browsed table that is
+the whole table (the page's @code{LIMIT/OFFSET} is dropped; the filter
+and sort you are looking at are kept), while a hand-written statement
+runs exactly as written.  The @kbd{h} header toggle is honoured on both
+paths, and either command asks before overwriting an existing file.
 
 @node Dbexplorer SQL Editor
 @section The SQL Editor
@@ -9500,6 +9519,15 @@ own.  @code{db_query} is classified as a read whatever it is handed and is
 row- and character-capped; @code{db_execute} is destructive, goes through
 the brigade approval flow, and is refused outright on a read-only
 connection.
+
+@code{db_connections} lists everything the other tools accept ---
+configured connections, connection sources, and live connections opened
+by other means.  Agent calls wait @code{cmacs-dbexplorer-tools-timeout}
+(30s) for the database; @code{db_export} alone waits
+@code{cmacs-dbexplorer-tools-export-timeout} (600s), because streaming a
+table too big for the editor is that tool's entire purpose, and it
+cancels the export if the deadline passes rather than letting the file
+keep growing behind a failure report.
 
 @cindex AI menu, database
 The AI context menu adds a @emph{Database} group in these buffers:

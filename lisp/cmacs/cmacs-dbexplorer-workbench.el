@@ -71,11 +71,9 @@ its results below.  `q' in any of them puts back the windows this
 replaced."
   (interactive)
   (cmacs-dbexplorer--require)
-  ;; Saved before anything moves, and only once: opening the workbench
-  ;; twice must not record the workbench as the thing to go back to.
-  (unless cmacs-dbexplorer--saved-window-configuration
-    (setq cmacs-dbexplorer--saved-window-configuration
-          (current-window-configuration)))
+  ;; Saved before anything moves; per-frame, and only once per frame --
+  ;; see `cmacs-dbexplorer-save-window-configuration'.
+  (cmacs-dbexplorer-save-window-configuration)
   (cmacs-dbexplorer-connect-auto)
   (let* ((connection (car (cmacs-dbexplorer-connections)))
          (name (and connection (cmacs-dbexplorer-connection-name connection))))

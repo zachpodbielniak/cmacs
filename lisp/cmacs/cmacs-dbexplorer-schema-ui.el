@@ -532,7 +532,14 @@ churn, rather than from the position, which does."
 (defun cmacs-dbexplorer-schema-browse-prompt (connection)
   "Read a table on CONNECTION and browse it.
 
-Used from the connection list, where there is no tree to point at yet."
+Used from the connection list, where there is no tree to point at yet.
+
+The prompt runs on a zero-delay timer rather than in the reply callback
+itself.  Replies are delivered through the C dispatch, which binds
+`inhibit-interaction' -- so a `completing-read' there does not prompt,
+it signals `inhibited-interaction', the dispatch swallows it, and the
+key that started all this appears to do nothing, every time.  The timer
+callback runs from the ordinary command loop, where prompting is legal."
   (cmacs-dbexplorer--need 'cmacs-dbexplorer--tables-async)
   (let ((connection (cmacs-dbexplorer-resolve connection)))
     (cmacs-dbexplorer--tables-async
@@ -544,11 +551,17 @@ Used from the connection list, where there is no tree to point at yet."
            (let ((names (mapcar #'cmacs-dbexplorer-schema--entry-name
                                 (cmacs-dbexplorer-schema--vector
                                  reply :relations))))
-             (unless names (user-error "cmacs-dbexplorer: no tables"))
-             (require 'cmacs-dbexplorer-grid)
-             (cmacs-dbexplorer-browse
-              connection nil
-              (completing-read "Table: " names nil t)))))))))
+             (if (null names)
+                 ;; `message', not `user-error': a signal raised inside
+                 ;; the dispatch unwinds the dispatch, not the user.
+                 (message "cmacs-dbexplorer: no tables")
+               (run-at-time
+                0 nil
+                (lambda ()
+                  (require 'cmacs-dbexplorer-grid)
+                  (cmacs-dbexplorer-browse
+                   connection nil
+                   (completing-read "Table: " names nil t))))))))))))
 
 
 ;;;; Mode ---------------------------------------------------------------

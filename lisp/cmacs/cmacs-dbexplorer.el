@@ -428,7 +428,12 @@ connection the user closed."
          (handle (nth 1 event))
          (state (nth 2 event)))
     (dolist (connection (cmacs-dbexplorer-connections))
-      (when (eql handle (cmacs-dbexplorer-connection-handle connection))
+      ;; HANDLE must be non-nil before the `eql': every disconnected
+      ;; struct's handle is nil too, so a malformed event with no handle
+      ;; would otherwise "match" -- and mutate -- every closed
+      ;; connection at once.
+      (when (and handle
+                 (eql handle (cmacs-dbexplorer-connection-handle connection)))
         (setf (cmacs-dbexplorer-connection-state connection)
               (pcase state
                 ('open 'idle)
@@ -704,6 +709,12 @@ statement failed; without one the message is simply shown."
 
 ;;;; Connecting ---------------------------------------------------------
 
+(defvar cmacs-dbexplorer-connect-failed-functions nil
+  "Hook run with the connection NAME when opening it failed.
+The counterpart of `cmacs-dbexplorer-connect-hook', and what lets a
+watcher waiting on a connect stop waiting instead of surviving the
+failure -- see `cmacs-dbexplorer-when-connected'.")
+
 (defun cmacs-dbexplorer--connected (name read-only reply)
   "Record a connection called NAME from REPLY, or report its failure.
 READ-ONLY is the flag the connection was opened with."
@@ -711,6 +722,7 @@ READ-ONLY is the flag the connection was opened with."
     (if error-message
         (progn
           (cmacs-dbexplorer--drop-connection name)
+          (run-hook-with-args 'cmacs-dbexplorer-connect-failed-functions name)
           (message "cmacs-dbexplorer: %s: %s" name error-message))
       (let ((connection (cmacs-dbexplorer-connection-create
                          :name name
@@ -826,22 +838,40 @@ model keys on the name for exactly this reason."
     (message "cmacs-dbexplorer: %s is now %s" name
              (if flag "read-only" "writable"))))
 
-(defun cmacs-dbexplorer-when-connected (name function)
+(defun cmacs-dbexplorer-when-connected (name function &optional failure)
   "Call FUNCTION with the connection called NAME once it is open.
 
 Connecting is asynchronous, so a command that means \"connect and then
 show me the tables\" cannot look the connection up on the next line.
 The watcher removes itself, and only fires for its own name, so two of
-these outstanding at once do not cross."
+these outstanding at once do not cross.
+
+It also removes itself when the attempt FAILS, which matters more than
+it looks: a watcher left on the hook after a bad password would sit
+there for the rest of the session and fire on the next successful
+connect of that name -- popping a schema tree hours after anyone asked
+for one, once per failed attempt that stacked another watcher up.
+FAILURE, when given, is called with NAME on that path."
   (let ((connection (cmacs-dbexplorer-connection name)))
     (if (cmacs-dbexplorer-connection-open-p connection)
         (funcall function connection)
-      (letrec ((watch
+      (letrec ((cleanup
+                (lambda ()
+                  (remove-hook 'cmacs-dbexplorer-connect-hook watch)
+                  (remove-hook 'cmacs-dbexplorer-connect-failed-functions
+                               failed)))
+               (watch
                 (lambda (opened)
                   (when (equal name (cmacs-dbexplorer-connection-name opened))
-                    (remove-hook 'cmacs-dbexplorer-connect-hook watch)
-                    (funcall function opened)))))
-        (add-hook 'cmacs-dbexplorer-connect-hook watch)))))
+                    (funcall cleanup)
+                    (funcall function opened))))
+               (failed
+                (lambda (failed-name)
+                  (when (equal name failed-name)
+                    (funcall cleanup)
+                    (when failure (funcall failure failed-name))))))
+        (add-hook 'cmacs-dbexplorer-connect-hook watch)
+        (add-hook 'cmacs-dbexplorer-connect-failed-functions failed)))))
 
 (defun cmacs-dbexplorer-connect-auto ()
   "Open every configured connection marked `:auto-connect'."
@@ -913,9 +943,13 @@ model anyway."
   (setq cmacs-dbexplorer--refresh-timer nil)
   (if (minibuffer-window-active-p (minibuffer-window))
       (when cmacs-dbexplorer--pending
+        ;; A plain timer for the re-arm, not an idle timer: an idle
+        ;; timer scheduled from inside an idle callback ripens within
+        ;; the SAME idle period, so while a prompt sat open this fired
+        ;; in a tight loop instead of every interval.
         (setq cmacs-dbexplorer--refresh-timer
-              (run-with-idle-timer cmacs-dbexplorer-refresh-idle nil
-                                   #'cmacs-dbexplorer--flush-refresh)))
+              (run-with-timer cmacs-dbexplorer-refresh-idle nil
+                              #'cmacs-dbexplorer--flush-refresh)))
     (let ((pending cmacs-dbexplorer--pending))
       (setq cmacs-dbexplorer--pending nil)
       (dolist (entry pending)
@@ -932,24 +966,49 @@ model anyway."
 
 ;;;; Leaving a view -----------------------------------------------------
 
-(defvar cmacs-dbexplorer--saved-window-configuration nil
-  "The window configuration the workbench replaced, or nil.
+(defun cmacs-dbexplorer-save-window-configuration ()
+  "Snapshot this frame's windows for `cmacs-dbexplorer-quit' to restore.
+Only when no snapshot is pending: opening the workbench twice must not
+record the workbench itself as the thing to go back to."
+  (unless (frame-parameter nil 'cmacs-dbexplorer-window-configuration)
+    (set-frame-parameter nil 'cmacs-dbexplorer-window-configuration
+                         (current-window-configuration))))
 
-Kept here rather than in the workbench so that every view's `q' can
-restore it without depending on the workbench being loaded.")
+(defun cmacs-dbexplorer--workbench-live-p ()
+  "Non-nil when this frame still shows the workbench's side windows."
+  (seq-some (lambda (window)
+              (and (window-parameter window 'window-side)
+                   (with-current-buffer (window-buffer window)
+                     (derived-mode-p 'cmacs-dbexplorer-connections-mode
+                                     'cmacs-dbexplorer-schema-mode))))
+            (window-list)))
 
 (defun cmacs-dbexplorer-quit ()
   "Close this view.
 
 Inside the workbench that means putting back the window configuration it
 replaced, because the workbench took the whole frame and quitting one of
-its four windows would leave the other three."
+its four windows would leave the other three.
+
+The snapshot lives on the frame it was taken on -- a frame parameter,
+not a global -- so a workbench on each of two frames restores each
+frame's own layout, and `q' on a frame that never opened one is just
+`quit-window'.  And it is only restored while the workbench's side
+windows are still up: a snapshot outliving the layout it described
+would otherwise snap the frame back to an arrangement from another era
+the next time some standalone grid was quit."
   (interactive)
-  (if cmacs-dbexplorer--saved-window-configuration
-      (let ((configuration cmacs-dbexplorer--saved-window-configuration))
-        (setq cmacs-dbexplorer--saved-window-configuration nil)
-        (set-window-configuration configuration))
-    (quit-window)))
+  (let ((configuration (frame-parameter nil
+                                        'cmacs-dbexplorer-window-configuration)))
+    (if (and configuration (cmacs-dbexplorer--workbench-live-p))
+        (progn
+          (set-frame-parameter nil 'cmacs-dbexplorer-window-configuration nil)
+          (set-window-configuration configuration))
+      (when configuration
+        ;; Stale: the workbench dissolved some other way.  Forget it so
+        ;; it cannot ambush a later `q', and close only this window.
+        (set-frame-parameter nil 'cmacs-dbexplorer-window-configuration nil))
+      (quit-window))))
 
 (provide 'cmacs-dbexplorer)
 ;;; cmacs-dbexplorer.el ends here

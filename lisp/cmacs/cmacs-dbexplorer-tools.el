@@ -35,21 +35,30 @@
 (require 'json)
 (require 'subr-x)
 
-;; Defined in cmacs-dbexplorer.el, which this file must not require: the
-;; UI half pulls in the transient and auth-source machinery, and an agent
-;; calling a tool should not drag a user interface in behind it.
-(defvar cmacs-dbexplorer-connections)
+;; cmacs-dbexplorer.el is required lazily, in
+;; `cmacs-dbexplorer-tools--ensure', not at the top of this file: the
+;; MCP, D-Bus and emacsctl surfaces load this file at startup, and an
+;; agent surface should not drag the transient and auth-source machinery
+;; in behind it.  But it MUST be loaded when a tool actually runs --
+;; every tool below reaches `cmacs-dbexplorer-connect',
+;; `cmacs-dbexplorer-query' and friends, and in a session where the user
+;; never opened the explorer themselves nothing else will have loaded
+;; them; without the lazy require the entire agent surface dies on the
+;; first call with a void-function error.
 
+(declare-function cmacs-dbexplorer-connection-specs "cmacs-dbexplorer" ())
 (declare-function cmacs-dbexplorer-connect "cmacs-dbexplorer" (&optional name))
 (declare-function cmacs-dbexplorer-disconnect "cmacs-dbexplorer" (&optional name))
 (declare-function cmacs-dbexplorer-connection-spec "cmacs-dbexplorer" (name))
-(declare-function cmacs-dbexplorer-when-connected "cmacs-dbexplorer" (name function))
+(declare-function cmacs-dbexplorer-when-connected "cmacs-dbexplorer"
+                  (name function &optional failure))
 (declare-function cmacs-dbexplorer-query "cmacs-dbexplorer"
                   (connection sql &rest keys))
 (declare-function cmacs-dbexplorer-execute "cmacs-dbexplorer"
                   (connection sql &rest keys))
 (declare-function cmacs-dbexplorer-run-export "cmacs-dbexplorer"
                   (connection sql format path &rest keys))
+(declare-function cmacs-dbexplorer-cancel "cmacs-dbexplorer" (id))
 (declare-function cmacs-dbexplorer--handle "cmacs-dbexplorer" (connection))
 (declare-function cmacs-dbexplorer--tables-async "src/cmacs-dbexplorer-defuns.c"
                   (handle schema callback))
@@ -72,23 +81,36 @@ a connection that may never answer."
   :type 'number
   :group 'cmacs-dbexplorer-tools)
 
-(defun cmacs-dbexplorer-tools--await (start)
+(defcustom cmacs-dbexplorer-tools-export-timeout 600
+  "Seconds `cmacs-dbexplorer-tool-export' waits for the export to finish.
+
+Separate from `cmacs-dbexplorer-tools-timeout', and much larger: the C
+streamer exists precisely to move tables bigger than the editor could
+hold, and a big table takes longer than any sensible query timeout.  A
+30-second cap here would tell the agent the export failed while the file
+went on quietly filling up behind it."
+  :type 'number
+  :group 'cmacs-dbexplorer-tools)
+
+(defun cmacs-dbexplorer-tools--await (start &optional timeout)
   "Run START, which takes a DONE callback, and wait for its result.
 
 DONE is called with (VALUE . nil) on success or (nil . MESSAGE) on
-failure.  Returns VALUE, or signals with MESSAGE.
+failure.  Returns VALUE, or signals with MESSAGE.  TIMEOUT overrides
+`cmacs-dbexplorer-tools-timeout'.
 
 The wait spins the event loop with `sit-for' rather than blocking,
 because the reply arrives through that same loop -- a blocking wait would
 prevent the very callback it is waiting for."
-  (let ((box nil)
-        (deadline (+ (float-time) cmacs-dbexplorer-tools-timeout)))
+  (let* ((timeout (or timeout cmacs-dbexplorer-tools-timeout))
+         (box nil)
+         (deadline (+ (float-time) timeout)))
     (funcall start (lambda (value message) (setq box (list value message))))
     (while (and (null box) (< (float-time) deadline))
       (sit-for 0.01))
     (cond
      ((null box)
-      (error "Timed out after %s seconds" cmacs-dbexplorer-tools-timeout))
+      (error "Timed out after %s seconds" timeout))
      ((nth 1 box) (error "%s" (nth 1 box)))
      (t (nth 0 box)))))
 
@@ -146,12 +168,19 @@ the process rather than unwind."
   (let ((value (alist-get key reply)))
     (if (vectorp value) (append value nil) value)))
 
+(defun cmacs-dbexplorer-tools--ensure ()
+  "Signal unless the explorer is built, then load its core.
+See the commentary at the top of the file for why the require is here
+and not at load time."
+  (cmacs-dbexplorer--require)
+  (require 'cmacs-dbexplorer))
+
 (defun cmacs-dbexplorer-tools--connection (name)
   "Return the live connection called NAME, connecting if needed.
 
 Signals rather than returning nil, because every caller here would
 otherwise have to repeat the same check and one of them would forget."
-  (cmacs-dbexplorer--require)
+  (cmacs-dbexplorer-tools--ensure)
   (unless (and (stringp name) (string-match-p "\\`[A-Za-z0-9._-]+\\'" name))
     (error "Not a valid connection name: %S" name))
   (let ((connection (cmacs-dbexplorer-connection name)))
@@ -159,12 +188,18 @@ otherwise have to repeat the same check and one of them would forget."
       (unless (cmacs-dbexplorer-connection-spec name)
         (error "%s is not a configured connection" name))
       ;; Connecting is asynchronous, so the connection cannot be looked
-      ;; up on the next line; wait for it to open or to fail.
+      ;; up on the next line; wait for it to open or to fail.  The
+      ;; failure watcher is what turns a bad password into an immediate
+      ;; error instead of a full timeout spent waiting for a connect
+      ;; that already said no.
       (setq connection
             (cmacs-dbexplorer-tools--await
              (lambda (done)
                (cmacs-dbexplorer-when-connected
-                name (lambda (opened) (funcall done opened nil)))
+                name
+                (lambda (opened) (funcall done opened nil))
+                (lambda (_name)
+                  (funcall done nil (format "could not connect to %s" name))))
                (cmacs-dbexplorer-connect name)))))
     (unless (cmacs-dbexplorer-connection-open-p connection)
       (error "Could not connect to %s" name))
@@ -187,27 +222,37 @@ otherwise have to repeat the same check and one of them would forget."
 ;; representation.
 
 (defun cmacs-dbexplorer-tool-connections ()
-  "Return the configured and live connections as JSON."
-  (cmacs-dbexplorer--require)
-  (cmacs-dbexplorer-tools--json
-   (vconcat
-    (mapcar
-     (lambda (entry)
-       (let* ((name (car entry))
-              (spec (cdr entry))
-              (live (cmacs-dbexplorer-connection name)))
-         (list (cons 'name name)
-               (cons 'dialect (and live (cmacs-dbexplorer-connection-dialect live)))
-               (cons 'state (format "%s" (if live
-                                             (cmacs-dbexplorer-connection-state live)
-                                           'closed)))
-               ;; The saved intent, not just the live flag, so a caller
-               ;; can see a connection is read-only before opening it.
-               (cons 'read_only
-                     (if (or (plist-get spec :read-only)
-                             (and live (cmacs-dbexplorer-connection-read-only live)))
-                         t json-false)))))
-     cmacs-dbexplorer-connections))))
+  "Return the configured and live connections as JSON.
+
+Configured means `cmacs-dbexplorer-connection-specs' -- the defcustom
+plus every registered connection source -- and live connections are
+listed even when no spec mentions them, since `cmacs-dbexplorer-tool-query'
+happily addresses one by name.  An agent working from a listing that
+hides connections the other tools accept is being lied to."
+  (cmacs-dbexplorer-tools--ensure)
+  (let* ((specs (cmacs-dbexplorer-connection-specs))
+         (names (delete-dups
+                 (append (mapcar #'car specs)
+                         (mapcar #'cmacs-dbexplorer-connection-name
+                                 (cmacs-dbexplorer-connections))))))
+    (cmacs-dbexplorer-tools--json
+     (vconcat
+      (mapcar
+       (lambda (name)
+         (let ((spec (cdr (assoc name specs)))
+               (live (cmacs-dbexplorer-connection name)))
+           (list (cons 'name name)
+                 (cons 'dialect (and live (cmacs-dbexplorer-connection-dialect live)))
+                 (cons 'state (format "%s" (if live
+                                               (cmacs-dbexplorer-connection-state live)
+                                             'closed)))
+                 ;; The saved intent, not just the live flag, so a caller
+                 ;; can see a connection is read-only before opening it.
+                 (cons 'read_only
+                       (if (or (plist-get spec :read-only)
+                               (and live (cmacs-dbexplorer-connection-read-only live)))
+                           t json-false)))))
+       names)))))
 
 (defun cmacs-dbexplorer-tool-connect (name)
   "Open the saved connection called NAME."
@@ -220,7 +265,7 @@ otherwise have to repeat the same check and one of them would forget."
 
 (defun cmacs-dbexplorer-tool-disconnect (name)
   "Close the connection called NAME."
-  (cmacs-dbexplorer--require)
+  (cmacs-dbexplorer-tools--ensure)
   (cmacs-dbexplorer-disconnect name)
   (cmacs-dbexplorer-tools--json (list (cons 'name name) (cons 'state "closed"))))
 
@@ -326,16 +371,29 @@ never enter Emacs, so exporting a table larger than the editor could hold
 is a question of disk rather than memory."
   (let* ((connection (cmacs-dbexplorer-tools--connection name))
          (path (expand-file-name path))
+         (stream nil)
          (summary
-          (cmacs-dbexplorer-tools--await
-           (lambda (done)
-             (cmacs-dbexplorer-run-export
-              connection sql format path
-              ;; With a header: the file is going somewhere this process
-              ;; cannot explain it, so the column names travel with it.
-              :options (list :header t)
-              :on-done (lambda (s) (funcall done s nil))
-              :on-error (lambda (m) (funcall done nil m)))))))
+          (condition-case err
+              (cmacs-dbexplorer-tools--await
+               (lambda (done)
+                 (setq stream
+                       (cmacs-dbexplorer-run-export
+                        connection sql format path
+                        ;; With a header: the file is going somewhere this
+                        ;; process cannot explain it, so the column names
+                        ;; travel with it.
+                        :options (list :header t)
+                        :on-done (lambda (s) (funcall done s nil))
+                        :on-error (lambda (m) (funcall done nil m)))))
+               ;; The export gets its own, far longer deadline -- see the
+               ;; defcustom -- and on timing out the stream is cancelled,
+               ;; so the caller is not told "it failed" while the file
+               ;; keeps growing behind its back.
+               cmacs-dbexplorer-tools-export-timeout)
+            (error
+             (when stream
+               (ignore-errors (cmacs-dbexplorer-cancel stream)))
+             (signal (car err) (cdr err))))))
     (cmacs-dbexplorer-tools--json
      (list (cons 'path (plist-get summary :path))
            (cons 'format format)
