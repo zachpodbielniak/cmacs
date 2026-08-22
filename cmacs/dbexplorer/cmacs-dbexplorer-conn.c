@@ -352,7 +352,91 @@ dbx_with_is_read_only (const char *p)
       word = dbx_take_word (&p);
       if (word == NULL)
         p++;                    /* punctuation inside the CTE list */
+      else if (dbx_word_is (word, "INSERT")
+               || dbx_word_is (word, "UPDATE")
+               || dbx_word_is (word, "DELETE")
+               || dbx_word_is (word, "MERGE")
+               || dbx_word_is (word, "REPLACE"))
+        /* A data-modifying CTE body: PostgreSQL executes `WITH t AS
+           (DELETE FROM x RETURNING *) SELECT ...' -- the write happens
+           even though the statement ends in SELECT.  Any DML keyword
+           anywhere in the CTE prefix (string literals and quoted
+           identifiers were already skipped above, so this is a bare
+           keyword position) classifies the whole statement as a write.
+           An unquoted column actually named `delete' costs a refused
+           SELECT; the other direction costs a table.  */
+        return FALSE;
     }
+}
+
+/* Whether SQL contains more than one top-level statement.
+
+   The drivers run an unparameterised string through the multi-statement
+   execution APIs -- sqlite3_exec, PQexec -- so "SELECT 1; DELETE FROM t"
+   would sail past a classifier that only reads the first keyword: the
+   SELECT is judged, both run.  A second statement therefore makes the
+   whole string unclassifiable as a read.  Semicolons inside string
+   literals, quoted identifiers and comments are not separators, and a
+   trailing semicolon with nothing after it is not a second statement.
+   Anything unterminated fails closed, same as dbx_skip_blanks.  */
+static gboolean
+dbx_sql_is_multi_statement (const char *sql)
+{
+  const char *p = sql;
+
+  while (*p != '\0')
+    {
+      if (*p == '\'' || *p == '"' || *p == '`')
+        {
+          char quote = *p++;
+
+          while (*p != '\0')
+            {
+              if (*p == quote)
+                {
+                  /* A doubled quote is an escaped one, not the end. */
+                  if (p[1] == quote)
+                    p += 2;
+                  else
+                    break;
+                }
+              else
+                p++;
+            }
+          if (*p == '\0')
+            return TRUE;
+          p++;
+          continue;
+        }
+
+      if (p[0] == '-' && p[1] == '-')
+        {
+          while (*p != '\0' && *p != '\n')
+            p++;
+          continue;
+        }
+
+      if (p[0] == '/' && p[1] == '*')
+        {
+          const char *close = strstr (p + 2, "*/");
+
+          if (close == NULL)
+            return TRUE;
+          p = close + 2;
+          continue;
+        }
+
+      if (*p == ';')
+        {
+          p++;
+          dbx_skip_blanks (&p);
+          return *p != '\0';
+        }
+
+      p++;
+    }
+
+  return FALSE;
 }
 
 /* The pragmas that report rather than configure even though they take an
@@ -423,6 +507,12 @@ cmacs_dbx_sql_is_read_only (const char *sql)
   if (sql == NULL)
     return 0;
 
+  /* More than one statement means the first keyword judges only the
+     first statement while the driver would run all of them, so the
+     string as a whole cannot be certified as a read.  */
+  if (dbx_sql_is_multi_statement (sql))
+    return 0;
+
   dbx_skip_blanks (&p);
   word = dbx_take_word (&p);
   if (word == NULL)
@@ -435,9 +525,73 @@ cmacs_dbx_sql_is_read_only (const char *sql)
      first keyword is ever consulted -- DELETE ... RETURNING is a DELETE. */
   if (dbx_word_is (word, "SELECT")
       || dbx_word_is (word, "VALUES")
-      || dbx_word_is (word, "EXPLAIN")
       || dbx_word_is (word, "SHOW"))
     return 1;
+
+  if (dbx_word_is (word, "EXPLAIN"))
+    {
+      /* EXPLAIN is only as read-only as the statement under it: on
+         PostgreSQL, EXPLAIN ANALYZE DELETE *runs* the DELETE.  Step
+         over the option syntax -- bare keywords, the parenthesised
+         (ANALYZE, BUFFERS) form, MySQL's FORMAT=json -- and judge what
+         is left with a recursive call.  */
+      for (;;)
+        {
+          const char *peek;
+          g_autofree gchar *next = NULL;
+
+          dbx_skip_blanks (&p);
+
+          if (*p == '(')
+            {
+              int depth = 0;
+
+              while (*p != '\0')
+                {
+                  if (*p == '(')
+                    depth++;
+                  else if (*p == ')')
+                    {
+                      depth--;
+                      if (depth == 0)
+                        {
+                          p++;
+                          break;
+                        }
+                    }
+                  p++;
+                }
+              continue;
+            }
+
+          peek = p;
+          next = dbx_take_word (&peek);
+          if (dbx_word_is (next, "ANALYZE")
+              || dbx_word_is (next, "VERBOSE")
+              || dbx_word_is (next, "QUERY")
+              || dbx_word_is (next, "PLAN"))
+            {
+              p = peek;
+              continue;
+            }
+          if (dbx_word_is (next, "FORMAT"))
+            {
+              p = peek;
+              dbx_skip_blanks (&p);
+              if (*p == '=')
+                {
+                  g_autofree gchar *format = NULL;
+
+                  p++;
+                  dbx_skip_blanks (&p);
+                  format = dbx_take_word (&p);
+                }
+              continue;
+            }
+          break;
+        }
+      return cmacs_dbx_sql_is_read_only (p);
+    }
 
   if (dbx_word_is (word, "WITH"))
     return dbx_with_is_read_only (p) ? 1 : 0;
