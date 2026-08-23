@@ -266,6 +266,23 @@ away from correct the moment the separator's shape changed.")
 
 ;;;; Rendering --------------------------------------------------------
 
+(defconst cmacs-ai-harness--read-only-props
+  '(read-only t front-sticky t rear-nonsticky t)
+  "Text properties marking text the library owns and the user must not edit.
+
+BOTH stickiness flags are load-bearing and neither is optional.
+
+`rear-nonsticky' is what lets the first character of the prompt be typed
+at all: without it the `read-only' property is inherited by whatever is
+inserted after the separator, and the buffer cannot be typed in.
+
+`front-sticky' is what makes the run unmodifiable in the MIDDLE.  With
+`rear-nonsticky' alone -- the comint idiom, and what this used -- Emacs
+decides inserted text would join neither neighbouring interval and
+permits the insertion, so only the run's edges were ever protected: the
+prompt glyph and every transcript block could be typed into.  There is a
+test.")
+
 (defun cmacs-ai-harness--apply-spans (origin spans)
   "Apply SPANS to the text inserted at ORIGIN.
 
@@ -297,7 +314,11 @@ multi-byte character in the buffer."
     ;; ai-glib's blocks on every change, so an edit here would be silently
     ;; discarded the next time the block grew.  `rear-nonsticky' keeps the
     ;; property from leaking onto whatever is inserted after it.
-    (add-text-properties origin (point) '(read-only t rear-nonsticky t))
+    ;;
+    ;; See `cmacs-ai-harness--read-only-props' for why both stickiness
+    ;; flags are there.
+    (add-text-properties origin (point)
+                         cmacs-ai-harness--read-only-props)
     ;; The two insertion types are deliberately opposite, and both
     ;; matter.  A block's region must be exactly that block: the END is
     ;; type nil so appending the next block -- which is inserted at
@@ -348,12 +369,10 @@ multi-byte character in the buffer."
   (let ((start (point)))
     (insert "\n" cmacs-ai-harness-prompt)
     ;; The separator and the marker glyph belong to the transcript; only
-    ;; what follows is the user's to edit.  `rear-nonsticky' is what lets
-    ;; the first character of the prompt be typed at all -- without it the
-    ;; read-only property is inherited by whatever is inserted after it.
+    ;; what follows is the user's to edit.
     (add-text-properties start (point)
-                         '(read-only t rear-nonsticky t
-                                     face cmacs-ai-harness-dim))
+                         (append cmacs-ai-harness--read-only-props
+                                 '(face cmacs-ai-harness-dim)))
     ;; Set AFTER the separator exists, pointing at where it begins.
     ;; Setting it before and inserting the separator at the same position
     ;; walked it: insertion type t means the marker advances past text

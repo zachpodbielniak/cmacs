@@ -225,6 +225,26 @@ So the mode derives from =fundamental-mode=, the transcript is protected by a =r
 
 The =evil-set-initial-state= call is inside =with-eval-after-load=, not behind a bare =fboundp= guard as some other cmacs modes use: that guard silently does nothing when the file loads before Evil, and the failure mode is landing in normal state, which does not look like an Evil problem when you hit it.
 
+** Both stickiness flags on the read-only property
+
+=cmacs-ai-harness--read-only-props= is =(read-only t front-sticky t
+rear-nonsticky t)= and neither flag is optional:
+
+- =rear-nonsticky= is what lets the first character of the prompt be
+  typed at all.  Without it the property is inherited by whatever is
+  inserted after the separator, and the buffer cannot be typed in.
+- =front-sticky= is what makes the run unmodifiable in the *middle*.
+  With =rear-nonsticky= alone -- the comint idiom, and what this used to
+  be -- Emacs decides inserted text would join neither neighbouring
+  interval and permits the insertion, so only the run's edges were
+  protected: the prompt glyph and every transcript block could be typed
+  into.
+
+The test asserts it by inserting mid-run, using the constant rather than
+a copy of its value -- a literal in the test would assert how Emacs
+behaves rather than how the harness marks its blocks, and would keep
+passing after someone dropped =front-sticky= from the real one.
+
 ** Block ids, not positions
 
 =cmacs-ai-harness-block-at= reports an =:id= that is unique for the life of the process. The buffer's region map is keyed on it, because positions shift when blocks are removed and ids do not.

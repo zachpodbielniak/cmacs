@@ -5066,6 +5066,13 @@ Open a file and return its buffer name.
 @table @code
 @item window_list_windows
 List all windows across all frames.
+@item window_current_view
+What the user is looking at right now: the visible buffers, most
+recently selected first, with the AI chat surfaces excluded.  Call it
+when the user says ``here'', ``this'' or ``the above'' without naming a
+buffer --- @code{window_list_windows} answers a mechanical question and
+cannot say which of five windows they meant.  The optional
+@code{include_content} also returns the buffers' text.
 @item window_list_frames
 List all frames with geometry and display info.
 @item window_split_window

@@ -217,6 +217,7 @@ delivered back through `cmacs-libreclaw--on-cmacs-response'.
                   (goto-char (point-max))
                   (point-marker)))
     (set-marker-insertion-type cmacs-libreclaw-room--compose-marker nil)
+    (cmacs-libreclaw--seal-history)
     (goto-char (point-max))))
 
 (defun cmacs-libreclaw-cmacs-channel--restore-history (buf room-id)
@@ -232,7 +233,9 @@ delivered back through `cmacs-libreclaw--on-cmacs-response'.
             (forward-line -1)
             (end-of-line)
             (insert "\n")
-            (insert-file-contents file)))))))
+            (insert-file-contents file))
+          ;; Restored history is finished text like any other.
+          (cmacs-libreclaw--seal-history))))))
 
 (defun cmacs-libreclaw-cmacs-channel--ensure-buffer (room-id)
   "Return (creating if necessary) the libreclaw buffer for ROOM-ID.
@@ -373,10 +376,14 @@ of user-message headings."
       ;; send_message_async vfunc and lands in this buffer via
       ;; `cmacs-libreclaw--on-cmacs-response', inserted AFTER the
       ;; local echo we just wrote.
+      ;;
+      ;; The screen context rides the injected body and NOT the local
+      ;; echo above: the agent needs to know what you were looking at,
+      ;; and the room needs to read as the conversation you had.
       (cmacs-libreclaw-cmacs-channel-inject
        cmacs-libreclaw-cmacs-channel-room-id
        cmacs-libreclaw-cmacs-channel-sender
-       body
+       (cmacs-libreclaw--outgoing-body body)
        cmacs-libreclaw-cmacs-channel-sender))))
 
 ;;;; Response dispatch target (called from C) ----------------------

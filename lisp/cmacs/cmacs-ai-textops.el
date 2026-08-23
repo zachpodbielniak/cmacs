@@ -236,9 +236,14 @@ minibuffer.  Returns the result buffer."
   "Stream SYSTEM/PROMPT into a result window called TITLE.
 
 The plumbing every AI action that produces prose shares: make a session,
-open the window, append the deltas, settle the non-streaming case, free
-the session.  SUBTITLE says what produced it; RETRY, a thunk, is what
-`g\=' in the window re-runs.  Returns the result buffer.
+open the window, append the deltas, settle the non-streaming case.
+SUBTITLE says what produced it; RETRY, a thunk, is what `g\=' in the
+window re-runs.  Returns the result buffer.
+
+The session is NOT freed when the answer lands -- `cmacs-ai-output\='
+keeps it so `C-c C-c\' in the window continues the conversation, and
+frees it when the window is closed.  So every action routed through
+here gets follow-ups without knowing anything about them.
 
 Public because it is the way to add an action that answers in prose
 without writing this loop again."
@@ -252,6 +257,14 @@ without writing this loop again."
                                       system))
          (streamed 0))
     (cmacs-ai-output-attach-session buf pair)
+    ;; What the window needs to carry the conversation on: the session
+    ;; alone cannot say what was asked, and a promoted chat that showed
+    ;; only the answer would read as though it had come from nowhere.
+    (cmacs-ai-output-set-request buf
+                                 :system system
+                                 :prompt prompt
+                                 :provider cmacs-ai-textops-provider
+                                 :model cmacs-ai-textops-model)
     (when retry
       (cmacs-ai-output-set-retry buf (lambda () (interactive) (funcall retry))))
     (cmacs-ai-output-show buf)

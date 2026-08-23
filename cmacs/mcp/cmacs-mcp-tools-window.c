@@ -177,6 +177,64 @@ handle_select_window (McpServer   *server,
   return result;
 }
 
+/* ── current_view ─────────────────────────────────────────────────── */
+
+/* "What is the user actually looking at?"
+ *
+ * list_windows answers a mechanical question -- geometry and point --
+ * and an agent reading it still cannot tell which of five windows the
+ * user meant by "here".  This answers the question they actually have:
+ * the visible buffers, most-recently-selected first, with the AI
+ * surfaces themselves left out, so the chat the agent is talking
+ * through never shows up as context for itself.
+ *
+ * The work is done in Elisp (cmacs-ai-view.el), because that is where
+ * the exclusion policy and the target resolvers live and it must stay
+ * one implementation -- the same string is what rides a chat's system
+ * prompt.  Loaded with `require ... noerror' so a build or a tree
+ * without it degrades to a plain window walk rather than an error. */
+static McpToolResult *
+handle_current_view (McpServer   *server,
+                     const gchar *name,
+                     JsonObject  *arguments,
+                     gpointer     user_data)
+{
+  gboolean include_content;
+  g_autoptr (GError) error = NULL;
+  g_autofree gchar *result_str = NULL;
+  g_autofree gchar *form = NULL;
+  McpToolResult *result;
+
+  (void) server;
+  (void) name;
+  (void) user_data;
+
+  include_content = arguments != NULL
+    ? json_object_get_boolean_member_with_default (arguments,
+                                                   "include_content",
+                                                   FALSE)
+    : FALSE;
+
+  form = g_strdup_printf (
+    "(progn"
+    "  (require 'cmacs-ai-view nil t)"
+    "  (if (fboundp 'cmacs-ai-view-report)"
+    "      (cmacs-ai-view-report %s)"
+    "    (mapconcat (lambda (w)"
+    "                 (format \"%%s | %%s\""
+    "                         (buffer-name (window-buffer w))"
+    "                         (or (buffer-file-name (window-buffer w)) \"\")))"
+    "               (window-list) \"\\n\")))",
+    include_content ? "t" : "nil");
+
+  result_str = cmacs_dispatch_eval (form, &error);
+
+  result = mcp_tool_result_new (result_str == NULL);
+  mcp_tool_result_add_text (result,
+    result_str ? result_str : error->message);
+  return result;
+}
+
 /* ── Registration ─────────────────────────────────────────────────── */
 
 void
@@ -190,6 +248,23 @@ cmacs_mcp_tools_window_register (McpServer *server)
     "List all windows with buffer, point, dimensions, and position.");
   mcp_tool_set_read_only_hint (tool, TRUE);
   mcp_server_add_tool (server, tool, handle_list_windows, NULL, NULL);
+  g_object_unref (tool);
+
+  /* current_view */
+  tool = mcp_tool_new ("current_view",
+    "What the user is looking at right now: the visible buffers, most "
+    "recently selected first, with the AI chat surfaces excluded. "
+    "Call this when the user refers to \"here\", \"this\" or \"the "
+    "above\" without naming a buffer.");
+  mcp_tool_set_read_only_hint (tool, TRUE);
+  schema = cmacs_mcp_schema_from_string (
+    "{\"type\":\"object\",\"properties\":{"
+    "\"include_content\":{\"type\":\"boolean\","
+    "\"description\":\"Also return the buffers' text "
+    "(default false: the listing alone is usually enough, and "
+    "get_buffer_content fetches just the one you want)\"}}}");
+  mcp_tool_set_input_schema (tool, schema);
+  mcp_server_add_tool (server, tool, handle_current_view, NULL, NULL);
   g_object_unref (tool);
 
   /* list_frames */

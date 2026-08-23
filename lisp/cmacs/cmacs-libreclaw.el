@@ -193,6 +193,17 @@ everything from here to `point-max' is the editable compose area.")
 (defvar-local cmacs-libreclaw-room--pending nil
   "List of pending messages when the buffer is temporarily hidden.")
 
+(defvar-local cmacs-libreclaw-room--view nil
+  "Signature of the screen as of the last message that described it.
+Compared against `cmacs-ai-view-signature' so an unchanged screen is
+not listed again on every message.")
+
+(defvar-local cmacs-libreclaw-room--hinted nil
+  "Non-nil once this room has been told what the screen listing means.
+The standing explanation rides the first outgoing message; libreclaw
+owns the agent\'s system prompt (it is assembled from the workspace
+identity files by `LcApp\'), so there is nowhere else to put it.")
+
 (defvar-local cmacs-libreclaw-room--created-at nil
   "Time the room buffer was created.
 Used as the timestamp portion of the archived-conversation file
@@ -205,6 +216,15 @@ Resolved lazily on the first save (so the agent name is known)
 and then cached, so subsequent saves rewrite the same file.")
 
 (declare-function cmacs-libreclaw-agent-name "cmacs-libreclaw.c" ())
+
+;; Soft: cmacs-ai-view is pure Elisp and always present in a normal
+;; tree, but libreclaw must still build and run in a --without-cmacs-ai
+;; checkout, so every call is guarded rather than assumed.
+(require 'cmacs-ai-view nil t)
+(declare-function cmacs-ai-view-attach "cmacs-ai-view" (&optional arg))
+(declare-function cmacs-ai-view-hint "cmacs-ai-view" (mode))
+(declare-function cmacs-ai-view-turn-block "cmacs-ai-view"
+                  (mode &optional last-signature))
 
 (defvar cmacs-libreclaw--allow-history-edit nil
   "Dynamic override for `cmacs-libreclaw--protect-history'.
@@ -221,14 +241,59 @@ with `text-read-only'.")
     (define-key m (kbd "C-c C-c") #'cmacs-libreclaw-send-compose)
     (define-key m (kbd "C-c C-k") #'cmacs-libreclaw-clear-compose)
     (define-key m (kbd "C-c C-x C-f") #'cmacs-libreclaw-attach-file)
+    ;; Shadows `org-attach' here, deliberately: in a chat buffer
+    ;; "attach" means the buffers you are looking at.
+    (define-key m (kbd "C-c C-a") #'cmacs-ai-view-attach)
     m)
   "Keymap for `cmacs-libreclaw-room-mode'.
 Binds `C-c C-c' to send and leaves `RET' free for multi-line editing.")
 
+(defconst cmacs-libreclaw--seal-props '(read-only t front-sticky t)
+  "Text properties making a delivered message unmodifiable.
+
+`front-sticky\' is load-bearing and the comint idiom is a trap: with
+`(read-only t rear-nonsticky t)\' Emacs decides inserted text would join
+neither neighbouring interval and PERMITS insertion in the middle of the
+sealed text -- the one place it must not.
+
+Nothing is needed at the trailing edge: the blank separator line above
+`* Compose\' is left unsealed, so the characters between the transcript
+and the compose region carry no property to inherit.")
+
+(defun cmacs-libreclaw--seal-history ()
+  "Seal the delivered messages, and re-arm the change guard.
+
+The transcript is protected by a `read-only\' TEXT PROPERTY, applied
+here after each message lands.  `cmacs-libreclaw--protect-history\'
+alone is not enough and cannot be made enough: Emacs CLEARS
+`before-change-functions\' when a function on it signals, so a guard
+that signals `text-read-only\' protects the buffer exactly once -- after
+the first stray keypress above `* Compose\', every edit lands.  The
+property is enforced in C and cannot be disarmed that way.
+
+Re-adding the guard here means a clearing heals itself at the next
+message rather than lasting for the rest of the session."
+  (when cmacs-libreclaw-room--compose-marker
+    (let ((end (save-excursion
+                 (goto-char cmacs-libreclaw-room--compose-marker)
+                 (forward-line -1)
+                 (max (point-min) (1- (line-beginning-position))))))
+      (when (> end (point-min))
+        (let ((inhibit-read-only t)
+              (cmacs-libreclaw--allow-history-edit t))
+          (add-text-properties (point-min) end
+                               cmacs-libreclaw--seal-props)))))
+  (add-hook 'before-change-functions
+            #'cmacs-libreclaw--protect-history nil t))
+
 (defun cmacs-libreclaw--protect-history (beg _end)
   "Reject edits BEG.._END that fall above the compose marker.
 Skipped when `cmacs-libreclaw--allow-history-edit' is non-nil so
-signal-dispatch code can legitimately insert history headings."
+signal-dispatch code can legitimately insert history headings.
+
+The second line of defence, not the first: see
+`cmacs-libreclaw--seal-history\' for why a signalling change hook cannot
+protect a buffer more than once, and what actually does."
   (when (and (not cmacs-libreclaw--allow-history-edit)
              cmacs-libreclaw-room--compose-marker
              (< beg cmacs-libreclaw-room--compose-marker))
@@ -281,6 +346,7 @@ ROOM-NAME is a human-readable label (falls back to ROOM-ID)."
                   (goto-char (point-max))
                   (point-marker)))
     (set-marker-insertion-type cmacs-libreclaw-room--compose-marker nil)
+    (cmacs-libreclaw--seal-history)
     (goto-char (point-max))))
 
 (defun cmacs-libreclaw--ensure-room-buffer (channel room-id &optional room-name)
@@ -341,7 +407,9 @@ through; user edits above the compose marker remain blocked."
           (insert "\n"))
         ;; ... plus a blank line so the next heading (or the
         ;; `* Compose' sentinel) is visually separated.
-        (insert "\n")))))
+        (insert "\n")))
+    ;; A delivered message is finished text.
+    (cmacs-libreclaw--seal-history)))
 
 ;;;; Conversation archiving -----------------------------------------
 
@@ -536,6 +604,73 @@ so for now we only run the hook — dedup-by-id is future work."
 
 ;;;; Compose / send -------------------------------------------------
 
+(defcustom cmacs-libreclaw-view-mode 'tools
+  "How a libreclaw agent is expected to read the user\'s buffers.
+
+`tools\' -- the agent can call cmacs\'s MCP tools, so outgoing messages
+carry a listing of what is on screen and the agent fetches what it
+needs.  Correct for the remote bridge, which tunnels the whole cmacs
+MCP surface to the agent (see `build_self_mcp_server\' in
+cmacs/libreclaw/cmacs-libreclaw-remote.c), and for any hatched agent
+whose MCP config includes the cmacs server.
+
+`inline\' -- the agent has no way to read the editor, so the visible
+buffers\' text is sent with the message instead.  Change to this if
+the agent keeps saying it cannot see your screen."
+  :type '(choice (const :tag "The agent has cmacs\'s MCP tools" tools)
+                 (const :tag "Send the text instead" inline))
+  :group 'cmacs-libreclaw)
+
+(defun cmacs-libreclaw-default-context ()
+  "The default screen-context prelude for an outgoing message, or nil.
+
+Assembled from `cmacs-ai-view\': the standing explanation on the first
+message of a room, then a listing of the visible buffers whenever the
+screen has changed since the last one."
+  (when (fboundp 'cmacs-ai-view-turn-block)
+    (let* ((result (cmacs-ai-view-turn-block cmacs-libreclaw-view-mode
+                                             cmacs-libreclaw-room--view))
+           (block (car result))
+           (hint (unless cmacs-libreclaw-room--hinted
+                   (cmacs-ai-view-hint cmacs-libreclaw-view-mode))))
+      (setq cmacs-libreclaw-room--view (cdr result))
+      (when (or block hint)
+        (setq cmacs-libreclaw-room--hinted t)
+        (string-join (delq nil (list hint block)) "\n\n")))))
+
+(defcustom cmacs-libreclaw-context-function #'cmacs-libreclaw-default-context
+  "Function returning the invisible prelude for an outgoing message.
+
+Called with no arguments, in the room buffer, just before a message is
+sent; a non-empty string is prepended to what actually goes out while
+the room still shows exactly what you typed.  nil disables the whole
+mechanism."
+  :type '(choice (const :tag "Send nothing extra" nil) function)
+  :group 'cmacs-libreclaw)
+
+(defun cmacs-libreclaw--compose-context ()
+  "The invisible prelude for the next outgoing message, or nil."
+  (when (functionp cmacs-libreclaw-context-function)
+    (condition-case err
+        (funcall cmacs-libreclaw-context-function)
+      (error
+       ;; Context is a convenience; failing to build it must never stop
+       ;; a message the user has already pressed C-c C-c on.
+       (message "cmacs-libreclaw: context unavailable: %s"
+                (error-message-string err))
+       nil))))
+
+(defun cmacs-libreclaw--outgoing-body (body)
+  "BODY with the screen-context prelude prepended, for sending.
+
+Only what BODY holds is echoed into the room: the prelude is for the
+agent, and a transcript full of machine-generated preamble is not a
+conversation anyone can read afterwards."
+  (let ((context (cmacs-libreclaw--compose-context)))
+    (if (and context (not (string-empty-p context)))
+        (concat context "\n\n---\n\n" body)
+      body)))
+
 (defun cmacs-libreclaw-send-compose ()
   "Send the compose region as a message and clear it.
 Routes through the remote bridge when the room channel is
@@ -558,8 +693,11 @@ and friends just work), otherwise through the embedded LcApp's
           (user-error
            "Bridge not connected — M-x cmacs-libreclaw-remote-connect"))
         (cmacs-libreclaw-remote-send-message
-         cmacs-libreclaw-room-id body))
+         cmacs-libreclaw-room-id (cmacs-libreclaw--outgoing-body body)))
        (t
+        ;; Only cmacs\'s own agent rooms get the screen context: a
+        ;; matrix room or a mailing list is other people, and what is
+        ;; on your screen is none of their business.
         (cmacs-libreclaw-send-message
          cmacs-libreclaw-room-channel
          cmacs-libreclaw-room-id

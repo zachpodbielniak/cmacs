@@ -143,6 +143,29 @@ your AI provider; the response is sent back via
 @code{lc_channel_send_message_async} on the bridge channel,
 encoded as @code{chat.message_in}, and surfaces in your buffer.
 
+@subsection Knowing what the user is looking at
+
+The bridge registers cmacs's whole MCP tool surface as an endpoint
+(@code{build_self_mcp_server} calls the same
+@code{cmacs_mcp_register_all_tools} the local socket uses), so a remote
+agent can read the user's editor directly.  What it cannot do is guess
+@emph{which} buffer --- so every outgoing message carries a listing of
+the visible ones, and the agent resolves ``here'' against that.
+
+The tool to reach for is @code{current_view}: it returns the same
+listing, freshly computed, and with @code{include_content} the buffers'
+text as well.  Use it when the listing in the prompt looks stale ---
+the user has been typing since they sent the message.
+
+One caveat specific to remote mode: the agent runs on the
+@emph{server's} filesystem.  Any path in the listing is meaningful only
+through the tunnelled MCP tools, which resolve against the editor;
+opening it with the agent's own file tools will read the wrong machine,
+or nothing.
+
+@xref{LibreClaw Usage}, for what rides the message and how to turn it
+off.
+
 @subsection Configuration
 
 @table @code

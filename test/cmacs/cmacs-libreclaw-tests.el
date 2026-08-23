@@ -14,6 +14,9 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cl-lib)
+(require 'cmacs-libreclaw nil t)
+(require 'cmacs-ai-view nil t)
 
 (defvar cmacs-libreclaw-tests--fixture-dir
   (expand-file-name "fixtures"
@@ -1201,6 +1204,147 @@ every subsequent connect attempt."
       (let ((buf (cdr (assoc '("c" . "r") cmacs-libreclaw-rooms-alist))))
         (when (buffer-live-p buf) (kill-buffer buf)))
       (delete-directory dir t))))
+
+
+;;;; Screen context on outgoing messages ---------------------------
+;;
+;; What rides the message and what appears in the room are deliberately
+;; different, and they are separate statements in both send paths.
+;; These tests are what keeps them from quietly converging.
+
+(defmacro cmacs-libreclaw-tests--in-room (channel &rest body)
+  "Run BODY in a throwaway room buffer on CHANNEL."
+  (declare (indent 1) (debug t))
+  `(let ((buf (generate-new-buffer "*lc-test-room*")))
+     (unwind-protect
+         (with-current-buffer buf
+           (cmacs-libreclaw-room-mode)
+           (setq-local cmacs-libreclaw-room-channel ,channel)
+           (setq-local cmacs-libreclaw-room-id "room")
+           (setq-local cmacs-libreclaw-room--view nil)
+           (setq-local cmacs-libreclaw-room--hinted nil)
+           ,@body)
+       (kill-buffer buf))))
+
+(ert-deftest cmacs-libreclaw-outgoing-body-carries-the-screen ()
+  "The agent is told what is on screen; the room is not."
+  (skip-unless (and (fboundp 'cmacs-libreclaw-room-mode)
+                    (fboundp 'cmacs-ai-view-turn-block)))
+  (cmacs-libreclaw-tests--in-room "cmacs"
+    (let ((sent (cmacs-libreclaw--outgoing-body "what is this?")))
+      (should (string-match-p "what is this?" sent))
+      (should (string-match-p "on the user's screen" sent))
+      ;; The user's own words survive intact and come last: what they
+      ;; asked has to be the final thing before the model answers.
+      (should (string-suffix-p "what is this?" sent)))))
+
+(ert-deftest cmacs-libreclaw-standing-hint-rides-only-the-first-message ()
+  "It is standing instruction, not per-turn preamble."
+  (skip-unless (and (fboundp 'cmacs-libreclaw-room-mode)
+                    (fboundp 'cmacs-ai-view-hint)))
+  (cmacs-libreclaw-tests--in-room "cmacs"
+    (should (string-match-p "not this conversation"
+                            (cmacs-libreclaw--outgoing-body "one")))
+    (should-not (string-match-p "not this conversation"
+                                (cmacs-libreclaw--outgoing-body "two")))))
+
+(ert-deftest cmacs-libreclaw-context-can-be-turned-off ()
+  (skip-unless (fboundp 'cmacs-libreclaw-room-mode))
+  (let ((cmacs-libreclaw-context-function nil))
+    (cmacs-libreclaw-tests--in-room "cmacs"
+      (should (equal "bare" (cmacs-libreclaw--outgoing-body "bare"))))))
+
+(ert-deftest cmacs-libreclaw-context-failure-never-blocks-a-message ()
+  "Context is a convenience.  Failing to build it must not eat a message
+the user has already pressed C-c C-c on."
+  (skip-unless (fboundp 'cmacs-libreclaw-room-mode))
+  (let ((cmacs-libreclaw-context-function
+         (lambda () (error "deliberate"))))
+    (cmacs-libreclaw-tests--in-room "cmacs"
+      (should (equal "still sent" (cmacs-libreclaw--outgoing-body
+                                   "still sent"))))))
+
+(ert-deftest cmacs-libreclaw-other-channels-get-no-screen-context ()
+  "A matrix room or a mailing list is other people, and what is on your
+screen is none of their business.  The branch in
+`cmacs-libreclaw-send-compose' is what enforces this."
+  (skip-unless (fboundp 'cmacs-libreclaw-send-compose))
+  (let (sent echoed)
+    ;; `&rest': the byte compiler expands a call to a (3 . 5) subr out
+    ;; to its full arity, so a compiled run hands this five arguments
+    ;; where an interpreted one hands it three.  A fixed-arity stub
+    ;; passes standalone and fails under `make check-cmacs'.
+    (cl-letf (((symbol-function 'cmacs-libreclaw-send-message)
+               (lambda (_c _r body &rest _) (setq sent body)))
+              ((symbol-function 'cmacs-libreclaw--insert-heading)
+               (lambda (_buf _sender body &rest _) (setq echoed body))))
+      (cmacs-libreclaw-tests--in-room "matrix"
+        (setq-local cmacs-libreclaw-room--compose-marker (point-max-marker))
+        (goto-char (point-max))
+        (insert "hello everyone")
+        (cmacs-libreclaw-send-compose)))
+    (should (equal "hello everyone" sent))
+    (should (equal "hello everyone" echoed))))
+
+(ert-deftest cmacs-libreclaw-bridge-sends-context-but-echoes-the-typing ()
+  "Remote mode: the prelude goes over the bridge, the room shows what
+you typed.  Two separate statements in one function, and the reason a
+transcript of an agent conversation is still readable a week later."
+  (skip-unless (and (fboundp 'cmacs-libreclaw-send-compose)
+                    (fboundp 'cmacs-ai-view-turn-block)))
+  (let (sent echoed)
+    (cl-letf (((symbol-function 'cmacs-libreclaw-remote-connected-p)
+               (lambda () t))
+              ((symbol-function 'cmacs-libreclaw-remote-send-message)
+               (lambda (_r body &rest _) (setq sent body)))
+              ((symbol-function 'cmacs-libreclaw--insert-heading)
+               (lambda (_buf _sender body &rest _) (setq echoed body))))
+      (cmacs-libreclaw-tests--in-room "bridge"
+        (setq-local cmacs-libreclaw-room--compose-marker (point-max-marker))
+        (goto-char (point-max))
+        (insert "review this")
+        (cmacs-libreclaw-send-compose)))
+    (should (string-match-p "on the user's screen" sent))
+    (should (string-suffix-p "review this" sent))
+    (should (equal "review this" echoed))))
+
+
+;;;; History protection ---------------------------------------------
+
+(ert-deftest cmacs-libreclaw-history-stays-protected-after-a-failed-edit ()
+  "A room transcript survives being typed into, more than once.
+
+Emacs CLEARS `before-change-functions' when a function on it signals, so
+`cmacs-libreclaw--protect-history' on its own protects the buffer
+exactly once: the first stray keypress above `* Compose' disarms it and
+every edit after lands in the transcript.  `cmacs-libreclaw--seal-history'
+adds a `read-only' text property, enforced in C and unclearable, and
+re-arms the guard.
+
+The repetition and the mid-message position are both load-bearing --
+a single attempt at the edge passes against the broken version."
+  (skip-unless (fboundp 'cmacs-libreclaw--init-room-buffer))
+  (let ((buf (generate-new-buffer "*lc-protect*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (cmacs-libreclaw--init-room-buffer buf "c" "r" "Room")
+          (cmacs-libreclaw--insert-heading buf "bob" "A-DELIVERED-MESSAGE"
+                                           "2026-01-01 00:00:00")
+          (dolist (_ '(1 2 3))
+            (goto-char (point-min))
+            (should-error (insert "x") :type 'text-read-only))
+          ;; ... and inside the message, not only above it.
+          (goto-char (point-min))
+          (should (search-forward "A-DELIVERED-MESSAGE" nil t))
+          (goto-char (- (point) 4))
+          (should-error (insert "x") :type 'text-read-only)
+          ;; The compose region is still the user's.
+          (goto-char (point-max))
+          (insert "my reply")
+          (should (string-suffix-p "my reply" (buffer-string)))
+          (should (memq 'cmacs-libreclaw--protect-history
+                        before-change-functions)))
+      (kill-buffer buf))))
 
 (provide 'cmacs-libreclaw-tests)
 

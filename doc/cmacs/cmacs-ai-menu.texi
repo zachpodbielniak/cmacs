@@ -35,7 +35,9 @@ major modes.
 @item Text operations @tab @file{lisp/cmacs/cmacs-ai-textops.el}
   @tab summarize / rephrase / reply
 @item Result window @tab @file{lisp/cmacs/cmacs-ai-output.el}
-  @tab where the answer goes
+  @tab where the answer goes, and follows up
+@item Screen context @tab @file{lisp/cmacs/cmacs-ai-view.el}
+  @tab what else you have on screen
 @item Wiring @tab @file{lisp/cmacs/cmacs-ai-menu.el}
   @tab the context-menu entry and bootstrap
 @end multitable
@@ -196,25 +198,121 @@ as @samp{Rewrite in place...}.
 @section The Result Window
 
 Output streams into a dedicated Org buffer, opened beside what you were
-reading or beneath it depending on the frame:
+reading or beneath it depending on the frame.  When the answer settles,
+a @code{* Follow-up} compose region opens underneath it and the
+conversation stays open:
 
-@multitable @columnfractions .18 .82
+@multitable @columnfractions .22 .78
 @headitem Key @tab Does
-@item @kbd{q} @tab cancel the request and close the window
-@item @kbd{C-c C-k} @tab the same
-@item @kbd{w} @tab copy the answer (without the header) to the kill ring
-@item @kbd{g} @tab run the same action again
+@item @kbd{C-c C-c} @tab send the follow-up you typed, continuing the
+same conversation
+@item @kbd{C-c C-k} @tab cancel, end the conversation, close the window
+@item @kbd{q} @tab the same as @kbd{C-c C-k} (while reading)
+@item @kbd{w} / @kbd{C-c C-w} @tab copy the answer to the kill ring
+@item @kbd{g} / @kbd{C-c C-r} @tab run the same action again, from
+scratch
+@item @kbd{C-c C-p} @tab promote the whole thing to a real chat buffer
+@item @kbd{C-c C-a} @tab attach the buffers you have on screen
+@item @kbd{C-c C-i} @tab (terminals only) send the command to its shell
+prompt
 @end multitable
 
 Both closing keys @emph{cancel}, not just hide.  A result window you
-have dismissed is one you have stopped reading, and a model still
-generating into it is spending money on nobody.
+have dismissed is one you have stopped reading, a model still
+generating into it is spending money on nobody, and a conversation
+nobody will continue is a handle held for nothing.
 
 Placement is chosen from the frame, not hardcoded: at
 @code{cmacs-ai-output-split-threshold} columns (150 by default) or wider
 the window opens side by side, below it underneath.  Both are ordinary
 @code{display-buffer} actions, so @code{display-buffer-alist} overrides
 them in the usual way.
+
+@subsection Follow-ups, and why g is not one
+
+Half the questions an answer produces are about the answer.
+``Summarize this'' is very often followed by ``now in one sentence'',
+and @kbd{g} cannot do that: it re-runs the @emph{action}, on a
+brand-new session, so the model has never seen the text you are talking
+about.  @kbd{C-c C-c} continues; @kbd{g} starts over.  Both are worth
+having and the difference is invisible from the window, which is why it
+is spelled out here.
+
+Continuing is nearly free.  ai-glib owns the message list in C, so the
+conversation lives in the session handle rather than in Lisp: keeping
+it alive costs a handle, and a follow-up re-sends nothing.  That is the
+only reason the window can do this at all, and the only cost is that
+the session is freed when you close the window rather than when the
+answer lands.  Set @code{cmacs-ai-output-followup} to nil for the old
+behaviour.
+
+Every action that reaches a result window through
+@code{cmacs-ai-textops-stream} gets this without knowing about it ---
+the Ask, Mail, Git, Errors, Terminal, Notes and Harness groups, all of
+them.
+
+The two producers that render text with no model call behind it --- the
+Tools group and a tool's return value --- have nothing to continue, so
+a follow-up there opens a session and seeds it with the answer already
+on screen.  The model then knows what a reader of the window knows.
+
+@subsection Promoting to a chat
+
+@kbd{C-c C-p}, for when a follow-up turns out to be the start of
+something.  A chat buffer has saving and resuming, the tool loop,
+@code{/image}, and a provider you can choose; a result window has none
+of those and should not grow them.
+
+The live session is handed over rather than replayed, so the model
+keeps the context it already has and nothing is re-sent --- and the
+system prompt the conversation has been held under (the action's, not
+the chat's default) is kept.
+
+@subsection Why you can type in it
+
+The buffer is read-only for its whole streaming life, which is what
+makes @kbd{q}, @kbd{w} and @kbd{g} usable as bare letters.  It stops
+being read-only the moment there is a compose region to type in, and
+from then on the answer is protected by a @code{read-only} @emph{text
+property} instead.
+
+Two rules follow, for anyone extending this mode.
+
+@enumerate
+@item
+@strong{Bare-letter keys must be conditional.}  @kbd{q}, @kbd{w} and
+@kbd{g} are bound through a @code{menu-item} @code{:filter} that
+returns nil below the compose marker, so inside the compose region they
+fall through to @code{self-insert-command} and type a q, a w and a g.
+Any non-@kbd{C-c} key added to the map has to do the same, or the
+compose region silently stops accepting letters of the alphabet.  There
+is a test.
+
+@item
+@strong{Protection is a text property, not a change hook.}  Emacs
+@emph{clears} @code{before-change-functions} when a function on it
+signals, so a guard that signals @code{text-read-only} protects the
+buffer exactly once: after your first stray keypress, every edit lands.
+The property is enforced in C and cannot be disarmed that way.  There
+is a test for that too.
+
+The property is @code{(read-only t front-sticky t)}, and the obvious
+alternative is a trap: the comint idiom @code{(read-only t
+rear-nonsticky t)} makes Emacs decide inserted text would join neither
+neighbouring interval, which @emph{permits insertion in the middle of
+the sealed text} --- the one place it must not.
+@end enumerate
+
+@subsection Under Evil
+
+The mode is deliberately not a @code{special-mode} (same reasoning as
+the harness: a @code{special-mode} derivative gets normal state, where
+the letters you meant to type are motions and operators).  It opens in
+normal state, because a result window opens on something to read.
+
+In normal state the bare letters are Evil's, not ours --- so every
+command also has a @kbd{C-c} binding, and those are the ones that
+always work.  @kbd{C-c C-w} copies, @kbd{C-c C-r} re-runs.
 
 @node AI Menu Surfaces
 @section Where It Works
@@ -645,6 +743,15 @@ it rather than grow a second copy that drifts.
 
 @node AI Menu Extending
 @section Extending It
+
+Before writing anything: an action that answers in prose should stream
+through @code{cmacs-ai-textops-stream}.  That is not only to avoid
+repeating the loop --- it is what gives the action a follow-up
+conversation, a promote-to-chat key and a working @kbd{g}, none of
+which it has to know about.  A producer that opens its own result
+buffer gets none of that until it calls
+@code{cmacs-ai-output-set-request} to say what it asked and which
+provider it asked.
 
 @subsection A New Surface: Write a Resolver
 

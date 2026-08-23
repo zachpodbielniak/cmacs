@@ -22,7 +22,8 @@ the other exists, and nothing anywhere grows a =cond= over major modes.
 | Resolvers            | =lisp/cmacs/cmacs-ai-targets.el=| ... in /this/ kind of buffer         |
 | Actions              | =lisp/cmacs/cmacs-ai-actions.el=| what can be done with it?            |
 | Text operations      | =lisp/cmacs/cmacs-ai-textops.el=| summarize / rephrase / reply / ...   |
-| Result window        | =lisp/cmacs/cmacs-ai-output.el= | where the answer goes                |
+| Result window        | =lisp/cmacs/cmacs-ai-output.el= | where the answer goes, and follows up |
+| Screen context       | =lisp/cmacs/cmacs-ai-view.el=   | what else you have on screen         |
 | Wiring               | =lisp/cmacs/cmacs-ai-menu.el=   | the context-menu entry and bootstrap |
 
 Requires =--with-cmacs-ai=.  The Brigade group additionally requires
@@ -148,24 +149,108 @@ place...*.
 ** The result window
 
 Output streams into a dedicated Org buffer, opened beside what you were
-reading or beneath it depending on the frame:
+reading or beneath it depending on the frame.  When the answer settles,
+a =* Follow-up= compose region opens underneath it and the conversation
+stays open:
 
 | Key       | Does                                                    |
 |-----------+---------------------------------------------------------|
-| =q=       | cancel the request and close the window                 |
-| =C-c C-k= | the same                                                |
-| =w=       | copy the answer (without the header) to the kill ring   |
-| =g=       | run the same action again                               |
+| =C-c C-c= | send the follow-up you typed, continuing the same chat  |
+| =C-c C-k= | cancel, end the conversation, close the window          |
+| =q=       | the same as =C-c C-k= (while reading)                   |
+| =w= / =C-c C-w= | copy the answer to the kill ring                  |
+| =g= / =C-c C-r= | run the same action again, from scratch           |
+| =C-c C-p= | promote the whole thing to a real chat buffer           |
+| =C-c C-a= | attach the buffers you have on screen                   |
+| =C-c C-i= | (terminals only) send the command to its shell prompt   |
 
 Both closing keys /cancel/, not just hide.  A result window you have
-dismissed is one you have stopped reading, and a model still generating
-into it is spending money on nobody.
+dismissed is one you have stopped reading, a model still generating into
+it is spending money on nobody, and a conversation nobody will continue
+is a handle held for nothing.
 
 Placement is chosen from the frame, not hardcoded: at
 =cmacs-ai-output-split-threshold= columns (150 by default) or wider the
 window opens side by side, below it underneath.  Both are ordinary
 =display-buffer= actions, so =display-buffer-alist= overrides them in
 the usual way.
+
+*** Follow-ups, and why =g= is not one
+
+Half the questions an answer produces are about the answer.
+"Summarize this" is very often followed by "now in one sentence", and
+=g= cannot do that: it re-runs the *action*, on a brand-new session, so
+the model has never seen the text you are talking about.  =C-c C-c=
+continues; =g= starts over.  Both are worth having and the difference is
+invisible from the window, which is why it is spelled out here.
+
+Continuing is nearly free.  ai-glib owns the message list in C, so the
+conversation lives in the session handle rather than in Lisp: keeping it
+alive costs a handle, and a follow-up re-sends nothing.  That is the
+only reason the window can do this at all, and the only cost is that the
+session is freed when you close the window rather than when the answer
+lands.  Set =cmacs-ai-output-followup= to nil for the old behaviour.
+
+Every action that reaches a result window through
+=cmacs-ai-textops-stream= gets this without knowing about it -- the Ask,
+Mail, Git, Errors, Terminal, Notes and Harness groups, all of them.
+
+The two producers that render text with no model call behind it -- the
+Tools group and a tool's return value -- have nothing to continue, so a
+follow-up there opens a session and seeds it with the answer already on
+screen.  The model then knows what a reader of the window knows.
+
+*** Promoting to a chat: =C-c C-p=
+
+For when a follow-up turns out to be the start of something.  A chat
+buffer has saving and resuming, the tool loop, =/image=, and a provider
+you can choose; a result window has none of those and should not grow
+them.
+
+The live session is handed over rather than replayed, so the model keeps
+the context it already has and nothing is re-sent -- and the system
+prompt the conversation has been held under (the action's, not the
+chat's default) is kept.
+
+*** Why you can type in it
+
+The buffer is read-only for its whole streaming life, which is what
+makes =q=, =w= and =g= usable as bare letters.  It stops being read-only
+the moment there is a compose region to type in, and from then on the
+answer is protected by a =read-only= *text property* instead.
+
+Two rules follow, for anyone extending this mode:
+
+- *Bare-letter keys must be conditional.*  =q=, =w= and =g= are bound
+  through a =menu-item= =:filter= that returns nil below the compose
+  marker, so inside the compose region they fall through to
+  =self-insert-command= and type a q, a w and a g.  Any non-=C-c= key
+  added to the map has to do the same, or the compose region silently
+  stops accepting letters of the alphabet.  There is a test.
+
+- *Protection is a text property, not a change hook.*  Emacs /clears/
+  =before-change-functions= when a function on it signals, so a guard
+  that signals =text-read-only= protects the buffer exactly once: after
+  your first stray keypress, every edit lands.  The property is enforced
+  in C and cannot be disarmed that way.  There is a test for that too.
+
+  The property is =(read-only t front-sticky t)=, and the obvious
+  alternative is a trap: the comint idiom =(read-only t rear-nonsticky
+  t)= makes Emacs decide inserted text would join neither neighbouring
+  interval, which *permits insertion in the middle of the sealed text*
+  -- the one place it must not.
+
+*** Under Evil
+
+The mode is deliberately not a =special-mode= (same reasoning as
+[[file:cmacs-ai-harness.org][the harness]]: a =special-mode= derivative
+gets normal state, where the letters you meant to type are motions and
+operators).  It opens in normal state, because a result window opens on
+something to read.
+
+In normal state the bare letters are Evil's, not ours -- so every
+command also has a =C-c= binding, and those are the ones that always
+work.  =C-c C-w= copies, =C-c C-r= re-runs.
 
 * Where it works
 
@@ -521,6 +606,14 @@ built /without/ =--with-cmacs-libregnum= can use it rather than grow a
 second copy that drifts.
 
 * Extending it
+
+Before writing anything: an action that answers in prose should stream
+through =cmacs-ai-textops-stream=.  That is not only to avoid repeating
+the loop -- it is what gives the action a follow-up conversation, a
+promote-to-chat key and a working =g=, none of which it has to know
+about.  A producer that opens its own result buffer gets none of that
+until it calls =cmacs-ai-output-set-request= to say what it asked and
+which provider it asked.
 
 ** A new surface: write a resolver
 

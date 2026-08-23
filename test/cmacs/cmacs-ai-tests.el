@@ -28,6 +28,10 @@
 ;; subsystem needed), so load the chat module best-effort to let those
 ;; tests run even on a build without --with-cmacs-ai.
 (require 'cmacs-ai-chat nil 'noerror)
+;; Required, not merely declared: several tests `let'-bind
+;; `cmacs-ai-view-attach-mode', and without the defcustom known to be
+;; special at compile time that binding is lexical and does nothing.
+(require 'cmacs-ai-view nil 'noerror)
 
 ;;;; Availability --------------------------------------------------
 
@@ -1289,7 +1293,8 @@ Lazy because opening a chat should cost nothing; once because the file
 lands in the system prompt, which persists for the whole conversation."
   (skip-unless (fboundp 'cmacs-ai-chat-open))
   (cmacs-ai-tests--with-project (list (cons "CLAUDE.md" "distinctive-rule"))
-    (let ((sets 0) (last nil))
+    (let ((sets 0) (last nil)
+          (cmacs-ai-view-attach-mode 'off))
       (cl-letf* ((orig (symbol-function 'cmacs-ai-client-set-system-prompt))
                  ((symbol-function 'cmacs-ai-client-set-system-prompt)
                   (lambda (c text) (setq sets (1+ sets) last text)
@@ -1299,14 +1304,14 @@ lands in the system prompt, which persists for the whole conversation."
               (with-current-buffer buf
                 ;; opening read nothing
                 (setq sets 0 last nil)
-                (cmacs-ai-chat--apply-bootstrap)
+                (cmacs-ai-chat--apply-system-prompt)
                 (should (= 1 sets))
                 (should (string-match-p "distinctive-rule" last))
                 ;; the shipped system prompt is kept, not replaced
                 (should (string-match-p (regexp-quote
                                          (substring cmacs-ai-system-prompt 0 20))
                                         last))
-                (cmacs-ai-chat--apply-bootstrap)
+                (cmacs-ai-chat--apply-system-prompt)
                 (should (= 1 sets)))
             (kill-buffer buf)))))))
 
@@ -1317,6 +1322,7 @@ Half a document of standing instructions is worse than none."
   (skip-unless (fboundp 'cmacs-ai-chat-open))
   (cmacs-ai-tests--with-project (list (cons "CLAUDE.md" (make-string 5000 ?x)))
     (let ((sets 0)
+          (cmacs-ai-view-attach-mode 'off)
           (cmacs-ai-chat-bootstrap-max-bytes 100))
       (cl-letf (((symbol-function 'cmacs-ai-client-set-system-prompt)
                  (lambda (&rest _) (setq sets (1+ sets)))))
@@ -1324,7 +1330,7 @@ Half a document of standing instructions is worse than none."
           (unwind-protect
               (with-current-buffer buf
                 (setq sets 0)
-                (cmacs-ai-chat--apply-bootstrap)
+                (cmacs-ai-chat--apply-system-prompt)
                 (should (= 0 sets))
                 ;; and it is not retried on the next turn either
                 (should-not cmacs-ai-chat--bootstrap-file))
@@ -1427,6 +1433,7 @@ the number that costs something on every turn."
       (list (cons "CLAUDE.md" "@big.org")
             (cons "big.org" (make-string 5000 ?x)))
     (let ((sets 0)
+          (cmacs-ai-view-attach-mode 'off)
           (cmacs-ai-chat-bootstrap-max-bytes 1000))
       (cl-letf (((symbol-function 'cmacs-ai-client-set-system-prompt)
                  (lambda (&rest _) (setq sets (1+ sets)))))
@@ -1434,7 +1441,7 @@ the number that costs something on every turn."
           (unwind-protect
               (with-current-buffer buf
                 (setq sets 0)
-                (cmacs-ai-chat--apply-bootstrap)
+                (cmacs-ai-chat--apply-system-prompt)
                 ;; the manifest is 8 bytes; what it expands to is not
                 (should (= 0 sets)))
             (kill-buffer buf)))))))
@@ -1444,12 +1451,13 @@ the number that costs something on every turn."
   (cmacs-ai-tests--with-project
       (list (cons "CLAUDE.md" "@soul.org") (cons "soul.org" "SOUL-BODY"))
     (let (captured
+          (cmacs-ai-view-attach-mode 'off)
           (cmacs-ai-chat-bootstrap-expand-imports nil))
       (cl-letf (((symbol-function 'cmacs-ai-client-set-system-prompt)
                  (lambda (_c text) (setq captured text))))
         (let ((buf (cmacs-ai-chat-open 'claude nil dir)))
           (unwind-protect
-              (with-current-buffer buf (cmacs-ai-chat--apply-bootstrap))
+              (with-current-buffer buf (cmacs-ai-chat--apply-system-prompt))
             (kill-buffer buf))))
       (should captured)
       (should-not (string-match-p "SOUL-BODY" captured)))))
@@ -1728,6 +1736,162 @@ delivers a message when the agent finishes."
     (should (string-match-p "DO NOT POLL" p))
     (should (string-match-p "agent_result" p))
     (should (string-match-p "automatically" p))))
+
+
+;;;; Screen context in a chat --------------------------------------
+
+(ert-deftest cmacs-ai-view-hint-reaches-a-chat-with-no-project-file ()
+  "The hint has to land in the plain case, which used to set nothing.
+
+Before the system prompt was assembled in one place, the ONLY caller of
+`cmacs-ai-client-set-system-prompt' was the bootstrap -- so a chat
+opened outside a project never re-set its prompt at all, and anything
+added there would have been invisible in the commonest situation."
+  (skip-unless (fboundp 'cmacs-ai-chat-open))
+  (let (captured)
+    (cl-letf (((symbol-function 'cmacs-ai-client-set-system-prompt)
+               (lambda (_c text) (setq captured text))))
+      (let ((buf (cmacs-ai-chat-open 'claude)))
+        (unwind-protect
+            (with-current-buffer buf
+              (setq captured nil)
+              (should-not cmacs-ai-chat--bootstrap-file)
+              (cmacs-ai-chat--apply-system-prompt)
+              (should captured)
+              (should (string-match-p "not this conversation" captured)))
+          (kill-buffer buf))))))
+
+(ert-deftest cmacs-ai-system-prompt-is-assembled-once-and-in-order ()
+  "Shipped prompt, then the screen hint, then the project's own file.
+
+Order matters: the project's standing instructions are the most
+specific thing in there and should be read last."
+  (skip-unless (fboundp 'cmacs-ai-chat-open))
+  (cmacs-ai-tests--with-project (list (cons "CLAUDE.md" "distinctive-rule"))
+    (let ((sets 0) captured)
+      (cl-letf (((symbol-function 'cmacs-ai-client-set-system-prompt)
+                 (lambda (_c text) (setq sets (1+ sets) captured text))))
+        (let ((buf (cmacs-ai-chat-open 'claude nil dir)))
+          (unwind-protect
+              (with-current-buffer buf
+                (setq sets 0 captured nil)
+                (cmacs-ai-chat--apply-system-prompt)
+                (should (= 1 sets))
+                (let ((hint (string-match "not this conversation" captured))
+                      (rule (string-match "distinctive-rule" captured))
+                      (base (string-match
+                             (regexp-quote
+                              (substring cmacs-ai-system-prompt 0 20))
+                             captured)))
+                  (should (and base hint rule))
+                  (should (< base hint))
+                  (should (< hint rule)))
+                ;; Once per buffer, whatever happens later.
+                (cmacs-ai-chat--apply-system-prompt)
+                (should (= 1 sets)))
+            (kill-buffer buf)))))))
+
+(ert-deftest cmacs-ai-chat-view-mode-follows-tool-access ()
+  "A hint saying \"read it with your tools\" needs there to be tools."
+  (skip-unless (fboundp 'cmacs-ai-chat-mode))
+  (with-temp-buffer
+    (setq-local cmacs-ai-chat-tool-executor 'an-executor)
+    (should (eq 'tools (cmacs-ai-chat--view-mode)))
+    (setq-local cmacs-ai-chat-tool-executor nil)
+    (setq-local cmacs-ai-chat-session-pair nil)
+    (should (eq 'inline (cmacs-ai-chat--view-mode)))))
+
+(ert-deftest cmacs-ai-pre-prompt-carries-the-screen-invisibly ()
+  "Both preludes ride the turn; neither is what the buffer shows.
+
+The user's own text comes last, because what they asked has to be the
+final thing the model reads."
+  (skip-unless (fboundp 'cmacs-ai-chat-mode))
+  (skip-unless (fboundp 'cmacs-ai-view-turn-block))
+  (with-temp-buffer
+    (cmacs-ai-chat-mode)
+    (setq-local cmacs-ai-pre-prompt "PRE-PROMPT-RULES")
+    (setq-local cmacs-ai-chat--last-view nil)
+    (let ((sent (cmacs-ai-chat--apply-pre-prompt "WHAT-I-TYPED")))
+      (should (string-match-p "PRE-PROMPT-RULES" sent))
+      (should (string-suffix-p "WHAT-I-TYPED" sent))
+      (should (< (string-match "PRE-PROMPT-RULES" sent)
+                 (string-match "WHAT-I-TYPED" sent))))))
+
+(ert-deftest cmacs-ai-pre-prompt-is-unchanged-when-the-view-is-off ()
+  (skip-unless (fboundp 'cmacs-ai-chat-mode))
+  (with-temp-buffer
+    (cmacs-ai-chat-mode)
+    (let ((cmacs-ai-view-attach-mode 'off))
+      (setq-local cmacs-ai-pre-prompt nil)
+      (should (equal "JUST-THIS"
+                     (cmacs-ai-chat--apply-pre-prompt "JUST-THIS"))))))
+
+(ert-deftest cmacs-ai-chat-binds-the-attach-key ()
+  (skip-unless (fboundp 'cmacs-ai-chat-mode))
+  (should (eq 'cmacs-ai-view-attach
+              (lookup-key cmacs-ai-chat-mode-map (kbd "C-c C-a")))))
+
+
+;;;; Transcript protection -----------------------------------------
+
+(ert-deftest cmacs-ai-chat-history-stays-protected-after-a-failed-edit ()
+  "The transcript survives being typed into, more than once.
+
+Emacs CLEARS `before-change-functions' when a function on it signals, so
+`cmacs-ai-chat--protect-history' on its own protects the buffer exactly
+once: the first stray keypress above `* Compose' disarms it and every
+edit after that lands in the transcript.  `cmacs-ai-chat--seal-history'
+adds a `read-only' text property, which is enforced in C and cannot be
+cleared that way, and re-arms the guard.
+
+Repeated attempts and a mid-turn position are both load-bearing: a
+single edge attempt passes against the broken version."
+  (skip-unless (fboundp 'cmacs-ai-chat-open))
+  (let ((buf (cmacs-ai-chat-open 'claude))
+        (cmacs-ai-chat-autosave nil))
+    (unwind-protect
+        (with-current-buffer buf
+          (cmacs-ai-chat--insert-heading buf "tester" "MY-QUESTION")
+          (let ((m (cmacs-ai-chat--ensure-segment buf)))
+            (cmacs-ai-chat--append-at-marker m "THE-ANSWER"))
+          (cmacs-ai-chat--close-turn buf)
+          ;; Three times at the top, because once is what used to work.
+          (dolist (_ '(1 2 3))
+            (goto-char (point-min))
+            (should-error (insert "x") :type 'text-read-only))
+          ;; And in the middle of a turn, not just at its edge.
+          (dolist (needle '("MY-QUESTION" "THE-ANSWER"))
+            (goto-char (point-min))
+            (should (search-forward needle nil t))
+            (goto-char (- (point) 3))
+            (should-error (insert "x") :type 'text-read-only))
+          ;; The compose region is untouched by any of that.
+          (goto-char (point-max))
+          (insert "my next question")
+          (should (equal "my next question" (cmacs-ai-chat--read-compose)))
+          ;; And the guard is armed again rather than left cleared.
+          (should (memq 'cmacs-ai-chat--protect-history
+                        before-change-functions)))
+      (kill-buffer buf))))
+
+(ert-deftest cmacs-ai-chat-clearing-history-reseals-what-is-left ()
+  "`C-c C-l' deletes the sealed text; the preamble it leaves behind has
+to come back sealed rather than as a hole."
+  (skip-unless (fboundp 'cmacs-ai-chat-open))
+  (let ((buf (cmacs-ai-chat-open 'claude))
+        (cmacs-ai-chat-autosave nil))
+    (unwind-protect
+        (with-current-buffer buf
+          (cmacs-ai-chat--insert-heading buf "tester" "gone soon")
+          (cmacs-ai-chat-clear-history)
+          (should-not (string-match-p "gone soon" (buffer-string)))
+          ;; Twice: one attempt passes against a bare signalling guard,
+          ;; which is the thing this is guarding against.
+          (dolist (_ '(1 2 3))
+            (goto-char (point-min))
+            (should-error (insert "x") :type 'text-read-only)))
+      (kill-buffer buf))))
 
 (provide 'cmacs-ai-tests)
 ;;; cmacs-ai-tests.el ends here

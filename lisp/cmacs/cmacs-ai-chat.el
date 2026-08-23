@@ -26,6 +26,7 @@
 (require 'org)
 (require 'cl-lib)
 (require 'cmacs-ai)
+(require 'cmacs-ai-view)
 
 (declare-function cmacs-ai-client-effective-model
                   "cmacs-ai-client.c" (handle))
@@ -104,6 +105,14 @@ Capped by `cmacs-ai-chat-tool-loop-max-turns' to prevent runaways.")
   "Dynamic override for `cmacs-ai-chat--protect-history'.
 Set non-nil by stream callbacks so they can insert above the marker.")
 
+(defvar-local cmacs-ai-chat--last-view nil
+  "Signature of the screen as of the last turn that described it.
+Compared against `cmacs-ai-view-signature' so an unchanged screen is
+not described again in full on every turn.")
+
+(defvar-local cmacs-ai-chat--system-applied nil
+  "Non-nil once this buffer has assembled its session system prompt.")
+
 ;;;; Keymap / mode --------------------------------------------------
 
 (defvar cmacs-ai-chat-mode-map
@@ -113,11 +122,60 @@ Set non-nil by stream callbacks so they can insert above the marker.")
     (define-key m (kbd "C-c C-l") #'cmacs-ai-chat-clear-history)
     (define-key m (kbd "C-c C-s") #'cmacs-ai-chat-save)
     (define-key m (kbd "C-c C-o") #'cmacs-ai-chat-resume)
+    ;; Shadows `org-attach' here, deliberately: in a chat buffer
+    ;; "attach" means the buffers you are looking at, not a file
+    ;; drawer on a heading you do not have.
+    (define-key m (kbd "C-c C-a") #'cmacs-ai-view-attach)
     m)
   "Keymap for `cmacs-ai-chat-mode'.")
 
+(defconst cmacs-ai-chat--seal-props '(read-only t front-sticky t)
+  "Text properties making a finished part of the transcript unmodifiable.
+
+`front-sticky\' is load-bearing and the comint idiom is a trap: with
+`(read-only t rear-nonsticky t)\' Emacs decides inserted text would join
+neither neighbouring interval and PERMITS insertion in the middle of the
+sealed text -- the one place it must not.  Verified by a test.
+
+Nothing is needed at the trailing edge: the blank separator line above
+`* Compose\' is deliberately left unsealed, so the characters between the
+transcript and the compose region carry no property to inherit.")
+
+(defun cmacs-ai-chat--seal-end ()
+  "Where the sealed transcript stops and the compose region begins."
+  (max (point-min) (1- (cmacs-ai-chat--history-end))))
+
+(defun cmacs-ai-chat--seal-history ()
+  "Seal the finished transcript, and re-arm the change guard.
+
+The transcript is protected by a `read-only\' TEXT PROPERTY, applied
+here at turn boundaries.  `cmacs-ai-chat--protect-history\' alone is not
+enough and cannot be made enough: Emacs CLEARS `before-change-functions\'
+when a function on it signals, so a guard that signals `text-read-only\'
+protects the buffer exactly once -- after the first stray keypress above
+`* Compose\', every edit lands.  The property is enforced in C and cannot
+be disarmed that way.
+
+The guard is still worth having for the tail of a turn that is still
+streaming (not sealed until it closes), and re-adding it here means a
+clearing heals itself at the next turn boundary rather than lasting for
+the rest of the session."
+  (when cmacs-ai-chat--compose-marker
+    (let ((end (cmacs-ai-chat--seal-end)))
+      (when (> end (point-min))
+        (let ((inhibit-read-only t)
+              (cmacs-ai-chat--allow-history-edit t))
+          (add-text-properties (point-min) end
+                               cmacs-ai-chat--seal-props)))))
+  (add-hook 'before-change-functions
+            #'cmacs-ai-chat--protect-history nil t))
+
 (defun cmacs-ai-chat--protect-history (beg _end)
-  "Block edits at BEG that fall above the compose marker."
+  "Block edits at BEG that fall above the compose marker.
+
+The second line of defence, not the first: see
+`cmacs-ai-chat--seal-history\' for why a signalling change hook cannot
+protect a buffer more than once, and what actually does."
   (when (and (not cmacs-ai-chat--allow-history-edit)
              cmacs-ai-chat--compose-marker
              (< beg cmacs-ai-chat--compose-marker))
@@ -376,6 +434,7 @@ ai-glib's web_search backend.  Shared by `cmacs-ai-chat--init' and
     (setq-local cmacs-ai-chat--compose-marker
                 (save-excursion (goto-char (point-max)) (point-marker)))
     (set-marker-insertion-type cmacs-ai-chat--compose-marker nil)
+    (cmacs-ai-chat--seal-history)
     (goto-char (point-max))))
 
 (defun cmacs-ai-chat-open (&optional provider model directory)
@@ -522,6 +581,9 @@ separator below it always remains intact."
             (insert body-trimmed)))
         (let ((m (point-marker)))
           (set-marker-insertion-type m t)
+          ;; Seal what is now finished.  Anything still streaming sits
+          ;; at or after M and is sealed by `cmacs-ai-chat--close-turn'.
+          (cmacs-ai-chat--seal-history)
           m)))))
 
 (defun cmacs-ai-chat--open-continuation (buf)
@@ -572,7 +634,10 @@ opens the heading; text after a tool call continues underneath it."
                                    cmacs-ai-chat--assistant-marker)
     (setq cmacs-ai-chat--assistant-marker nil
           cmacs-ai-chat--assistant-start nil
-          cmacs-ai-chat--turn-open nil)))
+          cmacs-ai-chat--turn-open nil)
+    ;; The streamed response is finished text now, so it becomes
+    ;; unmodifiable like the rest of the transcript.
+    (cmacs-ai-chat--seal-history)))
 
 (defun cmacs-ai-chat--append-at-marker (marker text)
   "Insert TEXT at MARKER (assistant streaming) in MARKER's buffer."
@@ -847,14 +912,48 @@ async.  No-op unless `cmacs-ai-chat-inline-images' is set."
                url (current-buffer)
                (copy-marker lbeg) (copy-marker lend)))))))))
 
+(defun cmacs-ai-chat--view-mode ()
+  "`tools' when this chat can read the user's buffers, else `inline'.
+
+An executor gives an HTTP provider the cmacs MCP surface; a CLI agent
+gets the same tools over its own MCP config (see
+`cmacs-ai-chat--wire-cli-tools').  With neither, a hint saying \"read
+it with your tools\" describes tools that do not exist, so the text
+has to be sent instead."
+  (let ((client (car-safe cmacs-ai-chat-session-pair)))
+    (if (or cmacs-ai-chat-tool-executor
+            (and client
+                 (fboundp 'cmacs-ai-client-cli-p)
+                 (cmacs-ai-client-cli-p client)))
+        'tools
+      'inline)))
+
+(defun cmacs-ai-chat--view-block ()
+  "The context block describing the user's screen, or nil.
+
+Updates `cmacs-ai-chat--last-view' so an unchanged screen collapses to
+one line next turn instead of being listed again."
+  (when (fboundp 'cmacs-ai-view-turn-block)
+    (let ((result (cmacs-ai-view-turn-block (cmacs-ai-chat--view-mode)
+                                            cmacs-ai-chat--last-view)))
+      (setq cmacs-ai-chat--last-view (cdr result))
+      (car result))))
+
 (defun cmacs-ai-chat--apply-pre-prompt (text)
-  "Return TEXT with `cmacs-ai-pre-prompt' prepended (if set).
-The pre-prompt is sent to the model on every user turn but is not
-rendered in the chat buffer -- the user heading always shows just
-what the user typed."
-  (let ((pre cmacs-ai-pre-prompt))
-    (if (and pre (stringp pre) (not (string-empty-p pre)))
-        (concat pre "\n\n---\n\n" text)
+  "Return TEXT with the pre-prompt and screen context prepended.
+
+Both ride every user turn and neither is rendered in the chat buffer --
+the user heading always shows just what the user typed.  The screen
+context comes first because it is background: what the user asked has
+to be the last thing before the model answers.
+
+See `cmacs-ai-pre-prompt' and `cmacs-ai-view-attach-mode'."
+  (let ((pre cmacs-ai-pre-prompt)
+        (view (cmacs-ai-chat--view-block)))
+    (when (and pre (stringp pre) (not (string-empty-p pre)))
+      (setq text (concat pre "\n\n---\n\n" text)))
+    (if (and view (not (string-empty-p view)))
+        (concat view "\n\n---\n\n" text)
       text)))
 
 (defcustom cmacs-ai-chat-bootstrap-files '("CLAUDE.md" "AGENTS.md")
@@ -1005,19 +1104,12 @@ the model still sees that a file was meant even when it is missing."
                         (error-message-string err))))))))
        text t t))))
 
-(defun cmacs-ai-chat--apply-bootstrap ()
-  "Fold this buffer's bootstrap file into the session's system prompt.
+(defun cmacs-ai-chat--bootstrap-text ()
+  "Read this buffer's bootstrap file, returning (NAME . TEXT) or nil.
 
-Done on the first send rather than when the chat opens: opening a chat
-should cost nothing, and a directory's instructions are only worth
-sending if the conversation actually happens.
-
-The contents go in the system prompt rather than the visible transcript,
-so the conversation reads as what was typed."
-  (when-let* ((path cmacs-ai-chat--bootstrap-file)
-              (client (car-safe cmacs-ai-chat-session-pair)))
-    ;; Once only, whatever happens below: a file that is too big or has
-    ;; gone away must not be reconsidered on every turn.
+Consumed once, whatever the outcome: a file that is too big or has
+gone away must not be reconsidered on every turn."
+  (when-let* ((path cmacs-ai-chat--bootstrap-file))
     (setq cmacs-ai-chat--bootstrap-file nil)
     (condition-case err
         (let* ((raw (with-temp-buffer
@@ -1037,29 +1129,55 @@ so the conversation reads as what was typed."
                        raw))
                (size (string-bytes text)))
           (if (> size cmacs-ai-chat-bootstrap-max-bytes)
-              (message "cmacs-ai: %s expands to %dkB, over the bootstrap \
+              (progn
+                (message "cmacs-ai: %s expands to %dkB, over the bootstrap \
 limit; not sent"
-                       (file-name-nondirectory path) (/ size 1024))
-            (cmacs-ai-client-set-system-prompt
-             client
-             (string-join
+                         (file-name-nondirectory path) (/ size 1024))
+                nil)
+            (when cmacs-ai-chat-bootstrap-announce
+              (message "cmacs-ai: bootstrapped from %s (%dkB)"
+                       (file-name-nondirectory path) (/ size 1024)))
+            (cons (file-name-nondirectory path) text)))
+      (error
+       (message "cmacs-ai: could not read %s: %s"
+                path (error-message-string err))
+       nil))))
+
+(defun cmacs-ai-chat--apply-system-prompt ()
+  "Assemble this session's system prompt and install it, once.
+
+Three things can go in it, in this order: `cmacs-ai-system-prompt',
+the standing hint about what the user has on screen (see
+`cmacs-ai-view-hint'), and the project's bootstrap file.  Returns the
+bootstrap file name when one was folded in, so the caller knows to
+prepend its directive to this turn; nil otherwise.
+
+Done on the first send rather than when the chat opens: opening a chat
+should cost nothing, and none of this is worth sending if the
+conversation never happens.
+
+It all goes in the system prompt rather than the visible transcript,
+so the conversation reads as what was typed."
+  (let ((client (car-safe cmacs-ai-chat-session-pair)))
+    (when (and client (not cmacs-ai-chat--system-applied))
+      (setq cmacs-ai-chat--system-applied t)
+      (let* ((boot (cmacs-ai-chat--bootstrap-text))
+             (hint (cmacs-ai-view-hint (cmacs-ai-chat--view-mode)))
+             (parts
               (delq nil
                     (list (and cmacs-ai-system-prompt
                                (not (string-empty-p cmacs-ai-system-prompt))
                                cmacs-ai-system-prompt)
-                          (format "The following is %s from the project \
+                          hint
+                          (and boot
+                               (format "The following is %s from the project \
 directory you are working in.  Treat it as standing instructions.\n\n%s"
-                                  (file-name-nondirectory path) text)))
-              "\n\n"))
-            (when cmacs-ai-chat-bootstrap-announce
-              (message "cmacs-ai: bootstrapped from %s (%dkB)"
-                       (file-name-nondirectory path) (/ size 1024)))
-            ;; The caller prepends a directive to this turn only when a
-            ;; bootstrap actually happened.
-            (file-name-nondirectory path)))
-      (error
-       (message "cmacs-ai: could not read %s: %s"
-                path (error-message-string err))))))
+                                       (car boot) (cdr boot)))))))
+        ;; Only touch the client when there is something new to add:
+        ;; `cmacs-ai-make-session' already installed the base prompt.
+        (when (or hint boot)
+          (cmacs-ai-client-set-system-prompt client (string-join parts "\n\n")))
+        (car boot)))))
 
 (defun cmacs-ai-chat-send-compose ()
   "Send the contents of the compose region and stream the reply.
@@ -1097,7 +1215,7 @@ result, and continue the stream until the model stops."
              (executor cmacs-ai-chat-tool-executor)
              ;; Before the first request only, and invisible in the
              ;; buffer.  Returns the file it injected, if any.
-             (bootstrapped (cmacs-ai-chat--apply-bootstrap))
+             (bootstrapped (cmacs-ai-chat--apply-system-prompt))
              ;; Directive immediately before what was typed, and inside
              ;; the pre-prompt rather than ahead of it: "then answer what
              ;; follows" has to point at the user's message, not at the
@@ -1139,7 +1257,8 @@ result, and continue the stream until the model stops."
                      (line-beginning-position)))))
           (when (and b e)
             (delete-region b e)
-            (insert "\n")))))))
+            (insert "\n"))))))
+  (cmacs-ai-chat--seal-history))
 
 ;;;; Saving ---------------------------------------------------------
 
@@ -1313,6 +1432,7 @@ turn carries full context.  Subsequent autosaves append to FILE."
                   (save-excursion (goto-char (point-max)) (point-marker)))
       (set-marker-insertion-type cmacs-ai-chat--compose-marker nil)
       (cmacs-ai-chat--rebuild-session (cdr cmacs-ai-chat-session-pair) turns)
+      (cmacs-ai-chat--seal-history)
       (goto-char (point-max)))))
 
 (defun cmacs-ai-chat--saved-files ()

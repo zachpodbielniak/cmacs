@@ -272,6 +272,27 @@ some other cmacs modes use: that guard silently does nothing when the
 file loads before Evil, and the failure mode is landing in normal state,
 which does not look like an Evil problem when you hit it.
 
+@subsection Both stickiness flags on the read-only property
+
+@code{cmacs-ai-harness--read-only-props} is @code{(read-only t
+front-sticky t rear-nonsticky t)} and neither flag is optional.
+
+@code{rear-nonsticky} is what lets the first character of the prompt be
+typed at all: without it the property is inherited by whatever is
+inserted after the separator, and the buffer cannot be typed in.
+
+@code{front-sticky} is what makes the run unmodifiable in the
+@emph{middle}.  With @code{rear-nonsticky} alone --- the comint idiom,
+and what this used to be --- Emacs decides inserted text would join
+neither neighbouring interval and permits the insertion, so only the
+run's edges were protected: the prompt glyph and every transcript block
+could be typed into.
+
+The test asserts it by inserting mid-run, using the constant rather than
+a copy of its value --- a literal in the test would assert how Emacs
+behaves rather than how the harness marks its blocks, and would keep
+passing after someone dropped @code{front-sticky} from the real one.
+
 @subsection Block ids, not positions
 
 @code{cmacs-ai-harness-block-at} reports an @code{:id} unique for the

@@ -23,6 +23,7 @@ when both are enabled (libreclaw's sub-make is redirected via
 @menu
 * CMacs AI Providers::
 * CMacs AI Chat Buffers::
+* CMacs AI View::
 * CMacs AI Region Commands::
 * CMacs AI Send::
 * CMacs AI Generic Calls::
@@ -178,7 +179,39 @@ Archive the chat history to @code{cmacs-ai-chat-dir} (the editable
 Resume a saved chat (@code{cmacs-ai-chat-resume}): reopen its
 transcript and rebuild the ai-glib session so it continues with full
 context.
+@item C-c C-a
+Attach the buffers you have on screen (@code{cmacs-ai-view-attach}).
+See @ref{CMacs AI View}.
 @end table
+
+@subsection Why the transcript cannot be edited
+
+A read-only region in Emacs has two ways to fail @emph{open} ---
+protecting nothing while looking protected --- and cmacs hit both.
+
+@enumerate
+@item
+@strong{Emacs clears @code{before-change-functions} when a function on
+it signals.}  A guard that signals @code{text-read-only} therefore
+protects a buffer @emph{exactly once}: after the first stray keypress
+the hook is gone and every edit after it lands.  That is what the
+transcript guard used to be on its own.
+
+@item
+@strong{@code{(read-only t rear-nonsticky t)} --- the comint idiom ---
+permits insertion in the MIDDLE of the run.}  With @code{rear-nonsticky}
+Emacs decides inserted text would join neither neighbouring interval and
+allows the insert, so only the run's edges were protected.
+@end enumerate
+
+So finished text carries @code{(read-only t front-sticky t)}, applied at
+turn boundaries; the property is enforced in C and cannot be disarmed.
+The change guard is kept for the tail of a turn still streaming, and is
+re-armed every time the transcript is sealed, so a clearing heals itself
+at the next turn rather than lasting the session.
+
+Both are covered by tests that try the same edit three times and once in
+the middle --- a single attempt at the edge passes against either bug.
 
 @subsection Saving and Resuming
 
@@ -206,6 +239,149 @@ carries the conversation, not the verbatim tool I/O --- this avoids
 provider errors from an orphaned @code{tool_result}); and each chat
 is its own archive file (there is no per-project single-file model
 like libreclaw's cmacs channel).
+
+@node CMacs AI View
+@section What the Model Can See
+
+@cindex screen context
+@cindex what I am looking at
+
+A chat buffer is the one place in cmacs where ``here'' is ambiguous.
+Ask @emph{please review the first paragraph here} and you mean the file
+in the window next door --- but point is in the chat, so everything
+that resolves context from point resolves to the conversation instead.
+
+So a chat is told what else is on your screen.
+
+@subsection It is a hint, not a payload
+
+The obvious implementation attaches the visible buffers' text to every
+message.  That is wrong twice over: you pay for it on every turn rather
+than once, and it is usually unnecessary, because a model with cmacs's
+MCP surface can read any buffer it likes.
+
+What is sent instead is a standing instruction in the system prompt ---
+a generic reference means the visible buffers, here is how to read them
+--- and, on each turn, a short @dfn{inventory}:
+
+@example
+[cmacs: on the user's screen right now]
+1. cmacs-ai-view.el | ~/src/cmacs/lisp/cmacs/cmacs-ai-view.el |
+   emacs-lisp-mode | 457 lines | point on line 212 | showing lines 190-243
+2. *shell* | shell-mode | 84 lines | point on line 84 | showing lines 61-84
+@end example
+
+Names, files, modes, where point is, which lines are on screen, and
+whether a region is highlighted.  A few hundred bytes, whatever the
+files weigh.  The model reads what it actually needs with
+@code{get_buffer_content}, @code{search_buffer}, or
+@code{current_view}.
+
+Neither half appears in the chat buffer.  The transcript shows what you
+typed, the same way @code{cmacs-ai-pre-prompt} and the bootstrap
+directive already work.
+
+@subsection The one thing that will confuse you
+
+@strong{A hint to ``read it with your tools'' is worthless where there
+are no tools.}  So there are two shapes, chosen per chat:
+
+@multitable @columnfractions .48 .16 .36
+@headitem Surface @tab Mode @tab What is sent
+@item A chat with a tool executor (the default)
+  @tab @code{tools} @tab the inventory; the model fetches
+@item A CLI agent (claude-code, claude-tmux, opencode)
+  @tab @code{tools} @tab ditto, over its own MCP config
+@item @code{cmacs-ai-chat-enable-tools} set to nil
+  @tab @code{inline} @tab the inventory @emph{and} the text
+@item An @option{--without-cmacs-mcp} build
+  @tab @code{inline} @tab ditto
+@end multitable
+
+@code{inline} mode sends the buffers themselves, clipped to
+@code{cmacs-ai-view-inline-max-chars}.  It is the fallback, not the
+default, and it is deduplicated: an unchanged screen collapses to one
+line rather than being re-sent.
+
+The mode is worked out from the chat, not configured --- see
+@code{cmacs-ai-chat--view-mode}.  If a model keeps telling you it
+cannot see your screen, that is the thing to check.
+
+@subsection Only what changed
+
+The inventory rides every turn, but only says anything new when there
+is something new.  The screen is fingerprinted by window layout, point,
+and each buffer's @code{buffer-chars-modified-tick}; an unchanged
+fingerprint produces one line saying so.
+
+Editing a visible buffer counts as a change even when the listing would
+read identically --- otherwise the model reasons about a version of the
+file that no longer exists.
+
+@subsection What is never context
+
+The AI surfaces themselves.  A chat that listed itself would answer
+questions about your question, so @code{cmacs-ai-view-exclude-modes}
+drops chat buffers, result windows, the harness, libreclaw rooms and
+the brigade dashboard, and @code{cmacs-ai-view-exclude-name-regexps}
+drops internal buffers by name.  Both are lists you can add your own
+surface to; modes are matched with @code{derived-mode-p}, so naming a
+parent covers its children.
+
+The buffer the command was invoked from is dropped too --- it is the
+chat asking the question.  With nothing else on screen at all (a chat
+filling a laptop frame, which is when you are @emph{most} likely to say
+``here''), the last non-excluded buffer you selected is used instead.
+
+@subsection Forcing it: C-c C-a
+
+@code{cmacs-ai-view-attach} puts the visible buffers' actual text into
+the compose area, as an Org example block: @emph{visible}, so you can
+see what you are about to send; @emph{editable}, so you can cut it down
+first; and part of the transcript, so a saved chat still makes sense
+later.
+
+Each buffer goes through @code{cmacs-ai-target-at}, so this inherits
+every resolver the right-click menu has: a highlighted region beats the
+whole buffer, and a mail message, a terminal's last command, an Org
+subtree, a dired selection or a diff hunk are each understood as
+themselves.  With a prefix argument you pick which visible buffers to
+attach.
+
+@kbd{C-c C-a} shadows @code{org-attach} in chat and room buffers.  That
+is deliberate: in a chat, ``attach'' means the thing you are looking
+at.
+
+@subsection What this sends, and how to stop it
+
+Worth being plain about, because it is on by default: the names and
+file paths of every buffer you have on screen go to the provider with
+every message.  @kbd{C-c C-a} sends their contents.  In @code{inline}
+mode the contents go automatically.
+
+@lisp
+(setq cmacs-ai-view-attach-mode 'off)  ; C-c C-a still works
+@end lisp
+
+@multitable @columnfractions .42 .12 .46
+@headitem Variable @tab Default @tab What
+@item @code{cmacs-ai-view-attach-mode} @tab @code{hint}
+  @tab @code{hint} or @code{off}
+@item @code{cmacs-ai-view-exclude-modes} @tab (list)
+  @tab modes never reported
+@item @code{cmacs-ai-view-exclude-name-regexps} @tab (list)
+  @tab buffer names never reported
+@item @code{cmacs-ai-view-max-buffers} @tab 8
+  @tab most buffers listed; the rest are counted
+@item @code{cmacs-ai-view-inline-max-chars} @tab 12000
+  @tab budget for the @code{inline} fallback
+@end multitable
+
+@subsection Elsewhere
+
+The same layer serves libreclaw's rooms (embedded and remote) and the
+@code{current_view} MCP tool, so an agent talking to cmacs over any of
+the three gets the same answer to ``what is the user looking at''.
 
 @node CMacs AI Region Commands
 @section Region Commands

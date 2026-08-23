@@ -80,6 +80,31 @@ Keymap:
 | =C-c C-l=   | =cmacs-ai-chat-clear-history= |
 | =C-c C-s=   | =cmacs-ai-chat-save=          |
 | =C-c C-o=   | =cmacs-ai-chat-resume=        |
+| =C-c C-a=   | =cmacs-ai-view-attach=        |
+
+** Why the transcript cannot be edited, and why that took two goes
+
+A read-only region in Emacs has two ways to fail /open/ -- protecting
+nothing while looking protected -- and cmacs hit both:
+
+1. *Emacs clears =before-change-functions= when a function on it
+   signals.*  A guard that signals =text-read-only= therefore protects a
+   buffer *exactly once*: after the first stray keypress the hook is
+   gone and every edit after it lands.  That is what the transcript
+   guard used to be on its own.
+2. *=(read-only t rear-nonsticky t)= -- the comint idiom -- permits
+   insertion in the MIDDLE of the run.*  With =rear-nonsticky= Emacs
+   decides inserted text would join neither neighbouring interval and
+   allows the insert, so only the run's edges were protected.
+
+So finished text carries =(read-only t front-sticky t)=, applied at turn
+boundaries; the property is enforced in C and cannot be disarmed.  The
+change guard is kept for the tail of a turn still streaming, and is
+re-armed every time the transcript is sealed, so a clearing heals itself
+at the next turn rather than lasting the session.
+
+Both are covered by tests that try the same edit three times and once in
+the middle -- a single attempt at the edge passes against either bug.
 
 ** Saving & resuming chats
 
@@ -108,6 +133,138 @@ carries the conversation, not the verbatim tool I/O — this avoids
 provider errors from an orphaned =tool_result=); and each chat is its
 own archive file (there is no per-project single-file model like
 libreclaw's cmacs channel).
+
+* What the model can see
+
+A chat buffer is the one place in cmacs where "here" is ambiguous.  Ask
+=please review the first paragraph here= and you mean the file in the
+window next door -- but point is in the chat, so everything that
+resolves context from point resolves to the conversation instead.
+
+So a chat is told what else is on your screen.
+
+** It is a hint, not a payload
+
+The obvious implementation attaches the visible buffers' text to every
+message.  That is wrong twice over: you pay for it on every turn rather
+than once, and it is usually unnecessary, because a model with cmacs's
+MCP surface can read any buffer it likes.
+
+What is sent instead is a standing instruction in the system prompt --
+a generic reference means the visible buffers, here is how to read them
+-- and, on each turn, a short *inventory*:
+
+#+begin_example
+[cmacs: on the user's screen right now]
+1. cmacs-ai-view.el | ~/source/projects/cmacs/lisp/cmacs/cmacs-ai-view.el | emacs-lisp-mode | 457 lines | point on line 212 | showing lines 190-243
+2. *shell* | shell-mode | 84 lines | point on line 84 | showing lines 61-84
+#+end_example
+
+Names, files, modes, where point is, which lines are on screen, and
+whether a region is highlighted.  A few hundred bytes, whatever the
+files weigh.  The model reads what it actually needs with
+=get_buffer_content=, =search_buffer=, or =current_view=.
+
+Neither half appears in the chat buffer.  The transcript shows what you
+typed, the same way =cmacs-ai-pre-prompt= and the bootstrap directive
+already work.
+
+** The one thing that will confuse you
+
+*A hint to "read it with your tools" is worthless where there are no
+tools.*  So there are two shapes, chosen per chat:
+
+| Surface                                       | Mode      | What is sent                    |
+|-----------------------------------------------+-----------+---------------------------------|
+| A chat with a tool executor (the default)     | =tools=   | the inventory; the model fetches |
+| A CLI agent (claude-code, claude-tmux, opencode) | =tools= | ditto, over its own MCP config  |
+| =cmacs-ai-chat-enable-tools= set to nil       | =inline=  | the inventory *and* the text     |
+| An =--without-cmacs-mcp= build                | =inline=  | ditto                            |
+
+=inline= mode sends the buffers themselves, clipped to
+=cmacs-ai-view-inline-max-chars=.  It is the fallback, not the default,
+and it is deduplicated: an unchanged screen collapses to one line rather
+than being re-sent.
+
+The mode is worked out from the chat, not configured -- see
+=cmacs-ai-chat--view-mode=.  If a model keeps telling you it cannot see
+your screen, that is the thing to check.
+
+** Only what changed
+
+The inventory rides every turn, but only says anything new when there is
+something new.  The screen is fingerprinted by window layout, point, and
+each buffer's =buffer-chars-modified-tick=; an unchanged fingerprint
+produces:
+
+#+begin_example
+[cmacs: on the user's screen right now] unchanged since the previous message.
+#+end_example
+
+Editing a visible buffer counts as a change even when the listing would
+read identically -- otherwise the model reasons about a version of the
+file that no longer exists.
+
+** What is never context
+
+The AI surfaces themselves.  A chat that listed itself would answer
+questions about your question, so =cmacs-ai-view-exclude-modes= drops
+chat buffers, result windows, the harness, libreclaw rooms and the
+brigade dashboard, and =cmacs-ai-view-exclude-name-regexps= drops
+internal buffers by name.  Both are lists you can add your own surface
+to; modes are matched with =derived-mode-p=, so naming a parent covers
+its children.
+
+The buffer the command was invoked from is dropped too -- it is the chat
+asking the question.  With nothing else on screen at all (a chat filling
+a laptop frame, which is when you are *most* likely to say "here"),
+the last non-excluded buffer you selected is used instead.
+
+** Forcing it: =C-c C-a=
+
+=cmacs-ai-view-attach= puts the visible buffers' actual text into the
+compose area, as an Org example block:
+
+- it is *visible*, so you can see what you are about to send;
+- it is *editable*, so you can cut it down first;
+- it is in the transcript, so a saved chat still makes sense later.
+
+Each buffer goes through =cmacs-ai-target-at=, so this inherits every
+resolver the right-click menu has: a highlighted region beats the whole
+buffer, and a mail message, a terminal's last command, an Org subtree, a
+dired selection or a diff hunk are each understood as themselves.  With
+a prefix argument you pick which visible buffers to attach.
+
+=C-c C-a= shadows =org-attach= in chat and room buffers.  That is
+deliberate: in a chat, "attach" means the thing you are looking at.
+
+** What this sends, and how to stop it
+
+Worth being plain about, because it is on by default: the names and file
+paths of every buffer you have on screen go to the provider with every
+message.  =C-c C-a= sends their contents.  In =inline= mode the contents
+go automatically.
+
+#+begin_src elisp
+(setq cmacs-ai-view-attach-mode 'off)   ; nothing automatic; C-c C-a still works
+#+end_src
+
+Other knobs:
+
+| Variable                             | Default | What                                    |
+|--------------------------------------+---------+-----------------------------------------|
+| =cmacs-ai-view-attach-mode=          | =hint=  | =hint= or =off=                          |
+| =cmacs-ai-view-exclude-modes=        | (list)  | modes never reported                    |
+| =cmacs-ai-view-exclude-name-regexps= | (list)  | buffer names never reported             |
+| =cmacs-ai-view-max-buffers=          | 8       | most buffers listed; the rest are counted |
+| =cmacs-ai-view-inline-max-chars=     | 12000   | budget for the =inline= fallback         |
+
+** Elsewhere
+
+The same layer serves libreclaw's rooms (embedded and remote) and the
+=current_view= MCP tool, so an agent talking to cmacs over any of the
+three gets the same answer to "what is the user looking at".  See
+[[file:libreclaw/usage.org][libreclaw usage]] and [[file:mcp.org][the MCP server]].
 
 * Region commands
 

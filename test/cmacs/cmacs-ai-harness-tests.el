@@ -127,6 +127,52 @@ at all."
     (insert "typed")
     (should (equal (cmacs-ai-harness-prompt-string) "typed"))))
 
+(ert-deftest cmacs-ai-harness-separator-cannot-be-edited-mid-run ()
+  "`rear-nonsticky\' alone protects only the EDGES of a read-only run.
+
+With `(read-only t rear-nonsticky t)\' Emacs decides inserted text would
+join neither neighbouring interval and permits insertion in the middle
+of the run -- so the prompt glyph could be typed into, and the
+transcript blocks with it, while every edge test passed.  `front-sticky\'
+is what closes it, and it has to coexist with `rear-nonsticky\' so the
+prompt itself stays typable.
+
+Repeated deliberately: a protection that works once is the other failure
+mode in this area (see `cmacs-ai-harness--draw-prompt\')."
+  (skip-unless (fboundp 'cmacs-ai-harness-new))
+  (cmacs-ai-harness-tests--with-session
+    (let ((mid (- (marker-position cmacs-ai-harness--prompt-marker) 1)))
+      (skip-unless (> mid (point-min)))
+      (dolist (_ '(1 2 3))
+        (goto-char mid)
+        (should-error (insert "x") :type 'text-read-only)))
+    ;; ... and the prompt right after it is still typable.
+    (goto-char (point-max))
+    (insert "typed")
+    (should (equal (cmacs-ai-harness-prompt-string) "typed"))))
+
+(ert-deftest cmacs-ai-harness-block-text-cannot-be-edited-mid-run ()
+  "A transcript block is the library's, and is redrawn from ai-glib's
+blocks on every change -- so an edit inside one is silently discarded
+the next time it grows.  It has to be refused, in the middle and not
+only at the ends."
+  (skip-unless (fboundp 'cmacs-ai-harness-new))
+  (cmacs-ai-harness-tests--with-session
+    (let ((start (cmacs-ai-harness--transcript-end)))
+      (let ((inhibit-read-only t))
+        (save-excursion
+          (goto-char start)
+          (insert "a block of transcript text\n\n")
+          ;; The code's own property list, not a copy of it: a literal
+          ;; here would assert how Emacs behaves rather than how the
+          ;; harness marks its blocks, and would keep passing after
+          ;; someone dropped `front-sticky' from the real one.
+          (add-text-properties start (point)
+                               cmacs-ai-harness--read-only-props)))
+      (goto-char (+ start 5))
+      (dolist (_ '(1 2))
+        (should-error (insert "x") :type 'text-read-only)))))
+
 (ert-deftest cmacs-ai-harness-is-not-a-special-mode ()
   "Deriving from `special-mode' makes the buffer untypable under Evil.
 

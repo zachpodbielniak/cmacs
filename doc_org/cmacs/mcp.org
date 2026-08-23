@@ -101,6 +101,7 @@ is reachable through it.
 | Tool                  | Description                                        |
 |-----------------------+----------------------------------------------------|
 | =list_windows=        | List all windows with buffer and geometry info     |
+| =current_view=        | What the user is looking at: the visible buffers, AI chat surfaces excluded.  Call this when they say "here" or "this" without naming a buffer.  =include_content= also returns the text |
 | =list_frames=         | List all frames                                    |
 | =split_window=        | Split a window horizontally or vertically          |
 | =delete_window=       | Delete a window                                    |

@@ -112,10 +112,86 @@ Buffer-local bindings:
 @code{cmacs-libreclaw-clear-compose}
 @item C-c C-x C-f
 @code{cmacs-libreclaw-attach-file}
+@item C-c C-a
+@code{cmacs-ai-view-attach} --- attach what you have on screen
 @end table
 
 @kbd{RET}, @kbd{TAB}, @kbd{C-c C-l} are standard org-mode keys and
 work as usual for multi-line editing.
+
+@subsection Why the transcript cannot be edited
+
+A read-only region in Emacs has two ways to fail @emph{open} ---
+protecting nothing while looking protected --- and cmacs hit both.
+
+@enumerate
+@item
+@strong{Emacs clears @code{before-change-functions} when a function on
+it signals.}  A guard that signals @code{text-read-only} therefore
+protects a buffer @emph{exactly once}: after the first stray keypress
+the hook is gone and every edit after it lands.  That is what the
+transcript guard used to be on its own.
+
+@item
+@strong{@code{(read-only t rear-nonsticky t)} --- the comint idiom ---
+permits insertion in the MIDDLE of the run.}  With @code{rear-nonsticky}
+Emacs decides inserted text would join neither neighbouring interval and
+allows the insert, so only the run's edges were protected.
+@end enumerate
+
+So finished text carries @code{(read-only t front-sticky t)}, applied at
+each delivered message; the property is enforced in C and cannot be disarmed.
+The change guard is kept for anything not yet sealed, and is
+re-armed every time the transcript is sealed, so a clearing heals itself
+at the next message rather than lasting the session.
+
+Both are covered by tests that try the same edit three times and once in
+the middle --- a single attempt at the edge passes against either bug.
+
+@subsection What the agent is told about your screen
+
+An agent room is a chat with something that can drive your editor, so
+``summarize this'' has to mean the buffer you are looking at rather
+than the room you typed it in.  Each outgoing message therefore carries
+an invisible prelude: a listing of the buffers currently on your screen
+--- name, file, mode, where point is, which lines are visible --- and,
+on the first message of a room, a standing explanation of what that
+listing is for.
+
+@strong{The room shows exactly what you typed.}  The prelude rides the
+wire and nothing else; the local echo and the send are separate
+statements in @code{cmacs-libreclaw-send-compose} for that reason, and
+there is a test holding them apart.  A transcript of an agent
+conversation is still readable a week later.
+
+The listing carries no buffer text.  The agent has cmacs's whole MCP
+surface tunnelled to it, so it reads what it needs with
+@code{get_buffer_content}, @code{search_buffer} or
+@code{current_view}.  @xref{CMacs AI View}, for the full model, the
+exclusion rules, and the @code{inline} fallback for an agent with no
+tools.
+
+@strong{Only cmacs's own agent rooms.}  A matrix room, a mailing list
+or a webhook channel is other people, and what is on your screen is
+none of their business --- the branch in
+@code{cmacs-libreclaw-send-compose} is what enforces that.
+
+@multitable @columnfractions .34 .26 .40
+@headitem Variable @tab Default @tab What
+@item @code{cmacs-libreclaw-view-mode} @tab @code{tools}
+  @tab @code{tools} (agent has MCP) or @code{inline}
+@item @code{cmacs-libreclaw-context-function}
+  @tab @code{cmacs-libreclaw-default-context}
+  @tab build the prelude yourself, or nil to send nothing
+@end multitable
+
+Set @code{cmacs-libreclaw-view-mode} to @code{inline} if the agent
+keeps saying it cannot see your screen --- that means its MCP config
+does not include the cmacs server.  @code{cmacs-ai-view-attach-mode}
+set to @code{off} disables the whole thing here too.
+
+@kbd{C-c C-a} forces the payload: the visible buffers' actual text,
+dropped into the compose region where you can trim it before sending.
 
 @subsection Switching between rooms
 
