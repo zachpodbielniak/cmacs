@@ -182,6 +182,16 @@ extern char etext;
 #ifdef HAVE_CMACS_GOWL
 #include <gowl.h>
 #include <wayland-server-core.h>
+/* CMACS: declared here rather than inside the --gowl branch below.
+   Nested externs are a warning (-Wnested-externs) and they hid the fact
+   that cmacs-gowl.h declares all of these; including that header here
+   instead would pull GTK and xwidget types into emacs.c, which is a
+   bigger upstream footprint than four lines. */
+extern GowlCompositor *cmacs_gowl_compositor;
+extern GowlCompositor *gowl_compositor;
+extern GowlConfig     *gowl_config;
+extern void cmacs_gowl_start_thread (void);
+extern void cmacs_gowl_inhibit_parent_shortcuts (GowlCompositor *comp);
 #endif
 
 #if defined HAVE_CMACS_GSURF || defined HAVE_XWIDGETS
@@ -1672,7 +1682,6 @@ android_emacs_init (int argc, char **argv, char *dump_file)
                                gowl_config / gowl_compositor globals
                                are expected to be defined by the
                                embedding process (cmacs-gowl.c). */
-                            extern GowlConfig *gowl_config;
                             gowl_config = config;
                             if (!gowl_config_compiler_load_and_apply (
                                     compiler, so_path, &c_err))
@@ -1709,10 +1718,6 @@ android_emacs_init (int argc, char **argv, char *dump_file)
                starting the dispatch thread — the roundtrip talks to
                the parent compositor process, not to gowl. */
             {
-              extern GowlCompositor *cmacs_gowl_compositor;
-              extern GowlCompositor *gowl_compositor;
-              extern void cmacs_gowl_start_thread (void);
-              extern void cmacs_gowl_inhibit_parent_shortcuts (GowlCompositor *);
               cmacs_gowl_compositor = comp;
               /* Mirror into the shared-object global so any C config
                  that already ran saw the config, and so future

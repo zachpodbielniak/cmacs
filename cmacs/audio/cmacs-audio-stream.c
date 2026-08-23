@@ -310,7 +310,13 @@ cmacs_audio__attach_bus_watch (CmacsAudioStream *s)
   s->bus_watch = gst_bus_create_watch (s->bus);
   if (!s->bus_watch) return FALSE;
   g_source_set_callback (s->bus_watch,
-                         (GSourceFunc) cmacs_audio__on_bus_message,
+                         G_SOURCE_FUNC (cmacs_audio__on_bus_message),
+                         /* G_SOURCE_FUNC, not a plain cast: a bus watch
+                            callback really is a GstBusFunc, and casting it
+                            straight to GSourceFunc is a cast between
+                            incompatible function types.  The macro routes
+                            it through void(*)(void), which is the form
+                            GLib defines for exactly this. */
                          s, NULL);
   g_source_attach (s->bus_watch, cmacs_glib_get_context ());
   g_source_unref (s->bus_watch);

@@ -32,9 +32,6 @@ typedef struct CmacsGsurfView CmacsGsurfView;
 
 /* ── Subsystem lifecycle (cmacs-gsurf-init.c) ───────────────────────── */
 
-extern void syms_of_cmacs_gsurf (void);
-extern void init_cmacs_gsurf    (void);
-
 /* Lazily bring up the gsurf runtime (gsurf_init + backend_init + the
    process GsurfApplication/GsurfConfig + module-manager search paths +
    GIR typelib path).  Returns true once gsurf is usable.  Safe to call

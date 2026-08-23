@@ -12,10 +12,14 @@
 #ifdef HAVE_CMACS_IMGEDIT
 
 /* Registers the cmacs-imgedit-* DEFUNs (called from syms_of_* in emacs.c). */
-extern void syms_of_cmacs_imgedit (void);
 
 /* Post-Lisp runtime init (idempotent). */
-extern void init_cmacs_imgedit (void);
+
+/* Per-file DEFUN registration entry points.  These are NOT in
+   lisp.h -- only the subsystem's top-level syms_of_/init_ pair is
+   -- so without them here each definition has no prototype.  */
+extern void syms_of_cmacs_imgedit_defuns (void);
 
 #endif /* HAVE_CMACS_IMGEDIT */
+
 #endif /* CMACS_IMGEDIT_H */

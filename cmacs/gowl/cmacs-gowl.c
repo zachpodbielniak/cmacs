@@ -5201,7 +5201,13 @@ Configures the alpha module and re-applies immediately. */)
 {
   GowlModuleManager *mgr;
   GHashTable *inner, *outer;
-  char buf[64];
+  /* 320, not 64: "%.4f" of an unconstrained double wants up to 315
+     bytes, and GCC will not narrow that through the CLAMP below (float
+     range propagation gives up on the NaN case), so the buffer is sized
+     for the format instead of the value.  The clamp still matters --
+     it is what makes the value meaningful to the compositor. */
+  char buf[320];
+  gfloat a;
 
   CHECK_NUMBER (alpha);
   GOWL_CHECK_RUNNING ();
@@ -5210,8 +5216,17 @@ Configures the alpha module and re-applies immediately. */)
   if (mgr == NULL)
     error ("No module manager");
 
-  cmacs_alpha_focused = (gfloat) XFLOATINT (alpha);
-  snprintf (buf, sizeof buf, "%.4f", cmacs_alpha_focused);
+  /* Validated and clamped before it is formatted, and that is the fix
+     rather than a bigger buffer: an alpha that is not a finite number in
+     0..1 is meaningless to the compositor.  It also bounds the
+     formatting -- "%.4f" of an unconstrained float wants up to 315
+     bytes, which is what -Wformat-truncation was pointing at. */
+  a = (gfloat) XFLOATINT (alpha);
+  if (!isfinite (a))
+    error ("Alpha must be a finite number");
+  a = CLAMP (a, 0.0f, 1.0f);
+  cmacs_alpha_focused = a;
+  snprintf (buf, sizeof buf, "%.4f", (gdouble) a);
 
   inner = g_hash_table_new (g_str_hash, g_str_equal);
   g_hash_table_insert (inner, (gpointer) "focused-alpha", buf);
@@ -5233,7 +5248,13 @@ Configures the alpha module and re-applies immediately. */)
 {
   GowlModuleManager *mgr;
   GHashTable *inner, *outer;
-  char buf[64];
+  /* 320, not 64: "%.4f" of an unconstrained double wants up to 315
+     bytes, and GCC will not narrow that through the CLAMP below (float
+     range propagation gives up on the NaN case), so the buffer is sized
+     for the format instead of the value.  The clamp still matters --
+     it is what makes the value meaningful to the compositor. */
+  char buf[320];
+  gfloat a;
 
   CHECK_NUMBER (alpha);
   GOWL_CHECK_RUNNING ();
@@ -5242,8 +5263,17 @@ Configures the alpha module and re-applies immediately. */)
   if (mgr == NULL)
     error ("No module manager");
 
-  cmacs_alpha_unfocused = (gfloat) XFLOATINT (alpha);
-  snprintf (buf, sizeof buf, "%.4f", cmacs_alpha_unfocused);
+  /* Validated and clamped before it is formatted, and that is the fix
+     rather than a bigger buffer: an alpha that is not a finite number in
+     0..1 is meaningless to the compositor.  It also bounds the
+     formatting -- "%.4f" of an unconstrained float wants up to 315
+     bytes, which is what -Wformat-truncation was pointing at. */
+  a = (gfloat) XFLOATINT (alpha);
+  if (!isfinite (a))
+    error ("Alpha must be a finite number");
+  a = CLAMP (a, 0.0f, 1.0f);
+  cmacs_alpha_unfocused = a;
+  snprintf (buf, sizeof buf, "%.4f", (gdouble) a);
 
   inner = g_hash_table_new (g_str_hash, g_str_equal);
   g_hash_table_insert (inner, (gpointer) "unfocused-alpha", buf);
@@ -6330,7 +6360,6 @@ static gboolean
 clipboard_push_idle (gpointer user_data)
 {
   gchar *text = (gchar *)user_data;
-  gchar *escaped;
   gchar *elisp;
 
   if (text == NULL || text[0] == '\0')

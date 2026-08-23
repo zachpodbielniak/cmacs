@@ -89,9 +89,12 @@ cmacs_piper_synth_sync (const char *binary, const char *model,
       return NULL;
     }
   const gchar *piper = cmacs_piper__binary_path (binary);
-  gchar *argv[] = {
-    (gchar *) piper,
-    "--model",       (gchar *) model,
+  /* const: "--model" and "--output_raw" are string literals, and putting
+     them in a gchar * slot discards their const.  g_subprocess_launcher_spawnv
+     takes const gchar * const *, so nothing here needs to be writable. */
+  const gchar *argv[] = {
+    piper,
+    "--model",       model,
     "--output_raw",
     NULL
   };
@@ -173,9 +176,12 @@ cmacs_piper_synth_async (const char *binary, const char *model,
 {
   if (!text) text = "";
   const gchar *piper = cmacs_piper__binary_path (binary);
-  gchar *argv[] = {
-    (gchar *) piper,
-    "--model",       (gchar *) model,
+  /* const: "--model" and "--output_raw" are string literals, and putting
+     them in a gchar * slot discards their const.  g_subprocess_launcher_spawnv
+     takes const gchar * const *, so nothing here needs to be writable. */
+  const gchar *argv[] = {
+    piper,
+    "--model",       model,
     "--output_raw",
     NULL
   };

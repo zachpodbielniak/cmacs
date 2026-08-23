@@ -37,7 +37,6 @@
 
 /* Reach into the frame's Cairo context without depending on the
    file-local FRAME_CR_CONTEXT macro from src/pgtkterm.c. */
-#define CMACS_FRAME_CR_CONTEXT(f) ((f)->output_data.pgtk->cr_context)
 
 /* Symbol referencing the buffer-local annotations list, defined in
    `cmacs-ink-region.el' via `defvar-local'.  Cached on first use. */
@@ -67,9 +66,6 @@ cmacs_ink_safe_blv (Lisp_Object var, Lisp_Object buffer)
     return Qunbound;
   return buffer_local_value (var, buffer);
 }
-
-static Lisp_Object
-cmacs_ink_safe_blv (Lisp_Object var, Lisp_Object buffer);
 
 static double
 cmacs_ink_overlay_alpha_for_buffer (Lisp_Object buffer)

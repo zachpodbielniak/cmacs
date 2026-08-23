@@ -12,7 +12,6 @@
 #include <stdbool.h>
 
 extern void syms_of_cmacs_libregnum_defuns   (void);
-extern void cmacs_libregnum_view_registry_init (void);
 
 #ifdef HAVE_PGTK
 extern void syms_of_cmacs_libregnum_dnd (void);

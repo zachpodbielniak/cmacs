@@ -13,7 +13,6 @@
 
 #include <stdbool.h>
 
-extern void syms_of_cmacs_vidstudio_defuns (void);
 
 static bool init_done = false;
 

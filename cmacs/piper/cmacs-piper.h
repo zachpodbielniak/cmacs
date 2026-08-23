@@ -17,8 +17,5 @@
 
 #include "lisp.h"
 
-extern void syms_of_cmacs_piper (void);
-extern void init_cmacs_piper (void);
-
 #endif /* HAVE_CMACS_PIPER */
 #endif /* CMACS_PIPER_H */

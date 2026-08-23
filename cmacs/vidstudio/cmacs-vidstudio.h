@@ -11,8 +11,11 @@
 
 #ifdef HAVE_CMACS_VIDSTUDIO
 
-extern void syms_of_cmacs_vidstudio (void);
-extern void init_cmacs_vidstudio (void);
+/* Per-file DEFUN registration entry points.  These are NOT in
+   lisp.h -- only the subsystem's top-level syms_of_/init_ pair is
+   -- so without them here each definition has no prototype.  */
+extern void syms_of_cmacs_vidstudio_defuns (void);
 
 #endif /* HAVE_CMACS_VIDSTUDIO */
+
 #endif /* CMACS_VIDSTUDIO_H */

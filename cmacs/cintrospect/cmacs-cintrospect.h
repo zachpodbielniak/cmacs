@@ -28,9 +28,6 @@
 
 /* ── Subsystem lifecycle ───────────────────────────────────────────── */
 
-extern void syms_of_cmacs_cintrospect (void);
-extern void init_cmacs_cintrospect (void);
-
 /* ── Internal helpers shared with cpatch ─────────────────────────────
  *
  * cpatch links against cintrospect for DWARF lookup, the DEFUN

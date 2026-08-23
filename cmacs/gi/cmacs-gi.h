@@ -18,7 +18,6 @@
 #include <girepository.h>
 
 /* Register DEFUN primitives. */
-extern void syms_of_cmacs_gi (void);
 
 #endif /* HAVE_CMACS_GI */
 #endif /* CMACS_GI_H */

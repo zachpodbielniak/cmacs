@@ -39,13 +39,9 @@ extern PodModule *pod_cmacs_libreclaw_module_new (void);
 extern void
 pod_cmacs_libreclaw_module_set_app (PodModule *self, LcApp *app);
 
-/* Forward decls from sibling files in cmacs/libreclaw/. */
-extern void syms_of_cmacs_libreclaw_config        (void);
-extern void syms_of_cmacs_libreclaw_room          (void);
-extern void syms_of_cmacs_libreclaw_marshal       (void);
-extern void syms_of_cmacs_libreclaw_hatch         (void);
-extern void syms_of_cmacs_libreclaw_cmacs_channel (void);
-extern void syms_of_cmacs_libreclaw_remote        (void);
+/* The sibling files' syms_of_ entry points are declared in
+   cmacs-libreclaw.h, included above -- repeating them here was a
+   redundant redeclaration of all six. */
 
 /* ── State ─────────────────────────────────────────────────────────── */
 

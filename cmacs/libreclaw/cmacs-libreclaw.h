@@ -30,10 +30,8 @@ struct _PodModule;
  * (cmacs-libreclaw-start), not at C init.  This keeps pdumper state
  * clean and avoids loading YAML before the user has configured
  * `cmacs-libreclaw-config-file'. */
-extern void init_cmacs_libreclaw (void);
 
 /* syms_of_cmacs_libreclaw: called from emacs.c to register DEFUNs. */
-extern void syms_of_cmacs_libreclaw (void);
 
 /* Accessors for the shared cmacs-libreclaw state, used by other
  * cmacs subsystems (e.g. the pod bridge module) to reach the LcApp
@@ -79,5 +77,28 @@ extern void cmacs_libreclaw_cmacs_channel_unbind (void);
  * declaration — referring to the symbol by name pulls in the
  * builtin-symbol macro automatically. */
 
+/* Per-file DEFUN registration entry points.  These are NOT in
+   lisp.h -- only the subsystem's top-level syms_of_/init_ pair is
+   -- so without them here each definition has no prototype.  */
+extern void syms_of_cmacs_libreclaw_config (void);
+extern void syms_of_cmacs_libreclaw_room (void);
+extern void syms_of_cmacs_libreclaw_marshal (void);
+extern void syms_of_cmacs_libreclaw_hatch (void);
+extern void syms_of_cmacs_libreclaw_cmacs_channel (void);
+extern void syms_of_cmacs_libreclaw_remote (void);
+
+/* Marshalling helpers: a libreclaw message as a Lisp plist.
+   Declared rather than made static because they are the subsystem's
+   message-to-Lisp surface, not internals -- though nothing in-tree
+   currently calls them, so they are also the first thing to check if
+   this file ever looks larger than it needs to be.  */
+extern Lisp_Object
+cmacs_libreclaw_attachment_to_plist (const LcAttachment *att);
+extern Lisp_Object
+cmacs_libreclaw_inbound_to_plist (const LcInboundMessage *msg);
+extern Lisp_Object
+cmacs_libreclaw_outbound_to_plist (const LcOutboundMessage *msg);
+
 #endif /* HAVE_CMACS_LIBRECLAW */
+
 #endif /* CMACS_LIBRECLAW_H */

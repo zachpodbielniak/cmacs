@@ -37,8 +37,6 @@ extern const gchar *cmacs_mcp_get_socket_path (void);
 extern McpServer *cmacs_mcp_get_internal_server (void);
 
 /* Subsystem lifecycle (called from emacs.c). */
-extern void syms_of_cmacs_mcp (void);
-extern void init_cmacs_mcp (void);
 
 #endif /* HAVE_CMACS_MCP */
 #endif /* CMACS_MCP_H */

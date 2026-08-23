@@ -15,8 +15,5 @@
 
 #ifdef HAVE_CMACS_CPATCH
 
-extern void syms_of_cmacs_cpatch (void);
-extern void init_cmacs_cpatch (void);
-
 #endif /* HAVE_CMACS_CPATCH */
 #endif /* CMACS_CPATCH_H */

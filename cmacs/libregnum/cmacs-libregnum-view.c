@@ -119,7 +119,6 @@ Lisp_Object *cmacs_libregnum__payloads_root (void)
  * dangerous -- a CHECK_LIVE_FRAME signal would longjmp through
  * GLib's signal-emit machinery, bypassing emission_pop and
  * corrupting the global emission stack. */
-gboolean cmacs_libregnum_view_registry_empty_p (void);
 gboolean
 cmacs_libregnum_view_registry_empty_p (void)
 {

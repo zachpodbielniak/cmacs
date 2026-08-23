@@ -841,8 +841,8 @@ both).  */)
 }
 
 /* JIT DEFUNs (cmacs-c-compile / cmacs-c-call / cmacs-c-handle-info /
- * cmacs-c-handle-dispose) live in cmacs-cintrospect-jit.c. */
-extern void syms_of_cmacs_cintrospect_jit (void);
+ * cmacs-c-handle-dispose) live in cmacs-cintrospect-jit.c; its entry
+ * point is declared in cmacs-cintrospect-jit.h, included above. */
 
 /* ── syms_of ──────────────────────────────────────────────────────── */
 

@@ -14,9 +14,6 @@
 
 #ifdef HAVE_CMACS_PODOMATION
 
-extern void syms_of_cmacs_podomation (void);
-extern void init_cmacs_podomation (void);
-
 /* Accessor for the shared PodEngine — used by pod-cmacs-module and
    pod-gowl-module which are compiled into temacs. */
 struct _PodEngine;

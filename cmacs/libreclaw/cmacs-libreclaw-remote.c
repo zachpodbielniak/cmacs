@@ -44,25 +44,13 @@ static gulong          sig_connected_id    = 0;
 static gulong          sig_disconnected_id = 0;
 static gulong          sig_error_id        = 0;
 
-/* Forward declarations for the DEFUNs below.  These match the
- * EXFUN entries make-docfile will generate into src/globals.h on
- * the next build; declaring them locally lets the DEFUN macro's
- * static struct initializer reference them before make-docfile
- * has been re-run. */
-extern Lisp_Object
-Fcmacs_libreclaw_remote__connect_internal (Lisp_Object url,
-                                            Lisp_Object token,
-                                            Lisp_Object display_name,
-                                            Lisp_Object endpoints,
-                                            Lisp_Object user_id);
-extern Lisp_Object
-Fcmacs_libreclaw_remote_disconnect (void);
-extern Lisp_Object
-Fcmacs_libreclaw_remote_connected_p (void);
-extern Lisp_Object
-Fcmacs_libreclaw_remote_send_message (Lisp_Object room_id,
-                                       Lisp_Object body,
-                                       Lisp_Object html_body);
+/* No local forward declarations for the DEFUNs below.
+ *
+ * make-docfile emits an EXFUN for each into src/globals.h, and
+ * src/Makefile.in makes globals.h a prerequisite of every object
+ * ($(ALLOBJS): globals.h), so the prototypes are always in scope by
+ * the time this compiles -- and repeating them here was a redundant
+ * redeclaration of all four.  */
 
 /* DEFSYM-backed Q* symbols are defined in syms_of_cmacs_libreclaw_remote
  * below.  make-docfile scans those DEFSYM lines and emits the matching

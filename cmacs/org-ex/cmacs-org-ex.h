@@ -14,7 +14,6 @@
 #ifdef HAVE_CMACS_ORG_EX
 
 /* Register DEFUN primitives. */
-extern void syms_of_cmacs_org_ex (void);
 
 #endif /* HAVE_CMACS_ORG_EX */
 #endif /* CMACS_ORG_EX_H */

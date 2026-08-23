@@ -18,8 +18,5 @@
 
 #include "lisp.h"
 
-extern void syms_of_cmacs_whisper (void);
-extern void init_cmacs_whisper (void);
-
 #endif /* HAVE_CMACS_WHISPER */
 #endif /* CMACS_WHISPER_H */

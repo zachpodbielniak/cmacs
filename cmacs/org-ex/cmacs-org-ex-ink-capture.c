@@ -164,6 +164,13 @@ stroke_min_dist2_to_point (OrgExInkStroke *stroke, gdouble px, gdouble py)
 
 /* Apply an eraser stroke to the committed set: any pen stroke with a
    point within K px of any eraser-path point is removed wholesale. */
+/* One GdkRGBA component as the 0..255 byte "%02x" wants.
+   `unsigned', because %x expects unsigned int and passing a plain int
+   is undefined; clamped, because a component outside 0..1 would
+   otherwise print as ffffffNN and make a nonsense colour string. */
+#define CMACS_INK_RGBA_BYTE(component) \
+  ((unsigned int) CLAMP ((int) ((component) * 255 + 0.5), 0, 255))
+
 static void
 apply_eraser_to_committed (CaptureState *state, OrgExInkStroke *eraser)
 {
@@ -774,9 +781,9 @@ on_colour_set (GtkColorButton *btn, gpointer user_data)
   gchar *hex;
   gtk_color_chooser_get_rgba (GTK_COLOR_CHOOSER (btn), &c);
   hex = g_strdup_printf ("#%02x%02x%02x",
-                        (int) (c.red   * 255 + 0.5),
-                        (int) (c.green * 255 + 0.5),
-                        (int) (c.blue  * 255 + 0.5));
+                        CMACS_INK_RGBA_BYTE (c.red),
+                        CMACS_INK_RGBA_BYTE (c.green),
+                        CMACS_INK_RGBA_BYTE (c.blue));
   /* Update whichever tool's colour slot is current.  Eraser
      doesn't have a colour; we still record into pen_colour so
      the user's choice persists when they switch back to pen. */
@@ -819,9 +826,9 @@ on_bg_set (GtkColorButton *btn, gpointer user_data)
   g_free (state->background_colour);
   state->background_colour =
     g_strdup_printf ("#%02x%02x%02x",
-                     (int) (c.red   * 255 + 0.5),
-                     (int) (c.green * 255 + 0.5),
-                     (int) (c.blue  * 255 + 0.5));
+                     CMACS_INK_RGBA_BYTE (c.red),
+                     CMACS_INK_RGBA_BYTE (c.green),
+                     CMACS_INK_RGBA_BYTE (c.blue));
   gtk_widget_queue_draw (state->canvas);
 }
 

@@ -32,17 +32,20 @@ struct frame;
 typedef struct _cairo cairo_t;
 
 /* Called from src/emacs.c during early Lisp init. */
-extern void syms_of_cmacs_audio (void);
 
 /* Called once at startup after Lisp is up.  Runs gst_init_check
  * (idempotent; harmless if cmacs-video already initialised it) and
  * registers the handle tables. */
-extern void init_cmacs_audio (void);
 
-/* Called from src/pgtkterm.c::pgtk_handle_draw AFTER the video
- * overlay paint pass.  Paints the cached waveform surface for any
- * audio stream anchored to a frame rect or a buffer marker. */
-extern void cmacs_audio_overlay_paint (struct frame *f, cairo_t *cr);
+/* Called from src/pgtkterm.c::pgtk_handle_draw AFTER the video overlay
+ * paint pass.  Paints the cached waveform surface for any audio stream
+ * anchored to a frame rect or a buffer marker.
+ *
+ * Declared by cmacs-audio-overlay.h and pulled in here rather than
+ * repeated: pgtkterm.c includes only this umbrella, the overlay TU
+ * includes only that header, and two copies of the prototype is a
+ * redundant redeclaration in every file that sees both.  */
+#include "cmacs-audio-overlay.h"
 
 #endif /* HAVE_CMACS_AUDIO */
 #endif /* CMACS_AUDIO_H */

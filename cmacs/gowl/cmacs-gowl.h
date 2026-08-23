@@ -55,5 +55,16 @@ extern void cmacs_gowl_xwidget_keyboard_leave (void);
 /* Return the GtkWidget from an xwidget's gowl embed view, or NULL. */
 extern GtkWidget *cmacs_gowl_xwidget_get_widget (struct xwidget *xw);
 
+/* The two names a compiled C config expects to resolve against the
+   embedding process: standalone gowl defines them in its main.c, cmacs
+   defines them in cmacs-gowl.c.  Declared here rather than only defined
+   there, so the definitions have a prototype.
+
+   cmacs_gowl_compositor is deliberately NOT repeated here -- it is
+   declared in cmacs-eval-dispatch.h, and a second declaration is a
+   redundant redeclaration in every file that sees both. */
+extern GowlCompositor *gowl_compositor;
+extern GowlConfig     *gowl_config;
+
 #endif /* HAVE_CMACS_GOWL */
 #endif /* CMACS_GOWL_H */

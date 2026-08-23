@@ -316,7 +316,13 @@ cmacs_video__attach_bus_watch (CmacsVideoStream *s)
   if (!s->bus_watch)
     return FALSE;
   g_source_set_callback (s->bus_watch,
-                         (GSourceFunc)cmacs_video__on_bus_message,
+                         G_SOURCE_FUNC (cmacs_video__on_bus_message),
+                         /* G_SOURCE_FUNC, not a plain cast: a bus watch
+                            callback really is a GstBusFunc, and casting it
+                            straight to GSourceFunc is a cast between
+                            incompatible function types.  The macro routes
+                            it through void(*)(void), which is the form
+                            GLib defines for exactly this. */
                          s, NULL);
   g_source_attach (s->bus_watch, cmacs_glib_get_context ());
   /* Context now holds a ref; drop ours. */

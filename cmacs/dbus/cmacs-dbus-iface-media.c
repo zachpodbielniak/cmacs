@@ -239,6 +239,11 @@ static const gchar *speech_xml =
 
 static GDBusNodeInfo *speech_info = NULL;
 
+/* Only the builds that are missing a backend ever call this -- every use
+   is in an #else branch -- so with both compiled in it is an unused
+   function.  Guarded rather than deleted: it is what those builds
+   answer with. */
+#if !defined HAVE_CMACS_WHISPER || !defined HAVE_CMACS_PIPER
 static void
 speech_unsupported (GDBusMethodInvocation *iv, const gchar *what)
 {
@@ -248,6 +253,7 @@ speech_unsupported (GDBusMethodInvocation *iv, const gchar *what)
     iv, "org.cmacs.Editor1.Error", msg);
   g_free (msg);
 }
+#endif
 
 static void
 speech_method_call (GDBusConnection *c, const gchar *s, const gchar *o,
