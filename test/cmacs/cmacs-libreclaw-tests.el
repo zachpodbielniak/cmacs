@@ -1346,6 +1346,35 @@ a single attempt at the edge passes against the broken version."
                         before-change-functions)))
       (kill-buffer buf))))
 
+
+(ert-deftest cmacs-libreclaw-commands-are-sent-exactly-as-typed ()
+  "A bot command gets no screen-context prelude in front of it.
+
+libreclaw dispatches on the FIRST CHARACTER of the body
+\(`cmd_body[0] == \='!\='\=' in lc-app.c\), so anything prepended stops
+`!help\=' being a command and delivers it to the model as prose.  The
+symptom is a command that silently does nothing, which is why this is
+asserted on the wire rather than through the round-trip test alone."
+  (skip-unless (and (fboundp 'cmacs-libreclaw-room-mode)
+                    (fboundp 'cmacs-ai-view-turn-block)))
+  (cmacs-libreclaw-tests--in-room "cmacs"
+    (dolist (command '("!help" "!close_session" "  !help with spaces"))
+      (should (equal command (cmacs-libreclaw--outgoing-body command))))
+    ;; ... and an ordinary message still gets it.
+    (let ((sent (cmacs-libreclaw--outgoing-body "what is this?")))
+      (should (string-match-p "on the user's screen" sent)))))
+
+(ert-deftest cmacs-libreclaw-a-command-does-not-consume-the-hint ()
+  "Opening a room with `!help\=' must not spend the standing hint on a
+message that never carried it."
+  (skip-unless (and (fboundp 'cmacs-libreclaw-room-mode)
+                    (fboundp 'cmacs-ai-view-hint)))
+  (cmacs-libreclaw-tests--in-room "cmacs"
+    (cmacs-libreclaw--outgoing-body "!help")
+    (should-not cmacs-libreclaw-room--hinted)
+    (should (string-match-p "not this conversation"
+                            (cmacs-libreclaw--outgoing-body "now a question")))))
+
 (provide 'cmacs-libreclaw-tests)
 
 ;;; cmacs-libreclaw-tests.el ends here

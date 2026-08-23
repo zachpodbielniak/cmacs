@@ -648,6 +648,28 @@ mechanism."
   :type '(choice (const :tag "Send nothing extra" nil) function)
   :group 'cmacs-libreclaw)
 
+(defcustom cmacs-libreclaw-command-prefixes '("!")
+  "Prefixes that mean a message is a command, not something to talk about.
+
+Messages starting with one of these are sent EXACTLY as typed, with no
+screen-context prelude in front of them.
+
+This is not cosmetic.  libreclaw dispatches commands by looking at the
+first character of the message body -- `cmd_body[0] == \='!\=''
+in `lc-app.c\=' -- so anything prepended to `!help\=' stops it being a
+command at all, and it is delivered to the model as prose instead.  The
+symptom is a bot command that silently does nothing."
+  :type '(repeat string)
+  :group 'cmacs-libreclaw)
+
+(defun cmacs-libreclaw--command-p (body)
+  "Non-nil when BODY is a bot command rather than a message."
+  (let ((text (string-trim-left (or body ""))))
+    (seq-some (lambda (prefix)
+                (and (not (string-empty-p prefix))
+                     (string-prefix-p prefix text)))
+              cmacs-libreclaw-command-prefixes)))
+
 (defun cmacs-libreclaw--compose-context ()
   "The invisible prelude for the next outgoing message, or nil."
   (when (functionp cmacs-libreclaw-context-function)
@@ -666,10 +688,16 @@ mechanism."
 Only what BODY holds is echoed into the room: the prelude is for the
 agent, and a transcript full of machine-generated preamble is not a
 conversation anyone can read afterwards."
-  (let ((context (cmacs-libreclaw--compose-context)))
-    (if (and context (not (string-empty-p context)))
-        (concat context "\n\n---\n\n" body)
-      body)))
+  (if (cmacs-libreclaw--command-p body)
+      ;; A command is parsed from the first character of the body, so
+      ;; there is nothing that may go in front of it.  Returning early
+      ;; also leaves the room's hint and screen signature untouched, so
+      ;; the next real message still carries them.
+      body
+    (let ((context (cmacs-libreclaw--compose-context)))
+      (if (and context (not (string-empty-p context)))
+          (concat context "\n\n---\n\n" body)
+        body))))
 
 (defun cmacs-libreclaw-send-compose ()
   "Send the compose region as a message and clear it.
