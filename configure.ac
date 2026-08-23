@@ -886,10 +886,16 @@ if test "$with_cmacs_libreclaw" != "no"; then
       -I\$(srcdir)/../deps/libreclaw/deps/podomation/src/module \
       -I\$(srcdir)/../deps/libreclaw/deps/podomation/src/interfaces \
       -I\$(srcdir)/../deps/libreclaw/deps/podomation/src/core \
-      -I\$(srcdir)/../deps/libreclaw/deps/podomation/build/$cmacs_dep_buildtype \
+      -I\$(srcdir)/../deps/libreclaw/deps/podomation/build/release \
       -DLC_COMPILATION \
       -DCMACS_LIBRECLAW_GIR_DIR=\\\"\$(abs_top_srcdir)/deps/libreclaw/build/$cmacs_dep_buildtype\\\" \
       $CMACS_LIBRECLAW_DEPS_CFLAGS"
+    # podomation's generated pod-version.h is under build/release, NOT
+    # build/$cmacs_dep_buildtype: libreclaw builds its vendored deps with
+    # DEBUG=0 unconditionally ("deps use release output regardless of
+    # parent DEBUG", libreclaw's config.mk), same as htmx-glib below.
+    # Pointing at build/debug gave -Wmissing-include-dirs on every object
+    # that includes podomation.h -- 65 warnings from one wrong path.
     # htmx-glib (libreclaw >= 0.24.0) backs the server-rendered dashboard.
     # liblc-1.0.a is linked --whole-archive, so lc-dashboard-pages.o is always
     # pulled in and its htmx_* references must be resolvable.  libreclaw builds
@@ -9207,6 +9213,46 @@ ARCH_INDEPENDENT_CONFIG_FILES([java/AndroidManifest.xml])
 # Make ndk-build Makefiles.  This is only done inside the recursive
 # configure.
 ndk_CONFIG_FILES
+
+# CMACS: third-party headers are not ours to fix.
+#
+# pkg-config hands back absolute -I paths, and -I does NOT make a
+# directory a system directory -- so cmacs's warning set gets applied to
+# json-glib, libsoup, gtk and friends.  json-glib alone contributes 80
+# -Wtrailing-whitespace warnings under GCC 16, none of them actionable
+# here, and they drown the ones that are.
+#
+# Rewriting those to -isystem fixes it at the right level.  Turning the
+# warnings off would have hidden our own code too, which is the whole
+# point of the zero-warning policy.
+#
+# Only ABSOLUTE -I paths are rewritten.  Every cmacs include path is
+# written $(srcdir)- or $(abs_top_srcdir)-relative and so begins with a
+# literal "$", which this deliberately leaves alone: our own headers must
+# keep warning.
+# Listed explicitly rather than scraped out of `set': shell quoting of
+# multi-line values makes that parse unreliable, and a silently missed
+# variable here reads as "those warnings are unfixable" later.  Keep in
+# step with the AC_SUBST(CMACS_*_CFLAGS) calls above.
+for cmacs_isystem_var in \
+  CMACS_AI_BRIGADE_CFLAGS CMACS_AI_CFLAGS CMACS_AUDIO_CFLAGS \
+  CMACS_BACON_CFLAGS CMACS_CAD_CFLAGS CMACS_CALCULATOR_CFLAGS \
+  CMACS_CINTROSPECT_CFLAGS CMACS_CRISPY_CFLAGS CMACS_DBEXPLORER_CFLAGS \
+  CMACS_GI_CFLAGS CMACS_GLIB_CFLAGS CMACS_GNUSEYE_CFLAGS \
+  CMACS_GOWL_CFLAGS CMACS_GSURF_CFLAGS CMACS_IMGEDIT_CFLAGS \
+  CMACS_LIBRECLAW_CFLAGS CMACS_LIBREGNUM_CFLAGS CMACS_LRGSCRIPT_CFLAGS \
+  CMACS_LRGTERM_CFLAGS CMACS_LSP_CFLAGS CMACS_MCP_CFLAGS \
+  CMACS_OFFICE_CFLAGS CMACS_ORG_EX_CFLAGS CMACS_PIPER_CFLAGS \
+  CMACS_PODOMATION_CFLAGS CMACS_ROAMGRAPH_CFLAGS \
+  CMACS_SCREENSAVER_CFLAGS CMACS_VIDEO_CFLAGS CMACS_VIDSTUDIO_CFLAGS \
+  CMACS_WHISPER_CFLAGS; do
+  eval "cmacs_isystem_val=\$$cmacs_isystem_var"
+  case $cmacs_isystem_val in
+    *-I/*)
+      cmacs_isystem_val=`AS_ECHO(["$cmacs_isystem_val"]) | sed -e 's|-I/|-isystem /|g'`
+      eval "$cmacs_isystem_var=\$cmacs_isystem_val" ;;
+  esac
+done
 
 AC_OUTPUT
 

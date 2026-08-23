@@ -1032,12 +1032,26 @@ endif
 ## install-deps script pulls these in.
 ifeq ($(CMACS_WHISPER_BUNDLED),yes)
 CMACS_WHISPER_STATIC_LIB = $(srcdir)/../deps/whisper.cpp/build/src/libwhisper.a
-$(CMACS_WHISPER_STATIC_LIB):
+## FORCE, for the same reason as ai-glib above, and this one was learned
+## the hard way: the rule used to have NO prerequisites, so make checked
+## only that libwhisper.a existed.  Bumping the submodule (v1.8.4 ->
+## v1.9.3) therefore compiled cmacs against the new headers and linked a
+## three-month-old archive, and the build exited 0 -- an ABI mismatch
+## that surfaces as a non-deterministic crash rather than an error.
+##
+## Configure only when there is no cache to reuse; after that always
+## `cmake --build', which is a fast no-op when nothing changed and
+## re-runs cmake itself when CMakeLists.txt moved (cmake generates that
+## check into its own build system).  So the archive tracks the source
+## without paying for a reconfigure on every make.
+$(CMACS_WHISPER_STATIC_LIB): FORCE
 	cd $(srcdir)/../deps/whisper.cpp && \
-	  cmake -B build -DBUILD_SHARED_LIBS=OFF -DGGML_OPENMP=OFF \
-	    -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=OFF \
-	    -DCMAKE_C_STANDARD=11 -DCMAKE_CXX_STANDARD=17 \
-	    -DCMAKE_C_STANDARD_REQUIRED=ON -DCMAKE_CXX_STANDARD_REQUIRED=ON && \
+	  { test -f build/CMakeCache.txt || \
+	    cmake -B build -DBUILD_SHARED_LIBS=OFF -DGGML_OPENMP=OFF \
+	      -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=OFF \
+	      -DCMAKE_C_STANDARD=11 -DCMAKE_CXX_STANDARD=17 \
+	      -DCMAKE_C_STANDARD_REQUIRED=ON \
+	      -DCMAKE_CXX_STANDARD_REQUIRED=ON ; } && \
 	  cmake --build build --config Release --parallel
 # The -DCMAKE_C/CXX_STANDARD flags work around a CMake 4.x feature-
 # detection table that doesn't yet know about GCC 16; setting the
