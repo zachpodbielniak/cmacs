@@ -120,6 +120,49 @@ the env var is the explicit override — see `cmacs_gowl_find_module`).
   `rm -f src/temacs && make -j$(nproc)`.
 - After Elisp in `lisp/cmacs/`: clean compiled caches — see *Stale Elisp cache* below.
 
+## Build warnings
+
+**A full rebuild produces a known 188 warnings** (as of 2026-08-23, GCC 16).
+The build has `--enable-gcc-warnings`, so the bar is zero *new* ones — anything
+past this baseline is yours. Before claiming a clean build, get a real inventory:
+
+```bash
+touch src/config.h && make -j$(nproc) 2>&1 | grep -oE '\[-W[a-z=-]+\]' | sort | uniq -c | sort -rn
+```
+
+**An incremental `make` recompiles almost nothing, so it proves nothing about
+warnings.** That is how ~350 of them accumulated unnoticed: every routine build
+was a near no-op and looked clean. `touch src/config.h` forces the full pass.
+
+**What is left, and why it is left:**
+
+| Count | Warning | Why it stays |
+|-------|---------|--------------|
+| 124 | `-Wuseless-cast` | From gnulib's `manywarnings` set, not a cmacs choice. Many are deliberate portability documentation — `(EMACS_INT)` on a `glong`, `(int)` on a `pid_t` for `%d` — that are only useless on LP64. Deleting them is a house-style decision, not a bug fix. |
+| 30 | `-Wdouble-promotion` | Same origin. libregnum is float-throughout and promoting to `double` for `printf`/`math.h` is the normal thing. |
+| 24 | tail | `-Wmisleading-indentation`, `-Wmissing-prototypes` and `-Wmissing-variable-declarations` in the `--lrg`, dbus and cintrospect files, some unused locals, plus advisory `-Wsuggest-attribute` on DEFUNs that always `xsignal` (a DEFUN's signature is fixed by the macro, so `noreturn` cannot be added). Individually fixable; nothing here is load-bearing. |
+| 10 | not ours | 7 upstream Emacs (two deprecated WebKit calls in `xwidget.c`, `-Wmaybe-uninitialized` in `lisp.h`, a generated Wayland protocol file) and 3 in deps (`GGML_TENSOR_SIZE` in `ggml.h`). Fixing these means patching upstream or a submodule. |
+
+If you take on `-Wuseless-cast`, do it as its own commit and check each site rather
+than sed-ing them away — some are load-bearing on non-LP64 targets.
+
+**Three invariants that keep the fixed classes fixed:**
+
+- **Third-party `-I` becomes `-isystem`.** `configure.ac` rewrites absolute `-I`
+  paths in every `CMACS_*_CFLAGS` just before `AC_OUTPUT`, because pkg-config's
+  `-I` does not make a directory a system directory and cmacs's warning set was
+  landing on json-glib (80 warnings under GCC 16). Only *absolute* paths are
+  rewritten — cmacs's own include paths are `$(srcdir)`-relative and must keep
+  warning. A new `PKG_CHECK_MODULES` needs its `CMACS_*_CFLAGS` added to that list.
+- **`syms_of_`/`init_` live in exactly one header.** The subsystem's *top-level*
+  pair is declared in `src/lisp.h`; per-file `syms_of_cmacs_<sub>_<part>` entry
+  points are declared in `cmacs/<sub>/cmacs-<sub>.h`. Declaring either in both
+  places is `-Wredundant-decls` in every TU that sees both — that was 98 of them.
+- **Dep archives must track their source.** A rule with no prerequisites only
+  checks that the archive *exists*, which is how a submodule bump left a stale
+  `libwhisper.a` linked against new headers with the build exiting 0. Bundled deps
+  use `FORCE` and let their own build system decide incrementality.
+
 ## Parallel work: git worktrees + incremental build
 
 To work on a big change while another agent/human keeps the main checkout, use a
@@ -264,6 +307,13 @@ rm -f ~/.config/emacs/.local/cache/eln/*/CHANGED-*.eln ~/.config/emacs/eln-cache
 
 Verify with `(locate-library "NAME")`. When in doubt: `rm -rf native-lisp/ lisp/cmacs/*.elc`.
 If you also changed C DEFUNs, force a relink (see Rebuild rules).
+
+**`git stash` does NOT revert Elisp behaviour.** `.elc`/`.eln` are gitignored, so
+they survive the stash and Emacs still prefers them — a "is this failure
+pre-existing?" check done by stashing sources re-runs the exact code it was meant
+to rule out, and answers confidently wrong. Bind the feature off
+(`(setq cmacs-libreclaw-context-function nil)`), or use a worktree at the older
+commit, which has its own build tree.
 
 ## Documentation
 
