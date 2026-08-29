@@ -226,7 +226,8 @@ cmacs_mcp_do_start (GError **error)
     "  gi: call GObject Introspection functions, list namespaces, describe types\n"
 #endif
 #ifdef HAVE_CMACS_GOWL
-    "  gowl: Wayland compositor control (clients, monitors, keybinds, spawn)\n"
+    "  gowl: Wayland compositor control (clients, monitors, keybinds, spawn),\n"
+    "        and bounded recording of real input (off by default)\n"
 #endif
     "\n"
     "The 'eval' tool is the universal gateway — any Elisp expression can be\n"

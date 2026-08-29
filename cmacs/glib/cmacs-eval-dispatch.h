@@ -149,6 +149,9 @@ gchar **cmacs_dispatch_gi_list_functions (const gchar *ns);
 #ifdef HAVE_CMACS_GOWL
 
 #include <gowl.h>
+/* Not reachable through <gowl.h>, which follows the GowlInputCapture
+ * precedent of leaving the input machinery out of the umbrella. */
+#include <core/gowl-input-recorder.h>
 
 /* Global compositor instance, defined in cmacs-gowl.c. */
 extern GowlCompositor *cmacs_gowl_compositor;
@@ -199,6 +202,21 @@ gchar *cmacs_dispatch_screensaver_restart (GError **error);
 gchar *cmacs_dispatch_screensaver_pause (GError **error);
 gchar *cmacs_dispatch_screensaver_resume (GError **error);
 gchar *cmacs_dispatch_screensaver_set_fps (gint fps, GError **error);
+
+/* Input recording.  All four return the recorder's JSON payload, or
+ * NULL with ERROR set.  Recording is gated by the compositor's own
+ * `input-recording' config key -- deliberately NOT by whatever allows
+ * the send_keys / input-injection path, since capturing what somebody
+ * types is a different permission from typing for them.  See
+ * deps/gowl/docs/input-recording.org. */
+gchar *cmacs_dispatch_gowl_start_recording (guint max_seconds,
+                                             guint max_events,
+                                             GError **error);
+gchar *cmacs_dispatch_gowl_drain_recording (const gchar *token,
+                                             GError **error);
+gchar *cmacs_dispatch_gowl_stop_recording (const gchar *token,
+                                            GError **error);
+gchar *cmacs_dispatch_gowl_recording_status (GError **error);
 
 /* Get config property by name. */
 gchar *cmacs_dispatch_gowl_config_get (const gchar *property,

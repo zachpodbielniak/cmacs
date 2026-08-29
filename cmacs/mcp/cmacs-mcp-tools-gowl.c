@@ -142,6 +142,101 @@ handle_gowl_reload_config (McpServer *s, const gchar *n,
   return gowl_result (cmacs_dispatch_gowl_reload_config (&error), error);
 }
 
+/* ── Input recording ──────────────────────────────────────────────
+ *
+ * The observing counterpart to send_keys.  These are separate tools
+ * behind a separate switch on purpose: gowl's `input-recording' config
+ * key gates them and defaults to off, and nothing that enables input
+ * *injection* enables capture.  An agent allowed to click must not
+ * thereby be allowed to watch the user type.
+ *
+ * There is no push notification of a state change.  Every payload
+ * carries `active' and `stop_reason', so a caller that is already
+ * draining learns on its next call that the recording ended and why
+ * (its deadline, Super+Shift+Escape, or consent withdrawn); a caller
+ * that is not draining polls gowl_recording_status.
+ */
+
+/* Reads an optional non-negative integer argument.  A missing or
+ * non-positive value means "use the recorder's default" -- there is no
+ * spelling for "unbounded", because there is no unbounded here. */
+static guint
+gowl_uint_arg (JsonObject *a, const gchar *name)
+{
+  gint64 val;
+
+  if (a == NULL || !json_object_has_member (a, name))
+    return 0;
+
+  val = json_object_get_int_member (a, name);
+  if (val <= 0)
+    return 0;
+  if (val > (gint64) G_MAXUINT)
+    return G_MAXUINT;
+
+  return (guint) val;
+}
+
+static McpToolResult *
+handle_gowl_start_recording (McpServer *s, const gchar *n,
+                             JsonObject *a, gpointer u)
+{
+  g_autoptr (GError) error = NULL;
+  (void) s; (void) n; (void) u;
+  return gowl_result (
+    cmacs_dispatch_gowl_start_recording (
+      gowl_uint_arg (a, "max_seconds"),
+      gowl_uint_arg (a, "max_events"), &error),
+    error);
+}
+
+static McpToolResult *
+handle_gowl_drain_recording (McpServer *s, const gchar *n,
+                             JsonObject *a, gpointer u)
+{
+  g_autoptr (GError) error = NULL;
+  const gchar *token;
+  (void) s; (void) n; (void) u;
+
+  token = json_object_get_string_member_with_default (a, "token", NULL);
+  if (token == NULL)
+    {
+      McpToolResult *r = mcp_tool_result_new (TRUE);
+      mcp_tool_result_add_text (r, "Missing required argument: token");
+      return r;
+    }
+  return gowl_result (
+    cmacs_dispatch_gowl_drain_recording (token, &error), error);
+}
+
+static McpToolResult *
+handle_gowl_stop_recording (McpServer *s, const gchar *n,
+                            JsonObject *a, gpointer u)
+{
+  g_autoptr (GError) error = NULL;
+  const gchar *token;
+  (void) s; (void) n; (void) u;
+
+  token = json_object_get_string_member_with_default (a, "token", NULL);
+  if (token == NULL)
+    {
+      McpToolResult *r = mcp_tool_result_new (TRUE);
+      mcp_tool_result_add_text (r, "Missing required argument: token");
+      return r;
+    }
+  return gowl_result (
+    cmacs_dispatch_gowl_stop_recording (token, &error), error);
+}
+
+static McpToolResult *
+handle_gowl_recording_status (McpServer *s, const gchar *n,
+                              JsonObject *a, gpointer u)
+{
+  g_autoptr (GError) error = NULL;
+  (void) s; (void) n; (void) a; (void) u;
+  return gowl_result (cmacs_dispatch_gowl_recording_status (&error), error);
+}
+
 /* NOTE: gowl_lock / gowl_unlock are intentionally NOT exposed as MCP tools --
  * an AI agent should not be able to lock or unlock the session screen.  They
  * remain available over D-Bus, emacsctl, and cmacsgi. */
@@ -682,6 +777,76 @@ cmacs_mcp_tools_gowl_register (McpServer *server)
   mcp_tool_set_input_schema (tool, schema);
   mcp_tool_set_read_only_hint (tool, TRUE);
   mcp_server_add_tool (server, tool, handle_gowl_screenshot, NULL, NULL);
+  g_object_unref (tool);
+
+  /* gowl_start_recording */
+  tool = mcp_tool_new ("gowl_start_recording",
+    "Record real keyboard and pointer input so a human demonstration "
+    "can be turned into a procedure. Returns a token for "
+    "gowl_drain_recording and gowl_stop_recording. Bounded: the ring "
+    "holds at most max_events (older events are dropped and counted) "
+    "and the recording stops itself after max_seconds. Requires gowl's "
+    "`input-recording' config key, which is separate from send_keys "
+    "and off by default. While it runs the screen is framed in red and "
+    "Super+Shift+Escape stops it. Capture is suppressed on the lock "
+    "screen and for windows on the deny list, but gowl CANNOT see a "
+    "password field inside an ordinary window -- review a trace before "
+    "storing or sharing it.");
+  schema = cmacs_mcp_schema_from_string (
+    "{\"type\":\"object\",\"properties\":{"
+    "\"max_seconds\":{\"type\":\"integer\","
+    "\"description\":\"Stop automatically after this many seconds "
+    "(default 120, maximum 3600)\"},"
+    "\"max_events\":{\"type\":\"integer\","
+    "\"description\":\"Ring size in events (default 4096, "
+    "maximum 100000)\"}"
+    "}}");
+  mcp_tool_set_input_schema (tool, schema);
+  mcp_tool_set_open_world_hint (tool, TRUE);
+  mcp_server_add_tool (server, tool, handle_gowl_start_recording,
+                       NULL, NULL);
+  g_object_unref (tool);
+
+  /* gowl_drain_recording */
+  tool = mcp_tool_new ("gowl_drain_recording",
+    "Take everything recorded since the last drain and leave the "
+    "recording running. The reply carries dropped (since the last "
+    "drain) and dropped_total, so a demonstration that overflowed the "
+    "ring is reported rather than passed off as complete, plus active "
+    "and stop_reason.");
+  schema = cmacs_mcp_schema_from_string (
+    "{\"type\":\"object\",\"properties\":{"
+    "\"token\":{\"type\":\"string\","
+    "\"description\":\"Token from gowl_start_recording\"}"
+    "},\"required\":[\"token\"]}");
+  mcp_tool_set_input_schema (tool, schema);
+  mcp_server_add_tool (server, tool, handle_gowl_drain_recording,
+                       NULL, NULL);
+  g_object_unref (tool);
+
+  /* gowl_stop_recording */
+  tool = mcp_tool_new ("gowl_stop_recording",
+    "Stop the recording and take the tail, in the same shape "
+    "gowl_drain_recording returns. Stopping a recording that already "
+    "stopped itself still returns its remaining events exactly once.");
+  schema = cmacs_mcp_schema_from_string (
+    "{\"type\":\"object\",\"properties\":{"
+    "\"token\":{\"type\":\"string\","
+    "\"description\":\"Token from gowl_start_recording\"}"
+    "},\"required\":[\"token\"]}");
+  mcp_tool_set_input_schema (tool, schema);
+  mcp_server_add_tool (server, tool, handle_gowl_stop_recording,
+                       NULL, NULL);
+  g_object_unref (tool);
+
+  /* gowl_recording_status */
+  tool = mcp_tool_new ("gowl_recording_status",
+    "Whether an input recording is running, its token, limits and "
+    "counters, without consuming anything. Poll this to notice that a "
+    "recording started, stopped, or was stopped from the keyboard.");
+  mcp_tool_set_read_only_hint (tool, TRUE);
+  mcp_server_add_tool (server, tool, handle_gowl_recording_status,
+                       NULL, NULL);
   g_object_unref (tool);
 }
 

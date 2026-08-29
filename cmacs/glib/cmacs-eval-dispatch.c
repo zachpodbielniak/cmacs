@@ -1046,6 +1046,89 @@ cmacs_dispatch_gowl_reload_config (GError **error)
   return g_strdup ("t");
 }
 
+/* ── Input recording ─────────────────────────────────────────────── */
+
+/* The recorder is created with the compositor, so a NULL here means
+ * gowl itself is not running rather than that recording is off; the
+ * two answers must not read the same. */
+static GowlInputRecorder *
+dispatch_recorder (GError **error)
+{
+  GowlInputRecorder *rec;
+
+  if (cmacs_gowl_compositor == NULL)
+    {
+      g_set_error (error, CMACS_DISPATCH_ERROR_DOMAIN, 1,
+                   "Gowl compositor not running");
+      return NULL;
+    }
+
+  rec = gowl_compositor_get_input_recorder (cmacs_gowl_compositor);
+  if (rec == NULL)
+    g_set_error (error, CMACS_DISPATCH_ERROR_DOMAIN, 1,
+                 "Gowl has no input recorder");
+
+  return rec;
+}
+
+gchar *
+cmacs_dispatch_gowl_start_recording (guint max_seconds,
+                                     guint max_events,
+                                     GError **error)
+{
+  GowlInputRecorder *rec;
+  g_autofree gchar *token = NULL;
+
+  rec = dispatch_recorder (error);
+  if (rec == NULL)
+    return NULL;
+
+  token = gowl_input_recorder_start (rec, max_seconds, max_events, error);
+  if (token == NULL)
+    return NULL;
+
+  /* The status payload carries the token along with the limits and the
+   * standing caveat about what suppression can and cannot see, so the
+   * caller gets the handle and the guard's reach in one reply. */
+  return gowl_input_recorder_status (rec);
+}
+
+gchar *
+cmacs_dispatch_gowl_drain_recording (const gchar *token, GError **error)
+{
+  GowlInputRecorder *rec;
+
+  rec = dispatch_recorder (error);
+  if (rec == NULL)
+    return NULL;
+
+  return gowl_input_recorder_drain (rec, token, error);
+}
+
+gchar *
+cmacs_dispatch_gowl_stop_recording (const gchar *token, GError **error)
+{
+  GowlInputRecorder *rec;
+
+  rec = dispatch_recorder (error);
+  if (rec == NULL)
+    return NULL;
+
+  return gowl_input_recorder_stop (rec, token, error);
+}
+
+gchar *
+cmacs_dispatch_gowl_recording_status (GError **error)
+{
+  GowlInputRecorder *rec;
+
+  rec = dispatch_recorder (error);
+  if (rec == NULL)
+    return NULL;
+
+  return gowl_input_recorder_status (rec);
+}
+
 gchar *
 cmacs_dispatch_gowl_config_get (const gchar *property, GError **error)
 {

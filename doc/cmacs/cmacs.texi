@@ -2845,6 +2845,39 @@ text, it is pushed to the Emacs kill-ring.
 Stop monitoring Wayland clipboard changes.
 @end table
 
+@noindent
+Input recording (teach-a-task).  These @emph{observe} real input, and
+are gated by gowl's own @code{input-recording} config key, which is off
+by default and is deliberately not the switch that allows input
+@emph{injection} --- an agent allowed to click on your behalf must not
+thereby be allowed to watch you type.  While a recording runs the whole
+layout is framed in red, and it stops itself after its deadline.  See
+@code{deps/gowl/docs/input-recording.org}, in particular for what the
+compositor can and cannot recognise as a secret: it sees the lock
+screen and an app-id/title deny list, and it cannot see a password
+field inside an ordinary window.
+
+@table @code
+@item gowl-start-recording &optional MAX-SECONDS MAX-EVENTS
+Start recording key and pointer input.  Returns a JSON string carrying
+the recording's token, its limits and its counters.  @var{MAX-SECONDS}
+defaults to 120 (maximum 3600), @var{MAX-EVENTS} to 4096 (maximum
+100000).  Signals @code{gowl-error} when recording has not been
+consented to.
+@item gowl-drain-recording TOKEN
+Return everything recorded since the last drain, as JSON, and keep
+recording.  The reply reports how many events were dropped by the ring
+and how many were withheld by secret suppression.
+@item gowl-stop-recording &optional TOKEN
+Stop the recording.  With @var{TOKEN}, return its remaining events as
+JSON.  With no argument, stop whatever is running and return @code{t}
+--- the way out for somebody who did not start it.
+@item gowl-recording-status
+Return the recorder's state as JSON, consuming nothing.
+@item gowl-recording-active-p
+Return @code{t} while a recording runs.
+@end table
+
 @subsection Clipboard Sync
 
 @cindex clipboard sync

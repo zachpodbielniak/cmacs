@@ -4742,6 +4742,174 @@ all configuration when embedded is explicit. */)
   return Qt;
 }
 
+
+/* ── Input recording ─────────────────────────────────────────────────
+ *
+ * The elisp face of GowlInputRecorder.  Present here, and not only over
+ * MCP, for one reason above the others: somebody who did not start a
+ * recording needs a way to end it.  `gowl-stop-recording' with no
+ * argument does that without the token, which is the same guarantee
+ * Super+Shift+Escape gives from the keyboard.
+ *
+ * Consent lives in gowl's own `input-recording' config key and is off
+ * by default.  It is deliberately not the switch that allows
+ * `send_keys' or any other injection path: capturing what somebody
+ * types is a different permission from typing for them.  See
+ * deps/gowl/docs/input-recording.org for what the compositor can and
+ * cannot recognise as a secret -- in short, the lock screen and an
+ * app-id/title deny list, and *not* a password field inside an
+ * ordinary window.
+ */
+
+/* The compositor's recorder, or signal if gowl is not running.  A
+ * missing recorder and a recorder that refuses must not read the
+ * same. */
+static GowlInputRecorder *
+cmacs_gowl_recorder (void)
+{
+  GowlInputRecorder *rec;
+
+  GOWL_CHECK_RUNNING ();
+
+  rec = gowl_compositor_get_input_recorder (cmacs_gowl_compositor);
+  if (rec == NULL)
+    error ("Gowl has no input recorder");
+
+  return rec;
+}
+
+DEFUN ("gowl-start-recording", Fgowl_start_recording,
+       Sgowl_start_recording, 0, 2, 0,
+       doc: /* Start recording real key and pointer input.
+Return a JSON string carrying the recording's token, its limits and its
+counters.  MAX-SECONDS defaults to 120 (maximum 3600) and MAX-EVENTS to
+4096 (maximum 100000); the ring drops its oldest entries when full and
+reports how many.
+
+Signals `gowl-error' unless gowl's `input-recording' config key is
+set -- that key is the consent gate, it is off by default, and it is
+separate from anything allowing input injection.
+
+While the recording runs the screen is framed in red.  It stops itself
+after MAX-SECONDS, and `gowl-stop-recording' with no argument, or
+Super+Shift+Escape, stops it at any time. */)
+  (Lisp_Object max_seconds, Lisp_Object max_events)
+{
+  GowlInputRecorder *rec;
+  g_autoptr (GError) err = NULL;
+  g_autofree gchar *token = NULL;
+  g_autofree gchar *status = NULL;
+  guint secs, events;
+
+  rec = cmacs_gowl_recorder ();
+
+  secs = 0;
+  events = 0;
+  if (!NILP (max_seconds))
+    {
+      CHECK_FIXNUM (max_seconds);
+      if (XFIXNUM (max_seconds) > 0)
+        secs = (guint) XFIXNUM (max_seconds);
+    }
+  if (!NILP (max_events))
+    {
+      CHECK_FIXNUM (max_events);
+      if (XFIXNUM (max_events) > 0)
+        events = (guint) XFIXNUM (max_events);
+    }
+
+  token = gowl_input_recorder_start (rec, secs, events, &err);
+  if (token == NULL)
+    xsignal1 (Qgowl_error, build_string (err->message));
+
+  status = gowl_input_recorder_status (rec);
+  return build_string (status ? : "{}");
+}
+
+DEFUN ("gowl-drain-recording", Fgowl_drain_recording,
+       Sgowl_drain_recording, 1, 1, 0,
+       doc: /* Take everything recorded since the last drain, as JSON.
+TOKEN is the token `gowl-start-recording' returned.  The recording keeps
+running.  The reply carries `dropped' (since the last drain) and
+`dropped_total', so a demonstration that overflowed the ring is reported
+rather than passed off as complete, plus `active' and `stop_reason'. */)
+  (Lisp_Object token)
+{
+  GowlInputRecorder *rec;
+  g_autoptr (GError) err = NULL;
+  g_autofree gchar *json = NULL;
+
+  CHECK_STRING (token);
+  rec = cmacs_gowl_recorder ();
+
+  json = gowl_input_recorder_drain (rec, SSDATA (token), &err);
+  if (json == NULL)
+    xsignal1 (Qgowl_error, build_string (err->message));
+
+  return build_string (json);
+}
+
+DEFUN ("gowl-stop-recording", Fgowl_stop_recording,
+       Sgowl_stop_recording, 0, 1, "",
+       doc: /* Stop the running input recording.
+With TOKEN, stop that recording and return its remaining events as
+JSON, the same shape `gowl-drain-recording' returns.
+
+With no TOKEN, stop whatever is running and return t -- this is the way
+out for somebody who did not start the recording and has no handle on
+it.  Buffered events are kept, so whoever did start it can still drain
+them; the stop ends the capture, not the read. */)
+  (Lisp_Object token)
+{
+  GowlInputRecorder *rec;
+  g_autoptr (GError) err = NULL;
+  g_autofree gchar *json = NULL;
+
+  rec = cmacs_gowl_recorder ();
+
+  if (NILP (token))
+    {
+      gowl_input_recorder_force_stop (rec, "stopped from cmacs");
+      return Qt;
+    }
+
+  CHECK_STRING (token);
+  json = gowl_input_recorder_stop (rec, SSDATA (token), &err);
+  if (json == NULL)
+    xsignal1 (Qgowl_error, build_string (err->message));
+
+  return build_string (json);
+}
+
+DEFUN ("gowl-recording-status", Fgowl_recording_status,
+       Sgowl_recording_status, 0, 0, 0,
+       doc: /* Return the input recorder's state as a JSON string.
+Consumes nothing.  Carries whether a recording is active, its token,
+its limits, how many events were dropped or withheld and why, and a
+standing note about what the compositor's secret suppression can and
+cannot see. */)
+  (void)
+{
+  GowlInputRecorder *rec;
+  g_autofree gchar *json = NULL;
+
+  rec = cmacs_gowl_recorder ();
+  json = gowl_input_recorder_status (rec);
+
+  return build_string (json ? : "{}");
+}
+
+DEFUN ("gowl-recording-active-p", Fgowl_recording_active_p,
+       Sgowl_recording_active_p, 0, 0, 0,
+       doc: /* Return t if an input recording is running, else nil. */)
+  (void)
+{
+  GowlInputRecorder *rec;
+
+  rec = cmacs_gowl_recorder ();
+  return gowl_input_recorder_is_active (rec) ? Qt : Qnil;
+}
+
 DEFUN ("gowl-config-get", Fgowl_config_get, Sgowl_config_get, 1, 1, 0,
        doc: /* Get a config property by name.
 Supported: border-width, terminal, menu, mfact, nmaster, tag-count,
@@ -7396,6 +7564,11 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_unlock);
   defsubr (&Sgowl_locked_p);
   defsubr (&Sgowl_reload_config);
+  defsubr (&Sgowl_start_recording);
+  defsubr (&Sgowl_drain_recording);
+  defsubr (&Sgowl_stop_recording);
+  defsubr (&Sgowl_recording_status);
+  defsubr (&Sgowl_recording_active_p);
   defsubr (&Sgowl_config_get);
   defsubr (&Sgowl_config_generate_yaml);
 

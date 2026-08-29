@@ -290,6 +290,77 @@ withholds X11 while Wayland is present.  gowl runs XWayland (=DISPLAY=:0=), so
 just grant access: =flatpak override --user --socket=x11 org.deskflow.deskflow=,
 then restart deskflow.  This is a deskflow/Flatpak limitation, not a gowl bug.
 
+* Input Recording (teach-a-task)
+
+The observing counterpart to =send_keys= and the =gowl_send_*= tools:
+a bounded recorder that captures real key and pointer events, so a
+demonstration you perform on the desktop can be turned into a reusable
+procedure.  The mechanism is a gowl subsystem, =GowlInputRecorder=;
+the full reference — including exactly where its secret suppression
+stops — is gowl's own =docs/input-recording.org=.
+
+*Consent.*  Recording is off until =input-recording: true= is in the
+gowl config.  That key is deliberately *not* the switch that allows
+input injection: an agent allowed to click on your behalf must not
+thereby be allowed to watch you type.  Setting it back to =false= and
+reloading stops a recording that is already running.
+
+*While it runs* the whole output layout is framed in saturated red,
+above every window and above the lock layer.  It stops itself after
+=max_seconds= (default 120, maximum 3600).
+
+*Stopping one you did not start.*  =Super+Shift+Escape= from the
+keyboard, or =M-x gowl-stop-recording= with no argument.  Neither
+needs the recording's token, which is the point: "ask the agent to
+stop" is not a way out of being recorded.
+
+** Elisp
+
+| Command                    | Description                                            |
+|----------------------------+--------------------------------------------------------|
+| =gowl-start-recording=     | Start; returns JSON with the token, limits and counters |
+| =gowl-drain-recording=     | Take what is buffered, keep recording (needs the token) |
+| =gowl-stop-recording=      | Stop; with no token, stop whatever is running           |
+| =gowl-recording-status=    | State and counters as JSON, consuming nothing           |
+| =gowl-recording-active-p=  | =t= while a recording runs                              |
+
+#+begin_src elisp
+(let* ((status (json-parse-string (gowl-start-recording 60 2048)))
+       (token  (gethash "token" status)))
+  ;; ... demonstrate the task ...
+  (gowl-stop-recording token))
+#+end_src
+
+** MCP
+
+The same four, as =gowl_start_recording=, =gowl_drain_recording=,
+=gowl_stop_recording= and =gowl_recording_status=.  There is no push
+notification when the state changes; instead every payload carries
+=active= and =stop_reason=, so a consumer that is already draining
+learns on its next call that the recording ended and why.
+
+** What it can and cannot keep out of a trace
+
+Capture is suppressed while the session is locked, and while the
+focused window's app-id or title matches a deny list that ships with
+the common credential prompts (pinentry, polkit, gcr-prompter,
+KeePassXC, Bitwarden, ...) and with title patterns such as
+=*password*= and =*sign in*=.  Add your own with
+=input-recording-deny-apps=; they are added to that list, never
+substituted for it.
+
+*gowl cannot see a password field.*  There is no Wayland equivalent of
+GNOME Shell's "the key-focus actor is a password entry" — a client's
+widget tree is private to the client, and a compositor knows only a
+surface, an app-id and a title.  A password typed into a form inside
+an ordinary window whose title the deny list does not name *is
+recorded*.  Treat a trace as credential material until you have read
+it.
+
+Withheld events are counted and explained rather than silently
+skipped: =suppressed=, =suppressed_total= and =suppress_reasons= are in
+every payload, alongside =dropped= for the ring's own overflow.
+
 * Window Management Commands
 
 | Command                        | Description                              |
